@@ -661,6 +661,19 @@
 
     var chatForm = document.getElementById("chat-form");
     if (chatForm) {
+      var chatInput = document.getElementById("chat-input");
+      if (chatInput) {
+        chatInput.addEventListener("keydown", function (event) {
+          if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
+          event.preventDefault();
+          if (chatForm.requestSubmit) {
+            chatForm.requestSubmit();
+          } else {
+            chatForm.dispatchEvent(new Event("submit", { cancelable: true }));
+          }
+        });
+      }
+
       chatForm.addEventListener("submit", function (event) {
         event.preventDefault();
         var input = document.getElementById("chat-input");

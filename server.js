@@ -714,15 +714,15 @@ function runLocalCodex(prompt) {
   return new Promise(function (resolve, reject) {
     const outputPath = path.join(os.tmpdir(), "digiter-twin-codex-" + process.pid + "-" + Date.now() + ".txt");
     const args = [
+      "-a",
+      "never",
+      "--sandbox",
+      "read-only",
+      "--cd",
+      rootDir,
       "exec",
       "--skip-git-repo-check",
       "--ephemeral",
-      "--sandbox",
-      "read-only",
-      "--ask-for-approval",
-      "never",
-      "--cd",
-      rootDir,
       "--output-last-message",
       outputPath,
       "-"

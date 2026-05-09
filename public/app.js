@@ -50,6 +50,7 @@
     error: "",
     sending: false,
     fallback: false,
+    responseEngine: "codex",
     memoryFilter: "all",
     stockData: [],
     stockLoading: false,
@@ -361,7 +362,7 @@
     return (
       '<div class="grid-dashboard"><section class="panel chat-panel">' +
       '<div class="panel-header"><div><h2>대화</h2><p class="subtle">' +
-      (state.fallback ? "로컬 응답" : "AI 응답") +
+      (state.fallback ? "로컬 응답" : state.responseEngine === "codex" ? "Codex 응답" : "AI 응답") +
       '</p></div><span class="status-pill">' +
       escapeHtml(snapshot.profile.assistantName) +
       "</span></div>" +
@@ -681,6 +682,7 @@
         })
           .then(function (response) {
             state.fallback = response.usedFallback;
+            state.responseEngine = response.engine || (response.usedFallback ? "local" : "ai");
             return load();
           })
           .catch(function (error) {

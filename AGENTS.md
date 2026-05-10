@@ -30,12 +30,20 @@ After making project changes:
 
 When the user asks to work from a GitHub issue, use the issue as the source of truth for the development request.
 
-1. Fetch and read the issue body and comments before editing.
+Git hooks do not receive GitHub Issue events. Use the local watcher instead when issue updates should be noticed from this machine:
+
+```bash
+npm run issue:watch
+```
+
+For a specific issue:
+
+1. Run `npm run issue:claim -- <issue-number>` to read the issue and post a local-started comment.
 2. Work locally on `main` and push to `origin/main` unless the issue explicitly asks for a branch or PR.
 3. Include the issue number in the commit message, for example `Implement stock filters for #12`.
 4. Run `npm test`.
 5. Push the commit.
-6. Comment on the issue with the commit hash, validation result, local server URL, and a short change summary.
+6. Run `npm run issue:done -- <issue-number> "<short summary>"` or otherwise comment on the issue with the commit hash, validation result, local server URL, and a short change summary.
 7. Restart the local server at `http://127.0.0.1:3000`.
 
 Use GitHub Connector tools for issue comments when available. If Connector tools are unavailable and `gh` is authenticated, use `gh issue view <number> --comments` and `gh issue comment <number> --body-file <file>`.

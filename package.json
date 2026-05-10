@@ -3,8 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "check": "node --check server.js && node --check public/app.js && node --check scripts/smoke-test.js && node --check scripts/share-local.js",
+    "check": "node --check server.js && node --check public/app.js && node --check scripts/smoke-test.js && node --check scripts/share-local.js && node --check scripts/issue-workflow.js",
     "dev": "node server.js",
+    "issue:claim": "node scripts/issue-workflow.js claim",
+    "issue:done": "node scripts/issue-workflow.js done",
+    "issue:list": "node scripts/issue-workflow.js list",
+    "issue:watch": "node scripts/issue-workflow.js watch",
     "share": "node scripts/share-local.js",
     "smoke": "node scripts/smoke-test.js",
     "start": "node server.js",

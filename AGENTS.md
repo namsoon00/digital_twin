@@ -26,6 +26,22 @@ After making project changes:
 3. Start or restart the local server so the latest pushed state is available at `http://127.0.0.1:3000`.
 4. Leave the final response with the commit hash, push result, server URL, and any validation that could not be run.
 
+## Issue Development Workflow
+
+When the user asks to work from a GitHub issue, use the issue as the source of truth for the development request.
+
+1. Fetch and read the issue body and comments before editing.
+2. Work locally on `main` and push to `origin/main` unless the issue explicitly asks for a branch or PR.
+3. Include the issue number in the commit message, for example `Implement stock filters for #12`.
+4. Run `npm test`.
+5. Push the commit.
+6. Comment on the issue with the commit hash, validation result, local server URL, and a short change summary.
+7. Restart the local server at `http://127.0.0.1:3000`.
+
+Use GitHub Connector tools for issue comments when available. If Connector tools are unavailable and `gh` is authenticated, use `gh issue view <number> --comments` and `gh issue comment <number> --body-file <file>`.
+
+The detailed workflow is documented in `docs/issue-development-workflow.md`.
+
 ## Shared Preview
 
 The project owner can expose a temporary preview URL with:

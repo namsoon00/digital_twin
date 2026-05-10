@@ -1,0 +1,45 @@
+name: Development Task
+description: 로컬에서 구현할 개발 작업을 남깁니다.
+title: "[Task] "
+labels:
+  - dev-task
+  - local-work
+body:
+  - type: markdown
+    attributes:
+      value: |
+        로컬에서 작업할 개발 사항을 적어주세요. 비밀키, 계좌번호, 실제 인증 정보는 이슈에 남기지 마세요.
+  - type: textarea
+    id: goal
+    attributes:
+      label: 목표
+      description: 무엇을 만들거나 바꾸면 되는지 한두 문장으로 적어주세요.
+      placeholder: 예) 주식 탭에서 보유 종목과 관심 종목을 따로 관리하고 싶다.
+    validations:
+      required: true
+  - type: textarea
+    id: requirements
+    attributes:
+      label: 요구사항
+      description: 반드시 포함되어야 하는 동작이나 화면 요소를 적어주세요.
+      placeholder: |
+        - 보유 주식에는 수량과 평균단가를 입력한다.
+        - 관심 주식에는 목표가와 관찰 메모를 입력한다.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 완료 기준
+      description: 작업 완료 여부를 확인할 수 있는 기준을 적어주세요.
+      placeholder: |
+        - npm test 통과
+        - http://127.0.0.1:3000 에서 직접 확인 가능
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: 참고 사항
+      description: 관련 화면, 기존 동작, 우선순위, 제외할 범위 등을 적어주세요.
+      placeholder: 예) 디자인은 현재 앱 스타일을 유지한다.

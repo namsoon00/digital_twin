@@ -43,6 +43,12 @@ npm test
 
 GitHub Actions는 push, pull request, 수동 실행에서 같은 검증을 수행합니다.
 
+## 이슈 기반 개발
+
+개발 요청은 GitHub Issue의 `Development Task` 또는 `Bug Report` 템플릿으로 남길 수 있습니다. 로컬 작업자는 이슈 내용을 기준으로 구현하고, `npm test`를 통과시킨 뒤 `origin/main`에 푸시하고 이슈에 완료 댓글을 남깁니다.
+
+자세한 절차는 `docs/issue-development-workflow.md`에 정리되어 있습니다.
+
 ## 주식 데이터
 
 주식 탭은 단순 메모장이 아니라 관심 종목의 가격 요약과 최근 뉴스를 보여줍니다.

@@ -1,0 +1,42 @@
+name: Bug Report
+description: 재현 가능한 버그를 남깁니다.
+title: "[Bug] "
+labels:
+  - bug
+  - local-work
+body:
+  - type: markdown
+    attributes:
+      value: |
+        로컬에서 확인하고 수정할 버그를 적어주세요. 비밀키, 계좌번호, 실제 인증 정보는 이슈에 남기지 마세요.
+  - type: textarea
+    id: problem
+    attributes:
+      label: 문제
+      description: 어떤 문제가 발생했는지 적어주세요.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 재현 방법
+      description: 문제를 다시 볼 수 있는 순서를 적어주세요.
+      placeholder: |
+        1. http://127.0.0.1:3000 접속
+        2. 주식 탭으로 이동
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 기대 동작
+      description: 원래 어떻게 동작해야 하는지 적어주세요.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: 환경
+      description: 브라우저, OS, 서버 실행 방식 등 확인에 필요한 정보를 적어주세요.
+      placeholder: 예) macOS, Chrome, npm start

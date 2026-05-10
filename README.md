@@ -23,6 +23,26 @@ OpenAI API를 쓰려면 `.env.local`에 `OPENAI_API_KEY`를 넣으세요. 키가
 
 서버는 기본적으로 `127.0.0.1`에만 바인딩합니다. 외부 접속을 열려면 `HOST=0.0.0.0`을 명시하세요.
 
+## 외부 개발자용 임시 미리보기
+
+로컬 서버를 외부에서 잠깐 확인하게 하려면 아래 명령을 사용하세요.
+
+```bash
+npm run share
+```
+
+이 명령은 로컬 서버를 `127.0.0.1`에서 실행하고, 임시 공유 토큰을 붙인 터널 URL을 출력합니다. 공유 모드에서는 안전을 위해 `LOCAL_CODEX_ENABLED=0`으로 실행됩니다. 작업이 끝나면 터미널에서 `Ctrl+C`로 터널과 서버를 끄세요.
+
+기본 터널은 `cloudflared`가 설치되어 있으면 Cloudflare Quick Tunnel을 사용하고, 없으면 `npx localtunnel`을 사용합니다. 특정 제공자를 고정하려면 `TUNNEL_PROVIDER=cloudflared npm run share` 또는 `TUNNEL_PROVIDER=localtunnel npm run share`처럼 실행하세요.
+
+## 검증
+
+```bash
+npm test
+```
+
+GitHub Actions는 push, pull request, 수동 실행에서 같은 검증을 수행합니다.
+
 ## 주식 데이터
 
 주식 탭은 단순 메모장이 아니라 관심 종목의 가격 요약과 최근 뉴스를 보여줍니다.

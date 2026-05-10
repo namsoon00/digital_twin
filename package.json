@@ -3,8 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "check": "node --check server.js && node --check public/app.js && node --check scripts/smoke-test.js && node --check scripts/share-local.js",
     "dev": "node server.js",
-    "start": "node server.js"
+    "share": "node scripts/share-local.js",
+    "smoke": "node scripts/smoke-test.js",
+    "start": "node server.js",
+    "test": "npm run check && npm run smoke"
   },
   "dependencies": {},
   "devDependencies": {}

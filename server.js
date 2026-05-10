@@ -188,6 +188,93 @@ function readBody(req) {
   });
 }
 
+function safeEqual(actual, expected) {
+  const actualBuffer = Buffer.from(String(actual || ""));
+  const expectedBuffer = Buffer.from(String(expected || ""));
+  if (actualBuffer.length !== expectedBuffer.length) return false;
+  return crypto.timingSafeEqual(actualBuffer, expectedBuffer);
+}
+
+function parseCookies(cookieHeader) {
+  const cookies = {};
+  String(cookieHeader || "")
+    .split(";")
+    .forEach(function (part) {
+      const index = part.indexOf("=");
+      if (index < 0) return;
+      const key = part.slice(0, index).trim();
+      const rawValue = part.slice(index + 1).trim();
+      if (!key) return;
+      try {
+        cookies[key] = decodeURIComponent(rawValue);
+      } catch (error) {
+        cookies[key] = rawValue;
+      }
+    });
+  return cookies;
+}
+
+function shareDeniedPage() {
+  return [
+    "<!doctype html>",
+    '<html lang="ko">',
+    "<head>",
+    '<meta charset="utf-8" />',
+    '<meta name="viewport" content="width=device-width, initial-scale=1" />',
+    "<title>Digiter Twin 접근 제한</title>",
+    "<style>",
+    "body{margin:0;min-height:100vh;display:grid;place-items:center;font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f6f4ee;color:#171717}",
+    "main{max-width:520px;padding:32px;line-height:1.6}",
+    "h1{font-size:22px;margin:0 0 10px}",
+    "p{margin:0;color:#5f5a53}",
+    "</style>",
+    "</head>",
+    "<body>",
+    "<main>",
+    "<h1>공유 접근 토큰이 필요합니다.</h1>",
+    "<p>서버를 공유한 사람이 제공한 전체 URL로 다시 접속하세요.</p>",
+    "</main>",
+    "</body>",
+    "</html>"
+  ].join("");
+}
+
+function authorizeShare(req, res) {
+  const expectedToken = String(process.env.SHARE_TOKEN || "").trim();
+  if (!expectedToken) return true;
+
+  const parsed = url.parse(req.url, true);
+  const suppliedToken = parsed.query.share_token ? String(parsed.query.share_token) : "";
+
+  if (suppliedToken && safeEqual(suppliedToken, expectedToken)) {
+    const params = new URLSearchParams();
+    Object.keys(parsed.query).forEach(function (key) {
+      if (key === "share_token") return;
+      const value = parsed.query[key];
+      if (Array.isArray(value)) value.forEach(function (entry) { params.append(key, entry); });
+      else if (value !== undefined) params.append(key, value);
+    });
+    const cleanPath = (parsed.pathname || "/") + (params.toString() ? "?" + params.toString() : "");
+    res.writeHead(302, {
+      "Set-Cookie": "dt_share_token=" + encodeURIComponent(suppliedToken) + "; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400",
+      "Location": cleanPath
+    });
+    res.end();
+    return false;
+  }
+
+  const cookies = parseCookies(req.headers.cookie);
+  if (safeEqual(cookies.dt_share_token, expectedToken)) return true;
+
+  if ((parsed.pathname || "").indexOf("/api/") === 0) {
+    json(res, 401, { error: "공유 접근 토큰이 필요합니다." });
+    return false;
+  }
+
+  text(res, 401, shareDeniedPage(), "text/html");
+  return false;
+}
+
 function fetchText(targetUrl) {
   return new Promise(function (resolve, reject) {
     const parsed = url.parse(targetUrl);
@@ -1206,6 +1293,8 @@ async function api(req, res, pathname) {
 const server = http.createServer(function (req, res) {
   const parsed = url.parse(req.url);
   const pathname = decodeURIComponent(parsed.pathname || "/");
+
+  if (!authorizeShare(req, res)) return;
 
   if (pathname.indexOf("/api/") === 0) {
     api(req, res, pathname).catch(function (error) {

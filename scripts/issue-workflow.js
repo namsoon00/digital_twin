@@ -1,10 +1,36 @@
 const childProcess = require("child_process");
+const fs = require("fs");
+const https = require("https");
+const path = require("path");
+
+const rootDir = path.resolve(__dirname, "..");
+loadEnv(".env");
+loadEnv(".env.local");
 
 const mode = process.argv[2] || "watch";
 const issueNumber = process.argv[3];
 const label = process.env.ISSUE_WORK_LABEL || "local-work";
 const configuredPollIntervalMs = Number(process.env.ISSUE_WATCH_INTERVAL_MS || 60000);
 const pollIntervalMs = isFinite(configuredPollIntervalMs) && configuredPollIntervalMs > 0 ? configuredPollIntervalMs : 60000;
+const repoFullName = process.env.ISSUE_REPOSITORY || process.env.GITHUB_REPOSITORY || remoteRepo();
+const token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN || "";
+
+function loadEnv(fileName) {
+  const envPath = path.join(rootDir, fileName);
+  if (!fs.existsSync(envPath)) return;
+
+  fs.readFileSync(envPath, "utf8")
+    .split(/\r?\n/)
+    .forEach(function (line) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.charAt(0) === "#") return;
+      const index = trimmed.indexOf("=");
+      if (index < 0) return;
+      const key = trimmed.slice(0, index).trim();
+      const value = trimmed.slice(index + 1).trim().replace(/^["']|["']$/g, "");
+      if (!process.env[key]) process.env[key] = value;
+    });
+}
 
 function run(command, args, options) {
   const result = childProcess.spawnSync(command, args, Object.assign({ encoding: "utf8" }, options || {}));
@@ -16,41 +42,118 @@ function run(command, args, options) {
   return String(result.stdout || "").trim();
 }
 
-function ensureGh() {
+function commandExists(command) {
+  const result = childProcess.spawnSync(command, ["--version"], { stdio: "ignore" });
+  return !result.error && result.status === 0;
+}
+
+function remoteRepo() {
   try {
-    run("gh", ["--version"], { stdio: "pipe" });
+    const remote = run("git", ["remote", "get-url", "origin"]);
+    const sshMatch = remote.match(/github\.com[:/]([^/]+\/[^/.]+)(?:\.git)?$/);
+    if (sshMatch) return sshMatch[1];
   } catch (error) {
-    throw new Error("GitHub CLI가 필요합니다. `gh auth login`으로 인증한 뒤 다시 실행하세요.");
+    return "";
   }
+  return "";
 }
 
-function fetchIssue(number) {
-  const raw = run("gh", [
-    "issue",
-    "view",
-    String(number),
-    "--json",
-    "number,title,body,url,labels,comments,updatedAt"
-  ]);
-  return JSON.parse(raw);
+function requestJson(method, apiPath, payload) {
+  if (!repoFullName) throw new Error("GitHub repository를 찾지 못했습니다. ISSUE_REPOSITORY=owner/repo를 설정하세요.");
+
+  const body = payload ? JSON.stringify(payload) : "";
+  const headers = {
+    "Accept": "application/vnd.github+json",
+    "Content-Type": "application/json",
+    "Content-Length": Buffer.byteLength(body),
+    "User-Agent": "digital-twin-issue-workflow",
+    "X-GitHub-Api-Version": "2022-11-28"
+  };
+  if (token) headers.Authorization = "Bearer " + token;
+
+  return new Promise(function (resolve, reject) {
+    const req = https.request(
+      {
+        hostname: "api.github.com",
+        method: method,
+        path: apiPath,
+        headers: headers
+      },
+      function (res) {
+        let raw = "";
+        res.setEncoding("utf8");
+        res.on("data", function (chunk) {
+          raw += chunk;
+        });
+        res.on("end", function () {
+          let parsed = null;
+          if (raw) {
+            try {
+              parsed = JSON.parse(raw);
+            } catch (error) {
+              return reject(error);
+            }
+          }
+
+          if (res.statusCode < 200 || res.statusCode >= 300) {
+            const message = parsed && parsed.message ? parsed.message : "GitHub API 요청 실패";
+            return reject(new Error(message + " (" + res.statusCode + ")"));
+          }
+          resolve(parsed);
+        });
+      }
+    );
+
+    req.on("error", reject);
+    if (body) req.write(body);
+    req.end();
+  });
 }
 
-function listIssues() {
-  const raw = run("gh", [
-    "issue",
-    "list",
-    "--state",
-    "open",
-    "--label",
-    label,
-    "--json",
-    "number,title,updatedAt,url,labels"
-  ]);
-  return JSON.parse(raw);
+async function fetchIssue(number) {
+  const issue = await requestJson("GET", "/repos/" + repoFullName + "/issues/" + number);
+  const comments = await requestJson("GET", "/repos/" + repoFullName + "/issues/" + number + "/comments?per_page=50");
+  return {
+    number: issue.number,
+    title: issue.title,
+    body: issue.body,
+    url: issue.html_url,
+    labels: issue.labels || [],
+    comments: comments || [],
+    updatedAt: issue.updated_at
+  };
 }
 
-function commentIssue(number, body) {
-  run("gh", ["issue", "comment", String(number), "--body", body]);
+async function listIssues() {
+  const issues = await requestJson(
+    "GET",
+    "/repos/" + repoFullName + "/issues?state=open&labels=" + encodeURIComponent(label) + "&per_page=30"
+  );
+  return (issues || [])
+    .filter(function (issue) { return !issue.pull_request; })
+    .map(function (issue) {
+      return {
+        number: issue.number,
+        title: issue.title,
+        updatedAt: issue.updated_at,
+        url: issue.html_url,
+        labels: issue.labels || []
+      };
+    });
+}
+
+async function commentIssue(number, body) {
+  if (token) {
+    await requestJson("POST", "/repos/" + repoFullName + "/issues/" + number + "/comments", { body: body });
+    return;
+  }
+
+  if (commandExists("gh")) {
+    run("gh", ["issue", "comment", String(number), "--body", body]);
+    return;
+  }
+
+  throw new Error("이슈 댓글에는 인증이 필요합니다. .env.local에 GITHUB_TOKEN을 넣거나 `gh auth login`을 실행하세요.");
 }
 
 function shortSha() {
@@ -74,18 +177,18 @@ function printIssue(issue) {
     console.log("");
     console.log("Recent comments:");
     comments.slice(-5).forEach(function (comment) {
-      const author = comment.author && comment.author.login ? comment.author.login : "unknown";
+      const author = comment.user && comment.user.login ? comment.user.login : "unknown";
       console.log("");
-      console.log("[" + comment.createdAt + "] " + author);
+      console.log("[" + comment.created_at + "] " + author);
       console.log(comment.body || "(empty)");
     });
   }
 }
 
-function claimIssue(number) {
-  const issue = fetchIssue(number);
+async function claimIssue(number) {
+  const issue = await fetchIssue(number);
   printIssue(issue);
-  commentIssue(
+  await commentIssue(
     number,
     [
       "로컬에서 작업 시작합니다.",
@@ -99,7 +202,7 @@ function claimIssue(number) {
   console.log("Claim comment posted for issue #" + number + ".");
 }
 
-function doneIssue(number, summaryArgs) {
+async function doneIssue(number, summaryArgs) {
   const summary = summaryArgs.length ? summaryArgs.join(" ") : "이슈 요구사항을 반영했습니다.";
   const body = [
     "작업 완료했습니다.",
@@ -112,7 +215,7 @@ function doneIssue(number, summaryArgs) {
     "변경 요약:",
     "- " + summary
   ].join("\n");
-  commentIssue(number, body);
+  await commentIssue(number, body);
   console.log("Done comment posted for issue #" + number + ".");
 }
 
@@ -131,13 +234,13 @@ function printChangedIssues(issues, seen, firstRun) {
   });
 }
 
-function watchIssues(once) {
+async function watchIssues(once) {
   const seen = {};
 
-  function tick(firstRun) {
-    const issues = listIssues();
+  async function tick(firstRun) {
+    const issues = await listIssues();
     if (!issues.length && firstRun) {
-      console.log("No open issues with label `" + label + "`.");
+      console.log("No open issues with label `" + label + "` in " + repoFullName + ".");
     } else {
       printChangedIssues(issues, seen, firstRun);
     }
@@ -146,14 +249,12 @@ function watchIssues(once) {
     console.log("Watching GitHub issues labeled `" + label + "` every " + Math.round(pollIntervalMs / 1000) + "s. Press Ctrl+C to stop.");
   }
 
-  tick(true);
+  await tick(true);
   if (once) return;
   setInterval(function () {
-    try {
-      tick(false);
-    } catch (error) {
+    tick(false).catch(function (error) {
       console.error(error.message || error);
-    }
+    });
   }, pollIntervalMs);
 }
 
@@ -165,22 +266,22 @@ function usage() {
   console.log("  npm run issue:done -- <issue-number> \"summary\"");
 }
 
-try {
-  ensureGh();
-
+async function main() {
   if (mode === "list") {
-    watchIssues(true);
+    await watchIssues(true);
   } else if (mode === "watch") {
-    watchIssues(false);
+    await watchIssues(false);
   } else if (mode === "claim" && issueNumber) {
-    claimIssue(issueNumber);
+    await claimIssue(issueNumber);
   } else if (mode === "done" && issueNumber) {
-    doneIssue(issueNumber, process.argv.slice(4));
+    await doneIssue(issueNumber, process.argv.slice(4));
   } else {
     usage();
     process.exitCode = 1;
   }
-} catch (error) {
+}
+
+main().catch(function (error) {
   console.error(error.message || error);
   process.exitCode = 1;
-}
+});

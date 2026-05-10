@@ -36,6 +36,8 @@ Git hooks do not receive GitHub Issue events. Use the local watcher instead when
 npm run issue:watch
 ```
 
+The watcher polls open issues with the `local-work` label. It can read public issues without a token, but private repositories and issue comments require `GITHUB_TOKEN` in `.env.local` or an authenticated `gh` CLI fallback.
+
 For a specific issue:
 
 1. Run `npm run issue:claim -- <issue-number>` to read the issue and post a local-started comment.

@@ -486,6 +486,28 @@ h2 {
   align-items: start;
 }
 
+.stock-groups {
+  display: grid;
+  gap: 16px;
+}
+
+.stock-group {
+  display: grid;
+  gap: 10px;
+}
+
+.stock-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.stock-group-header h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
 .stock-card {
   display: grid;
   gap: 14px;
@@ -500,6 +522,30 @@ h2 {
   justify-content: space-between;
   gap: 12px;
   align-items: flex-start;
+}
+
+.stock-card-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.stock-status {
+  border-radius: 999px;
+  padding: 5px 9px;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.stock-status.holding {
+  background: var(--teal-soft);
+  color: var(--teal-dark);
+}
+
+.stock-status.watch {
+  background: var(--gold-soft);
+  color: #805f1b;
 }
 
 .quote-row {

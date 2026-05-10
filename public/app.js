@@ -475,18 +475,40 @@
     return numberValue > 0 ? "up" : "down";
   }
 
+  function stockStatusKey(item) {
+    return item && item.status === "holding" ? "holding" : "watch";
+  }
+
+  function stockStatusLabel(item) {
+    return stockStatusKey(item) === "holding" ? "보유" : "관심";
+  }
+
+  function stockHoldingMeta(item) {
+    var fields = item.fields || {};
+    var values = [];
+    if (stockStatusKey(item) === "holding" && item.amount !== undefined && item.amount !== "" && item.amount !== null) values.push("수량 " + item.amount);
+    if (fields.averagePrice) values.push("평균단가 " + fields.averagePrice);
+    if (fields.targetPrice) values.push("목표가 " + fields.targetPrice);
+    return values.join(" · ");
+  }
+
   function renderStocks() {
     var items = state.snapshot.items.filter(function (item) { return item.type === "stock"; });
+    var holdingCount = items.filter(function (item) { return stockStatusKey(item) === "holding"; }).length;
+    var watchCount = items.length - holdingCount;
     return (
       '<div class="stock-layout"><section class="panel"><div class="panel-header"><div><h2>종목 추가</h2><p class="subtle">미국 종목은 AAPL, TSLA처럼 입력하고 국내 종목은 005930처럼 입력합니다.</p></div><span class="status-pill">' +
-      items.length +
+      escapeHtml("보유 " + holdingCount + " · 관심 " + watchCount) +
       '</span></div><form class="panel-body stack" id="stock-form">' +
       '<div class="field"><label>기업/종목</label><select class="select" name="preset" id="stock-preset">' +
       renderStockPresetOptions() +
       '</select></div>' +
+      '<div class="field"><label>구분</label><select class="select" name="status" id="stock-status"><option value="holding">보유 주식</option><option value="watch">관심 주식</option></select></div>' +
       '<div class="form-grid"><div class="field"><label>기업명</label><input class="input" name="title" id="stock-title" placeholder="Apple" /></div><div class="field"><label>티커/종목코드</label><input class="input" name="ticker" id="stock-ticker" placeholder="AAPL 또는 005930" /></div></div>' +
+      '<div class="form-grid"><div class="field"><label>보유 수량</label><input class="input" name="amount" inputmode="decimal" placeholder="10" /></div><div class="field"><label>평균단가</label><input class="input" name="averagePrice" inputmode="decimal" placeholder="선택 입력" /></div></div>' +
+      '<div class="field"><label>목표가</label><input class="input" name="targetPrice" inputmode="decimal" placeholder="관심 종목의 목표 가격 또는 점검 기준" /></div>' +
       '<div class="field"><label>관찰 메모</label><textarea class="textarea" name="notes" placeholder="실적, 밸류에이션, 리스크, 확인할 뉴스"></textarea></div>' +
-      '<div class="actions"><button class="primary-button">관심 종목 추가</button><button class="secondary-button" type="button" id="stock-refresh">새로고침</button></div>' +
+      '<div class="actions"><button class="primary-button">종목 추가</button><button class="secondary-button" type="button" id="stock-refresh">새로고침</button></div>' +
       '</form></section><section class="panel"><div class="panel-header"><div><h2>종목 상황</h2><p class="subtle">가격은 지연될 수 있고, 뉴스는 최근 기사 검색 결과입니다.</p></div>' +
       (state.stockLoading ? '<span class="status-pill muted">불러오는 중</span>' : '<span class="status-pill">시장/뉴스</span>') +
       '</div><div class="panel-body stack">' +
@@ -497,16 +519,37 @@
   }
 
   function renderStockCards(items) {
-    if (!items.length) return empty("관심 종목을 추가하면 가격과 관련 뉴스가 여기에 표시됩니다.");
+    var holdings = items.filter(function (item) { return stockStatusKey(item) === "holding"; });
+    var watchlist = items.filter(function (item) { return stockStatusKey(item) !== "holding"; });
+    if (!items.length) return empty("보유 주식이나 관심 주식을 추가하면 가격과 관련 뉴스가 여기에 표시됩니다.");
     if (state.stockLoading && !state.stockData.length) return empty("종목 정보를 불러오는 중입니다.");
 
-    return items
-      .map(function (item) {
-        var symbol = String(item.ticker || item.title || "").trim();
-        var data = state.stockData.filter(function (entry) { return entry.inputSymbol === symbol; })[0];
-        return renderStockCard(item, data);
-      })
-      .join("");
+    return (
+      '<div class="stock-groups">' +
+      renderStockGroup("보유 주식", holdings, "보유 주식이 없습니다.") +
+      renderStockGroup("관심 주식", watchlist, "관심 주식이 없습니다.") +
+      "</div>"
+    );
+  }
+
+  function renderStockGroup(title, items, emptyText) {
+    return (
+      '<div class="stock-group"><div class="stock-group-header"><h3>' +
+      escapeHtml(title) +
+      '</h3><span class="status-pill">' +
+      items.length +
+      "</span></div>" +
+      (items.length
+        ? items
+            .map(function (item) {
+              var symbol = String(item.ticker || item.title || "").trim();
+              var data = state.stockData.filter(function (entry) { return entry.inputSymbol === symbol; })[0];
+              return renderStockCard(item, data);
+            })
+            .join("")
+        : empty(emptyText)) +
+      "</div>"
+    );
   }
 
   function renderStockCard(item, data) {
@@ -515,14 +558,19 @@
     var change = quote ? quote.change : null;
     var pct = quote ? quote.changePercent : null;
     var changeText = quote && change !== null && change !== undefined ? (Number(change) > 0 ? "+" : "") + formatNumber(change, 2) + " (" + formatPercent(pct) + ")" : "-";
+    var holdingMeta = stockHoldingMeta(item);
     return (
       '<article class="stock-card"><div class="stock-card-head"><div><div class="item-title">' +
       escapeHtml(quote ? quote.name : item.title) +
       '</div><div class="item-meta">' +
       escapeHtml(quote ? quote.displaySymbol + " · " + quote.exchange : item.ticker || item.title) +
-      '</div></div><button class="icon-button" data-item-delete="' +
+      '</div></div><div class="stock-card-tools"><span class="stock-status ' +
+      stockStatusKey(item) +
+      '">' +
+      escapeHtml(stockStatusLabel(item)) +
+      '</span><button class="icon-button" data-item-delete="' +
       item.id +
-      '" title="삭제">×</button></div>' +
+      '" title="삭제">×</button></div></div>' +
       (quote
         ? '<div class="quote-row"><div><div class="quote-price">' +
           formatNumber(quote.price, 2) +
@@ -547,6 +595,7 @@
           formatNumber(quote.volume, 0) +
           "</strong></div></div>"
         : '<div class="item-card">' + escapeHtml(data && data.error ? data.error : "가격 정보를 아직 불러오지 못했습니다.") + "</div>") +
+      (holdingMeta ? '<p class="item-meta">' + escapeHtml(holdingMeta) + "</p>" : "") +
       (item.notes ? '<p class="item-meta">' + escapeHtml(item.notes) + "</p>" : "") +
       '<div class="news-block"><h3>최근 소식</h3>' +
       (news.length
@@ -804,6 +853,7 @@
         var preset = findStockPreset(String(form.get("preset") || ""));
         var ticker = String(form.get("ticker") || "").trim().toUpperCase();
         var title = String(form.get("title") || "").trim();
+        var status = form.get("status") === "watch" ? "watch" : "holding";
         if (preset) {
           ticker = ticker || preset.ticker;
           title = title || preset.name;
@@ -816,10 +866,10 @@
           return;
         }
         var exists = state.snapshot.items.some(function (item) {
-          return item.type === "stock" && String(item.ticker || item.title || "").trim().toUpperCase() === ticker;
+          return item.type === "stock" && stockStatusKey(item) === status && String(item.ticker || item.title || "").trim().toUpperCase() === ticker;
         });
         if (exists) {
-          state.error = "이미 추가된 관심 종목입니다.";
+          state.error = "이미 같은 구분으로 추가된 종목입니다.";
           render();
           return;
         }
@@ -829,8 +879,13 @@
             type: "stock",
             title: title,
             ticker: ticker,
-            status: "watch",
-            notes: form.get("notes")
+            status: status,
+            amount: status === "holding" ? form.get("amount") : "",
+            notes: form.get("notes"),
+            fields: {
+              averagePrice: String(form.get("averagePrice") || "").trim(),
+              targetPrice: String(form.get("targetPrice") || "").trim()
+            }
           })
         }).then(function () {
           return load().then(function () {

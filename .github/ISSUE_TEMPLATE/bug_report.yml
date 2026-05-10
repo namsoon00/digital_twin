@@ -8,7 +8,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        로컬에서 확인하고 수정할 버그를 적어주세요. 비밀키, 계좌번호, 실제 인증 정보는 이슈에 남기지 마세요.
+        로컬에서 확인하고 수정할 버그를 적어주세요. 비밀키, 계좌번호, 실제 인증 정보는 이슈에 남기지 마세요. 준비가 끝난 이슈에 `run-agent` 라벨을 붙이면 Issue Agent workflow가 실행됩니다.
   - type: textarea
     id: problem
     attributes:

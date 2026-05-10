@@ -23,12 +23,15 @@ After making project changes:
 
 1. Run the relevant validation, normally `npm test`.
 2. Commit the completed work and push it to `origin/main` unless the user explicitly says not to.
-3. Start or restart the local server so the latest pushed state is available at `http://127.0.0.1:3000`.
-4. Leave the final response with the commit hash, push result, server URL, and any validation that could not be run.
+3. Leave the final response with the commit hash, push result, and any validation that could not be run.
+
+For GitHub issue automation, the important handoff is that local Codex performed the work on a self-hosted runner, then validated, committed, pushed, and commented on the issue. Do not treat starting the app server as part of that automation unless the issue explicitly asks for runtime verification.
 
 ## Issue Development Workflow
 
 When the user asks to work from a GitHub issue, use the issue as the source of truth for the development request.
+
+GitHub Actions can run `.github/workflows/issue-agent.yml` from either manual `workflow_dispatch` with an issue number or by adding the `run-agent` label to an issue. That workflow is intentionally configured for a `self-hosted` runner so it can operate from the local development machine. If no self-hosted runner is online, the workflow will remain queued.
 
 Git hooks do not receive GitHub Issue events. Use the local watcher instead when issue updates should be noticed from this machine:
 
@@ -45,8 +48,7 @@ For a specific issue:
 3. Include the issue number in the commit message, for example `Implement stock filters for #12`.
 4. Run `npm test`.
 5. Push the commit.
-6. Run `npm run issue:done -- <issue-number> "<short summary>"` or otherwise comment on the issue with the commit hash, validation result, local server URL, and a short change summary.
-7. Restart the local server at `http://127.0.0.1:3000`.
+6. Run `npm run issue:done -- <issue-number> "<short summary>"` or otherwise comment on the issue with the commit hash, validation result, local Codex execution context, and a short change summary.
 
 Use GitHub Connector tools for issue comments when available. If Connector tools are unavailable and `gh` is authenticated, use `gh issue view <number> --comments` and `gh issue comment <number> --body-file <file>`.
 

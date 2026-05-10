@@ -164,6 +164,31 @@ function labelNames(labels) {
   return (labels || []).map(function (entry) { return entry.name; }).filter(Boolean).join(", ");
 }
 
+function issueMarkdown(issue) {
+  const lines = [
+    "# Issue #" + issue.number + ": " + issue.title,
+    "",
+    "- URL: " + issue.url,
+    "- Labels: " + (labelNames(issue.labels) || "-"),
+    "- Updated: " + issue.updatedAt,
+    "",
+    "## Body",
+    "",
+    issue.body || "(no body)"
+  ];
+
+  const comments = issue.comments || [];
+  if (comments.length) {
+    lines.push("", "## Recent Comments");
+    comments.slice(-10).forEach(function (comment) {
+      const author = comment.user && comment.user.login ? comment.user.login : "unknown";
+      lines.push("", "### " + author + " at " + comment.created_at, "", comment.body || "(empty)");
+    });
+  }
+
+  return lines.join("\n") + "\n";
+}
+
 function printIssue(issue) {
   console.log("#" + issue.number + " " + issue.title);
   console.log(issue.url);
@@ -193,9 +218,10 @@ async function claimIssue(number) {
     [
       "로컬에서 작업 시작합니다.",
       "",
+      "- 실행 주체: 로컬 self-hosted runner / Codex",
       "- 기준 브랜치: main",
       "- 검증 예정: npm test",
-      "- 완료 후 origin/main 푸시 및 로컬 서버 재시작"
+      "- 완료 후 origin/main 푸시 및 이슈 댓글 작성"
     ].join("\n")
   );
   console.log("");
@@ -210,13 +236,41 @@ async function doneIssue(number, summaryArgs) {
     "- 커밋: " + shortSha(),
     "- 푸시: origin/main",
     "- 검증: npm test 통과",
-    "- 로컬 서버: http://127.0.0.1:3000",
+    "- 실행 주체: 로컬 self-hosted runner / Codex",
     "",
     "변경 요약:",
     "- " + summary
   ].join("\n");
   await commentIssue(number, body);
   console.log("Done comment posted for issue #" + number + ".");
+}
+
+async function failIssue(number, summaryArgs) {
+  const summary = summaryArgs.length ? summaryArgs.join(" ") : "Issue Agent workflow failed.";
+  const runUrl =
+    process.env.GITHUB_SERVER_URL && process.env.GITHUB_REPOSITORY && process.env.GITHUB_RUN_ID
+      ? process.env.GITHUB_SERVER_URL + "/" + process.env.GITHUB_REPOSITORY + "/actions/runs/" + process.env.GITHUB_RUN_ID
+      : "";
+  const body = [
+    "작업 실행 중 문제가 발생했습니다.",
+    "",
+    "- 커밋: " + shortSha(),
+    runUrl ? "- Actions 로그: " + runUrl : "",
+    "",
+    "요약:",
+    "- " + summary
+  ]
+    .filter(Boolean)
+    .join("\n");
+  await commentIssue(number, body);
+  console.log("Failure comment posted for issue #" + number + ".");
+}
+
+async function exportIssue(number, outputPath) {
+  const issue = await fetchIssue(number);
+  const targetPath = path.resolve(rootDir, outputPath || "issue-context.md");
+  fs.writeFileSync(targetPath, issueMarkdown(issue), "utf8");
+  console.log("Issue context written to " + targetPath);
 }
 
 function printChangedIssues(issues, seen, firstRun) {
@@ -264,6 +318,8 @@ function usage() {
   console.log("  npm run issue:watch");
   console.log("  npm run issue:claim -- <issue-number>");
   console.log("  npm run issue:done -- <issue-number> \"summary\"");
+  console.log("  node scripts/issue-workflow.js export <issue-number> <output-file>");
+  console.log("  node scripts/issue-workflow.js fail <issue-number> \"summary\"");
 }
 
 async function main() {
@@ -275,6 +331,10 @@ async function main() {
     await claimIssue(issueNumber);
   } else if (mode === "done" && issueNumber) {
     await doneIssue(issueNumber, process.argv.slice(4));
+  } else if (mode === "export" && issueNumber) {
+    await exportIssue(issueNumber, process.argv[4]);
+  } else if (mode === "fail" && issueNumber) {
+    await failIssue(issueNumber, process.argv.slice(4));
   } else {
     usage();
     process.exitCode = 1;

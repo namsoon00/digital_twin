@@ -1,0 +1,117 @@
+name: Issue Agent
+
+on:
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: GitHub issue number to read and implement
+        required: true
+      agent_command:
+        description: Command that reads issue context from stdin and edits the repository
+        required: false
+        default: ""
+  issues:
+    types:
+      - labeled
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: issue-agent-${{ github.event.issue.number || inputs.issue_number }}
+  cancel-in-progress: false
+
+jobs:
+  run:
+    name: Run issue agent
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'run-agent'
+    runs-on: self-hosted
+    timeout-minutes: 60
+
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      ISSUE_REPOSITORY: ${{ github.repository }}
+      ISSUE_NUMBER: ${{ github.event.issue.number || inputs.issue_number }}
+      INPUT_AGENT_COMMAND: ${{ inputs.agent_command }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Configure Git author
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Mark issue as started
+        run: node scripts/issue-workflow.js claim "$ISSUE_NUMBER"
+
+      - name: Export issue context
+        run: node scripts/issue-workflow.js export "$ISSUE_NUMBER" issue-context.md
+
+      - name: Upload issue context
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-${{ env.ISSUE_NUMBER }}-context
+          path: issue-context.md
+
+      - name: Run coding agent
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          AGENT_COMMAND="${INPUT_AGENT_COMMAND:-}"
+          if [ -z "$AGENT_COMMAND" ]; then
+            AGENT_COMMAND="${ISSUE_AGENT_COMMAND:-codex -a never --sandbox workspace-write --cd \"$GITHUB_WORKSPACE\" exec --skip-git-repo-check -}"
+          fi
+
+          {
+            echo "You are working in $GITHUB_REPOSITORY on issue #$ISSUE_NUMBER."
+            echo "Implement the issue in this checked-out repository."
+            echo "Do not commit, push, or start long-running servers; the workflow handles validation, commit, and push."
+            echo "Keep changes scoped to the issue."
+            echo ""
+            cat issue-context.md
+          } | bash -lc "$AGENT_COMMAND"
+
+      - name: Validate
+        run: npm test
+
+      - name: Commit and push changes
+        id: commit
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No repository changes to commit."
+            exit 0
+          fi
+
+          git add -A
+          git commit -m "Resolve issue #$ISSUE_NUMBER"
+          git push origin HEAD:main
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Comment completion
+        if: success()
+        run: |
+          if [ "${{ steps.commit.outputs.changed }}" = "true" ]; then
+            node scripts/issue-workflow.js done "$ISSUE_NUMBER" "GitHub Actions Issue Agent가 이슈 내용을 읽고 변경사항을 커밋/푸시했습니다."
+          else
+            node scripts/issue-workflow.js done "$ISSUE_NUMBER" "GitHub Actions Issue Agent가 이슈를 실행했지만 커밋할 변경사항은 없었습니다."
+          fi
+
+      - name: Comment failure
+        if: failure()
+        run: node scripts/issue-workflow.js fail "$ISSUE_NUMBER" "GitHub Actions Issue Agent 실행이 실패했습니다. Actions 로그를 확인하세요."

@@ -12,6 +12,25 @@
 
 이슈 번호를 기준으로 작업합니다. 기본 흐름은 `main`에서 작업하고 `origin/main`으로 푸시하는 방식입니다. 별도 브랜치나 PR이 필요하면 이슈 본문에 명시합니다.
 
+## GitHub Actions 실행
+
+`.github/workflows/issue-agent.yml`은 이슈 번호를 받아 self-hosted runner에서 작업을 실행합니다.
+
+실행 방법은 두 가지입니다.
+
+1. GitHub Actions에서 `Issue Agent` workflow를 수동 실행하고 `issue_number`를 입력합니다.
+2. 이슈에 `run-agent` 라벨을 붙입니다.
+
+이 workflow는 이슈 본문과 댓글을 `issue-context.md`로 export하고, 에이전트 명령에 stdin으로 전달합니다. 기본 명령은 아래와 같습니다.
+
+```bash
+codex -a never --sandbox workspace-write --cd "$GITHUB_WORKSPACE" exec --skip-git-repo-check -
+```
+
+workflow는 에이전트 실행 후 `npm test`, 커밋, `origin/main` 푸시, 이슈 완료 댓글까지 수행합니다. 실제 로컬 파일과 서버를 다루려면 GitHub hosted runner가 아니라 로컬 머신에 설치한 self-hosted runner가 필요합니다. self-hosted runner에 `codex`, Node, Git 인증이 준비되어 있지 않으면 workflow는 실패합니다.
+
+핵심은 서버 실행이 아니라 로컬 머신의 self-hosted runner에서 `codex`가 이슈 내용을 읽고 저장소 파일을 수정하는 것입니다. 서버 실행은 이슈가 런타임 검증을 요구할 때만 별도로 수행합니다.
+
 Git hook은 GitHub Issue 생성이나 수정 이벤트를 받지 못합니다. 이슈를 로컬 작업으로 연결하려면 로컬에서 watcher를 켜두거나 GitHub webhook 수신기를 따로 운영해야 합니다. 이 저장소는 기본값으로 로컬 watcher를 사용합니다.
 
 ```bash
@@ -38,7 +57,6 @@ GITHUB_TOKEN=
 5. 커밋 메시지에 이슈 번호를 포함합니다. 예: `Implement stock filters for #12`
 6. `git push origin main`으로 푸시합니다.
 7. `npm run issue:done -- <issue-number> "변경 요약"`으로 이슈에 완료 댓글을 남깁니다.
-8. 로컬 서버를 최신 코드로 재시작합니다.
 
 열린 작업을 한 번만 확인하려면 아래 명령을 사용합니다.
 
@@ -54,13 +72,13 @@ npm run issue:list
 - 커밋: <short-sha>
 - 푸시: origin/main
 - 검증: npm test 통과
-- 로컬 서버: http://127.0.0.1:3000
+- 실행 주체: 로컬 self-hosted runner / Codex
 
 변경 요약:
 - ...
 ```
 
-검증을 실행하지 못했거나 서버를 띄우지 못한 경우, 댓글과 최종 응답에 이유를 함께 남깁니다.
+검증을 실행하지 못했거나 Codex 실행이 실패한 경우, 댓글과 최종 응답에 이유를 함께 남깁니다.
 
 ## 도구 사용
 

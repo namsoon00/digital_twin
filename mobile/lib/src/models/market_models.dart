@@ -74,6 +74,47 @@ extension CapitalFlowAssetClassLabel on CapitalFlowAssetClass {
   }
 }
 
+enum ApiIntegrationStatus { live, configurable, needed, vendorNeeded }
+
+extension ApiIntegrationStatusLabel on ApiIntegrationStatus {
+  String get label {
+    switch (this) {
+      case ApiIntegrationStatus.live:
+        return '연결됨';
+      case ApiIntegrationStatus.configurable:
+        return '설정 가능';
+      case ApiIntegrationStatus.needed:
+        return '추가 필요';
+      case ApiIntegrationStatus.vendorNeeded:
+        return '벤더 선정';
+    }
+  }
+}
+
+class DataApiSource {
+  const DataApiSource({
+    required this.id,
+    required this.name,
+    required this.provider,
+    required this.status,
+    required this.coverage,
+    required this.usedFor,
+    required this.keyName,
+    required this.docsUrl,
+    required this.priority,
+  });
+
+  final String id;
+  final String name;
+  final String provider;
+  final ApiIntegrationStatus status;
+  final String coverage;
+  final String usedFor;
+  final String keyName;
+  final String docsUrl;
+  final int priority;
+}
+
 class CapitalFlow {
   const CapitalFlow({
     required this.id,

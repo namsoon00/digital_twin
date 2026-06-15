@@ -159,6 +159,7 @@ class _AppShellState extends State<AppShell> {
         onRefreshQuotes: _refreshLiveQuotes,
       ),
       CapitalFlowScreen(
+        apiSources: widget.repository.dataApiSources,
         flows: widget.repository.capitalFlows,
         emergingFlows: widget.repository.emergingCapitalFlows,
       ),
@@ -480,16 +481,20 @@ class DashboardScreen extends StatelessWidget {
 
 class CapitalFlowScreen extends StatelessWidget {
   const CapitalFlowScreen({
+    required this.apiSources,
     required this.flows,
     required this.emergingFlows,
     super.key,
   });
 
+  final List<DataApiSource> apiSources;
   final List<CapitalFlow> flows;
   final List<EmergingCapitalFlow> emergingFlows;
 
   @override
   Widget build(BuildContext context) {
+    final rankedApiSources = apiSources.toList(growable: false)
+      ..sort((a, b) => a.priority.compareTo(b.priority));
     final rankedFlows = flows.toList(growable: false)
       ..sort((a, b) => b.flowScore.compareTo(a.flowScore));
     final rankedEmerging = emergingFlows.toList(growable: false)
@@ -531,6 +536,25 @@ class CapitalFlowScreen extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 18),
+        SectionHeader(
+          title: '필요 API 맵',
+          trailing: FlowChip(
+            label:
+                '${rankedApiSources.where((api) => api.status == ApiIntegrationStatus.live || api.status == ApiIntegrationStatus.configurable).length}/${rankedApiSources.length} ready',
+            color: AppColors.blue,
+          ),
+        ),
+        const SizedBox(height: 10),
+        if (rankedApiSources.isEmpty)
+          const EmptyState(message: '표시할 API 소스가 없습니다.')
+        else
+          ...rankedApiSources.map(
+            (api) => Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: DataApiSourceCard(api: api),
+            ),
+          ),
+        const SizedBox(height: 8),
         SectionHeader(
           title: '세계 자금 흐름',
           trailing: FlowChip(
@@ -679,6 +703,79 @@ class CapitalFlowCard extends StatelessWidget {
             children: [
               for (final driver in flow.drivers)
                 FlowChip(label: driver, color: AppColors.charcoal),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class DataApiSourceCard extends StatelessWidget {
+  const DataApiSourceCard({required this.api, super.key});
+
+  final DataApiSource api;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = _apiStatusColor(api.status);
+    return AppCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              DecoratedBox(
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(10),
+                  child: Icon(
+                    _apiStatusIcon(api.status),
+                    color: color,
+                    size: 22,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      api.name,
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+                    const SizedBox(height: 5),
+                    Text(
+                      api.provider,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                  ],
+                ),
+              ),
+              FlowChip(label: api.status.label, color: color),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Text(api.coverage, style: Theme.of(context).textTheme.bodyLarge),
+          const SizedBox(height: 10),
+          Text(
+            '사용 화면: ${api.usedFor}',
+            style: Theme.of(context).textTheme.bodyMedium,
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              FlowChip(label: api.keyName, color: AppColors.charcoal),
+              FlowChip(label: api.docsUrl, color: AppColors.blue),
             ],
           ),
         ],
@@ -2075,6 +2172,32 @@ Color _assetClassColor(CapitalFlowAssetClass assetClass) {
       return AppColors.red;
     case CapitalFlowAssetClass.alternative:
       return AppColors.blue;
+  }
+}
+
+IconData _apiStatusIcon(ApiIntegrationStatus status) {
+  switch (status) {
+    case ApiIntegrationStatus.live:
+      return Icons.check_circle_outline;
+    case ApiIntegrationStatus.configurable:
+      return Icons.tune_outlined;
+    case ApiIntegrationStatus.needed:
+      return Icons.add_link;
+    case ApiIntegrationStatus.vendorNeeded:
+      return Icons.manage_search_outlined;
+  }
+}
+
+Color _apiStatusColor(ApiIntegrationStatus status) {
+  switch (status) {
+    case ApiIntegrationStatus.live:
+      return AppColors.green;
+    case ApiIntegrationStatus.configurable:
+      return AppColors.blue;
+    case ApiIntegrationStatus.needed:
+      return AppColors.amber;
+    case ApiIntegrationStatus.vendorNeeded:
+      return AppColors.red;
   }
 }
 

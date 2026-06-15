@@ -45,6 +45,7 @@ flutter build web --release --base-href /digital_twin/ --dart-define=ALPHA_VANTA
 
 앱의 `자금` 탭은 세계 돈의 이동을 자산군 단위로 보여줍니다.
 
+- 필요 API 맵: Alpha Vantage, 토스증권 Open API, FRED, CoinGecko, DefiLlama, ETF/Fund Flow API, 한국 투자자별 수급 API
 - 자산군: 주가지수, 섹터, 코인, 금/원자재, 채권, 통화, 대체자산
 - 표시 항목: 흐름 점수, 모멘텀, 유동성, 위험도, 목적지, 핵심 촉발 요인
 - 새 흐름 후보: 미국 개인의 KOSPI 접근성 확대처럼 아직 초기 단계인 자금 이동 시나리오

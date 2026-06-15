@@ -3,6 +3,7 @@ import '../models/market_models.dart';
 abstract class FlowRepository {
   List<AppUser> get users;
   List<MarketPulse> get marketPulses;
+  List<DataApiSource> get dataApiSources;
   List<CapitalFlow> get capitalFlows;
   List<EmergingCapitalFlow> get emergingCapitalFlows;
   List<ThemePulse> get themes;
@@ -59,6 +60,87 @@ class MockFlowRepository implements FlowRepository {
       summary: 'AI 인프라와 전력 수요 테마가 대형주에서 소프트웨어, 냉각, 전력망 종목으로 번지는 구간입니다.',
       heat: [56, 57, 61, 64, 66, 69, 72, 78, 81],
       updatedLabel: '20분 전',
+    ),
+  ];
+
+  @override
+  List<DataApiSource> get dataApiSources => const [
+    DataApiSource(
+      id: 'alpha-vantage',
+      name: 'Alpha Vantage',
+      provider: 'alphavantage.co',
+      status: ApiIntegrationStatus.live,
+      coverage: '주식, ETF, 지수, FX, 원자재, 코인, 뉴스/감성, 기술지표',
+      usedFor: '가격 모멘텀, 섹터 프록시, 금/원자재, 달러, 뉴스 트리거',
+      keyName: 'ALPHA_VANTAGE_API_KEY',
+      docsUrl: 'https://www.alphavantage.co/documentation/',
+      priority: 1,
+    ),
+    DataApiSource(
+      id: 'toss-open-api',
+      name: '토스증권 Open API',
+      provider: 'Toss Securities',
+      status: ApiIntegrationStatus.configurable,
+      coverage: '계좌, 잔고, 보유 종목, 국내/해외 주식 조회, 주문 표면',
+      usedFor: '내 포트폴리오, 실제 보유 비중, 토스 계좌 기반 개인 자금 흐름',
+      keyName: '앱 키 / 앱 시크릿 / 액세스 토큰',
+      docsUrl: 'https://corp.tossinvest.com/ko/open-api',
+      priority: 2,
+    ),
+    DataApiSource(
+      id: 'fred',
+      name: 'FRED API',
+      provider: 'St. Louis Fed',
+      status: ApiIntegrationStatus.needed,
+      coverage: '금리, 장단기 스프레드, 물가, 고용, 유동성, 달러/매크로 시계열',
+      usedFor: '채권/달러/위험선호 regime, 매크로 자금 이동 배경',
+      keyName: 'FRED_API_KEY',
+      docsUrl: 'https://fred.stlouisfed.org/docs/api/fred/',
+      priority: 3,
+    ),
+    DataApiSource(
+      id: 'coingecko',
+      name: 'CoinGecko API',
+      provider: 'CoinGecko',
+      status: ApiIntegrationStatus.needed,
+      coverage: '코인 가격, 시총, 거래량, dominance, 카테고리, 온체인 DEX 데이터',
+      usedFor: 'BTC/ETH/알트/섹터별 코인 자금 흐름과 위험자산 베타',
+      keyName: 'COINGECKO_API_KEY',
+      docsUrl: 'https://docs.coingecko.com/',
+      priority: 4,
+    ),
+    DataApiSource(
+      id: 'defillama',
+      name: 'DefiLlama API',
+      provider: 'DefiLlama',
+      status: ApiIntegrationStatus.needed,
+      coverage: '스테이블코인, DeFi TVL, 체인별 유동성, 브릿지/수수료/수익',
+      usedFor: '온체인 달러 유동성, 스테이블코인 공급, RWA/DeFi 자금 이동',
+      keyName: '선택 사항',
+      docsUrl: 'https://api-docs.defillama.com/',
+      priority: 5,
+    ),
+    DataApiSource(
+      id: 'fund-flow-vendor',
+      name: 'ETF/Fund Flow API',
+      provider: '벤더 선정 필요',
+      status: ApiIntegrationStatus.vendorNeeded,
+      coverage: 'ETF 순유입/순유출, 국가/섹터/자산군별 펀드 플로우',
+      usedFor: '실제 돈의 이동 검증, 가격 모멘텀과 fund flow 분리',
+      keyName: '벤더별 API key',
+      docsUrl: '선정 후 입력',
+      priority: 6,
+    ),
+    DataApiSource(
+      id: 'kr-investor-flow',
+      name: '한국 투자자별 수급 API',
+      provider: 'KRX/증권 데이터 벤더',
+      status: ApiIntegrationStatus.vendorNeeded,
+      coverage: '외국인, 기관, 개인의 시장/업종/종목별 순매수',
+      usedFor: 'KOSPI/KOSDAQ 외국인 수급, 미국 개인 접근성 시나리오 검증',
+      keyName: '벤더별 API key',
+      docsUrl: '선정 후 입력',
+      priority: 7,
     ),
   ];
 

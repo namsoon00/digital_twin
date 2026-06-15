@@ -53,7 +53,44 @@ void main() {
     await tester.tap(find.text('자금'));
     await tester.pumpAndSettle();
 
-    expect(find.text('세계 자금 흐름'), findsOneWidget);
+    expect(find.text('필요 API 맵'), findsOneWidget);
+    expect(find.text('Alpha Vantage'), findsOneWidget);
+    expect(find.text('토스증권 Open API'), findsOneWidget);
+
+    await tester.scrollUntilVisible(
+      find.text('FRED API'),
+      360,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('FRED API'), findsOneWidget);
+
+    await tester.scrollUntilVisible(
+      find.text('CoinGecko API'),
+      360,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('CoinGecko API'), findsOneWidget);
+
+    await tester.scrollUntilVisible(
+      find.text('ETF/Fund Flow API'),
+      360,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('ETF/Fund Flow API'), findsOneWidget);
+
+    await tester.scrollUntilVisible(
+      find.text('세계 자금 흐름'),
+      360,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+
     expect(find.text('AI 인프라 CAPEX'), findsOneWidget);
 
     await tester.scrollUntilVisible(

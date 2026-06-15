@@ -32,6 +32,14 @@ flutter build web --release --base-href /digital_twin/ --dart-define=ALPHA_VANTA
 `main`에 푸시하면 `.github/workflows/pages.yml`이 같은 빌드를 실행하고 `gh-pages` 브랜치에 정적 파일을 배포합니다.
 배포 환경에서는 GitHub repository secret `ALPHA_VANTAGE_API_KEY`를 사용합니다.
 
+## 토스증권 설정
+
+앱의 `설정` 탭에서 토스증권 계정 옵션을 켤 수 있습니다.
+
+- 저장 항목: 계정 별칭, 계좌 식별 힌트, 백엔드 API URL, 읽기 전용 여부
+- 저장하지 않는 항목: Toss API key, app secret, 주문 권한 secret
+- 주문 기능: 서버 검증 전까지 앱에서 잠금 상태
+
 ## 사용 API
 
 - Provider: Alpha Vantage

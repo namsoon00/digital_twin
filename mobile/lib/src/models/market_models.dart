@@ -240,6 +240,59 @@ class QuoteFetchResult {
   final QuoteApiSnapshot snapshot;
 }
 
+class TossAccountSettings {
+  const TossAccountSettings({
+    required this.enabled,
+    required this.accountAlias,
+    required this.accountHint,
+    required this.backendUrl,
+    required this.readOnly,
+    required this.orderLocked,
+  });
+
+  factory TossAccountSettings.defaults() {
+    return const TossAccountSettings(
+      enabled: false,
+      accountAlias: '',
+      accountHint: '',
+      backendUrl: '',
+      readOnly: true,
+      orderLocked: true,
+    );
+  }
+
+  final bool enabled;
+  final String accountAlias;
+  final String accountHint;
+  final String backendUrl;
+  final bool readOnly;
+  final bool orderLocked;
+
+  bool get hasAccount =>
+      accountAlias.trim().isNotEmpty || accountHint.trim().isNotEmpty;
+  bool get hasBackend => backendUrl.trim().isNotEmpty;
+  bool get isReady =>
+      enabled && hasAccount && hasBackend && readOnly && orderLocked;
+
+  TossAccountSettings copyWith({
+    bool? enabled,
+    String? accountAlias,
+    String? accountHint,
+    String? backendUrl,
+    bool? readOnly,
+    bool? orderLocked,
+  }) {
+    return TossAccountSettings(
+      enabled: enabled ?? this.enabled,
+      accountAlias: accountAlias ?? this.accountAlias,
+      accountHint: accountHint ?? this.accountHint,
+      backendUrl: backendUrl ?? this.backendUrl,
+      readOnly: readOnly ?? this.readOnly,
+      orderLocked: orderLocked ?? this.orderLocked,
+    );
+  }
+}
+
 class JournalEntry {
   const JournalEntry({
     required this.id,

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../data/flow_repository.dart';
 import '../data/market_data_api.dart';
+import '../data/settings_repository.dart';
 import '../models/market_models.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_card.dart';
@@ -23,8 +24,11 @@ class _AppShellState extends State<AppShell> {
   late AppUser _currentUser;
   late List<JournalEntry> _journals;
   late AlphaVantageQuoteService _quoteService;
+  late SettingsRepository _settingsRepository;
   late QuoteApiSnapshot _quoteSnapshot;
   Map<String, LiveQuote> _quotes = const {};
+  TossAccountSettings _tossSettings = TossAccountSettings.defaults();
+  bool _settingsLoaded = false;
 
   @override
   void initState() {
@@ -32,7 +36,9 @@ class _AppShellState extends State<AppShell> {
     _currentUser = widget.repository.users.first;
     _journals = widget.repository.journals.toList();
     _quoteService = AlphaVantageQuoteService();
+    _settingsRepository = SettingsRepository();
     _quoteSnapshot = _quoteService.initialSnapshot;
+    _loadTossSettings();
     WidgetsBinding.instance.addPostFrameCallback((_) => _refreshLiveQuotes());
   }
 
@@ -60,6 +66,25 @@ class _AppShellState extends State<AppShell> {
       _quotes = result.quotes;
       _quoteSnapshot = result.snapshot;
     });
+  }
+
+  Future<void> _loadTossSettings() async {
+    final settings = await _settingsRepository.loadTossAccountSettings();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _tossSettings = settings;
+      _settingsLoaded = true;
+    });
+  }
+
+  Future<void> _saveTossSettings(TossAccountSettings settings) async {
+    await _settingsRepository.saveTossAccountSettings(settings);
+    if (!mounted) {
+      return;
+    }
+    setState(() => _tossSettings = settings);
   }
 
   bool _matchesRegion(MarketRegion region) {
@@ -125,6 +150,11 @@ class _AppShellState extends State<AppShell> {
       ThemeBoardScreen(themes: _themes),
       WatchlistScreen(equities: _equities, quotes: _quotes),
       JournalScreen(entries: _userJournals, onAddEntry: _openJournalComposer),
+      SettingsScreen(
+        tossSettings: _tossSettings,
+        settingsLoaded: _settingsLoaded,
+        onSaveTossSettings: _saveTossSettings,
+      ),
     ];
 
     return Scaffold(
@@ -181,6 +211,11 @@ class _AppShellState extends State<AppShell> {
             icon: Icon(Icons.edit_note_outlined),
             selectedIcon: Icon(Icons.edit_note),
             label: '기록',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.settings_outlined),
+            selectedIcon: Icon(Icons.settings),
+            label: '설정',
           ),
         ],
       ),
@@ -1190,6 +1225,226 @@ class _JournalComposerState extends State<JournalComposer> {
           ],
         ),
       ),
+    );
+  }
+}
+
+class SettingsScreen extends StatefulWidget {
+  const SettingsScreen({
+    required this.tossSettings,
+    required this.settingsLoaded,
+    required this.onSaveTossSettings,
+    super.key,
+  });
+
+  final TossAccountSettings tossSettings;
+  final bool settingsLoaded;
+  final ValueChanged<TossAccountSettings> onSaveTossSettings;
+
+  @override
+  State<SettingsScreen> createState() => _SettingsScreenState();
+}
+
+class _SettingsScreenState extends State<SettingsScreen> {
+  final _accountAliasController = TextEditingController();
+  final _accountHintController = TextEditingController();
+  final _backendUrlController = TextEditingController();
+  bool _enabled = false;
+  bool _readOnly = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _applySettings(widget.tossSettings);
+  }
+
+  @override
+  void didUpdateWidget(covariant SettingsScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.tossSettings != widget.tossSettings) {
+      _applySettings(widget.tossSettings);
+    }
+  }
+
+  @override
+  void dispose() {
+    _accountAliasController.dispose();
+    _accountHintController.dispose();
+    _backendUrlController.dispose();
+    super.dispose();
+  }
+
+  void _applySettings(TossAccountSettings settings) {
+    _enabled = settings.enabled;
+    _readOnly = settings.readOnly;
+    _accountAliasController.text = settings.accountAlias;
+    _accountHintController.text = settings.accountHint;
+    _backendUrlController.text = settings.backendUrl;
+  }
+
+  Future<void> _save() async {
+    final settings = TossAccountSettings(
+      enabled: _enabled,
+      accountAlias: _accountAliasController.text.trim(),
+      accountHint: _accountHintController.text.trim(),
+      backendUrl: _backendUrlController.text.trim(),
+      readOnly: _readOnly,
+      orderLocked: true,
+    );
+    widget.onSaveTossSettings(settings);
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('토스증권 설정 저장됨')));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final effectiveSettings = TossAccountSettings(
+      enabled: _enabled,
+      accountAlias: _accountAliasController.text.trim(),
+      accountHint: _accountHintController.text.trim(),
+      backendUrl: _backendUrlController.text.trim(),
+      readOnly: _readOnly,
+      orderLocked: true,
+    );
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 20),
+      children: [
+        const SectionHeader(title: '설정'),
+        const SizedBox(height: 10),
+        AppCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: AppColors.green.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Padding(
+                      padding: EdgeInsets.all(10),
+                      child: Icon(
+                        Icons.account_balance_outlined,
+                        color: AppColors.green,
+                        size: 22,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '토스증권 계정',
+                          style: Theme.of(context).textTheme.titleLarge,
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Toss Securities Open API',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                      ],
+                    ),
+                  ),
+                  Switch(
+                    value: _enabled,
+                    onChanged: widget.settingsLoaded
+                        ? (value) => setState(() => _enabled = value)
+                        : null,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  FlowChip(
+                    label: _enabled ? '활성' : '비활성',
+                    color: _enabled ? AppColors.green : AppColors.muted,
+                  ),
+                  FlowChip(
+                    label: effectiveSettings.hasBackend
+                        ? 'backend 설정'
+                        : 'backend 필요',
+                    color: effectiveSettings.hasBackend
+                        ? AppColors.green
+                        : AppColors.amber,
+                  ),
+                  FlowChip(
+                    label: _readOnly ? 'read-only' : 'read/write',
+                    color: _readOnly ? AppColors.blue : AppColors.red,
+                  ),
+                  const FlowChip(label: '주문 잠금', color: AppColors.red),
+                ],
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _accountAliasController,
+                decoration: const InputDecoration(
+                  labelText: '계정 별칭',
+                  hintText: '예: 토스 주계좌',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _accountHintController,
+                decoration: const InputDecoration(
+                  labelText: '계좌 식별값',
+                  hintText: '예: 끝 4자리 또는 내부 별칭',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _backendUrlController,
+                keyboardType: TextInputType.url,
+                decoration: const InputDecoration(
+                  labelText: '백엔드 API URL',
+                  hintText: 'https://api.example.com',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+              SwitchListTile(
+                value: _readOnly,
+                onChanged: (value) => setState(() => _readOnly = value),
+                contentPadding: EdgeInsets.zero,
+                title: const Text('읽기 전용 연결'),
+                subtitle: const Text('시세, 잔고, 보유 종목 조회만 허용'),
+              ),
+              SwitchListTile(
+                value: true,
+                onChanged: null,
+                contentPadding: EdgeInsets.zero,
+                title: const Text('주문 기능 잠금'),
+                subtitle: const Text('자동매매와 주문은 별도 서버 검증 전까지 비활성화'),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                '토스 API key와 secret은 앱에 저장하지 않고 서버 secret으로만 다룹니다.',
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+              const SizedBox(height: 16),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: widget.settingsLoaded ? _save : null,
+                  icon: const Icon(Icons.save_outlined),
+                  label: const Text('저장'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }

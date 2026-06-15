@@ -1,8 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:market_flow/main.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+  });
+
   testWidgets('MarketFlow opens on the live flow dashboard', (tester) async {
     await tester.pumpWidget(const MarketFlowApp());
     await tester.pumpAndSettle();
@@ -39,5 +44,18 @@ void main() {
 
     expect(find.text('감 기록'), findsOneWidget);
     expect(find.text('NVDA'), findsOneWidget);
+  });
+
+  testWidgets('MarketFlow shows Toss Securities settings', (tester) async {
+    await tester.pumpWidget(const MarketFlowApp());
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('설정'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('토스증권 계정'), findsOneWidget);
+    expect(find.text('Toss Securities Open API'), findsOneWidget);
+    expect(find.text('백엔드 API URL'), findsOneWidget);
+    expect(find.text('주문 기능 잠금'), findsOneWidget);
   });
 }

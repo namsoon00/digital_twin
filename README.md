@@ -65,6 +65,8 @@ flutter run --dart-define=ALPHA_VANTAGE_API_KEY=<your-key>
 
 API key가 없으면 앱은 mock 가격을 유지하고 화면에 `API key 필요` 상태를 표시합니다.
 
+앱의 `설정` 탭에는 토스증권 계정 옵션이 있습니다. Flutter 앱에는 계정 별칭, 계좌 식별 힌트, 백엔드 API URL, 읽기 전용 여부만 저장하고, 토스 API key와 secret은 서버 secret으로만 다루도록 설계했습니다.
+
 ### GitHub Pages
 
 모바일 앱의 웹 빌드는 GitHub Pages용으로 `gh-pages` 브랜치에 배포됩니다.

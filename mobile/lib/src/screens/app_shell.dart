@@ -158,6 +158,10 @@ class _AppShellState extends State<AppShell> {
         quoteSnapshot: _quoteSnapshot,
         onRefreshQuotes: _refreshLiveQuotes,
       ),
+      CapitalFlowScreen(
+        flows: widget.repository.capitalFlows,
+        emergingFlows: widget.repository.emergingCapitalFlows,
+      ),
       ThemeBoardScreen(themes: _themes),
       WatchlistScreen(equities: _equities, quotes: _quotes),
       JournalScreen(entries: _userJournals, onAddEntry: _openJournalComposer),
@@ -208,6 +212,11 @@ class _AppShellState extends State<AppShell> {
             icon: Icon(Icons.dashboard_outlined),
             selectedIcon: Icon(Icons.dashboard),
             label: '흐름',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.public_outlined),
+            selectedIcon: Icon(Icons.public),
+            label: '자금',
           ),
           NavigationDestination(
             icon: Icon(Icons.bubble_chart_outlined),
@@ -465,6 +474,290 @@ class DashboardScreen extends StatelessWidget {
                 ),
               ),
       ],
+    );
+  }
+}
+
+class CapitalFlowScreen extends StatelessWidget {
+  const CapitalFlowScreen({
+    required this.flows,
+    required this.emergingFlows,
+    super.key,
+  });
+
+  final List<CapitalFlow> flows;
+  final List<EmergingCapitalFlow> emergingFlows;
+
+  @override
+  Widget build(BuildContext context) {
+    final rankedFlows = flows.toList(growable: false)
+      ..sort((a, b) => b.flowScore.compareTo(a.flowScore));
+    final rankedEmerging = emergingFlows.toList(growable: false)
+      ..sort((a, b) => b.probability.compareTo(a.probability));
+    final topFlow = rankedFlows.isEmpty ? null : rankedFlows.first;
+    final riskOnCount = rankedFlows.where((flow) {
+      return flow.assetClass == CapitalFlowAssetClass.crypto ||
+          flow.assetClass == CapitalFlowAssetClass.sector ||
+          flow.assetClass == CapitalFlowAssetClass.equityIndex;
+    }).length;
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 20),
+      children: [
+        Row(
+          children: [
+            MetricPill(
+              icon: Icons.trending_up,
+              label: '최강 흐름',
+              value: topFlow == null ? '-' : '${topFlow.flowScore}',
+              color: topFlow == null
+                  ? AppColors.muted
+                  : scoreColor(topFlow.flowScore),
+            ),
+            const SizedBox(width: 10),
+            MetricPill(
+              icon: Icons.bolt_outlined,
+              label: '위험자산',
+              value: '$riskOnCount',
+              color: AppColors.amber,
+            ),
+            const SizedBox(width: 10),
+            MetricPill(
+              icon: Icons.auto_awesome_outlined,
+              label: '새 후보',
+              value: '${rankedEmerging.length}',
+              color: AppColors.blue,
+            ),
+          ],
+        ),
+        const SizedBox(height: 18),
+        SectionHeader(
+          title: '세계 자금 흐름',
+          trailing: FlowChip(
+            label: '${rankedFlows.length} flows',
+            color: AppColors.charcoal,
+          ),
+        ),
+        const SizedBox(height: 10),
+        if (rankedFlows.isEmpty)
+          const EmptyState(message: '세계 자금 흐름 데이터가 없습니다.')
+        else
+          ...rankedFlows.map(
+            (flow) => Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: CapitalFlowCard(flow: flow),
+            ),
+          ),
+        const SizedBox(height: 8),
+        SectionHeader(
+          title: '새 흐름 후보',
+          trailing: FlowChip(
+            label:
+                '${rankedEmerging.where((flow) => flow.probability >= 70).length} high',
+            color: AppColors.green,
+          ),
+        ),
+        const SizedBox(height: 10),
+        if (rankedEmerging.isEmpty)
+          const EmptyState(message: '새롭게 만들어질 자금 흐름 후보가 없습니다.')
+        else
+          ...rankedEmerging.map(
+            (flow) => Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: EmergingFlowCard(flow: flow),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class CapitalFlowCard extends StatelessWidget {
+  const CapitalFlowCard({required this.flow, super.key});
+
+  final CapitalFlow flow;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = scoreColor(flow.flowScore);
+    return AppCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              DecoratedBox(
+                decoration: BoxDecoration(
+                  color: _assetClassColor(
+                    flow.assetClass,
+                  ).withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(10),
+                  child: Icon(
+                    _assetClassIcon(flow.assetClass),
+                    color: _assetClassColor(flow.assetClass),
+                    size: 22,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      flow.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+                    const SizedBox(height: 5),
+                    Text(
+                      '${flow.regionLabel} → ${flow.destination}',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                  ],
+                ),
+              ),
+              _ScoreDial(score: flow.flowScore, color: color),
+            ],
+          ),
+          const SizedBox(height: 14),
+          SizedBox(
+            height: 66,
+            child: Sparkline(values: flow.trend, color: color),
+          ),
+          const SizedBox(height: 14),
+          Text(flow.thesis, style: Theme.of(context).textTheme.bodyLarge),
+          const SizedBox(height: 14),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              FlowChip(label: flow.assetClass.label, color: AppColors.blue),
+              FlowChip(label: flow.netFlowLabel, color: AppColors.charcoal),
+              FlowChip(label: flow.updatedLabel, color: AppColors.muted),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              Expanded(
+                child: _MiniStat(
+                  label: '모멘텀',
+                  value: flow.momentum,
+                  color: AppColors.green,
+                ),
+              ),
+              Expanded(
+                child: _MiniStat(
+                  label: '유동성',
+                  value: flow.liquidity,
+                  color: AppColors.blue,
+                ),
+              ),
+              Expanded(
+                child: _MiniStat(
+                  label: '위험',
+                  value: flow.risk,
+                  color: flow.risk >= 60 ? AppColors.red : AppColors.amber,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Text(flow.signal, style: Theme.of(context).textTheme.labelLarge),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final driver in flow.drivers)
+                FlowChip(label: driver, color: AppColors.charcoal),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class EmergingFlowCard extends StatelessWidget {
+  const EmergingFlowCard({required this.flow, super.key});
+
+  final EmergingCapitalFlow flow;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = scoreColor(flow.probability);
+    return AppCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              DecoratedBox(
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(10),
+                  child: Icon(Icons.route_outlined, color: color, size: 22),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      flow.title,
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      '${flow.from} → ${flow.to}',
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                  ],
+                ),
+              ),
+              FlowChip(label: '${flow.probability}%', color: color),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Text(flow.trigger, style: Theme.of(context).textTheme.bodyLarge),
+          const SizedBox(height: 12),
+          FactorBar(label: '현실화 가능성', value: flow.probability, color: color),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              FlowChip(label: flow.timeframe, color: AppColors.blue),
+              for (final item in flow.beneficiaries)
+                FlowChip(label: item, color: AppColors.green),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text(
+            '관찰 지표: ${flow.watch}',
+            style: Theme.of(context).textTheme.bodyMedium,
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '리스크: ${flow.risks.join(' · ')}',
+            style: Theme.of(context).textTheme.bodyMedium,
+          ),
+        ],
+      ),
     );
   }
 }
@@ -1744,6 +2037,44 @@ class EmptyState extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+IconData _assetClassIcon(CapitalFlowAssetClass assetClass) {
+  switch (assetClass) {
+    case CapitalFlowAssetClass.equityIndex:
+      return Icons.stacked_line_chart;
+    case CapitalFlowAssetClass.sector:
+      return Icons.hub_outlined;
+    case CapitalFlowAssetClass.crypto:
+      return Icons.currency_bitcoin;
+    case CapitalFlowAssetClass.commodity:
+      return Icons.diamond_outlined;
+    case CapitalFlowAssetClass.bond:
+      return Icons.account_balance_outlined;
+    case CapitalFlowAssetClass.currency:
+      return Icons.currency_exchange;
+    case CapitalFlowAssetClass.alternative:
+      return Icons.category_outlined;
+  }
+}
+
+Color _assetClassColor(CapitalFlowAssetClass assetClass) {
+  switch (assetClass) {
+    case CapitalFlowAssetClass.equityIndex:
+      return AppColors.green;
+    case CapitalFlowAssetClass.sector:
+      return AppColors.blue;
+    case CapitalFlowAssetClass.crypto:
+      return AppColors.amber;
+    case CapitalFlowAssetClass.commodity:
+      return AppColors.charcoal;
+    case CapitalFlowAssetClass.bond:
+      return AppColors.muted;
+    case CapitalFlowAssetClass.currency:
+      return AppColors.red;
+    case CapitalFlowAssetClass.alternative:
+      return AppColors.blue;
   }
 }
 

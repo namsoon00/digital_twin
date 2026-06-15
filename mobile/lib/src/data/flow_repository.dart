@@ -3,6 +3,8 @@ import '../models/market_models.dart';
 abstract class FlowRepository {
   List<AppUser> get users;
   List<MarketPulse> get marketPulses;
+  List<CapitalFlow> get capitalFlows;
+  List<EmergingCapitalFlow> get emergingCapitalFlows;
   List<ThemePulse> get themes;
   List<EquityFlow> get equities;
   List<JournalEntry> get journals;
@@ -57,6 +59,136 @@ class MockFlowRepository implements FlowRepository {
       summary: 'AI 인프라와 전력 수요 테마가 대형주에서 소프트웨어, 냉각, 전력망 종목으로 번지는 구간입니다.',
       heat: [56, 57, 61, 64, 66, 69, 72, 78, 81],
       updatedLabel: '20분 전',
+    ),
+  ];
+
+  @override
+  List<CapitalFlow> get capitalFlows => const [
+    CapitalFlow(
+      id: 'ai-infra-capex',
+      name: 'AI 인프라 CAPEX',
+      assetClass: CapitalFlowAssetClass.sector,
+      regionLabel: '미국/글로벌',
+      destination: '반도체, 전력망, 냉각, 데이터센터',
+      flowScore: 93,
+      momentum: 91,
+      liquidity: 88,
+      risk: 42,
+      netFlowLabel: '성장주 ETF와 인프라 테마 동시 유입',
+      signal: '점이 아니라 공급망 전체로 확산',
+      thesis: 'AI 수요가 GPU에서 전력, 냉각, 네트워크, 부동산 인프라까지 번지며 자본지출 사이클을 만듭니다.',
+      drivers: ['빅테크 CAPEX', '전력 부족', 'HBM 병목', '데이터센터 임대료'],
+      trend: [62, 64, 68, 72, 78, 81, 86, 90, 93],
+      updatedLabel: '오늘',
+    ),
+    CapitalFlow(
+      id: 'crypto-beta',
+      name: '디지털 자산 베타',
+      assetClass: CapitalFlowAssetClass.crypto,
+      regionLabel: '글로벌',
+      destination: 'BTC, ETH, 스테이킹/인프라 토큰',
+      flowScore: 82,
+      momentum: 79,
+      liquidity: 74,
+      risk: 67,
+      netFlowLabel: '현물 ETF와 위험선호 자금 민감',
+      signal: '달러 유동성 완화 기대에 반응',
+      thesis: '금리 인하 기대와 ETF 접근성이 맞물릴 때 코인은 가장 빠르게 위험자산 베타를 반영합니다.',
+      drivers: ['ETF 플로우', '달러 유동성', '반감기 이후 공급', '규제 뉴스'],
+      trend: [48, 52, 58, 63, 61, 70, 76, 80, 82],
+      updatedLabel: '오늘',
+    ),
+    CapitalFlow(
+      id: 'gold-reserve',
+      name: '금/안전자산 축적',
+      assetClass: CapitalFlowAssetClass.commodity,
+      regionLabel: '글로벌',
+      destination: '금, 금광주, 중앙은행 준비자산',
+      flowScore: 76,
+      momentum: 70,
+      liquidity: 63,
+      risk: 34,
+      netFlowLabel: '중앙은행 매입과 지정학 헤지',
+      signal: '위험선호와 별개로 구조적 매수',
+      thesis: '달러 신뢰 분산, 지정학 리스크, 실질금리 둔화가 겹치면 금은 포트폴리오 보험으로 재평가됩니다.',
+      drivers: ['중앙은행 매입', '실질금리', '달러 헤지', '지정학 리스크'],
+      trend: [56, 57, 60, 64, 66, 68, 71, 74, 76],
+      updatedLabel: '오늘',
+    ),
+    CapitalFlow(
+      id: 'korea-value-access',
+      name: '한국 주식 접근성 재평가',
+      assetClass: CapitalFlowAssetClass.equityIndex,
+      regionLabel: '한국',
+      destination: 'KOSPI 대형주, 지주사, 배당/자사주',
+      flowScore: 71,
+      momentum: 68,
+      liquidity: 61,
+      risk: 48,
+      netFlowLabel: '외국인 대형주와 정책 테마 선별 유입',
+      signal: '미국 개인 접근성 확대 시 구조적 자금 후보',
+      thesis:
+          '세제, 주주환원, 거래 접근성이 함께 개선되면 한국 저평가 자산이 글로벌 개인 자금의 새 목적지가 될 수 있습니다.',
+      drivers: ['밸류업', '원화 안정', '주주환원', '해외 브로커 접근성'],
+      trend: [45, 47, 51, 55, 57, 61, 65, 68, 71],
+      updatedLabel: '관찰',
+    ),
+    CapitalFlow(
+      id: 'us-duration',
+      name: '미국 장기채 듀레이션',
+      assetClass: CapitalFlowAssetClass.bond,
+      regionLabel: '미국',
+      destination: '장기 국채, 투자등급 채권',
+      flowScore: 64,
+      momentum: 58,
+      liquidity: 80,
+      risk: 44,
+      netFlowLabel: '금리 피크아웃 기대에 대기 자금 증가',
+      signal: '경기 둔화 확인 전까지는 변동성 큼',
+      thesis: '성장 둔화와 물가 안정이 동시에 확인되면 현금성 자금이 채권 듀레이션으로 이동할 가능성이 큽니다.',
+      drivers: ['물가 둔화', '고용 냉각', '연준 경로', '재정 발행량'],
+      trend: [44, 47, 52, 50, 55, 57, 60, 62, 64],
+      updatedLabel: '관찰',
+    ),
+  ];
+
+  @override
+  List<EmergingCapitalFlow> get emergingCapitalFlows => const [
+    EmergingCapitalFlow(
+      id: 'us-retail-kospi',
+      title: '미국 개인의 KOSPI 직접 접근 확대',
+      from: '미국 리테일/ETF 자금',
+      to: '한국 대형주와 밸류업 ETF',
+      probability: 72,
+      timeframe: '6-18개월',
+      trigger: '해외 브로커의 한국 주식 접근성 개선, 야간 거래/소수점 거래 확대, 원화 환전 UX 개선',
+      watch: '미국 브로커 상장 목록, ADR/ETF 거래대금, 원화 안정, 한국 주주환원 정책',
+      beneficiaries: ['KOSPI 대형주', '고배당 금융', '지주사', '반도체 ETF'],
+      risks: ['원화 약세', '세금/결제 복잡성', '코리아 디스카운트 재확대'],
+    ),
+    EmergingCapitalFlow(
+      id: 'stablecoin-treasury',
+      title: '스테이블코인 담보가 단기채 수요를 키우는 흐름',
+      from: '온체인 달러 유동성',
+      to: '미국 단기채와 토큰화 국채',
+      probability: 66,
+      timeframe: '3-12개월',
+      trigger: '스테이블코인 규제 명확화와 토큰화 머니마켓 상품 확대',
+      watch: '스테이블코인 시총, 단기채 금리, 온체인 RWA 발행액',
+      beneficiaries: ['단기채 ETF', 'RWA 인프라', '수탁/결제 플랫폼'],
+      risks: ['규제 지연', '환매 리스크', '스프레드 축소'],
+    ),
+    EmergingCapitalFlow(
+      id: 'power-bottleneck',
+      title: 'AI 전력 병목이 에너지/전력망으로 확산',
+      from: 'AI 대형주 차익 실현 자금',
+      to: '전력망, 발전, 냉각, 구리',
+      probability: 78,
+      timeframe: '현재-12개월',
+      trigger: '데이터센터 전력 계약, 전력 설비 수주, 구리 재고 감소',
+      watch: '전력기기 수주잔고, PPA 계약, 구리 가격, 전력 유틸리티 CAPEX',
+      beneficiaries: ['변압기', '전력 EPC', '냉각 장비', '구리/전선'],
+      risks: ['AI CAPEX 둔화', '원자재 급등', '정책 인허가 지연'],
     ),
   ];
 

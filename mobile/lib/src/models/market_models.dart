@@ -43,6 +43,99 @@ extension FlowStageLabel on FlowStage {
   }
 }
 
+enum CapitalFlowAssetClass {
+  equityIndex,
+  sector,
+  crypto,
+  commodity,
+  bond,
+  currency,
+  alternative,
+}
+
+extension CapitalFlowAssetClassLabel on CapitalFlowAssetClass {
+  String get label {
+    switch (this) {
+      case CapitalFlowAssetClass.equityIndex:
+        return '주가지수';
+      case CapitalFlowAssetClass.sector:
+        return '섹터';
+      case CapitalFlowAssetClass.crypto:
+        return '코인';
+      case CapitalFlowAssetClass.commodity:
+        return '원자재';
+      case CapitalFlowAssetClass.bond:
+        return '채권';
+      case CapitalFlowAssetClass.currency:
+        return '통화';
+      case CapitalFlowAssetClass.alternative:
+        return '대체자산';
+    }
+  }
+}
+
+class CapitalFlow {
+  const CapitalFlow({
+    required this.id,
+    required this.name,
+    required this.assetClass,
+    required this.regionLabel,
+    required this.destination,
+    required this.flowScore,
+    required this.momentum,
+    required this.liquidity,
+    required this.risk,
+    required this.netFlowLabel,
+    required this.signal,
+    required this.thesis,
+    required this.drivers,
+    required this.trend,
+    required this.updatedLabel,
+  });
+
+  final String id;
+  final String name;
+  final CapitalFlowAssetClass assetClass;
+  final String regionLabel;
+  final String destination;
+  final int flowScore;
+  final int momentum;
+  final int liquidity;
+  final int risk;
+  final String netFlowLabel;
+  final String signal;
+  final String thesis;
+  final List<String> drivers;
+  final List<double> trend;
+  final String updatedLabel;
+}
+
+class EmergingCapitalFlow {
+  const EmergingCapitalFlow({
+    required this.id,
+    required this.title,
+    required this.from,
+    required this.to,
+    required this.probability,
+    required this.timeframe,
+    required this.trigger,
+    required this.watch,
+    required this.beneficiaries,
+    required this.risks,
+  });
+
+  final String id;
+  final String title;
+  final String from;
+  final String to;
+  final int probability;
+  final String timeframe;
+  final String trigger;
+  final String watch;
+  final List<String> beneficiaries;
+  final List<String> risks;
+}
+
 class AppUser {
   const AppUser({
     required this.id,

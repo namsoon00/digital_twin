@@ -46,6 +46,45 @@ void main() {
     expect(find.text('NVDA'), findsOneWidget);
   });
 
+  testWidgets('MarketFlow shows global capital flows', (tester) async {
+    await tester.pumpWidget(const MarketFlowApp());
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('자금'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('세계 자금 흐름'), findsOneWidget);
+    expect(find.text('AI 인프라 CAPEX'), findsOneWidget);
+
+    await tester.scrollUntilVisible(
+      find.text('디지털 자산 베타'),
+      360,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('디지털 자산 베타'), findsOneWidget);
+
+    await tester.scrollUntilVisible(
+      find.text('금/안전자산 축적'),
+      360,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('금/안전자산 축적'), findsOneWidget);
+
+    await tester.scrollUntilVisible(
+      find.text('새 흐름 후보'),
+      360,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('새 흐름 후보'), findsOneWidget);
+    expect(find.text('미국 개인의 KOSPI 직접 접근 확대'), findsOneWidget);
+  });
+
   testWidgets('MarketFlow shows Toss Securities settings', (tester) async {
     await tester.pumpWidget(const MarketFlowApp());
     await tester.pumpAndSettle();

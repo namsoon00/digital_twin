@@ -47,7 +47,9 @@ jobs:
 
       - name: Build web
         working-directory: mobile
-        run: flutter build web --release --base-href /digital_twin/
+        run: >
+          flutter build web --release --base-href /digital_twin/
+          --dart-define=ALPHA_VANTAGE_API_KEY=${{ secrets.ALPHA_VANTAGE_API_KEY }}
 
       - name: Publish gh-pages branch
         shell: bash

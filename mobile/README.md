@@ -10,6 +10,12 @@ flutter run
 
 실제 기기에 설치하려면 `mobile` 폴더에서 iOS 또는 Android 디바이스를 선택해 실행하세요.
 
+시세 API를 연결하려면 Alpha Vantage API key를 빌드 변수로 전달하세요.
+
+```bash
+flutter run --dart-define=ALPHA_VANTAGE_API_KEY=<your-key>
+```
+
 ## 검증
 
 ```bash
@@ -20,10 +26,18 @@ flutter test
 ## GitHub Pages 빌드
 
 ```bash
-flutter build web --release --base-href /digital_twin/
+flutter build web --release --base-href /digital_twin/ --dart-define=ALPHA_VANTAGE_API_KEY=<your-key>
 ```
 
 `main`에 푸시하면 `.github/workflows/pages.yml`이 같은 빌드를 실행하고 `gh-pages` 브랜치에 정적 파일을 배포합니다.
+배포 환경에서는 GitHub repository secret `ALPHA_VANTAGE_API_KEY`를 사용합니다.
+
+## 사용 API
+
+- Provider: Alpha Vantage
+- Endpoint: `GLOBAL_QUOTE`
+- Key: `ALPHA_VANTAGE_API_KEY`
+- 화면 표시: 대시보드의 API 카드에 provider, endpoint, 연결 상태, 업데이트 시각이 표시됩니다.
 
 ## 구조
 

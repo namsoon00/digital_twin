@@ -114,6 +114,7 @@ class ThemePulse {
 class EquityFlow {
   const EquityFlow({
     required this.symbol,
+    required this.apiSymbol,
     required this.name,
     required this.region,
     required this.theme,
@@ -130,6 +131,7 @@ class EquityFlow {
   });
 
   final String symbol;
+  final String apiSymbol;
   final String name;
   final MarketRegion region;
   final String theme;
@@ -143,6 +145,99 @@ class EquityFlow {
   final List<String> tags;
   final String thesis;
   final List<double> sparkline;
+}
+
+enum QuoteFetchStatus { idle, loading, ready, missingApiKey, partial, failed }
+
+class QuoteApiSnapshot {
+  const QuoteApiSnapshot({
+    required this.provider,
+    required this.endpoint,
+    required this.status,
+    required this.message,
+    required this.apiKeyConfigured,
+    required this.requestedSymbols,
+    this.updatedAt,
+  });
+
+  factory QuoteApiSnapshot.initial({required bool apiKeyConfigured}) {
+    return QuoteApiSnapshot(
+      provider: 'Alpha Vantage',
+      endpoint: 'GLOBAL_QUOTE',
+      status: QuoteFetchStatus.idle,
+      message: apiKeyConfigured ? '대기 중' : 'API key 미설정',
+      apiKeyConfigured: apiKeyConfigured,
+      requestedSymbols: 0,
+    );
+  }
+
+  final String provider;
+  final String endpoint;
+  final QuoteFetchStatus status;
+  final String message;
+  final bool apiKeyConfigured;
+  final int requestedSymbols;
+  final DateTime? updatedAt;
+
+  String get statusLabel {
+    switch (status) {
+      case QuoteFetchStatus.idle:
+        return '대기';
+      case QuoteFetchStatus.loading:
+        return '조회 중';
+      case QuoteFetchStatus.ready:
+        return '최신 데이터 연결';
+      case QuoteFetchStatus.missingApiKey:
+        return 'API key 필요';
+      case QuoteFetchStatus.partial:
+        return '일부 업데이트';
+      case QuoteFetchStatus.failed:
+        return '연결 실패';
+    }
+  }
+}
+
+class LiveQuote {
+  const LiveQuote({
+    required this.symbol,
+    required this.apiSymbol,
+    required this.price,
+    required this.change,
+    required this.changePercent,
+    required this.volume,
+    required this.latestTradingDay,
+    required this.fetchedAt,
+    required this.provider,
+  });
+
+  final String symbol;
+  final String apiSymbol;
+  final double price;
+  final double change;
+  final double changePercent;
+  final int volume;
+  final String latestTradingDay;
+  final DateTime fetchedAt;
+  final String provider;
+
+  String priceLabel(MarketRegion region) {
+    if (region == MarketRegion.korea) {
+      return '${price.round()}원';
+    }
+    return '\$${price.toStringAsFixed(2)}';
+  }
+
+  String get changePercentLabel {
+    final prefix = changePercent >= 0 ? '+' : '';
+    return '$prefix${changePercent.toStringAsFixed(2)}%';
+  }
+}
+
+class QuoteFetchResult {
+  const QuoteFetchResult({required this.quotes, required this.snapshot});
+
+  final Map<String, LiveQuote> quotes;
+  final QuoteApiSnapshot snapshot;
 }
 
 class JournalEntry {

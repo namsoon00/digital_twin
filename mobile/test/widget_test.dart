@@ -5,8 +5,11 @@ import 'package:market_flow/main.dart';
 void main() {
   testWidgets('MarketFlow opens on the live flow dashboard', (tester) async {
     await tester.pumpWidget(const MarketFlowApp());
+    await tester.pumpAndSettle();
 
     expect(find.text('MarketFlow'), findsOneWidget);
+    expect(find.text('API key 필요'), findsWidgets);
+    expect(find.text('Alpha Vantage GLOBAL_QUOTE'), findsOneWidget);
     expect(find.text('시장 펄스'), findsOneWidget);
 
     await tester.scrollUntilVisible(

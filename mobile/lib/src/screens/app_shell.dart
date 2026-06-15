@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../data/flow_repository.dart';
+import '../data/market_data_api.dart';
 import '../models/market_models.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_card.dart';
@@ -21,12 +22,44 @@ class _AppShellState extends State<AppShell> {
   MarketRegion _region = MarketRegion.all;
   late AppUser _currentUser;
   late List<JournalEntry> _journals;
+  late AlphaVantageQuoteService _quoteService;
+  late QuoteApiSnapshot _quoteSnapshot;
+  Map<String, LiveQuote> _quotes = const {};
 
   @override
   void initState() {
     super.initState();
     _currentUser = widget.repository.users.first;
     _journals = widget.repository.journals.toList();
+    _quoteService = AlphaVantageQuoteService();
+    _quoteSnapshot = _quoteService.initialSnapshot;
+    WidgetsBinding.instance.addPostFrameCallback((_) => _refreshLiveQuotes());
+  }
+
+  @override
+  void dispose() {
+    _quoteService.dispose();
+    super.dispose();
+  }
+
+  Future<void> _refreshLiveQuotes() async {
+    final equities = widget.repository.equities.toList(growable: false)
+      ..sort((a, b) => b.flowScore.compareTo(a.flowScore));
+    if (mounted) {
+      setState(() {
+        _quoteSnapshot = _quoteService.loadingSnapshot(equities.length);
+      });
+    }
+
+    final result = await _quoteService.fetchQuotes(equities);
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _quotes = result.quotes;
+      _quoteSnapshot = result.snapshot;
+    });
   }
 
   bool _matchesRegion(MarketRegion region) {
@@ -85,9 +118,12 @@ class _AppShellState extends State<AppShell> {
         pulses: _pulses,
         themes: _themes,
         equities: _equities,
+        quotes: _quotes,
+        quoteSnapshot: _quoteSnapshot,
+        onRefreshQuotes: _refreshLiveQuotes,
       ),
       ThemeBoardScreen(themes: _themes),
-      WatchlistScreen(equities: _equities),
+      WatchlistScreen(equities: _equities, quotes: _quotes),
       JournalScreen(entries: _userJournals, onAddEntry: _openJournalComposer),
     ];
 
@@ -268,6 +304,9 @@ class DashboardScreen extends StatelessWidget {
     required this.pulses,
     required this.themes,
     required this.equities,
+    required this.quotes,
+    required this.quoteSnapshot,
+    required this.onRefreshQuotes,
     super.key,
   });
 
@@ -275,6 +314,9 @@ class DashboardScreen extends StatelessWidget {
   final List<MarketPulse> pulses;
   final List<ThemePulse> themes;
   final List<EquityFlow> equities;
+  final Map<String, LiveQuote> quotes;
+  final QuoteApiSnapshot quoteSnapshot;
+  final VoidCallback onRefreshQuotes;
 
   @override
   Widget build(BuildContext context) {
@@ -311,6 +353,12 @@ class DashboardScreen extends StatelessWidget {
               color: AppColors.amber,
             ),
           ],
+        ),
+        const SizedBox(height: 18),
+        ApiStatusCard(
+          snapshot: quoteSnapshot,
+          liveQuoteCount: quotes.length,
+          onRefresh: onRefreshQuotes,
         ),
         const SizedBox(height: 18),
         const SectionHeader(title: '시장 펄스'),
@@ -363,10 +411,120 @@ class DashboardScreen extends StatelessWidget {
               .map(
                 (equity) => Padding(
                   padding: const EdgeInsets.only(bottom: 10),
-                  child: EquityFlowTile(equity: equity),
+                  child: EquityFlowTile(
+                    equity: equity,
+                    quote: quotes[equity.symbol],
+                  ),
                 ),
               ),
       ],
+    );
+  }
+}
+
+class ApiStatusCard extends StatelessWidget {
+  const ApiStatusCard({
+    required this.snapshot,
+    required this.liveQuoteCount,
+    required this.onRefresh,
+    super.key,
+  });
+
+  final QuoteApiSnapshot snapshot;
+  final int liveQuoteCount;
+  final VoidCallback onRefresh;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = switch (snapshot.status) {
+      QuoteFetchStatus.ready => AppColors.green,
+      QuoteFetchStatus.partial => AppColors.amber,
+      QuoteFetchStatus.loading => AppColors.blue,
+      QuoteFetchStatus.missingApiKey => AppColors.amber,
+      QuoteFetchStatus.failed => AppColors.red,
+      QuoteFetchStatus.idle => AppColors.muted,
+    };
+    final updatedAt = snapshot.updatedAt;
+
+    return AppCard(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          DecoratedBox(
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(10),
+              child: Icon(Icons.cloud_sync_outlined, color: color, size: 22),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        snapshot.statusLabel,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  snapshot.message,
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    FlowChip(
+                      label: '${snapshot.provider} ${snapshot.endpoint}',
+                      color: AppColors.blue,
+                    ),
+                    FlowChip(
+                      label:
+                          'API ${snapshot.apiKeyConfigured ? '연결' : 'key 필요'}',
+                      color: snapshot.apiKeyConfigured
+                          ? AppColors.green
+                          : AppColors.amber,
+                    ),
+                    FlowChip(
+                      label:
+                          'live $liveQuoteCount/${snapshot.requestedSymbols}',
+                      color: liveQuoteCount > 0
+                          ? AppColors.green
+                          : AppColors.muted,
+                    ),
+                    if (updatedAt != null)
+                      FlowChip(
+                        label: _formatClock(updatedAt),
+                        color: AppColors.charcoal,
+                      ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          IconButton(
+            tooltip: '시세 새로고침',
+            onPressed: snapshot.status == QuoteFetchStatus.loading
+                ? null
+                : onRefresh,
+            icon: const Icon(Icons.refresh),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -543,9 +701,14 @@ class ThemePulseCard extends StatelessWidget {
 }
 
 class WatchlistScreen extends StatelessWidget {
-  const WatchlistScreen({required this.equities, super.key});
+  const WatchlistScreen({
+    required this.equities,
+    required this.quotes,
+    super.key,
+  });
 
   final List<EquityFlow> equities;
+  final Map<String, LiveQuote> quotes;
 
   @override
   Widget build(BuildContext context) {
@@ -566,11 +729,15 @@ class WatchlistScreen extends StatelessWidget {
         }
         return EquityFlowTile(
           equity: equities[index - 1],
+          quote: quotes[equities[index - 1].symbol],
           onTap: () => showModalBottomSheet<void>(
             context: context,
             isScrollControlled: true,
             showDragHandle: true,
-            builder: (_) => StockDetailSheet(equity: equities[index - 1]),
+            builder: (_) => StockDetailSheet(
+              equity: equities[index - 1],
+              quote: quotes[equities[index - 1].symbol],
+            ),
           ),
         );
       },
@@ -579,17 +746,24 @@ class WatchlistScreen extends StatelessWidget {
 }
 
 class EquityFlowTile extends StatelessWidget {
-  const EquityFlowTile({required this.equity, this.onTap, super.key});
+  const EquityFlowTile({
+    required this.equity,
+    this.quote,
+    this.onTap,
+    super.key,
+  });
 
   final EquityFlow equity;
+  final LiveQuote? quote;
   final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
     final color = scoreColor(equity.flowScore);
-    final changeColor = equity.changePercent >= 0
-        ? AppColors.green
-        : AppColors.red;
+    final effectiveChange = quote?.changePercent ?? equity.changePercent;
+    final effectivePrice =
+        quote?.priceLabel(equity.region) ?? equity.priceLabel;
+    final changeColor = effectiveChange >= 0 ? AppColors.green : AppColors.red;
 
     return AppCard(
       onTap: onTap,
@@ -632,9 +806,9 @@ class EquityFlowTile extends StatelessWidget {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    equity.changePercent >= 0
-                        ? '+${equity.changePercent.toStringAsFixed(1)}%'
-                        : '${equity.changePercent.toStringAsFixed(1)}%',
+                    effectiveChange >= 0
+                        ? '+${effectiveChange.toStringAsFixed(2)}%'
+                        : '${effectiveChange.toStringAsFixed(2)}%',
                     style: TextStyle(
                       color: changeColor,
                       fontWeight: FontWeight.w800,
@@ -654,7 +828,7 @@ class EquityFlowTile extends StatelessWidget {
           Row(
             children: [
               Text(
-                equity.priceLabel,
+                effectivePrice,
                 style: Theme.of(context).textTheme.labelLarge,
               ),
               const SizedBox(width: 10),
@@ -666,6 +840,12 @@ class EquityFlowTile extends StatelessWidget {
                   children: [
                     for (final tag in equity.tags.take(2))
                       FlowChip(label: tag, color: AppColors.blue),
+                    FlowChip(
+                      label: quote == null
+                          ? 'mock'
+                          : 'API ${quote!.latestTradingDay}',
+                      color: quote == null ? AppColors.amber : AppColors.green,
+                    ),
                   ],
                 ),
               ),
@@ -678,13 +858,17 @@ class EquityFlowTile extends StatelessWidget {
 }
 
 class StockDetailSheet extends StatelessWidget {
-  const StockDetailSheet({required this.equity, super.key});
+  const StockDetailSheet({required this.equity, this.quote, super.key});
 
   final EquityFlow equity;
+  final LiveQuote? quote;
 
   @override
   Widget build(BuildContext context) {
     final color = scoreColor(equity.flowScore);
+    final effectivePrice =
+        quote?.priceLabel(equity.region) ?? equity.priceLabel;
+    final effectiveChange = quote?.changePercent ?? equity.changePercent;
     return SafeArea(
       top: false,
       child: SingleChildScrollView(
@@ -725,6 +909,26 @@ class StockDetailSheet extends StatelessWidget {
             SizedBox(
               height: 100,
               child: Sparkline(values: equity.sparkline, color: color),
+            ),
+            const SizedBox(height: 14),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                FlowChip(label: effectivePrice, color: AppColors.charcoal),
+                FlowChip(
+                  label: effectiveChange >= 0
+                      ? '+${effectiveChange.toStringAsFixed(2)}%'
+                      : '${effectiveChange.toStringAsFixed(2)}%',
+                  color: effectiveChange >= 0 ? AppColors.green : AppColors.red,
+                ),
+                FlowChip(
+                  label: quote == null
+                      ? 'mock 데이터'
+                      : '${quote!.provider} ${quote!.latestTradingDay}',
+                  color: quote == null ? AppColors.amber : AppColors.green,
+                ),
+              ],
             ),
             const SizedBox(height: 18),
             Text(equity.thesis, style: Theme.of(context).textTheme.bodyLarge),
@@ -1108,4 +1312,10 @@ class EmptyState extends StatelessWidget {
       ),
     );
   }
+}
+
+String _formatClock(DateTime value) {
+  final hour = value.hour.toString().padLeft(2, '0');
+  final minute = value.minute.toString().padLeft(2, '0');
+  return '$hour:$minute';
 }

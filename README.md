@@ -56,18 +56,28 @@ flutter test
 
 현재 모바일 앱은 mock 데이터 repository로 동작하며, 이후 사용자 인증과 실제 시세/뉴스 API를 연결할 수 있도록 화면과 데이터 계층을 분리했습니다.
 
+실시간/지연 시세는 Alpha Vantage `GLOBAL_QUOTE` API를 사용합니다. 앱 화면의 API 카드에서 사용 중인 provider, endpoint, 연결 상태, 업데이트 시각을 확인할 수 있습니다.
+
+```bash
+cd mobile
+flutter run --dart-define=ALPHA_VANTAGE_API_KEY=<your-key>
+```
+
+API key가 없으면 앱은 mock 가격을 유지하고 화면에 `API key 필요` 상태를 표시합니다.
+
 ### GitHub Pages
 
 모바일 앱의 웹 빌드는 GitHub Pages용으로 `gh-pages` 브랜치에 배포됩니다.
 
 ```bash
 cd mobile
-flutter build web --release --base-href /digital_twin/
+flutter build web --release --base-href /digital_twin/ --dart-define=ALPHA_VANTAGE_API_KEY=<your-key>
 ```
 
 배포 URL은 `https://namsoon00.github.io/digital_twin/`입니다.
 
 GitHub Pages가 아직 활성화되어 있지 않으면 저장소 Settings > Pages에서 source를 `Deploy from a branch`, branch를 `gh-pages`, folder를 `/`로 설정하세요.
+GitHub Actions 배포에서 최신 시세를 켜려면 repository secret `ALPHA_VANTAGE_API_KEY`를 설정하세요.
 
 ## 이슈 기반 개발
 

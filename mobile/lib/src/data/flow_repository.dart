@@ -133,6 +133,7 @@ class MockFlowRepository implements FlowRepository {
   List<EquityFlow> get equities => const [
     EquityFlow(
       symbol: 'NVDA',
+      apiSymbol: 'NVDA',
       name: 'NVIDIA',
       region: MarketRegion.unitedStates,
       theme: 'AI 인프라',
@@ -149,6 +150,7 @@ class MockFlowRepository implements FlowRepository {
     ),
     EquityFlow(
       symbol: '005930',
+      apiSymbol: '005930.KS',
       name: '삼성전자',
       region: MarketRegion.korea,
       theme: 'HBM/반도체',
@@ -165,6 +167,7 @@ class MockFlowRepository implements FlowRepository {
     ),
     EquityFlow(
       symbol: '000660',
+      apiSymbol: '000660.KS',
       name: 'SK하이닉스',
       region: MarketRegion.korea,
       theme: 'HBM/반도체',
@@ -181,6 +184,7 @@ class MockFlowRepository implements FlowRepository {
     ),
     EquityFlow(
       symbol: 'VRT',
+      apiSymbol: 'VRT',
       name: 'Vertiv',
       region: MarketRegion.unitedStates,
       theme: 'AI 인프라',
@@ -197,6 +201,7 @@ class MockFlowRepository implements FlowRepository {
     ),
     EquityFlow(
       symbol: '012450',
+      apiSymbol: '012450.KS',
       name: '한화에어로스페이스',
       region: MarketRegion.korea,
       theme: '방산',
@@ -213,6 +218,7 @@ class MockFlowRepository implements FlowRepository {
     ),
     EquityFlow(
       symbol: 'GEV',
+      apiSymbol: 'GEV',
       name: 'GE Vernova',
       region: MarketRegion.unitedStates,
       theme: '전력망/변압기',

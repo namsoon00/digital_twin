@@ -245,7 +245,12 @@ class TossAccountSettings {
     required this.enabled,
     required this.accountAlias,
     required this.accountHint,
-    required this.backendUrl,
+    required this.apiBaseUrl,
+    required this.appKey,
+    required this.appSecret,
+    required this.accessToken,
+    required this.accountNumber,
+    required this.testPath,
     required this.readOnly,
     required this.orderLocked,
   });
@@ -255,7 +260,12 @@ class TossAccountSettings {
       enabled: false,
       accountAlias: '',
       accountHint: '',
-      backendUrl: '',
+      apiBaseUrl: '',
+      appKey: '',
+      appSecret: '',
+      accessToken: '',
+      accountNumber: '',
+      testPath: '',
       readOnly: true,
       orderLocked: true,
     );
@@ -264,21 +274,43 @@ class TossAccountSettings {
   final bool enabled;
   final String accountAlias;
   final String accountHint;
-  final String backendUrl;
+  final String apiBaseUrl;
+  final String appKey;
+  final String appSecret;
+  final String accessToken;
+  final String accountNumber;
+  final String testPath;
   final bool readOnly;
   final bool orderLocked;
 
   bool get hasAccount =>
-      accountAlias.trim().isNotEmpty || accountHint.trim().isNotEmpty;
-  bool get hasBackend => backendUrl.trim().isNotEmpty;
+      accountAlias.trim().isNotEmpty ||
+      accountHint.trim().isNotEmpty ||
+      accountNumber.trim().isNotEmpty;
+  bool get hasApiBaseUrl => apiBaseUrl.trim().isNotEmpty;
+  bool get hasCredential =>
+      accessToken.trim().isNotEmpty ||
+      (appKey.trim().isNotEmpty && appSecret.trim().isNotEmpty);
+  bool get hasTestPath => testPath.trim().isNotEmpty;
   bool get isReady =>
-      enabled && hasAccount && hasBackend && readOnly && orderLocked;
+      enabled &&
+      hasAccount &&
+      hasApiBaseUrl &&
+      hasCredential &&
+      hasTestPath &&
+      readOnly &&
+      orderLocked;
 
   TossAccountSettings copyWith({
     bool? enabled,
     String? accountAlias,
     String? accountHint,
-    String? backendUrl,
+    String? apiBaseUrl,
+    String? appKey,
+    String? appSecret,
+    String? accessToken,
+    String? accountNumber,
+    String? testPath,
     bool? readOnly,
     bool? orderLocked,
   }) {
@@ -286,7 +318,12 @@ class TossAccountSettings {
       enabled: enabled ?? this.enabled,
       accountAlias: accountAlias ?? this.accountAlias,
       accountHint: accountHint ?? this.accountHint,
-      backendUrl: backendUrl ?? this.backendUrl,
+      apiBaseUrl: apiBaseUrl ?? this.apiBaseUrl,
+      appKey: appKey ?? this.appKey,
+      appSecret: appSecret ?? this.appSecret,
+      accessToken: accessToken ?? this.accessToken,
+      accountNumber: accountNumber ?? this.accountNumber,
+      testPath: testPath ?? this.testPath,
       readOnly: readOnly ?? this.readOnly,
       orderLocked: orderLocked ?? this.orderLocked,
     );

@@ -54,8 +54,12 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('토스증권 계정'), findsOneWidget);
-    expect(find.text('Toss Securities Open API'), findsOneWidget);
-    expect(find.text('백엔드 API URL'), findsOneWidget);
+    expect(find.text('앱에서 Open API 직접 호출'), findsOneWidget);
+    expect(find.text('Open API 기본 URL'), findsOneWidget);
+    expect(find.text('앱 키'), findsOneWidget);
+    expect(find.text('앱 시크릿'), findsOneWidget);
+    expect(find.text('액세스 토큰'), findsOneWidget);
+    expect(find.text('연결 테스트'), findsOneWidget);
     expect(find.text('주문 기능 잠금'), findsOneWidget);
   });
 }

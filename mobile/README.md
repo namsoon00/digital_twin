@@ -34,10 +34,11 @@ flutter build web --release --base-href /digital_twin/ --dart-define=ALPHA_VANTA
 
 ## 토스증권 설정
 
-앱의 `설정` 탭에서 토스증권 계정 옵션을 켤 수 있습니다.
+앱의 `설정` 탭에서 토스증권 Open API 직접 호출 옵션을 켤 수 있습니다.
 
-- 저장 항목: 계정 별칭, 계좌 식별 힌트, 백엔드 API URL, 읽기 전용 여부
-- 저장하지 않는 항목: Toss API key, app secret, 주문 권한 secret
+- 저장 항목: 계정 별칭, 계좌 식별값, Open API 기본 URL, 연결 테스트 경로, 앱 키, 앱 시크릿, 액세스 토큰, 읽기 전용 여부
+- 호출 방식: 앱에서 REST API로 직접 호출하며, `Authorization: Bearer <token>`, `appkey`, `appsecret` 헤더를 전송합니다.
+- 주의 사항: 웹 배포에서는 키와 토큰이 브라우저 저장소와 네트워크 요청에 노출될 수 있습니다. 개인 기기 설치용으로 먼저 사용하세요.
 - 주문 기능: 서버 검증 전까지 앱에서 잠금 상태
 
 ## 사용 API

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../data/flow_repository.dart';
 import '../data/market_data_api.dart';
 import '../data/settings_repository.dart';
+import '../data/toss_direct_api.dart';
 import '../models/market_models.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_card.dart';
@@ -24,6 +25,7 @@ class _AppShellState extends State<AppShell> {
   late AppUser _currentUser;
   late List<JournalEntry> _journals;
   late AlphaVantageQuoteService _quoteService;
+  late TossDirectApiClient _tossDirectApiClient;
   late SettingsRepository _settingsRepository;
   late QuoteApiSnapshot _quoteSnapshot;
   Map<String, LiveQuote> _quotes = const {};
@@ -36,6 +38,7 @@ class _AppShellState extends State<AppShell> {
     _currentUser = widget.repository.users.first;
     _journals = widget.repository.journals.toList();
     _quoteService = AlphaVantageQuoteService();
+    _tossDirectApiClient = TossDirectApiClient();
     _settingsRepository = SettingsRepository();
     _quoteSnapshot = _quoteService.initialSnapshot;
     _loadTossSettings();
@@ -45,6 +48,7 @@ class _AppShellState extends State<AppShell> {
   @override
   void dispose() {
     _quoteService.dispose();
+    _tossDirectApiClient.dispose();
     super.dispose();
   }
 
@@ -85,6 +89,13 @@ class _AppShellState extends State<AppShell> {
       return;
     }
     setState(() => _tossSettings = settings);
+  }
+
+  Future<TossDirectApiProbeResult> _testTossConnection(
+    TossAccountSettings settings,
+  ) async {
+    await _saveTossSettings(settings);
+    return _tossDirectApiClient.probe(settings);
   }
 
   bool _matchesRegion(MarketRegion region) {
@@ -154,6 +165,7 @@ class _AppShellState extends State<AppShell> {
         tossSettings: _tossSettings,
         settingsLoaded: _settingsLoaded,
         onSaveTossSettings: _saveTossSettings,
+        onTestTossConnection: _testTossConnection,
       ),
     ];
 
@@ -1234,12 +1246,15 @@ class SettingsScreen extends StatefulWidget {
     required this.tossSettings,
     required this.settingsLoaded,
     required this.onSaveTossSettings,
+    required this.onTestTossConnection,
     super.key,
   });
 
   final TossAccountSettings tossSettings;
   final bool settingsLoaded;
-  final ValueChanged<TossAccountSettings> onSaveTossSettings;
+  final Future<void> Function(TossAccountSettings settings) onSaveTossSettings;
+  final Future<TossDirectApiProbeResult> Function(TossAccountSettings settings)
+  onTestTossConnection;
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -1248,9 +1263,17 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen> {
   final _accountAliasController = TextEditingController();
   final _accountHintController = TextEditingController();
-  final _backendUrlController = TextEditingController();
+  final _apiBaseUrlController = TextEditingController();
+  final _testPathController = TextEditingController();
+  final _appKeyController = TextEditingController();
+  final _appSecretController = TextEditingController();
+  final _accessTokenController = TextEditingController();
+  final _accountNumberController = TextEditingController();
   bool _enabled = false;
   bool _readOnly = true;
+  bool _hideSecrets = true;
+  bool _testingConnection = false;
+  TossDirectApiProbeResult? _probeResult;
 
   @override
   void initState() {
@@ -1270,7 +1293,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void dispose() {
     _accountAliasController.dispose();
     _accountHintController.dispose();
-    _backendUrlController.dispose();
+    _apiBaseUrlController.dispose();
+    _testPathController.dispose();
+    _appKeyController.dispose();
+    _appSecretController.dispose();
+    _accessTokenController.dispose();
+    _accountNumberController.dispose();
     super.dispose();
   }
 
@@ -1279,34 +1307,60 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _readOnly = settings.readOnly;
     _accountAliasController.text = settings.accountAlias;
     _accountHintController.text = settings.accountHint;
-    _backendUrlController.text = settings.backendUrl;
+    _apiBaseUrlController.text = settings.apiBaseUrl;
+    _testPathController.text = settings.testPath;
+    _appKeyController.text = settings.appKey;
+    _appSecretController.text = settings.appSecret;
+    _accessTokenController.text = settings.accessToken;
+    _accountNumberController.text = settings.accountNumber;
   }
 
-  Future<void> _save() async {
-    final settings = TossAccountSettings(
+  TossAccountSettings _currentSettings() {
+    return TossAccountSettings(
       enabled: _enabled,
       accountAlias: _accountAliasController.text.trim(),
       accountHint: _accountHintController.text.trim(),
-      backendUrl: _backendUrlController.text.trim(),
+      apiBaseUrl: _apiBaseUrlController.text.trim(),
+      appKey: _appKeyController.text.trim(),
+      appSecret: _appSecretController.text.trim(),
+      accessToken: _accessTokenController.text.trim(),
+      accountNumber: _accountNumberController.text.trim(),
+      testPath: _testPathController.text.trim(),
       readOnly: _readOnly,
       orderLocked: true,
     );
-    widget.onSaveTossSettings(settings);
+  }
+
+  Future<void> _save() async {
+    await widget.onSaveTossSettings(_currentSettings());
+    if (!mounted) {
+      return;
+    }
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(const SnackBar(content: Text('토스증권 설정 저장됨')));
   }
 
+  Future<void> _testConnection() async {
+    setState(() {
+      _testingConnection = true;
+      _probeResult = null;
+    });
+
+    final result = await widget.onTestTossConnection(_currentSettings());
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _testingConnection = false;
+      _probeResult = result;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
-    final effectiveSettings = TossAccountSettings(
-      enabled: _enabled,
-      accountAlias: _accountAliasController.text.trim(),
-      accountHint: _accountHintController.text.trim(),
-      backendUrl: _backendUrlController.text.trim(),
-      readOnly: _readOnly,
-      orderLocked: true,
-    );
+    final effectiveSettings = _currentSettings();
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 20),
@@ -1344,7 +1398,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          'Toss Securities Open API',
+                          '앱에서 Open API 직접 호출',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: Theme.of(context).textTheme.bodyMedium,
@@ -1370,10 +1424,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     color: _enabled ? AppColors.green : AppColors.muted,
                   ),
                   FlowChip(
-                    label: effectiveSettings.hasBackend
-                        ? 'backend 설정'
-                        : 'backend 필요',
-                    color: effectiveSettings.hasBackend
+                    label: effectiveSettings.hasApiBaseUrl
+                        ? 'URL 설정'
+                        : 'URL 필요',
+                    color: effectiveSettings.hasApiBaseUrl
+                        ? AppColors.green
+                        : AppColors.amber,
+                  ),
+                  FlowChip(
+                    label: effectiveSettings.hasCredential ? '인증 설정' : '인증 필요',
+                    color: effectiveSettings.hasCredential
                         ? AppColors.green
                         : AppColors.amber,
                   ),
@@ -1392,6 +1452,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   hintText: '예: 토스 주계좌',
                   border: OutlineInputBorder(),
                 ),
+                onChanged: (_) => setState(() {}),
               ),
               const SizedBox(height: 12),
               TextField(
@@ -1401,16 +1462,84 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   hintText: '예: 끝 4자리 또는 내부 별칭',
                   border: OutlineInputBorder(),
                 ),
+                onChanged: (_) => setState(() {}),
               ),
               const SizedBox(height: 12),
               TextField(
-                controller: _backendUrlController,
-                keyboardType: TextInputType.url,
+                controller: _accountNumberController,
+                keyboardType: TextInputType.text,
                 decoration: const InputDecoration(
-                  labelText: '백엔드 API URL',
-                  hintText: 'https://api.example.com',
+                  labelText: '계좌번호',
+                  hintText: 'Open API에서 쓰는 계좌 식별값',
                   border: OutlineInputBorder(),
                 ),
+                onChanged: (_) => setState(() {}),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _apiBaseUrlController,
+                keyboardType: TextInputType.url,
+                decoration: const InputDecoration(
+                  labelText: 'Open API 기본 URL',
+                  hintText: 'https://...',
+                  border: OutlineInputBorder(),
+                ),
+                onChanged: (_) => setState(() {}),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _testPathController,
+                keyboardType: TextInputType.url,
+                decoration: const InputDecoration(
+                  labelText: '연결 테스트 경로',
+                  hintText: '/v1/...',
+                  border: OutlineInputBorder(),
+                ),
+                onChanged: (_) => setState(() {}),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _appKeyController,
+                obscureText: _hideSecrets,
+                keyboardType: TextInputType.visiblePassword,
+                decoration: InputDecoration(
+                  labelText: '앱 키',
+                  border: const OutlineInputBorder(),
+                  suffixIcon: IconButton(
+                    tooltip: _hideSecrets ? '보기' : '숨기기',
+                    icon: Icon(
+                      _hideSecrets
+                          ? Icons.visibility_outlined
+                          : Icons.visibility_off_outlined,
+                    ),
+                    onPressed: () =>
+                        setState(() => _hideSecrets = !_hideSecrets),
+                  ),
+                ),
+                onChanged: (_) => setState(() {}),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _appSecretController,
+                obscureText: _hideSecrets,
+                keyboardType: TextInputType.visiblePassword,
+                decoration: const InputDecoration(
+                  labelText: '앱 시크릿',
+                  border: OutlineInputBorder(),
+                ),
+                onChanged: (_) => setState(() {}),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _accessTokenController,
+                obscureText: _hideSecrets,
+                keyboardType: TextInputType.visiblePassword,
+                decoration: const InputDecoration(
+                  labelText: '액세스 토큰',
+                  hintText: 'Bearer 토큰 또는 토큰 값',
+                  border: OutlineInputBorder(),
+                ),
+                onChanged: (_) => setState(() {}),
               ),
               const SizedBox(height: 12),
               SwitchListTile(
@@ -1429,10 +1558,59 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
               const SizedBox(height: 8),
               Text(
-                '토스 API key와 secret은 앱에 저장하지 않고 서버 secret으로만 다룹니다.',
+                '직접 호출 모드는 API key, secret, token을 이 기기 설정에 저장합니다. 웹 배포에서는 브라우저 저장소와 네트워크 요청에 노출될 수 있습니다.',
                 style: Theme.of(context).textTheme.bodyMedium,
               ),
               const SizedBox(height: 16),
+              if (_probeResult != null) ...[
+                DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: (_probeResult!.ok ? AppColors.green : AppColors.red)
+                        .withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(
+                          _probeResult!.ok
+                              ? Icons.check_circle_outline
+                              : Icons.error_outline,
+                          color: _probeResult!.ok
+                              ? AppColors.green
+                              : AppColors.red,
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            _probeResult!.statusLabel,
+                            style: Theme.of(context).textTheme.bodyMedium,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+              ],
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: widget.settingsLoaded && !_testingConnection
+                      ? _testConnection
+                      : null,
+                  icon: _testingConnection
+                      ? const SizedBox.square(
+                          dimension: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.cloud_sync_outlined),
+                  label: const Text('연결 테스트'),
+                ),
+              ),
+              const SizedBox(height: 10),
               SizedBox(
                 width: double.infinity,
                 child: FilledButton.icon(

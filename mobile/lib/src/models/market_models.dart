@@ -115,6 +115,36 @@ class DataApiSource {
   final int priority;
 }
 
+class FlowCandle {
+  const FlowCandle({
+    required this.label,
+    required this.open,
+    required this.high,
+    required this.low,
+    required this.close,
+    required this.liquidity,
+    required this.momentum,
+    required this.risk,
+    required this.aiFlow,
+    required this.cryptoFlow,
+    required this.goldFlow,
+    required this.koreaFlow,
+  });
+
+  final String label;
+  final double open;
+  final double high;
+  final double low;
+  final double close;
+  final double liquidity;
+  final double momentum;
+  final double risk;
+  final double aiFlow;
+  final double cryptoFlow;
+  final double goldFlow;
+  final double koreaFlow;
+}
+
 class CapitalFlow {
   const CapitalFlow({
     required this.id,

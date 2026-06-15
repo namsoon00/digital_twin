@@ -58,6 +58,7 @@ flutter test
 
 `자금` 탭은 코인, 금, 채권, 특정 섹터, 국가별 주식시장으로 돈이 이동하는 흐름을 점수화해서 보여줍니다. “새 흐름 후보”에는 미국 개인의 KOSPI 접근성 확대처럼 아직 만들어지는 중인 글로벌 자금 이동 시나리오를 기록합니다.
 같은 화면의 `필요 API 맵`에는 Alpha Vantage, 토스증권 Open API, FRED, CoinGecko, DefiLlama, ETF/Fund Flow API, 한국 투자자별 수급 API의 역할과 연결 상태를 노출합니다.
+`종합 플로우 캔들`은 캔들형 종합 흐름 지수, 유동성 막대, AI/코인/금/KOSPI/리스크 라인을 하나의 그래프에 겹쳐 보여주며 1M, 2M, 3M, ALL 기간과 세부 구간을 조정할 수 있습니다.
 
 실시간/지연 시세는 Alpha Vantage `GLOBAL_QUOTE` API를 사용합니다. 앱 화면의 API 카드에서 사용 중인 provider, endpoint, 연결 상태, 업데이트 시각을 확인할 수 있습니다.
 

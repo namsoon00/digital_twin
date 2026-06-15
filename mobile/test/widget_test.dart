@@ -53,6 +53,19 @@ void main() {
     await tester.tap(find.text('자금'));
     await tester.pumpAndSettle();
 
+    expect(find.text('종합 플로우 캔들'), findsOneWidget);
+    expect(find.text('1M'), findsOneWidget);
+    expect(find.text('3M'), findsOneWidget);
+    expect(find.text('ALL'), findsOneWidget);
+    expect(find.text('캔들: 종합지수'), findsOneWidget);
+
+    await tester.scrollUntilVisible(
+      find.text('필요 API 맵'),
+      360,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+
     expect(find.text('필요 API 맵'), findsOneWidget);
     expect(find.text('Alpha Vantage'), findsOneWidget);
     expect(find.text('토스증권 Open API'), findsOneWidget);

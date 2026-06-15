@@ -160,6 +160,7 @@ class _AppShellState extends State<AppShell> {
       ),
       CapitalFlowScreen(
         apiSources: widget.repository.dataApiSources,
+        candles: widget.repository.globalFlowCandles,
         flows: widget.repository.capitalFlows,
         emergingFlows: widget.repository.emergingCapitalFlows,
       ),
@@ -479,26 +480,38 @@ class DashboardScreen extends StatelessWidget {
   }
 }
 
-class CapitalFlowScreen extends StatelessWidget {
+class CapitalFlowScreen extends StatefulWidget {
   const CapitalFlowScreen({
     required this.apiSources,
+    required this.candles,
     required this.flows,
     required this.emergingFlows,
     super.key,
   });
 
   final List<DataApiSource> apiSources;
+  final List<FlowCandle> candles;
   final List<CapitalFlow> flows;
   final List<EmergingCapitalFlow> emergingFlows;
 
   @override
+  State<CapitalFlowScreen> createState() => _CapitalFlowScreenState();
+}
+
+class _CapitalFlowScreenState extends State<CapitalFlowScreen> {
+  int _rangeWeeks = 12;
+  RangeValues _detailWindow = const RangeValues(0, 1);
+
+  @override
   Widget build(BuildContext context) {
-    final rankedApiSources = apiSources.toList(growable: false)
+    final rankedApiSources = widget.apiSources.toList(growable: false)
       ..sort((a, b) => a.priority.compareTo(b.priority));
-    final rankedFlows = flows.toList(growable: false)
+    final rankedFlows = widget.flows.toList(growable: false)
       ..sort((a, b) => b.flowScore.compareTo(a.flowScore));
-    final rankedEmerging = emergingFlows.toList(growable: false)
+    final rankedEmerging = widget.emergingFlows.toList(growable: false)
       ..sort((a, b) => b.probability.compareTo(a.probability));
+    final rangeCandles = _rangeCandles(widget.candles, _rangeWeeks);
+    final visibleCandles = _visibleCandles(rangeCandles, _detailWindow);
     final topFlow = rankedFlows.isEmpty ? null : rankedFlows.first;
     final riskOnCount = rankedFlows.where((flow) {
       return flow.assetClass == CapitalFlowAssetClass.crypto ||
@@ -534,6 +547,22 @@ class CapitalFlowScreen extends StatelessWidget {
               color: AppColors.blue,
             ),
           ],
+        ),
+        const SizedBox(height: 18),
+        FlowCompositeChartCard(
+          candles: visibleCandles,
+          rangeWeeks: _rangeWeeks,
+          detailWindow: _detailWindow,
+          totalCount: rangeCandles.length,
+          onRangeChanged: (weeks) {
+            setState(() {
+              _rangeWeeks = weeks;
+              _detailWindow = const RangeValues(0, 1);
+            });
+          },
+          onWindowChanged: (window) {
+            setState(() => _detailWindow = window);
+          },
         ),
         const SizedBox(height: 18),
         SectionHeader(
@@ -591,6 +620,323 @@ class CapitalFlowScreen extends StatelessWidget {
               child: EmergingFlowCard(flow: flow),
             ),
           ),
+      ],
+    );
+  }
+
+  List<FlowCandle> _rangeCandles(List<FlowCandle> candles, int weeks) {
+    if (candles.length <= weeks) {
+      return candles;
+    }
+    return candles.skip(candles.length - weeks).toList(growable: false);
+  }
+
+  List<FlowCandle> _visibleCandles(
+    List<FlowCandle> candles,
+    RangeValues window,
+  ) {
+    if (candles.length <= 4) {
+      return candles;
+    }
+    final maxStart = candles.length - 2;
+    final start = (window.start * maxStart).round().clamp(0, maxStart);
+    final end = (window.end * (candles.length - 1)).round().clamp(
+      start + 1,
+      candles.length - 1,
+    );
+    return candles.sublist(start, end + 1);
+  }
+}
+
+class FlowCompositeChartCard extends StatelessWidget {
+  const FlowCompositeChartCard({
+    required this.candles,
+    required this.rangeWeeks,
+    required this.detailWindow,
+    required this.totalCount,
+    required this.onRangeChanged,
+    required this.onWindowChanged,
+    super.key,
+  });
+
+  final List<FlowCandle> candles;
+  final int rangeWeeks;
+  final RangeValues detailWindow;
+  final int totalCount;
+  final ValueChanged<int> onRangeChanged;
+  final ValueChanged<RangeValues> onWindowChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final latest = candles.isEmpty ? null : candles.last;
+    final first = candles.isEmpty ? null : candles.first;
+    final change = latest == null || first == null
+        ? 0
+        : latest.close - first.open;
+
+    return AppCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              DecoratedBox(
+                decoration: BoxDecoration(
+                  color: AppColors.charcoal.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Padding(
+                  padding: EdgeInsets.all(10),
+                  child: Icon(
+                    Icons.candlestick_chart_outlined,
+                    color: AppColors.charcoal,
+                    size: 22,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '종합 플로우 캔들',
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+                    const SizedBox(height: 5),
+                    Text(
+                      candles.isEmpty
+                          ? '기간 데이터 없음'
+                          : '${candles.first.label} → ${candles.last.label}',
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                  ],
+                ),
+              ),
+              FlowChip(
+                label: change >= 0
+                    ? '+${change.toStringAsFixed(1)}'
+                    : change.toStringAsFixed(1),
+                color: change >= 0 ? AppColors.green : AppColors.red,
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: SegmentedButton<int>(
+              segments: const [
+                ButtonSegment(value: 4, label: Text('1M')),
+                ButtonSegment(value: 8, label: Text('2M')),
+                ButtonSegment(value: 12, label: Text('3M')),
+                ButtonSegment(value: 18, label: Text('ALL')),
+              ],
+              selected: {rangeWeeks},
+              onSelectionChanged: (values) => onRangeChanged(values.first),
+            ),
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            height: 236,
+            child: candles.isEmpty
+                ? const EmptyState(message: '캔들 데이터가 없습니다.')
+                : FlowCompositeChart(candles: candles),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  '세부 구간',
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
+              ),
+              Text(
+                '${candles.length}/$totalCount',
+                style: Theme.of(context).textTheme.labelLarge,
+              ),
+            ],
+          ),
+          RangeSlider(
+            values: detailWindow,
+            min: 0,
+            max: 1,
+            divisions: totalCount > 2 ? totalCount - 1 : 1,
+            labels: RangeLabels(
+              '${(detailWindow.start * 100).round()}%',
+              '${(detailWindow.end * 100).round()}%',
+            ),
+            onChanged: totalCount > 2 ? onWindowChanged : null,
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 10,
+            runSpacing: 8,
+            children: const [
+              _FlowLegendDot(label: '캔들: 종합지수', color: AppColors.green),
+              _FlowLegendDot(label: '유동성', color: AppColors.muted),
+              _FlowLegendDot(label: 'AI', color: AppColors.blue),
+              _FlowLegendDot(label: 'BTC/ETH', color: AppColors.amber),
+              _FlowLegendDot(label: '금', color: AppColors.charcoal),
+              _FlowLegendDot(label: 'KOSPI', color: AppColors.green),
+              _FlowLegendDot(label: '리스크', color: AppColors.red),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class FlowCompositeChart extends StatelessWidget {
+  const FlowCompositeChart({required this.candles, super.key});
+
+  final List<FlowCandle> candles;
+
+  @override
+  Widget build(BuildContext context) {
+    return CustomPaint(
+      painter: FlowCompositeChartPainter(candles: candles),
+      size: const Size(double.infinity, 236),
+    );
+  }
+}
+
+class FlowCompositeChartPainter extends CustomPainter {
+  const FlowCompositeChartPainter({required this.candles});
+
+  final List<FlowCandle> candles;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (candles.isEmpty || size.width <= 0 || size.height <= 0) {
+      return;
+    }
+
+    final chart = Rect.fromLTWH(8, 8, size.width - 16, size.height - 36);
+    final volumeTop = chart.bottom - 38;
+    final volumeHeight = 30.0;
+    final gridPaint = Paint()
+      ..color = AppColors.line.withValues(alpha: 0.72)
+      ..strokeWidth = 1;
+
+    for (var i = 0; i <= 4; i++) {
+      final y = chart.top + chart.height * i / 4;
+      canvas.drawLine(Offset(chart.left, y), Offset(chart.right, y), gridPaint);
+    }
+
+    final step = candles.length == 1
+        ? chart.width
+        : chart.width / candles.length;
+    final candleWidth = (step * 0.48).clamp(4.0, 16.0);
+
+    double yFor(double value) {
+      final normalized = value.clamp(0, 100) / 100;
+      return chart.bottom - normalized * chart.height * 0.92;
+    }
+
+    for (var i = 0; i < candles.length; i++) {
+      final candle = candles[i];
+      final centerX = chart.left + step * i + step / 2;
+      final isUp = candle.close >= candle.open;
+      final color = isUp ? AppColors.green : AppColors.red;
+      final wickPaint = Paint()
+        ..color = color
+        ..strokeWidth = 1.4
+        ..strokeCap = StrokeCap.round;
+      final bodyPaint = Paint()..color = color.withValues(alpha: 0.78);
+      final volumePaint = Paint()
+        ..color = AppColors.muted.withValues(alpha: 0.24);
+
+      canvas.drawRect(
+        Rect.fromLTWH(
+          centerX - candleWidth / 2,
+          volumeTop + volumeHeight * (1 - candle.liquidity / 100),
+          candleWidth,
+          volumeHeight * candle.liquidity / 100,
+        ),
+        volumePaint,
+      );
+
+      canvas.drawLine(
+        Offset(centerX, yFor(candle.high)),
+        Offset(centerX, yFor(candle.low)),
+        wickPaint,
+      );
+      final top = yFor(candle.open > candle.close ? candle.open : candle.close);
+      final bottom = yFor(
+        candle.open < candle.close ? candle.open : candle.close,
+      );
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromLTRB(
+            centerX - candleWidth / 2,
+            top,
+            centerX + candleWidth / 2,
+            bottom == top ? bottom + 2 : bottom,
+          ),
+          const Radius.circular(2),
+        ),
+        bodyPaint,
+      );
+    }
+
+    void drawLine(double Function(FlowCandle candle) selector, Color color) {
+      if (candles.length < 2) {
+        return;
+      }
+      final path = Path();
+      for (var i = 0; i < candles.length; i++) {
+        final x = chart.left + step * i + step / 2;
+        final y = yFor(selector(candles[i]));
+        if (i == 0) {
+          path.moveTo(x, y);
+        } else {
+          path.lineTo(x, y);
+        }
+      }
+      canvas.drawPath(
+        path,
+        Paint()
+          ..color = color
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2.2
+          ..strokeCap = StrokeCap.round
+          ..strokeJoin = StrokeJoin.round,
+      );
+    }
+
+    drawLine((candle) => candle.aiFlow, AppColors.blue);
+    drawLine((candle) => candle.cryptoFlow, AppColors.amber);
+    drawLine((candle) => candle.goldFlow, AppColors.charcoal);
+    drawLine((candle) => candle.koreaFlow, AppColors.green);
+    drawLine((candle) => candle.risk, AppColors.red);
+  }
+
+  @override
+  bool shouldRepaint(covariant FlowCompositeChartPainter oldDelegate) {
+    return oldDelegate.candles != candles;
+  }
+}
+
+class _FlowLegendDot extends StatelessWidget {
+  const _FlowLegendDot({required this.label, required this.color});
+
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        DecoratedBox(
+          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+          child: const SizedBox(width: 8, height: 8),
+        ),
+        const SizedBox(width: 5),
+        Text(label, style: Theme.of(context).textTheme.bodyMedium),
       ],
     );
   }

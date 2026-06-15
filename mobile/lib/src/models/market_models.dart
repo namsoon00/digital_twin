@@ -115,6 +115,39 @@ class DataApiSource {
   final int priority;
 }
 
+class DataApiKeySettings {
+  const DataApiKeySettings({required this.keys});
+
+  factory DataApiKeySettings.empty() {
+    return const DataApiKeySettings(keys: {});
+  }
+
+  final Map<String, String> keys;
+
+  String keyFor(String apiId) {
+    return keys[apiId] ?? '';
+  }
+
+  bool hasKeyFor(String apiId) {
+    return keyFor(apiId).trim().isNotEmpty;
+  }
+
+  int configuredCount(Iterable<DataApiSource> sources) {
+    return sources.where((source) => hasKeyFor(source.id)).length;
+  }
+
+  DataApiKeySettings copyWithKey(String apiId, String value) {
+    final next = Map<String, String>.of(keys);
+    final normalized = value.trim();
+    if (normalized.isEmpty) {
+      next.remove(apiId);
+    } else {
+      next[apiId] = normalized;
+    }
+    return DataApiKeySettings(keys: Map.unmodifiable(next));
+  }
+}
+
 class FlowCandle {
   const FlowCandle({
     required this.label,

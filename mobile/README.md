@@ -16,6 +16,8 @@ flutter run
 flutter run --dart-define=ALPHA_VANTAGE_API_KEY=<your-key>
 ```
 
+앱 실행 후 `설정` 탭에서도 필요한 데이터 API key를 모두 입력할 수 있습니다. Alpha Vantage, 토스증권 Open API, FRED, CoinGecko, DefiLlama, ETF/Fund Flow API, 한국 투자자별 수급 API가 같은 화면에 표시되며, 공급자/커버리지/사용 화면/문서 URL은 읽기 전용 메타데이터로 보입니다. 앱은 기본 데이터 조회용 key 문자열만 기기 로컬 설정에 저장하고, Alpha Vantage key는 대시보드 시세 조회에 바로 사용합니다.
+
 ## 검증
 
 ```bash

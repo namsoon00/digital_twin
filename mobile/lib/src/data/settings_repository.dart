@@ -3,6 +3,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/market_models.dart';
 
 class SettingsRepository {
+  static const _dataApiKeyPrefix = 'dataApi.key.';
   static const _tossEnabledKey = 'toss.enabled';
   static const _tossAccountAliasKey = 'toss.accountAlias';
   static const _tossAccountHintKey = 'toss.accountHint';
@@ -15,6 +16,36 @@ class SettingsRepository {
   static const _tossTestPathKey = 'toss.testPath';
   static const _tossReadOnlyKey = 'toss.readOnly';
   static const _tossOrderLockedKey = 'toss.orderLocked';
+
+  Future<DataApiKeySettings> loadDataApiKeySettings(
+    Iterable<DataApiSource> sources,
+  ) async {
+    final prefs = await SharedPreferences.getInstance();
+    final keys = <String, String>{};
+    for (final source in sources) {
+      final value = prefs.getString(_dataApiKey(source.id)) ?? '';
+      if (value.trim().isNotEmpty) {
+        keys[source.id] = value;
+      }
+    }
+    return DataApiKeySettings(keys: Map.unmodifiable(keys));
+  }
+
+  Future<void> saveDataApiKeySettings(
+    DataApiKeySettings settings,
+    Iterable<DataApiSource> sources,
+  ) async {
+    final prefs = await SharedPreferences.getInstance();
+    for (final source in sources) {
+      final value = settings.keyFor(source.id).trim();
+      final key = _dataApiKey(source.id);
+      if (value.isEmpty) {
+        await prefs.remove(key);
+      } else {
+        await prefs.setString(key, value);
+      }
+    }
+  }
 
   Future<TossAccountSettings> loadTossAccountSettings() async {
     final prefs = await SharedPreferences.getInstance();
@@ -49,5 +80,9 @@ class SettingsRepository {
     await prefs.setString(_tossTestPathKey, settings.testPath);
     await prefs.setBool(_tossReadOnlyKey, settings.readOnly);
     await prefs.setBool(_tossOrderLockedKey, settings.orderLocked);
+  }
+
+  String _dataApiKey(String apiId) {
+    return '$_dataApiKeyPrefix$apiId';
   }
 }

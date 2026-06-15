@@ -29,7 +29,9 @@ class _AppShellState extends State<AppShell> {
   late SettingsRepository _settingsRepository;
   late QuoteApiSnapshot _quoteSnapshot;
   Map<String, LiveQuote> _quotes = const {};
+  DataApiKeySettings _dataApiKeySettings = DataApiKeySettings.empty();
   TossAccountSettings _tossSettings = TossAccountSettings.defaults();
+  bool _dataApiKeysLoaded = false;
   bool _settingsLoaded = false;
 
   @override
@@ -41,6 +43,7 @@ class _AppShellState extends State<AppShell> {
     _tossDirectApiClient = TossDirectApiClient();
     _settingsRepository = SettingsRepository();
     _quoteSnapshot = _quoteService.initialSnapshot;
+    _loadDataApiKeySettings();
     _loadTossSettings();
     WidgetsBinding.instance.addPostFrameCallback((_) => _refreshLiveQuotes());
   }
@@ -81,6 +84,49 @@ class _AppShellState extends State<AppShell> {
       _tossSettings = settings;
       _settingsLoaded = true;
     });
+  }
+
+  Future<void> _loadDataApiKeySettings() async {
+    final settings = await _settingsRepository.loadDataApiKeySettings(
+      widget.repository.dataApiSources,
+    );
+    _quoteService.updateApiKey(settings.keyFor('alpha-vantage'));
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _dataApiKeySettings = settings;
+      _dataApiKeysLoaded = true;
+      _quoteSnapshot = _quoteService.initialSnapshot;
+    });
+    if (settings.hasKeyFor('alpha-vantage')) {
+      await _refreshLiveQuotes();
+    }
+  }
+
+  Future<void> _saveDataApiKeySettings(DataApiKeySettings settings) async {
+    final previousAlphaKey = _dataApiKeySettings.keyFor('alpha-vantage');
+    await _settingsRepository.saveDataApiKeySettings(
+      settings,
+      widget.repository.dataApiSources,
+    );
+    final nextAlphaKey = settings.keyFor('alpha-vantage');
+    _quoteService.updateApiKey(nextAlphaKey);
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _dataApiKeySettings = settings;
+      if (previousAlphaKey != nextAlphaKey) {
+        if (nextAlphaKey.isEmpty) {
+          _quotes = const {};
+        }
+        _quoteSnapshot = _quoteService.initialSnapshot;
+      }
+    });
+    if (previousAlphaKey != nextAlphaKey && nextAlphaKey.isNotEmpty) {
+      await _refreshLiveQuotes();
+    }
   }
 
   Future<void> _saveTossSettings(TossAccountSettings settings) async {
@@ -168,6 +214,10 @@ class _AppShellState extends State<AppShell> {
       WatchlistScreen(equities: _equities, quotes: _quotes),
       JournalScreen(entries: _userJournals, onAddEntry: _openJournalComposer),
       SettingsScreen(
+        apiSources: widget.repository.dataApiSources,
+        dataApiKeySettings: _dataApiKeySettings,
+        dataApiKeysLoaded: _dataApiKeysLoaded,
+        onSaveDataApiKeySettings: _saveDataApiKeySettings,
         tossSettings: _tossSettings,
         settingsLoaded: _settingsLoaded,
         onSaveTossSettings: _saveTossSettings,
@@ -1130,6 +1180,105 @@ class DataApiSourceCard extends StatelessWidget {
   }
 }
 
+class DataApiKeyField extends StatelessWidget {
+  const DataApiKeyField({
+    required this.api,
+    required this.controller,
+    required this.enabled,
+    required this.obscureText,
+    required this.hasKey,
+    required this.onChanged,
+    super.key,
+  });
+
+  final DataApiSource api;
+  final TextEditingController controller;
+  final bool enabled;
+  final bool obscureText;
+  final bool hasKey;
+  final VoidCallback onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = _apiStatusColor(api.status);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            DecoratedBox(
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(9),
+                child: Icon(_apiStatusIcon(api.status), color: color, size: 20),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    api.name,
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    api.provider,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            FlowChip(
+              label: hasKey ? 'key 저장됨' : 'key 필요',
+              color: hasKey ? AppColors.green : AppColors.amber,
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Text(api.coverage, style: Theme.of(context).textTheme.bodyLarge),
+        const SizedBox(height: 8),
+        Text(
+          '사용 화면: ${api.usedFor}',
+          style: Theme.of(context).textTheme.bodyMedium,
+        ),
+        const SizedBox(height: 10),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            FlowChip(label: api.status.label, color: color),
+            const FlowChip(label: '읽기 전용', color: AppColors.blue),
+            FlowChip(label: api.keyName, color: AppColors.charcoal),
+            FlowChip(label: api.docsUrl, color: AppColors.blue),
+          ],
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          controller: controller,
+          enabled: enabled,
+          obscureText: obscureText,
+          keyboardType: TextInputType.visiblePassword,
+          decoration: InputDecoration(
+            labelText: 'API key',
+            hintText: api.keyName,
+            border: const OutlineInputBorder(),
+          ),
+          onChanged: (_) => onChanged(),
+        ),
+      ],
+    );
+  }
+}
+
 class EmergingFlowCard extends StatelessWidget {
   const EmergingFlowCard({required this.flow, super.key});
 
@@ -1979,6 +2128,10 @@ class _JournalComposerState extends State<JournalComposer> {
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({
+    required this.apiSources,
+    required this.dataApiKeySettings,
+    required this.dataApiKeysLoaded,
+    required this.onSaveDataApiKeySettings,
     required this.tossSettings,
     required this.settingsLoaded,
     required this.onSaveTossSettings,
@@ -1986,6 +2139,11 @@ class SettingsScreen extends StatefulWidget {
     super.key,
   });
 
+  final List<DataApiSource> apiSources;
+  final DataApiKeySettings dataApiKeySettings;
+  final bool dataApiKeysLoaded;
+  final Future<void> Function(DataApiKeySettings settings)
+  onSaveDataApiKeySettings;
   final TossAccountSettings tossSettings;
   final bool settingsLoaded;
   final Future<void> Function(TossAccountSettings settings) onSaveTossSettings;
@@ -1997,6 +2155,7 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
+  final Map<String, TextEditingController> _dataApiKeyControllers = {};
   final _accountAliasController = TextEditingController();
   final _accountHintController = TextEditingController();
   final _apiBaseUrlController = TextEditingController();
@@ -2007,13 +2166,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final _accountNumberController = TextEditingController();
   bool _enabled = false;
   bool _readOnly = true;
+  bool _hideDataApiKeys = true;
   bool _hideSecrets = true;
+  bool _savingDataApiKeys = false;
   bool _testingConnection = false;
   TossDirectApiProbeResult? _probeResult;
 
   @override
   void initState() {
     super.initState();
+    _syncDataApiKeyControllers();
     _applySettings(widget.tossSettings);
   }
 
@@ -2023,10 +2185,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (oldWidget.tossSettings != widget.tossSettings) {
       _applySettings(widget.tossSettings);
     }
+    if (oldWidget.dataApiKeySettings != widget.dataApiKeySettings ||
+        oldWidget.apiSources != widget.apiSources) {
+      _syncDataApiKeyControllers();
+    }
   }
 
   @override
   void dispose() {
+    for (final controller in _dataApiKeyControllers.values) {
+      controller.dispose();
+    }
     _accountAliasController.dispose();
     _accountHintController.dispose();
     _apiBaseUrlController.dispose();
@@ -2036,6 +2205,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _accessTokenController.dispose();
     _accountNumberController.dispose();
     super.dispose();
+  }
+
+  void _syncDataApiKeyControllers() {
+    final sourceIds = widget.apiSources.map((source) => source.id).toSet();
+    final removedIds = _dataApiKeyControllers.keys
+        .where((id) => !sourceIds.contains(id))
+        .toList(growable: false);
+    for (final id in removedIds) {
+      _dataApiKeyControllers.remove(id)?.dispose();
+    }
+
+    for (final source in widget.apiSources) {
+      final controller = _dataApiKeyControllers.putIfAbsent(
+        source.id,
+        () => TextEditingController(),
+      );
+      controller.text = widget.dataApiKeySettings.keyFor(source.id);
+    }
   }
 
   void _applySettings(TossAccountSettings settings) {
@@ -2067,6 +2254,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  DataApiKeySettings _currentDataApiKeySettings() {
+    var settings = DataApiKeySettings.empty();
+    for (final source in widget.apiSources) {
+      final value = _dataApiKeyControllers[source.id]?.text ?? '';
+      settings = settings.copyWithKey(source.id, value);
+    }
+    return settings;
+  }
+
+  Future<void> _saveDataApiKeys() async {
+    setState(() => _savingDataApiKeys = true);
+    await widget.onSaveDataApiKeySettings(_currentDataApiKeySettings());
+    if (!mounted) {
+      return;
+    }
+    setState(() => _savingDataApiKeys = false);
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('데이터 API key 저장됨')));
+  }
+
   Future<void> _save() async {
     await widget.onSaveTossSettings(_currentSettings());
     if (!mounted) {
@@ -2096,6 +2304,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final sortedApis = widget.apiSources.toList(growable: false)
+      ..sort((a, b) => a.priority.compareTo(b.priority));
+    final currentDataApiSettings = _currentDataApiKeySettings();
+    final configuredApiCount = currentDataApiSettings.configuredCount(
+      sortedApis,
+    );
     final effectiveSettings = _currentSettings();
 
     return ListView(
@@ -2103,6 +2317,111 @@ class _SettingsScreenState extends State<SettingsScreen> {
       children: [
         const SectionHeader(title: '설정'),
         const SizedBox(height: 10),
+        AppCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: AppColors.blue.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Padding(
+                      padding: EdgeInsets.all(10),
+                      child: Icon(
+                        Icons.key_outlined,
+                        color: AppColors.blue,
+                        size: 22,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '데이터 API key',
+                          style: Theme.of(context).textTheme.titleLarge,
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          '기본 데이터 조회용 key를 기기 로컬 설정에 저장',
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: _hideDataApiKeys ? 'API key 보기' : 'API key 숨기기',
+                    onPressed: () =>
+                        setState(() => _hideDataApiKeys = !_hideDataApiKeys),
+                    icon: Icon(
+                      _hideDataApiKeys
+                          ? Icons.visibility_outlined
+                          : Icons.visibility_off_outlined,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  FlowChip(
+                    label: '$configuredApiCount/${sortedApis.length} key',
+                    color: configuredApiCount == sortedApis.length
+                        ? AppColors.green
+                        : AppColors.amber,
+                  ),
+                  const FlowChip(label: '읽기 전용 데이터', color: AppColors.blue),
+                  const FlowChip(label: '로컬 저장', color: AppColors.charcoal),
+                ],
+              ),
+              const SizedBox(height: 16),
+              for (var index = 0; index < sortedApis.length; index++) ...[
+                DataApiKeyField(
+                  api: sortedApis[index],
+                  controller: _dataApiKeyControllers[sortedApis[index].id]!,
+                  enabled: widget.dataApiKeysLoaded,
+                  obscureText: _hideDataApiKeys,
+                  hasKey: currentDataApiSettings.hasKeyFor(
+                    sortedApis[index].id,
+                  ),
+                  onChanged: () => setState(() {}),
+                ),
+                if (index != sortedApis.length - 1) ...[
+                  const SizedBox(height: 14),
+                  const Divider(height: 1),
+                  const SizedBox(height: 14),
+                ],
+              ],
+              const SizedBox(height: 16),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: widget.dataApiKeysLoaded && !_savingDataApiKeys
+                      ? _saveDataApiKeys
+                      : null,
+                  icon: _savingDataApiKeys
+                      ? const SizedBox.square(
+                          dimension: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.save_outlined),
+                  label: const Text('데이터 API key 저장'),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
         AppCard(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,

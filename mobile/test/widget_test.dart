@@ -142,6 +142,23 @@ void main() {
     await tester.tap(find.text('설정'));
     await tester.pumpAndSettle();
 
+    expect(find.text('데이터 API key'), findsOneWidget);
+    expect(find.text('기본 데이터 조회용 key를 기기 로컬 설정에 저장'), findsOneWidget);
+    expect(find.text('Alpha Vantage'), findsOneWidget);
+    expect(find.text('FRED API'), findsOneWidget);
+    expect(find.text('CoinGecko API'), findsOneWidget);
+    expect(find.text('DefiLlama API'), findsOneWidget);
+    expect(find.text('읽기 전용 데이터'), findsOneWidget);
+    expect(find.text('API key'), findsWidgets);
+    expect(find.text('데이터 API key 저장'), findsOneWidget);
+
+    await tester.scrollUntilVisible(
+      find.text('토스증권 계정'),
+      520,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+
     expect(find.text('토스증권 계정'), findsOneWidget);
     expect(find.text('앱에서 Open API 직접 호출'), findsOneWidget);
     expect(find.text('Open API 기본 URL'), findsOneWidget);

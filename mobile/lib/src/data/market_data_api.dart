@@ -6,20 +6,34 @@ import 'package:http/http.dart' as http;
 import '../models/market_models.dart';
 
 class AlphaVantageQuoteService {
-  AlphaVantageQuoteService({http.Client? client})
-    : _client = client ?? http.Client();
+  AlphaVantageQuoteService({http.Client? client, String apiKey = ''})
+    : _client = client ?? http.Client(),
+      _runtimeApiKey = apiKey;
 
   static const provider = 'Alpha Vantage';
   static const endpoint = 'GLOBAL_QUOTE';
-  static const _apiKey = String.fromEnvironment('ALPHA_VANTAGE_API_KEY');
+  static const _buildApiKey = String.fromEnvironment('ALPHA_VANTAGE_API_KEY');
   static const _maxSymbols = int.fromEnvironment(
     'ALPHA_VANTAGE_MAX_SYMBOLS',
     defaultValue: 5,
   );
 
   final http.Client _client;
+  String _runtimeApiKey;
 
-  bool get isConfigured => _apiKey.trim().isNotEmpty;
+  String get _effectiveApiKey {
+    final runtimeKey = _runtimeApiKey.trim();
+    if (runtimeKey.isNotEmpty) {
+      return runtimeKey;
+    }
+    return _buildApiKey.trim();
+  }
+
+  bool get isConfigured => _effectiveApiKey.isNotEmpty;
+
+  void updateApiKey(String apiKey) {
+    _runtimeApiKey = apiKey;
+  }
 
   void dispose() => _client.close();
 
@@ -110,7 +124,7 @@ class AlphaVantageQuoteService {
     final uri = Uri.https('www.alphavantage.co', '/query', {
       'function': endpoint,
       'symbol': equity.apiSymbol,
-      'apikey': _apiKey,
+      'apikey': _effectiveApiKey,
     });
 
     final response = await _client

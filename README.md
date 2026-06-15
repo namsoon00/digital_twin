@@ -43,6 +43,19 @@ npm test
 
 GitHub Actions는 push, pull request, 수동 실행에서 같은 검증을 수행합니다.
 
+## Flutter 모바일 앱
+
+새 모바일 앱은 `mobile/`에 있습니다. 한국/미국 시장 흐름, 테마 확산, 관심 종목, 감 기록을 보는 Flutter MVP입니다.
+
+```bash
+cd mobile
+flutter run
+flutter analyze
+flutter test
+```
+
+현재 모바일 앱은 mock 데이터 repository로 동작하며, 이후 사용자 인증과 실제 시세/뉴스 API를 연결할 수 있도록 화면과 데이터 계층을 분리했습니다.
+
 ## 이슈 기반 개발
 
 개발 요청은 GitHub Issue의 `Development Task` 또는 `Bug Report` 템플릿으로 남길 수 있습니다. 로컬 작업자는 이슈 내용을 기준으로 구현하고, `npm test`를 통과시킨 뒤 `origin/main`에 푸시하고 이슈에 완료 댓글을 남깁니다.

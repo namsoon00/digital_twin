@@ -56,6 +56,19 @@ flutter test
 
 현재 모바일 앱은 mock 데이터 repository로 동작하며, 이후 사용자 인증과 실제 시세/뉴스 API를 연결할 수 있도록 화면과 데이터 계층을 분리했습니다.
 
+### GitHub Pages
+
+모바일 앱의 웹 빌드는 GitHub Pages용으로 `gh-pages` 브랜치에 배포됩니다.
+
+```bash
+cd mobile
+flutter build web --release --base-href /digital_twin/
+```
+
+배포 URL은 `https://namsoon00.github.io/digital_twin/`입니다.
+
+GitHub Pages가 아직 활성화되어 있지 않으면 저장소 Settings > Pages에서 source를 `Deploy from a branch`, branch를 `gh-pages`, folder를 `/`로 설정하세요.
+
 ## 이슈 기반 개발
 
 개발 요청은 GitHub Issue의 `Development Task` 또는 `Bug Report` 템플릿으로 남길 수 있습니다. 로컬 작업자는 이슈 내용을 기준으로 구현하고, `npm test`를 통과시킨 뒤 `origin/main`에 푸시하고 이슈에 완료 댓글을 남깁니다.

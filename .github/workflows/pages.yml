@@ -1,0 +1,87 @@
+name: Deploy Flutter Web
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/pages.yml"
+      - "mobile/**"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: flutter-pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build and publish MarketFlow
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: "3.41.2"
+          cache: true
+
+      - name: Install dependencies
+        working-directory: mobile
+        run: flutter pub get
+
+      - name: Analyze
+        working-directory: mobile
+        run: flutter analyze
+
+      - name: Test
+        working-directory: mobile
+        run: flutter test
+
+      - name: Build web
+        working-directory: mobile
+        run: flutter build web --release --base-href /digital_twin/
+
+      - name: Publish gh-pages branch
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          publish_dir="$(mktemp -d)"
+          cp -R mobile/build/web/. "$publish_dir/"
+          touch "$publish_dir/.nojekyll"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin gh-pages || true
+
+          worktree_dir="$(mktemp -d)"
+          rmdir "$worktree_dir"
+          git worktree add --detach "$worktree_dir"
+
+          cd "$worktree_dir"
+          if git rev-parse --verify origin/gh-pages >/dev/null 2>&1; then
+            git checkout -B gh-pages origin/gh-pages
+            git rm -r --ignore-unmatch .
+          else
+            git checkout --orphan gh-pages
+            git rm -r --cached --ignore-unmatch .
+          fi
+
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp -R "$publish_dir"/. .
+          git add .
+
+          if git diff --cached --quiet; then
+            echo "No Pages changes to publish."
+          else
+            git commit -m "Deploy Flutter web to GitHub Pages"
+            git push origin gh-pages --force
+          fi

@@ -17,6 +17,14 @@ flutter analyze
 flutter test
 ```
 
+## GitHub Pages 빌드
+
+```bash
+flutter build web --release --base-href /digital_twin/
+```
+
+`main`에 푸시하면 `.github/workflows/pages.yml`이 같은 빌드를 실행하고 `gh-pages` 브랜치에 정적 파일을 배포합니다.
+
 ## 구조
 
 - `lib/src/models`: 시장, 테마, 종목, 사용자, 기록 모델

@@ -1,11 +1,11 @@
 {
-    "name": "market_flow",
-    "short_name": "market_flow",
+    "name": "MarketFlow",
+    "short_name": "MarketFlow",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "background_color": "#F5F7F2",
+    "theme_color": "#107C5B",
+    "description": "Market momentum, theme diffusion, watchlists, and investing intuition journals.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

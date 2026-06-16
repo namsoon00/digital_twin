@@ -293,6 +293,13 @@ class _AppShellState extends State<AppShell> {
         focusedMonth: _focusedChecklistMonth,
         monthDays: _checklistMonth,
         loaded: _checklistLoaded,
+        pulses: _pulses,
+        capitalFlows: widget.repository.capitalFlows,
+        themes: _themes,
+        equities: _equities,
+        quotes: _quotes,
+        quoteSnapshot: _quoteSnapshot,
+        onRefreshQuotes: _refreshLiveQuotes,
         onDateSelected: (date) =>
             _loadChecklistDate(date, focusedMonth: _focusedChecklistMonth),
         onMonthChanged: _changeChecklistMonth,
@@ -2002,6 +2009,13 @@ class InvestmentChecklistScreen extends StatefulWidget {
     required this.focusedMonth,
     required this.monthDays,
     required this.loaded,
+    required this.pulses,
+    required this.capitalFlows,
+    required this.themes,
+    required this.equities,
+    required this.quotes,
+    required this.quoteSnapshot,
+    required this.onRefreshQuotes,
     required this.onDateSelected,
     required this.onMonthChanged,
     required this.onTodaySelected,
@@ -2018,6 +2032,13 @@ class InvestmentChecklistScreen extends StatefulWidget {
   final DateTime focusedMonth;
   final Map<String, InvestmentChecklistDay> monthDays;
   final bool loaded;
+  final List<MarketPulse> pulses;
+  final List<CapitalFlow> capitalFlows;
+  final List<ThemePulse> themes;
+  final List<EquityFlow> equities;
+  final Map<String, LiveQuote> quotes;
+  final QuoteApiSnapshot quoteSnapshot;
+  final VoidCallback onRefreshQuotes;
   final ValueChanged<DateTime> onDateSelected;
   final ValueChanged<DateTime> onMonthChanged;
   final VoidCallback onTodaySelected;
@@ -2135,6 +2156,16 @@ class _InvestmentChecklistScreenState extends State<InvestmentChecklistScreen> {
           ],
         ),
         const SizedBox(height: 18),
+        ChecklistDataPanel(
+          pulses: widget.pulses,
+          capitalFlows: widget.capitalFlows,
+          themes: widget.themes,
+          equities: widget.equities,
+          quotes: widget.quotes,
+          quoteSnapshot: widget.quoteSnapshot,
+          onRefreshQuotes: widget.onRefreshQuotes,
+        ),
+        const SizedBox(height: 12),
         AppCard(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -2416,6 +2447,305 @@ class _InvestmentChecklistScreenState extends State<InvestmentChecklistScreen> {
       return selectedDay;
     }
     return monthDays[dateKey];
+  }
+}
+
+class ChecklistDataPanel extends StatelessWidget {
+  const ChecklistDataPanel({
+    required this.pulses,
+    required this.capitalFlows,
+    required this.themes,
+    required this.equities,
+    required this.quotes,
+    required this.quoteSnapshot,
+    required this.onRefreshQuotes,
+    super.key,
+  });
+
+  final List<MarketPulse> pulses;
+  final List<CapitalFlow> capitalFlows;
+  final List<ThemePulse> themes;
+  final List<EquityFlow> equities;
+  final Map<String, LiveQuote> quotes;
+  final QuoteApiSnapshot quoteSnapshot;
+  final VoidCallback onRefreshQuotes;
+
+  @override
+  Widget build(BuildContext context) {
+    final rankedPulses = pulses.toList(growable: false)
+      ..sort((a, b) => b.score.compareTo(a.score));
+    final rankedFlows = capitalFlows.toList(growable: false)
+      ..sort((a, b) => b.flowScore.compareTo(a.flowScore));
+    final rankedThemes = themes.toList(growable: false)
+      ..sort((a, b) => b.score.compareTo(a.score));
+    final rankedEquities = equities.toList(growable: false)
+      ..sort((a, b) => b.flowScore.compareTo(a.flowScore));
+    final topPulse = rankedPulses.isEmpty ? null : rankedPulses.first;
+    final topFlow = rankedFlows.isEmpty ? null : rankedFlows.first;
+    final topTheme = rankedThemes.isEmpty ? null : rankedThemes.first;
+    final highRiskCount = equities.where((equity) => equity.risk >= 60).length;
+    final apiColor = switch (quoteSnapshot.status) {
+      QuoteFetchStatus.ready => AppColors.green,
+      QuoteFetchStatus.partial => AppColors.amber,
+      QuoteFetchStatus.loading => AppColors.blue,
+      QuoteFetchStatus.missingApiKey => AppColors.amber,
+      QuoteFetchStatus.failed => AppColors.red,
+      QuoteFetchStatus.idle => AppColors.muted,
+    };
+
+    return AppCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              DecoratedBox(
+                decoration: BoxDecoration(
+                  color: AppColors.green.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Padding(
+                  padding: EdgeInsets.all(10),
+                  child: Icon(
+                    Icons.query_stats_outlined,
+                    color: AppColors.green,
+                    size: 22,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '오늘 데이터 확인',
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '체크 전 시장, 자금, 관심 종목 데이터를 바로 확인',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                  ],
+                ),
+              ),
+              IconButton(
+                tooltip: '시세 새로고침',
+                onPressed: quoteSnapshot.status == QuoteFetchStatus.loading
+                    ? null
+                    : onRefreshQuotes,
+                icon: quoteSnapshot.status == QuoteFetchStatus.loading
+                    ? const SizedBox.square(
+                        dimension: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.refresh),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              FlowChip(label: quoteSnapshot.statusLabel, color: apiColor),
+              FlowChip(
+                label: '${quoteSnapshot.provider} ${quoteSnapshot.endpoint}',
+                color: AppColors.blue,
+              ),
+              FlowChip(
+                label:
+                    'live ${quotes.length}/${quoteSnapshot.requestedSymbols}',
+                color: quotes.isEmpty ? AppColors.muted : AppColors.green,
+              ),
+              if (highRiskCount > 0)
+                FlowChip(label: '고위험 $highRiskCount', color: AppColors.red),
+            ],
+          ),
+          const SizedBox(height: 14),
+          if (topPulse == null && topFlow == null && rankedEquities.isEmpty)
+            Row(
+              children: [
+                const Icon(Icons.info_outline, color: AppColors.muted),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    '체크 화면에 연결할 데이터가 없습니다.',
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
+                ),
+              ],
+            )
+          else ...[
+            if (topPulse != null)
+              _ChecklistDataLine(
+                icon: Icons.public_outlined,
+                title: '시장 펄스',
+                value: '${topPulse.title} · ${topPulse.score}',
+                detail:
+                    '${topPulse.bias} · ${topPulse.netFlow} · ${topPulse.updatedLabel}',
+                color: scoreColor(topPulse.score),
+              ),
+            if (topFlow != null) ...[
+              const Divider(height: 20),
+              _ChecklistDataLine(
+                icon: _assetClassIcon(topFlow.assetClass),
+                title: '자금 흐름',
+                value: '${topFlow.name} · ${topFlow.flowScore}',
+                detail:
+                    '${topFlow.regionLabel} → ${topFlow.destination} · ${topFlow.netFlowLabel}',
+                color: _assetClassColor(topFlow.assetClass),
+              ),
+            ],
+            if (topTheme != null) ...[
+              const Divider(height: 20),
+              _ChecklistDataLine(
+                icon: Icons.bubble_chart_outlined,
+                title: '강세 테마',
+                value: '${topTheme.name} · ${topTheme.score}',
+                detail:
+                    '${topTheme.stage.label} · 확산 ${topTheme.diffusion} · 위험 ${topTheme.risk}',
+                color: scoreColor(topTheme.score),
+              ),
+            ],
+            const Divider(height: 20),
+            Text('관심 종목 신호', style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 10),
+            if (rankedEquities.isEmpty)
+              Text(
+                '관심 종목 데이터가 없습니다.',
+                style: Theme.of(context).textTheme.bodyMedium,
+              )
+            else
+              ...rankedEquities
+                  .take(3)
+                  .map(
+                    (equity) => Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: _ChecklistEquitySignalLine(
+                        equity: equity,
+                        quote: quotes[equity.symbol],
+                      ),
+                    ),
+                  ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _ChecklistDataLine extends StatelessWidget {
+  const _ChecklistDataLine({
+    required this.icon,
+    required this.title,
+    required this.value,
+    required this.detail,
+    required this.color,
+  });
+
+  final IconData icon;
+  final String title;
+  final String value;
+  final String detail;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, color: color, size: 20),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(title, style: Theme.of(context).textTheme.bodyMedium),
+              const SizedBox(height: 3),
+              Text(
+                value,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: 3),
+              Text(
+                detail,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _ChecklistEquitySignalLine extends StatelessWidget {
+  const _ChecklistEquitySignalLine({required this.equity, this.quote});
+
+  final EquityFlow equity;
+  final LiveQuote? quote;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = scoreColor(equity.flowScore);
+    final effectiveChange = quote?.changePercent ?? equity.changePercent;
+    final effectivePrice =
+        quote?.priceLabel(equity.region) ?? equity.priceLabel;
+    final changeColor = effectiveChange >= 0 ? AppColors.green : AppColors.red;
+
+    return Row(
+      children: [
+        _SymbolAvatar(symbol: equity.symbol, color: color, size: 34),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '${equity.name} · ${equity.symbol}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: 3),
+              Text(
+                '${equity.theme} · ${equity.stage.label}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 8),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            Text(effectivePrice, style: Theme.of(context).textTheme.labelLarge),
+            const SizedBox(height: 3),
+            Text(
+              effectiveChange >= 0
+                  ? '+${effectiveChange.toStringAsFixed(2)}%'
+                  : '${effectiveChange.toStringAsFixed(2)}%',
+              style: TextStyle(
+                color: changeColor,
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
   }
 }
 

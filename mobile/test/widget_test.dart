@@ -55,6 +55,18 @@ void main() {
     await tester.tap(find.text('체크'));
     await tester.pumpAndSettle();
 
+    expect(find.text('오늘 데이터 확인'), findsOneWidget);
+    expect(find.text('시장 펄스'), findsOneWidget);
+    expect(find.text('자금 흐름'), findsOneWidget);
+    expect(find.text('관심 종목 신호'), findsOneWidget);
+
+    await tester.scrollUntilVisible(
+      find.text('체크 캘린더'),
+      320,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+
     expect(find.text('체크 캘린더'), findsOneWidget);
 
     await tester.scrollUntilVisible(

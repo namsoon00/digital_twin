@@ -148,6 +148,197 @@ class DataApiKeySettings {
   }
 }
 
+class InvestmentChecklistItem {
+  const InvestmentChecklistItem({
+    required this.id,
+    required this.label,
+    required this.checked,
+    this.isCustom = false,
+  });
+
+  factory InvestmentChecklistItem.fromJson(Map<String, dynamic> json) {
+    return InvestmentChecklistItem(
+      id: '${json['id'] ?? ''}',
+      label: '${json['label'] ?? ''}',
+      checked: json['checked'] == true,
+      isCustom: json['isCustom'] == true,
+    );
+  }
+
+  final String id;
+  final String label;
+  final bool checked;
+  final bool isCustom;
+
+  Map<String, dynamic> toJson() {
+    return {'id': id, 'label': label, 'checked': checked, 'isCustom': isCustom};
+  }
+
+  InvestmentChecklistItem copyWith({
+    String? id,
+    String? label,
+    bool? checked,
+    bool? isCustom,
+  }) {
+    return InvestmentChecklistItem(
+      id: id ?? this.id,
+      label: label ?? this.label,
+      checked: checked ?? this.checked,
+      isCustom: isCustom ?? this.isCustom,
+    );
+  }
+}
+
+class InvestmentChecklistDay {
+  const InvestmentChecklistDay({
+    required this.dateKey,
+    required this.items,
+    required this.note,
+  });
+
+  factory InvestmentChecklistDay.defaults(String dateKey) {
+    return InvestmentChecklistDay(
+      dateKey: dateKey,
+      items: defaultItems,
+      note: '',
+    );
+  }
+
+  factory InvestmentChecklistDay.fromJson(Map<String, dynamic> json) {
+    final rawItems = json['items'];
+    return InvestmentChecklistDay(
+      dateKey: '${json['dateKey'] ?? ''}',
+      items: rawItems is List
+          ? rawItems
+                .whereType<Map<String, dynamic>>()
+                .map(InvestmentChecklistItem.fromJson)
+                .where((item) => item.id.isNotEmpty && item.label.isNotEmpty)
+                .toList(growable: false)
+          : const [],
+      note: '${json['note'] ?? ''}',
+    );
+  }
+
+  static const defaultItems = [
+    InvestmentChecklistItem(
+      id: 'global-flow',
+      label: '글로벌 지수와 환율 방향 확인',
+      checked: false,
+    ),
+    InvestmentChecklistItem(
+      id: 'capital-flow',
+      label: '자금 흐름 탭에서 강한 자산군 확인',
+      checked: false,
+    ),
+    InvestmentChecklistItem(
+      id: 'trade-thesis',
+      label: '오늘 매매할 종목과 진입 이유 작성',
+      checked: false,
+    ),
+    InvestmentChecklistItem(
+      id: 'risk-plan',
+      label: '손절선과 목표 구간을 숫자로 확정',
+      checked: false,
+    ),
+    InvestmentChecklistItem(
+      id: 'position-size',
+      label: '포지션 크기와 하루 최대 손실 한도 확인',
+      checked: false,
+    ),
+    InvestmentChecklistItem(
+      id: 'event-calendar',
+      label: '실적, 지표, 이벤트 캘린더 확인',
+      checked: false,
+    ),
+    InvestmentChecklistItem(
+      id: 'emotion-check',
+      label: '감정 상태와 과매매 위험 점검',
+      checked: false,
+    ),
+  ];
+
+  final String dateKey;
+  final List<InvestmentChecklistItem> items;
+  final String note;
+
+  int get completedCount => items.where((item) => item.checked).length;
+  int get totalCount => items.length;
+  int get remainingCount => (totalCount - completedCount).clamp(0, totalCount);
+  bool get isComplete => totalCount > 0 && completedCount == totalCount;
+  bool get hasActivity =>
+      completedCount > 0 ||
+      note.trim().isNotEmpty ||
+      items.any((item) => item.isCustom);
+  double get completionRate =>
+      totalCount == 0 ? 0 : completedCount / totalCount;
+
+  Map<String, dynamic> toJson() {
+    return {
+      'dateKey': dateKey,
+      'items': items.map((item) => item.toJson()).toList(growable: false),
+      'note': note,
+    };
+  }
+
+  InvestmentChecklistDay copyWith({
+    String? dateKey,
+    List<InvestmentChecklistItem>? items,
+    String? note,
+  }) {
+    return InvestmentChecklistDay(
+      dateKey: dateKey ?? this.dateKey,
+      items: items ?? this.items,
+      note: note ?? this.note,
+    );
+  }
+
+  InvestmentChecklistDay toggleItem(String itemId, bool checked) {
+    return copyWith(
+      items: [
+        for (final item in items)
+          if (item.id == itemId) item.copyWith(checked: checked) else item,
+      ],
+    );
+  }
+
+  InvestmentChecklistDay addCustomItem(String itemId, String label) {
+    final normalized = label.trim();
+    if (normalized.isEmpty) {
+      return this;
+    }
+    return copyWith(
+      items: [
+        ...items,
+        InvestmentChecklistItem(
+          id: itemId,
+          label: normalized,
+          checked: false,
+          isCustom: true,
+        ),
+      ],
+    );
+  }
+
+  InvestmentChecklistDay removeItem(String itemId) {
+    return copyWith(
+      items: items
+          .where((item) => item.id != itemId || !item.isCustom)
+          .toList(growable: false),
+    );
+  }
+}
+
+String checklistDateKey(DateTime date) {
+  final year = date.year.toString().padLeft(4, '0');
+  final month = date.month.toString().padLeft(2, '0');
+  final day = date.day.toString().padLeft(2, '0');
+  return '$year-$month-$day';
+}
+
+DateTime checklistMonthStart(DateTime date) {
+  return DateTime(date.year, date.month);
+}
+
 class FlowCandle {
   const FlowCandle({
     required this.label,

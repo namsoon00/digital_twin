@@ -46,6 +46,61 @@ void main() {
     expect(find.text('NVDA'), findsOneWidget);
   });
 
+  testWidgets('MarketFlow manages the pre-investment checklist', (
+    tester,
+  ) async {
+    await tester.pumpWidget(const MarketFlowApp());
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('체크'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('체크 캘린더'), findsOneWidget);
+
+    await tester.scrollUntilVisible(
+      find.text('오늘 투자 전 체크'),
+      360,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('오늘 투자 전 체크'), findsOneWidget);
+    expect(find.text('글로벌 지수와 환율 방향 확인'), findsOneWidget);
+    expect(find.text('선택일 초기화'), findsOneWidget);
+    expect(find.text('0/7 완료'), findsOneWidget);
+
+    await tester.tap(find.byType(Checkbox).first);
+    await tester.pumpAndSettle();
+
+    expect(find.text('1/7 완료'), findsOneWidget);
+
+    await tester.scrollUntilVisible(
+      find.text('체크 항목 추가'),
+      260,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byType(TextField).first, '현금 비중 확인');
+    await tester.tap(find.byIcon(Icons.add));
+    await tester.pumpAndSettle();
+
+    expect(find.text('현금 비중 확인'), findsOneWidget);
+
+    await tester.scrollUntilVisible(
+      find.text('메모 저장'),
+      260,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byType(TextField).last, 'FOMC 전까지 절반만');
+    await tester.tap(find.text('메모 저장'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('체크 메모 저장됨'), findsOneWidget);
+  });
+
   testWidgets('MarketFlow shows global capital flows', (tester) async {
     await tester.pumpWidget(const MarketFlowApp());
     await tester.pumpAndSettle();

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../data/checklist_repository.dart';
 import '../data/flow_repository.dart';
 import '../data/market_data_api.dart';
 import '../data/settings_repository.dart';
@@ -24,13 +25,21 @@ class _AppShellState extends State<AppShell> {
   MarketRegion _region = MarketRegion.all;
   late AppUser _currentUser;
   late List<JournalEntry> _journals;
+  late ChecklistRepository _checklistRepository;
   late AlphaVantageQuoteService _quoteService;
   late TossDirectApiClient _tossDirectApiClient;
   late SettingsRepository _settingsRepository;
   late QuoteApiSnapshot _quoteSnapshot;
   Map<String, LiveQuote> _quotes = const {};
+  InvestmentChecklistDay _checklistDay = InvestmentChecklistDay.defaults(
+    checklistDateKey(DateTime.now()),
+  );
+  Map<String, InvestmentChecklistDay> _checklistMonth = const {};
+  DateTime _selectedChecklistDate = DateTime.now();
+  DateTime _focusedChecklistMonth = checklistMonthStart(DateTime.now());
   DataApiKeySettings _dataApiKeySettings = DataApiKeySettings.empty();
   TossAccountSettings _tossSettings = TossAccountSettings.defaults();
+  bool _checklistLoaded = false;
   bool _dataApiKeysLoaded = false;
   bool _settingsLoaded = false;
 
@@ -39,10 +48,12 @@ class _AppShellState extends State<AppShell> {
     super.initState();
     _currentUser = widget.repository.users.first;
     _journals = widget.repository.journals.toList();
+    _checklistRepository = ChecklistRepository();
     _quoteService = AlphaVantageQuoteService();
     _tossDirectApiClient = TossDirectApiClient();
     _settingsRepository = SettingsRepository();
     _quoteSnapshot = _quoteService.initialSnapshot;
+    _loadChecklistDate(DateTime.now());
     _loadDataApiKeySettings();
     _loadTossSettings();
     WidgetsBinding.instance.addPostFrameCallback((_) => _refreshLiveQuotes());
@@ -84,6 +95,70 @@ class _AppShellState extends State<AppShell> {
       _tossSettings = settings;
       _settingsLoaded = true;
     });
+  }
+
+  Future<void> _loadChecklistDate(
+    DateTime date, {
+    DateTime? focusedMonth,
+  }) async {
+    final selectedDate = DateTime(date.year, date.month, date.day);
+    final month = checklistMonthStart(focusedMonth ?? selectedDate);
+    final day = await _checklistRepository.loadDay(selectedDate);
+    final monthDays = await _checklistRepository.loadMonth(month);
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _selectedChecklistDate = selectedDate;
+      _focusedChecklistMonth = month;
+      _checklistDay = day;
+      _checklistMonth = {...monthDays, day.dateKey: day};
+      _checklistLoaded = true;
+    });
+  }
+
+  Future<void> _saveChecklistDay(InvestmentChecklistDay day) async {
+    await _checklistRepository.saveDay(day);
+    final monthDays = await _checklistRepository.loadMonth(
+      _focusedChecklistMonth,
+    );
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _checklistDay = day;
+      _checklistMonth = {...monthDays, day.dateKey: day};
+      _checklistLoaded = true;
+    });
+  }
+
+  Future<void> _changeChecklistMonth(DateTime month) async {
+    await _loadChecklistDate(checklistMonthStart(month), focusedMonth: month);
+  }
+
+  Future<void> _toggleChecklistItem(String itemId, bool checked) async {
+    await _saveChecklistDay(_checklistDay.toggleItem(itemId, checked));
+  }
+
+  Future<void> _addChecklistItem(String label) async {
+    final itemId = 'custom-${DateTime.now().microsecondsSinceEpoch}';
+    await _saveChecklistDay(_checklistDay.addCustomItem(itemId, label));
+  }
+
+  Future<void> _removeChecklistItem(String itemId) async {
+    await _saveChecklistDay(_checklistDay.removeItem(itemId));
+  }
+
+  Future<void> _saveChecklistNote(String note) async {
+    await _saveChecklistDay(_checklistDay.copyWith(note: note.trim()));
+  }
+
+  Future<void> _resetChecklistDay() async {
+    await _checklistRepository.resetDay(_checklistDay.dateKey);
+    await _loadChecklistDate(
+      _selectedChecklistDate,
+      focusedMonth: _focusedChecklistMonth,
+    );
   }
 
   Future<void> _loadDataApiKeySettings() async {
@@ -212,6 +287,22 @@ class _AppShellState extends State<AppShell> {
       ),
       ThemeBoardScreen(themes: _themes),
       WatchlistScreen(equities: _equities, quotes: _quotes),
+      InvestmentChecklistScreen(
+        day: _checklistDay,
+        selectedDate: _selectedChecklistDate,
+        focusedMonth: _focusedChecklistMonth,
+        monthDays: _checklistMonth,
+        loaded: _checklistLoaded,
+        onDateSelected: (date) =>
+            _loadChecklistDate(date, focusedMonth: _focusedChecklistMonth),
+        onMonthChanged: _changeChecklistMonth,
+        onTodaySelected: () => _loadChecklistDate(DateTime.now()),
+        onItemChanged: _toggleChecklistItem,
+        onAddItem: _addChecklistItem,
+        onRemoveItem: _removeChecklistItem,
+        onSaveNote: _saveChecklistNote,
+        onResetDay: _resetChecklistDay,
+      ),
       JournalScreen(entries: _userJournals, onAddEntry: _openJournalComposer),
       SettingsScreen(
         apiSources: widget.repository.dataApiSources,
@@ -279,6 +370,11 @@ class _AppShellState extends State<AppShell> {
             icon: Icon(Icons.format_list_bulleted),
             selectedIcon: Icon(Icons.playlist_add_check),
             label: '관심',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.fact_check_outlined),
+            selectedIcon: Icon(Icons.fact_check),
+            label: '체크',
           ),
           NavigationDestination(
             icon: Icon(Icons.edit_note_outlined),
@@ -1899,6 +1995,573 @@ class StockDetailSheet extends StatelessWidget {
   }
 }
 
+class InvestmentChecklistScreen extends StatefulWidget {
+  const InvestmentChecklistScreen({
+    required this.day,
+    required this.selectedDate,
+    required this.focusedMonth,
+    required this.monthDays,
+    required this.loaded,
+    required this.onDateSelected,
+    required this.onMonthChanged,
+    required this.onTodaySelected,
+    required this.onItemChanged,
+    required this.onAddItem,
+    required this.onRemoveItem,
+    required this.onSaveNote,
+    required this.onResetDay,
+    super.key,
+  });
+
+  final InvestmentChecklistDay day;
+  final DateTime selectedDate;
+  final DateTime focusedMonth;
+  final Map<String, InvestmentChecklistDay> monthDays;
+  final bool loaded;
+  final ValueChanged<DateTime> onDateSelected;
+  final ValueChanged<DateTime> onMonthChanged;
+  final VoidCallback onTodaySelected;
+  final Future<void> Function(String itemId, bool checked) onItemChanged;
+  final Future<void> Function(String label) onAddItem;
+  final Future<void> Function(String itemId) onRemoveItem;
+  final Future<void> Function(String note) onSaveNote;
+  final Future<void> Function() onResetDay;
+
+  @override
+  State<InvestmentChecklistScreen> createState() =>
+      _InvestmentChecklistScreenState();
+}
+
+class _InvestmentChecklistScreenState extends State<InvestmentChecklistScreen> {
+  final _newItemController = TextEditingController();
+  final _noteController = TextEditingController();
+  bool _savingNote = false;
+  bool _addingItem = false;
+  bool _resettingDay = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _noteController.text = widget.day.note;
+  }
+
+  @override
+  void didUpdateWidget(covariant InvestmentChecklistScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.day.dateKey != widget.day.dateKey ||
+        oldWidget.day.note != widget.day.note) {
+      _noteController.text = widget.day.note;
+    }
+  }
+
+  @override
+  void dispose() {
+    _newItemController.dispose();
+    _noteController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _addItem() async {
+    final label = _newItemController.text.trim();
+    if (label.isEmpty) {
+      return;
+    }
+    setState(() => _addingItem = true);
+    await widget.onAddItem(label);
+    if (!mounted) {
+      return;
+    }
+    _newItemController.clear();
+    setState(() => _addingItem = false);
+  }
+
+  Future<void> _saveNote() async {
+    setState(() => _savingNote = true);
+    await widget.onSaveNote(_noteController.text);
+    if (!mounted) {
+      return;
+    }
+    setState(() => _savingNote = false);
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('체크 메모 저장됨')));
+  }
+
+  Future<void> _resetDay() async {
+    setState(() => _resettingDay = true);
+    await widget.onResetDay();
+    if (!mounted) {
+      return;
+    }
+    setState(() => _resettingDay = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final day = widget.day;
+    final completedRate = (day.completionRate * 100).round();
+    final activeDays = widget.monthDays.values
+        .where((day) => day.hasActivity || day.isComplete)
+        .length;
+    final completeDays = widget.monthDays.values
+        .where((day) => day.isComplete)
+        .length;
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 20),
+      children: [
+        Row(
+          children: [
+            MetricPill(
+              icon: Icons.task_alt,
+              label: '완료율',
+              value: '$completedRate%',
+              color: day.isComplete ? AppColors.green : AppColors.amber,
+            ),
+            const SizedBox(width: 10),
+            MetricPill(
+              icon: Icons.pending_actions_outlined,
+              label: '남은 체크',
+              value: '${day.remainingCount}',
+              color: day.remainingCount == 0 ? AppColors.green : AppColors.red,
+            ),
+            const SizedBox(width: 10),
+            MetricPill(
+              icon: Icons.calendar_month_outlined,
+              label: '이번 달',
+              value: '$completeDays/$activeDays',
+              color: AppColors.blue,
+            ),
+          ],
+        ),
+        const SizedBox(height: 18),
+        AppCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: AppColors.blue.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Padding(
+                      padding: EdgeInsets.all(10),
+                      child: Icon(
+                        Icons.calendar_month_outlined,
+                        color: AppColors.blue,
+                        size: 22,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      '체크 캘린더',
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+                  ),
+                  FlowChip(
+                    label: _formatChecklistMonth(widget.focusedMonth),
+                    color: AppColors.charcoal,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  IconButton(
+                    tooltip: '이전 달',
+                    onPressed: widget.loaded
+                        ? () => widget.onMonthChanged(
+                            _shiftChecklistMonth(widget.focusedMonth, -1),
+                          )
+                        : null,
+                    icon: const Icon(Icons.chevron_left),
+                  ),
+                  Expanded(
+                    child: Center(
+                      child: Text(
+                        _formatChecklistMonth(widget.focusedMonth),
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                    ),
+                  ),
+                  TextButton.icon(
+                    onPressed: widget.loaded ? widget.onTodaySelected : null,
+                    icon: const Icon(Icons.today_outlined, size: 18),
+                    label: const Text('오늘'),
+                  ),
+                  IconButton(
+                    tooltip: '다음 달',
+                    onPressed: widget.loaded
+                        ? () => widget.onMonthChanged(
+                            _shiftChecklistMonth(widget.focusedMonth, 1),
+                          )
+                        : null,
+                    icon: const Icon(Icons.chevron_right),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  for (final label in const ['월', '화', '수', '목', '금', '토', '일'])
+                    Expanded(
+                      child: Center(
+                        child: Text(
+                          label,
+                          style: Theme.of(context).textTheme.labelMedium,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              GridView.count(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                crossAxisCount: 7,
+                childAspectRatio: 0.88,
+                mainAxisSpacing: 6,
+                crossAxisSpacing: 6,
+                children: [
+                  for (final date in _calendarDates(widget.focusedMonth))
+                    _ChecklistCalendarDayCell(
+                      date: date,
+                      day: date == null
+                          ? null
+                          : _dayForDate(date, widget.day, widget.monthDays),
+                      selectedDate: widget.selectedDate,
+                      onSelected: widget.loaded && date != null
+                          ? () => widget.onDateSelected(date)
+                          : null,
+                    ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        AppCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  DecoratedBox(
+                    decoration: BoxDecoration(
+                      color:
+                          (day.isComplete ? AppColors.green : AppColors.amber)
+                              .withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.all(10),
+                      child: Icon(
+                        day.isComplete
+                            ? Icons.verified_outlined
+                            : Icons.fact_check_outlined,
+                        color: day.isComplete
+                            ? AppColors.green
+                            : AppColors.amber,
+                        size: 22,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '오늘 투자 전 체크',
+                          style: Theme.of(context).textTheme.titleLarge,
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          _formatChecklistDate(widget.selectedDate),
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                      ],
+                    ),
+                  ),
+                  FlowChip(
+                    label: day.isComplete ? '투자 가능' : '보류',
+                    color: day.isComplete ? AppColors.green : AppColors.red,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              Row(
+                children: [
+                  Expanded(
+                    child: LinearProgressIndicator(
+                      value: day.completionRate,
+                      minHeight: 8,
+                      borderRadius: BorderRadius.circular(8),
+                      backgroundColor: AppColors.line,
+                      valueColor: AlwaysStoppedAnimation<Color>(
+                        day.isComplete ? AppColors.green : AppColors.amber,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Text(
+                    '${day.completedCount}/${day.totalCount} 완료',
+                    style: Theme.of(context).textTheme.labelLarge,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              for (final item in day.items)
+                _ChecklistItemRow(
+                  item: item,
+                  enabled: widget.loaded,
+                  onChanged: (checked) =>
+                      widget.onItemChanged(item.id, checked),
+                  onRemove: item.isCustom
+                      ? () => widget.onRemoveItem(item.id)
+                      : null,
+                ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _newItemController,
+                      enabled: widget.loaded && !_addingItem,
+                      textInputAction: TextInputAction.done,
+                      decoration: const InputDecoration(
+                        labelText: '체크 항목 추가',
+                        border: OutlineInputBorder(),
+                      ),
+                      onSubmitted: (_) => _addItem(),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  IconButton.filled(
+                    tooltip: '체크 항목 추가',
+                    onPressed: widget.loaded && !_addingItem ? _addItem : null,
+                    icon: _addingItem
+                        ? const SizedBox.square(
+                            dimension: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.add),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _noteController,
+                enabled: widget.loaded && !_savingNote,
+                maxLines: 3,
+                decoration: const InputDecoration(
+                  labelText: '오늘 메모',
+                  hintText: '체크 후 남길 리스크, 시나리오, 보류 사유',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: widget.loaded && !_resettingDay
+                          ? _resetDay
+                          : null,
+                      icon: _resettingDay
+                          ? const SizedBox.square(
+                              dimension: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.restart_alt),
+                      label: const Text('선택일 초기화'),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: FilledButton.icon(
+                      onPressed: widget.loaded && !_savingNote
+                          ? _saveNote
+                          : null,
+                      icon: _savingNote
+                          ? const SizedBox.square(
+                              dimension: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.save_outlined),
+                      label: const Text('메모 저장'),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  InvestmentChecklistDay? _dayForDate(
+    DateTime date,
+    InvestmentChecklistDay selectedDay,
+    Map<String, InvestmentChecklistDay> monthDays,
+  ) {
+    final dateKey = checklistDateKey(date);
+    if (dateKey == selectedDay.dateKey) {
+      return selectedDay;
+    }
+    return monthDays[dateKey];
+  }
+}
+
+class _ChecklistItemRow extends StatelessWidget {
+  const _ChecklistItemRow({
+    required this.item,
+    required this.enabled,
+    required this.onChanged,
+    this.onRemove,
+  });
+
+  final InvestmentChecklistItem item;
+  final bool enabled;
+  final ValueChanged<bool> onChanged;
+  final VoidCallback? onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Row(
+        children: [
+          Checkbox(
+            value: item.checked,
+            onChanged: enabled
+                ? (value) {
+                    if (value != null) {
+                      onChanged(value);
+                    }
+                  }
+                : null,
+          ),
+          Expanded(
+            child: Text(
+              item.label,
+              style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                decoration: item.checked ? TextDecoration.lineThrough : null,
+                color: item.checked ? AppColors.muted : AppColors.ink,
+              ),
+            ),
+          ),
+          if (onRemove != null)
+            IconButton(
+              tooltip: '항목 삭제',
+              onPressed: enabled ? onRemove : null,
+              icon: const Icon(Icons.close, size: 18),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ChecklistCalendarDayCell extends StatelessWidget {
+  const _ChecklistCalendarDayCell({
+    required this.date,
+    required this.day,
+    required this.selectedDate,
+    required this.onSelected,
+  });
+
+  final DateTime? date;
+  final InvestmentChecklistDay? day;
+  final DateTime selectedDate;
+  final VoidCallback? onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final date = this.date;
+    if (date == null) {
+      return const SizedBox.shrink();
+    }
+
+    final isSelected = DateUtils.isSameDay(date, selectedDate);
+    final isToday = DateUtils.isSameDay(date, DateTime.now());
+    final hasActivity = day?.hasActivity ?? false;
+    final isComplete = day?.isComplete ?? false;
+    final color = isSelected
+        ? AppColors.green
+        : isComplete
+        ? AppColors.green
+        : hasActivity
+        ? AppColors.amber
+        : AppColors.muted;
+
+    return GestureDetector(
+      onTap: onSelected,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: isSelected
+              ? AppColors.green.withValues(alpha: 0.14)
+              : color.withValues(alpha: hasActivity || isComplete ? 0.1 : 0.04),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: isSelected
+                ? AppColors.green
+                : isToday
+                ? AppColors.blue
+                : AppColors.line,
+          ),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                '${date.day}',
+                style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                  color: isSelected ? AppColors.green : AppColors.ink,
+                ),
+              ),
+              const SizedBox(height: 5),
+              if (isComplete)
+                const Icon(Icons.check_circle, color: AppColors.green, size: 15)
+              else if (hasActivity)
+                Text(
+                  '${day!.completedCount}/${day!.totalCount}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: AppColors.amber,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w800,
+                    height: 1,
+                  ),
+                )
+              else
+                SizedBox(
+                  width: 5,
+                  height: 5,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: isToday ? AppColors.blue : AppColors.line,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class JournalScreen extends StatelessWidget {
   const JournalScreen({
     required this.entries,
@@ -2864,6 +3527,35 @@ Color _apiStatusColor(ApiIntegrationStatus status) {
     case ApiIntegrationStatus.vendorNeeded:
       return AppColors.red;
   }
+}
+
+DateTime _shiftChecklistMonth(DateTime month, int offset) {
+  return DateTime(month.year, month.month + offset);
+}
+
+List<DateTime?> _calendarDates(DateTime month) {
+  final start = checklistMonthStart(month);
+  final daysInMonth = DateTime(start.year, start.month + 1, 0).day;
+  final cells = <DateTime?>[
+    for (var i = 0; i < start.weekday - 1; i++) null,
+    for (var day = 1; day <= daysInMonth; day++)
+      DateTime(start.year, start.month, day),
+  ];
+  while (cells.length % 7 != 0) {
+    cells.add(null);
+  }
+  return cells;
+}
+
+String _formatChecklistMonth(DateTime date) {
+  return '${date.year}.${date.month.toString().padLeft(2, '0')}';
+}
+
+String _formatChecklistDate(DateTime date) {
+  const weekdays = ['월', '화', '수', '목', '금', '토', '일'];
+  final month = date.month.toString().padLeft(2, '0');
+  final day = date.day.toString().padLeft(2, '0');
+  return '${date.year}.$month.$day (${weekdays[date.weekday - 1]})';
 }
 
 String _formatClock(DateTime value) {

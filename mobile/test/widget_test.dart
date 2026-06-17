@@ -237,6 +237,10 @@ void main() {
     expect(find.text('FRED API'), findsOneWidget);
     expect(find.text('CoinGecko API'), findsOneWidget);
     expect(find.text('DefiLlama API'), findsOneWidget);
+    expect(
+      find.text('발급 위치: https://www.alphavantage.co/documentation/'),
+      findsOneWidget,
+    );
     expect(find.text('읽기 전용 데이터'), findsOneWidget);
     expect(find.text('API key'), findsWidgets);
     expect(find.text('데이터 API key 저장'), findsOneWidget);

@@ -16,7 +16,7 @@ flutter run
 flutter run --dart-define=ALPHA_VANTAGE_API_KEY=<your-key>
 ```
 
-앱 실행 후 `설정` 탭에서도 필요한 데이터 API key를 모두 입력할 수 있습니다. Alpha Vantage, 토스증권 Open API, FRED, CoinGecko, DefiLlama, ETF/Fund Flow API, 한국 투자자별 수급 API가 같은 화면에 표시되며, 공급자/커버리지/사용 화면/문서 URL은 읽기 전용 메타데이터로 보입니다. 앱은 기본 데이터 조회용 key 문자열만 기기 로컬 설정에 저장하고, Alpha Vantage key는 대시보드 시세 조회에 바로 사용합니다.
+앱 실행 후 `설정` 탭에서도 필요한 데이터 API key를 모두 입력할 수 있습니다. Alpha Vantage, 토스증권 Open API, FRED, CoinGecko, DefiLlama, ETF/Fund Flow API, 한국 투자자별 수급 API가 같은 화면에 표시되며, 공급자/커버리지/사용 화면/key 발급 위치/문서 URL은 읽기 전용 메타데이터로 보입니다. 앱은 기본 데이터 조회용 key 문자열만 기기 로컬 설정에 저장하고, Alpha Vantage key는 대시보드 시세 조회에 바로 사용합니다.
 
 ## 검증
 
@@ -49,6 +49,7 @@ flutter build web --release --base-href /digital_twin/ --dart-define=ALPHA_VANTA
 
 - 필요 API 맵: Alpha Vantage, 토스증권 Open API, FRED, CoinGecko, DefiLlama, ETF/Fund Flow API, 한국 투자자별 수급 API
 - 종합 그래프: 캔들형 종합 흐름 지수, 유동성 막대, AI/코인/금/KOSPI/리스크 라인을 하나의 그래프에 표시
+- 데이터 UI: 축, 현재값 마커, 핵심 지표 요약을 포함한 금융 대시보드형 차트
 - 기간 조정: 1M, 2M, 3M, ALL 선택과 세부 구간 슬라이더
 - 자산군: 주가지수, 섹터, 코인, 금/원자재, 채권, 통화, 대체자산
 - 표시 항목: 흐름 점수, 모멘텀, 유동성, 위험도, 목적지, 핵심 촉발 요인

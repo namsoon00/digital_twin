@@ -73,7 +73,7 @@ flutter run --dart-define=ALPHA_VANTAGE_API_KEY=<your-key>
 
 API key가 없으면 앱은 mock 가격을 유지하고 화면에 `API key 필요` 상태를 표시합니다.
 
-앱의 `설정` 탭에서는 Alpha Vantage, 토스증권 Open API, FRED, CoinGecko, DefiLlama, ETF/Fund Flow API, 한국 투자자별 수급 API의 key를 모두 입력할 수 있습니다. 각 API의 공급자, 커버리지, 사용 화면, 문서 URL은 읽기 전용으로 표시되고, 입력값은 기기 로컬 설정에 저장됩니다.
+앱의 `설정` 탭에서는 Alpha Vantage, 토스증권 Open API, FRED, CoinGecko, DefiLlama, ETF/Fund Flow API, 한국 투자자별 수급 API의 key를 모두 입력할 수 있습니다. 각 API의 공급자, 커버리지, 사용 화면, key 발급 위치, 문서 URL은 읽기 전용으로 표시되고, 입력값은 기기 로컬 설정에 저장됩니다.
 
 앱의 `설정` 탭에는 토스증권 Open API 직접 호출 옵션이 있습니다. Flutter 앱은 계정 별칭, 계좌 식별값, Open API 기본 URL, 연결 테스트 경로, 앱 키, 앱 시크릿, 액세스 토큰, 읽기 전용 여부를 기기 로컬 설정에 저장합니다. 백엔드 서버 없이 호출할 수 있지만, GitHub Pages 같은 웹 배포에서는 키가 브라우저 저장소와 네트워크 요청에 노출될 수 있습니다.
 

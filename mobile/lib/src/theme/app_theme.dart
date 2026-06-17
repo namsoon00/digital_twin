@@ -3,16 +3,16 @@ import 'package:flutter/material.dart';
 class AppColors {
   const AppColors._();
 
-  static const canvas = Color(0xFFF5F7F2);
+  static const canvas = Color(0xFFF4F6F8);
   static const surface = Color(0xFFFFFFFF);
-  static const ink = Color(0xFF17201C);
-  static const muted = Color(0xFF6A766F);
-  static const line = Color(0xFFDDE5DC);
-  static const green = Color(0xFF107C5B);
-  static const blue = Color(0xFF2357A6);
-  static const amber = Color(0xFFC88412);
-  static const red = Color(0xFFC2413B);
-  static const charcoal = Color(0xFF24312B);
+  static const ink = Color(0xFF101828);
+  static const muted = Color(0xFF667085);
+  static const line = Color(0xFFD0D5DD);
+  static const green = Color(0xFF047857);
+  static const blue = Color(0xFF1D4ED8);
+  static const amber = Color(0xFFB7791F);
+  static const red = Color(0xFFB42318);
+  static const charcoal = Color(0xFF344054);
 }
 
 class AppTheme {
@@ -37,9 +37,9 @@ class AppTheme {
       scaffoldBackgroundColor: AppColors.canvas,
       textTheme: const TextTheme(
         displaySmall: TextStyle(
-          fontSize: 30,
+          fontSize: 28,
           height: 1.08,
-          fontWeight: FontWeight.w800,
+          fontWeight: FontWeight.w900,
           color: AppColors.ink,
         ),
         headlineSmall: TextStyle(
@@ -49,7 +49,7 @@ class AppTheme {
           color: AppColors.ink,
         ),
         titleLarge: TextStyle(
-          fontSize: 18,
+          fontSize: 17,
           height: 1.2,
           fontWeight: FontWeight.w800,
           color: AppColors.ink,
@@ -96,20 +96,20 @@ class AppTheme {
       ),
       navigationBarTheme: NavigationBarThemeData(
         backgroundColor: AppColors.surface,
-        indicatorColor: AppColors.green.withValues(alpha: 0.12),
+        indicatorColor: AppColors.charcoal.withValues(alpha: 0.08),
         labelTextStyle: WidgetStateProperty.resolveWith((states) {
           final selected = states.contains(WidgetState.selected);
           return TextStyle(
-            fontSize: 12,
+            fontSize: 11,
             fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
-            color: selected ? AppColors.green : AppColors.muted,
+            color: selected ? AppColors.ink : AppColors.muted,
           );
         }),
         iconTheme: WidgetStateProperty.resolveWith((states) {
           final selected = states.contains(WidgetState.selected);
           return IconThemeData(
-            color: selected ? AppColors.green : AppColors.muted,
-            size: 23,
+            color: selected ? AppColors.ink : AppColors.muted,
+            size: 22,
           );
         }),
       ),

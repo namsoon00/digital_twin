@@ -1191,6 +1191,46 @@ class FlowCompositeChartCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 14),
+          if (latest != null) ...[
+            Row(
+              children: [
+                Expanded(
+                  child: _ChartStat(
+                    label: '종합',
+                    value: latest.close.toStringAsFixed(1),
+                    color: latest.close >= latest.open
+                        ? AppColors.green
+                        : AppColors.red,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _ChartStat(
+                    label: '모멘텀',
+                    value: latest.momentum.toStringAsFixed(0),
+                    color: AppColors.blue,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _ChartStat(
+                    label: '유동성',
+                    value: latest.liquidity.toStringAsFixed(0),
+                    color: AppColors.green,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _ChartStat(
+                    label: '리스크',
+                    value: latest.risk.toStringAsFixed(0),
+                    color: latest.risk >= 60 ? AppColors.red : AppColors.amber,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+          ],
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: SegmentedButton<int>(
@@ -1257,6 +1297,45 @@ class FlowCompositeChartCard extends StatelessWidget {
   }
 }
 
+class _ChartStat extends StatelessWidget {
+  const _ChartStat({
+    required this.label,
+    required this.value,
+    required this.color,
+  });
+
+  final String label;
+  final String value;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: AppColors.canvas,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: AppColors.line),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(label, style: Theme.of(context).textTheme.bodyMedium),
+            const SizedBox(height: 4),
+            Text(
+              value,
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(color: color),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class FlowCompositeChart extends StatelessWidget {
   const FlowCompositeChart({required this.candles, super.key});
 
@@ -1282,17 +1361,64 @@ class FlowCompositeChartPainter extends CustomPainter {
       return;
     }
 
-    final chart = Rect.fromLTWH(8, 8, size.width - 16, size.height - 36);
+    final chart = Rect.fromLTWH(34, 10, size.width - 44, size.height - 44);
     final volumeTop = chart.bottom - 38;
     final volumeHeight = 30.0;
     final gridPaint = Paint()
-      ..color = AppColors.line.withValues(alpha: 0.72)
+      ..color = AppColors.line.withValues(alpha: 0.7)
       ..strokeWidth = 1;
+    final axisPaint = Paint()
+      ..color = AppColors.muted.withValues(alpha: 0.62)
+      ..strokeWidth = 1;
+
+    void drawText(
+      String text,
+      Offset offset, {
+      Color color = AppColors.muted,
+      double fontSize = 10,
+      TextAlign textAlign = TextAlign.left,
+    }) {
+      final painter = TextPainter(
+        text: TextSpan(
+          text: text,
+          style: TextStyle(
+            color: color,
+            fontSize: fontSize,
+            fontWeight: FontWeight.w700,
+            height: 1,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+        textAlign: textAlign,
+      )..layout();
+      painter.paint(canvas, offset);
+    }
 
     for (var i = 0; i <= 4; i++) {
       final y = chart.top + chart.height * i / 4;
       canvas.drawLine(Offset(chart.left, y), Offset(chart.right, y), gridPaint);
+      drawText('${100 - i * 25}', Offset(4, y - 5));
     }
+
+    for (var i = 0; i <= 4; i++) {
+      final x = chart.left + chart.width * i / 4;
+      canvas.drawLine(
+        Offset(x, chart.top),
+        Offset(x, chart.bottom),
+        gridPaint
+          ..color = AppColors.line.withValues(alpha: i == 0 ? 0.82 : 0.4),
+      );
+    }
+    canvas.drawLine(
+      Offset(chart.left, chart.bottom),
+      Offset(chart.right, chart.bottom),
+      axisPaint,
+    );
+    canvas.drawLine(
+      Offset(chart.left, chart.top),
+      Offset(chart.left, chart.bottom),
+      axisPaint,
+    );
 
     final step = candles.length == 1
         ? chart.width
@@ -1301,12 +1427,16 @@ class FlowCompositeChartPainter extends CustomPainter {
 
     double yFor(double value) {
       final normalized = value.clamp(0, 100) / 100;
-      return chart.bottom - normalized * chart.height * 0.92;
+      return chart.bottom - normalized * chart.height;
+    }
+
+    double xForIndex(int index) {
+      return chart.left + step * index + step / 2;
     }
 
     for (var i = 0; i < candles.length; i++) {
       final candle = candles[i];
-      final centerX = chart.left + step * i + step / 2;
+      final centerX = xForIndex(i);
       final isUp = candle.close >= candle.open;
       final color = isUp ? AppColors.green : AppColors.red;
       final wickPaint = Paint()
@@ -1356,7 +1486,7 @@ class FlowCompositeChartPainter extends CustomPainter {
       }
       final path = Path();
       for (var i = 0; i < candles.length; i++) {
-        final x = chart.left + step * i + step / 2;
+        final x = xForIndex(i);
         final y = yFor(selector(candles[i]));
         if (i == 0) {
           path.moveTo(x, y);
@@ -1380,6 +1510,43 @@ class FlowCompositeChartPainter extends CustomPainter {
     drawLine((candle) => candle.goldFlow, AppColors.charcoal);
     drawLine((candle) => candle.koreaFlow, AppColors.green);
     drawLine((candle) => candle.risk, AppColors.red);
+
+    final last = candles.last;
+    final lastX = xForIndex(candles.length - 1);
+    final lastY = yFor(last.close);
+    final lastColor = last.close >= last.open ? AppColors.green : AppColors.red;
+    final markerPaint = Paint()
+      ..color = lastColor
+      ..style = PaintingStyle.fill;
+    final markerLinePaint = Paint()
+      ..color = lastColor.withValues(alpha: 0.34)
+      ..strokeWidth = 1;
+    canvas.drawLine(
+      Offset(chart.left, lastY),
+      Offset(chart.right, lastY),
+      markerLinePaint,
+    );
+    canvas.drawCircle(Offset(lastX, lastY), 4, markerPaint);
+    drawText(
+      last.close.toStringAsFixed(1),
+      Offset(
+        (chart.right - 28).clamp(chart.left, chart.right).toDouble(),
+        lastY - 14,
+      ),
+      color: lastColor,
+    );
+
+    if (candles.length > 1) {
+      drawText(candles.first.label, Offset(chart.left, chart.bottom + 8));
+      final lastLabel = candles.last.label;
+      drawText(
+        lastLabel,
+        Offset(
+          (chart.right - 24).clamp(chart.left, chart.right).toDouble(),
+          chart.bottom + 8,
+        ),
+      );
+    }
   }
 
   @override
@@ -1667,6 +1834,20 @@ class DataApiKeyField extends StatelessWidget {
         Text(
           '사용 화면: ${api.usedFor}',
           style: Theme.of(context).textTheme.bodyMedium,
+        ),
+        const SizedBox(height: 8),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Icon(Icons.key_outlined, size: 16, color: AppColors.muted),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                '발급 위치: ${api.docsUrl}',
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+            ),
+          ],
         ),
         const SizedBox(height: 10),
         Wrap(

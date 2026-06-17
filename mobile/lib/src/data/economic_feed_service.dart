@@ -100,6 +100,10 @@ class GoogleNewsEconomicFeedService implements EconomicFeedService {
 
   static const provider = 'Google News RSS';
   static const endpoint = '/rss/search';
+  static const _localProxyBaseUrl = String.fromEnvironment(
+    'MARKET_FLOW_FEED_PROXY_BASE_URL',
+    defaultValue: 'http://127.0.0.1:3000',
+  );
 
   static const _queries = [
     _EconomicFeedQuery(
@@ -219,6 +223,31 @@ class GoogleNewsEconomicFeedService implements EconomicFeedService {
       'gl': 'KR',
       'ceid': 'KR:ko',
     });
+    final body = await _fetchRssBody(uri);
+    final blocks = RegExp(
+      r'<item\b[\s\S]*?<\/item>',
+      caseSensitive: false,
+    ).allMatches(body);
+    return blocks
+        .take(3)
+        .map((match) => _parseItem(match.group(0) ?? '', query))
+        .whereType<EconomicFeedItem>()
+        .toList(growable: false);
+  }
+
+  Future<String> _fetchRssBody(Uri uri) async {
+    try {
+      return await _fetchRssUri(uri);
+    } catch (directError) {
+      try {
+        return await _fetchRssUri(_localProxyUri(uri));
+      } catch (proxyError) {
+        throw FormatException('$directError · proxy: $proxyError');
+      }
+    }
+  }
+
+  Future<String> _fetchRssUri(Uri uri) async {
     final response = await _client
         .get(
           uri,
@@ -231,17 +260,15 @@ class GoogleNewsEconomicFeedService implements EconomicFeedService {
     if (response.statusCode != 200) {
       throw FormatException('HTTP ${response.statusCode}');
     }
+    return utf8.decode(response.bodyBytes);
+  }
 
-    final body = utf8.decode(response.bodyBytes);
-    final blocks = RegExp(
-      r'<item\b[\s\S]*?<\/item>',
-      caseSensitive: false,
-    ).allMatches(body);
-    return blocks
-        .take(3)
-        .map((match) => _parseItem(match.group(0) ?? '', query))
-        .whereType<EconomicFeedItem>()
-        .toList(growable: false);
+  Uri _localProxyUri(Uri uri) {
+    final base = Uri.parse(_localProxyBaseUrl);
+    return base.replace(
+      path: '/api/economic-feed/rss',
+      queryParameters: {'url': uri.toString()},
+    );
   }
 
   EconomicFeedItem? _parseItem(String block, _EconomicFeedQuery query) {
@@ -342,6 +369,7 @@ class GoogleNewsEconomicFeedService implements EconomicFeedService {
         .replaceAll('&gt;', '>')
         .replaceAll('&quot;', '"')
         .replaceAll('&#39;', "'")
+        .replaceAll('&nbsp;', ' ')
         .replaceAll(RegExp(r'<[^>]+>'), ' ')
         .replaceAll(RegExp(r'\s+'), ' ')
         .trim();

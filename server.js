@@ -166,6 +166,28 @@ function text(res, status, payload, contentType) {
   res.end(payload);
 }
 
+function corsJson(res, status, payload) {
+  res.writeHead(status, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Cache-Control": "no-store",
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type"
+  });
+  res.end(JSON.stringify(payload));
+}
+
+function corsText(res, status, payload, contentType) {
+  res.writeHead(status, {
+    "Content-Type": contentType + "; charset=utf-8",
+    "Cache-Control": "no-store",
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type"
+  });
+  res.end(payload);
+}
+
 function readBody(req) {
   return new Promise(function (resolve, reject) {
     let body = "";
@@ -311,6 +333,24 @@ function fetchJson(targetUrl) {
   return fetchText(targetUrl).then(function (raw) {
     return JSON.parse(raw);
   });
+}
+
+function normalizeEconomicFeedRssUrl(rawUrl) {
+  let target;
+  try {
+    target = new URL(String(rawUrl || ""));
+  } catch (error) {
+    throw new Error("RSS URL 형식이 올바르지 않습니다.");
+  }
+
+  if (target.protocol !== "https:" || target.hostname !== "news.google.com" || target.pathname !== "/rss/search") {
+    throw new Error("허용된 RSS URL은 news.google.com/rss/search 뿐입니다.");
+  }
+  if (!target.searchParams.get("q")) {
+    throw new Error("RSS 검색어가 필요합니다.");
+  }
+
+  return target.toString();
 }
 
 function serveStatic(req, res, pathname) {
@@ -1148,6 +1188,20 @@ function snapshot() {
 }
 
 async function api(req, res, pathname) {
+  if (pathname === "/api/economic-feed/rss") {
+    if (req.method === "OPTIONS") return corsText(res, 204, "", "text/plain");
+    if (req.method === "GET") {
+      try {
+        const parsedQuery = url.parse(req.url, true).query;
+        const targetUrl = normalizeEconomicFeedRssUrl(parsedQuery.url);
+        const raw = await fetchText(targetUrl);
+        return corsText(res, 200, raw, "application/rss+xml");
+      } catch (error) {
+        return corsJson(res, 400, { error: error.message || "RSS 피드를 가져오지 못했습니다." });
+      }
+    }
+  }
+
   if (req.method === "GET" && pathname === "/api/bootstrap") return json(res, 200, snapshot());
 
   if (req.method === "PUT" && pathname === "/api/profile") {

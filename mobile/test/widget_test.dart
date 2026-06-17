@@ -60,6 +60,52 @@ void main() {
     expect(result.items.single.summary, contains('Cloud spending'));
   });
 
+  test(
+    'Google News RSS uses local proxy fallback after direct fetch failure',
+    () async {
+      const rss = '''
+<rss><channel>
+  <item>
+    <title>Fed liquidity watch lifts stock futures</title>
+    <link>https://articles.example.com/fed-liquidity</link>
+    <pubDate>Tue, 16 Jun 2026 04:24:00 GMT</pubDate>
+    <source>MarketWatch</source>
+    <description>Dollar funding and rate expectations are moving equity futures.</description>
+  </item>
+</channel></rss>
+''';
+      var proxyRequestCount = 0;
+      final service = GoogleNewsEconomicFeedService(
+        client: MockClient((request) async {
+          if (request.url.host == 'news.google.com') {
+            throw http.ClientException('Failed to fetch', request.url);
+          }
+          expect(request.url.host, '127.0.0.1');
+          expect(request.url.port, 3000);
+          expect(request.url.path, '/api/economic-feed/rss');
+          expect(
+            request.url.queryParameters['url'],
+            contains('https://news.google.com/rss/search'),
+          );
+          proxyRequestCount += 1;
+          return http.Response(
+            rss,
+            200,
+            headers: {'content-type': 'application/rss+xml; charset=utf-8'},
+          );
+        }),
+      );
+      addTearDown(service.dispose);
+
+      final result = await service.fetchFeeds();
+
+      expect(result.snapshot.status, EconomicFeedFetchStatus.ready);
+      expect(result.items, hasLength(1));
+      expect(result.items.single.source, 'MarketWatch');
+      expect(proxyRequestCount, 7);
+    },
+  );
+
   testWidgets('MarketFlow defaults to dark mode', (tester) async {
     await pumpMarketFlowApp(tester);
 

@@ -8,6 +8,17 @@ void main() {
     SharedPreferences.setMockInitialValues({});
   });
 
+  testWidgets('MarketFlow defaults to dark mode', (tester) async {
+    await tester.pumpWidget(const MarketFlowApp());
+    await tester.pumpAndSettle();
+
+    final app = tester.widget<MaterialApp>(find.byType(MaterialApp));
+
+    expect(app.themeMode, ThemeMode.dark);
+    expect(app.darkTheme?.brightness, Brightness.dark);
+    expect(app.theme?.scaffoldBackgroundColor, const Color(0xFF0B1017));
+  });
+
   testWidgets('MarketFlow opens on the live flow dashboard', (tester) async {
     await tester.pumpWidget(const MarketFlowApp());
     await tester.pumpAndSettle();

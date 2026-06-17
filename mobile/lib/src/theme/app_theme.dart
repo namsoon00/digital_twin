@@ -3,36 +3,38 @@ import 'package:flutter/material.dart';
 class AppColors {
   const AppColors._();
 
-  static const canvas = Color(0xFFF4F6F8);
-  static const surface = Color(0xFFFFFFFF);
-  static const ink = Color(0xFF101828);
-  static const muted = Color(0xFF667085);
-  static const line = Color(0xFFD0D5DD);
-  static const green = Color(0xFF047857);
-  static const blue = Color(0xFF1D4ED8);
-  static const amber = Color(0xFFB7791F);
-  static const red = Color(0xFFB42318);
-  static const charcoal = Color(0xFF344054);
+  static const canvas = Color(0xFF0B1017);
+  static const surface = Color(0xFF111827);
+  static const ink = Color(0xFFE5E7EB);
+  static const muted = Color(0xFF98A2B3);
+  static const line = Color(0xFF263241);
+  static const green = Color(0xFF34D399);
+  static const blue = Color(0xFF60A5FA);
+  static const amber = Color(0xFFFBBF24);
+  static const red = Color(0xFFF87171);
+  static const charcoal = Color(0xFFCBD5E1);
 }
 
 class AppTheme {
   const AppTheme._();
 
-  static ThemeData get light {
+  static ThemeData get dark {
     final scheme =
         ColorScheme.fromSeed(
-          seedColor: AppColors.green,
-          brightness: Brightness.light,
+          seedColor: AppColors.blue,
+          brightness: Brightness.dark,
         ).copyWith(
           surface: AppColors.surface,
           primary: AppColors.green,
           secondary: AppColors.blue,
           tertiary: AppColors.amber,
           error: AppColors.red,
+          onSurface: AppColors.ink,
         );
 
     return ThemeData(
       useMaterial3: true,
+      brightness: Brightness.dark,
       colorScheme: scheme,
       scaffoldBackgroundColor: AppColors.canvas,
       textTheme: const TextTheme(
@@ -96,7 +98,7 @@ class AppTheme {
       ),
       navigationBarTheme: NavigationBarThemeData(
         backgroundColor: AppColors.surface,
-        indicatorColor: AppColors.charcoal.withValues(alpha: 0.08),
+        indicatorColor: AppColors.blue.withValues(alpha: 0.14),
         labelTextStyle: WidgetStateProperty.resolveWith((states) {
           final selected = states.contains(WidgetState.selected);
           return TextStyle(
@@ -117,12 +119,12 @@ class AppTheme {
         style: ButtonStyle(
           backgroundColor: WidgetStateProperty.resolveWith((states) {
             return states.contains(WidgetState.selected)
-                ? AppColors.charcoal
+                ? AppColors.blue.withValues(alpha: 0.18)
                 : AppColors.surface;
           }),
           foregroundColor: WidgetStateProperty.resolveWith((states) {
             return states.contains(WidgetState.selected)
-                ? Colors.white
+                ? AppColors.ink
                 : AppColors.muted;
           }),
           side: WidgetStateProperty.all(

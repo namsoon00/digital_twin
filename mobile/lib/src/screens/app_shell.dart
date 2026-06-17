@@ -508,7 +508,7 @@ class _ShellHeader extends StatelessWidget {
                 children: [
                   CircleAvatar(
                     radius: 16,
-                    backgroundColor: AppColors.charcoal,
+                    backgroundColor: AppColors.blue,
                     child: Text(
                       currentUser.name.characters.first,
                       style: const TextStyle(

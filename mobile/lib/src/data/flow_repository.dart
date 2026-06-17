@@ -3,6 +3,7 @@ import '../models/market_models.dart';
 abstract class FlowRepository {
   List<AppUser> get users;
   List<MarketPulse> get marketPulses;
+  List<EconomicFeedItem> get economicFeeds;
   List<DataApiSource> get dataApiSources;
   List<FlowCandle> get globalFlowCandles;
   List<CapitalFlow> get capitalFlows;
@@ -61,6 +62,87 @@ class MockFlowRepository implements FlowRepository {
       summary: 'AI 인프라와 전력 수요 테마가 대형주에서 소프트웨어, 냉각, 전력망 종목으로 번지는 구간입니다.',
       heat: [56, 57, 61, 64, 66, 69, 72, 78, 81],
       updatedLabel: '20분 전',
+    ),
+  ];
+
+  @override
+  List<EconomicFeedItem> get economicFeeds => const [
+    EconomicFeedItem(
+      id: 'feed-us-liquidity',
+      type: EconomicFeedType.liquidity,
+      region: MarketRegion.unitedStates,
+      title: '달러 유동성은 완화, 장기금리는 고점 테스트',
+      summary: '단기 유동성은 위험자산에 우호적이지만 장기금리 재상승이 성장주 밸류에이션을 압박하는 구간입니다.',
+      source: 'FRED / Treasury / ETF Flow',
+      timestampLabel: '10분 전',
+      impactScore: 84,
+      tags: ['달러', '금리', '성장주'],
+    ),
+    EconomicFeedItem(
+      id: 'feed-ai-capex',
+      type: EconomicFeedType.flow,
+      region: MarketRegion.unitedStates,
+      title: 'AI CAPEX 자금이 반도체에서 전력 인프라로 확산',
+      summary: 'GPU와 클라우드 중심의 자금 흐름이 전력망, 냉각, 데이터센터 리츠까지 넓어지는 선형 흐름입니다.',
+      source: 'MarketFlow Theme Map',
+      timestampLabel: '18분 전',
+      impactScore: 88,
+      tags: ['AI', '전력', '인프라'],
+    ),
+    EconomicFeedItem(
+      id: 'feed-kr-foreign',
+      type: EconomicFeedType.flow,
+      region: MarketRegion.korea,
+      title: '외국인 순매수는 대형 반도체와 방산에 집중',
+      summary: 'KOSPI 수급은 지수형 매수보다 특정 업종 집중도가 높아 업종 확산 여부를 확인해야 합니다.',
+      source: 'KRX / Broker Flow',
+      timestampLabel: '24분 전',
+      impactScore: 76,
+      tags: ['KOSPI', '외국인', '반도체'],
+    ),
+    EconomicFeedItem(
+      id: 'feed-policy',
+      type: EconomicFeedType.policy,
+      region: MarketRegion.all,
+      title: '중앙은행 발언은 인하 속도보다 물가 재가속에 민감',
+      summary: '정책 기대가 과하게 앞서면 장기금리와 달러가 반등할 수 있어 리스크 자산의 추격 매수 기준을 낮춰야 합니다.',
+      source: 'Fed / BOK Watch',
+      timestampLabel: '35분 전',
+      impactScore: 72,
+      tags: ['중앙은행', '물가', '달러'],
+    ),
+    EconomicFeedItem(
+      id: 'feed-earnings',
+      type: EconomicFeedType.earnings,
+      region: MarketRegion.unitedStates,
+      title: '실적 시즌은 매출 성장보다 마진 방어가 핵심',
+      summary: '고금리 구간에서는 매출보다 비용 통제와 현금흐름이 주가 반응을 좌우하는 비중이 커집니다.',
+      source: 'Earnings Calendar',
+      timestampLabel: '42분 전',
+      impactScore: 64,
+      tags: ['실적', '마진', '현금흐름'],
+    ),
+    EconomicFeedItem(
+      id: 'feed-risk',
+      type: EconomicFeedType.risk,
+      region: MarketRegion.all,
+      title: '금과 달러가 동시에 강하면 위험선호의 질을 재점검',
+      summary: '안전자산과 성장주가 함께 오르는 구간은 유동성 장세일 수 있지만, 변동성 확대 전조일 수도 있습니다.',
+      source: 'Alpha Vantage / Commodity Proxy',
+      timestampLabel: '55분 전',
+      impactScore: 69,
+      tags: ['금', '달러', '변동성'],
+    ),
+    EconomicFeedItem(
+      id: 'feed-crypto',
+      type: EconomicFeedType.macro,
+      region: MarketRegion.all,
+      title: '스테이블코인 공급 증가는 위험자산 베타를 지지',
+      summary: '온체인 달러 유동성이 늘어날 때 코인, 고베타 성장주, 테마형 ETF의 동조화가 강해질 수 있습니다.',
+      source: 'CoinGecko / DefiLlama',
+      timestampLabel: '1시간 전',
+      impactScore: 71,
+      tags: ['스테이블코인', 'BTC', '베타'],
     ),
   ];
 

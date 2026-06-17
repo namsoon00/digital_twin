@@ -229,6 +229,13 @@ class _AppShellState extends State<AppShell> {
         .toList(growable: false);
   }
 
+  List<EconomicFeedItem> get _economicFeeds {
+    return widget.repository.economicFeeds
+        .where((feed) => _matchesRegion(feed.region))
+        .toList(growable: false)
+      ..sort((a, b) => b.impactScore.compareTo(a.impactScore));
+  }
+
   List<ThemePulse> get _themes {
     return widget.repository.themes
         .where((theme) => _matchesRegion(theme.region))
@@ -278,6 +285,14 @@ class _AppShellState extends State<AppShell> {
         quotes: _quotes,
         quoteSnapshot: _quoteSnapshot,
         onRefreshQuotes: _refreshLiveQuotes,
+      ),
+      EconomicFeedScreen(
+        feeds: _economicFeeds,
+        pulses: _pulses,
+        flows: widget.repository.capitalFlows,
+        themes: _themes,
+        apiSources: widget.repository.dataApiSources,
+        quoteSnapshot: _quoteSnapshot,
       ),
       CapitalFlowScreen(
         apiSources: widget.repository.dataApiSources,
@@ -362,6 +377,11 @@ class _AppShellState extends State<AppShell> {
             icon: Icon(Icons.dashboard_outlined),
             selectedIcon: Icon(Icons.dashboard),
             label: '흐름',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.dynamic_feed_outlined),
+            selectedIcon: Icon(Icons.dynamic_feed),
+            label: '피드',
           ),
           NavigationDestination(
             icon: Icon(Icons.public_outlined),
@@ -629,6 +649,301 @@ class DashboardScreen extends StatelessWidget {
                 ),
               ),
       ],
+    );
+  }
+}
+
+class EconomicFeedScreen extends StatefulWidget {
+  const EconomicFeedScreen({
+    required this.feeds,
+    required this.pulses,
+    required this.flows,
+    required this.themes,
+    required this.apiSources,
+    required this.quoteSnapshot,
+    super.key,
+  });
+
+  final List<EconomicFeedItem> feeds;
+  final List<MarketPulse> pulses;
+  final List<CapitalFlow> flows;
+  final List<ThemePulse> themes;
+  final List<DataApiSource> apiSources;
+  final QuoteApiSnapshot quoteSnapshot;
+
+  @override
+  State<EconomicFeedScreen> createState() => _EconomicFeedScreenState();
+}
+
+class _EconomicFeedScreenState extends State<EconomicFeedScreen> {
+  String _filter = 'all';
+
+  @override
+  Widget build(BuildContext context) {
+    final rankedFeeds = widget.feeds.toList(growable: false)
+      ..sort((a, b) => b.impactScore.compareTo(a.impactScore));
+    final filteredFeeds = _filter == 'all'
+        ? rankedFeeds
+        : rankedFeeds
+              .where((feed) => feed.type.name == _filter)
+              .toList(growable: false);
+    final topImpact = rankedFeeds.isEmpty ? null : rankedFeeds.first;
+    final readyApiCount = widget.apiSources.where((api) {
+      return api.status == ApiIntegrationStatus.live ||
+          api.status == ApiIntegrationStatus.configurable;
+    }).length;
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 20),
+      children: [
+        Row(
+          children: [
+            MetricPill(
+              icon: Icons.auto_graph,
+              label: '경제 영향',
+              value: topImpact == null ? '-' : '${topImpact.impactScore}',
+              color: topImpact == null
+                  ? AppColors.muted
+                  : scoreColor(topImpact.impactScore),
+            ),
+            const SizedBox(width: 10),
+            MetricPill(
+              icon: Icons.dynamic_feed_outlined,
+              label: '피드',
+              value: '${rankedFeeds.length}',
+              color: AppColors.blue,
+            ),
+            const SizedBox(width: 10),
+            MetricPill(
+              icon: Icons.api_outlined,
+              label: '데이터',
+              value: '$readyApiCount/${widget.apiSources.length}',
+              color: readyApiCount == widget.apiSources.length
+                  ? AppColors.green
+                  : AppColors.amber,
+            ),
+          ],
+        ),
+        const SizedBox(height: 18),
+        EconomicFeedSummaryCard(
+          feeds: rankedFeeds,
+          pulses: widget.pulses,
+          flows: widget.flows,
+          themes: widget.themes,
+          quoteSnapshot: widget.quoteSnapshot,
+        ),
+        const SizedBox(height: 12),
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: SegmentedButton<String>(
+            segments: const [
+              ButtonSegment(value: 'all', label: Text('전체')),
+              ButtonSegment(value: 'macro', label: Text('매크로')),
+              ButtonSegment(value: 'liquidity', label: Text('유동성')),
+              ButtonSegment(value: 'policy', label: Text('정책')),
+              ButtonSegment(value: 'flow', label: Text('자금')),
+              ButtonSegment(value: 'earnings', label: Text('실적')),
+              ButtonSegment(value: 'risk', label: Text('리스크')),
+            ],
+            selected: {_filter},
+            onSelectionChanged: (values) => setState(() {
+              _filter = values.first;
+            }),
+          ),
+        ),
+        const SizedBox(height: 12),
+        SectionHeader(
+          title: '경제 피드',
+          trailing: FlowChip(
+            label: '${filteredFeeds.length} items',
+            color: AppColors.charcoal,
+          ),
+        ),
+        const SizedBox(height: 10),
+        if (filteredFeeds.isEmpty)
+          const EmptyState(message: '선택한 필터의 경제 피드가 없습니다.')
+        else
+          ...filteredFeeds.map(
+            (feed) => Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: EconomicFeedCard(feed: feed),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class EconomicFeedSummaryCard extends StatelessWidget {
+  const EconomicFeedSummaryCard({
+    required this.feeds,
+    required this.pulses,
+    required this.flows,
+    required this.themes,
+    required this.quoteSnapshot,
+    super.key,
+  });
+
+  final List<EconomicFeedItem> feeds;
+  final List<MarketPulse> pulses;
+  final List<CapitalFlow> flows;
+  final List<ThemePulse> themes;
+  final QuoteApiSnapshot quoteSnapshot;
+
+  @override
+  Widget build(BuildContext context) {
+    final topFeed = feeds.isEmpty ? null : feeds.first;
+    final topPulse = pulses.toList(growable: false)
+      ..sort((a, b) => b.score.compareTo(a.score));
+    final topFlow = flows.toList(growable: false)
+      ..sort((a, b) => b.flowScore.compareTo(a.flowScore));
+    final topTheme = themes.toList(growable: false)
+      ..sort((a, b) => b.score.compareTo(a.score));
+    final pulse = topPulse.isEmpty ? null : topPulse.first;
+    final flow = topFlow.isEmpty ? null : topFlow.first;
+    final theme = topTheme.isEmpty ? null : topTheme.first;
+
+    return AppCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              DecoratedBox(
+                decoration: BoxDecoration(
+                  color: AppColors.blue.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Padding(
+                  padding: EdgeInsets.all(10),
+                  child: Icon(
+                    Icons.language_outlined,
+                    color: AppColors.blue,
+                    size: 22,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '경제가 돌아가는 방향',
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+                    const SizedBox(height: 5),
+                    Text(
+                      topFeed?.title ?? '경제 피드 데이터 없음',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                  ],
+                ),
+              ),
+              FlowChip(
+                label: quoteSnapshot.statusLabel,
+                color: quoteSnapshot.apiKeyConfigured
+                    ? AppColors.green
+                    : AppColors.amber,
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          if (topFeed != null)
+            Text(topFeed.summary, style: Theme.of(context).textTheme.bodyLarge),
+          const SizedBox(height: 14),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              if (pulse != null)
+                FlowChip(
+                  label: '${pulse.title} ${pulse.score}',
+                  color: scoreColor(pulse.score),
+                ),
+              if (flow != null)
+                FlowChip(
+                  label: '${flow.name} ${flow.flowScore}',
+                  color: _assetClassColor(flow.assetClass),
+                ),
+              if (theme != null)
+                FlowChip(
+                  label: '${theme.name} ${theme.score}',
+                  color: scoreColor(theme.score),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class EconomicFeedCard extends StatelessWidget {
+  const EconomicFeedCard({required this.feed, super.key});
+
+  final EconomicFeedItem feed;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = _feedTypeColor(feed.type);
+    return AppCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              DecoratedBox(
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(10),
+                  child: Icon(_feedTypeIcon(feed.type), color: color, size: 22),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      feed.title,
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+                    const SizedBox(height: 5),
+                    Text(
+                      '${feed.source} · ${feed.timestampLabel}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                  ],
+                ),
+              ),
+              FlowChip(label: '${feed.impactScore}', color: color),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text(feed.summary, style: Theme.of(context).textTheme.bodyLarge),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              FlowChip(label: feed.type.label, color: color),
+              FlowChip(label: feed.region.label, color: AppColors.charcoal),
+              for (final tag in feed.tags)
+                FlowChip(label: tag, color: AppColors.blue),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }
@@ -3811,6 +4126,40 @@ IconData _assetClassIcon(CapitalFlowAssetClass assetClass) {
       return Icons.currency_exchange;
     case CapitalFlowAssetClass.alternative:
       return Icons.category_outlined;
+  }
+}
+
+IconData _feedTypeIcon(EconomicFeedType type) {
+  switch (type) {
+    case EconomicFeedType.macro:
+      return Icons.public_outlined;
+    case EconomicFeedType.liquidity:
+      return Icons.waterfall_chart;
+    case EconomicFeedType.policy:
+      return Icons.account_balance_outlined;
+    case EconomicFeedType.flow:
+      return Icons.route_outlined;
+    case EconomicFeedType.earnings:
+      return Icons.request_quote_outlined;
+    case EconomicFeedType.risk:
+      return Icons.warning_amber_outlined;
+  }
+}
+
+Color _feedTypeColor(EconomicFeedType type) {
+  switch (type) {
+    case EconomicFeedType.macro:
+      return AppColors.blue;
+    case EconomicFeedType.liquidity:
+      return AppColors.green;
+    case EconomicFeedType.policy:
+      return AppColors.charcoal;
+    case EconomicFeedType.flow:
+      return AppColors.amber;
+    case EconomicFeedType.earnings:
+      return AppColors.muted;
+    case EconomicFeedType.risk:
+      return AppColors.red;
   }
 }
 

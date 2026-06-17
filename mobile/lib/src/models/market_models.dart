@@ -91,6 +91,27 @@ extension ApiIntegrationStatusLabel on ApiIntegrationStatus {
   }
 }
 
+enum EconomicFeedType { macro, liquidity, policy, flow, earnings, risk }
+
+extension EconomicFeedTypeLabel on EconomicFeedType {
+  String get label {
+    switch (this) {
+      case EconomicFeedType.macro:
+        return '매크로';
+      case EconomicFeedType.liquidity:
+        return '유동성';
+      case EconomicFeedType.policy:
+        return '정책';
+      case EconomicFeedType.flow:
+        return '자금';
+      case EconomicFeedType.earnings:
+        return '실적';
+      case EconomicFeedType.risk:
+        return '리스크';
+    }
+  }
+}
+
 class DataApiSource {
   const DataApiSource({
     required this.id,
@@ -113,6 +134,30 @@ class DataApiSource {
   final String keyName;
   final String docsUrl;
   final int priority;
+}
+
+class EconomicFeedItem {
+  const EconomicFeedItem({
+    required this.id,
+    required this.type,
+    required this.region,
+    required this.title,
+    required this.summary,
+    required this.source,
+    required this.timestampLabel,
+    required this.impactScore,
+    required this.tags,
+  });
+
+  final String id;
+  final EconomicFeedType type;
+  final MarketRegion region;
+  final String title;
+  final String summary;
+  final String source;
+  final String timestampLabel;
+  final int impactScore;
+  final List<String> tags;
 }
 
 class DataApiKeySettings {

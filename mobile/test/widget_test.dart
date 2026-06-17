@@ -46,6 +46,28 @@ void main() {
     expect(find.text('NVDA'), findsOneWidget);
   });
 
+  testWidgets('MarketFlow shows the economic feed tab', (tester) async {
+    await tester.pumpWidget(const MarketFlowApp());
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('피드'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('경제가 돌아가는 방향'), findsOneWidget);
+    expect(find.text('AI CAPEX 자금이 반도체에서 전력 인프라로 확산'), findsWidgets);
+
+    await tester.scrollUntilVisible(
+      find.text('경제 피드'),
+      260,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('경제 피드'), findsOneWidget);
+    expect(find.text('AI CAPEX 자금이 반도체에서 전력 인프라로 확산'), findsWidgets);
+    expect(find.text('MarketFlow Theme Map · 18분 전'), findsOneWidget);
+  });
+
   testWidgets('MarketFlow manages the pre-investment checklist', (
     tester,
   ) async {

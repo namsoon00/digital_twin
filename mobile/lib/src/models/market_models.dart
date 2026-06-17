@@ -147,6 +147,8 @@ class EconomicFeedItem {
     required this.timestampLabel,
     required this.impactScore,
     required this.tags,
+    this.url = '',
+    this.publishedAt,
   });
 
   final String id;
@@ -158,6 +160,8 @@ class EconomicFeedItem {
   final String timestampLabel;
   final int impactScore;
   final List<String> tags;
+  final String url;
+  final DateTime? publishedAt;
 }
 
 class DataApiKeySettings {

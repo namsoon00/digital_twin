@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../data/checklist_repository.dart';
+import '../data/economic_feed_service.dart';
 import '../data/flow_repository.dart';
 import '../data/market_data_api.dart';
 import '../data/settings_repository.dart';
@@ -12,9 +13,21 @@ import '../widgets/region_switcher.dart';
 import '../widgets/sparkline.dart';
 
 class AppShell extends StatefulWidget {
-  const AppShell({required this.repository, super.key});
+  const AppShell({
+    required this.repository,
+    required this.themePreference,
+    required this.themeSettingsLoaded,
+    required this.onThemePreferenceChanged,
+    this.economicFeedService,
+    super.key,
+  });
 
   final FlowRepository repository;
+  final EconomicFeedService? economicFeedService;
+  final AppThemePreference themePreference;
+  final bool themeSettingsLoaded;
+  final Future<void> Function(AppThemePreference preference)
+  onThemePreferenceChanged;
 
   @override
   State<AppShell> createState() => _AppShellState();
@@ -26,10 +39,13 @@ class _AppShellState extends State<AppShell> {
   late AppUser _currentUser;
   late List<JournalEntry> _journals;
   late ChecklistRepository _checklistRepository;
+  late EconomicFeedService _economicFeedService;
   late AlphaVantageQuoteService _quoteService;
   late TossDirectApiClient _tossDirectApiClient;
   late SettingsRepository _settingsRepository;
+  late EconomicFeedFetchSnapshot _feedSnapshot;
   late QuoteApiSnapshot _quoteSnapshot;
+  late List<EconomicFeedItem> _economicFeedItems;
   Map<String, LiveQuote> _quotes = const {};
   InvestmentChecklistDay _checklistDay = InvestmentChecklistDay.defaults(
     checklistDateKey(DateTime.now()),
@@ -49,6 +65,10 @@ class _AppShellState extends State<AppShell> {
     _currentUser = widget.repository.users.first;
     _journals = widget.repository.journals.toList();
     _checklistRepository = ChecklistRepository();
+    _economicFeedService =
+        widget.economicFeedService ?? GoogleNewsEconomicFeedService();
+    _economicFeedItems = widget.repository.economicFeeds.toList();
+    _feedSnapshot = EconomicFeedFetchSnapshot.idle(_economicFeedItems.length);
     _quoteService = AlphaVantageQuoteService();
     _tossDirectApiClient = TossDirectApiClient();
     _settingsRepository = SettingsRepository();
@@ -56,14 +76,40 @@ class _AppShellState extends State<AppShell> {
     _loadChecklistDate(DateTime.now());
     _loadDataApiKeySettings();
     _loadTossSettings();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _refreshLiveQuotes());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _refreshLiveQuotes();
+      _refreshEconomicFeeds();
+    });
   }
 
   @override
   void dispose() {
+    _economicFeedService.dispose();
     _quoteService.dispose();
     _tossDirectApiClient.dispose();
     super.dispose();
+  }
+
+  Future<void> _refreshEconomicFeeds() async {
+    if (mounted) {
+      setState(() {
+        _feedSnapshot = EconomicFeedFetchSnapshot.loading(
+          _economicFeedItems.length,
+        );
+      });
+    }
+
+    final result = await _economicFeedService.fetchFeeds();
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      if (result.items.isNotEmpty) {
+        _economicFeedItems = result.items;
+      }
+      _feedSnapshot = result.snapshot;
+    });
   }
 
   Future<void> _refreshLiveQuotes() async {
@@ -230,10 +276,10 @@ class _AppShellState extends State<AppShell> {
   }
 
   List<EconomicFeedItem> get _economicFeeds {
-    return widget.repository.economicFeeds
+    return _economicFeedItems
         .where((feed) => _matchesRegion(feed.region))
         .toList(growable: false)
-      ..sort((a, b) => b.impactScore.compareTo(a.impactScore));
+      ..sort(_compareEconomicFeeds);
   }
 
   List<ThemePulse> get _themes {
@@ -288,6 +334,8 @@ class _AppShellState extends State<AppShell> {
       ),
       EconomicFeedScreen(
         feeds: _economicFeeds,
+        feedSnapshot: _feedSnapshot,
+        onRefreshFeeds: _refreshEconomicFeeds,
         pulses: _pulses,
         flows: widget.repository.capitalFlows,
         themes: _themes,
@@ -335,6 +383,9 @@ class _AppShellState extends State<AppShell> {
         settingsLoaded: _settingsLoaded,
         onSaveTossSettings: _saveTossSettings,
         onTestTossConnection: _testTossConnection,
+        themePreference: widget.themePreference,
+        themeSettingsLoaded: widget.themeSettingsLoaded,
+        onThemePreferenceChanged: widget.onThemePreferenceChanged,
       ),
     ];
 
@@ -656,6 +707,8 @@ class DashboardScreen extends StatelessWidget {
 class EconomicFeedScreen extends StatefulWidget {
   const EconomicFeedScreen({
     required this.feeds,
+    required this.feedSnapshot,
+    required this.onRefreshFeeds,
     required this.pulses,
     required this.flows,
     required this.themes,
@@ -665,6 +718,8 @@ class EconomicFeedScreen extends StatefulWidget {
   });
 
   final List<EconomicFeedItem> feeds;
+  final EconomicFeedFetchSnapshot feedSnapshot;
+  final Future<void> Function() onRefreshFeeds;
   final List<MarketPulse> pulses;
   final List<CapitalFlow> flows;
   final List<ThemePulse> themes;
@@ -681,17 +736,13 @@ class _EconomicFeedScreenState extends State<EconomicFeedScreen> {
   @override
   Widget build(BuildContext context) {
     final rankedFeeds = widget.feeds.toList(growable: false)
-      ..sort((a, b) => b.impactScore.compareTo(a.impactScore));
+      ..sort(_compareEconomicFeeds);
     final filteredFeeds = _filter == 'all'
         ? rankedFeeds
         : rankedFeeds
               .where((feed) => feed.type.name == _filter)
               .toList(growable: false);
     final topImpact = rankedFeeds.isEmpty ? null : rankedFeeds.first;
-    final readyApiCount = widget.apiSources.where((api) {
-      return api.status == ApiIntegrationStatus.live ||
-          api.status == ApiIntegrationStatus.configurable;
-    }).length;
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 20),
@@ -716,11 +767,9 @@ class _EconomicFeedScreenState extends State<EconomicFeedScreen> {
             const SizedBox(width: 10),
             MetricPill(
               icon: Icons.api_outlined,
-              label: '데이터',
-              value: '$readyApiCount/${widget.apiSources.length}',
-              color: readyApiCount == widget.apiSources.length
-                  ? AppColors.green
-                  : AppColors.amber,
+              label: '실제 데이터',
+              value: widget.feedSnapshot.statusLabel,
+              color: _feedStatusColor(widget.feedSnapshot.status),
             ),
           ],
         ),
@@ -730,6 +779,7 @@ class _EconomicFeedScreenState extends State<EconomicFeedScreen> {
           pulses: widget.pulses,
           flows: widget.flows,
           themes: widget.themes,
+          feedSnapshot: widget.feedSnapshot,
           quoteSnapshot: widget.quoteSnapshot,
         ),
         const SizedBox(height: 12),
@@ -754,9 +804,20 @@ class _EconomicFeedScreenState extends State<EconomicFeedScreen> {
         const SizedBox(height: 12),
         SectionHeader(
           title: '경제 피드',
-          trailing: FlowChip(
-            label: '${filteredFeeds.length} items',
-            color: AppColors.charcoal,
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              FlowChip(
+                label: '${filteredFeeds.length} items',
+                color: AppColors.charcoal,
+              ),
+              const SizedBox(width: 6),
+              IconButton(
+                tooltip: '실제 피드 새로고침',
+                onPressed: widget.onRefreshFeeds,
+                icon: const Icon(Icons.refresh),
+              ),
+            ],
           ),
         ),
         const SizedBox(height: 10),
@@ -780,6 +841,7 @@ class EconomicFeedSummaryCard extends StatelessWidget {
     required this.pulses,
     required this.flows,
     required this.themes,
+    required this.feedSnapshot,
     required this.quoteSnapshot,
     super.key,
   });
@@ -788,6 +850,7 @@ class EconomicFeedSummaryCard extends StatelessWidget {
   final List<MarketPulse> pulses;
   final List<CapitalFlow> flows;
   final List<ThemePulse> themes;
+  final EconomicFeedFetchSnapshot feedSnapshot;
   final QuoteApiSnapshot quoteSnapshot;
 
   @override
@@ -815,8 +878,8 @@ class EconomicFeedSummaryCard extends StatelessWidget {
                   color: AppColors.blue.withValues(alpha: 0.12),
                   borderRadius: BorderRadius.circular(8),
                 ),
-                child: const Padding(
-                  padding: EdgeInsets.all(10),
+                child: Padding(
+                  padding: const EdgeInsets.all(10),
                   child: Icon(
                     Icons.language_outlined,
                     color: AppColors.blue,
@@ -844,10 +907,8 @@ class EconomicFeedSummaryCard extends StatelessWidget {
                 ),
               ),
               FlowChip(
-                label: quoteSnapshot.statusLabel,
-                color: quoteSnapshot.apiKeyConfigured
-                    ? AppColors.green
-                    : AppColors.amber,
+                label: feedSnapshot.statusLabel,
+                color: _feedStatusColor(feedSnapshot.status),
               ),
             ],
           ),
@@ -874,6 +935,17 @@ class EconomicFeedSummaryCard extends StatelessWidget {
                   label: '${theme.name} ${theme.score}',
                   color: scoreColor(theme.score),
                 ),
+              FlowChip(
+                label: feedSnapshot.provider,
+                color: _feedStatusColor(feedSnapshot.status),
+              ),
+              FlowChip(label: feedSnapshot.message, color: AppColors.charcoal),
+              FlowChip(
+                label: quoteSnapshot.statusLabel,
+                color: quoteSnapshot.apiKeyConfigured
+                    ? AppColors.green
+                    : AppColors.amber,
+              ),
             ],
           ),
         ],
@@ -938,6 +1010,8 @@ class EconomicFeedCard extends StatelessWidget {
             children: [
               FlowChip(label: feed.type.label, color: color),
               FlowChip(label: feed.region.label, color: AppColors.charcoal),
+              if (feed.url.isNotEmpty)
+                FlowChip(label: _feedUrlHost(feed.url), color: AppColors.muted),
               for (final tag in feed.tags)
                 FlowChip(label: tag, color: AppColors.blue),
             ],
@@ -1154,8 +1228,8 @@ class FlowCompositeChartCard extends StatelessWidget {
                   color: AppColors.charcoal.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(8),
                 ),
-                child: const Padding(
-                  padding: EdgeInsets.all(10),
+                child: Padding(
+                  padding: const EdgeInsets.all(10),
                   child: Icon(
                     Icons.candlestick_chart_outlined,
                     color: AppColors.charcoal,
@@ -1281,7 +1355,7 @@ class FlowCompositeChartCard extends StatelessWidget {
           Wrap(
             spacing: 10,
             runSpacing: 8,
-            children: const [
+            children: [
               _FlowLegendDot(label: '캔들: 종합지수', color: AppColors.green),
               _FlowLegendDot(label: '유동성', color: AppColors.muted),
               _FlowLegendDot(label: 'AI', color: AppColors.blue),
@@ -1374,15 +1448,16 @@ class FlowCompositeChartPainter extends CustomPainter {
     void drawText(
       String text,
       Offset offset, {
-      Color color = AppColors.muted,
+      Color? color,
       double fontSize = 10,
       TextAlign textAlign = TextAlign.left,
     }) {
+      final effectiveColor = color ?? AppColors.muted;
       final painter = TextPainter(
         text: TextSpan(
           text: text,
           style: TextStyle(
-            color: color,
+            color: effectiveColor,
             fontSize: fontSize,
             fontWeight: FontWeight.w700,
             height: 1,
@@ -1839,7 +1914,7 @@ class DataApiKeyField extends StatelessWidget {
         Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Icon(Icons.key_outlined, size: 16, color: AppColors.muted),
+            Icon(Icons.key_outlined, size: 16, color: AppColors.muted),
             const SizedBox(width: 6),
             Expanded(
               child: Text(
@@ -1855,7 +1930,7 @@ class DataApiKeyField extends StatelessWidget {
           runSpacing: 8,
           children: [
             FlowChip(label: api.status.label, color: color),
-            const FlowChip(label: '읽기 전용', color: AppColors.blue),
+            FlowChip(label: '읽기 전용', color: AppColors.blue),
             FlowChip(label: api.keyName, color: AppColors.charcoal),
             FlowChip(label: api.docsUrl, color: AppColors.blue),
           ],
@@ -2673,8 +2748,8 @@ class _InvestmentChecklistScreenState extends State<InvestmentChecklistScreen> {
                       color: AppColors.blue.withValues(alpha: 0.12),
                       borderRadius: BorderRadius.circular(8),
                     ),
-                    child: const Padding(
-                      padding: EdgeInsets.all(10),
+                    child: Padding(
+                      padding: const EdgeInsets.all(10),
                       child: Icon(
                         Icons.calendar_month_outlined,
                         color: AppColors.blue,
@@ -3001,8 +3076,8 @@ class ChecklistDataPanel extends StatelessWidget {
                   color: AppColors.green.withValues(alpha: 0.12),
                   borderRadius: BorderRadius.circular(8),
                 ),
-                child: const Padding(
-                  padding: EdgeInsets.all(10),
+                child: Padding(
+                  padding: const EdgeInsets.all(10),
                   child: Icon(
                     Icons.query_stats_outlined,
                     color: AppColors.green,
@@ -3066,7 +3141,7 @@ class ChecklistDataPanel extends StatelessWidget {
           if (topPulse == null && topFlow == null && rankedEquities.isEmpty)
             Row(
               children: [
-                const Icon(Icons.info_outline, color: AppColors.muted),
+                Icon(Icons.info_outline, color: AppColors.muted),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
@@ -3356,13 +3431,13 @@ class _ChecklistCalendarDayCell extends StatelessWidget {
               ),
               const SizedBox(height: 5),
               if (isComplete)
-                const Icon(Icons.check_circle, color: AppColors.green, size: 15)
+                Icon(Icons.check_circle, color: AppColors.green, size: 15)
               else if (hasActivity)
                 Text(
                   '${day!.completedCount}/${day!.totalCount}',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: AppColors.amber,
                     fontSize: 10,
                     fontWeight: FontWeight.w800,
@@ -3625,6 +3700,9 @@ class SettingsScreen extends StatefulWidget {
     required this.settingsLoaded,
     required this.onSaveTossSettings,
     required this.onTestTossConnection,
+    required this.themePreference,
+    required this.themeSettingsLoaded,
+    required this.onThemePreferenceChanged,
     super.key,
   });
 
@@ -3638,6 +3716,10 @@ class SettingsScreen extends StatefulWidget {
   final Future<void> Function(TossAccountSettings settings) onSaveTossSettings;
   final Future<TossDirectApiProbeResult> Function(TossAccountSettings settings)
   onTestTossConnection;
+  final AppThemePreference themePreference;
+  final bool themeSettingsLoaded;
+  final Future<void> Function(AppThemePreference preference)
+  onThemePreferenceChanged;
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -3657,6 +3739,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _readOnly = true;
   bool _hideDataApiKeys = true;
   bool _hideSecrets = true;
+  bool _savingThemePreference = false;
   bool _savingDataApiKeys = false;
   bool _testingConnection = false;
   TossDirectApiProbeResult? _probeResult;
@@ -3764,6 +3847,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
     ).showSnackBar(const SnackBar(content: Text('데이터 API key 저장됨')));
   }
 
+  Future<void> _changeThemePreference(AppThemePreference preference) async {
+    if (preference == widget.themePreference) {
+      return;
+    }
+    setState(() => _savingThemePreference = true);
+    await widget.onThemePreferenceChanged(preference);
+    if (!mounted) {
+      return;
+    }
+    setState(() => _savingThemePreference = false);
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('화면 테마 저장됨')));
+  }
+
   Future<void> _save() async {
     await widget.onSaveTossSettings(_currentSettings());
     if (!mounted) {
@@ -3818,8 +3916,89 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       color: AppColors.blue.withValues(alpha: 0.12),
                       borderRadius: BorderRadius.circular(8),
                     ),
-                    child: const Padding(
-                      padding: EdgeInsets.all(10),
+                    child: Padding(
+                      padding: const EdgeInsets.all(10),
+                      child: Icon(
+                        Icons.contrast_outlined,
+                        color: AppColors.blue,
+                        size: 22,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '화면 테마',
+                          style: Theme.of(context).textTheme.titleLarge,
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          '기기 로컬 설정에 저장',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                      ],
+                    ),
+                  ),
+                  FlowChip(
+                    label: widget.themePreference.summary,
+                    color: widget.themePreference == AppThemePreference.dark
+                        ? AppColors.blue
+                        : AppColors.charcoal,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              SizedBox(
+                width: double.infinity,
+                child: SegmentedButton<AppThemePreference>(
+                  showSelectedIcon: false,
+                  selected: {widget.themePreference},
+                  onSelectionChanged:
+                      widget.themeSettingsLoaded && !_savingThemePreference
+                      ? (selection) => _changeThemePreference(selection.first)
+                      : null,
+                  segments: const [
+                    ButtonSegment(
+                      value: AppThemePreference.system,
+                      icon: Icon(Icons.settings_suggest_outlined, size: 18),
+                      label: Text('시스템'),
+                    ),
+                    ButtonSegment(
+                      value: AppThemePreference.light,
+                      icon: Icon(Icons.light_mode_outlined, size: 18),
+                      label: Text('라이트'),
+                    ),
+                    ButtonSegment(
+                      value: AppThemePreference.dark,
+                      icon: Icon(Icons.dark_mode_outlined, size: 18),
+                      label: Text('다크'),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        AppCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: AppColors.blue.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.all(10),
                       child: Icon(
                         Icons.key_outlined,
                         color: AppColors.blue,
@@ -3869,8 +4048,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ? AppColors.green
                         : AppColors.amber,
                   ),
-                  const FlowChip(label: '읽기 전용 데이터', color: AppColors.blue),
-                  const FlowChip(label: '로컬 저장', color: AppColors.charcoal),
+                  FlowChip(label: '읽기 전용 데이터', color: AppColors.blue),
+                  FlowChip(label: '로컬 저장', color: AppColors.charcoal),
                 ],
               ),
               const SizedBox(height: 16),
@@ -3922,8 +4101,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       color: AppColors.green.withValues(alpha: 0.12),
                       borderRadius: BorderRadius.circular(8),
                     ),
-                    child: const Padding(
-                      padding: EdgeInsets.all(10),
+                    child: Padding(
+                      padding: const EdgeInsets.all(10),
                       child: Icon(
                         Icons.account_balance_outlined,
                         color: AppColors.green,
@@ -3985,7 +4164,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     label: _readOnly ? 'read-only' : 'read/write',
                     color: _readOnly ? AppColors.blue : AppColors.red,
                   ),
-                  const FlowChip(label: '주문 잠금', color: AppColors.red),
+                  FlowChip(label: '주문 잠금', color: AppColors.red),
                 ],
               ),
               const SizedBox(height: 16),
@@ -4280,7 +4459,7 @@ class EmptyState extends StatelessWidget {
     return AppCard(
       child: Row(
         children: [
-          const Icon(Icons.info_outline, color: AppColors.muted),
+          Icon(Icons.info_outline, color: AppColors.muted),
           const SizedBox(width: 10),
           Expanded(
             child: Text(message, style: Theme.of(context).textTheme.bodyMedium),
@@ -4289,6 +4468,49 @@ class EmptyState extends StatelessWidget {
       ),
     );
   }
+}
+
+int _compareEconomicFeeds(EconomicFeedItem a, EconomicFeedItem b) {
+  final impactCompare = b.impactScore.compareTo(a.impactScore);
+  if (impactCompare != 0) {
+    return impactCompare;
+  }
+  final aDate = a.publishedAt;
+  final bDate = b.publishedAt;
+  if (aDate != null && bDate != null) {
+    return bDate.compareTo(aDate);
+  }
+  if (aDate != null) {
+    return -1;
+  }
+  if (bDate != null) {
+    return 1;
+  }
+  return a.title.compareTo(b.title);
+}
+
+Color _feedStatusColor(EconomicFeedFetchStatus status) {
+  switch (status) {
+    case EconomicFeedFetchStatus.idle:
+      return AppColors.muted;
+    case EconomicFeedFetchStatus.loading:
+      return AppColors.blue;
+    case EconomicFeedFetchStatus.ready:
+      return AppColors.green;
+    case EconomicFeedFetchStatus.partial:
+      return AppColors.amber;
+    case EconomicFeedFetchStatus.failed:
+      return AppColors.red;
+  }
+}
+
+String _feedUrlHost(String url) {
+  final uri = Uri.tryParse(url);
+  final host = uri?.host ?? '';
+  if (host.isEmpty) {
+    return '원문 링크';
+  }
+  return host.replaceFirst(RegExp(r'^www\.'), '');
 }
 
 IconData _assetClassIcon(CapitalFlowAssetClass assetClass) {

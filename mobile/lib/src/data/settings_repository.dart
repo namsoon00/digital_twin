@@ -1,8 +1,10 @@
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/market_models.dart';
+import '../theme/app_theme.dart';
 
 class SettingsRepository {
+  static const _themePreferenceKey = 'app.themeMode';
   static const _dataApiKeyPrefix = 'dataApi.key.';
   static const _tossEnabledKey = 'toss.enabled';
   static const _tossAccountAliasKey = 'toss.accountAlias';
@@ -16,6 +18,16 @@ class SettingsRepository {
   static const _tossTestPathKey = 'toss.testPath';
   static const _tossReadOnlyKey = 'toss.readOnly';
   static const _tossOrderLockedKey = 'toss.orderLocked';
+
+  Future<AppThemePreference> loadThemePreference() async {
+    final prefs = await SharedPreferences.getInstance();
+    return AppThemePreference.fromStorage(prefs.getString(_themePreferenceKey));
+  }
+
+  Future<void> saveThemePreference(AppThemePreference preference) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_themePreferenceKey, preference.storageValue);
+  }
 
   Future<DataApiKeySettings> loadDataApiKeySettings(
     Iterable<DataApiSource> sources,

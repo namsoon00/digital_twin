@@ -1,27 +1,106 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:market_flow/main.dart';
+import 'package:market_flow/src/data/economic_feed_service.dart';
+import 'package:market_flow/src/data/flow_repository.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+Future<void> pumpMarketFlowApp(WidgetTester tester) async {
+  const repository = MockFlowRepository();
+  await tester.pumpWidget(
+    MarketFlowApp(
+      repository: repository,
+      economicFeedService: StaticEconomicFeedService(repository.economicFeeds),
+    ),
+  );
+  await tester.pumpAndSettle();
+}
 
 void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
   });
 
+  test('Google News RSS items are mapped into economic feed items', () async {
+    const rss = '''
+<rss><channel>
+  <item>
+    <title><![CDATA[AI CAPEX expands into power infrastructure]]></title>
+    <link>https://articles.example.com/ai-power</link>
+    <pubDate>Tue, 16 Jun 2026 03:24:00 GMT</pubDate>
+    <source url="https://reuters.com">Reuters</source>
+    <description><![CDATA[Cloud spending and grid equipment orders are rising across the AI buildout.]]></description>
+  </item>
+</channel></rss>
+''';
+    final service = GoogleNewsEconomicFeedService(
+      client: MockClient((request) async {
+        expect(request.url.host, 'news.google.com');
+        return http.Response(
+          rss,
+          200,
+          headers: {'content-type': 'application/rss+xml; charset=utf-8'},
+        );
+      }),
+    );
+    addTearDown(service.dispose);
+
+    final result = await service.fetchFeeds();
+
+    expect(result.snapshot.status, EconomicFeedFetchStatus.ready);
+    expect(result.items, hasLength(1));
+    expect(
+      result.items.single.title,
+      'AI CAPEX expands into power infrastructure',
+    );
+    expect(result.items.single.source, 'Reuters');
+    expect(result.items.single.url, 'https://articles.example.com/ai-power');
+    expect(result.items.single.summary, contains('Cloud spending'));
+  });
+
   testWidgets('MarketFlow defaults to dark mode', (tester) async {
-    await tester.pumpWidget(const MarketFlowApp());
-    await tester.pumpAndSettle();
+    await pumpMarketFlowApp(tester);
 
     final app = tester.widget<MaterialApp>(find.byType(MaterialApp));
 
     expect(app.themeMode, ThemeMode.dark);
     expect(app.darkTheme?.brightness, Brightness.dark);
-    expect(app.theme?.scaffoldBackgroundColor, const Color(0xFF0B1017));
+    expect(app.darkTheme?.scaffoldBackgroundColor, const Color(0xFF0B1017));
+  });
+
+  testWidgets('MarketFlow changes theme mode from settings', (tester) async {
+    await pumpMarketFlowApp(tester);
+
+    await tester.tap(find.text('설정'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('화면 테마'), findsOneWidget);
+    expect(find.text('다크'), findsOneWidget);
+    expect(find.text('라이트'), findsOneWidget);
+
+    await tester.tap(find.text('라이트'));
+    await tester.pumpAndSettle();
+
+    var app = tester.widget<MaterialApp>(find.byType(MaterialApp));
+    expect(app.themeMode, ThemeMode.light);
+    expect(app.theme?.scaffoldBackgroundColor, const Color(0xFFF4F6F8));
+
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getString('app.themeMode'), 'light');
+
+    await tester.tap(find.text('다크'));
+    await tester.pumpAndSettle();
+
+    app = tester.widget<MaterialApp>(find.byType(MaterialApp));
+    expect(app.themeMode, ThemeMode.dark);
+    expect(app.darkTheme?.scaffoldBackgroundColor, const Color(0xFF0B1017));
+    expect(prefs.getString('app.themeMode'), 'dark');
   });
 
   testWidgets('MarketFlow opens on the live flow dashboard', (tester) async {
-    await tester.pumpWidget(const MarketFlowApp());
-    await tester.pumpAndSettle();
+    await pumpMarketFlowApp(tester);
 
     expect(find.text('MarketFlow'), findsOneWidget);
     expect(find.text('API key 필요'), findsWidgets);
@@ -48,7 +127,7 @@ void main() {
   });
 
   testWidgets('MarketFlow switches to the journal tab', (tester) async {
-    await tester.pumpWidget(const MarketFlowApp());
+    await pumpMarketFlowApp(tester);
 
     await tester.tap(find.text('기록'));
     await tester.pumpAndSettle();
@@ -58,8 +137,7 @@ void main() {
   });
 
   testWidgets('MarketFlow shows the economic feed tab', (tester) async {
-    await tester.pumpWidget(const MarketFlowApp());
-    await tester.pumpAndSettle();
+    await pumpMarketFlowApp(tester);
 
     await tester.tap(find.text('피드'));
     await tester.pumpAndSettle();
@@ -82,8 +160,7 @@ void main() {
   testWidgets('MarketFlow manages the pre-investment checklist', (
     tester,
   ) async {
-    await tester.pumpWidget(const MarketFlowApp());
-    await tester.pumpAndSettle();
+    await pumpMarketFlowApp(tester);
 
     await tester.tap(find.text('체크'));
     await tester.pumpAndSettle();
@@ -147,8 +224,7 @@ void main() {
   });
 
   testWidgets('MarketFlow shows global capital flows', (tester) async {
-    await tester.pumpWidget(const MarketFlowApp());
-    await tester.pumpAndSettle();
+    await pumpMarketFlowApp(tester);
 
     await tester.tap(find.text('자금'));
     await tester.pumpAndSettle();
@@ -236,12 +312,16 @@ void main() {
   });
 
   testWidgets('MarketFlow shows Toss Securities settings', (tester) async {
-    await tester.pumpWidget(const MarketFlowApp());
-    await tester.pumpAndSettle();
+    await pumpMarketFlowApp(tester);
 
     await tester.tap(find.text('설정'));
     await tester.pumpAndSettle();
 
+    expect(find.text('화면 테마'), findsOneWidget);
+    expect(find.text('기기 로컬 설정에 저장'), findsOneWidget);
+    expect(find.text('시스템'), findsOneWidget);
+    expect(find.text('라이트'), findsOneWidget);
+    expect(find.text('다크'), findsOneWidget);
     expect(find.text('데이터 API key'), findsOneWidget);
     expect(find.text('기본 데이터 조회용 key를 기기 로컬 설정에 저장'), findsOneWidget);
     expect(find.text('Alpha Vantage'), findsOneWidget);

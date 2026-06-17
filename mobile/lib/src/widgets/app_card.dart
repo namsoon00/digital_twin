@@ -60,22 +60,19 @@ class SectionHeader extends StatelessWidget {
 }
 
 class FlowChip extends StatelessWidget {
-  const FlowChip({
-    required this.label,
-    this.color = AppColors.green,
-    super.key,
-  });
+  const FlowChip({required this.label, this.color, super.key});
 
   final String label;
-  final Color color;
+  final Color? color;
 
   @override
   Widget build(BuildContext context) {
+    final effectiveColor = color ?? AppColors.green;
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.07),
+        color: effectiveColor.withValues(alpha: 0.07),
         borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: color.withValues(alpha: 0.18)),
+        border: Border.all(color: effectiveColor.withValues(alpha: 0.18)),
       ),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
@@ -84,7 +81,7 @@ class FlowChip extends StatelessWidget {
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: TextStyle(
-            color: color,
+            color: effectiveColor,
             fontSize: 11,
             fontWeight: FontWeight.w800,
             height: 1,
@@ -100,17 +97,18 @@ class MetricPill extends StatelessWidget {
     required this.icon,
     required this.label,
     required this.value,
-    this.color = AppColors.green,
+    this.color,
     super.key,
   });
 
   final IconData icon;
   final String label;
   final String value;
-  final Color color;
+  final Color? color;
 
   @override
   Widget build(BuildContext context) {
+    final effectiveColor = color ?? AppColors.green;
     return Expanded(
       child: DecoratedBox(
         decoration: BoxDecoration(
@@ -123,7 +121,7 @@ class MetricPill extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(icon, color: color, size: 17),
+              Icon(icon, color: effectiveColor, size: 17),
               const SizedBox(height: 10),
               Text(
                 value,

@@ -14,6 +14,8 @@ abstract class FlowRepository {
 }
 
 class MockFlowRepository implements FlowRepository {
+  const MockFlowRepository();
+
   @override
   List<AppUser> get users => const [
     AppUser(

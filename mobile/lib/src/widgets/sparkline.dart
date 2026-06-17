@@ -5,19 +5,24 @@ import '../theme/app_theme.dart';
 class Sparkline extends StatelessWidget {
   const Sparkline({
     required this.values,
-    this.color = AppColors.green,
+    this.color,
     this.fill = true,
     super.key,
   });
 
   final List<double> values;
-  final Color color;
+  final Color? color;
   final bool fill;
 
   @override
   Widget build(BuildContext context) {
+    final effectiveColor = color ?? AppColors.green;
     return CustomPaint(
-      painter: SparklinePainter(values: values, color: color, fill: fill),
+      painter: SparklinePainter(
+        values: values,
+        color: effectiveColor,
+        fill: fill,
+      ),
       size: const Size(double.infinity, 64),
     );
   }
@@ -113,16 +118,17 @@ class FactorBar extends StatelessWidget {
   const FactorBar({
     required this.label,
     required this.value,
-    this.color = AppColors.green,
+    this.color,
     super.key,
   });
 
   final String label;
   final int value;
-  final Color color;
+  final Color? color;
 
   @override
   Widget build(BuildContext context) {
+    final effectiveColor = color ?? AppColors.green;
     final normalized = value.clamp(0, 100) / 100;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -147,7 +153,7 @@ class FactorBar extends StatelessWidget {
             value: normalized.toDouble(),
             minHeight: 8,
             backgroundColor: AppColors.line,
-            valueColor: AlwaysStoppedAnimation<Color>(color),
+            valueColor: AlwaysStoppedAnimation<Color>(effectiveColor),
           ),
         ),
       ],

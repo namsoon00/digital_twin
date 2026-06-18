@@ -677,6 +677,95 @@ class QuoteFetchResult {
   final QuoteApiSnapshot snapshot;
 }
 
+enum CryptoFetchStatus { idle, loading, ready, partial, failed }
+
+class CryptoMarketSnapshot {
+  const CryptoMarketSnapshot({
+    required this.provider,
+    required this.endpoint,
+    required this.status,
+    required this.message,
+    required this.apiKeyConfigured,
+    required this.assetCount,
+    required this.updatedAt,
+  });
+
+  factory CryptoMarketSnapshot.initial({
+    required bool apiKeyConfigured,
+    required int assetCount,
+  }) {
+    return CryptoMarketSnapshot(
+      provider: 'CoinGecko',
+      endpoint: '/api/v3/coins/markets',
+      status: CryptoFetchStatus.idle,
+      message: apiKeyConfigured ? '대기 중' : '공개 API 대기 중',
+      apiKeyConfigured: apiKeyConfigured,
+      assetCount: assetCount,
+      updatedAt: null,
+    );
+  }
+
+  final String provider;
+  final String endpoint;
+  final CryptoFetchStatus status;
+  final String message;
+  final bool apiKeyConfigured;
+  final int assetCount;
+  final DateTime? updatedAt;
+
+  String get statusLabel {
+    switch (status) {
+      case CryptoFetchStatus.idle:
+        return '대기';
+      case CryptoFetchStatus.loading:
+        return '조회 중';
+      case CryptoFetchStatus.ready:
+        return '최신 데이터 연결';
+      case CryptoFetchStatus.partial:
+        return '일부 업데이트';
+      case CryptoFetchStatus.failed:
+        return '연결 실패';
+    }
+  }
+}
+
+class CryptoAsset {
+  const CryptoAsset({
+    required this.id,
+    required this.symbol,
+    required this.name,
+    required this.rank,
+    required this.priceUsd,
+    required this.marketCapUsd,
+    required this.volume24hUsd,
+    required this.change1hPercent,
+    required this.change24hPercent,
+    required this.change7dPercent,
+    required this.updatedAt,
+    required this.provider,
+  });
+
+  final String id;
+  final String symbol;
+  final String name;
+  final int rank;
+  final double priceUsd;
+  final double marketCapUsd;
+  final double volume24hUsd;
+  final double change1hPercent;
+  final double change24hPercent;
+  final double change7dPercent;
+  final DateTime? updatedAt;
+  final String provider;
+}
+
+class CryptoMarketFetchResult {
+  const CryptoMarketFetchResult({required this.assets, required this.snapshot});
+
+  final List<CryptoAsset> assets;
+  final CryptoMarketSnapshot snapshot;
+}
+
 class TossAccountSettings {
   const TossAccountSettings({
     required this.enabled,

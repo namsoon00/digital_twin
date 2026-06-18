@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../data/checklist_repository.dart';
+import '../data/crypto_market_service.dart';
 import '../data/economic_feed_service.dart';
 import '../data/flow_repository.dart';
 import '../data/market_data_api.dart';
@@ -18,11 +19,13 @@ class AppShell extends StatefulWidget {
     required this.themePreference,
     required this.themeSettingsLoaded,
     required this.onThemePreferenceChanged,
+    this.cryptoMarketService,
     this.economicFeedService,
     super.key,
   });
 
   final FlowRepository repository;
+  final CryptoMarketService? cryptoMarketService;
   final EconomicFeedService? economicFeedService;
   final AppThemePreference themePreference;
   final bool themeSettingsLoaded;
@@ -39,12 +42,15 @@ class _AppShellState extends State<AppShell> {
   late AppUser _currentUser;
   late List<JournalEntry> _journals;
   late ChecklistRepository _checklistRepository;
+  late CryptoMarketService _cryptoMarketService;
   late EconomicFeedService _economicFeedService;
   late AlphaVantageQuoteService _quoteService;
   late TossDirectApiClient _tossDirectApiClient;
   late SettingsRepository _settingsRepository;
+  late CryptoMarketSnapshot _cryptoSnapshot;
   late EconomicFeedFetchSnapshot _feedSnapshot;
   late QuoteApiSnapshot _quoteSnapshot;
+  late List<CryptoAsset> _cryptoAssets;
   late List<EconomicFeedItem> _economicFeedItems;
   Map<String, LiveQuote> _quotes = const {};
   InvestmentChecklistDay _checklistDay = InvestmentChecklistDay.defaults(
@@ -65,6 +71,12 @@ class _AppShellState extends State<AppShell> {
     _currentUser = widget.repository.users.first;
     _journals = widget.repository.journals.toList();
     _checklistRepository = ChecklistRepository();
+    _cryptoMarketService =
+        widget.cryptoMarketService ?? CoinGeckoCryptoMarketService();
+    _cryptoAssets = widget.repository.cryptoAssets.toList();
+    _cryptoSnapshot = _cryptoMarketService.initialSnapshot(
+      _cryptoAssets.length,
+    );
     _economicFeedService =
         widget.economicFeedService ?? GoogleNewsEconomicFeedService();
     _economicFeedItems = widget.repository.economicFeeds.toList();
@@ -78,12 +90,14 @@ class _AppShellState extends State<AppShell> {
     _loadTossSettings();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _refreshLiveQuotes();
+      _refreshCryptoAssets();
       _refreshEconomicFeeds();
     });
   }
 
   @override
   void dispose() {
+    _cryptoMarketService.dispose();
     _economicFeedService.dispose();
     _quoteService.dispose();
     _tossDirectApiClient.dispose();
@@ -109,6 +123,26 @@ class _AppShellState extends State<AppShell> {
         _economicFeedItems = result.items;
       }
       _feedSnapshot = result.snapshot;
+    });
+  }
+
+  Future<void> _refreshCryptoAssets() async {
+    if (mounted) {
+      setState(() {
+        _cryptoSnapshot = _cryptoMarketService.loadingSnapshot(
+          _cryptoAssets.length,
+        );
+      });
+    }
+
+    final result = await _cryptoMarketService.fetchAssets(_cryptoAssets);
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _cryptoAssets = result.assets;
+      _cryptoSnapshot = result.snapshot;
     });
   }
 
@@ -212,6 +246,7 @@ class _AppShellState extends State<AppShell> {
       widget.repository.dataApiSources,
     );
     _quoteService.updateApiKey(settings.keyFor('alpha-vantage'));
+    _cryptoMarketService.updateApiKey(settings.keyFor('coingecko'));
     if (!mounted) {
       return;
     }
@@ -219,20 +254,27 @@ class _AppShellState extends State<AppShell> {
       _dataApiKeySettings = settings;
       _dataApiKeysLoaded = true;
       _quoteSnapshot = _quoteService.initialSnapshot;
+      _cryptoSnapshot = _cryptoMarketService.initialSnapshot(
+        _cryptoAssets.length,
+      );
     });
     if (settings.hasKeyFor('alpha-vantage')) {
       await _refreshLiveQuotes();
     }
+    await _refreshCryptoAssets();
   }
 
   Future<void> _saveDataApiKeySettings(DataApiKeySettings settings) async {
     final previousAlphaKey = _dataApiKeySettings.keyFor('alpha-vantage');
+    final previousCoinGeckoKey = _dataApiKeySettings.keyFor('coingecko');
     await _settingsRepository.saveDataApiKeySettings(
       settings,
       widget.repository.dataApiSources,
     );
     final nextAlphaKey = settings.keyFor('alpha-vantage');
+    final nextCoinGeckoKey = settings.keyFor('coingecko');
     _quoteService.updateApiKey(nextAlphaKey);
+    _cryptoMarketService.updateApiKey(nextCoinGeckoKey);
     if (!mounted) {
       return;
     }
@@ -244,9 +286,17 @@ class _AppShellState extends State<AppShell> {
         }
         _quoteSnapshot = _quoteService.initialSnapshot;
       }
+      if (previousCoinGeckoKey != nextCoinGeckoKey) {
+        _cryptoSnapshot = _cryptoMarketService.initialSnapshot(
+          _cryptoAssets.length,
+        );
+      }
     });
     if (previousAlphaKey != nextAlphaKey && nextAlphaKey.isNotEmpty) {
       await _refreshLiveQuotes();
+    }
+    if (previousCoinGeckoKey != nextCoinGeckoKey) {
+      await _refreshCryptoAssets();
     }
   }
 
@@ -346,6 +396,9 @@ class _AppShellState extends State<AppShell> {
         apiSources: widget.repository.dataApiSources,
         candles: widget.repository.globalFlowCandles,
         flows: widget.repository.capitalFlows,
+        cryptoAssets: _cryptoAssets,
+        cryptoSnapshot: _cryptoSnapshot,
+        onRefreshCryptoAssets: _refreshCryptoAssets,
         emergingFlows: widget.repository.emergingCapitalFlows,
       ),
       ThemeBoardScreen(themes: _themes),
@@ -1027,6 +1080,9 @@ class CapitalFlowScreen extends StatefulWidget {
     required this.apiSources,
     required this.candles,
     required this.flows,
+    required this.cryptoAssets,
+    required this.cryptoSnapshot,
+    required this.onRefreshCryptoAssets,
     required this.emergingFlows,
     super.key,
   });
@@ -1034,6 +1090,9 @@ class CapitalFlowScreen extends StatefulWidget {
   final List<DataApiSource> apiSources;
   final List<FlowCandle> candles;
   final List<CapitalFlow> flows;
+  final List<CryptoAsset> cryptoAssets;
+  final CryptoMarketSnapshot cryptoSnapshot;
+  final Future<void> Function() onRefreshCryptoAssets;
   final List<EmergingCapitalFlow> emergingFlows;
 
   @override
@@ -1105,6 +1164,12 @@ class _CapitalFlowScreenState extends State<CapitalFlowScreen> {
           onWindowChanged: (window) {
             setState(() => _detailWindow = window);
           },
+        ),
+        const SizedBox(height: 18),
+        CryptoMarketCard(
+          assets: widget.cryptoAssets,
+          snapshot: widget.cryptoSnapshot,
+          onRefresh: widget.onRefreshCryptoAssets,
         ),
         const SizedBox(height: 18),
         SectionHeader(
@@ -1187,6 +1252,306 @@ class _CapitalFlowScreenState extends State<CapitalFlowScreen> {
       candles.length - 1,
     );
     return candles.sublist(start, end + 1);
+  }
+}
+
+class CryptoMarketCard extends StatelessWidget {
+  const CryptoMarketCard({
+    required this.assets,
+    required this.snapshot,
+    required this.onRefresh,
+    super.key,
+  });
+
+  final List<CryptoAsset> assets;
+  final CryptoMarketSnapshot snapshot;
+  final Future<void> Function() onRefresh;
+
+  @override
+  Widget build(BuildContext context) {
+    final rankedAssets = assets.toList(growable: false)
+      ..sort((a, b) => a.rank.compareTo(b.rank));
+    final totalMarketCap = rankedAssets.fold<double>(
+      0,
+      (sum, asset) => sum + asset.marketCapUsd,
+    );
+    final totalVolume = rankedAssets.fold<double>(
+      0,
+      (sum, asset) => sum + asset.volume24hUsd,
+    );
+    final bitcoin = rankedAssets
+        .where((asset) => asset.id == 'bitcoin')
+        .firstOrNull;
+
+    return AppCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              DecoratedBox(
+                decoration: BoxDecoration(
+                  color: AppColors.amber.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(10),
+                  child: Icon(
+                    Icons.currency_bitcoin,
+                    color: AppColors.amber,
+                    size: 22,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '코인 마켓',
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+                    const SizedBox(height: 5),
+                    Text(
+                      '${snapshot.provider} · ${snapshot.endpoint}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                  ],
+                ),
+              ),
+              IconButton(
+                tooltip: '코인 데이터 새로고침',
+                onPressed: onRefresh,
+                icon: const Icon(Icons.refresh),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              FlowChip(
+                label: snapshot.statusLabel,
+                color: _cryptoStatusColor(snapshot.status),
+              ),
+              FlowChip(
+                label: snapshot.apiKeyConfigured ? 'API key 적용' : '공개 API',
+                color: snapshot.apiKeyConfigured
+                    ? AppColors.green
+                    : AppColors.amber,
+              ),
+              FlowChip(
+                label: _formatCryptoUpdated(snapshot.updatedAt),
+                color: AppColors.charcoal,
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              Expanded(
+                child: _CryptoStat(
+                  label: 'BTC',
+                  value: bitcoin == null
+                      ? '-'
+                      : _formatUsdPrice(bitcoin.priceUsd),
+                  color: bitcoin == null
+                      ? AppColors.muted
+                      : _cryptoChangeColor(bitcoin.change24hPercent),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _CryptoStat(
+                  label: '추적 시총',
+                  value: _formatUsdCompact(totalMarketCap),
+                  color: AppColors.blue,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _CryptoStat(
+                  label: '24h 거래',
+                  value: _formatUsdCompact(totalVolume),
+                  color: AppColors.green,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          if (rankedAssets.isEmpty)
+            const EmptyState(message: '표시할 코인 데이터가 없습니다.')
+          else
+            ...rankedAssets.map(
+              (asset) => Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: CryptoAssetRow(
+                  asset: asset,
+                  totalMarketCap: totalMarketCap,
+                ),
+              ),
+            ),
+          Text(snapshot.message, style: Theme.of(context).textTheme.bodyMedium),
+        ],
+      ),
+    );
+  }
+}
+
+class _CryptoStat extends StatelessWidget {
+  const _CryptoStat({
+    required this.label,
+    required this.value,
+    required this.color,
+  });
+
+  final String label;
+  final String value;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: AppColors.canvas,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: AppColors.line),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(label, style: Theme.of(context).textTheme.bodyMedium),
+            const SizedBox(height: 4),
+            Text(
+              value,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(color: color),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class CryptoAssetRow extends StatelessWidget {
+  const CryptoAssetRow({
+    required this.asset,
+    required this.totalMarketCap,
+    super.key,
+  });
+
+  final CryptoAsset asset;
+  final double totalMarketCap;
+
+  @override
+  Widget build(BuildContext context) {
+    final changeColor = _cryptoChangeColor(asset.change24hPercent);
+    final dominance = totalMarketCap <= 0
+        ? 0
+        : asset.marketCapUsd / totalMarketCap * 100;
+
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: AppColors.canvas,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: AppColors.line),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _SymbolAvatar(symbol: asset.symbol, color: changeColor),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '${asset.name} · ${asset.symbol}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '#${asset.rank} · ${asset.provider}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodyMedium,
+                      ),
+                    ],
+                  ),
+                ),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text(
+                      _formatUsdPrice(asset.priceUsd),
+                      style: Theme.of(context).textTheme.labelLarge,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      _formatPercentSigned(asset.change24hPercent),
+                      style: TextStyle(
+                        color: changeColor,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                FlowChip(
+                  label: '1h ${_formatPercentSigned(asset.change1hPercent)}',
+                  color: _cryptoChangeColor(asset.change1hPercent),
+                ),
+                FlowChip(
+                  label: '24h ${_formatPercentSigned(asset.change24hPercent)}',
+                  color: _cryptoChangeColor(asset.change24hPercent),
+                ),
+                FlowChip(
+                  label: '7d ${_formatPercentSigned(asset.change7dPercent)}',
+                  color: _cryptoChangeColor(asset.change7dPercent),
+                ),
+                FlowChip(
+                  label: '시총 ${_formatUsdCompact(asset.marketCapUsd)}',
+                  color: AppColors.blue,
+                ),
+                FlowChip(
+                  label: '거래 ${_formatUsdCompact(asset.volume24hUsd)}',
+                  color: AppColors.green,
+                ),
+                FlowChip(
+                  label: '비중 ${dominance.toStringAsFixed(1)}%',
+                  color: AppColors.charcoal,
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 
@@ -4502,6 +4867,73 @@ Color _feedStatusColor(EconomicFeedFetchStatus status) {
     case EconomicFeedFetchStatus.failed:
       return AppColors.red;
   }
+}
+
+Color _cryptoStatusColor(CryptoFetchStatus status) {
+  switch (status) {
+    case CryptoFetchStatus.idle:
+      return AppColors.muted;
+    case CryptoFetchStatus.loading:
+      return AppColors.blue;
+    case CryptoFetchStatus.ready:
+      return AppColors.green;
+    case CryptoFetchStatus.partial:
+      return AppColors.amber;
+    case CryptoFetchStatus.failed:
+      return AppColors.red;
+  }
+}
+
+Color _cryptoChangeColor(double value) {
+  if (value > 0) {
+    return AppColors.green;
+  }
+  if (value < 0) {
+    return AppColors.red;
+  }
+  return AppColors.muted;
+}
+
+String _formatUsdPrice(double value) {
+  if (value >= 1000) {
+    return '\$${value.toStringAsFixed(0)}';
+  }
+  if (value >= 1) {
+    return '\$${value.toStringAsFixed(2)}';
+  }
+  if (value >= 0.01) {
+    return '\$${value.toStringAsFixed(4)}';
+  }
+  return '\$${value.toStringAsFixed(6)}';
+}
+
+String _formatUsdCompact(double value) {
+  final absolute = value.abs();
+  if (absolute >= 1000000000000) {
+    return '\$${(value / 1000000000000).toStringAsFixed(2)}T';
+  }
+  if (absolute >= 1000000000) {
+    return '\$${(value / 1000000000).toStringAsFixed(1)}B';
+  }
+  if (absolute >= 1000000) {
+    return '\$${(value / 1000000).toStringAsFixed(1)}M';
+  }
+  if (absolute >= 1000) {
+    return '\$${(value / 1000).toStringAsFixed(1)}K';
+  }
+  return _formatUsdPrice(value);
+}
+
+String _formatPercentSigned(double value) {
+  final prefix = value > 0 ? '+' : '';
+  return '$prefix${value.toStringAsFixed(2)}%';
+}
+
+String _formatCryptoUpdated(DateTime? value) {
+  if (value == null) {
+    return '업데이트 대기';
+  }
+  return '${_formatClock(value)} 업데이트';
 }
 
 String _feedUrlHost(String url) {

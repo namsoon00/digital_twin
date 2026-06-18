@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'src/data/crypto_market_service.dart';
 import 'src/data/economic_feed_service.dart';
 import 'src/data/flow_repository.dart';
 import 'src/data/settings_repository.dart';
@@ -13,11 +14,13 @@ void main() {
 class MarketFlowApp extends StatefulWidget {
   const MarketFlowApp({
     this.repository = const MockFlowRepository(),
+    this.cryptoMarketService,
     this.economicFeedService,
     super.key,
   });
 
   final FlowRepository repository;
+  final CryptoMarketService? cryptoMarketService;
   final EconomicFeedService? economicFeedService;
 
   @override
@@ -84,6 +87,7 @@ class _MarketFlowAppState extends State<MarketFlowApp>
       themeMode: _themePreference.themeMode,
       home: AppShell(
         repository: widget.repository,
+        cryptoMarketService: widget.cryptoMarketService,
         economicFeedService: widget.economicFeedService,
         themePreference: _themePreference,
         themeSettingsLoaded: _themeSettingsLoaded,

@@ -3,8 +3,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:market_flow/main.dart';
+import 'package:market_flow/src/data/crypto_market_service.dart';
 import 'package:market_flow/src/data/economic_feed_service.dart';
 import 'package:market_flow/src/data/flow_repository.dart';
+import 'package:market_flow/src/models/market_models.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 Future<void> pumpMarketFlowApp(WidgetTester tester) async {
@@ -12,6 +14,7 @@ Future<void> pumpMarketFlowApp(WidgetTester tester) async {
   await tester.pumpWidget(
     MarketFlowApp(
       repository: repository,
+      cryptoMarketService: StaticCryptoMarketService(repository.cryptoAssets),
       economicFeedService: StaticEconomicFeedService(repository.economicFeeds),
     ),
   );
@@ -105,6 +108,60 @@ void main() {
       expect(proxyRequestCount, 7);
     },
   );
+
+  test('CoinGecko market items are mapped into crypto assets', () async {
+    final service = CoinGeckoCryptoMarketService(
+      client: MockClient((request) async {
+        expect(request.url.host, 'api.coingecko.com');
+        expect(request.url.path, '/api/v3/coins/markets');
+        return http.Response(
+          '''
+[
+  {
+    "id": "bitcoin",
+    "symbol": "btc",
+    "name": "Bitcoin",
+    "market_cap_rank": 1,
+    "current_price": 104200.5,
+    "market_cap": 2060000000000,
+    "total_volume": 42000000000,
+    "price_change_percentage_1h_in_currency": 0.2,
+    "price_change_percentage_24h_in_currency": 1.7,
+    "price_change_percentage_7d_in_currency": 4.8,
+    "last_updated": "2026-06-17T20:00:00.000Z"
+  }
+]
+''',
+          200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        );
+      }),
+    );
+    addTearDown(service.dispose);
+
+    final result = await service.fetchAssets(const [
+      CryptoAsset(
+        id: 'bitcoin',
+        symbol: 'BTC',
+        name: 'Bitcoin',
+        rank: 1,
+        priceUsd: 100000,
+        marketCapUsd: 2000000000000,
+        volume24hUsd: 40000000000,
+        change1hPercent: 0,
+        change24hPercent: 0,
+        change7dPercent: 0,
+        updatedAt: null,
+        provider: 'mock',
+      ),
+    ]);
+
+    expect(result.snapshot.status, CryptoFetchStatus.ready);
+    expect(result.assets, hasLength(1));
+    expect(result.assets.single.symbol, 'BTC');
+    expect(result.assets.single.priceUsd, 104200.5);
+    expect(result.assets.single.change7dPercent, 4.8);
+  });
 
   testWidgets('MarketFlow defaults to dark mode', (tester) async {
     await pumpMarketFlowApp(tester);
@@ -280,6 +337,18 @@ void main() {
     expect(find.text('3M'), findsOneWidget);
     expect(find.text('ALL'), findsOneWidget);
     expect(find.text('캔들: 종합지수'), findsOneWidget);
+
+    await tester.scrollUntilVisible(
+      find.text('코인 마켓'),
+      360,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('코인 마켓'), findsOneWidget);
+    expect(find.text('Bitcoin · BTC'), findsOneWidget);
+    expect(find.text('Ethereum · ETH'), findsOneWidget);
+    expect(find.text('공개 API'), findsOneWidget);
 
     await tester.scrollUntilVisible(
       find.text('필요 API 맵'),

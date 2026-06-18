@@ -52,7 +52,8 @@ class _SparklineState extends State<Sparkline> {
                   _gestureStartWindow = _window;
                   _gesturePanFraction = 0;
                   _gestureFocalFraction = (details.localFocalPoint.dx / width)
-                      .clamp(0.0, 1.0);
+                      .clamp(0.0, 1.0)
+                      .toDouble();
                 },
           onScaleUpdate: widget.values.length <= widget.minVisiblePoints
               ? null
@@ -62,13 +63,14 @@ class _SparklineState extends State<Sparkline> {
                   _gesturePanFraction +=
                       -details.focalPointDelta.dx / width * startSpan;
                   setState(() {
-                    _window = _scaledWindow(
+                    final targetWindow = _scaledWindow(
                       startWindow: _gestureStartWindow,
                       scale: details.scale,
                       focalFraction: _gestureFocalFraction,
                       panFraction: _gesturePanFraction,
                       minSpan: _minWindowSpan,
                     );
+                    _window = _interpolateWindow(_window, targetWindow, 0.72);
                   });
                 },
           child: CustomPaint(
@@ -106,11 +108,11 @@ class _SparklineState extends State<Sparkline> {
       return values;
     }
     final maxStart = values.length - 2;
-    final start = (window.start * maxStart).round().clamp(0, maxStart);
-    final end = (window.end * (values.length - 1)).round().clamp(
-      start + 1,
-      values.length - 1,
-    );
+    final start = (window.start * maxStart).floor().clamp(0, maxStart).toInt();
+    final end = (window.end * (values.length - 1))
+        .ceil()
+        .clamp(start + 1, values.length - 1)
+        .toInt();
     return values.sublist(start, end + 1);
   }
 
@@ -141,6 +143,18 @@ class _SparklineState extends State<Sparkline> {
     final start = window.start.clamp(0.0, 1.0 - span).toDouble();
     return RangeValues(start, start + span);
   }
+
+  static RangeValues _interpolateWindow(
+    RangeValues current,
+    RangeValues target,
+    double factor,
+  ) {
+    final clampedFactor = factor.clamp(0.0, 1.0).toDouble();
+    return RangeValues(
+      current.start + (target.start - current.start) * clampedFactor,
+      current.end + (target.end - current.end) * clampedFactor,
+    );
+  }
 }
 
 class SparklinePainter extends CustomPainter {
@@ -165,41 +179,47 @@ class SparklinePainter extends CustomPainter {
     final spread = (maxValue - minValue).abs() < 0.001
         ? 1
         : maxValue - minValue;
-    final step = size.width / (values.length - 1);
+    final chart = Rect.fromLTWH(
+      4,
+      6,
+      (size.width - 8).clamp(1.0, double.infinity).toDouble(),
+      (size.height - 12).clamp(1.0, double.infinity).toDouble(),
+    );
+    final step = chart.width / (values.length - 1);
     final points = <Offset>[];
 
     for (var i = 0; i < values.length; i++) {
       final normalized = (values[i] - minValue) / spread;
-      final x = i * step;
-      final y =
-          size.height - (normalized * size.height * 0.82) - size.height * 0.08;
+      final x = chart.left + i * step;
+      final y = chart.bottom - normalized * chart.height;
       points.add(Offset(x, y));
     }
 
     final gridPaint = Paint()
-      ..color = AppColors.line.withValues(alpha: 0.75)
+      ..color = AppColors.line.withValues(alpha: 0.48)
       ..strokeWidth = 1;
-    canvas.drawLine(
-      Offset(0, size.height * 0.72),
-      Offset(size.width, size.height * 0.72),
-      gridPaint,
-    );
-
-    final path = Path()..moveTo(points.first.dx, points.first.dy);
-    for (final point in points.skip(1)) {
-      path.lineTo(point.dx, point.dy);
+    for (final fraction in const [0.25, 0.5, 0.75]) {
+      final y = chart.top + chart.height * fraction;
+      canvas.drawLine(Offset(chart.left, y), Offset(chart.right, y), gridPaint);
     }
+
+    final path = _smoothPath(points);
 
     if (fill) {
       final fillPath = Path.from(path)
-        ..lineTo(size.width, size.height)
-        ..lineTo(0, size.height)
+        ..lineTo(chart.right, chart.bottom)
+        ..lineTo(chart.left, chart.bottom)
         ..close();
       final fillPaint = Paint()
         ..shader = LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
-          colors: [color.withValues(alpha: 0.2), color.withValues(alpha: 0)],
+          colors: [
+            color.withValues(alpha: 0.2),
+            color.withValues(alpha: 0.04),
+            color.withValues(alpha: 0),
+          ],
+          stops: const [0, 0.52, 1],
         ).createShader(Offset.zero & size);
       canvas.drawPath(fillPath, fillPaint);
     }
@@ -212,13 +232,32 @@ class SparklinePainter extends CustomPainter {
       ..strokeJoin = StrokeJoin.round;
     canvas.drawPath(path, linePaint);
 
-    final dotPaint = Paint()..color = color;
-    canvas.drawCircle(points.last, 4, dotPaint);
     canvas.drawCircle(
       points.last,
-      6,
-      Paint()..color = color.withValues(alpha: 0.16),
+      7,
+      Paint()..color = color.withValues(alpha: 0.18),
     );
+    final dotPaint = Paint()..color = color;
+    canvas.drawCircle(points.last, 4, dotPaint);
+  }
+
+  Path _smoothPath(List<Offset> points) {
+    final path = Path()..moveTo(points.first.dx, points.first.dy);
+    if (points.length == 2) {
+      path.lineTo(points.last.dx, points.last.dy);
+      return path;
+    }
+    for (var i = 1; i < points.length - 1; i++) {
+      final current = points[i];
+      final next = points[i + 1];
+      final midpoint = Offset(
+        (current.dx + next.dx) / 2,
+        (current.dy + next.dy) / 2,
+      );
+      path.quadraticBezierTo(current.dx, current.dy, midpoint.dx, midpoint.dy);
+    }
+    path.lineTo(points.last.dx, points.last.dy);
+    return path;
   }
 
   @override

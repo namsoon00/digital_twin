@@ -1155,6 +1155,7 @@ class _CapitalFlowScreenState extends State<CapitalFlowScreen> {
           rangeWeeks: _rangeWeeks,
           detailWindow: _detailWindow,
           totalCount: rangeCandles.length,
+          availableCount: widget.candles.length,
           onRangeChanged: (weeks) {
             setState(() {
               _rangeWeeks = weeks;
@@ -1246,11 +1247,11 @@ class _CapitalFlowScreenState extends State<CapitalFlowScreen> {
       return candles;
     }
     final maxStart = candles.length - 2;
-    final start = (window.start * maxStart).round().clamp(0, maxStart);
-    final end = (window.end * (candles.length - 1)).round().clamp(
-      start + 1,
-      candles.length - 1,
-    );
+    final start = (window.start * maxStart).floor().clamp(0, maxStart).toInt();
+    final end = (window.end * (candles.length - 1))
+        .ceil()
+        .clamp(start + 1, candles.length - 1)
+        .toInt();
     return candles.sublist(start, end + 1);
   }
 }
@@ -1561,6 +1562,7 @@ class FlowCompositeChartCard extends StatefulWidget {
     required this.rangeWeeks,
     required this.detailWindow,
     required this.totalCount,
+    required this.availableCount,
     required this.onRangeChanged,
     required this.onWindowChanged,
     super.key,
@@ -1570,6 +1572,7 @@ class FlowCompositeChartCard extends StatefulWidget {
   final int rangeWeeks;
   final RangeValues detailWindow;
   final int totalCount;
+  final int availableCount;
   final ValueChanged<int> onRangeChanged;
   final ValueChanged<RangeValues> onWindowChanged;
 
@@ -1616,6 +1619,18 @@ class _FlowCompositeChartCardState extends State<FlowCompositeChartCard> {
     }
     final start = window.start.clamp(0.0, 1.0 - span).toDouble();
     return RangeValues(start, start + span);
+  }
+
+  static RangeValues _interpolateChartWindow(
+    RangeValues current,
+    RangeValues target,
+    double factor,
+  ) {
+    final clampedFactor = factor.clamp(0.0, 1.0).toDouble();
+    return RangeValues(
+      current.start + (target.start - current.start) * clampedFactor,
+      current.end + (target.end - current.end) * clampedFactor,
+    );
   }
 
   void _handleChartPointerDown(PointerDownEvent event, double width) {
@@ -1668,14 +1683,15 @@ class _FlowCompositeChartCardState extends State<FlowCompositeChartCard> {
     final startSpan = _gestureStartWindow.end - _gestureStartWindow.start;
     final panFraction =
         -(currentFocalFraction - _pinchStartFocalFraction) * startSpan;
+    final targetWindow = _scaledChartWindow(
+      startWindow: _gestureStartWindow,
+      scale: distance / startDistance,
+      focalFraction: _pinchStartFocalFraction,
+      panFraction: panFraction,
+      minSpan: _minChartWindowSpan,
+    );
     widget.onWindowChanged(
-      _scaledChartWindow(
-        startWindow: _gestureStartWindow,
-        scale: distance / startDistance,
-        focalFraction: _pinchStartFocalFraction,
-        panFraction: panFraction,
-        minSpan: _minChartWindowSpan,
-      ),
+      _interpolateChartWindow(widget.detailWindow, targetWindow, 0.45),
     );
   }
 
@@ -1686,6 +1702,20 @@ class _FlowCompositeChartCardState extends State<FlowCompositeChartCard> {
     final change = latest == null || first == null
         ? 0
         : latest.close - first.open;
+    final allRange = widget.availableCount <= 0 ? 18 : widget.availableCount;
+    final rangeSegments = <ButtonSegment<int>>[
+      if (allRange < 4)
+        ButtonSegment(value: allRange, label: const Text('ALL')),
+      if (allRange >= 4) const ButtonSegment(value: 4, label: Text('1M')),
+      if (allRange >= 8) const ButtonSegment(value: 8, label: Text('2M')),
+      if (allRange >= 12) const ButtonSegment(value: 12, label: Text('3M')),
+      if (allRange > 12)
+        ButtonSegment(value: allRange, label: const Text('ALL')),
+    ];
+    final selectedRange =
+        rangeSegments.any((segment) => segment.value == widget.rangeWeeks)
+        ? widget.rangeWeeks
+        : allRange;
 
     return AppCard(
       child: Column(
@@ -1779,13 +1809,8 @@ class _FlowCompositeChartCardState extends State<FlowCompositeChartCard> {
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: SegmentedButton<int>(
-              segments: const [
-                ButtonSegment(value: 4, label: Text('1M')),
-                ButtonSegment(value: 8, label: Text('2M')),
-                ButtonSegment(value: 12, label: Text('3M')),
-                ButtonSegment(value: 18, label: Text('ALL')),
-              ],
-              selected: {widget.rangeWeeks},
+              segments: rangeSegments,
+              selected: {selectedRange},
               onSelectionChanged: (values) =>
                   widget.onRangeChanged(values.first),
             ),
@@ -1930,11 +1955,55 @@ class FlowCompositeChartPainter extends CustomPainter {
       return;
     }
 
-    final chart = Rect.fromLTWH(34, 10, size.width - 44, size.height - 44);
-    final volumeTop = chart.bottom - 38;
-    final volumeHeight = 30.0;
+    final chartLeft = 42.0;
+    final chart = Rect.fromLTWH(
+      chartLeft,
+      10,
+      (size.width - chartLeft - 10).clamp(1.0, double.infinity).toDouble(),
+      (size.height - 48).clamp(1.0, double.infinity).toDouble(),
+    );
+    var minValue = candles.first.low;
+    var maxValue = candles.first.high;
+    var maxLiquidity = candles.first.liquidity;
+    for (final candle in candles) {
+      for (final value in [
+        candle.open,
+        candle.high,
+        candle.low,
+        candle.close,
+        candle.momentum,
+        candle.risk,
+        candle.aiFlow,
+        candle.cryptoFlow,
+        candle.goldFlow,
+        candle.koreaFlow,
+      ]) {
+        if (value < minValue) {
+          minValue = value;
+        }
+        if (value > maxValue) {
+          maxValue = value;
+        }
+      }
+      if (candle.liquidity > maxLiquidity) {
+        maxLiquidity = candle.liquidity;
+      }
+    }
+
+    final spread = maxValue - minValue;
+    final padding = (spread * 0.14).clamp(3.0, 10.0).toDouble();
+    var scaleMin = (minValue - padding).clamp(0.0, 100.0).toDouble();
+    var scaleMax = (maxValue + padding).clamp(0.0, 100.0).toDouble();
+    if (scaleMax - scaleMin < 8) {
+      final midpoint = ((minValue + maxValue) / 2).clamp(4.0, 96.0).toDouble();
+      scaleMin = (midpoint - 4).clamp(0.0, 100.0).toDouble();
+      scaleMax = (midpoint + 4).clamp(0.0, 100.0).toDouble();
+    }
+    final scaleSpan = scaleMax - scaleMin <= 0 ? 1.0 : scaleMax - scaleMin;
+    final volumeHeight = chart.height * 0.18;
+    final volumeTop = chart.bottom - volumeHeight;
     final gridPaint = Paint()
-      ..color = AppColors.line.withValues(alpha: 0.7)
+      ..color = AppColors.line.withValues(alpha: 0.58)
       ..strokeWidth = 1;
     final axisPaint = Paint()
       ..color = AppColors.muted.withValues(alpha: 0.62)
@@ -1961,22 +2030,64 @@ class FlowCompositeChartPainter extends CustomPainter {
         textDirection: TextDirection.ltr,
         textAlign: textAlign,
       )..layout();
-      painter.paint(canvas, offset);
+      var dx = offset.dx;
+      if (textAlign == TextAlign.center) {
+        dx -= painter.width / 2;
+      } else if (textAlign == TextAlign.right) {
+        dx -= painter.width;
+      }
+      painter.paint(canvas, Offset(dx, offset.dy));
+    }
+
+    String formatAxisValue(double value) {
+      return value.abs() >= 10
+          ? value.toStringAsFixed(0)
+          : value.toStringAsFixed(1);
+    }
+
+    final step = candles.length == 1
+        ? chart.width
+        : chart.width / candles.length;
+    final candleWidth = (step * 0.48).clamp(3.0, 15.0).toDouble();
+
+    double yFor(double value) {
+      final normalized = ((value - scaleMin) / scaleSpan)
+          .clamp(0.0, 1.0)
+          .toDouble();
+      return chart.bottom - normalized * chart.height;
+    }
+
+    double xForIndex(int index) {
+      return chart.left + step * index + step / 2;
     }
 
     for (var i = 0; i <= 4; i++) {
-      final y = chart.top + chart.height * i / 4;
+      final value = scaleMax - scaleSpan * i / 4;
+      final y = yFor(value);
       canvas.drawLine(Offset(chart.left, y), Offset(chart.right, y), gridPaint);
-      drawText('${100 - i * 25}', Offset(4, y - 5));
+      drawText(
+        formatAxisValue(value),
+        Offset(chart.left - 8, y - 5),
+        textAlign: TextAlign.right,
+      );
     }
 
-    for (var i = 0; i <= 4; i++) {
-      final x = chart.left + chart.width * i / 4;
+    final tickCount = candles.length <= 5 ? candles.length : 5;
+    final tickIndexes = <int>{};
+    for (var i = 0; i < tickCount; i++) {
+      final index = tickCount == 1
+          ? 0
+          : ((candles.length - 1) * i / (tickCount - 1)).round();
+      if (!tickIndexes.add(index)) {
+        continue;
+      }
+      final x = xForIndex(index);
       canvas.drawLine(
         Offset(x, chart.top),
         Offset(x, chart.bottom),
-        gridPaint
-          ..color = AppColors.line.withValues(alpha: i == 0 ? 0.82 : 0.4),
+        Paint()
+          ..color = AppColors.line.withValues(alpha: i == 0 ? 0.62 : 0.34)
+          ..strokeWidth = 1,
       );
     }
     canvas.drawLine(
@@ -1989,21 +2100,16 @@ class FlowCompositeChartPainter extends CustomPainter {
       Offset(chart.left, chart.bottom),
       axisPaint,
     );
+    canvas.drawLine(
+      Offset(chart.left, volumeTop),
+      Offset(chart.right, volumeTop),
+      Paint()
+        ..color = AppColors.line.withValues(alpha: 0.36)
+        ..strokeWidth = 1,
+    );
 
-    final step = candles.length == 1
-        ? chart.width
-        : chart.width / candles.length;
-    final candleWidth = (step * 0.48).clamp(4.0, 16.0);
-
-    double yFor(double value) {
-      final normalized = value.clamp(0, 100) / 100;
-      return chart.bottom - normalized * chart.height;
-    }
-
-    double xForIndex(int index) {
-      return chart.left + step * index + step / 2;
-    }
-
+    canvas.save();
+    canvas.clipRect(chart);
     for (var i = 0; i < candles.length; i++) {
       final candle = candles[i];
       final centerX = xForIndex(i);
@@ -2014,15 +2120,17 @@ class FlowCompositeChartPainter extends CustomPainter {
         ..strokeWidth = 1.4
         ..strokeCap = StrokeCap.round;
       final bodyPaint = Paint()..color = color.withValues(alpha: 0.78);
-      final volumePaint = Paint()
-        ..color = AppColors.muted.withValues(alpha: 0.24);
+      final volumePaint = Paint()..color = color.withValues(alpha: 0.16);
+      final liquidityRatio = maxLiquidity <= 0
+          ? 0.0
+          : (candle.liquidity / maxLiquidity).clamp(0.0, 1.0).toDouble();
 
       canvas.drawRect(
         Rect.fromLTWH(
           centerX - candleWidth / 2,
-          volumeTop + volumeHeight * (1 - candle.liquidity / 100),
+          volumeTop + volumeHeight * (1 - liquidityRatio),
           candleWidth,
-          volumeHeight * candle.liquidity / 100,
+          volumeHeight * liquidityRatio,
         ),
         volumePaint,
       );
@@ -2036,38 +2144,43 @@ class FlowCompositeChartPainter extends CustomPainter {
       final bottom = yFor(
         candle.open < candle.close ? candle.open : candle.close,
       );
+      final bodyMiddle = (top + bottom) / 2;
+      final bodyTop = bottom - top < 2.5
+          ? (bodyMiddle - 1.25).clamp(chart.top, chart.bottom).toDouble()
+          : top;
+      final bodyBottom = bottom - top < 2.5
+          ? (bodyMiddle + 1.25).clamp(chart.top, chart.bottom).toDouble()
+          : bottom;
       canvas.drawRRect(
         RRect.fromRectAndRadius(
           Rect.fromLTRB(
             centerX - candleWidth / 2,
-            top,
+            bodyTop,
             centerX + candleWidth / 2,
-            bottom == top ? bottom + 2 : bottom,
+            bodyBottom,
           ),
-          const Radius.circular(2),
+          const Radius.circular(2.5),
         ),
         bodyPaint,
       );
     }
 
-    void drawLine(double Function(FlowCandle candle) selector, Color color) {
+    void drawLine(
+      double Function(FlowCandle candle) selector,
+      Color color, {
+      double alpha = 0.78,
+    }) {
       if (candles.length < 2) {
         return;
       }
-      final path = Path();
+      final points = <Offset>[];
       for (var i = 0; i < candles.length; i++) {
-        final x = xForIndex(i);
-        final y = yFor(selector(candles[i]));
-        if (i == 0) {
-          path.moveTo(x, y);
-        } else {
-          path.lineTo(x, y);
-        }
+        points.add(Offset(xForIndex(i), yFor(selector(candles[i]))));
       }
       canvas.drawPath(
-        path,
+        _smoothChartPath(points),
         Paint()
-          ..color = color
+          ..color = color.withValues(alpha: alpha)
           ..style = PaintingStyle.stroke
           ..strokeWidth = 2.2
           ..strokeCap = StrokeCap.round
@@ -2077,9 +2190,9 @@ class FlowCompositeChartPainter extends CustomPainter {
 
     drawLine((candle) => candle.aiFlow, AppColors.blue);
     drawLine((candle) => candle.cryptoFlow, AppColors.amber);
-    drawLine((candle) => candle.goldFlow, AppColors.charcoal);
+    drawLine((candle) => candle.goldFlow, AppColors.charcoal, alpha: 0.72);
     drawLine((candle) => candle.koreaFlow, AppColors.green);
-    drawLine((candle) => candle.risk, AppColors.red);
+    drawLine((candle) => candle.risk, AppColors.red, alpha: 0.66);
 
     final last = candles.last;
     final lastX = xForIndex(candles.length - 1);
@@ -2096,27 +2209,86 @@ class FlowCompositeChartPainter extends CustomPainter {
       Offset(chart.right, lastY),
       markerLinePaint,
     );
-    canvas.drawCircle(Offset(lastX, lastY), 4, markerPaint);
-    drawText(
-      last.close.toStringAsFixed(1),
-      Offset(
-        (chart.right - 28).clamp(chart.left, chart.right).toDouble(),
-        lastY - 14,
-      ),
-      color: lastColor,
+    canvas.drawCircle(
+      Offset(lastX, lastY),
+      7,
+      Paint()..color = lastColor.withValues(alpha: 0.16),
     );
+    canvas.drawCircle(Offset(lastX, lastY), 4, markerPaint);
+    canvas.restore();
+
+    final priceText = last.close.toStringAsFixed(1);
+    final pricePainter = TextPainter(
+      text: TextSpan(
+        text: priceText,
+        style: TextStyle(
+          color: lastColor,
+          fontSize: 10,
+          fontWeight: FontWeight.w800,
+          height: 1,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    final pricePillWidth = pricePainter.width + 12;
+    final pricePillHeight = 20.0;
+    final pricePillLeft = chart.width > pricePillWidth + 6
+        ? chart.right - pricePillWidth - 2
+        : chart.left + 2;
+    final pricePillTop = (lastY - pricePillHeight / 2)
+        .clamp(chart.top + 2, chart.bottom - pricePillHeight - 2)
+        .toDouble();
+    final pricePill = RRect.fromRectAndRadius(
+      Rect.fromLTWH(
+        pricePillLeft,
+        pricePillTop,
+        pricePillWidth,
+        pricePillHeight,
+      ),
+      const Radius.circular(6),
+    );
+    canvas.drawRRect(
+      pricePill,
+      Paint()..color = lastColor.withValues(alpha: 0.12),
+    );
+    canvas.drawRRect(
+      pricePill,
+      Paint()
+        ..color = lastColor.withValues(alpha: 0.36)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1,
+    );
+    pricePainter.paint(canvas, Offset(pricePill.left + 6, pricePill.top + 5));
 
     if (candles.length > 1) {
-      drawText(candles.first.label, Offset(chart.left, chart.bottom + 8));
-      final lastLabel = candles.last.label;
-      drawText(
-        lastLabel,
-        Offset(
-          (chart.right - 24).clamp(chart.left, chart.right).toDouble(),
-          chart.bottom + 8,
-        ),
-      );
+      for (final index in tickIndexes) {
+        final x = xForIndex(index).clamp(chart.left + 12, chart.right - 12);
+        drawText(
+          candles[index].label,
+          Offset(x.toDouble(), chart.bottom + 8),
+          textAlign: TextAlign.center,
+        );
+      }
     }
+  }
+
+  Path _smoothChartPath(List<Offset> points) {
+    final path = Path()..moveTo(points.first.dx, points.first.dy);
+    if (points.length == 2) {
+      path.lineTo(points.last.dx, points.last.dy);
+      return path;
+    }
+    for (var i = 1; i < points.length - 1; i++) {
+      final current = points[i];
+      final next = points[i + 1];
+      final midpoint = Offset(
+        (current.dx + next.dx) / 2,
+        (current.dy + next.dy) / 2,
+      );
+      path.quadraticBezierTo(current.dx, current.dy, midpoint.dx, midpoint.dy);
+    }
+    path.lineTo(points.last.dx, points.last.dy);
+    return path;
   }
 
   @override

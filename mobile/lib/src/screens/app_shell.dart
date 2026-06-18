@@ -1555,7 +1555,7 @@ class CryptoAssetRow extends StatelessWidget {
   }
 }
 
-class FlowCompositeChartCard extends StatelessWidget {
+class FlowCompositeChartCard extends StatefulWidget {
   const FlowCompositeChartCard({
     required this.candles,
     required this.rangeWeeks,
@@ -1574,9 +1574,115 @@ class FlowCompositeChartCard extends StatelessWidget {
   final ValueChanged<RangeValues> onWindowChanged;
 
   @override
+  State<FlowCompositeChartCard> createState() => _FlowCompositeChartCardState();
+}
+
+class _FlowCompositeChartCardState extends State<FlowCompositeChartCard> {
+  RangeValues _gestureStartWindow = const RangeValues(0, 1);
+  final Map<int, Offset> _chartPointers = {};
+  double? _pinchStartDistance;
+  double _pinchStartFocalFraction = 0.5;
+
+  double get _minChartWindowSpan {
+    if (widget.totalCount <= 4) {
+      return 1;
+    }
+    return (4 / widget.totalCount).clamp(0.0, 1.0).toDouble();
+  }
+
+  static RangeValues _scaledChartWindow({
+    required RangeValues startWindow,
+    required double scale,
+    required double focalFraction,
+    required double panFraction,
+    required double minSpan,
+  }) {
+    final startSpan = startWindow.end - startWindow.start;
+    final nextSpan = (startSpan / scale.clamp(0.35, 4.0))
+        .clamp(minSpan, 1.0)
+        .toDouble();
+    final anchor = startWindow.start + startSpan * focalFraction;
+    final nextStart = anchor - nextSpan * focalFraction + panFraction;
+    return _normalizeChartWindow(
+      RangeValues(nextStart, nextStart + nextSpan),
+      minSpan,
+    );
+  }
+
+  static RangeValues _normalizeChartWindow(RangeValues window, double minSpan) {
+    final span = (window.end - window.start).clamp(minSpan, 1.0).toDouble();
+    if (span >= 1) {
+      return const RangeValues(0, 1);
+    }
+    final start = window.start.clamp(0.0, 1.0 - span).toDouble();
+    return RangeValues(start, start + span);
+  }
+
+  void _handleChartPointerDown(PointerDownEvent event, double width) {
+    _chartPointers[event.pointer] = event.localPosition;
+    if (_chartPointers.length == 2) {
+      _beginChartPinch(width);
+    }
+  }
+
+  void _handleChartPointerMove(PointerMoveEvent event, double width) {
+    if (!_chartPointers.containsKey(event.pointer)) {
+      return;
+    }
+    _chartPointers[event.pointer] = event.localPosition;
+    if (_chartPointers.length == 2 && _pinchStartDistance != null) {
+      _updateChartPinch(width);
+    }
+  }
+
+  void _handleChartPointerEnd(PointerEvent event) {
+    _chartPointers.remove(event.pointer);
+    if (_chartPointers.length < 2) {
+      _pinchStartDistance = null;
+    }
+  }
+
+  void _beginChartPinch(double width) {
+    final points = _chartPointers.values.take(2).toList(growable: false);
+    final distance = (points[1] - points[0]).distance;
+    if (distance <= 0) {
+      return;
+    }
+    _gestureStartWindow = widget.detailWindow;
+    _pinchStartDistance = distance;
+    _pinchStartFocalFraction = ((points[0].dx + points[1].dx) / 2 / width)
+        .clamp(0.0, 1.0)
+        .toDouble();
+  }
+
+  void _updateChartPinch(double width) {
+    final startDistance = _pinchStartDistance;
+    if (startDistance == null || startDistance <= 0) {
+      return;
+    }
+    final points = _chartPointers.values.take(2).toList(growable: false);
+    final distance = (points[1] - points[0]).distance;
+    final currentFocalFraction = ((points[0].dx + points[1].dx) / 2 / width)
+        .clamp(0.0, 1.0)
+        .toDouble();
+    final startSpan = _gestureStartWindow.end - _gestureStartWindow.start;
+    final panFraction =
+        -(currentFocalFraction - _pinchStartFocalFraction) * startSpan;
+    widget.onWindowChanged(
+      _scaledChartWindow(
+        startWindow: _gestureStartWindow,
+        scale: distance / startDistance,
+        focalFraction: _pinchStartFocalFraction,
+        panFraction: panFraction,
+        minSpan: _minChartWindowSpan,
+      ),
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final latest = candles.isEmpty ? null : candles.last;
-    final first = candles.isEmpty ? null : candles.first;
+    final latest = widget.candles.isEmpty ? null : widget.candles.last;
+    final first = widget.candles.isEmpty ? null : widget.candles.first;
     final change = latest == null || first == null
         ? 0
         : latest.close - first.open;
@@ -1613,9 +1719,9 @@ class FlowCompositeChartCard extends StatelessWidget {
                     ),
                     const SizedBox(height: 5),
                     Text(
-                      candles.isEmpty
+                      widget.candles.isEmpty
                           ? '기간 데이터 없음'
-                          : '${candles.first.label} → ${candles.last.label}',
+                          : '${widget.candles.first.label} → ${widget.candles.last.label}',
                       style: Theme.of(context).textTheme.bodyMedium,
                     ),
                   ],
@@ -1679,16 +1785,40 @@ class FlowCompositeChartCard extends StatelessWidget {
                 ButtonSegment(value: 12, label: Text('3M')),
                 ButtonSegment(value: 18, label: Text('ALL')),
               ],
-              selected: {rangeWeeks},
-              onSelectionChanged: (values) => onRangeChanged(values.first),
+              selected: {widget.rangeWeeks},
+              onSelectionChanged: (values) =>
+                  widget.onRangeChanged(values.first),
             ),
           ),
           const SizedBox(height: 12),
           SizedBox(
             height: 236,
-            child: candles.isEmpty
+            child: widget.candles.isEmpty
                 ? const EmptyState(message: '캔들 데이터가 없습니다.')
-                : FlowCompositeChart(candles: candles),
+                : LayoutBuilder(
+                    builder: (context, constraints) {
+                      final width = constraints.maxWidth <= 0
+                          ? 1.0
+                          : constraints.maxWidth;
+                      return Listener(
+                        behavior: HitTestBehavior.opaque,
+                        onPointerDown: widget.totalCount <= 4
+                            ? null
+                            : (event) => _handleChartPointerDown(event, width),
+                        onPointerMove: widget.totalCount <= 4
+                            ? null
+                            : (event) => _handleChartPointerMove(event, width),
+                        onPointerUp: _handleChartPointerEnd,
+                        onPointerCancel: _handleChartPointerEnd,
+                        child: GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onDoubleTap: () =>
+                              widget.onWindowChanged(const RangeValues(0, 1)),
+                          child: FlowCompositeChart(candles: widget.candles),
+                        ),
+                      );
+                    },
+                  ),
           ),
           const SizedBox(height: 10),
           Row(
@@ -1700,21 +1830,21 @@ class FlowCompositeChartCard extends StatelessWidget {
                 ),
               ),
               Text(
-                '${candles.length}/$totalCount',
+                '${widget.candles.length}/${widget.totalCount}',
                 style: Theme.of(context).textTheme.labelLarge,
               ),
             ],
           ),
           RangeSlider(
-            values: detailWindow,
+            values: widget.detailWindow,
             min: 0,
             max: 1,
-            divisions: totalCount > 2 ? totalCount - 1 : 1,
+            divisions: widget.totalCount > 2 ? widget.totalCount - 1 : 1,
             labels: RangeLabels(
-              '${(detailWindow.start * 100).round()}%',
-              '${(detailWindow.end * 100).round()}%',
+              '${(widget.detailWindow.start * 100).round()}%',
+              '${(widget.detailWindow.end * 100).round()}%',
             ),
-            onChanged: totalCount > 2 ? onWindowChanged : null,
+            onChanged: widget.totalCount > 2 ? widget.onWindowChanged : null,
           ),
           const SizedBox(height: 8),
           Wrap(

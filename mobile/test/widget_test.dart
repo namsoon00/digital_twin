@@ -1,3 +1,5 @@
+import 'dart:ui';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -7,6 +9,7 @@ import 'package:market_flow/src/data/crypto_market_service.dart';
 import 'package:market_flow/src/data/economic_feed_service.dart';
 import 'package:market_flow/src/data/flow_repository.dart';
 import 'package:market_flow/src/models/market_models.dart';
+import 'package:market_flow/src/widgets/sparkline.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 Future<void> pumpMarketFlowApp(WidgetTester tester) async {
@@ -108,6 +111,57 @@ void main() {
       expect(proxyRequestCount, 7);
     },
   );
+
+  testWidgets('Sparkline supports pinch zooming into a shorter period', (
+    tester,
+  ) async {
+    final values = List<double>.generate(10, (index) => index.toDouble());
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 320,
+            height: 90,
+            child: Sparkline(values: values),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    SparklinePainter painter() {
+      final customPaint = tester.widget<CustomPaint>(
+        find.descendant(
+          of: find.byType(Sparkline),
+          matching: find.byType(CustomPaint),
+        ),
+      );
+      return customPaint.painter! as SparklinePainter;
+    }
+
+    expect(painter().values.length, 10);
+
+    final center = tester.getCenter(find.byType(Sparkline));
+    final firstFinger = await tester.createGesture(
+      pointer: 101,
+      kind: PointerDeviceKind.touch,
+    );
+    final secondFinger = await tester.createGesture(
+      pointer: 102,
+      kind: PointerDeviceKind.touch,
+    );
+    await firstFinger.down(center - const Offset(30, 0));
+    await secondFinger.down(center + const Offset(30, 0));
+    await tester.pump(const Duration(milliseconds: 50));
+    await firstFinger.moveTo(center - const Offset(120, 0));
+    await secondFinger.moveTo(center + const Offset(120, 0));
+    await tester.pump();
+    await firstFinger.up();
+    await secondFinger.up();
+    await tester.pumpAndSettle();
+
+    expect(painter().values.length, lessThan(10));
+  });
 
   test('CoinGecko market items are mapped into crypto assets', () async {
     final service = CoinGeckoCryptoMarketService(

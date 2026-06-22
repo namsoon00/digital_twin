@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../data/checklist_repository.dart';
 import '../data/crypto_market_service.dart';
+import '../data/data_api_probe_service.dart';
 import '../data/economic_feed_service.dart';
 import '../data/flow_repository.dart';
 import '../data/market_data_api.dart';
@@ -45,6 +46,7 @@ class _AppShellState extends State<AppShell> {
   late CryptoMarketService _cryptoMarketService;
   late EconomicFeedService _economicFeedService;
   late AlphaVantageQuoteService _quoteService;
+  late DataApiProbeClient _dataApiProbeClient;
   late TossDirectApiClient _tossDirectApiClient;
   late SettingsRepository _settingsRepository;
   late CryptoMarketSnapshot _cryptoSnapshot;
@@ -82,6 +84,7 @@ class _AppShellState extends State<AppShell> {
     _economicFeedItems = widget.repository.economicFeeds.toList();
     _feedSnapshot = EconomicFeedFetchSnapshot.idle(_economicFeedItems.length);
     _quoteService = AlphaVantageQuoteService();
+    _dataApiProbeClient = DataApiProbeClient();
     _tossDirectApiClient = TossDirectApiClient();
     _settingsRepository = SettingsRepository();
     _quoteSnapshot = _quoteService.initialSnapshot;
@@ -100,6 +103,7 @@ class _AppShellState extends State<AppShell> {
     _cryptoMarketService.dispose();
     _economicFeedService.dispose();
     _quoteService.dispose();
+    _dataApiProbeClient.dispose();
     _tossDirectApiClient.dispose();
     super.dispose();
   }
@@ -300,6 +304,13 @@ class _AppShellState extends State<AppShell> {
     }
   }
 
+  Future<DataApiProbeResult> _testDataApiConnection(
+    DataApiSource source,
+    String apiKey,
+  ) async {
+    return _dataApiProbeClient.probe(source, apiKey);
+  }
+
   Future<void> _saveTossSettings(TossAccountSettings settings) async {
     await _settingsRepository.saveTossAccountSettings(settings);
     if (!mounted) {
@@ -432,6 +443,7 @@ class _AppShellState extends State<AppShell> {
         dataApiKeySettings: _dataApiKeySettings,
         dataApiKeysLoaded: _dataApiKeysLoaded,
         onSaveDataApiKeySettings: _saveDataApiKeySettings,
+        onTestDataApiConnection: _testDataApiConnection,
         tossSettings: _tossSettings,
         settingsLoaded: _settingsLoaded,
         onSaveTossSettings: _saveTossSettings,
@@ -2515,8 +2527,11 @@ class DataApiKeyField extends StatelessWidget {
     required this.obscureText,
     required this.savedKey,
     required this.saving,
+    required this.testing,
+    required this.probeResult,
     required this.onChanged,
     required this.onSave,
+    required this.onTest,
     super.key,
   });
 
@@ -2526,8 +2541,11 @@ class DataApiKeyField extends StatelessWidget {
   final bool obscureText;
   final String savedKey;
   final bool saving;
+  final bool testing;
+  final DataApiProbeResult? probeResult;
   final VoidCallback onChanged;
   final VoidCallback onSave;
+  final VoidCallback onTest;
 
   @override
   Widget build(BuildContext context) {
@@ -2537,6 +2555,14 @@ class DataApiKeyField extends StatelessWidget {
     final hasSavedKey = normalizedSavedKey.isNotEmpty;
     final hasCurrentKey = currentKey.isNotEmpty;
     final hasUnsavedChanges = currentKey != normalizedSavedKey;
+    final supportsTest = DataApiProbeClient.supportsSource(api.id);
+    final requiresKey = DataApiProbeClient.requiresKey(api.id);
+    final canTest =
+        enabled &&
+        !saving &&
+        !testing &&
+        supportsTest &&
+        (!requiresKey || hasCurrentKey);
     final statusLabel = hasUnsavedChanges
         ? (hasCurrentKey ? '변경됨' : '삭제 예정')
         : (hasSavedKey ? '저장됨' : '미등록');
@@ -2601,6 +2627,20 @@ class DataApiKeyField extends StatelessWidget {
         Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            Icon(Icons.hub_outlined, size: 16, color: AppColors.muted),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                '연동 데이터: ${DataApiProbeClient.linkedDataLabel(api)}',
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
             Icon(Icons.key_outlined, size: 16, color: AppColors.muted),
             const SizedBox(width: 6),
             Expanded(
@@ -2651,16 +2691,102 @@ class DataApiKeyField extends StatelessWidget {
             label: Text(buttonLabel),
           ),
         ),
+        const SizedBox(height: 8),
+        SizedBox(
+          width: double.infinity,
+          child: OutlinedButton.icon(
+            key: ValueKey('data-api-test-${api.id}'),
+            onPressed: canTest ? onTest : null,
+            icon: testing
+                ? const SizedBox.square(
+                    dimension: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : Icon(
+                    supportsTest
+                        ? Icons.network_check_outlined
+                        : Icons.lock_outline,
+                  ),
+            label: Text(
+              testing
+                  ? '테스트 중'
+                  : supportsTest
+                  ? DataApiProbeClient.testLabel(api.id)
+                  : '벤더 선정 후 테스트',
+            ),
+          ),
+        ),
+        if (probeResult != null) ...[
+          const SizedBox(height: 8),
+          _DataApiProbeResultBox(result: probeResult!),
+        ],
         const SizedBox(height: 6),
         Text(
           hasUnsavedChanges
               ? '저장 버튼을 눌러야 로컬 DB에 반영됩니다.'
               : hasSavedKey
               ? '로컬 DB에 저장된 key입니다.'
-              : '아직 로컬 DB에 저장된 key가 없습니다.',
+              : requiresKey
+              ? '아직 로컬 DB에 저장된 key가 없습니다.'
+              : 'key 없이 공개 API 테스트가 가능합니다.',
           style: Theme.of(context).textTheme.bodyMedium,
         ),
       ],
+    );
+  }
+}
+
+class _DataApiProbeResultBox extends StatelessWidget {
+  const _DataApiProbeResultBox({required this.result});
+
+  final DataApiProbeResult result;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = result.ok ? AppColors.green : AppColors.red;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withValues(alpha: 0.28)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(
+                  result.ok ? Icons.check_circle_outline : Icons.error_outline,
+                  color: color,
+                  size: 18,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    '${result.statusLabel} · ${result.message}',
+                    style: Theme.of(
+                      context,
+                    ).textTheme.labelLarge?.copyWith(color: color),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text(
+              '${result.provider} · ${result.endpoint}',
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              '연동 데이터: ${result.linkedDataLabel}',
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -4408,6 +4534,7 @@ class SettingsScreen extends StatefulWidget {
     required this.dataApiKeySettings,
     required this.dataApiKeysLoaded,
     required this.onSaveDataApiKeySettings,
+    required this.onTestDataApiConnection,
     required this.tossSettings,
     required this.settingsLoaded,
     required this.onSaveTossSettings,
@@ -4423,6 +4550,8 @@ class SettingsScreen extends StatefulWidget {
   final bool dataApiKeysLoaded;
   final Future<void> Function(DataApiKeySettings settings)
   onSaveDataApiKeySettings;
+  final Future<DataApiProbeResult> Function(DataApiSource source, String apiKey)
+  onTestDataApiConnection;
   final TossAccountSettings tossSettings;
   final bool settingsLoaded;
   final Future<void> Function(TossAccountSettings settings) onSaveTossSettings;
@@ -4453,6 +4582,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _hideSecrets = true;
   bool _savingThemePreference = false;
   bool _savingDataApiKeys = false;
+  String? _testingDataApiId;
+  final Map<String, DataApiProbeResult> _dataApiProbeResults = {};
   bool _testingConnection = false;
   TossDirectApiProbeResult? _probeResult;
 
@@ -4560,6 +4691,30 @@ class _SettingsScreenState extends State<SettingsScreen> {
     } finally {
       if (mounted) {
         setState(() => _savingDataApiKeys = false);
+      }
+    }
+  }
+
+  Future<void> _testDataApi(DataApiSource source) async {
+    final key = _dataApiKeyControllers[source.id]?.text.trim() ?? '';
+    setState(() {
+      _testingDataApiId = source.id;
+      _dataApiProbeResults.remove(source.id);
+    });
+
+    try {
+      await widget.onSaveDataApiKeySettings(_currentDataApiKeySettings());
+      final result = await widget.onTestDataApiConnection(source, key);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _testingDataApiId = null;
+        _dataApiProbeResults[source.id] = result;
+      });
+    } finally {
+      if (mounted && _testingDataApiId == source.id) {
+        setState(() => _testingDataApiId = null);
       }
     }
   }
@@ -4824,8 +4979,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     sortedApis[index].id,
                   ),
                   saving: _savingDataApiKeys,
+                  testing: _testingDataApiId == sortedApis[index].id,
+                  probeResult: _dataApiProbeResults[sortedApis[index].id],
                   onChanged: () => setState(() {}),
                   onSave: _saveDataApiKeys,
+                  onTest: () => _testDataApi(sortedApis[index]),
                 ),
                 if (index != sortedApis.length - 1) ...[
                   const SizedBox(height: 14),

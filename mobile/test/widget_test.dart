@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:market_flow/main.dart';
 import 'package:market_flow/src/data/crypto_market_service.dart';
+import 'package:market_flow/src/data/data_api_probe_service.dart';
 import 'package:market_flow/src/data/economic_feed_service.dart';
 import 'package:market_flow/src/data/flow_repository.dart';
 import 'package:market_flow/src/data/local_settings_database.dart';
@@ -113,6 +114,44 @@ void main() {
       expect(proxyRequestCount, 7);
     },
   );
+
+  test('Data API probe validates Alpha Vantage quote access', () async {
+    const repository = MockFlowRepository();
+    final source = repository.dataApiSources.firstWhere(
+      (source) => source.id == 'alpha-vantage',
+    );
+    final client = DataApiProbeClient(
+      client: MockClient((request) async {
+        expect(request.url.host, 'www.alphavantage.co');
+        expect(request.url.queryParameters['function'], 'GLOBAL_QUOTE');
+        expect(request.url.queryParameters['symbol'], 'NVDA');
+        expect(request.url.queryParameters['apikey'], 'demo-key');
+        return http.Response(
+          '''
+{
+  "Global Quote": {
+    "01. symbol": "NVDA",
+    "05. price": "142.1800",
+    "06. volume": "42000000",
+    "09. change": "3.40",
+    "10. change percent": "2.45%"
+  }
+}
+''',
+          200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        );
+      }),
+    );
+    addTearDown(client.dispose);
+
+    final result = await client.probe(source, 'demo-key');
+
+    expect(result.ok, isTrue);
+    expect(result.endpoint, 'GLOBAL_QUOTE NVDA');
+    expect(result.message, contains('142.1800'));
+    expect(result.linkedDataLabel, contains('관심 종목'));
+  });
 
   testWidgets('Sparkline supports pinch zooming into a shorter period', (
     tester,
@@ -640,9 +679,28 @@ void main() {
       find.text('발급 위치: https://www.alphavantage.co/documentation/'),
       findsOneWidget,
     );
+    expect(find.text('연동 데이터: 대시보드 관심 종목 가격, 등락률, 거래량'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('data-api-test-alpha-vantage')),
+      findsOneWidget,
+    );
+    expect(find.text('연결 테스트'), findsWidgets);
     expect(find.text('읽기 전용 데이터'), findsOneWidget);
     expect(find.text('로컬 DB 저장'), findsOneWidget);
     expect(find.text('API key'), findsWidgets);
+
+    await tester.scrollUntilVisible(
+      find.byKey(const ValueKey('data-api-test-coingecko')),
+      420,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('공개 API 테스트'), findsWidgets);
+    expect(
+      find.text('연동 데이터: 자금 탭 코인 가격, 시총, 거래량, 1h/24h/7d 변화율'),
+      findsOneWidget,
+    );
 
     await tester.scrollUntilVisible(
       find.text('토스증권 계정'),

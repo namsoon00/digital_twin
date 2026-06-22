@@ -357,6 +357,42 @@ void main() {
     expect(prefs.getString('app.themeMode'), 'dark');
   });
 
+  testWidgets('MarketFlow saves a data API key from the field button', (
+    tester,
+  ) async {
+    await pumpMarketFlowApp(tester);
+
+    await tester.tap(find.text('설정'));
+    await tester.pumpAndSettle();
+
+    await tester.scrollUntilVisible(
+      find.byKey(const ValueKey('data-api-key-input-coingecko')),
+      360,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+
+    await tester.enterText(
+      find.byKey(const ValueKey('data-api-key-input-coingecko')),
+      'coingecko-demo-key',
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('변경됨'), findsWidgets);
+    expect(find.text('입력값 저장'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('data-api-save-coingecko')));
+    await tester.pumpAndSettle();
+
+    final prefs = await SharedPreferences.getInstance();
+    expect(
+      prefs.getString(LocalSettingsDatabase.dataApiKeyStorageKey('coingecko')),
+      'coingecko-demo-key',
+    );
+    expect(find.text('저장됨'), findsWidgets);
+    expect(find.text('로컬 DB에 저장된 key입니다.'), findsOneWidget);
+  });
+
   testWidgets('MarketFlow opens on the live flow dashboard', (tester) async {
     await pumpMarketFlowApp(tester);
 
@@ -594,6 +630,8 @@ void main() {
     expect(find.text('다크'), findsOneWidget);
     expect(find.text('데이터 API key'), findsOneWidget);
     expect(find.text('등록한 key를 기기 로컬 DB에 저장'), findsOneWidget);
+    expect(find.byKey(const ValueKey('data-api-save-top')), findsOneWidget);
+    expect(find.text('API key 입력 후 저장'), findsWidgets);
     expect(find.text('Alpha Vantage'), findsOneWidget);
     expect(find.text('FRED API'), findsOneWidget);
     expect(find.text('CoinGecko API'), findsOneWidget);
@@ -605,7 +643,6 @@ void main() {
     expect(find.text('읽기 전용 데이터'), findsOneWidget);
     expect(find.text('로컬 DB 저장'), findsOneWidget);
     expect(find.text('API key'), findsWidgets);
-    expect(find.text('데이터 API key 저장'), findsOneWidget);
 
     await tester.scrollUntilVisible(
       find.text('토스증권 계정'),

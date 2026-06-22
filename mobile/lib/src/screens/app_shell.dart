@@ -2513,8 +2513,10 @@ class DataApiKeyField extends StatelessWidget {
     required this.controller,
     required this.enabled,
     required this.obscureText,
-    required this.hasKey,
+    required this.savedKey,
+    required this.saving,
     required this.onChanged,
+    required this.onSave,
     super.key,
   });
 
@@ -2522,12 +2524,33 @@ class DataApiKeyField extends StatelessWidget {
   final TextEditingController controller;
   final bool enabled;
   final bool obscureText;
-  final bool hasKey;
+  final String savedKey;
+  final bool saving;
   final VoidCallback onChanged;
+  final VoidCallback onSave;
 
   @override
   Widget build(BuildContext context) {
     final color = _apiStatusColor(api.status);
+    final currentKey = controller.text.trim();
+    final normalizedSavedKey = savedKey.trim();
+    final hasSavedKey = normalizedSavedKey.isNotEmpty;
+    final hasCurrentKey = currentKey.isNotEmpty;
+    final hasUnsavedChanges = currentKey != normalizedSavedKey;
+    final statusLabel = hasUnsavedChanges
+        ? (hasCurrentKey ? '변경됨' : '삭제 예정')
+        : (hasSavedKey ? '저장됨' : '미등록');
+    final statusColor = hasUnsavedChanges
+        ? AppColors.amber
+        : (hasSavedKey ? AppColors.green : AppColors.muted);
+    final buttonLabel = saving
+        ? '저장 중'
+        : hasUnsavedChanges
+        ? '입력값 저장'
+        : hasSavedKey
+        ? '저장됨'
+        : 'API key 입력 후 저장';
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -2564,10 +2587,7 @@ class DataApiKeyField extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 8),
-            FlowChip(
-              label: hasKey ? 'key 저장됨' : 'key 필요',
-              color: hasKey ? AppColors.green : AppColors.amber,
-            ),
+            FlowChip(label: statusLabel, color: statusColor),
           ],
         ),
         const SizedBox(height: 12),
@@ -2604,6 +2624,7 @@ class DataApiKeyField extends StatelessWidget {
         ),
         const SizedBox(height: 12),
         TextField(
+          key: ValueKey('data-api-key-input-${api.id}'),
           controller: controller,
           enabled: enabled,
           obscureText: obscureText,
@@ -2614,6 +2635,30 @@ class DataApiKeyField extends StatelessWidget {
             border: const OutlineInputBorder(),
           ),
           onChanged: (_) => onChanged(),
+        ),
+        const SizedBox(height: 10),
+        SizedBox(
+          width: double.infinity,
+          child: FilledButton.icon(
+            key: ValueKey('data-api-save-${api.id}'),
+            onPressed: enabled && !saving && hasUnsavedChanges ? onSave : null,
+            icon: saving
+                ? const SizedBox.square(
+                    dimension: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : Icon(hasUnsavedChanges ? Icons.save_outlined : Icons.check),
+            label: Text(buttonLabel),
+          ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          hasUnsavedChanges
+              ? '저장 버튼을 눌러야 로컬 DB에 반영됩니다.'
+              : hasSavedKey
+              ? '로컬 DB에 저장된 key입니다.'
+              : '아직 로컬 DB에 저장된 key가 없습니다.',
+          style: Theme.of(context).textTheme.bodyMedium,
         ),
       ],
     );
@@ -4504,14 +4549,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _saveDataApiKeys() async {
     setState(() => _savingDataApiKeys = true);
-    await widget.onSaveDataApiKeySettings(_currentDataApiKeySettings());
-    if (!mounted) {
-      return;
+    try {
+      await widget.onSaveDataApiKeySettings(_currentDataApiKeySettings());
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('데이터 API key 로컬 DB에 저장됨')));
+    } finally {
+      if (mounted) {
+        setState(() => _savingDataApiKeys = false);
+      }
     }
-    setState(() => _savingDataApiKeys = false);
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(const SnackBar(content: Text('데이터 API key 로컬 DB에 저장됨')));
   }
 
   Future<void> _changeThemePreference(AppThemePreference preference) async {
@@ -4561,9 +4611,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final sortedApis = widget.apiSources.toList(growable: false)
       ..sort((a, b) => a.priority.compareTo(b.priority));
     final currentDataApiSettings = _currentDataApiKeySettings();
-    final configuredApiCount = currentDataApiSettings.configuredCount(
+    final configuredApiCount = widget.dataApiKeySettings.configuredCount(
       sortedApis,
     );
+    final unsavedApiCount = sortedApis
+        .where(
+          (source) =>
+              currentDataApiSettings.keyFor(source.id) !=
+              widget.dataApiKeySettings.keyFor(source.id),
+        )
+        .length;
     final effectiveSettings = _currentSettings();
 
     return ListView(
@@ -4717,7 +4774,44 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                   FlowChip(label: '읽기 전용 데이터', color: AppColors.blue),
                   FlowChip(label: '로컬 DB 저장', color: AppColors.charcoal),
+                  if (unsavedApiCount > 0)
+                    FlowChip(
+                      label: '변경 $unsavedApiCount',
+                      color: AppColors.amber,
+                    ),
                 ],
+              ),
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  key: const ValueKey('data-api-save-top'),
+                  onPressed:
+                      widget.dataApiKeysLoaded &&
+                          !_savingDataApiKeys &&
+                          unsavedApiCount > 0
+                      ? _saveDataApiKeys
+                      : null,
+                  icon: _savingDataApiKeys
+                      ? const SizedBox.square(
+                          dimension: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : Icon(
+                          unsavedApiCount > 0
+                              ? Icons.save_outlined
+                              : configuredApiCount > 0
+                              ? Icons.check
+                              : Icons.key_outlined,
+                        ),
+                  label: Text(
+                    unsavedApiCount > 0
+                        ? '변경된 API key 저장'
+                        : configuredApiCount > 0
+                        ? 'API key 저장됨'
+                        : 'API key 입력 후 저장',
+                  ),
+                ),
               ),
               const SizedBox(height: 16),
               for (var index = 0; index < sortedApis.length; index++) ...[
@@ -4726,10 +4820,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   controller: _dataApiKeyControllers[sortedApis[index].id]!,
                   enabled: widget.dataApiKeysLoaded,
                   obscureText: _hideDataApiKeys,
-                  hasKey: currentDataApiSettings.hasKeyFor(
+                  savedKey: widget.dataApiKeySettings.keyFor(
                     sortedApis[index].id,
                   ),
+                  saving: _savingDataApiKeys,
                   onChanged: () => setState(() {}),
+                  onSave: _saveDataApiKeys,
                 ),
                 if (index != sortedApis.length - 1) ...[
                   const SizedBox(height: 14),

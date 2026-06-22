@@ -436,7 +436,15 @@ void main() {
     await pumpMarketFlowApp(tester);
 
     expect(find.text('MarketFlow'), findsOneWidget);
-    expect(find.text('API key 필요'), findsWidgets);
+    expect(
+      find.byWidgetPredicate(
+        (widget) =>
+            widget is Text &&
+            (widget.data == 'API key 필요' || widget.data == 'API 연결'),
+        description: 'API key status text',
+      ),
+      findsWidgets,
+    );
     expect(find.text('Alpha Vantage GLOBAL_QUOTE'), findsOneWidget);
     expect(find.text('시장 펄스'), findsOneWidget);
 

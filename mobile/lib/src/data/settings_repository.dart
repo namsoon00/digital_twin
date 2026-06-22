@@ -1,23 +1,29 @@
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'local_settings_database.dart';
 import '../models/market_models.dart';
 import '../theme/app_theme.dart';
 
 class SettingsRepository {
+  SettingsRepository({LocalSettingsDatabase? database})
+    : _database = database ?? const LocalSettingsDatabase();
+
+  final LocalSettingsDatabase _database;
+
   static const _themePreferenceKey = 'app.themeMode';
-  static const _dataApiKeyPrefix = 'dataApi.key.';
-  static const _tossEnabledKey = 'toss.enabled';
-  static const _tossAccountAliasKey = 'toss.accountAlias';
-  static const _tossAccountHintKey = 'toss.accountHint';
-  static const _tossApiBaseUrlKey = 'toss.apiBaseUrl';
+  static const _legacyDataApiKeyPrefix = 'dataApi.key.';
+  static const _legacyTossEnabledKey = 'toss.enabled';
+  static const _legacyTossAccountAliasKey = 'toss.accountAlias';
+  static const _legacyTossAccountHintKey = 'toss.accountHint';
+  static const _legacyTossApiBaseUrlKey = 'toss.apiBaseUrl';
   static const _legacyTossBackendUrlKey = 'toss.backendUrl';
-  static const _tossAppKeyKey = 'toss.appKey';
-  static const _tossAppSecretKey = 'toss.appSecret';
-  static const _tossAccessTokenKey = 'toss.accessToken';
-  static const _tossAccountNumberKey = 'toss.accountNumber';
-  static const _tossTestPathKey = 'toss.testPath';
-  static const _tossReadOnlyKey = 'toss.readOnly';
-  static const _tossOrderLockedKey = 'toss.orderLocked';
+  static const _legacyTossAppKeyKey = 'toss.appKey';
+  static const _legacyTossAppSecretKey = 'toss.appSecret';
+  static const _legacyTossAccessTokenKey = 'toss.accessToken';
+  static const _legacyTossAccountNumberKey = 'toss.accountNumber';
+  static const _legacyTossTestPathKey = 'toss.testPath';
+  static const _legacyTossReadOnlyKey = 'toss.readOnly';
+  static const _legacyTossOrderLockedKey = 'toss.orderLocked';
 
   Future<AppThemePreference> loadThemePreference() async {
     final prefs = await SharedPreferences.getInstance();
@@ -32,10 +38,14 @@ class SettingsRepository {
   Future<DataApiKeySettings> loadDataApiKeySettings(
     Iterable<DataApiSource> sources,
   ) async {
-    final prefs = await SharedPreferences.getInstance();
     final keys = <String, String>{};
     for (final source in sources) {
-      final value = prefs.getString(_dataApiKey(source.id)) ?? '';
+      final value =
+          await _readStringWithLegacy(
+            LocalSettingsDatabase.dataApiKeyStorageKey(source.id),
+            _legacyDataApiKey(source.id),
+          ) ??
+          '';
       if (value.trim().isNotEmpty) {
         keys[source.id] = value;
       }
@@ -47,54 +57,180 @@ class SettingsRepository {
     DataApiKeySettings settings,
     Iterable<DataApiSource> sources,
   ) async {
-    final prefs = await SharedPreferences.getInstance();
     for (final source in sources) {
       final value = settings.keyFor(source.id).trim();
-      final key = _dataApiKey(source.id);
+      final key = LocalSettingsDatabase.dataApiKeyStorageKey(source.id);
       if (value.isEmpty) {
-        await prefs.remove(key);
+        await _database.remove(key);
+        await _database.remove(
+          LocalSettingsDatabase.dataApiKeyUpdatedAtStorageKey(source.id),
+        );
       } else {
-        await prefs.setString(key, value);
+        await _database.writeString(key, value);
+        await _database.markDataApiKeyUpdated(source.id);
       }
     }
   }
 
   Future<TossAccountSettings> loadTossAccountSettings() async {
-    final prefs = await SharedPreferences.getInstance();
+    final enabled =
+        await _readBoolWithLegacy(
+          LocalSettingsDatabase.tossStorageKey('enabled'),
+          _legacyTossEnabledKey,
+        ) ??
+        false;
+    final accountAlias =
+        await _readStringWithLegacy(
+          LocalSettingsDatabase.tossStorageKey('accountAlias'),
+          _legacyTossAccountAliasKey,
+        ) ??
+        '';
+    final accountHint =
+        await _readStringWithLegacy(
+          LocalSettingsDatabase.tossStorageKey('accountHint'),
+          _legacyTossAccountHintKey,
+        ) ??
+        '';
+    var apiBaseUrl = await _readStringWithLegacy(
+      LocalSettingsDatabase.tossStorageKey('apiBaseUrl'),
+      _legacyTossApiBaseUrlKey,
+    );
+    apiBaseUrl ??= await _readStringWithLegacy(
+      LocalSettingsDatabase.tossStorageKey('apiBaseUrl'),
+      _legacyTossBackendUrlKey,
+    );
+    final appKey =
+        await _readStringWithLegacy(
+          LocalSettingsDatabase.tossStorageKey('appKey'),
+          _legacyTossAppKeyKey,
+        ) ??
+        '';
+    final appSecret =
+        await _readStringWithLegacy(
+          LocalSettingsDatabase.tossStorageKey('appSecret'),
+          _legacyTossAppSecretKey,
+        ) ??
+        '';
+    final accessToken =
+        await _readStringWithLegacy(
+          LocalSettingsDatabase.tossStorageKey('accessToken'),
+          _legacyTossAccessTokenKey,
+        ) ??
+        '';
+    final accountNumber =
+        await _readStringWithLegacy(
+          LocalSettingsDatabase.tossStorageKey('accountNumber'),
+          _legacyTossAccountNumberKey,
+        ) ??
+        '';
+    final testPath =
+        await _readStringWithLegacy(
+          LocalSettingsDatabase.tossStorageKey('testPath'),
+          _legacyTossTestPathKey,
+        ) ??
+        '';
+    final readOnly =
+        await _readBoolWithLegacy(
+          LocalSettingsDatabase.tossStorageKey('readOnly'),
+          _legacyTossReadOnlyKey,
+        ) ??
+        true;
+    final orderLocked =
+        await _readBoolWithLegacy(
+          LocalSettingsDatabase.tossStorageKey('orderLocked'),
+          _legacyTossOrderLockedKey,
+        ) ??
+        true;
+
     return TossAccountSettings(
-      enabled: prefs.getBool(_tossEnabledKey) ?? false,
-      accountAlias: prefs.getString(_tossAccountAliasKey) ?? '',
-      accountHint: prefs.getString(_tossAccountHintKey) ?? '',
-      apiBaseUrl:
-          prefs.getString(_tossApiBaseUrlKey) ??
-          prefs.getString(_legacyTossBackendUrlKey) ??
-          '',
-      appKey: prefs.getString(_tossAppKeyKey) ?? '',
-      appSecret: prefs.getString(_tossAppSecretKey) ?? '',
-      accessToken: prefs.getString(_tossAccessTokenKey) ?? '',
-      accountNumber: prefs.getString(_tossAccountNumberKey) ?? '',
-      testPath: prefs.getString(_tossTestPathKey) ?? '',
-      readOnly: prefs.getBool(_tossReadOnlyKey) ?? true,
-      orderLocked: prefs.getBool(_tossOrderLockedKey) ?? true,
+      enabled: enabled,
+      accountAlias: accountAlias,
+      accountHint: accountHint,
+      apiBaseUrl: apiBaseUrl ?? '',
+      appKey: appKey,
+      appSecret: appSecret,
+      accessToken: accessToken,
+      accountNumber: accountNumber,
+      testPath: testPath,
+      readOnly: readOnly,
+      orderLocked: orderLocked,
     );
   }
 
   Future<void> saveTossAccountSettings(TossAccountSettings settings) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_tossEnabledKey, settings.enabled);
-    await prefs.setString(_tossAccountAliasKey, settings.accountAlias);
-    await prefs.setString(_tossAccountHintKey, settings.accountHint);
-    await prefs.setString(_tossApiBaseUrlKey, settings.apiBaseUrl);
-    await prefs.setString(_tossAppKeyKey, settings.appKey);
-    await prefs.setString(_tossAppSecretKey, settings.appSecret);
-    await prefs.setString(_tossAccessTokenKey, settings.accessToken);
-    await prefs.setString(_tossAccountNumberKey, settings.accountNumber);
-    await prefs.setString(_tossTestPathKey, settings.testPath);
-    await prefs.setBool(_tossReadOnlyKey, settings.readOnly);
-    await prefs.setBool(_tossOrderLockedKey, settings.orderLocked);
+    await _database.writeBool(
+      LocalSettingsDatabase.tossStorageKey('enabled'),
+      settings.enabled,
+    );
+    await _database.writeString(
+      LocalSettingsDatabase.tossStorageKey('accountAlias'),
+      settings.accountAlias,
+    );
+    await _database.writeString(
+      LocalSettingsDatabase.tossStorageKey('accountHint'),
+      settings.accountHint,
+    );
+    await _database.writeString(
+      LocalSettingsDatabase.tossStorageKey('apiBaseUrl'),
+      settings.apiBaseUrl,
+    );
+    await _database.writeString(
+      LocalSettingsDatabase.tossStorageKey('appKey'),
+      settings.appKey,
+    );
+    await _database.writeString(
+      LocalSettingsDatabase.tossStorageKey('appSecret'),
+      settings.appSecret,
+    );
+    await _database.writeString(
+      LocalSettingsDatabase.tossStorageKey('accessToken'),
+      settings.accessToken,
+    );
+    await _database.writeString(
+      LocalSettingsDatabase.tossStorageKey('accountNumber'),
+      settings.accountNumber,
+    );
+    await _database.writeString(
+      LocalSettingsDatabase.tossStorageKey('testPath'),
+      settings.testPath,
+    );
+    await _database.writeBool(
+      LocalSettingsDatabase.tossStorageKey('readOnly'),
+      settings.readOnly,
+    );
+    await _database.writeBool(
+      LocalSettingsDatabase.tossStorageKey('orderLocked'),
+      settings.orderLocked,
+    );
   }
 
-  String _dataApiKey(String apiId) {
-    return '$_dataApiKeyPrefix$apiId';
+  Future<String?> _readStringWithLegacy(String key, String legacyKey) async {
+    final stored = await _database.readString(key);
+    if (stored != null) {
+      return stored;
+    }
+    final prefs = await SharedPreferences.getInstance();
+    final legacyValue = prefs.getString(legacyKey);
+    if (legacyValue != null) {
+      await _database.writeString(key, legacyValue);
+    }
+    return legacyValue;
+  }
+
+  Future<bool?> _readBoolWithLegacy(String key, String legacyKey) async {
+    final stored = await _database.readBool(key);
+    if (stored != null) {
+      return stored;
+    }
+    final prefs = await SharedPreferences.getInstance();
+    final legacyValue = prefs.getBool(legacyKey);
+    if (legacyValue != null) {
+      await _database.writeBool(key, legacyValue);
+    }
+    return legacyValue;
+  }
+
+  String _legacyDataApiKey(String apiId) {
+    return '$_legacyDataApiKeyPrefix$apiId';
   }
 }

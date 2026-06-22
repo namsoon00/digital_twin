@@ -18,7 +18,7 @@ flutter run
 flutter run --dart-define=ALPHA_VANTAGE_API_KEY=<your-key>
 ```
 
-앱 실행 후 `설정` 탭에서도 필요한 데이터 API key를 모두 입력할 수 있습니다. Alpha Vantage, 토스증권 Open API, FRED, CoinGecko, DefiLlama, ETF/Fund Flow API, 한국 투자자별 수급 API가 같은 화면에 표시되며, 공급자/커버리지/사용 화면/key 발급 위치/문서 URL은 읽기 전용 메타데이터로 보입니다. 앱은 기본 데이터 조회용 key 문자열만 기기 로컬 설정에 저장하고, Alpha Vantage key는 대시보드 시세 조회에 바로 사용합니다.
+앱 실행 후 `설정` 탭에서도 필요한 데이터 API key를 모두 입력할 수 있습니다. Alpha Vantage, 토스증권 Open API, FRED, CoinGecko, DefiLlama, ETF/Fund Flow API, 한국 투자자별 수급 API가 같은 화면에 표시되며, 공급자/커버리지/사용 화면/key 발급 위치/문서 URL은 읽기 전용 메타데이터로 보입니다. 앱은 기본 데이터 조회용 key 문자열만 기기 로컬 DB에 저장하고, Alpha Vantage key는 대시보드 시세 조회에 바로 사용합니다. GitHub Pages 배포판은 중앙 서버 DB로 key를 전송하지 않습니다.
 
 ## 검증
 
@@ -41,6 +41,7 @@ flutter build web --release --base-href /digital_twin/ --dart-define=ALPHA_VANTA
 앱의 `설정` 탭에서 토스증권 Open API 직접 호출 옵션을 켤 수 있습니다.
 
 - 저장 항목: 계정 별칭, 계좌 식별값, Open API 기본 URL, 연결 테스트 경로, 앱 키, 앱 시크릿, 액세스 토큰, 읽기 전용 여부
+- 저장 위치: 기기 로컬 DB
 - 호출 방식: 앱에서 REST API로 직접 호출하며, `Authorization: Bearer <token>`, `appkey`, `appsecret` 헤더를 전송합니다.
 - 주의 사항: 웹 배포에서는 키와 토큰이 브라우저 저장소와 네트워크 요청에 노출될 수 있습니다. 개인 기기 설치용으로 먼저 사용하세요.
 - 주문 기능: 서버 검증 전까지 앱에서 잠금 상태

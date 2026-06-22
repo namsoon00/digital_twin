@@ -8,6 +8,8 @@ import 'package:market_flow/main.dart';
 import 'package:market_flow/src/data/crypto_market_service.dart';
 import 'package:market_flow/src/data/economic_feed_service.dart';
 import 'package:market_flow/src/data/flow_repository.dart';
+import 'package:market_flow/src/data/local_settings_database.dart';
+import 'package:market_flow/src/data/settings_repository.dart';
 import 'package:market_flow/src/models/market_models.dart';
 import 'package:market_flow/src/widgets/sparkline.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -216,6 +218,105 @@ void main() {
     expect(result.assets.single.priceUsd, 104200.5);
     expect(result.assets.single.change7dPercent, 4.8);
   });
+
+  test(
+    'SettingsRepository stores API keys in the local settings database',
+    () async {
+      final repository = SettingsRepository();
+      final sources = const MockFlowRepository().dataApiSources;
+
+      await repository.saveDataApiKeySettings(
+        const DataApiKeySettings(
+          keys: {'alpha-vantage': 'alpha-key', 'coingecko': 'coingecko-key'},
+        ),
+        sources,
+      );
+
+      final prefs = await SharedPreferences.getInstance();
+      expect(
+        prefs.getString(
+          LocalSettingsDatabase.dataApiKeyStorageKey('alpha-vantage'),
+        ),
+        'alpha-key',
+      );
+      expect(
+        prefs.getString(
+          LocalSettingsDatabase.dataApiKeyStorageKey('coingecko'),
+        ),
+        'coingecko-key',
+      );
+      expect(
+        prefs.getString(
+          LocalSettingsDatabase.dataApiKeyUpdatedAtStorageKey('alpha-vantage'),
+        ),
+        isNotEmpty,
+      );
+      expect(prefs.getInt(LocalSettingsDatabase.schemaVersionKey), 1);
+      expect(prefs.getString(LocalSettingsDatabase.lastWriteAtKey), isNotEmpty);
+    },
+  );
+
+  test(
+    'SettingsRepository migrates legacy API keys into local database',
+    () async {
+      SharedPreferences.setMockInitialValues({
+        'dataApi.key.alpha-vantage': 'legacy-alpha-key',
+      });
+      final repository = SettingsRepository();
+      final sources = const MockFlowRepository().dataApiSources;
+
+      final settings = await repository.loadDataApiKeySettings(sources);
+
+      expect(settings.keyFor('alpha-vantage'), 'legacy-alpha-key');
+      final prefs = await SharedPreferences.getInstance();
+      expect(
+        prefs.getString(
+          LocalSettingsDatabase.dataApiKeyStorageKey('alpha-vantage'),
+        ),
+        'legacy-alpha-key',
+      );
+    },
+  );
+
+  test(
+    'SettingsRepository stores Toss credentials in local database',
+    () async {
+      final repository = SettingsRepository();
+      await repository.saveTossAccountSettings(
+        const TossAccountSettings(
+          enabled: true,
+          accountAlias: '토스 주계좌',
+          accountHint: '1234',
+          apiBaseUrl: 'https://open-api.example.com',
+          appKey: 'toss-app-key',
+          appSecret: 'toss-secret',
+          accessToken: 'token-value',
+          accountNumber: '000-123',
+          testPath: '/v1/accounts',
+          readOnly: true,
+          orderLocked: true,
+        ),
+      );
+
+      final prefs = await SharedPreferences.getInstance();
+      expect(
+        prefs.getString(LocalSettingsDatabase.tossStorageKey('appKey')),
+        'toss-app-key',
+      );
+      expect(
+        prefs.getString(LocalSettingsDatabase.tossStorageKey('appSecret')),
+        'toss-secret',
+      );
+      expect(
+        prefs.getString(LocalSettingsDatabase.tossStorageKey('accessToken')),
+        'token-value',
+      );
+      expect(
+        prefs.getBool(LocalSettingsDatabase.tossStorageKey('enabled')),
+        true,
+      );
+    },
+  );
 
   testWidgets('MarketFlow defaults to dark mode', (tester) async {
     await pumpMarketFlowApp(tester);
@@ -492,7 +593,7 @@ void main() {
     expect(find.text('라이트'), findsOneWidget);
     expect(find.text('다크'), findsOneWidget);
     expect(find.text('데이터 API key'), findsOneWidget);
-    expect(find.text('기본 데이터 조회용 key를 기기 로컬 설정에 저장'), findsOneWidget);
+    expect(find.text('등록한 key를 기기 로컬 DB에 저장'), findsOneWidget);
     expect(find.text('Alpha Vantage'), findsOneWidget);
     expect(find.text('FRED API'), findsOneWidget);
     expect(find.text('CoinGecko API'), findsOneWidget);
@@ -502,6 +603,7 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('읽기 전용 데이터'), findsOneWidget);
+    expect(find.text('로컬 DB 저장'), findsOneWidget);
     expect(find.text('API key'), findsWidgets);
     expect(find.text('데이터 API key 저장'), findsOneWidget);
 
@@ -513,7 +615,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('토스증권 계정'), findsOneWidget);
-    expect(find.text('앱에서 Open API 직접 호출'), findsOneWidget);
+    expect(find.text('앱에서 Open API 직접 호출 · 로컬 DB 저장'), findsOneWidget);
     expect(find.text('Open API 기본 URL'), findsOneWidget);
     expect(find.text('앱 키'), findsOneWidget);
     expect(find.text('앱 시크릿'), findsOneWidget);

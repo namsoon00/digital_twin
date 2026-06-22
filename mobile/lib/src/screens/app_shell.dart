@@ -4511,7 +4511,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() => _savingDataApiKeys = false);
     ScaffoldMessenger.of(
       context,
-    ).showSnackBar(const SnackBar(content: Text('데이터 API key 저장됨')));
+    ).showSnackBar(const SnackBar(content: Text('데이터 API key 로컬 DB에 저장됨')));
   }
 
   Future<void> _changeThemePreference(AppThemePreference preference) async {
@@ -4684,7 +4684,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          '기본 데이터 조회용 key를 기기 로컬 설정에 저장',
+                          '등록한 key를 기기 로컬 DB에 저장',
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                           style: Theme.of(context).textTheme.bodyMedium,
@@ -4716,7 +4716,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         : AppColors.amber,
                   ),
                   FlowChip(label: '읽기 전용 데이터', color: AppColors.blue),
-                  FlowChip(label: '로컬 저장', color: AppColors.charcoal),
+                  FlowChip(label: '로컬 DB 저장', color: AppColors.charcoal),
                 ],
               ),
               const SizedBox(height: 16),
@@ -4788,7 +4788,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          '앱에서 Open API 직접 호출',
+                          '앱에서 Open API 직접 호출 · 로컬 DB 저장',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: Theme.of(context).textTheme.bodyMedium,
@@ -4948,7 +4948,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
               const SizedBox(height: 8),
               Text(
-                '직접 호출 모드는 API key, secret, token을 이 기기 설정에 저장합니다. 웹 배포에서는 브라우저 저장소와 네트워크 요청에 노출될 수 있습니다.',
+                '직접 호출 모드는 API key, secret, token을 이 기기의 로컬 DB에 저장합니다. 중앙 서버로 전송하지 않지만, 웹 배포에서는 브라우저 저장소와 네트워크 요청에 노출될 수 있습니다.',
                 style: Theme.of(context).textTheme.bodyMedium,
               ),
               const SizedBox(height: 16),

@@ -255,6 +255,36 @@ class MockFlowRepository implements FlowRepository {
       keyName: '벤더별 API key',
       docsUrl: '선정 후 입력',
       priority: 7,
+      vendorOptions: [
+        DataApiVendorOption(
+          id: 'epfr',
+          name: 'EPFR Global Fund Flows',
+          provider: 'EPFR',
+          docsUrl: 'https://epfr.com/',
+          endpointHint: '계약 후 제공되는 fund flow endpoint',
+        ),
+        DataApiVendorOption(
+          id: 'etf-global',
+          name: 'ETF Global',
+          provider: 'ETF Global',
+          docsUrl: 'https://www.etfg.com/',
+          endpointHint: 'ETF flow/holdings 데이터 endpoint',
+        ),
+        DataApiVendorOption(
+          id: 'nasdaq-data-link',
+          name: 'Nasdaq Data Link',
+          provider: 'Nasdaq',
+          docsUrl: 'https://data.nasdaq.com/',
+          endpointHint: '구독 데이터셋별 endpoint',
+        ),
+        DataApiVendorOption(
+          id: 'custom',
+          name: '직접 입력/계약 벤더',
+          provider: '사용자 선택 벤더',
+          docsUrl: '계약 벤더 문서',
+          endpointHint: '벤더 문서의 REST endpoint',
+        ),
+      ],
     ),
     DataApiSource(
       id: 'kr-investor-flow',
@@ -266,6 +296,36 @@ class MockFlowRepository implements FlowRepository {
       keyName: '벤더별 API key',
       docsUrl: '선정 후 입력',
       priority: 8,
+      vendorOptions: [
+        DataApiVendorOption(
+          id: 'krx-data',
+          name: 'KRX 정보데이터시스템',
+          provider: 'KRX',
+          docsUrl: 'https://data.krx.co.kr/',
+          endpointHint: 'KRX 데이터 상품/다운로드 endpoint',
+        ),
+        DataApiVendorOption(
+          id: 'fnguide',
+          name: 'FnGuide DataGuide',
+          provider: 'FnGuide',
+          docsUrl: 'https://www.fnguide.com/',
+          endpointHint: '계약 후 제공되는 DataGuide endpoint',
+        ),
+        DataApiVendorOption(
+          id: 'securities-open-api',
+          name: '증권사 Open API',
+          provider: '국내 증권사',
+          docsUrl: '이용 중인 증권사 개발자 문서',
+          endpointHint: '투자자별 매매동향 endpoint',
+        ),
+        DataApiVendorOption(
+          id: 'custom',
+          name: '직접 입력/계약 벤더',
+          provider: '사용자 선택 벤더',
+          docsUrl: '계약 벤더 문서',
+          endpointHint: '벤더 문서의 REST endpoint',
+        ),
+      ],
     ),
   ];
 

@@ -39,6 +39,7 @@ class SettingsRepository {
     Iterable<DataApiSource> sources,
   ) async {
     final keys = <String, String>{};
+    final vendors = <String, String>{};
     for (final source in sources) {
       final value =
           await _readStringWithLegacy(
@@ -49,8 +50,17 @@ class SettingsRepository {
       if (value.trim().isNotEmpty) {
         keys[source.id] = value;
       }
+      final vendor = await _database.readString(
+        LocalSettingsDatabase.dataApiVendorStorageKey(source.id),
+      );
+      if (vendor != null && vendor.trim().isNotEmpty) {
+        vendors[source.id] = vendor;
+      }
     }
-    return DataApiKeySettings(keys: Map.unmodifiable(keys));
+    return DataApiKeySettings(
+      keys: Map.unmodifiable(keys),
+      vendors: Map.unmodifiable(vendors),
+    );
   }
 
   Future<void> saveDataApiKeySettings(
@@ -68,6 +78,16 @@ class SettingsRepository {
       } else {
         await _database.writeString(key, value);
         await _database.markDataApiKeyUpdated(source.id);
+      }
+
+      final vendor = settings.vendorFor(source.id).trim();
+      final vendorKey = LocalSettingsDatabase.dataApiVendorStorageKey(
+        source.id,
+      );
+      if (vendor.isEmpty) {
+        await _database.remove(vendorKey);
+      } else {
+        await _database.writeString(vendorKey, vendor);
       }
     }
   }

@@ -134,6 +134,22 @@ class EconomicFeedChannel {
   final String url;
 }
 
+class DataApiVendorOption {
+  const DataApiVendorOption({
+    required this.id,
+    required this.name,
+    required this.provider,
+    required this.docsUrl,
+    required this.endpointHint,
+  });
+
+  final String id;
+  final String name;
+  final String provider;
+  final String docsUrl;
+  final String endpointHint;
+}
+
 class DataApiSource {
   const DataApiSource({
     required this.id,
@@ -145,6 +161,7 @@ class DataApiSource {
     required this.keyName,
     required this.docsUrl,
     required this.priority,
+    this.vendorOptions = const [],
   });
 
   final String id;
@@ -156,6 +173,21 @@ class DataApiSource {
   final String keyName;
   final String docsUrl;
   final int priority;
+  final List<DataApiVendorOption> vendorOptions;
+
+  bool get requiresVendorSelection {
+    return status == ApiIntegrationStatus.vendorNeeded &&
+        vendorOptions.isNotEmpty;
+  }
+
+  DataApiVendorOption? vendorOptionFor(String vendorId) {
+    for (final option in vendorOptions) {
+      if (option.id == vendorId) {
+        return option;
+      }
+    }
+    return null;
+  }
 }
 
 class EconomicFeedItem {
@@ -191,24 +223,38 @@ class EconomicFeedItem {
 }
 
 class DataApiKeySettings {
-  const DataApiKeySettings({required this.keys});
+  const DataApiKeySettings({required this.keys, this.vendors = const {}});
 
   factory DataApiKeySettings.empty() {
-    return const DataApiKeySettings(keys: {});
+    return const DataApiKeySettings(keys: {}, vendors: {});
   }
 
   final Map<String, String> keys;
+  final Map<String, String> vendors;
 
   String keyFor(String apiId) {
     return keys[apiId] ?? '';
+  }
+
+  String vendorFor(String apiId) {
+    return vendors[apiId] ?? '';
   }
 
   bool hasKeyFor(String apiId) {
     return keyFor(apiId).trim().isNotEmpty;
   }
 
+  bool hasVendorFor(String apiId) {
+    return vendorFor(apiId).trim().isNotEmpty;
+  }
+
   int configuredCount(Iterable<DataApiSource> sources) {
-    return sources.where((source) => hasKeyFor(source.id)).length;
+    return sources.where((source) {
+      if (source.requiresVendorSelection) {
+        return hasVendorFor(source.id);
+      }
+      return hasKeyFor(source.id);
+    }).length;
   }
 
   DataApiKeySettings copyWithKey(String apiId, String value) {
@@ -219,7 +265,24 @@ class DataApiKeySettings {
     } else {
       next[apiId] = normalized;
     }
-    return DataApiKeySettings(keys: Map.unmodifiable(next));
+    return DataApiKeySettings(
+      keys: Map.unmodifiable(next),
+      vendors: Map.unmodifiable(vendors),
+    );
+  }
+
+  DataApiKeySettings copyWithVendor(String apiId, String value) {
+    final next = Map<String, String>.of(vendors);
+    final normalized = value.trim();
+    if (normalized.isEmpty) {
+      next.remove(apiId);
+    } else {
+      next[apiId] = normalized;
+    }
+    return DataApiKeySettings(
+      keys: Map.unmodifiable(keys),
+      vendors: Map.unmodifiable(next),
+    );
   }
 }
 

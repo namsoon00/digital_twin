@@ -16,6 +16,10 @@ class LocalSettingsDatabase {
     return 'localSettingsDb.dataApiKeyUpdatedAt.$apiId';
   }
 
+  static String dataApiVendorStorageKey(String apiId) {
+    return 'localSettingsDb.dataApiVendor.$apiId';
+  }
+
   static String tossStorageKey(String field) {
     return 'localSettingsDb.toss.$field';
   }

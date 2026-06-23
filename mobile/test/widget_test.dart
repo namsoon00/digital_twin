@@ -314,6 +314,7 @@ void main() {
       await repository.saveDataApiKeySettings(
         const DataApiKeySettings(
           keys: {'alpha-vantage': 'alpha-key', 'coingecko': 'coingecko-key'},
+          vendors: {'fund-flow-vendor': 'epfr'},
         ),
         sources,
       );
@@ -336,6 +337,12 @@ void main() {
           LocalSettingsDatabase.dataApiKeyUpdatedAtStorageKey('alpha-vantage'),
         ),
         isNotEmpty,
+      );
+      expect(
+        prefs.getString(
+          LocalSettingsDatabase.dataApiVendorStorageKey('fund-flow-vendor'),
+        ),
+        'epfr',
       );
       expect(prefs.getInt(LocalSettingsDatabase.schemaVersionKey), 1);
       expect(prefs.getString(LocalSettingsDatabase.lastWriteAtKey), isNotEmpty);
@@ -764,6 +771,29 @@ void main() {
       find.text('연동 데이터: 자금 탭 코인 가격, 시총, 거래량, 1h/24h/7d 변화율'),
       findsOneWidget,
     );
+
+    await tester.scrollUntilVisible(
+      find.byKey(const ValueKey('data-api-vendor-fund-flow-vendor')),
+      520,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('벤더 선택'), findsWidgets);
+    expect(find.text('벤더 API key'), findsWidgets);
+
+    await tester.tap(
+      find.byKey(const ValueKey('data-api-vendor-fund-flow-vendor')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('EPFR Global Fund Flows'), findsOneWidget);
+    expect(find.text('Nasdaq Data Link'), findsOneWidget);
+
+    await tester.tap(find.text('EPFR Global Fund Flows'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('계약 후 제공되는 fund flow endpoint'), findsOneWidget);
 
     await tester.scrollUntilVisible(
       find.text('토스증권 계정'),

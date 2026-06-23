@@ -2737,10 +2737,13 @@ class DataApiKeyField extends StatelessWidget {
     required this.enabled,
     required this.obscureText,
     required this.savedKey,
+    this.selectedVendor = '',
+    this.savedVendor = '',
     required this.saving,
     required this.testing,
     required this.probeResult,
     required this.onChanged,
+    this.onVendorChanged,
     required this.onSave,
     required this.onTest,
     super.key,
@@ -2751,10 +2754,13 @@ class DataApiKeyField extends StatelessWidget {
   final bool enabled;
   final bool obscureText;
   final String savedKey;
+  final String selectedVendor;
+  final String savedVendor;
   final bool saving;
   final bool testing;
   final DataApiProbeResult? probeResult;
   final VoidCallback onChanged;
+  final ValueChanged<String?>? onVendorChanged;
   final VoidCallback onSave;
   final VoidCallback onTest;
 
@@ -2763,9 +2769,24 @@ class DataApiKeyField extends StatelessWidget {
     final color = _apiStatusColor(api.status);
     final currentKey = controller.text.trim();
     final normalizedSavedKey = savedKey.trim();
+    final currentVendor = selectedVendor.trim();
+    final normalizedSavedVendor = savedVendor.trim();
+    final requiresVendorSelection = api.requiresVendorSelection;
+    final selectedVendorOption = requiresVendorSelection
+        ? api.vendorOptionFor(currentVendor)
+        : null;
     final hasSavedKey = normalizedSavedKey.isNotEmpty;
     final hasCurrentKey = currentKey.isNotEmpty;
-    final hasUnsavedChanges = currentKey != normalizedSavedKey;
+    final hasSavedVendor = normalizedSavedVendor.isNotEmpty;
+    final hasCurrentConfiguration = requiresVendorSelection
+        ? currentVendor.isNotEmpty || hasCurrentKey
+        : hasCurrentKey;
+    final hasUnsavedChanges =
+        currentKey != normalizedSavedKey ||
+        currentVendor != normalizedSavedVendor;
+    final hasSavedConfiguration = requiresVendorSelection
+        ? hasSavedVendor
+        : hasSavedKey;
     final supportsTest = DataApiProbeClient.supportsSource(api.id);
     final requiresKey = DataApiProbeClient.requiresKey(api.id);
     final canTest =
@@ -2775,17 +2796,19 @@ class DataApiKeyField extends StatelessWidget {
         supportsTest &&
         (!requiresKey || hasCurrentKey);
     final statusLabel = hasUnsavedChanges
-        ? (hasCurrentKey ? '변경됨' : '삭제 예정')
-        : (hasSavedKey ? '저장됨' : '미등록');
+        ? (hasCurrentConfiguration ? '변경됨' : '삭제 예정')
+        : (hasSavedConfiguration ? '저장됨' : '미등록');
     final statusColor = hasUnsavedChanges
         ? AppColors.amber
-        : (hasSavedKey ? AppColors.green : AppColors.muted);
+        : (hasSavedConfiguration ? AppColors.green : AppColors.muted);
     final buttonLabel = saving
         ? '저장 중'
         : hasUnsavedChanges
         ? '입력값 저장'
-        : hasSavedKey
+        : hasSavedConfiguration
         ? '저장됨'
+        : requiresVendorSelection
+        ? '벤더 선택 후 저장'
         : 'API key 입력 후 저장';
 
     return Column(
@@ -2874,6 +2897,62 @@ class DataApiKeyField extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 12),
+        if (requiresVendorSelection) ...[
+          DropdownButtonFormField<String>(
+            key: ValueKey('data-api-vendor-${api.id}'),
+            initialValue: selectedVendorOption?.id,
+            isExpanded: true,
+            decoration: const InputDecoration(
+              labelText: '벤더 선택',
+              border: OutlineInputBorder(),
+            ),
+            hint: const Text('벤더를 선택하세요'),
+            items: [
+              for (final option in api.vendorOptions)
+                DropdownMenuItem(
+                  value: option.id,
+                  child: Text(option.name, overflow: TextOverflow.ellipsis),
+                ),
+            ],
+            onChanged: enabled ? onVendorChanged : null,
+          ),
+          if (selectedVendorOption != null) ...[
+            const SizedBox(height: 8),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(
+                  Icons.business_center_outlined,
+                  size: 16,
+                  color: AppColors.muted,
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    '${selectedVendorOption.provider} · '
+                    '${selectedVendorOption.endpointHint}',
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(Icons.link_outlined, size: 16, color: AppColors.muted),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    '벤더 문서: ${selectedVendorOption.docsUrl}',
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
+                ),
+              ],
+            ),
+          ],
+          const SizedBox(height: 12),
+        ],
         TextField(
           key: ValueKey('data-api-key-input-${api.id}'),
           controller: controller,
@@ -2881,8 +2960,8 @@ class DataApiKeyField extends StatelessWidget {
           obscureText: obscureText,
           keyboardType: TextInputType.visiblePassword,
           decoration: InputDecoration(
-            labelText: 'API key',
-            hintText: api.keyName,
+            labelText: requiresVendorSelection ? '벤더 API key' : 'API key',
+            hintText: requiresVendorSelection ? '선택한 벤더의 API key' : api.keyName,
             border: const OutlineInputBorder(),
           ),
           onChanged: (_) => onChanged(),
@@ -2935,10 +3014,14 @@ class DataApiKeyField extends StatelessWidget {
         Text(
           hasUnsavedChanges
               ? '저장 버튼을 눌러야 로컬 DB에 반영됩니다.'
-              : hasSavedKey
-              ? '로컬 DB에 저장된 key입니다.'
+              : hasSavedConfiguration
+              ? requiresVendorSelection
+                    ? '선택한 벤더 구성이 로컬 DB에 저장되어 있습니다.'
+                    : '로컬 DB에 저장된 key입니다.'
               : requiresKey
-              ? '아직 로컬 DB에 저장된 key가 없습니다.'
+              ? requiresVendorSelection
+                    ? '벤더를 먼저 선택하고 필요한 key를 입력하세요.'
+                    : '아직 로컬 DB에 저장된 key가 없습니다.'
               : 'key 없이 공개 API 테스트가 가능합니다.',
           style: Theme.of(context).textTheme.bodyMedium,
         ),
@@ -4779,6 +4862,7 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   final Map<String, TextEditingController> _dataApiKeyControllers = {};
+  final Map<String, String> _dataApiVendorSelections = {};
   final _accountAliasController = TextEditingController();
   final _accountHintController = TextEditingController();
   final _apiBaseUrlController = TextEditingController();
@@ -4841,6 +4925,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     for (final id in removedIds) {
       _dataApiKeyControllers.remove(id)?.dispose();
     }
+    _dataApiVendorSelections.removeWhere((id, _) => !sourceIds.contains(id));
 
     for (final source in widget.apiSources) {
       final controller = _dataApiKeyControllers.putIfAbsent(
@@ -4848,6 +4933,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
         () => TextEditingController(),
       );
       controller.text = widget.dataApiKeySettings.keyFor(source.id);
+      if (source.requiresVendorSelection) {
+        final savedVendor = widget.dataApiKeySettings.vendorFor(source.id);
+        _dataApiVendorSelections[source.id] =
+            source.vendorOptionFor(savedVendor) == null ? '' : savedVendor;
+      } else {
+        _dataApiVendorSelections.remove(source.id);
+      }
     }
   }
 
@@ -4885,6 +4977,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
     for (final source in widget.apiSources) {
       final value = _dataApiKeyControllers[source.id]?.text ?? '';
       settings = settings.copyWithKey(source.id, value);
+      if (source.requiresVendorSelection) {
+        settings = settings.copyWithVendor(
+          source.id,
+          _dataApiVendorSelections[source.id] ?? '',
+        );
+      }
     }
     return settings;
   }
@@ -4984,7 +5082,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
         .where(
           (source) =>
               currentDataApiSettings.keyFor(source.id) !=
-              widget.dataApiKeySettings.keyFor(source.id),
+                  widget.dataApiKeySettings.keyFor(source.id) ||
+              currentDataApiSettings.vendorFor(source.id) !=
+                  widget.dataApiKeySettings.vendorFor(source.id),
         )
         .length;
     final effectiveSettings = _currentSettings();
@@ -5133,7 +5233,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 runSpacing: 8,
                 children: [
                   FlowChip(
-                    label: '$configuredApiCount/${sortedApis.length} key',
+                    label: '$configuredApiCount/${sortedApis.length} 설정',
                     color: configuredApiCount == sortedApis.length
                         ? AppColors.green
                         : AppColors.amber,
@@ -5189,10 +5289,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   savedKey: widget.dataApiKeySettings.keyFor(
                     sortedApis[index].id,
                   ),
+                  selectedVendor:
+                      _dataApiVendorSelections[sortedApis[index].id] ?? '',
+                  savedVendor: widget.dataApiKeySettings.vendorFor(
+                    sortedApis[index].id,
+                  ),
                   saving: _savingDataApiKeys,
                   testing: _testingDataApiId == sortedApis[index].id,
                   probeResult: _dataApiProbeResults[sortedApis[index].id],
                   onChanged: () => setState(() {}),
+                  onVendorChanged: (value) => setState(() {
+                    _dataApiVendorSelections[sortedApis[index].id] =
+                        value ?? '';
+                  }),
                   onSave: _saveDataApiKeys,
                   onTest: () => _testDataApi(sortedApis[index]),
                 ),

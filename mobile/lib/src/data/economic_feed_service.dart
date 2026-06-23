@@ -65,15 +65,20 @@ class EconomicFeedFetchResult {
 }
 
 abstract class EconomicFeedService {
+  List<EconomicFeedChannel> get feedChannels => const [];
+
   Future<EconomicFeedFetchResult> fetchFeeds();
 
   void dispose() {}
 }
 
 class StaticEconomicFeedService implements EconomicFeedService {
-  const StaticEconomicFeedService(this.items);
+  const StaticEconomicFeedService(this.items, {this.feedChannels = const []});
 
   final List<EconomicFeedItem> items;
+
+  @override
+  final List<EconomicFeedChannel> feedChannels;
 
   @override
   Future<EconomicFeedFetchResult> fetchFeeds() async {
@@ -108,6 +113,7 @@ class GoogleNewsEconomicFeedService implements EconomicFeedService {
   static const _queries = [
     _EconomicFeedQuery(
       id: 'us-liquidity',
+      name: '미국 유동성',
       search: '미국 금리 달러 유동성 주식 시장 when:3d',
       type: EconomicFeedType.liquidity,
       region: MarketRegion.unitedStates,
@@ -116,6 +122,7 @@ class GoogleNewsEconomicFeedService implements EconomicFeedService {
     ),
     _EconomicFeedQuery(
       id: 'ai-capex',
+      name: 'AI CAPEX',
       search: 'AI capex 반도체 전력 인프라 데이터센터 주식 when:7d',
       type: EconomicFeedType.flow,
       region: MarketRegion.unitedStates,
@@ -124,6 +131,7 @@ class GoogleNewsEconomicFeedService implements EconomicFeedService {
     ),
     _EconomicFeedQuery(
       id: 'kr-foreign-flow',
+      name: '한국 수급',
       search: '코스피 외국인 순매수 반도체 방산 수급 when:3d',
       type: EconomicFeedType.flow,
       region: MarketRegion.korea,
@@ -132,6 +140,7 @@ class GoogleNewsEconomicFeedService implements EconomicFeedService {
     ),
     _EconomicFeedQuery(
       id: 'central-bank-policy',
+      name: '중앙은행 정책',
       search: '연준 한국은행 금리 인하 물가 중앙은행 when:7d',
       type: EconomicFeedType.policy,
       region: MarketRegion.all,
@@ -140,6 +149,7 @@ class GoogleNewsEconomicFeedService implements EconomicFeedService {
     ),
     _EconomicFeedQuery(
       id: 'earnings-margin',
+      name: '실적/마진',
       search: '미국 실적 시즌 마진 가이던스 주식 when:7d',
       type: EconomicFeedType.earnings,
       region: MarketRegion.unitedStates,
@@ -148,6 +158,7 @@ class GoogleNewsEconomicFeedService implements EconomicFeedService {
     ),
     _EconomicFeedQuery(
       id: 'risk-assets',
+      name: '위험자산',
       search: '금 달러 변동성 위험자산 주식 시장 when:3d',
       type: EconomicFeedType.risk,
       region: MarketRegion.all,
@@ -156,6 +167,7 @@ class GoogleNewsEconomicFeedService implements EconomicFeedService {
     ),
     _EconomicFeedQuery(
       id: 'crypto-liquidity',
+      name: '코인 유동성',
       search: '비트코인 스테이블코인 유동성 crypto market when:7d',
       type: EconomicFeedType.macro,
       region: MarketRegion.all,
@@ -164,7 +176,27 @@ class GoogleNewsEconomicFeedService implements EconomicFeedService {
     ),
   ];
 
+  static List<EconomicFeedChannel> get defaultFeedChannels {
+    return _queries
+        .map(
+          (query) => EconomicFeedChannel(
+            id: query.id,
+            name: query.name,
+            provider: provider,
+            query: query.displayQuery,
+            type: query.type,
+            region: query.region,
+            tags: query.tags,
+            url: _googleNewsSearchUri(query).toString(),
+          ),
+        )
+        .toList(growable: false);
+  }
+
   final http.Client _client;
+
+  @override
+  List<EconomicFeedChannel> get feedChannels => defaultFeedChannels;
 
   @override
   void dispose() => _client.close();
@@ -217,12 +249,7 @@ class GoogleNewsEconomicFeedService implements EconomicFeedService {
   }
 
   Future<List<EconomicFeedItem>> _fetchQuery(_EconomicFeedQuery query) async {
-    final uri = Uri.https('news.google.com', endpoint, {
-      'q': query.search,
-      'hl': 'ko',
-      'gl': 'KR',
-      'ceid': 'KR:ko',
-    });
+    final uri = _googleNewsRssUri(query);
     final body = await _fetchRssBody(uri);
     final blocks = RegExp(
       r'<item\b[\s\S]*?<\/item>',
@@ -294,8 +321,28 @@ class GoogleNewsEconomicFeedService implements EconomicFeedService {
       impactScore: _impactScore(query, title, summary, publishedAt),
       tags: query.tags,
       url: link,
+      channelId: query.id,
+      channelName: query.name,
       publishedAt: publishedAt,
     );
+  }
+
+  static Uri _googleNewsRssUri(_EconomicFeedQuery query) {
+    return Uri.https('news.google.com', endpoint, {
+      'q': query.search,
+      'hl': 'ko',
+      'gl': 'KR',
+      'ceid': 'KR:ko',
+    });
+  }
+
+  static Uri _googleNewsSearchUri(_EconomicFeedQuery query) {
+    return Uri.https('news.google.com', '/search', {
+      'q': query.displayQuery,
+      'hl': 'ko',
+      'gl': 'KR',
+      'ceid': 'KR:ko',
+    });
   }
 
   static List<EconomicFeedItem> _dedupe(List<EconomicFeedItem> items) {
@@ -464,6 +511,7 @@ class GoogleNewsEconomicFeedService implements EconomicFeedService {
 class _EconomicFeedQuery {
   const _EconomicFeedQuery({
     required this.id,
+    required this.name,
     required this.search,
     required this.type,
     required this.region,
@@ -472,11 +520,16 @@ class _EconomicFeedQuery {
   });
 
   final String id;
+  final String name;
   final String search;
   final EconomicFeedType type;
   final MarketRegion region;
   final List<String> tags;
   final int baseImpact;
+
+  String get displayQuery {
+    return search.replaceAll(RegExp(r'\s*when:\d+d'), '').trim();
+  }
 }
 
 class _FeedQueryResult {

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../data/checklist_repository.dart';
 import '../data/crypto_market_service.dart';
@@ -343,6 +344,13 @@ class _AppShellState extends State<AppShell> {
       ..sort(_compareEconomicFeeds);
   }
 
+  List<EconomicFeedChannel> get _feedChannels {
+    final serviceChannels = _economicFeedService.feedChannels;
+    return serviceChannels.isEmpty
+        ? GoogleNewsEconomicFeedService.defaultFeedChannels
+        : serviceChannels;
+  }
+
   List<ThemePulse> get _themes {
     return widget.repository.themes
         .where((theme) => _matchesRegion(theme.region))
@@ -395,6 +403,7 @@ class _AppShellState extends State<AppShell> {
       ),
       EconomicFeedScreen(
         feeds: _economicFeeds,
+        feedChannels: _feedChannels,
         feedSnapshot: _feedSnapshot,
         onRefreshFeeds: _refreshEconomicFeeds,
         pulses: _pulses,
@@ -772,6 +781,7 @@ class DashboardScreen extends StatelessWidget {
 class EconomicFeedScreen extends StatefulWidget {
   const EconomicFeedScreen({
     required this.feeds,
+    required this.feedChannels,
     required this.feedSnapshot,
     required this.onRefreshFeeds,
     required this.pulses,
@@ -783,6 +793,7 @@ class EconomicFeedScreen extends StatefulWidget {
   });
 
   final List<EconomicFeedItem> feeds;
+  final List<EconomicFeedChannel> feedChannels;
   final EconomicFeedFetchSnapshot feedSnapshot;
   final Future<void> Function() onRefreshFeeds;
   final List<MarketPulse> pulses;
@@ -797,6 +808,40 @@ class EconomicFeedScreen extends StatefulWidget {
 
 class _EconomicFeedScreenState extends State<EconomicFeedScreen> {
   String _filter = 'all';
+
+  Future<void> _openFeedInAppBrowser(EconomicFeedItem feed) async {
+    final uri = Uri.tryParse(feed.url.trim());
+    if (uri == null ||
+        uri.host.isEmpty ||
+        (uri.scheme != 'http' && uri.scheme != 'https')) {
+      _showFeedMessage('열 수 있는 상세 링크가 없습니다.');
+      return;
+    }
+
+    try {
+      final opened = await launchUrl(uri, mode: LaunchMode.inAppBrowserView);
+      if (!mounted) {
+        return;
+      }
+      if (!opened) {
+        _showFeedMessage('상세 페이지를 열 수 없습니다.');
+      }
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+      _showFeedMessage('상세 페이지를 열 수 없습니다.');
+    }
+  }
+
+  void _showFeedMessage(String message) {
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -848,6 +893,13 @@ class _EconomicFeedScreenState extends State<EconomicFeedScreen> {
           quoteSnapshot: widget.quoteSnapshot,
         ),
         const SizedBox(height: 12),
+        if (widget.feedChannels.isNotEmpty) ...[
+          EconomicFeedChannelStrip(
+            channels: widget.feedChannels,
+            feeds: rankedFeeds,
+          ),
+          const SizedBox(height: 12),
+        ],
         SingleChildScrollView(
           scrollDirection: Axis.horizontal,
           child: SegmentedButton<String>(
@@ -892,10 +944,147 @@ class _EconomicFeedScreenState extends State<EconomicFeedScreen> {
           ...filteredFeeds.map(
             (feed) => Padding(
               padding: const EdgeInsets.only(bottom: 10),
-              child: EconomicFeedCard(feed: feed),
+              child: EconomicFeedCard(
+                feed: feed,
+                onOpen: _openFeedInAppBrowser,
+              ),
             ),
           ),
       ],
+    );
+  }
+}
+
+class EconomicFeedChannelStrip extends StatelessWidget {
+  const EconomicFeedChannelStrip({
+    required this.channels,
+    required this.feeds,
+    super.key,
+  });
+
+  final List<EconomicFeedChannel> channels;
+  final List<EconomicFeedItem> feeds;
+
+  @override
+  Widget build(BuildContext context) {
+    final itemCounts = <String, int>{};
+    for (final feed in feeds) {
+      if (feed.channelId.isEmpty) {
+        continue;
+      }
+      itemCounts[feed.channelId] = (itemCounts[feed.channelId] ?? 0) + 1;
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SectionHeader(
+          title: '피드 채널',
+          trailing: FlowChip(
+            label: '${channels.length} channels',
+            color: AppColors.charcoal,
+          ),
+        ),
+        const SizedBox(height: 10),
+        SizedBox(
+          height: 166,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            itemCount: channels.length,
+            separatorBuilder: (context, index) => const SizedBox(width: 10),
+            itemBuilder: (context, index) {
+              final channel = channels[index];
+              return SizedBox(
+                width: 260,
+                child: EconomicFeedChannelCard(
+                  channel: channel,
+                  itemCount: itemCounts[channel.id] ?? 0,
+                ),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class EconomicFeedChannelCard extends StatelessWidget {
+  const EconomicFeedChannelCard({
+    required this.channel,
+    required this.itemCount,
+    super.key,
+  });
+
+  final EconomicFeedChannel channel;
+  final int itemCount;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = _feedTypeColor(channel.type);
+
+    return AppCard(
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              DecoratedBox(
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(9),
+                  child: Icon(_feedTypeIcon(channel.type), color: color),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      channel.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      channel.provider,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ],
+                ),
+              ),
+              FlowChip(label: '$itemCount', color: color),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(
+            channel.query,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.bodyMedium,
+          ),
+          const Spacer(),
+          Wrap(
+            spacing: 7,
+            runSpacing: 7,
+            children: [
+              FlowChip(label: channel.type.label, color: color),
+              FlowChip(label: channel.region.label, color: AppColors.charcoal),
+              for (final tag in channel.tags.take(2))
+                FlowChip(label: tag, color: AppColors.blue),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }
@@ -1020,14 +1209,18 @@ class EconomicFeedSummaryCard extends StatelessWidget {
 }
 
 class EconomicFeedCard extends StatelessWidget {
-  const EconomicFeedCard({required this.feed, super.key});
+  const EconomicFeedCard({required this.feed, this.onOpen, super.key});
 
   final EconomicFeedItem feed;
+  final ValueChanged<EconomicFeedItem>? onOpen;
 
   @override
   Widget build(BuildContext context) {
     final color = _feedTypeColor(feed.type);
+    final canOpen = feed.url.trim().isNotEmpty && onOpen != null;
+
     return AppCard(
+      onTap: canOpen ? () => onOpen?.call(feed) : null,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1063,7 +1256,23 @@ class EconomicFeedCard extends StatelessWidget {
                   ],
                 ),
               ),
-              FlowChip(label: '${feed.impactScore}', color: color),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  FlowChip(label: '${feed.impactScore}', color: color),
+                  if (canOpen) ...[
+                    const SizedBox(height: 8),
+                    Tooltip(
+                      message: '상세 페이지 열기',
+                      child: Icon(
+                        Icons.open_in_browser_outlined,
+                        color: AppColors.muted,
+                        size: 20,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
             ],
           ),
           const SizedBox(height: 12),
@@ -1075,6 +1284,8 @@ class EconomicFeedCard extends StatelessWidget {
             children: [
               FlowChip(label: feed.type.label, color: color),
               FlowChip(label: feed.region.label, color: AppColors.charcoal),
+              if (feed.channelName.isNotEmpty)
+                FlowChip(label: feed.channelName, color: color),
               if (feed.url.isNotEmpty)
                 FlowChip(label: _feedUrlHost(feed.url), color: AppColors.muted),
               for (final tag in feed.tags)

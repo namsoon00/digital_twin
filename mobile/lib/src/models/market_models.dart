@@ -112,6 +112,28 @@ extension EconomicFeedTypeLabel on EconomicFeedType {
   }
 }
 
+class EconomicFeedChannel {
+  const EconomicFeedChannel({
+    required this.id,
+    required this.name,
+    required this.provider,
+    required this.query,
+    required this.type,
+    required this.region,
+    required this.tags,
+    required this.url,
+  });
+
+  final String id;
+  final String name;
+  final String provider;
+  final String query;
+  final EconomicFeedType type;
+  final MarketRegion region;
+  final List<String> tags;
+  final String url;
+}
+
 class DataApiSource {
   const DataApiSource({
     required this.id,
@@ -148,6 +170,8 @@ class EconomicFeedItem {
     required this.impactScore,
     required this.tags,
     this.url = '',
+    this.channelId = '',
+    this.channelName = '',
     this.publishedAt,
   });
 
@@ -161,6 +185,8 @@ class EconomicFeedItem {
   final int impactScore;
   final List<String> tags;
   final String url;
+  final String channelId;
+  final String channelName;
   final DateTime? publishedAt;
 }
 

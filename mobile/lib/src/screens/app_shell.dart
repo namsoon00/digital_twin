@@ -81,7 +81,7 @@ class _AppShellState extends State<AppShell> {
       _cryptoAssets.length,
     );
     _economicFeedService =
-        widget.economicFeedService ?? GoogleNewsEconomicFeedService();
+        widget.economicFeedService ?? GdeltNewsEconomicFeedService();
     _economicFeedItems = widget.repository.economicFeeds.toList();
     _feedSnapshot = EconomicFeedFetchSnapshot.idle(_economicFeedItems.length);
     _quoteService = AlphaVantageQuoteService();
@@ -348,7 +348,7 @@ class _AppShellState extends State<AppShell> {
   List<EconomicFeedChannel> get _feedChannels {
     final serviceChannels = _economicFeedService.feedChannels;
     return serviceChannels.isEmpty
-        ? GoogleNewsEconomicFeedService.defaultFeedChannels
+        ? GdeltNewsEconomicFeedService.defaultFeedChannels
         : serviceChannels;
   }
 
@@ -853,6 +853,18 @@ class _EconomicFeedScreenState extends State<EconomicFeedScreen> {
     await _openNewsUrl(feed.url, missingMessage: '열 수 있는 상세 링크가 없습니다.');
   }
 
+  void _showFeedDetail(EconomicFeedItem feed) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) => EconomicFeedDetailSheet(
+        feed: feed,
+        onOpenOriginal: () => _openFeedInAppBrowser(feed),
+      ),
+    );
+  }
+
   Future<void> _openFeedChannel(EconomicFeedChannel channel) async {
     await _openNewsUrl(channel.url, missingMessage: '열 수 있는 채널 링크가 없습니다.');
   }
@@ -950,7 +962,7 @@ class _EconomicFeedScreenState extends State<EconomicFeedScreen> {
           feedSnapshot: widget.feedSnapshot,
           quoteSnapshot: widget.quoteSnapshot,
           onRefresh: widget.onRefreshFeeds,
-          onOpen: _openFeedInAppBrowser,
+          onOpen: _showFeedDetail,
         ),
         const SizedBox(height: 12),
         EconomicFeedTrendCard(
@@ -1010,10 +1022,7 @@ class _EconomicFeedScreenState extends State<EconomicFeedScreen> {
           ...filteredFeeds.map(
             (feed) => Padding(
               padding: const EdgeInsets.only(bottom: 10),
-              child: EconomicFeedCard(
-                feed: feed,
-                onOpen: _openFeedInAppBrowser,
-              ),
+              child: EconomicFeedCard(feed: feed, onOpen: _showFeedDetail),
             ),
           ),
       ],
@@ -1055,7 +1064,7 @@ class EconomicFeedChannelStrip extends StatelessWidget {
         ),
         const SizedBox(height: 10),
         SizedBox(
-          height: 166,
+          height: 218,
           child: ListView.separated(
             scrollDirection: Axis.horizontal,
             itemCount: channels.length,
@@ -1063,7 +1072,7 @@ class EconomicFeedChannelStrip extends StatelessWidget {
             itemBuilder: (context, index) {
               final channel = channels[index];
               return SizedBox(
-                width: 260,
+                width: 280,
                 child: EconomicFeedChannelCard(
                   channel: channel,
                   itemCount: itemCounts[channel.id] ?? 0,
@@ -1572,6 +1581,78 @@ class EconomicFeedCard extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+class EconomicFeedDetailSheet extends StatelessWidget {
+  const EconomicFeedDetailSheet({
+    required this.feed,
+    required this.onOpenOriginal,
+    super.key,
+  });
+
+  final EconomicFeedItem feed;
+  final Future<void> Function() onOpenOriginal;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = _feedTypeColor(feed.type);
+    final host = _feedUrlHost(feed.url);
+
+    return FlowDetailSheetFrame(
+      title: feed.title,
+      subtitle: '${feed.source} · ${feed.timestampLabel}',
+      icon: _feedTypeIcon(feed.type),
+      color: color,
+      children: [
+        DetailStatGrid(
+          stats: [
+            DetailStat(
+              label: '영향 점수',
+              value: '${feed.impactScore}',
+              color: color,
+            ),
+            DetailStat(
+              label: '채널',
+              value: feed.channelName.isEmpty
+                  ? feed.type.label
+                  : feed.channelName,
+              color: color,
+            ),
+            DetailStat(
+              label: '지역',
+              value: feed.region.label,
+              color: AppColors.charcoal,
+            ),
+            DetailStat(label: '원문', value: host, color: AppColors.blue),
+          ],
+        ),
+        const SizedBox(height: 16),
+        Text(feed.summary, style: Theme.of(context).textTheme.bodyLarge),
+        const SizedBox(height: 14),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            FlowChip(label: feed.type.label, color: color),
+            if (feed.channelName.isNotEmpty)
+              FlowChip(label: feed.channelName, color: color),
+            FlowChip(label: host, color: AppColors.blue),
+            for (final tag in feed.tags)
+              FlowChip(label: tag, color: AppColors.charcoal),
+          ],
+        ),
+        const SizedBox(height: 18),
+        SizedBox(
+          width: double.infinity,
+          child: FilledButton.icon(
+            onPressed: onOpenOriginal,
+            icon: const Icon(Icons.open_in_browser_outlined),
+            label: const Text('원문 기사 열기'),
+          ),
+        ),
+      ],
     );
   }
 }

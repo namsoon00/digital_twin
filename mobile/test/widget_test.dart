@@ -38,6 +38,97 @@ void main() {
     SharedPreferences.setMockInitialValues({});
   });
 
+  test(
+    'GDELT DOC API items are mapped into direct article feed items',
+    () async {
+      const payload = '''
+{
+  "articles": [
+    {
+      "url": "https://www.reuters.com/technology/semiconductor-power-grid-2026-06-24/",
+      "title": "Semiconductor power demand lifts grid investment outlook",
+      "seendate": "20260624031500",
+      "domain": "reuters.com",
+      "language": "English",
+      "sourcecountry": "United States"
+    }
+  ]
+}
+''';
+      final service = GdeltNewsEconomicFeedService(
+        client: MockClient((request) async {
+          expect(request.url.host, 'api.gdeltproject.org');
+          expect(request.url.queryParameters['mode'], 'ArtList');
+          expect(request.url.queryParameters['format'], 'JSON');
+          expect(request.headers['Cache-Control'], 'no-cache');
+          return http.Response(
+            payload,
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+        }),
+      );
+      addTearDown(service.dispose);
+
+      final result = await service.fetchFeeds();
+
+      expect(result.snapshot.status, EconomicFeedFetchStatus.ready);
+      expect(result.snapshot.provider, 'GDELT DOC API');
+      expect(result.items, hasLength(1));
+      expect(result.items.single.source, 'reuters.com');
+      expect(result.items.single.url, startsWith('https://www.reuters.com/'));
+      expect(result.items.single.channelName, 'AI 인프라');
+    },
+  );
+
+  test(
+    'GDELT DOC API uses local proxy fallback after direct fetch failure',
+    () async {
+      const payload = '''
+{
+  "articles": [
+    {
+      "url": "https://www.cnbc.com/markets/central-bank-policy.html",
+      "title": "Central bank policy keeps markets focused on rates",
+      "seendate": "20260624041500",
+      "domain": "cnbc.com",
+      "language": "English",
+      "sourcecountry": "United States"
+    }
+  ]
+}
+''';
+      var proxyRequestCount = 0;
+      final service = GdeltNewsEconomicFeedService(
+        client: MockClient((request) async {
+          if (request.url.host == 'api.gdeltproject.org') {
+            throw http.ClientException('Failed to fetch', request.url);
+          }
+          expect(request.url.host, '127.0.0.1');
+          expect(request.url.port, 3000);
+          expect(request.url.path, '/api/economic-feed/gdelt');
+          expect(
+            request.url.queryParameters['url'],
+            contains('https://api.gdeltproject.org/api/v2/doc/doc'),
+          );
+          proxyRequestCount += 1;
+          return http.Response(
+            payload,
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+        }),
+      );
+      addTearDown(service.dispose);
+
+      final result = await service.fetchFeeds();
+
+      expect(result.snapshot.status, EconomicFeedFetchStatus.ready);
+      expect(result.items.single.channelName, '중앙은행 정책');
+      expect(proxyRequestCount, 1);
+    },
+  );
+
   test('Google News RSS items are mapped into economic feed items', () async {
     const rss = '''
 <rss><channel>
@@ -930,7 +1021,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('피드 채널'), findsOneWidget);
-    expect(find.text('Google News RSS'), findsWidgets);
+    expect(find.text('GDELT DOC API'), findsWidgets);
     expect(find.byTooltip('채널 뉴스 열기'), findsWidgets);
 
     await tester.drag(feedList, const Offset(0, -420));
@@ -939,8 +1030,16 @@ void main() {
     expect(find.text('경제 피드'), findsOneWidget);
     expect(find.text('AI CAPEX 자금이 반도체에서 전력 인프라로 확산'), findsWidgets);
     expect(find.text('MarketFlow Theme Map · 18분 전'), findsOneWidget);
-    expect(find.text('news.google.com'), findsWidgets);
+    expect(find.textContaining('reuters.com'), findsWidgets);
     expect(find.byTooltip('상세 페이지 열기'), findsWidgets);
+
+    await tester.tap(find.text('AI CAPEX 자금이 반도체에서 전력 인프라로 확산').last);
+    await tester.pumpAndSettle();
+
+    expect(find.text('원문 기사 열기'), findsOneWidget);
+    expect(find.text('영향 점수'), findsOneWidget);
+
+    await dismissModal(tester, find.text('원문 기사 열기'));
   });
 
   testWidgets('MarketFlow manages the pre-investment checklist', (

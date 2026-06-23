@@ -20,8 +20,8 @@ class EconomicFeedFetchSnapshot {
 
   factory EconomicFeedFetchSnapshot.idle(int itemCount) {
     return EconomicFeedFetchSnapshot(
-      provider: GoogleNewsEconomicFeedService.provider,
-      endpoint: GoogleNewsEconomicFeedService.endpoint,
+      provider: GdeltNewsEconomicFeedService.provider,
+      endpoint: GdeltNewsEconomicFeedService.endpoint,
       status: EconomicFeedFetchStatus.idle,
       message: '실제 RSS 피드 대기 중',
       itemCount: itemCount,
@@ -31,10 +31,10 @@ class EconomicFeedFetchSnapshot {
 
   factory EconomicFeedFetchSnapshot.loading(int itemCount) {
     return EconomicFeedFetchSnapshot(
-      provider: GoogleNewsEconomicFeedService.provider,
-      endpoint: GoogleNewsEconomicFeedService.endpoint,
+      provider: GdeltNewsEconomicFeedService.provider,
+      endpoint: GdeltNewsEconomicFeedService.endpoint,
       status: EconomicFeedFetchStatus.loading,
-      message: 'Google News RSS 조회 중',
+      message: 'GDELT 기사 조회 중',
       itemCount: itemCount,
       updatedAt: DateTime.now(),
     );
@@ -99,6 +99,313 @@ class StaticEconomicFeedService implements EconomicFeedService {
 
   @override
   void dispose() {}
+}
+
+class GdeltNewsEconomicFeedService implements EconomicFeedService {
+  GdeltNewsEconomicFeedService({http.Client? client})
+    : _client = client ?? http.Client();
+
+  static const provider = 'GDELT DOC API';
+  static const endpoint = '/api/v2/doc/doc';
+  static const _localProxyBaseUrl = String.fromEnvironment(
+    'MARKET_FLOW_FEED_PROXY_BASE_URL',
+    defaultValue: 'http://127.0.0.1:3000',
+  );
+  static const _maxItems = 24;
+  static const _combinedSearch =
+      '"stock market" OR liquidity OR semiconductor OR infrastructure OR '
+      '"central bank" OR earnings OR dollar OR cryptocurrency OR electricity OR Korea';
+
+  static const _queries = [
+    _EconomicFeedQuery(
+      id: 'market-liquidity',
+      name: '시장 유동성',
+      search: 'liquidity dollar rates stocks treasury',
+      type: EconomicFeedType.liquidity,
+      region: MarketRegion.all,
+      tags: ['liquidity', 'dollar', 'rates', 'treasury'],
+      baseImpact: 82,
+    ),
+    _EconomicFeedQuery(
+      id: 'ai-infrastructure',
+      name: 'AI 인프라',
+      search: 'semiconductor datacenter electricity infrastructure investment',
+      type: EconomicFeedType.flow,
+      region: MarketRegion.unitedStates,
+      tags: ['semiconductor', 'datacenter', 'electricity', 'infrastructure'],
+      baseImpact: 86,
+    ),
+    _EconomicFeedQuery(
+      id: 'korea-market',
+      name: '한국 시장',
+      search: 'Korea KOSPI foreign investors semiconductor defense stocks',
+      type: EconomicFeedType.flow,
+      region: MarketRegion.korea,
+      tags: ['Korea', 'KOSPI', 'foreign', 'semiconductor'],
+      baseImpact: 78,
+    ),
+    _EconomicFeedQuery(
+      id: 'central-bank-policy',
+      name: '중앙은행 정책',
+      search: 'central bank inflation interest rates monetary policy',
+      type: EconomicFeedType.policy,
+      region: MarketRegion.all,
+      tags: ['central bank', 'inflation', 'rates', 'policy'],
+      baseImpact: 75,
+    ),
+    _EconomicFeedQuery(
+      id: 'earnings-margin',
+      name: '실적/마진',
+      search: 'earnings margin guidance revenue stocks',
+      type: EconomicFeedType.earnings,
+      region: MarketRegion.unitedStates,
+      tags: ['earnings', 'margin', 'guidance', 'revenue'],
+      baseImpact: 70,
+    ),
+    _EconomicFeedQuery(
+      id: 'risk-assets',
+      name: '리스크 자산',
+      search: 'volatility gold dollar credit risk assets',
+      type: EconomicFeedType.risk,
+      region: MarketRegion.all,
+      tags: ['volatility', 'gold', 'credit', 'risk'],
+      baseImpact: 73,
+    ),
+    _EconomicFeedQuery(
+      id: 'crypto-liquidity',
+      name: '코인 유동성',
+      search: 'bitcoin cryptocurrency stablecoin liquidity market',
+      type: EconomicFeedType.macro,
+      region: MarketRegion.all,
+      tags: ['bitcoin', 'cryptocurrency', 'stablecoin'],
+      baseImpact: 70,
+    ),
+  ];
+
+  final http.Client _client;
+
+  @override
+  List<EconomicFeedChannel> get feedChannels => defaultFeedChannels;
+
+  static List<EconomicFeedChannel> get defaultFeedChannels {
+    return _queries
+        .map(
+          (query) => EconomicFeedChannel(
+            id: query.id,
+            name: query.name,
+            provider: provider,
+            query: query.displayQuery,
+            type: query.type,
+            region: query.region,
+            tags: query.tags,
+            url: _gdeltSearchUri(query.search).toString(),
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  @override
+  void dispose() => _client.close();
+
+  @override
+  Future<EconomicFeedFetchResult> fetchFeeds() async {
+    try {
+      final body = await _fetchJsonBody(_gdeltArticlesUri());
+      final items = _parseArticles(body)
+        ..sort(GoogleNewsEconomicFeedService._compareFeedItems);
+      final selected = GoogleNewsEconomicFeedService._dedupe(
+        items,
+      ).take(_maxItems).toList(growable: false);
+      return EconomicFeedFetchResult(
+        items: selected,
+        snapshot: EconomicFeedFetchSnapshot(
+          provider: provider,
+          endpoint: endpoint,
+          status: selected.isEmpty
+              ? EconomicFeedFetchStatus.failed
+              : EconomicFeedFetchStatus.ready,
+          message: selected.isEmpty
+              ? 'GDELT 기사 결과 없음'
+              : 'GDELT 직접 기사 ${selected.length}건 갱신',
+          itemCount: selected.length,
+          updatedAt: DateTime.now(),
+        ),
+      );
+    } catch (error) {
+      return EconomicFeedFetchResult(
+        items: const [],
+        snapshot: EconomicFeedFetchSnapshot(
+          provider: provider,
+          endpoint: endpoint,
+          status: EconomicFeedFetchStatus.failed,
+          message: 'GDELT 기사 조회 실패 · $error',
+          itemCount: 0,
+          updatedAt: DateTime.now(),
+        ),
+      );
+    }
+  }
+
+  Future<String> _fetchJsonBody(Uri uri) async {
+    try {
+      return await _fetchUri(uri);
+    } catch (directError) {
+      try {
+        return await _fetchUri(_localProxyUri(uri));
+      } catch (proxyError) {
+        throw FormatException('$directError · proxy: $proxyError');
+      }
+    }
+  }
+
+  Future<String> _fetchUri(Uri uri) async {
+    final response = await _client
+        .get(
+          uri,
+          headers: const {
+            'Accept': 'application/json, text/plain;q=0.9, */*;q=0.8',
+            'Cache-Control': 'no-cache',
+            'Pragma': 'no-cache',
+            'User-Agent': 'MarketFlow/1.0',
+          },
+        )
+        .timeout(const Duration(seconds: 12));
+    if (response.statusCode != 200) {
+      throw FormatException('HTTP ${response.statusCode}');
+    }
+    return utf8.decode(response.bodyBytes);
+  }
+
+  Uri _localProxyUri(Uri uri) {
+    final base = Uri.parse(_localProxyBaseUrl);
+    return base.replace(
+      path: '/api/economic-feed/gdelt',
+      queryParameters: {'url': uri.toString()},
+    );
+  }
+
+  List<EconomicFeedItem> _parseArticles(String body) {
+    final decoded = jsonDecode(body);
+    if (decoded is! Map<String, dynamic>) {
+      return const [];
+    }
+    final articles = decoded['articles'];
+    if (articles is! List) {
+      return const [];
+    }
+    return articles
+        .whereType<Map<String, dynamic>>()
+        .map(_parseArticle)
+        .whereType<EconomicFeedItem>()
+        .toList(growable: false);
+  }
+
+  EconomicFeedItem? _parseArticle(Map<String, dynamic> article) {
+    final title = '${article['title'] ?? ''}'.trim();
+    final url = '${article['url'] ?? ''}'.trim();
+    if (title.isEmpty || url.isEmpty) {
+      return null;
+    }
+    final uri = Uri.tryParse(url);
+    if (uri == null || !uri.hasScheme || uri.host.isEmpty) {
+      return null;
+    }
+
+    final domain = '${article['domain'] ?? uri.host}'.trim();
+    final language = '${article['language'] ?? ''}'.trim();
+    final sourceCountry = '${article['sourcecountry'] ?? ''}'.trim();
+    final publishedAt = _parseGdeltDate('${article['seendate'] ?? ''}');
+    final query = _classifyArticle(title, domain);
+    final summary = [
+      'GDELT가 수집한 ${domain.isEmpty ? '원문 매체' : domain} 기사입니다.',
+      if (language.isNotEmpty) '언어 $language',
+      if (sourceCountry.isNotEmpty) '국가 $sourceCountry',
+    ].join(' · ');
+
+    return EconomicFeedItem(
+      id: 'gdelt-${query.id}-${url.hashCode.abs()}',
+      type: query.type,
+      region: query.region,
+      title: title,
+      summary: summary,
+      source: domain.isEmpty ? provider : domain,
+      timestampLabel: GoogleNewsEconomicFeedService._formatTimestamp(
+        publishedAt,
+        '${article['seendate'] ?? ''}',
+      ),
+      impactScore: GoogleNewsEconomicFeedService._impactScore(
+        query,
+        title,
+        summary,
+        publishedAt,
+      ),
+      tags: query.tags,
+      url: url,
+      channelId: query.id,
+      channelName: query.name,
+      publishedAt: publishedAt,
+    );
+  }
+
+  _EconomicFeedQuery _classifyArticle(String title, String domain) {
+    final haystack = '$title $domain'.toLowerCase();
+    var bestScore = -1;
+    var best = _queries.first;
+    for (final query in _queries) {
+      var score = 0;
+      for (final tag in query.tags) {
+        if (haystack.contains(tag.toLowerCase())) {
+          score += 3;
+        }
+      }
+      for (final token in query.search.toLowerCase().split(RegExp(r'\s+'))) {
+        if (token.length >= 5 && haystack.contains(token)) {
+          score += 1;
+        }
+      }
+      if (score > bestScore) {
+        bestScore = score;
+        best = query;
+      }
+    }
+    return best;
+  }
+
+  static Uri _gdeltArticlesUri() {
+    return Uri.https('api.gdeltproject.org', endpoint, {
+      'query': _combinedSearch,
+      'mode': 'ArtList',
+      'format': 'JSON',
+      'maxrecords': '75',
+      'timespan': '3d',
+      'sort': 'DateDesc',
+    });
+  }
+
+  static Uri _gdeltSearchUri(String query) {
+    return Uri.https('api.gdeltproject.org', endpoint, {
+      'query': query,
+      'mode': 'ArtList',
+      'format': 'HTML',
+      'timespan': '3d',
+      'sort': 'DateDesc',
+    });
+  }
+
+  static DateTime? _parseGdeltDate(String value) {
+    final digits = value.replaceAll(RegExp(r'\D'), '');
+    if (digits.length < 14) {
+      return DateTime.tryParse(value)?.toLocal();
+    }
+    return DateTime.utc(
+      int.parse(digits.substring(0, 4)),
+      int.parse(digits.substring(4, 6)),
+      int.parse(digits.substring(6, 8)),
+      int.parse(digits.substring(8, 10)),
+      int.parse(digits.substring(10, 12)),
+      int.parse(digits.substring(12, 14)),
+    ).toLocal();
+  }
 }
 
 class GoogleNewsEconomicFeedService implements EconomicFeedService {

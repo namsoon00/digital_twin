@@ -359,6 +359,30 @@ function normalizeEconomicFeedRssUrl(rawUrl) {
   return target.toString();
 }
 
+function normalizeEconomicFeedGdeltUrl(rawUrl) {
+  let target;
+  try {
+    target = new URL(String(rawUrl || ""));
+  } catch (error) {
+    throw new Error("GDELT URL 형식이 올바르지 않습니다.");
+  }
+
+  if (target.protocol !== "https:" || target.hostname !== "api.gdeltproject.org" || target.pathname !== "/api/v2/doc/doc") {
+    throw new Error("허용된 GDELT URL은 api.gdeltproject.org/api/v2/doc/doc 뿐입니다.");
+  }
+  if (!target.searchParams.get("query")) {
+    throw new Error("GDELT 검색어가 필요합니다.");
+  }
+  if ((target.searchParams.get("mode") || "").toLowerCase() !== "artlist") {
+    throw new Error("GDELT mode=ArtList 요청만 허용됩니다.");
+  }
+  if ((target.searchParams.get("format") || "").toLowerCase() !== "json") {
+    throw new Error("GDELT format=JSON 요청만 허용됩니다.");
+  }
+
+  return target.toString();
+}
+
 function normalizeFredObservationsUrl(query) {
   const seriesId = String(query.series_id || "").trim().toUpperCase();
   const apiKey = String(query.api_key || "").trim();
@@ -1286,6 +1310,20 @@ async function api(req, res, pathname) {
     }
   }
 
+  if (pathname === "/api/economic-feed/gdelt") {
+    if (req.method === "OPTIONS") return corsText(res, 204, "", "text/plain");
+    if (req.method === "GET") {
+      try {
+        const parsedQuery = url.parse(req.url, true).query;
+        const targetUrl = normalizeEconomicFeedGdeltUrl(parsedQuery.url);
+        const raw = await fetchText(targetUrl);
+        return corsText(res, 200, raw, "application/json");
+      } catch (error) {
+        return corsJson(res, 400, { error: error.message || "GDELT 피드를 가져오지 못했습니다." });
+      }
+    }
+  }
+
   if (pathname === "/api/data-api/fred/observations") {
     if (req.method === "OPTIONS") return corsJson(res, 204, {});
     if (req.method === "GET") {
@@ -1356,7 +1394,7 @@ async function api(req, res, pathname) {
     );
     return json(res, 200, {
       stocks: stocks,
-      source: "Quotes: Stooq/Naver Finance, News: Google News RSS",
+      source: "Quotes: Stooq/Naver Finance, News: GDELT DOC API",
       fetchedAt: now()
     });
   }

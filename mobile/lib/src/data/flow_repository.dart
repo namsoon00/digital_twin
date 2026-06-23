@@ -77,8 +77,7 @@ class MockFlowRepository implements FlowRepository {
       title: '달러 유동성은 완화, 장기금리는 고점 테스트',
       summary: '단기 유동성은 위험자산에 우호적이지만 장기금리 재상승이 성장주 밸류에이션을 압박하는 구간입니다.',
       source: 'FRED / Treasury / ETF Flow',
-      url:
-          'https://news.google.com/search?q=US+liquidity+rates+dollar+stocks&hl=ko&gl=KR&ceid=KR:ko',
+      url: 'https://www.reuters.com/markets/rates-bonds/',
       channelId: 'us-liquidity',
       channelName: '미국 유동성',
       timestampLabel: '10분 전',
@@ -92,8 +91,7 @@ class MockFlowRepository implements FlowRepository {
       title: 'AI CAPEX 자금이 반도체에서 전력 인프라로 확산',
       summary: 'GPU와 클라우드 중심의 자금 흐름이 전력망, 냉각, 데이터센터 리츠까지 넓어지는 선형 흐름입니다.',
       source: 'MarketFlow Theme Map',
-      url:
-          'https://news.google.com/search?q=AI+capex+power+infrastructure+semiconductor&hl=ko&gl=KR&ceid=KR:ko',
+      url: 'https://www.reuters.com/technology/',
       channelId: 'ai-capex',
       channelName: 'AI CAPEX',
       timestampLabel: '18분 전',
@@ -107,8 +105,7 @@ class MockFlowRepository implements FlowRepository {
       title: '외국인 순매수는 대형 반도체와 방산에 집중',
       summary: 'KOSPI 수급은 지수형 매수보다 특정 업종 집중도가 높아 업종 확산 여부를 확인해야 합니다.',
       source: 'KRX / Broker Flow',
-      url:
-          'https://news.google.com/search?q=KOSPI+foreign+buying+semiconductor+defense&hl=ko&gl=KR&ceid=KR:ko',
+      url: 'https://www.reuters.com/world/asia-pacific/',
       channelId: 'kr-foreign-flow',
       channelName: '한국 수급',
       timestampLabel: '24분 전',
@@ -122,8 +119,7 @@ class MockFlowRepository implements FlowRepository {
       title: '중앙은행 발언은 인하 속도보다 물가 재가속에 민감',
       summary: '정책 기대가 과하게 앞서면 장기금리와 달러가 반등할 수 있어 리스크 자산의 추격 매수 기준을 낮춰야 합니다.',
       source: 'Fed / BOK Watch',
-      url:
-          'https://news.google.com/search?q=Fed+BOK+rate+cut+inflation+central+bank&hl=ko&gl=KR&ceid=KR:ko',
+      url: 'https://www.reuters.com/markets/global-market-data/',
       channelId: 'central-bank-policy',
       channelName: '중앙은행 정책',
       timestampLabel: '35분 전',
@@ -137,8 +133,7 @@ class MockFlowRepository implements FlowRepository {
       title: '실적 시즌은 매출 성장보다 마진 방어가 핵심',
       summary: '고금리 구간에서는 매출보다 비용 통제와 현금흐름이 주가 반응을 좌우하는 비중이 커집니다.',
       source: 'Earnings Calendar',
-      url:
-          'https://news.google.com/search?q=US+earnings+season+margin+guidance+stocks&hl=ko&gl=KR&ceid=KR:ko',
+      url: 'https://www.reuters.com/markets/companies/',
       channelId: 'earnings-margin',
       channelName: '실적/마진',
       timestampLabel: '42분 전',
@@ -152,8 +147,7 @@ class MockFlowRepository implements FlowRepository {
       title: '금과 달러가 동시에 강하면 위험선호의 질을 재점검',
       summary: '안전자산과 성장주가 함께 오르는 구간은 유동성 장세일 수 있지만, 변동성 확대 전조일 수도 있습니다.',
       source: 'Alpha Vantage / Commodity Proxy',
-      url:
-          'https://news.google.com/search?q=gold+dollar+volatility+risk+assets+stocks&hl=ko&gl=KR&ceid=KR:ko',
+      url: 'https://www.reuters.com/markets/commodities/',
       channelId: 'risk-assets',
       channelName: '위험자산',
       timestampLabel: '55분 전',
@@ -167,8 +161,7 @@ class MockFlowRepository implements FlowRepository {
       title: '스테이블코인 공급 증가는 위험자산 베타를 지지',
       summary: '온체인 달러 유동성이 늘어날 때 코인, 고베타 성장주, 테마형 ETF의 동조화가 강해질 수 있습니다.',
       source: 'CoinGecko / DefiLlama',
-      url:
-          'https://news.google.com/search?q=bitcoin+stablecoin+liquidity+crypto+market&hl=ko&gl=KR&ceid=KR:ko',
+      url: 'https://www.coindesk.com/markets/',
       channelId: 'crypto-liquidity',
       channelName: '코인 유동성',
       timestampLabel: '1시간 전',

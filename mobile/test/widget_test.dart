@@ -153,6 +153,41 @@ void main() {
     expect(result.linkedDataLabel, contains('관심 종목'));
   });
 
+  test('Data API probe validates OpenDART company access', () async {
+    const repository = MockFlowRepository();
+    final source = repository.dataApiSources.firstWhere(
+      (source) => source.id == 'opendart',
+    );
+    final client = DataApiProbeClient(
+      client: MockClient((request) async {
+        expect(request.url.host, 'opendart.fss.or.kr');
+        expect(request.url.path, '/api/company.json');
+        expect(request.url.queryParameters['crtfc_key'], 'dart-key');
+        expect(request.url.queryParameters['corp_code'], '00126380');
+        return http.Response(
+          '''
+{
+  "status": "000",
+  "message": "정상",
+  "corp_name": "삼성전자(주)",
+  "stock_code": "005930"
+}
+''',
+          200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        );
+      }),
+    );
+    addTearDown(client.dispose);
+
+    final result = await client.probe(source, 'dart-key');
+
+    expect(result.ok, isTrue);
+    expect(result.endpoint, 'company.json 삼성전자');
+    expect(result.message, contains('삼성전자'));
+    expect(result.linkedDataLabel, contains('공시'));
+  });
+
   testWidgets('Sparkline supports pinch zooming into a shorter period', (
     tester,
   ) async {
@@ -681,6 +716,7 @@ void main() {
     expect(find.text('API key 입력 후 저장'), findsWidgets);
     expect(find.text('Alpha Vantage'), findsOneWidget);
     expect(find.text('FRED API'), findsOneWidget);
+    expect(find.text('OpenDART API'), findsOneWidget);
     expect(find.text('CoinGecko API'), findsOneWidget);
     expect(find.text('DefiLlama API'), findsOneWidget);
     expect(
@@ -693,6 +729,10 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('연결 테스트'), findsWidgets);
+    expect(
+      find.byKey(const ValueKey('data-api-test-opendart')),
+      findsOneWidget,
+    );
     expect(find.text('읽기 전용 데이터'), findsOneWidget);
     expect(find.text('로컬 DB 저장'), findsOneWidget);
     expect(find.text('API key'), findsWidgets);

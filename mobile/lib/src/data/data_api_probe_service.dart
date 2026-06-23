@@ -56,6 +56,7 @@ class DataApiProbeClient {
         'alpha-vantage' => await _probeAlphaVantage(normalizedKey, spec),
         'coingecko' => await _probeCoinGecko(normalizedKey, spec),
         'fred' => await _probeFred(normalizedKey, spec),
+        'opendart' => await _probeOpenDart(normalizedKey, spec),
         'defillama' => await _probeDefiLlama(spec),
         _ => DataApiProbeResult.unsupported(
           sourceId: source.id,
@@ -190,6 +191,32 @@ class DataApiProbeClient {
       endpoint: spec.endpointLabel,
       linkedDataLabel: spec.linkedDataLabel,
       message: '미국 10년물 DGS10 ${value ?? '확인'}',
+    );
+  }
+
+  Future<DataApiProbeResult> _probeOpenDart(
+    String apiKey,
+    _DataApiProbeSpec spec,
+  ) async {
+    final uri = Uri.https('opendart.fss.or.kr', '/api/company.json', {
+      'crtfc_key': apiKey,
+      'corp_code': '00126380',
+    });
+    final decoded = await _getJsonMap(uri);
+    final status = '${decoded['status'] ?? ''}';
+    if (status != '000') {
+      throw FormatException(
+        '${decoded['message'] ?? 'OpenDART 응답 오류'} ($status)',
+      );
+    }
+    final corpName = decoded['corp_name'] ?? '기업개황';
+    final stockCode = decoded['stock_code'] ?? '005930';
+    return DataApiProbeResult.ok(
+      sourceId: 'opendart',
+      provider: 'OpenDART',
+      endpoint: spec.endpointLabel,
+      linkedDataLabel: spec.linkedDataLabel,
+      message: '$corpName $stockCode 기업개황 확인',
     );
   }
 
@@ -328,6 +355,10 @@ const _probeSpecs = {
   'fred': _DataApiProbeSpec(
     endpointLabel: 'series/observations DGS10',
     linkedDataLabel: '금리, 물가, 고용, 유동성 매크로 시계열',
+  ),
+  'opendart': _DataApiProbeSpec(
+    endpointLabel: 'company.json 삼성전자',
+    linkedDataLabel: '국내 상장사 공시, 기업개황, 사업보고서, 재무제표',
   ),
   'defillama': _DataApiProbeSpec(
     endpointLabel: '/protocols',

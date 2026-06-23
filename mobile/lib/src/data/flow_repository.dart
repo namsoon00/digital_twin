@@ -185,6 +185,17 @@ class MockFlowRepository implements FlowRepository {
       priority: 3,
     ),
     DataApiSource(
+      id: 'opendart',
+      name: 'OpenDART API',
+      provider: 'Financial Supervisory Service',
+      status: ApiIntegrationStatus.configurable,
+      coverage: '한국 상장사 공시, 기업개황, 사업보고서, 주요 재무제표',
+      usedFor: '국내 종목 공시 이벤트, 실적/재무 검증, 기업 리스크 점검',
+      keyName: 'OPENDART_API_KEY',
+      docsUrl: 'https://opendart.fss.or.kr/',
+      priority: 4,
+    ),
+    DataApiSource(
       id: 'coingecko',
       name: 'CoinGecko API',
       provider: 'CoinGecko',
@@ -193,7 +204,7 @@ class MockFlowRepository implements FlowRepository {
       usedFor: 'BTC/ETH/알트/섹터별 코인 자금 흐름과 위험자산 베타',
       keyName: 'COINGECKO_API_KEY',
       docsUrl: 'https://docs.coingecko.com/',
-      priority: 4,
+      priority: 5,
     ),
     DataApiSource(
       id: 'defillama',
@@ -204,7 +215,7 @@ class MockFlowRepository implements FlowRepository {
       usedFor: '온체인 달러 유동성, 스테이블코인 공급, RWA/DeFi 자금 이동',
       keyName: '선택 사항',
       docsUrl: 'https://api-docs.defillama.com/',
-      priority: 5,
+      priority: 6,
     ),
     DataApiSource(
       id: 'fund-flow-vendor',
@@ -215,7 +226,7 @@ class MockFlowRepository implements FlowRepository {
       usedFor: '실제 돈의 이동 검증, 가격 모멘텀과 fund flow 분리',
       keyName: '벤더별 API key',
       docsUrl: '선정 후 입력',
-      priority: 6,
+      priority: 7,
     ),
     DataApiSource(
       id: 'kr-investor-flow',
@@ -226,7 +237,7 @@ class MockFlowRepository implements FlowRepository {
       usedFor: 'KOSPI/KOSDAQ 외국인 수급, 미국 개인 접근성 시나리오 검증',
       keyName: '벤더별 API key',
       docsUrl: '선정 후 입력',
-      priority: 7,
+      priority: 8,
     ),
   ];
 

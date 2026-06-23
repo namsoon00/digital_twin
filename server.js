@@ -512,6 +512,39 @@ function normalizeAmount(value) {
   return Number.isFinite(numberValue) ? numberValue : textValue;
 }
 
+function hasOwn(object, key) {
+  return Object.prototype.hasOwnProperty.call(object || {}, key);
+}
+
+function normalizeItemFields(fields) {
+  if (!fields || typeof fields !== "object" || Array.isArray(fields)) return {};
+  const cleaned = {};
+  Object.keys(fields).forEach(function (key) {
+    const value = fields[key];
+    cleaned[key] = value === undefined || value === null ? "" : String(value).trim();
+  });
+  return cleaned;
+}
+
+function patchItem(item, body) {
+  const next = Object.assign({}, item);
+  if (hasOwn(body, "type") && domainTypes.indexOf(body.type) >= 0) next.type = body.type;
+  if (hasOwn(body, "title")) {
+    const title = String(body.title || "").trim();
+    if (title) next.title = title;
+  }
+  if (hasOwn(body, "status")) next.status = String(body.status || "open").trim() || "open";
+  if (hasOwn(body, "date")) next.date = String(body.date || "").trim();
+  if (hasOwn(body, "amount")) next.amount = normalizeAmount(body.amount);
+  if (hasOwn(body, "currency")) next.currency = String(body.currency || "").trim();
+  if (hasOwn(body, "ticker")) next.ticker = String(body.ticker || "").trim().toUpperCase();
+  if (hasOwn(body, "location")) next.location = String(body.location || "").trim();
+  if (hasOwn(body, "notes")) next.notes = String(body.notes || "").trim();
+  if (hasOwn(body, "fields")) next.fields = Object.assign({}, next.fields || {}, normalizeItemFields(body.fields));
+  next.updatedAt = now();
+  return next;
+}
+
 function parseNumber(value) {
   if (value === undefined || value === null) return null;
   const numberValue = Number(String(value).replace(/,/g, "").replace(/%/g, "").trim());
@@ -1390,7 +1423,7 @@ async function api(req, res, pathname) {
       ticker: String(body.ticker || "").trim().toUpperCase(),
       location: String(body.location || "").trim(),
       notes: String(body.notes || "").trim(),
-      fields: body.fields || {},
+      fields: normalizeItemFields(body.fields),
       createdAt: stamped,
       updatedAt: stamped
     };
@@ -1406,11 +1439,7 @@ async function api(req, res, pathname) {
     const store = save(function (draft) {
       draft.items = draft.items.map(function (item) {
         if (item.id !== itemMatch[1]) return item;
-        return Object.assign({}, item, body, {
-          title: body.title ? String(body.title).trim() : item.title,
-          ticker: body.ticker ? String(body.ticker).trim().toUpperCase() : item.ticker,
-          updatedAt: now()
-        });
+        return patchItem(item, body);
       });
     });
     return json(res, 200, { items: store.items });

@@ -383,6 +383,12 @@ h2 {
   background: #fbfaf7;
 }
 
+.compact-button {
+  min-height: 34px;
+  padding: 0 10px;
+  font-size: 13px;
+}
+
 .status-pill {
   display: inline-flex;
   align-items: center;
@@ -503,6 +509,23 @@ h2 {
   align-items: start;
 }
 
+.stock-panel-header {
+  align-items: flex-start;
+}
+
+.stock-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 0.72fr);
+  gap: 10px;
+  align-items: center;
+}
+
+.stock-search-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 8px;
+}
+
 .stock-groups {
   display: grid;
   gap: 16px;
@@ -534,6 +557,15 @@ h2 {
   border: 1px solid var(--line);
 }
 
+.stock-card.editing {
+  background: #fffdf8;
+}
+
+.stock-edit-form {
+  display: grid;
+  gap: 12px;
+}
+
 .stock-card-head {
   display: flex;
   justify-content: space-between;
@@ -545,6 +577,8 @@ h2 {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .stock-status {
@@ -636,6 +670,15 @@ h2 {
 .quote-grid strong {
   font-size: 15px;
   overflow-wrap: anywhere;
+}
+
+.stock-message {
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: #fbfaf7;
+  color: var(--muted);
+  line-height: 1.45;
+  padding: 12px;
 }
 
 .news-block {
@@ -735,6 +778,10 @@ h2 {
   .stock-layout {
     grid-template-columns: 1fr;
   }
+
+  .stock-controls {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 720px) {
@@ -774,5 +821,17 @@ h2 {
 
   .composer .primary-button {
     width: 100%;
+  }
+
+  .stock-card-head {
+    display: grid;
+  }
+
+  .stock-card-tools {
+    justify-content: flex-start;
+  }
+
+  .stock-search-form {
+    grid-template-columns: 1fr;
   }
 }

@@ -55,7 +55,10 @@
     stockData: [],
     stockLoading: false,
     stockError: "",
-    stockLoadedKey: ""
+    stockLoadedKey: "",
+    stockFilter: "all",
+    stockQuery: "",
+    editingStockId: ""
   };
 
   var navItems = [
@@ -492,6 +495,60 @@
     return values.join(" · ");
   }
 
+  function stockSearchText(item) {
+    var fields = item.fields || {};
+    return [
+      item.title,
+      item.ticker,
+      item.notes,
+      stockStatusLabel(item),
+      fields.averagePrice,
+      fields.targetPrice
+    ]
+      .join(" ")
+      .toLowerCase();
+  }
+
+  function stockMatchesFilter(item) {
+    var filter = state.stockFilter || "all";
+    var query = String(state.stockQuery || "").trim().toLowerCase();
+    if (filter !== "all" && stockStatusKey(item) !== filter) return false;
+    if (query && stockSearchText(item).indexOf(query) < 0) return false;
+    return true;
+  }
+
+  function findItem(id) {
+    return state.snapshot.items.filter(function (item) { return item.id === id; })[0];
+  }
+
+  function itemAmountValue(item) {
+    return item.amount === undefined || item.amount === null ? "" : String(item.amount);
+  }
+
+  function stockExists(ticker, status, currentId) {
+    var cleanTicker = String(ticker || "").trim().toUpperCase();
+    return state.snapshot.items.some(function (item) {
+      return (
+        item.type === "stock" &&
+        item.id !== currentId &&
+        stockStatusKey(item) === status &&
+        String(item.ticker || item.title || "").trim().toUpperCase() === cleanTicker
+      );
+    });
+  }
+
+  function stockPatch(id, payload, refreshQuotes) {
+    return requestJson("/api/items/" + id, {
+      method: "PATCH",
+      body: JSON.stringify(payload)
+    }).then(function () {
+      return load().then(function () {
+        if (refreshQuotes) return loadStocks(true);
+        return undefined;
+      });
+    });
+  }
+
   function renderStocks() {
     var items = state.snapshot.items.filter(function (item) { return item.type === "stock"; });
     var holdingCount = items.filter(function (item) { return stockStatusKey(item) === "holding"; }).length;
@@ -509,20 +566,50 @@
       '<div class="field"><label>목표가</label><input class="input" name="targetPrice" inputmode="decimal" placeholder="관심 종목의 목표 가격 또는 점검 기준" /></div>' +
       '<div class="field"><label>관찰 메모</label><textarea class="textarea" name="notes" placeholder="실적, 밸류에이션, 리스크, 확인할 뉴스"></textarea></div>' +
       '<div class="actions"><button class="primary-button">종목 추가</button><button class="secondary-button" type="button" id="stock-refresh">새로고침</button></div>' +
-      '</form></section><section class="panel"><div class="panel-header"><div><h2>종목 상황</h2><p class="subtle">가격은 지연될 수 있고, 뉴스는 최근 기사 검색 결과입니다.</p></div>' +
+      '</form></section><section class="panel"><div class="panel-header stock-panel-header"><div><h2>종목 관리</h2><p class="subtle">가격은 지연될 수 있고, 뉴스는 최근 기사 검색 결과입니다.</p></div>' +
       (state.stockLoading ? '<span class="status-pill muted">불러오는 중</span>' : '<span class="status-pill">시장/뉴스</span>') +
       '</div><div class="panel-body stack">' +
+      renderStockControls(items, holdingCount, watchCount) +
       (state.stockError ? '<div class="item-card">' + escapeHtml(state.stockError) + "</div>" : "") +
       renderStockCards(items) +
       "</div></section></div>"
     );
   }
 
+  function renderStockControls(items, holdingCount, watchCount) {
+    var tabs = [
+      { key: "all", label: "전체", count: items.length },
+      { key: "holding", label: "보유", count: holdingCount },
+      { key: "watch", label: "관심", count: watchCount }
+    ];
+    return (
+      '<div class="stock-controls"><div class="tabs">' +
+      tabs
+        .map(function (tab) {
+          return (
+            '<button class="tab-button ' +
+            (state.stockFilter === tab.key ? "active" : "") +
+            '" data-stock-filter="' +
+            tab.key +
+            '">' +
+            escapeHtml(tab.label + " " + tab.count) +
+            "</button>"
+          );
+        })
+        .join("") +
+      '</div><form class="stock-search-form" id="stock-filter-form"><input class="input" name="query" value="' +
+      escapeHtml(state.stockQuery) +
+      '" placeholder="종목명, 티커, 메모 검색" /><button class="secondary-button">검색</button><button class="secondary-button" type="button" id="stock-filter-clear">초기화</button></form></div>'
+    );
+  }
+
   function renderStockCards(items) {
-    var holdings = items.filter(function (item) { return stockStatusKey(item) === "holding"; });
-    var watchlist = items.filter(function (item) { return stockStatusKey(item) !== "holding"; });
+    var filteredItems = items.filter(stockMatchesFilter);
+    var holdings = filteredItems.filter(function (item) { return stockStatusKey(item) === "holding"; });
+    var watchlist = filteredItems.filter(function (item) { return stockStatusKey(item) !== "holding"; });
     if (!items.length) return empty("보유 주식이나 관심 주식을 추가하면 가격과 관련 뉴스가 여기에 표시됩니다.");
     if (state.stockLoading && !state.stockData.length) return empty("종목 정보를 불러오는 중입니다.");
+    if (!filteredItems.length) return empty("조건에 맞는 종목이 없습니다.");
 
     return (
       '<div class="stock-groups">' +
@@ -553,6 +640,7 @@
   }
 
   function renderStockCard(item, data) {
+    if (state.editingStockId === item.id) return renderStockEditor(item);
     var quote = data && data.quote;
     var news = data && data.news ? data.news : [];
     var change = quote ? quote.change : null;
@@ -568,7 +656,13 @@
       stockStatusKey(item) +
       '">' +
       escapeHtml(stockStatusLabel(item)) +
-      '</span><button class="icon-button" data-item-delete="' +
+      '</span><button class="secondary-button compact-button" data-stock-toggle="' +
+      item.id +
+      '">' +
+      escapeHtml(stockStatusKey(item) === "holding" ? "관심으로" : "보유로") +
+      '</button><button class="secondary-button compact-button" data-stock-edit="' +
+      item.id +
+      '">수정</button><button class="icon-button" data-item-delete="' +
       item.id +
       '" title="삭제">×</button></div></div>' +
       (quote
@@ -594,7 +688,7 @@
           '</strong></div><div><span>거래량</span><strong>' +
           formatNumber(quote.volume, 0) +
           "</strong></div></div>"
-        : '<div class="item-card">' + escapeHtml(data && data.error ? data.error : "가격 정보를 아직 불러오지 못했습니다.") + "</div>") +
+        : '<div class="stock-message">' + escapeHtml(data && data.error ? data.error : "가격 정보를 아직 불러오지 못했습니다.") + "</div>") +
       (holdingMeta ? '<p class="item-meta">' + escapeHtml(holdingMeta) + "</p>" : "") +
       (item.notes ? '<p class="item-meta">' + escapeHtml(item.notes) + "</p>" : "") +
       '<div class="news-block"><h3>최근 소식</h3>' +
@@ -607,6 +701,37 @@
             .join("")
         : '<p class="item-meta">관련 뉴스를 찾지 못했습니다.</p>') +
       "</div></article>"
+    );
+  }
+
+  function renderStockEditor(item) {
+    var fields = item.fields || {};
+    return (
+      '<article class="stock-card editing"><form class="stock-edit-form" data-stock-edit-form="' +
+      item.id +
+      '"><div class="stock-card-head"><div><div class="item-title">종목 수정</div><div class="item-meta">' +
+      escapeHtml(item.ticker || item.title) +
+      '</div></div><button class="icon-button" type="button" data-stock-edit-cancel="' +
+      item.id +
+      '" title="취소">×</button></div><div class="form-grid"><div class="field"><label>기업명</label><input class="input" name="title" value="' +
+      escapeHtml(item.title) +
+      '" /></div><div class="field"><label>티커/종목코드</label><input class="input" name="ticker" value="' +
+      escapeHtml(item.ticker || "") +
+      '" /></div><div class="field"><label>구분</label><select class="select" name="status"><option value="holding" ' +
+      (stockStatusKey(item) === "holding" ? "selected" : "") +
+      '>보유 주식</option><option value="watch" ' +
+      (stockStatusKey(item) === "watch" ? "selected" : "") +
+      '>관심 주식</option></select></div><div class="field"><label>보유 수량</label><input class="input" name="amount" inputmode="decimal" value="' +
+      escapeHtml(itemAmountValue(item)) +
+      '" /></div><div class="field"><label>평균단가</label><input class="input" name="averagePrice" inputmode="decimal" value="' +
+      escapeHtml(fields.averagePrice || "") +
+      '" /></div><div class="field"><label>목표가</label><input class="input" name="targetPrice" inputmode="decimal" value="' +
+      escapeHtml(fields.targetPrice || "") +
+      '" /></div></div><div class="field"><label>관찰 메모</label><textarea class="textarea" name="notes">' +
+      escapeHtml(item.notes || "") +
+      '</textarea></div><div class="actions"><button class="primary-button">저장</button><button class="secondary-button" type="button" data-stock-edit-cancel="' +
+      item.id +
+      '">취소</button></div></form></article>'
     );
   }
 
@@ -865,10 +990,7 @@
           render();
           return;
         }
-        var exists = state.snapshot.items.some(function (item) {
-          return item.type === "stock" && stockStatusKey(item) === status && String(item.ticker || item.title || "").trim().toUpperCase() === ticker;
-        });
-        if (exists) {
+        if (stockExists(ticker, status, "")) {
           state.error = "이미 같은 구분으로 추가된 종목입니다.";
           render();
           return;
@@ -894,6 +1016,101 @@
         });
       });
     }
+
+    var stockFilterForm = document.getElementById("stock-filter-form");
+    if (stockFilterForm) {
+      stockFilterForm.addEventListener("submit", function (event) {
+        event.preventDefault();
+        var form = new FormData(stockFilterForm);
+        state.stockQuery = String(form.get("query") || "").trim();
+        render();
+      });
+    }
+
+    var stockFilterClear = document.getElementById("stock-filter-clear");
+    if (stockFilterClear) {
+      stockFilterClear.addEventListener("click", function () {
+        state.stockQuery = "";
+        state.stockFilter = "all";
+        render();
+      });
+    }
+
+    Array.prototype.forEach.call(document.querySelectorAll("[data-stock-filter]"), function (button) {
+      button.addEventListener("click", function () {
+        state.stockFilter = button.getAttribute("data-stock-filter") || "all";
+        render();
+      });
+    });
+
+    Array.prototype.forEach.call(document.querySelectorAll("[data-stock-edit]"), function (button) {
+      button.addEventListener("click", function () {
+        state.editingStockId = button.getAttribute("data-stock-edit");
+        render();
+      });
+    });
+
+    Array.prototype.forEach.call(document.querySelectorAll("[data-stock-edit-cancel]"), function (button) {
+      button.addEventListener("click", function () {
+        if (state.editingStockId === button.getAttribute("data-stock-edit-cancel")) {
+          state.editingStockId = "";
+          render();
+        }
+      });
+    });
+
+    Array.prototype.forEach.call(document.querySelectorAll("[data-stock-toggle]"), function (button) {
+      button.addEventListener("click", function () {
+        var item = findItem(button.getAttribute("data-stock-toggle"));
+        if (!item) return;
+        var nextStatus = stockStatusKey(item) === "holding" ? "watch" : "holding";
+        var ticker = String(item.ticker || item.title || "").trim().toUpperCase();
+        if (stockExists(ticker, nextStatus, item.id)) {
+          state.error = "이미 같은 구분으로 추가된 종목입니다.";
+          render();
+          return;
+        }
+        stockPatch(item.id, {
+          status: nextStatus,
+          amount: nextStatus === "holding" ? itemAmountValue(item) : ""
+        }, false);
+      });
+    });
+
+    Array.prototype.forEach.call(document.querySelectorAll("[data-stock-edit-form]"), function (formElement) {
+      formElement.addEventListener("submit", function (event) {
+        event.preventDefault();
+        var id = formElement.getAttribute("data-stock-edit-form");
+        var form = new FormData(formElement);
+        var ticker = String(form.get("ticker") || "").trim().toUpperCase();
+        var title = String(form.get("title") || "").trim();
+        var status = form.get("status") === "watch" ? "watch" : "holding";
+        if (!ticker && title) ticker = title.toUpperCase();
+        if (!title) title = ticker;
+        if (!ticker && !title) {
+          state.error = "티커나 종목코드를 입력하세요.";
+          render();
+          return;
+        }
+        if (stockExists(ticker, status, id)) {
+          state.error = "이미 같은 구분으로 추가된 종목입니다.";
+          render();
+          return;
+        }
+        state.editingStockId = "";
+        stockPatch(id, {
+          title: title,
+          ticker: ticker,
+          status: status,
+          amount: status === "holding" ? form.get("amount") : "",
+          notes: form.get("notes"),
+          fields: {
+            averagePrice: String(form.get("averagePrice") || "").trim(),
+            targetPrice: String(form.get("targetPrice") || "").trim()
+          }
+        }, true);
+      });
+    });
 
     Array.prototype.forEach.call(document.querySelectorAll("[data-item-done]"), function (button) {
       button.addEventListener("click", function () {

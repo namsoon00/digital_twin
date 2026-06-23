@@ -8,6 +8,11 @@ import '../models/market_models.dart';
 class DataApiProbeClient {
   DataApiProbeClient({http.Client? client}) : _client = client ?? http.Client();
 
+  static const _localDataProxyBaseUrl = String.fromEnvironment(
+    'MARKET_FLOW_DATA_PROXY_BASE_URL',
+    defaultValue: 'http://127.0.0.1:3000',
+  );
+
   final http.Client _client;
 
   void dispose() => _client.close();
@@ -171,14 +176,49 @@ class DataApiProbeClient {
     String apiKey,
     _DataApiProbeSpec spec,
   ) async {
-    final uri = Uri.https('api.stlouisfed.org', '/fred/series/observations', {
+    try {
+      return await _probeFredUri(_fredDirectUri(apiKey), spec);
+    } catch (directError) {
+      try {
+        return await _probeFredUri(_fredProxyUri(apiKey), spec);
+      } catch (proxyError) {
+        throw FormatException('$directError · proxy: $proxyError');
+      }
+    }
+  }
+
+  Uri _fredDirectUri(String apiKey) {
+    return Uri.https('api.stlouisfed.org', '/fred/series/observations', {
       'series_id': 'DGS10',
       'api_key': apiKey,
       'file_type': 'json',
       'limit': '1',
       'sort_order': 'desc',
     });
+  }
+
+  Uri _fredProxyUri(String apiKey) {
+    final base = Uri.parse(_localDataProxyBaseUrl);
+    return base.replace(
+      path: '/api/data-api/fred/observations',
+      queryParameters: {
+        'series_id': 'DGS10',
+        'api_key': apiKey,
+        'limit': '1',
+        'sort_order': 'desc',
+      },
+    );
+  }
+
+  Future<DataApiProbeResult> _probeFredUri(
+    Uri uri,
+    _DataApiProbeSpec spec,
+  ) async {
     final decoded = await _getJsonMap(uri);
+    final errorMessage = decoded['error'] ?? decoded['error_message'];
+    if (errorMessage is String && errorMessage.isNotEmpty) {
+      throw FormatException(errorMessage);
+    }
     final observations = decoded['observations'];
     if (observations is! List || observations.isEmpty) {
       throw const FormatException('DGS10 관측값 응답이 비어 있습니다.');

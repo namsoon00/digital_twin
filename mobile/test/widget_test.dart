@@ -165,6 +165,47 @@ void main() {
     expect(result.linkedDataLabel, contains('관심 종목'));
   });
 
+  test('Data API probe retries FRED through the local proxy', () async {
+    const repository = MockFlowRepository();
+    final source = repository.dataApiSources.firstWhere(
+      (source) => source.id == 'fred',
+    );
+    var requestCount = 0;
+    final client = DataApiProbeClient(
+      client: MockClient((request) async {
+        requestCount += 1;
+        if (requestCount == 1) {
+          expect(request.url.host, 'api.stlouisfed.org');
+          return http.Response('CORS blocked in browser', 500);
+        }
+
+        expect(request.url.host, '127.0.0.1');
+        expect(request.url.path, '/api/data-api/fred/observations');
+        expect(request.url.queryParameters['series_id'], 'DGS10');
+        expect(request.url.queryParameters['api_key'], 'fred-key');
+        return http.Response(
+          '''
+{
+  "observations": [
+    {"date": "2026-06-18", "value": "4.46"}
+  ]
+}
+''',
+          200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        );
+      }),
+    );
+    addTearDown(client.dispose);
+
+    final result = await client.probe(source, 'fred-key');
+
+    expect(result.ok, isTrue);
+    expect(result.endpoint, 'series/observations DGS10');
+    expect(result.message, contains('4.46'));
+    expect(requestCount, 2);
+  });
+
   test('Data API probe validates OpenDART company access', () async {
     const repository = MockFlowRepository();
     final source = repository.dataApiSources.firstWhere(

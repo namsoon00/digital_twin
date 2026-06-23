@@ -353,6 +353,34 @@ function normalizeEconomicFeedRssUrl(rawUrl) {
   return target.toString();
 }
 
+function normalizeFredObservationsUrl(query) {
+  const seriesId = String(query.series_id || "").trim().toUpperCase();
+  const apiKey = String(query.api_key || "").trim();
+  const limit = String(query.limit || "1").trim();
+  const sortOrder = String(query.sort_order || "desc").trim().toLowerCase();
+
+  if (!/^[A-Z0-9_.-]{1,40}$/.test(seriesId)) {
+    throw new Error("FRED series_id 형식이 올바르지 않습니다.");
+  }
+  if (!/^[A-Za-z0-9]{16,64}$/.test(apiKey)) {
+    throw new Error("FRED_API_KEY 형식이 올바르지 않습니다.");
+  }
+  if (!/^\d{1,4}$/.test(limit)) {
+    throw new Error("FRED limit 형식이 올바르지 않습니다.");
+  }
+  if (["asc", "desc"].indexOf(sortOrder) < 0) {
+    throw new Error("FRED sort_order는 asc 또는 desc만 가능합니다.");
+  }
+
+  const target = new URL("https://api.stlouisfed.org/fred/series/observations");
+  target.searchParams.set("series_id", seriesId);
+  target.searchParams.set("api_key", apiKey);
+  target.searchParams.set("file_type", "json");
+  target.searchParams.set("limit", limit);
+  target.searchParams.set("sort_order", sortOrder);
+  return target.toString();
+}
+
 function serveStatic(req, res, pathname) {
   const target = pathname === "/" ? "/index.html" : pathname;
   const filePath = path.normalize(path.join(publicDir, target));
@@ -1198,6 +1226,22 @@ async function api(req, res, pathname) {
         return corsText(res, 200, raw, "application/rss+xml");
       } catch (error) {
         return corsJson(res, 400, { error: error.message || "RSS 피드를 가져오지 못했습니다." });
+      }
+    }
+  }
+
+  if (pathname === "/api/data-api/fred/observations") {
+    if (req.method === "OPTIONS") return corsJson(res, 204, {});
+    if (req.method === "GET") {
+      try {
+        const parsedQuery = url.parse(req.url, true).query;
+        const targetUrl = normalizeFredObservationsUrl(parsedQuery);
+        const payload = await fetchJson(targetUrl);
+        return corsJson(res, 200, payload);
+      } catch (error) {
+        return corsJson(res, 400, {
+          error: error.message || "FRED 데이터를 가져오지 못했습니다."
+        });
       }
     }
   }

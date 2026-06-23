@@ -10,6 +10,7 @@ import 'package:market_flow/src/data/data_api_probe_service.dart';
 import 'package:market_flow/src/data/economic_feed_service.dart';
 import 'package:market_flow/src/data/flow_repository.dart';
 import 'package:market_flow/src/data/local_settings_database.dart';
+import 'package:market_flow/src/data/market_data_api.dart';
 import 'package:market_flow/src/data/settings_repository.dart';
 import 'package:market_flow/src/models/market_models.dart';
 import 'package:market_flow/src/widgets/sparkline.dart';
@@ -82,11 +83,13 @@ void main() {
   test('Google News RSS exposes configured feed channels', () {
     final channels = GoogleNewsEconomicFeedService.defaultFeedChannels;
 
-    expect(channels, hasLength(7));
+    expect(channels, hasLength(12));
     expect(channels.first.name, '미국 유동성');
     expect(channels.first.provider, 'Google News RSS');
     expect(channels.first.query, contains('미국 금리'));
     expect(channels.first.url, startsWith('https://news.google.com/search'));
+    expect(channels.map((channel) => channel.name), contains('ETF 자금'));
+    expect(channels.map((channel) => channel.name), contains('전력/에너지'));
   });
 
   test(
@@ -136,7 +139,163 @@ void main() {
       expect(result.snapshot.status, EconomicFeedFetchStatus.ready);
       expect(result.items, hasLength(1));
       expect(result.items.single.source, 'MarketWatch');
-      expect(proxyRequestCount, 7);
+      expect(proxyRequestCount, 12);
+    },
+  );
+
+  test(
+    'Google News RSS stores and reuses the last successful feed cache',
+    () async {
+      const rss = '''
+<rss><channel>
+  <item>
+    <title>Liquidity pulse keeps AI infrastructure bid alive</title>
+    <link>https://articles.example.com/ai-liquidity</link>
+    <pubDate>Tue, 16 Jun 2026 05:24:00 GMT</pubDate>
+    <source>Reuters</source>
+    <description>Investors continue to fund data center power infrastructure.</description>
+  </item>
+</channel></rss>
+''';
+      final service = GoogleNewsEconomicFeedService(
+        client: MockClient((request) async {
+          return http.Response(
+            rss,
+            200,
+            headers: {'content-type': 'application/rss+xml; charset=utf-8'},
+          );
+        }),
+      );
+      addTearDown(service.dispose);
+
+      final live = await service.fetchFeeds();
+      expect(live.snapshot.status, EconomicFeedFetchStatus.ready);
+
+      final cachedService = GoogleNewsEconomicFeedService(
+        client: MockClient((request) async {
+          throw http.ClientException('rate limited', request.url);
+        }),
+      );
+      addTearDown(cachedService.dispose);
+
+      final cached = await cachedService.fetchFeeds();
+
+      expect(cached.snapshot.status, EconomicFeedFetchStatus.cached);
+      expect(cached.snapshot.provider, 'Google News RSS cache');
+      expect(cached.items.single.title, contains('Liquidity pulse'));
+    },
+  );
+
+  test(
+    'Alpha Vantage stores and reuses the last successful quote cache',
+    () async {
+      const repository = MockFlowRepository();
+      final equities = repository.equities.take(1).toList(growable: false);
+      final service = AlphaVantageQuoteService(
+        apiKey: 'demo-key',
+        client: MockClient((request) async {
+          return http.Response(
+            '''
+{
+  "Global Quote": {
+    "01. symbol": "NVDA",
+    "05. price": "142.1800",
+    "06. volume": "42000000",
+    "07. latest trading day": "2026-06-18",
+    "09. change": "3.40",
+    "10. change percent": "2.45%"
+  }
+}
+''',
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+        }),
+      );
+      addTearDown(service.dispose);
+
+      final live = await service.fetchQuotes(equities);
+      expect(live.snapshot.status, QuoteFetchStatus.ready);
+
+      final cachedService = AlphaVantageQuoteService(
+        apiKey: 'demo-key',
+        client: MockClient((request) async {
+          throw http.ClientException('rate limited', request.url);
+        }),
+      );
+      addTearDown(cachedService.dispose);
+
+      final cached = await cachedService.fetchQuotes(equities);
+      final symbol = equities.single.symbol;
+
+      expect(cached.snapshot.status, QuoteFetchStatus.cached);
+      expect(cached.snapshot.provider, 'Alpha Vantage cache');
+      expect(cached.quotes[symbol]?.provider, 'Alpha Vantage cache');
+      expect(cached.quotes[symbol]?.price, 142.18);
+    },
+  );
+
+  test(
+    'CoinGecko stores and reuses the last successful market cache',
+    () async {
+      const repository = MockFlowRepository();
+      final assets = repository.cryptoAssets.take(2).toList(growable: false);
+      final service = CoinGeckoCryptoMarketService(
+        client: MockClient((request) async {
+          return http.Response(
+            '''
+[
+  {
+    "id": "bitcoin",
+    "symbol": "btc",
+    "name": "Bitcoin",
+    "market_cap_rank": 1,
+    "current_price": 65000,
+    "market_cap": 1280000000000,
+    "total_volume": 41000000000,
+    "price_change_percentage_1h_in_currency": 0.4,
+    "price_change_percentage_24h_in_currency": 2.1,
+    "price_change_percentage_7d_in_currency": 5.2,
+    "last_updated": "2026-06-18T05:24:00.000Z"
+  },
+  {
+    "id": "ethereum",
+    "symbol": "eth",
+    "name": "Ethereum",
+    "market_cap_rank": 2,
+    "current_price": 3500,
+    "market_cap": 420000000000,
+    "total_volume": 19000000000,
+    "price_change_percentage_1h_in_currency": 0.2,
+    "price_change_percentage_24h_in_currency": 1.2,
+    "price_change_percentage_7d_in_currency": 4.0,
+    "last_updated": "2026-06-18T05:24:00.000Z"
+  }
+]
+''',
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+        }),
+      );
+      addTearDown(service.dispose);
+
+      final live = await service.fetchAssets(assets);
+      expect(live.snapshot.status, CryptoFetchStatus.ready);
+
+      final cachedService = CoinGeckoCryptoMarketService(
+        client: MockClient((request) async {
+          throw http.ClientException('rate limited', request.url);
+        }),
+      );
+      addTearDown(cachedService.dispose);
+
+      final cached = await cachedService.fetchAssets(assets);
+
+      expect(cached.snapshot.status, CryptoFetchStatus.cached);
+      expect(cached.snapshot.provider, 'CoinGecko cache');
+      expect(cached.assets.first.provider, 'CoinGecko cache');
+      expect(cached.assets.first.priceUsd, 65000);
     },
   );
 
@@ -636,7 +795,39 @@ void main() {
       findsWidgets,
     );
     expect(find.text('Alpha Vantage GLOBAL_QUOTE'), findsOneWidget);
+    expect(find.text('시장·테마 종합 지표'), findsOneWidget);
+
+    await tester.tap(find.text('시장·테마 종합 지표'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('테마 확산 구성'), findsOneWidget);
+    expect(find.text('시장 펄스 구성'), findsOneWidget);
+
+    await dismissModal(tester, find.text('테마 확산 구성'));
+
+    await tester.scrollUntilVisible(
+      find.text('시장 펄스'),
+      180,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+
     expect(find.text('시장 펄스'), findsOneWidget);
+
+    await tester.scrollUntilVisible(
+      find.text('KOSPI/KOSDAQ 흐름'),
+      240,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('KOSPI/KOSDAQ 흐름'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('펄스 점수'), findsOneWidget);
+    expect(find.text('추세 안정성'), findsOneWidget);
+
+    await dismissModal(tester, find.text('펄스 점수'));
 
     await tester.scrollUntilVisible(
       find.text('테마 확산'),
@@ -646,6 +837,14 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('테마 확산'), findsOneWidget);
+
+    await tester.tap(find.text('AI 인프라'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('테마 점수'), findsOneWidget);
+    expect(find.text('확산 강도'), findsOneWidget);
+
+    await dismissModal(tester, find.text('테마 점수'));
 
     await tester.scrollUntilVisible(
       find.text('오늘의 신호'),
@@ -670,22 +869,25 @@ void main() {
   testWidgets('MarketFlow shows the economic feed tab', (tester) async {
     await pumpMarketFlowApp(tester);
 
-    await tester.tap(find.text('피드'));
+    await tester.tap(find.byKey(const ValueKey('nav-feed')));
     await tester.pumpAndSettle();
 
+    final feedList = find.byKey(const ValueKey('economic-feed-list'));
     expect(find.text('경제가 돌아가는 방향'), findsOneWidget);
     expect(find.text('AI CAPEX 자금이 반도체에서 전력 인프라로 확산'), findsWidgets);
-    expect(find.text('피드 채널'), findsOneWidget);
-    expect(find.text('Google News RSS'), findsWidgets);
+    expect(find.text('트렌드 스냅샷'), findsOneWidget);
+    expect(find.text('반복 키워드'), findsOneWidget);
     expect(find.textContaining('피드 갱신'), findsOneWidget);
     expect(find.byTooltip('대표 뉴스 열기'), findsOneWidget);
+
+    await tester.drag(feedList, const Offset(0, -320));
+    await tester.pumpAndSettle();
+
+    expect(find.text('피드 채널'), findsOneWidget);
+    expect(find.text('Google News RSS'), findsWidgets);
     expect(find.byTooltip('채널 뉴스 열기'), findsWidgets);
 
-    await tester.scrollUntilVisible(
-      find.text('경제 피드'),
-      260,
-      scrollable: find.byType(Scrollable).first,
-    );
+    await tester.drag(feedList, const Offset(0, -420));
     await tester.pumpAndSettle();
 
     expect(find.text('경제 피드'), findsOneWidget);

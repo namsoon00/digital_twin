@@ -506,6 +506,7 @@ class _AppShellState extends State<AppShell> {
           ),
           NavigationDestination(
             icon: Icon(Icons.dynamic_feed_outlined),
+            key: ValueKey('nav-feed'),
             selectedIcon: Icon(Icons.dynamic_feed),
             label: '피드',
           ),
@@ -675,6 +676,33 @@ class DashboardScreen extends StatelessWidget {
   final QuoteApiSnapshot quoteSnapshot;
   final VoidCallback onRefreshQuotes;
 
+  void _showSignalOverview(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) => SignalOverviewDetailSheet(pulses: pulses, themes: themes),
+    );
+  }
+
+  void _showMarketPulseDetail(BuildContext context, MarketPulse pulse) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) => MarketPulseDetailSheet(pulse: pulse),
+    );
+  }
+
+  void _showThemePulseDetail(BuildContext context, ThemePulse theme) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) => ThemePulseDetailSheet(theme: theme),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final averageScore = equities.isEmpty
@@ -718,6 +746,12 @@ class DashboardScreen extends StatelessWidget {
           onRefresh: onRefreshQuotes,
         ),
         const SizedBox(height: 18),
+        MarketSignalOverviewCard(
+          pulses: pulses,
+          themes: themes,
+          onOpen: () => _showSignalOverview(context),
+        ),
+        const SizedBox(height: 18),
         const SectionHeader(title: '시장 펄스'),
         const SizedBox(height: 10),
         if (pulses.isEmpty)
@@ -726,7 +760,10 @@ class DashboardScreen extends StatelessWidget {
           ...pulses.map(
             (pulse) => Padding(
               padding: const EdgeInsets.only(bottom: 10),
-              child: MarketPulseCard(pulse: pulse),
+              child: MarketPulseCard(
+                pulse: pulse,
+                onOpen: () => _showMarketPulseDetail(context, pulse),
+              ),
             ),
           ),
         const SizedBox(height: 8),
@@ -752,6 +789,8 @@ class DashboardScreen extends StatelessWidget {
                       child: ThemePulseCard(
                         theme: themes[index],
                         compact: true,
+                        onOpen: () =>
+                            _showThemePulseDetail(context, themes[index]),
                       ),
                     );
                   },
@@ -873,6 +912,7 @@ class _EconomicFeedScreenState extends State<EconomicFeedScreen> {
     final topImpact = rankedFeeds.isEmpty ? null : rankedFeeds.first;
 
     return ListView(
+      key: const ValueKey('economic-feed-list'),
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 20),
       children: [
         Row(
@@ -909,7 +949,13 @@ class _EconomicFeedScreenState extends State<EconomicFeedScreen> {
           themes: widget.themes,
           feedSnapshot: widget.feedSnapshot,
           quoteSnapshot: widget.quoteSnapshot,
+          onRefresh: widget.onRefreshFeeds,
           onOpen: _openFeedInAppBrowser,
+        ),
+        const SizedBox(height: 12),
+        EconomicFeedTrendCard(
+          feeds: rankedFeeds,
+          channels: widget.feedChannels,
         ),
         const SizedBox(height: 12),
         if (widget.feedChannels.isNotEmpty) ...[
@@ -1140,6 +1186,7 @@ class EconomicFeedSummaryCard extends StatelessWidget {
     required this.themes,
     required this.feedSnapshot,
     required this.quoteSnapshot,
+    required this.onRefresh,
     this.onOpen,
     super.key,
   });
@@ -1150,6 +1197,7 @@ class EconomicFeedSummaryCard extends StatelessWidget {
   final List<ThemePulse> themes;
   final EconomicFeedFetchSnapshot feedSnapshot;
   final QuoteApiSnapshot quoteSnapshot;
+  final Future<void> Function() onRefresh;
   final ValueChanged<EconomicFeedItem>? onOpen;
 
   @override
@@ -1226,6 +1274,13 @@ class EconomicFeedSummaryCard extends StatelessWidget {
                       ),
                     ),
                   ],
+                  const SizedBox(height: 8),
+                  IconButton(
+                    tooltip: '피드 갱신',
+                    onPressed: onRefresh,
+                    visualDensity: VisualDensity.compact,
+                    icon: const Icon(Icons.refresh),
+                  ),
                 ],
               ),
             ],
@@ -1258,6 +1313,10 @@ class EconomicFeedSummaryCard extends StatelessWidget {
                 color: _feedStatusColor(feedSnapshot.status),
               ),
               FlowChip(
+                label: _feedDataQualityLabel(feedSnapshot),
+                color: _dataQualityColor(_feedDataQualityLabel(feedSnapshot)),
+              ),
+              FlowChip(
                 label: _formatFeedUpdated(feedSnapshot.updatedAt),
                 color: AppColors.muted,
               ),
@@ -1268,6 +1327,157 @@ class EconomicFeedSummaryCard extends StatelessWidget {
                     ? AppColors.green
                     : AppColors.amber,
               ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class EconomicFeedTrendCard extends StatelessWidget {
+  const EconomicFeedTrendCard({
+    required this.feeds,
+    required this.channels,
+    super.key,
+  });
+
+  final List<EconomicFeedItem> feeds;
+  final List<EconomicFeedChannel> channels;
+
+  @override
+  Widget build(BuildContext context) {
+    final now = DateTime.now();
+    final recentCount = feeds.where((feed) {
+      final publishedAt = feed.publishedAt;
+      if (publishedAt == null) {
+        return false;
+      }
+      return now.difference(publishedAt).inHours <= 36;
+    }).length;
+    final sourceCount = feeds
+        .map((feed) => feed.source.trim())
+        .where((source) => source.isNotEmpty)
+        .toSet()
+        .length;
+    final highImpactCount = feeds
+        .where((feed) => feed.impactScore >= 80)
+        .length;
+    final channelCounts = <String, int>{};
+    final channelColors = <String, Color>{};
+    for (final channel in channels) {
+      channelColors[channel.name] = _feedTypeColor(channel.type);
+    }
+    for (final feed in feeds) {
+      final name = feed.channelName.isEmpty
+          ? feed.type.label
+          : feed.channelName;
+      channelCounts[name] = (channelCounts[name] ?? 0) + 1;
+    }
+    final topChannels = channelCounts.entries.toList(growable: false)
+      ..sort((a, b) => b.value.compareTo(a.value));
+    final tagCounts = <String, int>{};
+    for (final feed in feeds) {
+      for (final tag in feed.tags) {
+        tagCounts[tag] = (tagCounts[tag] ?? 0) + 1;
+      }
+    }
+    final topTags = tagCounts.entries.toList(growable: false)
+      ..sort((a, b) => b.value.compareTo(a.value));
+
+    return AppCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              DecoratedBox(
+                decoration: BoxDecoration(
+                  color: AppColors.green.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(10),
+                  child: Icon(
+                    Icons.insights_outlined,
+                    color: AppColors.green,
+                    size: 22,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  '트렌드 스냅샷',
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
+              ),
+              FlowChip(
+                label: '${feeds.length} articles',
+                color: AppColors.blue,
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          DetailStatGrid(
+            stats: [
+              DetailStat(
+                label: '최근 36h',
+                value: '$recentCount',
+                color: AppColors.green,
+              ),
+              DetailStat(
+                label: '기사 소스',
+                value: '$sourceCount',
+                color: AppColors.blue,
+              ),
+              DetailStat(
+                label: '고영향',
+                value: '$highImpactCount',
+                color: AppColors.amber,
+              ),
+              DetailStat(
+                label: '채널',
+                value: '${channels.length}',
+                color: AppColors.charcoal,
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Text('강한 채널', style: Theme.of(context).textTheme.labelLarge),
+          const SizedBox(height: 8),
+          if (topChannels.isEmpty)
+            Text(
+              '아직 집계된 채널이 없습니다.',
+              style: Theme.of(context).textTheme.bodyMedium,
+            )
+          else
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final entry in topChannels.take(5))
+                  FlowChip(
+                    label: '${entry.key} ${entry.value}',
+                    color: channelColors[entry.key] ?? AppColors.charcoal,
+                  ),
+              ],
+            ),
+          const SizedBox(height: 12),
+          Text('반복 키워드', style: Theme.of(context).textTheme.labelLarge),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              if (topTags.isEmpty)
+                FlowChip(label: '키워드 대기', color: AppColors.muted)
+              else
+                for (final entry in topTags.take(8))
+                  FlowChip(
+                    label: '${entry.key} ${entry.value}',
+                    color: AppColors.green,
+                  ),
             ],
           ),
         ],
@@ -4091,6 +4301,355 @@ class DataApiSourceDetailSheet extends StatelessWidget {
   }
 }
 
+class SignalOverviewDetailSheet extends StatelessWidget {
+  const SignalOverviewDetailSheet({
+    required this.pulses,
+    required this.themes,
+    super.key,
+  });
+
+  final List<MarketPulse> pulses;
+  final List<ThemePulse> themes;
+
+  @override
+  Widget build(BuildContext context) {
+    final combined = _combinedSignalSeries(pulses, themes);
+    final composite = combined.isEmpty ? 0 : combined.last.round();
+    final pulseAverage = _averageMetric(
+      pulses.map((pulse) => pulse.score.toDouble()),
+    );
+    final themeAverage = _averageMetric(
+      themes.map((theme) => theme.score.toDouble()),
+    );
+    final diffusionAverage = _averageMetric(
+      themes.map((theme) => theme.diffusion.toDouble()),
+    );
+    final riskAverage = _averageMetric(
+      themes.map((theme) => theme.risk.toDouble()),
+    );
+    final color = scoreColor(composite);
+    final topPulse = pulses.toList(growable: false)
+      ..sort((a, b) => b.score.compareTo(a.score));
+    final topThemes = themes.toList(growable: false)
+      ..sort((a, b) => b.score.compareTo(a.score));
+
+    return FlowDetailSheetFrame(
+      title: '시장·테마 종합 지표',
+      subtitle: '시장 펄스와 테마 확산을 하나의 흐름으로 압축',
+      icon: Icons.stacked_line_chart,
+      color: color,
+      children: [
+        SizedBox(
+          height: 132,
+          child: combined.length < 2
+              ? const EmptyState(message: '종합 지표 데이터가 없습니다.')
+              : Sparkline(values: combined, color: color),
+        ),
+        const SizedBox(height: 12),
+        DetailStatGrid(
+          stats: [
+            DetailStat(label: '종합', value: '$composite', color: color),
+            DetailStat(
+              label: '시장 평균',
+              value: pulseAverage.toStringAsFixed(1),
+              color: scoreColor(pulseAverage.round()),
+            ),
+            DetailStat(
+              label: '테마 평균',
+              value: themeAverage.toStringAsFixed(1),
+              color: scoreColor(themeAverage.round()),
+            ),
+            DetailStat(
+              label: '평균 위험',
+              value: riskAverage.toStringAsFixed(1),
+              color: riskAverage >= 55 ? AppColors.red : AppColors.amber,
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        FactorBar(
+          label: '테마 확산 평균',
+          value: diffusionAverage.round(),
+          color: AppColors.blue,
+        ),
+        const SizedBox(height: 12),
+        FactorBar(
+          label: '시장 펄스 평균',
+          value: pulseAverage.round(),
+          color: scoreColor(pulseAverage.round()),
+        ),
+        const SizedBox(height: 18),
+        Text(
+          _signalOverviewExplanation(composite, riskAverage),
+          style: Theme.of(context).textTheme.bodyLarge,
+        ),
+        const SizedBox(height: 18),
+        const SectionHeader(title: '시장 펄스 구성'),
+        const SizedBox(height: 10),
+        if (topPulse.isEmpty)
+          const EmptyState(message: '시장 펄스 데이터가 없습니다.')
+        else
+          ...topPulse.map(
+            (pulse) => Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: SignalComponentRow(
+                icon: Icons.public_outlined,
+                title: pulse.title,
+                subtitle: '${pulse.bias} · ${pulse.netFlow}',
+                score: pulse.score,
+                color: scoreColor(pulse.score),
+              ),
+            ),
+          ),
+        const SizedBox(height: 8),
+        const SectionHeader(title: '테마 확산 구성'),
+        const SizedBox(height: 10),
+        if (topThemes.isEmpty)
+          const EmptyState(message: '테마 데이터가 없습니다.')
+        else
+          ...topThemes.map(
+            (theme) => Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: SignalComponentRow(
+                icon: Icons.bubble_chart_outlined,
+                title: theme.name,
+                subtitle:
+                    '${theme.stage.label} · 확산 ${theme.diffusion} · 위험 ${theme.risk}',
+                score: theme.score,
+                color: scoreColor(theme.score),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class MarketPulseDetailSheet extends StatelessWidget {
+  const MarketPulseDetailSheet({required this.pulse, super.key});
+
+  final MarketPulse pulse;
+
+  @override
+  Widget build(BuildContext context) {
+    final score = pulse.score.clamp(0, 100);
+    final color = scoreColor(score);
+    final heatChange = _seriesChange(pulse.heat);
+    final heatAverage = _averageMetric(pulse.heat);
+    final volatility = _seriesVolatility(pulse.heat);
+
+    return FlowDetailSheetFrame(
+      title: pulse.title,
+      subtitle: '${pulse.bias} · ${pulse.updatedLabel}',
+      icon: Icons.public_outlined,
+      color: color,
+      children: [
+        SizedBox(
+          height: 132,
+          child: Sparkline(values: pulse.heat, color: color),
+        ),
+        const SizedBox(height: 12),
+        DetailStatGrid(
+          stats: [
+            DetailStat(label: '펄스 점수', value: '$score', color: color),
+            DetailStat(
+              label: '변화율',
+              value: pulse.change >= 0
+                  ? '+${pulse.change.toStringAsFixed(1)}%'
+                  : '${pulse.change.toStringAsFixed(1)}%',
+              color: pulse.change >= 0 ? AppColors.green : AppColors.red,
+            ),
+            DetailStat(
+              label: '순흐름',
+              value: pulse.netFlow,
+              color: AppColors.charcoal,
+            ),
+            DetailStat(
+              label: '업데이트',
+              value: pulse.updatedLabel,
+              color: AppColors.muted,
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        FactorBar(label: '현재 열기', value: score, color: color),
+        const SizedBox(height: 12),
+        FactorBar(
+          label: '평균 열기',
+          value: heatAverage.round(),
+          color: scoreColor(heatAverage.round()),
+        ),
+        const SizedBox(height: 12),
+        FactorBar(
+          label: '추세 안정성',
+          value: (100 - volatility.round()).clamp(0, 100),
+          color: volatility >= 22 ? AppColors.amber : AppColors.green,
+        ),
+        const SizedBox(height: 18),
+        Text(pulse.summary, style: Theme.of(context).textTheme.bodyLarge),
+        const SizedBox(height: 10),
+        Text(
+          _marketPulseExplanation(pulse, heatChange),
+          style: Theme.of(context).textTheme.bodyMedium,
+        ),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            FlowChip(label: pulse.bias, color: color),
+            FlowChip(label: pulse.netFlow, color: AppColors.charcoal),
+            FlowChip(
+              label: heatChange >= 0
+                  ? '추세 +${heatChange.toStringAsFixed(1)}'
+                  : '추세 ${heatChange.toStringAsFixed(1)}',
+              color: heatChange >= 0 ? AppColors.green : AppColors.red,
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class ThemePulseDetailSheet extends StatelessWidget {
+  const ThemePulseDetailSheet({required this.theme, super.key});
+
+  final ThemePulse theme;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = scoreColor(theme.score);
+    final trendChange = _seriesChange(theme.trend);
+    final trendAverage = _averageMetric(theme.trend);
+
+    return FlowDetailSheetFrame(
+      title: theme.name,
+      subtitle: '${theme.stage.label} · 확산 ${theme.diffusion}',
+      icon: Icons.bubble_chart_outlined,
+      color: color,
+      children: [
+        SizedBox(
+          height: 132,
+          child: Sparkline(values: theme.trend, color: color),
+        ),
+        const SizedBox(height: 12),
+        DetailStatGrid(
+          stats: [
+            DetailStat(label: '테마 점수', value: '${theme.score}', color: color),
+            DetailStat(
+              label: '확산',
+              value: '${theme.diffusion}',
+              color: AppColors.blue,
+            ),
+            DetailStat(
+              label: '모멘텀',
+              value: '${theme.momentum}',
+              color: AppColors.green,
+            ),
+            DetailStat(
+              label: '위험',
+              value: '${theme.risk}',
+              color: theme.risk >= 55 ? AppColors.red : AppColors.amber,
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        FactorBar(
+          label: '확산 강도',
+          value: theme.diffusion,
+          color: AppColors.blue,
+        ),
+        const SizedBox(height: 12),
+        FactorBar(label: '모멘텀', value: theme.momentum, color: AppColors.green),
+        const SizedBox(height: 12),
+        FactorBar(
+          label: '위험도',
+          value: theme.risk,
+          color: theme.risk >= 55 ? AppColors.red : AppColors.amber,
+        ),
+        const SizedBox(height: 18),
+        Text(theme.narrative, style: Theme.of(context).textTheme.bodyLarge),
+        const SizedBox(height: 10),
+        Text(
+          _themePulseExplanation(theme, trendChange, trendAverage),
+          style: Theme.of(context).textTheme.bodyMedium,
+        ),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            FlowChip(label: theme.stage.label, color: color),
+            FlowChip(
+              label: trendChange >= 0
+                  ? '추세 +${trendChange.toStringAsFixed(1)}'
+                  : '추세 ${trendChange.toStringAsFixed(1)}',
+              color: trendChange >= 0 ? AppColors.green : AppColors.red,
+            ),
+            for (final leader in theme.leaders)
+              FlowChip(label: leader, color: AppColors.charcoal),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class SignalComponentRow extends StatelessWidget {
+  const SignalComponentRow({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.score,
+    required this.color,
+    super.key,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final int score;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: AppColors.line),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Row(
+          children: [
+            Icon(icon, color: color, size: 20),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title, style: Theme.of(context).textTheme.titleMedium),
+                  const SizedBox(height: 3),
+                  Text(
+                    subtitle,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 10),
+            _ScoreDial(score: score.clamp(0, 100), color: color),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class CapitalFlowDetailSheet extends StatelessWidget {
   const CapitalFlowDetailSheet({required this.flow, super.key});
 
@@ -4501,6 +5060,7 @@ class ApiStatusCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final color = switch (snapshot.status) {
       QuoteFetchStatus.ready => AppColors.green,
+      QuoteFetchStatus.cached => AppColors.blue,
       QuoteFetchStatus.partial => AppColors.amber,
       QuoteFetchStatus.loading => AppColors.blue,
       QuoteFetchStatus.missingApiKey => AppColors.amber,
@@ -4562,8 +5122,14 @@ class ApiStatusCard extends StatelessWidget {
                           : AppColors.amber,
                     ),
                     FlowChip(
+                      label: _quoteDataQualityLabel(snapshot, liveQuoteCount),
+                      color: _dataQualityColor(
+                        _quoteDataQualityLabel(snapshot, liveQuoteCount),
+                      ),
+                    ),
+                    FlowChip(
                       label:
-                          'live $liveQuoteCount/${snapshot.requestedSymbols}',
+                          'data $liveQuoteCount/${snapshot.requestedSymbols}',
                       color: liveQuoteCount > 0
                           ? AppColors.green
                           : AppColors.muted,
@@ -4592,8 +5158,220 @@ class ApiStatusCard extends StatelessWidget {
   }
 }
 
-class MarketPulseCard extends StatelessWidget {
-  const MarketPulseCard({required this.pulse, super.key});
+class MarketSignalOverviewCard extends StatelessWidget {
+  const MarketSignalOverviewCard({
+    required this.pulses,
+    required this.themes,
+    this.onOpen,
+    super.key,
+  });
+
+  final List<MarketPulse> pulses;
+  final List<ThemePulse> themes;
+  final VoidCallback? onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    final combined = _combinedSignalSeries(pulses, themes);
+    final pulseScore = _averageMetric(
+      pulses.map((pulse) => pulse.score.toDouble()),
+    ).round();
+    final themeScore = _averageMetric(
+      themes.map((theme) => theme.score.toDouble()),
+    ).round();
+    final diffusion = _averageMetric(
+      themes.map((theme) => theme.diffusion.toDouble()),
+    ).round();
+    final risk = _averageMetric(
+      themes.map((theme) => theme.risk.toDouble()),
+    ).round();
+    final composite = combined.isEmpty ? 0 : combined.last.round();
+    final color = scoreColor(composite);
+
+    return AppCard(
+      onTap: onOpen,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              DecoratedBox(
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: color.withValues(alpha: 0.22)),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(10),
+                  child: Icon(Icons.stacked_line_chart, color: color, size: 22),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '시장·테마 종합 지표',
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+                    const SizedBox(height: 5),
+                    Text(
+                      '${pulses.length}개 시장 펄스와 ${themes.length}개 테마를 하나의 흐름으로 압축',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                  ],
+                ),
+              ),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  FlowChip(label: '$composite', color: color),
+                  if (onOpen != null) ...[
+                    const SizedBox(height: 8),
+                    Icon(
+                      Icons.open_in_full_outlined,
+                      color: AppColors.muted,
+                      size: 19,
+                    ),
+                  ],
+                ],
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          SizedBox(
+            height: 94,
+            child: combined.length < 2
+                ? const EmptyState(message: '종합 지표 데이터가 없습니다.')
+                : Sparkline(values: combined, color: color),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: _MiniStat(
+                  label: '시장',
+                  value: pulseScore,
+                  color: scoreColor(pulseScore),
+                ),
+              ),
+              Expanded(
+                child: _MiniStat(
+                  label: '테마',
+                  value: themeScore,
+                  color: scoreColor(themeScore),
+                ),
+              ),
+              Expanded(
+                child: _MiniStat(
+                  label: '확산',
+                  value: diffusion,
+                  color: AppColors.blue,
+                ),
+              ),
+              Expanded(
+                child: _MiniStat(
+                  label: '위험',
+                  value: risk,
+                  color: risk >= 55 ? AppColors.red : AppColors.amber,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class SignalOverviewDetailSheetLegacyB extends StatelessWidget {
+  const SignalOverviewDetailSheetLegacyB({
+    required this.pulses,
+    required this.themes,
+    super.key,
+  });
+
+  final List<MarketPulse> pulses;
+  final List<ThemePulse> themes;
+
+  @override
+  Widget build(BuildContext context) {
+    final combined = _combinedSignalSeries(pulses, themes);
+    final pulseScore = _averageMetric(
+      pulses.map((pulse) => pulse.score.toDouble()),
+    ).round();
+    final themeScore = _averageMetric(
+      themes.map((theme) => theme.score.toDouble()),
+    ).round();
+    final diffusion = _averageMetric(
+      themes.map((theme) => theme.diffusion.toDouble()),
+    ).round();
+    final risk = _averageMetric(
+      themes.map((theme) => theme.risk.toDouble()),
+    ).round();
+    final composite = combined.isEmpty ? 0 : combined.last.round();
+    final color = scoreColor(composite);
+    final topPulse = pulses.toList(growable: false)
+      ..sort((a, b) => b.score.compareTo(a.score));
+    final topTheme = themes.toList(growable: false)
+      ..sort((a, b) => b.score.compareTo(a.score));
+
+    return FlowDetailSheetFrame(
+      title: '시장·테마 종합 상세',
+      subtitle: '${pulses.length}개 시장 펄스 · ${themes.length}개 테마',
+      icon: Icons.stacked_line_chart,
+      color: color,
+      children: [
+        SizedBox(
+          height: 150,
+          child: combined.length < 2
+              ? const EmptyState(message: '종합 지표 데이터가 없습니다.')
+              : Sparkline(values: combined, color: color),
+        ),
+        const SizedBox(height: 12),
+        DetailStatGrid(
+          stats: [
+            DetailStat(label: '종합', value: '$composite', color: color),
+            DetailStat(
+              label: '시장',
+              value: '$pulseScore',
+              color: scoreColor(pulseScore),
+            ),
+            DetailStat(
+              label: '테마',
+              value: '$themeScore',
+              color: scoreColor(themeScore),
+            ),
+            DetailStat(
+              label: '확산/위험',
+              value: '$diffusion/$risk',
+              color: risk >= 55 ? AppColors.red : AppColors.blue,
+            ),
+          ],
+        ),
+        if (topPulse.isNotEmpty) ...[
+          const SizedBox(height: 18),
+          const SectionHeader(title: '강한 시장 펄스'),
+          const SizedBox(height: 10),
+          MarketPulseCard(pulse: topPulse.first),
+        ],
+        if (topTheme.isNotEmpty) ...[
+          const SizedBox(height: 18),
+          const SectionHeader(title: '강한 테마'),
+          const SizedBox(height: 10),
+          ThemePulseCard(theme: topTheme.first, compact: true),
+        ],
+      ],
+    );
+  }
+}
+
+class MarketPulseDetailSheetLegacyB extends StatelessWidget {
+  const MarketPulseDetailSheetLegacyB({required this.pulse, super.key});
 
   final MarketPulse pulse;
 
@@ -4601,7 +5379,135 @@ class MarketPulseCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final score = pulse.score.clamp(0, 100);
     final color = scoreColor(score);
+
+    return FlowDetailSheetFrame(
+      title: pulse.title,
+      subtitle: '${pulse.region.label} · ${pulse.bias}',
+      icon: Icons.monitor_heart_outlined,
+      color: color,
+      children: [
+        SizedBox(
+          height: 138,
+          child: Sparkline(values: pulse.heat, color: color),
+        ),
+        const SizedBox(height: 12),
+        DetailStatGrid(
+          stats: [
+            DetailStat(label: '점수', value: '$score', color: color),
+            DetailStat(
+              label: '변화',
+              value: pulse.change >= 0
+                  ? '+${pulse.change.toStringAsFixed(1)}%'
+                  : '${pulse.change.toStringAsFixed(1)}%',
+              color: pulse.change >= 0 ? AppColors.green : AppColors.red,
+            ),
+            DetailStat(
+              label: '순유입',
+              value: pulse.netFlow,
+              color: AppColors.blue,
+            ),
+            DetailStat(
+              label: '업데이트',
+              value: pulse.updatedLabel,
+              color: AppColors.muted,
+            ),
+          ],
+        ),
+        const SizedBox(height: 14),
+        Text(pulse.summary, style: Theme.of(context).textTheme.bodyLarge),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            FlowChip(label: pulse.region.label, color: AppColors.charcoal),
+            FlowChip(label: pulse.bias, color: color),
+            FlowChip(label: pulse.netFlow, color: AppColors.blue),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class ThemePulseDetailSheetLegacyB extends StatelessWidget {
+  const ThemePulseDetailSheetLegacyB({required this.theme, super.key});
+
+  final ThemePulse theme;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = scoreColor(theme.score);
+
+    return FlowDetailSheetFrame(
+      title: theme.name,
+      subtitle: '${theme.region.label} · ${theme.stage.label}',
+      icon: Icons.hub_outlined,
+      color: color,
+      children: [
+        SizedBox(
+          height: 138,
+          child: Sparkline(values: theme.trend, color: color),
+        ),
+        const SizedBox(height: 12),
+        DetailStatGrid(
+          stats: [
+            DetailStat(label: '점수', value: '${theme.score}', color: color),
+            DetailStat(
+              label: '확산',
+              value: '${theme.diffusion}',
+              color: AppColors.blue,
+            ),
+            DetailStat(
+              label: '모멘텀',
+              value: '${theme.momentum}',
+              color: AppColors.green,
+            ),
+            DetailStat(
+              label: '위험',
+              value: '${theme.risk}',
+              color: theme.risk >= 55 ? AppColors.red : AppColors.amber,
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        FactorBar(label: '확산', value: theme.diffusion, color: AppColors.blue),
+        const SizedBox(height: 12),
+        FactorBar(label: '모멘텀', value: theme.momentum, color: AppColors.green),
+        const SizedBox(height: 12),
+        FactorBar(
+          label: '위험',
+          value: theme.risk,
+          color: theme.risk >= 55 ? AppColors.red : AppColors.amber,
+        ),
+        const SizedBox(height: 14),
+        Text(theme.narrative, style: Theme.of(context).textTheme.bodyLarge),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final leader in theme.leaders)
+              FlowChip(label: leader, color: AppColors.green),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class MarketPulseCard extends StatelessWidget {
+  const MarketPulseCard({required this.pulse, this.onOpen, super.key});
+
+  final MarketPulse pulse;
+  final VoidCallback? onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    final score = pulse.score.clamp(0, 100);
+    final color = scoreColor(score);
     return AppCard(
+      onTap: onOpen,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -4626,7 +5532,19 @@ class MarketPulseCard extends StatelessWidget {
                   ],
                 ),
               ),
-              _ScoreDial(score: score, color: color),
+              Column(
+                children: [
+                  _ScoreDial(score: score, color: color),
+                  if (onOpen != null) ...[
+                    const SizedBox(height: 8),
+                    Icon(
+                      Icons.open_in_full_outlined,
+                      color: AppColors.muted,
+                      size: 19,
+                    ),
+                  ],
+                ],
+              ),
             ],
           ),
           const SizedBox(height: 16),
@@ -4668,6 +5586,15 @@ class ThemeBoardScreen extends StatelessWidget {
 
   final List<ThemePulse> themes;
 
+  void _showThemePulseDetail(BuildContext context, ThemePulse theme) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) => ThemePulseDetailSheet(theme: theme),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (themes.isEmpty) {
@@ -4685,22 +5612,33 @@ class ThemeBoardScreen extends StatelessWidget {
         if (index == 0) {
           return const SectionHeader(title: '테마 맵');
         }
-        return ThemePulseCard(theme: themes[index - 1]);
+        final theme = themes[index - 1];
+        return ThemePulseCard(
+          theme: theme,
+          onOpen: () => _showThemePulseDetail(context, theme),
+        );
       },
     );
   }
 }
 
 class ThemePulseCard extends StatelessWidget {
-  const ThemePulseCard({required this.theme, this.compact = false, super.key});
+  const ThemePulseCard({
+    required this.theme,
+    this.compact = false,
+    this.onOpen,
+    super.key,
+  });
 
   final ThemePulse theme;
   final bool compact;
+  final VoidCallback? onOpen;
 
   @override
   Widget build(BuildContext context) {
     final color = scoreColor(theme.score);
     return AppCard(
+      onTap: onOpen,
       padding: EdgeInsets.all(compact ? 14 : 16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -4715,7 +5653,20 @@ class ThemePulseCard extends StatelessWidget {
                   style: Theme.of(context).textTheme.titleLarge,
                 ),
               ),
-              FlowChip(label: theme.stage.label, color: color),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  FlowChip(label: theme.stage.label, color: color),
+                  if (onOpen != null) ...[
+                    const SizedBox(height: 8),
+                    Icon(
+                      Icons.open_in_full_outlined,
+                      color: AppColors.muted,
+                      size: 18,
+                    ),
+                  ],
+                ],
+              ),
             ],
           ),
           const SizedBox(height: 10),
@@ -5514,6 +6465,7 @@ class ChecklistDataPanel extends StatelessWidget {
     final highRiskCount = equities.where((equity) => equity.risk >= 60).length;
     final apiColor = switch (quoteSnapshot.status) {
       QuoteFetchStatus.ready => AppColors.green,
+      QuoteFetchStatus.cached => AppColors.blue,
       QuoteFetchStatus.partial => AppColors.amber,
       QuoteFetchStatus.loading => AppColors.blue,
       QuoteFetchStatus.missingApiKey => AppColors.amber,
@@ -5582,12 +6534,18 @@ class ChecklistDataPanel extends StatelessWidget {
             children: [
               FlowChip(label: quoteSnapshot.statusLabel, color: apiColor),
               FlowChip(
+                label: _quoteDataQualityLabel(quoteSnapshot, quotes.length),
+                color: _dataQualityColor(
+                  _quoteDataQualityLabel(quoteSnapshot, quotes.length),
+                ),
+              ),
+              FlowChip(
                 label: '${quoteSnapshot.provider} ${quoteSnapshot.endpoint}',
                 color: AppColors.blue,
               ),
               FlowChip(
                 label:
-                    'live ${quotes.length}/${quoteSnapshot.requestedSymbols}',
+                    'data ${quotes.length}/${quoteSnapshot.requestedSymbols}',
                 color: quotes.isEmpty ? AppColors.muted : AppColors.green,
               ),
               if (highRiskCount > 0)
@@ -7072,6 +8030,8 @@ Color _feedStatusColor(EconomicFeedFetchStatus status) {
       return AppColors.blue;
     case EconomicFeedFetchStatus.ready:
       return AppColors.green;
+    case EconomicFeedFetchStatus.cached:
+      return AppColors.blue;
     case EconomicFeedFetchStatus.partial:
       return AppColors.amber;
     case EconomicFeedFetchStatus.failed:
@@ -7087,11 +8047,124 @@ Color _cryptoStatusColor(CryptoFetchStatus status) {
       return AppColors.blue;
     case CryptoFetchStatus.ready:
       return AppColors.green;
+    case CryptoFetchStatus.cached:
+      return AppColors.blue;
     case CryptoFetchStatus.partial:
       return AppColors.amber;
     case CryptoFetchStatus.failed:
       return AppColors.red;
   }
+}
+
+List<double> _combinedSignalSeries(
+  List<MarketPulse> pulses,
+  List<ThemePulse> themes,
+) {
+  final series = <List<double>>[
+    for (final pulse in pulses)
+      if (pulse.heat.isNotEmpty) pulse.heat,
+    for (final theme in themes)
+      if (theme.trend.isNotEmpty) theme.trend,
+  ];
+  if (series.isEmpty) {
+    return const [];
+  }
+
+  var length = 0;
+  for (final values in series) {
+    if (values.length > length) {
+      length = values.length;
+    }
+  }
+  if (length <= 1) {
+    return [
+      _averageMetric(series.map((values) => values.isEmpty ? 0 : values.last)),
+    ];
+  }
+
+  return List<double>.generate(length, (index) {
+    final fraction = index / (length - 1);
+    return _averageMetric(
+      series.map((values) => _resampledSignalValue(values, fraction)),
+    );
+  }, growable: false);
+}
+
+double _resampledSignalValue(List<double> values, double fraction) {
+  if (values.isEmpty) {
+    return 0;
+  }
+  if (values.length == 1) {
+    return values.first;
+  }
+  final position = fraction.clamp(0.0, 1.0) * (values.length - 1);
+  final lower = position.floor().clamp(0, values.length - 1);
+  final upper = position.ceil().clamp(0, values.length - 1);
+  if (lower == upper) {
+    return values[lower];
+  }
+  final weight = position - lower;
+  return values[lower] + (values[upper] - values[lower]) * weight;
+}
+
+double _seriesChange(List<double> values) {
+  if (values.length < 2) {
+    return 0;
+  }
+  return values.last - values.first;
+}
+
+double _seriesVolatility(List<double> values) {
+  if (values.length < 2) {
+    return 0;
+  }
+  var total = 0.0;
+  for (var i = 1; i < values.length; i++) {
+    total += (values[i] - values[i - 1]).abs();
+  }
+  return total / (values.length - 1);
+}
+
+String _signalOverviewExplanation(int composite, double riskAverage) {
+  final tone = composite >= 80
+      ? '강한 위험 선호가 유지되는 구간입니다.'
+      : composite >= 65
+      ? '선별적인 위험 선호가 유지되는 구간입니다.'
+      : '확산보다 방어 확인이 먼저 필요한 구간입니다.';
+  final risk = riskAverage >= 55
+      ? ' 다만 평균 위험도가 높아 추격보다 눌림 확인이 필요합니다.'
+      : ' 평균 위험도는 통제 가능한 범위라 주도 테마의 지속성을 우선 봅니다.';
+  return '$tone$risk';
+}
+
+String _marketPulseExplanation(MarketPulse pulse, double heatChange) {
+  final direction = heatChange >= 8
+      ? '펄스 그래프가 뚜렷하게 우상향해 수급 강도가 강화되고 있습니다.'
+      : heatChange >= 0
+      ? '펄스 그래프는 완만한 개선 흐름으로, 현재 바이어스가 유지되는지 확인할 구간입니다.'
+      : '펄스 그래프가 둔화되어 단기 리스크 관리가 필요합니다.';
+  return '$direction ${pulse.netFlow} 흐름과 ${pulse.bias} 신호를 함께 확인하세요.';
+}
+
+String _themePulseExplanation(
+  ThemePulse theme,
+  double trendChange,
+  double trendAverage,
+) {
+  final diffusion = theme.diffusion >= 75
+      ? '확산 점수가 높아 리더뿐 아니라 주변 종목까지 온기가 퍼지고 있습니다.'
+      : '확산 점수는 아직 제한적이라 리더 종목 중심으로 확인하는 편이 좋습니다.';
+  final trend = trendChange >= 8
+      ? ' 추세 변화도 강해 테마 지속성이 개선되고 있습니다.'
+      : trendChange >= 0
+      ? ' 추세는 유지되지만 속도는 완만합니다.'
+      : ' 최근 추세는 식고 있어 재확인 전까지 비중 확대는 신중해야 합니다.';
+  final average = trendAverage >= 75
+      ? ' 평균 레벨은 강세권입니다.'
+      : trendAverage >= 60
+      ? ' 평균 레벨은 중립 이상입니다.'
+      : ' 평균 레벨은 아직 초기 구축 단계입니다.';
+  return '$diffusion$trend$average';
 }
 
 double _averageMetric(Iterable<double> values) {
@@ -7133,6 +8206,40 @@ List<double> _emergingProjection(EmergingCapitalFlow flow) {
   ];
 }
 
+List<double> combinedSignalSeriesLegacy(
+  List<MarketPulse> pulses,
+  List<ThemePulse> themes,
+) {
+  final maxLength = [
+    for (final pulse in pulses) pulse.heat.length,
+    for (final theme in themes) theme.trend.length,
+  ].fold<int>(0, (max, length) => length > max ? length : max);
+  if (maxLength == 0) {
+    return const [];
+  }
+
+  return List<double>.generate(maxLength, (index) {
+    final values = <double>[
+      for (final pulse in pulses) _seriesValueAt(pulse.heat, index, maxLength),
+      for (final theme in themes) _seriesValueAt(theme.trend, index, maxLength),
+    ];
+    return _averageMetric(values);
+  }, growable: false);
+}
+
+double _seriesValueAt(List<double> values, int index, int maxLength) {
+  if (values.isEmpty) {
+    return 0;
+  }
+  if (values.length == maxLength) {
+    return values[index];
+  }
+  final scaledIndex = maxLength <= 1
+      ? 0
+      : (index * (values.length - 1) / (maxLength - 1)).round();
+  return values[scaledIndex.clamp(0, values.length - 1).toInt()];
+}
+
 String _flowCandleDataQuality(List<FlowCandle> candles) {
   if (candles.isEmpty) {
     return '데이터 없음';
@@ -7167,9 +8274,13 @@ String _cryptoDataQualityLabel(List<CryptoAsset> assets) {
     return '데이터 없음';
   }
   final hasMock = assets.any(_isMockProvider);
+  final hasCached = assets.any(_isCacheProvider);
   final hasActual = assets.any((asset) => !_isMockProvider(asset));
   if (hasActual && hasMock) {
     return '실제+mock 데이터';
+  }
+  if (hasCached) {
+    return '실제 캐시 데이터';
   }
   return hasActual
       ? MarketDataQuality.actual.label
@@ -7180,12 +8291,42 @@ bool _isMockProvider(CryptoAsset asset) {
   return asset.provider.toLowerCase().contains('mock');
 }
 
+bool _isCacheProvider(CryptoAsset asset) {
+  return asset.provider.toLowerCase().contains('cache');
+}
+
+String _quoteDataQualityLabel(QuoteApiSnapshot snapshot, int quoteCount) {
+  if (snapshot.status == QuoteFetchStatus.cached) {
+    return '실제 캐시 데이터';
+  }
+  if (quoteCount > 0 &&
+      (snapshot.status == QuoteFetchStatus.ready ||
+          snapshot.status == QuoteFetchStatus.partial)) {
+    return MarketDataQuality.actual.label;
+  }
+  return MarketDataQuality.mock.label;
+}
+
+String _feedDataQualityLabel(EconomicFeedFetchSnapshot snapshot) {
+  if (snapshot.status == EconomicFeedFetchStatus.cached) {
+    return '실제 캐시 데이터';
+  }
+  if (snapshot.status == EconomicFeedFetchStatus.ready ||
+      snapshot.status == EconomicFeedFetchStatus.partial) {
+    return MarketDataQuality.actual.label;
+  }
+  return MarketDataQuality.mock.label;
+}
+
 Color _dataQualityColor(String label) {
   if (label == MarketDataQuality.actual.label) {
     return AppColors.green;
   }
   if (label == MarketDataQuality.mock.label) {
     return AppColors.amber;
+  }
+  if (label == '실제 캐시 데이터') {
+    return AppColors.blue;
   }
   if (label == '실제+mock 데이터') {
     return AppColors.blue;

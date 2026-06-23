@@ -1477,7 +1477,11 @@ class _CapitalFlowScreenState extends State<CapitalFlowScreen> {
     final rangeCandles = _rangeCandles(widget.candles, _rangeWeeks);
     final intervalCandles = _candlesForInterval(rangeCandles, _interval);
     final visibleCandles = _visibleCandles(intervalCandles, _detailWindow);
+    final topApiSource = rankedApiSources.isEmpty
+        ? null
+        : rankedApiSources.first;
     final topFlow = rankedFlows.isEmpty ? null : rankedFlows.first;
+    final topEmerging = rankedEmerging.isEmpty ? null : rankedEmerging.first;
     final riskOnCount = rankedFlows.where((flow) {
       return flow.assetClass == CapitalFlowAssetClass.crypto ||
           flow.assetClass == CapitalFlowAssetClass.sector ||
@@ -1549,10 +1553,18 @@ class _CapitalFlowScreenState extends State<CapitalFlowScreen> {
         const SizedBox(height: 18),
         SectionHeader(
           title: '필요 API 맵',
-          trailing: FlowChip(
+          onTap: topApiSource == null
+              ? null
+              : () => _showDataApiDetail(topApiSource),
+          tooltip: 'API 맵 상세 보기',
+          trailing: _SectionHeaderOpenAction(
             label:
                 '${rankedApiSources.where((api) => api.status == ApiIntegrationStatus.live || api.status == ApiIntegrationStatus.configurable).length}/${rankedApiSources.length} ready',
             color: AppColors.blue,
+            tooltip: 'API 맵 상세 보기',
+            onOpen: topApiSource == null
+                ? null
+                : () => _showDataApiDetail(topApiSource),
           ),
         ),
         const SizedBox(height: 10),
@@ -1568,9 +1580,15 @@ class _CapitalFlowScreenState extends State<CapitalFlowScreen> {
         const SizedBox(height: 8),
         SectionHeader(
           title: '세계 자금 흐름',
-          trailing: FlowChip(
+          onTap: topFlow == null ? null : () => _showCapitalFlowDetail(topFlow),
+          tooltip: '세계 자금 흐름 상세 보기',
+          trailing: _SectionHeaderOpenAction(
             label: '${rankedFlows.length} flows',
             color: AppColors.charcoal,
+            tooltip: '세계 자금 흐름 상세 보기',
+            onOpen: topFlow == null
+                ? null
+                : () => _showCapitalFlowDetail(topFlow),
           ),
         ),
         const SizedBox(height: 10),
@@ -1589,10 +1607,18 @@ class _CapitalFlowScreenState extends State<CapitalFlowScreen> {
         const SizedBox(height: 8),
         SectionHeader(
           title: '새 흐름 후보',
-          trailing: FlowChip(
+          onTap: topEmerging == null
+              ? null
+              : () => _showEmergingFlowDetail(topEmerging),
+          tooltip: '새 흐름 후보 상세 보기',
+          trailing: _SectionHeaderOpenAction(
             label:
                 '${rankedEmerging.where((flow) => flow.probability >= 70).length} high',
             color: AppColors.green,
+            tooltip: '새 흐름 후보 상세 보기',
+            onOpen: topEmerging == null
+                ? null
+                : () => _showEmergingFlowDetail(topEmerging),
           ),
         ),
         const SizedBox(height: 10),
@@ -1747,6 +1773,39 @@ class _CapitalFlowScreenState extends State<CapitalFlowScreen> {
   }
 }
 
+class _SectionHeaderOpenAction extends StatelessWidget {
+  const _SectionHeaderOpenAction({
+    required this.label,
+    required this.color,
+    required this.tooltip,
+    required this.onOpen,
+  });
+
+  final String label;
+  final Color color;
+  final String tooltip;
+  final VoidCallback? onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        FlowChip(label: label, color: color),
+        if (onOpen != null) ...[
+          const SizedBox(width: 4),
+          IconButton(
+            tooltip: tooltip,
+            onPressed: onOpen,
+            visualDensity: VisualDensity.compact,
+            icon: const Icon(Icons.open_in_full_outlined),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
 class CryptoMarketCard extends StatelessWidget {
   const CryptoMarketCard({
     required this.assets,
@@ -1827,13 +1886,11 @@ class CryptoMarketCard extends StatelessWidget {
                     icon: const Icon(Icons.refresh),
                   ),
                   if (onOpenDetail != null)
-                    Tooltip(
-                      message: '코인 상세 보기',
-                      child: Icon(
-                        Icons.open_in_full_outlined,
-                        color: AppColors.muted,
-                        size: 20,
-                      ),
+                    IconButton(
+                      tooltip: '코인 상세 보기',
+                      onPressed: onOpenDetail,
+                      visualDensity: VisualDensity.compact,
+                      icon: const Icon(Icons.open_in_full_outlined, size: 20),
                     ),
                 ],
               ),
@@ -2289,13 +2346,11 @@ class _FlowCompositeChartCardState extends State<FlowCompositeChartCard> {
                   ),
                   if (widget.onOpenDetail != null) ...[
                     const SizedBox(height: 8),
-                    Tooltip(
-                      message: '종합 플로우 상세 보기',
-                      child: Icon(
-                        Icons.open_in_full_outlined,
-                        color: AppColors.muted,
-                        size: 20,
-                      ),
+                    IconButton(
+                      tooltip: '종합 플로우 상세 보기',
+                      onPressed: widget.onOpenDetail,
+                      visualDensity: VisualDensity.compact,
+                      icon: const Icon(Icons.open_in_full_outlined, size: 20),
                     ),
                   ],
                 ],
@@ -2954,13 +3009,11 @@ class CapitalFlowCard extends StatelessWidget {
                   _ScoreDial(score: flow.flowScore, color: color),
                   if (onOpen != null) ...[
                     const SizedBox(height: 8),
-                    Tooltip(
-                      message: '자금 흐름 상세 보기',
-                      child: Icon(
-                        Icons.open_in_full_outlined,
-                        color: AppColors.muted,
-                        size: 20,
-                      ),
+                    IconButton(
+                      tooltip: '자금 흐름 상세 보기',
+                      onPressed: () => onOpen?.call(flow),
+                      visualDensity: VisualDensity.compact,
+                      icon: const Icon(Icons.open_in_full_outlined, size: 20),
                     ),
                   ],
                 ],
@@ -3088,13 +3141,11 @@ class DataApiSourceCard extends StatelessWidget {
                   FlowChip(label: api.status.label, color: color),
                   if (onOpen != null) ...[
                     const SizedBox(height: 8),
-                    Tooltip(
-                      message: 'API 상세 보기',
-                      child: Icon(
-                        Icons.open_in_full_outlined,
-                        color: AppColors.muted,
-                        size: 20,
-                      ),
+                    IconButton(
+                      tooltip: 'API 상세 보기',
+                      onPressed: () => onOpen?.call(api),
+                      visualDensity: VisualDensity.compact,
+                      icon: const Icon(Icons.open_in_full_outlined, size: 20),
                     ),
                   ],
                 ],
@@ -3568,13 +3619,11 @@ class EmergingFlowCard extends StatelessWidget {
                   FlowChip(label: '${flow.probability}%', color: color),
                   if (onOpen != null) ...[
                     const SizedBox(height: 8),
-                    Tooltip(
-                      message: '새 흐름 상세 보기',
-                      child: Icon(
-                        Icons.open_in_full_outlined,
-                        color: AppColors.muted,
-                        size: 20,
-                      ),
+                    IconButton(
+                      tooltip: '새 흐름 상세 보기',
+                      onPressed: () => onOpen?.call(flow),
+                      visualDensity: VisualDensity.compact,
+                      icon: const Icon(Icons.open_in_full_outlined, size: 20),
                     ),
                   ],
                 ],

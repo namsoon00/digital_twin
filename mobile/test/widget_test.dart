@@ -831,7 +831,7 @@ void main() {
     expect(find.text('Alpha Vantage'), findsOneWidget);
     expect(find.text('토스증권 Open API'), findsOneWidget);
 
-    await tester.tap(find.byTooltip('API 상세 보기').first);
+    await tester.tap(find.text('필요 API 맵'));
     await tester.pumpAndSettle();
 
     expect(find.text('연결 준비도'), findsOneWidget);
@@ -874,9 +874,10 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    expect(find.text('세계 자금 흐름'), findsOneWidget);
     expect(find.text('AI 인프라 CAPEX'), findsOneWidget);
 
-    await tester.tap(find.byTooltip('자금 흐름 상세 보기').first);
+    await tester.tap(find.text('세계 자금 흐름'));
     await tester.pumpAndSettle();
 
     expect(find.text('흐름 점수'), findsOneWidget);
@@ -912,6 +913,14 @@ void main() {
 
     expect(find.text('새 흐름 후보'), findsOneWidget);
     expect(find.text('미국 개인의 KOSPI 직접 접근 확대'), findsOneWidget);
+
+    await tester.tap(find.text('새 흐름 후보'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('현실화'), findsOneWidget);
+    expect(find.text('수혜군'), findsOneWidget);
+
+    await dismissModal(tester, find.text('현실화'));
 
     await tester.tap(find.byTooltip('새 흐름 상세 보기').first);
     await tester.pumpAndSettle();

@@ -3,10 +3,13 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import 'local_settings_database.dart';
 import '../models/market_models.dart';
 
 class DataApiProbeClient {
-  DataApiProbeClient({http.Client? client}) : _client = client ?? http.Client();
+  DataApiProbeClient({http.Client? client, LocalSettingsDatabase? database})
+    : _client = client ?? http.Client(),
+      _database = database ?? const LocalSettingsDatabase();
 
   static const _localDataProxyBaseUrl = String.fromEnvironment(
     'MARKET_FLOW_DATA_PROXY_BASE_URL',
@@ -14,6 +17,7 @@ class DataApiProbeClient {
   );
 
   final http.Client _client;
+  final LocalSettingsDatabase _database;
 
   void dispose() => _client.close();
 
@@ -57,6 +61,12 @@ class DataApiProbeClient {
 
     final normalizedKey = apiKey.trim();
     if (spec.requiresKey && normalizedKey.isEmpty) {
+      final cached = await _readCachedProbe(source.id, vendorId: vendorId);
+      if (cached != null) {
+        return cached.asCached(
+          message: '${source.keyName} 미입력 · 마지막 성공 테스트 사용',
+        );
+      }
       return DataApiProbeResult.failed(
         sourceId: source.id,
         provider: source.name,
@@ -67,7 +77,7 @@ class DataApiProbeClient {
     }
 
     try {
-      return switch (source.id) {
+      final result = switch (source.id) {
         'alpha-vantage' => await _probeAlphaVantage(normalizedKey, spec),
         'coingecko' => await _probeCoinGecko(normalizedKey, spec),
         'fred' => await _probeFred(normalizedKey, spec),
@@ -85,39 +95,64 @@ class DataApiProbeClient {
           linkedDataLabel: source.usedFor,
         ),
       };
-    } on TimeoutException {
-      return DataApiProbeResult.failed(
-        sourceId: source.id,
-        provider: source.name,
-        endpoint: spec.endpointLabel,
-        linkedDataLabel: spec.linkedDataLabel,
-        message: '시간 초과',
-      );
-    } on FormatException catch (error) {
-      return DataApiProbeResult.failed(
-        sourceId: source.id,
-        provider: source.name,
-        endpoint: spec.endpointLabel,
-        linkedDataLabel: spec.linkedDataLabel,
-        message: error.message,
-      );
-    } on http.ClientException catch (error) {
-      return DataApiProbeResult.failed(
-        sourceId: source.id,
-        provider: source.name,
-        endpoint: spec.endpointLabel,
-        linkedDataLabel: spec.linkedDataLabel,
-        message: error.message,
-      );
+      if (result.ok) {
+        await _writeCachedProbe(result, vendorId: vendorId);
+      }
+      return result;
     } catch (error) {
+      final cached = await _readCachedProbe(source.id, vendorId: vendorId);
+      if (cached != null) {
+        return cached.asCached(
+          message: '${_safeProbeError(error)} · 마지막 성공 테스트 사용',
+        );
+      }
       return DataApiProbeResult.failed(
         sourceId: source.id,
         provider: source.name,
         endpoint: spec.endpointLabel,
         linkedDataLabel: spec.linkedDataLabel,
-        message: '$error',
+        message: _safeProbeError(error),
       );
     }
+  }
+
+  Future<void> _writeCachedProbe(
+    DataApiProbeResult result, {
+    required String vendorId,
+  }) async {
+    final payload = jsonEncode(result.toJson());
+    await _database.writeString(
+      _probeCacheStorageKey(result.sourceId, vendorId),
+      payload,
+    );
+  }
+
+  Future<DataApiProbeResult?> _readCachedProbe(
+    String sourceId, {
+    required String vendorId,
+  }) async {
+    final raw = await _database.readString(
+      _probeCacheStorageKey(sourceId, vendorId),
+    );
+    if (raw == null || raw.isEmpty) {
+      return null;
+    }
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map<String, dynamic>) {
+        return null;
+      }
+      return DataApiProbeResult.fromJson(decoded);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  String _probeCacheStorageKey(String sourceId, String vendorId) {
+    final vendorSuffix = vendorId.trim().isEmpty ? '' : '.${vendorId.trim()}';
+    return LocalSettingsDatabase.apiCacheStorageKey(
+      'data-api-probe.$sourceId$vendorSuffix',
+    );
   }
 
   Future<DataApiProbeResult> _probeAlphaVantage(
@@ -399,6 +434,7 @@ class DataApiProbeResult {
     required this.message,
     required this.linkedDataLabel,
     required this.checkedAt,
+    this.fromCache = false,
   });
 
   factory DataApiProbeResult.ok({
@@ -453,6 +489,20 @@ class DataApiProbeResult {
     );
   }
 
+  factory DataApiProbeResult.fromJson(Map<String, dynamic> json) {
+    return DataApiProbeResult(
+      sourceId: '${json['sourceId'] ?? ''}',
+      provider: '${json['provider'] ?? ''}',
+      endpoint: '${json['endpoint'] ?? ''}',
+      ok: json['ok'] == true,
+      message: '${json['message'] ?? ''}',
+      linkedDataLabel: '${json['linkedDataLabel'] ?? ''}',
+      checkedAt:
+          DateTime.tryParse('${json['checkedAt'] ?? ''}') ?? DateTime.now(),
+      fromCache: json['fromCache'] == true,
+    );
+  }
+
   final String sourceId;
   final String provider;
   final String endpoint;
@@ -460,8 +510,39 @@ class DataApiProbeResult {
   final String message;
   final String linkedDataLabel;
   final DateTime checkedAt;
+  final bool fromCache;
 
-  String get statusLabel => ok ? '테스트 성공' : '테스트 실패';
+  String get statusLabel {
+    if (fromCache) {
+      return '저장 데이터';
+    }
+    return ok ? '테스트 성공' : '테스트 실패';
+  }
+
+  DataApiProbeResult asCached({required String message}) {
+    return DataApiProbeResult(
+      sourceId: sourceId,
+      provider: '$provider cache',
+      endpoint: endpoint,
+      ok: ok,
+      message: message,
+      linkedDataLabel: linkedDataLabel,
+      checkedAt: checkedAt,
+      fromCache: true,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'sourceId': sourceId,
+      'provider': provider,
+      'endpoint': endpoint,
+      'ok': ok,
+      'message': message,
+      'linkedDataLabel': linkedDataLabel,
+      'checkedAt': checkedAt.toUtc().toIso8601String(),
+    };
+  }
 }
 
 class _DataApiProbeSpec {

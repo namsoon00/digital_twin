@@ -433,6 +433,52 @@ void main() {
     expect(result.linkedDataLabel, contains('공시'));
   });
 
+  test(
+    'Data API probe stores and reuses the last successful result cache',
+    () async {
+      const repository = MockFlowRepository();
+      final source = repository.dataApiSources.firstWhere(
+        (source) => source.id == 'opendart',
+      );
+      final liveClient = DataApiProbeClient(
+        client: MockClient((request) async {
+          return http.Response(
+            '''
+{
+  "status": "000",
+  "message": "정상",
+  "corp_name": "삼성전자(주)",
+  "stock_code": "005930"
+}
+''',
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+        }),
+      );
+      addTearDown(liveClient.dispose);
+
+      final live = await liveClient.probe(source, 'dart-key');
+      expect(live.ok, isTrue);
+
+      final cachedClient = DataApiProbeClient(
+        client: MockClient((request) async {
+          throw http.ClientException('rate limited', request.url);
+        }),
+      );
+      addTearDown(cachedClient.dispose);
+
+      final cached = await cachedClient.probe(source, 'dart-key');
+
+      expect(cached.ok, isTrue);
+      expect(cached.fromCache, isTrue);
+      expect(cached.statusLabel, '저장 데이터');
+      expect(cached.provider, 'OpenDART cache');
+      expect(cached.endpoint, 'company.json 삼성전자');
+      expect(cached.message, contains('마지막 성공 테스트 사용'));
+    },
+  );
+
   test('Data API probe falls back to OpenDART local proxy', () async {
     const repository = MockFlowRepository();
     final source = repository.dataApiSources.firstWhere(

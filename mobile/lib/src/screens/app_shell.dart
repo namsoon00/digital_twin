@@ -3698,7 +3698,11 @@ class _DataApiProbeResultBox extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = result.ok ? AppColors.green : AppColors.red;
+    final color = result.fromCache
+        ? AppColors.blue
+        : result.ok
+        ? AppColors.green
+        : AppColors.red;
     return DecoratedBox(
       decoration: BoxDecoration(
         color: color.withValues(alpha: 0.1),
@@ -3714,7 +3718,11 @@ class _DataApiProbeResultBox extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Icon(
-                  result.ok ? Icons.check_circle_outline : Icons.error_outline,
+                  result.fromCache
+                      ? Icons.history_outlined
+                      : result.ok
+                      ? Icons.check_circle_outline
+                      : Icons.error_outline,
                   color: color,
                   size: 18,
                 ),

@@ -27,6 +27,11 @@ Future<void> pumpMarketFlowApp(WidgetTester tester) async {
   await tester.pumpAndSettle();
 }
 
+Future<void> dismissModal(WidgetTester tester, Finder anchor) async {
+  Navigator.of(tester.element(anchor)).pop();
+  await tester.pumpAndSettle();
+}
+
 void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
@@ -259,6 +264,46 @@ void main() {
     expect(result.endpoint, 'company.json 삼성전자');
     expect(result.message, contains('삼성전자'));
     expect(result.linkedDataLabel, contains('공시'));
+  });
+
+  test('Data API probe falls back to OpenDART local proxy', () async {
+    const repository = MockFlowRepository();
+    final source = repository.dataApiSources.firstWhere(
+      (source) => source.id == 'opendart',
+    );
+    var proxyRequestCount = 0;
+    final client = DataApiProbeClient(
+      client: MockClient((request) async {
+        if (request.url.host == 'opendart.fss.or.kr') {
+          throw http.ClientException('XMLHttpRequest error.', request.url);
+        }
+        expect(request.url.host, '127.0.0.1');
+        expect(request.url.port, 3000);
+        expect(request.url.path, '/api/data-api/opendart/company');
+        expect(request.url.queryParameters['crtfc_key'], 'dart-key');
+        expect(request.url.queryParameters['corp_code'], '00126380');
+        proxyRequestCount += 1;
+        return http.Response(
+          '''
+{
+  "status": "000",
+  "message": "정상",
+  "corp_name": "삼성전자(주)",
+  "stock_code": "005930"
+}
+''',
+          200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        );
+      }),
+    );
+    addTearDown(client.dispose);
+
+    final result = await client.probe(source, 'dart-key');
+
+    expect(result.ok, isTrue);
+    expect(result.message, contains('삼성전자'));
+    expect(proxyRequestCount, 1);
   });
 
   testWidgets('Sparkline supports pinch zooming into a shorter period', (
@@ -602,6 +647,8 @@ void main() {
     expect(find.text('AI CAPEX 자금이 반도체에서 전력 인프라로 확산'), findsWidgets);
     expect(find.text('피드 채널'), findsOneWidget);
     expect(find.text('Google News RSS'), findsWidgets);
+    expect(find.byTooltip('대표 뉴스 열기'), findsOneWidget);
+    expect(find.byTooltip('채널 뉴스 열기'), findsWidgets);
 
     await tester.scrollUntilVisible(
       find.text('경제 피드'),
@@ -614,6 +661,7 @@ void main() {
     expect(find.text('AI CAPEX 자금이 반도체에서 전력 인프라로 확산'), findsWidgets);
     expect(find.text('MarketFlow Theme Map · 18분 전'), findsOneWidget);
     expect(find.text('news.google.com'), findsWidgets);
+    expect(find.byTooltip('상세 페이지 열기'), findsWidgets);
   });
 
   testWidgets('MarketFlow manages the pre-investment checklist', (
@@ -699,6 +747,15 @@ void main() {
     expect(find.text('ALL'), findsOneWidget);
     expect(find.text('캔들: 종합지수'), findsOneWidget);
 
+    await tester.tap(find.byTooltip('종합 플로우 상세 보기'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('종합 플로우 상세'), findsOneWidget);
+    expect(find.text('현재 종합'), findsOneWidget);
+    expect(find.text('최근 캔들'), findsOneWidget);
+
+    await dismissModal(tester, find.text('종합 플로우 상세'));
+
     await tester.tap(find.text('일별'));
     await tester.pumpAndSettle();
 
@@ -723,6 +780,15 @@ void main() {
     expect(find.text('Ethereum · ETH'), findsOneWidget);
     expect(find.text('공개 API'), findsOneWidget);
 
+    await tester.tap(find.byTooltip('코인 상세 보기'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('코인 마켓 상세'), findsOneWidget);
+    expect(find.text('BTC 비중'), findsOneWidget);
+    expect(find.text('24h 변화율'), findsOneWidget);
+
+    await dismissModal(tester, find.text('코인 마켓 상세'));
+
     await tester.scrollUntilVisible(
       find.text('필요 API 맵'),
       360,
@@ -733,6 +799,15 @@ void main() {
     expect(find.text('필요 API 맵'), findsOneWidget);
     expect(find.text('Alpha Vantage'), findsOneWidget);
     expect(find.text('토스증권 Open API'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('API 상세 보기').first);
+    await tester.pumpAndSettle();
+
+    expect(find.text('연결 준비도'), findsOneWidget);
+    expect(find.text('우선순위 점수'), findsOneWidget);
+    expect(find.textContaining('연동 데이터:'), findsOneWidget);
+
+    await dismissModal(tester, find.text('연결 준비도'));
 
     await tester.scrollUntilVisible(
       find.text('FRED API'),
@@ -770,6 +845,15 @@ void main() {
 
     expect(find.text('AI 인프라 CAPEX'), findsOneWidget);
 
+    await tester.tap(find.byTooltip('자금 흐름 상세 보기').first);
+    await tester.pumpAndSettle();
+
+    expect(find.text('흐름 점수'), findsOneWidget);
+    expect(find.text('추세 변화'), findsOneWidget);
+    expect(find.text('순유입'), findsOneWidget);
+
+    await dismissModal(tester, find.text('흐름 점수'));
+
     await tester.scrollUntilVisible(
       find.text('디지털 자산 베타'),
       360,
@@ -797,6 +881,13 @@ void main() {
 
     expect(find.text('새 흐름 후보'), findsOneWidget);
     expect(find.text('미국 개인의 KOSPI 직접 접근 확대'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('새 흐름 상세 보기').first);
+    await tester.pumpAndSettle();
+
+    expect(find.text('현실화'), findsOneWidget);
+    expect(find.textContaining('미국 브로커 상장 목록'), findsOneWidget);
+    expect(find.text('수혜군'), findsOneWidget);
   });
 
   testWidgets('MarketFlow shows Toss Securities settings', (tester) async {

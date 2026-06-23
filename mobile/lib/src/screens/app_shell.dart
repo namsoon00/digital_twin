@@ -811,16 +811,33 @@ class _EconomicFeedScreenState extends State<EconomicFeedScreen> {
   String _filter = 'all';
 
   Future<void> _openFeedInAppBrowser(EconomicFeedItem feed) async {
-    final uri = Uri.tryParse(feed.url.trim());
+    await _openNewsUrl(feed.url, missingMessage: '열 수 있는 상세 링크가 없습니다.');
+  }
+
+  Future<void> _openFeedChannel(EconomicFeedChannel channel) async {
+    await _openNewsUrl(channel.url, missingMessage: '열 수 있는 채널 링크가 없습니다.');
+  }
+
+  Future<void> _openNewsUrl(
+    String rawUrl, {
+    required String missingMessage,
+  }) async {
+    final uri = Uri.tryParse(rawUrl.trim());
     if (uri == null ||
         uri.host.isEmpty ||
         (uri.scheme != 'http' && uri.scheme != 'https')) {
-      _showFeedMessage('열 수 있는 상세 링크가 없습니다.');
+      _showFeedMessage(missingMessage);
       return;
     }
 
     try {
-      final opened = await launchUrl(uri, mode: LaunchMode.inAppBrowserView);
+      var opened = await launchUrl(uri, mode: LaunchMode.inAppBrowserView);
+      if (!opened) {
+        opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      }
+      if (!opened) {
+        opened = await launchUrl(uri);
+      }
       if (!mounted) {
         return;
       }
@@ -892,12 +909,14 @@ class _EconomicFeedScreenState extends State<EconomicFeedScreen> {
           themes: widget.themes,
           feedSnapshot: widget.feedSnapshot,
           quoteSnapshot: widget.quoteSnapshot,
+          onOpen: _openFeedInAppBrowser,
         ),
         const SizedBox(height: 12),
         if (widget.feedChannels.isNotEmpty) ...[
           EconomicFeedChannelStrip(
             channels: widget.feedChannels,
             feeds: rankedFeeds,
+            onOpen: _openFeedChannel,
           ),
           const SizedBox(height: 12),
         ],
@@ -960,11 +979,13 @@ class EconomicFeedChannelStrip extends StatelessWidget {
   const EconomicFeedChannelStrip({
     required this.channels,
     required this.feeds,
+    this.onOpen,
     super.key,
   });
 
   final List<EconomicFeedChannel> channels;
   final List<EconomicFeedItem> feeds;
+  final ValueChanged<EconomicFeedChannel>? onOpen;
 
   @override
   Widget build(BuildContext context) {
@@ -1000,6 +1021,7 @@ class EconomicFeedChannelStrip extends StatelessWidget {
                 child: EconomicFeedChannelCard(
                   channel: channel,
                   itemCount: itemCounts[channel.id] ?? 0,
+                  onOpen: onOpen,
                 ),
               );
             },
@@ -1014,18 +1036,22 @@ class EconomicFeedChannelCard extends StatelessWidget {
   const EconomicFeedChannelCard({
     required this.channel,
     required this.itemCount,
+    this.onOpen,
     super.key,
   });
 
   final EconomicFeedChannel channel;
   final int itemCount;
+  final ValueChanged<EconomicFeedChannel>? onOpen;
 
   @override
   Widget build(BuildContext context) {
     final color = _feedTypeColor(channel.type);
+    final canOpen = channel.url.trim().isNotEmpty && onOpen != null;
 
     return AppCard(
       padding: const EdgeInsets.all(14),
+      onTap: canOpen ? () => onOpen?.call(channel) : null,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1063,7 +1089,23 @@ class EconomicFeedChannelCard extends StatelessWidget {
                   ],
                 ),
               ),
-              FlowChip(label: '$itemCount', color: color),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  FlowChip(label: '$itemCount', color: color),
+                  if (canOpen) ...[
+                    const SizedBox(height: 8),
+                    Tooltip(
+                      message: '채널 뉴스 열기',
+                      child: Icon(
+                        Icons.open_in_new_outlined,
+                        color: AppColors.muted,
+                        size: 18,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
             ],
           ),
           const SizedBox(height: 10),
@@ -1073,7 +1115,7 @@ class EconomicFeedChannelCard extends StatelessWidget {
             overflow: TextOverflow.ellipsis,
             style: Theme.of(context).textTheme.bodyMedium,
           ),
-          const Spacer(),
+          const SizedBox(height: 10),
           Wrap(
             spacing: 7,
             runSpacing: 7,
@@ -1098,6 +1140,7 @@ class EconomicFeedSummaryCard extends StatelessWidget {
     required this.themes,
     required this.feedSnapshot,
     required this.quoteSnapshot,
+    this.onOpen,
     super.key,
   });
 
@@ -1107,6 +1150,7 @@ class EconomicFeedSummaryCard extends StatelessWidget {
   final List<ThemePulse> themes;
   final EconomicFeedFetchSnapshot feedSnapshot;
   final QuoteApiSnapshot quoteSnapshot;
+  final ValueChanged<EconomicFeedItem>? onOpen;
 
   @override
   Widget build(BuildContext context) {
@@ -1120,8 +1164,11 @@ class EconomicFeedSummaryCard extends StatelessWidget {
     final pulse = topPulse.isEmpty ? null : topPulse.first;
     final flow = topFlow.isEmpty ? null : topFlow.first;
     final theme = topTheme.isEmpty ? null : topTheme.first;
+    final canOpen =
+        topFeed != null && topFeed.url.trim().isNotEmpty && onOpen != null;
 
     return AppCard(
+      onTap: canOpen ? () => onOpen?.call(topFeed) : null,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1161,9 +1208,25 @@ class EconomicFeedSummaryCard extends StatelessWidget {
                   ],
                 ),
               ),
-              FlowChip(
-                label: feedSnapshot.statusLabel,
-                color: _feedStatusColor(feedSnapshot.status),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  FlowChip(
+                    label: feedSnapshot.statusLabel,
+                    color: _feedStatusColor(feedSnapshot.status),
+                  ),
+                  if (canOpen) ...[
+                    const SizedBox(height: 8),
+                    Tooltip(
+                      message: '대표 뉴스 열기',
+                      child: Icon(
+                        Icons.open_in_new_outlined,
+                        color: AppColors.muted,
+                        size: 19,
+                      ),
+                    ),
+                  ],
+                ],
               ),
             ],
           ),
@@ -1343,6 +1406,62 @@ class _CapitalFlowScreenState extends State<CapitalFlowScreen> {
   FlowCandleInterval _interval = FlowCandleInterval.week;
   RangeValues _detailWindow = const RangeValues(0, 1);
 
+  void _showFlowCompositeDetail(
+    List<FlowCandle> candles,
+    List<FlowCandle> visibleCandles,
+  ) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) => FlowCompositeDetailSheet(
+        candles: candles,
+        visibleCandles: visibleCandles,
+        interval: _interval,
+        rangeWeeks: _rangeWeeks,
+      ),
+    );
+  }
+
+  void _showCryptoMarketDetail() {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) => CryptoMarketDetailSheet(
+        assets: widget.cryptoAssets,
+        snapshot: widget.cryptoSnapshot,
+      ),
+    );
+  }
+
+  void _showDataApiDetail(DataApiSource api) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) => DataApiSourceDetailSheet(api: api),
+    );
+  }
+
+  void _showCapitalFlowDetail(CapitalFlow flow) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) => CapitalFlowDetailSheet(flow: flow),
+    );
+  }
+
+  void _showEmergingFlowDetail(EmergingCapitalFlow flow) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) => EmergingFlowDetailSheet(flow: flow),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final rankedApiSources = widget.apiSources.toList(growable: false)
@@ -1413,12 +1532,15 @@ class _CapitalFlowScreenState extends State<CapitalFlowScreen> {
           onWindowChanged: (window) {
             setState(() => _detailWindow = window);
           },
+          onOpenDetail: () =>
+              _showFlowCompositeDetail(intervalCandles, visibleCandles),
         ),
         const SizedBox(height: 18),
         CryptoMarketCard(
           assets: widget.cryptoAssets,
           snapshot: widget.cryptoSnapshot,
           onRefresh: widget.onRefreshCryptoAssets,
+          onOpenDetail: _showCryptoMarketDetail,
         ),
         const SizedBox(height: 18),
         SectionHeader(
@@ -1436,7 +1558,7 @@ class _CapitalFlowScreenState extends State<CapitalFlowScreen> {
           ...rankedApiSources.map(
             (api) => Padding(
               padding: const EdgeInsets.only(bottom: 10),
-              child: DataApiSourceCard(api: api),
+              child: DataApiSourceCard(api: api, onOpen: _showDataApiDetail),
             ),
           ),
         const SizedBox(height: 8),
@@ -1454,7 +1576,10 @@ class _CapitalFlowScreenState extends State<CapitalFlowScreen> {
           ...rankedFlows.map(
             (flow) => Padding(
               padding: const EdgeInsets.only(bottom: 10),
-              child: CapitalFlowCard(flow: flow),
+              child: CapitalFlowCard(
+                flow: flow,
+                onOpen: _showCapitalFlowDetail,
+              ),
             ),
           ),
         const SizedBox(height: 8),
@@ -1473,7 +1598,10 @@ class _CapitalFlowScreenState extends State<CapitalFlowScreen> {
           ...rankedEmerging.map(
             (flow) => Padding(
               padding: const EdgeInsets.only(bottom: 10),
-              child: EmergingFlowCard(flow: flow),
+              child: EmergingFlowCard(
+                flow: flow,
+                onOpen: _showEmergingFlowDetail,
+              ),
             ),
           ),
       ],
@@ -1620,12 +1748,14 @@ class CryptoMarketCard extends StatelessWidget {
     required this.assets,
     required this.snapshot,
     required this.onRefresh,
+    this.onOpenDetail,
     super.key,
   });
 
   final List<CryptoAsset> assets;
   final CryptoMarketSnapshot snapshot;
   final Future<void> Function() onRefresh;
+  final VoidCallback? onOpenDetail;
 
   @override
   Widget build(BuildContext context) {
@@ -1645,6 +1775,7 @@ class CryptoMarketCard extends StatelessWidget {
     final dataQualityLabel = _cryptoDataQualityLabel(rankedAssets);
 
     return AppCard(
+      onTap: onOpenDetail,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1684,10 +1815,23 @@ class CryptoMarketCard extends StatelessWidget {
                   ],
                 ),
               ),
-              IconButton(
-                tooltip: '코인 데이터 새로고침',
-                onPressed: onRefresh,
-                icon: const Icon(Icons.refresh),
+              Column(
+                children: [
+                  IconButton(
+                    tooltip: '코인 데이터 새로고침',
+                    onPressed: onRefresh,
+                    icon: const Icon(Icons.refresh),
+                  ),
+                  if (onOpenDetail != null)
+                    Tooltip(
+                      message: '코인 상세 보기',
+                      child: Icon(
+                        Icons.open_in_full_outlined,
+                        color: AppColors.muted,
+                        size: 20,
+                      ),
+                    ),
+                ],
               ),
             ],
           ),
@@ -1931,6 +2075,7 @@ class FlowCompositeChartCard extends StatefulWidget {
     required this.onRangeChanged,
     required this.onIntervalChanged,
     required this.onWindowChanged,
+    this.onOpenDetail,
     super.key,
   });
 
@@ -1943,6 +2088,7 @@ class FlowCompositeChartCard extends StatefulWidget {
   final ValueChanged<int> onRangeChanged;
   final ValueChanged<FlowCandleInterval> onIntervalChanged;
   final ValueChanged<RangeValues> onWindowChanged;
+  final VoidCallback? onOpenDetail;
 
   @override
   State<FlowCompositeChartCard> createState() => _FlowCompositeChartCardState();
@@ -2088,6 +2234,7 @@ class _FlowCompositeChartCardState extends State<FlowCompositeChartCard> {
     final dataProvider = _flowCandleDataProvider(widget.candles);
 
     return AppCard(
+      onTap: widget.onOpenDetail,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -2127,11 +2274,27 @@ class _FlowCompositeChartCardState extends State<FlowCompositeChartCard> {
                   ],
                 ),
               ),
-              FlowChip(
-                label: change >= 0
-                    ? '+${change.toStringAsFixed(1)}'
-                    : change.toStringAsFixed(1),
-                color: change >= 0 ? AppColors.green : AppColors.red,
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  FlowChip(
+                    label: change >= 0
+                        ? '+${change.toStringAsFixed(1)}'
+                        : change.toStringAsFixed(1),
+                    color: change >= 0 ? AppColors.green : AppColors.red,
+                  ),
+                  if (widget.onOpenDetail != null) ...[
+                    const SizedBox(height: 8),
+                    Tooltip(
+                      message: '종합 플로우 상세 보기',
+                      child: Icon(
+                        Icons.open_in_full_outlined,
+                        color: AppColors.muted,
+                        size: 20,
+                      ),
+                    ),
+                  ],
+                ],
               ),
             ],
           ),
@@ -2728,14 +2891,16 @@ class _FlowLegendDot extends StatelessWidget {
 }
 
 class CapitalFlowCard extends StatelessWidget {
-  const CapitalFlowCard({required this.flow, super.key});
+  const CapitalFlowCard({required this.flow, this.onOpen, super.key});
 
   final CapitalFlow flow;
+  final ValueChanged<CapitalFlow>? onOpen;
 
   @override
   Widget build(BuildContext context) {
     final color = scoreColor(flow.flowScore);
     return AppCard(
+      onTap: onOpen == null ? null : () => onOpen?.call(flow),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -2779,7 +2944,23 @@ class CapitalFlowCard extends StatelessWidget {
                   ],
                 ),
               ),
-              _ScoreDial(score: flow.flowScore, color: color),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  _ScoreDial(score: flow.flowScore, color: color),
+                  if (onOpen != null) ...[
+                    const SizedBox(height: 8),
+                    Tooltip(
+                      message: '자금 흐름 상세 보기',
+                      child: Icon(
+                        Icons.open_in_full_outlined,
+                        color: AppColors.muted,
+                        size: 20,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
             ],
           ),
           const SizedBox(height: 14),
@@ -2848,14 +3029,16 @@ class CapitalFlowCard extends StatelessWidget {
 }
 
 class DataApiSourceCard extends StatelessWidget {
-  const DataApiSourceCard({required this.api, super.key});
+  const DataApiSourceCard({required this.api, this.onOpen, super.key});
 
   final DataApiSource api;
+  final ValueChanged<DataApiSource>? onOpen;
 
   @override
   Widget build(BuildContext context) {
     final color = _apiStatusColor(api.status);
     return AppCard(
+      onTap: onOpen == null ? null : () => onOpen?.call(api),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -2895,7 +3078,23 @@ class DataApiSourceCard extends StatelessWidget {
                   ],
                 ),
               ),
-              FlowChip(label: api.status.label, color: color),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  FlowChip(label: api.status.label, color: color),
+                  if (onOpen != null) ...[
+                    const SizedBox(height: 8),
+                    Tooltip(
+                      message: 'API 상세 보기',
+                      child: Icon(
+                        Icons.open_in_full_outlined,
+                        color: AppColors.muted,
+                        size: 20,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
             ],
           ),
           const SizedBox(height: 14),
@@ -3278,14 +3477,16 @@ class _DataApiProbeResultBox extends StatelessWidget {
 }
 
 class EmergingFlowCard extends StatelessWidget {
-  const EmergingFlowCard({required this.flow, super.key});
+  const EmergingFlowCard({required this.flow, this.onOpen, super.key});
 
   final EmergingCapitalFlow flow;
+  final ValueChanged<EmergingCapitalFlow>? onOpen;
 
   @override
   Widget build(BuildContext context) {
     final color = scoreColor(flow.probability);
     return AppCard(
+      onTap: onOpen == null ? null : () => onOpen?.call(flow),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -3319,7 +3520,23 @@ class EmergingFlowCard extends StatelessWidget {
                   ],
                 ),
               ),
-              FlowChip(label: '${flow.probability}%', color: color),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  FlowChip(label: '${flow.probability}%', color: color),
+                  if (onOpen != null) ...[
+                    const SizedBox(height: 8),
+                    Tooltip(
+                      message: '새 흐름 상세 보기',
+                      child: Icon(
+                        Icons.open_in_full_outlined,
+                        color: AppColors.muted,
+                        size: 20,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
             ],
           ),
           const SizedBox(height: 14),
@@ -3348,6 +3565,831 @@ class EmergingFlowCard extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+class FlowDetailSheetFrame extends StatelessWidget {
+  const FlowDetailSheetFrame({
+    required this.title,
+    required this.subtitle,
+    required this.icon,
+    required this.color,
+    required this.children,
+    super.key,
+  });
+
+  final String title;
+  final String subtitle;
+  final IconData icon;
+  final Color color;
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      top: false,
+      child: SingleChildScrollView(
+        padding: EdgeInsets.fromLTRB(
+          20,
+          4,
+          20,
+          20 + MediaQuery.viewInsetsOf(context).bottom,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: color.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: color.withValues(alpha: 0.22)),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(11),
+                    child: Icon(icon, color: color, size: 24),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        style: Theme.of(context).textTheme.headlineSmall,
+                      ),
+                      const SizedBox(height: 5),
+                      Text(
+                        subtitle,
+                        style: Theme.of(context).textTheme.bodyMedium,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 18),
+            ...children,
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class FlowCompositeDetailSheet extends StatelessWidget {
+  const FlowCompositeDetailSheet({
+    required this.candles,
+    required this.visibleCandles,
+    required this.interval,
+    required this.rangeWeeks,
+    super.key,
+  });
+
+  final List<FlowCandle> candles;
+  final List<FlowCandle> visibleCandles;
+  final FlowCandleInterval interval;
+  final int rangeWeeks;
+
+  @override
+  Widget build(BuildContext context) {
+    final detailCandles = visibleCandles.isEmpty ? candles : visibleCandles;
+    final latest = detailCandles.isEmpty ? null : detailCandles.last;
+    final first = detailCandles.isEmpty ? null : detailCandles.first;
+    final change = latest == null || first == null
+        ? 0.0
+        : latest.close - first.open;
+    final avgLiquidity = _averageMetric(
+      detailCandles.map((candle) => candle.liquidity),
+    );
+    final avgMomentum = _averageMetric(
+      detailCandles.map((candle) => candle.momentum),
+    );
+    final avgRisk = _averageMetric(detailCandles.map((candle) => candle.risk));
+    final avgAi = _averageMetric(detailCandles.map((candle) => candle.aiFlow));
+
+    return FlowDetailSheetFrame(
+      title: '종합 플로우 상세',
+      subtitle:
+          '${interval.label} · 최근 $rangeWeeks주 · ${detailCandles.length}개 포인트',
+      icon: Icons.candlestick_chart_outlined,
+      color: change >= 0 ? AppColors.green : AppColors.red,
+      children: [
+        AppCard(
+          padding: const EdgeInsets.all(14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SizedBox(
+                height: 310,
+                child: detailCandles.isEmpty
+                    ? const EmptyState(message: '상세 캔들 데이터가 없습니다.')
+                    : FlowCompositeChart(candles: detailCandles),
+              ),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  FlowChip(
+                    label: _flowCandleDataQuality(detailCandles),
+                    color: _dataQualityColor(
+                      _flowCandleDataQuality(detailCandles),
+                    ),
+                  ),
+                  FlowChip(
+                    label: _flowCandleDataProvider(detailCandles),
+                    color: AppColors.charcoal,
+                  ),
+                  FlowChip(
+                    label: change >= 0
+                        ? '+${change.toStringAsFixed(1)}'
+                        : change.toStringAsFixed(1),
+                    color: change >= 0 ? AppColors.green : AppColors.red,
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        DetailStatGrid(
+          stats: [
+            DetailStat(
+              label: '현재 종합',
+              value: latest == null ? '-' : latest.close.toStringAsFixed(1),
+              color: latest == null
+                  ? AppColors.muted
+                  : scoreColor(latest.close.round()),
+            ),
+            DetailStat(
+              label: '평균 유동성',
+              value: avgLiquidity.toStringAsFixed(1),
+              color: AppColors.green,
+            ),
+            DetailStat(
+              label: '평균 모멘텀',
+              value: avgMomentum.toStringAsFixed(1),
+              color: AppColors.blue,
+            ),
+            DetailStat(
+              label: '평균 리스크',
+              value: avgRisk.toStringAsFixed(1),
+              color: avgRisk >= 60 ? AppColors.red : AppColors.amber,
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        FactorBar(
+          label: 'AI 인프라 플로우 평균',
+          value: avgAi.round(),
+          color: AppColors.blue,
+        ),
+        const SizedBox(height: 12),
+        FactorBar(
+          label: '위험자산 부담',
+          value: avgRisk.round(),
+          color: avgRisk >= 60 ? AppColors.red : AppColors.amber,
+        ),
+        const SizedBox(height: 18),
+        const SectionHeader(title: '최근 캔들'),
+        const SizedBox(height: 10),
+        if (detailCandles.isEmpty)
+          const EmptyState(message: '표시할 캔들이 없습니다.')
+        else
+          ...detailCandles.reversed
+              .take(6)
+              .map(
+                (candle) => Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: FlowCandleDetailRow(candle: candle),
+                ),
+              ),
+      ],
+    );
+  }
+}
+
+class CryptoMarketDetailSheet extends StatelessWidget {
+  const CryptoMarketDetailSheet({
+    required this.assets,
+    required this.snapshot,
+    super.key,
+  });
+
+  final List<CryptoAsset> assets;
+  final CryptoMarketSnapshot snapshot;
+
+  @override
+  Widget build(BuildContext context) {
+    final rankedAssets = assets.toList(growable: false)
+      ..sort((a, b) => a.rank.compareTo(b.rank));
+    final totalMarketCap = rankedAssets.fold<double>(
+      0,
+      (sum, asset) => sum + asset.marketCapUsd,
+    );
+    final totalVolume = rankedAssets.fold<double>(
+      0,
+      (sum, asset) => sum + asset.volume24hUsd,
+    );
+    final bitcoin = rankedAssets
+        .where((asset) => asset.id == 'bitcoin')
+        .firstOrNull;
+    final btcDominance = bitcoin == null || totalMarketCap <= 0
+        ? 0.0
+        : bitcoin.marketCapUsd / totalMarketCap * 100;
+    final advancingCount = rankedAssets
+        .where((asset) => asset.change24hPercent > 0)
+        .length;
+
+    return FlowDetailSheetFrame(
+      title: '코인 마켓 상세',
+      subtitle: '${snapshot.provider} · ${snapshot.endpoint}',
+      icon: Icons.currency_bitcoin,
+      color: AppColors.amber,
+      children: [
+        DetailStatGrid(
+          stats: [
+            DetailStat(
+              label: '추적 시총',
+              value: _formatUsdCompact(totalMarketCap),
+              color: AppColors.blue,
+            ),
+            DetailStat(
+              label: '24h 거래',
+              value: _formatUsdCompact(totalVolume),
+              color: AppColors.green,
+            ),
+            DetailStat(
+              label: 'BTC 비중',
+              value: '${btcDominance.toStringAsFixed(1)}%',
+              color: AppColors.amber,
+            ),
+            DetailStat(
+              label: '상승 자산',
+              value: '$advancingCount/${rankedAssets.length}',
+              color: advancingCount >= rankedAssets.length / 2
+                  ? AppColors.green
+                  : AppColors.red,
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        AppCard(
+          padding: const EdgeInsets.all(14),
+          child: CryptoChangeBars(assets: rankedAssets.take(6).toList()),
+        ),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            FlowChip(
+              label: snapshot.statusLabel,
+              color: _cryptoStatusColor(snapshot.status),
+            ),
+            FlowChip(
+              label: snapshot.apiKeyConfigured ? 'API key 적용' : '공개 API',
+              color: snapshot.apiKeyConfigured
+                  ? AppColors.green
+                  : AppColors.amber,
+            ),
+            FlowChip(
+              label: _cryptoDataQualityLabel(rankedAssets),
+              color: _dataQualityColor(_cryptoDataQualityLabel(rankedAssets)),
+            ),
+          ],
+        ),
+        const SizedBox(height: 18),
+        const SectionHeader(title: '상위 코인'),
+        const SizedBox(height: 10),
+        if (rankedAssets.isEmpty)
+          const EmptyState(message: '표시할 코인 데이터가 없습니다.')
+        else
+          ...rankedAssets
+              .take(6)
+              .map(
+                (asset) => Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: CryptoAssetRow(
+                    asset: asset,
+                    totalMarketCap: totalMarketCap,
+                  ),
+                ),
+              ),
+      ],
+    );
+  }
+}
+
+class DataApiSourceDetailSheet extends StatelessWidget {
+  const DataApiSourceDetailSheet({required this.api, super.key});
+
+  final DataApiSource api;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = _apiStatusColor(api.status);
+    final readiness = _apiReadinessScore(api.status);
+    final priorityScore = (104 - api.priority * 12).clamp(24, 100).toInt();
+    final coverageScore = (api.coverage.length ~/ 2).clamp(48, 96).toInt();
+
+    return FlowDetailSheetFrame(
+      title: api.name,
+      subtitle: api.provider,
+      icon: _apiStatusIcon(api.status),
+      color: color,
+      children: [
+        DetailStatGrid(
+          stats: [
+            DetailStat(label: '상태', value: api.status.label, color: color),
+            DetailStat(
+              label: '우선순위',
+              value: '#${api.priority}',
+              color: AppColors.blue,
+            ),
+            DetailStat(
+              label: 'Key',
+              value: api.keyName,
+              color: AppColors.charcoal,
+            ),
+            DetailStat(
+              label: '테스트',
+              value: DataApiProbeClient.supportsSource(api.id) ? '지원' : '대기',
+              color: DataApiProbeClient.supportsSource(api.id)
+                  ? AppColors.green
+                  : AppColors.amber,
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        FactorBar(label: '연결 준비도', value: readiness, color: color),
+        const SizedBox(height: 12),
+        FactorBar(
+          label: '우선순위 점수',
+          value: priorityScore,
+          color: AppColors.blue,
+        ),
+        const SizedBox(height: 12),
+        FactorBar(
+          label: '커버리지 폭',
+          value: coverageScore,
+          color: AppColors.green,
+        ),
+        const SizedBox(height: 18),
+        Text(api.coverage, style: Theme.of(context).textTheme.bodyLarge),
+        const SizedBox(height: 10),
+        Text(
+          '사용 화면: ${api.usedFor}',
+          style: Theme.of(context).textTheme.bodyMedium,
+        ),
+        const SizedBox(height: 8),
+        Text(
+          '연동 데이터: ${DataApiProbeClient.linkedDataLabel(api)}',
+          style: Theme.of(context).textTheme.bodyMedium,
+        ),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            FlowChip(label: api.docsUrl, color: AppColors.blue),
+            FlowChip(label: api.keyName, color: AppColors.charcoal),
+            if (api.requiresVendorSelection)
+              FlowChip(
+                label: '${api.vendorOptions.length} vendors',
+                color: AppColors.amber,
+              ),
+          ],
+        ),
+        if (api.vendorOptions.isNotEmpty) ...[
+          const SizedBox(height: 18),
+          const SectionHeader(title: '후보 벤더'),
+          const SizedBox(height: 10),
+          for (final option in api.vendorOptions)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: AppCard(
+                padding: const EdgeInsets.all(14),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      option.name,
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      '${option.provider} · ${option.endpointHint}',
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                    const SizedBox(height: 8),
+                    FlowChip(label: option.docsUrl, color: AppColors.blue),
+                  ],
+                ),
+              ),
+            ),
+        ],
+      ],
+    );
+  }
+}
+
+class CapitalFlowDetailSheet extends StatelessWidget {
+  const CapitalFlowDetailSheet({required this.flow, super.key});
+
+  final CapitalFlow flow;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = scoreColor(flow.flowScore);
+    final trendChange = flow.trend.length < 2
+        ? 0.0
+        : flow.trend.last - flow.trend.first;
+
+    return FlowDetailSheetFrame(
+      title: flow.name,
+      subtitle: '${flow.regionLabel} → ${flow.destination}',
+      icon: _assetClassIcon(flow.assetClass),
+      color: color,
+      children: [
+        SizedBox(
+          height: 132,
+          child: Sparkline(values: flow.trend, color: color),
+        ),
+        const SizedBox(height: 12),
+        DetailStatGrid(
+          stats: [
+            DetailStat(
+              label: '흐름 점수',
+              value: '${flow.flowScore}',
+              color: color,
+            ),
+            DetailStat(
+              label: '추세 변화',
+              value: trendChange >= 0
+                  ? '+${trendChange.toStringAsFixed(1)}'
+                  : trendChange.toStringAsFixed(1),
+              color: trendChange >= 0 ? AppColors.green : AppColors.red,
+            ),
+            DetailStat(
+              label: '순유입',
+              value: flow.netFlowLabel,
+              color: AppColors.charcoal,
+            ),
+            DetailStat(
+              label: '업데이트',
+              value: flow.updatedLabel,
+              color: AppColors.muted,
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        FactorBar(label: '모멘텀', value: flow.momentum, color: AppColors.green),
+        const SizedBox(height: 12),
+        FactorBar(label: '유동성', value: flow.liquidity, color: AppColors.blue),
+        const SizedBox(height: 12),
+        FactorBar(
+          label: '위험도',
+          value: flow.risk,
+          color: flow.risk >= 60 ? AppColors.red : AppColors.amber,
+        ),
+        const SizedBox(height: 18),
+        Text(flow.thesis, style: Theme.of(context).textTheme.bodyLarge),
+        const SizedBox(height: 12),
+        Text(flow.signal, style: Theme.of(context).textTheme.labelLarge),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            FlowChip(
+              label: flow.assetClass.label,
+              color: _assetClassColor(flow.assetClass),
+            ),
+            FlowChip(
+              label: flow.dataQuality.label,
+              color: _dataQualityColor(flow.dataQuality.label),
+            ),
+            FlowChip(label: flow.dataProvider, color: AppColors.charcoal),
+            for (final driver in flow.drivers)
+              FlowChip(label: driver, color: AppColors.blue),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class EmergingFlowDetailSheet extends StatelessWidget {
+  const EmergingFlowDetailSheet({required this.flow, super.key});
+
+  final EmergingCapitalFlow flow;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = scoreColor(flow.probability);
+    final projection = _emergingProjection(flow);
+
+    return FlowDetailSheetFrame(
+      title: flow.title,
+      subtitle: '${flow.from} → ${flow.to}',
+      icon: Icons.route_outlined,
+      color: color,
+      children: [
+        SizedBox(
+          height: 124,
+          child: Sparkline(values: projection, color: color),
+        ),
+        const SizedBox(height: 12),
+        DetailStatGrid(
+          stats: [
+            DetailStat(
+              label: '현실화',
+              value: '${flow.probability}%',
+              color: color,
+            ),
+            DetailStat(
+              label: '기간',
+              value: flow.timeframe,
+              color: AppColors.blue,
+            ),
+            DetailStat(
+              label: '수혜군',
+              value: '${flow.beneficiaries.length}',
+              color: AppColors.green,
+            ),
+            DetailStat(
+              label: '리스크',
+              value: '${flow.risks.length}',
+              color: AppColors.red,
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        FactorBar(label: '현실화 가능성', value: flow.probability, color: color),
+        const SizedBox(height: 18),
+        Text(flow.trigger, style: Theme.of(context).textTheme.bodyLarge),
+        const SizedBox(height: 12),
+        Text(
+          '관찰 지표: ${flow.watch}',
+          style: Theme.of(context).textTheme.bodyMedium,
+        ),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final item in flow.beneficiaries)
+              FlowChip(label: item, color: AppColors.green),
+            for (final risk in flow.risks)
+              FlowChip(label: risk, color: AppColors.red),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class DetailStat {
+  const DetailStat({
+    required this.label,
+    required this.value,
+    required this.color,
+  });
+
+  final String label;
+  final String value;
+  final Color color;
+}
+
+class DetailStatGrid extends StatelessWidget {
+  const DetailStatGrid({required this.stats, super.key});
+
+  final List<DetailStat> stats;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final columnCount = constraints.maxWidth >= 520 ? 4 : 2;
+        final spacing = 8.0;
+        final itemWidth =
+            (constraints.maxWidth - spacing * (columnCount - 1)) / columnCount;
+        return Wrap(
+          spacing: spacing,
+          runSpacing: spacing,
+          children: [
+            for (final stat in stats)
+              SizedBox(
+                width: itemWidth,
+                child: DetailStatTile(stat: stat),
+              ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class DetailStatTile extends StatelessWidget {
+  const DetailStatTile({required this.stat, super.key});
+
+  final DetailStat stat;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: AppColors.canvas,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: AppColors.line),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              stat.label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+            const SizedBox(height: 5),
+            Text(
+              stat.value,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(color: stat.color),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class FlowCandleDetailRow extends StatelessWidget {
+  const FlowCandleDetailRow({required this.candle, super.key});
+
+  final FlowCandle candle;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = candle.close >= candle.open ? AppColors.green : AppColors.red;
+    return AppCard(
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  candle.label,
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+              ),
+              FlowChip(
+                label: candle.close >= candle.open
+                    ? '+${(candle.close - candle.open).toStringAsFixed(1)}'
+                    : (candle.close - candle.open).toStringAsFixed(1),
+                color: color,
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              FlowChip(
+                label: 'O ${candle.open.toStringAsFixed(1)}',
+                color: AppColors.charcoal,
+              ),
+              FlowChip(
+                label: 'H ${candle.high.toStringAsFixed(1)}',
+                color: AppColors.green,
+              ),
+              FlowChip(
+                label: 'L ${candle.low.toStringAsFixed(1)}',
+                color: AppColors.red,
+              ),
+              FlowChip(
+                label: 'C ${candle.close.toStringAsFixed(1)}',
+                color: color,
+              ),
+              FlowChip(
+                label: '유동성 ${candle.liquidity.toStringAsFixed(0)}',
+                color: AppColors.blue,
+              ),
+              FlowChip(
+                label: '리스크 ${candle.risk.toStringAsFixed(0)}',
+                color: AppColors.amber,
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class CryptoChangeBars extends StatelessWidget {
+  const CryptoChangeBars({required this.assets, super.key});
+
+  final List<CryptoAsset> assets;
+
+  @override
+  Widget build(BuildContext context) {
+    if (assets.isEmpty) {
+      return const EmptyState(message: '표시할 코인 변화율이 없습니다.');
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('24h 변화율', style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 12),
+        for (final asset in assets)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: SignedChangeBar(
+              label: asset.symbol,
+              value: asset.change24hPercent,
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class SignedChangeBar extends StatelessWidget {
+  const SignedChangeBar({required this.label, required this.value, super.key});
+
+  final String label;
+  final double value;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = _cryptoChangeColor(value);
+    final magnitude = (value.abs() / 12).clamp(0.04, 1.0).toDouble();
+    return Row(
+      children: [
+        SizedBox(
+          width: 48,
+          child: Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.labelLarge,
+          ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(999),
+            child: DecoratedBox(
+              decoration: BoxDecoration(color: AppColors.line),
+              child: SizedBox(
+                height: 10,
+                child: Align(
+                  alignment: value >= 0
+                      ? Alignment.centerLeft
+                      : Alignment.centerRight,
+                  child: FractionallySizedBox(
+                    widthFactor: magnitude,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(color: color),
+                      child: const SizedBox.expand(),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        SizedBox(
+          width: 58,
+          child: Text(
+            _formatPercentSigned(value),
+            maxLines: 1,
+            textAlign: TextAlign.right,
+            style: Theme.of(
+              context,
+            ).textTheme.labelLarge?.copyWith(color: color),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -5959,6 +7001,45 @@ Color _cryptoStatusColor(CryptoFetchStatus status) {
     case CryptoFetchStatus.failed:
       return AppColors.red;
   }
+}
+
+double _averageMetric(Iterable<double> values) {
+  var count = 0;
+  var total = 0.0;
+  for (final value in values) {
+    total += value;
+    count += 1;
+  }
+  return count == 0 ? 0 : total / count;
+}
+
+int _apiReadinessScore(ApiIntegrationStatus status) {
+  switch (status) {
+    case ApiIntegrationStatus.live:
+      return 100;
+    case ApiIntegrationStatus.configurable:
+      return 74;
+    case ApiIntegrationStatus.needed:
+      return 46;
+    case ApiIntegrationStatus.vendorNeeded:
+      return 32;
+  }
+}
+
+List<double> _emergingProjection(EmergingCapitalFlow flow) {
+  double bound(num value) => value.clamp(0, 100).toDouble();
+  final target = flow.probability.toDouble();
+  final riskDrag = flow.risks.length * 2.5;
+  final beneficiaryLift = flow.beneficiaries.length * 1.6;
+  final base = target * 0.58;
+
+  return [
+    bound(base - riskDrag),
+    bound(base + beneficiaryLift),
+    bound(target - 12 + beneficiaryLift),
+    bound(target - 5),
+    bound(target),
+  ];
 }
 
 String _flowCandleDataQuality(List<FlowCandle> candles) {

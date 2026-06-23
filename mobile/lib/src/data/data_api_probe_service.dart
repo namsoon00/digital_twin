@@ -250,10 +250,40 @@ class DataApiProbeClient {
     String apiKey,
     _DataApiProbeSpec spec,
   ) async {
-    final uri = Uri.https('opendart.fss.or.kr', '/api/company.json', {
+    try {
+      return await _probeOpenDartUri(_openDartDirectUri(apiKey), spec);
+    } catch (directError) {
+      try {
+        return await _probeOpenDartUri(_openDartProxyUri(apiKey), spec);
+      } catch (proxyError) {
+        throw FormatException(
+          'OpenDART 직접 호출 실패 후 로컬 프록시도 실패했습니다. '
+          '웹에서는 OpenDART CORS 차단 때문에 `npm start`로 127.0.0.1:3000 프록시를 켜야 합니다. '
+          '$directError · proxy: $proxyError',
+        );
+      }
+    }
+  }
+
+  Uri _openDartDirectUri(String apiKey) {
+    return Uri.https('opendart.fss.or.kr', '/api/company.json', {
       'crtfc_key': apiKey,
       'corp_code': '00126380',
     });
+  }
+
+  Uri _openDartProxyUri(String apiKey) {
+    final base = Uri.parse(_localDataProxyBaseUrl);
+    return base.replace(
+      path: '/api/data-api/opendart/company',
+      queryParameters: {'crtfc_key': apiKey, 'corp_code': '00126380'},
+    );
+  }
+
+  Future<DataApiProbeResult> _probeOpenDartUri(
+    Uri uri,
+    _DataApiProbeSpec spec,
+  ) async {
     final decoded = await _getJsonMap(uri);
     final status = '${decoded['status'] ?? ''}';
     if (status != '000') {

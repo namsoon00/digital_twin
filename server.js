@@ -381,6 +381,23 @@ function normalizeFredObservationsUrl(query) {
   return target.toString();
 }
 
+function normalizeOpenDartCompanyUrl(query) {
+  const apiKey = String(query.crtfc_key || "").trim();
+  const corpCode = String(query.corp_code || "00126380").trim();
+
+  if (!/^[A-Za-z0-9]{32,64}$/.test(apiKey)) {
+    throw new Error("OpenDART API key 형식이 올바르지 않습니다.");
+  }
+  if (!/^\d{8}$/.test(corpCode)) {
+    throw new Error("OpenDART corp_code 형식이 올바르지 않습니다.");
+  }
+
+  const target = new URL("https://opendart.fss.or.kr/api/company.json");
+  target.searchParams.set("crtfc_key", apiKey);
+  target.searchParams.set("corp_code", corpCode);
+  return target.toString();
+}
+
 function serveStatic(req, res, pathname) {
   const target = pathname === "/" ? "/index.html" : pathname;
   const filePath = path.normalize(path.join(publicDir, target));
@@ -1241,6 +1258,22 @@ async function api(req, res, pathname) {
       } catch (error) {
         return corsJson(res, 400, {
           error: error.message || "FRED 데이터를 가져오지 못했습니다."
+        });
+      }
+    }
+  }
+
+  if (pathname === "/api/data-api/opendart/company") {
+    if (req.method === "OPTIONS") return corsJson(res, 204, {});
+    if (req.method === "GET") {
+      try {
+        const parsedQuery = url.parse(req.url, true).query;
+        const targetUrl = normalizeOpenDartCompanyUrl(parsedQuery);
+        const payload = await fetchJson(targetUrl);
+        return corsJson(res, 200, payload);
+      } catch (error) {
+        return corsJson(res, 400, {
+          error: error.message || "OpenDART 데이터를 가져오지 못했습니다."
         });
       }
     }

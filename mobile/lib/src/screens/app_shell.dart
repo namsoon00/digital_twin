@@ -1257,6 +1257,10 @@ class EconomicFeedSummaryCard extends StatelessWidget {
                 label: feedSnapshot.provider,
                 color: _feedStatusColor(feedSnapshot.status),
               ),
+              FlowChip(
+                label: _formatFeedUpdated(feedSnapshot.updatedAt),
+                color: AppColors.muted,
+              ),
               FlowChip(label: feedSnapshot.message, color: AppColors.charcoal),
               FlowChip(
                 label: quoteSnapshot.statusLabel,
@@ -3201,6 +3205,7 @@ class DataApiKeyField extends StatelessWidget {
         : requiresVendorSelection
         ? '벤더 선택 후 저장'
         : 'API key 입력 후 저장';
+    final sourceNotice = DataApiProbeClient.sourceNotice(api.id);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -3287,6 +3292,10 @@ class DataApiKeyField extends StatelessWidget {
             FlowChip(label: api.docsUrl, color: AppColors.blue),
           ],
         ),
+        if (sourceNotice != null) ...[
+          const SizedBox(height: 10),
+          _DataApiNoticeBox(message: sourceNotice),
+        ],
         const SizedBox(height: 12),
         if (requiresVendorSelection) ...[
           DropdownButtonFormField<String>(
@@ -3468,6 +3477,39 @@ class _DataApiProbeResultBox extends StatelessWidget {
             Text(
               '연동 데이터: ${result.linkedDataLabel}',
               style: Theme.of(context).textTheme.bodyMedium,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _DataApiNoticeBox extends StatelessWidget {
+  const _DataApiNoticeBox({required this.message});
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: AppColors.amber.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: AppColors.amber.withValues(alpha: 0.28)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(Icons.info_outline, color: AppColors.amber, size: 18),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                message,
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
             ),
           ],
         ),
@@ -7152,6 +7194,13 @@ String _formatCryptoUpdated(DateTime? value) {
     return '업데이트 대기';
   }
   return '${_formatClock(value)} 업데이트';
+}
+
+String _formatFeedUpdated(DateTime? value) {
+  if (value == null) {
+    return '피드 갱신 대기';
+  }
+  return '${_formatClock(value)} 피드 갱신';
 }
 
 String _feedUrlHost(String url) {

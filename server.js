@@ -172,7 +172,7 @@ function corsJson(res, status, payload) {
     "Cache-Control": "no-store",
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type"
+    "Access-Control-Allow-Headers": "Content-Type, Cache-Control, Pragma"
   });
   res.end(JSON.stringify(payload));
 }
@@ -183,7 +183,7 @@ function corsText(res, status, payload, contentType) {
     "Cache-Control": "no-store",
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type"
+    "Access-Control-Allow-Headers": "Content-Type, Cache-Control, Pragma"
   });
   res.end(payload);
 }

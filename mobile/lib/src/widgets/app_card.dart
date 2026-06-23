@@ -41,14 +41,22 @@ class AppCard extends StatelessWidget {
 }
 
 class SectionHeader extends StatelessWidget {
-  const SectionHeader({required this.title, this.trailing, super.key});
+  const SectionHeader({
+    required this.title,
+    this.trailing,
+    this.onTap,
+    this.tooltip,
+    super.key,
+  });
 
   final String title;
   final Widget? trailing;
+  final VoidCallback? onTap;
+  final String? tooltip;
 
   @override
   Widget build(BuildContext context) {
-    return Row(
+    final content = Row(
       children: [
         Expanded(
           child: Text(title, style: Theme.of(context).textTheme.titleLarge),
@@ -56,6 +64,28 @@ class SectionHeader extends StatelessWidget {
         ?trailing,
       ],
     );
+
+    if (onTap == null) {
+      return content;
+    }
+
+    final tappable = Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(6),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 4),
+          child: content,
+        ),
+      ),
+    );
+
+    if (tooltip == null) {
+      return tappable;
+    }
+
+    return Tooltip(message: tooltip!, child: tappable);
   }
 }
 

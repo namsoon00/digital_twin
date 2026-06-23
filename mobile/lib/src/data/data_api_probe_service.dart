@@ -33,6 +33,14 @@ class DataApiProbeClient {
     return _probeSpecs[sourceId]?.effectiveTestLabel ?? '테스트 준비 전';
   }
 
+  static String? sourceNotice(String sourceId) {
+    if (sourceId != 'opendart') {
+      return null;
+    }
+    return 'OpenDART는 브라우저 CORS 정책 때문에 GitHub Pages 웹에서 직접 연결 테스트가 실패할 수 있습니다. '
+        '모바일 앱에서 테스트하거나 로컬에서 `npm start` 실행 후 127.0.0.1:3000으로 열어 테스트하세요.';
+  }
+
   Future<DataApiProbeResult> probe(
     DataApiSource source,
     String apiKey, {
@@ -193,7 +201,8 @@ class DataApiProbeClient {
         throw FormatException(
           'FRED 직접 호출 실패 후 로컬 프록시도 실패했습니다. '
           '웹에서는 `npm start`로 127.0.0.1:3000 프록시를 켜야 합니다. '
-          '$directError · proxy: $proxyError',
+          'direct: ${_safeProbeError(directError)} · '
+          'proxy: ${_safeProbeError(proxyError)}',
         );
       }
     }
@@ -257,9 +266,11 @@ class DataApiProbeClient {
         return await _probeOpenDartUri(_openDartProxyUri(apiKey), spec);
       } catch (proxyError) {
         throw FormatException(
-          'OpenDART 직접 호출 실패 후 로컬 프록시도 실패했습니다. '
-          '웹에서는 OpenDART CORS 차단 때문에 `npm start`로 127.0.0.1:3000 프록시를 켜야 합니다. '
-          '$directError · proxy: $proxyError',
+          'OpenDART 연결 테스트 실패: 브라우저 웹에서는 OpenDART CORS 차단으로 직접 호출이 막힐 수 있습니다. '
+          'GitHub Pages에는 API 서버가 없으므로 모바일 앱에서 테스트하거나 로컬에서 `npm start` 실행 후 '
+          '127.0.0.1:3000으로 열어 테스트하세요. '
+          'direct: ${_safeProbeError(directError)} · '
+          'proxy: ${_safeProbeError(proxyError)}',
         );
       }
     }
@@ -363,6 +374,19 @@ class DataApiProbeClient {
       throw const FormatException('JSON 객체 응답이 아닙니다.');
     }
     return decoded;
+  }
+
+  String _safeProbeError(Object error) {
+    if (error is TimeoutException) {
+      return '시간 초과';
+    }
+    if (error is FormatException) {
+      return error.message;
+    }
+    if (error is http.ClientException) {
+      return error.message;
+    }
+    return error.runtimeType.toString();
   }
 }
 

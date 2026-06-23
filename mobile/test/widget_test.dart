@@ -52,6 +52,9 @@ void main() {
     final service = GoogleNewsEconomicFeedService(
       client: MockClient((request) async {
         expect(request.url.host, 'news.google.com');
+        expect(request.url.queryParameters['_refresh'], isNotEmpty);
+        expect(request.headers['Cache-Control'], 'no-cache');
+        expect(request.headers['Pragma'], 'no-cache');
         return http.Response(
           rss,
           200,
@@ -104,15 +107,20 @@ void main() {
       final service = GoogleNewsEconomicFeedService(
         client: MockClient((request) async {
           if (request.url.host == 'news.google.com') {
+            expect(request.url.queryParameters['_refresh'], isNotEmpty);
             throw http.ClientException('Failed to fetch', request.url);
           }
           expect(request.url.host, '127.0.0.1');
           expect(request.url.port, 3000);
           expect(request.url.path, '/api/economic-feed/rss');
+          expect(request.headers['Cache-Control'], 'no-cache');
+          expect(request.headers['Pragma'], 'no-cache');
           expect(
             request.url.queryParameters['url'],
             contains('https://news.google.com/rss/search'),
           );
+          final proxiedUrl = Uri.parse(request.url.queryParameters['url']!);
+          expect(proxiedUrl.queryParameters['_refresh'], isNotEmpty);
           proxyRequestCount += 1;
           return http.Response(
             rss,
@@ -304,6 +312,28 @@ void main() {
     expect(result.ok, isTrue);
     expect(result.message, contains('삼성전자'));
     expect(proxyRequestCount, 1);
+  });
+
+  test('Data API probe hides OpenDART key when browser proxy fails', () async {
+    const repository = MockFlowRepository();
+    final source = repository.dataApiSources.firstWhere(
+      (source) => source.id == 'opendart',
+    );
+    const apiKey = 'redacted-opendart-test-key';
+    final client = DataApiProbeClient(
+      client: MockClient((request) async {
+        throw http.ClientException('XMLHttpRequest error.', request.url);
+      }),
+    );
+    addTearDown(client.dispose);
+
+    final result = await client.probe(source, apiKey);
+
+    expect(result.ok, isFalse);
+    expect(result.message, contains('OpenDART 연결 테스트 실패'));
+    expect(result.message, contains('CORS'));
+    expect(result.message, contains('npm start'));
+    expect(result.message, isNot(contains(apiKey)));
   });
 
   testWidgets('Sparkline supports pinch zooming into a shorter period', (
@@ -647,6 +677,7 @@ void main() {
     expect(find.text('AI CAPEX 자금이 반도체에서 전력 인프라로 확산'), findsWidgets);
     expect(find.text('피드 채널'), findsOneWidget);
     expect(find.text('Google News RSS'), findsWidgets);
+    expect(find.textContaining('피드 갱신'), findsOneWidget);
     expect(find.byTooltip('대표 뉴스 열기'), findsOneWidget);
     expect(find.byTooltip('채널 뉴스 열기'), findsWidgets);
 
@@ -924,6 +955,7 @@ void main() {
       find.byKey(const ValueKey('data-api-test-opendart')),
       findsOneWidget,
     );
+    expect(find.textContaining('OpenDART는 브라우저 CORS 정책'), findsOneWidget);
     expect(find.text('읽기 전용 데이터'), findsOneWidget);
     expect(find.text('로컬 DB 저장'), findsOneWidget);
     expect(find.text('API key'), findsWidgets);

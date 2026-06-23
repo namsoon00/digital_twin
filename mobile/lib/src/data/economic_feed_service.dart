@@ -109,6 +109,7 @@ class GoogleNewsEconomicFeedService implements EconomicFeedService {
     'MARKET_FLOW_FEED_PROXY_BASE_URL',
     defaultValue: 'http://127.0.0.1:3000',
   );
+  static const _refreshQueryParameter = '_refresh';
 
   static const _queries = [
     _EconomicFeedQuery(
@@ -203,10 +204,11 @@ class GoogleNewsEconomicFeedService implements EconomicFeedService {
 
   @override
   Future<EconomicFeedFetchResult> fetchFeeds() async {
+    final refreshToken = DateTime.now().millisecondsSinceEpoch.toString();
     final results = await Future.wait(
       _queries.map((query) async {
         try {
-          return _FeedQueryResult(await _fetchQuery(query), null);
+          return _FeedQueryResult(await _fetchQuery(query, refreshToken), null);
         } catch (error) {
           return _FeedQueryResult(const [], '${query.id}: $error');
         }
@@ -248,8 +250,11 @@ class GoogleNewsEconomicFeedService implements EconomicFeedService {
     );
   }
 
-  Future<List<EconomicFeedItem>> _fetchQuery(_EconomicFeedQuery query) async {
-    final uri = _googleNewsRssUri(query);
+  Future<List<EconomicFeedItem>> _fetchQuery(
+    _EconomicFeedQuery query,
+    String refreshToken,
+  ) async {
+    final uri = _googleNewsRssUri(query, refreshToken: refreshToken);
     final body = await _fetchRssBody(uri);
     final blocks = RegExp(
       r'<item\b[\s\S]*?<\/item>',
@@ -280,6 +285,8 @@ class GoogleNewsEconomicFeedService implements EconomicFeedService {
           uri,
           headers: const {
             'Accept': 'application/rss+xml, application/xml;q=0.9, */*;q=0.8',
+            'Cache-Control': 'no-cache',
+            'Pragma': 'no-cache',
             'User-Agent': 'MarketFlow/1.0',
           },
         )
@@ -327,13 +334,19 @@ class GoogleNewsEconomicFeedService implements EconomicFeedService {
     );
   }
 
-  static Uri _googleNewsRssUri(_EconomicFeedQuery query) {
-    return Uri.https('news.google.com', endpoint, {
+  static Uri _googleNewsRssUri(
+    _EconomicFeedQuery query, {
+    String? refreshToken,
+  }) {
+    final parameters = {
       'q': query.search,
       'hl': 'ko',
       'gl': 'KR',
       'ceid': 'KR:ko',
-    });
+      if (refreshToken != null && refreshToken.isNotEmpty)
+        _refreshQueryParameter: refreshToken,
+    };
+    return Uri.https('news.google.com', endpoint, parameters);
   }
 
   static Uri _googleNewsSearchUri(_EconomicFeedQuery query) {
@@ -358,20 +371,23 @@ class GoogleNewsEconomicFeedService implements EconomicFeedService {
   }
 
   static int _compareFeedItems(EconomicFeedItem a, EconomicFeedItem b) {
-    final impactCompare = b.impactScore.compareTo(a.impactScore);
-    if (impactCompare != 0) {
-      return impactCompare;
-    }
     final aDate = a.publishedAt;
     final bDate = b.publishedAt;
     if (aDate != null && bDate != null) {
-      return bDate.compareTo(aDate);
+      final dateCompare = bDate.compareTo(aDate);
+      if (dateCompare != 0) {
+        return dateCompare;
+      }
     }
     if (aDate != null) {
       return -1;
     }
     if (bDate != null) {
       return 1;
+    }
+    final impactCompare = b.impactScore.compareTo(a.impactScore);
+    if (impactCompare != 0) {
+      return impactCompare;
     }
     return a.title.compareTo(b.title);
   }

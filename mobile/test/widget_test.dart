@@ -206,6 +206,26 @@ void main() {
     expect(requestCount, 2);
   });
 
+  test('Data API probe confirms a selected investor flow vendor', () async {
+    const repository = MockFlowRepository();
+    final source = repository.dataApiSources.firstWhere(
+      (source) => source.id == 'kr-investor-flow',
+    );
+    final client = DataApiProbeClient(
+      client: MockClient((request) async {
+        throw StateError('vendor selection probe should not call the network');
+      }),
+    );
+    addTearDown(client.dispose);
+
+    final result = await client.probe(source, '', vendorId: 'krx-data');
+
+    expect(result.ok, isTrue);
+    expect(result.provider, 'KRX');
+    expect(result.endpoint, contains('KRX 데이터'));
+    expect(result.message, contains('KRX 정보데이터시스템'));
+  });
+
   test('Data API probe validates OpenDART company access', () async {
     const repository = MockFlowRepository();
     final source = repository.dataApiSources.firstWhere(
@@ -835,6 +855,30 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.textContaining('계약 후 제공되는 fund flow endpoint'), findsOneWidget);
+
+    await tester.scrollUntilVisible(
+      find.byKey(const ValueKey('data-api-vendor-kr-investor-flow')),
+      520,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+
+    final krTestButton = find.byKey(
+      const ValueKey('data-api-test-kr-investor-flow'),
+    );
+    expect(tester.widget<OutlinedButton>(krTestButton).onPressed, isNull);
+
+    await tester.tap(
+      find.byKey(const ValueKey('data-api-vendor-kr-investor-flow')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('KRX 정보데이터시스템'), findsOneWidget);
+
+    await tester.tap(find.text('KRX 정보데이터시스템'));
+    await tester.pumpAndSettle();
+
+    expect(tester.widget<OutlinedButton>(krTestButton).onPressed, isNotNull);
 
     await tester.scrollUntilVisible(
       find.text('토스증권 계정'),

@@ -30,12 +30,14 @@ class DataApiProbeClient {
   }
 
   static String testLabel(String sourceId) {
-    return supportsSource(sourceId)
-        ? (requiresKey(sourceId) ? '연결 테스트' : '공개 API 테스트')
-        : '테스트 준비 전';
+    return _probeSpecs[sourceId]?.effectiveTestLabel ?? '테스트 준비 전';
   }
 
-  Future<DataApiProbeResult> probe(DataApiSource source, String apiKey) async {
+  Future<DataApiProbeResult> probe(
+    DataApiSource source,
+    String apiKey, {
+    String vendorId = '',
+  }) async {
     final spec = _probeSpecs[source.id];
     if (spec == null) {
       return DataApiProbeResult.unsupported(
@@ -63,6 +65,12 @@ class DataApiProbeClient {
         'fred' => await _probeFred(normalizedKey, spec),
         'opendart' => await _probeOpenDart(normalizedKey, spec),
         'defillama' => await _probeDefiLlama(spec),
+        'fund-flow-vendor' || 'kr-investor-flow' => _probeVendorSelection(
+          source,
+          normalizedKey,
+          vendorId,
+          spec,
+        ),
         _ => DataApiProbeResult.unsupported(
           sourceId: source.id,
           endpoint: source.docsUrl,
@@ -182,7 +190,11 @@ class DataApiProbeClient {
       try {
         return await _probeFredUri(_fredProxyUri(apiKey), spec);
       } catch (proxyError) {
-        throw FormatException('$directError · proxy: $proxyError');
+        throw FormatException(
+          'FRED 직접 호출 실패 후 로컬 프록시도 실패했습니다. '
+          '웹에서는 `npm start`로 127.0.0.1:3000 프록시를 켜야 합니다. '
+          '$directError · proxy: $proxyError',
+        );
       }
     }
   }
@@ -257,6 +269,34 @@ class DataApiProbeClient {
       endpoint: spec.endpointLabel,
       linkedDataLabel: spec.linkedDataLabel,
       message: '$corpName $stockCode 기업개황 확인',
+    );
+  }
+
+  DataApiProbeResult _probeVendorSelection(
+    DataApiSource source,
+    String apiKey,
+    String vendorId,
+    _DataApiProbeSpec spec,
+  ) {
+    final vendor = source.vendorOptionFor(vendorId.trim());
+    if (vendor == null) {
+      return DataApiProbeResult.failed(
+        sourceId: source.id,
+        provider: source.name,
+        endpoint: spec.endpointLabel,
+        linkedDataLabel: spec.linkedDataLabel,
+        message: '벤더 선택 후 테스트할 수 있습니다.',
+      );
+    }
+
+    return DataApiProbeResult.ok(
+      sourceId: source.id,
+      provider: vendor.provider,
+      endpoint: vendor.endpointHint,
+      linkedDataLabel: spec.linkedDataLabel,
+      message: apiKey.isEmpty
+          ? '${vendor.name} 벤더 선택 확인 · API key는 아직 입력 전'
+          : '${vendor.name} 벤더와 API key 입력 확인',
     );
   }
 
@@ -375,11 +415,17 @@ class _DataApiProbeSpec {
     required this.endpointLabel,
     required this.linkedDataLabel,
     this.requiresKey = true,
+    this.testLabel,
   });
 
   final String endpointLabel;
   final String linkedDataLabel;
   final bool requiresKey;
+  final String? testLabel;
+
+  String get effectiveTestLabel {
+    return testLabel ?? (requiresKey ? '연결 테스트' : '공개 API 테스트');
+  }
 }
 
 const _probeSpecs = {
@@ -404,5 +450,17 @@ const _probeSpecs = {
     endpointLabel: '/protocols',
     linkedDataLabel: 'DeFi TVL, 스테이블코인, 체인별 온체인 유동성',
     requiresKey: false,
+  ),
+  'fund-flow-vendor': _DataApiProbeSpec(
+    endpointLabel: '벤더별 fund flow endpoint',
+    linkedDataLabel: 'ETF/펀드 순유입, 국가/섹터/자산군별 자금 흐름',
+    requiresKey: false,
+    testLabel: '연결 테스트',
+  ),
+  'kr-investor-flow': _DataApiProbeSpec(
+    endpointLabel: '벤더별 투자자 수급 endpoint',
+    linkedDataLabel: '외국인, 기관, 개인의 시장/업종/종목별 순매수',
+    requiresKey: false,
+    testLabel: '연결 테스트',
   ),
 };

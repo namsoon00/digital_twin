@@ -308,8 +308,9 @@ class _AppShellState extends State<AppShell> {
   Future<DataApiProbeResult> _testDataApiConnection(
     DataApiSource source,
     String apiKey,
+    String vendorId,
   ) async {
-    return _dataApiProbeClient.probe(source, apiKey);
+    return _dataApiProbeClient.probe(source, apiKey, vendorId: vendorId);
   }
 
   Future<void> _saveTossSettings(TossAccountSettings settings) async {
@@ -2778,8 +2779,9 @@ class DataApiKeyField extends StatelessWidget {
     final hasSavedKey = normalizedSavedKey.isNotEmpty;
     final hasCurrentKey = currentKey.isNotEmpty;
     final hasSavedVendor = normalizedSavedVendor.isNotEmpty;
+    final hasCurrentVendor = currentVendor.isNotEmpty;
     final hasCurrentConfiguration = requiresVendorSelection
-        ? currentVendor.isNotEmpty || hasCurrentKey
+        ? hasCurrentVendor || hasCurrentKey
         : hasCurrentKey;
     final hasUnsavedChanges =
         currentKey != normalizedSavedKey ||
@@ -2794,7 +2796,8 @@ class DataApiKeyField extends StatelessWidget {
         !saving &&
         !testing &&
         supportsTest &&
-        (!requiresKey || hasCurrentKey);
+        (!requiresKey || hasCurrentKey) &&
+        (!requiresVendorSelection || hasCurrentVendor);
     final statusLabel = hasUnsavedChanges
         ? (hasCurrentConfiguration ? '변경됨' : '삭제 예정')
         : (hasSavedConfiguration ? '저장됨' : '미등록');
@@ -4844,7 +4847,11 @@ class SettingsScreen extends StatefulWidget {
   final bool dataApiKeysLoaded;
   final Future<void> Function(DataApiKeySettings settings)
   onSaveDataApiKeySettings;
-  final Future<DataApiProbeResult> Function(DataApiSource source, String apiKey)
+  final Future<DataApiProbeResult> Function(
+    DataApiSource source,
+    String apiKey,
+    String vendorId,
+  )
   onTestDataApiConnection;
   final TossAccountSettings tossSettings;
   final bool settingsLoaded;
@@ -5006,6 +5013,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _testDataApi(DataApiSource source) async {
     final key = _dataApiKeyControllers[source.id]?.text.trim() ?? '';
+    final vendorId = _dataApiVendorSelections[source.id] ?? '';
     setState(() {
       _testingDataApiId = source.id;
       _dataApiProbeResults.remove(source.id);
@@ -5013,7 +5021,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     try {
       await widget.onSaveDataApiKeySettings(_currentDataApiKeySettings());
-      final result = await widget.onTestDataApiConnection(source, key);
+      final result = await widget.onTestDataApiConnection(
+        source,
+        key,
+        vendorId,
+      );
       if (!mounted) {
         return;
       }

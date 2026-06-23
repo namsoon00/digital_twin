@@ -64,6 +64,8 @@ flutter build web --release --base-href /digital_twin/ --dart-define=ALPHA_VANTA
 
 - 필요 API 맵: Alpha Vantage, 토스증권 Open API, FRED, CoinGecko, DefiLlama, ETF/Fund Flow API, 한국 투자자별 수급 API
 - 종합 그래프: 캔들형 종합 흐름 지수, 유동성 막대, AI/코인/금/KOSPI/리스크 라인을 하나의 그래프에 표시
+- 보기 단위: 일별, 주별, 월별 전환
+- 데이터 출처: 실제 API 데이터와 mock 데이터를 배지로 구분
 - 코인 마켓: CoinGecko API로 BTC, ETH, SOL, XRP, BNB, USDC, USDT, DOGE 가격/시총/거래량/1h/24h/7d 변화율 표시
 - 데이터 UI: 축, 현재값 마커, 핵심 지표 요약을 포함한 금융 대시보드형 차트
 - 기간 조정: 1M, 2M, 3M, ALL 선택과 세부 구간 슬라이더

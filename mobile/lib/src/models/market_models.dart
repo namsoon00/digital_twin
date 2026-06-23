@@ -26,6 +26,19 @@ extension MarketRegionLabel on MarketRegion {
 
 enum FlowStage { build, breakout, expansion, pullback, riskOff }
 
+enum MarketDataQuality { actual, mock }
+
+extension MarketDataQualityLabel on MarketDataQuality {
+  String get label {
+    switch (this) {
+      case MarketDataQuality.actual:
+        return '실제 데이터';
+      case MarketDataQuality.mock:
+        return 'mock 데이터';
+    }
+  }
+}
+
 extension FlowStageLabel on FlowStage {
   String get label {
     switch (this) {
@@ -491,6 +504,8 @@ class FlowCandle {
     required this.cryptoFlow,
     required this.goldFlow,
     required this.koreaFlow,
+    this.dataQuality = MarketDataQuality.mock,
+    this.dataProvider = 'MarketFlow mock',
   });
 
   final String label;
@@ -505,6 +520,8 @@ class FlowCandle {
   final double cryptoFlow;
   final double goldFlow;
   final double koreaFlow;
+  final MarketDataQuality dataQuality;
+  final String dataProvider;
 }
 
 class CapitalFlow {
@@ -524,6 +541,8 @@ class CapitalFlow {
     required this.drivers,
     required this.trend,
     required this.updatedLabel,
+    this.dataQuality = MarketDataQuality.mock,
+    this.dataProvider = 'MarketFlow mock',
   });
 
   final String id;
@@ -541,6 +560,8 @@ class CapitalFlow {
   final List<String> drivers;
   final List<double> trend;
   final String updatedLabel;
+  final MarketDataQuality dataQuality;
+  final String dataProvider;
 }
 
 class EmergingCapitalFlow {

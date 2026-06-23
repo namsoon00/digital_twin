@@ -1323,8 +1323,24 @@ class CapitalFlowScreen extends StatefulWidget {
   State<CapitalFlowScreen> createState() => _CapitalFlowScreenState();
 }
 
+enum FlowCandleInterval { day, week, month }
+
+extension FlowCandleIntervalLabel on FlowCandleInterval {
+  String get label {
+    switch (this) {
+      case FlowCandleInterval.day:
+        return '일별';
+      case FlowCandleInterval.week:
+        return '주별';
+      case FlowCandleInterval.month:
+        return '월별';
+    }
+  }
+}
+
 class _CapitalFlowScreenState extends State<CapitalFlowScreen> {
   int _rangeWeeks = 12;
+  FlowCandleInterval _interval = FlowCandleInterval.week;
   RangeValues _detailWindow = const RangeValues(0, 1);
 
   @override
@@ -1336,7 +1352,8 @@ class _CapitalFlowScreenState extends State<CapitalFlowScreen> {
     final rankedEmerging = widget.emergingFlows.toList(growable: false)
       ..sort((a, b) => b.probability.compareTo(a.probability));
     final rangeCandles = _rangeCandles(widget.candles, _rangeWeeks);
-    final visibleCandles = _visibleCandles(rangeCandles, _detailWindow);
+    final intervalCandles = _candlesForInterval(rangeCandles, _interval);
+    final visibleCandles = _visibleCandles(intervalCandles, _detailWindow);
     final topFlow = rankedFlows.isEmpty ? null : rankedFlows.first;
     final riskOnCount = rankedFlows.where((flow) {
       return flow.assetClass == CapitalFlowAssetClass.crypto ||
@@ -1377,12 +1394,19 @@ class _CapitalFlowScreenState extends State<CapitalFlowScreen> {
         FlowCompositeChartCard(
           candles: visibleCandles,
           rangeWeeks: _rangeWeeks,
+          interval: _interval,
           detailWindow: _detailWindow,
-          totalCount: rangeCandles.length,
+          totalCount: intervalCandles.length,
           availableCount: widget.candles.length,
           onRangeChanged: (weeks) {
             setState(() {
               _rangeWeeks = weeks;
+              _detailWindow = const RangeValues(0, 1);
+            });
+          },
+          onIntervalChanged: (interval) {
+            setState(() {
+              _interval = interval;
               _detailWindow = const RangeValues(0, 1);
             });
           },
@@ -1456,6 +1480,103 @@ class _CapitalFlowScreenState extends State<CapitalFlowScreen> {
     );
   }
 
+  List<FlowCandle> _candlesForInterval(
+    List<FlowCandle> candles,
+    FlowCandleInterval interval,
+  ) {
+    switch (interval) {
+      case FlowCandleInterval.day:
+        return _dailyCandles(candles);
+      case FlowCandleInterval.week:
+        return candles;
+      case FlowCandleInterval.month:
+        return _monthlyCandles(candles);
+    }
+  }
+
+  List<FlowCandle> _dailyCandles(List<FlowCandle> weeklyCandles) {
+    final daily = <FlowCandle>[];
+    for (final week in weeklyCandles) {
+      var previousClose = week.open;
+      for (var day = 0; day < 5; day++) {
+        final endProgress = (day + 1) / 5;
+        final close = _lerpDouble(week.open, week.close, endProgress);
+        final open = day == 0 ? week.open : previousClose;
+        final highBuffer =
+            (week.high -
+                    [week.open, week.close].reduce((a, b) => a > b ? a : b))
+                .clamp(0.6, 4.0)
+                .toDouble();
+        final lowBuffer =
+            ([week.open, week.close].reduce((a, b) => a < b ? a : b) - week.low)
+                .clamp(0.6, 4.0)
+                .toDouble();
+        final wave = (day - 2) * 0.22;
+        daily.add(
+          FlowCandle(
+            label: 'D${(daily.length + 1).toString().padLeft(2, '0')}',
+            open: open,
+            high: ([open, close].reduce((a, b) => a > b ? a : b) + highBuffer)
+                .clamp(0.0, 100.0)
+                .toDouble(),
+            low: ([open, close].reduce((a, b) => a < b ? a : b) - lowBuffer)
+                .clamp(0.0, 100.0)
+                .toDouble(),
+            close: close,
+            liquidity: (week.liquidity + wave).clamp(0.0, 100.0).toDouble(),
+            momentum: (week.momentum + wave).clamp(0.0, 100.0).toDouble(),
+            risk: (week.risk - wave).clamp(0.0, 100.0).toDouble(),
+            aiFlow: (week.aiFlow + wave).clamp(0.0, 100.0).toDouble(),
+            cryptoFlow: (week.cryptoFlow + wave).clamp(0.0, 100.0).toDouble(),
+            goldFlow: (week.goldFlow - wave).clamp(0.0, 100.0).toDouble(),
+            koreaFlow: (week.koreaFlow + wave).clamp(0.0, 100.0).toDouble(),
+            dataQuality: week.dataQuality,
+            dataProvider: week.dataProvider,
+          ),
+        );
+        previousClose = close;
+      }
+    }
+    return daily;
+  }
+
+  List<FlowCandle> _monthlyCandles(List<FlowCandle> weeklyCandles) {
+    final monthly = <FlowCandle>[];
+    for (var start = 0; start < weeklyCandles.length; start += 4) {
+      final end = (start + 4).clamp(0, weeklyCandles.length).toInt();
+      final group = weeklyCandles.sublist(start, end);
+      monthly.add(_aggregateCandles(group, monthly.length + 1));
+    }
+    return monthly;
+  }
+
+  FlowCandle _aggregateCandles(List<FlowCandle> candles, int monthIndex) {
+    final first = candles.first;
+    final last = candles.last;
+    final providers = candles.map((candle) => candle.dataProvider).toSet();
+    final hasMock = candles.any(
+      (candle) => candle.dataQuality == MarketDataQuality.mock,
+    );
+    return FlowCandle(
+      label: 'M${monthIndex.toString().padLeft(2, '0')}',
+      open: first.open,
+      high: candles
+          .map((candle) => candle.high)
+          .reduce((a, b) => a > b ? a : b),
+      low: candles.map((candle) => candle.low).reduce((a, b) => a < b ? a : b),
+      close: last.close,
+      liquidity: _average(candles.map((candle) => candle.liquidity)),
+      momentum: _average(candles.map((candle) => candle.momentum)),
+      risk: _average(candles.map((candle) => candle.risk)),
+      aiFlow: _average(candles.map((candle) => candle.aiFlow)),
+      cryptoFlow: _average(candles.map((candle) => candle.cryptoFlow)),
+      goldFlow: _average(candles.map((candle) => candle.goldFlow)),
+      koreaFlow: _average(candles.map((candle) => candle.koreaFlow)),
+      dataQuality: hasMock ? MarketDataQuality.mock : MarketDataQuality.actual,
+      dataProvider: providers.length == 1 ? providers.first : 'Mixed providers',
+    );
+  }
+
   List<FlowCandle> _rangeCandles(List<FlowCandle> candles, int weeks) {
     if (candles.length <= weeks) {
       return candles;
@@ -1477,6 +1598,20 @@ class _CapitalFlowScreenState extends State<CapitalFlowScreen> {
         .clamp(start + 1, candles.length - 1)
         .toInt();
     return candles.sublist(start, end + 1);
+  }
+
+  double _average(Iterable<double> values) {
+    var sum = 0.0;
+    var count = 0;
+    for (final value in values) {
+      sum += value;
+      count += 1;
+    }
+    return count == 0 ? 0 : sum / count;
+  }
+
+  double _lerpDouble(double start, double end, double progress) {
+    return start + (end - start) * progress;
   }
 }
 
@@ -1507,6 +1642,7 @@ class CryptoMarketCard extends StatelessWidget {
     final bitcoin = rankedAssets
         .where((asset) => asset.id == 'bitcoin')
         .firstOrNull;
+    final dataQualityLabel = _cryptoDataQualityLabel(rankedAssets);
 
     return AppCard(
       child: Column(
@@ -1573,6 +1709,10 @@ class CryptoMarketCard extends StatelessWidget {
               FlowChip(
                 label: _formatCryptoUpdated(snapshot.updatedAt),
                 color: AppColors.charcoal,
+              ),
+              FlowChip(
+                label: dataQualityLabel,
+                color: _dataQualityColor(dataQualityLabel),
               ),
             ],
           ),
@@ -1784,20 +1924,24 @@ class FlowCompositeChartCard extends StatefulWidget {
   const FlowCompositeChartCard({
     required this.candles,
     required this.rangeWeeks,
+    required this.interval,
     required this.detailWindow,
     required this.totalCount,
     required this.availableCount,
     required this.onRangeChanged,
+    required this.onIntervalChanged,
     required this.onWindowChanged,
     super.key,
   });
 
   final List<FlowCandle> candles;
   final int rangeWeeks;
+  final FlowCandleInterval interval;
   final RangeValues detailWindow;
   final int totalCount;
   final int availableCount;
   final ValueChanged<int> onRangeChanged;
+  final ValueChanged<FlowCandleInterval> onIntervalChanged;
   final ValueChanged<RangeValues> onWindowChanged;
 
   @override
@@ -1940,6 +2084,8 @@ class _FlowCompositeChartCardState extends State<FlowCompositeChartCard> {
         rangeSegments.any((segment) => segment.value == widget.rangeWeeks)
         ? widget.rangeWeeks
         : allRange;
+    final dataQuality = _flowCandleDataQuality(widget.candles);
+    final dataProvider = _flowCandleDataProvider(widget.candles);
 
     return AppCard(
       child: Column(
@@ -1990,6 +2136,19 @@ class _FlowCompositeChartCardState extends State<FlowCompositeChartCard> {
             ],
           ),
           const SizedBox(height: 14),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              FlowChip(label: widget.interval.label, color: AppColors.blue),
+              FlowChip(
+                label: dataQuality,
+                color: _dataQualityColor(dataQuality),
+              ),
+              FlowChip(label: dataProvider, color: AppColors.charcoal),
+            ],
+          ),
+          const SizedBox(height: 14),
           if (latest != null) ...[
             Row(
               children: [
@@ -2030,6 +2189,31 @@ class _FlowCompositeChartCardState extends State<FlowCompositeChartCard> {
             ),
             const SizedBox(height: 14),
           ],
+          Text('보기 단위', style: Theme.of(context).textTheme.bodyMedium),
+          const SizedBox(height: 8),
+          SizedBox(
+            width: double.infinity,
+            child: SegmentedButton<FlowCandleInterval>(
+              showSelectedIcon: false,
+              segments: const [
+                ButtonSegment(value: FlowCandleInterval.day, label: Text('일별')),
+                ButtonSegment(
+                  value: FlowCandleInterval.week,
+                  label: Text('주별'),
+                ),
+                ButtonSegment(
+                  value: FlowCandleInterval.month,
+                  label: Text('월별'),
+                ),
+              ],
+              selected: {widget.interval},
+              onSelectionChanged: (values) =>
+                  widget.onIntervalChanged(values.first),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Text('기간 범위', style: Theme.of(context).textTheme.bodyMedium),
+          const SizedBox(height: 8),
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: SegmentedButton<int>(
@@ -2612,6 +2796,11 @@ class CapitalFlowCard extends StatelessWidget {
             children: [
               FlowChip(label: flow.assetClass.label, color: AppColors.blue),
               FlowChip(label: flow.netFlowLabel, color: AppColors.charcoal),
+              FlowChip(
+                label: flow.dataQuality.label,
+                color: _dataQualityColor(flow.dataQuality.label),
+              ),
+              FlowChip(label: flow.dataProvider, color: AppColors.charcoal),
               FlowChip(label: flow.updatedLabel, color: AppColors.muted),
             ],
           ),
@@ -5770,6 +5959,66 @@ Color _cryptoStatusColor(CryptoFetchStatus status) {
     case CryptoFetchStatus.failed:
       return AppColors.red;
   }
+}
+
+String _flowCandleDataQuality(List<FlowCandle> candles) {
+  if (candles.isEmpty) {
+    return '데이터 없음';
+  }
+  final hasActual = candles.any(
+    (candle) => candle.dataQuality == MarketDataQuality.actual,
+  );
+  final hasMock = candles.any(
+    (candle) => candle.dataQuality == MarketDataQuality.mock,
+  );
+  if (hasActual && hasMock) {
+    return '실제+mock 데이터';
+  }
+  return hasActual
+      ? MarketDataQuality.actual.label
+      : MarketDataQuality.mock.label;
+}
+
+String _flowCandleDataProvider(List<FlowCandle> candles) {
+  if (candles.isEmpty) {
+    return 'provider 없음';
+  }
+  final providers = candles.map((candle) => candle.dataProvider).toSet();
+  if (providers.length == 1) {
+    return providers.first;
+  }
+  return 'Mixed providers';
+}
+
+String _cryptoDataQualityLabel(List<CryptoAsset> assets) {
+  if (assets.isEmpty) {
+    return '데이터 없음';
+  }
+  final hasMock = assets.any(_isMockProvider);
+  final hasActual = assets.any((asset) => !_isMockProvider(asset));
+  if (hasActual && hasMock) {
+    return '실제+mock 데이터';
+  }
+  return hasActual
+      ? MarketDataQuality.actual.label
+      : MarketDataQuality.mock.label;
+}
+
+bool _isMockProvider(CryptoAsset asset) {
+  return asset.provider.toLowerCase().contains('mock');
+}
+
+Color _dataQualityColor(String label) {
+  if (label == MarketDataQuality.actual.label) {
+    return AppColors.green;
+  }
+  if (label == MarketDataQuality.mock.label) {
+    return AppColors.amber;
+  }
+  if (label == '실제+mock 데이터') {
+    return AppColors.blue;
+  }
+  return AppColors.muted;
 }
 
 Color _cryptoChangeColor(double value) {

@@ -689,10 +689,27 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('종합 플로우 캔들'), findsOneWidget);
+    expect(find.text('보기 단위'), findsOneWidget);
+    expect(find.text('일별'), findsOneWidget);
+    expect(find.text('주별'), findsWidgets);
+    expect(find.text('월별'), findsOneWidget);
+    expect(find.text('mock 데이터'), findsWidgets);
     expect(find.text('1M'), findsOneWidget);
     expect(find.text('3M'), findsOneWidget);
     expect(find.text('ALL'), findsOneWidget);
     expect(find.text('캔들: 종합지수'), findsOneWidget);
+
+    await tester.tap(find.text('일별'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('일별'), findsWidgets);
+    expect(find.text('mock 데이터'), findsWidgets);
+
+    await tester.tap(find.text('월별'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('월별'), findsWidgets);
+    expect(find.text('mock 데이터'), findsWidgets);
 
     await tester.scrollUntilVisible(
       find.text('코인 마켓'),

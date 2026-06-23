@@ -85,13 +85,15 @@ class _MarketFlowAppState extends State<MarketFlowApp>
       theme: AppTheme.light,
       darkTheme: AppTheme.dark,
       themeMode: _themePreference.themeMode,
-      home: AppShell(
-        repository: widget.repository,
-        cryptoMarketService: widget.cryptoMarketService,
-        economicFeedService: widget.economicFeedService,
-        themePreference: _themePreference,
-        themeSettingsLoaded: _themeSettingsLoaded,
-        onThemePreferenceChanged: _changeThemePreference,
+      home: SelectionArea(
+        child: AppShell(
+          repository: widget.repository,
+          cryptoMarketService: widget.cryptoMarketService,
+          economicFeedService: widget.economicFeedService,
+          themePreference: _themePreference,
+          themeSettingsLoaded: _themeSettingsLoaded,
+          onThemePreferenceChanged: _changeThemePreference,
+        ),
       ),
     );
   }

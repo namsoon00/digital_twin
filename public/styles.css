@@ -37,6 +37,8 @@ body {
     "Segoe UI",
     sans-serif;
   letter-spacing: 0;
+  -webkit-touch-callout: default;
+  -webkit-text-size-adjust: 100%;
 }
 
 button,
@@ -48,6 +50,21 @@ select {
 
 button {
   cursor: pointer;
+}
+
+.message-bubble,
+.message-meta,
+.panel-body,
+.item-card,
+.stock-card,
+.empty-state,
+.metric,
+.subtle,
+.item-title,
+.item-meta {
+  -webkit-touch-callout: default;
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 button:disabled {

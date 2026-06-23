@@ -172,7 +172,10 @@ function corsJson(res, status, payload) {
     "Cache-Control": "no-store",
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Cache-Control, Pragma"
+    "Access-Control-Allow-Headers": "Accept, Authorization, Content-Type, Cache-Control, Pragma, X-Requested-With",
+    "Access-Control-Allow-Private-Network": "true",
+    "Access-Control-Max-Age": "600",
+    "Vary": "Origin, Access-Control-Request-Headers, Access-Control-Request-Private-Network"
   });
   res.end(JSON.stringify(payload));
 }
@@ -183,7 +186,10 @@ function corsText(res, status, payload, contentType) {
     "Cache-Control": "no-store",
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Cache-Control, Pragma"
+    "Access-Control-Allow-Headers": "Accept, Authorization, Content-Type, Cache-Control, Pragma, X-Requested-With",
+    "Access-Control-Allow-Private-Network": "true",
+    "Access-Control-Max-Age": "600",
+    "Vary": "Origin, Access-Control-Request-Headers, Access-Control-Request-Private-Network"
   });
   res.end(payload);
 }

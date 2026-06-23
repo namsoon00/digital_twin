@@ -51,13 +51,16 @@ function waitForServer(child) {
   });
 }
 
-function request(port, pathname, headers) {
+function request(port, pathname, options) {
   return new Promise(function (resolve, reject) {
-    const req = http.get(
+    const method = options && options.method ? options.method : "GET";
+    const headers = options && options.method ? options.headers || {} : options || {};
+    const req = http.request(
       {
         hostname: "127.0.0.1",
         port: port,
         path: pathname,
+        method: method,
         headers: headers || {},
         timeout: 5000
       },
@@ -77,6 +80,7 @@ function request(port, pathname, headers) {
       req.destroy(new Error("요청 시간이 초과되었습니다: " + pathname));
     });
     req.on("error", reject);
+    req.end();
   });
 }
 
@@ -114,6 +118,21 @@ async function checkNormalMode(port) {
   assertOk(payload.profile && payload.profile.assistantName, "부트스트랩 API에 프로필 정보가 없습니다.");
   assertOk(Array.isArray(payload.items), "부트스트랩 API items가 배열이 아닙니다.");
   assertOk(Array.isArray(payload.messages), "부트스트랩 API messages가 배열이 아닙니다.");
+
+  const preflight = await request(port, "/api/data-api/opendart/company", {
+    method: "OPTIONS",
+    headers: {
+      Origin: "https://namsoon00.github.io",
+      "Access-Control-Request-Method": "GET",
+      "Access-Control-Request-Headers": "accept",
+      "Access-Control-Request-Private-Network": "true"
+    }
+  });
+  assertOk(preflight.statusCode === 204, "데이터 API preflight 응답 코드가 204가 아닙니다: " + preflight.statusCode);
+  assertOk(preflight.headers["access-control-allow-origin"] === "*", "데이터 API CORS origin 헤더가 없습니다.");
+  assertOk(String(preflight.headers["access-control-allow-methods"] || "").indexOf("GET") >= 0, "데이터 API CORS method 헤더에 GET이 없습니다.");
+  assertOk(String(preflight.headers["access-control-allow-headers"] || "").toLowerCase().indexOf("accept") >= 0, "데이터 API CORS headers에 Accept가 없습니다.");
+  assertOk(preflight.headers["access-control-allow-private-network"] === "true", "데이터 API private network preflight 허용 헤더가 없습니다.");
 }
 
 async function checkShareMode(port) {

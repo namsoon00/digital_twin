@@ -24,6 +24,10 @@ class LocalSettingsDatabase {
     return 'localSettingsDb.toss.$field';
   }
 
+  static String apiCacheStorageKey(String apiId) {
+    return 'localSettingsDb.apiCache.$apiId';
+  }
+
   Future<String?> readString(String key) async {
     final prefs = await _open();
     return prefs.getString(key);

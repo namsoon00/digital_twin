@@ -3,9 +3,10 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import 'local_settings_database.dart';
 import '../models/market_models.dart';
 
-enum EconomicFeedFetchStatus { idle, loading, ready, partial, failed }
+enum EconomicFeedFetchStatus { idle, loading, ready, cached, partial, failed }
 
 class EconomicFeedFetchSnapshot {
   const EconomicFeedFetchSnapshot({
@@ -51,6 +52,7 @@ class EconomicFeedFetchSnapshot {
       EconomicFeedFetchStatus.idle => 'RSS 대기',
       EconomicFeedFetchStatus.loading => 'RSS 조회',
       EconomicFeedFetchStatus.ready => '실제 RSS',
+      EconomicFeedFetchStatus.cached => 'RSS 캐시',
       EconomicFeedFetchStatus.partial => 'RSS 일부',
       EconomicFeedFetchStatus.failed => '대체 피드',
     };
@@ -100,22 +102,28 @@ class StaticEconomicFeedService implements EconomicFeedService {
 }
 
 class GoogleNewsEconomicFeedService implements EconomicFeedService {
-  GoogleNewsEconomicFeedService({http.Client? client})
-    : _client = client ?? http.Client();
+  GoogleNewsEconomicFeedService({
+    http.Client? client,
+    LocalSettingsDatabase? database,
+  }) : _client = client ?? http.Client(),
+       _database = database ?? const LocalSettingsDatabase();
 
   static const provider = 'Google News RSS';
   static const endpoint = '/rss/search';
+  static const _cacheId = 'google-news-rss.feeds';
   static const _localProxyBaseUrl = String.fromEnvironment(
     'MARKET_FLOW_FEED_PROXY_BASE_URL',
     defaultValue: 'http://127.0.0.1:3000',
   );
   static const _refreshQueryParameter = '_refresh';
+  static const _itemsPerQuery = 5;
+  static const _maxItems = 24;
 
   static const _queries = [
     _EconomicFeedQuery(
       id: 'us-liquidity',
       name: '미국 유동성',
-      search: '미국 금리 달러 유동성 주식 시장 when:3d',
+      search: '미국 금리 달러 유동성 주식 시장 when:2d',
       type: EconomicFeedType.liquidity,
       region: MarketRegion.unitedStates,
       tags: ['금리', '달러', '유동성'],
@@ -151,7 +159,7 @@ class GoogleNewsEconomicFeedService implements EconomicFeedService {
     _EconomicFeedQuery(
       id: 'earnings-margin',
       name: '실적/마진',
-      search: '미국 실적 시즌 마진 가이던스 주식 when:7d',
+      search: '미국 실적 시즌 마진 가이던스 주식 when:3d',
       type: EconomicFeedType.earnings,
       region: MarketRegion.unitedStates,
       tags: ['실적', '마진', '가이던스'],
@@ -175,6 +183,51 @@ class GoogleNewsEconomicFeedService implements EconomicFeedService {
       tags: ['BTC', '스테이블코인', '코인'],
       baseImpact: 70,
     ),
+    _EconomicFeedQuery(
+      id: 'global-etf-flow',
+      name: 'ETF 자금',
+      search: 'ETF fund flow 주식 채권 자금 유입 유출 when:3d',
+      type: EconomicFeedType.flow,
+      region: MarketRegion.all,
+      tags: ['ETF', '자금', '채권'],
+      baseImpact: 76,
+    ),
+    _EconomicFeedQuery(
+      id: 'fx-carry',
+      name: '환율/캐리',
+      search: '달러 엔화 원화 환율 carry trade 증시 when:3d',
+      type: EconomicFeedType.risk,
+      region: MarketRegion.all,
+      tags: ['환율', '엔화', '캐리'],
+      baseImpact: 74,
+    ),
+    _EconomicFeedQuery(
+      id: 'energy-grid',
+      name: '전력/에너지',
+      search: '전력망 전력기기 구리 에너지 인프라 AI 데이터센터 when:7d',
+      type: EconomicFeedType.flow,
+      region: MarketRegion.all,
+      tags: ['전력', '구리', '에너지'],
+      baseImpact: 81,
+    ),
+    _EconomicFeedQuery(
+      id: 'korea-valueup',
+      name: '밸류업/주주환원',
+      search: '코리아 밸류업 자사주 배당 주주환원 외국인 when:7d',
+      type: EconomicFeedType.policy,
+      region: MarketRegion.korea,
+      tags: ['밸류업', '배당', '주주환원'],
+      baseImpact: 77,
+    ),
+    _EconomicFeedQuery(
+      id: 'credit-stress',
+      name: '크레딧/부동산',
+      search: '크레딧 스프레드 회사채 상업용 부동산 은행 리스크 when:7d',
+      type: EconomicFeedType.risk,
+      region: MarketRegion.all,
+      tags: ['크레딧', '부동산', '은행'],
+      baseImpact: 73,
+    ),
   ];
 
   static List<EconomicFeedChannel> get defaultFeedChannels {
@@ -195,6 +248,7 @@ class GoogleNewsEconomicFeedService implements EconomicFeedService {
   }
 
   final http.Client _client;
+  final LocalSettingsDatabase _database;
 
   @override
   List<EconomicFeedChannel> get feedChannels => defaultFeedChannels;
@@ -204,6 +258,7 @@ class GoogleNewsEconomicFeedService implements EconomicFeedService {
 
   @override
   Future<EconomicFeedFetchResult> fetchFeeds() async {
+    final cachedItems = await _readCachedFeeds();
     final refreshToken = DateTime.now().millisecondsSinceEpoch.toString();
     final results = await Future.wait(
       _queries.map((query) async {
@@ -222,16 +277,26 @@ class GoogleNewsEconomicFeedService implements EconomicFeedService {
     final items = _dedupe(
       results.expand((result) => result.items).toList(growable: false),
     )..sort(_compareFeedItems);
-    final selected = items.take(12).toList(growable: false);
+    final selected = items.take(_maxItems).toList(growable: false);
+    if (selected.isNotEmpty) {
+      await _writeFeedCache(selected);
+    }
+    if (selected.isEmpty && cachedItems.isNotEmpty) {
+      return _cachedResult(
+        cachedItems,
+        'RSS 조회 실패 · 마지막 저장 피드 사용 · ${errors.take(2).join(' · ')}',
+      );
+    }
     final status = selected.isEmpty
         ? EconomicFeedFetchStatus.failed
         : errors.isEmpty
         ? EconomicFeedFetchStatus.ready
         : EconomicFeedFetchStatus.partial;
     final message = switch (status) {
-      EconomicFeedFetchStatus.ready => 'Google News RSS 실데이터 반영',
+      EconomicFeedFetchStatus.ready =>
+        'Google News RSS ${selected.length}건 · ${_queries.length}채널 갱신',
       EconomicFeedFetchStatus.partial =>
-        '일부 RSS 쿼리만 반영 · ${errors.take(2).join(' · ')}',
+        'RSS 일부 갱신 ${selected.length}건 · ${errors.take(2).join(' · ')}',
       EconomicFeedFetchStatus.failed =>
         'RSS 조회 실패 · ${errors.take(2).join(' · ')}',
       _ => 'RSS 상태 확인',
@@ -250,6 +315,126 @@ class GoogleNewsEconomicFeedService implements EconomicFeedService {
     );
   }
 
+  Future<void> _writeFeedCache(List<EconomicFeedItem> items) async {
+    if (items.isEmpty) {
+      return;
+    }
+    final payload = {
+      'provider': provider,
+      'endpoint': endpoint,
+      'cachedAt': DateTime.now().toUtc().toIso8601String(),
+      'items': [for (final item in items) _feedToJson(item)],
+    };
+    await _database.writeString(
+      LocalSettingsDatabase.apiCacheStorageKey(_cacheId),
+      jsonEncode(payload),
+    );
+  }
+
+  Future<List<EconomicFeedItem>> _readCachedFeeds() async {
+    final raw = await _database.readString(
+      LocalSettingsDatabase.apiCacheStorageKey(_cacheId),
+    );
+    if (raw == null || raw.isEmpty) {
+      return const [];
+    }
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map<String, dynamic>) {
+        return const [];
+      }
+      final items = decoded['items'];
+      if (items is! List) {
+        return const [];
+      }
+      final feeds = items
+          .whereType<Map<String, dynamic>>()
+          .map(_feedFromJson)
+          .whereType<EconomicFeedItem>()
+          .toList(growable: false);
+      return feeds..sort(_compareFeedItems);
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  EconomicFeedFetchResult _cachedResult(
+    List<EconomicFeedItem> items,
+    String message,
+  ) {
+    final latest = items
+        .map((item) => item.publishedAt)
+        .whereType<DateTime>()
+        .fold<DateTime?>(null, (latest, value) {
+          if (latest == null || value.isAfter(latest)) {
+            return value;
+          }
+          return latest;
+        });
+    return EconomicFeedFetchResult(
+      items: items.take(12).toList(growable: false),
+      snapshot: EconomicFeedFetchSnapshot(
+        provider: '$provider cache',
+        endpoint: endpoint,
+        status: EconomicFeedFetchStatus.cached,
+        message: message,
+        itemCount: items.length,
+        updatedAt: latest,
+      ),
+    );
+  }
+
+  Map<String, dynamic> _feedToJson(EconomicFeedItem item) {
+    return {
+      'id': item.id,
+      'type': item.type.name,
+      'region': item.region.name,
+      'title': item.title,
+      'summary': item.summary,
+      'source': item.source,
+      'timestampLabel': item.timestampLabel,
+      'impactScore': item.impactScore,
+      'tags': item.tags,
+      'url': item.url,
+      'channelId': item.channelId,
+      'channelName': item.channelName,
+      'publishedAt': item.publishedAt?.toUtc().toIso8601String(),
+    };
+  }
+
+  EconomicFeedItem? _feedFromJson(Map<String, dynamic> json) {
+    final id = '${json['id'] ?? ''}';
+    final title = '${json['title'] ?? ''}';
+    if (id.isEmpty || title.isEmpty) {
+      return null;
+    }
+    return EconomicFeedItem(
+      id: id,
+      type: _enumByName(
+        EconomicFeedType.values,
+        '${json['type'] ?? ''}',
+        EconomicFeedType.macro,
+      ),
+      region: _enumByName(
+        MarketRegion.values,
+        '${json['region'] ?? ''}',
+        MarketRegion.all,
+      ),
+      title: title,
+      summary: '${json['summary'] ?? ''}',
+      source: '${json['source'] ?? provider} cache',
+      timestampLabel: '${json['timestampLabel'] ?? 'cached'}',
+      impactScore: int.tryParse('${json['impactScore'] ?? ''}') ?? 0,
+      tags: (json['tags'] is List)
+          ? (json['tags'] as List).map((tag) => '$tag').toList(growable: false)
+          : const [],
+      url: '${json['url'] ?? ''}',
+      channelId: '${json['channelId'] ?? ''}',
+      channelName: '${json['channelName'] ?? ''}',
+      publishedAt: DateTime.tryParse('${json['publishedAt'] ?? ''}'),
+    );
+  }
+
   Future<List<EconomicFeedItem>> _fetchQuery(
     _EconomicFeedQuery query,
     String refreshToken,
@@ -261,7 +446,7 @@ class GoogleNewsEconomicFeedService implements EconomicFeedService {
       caseSensitive: false,
     ).allMatches(body);
     return blocks
-        .take(3)
+        .take(_itemsPerQuery)
         .map((match) => _parseItem(match.group(0) ?? '', query))
         .whereType<EconomicFeedItem>()
         .toList(growable: false);
@@ -521,6 +706,19 @@ class GoogleNewsEconomicFeedService implements EconomicFeedService {
       }
     }
     return score.clamp(50, 99).toInt();
+  }
+
+  static T _enumByName<T extends Enum>(
+    List<T> values,
+    String name,
+    T fallback,
+  ) {
+    for (final value in values) {
+      if (value.name == name) {
+        return value;
+      }
+    }
+    return fallback;
   }
 }
 

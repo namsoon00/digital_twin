@@ -694,7 +694,15 @@ class EquityFlow {
   final List<double> sparkline;
 }
 
-enum QuoteFetchStatus { idle, loading, ready, missingApiKey, partial, failed }
+enum QuoteFetchStatus {
+  idle,
+  loading,
+  ready,
+  cached,
+  missingApiKey,
+  partial,
+  failed,
+}
 
 class QuoteApiSnapshot {
   const QuoteApiSnapshot({
@@ -734,6 +742,8 @@ class QuoteApiSnapshot {
         return '조회 중';
       case QuoteFetchStatus.ready:
         return '최신 데이터 연결';
+      case QuoteFetchStatus.cached:
+        return '저장 데이터';
       case QuoteFetchStatus.missingApiKey:
         return 'API key 필요';
       case QuoteFetchStatus.partial:
@@ -787,7 +797,7 @@ class QuoteFetchResult {
   final QuoteApiSnapshot snapshot;
 }
 
-enum CryptoFetchStatus { idle, loading, ready, partial, failed }
+enum CryptoFetchStatus { idle, loading, ready, cached, partial, failed }
 
 class CryptoMarketSnapshot {
   const CryptoMarketSnapshot({
@@ -831,6 +841,8 @@ class CryptoMarketSnapshot {
         return '조회 중';
       case CryptoFetchStatus.ready:
         return '최신 데이터 연결';
+      case CryptoFetchStatus.cached:
+        return '저장 데이터';
       case CryptoFetchStatus.partial:
         return '일부 업데이트';
       case CryptoFetchStatus.failed:

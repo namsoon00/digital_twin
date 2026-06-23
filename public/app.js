@@ -284,35 +284,6 @@
     var approvedCount = snapshot ? snapshot.memories.filter(function (memory) { return memory.status === "approved"; }).length : 0;
 
     app.innerHTML =
-      '<aside class="sidebar">' +
-      '<div class="brand"><div class="brand-mark">DT</div><div class="brand-text"><strong>Digiter Twin</strong><span>' +
-      escapeHtml(snapshot ? snapshot.profile.ownerName : "Personal OS") +
-      "</span></div></div>" +
-      '<nav class="nav">' +
-      navItems
-        .map(function (item) {
-          return (
-            '<button class="nav-button ' +
-            (state.view === item.key ? "active" : "") +
-            '" data-view="' +
-            item.key +
-            '" title="' +
-            escapeHtml(item.label) +
-            '"><span class="nav-icon">' +
-            escapeHtml(item.icon) +
-            '</span><span class="label">' +
-            escapeHtml(item.label) +
-            "</span>" +
-            (item.key === "memories" && candidateCount ? '<small class="status-pill warn">' + candidateCount + "</small>" : "") +
-            "</button>"
-          );
-        })
-        .join("") +
-      "</nav>" +
-      '<div class="sidebar-footer"><strong>' +
-      escapeHtml(snapshot ? snapshot.profile.assistantName : "Twin") +
-      "</strong><br />주식, 여행, 자산, 일정을 함께 봅니다.</div>" +
-      "</aside>" +
       '<main class="main"><div class="workspace">' +
       '<header class="topbar"><div><p class="eyebrow">' +
       escapeHtml(topEyebrow()) +
@@ -325,9 +296,36 @@
       "</header>" +
       (state.error ? '<div class="item-card">' + escapeHtml(state.error) + "</div>" : "") +
       (state.loading || !snapshot ? '<section class="panel panel-body"><span class="status-pill muted">로딩</span></section>' : renderActive()) +
-      "</div></main>";
+      "</div></main>" +
+      renderBottomTabs(candidateCount);
 
     bindEvents();
+  }
+
+  function renderBottomTabs(candidateCount) {
+    return (
+      '<nav class="bottom-tabs" aria-label="주요 메뉴">' +
+      navItems
+        .map(function (item) {
+          return (
+            '<button class="bottom-tab ' +
+            (state.view === item.key ? "active" : "") +
+            '" data-view="' +
+            item.key +
+            '" title="' +
+            escapeHtml(item.label) +
+            '"><span class="bottom-tab-icon">' +
+            escapeHtml(item.icon) +
+            '</span><span class="bottom-tab-label">' +
+            escapeHtml(item.label) +
+            "</span>" +
+            (item.key === "memories" && candidateCount ? '<small class="bottom-tab-badge">' + candidateCount + "</small>" : "") +
+            "</button>"
+          );
+        })
+        .join("") +
+      "</nav>"
+    );
   }
 
   function renderActive() {

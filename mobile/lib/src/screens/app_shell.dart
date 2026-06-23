@@ -81,7 +81,7 @@ class _AppShellState extends State<AppShell> {
       _cryptoAssets.length,
     );
     _economicFeedService =
-        widget.economicFeedService ?? GdeltNewsEconomicFeedService();
+        widget.economicFeedService ?? MarketNewsEconomicFeedService();
     _economicFeedItems = widget.repository.economicFeeds.toList();
     _feedSnapshot = EconomicFeedFetchSnapshot.idle(_economicFeedItems.length);
     _quoteService = AlphaVantageQuoteService();
@@ -348,7 +348,7 @@ class _AppShellState extends State<AppShell> {
   List<EconomicFeedChannel> get _feedChannels {
     final serviceChannels = _economicFeedService.feedChannels;
     return serviceChannels.isEmpty
-        ? GdeltNewsEconomicFeedService.defaultFeedChannels
+        ? MarketNewsEconomicFeedService.defaultFeedChannels
         : serviceChannels;
   }
 

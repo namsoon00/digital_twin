@@ -38,6 +38,176 @@ void main() {
     SharedPreferences.setMockInitialValues({});
   });
 
+  test('Market news service combines multiple non-Google channels', () async {
+    String rss({
+      required String title,
+      required String link,
+      required String description,
+      required String pubDate,
+    }) {
+      return '''
+<rss><channel>
+  <item>
+    <title><![CDATA[$title]]></title>
+    <link>$link</link>
+    <pubDate>$pubDate</pubDate>
+    <description><![CDATA[$description]]></description>
+  </item>
+</channel></rss>
+''';
+    }
+
+    final seenHosts = <String>{};
+    final service = MarketNewsEconomicFeedService(
+      client: MockClient((request) async {
+        seenHosts.add(request.url.host);
+        expect(request.headers['Cache-Control'], 'no-cache');
+        expect(request.headers['Pragma'], 'no-cache');
+        switch (request.url.host) {
+          case 'www.cnbc.com':
+            return http.Response(
+              rss(
+                title: 'AI chip margins pressure Wall Street earnings',
+                link: 'https://www.cnbc.com/2026/06/24/ai-chip-earnings.html',
+                description:
+                    'Semiconductor and data-center spending is changing equity leadership.',
+                pubDate: 'Wed, 24 Jun 2026 00:15:00 GMT',
+              ),
+              200,
+              headers: {'content-type': 'application/rss+xml; charset=utf-8'},
+            );
+          case 'feeds.finance.yahoo.com':
+            return http.Response(
+              rss(
+                title: 'Nasdaq futures recover as dollar eases',
+                link:
+                    'https://finance.yahoo.com/news/nasdaq-futures-dollar.html',
+                description:
+                    'Index futures and currency moves show a broader liquidity read.',
+                pubDate: 'Wed, 24 Jun 2026 00:10:00 GMT',
+              ),
+              200,
+              headers: {'content-type': 'application/rss+xml; charset=utf-8'},
+            );
+          case 'www.federalreserve.gov':
+            return http.Response(
+              rss(
+                title: 'Federal Reserve issues FOMC statement',
+                link:
+                    'https://www.federalreserve.gov/newsevents/pressreleases/monetary20260624a.htm',
+                description:
+                    'The Federal Reserve statement gives the policy channel a direct official source.',
+                pubDate: 'Tue, 23 Jun 2026 19:00:00 GMT',
+              ),
+              200,
+              headers: {'content-type': 'text/xml; charset=utf-8'},
+            );
+          case 'www.yna.co.kr':
+            return http.Response(
+              rss(
+                title: '외국인 순매수와 반도체가 코스피를 견인',
+                link: 'https://www.yna.co.kr/view/AKR20260624000100008',
+                description: '한국 증시 수급과 산업 뉴스가 국내 시장 채널을 보강합니다.',
+                pubDate: 'Wed, 24 Jun 2026 08:45:27 +0900',
+              ),
+              200,
+              headers: {'content-type': 'application/xml; charset=utf-8'},
+            );
+          case 'www.coindesk.com':
+            return http.Response(
+              rss(
+                title:
+                    'Bitcoin liquidity improves as tokenization demand rises',
+                link:
+                    'https://www.coindesk.com/markets/2026/06/24/bitcoin-liquidity.html',
+                description:
+                    'Crypto market structure gives another view of risk appetite.',
+                pubDate: 'Wed, 24 Jun 2026 00:05:00 +0000',
+              ),
+              200,
+              headers: {'content-type': 'application/xml; charset=utf-8'},
+            );
+          case 'api.gdeltproject.org':
+            expect(request.url.queryParameters['mode'], 'ArtList');
+            expect(request.url.queryParameters['format'], 'JSON');
+            return http.Response(
+              '''
+{
+  "articles": [
+    {
+      "url": "https://www.reuters.com/markets/global-markets-wrap-2026-06-24/",
+      "title": "Global markets weigh central banks and chip spending",
+      "seendate": "20260624002000",
+      "domain": "reuters.com",
+      "language": "English",
+      "sourcecountry": "United States"
+    }
+  ]
+}
+''',
+              200,
+              headers: {'content-type': 'application/json; charset=utf-8'},
+            );
+        }
+        fail('Unexpected feed request: ${request.url}');
+      }),
+    );
+    addTearDown(service.dispose);
+
+    final result = await service.fetchFeeds();
+
+    expect(result.snapshot.status, EconomicFeedFetchStatus.ready);
+    expect(result.snapshot.provider, '멀티 채널 뉴스');
+    expect(result.snapshot.message, contains('6채널'));
+    expect(result.items, hasLength(6));
+    expect(seenHosts, isNot(contains('news.google.com')));
+    expect(result.items.map((item) => item.source), contains('CNBC'));
+    expect(result.items.map((item) => item.source), contains('Yahoo Finance'));
+    expect(
+      result.items.map((item) => item.source),
+      contains('Federal Reserve'),
+    );
+    expect(result.items.map((item) => item.source), contains('연합뉴스'));
+    expect(result.items.map((item) => item.source), contains('CoinDesk'));
+    expect(result.items.map((item) => item.source), contains('reuters.com'));
+    expect(
+      result.items.map((item) => item.channelName),
+      containsAll([
+        'CNBC 시장',
+        'Yahoo 시장 테이프',
+        'Fed 정책',
+        '연합뉴스 경제',
+        'CoinDesk 마켓',
+        'GDELT 글로벌 레이더',
+      ]),
+    );
+  });
+
+  test('Market news service exposes source-diverse feed channels', () {
+    final channels = MarketNewsEconomicFeedService.defaultFeedChannels;
+
+    expect(channels, hasLength(6));
+    expect(channels.map((channel) => channel.provider), contains('CNBC'));
+    expect(
+      channels.map((channel) => channel.provider),
+      contains('Yahoo Finance'),
+    );
+    expect(
+      channels.map((channel) => channel.provider),
+      contains('Federal Reserve'),
+    );
+    expect(channels.map((channel) => channel.provider), contains('연합뉴스'));
+    expect(channels.map((channel) => channel.provider), contains('CoinDesk'));
+    expect(
+      channels.map((channel) => channel.provider),
+      contains('GDELT DOC API'),
+    );
+    expect(
+      channels.map((channel) => channel.url),
+      everyElement(isNot(startsWith('https://news.google.com'))),
+    );
+  });
+
   test(
     'GDELT DOC API items are mapped into direct article feed items',
     () async {
@@ -1021,7 +1191,8 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('피드 채널'), findsOneWidget);
-    expect(find.text('GDELT DOC API'), findsWidgets);
+    expect(find.text('CNBC'), findsWidgets);
+    expect(find.text('Yahoo Finance'), findsWidgets);
     expect(find.byTooltip('채널 뉴스 열기'), findsWidgets);
 
     await tester.drag(feedList, const Offset(0, -420));

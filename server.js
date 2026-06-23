@@ -349,10 +349,23 @@ function normalizeEconomicFeedRssUrl(rawUrl) {
     throw new Error("RSS URL 형식이 올바르지 않습니다.");
   }
 
-  if (target.protocol !== "https:" || target.hostname !== "news.google.com" || target.pathname !== "/rss/search") {
-    throw new Error("허용된 RSS URL은 news.google.com/rss/search 뿐입니다.");
+  if (target.protocol !== "https:") {
+    throw new Error("RSS URL은 https만 허용됩니다.");
   }
-  if (!target.searchParams.get("q")) {
+
+  const allowed = [
+    target.hostname === "news.google.com" && target.pathname === "/rss/search" && target.searchParams.get("q"),
+    target.hostname === "www.cnbc.com" && /^\/id\/\d+\/device\/rss\/rss\.html$/.test(target.pathname),
+    target.hostname === "feeds.finance.yahoo.com" && target.pathname === "/rss/2.0/headline" && target.searchParams.get("s"),
+    target.hostname === "www.coindesk.com" && target.pathname === "/arc/outboundfeeds/rss/",
+    target.hostname === "www.federalreserve.gov" && /^\/feeds\/[a-z0-9_-]+\.xml$/i.test(target.pathname),
+    target.hostname === "www.yna.co.kr" && /^\/rss\/[a-z0-9_-]+\.xml$/i.test(target.pathname)
+  ].some(Boolean);
+
+  if (!allowed) {
+    throw new Error("허용된 RSS URL은 등록된 경제 뉴스 공급자만 가능합니다.");
+  }
+  if (target.hostname === "news.google.com" && !target.searchParams.get("q")) {
     throw new Error("RSS 검색어가 필요합니다.");
   }
 
@@ -1394,7 +1407,7 @@ async function api(req, res, pathname) {
     );
     return json(res, 200, {
       stocks: stocks,
-      source: "Quotes: Stooq/Naver Finance, News: GDELT DOC API",
+      source: "Quotes: Stooq/Naver Finance, News: multi-channel RSS/GDELT",
       fetchedAt: now()
     });
   }

@@ -20,10 +20,10 @@ class EconomicFeedFetchSnapshot {
 
   factory EconomicFeedFetchSnapshot.idle(int itemCount) {
     return EconomicFeedFetchSnapshot(
-      provider: GdeltNewsEconomicFeedService.provider,
-      endpoint: GdeltNewsEconomicFeedService.endpoint,
+      provider: MarketNewsEconomicFeedService.provider,
+      endpoint: MarketNewsEconomicFeedService.endpoint,
       status: EconomicFeedFetchStatus.idle,
-      message: '실제 RSS 피드 대기 중',
+      message: '다중 뉴스 채널 대기 중',
       itemCount: itemCount,
       updatedAt: null,
     );
@@ -31,10 +31,10 @@ class EconomicFeedFetchSnapshot {
 
   factory EconomicFeedFetchSnapshot.loading(int itemCount) {
     return EconomicFeedFetchSnapshot(
-      provider: GdeltNewsEconomicFeedService.provider,
-      endpoint: GdeltNewsEconomicFeedService.endpoint,
+      provider: MarketNewsEconomicFeedService.provider,
+      endpoint: MarketNewsEconomicFeedService.endpoint,
       status: EconomicFeedFetchStatus.loading,
-      message: 'GDELT 기사 조회 중',
+      message: '다중 뉴스 채널 조회 중',
       itemCount: itemCount,
       updatedAt: DateTime.now(),
     );
@@ -49,11 +49,11 @@ class EconomicFeedFetchSnapshot {
 
   String get statusLabel {
     return switch (status) {
-      EconomicFeedFetchStatus.idle => 'RSS 대기',
-      EconomicFeedFetchStatus.loading => 'RSS 조회',
-      EconomicFeedFetchStatus.ready => '실제 RSS',
-      EconomicFeedFetchStatus.cached => 'RSS 캐시',
-      EconomicFeedFetchStatus.partial => 'RSS 일부',
+      EconomicFeedFetchStatus.idle => '뉴스 대기',
+      EconomicFeedFetchStatus.loading => '뉴스 조회',
+      EconomicFeedFetchStatus.ready => '실제 뉴스',
+      EconomicFeedFetchStatus.cached => '뉴스 캐시',
+      EconomicFeedFetchStatus.partial => '뉴스 일부',
       EconomicFeedFetchStatus.failed => '대체 피드',
     };
   }
@@ -99,6 +99,559 @@ class StaticEconomicFeedService implements EconomicFeedService {
 
   @override
   void dispose() {}
+}
+
+class MarketNewsEconomicFeedService implements EconomicFeedService {
+  MarketNewsEconomicFeedService({
+    http.Client? client,
+    LocalSettingsDatabase? database,
+  }) : _client = client ?? http.Client(),
+       _database = database ?? const LocalSettingsDatabase();
+
+  static const provider = '멀티 채널 뉴스';
+  static const endpoint = 'GDELT + public RSS';
+  static const _cacheId = 'multi-channel-news.feeds';
+  static const _localProxyBaseUrl = String.fromEnvironment(
+    'MARKET_FLOW_FEED_PROXY_BASE_URL',
+    defaultValue: 'http://127.0.0.1:3000',
+  );
+  static const _itemsPerSource = 5;
+  static const _maxItems = 30;
+  static const _gdeltSearch =
+      '"stock market" OR "central bank" OR semiconductor OR Korea OR cryptocurrency';
+
+  static List<_EconomicFeedSource> get _sources => [
+    const _EconomicFeedSource(
+      id: 'cnbc-markets',
+      name: 'CNBC 시장',
+      provider: 'CNBC',
+      feedUrl: 'https://www.cnbc.com/id/15839135/device/rss/rss.html',
+      channelUrl: 'https://www.cnbc.com/markets/',
+      query: 'Market movers, earnings, tech, Wall Street',
+      format: _EconomicFeedSourceFormat.rss,
+      type: EconomicFeedType.earnings,
+      region: MarketRegion.unitedStates,
+      tags: ['markets', 'earnings', 'AI'],
+      baseImpact: 80,
+    ),
+    const _EconomicFeedSource(
+      id: 'yahoo-market-tape',
+      name: 'Yahoo 시장 테이프',
+      provider: 'Yahoo Finance',
+      feedUrl:
+          'https://feeds.finance.yahoo.com/rss/2.0/headline?s=%5EGSPC,%5EIXIC,KRW=X,BTC-USD&region=US&lang=en-US',
+      channelUrl: 'https://finance.yahoo.com/markets/',
+      query: 'S&P 500, Nasdaq, KRW, Bitcoin headlines',
+      format: _EconomicFeedSourceFormat.rss,
+      type: EconomicFeedType.liquidity,
+      region: MarketRegion.unitedStates,
+      tags: ['indices', 'Nasdaq', 'FX'],
+      baseImpact: 78,
+    ),
+    const _EconomicFeedSource(
+      id: 'fed-policy',
+      name: 'Fed 정책',
+      provider: 'Federal Reserve',
+      feedUrl: 'https://www.federalreserve.gov/feeds/press_all.xml',
+      channelUrl: 'https://www.federalreserve.gov/newsevents/pressreleases.htm',
+      query: 'Official Federal Reserve press releases',
+      format: _EconomicFeedSourceFormat.rss,
+      type: EconomicFeedType.policy,
+      region: MarketRegion.unitedStates,
+      tags: ['Fed', 'FOMC', 'rates'],
+      baseImpact: 76,
+    ),
+    const _EconomicFeedSource(
+      id: 'yonhap-economy',
+      name: '연합뉴스 경제',
+      provider: '연합뉴스',
+      feedUrl: 'https://www.yna.co.kr/rss/economy.xml',
+      channelUrl: 'https://www.yna.co.kr/economy/index',
+      query: 'Korea economy, securities, industry',
+      format: _EconomicFeedSourceFormat.rss,
+      type: EconomicFeedType.flow,
+      region: MarketRegion.korea,
+      tags: ['한국', '증권', '산업'],
+      baseImpact: 76,
+    ),
+    const _EconomicFeedSource(
+      id: 'coindesk-markets',
+      name: 'CoinDesk 마켓',
+      provider: 'CoinDesk',
+      feedUrl: 'https://www.coindesk.com/arc/outboundfeeds/rss/',
+      channelUrl: 'https://www.coindesk.com/markets/',
+      query: 'Crypto markets, tokenization, liquidity',
+      format: _EconomicFeedSourceFormat.rss,
+      type: EconomicFeedType.macro,
+      region: MarketRegion.all,
+      tags: ['crypto', 'bitcoin', 'liquidity'],
+      baseImpact: 73,
+    ),
+    _EconomicFeedSource(
+      id: 'gdelt-cross-source',
+      name: 'GDELT 글로벌 레이더',
+      provider: GdeltNewsEconomicFeedService.provider,
+      feedUrl: _gdeltArticlesUri().toString(),
+      channelUrl: _gdeltSearchUri().toString(),
+      query: 'Cross-source global market radar',
+      format: _EconomicFeedSourceFormat.gdelt,
+      type: EconomicFeedType.macro,
+      region: MarketRegion.all,
+      tags: const ['global', 'cross-source', 'market'],
+      baseImpact: 74,
+    ),
+  ];
+
+  final http.Client _client;
+  final LocalSettingsDatabase _database;
+
+  @override
+  List<EconomicFeedChannel> get feedChannels => defaultFeedChannels;
+
+  static List<EconomicFeedChannel> get defaultFeedChannels {
+    return _sources
+        .map(
+          (source) => EconomicFeedChannel(
+            id: source.id,
+            name: source.name,
+            provider: source.provider,
+            query: source.query,
+            type: source.type,
+            region: source.region,
+            tags: source.tags,
+            url: source.channelUrl,
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  @override
+  void dispose() => _client.close();
+
+  @override
+  Future<EconomicFeedFetchResult> fetchFeeds() async {
+    final cachedItems = await _readCachedFeeds();
+    final results = await Future.wait(
+      _sources.map((source) async {
+        try {
+          return _FeedQueryResult(await _fetchSource(source), null);
+        } catch (error) {
+          return _FeedQueryResult(const [], '${source.name}: $error');
+        }
+      }),
+    );
+
+    final errors = results
+        .map((result) => result.error)
+        .whereType<String>()
+        .toList(growable: false);
+    final items = GoogleNewsEconomicFeedService._dedupe(
+      results.expand((result) => result.items).toList(growable: false),
+    )..sort(GoogleNewsEconomicFeedService._compareFeedItems);
+    final selected = items.take(_maxItems).toList(growable: false);
+    if (selected.isNotEmpty) {
+      await _writeFeedCache(selected);
+    }
+    if (selected.isEmpty && cachedItems.isNotEmpty) {
+      return _cachedResult(
+        cachedItems,
+        '다중 채널 조회 실패 · 마지막 저장 피드 사용 · ${errors.take(2).join(' · ')}',
+      );
+    }
+
+    final status = selected.isEmpty
+        ? EconomicFeedFetchStatus.failed
+        : errors.isEmpty
+        ? EconomicFeedFetchStatus.ready
+        : EconomicFeedFetchStatus.partial;
+    final activeSources = _sources.length - errors.length;
+    final message = switch (status) {
+      EconomicFeedFetchStatus.ready =>
+        '다중 채널 ${selected.length}건 · ${_sources.length}채널 갱신',
+      EconomicFeedFetchStatus.partial =>
+        '다중 채널 일부 갱신 ${selected.length}건 · $activeSources/${_sources.length}채널',
+      EconomicFeedFetchStatus.failed =>
+        '다중 채널 조회 실패 · ${errors.take(2).join(' · ')}',
+      _ => '다중 채널 상태 확인',
+    };
+
+    return EconomicFeedFetchResult(
+      items: selected,
+      snapshot: EconomicFeedFetchSnapshot(
+        provider: provider,
+        endpoint: endpoint,
+        status: status,
+        message: message,
+        itemCount: selected.length,
+        updatedAt: DateTime.now(),
+      ),
+    );
+  }
+
+  Future<List<EconomicFeedItem>> _fetchSource(
+    _EconomicFeedSource source,
+  ) async {
+    final uri = Uri.parse(source.feedUrl);
+    final body = await _fetchBody(uri, source.format);
+    return switch (source.format) {
+      _EconomicFeedSourceFormat.gdelt => _parseGdeltArticles(body, source),
+      _EconomicFeedSourceFormat.rss => _parseRssItems(body, source),
+    };
+  }
+
+  Future<String> _fetchBody(Uri uri, _EconomicFeedSourceFormat format) async {
+    try {
+      return await _fetchUri(uri, format);
+    } catch (directError) {
+      try {
+        return await _fetchUri(_localProxyUri(uri, format), format);
+      } catch (proxyError) {
+        throw FormatException('$directError · proxy: $proxyError');
+      }
+    }
+  }
+
+  Future<String> _fetchUri(Uri uri, _EconomicFeedSourceFormat format) async {
+    final response = await _client
+        .get(
+          uri,
+          headers: {
+            'Accept': format == _EconomicFeedSourceFormat.gdelt
+                ? 'application/json, text/plain;q=0.9, */*;q=0.8'
+                : 'application/rss+xml, application/xml;q=0.9, */*;q=0.8',
+            'Cache-Control': 'no-cache',
+            'Pragma': 'no-cache',
+            'User-Agent': 'MarketFlow/1.0',
+          },
+        )
+        .timeout(const Duration(seconds: 12));
+    if (response.statusCode != 200) {
+      throw FormatException('HTTP ${response.statusCode}');
+    }
+    return utf8.decode(response.bodyBytes);
+  }
+
+  Uri _localProxyUri(Uri uri, _EconomicFeedSourceFormat format) {
+    final base = Uri.parse(_localProxyBaseUrl);
+    return base.replace(
+      path: format == _EconomicFeedSourceFormat.gdelt
+          ? '/api/economic-feed/gdelt'
+          : '/api/economic-feed/rss',
+      queryParameters: {'url': uri.toString()},
+    );
+  }
+
+  List<EconomicFeedItem> _parseRssItems(
+    String body,
+    _EconomicFeedSource source,
+  ) {
+    final blocks = RegExp(
+      r'<item\b[\s\S]*?<\/item>',
+      caseSensitive: false,
+    ).allMatches(body);
+    return blocks
+        .take(_itemsPerSource)
+        .map((match) => _parseRssItem(match.group(0) ?? '', source))
+        .whereType<EconomicFeedItem>()
+        .toList(growable: false);
+  }
+
+  EconomicFeedItem? _parseRssItem(String block, _EconomicFeedSource source) {
+    final title = GoogleNewsEconomicFeedService._readXmlText(block, 'title');
+    final link = GoogleNewsEconomicFeedService._readXmlText(block, 'link');
+    final pubDate = GoogleNewsEconomicFeedService._readXmlText(
+      block,
+      'pubDate',
+    );
+    final description =
+        GoogleNewsEconomicFeedService._readXmlText(block, 'description').isEmpty
+        ? GoogleNewsEconomicFeedService._readXmlText(block, 'content:encoded')
+        : GoogleNewsEconomicFeedService._readXmlText(block, 'description');
+    if (title.isEmpty || link.isEmpty) {
+      return null;
+    }
+    final uri = Uri.tryParse(link);
+    if (uri == null || !uri.hasScheme || uri.host.isEmpty) {
+      return null;
+    }
+
+    final publishedAt = GoogleNewsEconomicFeedService._parseRssDate(pubDate);
+    final summary = _summaryFromDescription(description, title, source);
+    final query = _queryForSource(source);
+    return EconomicFeedItem(
+      id: 'rss-${source.id}-${link.hashCode.abs()}',
+      type: query.type,
+      region: query.region,
+      title: title,
+      summary: summary,
+      source: source.provider,
+      timestampLabel: GoogleNewsEconomicFeedService._formatTimestamp(
+        publishedAt,
+        pubDate,
+      ),
+      impactScore: GoogleNewsEconomicFeedService._impactScore(
+        query,
+        title,
+        summary,
+        publishedAt,
+      ),
+      tags: source.tags,
+      url: link,
+      channelId: source.id,
+      channelName: source.name,
+      publishedAt: publishedAt,
+    );
+  }
+
+  List<EconomicFeedItem> _parseGdeltArticles(
+    String body,
+    _EconomicFeedSource source,
+  ) {
+    final decoded = jsonDecode(body);
+    if (decoded is! Map<String, dynamic>) {
+      return const [];
+    }
+    final articles = decoded['articles'];
+    if (articles is! List) {
+      return const [];
+    }
+    return articles
+        .whereType<Map<String, dynamic>>()
+        .map((article) => _parseGdeltArticle(article, source))
+        .whereType<EconomicFeedItem>()
+        .take(_itemsPerSource)
+        .toList(growable: false);
+  }
+
+  EconomicFeedItem? _parseGdeltArticle(
+    Map<String, dynamic> article,
+    _EconomicFeedSource source,
+  ) {
+    final title = '${article['title'] ?? ''}'.trim();
+    final url = '${article['url'] ?? ''}'.trim();
+    if (title.isEmpty || url.isEmpty) {
+      return null;
+    }
+    final uri = Uri.tryParse(url);
+    if (uri == null || !uri.hasScheme || uri.host.isEmpty) {
+      return null;
+    }
+
+    final domain = '${article['domain'] ?? uri.host}'.trim();
+    final language = '${article['language'] ?? ''}'.trim();
+    final sourceCountry = '${article['sourcecountry'] ?? ''}'.trim();
+    final publishedAt = GdeltNewsEconomicFeedService._parseGdeltDate(
+      '${article['seendate'] ?? ''}',
+    );
+    final summary = [
+      'GDELT가 수집한 ${domain.isEmpty ? '원문 매체' : domain} 기사입니다.',
+      if (language.isNotEmpty) '언어 $language',
+      if (sourceCountry.isNotEmpty) '국가 $sourceCountry',
+    ].join(' · ');
+    final query = _queryForSource(source);
+
+    return EconomicFeedItem(
+      id: 'gdelt-${source.id}-${url.hashCode.abs()}',
+      type: query.type,
+      region: query.region,
+      title: title,
+      summary: summary,
+      source: domain.isEmpty ? source.provider : domain,
+      timestampLabel: GoogleNewsEconomicFeedService._formatTimestamp(
+        publishedAt,
+        '${article['seendate'] ?? ''}',
+      ),
+      impactScore: GoogleNewsEconomicFeedService._impactScore(
+        query,
+        title,
+        summary,
+        publishedAt,
+      ),
+      tags: source.tags,
+      url: url,
+      channelId: source.id,
+      channelName: source.name,
+      publishedAt: publishedAt,
+    );
+  }
+
+  String _summaryFromDescription(
+    String description,
+    String title,
+    _EconomicFeedSource source,
+  ) {
+    final normalized = description
+        .replaceAll(title, '')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    if (normalized.length >= 36) {
+      return normalized.length > 180
+          ? '${normalized.substring(0, 177)}...'
+          : normalized;
+    }
+    return '${source.provider} ${source.name}에서 수집한 최신 기사입니다.';
+  }
+
+  Future<void> _writeFeedCache(List<EconomicFeedItem> items) async {
+    if (items.isEmpty) {
+      return;
+    }
+    final payload = {
+      'provider': provider,
+      'endpoint': endpoint,
+      'cachedAt': DateTime.now().toUtc().toIso8601String(),
+      'items': [for (final item in items) _feedToJson(item)],
+    };
+    await _database.writeString(
+      LocalSettingsDatabase.apiCacheStorageKey(_cacheId),
+      jsonEncode(payload),
+    );
+  }
+
+  Future<List<EconomicFeedItem>> _readCachedFeeds() async {
+    final raw = await _database.readString(
+      LocalSettingsDatabase.apiCacheStorageKey(_cacheId),
+    );
+    if (raw == null || raw.isEmpty) {
+      return const [];
+    }
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map<String, dynamic>) {
+        return const [];
+      }
+      final items = decoded['items'];
+      if (items is! List) {
+        return const [];
+      }
+      final feeds = items
+          .whereType<Map<String, dynamic>>()
+          .map(_feedFromJson)
+          .whereType<EconomicFeedItem>()
+          .toList(growable: false);
+      return feeds..sort(GoogleNewsEconomicFeedService._compareFeedItems);
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  EconomicFeedFetchResult _cachedResult(
+    List<EconomicFeedItem> items,
+    String message,
+  ) {
+    final latest = items
+        .map((item) => item.publishedAt)
+        .whereType<DateTime>()
+        .fold<DateTime?>(null, (latest, value) {
+          if (latest == null || value.isAfter(latest)) {
+            return value;
+          }
+          return latest;
+        });
+    return EconomicFeedFetchResult(
+      items: items.take(12).toList(growable: false),
+      snapshot: EconomicFeedFetchSnapshot(
+        provider: '$provider cache',
+        endpoint: endpoint,
+        status: EconomicFeedFetchStatus.cached,
+        message: message,
+        itemCount: items.length,
+        updatedAt: latest,
+      ),
+    );
+  }
+
+  Map<String, dynamic> _feedToJson(EconomicFeedItem item) {
+    return {
+      'id': item.id,
+      'type': item.type.name,
+      'region': item.region.name,
+      'title': item.title,
+      'summary': item.summary,
+      'source': item.source,
+      'timestampLabel': item.timestampLabel,
+      'impactScore': item.impactScore,
+      'tags': item.tags,
+      'url': item.url,
+      'channelId': item.channelId,
+      'channelName': item.channelName,
+      'publishedAt': item.publishedAt?.toUtc().toIso8601String(),
+    };
+  }
+
+  EconomicFeedItem? _feedFromJson(Map<String, dynamic> json) {
+    final id = '${json['id'] ?? ''}';
+    final title = '${json['title'] ?? ''}';
+    if (id.isEmpty || title.isEmpty) {
+      return null;
+    }
+    return EconomicFeedItem(
+      id: id,
+      type: GoogleNewsEconomicFeedService._enumByName(
+        EconomicFeedType.values,
+        '${json['type'] ?? ''}',
+        EconomicFeedType.macro,
+      ),
+      region: GoogleNewsEconomicFeedService._enumByName(
+        MarketRegion.values,
+        '${json['region'] ?? ''}',
+        MarketRegion.all,
+      ),
+      title: title,
+      summary: '${json['summary'] ?? ''}',
+      source: '${json['source'] ?? provider} cache',
+      timestampLabel: '${json['timestampLabel'] ?? 'cached'}',
+      impactScore: int.tryParse('${json['impactScore'] ?? ''}') ?? 0,
+      tags: (json['tags'] is List)
+          ? (json['tags'] as List).map((tag) => '$tag').toList(growable: false)
+          : const [],
+      url: '${json['url'] ?? ''}',
+      channelId: '${json['channelId'] ?? ''}',
+      channelName: '${json['channelName'] ?? ''}',
+      publishedAt: DateTime.tryParse('${json['publishedAt'] ?? ''}'),
+    );
+  }
+
+  _EconomicFeedQuery _queryForSource(_EconomicFeedSource source) {
+    return _EconomicFeedQuery(
+      id: source.id,
+      name: source.name,
+      search: source.query,
+      type: source.type,
+      region: source.region,
+      tags: source.tags,
+      baseImpact: source.baseImpact,
+    );
+  }
+
+  static Uri _gdeltArticlesUri() {
+    return Uri.https(
+      'api.gdeltproject.org',
+      GdeltNewsEconomicFeedService.endpoint,
+      {
+        'query': _gdeltSearch,
+        'mode': 'ArtList',
+        'format': 'JSON',
+        'maxrecords': '40',
+        'timespan': '3d',
+        'sort': 'DateDesc',
+      },
+    );
+  }
+
+  static Uri _gdeltSearchUri() {
+    return Uri.https(
+      'api.gdeltproject.org',
+      GdeltNewsEconomicFeedService.endpoint,
+      {
+        'query': _gdeltSearch,
+        'mode': 'ArtList',
+        'format': 'HTML',
+        'timespan': '3d',
+        'sort': 'DateDesc',
+      },
+    );
+  }
 }
 
 class GdeltNewsEconomicFeedService implements EconomicFeedService {
@@ -1058,4 +1611,34 @@ class _FeedQueryResult {
 
   final List<EconomicFeedItem> items;
   final String? error;
+}
+
+enum _EconomicFeedSourceFormat { rss, gdelt }
+
+class _EconomicFeedSource {
+  const _EconomicFeedSource({
+    required this.id,
+    required this.name,
+    required this.provider,
+    required this.feedUrl,
+    required this.channelUrl,
+    required this.query,
+    required this.format,
+    required this.type,
+    required this.region,
+    required this.tags,
+    required this.baseImpact,
+  });
+
+  final String id;
+  final String name;
+  final String provider;
+  final String feedUrl;
+  final String channelUrl;
+  final String query;
+  final _EconomicFeedSourceFormat format;
+  final EconomicFeedType type;
+  final MarketRegion region;
+  final List<String> tags;
+  final int baseImpact;
 }

@@ -1,9 +1,9 @@
 {
   "app_name": "market_flow",
   "version": "1.0.0",
-  "build_number": "44",
+  "build_number": "45",
   "package_name": "market_flow",
-  "build_version": "7bb4f2bf2c2b75f5b23115032654f89b15bf32b3-44-1",
-  "git_sha": "7bb4f2bf2c2b75f5b23115032654f89b15bf32b3",
-  "built_at": "2026-06-24T09:55:46.967Z"
+  "build_version": "dbbe23f7eaeada35e7e28b5500fb1e01537c45f9-45-1",
+  "git_sha": "dbbe23f7eaeada35e7e28b5500fb1e01537c45f9",
+  "built_at": "2026-06-24T22:39:48.524Z"
 }

@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import 'local_network_fetch.dart';
 import 'local_settings_database.dart';
 import '../models/market_models.dart';
 
@@ -42,7 +43,8 @@ class DataApiProbeClient {
       return null;
     }
     return 'OpenDART는 브라우저 CORS 정책 때문에 GitHub Pages 웹에서 직접 연결 테스트가 실패할 수 있습니다. '
-        '모바일 앱에서 테스트하거나 로컬에서 `npm start` 실행 후 127.0.0.1:3000으로 열어 테스트하세요.';
+        '로컬 프록시를 쓸 때는 `npm start` 실행 후 Chrome의 로컬 네트워크 접근 권한 요청을 허용하세요. '
+        '권한 요청이 뜨지 않거나 계속 실패하면 모바일 앱 또는 127.0.0.1:3000 로컬 웹에서 테스트하세요.';
   }
 
   Future<DataApiProbeResult> probe(
@@ -398,9 +400,10 @@ class DataApiProbeClient {
   }
 
   Future<Map<String, dynamic>> _getJsonMap(Uri uri) async {
-    final response = await _client
-        .get(uri, headers: {'Accept': 'application/json'})
-        .timeout(const Duration(seconds: 12));
+    final response = await getJsonWithLocalNetworkAccess(
+      _client,
+      uri,
+    ).timeout(const Duration(seconds: 12));
     if (response.statusCode != 200) {
       throw FormatException('HTTP ${response.statusCode}');
     }

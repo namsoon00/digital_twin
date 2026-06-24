@@ -20,10 +20,10 @@ class EconomicFeedFetchSnapshot {
 
   factory EconomicFeedFetchSnapshot.idle(int itemCount) {
     return EconomicFeedFetchSnapshot(
-      provider: MarketNewsEconomicFeedService.provider,
-      endpoint: MarketNewsEconomicFeedService.endpoint,
+      provider: StaticEconomicFeedService.defaultProvider,
+      endpoint: StaticEconomicFeedService.defaultEndpoint,
       status: EconomicFeedFetchStatus.idle,
-      message: '다중 뉴스 채널 대기 중',
+      message: '로컬 기본 피드 대기 중',
       itemCount: itemCount,
       updatedAt: null,
     );
@@ -31,10 +31,10 @@ class EconomicFeedFetchSnapshot {
 
   factory EconomicFeedFetchSnapshot.loading(int itemCount) {
     return EconomicFeedFetchSnapshot(
-      provider: MarketNewsEconomicFeedService.provider,
-      endpoint: MarketNewsEconomicFeedService.endpoint,
+      provider: StaticEconomicFeedService.defaultProvider,
+      endpoint: StaticEconomicFeedService.defaultEndpoint,
       status: EconomicFeedFetchStatus.loading,
-      message: '다중 뉴스 채널 조회 중',
+      message: '로컬 기본 피드 준비 중',
       itemCount: itemCount,
       updatedAt: DateTime.now(),
     );
@@ -75,9 +75,21 @@ abstract class EconomicFeedService {
 }
 
 class StaticEconomicFeedService implements EconomicFeedService {
-  const StaticEconomicFeedService(this.items, {this.feedChannels = const []});
+  const StaticEconomicFeedService(
+    this.items, {
+    this.feedChannels = const [],
+    this.provider = defaultProvider,
+    this.endpoint = defaultEndpoint,
+    this.message = '로컬 기본 피드',
+  });
+
+  static const defaultProvider = '로컬 기본 피드';
+  static const defaultEndpoint = 'repository';
 
   final List<EconomicFeedItem> items;
+  final String provider;
+  final String endpoint;
+  final String message;
 
   @override
   final List<EconomicFeedChannel> feedChannels;
@@ -87,10 +99,10 @@ class StaticEconomicFeedService implements EconomicFeedService {
     return EconomicFeedFetchResult(
       items: items,
       snapshot: EconomicFeedFetchSnapshot(
-        provider: 'Test',
-        endpoint: 'static',
+        provider: provider,
+        endpoint: endpoint,
         status: EconomicFeedFetchStatus.ready,
-        message: '정적 테스트 피드',
+        message: message,
         itemCount: items.length,
         updatedAt: DateTime.now(),
       ),
@@ -660,14 +672,10 @@ class GdeltNewsEconomicFeedService implements EconomicFeedService {
 
   static const provider = 'GDELT DOC API';
   static const endpoint = '/api/v2/doc/doc';
-  static const _localProxyBaseUrl = String.fromEnvironment(
-    'MARKET_FLOW_FEED_PROXY_BASE_URL',
-    defaultValue: 'http://127.0.0.1:3000',
-  );
   static const _maxItems = 24;
   static const _combinedSearch =
-      '"stock market" OR liquidity OR semiconductor OR infrastructure OR '
-      '"central bank" OR earnings OR dollar OR cryptocurrency OR electricity OR Korea';
+      '("stock market" OR liquidity OR semiconductor OR infrastructure OR '
+      '"central bank" OR earnings OR dollar OR cryptocurrency OR electricity OR Korea)';
 
   static const _queries = [
     _EconomicFeedQuery(
@@ -800,15 +808,7 @@ class GdeltNewsEconomicFeedService implements EconomicFeedService {
   }
 
   Future<String> _fetchJsonBody(Uri uri) async {
-    try {
-      return await _fetchUri(uri);
-    } catch (directError) {
-      try {
-        return await _fetchUri(_localProxyUri(uri));
-      } catch (proxyError) {
-        throw FormatException('$directError · proxy: $proxyError');
-      }
-    }
+    return _fetchUri(uri);
   }
 
   Future<String> _fetchUri(Uri uri) async {
@@ -827,14 +827,6 @@ class GdeltNewsEconomicFeedService implements EconomicFeedService {
       throw FormatException('HTTP ${response.statusCode}');
     }
     return utf8.decode(response.bodyBytes);
-  }
-
-  Uri _localProxyUri(Uri uri) {
-    final base = Uri.parse(_localProxyBaseUrl);
-    return base.replace(
-      path: '/api/economic-feed/gdelt',
-      queryParameters: {'url': uri.toString()},
-    );
   }
 
   List<EconomicFeedItem> _parseArticles(String body) {

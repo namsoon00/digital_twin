@@ -252,50 +252,24 @@ void main() {
   );
 
   test(
-    'GDELT DOC API uses local proxy fallback after direct fetch failure',
+    'GDELT DOC API reports direct fetch failure without proxy fallback',
     () async {
-      const payload = '''
-{
-  "articles": [
-    {
-      "url": "https://www.cnbc.com/markets/central-bank-policy.html",
-      "title": "Central bank policy keeps markets focused on rates",
-      "seendate": "20260624041500",
-      "domain": "cnbc.com",
-      "language": "English",
-      "sourcecountry": "United States"
-    }
-  ]
-}
-''';
-      var proxyRequestCount = 0;
+      var requestCount = 0;
       final service = GdeltNewsEconomicFeedService(
         client: MockClient((request) async {
-          if (request.url.host == 'api.gdeltproject.org') {
-            throw http.ClientException('Failed to fetch', request.url);
-          }
-          expect(request.url.host, '127.0.0.1');
-          expect(request.url.port, 3000);
-          expect(request.url.path, '/api/economic-feed/gdelt');
-          expect(
-            request.url.queryParameters['url'],
-            contains('https://api.gdeltproject.org/api/v2/doc/doc'),
-          );
-          proxyRequestCount += 1;
-          return http.Response(
-            payload,
-            200,
-            headers: {'content-type': 'application/json; charset=utf-8'},
-          );
+          requestCount += 1;
+          expect(request.url.host, 'api.gdeltproject.org');
+          throw http.ClientException('Failed to fetch', request.url);
         }),
       );
       addTearDown(service.dispose);
 
       final result = await service.fetchFeeds();
 
-      expect(result.snapshot.status, EconomicFeedFetchStatus.ready);
-      expect(result.items.single.channelName, '중앙은행 정책');
-      expect(proxyRequestCount, 1);
+      expect(result.snapshot.status, EconomicFeedFetchStatus.failed);
+      expect(result.snapshot.message, contains('GDELT 기사 조회 실패'));
+      expect(result.items, isEmpty);
+      expect(requestCount, 1);
     },
   );
 
@@ -560,28 +534,22 @@ void main() {
     },
   );
 
-  test('Data API probe validates Alpha Vantage quote access', () async {
+  test('Data API probe validates CoinGecko market access', () async {
     const repository = MockFlowRepository();
     final source = repository.dataApiSources.firstWhere(
-      (source) => source.id == 'alpha-vantage',
+      (source) => source.id == 'coingecko',
     );
     final client = DataApiProbeClient(
       client: MockClient((request) async {
-        expect(request.url.host, 'www.alphavantage.co');
-        expect(request.url.queryParameters['function'], 'GLOBAL_QUOTE');
-        expect(request.url.queryParameters['symbol'], 'NVDA');
-        expect(request.url.queryParameters['apikey'], 'demo-key');
+        expect(request.url.host, 'api.coingecko.com');
+        expect(request.url.path, '/api/v3/coins/markets');
+        expect(request.url.queryParameters['ids'], 'bitcoin,ethereum');
         return http.Response(
           '''
-{
-  "Global Quote": {
-    "01. symbol": "NVDA",
-    "05. price": "142.1800",
-    "06. volume": "42000000",
-    "09. change": "3.40",
-    "10. change percent": "2.45%"
-  }
-}
+[
+  {"id": "bitcoin", "symbol": "btc"},
+  {"id": "ethereum", "symbol": "eth"}
+]
 ''',
           200,
           headers: {'content-type': 'application/json; charset=utf-8'},
@@ -590,39 +558,29 @@ void main() {
     );
     addTearDown(client.dispose);
 
-    final result = await client.probe(source, 'demo-key');
+    final result = await client.probe(source, '');
 
     expect(result.ok, isTrue);
-    expect(result.endpoint, 'GLOBAL_QUOTE NVDA');
-    expect(result.message, contains('142.1800'));
-    expect(result.linkedDataLabel, contains('관심 종목'));
+    expect(result.endpoint, '/api/v3/coins/markets BTC,ETH');
+    expect(result.message, contains('BTC/ETH'));
+    expect(result.linkedDataLabel, contains('코인 가격'));
   });
 
-  test('Data API probe retries FRED through the local proxy', () async {
+  test('Data API probe validates DefiLlama protocol access', () async {
     const repository = MockFlowRepository();
     final source = repository.dataApiSources.firstWhere(
-      (source) => source.id == 'fred',
+      (source) => source.id == 'defillama',
     );
-    var requestCount = 0;
     final client = DataApiProbeClient(
       client: MockClient((request) async {
-        requestCount += 1;
-        if (requestCount == 1) {
-          expect(request.url.host, 'api.stlouisfed.org');
-          return http.Response('CORS blocked in browser', 500);
-        }
-
-        expect(request.url.host, '127.0.0.1');
-        expect(request.url.path, '/api/data-api/fred/observations');
-        expect(request.url.queryParameters['series_id'], 'DGS10');
-        expect(request.url.queryParameters['api_key'], 'fred-key');
+        expect(request.url.host, 'api.llama.fi');
+        expect(request.url.path, '/protocols');
         return http.Response(
           '''
-{
-  "observations": [
-    {"date": "2026-06-18", "value": "4.46"}
-  ]
-}
+[
+  {"name": "Aave", "tvl": 12000000000},
+  {"name": "Lido", "tvl": 30000000000}
+]
 ''',
           200,
           headers: {'content-type': 'application/json; charset=utf-8'},
@@ -631,67 +589,12 @@ void main() {
     );
     addTearDown(client.dispose);
 
-    final result = await client.probe(source, 'fred-key');
+    final result = await client.probe(source, '');
 
     expect(result.ok, isTrue);
-    expect(result.endpoint, 'series/observations DGS10');
-    expect(result.message, contains('4.46'));
-    expect(requestCount, 2);
-  });
-
-  test('Data API probe confirms a selected investor flow vendor', () async {
-    const repository = MockFlowRepository();
-    final source = repository.dataApiSources.firstWhere(
-      (source) => source.id == 'kr-investor-flow',
-    );
-    final client = DataApiProbeClient(
-      client: MockClient((request) async {
-        throw StateError('vendor selection probe should not call the network');
-      }),
-    );
-    addTearDown(client.dispose);
-
-    final result = await client.probe(source, '', vendorId: 'krx-data');
-
-    expect(result.ok, isTrue);
-    expect(result.provider, 'KRX');
-    expect(result.endpoint, contains('KRX 데이터'));
-    expect(result.message, contains('KRX 정보데이터시스템'));
-  });
-
-  test('Data API probe validates OpenDART company access', () async {
-    const repository = MockFlowRepository();
-    final source = repository.dataApiSources.firstWhere(
-      (source) => source.id == 'opendart',
-    );
-    final client = DataApiProbeClient(
-      client: MockClient((request) async {
-        expect(request.url.host, 'opendart.fss.or.kr');
-        expect(request.url.path, '/api/company.json');
-        expect(request.url.queryParameters['crtfc_key'], 'dart-key');
-        expect(request.url.queryParameters['corp_code'], '00126380');
-        return http.Response(
-          '''
-{
-  "status": "000",
-  "message": "정상",
-  "corp_name": "삼성전자(주)",
-  "stock_code": "005930"
-}
-''',
-          200,
-          headers: {'content-type': 'application/json; charset=utf-8'},
-        );
-      }),
-    );
-    addTearDown(client.dispose);
-
-    final result = await client.probe(source, 'dart-key');
-
-    expect(result.ok, isTrue);
-    expect(result.endpoint, 'company.json 삼성전자');
-    expect(result.message, contains('삼성전자'));
-    expect(result.linkedDataLabel, contains('공시'));
+    expect(result.endpoint, '/protocols');
+    expect(result.message, contains('DeFi 프로토콜'));
+    expect(result.linkedDataLabel, contains('온체인 유동성'));
   });
 
   test(
@@ -699,18 +602,15 @@ void main() {
     () async {
       const repository = MockFlowRepository();
       final source = repository.dataApiSources.firstWhere(
-        (source) => source.id == 'opendart',
+        (source) => source.id == 'defillama',
       );
       final liveClient = DataApiProbeClient(
         client: MockClient((request) async {
           return http.Response(
             '''
-{
-  "status": "000",
-  "message": "정상",
-  "corp_name": "삼성전자(주)",
-  "stock_code": "005930"
-}
+[
+  {"name": "Aave", "tvl": 12000000000}
+]
 ''',
             200,
             headers: {'content-type': 'application/json; charset=utf-8'},
@@ -719,7 +619,7 @@ void main() {
       );
       addTearDown(liveClient.dispose);
 
-      final live = await liveClient.probe(source, 'dart-key');
+      final live = await liveClient.probe(source, '');
       expect(live.ok, isTrue);
 
       final cachedClient = DataApiProbeClient(
@@ -729,78 +629,16 @@ void main() {
       );
       addTearDown(cachedClient.dispose);
 
-      final cached = await cachedClient.probe(source, 'dart-key');
+      final cached = await cachedClient.probe(source, '');
 
       expect(cached.ok, isTrue);
       expect(cached.fromCache, isTrue);
       expect(cached.statusLabel, '저장 데이터');
-      expect(cached.provider, 'OpenDART cache');
-      expect(cached.endpoint, 'company.json 삼성전자');
+      expect(cached.provider, 'DefiLlama cache');
+      expect(cached.endpoint, '/protocols');
       expect(cached.message, contains('마지막 성공 테스트 사용'));
     },
   );
-
-  test('Data API probe falls back to OpenDART local proxy', () async {
-    const repository = MockFlowRepository();
-    final source = repository.dataApiSources.firstWhere(
-      (source) => source.id == 'opendart',
-    );
-    var proxyRequestCount = 0;
-    final client = DataApiProbeClient(
-      client: MockClient((request) async {
-        if (request.url.host == 'opendart.fss.or.kr') {
-          throw http.ClientException('XMLHttpRequest error.', request.url);
-        }
-        expect(request.url.host, '127.0.0.1');
-        expect(request.url.port, 3000);
-        expect(request.url.path, '/api/data-api/opendart/company');
-        expect(request.url.queryParameters['crtfc_key'], 'dart-key');
-        expect(request.url.queryParameters['corp_code'], '00126380');
-        proxyRequestCount += 1;
-        return http.Response(
-          '''
-{
-  "status": "000",
-  "message": "정상",
-  "corp_name": "삼성전자(주)",
-  "stock_code": "005930"
-}
-''',
-          200,
-          headers: {'content-type': 'application/json; charset=utf-8'},
-        );
-      }),
-    );
-    addTearDown(client.dispose);
-
-    final result = await client.probe(source, 'dart-key');
-
-    expect(result.ok, isTrue);
-    expect(result.message, contains('삼성전자'));
-    expect(proxyRequestCount, 1);
-  });
-
-  test('Data API probe hides OpenDART key when browser proxy fails', () async {
-    const repository = MockFlowRepository();
-    final source = repository.dataApiSources.firstWhere(
-      (source) => source.id == 'opendart',
-    );
-    const apiKey = 'redacted-opendart-test-key';
-    final client = DataApiProbeClient(
-      client: MockClient((request) async {
-        throw http.ClientException('XMLHttpRequest error.', request.url);
-      }),
-    );
-    addTearDown(client.dispose);
-
-    final result = await client.probe(source, apiKey);
-
-    expect(result.ok, isFalse);
-    expect(result.message, contains('OpenDART 연결 테스트 실패'));
-    expect(result.message, contains('CORS'));
-    expect(result.message, contains('npm start'));
-    expect(result.message, isNot(contains(apiKey)));
-  });
 
   testWidgets('Sparkline supports pinch zooming into a shorter period', (
     tester,
@@ -914,20 +752,11 @@ void main() {
       final sources = const MockFlowRepository().dataApiSources;
 
       await repository.saveDataApiKeySettings(
-        const DataApiKeySettings(
-          keys: {'alpha-vantage': 'alpha-key', 'coingecko': 'coingecko-key'},
-          vendors: {'fund-flow-vendor': 'epfr'},
-        ),
+        const DataApiKeySettings(keys: {'coingecko': 'coingecko-key'}),
         sources,
       );
 
       final prefs = await SharedPreferences.getInstance();
-      expect(
-        prefs.getString(
-          LocalSettingsDatabase.dataApiKeyStorageKey('alpha-vantage'),
-        ),
-        'alpha-key',
-      );
       expect(
         prefs.getString(
           LocalSettingsDatabase.dataApiKeyStorageKey('coingecko'),
@@ -936,15 +765,9 @@ void main() {
       );
       expect(
         prefs.getString(
-          LocalSettingsDatabase.dataApiKeyUpdatedAtStorageKey('alpha-vantage'),
+          LocalSettingsDatabase.dataApiKeyUpdatedAtStorageKey('coingecko'),
         ),
         isNotEmpty,
-      );
-      expect(
-        prefs.getString(
-          LocalSettingsDatabase.dataApiVendorStorageKey('fund-flow-vendor'),
-        ),
-        'epfr',
       );
       expect(prefs.getInt(LocalSettingsDatabase.schemaVersionKey), 1);
       expect(prefs.getString(LocalSettingsDatabase.lastWriteAtKey), isNotEmpty);
@@ -955,20 +778,20 @@ void main() {
     'SettingsRepository migrates legacy API keys into local database',
     () async {
       SharedPreferences.setMockInitialValues({
-        'dataApi.key.alpha-vantage': 'legacy-alpha-key',
+        'dataApi.key.coingecko': 'legacy-coingecko-key',
       });
       final repository = SettingsRepository();
       final sources = const MockFlowRepository().dataApiSources;
 
       final settings = await repository.loadDataApiKeySettings(sources);
 
-      expect(settings.keyFor('alpha-vantage'), 'legacy-alpha-key');
+      expect(settings.keyFor('coingecko'), 'legacy-coingecko-key');
       final prefs = await SharedPreferences.getInstance();
       expect(
         prefs.getString(
-          LocalSettingsDatabase.dataApiKeyStorageKey('alpha-vantage'),
+          LocalSettingsDatabase.dataApiKeyStorageKey('coingecko'),
         ),
-        'legacy-alpha-key',
+        'legacy-coingecko-key',
       );
     },
   );
@@ -1085,7 +908,7 @@ void main() {
       'coingecko-demo-key',
     );
     expect(find.text('저장됨'), findsWidgets);
-    expect(find.text('로컬 DB에 저장된 key입니다.'), findsOneWidget);
+    expect(find.text('선택 API key가 로컬 DB에 저장되어 있습니다.'), findsOneWidget);
   });
 
   testWidgets('MarketFlow opens on the live flow dashboard', (tester) async {
@@ -1346,8 +1169,10 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('필요 API 맵'), findsOneWidget);
-    expect(find.text('Alpha Vantage'), findsOneWidget);
-    expect(find.text('토스증권 Open API'), findsOneWidget);
+    expect(find.text('CoinGecko API'), findsWidgets);
+    expect(find.text('DefiLlama API'), findsOneWidget);
+    expect(find.text('Alpha Vantage'), findsNothing);
+    expect(find.text('토스증권 Open API'), findsNothing);
 
     await tester.tap(find.text('필요 API 맵'));
     await tester.pumpAndSettle();
@@ -1359,15 +1184,6 @@ void main() {
     await dismissModal(tester, find.text('연결 준비도'));
 
     await tester.scrollUntilVisible(
-      find.text('FRED API'),
-      360,
-      scrollable: find.byType(Scrollable).first,
-    );
-    await tester.pumpAndSettle();
-
-    expect(find.text('FRED API'), findsOneWidget);
-
-    await tester.scrollUntilVisible(
       find.text('CoinGecko API'),
       360,
       scrollable: find.byType(Scrollable).first,
@@ -1375,15 +1191,6 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('CoinGecko API'), findsOneWidget);
-
-    await tester.scrollUntilVisible(
-      find.text('ETF/Fund Flow API'),
-      360,
-      scrollable: find.byType(Scrollable).first,
-    );
-    await tester.pumpAndSettle();
-
-    expect(find.text('ETF/Fund Flow API'), findsOneWidget);
 
     await tester.scrollUntilVisible(
       find.text('세계 자금 흐름'),
@@ -1448,7 +1255,7 @@ void main() {
     expect(find.text('수혜군'), findsOneWidget);
   });
 
-  testWidgets('MarketFlow shows Toss Securities settings', (tester) async {
+  testWidgets('MarketFlow shows web-direct API settings', (tester) async {
     await pumpMarketFlowApp(tester);
 
     await tester.tap(find.text('설정'));
@@ -1459,108 +1266,36 @@ void main() {
     expect(find.text('시스템'), findsOneWidget);
     expect(find.text('라이트'), findsOneWidget);
     expect(find.text('다크'), findsOneWidget);
-    expect(find.text('데이터 API key'), findsOneWidget);
-    expect(find.text('등록한 key를 기기 로컬 DB에 저장'), findsOneWidget);
+    expect(find.text('웹 직접 호출 API'), findsOneWidget);
+    expect(find.text('브라우저에서 프록시 없이 테스트 가능한 공개 API'), findsOneWidget);
     expect(find.byKey(const ValueKey('data-api-save-top')), findsOneWidget);
-    expect(find.text('API key 입력 후 저장'), findsWidgets);
-    expect(find.text('Alpha Vantage'), findsOneWidget);
-    expect(find.text('FRED API'), findsOneWidget);
-    expect(find.text('OpenDART API'), findsOneWidget);
+    expect(find.text('저장할 변경 없음'), findsOneWidget);
+    expect(find.text('2개 웹 직접 호출'), findsOneWidget);
+    expect(find.text('프록시 미사용'), findsOneWidget);
+    expect(find.text('키 저장 선택 사항'), findsOneWidget);
     expect(find.text('CoinGecko API'), findsOneWidget);
-    expect(find.text('DefiLlama API'), findsOneWidget);
     expect(
-      find.text('발급 위치: https://www.alphavantage.co/documentation/'),
+      find.byKey(const ValueKey('data-api-test-coingecko')),
       findsOneWidget,
     );
-    expect(find.text('연동 데이터: 대시보드 관심 종목 가격, 등락률, 거래량'), findsOneWidget);
-    expect(
-      find.byKey(const ValueKey('data-api-test-alpha-vantage')),
-      findsOneWidget,
-    );
-    expect(find.text('연결 테스트'), findsWidgets);
-    expect(
-      find.byKey(const ValueKey('data-api-test-opendart')),
-      findsOneWidget,
-    );
-    expect(find.textContaining('OpenDART는 브라우저 CORS 정책'), findsOneWidget);
-    expect(find.text('읽기 전용 데이터'), findsOneWidget);
-    expect(find.text('로컬 DB 저장'), findsOneWidget);
-    expect(find.text('API key'), findsWidgets);
+    expect(find.text('공개 API 테스트'), findsWidgets);
+    expect(find.text('Alpha Vantage'), findsNothing);
+    expect(find.text('FRED API'), findsNothing);
+    expect(find.text('OpenDART API'), findsNothing);
+    expect(find.text('토스증권 계정'), findsNothing);
 
     await tester.scrollUntilVisible(
-      find.byKey(const ValueKey('data-api-test-coingecko')),
+      find.byKey(const ValueKey('data-api-test-defillama')),
       420,
       scrollable: find.byType(Scrollable).first,
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('공개 API 테스트'), findsWidgets);
-    expect(
-      find.text('연동 데이터: 자금 탭 코인 가격, 시총, 거래량, 1h/24h/7d 변화율'),
-      findsOneWidget,
-    );
+    expect(find.text('DefiLlama API'), findsOneWidget);
+    expect(find.text('연동 데이터: DeFi TVL, 스테이블코인, 체인별 온체인 유동성'), findsOneWidget);
 
-    await tester.scrollUntilVisible(
-      find.byKey(const ValueKey('data-api-vendor-fund-flow-vendor')),
-      520,
-      scrollable: find.byType(Scrollable).first,
-    );
-    await tester.pumpAndSettle();
-
-    expect(find.text('벤더 선택'), findsWidgets);
-    expect(find.text('벤더 API key'), findsWidgets);
-
-    await tester.tap(
-      find.byKey(const ValueKey('data-api-vendor-fund-flow-vendor')),
-    );
-    await tester.pumpAndSettle();
-
-    expect(find.text('EPFR Global Fund Flows'), findsOneWidget);
-    expect(find.text('Nasdaq Data Link'), findsOneWidget);
-
-    await tester.tap(find.text('EPFR Global Fund Flows'));
-    await tester.pumpAndSettle();
-
-    expect(find.textContaining('계약 후 제공되는 fund flow endpoint'), findsOneWidget);
-
-    await tester.scrollUntilVisible(
-      find.byKey(const ValueKey('data-api-vendor-kr-investor-flow')),
-      520,
-      scrollable: find.byType(Scrollable).first,
-    );
-    await tester.pumpAndSettle();
-
-    final krTestButton = find.byKey(
-      const ValueKey('data-api-test-kr-investor-flow'),
-    );
-    expect(tester.widget<OutlinedButton>(krTestButton).onPressed, isNull);
-
-    await tester.tap(
-      find.byKey(const ValueKey('data-api-vendor-kr-investor-flow')),
-    );
-    await tester.pumpAndSettle();
-
-    expect(find.text('KRX 정보데이터시스템'), findsOneWidget);
-
-    await tester.tap(find.text('KRX 정보데이터시스템'));
-    await tester.pumpAndSettle();
-
-    expect(tester.widget<OutlinedButton>(krTestButton).onPressed, isNotNull);
-
-    await tester.scrollUntilVisible(
-      find.text('토스증권 계정'),
-      520,
-      scrollable: find.byType(Scrollable).first,
-    );
-    await tester.pumpAndSettle();
-
-    expect(find.text('토스증권 계정'), findsOneWidget);
-    expect(find.text('앱에서 Open API 직접 호출 · 로컬 DB 저장'), findsOneWidget);
-    expect(find.text('Open API 기본 URL'), findsOneWidget);
-    expect(find.text('앱 키'), findsOneWidget);
-    expect(find.text('앱 시크릿'), findsOneWidget);
-    expect(find.text('액세스 토큰'), findsOneWidget);
-    expect(find.text('연결 테스트'), findsOneWidget);
-    expect(find.text('주문 기능 잠금'), findsOneWidget);
+    expect(find.text('벤더 선택'), findsNothing);
+    expect(find.text('벤더 API key'), findsNothing);
+    expect(find.text('토스증권 계정'), findsNothing);
   });
 }

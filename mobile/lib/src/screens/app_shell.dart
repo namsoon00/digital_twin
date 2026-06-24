@@ -81,7 +81,11 @@ class _AppShellState extends State<AppShell> {
       _cryptoAssets.length,
     );
     _economicFeedService =
-        widget.economicFeedService ?? MarketNewsEconomicFeedService();
+        widget.economicFeedService ??
+        StaticEconomicFeedService(
+          widget.repository.economicFeeds,
+          message: '웹 직접 호출 가능한 뉴스 API 미설정 · 로컬 기본 피드',
+        );
     _economicFeedItems = widget.repository.economicFeeds.toList();
     _feedSnapshot = EconomicFeedFetchSnapshot.idle(_economicFeedItems.length);
     _quoteService = AlphaVantageQuoteService();
@@ -3514,17 +3518,22 @@ class DataApiKeyField extends StatelessWidget {
     final hasCurrentKey = currentKey.isNotEmpty;
     final hasSavedVendor = normalizedSavedVendor.isNotEmpty;
     final hasCurrentVendor = currentVendor.isNotEmpty;
+    final supportsTest = DataApiProbeClient.supportsSource(api.id);
+    final requiresKey = DataApiProbeClient.requiresKey(api.id);
+    final isPublicWebApi = !requiresKey && !requiresVendorSelection;
     final hasCurrentConfiguration = requiresVendorSelection
         ? hasCurrentVendor || hasCurrentKey
+        : isPublicWebApi
+        ? true
         : hasCurrentKey;
     final hasUnsavedChanges =
         currentKey != normalizedSavedKey ||
         currentVendor != normalizedSavedVendor;
     final hasSavedConfiguration = requiresVendorSelection
         ? hasSavedVendor
+        : isPublicWebApi
+        ? true
         : hasSavedKey;
-    final supportsTest = DataApiProbeClient.supportsSource(api.id);
-    final requiresKey = DataApiProbeClient.requiresKey(api.id);
     final canTest =
         enabled &&
         !saving &&
@@ -3534,14 +3543,20 @@ class DataApiKeyField extends StatelessWidget {
         (!requiresVendorSelection || hasCurrentVendor);
     final statusLabel = hasUnsavedChanges
         ? (hasCurrentConfiguration ? '변경됨' : '삭제 예정')
+        : isPublicWebApi && !hasSavedKey
+        ? '공개 API'
         : (hasSavedConfiguration ? '저장됨' : '미등록');
     final statusColor = hasUnsavedChanges
         ? AppColors.amber
+        : isPublicWebApi && !hasSavedKey
+        ? AppColors.blue
         : (hasSavedConfiguration ? AppColors.green : AppColors.muted);
     final buttonLabel = saving
         ? '저장 중'
         : hasUnsavedChanges
         ? '입력값 저장'
+        : isPublicWebApi && !hasSavedKey
+        ? '선택 key 없음'
         : hasSavedConfiguration
         ? '저장됨'
         : requiresVendorSelection
@@ -3702,7 +3717,11 @@ class DataApiKeyField extends StatelessWidget {
           obscureText: obscureText,
           keyboardType: TextInputType.visiblePassword,
           decoration: InputDecoration(
-            labelText: requiresVendorSelection ? '벤더 API key' : 'API key',
+            labelText: requiresVendorSelection
+                ? '벤더 API key'
+                : isPublicWebApi
+                ? '선택 API key'
+                : 'API key',
             hintText: requiresVendorSelection ? '선택한 벤더의 API key' : api.keyName,
             border: const OutlineInputBorder(),
           ),
@@ -3756,6 +3775,10 @@ class DataApiKeyField extends StatelessWidget {
         Text(
           hasUnsavedChanges
               ? '저장 버튼을 눌러야 로컬 DB에 반영됩니다.'
+              : isPublicWebApi && hasSavedKey
+              ? '선택 API key가 로컬 DB에 저장되어 있습니다.'
+              : isPublicWebApi
+              ? 'key 없이 브라우저에서 직접 테스트할 수 있습니다.'
               : hasSavedConfiguration
               ? requiresVendorSelection
                     ? '선택한 벤더 구성이 로컬 DB에 저장되어 있습니다.'
@@ -7050,6 +7073,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _testingConnection = false;
   TossDirectApiProbeResult? _probeResult;
 
+  bool get _showServerApiSettings => false;
+
   @override
   void initState() {
     super.initState();
@@ -7164,7 +7189,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       }
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('데이터 API key 로컬 DB에 저장됨')));
+      ).showSnackBar(const SnackBar(content: Text('선택 API key 로컬 DB에 저장됨')));
     } finally {
       if (mounted) {
         setState(() => _savingDataApiKeys = false);
@@ -7248,9 +7273,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final sortedApis = widget.apiSources.toList(growable: false)
       ..sort((a, b) => a.priority.compareTo(b.priority));
     final currentDataApiSettings = _currentDataApiKeySettings();
-    final configuredApiCount = widget.dataApiKeySettings.configuredCount(
-      sortedApis,
-    );
     final unsavedApiCount = sortedApis
         .where(
           (source) =>
@@ -7261,6 +7283,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         )
         .length;
     final effectiveSettings = _currentSettings();
+    final webDirectApiCount = sortedApis.length;
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 20),
@@ -7363,7 +7386,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     child: Padding(
                       padding: const EdgeInsets.all(10),
                       child: Icon(
-                        Icons.key_outlined,
+                        Icons.public_outlined,
                         color: AppColors.blue,
                         size: 22,
                       ),
@@ -7375,12 +7398,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          '데이터 API key',
+                          '웹 직접 호출 API',
                           style: Theme.of(context).textTheme.titleLarge,
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          '등록한 key를 기기 로컬 DB에 저장',
+                          '브라우저에서 프록시 없이 테스트 가능한 공개 API',
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                           style: Theme.of(context).textTheme.bodyMedium,
@@ -7389,7 +7412,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                   ),
                   IconButton(
-                    tooltip: _hideDataApiKeys ? 'API key 보기' : 'API key 숨기기',
+                    tooltip: _hideDataApiKeys
+                        ? '선택 API key 보기'
+                        : '선택 API key 숨기기',
                     onPressed: () =>
                         setState(() => _hideDataApiKeys = !_hideDataApiKeys),
                     icon: Icon(
@@ -7406,13 +7431,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 runSpacing: 8,
                 children: [
                   FlowChip(
-                    label: '$configuredApiCount/${sortedApis.length} 설정',
-                    color: configuredApiCount == sortedApis.length
-                        ? AppColors.green
-                        : AppColors.amber,
+                    label: '$webDirectApiCount개 웹 직접 호출',
+                    color: AppColors.green,
                   ),
-                  FlowChip(label: '읽기 전용 데이터', color: AppColors.blue),
-                  FlowChip(label: '로컬 DB 저장', color: AppColors.charcoal),
+                  FlowChip(label: '프록시 미사용', color: AppColors.blue),
+                  FlowChip(label: '키 저장 선택 사항', color: AppColors.charcoal),
                   if (unsavedApiCount > 0)
                     FlowChip(
                       label: '변경 $unsavedApiCount',
@@ -7439,16 +7462,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       : Icon(
                           unsavedApiCount > 0
                               ? Icons.save_outlined
-                              : configuredApiCount > 0
-                              ? Icons.check
-                              : Icons.key_outlined,
+                              : Icons.check,
                         ),
                   label: Text(
-                    unsavedApiCount > 0
-                        ? '변경된 API key 저장'
-                        : configuredApiCount > 0
-                        ? 'API key 저장됨'
-                        : 'API key 입력 후 저장',
+                    unsavedApiCount > 0 ? '선택 API key 저장' : '저장할 변경 없음',
                   ),
                 ),
               ),
@@ -7488,7 +7505,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
               SizedBox(
                 width: double.infinity,
                 child: FilledButton.icon(
-                  onPressed: widget.dataApiKeysLoaded && !_savingDataApiKeys
+                  onPressed:
+                      widget.dataApiKeysLoaded &&
+                          !_savingDataApiKeys &&
+                          unsavedApiCount > 0
                       ? _saveDataApiKeys
                       : null,
                   icon: _savingDataApiKeys
@@ -7497,268 +7517,273 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           child: CircularProgressIndicator(strokeWidth: 2),
                         )
                       : const Icon(Icons.save_outlined),
-                  label: const Text('데이터 API key 저장'),
+                  label: const Text('선택 API key 저장'),
                 ),
               ),
             ],
           ),
         ),
-        const SizedBox(height: 12),
-        AppCard(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
+        if (_showServerApiSettings) ...[
+          const SizedBox(height: 12),
+          AppCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: AppColors.green.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.all(10),
+                        child: Icon(
+                          Icons.account_balance_outlined,
+                          color: AppColors.green,
+                          size: 22,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '토스증권 계정',
+                            style: Theme.of(context).textTheme.titleLarge,
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            '앱에서 Open API 직접 호출 · 로컬 DB 저장',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.bodyMedium,
+                          ),
+                        ],
+                      ),
+                    ),
+                    Switch(
+                      value: _enabled,
+                      onChanged: widget.settingsLoaded
+                          ? (value) => setState(() => _enabled = value)
+                          : null,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 14),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    FlowChip(
+                      label: _enabled ? '활성' : '비활성',
+                      color: _enabled ? AppColors.green : AppColors.muted,
+                    ),
+                    FlowChip(
+                      label: effectiveSettings.hasApiBaseUrl
+                          ? 'URL 설정'
+                          : 'URL 필요',
+                      color: effectiveSettings.hasApiBaseUrl
+                          ? AppColors.green
+                          : AppColors.amber,
+                    ),
+                    FlowChip(
+                      label: effectiveSettings.hasCredential
+                          ? '인증 설정'
+                          : '인증 필요',
+                      color: effectiveSettings.hasCredential
+                          ? AppColors.green
+                          : AppColors.amber,
+                    ),
+                    FlowChip(
+                      label: _readOnly ? 'read-only' : 'read/write',
+                      color: _readOnly ? AppColors.blue : AppColors.red,
+                    ),
+                    FlowChip(label: '주문 잠금', color: AppColors.red),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: _accountAliasController,
+                  decoration: const InputDecoration(
+                    labelText: '계정 별칭',
+                    hintText: '예: 토스 주계좌',
+                    border: OutlineInputBorder(),
+                  ),
+                  onChanged: (_) => setState(() {}),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _accountHintController,
+                  decoration: const InputDecoration(
+                    labelText: '계좌 식별값',
+                    hintText: '예: 끝 4자리 또는 내부 별칭',
+                    border: OutlineInputBorder(),
+                  ),
+                  onChanged: (_) => setState(() {}),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _accountNumberController,
+                  keyboardType: TextInputType.text,
+                  decoration: const InputDecoration(
+                    labelText: '계좌번호',
+                    hintText: 'Open API에서 쓰는 계좌 식별값',
+                    border: OutlineInputBorder(),
+                  ),
+                  onChanged: (_) => setState(() {}),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _apiBaseUrlController,
+                  keyboardType: TextInputType.url,
+                  decoration: const InputDecoration(
+                    labelText: 'Open API 기본 URL',
+                    hintText: 'https://...',
+                    border: OutlineInputBorder(),
+                  ),
+                  onChanged: (_) => setState(() {}),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _testPathController,
+                  keyboardType: TextInputType.url,
+                  decoration: const InputDecoration(
+                    labelText: '연결 테스트 경로',
+                    hintText: '/v1/...',
+                    border: OutlineInputBorder(),
+                  ),
+                  onChanged: (_) => setState(() {}),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _appKeyController,
+                  obscureText: _hideSecrets,
+                  keyboardType: TextInputType.visiblePassword,
+                  decoration: InputDecoration(
+                    labelText: '앱 키',
+                    border: const OutlineInputBorder(),
+                    suffixIcon: IconButton(
+                      tooltip: _hideSecrets ? '보기' : '숨기기',
+                      icon: Icon(
+                        _hideSecrets
+                            ? Icons.visibility_outlined
+                            : Icons.visibility_off_outlined,
+                      ),
+                      onPressed: () =>
+                          setState(() => _hideSecrets = !_hideSecrets),
+                    ),
+                  ),
+                  onChanged: (_) => setState(() {}),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _appSecretController,
+                  obscureText: _hideSecrets,
+                  keyboardType: TextInputType.visiblePassword,
+                  decoration: const InputDecoration(
+                    labelText: '앱 시크릿',
+                    border: OutlineInputBorder(),
+                  ),
+                  onChanged: (_) => setState(() {}),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _accessTokenController,
+                  obscureText: _hideSecrets,
+                  keyboardType: TextInputType.visiblePassword,
+                  decoration: const InputDecoration(
+                    labelText: '액세스 토큰',
+                    hintText: 'Bearer 토큰 또는 토큰 값',
+                    border: OutlineInputBorder(),
+                  ),
+                  onChanged: (_) => setState(() {}),
+                ),
+                const SizedBox(height: 12),
+                SwitchListTile(
+                  value: _readOnly,
+                  onChanged: (value) => setState(() => _readOnly = value),
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('읽기 전용 연결'),
+                  subtitle: const Text('시세, 잔고, 보유 종목 조회만 허용'),
+                ),
+                SwitchListTile(
+                  value: true,
+                  onChanged: null,
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('주문 기능 잠금'),
+                  subtitle: const Text('자동매매와 주문은 별도 서버 검증 전까지 비활성화'),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  '직접 호출 모드는 API key, secret, token을 이 기기의 로컬 DB에 저장합니다. 중앙 서버로 전송하지 않지만, 웹 배포에서는 브라우저 저장소와 네트워크 요청에 노출될 수 있습니다.',
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
+                const SizedBox(height: 16),
+                if (_probeResult != null) ...[
                   DecoratedBox(
                     decoration: BoxDecoration(
-                      color: AppColors.green.withValues(alpha: 0.12),
+                      color:
+                          (_probeResult!.ok ? AppColors.green : AppColors.red)
+                              .withValues(alpha: 0.1),
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: Padding(
-                      padding: const EdgeInsets.all(10),
-                      child: Icon(
-                        Icons.account_balance_outlined,
-                        color: AppColors.green,
-                        size: 22,
+                      padding: const EdgeInsets.all(12),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Icon(
+                            _probeResult!.ok
+                                ? Icons.check_circle_outline
+                                : Icons.error_outline,
+                            color: _probeResult!.ok
+                                ? AppColors.green
+                                : AppColors.red,
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              _probeResult!.statusLabel,
+                              style: Theme.of(context).textTheme.bodyMedium,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          '토스증권 계정',
-                          style: Theme.of(context).textTheme.titleLarge,
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          '앱에서 Open API 직접 호출 · 로컬 DB 저장',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.bodyMedium,
-                        ),
-                      ],
-                    ),
-                  ),
-                  Switch(
-                    value: _enabled,
-                    onChanged: widget.settingsLoaded
-                        ? (value) => setState(() => _enabled = value)
+                  const SizedBox(height: 12),
+                ],
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: widget.settingsLoaded && !_testingConnection
+                        ? _testConnection
                         : null,
-                  ),
-                ],
-              ),
-              const SizedBox(height: 14),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  FlowChip(
-                    label: _enabled ? '활성' : '비활성',
-                    color: _enabled ? AppColors.green : AppColors.muted,
-                  ),
-                  FlowChip(
-                    label: effectiveSettings.hasApiBaseUrl
-                        ? 'URL 설정'
-                        : 'URL 필요',
-                    color: effectiveSettings.hasApiBaseUrl
-                        ? AppColors.green
-                        : AppColors.amber,
-                  ),
-                  FlowChip(
-                    label: effectiveSettings.hasCredential ? '인증 설정' : '인증 필요',
-                    color: effectiveSettings.hasCredential
-                        ? AppColors.green
-                        : AppColors.amber,
-                  ),
-                  FlowChip(
-                    label: _readOnly ? 'read-only' : 'read/write',
-                    color: _readOnly ? AppColors.blue : AppColors.red,
-                  ),
-                  FlowChip(label: '주문 잠금', color: AppColors.red),
-                ],
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: _accountAliasController,
-                decoration: const InputDecoration(
-                  labelText: '계정 별칭',
-                  hintText: '예: 토스 주계좌',
-                  border: OutlineInputBorder(),
-                ),
-                onChanged: (_) => setState(() {}),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _accountHintController,
-                decoration: const InputDecoration(
-                  labelText: '계좌 식별값',
-                  hintText: '예: 끝 4자리 또는 내부 별칭',
-                  border: OutlineInputBorder(),
-                ),
-                onChanged: (_) => setState(() {}),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _accountNumberController,
-                keyboardType: TextInputType.text,
-                decoration: const InputDecoration(
-                  labelText: '계좌번호',
-                  hintText: 'Open API에서 쓰는 계좌 식별값',
-                  border: OutlineInputBorder(),
-                ),
-                onChanged: (_) => setState(() {}),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _apiBaseUrlController,
-                keyboardType: TextInputType.url,
-                decoration: const InputDecoration(
-                  labelText: 'Open API 기본 URL',
-                  hintText: 'https://...',
-                  border: OutlineInputBorder(),
-                ),
-                onChanged: (_) => setState(() {}),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _testPathController,
-                keyboardType: TextInputType.url,
-                decoration: const InputDecoration(
-                  labelText: '연결 테스트 경로',
-                  hintText: '/v1/...',
-                  border: OutlineInputBorder(),
-                ),
-                onChanged: (_) => setState(() {}),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _appKeyController,
-                obscureText: _hideSecrets,
-                keyboardType: TextInputType.visiblePassword,
-                decoration: InputDecoration(
-                  labelText: '앱 키',
-                  border: const OutlineInputBorder(),
-                  suffixIcon: IconButton(
-                    tooltip: _hideSecrets ? '보기' : '숨기기',
-                    icon: Icon(
-                      _hideSecrets
-                          ? Icons.visibility_outlined
-                          : Icons.visibility_off_outlined,
-                    ),
-                    onPressed: () =>
-                        setState(() => _hideSecrets = !_hideSecrets),
+                    icon: _testingConnection
+                        ? const SizedBox.square(
+                            dimension: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.cloud_sync_outlined),
+                    label: const Text('연결 테스트'),
                   ),
                 ),
-                onChanged: (_) => setState(() {}),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _appSecretController,
-                obscureText: _hideSecrets,
-                keyboardType: TextInputType.visiblePassword,
-                decoration: const InputDecoration(
-                  labelText: '앱 시크릿',
-                  border: OutlineInputBorder(),
-                ),
-                onChanged: (_) => setState(() {}),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _accessTokenController,
-                obscureText: _hideSecrets,
-                keyboardType: TextInputType.visiblePassword,
-                decoration: const InputDecoration(
-                  labelText: '액세스 토큰',
-                  hintText: 'Bearer 토큰 또는 토큰 값',
-                  border: OutlineInputBorder(),
-                ),
-                onChanged: (_) => setState(() {}),
-              ),
-              const SizedBox(height: 12),
-              SwitchListTile(
-                value: _readOnly,
-                onChanged: (value) => setState(() => _readOnly = value),
-                contentPadding: EdgeInsets.zero,
-                title: const Text('읽기 전용 연결'),
-                subtitle: const Text('시세, 잔고, 보유 종목 조회만 허용'),
-              ),
-              SwitchListTile(
-                value: true,
-                onChanged: null,
-                contentPadding: EdgeInsets.zero,
-                title: const Text('주문 기능 잠금'),
-                subtitle: const Text('자동매매와 주문은 별도 서버 검증 전까지 비활성화'),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                '직접 호출 모드는 API key, secret, token을 이 기기의 로컬 DB에 저장합니다. 중앙 서버로 전송하지 않지만, 웹 배포에서는 브라우저 저장소와 네트워크 요청에 노출될 수 있습니다.',
-                style: Theme.of(context).textTheme.bodyMedium,
-              ),
-              const SizedBox(height: 16),
-              if (_probeResult != null) ...[
-                DecoratedBox(
-                  decoration: BoxDecoration(
-                    color: (_probeResult!.ok ? AppColors.green : AppColors.red)
-                        .withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Icon(
-                          _probeResult!.ok
-                              ? Icons.check_circle_outline
-                              : Icons.error_outline,
-                          color: _probeResult!.ok
-                              ? AppColors.green
-                              : AppColors.red,
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Text(
-                            _probeResult!.statusLabel,
-                            style: Theme.of(context).textTheme.bodyMedium,
-                          ),
-                        ),
-                      ],
-                    ),
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    onPressed: widget.settingsLoaded ? _save : null,
+                    icon: const Icon(Icons.save_outlined),
+                    label: const Text('저장'),
                   ),
                 ),
-                const SizedBox(height: 12),
               ],
-              SizedBox(
-                width: double.infinity,
-                child: OutlinedButton.icon(
-                  onPressed: widget.settingsLoaded && !_testingConnection
-                      ? _testConnection
-                      : null,
-                  icon: _testingConnection
-                      ? const SizedBox.square(
-                          dimension: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.cloud_sync_outlined),
-                  label: const Text('연결 테스트'),
-                ),
-              ),
-              const SizedBox(height: 10),
-              SizedBox(
-                width: double.infinity,
-                child: FilledButton.icon(
-                  onPressed: widget.settingsLoaded ? _save : null,
-                  icon: const Icon(Icons.save_outlined),
-                  label: const Text('저장'),
-                ),
-              ),
-            ],
+            ),
           ),
-        ),
+        ],
       ],
     );
   }

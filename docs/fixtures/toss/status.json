@@ -1,0 +1,10 @@
+{
+  "connected": true,
+  "mode": "read_only",
+  "baseUrl": "https://openapi.tossinvest.com",
+  "accountSeq": "1",
+  "accountDisplay": "****8901",
+  "tokenExpiresAt": "2026-06-25T12:00:00+09:00",
+  "ordersEnabled": false,
+  "lastProbeAt": "2026-06-25T09:05:00+09:00"
+}

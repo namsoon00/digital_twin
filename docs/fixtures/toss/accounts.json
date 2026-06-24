@@ -1,0 +1,11 @@
+{
+  "accounts": [
+    {
+      "id": "1",
+      "displayNumber": "****8901",
+      "type": "BROKERAGE",
+      "isDefault": true
+    }
+  ],
+  "syncedAt": "2026-06-25T09:05:00+09:00"
+}

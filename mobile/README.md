@@ -18,7 +18,7 @@ flutter run
 flutter run --dart-define=ALPHA_VANTAGE_API_KEY=<your-key>
 ```
 
-앱 실행 후 `설정` 탭에서도 필요한 데이터 API key를 모두 입력할 수 있습니다. Alpha Vantage, 토스증권 Open API, FRED, CoinGecko, DefiLlama, ETF/Fund Flow API, 한국 투자자별 수급 API가 같은 화면에 표시되며, 공급자/커버리지/사용 화면/key 발급 위치/문서 URL은 읽기 전용 메타데이터로 보입니다. 앱은 기본 데이터 조회용 key 문자열만 기기 로컬 DB에 저장하고, Alpha Vantage key는 대시보드 시세 조회에 바로 사용합니다. GitHub Pages 배포판은 중앙 서버 DB로 key를 전송하지 않습니다.
+앱 실행 후 `설정` 탭에서는 웹 클라이언트에서 직접 호출 가능한 데이터 API를 중심으로 연결 상태를 확인합니다. 현재 우선 대상은 CoinGecko와 DefiLlama이며, GitHub Pages 배포판은 토스증권 secret이나 계좌 토큰을 브라우저에 저장하지 않습니다.
 
 ## iOS 빌드 준비
 
@@ -48,21 +48,21 @@ flutter build web --release --base-href /digital_twin/ --dart-define=ALPHA_VANTA
 `main`에 푸시하면 `.github/workflows/pages.yml`이 같은 빌드를 실행하고 `gh-pages` 브랜치에 정적 파일을 배포합니다.
 배포 환경에서는 GitHub repository secret `ALPHA_VANTAGE_API_KEY`를 사용합니다.
 
-## 토스증권 설정
+## 토스증권 연동
 
-앱의 `설정` 탭에서 토스증권 Open API 직접 호출 옵션을 켤 수 있습니다.
+토스증권 Open API는 Flutter Web에서 직접 호출하지 않고 로컬 BFF를 통해 연결합니다.
 
-- 저장 항목: 계정 별칭, 계좌 식별값, Open API 기본 URL, 연결 테스트 경로, 앱 키, 앱 시크릿, 액세스 토큰, 읽기 전용 여부
-- 저장 위치: 기기 로컬 DB
-- 호출 방식: 앱에서 REST API로 직접 호출하며, `Authorization: Bearer <token>`, `appkey`, `appsecret` 헤더를 전송합니다.
-- 주의 사항: 웹 배포에서는 키와 토큰이 브라우저 저장소와 네트워크 요청에 노출될 수 있습니다. 개인 기기 설치용으로 먼저 사용하세요.
-- 주문 기능: 서버 검증 전까지 앱에서 잠금 상태
+- 공식 API: OAuth 2.0 Client Credentials, `https://openapi.tossinvest.com`
+- 브라우저 정책: `client_secret`, access token, `X-Tossinvest-Account` 헤더를 브라우저에 저장하지 않음
+- 1단계 산출물: `docs/toss-api-contract.md`
+- mock fixture: `docs/fixtures/toss/`
+- 주문 기능: read-only 연결 검증 이후에도 서버 플래그가 켜질 때까지 잠금 상태
 
 ## 세계 자금 흐름
 
 앱의 `자금` 탭은 세계 돈의 이동을 자산군 단위로 보여줍니다.
 
-- 필요 API 맵: Alpha Vantage, 토스증권 Open API, FRED, CoinGecko, DefiLlama, ETF/Fund Flow API, 한국 투자자별 수급 API
+- 필요 API 맵: CoinGecko, DefiLlama, 이후 BFF 기반 토스증권 Open API
 - 종합 그래프: 캔들형 종합 흐름 지수, 유동성 막대, AI/코인/금/KOSPI/리스크 라인을 하나의 그래프에 표시
 - 보기 단위: 일별, 주별, 월별 전환
 - 데이터 출처: 실제 API 데이터와 mock 데이터를 배지로 구분

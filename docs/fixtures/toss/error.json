@@ -1,0 +1,9 @@
+{
+  "error": {
+    "requestId": "local-demo-request",
+    "code": "toss-auth-required",
+    "message": "토스증권 연결 인증이 필요합니다.",
+    "retryable": false,
+    "source": "digital-twin-bff"
+  }
+}

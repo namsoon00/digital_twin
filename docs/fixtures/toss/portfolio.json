@@ -1,0 +1,52 @@
+{
+  "accountId": "1",
+  "totalPurchaseAmount": {
+    "KRW": "780000",
+    "USD": "420.00"
+  },
+  "marketValue": {
+    "KRW": "864000",
+    "USD": "486.20"
+  },
+  "profitLoss": {
+    "KRW": "84000",
+    "USD": "66.20"
+  },
+  "dailyProfitLoss": {
+    "KRW": "-12000",
+    "USD": "4.15"
+  },
+  "positions": [
+    {
+      "accountId": "1",
+      "symbol": "005930",
+      "name": "삼성전자",
+      "marketCountry": "KR",
+      "currency": "KRW",
+      "quantity": "12",
+      "lastPrice": "72000",
+      "averagePurchasePrice": "65000",
+      "marketValue": "864000",
+      "profitLoss": "84000",
+      "profitLossRate": "10.7692",
+      "dailyProfitLoss": "-12000",
+      "syncedAt": "2026-06-25T09:05:00+09:00"
+    },
+    {
+      "accountId": "1",
+      "symbol": "AAPL",
+      "name": "Apple Inc.",
+      "marketCountry": "US",
+      "currency": "USD",
+      "quantity": "2",
+      "lastPrice": "243.10",
+      "averagePurchasePrice": "210.00",
+      "marketValue": "486.20",
+      "profitLoss": "66.20",
+      "profitLossRate": "15.7619",
+      "dailyProfitLoss": "4.15",
+      "syncedAt": "2026-06-25T09:05:00+09:00"
+    }
+  ],
+  "syncedAt": "2026-06-25T09:05:00+09:00"
+}

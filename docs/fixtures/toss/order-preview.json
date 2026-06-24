@@ -1,0 +1,18 @@
+{
+  "previewId": "preview_demo_001",
+  "accountId": "1",
+  "symbol": "AAPL",
+  "side": "BUY",
+  "orderType": "LIMIT",
+  "timeInForce": "DAY",
+  "quantity": "1",
+  "price": "185.50",
+  "currency": "USD",
+  "estimatedOrderAmount": "185.50",
+  "estimatedCommission": "0.28",
+  "warnings": [
+    "주문 기능은 서버 플래그가 켜질 때까지 잠금 상태입니다."
+  ],
+  "ordersEnabled": false,
+  "createdAt": "2026-06-25T09:05:00+09:00"
+}

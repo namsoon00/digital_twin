@@ -1,0 +1,14 @@
+{
+  "accountId": "1",
+  "buyingPower": [
+    {
+      "currency": "KRW",
+      "cashBuyingPower": "1250000"
+    },
+    {
+      "currency": "USD",
+      "cashBuyingPower": "320.50"
+    }
+  ],
+  "syncedAt": "2026-06-25T09:05:00+09:00"
+}

@@ -123,6 +123,38 @@ h3 {
   color: var(--amber);
 }
 
+.status-pill.mock {
+  border-color: #d6c6e8;
+  background: var(--violet-soft);
+  color: var(--violet);
+}
+
+.mode-toggle {
+  display: inline-flex;
+  min-height: 38px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.mode-toggle button {
+  min-width: 72px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  padding: 0 10px;
+  font-size: 13px;
+  font-weight: 850;
+  cursor: pointer;
+}
+
+.mode-toggle button.active {
+  background: var(--ink);
+  color: #ffffff;
+}
+
 .icon-button,
 .open-link {
   width: 38px;

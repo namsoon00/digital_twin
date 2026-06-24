@@ -22,10 +22,21 @@ X_BEARER_TOKEN=... # 선택
 X_SEARCH_QUERY=(market OR stocks OR semiconductor OR Fed OR KOSPI OR dollar OR AI) -is:retweet lang:en
 ```
 
+## Mock 확인
+
+웹 상단의 `Mock` 전환 버튼을 누르면 토스, 뉴스, X를 모두 고정 mock 데이터로 표시합니다. 실환경 변수가 설정되어 있어도 mock 모드에서는 외부 API를 호출하지 않습니다.
+
+API만 확인할 때는 아래처럼 호출합니다.
+
+```bash
+curl http://127.0.0.1:3000/api/flow-lens?mock=1
+```
+
 ## 앱 구조
 
 - `public/`: Exit Lens 웹 대시보드
 - `GET /api/flow-lens`: 토스 계좌/보유자산, 관심 종목, 뉴스/포스팅 테마, 종목별 매도 압력, 점검 체크리스트 집계
+- `GET /api/flow-lens?mock=1`: 웹 검증용 고정 mock 스냅샷
 - `server.js`: 토스 OAuth 토큰 발급, 계좌/보유자산 조회, 관심 종목 파싱, 뉴스 피드와 X recent search 수집, 매도 판단 fallback 생성
 
 토스와 X 호출은 서버에서만 수행합니다. 브라우저에 `client_secret`, access token, `X-Tossinvest-Account`, `X_BEARER_TOKEN` 값이 내려가지 않습니다.

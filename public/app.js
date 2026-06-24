@@ -5,7 +5,8 @@
     refreshing: false,
     error: "",
     snapshot: null,
-    selectedTheme: "all"
+    selectedTheme: "all",
+    dataMode: initialDataMode()
   };
 
   function escapeHtml(value) {
@@ -27,6 +28,29 @@
         return payload;
       });
     });
+  }
+
+  function initialDataMode() {
+    var params = new URLSearchParams(window.location.search);
+    var queryMode = String(params.get("mock") || params.get("mode") || "").toLowerCase();
+    if (queryMode === "1" || queryMode === "true" || queryMode === "mock") return "mock";
+    try {
+      return window.localStorage.getItem("exitLensDataMode") === "mock" ? "mock" : "live";
+    } catch (error) {
+      return "live";
+    }
+  }
+
+  function persistDataMode(value) {
+    try {
+      window.localStorage.setItem("exitLensDataMode", value);
+    } catch (error) {
+      // Storage can be unavailable in private contexts; the in-memory state is enough.
+    }
+  }
+
+  function flowLensPath() {
+    return state.dataMode === "mock" ? "/api/flow-lens?mock=1" : "/api/flow-lens";
   }
 
   function formatClock(value) {
@@ -98,7 +122,7 @@
     state.error = "";
     render();
 
-    return requestJson("/api/flow-lens")
+    return requestJson(flowLensPath())
       .then(function (snapshot) {
         state.snapshot = snapshot;
         state.error = "";
@@ -163,6 +187,8 @@
   function renderDashboard(snapshot) {
     var news = filteredNews(snapshot);
     var toss = snapshot.toss || { mode: "demo" };
+    var modeLabel = snapshot.mock ? "Mock" : (toss.mode === "live" ? "Toss live" : "Demo");
+    var modeClass = snapshot.mock ? "mock" : (toss.mode === "live" ? "live" : "demo");
     return [
       '<main class="shell">',
       '<section class="topbar">',
@@ -172,7 +198,11 @@
       '<p class="subtle">' + escapeHtml(snapshot.headline) + " · " + escapeHtml(formatClock(snapshot.generatedAt)) + "</p>",
       '</div>',
       '<div class="toolbar">',
-      '<span class="status-pill ' + (toss.mode === "live" ? "live" : "demo") + '">' + escapeHtml(toss.mode === "live" ? "Toss live" : "Demo") + "</span>",
+      '<div class="mode-toggle" role="group" aria-label="데이터 모드">',
+      '<button class="' + (state.dataMode === "live" ? "active" : "") + '" data-mode="live">실데이터</button>',
+      '<button class="' + (state.dataMode === "mock" ? "active" : "") + '" data-mode="mock">Mock</button>',
+      '</div>',
+      '<span class="status-pill ' + modeClass + '">' + escapeHtml(modeLabel) + "</span>",
       '<button class="icon-button" data-action="refresh" title="새로고침">' + (state.refreshing ? "…" : "↻") + "</button>",
       '</div>',
       '</section>',
@@ -228,6 +258,7 @@
       '</div>',
       '</div>',
       '<div class="source-stack">',
+      '<div class="source-row"><span>표시 모드</span><strong>' + escapeHtml(snapshot.mock ? "Mock 데이터" : "기본 데이터") + '</strong></div>',
       '<div class="source-row"><span>토스</span><strong>' + escapeHtml(toss.status || "-") + '</strong></div>',
       '<div class="source-row"><span>계좌</span><strong>' + escapeHtml(toss.account && toss.account.displayNumber || "-") + '</strong></div>',
       '<div class="source-row"><span>보유/관심</span><strong>' + escapeHtml(exitLens.holdingCount || 0) + ' / ' + escapeHtml(exitLens.watchCount || 0) + '</strong></div>',
@@ -458,6 +489,18 @@
         if (!state.refreshing) load();
       });
     }
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-mode]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        var nextMode = button.getAttribute("data-mode") || "live";
+        if (nextMode === state.dataMode || state.refreshing) return;
+        state.dataMode = nextMode === "mock" ? "mock" : "live";
+        state.selectedTheme = "all";
+        state.snapshot = null;
+        persistDataMode(state.dataMode);
+        load();
+      });
+    });
 
     Array.prototype.slice.call(app.querySelectorAll("[data-theme]")).forEach(function (button) {
       button.addEventListener("click", function () {

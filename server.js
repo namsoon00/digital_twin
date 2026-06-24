@@ -2021,7 +2021,8 @@ function buildExitLens(toss, portfolio, themes, newsItems, socialPosts) {
   };
 }
 
-function buildFlowLensSnapshot(toss, newsItems, socialPosts) {
+function buildFlowLensSnapshot(toss, newsItems, socialPosts, options) {
+  options = options || {};
   const themes = analyzeThemes(newsItems, socialPosts);
   const portfolio = analyzePortfolio(toss.positions || []);
   const riskTheme = themes.find(function (theme) { return theme.id === "risk"; }) || { count: 0 };
@@ -2036,6 +2037,8 @@ function buildFlowLensSnapshot(toss, newsItems, socialPosts) {
   const leadTheme = themes[0] || { label: "대기", headline: "뉴스 대기" };
   return {
     generatedAt: now(),
+    dataMode: options.mock ? "mock" : "live",
+    mock: Boolean(options.mock),
     headline: exitLens.headline,
     exitScore: exitLens.overallPressure,
     flowScore: Math.round(flowScore),
@@ -2061,7 +2064,27 @@ function buildFlowLensSnapshot(toss, newsItems, socialPosts) {
   };
 }
 
-async function flowLensSnapshot() {
+function mockFlowLensSnapshot() {
+  const toss = demoTossPortfolio("웹 mock 데이터");
+  toss.mode = "mock";
+  toss.status = "웹 mock 데이터";
+  return buildFlowLensSnapshot(
+    toss,
+    demoNewsItems("웹 mock 데이터"),
+    demoSocialPosts("웹 mock 데이터"),
+    { mock: true }
+  );
+}
+
+function wantsMockFlowLens(query) {
+  const value = String(query.mock || query.mode || "").trim().toLowerCase();
+  return value === "1" || value === "true" || value === "mock";
+}
+
+async function flowLensSnapshot(options) {
+  options = options || {};
+  if (options.mock) return mockFlowLensSnapshot();
+
   const newsPromise = Promise.race([
     fetchFlowNews(),
     new Promise(function (resolve) {
@@ -2079,7 +2102,7 @@ async function flowLensSnapshot() {
     })
   ]);
   const results = await Promise.all([fetchTossPortfolio(), newsPromise, socialPromise]);
-  return buildFlowLensSnapshot(results[0], results[1], results[2]);
+  return buildFlowLensSnapshot(results[0], results[1], results[2], { mock: false });
 }
 
 async function api(req, res, pathname) {
@@ -2144,7 +2167,8 @@ async function api(req, res, pathname) {
   }
 
   if (req.method === "GET" && pathname === "/api/flow-lens") {
-    const payload = await flowLensSnapshot();
+    const parsedQuery = url.parse(req.url, true).query;
+    const payload = await flowLensSnapshot({ mock: wantsMockFlowLens(parsedQuery) });
     return json(res, 200, payload);
   }
 

@@ -1,14 +1,19 @@
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'local_settings_database.dart';
+import 'secure_settings_store.dart';
 import '../models/market_models.dart';
 import '../theme/app_theme.dart';
 
 class SettingsRepository {
-  SettingsRepository({LocalSettingsDatabase? database})
-    : _database = database ?? const LocalSettingsDatabase();
+  SettingsRepository({
+    LocalSettingsDatabase? database,
+    SecureSettingsStore? secureStore,
+  }) : _database = database ?? const LocalSettingsDatabase(),
+       _secureStore = secureStore ?? const SecureSettingsStore();
 
   final LocalSettingsDatabase _database;
+  final SecureSettingsStore _secureStore;
 
   static const _themePreferenceKey = 'app.themeMode';
   static const _legacyDataApiKeyPrefix = 'dataApi.key.';
@@ -119,24 +124,15 @@ class SettingsRepository {
       LocalSettingsDatabase.tossStorageKey('apiBaseUrl'),
       _legacyTossBackendUrlKey,
     );
-    final appKey =
-        await _readStringWithLegacy(
-          LocalSettingsDatabase.tossStorageKey('appKey'),
-          _legacyTossAppKeyKey,
-        ) ??
-        '';
-    final appSecret =
-        await _readStringWithLegacy(
-          LocalSettingsDatabase.tossStorageKey('appSecret'),
-          _legacyTossAppSecretKey,
-        ) ??
-        '';
-    final accessToken =
-        await _readStringWithLegacy(
-          LocalSettingsDatabase.tossStorageKey('accessToken'),
-          _legacyTossAccessTokenKey,
-        ) ??
-        '';
+    final appKey = await _readTossSecret('appKey', _legacyTossAppKeyKey);
+    final appSecret = await _readTossSecret(
+      'appSecret',
+      _legacyTossAppSecretKey,
+    );
+    final accessToken = await _readTossSecret(
+      'accessToken',
+      _legacyTossAccessTokenKey,
+    );
     final accountNumber =
         await _readStringWithLegacy(
           LocalSettingsDatabase.tossStorageKey('accountNumber'),
@@ -194,16 +190,15 @@ class SettingsRepository {
       LocalSettingsDatabase.tossStorageKey('apiBaseUrl'),
       settings.apiBaseUrl,
     );
-    await _database.writeString(
-      LocalSettingsDatabase.tossStorageKey('appKey'),
-      settings.appKey,
-    );
-    await _database.writeString(
-      LocalSettingsDatabase.tossStorageKey('appSecret'),
+    await _writeTossSecret('appKey', _legacyTossAppKeyKey, settings.appKey);
+    await _writeTossSecret(
+      'appSecret',
+      _legacyTossAppSecretKey,
       settings.appSecret,
     );
-    await _database.writeString(
-      LocalSettingsDatabase.tossStorageKey('accessToken'),
+    await _writeTossSecret(
+      'accessToken',
+      _legacyTossAccessTokenKey,
       settings.accessToken,
     );
     await _database.writeString(
@@ -235,6 +230,48 @@ class SettingsRepository {
       await _database.writeString(key, legacyValue);
     }
     return legacyValue;
+  }
+
+  Future<String> _readTossSecret(String field, String legacyKey) async {
+    final secureKey = SecureSettingsStore.tossSecretKey(field);
+    final stored = await _secureStore.readString(secureKey);
+    if (stored != null) {
+      return stored;
+    }
+
+    final localKey = LocalSettingsDatabase.tossStorageKey(field);
+    final localValue = await _database.readString(localKey);
+    if (localValue != null) {
+      await _writeTossSecret(field, legacyKey, localValue);
+      return localValue;
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    final legacyValue = prefs.getString(legacyKey);
+    if (legacyValue != null) {
+      await _writeTossSecret(field, legacyKey, legacyValue);
+      return legacyValue;
+    }
+    return '';
+  }
+
+  Future<void> _writeTossSecret(
+    String field,
+    String legacyKey,
+    String value,
+  ) async {
+    final secureKey = SecureSettingsStore.tossSecretKey(field);
+    final normalized = value.trim();
+    if (normalized.isEmpty) {
+      await _secureStore.remove(secureKey);
+    } else {
+      await _secureStore.writeString(secureKey, normalized);
+    }
+
+    await _database.remove(LocalSettingsDatabase.tossStorageKey(field));
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(legacyKey);
   }
 
   Future<bool?> _readBoolWithLegacy(String key, String legacyKey) async {

@@ -2,7 +2,9 @@
 
 Last reviewed: 2026-06-25 KST
 
-This document defines the first implementation contract for integrating Toss Securities Open API into Digiter Twin. The app must not call Toss directly from Flutter Web. The browser calls only this project's backend-for-frontend (BFF), and the BFF calls Toss with server-side credentials.
+This document defines the first implementation contract for integrating Toss Securities Open API into Digiter Twin.
+
+Current product direction: personal native app first. The user enters their own Toss Open API credentials, and the native app stores sensitive values in the device secure storage layer. Flutter Web still must not call Toss directly.
 
 ## Official Sources
 
@@ -32,14 +34,29 @@ The official OpenAPI document was available as OpenAPI `3.1.0`, API title `í† ìŠ
 
 - Flutter Web never stores `client_secret`, Toss access tokens, or account headers.
 - Flutter Web never calls `https://openapi.tossinvest.com` directly.
-- The BFF owns OAuth token issuance, token caching, Toss account selection, rate-limit handling, and error normalization.
-- Phase 2 starts read-only. Order endpoints remain locked behind an explicit server-side feature flag.
+- Personal native builds may call Toss directly after the user enters their own `client_id` and `client_secret`.
+- Native builds store `client_id`, `client_secret`, and optional access tokens in iOS Keychain / Android Keystore through `flutter_secure_storage`.
+- The app owns OAuth token issuance, token caching, Toss account selection, rate-limit handling, and error normalization for personal native mode.
+- Public web or multi-user service mode must use the BFF contract below instead of native direct calls.
+- Phase 2 starts read-only. Order endpoints remain locked behind an explicit feature flag.
 - The app treats every decimal money/quantity value as a string at the API boundary to avoid precision loss.
 - The app accepts unknown enum values from Toss and renders them as unsupported/unknown instead of crashing.
 
+## Personal Native Flow
+
+1. User installs the app on a trusted personal iOS/Android device.
+2. User enters Toss Open API `client_id` and `client_secret`.
+3. The app stores sensitive values in device secure storage, not SharedPreferences.
+4. The app calls `POST /oauth2/token` and receives an access token.
+5. The app calls read-only Toss endpoints first, starting with `GET /api/v1/accounts`.
+6. Account-scoped calls add `X-Tossinvest-Account: {accountSeq}`.
+7. Order creation, modification, and cancellation stay disabled until a separate order-safety phase.
+
+Personal native mode reduces shared-service risk but does not make secrets impossible to steal from a compromised device. Users must be able to delete local credentials and revoke/reissue Toss credentials.
+
 ## BFF Endpoint Contract
 
-All endpoints below are served by Digiter Twin, not Toss. Paths are intentionally app-oriented so the frontend does not depend on Toss raw schema names.
+The BFF contract remains the target for Flutter Web, public previews, or any future multi-user service. All endpoints below are served by Digiter Twin, not Toss. Paths are intentionally app-oriented so the frontend does not depend on Toss raw schema names.
 
 | Method | Path | Purpose | Toss mapping | Phase |
 | --- | --- | --- | --- | --- |
@@ -204,14 +221,15 @@ These fixtures are safe demo data and should be used for Phase 2 UI/BFF tests be
 - Official source-of-truth URLs are captured.
 - Auth, account header, base URL, endpoint groups, and rate limits are documented.
 - Browser direct Toss calls are rejected as an architecture decision.
+- Personal native direct calls are allowed only with user-provided credentials stored in device secure storage.
 - BFF endpoint contract is defined before implementation.
 - Read-only first behavior and order lock are documented.
 - Internal normalized fixtures are committed.
 
 ## Phase 2 Entry Checklist
 
-- Decide local secret storage mechanism for BFF credentials.
-- Add server env/config keys without committing secrets.
-- Implement BFF token cache and `/api/toss/probe`.
-- Replace hidden Flutter Toss direct settings with a BFF connection status UI.
+- Store personal native credentials in device secure storage.
+- Keep Toss settings hidden in Flutter Web builds.
+- Implement official OAuth token issuance for `/oauth2/token`.
+- Probe `GET /api/v1/accounts` before any account-scoped endpoint.
 - Add tests using the fixture set first, then add optional real-credential smoke tests guarded by env vars.

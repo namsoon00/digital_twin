@@ -50,9 +50,10 @@ flutter build web --release --base-href /digital_twin/ --dart-define=ALPHA_VANTA
 
 ## 토스증권 연동
 
-토스증권 Open API는 Flutter Web에서 직접 호출하지 않고 로컬 BFF를 통해 연결합니다.
+토스증권 Open API는 개인용 네이티브 앱에서 사용자가 직접 입력한 credentials로 연결합니다. Flutter Web에서는 토스 직접 연결 UI를 숨기고, 공개 웹/다중 사용자 서비스가 필요해지면 BFF 구조로 전환합니다.
 
 - 공식 API: OAuth 2.0 Client Credentials, `https://openapi.tossinvest.com`
+- 저장 정책: `client_id`, `client_secret`, access token은 iOS Keychain/Android Keystore 계층에 저장
 - 브라우저 정책: `client_secret`, access token, `X-Tossinvest-Account` 헤더를 브라우저에 저장하지 않음
 - 1단계 산출물: `docs/toss-api-contract.md`
 - mock fixture: `docs/fixtures/toss/`

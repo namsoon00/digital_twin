@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -7,6 +8,7 @@ import '../data/data_api_probe_service.dart';
 import '../data/economic_feed_service.dart';
 import '../data/flow_repository.dart';
 import '../data/market_data_api.dart';
+import '../data/secure_settings_store.dart';
 import '../data/settings_repository.dart';
 import '../data/toss_direct_api.dart';
 import '../models/market_models.dart';
@@ -7073,7 +7075,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _testingConnection = false;
   TossDirectApiProbeResult? _probeResult;
 
-  bool get _showServerApiSettings => false;
+  bool get _showServerApiSettings => !kIsWeb;
 
   @override
   void initState() {
@@ -7248,7 +7250,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
     ScaffoldMessenger.of(
       context,
-    ).showSnackBar(const SnackBar(content: Text('토스증권 설정 저장됨')));
+    ).showSnackBar(const SnackBar(content: Text('토스증권 보안 설정 저장됨')));
   }
 
   Future<void> _testConnection() async {
@@ -7556,8 +7558,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           ),
                           const SizedBox(height: 4),
                           Text(
-                            '앱에서 Open API 직접 호출 · 로컬 DB 저장',
-                            maxLines: 1,
+                            '개인용 네이티브 앱 · ${SecureSettingsStore.storageLabel}',
+                            maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                             style: Theme.of(context).textTheme.bodyMedium,
                           ),
@@ -7597,10 +7599,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           ? AppColors.green
                           : AppColors.amber,
                     ),
-                    FlowChip(
-                      label: _readOnly ? 'read-only' : 'read/write',
-                      color: _readOnly ? AppColors.blue : AppColors.red,
-                    ),
+                    FlowChip(label: '네이티브 전용', color: AppColors.blue),
                     FlowChip(label: '주문 잠금', color: AppColors.red),
                   ],
                 ),
@@ -7629,8 +7628,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   controller: _accountNumberController,
                   keyboardType: TextInputType.text,
                   decoration: const InputDecoration(
-                    labelText: '계좌번호',
-                    hintText: 'Open API에서 쓰는 계좌 식별값',
+                    labelText: '계좌 식별값(accountSeq)',
+                    hintText: '계좌/자산 API에서 쓰는 X-Tossinvest-Account 값',
                     border: OutlineInputBorder(),
                   ),
                   onChanged: (_) => setState(() {}),
@@ -7641,7 +7640,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   keyboardType: TextInputType.url,
                   decoration: const InputDecoration(
                     labelText: 'Open API 기본 URL',
-                    hintText: 'https://...',
+                    hintText: 'https://openapi.tossinvest.com',
                     border: OutlineInputBorder(),
                   ),
                   onChanged: (_) => setState(() {}),
@@ -7652,7 +7651,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   keyboardType: TextInputType.url,
                   decoration: const InputDecoration(
                     labelText: '연결 테스트 경로',
-                    hintText: '/v1/...',
+                    hintText: '/api/v1/accounts',
                     border: OutlineInputBorder(),
                   ),
                   onChanged: (_) => setState(() {}),
@@ -7663,7 +7662,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   obscureText: _hideSecrets,
                   keyboardType: TextInputType.visiblePassword,
                   decoration: InputDecoration(
-                    labelText: '앱 키',
+                    labelText: 'client_id',
                     border: const OutlineInputBorder(),
                     suffixIcon: IconButton(
                       tooltip: _hideSecrets ? '보기' : '숨기기',
@@ -7684,7 +7683,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   obscureText: _hideSecrets,
                   keyboardType: TextInputType.visiblePassword,
                   decoration: const InputDecoration(
-                    labelText: '앱 시크릿',
+                    labelText: 'client_secret',
                     border: OutlineInputBorder(),
                   ),
                   onChanged: (_) => setState(() {}),
@@ -7695,8 +7694,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   obscureText: _hideSecrets,
                   keyboardType: TextInputType.visiblePassword,
                   decoration: const InputDecoration(
-                    labelText: '액세스 토큰',
-                    hintText: 'Bearer 토큰 또는 토큰 값',
+                    labelText: '수동 access token(선택)',
+                    hintText: 'client_id/client_secret 대신 임시 토큰으로 테스트할 때만 입력',
                     border: OutlineInputBorder(),
                   ),
                   onChanged: (_) => setState(() {}),
@@ -7718,7 +7717,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  '직접 호출 모드는 API key, secret, token을 이 기기의 로컬 DB에 저장합니다. 중앙 서버로 전송하지 않지만, 웹 배포에서는 브라우저 저장소와 네트워크 요청에 노출될 수 있습니다.',
+                  'client_id, client_secret, access token은 ${SecureSettingsStore.storageLabel}에 저장합니다. 이 카드는 웹 빌드에서는 숨겨지며, 주문 기능은 별도 단계 전까지 잠금 상태입니다.',
                   style: Theme.of(context).textTheme.bodyMedium,
                 ),
                 const SizedBox(height: 16),

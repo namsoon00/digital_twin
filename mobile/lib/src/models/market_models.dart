@@ -908,12 +908,12 @@ class TossAccountSettings {
       enabled: false,
       accountAlias: '',
       accountHint: '',
-      apiBaseUrl: '',
+      apiBaseUrl: 'https://openapi.tossinvest.com',
       appKey: '',
       appSecret: '',
       accessToken: '',
       accountNumber: '',
-      testPath: '',
+      testPath: '/api/v1/accounts',
       readOnly: true,
       orderLocked: true,
     );
@@ -942,7 +942,6 @@ class TossAccountSettings {
   bool get hasTestPath => testPath.trim().isNotEmpty;
   bool get isReady =>
       enabled &&
-      hasAccount &&
       hasApiBaseUrl &&
       hasCredential &&
       hasTestPath &&

@@ -2,6 +2,7 @@ import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:market_flow/main.dart';
@@ -11,7 +12,9 @@ import 'package:market_flow/src/data/economic_feed_service.dart';
 import 'package:market_flow/src/data/flow_repository.dart';
 import 'package:market_flow/src/data/local_settings_database.dart';
 import 'package:market_flow/src/data/market_data_api.dart';
+import 'package:market_flow/src/data/secure_settings_store.dart';
 import 'package:market_flow/src/data/settings_repository.dart';
+import 'package:market_flow/src/data/toss_direct_api.dart';
 import 'package:market_flow/src/models/market_models.dart';
 import 'package:market_flow/src/widgets/sparkline.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -36,6 +39,7 @@ Future<void> dismissModal(WidgetTester tester, Finder anchor) async {
 void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
+    FlutterSecureStorage.setMockInitialValues({});
   });
 
   test('Market news service combines multiple non-Google channels', () async {
@@ -797,7 +801,7 @@ void main() {
   );
 
   test(
-    'SettingsRepository stores Toss credentials in local database',
+    'SettingsRepository stores Toss credentials in secure storage',
     () async {
       final repository = SettingsRepository();
       await repository.saveTossAccountSettings(
@@ -817,17 +821,36 @@ void main() {
       );
 
       final prefs = await SharedPreferences.getInstance();
+      const secureStorage = FlutterSecureStorage();
       expect(
-        prefs.getString(LocalSettingsDatabase.tossStorageKey('appKey')),
+        await secureStorage.read(
+          key: SecureSettingsStore.tossSecretKey('appKey'),
+        ),
         'toss-app-key',
       );
       expect(
-        prefs.getString(LocalSettingsDatabase.tossStorageKey('appSecret')),
+        await secureStorage.read(
+          key: SecureSettingsStore.tossSecretKey('appSecret'),
+        ),
         'toss-secret',
       );
       expect(
-        prefs.getString(LocalSettingsDatabase.tossStorageKey('accessToken')),
+        await secureStorage.read(
+          key: SecureSettingsStore.tossSecretKey('accessToken'),
+        ),
         'token-value',
+      );
+      expect(
+        prefs.getString(LocalSettingsDatabase.tossStorageKey('appKey')),
+        isNull,
+      );
+      expect(
+        prefs.getString(LocalSettingsDatabase.tossStorageKey('appSecret')),
+        isNull,
+      );
+      expect(
+        prefs.getString(LocalSettingsDatabase.tossStorageKey('accessToken')),
+        isNull,
       );
       expect(
         prefs.getBool(LocalSettingsDatabase.tossStorageKey('enabled')),
@@ -835,6 +858,59 @@ void main() {
       );
     },
   );
+
+  test('TossDirectApiClient probes through OAuth client credentials', () async {
+    final requested = <String>[];
+    final client = TossDirectApiClient(
+      client: MockClient((request) async {
+        requested.add('${request.method} ${request.url.path}');
+        if (request.method == 'POST' && request.url.path == '/oauth2/token') {
+          expect(
+            request.headers['Content-Type'],
+            'application/x-www-form-urlencoded',
+          );
+          expect(request.bodyFields['grant_type'], 'client_credentials');
+          expect(request.bodyFields['client_id'], 'client-id');
+          expect(request.bodyFields['client_secret'], 'client-secret');
+          return http.Response(
+            '{"access_token":"issued-token","token_type":"Bearer","expires_in":86400}',
+            200,
+            headers: {'content-type': 'application/json'},
+          );
+        }
+
+        if (request.method == 'GET' && request.url.path == '/api/v1/accounts') {
+          expect(request.headers['Authorization'], 'Bearer issued-token');
+          expect(request.headers['X-Tossinvest-Account'], isNull);
+          return http.Response('{"data":{"accounts":[]}}', 200);
+        }
+
+        fail('Unexpected Toss request: ${request.method} ${request.url}');
+      }),
+    );
+    addTearDown(client.dispose);
+
+    final result = await client.probe(
+      const TossAccountSettings(
+        enabled: true,
+        accountAlias: '토스 주계좌',
+        accountHint: '1234',
+        apiBaseUrl: 'https://openapi.tossinvest.com',
+        appKey: 'client-id',
+        appSecret: 'client-secret',
+        accessToken: '',
+        accountNumber: '',
+        testPath: '/api/v1/accounts',
+        readOnly: true,
+        orderLocked: true,
+      ),
+    );
+
+    expect(result.ok, true);
+    expect(result.statusCode, 200);
+    expect(result.message, 'OAuth 연결 성공');
+    expect(requested, ['POST /oauth2/token', 'GET /api/v1/accounts']);
+  });
 
   testWidgets('MarketFlow defaults to dark mode', (tester) async {
     await pumpMarketFlowApp(tester);
@@ -1255,7 +1331,9 @@ void main() {
     expect(find.text('수혜군'), findsOneWidget);
   });
 
-  testWidgets('MarketFlow shows web-direct API settings', (tester) async {
+  testWidgets('MarketFlow shows web-direct and personal Toss settings', (
+    tester,
+  ) async {
     await pumpMarketFlowApp(tester);
 
     await tester.tap(find.text('설정'));
@@ -1282,7 +1360,6 @@ void main() {
     expect(find.text('Alpha Vantage'), findsNothing);
     expect(find.text('FRED API'), findsNothing);
     expect(find.text('OpenDART API'), findsNothing);
-    expect(find.text('토스증권 계정'), findsNothing);
 
     await tester.scrollUntilVisible(
       find.byKey(const ValueKey('data-api-test-defillama')),
@@ -1296,6 +1373,26 @@ void main() {
 
     expect(find.text('벤더 선택'), findsNothing);
     expect(find.text('벤더 API key'), findsNothing);
-    expect(find.text('토스증권 계정'), findsNothing);
+
+    await tester.scrollUntilVisible(
+      find.text('토스증권 계정'),
+      420,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('토스증권 계정'), findsOneWidget);
+    expect(find.text('개인용 네이티브 앱 · 기기 보안 저장소'), findsOneWidget);
+    expect(find.text('네이티브 전용'), findsOneWidget);
+
+    await tester.scrollUntilVisible(
+      find.text('client_secret'),
+      420,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('client_id'), findsOneWidget);
+    expect(find.text('client_secret'), findsOneWidget);
   });
 }

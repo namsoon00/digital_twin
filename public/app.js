@@ -212,6 +212,8 @@
       '</section>',
       '<section class="content-grid">',
       renderExitPanel(snapshot),
+      renderPsychologyPanel(snapshot),
+      renderStockFlowPanel(snapshot),
       renderPortfolioPanel(snapshot),
       renderThemePanel(snapshot),
       renderNewsPanel(snapshot, news),
@@ -324,6 +326,81 @@
       '<div class="rule-strip">',
       (exitLens.rules || []).map(function (rule) {
         return '<span>' + escapeHtml(rule) + '</span>';
+      }).join(""),
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderPsychologyPanel(snapshot) {
+    var psychology = snapshot.psychology || { gauges: [], notes: [] };
+    return [
+      '<article class="panel psychology-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Market Psychology</p>',
+      '<h2>사람들의 심리</h2>',
+      '</div>',
+      '<span class="tone-chip ' + escapeHtml(psychology.tone || "hold") + '">' + escapeHtml(psychology.moodLabel || "대기") + '</span>',
+      '</div>',
+      '<div class="psychology-body">',
+      '<div class="mood-meter">',
+      '<div>',
+      '<strong>' + escapeHtml(psychology.moodScore || 0) + '</strong>',
+      '<span>' + escapeHtml(psychology.dominantEmotion || "관망") + '</span>',
+      '</div>',
+      '<div class="mood-track"><span style="width:' + Math.min(100, Math.max(0, Number(psychology.moodScore || 0))) + '%"></span></div>',
+      '</div>',
+      '<div class="gauge-grid">',
+      (psychology.gauges || []).map(function (gauge) {
+        return [
+          '<div class="gauge-card ' + escapeHtml(gauge.tone || "hold") + '">',
+          '<div><strong>' + escapeHtml(gauge.label) + '</strong><span>' + escapeHtml(gauge.value || 0) + '</span></div>',
+          '<div class="bar-track"><span style="width:' + Math.min(100, Math.max(2, Number(gauge.value || 0))) + '%"></span></div>',
+          '</div>'
+        ].join("");
+      }).join(""),
+      '</div>',
+      '<div class="psychology-notes">',
+      (psychology.notes || []).map(function (note) {
+        return '<p>' + escapeHtml(note) + '</p>';
+      }).join(""),
+      '</div>',
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderStockFlowPanel(snapshot) {
+    var stockFlows = snapshot.stockFlows || { items: [], lanes: [] };
+    return [
+      '<article class="panel flow-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Stock Flow</p>',
+      '<h2>종목 흐름 읽기</h2>',
+      '</div>',
+      '<span class="metric">' + escapeHtml((stockFlows.items || []).length) + '</span>',
+      '</div>',
+      '<div class="flow-lanes">',
+      (stockFlows.lanes || []).map(function (lane) {
+        return '<div class="flow-lane ' + escapeHtml(lane.tone || "hold") + '"><strong>' + escapeHtml(lane.value || 0) + '</strong><span>' + escapeHtml(lane.label) + '</span></div>';
+      }).join(""),
+      '</div>',
+      '<div class="flow-list">',
+      (stockFlows.items || []).map(function (item) {
+        return [
+          '<div class="flow-row">',
+          '<div class="flow-main">',
+          '<div class="flow-title">',
+          '<div><strong>' + escapeHtml(item.name) + '</strong><span>' + escapeHtml(item.symbol) + ' · ' + escapeHtml(item.crowdTilt) + '</span></div>',
+          '<span class="tone-chip ' + escapeHtml(item.tone || "hold") + '">' + escapeHtml(item.direction) + '</span>',
+          '</div>',
+          '<p>' + escapeHtml(item.read) + '</p>',
+          '</div>',
+          '<div class="flow-score"><strong>' + escapeHtml(item.flowScore) + '</strong><span>흐름</span></div>',
+          '</div>'
+        ].join("");
       }).join(""),
       '</div>',
       '</article>'

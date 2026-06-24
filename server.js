@@ -1565,21 +1565,21 @@ function demoNewsItems(reason) {
       source: "demo",
       url: "",
       publishedAt: stamped,
-      summary: "AI CAPEX와 전력망 증설 이슈가 반도체와 데이터센터 밸류체인을 동시에 움직입니다."
+      summary: "AI CAPEX와 전력망 증설 이슈가 반도체와 데이터센터 밸류체인을 동시에 움직이며 투자자 낙관과 추격 심리를 키웁니다."
     },
     {
       title: "달러와 금리가 재상승하면 위험자산 포지션 크기 조절 필요",
       source: "demo",
       url: "",
       publishedAt: stamped,
-      summary: "환율과 금리 변동은 해외 주식 평가액과 신규 매수 여력을 동시에 흔듭니다."
+      summary: "환율과 금리 변동은 해외 주식 평가액과 신규 매수 여력을 동시에 흔들어 공포 매도와 관망 심리를 자극합니다."
     },
     {
       title: "한국 증시는 반도체 수급과 외국인 매수 지속 여부가 핵심",
       source: "demo",
       url: "",
       publishedAt: stamped,
-      summary: "국내 포트폴리오는 반도체 집중도가 높을수록 외국인 수급 뉴스 민감도가 커집니다."
+      summary: "국내 포트폴리오는 반도체 집중도가 높을수록 외국인 매수, 수급 유입, 차익 실현 뉴스 민감도가 커집니다."
     }
   ].map(function (item) {
     item.reason = reason || "뉴스 fallback";
@@ -1594,7 +1594,7 @@ function demoSocialPosts(reason) {
       id: "social-demo-ai",
       author: "market_signal",
       source: "demo",
-      text: "AI capex commentary is still driving chip names, but watch whether power-grid bottlenecks cap the next leg.",
+      text: "AI capex commentary is still driving chip names and traders are chasing the winners, but watch whether power-grid bottlenecks cap the next leg.",
       url: "",
       createdAt: stamped,
       metrics: { reposts: 18, replies: 7, likes: 96, quotes: 4 },
@@ -1604,7 +1604,7 @@ function demoSocialPosts(reason) {
       id: "social-demo-rates",
       author: "macro_watch",
       source: "demo",
-      text: "Dollar strength and front-end yields are the two tells for whether risk appetite can hold into the US session.",
+      text: "Dollar strength and front-end yields are the two tells for whether risk appetite can hold or fear selling returns into the US session.",
       url: "",
       createdAt: stamped,
       metrics: { reposts: 9, replies: 3, likes: 41, quotes: 2 },
@@ -1614,7 +1614,7 @@ function demoSocialPosts(reason) {
       id: "social-demo-korea",
       author: "seoul_flow",
       source: "demo",
-      text: "KOSPI flow still looks tied to foreign buying in semis. If that pauses, cash buffer matters more than beta.",
+      text: "KOSPI flow still looks tied to foreign buying in semis. If that pauses, profit taking and cash buffer matter more than beta.",
       url: "",
       createdAt: stamped,
       metrics: { reposts: 12, replies: 5, likes: 54, quotes: 3 },
@@ -2021,6 +2021,150 @@ function buildExitLens(toss, portfolio, themes, newsItems, socialPosts) {
   };
 }
 
+function countKeywordSignals(signals, keywords) {
+  return signals.reduce(function (sum, signal) {
+    const haystack = (signal.title + " " + signal.summary + " " + signal.source).toLowerCase();
+    const matched = keywords.some(function (keyword) {
+      return haystack.indexOf(keyword.toLowerCase()) >= 0;
+    });
+    return sum + (matched ? 1 : 0);
+  }, 0);
+}
+
+function psychologyTone(score) {
+  if (score >= 72) return "danger";
+  if (score >= 58) return "watch";
+  if (score <= 34) return "danger";
+  if (score <= 44) return "caution";
+  return "hold";
+}
+
+function psychologyLabel(score) {
+  if (score >= 72) return "과열/FOMO";
+  if (score >= 58) return "낙관 우위";
+  if (score <= 34) return "공포 우위";
+  if (score <= 44) return "위험 회피";
+  return "중립/관망";
+}
+
+function analyzePsychology(newsItems, socialPosts, themes) {
+  const signals = newsItems.concat(socialPostsAsSignals(socialPosts));
+  const themeById = {};
+  themes.forEach(function (theme) { themeById[theme.id] = theme; });
+  const optimism = countKeywordSignals(signals, ["buying", "growth", "capex", "rally", "risk appetite", "driving", "낙관", "매수", "성장", "유입"]);
+  const fear = countKeywordSignals(signals, ["fear", "selloff", "risk", "volatility", "war", "tariff", "panic", "공포", "위험", "매도", "관세"]);
+  const fomo = countKeywordSignals(signals, ["chasing", "fomo", "euphoria", "winners", "mania", "추격", "과열", "쏠림"]);
+  const fatigue = countKeywordSignals(signals, ["profit taking", "pause", "bottleneck", "cash buffer", "slowdown", "차익", "피로", "관망"]);
+  const socialEngagement = (socialPosts || []).reduce(function (sum, post) {
+    const metrics = post.metrics || {};
+    return sum + Number(metrics.likes || 0) + Number(metrics.reposts || 0) * 2 + Number(metrics.quotes || 0) * 2 + Number(metrics.replies || 0);
+  }, 0);
+  const ratesCount = (themeById.rates && themeById.rates.count) || 0;
+  const riskCount = (themeById.risk && themeById.risk.count) || 0;
+  const moodScore = clampScore(50 + optimism * 8 + fomo * 8 - fear * 9 - fatigue * 5 - ratesCount * 3 - riskCount * 4);
+  const disagreement = clampScore(Math.min(100, Math.min(optimism + fomo, fear + fatigue) * 28));
+  const dominantEmotion = fomo >= 2 && moodScore >= 58
+    ? "추격"
+    : fear + riskCount > optimism + fomo
+      ? "경계"
+      : optimism > fear
+        ? "낙관"
+        : "관망";
+  const contrarianAlert = moodScore >= 72
+    ? "군중이 한쪽으로 몰리는 구간입니다. 좋은 뉴스보다 매도 기준을 먼저 봅니다."
+    : moodScore <= 34
+      ? "공포가 강한 구간입니다. 반등보다 손실 제한 기준을 먼저 확인합니다."
+      : "심리가 한쪽으로 치우치지 않아 가격과 뉴스의 다음 반복을 기다립니다.";
+
+  return {
+    moodScore: moodScore,
+    moodLabel: psychologyLabel(moodScore),
+    tone: psychologyTone(moodScore),
+    dominantEmotion: dominantEmotion,
+    disagreement: disagreement,
+    socialEngagement: socialEngagement,
+    contrarianAlert: contrarianAlert,
+    gauges: [
+      { label: "낙관", value: clampScore(optimism * 22), tone: "watch" },
+      { label: "공포", value: clampScore((fear + riskCount) * 18), tone: "danger" },
+      { label: "추격", value: clampScore(fomo * 28), tone: "caution" },
+      { label: "의견 충돌", value: disagreement, tone: "hold" }
+    ],
+    notes: [
+      "심리 중심축은 " + dominantEmotion + "입니다.",
+      contrarianAlert,
+      socialEngagement ? "포스팅 반응 합산 점수는 " + socialEngagement + "입니다." : "포스팅 반응은 아직 낮게 잡혔습니다."
+    ]
+  };
+}
+
+function stockFlowDirection(score) {
+  if (score >= 64) return { label: "유입 우세", tone: "watch" };
+  if (score <= 36) return { label: "이탈 우세", tone: "danger" };
+  if (score <= 46) return { label: "약한 이탈", tone: "caution" };
+  return { label: "혼조", tone: "hold" };
+}
+
+function crowdTiltForItem(item, psychology) {
+  if (psychology.moodScore >= 72 && item.signalScore >= 50) return "추격 심리";
+  if (psychology.moodScore <= 38 && item.exitPressure >= 55) return "공포 매도";
+  if (psychology.disagreement >= 45) return "의견 충돌";
+  if (item.source === "watchlist") return "관심 대기";
+  return "보유 관망";
+}
+
+function stockFlowRead(item, direction, psychology) {
+  if (direction.tone === "watch" && psychology.moodScore >= 72) {
+    return "관심 유입은 강하지만 군중 추격이 겹쳐 매도 기준을 앞에 둡니다.";
+  }
+  if (direction.tone === "watch") return "관련 신호가 반복되어 단기 흐름은 아직 살아 있습니다.";
+  if (direction.tone === "danger") return "리스크와 매도 압력이 겹쳐 보유 크기 축소 기준을 확인합니다.";
+  if (direction.tone === "caution") return "흐름이 약해지고 있어 다음 뉴스 반복 여부를 확인합니다.";
+  return "긍정과 경계 신호가 섞여 있어 가격 확인 전 결론을 미룹니다.";
+}
+
+function buildStockFlows(exitLens, themes, psychology) {
+  const themeById = {};
+  themes.forEach(function (theme) { themeById[theme.id] = theme; });
+  const riskCount = (themeById.risk && themeById.risk.count) || 0;
+  const ratesCount = (themeById.rates && themeById.rates.count) || 0;
+  const items = (exitLens.items || []).map(function (item) {
+    const sectorTheme = sectorThemePressure(item, themes);
+    const evidenceCount = (item.matchedSignals || []).length;
+    const rawScore = 50
+      + (sectorTheme.count || 0) * 8
+      + evidenceCount * 5
+      + (psychology.moodScore - 50) / 3
+      - riskCount * 6
+      - ratesCount * 3
+      - Math.max(0, item.exitPressure - 70) / 2;
+    const flowScore = clampScore(rawScore);
+    const direction = stockFlowDirection(flowScore);
+    return {
+      symbol: item.symbol,
+      name: item.name,
+      sector: item.sector,
+      source: item.source,
+      flowScore: flowScore,
+      direction: direction.label,
+      tone: direction.tone,
+      crowdTilt: crowdTiltForItem(item, psychology),
+      read: stockFlowRead(item, direction, psychology),
+      evidenceCount: evidenceCount
+    };
+  });
+  const lanes = [
+    { label: "유입", value: items.filter(function (item) { return item.tone === "watch"; }).length, tone: "watch" },
+    { label: "혼조", value: items.filter(function (item) { return item.tone === "hold"; }).length, tone: "hold" },
+    { label: "이탈", value: items.filter(function (item) { return item.tone === "danger" || item.tone === "caution"; }).length, tone: "danger" }
+  ];
+  return {
+    headline: items[0] ? items[0].name + " 흐름은 " + items[0].direction + "로 읽힙니다." : "종목 흐름 신호가 아직 없습니다.",
+    lanes: lanes,
+    items: items
+  };
+}
+
 function buildFlowLensSnapshot(toss, newsItems, socialPosts, options) {
   options = options || {};
   const themes = analyzeThemes(newsItems, socialPosts);
@@ -2029,6 +2173,8 @@ function buildFlowLensSnapshot(toss, newsItems, socialPosts, options) {
   const aiTheme = themes.find(function (theme) { return theme.id === "ai"; }) || { count: 0 };
   const ratesTheme = themes.find(function (theme) { return theme.id === "rates"; }) || { count: 0 };
   const exitLens = buildExitLens(toss, portfolio, themes, newsItems, socialPosts);
+  const psychology = analyzePsychology(newsItems, socialPosts, themes);
+  const stockFlows = buildStockFlows(exitLens, themes, psychology);
   const flowScore = Math.max(
     0,
     Math.min(100, 52 + aiTheme.count * 6 - riskTheme.count * 7 - ratesTheme.count * 3 - Math.max(0, portfolio.concentration - 55) / 3)
@@ -2045,17 +2191,21 @@ function buildFlowLensSnapshot(toss, newsItems, socialPosts, options) {
     regime: regime,
     summary: [
       exitLens.urgentCount ? "매도 또는 축소를 검토할 종목이 " + exitLens.urgentCount + "개 잡혔습니다." : "즉시 매도보다 조건 확인이 우선입니다.",
+      "시장 심리는 " + psychology.moodLabel + "이고 핵심 감정은 " + psychology.dominantEmotion + "입니다.",
       portfolio.sectors[0] ? "계좌는 " + portfolio.sectors[0].sector + " 비중이 가장 큽니다." : "계좌 보유 종목은 아직 비어 있습니다.",
       leadTheme.label + " 신호가 뉴스와 포스팅에서 가장 많이 잡혔습니다."
     ],
     toss: toss,
     portfolio: portfolio,
     exitLens: exitLens,
+    psychology: psychology,
+    stockFlows: stockFlows,
     themes: themes,
     news: newsItems,
     social: socialPosts,
     checklist: [
       { label: "보유 종목마다 전량/부분 매도 기준과 손절 기준을 숫자로 남기기", status: exitLens.urgentCount ? "주의" : "정상" },
+      { label: "군중 심리가 과열이면 좋은 뉴스보다 분할 매도 기준 먼저 확인", status: psychology.moodScore >= 72 ? "주의" : "정상" },
       { label: "관심 종목은 진입 전에 무효화 조건과 매도 사유부터 정하기", status: exitLens.watchCount ? "정상" : "대기" },
       { label: "X 포스팅은 기사보다 소음이 크므로 반복 등장하는 테마만 반영", status: socialPosts.length ? "정상" : "대기" },
       { label: "금리/달러 뉴스가 강하면 해외주식과 성장주 비중 축소 기준 확인", status: ratesTheme.count > 1 ? "주의" : "정상" },

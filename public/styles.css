@@ -458,6 +458,253 @@ h3 {
   font-weight: 700;
 }
 
+.psychology-panel,
+.flow-panel {
+  min-height: 100%;
+}
+
+.psychology-body,
+.flow-list {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+}
+
+.tone-chip {
+  min-height: 28px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 9px;
+  font-size: 12px;
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+.tone-chip.watch {
+  background: var(--green-soft);
+  color: var(--green);
+}
+
+.tone-chip.hold {
+  background: var(--blue-soft);
+  color: var(--blue);
+}
+
+.tone-chip.caution {
+  background: var(--amber-soft);
+  color: var(--amber);
+}
+
+.tone-chip.danger {
+  background: var(--red-soft);
+  color: var(--red);
+}
+
+.mood-meter {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8faf9;
+}
+
+.mood-meter > div:first-child {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.mood-meter strong {
+  font-size: 34px;
+  line-height: 1;
+}
+
+.mood-meter span {
+  color: var(--muted);
+  font-weight: 850;
+}
+
+.mood-track {
+  height: 10px;
+  border-radius: 999px;
+  background: #e6ecee;
+  overflow: hidden;
+}
+
+.mood-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--red), var(--amber), var(--green));
+}
+
+.gauge-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.gauge-card {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 8px;
+  background: #f8faf9;
+}
+
+.gauge-card > div:first-child {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.gauge-card span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.gauge-card.watch {
+  background: var(--green-soft);
+}
+
+.gauge-card.hold {
+  background: var(--blue-soft);
+}
+
+.gauge-card.caution {
+  background: var(--amber-soft);
+}
+
+.gauge-card.danger {
+  background: var(--red-soft);
+}
+
+.psychology-notes {
+  display: grid;
+  gap: 8px;
+}
+
+.psychology-notes p {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  color: #344042;
+  line-height: 1.45;
+}
+
+.flow-lanes {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 14px 16px 0;
+}
+
+.flow-lane {
+  display: grid;
+  place-items: center;
+  gap: 2px;
+  min-height: 66px;
+  border-radius: 8px;
+  background: #f8faf9;
+}
+
+.flow-lane strong {
+  font-size: 22px;
+  line-height: 1;
+}
+
+.flow-lane span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.flow-lane.watch {
+  background: var(--green-soft);
+}
+
+.flow-lane.hold {
+  background: var(--blue-soft);
+}
+
+.flow-lane.danger {
+  background: var(--red-soft);
+}
+
+.flow-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 70px;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8faf9;
+}
+
+.flow-main {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.flow-title {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.flow-title > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.flow-title strong,
+.flow-title span,
+.flow-main p {
+  overflow-wrap: anywhere;
+}
+
+.flow-title span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.flow-main p {
+  color: #344042;
+  line-height: 1.45;
+}
+
+.flow-score {
+  min-height: 70px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 3px;
+}
+
+.flow-score strong {
+  font-size: 22px;
+  line-height: 1;
+}
+
+.flow-score span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+}
+
 .bar-row {
   display: grid;
   gap: 7px;
@@ -728,5 +975,15 @@ h3 {
 
   .exit-score {
     min-height: 74px;
+  }
+
+  .gauge-grid,
+  .flow-lanes,
+  .flow-row {
+    grid-template-columns: 1fr;
+  }
+
+  .flow-title {
+    display: grid;
   }
 }

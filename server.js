@@ -1561,6 +1561,42 @@ function demoNewsItems(reason) {
   });
 }
 
+function demoSocialPosts(reason) {
+  const stamped = now();
+  return [
+    {
+      id: "social-demo-ai",
+      author: "market_signal",
+      source: "demo",
+      text: "AI capex commentary is still driving chip names, but watch whether power-grid bottlenecks cap the next leg.",
+      url: "",
+      createdAt: stamped,
+      metrics: { reposts: 18, replies: 7, likes: 96, quotes: 4 },
+      reason: reason || "social fallback"
+    },
+    {
+      id: "social-demo-rates",
+      author: "macro_watch",
+      source: "demo",
+      text: "Dollar strength and front-end yields are the two tells for whether risk appetite can hold into the US session.",
+      url: "",
+      createdAt: stamped,
+      metrics: { reposts: 9, replies: 3, likes: 41, quotes: 2 },
+      reason: reason || "social fallback"
+    },
+    {
+      id: "social-demo-korea",
+      author: "seoul_flow",
+      source: "demo",
+      text: "KOSPI flow still looks tied to foreign buying in semis. If that pauses, cash buffer matters more than beta.",
+      url: "",
+      createdAt: stamped,
+      metrics: { reposts: 12, replies: 5, likes: 54, quotes: 3 },
+      reason: reason || "social fallback"
+    }
+  ];
+}
+
 async function fetchFlowNews() {
   const target = new URL("https://api.gdeltproject.org/api/v2/doc/doc");
   target.searchParams.set("query", "(market OR stocks OR semiconductor OR \"Federal Reserve\" OR Korea OR dollar OR bonds) sourcelang:english");
@@ -1593,7 +1629,84 @@ async function fetchFlowNews() {
   }
 }
 
-function analyzeThemes(newsItems) {
+function normalizeXPosts(payload) {
+  const tweets = Array.isArray(payload.data) ? payload.data : [];
+  const users = {};
+  const includedUsers = payload.includes && Array.isArray(payload.includes.users)
+    ? payload.includes.users
+    : [];
+  includedUsers.forEach(function (user) {
+    users[String(user.id)] = user;
+  });
+
+  return tweets.map(function (post) {
+    const user = users[String(post.author_id)] || {};
+    const username = user.username || post.author_id || "x";
+    const metrics = post.public_metrics || {};
+    return {
+      id: String(post.id || ""),
+      author: String(username),
+      source: "X",
+      text: String(post.text || ""),
+      url: username && post.id ? "https://x.com/" + encodeURIComponent(username) + "/status/" + encodeURIComponent(post.id) : "",
+      createdAt: String(post.created_at || ""),
+      metrics: {
+        reposts: Number(metrics.retweet_count || 0),
+        replies: Number(metrics.reply_count || 0),
+        likes: Number(metrics.like_count || 0),
+        quotes: Number(metrics.quote_count || 0)
+      }
+    };
+  }).filter(function (post) {
+    return post.id && post.text;
+  });
+}
+
+async function fetchSocialPosts() {
+  const bearerToken = String(process.env.X_BEARER_TOKEN || "").trim();
+  const query = String(process.env.X_SEARCH_QUERY || "(market OR stocks OR semiconductor OR Fed OR KOSPI OR dollar OR AI) -is:retweet lang:en").trim();
+
+  if (!bearerToken) {
+    return demoSocialPosts("X_BEARER_TOKEN 미설정");
+  }
+
+  try {
+    const target = new URL("https://api.x.com/2/tweets/search/recent");
+    target.searchParams.set("query", query);
+    target.searchParams.set("max_results", "10");
+    target.searchParams.set("tweet.fields", "created_at,public_metrics,lang,author_id");
+    target.searchParams.set("expansions", "author_id");
+    target.searchParams.set("user.fields", "username,name");
+
+    const response = await requestExternalJson("GET", target.toString(), {
+      timeout: 2500,
+      headers: {
+        "Authorization": "Bearer " + bearerToken
+      }
+    });
+    const posts = normalizeXPosts(response.payload);
+    if (!posts.length) return demoSocialPosts("X 검색 결과 없음");
+    return posts;
+  } catch (error) {
+    return demoSocialPosts("X 조회 실패 · " + error.message);
+  }
+}
+
+function socialPostsAsSignals(posts) {
+  return (posts || []).map(function (post) {
+    return {
+      title: post.text,
+      summary: post.text,
+      source: post.source + " @" + post.author,
+      url: post.url,
+      publishedAt: post.createdAt,
+      signalType: "social"
+    };
+  });
+}
+
+function analyzeThemes(newsItems, socialPosts) {
+  const signals = newsItems.concat(socialPostsAsSignals(socialPosts));
   const themeDefs = [
     { id: "ai", label: "AI/반도체", color: "green", keywords: ["ai", "chip", "semiconductor", "nvidia", "data center", "반도체", "삼성", "hynix"] },
     { id: "rates", label: "금리/달러", color: "blue", keywords: ["fed", "rate", "yield", "bond", "dollar", "inflation", "금리", "달러"] },
@@ -1603,7 +1716,7 @@ function analyzeThemes(newsItems) {
   ];
 
   return themeDefs.map(function (theme) {
-    const matches = newsItems.filter(function (item) {
+    const matches = signals.filter(function (item) {
       const haystack = (item.title + " " + item.summary + " " + item.source).toLowerCase();
       return theme.keywords.some(function (keyword) {
         return haystack.indexOf(keyword.toLowerCase()) >= 0;
@@ -1614,6 +1727,7 @@ function analyzeThemes(newsItems) {
       label: theme.label,
       color: theme.color,
       count: matches.length,
+      socialCount: matches.filter(function (item) { return item.signalType === "social"; }).length,
       headline: matches[0] ? matches[0].title : "관련 헤드라인 대기",
       weight: Math.min(100, matches.length * 28)
     };
@@ -1646,8 +1760,8 @@ function analyzePortfolio(positions) {
   return { total: total, sectors: sectors, concentration: concentration };
 }
 
-function buildFlowLensSnapshot(toss, newsItems) {
-  const themes = analyzeThemes(newsItems);
+function buildFlowLensSnapshot(toss, newsItems, socialPosts) {
+  const themes = analyzeThemes(newsItems, socialPosts);
   const portfolio = analyzePortfolio(toss.positions || []);
   const riskTheme = themes.find(function (theme) { return theme.id === "risk"; }) || { count: 0 };
   const aiTheme = themes.find(function (theme) { return theme.id === "ai"; }) || { count: 0 };
@@ -1664,7 +1778,7 @@ function buildFlowLensSnapshot(toss, newsItems) {
     flowScore: Math.round(flowScore),
     regime: regime,
     summary: [
-      leadTheme.label + " 뉴스가 가장 많이 잡혔습니다.",
+      leadTheme.label + " 신호가 뉴스와 포스팅에서 가장 많이 잡혔습니다.",
       portfolio.sectors[0] ? "계좌는 " + portfolio.sectors[0].sector + " 비중이 가장 큽니다." : "계좌 보유 종목은 아직 비어 있습니다.",
       riskTheme.count ? "리스크 뉴스가 있어 신규 진입은 크기 조절이 필요합니다." : "리스크 뉴스 강도는 낮게 잡혔습니다."
     ],
@@ -1672,8 +1786,10 @@ function buildFlowLensSnapshot(toss, newsItems) {
     portfolio: portfolio,
     themes: themes,
     news: newsItems,
+    social: socialPosts,
     checklist: [
       { label: "토스 보유 비중과 뉴스 주도 테마가 같은 방향인지 확인", status: portfolio.concentration > 55 ? "주의" : "정상" },
+      { label: "X 포스팅은 기사보다 소음이 크므로 반복 등장하는 테마만 반영", status: socialPosts.length ? "정상" : "대기" },
       { label: "금리/달러 뉴스가 강하면 해외주식 신규 매수 속도 조절", status: ratesTheme.count > 1 ? "주의" : "정상" },
       { label: "주문 기능은 읽기 전용 점검 이후 별도 단계에서만 열기", status: "잠금" }
     ]
@@ -1689,8 +1805,16 @@ async function flowLensSnapshot() {
       }, 1800);
     })
   ]);
-  const results = await Promise.all([fetchTossPortfolio(), newsPromise]);
-  return buildFlowLensSnapshot(results[0], results[1]);
+  const socialPromise = Promise.race([
+    fetchSocialPosts(),
+    new Promise(function (resolve) {
+      setTimeout(function () {
+        resolve(demoSocialPosts("포스팅 빠른 fallback"));
+      }, 1800);
+    })
+  ]);
+  const results = await Promise.all([fetchTossPortfolio(), newsPromise, socialPromise]);
+  return buildFlowLensSnapshot(results[0], results[1], results[2]);
 }
 
 async function api(req, res, pathname) {

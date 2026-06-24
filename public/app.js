@@ -153,7 +153,7 @@
       '<section class="topbar">',
       '<div>',
       '<p class="eyebrow">Flow Lens</p>',
-      '<h1>토스 계좌와 뉴스로 보는 오늘의 흐름</h1>',
+      '<h1>토스 계좌, 뉴스, 포스팅으로 보는 오늘의 흐름</h1>',
       '<p class="subtle">' + escapeHtml(snapshot.headline) + " · " + escapeHtml(formatClock(snapshot.generatedAt)) + "</p>",
       '</div>',
       '<div class="toolbar">',
@@ -169,6 +169,7 @@
       renderPortfolioPanel(snapshot),
       renderThemePanel(snapshot),
       renderNewsPanel(snapshot, news),
+      renderSocialPanel(snapshot),
       renderChecklistPanel(snapshot),
       '</section>',
       '</main>'
@@ -210,6 +211,7 @@
       '<div class="source-row"><span>토스</span><strong>' + escapeHtml(snapshot.toss.status) + '</strong></div>',
       '<div class="source-row"><span>계좌</span><strong>' + escapeHtml(snapshot.toss.account && snapshot.toss.account.displayNumber || "-") + '</strong></div>',
       '<div class="source-row"><span>뉴스</span><strong>' + escapeHtml((snapshot.news || []).length) + '건</strong></div>',
+      '<div class="source-row"><span>포스팅</span><strong>' + escapeHtml((snapshot.social || []).length) + '건</strong></div>',
       '</div>',
       '</aside>'
     ].join("");
@@ -256,8 +258,8 @@
       '<article class="panel">',
       '<div class="panel-head">',
       '<div>',
-      '<p class="label">News Themes</p>',
-      '<h2>뉴스가 미는 축</h2>',
+      '<p class="label">Signal Themes</p>',
+      '<h2>뉴스와 포스팅이 미는 축</h2>',
       '</div>',
       '</div>',
       '<div class="theme-tabs">',
@@ -271,7 +273,7 @@
         return [
           '<div class="theme-row ' + escapeHtml(theme.color) + '">',
           '<div><strong>' + escapeHtml(theme.label) + '</strong><span>' + escapeHtml(theme.headline) + '</span></div>',
-          '<div class="theme-count">' + escapeHtml(theme.count) + '</div>',
+          '<div class="theme-count"><strong>' + escapeHtml(theme.count) + '</strong><span>X ' + escapeHtml(theme.socialCount || 0) + '</span></div>',
           '</div>'
         ].join("");
       }).join(""),
@@ -286,7 +288,7 @@
       '<div class="panel-head">',
       '<div>',
       '<p class="label">News Feed</p>',
-      '<h2>흐름을 만든 헤드라인</h2>',
+      '<h2>흐름을 만든 기사</h2>',
       '</div>',
       '<span class="metric">' + escapeHtml(news.length) + '</span>',
       '</div>',
@@ -303,6 +305,40 @@
           '</div>'
         ];
         return content.join("");
+      }).join(""),
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderSocialPanel(snapshot) {
+    var posts = snapshot.social || [];
+    return [
+      '<article class="panel social-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Social Pulse</p>',
+      '<h2>X 포스팅 신호</h2>',
+      '</div>',
+      '<span class="metric">' + escapeHtml(posts.length) + '</span>',
+      '</div>',
+      '<div class="social-list">',
+      posts.map(function (post) {
+        var metrics = post.metrics || {};
+        return [
+          '<div class="social-item">',
+          '<div>',
+          '<p class="post-meta">' + escapeHtml(post.source || "post") + ' · @' + escapeHtml(post.author || "unknown") + '</p>',
+          '<p>' + escapeHtml(post.text) + '</p>',
+          '<div class="engagement">',
+          '<span>↻ ' + escapeHtml(metrics.reposts || 0) + '</span>',
+          '<span>♡ ' + escapeHtml(metrics.likes || 0) + '</span>',
+          '<span>↩ ' + escapeHtml(metrics.replies || 0) + '</span>',
+          '</div>',
+          '</div>',
+          post.url ? '<a class="open-link" href="' + escapeHtml(post.url) + '" target="_blank" rel="noreferrer" title="포스팅 열기">↗</a>' : '',
+          '</div>'
+        ].join("");
       }).join(""),
       '</div>',
       '</article>'

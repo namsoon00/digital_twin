@@ -1,6 +1,6 @@
 # Flow Lens
 
-토스증권 Open API와 뉴스 피드를 함께 읽어 오늘의 시장 흐름을 파악하는 로컬 우선 대시보드입니다. 브라우저는 `/api/flow-lens` 집계 결과만 받고, 토스 credentials는 서버 환경변수에서만 사용합니다.
+토스증권 Open API, 뉴스 피드, X 같은 소셜 포스팅을 함께 읽어 오늘의 시장 흐름을 파악하는 로컬 우선 대시보드입니다. 브라우저는 `/api/flow-lens` 집계 결과만 받고, 토스/X credentials는 서버 환경변수에서만 사용합니다.
 
 ## 실행
 
@@ -17,19 +17,21 @@ npm start
 TOSS_CLIENT_ID=...
 TOSS_CLIENT_SECRET=...
 TOSS_ACCOUNT_SEQ=... # 선택
+X_BEARER_TOKEN=... # 선택
+X_SEARCH_QUERY=(market OR stocks OR semiconductor OR Fed OR KOSPI OR dollar OR AI) -is:retweet lang:en
 ```
 
 ## 앱 구조
 
 - `public/`: Flow Lens 웹 대시보드
-- `GET /api/flow-lens`: 토스 계좌/보유자산, 뉴스 테마, 흐름 점수, 점검 체크리스트 집계
-- `server.js`: 토스 OAuth 토큰 발급, 계좌/보유자산 조회, 뉴스 피드 수집, fallback 생성
+- `GET /api/flow-lens`: 토스 계좌/보유자산, 뉴스/포스팅 테마, 흐름 점수, 점검 체크리스트 집계
+- `server.js`: 토스 OAuth 토큰 발급, 계좌/보유자산 조회, 뉴스 피드와 X recent search 수집, fallback 생성
 
-토스 호출은 서버에서만 수행합니다. 브라우저에 `client_secret`, access token, `X-Tossinvest-Account` 값이 내려가지 않습니다.
+토스와 X 호출은 서버에서만 수행합니다. 브라우저에 `client_secret`, access token, `X-Tossinvest-Account`, `X_BEARER_TOKEN` 값이 내려가지 않습니다.
 
 ## 뉴스 피드
 
-기본 뉴스 소스는 GDELT DOC API입니다. 네트워크 오류나 결과 없음 상태에서는 로컬 데모 뉴스로 fallback해 화면이 비지 않게 합니다.
+기본 뉴스 소스는 GDELT DOC API입니다. X 포스팅은 X API v2 recent search를 사용합니다. 네트워크 오류, API 권한 부족, 결과 없음 상태에서는 로컬 데모 뉴스/포스팅으로 fallback해 화면이 비지 않게 합니다.
 
 ## 검증
 

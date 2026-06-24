@@ -375,19 +375,29 @@ h3 {
 
 .theme-count {
   min-width: 32px;
-  height: 32px;
   border-radius: 8px;
   display: grid;
+  gap: 1px;
   place-items: center;
   background: rgba(255, 255, 255, 0.72);
+  padding: 5px 7px;
+}
+
+.theme-count strong {
   font-weight: 850;
+}
+
+.theme-count span {
+  color: var(--muted);
+  font-size: 11px;
 }
 
 .news-panel {
   grid-row: span 2;
 }
 
-.news-item {
+.news-item,
+.social-item {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 12px;
@@ -395,7 +405,8 @@ h3 {
   border-bottom: 1px solid var(--line);
 }
 
-.news-item:last-child {
+.news-item:last-child,
+.social-item:last-child {
   border-bottom: 0;
   padding-bottom: 0;
 }
@@ -405,6 +416,35 @@ h3 {
   color: var(--blue);
   font-size: 12px;
   font-weight: 800;
+}
+
+.social-list {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+}
+
+.post-meta {
+  margin-bottom: 6px;
+  color: var(--violet);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.engagement {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 9px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.engagement span {
+  min-height: 24px;
+  padding: 3px 7px;
+  border-radius: 8px;
+  background: #f3f6f7;
 }
 
 .check-row {
@@ -435,6 +475,11 @@ h3 {
 .check-state.잠금 {
   background: var(--red-soft);
   color: var(--red);
+}
+
+.check-state.대기 {
+  background: var(--blue-soft);
+  color: var(--blue);
 }
 
 .skeleton {

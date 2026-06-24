@@ -1308,6 +1308,391 @@ function snapshot() {
   };
 }
 
+function requestExternalJson(method, targetUrl, options) {
+  options = options || {};
+  return new Promise(function (resolve, reject) {
+    const parsed = url.parse(targetUrl);
+    const client = parsed.protocol === "http:" ? http : https;
+    const body = options.body || "";
+    const headers = Object.assign(
+      {
+        "Accept": "application/json",
+        "User-Agent": "DigiterTwin-FlowLens/0.1"
+      },
+      options.headers || {}
+    );
+    if (body) headers["Content-Length"] = Buffer.byteLength(body);
+
+    const request = client.request(
+      {
+        method: method,
+        hostname: parsed.hostname,
+        path: parsed.path,
+        headers: headers,
+        timeout: options.timeout || 7000
+      },
+      function (response) {
+        let raw = "";
+        response.setEncoding("utf8");
+        response.on("data", function (chunk) {
+          raw += chunk;
+        });
+        response.on("end", function () {
+          let payload = {};
+          try {
+            payload = raw ? JSON.parse(raw) : {};
+          } catch (error) {
+            return reject(new Error("외부 JSON 응답을 해석하지 못했습니다."));
+          }
+          if (response.statusCode < 200 || response.statusCode >= 300) {
+            return reject(new Error("외부 API 응답 오류: HTTP " + response.statusCode));
+          }
+          resolve({ statusCode: response.statusCode, headers: response.headers, payload: payload });
+        });
+      }
+    );
+    request.setTimeout(options.timeout || 7000, function () {
+      request.destroy(new Error("외부 API 요청 시간이 초과되었습니다."));
+    });
+    request.on("timeout", function () {
+      request.destroy(new Error("외부 API 요청 시간이 초과되었습니다."));
+    });
+    request.on("error", reject);
+    if (body) request.write(body);
+    request.end();
+  });
+}
+
+function formBody(values) {
+  const params = new URLSearchParams();
+  Object.keys(values).forEach(function (key) {
+    params.set(key, values[key]);
+  });
+  return params.toString();
+}
+
+function decimalNumber(value) {
+  if (value == null) return 0;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const parsed = Number(value.replace(/,/g, ""));
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  if (typeof value === "object") {
+    return decimalNumber(value.amount || value.value || value.krw || value.usd);
+  }
+  return 0;
+}
+
+function demoTossPortfolio(reason) {
+  return {
+    mode: "demo",
+    configured: false,
+    status: reason || "토스 credentials 미설정",
+    account: {
+      displayNumber: "demo",
+      type: "BROKERAGE"
+    },
+    positions: [
+      {
+        symbol: "005930",
+        name: "삼성전자",
+        market: "KR",
+        currency: "KRW",
+        quantity: "12",
+        marketValue: 864000,
+        profitLoss: 84000,
+        sector: "반도체"
+      },
+      {
+        symbol: "AAPL",
+        name: "Apple",
+        market: "US",
+        currency: "USD",
+        quantity: "2",
+        marketValue: 486.2,
+        profitLoss: 66.2,
+        sector: "AI 디바이스"
+      },
+      {
+        symbol: "CASH",
+        name: "대기 현금",
+        market: "CASH",
+        currency: "KRW",
+        quantity: "1",
+        marketValue: 1250000,
+        profitLoss: 0,
+        sector: "현금"
+      }
+    ]
+  };
+}
+
+function normalizeTossAccounts(payload) {
+  const data = payload && (payload.data || payload.result || payload);
+  const accounts = data && (data.accounts || data.items || data);
+  return Array.isArray(accounts) ? accounts : [];
+}
+
+function normalizeTossHoldings(payload) {
+  const data = payload && (payload.data || payload.result || payload);
+  const overview = data && (data.overview || data.holdings || data);
+  const items = overview && (overview.items || overview.holdings || overview.positions || overview);
+  return Array.isArray(items) ? items : [];
+}
+
+function normalizeTossPosition(item) {
+  const marketValue = decimalNumber(item.marketValue) || decimalNumber(item.evaluationAmount);
+  const profitLoss = decimalNumber(item.profitLoss) || decimalNumber(item.unrealizedProfitLoss);
+  return {
+    symbol: String(item.symbol || item.stockCode || item.code || ""),
+    name: String(item.name || item.stockName || item.symbol || "보유 종목"),
+    market: String(item.marketCountry || item.market || ""),
+    currency: String(item.currency || ""),
+    quantity: String(item.quantity || item.qty || ""),
+    marketValue: marketValue,
+    profitLoss: profitLoss,
+    sector: sectorFromSymbol(String(item.symbol || item.stockCode || item.name || ""))
+  };
+}
+
+function sectorFromSymbol(value) {
+  const normalized = value.toUpperCase();
+  if (/005930|000660|NVDA|AMD|TSM|반도체|CHIP|SEMICONDUCTOR/.test(normalized)) return "반도체";
+  if (/AAPL|MSFT|GOOGL|META|AMZN|AI|SOFTWARE/.test(normalized)) return "AI/플랫폼";
+  if (/CASH|USD|KRW|현금/.test(normalized)) return "현금";
+  if (/BTC|ETH|COIN|CRYPTO/.test(normalized)) return "디지털자산";
+  return "기타";
+}
+
+async function fetchTossPortfolio() {
+  const baseUrl = String(process.env.TOSS_API_BASE_URL || "https://openapi.tossinvest.com").replace(/\/+$/, "");
+  const clientId = String(process.env.TOSS_CLIENT_ID || "").trim();
+  const clientSecret = String(process.env.TOSS_CLIENT_SECRET || "").trim();
+  const forcedAccountSeq = String(process.env.TOSS_ACCOUNT_SEQ || "").trim();
+
+  if (!clientId || !clientSecret) {
+    return demoTossPortfolio();
+  }
+
+  try {
+    const tokenResponse = await requestExternalJson("POST", baseUrl + "/oauth2/token", {
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: formBody({
+        grant_type: "client_credentials",
+        client_id: clientId,
+        client_secret: clientSecret
+      })
+    });
+    const token = tokenResponse.payload && tokenResponse.payload.access_token;
+    if (!token) throw new Error("토스 access_token이 없습니다.");
+
+    const accountsResponse = await requestExternalJson("GET", baseUrl + "/api/v1/accounts", {
+      headers: { "Authorization": "Bearer " + token }
+    });
+    const accounts = normalizeTossAccounts(accountsResponse.payload);
+    const account = accounts[0] || {};
+    const accountSeq = forcedAccountSeq || String(account.accountSeq || account.id || "");
+    if (!accountSeq) {
+      return {
+        mode: "live",
+        configured: true,
+        status: "계좌 식별값 없음",
+        account: { displayNumber: maskAccount(account.accountNo || ""), type: account.accountType || "" },
+        positions: []
+      };
+    }
+
+    const holdingsResponse = await requestExternalJson("GET", baseUrl + "/api/v1/holdings", {
+      headers: {
+        "Authorization": "Bearer " + token,
+        "X-Tossinvest-Account": accountSeq
+      }
+    });
+    const positions = normalizeTossHoldings(holdingsResponse.payload).map(normalizeTossPosition);
+    return {
+      mode: "live",
+      configured: true,
+      status: "토스 계좌 동기화",
+      account: {
+        displayNumber: maskAccount(account.accountNo || accountSeq),
+        type: account.accountType || "BROKERAGE"
+      },
+      positions: positions
+    };
+  } catch (error) {
+    return demoTossPortfolio("토스 조회 실패 · " + error.message);
+  }
+}
+
+function maskAccount(value) {
+  const textValue = String(value || "");
+  if (!textValue) return "연결 계좌";
+  return "****" + textValue.slice(-4);
+}
+
+function demoNewsItems(reason) {
+  const stamped = now();
+  return [
+    {
+      title: "AI 반도체 투자와 전력 인프라 지출이 성장주 흐름을 좌우",
+      source: "demo",
+      url: "",
+      publishedAt: stamped,
+      summary: "AI CAPEX와 전력망 증설 이슈가 반도체와 데이터센터 밸류체인을 동시에 움직입니다."
+    },
+    {
+      title: "달러와 금리가 재상승하면 위험자산 포지션 크기 조절 필요",
+      source: "demo",
+      url: "",
+      publishedAt: stamped,
+      summary: "환율과 금리 변동은 해외 주식 평가액과 신규 매수 여력을 동시에 흔듭니다."
+    },
+    {
+      title: "한국 증시는 반도체 수급과 외국인 매수 지속 여부가 핵심",
+      source: "demo",
+      url: "",
+      publishedAt: stamped,
+      summary: "국내 포트폴리오는 반도체 집중도가 높을수록 외국인 수급 뉴스 민감도가 커집니다."
+    }
+  ].map(function (item) {
+    item.reason = reason || "뉴스 fallback";
+    return item;
+  });
+}
+
+async function fetchFlowNews() {
+  const target = new URL("https://api.gdeltproject.org/api/v2/doc/doc");
+  target.searchParams.set("query", "(market OR stocks OR semiconductor OR \"Federal Reserve\" OR Korea OR dollar OR bonds) sourcelang:english");
+  target.searchParams.set("mode", "ArtList");
+  target.searchParams.set("format", "JSON");
+  target.searchParams.set("maxrecords", "12");
+  target.searchParams.set("sort", "DateDesc");
+
+  try {
+    const response = await requestExternalJson("GET", target.toString(), {
+      timeout: 2500
+    });
+    const payload = response.payload;
+    const articles = Array.isArray(payload.articles) ? payload.articles : [];
+    const items = articles.slice(0, 12).map(function (article) {
+      return {
+        title: String(article.title || "Untitled"),
+        source: String(article.domain || "GDELT"),
+        url: String(article.url || ""),
+        publishedAt: String(article.seendate || ""),
+        summary: String(article.title || "")
+      };
+    }).filter(function (item) {
+      return item.title && item.url;
+    });
+    if (!items.length) return demoNewsItems("GDELT 기사 없음");
+    return items;
+  } catch (error) {
+    return demoNewsItems("뉴스 조회 실패 · " + error.message);
+  }
+}
+
+function analyzeThemes(newsItems) {
+  const themeDefs = [
+    { id: "ai", label: "AI/반도체", color: "green", keywords: ["ai", "chip", "semiconductor", "nvidia", "data center", "반도체", "삼성", "hynix"] },
+    { id: "rates", label: "금리/달러", color: "blue", keywords: ["fed", "rate", "yield", "bond", "dollar", "inflation", "금리", "달러"] },
+    { id: "korea", label: "한국/수급", color: "amber", keywords: ["korea", "kospi", "krw", "seoul", "한국", "코스피", "외국인"] },
+    { id: "risk", label: "리스크", color: "red", keywords: ["war", "tariff", "risk", "selloff", "volatility", "oil", "위험", "관세"] },
+    { id: "crypto", label: "코인/유동성", color: "violet", keywords: ["bitcoin", "crypto", "stablecoin", "token", "ethereum", "코인", "비트코인"] }
+  ];
+
+  return themeDefs.map(function (theme) {
+    const matches = newsItems.filter(function (item) {
+      const haystack = (item.title + " " + item.summary + " " + item.source).toLowerCase();
+      return theme.keywords.some(function (keyword) {
+        return haystack.indexOf(keyword.toLowerCase()) >= 0;
+      });
+    });
+    return {
+      id: theme.id,
+      label: theme.label,
+      color: theme.color,
+      count: matches.length,
+      headline: matches[0] ? matches[0].title : "관련 헤드라인 대기",
+      weight: Math.min(100, matches.length * 28)
+    };
+  }).sort(function (a, b) {
+    return b.count - a.count;
+  });
+}
+
+function analyzePortfolio(positions) {
+  const total = positions.reduce(function (sum, item) {
+    return sum + Math.max(0, decimalNumber(item.marketValue));
+  }, 0);
+  const sectorMap = {};
+  positions.forEach(function (item) {
+    const sector = item.sector || sectorFromSymbol(item.symbol || item.name);
+    sectorMap[sector] = (sectorMap[sector] || 0) + Math.max(0, decimalNumber(item.marketValue));
+  });
+  const sectors = Object.keys(sectorMap)
+    .map(function (sector) {
+      return {
+        sector: sector,
+        value: sectorMap[sector],
+        ratio: total ? Math.round((sectorMap[sector] / total) * 100) : 0
+      };
+    })
+    .sort(function (a, b) {
+      return b.value - a.value;
+    });
+  const concentration = sectors[0] ? sectors[0].ratio : 0;
+  return { total: total, sectors: sectors, concentration: concentration };
+}
+
+function buildFlowLensSnapshot(toss, newsItems) {
+  const themes = analyzeThemes(newsItems);
+  const portfolio = analyzePortfolio(toss.positions || []);
+  const riskTheme = themes.find(function (theme) { return theme.id === "risk"; }) || { count: 0 };
+  const aiTheme = themes.find(function (theme) { return theme.id === "ai"; }) || { count: 0 };
+  const ratesTheme = themes.find(function (theme) { return theme.id === "rates"; }) || { count: 0 };
+  const flowScore = Math.max(
+    0,
+    Math.min(100, 52 + aiTheme.count * 6 - riskTheme.count * 7 - ratesTheme.count * 3 - Math.max(0, portfolio.concentration - 55) / 3)
+  );
+  const regime = flowScore >= 65 ? "위험자산 우위" : flowScore <= 40 ? "방어 우위" : "혼조 관찰";
+  const leadTheme = themes[0] || { label: "대기", headline: "뉴스 대기" };
+  return {
+    generatedAt: now(),
+    headline: regime + " · " + leadTheme.label,
+    flowScore: Math.round(flowScore),
+    regime: regime,
+    summary: [
+      leadTheme.label + " 뉴스가 가장 많이 잡혔습니다.",
+      portfolio.sectors[0] ? "계좌는 " + portfolio.sectors[0].sector + " 비중이 가장 큽니다." : "계좌 보유 종목은 아직 비어 있습니다.",
+      riskTheme.count ? "리스크 뉴스가 있어 신규 진입은 크기 조절이 필요합니다." : "리스크 뉴스 강도는 낮게 잡혔습니다."
+    ],
+    toss: toss,
+    portfolio: portfolio,
+    themes: themes,
+    news: newsItems,
+    checklist: [
+      { label: "토스 보유 비중과 뉴스 주도 테마가 같은 방향인지 확인", status: portfolio.concentration > 55 ? "주의" : "정상" },
+      { label: "금리/달러 뉴스가 강하면 해외주식 신규 매수 속도 조절", status: ratesTheme.count > 1 ? "주의" : "정상" },
+      { label: "주문 기능은 읽기 전용 점검 이후 별도 단계에서만 열기", status: "잠금" }
+    ]
+  };
+}
+
+async function flowLensSnapshot() {
+  const newsPromise = Promise.race([
+    fetchFlowNews(),
+    new Promise(function (resolve) {
+      setTimeout(function () {
+        resolve(demoNewsItems("뉴스 빠른 fallback"));
+      }, 1800);
+    })
+  ]);
+  const results = await Promise.all([fetchTossPortfolio(), newsPromise]);
+  return buildFlowLensSnapshot(results[0], results[1]);
+}
+
 async function api(req, res, pathname) {
   if (pathname === "/api/economic-feed/rss") {
     if (req.method === "OPTIONS") return corsText(res, 204, "", "text/plain");
@@ -1367,6 +1752,11 @@ async function api(req, res, pathname) {
         });
       }
     }
+  }
+
+  if (req.method === "GET" && pathname === "/api/flow-lens") {
+    const payload = await flowLensSnapshot();
+    return json(res, 200, payload);
   }
 
   if (req.method === "GET" && pathname === "/api/bootstrap") return json(res, 200, snapshot());

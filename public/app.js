@@ -53,9 +53,24 @@
     return Math.round(Number(value || 0)) + "%";
   }
 
-  function dominantTheme(snapshot) {
-    if (!snapshot || !snapshot.themes || !snapshot.themes.length) return null;
-    return snapshot.themes[0];
+  function signedPct(value) {
+    var number = Number(value || 0);
+    if (!Number.isFinite(number) || number === 0) return "0%";
+    return (number > 0 ? "+" : "") + number.toFixed(Math.abs(number) >= 10 ? 0 : 1) + "%";
+  }
+
+  function sourceLabel(value) {
+    if (value === "holding") return "보유";
+    if (value === "watchlist") return "관심";
+    return value || "-";
+  }
+
+  function pressureLabel(score) {
+    var value = Number(score || 0);
+    if (value >= 72) return "높음";
+    if (value >= 55) return "검토";
+    if (value >= 38) return "관찰";
+    return "낮음";
   }
 
   function filteredNews(snapshot) {
@@ -117,8 +132,8 @@
       '<main class="shell">',
       '<section class="topbar">',
       '<div>',
-      '<p class="eyebrow">Flow Lens</p>',
-      '<h1>시장 흐름을 불러오는 중</h1>',
+      '<p class="eyebrow">Exit Lens</p>',
+      '<h1>매도 타이밍을 불러오는 중</h1>',
       '</div>',
       '</section>',
       '<section class="grid">',
@@ -135,8 +150,8 @@
       '<main class="shell">',
       '<section class="topbar">',
       '<div>',
-      '<p class="eyebrow">Flow Lens</p>',
-      '<h1>흐름 스냅샷을 만들지 못했습니다</h1>',
+      '<p class="eyebrow">Exit Lens</p>',
+      '<h1>매도 판단 스냅샷을 만들지 못했습니다</h1>',
       '<p class="subtle">' + escapeHtml(state.error || "알 수 없는 오류") + "</p>",
       '</div>',
       '<button class="icon-button" data-action="refresh" title="새로고침">↻</button>',
@@ -146,26 +161,27 @@
   }
 
   function renderDashboard(snapshot) {
-    var lead = dominantTheme(snapshot) || { label: "대기", headline: "" };
     var news = filteredNews(snapshot);
+    var toss = snapshot.toss || { mode: "demo" };
     return [
       '<main class="shell">',
       '<section class="topbar">',
       '<div>',
-      '<p class="eyebrow">Flow Lens</p>',
-      '<h1>토스 계좌, 뉴스, 포스팅으로 보는 오늘의 흐름</h1>',
+      '<p class="eyebrow">Exit Lens</p>',
+      '<h1>보유/관심 종목 매도 타이밍</h1>',
       '<p class="subtle">' + escapeHtml(snapshot.headline) + " · " + escapeHtml(formatClock(snapshot.generatedAt)) + "</p>",
       '</div>',
       '<div class="toolbar">',
-      '<span class="status-pill ' + (snapshot.toss.mode === "live" ? "live" : "demo") + '">' + escapeHtml(snapshot.toss.mode === "live" ? "Toss live" : "Demo") + "</span>",
+      '<span class="status-pill ' + (toss.mode === "live" ? "live" : "demo") + '">' + escapeHtml(toss.mode === "live" ? "Toss live" : "Demo") + "</span>",
       '<button class="icon-button" data-action="refresh" title="새로고침">' + (state.refreshing ? "…" : "↻") + "</button>",
       '</div>',
       '</section>',
       '<section class="hero-grid">',
-      renderScorePanel(snapshot, lead),
+      renderScorePanel(snapshot),
       renderSourcePanel(snapshot),
       '</section>',
       '<section class="content-grid">',
+      renderExitPanel(snapshot),
       renderPortfolioPanel(snapshot),
       renderThemePanel(snapshot),
       renderNewsPanel(snapshot, news),
@@ -176,17 +192,19 @@
     ].join("");
   }
 
-  function renderScorePanel(snapshot, lead) {
+  function renderScorePanel(snapshot) {
+    var exitLens = snapshot.exitLens || {};
+    var score = Number(snapshot.exitScore || exitLens.overallPressure || 0);
     return [
       '<article class="panel score-panel">',
       '<div class="score-wrap">',
-      '<div class="score-ring" style="--score:' + Number(snapshot.flowScore || 0) + '">',
-      '<span>' + escapeHtml(snapshot.flowScore) + '</span>',
+      '<div class="score-ring" style="--score:' + score + '">',
+      '<span>' + escapeHtml(score) + '</span>',
       '</div>',
       '<div>',
-      '<p class="label">흐름 점수</p>',
-      '<h2>' + escapeHtml(snapshot.regime) + '</h2>',
-      '<p class="subtle">' + escapeHtml(lead.headline || "뉴스 신호 대기") + '</p>',
+      '<p class="label">Exit Pressure</p>',
+      '<h2>매도 압력 ' + escapeHtml(pressureLabel(score)) + '</h2>',
+      '<p class="subtle">' + escapeHtml(exitLens.urgentCount || 0) + '개 종목은 매도/축소 기준 확인이 필요합니다.</p>',
       '</div>',
       '</div>',
       '<div class="summary-list">',
@@ -199,6 +217,8 @@
   }
 
   function renderSourcePanel(snapshot) {
+    var toss = snapshot.toss || { account: {} };
+    var exitLens = snapshot.exitLens || {};
     return [
       '<aside class="panel source-panel">',
       '<div class="panel-head">',
@@ -208,8 +228,10 @@
       '</div>',
       '</div>',
       '<div class="source-stack">',
-      '<div class="source-row"><span>토스</span><strong>' + escapeHtml(snapshot.toss.status) + '</strong></div>',
-      '<div class="source-row"><span>계좌</span><strong>' + escapeHtml(snapshot.toss.account && snapshot.toss.account.displayNumber || "-") + '</strong></div>',
+      '<div class="source-row"><span>토스</span><strong>' + escapeHtml(toss.status || "-") + '</strong></div>',
+      '<div class="source-row"><span>계좌</span><strong>' + escapeHtml(toss.account && toss.account.displayNumber || "-") + '</strong></div>',
+      '<div class="source-row"><span>보유/관심</span><strong>' + escapeHtml(exitLens.holdingCount || 0) + ' / ' + escapeHtml(exitLens.watchCount || 0) + '</strong></div>',
+      '<div class="source-row"><span>매도 검토</span><strong>' + escapeHtml(exitLens.urgentCount || 0) + '개</strong></div>',
       '<div class="source-row"><span>뉴스</span><strong>' + escapeHtml((snapshot.news || []).length) + '건</strong></div>',
       '<div class="source-row"><span>포스팅</span><strong>' + escapeHtml((snapshot.social || []).length) + '건</strong></div>',
       '</div>',
@@ -217,15 +239,76 @@
     ].join("");
   }
 
+  function renderExitPanel(snapshot) {
+    var exitLens = snapshot.exitLens || { items: [], rules: [] };
+    var items = exitLens.items || [];
+    return [
+      '<article class="panel exit-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Sell Timing</p>',
+      '<h2>오늘 먼저 볼 종목</h2>',
+      '</div>',
+      '<span class="metric">' + escapeHtml(items.length) + '</span>',
+      '</div>',
+      '<div class="exit-list">',
+      items.map(function (item) {
+        var signals = item.matchedSignals || [];
+        return [
+          '<div class="exit-row">',
+          '<div class="exit-main">',
+          '<div class="exit-title">',
+          '<div>',
+          '<h3>' + escapeHtml(item.name) + '</h3>',
+          '<p class="subtle">' + escapeHtml(item.symbol) + ' · ' + escapeHtml(item.sector) + '</p>',
+          '</div>',
+          '<div class="exit-badges">',
+          '<span class="source-chip ' + escapeHtml(item.source) + '">' + escapeHtml(sourceLabel(item.source)) + '</span>',
+          '<span class="decision-chip ' + escapeHtml(item.tone) + '">' + escapeHtml(item.decision) + '</span>',
+          '</div>',
+          '</div>',
+          '<div class="exit-reasons">',
+          (item.reasons || []).map(function (reason) {
+            return '<p>' + escapeHtml(reason) + '</p>';
+          }).join(""),
+          '</div>',
+          '<div class="trigger-list">',
+          (item.triggers || []).map(function (trigger) {
+            return '<span>' + escapeHtml(trigger) + '</span>';
+          }).join(""),
+          '</div>',
+          signals.length ? '<div class="evidence-list">' + signals.map(function (signal) {
+            return '<span>' + escapeHtml(signal.type === "post" ? "X" : "뉴스") + ' · ' + escapeHtml(signal.source) + '</span>';
+          }).join("") + '</div>' : '',
+          '</div>',
+          '<div class="exit-score">',
+          '<strong>' + escapeHtml(item.exitPressure) + '</strong>',
+          '<span>압력</span>',
+          item.source === "holding" ? '<em>' + escapeHtml(signedPct(item.profitLossRate)) + '</em>' : '<em>watch</em>',
+          '</div>',
+          '</div>'
+        ].join("");
+      }).join(""),
+      '</div>',
+      '<div class="rule-strip">',
+      (exitLens.rules || []).map(function (rule) {
+        return '<span>' + escapeHtml(rule) + '</span>';
+      }).join(""),
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
   function renderPortfolioPanel(snapshot) {
     var portfolio = snapshot.portfolio || { sectors: [] };
-    var positions = snapshot.toss.positions || [];
+    var toss = snapshot.toss || { positions: [] };
+    var positions = toss.positions || [];
     return [
       '<article class="panel">',
       '<div class="panel-head">',
       '<div>',
       '<p class="label">Toss Portfolio</p>',
-      '<h2>계좌 노출 방향</h2>',
+      '<h2>보유 노출</h2>',
       '</div>',
       '<span class="metric">' + escapeHtml(formatMoney(portfolio.total)) + '</span>',
       '</div>',
@@ -259,7 +342,7 @@
       '<div class="panel-head">',
       '<div>',
       '<p class="label">Signal Themes</p>',
-      '<h2>뉴스와 포스팅이 미는 축</h2>',
+      '<h2>매도 판단에 영향을 주는 신호</h2>',
       '</div>',
       '</div>',
       '<div class="theme-tabs">',
@@ -288,7 +371,7 @@
       '<div class="panel-head">',
       '<div>',
       '<p class="label">News Feed</p>',
-      '<h2>흐름을 만든 기사</h2>',
+      '<h2>매도 근거 기사</h2>',
       '</div>',
       '<span class="metric">' + escapeHtml(news.length) + '</span>',
       '</div>',
@@ -351,7 +434,7 @@
       '<div class="panel-head">',
       '<div>',
       '<p class="label">Trade Check</p>',
-      '<h2>오늘 확인할 것</h2>',
+      '<h2>매도 전 확인할 것</h2>',
       '</div>',
       '</div>',
       '<div class="check-list">',

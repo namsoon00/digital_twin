@@ -1460,9 +1460,35 @@ function sectorFromSymbol(value) {
   const normalized = value.toUpperCase();
   if (/005930|000660|NVDA|AMD|TSM|반도체|CHIP|SEMICONDUCTOR/.test(normalized)) return "반도체";
   if (/AAPL|MSFT|GOOGL|META|AMZN|AI|SOFTWARE/.test(normalized)) return "AI/플랫폼";
+  if (/^(TSLA|RIVN|GM|F)$/.test(normalized) || /EV|BATTERY|AUTO|전기차/.test(normalized)) return "모빌리티";
   if (/CASH|USD|KRW|현금/.test(normalized)) return "현금";
   if (/BTC|ETH|COIN|CRYPTO/.test(normalized)) return "디지털자산";
   return "기타";
+}
+
+function knownStockInfo(symbol) {
+  const normalized = String(symbol || "").trim().toUpperCase();
+  const map = {
+    "005930": { name: "삼성전자", market: "KR", currency: "KRW", sector: "반도체" },
+    "000660": { name: "SK하이닉스", market: "KR", currency: "KRW", sector: "반도체" },
+    AAPL: { name: "Apple", market: "US", currency: "USD", sector: "AI/플랫폼" },
+    MSFT: { name: "Microsoft", market: "US", currency: "USD", sector: "AI/플랫폼" },
+    NVDA: { name: "NVIDIA", market: "US", currency: "USD", sector: "반도체" },
+    AMD: { name: "AMD", market: "US", currency: "USD", sector: "반도체" },
+    TSLA: { name: "Tesla", market: "US", currency: "USD", sector: "모빌리티" },
+    GOOGL: { name: "Alphabet", market: "US", currency: "USD", sector: "AI/플랫폼" },
+    META: { name: "Meta", market: "US", currency: "USD", sector: "AI/플랫폼" }
+  };
+  return Object.assign(
+    {
+      symbol: normalized,
+      name: normalized || "관심 종목",
+      market: "",
+      currency: "",
+      sector: sectorFromSymbol(normalized)
+    },
+    map[normalized] || {}
+  );
 }
 
 async function fetchTossPortfolio() {
@@ -1760,12 +1786,248 @@ function analyzePortfolio(positions) {
   return { total: total, sectors: sectors, concentration: concentration };
 }
 
+function parseWatchlist() {
+  const raw = String(process.env.WATCHLIST_SYMBOLS || "").trim();
+  const symbols = raw
+    ? raw.split(",").map(function (item) { return item.trim(); }).filter(Boolean)
+    : ["NVDA", "TSLA", "000660"];
+  return symbols.map(function (symbol) {
+    const info = knownStockInfo(symbol);
+    return {
+      symbol: info.symbol,
+      name: info.name,
+      market: info.market,
+      currency: info.currency,
+      sector: info.sector,
+      source: "watchlist",
+      configured: Boolean(raw)
+    };
+  });
+}
+
+function stockSignalKeywords(item) {
+  const sector = item.sector || sectorFromSymbol(item.symbol || item.name);
+  const base = [item.symbol, item.name, sector].filter(Boolean);
+  const sectorKeywords = {
+    "반도체": ["ai", "chip", "semiconductor", "nvidia", "hynix", "samsung", "data center", "반도체", "삼성", "하이닉스"],
+    "AI/플랫폼": ["ai", "platform", "software", "apple", "microsoft", "google", "meta", "cloud", "앱", "플랫폼"],
+    "모빌리티": ["tesla", "ev", "battery", "delivery", "vehicle", "auto", "전기차", "배터리"],
+    "디지털자산": ["bitcoin", "crypto", "coin", "token", "ethereum", "비트코인", "코인"],
+    "기타": ["market", "stocks", "earnings", "guidance", "growth", "equity"]
+  };
+  return base.concat(sectorKeywords[sector] || sectorKeywords["기타"]).map(function (value) {
+    return String(value || "").toLowerCase();
+  }).filter(Boolean);
+}
+
+function matchedSignalsForStock(item, newsItems, socialPosts) {
+  const keywords = stockSignalKeywords(item);
+  const signals = newsItems.concat(socialPostsAsSignals(socialPosts));
+  return signals.filter(function (signal) {
+    const haystack = (signal.title + " " + signal.summary + " " + signal.source).toLowerCase();
+    return keywords.some(function (keyword) {
+      return keyword.length > 1 && haystack.indexOf(keyword) >= 0;
+    });
+  }).slice(0, 4).map(function (signal) {
+    return {
+      title: signal.title,
+      source: signal.source,
+      url: signal.url || "",
+      type: signal.signalType === "social" ? "post" : "news"
+    };
+  });
+}
+
+function sectorThemePressure(item, themes) {
+  const sector = item.sector || sectorFromSymbol(item.symbol || item.name);
+  const themeById = {};
+  themes.forEach(function (theme) {
+    themeById[theme.id] = theme;
+  });
+  if (sector === "반도체") return themeById.ai || { count: 0 };
+  if (sector === "AI/플랫폼") return themeById.ai || { count: 0 };
+  if (sector === "디지털자산") return themeById.crypto || { count: 0 };
+  if (sector === "모빌리티") return themeById.risk || { count: 0 };
+  return { count: 0 };
+}
+
+function profitLossRate(item) {
+  const marketValue = decimalNumber(item.marketValue);
+  const profitLoss = decimalNumber(item.profitLoss);
+  const costBasis = marketValue - profitLoss;
+  if (!costBasis) return 0;
+  return Math.round((profitLoss / costBasis) * 1000) / 10;
+}
+
+function clampScore(value) {
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+function exitDecision(source, pressure, pnlRate) {
+  if (source === "watchlist") {
+    if (pressure >= 62) return { label: "진입 보류", tone: "danger", priority: 1 };
+    if (pressure >= 44) return { label: "기준가 대기", tone: "caution", priority: 2 };
+    return { label: "관심 유지", tone: "watch", priority: 3 };
+  }
+  if (pressure >= 72) {
+    return {
+      label: pnlRate <= -8 ? "손절 검토" : "매도 검토",
+      tone: "danger",
+      priority: 1
+    };
+  }
+  if (pressure >= 55) return { label: "부분 매도 검토", tone: "caution", priority: 2 };
+  if (pressure >= 38) return { label: "조건부 보유", tone: "hold", priority: 3 };
+  return { label: "보유 유지", tone: "watch", priority: 4 };
+}
+
+function exitReasons(item, pressure, pnlRate, context) {
+  const reasons = [];
+  if (item.source === "holding") {
+    if (pnlRate >= 15) reasons.push("수익 구간이어서 일부 이익 확정 기준을 점검할 때입니다.");
+    if (pnlRate <= -8) reasons.push("손실 구간에서 리스크 신호가 겹치면 손절 기준을 다시 확인해야 합니다.");
+    if (context.sectorRatio >= 50) reasons.push("계좌 안에서 " + item.sector + " 비중이 높아 한 종목 판단이 전체 성과에 크게 반영됩니다.");
+  } else {
+    reasons.push("보유 전 관심 종목은 먼저 무효화 조건과 목표 보유 기간을 정해야 합니다.");
+  }
+  if (context.riskCount) reasons.push("리스크 뉴스가 반복되어 포지션 크기를 줄이는 판단에 가중치를 줬습니다.");
+  if (context.ratesCount) reasons.push("금리/달러 신호가 있어 해외주식과 성장주의 할인율 부담을 반영했습니다.");
+  if (context.sectorThemeCount && pnlRate >= 8) reasons.push(item.sector + " 테마가 강하지만 이미 수익이 난 구간이라 추격보다 분할 매도 기준이 우선입니다.");
+  if (!reasons.length) reasons.push("강한 매도 압력보다 보유 조건 유지 신호가 더 큽니다.");
+  return reasons.slice(0, 3);
+}
+
+function exitTriggers(item, pnlRate, context) {
+  const triggers = [];
+  if (item.source === "holding") {
+    triggers.push(pnlRate >= 10 ? "수익률 " + pnlRate + "% 구간: 분할 익절 비율 확정" : "평균단가 대비 손실 허용폭 재확인");
+    if (context.riskCount || context.ratesCount) triggers.push("금리/달러/리스크 뉴스가 다음 장까지 이어지는지 확인");
+    if (context.sectorRatio >= 50) triggers.push(item.sector + " 비중 50% 초과 시 같은 테마 종목 동시 축소 검토");
+  } else {
+    triggers.push("진입 전 목표가, 손절가, 매도 사유를 한 줄로 고정");
+    triggers.push("뉴스와 포스팅 신호가 같은 방향으로 2회 이상 반복될 때만 반응");
+  }
+  if (context.matchedCount) triggers.push("관련 기사/포스팅 " + context.matchedCount + "건의 방향성 확인");
+  return triggers.slice(0, 3);
+}
+
+function buildExitCandidate(item, source, portfolio, themes, newsItems, socialPosts) {
+  const normalized = Object.assign({}, item, {
+    source: source,
+    sector: item.sector || sectorFromSymbol(item.symbol || item.name)
+  });
+  const themeById = {};
+  themes.forEach(function (theme) { themeById[theme.id] = theme; });
+  const riskCount = (themeById.risk && themeById.risk.count) || 0;
+  const ratesCount = (themeById.rates && themeById.rates.count) || 0;
+  const sectorTheme = sectorThemePressure(normalized, themes);
+  const sectorEntry = (portfolio.sectors || []).find(function (entry) {
+    return entry.sector === normalized.sector;
+  }) || { ratio: 0 };
+  const matches = matchedSignalsForStock(normalized, newsItems, socialPosts);
+  const pnlRate = source === "holding" ? profitLossRate(normalized) : 0;
+  const context = {
+    riskCount: riskCount,
+    ratesCount: ratesCount,
+    sectorThemeCount: sectorTheme.count || 0,
+    sectorRatio: sectorEntry.ratio || 0,
+    matchedCount: matches.length
+  };
+
+  let pressure = source === "holding" ? 26 : 22;
+  pressure += Math.min(28, riskCount * 9 + ratesCount * 5);
+  pressure += Math.min(18, matches.length * 5);
+  pressure += Math.min(16, (sectorTheme.count || 0) * 4);
+  if (source === "holding") {
+    if (pnlRate >= 20) pressure += 22;
+    else if (pnlRate >= 10) pressure += 13;
+    else if (pnlRate <= -15) pressure += 24;
+    else if (pnlRate <= -8) pressure += 15;
+    if (sectorEntry.ratio >= 55) pressure += 12;
+    else if (sectorEntry.ratio >= 40) pressure += 6;
+    if ((sectorTheme.count || 0) >= 2 && pnlRate >= 8) pressure += 8;
+  } else {
+    if (riskCount || ratesCount) pressure += 10;
+    if ((sectorTheme.count || 0) >= 2 && !riskCount) pressure -= 7;
+  }
+
+  const exitPressure = clampScore(pressure);
+  const signalScore = clampScore(matches.length * 18 + (sectorTheme.count || 0) * 10 - riskCount * 4);
+  const decision = exitDecision(source, exitPressure, pnlRate);
+  return {
+    symbol: normalized.symbol,
+    name: normalized.name,
+    source: source,
+    sector: normalized.sector,
+    market: normalized.market || "",
+    currency: normalized.currency || "",
+    marketValue: decimalNumber(normalized.marketValue),
+    profitLoss: decimalNumber(normalized.profitLoss),
+    profitLossRate: pnlRate,
+    signalScore: signalScore,
+    exitPressure: exitPressure,
+    decision: decision.label,
+    tone: decision.tone,
+    priority: decision.priority,
+    reasons: exitReasons(normalized, exitPressure, pnlRate, context),
+    triggers: exitTriggers(normalized, pnlRate, context),
+    matchedSignals: matches
+  };
+}
+
+function buildExitLens(toss, portfolio, themes, newsItems, socialPosts) {
+  const positions = (toss.positions || []).filter(function (item) {
+    const sector = item.sector || sectorFromSymbol(item.symbol || item.name);
+    return sector !== "현금" && decimalNumber(item.marketValue) > 0;
+  });
+  const holdingSymbols = new Set(positions.map(function (item) {
+    return String(item.symbol || "").toUpperCase();
+  }));
+  const watchlist = parseWatchlist().filter(function (item) {
+    return !holdingSymbols.has(String(item.symbol || "").toUpperCase());
+  });
+  const holdingItems = positions.map(function (item) {
+    return buildExitCandidate(item, "holding", portfolio, themes, newsItems, socialPosts);
+  });
+  const watchItems = watchlist.map(function (item) {
+    return buildExitCandidate(item, "watchlist", portfolio, themes, newsItems, socialPosts);
+  });
+  const items = holdingItems.concat(watchItems).sort(function (a, b) {
+    if (a.priority !== b.priority) return a.priority - b.priority;
+    return b.exitPressure - a.exitPressure;
+  });
+  const urgentCount = items.filter(function (item) {
+    return item.tone === "danger" || item.tone === "caution";
+  }).length;
+  const topItems = items.slice(0, 3);
+  const overallPressure = topItems.length
+    ? Math.round(topItems.reduce(function (sum, item) { return sum + item.exitPressure; }, 0) / topItems.length)
+    : 0;
+  const headline = items[0]
+    ? items[0].name + "의 " + items[0].decision + " 우선순위가 가장 높습니다."
+    : "매도 판단을 만들 보유/관심 종목이 아직 없습니다.";
+  return {
+    headline: headline,
+    overallPressure: overallPressure,
+    urgentCount: urgentCount,
+    holdingCount: holdingItems.length,
+    watchCount: watchItems.length,
+    items: items,
+    rules: [
+      "수익 구간에서 리스크 신호가 커지면 전량 매도보다 분할 매도 기준부터 확인합니다.",
+      "손실 구간에서 같은 악재가 반복되면 손절 기준을 숫자로 고정합니다.",
+      "관심 종목은 매수 전 목표가, 손절가, 매도 사유를 먼저 정합니다."
+    ]
+  };
+}
+
 function buildFlowLensSnapshot(toss, newsItems, socialPosts) {
   const themes = analyzeThemes(newsItems, socialPosts);
   const portfolio = analyzePortfolio(toss.positions || []);
   const riskTheme = themes.find(function (theme) { return theme.id === "risk"; }) || { count: 0 };
   const aiTheme = themes.find(function (theme) { return theme.id === "ai"; }) || { count: 0 };
   const ratesTheme = themes.find(function (theme) { return theme.id === "rates"; }) || { count: 0 };
+  const exitLens = buildExitLens(toss, portfolio, themes, newsItems, socialPosts);
   const flowScore = Math.max(
     0,
     Math.min(100, 52 + aiTheme.count * 6 - riskTheme.count * 7 - ratesTheme.count * 3 - Math.max(0, portfolio.concentration - 55) / 3)
@@ -1774,23 +2036,26 @@ function buildFlowLensSnapshot(toss, newsItems, socialPosts) {
   const leadTheme = themes[0] || { label: "대기", headline: "뉴스 대기" };
   return {
     generatedAt: now(),
-    headline: regime + " · " + leadTheme.label,
+    headline: exitLens.headline,
+    exitScore: exitLens.overallPressure,
     flowScore: Math.round(flowScore),
     regime: regime,
     summary: [
-      leadTheme.label + " 신호가 뉴스와 포스팅에서 가장 많이 잡혔습니다.",
+      exitLens.urgentCount ? "매도 또는 축소를 검토할 종목이 " + exitLens.urgentCount + "개 잡혔습니다." : "즉시 매도보다 조건 확인이 우선입니다.",
       portfolio.sectors[0] ? "계좌는 " + portfolio.sectors[0].sector + " 비중이 가장 큽니다." : "계좌 보유 종목은 아직 비어 있습니다.",
-      riskTheme.count ? "리스크 뉴스가 있어 신규 진입은 크기 조절이 필요합니다." : "리스크 뉴스 강도는 낮게 잡혔습니다."
+      leadTheme.label + " 신호가 뉴스와 포스팅에서 가장 많이 잡혔습니다."
     ],
     toss: toss,
     portfolio: portfolio,
+    exitLens: exitLens,
     themes: themes,
     news: newsItems,
     social: socialPosts,
     checklist: [
-      { label: "토스 보유 비중과 뉴스 주도 테마가 같은 방향인지 확인", status: portfolio.concentration > 55 ? "주의" : "정상" },
+      { label: "보유 종목마다 전량/부분 매도 기준과 손절 기준을 숫자로 남기기", status: exitLens.urgentCount ? "주의" : "정상" },
+      { label: "관심 종목은 진입 전에 무효화 조건과 매도 사유부터 정하기", status: exitLens.watchCount ? "정상" : "대기" },
       { label: "X 포스팅은 기사보다 소음이 크므로 반복 등장하는 테마만 반영", status: socialPosts.length ? "정상" : "대기" },
-      { label: "금리/달러 뉴스가 강하면 해외주식 신규 매수 속도 조절", status: ratesTheme.count > 1 ? "주의" : "정상" },
+      { label: "금리/달러 뉴스가 강하면 해외주식과 성장주 비중 축소 기준 확인", status: ratesTheme.count > 1 ? "주의" : "정상" },
       { label: "주문 기능은 읽기 전용 점검 이후 별도 단계에서만 열기", status: "잠금" }
     ]
   };

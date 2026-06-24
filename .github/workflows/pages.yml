@@ -1,4 +1,4 @@
-name: Deploy Flutter Web
+name: Deploy Static Web
 
 on:
   push:
@@ -6,60 +6,28 @@ on:
       - main
     paths:
       - ".github/workflows/pages.yml"
-      - "mobile/**"
+      - "public/**"
   workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: flutter-pages
+  group: static-pages
   cancel-in-progress: false
 
 jobs:
   deploy:
-    name: Build and publish MarketFlow
+    name: Publish Exit Lens
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Set up Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          flutter-version: "3.41.2"
-          cache: true
-
-      - name: Install dependencies
-        working-directory: mobile
-        run: flutter pub get
-
-      - name: Analyze
-        working-directory: mobile
-        run: flutter analyze
-
-      - name: Test
-        working-directory: mobile
-        run: flutter test
-
-      - name: Build web
-        working-directory: mobile
-        env:
-          WEB_BUILD_VERSION: ${{ github.sha }}-${{ github.run_number }}-${{ github.run_attempt }}
-          WEB_BUILD_NUMBER: ${{ github.run_number }}
-        run: >
-          flutter build web --release --base-href /digital_twin/
-          --build-number=${{ github.run_number }}
-          --dart-define=ALPHA_VANTAGE_API_KEY=${{ secrets.ALPHA_VANTAGE_API_KEY }}
-
-      - name: Stamp build version
-        env:
-          WEB_BUILD_VERSION: ${{ github.sha }}-${{ github.run_number }}-${{ github.run_attempt }}
-          WEB_BUILD_NUMBER: ${{ github.run_number }}
-        run: npm run stamp:flutter-web
+      - name: Validate static app
+        run: node --check public/app.js
 
       - name: Publish gh-pages branch
         shell: bash
@@ -67,7 +35,7 @@ jobs:
           set -euo pipefail
 
           publish_dir="$(mktemp -d)"
-          cp -R mobile/build/web/. "$publish_dir/"
+          cp -R public/. "$publish_dir/"
           touch "$publish_dir/.nojekyll"
 
           git config user.name "github-actions[bot]"
@@ -94,6 +62,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "No Pages changes to publish."
           else
-            git commit -m "Deploy Flutter web to GitHub Pages"
+            git commit -m "Deploy Exit Lens to GitHub Pages"
             git push origin gh-pages --force
           fi

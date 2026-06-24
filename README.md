@@ -11,6 +11,12 @@ npm start
 
 브라우저에서 `http://127.0.0.1:3000`을 여세요.
 
+GitHub Pages mock preview는 아래 URL에서 확인합니다.
+
+```text
+https://namsoon00.github.io/digital_twin/?mock=1
+```
+
 토스 실계좌 조회를 켜려면 `.env.local`에 아래 값을 넣습니다. 값이 없으면 앱은 데모 포트폴리오와 뉴스 fallback으로 동작합니다.
 
 ```bash
@@ -25,6 +31,7 @@ X_SEARCH_QUERY=(market OR stocks OR semiconductor OR Fed OR KOSPI OR dollar OR A
 ## Mock 확인
 
 웹 상단의 `Mock` 전환 버튼을 누르면 토스, 뉴스, X를 모두 고정 mock 데이터로 표시합니다. 실환경 변수가 설정되어 있어도 mock 모드에서는 외부 API를 호출하지 않습니다.
+GitHub Pages에서는 서버 API가 없으므로 mock 스냅샷을 브라우저에서 바로 렌더링합니다.
 
 API만 확인할 때는 아래처럼 호출합니다.
 

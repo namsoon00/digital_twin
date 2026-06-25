@@ -1818,12 +1818,15 @@ function analyzePortfolio(positions) {
   return { total: total, sectors: sectors, concentration: concentration };
 }
 
-function parseWatchlist() {
-  const raw = String(process.env.WATCHLIST_SYMBOLS || "").trim();
+function parseWatchlist(rawValue) {
+  const raw = String(rawValue !== undefined ? rawValue : process.env.WATCHLIST_SYMBOLS || "").trim();
   const symbols = raw
-    ? raw.split(",").map(function (item) { return item.trim(); }).filter(Boolean)
+    ? raw.split(/[,\s]+/).map(function (item) { return item.trim().toUpperCase(); }).filter(Boolean)
     : ["NVDA", "TSLA", "000660"];
-  return symbols.map(function (symbol) {
+  const uniqueSymbols = symbols.filter(function (symbol, index, list) {
+    return list.indexOf(symbol) === index;
+  }).slice(0, 30);
+  return uniqueSymbols.map(function (symbol) {
     const info = knownStockInfo(symbol);
     return {
       symbol: info.symbol,
@@ -2292,11 +2295,11 @@ function buildTossPortfolio(positions, account) {
   };
 }
 
-function buildTossWatchlist(positions) {
+function buildTossWatchlist(positions, watchlistSymbols) {
   const holdingSymbols = new Set(positions.map(function (item) {
     return String(item.symbol || "").toUpperCase();
   }));
-  return parseWatchlist()
+  return parseWatchlist(watchlistSymbols)
     .filter(function (item) {
       return !holdingSymbols.has(String(item.symbol || "").toUpperCase());
     })
@@ -2414,7 +2417,7 @@ function buildTossLensSnapshot(toss, options) {
   const account = toss.account || {};
   const positions = toss.positions || [];
   const portfolio = buildTossPortfolio(positions, account);
-  const watchlist = buildTossWatchlist(positions);
+  const watchlist = buildTossWatchlist(positions, options.watchlistSymbols);
   toss.watchlist = watchlist;
   const tossDecision = buildTossDecision(toss, portfolio, watchlist);
   return {
@@ -2440,11 +2443,12 @@ function buildTossLensSnapshot(toss, options) {
   };
 }
 
-function mockFlowLensSnapshot() {
+function mockFlowLensSnapshot(options) {
+  options = options || {};
   const toss = demoTossPortfolio("웹 mock 데이터");
   toss.mode = "mock";
   toss.status = "웹 mock 데이터";
-  return buildTossLensSnapshot(toss, { mock: true });
+  return buildTossLensSnapshot(toss, { mock: true, watchlistSymbols: options.watchlistSymbols });
 }
 
 function wantsMockFlowLens(query) {
@@ -2454,8 +2458,11 @@ function wantsMockFlowLens(query) {
 
 async function flowLensSnapshot(options) {
   options = options || {};
-  if (options.mock) return mockFlowLensSnapshot();
-  return buildTossLensSnapshot(await fetchTossPortfolio(), { mock: false });
+  if (options.mock) return mockFlowLensSnapshot(options);
+  return buildTossLensSnapshot(await fetchTossPortfolio(), {
+    mock: false,
+    watchlistSymbols: options.watchlistSymbols
+  });
 }
 
 async function api(req, res, pathname) {
@@ -2521,7 +2528,10 @@ async function api(req, res, pathname) {
 
   if (req.method === "GET" && pathname === "/api/flow-lens") {
     const parsedQuery = url.parse(req.url, true).query;
-    const payload = await flowLensSnapshot({ mock: wantsMockFlowLens(parsedQuery) });
+    const payload = await flowLensSnapshot({
+      mock: wantsMockFlowLens(parsedQuery),
+      watchlistSymbols: parsedQuery.watchlistSymbols
+    });
     return json(res, 200, payload);
   }
 

@@ -29,6 +29,7 @@ The official OpenAPI document was available as OpenAPI `3.1.0`, API title `í† ìŠ
   - Market info: KRW/USD exchange rate, KR/US market calendars
   - Account and asset: accounts, holdings
   - Order: create, modify, cancel, list, detail, buying power, sellable quantity, commissions
+- No public endpoint for reading the user's Toss app watchlist was present in the official OpenAPI document reviewed here. Digiter Twin manages watchlist symbols as app-local user settings and can pass those symbols to its own BFF query, but it does not claim to sync Toss app watchlists.
 
 ## Product Decisions
 

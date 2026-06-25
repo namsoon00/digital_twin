@@ -5,10 +5,15 @@
     tossApiBaseUrl: "https://openapi.tossinvest.com",
     tossClientId: "",
     tossClientSecret: "",
-    tossAccountSeq: ""
+    tossAccountSeq: "",
+    valuationAssumptions: [
+      "AAPL,7.5,28,15",
+      "005930,6500,12,20"
+    ].join("\n")
   };
   var tabs = [
     { id: "decision", label: "판단" },
+    { id: "valuation", label: "가치" },
     { id: "holdings", label: "보유" },
     { id: "watchlist", label: "관심" },
     { id: "settings", label: "설정" }
@@ -23,7 +28,9 @@
     activeTab: initialTab(),
     settings: loadSettings(),
     showSecrets: false,
-    settingsSaved: false
+    settingsSaved: false,
+    editingWatchSymbol: "",
+    watchlistError: ""
   };
 
   function escapeHtml(value) {
@@ -128,13 +135,64 @@
     state.settings = Object.assign({}, defaultSettings);
     state.showSecrets = false;
     state.settingsSaved = false;
+    state.editingWatchSymbol = "";
+    state.watchlistError = "";
     if (!removeStoredSettings()) {
       state.error = "브라우저 저장소에서 설정을 삭제하지 못했습니다.";
     }
   }
 
+  function normalizeSymbols(value) {
+    return String(value || "")
+      .split(/[,\s]+/)
+      .map(function (symbol) { return symbol.trim().toUpperCase(); })
+      .filter(Boolean)
+      .filter(function (symbol, index, list) { return list.indexOf(symbol) === index; })
+      .slice(0, 30);
+  }
+
+  function watchlistSymbols() {
+    return normalizeSymbols(settingValue("watchlistSymbols"));
+  }
+
+  function clientKnownStockInfo(symbol) {
+    var normalized = String(symbol || "").trim().toUpperCase();
+    var map = {
+      "005930": { name: "삼성전자", market: "KR", currency: "KRW", sector: "반도체" },
+      "000660": { name: "SK하이닉스", market: "KR", currency: "KRW", sector: "반도체" },
+      AAPL: { name: "Apple", market: "US", currency: "USD", sector: "AI/플랫폼" },
+      MSFT: { name: "Microsoft", market: "US", currency: "USD", sector: "AI/플랫폼" },
+      NVDA: { name: "NVIDIA", market: "US", currency: "USD", sector: "반도체" },
+      AMD: { name: "AMD", market: "US", currency: "USD", sector: "반도체" },
+      TSLA: { name: "Tesla", market: "US", currency: "USD", sector: "모빌리티" },
+      GOOGL: { name: "Alphabet", market: "US", currency: "USD", sector: "AI/플랫폼" },
+      META: { name: "Meta", market: "US", currency: "USD", sector: "AI/플랫폼" }
+    };
+    return Object.assign({
+      symbol: normalized,
+      name: normalized || "관심 종목",
+      market: "",
+      currency: "",
+      sector: ""
+    }, map[normalized] || {});
+  }
+
+  function saveWatchlistSymbols(symbols) {
+    state.settings.watchlistSymbols = normalizeSymbols(symbols.join(",")).join(",");
+    state.editingWatchSymbol = "";
+    state.watchlistError = "";
+    persistSettings();
+    state.snapshot = null;
+    return load();
+  }
+
   function tossLensPath() {
-    return state.dataMode === "mock" ? "/api/flow-lens?mock=1" : "/api/flow-lens";
+    var params = new URLSearchParams();
+    if (state.dataMode === "mock") params.set("mock", "1");
+    var symbols = watchlistSymbols().join(",");
+    if (symbols) params.set("watchlistSymbols", symbols);
+    var query = params.toString();
+    return "/api/flow-lens" + (query ? "?" + query : "");
   }
 
   function staticMockSnapshot() {
@@ -186,11 +244,15 @@
         profitLossRate: 0
       }
     ];
-    var watchlist = [
-      { symbol: "NVDA", name: "NVIDIA", source: "watchlist", sector: "반도체", market: "US", currency: "USD", quoteStatus: "시세 조회 대기" },
-      { symbol: "TSLA", name: "Tesla", source: "watchlist", sector: "모빌리티", market: "US", currency: "USD", quoteStatus: "시세 조회 대기" },
-      { symbol: "000660", name: "SK하이닉스", source: "watchlist", sector: "반도체", market: "KR", currency: "KRW", quoteStatus: "시세 조회 대기" }
-    ];
+    var holdingSymbols = positions.map(function (item) { return String(item.symbol || "").toUpperCase(); });
+    var watchlist = watchlistSymbols()
+      .filter(function (symbol) { return holdingSymbols.indexOf(symbol) < 0; })
+      .map(function (symbol) {
+        return Object.assign(clientKnownStockInfo(symbol), {
+          source: "watchlist",
+          quoteStatus: "시세 조회 대기"
+        });
+      });
     var decisionItems = [
       {
         symbol: "AAPL",
@@ -240,7 +302,12 @@
         reasons: ["관심 종목은 토스 시세 연결 후 현재가와 기준가를 비교해야 합니다."],
         triggers: ["관심 종목", "현재가", "기준가"]
       }
-    ];
+    ].filter(function (item) {
+      if (item.source !== "watchlist") return true;
+      return watchlist.some(function (watchItem) {
+        return watchItem.symbol === item.symbol;
+      });
+    });
     return {
       generatedAt: stamped,
       dataMode: "mock",
@@ -249,7 +316,7 @@
       exitScore: 57,
       regime: "토스 조회 전용",
       summary: [
-        "보유 종목 2개와 관심 종목 3개를 토스 API 범위 안에서 분리했습니다.",
+        "보유 종목 2개와 관심 종목 " + watchlist.length + "개를 토스 API 범위 안에서 분리했습니다.",
         "외부 텍스트 신호는 첫 화면 판단에서 제외했습니다.",
         "판단 근거는 수익률, 평가손익, 매도 가능 수량, 보유 비중으로 제한합니다."
       ],
@@ -277,7 +344,7 @@
         overallPressure: 57,
         urgentCount: 2,
         holdingCount: 2,
-        watchCount: 3,
+        watchCount: watchlist.length,
         items: decisionItems,
         rules: [
           "수익률과 평가손익은 토스 잔고에서 확인 가능한 값만 사용합니다.",
@@ -318,6 +385,15 @@
     return formatMoney(value) + suffix;
   }
 
+  function formatPrice(value, currency) {
+    var number = Number(value || 0);
+    if (!Number.isFinite(number)) return "-";
+    var suffix = currency ? " " + currency : "";
+    return number.toLocaleString("ko-KR", {
+      maximumFractionDigits: Number.isInteger(number) ? 0 : 2
+    }) + suffix;
+  }
+
   function pct(value) {
     return Math.round(Number(value || 0)) + "%";
   }
@@ -339,6 +415,96 @@
     if (value === "watchlist") return "관심";
     if (value === "cash") return "현금";
     return value || "-";
+  }
+
+  function numeric(value) {
+    var parsed = Number(String(value == null ? "" : value).replace(/,/g, "").trim());
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  function parseValuationAssumptions() {
+    var map = {};
+    String(settingValue("valuationAssumptions") || "")
+      .split(/\r?\n/)
+      .map(function (line) { return line.trim(); })
+      .filter(Boolean)
+      .forEach(function (line) {
+        var parts = line.split(",").map(function (part) { return part.trim(); });
+        var symbol = String(parts[0] || "").toUpperCase();
+        if (!symbol) return;
+        map[symbol] = {
+          symbol: symbol,
+          eps: numeric(parts[1]),
+          targetPer: numeric(parts[2]),
+          margin: numeric(parts[3] || 15)
+        };
+      });
+    return map;
+  }
+
+  function currentPriceOf(item) {
+    var currentPrice = numeric(item.currentPrice);
+    if (currentPrice) return currentPrice;
+    var quantity = numeric(item.quantity);
+    var marketValue = numeric(item.marketValue);
+    return quantity ? marketValue / quantity : 0;
+  }
+
+  function valuationStatus(currentPrice, fairValue, marginPrice) {
+    if (!currentPrice || !fairValue) return { label: "입력 필요", tone: "hold", rank: 4 };
+    if (currentPrice <= marginPrice) return { label: "싸다", tone: "watch", rank: 1 };
+    if (currentPrice <= fairValue) return { label: "적정권", tone: "hold", rank: 2 };
+    if (currentPrice <= fairValue * 1.15) return { label: "비싼 편", tone: "caution", rank: 3 };
+    return { label: "비싸다", tone: "danger", rank: 3 };
+  }
+
+  function buildValuationItems(snapshot) {
+    var toss = snapshot.toss || { positions: [] };
+    var assumptions = parseValuationAssumptions();
+    return (toss.positions || [])
+      .filter(function (item) {
+        return item.source !== "cash" && item.sector !== "현금";
+      })
+      .map(function (item) {
+        var symbol = String(item.symbol || "").toUpperCase();
+        var assumption = assumptions[symbol] || {};
+        var currentPrice = currentPriceOf(item);
+        var fairValue = assumption.eps && assumption.targetPer ? assumption.eps * assumption.targetPer : 0;
+        var margin = assumption.margin || 15;
+        var marginPrice = fairValue ? fairValue * (1 - margin / 100) : 0;
+        var gap = currentPrice && fairValue ? ((fairValue / currentPrice) - 1) * 100 : 0;
+        var status = valuationStatus(currentPrice, fairValue, marginPrice);
+        var reasons = [];
+        if (!assumption.eps || !assumption.targetPer) {
+          reasons.push("EPS와 목표 PER 가정이 필요합니다.");
+        } else if (!currentPrice) {
+          reasons.push("현재가가 필요합니다.");
+        } else {
+          reasons.push("적정가 " + formatPrice(fairValue, item.currency) + " 대비 " + signedPct(gap) + " 괴리입니다.");
+          reasons.push("안전마진 " + margin + "% 기준 매수가 상한은 " + formatPrice(marginPrice, item.currency) + "입니다.");
+        }
+        return {
+          symbol: symbol,
+          name: item.name,
+          market: item.market || "",
+          currency: item.currency || "",
+          currentPrice: currentPrice,
+          eps: assumption.eps || 0,
+          targetPer: assumption.targetPer || 0,
+          margin: margin,
+          fairValue: fairValue,
+          marginPrice: marginPrice,
+          gap: gap,
+          status: status.label,
+          tone: status.tone,
+          rank: status.rank,
+          reasons: reasons
+        };
+      })
+      .sort(function (a, b) {
+        if (a.rank !== b.rank) return a.rank - b.rank;
+        return a.gap - b.gap;
+      });
   }
 
   function pressureLabel(score) {
@@ -453,7 +619,7 @@
 
   function renderTabs() {
     return [
-      '<nav class="tab-bar" aria-label="앱 탭">',
+      '<nav class="tab-bar" aria-label="앱 탭" style="--tab-count:' + tabs.length + '">',
       tabs.map(function (tab) {
         return '<button class="' + (state.activeTab === tab.id ? "active" : "") + '" data-tab="' + escapeHtml(tab.id) + '">' + escapeHtml(tab.label) + '</button>';
       }).join(""),
@@ -462,6 +628,14 @@
   }
 
   function renderActiveTab(snapshot) {
+    if (state.activeTab === "valuation") {
+      return [
+        '<section class="content-grid">',
+        renderValuationPanel(snapshot, true),
+        renderValuationMethodPanel(),
+        '</section>'
+      ].join("");
+    }
     if (state.activeTab === "holdings") {
       return [
         '<section class="content-grid">',
@@ -491,6 +665,7 @@
       renderSourcePanel(snapshot),
       '</section>',
       '<section class="content-grid">',
+      renderValuationPanel(snapshot, false),
       renderDecisionPanel(snapshot),
       renderChecklistPanel(snapshot),
       '</section>'
@@ -603,6 +778,81 @@
     ].join("");
   }
 
+  function renderValuationPanel(snapshot, full) {
+    var items = buildValuationItems(snapshot);
+    var expensive = items.filter(function (item) {
+      return item.tone === "danger" || item.tone === "caution";
+    }).length;
+    return [
+      '<article class="panel valuation-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Valuation</p>',
+      '<h2>보유 종목 적정가 점검</h2>',
+      '</div>',
+      '<span class="metric">' + escapeHtml(expensive) + '</span>',
+      '</div>',
+      '<div class="valuation-list">',
+      items.length ? items.map(renderValuationRow).join("") : '<p class="subtle">토스 잔고에서 밸류에이션할 보유 종목을 찾지 못했습니다.</p>',
+      '</div>',
+      full ? '' : '<div class="rule-strip"><span>상세 가정은 가치 탭과 설정 탭에서 조정합니다.</span></div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderValuationRow(item) {
+    var hasValue = item.currentPrice && item.fairValue;
+    return [
+      '<div class="valuation-row">',
+      '<div class="valuation-main">',
+      '<div class="flow-title">',
+      '<div>',
+      '<strong>' + escapeHtml(item.name) + '</strong>',
+      '<span>' + escapeHtml(item.symbol) + ' · 현재 ' + escapeHtml(item.currentPrice ? formatPrice(item.currentPrice, item.currency) : "-") + '</span>',
+      '</div>',
+      '<span class="tone-chip ' + escapeHtml(item.tone || "hold") + '">' + escapeHtml(item.status) + '</span>',
+      '</div>',
+      '<div class="valuation-grid">',
+      '<span>EPS <strong>' + escapeHtml(item.eps || "-") + '</strong></span>',
+      '<span>목표 PER <strong>' + escapeHtml(item.targetPer || "-") + '</strong></span>',
+      '<span>적정가 <strong>' + escapeHtml(hasValue ? formatPrice(item.fairValue, item.currency) : "-") + '</strong></span>',
+      '<span>괴리 <strong>' + escapeHtml(hasValue ? signedPct(item.gap) : "-") + '</strong></span>',
+      '</div>',
+      '<div class="exit-reasons">',
+      item.reasons.map(function (reason) {
+        return '<p>' + escapeHtml(reason) + '</p>';
+      }).join(""),
+      '</div>',
+      '</div>',
+      '</div>'
+    ].join("");
+  }
+
+  function renderValuationMethodPanel() {
+    var rows = [
+      ["적정가", "EPS × 목표 PER"],
+      ["싸다", "현재가가 안전마진 가격 이하"],
+      ["적정권", "현재가가 적정가 이하"],
+      ["비싸다", "현재가가 적정가를 초과"]
+    ];
+    return [
+      '<article class="panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Method</p>',
+      '<h2>계산 기준</h2>',
+      '</div>',
+      '</div>',
+      '<div class="source-stack">',
+      rows.map(function (row) {
+        return '<div class="source-row"><span>' + escapeHtml(row[0]) + '</span><strong>' + escapeHtml(row[1]) + '</strong></div>';
+      }).join(""),
+      '</div>',
+      '<div class="rule-strip"><span>현재가는 토스 잔고/시세 값, EPS와 목표 PER은 사용자 가정입니다.</span></div>',
+      '</article>'
+    ].join("");
+  }
+
   function renderPortfolioPanel(snapshot) {
     var portfolio = snapshot.portfolio || { sectors: [] };
     return [
@@ -671,6 +921,19 @@
   function renderWatchlistPanel(snapshot) {
     var toss = snapshot.toss || {};
     var watchlist = toss.watchlist || [];
+    var symbols = watchlistSymbols();
+    var lookup = {};
+    (watchlist || []).forEach(function (item) {
+      lookup[String(item.symbol || "").toUpperCase()] = item;
+    });
+    ((toss.positions || []) || []).forEach(function (item) {
+      var symbol = String(item.symbol || "").toUpperCase();
+      if (!symbol) return;
+      lookup[symbol] = Object.assign({}, item, {
+        source: item.source || "holding",
+        quoteStatus: "보유 종목으로 분류됨"
+      });
+    });
     return [
       '<article class="panel watchlist-panel">',
       '<div class="panel-head">',
@@ -678,25 +941,52 @@
       '<p class="label">Watchlist</p>',
       '<h2>관심 종목</h2>',
       '</div>',
-      '<span class="metric">' + escapeHtml(watchlist.length) + '</span>',
+      '<span class="metric">' + escapeHtml(symbols.length) + '</span>',
+      '</div>',
+      '<div class="watch-editor">',
+      '<form class="watch-add-form" data-watch-add-form>',
+      '<input name="symbol" placeholder="티커 또는 종목코드 추가" autocomplete="off" />',
+      '<button class="text-button primary">추가</button>',
+      '</form>',
+      '<p class="subtle">토스 앱의 관심 목록은 공개 API에서 직접 읽지 못해, 여기 저장한 관심 종목을 기준으로 점검합니다.</p>',
+      state.watchlistError ? '<p class="form-error">' + escapeHtml(state.watchlistError) + '</p>' : '',
       '</div>',
       '<div class="position-list">',
-      watchlist.length ? watchlist.map(renderWatchRow).join("") : '<p class="subtle">설정 탭에서 관심 종목을 입력하세요.</p>',
+      symbols.length ? symbols.map(function (symbol) {
+        return renderEditableWatchRow(symbol, lookup[symbol] || clientKnownStockInfo(symbol));
+      }).join("") : '<p class="subtle">관심 종목을 추가하세요.</p>',
       '</div>',
       '</article>'
     ].join("");
   }
 
+  function renderEditableWatchRow(symbol, item) {
+    var original = String(symbol || "").toUpperCase();
+    if (state.editingWatchSymbol === original) {
+      return [
+        '<form class="watch-edit-row" data-watch-edit-form="' + escapeHtml(original) + '">',
+        '<input name="symbol" value="' + escapeHtml(original) + '" autocomplete="off" />',
+        '<button class="text-button primary">저장</button>',
+        '<button class="text-button" type="button" data-watch-cancel>취소</button>',
+        '</form>'
+      ].join("");
+    }
+    return renderWatchRow(Object.assign({}, item, { symbol: original }), true);
+  }
+
   function renderWatchRow(item) {
+    var editable = arguments.length > 1 && arguments[1];
+    var source = item.source === "holding" ? "보유" : "관심";
     return [
       '<div class="position-row rich-row">',
       '<div>',
       '<strong>' + escapeHtml(item.name || item.symbol) + '</strong>',
-      '<span>' + escapeHtml(item.symbol) + ' · ' + escapeHtml(item.market || "-") + ' · ' + escapeHtml(item.sector || "-") + '</span>',
+      '<span>' + escapeHtml(item.symbol) + ' · ' + escapeHtml(item.market || "-") + ' · ' + escapeHtml(item.sector || "-") + ' · ' + escapeHtml(source) + '</span>',
       '</div>',
       '<div class="right">',
       '<strong>' + escapeHtml(item.currentPrice ? formatCurrency(item.currentPrice, item.currency) : "시세 대기") + '</strong>',
       '<span>' + escapeHtml(item.changeRate == null ? item.quoteStatus || "토스 시세 연결 후 표시" : signedPct(item.changeRate)) + '</span>',
+      editable ? '<div class="row-actions"><button class="mini-button" data-watch-edit="' + escapeHtml(item.symbol) + '">수정</button><button class="mini-button danger" data-watch-remove="' + escapeHtml(item.symbol) + '">삭제</button></div>' : '',
       '</div>',
       '</div>'
     ].join("");
@@ -761,6 +1051,10 @@
       renderSettingField("tossClientId", "Toss Client ID", "text", "client id"),
       renderSettingField("tossClientSecret", "Toss Client Secret", secretType, "client secret"),
       renderSettingField("tossAccountSeq", "Toss Account Seq", "text", "선택"),
+      '<label class="setting-field wide">',
+      '<span>밸류에이션 가정</span>',
+      '<textarea data-setting="valuationAssumptions" rows="4" autocomplete="off" placeholder="SYMBOL, EPS, 목표PER, 안전마진%">' + escapeHtml(settingValue("valuationAssumptions")) + '</textarea>',
+      '</label>',
       '</div>',
       '<div class="settings-actions">',
       '<button class="text-button primary" data-action="save-settings">저장</button>',
@@ -836,6 +1130,77 @@
     if (saveSettings) {
       saveSettings.addEventListener("click", function () {
         persistSettings();
+        state.snapshot = null;
+        load();
+      });
+    }
+
+    var watchAddForm = app.querySelector("[data-watch-add-form]");
+    if (watchAddForm) {
+      watchAddForm.addEventListener("submit", function (event) {
+        event.preventDefault();
+        var input = watchAddForm.querySelector('input[name="symbol"]');
+        var next = normalizeSymbols(input ? input.value : "");
+        if (!next.length) {
+          state.watchlistError = "추가할 티커나 종목코드를 입력하세요.";
+          render();
+          return;
+        }
+        var symbols = watchlistSymbols();
+        if (symbols.indexOf(next[0]) >= 0) {
+          state.watchlistError = "이미 추가된 관심 종목입니다.";
+          render();
+          return;
+        }
+        saveWatchlistSymbols(symbols.concat(next[0]));
+      });
+    }
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-watch-edit]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        state.editingWatchSymbol = String(button.getAttribute("data-watch-edit") || "").toUpperCase();
+        state.watchlistError = "";
+        render();
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-watch-remove]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        var removeSymbol = String(button.getAttribute("data-watch-remove") || "").toUpperCase();
+        saveWatchlistSymbols(watchlistSymbols().filter(function (symbol) {
+          return symbol !== removeSymbol;
+        }));
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-watch-edit-form]")).forEach(function (form) {
+      form.addEventListener("submit", function (event) {
+        event.preventDefault();
+        var original = String(form.getAttribute("data-watch-edit-form") || "").toUpperCase();
+        var input = form.querySelector('input[name="symbol"]');
+        var next = normalizeSymbols(input ? input.value : "");
+        if (!next.length) {
+          state.watchlistError = "수정할 티커나 종목코드를 입력하세요.";
+          render();
+          return;
+        }
+        var symbols = watchlistSymbols();
+        if (next[0] !== original && symbols.indexOf(next[0]) >= 0) {
+          state.watchlistError = "이미 추가된 관심 종목입니다.";
+          render();
+          return;
+        }
+        saveWatchlistSymbols(symbols.map(function (symbol) {
+          return symbol === original ? next[0] : symbol;
+        }));
+      });
+    });
+
+    var watchCancel = app.querySelector("[data-watch-cancel]");
+    if (watchCancel) {
+      watchCancel.addEventListener("click", function () {
+        state.editingWatchSymbol = "";
+        state.watchlistError = "";
         render();
       });
     }

@@ -245,7 +245,7 @@
       generatedAt: stamped,
       dataMode: "mock",
       mock: true,
-      headline: "토스 잔고 기준으로 AAPL 분할 매도 기준 확인이 우선입니다.",
+      headline: "내 토스 계좌 기준으로 AAPL 분할 매도 기준 점검이 우선입니다.",
       exitScore: 57,
       regime: "토스 조회 전용",
       summary: [

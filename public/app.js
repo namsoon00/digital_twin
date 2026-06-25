@@ -15,8 +15,58 @@
     { id: "decision", label: "판단" },
     { id: "valuation", label: "가치" },
     { id: "holdings", label: "보유" },
-    { id: "watchlist", label: "관심" },
-    { id: "settings", label: "설정" }
+    { id: "feed", label: "피드" },
+    { id: "watchlist", label: "관심" }
+  ];
+  var feedChannels = [
+    {
+      id: "cnbc-markets",
+      label: "CNBC 시장",
+      provider: "CNBC",
+      kind: "rss",
+      feedUrl: "https://www.cnbc.com/id/15839135/device/rss/rss.html",
+      tags: ["미국", "실적", "AI"]
+    },
+    {
+      id: "yahoo-market-tape",
+      label: "Yahoo 시장",
+      provider: "Yahoo Finance",
+      kind: "rss",
+      feedUrl: "https://feeds.finance.yahoo.com/rss/2.0/headline?s=%5EGSPC,%5EIXIC,KRW=X,BTC-USD&region=US&lang=en-US",
+      tags: ["지수", "환율", "유동성"]
+    },
+    {
+      id: "fed-policy",
+      label: "Fed 정책",
+      provider: "Federal Reserve",
+      kind: "rss",
+      feedUrl: "https://www.federalreserve.gov/feeds/press_all.xml",
+      tags: ["금리", "정책", "달러"]
+    },
+    {
+      id: "yonhap-economy",
+      label: "연합뉴스 경제",
+      provider: "연합뉴스",
+      kind: "rss",
+      feedUrl: "https://www.yna.co.kr/rss/economy.xml",
+      tags: ["한국", "증권", "산업"]
+    },
+    {
+      id: "coindesk-markets",
+      label: "CoinDesk 마켓",
+      provider: "CoinDesk",
+      kind: "rss",
+      feedUrl: "https://www.coindesk.com/arc/outboundfeeds/rss/",
+      tags: ["코인", "유동성", "리스크"]
+    },
+    {
+      id: "gdelt-cross-source",
+      label: "GDELT 글로벌",
+      provider: "GDELT",
+      kind: "gdelt",
+      query: '"stock market" OR "central bank" OR semiconductor OR Korea OR cryptocurrency',
+      tags: ["글로벌", "교차검증", "뉴스"]
+    }
   ];
   var settingsMemoryStore = "";
   var state = {
@@ -24,9 +74,13 @@
     refreshing: false,
     error: "",
     snapshot: null,
+    feed: null,
+    feedLoading: false,
+    feedError: "",
     dataMode: initialDataMode(),
     activeTab: initialTab(),
     settings: loadSettings(),
+    settingsOpen: false,
     showSecrets: false,
     settingsSaved: false,
     editingWatchSymbol: "",
@@ -50,6 +104,26 @@
       return response.json().then(function (payload) {
         if (!response.ok) throw new Error(payload.error || "요청 실패");
         return payload;
+      });
+    });
+  }
+
+  function requestText(path) {
+    return fetch(path, {
+      headers: { "Accept": "application/rss+xml, application/xml;q=0.9, text/plain;q=0.8, */*;q=0.7" },
+      cache: "no-store"
+    }).then(function (response) {
+      return response.text().then(function (body) {
+        if (!response.ok) {
+          var message = "요청 실패";
+          try {
+            message = JSON.parse(body).error || message;
+          } catch (error) {
+            message = body || message;
+          }
+          throw new Error(message);
+        }
+        return body;
       });
     });
   }
@@ -193,6 +267,230 @@
     if (symbols) params.set("watchlistSymbols", symbols);
     var query = params.toString();
     return "/api/flow-lens" + (query ? "?" + query : "");
+  }
+
+  function gdeltFeedUrl(channel) {
+    var target = new URL("https://api.gdeltproject.org/api/v2/doc/doc");
+    target.searchParams.set("query", channel.query || "market stocks");
+    target.searchParams.set("mode", "ArtList");
+    target.searchParams.set("format", "JSON");
+    target.searchParams.set("maxrecords", "24");
+    target.searchParams.set("timespan", "3d");
+    target.searchParams.set("sort", "DateDesc");
+    return target.toString();
+  }
+
+  function economicFeedProxyPath(channel) {
+    var target = channel.kind === "gdelt" ? gdeltFeedUrl(channel) : channel.feedUrl;
+    var route = channel.kind === "gdelt" ? "/api/economic-feed/gdelt" : "/api/economic-feed/rss";
+    return route + "?url=" + encodeURIComponent(target);
+  }
+
+  function textFromXml(node, selector) {
+    var found = node.querySelector(selector);
+    return found ? String(found.textContent || "").replace(/\s+/g, " ").trim() : "";
+  }
+
+  function cleanSummary(value, fallback) {
+    var text = String(value || "")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (text.length > 220) text = text.slice(0, 217) + "...";
+    return text || fallback || "요약 대기";
+  }
+
+  function feedTimeValue(value) {
+    var raw = String(value || "");
+    var compact = raw.replace(/\D/g, "");
+    if (compact.length >= 14) {
+      return Date.UTC(
+        Number(compact.slice(0, 4)),
+        Number(compact.slice(4, 6)) - 1,
+        Number(compact.slice(6, 8)),
+        Number(compact.slice(8, 10)),
+        Number(compact.slice(10, 12)),
+        Number(compact.slice(12, 14))
+      );
+    }
+    var parsed = Date.parse(raw);
+    return Number.isNaN(parsed) ? 0 : parsed;
+  }
+
+  function formatFeedTime(value) {
+    var raw = String(value || "");
+    var compact = raw.replace(/\D/g, "");
+    if (compact.length >= 14) {
+      return compact.slice(4, 6) + "." + compact.slice(6, 8) + " " + compact.slice(8, 10) + ":" + compact.slice(10, 12);
+    }
+    return formatClock(value);
+  }
+
+  function parseRssFeed(raw, channel) {
+    var parsed = new DOMParser().parseFromString(raw, "application/xml");
+    var items = Array.prototype.slice.call(parsed.querySelectorAll("item"));
+    return items.slice(0, 6).map(function (item, index) {
+      var title = textFromXml(item, "title");
+      var url = textFromXml(item, "link") || textFromXml(item, "guid");
+      var publishedAt = textFromXml(item, "pubDate") || textFromXml(item, "updated");
+      var summary = cleanSummary(textFromXml(item, "description") || textFromXml(item, "content\\:encoded"), title);
+      if (!title || !url) return null;
+      return {
+        id: channel.id + "-" + index + "-" + title,
+        title: title,
+        summary: summary,
+        url: url,
+        source: channel.provider,
+        channelId: channel.id,
+        channelLabel: channel.label,
+        publishedAt: publishedAt,
+        publishedLabel: formatFeedTime(publishedAt),
+        tags: channel.tags || [],
+        sortValue: feedTimeValue(publishedAt)
+      };
+    }).filter(Boolean);
+  }
+
+  function parseGdeltFeed(payload, channel) {
+    var articles = Array.isArray(payload.articles) ? payload.articles : [];
+    return articles.slice(0, 6).map(function (article, index) {
+      var title = String(article.title || "").trim();
+      var url = String(article.url || "").trim();
+      var publishedAt = String(article.seendate || "");
+      var domain = String(article.domain || "GDELT").trim();
+      if (!title || !url) return null;
+      return {
+        id: channel.id + "-" + index + "-" + title,
+        title: title,
+        summary: "GDELT가 수집한 " + domain + " 기사입니다.",
+        url: url,
+        source: domain,
+        channelId: channel.id,
+        channelLabel: channel.label,
+        publishedAt: publishedAt,
+        publishedLabel: formatFeedTime(publishedAt),
+        tags: channel.tags || [],
+        sortValue: feedTimeValue(publishedAt)
+      };
+    }).filter(Boolean);
+  }
+
+  function fetchFeedChannel(channel) {
+    if (channel.kind === "gdelt") {
+      return requestJson(economicFeedProxyPath(channel)).then(function (payload) {
+        return parseGdeltFeed(payload, channel);
+      });
+    }
+    return requestText(economicFeedProxyPath(channel)).then(function (raw) {
+      return parseRssFeed(raw, channel);
+    });
+  }
+
+  function staticFeedSnapshot(reason) {
+    var stamped = new Date().toISOString();
+    var items = [
+      {
+        title: "AI 인프라 지출과 금리 경로가 성장주 판단을 흔듭니다",
+        summary: "정적 미리보기에서는 실제 RSS 대신 예시 피드를 보여줍니다. 로컬 서버에서는 CNBC, Yahoo, Fed, 연합뉴스, CoinDesk, GDELT를 직접 조회합니다.",
+        source: "Static Preview",
+        url: "",
+        channelId: "preview",
+        channelLabel: "미리보기",
+        publishedAt: stamped,
+        publishedLabel: formatFeedTime(stamped),
+        tags: ["AI", "금리", "성장주"],
+        sortValue: Date.now()
+      },
+      {
+        title: "한국 수급과 코인 유동성은 별도 채널로 분리해 확인합니다",
+        summary: reason || "피드 탭은 시장 관점을 여러 원천으로 나눠 비교합니다.",
+        source: "Static Preview",
+        url: "",
+        channelId: "preview",
+        channelLabel: "미리보기",
+        publishedAt: stamped,
+        publishedLabel: formatFeedTime(stamped),
+        tags: ["한국", "코인", "유동성"],
+        sortValue: Date.now() - 1
+      }
+    ];
+    return {
+      generatedAt: stamped,
+      mock: true,
+      items: items,
+      channels: feedChannels.map(function (channel) {
+        return { id: channel.id, label: channel.label, provider: channel.provider, count: 0, error: "" };
+      }),
+      errors: reason ? [reason] : []
+    };
+  }
+
+  function buildFeedSnapshot(results) {
+    var items = [];
+    var errors = [];
+    var channels = results.map(function (result) {
+      if (result.error) errors.push(result.channel.label + ": " + result.error);
+      items = items.concat(result.items || []);
+      return {
+        id: result.channel.id,
+        label: result.channel.label,
+        provider: result.channel.provider,
+        count: (result.items || []).length,
+        error: result.error || ""
+      };
+    });
+    items.sort(function (a, b) {
+      return (b.sortValue || 0) - (a.sortValue || 0);
+    });
+    if (!items.length) {
+      throw new Error(errors[0] || "피드 결과 없음");
+    }
+    return {
+      generatedAt: new Date().toISOString(),
+      mock: false,
+      items: items.slice(0, 30),
+      channels: channels,
+      errors: errors
+    };
+  }
+
+  function loadFeed(force) {
+    if (state.feedLoading) return Promise.resolve();
+    if (state.feed && !force) return Promise.resolve(state.feed);
+    state.feedLoading = true;
+    state.feedError = "";
+    render();
+
+    var promise = isStaticPreviewHost()
+      ? Promise.resolve(staticFeedSnapshot("정적 미리보기"))
+      : Promise.all(feedChannels.map(function (channel) {
+        return fetchFeedChannel(channel)
+          .then(function (items) {
+            return { channel: channel, items: items, error: "" };
+          })
+          .catch(function (error) {
+            return { channel: channel, items: [], error: error.message || String(error) };
+          });
+      })).then(buildFeedSnapshot);
+
+    return promise
+      .then(function (feed) {
+        state.feed = feed;
+        state.feedError = "";
+      })
+      .catch(function (error) {
+        if (state.dataMode === "mock") {
+          state.feed = staticFeedSnapshot(error.message || "피드 조회 실패");
+          state.feedError = "";
+        } else {
+          state.feed = null;
+          state.feedError = error.message || "피드를 불러오지 못했습니다.";
+        }
+      })
+      .finally(function () {
+        state.feedLoading = false;
+        render();
+      });
   }
 
   function staticMockSnapshot() {
@@ -555,6 +853,9 @@
     }
     app.innerHTML = renderDashboard(state.snapshot);
     bindActions();
+    if (state.activeTab === "feed" && !state.feed && !state.feedLoading) {
+      loadFeed(false);
+    }
   }
 
   function renderLoading() {
@@ -608,11 +909,13 @@
       '<button class="' + (state.dataMode === "mock" ? "active" : "") + '" data-mode="mock">Mock</button>',
       '</div>',
       '<span class="status-pill ' + modeClass + '">' + escapeHtml(modeLabel) + "</span>",
+      '<button class="icon-button" data-action="open-settings" title="설정" aria-label="설정">⚙</button>',
       '<button class="icon-button" data-action="refresh" title="새로고침">' + (state.refreshing ? "…" : "↻") + "</button>",
       '</div>',
       '</section>',
       renderTabs(),
       renderActiveTab(snapshot),
+      state.settingsOpen ? renderSettingsOverlay() : '',
       '</main>'
     ].join("");
   }
@@ -644,18 +947,20 @@
         '</section>'
       ].join("");
     }
+    if (state.activeTab === "feed") {
+      return [
+        '<section class="content-grid">',
+        renderFeedOverviewPanel(),
+        renderFeedListPanel(),
+        renderFeedChannelPanel(),
+        '</section>'
+      ].join("");
+    }
     if (state.activeTab === "watchlist") {
       return [
         '<section class="content-grid">',
         renderWatchlistPanel(snapshot),
         renderApiScopePanel(),
-        '</section>'
-      ].join("");
-    }
-    if (state.activeTab === "settings") {
-      return [
-        '<section class="content-grid">',
-        renderSettingsPanel(),
         '</section>'
       ].join("");
     }
@@ -795,7 +1100,7 @@
       '<div class="valuation-list">',
       items.length ? items.map(renderValuationRow).join("") : '<p class="subtle">토스 잔고에서 밸류에이션할 보유 종목을 찾지 못했습니다.</p>',
       '</div>',
-      full ? '' : '<div class="rule-strip"><span>상세 가정은 가치 탭과 설정 탭에서 조정합니다.</span></div>',
+      full ? '' : '<div class="rule-strip"><span>상세 가정은 가치 탭과 상단 설정에서 조정합니다.</span></div>',
       '</article>'
     ].join("");
   }
@@ -1016,6 +1321,130 @@
     ].join("");
   }
 
+  function currentFeed() {
+    return state.feed || { items: [], channels: [], errors: [] };
+  }
+
+  function uniqueCount(items, key) {
+    var seen = {};
+    (items || []).forEach(function (item) {
+      var value = String(item[key] || "").trim();
+      if (value) seen[value] = true;
+    });
+    return Object.keys(seen).length;
+  }
+
+  function feedTagCounts(items) {
+    var counts = {};
+    (items || []).forEach(function (item) {
+      (item.tags || []).forEach(function (tag) {
+        counts[tag] = (counts[tag] || 0) + 1;
+      });
+    });
+    return Object.keys(counts)
+      .map(function (tag) {
+        return { tag: tag, count: counts[tag] };
+      })
+      .sort(function (a, b) {
+        return b.count - a.count;
+      });
+  }
+
+  function renderFeedOverviewPanel() {
+    var feed = currentFeed();
+    var items = feed.items || [];
+    var tags = feedTagCounts(items);
+    return [
+      '<article class="panel feed-overview-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Market Feed</p>',
+      '<h2>여러 채널로 보는 시장 피드</h2>',
+      '</div>',
+      '<button class="text-button primary" data-action="refresh-feed">' + (state.feedLoading ? "갱신 중" : "피드 갱신") + '</button>',
+      '</div>',
+      '<div class="feed-stat-grid">',
+      '<div class="feed-stat"><span>기사</span><strong>' + escapeHtml(items.length) + '</strong></div>',
+      '<div class="feed-stat"><span>소스</span><strong>' + escapeHtml(uniqueCount(items, "source")) + '</strong></div>',
+      '<div class="feed-stat"><span>채널</span><strong>' + escapeHtml(feedChannels.length) + '</strong></div>',
+      '<div class="feed-stat"><span>갱신</span><strong>' + escapeHtml(feed.generatedAt ? formatFeedTime(feed.generatedAt) : "-") + '</strong></div>',
+      '</div>',
+      '<div class="theme-radar">',
+      tags.length ? tags.slice(0, 8).map(function (entry) {
+        return '<span>' + escapeHtml(entry.tag) + ' <strong>' + escapeHtml(entry.count) + '</strong></span>';
+      }).join("") : '<span>키워드 대기</span>',
+      '</div>',
+      feed.errors && feed.errors.length ? '<p class="form-error">' + escapeHtml(feed.errors.slice(0, 2).join(" · ")) + '</p>' : '',
+      '</article>'
+    ].join("");
+  }
+
+  function renderFeedListPanel() {
+    var feed = currentFeed();
+    var items = feed.items || [];
+    return [
+      '<article class="panel feed-list-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Articles</p>',
+      '<h2>최신 기사</h2>',
+      '</div>',
+      '<span class="metric">' + escapeHtml(items.length) + '</span>',
+      '</div>',
+      '<div class="news-list">',
+      state.feedLoading ? '<div class="panel skeleton"></div>' : '',
+      state.feedError ? '<p class="form-error">' + escapeHtml(state.feedError) + '</p>' : '',
+      (!state.feedLoading && !state.feedError && !items.length) ? '<p class="subtle">피드 탭을 열면 실제 채널을 조회합니다.</p>' : '',
+      (!state.feedLoading && items.length) ? items.map(renderFeedItem).join("") : '',
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderFeedItem(item) {
+    return [
+      '<div class="news-item">',
+      '<div>',
+      '<div class="news-source">' + escapeHtml(item.channelLabel || item.source) + ' · ' + escapeHtml(item.source || "-") + ' · ' + escapeHtml(item.publishedLabel || "-") + '</div>',
+      '<h3>' + escapeHtml(item.title) + '</h3>',
+      '<p>' + escapeHtml(item.summary || "요약 대기") + '</p>',
+      '<div class="trigger-list">',
+      (item.tags || []).map(function (tag) {
+        return '<span>' + escapeHtml(tag) + '</span>';
+      }).join(""),
+      '</div>',
+      '</div>',
+      item.url ? '<a class="open-link" href="' + escapeHtml(item.url) + '" target="_blank" rel="noreferrer" title="원문 열기">↗</a>' : '<span class="open-link muted">-</span>',
+      '</div>'
+    ].join("");
+  }
+
+  function renderFeedChannelPanel() {
+    var feed = currentFeed();
+    var channelMap = {};
+    (feed.channels || []).forEach(function (channel) {
+      channelMap[channel.id] = channel;
+    });
+    return [
+      '<article class="panel feed-channel-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Channels</p>',
+      '<h2>피드 채널 상태</h2>',
+      '</div>',
+      '</div>',
+      '<div class="source-stack">',
+      feedChannels.map(function (channel) {
+        var stateChannel = channelMap[channel.id] || {};
+        var count = stateChannel.count || 0;
+        var status = stateChannel.error ? "오류" : (count ? count + "건" : "대기");
+        return '<div class="source-row"><span>' + escapeHtml(channel.label) + '</span><strong>' + escapeHtml(status) + '</strong></div>';
+      }).join(""),
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
   function settingValue(name) {
     return state.settings && state.settings[name] != null ? state.settings[name] : "";
   }
@@ -1066,6 +1495,23 @@
     ].join("");
   }
 
+  function renderSettingsOverlay() {
+    return [
+      '<div class="settings-overlay" data-settings-overlay>',
+      '<section class="settings-dialog" role="dialog" aria-modal="true" aria-label="설정">',
+      '<div class="settings-dialog-head">',
+      '<div>',
+      '<p class="label">Settings</p>',
+      '<h2>설정</h2>',
+      '</div>',
+      '<button class="icon-button" data-action="close-settings" title="닫기" aria-label="닫기">×</button>',
+      '</div>',
+      renderSettingsPanel(),
+      '</section>',
+      '</div>'
+    ].join("");
+  }
+
   function renderChecklistPanel(snapshot) {
     return [
       '<article class="panel">',
@@ -1106,12 +1552,46 @@
       });
     });
 
+    var openSettings = app.querySelector('[data-action="open-settings"]');
+    if (openSettings) {
+      openSettings.addEventListener("click", function () {
+        state.settingsOpen = true;
+        render();
+      });
+    }
+
+    var closeSettings = app.querySelector('[data-action="close-settings"]');
+    if (closeSettings) {
+      closeSettings.addEventListener("click", function () {
+        state.settingsOpen = false;
+        render();
+      });
+    }
+
+    var settingsOverlay = app.querySelector("[data-settings-overlay]");
+    if (settingsOverlay) {
+      settingsOverlay.addEventListener("click", function (event) {
+        if (event.target !== settingsOverlay) return;
+        state.settingsOpen = false;
+        render();
+      });
+    }
+
+    var refreshFeed = app.querySelector('[data-action="refresh-feed"]');
+    if (refreshFeed) {
+      refreshFeed.addEventListener("click", function () {
+        loadFeed(true);
+      });
+    }
+
     Array.prototype.slice.call(app.querySelectorAll("[data-mode]")).forEach(function (button) {
       button.addEventListener("click", function () {
         var nextMode = button.getAttribute("data-mode") || "live";
         if (nextMode === state.dataMode || state.refreshing) return;
         state.dataMode = nextMode === "mock" ? "mock" : "live";
         state.snapshot = null;
+        state.feed = null;
+        state.feedError = "";
         persistDataMode(state.dataMode);
         load();
       });
@@ -1131,6 +1611,8 @@
       saveSettings.addEventListener("click", function () {
         persistSettings();
         state.snapshot = null;
+        state.feed = null;
+        state.settingsOpen = false;
         load();
       });
     }

@@ -749,6 +749,116 @@ h3 {
   grid-column: 1 / -1;
 }
 
+.settings-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: grid;
+  place-items: end center;
+  padding: 18px;
+  background: rgba(9, 16, 18, 0.36);
+}
+
+.settings-dialog {
+  width: min(920px, 100%);
+  max-height: min(820px, calc(100vh - 36px));
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: 0 24px 80px rgba(20, 31, 34, 0.28);
+}
+
+.settings-dialog-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.96);
+  backdrop-filter: blur(12px);
+}
+
+.settings-dialog-head h2 {
+  margin: 0;
+}
+
+.settings-dialog .settings-panel {
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.settings-dialog .settings-panel > .panel-head {
+  display: none;
+}
+
+.feed-overview-panel,
+.feed-list-panel,
+.feed-channel-panel {
+  grid-column: 1 / -1;
+}
+
+.feed-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  padding: 16px 16px 0;
+}
+
+.feed-stat {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8faf9;
+}
+
+.feed-stat span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.feed-stat strong {
+  color: var(--ink);
+  font-size: 18px;
+  overflow-wrap: anywhere;
+}
+
+.theme-radar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px 16px 16px;
+}
+
+.theme-radar span {
+  min-height: 28px;
+  padding: 5px 9px;
+  border-radius: 8px;
+  background: var(--green-soft);
+  color: var(--green);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.theme-radar strong {
+  color: inherit;
+}
+
+.news-list {
+  display: grid;
+  gap: 13px;
+  padding: 16px;
+}
+
 .valuation-panel {
   grid-column: 1 / -1;
 }
@@ -1246,8 +1356,17 @@ h3 {
   .gauge-grid,
   .flow-lanes,
   .flow-row,
-  .valuation-grid {
+  .valuation-grid,
+  .feed-stat-grid {
     grid-template-columns: 1fr;
+  }
+
+  .settings-overlay {
+    padding: 10px;
+  }
+
+  .settings-dialog {
+    max-height: calc(100vh - 20px);
   }
 
   .flow-title {

@@ -31,6 +31,7 @@ The official OpenAPI document was available as OpenAPI `3.1.0`, API title `토�
   - Order: create, modify, cancel, list, detail, buying power, sellable quantity, commissions
 - No public endpoint for reading the user's Toss app watchlist was present in the official OpenAPI document reviewed here. Digiter Twin manages watchlist symbols as app-local user settings and can pass those symbols to its own BFF query, but it does not claim to sync Toss app watchlists.
 - The `수급` screen is designed around the market data group: current price and price change from current-price/candle style responses, trade strength and buy/sell prints from trades, and bid/ask imbalance from orderbook. Until those live mappings are connected, Web mock mode uses app-local manual signal input with the same normalized field names.
+- Fair value, buy score, and sell score are user-configurable formulas in the client. The app ships a recommended default formula set, but user-defined weights and threshold values are treated as local strategy settings, not Toss raw data.
 
 ## Product Decisions
 
@@ -43,6 +44,7 @@ The official OpenAPI document was available as OpenAPI `3.1.0`, API title `토�
 - Phase 2 starts read-only. Order endpoints remain locked behind an explicit feature flag.
 - The app treats every decimal money/quantity value as a string at the API boundary to avoid precision loss.
 - The app accepts unknown enum values from Toss and renders them as unsupported/unknown instead of crashing.
+- Strategy formulas stay local by default. They can reference normalized market/account variables, but they must not trigger order creation by themselves.
 
 ## Personal Native Flow
 

@@ -16,6 +16,24 @@
       "NVDA,132,2.3,780000,520000,22,3.5",
       "TSLA,91,1.2,210000,260000,-8,-0.9",
       "000660,122,1.7,510000,390000,15,2.4"
+    ].join("\n"),
+    fairValueFormula: "eps * targetPer * growthWeight * qualityWeight * riskWeight",
+    buyScoreFormula: "50 + ((tradeStrength - 100) * 0.25 + (volumeRatio - 1) * 12 + (buyShare - 50) * 0.35 + bidAskImbalance * 0.28 + priceChangeRate * 1.1) * flowWeight + undervalueBonus * valuationWeight - expensivePenalty * valuationWeight",
+    sellScoreFormula: "50 + ((100 - tradeStrength) * 0.22 + (volumeRatio - 1) * 8 + (50 - buyShare) * 0.42 - bidAskImbalance * 0.28 - priceChangeRate * 1.2) * flowWeight + expensiveBonus * valuationWeight",
+    formulaWeights: [
+      "growthWeight=1",
+      "qualityWeight=1",
+      "riskWeight=1",
+      "flowWeight=1",
+      "valuationWeight=1"
+    ].join("\n"),
+    decisionThresholds: [
+      "buyCandidate=78",
+      "chaseCaution=70",
+      "strongHold=72",
+      "sellTrim=70",
+      "riskReduce=66",
+      "sellWatch=64"
     ].join("\n")
   };
   var tabs = [
@@ -732,6 +750,194 @@
     return Math.max(min, Math.min(max, value));
   }
 
+  function formulaSetting(name) {
+    return String(settingValue(name) || defaultSettings[name] || "").trim();
+  }
+
+  function tokenizeFormula(expression) {
+    var input = String(expression || "");
+    var tokens = [];
+    var index = 0;
+    if (input.length > 1200) throw new Error("공식이 너무 깁니다.");
+    while (index < input.length) {
+      var char = input[index];
+      if (/\s/.test(char)) {
+        index += 1;
+        continue;
+      }
+      if (/[0-9.]/.test(char)) {
+        var start = index;
+        index += 1;
+        while (index < input.length && /[0-9.]/.test(input[index])) index += 1;
+        var number = Number(input.slice(start, index));
+        if (!Number.isFinite(number)) throw new Error("숫자 형식 오류");
+        tokens.push({ type: "number", value: number });
+        continue;
+      }
+      if (/[A-Za-z_]/.test(char)) {
+        var nameStart = index;
+        index += 1;
+        while (index < input.length && /[A-Za-z0-9_]/.test(input[index])) index += 1;
+        tokens.push({ type: "name", value: input.slice(nameStart, index) });
+        continue;
+      }
+      if ("+-*/(),".indexOf(char) >= 0) {
+        tokens.push({ type: char, value: char });
+        index += 1;
+        continue;
+      }
+      throw new Error("지원하지 않는 문자: " + char);
+    }
+    return tokens;
+  }
+
+  function evaluateFormula(expression, variables) {
+    var tokens = tokenizeFormula(expression);
+    var index = 0;
+    variables = variables || {};
+
+    function peek() {
+      return tokens[index] || null;
+    }
+
+    function take(type) {
+      var token = peek();
+      if (token && token.type === type) {
+        index += 1;
+        return token;
+      }
+      return null;
+    }
+
+    function expect(type) {
+      var token = take(type);
+      if (!token) throw new Error("'" + type + "'가 필요합니다.");
+      return token;
+    }
+
+    function safeNumber(value) {
+      var number = Number(value);
+      return Number.isFinite(number) ? number : 0;
+    }
+
+    function applyFormulaFunction(name, args) {
+      var lower = String(name || "").toLowerCase();
+      if (lower === "min") return Math.min.apply(Math, args);
+      if (lower === "max") return Math.max.apply(Math, args);
+      if (lower === "abs") return Math.abs(args[0] || 0);
+      if (lower === "round") return Math.round(args[0] || 0);
+      if (lower === "sqrt") return Math.sqrt(Math.max(0, args[0] || 0));
+      if (lower === "pow") return Math.pow(args[0] || 0, args[1] || 0);
+      if (lower === "clamp") return clamp(args[0] || 0, args[1] || 0, args[2] == null ? 100 : args[2]);
+      throw new Error("지원하지 않는 함수: " + name);
+    }
+
+    function parsePrimary() {
+      var token = peek();
+      if (!token) throw new Error("공식이 끝났습니다.");
+      if (take("number")) return token.value;
+      if (take("name")) {
+        if (take("(")) {
+          var args = [];
+          if (!take(")")) {
+            do {
+              args.push(parseExpression());
+            } while (take(","));
+            expect(")");
+          }
+          return safeNumber(applyFormulaFunction(token.value, args));
+        }
+        return safeNumber(variables[token.value]);
+      }
+      if (take("(")) {
+        var value = parseExpression();
+        expect(")");
+        return value;
+      }
+      throw new Error("예상하지 못한 토큰: " + token.value);
+    }
+
+    function parseUnary() {
+      if (take("+")) return parseUnary();
+      if (take("-")) return -parseUnary();
+      return parsePrimary();
+    }
+
+    function parseTerm() {
+      var value = parseUnary();
+      while (true) {
+        if (take("*")) {
+          value *= parseUnary();
+        } else if (take("/")) {
+          var divisor = parseUnary();
+          value = divisor ? value / divisor : 0;
+        } else {
+          break;
+        }
+      }
+      return value;
+    }
+
+    function parseExpression() {
+      var value = parseTerm();
+      while (true) {
+        if (take("+")) {
+          value += parseTerm();
+        } else if (take("-")) {
+          value -= parseTerm();
+        } else {
+          break;
+        }
+      }
+      return value;
+    }
+
+    var output = parseExpression();
+    if (index < tokens.length) throw new Error("공식 뒤에 해석되지 않은 값이 있습니다.");
+    if (!Number.isFinite(output)) throw new Error("공식 결과가 숫자가 아닙니다.");
+    return output;
+  }
+
+  function evaluateConfiguredFormula(expression, variables, fallback) {
+    try {
+      var value = evaluateFormula(expression, variables);
+      return {
+        value: value,
+        error: "",
+        usedFallback: false
+      };
+    } catch (error) {
+      return {
+        value: fallback,
+        error: error.message || "공식 오류",
+        usedFallback: true
+      };
+    }
+  }
+
+  function parseNumberAssignments(value, defaults) {
+    var map = Object.assign({}, defaults || {});
+    String(value || "")
+      .split(/\r?\n/)
+      .map(function (line) { return line.trim(); })
+      .filter(Boolean)
+      .forEach(function (line) {
+        var parts = line.split(/[=:,]/);
+        var key = String(parts[0] || "").trim();
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) return;
+        map[key] = numeric(parts.slice(1).join(":"));
+      });
+    return map;
+  }
+
+  function formulaWeights() {
+    return parseNumberAssignments(settingValue("formulaWeights"), parseNumberAssignments(defaultSettings.formulaWeights));
+  }
+
+  function decisionThresholds() {
+    return parseNumberAssignments(settingValue("decisionThresholds"), parseNumberAssignments(defaultSettings.decisionThresholds));
+  }
+
   function formatSignalNumber(value, suffix) {
     var number = Number(value || 0);
     if (!Number.isFinite(number) || number === 0) return "-";
@@ -815,6 +1021,8 @@
   function buildValuationItems(snapshot) {
     var toss = snapshot.toss || { positions: [] };
     var assumptions = parseValuationAssumptions();
+    var weights = formulaWeights();
+    var formula = formulaSetting("fairValueFormula");
     return (toss.positions || [])
       .filter(function (item) {
         return item.source !== "cash" && item.sector !== "현금";
@@ -823,14 +1031,32 @@
         var symbol = String(item.symbol || "").toUpperCase();
         var assumption = assumptions[symbol] || {};
         var currentPrice = currentPriceOf(item);
-        var fairValue = assumption.eps && assumption.targetPer ? assumption.eps * assumption.targetPer : 0;
+        var baseFairValue = assumption.eps && assumption.targetPer ? assumption.eps * assumption.targetPer : 0;
         var margin = assumption.margin || 15;
+        var variables = Object.assign({}, weights, {
+          eps: assumption.eps || 0,
+          targetPer: assumption.targetPer || 0,
+          margin: margin,
+          currentPrice: currentPrice,
+          averagePrice: numeric(item.averagePrice),
+          quantity: numeric(item.quantity),
+          marketValue: numeric(item.marketValue),
+          profitLoss: numeric(item.profitLoss),
+          profitLossRate: numeric(item.profitLossRate)
+        });
+        var formulaResult = formula
+          ? evaluateConfiguredFormula(formula, variables, baseFairValue)
+          : { value: baseFairValue, error: "", usedFallback: false };
+        var fairValue = Math.max(0, numeric(formulaResult.value));
         var marginPrice = fairValue ? fairValue * (1 - margin / 100) : 0;
         var gap = currentPrice && fairValue ? ((fairValue / currentPrice) - 1) * 100 : 0;
         var status = valuationStatus(currentPrice, fairValue, marginPrice);
         var reasons = [];
-        if (!assumption.eps || !assumption.targetPer) {
-          reasons.push("EPS와 목표 PER 가정이 필요합니다.");
+        if (formulaResult.error) {
+          reasons.push("적정가 공식 오류로 기본값을 사용했습니다: " + formulaResult.error);
+        }
+        if (!fairValue) {
+          reasons.push("적정가 공식 결과가 0입니다. EPS, 목표 PER, 가중치를 확인하세요.");
         } else if (!currentPrice) {
           reasons.push("현재가가 필요합니다.");
         } else {
@@ -846,6 +1072,8 @@
           eps: assumption.eps || 0,
           targetPer: assumption.targetPer || 0,
           margin: margin,
+          formula: formula,
+          formulaError: formulaResult.error,
           fairValue: fairValue,
           marginPrice: marginPrice,
           gap: gap,
@@ -910,28 +1138,62 @@
     return total > 0 ? (buy / total) * 100 : 50;
   }
 
-  function marketSignalScores(signal) {
+  function marketSignalScores(signal, context) {
+    context = context || {};
+    var valuation = context.valuation || {};
+    var item = context.item || {};
+    var weights = formulaWeights();
     var strength = signal.tradeStrength || 100;
     var volumeRatio = signal.volumeRatio || 1;
     var imbalance = signal.bidAskImbalance || 0;
     var priceChange = signal.priceChangeRate || 0;
     var buyShare = buyVolumeShare(signal);
-    var buyScore = 50
+    var valuationGap = Number(valuation.gap || 0);
+    var expensivePenalty = valuationGap < 0 ? Math.min(18, Math.abs(valuationGap) / 2) : 0;
+    var undervalueBonus = valuationGap > 0 ? Math.min(14, valuationGap / 3) : 0;
+    var expensiveBonus = expensivePenalty;
+    var variables = Object.assign({}, weights, {
+      tradeStrength: strength,
+      volumeRatio: volumeRatio,
+      buyVolume: signal.buyVolume || 0,
+      sellVolume: signal.sellVolume || 0,
+      buyShare: buyShare,
+      bidAskImbalance: imbalance,
+      priceChangeRate: priceChange,
+      currentPrice: currentPriceOf(item),
+      fairValue: valuation.fairValue || 0,
+      fairValueGap: valuationGap,
+      valuationRank: valuation.rank || 0,
+      expensivePenalty: expensivePenalty,
+      expensiveBonus: expensiveBonus,
+      undervalueBonus: undervalueBonus,
+      profitLossRate: numeric(item.profitLossRate),
+      marketValue: numeric(item.marketValue),
+      holding: item.source === "watchlist" ? 0 : 1,
+      watchlist: item.source === "watchlist" ? 1 : 0
+    });
+    var fallbackBuyScore = 50
       + (strength - 100) * 0.25
       + (volumeRatio - 1) * 12
       + (buyShare - 50) * 0.35
       + imbalance * 0.28
       + priceChange * 1.1;
-    var sellScore = 50
+    var fallbackSellScore = 50
       + (100 - strength) * 0.22
       + (volumeRatio - 1) * 8
       + (50 - buyShare) * 0.42
       - imbalance * 0.28
       - priceChange * 1.2;
+    var buyResult = evaluateConfiguredFormula(formulaSetting("buyScoreFormula"), variables, fallbackBuyScore);
+    var sellResult = evaluateConfiguredFormula(formulaSetting("sellScoreFormula"), variables, fallbackSellScore);
+    var errors = [];
+    if (buyResult.error) errors.push("매수 공식 오류: " + buyResult.error);
+    if (sellResult.error) errors.push("매도 공식 오류: " + sellResult.error);
     return {
-      buyScore: Math.round(clamp(buyScore, 0, 100)),
-      sellScore: Math.round(clamp(sellScore, 0, 100)),
-      buyShare: Math.round(clamp(buyShare, 0, 100))
+      buyScore: Math.round(clamp(buyResult.value, 0, 100)),
+      sellScore: Math.round(clamp(sellResult.value, 0, 100)),
+      buyShare: Math.round(clamp(buyShare, 0, 100)),
+      errors: errors
     };
   }
 
@@ -956,16 +1218,17 @@
   }
 
   function tradeSignalDecision(item, scores, valuation, hasData) {
+    var thresholds = decisionThresholds();
     if (!hasData) return { label: "수급 입력 필요", tone: "hold", priority: 9 };
     var holding = item.source !== "watchlist";
     var expensive = valuation && (valuation.tone === "danger" || valuation.tone === "caution");
     var cheap = valuation && valuation.tone === "watch";
-    if (holding && scores.sellScore >= 70 && expensive) return { label: "분할매도 검토", tone: "danger", priority: 1 };
-    if (holding && scores.sellScore >= 66) return { label: "리스크 축소 검토", tone: "caution", priority: 2 };
-    if (holding && scores.buyScore >= 72 && !expensive) return { label: "보유 강화 관찰", tone: "watch", priority: 3 };
-    if (!holding && scores.buyScore >= 78 && (cheap || !expensive)) return { label: "매수 후보", tone: "watch", priority: 2 };
-    if (!holding && scores.buyScore >= 70) return { label: "추격 주의", tone: "caution", priority: 4 };
-    if (scores.sellScore >= 64) return { label: holding ? "매도 기준 확인" : "진입 보류", tone: "caution", priority: 5 };
+    if (holding && scores.sellScore >= thresholds.sellTrim && expensive) return { label: "분할매도 검토", tone: "danger", priority: 1 };
+    if (holding && scores.sellScore >= thresholds.riskReduce) return { label: "리스크 축소 검토", tone: "caution", priority: 2 };
+    if (holding && scores.buyScore >= thresholds.strongHold && !expensive) return { label: "보유 강화 관찰", tone: "watch", priority: 3 };
+    if (!holding && scores.buyScore >= thresholds.buyCandidate && (cheap || !expensive)) return { label: "매수 후보", tone: "watch", priority: 2 };
+    if (!holding && scores.buyScore >= thresholds.chaseCaution) return { label: "추격 주의", tone: "caution", priority: 4 };
+    if (scores.sellScore >= thresholds.sellWatch) return { label: holding ? "매도 기준 확인" : "진입 보류", tone: "caution", priority: 5 };
     return { label: "관망", tone: "hold", priority: 6 };
   }
 
@@ -982,6 +1245,9 @@
     } else {
       reasons.push("밸류에이션 가정이 없으면 수급 신호만으로 관찰 라벨을 만듭니다.");
     }
+    (scores.errors || []).forEach(function (error) {
+      reasons.push(error + " 기본 추천 공식을 대신 사용했습니다.");
+    });
     return reasons;
   }
 
@@ -995,8 +1261,8 @@
       var symbol = String(item.symbol || "").toUpperCase();
       var signal = marketSignalForItem(item, signalMap);
       var hasData = hasMarketSignal(signal);
-      var scores = hasData ? marketSignalScores(signal) : { buyScore: 0, sellScore: 0, buyShare: 0 };
       var valuation = valuationMap[symbol] || null;
+      var scores = hasData ? marketSignalScores(signal, { item: item, valuation: valuation }) : { buyScore: 0, sellScore: 0, buyShare: 0, errors: [] };
       var decision = tradeSignalDecision(item, scores, valuation, hasData);
       return {
         symbol: symbol,
@@ -1383,13 +1649,44 @@
     ].join("");
   }
 
+  function renderFormulaBlock(label, formula) {
+    return [
+      '<div class="formula-block">',
+      '<span>' + escapeHtml(label) + '</span>',
+      '<code>' + escapeHtml(formula || "-") + '</code>',
+      '</div>'
+    ].join("");
+  }
+
+  function renderVariableGuide(items) {
+    return [
+      '<div class="variable-grid">',
+      items.map(function (item) {
+        return '<span><strong>' + escapeHtml(item[0]) + '</strong>' + escapeHtml(item[1]) + '</span>';
+      }).join(""),
+      '</div>'
+    ].join("");
+  }
+
   function renderTradeSignalMethodPanel() {
     var rows = [
       ["체결강도", "100 이상이면 매수 체결 우위, 100 미만이면 매도 체결 우위"],
       ["거래량 배율", "평균 대비 거래량이 커질수록 신호 가중치 상승"],
       ["매수/매도량", "실제 체결 방향의 비중으로 매수·매도 압력 분리"],
       ["호가 불균형", "매수잔량 우위는 양수, 매도잔량 우위는 음수로 입력"],
-      ["최종 라벨", "수급 점수 + 보유 여부 + 밸류에이션 상태를 조합"]
+      ["최종 라벨", "매수/매도 점수 + 보유 여부 + 기준값을 조합"]
+    ];
+    var variables = [
+      ["tradeStrength", "체결강도"],
+      ["volumeRatio", "거래량 배율"],
+      ["buyShare", "매수 체결 비중"],
+      ["bidAskImbalance", "호가 불균형"],
+      ["priceChangeRate", "가격 변화율"],
+      ["fairValueGap", "적정가 대비 괴리율"],
+      ["undervalueBonus", "저평가 보너스"],
+      ["expensivePenalty", "고평가 감점"],
+      ["flowWeight", "수급 가중치"],
+      ["valuationWeight", "가치 가중치"]
     ];
     return [
       '<article class="panel signal-method-panel">',
@@ -1404,6 +1701,11 @@
         return '<div class="source-row"><span>' + escapeHtml(row[0]) + '</span><strong>' + escapeHtml(row[1]) + '</strong></div>';
       }).join(""),
       '</div>',
+      '<div class="formula-stack">',
+      renderFormulaBlock("매수 점수 공식", formulaSetting("buyScoreFormula")),
+      renderFormulaBlock("매도 점수 공식", formulaSetting("sellScoreFormula")),
+      '</div>',
+      renderVariableGuide(variables),
       '<div class="rule-strip"><span>입력 형식: SYMBOL, 체결강도, 거래량배율, 매수량, 매도량, 호가불균형%, 가격변화%</span></div>',
       '</article>'
     ].join("");
@@ -1461,10 +1763,21 @@
 
   function renderValuationMethodPanel() {
     var rows = [
-      ["적정가", "EPS × 목표 PER"],
+      ["적정가", "사용자 공식 결과"],
       ["싸다", "현재가가 안전마진 가격 이하"],
       ["적정권", "현재가가 적정가 이하"],
       ["비싸다", "현재가가 적정가를 초과"]
+    ];
+    var variables = [
+      ["eps", "주당순이익"],
+      ["targetPer", "목표 PER"],
+      ["margin", "안전마진"],
+      ["currentPrice", "현재가"],
+      ["averagePrice", "평균단가"],
+      ["profitLossRate", "수익률"],
+      ["growthWeight", "성장 가중치"],
+      ["qualityWeight", "품질 가중치"],
+      ["riskWeight", "리스크 가중치"]
     ];
     return [
       '<article class="panel">',
@@ -1479,7 +1792,11 @@
         return '<div class="source-row"><span>' + escapeHtml(row[0]) + '</span><strong>' + escapeHtml(row[1]) + '</strong></div>';
       }).join(""),
       '</div>',
-      '<div class="rule-strip"><span>현재가는 토스 잔고/시세 값, EPS와 목표 PER은 사용자 가정입니다.</span></div>',
+      '<div class="formula-stack">',
+      renderFormulaBlock("적정가 공식", formulaSetting("fairValueFormula")),
+      '</div>',
+      renderVariableGuide(variables),
+      '<div class="rule-strip"><span>현재가는 토스 잔고/시세 값, EPS·목표 PER·공식·가중치는 사용자가 설정합니다.</span></div>',
       '</article>'
     ].join("");
   }
@@ -1813,6 +2130,26 @@
       '<label class="setting-field wide">',
       '<span>수급 신호 입력</span>',
       '<textarea data-setting="marketSignalInputs" rows="5" autocomplete="off" placeholder="SYMBOL, 체결강도, 거래량배율, 매수량, 매도량, 호가불균형%, 가격변화%">' + escapeHtml(settingValue("marketSignalInputs")) + '</textarea>',
+      '</label>',
+      '<label class="setting-field wide">',
+      '<span>적정가 공식</span>',
+      '<textarea data-setting="fairValueFormula" rows="2" autocomplete="off" placeholder="eps * targetPer">' + escapeHtml(formulaSetting("fairValueFormula")) + '</textarea>',
+      '</label>',
+      '<label class="setting-field wide">',
+      '<span>매수 점수 공식</span>',
+      '<textarea data-setting="buyScoreFormula" rows="3" autocomplete="off" placeholder="50 + ...">' + escapeHtml(formulaSetting("buyScoreFormula")) + '</textarea>',
+      '</label>',
+      '<label class="setting-field wide">',
+      '<span>매도 점수 공식</span>',
+      '<textarea data-setting="sellScoreFormula" rows="3" autocomplete="off" placeholder="50 + ...">' + escapeHtml(formulaSetting("sellScoreFormula")) + '</textarea>',
+      '</label>',
+      '<label class="setting-field wide">',
+      '<span>추가 가중치</span>',
+      '<textarea data-setting="formulaWeights" rows="5" autocomplete="off" placeholder="flowWeight=1">' + escapeHtml(settingValue("formulaWeights") || defaultSettings.formulaWeights) + '</textarea>',
+      '</label>',
+      '<label class="setting-field wide">',
+      '<span>판단 기준값</span>',
+      '<textarea data-setting="decisionThresholds" rows="5" autocomplete="off" placeholder="buyCandidate=78">' + escapeHtml(settingValue("decisionThresholds") || defaultSettings.decisionThresholds) + '</textarea>',
       '</label>',
       '</div>',
       '<div class="settings-actions">',

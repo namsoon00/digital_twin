@@ -1,12 +1,32 @@
 (function () {
   var app = document.getElementById("app");
+  var defaultSettings = {
+    watchlistSymbols: "NVDA,TSLA,000660",
+    tossApiBaseUrl: "https://openapi.tossinvest.com",
+    tossClientId: "",
+    tossClientSecret: "",
+    tossAccountSeq: "",
+    xBearerToken: "",
+    xSearchQuery: "(market OR stocks OR semiconductor OR Fed OR KOSPI OR dollar OR AI) -is:retweet lang:en"
+  };
+  var tabs = [
+    { id: "decision", label: "판단" },
+    { id: "flow", label: "심리·흐름" },
+    { id: "feed", label: "피드" },
+    { id: "settings", label: "설정" }
+  ];
+  var settingsMemoryStore = "";
   var state = {
     loading: true,
     refreshing: false,
     error: "",
     snapshot: null,
     selectedTheme: "all",
-    dataMode: initialDataMode()
+    dataMode: initialDataMode(),
+    activeTab: initialTab(),
+    settings: loadSettings(),
+    showSecrets: false,
+    settingsSaved: false
   };
 
   function escapeHtml(value) {
@@ -34,6 +54,12 @@
     return window.location.protocol === "file:" || /\.github\.io$/i.test(window.location.hostname);
   }
 
+  function initialTab() {
+    var params = new URLSearchParams(window.location.search);
+    var requested = String(params.get("tab") || "").toLowerCase();
+    return tabs.some(function (tab) { return tab.id === requested; }) ? requested : "decision";
+  }
+
   function initialDataMode() {
     var params = new URLSearchParams(window.location.search);
     var queryMode = String(params.get("mock") || params.get("mode") || "").toLowerCase();
@@ -51,6 +77,62 @@
       window.localStorage.setItem("exitLensDataMode", value);
     } catch (error) {
       // Storage can be unavailable in private contexts; the in-memory state is enough.
+    }
+  }
+
+  function loadSettings() {
+    try {
+      var raw = readStoredSettings();
+      return Object.assign({}, defaultSettings, raw ? JSON.parse(raw) : {});
+    } catch (error) {
+      return Object.assign({}, defaultSettings);
+    }
+  }
+
+  function readStoredSettings() {
+    try {
+      var storage = window.localStorage;
+      return storage ? storage.getItem("exitLensSettings") : settingsMemoryStore;
+    } catch (error) {
+      return settingsMemoryStore;
+    }
+  }
+
+  function writeStoredSettings(payload) {
+    settingsMemoryStore = payload;
+    try {
+      var storage = window.localStorage;
+      if (storage) storage.setItem("exitLensSettings", payload);
+      return true;
+    } catch (error) {
+      return true;
+    }
+  }
+
+  function removeStoredSettings() {
+    settingsMemoryStore = "";
+    try {
+      var storage = window.localStorage;
+      if (storage) storage.removeItem("exitLensSettings");
+      return true;
+    } catch (error) {
+      return true;
+    }
+  }
+
+  function persistSettings() {
+    state.settingsSaved = writeStoredSettings(JSON.stringify(state.settings));
+    if (!state.settingsSaved) {
+      state.error = "브라우저 저장소에 설정을 저장하지 못했습니다.";
+    }
+  }
+
+  function clearSettings() {
+    state.settings = Object.assign({}, defaultSettings);
+    state.showSecrets = false;
+    state.settingsSaved = false;
+    if (!removeStoredSettings()) {
+      state.error = "브라우저 저장소에서 설정을 삭제하지 못했습니다.";
     }
   }
 
@@ -450,21 +532,58 @@
       '<button class="icon-button" data-action="refresh" title="새로고침">' + (state.refreshing ? "…" : "↻") + "</button>",
       '</div>',
       '</section>',
+      renderTabs(),
+      renderActiveTab(snapshot, news),
+      '</main>'
+    ].join("");
+  }
+
+  function renderTabs() {
+    return [
+      '<nav class="tab-bar" aria-label="앱 탭">',
+      tabs.map(function (tab) {
+        return '<button class="' + (state.activeTab === tab.id ? "active" : "") + '" data-tab="' + escapeHtml(tab.id) + '">' + escapeHtml(tab.label) + '</button>';
+      }).join(""),
+      '</nav>'
+    ].join("");
+  }
+
+  function renderActiveTab(snapshot, news) {
+    if (state.activeTab === "flow") {
+      return [
+        '<section class="content-grid">',
+        renderPsychologyPanel(snapshot),
+        renderStockFlowPanel(snapshot),
+        renderThemePanel(snapshot),
+        '</section>'
+      ].join("");
+    }
+    if (state.activeTab === "feed") {
+      return [
+        '<section class="content-grid">',
+        renderNewsPanel(snapshot, news),
+        renderSocialPanel(snapshot),
+        renderChecklistPanel(snapshot),
+        '</section>'
+      ].join("");
+    }
+    if (state.activeTab === "settings") {
+      return [
+        '<section class="content-grid">',
+        renderSettingsPanel(),
+        '</section>'
+      ].join("");
+    }
+    return [
       '<section class="hero-grid">',
       renderScorePanel(snapshot),
       renderSourcePanel(snapshot),
       '</section>',
       '<section class="content-grid">',
       renderExitPanel(snapshot),
-      renderPsychologyPanel(snapshot),
-      renderStockFlowPanel(snapshot),
       renderPortfolioPanel(snapshot),
-      renderThemePanel(snapshot),
-      renderNewsPanel(snapshot, news),
-      renderSocialPanel(snapshot),
       renderChecklistPanel(snapshot),
-      '</section>',
-      '</main>'
+      '</section>'
     ].join("");
   }
 
@@ -651,6 +770,57 @@
     ].join("");
   }
 
+  function settingValue(name) {
+    return state.settings && state.settings[name] != null ? state.settings[name] : "";
+  }
+
+  function renderSettingField(name, label, type, placeholder) {
+    return [
+      '<label class="setting-field">',
+      '<span>' + escapeHtml(label) + '</span>',
+      '<input data-setting="' + escapeHtml(name) + '" type="' + escapeHtml(type || "text") + '" value="' + escapeHtml(settingValue(name)) + '" placeholder="' + escapeHtml(placeholder || "") + '" autocomplete="off" />',
+      '</label>'
+    ].join("");
+  }
+
+  function renderSettingsPanel() {
+    var secretType = state.showSecrets ? "text" : "password";
+    return [
+      '<article class="panel settings-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">App Settings</p>',
+      '<h2>앱 설정과 secret</h2>',
+      '</div>',
+      '<span class="tone-chip ' + (state.settingsSaved ? "watch" : "hold") + '">' + (state.settingsSaved ? "저장됨" : "로컬") + '</span>',
+      '</div>',
+      '<div class="settings-body">',
+      '<div class="settings-note">',
+      '<strong>저장 위치</strong>',
+      '<p>입력값은 이 브라우저의 localStorage에만 저장됩니다. GitHub Pages에서는 서버로 secret을 전송하지 않습니다.</p>',
+      '</div>',
+      '<div class="settings-grid">',
+      renderSettingField("watchlistSymbols", "관심 종목", "text", "NVDA,TSLA,000660"),
+      renderSettingField("tossApiBaseUrl", "Toss API Base URL", "url", "https://openapi.tossinvest.com"),
+      renderSettingField("tossClientId", "Toss Client ID", "text", "client id"),
+      renderSettingField("tossClientSecret", "Toss Client Secret", secretType, "client secret"),
+      renderSettingField("tossAccountSeq", "Toss Account Seq", "text", "선택"),
+      renderSettingField("xBearerToken", "X Bearer Token", secretType, "bearer token"),
+      '<label class="setting-field wide">',
+      '<span>X Search Query</span>',
+      '<textarea data-setting="xSearchQuery" rows="3" autocomplete="off">' + escapeHtml(settingValue("xSearchQuery")) + '</textarea>',
+      '</label>',
+      '</div>',
+      '<div class="settings-actions">',
+      '<button class="text-button primary" data-action="save-settings">저장</button>',
+      '<button class="text-button" data-action="toggle-secrets">' + (state.showSecrets ? "숨기기" : "secret 보기") + '</button>',
+      '<button class="text-button danger" data-action="clear-settings">삭제</button>',
+      '</div>',
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
   function renderPortfolioPanel(snapshot) {
     var portfolio = snapshot.portfolio || { sectors: [] };
     var toss = snapshot.toss || { positions: [] };
@@ -811,6 +981,15 @@
       });
     }
 
+    Array.prototype.slice.call(app.querySelectorAll("[data-tab]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        var nextTab = button.getAttribute("data-tab") || "decision";
+        if (nextTab === state.activeTab) return;
+        state.activeTab = nextTab;
+        render();
+      });
+    });
+
     Array.prototype.slice.call(app.querySelectorAll("[data-mode]")).forEach(function (button) {
       button.addEventListener("click", function () {
         var nextMode = button.getAttribute("data-mode") || "live";
@@ -829,6 +1008,39 @@
         render();
       });
     });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-setting]")).forEach(function (field) {
+      field.addEventListener("input", function () {
+        var name = field.getAttribute("data-setting");
+        if (!name) return;
+        state.settings[name] = field.value;
+        state.settingsSaved = false;
+      });
+    });
+
+    var saveSettings = app.querySelector('[data-action="save-settings"]');
+    if (saveSettings) {
+      saveSettings.addEventListener("click", function () {
+        persistSettings();
+        render();
+      });
+    }
+
+    var toggleSecrets = app.querySelector('[data-action="toggle-secrets"]');
+    if (toggleSecrets) {
+      toggleSecrets.addEventListener("click", function () {
+        state.showSecrets = !state.showSecrets;
+        render();
+      });
+    }
+
+    var clearSettingsButton = app.querySelector('[data-action="clear-settings"]');
+    if (clearSettingsButton) {
+      clearSettingsButton.addEventListener("click", function () {
+        clearSettings();
+        render();
+      });
+    }
   }
 
   load();

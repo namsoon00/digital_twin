@@ -803,6 +803,73 @@ h3 {
   grid-column: 1 / -1;
 }
 
+.signal-panel {
+  grid-column: 1 / -1;
+}
+
+.signal-list {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+}
+
+.signal-row {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8faf9;
+}
+
+.signal-main {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.signal-score-grid,
+.signal-metric-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.signal-score-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.signal-metric-grid {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.signal-score-grid span,
+.signal-metric-grid span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 9px 10px;
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.signal-score-grid strong,
+.signal-metric-grid strong {
+  color: var(--ink);
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.signal-score-grid strong.buy {
+  color: var(--green);
+}
+
+.signal-score-grid strong.sell {
+  color: var(--red);
+}
+
 .feed-stat-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1356,6 +1423,8 @@ h3 {
   .gauge-grid,
   .flow-lanes,
   .flow-row,
+  .signal-score-grid,
+  .signal-metric-grid,
   .valuation-grid,
   .feed-stat-grid {
     grid-template-columns: 1fr;

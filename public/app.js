@@ -9,10 +9,18 @@
     valuationAssumptions: [
       "AAPL,7.5,28,15",
       "005930,6500,12,20"
+    ].join("\n"),
+    marketSignalInputs: [
+      "005930,118,1.8,620000,480000,18,2.1",
+      "AAPL,86,1.4,320000,410000,-12,-1.8",
+      "NVDA,132,2.3,780000,520000,22,3.5",
+      "TSLA,91,1.2,210000,260000,-8,-0.9",
+      "000660,122,1.7,510000,390000,15,2.4"
     ].join("\n")
   };
   var tabs = [
     { id: "decision", label: "판단" },
+    { id: "signal", label: "수급" },
     { id: "valuation", label: "가치" },
     { id: "holdings", label: "보유" },
     { id: "feed", label: "피드" },
@@ -615,7 +623,7 @@
       regime: "토스 조회 전용",
       summary: [
         "보유 종목 2개와 관심 종목 " + watchlist.length + "개를 토스 API 범위 안에서 분리했습니다.",
-        "외부 텍스트 신호는 첫 화면 판단에서 제외했습니다.",
+        "체결강도, 거래량, 매수/매도 체결량은 수급 탭에서 별도 조합합니다.",
         "판단 근거는 수익률, 평가손익, 매도 가능 수량, 보유 비중으로 제한합니다."
       ],
       toss: {
@@ -720,6 +728,30 @@
     return Number.isFinite(parsed) ? parsed : 0;
   }
 
+  function clamp(value, min, max) {
+    return Math.max(min, Math.min(max, value));
+  }
+
+  function formatSignalNumber(value, suffix) {
+    var number = Number(value || 0);
+    if (!Number.isFinite(number) || number === 0) return "-";
+    return number.toLocaleString("ko-KR", {
+      maximumFractionDigits: Math.abs(number) >= 10 ? 0 : 1
+    }) + (suffix || "");
+  }
+
+  function formatSignalRatio(value) {
+    var number = Number(value || 0);
+    if (!Number.isFinite(number) || number === 0) return "-";
+    return number.toFixed(number >= 10 ? 0 : 1) + "x";
+  }
+
+  function formatSignalVolume(value) {
+    var number = Number(value || 0);
+    if (!Number.isFinite(number) || number === 0) return "-";
+    return formatMoney(number);
+  }
+
   function parseValuationAssumptions() {
     var map = {};
     String(settingValue("valuationAssumptions") || "")
@@ -735,6 +767,30 @@
           eps: numeric(parts[1]),
           targetPer: numeric(parts[2]),
           margin: numeric(parts[3] || 15)
+        };
+      });
+    return map;
+  }
+
+  function parseMarketSignals() {
+    var map = {};
+    String(settingValue("marketSignalInputs") || "")
+      .split(/\r?\n/)
+      .map(function (line) { return line.trim(); })
+      .filter(Boolean)
+      .forEach(function (line) {
+        var parts = line.split(",").map(function (part) { return part.trim(); });
+        var symbol = String(parts[0] || "").toUpperCase();
+        if (!symbol) return;
+        map[symbol] = {
+          symbol: symbol,
+          tradeStrength: numeric(parts[1]),
+          volumeRatio: numeric(parts[2]),
+          buyVolume: numeric(parts[3]),
+          sellVolume: numeric(parts[4]),
+          bidAskImbalance: numeric(parts[5]),
+          priceChangeRate: numeric(parts[6]),
+          source: "manual"
         };
       });
     return map;
@@ -803,6 +859,169 @@
         if (a.rank !== b.rank) return a.rank - b.rank;
         return a.gap - b.gap;
       });
+  }
+
+  function signalValue(raw, keys) {
+    var value = 0;
+    keys.some(function (key) {
+      if (raw && raw[key] != null && raw[key] !== "") {
+        value = numeric(raw[key]);
+        return true;
+      }
+      return false;
+    });
+    return value;
+  }
+
+  function marketSignalForItem(item, signalMap) {
+    var symbol = String(item.symbol || "").toUpperCase();
+    var fromItem = item.marketSignal || item.tradeSignal || item.signal || {};
+    var fromSettings = signalMap[symbol] || {};
+    var merged = Object.assign({}, fromItem, fromSettings);
+    return {
+      symbol: symbol,
+      tradeStrength: signalValue(merged, ["tradeStrength", "executionStrength"]),
+      volumeRatio: signalValue(merged, ["volumeRatio", "relativeVolume", "volumeMultiple"]),
+      buyVolume: signalValue(merged, ["buyVolume", "buyTradeVolume", "bidVolume"]),
+      sellVolume: signalValue(merged, ["sellVolume", "sellTradeVolume", "askVolume"]),
+      bidAskImbalance: signalValue(merged, ["bidAskImbalance", "orderbookImbalance", "imbalance"]),
+      priceChangeRate: signalValue(merged, ["priceChangeRate", "changeRate", "changePercent"]),
+      source: merged.source || (Object.keys(fromItem).length ? "toss" : "")
+    };
+  }
+
+  function hasMarketSignal(signal) {
+    return [
+      "tradeStrength",
+      "volumeRatio",
+      "buyVolume",
+      "sellVolume",
+      "bidAskImbalance",
+      "priceChangeRate"
+    ].some(function (key) {
+      return Number(signal[key] || 0) !== 0;
+    });
+  }
+
+  function buyVolumeShare(signal) {
+    var buy = Number(signal.buyVolume || 0);
+    var sell = Number(signal.sellVolume || 0);
+    var total = buy + sell;
+    return total > 0 ? (buy / total) * 100 : 50;
+  }
+
+  function marketSignalScores(signal) {
+    var strength = signal.tradeStrength || 100;
+    var volumeRatio = signal.volumeRatio || 1;
+    var imbalance = signal.bidAskImbalance || 0;
+    var priceChange = signal.priceChangeRate || 0;
+    var buyShare = buyVolumeShare(signal);
+    var buyScore = 50
+      + (strength - 100) * 0.25
+      + (volumeRatio - 1) * 12
+      + (buyShare - 50) * 0.35
+      + imbalance * 0.28
+      + priceChange * 1.1;
+    var sellScore = 50
+      + (100 - strength) * 0.22
+      + (volumeRatio - 1) * 8
+      + (50 - buyShare) * 0.42
+      - imbalance * 0.28
+      - priceChange * 1.2;
+    return {
+      buyScore: Math.round(clamp(buyScore, 0, 100)),
+      sellScore: Math.round(clamp(sellScore, 0, 100)),
+      buyShare: Math.round(clamp(buyShare, 0, 100))
+    };
+  }
+
+  function instrumentItems(snapshot) {
+    var toss = snapshot.toss || { positions: [], watchlist: [] };
+    var seen = {};
+    var items = [];
+    (toss.positions || []).forEach(function (item) {
+      if (item.source === "cash" || item.sector === "현금" || String(item.symbol || "").toUpperCase() === "CASH") return;
+      var symbol = String(item.symbol || "").toUpperCase();
+      if (!symbol || seen[symbol]) return;
+      seen[symbol] = true;
+      items.push(Object.assign({}, item, { source: item.source || "holding" }));
+    });
+    (toss.watchlist || []).forEach(function (item) {
+      var symbol = String(item.symbol || "").toUpperCase();
+      if (!symbol || seen[symbol]) return;
+      seen[symbol] = true;
+      items.push(Object.assign(clientKnownStockInfo(symbol), item, { source: "watchlist" }));
+    });
+    return items;
+  }
+
+  function tradeSignalDecision(item, scores, valuation, hasData) {
+    if (!hasData) return { label: "수급 입력 필요", tone: "hold", priority: 9 };
+    var holding = item.source !== "watchlist";
+    var expensive = valuation && (valuation.tone === "danger" || valuation.tone === "caution");
+    var cheap = valuation && valuation.tone === "watch";
+    if (holding && scores.sellScore >= 70 && expensive) return { label: "분할매도 검토", tone: "danger", priority: 1 };
+    if (holding && scores.sellScore >= 66) return { label: "리스크 축소 검토", tone: "caution", priority: 2 };
+    if (holding && scores.buyScore >= 72 && !expensive) return { label: "보유 강화 관찰", tone: "watch", priority: 3 };
+    if (!holding && scores.buyScore >= 78 && (cheap || !expensive)) return { label: "매수 후보", tone: "watch", priority: 2 };
+    if (!holding && scores.buyScore >= 70) return { label: "추격 주의", tone: "caution", priority: 4 };
+    if (scores.sellScore >= 64) return { label: holding ? "매도 기준 확인" : "진입 보류", tone: "caution", priority: 5 };
+    return { label: "관망", tone: "hold", priority: 6 };
+  }
+
+  function tradeSignalReasons(signal, scores, valuation, hasData) {
+    if (!hasData) {
+      return ["설정에서 체결강도, 거래량 배율, 매수/매도 체결량을 입력하면 신호를 계산합니다."];
+    }
+    var reasons = [
+      "체결강도: " + formatSignalNumber(signal.tradeStrength, "") + ", 거래량: " + formatSignalRatio(signal.volumeRatio) + "을 함께 봅니다.",
+      "매수 체결 비중은 " + scores.buyShare + "%이고 호가 불균형은 " + formatSignalNumber(signal.bidAskImbalance, "%") + "입니다."
+    ];
+    if (valuation && valuation.status) {
+      reasons.push("밸류에이션 분류는 " + valuation.status + "이며 수급 판단에 함께 반영됩니다.");
+    } else {
+      reasons.push("밸류에이션 가정이 없으면 수급 신호만으로 관찰 라벨을 만듭니다.");
+    }
+    return reasons;
+  }
+
+  function buildTradeSignalItems(snapshot) {
+    var signalMap = parseMarketSignals();
+    var valuationMap = {};
+    buildValuationItems(snapshot).forEach(function (item) {
+      valuationMap[item.symbol] = item;
+    });
+    return instrumentItems(snapshot).map(function (item) {
+      var symbol = String(item.symbol || "").toUpperCase();
+      var signal = marketSignalForItem(item, signalMap);
+      var hasData = hasMarketSignal(signal);
+      var scores = hasData ? marketSignalScores(signal) : { buyScore: 0, sellScore: 0, buyShare: 0 };
+      var valuation = valuationMap[symbol] || null;
+      var decision = tradeSignalDecision(item, scores, valuation, hasData);
+      return {
+        symbol: symbol,
+        name: item.name || symbol,
+        source: item.source || "watchlist",
+        sector: item.sector || "-",
+        market: item.market || "",
+        currency: item.currency || "",
+        currentPrice: currentPriceOf(item),
+        signal: signal,
+        hasData: hasData,
+        buyScore: scores.buyScore,
+        sellScore: scores.sellScore,
+        buyShare: scores.buyShare,
+        valuation: valuation,
+        action: decision.label,
+        tone: decision.tone,
+        priority: decision.priority,
+        reasons: tradeSignalReasons(signal, scores, valuation, hasData),
+        triggers: ["체결강도", "거래량", "매수/매도", "호가", "가격변화"]
+      };
+    }).sort(function (a, b) {
+      if (a.priority !== b.priority) return a.priority - b.priority;
+      return Math.max(b.buyScore, b.sellScore) - Math.max(a.buyScore, a.sellScore);
+    });
   }
 
   function pressureLabel(score) {
@@ -931,6 +1150,14 @@
   }
 
   function renderActiveTab(snapshot) {
+    if (state.activeTab === "signal") {
+      return [
+        '<section class="content-grid">',
+        renderTradeSignalPanel(snapshot, true),
+        renderTradeSignalMethodPanel(),
+        '</section>'
+      ].join("");
+    }
     if (state.activeTab === "valuation") {
       return [
         '<section class="content-grid">',
@@ -970,8 +1197,9 @@
       renderSourcePanel(snapshot),
       '</section>',
       '<section class="content-grid">',
-      renderValuationPanel(snapshot, false),
+      renderTradeSignalPanel(snapshot, false),
       renderDecisionPanel(snapshot),
+      renderValuationPanel(snapshot, false),
       renderChecklistPanel(snapshot),
       '</section>'
     ].join("");
@@ -1019,7 +1247,8 @@
       '<div class="source-row"><span>계좌</span><strong>' + escapeHtml(account.displayNumber || "-") + '</strong></div>',
       '<div class="source-row"><span>주문 가능 금액</span><strong>' + escapeHtml(formatCurrency(account.orderableAmount || 0, account.currency || "KRW")) + '</strong></div>',
       '<div class="source-row"><span>보유/관심</span><strong>' + escapeHtml(decision.holdingCount || 0) + ' / ' + escapeHtml(decision.watchCount || 0) + '</strong></div>',
-      '<div class="source-row"><span>외부 신호</span><strong>사용 안 함</strong></div>',
+      '<div class="source-row"><span>수급 신호</span><strong>설정/토스 시장 데이터</strong></div>',
+      '<div class="source-row"><span>뉴스·X</span><strong>매매 점수 제외</strong></div>',
       '</div>',
       '</aside>'
     ].join("");
@@ -1033,7 +1262,7 @@
       '<div class="panel-head">',
       '<div>',
       '<p class="label">Account Priority</p>',
-      '<h2>내 계좌 기준 오늘 먼저 점검할 종목</h2>',
+      '<h2>계좌 데이터 기준 우선 점검 종목</h2>',
       '</div>',
       '<span class="metric">' + escapeHtml(items.length) + '</span>',
       '</div>',
@@ -1080,6 +1309,103 @@
       item.source === "holding" ? '<em>' + escapeHtml(signedPct(item.profitLossRate)) + '</em>' : '<em>watch</em>',
       '</div>',
       '</div>'
+    ].join("");
+  }
+
+  function renderTradeSignalPanel(snapshot, full) {
+    var items = buildTradeSignalItems(snapshot);
+    var visible = full ? items : items.slice(0, 3);
+    var actionCount = items.filter(function (item) {
+      return item.tone === "danger" || item.tone === "caution" || item.tone === "watch";
+    }).length;
+    return [
+      '<article class="panel signal-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Trade Signal</p>',
+      '<h2>체결·거래량 매매 신호</h2>',
+      '</div>',
+      '<span class="metric">' + escapeHtml(actionCount) + '</span>',
+      '</div>',
+      '<div class="signal-list">',
+      visible.length ? visible.map(renderTradeSignalRow).join("") : '<p class="subtle">보유 또는 관심 종목을 찾지 못했습니다.</p>',
+      '</div>',
+      '<div class="rule-strip">',
+      '<span>매수/매도 실행 지시가 아니라 수급 데이터 점검 라벨입니다.</span>',
+      full ? '<span>값은 설정에서 직접 수정하거나 향후 토스 시장 데이터로 교체합니다.</span>' : '<span>전체 목록은 수급 탭에서 봅니다.</span>',
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderTradeSignalRow(item) {
+    var signal = item.signal || {};
+    var valuationText = item.valuation && item.valuation.status ? item.valuation.status : "가정 대기";
+    return [
+      '<div class="signal-row">',
+      '<div class="signal-main">',
+      '<div class="flow-title">',
+      '<div>',
+      '<strong>' + escapeHtml(item.name) + '</strong>',
+      '<span>' + escapeHtml(item.symbol) + ' · ' + escapeHtml(item.sector || "-") + ' · ' + escapeHtml(sourceLabel(item.source)) + '</span>',
+      '</div>',
+      '<div class="exit-badges">',
+      '<span class="source-chip ' + escapeHtml(item.source) + '">' + escapeHtml(sourceLabel(item.source)) + '</span>',
+      '<span class="tone-chip ' + escapeHtml(item.tone || "hold") + '">' + escapeHtml(item.action) + '</span>',
+      '</div>',
+      '</div>',
+      '<div class="signal-score-grid">',
+      '<span>매수 점수 <strong class="buy">' + escapeHtml(item.hasData ? item.buyScore : "-") + '</strong></span>',
+      '<span>매도 점수 <strong class="sell">' + escapeHtml(item.hasData ? item.sellScore : "-") + '</strong></span>',
+      '<span>매수 비중 <strong>' + escapeHtml(item.hasData ? item.buyShare + "%" : "-") + '</strong></span>',
+      '<span>가치 판단 <strong>' + escapeHtml(valuationText) + '</strong></span>',
+      '</div>',
+      '<div class="signal-metric-grid">',
+      '<span>체결강도 <strong>' + escapeHtml(formatSignalNumber(signal.tradeStrength, "")) + '</strong></span>',
+      '<span>거래량 <strong>' + escapeHtml(formatSignalRatio(signal.volumeRatio)) + '</strong></span>',
+      '<span>매수량 <strong>' + escapeHtml(formatSignalVolume(signal.buyVolume)) + '</strong></span>',
+      '<span>매도량 <strong>' + escapeHtml(formatSignalVolume(signal.sellVolume)) + '</strong></span>',
+      '<span>호가 불균형 <strong>' + escapeHtml(formatSignalNumber(signal.bidAskImbalance, "%")) + '</strong></span>',
+      '<span>가격 변화 <strong>' + escapeHtml(formatSignalNumber(signal.priceChangeRate, "%")) + '</strong></span>',
+      '</div>',
+      '<div class="exit-reasons">',
+      (item.reasons || []).map(function (reason) {
+        return '<p>' + escapeHtml(reason) + '</p>';
+      }).join(""),
+      '</div>',
+      '<div class="trigger-list">',
+      (item.triggers || []).map(function (trigger) {
+        return '<span>' + escapeHtml(trigger) + '</span>';
+      }).join(""),
+      '</div>',
+      '</div>',
+      '</div>'
+    ].join("");
+  }
+
+  function renderTradeSignalMethodPanel() {
+    var rows = [
+      ["체결강도", "100 이상이면 매수 체결 우위, 100 미만이면 매도 체결 우위"],
+      ["거래량 배율", "평균 대비 거래량이 커질수록 신호 가중치 상승"],
+      ["매수/매도량", "실제 체결 방향의 비중으로 매수·매도 압력 분리"],
+      ["호가 불균형", "매수잔량 우위는 양수, 매도잔량 우위는 음수로 입력"],
+      ["최종 라벨", "수급 점수 + 보유 여부 + 밸류에이션 상태를 조합"]
+    ];
+    return [
+      '<article class="panel signal-method-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Signal Method</p>',
+      '<h2>수급 계산 기준</h2>',
+      '</div>',
+      '</div>',
+      '<div class="source-stack">',
+      rows.map(function (row) {
+        return '<div class="source-row"><span>' + escapeHtml(row[0]) + '</span><strong>' + escapeHtml(row[1]) + '</strong></div>';
+      }).join(""),
+      '</div>',
+      '<div class="rule-strip"><span>입력 형식: SYMBOL, 체결강도, 거래량배율, 매수량, 매도량, 호가불균형%, 가격변화%</span></div>',
+      '</article>'
     ].join("");
   }
 
@@ -1483,6 +1809,10 @@
       '<label class="setting-field wide">',
       '<span>밸류에이션 가정</span>',
       '<textarea data-setting="valuationAssumptions" rows="4" autocomplete="off" placeholder="SYMBOL, EPS, 목표PER, 안전마진%">' + escapeHtml(settingValue("valuationAssumptions")) + '</textarea>',
+      '</label>',
+      '<label class="setting-field wide">',
+      '<span>수급 신호 입력</span>',
+      '<textarea data-setting="marketSignalInputs" rows="5" autocomplete="off" placeholder="SYMBOL, 체결강도, 거래량배율, 매수량, 매도량, 호가불균형%, 가격변화%">' + escapeHtml(settingValue("marketSignalInputs")) + '</textarea>',
       '</label>',
       '</div>',
       '<div class="settings-actions">',

@@ -1040,6 +1040,11 @@ h3 {
   color: var(--amber);
 }
 
+.check-state.대기 {
+  background: var(--blue-soft);
+  color: var(--blue);
+}
+
 .check-state.잠금 {
   background: var(--red-soft);
   color: var(--red);
@@ -1102,6 +1107,14 @@ h3 {
 
   .exit-row {
     grid-template-columns: 1fr;
+  }
+
+  .rich-row {
+    display: grid;
+  }
+
+  .rich-row .right {
+    text-align: left;
   }
 
   .exit-title {

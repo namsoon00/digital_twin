@@ -1391,7 +1391,9 @@ function demoTossPortfolio(reason) {
     status: reason || "토스 credentials 미설정",
     account: {
       displayNumber: "demo",
-      type: "BROKERAGE"
+      type: "BROKERAGE",
+      orderableAmount: 1250000,
+      currency: "KRW"
     },
     positions: [
       {
@@ -1400,8 +1402,12 @@ function demoTossPortfolio(reason) {
         market: "KR",
         currency: "KRW",
         quantity: "12",
+        sellableQuantity: "12",
+        averagePrice: 65000,
+        currentPrice: 72000,
         marketValue: 864000,
         profitLoss: 84000,
+        profitLossRate: 10.8,
         sector: "반도체"
       },
       {
@@ -1410,8 +1416,12 @@ function demoTossPortfolio(reason) {
         market: "US",
         currency: "USD",
         quantity: "2",
+        sellableQuantity: "2",
+        averagePrice: 210,
+        currentPrice: 243.1,
         marketValue: 486.2,
         profitLoss: 66.2,
+        profitLossRate: 15.8,
         sector: "AI 디바이스"
       },
       {
@@ -1420,8 +1430,12 @@ function demoTossPortfolio(reason) {
         market: "CASH",
         currency: "KRW",
         quantity: "1",
+        sellableQuantity: "1",
+        averagePrice: 0,
+        currentPrice: 0,
         marketValue: 1250000,
         profitLoss: 0,
+        profitLossRate: 0,
         sector: "현금"
       }
     ]
@@ -1444,14 +1458,25 @@ function normalizeTossHoldings(payload) {
 function normalizeTossPosition(item) {
   const marketValue = decimalNumber(item.marketValue) || decimalNumber(item.evaluationAmount);
   const profitLoss = decimalNumber(item.profitLoss) || decimalNumber(item.unrealizedProfitLoss);
+  const averagePrice = decimalNumber(item.averagePrice) || decimalNumber(item.avgPrice) || decimalNumber(item.purchasePrice);
+  const currentPrice = decimalNumber(item.currentPrice) || decimalNumber(item.price) || decimalNumber(item.closePrice);
+  const rawRate = item.profitLossRate != null
+    ? decimalNumber(item.profitLossRate)
+    : item.unrealizedProfitLossRate != null
+      ? decimalNumber(item.unrealizedProfitLossRate)
+      : 0;
   return {
     symbol: String(item.symbol || item.stockCode || item.code || ""),
     name: String(item.name || item.stockName || item.symbol || "보유 종목"),
     market: String(item.marketCountry || item.market || ""),
     currency: String(item.currency || ""),
     quantity: String(item.quantity || item.qty || ""),
+    sellableQuantity: String(item.sellableQuantity || item.availableQuantity || item.sellableQty || item.quantity || item.qty || ""),
+    averagePrice: averagePrice,
+    currentPrice: currentPrice,
     marketValue: marketValue,
     profitLoss: profitLoss,
+    profitLossRate: rawRate || profitLossRate({ marketValue: marketValue, profitLoss: profitLoss }),
     sector: sectorFromSymbol(String(item.symbol || item.stockCode || item.name || ""))
   };
 }
@@ -1524,7 +1549,12 @@ async function fetchTossPortfolio() {
         mode: "live",
         configured: true,
         status: "계좌 식별값 없음",
-        account: { displayNumber: maskAccount(account.accountNo || ""), type: account.accountType || "" },
+        account: {
+          displayNumber: maskAccount(account.accountNo || ""),
+          type: account.accountType || "",
+          orderableAmount: decimalNumber(account.orderableAmount || account.availableAmount || account.cashBalance),
+          currency: account.currency || "KRW"
+        },
         positions: []
       };
     }
@@ -1542,7 +1572,9 @@ async function fetchTossPortfolio() {
       status: "토스 계좌 동기화",
       account: {
         displayNumber: maskAccount(account.accountNo || accountSeq),
-        type: account.accountType || "BROKERAGE"
+        type: account.accountType || "BROKERAGE",
+        orderableAmount: decimalNumber(account.orderableAmount || account.availableAmount || account.cashBalance),
+        currency: account.currency || "KRW"
       },
       positions: positions
     };
@@ -2214,16 +2246,205 @@ function buildFlowLensSnapshot(toss, newsItems, socialPosts, options) {
   };
 }
 
+function isCashPosition(item) {
+  const sector = item.sector || sectorFromSymbol(item.symbol || item.name);
+  return sector === "현금" || String(item.symbol || "").toUpperCase() === "CASH";
+}
+
+function buildTossPortfolio(positions, account) {
+  const cashFromPositions = positions.filter(isCashPosition).reduce(function (sum, item) {
+    return sum + Math.max(0, decimalNumber(item.marketValue));
+  }, 0);
+  const cash = cashFromPositions || decimalNumber(account && account.orderableAmount);
+  const investPositions = positions.filter(function (item) {
+    return !isCashPosition(item);
+  });
+  const invested = investPositions.reduce(function (sum, item) {
+    return sum + Math.max(0, decimalNumber(item.marketValue));
+  }, 0);
+  const total = invested + cash;
+  const sectorMap = {};
+  if (cash) sectorMap["현금"] = cash;
+  investPositions.forEach(function (item) {
+    const sector = item.sector || sectorFromSymbol(item.symbol || item.name);
+    sectorMap[sector] = (sectorMap[sector] || 0) + Math.max(0, decimalNumber(item.marketValue));
+  });
+  const sectors = Object.keys(sectorMap)
+    .map(function (sector) {
+      return {
+        sector: sector,
+        value: sectorMap[sector],
+        ratio: total ? Math.round((sectorMap[sector] / total) * 100) : 0
+      };
+    })
+    .sort(function (a, b) {
+      return b.value - a.value;
+    });
+  const concentration = sectors.filter(function (entry) {
+    return entry.sector !== "현금";
+  })[0] || { ratio: 0 };
+  return {
+    total: total,
+    invested: invested,
+    cash: cash,
+    sectors: sectors,
+    concentration: concentration.ratio
+  };
+}
+
+function buildTossWatchlist(positions) {
+  const holdingSymbols = new Set(positions.map(function (item) {
+    return String(item.symbol || "").toUpperCase();
+  }));
+  return parseWatchlist()
+    .filter(function (item) {
+      return !holdingSymbols.has(String(item.symbol || "").toUpperCase());
+    })
+    .map(function (item) {
+      return Object.assign({}, item, {
+        quoteStatus: "시세 조회 대기"
+      });
+    });
+}
+
+function tossDecisionForHolding(item, portfolio) {
+  const pnlRate = item.profitLossRate != null ? decimalNumber(item.profitLossRate) : profitLossRate(item);
+  const sector = item.sector || sectorFromSymbol(item.symbol || item.name);
+  const sectorEntry = (portfolio.sectors || []).find(function (entry) {
+    return entry.sector === sector;
+  }) || { ratio: 0 };
+  const sellable = decimalNumber(item.sellableQuantity || item.quantity);
+  let score = 24;
+  if (pnlRate >= 20) score += 40;
+  else if (pnlRate >= 10) score += 28;
+  else if (pnlRate >= 5) score += 15;
+  else if (pnlRate <= -15) score += 38;
+  else if (pnlRate <= -8) score += 24;
+  if (sectorEntry.ratio >= 50) score += 12;
+  else if (sectorEntry.ratio >= 35) score += 6;
+  if (sellable > 0) score += 4;
+  const exitPressure = clampScore(score);
+  const decision = exitPressure >= 72
+    ? { label: pnlRate <= -8 ? "손절 기준 확인" : "분할 매도 기준 확인", tone: "danger", priority: 1 }
+    : exitPressure >= 55
+      ? { label: "일부 익절 기준 확인", tone: "caution", priority: 2 }
+      : exitPressure >= 38
+        ? { label: "조건부 보유", tone: "hold", priority: 3 }
+        : { label: "보유 유지", tone: "watch", priority: 4 };
+  const reasons = [];
+  reasons.push("토스 잔고 기준 수익률이 " + (pnlRate > 0 ? "+" : "") + pnlRate + "%입니다.");
+  reasons.push("평가손익은 " + decimalNumber(item.profitLoss).toLocaleString("ko-KR") + " " + (item.currency || "") + "입니다.");
+  if (sectorEntry.ratio >= 35) reasons.push(sector + " 노출이 계좌의 " + sectorEntry.ratio + "%입니다.");
+  if (sellable > 0) reasons.push("매도 가능 수량은 " + sellable + "입니다.");
+  return {
+    symbol: item.symbol,
+    name: item.name,
+    source: "holding",
+    sector: sector,
+    market: item.market || "",
+    currency: item.currency || "",
+    marketValue: decimalNumber(item.marketValue),
+    profitLoss: decimalNumber(item.profitLoss),
+    profitLossRate: pnlRate,
+    exitPressure: exitPressure,
+    decision: decision.label,
+    tone: decision.tone,
+    priority: decision.priority,
+    reasons: reasons.slice(0, 3),
+    triggers: ["수익률", "평가손익", "매도 가능 수량", "보유 비중"].slice(0, 3)
+  };
+}
+
+function tossDecisionForWatch(item) {
+  return {
+    symbol: item.symbol,
+    name: item.name,
+    source: "watchlist",
+    sector: item.sector,
+    market: item.market || "",
+    currency: item.currency || "",
+    marketValue: 0,
+    profitLoss: 0,
+    profitLossRate: 0,
+    exitPressure: 32,
+    decision: "시세 기준 대기",
+    tone: "hold",
+    priority: 5,
+    reasons: ["보유 종목이 아니므로 매도 판단 대신 토스 시세 기준을 기다립니다."],
+    triggers: ["관심 종목", "현재가", "기준가"]
+  };
+}
+
+function buildTossDecision(toss, portfolio, watchlist) {
+  const positions = (toss.positions || []).filter(function (item) {
+    return !isCashPosition(item) && decimalNumber(item.marketValue) > 0;
+  });
+  const holdingItems = positions.map(function (item) {
+    return tossDecisionForHolding(item, portfolio);
+  });
+  const watchItems = watchlist.map(tossDecisionForWatch);
+  const items = holdingItems.concat(watchItems).sort(function (a, b) {
+    if (a.priority !== b.priority) return a.priority - b.priority;
+    return b.exitPressure - a.exitPressure;
+  });
+  const urgentCount = holdingItems.filter(function (item) {
+    return item.tone === "danger" || item.tone === "caution";
+  }).length;
+  const topItems = items.slice(0, 3);
+  const overallPressure = topItems.length
+    ? Math.round(topItems.reduce(function (sum, item) { return sum + item.exitPressure; }, 0) / topItems.length)
+    : 0;
+  return {
+    headline: items[0] ? items[0].name + "의 " + items[0].decision + "이 가장 먼저입니다." : "토스 잔고에서 판단할 종목이 아직 없습니다.",
+    overallPressure: overallPressure,
+    urgentCount: urgentCount,
+    holdingCount: holdingItems.length,
+    watchCount: watchItems.length,
+    items: items,
+    rules: [
+      "수익률과 평가손익은 토스 잔고에서 확인 가능한 값만 사용합니다.",
+      "관심 종목은 보유가 아니므로 매도 판단 대신 시세 기준 대기 상태로 둡니다.",
+      "외부 텍스트 신호는 토스 전용 판단 점수에 반영하지 않습니다."
+    ]
+  };
+}
+
+function buildTossLensSnapshot(toss, options) {
+  options = options || {};
+  const account = toss.account || {};
+  const positions = toss.positions || [];
+  const portfolio = buildTossPortfolio(positions, account);
+  const watchlist = buildTossWatchlist(positions);
+  toss.watchlist = watchlist;
+  const tossDecision = buildTossDecision(toss, portfolio, watchlist);
+  return {
+    generatedAt: now(),
+    dataMode: options.mock ? "mock" : "live",
+    mock: Boolean(options.mock),
+    headline: tossDecision.headline,
+    exitScore: tossDecision.overallPressure,
+    regime: "토스 조회 전용",
+    summary: [
+      "보유 종목 " + tossDecision.holdingCount + "개와 관심 종목 " + tossDecision.watchCount + "개를 분리했습니다.",
+      "외부 텍스트 신호는 판단에서 제외했습니다.",
+      portfolio.sectors[0] ? "가장 큰 계좌 노출은 " + portfolio.sectors[0].sector + " " + portfolio.sectors[0].ratio + "%입니다." : "계좌 보유 종목은 아직 비어 있습니다."
+    ],
+    toss: toss,
+    portfolio: portfolio,
+    tossDecision: tossDecision,
+    checklist: [
+      { label: "토스 잔고의 수익률, 평가손익, 매도 가능 수량 확인", status: tossDecision.urgentCount ? "주의" : "정상" },
+      { label: "관심 종목은 토스 시세 연결 후 현재가 기준만 비교", status: watchlist.length ? "대기" : "정상" },
+      { label: "주문 실행은 읽기 전용 검증 이후 별도 단계에서만 열기", status: "잠금" }
+    ]
+  };
+}
+
 function mockFlowLensSnapshot() {
   const toss = demoTossPortfolio("웹 mock 데이터");
   toss.mode = "mock";
   toss.status = "웹 mock 데이터";
-  return buildFlowLensSnapshot(
-    toss,
-    demoNewsItems("웹 mock 데이터"),
-    demoSocialPosts("웹 mock 데이터"),
-    { mock: true }
-  );
+  return buildTossLensSnapshot(toss, { mock: true });
 }
 
 function wantsMockFlowLens(query) {
@@ -2234,25 +2455,7 @@ function wantsMockFlowLens(query) {
 async function flowLensSnapshot(options) {
   options = options || {};
   if (options.mock) return mockFlowLensSnapshot();
-
-  const newsPromise = Promise.race([
-    fetchFlowNews(),
-    new Promise(function (resolve) {
-      setTimeout(function () {
-        resolve(demoNewsItems("뉴스 빠른 fallback"));
-      }, 1800);
-    })
-  ]);
-  const socialPromise = Promise.race([
-    fetchSocialPosts(),
-    new Promise(function (resolve) {
-      setTimeout(function () {
-        resolve(demoSocialPosts("포스팅 빠른 fallback"));
-      }, 1800);
-    })
-  ]);
-  const results = await Promise.all([fetchTossPortfolio(), newsPromise, socialPromise]);
-  return buildFlowLensSnapshot(results[0], results[1], results[2], { mock: false });
+  return buildTossLensSnapshot(await fetchTossPortfolio(), { mock: false });
 }
 
 async function api(req, res, pathname) {

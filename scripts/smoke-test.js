@@ -119,6 +119,14 @@ async function checkNormalMode(port) {
   assertOk(Array.isArray(payload.items), "부트스트랩 API items가 배열이 아닙니다.");
   assertOk(Array.isArray(payload.messages), "부트스트랩 API messages가 배열이 아닙니다.");
 
+  const tossLens = await request(port, "/api/flow-lens?mock=1");
+  assertOk(tossLens.statusCode === 200, "토스 판단 API 응답 코드가 200이 아닙니다: " + tossLens.statusCode);
+  const tossPayload = JSON.parse(tossLens.body);
+  assertOk(tossPayload.toss && Array.isArray(tossPayload.toss.positions), "토스 판단 API에 보유 종목 배열이 없습니다.");
+  assertOk(tossPayload.tossDecision && Array.isArray(tossPayload.tossDecision.items), "토스 판단 API에 판단 항목이 없습니다.");
+  assertOk(!Array.isArray(tossPayload.news), "토스 전용 판단 API가 뉴스 배열을 내려주고 있습니다.");
+  assertOk(!Array.isArray(tossPayload.social), "토스 전용 판단 API가 소셜 배열을 내려주고 있습니다.");
+
   const preflight = await request(port, "/api/data-api/opendart/company", {
     method: "OPTIONS",
     headers: {

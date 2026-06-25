@@ -273,7 +273,7 @@
         ]
       },
       tossDecision: {
-        headline: "AAPL의 분할 매도 기준 확인이 가장 먼저입니다.",
+        headline: "내 토스 계좌 기준으로 AAPL 분할 매도 기준 점검이 우선입니다.",
         overallPressure: 57,
         urgentCount: 2,
         holdingCount: 2,
@@ -433,7 +433,7 @@
       '<section class="topbar">',
       '<div>',
       '<p class="eyebrow">Toss Lens</p>',
-      '<h1>토스 API 기반 보유/관심 판단</h1>',
+      '<h1>토스 계좌 기준 보유/관심 점검</h1>',
       '<p class="subtle">' + escapeHtml(snapshot.headline) + " · " + escapeHtml(formatClock(snapshot.generatedAt)) + "</p>",
       '</div>',
       '<div class="toolbar">',
@@ -552,8 +552,8 @@
       '<article class="panel exit-panel">',
       '<div class="panel-head">',
       '<div>',
-      '<p class="label">Toss Decision</p>',
-      '<h2>오늘 먼저 확인할 종목</h2>',
+      '<p class="label">Account Priority</p>',
+      '<h2>내 계좌 기준 오늘 먼저 점검할 종목</h2>',
       '</div>',
       '<span class="metric">' + escapeHtml(items.length) + '</span>',
       '</div>',

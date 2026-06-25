@@ -44,7 +44,7 @@ curl http://127.0.0.1:3000/api/flow-lens?mock=1
 ## 앱 구조
 
 - `public/`: Exit Lens 웹 대시보드
-- `GET /api/flow-lens`: 토스 계좌/보유자산, 주문 가능 금액, 관심 종목, 토스 데이터 기반 매도 검토 우선순위 집계
+- `GET /api/flow-lens`: 토스 계좌/보유자산, 주문 가능 금액, 관심 종목, 내 계좌 기준 오늘 먼저 점검할 종목 집계
 - `GET /api/flow-lens?mock=1`: 웹 검증용 고정 mock 스냅샷
 - `server.js`: 토스 OAuth 토큰 발급, 계좌/보유자산 조회, 관심 종목 파싱, 매도 검토 fallback 생성
 

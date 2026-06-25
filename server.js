@@ -2395,7 +2395,7 @@ function buildTossDecision(toss, portfolio, watchlist) {
     ? Math.round(topItems.reduce(function (sum, item) { return sum + item.exitPressure; }, 0) / topItems.length)
     : 0;
   return {
-    headline: items[0] ? items[0].name + "의 " + items[0].decision + "이 가장 먼저입니다." : "토스 잔고에서 판단할 종목이 아직 없습니다.",
+    headline: items[0] ? "내 토스 계좌 기준으로 " + items[0].name + " " + items[0].decision + "이 우선입니다." : "토스 잔고에서 점검할 종목이 아직 없습니다.",
     overallPressure: overallPressure,
     urgentCount: urgentCount,
     holdingCount: holdingItems.length,

@@ -15,6 +15,7 @@
   --violet: #6f5aa7;
   --violet-soft: #eee8f5;
   --shadow: 0 16px 44px rgba(20, 31, 34, 0.08);
+  --bottom-tabs-height: 66px;
 }
 
 * {
@@ -45,7 +46,7 @@ a {
 .shell {
   width: min(1180px, calc(100vw - 32px));
   margin: 0 auto;
-  padding: 18px 0 28px;
+  padding: 18px 0 calc(32px + var(--bottom-tabs-height) + env(safe-area-inset-bottom));
 }
 
 .topbar {
@@ -156,28 +157,40 @@ h3 {
 }
 
 .tab-bar {
-  display: flex;
-  gap: 8px;
-  overflow-x: auto;
-  margin: 0 0 14px;
-  padding-bottom: 2px;
+  position: fixed;
+  left: 50%;
+  bottom: max(12px, env(safe-area-inset-bottom));
+  z-index: 50;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  width: min(520px, calc(100vw - 24px));
+  min-height: var(--bottom-tabs-height);
+  margin: 0;
+  padding: 6px;
+  border: 1px solid rgba(215, 222, 224, 0.92);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 18px 48px rgba(20, 31, 34, 0.18);
+  transform: translateX(-50%);
+  backdrop-filter: blur(14px);
 }
 
 .tab-bar button {
-  min-height: 38px;
-  border: 1px solid var(--line);
+  min-width: 0;
+  min-height: 52px;
+  border: 0;
   border-radius: 8px;
-  background: var(--panel);
+  background: transparent;
   color: var(--muted);
-  padding: 0 14px;
-  font-size: 14px;
+  padding: 0 8px;
+  font-size: 13px;
   font-weight: 850;
   white-space: nowrap;
   cursor: pointer;
 }
 
 .tab-bar button.active {
-  border-color: #afd7ca;
   background: var(--green-soft);
   color: var(--green);
 }
@@ -1061,6 +1074,7 @@ h3 {
   .shell {
     width: min(100vw - 24px, 720px);
     padding-top: 12px;
+    padding-bottom: calc(28px + var(--bottom-tabs-height) + env(safe-area-inset-bottom));
   }
 
   .topbar,

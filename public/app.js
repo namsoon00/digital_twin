@@ -38,8 +38,7 @@
   };
   var tabs = [
     { id: "decision", label: "판단" },
-    { id: "signal", label: "수급" },
-    { id: "valuation", label: "가치" },
+    { id: "lab", label: "실험실" },
     { id: "holdings", label: "보유" },
     { id: "feed", label: "피드" },
     { id: "watchlist", label: "관심" }
@@ -1018,70 +1017,72 @@
     return { label: "비싸다", tone: "danger", rank: 3 };
   }
 
+  function buildValuationForItem(item, assumptions, weights, formula) {
+    var symbol = String(item.symbol || "").toUpperCase();
+    var assumption = assumptions[symbol] || {};
+    var currentPrice = currentPriceOf(item);
+    var baseFairValue = assumption.eps && assumption.targetPer ? assumption.eps * assumption.targetPer : 0;
+    var margin = assumption.margin || 15;
+    var variables = Object.assign({}, weights, {
+      eps: assumption.eps || 0,
+      targetPer: assumption.targetPer || 0,
+      margin: margin,
+      currentPrice: currentPrice,
+      averagePrice: numeric(item.averagePrice),
+      quantity: numeric(item.quantity),
+      marketValue: numeric(item.marketValue),
+      profitLoss: numeric(item.profitLoss),
+      profitLossRate: numeric(item.profitLossRate)
+    });
+    var formulaResult = formula
+      ? evaluateConfiguredFormula(formula, variables, baseFairValue)
+      : { value: baseFairValue, error: "", usedFallback: false };
+    var fairValue = Math.max(0, numeric(formulaResult.value));
+    var marginPrice = fairValue ? fairValue * (1 - margin / 100) : 0;
+    var gap = currentPrice && fairValue ? ((fairValue / currentPrice) - 1) * 100 : 0;
+    var status = valuationStatus(currentPrice, fairValue, marginPrice);
+    var reasons = [];
+    if (formulaResult.error) {
+      reasons.push("적정가 공식 오류로 기본값을 사용했습니다: " + formulaResult.error);
+    }
+    if (!fairValue) {
+      reasons.push("적정가 공식 결과가 0입니다. EPS, 목표 PER, 가중치를 확인하세요.");
+    } else if (!currentPrice) {
+      reasons.push("현재가가 필요합니다.");
+    } else {
+      reasons.push("적정가 " + formatPrice(fairValue, item.currency) + " 대비 " + signedPct(gap) + " 괴리입니다.");
+      reasons.push("안전마진 " + margin + "% 기준 매수가 상한은 " + formatPrice(marginPrice, item.currency) + "입니다.");
+    }
+    return {
+      symbol: symbol,
+      name: item.name || symbol,
+      source: item.source || "watchlist",
+      sector: item.sector || "-",
+      market: item.market || "",
+      currency: item.currency || "",
+      currentPrice: currentPrice,
+      eps: assumption.eps || 0,
+      targetPer: assumption.targetPer || 0,
+      margin: margin,
+      formula: formula,
+      formulaError: formulaResult.error,
+      fairValue: fairValue,
+      marginPrice: marginPrice,
+      gap: gap,
+      status: status.label,
+      tone: status.tone,
+      rank: status.rank,
+      reasons: reasons
+    };
+  }
+
   function buildValuationItems(snapshot) {
-    var toss = snapshot.toss || { positions: [] };
     var assumptions = parseValuationAssumptions();
     var weights = formulaWeights();
     var formula = formulaSetting("fairValueFormula");
-    return (toss.positions || [])
-      .filter(function (item) {
-        return item.source !== "cash" && item.sector !== "현금";
-      })
+    return instrumentItems(snapshot)
       .map(function (item) {
-        var symbol = String(item.symbol || "").toUpperCase();
-        var assumption = assumptions[symbol] || {};
-        var currentPrice = currentPriceOf(item);
-        var baseFairValue = assumption.eps && assumption.targetPer ? assumption.eps * assumption.targetPer : 0;
-        var margin = assumption.margin || 15;
-        var variables = Object.assign({}, weights, {
-          eps: assumption.eps || 0,
-          targetPer: assumption.targetPer || 0,
-          margin: margin,
-          currentPrice: currentPrice,
-          averagePrice: numeric(item.averagePrice),
-          quantity: numeric(item.quantity),
-          marketValue: numeric(item.marketValue),
-          profitLoss: numeric(item.profitLoss),
-          profitLossRate: numeric(item.profitLossRate)
-        });
-        var formulaResult = formula
-          ? evaluateConfiguredFormula(formula, variables, baseFairValue)
-          : { value: baseFairValue, error: "", usedFallback: false };
-        var fairValue = Math.max(0, numeric(formulaResult.value));
-        var marginPrice = fairValue ? fairValue * (1 - margin / 100) : 0;
-        var gap = currentPrice && fairValue ? ((fairValue / currentPrice) - 1) * 100 : 0;
-        var status = valuationStatus(currentPrice, fairValue, marginPrice);
-        var reasons = [];
-        if (formulaResult.error) {
-          reasons.push("적정가 공식 오류로 기본값을 사용했습니다: " + formulaResult.error);
-        }
-        if (!fairValue) {
-          reasons.push("적정가 공식 결과가 0입니다. EPS, 목표 PER, 가중치를 확인하세요.");
-        } else if (!currentPrice) {
-          reasons.push("현재가가 필요합니다.");
-        } else {
-          reasons.push("적정가 " + formatPrice(fairValue, item.currency) + " 대비 " + signedPct(gap) + " 괴리입니다.");
-          reasons.push("안전마진 " + margin + "% 기준 매수가 상한은 " + formatPrice(marginPrice, item.currency) + "입니다.");
-        }
-        return {
-          symbol: symbol,
-          name: item.name,
-          market: item.market || "",
-          currency: item.currency || "",
-          currentPrice: currentPrice,
-          eps: assumption.eps || 0,
-          targetPer: assumption.targetPer || 0,
-          margin: margin,
-          formula: formula,
-          formulaError: formulaResult.error,
-          fairValue: fairValue,
-          marginPrice: marginPrice,
-          gap: gap,
-          status: status.label,
-          tone: status.tone,
-          rank: status.rank,
-          reasons: reasons
-        };
+        return buildValuationForItem(item, assumptions, weights, formula);
       })
       .sort(function (a, b) {
         if (a.rank !== b.rank) return a.rank - b.rank;
@@ -1272,6 +1273,12 @@
         market: item.market || "",
         currency: item.currency || "",
         currentPrice: currentPriceOf(item),
+        averagePrice: numeric(item.averagePrice),
+        quantity: numeric(item.quantity),
+        sellableQuantity: numeric(item.sellableQuantity || item.quantity),
+        marketValue: numeric(item.marketValue),
+        profitLoss: numeric(item.profitLoss),
+        profitLossRate: numeric(item.profitLossRate),
         signal: signal,
         hasData: hasData,
         buyScore: scores.buyScore,
@@ -1296,6 +1303,87 @@
     if (value >= 55) return "검토";
     if (value >= 38) return "관찰";
     return "낮음";
+  }
+
+  function labPriceDiff(value, currentPrice) {
+    var price = Number(value || 0);
+    var current = Number(currentPrice || 0);
+    if (!price || !current) return "-";
+    return signedPct(((price / current) - 1) * 100);
+  }
+
+  function labActionPrices(item) {
+    var valuation = item.valuation || {};
+    var current = Number(item.currentPrice || valuation.currentPrice || 0);
+    var average = Number(item.averagePrice || 0);
+    var reference = average || current;
+    var fairValue = Number(valuation.fairValue || 0);
+    var marginPrice = Number(valuation.marginPrice || 0);
+    var buyLimit = marginPrice || (current ? current * 0.92 : 0);
+    var stopPrice = reference ? reference * 0.92 : (buyLimit ? buyLimit * 0.92 : 0);
+    var trimOne = reference ? reference * 1.12 : (fairValue ? fairValue * 0.9 : 0);
+    var trimTwoBase = reference ? reference * 1.25 : 0;
+    var trimTwo = fairValue ? Math.max(fairValue, trimTwoBase) : trimTwoBase;
+    if (fairValue && fairValue > reference && trimOne > fairValue) trimOne = fairValue;
+    if (fairValue && trimTwo < trimOne) trimTwo = trimOne;
+    return [
+      { label: "현재가", value: current, tone: "hold" },
+      { label: item.source === "watchlist" ? "진입 기준" : "평단", value: reference, tone: "hold" },
+      { label: "매수 상한", value: buyLimit, tone: "watch" },
+      { label: "손절 기준", value: stopPrice, tone: "danger" },
+      { label: "1차 매도", value: trimOne, tone: "caution" },
+      { label: "2차 매도", value: trimTwo, tone: "danger" },
+      { label: "적정가", value: fairValue, tone: "watch" }
+    ];
+  }
+
+  function labScenarioNotes(item) {
+    var valuation = item.valuation || {};
+    var notes = [];
+    if (!item.hasData) {
+      notes.push("체결강도와 거래량 입력이 없어 수급 판단은 대기 상태입니다.");
+    } else if (item.buyScore > item.sellScore + 10) {
+      notes.push("매수 압력이 매도 압력보다 뚜렷해 추가 관찰 우선입니다.");
+    } else if (item.sellScore > item.buyScore + 10) {
+      notes.push("매도 압력이 우세해 분할매도 또는 리스크 축소 기준을 먼저 확인합니다.");
+    } else {
+      notes.push("매수·매도 압력이 비슷해 가격 기준 도달 여부를 먼저 봅니다.");
+    }
+    if (valuation.status) {
+      notes.push("가치 분류는 " + valuation.status + "이고 적정가 괴리는 " + (valuation.fairValue ? signedPct(valuation.gap) : "-") + "입니다.");
+    } else {
+      notes.push("EPS와 목표 PER을 입력하면 적정가·안전마진 기준이 계산됩니다.");
+    }
+    if (item.source !== "watchlist" && item.averagePrice) {
+      notes.push("평단 대비 현재 수익률은 " + signedPct(item.profitLossRate) + "입니다.");
+    }
+    return notes;
+  }
+
+  function serializeValuationAssumptions(map) {
+    return Object.keys(map)
+      .sort()
+      .map(function (symbol) {
+        var row = map[symbol] || {};
+        return [
+          symbol,
+          Number(row.eps || 0),
+          Number(row.targetPer || 0),
+          Number(row.margin || 15)
+        ].join(",");
+      })
+      .join("\n");
+  }
+
+  function updateValuationAssumption(symbol, field, value) {
+    var key = String(symbol || "").toUpperCase();
+    if (!key || ["eps", "targetPer", "margin"].indexOf(field) < 0) return;
+    var map = parseValuationAssumptions();
+    map[key] = Object.assign({ symbol: key, eps: 0, targetPer: 0, margin: 15 }, map[key] || {});
+    map[key][field] = numeric(value);
+    state.settings.valuationAssumptions = serializeValuationAssumptions(map);
+    persistSettings();
+    render();
   }
 
   function load() {
@@ -1416,19 +1504,11 @@
   }
 
   function renderActiveTab(snapshot) {
-    if (state.activeTab === "signal") {
+    if (state.activeTab === "lab") {
       return [
         '<section class="content-grid">',
-        renderTradeSignalPanel(snapshot, true),
-        renderTradeSignalMethodPanel(),
-        '</section>'
-      ].join("");
-    }
-    if (state.activeTab === "valuation") {
-      return [
-        '<section class="content-grid">',
-        renderValuationPanel(snapshot, true),
-        renderValuationMethodPanel(),
+        renderLabPanel(snapshot, true),
+        renderLabMethodPanel(),
         '</section>'
       ].join("");
     }
@@ -1463,9 +1543,8 @@
       renderSourcePanel(snapshot),
       '</section>',
       '<section class="content-grid">',
-      renderTradeSignalPanel(snapshot, false),
+      renderLabPanel(snapshot, false),
       renderDecisionPanel(snapshot),
-      renderValuationPanel(snapshot, false),
       renderChecklistPanel(snapshot),
       '</section>'
     ].join("");
@@ -1578,6 +1657,144 @@
     ].join("");
   }
 
+  function renderLabPanel(snapshot, full) {
+    var items = buildTradeSignalItems(snapshot);
+    var visible = full ? items : items.slice(0, 3);
+    var actionCount = items.filter(function (item) {
+      return item.tone === "danger" || item.tone === "caution" || item.tone === "watch";
+    }).length;
+    return [
+      '<article class="panel lab-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Position Lab</p>',
+      '<h2>매수·보유·매도 타이밍 실험실</h2>',
+      '</div>',
+      '<span class="metric">' + escapeHtml(actionCount) + '</span>',
+      '</div>',
+      '<div class="lab-list">',
+      visible.length ? visible.map(renderLabRow).join("") : '<p class="subtle">보유 또는 관심 종목을 찾지 못했습니다.</p>',
+      '</div>',
+      '<div class="rule-strip">',
+      '<span>주문 실행이 아니라 매매 타이밍을 찾기 위한 읽기 전용 계산판입니다.</span>',
+      full ? '<span>EPS, 목표 PER, 안전마진을 바꾸면 적정가와 가격 기준선이 다시 계산됩니다.</span>' : '<span>전체 종목은 실험실 탭에서 봅니다.</span>',
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderLabRow(item) {
+    var valuation = item.valuation || {};
+    var signal = item.signal || {};
+    var lines = labActionPrices(item);
+    var notes = labScenarioNotes(item);
+    return [
+      '<div class="lab-row">',
+      '<div class="lab-row-head">',
+      '<div>',
+      '<strong>' + escapeHtml(item.name) + '</strong>',
+      '<span>' + escapeHtml(item.symbol) + ' · ' + escapeHtml(item.sector || "-") + ' · ' + escapeHtml(sourceLabel(item.source)) + '</span>',
+      '</div>',
+      '<div class="exit-badges">',
+      '<span class="source-chip ' + escapeHtml(item.source) + '">' + escapeHtml(sourceLabel(item.source)) + '</span>',
+      '<span class="tone-chip ' + escapeHtml(item.tone || "hold") + '">' + escapeHtml(item.action) + '</span>',
+      '</div>',
+      '</div>',
+      '<div class="lab-status-grid">',
+      '<span>현재가 <strong>' + escapeHtml(item.currentPrice ? formatPrice(item.currentPrice, item.currency) : "-") + '</strong></span>',
+      '<span>' + escapeHtml(item.source === "watchlist" ? "관심 기준" : "평단") + ' <strong>' + escapeHtml((item.averagePrice || item.currentPrice) ? formatPrice(item.averagePrice || item.currentPrice, item.currency) : "-") + '</strong></span>',
+      '<span>수량 <strong>' + escapeHtml(item.source === "watchlist" ? "-" : (item.quantity || "-")) + '</strong></span>',
+      '<span>손익률 <strong>' + escapeHtml(item.source === "watchlist" ? "-" : signedPct(item.profitLossRate)) + '</strong></span>',
+      '<span>매수 점수 <strong class="buy">' + escapeHtml(item.hasData ? item.buyScore : "-") + '</strong></span>',
+      '<span>매도 점수 <strong class="sell">' + escapeHtml(item.hasData ? item.sellScore : "-") + '</strong></span>',
+      '</div>',
+      '<div class="lab-body-grid">',
+      '<div class="lab-price-ladder">',
+      lines.map(function (line) { return renderLabPriceLine(line, item); }).join(""),
+      '</div>',
+      '<div class="lab-side">',
+      '<div class="lab-control-grid">',
+      renderLabControl(item.symbol, "eps", "EPS", valuation.eps || 0, "1"),
+      renderLabControl(item.symbol, "targetPer", "목표 PER", valuation.targetPer || 0, "0.1"),
+      renderLabControl(item.symbol, "margin", "안전마진 %", valuation.margin || 15, "1"),
+      '</div>',
+      '<div class="signal-metric-grid compact">',
+      '<span>체결강도 <strong>' + escapeHtml(formatSignalNumber(signal.tradeStrength, "")) + '</strong></span>',
+      '<span>거래량 <strong>' + escapeHtml(formatSignalRatio(signal.volumeRatio)) + '</strong></span>',
+      '<span>매수비중 <strong>' + escapeHtml(item.hasData ? item.buyShare + "%" : "-") + '</strong></span>',
+      '<span>호가 <strong>' + escapeHtml(formatSignalNumber(signal.bidAskImbalance, "%")) + '</strong></span>',
+      '</div>',
+      '<div class="exit-reasons">',
+      notes.map(function (note) { return '<p>' + escapeHtml(note) + '</p>'; }).join(""),
+      '</div>',
+      '</div>',
+      '</div>',
+      '</div>'
+    ].join("");
+  }
+
+  function renderLabPriceLine(line, item) {
+    var value = Number(line.value || 0);
+    return [
+      '<div class="lab-price-line ' + escapeHtml(line.tone || "hold") + '">',
+      '<span>' + escapeHtml(line.label) + '</span>',
+      '<strong>' + escapeHtml(value ? formatPrice(value, item.currency) : "-") + '</strong>',
+      '<em>' + escapeHtml(labPriceDiff(value, item.currentPrice)) + '</em>',
+      '</div>'
+    ].join("");
+  }
+
+  function renderLabControl(symbol, field, label, value, step) {
+    return [
+      '<label class="lab-control">',
+      '<span>' + escapeHtml(label) + '</span>',
+      '<input type="number" step="' + escapeHtml(step || "1") + '" value="' + escapeHtml(value || "") + '" data-lab-symbol="' + escapeHtml(symbol) + '" data-lab-assumption="' + escapeHtml(field) + '" />',
+      '</label>'
+    ].join("");
+  }
+
+  function renderLabMethodPanel() {
+    var rows = [
+      ["핵심 질문", "지금 추가매수, 보유, 분할매도, 손절 기준 중 어디에 가까운지 계산"],
+      ["가격 기준선", "현재가, 평단, 안전마진 매수가, 손절선, 1·2차 매도가를 한 번에 비교"],
+      ["수급 판단", "체결강도, 거래량, 매수 비중, 호가 불균형을 매수·매도 점수로 분리"],
+      ["가치 판단", "EPS, 목표 PER, 안전마진과 사용자 공식을 이용해 적정가를 계산"],
+      ["조정 방식", "실험실 입력값 또는 상단 설정의 공식과 기준값을 바꿔 시나리오를 재계산"]
+    ];
+    var variables = [
+      ["eps", "주당순이익"],
+      ["targetPer", "목표 PER"],
+      ["margin", "안전마진"],
+      ["tradeStrength", "체결강도"],
+      ["volumeRatio", "거래량 배율"],
+      ["buyShare", "매수 체결 비중"],
+      ["fairValueGap", "적정가 괴리"],
+      ["profitLossRate", "평단 대비 수익률"]
+    ];
+    return [
+      '<article class="panel lab-method-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Lab Method</p>',
+      '<h2>실험실 계산 기준</h2>',
+      '</div>',
+      '</div>',
+      '<div class="source-stack">',
+      rows.map(function (row) {
+        return '<div class="source-row"><span>' + escapeHtml(row[0]) + '</span><strong>' + escapeHtml(row[1]) + '</strong></div>';
+      }).join(""),
+      '</div>',
+      '<div class="formula-stack">',
+      renderFormulaBlock("적정가 공식", formulaSetting("fairValueFormula")),
+      renderFormulaBlock("매수 점수 공식", formulaSetting("buyScoreFormula")),
+      renderFormulaBlock("매도 점수 공식", formulaSetting("sellScoreFormula")),
+      '</div>',
+      renderVariableGuide(variables),
+      '<div class="rule-strip"><span>가격 기준선은 참고용입니다. 실제 주문 API 연결은 별도 승인 단계에서만 다룹니다.</span></div>',
+      '</article>'
+    ].join("");
+  }
+
   function renderTradeSignalPanel(snapshot, full) {
     var items = buildTradeSignalItems(snapshot);
     var visible = full ? items : items.slice(0, 3);
@@ -1598,7 +1815,7 @@
       '</div>',
       '<div class="rule-strip">',
       '<span>매수/매도 실행 지시가 아니라 수급 데이터 점검 라벨입니다.</span>',
-      full ? '<span>값은 설정에서 직접 수정하거나 향후 토스 시장 데이터로 교체합니다.</span>' : '<span>전체 목록은 수급 탭에서 봅니다.</span>',
+      full ? '<span>값은 설정에서 직접 수정하거나 향후 토스 시장 데이터로 교체합니다.</span>' : '<span>전체 목록은 실험실 탭에서 봅니다.</span>',
       '</div>',
       '</article>'
     ].join("");
@@ -1728,7 +1945,7 @@
       '<div class="valuation-list">',
       items.length ? items.map(renderValuationRow).join("") : '<p class="subtle">토스 잔고에서 밸류에이션할 보유 종목을 찾지 못했습니다.</p>',
       '</div>',
-      full ? '' : '<div class="rule-strip"><span>상세 가정은 가치 탭과 상단 설정에서 조정합니다.</span></div>',
+      full ? '' : '<div class="rule-strip"><span>상세 가정은 실험실 탭과 상단 설정에서 조정합니다.</span></div>',
       '</article>'
     ].join("");
   }
@@ -2250,6 +2467,16 @@
         loadFeed(true);
       });
     }
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-lab-assumption]")).forEach(function (field) {
+      field.addEventListener("change", function () {
+        updateValuationAssumption(
+          field.getAttribute("data-lab-symbol"),
+          field.getAttribute("data-lab-assumption"),
+          field.value
+        );
+      });
+    });
 
     Array.prototype.slice.call(app.querySelectorAll("[data-mode]")).forEach(function (button) {
       button.addEventListener("click", function () {

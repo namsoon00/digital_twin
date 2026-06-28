@@ -20,12 +20,19 @@
     fairValueFormula: "eps * targetPer * growthWeight * qualityWeight * riskWeight",
     buyScoreFormula: "50 + ((tradeStrength - 100) * 0.25 + (volumeRatio - 1) * 12 + (buyShare - 50) * 0.35 + bidAskImbalance * 0.28 + priceChangeRate * 1.1) * flowWeight + undervalueBonus * valuationWeight - expensivePenalty * valuationWeight",
     sellScoreFormula: "50 + ((100 - tradeStrength) * 0.22 + (volumeRatio - 1) * 8 + (50 - buyShare) * 0.42 - bidAskImbalance * 0.28 - priceChangeRate * 1.2) * flowWeight + expensiveBonus * valuationWeight",
+    modelName: "나의 매수/매도 모델",
+    modelHypothesis: "수급, 가치, 내 점수, 리스크를 함께 봐서 매수 후보와 매도 후보를 분리한다.",
+    customBuyModelFormula: "buyScore * 0.35 + thesisScore * thesisWeight + confidenceScore * confidenceWeight + max(0, targetReturn) * 0.15 + undervalueBonus * valuationWeight - riskScore * riskControlWeight",
+    customSellModelFormula: "sellScore * 0.35 + riskScore * riskControlWeight + expensivePenalty * valuationWeight + max(0, -targetReturn) * 0.2 - thesisScore * 0.1",
     formulaWeights: [
       "growthWeight=1",
       "qualityWeight=1",
       "riskWeight=1",
       "flowWeight=1",
-      "valuationWeight=1"
+      "valuationWeight=1",
+      "thesisWeight=0.25",
+      "confidenceWeight=0.15",
+      "riskControlWeight=0.35"
     ].join("\n"),
     decisionThresholds: [
       "buyCandidate=78",
@@ -34,11 +41,19 @@
       "sellTrim=70",
       "riskReduce=66",
       "sellWatch=64"
+    ].join("\n"),
+    modelDecisionThresholds: [
+      "modelBuy=74",
+      "modelAdd=70",
+      "modelSell=72",
+      "modelReduce=64",
+      "modelHold=55"
     ].join("\n")
   };
   var tabs = [
     { id: "decision", label: "판단" },
     { id: "lab", label: "실험실" },
+    { id: "model", label: "모델" },
     { id: "holdings", label: "보유" },
     { id: "feed", label: "피드" },
     { id: "watchlist", label: "관심" }
@@ -96,6 +111,7 @@
   var settingsMemoryStore = "";
   var labDraftsMemoryStore = "";
   var labRecordsMemoryStore = "";
+  var modelVersionsMemoryStore = "";
   var state = {
     loading: true,
     refreshing: false,
@@ -112,8 +128,11 @@
     settingsSaved: false,
     labDrafts: loadLabDrafts(),
     labRecords: loadLabRecords(),
+    modelVersions: loadModelVersions(),
     labRecordSaved: false,
     labRecordError: "",
+    modelSaved: false,
+    modelError: "",
     editingWatchSymbol: "",
     watchlistError: ""
   };
@@ -275,6 +294,21 @@
   function persistLabRecords() {
     return writeLocalPayload("exitLensLabRecords", JSON.stringify(state.labRecords || []), function (payload) {
       labRecordsMemoryStore = payload;
+    });
+  }
+
+  function loadModelVersions() {
+    try {
+      var versions = JSON.parse(readLocalPayload("exitLensModelVersions", modelVersionsMemoryStore) || "[]");
+      return Array.isArray(versions) ? versions : [];
+    } catch (error) {
+      return [];
+    }
+  }
+
+  function persistModelVersions() {
+    return writeLocalPayload("exitLensModelVersions", JSON.stringify(state.modelVersions || []), function (payload) {
+      modelVersionsMemoryStore = payload;
     });
   }
 
@@ -992,6 +1026,44 @@
     return parseNumberAssignments(settingValue("decisionThresholds"), parseNumberAssignments(defaultSettings.decisionThresholds));
   }
 
+  function modelDecisionThresholds() {
+    return parseNumberAssignments(settingValue("modelDecisionThresholds"), parseNumberAssignments(defaultSettings.modelDecisionThresholds));
+  }
+
+  function assignmentOrder(settingName) {
+    return String(defaultSettings[settingName] || "")
+      .split(/\r?\n/)
+      .map(function (line) { return String(line.split(/[=:,]/)[0] || "").trim(); })
+      .filter(Boolean);
+  }
+
+  function serializeNumberAssignments(map, order) {
+    var seen = {};
+    var keys = (order || []).filter(function (key) {
+      if (!Object.prototype.hasOwnProperty.call(map, key) || seen[key]) return false;
+      seen[key] = true;
+      return true;
+    });
+    Object.keys(map).sort().forEach(function (key) {
+      if (!seen[key]) keys.push(key);
+    });
+    return keys.map(function (key) {
+      return key + "=" + Number(map[key] || 0);
+    }).join("\n");
+  }
+
+  function updateNumberAssignmentSetting(settingName, key, value) {
+    if (!Object.prototype.hasOwnProperty.call(defaultSettings, settingName)) return;
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(String(key || ""))) return;
+    var map = parseNumberAssignments(settingValue(settingName), parseNumberAssignments(defaultSettings[settingName]));
+    map[key] = numeric(value);
+    state.settings[settingName] = serializeNumberAssignments(map, assignmentOrder(settingName));
+    persistSettings();
+    state.modelSaved = false;
+    state.modelError = "";
+    render();
+  }
+
   function formatSignalNumber(value, suffix) {
     var number = Number(value || 0);
     if (!Number.isFinite(number) || number === 0) return "-";
@@ -1507,6 +1579,7 @@
     }
     var valuation = item.valuation || {};
     var draft = labDraftForItem(item);
+    var model = customModelScores(item);
     var lines = labActionPrices(item);
     var lineMap = {};
     lines.forEach(function (line) {
@@ -1523,6 +1596,8 @@
       currency: item.currency || "",
       action: item.action || "",
       tone: item.tone || "hold",
+      modelAction: model.action,
+      modelTone: model.tone,
       priceAtRecord: Number(item.currentPrice || 0),
       averagePrice: Number(item.averagePrice || 0),
       fairValue: Number(valuation.fairValue || 0),
@@ -1530,6 +1605,8 @@
       fairValueGap: Number(valuation.gap || 0),
       buyScore: Number(item.buyScore || 0),
       sellScore: Number(item.sellScore || 0),
+      modelBuyScore: Number(model.buyScore || 0),
+      modelSellScore: Number(model.sellScore || 0),
       buyShare: Number(item.buyShare || 0),
       inputs: {
         thesisScore: Number(draft.thesisScore || 0),
@@ -1593,6 +1670,188 @@
       averageScore: latestRecords.length ? scoreTotal / latestRecords.length : 0,
       averageRisk: latestRecords.length ? riskTotal / latestRecords.length : 0
     };
+  }
+
+  function modelFormulaVariables(item) {
+    var valuation = item.valuation || {};
+    var draft = labDraftForItem(item);
+    var weights = formulaWeights();
+    var valuationGap = Number(valuation.gap || 0);
+    var expensivePenalty = valuationGap < 0 ? Math.min(18, Math.abs(valuationGap) / 2) : 0;
+    var undervalueBonus = valuationGap > 0 ? Math.min(14, valuationGap / 3) : 0;
+    return Object.assign({}, weights, {
+      buyScore: Number(item.buyScore || 0),
+      sellScore: Number(item.sellScore || 0),
+      systemBuyScore: Number(item.buyScore || 0),
+      systemSellScore: Number(item.sellScore || 0),
+      buyShare: Number(item.buyShare || 0),
+      currentPrice: Number(item.currentPrice || 0),
+      averagePrice: Number(item.averagePrice || 0),
+      fairValue: Number(valuation.fairValue || 0),
+      fairValueGap: valuationGap,
+      expensivePenalty: expensivePenalty,
+      expensiveBonus: expensivePenalty,
+      undervalueBonus: undervalueBonus,
+      profitLossRate: Number(item.profitLossRate || 0),
+      thesisScore: Number(draft.thesisScore || 0),
+      riskScore: Number(draft.riskScore || 0),
+      confidenceScore: Number(draft.confidenceScore || 0),
+      targetReturn: Number(draft.targetReturn || 0),
+      stopLoss: Number(draft.stopLoss || 0),
+      positionSize: Number(draft.positionSize || 0),
+      holding: item.source === "watchlist" ? 0 : 1,
+      watchlist: item.source === "watchlist" ? 1 : 0
+    });
+  }
+
+  function customModelDecision(item, buyScore, sellScore) {
+    var thresholds = modelDecisionThresholds();
+    var holding = item.source !== "watchlist";
+    if (holding && sellScore >= thresholds.modelSell) return { label: "내 모델 분할매도", tone: "danger", rank: 1 };
+    if (holding && sellScore >= thresholds.modelReduce) return { label: "내 모델 리스크 축소", tone: "caution", rank: 2 };
+    if (buyScore >= thresholds.modelBuy && !holding) return { label: "내 모델 매수 후보", tone: "watch", rank: 2 };
+    if (buyScore >= thresholds.modelAdd && holding) return { label: "내 모델 보유 강화", tone: "watch", rank: 3 };
+    if (Math.max(buyScore, sellScore) >= thresholds.modelHold) return { label: "내 모델 관찰", tone: "hold", rank: 4 };
+    return { label: "내 모델 관망", tone: "hold", rank: 5 };
+  }
+
+  function customModelScores(item) {
+    var variables = modelFormulaVariables(item);
+    var fallbackBuy = variables.buyScore * 0.35
+      + variables.thesisScore * Number(variables.thesisWeight || 0.25)
+      + variables.confidenceScore * Number(variables.confidenceWeight || 0.15)
+      + Math.max(0, variables.targetReturn) * 0.15
+      + variables.undervalueBonus * Number(variables.valuationWeight || 1)
+      - variables.riskScore * Number(variables.riskControlWeight || 0.35);
+    var fallbackSell = variables.sellScore * 0.35
+      + variables.riskScore * Number(variables.riskControlWeight || 0.35)
+      + variables.expensivePenalty * Number(variables.valuationWeight || 1)
+      + Math.max(0, -variables.targetReturn) * 0.2
+      - variables.thesisScore * 0.1;
+    var buyResult = evaluateConfiguredFormula(formulaSetting("customBuyModelFormula"), variables, fallbackBuy);
+    var sellResult = evaluateConfiguredFormula(formulaSetting("customSellModelFormula"), variables, fallbackSell);
+    var buy = Math.round(clamp(buyResult.value, 0, 100));
+    var sell = Math.round(clamp(sellResult.value, 0, 100));
+    var decision = customModelDecision(item, buy, sell);
+    var errors = [];
+    if (buyResult.error) errors.push("내 모델 매수 공식 오류: " + buyResult.error);
+    if (sellResult.error) errors.push("내 모델 매도 공식 오류: " + sellResult.error);
+    return {
+      buyScore: buy,
+      sellScore: sell,
+      action: decision.label,
+      tone: decision.tone,
+      rank: decision.rank,
+      errors: errors,
+      variables: variables
+    };
+  }
+
+  function modelStatsForItems(items) {
+    var scored = items.map(function (item) {
+      return customModelScores(item);
+    });
+    var buyAverage = scored.length ? scored.reduce(function (sum, score) { return sum + score.buyScore; }, 0) / scored.length : 0;
+    var sellAverage = scored.length ? scored.reduce(function (sum, score) { return sum + score.sellScore; }, 0) / scored.length : 0;
+    var actionCount = scored.filter(function (score) {
+      return score.tone === "danger" || score.tone === "caution" || score.tone === "watch";
+    }).length;
+    var stats = labStatsForItems(items);
+    return {
+      buyAverage: buyAverage,
+      sellAverage: sellAverage,
+      actionCount: actionCount,
+      recordCount: stats.recordCount,
+      symbolCount: stats.symbolCount,
+      averageReturn: stats.averageReturn,
+      winRate: stats.winRate
+    };
+  }
+
+  function currentModelSnapshot(items) {
+    return {
+      name: settingValue("modelName") || defaultSettings.modelName,
+      hypothesis: settingValue("modelHypothesis") || defaultSettings.modelHypothesis,
+      fairValueFormula: formulaSetting("fairValueFormula"),
+      buyScoreFormula: formulaSetting("buyScoreFormula"),
+      sellScoreFormula: formulaSetting("sellScoreFormula"),
+      customBuyModelFormula: formulaSetting("customBuyModelFormula"),
+      customSellModelFormula: formulaSetting("customSellModelFormula"),
+      formulaWeights: formulaWeights(),
+      decisionThresholds: decisionThresholds(),
+      modelDecisionThresholds: modelDecisionThresholds(),
+      stats: modelStatsForItems(items || [])
+    };
+  }
+
+  function saveModelVersion() {
+    if (!state.snapshot) return;
+    var items = buildTradeSignalItems(state.snapshot);
+    var snapshot = currentModelSnapshot(items);
+    var version = {
+      id: "model-" + Date.now(),
+      schemaVersion: 1,
+      version: (state.modelVersions || []).length + 1,
+      createdAt: new Date().toISOString(),
+      model: snapshot
+    };
+    state.modelVersions = (state.modelVersions || []).concat(version);
+    state.modelSaved = persistModelVersions();
+    state.modelError = state.modelSaved ? "" : "모델 버전을 저장하지 못했습니다.";
+    render();
+  }
+
+  function downloadText(filename, content, mimeType) {
+    try {
+      var blob = new Blob([content], { type: mimeType || "text/plain;charset=utf-8" });
+      var url = URL.createObjectURL(blob);
+      var link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      state.modelError = "파일을 만들지 못했습니다: " + (error.message || "알 수 없는 오류");
+      render();
+    }
+  }
+
+  function csvCell(value) {
+    var text = String(value == null ? "" : value);
+    return '"' + text.replace(/"/g, '""') + '"';
+  }
+
+  function exportLabRecords(format) {
+    var records = state.labRecords || [];
+    if (format === "csv") {
+      var headers = ["version", "createdAt", "symbol", "name", "action", "priceAtRecord", "modelBuyScore", "modelSellScore", "thesisScore", "riskScore", "targetReturn", "stopLoss"];
+      var rows = records.map(function (record) {
+        var inputs = record.inputs || {};
+        return [
+          record.version,
+          record.createdAt,
+          record.symbol,
+          record.name,
+          record.action,
+          record.priceAtRecord,
+          record.modelBuyScore,
+          record.modelSellScore,
+          inputs.thesisScore,
+          inputs.riskScore,
+          inputs.targetReturn,
+          inputs.stopLoss
+        ].map(csvCell).join(",");
+      });
+      downloadText("lab-records.csv", headers.map(csvCell).join(",") + "\n" + rows.join("\n"), "text/csv;charset=utf-8");
+      return;
+    }
+    downloadText("lab-records.json", JSON.stringify(records, null, 2), "application/json;charset=utf-8");
+  }
+
+  function exportModelVersions() {
+    downloadText("model-versions.json", JSON.stringify(state.modelVersions || [], null, 2), "application/json;charset=utf-8");
   }
 
   function load() {
@@ -1718,6 +1977,15 @@
         '<section class="content-grid">',
         renderLabPanel(snapshot, true),
         renderLabMethodPanel(),
+        '</section>'
+      ].join("");
+    }
+    if (state.activeTab === "model") {
+      return [
+        '<section class="content-grid">',
+        renderModelStudioPanel(snapshot),
+        renderModelVersionPanel(snapshot),
+        renderModelPreviewPanel(snapshot),
         '</section>'
       ].join("");
     }
@@ -1926,6 +2194,7 @@
     var draft = labDraftForItem(item);
     var latest = latestLabRecordFor(item.symbol);
     var versionCount = labRecordsForSymbol(item.symbol).length;
+    var model = customModelScores(item);
     return [
       '<div class="lab-row">',
       '<div class="lab-row-head">',
@@ -1945,6 +2214,12 @@
       '<span>손익률 <strong>' + escapeHtml(item.source === "watchlist" ? "-" : signedPct(item.profitLossRate)) + '</strong></span>',
       '<span>매수 점수 <strong class="buy">' + escapeHtml(item.hasData ? item.buyScore : "-") + '</strong></span>',
       '<span>매도 점수 <strong class="sell">' + escapeHtml(item.hasData ? item.sellScore : "-") + '</strong></span>',
+      '</div>',
+      '<div class="lab-model-grid">',
+      '<span>내 모델 매수 <strong class="buy">' + escapeHtml(model.buyScore) + '</strong></span>',
+      '<span>내 모델 매도 <strong class="sell">' + escapeHtml(model.sellScore) + '</strong></span>',
+      '<span>내 모델 판단 <strong>' + escapeHtml(model.action) + '</strong></span>',
+      '<span>공식 상태 <strong>' + escapeHtml(model.errors.length ? "확인 필요" : "정상") + '</strong></span>',
       '</div>',
       '<div class="lab-body-grid">',
       '<div class="lab-price-ladder">',
@@ -1972,7 +2247,7 @@
       '</div>',
       renderLabVersionBar(item, latest, versionCount),
       '<div class="exit-reasons">',
-      notes.map(function (note) { return '<p>' + escapeHtml(note) + '</p>'; }).join(""),
+      notes.concat(model.errors).map(function (note) { return '<p>' + escapeHtml(note) + '</p>'; }).join(""),
       '</div>',
       '</div>',
       '</div>',
@@ -2031,6 +2306,8 @@
       '<span>현재 성과 <strong>' + escapeHtml(signedPct(labRecordReturn(record, item.currentPrice))) + '</strong></span>',
       '<span>내 점수 <strong>' + escapeHtml(Math.round(inputs.thesisScore || 0)) + '</strong></span>',
       '<span>리스크 <strong>' + escapeHtml(Math.round(inputs.riskScore || 0)) + '</strong></span>',
+      '<span>모델 매수 <strong>' + escapeHtml(record.modelBuyScore == null ? "-" : Math.round(record.modelBuyScore)) + '</strong></span>',
+      '<span>모델 매도 <strong>' + escapeHtml(record.modelSellScore == null ? "-" : Math.round(record.modelSellScore)) + '</strong></span>',
       '<span>목표 <strong>' + escapeHtml(signedPct(inputs.targetReturn || 0)) + '</strong></span>',
       '<span>손절 <strong>' + escapeHtml("-" + Math.abs(Number(inputs.stopLoss || 0)).toFixed(1) + "%") + '</strong></span>',
       '</div>'
@@ -2080,6 +2357,199 @@
       '<div class="rule-strip"><span>가격 기준선은 참고용입니다. 실제 주문 API 연결은 별도 승인 단계에서만 다룹니다.</span></div>',
       '</article>'
     ].join("");
+  }
+
+  function renderModelStudioPanel(snapshot) {
+    var items = buildTradeSignalItems(snapshot);
+    var stats = modelStatsForItems(items);
+    var weights = formulaWeights();
+    var thresholds = modelDecisionThresholds();
+    return [
+      '<article class="panel model-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Model Studio</p>',
+      '<h2>나만의 매수·매도 모델</h2>',
+      '</div>',
+      '<span class="metric">' + escapeHtml(Math.round(stats.buyAverage)) + '</span>',
+      '</div>',
+      '<div class="lab-stats-grid model-stats-grid">',
+      renderLabStat("모델 매수 평균", Math.round(stats.buyAverage), "점"),
+      renderLabStat("모델 매도 평균", Math.round(stats.sellAverage), "점"),
+      renderLabStat("모델 신호", stats.actionCount, "개"),
+      renderLabStat("실험 기록", stats.recordCount, "개"),
+      renderLabStat("평균 성과", signedPct(stats.averageReturn), ""),
+      renderLabStat("승률", pct(stats.winRate), ""),
+      '</div>',
+      state.modelError ? '<div class="lab-message danger">' + escapeHtml(state.modelError) + '</div>' : '',
+      state.modelSaved ? '<div class="lab-message">모델 버전을 저장했습니다.</div>' : '',
+      '<div class="model-editor">',
+      '<div class="settings-grid">',
+      renderModelSettingField("modelName", "모델 이름", "text", "나의 모델"),
+      renderModelFormulaField("modelHypothesis", "모델 가설", "어떤 조건에서 매수/매도할지"),
+      renderModelFormulaField("customBuyModelFormula", "내 모델 매수 공식", "buyScore * 0.35 + thesisScore * thesisWeight"),
+      renderModelFormulaField("customSellModelFormula", "내 모델 매도 공식", "sellScore * 0.35 + riskScore * riskControlWeight"),
+      '</div>',
+      '<div class="model-section">',
+      '<div class="flow-title"><div><strong>가중치</strong><span>공식에서 바로 사용할 수 있는 변수입니다.</span></div></div>',
+      renderNumberSettingGrid("formulaWeights", weights, ["growthWeight", "qualityWeight", "riskWeight", "flowWeight", "valuationWeight", "thesisWeight", "confidenceWeight", "riskControlWeight"]),
+      '</div>',
+      '<div class="model-section">',
+      '<div class="flow-title"><div><strong>모델 판단 기준</strong><span>내 모델 점수가 이 기준을 넘으면 라벨이 바뀝니다.</span></div></div>',
+      renderNumberSettingGrid("modelDecisionThresholds", thresholds, ["modelBuy", "modelAdd", "modelSell", "modelReduce", "modelHold"]),
+      '</div>',
+      renderVariableGuide(modelVariableGuide()),
+      '<div class="rule-strip"><span>공식은 +, -, *, /, 괄호와 min, max, abs, round, sqrt, pow, clamp 함수를 지원합니다.</span></div>',
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderModelVersionPanel(snapshot) {
+    var versions = (state.modelVersions || []).slice().sort(function (a, b) {
+      return String(b.createdAt || "").localeCompare(String(a.createdAt || ""));
+    });
+    return [
+      '<article class="panel model-version-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Model Versions</p>',
+      '<h2>모델 버전과 데이터</h2>',
+      '</div>',
+      '<span class="metric">' + escapeHtml(versions.length) + '</span>',
+      '</div>',
+      '<div class="settings-body">',
+      '<div class="settings-note">',
+      '<strong>버전 저장</strong>',
+      '<p>현재 모델 이름, 가설, 공식, 가중치, 기준값, 현재 성과 통계를 하나의 버전으로 저장합니다.</p>',
+      '</div>',
+      '<div class="settings-actions">',
+      '<button class="text-button primary" data-action="save-model-version">모델 버전 저장</button>',
+      '<button class="text-button" data-export-lab="json">실험 JSON</button>',
+      '<button class="text-button" data-export-lab="csv">실험 CSV</button>',
+      '<button class="text-button" data-action="export-model-versions">모델 JSON</button>',
+      '</div>',
+      '<div class="model-version-list">',
+      versions.length ? versions.slice(0, 6).map(renderModelVersionRow).join("") : '<p class="subtle">아직 저장한 모델 버전이 없습니다.</p>',
+      '</div>',
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderModelVersionRow(version) {
+    var model = version.model || {};
+    var stats = model.stats || {};
+    return [
+      '<div class="model-version-row">',
+      '<div>',
+      '<strong>v' + escapeHtml(version.version || "-") + ' · ' + escapeHtml(model.name || "-") + '</strong>',
+      '<span>' + escapeHtml(formatClock(version.createdAt)) + ' · 평균 성과 ' + escapeHtml(signedPct(stats.averageReturn || 0)) + ' · 승률 ' + escapeHtml(pct(stats.winRate || 0)) + '</span>',
+      '</div>',
+      '<span class="tone-chip hold">' + escapeHtml(Math.round(stats.buyAverage || 0)) + ' / ' + escapeHtml(Math.round(stats.sellAverage || 0)) + '</span>',
+      '</div>'
+    ].join("");
+  }
+
+  function renderModelPreviewPanel(snapshot) {
+    var items = buildTradeSignalItems(snapshot).map(function (item) {
+      return Object.assign({}, item, { model: customModelScores(item) });
+    }).sort(function (a, b) {
+      if (a.model.rank !== b.model.rank) return a.model.rank - b.model.rank;
+      return Math.max(b.model.buyScore, b.model.sellScore) - Math.max(a.model.buyScore, a.model.sellScore);
+    });
+    return [
+      '<article class="panel model-preview-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Model Preview</p>',
+      '<h2>현재 종목 적용 결과</h2>',
+      '</div>',
+      '<span class="metric">' + escapeHtml(items.length) + '</span>',
+      '</div>',
+      '<div class="signal-list">',
+      items.length ? items.map(renderModelPreviewRow).join("") : '<p class="subtle">평가할 종목이 없습니다.</p>',
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderModelPreviewRow(item) {
+    var model = item.model || customModelScores(item);
+    return [
+      '<div class="signal-row model-preview-row">',
+      '<div class="signal-main">',
+      '<div class="flow-title">',
+      '<div>',
+      '<strong>' + escapeHtml(item.name) + '</strong>',
+      '<span>' + escapeHtml(item.symbol) + ' · ' + escapeHtml(sourceLabel(item.source)) + ' · 현재 ' + escapeHtml(item.currentPrice ? formatPrice(item.currentPrice, item.currency) : "-") + '</span>',
+      '</div>',
+      '<span class="tone-chip ' + escapeHtml(model.tone || "hold") + '">' + escapeHtml(model.action) + '</span>',
+      '</div>',
+      '<div class="lab-model-grid">',
+      '<span>내 모델 매수 <strong class="buy">' + escapeHtml(model.buyScore) + '</strong></span>',
+      '<span>내 모델 매도 <strong class="sell">' + escapeHtml(model.sellScore) + '</strong></span>',
+      '<span>시스템 매수 <strong>' + escapeHtml(item.hasData ? item.buyScore : "-") + '</strong></span>',
+      '<span>시스템 매도 <strong>' + escapeHtml(item.hasData ? item.sellScore : "-") + '</strong></span>',
+      '</div>',
+      model.errors.length ? '<div class="exit-reasons">' + model.errors.map(function (error) { return '<p>' + escapeHtml(error) + '</p>'; }).join("") + '</div>' : '',
+      '</div>',
+      '</div>'
+    ].join("");
+  }
+
+  function renderModelSettingField(name, label, type, placeholder) {
+    return [
+      '<label class="setting-field">',
+      '<span>' + escapeHtml(label) + '</span>',
+      '<input data-model-setting="' + escapeHtml(name) + '" type="' + escapeHtml(type || "text") + '" value="' + escapeHtml(settingValue(name) || defaultSettings[name] || "") + '" placeholder="' + escapeHtml(placeholder || "") + '" autocomplete="off" />',
+      '</label>'
+    ].join("");
+  }
+
+  function renderModelFormulaField(name, label, placeholder) {
+    return [
+      '<label class="setting-field wide">',
+      '<span>' + escapeHtml(label) + '</span>',
+      '<textarea data-model-setting="' + escapeHtml(name) + '" rows="3" autocomplete="off" placeholder="' + escapeHtml(placeholder || "") + '">' + escapeHtml(formulaSetting(name)) + '</textarea>',
+      '</label>'
+    ].join("");
+  }
+
+  function renderNumberSettingGrid(settingName, map, keys) {
+    return [
+      '<div class="model-number-grid">',
+      keys.map(function (key) {
+        return renderNumberSettingInput(settingName, key, map[key]);
+      }).join(""),
+      '</div>'
+    ].join("");
+  }
+
+  function renderNumberSettingInput(settingName, key, value) {
+    return [
+      '<label class="lab-control">',
+      '<span>' + escapeHtml(key) + '</span>',
+      '<input type="number" step="0.01" value="' + escapeHtml(value == null ? 0 : value) + '" data-number-setting="' + escapeHtml(settingName) + '" data-number-key="' + escapeHtml(key) + '" />',
+      '</label>'
+    ].join("");
+  }
+
+  function modelVariableGuide() {
+    return [
+      ["buyScore", "수급/가치 기반 시스템 매수 점수"],
+      ["sellScore", "수급/가치 기반 시스템 매도 점수"],
+      ["thesisScore", "실험실에서 입력한 내 매수 점수"],
+      ["riskScore", "실험실에서 입력한 리스크 점수"],
+      ["confidenceScore", "확신 점수"],
+      ["targetReturn", "목표 수익률"],
+      ["stopLoss", "허용 손절률"],
+      ["positionSize", "비중 계획"],
+      ["fairValueGap", "적정가 대비 괴리"],
+      ["undervalueBonus", "저평가 보너스"],
+      ["expensivePenalty", "고평가/매도 보너스"],
+      ["profitLossRate", "보유 수익률"]
+    ];
   }
 
   function renderTradeSignalPanel(snapshot, full) {
@@ -2789,6 +3259,51 @@
         saveLabRecord(button.getAttribute("data-lab-save"));
       });
     });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-model-setting]")).forEach(function (field) {
+      field.addEventListener("input", function () {
+        var name = field.getAttribute("data-model-setting");
+        if (!name) return;
+        state.settings[name] = field.value;
+        persistSettings();
+        state.modelSaved = false;
+        state.modelError = "";
+      });
+      field.addEventListener("change", function () {
+        persistSettings();
+        render();
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-number-setting]")).forEach(function (field) {
+      field.addEventListener("change", function () {
+        updateNumberAssignmentSetting(
+          field.getAttribute("data-number-setting"),
+          field.getAttribute("data-number-key"),
+          field.value
+        );
+      });
+    });
+
+    var saveModelVersionButton = app.querySelector('[data-action="save-model-version"]');
+    if (saveModelVersionButton) {
+      saveModelVersionButton.addEventListener("click", function () {
+        saveModelVersion();
+      });
+    }
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-export-lab]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        exportLabRecords(button.getAttribute("data-export-lab"));
+      });
+    });
+
+    var exportModelVersionsButton = app.querySelector('[data-action="export-model-versions"]');
+    if (exportModelVersionsButton) {
+      exportModelVersionsButton.addEventListener("click", function () {
+        exportModelVersions();
+      });
+    }
 
     Array.prototype.slice.call(app.querySelectorAll("[data-mode]")).forEach(function (button) {
       button.addEventListener("click", function () {

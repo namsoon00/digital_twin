@@ -814,6 +814,53 @@ h3 {
   padding: 16px;
 }
 
+.lab-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+  padding: 16px 16px 0;
+}
+
+.lab-stats-grid span {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8faf9;
+}
+
+.lab-stats-grid em {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 850;
+}
+
+.lab-stats-grid strong {
+  color: var(--ink);
+  font-size: 17px;
+  overflow-wrap: anywhere;
+}
+
+.lab-message {
+  margin: 10px 16px 0;
+  padding: 9px 10px;
+  border: 1px solid #afd7ca;
+  border-radius: 8px;
+  background: var(--green-soft);
+  color: var(--green);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.lab-message.danger {
+  border-color: #e6b9b5;
+  background: var(--red-soft);
+  color: var(--red);
+}
+
 .lab-row {
   display: grid;
   gap: 12px;
@@ -951,6 +998,12 @@ h3 {
   gap: 8px;
 }
 
+.lab-draft-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+}
+
 .lab-control {
   display: grid;
   gap: 5px;
@@ -982,6 +1035,63 @@ h3 {
 
 .lab-control input:focus {
   border-bottom-color: var(--green);
+}
+
+.lab-draft-control {
+  background: #f7fbfa;
+}
+
+.lab-version-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.lab-version-bar > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.lab-version-bar strong {
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.lab-version-bar span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 1.35;
+}
+
+.lab-record-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.lab-record-grid span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 8px 9px;
+  border-radius: 8px;
+  background: #edf4f2;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.lab-record-grid strong {
+  color: var(--ink);
+  font-size: 13px;
+  overflow-wrap: anywhere;
 }
 
 .signal-panel {
@@ -1299,6 +1409,13 @@ h3 {
   border-color: #afd7ca;
   background: var(--green-soft);
   color: var(--green);
+}
+
+.text-button.compact {
+  min-height: 32px;
+  padding: 0 10px;
+  font-size: 12px;
+  white-space: nowrap;
 }
 
 .text-button.danger {
@@ -1675,11 +1792,19 @@ h3 {
     grid-template-columns: 76px minmax(0, 1fr) 54px;
   }
 
+  .lab-version-bar {
+    align-items: stretch;
+    display: grid;
+  }
+
   .gauge-grid,
   .flow-lanes,
   .flow-row,
+  .lab-stats-grid,
   .lab-status-grid,
   .lab-control-grid,
+  .lab-draft-grid,
+  .lab-record-grid,
   .signal-score-grid,
   .signal-metric-grid,
   .signal-metric-grid.compact,

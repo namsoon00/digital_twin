@@ -94,6 +94,8 @@
     }
   ];
   var settingsMemoryStore = "";
+  var labDraftsMemoryStore = "";
+  var labRecordsMemoryStore = "";
   var state = {
     loading: true,
     refreshing: false,
@@ -108,6 +110,10 @@
     settingsOpen: false,
     showSecrets: false,
     settingsSaved: false,
+    labDrafts: loadLabDrafts(),
+    labRecords: loadLabRecords(),
+    labRecordSaved: false,
+    labRecordError: "",
     editingWatchSymbol: "",
     watchlistError: ""
   };
@@ -221,6 +227,55 @@
     } catch (error) {
       return true;
     }
+  }
+
+  function readLocalPayload(key, fallback) {
+    try {
+      var storage = window.localStorage;
+      return storage ? storage.getItem(key) : fallback;
+    } catch (error) {
+      return fallback;
+    }
+  }
+
+  function writeLocalPayload(key, payload, memorySetter) {
+    memorySetter(payload);
+    try {
+      var storage = window.localStorage;
+      if (storage) storage.setItem(key, payload);
+      return true;
+    } catch (error) {
+      return true;
+    }
+  }
+
+  function loadLabDrafts() {
+    try {
+      return JSON.parse(readLocalPayload("exitLensLabDrafts", labDraftsMemoryStore) || "{}") || {};
+    } catch (error) {
+      return {};
+    }
+  }
+
+  function persistLabDrafts() {
+    return writeLocalPayload("exitLensLabDrafts", JSON.stringify(state.labDrafts || {}), function (payload) {
+      labDraftsMemoryStore = payload;
+    });
+  }
+
+  function loadLabRecords() {
+    try {
+      var records = JSON.parse(readLocalPayload("exitLensLabRecords", labRecordsMemoryStore) || "[]");
+      return Array.isArray(records) ? records : [];
+    } catch (error) {
+      return [];
+    }
+  }
+
+  function persistLabRecords() {
+    return writeLocalPayload("exitLensLabRecords", JSON.stringify(state.labRecords || []), function (payload) {
+      labRecordsMemoryStore = payload;
+    });
   }
 
   function persistSettings() {
@@ -1386,6 +1441,160 @@
     render();
   }
 
+  function labDraftDefaults(item) {
+    var valuation = item.valuation || {};
+    var current = Number(item.currentPrice || 0);
+    var targetReturn = current && valuation.fairValue ? ((valuation.fairValue / current) - 1) * 100 : 15;
+    return {
+      thesisScore: item.hasData ? item.buyScore : 50,
+      riskScore: item.hasData ? item.sellScore : 50,
+      confidenceScore: item.hasData ? Math.max(item.buyScore, item.sellScore) : 50,
+      targetReturn: Math.round(clamp(targetReturn, -50, 200)),
+      stopLoss: 8,
+      positionSize: item.source === "watchlist" ? 10 : 100
+    };
+  }
+
+  function labDraftForItem(item) {
+    var symbol = String(item.symbol || "").toUpperCase();
+    return Object.assign({}, labDraftDefaults(item), state.labDrafts[symbol] || {});
+  }
+
+  function updateLabDraft(symbol, field, value, shouldRender) {
+    var key = String(symbol || "").toUpperCase();
+    var allowed = ["thesisScore", "riskScore", "confidenceScore", "targetReturn", "stopLoss", "positionSize"];
+    if (!key || allowed.indexOf(field) < 0) return;
+    state.labDrafts[key] = Object.assign({}, state.labDrafts[key] || {});
+    state.labDrafts[key][field] = numeric(value);
+    state.labRecordSaved = false;
+    state.labRecordError = "";
+    persistLabDrafts();
+    if (shouldRender !== false) render();
+  }
+
+  function labRecordsForSymbol(symbol) {
+    var key = String(symbol || "").toUpperCase();
+    return (state.labRecords || [])
+      .filter(function (record) { return String(record.symbol || "").toUpperCase() === key; })
+      .sort(function (a, b) { return String(b.createdAt || "").localeCompare(String(a.createdAt || "")); });
+  }
+
+  function latestLabRecordFor(symbol) {
+    return labRecordsForSymbol(symbol)[0] || null;
+  }
+
+  function labRecordReturn(record, currentPrice) {
+    var start = Number(record && record.priceAtRecord || 0);
+    var current = Number(currentPrice || 0);
+    if (!start || !current) return 0;
+    return ((current / start) - 1) * 100;
+  }
+
+  function labRecordVersion(symbol) {
+    return labRecordsForSymbol(symbol).length + 1;
+  }
+
+  function saveLabRecord(symbol) {
+    var key = String(symbol || "").toUpperCase();
+    if (!key || !state.snapshot) return;
+    var item = buildTradeSignalItems(state.snapshot).filter(function (candidate) {
+      return candidate.symbol === key;
+    })[0];
+    if (!item) {
+      state.labRecordError = "저장할 종목을 찾지 못했습니다.";
+      render();
+      return;
+    }
+    var valuation = item.valuation || {};
+    var draft = labDraftForItem(item);
+    var lines = labActionPrices(item);
+    var lineMap = {};
+    lines.forEach(function (line) {
+      lineMap[line.label] = Number(line.value || 0);
+    });
+    var record = {
+      id: key + "-" + Date.now(),
+      schemaVersion: 1,
+      version: labRecordVersion(key),
+      createdAt: new Date().toISOString(),
+      symbol: key,
+      name: item.name || key,
+      source: item.source || "",
+      currency: item.currency || "",
+      action: item.action || "",
+      tone: item.tone || "hold",
+      priceAtRecord: Number(item.currentPrice || 0),
+      averagePrice: Number(item.averagePrice || 0),
+      fairValue: Number(valuation.fairValue || 0),
+      marginPrice: Number(valuation.marginPrice || 0),
+      fairValueGap: Number(valuation.gap || 0),
+      buyScore: Number(item.buyScore || 0),
+      sellScore: Number(item.sellScore || 0),
+      buyShare: Number(item.buyShare || 0),
+      inputs: {
+        thesisScore: Number(draft.thesisScore || 0),
+        riskScore: Number(draft.riskScore || 0),
+        confidenceScore: Number(draft.confidenceScore || 0),
+        targetReturn: Number(draft.targetReturn || 0),
+        stopLoss: Number(draft.stopLoss || 0),
+        positionSize: Number(draft.positionSize || 0)
+      },
+      pricePlan: {
+        buyLimit: Number(lineMap["매수 상한"] || 0),
+        stopPrice: Number(lineMap["손절 기준"] || 0),
+        trimOne: Number(lineMap["1차 매도"] || 0),
+        trimTwo: Number(lineMap["2차 매도"] || 0)
+      }
+    };
+    state.labRecords = (state.labRecords || []).concat(record);
+    state.labRecordSaved = persistLabRecords();
+    state.labRecordError = state.labRecordSaved ? "" : "실험 기록을 저장하지 못했습니다.";
+    render();
+  }
+
+  function labLatestRecordMap() {
+    var map = {};
+    (state.labRecords || []).forEach(function (record) {
+      var symbol = String(record.symbol || "").toUpperCase();
+      if (!symbol) return;
+      if (!map[symbol] || String(record.createdAt || "") > String(map[symbol].createdAt || "")) {
+        map[symbol] = record;
+      }
+    });
+    return map;
+  }
+
+  function labStatsForItems(items) {
+    var latestMap = labLatestRecordMap();
+    var latestRecords = Object.keys(latestMap).map(function (symbol) { return latestMap[symbol]; });
+    var itemMap = {};
+    items.forEach(function (item) {
+      itemMap[item.symbol] = item;
+    });
+    var returns = latestRecords
+      .map(function (record) {
+        var item = itemMap[record.symbol] || {};
+        return labRecordReturn(record, item.currentPrice);
+      })
+      .filter(function (value) { return Number.isFinite(value); });
+    var scoreTotal = latestRecords.reduce(function (sum, record) {
+      return sum + Number(record.inputs && record.inputs.thesisScore || 0);
+    }, 0);
+    var riskTotal = latestRecords.reduce(function (sum, record) {
+      return sum + Number(record.inputs && record.inputs.riskScore || 0);
+    }, 0);
+    var returnTotal = returns.reduce(function (sum, value) { return sum + value; }, 0);
+    var winners = returns.filter(function (value) { return value > 0; }).length;
+    return {
+      recordCount: (state.labRecords || []).length,
+      symbolCount: latestRecords.length,
+      averageReturn: returns.length ? returnTotal / returns.length : 0,
+      winRate: returns.length ? (winners / returns.length) * 100 : 0,
+      averageScore: latestRecords.length ? scoreTotal / latestRecords.length : 0,
+      averageRisk: latestRecords.length ? riskTotal / latestRecords.length : 0
+    };
+  }
+
   function load() {
     state.loading = !state.snapshot;
     state.refreshing = Boolean(state.snapshot);
@@ -1672,6 +1881,7 @@
       '</div>',
       '<span class="metric">' + escapeHtml(actionCount) + '</span>',
       '</div>',
+      renderLabStats(items),
       '<div class="lab-list">',
       visible.length ? visible.map(renderLabRow).join("") : '<p class="subtle">보유 또는 관심 종목을 찾지 못했습니다.</p>',
       '</div>',
@@ -1683,11 +1893,39 @@
     ].join("");
   }
 
+  function renderLabStats(items) {
+    var stats = labStatsForItems(items);
+    return [
+      '<div class="lab-stats-grid">',
+      renderLabStat("저장 버전", stats.recordCount, "개"),
+      renderLabStat("기록 종목", stats.symbolCount, "종목"),
+      renderLabStat("평균 성과", signedPct(stats.averageReturn), ""),
+      renderLabStat("승률", pct(stats.winRate), ""),
+      renderLabStat("평균 내 점수", Math.round(stats.averageScore), "점"),
+      renderLabStat("평균 리스크", Math.round(stats.averageRisk), "점"),
+      '</div>',
+      state.labRecordError ? '<div class="lab-message danger">' + escapeHtml(state.labRecordError) + '</div>' : '',
+      state.labRecordSaved ? '<div class="lab-message">실험 기록을 저장했습니다.</div>' : ''
+    ].join("");
+  }
+
+  function renderLabStat(label, value, suffix) {
+    return [
+      '<span>',
+      '<em>' + escapeHtml(label) + '</em>',
+      '<strong>' + escapeHtml(value) + escapeHtml(suffix || "") + '</strong>',
+      '</span>'
+    ].join("");
+  }
+
   function renderLabRow(item) {
     var valuation = item.valuation || {};
     var signal = item.signal || {};
     var lines = labActionPrices(item);
     var notes = labScenarioNotes(item);
+    var draft = labDraftForItem(item);
+    var latest = latestLabRecordFor(item.symbol);
+    var versionCount = labRecordsForSymbol(item.symbol).length;
     return [
       '<div class="lab-row">',
       '<div class="lab-row-head">',
@@ -1718,12 +1956,21 @@
       renderLabControl(item.symbol, "targetPer", "목표 PER", valuation.targetPer || 0, "0.1"),
       renderLabControl(item.symbol, "margin", "안전마진 %", valuation.margin || 15, "1"),
       '</div>',
+      '<div class="lab-draft-grid">',
+      renderLabDraftControl(item.symbol, "thesisScore", "내 매수 점수", draft.thesisScore, "1"),
+      renderLabDraftControl(item.symbol, "riskScore", "리스크 점수", draft.riskScore, "1"),
+      renderLabDraftControl(item.symbol, "confidenceScore", "확신 점수", draft.confidenceScore, "1"),
+      renderLabDraftControl(item.symbol, "targetReturn", "목표 수익률 %", draft.targetReturn, "0.1"),
+      renderLabDraftControl(item.symbol, "stopLoss", "허용 손절 %", draft.stopLoss, "0.1"),
+      renderLabDraftControl(item.symbol, "positionSize", "비중 계획 %", draft.positionSize, "1"),
+      '</div>',
       '<div class="signal-metric-grid compact">',
       '<span>체결강도 <strong>' + escapeHtml(formatSignalNumber(signal.tradeStrength, "")) + '</strong></span>',
       '<span>거래량 <strong>' + escapeHtml(formatSignalRatio(signal.volumeRatio)) + '</strong></span>',
       '<span>매수비중 <strong>' + escapeHtml(item.hasData ? item.buyShare + "%" : "-") + '</strong></span>',
       '<span>호가 <strong>' + escapeHtml(formatSignalNumber(signal.bidAskImbalance, "%")) + '</strong></span>',
       '</div>',
+      renderLabVersionBar(item, latest, versionCount),
       '<div class="exit-reasons">',
       notes.map(function (note) { return '<p>' + escapeHtml(note) + '</p>'; }).join(""),
       '</div>',
@@ -1753,13 +2000,51 @@
     ].join("");
   }
 
+  function renderLabDraftControl(symbol, field, label, value, step) {
+    return [
+      '<label class="lab-control lab-draft-control">',
+      '<span>' + escapeHtml(label) + '</span>',
+      '<input type="number" step="' + escapeHtml(step || "1") + '" value="' + escapeHtml(value) + '" data-lab-symbol="' + escapeHtml(symbol) + '" data-lab-draft="' + escapeHtml(field) + '" />',
+      '</label>'
+    ].join("");
+  }
+
+  function renderLabVersionBar(item, latest, versionCount) {
+    var returnText = latest ? signedPct(labRecordReturn(latest, item.currentPrice)) : "-";
+    return [
+      '<div class="lab-version-bar">',
+      '<div>',
+      '<strong>' + escapeHtml(versionCount ? "v" + versionCount : "기록 없음") + '</strong>',
+      '<span>' + escapeHtml(latest ? "최근 저장 " + formatClock(latest.createdAt) + " · 이후 성과 " + returnText : "점수와 수치를 입력한 뒤 버전을 저장하세요.") + '</span>',
+      '</div>',
+      '<button class="text-button primary compact" data-lab-save="' + escapeHtml(item.symbol) + '">버전 저장</button>',
+      '</div>',
+      latest ? renderLabLatestRecord(latest, item) : ''
+    ].join("");
+  }
+
+  function renderLabLatestRecord(record, item) {
+    var inputs = record.inputs || {};
+    return [
+      '<div class="lab-record-grid">',
+      '<span>저장가 <strong>' + escapeHtml(record.priceAtRecord ? formatPrice(record.priceAtRecord, record.currency) : "-") + '</strong></span>',
+      '<span>현재 성과 <strong>' + escapeHtml(signedPct(labRecordReturn(record, item.currentPrice))) + '</strong></span>',
+      '<span>내 점수 <strong>' + escapeHtml(Math.round(inputs.thesisScore || 0)) + '</strong></span>',
+      '<span>리스크 <strong>' + escapeHtml(Math.round(inputs.riskScore || 0)) + '</strong></span>',
+      '<span>목표 <strong>' + escapeHtml(signedPct(inputs.targetReturn || 0)) + '</strong></span>',
+      '<span>손절 <strong>' + escapeHtml("-" + Math.abs(Number(inputs.stopLoss || 0)).toFixed(1) + "%") + '</strong></span>',
+      '</div>'
+    ].join("");
+  }
+
   function renderLabMethodPanel() {
     var rows = [
       ["핵심 질문", "지금 추가매수, 보유, 분할매도, 손절 기준 중 어디에 가까운지 계산"],
       ["가격 기준선", "현재가, 평단, 안전마진 매수가, 손절선, 1·2차 매도가를 한 번에 비교"],
       ["수급 판단", "체결강도, 거래량, 매수 비중, 호가 불균형을 매수·매도 점수로 분리"],
       ["가치 판단", "EPS, 목표 PER, 안전마진과 사용자 공식을 이용해 적정가를 계산"],
-      ["조정 방식", "실험실 입력값 또는 상단 설정의 공식과 기준값을 바꿔 시나리오를 재계산"]
+      ["입력 기록", "내 매수 점수, 리스크, 확신, 목표 수익률, 손절률, 비중 계획을 종목별로 저장"],
+      ["성과 분석", "버전 저장 시점의 가격과 현재가를 비교해 평균 성과와 승률을 계산"]
     ];
     var variables = [
       ["eps", "주당순이익"],
@@ -1769,7 +2054,9 @@
       ["volumeRatio", "거래량 배율"],
       ["buyShare", "매수 체결 비중"],
       ["fairValueGap", "적정가 괴리"],
-      ["profitLossRate", "평단 대비 수익률"]
+      ["profitLossRate", "평단 대비 수익률"],
+      ["thesisScore", "사용자 매수 점수"],
+      ["riskScore", "사용자 리스크 점수"]
     ];
     return [
       '<article class="panel lab-method-panel">',
@@ -2475,6 +2762,31 @@
           field.getAttribute("data-lab-assumption"),
           field.value
         );
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-lab-draft]")).forEach(function (field) {
+      field.addEventListener("input", function () {
+        updateLabDraft(
+          field.getAttribute("data-lab-symbol"),
+          field.getAttribute("data-lab-draft"),
+          field.value,
+          false
+        );
+      });
+      field.addEventListener("change", function () {
+        updateLabDraft(
+          field.getAttribute("data-lab-symbol"),
+          field.getAttribute("data-lab-draft"),
+          field.value,
+          true
+        );
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-lab-save]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        saveLabRecord(button.getAttribute("data-lab-save"));
       });
     });
 

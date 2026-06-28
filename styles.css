@@ -804,7 +804,10 @@ h3 {
 }
 
 .lab-panel,
-.lab-method-panel {
+.lab-method-panel,
+.model-panel,
+.model-version-panel,
+.model-preview-panel {
   grid-column: 1 / -1;
 }
 
@@ -925,6 +928,39 @@ h3 {
 }
 
 .lab-status-grid strong.sell {
+  color: var(--red);
+}
+
+.lab-model-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.lab-model-grid span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #eef5f3;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.lab-model-grid strong {
+  color: var(--ink);
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.lab-model-grid strong.buy {
+  color: var(--green);
+}
+
+.lab-model-grid strong.sell {
   color: var(--red);
 }
 
@@ -1092,6 +1128,61 @@ h3 {
   color: var(--ink);
   font-size: 13px;
   overflow-wrap: anywhere;
+}
+
+.model-editor {
+  display: grid;
+  gap: 16px;
+  padding: 16px;
+}
+
+.model-section {
+  display: grid;
+  gap: 10px;
+}
+
+.model-number-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.model-version-list {
+  display: grid;
+  gap: 10px;
+}
+
+.model-version-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8faf9;
+}
+
+.model-version-row > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.model-version-row strong {
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.model-version-row span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 1.4;
+}
+
+.model-preview-row {
+  background: #ffffff;
 }
 
 .signal-panel {
@@ -1802,9 +1893,11 @@ h3 {
   .flow-row,
   .lab-stats-grid,
   .lab-status-grid,
+  .lab-model-grid,
   .lab-control-grid,
   .lab-draft-grid,
   .lab-record-grid,
+  .model-number-grid,
   .signal-score-grid,
   .signal-metric-grid,
   .signal-metric-grid.compact,

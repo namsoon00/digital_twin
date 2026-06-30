@@ -1516,6 +1516,328 @@ function knownStockInfo(symbol) {
   );
 }
 
+const mockMarketUniverse = {
+  AAPL: { name: "Apple", market: "US", currency: "USD", sector: "AI/플랫폼", anchorPrice: 210, baseVolume: 56000000, beta: 0.9 },
+  MSFT: { name: "Microsoft", market: "US", currency: "USD", sector: "AI/플랫폼", anchorPrice: 495, baseVolume: 24000000, beta: 0.8 },
+  NVDA: { name: "NVIDIA", market: "US", currency: "USD", sector: "반도체", anchorPrice: 158, baseVolume: 225000000, beta: 1.45 },
+  AMD: { name: "AMD", market: "US", currency: "USD", sector: "반도체", anchorPrice: 165, baseVolume: 61000000, beta: 1.35 },
+  TSLA: { name: "Tesla", market: "US", currency: "USD", sector: "모빌리티", anchorPrice: 330, baseVolume: 95000000, beta: 1.55 },
+  GOOGL: { name: "Alphabet", market: "US", currency: "USD", sector: "AI/플랫폼", anchorPrice: 185, baseVolume: 31000000, beta: 0.95 },
+  META: { name: "Meta", market: "US", currency: "USD", sector: "AI/플랫폼", anchorPrice: 680, baseVolume: 18000000, beta: 1.05 },
+  "005930": { name: "삼성전자", market: "KR", currency: "KRW", sector: "반도체", anchorPrice: 72000, baseVolume: 16000000, beta: 1.05 },
+  "000660": { name: "SK하이닉스", market: "KR", currency: "KRW", sector: "반도체", anchorPrice: 260000, baseVolume: 4200000, beta: 1.35 }
+};
+
+const mockMarketScenarios = {
+  "recent-one-year": {
+    label: "최근 1년 기준",
+    description: "최근 1년 가격 레벨을 기준으로 완만한 상승, 순환 조정, 거래량 회복을 섞은 기본 학습 데이터",
+    targetPeriod: "rolling-one-year",
+    drift: 0.18,
+    volatility: 0.018,
+    volumeMultiplier: 1.0,
+    semiconductorTilt: 0.28,
+    events: [
+      { offset: 38, label: "금리 경로 재가격", impact: -0.06 },
+      { offset: 116, label: "실적 시즌 상향", impact: 0.08 },
+      { offset: 188, label: "AI 설비 투자 확인", impact: 0.1 }
+    ]
+  },
+  "covid-crash": {
+    label: "코로나 급락/회복",
+    description: "2020년 코로나 충격처럼 급락, 거래량 폭증, 정책 대응 후 V자 회복이 나타나는 국면",
+    start: "2020-02-03",
+    end: "2021-02-02",
+    drift: 0.1,
+    volatility: 0.03,
+    volumeMultiplier: 1.45,
+    shock: { center: 36, width: 16, depth: -0.38 },
+    rebound: { center: 86, width: 42, strength: 0.5 },
+    events: [
+      { offset: 28, label: "팬데믹 공포 확산", impact: -0.18 },
+      { offset: 52, label: "유동성 공급", impact: 0.12 },
+      { offset: 118, label: "언택트/기술주 주도", impact: 0.16 }
+    ]
+  },
+  "financial-crisis": {
+    label: "금융위기",
+    description: "2008년 금융위기처럼 신용 경색, 장기 하락, 높은 변동성, 느린 회복이 이어지는 국면",
+    start: "2008-09-02",
+    end: "2009-09-01",
+    drift: -0.12,
+    volatility: 0.026,
+    volumeMultiplier: 1.35,
+    shock: { center: 62, width: 46, depth: -0.46 },
+    rebound: { center: 170, width: 60, strength: 0.24 },
+    events: [
+      { offset: 18, label: "신용 경색 심화", impact: -0.12 },
+      { offset: 66, label: "강제 매도/마진콜", impact: -0.18 },
+      { offset: 152, label: "정책 안정화 기대", impact: 0.08 }
+    ]
+  },
+  "semiconductor-boom": {
+    label: "반도체 호황",
+    description: "AI/메모리 사이클 개선처럼 반도체가 시장을 주도하고 거래량과 상대강도가 커지는 국면",
+    start: "2023-10-02",
+    end: "2024-10-01",
+    drift: 0.22,
+    volatility: 0.021,
+    volumeMultiplier: 1.25,
+    semiconductorTilt: 0.72,
+    events: [
+      { offset: 44, label: "AI 가속기 수요 상향", impact: 0.12 },
+      { offset: 104, label: "HBM 공급 부족", impact: 0.15 },
+      { offset: 176, label: "차익 실현 조정", impact: -0.08 }
+    ]
+  },
+  "rate-shock": {
+    label: "금리 충격",
+    description: "금리 급등과 밸류에이션 압축으로 성장주가 흔들리는 고금리 스트레스 국면",
+    start: "2022-01-03",
+    end: "2023-01-03",
+    drift: -0.18,
+    volatility: 0.024,
+    volumeMultiplier: 1.18,
+    shock: { center: 92, width: 70, depth: -0.28 },
+    events: [
+      { offset: 32, label: "인플레이션 서프라이즈", impact: -0.08 },
+      { offset: 96, label: "긴축 가속", impact: -0.12 },
+      { offset: 188, label: "금리 정점 기대", impact: 0.09 }
+    ]
+  }
+};
+
+function clampNumber(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function dateOnly(value) {
+  return new Date(value).toISOString().slice(0, 10);
+}
+
+function addCalendarDays(date, days) {
+  const next = new Date(date.getTime());
+  next.setUTCDate(next.getUTCDate() + days);
+  return next;
+}
+
+function businessDaysBetween(start, end) {
+  const days = [];
+  let cursor = new Date(start + "T00:00:00.000Z");
+  const endDate = new Date(end + "T00:00:00.000Z");
+  while (cursor <= endDate) {
+    const day = cursor.getUTCDay();
+    if (day !== 0 && day !== 6) days.push(dateOnly(cursor));
+    cursor = addCalendarDays(cursor, 1);
+  }
+  return days;
+}
+
+function rollingOneYearRange(referenceDate) {
+  const endDate = referenceDate ? new Date(referenceDate + "T00:00:00.000Z") : new Date();
+  const safeEnd = Number.isNaN(endDate.getTime()) ? new Date() : endDate;
+  const startDate = addCalendarDays(safeEnd, -365);
+  return { start: dateOnly(startDate), end: dateOnly(safeEnd) };
+}
+
+function hashSeed(input) {
+  const hash = crypto.createHash("sha256").update(String(input || "mock")).digest();
+  return hash.readUInt32BE(0) || 1;
+}
+
+function seededRandom(seedInput) {
+  let seed = hashSeed(seedInput);
+  return function () {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    return seed / 4294967296;
+  };
+}
+
+function randomNormal(random) {
+  const u1 = Math.max(random(), 1e-9);
+  const u2 = Math.max(random(), 1e-9);
+  return Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+}
+
+function scenarioPulse(index, center, width, strength) {
+  const distance = (index - center) / Math.max(width, 1);
+  return strength * Math.exp(-0.5 * distance * distance);
+}
+
+function movingAverage(candles, field, index, windowSize) {
+  const start = Math.max(0, index - windowSize + 1);
+  const slice = candles.slice(start, index + 1);
+  const total = slice.reduce(function (sum, candle) {
+    return sum + Number(candle[field] || 0);
+  }, 0);
+  return slice.length ? total / slice.length : 0;
+}
+
+function roundMarket(value, currency) {
+  if (currency === "KRW") return Math.round(value);
+  return Math.round(value * 100) / 100;
+}
+
+function mockScenarioById(id) {
+  return mockMarketScenarios[id] || mockMarketScenarios["recent-one-year"];
+}
+
+function mockScenarioRange(scenario, query) {
+  if (scenario.targetPeriod === "rolling-one-year") return rollingOneYearRange(query.asOf);
+  return { start: scenario.start, end: scenario.end };
+}
+
+function mockStockInfo(symbol) {
+  const normalized = String(symbol || "").trim().toUpperCase();
+  return Object.assign({}, knownStockInfo(normalized), mockMarketUniverse[normalized] || {
+    anchorPrice: 100,
+    baseVolume: 10000000,
+    beta: 1
+  });
+}
+
+function generateMockCandles(symbol, scenarioId, query) {
+  const scenario = mockScenarioById(scenarioId);
+  const info = mockStockInfo(symbol);
+  const range = mockScenarioRange(scenario, query || {});
+  const dates = businessDaysBetween(range.start, range.end).slice(-252);
+  const random = seededRandom([scenarioId, info.symbol, query && query.seed].join(":"));
+  const semiconductorBoost = info.sector === "반도체" ? Number(scenario.semiconductorTilt || 0) : 0;
+  const beta = Number(info.beta || 1);
+  const dailyDrift = (Number(scenario.drift || 0) + semiconductorBoost) / Math.max(dates.length, 1);
+  const volatility = Number(scenario.volatility || 0.018) * beta;
+  let close = Number(info.anchorPrice || 100);
+  const candles = [];
+  dates.forEach(function (date, index) {
+    const eventImpact = (scenario.events || []).reduce(function (sum, event) {
+      return sum + scenarioPulse(index, event.offset, 4, Number(event.impact || 0));
+    }, 0);
+    const shock = scenario.shock ? scenarioPulse(index, scenario.shock.center, scenario.shock.width, scenario.shock.depth) : 0;
+    const rebound = scenario.rebound ? scenarioPulse(index, scenario.rebound.center, scenario.rebound.width, scenario.rebound.strength) : 0;
+    const noise = randomNormal(random) * volatility;
+    const dailyReturn = clampNumber(dailyDrift + noise + eventImpact / 18 + shock / 28 + rebound / 36, -0.18, 0.18);
+    const open = close * (1 + randomNormal(random) * volatility * 0.28);
+    close = Math.max(1, close * (1 + dailyReturn));
+    const intraday = Math.abs(randomNormal(random)) * volatility * 1.8 + Math.abs(dailyReturn) * 0.35;
+    const high = Math.max(open, close) * (1 + intraday);
+    const low = Math.max(0.01, Math.min(open, close) * (1 - intraday));
+    const stress = Math.abs(shock) + Math.abs(eventImpact) + Math.max(0, rebound);
+    const relativeVolume = clampNumber(Number(scenario.volumeMultiplier || 1) + Math.abs(dailyReturn) * 12 + stress * 3 + random() * 0.35, 0.35, 6);
+    const volume = Math.round(Number(info.baseVolume || 10000000) * relativeVolume);
+    const buyShare = clampNumber(50 + dailyReturn * 180 + rebound * 20 - Math.abs(shock) * 18 + randomNormal(random) * 6, 12, 88);
+    const tradeStrength = clampNumber(100 + (buyShare - 50) * 1.9 + dailyReturn * 90, 35, 185);
+    const buyVolume = Math.round(volume * (buyShare / 100));
+    const sellVolume = Math.max(0, volume - buyVolume);
+    const bidAskImbalance = clampNumber((buyShare - 50) * 1.4 + randomNormal(random) * 3, -45, 45);
+    const activeEvents = (scenario.events || [])
+      .filter(function (event) { return Math.abs(index - event.offset) <= 4; })
+      .map(function (event) { return event.label; });
+    candles.push({
+      date: date,
+      open: roundMarket(open, info.currency),
+      high: roundMarket(high, info.currency),
+      low: roundMarket(low, info.currency),
+      close: roundMarket(close, info.currency),
+      volume: volume,
+      changePercent: Math.round(dailyReturn * 10000) / 100,
+      relativeVolume: Math.round(relativeVolume * 100) / 100,
+      tradeStrength: Math.round(tradeStrength),
+      buyVolume: buyVolume,
+      sellVolume: sellVolume,
+      bidAskImbalance: Math.round(bidAskImbalance * 10) / 10,
+      eventTags: activeEvents
+    });
+  });
+  candles.forEach(function (candle, index) {
+    candle.ma20 = roundMarket(movingAverage(candles, "close", index, 20), info.currency);
+    candle.ma60 = roundMarket(movingAverage(candles, "close", index, 60), info.currency);
+    candle.volumeMa20 = Math.round(movingAverage(candles, "volume", index, 20));
+  });
+  return { info: info, range: range, candles: candles };
+}
+
+function latestMockSignal(symbol, generated) {
+  const candles = generated.candles;
+  const last = candles[candles.length - 1] || {};
+  const previous = candles[candles.length - 2] || last;
+  const priceChangeRate = previous.close ? ((last.close / previous.close) - 1) * 100 : 0;
+  return {
+    symbol: symbol,
+    tradeStrength: last.tradeStrength || 0,
+    volumeRatio: last.relativeVolume || 0,
+    buyVolume: last.buyVolume || 0,
+    sellVolume: last.sellVolume || 0,
+    bidAskImbalance: last.bidAskImbalance || 0,
+    priceChangeRate: Math.round(priceChangeRate * 10) / 10,
+    close: last.close || 0,
+    ma20: last.ma20 || 0,
+    ma60: last.ma60 || 0,
+    asOf: last.date || ""
+  };
+}
+
+function mockMarketPayload(query) {
+  const scenarioId = String(query.scenario || query.regime || "recent-one-year").trim();
+  const scenario = mockScenarioById(scenarioId);
+  const symbols = String(query.symbols || "NVDA,AAPL,005930,000660,TSLA")
+    .split(",")
+    .map(function (symbol) { return symbol.trim().toUpperCase(); })
+    .filter(Boolean)
+    .slice(0, 12);
+  const series = {};
+  const signals = [];
+  symbols.forEach(function (symbol) {
+    const generated = generateMockCandles(symbol, scenarioId, query);
+    series[symbol] = {
+      symbol: symbol,
+      name: generated.info.name,
+      market: generated.info.market,
+      currency: generated.info.currency,
+      sector: generated.info.sector,
+      range: generated.range,
+      candles: generated.candles
+    };
+    signals.push(latestMockSignal(symbol, generated));
+  });
+  return {
+    schemaVersion: 1,
+    dataQuality: "mock-synthetic",
+    provider: "Digiter Twin mock market API",
+    generatedAt: now(),
+    scenario: {
+      id: mockMarketScenarios[scenarioId] ? scenarioId : "recent-one-year",
+      label: scenario.label,
+      description: scenario.description,
+      targetPeriod: scenario.targetPeriod || [scenario.start, scenario.end].join("/"),
+      events: scenario.events || []
+    },
+    request: {
+      symbols: symbols,
+      seed: query.seed || "",
+      asOf: query.asOf || ""
+    },
+    series: series,
+    signals: signals
+  };
+}
+
+function mockMarketScenarioList() {
+  return {
+    schemaVersion: 1,
+    scenarios: Object.keys(mockMarketScenarios).map(function (id) {
+      const scenario = mockMarketScenarios[id];
+      return {
+        id: id,
+        label: scenario.label,
+        description: scenario.description,
+        targetPeriod: scenario.targetPeriod || [scenario.start, scenario.end].join("/"),
+        events: scenario.events || []
+      };
+    }),
+    defaultSymbols: Object.keys(mockMarketUniverse)
+  };
+}
+
 async function fetchTossPortfolio() {
   const baseUrl = String(process.env.TOSS_API_BASE_URL || "https://openapi.tossinvest.com").replace(/\/+$/, "");
   const clientId = String(process.env.TOSS_CLIENT_ID || "").trim();
@@ -2523,6 +2845,19 @@ async function api(req, res, pathname) {
           error: error.message || "OpenDART 데이터를 가져오지 못했습니다."
         });
       }
+    }
+  }
+
+  if (pathname === "/api/mock-market/scenarios") {
+    if (req.method === "OPTIONS") return corsJson(res, 204, {});
+    if (req.method === "GET") return corsJson(res, 200, mockMarketScenarioList());
+  }
+
+  if (pathname === "/api/mock-market/candles") {
+    if (req.method === "OPTIONS") return corsJson(res, 204, {});
+    if (req.method === "GET") {
+      const parsedQuery = url.parse(req.url, true).query;
+      return corsJson(res, 200, mockMarketPayload(parsedQuery));
     }
   }
 

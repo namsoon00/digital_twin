@@ -37,15 +37,34 @@ API만 확인할 때는 아래처럼 호출합니다.
 curl http://127.0.0.1:3000/api/flow-lens?mock=1
 ```
 
+시스템 실험용 시계열 mock API도 제공합니다. 이 API는 실제 주문/계좌와 분리된 합성 OHLCV 데이터이며, 최근 1년 가격 레벨을 기준으로 한 기본 국면과 역사적 특징 국면을 선택해 받을 수 있습니다.
+
+```bash
+curl "http://127.0.0.1:3000/api/mock-market/scenarios"
+curl "http://127.0.0.1:3000/api/mock-market/candles?scenario=semiconductor-boom&symbols=NVDA,005930&seed=demo"
+```
+
+지원 시나리오:
+
+- `recent-one-year`: 최근 1년 기준의 완만한 상승/순환 조정
+- `covid-crash`: 코로나 급락과 V자 회복
+- `financial-crisis`: 금융위기형 장기 하락과 느린 회복
+- `semiconductor-boom`: 반도체 호황과 AI 설비 투자 국면
+- `rate-shock`: 금리 충격과 성장주 밸류에이션 압축
+
+`seed` 값을 바꾸면 같은 시나리오 안에서도 다른 mock 흐름을 만들 수 있습니다. 응답에는 종목별 `candles`, 최신 `signals`, 시나리오 이벤트, 기준 기간이 포함됩니다.
+
 ## 화면 구성
 
-웹은 `판단`, `수급`, `가치`, `보유`, `피드`, `관심` 하단 탭으로 구성됩니다. `관심` 탭에서는 관심 종목을 추가, 수정, 삭제할 수 있고, 상단 설정 버튼에서는 관심 종목, Toss API 설정, 밸류에이션 가정, 수급 신호 입력, 적정가/매수/매도 공식, 가중치, secret 값을 이 브라우저의 `localStorage`에 저장할 수 있습니다. GitHub Pages에서는 secret을 서버로 보내지 않으며, 브라우저 저장소가 막힌 환경에서는 현재 탭 메모리에서만 유지됩니다.
+웹은 `판단`, `실험실`, `모델`, `보유`, `피드`, `관심` 하단 탭으로 구성됩니다. `실험실`에서는 매수/매도 실험 기록을 버전으로 저장하고, `모델`에서는 나만의 매수·매도 공식, 가중치, 판단 기준, 모델 버전을 관리합니다. `관심` 탭에서는 관심 종목을 추가, 수정, 삭제할 수 있고, 상단 설정 버튼에서는 관심 종목, Toss API 설정, 밸류에이션 가정, 수급 신호 입력, 적정가/매수/매도 공식, 가중치, secret 값을 이 브라우저의 `localStorage`에 저장할 수 있습니다. GitHub Pages에서는 secret을 서버로 보내지 않으며, 브라우저 저장소가 막힌 환경에서는 현재 탭 메모리에서만 유지됩니다.
 
 ## 앱 구조
 
 - `public/`: Exit Lens 웹 대시보드
 - `GET /api/flow-lens`: 토스 계좌/보유자산, 주문 가능 금액, 관심 종목, 내 계좌 기준 오늘 먼저 점검할 종목 집계
 - `GET /api/flow-lens?mock=1`: 웹 검증용 고정 mock 스냅샷
+- `GET /api/mock-market/scenarios`: 학습/실험용 mock market 시나리오 목록
+- `GET /api/mock-market/candles?scenario=recent-one-year&symbols=NVDA,AAPL`: 시나리오별 1년치 OHLCV, 수급 신호, 이벤트 반환
 - `server.js`: 토스 OAuth 토큰 발급, 계좌/보유자산 조회, 관심 종목 파싱, 매도 검토 fallback 생성
 
 토스 호출은 서버에서만 수행합니다. 브라우저에 `client_secret`, access token, `X-Tossinvest-Account` 값이 내려가지 않습니다. 토스증권 공개 Open API에는 토스 앱의 관심 종목 목록 조회 endpoint가 확인되지 않아, 관심 종목은 앱 내부 목록으로 관리합니다.

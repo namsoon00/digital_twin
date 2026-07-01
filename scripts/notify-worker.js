@@ -120,8 +120,8 @@ function intervalBucketKey(parts) {
   return [parts.date, interval + "m", bucket].join(":");
 }
 
-function event(severity, key, line) {
-  return { severity: severity, key: key, line: line };
+function event(severity, key, line, meta) {
+  return { severity: severity, key: key, line: line, meta: meta || {} };
 }
 
 function isWeekend(parts) {
@@ -303,7 +303,8 @@ function buildHoldingTimingEvents(snapshot, now, date) {
     return event(
       holdingSeverity(item),
       [bucket, "holding-timing", item.symbol || item.name, session.phase, item.decision].join(":"),
-      line
+      line,
+      { splitMessage: true, symbol: item.symbol, name: item.name }
     );
   });
 }
@@ -425,7 +426,8 @@ function buildRealtimeTimingEvents(snapshot, date) {
         signal.label,
         "손익 " + signedPct(item.profitLossRate),
         signal.reason
-      ].join(" · ")
+      ].join(" · "),
+      { splitMessage: true, symbol: item.symbol, name: item.name }
     ));
   });
 
@@ -533,8 +535,7 @@ function maxSeverity(events) {
   }, "INFO");
 }
 
-function composeMessage(events, kind) {
-  const severity = maxSeverity(events);
+function notificationTitle(kind) {
   const labels = {
     morning: "장전 점검",
     intraday: "장중 알림",
@@ -542,13 +543,42 @@ function composeMessage(events, kind) {
     status: "상태 점검",
     realtime: "실시간 타이밍"
   };
+  return labels[kind] || "알림";
+}
+
+function composeMessage(events, kind) {
+  const severity = maxSeverity(events);
   const lines = [
-    "[Twin " + severity + "] " + (labels[kind] || "알림")
+    "[Twin " + severity + "] " + notificationTitle(kind)
   ].concat(events.map(function (item) {
     return "- " + item.line;
   }));
   const text = lines.join("\n");
   return text.length > 900 ? text.slice(0, 897) + "..." : text;
+}
+
+function composeSingleEventMessage(item, kind) {
+  const titleName = item.meta && item.meta.name ? " · " + item.meta.name : "";
+  const lines = ["[Twin " + item.severity + "] " + notificationTitle(kind) + titleName];
+  String(item.line || "").split(" · ").forEach(function (part) {
+    if (part) lines.push("- " + part);
+  });
+  const text = lines.join("\n");
+  return text.length > 900 ? text.slice(0, 897) + "..." : text;
+}
+
+function composeMessages(events, kind) {
+  const bundled = events.filter(function (item) {
+    return !(item.meta && item.meta.splitMessage);
+  });
+  const split = events.filter(function (item) {
+    return item.meta && item.meta.splitMessage;
+  });
+  const messages = bundled.length ? [composeMessage(bundled, kind)] : [];
+  split.forEach(function (item) {
+    messages.push(composeSingleEventMessage(item, kind));
+  });
+  return messages;
 }
 
 function httpsJson(method, targetUrl, headers, body) {
@@ -743,6 +773,15 @@ async function sendNotification(text) {
   };
 }
 
+async function sendMessages(messages) {
+  let lastResult = null;
+  for (let index = 0; index < messages.length; index += 1) {
+    lastResult = await sendNotification(messages[index]);
+    if (!lastResult.delivered) return lastResult;
+  }
+  return Object.assign({ delivered: true, label: "Notification" }, lastResult || {});
+}
+
 function telegramChatFromUpdate(update) {
   const candidates = [
     update.message,
@@ -814,21 +853,21 @@ async function runOnce() {
     return;
   }
 
-  const message = composeMessage(events, kind);
+  const messages = composeMessages(events, kind);
   if (dryRun) {
-    console.log(message);
+    console.log(messages.join("\n\n"));
     return;
   }
 
-  const result = await sendNotification(message);
+  const result = await sendMessages(messages);
   if (!result.delivered) {
-    console.log(message);
+    console.log(messages.join("\n\n"));
     console.log("Delivery: console only (" + result.reason + ")");
     return;
   }
 
   markSent(events, state);
-  console.log(result.label + " notification sent: " + events.length + " event(s).");
+  console.log(result.label + " notification sent: " + events.length + " event(s), " + messages.length + " message(s).");
 }
 
 async function runRealtimeOnce() {
@@ -846,21 +885,21 @@ async function runRealtimeOnce() {
     return;
   }
 
-  const message = composeMessage(events, "realtime");
+  const messages = composeMessages(events, "realtime");
   if (dryRun) {
-    console.log(message);
+    console.log(messages.join("\n\n"));
     return;
   }
 
-  const result = await sendNotification(message);
+  const result = await sendMessages(messages);
   if (!result.delivered) {
-    console.log(message);
+    console.log(messages.join("\n\n"));
     console.log("Delivery: console only (" + result.reason + ")");
     return;
   }
 
   markSent(events, state);
-  console.log(result.label + " realtime notification sent: " + events.length + " event(s).");
+  console.log(result.label + " realtime notification sent: " + events.length + " event(s), " + messages.length + " message(s).");
 }
 
 async function runDaemon() {

@@ -13,6 +13,16 @@ const notificationStatePath = path.join(dataDir, "notification-state.json");
 const kakaoTokenPath = path.join(dataDir, "kakao-token.json");
 
 const severityRank = { INFO: 1, WATCH: 2, ALERT: 3 };
+const defaultAlertRules = {
+  tossConnection: 1,
+  holdingTiming: 1,
+  sectorConcentration: 1,
+  marketCashLow: 1
+};
+const defaultAlertThresholds = {
+  sectorWeightHigh: 50,
+  marketCashLow: 10
+};
 
 function hasArg(name) {
   return process.argv.indexOf(name) >= 0;
@@ -103,6 +113,33 @@ function notificationIntervalMinutes() {
   return Math.max(1, Number(runtimeSettings().notifyIntervalMinutes || process.env.NOTIFY_INTERVAL_MINUTES || 10));
 }
 
+function parseNumberAssignments(value, defaults) {
+  const map = Object.assign({}, defaults || {});
+  String(value || "")
+    .split(/\r?\n/)
+    .map(function (line) { return line.trim(); })
+    .filter(Boolean)
+    .forEach(function (line) {
+      const parts = line.split(/[=:,]/);
+      const key = String(parts[0] || "").trim();
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) return;
+      map[key] = Number(parts.slice(1).join(":")) || 0;
+    });
+  return map;
+}
+
+function notificationAlertRules() {
+  return parseNumberAssignments(runtimeSettings().alertRules, defaultAlertRules);
+}
+
+function notificationAlertThresholds() {
+  return parseNumberAssignments(runtimeSettings().alertThresholds, defaultAlertThresholds);
+}
+
+function alertRuleEnabled(rules, key) {
+  return !key || Number((rules || {})[key]) !== 0;
+}
+
 function realtimeIntervalSeconds() {
   return Math.max(1, Number(process.env.REALTIME_NOTIFY_INTERVAL_SECONDS || 60));
 }
@@ -120,8 +157,8 @@ function intervalBucketKey(parts) {
   return [parts.date, interval + "m", bucket].join(":");
 }
 
-function event(severity, key, line, meta) {
-  return { severity: severity, key: key, line: line, meta: meta || {} };
+function event(severity, key, line, rule, meta) {
+  return { severity: severity, key: key, line: line, rule: rule || "", meta: meta || {} };
 }
 
 function isWeekend(parts) {
@@ -304,12 +341,14 @@ function buildHoldingTimingEvents(snapshot, now, date) {
       holdingSeverity(item),
       [bucket, "holding-timing", item.symbol || item.name, session.phase, item.decision].join(":"),
       line,
+      "holdingTiming",
       { splitMessage: true, symbol: item.symbol, name: item.name }
     );
   });
 }
 
-function buildCashEvents(portfolio, now) {
+function buildCashEvents(portfolio, now, thresholds) {
+  const cashLow = Number(thresholds.marketCashLow || defaultAlertThresholds.marketCashLow);
   let markets = Array.isArray(portfolio.markets) ? portfolio.markets.filter(function (entry) {
     return Number(entry.total || 0) > 0;
   }) : [];
@@ -325,17 +364,19 @@ function buildCashEvents(portfolio, now) {
   const events = [];
   markets.forEach(function (entry) {
     const ratio = Number(entry.cashRatio || 0);
-    if (ratio <= 5) {
+    if (ratio <= cashLow / 2) {
       events.push(event(
         "ALERT",
         [now.date, "cash-low", entry.key, ratio].join(":"),
-        entry.label + " 현금 비중이 " + ratio + "%입니다. 신규 매수 전 유동성 확인 필요."
+        entry.label + " 현금 비중이 " + ratio + "%입니다. 신규 매수 전 유동성 확인 필요.",
+        "marketCashLow"
       ));
-    } else if (ratio <= 10) {
+    } else if (ratio <= cashLow) {
       events.push(event(
         "WATCH",
         [now.date, "cash-low", entry.key, ratio].join(":"),
-        entry.label + " 현금 비중이 " + ratio + "%입니다."
+        entry.label + " 현금 비중이 " + ratio + "%입니다.",
+        "marketCashLow"
       ));
     }
   });
@@ -427,6 +468,7 @@ function buildRealtimeTimingEvents(snapshot, date) {
         "손익 " + signedPct(item.profitLossRate),
         signal.reason
       ].join(" · "),
+      "holdingTiming",
       { splitMessage: true, symbol: item.symbol, name: item.name }
     ));
   });
@@ -434,9 +476,17 @@ function buildRealtimeTimingEvents(snapshot, date) {
   return events;
 }
 
+function filterEventsByRules(events, rules) {
+  return events.filter(function (item) {
+    return alertRuleEnabled(rules, item.rule);
+  });
+}
+
 function buildEvents(snapshot, kind) {
   const currentDate = currentRunDate();
   const now = kstParts(currentDate);
+  const rules = notificationAlertRules();
+  const thresholds = notificationAlertThresholds();
   const toss = snapshot.toss || {};
   const portfolio = snapshot.portfolio || {};
   const decision = snapshot.tossDecision || {};
@@ -449,7 +499,8 @@ function buildEvents(snapshot, kind) {
     events.push(event(
       "ALERT",
       [now.date, "connection", toss.status || "not-live"].join(":"),
-      "토스 live 연결이 아닙니다: " + (toss.status || "상태 확인 필요")
+      "토스 live 연결이 아닙니다: " + (toss.status || "상태 확인 필요"),
+      "tossConnection"
     ));
   }
 
@@ -457,7 +508,8 @@ function buildEvents(snapshot, kind) {
     events.push(event(
       "WATCH",
       [now.date, "empty-positions"].join(":"),
-      "토스 연결은 성공했지만 보유 종목이 비어 있습니다."
+      "토스 연결은 성공했지만 보유 종목이 비어 있습니다.",
+      "tossConnection"
     ));
   }
 
@@ -466,21 +518,25 @@ function buildEvents(snapshot, kind) {
   });
 
   const concentration = Number(portfolio.concentration || 0);
-  if (concentration >= 50) {
+  const concentrationHigh = Number(thresholds.sectorWeightHigh || defaultAlertThresholds.sectorWeightHigh);
+  const concentrationWatch = Math.max(1, Math.round(concentrationHigh * 0.7));
+  if (concentration >= concentrationHigh) {
     events.push(event(
       "ALERT",
       [now.date, "concentration", concentration].join(":"),
-      "계좌 최대 섹터 노출이 " + concentration + "%입니다. 비중 기준 확인 필요."
+      "계좌 최대 섹터 노출이 " + concentration + "%입니다. 비중 기준 확인 필요.",
+      "sectorConcentration"
     ));
-  } else if (concentration >= 35) {
+  } else if (concentration >= concentrationWatch) {
     events.push(event(
       "WATCH",
       [now.date, "concentration", concentration].join(":"),
-      "계좌 최대 섹터 노출이 " + concentration + "%입니다."
+      "계좌 최대 섹터 노출이 " + concentration + "%입니다.",
+      "sectorConcentration"
     ));
   }
 
-  buildCashEvents(portfolio, now).forEach(function (item) {
+  buildCashEvents(portfolio, now, thresholds).forEach(function (item) {
     events.push(item);
   });
 
@@ -497,7 +553,7 @@ function buildEvents(snapshot, kind) {
     events.unshift(event("INFO", [now.date, kind, "summary"].join(":"), summaryLine));
   }
 
-  return events;
+  return filterEventsByRules(events, rules);
 }
 
 function loadNotificationState() {
@@ -878,7 +934,11 @@ async function runRealtimeOnce() {
     watchlistSymbols: runtimeSettings().watchlistSymbols
   });
   const state = loadNotificationState();
-  const events = unsentEvents(buildRealtimeTimingEvents(snapshot, currentRunDate()), state, force);
+  const events = unsentEvents(
+    filterEventsByRules(buildRealtimeTimingEvents(snapshot, currentRunDate()), notificationAlertRules()),
+    state,
+    force
+  );
 
   if (events.length === 0) {
     console.log("No realtime timing events.");

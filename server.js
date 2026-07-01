@@ -196,26 +196,55 @@ function runtimeSettings() {
     notifyProvider: settingFromStoreOrEnv(store, "notifyProvider", "NOTIFY_PROVIDER", ""),
     telegramBotToken: settingFromStoreOrEnv(store, "telegramBotToken", "TELEGRAM_BOT_TOKEN", ""),
     telegramChatId: settingFromStoreOrEnv(store, "telegramChatId", "TELEGRAM_CHAT_ID", ""),
-    notifyLinkUrl: settingFromStoreOrEnv(store, "notifyLinkUrl", "NOTIFY_LINK_URL", "http://127.0.0.1:3000"),
-    notifyIntervalMinutes: settingFromStoreOrEnv(store, "notifyIntervalMinutes", "NOTIFY_INTERVAL_MINUTES", "10")
+    notifyLinkUrl: settingFromStoreOrEnv(store, "notifyLinkUrl", "NOTIFY_LINK_URL", "http://127.0.0.1:3000?tab=alerts"),
+    notifyIntervalMinutes: settingFromStoreOrEnv(store, "notifyIntervalMinutes", "NOTIFY_INTERVAL_MINUTES", "10"),
+    valuationAssumptions: settingFromStoreOrEnv(store, "valuationAssumptions", "VALUATION_ASSUMPTIONS", ""),
+    marketSignalInputs: settingFromStoreOrEnv(store, "marketSignalInputs", "MARKET_SIGNAL_INPUTS", ""),
+    fairValueFormula: settingFromStoreOrEnv(store, "fairValueFormula", "FAIR_VALUE_FORMULA", ""),
+    buyScoreFormula: settingFromStoreOrEnv(store, "buyScoreFormula", "BUY_SCORE_FORMULA", ""),
+    sellScoreFormula: settingFromStoreOrEnv(store, "sellScoreFormula", "SELL_SCORE_FORMULA", ""),
+    modelName: settingFromStoreOrEnv(store, "modelName", "MODEL_NAME", ""),
+    modelHypothesis: settingFromStoreOrEnv(store, "modelHypothesis", "MODEL_HYPOTHESIS", ""),
+    customBuyModelFormula: settingFromStoreOrEnv(store, "customBuyModelFormula", "CUSTOM_BUY_MODEL_FORMULA", ""),
+    customSellModelFormula: settingFromStoreOrEnv(store, "customSellModelFormula", "CUSTOM_SELL_MODEL_FORMULA", ""),
+    formulaWeights: settingFromStoreOrEnv(store, "formulaWeights", "FORMULA_WEIGHTS", ""),
+    decisionThresholds: settingFromStoreOrEnv(store, "decisionThresholds", "DECISION_THRESHOLDS", ""),
+    modelDecisionThresholds: settingFromStoreOrEnv(store, "modelDecisionThresholds", "MODEL_DECISION_THRESHOLDS", ""),
+    alertRules: settingFromStoreOrEnv(store, "alertRules", "ALERT_RULES", ""),
+    alertThresholds: settingFromStoreOrEnv(store, "alertThresholds", "ALERT_THRESHOLDS", "")
   };
 }
 
 function settingsStatusPayload() {
   const settings = runtimeSettings();
+  const publicSettings = {
+    watchlistSymbols: settings.watchlistSymbols,
+    tossApiBaseUrl: settings.tossApiBaseUrl,
+    tossClientId: "",
+    tossClientSecret: "",
+    tossAccountSeq: "",
+    notifyProvider: settings.notifyProvider,
+    telegramBotToken: "",
+    telegramChatId: "",
+    notifyLinkUrl: settings.notifyLinkUrl,
+    notifyIntervalMinutes: settings.notifyIntervalMinutes,
+    fairValueFormula: settings.fairValueFormula,
+    buyScoreFormula: settings.buyScoreFormula,
+    sellScoreFormula: settings.sellScoreFormula,
+    modelName: settings.modelName,
+    modelHypothesis: settings.modelHypothesis,
+    customBuyModelFormula: settings.customBuyModelFormula,
+    customSellModelFormula: settings.customSellModelFormula,
+    formulaWeights: settings.formulaWeights,
+    decisionThresholds: settings.decisionThresholds,
+    modelDecisionThresholds: settings.modelDecisionThresholds,
+    alertRules: settings.alertRules,
+    alertThresholds: settings.alertThresholds
+  };
+  if (configuredValue(settings.valuationAssumptions)) publicSettings.valuationAssumptions = settings.valuationAssumptions;
+  if (configuredValue(settings.marketSignalInputs)) publicSettings.marketSignalInputs = settings.marketSignalInputs;
   return {
-    settings: {
-      watchlistSymbols: settings.watchlistSymbols,
-      tossApiBaseUrl: settings.tossApiBaseUrl,
-      tossClientId: "",
-      tossClientSecret: "",
-      tossAccountSeq: "",
-      notifyProvider: settings.notifyProvider,
-      telegramBotToken: "",
-      telegramChatId: "",
-      notifyLinkUrl: settings.notifyLinkUrl,
-      notifyIntervalMinutes: settings.notifyIntervalMinutes
-    },
+    settings: publicSettings,
     configured: {
       tossClientId: Boolean(settings.tossClientId),
       tossClientSecret: Boolean(settings.tossClientSecret),
@@ -237,7 +266,21 @@ function saveRuntimeSettings(input) {
     "notifyProvider",
     "telegramChatId",
     "notifyLinkUrl",
-    "notifyIntervalMinutes"
+    "notifyIntervalMinutes",
+    "valuationAssumptions",
+    "marketSignalInputs",
+    "fairValueFormula",
+    "buyScoreFormula",
+    "sellScoreFormula",
+    "modelName",
+    "modelHypothesis",
+    "customBuyModelFormula",
+    "customSellModelFormula",
+    "formulaWeights",
+    "decisionThresholds",
+    "modelDecisionThresholds",
+    "alertRules",
+    "alertThresholds"
   ];
   const secretKeys = ["tossClientId", "tossClientSecret", "telegramBotToken"];
 

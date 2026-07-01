@@ -211,6 +211,8 @@ async function checkNormalMode(port) {
   const settingsPayload = JSON.parse(settings.body);
   assertOk(settingsPayload.settings && settingsPayload.configured, "설정 API 응답 형식이 맞지 않습니다.");
   assertOk(settingsPayload.settings.tossClientSecret === "", "설정 API가 secret 원문을 내려주고 있습니다.");
+  assertOk(Object.prototype.hasOwnProperty.call(settingsPayload.settings, "alertRules"), "설정 API에 알림 규칙 필드가 없습니다.");
+  assertOk(Object.prototype.hasOwnProperty.call(settingsPayload.settings, "modelDecisionThresholds"), "설정 API에 모델 판단 기준 필드가 없습니다.");
 
   const savedSettings = await request(port, "/api/settings", {
     method: "PUT",
@@ -223,7 +225,9 @@ async function checkNormalMode(port) {
         tossClientSecret: "fake-secret",
         notifyProvider: "telegram",
         telegramBotToken: "fake-telegram-token",
-        telegramChatId: "1234"
+        telegramChatId: "1234",
+        alertRules: "priceStop=1\nmodelSell=1",
+        modelDecisionThresholds: "modelBuy=75\nmodelSell=70"
       }
     })
   });
@@ -231,6 +235,8 @@ async function checkNormalMode(port) {
   const savedSettingsPayload = JSON.parse(savedSettings.body);
   assertOk(savedSettingsPayload.configured.tossClientSecret === true, "저장된 토스 secret 설정 상태가 true가 아닙니다.");
   assertOk(savedSettingsPayload.settings.tossClientSecret === "", "저장 응답이 토스 secret을 내려주고 있습니다.");
+  assertOk(savedSettingsPayload.settings.alertRules.indexOf("priceStop=1") >= 0, "저장된 알림 규칙이 응답에 없습니다.");
+  assertOk(savedSettingsPayload.settings.modelDecisionThresholds.indexOf("modelBuy=75") >= 0, "저장된 모델 기준값이 응답에 없습니다.");
 
   const tossLens = await request(port, "/api/flow-lens?mock=1");
   assertOk(tossLens.statusCode === 200, "토스 판단 API 응답 코드가 200이 아닙니다: " + tossLens.statusCode);

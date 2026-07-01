@@ -10,17 +10,28 @@ const { flowLensSnapshot, runtimeSettings } = require("../server");
 
 const dataDir = path.join(rootDir, "data");
 const notificationStatePath = path.join(dataDir, "notification-state.json");
+const monitorStatePath = path.join(dataDir, "monitor-state.json");
 const kakaoTokenPath = path.join(dataDir, "kakao-token.json");
 
 const defaultAlertRules = {
   tossConnection: 1,
   holdingTiming: 1,
   sectorConcentration: 1,
-  marketCashLow: 1
+  marketCashLow: 1,
+  monitorConnection: 1,
+  monitorPositionChange: 1,
+  monitorPnlChange: 1,
+  monitorValueChange: 1,
+  monitorCashChange: 1,
+  monitorDecisionChange: 1
 };
 const defaultAlertThresholds = {
   sectorWeightHigh: 50,
-  marketCashLow: 10
+  marketCashLow: 10,
+  monitorPnlDelta: 2,
+  monitorValueDelta: 5,
+  monitorCashDelta: 10,
+  monitorExitPressureDelta: 15
 };
 const minRealtimeIntervalSeconds = 10 * 60;
 
@@ -265,6 +276,114 @@ function marketCashSummary(portfolio) {
   return lines.length ? lines.join(" / ") : "현금 " + formatMoney(portfolio.cash);
 }
 
+function rounded(value, digits) {
+  const scale = Math.pow(10, digits || 0);
+  return Math.round(Number(value || 0) * scale) / scale;
+}
+
+function percentPoint(value) {
+  return (Number(value || 0) > 0 ? "+" : "") + rounded(value, 1) + "%p";
+}
+
+function percentDelta(current, previous) {
+  const base = Number(previous || 0);
+  const next = Number(current || 0);
+  if (!base || !Number.isFinite(base) || !Number.isFinite(next)) return 0;
+  return ((next / base) - 1) * 100;
+}
+
+function isCashLikePosition(item) {
+  const symbol = String(item && item.symbol || "").toUpperCase();
+  const sector = String(item && item.sector || "");
+  return symbol === "CASH" || sector === "현금";
+}
+
+function rawPositionMap(snapshot) {
+  const map = {};
+  const positions = snapshot && snapshot.toss && Array.isArray(snapshot.toss.positions) ? snapshot.toss.positions : [];
+  positions.forEach(function (item) {
+    const symbol = String(item.symbol || "").toUpperCase();
+    if (!symbol || isCashLikePosition(item)) return;
+    map[symbol] = item;
+  });
+  return map;
+}
+
+function monitorPosition(item, raw) {
+  item = item || {};
+  raw = raw || {};
+  return {
+    symbol: String(item.symbol || raw.symbol || "").toUpperCase(),
+    name: item.name || raw.name || item.symbol || raw.symbol || "",
+    sector: item.sector || raw.sector || "",
+    currency: item.currency || raw.currency || "",
+    quantity: Number(raw.quantity || item.quantity || 0),
+    marketValue: Number(item.marketValue || raw.marketValue || 0),
+    profitLoss: Number(item.profitLoss || raw.profitLoss || 0),
+    profitLossRate: Number(item.profitLossRate || raw.profitLossRate || 0),
+    exitPressure: Number(item.exitPressure || 0),
+    decision: item.decision || "",
+    tone: item.tone || "",
+    source: item.source || "holding"
+  };
+}
+
+function monitorSnapshotFromFlow(snapshot) {
+  const decision = snapshot.tossDecision || {};
+  const portfolio = snapshot.portfolio || {};
+  const rawMap = rawPositionMap(snapshot);
+  const positions = {};
+  (Array.isArray(decision.items) ? decision.items : [])
+    .filter(function (item) { return item.source === "holding"; })
+    .forEach(function (item) {
+      const symbol = String(item.symbol || "").toUpperCase();
+      if (!symbol) return;
+      positions[symbol] = monitorPosition(item, rawMap[symbol]);
+    });
+  Object.keys(rawMap).forEach(function (symbol) {
+    if (!positions[symbol]) positions[symbol] = monitorPosition(rawMap[symbol], rawMap[symbol]);
+  });
+  return {
+    generatedAt: snapshot.generatedAt || new Date().toISOString(),
+    tossMode: snapshot.toss && snapshot.toss.mode || "",
+    tossStatus: snapshot.toss && snapshot.toss.status || "",
+    portfolio: {
+      total: Number(portfolio.total || 0),
+      invested: Number(portfolio.invested || 0),
+      cash: Number(portfolio.cash || 0)
+    },
+    markets: (Array.isArray(portfolio.markets) ? portfolio.markets : []).map(function (market) {
+      return {
+        key: market.key || market.label || "",
+        label: market.label || market.key || "",
+        total: Number(market.total || 0),
+        cash: Number(market.cash || 0),
+        cashRatio: Number(market.cashRatio || 0)
+      };
+    }),
+    sectors: (Array.isArray(portfolio.sectors) ? portfolio.sectors : []).map(function (sector) {
+      return {
+        sector: sector.sector || "",
+        ratio: Number(sector.ratio || 0),
+        value: Number(sector.value || 0)
+      };
+    }),
+    positions: positions
+  };
+}
+
+function loadMonitorState() {
+  const state = readJson(monitorStatePath, { previous: null });
+  return state && typeof state === "object" ? state : { previous: null };
+}
+
+function saveMonitorState(current) {
+  writePrivateJson(monitorStatePath, {
+    updatedAt: new Date().toISOString(),
+    previous: current
+  });
+}
+
 function holdingSeverity(item) {
   if (item.tone === "danger") return "ALERT";
   if (item.tone === "caution" || item.tone === "hold") return "WATCH";
@@ -480,6 +599,189 @@ function buildRealtimeTimingEvents(snapshot, date) {
   return events;
 }
 
+function buildConnectionMonitorEvents(current, previous, now) {
+  const events = [];
+  if (current.tossMode !== "live") {
+    events.push(event(
+      "ALERT",
+      [now.date, "monitor-connection", current.tossMode || "unknown", current.tossStatus || ""].join(":"),
+      "토스 연결 상태가 live가 아닙니다: " + (current.tossStatus || current.tossMode || "상태 확인 필요"),
+      "monitorConnection"
+    ));
+  }
+  if (previous && previous.tossStatus && current.tossStatus && previous.tossStatus !== current.tossStatus) {
+    events.push(event(
+      "WATCH",
+      [now.date, "monitor-connection-change", current.tossStatus].join(":"),
+      "토스 연결 상태가 변경되었습니다: " + previous.tossStatus + " → " + current.tossStatus,
+      "monitorConnection"
+    ));
+  }
+  return events;
+}
+
+function buildPositionChangeEvents(current, previous, thresholds, now) {
+  const events = [];
+  const currentPositions = current.positions || {};
+  const previousPositions = previous && previous.positions || {};
+  const symbols = {};
+  Object.keys(currentPositions).forEach(function (symbol) { symbols[symbol] = true; });
+  Object.keys(previousPositions).forEach(function (symbol) { symbols[symbol] = true; });
+
+  Object.keys(symbols).sort().forEach(function (symbol) {
+    const item = currentPositions[symbol];
+    const before = previousPositions[symbol];
+    if (item && !before) {
+      events.push(event(
+        "WATCH",
+        [now.date, "monitor-new-position", symbol].join(":"),
+        [
+          item.name + ": 새 보유 종목 감지",
+          "수량 " + rounded(item.quantity, 4),
+          "평가 " + formatMoney(item.marketValue),
+          "손익 " + signedPct(item.profitLossRate)
+        ].join(" · "),
+        "monitorPositionChange",
+        { splitMessage: true, symbol: symbol, name: item.name }
+      ));
+      return;
+    }
+    if (!item && before) {
+      events.push(event(
+        "WATCH",
+        [now.date, "monitor-removed-position", symbol].join(":"),
+        before.name + ": 보유 목록에서 사라졌습니다. 매도/이관/데이터 변경 여부를 확인하세요.",
+        "monitorPositionChange",
+        { splitMessage: true, symbol: symbol, name: before.name }
+      ));
+      return;
+    }
+    if (!item || !before) return;
+
+    const quantityDelta = Number(item.quantity || 0) - Number(before.quantity || 0);
+    if (quantityDelta !== 0) {
+      events.push(event(
+        "WATCH",
+        [now.date, "monitor-quantity", symbol, rounded(item.quantity, 4)].join(":"),
+        [
+          item.name + ": 보유 수량 변경",
+          "이전 " + rounded(before.quantity, 4),
+          "현재 " + rounded(item.quantity, 4),
+          "변화 " + rounded(quantityDelta, 4)
+        ].join(" · "),
+        "monitorPositionChange",
+        { splitMessage: true, symbol: symbol, name: item.name }
+      ));
+    }
+
+    const pnlDelta = Number(item.profitLossRate || 0) - Number(before.profitLossRate || 0);
+    if (Math.abs(pnlDelta) >= Number(thresholds.monitorPnlDelta || 0)) {
+      events.push(event(
+        pnlDelta < 0 ? "ALERT" : "WATCH",
+        [now.date, "monitor-pnl", symbol, rounded(item.profitLossRate, 1)].join(":"),
+        [
+          item.name + ": 손익률 급변",
+          "이전 " + signedPct(before.profitLossRate),
+          "현재 " + signedPct(item.profitLossRate),
+          "변화 " + percentPoint(pnlDelta)
+        ].join(" · "),
+        "monitorPnlChange",
+        { splitMessage: true, symbol: symbol, name: item.name }
+      ));
+    }
+
+    const valueDelta = percentDelta(item.marketValue, before.marketValue);
+    if (Math.abs(valueDelta) >= Number(thresholds.monitorValueDelta || 0)) {
+      events.push(event(
+        valueDelta < 0 ? "ALERT" : "WATCH",
+        [now.date, "monitor-value", symbol, rounded(valueDelta, 1)].join(":"),
+        [
+          item.name + ": 평가액 급변",
+          "이전 " + formatMoney(before.marketValue),
+          "현재 " + formatMoney(item.marketValue),
+          "변화 " + signedPct(valueDelta)
+        ].join(" · "),
+        "monitorValueChange",
+        { splitMessage: true, symbol: symbol, name: item.name }
+      ));
+    }
+
+    const pressureDelta = Number(item.exitPressure || 0) - Number(before.exitPressure || 0);
+    const decisionChanged = item.decision && before.decision && item.decision !== before.decision;
+    const toneEscalated = ["danger", "caution"].indexOf(item.tone) >= 0 && item.tone !== before.tone;
+    if (decisionChanged || toneEscalated || Math.abs(pressureDelta) >= Number(thresholds.monitorExitPressureDelta || 0)) {
+      events.push(event(
+        item.tone === "danger" ? "ALERT" : "WATCH",
+        [now.date, "monitor-decision", symbol, item.tone || "tone"].join(":"),
+        [
+          item.name + ": 판단 변화",
+          "이전 " + (before.decision || "-") + " " + Number(before.exitPressure || 0) + "점",
+          "현재 " + (item.decision || "-") + " " + Number(item.exitPressure || 0) + "점"
+        ].join(" · "),
+        "monitorDecisionChange",
+        { splitMessage: true, symbol: symbol, name: item.name }
+      ));
+    }
+  });
+
+  return events;
+}
+
+function buildCashMonitorEvents(current, previous, thresholds, now) {
+  if (!previous) return [];
+  const events = [];
+  const previousMarkets = {};
+  (previous.markets || []).forEach(function (market) {
+    previousMarkets[market.key || market.label] = market;
+  });
+  (current.markets || []).forEach(function (market) {
+    const key = market.key || market.label;
+    const before = previousMarkets[key];
+    if (!before) return;
+    const ratioDelta = Number(market.cashRatio || 0) - Number(before.cashRatio || 0);
+    if (Math.abs(ratioDelta) >= Number(thresholds.monitorCashDelta || 0)) {
+      events.push(event(
+        ratioDelta < 0 ? "ALERT" : "WATCH",
+        [now.date, "monitor-cash", key, rounded(market.cashRatio, 1)].join(":"),
+        [
+          (market.label || key) + " 현금비중 급변",
+          "이전 " + signedPct(before.cashRatio),
+          "현재 " + signedPct(market.cashRatio),
+          "변화 " + percentPoint(ratioDelta)
+        ].join(" · "),
+        "monitorCashChange"
+      ));
+    }
+  });
+  return events;
+}
+
+function buildRealtimeMonitorEvents(snapshot, monitorState, date) {
+  const now = kstParts(date);
+  const thresholds = notificationAlertThresholds();
+  const current = monitorSnapshotFromFlow(snapshot);
+  const previous = monitorState && monitorState.previous;
+  const events = [];
+
+  buildConnectionMonitorEvents(current, previous, now).forEach(function (item) {
+    events.push(item);
+  });
+
+  if (previous && previous.positions) {
+    buildPositionChangeEvents(current, previous, thresholds, now).forEach(function (item) {
+      events.push(item);
+    });
+    buildCashMonitorEvents(current, previous, thresholds, now).forEach(function (item) {
+      events.push(item);
+    });
+  }
+
+  return {
+    current: current,
+    events: events
+  };
+}
+
 function filterEventsByRules(events, rules) {
   return events.filter(function (item) {
     return alertRuleEnabled(rules, item.rule);
@@ -595,7 +897,7 @@ function notificationTitle(kind) {
     intraday: "장중 알림",
     close: "마감 요약",
     status: "상태 점검",
-    realtime: "실시간 타이밍"
+    realtime: "실시간 모니터링"
   };
   return labels[kind] || "알림";
 }
@@ -948,15 +1250,18 @@ async function runRealtimeOnce() {
     mock: notificationMockMode(),
     watchlistSymbols: runtimeSettings().watchlistSymbols
   });
+  const runDate = currentRunDate();
+  const monitorState = loadMonitorState();
+  const monitorResult = buildRealtimeMonitorEvents(snapshot, monitorState, runDate);
   const state = loadNotificationState();
-  const events = unsentEvents(
-    filterEventsByRules(buildRealtimeTimingEvents(snapshot, currentRunDate()), notificationAlertRules()),
-    state,
-    force
-  );
+  const events = unsentEvents(filterEventsByRules(
+    buildRealtimeTimingEvents(snapshot, runDate).concat(monitorResult.events),
+    notificationAlertRules()
+  ), state, force);
 
   if (events.length === 0) {
-    console.log("No realtime timing events.");
+    if (!dryRun) saveMonitorState(monitorResult.current);
+    console.log("No realtime monitoring events.");
     return;
   }
 
@@ -974,6 +1279,7 @@ async function runRealtimeOnce() {
   }
 
   markSent(events, state);
+  saveMonitorState(monitorResult.current);
   console.log(result.label + " realtime notification sent: " + events.length + " event(s), " + messages.length + " message(s).");
 }
 

@@ -8,6 +8,7 @@ dist/
 data/store.json
 data/settings.json
 data/notification-state.json
+data/monitor-state.json
 data/kakao-token.json
 data/*.pid
 *.log

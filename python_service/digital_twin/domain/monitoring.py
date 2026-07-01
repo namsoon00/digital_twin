@@ -1,3 +1,5 @@
+from copy import deepcopy
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Dict, List
 
@@ -89,6 +91,96 @@ class RealtimeMonitor:
             events.extend(self.cash_events(snapshot, previous))
         events.extend(self.holding_timing_events(snapshot))
         return [event for event in events if self.enabled(event.rule)]
+
+    def type_check_events_for_snapshot(self, snapshot: AccountSnapshot) -> List[AlertEvent]:
+        events: List[AlertEvent] = []
+        events.extend(self.connection_events(snapshot, {"status": "이전 연결 상태"}))
+        events.extend(self.heartbeat_events(snapshot))
+
+        state = snapshot.to_monitor_state()
+        symbols = sorted(state.get("positions", {}).keys())
+        if symbols:
+            symbol = symbols[0]
+            events.extend(self.only_rule(
+                "monitorPositionChange",
+                self.position_change_events(snapshot, self.previous_with_position_quantity(state, symbol)),
+            ))
+            events.extend(self.only_rule(
+                "monitorPnlChange",
+                self.position_change_events(snapshot, self.previous_with_pnl_delta(state, symbol)),
+            ))
+            events.extend(self.only_rule(
+                "monitorValueChange",
+                self.position_change_events(snapshot, self.previous_with_value_delta(state, symbol)),
+            ))
+            events.extend(self.only_rule(
+                "monitorDecisionChange",
+                self.position_change_events(snapshot, self.previous_with_decision_delta(state, symbol)),
+            ))
+
+        events.extend(self.only_rule("monitorCashChange", self.cash_events(snapshot, self.previous_with_cash_delta(state))))
+        timing_events = self.holding_timing_events(snapshot)
+        if not timing_events and snapshot.decisions:
+            timing_snapshot = replace(snapshot, decisions=[
+                replace(snapshot.decisions[0], tone="caution", decision=snapshot.decisions[0].decision or "조건부 보유"),
+                *snapshot.decisions[1:],
+            ])
+            timing_events = self.holding_timing_events(timing_snapshot)
+        events.extend(self.only_rule("holdingTiming", timing_events))
+        return self.unique_rules([event for event in events if self.enabled(event.rule)])
+
+    def only_rule(self, rule: str, events: List[AlertEvent]) -> List[AlertEvent]:
+        return [event for event in events if event.rule == rule]
+
+    def unique_rules(self, events: List[AlertEvent]) -> List[AlertEvent]:
+        seen = set()
+        unique: List[AlertEvent] = []
+        for event in events:
+            if event.rule in seen:
+                continue
+            seen.add(event.rule)
+            unique.append(event)
+        return unique
+
+    def previous_with_position_quantity(self, state: Dict[str, object], symbol: str) -> Dict[str, object]:
+        previous = deepcopy(state)
+        position = previous.get("positions", {}).get(symbol, {})
+        position["quantity"] = max(0, float(position.get("quantity") or 0) - 1)
+        return previous
+
+    def previous_with_pnl_delta(self, state: Dict[str, object], symbol: str) -> Dict[str, object]:
+        previous = deepcopy(state)
+        position = previous.get("positions", {}).get(symbol, {})
+        current = float(position.get("profit_loss_rate") or 0)
+        position["profit_loss_rate"] = current - float(self.thresholds.get("monitorPnlDelta", 0)) - 1
+        return previous
+
+    def previous_with_value_delta(self, state: Dict[str, object], symbol: str) -> Dict[str, object]:
+        previous = deepcopy(state)
+        position = previous.get("positions", {}).get(symbol, {})
+        current = float(position.get("market_value") or 0)
+        threshold = max(1.0, float(self.thresholds.get("monitorValueDelta", 0)) + 1)
+        position["market_value"] = current / (1 + threshold / 100) if current else 1
+        return previous
+
+    def previous_with_decision_delta(self, state: Dict[str, object], symbol: str) -> Dict[str, object]:
+        previous = deepcopy(state)
+        decision = previous.get("decisions", {}).get(symbol, {})
+        current = float(decision.get("exit_pressure") or 0)
+        decision["decision"] = "이전 판단"
+        decision["exit_pressure"] = max(0, current - float(self.thresholds.get("monitorExitPressureDelta", 0)) - 1)
+        return previous
+
+    def previous_with_cash_delta(self, state: Dict[str, object]) -> Dict[str, object]:
+        previous = deepcopy(state)
+        markets = previous.get("portfolio", {}).get("markets") or []
+        if not markets:
+            previous.setdefault("portfolio", {})["markets"] = [{"key": "KR", "label": "한국장", "cashRatio": 100}]
+            return previous
+        first = markets[0]
+        current = float(first.get("cashRatio") or 0)
+        first["cashRatio"] = current + float(self.thresholds.get("monitorCashDelta", 0)) + 1
+        return previous
 
     def connection_events(self, snapshot: AccountSnapshot, previous: Dict[str, object]) -> List[AlertEvent]:
         events: List[AlertEvent] = []

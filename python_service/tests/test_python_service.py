@@ -178,6 +178,48 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(any(event.rule == "monitorHeartbeat" for event in first_events))
         self.assertFalse(any(event.rule == "monitorHeartbeat" for event in second_events))
 
+    def test_monitor_type_check_events_use_real_alert_rules(self):
+        position = normalize_position({
+            "symbol": "AAPL",
+            "name": "Apple",
+            "marketValue": 1000,
+            "quantity": 2,
+            "sellableQuantity": 2,
+            "averagePrice": 100,
+            "currentPrice": 125,
+            "profitLossRate": 25,
+            "sector": "AI/플랫폼",
+        })
+        portfolio = portfolio_summary([position], 300, "KRW")
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "토스 계좌 동기화",
+            utc_now_iso(),
+            portfolio,
+            [position],
+            decisions_for_positions([position], portfolio),
+        )
+
+        events = RealtimeMonitor().type_check_events_for_snapshot(snapshot)
+
+        self.assertEqual(
+            {
+                "holdingTiming",
+                "monitorHeartbeat",
+                "monitorConnection",
+                "monitorPositionChange",
+                "monitorPnlChange",
+                "monitorValueChange",
+                "monitorCashChange",
+                "monitorDecisionChange",
+            },
+            {event.rule for event in events},
+        )
+        self.assertTrue(all(not event.message().startswith("메인 ") for event in events))
+
     def test_decision_change_message_includes_model_review(self):
         previous_position = normalize_position({
             "symbol": "AAPL",

@@ -10,12 +10,15 @@ from .application.account_service import AccountApplicationService
 from .application.model_review_service import ModelReviewScheduler
 from .application.scheduler import MIN_REALTIME_INTERVAL_SECONDS, RealtimeScheduler
 from .domain.accounts import AccountConfig, split_symbols
+from .domain.monitoring import RealtimeMonitor
 from .infrastructure.event_bus import default_event_bus
 from .infrastructure.json_monitor_state import MonitorStore
 from .infrastructure.model_review_queue import ModelReviewJobStore
+from .infrastructure.notifications import send_events
 from .infrastructure.service_factory import build_model_review_runner, build_monitor_runner
 from .infrastructure.settings import runtime_settings
 from .infrastructure.sqlite_accounts import AccountRegistry
+from .infrastructure.toss_snapshots import build_snapshot
 
 
 def account_from_args(args) -> AccountConfig:
@@ -91,6 +94,27 @@ def monitor_command(args) -> int:
     if args.monitor_action == "once":
         runner.run_once(dry_run=args.dry_run, force=args.force)
         return 0
+    if args.monitor_action == "send-types":
+        monitor = RealtimeMonitor(runtime_settings())
+        account_map = {account.account_id: account for account in accounts}
+        events = []
+        skipped = []
+        for account in accounts:
+            snapshot = build_snapshot(account)
+            if snapshot.mode != "live" and not args.allow_demo:
+                skipped.append(account.account_id + ": " + snapshot.status)
+                continue
+            events.extend(monitor.type_check_events_for_snapshot(snapshot))
+        if not events:
+            print("No message type check events.")
+            for item in skipped:
+                print("Skipped " + item)
+            return 2
+        result = send_events(events, dry_run=args.dry_run, accounts=account_map)
+        print("messageTypeEvents=" + str(len(events)) + " delivered=" + str(result.delivered) + " provider=" + result.label + (" reason=" + result.reason if result.reason else ""))
+        for item in skipped:
+            print("Skipped " + item)
+        return 0 if args.dry_run or result.delivered else 1
     if args.monitor_action == "watch":
         interval = int(os.environ.get("PYTHON_REALTIME_INTERVAL_SECONDS") or os.environ.get("REALTIME_NOTIFY_INTERVAL_SECONDS") or MIN_REALTIME_INTERVAL_SECONDS)
         RealtimeScheduler(runner, interval).run_forever()
@@ -157,6 +181,9 @@ def build_parser() -> argparse.ArgumentParser:
     once = monitor_actions.add_parser("once")
     once.add_argument("--dry-run", action="store_true")
     once.add_argument("--force", action="store_true")
+    send_types = monitor_actions.add_parser("send-types")
+    send_types.add_argument("--dry-run", action="store_true")
+    send_types.add_argument("--allow-demo", action="store_true")
     monitor_actions.add_parser("watch")
     monitor_actions.add_parser("status")
     monitor.set_defaults(func=monitor_command)

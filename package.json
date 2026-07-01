@@ -18,6 +18,7 @@
     "python:check": "python3 -m compileall -q python_service/service.py python_service/monitor_service.py python_service/digital_twin python_service/tests",
     "python:monitor": "python3 python_service/service.py monitor",
     "python:monitor:once": "python3 python_service/service.py monitor once",
+    "python:monitor:send-types": "python3 python_service/service.py monitor send-types",
     "python:monitor:status": "python3 python_service/service.py monitor status",
     "python:monitor:watch": "python3 python_service/service.py monitor watch",
     "python:model-review:once": "python3 python_service/service.py model-review once",

@@ -124,6 +124,10 @@ npm test
 
 프런트엔드 변경 후에는 로컬 서버를 띄워 브라우저에서도 확인합니다.
 
+## GitHub Pages 배포
+
+`main` 브랜치에 푸시하면 `.github/workflows/pages.yml`이 실행되어 GitHub Pages용 `gh-pages` 브랜치를 갱신합니다. 배포 직전에 `npm run generate:mock-market`를 실행하므로 서버의 mock market generator만 바뀌어도 정적 JSON이 함께 갱신됩니다.
+
 ## 공유 미리보기
 
 ```bash

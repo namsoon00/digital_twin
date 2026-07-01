@@ -4,9 +4,6 @@ on:
   push:
     branches:
       - main
-    paths:
-      - ".github/workflows/pages.yml"
-      - "public/**"
   workflow_dispatch:
 
 permissions:
@@ -26,8 +23,16 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
       - name: Validate static app
-        run: node --check public/app.js
+        run: npm run check
+
+      - name: Generate static mock data
+        run: npm run generate:mock-market
 
       - name: Publish gh-pages branch
         shell: bash

@@ -34,7 +34,15 @@ After making project changes:
 
 1. Run the relevant validation, normally `npm test`.
 2. Commit the completed work and push it to `origin/main` unless the user explicitly says not to.
-3. Send a work-complete notification through the project notifier so the owner and other local workers can see that the task finished:
+3. Restart project-managed local runtime processes so running workers pick up the committed code:
+
+```bash
+npm run python:service:restart
+npm run python:service:status
+```
+
+This restarts the realtime monitor, model review worker, and notification worker managed by `python_service/monitor_service.py`. Also restart any web, preview, share, or watcher process that the current Codex session started. Do not kill unrelated or user-started processes that cannot be safely identified; report any process that could not be restarted.
+4. Send a work-complete notification through the project notifier so the owner and other local workers can see that the task finished:
 
 ```bash
 npm run python:handoff:notify -- --summary "<short summary>" --commit "$(git rev-parse --short HEAD)" --validation "npm test 통과" --push "origin/main 성공"
@@ -42,7 +50,7 @@ npm run python:handoff:notify -- --summary "<short summary>" --commit "$(git rev
 
 Use `--dry-run` only when Telegram or the configured notifier is unavailable, and report that clearly.
 The message uses the `workHandoff` type so it is distinguishable from realtime portfolio alerts.
-4. Leave the final response with the commit hash, push result, handoff notification result, and any validation that could not be run.
+5. Leave the final response with the commit hash, push result, restart result, handoff notification result, and any validation that could not be run.
 
 For GitHub issue automation, the important handoff is that local Codex performed the work on a self-hosted runner, then validated, committed, pushed, and commented on the issue. Do not treat starting the app server as part of that automation unless the issue explicitly asks for runtime verification.
 

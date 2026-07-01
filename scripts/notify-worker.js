@@ -113,6 +113,10 @@ function notificationIntervalMinutes() {
   return Math.max(1, Number(runtimeSettings().notifyIntervalMinutes || process.env.NOTIFY_INTERVAL_MINUTES || 10));
 }
 
+function notificationMockMode() {
+  return hasArg("--mock") && hasArg("--allow-mock");
+}
+
 function parseNumberAssignments(value, defaults) {
   const map = Object.assign({}, defaults || {});
   String(value || "")
@@ -898,7 +902,7 @@ async function runOnce() {
   const force = hasArg("--force");
   const dryRun = hasArg("--dry-run");
   const snapshot = await flowLensSnapshot({
-    mock: hasArg("--mock"),
+    mock: notificationMockMode(),
     watchlistSymbols: runtimeSettings().watchlistSymbols
   });
   const state = loadNotificationState();
@@ -930,7 +934,7 @@ async function runRealtimeOnce() {
   const force = hasArg("--force");
   const dryRun = hasArg("--dry-run");
   const snapshot = await flowLensSnapshot({
-    mock: hasArg("--mock"),
+    mock: notificationMockMode(),
     watchlistSymbols: runtimeSettings().watchlistSymbols
   });
   const state = loadNotificationState();

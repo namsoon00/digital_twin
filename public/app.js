@@ -322,11 +322,7 @@
     var queryMode = String(params.get("mock") || params.get("mode") || "").toLowerCase();
     if (queryMode === "1" || queryMode === "true" || queryMode === "mock") return "mock";
     if (isStaticPreviewHost()) return "mock";
-    try {
-      return window.localStorage.getItem("exitLensDataMode") === "mock" ? "mock" : "live";
-    } catch (error) {
-      return "live";
-    }
+    return "live";
   }
 
   function persistDataMode(value) {
@@ -2769,7 +2765,7 @@
       '</div>',
       '</div>',
       '<div class="source-stack">',
-      '<div class="source-row"><span>표시 모드</span><strong>' + escapeHtml(snapshot.mock ? "Mock 데이터" : "기본 데이터") + '</strong></div>',
+      '<div class="source-row"><span>표시 모드</span><strong>' + escapeHtml(snapshot.mock ? "Mock 데이터" : "실제 데이터") + '</strong></div>',
       '<div class="source-row"><span>토스</span><strong>' + escapeHtml(toss.status || "-") + '</strong></div>',
       '<div class="source-row"><span>계좌</span><strong>' + escapeHtml(account.displayNumber || "-") + '</strong></div>',
       '<div class="source-row"><span>주문 가능 금액</span><strong>' + escapeHtml(formatCurrency(account.orderableAmount || 0, account.currency || "KRW")) + '</strong></div>',

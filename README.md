@@ -138,6 +138,18 @@ npm run share
 
 공유 모드에서는 임시 토큰 URL을 사용합니다. `.env`, `.env.local`, `data/store.json`, API key, 토스 credentials, 개인 계좌 데이터는 이슈나 PR에 올리지 않습니다.
 
+## 로컬 알림
+
+로컬 PC에서 토스 계좌를 조회한 뒤 점검 요약을 콘솔 또는 카카오톡 나에게 보내기로 발송할 수 있습니다.
+
+```bash
+npm run notify -- --dry-run
+npm run notify
+npm run notify:watch
+```
+
+`notify`는 한 번 실행하고, `notify:watch`는 `NOTIFY_INTERVAL_MINUTES` 간격으로 반복 실행합니다. 알림은 토스 연결 실패, 장전/마감 요약, 보유 종목 리스크, 섹터 집중, 현금 비중 부족을 점검합니다. 카카오 발송을 쓰려면 `KAKAO_ACCESS_TOKEN`을 넣거나, 장기 실행용으로 `KAKAO_REST_API_KEY`와 `KAKAO_REFRESH_TOKEN`을 `.env.local`에 넣습니다. 토큰과 알림 중복 방지 상태는 `data/kakao-token.json`, `data/notification-state.json`에 로컬로 저장되며 커밋하지 않습니다.
+
 ## 참고
 
 토스증권 Open API 계약과 fixture는 `docs/toss-api-contract.md`와 `docs/fixtures/toss/`에 정리되어 있습니다. `mobile/`은 이전 실험 앱 코드이며, 현재 루트 웹 앱의 기준 구현은 Exit Lens입니다.

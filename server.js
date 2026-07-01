@@ -3048,4 +3048,12 @@ function listen(port) {
   });
 }
 
-listen(Number(process.env.PORT || 3000));
+if (require.main === module) {
+  listen(Number(process.env.PORT || 3000));
+}
+
+module.exports = {
+  flowLensSnapshot,
+  listen,
+  server
+};

@@ -6,4 +6,6 @@ dist/
 .env
 .env*.local
 data/store.json
+data/notification-state.json
+data/kakao-token.json
 *.log

@@ -1,9 +1,9 @@
 import signal
 import time
-from typing import Iterable, List
+from typing import Iterable
 
+from .application.monitoring_service import MonitorRunner as ApplicationMonitorRunner
 from .config import AccountConfig
-from .models import AlertEvent
 from .monitor import MonitorStore, RealtimeMonitor
 from .notifiers import send_events
 from .providers import build_snapshot
@@ -12,36 +12,22 @@ from .providers import build_snapshot
 MIN_REALTIME_INTERVAL_SECONDS = 10 * 60
 
 
-class MonitorRunner:
-    def __init__(self, accounts: Iterable[AccountConfig], store: MonitorStore = None, monitor: RealtimeMonitor = None):
-        self.accounts = list(accounts)
-        self.account_map = {account.account_id: account for account in self.accounts}
-        self.store = store or MonitorStore()
-        self.monitor = monitor or RealtimeMonitor()
-
-    def run_once(self, dry_run: bool = False, force: bool = False) -> List[AlertEvent]:
-        all_events: List[AlertEvent] = []
-        snapshots = []
-        for account in self.accounts:
-            snapshot = build_snapshot(account)
-            snapshots.append(snapshot)
-            previous = self.store.previous.get(snapshot.account_id) or {}
-            events = self.monitor.events_for_snapshot(snapshot, previous)
-            events = self.monitor.apply_cadence(events, self.store, force=force)
-            all_events.extend(events)
-        if all_events:
-            result = send_events(all_events, dry_run=dry_run, accounts=self.account_map)
-            if dry_run:
-                return all_events
-            if result.delivered:
-                self.store.mark_sent(all_events)
-        else:
-            print("No Python realtime monitoring events.")
-        if not dry_run:
-            for snapshot in snapshots:
-                self.store.save_snapshot(snapshot)
-            self.store.write()
-        return all_events
+class MonitorRunner(ApplicationMonitorRunner):
+    def __init__(
+        self,
+        accounts: Iterable[AccountConfig],
+        store: MonitorStore = None,
+        monitor: RealtimeMonitor = None,
+        snapshot_builder=None,
+        event_sender=None,
+    ):
+        super().__init__(
+            accounts,
+            store=store or MonitorStore(),
+            monitor=monitor or RealtimeMonitor(),
+            snapshot_builder=snapshot_builder or build_snapshot,
+            event_sender=event_sender or send_events,
+        )
 
 
 class RealtimeScheduler:

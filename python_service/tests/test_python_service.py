@@ -3,10 +3,13 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from digital_twin.application.account_service import AccountApplicationService
+from digital_twin.application.monitoring_service import MonitorRunner as ApplicationMonitorRunner
 from digital_twin.analytics import SafeFormula, StrategyModel, decisions_for_positions, normalize_position, portfolio_summary
 from digital_twin.config import AccountConfig, AccountRegistry, parse_assignments
 from digital_twin.cli import preserve_existing_secrets
@@ -87,6 +90,32 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("token", preserved.telegram_bot_token)
         self.assertEqual("chat", preserved.telegram_chat_id)
 
+    def test_account_application_service_manages_account_use_cases(self):
+        registry = AccountRegistry()
+        service = AccountApplicationService(registry, registry.settings)
+        existing = AccountConfig(
+            "main",
+            "메인",
+            "toss",
+            "https://example.test",
+            "id1",
+            "secret1",
+            "1",
+            ["AAPL"],
+            notify_provider="telegram",
+            telegram_bot_token="token",
+            telegram_chat_id="chat",
+        )
+        service.save(existing)
+
+        updated = service.save_payload({"id": "main", "label": "메인 수정", "watchlistSymbols": "NVDA"})
+        masked = service.list_masked()[0]
+
+        self.assertEqual("secret1", updated.client_secret)
+        self.assertEqual("token", updated.telegram_bot_token)
+        self.assertEqual(["NVDA"], masked["watchlistSymbols"])
+        self.assertTrue(masked["clientSecret"])
+
     def test_strategy_formula_is_safe_and_scores(self):
         formula = SafeFormula("max(0, buyShare - 50) + abs(priceChangeRate)")
         self.assertEqual(17, formula.evaluate({"buyShare": 65, "priceChangeRate": -2}))
@@ -148,6 +177,30 @@ class PythonServiceTests(unittest.TestCase):
             events = MonitorRunner([account]).run_once(dry_run=True, force=True)
 
         self.assertTrue(events)
+
+    def test_application_runner_uses_injected_ports(self):
+        account = AccountConfig("main", "메인", "toss", "https://example.test", "", "", "", ["AAPL"])
+        sent = []
+
+        def snapshot_builder(_account):
+            position = normalize_position({"symbol": "AAPL", "name": "Apple", "marketValue": 1000, "profitLossRate": 15, "sellableQuantity": 1})
+            portfolio = portfolio_summary([position])
+            return AccountSnapshot("main", "메인", "toss", "live", "ok", utc_now_iso(), portfolio, [position], decisions_for_positions([position], portfolio))
+
+        def sender(events, dry_run=False, accounts=None):
+            sent.extend(events)
+            return SimpleNamespace(delivered=True)
+
+        events = ApplicationMonitorRunner(
+            [account],
+            store=MonitorStore(),
+            monitor=RealtimeMonitor(),
+            snapshot_builder=snapshot_builder,
+            event_sender=sender,
+        ).run_once(dry_run=True, force=True)
+
+        self.assertTrue(events)
+        self.assertEqual(events, sent)
 
 
 class AssignmentTests(unittest.TestCase):

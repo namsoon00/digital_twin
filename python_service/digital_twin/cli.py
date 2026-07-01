@@ -4,6 +4,7 @@ import os
 import sys
 from typing import List
 
+from .application.account_service import AccountApplicationService
 from .config import AccountConfig, AccountRegistry, runtime_settings, split_symbols
 from .monitor import MonitorStore
 from .scheduler import MIN_REALTIME_INTERVAL_SECONDS, MonitorRunner, RealtimeScheduler
@@ -29,28 +30,14 @@ def account_from_args(args) -> AccountConfig:
 
 
 def preserve_existing_secrets(registry: AccountRegistry, payload, account: AccountConfig) -> AccountConfig:
-    existing = {item.account_id: item for item in registry.load_saved()}.get(account.account_id)
-    if not existing or not isinstance(payload, dict):
-        return account
-
-    def missing(*keys):
-        return not any(key in payload for key in keys)
-
-    if missing("clientId", "client_id"):
-        account.client_id = existing.client_id
-    if missing("clientSecret", "client_secret"):
-        account.client_secret = existing.client_secret
-    if missing("telegramBotToken", "telegram_bot_token"):
-        account.telegram_bot_token = existing.telegram_bot_token
-    if missing("telegramChatId", "telegram_chat_id"):
-        account.telegram_chat_id = existing.telegram_chat_id
-    return account
+    return AccountApplicationService(registry).preserve_existing_secrets(payload, account)
 
 
 def accounts_command(args) -> int:
     registry = AccountRegistry()
+    service = AccountApplicationService(registry, registry.settings)
     if args.accounts_action == "list":
-        accounts = [account.masked() for account in registry.load_all()]
+        accounts = service.list_masked()
         if args.json:
             print(json.dumps({"accounts": accounts}, ensure_ascii=False))
         else:
@@ -59,7 +46,7 @@ def accounts_command(args) -> int:
         return 0
     if args.accounts_action == "add":
         account = account_from_args(args)
-        registry.upsert(account)
+        service.save(account)
         if args.json:
             print(json.dumps({"account": account.masked()}, ensure_ascii=False))
         else:
@@ -67,14 +54,11 @@ def accounts_command(args) -> int:
         return 0
     if args.accounts_action == "save-json":
         payload = json.loads(sys.stdin.read() or "{}")
-        raw_account = payload.get("account") or payload
-        account = AccountConfig.from_dict(raw_account, runtime_settings())
-        account = preserve_existing_secrets(registry, raw_account, account)
-        registry.upsert(account)
+        account = service.save_payload(payload)
         print(json.dumps({"account": account.masked()}, ensure_ascii=False))
         return 0
     if args.accounts_action == "remove":
-        removed = registry.remove(args.id)
+        removed = service.remove(args.id)
         if args.json:
             print(json.dumps({"removed": removed, "id": args.id}, ensure_ascii=False))
         else:

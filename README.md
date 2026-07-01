@@ -140,7 +140,7 @@ npm run share
 
 ## 로컬 알림
 
-로컬 PC에서 토스 계좌를 조회한 뒤 점검 요약을 콘솔 또는 카카오톡 나에게 보내기로 발송할 수 있습니다.
+로컬 PC에서 토스 계좌를 조회한 뒤 점검 요약을 콘솔, 텔레그램, 또는 카카오톡 나에게 보내기로 발송할 수 있습니다.
 
 ```bash
 npm run notify -- --dry-run
@@ -148,7 +148,15 @@ npm run notify
 npm run notify:watch
 ```
 
-`notify`는 한 번 실행하고, `notify:watch`는 `NOTIFY_INTERVAL_MINUTES` 간격으로 반복 실행합니다. 알림은 토스 연결 실패, 장전/마감 요약, 보유 종목 리스크, 섹터 집중, 현금 비중 부족을 점검합니다. 카카오 발송을 쓰려면 `KAKAO_ACCESS_TOKEN`을 넣거나, 장기 실행용으로 `KAKAO_REST_API_KEY`와 `KAKAO_REFRESH_TOKEN`을 `.env.local`에 넣습니다. 토큰과 알림 중복 방지 상태는 `data/kakao-token.json`, `data/notification-state.json`에 로컬로 저장되며 커밋하지 않습니다.
+`notify`는 한 번 실행하고, `notify:watch`는 `NOTIFY_INTERVAL_MINUTES` 간격으로 반복 실행합니다. 알림은 토스 연결 실패, 장전/마감 요약, 보유 종목 리스크, 섹터 집중, 현금 비중 부족을 점검합니다.
+
+텔레그램 발송을 쓰려면 봇에게 `/start`를 보낸 뒤 `.env.local`에 `NOTIFY_PROVIDER=telegram`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`를 넣습니다. `TELEGRAM_CHAT_ID`는 토큰을 넣은 상태에서 아래 명령으로 확인합니다.
+
+```bash
+npm run notify:telegram-chat
+```
+
+카카오 발송을 쓰려면 `NOTIFY_PROVIDER=kakao`와 `KAKAO_ACCESS_TOKEN`을 넣거나, 장기 실행용으로 `KAKAO_REST_API_KEY`와 `KAKAO_REFRESH_TOKEN`을 `.env.local`에 넣습니다. 토큰과 알림 중복 방지 상태는 `data/kakao-token.json`, `data/notification-state.json`에 로컬로 저장되며 커밋하지 않습니다.
 
 ## 참고
 

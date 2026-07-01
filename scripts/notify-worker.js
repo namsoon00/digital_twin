@@ -352,6 +352,136 @@ async function sendKakaoMessage(text) {
   return { delivered: true };
 }
 
+function telegramCredentials() {
+  return {
+    botToken: String(process.env.TELEGRAM_BOT_TOKEN || "").trim(),
+    chatId: String(process.env.TELEGRAM_CHAT_ID || "").trim()
+  };
+}
+
+function hasTelegramCredentials() {
+  const credentials = telegramCredentials();
+  return Boolean(credentials.botToken && credentials.chatId);
+}
+
+function hasKakaoCredentials() {
+  if (String(process.env.KAKAO_ACCESS_TOKEN || "").trim()) return true;
+  if (String(process.env.KAKAO_REST_API_KEY || "").trim() && String(process.env.KAKAO_REFRESH_TOKEN || "").trim()) return true;
+  const tokenState = readJson(kakaoTokenPath, {});
+  return Boolean(tokenState.accessToken || (String(process.env.KAKAO_REST_API_KEY || "").trim() && tokenState.refreshToken));
+}
+
+async function sendTelegramMessage(text) {
+  const credentials = telegramCredentials();
+  if (!credentials.botToken || !credentials.chatId) {
+    return { delivered: false, reason: "텔레그램 토큰 또는 chat id 미설정" };
+  }
+
+  const body = JSON.stringify({
+    chat_id: credentials.chatId,
+    text: text,
+    disable_web_page_preview: true
+  });
+  const response = await httpsJson("POST", "https://api.telegram.org/bot" + credentials.botToken + "/sendMessage", {
+    "Accept": "application/json",
+    "Content-Type": "application/json",
+    "Content-Length": Buffer.byteLength(body)
+  }, body);
+
+  if (response.statusCode < 200 || response.statusCode >= 300 || response.payload.ok === false) {
+    const description = response.payload && response.payload.description ? " (" + response.payload.description + ")" : "";
+    return {
+      delivered: false,
+      reason: "텔레그램 발송 실패: HTTP " + response.statusCode + description
+    };
+  }
+  return { delivered: true };
+}
+
+function selectedProvider() {
+  const explicit = String(process.env.NOTIFY_PROVIDER || "").trim().toLowerCase();
+  if (explicit) return explicit;
+  if (hasTelegramCredentials()) return "telegram";
+  if (hasKakaoCredentials()) return "kakao";
+  return "console";
+}
+
+async function sendNotification(text) {
+  const provider = selectedProvider();
+  if (provider === "telegram") {
+    const result = await sendTelegramMessage(text);
+    return Object.assign({ provider: "telegram", label: "Telegram" }, result);
+  }
+  if (provider === "kakao") {
+    const result = await sendKakaoMessage(text);
+    return Object.assign({ provider: "kakao", label: "Kakao" }, result);
+  }
+  if (provider === "console") {
+    return { provider: "console", label: "Console", delivered: false, reason: "콘솔 전용 모드" };
+  }
+  return {
+    provider: provider,
+    label: provider,
+    delivered: false,
+    reason: "지원하지 않는 NOTIFY_PROVIDER: " + provider
+  };
+}
+
+function telegramChatFromUpdate(update) {
+  const candidates = [
+    update.message,
+    update.edited_message,
+    update.channel_post,
+    update.edited_channel_post,
+    update.my_chat_member,
+    update.chat_member
+  ];
+  for (let index = 0; index < candidates.length; index += 1) {
+    const item = candidates[index];
+    if (item && item.chat) return item.chat;
+  }
+  return null;
+}
+
+function telegramChatLabel(chat) {
+  const name = [chat.first_name, chat.last_name].filter(Boolean).join(" ");
+  const handle = chat.username ? "@" + chat.username : "";
+  return [chat.type, handle || name || chat.title || ""].filter(Boolean).join(" ");
+}
+
+async function printTelegramChatIds() {
+  const credentials = telegramCredentials();
+  if (!credentials.botToken) {
+    console.log("TELEGRAM_BOT_TOKEN is required.");
+    return;
+  }
+
+  const response = await httpsJson("GET", "https://api.telegram.org/bot" + credentials.botToken + "/getUpdates", {
+    "Accept": "application/json"
+  });
+  if (response.statusCode < 200 || response.statusCode >= 300 || response.payload.ok === false) {
+    const description = response.payload && response.payload.description ? " (" + response.payload.description + ")" : "";
+    throw new Error("텔레그램 업데이트 조회 실패: HTTP " + response.statusCode + description);
+  }
+
+  const chats = {};
+  (Array.isArray(response.payload.result) ? response.payload.result : []).forEach(function (update) {
+    const chat = telegramChatFromUpdate(update);
+    if (chat && chat.id !== undefined) chats[String(chat.id)] = telegramChatLabel(chat);
+  });
+
+  const ids = Object.keys(chats);
+  if (ids.length === 0) {
+    console.log("No Telegram chat ids found. Open the bot, send /start, then retry.");
+    return;
+  }
+
+  console.log("Telegram chat ids:");
+  ids.forEach(function (id) {
+    console.log("- " + id + (chats[id] ? " (" + chats[id] + ")" : ""));
+  });
+}
+
 async function runOnce() {
   const kind = notificationKind();
   const force = hasArg("--force");
@@ -374,7 +504,7 @@ async function runOnce() {
     return;
   }
 
-  const result = await sendKakaoMessage(message);
+  const result = await sendNotification(message);
   if (!result.delivered) {
     console.log(message);
     console.log("Delivery: console only (" + result.reason + ")");
@@ -382,7 +512,7 @@ async function runOnce() {
   }
 
   markSent(events, state);
-  console.log("Kakao notification sent: " + events.length + " event(s).");
+  console.log(result.label + " notification sent: " + events.length + " event(s).");
 }
 
 async function runDaemon() {
@@ -396,7 +526,12 @@ async function runDaemon() {
   }, intervalMinutes * 60 * 1000);
 }
 
-if (hasArg("--daemon")) {
+if (hasArg("--telegram-chat-ids")) {
+  printTelegramChatIds().catch(function (error) {
+    console.error(error.message || error);
+    process.exitCode = 1;
+  });
+} else if (hasArg("--daemon")) {
   runDaemon().catch(function (error) {
     console.error(error.message || error);
     process.exitCode = 1;

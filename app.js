@@ -9,7 +9,7 @@
     notifyProvider: "",
     telegramBotToken: "",
     telegramChatId: "",
-    notifyLinkUrl: "http://127.0.0.1:3000?tab=alerts",
+    notifyLinkUrl: "http://127.0.0.1:3000?tab=notifications",
     notifyIntervalMinutes: "10",
     valuationAssumptions: [
       "AAPL,7.5,28,15",
@@ -153,14 +153,11 @@
     ].join("\n")
   };
   var tabs = [
-    { id: "admin", label: "운영" },
-    { id: "decision", label: "판단" },
-    { id: "lab", label: "실험실" },
-    { id: "model", label: "모델" },
-    { id: "alerts", label: "알림" },
-    { id: "holdings", label: "보유" },
-    { id: "feed", label: "피드" },
-    { id: "watchlist", label: "관심" }
+    { id: "overview", label: "대시보드" },
+    { id: "accounts", label: "계정" },
+    { id: "notifications", label: "알림" },
+    { id: "modeling", label: "모델링" },
+    { id: "monitoring", label: "모니터링" }
   ];
   var feedChannels = [
     {
@@ -379,7 +376,7 @@
   function initialTab() {
     var params = new URLSearchParams(window.location.search);
     var requested = String(params.get("tab") || "").toLowerCase();
-    return tabs.some(function (tab) { return tab.id === requested; }) ? requested : "admin";
+    return tabs.some(function (tab) { return tab.id === requested; }) ? requested : "overview";
   }
 
   function initialDataMode() {
@@ -520,6 +517,23 @@
     persistSettings();
   }
 
+  function textValueUnlessBoolean(value) {
+    return typeof value === "boolean" ? "" : String(value || "");
+  }
+
+  function syncAccountDraftFromLoadedAccounts(force) {
+    var accounts = state.serviceAccounts || [];
+    if (!accounts.length) {
+      if (force) state.accountDraft = defaultAccountDraft();
+      return;
+    }
+    if (!force && state.editingAccountId) return;
+    if (!force && state.accountDraft && state.accountDraft.id && state.accountDraft.id !== "main") return;
+    var selected = accounts[0];
+    state.editingAccountId = selected.id || "";
+    state.accountDraft = accountDraftFromAccount(selected);
+  }
+
   function defaultAccountDraft() {
     var currentSettings = state && state.settings ? state.settings : defaultSettings;
     return {
@@ -539,7 +553,8 @@
     };
   }
 
-  function loadServiceAccounts() {
+  function loadServiceAccounts(options) {
+    options = options || {};
     state.serviceAccountsLoading = true;
     state.serviceAccountsError = "";
     if (isStaticPreviewHost()) {
@@ -552,6 +567,7 @@
       .then(function (payload) {
         state.serviceAccounts = Array.isArray(payload.accounts) ? payload.accounts : [];
         state.serviceAccountsLoaded = true;
+        syncAccountDraftFromLoadedAccounts(Boolean(options.forceDraft));
       })
       .catch(function (error) {
         state.serviceAccountsError = error.message || "계정 DB를 읽지 못했습니다.";
@@ -570,11 +586,11 @@
       baseUrl: account.baseUrl || "https://openapi.tossinvest.com",
       clientId: "",
       clientSecret: "",
-      accountSeq: account.accountSeq || "",
+      accountSeq: textValueUnlessBoolean(account.accountSeq),
       watchlistSymbols: Array.isArray(account.watchlistSymbols) ? account.watchlistSymbols.join(",") : String(account.watchlistSymbols || ""),
       notifyProvider: account.notifyProvider || settingValue("notifyProvider") || "telegram",
       telegramBotToken: "",
-      telegramChatId: account.telegramChatId || "",
+      telegramChatId: textValueUnlessBoolean(account.telegramChatId),
       notifyLinkUrl: account.notifyLinkUrl || settingValue("notifyLinkUrl") || defaultSettings.notifyLinkUrl,
       enabled: account.enabled !== false
     };
@@ -620,8 +636,7 @@
       .then(function () {
         state.accountSaved = true;
         state.editingAccountId = "";
-        state.accountDraft = defaultAccountDraft();
-        return loadServiceAccounts();
+        return loadServiceAccounts({ forceDraft: true });
       })
       .catch(function (error) {
         state.serviceAccountsError = error.message || "계정을 저장하지 못했습니다.";
@@ -648,7 +663,7 @@
           state.editingAccountId = "";
           state.accountDraft = defaultAccountDraft();
         }
-        return loadServiceAccounts();
+        return loadServiceAccounts({ forceDraft: true });
       })
       .catch(function (error) {
         state.serviceAccountsError = error.message || "계정을 삭제하지 못했습니다.";
@@ -2872,78 +2887,52 @@
   }
 
   function renderActiveTab(snapshot) {
-    if (state.activeTab === "admin") {
+    if (state.activeTab === "overview") {
       return [
         '<section class="admin-grid">',
         renderAdminOverviewPanel(snapshot),
+        renderAdminMonitoringPanel(snapshot),
+        '</section>'
+      ].join("");
+    }
+    if (state.activeTab === "accounts") {
+      return [
+        '<section class="admin-grid">',
         renderAdminAccountPanel(),
+        '</section>'
+      ].join("");
+    }
+    if (state.activeTab === "notifications") {
+      return [
+        '<section class="admin-grid">',
         renderAdminMessagePanel(),
-        renderAdminModelingPanel(snapshot),
         renderAdminDeliveryPanel(),
         '</section>'
       ].join("");
     }
-    if (state.activeTab === "lab") {
+    if (state.activeTab === "modeling") {
       return [
-        '<section class="content-grid">',
-        renderLabPanel(snapshot, true),
-        renderLabMethodPanel(),
-        '</section>'
-      ].join("");
-    }
-    if (state.activeTab === "model") {
-      return [
-        '<section class="content-grid">',
-        renderModelStudioPanel(snapshot),
+        '<section class="admin-grid">',
+        renderAdminModelingPanel(snapshot),
         renderModelVersionPanel(snapshot),
         renderModelPreviewPanel(snapshot),
         '</section>'
       ].join("");
     }
-    if (state.activeTab === "alerts") {
+    if (state.activeTab === "monitoring") {
       return [
-        '<section class="content-grid">',
+        '<section class="admin-grid">',
+        renderAdminMonitoringPanel(snapshot),
         renderAlertCenterPanel(snapshot),
-        renderAlertSettingsPanel(),
-        renderAlertModelSettingsPanel(snapshot),
-        renderAlertDeliveryPanel(),
-        '</section>'
-      ].join("");
-    }
-    if (state.activeTab === "holdings") {
-      return [
-        '<section class="content-grid">',
         renderPortfolioPanel(snapshot),
         renderHoldingsPanel(snapshot),
         '</section>'
       ].join("");
     }
-    if (state.activeTab === "feed") {
-      return [
-        '<section class="content-grid">',
-        renderFeedOverviewPanel(),
-        renderFeedListPanel(),
-        renderFeedChannelPanel(),
-        '</section>'
-      ].join("");
-    }
-    if (state.activeTab === "watchlist") {
-      return [
-        '<section class="content-grid">',
-        renderWatchlistPanel(snapshot),
-        renderApiScopePanel(),
-        '</section>'
-      ].join("");
-    }
     return [
-      '<section class="hero-grid">',
-      renderScorePanel(snapshot),
-      renderSourcePanel(snapshot),
-      '</section>',
-      '<section class="content-grid">',
-      renderLabPanel(snapshot, false),
-      renderDecisionPanel(snapshot),
-      renderChecklistPanel(snapshot),
+      '<section class="admin-grid">',
+      renderAdminOverviewPanel(snapshot),
+      renderAdminMonitoringPanel(snapshot),
       '</section>'
     ].join("");
   }
@@ -2993,6 +2982,58 @@
     ].join("");
   }
 
+  function renderAdminMonitoringPanel(snapshot) {
+    var toss = snapshot.toss || {};
+    var portfolio = snapshot.portfolio || {};
+    var accounts = state.serviceAccounts || [];
+    var enabledCount = accounts.filter(function (account) { return account.enabled !== false; }).length;
+    var positions = ((toss.positions || []) || []).filter(function (item) {
+      return item.source !== "cash" && item.sector !== "현금";
+    });
+    var marketRows = (portfolio.markets || []).map(function (market) {
+      return '<div class="source-row"><span>' + escapeHtml(market.label || market.key || "-") + '</span><strong>현금 ' + escapeHtml(pct(market.cashRatio || 0)) + '</strong></div>';
+    }).join("");
+    var commands = [
+      ["계정 확인", "npm run python:accounts -- list --json"],
+      ["1회 점검", "npm run python:monitor:once -- --dry-run --force"],
+      ["모니터 시작", "npm run python:service:start"],
+      ["서비스 상태", "npm run python:service:status"],
+      ["모델 리뷰", "npm run python:model-review:status"]
+    ];
+    return [
+      '<article class="panel admin-monitoring-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Monitoring</p>',
+      '<h2>모니터링 실행 상태</h2>',
+      '</div>',
+      '<span class="status-pill ' + (snapshot.mock ? "mock" : "live") + '">' + escapeHtml(snapshot.mock ? "Mock" : "Live") + '</span>',
+      '</div>',
+      '<div class="admin-stat-grid">',
+      renderAdminStat("활성 계정", enabledCount + "/" + accounts.length, ""),
+      renderAdminStat("보유 종목", positions.length, "개"),
+      renderAdminStat("평가 금액", formatMoney(portfolio.total || 0), ""),
+      renderAdminStat("상태", toss.status || "-", ""),
+      renderAdminStat("마지막 갱신", formatClock(snapshot.generatedAt), ""),
+      renderAdminStat("모델 리뷰", settingValue("modelReviewUseCodex") === "0" ? "로컬" : "Codex", ""),
+      '</div>',
+      '<div class="admin-monitor-grid">',
+      '<div class="source-stack">',
+      '<div class="source-row"><span>데이터 모드</span><strong>' + escapeHtml(snapshot.mock ? "Mock" : "실데이터") + '</strong></div>',
+      '<div class="source-row"><span>토스 연결</span><strong>' + escapeHtml(toss.status || "-") + '</strong></div>',
+      marketRows,
+      '</div>',
+      '<div class="source-stack">',
+      commands.map(function (row) {
+        return '<div class="source-row"><span>' + escapeHtml(row[0]) + '</span><strong><code>' + escapeHtml(row[1]) + '</code></strong></div>';
+      }).join(""),
+      '</div>',
+      '</div>',
+      '<div class="rule-strip"><span>실제 백그라운드 워커 실행/중지는 로컬 명령으로 관리하고, 웹은 저장된 계정과 알림 설정을 같은 로컬 DB/설정 파일에 기록합니다.</span></div>',
+      '</article>'
+    ].join("");
+  }
+
   function renderAdminAccountPanel() {
     var accounts = state.serviceAccounts || [];
     var draft = state.accountDraft || defaultAccountDraft();
@@ -3033,7 +3074,7 @@
       renderAccountField("notifyProvider", "알림 채널", "text", "telegram"),
       renderAccountField("telegramBotToken", "Telegram Bot Token", state.showSecrets ? "text" : "password", "새 값 입력 시 교체"),
       renderAccountField("telegramChatId", "Telegram Chat ID", "text", "chat id"),
-      renderAccountField("notifyLinkUrl", "알림 링크 URL", "url", "http://127.0.0.1:3000?tab=admin"),
+      renderAccountField("notifyLinkUrl", "알림 링크 URL", "url", "http://127.0.0.1:3000?tab=notifications"),
       '<label class="admin-check-field">',
       '<input data-account-field="enabled" type="checkbox"' + (draft.enabled !== false ? " checked" : "") + ' />',
       '<span>이 계정을 모니터링에 사용</span>',
@@ -3100,7 +3141,7 @@
       '<div class="settings-body">',
       '<div class="settings-grid admin-delivery-grid">',
       renderSettingField("notifyIntervalMinutes", "기본 알림 주기(분)", "number", "10"),
-      renderSettingField("notifyLinkUrl", "알림 링크 URL", "url", "http://127.0.0.1:3000?tab=admin"),
+      renderSettingField("notifyLinkUrl", "알림 링크 URL", "url", "http://127.0.0.1:3000?tab=notifications"),
       '</div>',
       '<div class="admin-message-list">',
       alertRuleCatalog.map(function (rule) {
@@ -3848,7 +3889,7 @@
       '</div>',
       '<div class="settings-grid">',
       renderSettingField("notifyProvider", "알림 제공자", "text", "telegram"),
-      renderSettingField("notifyLinkUrl", "알림 링크 URL", "url", "http://127.0.0.1:3000?tab=alerts"),
+      renderSettingField("notifyLinkUrl", "알림 링크 URL", "url", "http://127.0.0.1:3000?tab=notifications"),
       renderSettingField("notifyIntervalMinutes", "알림 주기(분)", "number", "10"),
       renderSettingField("telegramBotToken", "Telegram Bot Token", secretType, "bot token", { preserveConfigured: true }),
       renderSettingField("telegramChatId", "Telegram Chat ID", "text", "chat id", { preserveConfigured: true }),
@@ -4481,7 +4522,7 @@
       renderSettingField("notifyProvider", "알림 제공자", "text", "telegram"),
       renderSettingField("telegramBotToken", "Telegram Bot Token", secretType, "bot token", { preserveConfigured: true }),
       renderSettingField("telegramChatId", "Telegram Chat ID", "text", "chat id", { preserveConfigured: true }),
-      renderSettingField("notifyLinkUrl", "알림 링크 URL", "url", "http://127.0.0.1:3000?tab=alerts"),
+      renderSettingField("notifyLinkUrl", "알림 링크 URL", "url", "http://127.0.0.1:3000?tab=notifications"),
       renderSettingField("notifyIntervalMinutes", "알림 주기(분)", "number", "10"),
       '<label class="setting-field wide">',
       '<span>밸류에이션 가정</span>',
@@ -4572,7 +4613,7 @@
 
     Array.prototype.slice.call(app.querySelectorAll("[data-tab]")).forEach(function (button) {
       button.addEventListener("click", function () {
-        var nextTab = button.getAttribute("data-tab") || "decision";
+        var nextTab = button.getAttribute("data-tab") || "overview";
         if (nextTab === state.activeTab) return;
         state.activeTab = nextTab;
         render();

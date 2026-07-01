@@ -211,6 +211,8 @@ function runtimeSettings() {
     formulaWeights: settingFromStoreOrEnv(store, "formulaWeights", "FORMULA_WEIGHTS", ""),
     decisionThresholds: settingFromStoreOrEnv(store, "decisionThresholds", "DECISION_THRESHOLDS", ""),
     modelDecisionThresholds: settingFromStoreOrEnv(store, "modelDecisionThresholds", "MODEL_DECISION_THRESHOLDS", ""),
+    modelTimingScenario: settingFromStoreOrEnv(store, "modelTimingScenario", "MODEL_TIMING_SCENARIO", "recent-one-year"),
+    modelTimingSymbols: settingFromStoreOrEnv(store, "modelTimingSymbols", "MODEL_TIMING_SYMBOLS", "NVDA,AAPL,005930,000660,TSLA"),
     alertRules: settingFromStoreOrEnv(store, "alertRules", "ALERT_RULES", ""),
     alertThresholds: settingFromStoreOrEnv(store, "alertThresholds", "ALERT_THRESHOLDS", ""),
     alertCadenceMinutes: settingFromStoreOrEnv(store, "alertCadenceMinutes", "ALERT_CADENCE_MINUTES", "")
@@ -241,6 +243,8 @@ function settingsStatusPayload() {
     formulaWeights: settings.formulaWeights,
     decisionThresholds: settings.decisionThresholds,
     modelDecisionThresholds: settings.modelDecisionThresholds,
+    modelTimingScenario: settings.modelTimingScenario,
+    modelTimingSymbols: settings.modelTimingSymbols,
     alertRules: settings.alertRules,
     alertThresholds: settings.alertThresholds,
     alertCadenceMinutes: settings.alertCadenceMinutes
@@ -284,6 +288,8 @@ function saveRuntimeSettings(input) {
     "formulaWeights",
     "decisionThresholds",
     "modelDecisionThresholds",
+    "modelTimingScenario",
+    "modelTimingSymbols",
     "alertRules",
     "alertThresholds",
     "alertCadenceMinutes"

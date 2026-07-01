@@ -126,6 +126,55 @@ function checkFrontendAdminRender() {
       portfolio: { total: 0, invested: 0, cash: 0, markets: [], sectors: [] },
       checklist: [],
       summary: []
+    },
+    "mock-data/market/recent-one-year.json": {
+      schemaVersion: 1,
+      dataQuality: "mock-synthetic",
+      scenario: { id: "recent-one-year", label: "최근 1년 기준", description: "테스트 시계열" },
+      request: { symbols: ["NVDA"], staticFile: true },
+      series: {
+        NVDA: {
+          symbol: "NVDA",
+          name: "NVIDIA",
+          market: "US",
+          currency: "USD",
+          sector: "반도체",
+          candles: [
+            {
+              date: "2026-06-28",
+              open: 100,
+              high: 104,
+              low: 98,
+              close: 100,
+              volume: 100000,
+              changePercent: 0,
+              relativeVolume: 1,
+              tradeStrength: 100,
+              buyVolume: 52000,
+              sellVolume: 48000,
+              bidAskImbalance: 4,
+              ma20: 100,
+              ma60: 98
+            },
+            {
+              date: "2026-07-01",
+              open: 101,
+              high: 111,
+              low: 100,
+              close: 110,
+              volume: 180000,
+              changePercent: 10,
+              relativeVolume: 1.8,
+              tradeStrength: 126,
+              buyVolume: 120000,
+              sellVolume: 60000,
+              bidAskImbalance: 18,
+              ma20: 103,
+              ma60: 99
+            }
+          ]
+        }
+      }
     }
   };
 
@@ -222,8 +271,8 @@ function checkFrontendAdminRender() {
     assertOk(notificationHtml.indexOf("admin-message-row") >= 0, "메시지 타입별 알림 설정이 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("tab=notifications") >= 0, "알림 링크 기본값이 새 알림 탭을 가리키지 않습니다.");
     assertOk(modelingHtml.indexOf("admin-modeling-panel") >= 0, "모델링 설정 패널이 렌더링되지 않았습니다.");
-    assertOk(modelingHtml.indexOf("model-timing-panel") < 0, "Mock 시계열 기반 타이밍 패널이 아직 렌더링됩니다.");
-    assertOk(modelingHtml.indexOf("웹에서 운영하는 매수·매도 타이밍 모델") < 0, "타이밍 모델 제목이 아직 렌더링됩니다.");
+    assertOk(modelingHtml.indexOf("model-timing-panel") >= 0, "타이밍 백테스트 패널이 렌더링되지 않았습니다.");
+    assertOk(modelingHtml.indexOf("웹에서 운영하는 매수·매도 타이밍 모델") >= 0, "타이밍 모델 제목이 렌더링되지 않았습니다.");
   });
 }
 

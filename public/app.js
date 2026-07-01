@@ -58,6 +58,8 @@
       "modelReduce=64",
       "modelHold=55"
     ].join("\n"),
+    modelTimingScenario: "recent-one-year",
+    modelTimingSymbols: "NVDA,AAPL,005930,000660,TSLA",
     alertRules: [
       "priceBuyLimit=1",
       "priceStop=1",
@@ -213,6 +215,13 @@
       tags: ["글로벌", "교차검증", "뉴스"]
     }
   ];
+  var modelTimingScenarioOptions = [
+    { id: "recent-one-year", label: "최근 1년", description: "완만한 상승, 순환 조정, 거래량 회복" },
+    { id: "covid-crash", label: "급락장", description: "단기 급락과 회복 구간" },
+    { id: "financial-crisis", label: "금융위기", description: "긴 하락과 저점 변동성" },
+    { id: "semiconductor-boom", label: "반도체 랠리", description: "강한 추세와 과열 구간" },
+    { id: "rate-shock", label: "금리 충격", description: "성장주 밸류에이션 압축" }
+  ];
   var alertRuleCatalog = [
     { key: "priceBuyLimit", group: "가격", label: "매수 상한 접근", description: "현재가가 실험실 매수 상한에 접근하거나 하회할 때" },
     { key: "priceStop", group: "가격", label: "손절 기준 접근", description: "현재가가 손절 기준선에 접근하거나 하회할 때" },
@@ -310,6 +319,9 @@
     labRecordError: "",
     modelSaved: false,
     modelError: "",
+    timingScenarioCache: {},
+    timingScenarioLoading: false,
+    timingScenarioError: "",
     editingWatchSymbol: "",
     watchlistError: ""
   };
@@ -697,6 +709,8 @@
       formulaWeights: settingValue("formulaWeights"),
       decisionThresholds: settingValue("decisionThresholds"),
       modelDecisionThresholds: settingValue("modelDecisionThresholds"),
+      modelTimingScenario: settingValue("modelTimingScenario"),
+      modelTimingSymbols: settingValue("modelTimingSymbols"),
       alertRules: settingValue("alertRules"),
       alertThresholds: settingValue("alertThresholds"),
       alertCadenceMinutes: settingValue("alertCadenceMinutes")
@@ -2083,6 +2097,183 @@
     };
   }
 
+  function modelTimingScenarioId() {
+    var requested = String(settingValue("modelTimingScenario") || defaultSettings.modelTimingScenario).trim();
+    return modelTimingScenarioOptions.some(function (scenario) { return scenario.id === requested; })
+      ? requested
+      : defaultSettings.modelTimingScenario;
+  }
+
+  function modelTimingScenarioMeta(id) {
+    return modelTimingScenarioOptions.filter(function (scenario) { return scenario.id === id; })[0] || modelTimingScenarioOptions[0];
+  }
+
+  function loadTimingScenario(force) {
+    var scenarioId = modelTimingScenarioId();
+    if (state.timingScenarioLoading) return Promise.resolve();
+    if (!force && state.timingScenarioCache[scenarioId]) return Promise.resolve(state.timingScenarioCache[scenarioId]);
+    state.timingScenarioLoading = true;
+    state.timingScenarioError = "";
+    if (force) delete state.timingScenarioCache[scenarioId];
+    return requestJson("mock-data/market/" + encodeURIComponent(scenarioId) + ".json")
+      .then(function (payload) { state.timingScenarioCache[scenarioId] = payload; })
+      .catch(function (error) { state.timingScenarioError = error.message || "타이밍 데이터를 불러오지 못했습니다."; })
+      .finally(function () { state.timingScenarioLoading = false; render(); });
+  }
+
+  function currentTimingPayload() {
+    return state.timingScenarioCache[modelTimingScenarioId()] || null;
+  }
+
+  function modelTimingSymbols(payload, snapshot) {
+    var configured = normalizeSymbols(settingValue("modelTimingSymbols"));
+    if (configured.length) return configured.slice(0, 8);
+    var fromSnapshot = instrumentItems(snapshot || {}).map(function (item) { return String(item.symbol || "").toUpperCase(); }).filter(Boolean);
+    var series = payload && payload.series ? Object.keys(payload.series) : [];
+    return (fromSnapshot.length ? fromSnapshot : series).slice(0, 8);
+  }
+
+  function timingSignalFromCandle(candle) {
+    return {
+      tradeStrength: Number(candle.tradeStrength || 100),
+      volumeRatio: Number(candle.relativeVolume || candle.volumeRatio || 1),
+      buyVolume: Number(candle.buyVolume || 0),
+      sellVolume: Number(candle.sellVolume || 0),
+      bidAskImbalance: Number(candle.bidAskImbalance || 0),
+      priceChangeRate: Number(candle.changePercent || candle.priceChangeRate || 0),
+      ma20: Number(candle.ma20 || 0),
+      ma60: Number(candle.ma60 || 0),
+      source: "mock-candle"
+    };
+  }
+
+  function timingItem(series, candle, sourceItem, inPosition, entryPrice, assumptions, weights, formula) {
+    var symbol = String(series.symbol || sourceItem.symbol || "").toUpperCase();
+    var known = clientKnownStockInfo(symbol);
+    var price = Number(candle.close || 0);
+    var signal = timingSignalFromCandle(candle);
+    var averagePrice = inPosition && entryPrice ? entryPrice : Number(sourceItem.averagePrice || price || 0);
+    var item = Object.assign({}, known, {
+      symbol: symbol,
+      name: series.name || sourceItem.name || known.name || symbol,
+      market: series.market || sourceItem.market || known.market || "",
+      currency: series.currency || sourceItem.currency || known.currency || "",
+      sector: series.sector || sourceItem.sector || known.sector || "-",
+      source: inPosition ? "holding" : "watchlist",
+      currentPrice: price,
+      averagePrice: averagePrice,
+      quantity: inPosition ? 1 : 0,
+      marketValue: inPosition ? price : 0,
+      profitLoss: inPosition && averagePrice ? price - averagePrice : 0,
+      profitLossRate: inPosition && averagePrice ? ((price / averagePrice) - 1) * 100 : 0,
+      signal: signal,
+      ma20: Number(candle.ma20 || 0),
+      ma60: Number(candle.ma60 || 0)
+    });
+    var valuation = buildValuationForItem(item, assumptions, weights, formula);
+    var scores = marketSignalScores(signal, { item: item, valuation: valuation });
+    return Object.assign(item, { hasData: true, buyScore: scores.buyScore, sellScore: scores.sellScore, buyShare: scores.buyShare, valuation: valuation });
+  }
+
+  function timingDays(start, end) {
+    var diff = Date.parse(end || "") - Date.parse(start || "");
+    return Number.isFinite(diff) ? Math.max(1, Math.round(diff / 86400000)) : 0;
+  }
+
+  function modelTimingBacktest(series, sourceItem, assumptions, weights, formula, thresholds) {
+    var candles = Array.isArray(series.candles) ? series.candles.filter(function (candle) { return Number(candle.close || 0) > 0; }) : [];
+    var first = candles[0] || {};
+    var last = candles[candles.length - 1] || {};
+    var inPosition = Boolean(sourceItem && sourceItem.source && sourceItem.source !== "watchlist");
+    var entry = inPosition ? { date: first.date, price: Number(first.close || 0) } : null;
+    var capital = 1;
+    var peak = 1;
+    var maxDrawdown = 0;
+    var trades = [];
+    var lastStep = null;
+    candles.forEach(function (candle) {
+      var item = timingItem(series, candle, sourceItem || {}, inPosition, entry && entry.price, assumptions, weights, formula);
+      var draft = labDraftForItem(item);
+      var model = customModelScores(item);
+      var price = Number(candle.close || 0);
+      var entryPrice = Number(entry && entry.price || 0);
+      var reason = "";
+      if (inPosition && entryPrice) {
+        if (Math.abs(Number(draft.stopLoss || 0)) && price <= entryPrice * (1 - Math.abs(Number(draft.stopLoss || 0)) / 100)) reason = "손절 기준";
+        else if (Number(draft.targetReturn || 0) > 0 && price >= entryPrice * (1 + Number(draft.targetReturn || 0) / 100)) reason = "목표 수익";
+        else if (model.sellScore >= Number(thresholds.modelSell || 0)) reason = "모델 매도";
+        else if (model.sellScore >= Number(thresholds.modelReduce || 0) && model.sellScore > model.buyScore + 8) reason = "리스크 축소";
+      }
+      if (inPosition && reason) {
+        var returnPct = entryPrice ? ((price / entryPrice) - 1) * 100 : 0;
+        trades.push({ entryDate: entry.date, exitDate: candle.date, returnPct: returnPct, holdDays: timingDays(entry.date, candle.date), reason: reason });
+        capital *= entryPrice ? price / entryPrice : 1;
+        inPosition = false;
+        entry = null;
+      } else if (!inPosition && model.buyScore >= Number(thresholds.modelBuy || 0) && model.buyScore > model.sellScore) {
+        inPosition = true;
+        entry = { date: candle.date, price: price };
+      }
+      var equity = inPosition && entry && entry.price ? capital * (price / entry.price) : capital;
+      peak = Math.max(peak, equity);
+      maxDrawdown = Math.min(maxDrawdown, peak ? ((equity / peak) - 1) * 100 : 0);
+      lastStep = { item: item, model: model, equity: equity, entry: entry };
+    });
+    var finalEquity = lastStep ? lastStep.equity : 1;
+    var openPosition = inPosition && entry && last.close ? { entryDate: entry.date, returnPct: entry.price ? ((Number(last.close || 0) / entry.price) - 1) * 100 : 0 } : null;
+    var winners = trades.filter(function (trade) { return trade.returnPct > 0; }).length;
+    var totalHoldDays = trades.reduce(function (sum, trade) { return sum + Number(trade.holdDays || 0); }, 0);
+    var strategyReturn = (finalEquity - 1) * 100;
+    var buyHoldReturn = first.close && last.close ? ((Number(last.close) / Number(first.close)) - 1) * 100 : 0;
+    var lastItem = lastStep && lastStep.item ? lastStep.item : {};
+    return {
+      symbol: String(series.symbol || sourceItem.symbol || "").toUpperCase(),
+      name: series.name || sourceItem.name || series.symbol || "",
+      market: series.market || sourceItem.market || "",
+      currency: series.currency || sourceItem.currency || "",
+      sector: series.sector || sourceItem.sector || "-",
+      source: sourceItem && sourceItem.source && sourceItem.source !== "watchlist" ? "holding" : "watchlist",
+      startDate: first.date || "",
+      endDate: last.date || "",
+      strategyReturn: strategyReturn,
+      buyHoldReturn: buyHoldReturn,
+      edge: strategyReturn - buyHoldReturn,
+      maxDrawdown: maxDrawdown,
+      trades: trades,
+      tradeCount: trades.length,
+      winRate: trades.length ? (winners / trades.length) * 100 : 0,
+      averageHoldDays: trades.length ? totalHoldDays / trades.length : 0,
+      openPosition: openPosition,
+      last: { price: Number(last.close || 0), item: lastItem, model: lastStep ? lastStep.model : customModelScores(lastItem), signal: lastItem.signal || {} }
+    };
+  }
+
+  function buildModelTimingResults(snapshot, payload) {
+    var seriesMap = payload && payload.series ? payload.series : {};
+    var currentMap = {};
+    instrumentItems(snapshot || {}).forEach(function (item) {
+      var symbol = String(item.symbol || "").toUpperCase();
+      if (symbol) currentMap[symbol] = item;
+    });
+    var assumptions = parseValuationAssumptions();
+    var weights = formulaWeights();
+    var formula = formulaSetting("fairValueFormula");
+    var thresholds = modelDecisionThresholds();
+    return modelTimingSymbols(payload, snapshot).map(function (symbol) {
+      return seriesMap[symbol] ? modelTimingBacktest(seriesMap[symbol], currentMap[symbol] || clientKnownStockInfo(symbol), assumptions, weights, formula, thresholds) : null;
+    }).filter(Boolean);
+  }
+
+  function modelTimingStats(results) {
+    var totalTrades = results.reduce(function (sum, result) { return sum + Number(result.tradeCount || 0); }, 0);
+    var weightedWins = results.reduce(function (sum, result) { return sum + Number(result.tradeCount || 0) * Number(result.winRate || 0) / 100; }, 0);
+    var averageReturn = results.length ? results.reduce(function (sum, result) { return sum + Number(result.strategyReturn || 0); }, 0) / results.length : 0;
+    var averageBuyHold = results.length ? results.reduce(function (sum, result) { return sum + Number(result.buyHoldReturn || 0); }, 0) / results.length : 0;
+    var beatCount = results.filter(function (result) { return Number(result.strategyReturn || 0) > Number(result.buyHoldReturn || 0); }).length;
+    var activeCount = results.filter(function (result) { var model = result.last && result.last.model || {}; return model.tone === "danger" || model.tone === "caution" || model.tone === "watch"; }).length;
+    return { totalTrades: totalTrades, winRate: totalTrades ? (weightedWins / totalTrades) * 100 : 0, averageReturn: averageReturn, averageBuyHold: averageBuyHold, beatCount: beatCount, activeCount: activeCount };
+  }
+
   function saveModelVersion() {
     if (!state.snapshot) return;
     var items = buildTradeSignalItems(state.snapshot);
@@ -2686,6 +2877,9 @@
     if (state.activeTab === "feed" && !state.feed && !state.feedLoading) {
       loadFeed(false);
     }
+    if (state.activeTab === "modeling" && !currentTimingPayload() && !state.timingScenarioLoading && !state.timingScenarioError) {
+      loadTimingScenario(false);
+    }
   }
 
   function renderLoading() {
@@ -2784,6 +2978,7 @@
       return [
         '<section class="admin-grid">',
         renderAdminModelingPanel(snapshot),
+        renderModelTimingPanel(snapshot),
         renderModelVersionPanel(snapshot),
         renderModelPreviewPanel(snapshot),
         '</section>'
@@ -3080,6 +3275,8 @@
       renderModelFormulaField("modelHypothesis", "모델 가설", "어떤 조건에서 매수/매도할지"),
       renderModelFormulaField("customBuyModelFormula", "내 모델 매수 공식", "buyScore * 0.35 + thesisScore * thesisWeight"),
       renderModelFormulaField("customSellModelFormula", "내 모델 매도 공식", "sellScore * 0.35 + riskScore * riskControlWeight"),
+      renderModelSettingField("modelTimingSymbols", "타이밍 백테스트 종목", "text", "NVDA,AAPL,005930"),
+      renderModelSettingField("modelTimingScenario", "타이밍 시나리오 ID", "text", "recent-one-year"),
       '</div>',
       '<div class="model-section">',
       '<div class="flow-title"><div><strong>가중치</strong><span>공식에서 바로 사용할 변수입니다.</span></div></div>',
@@ -3093,6 +3290,80 @@
       '</div>',
       '</article>'
     ].join("");
+  }
+
+  function renderModelTimingPanel(snapshot) {
+    var scenarioId = modelTimingScenarioId();
+    var scenario = modelTimingScenarioMeta(scenarioId);
+    var payload = currentTimingPayload();
+    var results = payload ? buildModelTimingResults(snapshot, payload) : [];
+    var stats = modelTimingStats(results);
+    return [
+      '<article class="panel model-timing-panel">',
+      '<div class="panel-head"><div><p class="label">Timing Backtest</p><h2>웹에서 운영하는 매수·매도 타이밍 모델</h2></div>',
+      '<div class="settings-actions"><button class="text-button" data-action="reload-timing-scenario">' + (state.timingScenarioLoading ? "불러오는 중" : "데이터 새로고침") + '</button></div></div>',
+      '<div class="timing-scenario-strip">',
+      modelTimingScenarioOptions.map(function (item) {
+        return '<button class="text-button compact' + (item.id === scenarioId ? " active" : "") + '" data-timing-scenario="' + escapeHtml(item.id) + '">' + escapeHtml(item.label) + '</button>';
+      }).join(""),
+      '</div>',
+      '<div class="settings-note timing-note"><strong>' + escapeHtml(scenario.label) + '</strong><p>' + escapeHtml(scenario.description) + ' · 대상 종목 ' + escapeHtml(modelTimingSymbols(payload, snapshot).join(", ") || "-") + '</p><p>공식, 가중치, 판단 기준, 종목별 실험실 입력값을 바꾸면 같은 브라우저에서 결과가 다시 계산됩니다.</p></div>',
+      state.timingScenarioError ? '<div class="lab-message danger">' + escapeHtml(state.timingScenarioError) + '</div>' : '',
+      !payload ? '<div class="timing-list"><p class="subtle">시나리오 데이터를 불러오는 중입니다.</p></div>' : [
+        '<div class="lab-stats-grid model-stats-grid">',
+        renderLabStat("모델 평균", signedPct(stats.averageReturn), ""),
+        renderLabStat("단순 보유", signedPct(stats.averageBuyHold), ""),
+        renderLabStat("초과 종목", stats.beatCount + "/" + results.length, ""),
+        renderLabStat("완료 거래", stats.totalTrades, "건"),
+        renderLabStat("승률", pct(stats.winRate), ""),
+        renderLabStat("최근 신호", stats.activeCount, "개"),
+        '</div>',
+        '<div class="timing-list">',
+        results.length ? results.map(renderTimingBacktestRow).join("") : '<p class="subtle">선택한 종목의 시계열 mock 데이터를 찾지 못했습니다.</p>',
+        '</div>',
+        '<div class="rule-strip"><span>정적 mock 시계열 기반의 모델 검증이며 실제 주문 실행은 하지 않습니다.</span><span>보유 종목은 기간 시작부터 보유한 것으로, 관심 종목은 모델 매수 신호가 나온 날부터 진입한 것으로 계산합니다.</span></div>'
+      ].join(""),
+      '</article>'
+    ].join("");
+  }
+
+  function renderTimingBacktestRow(result) {
+    var last = result.last || {};
+    var model = last.model || {};
+    var signal = last.signal || {};
+    var returnClass = result.strategyReturn >= 0 ? "buy" : "sell";
+    var edgeClass = result.edge >= 0 ? "buy" : "sell";
+    return [
+      '<div class="timing-row">',
+      '<div class="lab-row-head"><div><strong>' + escapeHtml(result.name || result.symbol) + '</strong><span>' + escapeHtml(result.symbol) + ' · ' + escapeHtml(result.sector || "-") + ' · ' + escapeHtml(sourceLabel(result.source)) + ' · ' + escapeHtml(result.startDate || "-") + " ~ " + escapeHtml(result.endDate || "-") + '</span></div><div class="exit-badges"><span class="source-chip ' + escapeHtml(result.source) + '">' + escapeHtml(sourceLabel(result.source)) + '</span><span class="tone-chip ' + escapeHtml(model.tone || "hold") + '">' + escapeHtml(model.action || "모델 관망") + '</span></div></div>',
+      '<div class="signal-score-grid"><span>모델 성과 <strong class="' + returnClass + '">' + escapeHtml(signedPct(result.strategyReturn)) + '</strong></span><span>단순 보유 <strong>' + escapeHtml(signedPct(result.buyHoldReturn)) + '</strong></span><span>초과 성과 <strong class="' + edgeClass + '">' + escapeHtml(signedPct(result.edge)) + '</strong></span><span>최대 낙폭 <strong class="sell">' + escapeHtml(signedPct(result.maxDrawdown)) + '</strong></span></div>',
+      '<div class="signal-metric-grid"><span>최근가 <strong>' + escapeHtml(last.price ? formatPrice(last.price, result.currency) : "-") + '</strong></span><span>내 모델 매수 <strong class="buy">' + escapeHtml(model.buyScore == null ? "-" : model.buyScore) + '</strong></span><span>내 모델 매도 <strong class="sell">' + escapeHtml(model.sellScore == null ? "-" : model.sellScore) + '</strong></span><span>완료 거래 <strong>' + escapeHtml(result.tradeCount) + '</strong></span><span>승률 <strong>' + escapeHtml(pct(result.winRate)) + '</strong></span><span>평균 보유 <strong>' + escapeHtml(Math.round(result.averageHoldDays || 0)) + '일</strong></span></div>',
+      '<div class="signal-metric-grid compact"><span>체결강도 <strong>' + escapeHtml(formatSignalNumber(signal.tradeStrength, "")) + '</strong></span><span>거래량 <strong>' + escapeHtml(formatSignalRatio(signal.volumeRatio)) + '</strong></span><span>매수비중 <strong>' + escapeHtml((last.item && last.item.buyShare != null) ? last.item.buyShare + "%" : "-") + '</strong></span><span>호가 <strong>' + escapeHtml(formatSignalNumber(signal.bidAskImbalance, "%")) + '</strong></span></div>',
+      '<div class="trigger-list timing-trade-list">' + renderTimingTradePills(result) + '</div>',
+      '<div class="exit-reasons">' + renderTimingNotes(result).map(function (note) { return '<p>' + escapeHtml(note) + '</p>'; }).join("") + '</div>',
+      '</div>'
+    ].join("");
+  }
+
+  function renderTimingTradePills(result) {
+    var pills = [];
+    if (result.openPosition) pills.push('<span>보유중 ' + escapeHtml(result.openPosition.entryDate || "-") + ' · ' + escapeHtml(signedPct(result.openPosition.returnPct)) + '</span>');
+    result.trades.slice(-3).reverse().forEach(function (trade) {
+      pills.push('<span>' + escapeHtml(trade.entryDate || "-") + ' → ' + escapeHtml(trade.exitDate || "-") + ' · ' + escapeHtml(signedPct(trade.returnPct)) + ' · ' + escapeHtml(trade.reason || "청산") + '</span>');
+    });
+    return pills.length ? pills.join("") : '<span>완료 거래 없음</span>';
+  }
+
+  function renderTimingNotes(result) {
+    var notes = [];
+    var model = result.last && result.last.model || {};
+    if (!result.tradeCount && !result.openPosition) notes.push("현재 모델 기준에서는 이 시나리오 동안 진입 조건을 충족하지 못했습니다.");
+    else if (result.edge >= 0) notes.push("같은 기간 단순 보유보다 " + signedPct(result.edge) + " 유리하게 계산됐습니다.");
+    else notes.push("같은 기간 단순 보유보다 " + signedPct(Math.abs(result.edge)) + " 낮게 계산됐습니다.");
+    if (result.openPosition) notes.push("마지막 거래일 기준 아직 보유 상태입니다. 매도 공식이나 목표/손절 기준을 확인하세요.");
+    (model.errors || []).forEach(function (error) { notes.push(error); });
+    notes.push("최근 모델 판단은 " + (model.action || "모델 관망") + "입니다.");
+    return notes;
   }
 
   function renderAdminDeliveryPanel() {
@@ -4637,6 +4908,24 @@
         render();
       });
     });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-timing-scenario]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        var scenarioId = button.getAttribute("data-timing-scenario");
+        if (!scenarioId || scenarioId === settingValue("modelTimingScenario")) return;
+        state.settings.modelTimingScenario = scenarioId;
+        state.timingScenarioError = "";
+        persistSettings();
+        render();
+      });
+    });
+
+    var reloadTiming = app.querySelector('[data-action="reload-timing-scenario"]');
+    if (reloadTiming) {
+      reloadTiming.addEventListener("click", function () {
+        if (!state.timingScenarioLoading) loadTimingScenario(true);
+      });
+    }
 
     Array.prototype.slice.call(app.querySelectorAll("[data-number-setting]")).forEach(function (field) {
       field.addEventListener("change", function () {

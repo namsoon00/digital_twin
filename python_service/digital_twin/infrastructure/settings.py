@@ -99,6 +99,8 @@ def runtime_settings() -> Dict[str, str]:
         "sellScoreFormula": value("sellScoreFormula", "SELL_SCORE_FORMULA", ""),
         "formulaWeights": value("formulaWeights", "FORMULA_WEIGHTS", ""),
         "modelDecisionThresholds": value("modelDecisionThresholds", "MODEL_DECISION_THRESHOLDS", ""),
+        "modelTimingScenario": value("modelTimingScenario", "MODEL_TIMING_SCENARIO", "recent-one-year"),
+        "modelTimingSymbols": value("modelTimingSymbols", "MODEL_TIMING_SYMBOLS", "NVDA,AAPL,005930,000660,TSLA"),
         "modelReviewCommand": value("modelReviewCommand", "MODEL_REVIEW_COMMAND", ""),
         "modelReviewUseCodex": value("modelReviewUseCodex", "MODEL_REVIEW_USE_CODEX", "1"),
         "modelReviewTimeoutSeconds": value("modelReviewTimeoutSeconds", "MODEL_REVIEW_TIMEOUT_SECONDS", "180"),

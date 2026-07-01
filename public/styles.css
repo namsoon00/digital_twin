@@ -1017,6 +1017,7 @@ h3 {
 .lab-panel,
 .lab-method-panel,
 .model-panel,
+.model-timing-panel,
 .model-version-panel,
 .model-preview-panel,
 .alert-panel,
@@ -1398,6 +1399,42 @@ h3 {
 
 .model-preview-row {
   background: #ffffff;
+}
+
+.timing-scenario-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 16px 12px;
+}
+
+.text-button.active {
+  border-color: #8fc8b7;
+  background: var(--green-soft);
+  color: var(--green);
+}
+
+.timing-note {
+  margin: 0 16px;
+}
+
+.timing-list {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+}
+
+.timing-row {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8faf9;
+}
+
+.timing-trade-list {
+  justify-content: flex-start;
 }
 
 .alert-stat-grid {

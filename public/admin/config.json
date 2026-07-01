@@ -133,7 +133,7 @@
           "key": "notifyLinkUrl",
           "label": "알림 링크 URL",
           "type": "url",
-          "default": "http://127.0.0.1:3000?tab=alerts"
+          "default": "http://127.0.0.1:3000?tab=notifications"
         },
         {
           "key": "formulaWeights",
@@ -330,5 +330,5 @@
       ]
     }
   ],
-  "buildId": "3f5726714a71"
+  "buildId": "23bdd1f4d11f"
 }

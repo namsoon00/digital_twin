@@ -997,6 +997,19 @@ h3 {
   font-size: 12px;
 }
 
+.admin-monitor-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  padding: 0 16px 16px;
+}
+
+.admin-monitor-grid code {
+  font-size: 12px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .admin-delivery-grid {
   padding: 0;
 }
@@ -2209,6 +2222,7 @@ h3 {
   .content-grid,
   .admin-grid,
   .admin-account-layout,
+  .admin-monitor-grid,
   .settings-grid {
     grid-template-columns: 1fr;
   }

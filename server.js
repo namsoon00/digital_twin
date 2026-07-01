@@ -196,7 +196,7 @@ function runtimeSettings() {
     notifyProvider: settingFromStoreOrEnv(store, "notifyProvider", "NOTIFY_PROVIDER", ""),
     telegramBotToken: settingFromStoreOrEnv(store, "telegramBotToken", "TELEGRAM_BOT_TOKEN", ""),
     telegramChatId: settingFromStoreOrEnv(store, "telegramChatId", "TELEGRAM_CHAT_ID", ""),
-    notifyLinkUrl: settingFromStoreOrEnv(store, "notifyLinkUrl", "NOTIFY_LINK_URL", "http://127.0.0.1:3000?tab=alerts"),
+    notifyLinkUrl: settingFromStoreOrEnv(store, "notifyLinkUrl", "NOTIFY_LINK_URL", "http://127.0.0.1:3000?tab=notifications"),
     notifyIntervalMinutes: settingFromStoreOrEnv(store, "notifyIntervalMinutes", "NOTIFY_INTERVAL_MINUTES", "10"),
     valuationAssumptions: settingFromStoreOrEnv(store, "valuationAssumptions", "VALUATION_ASSUMPTIONS", ""),
     marketSignalInputs: settingFromStoreOrEnv(store, "marketSignalInputs", "MARKET_SIGNAL_INPUTS", ""),

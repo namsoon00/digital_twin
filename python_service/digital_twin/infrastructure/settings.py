@@ -90,7 +90,7 @@ def runtime_settings() -> Dict[str, str]:
         "notifyProvider": value("notifyProvider", "NOTIFY_PROVIDER"),
         "telegramBotToken": value("telegramBotToken", "TELEGRAM_BOT_TOKEN"),
         "telegramChatId": value("telegramChatId", "TELEGRAM_CHAT_ID"),
-        "notifyLinkUrl": value("notifyLinkUrl", "NOTIFY_LINK_URL", "http://127.0.0.1:3000?tab=alerts"),
+        "notifyLinkUrl": value("notifyLinkUrl", "NOTIFY_LINK_URL", "http://127.0.0.1:3000?tab=notifications"),
         "notifyIntervalMinutes": value("notifyIntervalMinutes", "NOTIFY_INTERVAL_MINUTES", "10"),
         "alertRules": value("alertRules", "ALERT_RULES"),
         "alertThresholds": value("alertThresholds", "ALERT_THRESHOLDS"),

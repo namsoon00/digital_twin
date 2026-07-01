@@ -96,35 +96,24 @@ function assertOk(condition, message) {
 
 function checkFrontendAdminRender() {
   const code = fs.readFileSync(path.join(rootDir, "public", "app.js"), "utf8");
-  let html = "";
-  const app = {
-    get innerHTML() {
-      return html;
-    },
-    set innerHTML(value) {
-      html = String(value);
-    },
-    querySelector: function () {
-      return null;
-    },
-    querySelectorAll: function () {
-      return [];
-    }
-  };
-  const storage = new Map();
   const payloads = {
     "/api/settings": { settings: {}, configured: {}, locked: false },
     "/api/service-accounts": {
       accounts: [
         {
           id: "main",
-          label: "메인",
+          label: "DB 계정",
           provider: "toss",
+          baseUrl: "https://openapi.tossinvest.com",
+          accountSeq: "1",
           enabled: true,
-          watchlistSymbols: ["NVDA"],
+          watchlistSymbols: ["NVDA", "005930"],
+          notifyProvider: "telegram",
+          notifyLinkUrl: "http://127.0.0.1:3000?tab=notifications",
           clientId: true,
           clientSecret: true,
-          telegramBotToken: true
+          telegramBotToken: true,
+          telegramChatId: true
         }
       ]
     },
@@ -141,53 +130,96 @@ function checkFrontendAdminRender() {
     }
   };
 
-  vm.runInNewContext(code, {
-    console: console,
-    setTimeout: setTimeout,
-    clearTimeout: clearTimeout,
-    URLSearchParams: URLSearchParams,
-    document: {
-      getElementById: function (id) {
-        return id === "app" ? app : null;
+  function renderForSearch(search) {
+    let html = "";
+    const storage = new Map();
+    const app = {
+      get innerHTML() {
+        return html;
+      },
+      set innerHTML(value) {
+        html = String(value);
+      },
+      querySelector: function () {
+        return null;
+      },
+      querySelectorAll: function () {
+        return [];
       }
-    },
-    window: {
-      location: { protocol: "http:", hostname: "127.0.0.1", search: "" },
-      localStorage: {
-        getItem: function (key) {
-          return storage.has(key) ? storage.get(key) : null;
-        },
-        setItem: function (key, value) {
-          storage.set(key, String(value));
-        },
-        removeItem: function (key) {
-          storage.delete(key);
-        }
-      }
-    },
-    fetch: function (requestedPath) {
-      const key = String(requestedPath).split("?")[0];
-      if (!payloads[key]) throw new Error("unexpected frontend fetch: " + requestedPath);
-      return Promise.resolve({
-        ok: true,
-        json: function () {
-          return Promise.resolve(payloads[key]);
-        },
-        text: function () {
-          return Promise.resolve(JSON.stringify(payloads[key]));
-        }
-      });
-    }
-  }, { filename: "public/app.js" });
+    };
 
-  return new Promise(function (resolve) {
-    setTimeout(function () {
-      assertOk(html.indexOf("계정·알림·모델 운영 콘솔") >= 0, "메인 운영 콘솔 제목이 렌더링되지 않았습니다.");
-      assertOk(html.indexOf("data-account-form") >= 0, "계정 등록 폼이 렌더링되지 않았습니다.");
-      assertOk(html.indexOf("admin-message-row") >= 0, "메시지 타입별 알림 설정이 렌더링되지 않았습니다.");
-      assertOk(html.indexOf("admin-modeling-panel") >= 0, "모델링 설정 패널이 렌더링되지 않았습니다.");
-      resolve();
-    }, 50);
+    vm.runInNewContext(code, {
+      console: console,
+      setTimeout: setTimeout,
+      clearTimeout: clearTimeout,
+      URLSearchParams: URLSearchParams,
+      document: {
+        getElementById: function (id) {
+          return id === "app" ? app : null;
+        }
+      },
+      window: {
+        location: { protocol: "http:", hostname: "127.0.0.1", search: search || "" },
+        localStorage: {
+          getItem: function (key) {
+            return storage.has(key) ? storage.get(key) : null;
+          },
+          setItem: function (key, value) {
+            storage.set(key, String(value));
+          },
+          removeItem: function (key) {
+            storage.delete(key);
+          }
+        }
+      },
+      fetch: function (requestedPath) {
+        const key = String(requestedPath).split("?")[0];
+        if (!payloads[key]) throw new Error("unexpected frontend fetch: " + requestedPath);
+        return Promise.resolve({
+          ok: true,
+          json: function () {
+            return Promise.resolve(payloads[key]);
+          },
+          text: function () {
+            return Promise.resolve(JSON.stringify(payloads[key]));
+          }
+        });
+      }
+    }, { filename: "public/app.js" });
+
+    return new Promise(function (resolve) {
+      setTimeout(function () {
+        resolve(html);
+      }, 50);
+    });
+  }
+
+  return Promise.all([
+    renderForSearch(""),
+    renderForSearch("?tab=accounts"),
+    renderForSearch("?tab=notifications"),
+    renderForSearch("?tab=modeling")
+  ]).then(function (pages) {
+    const overviewHtml = pages[0];
+    const accountHtml = pages[1];
+    const notificationHtml = pages[2];
+    const modelingHtml = pages[3];
+
+    assertOk(overviewHtml.indexOf("계정·알림·모델 운영 콘솔") >= 0, "메인 운영 콘솔 제목이 렌더링되지 않았습니다.");
+    ["overview", "accounts", "notifications", "modeling", "monitoring"].forEach(function (tab) {
+      assertOk(overviewHtml.indexOf('data-tab="' + tab + '"') >= 0, "새 탭이 렌더링되지 않았습니다: " + tab);
+    });
+    ["decision", "lab", "alerts", "holdings", "feed", "watchlist"].forEach(function (tab) {
+      assertOk(overviewHtml.indexOf('data-tab="' + tab + '"') < 0, "기존 탭이 남아 있습니다: " + tab);
+    });
+    assertOk(overviewHtml.indexOf("admin-monitoring-panel") >= 0, "모니터링 상태 패널이 렌더링되지 않았습니다.");
+    assertOk(accountHtml.indexOf("data-account-form") >= 0, "계정 등록 폼이 렌더링되지 않았습니다.");
+    assertOk(accountHtml.indexOf('value="DB 계정"') >= 0, "로컬 DB 계정 표시 이름이 폼에 채워지지 않았습니다.");
+    assertOk(accountHtml.indexOf('value="NVDA,005930"') >= 0, "로컬 DB 관심 종목이 폼에 채워지지 않았습니다.");
+    assertOk(accountHtml.indexOf('value="true"') < 0, "마스킹된 boolean 값이 계정 폼에 그대로 표시됩니다.");
+    assertOk(notificationHtml.indexOf("admin-message-row") >= 0, "메시지 타입별 알림 설정이 렌더링되지 않았습니다.");
+    assertOk(notificationHtml.indexOf("tab=notifications") >= 0, "알림 링크 기본값이 새 알림 탭을 가리키지 않습니다.");
+    assertOk(modelingHtml.indexOf("admin-modeling-panel") >= 0, "모델링 설정 패널이 렌더링되지 않았습니다.");
   });
 }
 

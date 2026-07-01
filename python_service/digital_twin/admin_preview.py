@@ -69,7 +69,7 @@ def admin_preview_config() -> Dict[str, object]:
                     {"key": "notifyProvider", "label": "알림 채널", "type": "select", "options": ["telegram", "kakao", "console"]},
                     {"key": "telegramBotToken", "label": "Telegram Bot Token", "type": "secret", "masked": True},
                     {"key": "telegramChatId", "label": "Telegram Chat ID", "type": "secret", "masked": True},
-                    {"key": "notifyLinkUrl", "label": "알림 링크 URL", "type": "url", "default": "http://127.0.0.1:3000?tab=alerts"},
+                    {"key": "notifyLinkUrl", "label": "알림 링크 URL", "type": "url", "default": "http://127.0.0.1:3000?tab=notifications"},
                     {"key": "formulaWeights", "label": "공식 가중치", "type": "assignmentText"},
                     {"key": "modelDecisionThresholds", "label": "모델 판단 기준", "type": "assignmentText"},
                 ],

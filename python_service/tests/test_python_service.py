@@ -19,7 +19,7 @@ from digital_twin.cli import build_parser
 from digital_twin.domain.accounts import AccountConfig
 from digital_twin.domain.analytics import SafeFormula, StrategyModel, decisions_for_positions, normalize_position, portfolio_summary
 from digital_twin.domain.events import ACCOUNT_SAVED, MONITORING_ALERTS_DETECTED, MONITORING_CYCLE_COMPLETED, MONITORING_SNAPSHOT_COLLECTED, alerts_detected_event
-from digital_twin.domain.monitoring import RealtimeMonitor
+from digital_twin.domain.monitoring import DEFAULT_CADENCE, RealtimeMonitor
 from digital_twin.domain.model_review import ModelReviewJob, local_model_review
 from digital_twin.domain.parsing import parse_assignments
 from digital_twin.domain.portfolio import AccountSnapshot, utc_now_iso
@@ -201,6 +201,10 @@ class PythonServiceTests(unittest.TestCase):
 
         self.assertTrue(any(event.rule == "monitorHeartbeat" for event in first_events))
         self.assertFalse(any(event.rule == "monitorHeartbeat" for event in second_events))
+
+    def test_default_message_type_cadence_is_ten_minutes(self):
+        self.assertTrue(DEFAULT_CADENCE)
+        self.assertEqual({10}, set(DEFAULT_CADENCE.values()))
 
     def test_monitor_type_check_events_use_real_alert_rules(self):
         position = normalize_position({

@@ -29,13 +29,13 @@ DEFAULT_THRESHOLDS = {
 
 DEFAULT_CADENCE = {
     "holdingTiming": 10,
-    "monitorHeartbeat": 60,
+    "monitorHeartbeat": 10,
     "monitorConnection": 10,
     "monitorPositionChange": 10,
-    "monitorPnlChange": 30,
-    "monitorValueChange": 30,
-    "monitorCashChange": 60,
-    "monitorDecisionChange": 30,
+    "monitorPnlChange": 10,
+    "monitorValueChange": 10,
+    "monitorCashChange": 10,
+    "monitorDecisionChange": 10,
 }
 
 MIN_CADENCE_MINUTES = 10

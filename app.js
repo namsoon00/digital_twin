@@ -153,6 +153,7 @@
     ].join("\n")
   };
   var tabs = [
+    { id: "admin", label: "운영" },
     { id: "decision", label: "판단" },
     { id: "lab", label: "실험실" },
     { id: "model", label: "모델" },
@@ -295,6 +296,13 @@
     serverSettingsError: "",
     serverSettingsLocked: false,
     serverConfigured: {},
+    serviceAccounts: [],
+    serviceAccountsLoading: false,
+    serviceAccountsLoaded: false,
+    serviceAccountsError: "",
+    accountDraft: defaultAccountDraft(),
+    editingAccountId: "",
+    accountSaved: false,
     labDrafts: loadLabDrafts(),
     labRecords: loadLabRecords(),
     modelVersions: loadModelVersions(),
@@ -371,7 +379,7 @@
   function initialTab() {
     var params = new URLSearchParams(window.location.search);
     var requested = String(params.get("tab") || "").toLowerCase();
-    return tabs.some(function (tab) { return tab.id === requested; }) ? requested : "decision";
+    return tabs.some(function (tab) { return tab.id === requested; }) ? requested : "admin";
   }
 
   function initialDataMode() {
@@ -510,6 +518,145 @@
     state.serverSettingsError = "";
     state.settingsSaved = true;
     persistSettings();
+  }
+
+  function defaultAccountDraft() {
+    var currentSettings = state && state.settings ? state.settings : defaultSettings;
+    return {
+      id: "main",
+      label: "메인 계정",
+      provider: "toss",
+      baseUrl: "https://openapi.tossinvest.com",
+      clientId: "",
+      clientSecret: "",
+      accountSeq: "",
+      watchlistSymbols: currentSettings.watchlistSymbols || defaultSettings.watchlistSymbols,
+      notifyProvider: currentSettings.notifyProvider || "telegram",
+      telegramBotToken: "",
+      telegramChatId: currentSettings.telegramChatId || "",
+      notifyLinkUrl: currentSettings.notifyLinkUrl || defaultSettings.notifyLinkUrl,
+      enabled: true
+    };
+  }
+
+  function loadServiceAccounts() {
+    state.serviceAccountsLoading = true;
+    state.serviceAccountsError = "";
+    if (isStaticPreviewHost()) {
+      state.serviceAccounts = [];
+      state.serviceAccountsLoaded = true;
+      state.serviceAccountsLoading = false;
+      return Promise.resolve();
+    }
+    return requestJson("/api/service-accounts")
+      .then(function (payload) {
+        state.serviceAccounts = Array.isArray(payload.accounts) ? payload.accounts : [];
+        state.serviceAccountsLoaded = true;
+      })
+      .catch(function (error) {
+        state.serviceAccountsError = error.message || "계정 DB를 읽지 못했습니다.";
+      })
+      .finally(function () {
+        state.serviceAccountsLoading = false;
+        if (state.snapshot) render();
+      });
+  }
+
+  function accountDraftFromAccount(account) {
+    return {
+      id: account.id || "",
+      label: account.label || account.id || "",
+      provider: account.provider || "toss",
+      baseUrl: account.baseUrl || "https://openapi.tossinvest.com",
+      clientId: "",
+      clientSecret: "",
+      accountSeq: account.accountSeq || "",
+      watchlistSymbols: Array.isArray(account.watchlistSymbols) ? account.watchlistSymbols.join(",") : String(account.watchlistSymbols || ""),
+      notifyProvider: account.notifyProvider || settingValue("notifyProvider") || "telegram",
+      telegramBotToken: "",
+      telegramChatId: account.telegramChatId || "",
+      notifyLinkUrl: account.notifyLinkUrl || settingValue("notifyLinkUrl") || defaultSettings.notifyLinkUrl,
+      enabled: account.enabled !== false
+    };
+  }
+
+  function serviceAccountPayloadFromDraft() {
+    var draft = state.accountDraft || defaultAccountDraft();
+    var payload = {
+      id: String(draft.id || "").trim(),
+      label: String(draft.label || "").trim(),
+      provider: String(draft.provider || "toss").trim(),
+      baseUrl: String(draft.baseUrl || "https://openapi.tossinvest.com").trim(),
+      accountSeq: String(draft.accountSeq || "").trim(),
+      watchlistSymbols: normalizeSymbols(draft.watchlistSymbols || "").join(","),
+      notifyProvider: String(draft.notifyProvider || "").trim(),
+      telegramChatId: String(draft.telegramChatId || "").trim(),
+      notifyLinkUrl: String(draft.notifyLinkUrl || "").trim(),
+      enabled: draft.enabled !== false
+    };
+    if (String(draft.clientId || "").trim()) payload.clientId = String(draft.clientId || "").trim();
+    if (String(draft.clientSecret || "").trim()) payload.clientSecret = String(draft.clientSecret || "").trim();
+    if (String(draft.telegramBotToken || "").trim()) payload.telegramBotToken = String(draft.telegramBotToken || "").trim();
+    return payload;
+  }
+
+  function saveServiceAccount() {
+    if (isStaticPreviewHost()) {
+      state.serviceAccountsError = "GitHub Pages에서는 실제 계정 DB를 저장할 수 없습니다. 로컬 서버에서 사용하세요.";
+      render();
+      return Promise.resolve();
+    }
+    var account = serviceAccountPayloadFromDraft();
+    if (!account.id || !account.label) {
+      state.serviceAccountsError = "계정 ID와 표시 이름은 필요합니다.";
+      render();
+      return Promise.resolve();
+    }
+    state.serviceAccountsLoading = true;
+    state.serviceAccountsError = "";
+    state.accountSaved = false;
+    render();
+    return sendJson("/api/service-accounts", "POST", { account: account })
+      .then(function () {
+        state.accountSaved = true;
+        state.editingAccountId = "";
+        state.accountDraft = defaultAccountDraft();
+        return loadServiceAccounts();
+      })
+      .catch(function (error) {
+        state.serviceAccountsError = error.message || "계정을 저장하지 못했습니다.";
+      })
+      .finally(function () {
+        state.serviceAccountsLoading = false;
+        render();
+      });
+  }
+
+  function removeServiceAccount(id) {
+    if (isStaticPreviewHost()) {
+      state.serviceAccountsError = "GitHub Pages에서는 실제 계정 DB를 변경할 수 없습니다. 로컬 서버에서 사용하세요.";
+      render();
+      return Promise.resolve();
+    }
+    if (!id) return Promise.resolve();
+    state.serviceAccountsLoading = true;
+    state.serviceAccountsError = "";
+    render();
+    return sendJson("/api/service-accounts/" + encodeURIComponent(id), "DELETE")
+      .then(function () {
+        if (state.editingAccountId === id) {
+          state.editingAccountId = "";
+          state.accountDraft = defaultAccountDraft();
+        }
+        return loadServiceAccounts();
+      })
+      .catch(function (error) {
+        state.serviceAccountsError = error.message || "계정을 삭제하지 못했습니다.";
+      })
+      .finally(function () {
+        state.serviceAccountsLoading = false;
+        render();
+      });
   }
 
   function loadServerSettings() {
@@ -2693,9 +2840,9 @@
       '<main class="shell">',
       '<section class="topbar">',
       '<div>',
-      '<p class="eyebrow">Toss Lens</p>',
-      '<h1>토스 계좌 기준 보유/관심 점검</h1>',
-      '<p class="subtle">' + escapeHtml(snapshot.headline) + " · " + escapeHtml(formatClock(snapshot.generatedAt)) + "</p>",
+      '<p class="eyebrow">Exit Lens Admin</p>',
+      '<h1>계정·알림·모델 운영 콘솔</h1>',
+      '<p class="subtle">Python 서비스의 계정 등록, 메시지 타입별 알림, 모델링 설정을 이 화면에서 관리합니다. 마지막 데이터 ' + escapeHtml(formatClock(snapshot.generatedAt)) + "</p>",
       '</div>',
       '<div class="toolbar">',
       '<div class="mode-toggle" role="group" aria-label="데이터 모드">',
@@ -2725,6 +2872,17 @@
   }
 
   function renderActiveTab(snapshot) {
+    if (state.activeTab === "admin") {
+      return [
+        '<section class="admin-grid">',
+        renderAdminOverviewPanel(snapshot),
+        renderAdminAccountPanel(),
+        renderAdminMessagePanel(),
+        renderAdminModelingPanel(snapshot),
+        renderAdminDeliveryPanel(),
+        '</section>'
+      ].join("");
+    }
     if (state.activeTab === "lab") {
       return [
         '<section class="content-grid">',
@@ -2788,6 +2946,246 @@
       renderChecklistPanel(snapshot),
       '</section>'
     ].join("");
+  }
+
+  function renderAdminOverviewPanel(snapshot) {
+    var rules = alertRules();
+    var cadences = alertCadenceMinutes();
+    var enabledRules = alertRuleCatalog.filter(function (rule) { return enabledAlertRule(rules, rule.key); }).length;
+    var realtimeKeys = alertRuleCatalog.filter(function (rule) { return rule.group === "실시간" || rule.group === "푸시"; }).map(function (rule) { return rule.key; });
+    var realtimeCadence = realtimeKeys.reduce(function (min, key) {
+      var value = Number(cadences[key] || 0);
+      return value > 0 ? Math.min(min, value) : min;
+    }, 9999);
+    var portfolio = snapshot.portfolio || {};
+    var accounts = state.serviceAccounts || [];
+    return [
+      '<article class="panel admin-overview-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Operations</p>',
+      '<h2>서비스 운영 상태</h2>',
+      '</div>',
+      '<span class="status-pill ' + (isStaticPreviewHost() ? "mock" : "live") + '">' + (isStaticPreviewHost() ? "Pages preview" : "Local server") + '</span>',
+      '</div>',
+      '<div class="admin-stat-grid">',
+      renderAdminStat("등록 계정", accounts.length, "개"),
+      renderAdminStat("활성 알림", enabledRules + "/" + alertRuleCatalog.length, ""),
+      renderAdminStat("최소 주기", (realtimeCadence === 9999 ? "-" : realtimeCadence), realtimeCadence === 9999 ? "" : "분"),
+      renderAdminStat("모델", settingValue("modelName") || defaultSettings.modelName, ""),
+      renderAdminStat("평가 자산", formatMoney(portfolio.total || 0), ""),
+      renderAdminStat("데이터", snapshot.mock ? "Mock" : "Live", ""),
+      '</div>',
+      '<div class="rule-strip">',
+      '<span>메인 화면은 계정, 메시지 타입, 주기, 모델 기준을 관리하는 운영 콘솔입니다.</span>',
+      isStaticPreviewHost() ? '<span>GitHub Pages에서는 저장 API가 없으므로 실제 등록은 로컬 서버에서 진행합니다.</span>' : '<span>저장하면 로컬 SQLite와 설정 파일을 Python 모니터링 서비스가 읽습니다.</span>',
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderAdminStat(label, value, suffix) {
+    return [
+      '<span>',
+      '<em>' + escapeHtml(label) + '</em>',
+      '<strong>' + escapeHtml(value) + escapeHtml(suffix || "") + '</strong>',
+      '</span>'
+    ].join("");
+  }
+
+  function renderAdminAccountPanel() {
+    var accounts = state.serviceAccounts || [];
+    var draft = state.accountDraft || defaultAccountDraft();
+    var locked = state.serverSettingsLocked || isStaticPreviewHost();
+    return [
+      '<article class="panel admin-account-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Accounts</p>',
+      '<h2>계정 등록</h2>',
+      '</div>',
+      '<div class="settings-actions">',
+      '<button class="text-button" data-action="new-service-account">새 계정</button>',
+      '<span class="metric">' + escapeHtml(accounts.length) + '</span>',
+      '</div>',
+      '</div>',
+      '<div class="admin-account-layout">',
+      '<div class="admin-account-list">',
+      state.serviceAccountsLoading ? '<p class="subtle">계정 정보를 읽는 중입니다.</p>' : '',
+      state.serviceAccountsError ? '<p class="form-error">' + escapeHtml(state.serviceAccountsError) + '</p>' : '',
+      state.accountSaved ? '<p class="lab-message">계정 설정을 저장했습니다.</p>' : '',
+      accounts.length ? accounts.map(renderServiceAccountRow).join("") : '<p class="subtle">아직 등록된 서비스 계정이 없습니다.</p>',
+      '</div>',
+      '<form class="admin-account-form" data-account-form>',
+      '<div class="settings-note">',
+      '<strong>' + escapeHtml(state.editingAccountId ? "계정 수정" : "새 계정 등록") + '</strong>',
+      '<p>API key와 secret은 저장 여부만 표시됩니다. 수정하지 않을 secret 칸은 비워두세요.</p>',
+      '</div>',
+      '<div class="admin-form-grid">',
+      renderAccountField("id", "계정 ID", "text", "main", { required: true, disabled: Boolean(state.editingAccountId) }),
+      renderAccountField("label", "표시 이름", "text", "메인 계정", { required: true }),
+      renderAccountField("provider", "증권사", "text", "toss"),
+      renderAccountField("baseUrl", "Toss API Base URL", "url", "https://openapi.tossinvest.com"),
+      renderAccountField("clientId", "Toss API Key", state.showSecrets ? "text" : "password", "새 값 입력 시 교체"),
+      renderAccountField("clientSecret", "Toss Secret Key", state.showSecrets ? "text" : "password", "새 값 입력 시 교체"),
+      renderAccountField("accountSeq", "계좌 순번", "text", "선택"),
+      renderAccountField("watchlistSymbols", "관심 종목", "text", "NVDA,005930"),
+      renderAccountField("notifyProvider", "알림 채널", "text", "telegram"),
+      renderAccountField("telegramBotToken", "Telegram Bot Token", state.showSecrets ? "text" : "password", "새 값 입력 시 교체"),
+      renderAccountField("telegramChatId", "Telegram Chat ID", "text", "chat id"),
+      renderAccountField("notifyLinkUrl", "알림 링크 URL", "url", "http://127.0.0.1:3000?tab=admin"),
+      '<label class="admin-check-field">',
+      '<input data-account-field="enabled" type="checkbox"' + (draft.enabled !== false ? " checked" : "") + ' />',
+      '<span>이 계정을 모니터링에 사용</span>',
+      '</label>',
+      '</div>',
+      '<div class="settings-actions">',
+      '<button class="text-button primary" type="submit"' + (locked ? ' disabled' : '') + '>계정 저장</button>',
+      '<button class="text-button" type="button" data-action="toggle-secrets">' + (state.showSecrets ? "secret 숨기기" : "secret 보기") + '</button>',
+      locked ? '<span class="subtle">로컬 서버에서만 저장할 수 있습니다.</span>' : '',
+      '</div>',
+      '</form>',
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderAccountField(name, label, type, placeholder, options) {
+    options = options || {};
+    var draft = state.accountDraft || defaultAccountDraft();
+    var value = draft[name] == null ? "" : draft[name];
+    return [
+      '<label class="setting-field">',
+      '<span>' + escapeHtml(label) + '</span>',
+      '<input data-account-field="' + escapeHtml(name) + '" name="' + escapeHtml(name) + '" type="' + escapeHtml(type || "text") + '" value="' + escapeHtml(value) + '" placeholder="' + escapeHtml(placeholder || "") + '" autocomplete="off"' + (options.required ? " required" : "") + (options.disabled ? " disabled" : "") + ' />',
+      '</label>'
+    ].join("");
+  }
+
+  function renderServiceAccountRow(account) {
+    var watchlist = Array.isArray(account.watchlistSymbols) ? account.watchlistSymbols.join(", ") : String(account.watchlistSymbols || "");
+    return [
+      '<div class="service-account-row">',
+      '<div>',
+      '<strong>' + escapeHtml(account.label || account.id || "-") + '</strong>',
+      '<span>' + escapeHtml(account.id || "-") + ' · ' + escapeHtml(account.provider || "toss") + ' · ' + escapeHtml(account.enabled === false ? "중지" : "사용") + '</span>',
+      '<span>관심 ' + escapeHtml(watchlist || "-") + '</span>',
+      '</div>',
+      '<div class="service-account-meta">',
+      '<span class="chip ' + (account.clientId ? "ok" : "") + '">API key ' + (account.clientId ? "설정" : "없음") + '</span>',
+      '<span class="chip ' + (account.clientSecret ? "ok" : "") + '">Secret ' + (account.clientSecret ? "설정" : "없음") + '</span>',
+      '<span class="chip ' + (account.telegramBotToken ? "ok" : "") + '">Telegram ' + (account.telegramBotToken ? "설정" : "없음") + '</span>',
+      '<div class="row-actions">',
+      '<button class="mini-button" data-account-edit="' + escapeHtml(account.id || "") + '">수정</button>',
+      '<button class="mini-button danger" data-account-remove="' + escapeHtml(account.id || "") + '">삭제</button>',
+      '</div>',
+      '</div>',
+      '</div>'
+    ].join("");
+  }
+
+  function renderAdminMessagePanel() {
+    var rules = alertRules();
+    var cadences = alertCadenceMinutes();
+    var thresholds = alertThresholds();
+    return [
+      '<article class="panel admin-message-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Messages</p>',
+      '<h2>메시지 타입별 알림</h2>',
+      '</div>',
+      '<button class="text-button primary" data-action="save-settings"' + (state.serverSettingsLocked ? ' disabled' : '') + '>알림 설정 저장</button>',
+      '</div>',
+      '<div class="settings-body">',
+      '<div class="settings-grid admin-delivery-grid">',
+      renderSettingField("notifyIntervalMinutes", "기본 알림 주기(분)", "number", "10"),
+      renderSettingField("notifyLinkUrl", "알림 링크 URL", "url", "http://127.0.0.1:3000?tab=admin"),
+      '</div>',
+      '<div class="admin-message-list">',
+      alertRuleCatalog.map(function (rule) {
+        return renderAdminMessageRow(rule, enabledAlertRule(rules, rule.key), cadences[rule.key]);
+      }).join(""),
+      '</div>',
+      '<div class="model-section alert-threshold-section">',
+      '<div class="flow-title"><div><strong>임계값</strong><span>모델과 실시간 알림의 발생 기준입니다.</span></div></div>',
+      '<div class="alert-threshold-grid">',
+      alertThresholdCatalog.map(function (item) {
+        return renderAlertThresholdInput(item, thresholds[item.key]);
+      }).join(""),
+      '</div>',
+      '</div>',
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderAdminMessageRow(rule, checked, cadence) {
+    return [
+      '<label class="admin-message-row">',
+      '<input type="checkbox" data-alert-rule="' + escapeHtml(rule.key) + '"' + (checked ? " checked" : "") + ' />',
+      '<span class="admin-message-main">',
+      '<strong>' + escapeHtml(rule.label) + '</strong>',
+      '<em>' + escapeHtml(rule.group + " · " + rule.description) + '</em>',
+      '</span>',
+      '<span class="admin-cadence-field">',
+      '<input data-alert-cadence="' + escapeHtml(rule.key) + '" type="number" min="10" step="10" value="' + escapeHtml(cadence) + '" />',
+      '<b>분</b>',
+      '</span>',
+      '</label>'
+    ].join("");
+  }
+
+  function renderAdminModelingPanel(snapshot) {
+    var items = buildTradeSignalItems(snapshot);
+    var stats = modelStatsForItems(items);
+    var weights = formulaWeights();
+    var thresholds = modelDecisionThresholds();
+    return [
+      '<article class="panel admin-modeling-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Modeling</p>',
+      '<h2>모델링 설정</h2>',
+      '</div>',
+      '<div class="settings-actions">',
+      '<button class="text-button" data-action="save-model-version">모델 버전 저장</button>',
+      '<button class="text-button primary" data-action="save-settings"' + (state.serverSettingsLocked ? ' disabled' : '') + '>모델 설정 저장</button>',
+      '</div>',
+      '</div>',
+      '<div class="lab-stats-grid model-stats-grid">',
+      renderLabStat("모델 매수 평균", Math.round(stats.buyAverage), "점"),
+      renderLabStat("모델 매도 평균", Math.round(stats.sellAverage), "점"),
+      renderLabStat("모델 신호", stats.actionCount, "개"),
+      renderLabStat("실험 기록", stats.recordCount, "개"),
+      renderLabStat("평균 성과", signedPct(stats.averageReturn), ""),
+      renderLabStat("승률", pct(stats.winRate), ""),
+      '</div>',
+      state.modelError ? '<div class="lab-message danger">' + escapeHtml(state.modelError) + '</div>' : '',
+      state.modelSaved ? '<div class="lab-message">모델 버전을 저장했습니다.</div>' : '',
+      '<div class="model-editor">',
+      '<div class="settings-grid">',
+      renderModelSettingField("modelName", "모델 이름", "text", "나의 모델"),
+      renderModelFormulaField("modelHypothesis", "모델 가설", "어떤 조건에서 매수/매도할지"),
+      renderModelFormulaField("customBuyModelFormula", "내 모델 매수 공식", "buyScore * 0.35 + thesisScore * thesisWeight"),
+      renderModelFormulaField("customSellModelFormula", "내 모델 매도 공식", "sellScore * 0.35 + riskScore * riskControlWeight"),
+      '</div>',
+      '<div class="model-section">',
+      '<div class="flow-title"><div><strong>가중치</strong><span>공식에서 바로 사용할 변수입니다.</span></div></div>',
+      renderNumberSettingGrid("formulaWeights", weights, ["growthWeight", "qualityWeight", "riskWeight", "flowWeight", "valuationWeight", "thesisWeight", "confidenceWeight", "riskControlWeight"]),
+      '</div>',
+      '<div class="model-section">',
+      '<div class="flow-title"><div><strong>모델 판단 기준</strong><span>점수가 기준을 넘으면 판단 라벨과 알림이 바뀝니다.</span></div></div>',
+      renderNumberSettingGrid("modelDecisionThresholds", thresholds, ["modelBuy", "modelAdd", "modelSell", "modelReduce", "modelHold"]),
+      '</div>',
+      renderVariableGuide(modelVariableGuide()),
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderAdminDeliveryPanel() {
+    return renderAlertDeliveryPanel();
   }
 
   function renderScorePanel(snapshot) {
@@ -4213,6 +4611,58 @@
       });
     }
 
+    var newServiceAccount = app.querySelector('[data-action="new-service-account"]');
+    if (newServiceAccount) {
+      newServiceAccount.addEventListener("click", function () {
+        state.editingAccountId = "";
+        state.accountDraft = defaultAccountDraft();
+        state.accountSaved = false;
+        state.serviceAccountsError = "";
+        render();
+      });
+    }
+
+    var accountForm = app.querySelector("[data-account-form]");
+    if (accountForm) {
+      accountForm.addEventListener("submit", function (event) {
+        event.preventDefault();
+        saveServiceAccount();
+      });
+    }
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-account-field]")).forEach(function (field) {
+      field.addEventListener("input", function () {
+        var name = field.getAttribute("data-account-field");
+        if (!name) return;
+        state.accountDraft[name] = field.type === "checkbox" ? field.checked : field.value;
+        state.accountSaved = false;
+      });
+      field.addEventListener("change", function () {
+        var name = field.getAttribute("data-account-field");
+        if (!name) return;
+        state.accountDraft[name] = field.type === "checkbox" ? field.checked : field.value;
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-account-edit]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        var id = button.getAttribute("data-account-edit");
+        var account = (state.serviceAccounts || []).filter(function (item) { return item.id === id; })[0];
+        if (!account) return;
+        state.editingAccountId = id;
+        state.accountDraft = accountDraftFromAccount(account);
+        state.accountSaved = false;
+        state.serviceAccountsError = "";
+        render();
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-account-remove]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        removeServiceAccount(button.getAttribute("data-account-remove"));
+      });
+    });
+
     Array.prototype.slice.call(app.querySelectorAll("[data-lab-assumption]")).forEach(function (field) {
       field.addEventListener("change", function () {
         updateValuationAssumption(
@@ -4439,7 +4889,7 @@
     }
   }
 
-  loadServerSettings().finally(function () {
+  Promise.all([loadServerSettings(), loadServiceAccounts()]).finally(function () {
     load();
   });
 }());

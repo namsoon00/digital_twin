@@ -3,6 +3,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Dict, List
 
+from .analytics import DEFAULT_FX_RATES, number, value_in_base
 from .model_review import decision_change_review_lines
 from .parsing import parse_assignments
 from .portfolio import AccountSnapshot, AlertEvent
@@ -49,15 +50,24 @@ def now_ms() -> int:
     return int(datetime.now(timezone.utc).timestamp() * 1000)
 
 
-def money(value: float) -> str:
-    amount = float(value or 0)
+def money(value: float, currency: str = "KRW") -> str:
+    amount = number(value)
+    code = str(currency or "KRW").upper()
     if amount <= 0:
         return "-"
+    if code == "USD":
+        if amount >= 1000:
+            return "$" + format(round(amount), ",")
+        return "$" + format(round(amount, 2), ",").rstrip("0").rstrip(".")
+    if code != "KRW":
+        if amount >= 1000:
+            return format(round(amount), ",") + " " + code
+        return format(round(amount, 2), ",").rstrip("0").rstrip(".") + " " + code
     if amount >= 100000000:
-        return str(round(amount / 100000000)) + "억"
+        return str(round(amount / 100000000)) + "억 원"
     if amount >= 10000:
-        return format(round(amount / 10000), ",") + "만"
-    return format(round(amount), ",")
+        return format(round(amount / 10000), ",") + "만 원"
+    return format(round(amount), ",") + "원"
 
 
 def signed_pct(value: float, suffix: str = "%") -> str:
@@ -78,6 +88,10 @@ class RealtimeMonitor:
         self.rules = parse_assignments(settings.get("alertRules", ""), DEFAULT_ALERT_RULES)
         self.thresholds = parse_assignments(settings.get("alertThresholds", ""), DEFAULT_THRESHOLDS)
         self.cadence = parse_assignments(settings.get("alertCadenceMinutes", ""), DEFAULT_CADENCE)
+        self.fx_rates = {
+            str(key).upper(): float(value or 0)
+            for key, value in parse_assignments(settings.get("fxRates", ""), DEFAULT_FX_RATES).items()
+        }
 
     def enabled(self, rule: str) -> bool:
         return self.rules.get(rule, 1) != 0
@@ -167,6 +181,37 @@ class RealtimeMonitor:
         position["market_value"] = current / (1 + threshold / 100) if current else 1
         return previous
 
+    def position_currency(self, position: Dict[str, object]) -> str:
+        currency = str(position.get("currency") or "").upper()
+        if currency:
+            return currency
+        market = str(position.get("market") or "").upper()
+        symbol = str(position.get("symbol") or "").upper()
+        if market == "US":
+            return "USD"
+        if market in {"KR", "KOSPI", "KOSDAQ"} or symbol.isdigit():
+            return "KRW"
+        return "KRW"
+
+    def position_market_value(self, position: Dict[str, object]) -> float:
+        return number(position.get("market_value") if "market_value" in position else position.get("marketValue"))
+
+    def position_value_base(self, position: Dict[str, object]) -> float:
+        return value_in_base(self.position_market_value(position), self.position_currency(position), self.fx_rates)
+
+    def position_value_label(self, position: Dict[str, object]) -> str:
+        currency = self.position_currency(position)
+        native_value = self.position_market_value(position)
+        native_label = money(native_value, currency)
+        if currency == "KRW":
+            return native_label
+        base_value = self.position_value_base(position)
+        return native_label + " (약 " + money(base_value, "KRW") + ")"
+
+    def value_delta_basis_label(self, before: Dict[str, object], item: Dict[str, object]) -> str:
+        currencies = {self.position_currency(before), self.position_currency(item)}
+        return " (KRW 환산 기준)" if currencies != {"KRW"} else ""
+
     def previous_with_decision_delta(self, state: Dict[str, object], symbol: str) -> Dict[str, object]:
         previous = deepcopy(state)
         decision = previous.get("decisions", {}).get(symbol, {})
@@ -223,7 +268,7 @@ class RealtimeMonitor:
                 "모니터링 정상 작동",
                 "상태 " + (snapshot.status or snapshot.mode),
                 "보유 " + str(len([item for item in snapshot.positions if not item.is_cash()])) + "개",
-                "평가 " + money(snapshot.portfolio.invested),
+                "평가 " + money(snapshot.portfolio.invested, "KRW"),
             ],
         )]
 
@@ -238,7 +283,7 @@ class RealtimeMonitor:
             item = current_positions.get(symbol)
             before = previous_positions.get(symbol)
             if item and not before:
-                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "WATCH", "monitorPositionChange", snapshot.account_id + ":new:" + symbol, item["name"], ["새 보유 종목", "수량 " + str(item.get("quantity", 0)), "평가 " + money(float(item.get("market_value", 0)))], symbol))
+                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "WATCH", "monitorPositionChange", snapshot.account_id + ":new:" + symbol, item["name"], ["새 보유 종목", "수량 " + str(item.get("quantity", 0)), "평가 " + self.position_value_label(item)], symbol))
                 continue
             if before and not item:
                 events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "WATCH", "monitorPositionChange", snapshot.account_id + ":removed:" + symbol, before["name"], ["보유 목록에서 사라졌습니다", "매도/이관/데이터 변경 여부 확인"], symbol))
@@ -251,9 +296,9 @@ class RealtimeMonitor:
             pnl_delta = float(item.get("profit_loss_rate") or 0) - float(before.get("profit_loss_rate") or 0)
             if abs(pnl_delta) >= float(self.thresholds.get("monitorPnlDelta", 0)):
                 events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "ALERT" if pnl_delta < 0 else "WATCH", "monitorPnlChange", snapshot.account_id + ":pnl:" + symbol + ":" + signed_pct(pnl_delta), item["name"], ["손익률 급변", "이전 " + signed_pct(float(before.get("profit_loss_rate") or 0)), "현재 " + signed_pct(float(item.get("profit_loss_rate") or 0)), "변화 " + signed_pct(pnl_delta, "%p")], symbol))
-            value_delta = pct_delta(float(item.get("market_value") or 0), float(before.get("market_value") or 0))
+            value_delta = pct_delta(self.position_value_base(item), self.position_value_base(before))
             if abs(value_delta) >= float(self.thresholds.get("monitorValueDelta", 0)):
-                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "ALERT" if value_delta < 0 else "WATCH", "monitorValueChange", snapshot.account_id + ":value:" + symbol + ":" + signed_pct(value_delta), item["name"], ["평가액 급변", "이전 " + money(float(before.get("market_value") or 0)), "현재 " + money(float(item.get("market_value") or 0)), "변화 " + signed_pct(value_delta)], symbol))
+                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "ALERT" if value_delta < 0 else "WATCH", "monitorValueChange", snapshot.account_id + ":value:" + symbol + ":" + signed_pct(value_delta), item["name"], ["평가액 급변", "이전 " + self.position_value_label(before), "현재 " + self.position_value_label(item), "변화 " + signed_pct(value_delta) + self.value_delta_basis_label(before, item)], symbol))
             decision = current_decisions.get(symbol) or {}
             previous_decision = previous_decisions.get(symbol) or {}
             pressure_delta = float(decision.get("exit_pressure") or 0) - float(previous_decision.get("exit_pressure") or 0)

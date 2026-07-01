@@ -176,6 +176,65 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(1000000, next(item for item in portfolio.markets if item["key"] == "KR")["invested"])
         self.assertEqual(1400000, next(item for item in portfolio.markets if item["key"] == "US")["invested"])
 
+    def test_monitor_value_change_formats_usd_with_krw_basis(self):
+        previous_position = normalize_position({
+            "symbol": "AAPL",
+            "name": "Apple",
+            "market": "US",
+            "currency": "USD",
+            "marketValue": 1000,
+            "quantity": 4,
+            "profitLossRate": 10,
+            "sellableQuantity": 4,
+            "sector": "AI/플랫폼",
+        })
+        current_position = normalize_position({
+            "symbol": "AAPL",
+            "name": "Apple",
+            "market": "US",
+            "currency": "USD",
+            "marketValue": 1100,
+            "quantity": 4,
+            "profitLossRate": 10,
+            "sellableQuantity": 4,
+            "sector": "AI/플랫폼",
+        })
+        previous_portfolio = portfolio_summary([previous_position], fx_rates={"KRW": 1, "USD": 1400})
+        current_portfolio = portfolio_summary([current_position], fx_rates={"KRW": 1, "USD": 1400})
+        previous_snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "ok",
+            utc_now_iso(),
+            previous_portfolio,
+            [previous_position],
+            decisions_for_positions([previous_position], previous_portfolio),
+        )
+        current_snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "ok",
+            utc_now_iso(),
+            current_portfolio,
+            [current_position],
+            decisions_for_positions([current_position], current_portfolio),
+        )
+
+        events = RealtimeMonitor({
+            "fxRates": "KRW=1\nUSD=1400",
+            "alertThresholds": "monitorValueDelta=5",
+        }).events_for_snapshot(current_snapshot, previous_snapshot.to_monitor_state())
+        message = next(event for event in events if event.rule == "monitorValueChange").message()
+
+        self.assertIn("이전 $1,000 (약 140만 원)", message)
+        self.assertIn("현재 $1,100 (약 154만 원)", message)
+        self.assertIn("변화 +10.0% (KRW 환산 기준)", message)
+        self.assertNotIn("이전 1,000원", message)
+
     def test_monitor_cadence_is_account_and_type_scoped(self):
         account = AccountConfig("main", "메인", "toss", "https://example.test", "", "", "", ["AAPL"])
         position = normalize_position({

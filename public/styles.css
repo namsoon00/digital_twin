@@ -1540,6 +1540,69 @@ h3 {
   background: #ffffff;
 }
 
+.model-feature-audit {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8faf9;
+}
+
+.feature-audit-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.feature-audit-head strong {
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.feature-audit-grid,
+.feature-delta-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.feature-audit-grid span,
+.feature-delta-grid span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 8px;
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.feature-audit-grid strong,
+.feature-delta-grid strong,
+.feature-delta-grid b {
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.feature-delta-grid span.changed {
+  background: #fff7ed;
+}
+
+.feature-delta-grid span.changed strong {
+  color: var(--red);
+}
+
+.feature-delta-grid em {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+}
+
 .text-button.active {
   border-color: #8fc8b7;
   background: var(--green-soft);
@@ -2447,6 +2510,8 @@ h3 {
   .signal-score-grid,
   .signal-metric-grid,
   .signal-metric-grid.compact,
+  .feature-audit-grid,
+  .feature-delta-grid,
   .variable-grid,
   .valuation-grid,
   .feed-stat-grid {

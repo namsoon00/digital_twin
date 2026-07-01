@@ -159,8 +159,16 @@ function checkFrontendAdminRender() {
       generatedAt: "2026-07-01T00:00:00.000Z",
       headline: "테스트 스냅샷",
       exitScore: 0,
-      toss: { mode: "live", status: "ok", account: {}, positions: [], watchlist: [] },
-      tossDecision: { items: [], rules: [], holdingCount: 0, watchCount: 0, overallPressure: 0 },
+      toss: {
+        mode: "live",
+        status: "ok",
+        account: {},
+        positions: [],
+        watchlist: [
+          { symbol: "NVDA", name: "NVIDIA", market: "US", currency: "USD", sector: "반도체", currentPrice: 180 }
+        ]
+      },
+      tossDecision: { items: [], rules: [], holdingCount: 0, watchCount: 1, overallPressure: 0 },
       portfolio: { total: 0, invested: 0, cash: 0, markets: [], sectors: [] },
       checklist: [],
       summary: []
@@ -316,6 +324,9 @@ function checkFrontendAdminRender() {
     assertOk(modelingHtml.indexOf("내 매수·매도 기준 운영 순서") >= 0, "모델 운영 순서 제목이 렌더링되지 않았습니다.");
     assertOk(modelingHtml.indexOf("admin-modeling-panel") >= 0, "모델링 설정 패널이 렌더링되지 않았습니다.");
     assertOk(modelingHtml.indexOf("매매 판단 기준 관리") >= 0, "쉬운 모델 판단 기준 제목이 렌더링되지 않았습니다.");
+    assertOk(modelingHtml.indexOf("투자자별 수급") >= 0, "투자자별 수급 feature 설명이 렌더링되지 않았습니다.");
+    assertOk(modelingHtml.indexOf("feature 재현성") >= 0, "feature 재현성 검증 블록이 렌더링되지 않았습니다.");
+    assertOk(modelingHtml.indexOf("같은 입력 재현됨") >= 0, "같은 입력 재계산 검증 결과가 렌더링되지 않았습니다.");
     assertOk(modelingHtml.indexOf("model-timing-panel") < 0, "Mock 시계열 기반 타이밍 패널이 아직 렌더링됩니다.");
     assertOk(modelingHtml.indexOf("웹에서 운영하는 매수·매도 타이밍 모델") < 0, "타이밍 모델 제목이 아직 렌더링됩니다.");
     assertOk(monitoringHtml.indexOf("watchlist-panel") >= 0, "모니터링 탭에 관심 종목 관리 패널이 렌더링되지 않았습니다.");

@@ -1138,6 +1138,12 @@
     return (number > 0 ? "+" : "") + number.toFixed(Math.abs(number) >= 10 ? 0 : 1) + "%";
   }
 
+  function signedNumber(value) {
+    var number = Number(value || 0);
+    if (!Number.isFinite(number) || number === 0) return "0";
+    return (number > 0 ? "+" : "") + number.toFixed(Math.abs(number) >= 10 ? 0 : 1);
+  }
+
   function signedMoney(value, currency) {
     var number = Number(value || 0);
     if (!Number.isFinite(number) || number === 0) return "0" + (currency ? " " + currency : "");
@@ -1690,17 +1696,21 @@
       watchlist: item.source === "watchlist" ? 1 : 0
     });
     var fallbackBuyScore = 50
-      + (strength - 100) * 0.25
-      + (volumeRatio - 1) * 12
-      + (buyShare - 50) * 0.35
-      + imbalance * 0.28
-      + priceChange * 1.1;
+      + (strength - 100) * 0.22
+      + featureVars.volumePressure
+      + (buyShare - 50) * 0.32
+      + imbalance * 0.22
+      + priceChange * 0.8
+      + featureVars.trendScore * 0.45
+      + featureVars.investorFlowScore * 0.35;
     var fallbackSellScore = 50
-      + (100 - strength) * 0.22
-      + (volumeRatio - 1) * 8
-      + (50 - buyShare) * 0.42
-      - imbalance * 0.28
-      - priceChange * 1.2;
+      + (100 - strength) * 0.2
+      + featureVars.volumePressure * 0.55
+      + (50 - buyShare) * 0.38
+      - imbalance * 0.22
+      - priceChange * 0.9
+      - featureVars.trendScore * 0.35
+      - featureVars.investorFlowScore * 0.3;
     var buyResult = evaluateConfiguredFormula(formulaSetting("buyScoreFormula"), variables, fallbackBuyScore);
     var sellResult = evaluateConfiguredFormula(formulaSetting("sellScoreFormula"), variables, fallbackSellScore);
     var errors = [];
@@ -1757,6 +1767,12 @@
       "체결강도: " + formatSignalNumber(signal.tradeStrength, "") + ", 거래량: " + formatSignalRatio(signal.volumeRatio) + "을 함께 봅니다.",
       "매수 체결 비중은 " + scores.buyShare + "%이고 호가 불균형은 " + formatSignalNumber(signal.bidAskImbalance, "%") + "입니다."
     ];
+    if (signal.ma20 || signal.ma60) {
+      reasons.push("이동평균은 20일선 " + formatSignalNumber(signal.ma20, "") + ", 60일선 " + formatSignalNumber(signal.ma60, "") + "을 feature로 반영합니다.");
+    }
+    if (signal.foreignNet || signal.institutionNet || signal.individualNet) {
+      reasons.push("투자자별 수급은 외국인 " + formatSignalVolume(signal.foreignNet) + ", 기관 " + formatSignalVolume(signal.institutionNet) + ", 개인 " + formatSignalVolume(signal.individualNet) + " 순매수로 검증합니다.");
+    }
     if (valuation && valuation.status) {
       reasons.push("밸류에이션 분류는 " + valuation.status + "이며 수급 판단에 함께 반영됩니다.");
     } else {
@@ -1805,7 +1821,7 @@
         tone: decision.tone,
         priority: decision.priority,
         reasons: tradeSignalReasons(signal, scores, valuation, hasData),
-        triggers: ["체결강도", "거래량", "매수/매도", "호가", "가격변화"]
+        triggers: ["체결강도", "거래량", "이동평균", "투자자 수급", "호가", "가격변화"]
       };
     }).sort(function (a, b) {
       if (a.priority !== b.priority) return a.priority - b.priority;
@@ -2070,30 +2086,16 @@
     var valuationGap = Number(valuation.gap || 0);
     var expensivePenalty = valuationGap < 0 ? Math.min(18, Math.abs(valuationGap) / 2) : 0;
     var undervalueBonus = valuationGap > 0 ? Math.min(14, valuationGap / 3) : 0;
-    var current = Number(item.currentPrice || 0);
-    var ma20 = Number(item.ma20 || signal.ma20 || 0);
-    var ma60 = Number(item.ma60 || signal.ma60 || 0);
-    var buyShare = Number(item.buyShare || buyVolumeShare(signal) || 0);
-    return Object.assign({}, weights, {
+    var featureVars = modelFeatureVariables(item, signal, valuation);
+    var buyShare = Number(item.buyShare || featureVars.buyShare || 0);
+    return Object.assign({}, weights, featureVars, {
       buyScore: Number(item.buyScore || 0),
       sellScore: Number(item.sellScore || 0),
       systemBuyScore: Number(item.buyScore || 0),
       systemSellScore: Number(item.sellScore || 0),
-      tradeStrength: Number(signal.tradeStrength || 0),
-      volumeRatio: Number(signal.volumeRatio || 0),
-      buyVolume: Number(signal.buyVolume || 0),
-      sellVolume: Number(signal.sellVolume || 0),
       buyShare: buyShare,
       sellShare: Math.max(0, 100 - buyShare),
-      bidAskImbalance: Number(signal.bidAskImbalance || 0),
-      priceChangeRate: Number(signal.priceChangeRate || 0),
-      ma20: ma20,
-      ma60: ma60,
-      trendDistance20: current && ma20 ? ((current / ma20) - 1) * 100 : 0,
-      trendDistance60: current && ma60 ? ((current / ma60) - 1) * 100 : 0,
-      currentPrice: current,
       averagePrice: Number(item.averagePrice || 0),
-      fairValue: Number(valuation.fairValue || 0),
       fairValueGap: valuationGap,
       expensivePenalty: expensivePenalty,
       expensiveBonus: expensivePenalty,
@@ -2155,6 +2157,78 @@
 
   function customModelScores(item) {
     return customModelScoresFromVariables(item, modelFormulaVariables(item));
+  }
+
+  function modelFeatureGroups() {
+    return [
+      {
+        key: "execution",
+        label: "체결강도",
+        neutral: function () {
+          return { tradeStrength: 100, buyVolume: 50, sellVolume: 50, bidAskImbalance: 0 };
+        }
+      },
+      {
+        key: "volume",
+        label: "거래량",
+        neutral: function () {
+          return { volumeRatio: 1 };
+        }
+      },
+      {
+        key: "trend",
+        label: "이동평균",
+        neutral: function (item) {
+          var current = currentPriceOf(item || {});
+          return { ma20: current, ma60: current };
+        }
+      },
+      {
+        key: "investor",
+        label: "투자자 수급",
+        neutral: function () {
+          return { foreignNet: 0, institutionNet: 0, individualNet: 0 };
+        }
+      }
+    ];
+  }
+
+  function modelWithFeatureOverrides(item, overrides) {
+    var baseSignal = Object.assign({}, item.signal || {}, overrides || {});
+    var valuation = item.valuation || buildValuationForItem(item, parseValuationAssumptions(), formulaWeights(), formulaSetting("fairValueFormula"));
+    var scores = marketSignalScores(baseSignal, { item: item, valuation: valuation });
+    var nextItem = Object.assign({}, item, {
+      signal: baseSignal,
+      hasData: true,
+      buyScore: scores.buyScore,
+      sellScore: scores.sellScore,
+      buyShare: scores.buyShare,
+      valuation: valuation
+    });
+    return customModelScores(nextItem);
+  }
+
+  function modelFeatureAudit(item, model) {
+    var baseline = model || customModelScores(item);
+    var replay = customModelScoresFromVariables(item, Object.assign({}, baseline.variables || modelFormulaVariables(item)));
+    var stable = replay.buyScore === baseline.buyScore
+      && replay.sellScore === baseline.sellScore
+      && replay.action === baseline.action;
+    var groups = modelFeatureGroups().map(function (group) {
+      var next = modelWithFeatureOverrides(item, group.neutral(item));
+      var buyDelta = next.buyScore - baseline.buyScore;
+      var sellDelta = next.sellScore - baseline.sellScore;
+      var changed = next.action !== baseline.action || Math.abs(buyDelta) >= 3 || Math.abs(sellDelta) >= 3;
+      return {
+        key: group.key,
+        label: group.label,
+        buyDelta: buyDelta,
+        sellDelta: sellDelta,
+        action: next.action,
+        changed: changed
+      };
+    });
+    return { stable: stable, replay: replay, groups: groups, variables: baseline.variables || {} };
   }
 
   function modelStatsForItems(items) {
@@ -3179,8 +3253,8 @@
       },
       {
         label: "3. 수급",
-        value: "체결·거래량",
-        description: "체결강도, 거래량, 매수비중으로 매수·매도 압력을 나눕니다."
+        value: "체결·거래량·투자자",
+        description: "체결강도, 거래량, 이동평균, 투자자별 수급으로 판단 변화를 검증합니다."
       },
       {
         label: "4. 행동",
@@ -3567,6 +3641,10 @@
       '<span>거래량 <strong>' + escapeHtml(formatSignalRatio(signal.volumeRatio)) + '</strong></span>',
       '<span>매수비중 <strong>' + escapeHtml(item.hasData ? item.buyShare + "%" : "-") + '</strong></span>',
       '<span>호가 <strong>' + escapeHtml(formatSignalNumber(signal.bidAskImbalance, "%")) + '</strong></span>',
+      '<span>20일선 <strong>' + escapeHtml(formatSignalNumber(signal.ma20, "")) + '</strong></span>',
+      '<span>60일선 <strong>' + escapeHtml(formatSignalNumber(signal.ma60, "")) + '</strong></span>',
+      '<span>외국인 <strong>' + escapeHtml(formatSignalVolume(signal.foreignNet)) + '</strong></span>',
+      '<span>기관 <strong>' + escapeHtml(formatSignalVolume(signal.institutionNet)) + '</strong></span>',
       '</div>',
       renderLabVersionBar(item, latest, versionCount),
       '<div class="exit-reasons">',
@@ -3815,7 +3893,54 @@
       '<span>기본 매수 점수 <strong>' + escapeHtml(item.hasData ? item.buyScore : "-") + '</strong></span>',
       '<span>기본 매도 점수 <strong>' + escapeHtml(item.hasData ? item.sellScore : "-") + '</strong></span>',
       '</div>',
+      renderModelFeatureAudit(item, model),
       model.errors.length ? '<div class="exit-reasons">' + model.errors.map(function (error) { return '<p>' + escapeHtml(error) + '</p>'; }).join("") + '</div>' : '',
+      '</div>',
+      '</div>'
+    ].join("");
+  }
+
+  function renderModelFeatureAudit(item, model) {
+    if (!item.hasData) {
+      return [
+        '<div class="model-feature-audit">',
+        '<div class="feature-audit-head">',
+        '<strong>feature 재현성</strong>',
+        '<span class="tone-chip hold">데이터 부족</span>',
+        '</div>',
+        '<div class="feature-audit-grid"><span>체결강도, 거래량, 이동평균, 투자자별 수급을 입력하면 같은 입력 재계산과 feature 제거 실험을 실행합니다.</span></div>',
+        '</div>'
+      ].join("");
+    }
+    var audit = modelFeatureAudit(item, model);
+    var variables = audit.variables || {};
+    var signal = item.signal || {};
+    var featureRows = [
+      ["체결강도", formatSignalNumber(variables.tradeStrength, "")],
+      ["거래량", formatSignalRatio(variables.volumeRatio)],
+      ["20일 괴리", formatSignalNumber(variables.trendDistance20, "%")],
+      ["60일 괴리", formatSignalNumber(variables.trendDistance60, "%")],
+      ["외국인", formatSignalVolume(signal.foreignNet)],
+      ["기관", formatSignalVolume(signal.institutionNet)],
+      ["개인", formatSignalVolume(signal.individualNet)],
+      ["수급점수", formatSignalNumber(variables.investorFlowScore, "")]
+    ];
+    return [
+      '<div class="model-feature-audit">',
+      '<div class="feature-audit-head">',
+      '<strong>feature 재현성</strong>',
+      '<span class="tone-chip ' + (audit.stable ? "watch" : "caution") + '">' + (audit.stable ? "같은 입력 재현됨" : "재계산 확인 필요") + '</span>',
+      '</div>',
+      '<div class="feature-audit-grid">',
+      featureRows.map(function (row) {
+        return '<span>' + escapeHtml(row[0]) + ' <strong>' + escapeHtml(row[1]) + '</strong></span>';
+      }).join(""),
+      '</div>',
+      '<div class="feature-delta-grid">',
+      audit.groups.map(function (group) {
+        var tone = group.changed ? "changed" : "stable";
+        return '<span class="' + tone + '"><b>' + escapeHtml(group.label) + '</b><strong>매수 ' + escapeHtml(signedNumber(group.buyDelta)) + ' / 매도 ' + escapeHtml(signedNumber(group.sellDelta)) + '</strong><em>' + escapeHtml(group.changed ? "판단 변화 가능" : "판단 유지") + '</em></span>';
+      }).join(""),
       '</div>',
       '</div>'
     ].join("");
@@ -4071,8 +4196,18 @@
       ["sellShare", "매도 체결 비중"],
       ["bidAskImbalance", "호가 불균형"],
       ["priceChangeRate", "가격 변화율"],
+      ["volumePressure", "거래량 배율을 점수화한 값"],
+      ["ma20", "20일 이동평균"],
+      ["ma60", "60일 이동평균"],
       ["trendDistance20", "20일선 대비 괴리"],
       ["trendDistance60", "60일선 대비 괴리"],
+      ["maSpread", "20일선과 60일선의 간격"],
+      ["trendScore", "이동평균 추세 점수"],
+      ["foreignNet", "외국인 순매수"],
+      ["institutionNet", "기관 순매수"],
+      ["individualNet", "개인 순매수"],
+      ["smartMoneyNet", "외국인+기관 순매수"],
+      ["investorFlowScore", "투자자별 수급 점수"],
       ["thesisScore", "실험실에서 입력한 내 매수 점수"],
       ["riskScore", "실험실에서 입력한 리스크 점수"],
       ["confidenceScore", "확신 점수"],
@@ -4141,6 +4276,11 @@
       '<span>매도량 <strong>' + escapeHtml(formatSignalVolume(signal.sellVolume)) + '</strong></span>',
       '<span>호가 불균형 <strong>' + escapeHtml(formatSignalNumber(signal.bidAskImbalance, "%")) + '</strong></span>',
       '<span>가격 변화 <strong>' + escapeHtml(formatSignalNumber(signal.priceChangeRate, "%")) + '</strong></span>',
+      '<span>20일선 <strong>' + escapeHtml(formatSignalNumber(signal.ma20, "")) + '</strong></span>',
+      '<span>60일선 <strong>' + escapeHtml(formatSignalNumber(signal.ma60, "")) + '</strong></span>',
+      '<span>외국인 <strong>' + escapeHtml(formatSignalVolume(signal.foreignNet)) + '</strong></span>',
+      '<span>기관 <strong>' + escapeHtml(formatSignalVolume(signal.institutionNet)) + '</strong></span>',
+      '<span>개인 <strong>' + escapeHtml(formatSignalVolume(signal.individualNet)) + '</strong></span>',
       '</div>',
       '<div class="exit-reasons">',
       (item.reasons || []).map(function (reason) {
@@ -4181,6 +4321,8 @@
       ["체결강도", "100 이상이면 매수 체결 우위, 100 미만이면 매도 체결 우위"],
       ["거래량 배율", "평균 대비 거래량이 커질수록 신호 가중치 상승"],
       ["매수/매도량", "실제 체결 방향의 비중으로 매수·매도 압력 분리"],
+      ["이동평균", "20일·60일선 대비 괴리와 두 이동평균의 간격으로 추세 확인"],
+      ["투자자별 수급", "외국인·기관·개인의 순매수 균형을 점수화해 수급 반복성을 검증"],
       ["호가 불균형", "매수잔량 우위는 양수, 매도잔량 우위는 음수로 입력"],
       ["최종 라벨", "매수/매도 점수 + 보유 여부 + 기준값을 조합"]
     ];
@@ -4190,6 +4332,8 @@
       ["buyShare", "매수 체결 비중"],
       ["bidAskImbalance", "호가 불균형"],
       ["priceChangeRate", "가격 변화율"],
+      ["trendScore", "이동평균 추세 점수"],
+      ["investorFlowScore", "투자자별 수급 점수"],
       ["fairValueGap", "적정가 대비 괴리율"],
       ["undervalueBonus", "저평가 보너스"],
       ["expensivePenalty", "고평가 감점"],
@@ -4214,7 +4358,7 @@
       renderFormulaBlock("매도 점수 공식", formulaSetting("sellScoreFormula")),
       '</div>',
       renderVariableGuide(variables),
-      '<div class="rule-strip"><span>입력 형식: SYMBOL, 체결강도, 거래량배율, 매수량, 매도량, 호가불균형%, 가격변화%</span></div>',
+      '<div class="rule-strip"><span>입력 형식: SYMBOL, 체결강도, 거래량배율, 매수량, 매도량, 호가불균형%, 가격변화%, 20일선, 60일선, 외국인순매수, 기관순매수, 개인순매수</span></div>',
       '</article>'
     ].join("");
   }
@@ -4663,7 +4807,7 @@
       '</label>',
       '<label class="setting-field wide">',
       '<span>수급 신호 입력</span>',
-      '<textarea data-setting="marketSignalInputs" rows="5" autocomplete="off" placeholder="SYMBOL, 체결강도, 거래량배율, 매수량, 매도량, 호가불균형%, 가격변화%">' + escapeHtml(settingValue("marketSignalInputs")) + '</textarea>',
+      '<textarea data-setting="marketSignalInputs" rows="6" autocomplete="off" placeholder="SYMBOL, 체결강도, 거래량배율, 매수량, 매도량, 호가불균형%, 가격변화%, 20일선, 60일선, 외국인순매수, 기관순매수, 개인순매수">' + escapeHtml(settingValue("marketSignalInputs")) + '</textarea>',
       '</label>',
       '<label class="setting-field wide">',
       '<span>적정가 공식</span>',

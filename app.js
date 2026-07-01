@@ -3089,7 +3089,7 @@
       '<div class="settings-body">',
       '<div class="settings-note">',
       '<strong>저장 위치</strong>',
-      '<p>입력값은 이 브라우저의 localStorage에만 저장됩니다. GitHub Pages에서는 서버로 secret을 전송하지 않습니다. 실제 API 호출은 로컬 서버 환경변수 연결 단계에서만 사용합니다.</p>',
+      '<p>입력값은 이 브라우저의 localStorage에만 저장됩니다. 실제 토스 호출은 .env.local의 서버 환경변수만 사용하며, 토스 허용 IP에는 이 로컬 서버가 나가는 공인 IP를 등록해야 합니다.</p>',
       '</div>',
       '<div class="settings-grid">',
       renderSettingField("watchlistSymbols", "관심 종목", "text", "NVDA,TSLA,000660"),

@@ -6,7 +6,7 @@ const { URLSearchParams } = require("url");
 const rootDir = path.resolve(__dirname, "..");
 process.chdir(rootDir);
 
-const { flowLensSnapshot } = require("../server");
+const { flowLensSnapshot, runtimeSettings } = require("../server");
 
 const dataDir = path.join(rootDir, "data");
 const notificationStatePath = path.join(dataDir, "notification-state.json");
@@ -317,7 +317,8 @@ async function sendKakaoMessage(text) {
   if (!token) return { delivered: false, reason: "카카오 토큰 미설정" };
 
   async function sendWithToken(accessToken) {
-    const link = String(process.env.NOTIFY_LINK_URL || "http://127.0.0.1:3000").trim();
+    const settings = runtimeSettings();
+    const link = String(settings.notifyLinkUrl || process.env.NOTIFY_LINK_URL || "http://127.0.0.1:3000").trim();
     const template = {
       object_type: "text",
       text: text,
@@ -353,9 +354,10 @@ async function sendKakaoMessage(text) {
 }
 
 function telegramCredentials() {
+  const settings = runtimeSettings();
   return {
-    botToken: String(process.env.TELEGRAM_BOT_TOKEN || "").trim(),
-    chatId: String(process.env.TELEGRAM_CHAT_ID || "").trim()
+    botToken: String(settings.telegramBotToken || process.env.TELEGRAM_BOT_TOKEN || "").trim(),
+    chatId: String(settings.telegramChatId || process.env.TELEGRAM_CHAT_ID || "").trim()
   };
 }
 
@@ -399,7 +401,8 @@ async function sendTelegramMessage(text) {
 }
 
 function selectedProvider() {
-  const explicit = String(process.env.NOTIFY_PROVIDER || "").trim().toLowerCase();
+  const settings = runtimeSettings();
+  const explicit = String(settings.notifyProvider || process.env.NOTIFY_PROVIDER || "").trim().toLowerCase();
   if (explicit) return explicit;
   if (hasTelegramCredentials()) return "telegram";
   if (hasKakaoCredentials()) return "kakao";
@@ -488,7 +491,7 @@ async function runOnce() {
   const dryRun = hasArg("--dry-run");
   const snapshot = await flowLensSnapshot({
     mock: hasArg("--mock"),
-    watchlistSymbols: process.env.WATCHLIST_SYMBOLS
+    watchlistSymbols: runtimeSettings().watchlistSymbols
   });
   const state = loadNotificationState();
   const events = unsentEvents(buildEvents(snapshot, kind), state, force);
@@ -516,7 +519,7 @@ async function runOnce() {
 }
 
 async function runDaemon() {
-  const intervalMinutes = Math.max(1, Number(process.env.NOTIFY_INTERVAL_MINUTES || 10));
+  const intervalMinutes = Math.max(1, Number(runtimeSettings().notifyIntervalMinutes || process.env.NOTIFY_INTERVAL_MINUTES || 10));
   console.log("Notify worker started. interval=" + intervalMinutes + "m");
   await runOnce();
   setInterval(function () {

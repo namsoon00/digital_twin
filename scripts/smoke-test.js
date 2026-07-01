@@ -1,6 +1,7 @@
 const childProcess = require("child_process");
 const crypto = require("crypto");
 const http = require("http");
+const os = require("os");
 const path = require("path");
 
 const rootDir = path.resolve(__dirname, "..");
@@ -55,6 +56,8 @@ function request(port, pathname, options) {
   return new Promise(function (resolve, reject) {
     const method = options && options.method ? options.method : "GET";
     const headers = options && options.method ? options.headers || {} : options || {};
+    const body = options && options.body ? options.body : "";
+    if (body && !headers["Content-Length"]) headers["Content-Length"] = Buffer.byteLength(body);
     const req = http.request(
       {
         hostname: "127.0.0.1",
@@ -80,6 +83,7 @@ function request(port, pathname, options) {
       req.destroy(new Error("요청 시간이 초과되었습니다: " + pathname));
     });
     req.on("error", reject);
+    if (body) req.write(body);
     req.end();
   });
 }
@@ -177,7 +181,8 @@ async function withServer(extraEnv, callback) {
     env: Object.assign({}, process.env, {
       HOST: "127.0.0.1",
       PORT: String(randomPort()),
-      LOCAL_CODEX_ENABLED: "0"
+      LOCAL_CODEX_ENABLED: "0",
+      SETTINGS_PATH: path.join(os.tmpdir(), "digital-twin-smoke-settings-" + process.pid + "-" + Date.now() + "-" + Math.random() + ".json")
     }, extraEnv || {})
   });
 
@@ -200,6 +205,32 @@ async function checkNormalMode(port) {
   assertOk(payload.profile && payload.profile.assistantName, "부트스트랩 API에 프로필 정보가 없습니다.");
   assertOk(Array.isArray(payload.items), "부트스트랩 API items가 배열이 아닙니다.");
   assertOk(Array.isArray(payload.messages), "부트스트랩 API messages가 배열이 아닙니다.");
+
+  const settings = await request(port, "/api/settings");
+  assertOk(settings.statusCode === 200, "설정 API 응답 코드가 200이 아닙니다: " + settings.statusCode);
+  const settingsPayload = JSON.parse(settings.body);
+  assertOk(settingsPayload.settings && settingsPayload.configured, "설정 API 응답 형식이 맞지 않습니다.");
+  assertOk(settingsPayload.settings.tossClientSecret === "", "설정 API가 secret 원문을 내려주고 있습니다.");
+
+  const savedSettings = await request(port, "/api/settings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      settings: {
+        watchlistSymbols: "AAPL,NVDA",
+        tossApiBaseUrl: "http://127.0.0.1:1",
+        tossClientId: "fake-client",
+        tossClientSecret: "fake-secret",
+        notifyProvider: "telegram",
+        telegramBotToken: "fake-telegram-token",
+        telegramChatId: "1234"
+      }
+    })
+  });
+  assertOk(savedSettings.statusCode === 200, "설정 저장 API 응답 코드가 200이 아닙니다: " + savedSettings.statusCode);
+  const savedSettingsPayload = JSON.parse(savedSettings.body);
+  assertOk(savedSettingsPayload.configured.tossClientSecret === true, "저장된 토스 secret 설정 상태가 true가 아닙니다.");
+  assertOk(savedSettingsPayload.settings.tossClientSecret === "", "저장 응답이 토스 secret을 내려주고 있습니다.");
 
   const tossLens = await request(port, "/api/flow-lens?mock=1");
   assertOk(tossLens.statusCode === 200, "토스 판단 API 응답 코드가 200이 아닙니다: " + tossLens.statusCode);

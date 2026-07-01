@@ -71,13 +71,16 @@ API 방식은 `seed` 값을 바꾸면 같은 시나리오 안에서도 다른 mo
 
 ## 화면 구성
 
-웹은 `판단`, `실험실`, `모델`, `보유`, `피드`, `관심` 하단 탭으로 구성됩니다. `실험실`에서는 매수/매도 실험 기록을 버전으로 저장하고, `모델`에서는 나만의 매수·매도 공식, 가중치, 판단 기준, 모델 버전을 관리합니다. `관심` 탭에서는 관심 종목을 추가, 수정, 삭제할 수 있고, 상단 설정 버튼에서는 관심 종목, Toss API 설정, 밸류에이션 가정, 수급 신호 입력, 적정가/매수/매도 공식, 가중치, secret 값을 이 브라우저의 `localStorage`에 저장할 수 있습니다. GitHub Pages에서는 secret을 서버로 보내지 않으며, 브라우저 저장소가 막힌 환경에서는 현재 탭 메모리에서만 유지됩니다.
+웹은 `판단`, `실험실`, `모델`, `보유`, `피드`, `관심` 하단 탭으로 구성됩니다. `실험실`에서는 매수/매도 실험 기록을 버전으로 저장하고, `모델`에서는 나만의 매수·매도 공식, 가중치, 판단 기준, 모델 버전을 관리합니다. `관심` 탭에서는 관심 종목을 추가, 수정, 삭제할 수 있습니다.
+
+상단 설정 버튼에서는 관심 종목, Toss API, 텔레그램 알림 설정을 로컬 서버 DB(`data/settings.json`)에 저장합니다. `client_secret`과 bot token은 서버가 사용하는 로컬 파일에만 저장하고, API 응답과 화면에는 원문을 다시 표시하지 않습니다. GitHub Pages 정적 미리보기에서는 서버 DB가 없으므로 민감 설정 저장을 사용하지 않습니다.
 
 ## 앱 구조
 
 - `public/`: Exit Lens 웹 대시보드
 - `GET /api/flow-lens`: 토스 계좌/보유자산, 주문 가능 금액, 관심 종목, 내 계좌 기준 오늘 먼저 점검할 종목 집계
 - `GET /api/flow-lens?mock=1`: 웹 검증용 고정 mock 스냅샷
+- `GET/PUT /api/settings`: 로컬 서버 DB 기반 Toss/알림 설정 조회와 저장. secret 원문은 GET 응답에 포함하지 않음
 - `public/mock-data/market/*.json`: GitHub Pages에서도 읽을 수 있는 정적 mock market 데이터
 - `GET /api/mock-market/scenarios`: 학습/실험용 mock market 시나리오 목록
 - `GET /api/mock-market/candles?scenario=recent-one-year&symbols=NVDA,AAPL`: 시나리오별 1년치 OHLCV, 수급 신호, 이벤트 반환

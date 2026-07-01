@@ -6,6 +6,11 @@
     tossClientId: "",
     tossClientSecret: "",
     tossAccountSeq: "",
+    notifyProvider: "",
+    telegramBotToken: "",
+    telegramChatId: "",
+    notifyLinkUrl: "http://127.0.0.1:3000",
+    notifyIntervalMinutes: "10",
     valuationAssumptions: [
       "AAPL,7.5,28,15",
       "005930,6500,12,20"
@@ -126,6 +131,10 @@
     settingsOpen: false,
     showSecrets: false,
     settingsSaved: false,
+    serverSettingsLoaded: false,
+    serverSettingsError: "",
+    serverSettingsLocked: false,
+    serverConfigured: {},
     labDrafts: loadLabDrafts(),
     labRecords: loadLabRecords(),
     modelVersions: loadModelVersions(),
@@ -154,6 +163,23 @@
       return response.json().then(function (payload) {
         if (!response.ok) throw new Error(payload.error || "요청 실패");
         return payload;
+      });
+    });
+  }
+
+  function sendJson(path, method, payload) {
+    return fetch(path, {
+      method: method,
+      headers: {
+        "Accept": "application/json",
+        "Content-Type": "application/json"
+      },
+      cache: "no-store",
+      body: JSON.stringify(payload || {})
+    }).then(function (response) {
+      return response.json().then(function (body) {
+        if (!response.ok) throw new Error(body.error || "요청 실패");
+        return body;
       });
     });
   }
@@ -317,6 +343,54 @@
     if (!state.settingsSaved) {
       state.error = "브라우저 저장소에 설정을 저장하지 못했습니다.";
     }
+  }
+
+  function applyServerSettings(payload) {
+    var nextSettings = payload.settings || {};
+    state.settings = Object.assign({}, state.settings, nextSettings);
+    state.serverConfigured = payload.configured || {};
+    state.serverSettingsLocked = Boolean(payload.locked);
+    state.serverSettingsLoaded = true;
+    state.serverSettingsError = "";
+    state.settingsSaved = true;
+    persistSettings();
+  }
+
+  function loadServerSettings() {
+    if (isStaticPreviewHost()) return Promise.resolve();
+    return requestJson("/api/settings")
+      .then(function (payload) {
+        applyServerSettings(payload);
+      })
+      .catch(function (error) {
+        state.serverSettingsError = error.message || "서버 설정을 읽지 못했습니다.";
+      });
+  }
+
+  function serverSettingsPayload() {
+    return {
+      watchlistSymbols: settingValue("watchlistSymbols"),
+      tossApiBaseUrl: settingValue("tossApiBaseUrl"),
+      tossClientId: settingValue("tossClientId"),
+      tossClientSecret: settingValue("tossClientSecret"),
+      tossAccountSeq: settingValue("tossAccountSeq"),
+      notifyProvider: settingValue("notifyProvider"),
+      telegramBotToken: settingValue("telegramBotToken"),
+      telegramChatId: settingValue("telegramChatId"),
+      notifyLinkUrl: settingValue("notifyLinkUrl"),
+      notifyIntervalMinutes: settingValue("notifyIntervalMinutes")
+    };
+  }
+
+  function saveSettingsToServer() {
+    if (isStaticPreviewHost()) {
+      persistSettings();
+      return Promise.resolve();
+    }
+    return sendJson("/api/settings", "PUT", { settings: serverSettingsPayload() })
+      .then(function (payload) {
+        applyServerSettings(payload);
+      });
   }
 
   function clearSettings() {
@@ -3066,11 +3140,20 @@
     return state.settings && state.settings[name] != null ? state.settings[name] : "";
   }
 
-  function renderSettingField(name, label, type, placeholder) {
+  function isConfiguredSetting(name) {
+    return Boolean(state.serverConfigured && state.serverConfigured[name]);
+  }
+
+  function renderSettingField(name, label, type, placeholder, options) {
+    options = options || {};
+    var fieldPlaceholder = placeholder || "";
+    if (options.preserveConfigured && isConfiguredSetting(name)) {
+      fieldPlaceholder = "설정됨 - 새 값 입력 시 교체";
+    }
     return [
       '<label class="setting-field">',
       '<span>' + escapeHtml(label) + '</span>',
-      '<input data-setting="' + escapeHtml(name) + '" type="' + escapeHtml(type || "text") + '" value="' + escapeHtml(settingValue(name)) + '" placeholder="' + escapeHtml(placeholder || "") + '" autocomplete="off" />',
+      '<input data-setting="' + escapeHtml(name) + '" type="' + escapeHtml(type || "text") + '" value="' + escapeHtml(settingValue(name)) + '" placeholder="' + escapeHtml(fieldPlaceholder) + '" autocomplete="off" />',
       '</label>'
     ].join("");
   }
@@ -3084,19 +3167,26 @@
       '<p class="label">App Settings</p>',
       '<h2>토스 API 설정</h2>',
       '</div>',
-      '<span class="tone-chip ' + (state.settingsSaved ? "watch" : "hold") + '">' + (state.settingsSaved ? "저장됨" : "로컬") + '</span>',
+      '<span class="tone-chip ' + (state.settingsSaved ? "watch" : "hold") + '">' + (state.settingsSaved ? "DB 저장됨" : "수정 중") + '</span>',
       '</div>',
       '<div class="settings-body">',
       '<div class="settings-note">',
       '<strong>저장 위치</strong>',
-      '<p>입력값은 이 브라우저의 localStorage에만 저장됩니다. 실제 토스 호출은 .env.local의 서버 환경변수만 사용하며, 토스 허용 IP에는 이 로컬 서버가 나가는 공인 IP를 등록해야 합니다.</p>',
+      '<p>토스와 알림 설정은 이 PC의 로컬 DB에 저장되고 서버가 직접 사용합니다. secret 원문은 다시 표시하지 않으며, 공유 모드에서는 설정 변경을 막습니다.</p>',
+      state.serverSettingsError ? '<p class="form-error">' + escapeHtml(state.serverSettingsError) + '</p>' : '',
+      state.serverSettingsLocked ? '<p class="form-error">공유 모드에서는 서버 설정 저장이 잠겨 있습니다.</p>' : '',
       '</div>',
       '<div class="settings-grid">',
       renderSettingField("watchlistSymbols", "관심 종목", "text", "NVDA,TSLA,000660"),
       renderSettingField("tossApiBaseUrl", "Toss API Base URL", "url", "https://openapi.tossinvest.com"),
-      renderSettingField("tossClientId", "Toss Client ID", "text", "client id"),
-      renderSettingField("tossClientSecret", "Toss Client Secret", secretType, "client secret"),
-      renderSettingField("tossAccountSeq", "Toss Account Seq", "text", "선택"),
+      renderSettingField("tossClientId", "Toss Client ID", secretType, "client id", { preserveConfigured: true }),
+      renderSettingField("tossClientSecret", "Toss Client Secret", secretType, "client secret", { preserveConfigured: true }),
+      renderSettingField("tossAccountSeq", "Toss Account Seq", "text", "선택", { preserveConfigured: true }),
+      renderSettingField("notifyProvider", "알림 제공자", "text", "telegram"),
+      renderSettingField("telegramBotToken", "Telegram Bot Token", secretType, "bot token", { preserveConfigured: true }),
+      renderSettingField("telegramChatId", "Telegram Chat ID", "text", "chat id", { preserveConfigured: true }),
+      renderSettingField("notifyLinkUrl", "알림 링크 URL", "url", "http://127.0.0.1:3000"),
+      renderSettingField("notifyIntervalMinutes", "알림 주기(분)", "number", "10"),
       '<label class="setting-field wide">',
       '<span>밸류에이션 가정</span>',
       '<textarea data-setting="valuationAssumptions" rows="4" autocomplete="off" placeholder="SYMBOL, EPS, 목표PER, 안전마진%">' + escapeHtml(settingValue("valuationAssumptions")) + '</textarea>',
@@ -3127,7 +3217,7 @@
       '</label>',
       '</div>',
       '<div class="settings-actions">',
-      '<button class="text-button primary" data-action="save-settings">저장</button>',
+      '<button class="text-button primary" data-action="save-settings"' + (state.serverSettingsLocked ? ' disabled' : '') + '>저장</button>',
       '<button class="text-button" data-action="toggle-secrets">' + (state.showSecrets ? "숨기기" : "secret 보기") + '</button>',
       '<button class="text-button danger" data-action="clear-settings">삭제</button>',
       '</div>',
@@ -3330,11 +3420,19 @@
     var saveSettings = app.querySelector('[data-action="save-settings"]');
     if (saveSettings) {
       saveSettings.addEventListener("click", function () {
-        persistSettings();
-        state.snapshot = null;
-        state.feed = null;
-        state.settingsOpen = false;
-        load();
+        saveSettings.disabled = true;
+        saveSettingsToServer()
+          .then(function () {
+            state.snapshot = null;
+            state.feed = null;
+            state.settingsOpen = false;
+            return load();
+          })
+          .catch(function (error) {
+            state.serverSettingsError = error.message || "설정을 저장하지 못했습니다.";
+            state.settingsSaved = false;
+            render();
+          });
       });
     }
 
@@ -3425,5 +3523,7 @@
     }
   }
 
-  load();
+  loadServerSettings().finally(function () {
+    load();
+  });
 }());

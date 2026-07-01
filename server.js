@@ -11,6 +11,9 @@ const rootDir = process.cwd();
 const publicDir = path.join(rootDir, "public");
 const dataDir = path.join(rootDir, "data");
 const storePath = path.join(dataDir, "store.json");
+const settingsPath = process.env.SETTINGS_PATH
+  ? path.resolve(rootDir, process.env.SETTINGS_PATH)
+  : path.join(dataDir, "settings.json");
 const codexPath = process.env.CODEX_BIN || "codex";
 
 loadEnv(".env");
@@ -148,6 +151,122 @@ function save(mutator) {
   mutator(store);
   writeStore(store);
   return store;
+}
+
+function readSettingsStore() {
+  if (!fs.existsSync(settingsPath)) return {};
+  try {
+    const parsed = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch (error) {
+    return {};
+  }
+}
+
+function writeSettingsStore(settings) {
+  if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+  const tempPath = settingsPath + "." + process.pid + "." + Date.now() + ".tmp";
+  fs.writeFileSync(tempPath, JSON.stringify(settings, null, 2) + "\n", {
+    encoding: "utf8",
+    mode: 0o600
+  });
+  fs.renameSync(tempPath, settingsPath);
+}
+
+function configuredValue(value) {
+  return String(value || "").trim();
+}
+
+function settingFromStoreOrEnv(store, key, envName, fallback) {
+  const stored = configuredValue(store[key]);
+  if (stored) return stored;
+  const envValue = configuredValue(process.env[envName]);
+  if (envValue) return envValue;
+  return fallback || "";
+}
+
+function runtimeSettings() {
+  const store = readSettingsStore();
+  return {
+    watchlistSymbols: settingFromStoreOrEnv(store, "watchlistSymbols", "WATCHLIST_SYMBOLS", "NVDA,TSLA,000660"),
+    tossApiBaseUrl: settingFromStoreOrEnv(store, "tossApiBaseUrl", "TOSS_API_BASE_URL", "https://openapi.tossinvest.com"),
+    tossClientId: settingFromStoreOrEnv(store, "tossClientId", "TOSS_CLIENT_ID", ""),
+    tossClientSecret: settingFromStoreOrEnv(store, "tossClientSecret", "TOSS_CLIENT_SECRET", ""),
+    tossAccountSeq: settingFromStoreOrEnv(store, "tossAccountSeq", "TOSS_ACCOUNT_SEQ", ""),
+    notifyProvider: settingFromStoreOrEnv(store, "notifyProvider", "NOTIFY_PROVIDER", ""),
+    telegramBotToken: settingFromStoreOrEnv(store, "telegramBotToken", "TELEGRAM_BOT_TOKEN", ""),
+    telegramChatId: settingFromStoreOrEnv(store, "telegramChatId", "TELEGRAM_CHAT_ID", ""),
+    notifyLinkUrl: settingFromStoreOrEnv(store, "notifyLinkUrl", "NOTIFY_LINK_URL", "http://127.0.0.1:3000"),
+    notifyIntervalMinutes: settingFromStoreOrEnv(store, "notifyIntervalMinutes", "NOTIFY_INTERVAL_MINUTES", "10")
+  };
+}
+
+function settingsStatusPayload() {
+  const settings = runtimeSettings();
+  return {
+    settings: {
+      watchlistSymbols: settings.watchlistSymbols,
+      tossApiBaseUrl: settings.tossApiBaseUrl,
+      tossClientId: "",
+      tossClientSecret: "",
+      tossAccountSeq: "",
+      notifyProvider: settings.notifyProvider,
+      telegramBotToken: "",
+      telegramChatId: "",
+      notifyLinkUrl: settings.notifyLinkUrl,
+      notifyIntervalMinutes: settings.notifyIntervalMinutes
+    },
+    configured: {
+      tossClientId: Boolean(settings.tossClientId),
+      tossClientSecret: Boolean(settings.tossClientSecret),
+      tossAccountSeq: Boolean(settings.tossAccountSeq),
+      telegramBotToken: Boolean(settings.telegramBotToken),
+      telegramChatId: Boolean(settings.telegramChatId)
+    },
+    locked: Boolean(configuredValue(process.env.SHARE_TOKEN))
+  };
+}
+
+function saveRuntimeSettings(input) {
+  const current = readSettingsStore();
+  const next = Object.assign({}, current);
+  const textKeys = [
+    "watchlistSymbols",
+    "tossApiBaseUrl",
+    "tossAccountSeq",
+    "notifyProvider",
+    "telegramChatId",
+    "notifyLinkUrl",
+    "notifyIntervalMinutes"
+  ];
+  const secretKeys = ["tossClientId", "tossClientSecret", "telegramBotToken"];
+
+  textKeys.forEach(function (key) {
+    if (Object.prototype.hasOwnProperty.call(input, key)) {
+      next[key] = String(input[key] || "").trim();
+    }
+  });
+
+  secretKeys.forEach(function (key) {
+    if (Object.prototype.hasOwnProperty.call(input, key)) {
+      const value = String(input[key] || "").trim();
+      if (value) next[key] = value;
+    }
+  });
+
+  if (input.clearTossCredentials) {
+    delete next.tossClientId;
+    delete next.tossClientSecret;
+    delete next.tossAccountSeq;
+  }
+  if (input.clearTelegramCredentials) {
+    delete next.telegramBotToken;
+    delete next.telegramChatId;
+  }
+
+  next.updatedAt = now();
+  writeSettingsStore(next);
+  return settingsStatusPayload();
 }
 
 function json(res, status, payload) {
@@ -1848,10 +1967,11 @@ function mockMarketScenarioList() {
 }
 
 async function fetchTossPortfolio() {
-  const baseUrl = String(process.env.TOSS_API_BASE_URL || "https://openapi.tossinvest.com").replace(/\/+$/, "");
-  const clientId = String(process.env.TOSS_CLIENT_ID || "").trim();
-  const clientSecret = String(process.env.TOSS_CLIENT_SECRET || "").trim();
-  const forcedAccountSeq = String(process.env.TOSS_ACCOUNT_SEQ || "").trim();
+  const settings = runtimeSettings();
+  const baseUrl = String(settings.tossApiBaseUrl || "https://openapi.tossinvest.com").replace(/\/+$/, "");
+  const clientId = String(settings.tossClientId || "").trim();
+  const clientSecret = String(settings.tossClientSecret || "").trim();
+  const forcedAccountSeq = String(settings.tossAccountSeq || "").trim();
 
   if (!clientId || !clientSecret) {
     return demoTossPortfolio();
@@ -2150,7 +2270,7 @@ function analyzePortfolio(positions) {
 }
 
 function parseWatchlist(rawValue) {
-  const raw = String(rawValue !== undefined ? rawValue : process.env.WATCHLIST_SYMBOLS || "").trim();
+  const raw = String(rawValue !== undefined ? rawValue : runtimeSettings().watchlistSymbols || "").trim();
   const symbols = raw
     ? raw.split(/[,\s]+/).map(function (item) { return item.trim().toUpperCase(); }).filter(Boolean)
     : ["NVDA", "TSLA", "000660"];
@@ -2792,11 +2912,22 @@ async function flowLensSnapshot(options) {
   if (options.mock) return mockFlowLensSnapshot(options);
   return buildTossLensSnapshot(await fetchTossPortfolio(), {
     mock: false,
-    watchlistSymbols: options.watchlistSymbols
+    watchlistSymbols: options.watchlistSymbols || runtimeSettings().watchlistSymbols
   });
 }
 
 async function api(req, res, pathname) {
+  if (pathname === "/api/settings") {
+    if (req.method === "GET") return json(res, 200, settingsStatusPayload());
+    if (req.method === "PUT") {
+      if (configuredValue(process.env.SHARE_TOKEN)) {
+        return json(res, 403, { error: "공유 모드에서는 서버 설정을 변경할 수 없습니다." });
+      }
+      const body = await readBody(req);
+      return json(res, 200, saveRuntimeSettings(body.settings || body));
+    }
+  }
+
   if (pathname === "/api/economic-feed/rss") {
     if (req.method === "OPTIONS") return corsText(res, 204, "", "text/plain");
     if (req.method === "GET") {
@@ -3055,5 +3186,6 @@ if (require.main === module) {
 module.exports = {
   flowLensSnapshot,
   listen,
+  runtimeSettings,
   server
 };

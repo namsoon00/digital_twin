@@ -1,5 +1,7 @@
 .next/
 node_modules/
+__pycache__/
+*.pyc
 out/
 build/
 dist/
@@ -7,8 +9,11 @@ dist/
 .env*.local
 data/store.json
 data/settings.json
+data/accounts.json
 data/notification-state.json
 data/monitor-state.json
+data/python-monitor-state.json
 data/kakao-token.json
 data/*.pid
+data/python-monitor.log
 *.log

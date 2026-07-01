@@ -240,7 +240,8 @@ function settingsStatusPayload() {
     decisionThresholds: settings.decisionThresholds,
     modelDecisionThresholds: settings.modelDecisionThresholds,
     alertRules: settings.alertRules,
-    alertThresholds: settings.alertThresholds
+    alertThresholds: settings.alertThresholds,
+    alertCadenceMinutes: settings.alertCadenceMinutes
   };
   if (configuredValue(settings.valuationAssumptions)) publicSettings.valuationAssumptions = settings.valuationAssumptions;
   if (configuredValue(settings.marketSignalInputs)) publicSettings.marketSignalInputs = settings.marketSignalInputs;
@@ -281,7 +282,8 @@ function saveRuntimeSettings(input) {
     "decisionThresholds",
     "modelDecisionThresholds",
     "alertRules",
-    "alertThresholds"
+    "alertThresholds",
+    "alertCadenceMinutes"
   ];
   const secretKeys = ["tossClientId", "tossClientSecret", "telegramBotToken"];
 

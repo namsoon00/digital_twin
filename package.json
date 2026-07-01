@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "check": "node --check server.js && node --check public/app.js && node --check scripts/smoke-test.js && node --check scripts/share-local.js && node --check scripts/issue-workflow.js && node --check scripts/notify-worker.js && node --check scripts/notify-realtime-service.js && node --check scripts/stamp-flutter-web-build.js && node --check scripts/generate-static-mock-market.js",
+    "check": "node --check server.js && node --check public/app.js && node --check scripts/smoke-test.js && node --check scripts/share-local.js && node --check scripts/issue-workflow.js && node --check scripts/notify-worker.js && node --check scripts/notify-realtime-service.js && node --check scripts/stamp-flutter-web-build.js && node --check scripts/generate-static-mock-market.js && npm run python:check",
     "dev": "node server.js",
     "generate:mock-market": "node scripts/generate-static-mock-market.js",
     "issue:claim": "node scripts/issue-workflow.js claim",
@@ -21,11 +21,23 @@
     "notify:realtime:stop": "node scripts/notify-realtime-service.js stop",
     "notify:telegram-chat": "node scripts/notify-worker.js --telegram-chat-ids",
     "notify:watch": "node scripts/notify-worker.js --daemon",
+    "python:accounts": "python3 python_service/service.py accounts",
+    "python:check": "python3 -m compileall -q python_service/service.py python_service/monitor_service.py python_service/digital_twin python_service/tests",
+    "python:monitor": "python3 python_service/service.py monitor",
+    "python:monitor:once": "python3 python_service/service.py monitor once",
+    "python:monitor:status": "python3 python_service/service.py monitor status",
+    "python:monitor:watch": "python3 python_service/service.py monitor watch",
+    "python:service": "python3 python_service/monitor_service.py",
+    "python:service:restart": "python3 python_service/monitor_service.py restart",
+    "python:service:start": "python3 python_service/monitor_service.py start",
+    "python:service:status": "python3 python_service/monitor_service.py status",
+    "python:service:stop": "python3 python_service/monitor_service.py stop",
+    "python:test": "python3 -m unittest discover -s python_service/tests",
     "share": "node scripts/share-local.js",
     "smoke": "node scripts/smoke-test.js",
     "stamp:flutter-web": "node scripts/stamp-flutter-web-build.js",
     "start": "node server.js",
-    "test": "npm run check && npm run smoke"
+    "test": "npm run check && npm run smoke && npm run python:test"
   },
   "dependencies": {},
   "devDependencies": {}

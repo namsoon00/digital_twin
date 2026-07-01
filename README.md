@@ -165,6 +165,24 @@ npm run notify:realtime:stop
 
 장 시간 판별은 평일 기준의 일반 세션을 사용합니다. 한국장은 09:00-15:30 KST 정규장, 미국장은 09:30-16:00 ET 정규장을 기준으로 보며, 거래소 휴장일과 조기폐장은 아직 별도 캘린더로 보정하지 않습니다.
 
+## Python 서비스 전환
+
+다중 계정, 실시간 모니터링, 스케줄링, 모델 개발 로직은 Python 서비스 레이어로 이전 중입니다. 기존 웹은 유지하되 Python 서비스가 `data/accounts.json`의 여러 계정을 순회하고 계정별 이전 스냅샷과 메시지 주기를 `data/python-monitor-state.json`에 저장합니다.
+
+```bash
+npm run python:accounts -- list
+npm run python:accounts -- add --id main --label "메인" --client-id "$TOSS_CLIENT_ID" --client-secret "$TOSS_CLIENT_SECRET" --account-seq "$TOSS_ACCOUNT_SEQ" --watchlist "NVDA,005930"
+npm run python:monitor:once -- --dry-run --force
+npm run python:monitor:status
+npm run python:monitor:watch
+npm run python:service:start
+npm run python:service:status
+npm run python:service:restart
+npm run python:service:stop
+```
+
+Python 서비스는 계정별 연결 상태, 보유 종목 변화, 손익률/평가액 급변, 현금비중 급변, 판단 변화, 보유 타이밍을 감지합니다. 모델 공식은 제한된 안전 수식 평가기로 실행해 임의 Python 코드 실행을 막습니다. 자세한 구조는 `docs/python-service.md`에 정리되어 있습니다.
+
 텔레그램 발송을 쓰려면 봇에게 `/start`를 보낸 뒤 `.env.local`에 `NOTIFY_PROVIDER=telegram`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`를 넣습니다. `TELEGRAM_CHAT_ID`는 토큰을 넣은 상태에서 아래 명령으로 확인합니다.
 
 ```bash

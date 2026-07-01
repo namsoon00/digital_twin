@@ -34,9 +34,9 @@ Application:
 
 Infrastructure:
 
-- `python_service/digital_twin/infrastructure/settings.py`: env, local settings, private JSON helpers
+- `python_service/digital_twin/infrastructure/settings.py`: env fallback and SQLite-backed runtime settings facade
 - `python_service/digital_twin/infrastructure/sqlite_accounts.py`: SQLite account repository
-- `python_service/digital_twin/infrastructure/sqlite_operational.py`: SQLite snapshots, cadence, domain events, and model-review jobs
+- `python_service/digital_twin/infrastructure/sqlite_operational.py`: SQLite app store, runtime settings, snapshots, cadence, domain events, and model-review jobs
 - `python_service/digital_twin/infrastructure/json_monitor_state.py`: legacy JSON monitor state compatibility only
 - `python_service/digital_twin/infrastructure/toss_snapshots.py`: Toss adapter and demo snapshot fallback
 - `python_service/digital_twin/infrastructure/notifications.py`: console and Telegram delivery

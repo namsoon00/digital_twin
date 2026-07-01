@@ -150,7 +150,7 @@ class AccountRegistry:
             client_id=self.settings.get("tossClientId", ""),
             client_secret=self.settings.get("tossClientSecret", ""),
             account_seq=self.settings.get("tossAccountSeq", ""),
-            watchlist_symbols=split_symbols(self.settings.get("watchlistSymbols", "NVDA,TSLA,000660")),
+            watchlist_symbols=split_symbols(self.settings.get("watchlistSymbols", "TSLA,AAPL,NVDA,000660")),
             notify_provider=self.settings.get("notifyProvider", ""),
             telegram_bot_token=self.settings.get("telegramBotToken", ""),
             telegram_chat_id=self.settings.get("telegramChatId", ""),
@@ -238,4 +238,3 @@ class AccountRegistry:
         if not removed:
             return False
         return True
-

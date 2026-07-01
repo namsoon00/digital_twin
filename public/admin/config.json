@@ -13,7 +13,7 @@
     "공유 미리보기에서는 서버 설정과 계정 DB 쓰기를 차단합니다."
   ],
   "localData": {
-    "generatedAt": "2026-07-01T22:00:50.063484Z",
+    "generatedAt": "2026-07-01T22:05:48.107744Z",
     "sources": {
       "serviceDb": "data/service.db",
       "serviceDbExists": true,
@@ -34,8 +34,9 @@
         "clientSecret": true,
         "accountSeq": false,
         "watchlistSymbols": [
-          "NVDA",
           "TSLA",
+          "AAPL",
+          "NVDA",
           "000660"
         ],
         "notifyProvider": "telegram",
@@ -46,7 +47,7 @@
       }
     ],
     "settings": {
-      "watchlistSymbols": "NVDA,TSLA,000660",
+      "watchlistSymbols": "TSLA,AAPL,NVDA,000660",
       "tossApiBaseUrl": "https://openapi.tossinvest.com",
       "notifyProvider": "telegram",
       "notifyLinkUrl": "http://127.0.0.1:3000",
@@ -66,6 +67,16 @@
     },
     "notification": {
       "alertRules": [
+        {
+          "key": "modelBuy",
+          "default": 1,
+          "unit": ""
+        },
+        {
+          "key": "modelSell",
+          "default": 1,
+          "unit": ""
+        },
         {
           "key": "holdingTiming",
           "default": 1,
@@ -130,6 +141,16 @@
         }
       ],
       "alertCadenceMinutes": [
+        {
+          "key": "modelBuy",
+          "default": 10,
+          "unit": "minutes"
+        },
+        {
+          "key": "modelSell",
+          "default": 10,
+          "unit": "minutes"
+        },
         {
           "key": "holdingTiming",
           "default": 10,
@@ -260,7 +281,7 @@
         "npm start"
       ],
       "storage": [
-        "data/settings.json",
+        "data/service.db: runtime_settings",
         ".env.local"
       ],
       "fields": [
@@ -268,7 +289,7 @@
           "key": "watchlistSymbols",
           "label": "기본 관심 종목",
           "type": "symbols",
-          "default": "NVDA,TSLA,000660"
+          "default": "TSLA,AAPL,NVDA,000660"
         },
         {
           "key": "notifyProvider",
@@ -327,6 +348,16 @@
       ],
       "defaults": {
         "alertRules": [
+          {
+            "key": "modelBuy",
+            "default": 1,
+            "unit": ""
+          },
+          {
+            "key": "modelSell",
+            "default": 1,
+            "unit": ""
+          },
           {
             "key": "holdingTiming",
             "default": 1,
@@ -391,6 +422,16 @@
           }
         ],
         "alertCadenceMinutes": [
+          {
+            "key": "modelBuy",
+            "default": 10,
+            "unit": "minutes"
+          },
+          {
+            "key": "modelSell",
+            "default": 10,
+            "unit": "minutes"
+          },
           {
             "key": "holdingTiming",
             "default": 10,
@@ -494,5 +535,5 @@
       ]
     }
   ],
-  "buildId": "b21c235b4b59"
+  "buildId": "3678aeb91b0a"
 }

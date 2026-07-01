@@ -122,15 +122,47 @@ function defaultStore() {
   };
 }
 
-function ensureStore() {
+function readStoreLegacy() {
+  if (!fs.existsSync(storePath)) return {};
+  try {
+    const parsed = JSON.parse(fs.readFileSync(storePath, "utf8"));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch (error) {
+    return {};
+  }
+}
+
+function writeStoreLegacy(store) {
   if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
-  if (!fs.existsSync(storePath)) writeStore(defaultStore());
+  const tempPath = storePath + "." + process.pid + "." + Date.now() + ".tmp";
+  fs.writeFileSync(tempPath, JSON.stringify(store, null, 2) + "\n", "utf8");
+  fs.renameSync(tempPath, storePath);
+}
+
+function readStoreDatabase() {
+  try {
+    const payload = pythonServiceJsonSync(["store", "raw-json"]);
+    return payload.store && typeof payload.store === "object" && !Array.isArray(payload.store) ? payload.store : {};
+  } catch (error) {
+    return readStoreLegacy();
+  }
+}
+
+function writeStoreDatabase(store) {
+  try {
+    pythonServiceJsonSync(["store", "replace-json"], { store: store || {} });
+  } catch (error) {
+    writeStoreLegacy(store || {});
+  }
 }
 
 function readStore() {
-  ensureStore();
   const fallback = defaultStore();
-  const parsed = JSON.parse(fs.readFileSync(storePath, "utf8"));
+  let parsed = readStoreDatabase();
+  if (!parsed || !Object.keys(parsed).length) {
+    parsed = fallback;
+    writeStoreDatabase(parsed);
+  }
   return Object.assign({}, fallback, parsed, {
     profile: Object.assign({}, fallback.profile, parsed.profile || {}),
     memories: Array.isArray(parsed.memories) ? parsed.memories : [],
@@ -140,10 +172,7 @@ function readStore() {
 }
 
 function writeStore(store) {
-  if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
-  const tempPath = storePath + "." + process.pid + "." + Date.now() + ".tmp";
-  fs.writeFileSync(tempPath, JSON.stringify(store, null, 2) + "\n", "utf8");
-  fs.renameSync(tempPath, storePath);
+  writeStoreDatabase(store);
 }
 
 function save(mutator) {
@@ -153,7 +182,7 @@ function save(mutator) {
   return store;
 }
 
-function readSettingsStore() {
+function readSettingsStoreLegacy() {
   if (!fs.existsSync(settingsPath)) return {};
   try {
     const parsed = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
@@ -163,7 +192,7 @@ function readSettingsStore() {
   }
 }
 
-function writeSettingsStore(settings) {
+function writeSettingsStoreLegacy(settings) {
   if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
   const tempPath = settingsPath + "." + process.pid + "." + Date.now() + ".tmp";
   fs.writeFileSync(tempPath, JSON.stringify(settings, null, 2) + "\n", {
@@ -171,6 +200,38 @@ function writeSettingsStore(settings) {
     mode: 0o600
   });
   fs.renameSync(tempPath, settingsPath);
+}
+
+function pythonServiceJsonSync(args, payload) {
+  const result = childProcess.spawnSync(process.env.PYTHON_BIN || "python3", ["python_service/service.py"].concat(args), {
+    cwd: rootDir,
+    env: Object.assign({}, process.env),
+    input: payload ? JSON.stringify(payload) : "",
+    encoding: "utf8",
+    maxBuffer: 1024 * 1024
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    throw new Error(String(result.stderr || result.stdout || "Python service failed").trim());
+  }
+  return result.stdout.trim() ? JSON.parse(result.stdout) : {};
+}
+
+function readSettingsStore() {
+  try {
+    const payload = pythonServiceJsonSync(["settings", "raw-json"]);
+    return payload.settings && typeof payload.settings === "object" && !Array.isArray(payload.settings) ? payload.settings : {};
+  } catch (error) {
+    return readSettingsStoreLegacy();
+  }
+}
+
+function writeSettingsStore(settings) {
+  try {
+    pythonServiceJsonSync(["settings", "replace-json"], { settings: settings || {} });
+  } catch (error) {
+    writeSettingsStoreLegacy(settings || {});
+  }
 }
 
 function configuredValue(value) {
@@ -188,7 +249,7 @@ function settingFromStoreOrEnv(store, key, envName, fallback) {
 function runtimeSettings() {
   const store = readSettingsStore();
   return {
-    watchlistSymbols: settingFromStoreOrEnv(store, "watchlistSymbols", "WATCHLIST_SYMBOLS", "NVDA,TSLA,000660"),
+    watchlistSymbols: settingFromStoreOrEnv(store, "watchlistSymbols", "WATCHLIST_SYMBOLS", "TSLA,AAPL,NVDA,000660"),
     tossApiBaseUrl: settingFromStoreOrEnv(store, "tossApiBaseUrl", "TOSS_API_BASE_URL", "https://openapi.tossinvest.com"),
     tossClientId: settingFromStoreOrEnv(store, "tossClientId", "TOSS_CLIENT_ID", ""),
     tossClientSecret: settingFromStoreOrEnv(store, "tossClientSecret", "TOSS_CLIENT_SECRET", ""),
@@ -2416,7 +2477,7 @@ function parseWatchlist(rawValue) {
   const raw = String(rawValue !== undefined ? rawValue : runtimeSettings().watchlistSymbols || "").trim();
   const symbols = raw
     ? raw.split(/[,\s]+/).map(function (item) { return item.trim().toUpperCase(); }).filter(Boolean)
-    : ["NVDA", "TSLA", "000660"];
+    : ["TSLA", "AAPL", "NVDA", "000660"];
   const uniqueSymbols = symbols.filter(function (symbol, index, list) {
     return list.indexOf(symbol) === index;
   }).slice(0, 30);

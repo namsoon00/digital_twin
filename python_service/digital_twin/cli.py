@@ -8,15 +8,23 @@ from typing import List
 from .admin_preview import write_admin_preview
 from .application.account_service import AccountApplicationService
 from .application.model_review_service import ModelReviewScheduler
+from .application.notification_service import NotificationQueueScheduler
 from .application.scheduler import MIN_REALTIME_INTERVAL_SECONDS, RealtimeScheduler
 from .domain.accounts import AccountConfig, split_symbols
 from .domain.monitoring import RealtimeMonitor
 from .domain.portfolio import AlertEvent
 from .infrastructure.event_bus import default_event_bus
-from .infrastructure.sqlite_operational import SQLiteModelReviewJobStore, SQLiteMonitorStore
-from .infrastructure.notifications import notifier_for_account, send_events
-from .infrastructure.service_factory import build_model_review_runner, build_monitor_runner
-from .infrastructure.settings import runtime_settings, utc_now
+from .infrastructure.sqlite_operational import SQLiteAppStore, SQLiteModelReviewJobStore, SQLiteMonitorStore, SQLiteNotificationJobStore
+from .infrastructure.notifications import queued_notifier_for_account, send_events
+from .infrastructure.service_factory import build_model_review_runner, build_monitor_runner, build_notification_queue_runner
+from .infrastructure.settings import (
+    SECRET_SETTING_KEYS,
+    read_settings_store,
+    runtime_settings,
+    save_runtime_settings,
+    utc_now,
+    write_settings_store,
+)
 from .infrastructure.sqlite_accounts import AccountRegistry
 from .infrastructure.toss_snapshots import build_snapshot
 
@@ -227,6 +235,77 @@ def model_review_command(args) -> int:
     return 1
 
 
+def notifications_command(args) -> int:
+    store = SQLiteNotificationJobStore()
+    if args.notifications_action == "status":
+        print(json.dumps({"jobs": store.summary()}, ensure_ascii=False))
+        return 0
+    settings = runtime_settings()
+    limit = int(args.limit or settings.get("notificationQueueBatchSize") or 10)
+    runner = build_notification_queue_runner(dry_run=args.dry_run)
+    if args.notifications_action == "once":
+        processed = runner.run_once(limit=limit)
+        print("notificationJobsProcessed=" + str(processed))
+        return 0
+    if args.notifications_action == "watch":
+        interval = int(
+            os.environ.get("NOTIFICATION_QUEUE_INTERVAL_SECONDS")
+            or settings.get("notificationQueueIntervalSeconds")
+            or 30
+        )
+        NotificationQueueScheduler(runner, interval).run_forever(limit=limit)
+        return 0
+    return 1
+
+
+MASKED_RUNTIME_SETTING_KEYS = set(SECRET_SETTING_KEYS) | {"tossAccountSeq", "telegramChatId"}
+
+
+def public_settings_payload(settings):
+    public = {}
+    configured = {}
+    for key, value in settings.items():
+        if key in MASKED_RUNTIME_SETTING_KEYS:
+            public[key] = ""
+            configured[key] = bool(value)
+        else:
+            public[key] = value
+    return {"settings": public, "configured": configured}
+
+
+def settings_command(args) -> int:
+    if args.settings_action == "raw-json":
+        print(json.dumps({"settings": read_settings_store()}, ensure_ascii=False))
+        return 0
+    if args.settings_action == "save-json":
+        payload = json.loads(sys.stdin.read() or "{}")
+        settings = payload.get("settings") if isinstance(payload.get("settings"), dict) else payload
+        saved = save_runtime_settings(settings if isinstance(settings, dict) else {})
+        print(json.dumps(public_settings_payload(saved), ensure_ascii=False))
+        return 0
+    if args.settings_action == "replace-json":
+        payload = json.loads(sys.stdin.read() or "{}")
+        settings = payload.get("settings") if isinstance(payload.get("settings"), dict) else payload
+        write_settings_store(settings if isinstance(settings, dict) else {})
+        print(json.dumps({"ok": True}, ensure_ascii=False))
+        return 0
+    return 1
+
+
+def app_store_command(args) -> int:
+    store = SQLiteAppStore()
+    if args.store_action == "raw-json":
+        print(json.dumps({"store": store.load()}, ensure_ascii=False))
+        return 0
+    if args.store_action == "replace-json":
+        payload = json.loads(sys.stdin.read() or "{}")
+        next_store = payload.get("store") if isinstance(payload.get("store"), dict) else payload
+        store.replace(next_store if isinstance(next_store, dict) else {})
+        print(json.dumps({"store": store.load()}, ensure_ascii=False))
+        return 0
+    return 1
+
+
 def handoff_command(args) -> int:
     if args.handoff_action != "notify":
         return 1
@@ -239,12 +318,20 @@ def handoff_command(args) -> int:
     results = []
     targets = accounts or [None]
     for account in targets:
-        result = notifier_for_account(account).send(message)
+        result = queued_notifier_for_account(account, message_type="workHandoff").send(message)
         results.append(result)
-    delivered = sum(1 for result in results if result.delivered)
-    failed = len(results) - delivered
+    queued = sum(result.queued for result in results if result.delivered)
+    failed = len([result for result in results if not result.delivered])
     reason = next((result.reason for result in results if not result.delivered and result.reason), "")
-    print("handoffNotifications=" + str(len(results)) + " delivered=" + str(delivered) + " failed=" + str(failed) + (" reason=" + reason if reason else ""))
+    print(
+        "handoffNotifications="
+        + str(len(results))
+        + " queued="
+        + str(queued)
+        + " failed="
+        + str(failed)
+        + (" reason=" + reason if reason else "")
+    )
     return 0 if failed == 0 else 1
 
 
@@ -309,6 +396,30 @@ def build_parser() -> argparse.ArgumentParser:
     review_watch.add_argument("--limit", default="")
     model_review_actions.add_parser("status")
     model_review.set_defaults(func=model_review_command)
+
+    notifications = subparsers.add_parser("notifications", help="Run queued notification delivery")
+    notification_actions = notifications.add_subparsers(dest="notifications_action", required=True)
+    notify_once = notification_actions.add_parser("once")
+    notify_once.add_argument("--dry-run", action="store_true")
+    notify_once.add_argument("--limit", default="")
+    notify_watch = notification_actions.add_parser("watch")
+    notify_watch.add_argument("--dry-run", action="store_true")
+    notify_watch.add_argument("--limit", default="")
+    notification_actions.add_parser("status")
+    notifications.set_defaults(func=notifications_command)
+
+    settings = subparsers.add_parser("settings", help="Manage runtime settings")
+    settings_actions = settings.add_subparsers(dest="settings_action", required=True)
+    settings_actions.add_parser("raw-json")
+    settings_actions.add_parser("save-json")
+    settings_actions.add_parser("replace-json")
+    settings.set_defaults(func=settings_command)
+
+    app_store = subparsers.add_parser("store", help="Manage app store data")
+    app_store_actions = app_store.add_subparsers(dest="store_action", required=True)
+    app_store_actions.add_parser("raw-json")
+    app_store_actions.add_parser("replace-json")
+    app_store.set_defaults(func=app_store_command)
 
     handoff = subparsers.add_parser("handoff", help="Send development handoff notifications")
     handoff_actions = handoff.add_subparsers(dest="handoff_action", required=True)

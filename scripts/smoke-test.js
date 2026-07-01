@@ -285,13 +285,15 @@ function checkFrontendAdminRender() {
     renderForSearch("?tab=accounts"),
     renderForSearch("?tab=notifications"),
     renderForSearch("?tab=modeling"),
+    renderForSearch("?tab=monitoring"),
     renderForSearch("?tab=accounts", "namsoon00.github.io")
   ]).then(function (pages) {
     const overviewHtml = pages[0];
     const accountHtml = pages[1];
     const notificationHtml = pages[2];
     const modelingHtml = pages[3];
-    const staticAccountHtml = pages[4];
+    const monitoringHtml = pages[4];
+    const staticAccountHtml = pages[5];
 
     assertOk(overviewHtml.indexOf("계정·알림·모델 운영 콘솔") >= 0, "메인 운영 콘솔 제목이 렌더링되지 않았습니다.");
     ["overview", "accounts", "notifications", "modeling", "monitoring"].forEach(function (tab) {
@@ -316,6 +318,8 @@ function checkFrontendAdminRender() {
     assertOk(modelingHtml.indexOf("매매 판단 기준 관리") >= 0, "쉬운 모델 판단 기준 제목이 렌더링되지 않았습니다.");
     assertOk(modelingHtml.indexOf("model-timing-panel") < 0, "Mock 시계열 기반 타이밍 패널이 아직 렌더링됩니다.");
     assertOk(modelingHtml.indexOf("웹에서 운영하는 매수·매도 타이밍 모델") < 0, "타이밍 모델 제목이 아직 렌더링됩니다.");
+    assertOk(monitoringHtml.indexOf("watchlist-panel") >= 0, "모니터링 탭에 관심 종목 관리 패널이 렌더링되지 않았습니다.");
+    assertOk(monitoringHtml.indexOf("토스 앱의 관심 목록") >= 0, "관심 종목 API 한계 안내가 렌더링되지 않았습니다.");
     assertOk(staticAccountHtml.indexOf('value="Pages DB 계정"') >= 0, "정적 빌드 DB 계정 표시 이름이 폼에 채워지지 않았습니다.");
     assertOk(staticAccountHtml.indexOf('value="MSFT,035720"') >= 0, "정적 빌드 관심 종목이 폼에 채워지지 않았습니다.");
     assertOk(staticAccountHtml.indexOf('value="true"') < 0, "정적 빌드의 마스킹된 boolean 값이 계정 폼에 그대로 표시됩니다.");
@@ -413,6 +417,7 @@ async function withServer(extraEnv, callback) {
       HOST: "127.0.0.1",
       PORT: String(randomPort()),
       LOCAL_CODEX_ENABLED: "0",
+      WATCHLIST_SYMBOLS: "TSLA,AAPL,NVDA,000660",
       SETTINGS_PATH: path.join(os.tmpdir(), "digital-twin-smoke-settings-" + runId + ".json"),
       DIGITAL_TWIN_DATA_DIR: path.join(os.tmpdir(), "digital-twin-smoke-data-" + runId)
     }, extraEnv || {})
@@ -445,13 +450,15 @@ async function checkNormalMode(port) {
   assertOk(settingsPayload.settings.tossClientSecret === "", "설정 API가 secret 원문을 내려주고 있습니다.");
   assertOk(Object.prototype.hasOwnProperty.call(settingsPayload.settings, "alertRules"), "설정 API에 알림 규칙 필드가 없습니다.");
   assertOk(Object.prototype.hasOwnProperty.call(settingsPayload.settings, "modelDecisionThresholds"), "설정 API에 모델 판단 기준 필드가 없습니다.");
+  assertOk(settingsPayload.settings.watchlistSymbols.indexOf("TSLA") >= 0, "기본 관심 종목에 TSLA가 없습니다.");
+  assertOk(settingsPayload.settings.watchlistSymbols.indexOf("AAPL") >= 0, "기본 관심 종목에 AAPL이 없습니다.");
 
   const savedSettings = await request(port, "/api/settings", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       settings: {
-        watchlistSymbols: "AAPL,NVDA",
+        watchlistSymbols: "TSLA,AAPL,NVDA",
         tossApiBaseUrl: "http://127.0.0.1:1",
         tossClientId: "fake-client",
         tossClientSecret: "fake-secret",
@@ -467,6 +474,7 @@ async function checkNormalMode(port) {
   const savedSettingsPayload = JSON.parse(savedSettings.body);
   assertOk(savedSettingsPayload.configured.tossClientSecret === true, "저장된 토스 secret 설정 상태가 true가 아닙니다.");
   assertOk(savedSettingsPayload.settings.tossClientSecret === "", "저장 응답이 토스 secret을 내려주고 있습니다.");
+  assertOk(savedSettingsPayload.settings.watchlistSymbols === "TSLA,AAPL,NVDA", "저장된 관심 종목 값이 응답에 없습니다.");
   assertOk(savedSettingsPayload.settings.alertRules.indexOf("priceStop=1") >= 0, "저장된 알림 규칙이 응답에 없습니다.");
   assertOk(savedSettingsPayload.settings.modelDecisionThresholds.indexOf("modelBuy=75") >= 0, "저장된 모델 기준값이 응답에 없습니다.");
 
@@ -488,7 +496,7 @@ async function checkNormalMode(port) {
         clientId: "db-client",
         clientSecret: "db-secret",
         accountSeq: "7",
-        watchlistSymbols: "AAPL,NVDA",
+        watchlistSymbols: "TSLA,AAPL,NVDA",
         notifyProvider: "telegram",
         telegramBotToken: "telegram-secret",
         telegramChatId: "9876",
@@ -514,6 +522,8 @@ async function checkNormalMode(port) {
   const tossPayload = JSON.parse(tossLens.body);
   assertOk(tossPayload.toss && Array.isArray(tossPayload.toss.positions), "토스 판단 API에 보유 종목 배열이 없습니다.");
   assertOk(tossPayload.tossDecision && Array.isArray(tossPayload.tossDecision.items), "토스 판단 API에 판단 항목이 없습니다.");
+  assertOk(tossPayload.tossDecision.items.some(function (item) { return item.symbol === "AAPL"; }), "토스 판단 항목에 AAPL이 없습니다.");
+  assertOk(tossPayload.tossDecision.items.some(function (item) { return item.symbol === "TSLA"; }), "토스 판단 항목에 TSLA 관심 종목이 없습니다.");
   assertOk(tossPayload.portfolio && Array.isArray(tossPayload.portfolio.markets), "토스 판단 API에 시장별 현금비중 배열이 없습니다.");
   assertOk(tossPayload.portfolio.markets.some(function (market) { return market.key === "KR"; }), "시장별 현금비중에 한국장 항목이 없습니다.");
   assertOk(tossPayload.portfolio.markets.some(function (market) { return market.key === "US"; }), "시장별 현금비중에 미국장 항목이 없습니다.");

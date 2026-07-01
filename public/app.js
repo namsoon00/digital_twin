@@ -1,7 +1,7 @@
 (function () {
   var app = document.getElementById("app");
   var defaultSettings = {
-    watchlistSymbols: "NVDA,TSLA,000660",
+    watchlistSymbols: "TSLA,AAPL,NVDA,000660",
     tossApiBaseUrl: "https://openapi.tossinvest.com",
     tossClientId: "",
     tossClientSecret: "",
@@ -20,15 +20,15 @@
       "005930,6500,12,20"
     ].join("\n"),
     marketSignalInputs: [
-      "005930,118,1.8,620000,480000,18,2.1",
-      "AAPL,86,1.4,320000,410000,-12,-1.8",
-      "NVDA,132,2.3,780000,520000,22,3.5",
-      "TSLA,91,1.2,210000,260000,-8,-0.9",
-      "000660,122,1.7,510000,390000,15,2.4"
+      "005930,118,1.8,620000,480000,18,2.1,71000,68000,14500000000,8200000000,-11200000000",
+      "AAPL,86,1.4,320000,410000,-12,-1.8,205,212,-4200000,-1800000,5200000",
+      "NVDA,132,2.3,780000,520000,22,3.5,174,159,11800000,7400000,-9300000",
+      "TSLA,91,1.2,210000,260000,-8,-0.9,182,197,-6300000,-2100000,7600000",
+      "000660,122,1.7,510000,390000,15,2.4,236000,218000,9800000000,13400000000,-15100000000"
     ].join("\n"),
     fairValueFormula: "eps * targetPer * growthWeight * qualityWeight * riskWeight",
-    buyScoreFormula: "50 + ((tradeStrength - 100) * 0.25 + (volumeRatio - 1) * 12 + (buyShare - 50) * 0.35 + bidAskImbalance * 0.28 + priceChangeRate * 1.1) * flowWeight + undervalueBonus * valuationWeight - expensivePenalty * valuationWeight",
-    sellScoreFormula: "50 + ((100 - tradeStrength) * 0.22 + (volumeRatio - 1) * 8 + (50 - buyShare) * 0.42 - bidAskImbalance * 0.28 - priceChangeRate * 1.2) * flowWeight + expensiveBonus * valuationWeight",
+    buyScoreFormula: "50 + ((tradeStrength - 100) * 0.22 + volumePressure + (buyShare - 50) * 0.32 + bidAskImbalance * 0.22 + priceChangeRate * 0.8 + trendScore * 0.45 + investorFlowScore * 0.35) * flowWeight + undervalueBonus * valuationWeight - expensivePenalty * valuationWeight",
+    sellScoreFormula: "50 + ((100 - tradeStrength) * 0.2 + volumePressure * 0.55 + (50 - buyShare) * 0.38 - bidAskImbalance * 0.22 - priceChangeRate * 0.9 - trendScore * 0.35 - investorFlowScore * 0.3) * flowWeight + expensiveBonus * valuationWeight",
     modelName: "나의 매수/매도 모델",
     modelHypothesis: "수급, 가치, 내 점수, 리스크를 함께 봐서 매수 후보와 매도 후보를 분리한다.",
     customBuyModelFormula: "buyScore * 0.35 + thesisScore * thesisWeight + confidenceScore * confidenceWeight + max(0, targetReturn) * 0.15 + undervalueBonus * valuationWeight - riskScore * riskControlWeight",
@@ -1456,6 +1456,11 @@
           sellVolume: numeric(parts[4]),
           bidAskImbalance: numeric(parts[5]),
           priceChangeRate: numeric(parts[6]),
+          ma20: numeric(parts[7]),
+          ma60: numeric(parts[8]),
+          foreignNet: numeric(parts[9]),
+          institutionNet: numeric(parts[10]),
+          individualNet: numeric(parts[11]),
           source: "manual"
         };
       });
@@ -1576,6 +1581,11 @@
       sellVolume: signalValue(merged, ["sellVolume", "sellTradeVolume", "askVolume"]),
       bidAskImbalance: signalValue(merged, ["bidAskImbalance", "orderbookImbalance", "imbalance"]),
       priceChangeRate: signalValue(merged, ["priceChangeRate", "changeRate", "changePercent"]),
+      ma20: signalValue(merged, ["ma20", "movingAverage20", "sma20"]),
+      ma60: signalValue(merged, ["ma60", "movingAverage60", "sma60"]),
+      foreignNet: signalValue(merged, ["foreignNet", "foreignNetBuy", "foreignInvestorNet", "foreignerNetBuy"]),
+      institutionNet: signalValue(merged, ["institutionNet", "institutionNetBuy", "institutionalNet", "institutionInvestorNet"]),
+      individualNet: signalValue(merged, ["individualNet", "individualNetBuy", "retailNet", "personalNetBuy"]),
       source: merged.source || (Object.keys(fromItem).length ? "toss" : "")
     };
   }
@@ -1587,7 +1597,12 @@
       "buyVolume",
       "sellVolume",
       "bidAskImbalance",
-      "priceChangeRate"
+      "priceChangeRate",
+      "ma20",
+      "ma60",
+      "foreignNet",
+      "institutionNet",
+      "individualNet"
     ].some(function (key) {
       return Number(signal[key] || 0) !== 0;
     });
@@ -1600,32 +1615,72 @@
     return total > 0 ? (buy / total) * 100 : 50;
   }
 
+  function modelFeatureVariables(item, signal, valuation) {
+    item = item || {};
+    signal = signal || {};
+    valuation = valuation || {};
+    var current = currentPriceOf(item);
+    var ma20 = Number(signal.ma20 || item.ma20 || 0);
+    var ma60 = Number(signal.ma60 || item.ma60 || 0);
+    var tradeStrength = Number(signal.tradeStrength || 0);
+    var volumeRatio = Number(signal.volumeRatio || 0);
+    var buyVolume = Number(signal.buyVolume || 0);
+    var sellVolume = Number(signal.sellVolume || 0);
+    var buyShare = buyVolumeShare(signal);
+    var foreignNet = Number(signal.foreignNet || 0);
+    var institutionNet = Number(signal.institutionNet || 0);
+    var individualNet = Number(signal.individualNet || 0);
+    var smartMoneyNet = foreignNet + institutionNet;
+    var investorBase = Math.abs(foreignNet) + Math.abs(institutionNet) + Math.abs(individualNet);
+    var investorBalance = smartMoneyNet - individualNet * 0.35;
+    var trendDistance20 = current && ma20 ? ((current / ma20) - 1) * 100 : 0;
+    var trendDistance60 = current && ma60 ? ((current / ma60) - 1) * 100 : 0;
+    var maSpread = ma20 && ma60 ? ((ma20 / ma60) - 1) * 100 : 0;
+    return {
+      tradeStrength: tradeStrength,
+      volumeRatio: volumeRatio,
+      volumePressure: clamp((volumeRatio - 1) * 10, -10, 25),
+      buyVolume: buyVolume,
+      sellVolume: sellVolume,
+      buyShare: buyShare,
+      sellShare: Math.max(0, 100 - buyShare),
+      bidAskImbalance: Number(signal.bidAskImbalance || 0),
+      priceChangeRate: Number(signal.priceChangeRate || 0),
+      ma20: ma20,
+      ma60: ma60,
+      trendDistance20: trendDistance20,
+      trendDistance60: trendDistance60,
+      maSpread: maSpread,
+      trendScore: clamp(trendDistance20 * 0.35 + trendDistance60 * 0.2 + maSpread * 0.4, -15, 15),
+      foreignNet: foreignNet,
+      institutionNet: institutionNet,
+      individualNet: individualNet,
+      smartMoneyNet: smartMoneyNet,
+      investorFlowBalance: investorBalance,
+      investorFlowScore: investorBase ? clamp((investorBalance / investorBase) * 100, -30, 30) : 0,
+      currentPrice: current,
+      fairValue: Number(valuation.fairValue || 0),
+      fairValueGap: Number(valuation.gap || 0),
+      valuationRank: Number(valuation.rank || 0)
+    };
+  }
+
   function marketSignalScores(signal, context) {
     context = context || {};
     var valuation = context.valuation || {};
     var item = context.item || {};
     var weights = formulaWeights();
-    var strength = signal.tradeStrength || 100;
-    var volumeRatio = signal.volumeRatio || 1;
-    var imbalance = signal.bidAskImbalance || 0;
-    var priceChange = signal.priceChangeRate || 0;
-    var buyShare = buyVolumeShare(signal);
+    var featureVars = modelFeatureVariables(item, signal, valuation);
+    var strength = featureVars.tradeStrength || 100;
+    var volumeRatio = featureVars.volumeRatio || 1;
+    var imbalance = featureVars.bidAskImbalance || 0;
+    var priceChange = featureVars.priceChangeRate || 0;
+    var buyShare = featureVars.buyShare;
     var valuationGap = Number(valuation.gap || 0);
     var expensivePenalty = valuationGap < 0 ? Math.min(18, Math.abs(valuationGap) / 2) : 0;
     var undervalueBonus = valuationGap > 0 ? Math.min(14, valuationGap / 3) : 0;
     var expensiveBonus = expensivePenalty;
-    var variables = Object.assign({}, weights, {
-      tradeStrength: strength,
-      volumeRatio: volumeRatio,
-      buyVolume: signal.buyVolume || 0,
-      sellVolume: signal.sellVolume || 0,
-      buyShare: buyShare,
-      bidAskImbalance: imbalance,
-      priceChangeRate: priceChange,
-      currentPrice: currentPriceOf(item),
-      fairValue: valuation.fairValue || 0,
-      fairValueGap: valuationGap,
-      valuationRank: valuation.rank || 0,
+    var variables = Object.assign({}, weights, featureVars, {
       expensivePenalty: expensivePenalty,
       expensiveBonus: expensiveBonus,
       undervalueBonus: undervalueBonus,
@@ -2853,6 +2908,7 @@
         '<section class="admin-grid">',
         renderAdminMonitoringPanel(snapshot),
         renderAlertCenterPanel(snapshot),
+        renderWatchlistPanel(snapshot),
         renderPortfolioPanel(snapshot),
         renderHoldingsPanel(snapshot),
         '</section>'
@@ -4587,7 +4643,7 @@
       state.serverSettingsLocked ? '<p class="form-error">공유 모드에서는 서버 설정 저장이 잠겨 있습니다.</p>' : '',
       '</div>',
       '<div class="settings-grid">',
-      renderSettingField("watchlistSymbols", "관심 종목", "text", "NVDA,TSLA,000660"),
+      renderSettingField("watchlistSymbols", "관심 종목", "text", "TSLA,AAPL,NVDA,000660"),
       renderSettingField("tossApiBaseUrl", "Toss API Base URL", "url", "https://openapi.tossinvest.com"),
       renderSettingField("tossClientId", "Toss Client ID", secretType, "client id", { preserveConfigured: true }),
       renderSettingField("tossClientSecret", "Toss Client Secret", secretType, "client secret", { preserveConfigured: true }),

@@ -177,9 +177,9 @@ def admin_preview_config() -> Dict[str, object]:
                 "summary": "웹 설정 패널과 Python 서비스가 함께 읽는 로컬 설정입니다. secret 원문은 응답에 다시 내려주지 않습니다.",
                 "localEndpoints": ["GET /api/settings", "PUT /api/settings"],
                 "commands": ["cp .env.example .env.local", "npm start"],
-                "storage": ["data/settings.json", ".env.local"],
+                "storage": ["data/service.db: runtime_settings", ".env.local"],
                 "fields": [
-                    {"key": "watchlistSymbols", "label": "기본 관심 종목", "type": "symbols", "default": "NVDA,TSLA,000660"},
+                    {"key": "watchlistSymbols", "label": "기본 관심 종목", "type": "symbols", "default": "TSLA,AAPL,NVDA,000660"},
                     {"key": "notifyProvider", "label": "알림 채널", "type": "select", "options": ["telegram", "kakao", "console"]},
                     {"key": "telegramBotToken", "label": "Telegram Bot Token", "type": "secret", "masked": True},
                     {"key": "telegramChatId", "label": "Telegram Chat ID", "type": "secret", "masked": True},

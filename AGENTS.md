@@ -26,7 +26,7 @@ Key rules:
 - Use DDD layers: `domain/` for business concepts, `application/` for use cases, `infrastructure/` for DB/files/API/vendors/runtime wiring.
 - Use domain events for cross-feature contracts so multiple development sessions can work independently.
 - Keep top-level Python modules such as `config.py`, `analytics.py`, `monitor.py`, `providers.py`, `notifiers.py`, and `scheduler.py` as compatibility wrappers only.
-- Do not put API keys, Telegram tokens, client secrets, raw account credentials, `data/service.db`, legacy `data/domain-events.jsonl`, or other private local data into git.
+- Do not put API keys, Telegram tokens, client secrets, raw account credentials, `data/service.db`, legacy `data/store.json`, legacy `data/settings.json`, legacy `data/domain-events.jsonl`, or other private local data into git.
 
 ## Required Handoff
 

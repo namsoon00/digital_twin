@@ -20,14 +20,15 @@ from digital_twin.cli import build_parser
 from digital_twin.domain.accounts import AccountConfig
 from digital_twin.domain.analytics import SafeFormula, StrategyModel, decisions_for_positions, normalize_position, portfolio_summary
 from digital_twin.domain.events import ACCOUNT_SAVED, MONITORING_ALERTS_DETECTED, MONITORING_CYCLE_COMPLETED, MONITORING_SNAPSHOT_COLLECTED, alerts_detected_event
-from digital_twin.domain.monitoring import DEFAULT_CADENCE, RealtimeMonitor
+from digital_twin.domain.monitoring import DEFAULT_ALERT_RULES, DEFAULT_CADENCE, RealtimeMonitor
 from digital_twin.domain.model_review import ModelReviewJob, local_model_review
 from digital_twin.domain.parsing import parse_assignments
 from digital_twin.domain.portfolio import AccountSnapshot, AlertEvent, utc_now_iso
 from digital_twin.infrastructure.event_bus import EventBus, JsonEventLog
 from digital_twin.infrastructure.json_monitor_state import MonitorStore
 from digital_twin.infrastructure.model_review_queue import ModelReviewEnqueuer, ModelReviewJobStore
-from digital_twin.infrastructure.sqlite_operational import SQLiteEventLog, SQLiteModelReviewJobStore, SQLiteMonitorStore
+from digital_twin.infrastructure.settings import runtime_settings
+from digital_twin.infrastructure.sqlite_operational import SQLiteAppStore, SQLiteEventLog, SQLiteModelReviewJobStore, SQLiteMonitorStore, SQLiteRuntimeSettingsStore
 from digital_twin.infrastructure.sqlite_accounts import AccountRegistry
 from digital_twin.scheduler import MonitorRunner
 
@@ -207,6 +208,16 @@ class PythonServiceTests(unittest.TestCase):
     def test_default_message_type_cadence_is_ten_minutes(self):
         self.assertTrue(DEFAULT_CADENCE)
         self.assertEqual({10}, set(DEFAULT_CADENCE.values()))
+
+    def test_default_watchlist_and_model_alerts_include_requested_symbols(self):
+        symbols = runtime_settings()["watchlistSymbols"].split(",")
+
+        self.assertIn("TSLA", symbols)
+        self.assertIn("AAPL", symbols)
+        self.assertEqual(1, DEFAULT_ALERT_RULES["modelBuy"])
+        self.assertEqual(1, DEFAULT_ALERT_RULES["modelSell"])
+        self.assertEqual(10, DEFAULT_CADENCE["modelBuy"])
+        self.assertEqual(10, DEFAULT_CADENCE["modelSell"])
 
     def test_monitor_type_check_events_use_real_alert_rules(self):
         position = normalize_position({
@@ -563,12 +574,21 @@ class PythonServiceTests(unittest.TestCase):
         job_store = SQLiteModelReviewJobStore(db_path, legacy_path=legacy_missing)
         self.assertEqual(1, job_store.enqueue_from_event(alerts_detected_event([alert])))
         self.assertEqual(1, len(job_store.pending(limit=10)))
+        settings_store = SQLiteRuntimeSettingsStore(db_path, legacy_path=legacy_missing)
+        settings_store.save({"watchlistSymbols": "AAPL,NVDA", "tossClientSecret": "secret"})
+        app_store = SQLiteAppStore(db_path, legacy_path=legacy_missing)
+        app_store.replace({"messages": [{"id": "msg-1", "content": "hello"}]})
+
+        self.assertEqual("AAPL,NVDA", runtime_settings()["watchlistSymbols"])
+        self.assertEqual("msg-1", app_store.load()["messages"][0]["id"])
 
         with sqlite3.connect(str(db_path)) as connection:
             self.assertEqual(1, connection.execute("SELECT COUNT(*) FROM monitor_snapshots").fetchone()[0])
             self.assertEqual(2, connection.execute("SELECT COUNT(*) FROM monitor_sent").fetchone()[0])
             self.assertEqual(1, connection.execute("SELECT COUNT(*) FROM domain_events").fetchone()[0])
             self.assertEqual(1, connection.execute("SELECT COUNT(*) FROM model_review_jobs").fetchone()[0])
+            self.assertEqual(2, connection.execute("SELECT COUNT(*) FROM runtime_settings").fetchone()[0])
+            self.assertEqual(1, connection.execute("SELECT COUNT(*) FROM app_store").fetchone()[0])
 
 
 class AssignmentTests(unittest.TestCase):

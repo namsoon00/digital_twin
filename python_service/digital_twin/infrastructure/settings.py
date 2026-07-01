@@ -11,6 +11,48 @@ from ..domain.parsing import parse_assignments
 ROOT_DIR = Path(__file__).resolve().parents[3]
 DEFAULT_DATA_DIR = ROOT_DIR / "data"
 
+TEXT_SETTING_KEYS = [
+    "watchlistSymbols",
+    "tossApiBaseUrl",
+    "tossAccountSeq",
+    "notifyProvider",
+    "telegramChatId",
+    "notifyLinkUrl",
+    "notifyIntervalMinutes",
+    "fxRates",
+    "valuationAssumptions",
+    "marketSignalInputs",
+    "fairValueFormula",
+    "buyScoreFormula",
+    "sellScoreFormula",
+    "modelName",
+    "modelHypothesis",
+    "customBuyModelFormula",
+    "customSellModelFormula",
+    "formulaWeights",
+    "decisionThresholds",
+    "modelDecisionThresholds",
+    "modelTimingScenario",
+    "modelTimingSymbols",
+    "alertRules",
+    "alertThresholds",
+    "alertCadenceMinutes",
+    "modelReviewUseCodex",
+    "modelReviewCommand",
+    "modelReviewTimeoutSeconds",
+    "modelReviewIntervalSeconds",
+    "modelReviewBatchSize",
+    "notificationQueueIntervalSeconds",
+    "notificationQueueBatchSize",
+    "notificationSendGapSeconds",
+]
+
+SECRET_SETTING_KEYS = [
+    "tossClientId",
+    "tossClientSecret",
+    "telegramBotToken",
+]
+
 
 def data_dir() -> Path:
     return Path(os.environ.get("DIGITAL_TWIN_DATA_DIR", str(DEFAULT_DATA_DIR))).resolve()
@@ -68,9 +110,48 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def read_settings_store() -> Dict[str, str]:
+    try:
+        from .sqlite_operational import SQLiteRuntimeSettingsStore
+
+        return SQLiteRuntimeSettingsStore().load()
+    except Exception:
+        return read_json(settings_path(), {})
+
+
+def write_settings_store(settings: Dict[str, object]) -> Dict[str, str]:
+    from .sqlite_operational import SQLiteRuntimeSettingsStore
+
+    clean = {str(key): str(value or "") for key, value in settings.items()}
+    SQLiteRuntimeSettingsStore().replace(clean)
+    return clean
+
+
+def save_runtime_settings(input_settings: Dict[str, object]) -> Dict[str, str]:
+    current = read_settings_store()
+    next_settings = dict(current)
+    for key in TEXT_SETTING_KEYS:
+        if key in input_settings:
+            next_settings[key] = str(input_settings.get(key) or "").strip()
+    for key in SECRET_SETTING_KEYS:
+        if key in input_settings:
+            value = str(input_settings.get(key) or "").strip()
+            if value:
+                next_settings[key] = value
+    if input_settings.get("clearTossCredentials"):
+        for key in ["tossClientId", "tossClientSecret", "tossAccountSeq"]:
+            next_settings.pop(key, None)
+    if input_settings.get("clearTelegramCredentials"):
+        for key in ["telegramBotToken", "telegramChatId"]:
+            next_settings.pop(key, None)
+    next_settings["updatedAt"] = utc_now()
+    write_settings_store(next_settings)
+    return runtime_settings()
+
+
 def runtime_settings() -> Dict[str, str]:
     load_local_env()
-    store = read_json(settings_path(), {})
+    store = read_settings_store()
 
     def value(key: str, env_name: str, fallback: str = "") -> str:
         stored = configured(store.get(key))
@@ -82,7 +163,7 @@ def runtime_settings() -> Dict[str, str]:
         return fallback
 
     return {
-        "watchlistSymbols": value("watchlistSymbols", "WATCHLIST_SYMBOLS", "NVDA,TSLA,000660"),
+        "watchlistSymbols": value("watchlistSymbols", "WATCHLIST_SYMBOLS", "TSLA,AAPL,NVDA,000660"),
         "tossApiBaseUrl": value("tossApiBaseUrl", "TOSS_API_BASE_URL", "https://openapi.tossinvest.com"),
         "tossClientId": value("tossClientId", "TOSS_CLIENT_ID"),
         "tossClientSecret": value("tossClientSecret", "TOSS_CLIENT_SECRET"),
@@ -106,6 +187,9 @@ def runtime_settings() -> Dict[str, str]:
         "modelReviewTimeoutSeconds": value("modelReviewTimeoutSeconds", "MODEL_REVIEW_TIMEOUT_SECONDS", "180"),
         "modelReviewIntervalSeconds": value("modelReviewIntervalSeconds", "MODEL_REVIEW_INTERVAL_SECONDS", "300"),
         "modelReviewBatchSize": value("modelReviewBatchSize", "MODEL_REVIEW_BATCH_SIZE", "1"),
+        "notificationQueueIntervalSeconds": value("notificationQueueIntervalSeconds", "NOTIFICATION_QUEUE_INTERVAL_SECONDS", "30"),
+        "notificationQueueBatchSize": value("notificationQueueBatchSize", "NOTIFICATION_QUEUE_BATCH_SIZE", "10"),
+        "notificationSendGapSeconds": value("notificationSendGapSeconds", "NOTIFICATION_SEND_GAP_SECONDS", "1"),
         "fxRates": value("fxRates", "FX_RATES", "KRW=1\nUSD=1400"),
     }
 

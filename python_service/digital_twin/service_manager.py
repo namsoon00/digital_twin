@@ -24,6 +24,13 @@ WORKERS = {
         "command": [sys.executable, "-u", "python_service/service.py", "model-review", "watch"],
         "needle": "python_service/service.py model-review watch",
     },
+    "notifications": {
+        "label": "Python notification worker",
+        "pid": data_dir() / "python-notifications.pid",
+        "log": data_dir() / "python-notifications.log",
+        "command": [sys.executable, "-u", "python_service/service.py", "notifications", "watch"],
+        "needle": "python_service/service.py notifications watch",
+    },
 }
 
 

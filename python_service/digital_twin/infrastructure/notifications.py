@@ -4,15 +4,17 @@ import urllib.request
 from typing import Dict, Iterable
 
 from ..domain.accounts import AccountConfig
+from ..domain.notifications import NotificationJob
 from ..domain.portfolio import AlertEvent
 from .settings import runtime_settings
 
 
 class NotificationResult:
-    def __init__(self, delivered: bool, label: str, reason: str = ""):
+    def __init__(self, delivered: bool, label: str, reason: str = "", queued: int = 0):
         self.delivered = delivered
         self.label = label
         self.reason = reason
+        self.queued = queued
 
 
 class ConsoleNotifier:
@@ -71,21 +73,66 @@ def notifier_for_account(account: AccountConfig = None):
     return notifier_from_settings()
 
 
-def send_events(events: Iterable[AlertEvent], dry_run: bool = False, accounts: Dict[str, AccountConfig] = None) -> NotificationResult:
+def notification_queue():
+    from .sqlite_operational import SQLiteNotificationJobStore
+
+    return SQLiteNotificationJobStore()
+
+
+class QueueingNotifier:
+    label = "Notification Queue"
+
+    def __init__(self, account: AccountConfig = None, message_type: str = "notification", queue=None):
+        self.account = account
+        self.message_type = message_type
+        self.queue = queue or notification_queue()
+
+    def send(self, text: str) -> NotificationResult:
+        job = NotificationJob.create(
+            text,
+            account_id=self.account.account_id if self.account else "",
+            account_label=self.account.label if self.account else "",
+            message_type=self.message_type,
+        )
+        if not job.text:
+            return NotificationResult(False, self.label, "empty notification text")
+        if not self.queue.enqueue(job):
+            return NotificationResult(False, self.label, "notification queue enqueue failed")
+        return NotificationResult(True, self.label, "queued=1", queued=1)
+
+
+def queued_notifier_for_account(account: AccountConfig = None, message_type: str = "notification", queue=None):
+    return QueueingNotifier(account, message_type=message_type, queue=queue)
+
+
+def enqueue_text(
+    text: str,
+    account: AccountConfig = None,
+    message_type: str = "notification",
+    dry_run: bool = False,
+    queue=None,
+) -> NotificationResult:
+    if dry_run:
+        print(text)
+        return NotificationResult(False, "Dry Run", "dry-run")
+    return queued_notifier_for_account(account, message_type=message_type, queue=queue).send(text)
+
+
+def send_events(events: Iterable[AlertEvent], dry_run: bool = False, accounts: Dict[str, AccountConfig] = None, queue=None) -> NotificationResult:
     events = list(events)
     messages = [event.message() for event in events]
     if dry_run:
         print("\n\n".join(messages) if messages else "No messages.")
         return NotificationResult(False, "Dry Run", "dry-run")
-    account_map = accounts or {}
-    result = NotificationResult(True, "Notification")
+    target_queue = queue or notification_queue()
+    queued = 0
     for event, message in zip(events, messages):
-        notifier = notifier_for_account(account_map.get(event.account_id))
-        result = notifier.send(message)
-        if not result.delivered:
-            if result.reason:
-                print(message)
-                print("Delivery: console only (" + result.reason + ")")
-            return result
-    return result
-
+        job = NotificationJob.create(
+            message,
+            account_id=event.account_id,
+            account_label=event.account_label,
+            message_type=event.rule or "alert",
+        )
+        if target_queue.enqueue(job):
+            queued += 1
+    return NotificationResult(True, "Notification Queue", "queued=" + str(queued), queued=queued)

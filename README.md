@@ -29,7 +29,7 @@ https://namsoon00.github.io/digital_twin/admin/
 TOSS_CLIENT_ID=...
 TOSS_CLIENT_SECRET=...
 TOSS_ACCOUNT_SEQ=... # 선택
-WATCHLIST_SYMBOLS=NVDA,TSLA,000660 # 선택
+WATCHLIST_SYMBOLS=TSLA,AAPL,NVDA,000660 # 선택
 ```
 
 토스 개발자 콘솔에서 허용 IP를 관리하는 경우, 브라우저 IP가 아니라 이 로컬 서버가 외부로 나가는 공인 IP를 등록해야 합니다. GitHub Pages 같은 정적 웹 페이지에서 브라우저가 직접 토스 API를 호출하는 구조는 `client_secret` 노출과 사용자별 유동 IP 문제 때문에 사용하지 않습니다.
@@ -44,13 +44,14 @@ npm run generate:static
 
 웹은 `대시보드`, `계정`, `알림`, `모델링`, `모니터링` 하단 탭으로 구성됩니다. 기존 판단/실험실/보유/피드/관심 탭은 메인 내비게이션에서 제거했고, Python 서비스 운영에 필요한 기능별 화면으로 재구성했습니다. `계정` 탭은 로컬 SQLite DB에 저장된 계정 값을 폼에 채우고, secret 원문은 다시 표시하지 않습니다. `알림` 탭에서는 메시지 타입별 활성화와 주기, 임계값, 발송 채널을 관리하고, `모델링` 탭에서는 모델 공식과 판단 기준을 관리합니다.
 
-상단 설정 버튼에서는 관심 종목, Toss API, 텔레그램 알림 설정을 로컬 서버 DB(`data/settings.json`)에 저장합니다. `client_secret`과 bot token은 서버가 사용하는 로컬 파일에만 저장하고, API 응답과 화면에는 원문을 다시 표시하지 않습니다. GitHub Pages 정적 미리보기에서는 서버 DB가 없으므로 민감 설정 저장을 사용하지 않습니다.
+상단 설정 버튼에서는 관심 종목, Toss API, 텔레그램 알림 설정을 로컬 SQLite DB(`data/service.db`)의 `runtime_settings` 테이블에 저장합니다. `client_secret`과 bot token은 서버가 사용하는 로컬 DB에만 저장하고, API 응답과 화면에는 원문을 다시 표시하지 않습니다. GitHub Pages 정적 미리보기에서는 서버 DB가 없으므로 민감 설정 저장을 사용하지 않습니다.
 
 ## 앱 구조
 
 - `public/`: Exit Lens 웹 대시보드
 - `GET /api/flow-lens`: 토스 계좌/보유자산, 주문 가능 금액, 관심 종목, 내 계좌 기준 오늘 먼저 점검할 종목 집계
-- `GET/PUT /api/settings`: 로컬 서버 DB 기반 Toss/알림 설정 조회와 저장. secret 원문은 GET 응답에 포함하지 않음
+- `GET /api/bootstrap`, `GET/POST /api/memories`, `GET/POST /api/items`: 로컬 SQLite DB의 `app_store` 기반 앱 데이터 조회와 저장
+- `GET/PUT /api/settings`: 로컬 SQLite DB의 `runtime_settings` 기반 Toss/알림 설정 조회와 저장. secret 원문은 GET 응답에 포함하지 않음
 - `server.js`: 토스 OAuth 토큰 발급, 계좌/보유자산 조회, 관심 종목 파싱, 매도 검토 fallback 생성
 
 토스 호출은 서버에서만 수행합니다. 브라우저에 `client_secret`, access token, `X-Tossinvest-Account` 값이 내려가지 않습니다. 토스증권 공개 Open API에는 토스 앱의 관심 종목 목록 조회 endpoint가 확인되지 않아, 관심 종목은 앱 내부 목록으로 관리합니다.
@@ -96,7 +97,7 @@ npm test
 
 ## GitHub Pages 배포
 
-`main` 브랜치에 푸시하면 `.github/workflows/pages.yml`이 실행되어 GitHub Pages용 `gh-pages` 브랜치를 갱신합니다. 배포 직전에 `npm run generate:static`를 실행해 정적 웹 자산과 Python admin preview 구성을 함께 갱신합니다.
+`main` 브랜치에 푸시하면 `.github/workflows/pages.yml`이 실행되어 GitHub Pages용 `gh-pages` 브랜치를 갱신합니다. 로컬 DB 값을 반영해야 하므로 정적 웹 자산은 로컬에서 `npm run generate:admin-preview`로 갱신해 커밋하고, GitHub Actions는 커밋된 `public/` 산출물을 그대로 배포합니다.
 
 ## 공유 미리보기
 
@@ -104,11 +105,11 @@ npm test
 npm run share
 ```
 
-공유 모드에서는 임시 토큰 URL을 사용합니다. `.env`, `.env.local`, `data/store.json`, API key, 토스 credentials, 개인 계좌 데이터는 이슈나 PR에 올리지 않습니다.
+공유 모드에서는 임시 토큰 URL을 사용합니다. `.env`, `.env.local`, `data/service.db`, legacy `data/store.json`, API key, 토스 credentials, 개인 계좌 데이터는 이슈나 PR에 올리지 않습니다.
 
 ## Python 서비스
 
-다중 계정, 실시간 모니터링, 스케줄링, 모델 리뷰 로직은 Python 서비스가 담당합니다. Python 서비스는 SQLite DB인 `data/service.db`의 여러 계정을 순회하고, 계정별 이전 스냅샷, 메시지 주기, 도메인 이벤트, 모델 리뷰 큐를 DB 테이블에 저장합니다. 토스 credentials와 텔레그램 발송 정보도 계정별 DB row로 관리합니다.
+다중 계정, 실시간 모니터링, 스케줄링, 모델 리뷰 로직은 Python 서비스가 담당합니다. Python 서비스는 SQLite DB인 `data/service.db`의 여러 계정을 순회하고, 앱 store, 런타임 설정, 계정별 이전 스냅샷, 메시지 주기, 도메인 이벤트, 모델 리뷰 큐를 DB 테이블에 저장합니다. 토스 credentials와 텔레그램 발송 정보도 계정별 DB row로 관리합니다.
 
 ```bash
 npm run python:accounts -- list

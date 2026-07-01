@@ -7,6 +7,7 @@ from typing import Dict, Iterable, List, Optional
 
 from ..domain.events import DomainEvent, MONITORING_ALERTS_DETECTED
 from ..domain.model_review import ModelReviewJob
+from ..domain.notifications import NotificationJob
 from ..domain.portfolio import AccountSnapshot, AlertEvent
 from .settings import data_dir, read_json, service_db_path, settings_path, utc_now
 
@@ -82,12 +83,78 @@ class OperationalConnection:
             """)
             connection.execute("CREATE INDEX IF NOT EXISTS idx_model_review_jobs_status ON model_review_jobs(status, created_at)")
             connection.execute("""
+                CREATE TABLE IF NOT EXISTS notification_jobs (
+                    job_id TEXT PRIMARY KEY,
+                    account_id TEXT NOT NULL DEFAULT '',
+                    account_label TEXT NOT NULL DEFAULT '',
+                    message_type TEXT NOT NULL DEFAULT 'notification',
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL DEFAULT '',
+                    last_error TEXT NOT NULL DEFAULT '',
+                    text TEXT NOT NULL DEFAULT '',
+                    payload_json TEXT NOT NULL
+                )
+            """)
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_notification_jobs_status ON notification_jobs(status, created_at)")
+            connection.execute("""
                 CREATE TABLE IF NOT EXISTS runtime_settings (
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL DEFAULT '',
                     updated_at TEXT NOT NULL
                 )
             """)
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS app_store (
+                    store_id TEXT PRIMARY KEY,
+                    payload_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+            """)
+
+
+class SQLiteAppStore(OperationalConnection):
+    def __init__(self, path: Optional[Path] = None, legacy_path: Optional[Path] = None):
+        self.legacy_path = legacy_path or data_dir() / "store.json"
+        super().__init__(path)
+        self.migrate_legacy_if_needed()
+
+    def migrate_legacy_if_needed(self) -> None:
+        if not self.legacy_path.exists():
+            return
+        with self.connect() as connection:
+            existing = connection.execute("SELECT store_id FROM app_store WHERE store_id = 'default'").fetchone()
+        if existing:
+            return
+        payload = read_json(self.legacy_path, {})
+        if isinstance(payload, dict) and payload:
+            self.replace(payload)
+
+    def load(self) -> Dict[str, object]:
+        with self.connect() as connection:
+            row = connection.execute("SELECT payload_json FROM app_store WHERE store_id = 'default'").fetchone()
+        if not row:
+            return {}
+        try:
+            payload = json.loads(row["payload_json"])
+            return payload if isinstance(payload, dict) else {}
+        except json.JSONDecodeError:
+            return {}
+
+    def replace(self, payload: Dict[str, object]) -> None:
+        stamp = utc_now()
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO app_store (store_id, payload_json, updated_at)
+                VALUES ('default', ?, ?)
+                ON CONFLICT(store_id) DO UPDATE SET
+                    payload_json = excluded.payload_json,
+                    updated_at = excluded.updated_at
+                """,
+                (json_dumps(payload), stamp),
+            )
 
 
 class SQLiteRuntimeSettingsStore(OperationalConnection):
@@ -434,4 +501,113 @@ class SQLiteModelReviewJobStore(OperationalConnection):
     def summary(self) -> Dict[str, int]:
         with self.connect() as connection:
             rows = connection.execute("SELECT status, COUNT(*) AS count FROM model_review_jobs GROUP BY status").fetchall()
+        return {row["status"]: int(row["count"]) for row in rows}
+
+
+class SQLiteNotificationJobStore(OperationalConnection):
+    def jobs(self) -> List[NotificationJob]:
+        with self.connect() as connection:
+            rows = connection.execute("SELECT payload_json FROM notification_jobs ORDER BY created_at, job_id").fetchall()
+        jobs = []
+        for row in rows:
+            try:
+                jobs.append(NotificationJob.from_dict(json.loads(row["payload_json"])))
+            except json.JSONDecodeError:
+                continue
+        return jobs
+
+    def upsert_job_with_connection(self, connection, job: NotificationJob) -> None:
+        payload = job.to_dict()
+        connection.execute(
+            """
+            INSERT INTO notification_jobs (
+                job_id, account_id, account_label, message_type, status, attempts,
+                created_at, updated_at, last_error, text, payload_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(job_id) DO UPDATE SET
+                account_id = excluded.account_id,
+                account_label = excluded.account_label,
+                message_type = excluded.message_type,
+                status = excluded.status,
+                attempts = excluded.attempts,
+                created_at = excluded.created_at,
+                updated_at = excluded.updated_at,
+                last_error = excluded.last_error,
+                text = excluded.text,
+                payload_json = excluded.payload_json
+            """,
+            (
+                job.job_id,
+                job.account_id,
+                job.account_label,
+                job.message_type,
+                job.status,
+                job.attempts,
+                job.created_at,
+                job.updated_at,
+                job.last_error,
+                job.text,
+                json_dumps(payload),
+            ),
+        )
+
+    def upsert_job(self, job: NotificationJob) -> None:
+        with self.connect() as connection:
+            self.upsert_job_with_connection(connection, job)
+
+    def enqueue(self, job: NotificationJob) -> bool:
+        if not job.text.strip():
+            return False
+        with self.connect() as connection:
+            existing = connection.execute("SELECT job_id FROM notification_jobs WHERE job_id = ?", (job.job_id,)).fetchone()
+            if existing:
+                return False
+            self.upsert_job_with_connection(connection, job)
+        return True
+
+    def pending(self, limit: int = 10) -> List[NotificationJob]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT payload_json FROM notification_jobs
+                WHERE status IN ('pending', 'failed')
+                ORDER BY created_at, job_id
+                LIMIT ?
+                """,
+                (int(limit or 10),),
+            ).fetchall()
+        jobs = []
+        for row in rows:
+            try:
+                jobs.append(NotificationJob.from_dict(json.loads(row["payload_json"])))
+            except json.JSONDecodeError:
+                continue
+        return jobs
+
+    def update(self, updated: NotificationJob) -> None:
+        self.upsert_job(updated)
+
+    def mark_processing(self, job: NotificationJob) -> NotificationJob:
+        job.status = "processing"
+        job.attempts += 1
+        job.updated_at = utc_now()
+        self.update(job)
+        return job
+
+    def mark_done(self, job: NotificationJob) -> None:
+        job.status = "done"
+        job.last_error = ""
+        job.updated_at = utc_now()
+        self.update(job)
+
+    def mark_failed(self, job: NotificationJob, error: str) -> None:
+        job.status = "failed"
+        job.last_error = error
+        job.updated_at = utc_now()
+        self.update(job)
+
+    def summary(self) -> Dict[str, int]:
+        with self.connect() as connection:
+            rows = connection.execute("SELECT status, COUNT(*) AS count FROM notification_jobs GROUP BY status").fetchall()
         return {row["status"]: int(row["count"]) for row in rows}

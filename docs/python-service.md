@@ -76,7 +76,7 @@ npm run python:service:stop
 
 The account registry is stored in SQLite at `data/service.db` with `0600` permissions and is ignored by git.
 
-If the SQLite database has no account rows, the service falls back to the existing single-account settings from `data/settings.json` or `.env.local`. If an old `data/accounts.json` exists, it is imported into SQLite on first use.
+If the SQLite database has no account rows, the service falls back to single-account settings from the `runtime_settings` table or `.env.local`. Existing `data/store.json`, `data/settings.json`, and `data/accounts.json` files are imported into SQLite on first use as legacy compatibility.
 
 `python:monitor:watch` runs realtime monitoring in the foreground. `python:model-review:watch` runs the asynchronous model-review worker in the foreground.
 
@@ -139,7 +139,7 @@ When a `monitorDecisionChange` alert is emitted, the message includes:
 
 The same decision-change alert also queues a deeper asynchronous model review. The realtime alert path does not wait for LLM/Codex output.
 
-Snapshots are stored in `monitor_snapshots`, and cadence is stored per account, rule, and symbol in `monitor_sent` inside `data/service.db`.
+The app store is stored in `app_store`, runtime settings are stored in `runtime_settings`, snapshots are stored in `monitor_snapshots`, and cadence is stored per account, rule, and symbol in `monitor_sent` inside `data/service.db`.
 
 ## Async Model Review
 

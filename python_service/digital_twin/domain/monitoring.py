@@ -10,6 +10,8 @@ from .repositories import MonitorStateRepository
 
 
 DEFAULT_ALERT_RULES = {
+    "modelBuy": 1,
+    "modelSell": 1,
     "holdingTiming": 1,
     "monitorHeartbeat": 1,
     "monitorConnection": 1,
@@ -28,6 +30,8 @@ DEFAULT_THRESHOLDS = {
 }
 
 DEFAULT_CADENCE = {
+    "modelBuy": 10,
+    "modelSell": 10,
     "holdingTiming": 10,
     "monitorHeartbeat": 10,
     "monitorConnection": 10,

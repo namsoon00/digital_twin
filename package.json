@@ -3,8 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "check": "node --check server.js && node --check public/app.js && node --check scripts/smoke-test.js && node --check scripts/share-local.js && node --check scripts/issue-workflow.js && node --check scripts/stamp-flutter-web-build.js",
+    "check": "node --check server.js && node --check public/app.js && node --check scripts/smoke-test.js && node --check scripts/share-local.js && node --check scripts/issue-workflow.js && node --check scripts/stamp-flutter-web-build.js && node --check scripts/generate-static-mock-market.js",
     "dev": "node server.js",
+    "generate:mock-market": "node scripts/generate-static-mock-market.js",
     "issue:claim": "node scripts/issue-workflow.js claim",
     "issue:done": "node scripts/issue-workflow.js done",
     "issue:export": "node scripts/issue-workflow.js export",

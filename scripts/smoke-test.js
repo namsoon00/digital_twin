@@ -141,6 +141,12 @@ async function checkNormalMode(port) {
   assertOk(mockMarketPayload.series.NVDA.candles.length >= 200, "NVDA mock candle 수가 부족합니다.");
   assertOk(Array.isArray(mockMarketPayload.signals) && mockMarketPayload.signals.length === 2, "mock market signal 개수가 맞지 않습니다.");
 
+  const staticMockMarket = await request(port, "/mock-data/market/semiconductor-boom.json");
+  assertOk(staticMockMarket.statusCode === 200, "정적 mock market JSON 응답 코드가 200이 아닙니다: " + staticMockMarket.statusCode);
+  const staticMockMarketPayload = JSON.parse(staticMockMarket.body);
+  assertOk(staticMockMarketPayload.request && staticMockMarketPayload.request.staticFile === true, "정적 mock market JSON 표시가 없습니다.");
+  assertOk(staticMockMarketPayload.series && Array.isArray(staticMockMarketPayload.series.NVDA.candles), "정적 NVDA mock candle 배열이 없습니다.");
+
   const preflight = await request(port, "/api/data-api/opendart/company", {
     method: "OPTIONS",
     headers: {

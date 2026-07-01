@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-07-01T00:00:00.000Z",
+  "asOf": "2026-07-01",
+  "symbols": [
+    "NVDA",
+    "AAPL",
+    "005930",
+    "000660",
+    "TSLA"
+  ],
+  "files": {
+    "recent-one-year": "mock-data/market/recent-one-year.json",
+    "covid-crash": "mock-data/market/covid-crash.json",
+    "financial-crisis": "mock-data/market/financial-crisis.json",
+    "semiconductor-boom": "mock-data/market/semiconductor-boom.json",
+    "rate-shock": "mock-data/market/rate-shock.json"
+  }
+}

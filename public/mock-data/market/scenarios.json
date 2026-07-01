@@ -1,0 +1,132 @@
+{
+  "schemaVersion": 1,
+  "scenarios": [
+    {
+      "id": "recent-one-year",
+      "label": "최근 1년 기준",
+      "description": "최근 1년 가격 레벨을 기준으로 완만한 상승, 순환 조정, 거래량 회복을 섞은 기본 학습 데이터",
+      "targetPeriod": "rolling-one-year",
+      "events": [
+        {
+          "offset": 38,
+          "label": "금리 경로 재가격",
+          "impact": -0.06
+        },
+        {
+          "offset": 116,
+          "label": "실적 시즌 상향",
+          "impact": 0.08
+        },
+        {
+          "offset": 188,
+          "label": "AI 설비 투자 확인",
+          "impact": 0.1
+        }
+      ]
+    },
+    {
+      "id": "covid-crash",
+      "label": "코로나 급락/회복",
+      "description": "2020년 코로나 충격처럼 급락, 거래량 폭증, 정책 대응 후 V자 회복이 나타나는 국면",
+      "targetPeriod": "2020-02-03/2021-02-02",
+      "events": [
+        {
+          "offset": 28,
+          "label": "팬데믹 공포 확산",
+          "impact": -0.18
+        },
+        {
+          "offset": 52,
+          "label": "유동성 공급",
+          "impact": 0.12
+        },
+        {
+          "offset": 118,
+          "label": "언택트/기술주 주도",
+          "impact": 0.16
+        }
+      ]
+    },
+    {
+      "id": "financial-crisis",
+      "label": "금융위기",
+      "description": "2008년 금융위기처럼 신용 경색, 장기 하락, 높은 변동성, 느린 회복이 이어지는 국면",
+      "targetPeriod": "2008-09-02/2009-09-01",
+      "events": [
+        {
+          "offset": 18,
+          "label": "신용 경색 심화",
+          "impact": -0.12
+        },
+        {
+          "offset": 66,
+          "label": "강제 매도/마진콜",
+          "impact": -0.18
+        },
+        {
+          "offset": 152,
+          "label": "정책 안정화 기대",
+          "impact": 0.08
+        }
+      ]
+    },
+    {
+      "id": "semiconductor-boom",
+      "label": "반도체 호황",
+      "description": "AI/메모리 사이클 개선처럼 반도체가 시장을 주도하고 거래량과 상대강도가 커지는 국면",
+      "targetPeriod": "2023-10-02/2024-10-01",
+      "events": [
+        {
+          "offset": 44,
+          "label": "AI 가속기 수요 상향",
+          "impact": 0.12
+        },
+        {
+          "offset": 104,
+          "label": "HBM 공급 부족",
+          "impact": 0.15
+        },
+        {
+          "offset": 176,
+          "label": "차익 실현 조정",
+          "impact": -0.08
+        }
+      ]
+    },
+    {
+      "id": "rate-shock",
+      "label": "금리 충격",
+      "description": "금리 급등과 밸류에이션 압축으로 성장주가 흔들리는 고금리 스트레스 국면",
+      "targetPeriod": "2022-01-03/2023-01-03",
+      "events": [
+        {
+          "offset": 32,
+          "label": "인플레이션 서프라이즈",
+          "impact": -0.08
+        },
+        {
+          "offset": 96,
+          "label": "긴축 가속",
+          "impact": -0.12
+        },
+        {
+          "offset": 188,
+          "label": "금리 정점 기대",
+          "impact": 0.09
+        }
+      ]
+    }
+  ],
+  "defaultSymbols": [
+    "AAPL",
+    "MSFT",
+    "NVDA",
+    "AMD",
+    "TSLA",
+    "GOOGL",
+    "META",
+    "005930",
+    "000660"
+  ],
+  "generatedAt": "2026-07-01T00:00:00.000Z"
+}

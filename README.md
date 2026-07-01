@@ -37,11 +37,11 @@ API만 확인할 때는 아래처럼 호출합니다.
 curl http://127.0.0.1:3000/api/flow-lens?mock=1
 ```
 
-시스템 실험용 시계열 mock API도 제공합니다. 이 API는 실제 주문/계좌와 분리된 합성 OHLCV 데이터이며, 최근 1년 가격 레벨을 기준으로 한 기본 국면과 역사적 특징 국면을 선택해 받을 수 있습니다.
+시스템 실험용 시계열 mock 데이터도 제공합니다. GitHub Pages에서도 바로 읽을 수 있도록 정적 JSON을 `public/mock-data/market/`에 커밋합니다. 이 데이터는 실제 주문/계좌와 분리된 합성 OHLCV 데이터이며, 최근 1년 가격 레벨을 기준으로 한 기본 국면과 역사적 특징 국면을 선택해 받을 수 있습니다.
 
 ```bash
-curl "http://127.0.0.1:3000/api/mock-market/scenarios"
-curl "http://127.0.0.1:3000/api/mock-market/candles?scenario=semiconductor-boom&symbols=NVDA,005930&seed=demo"
+curl "http://127.0.0.1:3000/mock-data/market/scenarios.json"
+curl "http://127.0.0.1:3000/mock-data/market/semiconductor-boom.json"
 ```
 
 지원 시나리오:
@@ -52,7 +52,20 @@ curl "http://127.0.0.1:3000/api/mock-market/candles?scenario=semiconductor-boom&
 - `semiconductor-boom`: 반도체 호황과 AI 설비 투자 국면
 - `rate-shock`: 금리 충격과 성장주 밸류에이션 압축
 
-`seed` 값을 바꾸면 같은 시나리오 안에서도 다른 mock 흐름을 만들 수 있습니다. 응답에는 종목별 `candles`, 최신 `signals`, 시나리오 이벤트, 기준 기간이 포함됩니다.
+정적 JSON 응답에는 종목별 `candles`, 최신 `signals`, 시나리오 이벤트, 기준 기간이 포함됩니다. 데이터 구성을 바꾸고 싶으면 아래 명령으로 같은 스키마의 정적 파일을 다시 생성합니다.
+
+```bash
+npm run generate:mock-market
+```
+
+로컬 서버에서는 같은 generator를 API 형태로도 확인할 수 있습니다.
+
+```bash
+curl "http://127.0.0.1:3000/api/mock-market/scenarios"
+curl "http://127.0.0.1:3000/api/mock-market/candles?scenario=semiconductor-boom&symbols=NVDA,005930&seed=demo"
+```
+
+API 방식은 `seed` 값을 바꾸면 같은 시나리오 안에서도 다른 mock 흐름을 만들 수 있습니다.
 
 ## 화면 구성
 
@@ -63,6 +76,7 @@ curl "http://127.0.0.1:3000/api/mock-market/candles?scenario=semiconductor-boom&
 - `public/`: Exit Lens 웹 대시보드
 - `GET /api/flow-lens`: 토스 계좌/보유자산, 주문 가능 금액, 관심 종목, 내 계좌 기준 오늘 먼저 점검할 종목 집계
 - `GET /api/flow-lens?mock=1`: 웹 검증용 고정 mock 스냅샷
+- `public/mock-data/market/*.json`: GitHub Pages에서도 읽을 수 있는 정적 mock market 데이터
 - `GET /api/mock-market/scenarios`: 학습/실험용 mock market 시나리오 목록
 - `GET /api/mock-market/candles?scenario=recent-one-year&symbols=NVDA,AAPL`: 시나리오별 1년치 OHLCV, 수급 신호, 이벤트 반환
 - `server.js`: 토스 OAuth 토큰 발급, 계좌/보유자산 조회, 관심 종목 파싱, 매도 검토 fallback 생성

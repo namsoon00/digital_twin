@@ -22,6 +22,7 @@ const defaultAlertThresholds = {
   sectorWeightHigh: 50,
   marketCashLow: 10
 };
+const minRealtimeIntervalSeconds = 10 * 60;
 
 function hasArg(name) {
   return process.argv.indexOf(name) >= 0;
@@ -144,7 +145,7 @@ function alertRuleEnabled(rules, key) {
 }
 
 function realtimeIntervalSeconds() {
-  return Math.max(1, Number(process.env.REALTIME_NOTIFY_INTERVAL_SECONDS || 60));
+  return Math.max(minRealtimeIntervalSeconds, Number(process.env.REALTIME_NOTIFY_INTERVAL_SECONDS || minRealtimeIntervalSeconds));
 }
 
 function currentRunDate() {

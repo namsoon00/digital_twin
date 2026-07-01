@@ -109,7 +109,7 @@ npm run share
 
 ## Python 서비스
 
-다중 계정, 실시간 모니터링, 스케줄링, 모델 리뷰 로직은 Python 서비스가 담당합니다. Python 서비스는 SQLite DB인 `data/service.db`의 여러 계정을 순회하고, 앱 store, 런타임 설정, 계정별 이전 스냅샷, 메시지 주기, 도메인 이벤트, 모델 리뷰 큐를 DB 테이블에 저장합니다. 토스 credentials와 텔레그램 발송 정보도 계정별 DB row로 관리합니다.
+다중 계정, 실시간 모니터링, 스케줄링, 모델 리뷰 로직은 Python 서비스가 담당합니다. Python 서비스는 SQLite DB인 `data/service.db`의 여러 계정을 순회하고, 앱 store, 런타임 설정, 계정별 이전 스냅샷, 메시지 주기, 도메인 이벤트, 모델 리뷰 큐, 알림 발송 큐를 DB 테이블에 저장합니다. 토스 credentials와 텔레그램 발송 정보도 계정별 DB row로 관리합니다.
 
 ```bash
 npm run python:accounts -- list
@@ -120,13 +120,16 @@ npm run python:monitor:watch
 npm run python:model-review:once -- --dry-run
 npm run python:model-review:status
 npm run python:model-review:watch
+npm run python:notifications:once
+npm run python:notifications:status
+npm run python:notifications:watch
 npm run python:service:start
 npm run python:service:status
 npm run python:service:restart
 npm run python:service:stop
 ```
 
-`python:service:start`는 실시간 모니터와 비동기 모델 리뷰 worker를 함께 시작합니다. Python 서비스는 계정별 연결 상태, 보유 종목 변화, 손익률/평가액 급변, 현금비중 급변, 판단 변화, 보유 타이밍을 감지합니다. 판단 변화는 즉시 알림을 보내고, 별도 모델 리뷰 큐에서 Codex/LLM 또는 로컬 fallback 분석으로 추가 리뷰 메시지를 보냅니다.
+`python:service:start`는 실시간 모니터, 비동기 모델 리뷰 worker, 알림 worker를 함께 시작합니다. Python 서비스는 계정별 연결 상태, 보유 종목 변화, 손익률/평가액 급변, 현금비중 급변, 판단 변화, 보유 타이밍을 감지합니다. 알림 메시지는 모니터링/모델 리뷰/핸드오프에서 즉시 외부 전송하지 않고 `notification_jobs` 큐에 먼저 적재하며, 실제 텔레그램/콘솔 발송은 알림 worker 한 곳에서 순차 처리합니다.
 
 텔레그램 발송을 쓰려면 봇에게 `/start`를 보낸 뒤 계정 설정에 `notify-provider telegram`, `telegram-bot-token`, `telegram-chat-id`를 저장합니다. 자세한 구조는 `docs/python-service.md`에 정리되어 있습니다.
 

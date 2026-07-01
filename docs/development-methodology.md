@@ -36,10 +36,11 @@ Infrastructure:
 
 - `python_service/digital_twin/infrastructure/settings.py`: env fallback and SQLite-backed runtime settings facade
 - `python_service/digital_twin/infrastructure/sqlite_accounts.py`: SQLite account repository
-- `python_service/digital_twin/infrastructure/sqlite_operational.py`: SQLite app store, runtime settings, snapshots, cadence, domain events, and model-review jobs
+- `python_service/digital_twin/infrastructure/sqlite_operational.py`: SQLite app store, runtime settings, snapshots, cadence, domain events, model-review jobs, and notification jobs
 - `python_service/digital_twin/infrastructure/json_monitor_state.py`: legacy JSON monitor state compatibility only
 - `python_service/digital_twin/infrastructure/toss_snapshots.py`: Toss adapter and demo snapshot fallback
-- `python_service/digital_twin/infrastructure/notifications.py`: console and Telegram delivery
+- `python_service/digital_twin/application/notification_service.py`: queued notification delivery worker
+- `python_service/digital_twin/infrastructure/notifications.py`: notification queue adapters plus console and Telegram delivery
 - `python_service/digital_twin/infrastructure/event_bus.py`: synchronous event bus with SQLite event-log default
 - `python_service/digital_twin/infrastructure/model_review_queue.py`: async model-review queue interface fed by decision-change events
 - `python_service/digital_twin/infrastructure/model_reviewer.py`: Codex/LLM command adapter with local fallback
@@ -64,7 +65,7 @@ Current events:
 
 Events are persisted locally to the `domain_events` table in `data/service.db` through `SQLiteEventLog`. Event handlers must not break publishers by default. If one feature needs another feature's result, publish or subscribe to an event instead of importing the other feature's application service.
 
-`monitoring.alerts_detected` also feeds asynchronous model-review jobs for `monitorDecisionChange` alerts. Realtime alerts must never wait for LLM/Codex output; deep analysis belongs in the model-review queue and worker.
+`monitoring.alerts_detected` also feeds asynchronous model-review jobs for `monitorDecisionChange` alerts. Realtime alerts must never wait for LLM/Codex output; deep analysis belongs in the model-review queue and worker. Notification producers should enqueue jobs and leave external delivery to the notification worker.
 
 ## Parallel Development Slices
 
@@ -72,7 +73,7 @@ Use these slices when multiple chat windows work independently:
 
 - Account management: `domain/accounts.py`, `application/account_service.py`, `infrastructure/sqlite_accounts.py`
 - Monitoring and scheduling: `domain/monitoring.py`, `application/monitoring_service.py`, `application/scheduler.py`, `infrastructure/sqlite_operational.py`
-- Notifications: `infrastructure/notifications.py` plus event handlers subscribed to monitoring events
+- Notifications: `domain/notifications.py`, `application/notification_service.py`, `infrastructure/notifications.py`, and `infrastructure/sqlite_operational.py`
 - Providers/data collection: `infrastructure/toss_snapshots.py`
 - Model scoring: `domain/analytics.py` and future model-lab application services
 - Model review and validation: `domain/model_review.py`, `application/model_review_service.py`, `infrastructure/sqlite_operational.py`, `infrastructure/model_review_queue.py`, `infrastructure/model_reviewer.py`

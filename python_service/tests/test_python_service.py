@@ -14,6 +14,7 @@ from digital_twin.admin_preview import admin_preview_config, write_admin_preview
 from digital_twin.application.account_service import AccountApplicationService
 from digital_twin.application.model_review_service import ModelReviewRunner
 from digital_twin.application.monitoring_service import MonitorRunner as ApplicationMonitorRunner
+from digital_twin.application.notification_service import NotificationQueueRunner
 from digital_twin.cli import build_handoff_message
 from digital_twin.cli import preserve_existing_secrets
 from digital_twin.cli import build_parser
@@ -22,13 +23,15 @@ from digital_twin.domain.analytics import SafeFormula, StrategyModel, decisions_
 from digital_twin.domain.events import ACCOUNT_SAVED, MONITORING_ALERTS_DETECTED, MONITORING_CYCLE_COMPLETED, MONITORING_SNAPSHOT_COLLECTED, alerts_detected_event
 from digital_twin.domain.monitoring import DEFAULT_ALERT_RULES, DEFAULT_CADENCE, RealtimeMonitor
 from digital_twin.domain.model_review import ModelReviewJob, local_model_review
+from digital_twin.domain.notifications import NotificationJob
 from digital_twin.domain.parsing import parse_assignments
 from digital_twin.domain.portfolio import AccountSnapshot, AlertEvent, utc_now_iso
 from digital_twin.infrastructure.event_bus import EventBus, JsonEventLog
 from digital_twin.infrastructure.json_monitor_state import MonitorStore
 from digital_twin.infrastructure.model_review_queue import ModelReviewEnqueuer, ModelReviewJobStore
+from digital_twin.infrastructure.notifications import send_events
 from digital_twin.infrastructure.settings import runtime_settings
-from digital_twin.infrastructure.sqlite_operational import SQLiteAppStore, SQLiteEventLog, SQLiteModelReviewJobStore, SQLiteMonitorStore, SQLiteRuntimeSettingsStore
+from digital_twin.infrastructure.sqlite_operational import SQLiteAppStore, SQLiteEventLog, SQLiteModelReviewJobStore, SQLiteMonitorStore, SQLiteNotificationJobStore, SQLiteRuntimeSettingsStore
 from digital_twin.infrastructure.sqlite_accounts import AccountRegistry
 from digital_twin.scheduler import MonitorRunner
 
@@ -400,6 +403,42 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(sent[0].startswith("AAPL 모델 리뷰"))
         self.assertNotIn("메인 AAPL 모델 리뷰", sent[0])
 
+    def test_send_events_enqueues_notifications_without_direct_delivery(self):
+        account = AccountConfig("main", "메인", "toss", "https://example.test", "", "", "", ["AAPL"])
+        queue = SQLiteNotificationJobStore(Path(self.temp.name) / "service.db")
+        event = AlertEvent("main", "메인", "WATCH", "monitorHeartbeat", "main:heartbeat", "상태 확인", ["정상"], "")
+
+        result = send_events([event], accounts={"main": account}, queue=queue)
+
+        self.assertTrue(result.delivered)
+        self.assertEqual(1, result.queued)
+        jobs = queue.pending(limit=10)
+        self.assertEqual(1, len(jobs))
+        self.assertEqual("pending", jobs[0].status)
+        self.assertEqual("monitorHeartbeat", jobs[0].message_type)
+        self.assertIn("상태 확인", jobs[0].text)
+
+    def test_notification_queue_runner_delivers_pending_messages_in_order(self):
+        registry = AccountRegistry()
+        registry.upsert(AccountConfig("main", "메인", "toss", "https://example.test", "", "", "", ["AAPL"]))
+        queue = SQLiteNotificationJobStore(Path(self.temp.name) / "service.db")
+        queue.enqueue(NotificationJob.create("첫 번째", account_id="main", account_label="메인", message_type="test"))
+        queue.enqueue(NotificationJob.create("두 번째", account_id="main", account_label="메인", message_type="test"))
+        sent = []
+
+        class FakeNotifier:
+            def send(self, message):
+                sent.append(message)
+                return SimpleNamespace(delivered=True, reason="")
+
+        runner = NotificationQueueRunner(queue, registry, lambda _account: FakeNotifier())
+
+        processed = runner.run_once(limit=10)
+
+        self.assertEqual(2, processed)
+        self.assertEqual(["첫 번째", "두 번째"], sent)
+        self.assertEqual({"done": 2}, queue.summary())
+
     def test_admin_preview_config_is_static_and_sanitized(self):
         registry = AccountRegistry()
         registry.upsert(AccountConfig(
@@ -574,6 +613,9 @@ class PythonServiceTests(unittest.TestCase):
         job_store = SQLiteModelReviewJobStore(db_path, legacy_path=legacy_missing)
         self.assertEqual(1, job_store.enqueue_from_event(alerts_detected_event([alert])))
         self.assertEqual(1, len(job_store.pending(limit=10)))
+        notification_store = SQLiteNotificationJobStore(db_path)
+        self.assertTrue(notification_store.enqueue(NotificationJob.create("queued", account_id="main", message_type="test")))
+        self.assertEqual(1, len(notification_store.pending(limit=10)))
         settings_store = SQLiteRuntimeSettingsStore(db_path, legacy_path=legacy_missing)
         settings_store.save({"watchlistSymbols": "AAPL,NVDA", "tossClientSecret": "secret"})
         app_store = SQLiteAppStore(db_path, legacy_path=legacy_missing)
@@ -587,6 +629,7 @@ class PythonServiceTests(unittest.TestCase):
             self.assertEqual(2, connection.execute("SELECT COUNT(*) FROM monitor_sent").fetchone()[0])
             self.assertEqual(1, connection.execute("SELECT COUNT(*) FROM domain_events").fetchone()[0])
             self.assertEqual(1, connection.execute("SELECT COUNT(*) FROM model_review_jobs").fetchone()[0])
+            self.assertEqual(1, connection.execute("SELECT COUNT(*) FROM notification_jobs").fetchone()[0])
             self.assertEqual(2, connection.execute("SELECT COUNT(*) FROM runtime_settings").fetchone()[0])
             self.assertEqual(1, connection.execute("SELECT COUNT(*) FROM app_store").fetchone()[0])
 

@@ -51,7 +51,7 @@ For parallel work across multiple chat windows, keep each conversation inside on
 
 - Account management: `domain/accounts.py`, `application/account_service.py`, `infrastructure/sqlite_accounts.py`
 - Monitoring and scheduling: `domain/portfolio.py`, `application/monitoring_service.py`, `monitor.py`, `scheduler.py`
-- Notifications: `notifiers.py`, `infrastructure/notifications.py`, and handlers subscribed to monitoring events
+- Notifications: `notifiers.py`, `infrastructure/notifications.py`, `application/notification_service.py`, and the SQLite notification queue
 - Providers/data collection: `providers.py`, `infrastructure/toss_snapshots.py`
 - Model scoring: `analytics.py` and future model-lab modules
 
@@ -68,6 +68,9 @@ npm run python:monitor:watch
 npm run python:model-review:once -- --dry-run
 npm run python:model-review:status
 npm run python:model-review:watch
+npm run python:notifications:once
+npm run python:notifications:status
+npm run python:notifications:watch
 npm run python:service:start
 npm run python:service:status
 npm run python:service:restart
@@ -78,12 +81,13 @@ The account registry is stored in SQLite at `data/service.db` with `0600` permis
 
 If the SQLite database has no account rows, the service falls back to single-account settings from the `runtime_settings` table or `.env.local`. Existing `data/store.json`, `data/settings.json`, and `data/accounts.json` files are imported into SQLite on first use as legacy compatibility.
 
-`python:monitor:watch` runs realtime monitoring in the foreground. `python:model-review:watch` runs the asynchronous model-review worker in the foreground.
+`python:monitor:watch` runs realtime monitoring in the foreground. `python:model-review:watch` runs the asynchronous model-review worker in the foreground. `python:notifications:watch` runs the single notification delivery worker.
 
-The `python:service:*` commands run both background workers:
+The `python:service:*` commands run all background workers:
 
 - realtime monitor: `data/python-monitor.pid`, `data/python-monitor.log`
 - model review worker: `data/python-model-review.pid`, `data/python-model-review.log`
+- notification worker: `data/python-notifications.pid`, `data/python-notifications.log`
 
 ## Account Database
 
@@ -139,13 +143,23 @@ When a `monitorDecisionChange` alert is emitted, the message includes:
 
 The same decision-change alert also queues a deeper asynchronous model review. The realtime alert path does not wait for LLM/Codex output.
 
-The app store is stored in `app_store`, runtime settings are stored in `runtime_settings`, snapshots are stored in `monitor_snapshots`, and cadence is stored per account, rule, and symbol in `monitor_sent` inside `data/service.db`.
+The app store is stored in `app_store`, runtime settings are stored in `runtime_settings`, snapshots are stored in `monitor_snapshots`, cadence is stored per account, rule, and symbol in `monitor_sent`, and outgoing notification jobs are stored in `notification_jobs` inside `data/service.db`.
+
+## Notification Queue
+
+Monitoring alerts, model-review messages, and work-handoff messages enqueue `notification_jobs` instead of sending directly. The notification worker is the only place that calls the configured notifier, so slow Telegram/API delivery cannot block monitoring or model-review work.
+
+Configuration:
+
+- `NOTIFICATION_QUEUE_INTERVAL_SECONDS`: defaults to `30`.
+- `NOTIFICATION_QUEUE_BATCH_SIZE`: defaults to `10`.
+- `NOTIFICATION_SEND_GAP_SECONDS`: defaults to `1`.
 
 ## Async Model Review
 
 Decision-change alerts are queued in the `model_review_jobs` table inside `data/service.db`.
 
-The model-review worker processes that queue separately and sends a second message with:
+The model-review worker processes that queue separately and enqueues a second notification message with:
 
 - decision-change cause
 - data validation
@@ -160,7 +174,7 @@ Configuration:
 - `MODEL_REVIEW_INTERVAL_SECONDS`: defaults to `300`.
 - `MODEL_REVIEW_BATCH_SIZE`: defaults to `1`.
 
-If the configured LLM command fails or is unavailable, the worker sends a local deterministic model review instead of blocking the queue.
+If the configured LLM command fails or is unavailable, the worker enqueues a local deterministic model review instead of blocking the queue.
 
 ## Model Development
 

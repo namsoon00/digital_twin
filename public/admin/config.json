@@ -7,10 +7,173 @@
   "previewUrl": "https://namsoon00.github.io/digital_twin/admin/",
   "localUrl": "http://127.0.0.1:3000/admin/",
   "security": [
-    "GitHub Pages 미리보기에는 실제 계좌, Toss secret, Telegram bot token, SQLite DB, 로컬 상태 파일을 포함하지 않습니다.",
+    "GitHub Pages 미리보기에는 SQLite DB 파일, Toss secret, Telegram bot token, 계좌 순번, 채팅 ID 원문을 포함하지 않습니다.",
+    "빌드 시점의 로컬 DB 계정과 런타임 설정은 secret 원문 없이 마스킹된 값으로만 포함합니다.",
     "실제 설정 저장과 계좌 조회는 로컬 서버의 /api/service-accounts, /api/settings에서만 수행합니다.",
     "공유 미리보기에서는 서버 설정과 계정 DB 쓰기를 차단합니다."
   ],
+  "localData": {
+    "generatedAt": "2026-07-01T22:00:50.063484Z",
+    "sources": {
+      "serviceDb": "data/service.db",
+      "serviceDbExists": true,
+      "settings": "data/settings.json",
+      "settingsExists": false
+    },
+    "accountSource": "runtime-default",
+    "savedAccountCount": 0,
+    "accountCount": 1,
+    "enabledAccountCount": 1,
+    "accounts": [
+      {
+        "id": "default",
+        "label": "기본 계정",
+        "provider": "toss",
+        "baseUrl": "https://openapi.tossinvest.com",
+        "clientId": true,
+        "clientSecret": true,
+        "accountSeq": false,
+        "watchlistSymbols": [
+          "NVDA",
+          "TSLA",
+          "000660"
+        ],
+        "notifyProvider": "telegram",
+        "telegramBotToken": true,
+        "telegramChatId": true,
+        "notifyLinkUrl": "http://127.0.0.1:3000",
+        "enabled": true
+      }
+    ],
+    "settings": {
+      "watchlistSymbols": "NVDA,TSLA,000660",
+      "tossApiBaseUrl": "https://openapi.tossinvest.com",
+      "notifyProvider": "telegram",
+      "notifyLinkUrl": "http://127.0.0.1:3000",
+      "notifyIntervalMinutes": "10",
+      "fxRates": "KRW=1\nUSD=1400",
+      "modelReviewUseCodex": "1",
+      "modelReviewTimeoutSeconds": "180",
+      "modelReviewIntervalSeconds": "300",
+      "modelReviewBatchSize": "1"
+    },
+    "configured": {
+      "tossClientId": true,
+      "tossClientSecret": true,
+      "tossAccountSeq": false,
+      "telegramBotToken": true,
+      "telegramChatId": true
+    },
+    "notification": {
+      "alertRules": [
+        {
+          "key": "holdingTiming",
+          "default": 1,
+          "unit": ""
+        },
+        {
+          "key": "monitorHeartbeat",
+          "default": 1,
+          "unit": ""
+        },
+        {
+          "key": "monitorConnection",
+          "default": 1,
+          "unit": ""
+        },
+        {
+          "key": "monitorPositionChange",
+          "default": 1,
+          "unit": ""
+        },
+        {
+          "key": "monitorPnlChange",
+          "default": 1,
+          "unit": ""
+        },
+        {
+          "key": "monitorValueChange",
+          "default": 1,
+          "unit": ""
+        },
+        {
+          "key": "monitorCashChange",
+          "default": 1,
+          "unit": ""
+        },
+        {
+          "key": "monitorDecisionChange",
+          "default": 1,
+          "unit": ""
+        }
+      ],
+      "alertThresholds": [
+        {
+          "key": "monitorPnlDelta",
+          "default": 2,
+          "unit": ""
+        },
+        {
+          "key": "monitorValueDelta",
+          "default": 5,
+          "unit": ""
+        },
+        {
+          "key": "monitorCashDelta",
+          "default": 10,
+          "unit": ""
+        },
+        {
+          "key": "monitorExitPressureDelta",
+          "default": 15,
+          "unit": ""
+        }
+      ],
+      "alertCadenceMinutes": [
+        {
+          "key": "holdingTiming",
+          "default": 10,
+          "unit": "minutes"
+        },
+        {
+          "key": "monitorHeartbeat",
+          "default": 10,
+          "unit": "minutes"
+        },
+        {
+          "key": "monitorConnection",
+          "default": 10,
+          "unit": "minutes"
+        },
+        {
+          "key": "monitorPositionChange",
+          "default": 10,
+          "unit": "minutes"
+        },
+        {
+          "key": "monitorPnlChange",
+          "default": 10,
+          "unit": "minutes"
+        },
+        {
+          "key": "monitorValueChange",
+          "default": 10,
+          "unit": "minutes"
+        },
+        {
+          "key": "monitorCashChange",
+          "default": 10,
+          "unit": "minutes"
+        },
+        {
+          "key": "monitorDecisionChange",
+          "default": 10,
+          "unit": "minutes"
+        }
+      ],
+      "minimumCadenceMinutes": 10
+    }
+  },
   "pages": [
     {
       "id": "accounts",
@@ -158,8 +321,9 @@
         "npm run python:service:status"
       ],
       "storage": [
-        "data/python-monitor-state.json",
-        "data/domain-events.jsonl"
+        "data/service.db: monitor_snapshots",
+        "data/service.db: monitor_sent",
+        "data/service.db: domain_events"
       ],
       "defaults": {
         "alertRules": [
@@ -234,7 +398,7 @@
           },
           {
             "key": "monitorHeartbeat",
-            "default": 60,
+            "default": 10,
             "unit": "minutes"
           },
           {
@@ -249,22 +413,22 @@
           },
           {
             "key": "monitorPnlChange",
-            "default": 30,
+            "default": 10,
             "unit": "minutes"
           },
           {
             "key": "monitorValueChange",
-            "default": 30,
+            "default": 10,
             "unit": "minutes"
           },
           {
             "key": "monitorCashChange",
-            "default": 60,
+            "default": 10,
             "unit": "minutes"
           },
           {
             "key": "monitorDecisionChange",
-            "default": 30,
+            "default": 10,
             "unit": "minutes"
           }
         ],
@@ -281,7 +445,7 @@
         "npm run python:model-review:status"
       ],
       "storage": [
-        "data/model-review-queue.json",
+        "data/service.db: model_review_jobs",
         "data/python-model-review.log"
       ],
       "settings": [
@@ -330,5 +494,5 @@
       ]
     }
   ],
-  "buildId": "cc1406e8896d"
+  "buildId": "b21c235b4b59"
 }

@@ -37,7 +37,7 @@ Use events as the contract between independently developed features:
 - Runtime dispatch lives in `python_service/digital_twin/infrastructure/event_bus.py`.
 - Application services publish events after completing their own transaction or monitoring step.
 - Event payloads must not include API keys, Telegram tokens, client secrets, or raw account credentials.
-- Local events are appended to `data/domain-events.jsonl`, which is ignored by git.
+- Local events are stored in the `domain_events` table inside `data/service.db`.
 
 Current event contracts:
 
@@ -139,11 +139,11 @@ When a `monitorDecisionChange` alert is emitted, the message includes:
 
 The same decision-change alert also queues a deeper asynchronous model review. The realtime alert path does not wait for LLM/Codex output.
 
-Cadence is stored per account, rule, and symbol in `data/python-monitor-state.json`.
+Snapshots are stored in `monitor_snapshots`, and cadence is stored per account, rule, and symbol in `monitor_sent` inside `data/service.db`.
 
 ## Async Model Review
 
-Decision-change alerts are queued in `data/model-review-queue.json`, which is ignored by git.
+Decision-change alerts are queued in the `model_review_jobs` table inside `data/service.db`.
 
 The model-review worker processes that queue separately and sends a second message with:
 

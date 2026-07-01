@@ -13,8 +13,7 @@ from .domain.accounts import AccountConfig, split_symbols
 from .domain.monitoring import RealtimeMonitor
 from .domain.portfolio import AlertEvent
 from .infrastructure.event_bus import default_event_bus
-from .infrastructure.json_monitor_state import MonitorStore
-from .infrastructure.model_review_queue import ModelReviewJobStore
+from .infrastructure.sqlite_operational import SQLiteModelReviewJobStore, SQLiteMonitorStore
 from .infrastructure.notifications import notifier_for_account, send_events
 from .infrastructure.service_factory import build_model_review_runner, build_monitor_runner
 from .infrastructure.settings import runtime_settings, utc_now
@@ -152,7 +151,7 @@ def monitor_command(args) -> int:
     registry = AccountRegistry()
     accounts = registry.load()
     if args.monitor_action == "status":
-        store = MonitorStore()
+        store = SQLiteMonitorStore()
         print("Accounts: " + str(len(accounts)))
         for account in accounts:
             previous = store.previous.get(account.account_id)
@@ -210,7 +209,7 @@ def monitor_command(args) -> int:
 
 
 def model_review_command(args) -> int:
-    store = ModelReviewJobStore()
+    store = SQLiteModelReviewJobStore()
     if args.model_review_action == "status":
         summary = store.summary()
         print(json.dumps({"jobs": summary}, ensure_ascii=False))

@@ -117,6 +117,44 @@ function checkFrontendAdminRender() {
         }
       ]
     },
+    "admin/config.json": {
+      mode: "github-pages-readonly-preview",
+      localData: {
+        generatedAt: "2026-07-01T00:00:00.000Z",
+        accountCount: 1,
+        enabledAccountCount: 1,
+        accounts: [
+          {
+            id: "pages-main",
+            label: "Pages DB 계정",
+            provider: "toss",
+            baseUrl: "https://openapi.tossinvest.com",
+            accountSeq: true,
+            enabled: true,
+            watchlistSymbols: ["MSFT", "035720"],
+            notifyProvider: "telegram",
+            notifyLinkUrl: "https://namsoon00.github.io/digital_twin/?tab=notifications",
+            clientId: true,
+            clientSecret: true,
+            telegramBotToken: true,
+            telegramChatId: true
+          }
+        ],
+        settings: {
+          watchlistSymbols: "MSFT,035720",
+          notifyProvider: "telegram",
+          notifyLinkUrl: "https://namsoon00.github.io/digital_twin/?tab=notifications",
+          alertCadenceMinutes: "monitorDecisionChange=10"
+        },
+        configured: {
+          tossClientId: true,
+          tossClientSecret: true,
+          tossAccountSeq: true,
+          telegramBotToken: true,
+          telegramChatId: true
+        }
+      }
+    },
     "/api/flow-lens": {
       generatedAt: "2026-07-01T00:00:00.000Z",
       headline: "테스트 스냅샷",
@@ -178,7 +216,7 @@ function checkFrontendAdminRender() {
     }
   };
 
-  function renderForSearch(search) {
+  function renderForSearch(search, hostname) {
     let html = "";
     const storage = new Map();
     const app = {
@@ -207,7 +245,7 @@ function checkFrontendAdminRender() {
         }
       },
       window: {
-        location: { protocol: "http:", hostname: "127.0.0.1", search: search || "" },
+        location: { protocol: "http:", hostname: hostname || "127.0.0.1", search: search || "" },
         localStorage: {
           getItem: function (key) {
             return storage.has(key) ? storage.get(key) : null;
@@ -238,7 +276,7 @@ function checkFrontendAdminRender() {
     return new Promise(function (resolve) {
       setTimeout(function () {
         resolve(html);
-      }, 50);
+      }, 80);
     });
   }
 
@@ -246,12 +284,14 @@ function checkFrontendAdminRender() {
     renderForSearch(""),
     renderForSearch("?tab=accounts"),
     renderForSearch("?tab=notifications"),
-    renderForSearch("?tab=modeling")
+    renderForSearch("?tab=modeling"),
+    renderForSearch("?tab=accounts", "namsoon00.github.io")
   ]).then(function (pages) {
     const overviewHtml = pages[0];
     const accountHtml = pages[1];
     const notificationHtml = pages[2];
     const modelingHtml = pages[3];
+    const staticAccountHtml = pages[4];
 
     assertOk(overviewHtml.indexOf("계정·알림·모델 운영 콘솔") >= 0, "메인 운영 콘솔 제목이 렌더링되지 않았습니다.");
     ["overview", "accounts", "notifications", "modeling", "monitoring"].forEach(function (tab) {
@@ -270,9 +310,15 @@ function checkFrontendAdminRender() {
     assertOk(accountHtml.indexOf('value="true"') < 0, "마스킹된 boolean 값이 계정 폼에 그대로 표시됩니다.");
     assertOk(notificationHtml.indexOf("admin-message-row") >= 0, "메시지 타입별 알림 설정이 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("tab=notifications") >= 0, "알림 링크 기본값이 새 알림 탭을 가리키지 않습니다.");
+    assertOk(modelingHtml.indexOf("model-guide-panel") >= 0, "모델 운영 가이드가 렌더링되지 않았습니다.");
+    assertOk(modelingHtml.indexOf("내 매수·매도 기준 운영 순서") >= 0, "모델 운영 순서 제목이 렌더링되지 않았습니다.");
     assertOk(modelingHtml.indexOf("admin-modeling-panel") >= 0, "모델링 설정 패널이 렌더링되지 않았습니다.");
-    assertOk(modelingHtml.indexOf("model-timing-panel") >= 0, "타이밍 백테스트 패널이 렌더링되지 않았습니다.");
-    assertOk(modelingHtml.indexOf("웹에서 운영하는 매수·매도 타이밍 모델") >= 0, "타이밍 모델 제목이 렌더링되지 않았습니다.");
+    assertOk(modelingHtml.indexOf("매매 판단 기준 관리") >= 0, "쉬운 모델 판단 기준 제목이 렌더링되지 않았습니다.");
+    assertOk(modelingHtml.indexOf("model-timing-panel") < 0, "Mock 시계열 기반 타이밍 패널이 아직 렌더링됩니다.");
+    assertOk(modelingHtml.indexOf("웹에서 운영하는 매수·매도 타이밍 모델") < 0, "타이밍 모델 제목이 아직 렌더링됩니다.");
+    assertOk(staticAccountHtml.indexOf('value="Pages DB 계정"') >= 0, "정적 빌드 DB 계정 표시 이름이 폼에 채워지지 않았습니다.");
+    assertOk(staticAccountHtml.indexOf('value="MSFT,035720"') >= 0, "정적 빌드 관심 종목이 폼에 채워지지 않았습니다.");
+    assertOk(staticAccountHtml.indexOf('value="true"') < 0, "정적 빌드의 마스킹된 boolean 값이 계정 폼에 그대로 표시됩니다.");
   });
 }
 

@@ -11,13 +11,13 @@ npm start
 
 브라우저에서 `http://127.0.0.1:3000`을 여세요. 첫 화면은 Python 서비스 운영 콘솔이며, 계정 등록, 메시지 타입별 알림 활성화, 알림 주기, 모델링 설정을 관리합니다.
 
-GitHub Pages 정적 미리보기는 아래 URL에서 확인합니다. 실제 계좌 DB와 secret은 포함하지 않으며, 로컬 서버가 필요한 저장/조회 기능은 비활성화됩니다.
+GitHub Pages 정적 미리보기는 아래 URL에서 확인합니다. 빌드 시점의 로컬 DB 계정/설정 요약은 마스킹된 값으로 채우고, 실제 SQLite DB 파일과 secret 원문은 포함하지 않습니다. 로컬 서버가 필요한 저장/조회 기능은 비활성화됩니다.
 
 ```text
 https://namsoon00.github.io/digital_twin/
 ```
 
-Python 서비스 어드민 구성 미리보기는 아래 URL에서 확인합니다. 실제 계좌 DB와 secret은 포함하지 않는 읽기 전용 정적 페이지입니다.
+Python 서비스 어드민 구성 미리보기는 아래 URL에서 확인합니다. 계정, 알림 주기, 모델링 설정의 빌드 스냅샷을 secret 없이 보여주는 읽기 전용 정적 페이지입니다.
 
 ```text
 https://namsoon00.github.io/digital_twin/admin/
@@ -108,7 +108,7 @@ npm run share
 
 ## Python 서비스
 
-다중 계정, 실시간 모니터링, 스케줄링, 모델 리뷰 로직은 Python 서비스가 담당합니다. Python 서비스는 SQLite DB인 `data/service.db`의 여러 계정을 순회하고, 계정별 이전 스냅샷과 메시지 주기를 `data/python-monitor-state.json`에 저장합니다. 토스 credentials와 텔레그램 발송 정보도 계정별 DB row로 관리합니다.
+다중 계정, 실시간 모니터링, 스케줄링, 모델 리뷰 로직은 Python 서비스가 담당합니다. Python 서비스는 SQLite DB인 `data/service.db`의 여러 계정을 순회하고, 계정별 이전 스냅샷, 메시지 주기, 도메인 이벤트, 모델 리뷰 큐를 DB 테이블에 저장합니다. 토스 credentials와 텔레그램 발송 정보도 계정별 DB row로 관리합니다.
 
 ```bash
 npm run python:accounts -- list

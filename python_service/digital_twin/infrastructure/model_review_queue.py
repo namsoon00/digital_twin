@@ -90,8 +90,12 @@ class ModelReviewJobStore:
 
 class ModelReviewEnqueuer:
     def __init__(self, store: ModelReviewJobStore = None):
-        self.store = store or ModelReviewJobStore()
+        if store:
+            self.store = store
+        else:
+            from .sqlite_operational import SQLiteModelReviewJobStore
+
+            self.store = SQLiteModelReviewJobStore()
 
     def handle(self, event: DomainEvent) -> None:
         self.store.enqueue_from_event(event)
-

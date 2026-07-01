@@ -812,6 +812,7 @@ h3 {
 .admin-overview-panel,
 .admin-account-panel,
 .admin-message-panel,
+.model-guide-panel,
 .admin-modeling-panel,
 .admin-grid .alert-delivery-panel {
   grid-column: 1 / -1;
@@ -1016,8 +1017,8 @@ h3 {
 
 .lab-panel,
 .lab-method-panel,
+.model-guide-panel,
 .model-panel,
-.model-timing-panel,
 .model-version-panel,
 .model-preview-panel,
 .alert-panel,
@@ -1357,6 +1358,144 @@ h3 {
   gap: 10px;
 }
 
+.model-guide-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  padding: 0 16px 16px;
+}
+
+.model-guide-card,
+.model-setting-card {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8faf9;
+}
+
+.model-guide-card em,
+.model-setting-card em {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.model-guide-card strong,
+.model-setting-card strong {
+  color: var(--ink);
+  font-size: 15px;
+  overflow-wrap: anywhere;
+}
+
+.model-guide-card p {
+  margin: 0;
+  color: #344042;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.model-step-list {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  padding: 0 16px 16px;
+}
+
+.model-step-list div {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 9px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.model-step-list b {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--green-soft);
+  color: var(--green);
+  font-size: 12px;
+}
+
+.model-step-list span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.model-step-list strong {
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.model-step-list em {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 750;
+  line-height: 1.4;
+}
+
+.model-setting-card-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.model-setting-card {
+  background: #ffffff;
+}
+
+.model-setting-card span {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.model-setting-input {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 6px;
+}
+
+.model-setting-input input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 16px;
+  font-weight: 850;
+  outline: none;
+}
+
+.model-setting-input input:focus {
+  border-bottom-color: var(--green);
+}
+
+.model-setting-input b {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.advanced-model-section {
+  padding-top: 4px;
+}
+
 .model-number-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1401,40 +1540,10 @@ h3 {
   background: #ffffff;
 }
 
-.timing-scenario-strip {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  padding: 0 16px 12px;
-}
-
 .text-button.active {
   border-color: #8fc8b7;
   background: var(--green-soft);
   color: var(--green);
-}
-
-.timing-note {
-  margin: 0 16px;
-}
-
-.timing-list {
-  display: grid;
-  gap: 12px;
-  padding: 16px;
-}
-
-.timing-row {
-  display: grid;
-  gap: 12px;
-  padding: 14px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #f8faf9;
-}
-
-.timing-trade-list {
-  justify-content: flex-start;
 }
 
 .alert-stat-grid {
@@ -2328,6 +2437,9 @@ h3 {
   .lab-control-grid,
   .lab-draft-grid,
   .lab-record-grid,
+  .model-guide-grid,
+  .model-step-list,
+  .model-setting-card-grid,
   .model-number-grid,
   .alert-stat-grid,
   .alert-rule-grid,

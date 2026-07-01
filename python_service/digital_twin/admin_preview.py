@@ -6,10 +6,41 @@ from typing import Dict, Iterable, List
 
 from .domain.model_review import MODEL_REVIEW_PROMPT_VERSION
 from .domain.monitoring import DEFAULT_ALERT_RULES, DEFAULT_CADENCE, DEFAULT_THRESHOLDS, MIN_CADENCE_MINUTES
-from .infrastructure.settings import ROOT_DIR
+from .domain.parsing import parse_assignments
+from .infrastructure.settings import ROOT_DIR, runtime_settings, service_db_path, settings_path, utc_now
+from .infrastructure.sqlite_accounts import AccountRegistry
 
 
 ADMIN_PREVIEW_SCHEMA_VERSION = 1
+
+PUBLIC_SETTING_KEYS = [
+    "watchlistSymbols",
+    "tossApiBaseUrl",
+    "notifyProvider",
+    "notifyLinkUrl",
+    "notifyIntervalMinutes",
+    "fxRates",
+    "valuationAssumptions",
+    "marketSignalInputs",
+    "fairValueFormula",
+    "buyScoreFormula",
+    "sellScoreFormula",
+    "modelName",
+    "modelHypothesis",
+    "customBuyModelFormula",
+    "customSellModelFormula",
+    "formulaWeights",
+    "decisionThresholds",
+    "modelDecisionThresholds",
+    "alertRules",
+    "alertThresholds",
+    "alertCadenceMinutes",
+    "modelReviewUseCodex",
+    "modelReviewCommand",
+    "modelReviewTimeoutSeconds",
+    "modelReviewIntervalSeconds",
+    "modelReviewBatchSize",
+]
 
 
 def assignment_items(values: Dict[str, float], unit: str = "") -> List[Dict[str, object]]:
@@ -23,6 +54,87 @@ def assignment_items(values: Dict[str, float], unit: str = "") -> List[Dict[str,
     ]
 
 
+def configured(value: object) -> bool:
+    return bool(str(value or "").strip())
+
+
+def relative_path(path: Path) -> str:
+    try:
+        return str(path.resolve().relative_to(ROOT_DIR))
+    except ValueError:
+        return path.name
+
+
+def sanitized_account(account) -> Dict[str, object]:
+    return {
+        "id": account.account_id,
+        "label": account.label,
+        "provider": account.provider,
+        "baseUrl": account.base_url,
+        "clientId": configured(account.client_id),
+        "clientSecret": configured(account.client_secret),
+        "accountSeq": configured(account.account_seq),
+        "watchlistSymbols": list(account.watchlist_symbols),
+        "notifyProvider": account.notify_provider,
+        "telegramBotToken": configured(account.telegram_bot_token),
+        "telegramChatId": configured(account.telegram_chat_id),
+        "notifyLinkUrl": account.notify_link_url,
+        "enabled": account.enabled,
+    }
+
+
+def public_runtime_settings(settings: Dict[str, str]) -> Dict[str, str]:
+    return {
+        key: str(settings.get(key) or "")
+        for key in PUBLIC_SETTING_KEYS
+        if str(settings.get(key) or "").strip()
+    }
+
+
+def configured_runtime_flags(settings: Dict[str, str]) -> Dict[str, bool]:
+    return {
+        "tossClientId": configured(settings.get("tossClientId")),
+        "tossClientSecret": configured(settings.get("tossClientSecret")),
+        "tossAccountSeq": configured(settings.get("tossAccountSeq")),
+        "telegramBotToken": configured(settings.get("telegramBotToken")),
+        "telegramChatId": configured(settings.get("telegramChatId")),
+    }
+
+
+def assignment_snapshot(raw: str, defaults: Dict[str, float], unit: str = "") -> List[Dict[str, object]]:
+    return assignment_items(parse_assignments(raw or "", defaults), unit)
+
+
+def local_data_snapshot() -> Dict[str, object]:
+    settings = runtime_settings()
+    registry = AccountRegistry()
+    saved_accounts = registry.load_saved()
+    accounts = saved_accounts or registry.load_all()
+    enabled_accounts = [account for account in accounts if account.enabled]
+    return {
+        "generatedAt": utc_now(),
+        "sources": {
+            "serviceDb": relative_path(service_db_path()),
+            "serviceDbExists": service_db_path().exists(),
+            "settings": relative_path(settings_path()),
+            "settingsExists": settings_path().exists(),
+        },
+        "accountSource": "sqlite" if saved_accounts else "runtime-default",
+        "savedAccountCount": len(saved_accounts),
+        "accountCount": len(accounts),
+        "enabledAccountCount": len(enabled_accounts),
+        "accounts": [sanitized_account(account) for account in accounts],
+        "settings": public_runtime_settings(settings),
+        "configured": configured_runtime_flags(settings),
+        "notification": {
+            "alertRules": assignment_snapshot(settings.get("alertRules", ""), DEFAULT_ALERT_RULES),
+            "alertThresholds": assignment_snapshot(settings.get("alertThresholds", ""), DEFAULT_THRESHOLDS),
+            "alertCadenceMinutes": assignment_snapshot(settings.get("alertCadenceMinutes", ""), DEFAULT_CADENCE, "minutes"),
+            "minimumCadenceMinutes": MIN_CADENCE_MINUTES,
+        },
+    }
+
+
 def admin_preview_config() -> Dict[str, object]:
     payload: Dict[str, object] = {
         "schemaVersion": ADMIN_PREVIEW_SCHEMA_VERSION,
@@ -33,10 +145,12 @@ def admin_preview_config() -> Dict[str, object]:
         "previewUrl": "https://namsoon00.github.io/digital_twin/admin/",
         "localUrl": "http://127.0.0.1:3000/admin/",
         "security": [
-            "GitHub Pages 미리보기에는 실제 계좌, Toss secret, Telegram bot token, SQLite DB, 로컬 상태 파일을 포함하지 않습니다.",
+            "GitHub Pages 미리보기에는 SQLite DB 파일, Toss secret, Telegram bot token, 계좌 순번, 채팅 ID 원문을 포함하지 않습니다.",
+            "빌드 시점의 로컬 DB 계정과 런타임 설정은 secret 원문 없이 마스킹된 값으로만 포함합니다.",
             "실제 설정 저장과 계좌 조회는 로컬 서버의 /api/service-accounts, /api/settings에서만 수행합니다.",
             "공유 미리보기에서는 서버 설정과 계정 DB 쓰기를 차단합니다.",
         ],
+        "localData": local_data_snapshot(),
         "pages": [
             {
                 "id": "accounts",
@@ -84,7 +198,7 @@ def admin_preview_config() -> Dict[str, object]:
                     "npm run python:service:start",
                     "npm run python:service:status",
                 ],
-                "storage": ["data/python-monitor-state.json", "data/domain-events.jsonl"],
+                "storage": ["data/service.db: monitor_snapshots", "data/service.db: monitor_sent", "data/service.db: domain_events"],
                 "defaults": {
                     "alertRules": assignment_items(DEFAULT_ALERT_RULES),
                     "alertThresholds": assignment_items(DEFAULT_THRESHOLDS),
@@ -101,7 +215,7 @@ def admin_preview_config() -> Dict[str, object]:
                     "npm run python:model-review:watch",
                     "npm run python:model-review:status",
                 ],
-                "storage": ["data/model-review-queue.json", "data/python-model-review.log"],
+                "storage": ["data/service.db: model_review_jobs", "data/python-model-review.log"],
                 "settings": [
                     {"key": "modelReviewUseCodex", "label": "Codex 분석 사용", "default": "1"},
                     {"key": "modelReviewCommand", "label": "외부 리뷰 명령", "default": ""},
@@ -165,6 +279,87 @@ def render_defaults(defaults: Dict[str, object]) -> str:
     return '<div class="defaults">' + "".join(rows) + "</div>"
 
 
+def status_chip(value: object, label: str = "") -> str:
+    text = label or ("설정됨" if bool(value) else "미설정")
+    tone = "ok" if bool(value) else "muted"
+    return '<span class="chip ' + tone + '">' + escape(text) + "</span>"
+
+
+def render_setting_chips(settings: Dict[str, object]) -> str:
+    if not settings:
+        return '<span class="muted">저장된 공개 설정 없음</span>'
+    return "".join(
+        '<span class="chip">' + escape(str(key)) + "=" + escape(str(value)) + "</span>"
+        for key, value in settings.items()
+    )
+
+
+def render_configured_flags(flags: Dict[str, bool]) -> str:
+    if not flags:
+        return '<span class="muted">설정 상태 없음</span>'
+    return "".join(status_chip(value, key + (" 설정됨" if value else " 미설정")) for key, value in flags.items())
+
+
+def render_account_cards(accounts: List[Dict[str, object]]) -> str:
+    if not accounts:
+        return '<p class="muted">빌드 시점에 SQLite DB에 저장된 계정이 없습니다.</p>'
+    cards = []
+    for account in accounts:
+        symbols = account.get("watchlistSymbols") if isinstance(account.get("watchlistSymbols"), list) else []
+        credentials = "".join(
+            [
+                status_chip(account.get("clientId"), "API key"),
+                status_chip(account.get("clientSecret"), "Toss secret"),
+                status_chip(account.get("accountSeq"), "계좌 순번"),
+                status_chip(account.get("telegramBotToken"), "Bot token"),
+                status_chip(account.get("telegramChatId"), "Chat ID"),
+            ]
+        )
+        cards.append(
+            '<div class="account-card">'
+            '<div><strong>' + escape(str(account.get("label") or account.get("id") or "-")) + "</strong>"
+            '<p>' + escape(str(account.get("id") or "-")) + " · " + escape(str(account.get("provider") or "-")) + " · " + ("활성" if account.get("enabled") is not False else "비활성") + "</p></div>"
+            '<div><span class="muted">관심 종목</span><p>' + escape(", ".join(str(symbol) for symbol in symbols) or "-") + "</p></div>"
+            '<div><span class="muted">알림</span><p>' + escape(str(account.get("notifyProvider") or "-")) + " · " + escape(str(account.get("notifyLinkUrl") or "-")) + "</p></div>"
+            '<div class="credential-row">' + credentials + "</div>"
+            "</div>"
+        )
+    return "".join(cards)
+
+
+def render_local_data(payload: Dict[str, object]) -> str:
+    local_data = payload.get("localData") if isinstance(payload.get("localData"), dict) else {}
+    sources = local_data.get("sources") if isinstance(local_data.get("sources"), dict) else {}
+    accounts = local_data.get("accounts") if isinstance(local_data.get("accounts"), list) else []
+    settings = local_data.get("settings") if isinstance(local_data.get("settings"), dict) else {}
+    configured_flags = local_data.get("configured") if isinstance(local_data.get("configured"), dict) else {}
+    return (
+        '<section class="section" id="local-data">'
+        '<div class="section-head">'
+        '<p class="eyebrow">local-data</p>'
+        "<h2>로컬 DB 빌드 스냅샷</h2>"
+        "<p>현재 빌드에 포함된 SQLite 계정과 런타임 설정입니다. 민감 값은 원문 대신 설정 여부만 표시합니다.</p>"
+        "</div>"
+        '<div class="section-grid">'
+        '<div class="panel"><h3>소스</h3>'
+        '<div class="default-row"><strong>DB</strong><div><span class="chip">' + escape(str(sources.get("serviceDb") or "data/service.db")) + "</span>" + status_chip(sources.get("serviceDbExists"), "파일 확인") + "</div></div>"
+        '<div class="default-row"><strong>설정</strong><div><span class="chip">' + escape(str(sources.get("settings") or "data/settings.json")) + "</span>" + status_chip(sources.get("settingsExists"), "파일 확인") + "</div></div>"
+        '<div class="default-row"><strong>빌드 시각</strong><div><span class="chip">' + escape(str(local_data.get("generatedAt") or "-")) + "</span></div></div>"
+        "</div>"
+        '<div class="panel"><h3>요약</h3>'
+        '<span class="chip">계정 ' + escape(str(local_data.get("accountCount", 0))) + "</span>"
+        '<span class="chip">활성 ' + escape(str(local_data.get("enabledAccountCount", 0))) + "</span>"
+        '<span class="chip">저장 행 ' + escape(str(local_data.get("savedAccountCount", 0))) + "</span>"
+        '<span class="chip">소스 ' + escape(str(local_data.get("accountSource") or "-")) + "</span>"
+        + render_configured_flags(configured_flags) +
+        "</div>"
+        '<div class="panel wide"><h3>런타임 설정</h3>' + render_setting_chips(settings) + "</div>"
+        "</div>"
+        '<div class="account-list">' + render_account_cards(accounts) + "</div>"
+        "</section>"
+    )
+
+
 def render_admin_html(payload: Dict[str, object]) -> str:
     pages = payload.get("pages") or []
     nav = "".join(
@@ -172,6 +367,7 @@ def render_admin_html(payload: Dict[str, object]) -> str:
         for page in pages
         if isinstance(page, dict)
     )
+    nav = '<a href="#local-data">로컬 DB</a>' + nav
     sections = []
     for page in pages:
         if not isinstance(page, dict):
@@ -339,6 +535,7 @@ def render_admin_html(payload: Dict[str, object]) -> str:
         font-size: 13px;
         color: #263241;
       }}
+      .chip.ok {{ border-color: #b9d8cf; background: #eef8f5; color: var(--accent); }}
       .defaults {{
         margin-top: 12px;
         border-top: 1px solid var(--line);
@@ -350,6 +547,28 @@ def render_admin_html(payload: Dict[str, object]) -> str:
         margin-bottom: 6px;
         font-size: 13px;
       }}
+      .account-list {{
+        display: grid;
+        gap: 10px;
+        margin-top: 12px;
+      }}
+      .account-card {{
+        display: grid;
+        grid-template-columns: 1.2fr 1fr 1.2fr;
+        gap: 12px;
+        align-items: start;
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 14px;
+      }}
+      .account-card p {{
+        margin: 4px 0 0;
+        color: var(--muted);
+      }}
+      .credential-row {{
+        grid-column: 1 / -1;
+      }}
       .muted {{ color: var(--muted); }}
       footer {{
         color: var(--muted);
@@ -360,6 +579,7 @@ def render_admin_html(payload: Dict[str, object]) -> str:
       footer a {{ color: var(--info); }}
       @media (max-width: 920px) {{
         .section-grid {{ grid-template-columns: 1fr; }}
+        .account-card {{ grid-template-columns: 1fr; }}
       }}
     </style>
   </head>
@@ -374,6 +594,7 @@ def render_admin_html(payload: Dict[str, object]) -> str:
     </header>
     <main>
       <div class="notice">{security}</div>
+      {local_data}
       {sections}
       <footer>
         <p>정적 구성 JSON: <a href="config.json?v={build_id}">config.json</a></p>
@@ -388,6 +609,7 @@ def render_admin_html(payload: Dict[str, object]) -> str:
         description=escape(str(payload.get("description"))),
         nav=nav,
         security="".join("<p>" + escape(line) + "</p>" for line in payload.get("security") or []),
+        local_data=render_local_data(payload),
         sections="".join(sections),
     )
 

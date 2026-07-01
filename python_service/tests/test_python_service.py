@@ -1,5 +1,6 @@
 import json
 import os
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -22,10 +23,11 @@ from digital_twin.domain.events import ACCOUNT_SAVED, MONITORING_ALERTS_DETECTED
 from digital_twin.domain.monitoring import DEFAULT_CADENCE, RealtimeMonitor
 from digital_twin.domain.model_review import ModelReviewJob, local_model_review
 from digital_twin.domain.parsing import parse_assignments
-from digital_twin.domain.portfolio import AccountSnapshot, utc_now_iso
+from digital_twin.domain.portfolio import AccountSnapshot, AlertEvent, utc_now_iso
 from digital_twin.infrastructure.event_bus import EventBus, JsonEventLog
 from digital_twin.infrastructure.json_monitor_state import MonitorStore
 from digital_twin.infrastructure.model_review_queue import ModelReviewEnqueuer, ModelReviewJobStore
+from digital_twin.infrastructure.sqlite_operational import SQLiteEventLog, SQLiteModelReviewJobStore, SQLiteMonitorStore
 from digital_twin.infrastructure.sqlite_accounts import AccountRegistry
 from digital_twin.scheduler import MonitorRunner
 
@@ -388,6 +390,21 @@ class PythonServiceTests(unittest.TestCase):
         self.assertNotIn("메인 AAPL 모델 리뷰", sent[0])
 
     def test_admin_preview_config_is_static_and_sanitized(self):
+        registry = AccountRegistry()
+        registry.upsert(AccountConfig(
+            "main",
+            "메인",
+            "toss",
+            "https://example.test",
+            "client-id-that-must-not-leak",
+            "secret-that-must-not-leak",
+            "account-seq-that-must-not-leak",
+            ["AAPL", "005930"],
+            notify_provider="telegram",
+            telegram_bot_token="telegram-secret-that-must-not-leak",
+            telegram_chat_id="chat-id-that-must-not-leak",
+            notify_link_url="http://127.0.0.1:3000?tab=notifications",
+        ))
         with mock.patch.dict(os.environ, {
             "TOSS_CLIENT_SECRET": "secret-that-must-not-leak",
             "TELEGRAM_BOT_TOKEN": "telegram-secret-that-must-not-leak",
@@ -399,8 +416,15 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(payload["buildId"])
         self.assertTrue(any(page["id"] == "model-review" for page in payload["pages"]))
         self.assertIn("clientSecret", encoded)
+        self.assertEqual(1, payload["localData"]["accountCount"])
+        self.assertEqual(["AAPL", "005930"], payload["localData"]["accounts"][0]["watchlistSymbols"])
+        self.assertTrue(payload["localData"]["accounts"][0]["clientSecret"])
+        self.assertTrue(payload["localData"]["accounts"][0]["telegramChatId"])
         self.assertNotIn("secret-that-must-not-leak", encoded)
         self.assertNotIn("telegram-secret-that-must-not-leak", encoded)
+        self.assertNotIn("client-id-that-must-not-leak", encoded)
+        self.assertNotIn("account-seq-that-must-not-leak", encoded)
+        self.assertNotIn("chat-id-that-must-not-leak", encoded)
 
     def test_admin_preview_writes_pages_assets(self):
         output_dir = Path(self.temp.name) / "admin"
@@ -411,6 +435,7 @@ class PythonServiceTests(unittest.TestCase):
         config = json.loads((output_dir / "config.json").read_text(encoding="utf-8"))
         self.assertEqual(payload["buildId"], config["buildId"])
         self.assertIn("Exit Lens Python Admin", html)
+        self.assertIn("로컬 DB 빌드 스냅샷", html)
         self.assertIn("config.json?v=" + payload["buildId"], html)
 
     def test_runner_uses_provider_snapshot(self):
@@ -499,6 +524,51 @@ class PythonServiceTests(unittest.TestCase):
         payload = (Path(self.temp.name) / "domain-events.jsonl").read_text(encoding="utf-8")
         self.assertIn('"name": "account.saved"', payload)
         self.assertNotIn("secret1", payload)
+
+    def test_sqlite_operational_store_persists_runtime_data(self):
+        db_path = Path(self.temp.name) / "service.db"
+        legacy_missing = Path(self.temp.name) / "missing.json"
+        position = normalize_position({
+            "symbol": "AAPL",
+            "name": "Apple",
+            "marketValue": 1000,
+            "profitLossRate": 12,
+            "sellableQuantity": 1,
+        })
+        portfolio = portfolio_summary([position])
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "ok",
+            utc_now_iso(),
+            portfolio,
+            [position],
+            decisions_for_positions([position], portfolio),
+        )
+        alert = AlertEvent("main", "메인", "WATCH", "monitorDecisionChange", "main:decision:AAPL", "Apple", ["판단 변화"], "AAPL")
+
+        monitor_store = SQLiteMonitorStore(db_path, legacy_path=legacy_missing)
+        monitor_store.save_snapshot(snapshot)
+        monitor_store.mark_sent([alert])
+        reopened = SQLiteMonitorStore(db_path, legacy_path=legacy_missing)
+
+        self.assertIn("main", reopened.previous)
+        self.assertIn(alert.key, reopened.sent)
+        self.assertIn(alert.cadence_key(), reopened.sent)
+
+        event_log = SQLiteEventLog(db_path, legacy_path=Path(self.temp.name) / "missing.jsonl")
+        event_log.handle(alerts_detected_event([alert]))
+        job_store = SQLiteModelReviewJobStore(db_path, legacy_path=legacy_missing)
+        self.assertEqual(1, job_store.enqueue_from_event(alerts_detected_event([alert])))
+        self.assertEqual(1, len(job_store.pending(limit=10)))
+
+        with sqlite3.connect(str(db_path)) as connection:
+            self.assertEqual(1, connection.execute("SELECT COUNT(*) FROM monitor_snapshots").fetchone()[0])
+            self.assertEqual(2, connection.execute("SELECT COUNT(*) FROM monitor_sent").fetchone()[0])
+            self.assertEqual(1, connection.execute("SELECT COUNT(*) FROM domain_events").fetchone()[0])
+            self.assertEqual(1, connection.execute("SELECT COUNT(*) FROM model_review_jobs").fetchone()[0])
 
 
 class AssignmentTests(unittest.TestCase):

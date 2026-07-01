@@ -11,6 +11,10 @@
     telegramChatId: "",
     notifyLinkUrl: "http://127.0.0.1:3000?tab=notifications",
     notifyIntervalMinutes: "10",
+    fxRates: [
+      "KRW=1",
+      "USD=1400"
+    ].join("\n"),
     valuationAssumptions: [
       "AAPL,7.5,28,15",
       "005930,6500,12,20"
@@ -697,6 +701,7 @@
       telegramChatId: settingValue("telegramChatId"),
       notifyLinkUrl: settingValue("notifyLinkUrl"),
       notifyIntervalMinutes: settingValue("notifyIntervalMinutes"),
+      fxRates: settingValue("fxRates"),
       valuationAssumptions: settingValue("valuationAssumptions"),
       marketSignalInputs: settingValue("marketSignalInputs"),
       fairValueFormula: settingValue("fairValueFormula"),
@@ -760,6 +765,8 @@
       NVDA: { name: "NVIDIA", market: "US", currency: "USD", sector: "반도체" },
       AMD: { name: "AMD", market: "US", currency: "USD", sector: "반도체" },
       TSLA: { name: "Tesla", market: "US", currency: "USD", sector: "모빌리티" },
+      MSTR: { name: "Strategy", market: "US", currency: "USD", sector: "디지털자산" },
+      STRC: { name: "Strategy Preferred", market: "US", currency: "USD", sector: "디지털자산" },
       GOOGL: { name: "Alphabet", market: "US", currency: "USD", sector: "AI/플랫폼" },
       META: { name: "Meta", market: "US", currency: "USD", sector: "AI/플랫폼" }
     };
@@ -4524,6 +4531,10 @@
       renderSettingField("telegramChatId", "Telegram Chat ID", "text", "chat id", { preserveConfigured: true }),
       renderSettingField("notifyLinkUrl", "알림 링크 URL", "url", "http://127.0.0.1:3000?tab=notifications"),
       renderSettingField("notifyIntervalMinutes", "알림 주기(분)", "number", "10"),
+      '<label class="setting-field wide">',
+      '<span>환율 설정</span>',
+      '<textarea data-setting="fxRates" rows="2" autocomplete="off" placeholder="USD=1400">' + escapeHtml(settingValue("fxRates") || defaultSettings.fxRates) + '</textarea>',
+      '</label>',
       '<label class="setting-field wide">',
       '<span>밸류에이션 가정</span>',
       '<textarea data-setting="valuationAssumptions" rows="4" autocomplete="off" placeholder="SYMBOL, EPS, 목표PER, 안전마진%">' + escapeHtml(settingValue("valuationAssumptions")) + '</textarea>',

@@ -145,6 +145,28 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(62, score["buyScore"])
         self.assertEqual(53, score["sellScore"])
 
+    def test_portfolio_summary_converts_usd_holdings_to_krw_base(self):
+        kr_position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "currency": "KRW",
+            "marketValue": 1000000,
+        })
+        us_position = normalize_position({
+            "symbol": "MSTR",
+            "name": "Strategy",
+            "market": "US",
+            "currency": "USD",
+            "marketValue": 1000,
+        })
+
+        portfolio = portfolio_summary([kr_position, us_position], fx_rates={"USD": 1400, "KRW": 1})
+
+        self.assertEqual(2400000, portfolio.invested)
+        self.assertEqual(2400000, portfolio.total)
+        self.assertEqual(1000000, next(item for item in portfolio.markets if item["key"] == "KR")["invested"])
+        self.assertEqual(1400000, next(item for item in portfolio.markets if item["key"] == "US")["invested"])
+
     def test_monitor_cadence_is_account_and_type_scoped(self):
         account = AccountConfig("main", "메인", "toss", "https://example.test", "", "", "", ["AAPL"])
         position = normalize_position({

@@ -7,6 +7,9 @@ from .parsing import parse_assignments
 from .portfolio import DecisionItem, PortfolioSummary, Position
 
 
+DEFAULT_FX_RATES = {"KRW": 1.0, "USD": 1400.0}
+
+
 def number(value) -> float:
     if value is None:
         return 0.0
@@ -49,6 +52,8 @@ def known_stock(symbol: str) -> Dict[str, str]:
         "NVDA": {"name": "NVIDIA", "market": "US", "currency": "USD", "sector": "반도체"},
         "AMD": {"name": "AMD", "market": "US", "currency": "USD", "sector": "반도체"},
         "TSLA": {"name": "Tesla", "market": "US", "currency": "USD", "sector": "모빌리티"},
+        "MSTR": {"name": "Strategy", "market": "US", "currency": "USD", "sector": "디지털자산"},
+        "STRC": {"name": "Strategy Preferred", "market": "US", "currency": "USD", "sector": "디지털자산"},
     }
     fallback = {"name": normalized or "관심 종목", "market": "", "currency": "", "sector": sector_from_symbol(normalized)}
     fallback.update(known.get(normalized, {}))
@@ -75,11 +80,19 @@ def normalize_position(item: Dict[str, object]) -> Position:
         raw_rate = profit_loss / max(1.0, market_value - profit_loss) * 100
     symbol = str(item.get("symbol") or item.get("stockCode") or item.get("code") or "").upper()
     info = known_stock(symbol)
+    market = str(item.get("marketCountry") or item.get("market") or info["market"])
+    currency = str(item.get("currency") or info["currency"])
+    if not currency:
+        market_code = market.upper()
+        if market_code == "US":
+            currency = "USD"
+        elif market_code in {"KR", "KOSPI", "KOSDAQ"} or symbol.isdigit():
+            currency = "KRW"
     return Position(
         symbol=symbol or info["symbol"],
         name=str(item.get("name") or item.get("stockName") or info["name"]),
-        market=str(item.get("marketCountry") or item.get("market") or info["market"]),
-        currency=str(item.get("currency") or info["currency"]),
+        market=market,
+        currency=currency,
         quantity=number(item.get("quantity") or item.get("qty")),
         sellable_quantity=number(item.get("sellableQuantity") or item.get("availableQuantity") or item.get("sellableQty") or item.get("quantity") or item.get("qty")),
         average_price=average_price,
@@ -106,8 +119,29 @@ def empty_market(key: str) -> Dict[str, object]:
     return {"key": key, "label": labels.get(key, key), "invested": 0.0, "cash": 0.0, "total": 0.0, "cashRatio": 0.0}
 
 
-def portfolio_summary(positions: Iterable[Position], account_cash: float = 0.0, account_currency: str = "KRW") -> PortfolioSummary:
+def normalized_fx_rates(fx_rates: Dict[str, float] = None) -> Dict[str, float]:
+    rates = dict(DEFAULT_FX_RATES)
+    for key, value in (fx_rates or {}).items():
+        currency = str(key or "").upper()
+        if currency:
+            rates[currency] = max(0.0, number(value))
+    return rates
+
+
+def value_in_base(value: float, currency: str, fx_rates: Dict[str, float] = None) -> float:
+    rates = normalized_fx_rates(fx_rates)
+    code = str(currency or "KRW").upper()
+    return number(value) * rates.get(code, 1.0)
+
+
+def portfolio_summary(
+    positions: Iterable[Position],
+    account_cash: float = 0.0,
+    account_currency: str = "KRW",
+    fx_rates: Dict[str, float] = None,
+) -> PortfolioSummary:
     market_map: Dict[str, Dict[str, object]] = {}
+    rates = normalized_fx_rates(fx_rates)
 
     def exposure(key: str) -> Dict[str, object]:
         if key not in market_map:
@@ -115,13 +149,13 @@ def portfolio_summary(positions: Iterable[Position], account_cash: float = 0.0, 
         return market_map[key]
 
     position_list = list(positions)
-    cash = sum(max(0.0, item.market_value) for item in position_list if item.is_cash())
+    cash = sum(max(0.0, value_in_base(item.market_value, item.currency, rates)) for item in position_list if item.is_cash())
     if cash:
         for item in position_list:
             if item.is_cash():
-                exposure(market_key(item))["cash"] = float(exposure(market_key(item))["cash"]) + max(0.0, item.market_value)
+                exposure(market_key(item))["cash"] = float(exposure(market_key(item))["cash"]) + max(0.0, value_in_base(item.market_value, item.currency, rates))
     elif account_cash:
-        cash = max(0.0, account_cash)
+        cash = max(0.0, value_in_base(account_cash, account_currency, rates))
         exposure("KR" if account_currency.upper() == "KRW" else "US" if account_currency.upper() == "USD" else "OTHER")["cash"] = cash
 
     invested = 0.0
@@ -131,7 +165,7 @@ def portfolio_summary(positions: Iterable[Position], account_cash: float = 0.0, 
     for item in position_list:
         if item.is_cash():
             continue
-        value = max(0.0, item.market_value)
+        value = max(0.0, value_in_base(item.market_value, item.currency, rates))
         invested += value
         exposure(market_key(item))["invested"] = float(exposure(market_key(item))["invested"]) + value
         sector_map[item.sector or sector_from_symbol(item.symbol)] = sector_map.get(item.sector or "기타", 0.0) + value
@@ -269,4 +303,3 @@ def decisions_for_positions(positions: Iterable[Position], portfolio: PortfolioS
 
 def serialize_dataclass(value) -> Dict[str, object]:
     return asdict(value)
-

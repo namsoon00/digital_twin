@@ -7,6 +7,7 @@ from typing import Dict, List, Tuple
 from ..domain.accounts import AccountConfig
 from ..domain.analytics import decisions_for_positions, normalize_position, number, portfolio_summary
 from ..domain.portfolio import AccountSnapshot, Position, utc_now_iso
+from .settings import currency_rates
 
 
 def http_json(method: str, url: str, headers: Dict[str, str], body: bytes = None, timeout: int = 12) -> Dict[str, object]:
@@ -122,7 +123,7 @@ class TossProvider:
 def build_snapshot(account: AccountConfig) -> AccountSnapshot:
     provider = TossProvider(account)
     mode, status, positions, cash, currency = provider.fetch_positions()
-    portfolio = portfolio_summary(positions, cash, currency)
+    portfolio = portfolio_summary(positions, cash, currency, currency_rates())
     decisions = decisions_for_positions(positions, portfolio)
     return AccountSnapshot(
         account_id=account.account_id,
@@ -135,4 +136,3 @@ def build_snapshot(account: AccountConfig) -> AccountSnapshot:
         positions=positions,
         decisions=decisions,
     )
-

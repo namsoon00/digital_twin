@@ -104,4 +104,12 @@ def runtime_settings() -> Dict[str, str]:
         "modelReviewTimeoutSeconds": value("modelReviewTimeoutSeconds", "MODEL_REVIEW_TIMEOUT_SECONDS", "180"),
         "modelReviewIntervalSeconds": value("modelReviewIntervalSeconds", "MODEL_REVIEW_INTERVAL_SECONDS", "300"),
         "modelReviewBatchSize": value("modelReviewBatchSize", "MODEL_REVIEW_BATCH_SIZE", "1"),
+        "fxRates": value("fxRates", "FX_RATES", "KRW=1\nUSD=1400"),
     }
+
+
+def currency_rates(settings: Dict[str, str] = None) -> Dict[str, float]:
+    settings = settings or runtime_settings()
+    raw = str(settings.get("fxRates") or "").replace(";", "\n")
+    rates = parse_assignments(raw, {"KRW": 1.0, "USD": 1400.0})
+    return {str(key).upper(): float(value or 0) for key, value in rates.items()}

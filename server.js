@@ -198,6 +198,7 @@ function runtimeSettings() {
     telegramChatId: settingFromStoreOrEnv(store, "telegramChatId", "TELEGRAM_CHAT_ID", ""),
     notifyLinkUrl: settingFromStoreOrEnv(store, "notifyLinkUrl", "NOTIFY_LINK_URL", "http://127.0.0.1:3000?tab=notifications"),
     notifyIntervalMinutes: settingFromStoreOrEnv(store, "notifyIntervalMinutes", "NOTIFY_INTERVAL_MINUTES", "10"),
+    fxRates: settingFromStoreOrEnv(store, "fxRates", "FX_RATES", "KRW=1\nUSD=1400"),
     valuationAssumptions: settingFromStoreOrEnv(store, "valuationAssumptions", "VALUATION_ASSUMPTIONS", ""),
     marketSignalInputs: settingFromStoreOrEnv(store, "marketSignalInputs", "MARKET_SIGNAL_INPUTS", ""),
     fairValueFormula: settingFromStoreOrEnv(store, "fairValueFormula", "FAIR_VALUE_FORMULA", ""),
@@ -229,6 +230,7 @@ function settingsStatusPayload() {
     telegramChatId: "",
     notifyLinkUrl: settings.notifyLinkUrl,
     notifyIntervalMinutes: settings.notifyIntervalMinutes,
+    fxRates: settings.fxRates,
     fairValueFormula: settings.fairValueFormula,
     buyScoreFormula: settings.buyScoreFormula,
     sellScoreFormula: settings.sellScoreFormula,
@@ -269,6 +271,7 @@ function saveRuntimeSettings(input) {
     "telegramChatId",
     "notifyLinkUrl",
     "notifyIntervalMinutes",
+    "fxRates",
     "valuationAssumptions",
     "marketSignalInputs",
     "fairValueFormula",
@@ -1664,6 +1667,12 @@ function normalizeTossHoldings(payload) {
 }
 
 function normalizeTossPosition(item) {
+  const symbol = String(item.symbol || item.stockCode || item.code || "").toUpperCase();
+  const info = knownStockInfo(symbol);
+  const market = String(item.marketCountry || item.market || info.market || "");
+  const marketCode = market.toUpperCase();
+  const inferredCurrency = marketCode === "US" ? "USD" : (marketCode === "KR" || marketCode === "KOSPI" || marketCode === "KOSDAQ" || /^[0-9]{6}$/.test(symbol)) ? "KRW" : "";
+  const currency = String(item.currency || info.currency || inferredCurrency || "");
   const marketValue = decimalNumber(item.marketValue) || decimalNumber(item.evaluationAmount);
   const profitLoss = decimalNumber(item.profitLoss) || decimalNumber(item.unrealizedProfitLoss);
   const averagePrice =
@@ -1682,10 +1691,10 @@ function normalizeTossPosition(item) {
       ? decimalNumber(item.unrealizedProfitLossRate)
       : 0;
   return {
-    symbol: String(item.symbol || item.stockCode || item.code || ""),
-    name: String(item.name || item.stockName || item.symbol || "보유 종목"),
-    market: String(item.marketCountry || item.market || ""),
-    currency: String(item.currency || ""),
+    symbol: symbol,
+    name: String(item.name || item.stockName || info.name || item.symbol || "보유 종목"),
+    market: market,
+    currency: currency,
     quantity: String(item.quantity || item.qty || ""),
     sellableQuantity: String(item.sellableQuantity || item.availableQuantity || item.sellableQty || item.quantity || item.qty || ""),
     averagePrice: averagePrice,
@@ -1693,7 +1702,7 @@ function normalizeTossPosition(item) {
     marketValue: marketValue,
     profitLoss: profitLoss,
     profitLossRate: rawRate || profitLossRate({ marketValue: marketValue, profitLoss: profitLoss }),
-    sector: sectorFromSymbol(String(item.symbol || item.stockCode || item.name || ""))
+    sector: String(item.sector || info.sector || sectorFromSymbol(String(item.symbol || item.stockCode || item.name || "")))
   };
 }
 
@@ -1717,6 +1726,8 @@ function knownStockInfo(symbol) {
     NVDA: { name: "NVIDIA", market: "US", currency: "USD", sector: "반도체" },
     AMD: { name: "AMD", market: "US", currency: "USD", sector: "반도체" },
     TSLA: { name: "Tesla", market: "US", currency: "USD", sector: "모빌리티" },
+    MSTR: { name: "Strategy", market: "US", currency: "USD", sector: "디지털자산" },
+    STRC: { name: "Strategy Preferred", market: "US", currency: "USD", sector: "디지털자산" },
     GOOGL: { name: "Alphabet", market: "US", currency: "USD", sector: "AI/플랫폼" },
     META: { name: "Meta", market: "US", currency: "USD", sector: "AI/플랫폼" }
   };
@@ -2302,6 +2313,43 @@ function socialPostsAsSignals(posts) {
   });
 }
 
+function parseNumberAssignments(rawValue, defaults) {
+  const values = Object.assign({}, defaults || {});
+  String(rawValue || "").replace(/;/g, "\n").split(/\n+/).forEach(function (line) {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    const separator = trimmed.indexOf("=") >= 0 ? "=" : trimmed.indexOf(":") >= 0 ? ":" : trimmed.indexOf(",") >= 0 ? "," : "";
+    if (!separator) return;
+    const parts = trimmed.split(separator);
+    const key = String(parts.shift() || "").trim().toUpperCase();
+    const value = decimalNumber(parts.join(separator));
+    if (key && Number.isFinite(value) && value > 0) values[key] = value;
+  });
+  return values;
+}
+
+function fxRatesFromSettings() {
+  return parseNumberAssignments(runtimeSettings().fxRates, { KRW: 1, USD: 1400 });
+}
+
+function currencyForPosition(item) {
+  const explicit = String(item && item.currency || "").trim().toUpperCase();
+  if (explicit) return explicit;
+  const market = String(item && item.market || "").trim().toUpperCase();
+  if (market === "US") return "USD";
+  if (market === "KR" || market === "KOSPI" || market === "KOSDAQ" || /^[0-9]{6}$/.test(String(item && item.symbol || ""))) return "KRW";
+  return String(knownStockInfo(item && item.symbol).currency || "KRW").toUpperCase();
+}
+
+function valueInBaseCurrency(value, currency, rates) {
+  const code = String(currency || "KRW").trim().toUpperCase();
+  return decimalNumber(value) * decimalNumber((rates || {})[code] || 1);
+}
+
+function positionBaseMarketValue(item, rates) {
+  return Math.max(0, valueInBaseCurrency(item && item.marketValue, currencyForPosition(item), rates));
+}
+
 function analyzeThemes(newsItems, socialPosts) {
   const signals = newsItems.concat(socialPostsAsSignals(socialPosts));
   const themeDefs = [
@@ -2334,13 +2382,14 @@ function analyzeThemes(newsItems, socialPosts) {
 }
 
 function analyzePortfolio(positions) {
+  const rates = fxRatesFromSettings();
   const total = positions.reduce(function (sum, item) {
-    return sum + Math.max(0, decimalNumber(item.marketValue));
+    return sum + positionBaseMarketValue(item, rates);
   }, 0);
   const sectorMap = {};
   positions.forEach(function (item) {
     const sector = item.sector || sectorFromSymbol(item.symbol || item.name);
-    sectorMap[sector] = (sectorMap[sector] || 0) + Math.max(0, decimalNumber(item.marketValue));
+    sectorMap[sector] = (sectorMap[sector] || 0) + positionBaseMarketValue(item, rates);
   });
   const sectors = Object.keys(sectorMap)
     .map(function (sector) {
@@ -2827,6 +2876,7 @@ function emptyMarketExposure(key) {
 }
 
 function buildTossPortfolio(positions, account) {
+  const rates = fxRatesFromSettings();
   const marketMap = {};
   function marketExposure(key) {
     if (!marketMap[key]) marketMap[key] = emptyMarketExposure(key);
@@ -2835,20 +2885,20 @@ function buildTossPortfolio(positions, account) {
 
   const cashPositions = positions.filter(isCashPosition);
   const cashFromPositions = cashPositions.reduce(function (sum, item) {
-    const value = Math.max(0, decimalNumber(item.marketValue));
+    const value = positionBaseMarketValue(item, rates);
     marketExposure(marketBucketForPosition(item)).cash += value;
     return sum + value;
   }, 0);
   if (!cashFromPositions) {
-    const accountCash = Math.max(0, decimalNumber(account && account.orderableAmount));
+    const accountCash = Math.max(0, valueInBaseCurrency(account && account.orderableAmount, account && account.currency, rates));
     if (accountCash) marketExposure(marketBucketForCash(account && account.currency)).cash += accountCash;
   }
-  const cash = cashFromPositions || decimalNumber(account && account.orderableAmount);
+  const cash = cashFromPositions || Math.max(0, valueInBaseCurrency(account && account.orderableAmount, account && account.currency, rates));
   const investPositions = positions.filter(function (item) {
     return !isCashPosition(item);
   });
   const invested = investPositions.reduce(function (sum, item) {
-    const value = Math.max(0, decimalNumber(item.marketValue));
+    const value = positionBaseMarketValue(item, rates);
     marketExposure(marketBucketForPosition(item)).invested += value;
     return sum + value;
   }, 0);
@@ -2857,7 +2907,7 @@ function buildTossPortfolio(positions, account) {
   if (cash) sectorMap["현금"] = cash;
   investPositions.forEach(function (item) {
     const sector = item.sector || sectorFromSymbol(item.symbol || item.name);
-    sectorMap[sector] = (sectorMap[sector] || 0) + Math.max(0, decimalNumber(item.marketValue));
+    sectorMap[sector] = (sectorMap[sector] || 0) + positionBaseMarketValue(item, rates);
   });
   const sectors = Object.keys(sectorMap)
     .map(function (sector) {

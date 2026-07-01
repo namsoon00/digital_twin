@@ -998,6 +998,70 @@ h3 {
   font-size: 12px;
 }
 
+.notification-template-section {
+  padding-top: 8px;
+}
+
+.template-variable-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.notification-template-list {
+  display: grid;
+  gap: 10px;
+}
+
+.notification-template-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.8fr) minmax(0, 1.4fr) auto;
+  gap: 10px;
+  align-items: start;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8faf9;
+}
+
+.notification-template-meta {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.notification-template-meta strong {
+  font-size: 13px;
+}
+
+.notification-template-meta span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.notification-template-row textarea {
+  width: 100%;
+  min-height: 86px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--ink);
+  padding: 9px 10px;
+  font: inherit;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  resize: vertical;
+}
+
+.notification-template-row textarea:focus {
+  outline: 2px solid #afd7ca;
+  outline-offset: 1px;
+}
+
 .admin-monitor-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
@@ -2432,6 +2496,7 @@ h3 {
   .admin-grid,
   .admin-account-layout,
   .admin-monitor-grid,
+  .notification-template-row,
   .settings-grid {
     grid-template-columns: 1fr;
   }

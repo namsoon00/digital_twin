@@ -261,6 +261,7 @@ class PythonServiceTests(unittest.TestCase):
         )
 
         self.assertTrue(message.startswith("작업 완료"))
+        self.assertIn("타입: workHandoff", message)
         self.assertIn("환율 평가액 수정", message)
         self.assertIn("abc1234", message)
         self.assertNotIn("telegram", message.lower())

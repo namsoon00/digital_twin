@@ -41,6 +41,7 @@ npm run python:handoff:notify -- --summary "<short summary>" --commit "$(git rev
 ```
 
 Use `--dry-run` only when Telegram or the configured notifier is unavailable, and report that clearly.
+The message uses the `workHandoff` type so it is distinguishable from realtime portfolio alerts.
 4. Leave the final response with the commit hash, push result, handoff notification result, and any validation that could not be run.
 
 For GitHub issue automation, the important handoff is that local Codex performed the work on a self-hosted runner, then validated, committed, pushed, and commented on the issue. Do not treat starting the app server as part of that automation unless the issue explicitly asks for runtime verification.

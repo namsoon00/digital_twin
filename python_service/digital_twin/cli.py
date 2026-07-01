@@ -82,6 +82,7 @@ def print_message_type_report(events: List[AlertEvent], skipped: List[str]) -> N
 
 def build_handoff_message(summary: str, commit: str = "", validation: str = "", push: str = "", details: str = "") -> str:
     lines = [
+        "타입: workHandoff",
         "요약: " + (summary or "작업 완료"),
         "검증: " + (validation or "미기재"),
     ]

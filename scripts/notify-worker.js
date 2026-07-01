@@ -103,6 +103,17 @@ function notificationIntervalMinutes() {
   return Math.max(1, Number(runtimeSettings().notifyIntervalMinutes || process.env.NOTIFY_INTERVAL_MINUTES || 10));
 }
 
+function realtimeIntervalSeconds() {
+  return Math.max(1, Number(process.env.REALTIME_NOTIFY_INTERVAL_SECONDS || 60));
+}
+
+function currentRunDate() {
+  const explicit = argValue("--at", "").trim();
+  if (!explicit) return new Date();
+  const parsed = new Date(explicit);
+  return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+}
+
 function intervalBucketKey(parts) {
   const interval = notificationIntervalMinutes();
   const bucket = Math.floor(parts.minutes / interval);
@@ -330,8 +341,99 @@ function buildCashEvents(portfolio, now) {
   return events;
 }
 
+function realtimeSellSignal(item, ratio) {
+  const pnlRate = Number(item.profitLossRate || 0);
+  if (item.tone === "danger") {
+    return {
+      severity: "ALERT",
+      code: pnlRate <= -8 ? "stop" : "sell",
+      label: pnlRate <= -8 ? "손절 기준 확인" : "매도 기준 확인",
+      reason: sellTimingCore(item, ratio)
+    };
+  }
+  if (item.tone === "caution") {
+    return {
+      severity: "WATCH",
+      code: "trim",
+      label: "분할매도/익절 확인",
+      reason: sellTimingCore(item, ratio)
+    };
+  }
+  if (pnlRate <= -8) {
+    return {
+      severity: "ALERT",
+      code: "loss",
+      label: "손실 기준 확인",
+      reason: "손실 허용폭/손절 기준 재확인"
+    };
+  }
+  if (ratio >= 50) {
+    return {
+      severity: "WATCH",
+      code: "sector",
+      label: "비중 축소 확인",
+      reason: "섹터 쏠림 완화 기준 확인"
+    };
+  }
+  return null;
+}
+
+function realtimeBuySignal(item, portfolio) {
+  const pnlRate = Number(item.profitLossRate || 0);
+  const ratio = cashRatio(portfolio, item);
+  if (ratio <= 10) return null;
+  if (item.tone === "danger" || item.tone === "caution") return null;
+  if (pnlRate <= -8 || pnlRate >= 10) return null;
+  if (pnlRate <= 0) {
+    return {
+      severity: "WATCH",
+      code: "pullback",
+      label: "분할매수 검토",
+      reason: cashLabel(portfolio, item) + " 여유, 하락 구간 기준가 확인"
+    };
+  }
+  return null;
+}
+
+function buildRealtimeTimingEvents(snapshot, date) {
+  const now = kstParts(date);
+  const toss = snapshot.toss || {};
+  if (toss.mode !== "live" && !snapshot.mock) return [];
+
+  const portfolio = snapshot.portfolio || {};
+  const decision = snapshot.tossDecision || {};
+  const items = (Array.isArray(decision.items) ? decision.items : []).filter(function (item) {
+    return item.source === "holding";
+  });
+  const events = [];
+
+  items.forEach(function (item) {
+    const session = marketSession(item, date);
+    if (session.phase !== "open") return;
+
+    const ratio = sectorRatio(portfolio, item.sector);
+    const sell = realtimeSellSignal(item, ratio);
+    const buy = sell ? null : realtimeBuySignal(item, portfolio);
+    const signal = sell || buy;
+    if (!signal) return;
+
+    events.push(event(
+      signal.severity,
+      [now.date, "realtime", signal.code, item.symbol || item.name].join(":"),
+      [
+        item.name + ": " + session.label + " " + session.localTime,
+        signal.label,
+        "손익 " + signedPct(item.profitLossRate),
+        signal.reason
+      ].join(" · ")
+    ));
+  });
+
+  return events;
+}
+
 function buildEvents(snapshot, kind) {
-  const currentDate = new Date();
+  const currentDate = currentRunDate();
   const now = kstParts(currentDate);
   const toss = snapshot.toss || {};
   const portfolio = snapshot.portfolio || {};
@@ -437,7 +539,8 @@ function composeMessage(events, kind) {
     morning: "장전 점검",
     intraday: "장중 알림",
     close: "마감 요약",
-    status: "상태 점검"
+    status: "상태 점검",
+    realtime: "실시간 타이밍"
   };
   const lines = [
     "[Twin " + severity + "] " + (labels[kind] || "알림")
@@ -728,6 +831,38 @@ async function runOnce() {
   console.log(result.label + " notification sent: " + events.length + " event(s).");
 }
 
+async function runRealtimeOnce() {
+  const force = hasArg("--force");
+  const dryRun = hasArg("--dry-run");
+  const snapshot = await flowLensSnapshot({
+    mock: hasArg("--mock"),
+    watchlistSymbols: runtimeSettings().watchlistSymbols
+  });
+  const state = loadNotificationState();
+  const events = unsentEvents(buildRealtimeTimingEvents(snapshot, currentRunDate()), state, force);
+
+  if (events.length === 0) {
+    console.log("No realtime timing events.");
+    return;
+  }
+
+  const message = composeMessage(events, "realtime");
+  if (dryRun) {
+    console.log(message);
+    return;
+  }
+
+  const result = await sendNotification(message);
+  if (!result.delivered) {
+    console.log(message);
+    console.log("Delivery: console only (" + result.reason + ")");
+    return;
+  }
+
+  markSent(events, state);
+  console.log(result.label + " realtime notification sent: " + events.length + " event(s).");
+}
+
 async function runDaemon() {
   const intervalMinutes = notificationIntervalMinutes();
   console.log("Notify worker started. interval=" + intervalMinutes + "m");
@@ -739,8 +874,41 @@ async function runDaemon() {
   }, intervalMinutes * 60 * 1000);
 }
 
+async function runRealtimeDaemon() {
+  const intervalSeconds = realtimeIntervalSeconds();
+  let running = false;
+  console.log("Realtime notify worker started. interval=" + intervalSeconds + "s");
+
+  async function tick() {
+    if (running) return;
+    running = true;
+    try {
+      await runRealtimeOnce();
+    } finally {
+      running = false;
+    }
+  }
+
+  await tick();
+  setInterval(function () {
+    tick().catch(function (error) {
+      console.error(error.message || error);
+    });
+  }, intervalSeconds * 1000);
+}
+
 if (hasArg("--telegram-chat-ids")) {
   printTelegramChatIds().catch(function (error) {
+    console.error(error.message || error);
+    process.exitCode = 1;
+  });
+} else if (hasArg("--realtime-daemon")) {
+  runRealtimeDaemon().catch(function (error) {
+    console.error(error.message || error);
+    process.exitCode = 1;
+  });
+} else if (hasArg("--realtime")) {
+  runRealtimeOnce().catch(function (error) {
     console.error(error.message || error);
     process.exitCode = 1;
   });

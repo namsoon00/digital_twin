@@ -13,6 +13,8 @@
     "issue:list": "node scripts/issue-workflow.js list",
     "issue:watch": "node scripts/issue-workflow.js watch",
     "notify": "node scripts/notify-worker.js --once",
+    "notify:realtime": "node scripts/notify-worker.js --realtime-daemon",
+    "notify:realtime:once": "node scripts/notify-worker.js --realtime",
     "notify:telegram-chat": "node scripts/notify-worker.js --telegram-chat-ids",
     "notify:watch": "node scripts/notify-worker.js --daemon",
     "share": "node scripts/share-local.js",

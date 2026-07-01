@@ -11,6 +11,7 @@ from .application.model_review_service import ModelReviewScheduler
 from .application.scheduler import MIN_REALTIME_INTERVAL_SECONDS, RealtimeScheduler
 from .domain.accounts import AccountConfig, split_symbols
 from .domain.monitoring import RealtimeMonitor
+from .domain.portfolio import AlertEvent
 from .infrastructure.event_bus import default_event_bus
 from .infrastructure.json_monitor_state import MonitorStore
 from .infrastructure.model_review_queue import ModelReviewJobStore
@@ -42,6 +43,41 @@ def account_from_args(args) -> AccountConfig:
 
 def preserve_existing_secrets(registry: AccountRegistry, payload, account: AccountConfig) -> AccountConfig:
     return AccountApplicationService(registry).preserve_existing_secrets(payload, account)
+
+
+def collect_message_type_events(accounts: List[AccountConfig], allow_demo: bool = False):
+    monitor = RealtimeMonitor(runtime_settings())
+    events = []
+    skipped = []
+    for account in accounts:
+        snapshot = build_snapshot(account)
+        if snapshot.mode != "live" and not allow_demo:
+            skipped.append(account.account_id + ": " + snapshot.status)
+            continue
+        events.extend(monitor.type_check_events_for_snapshot(snapshot))
+    return events, skipped
+
+
+def event_to_dict(event: AlertEvent):
+    return {
+        "accountId": event.account_id,
+        "rule": event.rule,
+        "severity": event.severity,
+        "symbol": event.symbol,
+        "title": event.title,
+        "lines": event.lines,
+        "message": event.message(),
+    }
+
+
+def print_message_type_report(events: List[AlertEvent], skipped: List[str]) -> None:
+    print("messageTypeEvents=" + str(len(events)) + " mode=inspect")
+    for event in events:
+        print("")
+        print("--- " + event.rule + " ---")
+        print(event.message())
+    for item in skipped:
+        print("Skipped " + item)
 
 
 def accounts_command(args) -> int:
@@ -95,16 +131,8 @@ def monitor_command(args) -> int:
         runner.run_once(dry_run=args.dry_run, force=args.force)
         return 0
     if args.monitor_action == "send-types":
-        monitor = RealtimeMonitor(runtime_settings())
         account_map = {account.account_id: account for account in accounts}
-        events = []
-        skipped = []
-        for account in accounts:
-            snapshot = build_snapshot(account)
-            if snapshot.mode != "live" and not args.allow_demo:
-                skipped.append(account.account_id + ": " + snapshot.status)
-                continue
-            events.extend(monitor.type_check_events_for_snapshot(snapshot))
+        events, skipped = collect_message_type_events(accounts, args.allow_demo)
         if not events:
             print("No message type check events.")
             for item in skipped:
@@ -115,6 +143,31 @@ def monitor_command(args) -> int:
         for item in skipped:
             print("Skipped " + item)
         return 0 if args.dry_run or result.delivered else 1
+    if args.monitor_action == "message-types":
+        account_map = {account.account_id: account for account in accounts}
+        events, skipped = collect_message_type_events(accounts, args.allow_demo)
+        if not events:
+            if args.json:
+                print(json.dumps({"messageTypeEvents": [], "skipped": skipped, "send": args.send}, ensure_ascii=False))
+            else:
+                print("No message type check events.")
+                for item in skipped:
+                    print("Skipped " + item)
+            return 2
+        if args.json:
+            print(json.dumps({
+                "messageTypeEvents": [event_to_dict(event) for event in events],
+                "skipped": skipped,
+                "send": args.send,
+            }, ensure_ascii=False))
+        elif args.send:
+            result = send_events(events, dry_run=False, accounts=account_map)
+            print("messageTypeEvents=" + str(len(events)) + " delivered=" + str(result.delivered) + " provider=" + result.label + (" reason=" + result.reason if result.reason else ""))
+        else:
+            print_message_type_report(events, skipped)
+        if args.send and "result" in locals() and not result.delivered:
+            return 1
+        return 0
     if args.monitor_action == "watch":
         interval = int(os.environ.get("PYTHON_REALTIME_INTERVAL_SECONDS") or os.environ.get("REALTIME_NOTIFY_INTERVAL_SECONDS") or MIN_REALTIME_INTERVAL_SECONDS)
         RealtimeScheduler(runner, interval).run_forever()
@@ -184,6 +237,10 @@ def build_parser() -> argparse.ArgumentParser:
     send_types = monitor_actions.add_parser("send-types")
     send_types.add_argument("--dry-run", action="store_true")
     send_types.add_argument("--allow-demo", action="store_true")
+    message_types = monitor_actions.add_parser("message-types")
+    message_types.add_argument("--send", action="store_true")
+    message_types.add_argument("--json", action="store_true")
+    message_types.add_argument("--allow-demo", action="store_true")
     monitor_actions.add_parser("watch")
     monitor_actions.add_parser("status")
     monitor.set_defaults(func=monitor_command)

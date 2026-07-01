@@ -17,6 +17,7 @@
     "python:accounts": "python3 python_service/service.py accounts",
     "python:check": "python3 -m compileall -q python_service/service.py python_service/monitor_service.py python_service/digital_twin python_service/tests",
     "python:monitor": "python3 python_service/service.py monitor",
+    "python:monitor:message-types": "python3 python_service/service.py monitor message-types",
     "python:monitor:once": "python3 python_service/service.py monitor once",
     "python:monitor:send-types": "python3 python_service/service.py monitor send-types",
     "python:monitor:status": "python3 python_service/service.py monitor status",

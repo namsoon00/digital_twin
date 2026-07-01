@@ -14,6 +14,7 @@ from digital_twin.application.account_service import AccountApplicationService
 from digital_twin.application.model_review_service import ModelReviewRunner
 from digital_twin.application.monitoring_service import MonitorRunner as ApplicationMonitorRunner
 from digital_twin.cli import preserve_existing_secrets
+from digital_twin.cli import build_parser
 from digital_twin.domain.accounts import AccountConfig
 from digital_twin.domain.analytics import SafeFormula, StrategyModel, decisions_for_positions, normalize_position, portfolio_summary
 from digital_twin.domain.events import ACCOUNT_SAVED, MONITORING_ALERTS_DETECTED, MONITORING_CYCLE_COMPLETED, MONITORING_SNAPSHOT_COLLECTED, alerts_detected_event
@@ -219,6 +220,13 @@ class PythonServiceTests(unittest.TestCase):
             {event.rule for event in events},
         )
         self.assertTrue(all(not event.message().startswith("메인 ") for event in events))
+
+    def test_message_type_check_command_does_not_send_by_default(self):
+        args = build_parser().parse_args(["monitor", "message-types"])
+
+        self.assertFalse(args.send)
+        self.assertFalse(args.json)
+        self.assertEqual("message-types", args.monitor_action)
 
     def test_decision_change_message_includes_model_review(self):
         previous_position = normalize_position({

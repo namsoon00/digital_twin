@@ -12,7 +12,7 @@ from .notifications import queued_notifier_for_account
 from .notifications import send_events
 from .notifications import notifier_for_account
 from .settings import runtime_settings
-from .sqlite_operational import SQLiteModelReviewJobStore, SQLiteMonitorStore, SQLiteNotificationJobStore
+from .sqlite_operational import SQLiteModelReviewJobStore, SQLiteMonitorStore, SQLiteNotificationJobStore, SQLiteNotificationTemplateStore
 from .sqlite_accounts import AccountRegistry
 from .toss_snapshots import build_snapshot
 
@@ -54,4 +54,5 @@ def build_notification_queue_runner(dry_run: bool = False) -> NotificationQueueR
         notifier_factory=notifier_for_account,
         dry_run=dry_run,
         send_gap_seconds=float(settings.get("notificationSendGapSeconds") or 0),
+        template_renderer=SQLiteNotificationTemplateStore().render_job,
     )

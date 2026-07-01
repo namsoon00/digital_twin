@@ -25,6 +25,17 @@ class DomainEvent:
     def to_dict(self) -> Dict[str, object]:
         return asdict(self)
 
+    @classmethod
+    def from_dict(cls, payload: Dict[str, object]):
+        return cls(
+            name=str(payload.get("name") or ""),
+            aggregate_id=str(payload.get("aggregate_id") or payload.get("aggregateId") or ""),
+            payload=dict(payload.get("payload") or {}),
+            occurred_at=str(payload.get("occurred_at") or payload.get("occurredAt") or utc_now_iso()),
+            event_id=str(payload.get("event_id") or payload.get("eventId") or uuid.uuid4().hex),
+            correlation_id=str(payload.get("correlation_id") or payload.get("correlationId") or ""),
+        )
+
 
 def account_saved_event(account: AccountConfig) -> DomainEvent:
     return DomainEvent(

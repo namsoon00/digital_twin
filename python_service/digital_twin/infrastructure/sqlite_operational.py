@@ -7,6 +7,7 @@ from typing import Dict, Iterable, List, Optional
 
 from ..domain.events import DomainEvent, MONITORING_ALERTS_DETECTED
 from ..domain.model_review import ModelReviewJob
+from ..domain.notification_templates import DEFAULT_NOTIFICATION_TEMPLATES, NotificationTemplate, render_notification
 from ..domain.notifications import NotificationJob
 from ..domain.portfolio import AccountSnapshot, AlertEvent
 from .settings import data_dir, read_json, service_db_path, settings_path, utc_now
@@ -88,6 +89,9 @@ class OperationalConnection:
                     account_id TEXT NOT NULL DEFAULT '',
                     account_label TEXT NOT NULL DEFAULT '',
                     message_type TEXT NOT NULL DEFAULT 'notification',
+                    source_event_id TEXT NOT NULL DEFAULT '',
+                    source_event_name TEXT NOT NULL DEFAULT '',
+                    dedupe_key TEXT NOT NULL DEFAULT '',
                     status TEXT NOT NULL DEFAULT 'pending',
                     attempts INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL,
@@ -97,7 +101,17 @@ class OperationalConnection:
                     payload_json TEXT NOT NULL
                 )
             """)
+            self.ensure_columns(
+                connection,
+                "notification_jobs",
+                {
+                    "source_event_id": "TEXT NOT NULL DEFAULT ''",
+                    "source_event_name": "TEXT NOT NULL DEFAULT ''",
+                    "dedupe_key": "TEXT NOT NULL DEFAULT ''",
+                },
+            )
             connection.execute("CREATE INDEX IF NOT EXISTS idx_notification_jobs_status ON notification_jobs(status, created_at)")
+            connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_notification_jobs_dedupe ON notification_jobs(dedupe_key) WHERE dedupe_key != ''")
             connection.execute("""
                 CREATE TABLE IF NOT EXISTS runtime_settings (
                     key TEXT PRIMARY KEY,
@@ -112,6 +126,121 @@ class OperationalConnection:
                     updated_at TEXT NOT NULL
                 )
             """)
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS notification_templates (
+                    message_type TEXT PRIMARY KEY,
+                    template TEXT NOT NULL,
+                    description TEXT NOT NULL DEFAULT '',
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    updated_at TEXT NOT NULL
+                )
+            """)
+
+    def ensure_columns(self, connection, table: str, columns: Dict[str, str]) -> None:
+        existing = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(" + table + ")").fetchall()
+        }
+        for name, definition in columns.items():
+            if name not in existing:
+                connection.execute("ALTER TABLE " + table + " ADD COLUMN " + name + " " + definition)
+
+
+class SQLiteNotificationTemplateStore(OperationalConnection):
+    def __init__(self, path: Optional[Path] = None):
+        super().__init__(path)
+        self.seed_defaults()
+
+    def seed_defaults(self) -> None:
+        stamp = utc_now()
+        with self.connect() as connection:
+            for message_type, payload in DEFAULT_NOTIFICATION_TEMPLATES.items():
+                connection.execute(
+                    """
+                    INSERT OR IGNORE INTO notification_templates (
+                        message_type, template, description, enabled, updated_at
+                    )
+                    VALUES (?, ?, ?, 1, ?)
+                    """,
+                    (
+                        message_type,
+                        str(payload.get("template") or ""),
+                        str(payload.get("description") or ""),
+                        stamp,
+                    ),
+                )
+
+    def row_to_template(self, row) -> NotificationTemplate:
+        return NotificationTemplate(
+            message_type=row["message_type"],
+            template=row["template"],
+            description=row["description"],
+            enabled=bool(row["enabled"]),
+            updated_at=row["updated_at"],
+        )
+
+    def list(self) -> List[NotificationTemplate]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT message_type, template, description, enabled, updated_at FROM notification_templates ORDER BY message_type"
+            ).fetchall()
+        return [self.row_to_template(row) for row in rows]
+
+    def get(self, message_type: str) -> NotificationTemplate:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT message_type, template, description, enabled, updated_at
+                FROM notification_templates
+                WHERE message_type = ?
+                """,
+                (str(message_type or "notification"),),
+            ).fetchone()
+            if not row:
+                row = connection.execute(
+                    """
+                    SELECT message_type, template, description, enabled, updated_at
+                    FROM notification_templates
+                    WHERE message_type = 'default'
+                    """
+                ).fetchone()
+        return self.row_to_template(row) if row else NotificationTemplate.default("default")
+
+    def upsert(self, message_type: str, template: str, description: str = "", enabled: bool = True) -> NotificationTemplate:
+        stamp = utc_now()
+        key = str(message_type or "").strip()
+        if not key:
+            raise ValueError("message_type is required")
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO notification_templates (message_type, template, description, enabled, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(message_type) DO UPDATE SET
+                    template = excluded.template,
+                    description = excluded.description,
+                    enabled = excluded.enabled,
+                    updated_at = excluded.updated_at
+                """,
+                (key, str(template or ""), str(description or ""), 1 if enabled else 0, stamp),
+            )
+        return self.get(key)
+
+    def reset(self, message_type: str) -> NotificationTemplate:
+        key = str(message_type or "").strip() or "default"
+        configured = DEFAULT_NOTIFICATION_TEMPLATES.get(key) or DEFAULT_NOTIFICATION_TEMPLATES["default"]
+        return self.upsert(key, configured["template"], configured.get("description", ""), True)
+
+    def render(self, message_type: str, context: Dict[str, object]) -> str:
+        return render_notification(self.get(message_type), context)
+
+    def render_job(self, job: NotificationJob) -> str:
+        context = dict(job.context or {})
+        context.setdefault("body", job.text)
+        context.setdefault("messageType", job.message_type)
+        context.setdefault("accountId", job.account_id)
+        context.setdefault("accountLabel", job.account_label)
+        return self.render(job.message_type, context)
 
 
 class SQLiteAppStore(OperationalConnection):
@@ -355,6 +484,38 @@ class SQLiteEventLog(OperationalConnection):
     def handle(self, event: DomainEvent) -> None:
         self.insert_event_dict(event.to_dict())
 
+    def events(self, name: str = "", aggregate_id: str = "", limit: int = 0) -> List[DomainEvent]:
+        clauses = []
+        params = []
+        if name:
+            clauses.append("name = ?")
+            params.append(name)
+        if aggregate_id:
+            clauses.append("aggregate_id = ?")
+            params.append(aggregate_id)
+        sql = "SELECT event_json FROM domain_events"
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY occurred_at, event_id"
+        if limit:
+            sql += " LIMIT ?"
+            params.append(int(limit))
+        with self.connect() as connection:
+            rows = connection.execute(sql, params).fetchall()
+        events = []
+        for row in rows:
+            try:
+                events.append(DomainEvent.from_dict(json.loads(row["event_json"])))
+            except json.JSONDecodeError:
+                continue
+        return events
+
+    def event_counts(self) -> Dict[str, int]:
+        counts: Dict[str, int] = {}
+        for event in self.events():
+            counts[event.name] = counts.get(event.name, 0) + 1
+        return counts
+
 
 class SQLiteModelReviewJobStore(OperationalConnection):
     def __init__(self, path: Optional[Path] = None, legacy_path: Optional[Path] = None):
@@ -521,14 +682,17 @@ class SQLiteNotificationJobStore(OperationalConnection):
         connection.execute(
             """
             INSERT INTO notification_jobs (
-                job_id, account_id, account_label, message_type, status, attempts,
+                job_id, account_id, account_label, message_type, source_event_id, source_event_name, dedupe_key, status, attempts,
                 created_at, updated_at, last_error, text, payload_json
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(job_id) DO UPDATE SET
                 account_id = excluded.account_id,
                 account_label = excluded.account_label,
                 message_type = excluded.message_type,
+                source_event_id = excluded.source_event_id,
+                source_event_name = excluded.source_event_name,
+                dedupe_key = excluded.dedupe_key,
                 status = excluded.status,
                 attempts = excluded.attempts,
                 created_at = excluded.created_at,
@@ -542,6 +706,9 @@ class SQLiteNotificationJobStore(OperationalConnection):
                 job.account_id,
                 job.account_label,
                 job.message_type,
+                job.source_event_id,
+                job.source_event_name,
+                job.dedupe_key,
                 job.status,
                 job.attempts,
                 job.created_at,
@@ -563,6 +730,13 @@ class SQLiteNotificationJobStore(OperationalConnection):
             existing = connection.execute("SELECT job_id FROM notification_jobs WHERE job_id = ?", (job.job_id,)).fetchone()
             if existing:
                 return False
+            if job.dedupe_key:
+                existing = connection.execute(
+                    "SELECT job_id FROM notification_jobs WHERE dedupe_key = ?",
+                    (job.dedupe_key,),
+                ).fetchone()
+                if existing:
+                    return False
             self.upsert_job_with_connection(connection, job)
         return True
 

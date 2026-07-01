@@ -145,9 +145,11 @@ The same decision-change alert also queues a deeper asynchronous model review. T
 
 The app store is stored in `app_store`, runtime settings are stored in `runtime_settings`, snapshots are stored in `monitor_snapshots`, cadence is stored per account, rule, and symbol in `monitor_sent`, and outgoing notification jobs are stored in `notification_jobs` inside `data/service.db`.
 
-## Notification Queue
+## Event Sourcing and Outbox
 
-Monitoring alerts, model-review messages, and work-handoff messages enqueue `notification_jobs` instead of sending directly. The notification worker is the only place that calls the configured notifier, so slow Telegram/API delivery cannot block monitoring or model-review work.
+Monitoring snapshots, alert detections, account changes, and cycle completions are appended to `domain_events`. `SQLiteEventLog.events()` replays that stream in event order so lightweight projections and audits can be rebuilt from the event log instead of trusting only the latest mutable state.
+
+Monitoring alerts, model-review messages, and work-handoff messages enqueue `notification_jobs` instead of sending directly. This table is the notification outbox. Jobs derived from a domain event store `source_event_id`, `source_event_name`, and a `dedupe_key`, so replaying or retrying an event does not enqueue the same outbound message twice. The notification worker is the only place that calls the configured notifier, so slow Telegram/API delivery cannot block monitoring or model-review work.
 
 Configuration:
 

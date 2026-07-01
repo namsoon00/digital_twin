@@ -1,3 +1,4 @@
+import inspect
 from typing import Callable, Iterable, List
 
 from ..domain.accounts import AccountConfig
@@ -36,8 +37,9 @@ class MonitorRunner:
             events = self.monitor.apply_cadence(events, self.store, force=force)
             all_events.extend(events)
         if all_events:
-            self.publish(alerts_detected_event(all_events))
-            result = self.event_sender(all_events, dry_run=dry_run, accounts=self.account_map)
+            alert_event = alerts_detected_event(all_events)
+            self.publish(alert_event)
+            result = self.send_alert_events(all_events, dry_run=dry_run, source_event=alert_event)
             self.publish_cycle_completed(snapshots, all_events, dry_run, result.delivered)
             if dry_run:
                 return all_events
@@ -64,3 +66,17 @@ class MonitorRunner:
     def publish(self, event) -> None:
         if self.event_publisher:
             self.event_publisher.publish(event)
+
+    def send_alert_events(self, events, dry_run: bool, source_event):
+        parameters = inspect.signature(self.event_sender).parameters
+        if "source_event" in parameters or any(
+            parameter.kind == inspect.Parameter.VAR_KEYWORD
+            for parameter in parameters.values()
+        ):
+            return self.event_sender(
+                events,
+                dry_run=dry_run,
+                accounts=self.account_map,
+                source_event=source_event,
+            )
+        return self.event_sender(events, dry_run=dry_run, accounts=self.account_map)

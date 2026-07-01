@@ -63,9 +63,9 @@ Current events:
 - `monitoring.alerts_detected`
 - `monitoring.cycle_completed`
 
-Events are persisted locally to the `domain_events` table in `data/service.db` through `SQLiteEventLog`. Event handlers must not break publishers by default. If one feature needs another feature's result, publish or subscribe to an event instead of importing the other feature's application service.
+Events are persisted locally to the append-only `domain_events` table in `data/service.db` through `SQLiteEventLog`. Rebuild projections by replaying that event stream where practical instead of coupling features to mutable state tables. Event handlers must not break publishers by default. If one feature needs another feature's result, publish or subscribe to an event instead of importing the other feature's application service.
 
-`monitoring.alerts_detected` also feeds asynchronous model-review jobs for `monitorDecisionChange` alerts. Realtime alerts must never wait for LLM/Codex output; deep analysis belongs in the model-review queue and worker. Notification producers should enqueue jobs and leave external delivery to the notification worker.
+`monitoring.alerts_detected` also feeds asynchronous model-review jobs for `monitorDecisionChange` alerts. Realtime alerts must never wait for LLM/Codex output; deep analysis belongs in the model-review queue and worker. Notification producers should enqueue jobs in the notification outbox and leave external delivery to the notification worker. Jobs derived from a domain event should carry `source_event_id` and a stable `dedupe_key`.
 
 ## Parallel Development Slices
 

@@ -12,12 +12,14 @@ class NotificationQueueRunner:
         notifier_factory: Callable,
         dry_run: bool = False,
         send_gap_seconds: float = 0.0,
+        template_renderer: Callable = None,
     ):
         self.queue = queue
         self.account_repository = account_repository
         self.notifier_factory = notifier_factory
         self.dry_run = dry_run
         self.send_gap_seconds = max(0.0, float(send_gap_seconds or 0))
+        self.template_renderer = template_renderer
 
     def account_map(self) -> Dict[str, object]:
         return {account.account_id: account for account in self.account_repository.load_all()}
@@ -33,13 +35,14 @@ class NotificationQueueRunner:
             if not job.text.strip():
                 self.queue.mark_failed(job, "empty notification text")
                 continue
+            message = self.render(job)
             if self.dry_run:
-                print(job.text)
+                print(message)
                 processed += 1
                 continue
             self.queue.mark_processing(job)
             try:
-                self.deliver(job, accounts)
+                self.deliver(job, accounts, message)
                 self.queue.mark_done(job)
                 processed += 1
             except Exception as error:  # noqa: BLE001 - one failed delivery must not stop the queue.
@@ -48,9 +51,14 @@ class NotificationQueueRunner:
                 time.sleep(self.send_gap_seconds)
         return processed
 
-    def deliver(self, job: NotificationJob, accounts: Dict[str, object]) -> None:
+    def render(self, job: NotificationJob) -> str:
+        if self.template_renderer:
+            return str(self.template_renderer(job) or "").strip()
+        return job.text.strip()
+
+    def deliver(self, job: NotificationJob, accounts: Dict[str, object], message: str) -> None:
         notifier = self.notifier_factory(accounts.get(job.account_id))
-        delivery = notifier.send(job.text)
+        delivery = notifier.send(message)
         if not delivery.delivered:
             raise RuntimeError(delivery.reason or "notification delivery failed")
 

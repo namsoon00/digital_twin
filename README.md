@@ -129,7 +129,7 @@ npm run python:service:restart
 npm run python:service:stop
 ```
 
-`python:service:start`는 실시간 모니터, 비동기 모델 리뷰 worker, 알림 worker를 함께 시작합니다. Python 서비스는 계정별 연결 상태, 보유 종목 변화, 손익률/평가액 급변, 현금비중 급변, 판단 변화, 보유 타이밍을 감지합니다. 알림 메시지는 모니터링/모델 리뷰/핸드오프에서 즉시 외부 전송하지 않고 `notification_jobs` 큐에 먼저 적재하며, 실제 텔레그램/콘솔 발송은 알림 worker 한 곳에서 순차 처리합니다.
+`python:service:start`는 실시간 모니터, 비동기 모델 리뷰 worker, 알림 worker를 함께 시작합니다. Python 서비스는 계정별 연결 상태, 보유 종목 변화, 손익률/평가액 급변, 현금비중 급변, 판단 변화, 보유 타이밍을 감지합니다. 알림 메시지는 모니터링/모델 리뷰/핸드오프에서 즉시 외부 전송하지 않고 outbox인 `notification_jobs` 큐에 먼저 적재하며, 실제 텔레그램/콘솔 발송은 알림 worker 한 곳에서 순차 처리합니다. 모니터링 이벤트는 append-only `domain_events` 이벤트 스트림에 저장되고, 알림 outbox 작업은 source event id와 dedupe key를 함께 저장해 이벤트 재처리 시에도 중복 발송을 막습니다.
 
 텔레그램 발송을 쓰려면 봇에게 `/start`를 보낸 뒤 계정 설정에 `notify-provider telegram`, `telegram-bot-token`, `telegram-chat-id`를 저장합니다. 자세한 구조는 `docs/python-service.md`에 정리되어 있습니다.
 

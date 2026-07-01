@@ -11,6 +11,7 @@
     telegramChatId: "",
     notifyLinkUrl: "http://127.0.0.1:3000?tab=notifications",
     notifyIntervalMinutes: "10",
+    symbolUniverseMaxAgeHours: "24",
     fxRates: [
       "KRW=1",
       "USD=1400"
@@ -320,7 +321,14 @@
     modelSaved: false,
     modelError: "",
     editingWatchSymbol: "",
-    watchlistError: ""
+    watchlistError: "",
+    symbolUniverse: { items: [], summary: { markets: [], sources: [], total: 0, maxAgeHours: 24 } },
+    symbolUniverseLoading: false,
+    symbolUniverseRefreshing: false,
+    symbolUniverseLoaded: false,
+    symbolUniverseError: "",
+    symbolUniverseQuery: "",
+    symbolUniverseMarket: ""
   };
 
   function escapeHtml(value) {
@@ -882,6 +890,7 @@
       telegramChatId: settingValue("telegramChatId"),
       notifyLinkUrl: settingValue("notifyLinkUrl"),
       notifyIntervalMinutes: settingValue("notifyIntervalMinutes"),
+      symbolUniverseMaxAgeHours: settingValue("symbolUniverseMaxAgeHours"),
       fxRates: settingValue("fxRates"),
       valuationAssumptions: settingValue("valuationAssumptions"),
       marketSignalInputs: settingValue("marketSignalInputs"),
@@ -936,7 +945,7 @@
     return normalizeSymbols(settingValue("watchlistSymbols"));
   }
 
-  function clientKnownStockInfo(symbol) {
+  function fallbackKnownStockInfo(symbol) {
     var normalized = String(symbol || "").trim().toUpperCase();
     var map = {
       "005930": { name: "삼성전자", market: "KR", currency: "KRW", sector: "반도체" },
@@ -958,6 +967,125 @@
       currency: "",
       sector: ""
     }, map[normalized] || {});
+  }
+
+  function clientKnownStockInfo(symbol) {
+    var normalized = String(symbol || "").trim().toUpperCase();
+    var universeItem = (state.symbolUniverse.items || []).filter(function (item) {
+      return String(item.symbol || "").toUpperCase() === normalized;
+    })[0];
+    if (universeItem) {
+      return Object.assign(fallbackKnownStockInfo(normalized), {
+        symbol: universeItem.symbol,
+        name: universeItem.name || universeItem.symbol,
+        market: universeItem.market || universeItem.exchange || "",
+        currency: universeItem.currency || "",
+        sector: universeItem.sector || "",
+        source: universeItem.source || "",
+        stale: Boolean(universeItem.stale)
+      });
+    }
+    return fallbackKnownStockInfo(normalized);
+  }
+
+  function defaultSymbolUniversePayload() {
+    var items = ["005930", "000660", "TSLA", "AAPL", "NVDA", "MSFT", "AMD"].map(function (symbol) {
+      var info = fallbackKnownStockInfo(symbol);
+      var market = info.market === "US" ? "NASDAQ" : (info.market === "KR" ? "KOSPI" : info.market);
+      return Object.assign({}, info, {
+        market: market,
+        exchange: market,
+        assetType: "STOCK",
+        source: "Exit Lens seed",
+        sourceUrl: "local-default",
+        fetchedAt: "",
+        lastSeenAt: "",
+        stale: true
+      });
+    });
+    return {
+      items: items,
+      summary: {
+        total: items.length,
+        maxAgeHours: 24,
+        sources: [],
+        markets: ["KOSPI", "KOSDAQ", "NASDAQ"].map(function (market) {
+          return {
+            market: market,
+            count: items.filter(function (item) { return item.market === market; }).length,
+            lastSeenAt: "",
+            stale: true,
+            source: market === "NASDAQ" ? "Nasdaq Trader Symbol Directory" : "KRX KIND Listed Companies",
+            sourceUrl: ""
+          };
+        })
+      }
+    };
+  }
+
+  function applySymbolUniverse(payload) {
+    state.symbolUniverse = {
+      items: Array.isArray(payload.items) ? payload.items : [],
+      summary: payload.summary || { markets: [], sources: [], total: 0, maxAgeHours: 24 }
+    };
+    state.symbolUniverseLoaded = true;
+    state.symbolUniverseError = "";
+  }
+
+  function symbolUniversePath() {
+    var params = new URLSearchParams();
+    if (state.symbolUniverseQuery) params.set("query", state.symbolUniverseQuery);
+    if (state.symbolUniverseMarket) params.set("market", state.symbolUniverseMarket);
+    params.set("limit", "80");
+    return "/api/symbol-universe?" + params.toString();
+  }
+
+  function loadSymbolUniverse() {
+    state.symbolUniverseLoading = true;
+    state.symbolUniverseError = "";
+    if (isStaticPreviewHost()) {
+      applySymbolUniverse(defaultSymbolUniversePayload());
+      state.symbolUniverseLoading = false;
+      return Promise.resolve();
+    }
+    return requestJson(symbolUniversePath())
+      .then(function (payload) {
+        applySymbolUniverse(payload);
+      })
+      .catch(function (error) {
+        state.symbolUniverseError = error.message || "종목 유니버스를 읽지 못했습니다.";
+        applySymbolUniverse(defaultSymbolUniversePayload());
+      })
+      .finally(function () {
+        state.symbolUniverseLoading = false;
+        if (state.snapshot) render();
+      });
+  }
+
+  function refreshSymbolUniverse() {
+    if (isStaticPreviewHost() || state.serverSettingsLocked) {
+      state.symbolUniverseError = "공유 모드에서는 종목 유니버스를 갱신할 수 없습니다.";
+      render();
+      return Promise.resolve();
+    }
+    state.symbolUniverseRefreshing = true;
+    state.symbolUniverseError = "";
+    render();
+    var markets = state.symbolUniverseMarket ? [state.symbolUniverseMarket] : ["KOSPI", "KOSDAQ", "NASDAQ"];
+    return sendJson("/api/symbol-universe/refresh", "POST", { markets: markets })
+      .then(function (payload) {
+        if (payload.summary) {
+          state.symbolUniverse.summary = payload.summary;
+        }
+        return loadSymbolUniverse();
+      })
+      .catch(function (error) {
+        state.symbolUniverseError = error.message || "종목 유니버스를 갱신하지 못했습니다.";
+      })
+      .finally(function () {
+        state.symbolUniverseRefreshing = false;
+        render();
+      });
   }
 
   function saveWatchlistSymbols(symbols) {
@@ -3124,6 +3252,7 @@
         '<section class="admin-grid">',
         renderAdminMonitoringPanel(snapshot),
         renderAlertCenterPanel(snapshot),
+        renderSymbolUniversePanel(),
         renderWatchlistPanel(snapshot),
         renderPortfolioPanel(snapshot),
         renderHoldingsPanel(snapshot),
@@ -4758,6 +4887,79 @@
     ].join("");
   }
 
+  function marketLabel(market) {
+    var key = String(market || "").toUpperCase();
+    if (key === "KOSPI") return "코스피";
+    if (key === "KOSDAQ") return "코스닥";
+    if (key === "NASDAQ") return "나스닥";
+    if (key === "US") return "미국";
+    if (key === "KR") return "한국";
+    return key || "-";
+  }
+
+  function freshnessLabel(item) {
+    if (!item || !item.lastSeenAt) return "초기 데이터";
+    return (item.stale ? "갱신 필요" : "신선") + " · " + formatClock(item.lastSeenAt);
+  }
+
+  function renderSymbolUniversePanel() {
+    var universe = state.symbolUniverse || {};
+    var summary = universe.summary || {};
+    var items = universe.items || [];
+    var markets = summary.markets || [];
+    return [
+      '<article class="panel symbol-universe-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Symbol Universe</p>',
+      '<h2>전체 종목 카탈로그</h2>',
+      '</div>',
+      '<span class="metric">' + escapeHtml(summary.total || items.length || 0) + '</span>',
+      '</div>',
+      '<div class="source-stack">',
+      markets.length ? markets.map(function (market) {
+        return '<div class="source-row"><span>' + escapeHtml(marketLabel(market.market)) + '</span><strong>' + escapeHtml(market.count || 0) + '종목 · ' + escapeHtml(freshnessLabel(market)) + '</strong></div>';
+      }).join("") : '<p class="subtle">아직 저장된 전체 종목 목록이 없습니다.</p>',
+      '</div>',
+      '<form class="watch-add-form symbol-search-form" data-symbol-search-form>',
+      '<select name="market" data-symbol-market>',
+      '<option value="">전체 시장</option>',
+      ["KOSPI", "KOSDAQ", "NASDAQ"].map(function (market) {
+        return '<option value="' + escapeHtml(market) + '"' + (state.symbolUniverseMarket === market ? " selected" : "") + '>' + escapeHtml(marketLabel(market)) + '</option>';
+      }).join(""),
+      '</select>',
+      '<input name="query" data-symbol-query placeholder="종목명 또는 티커 검색" value="' + escapeHtml(state.symbolUniverseQuery || "") + '" autocomplete="off" />',
+      '<button class="text-button primary">검색</button>',
+      '<button class="text-button" type="button" data-action="refresh-symbol-universe">' + escapeHtml(state.symbolUniverseRefreshing ? "갱신 중" : "목록 갱신") + '</button>',
+      '</form>',
+      state.symbolUniverseError ? '<p class="form-error">' + escapeHtml(state.symbolUniverseError) + '</p>' : '',
+      '<p class="subtle">코스피·코스닥은 KRX KIND, 나스닥은 Nasdaq Trader 심볼 디렉터리를 로컬 SQLite에 저장합니다. 원천 호출이 실패해도 마지막 성공 목록을 계속 사용합니다.</p>',
+      '<div class="position-list">',
+      state.symbolUniverseLoading ? '<p class="subtle">종목 목록을 읽는 중입니다.</p>' : (items.length ? items.slice(0, 12).map(renderSymbolUniverseRow).join("") : '<p class="subtle">검색 결과가 없습니다. 목록 갱신을 실행하세요.</p>'),
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderSymbolUniverseRow(item) {
+    var symbol = String(item.symbol || "").toUpperCase();
+    var already = watchlistSymbols().indexOf(symbol) >= 0;
+    return [
+      '<div class="position-row rich-row">',
+      '<div>',
+      '<strong>' + escapeHtml(item.name || symbol) + '</strong>',
+      '<span>' + escapeHtml(symbol) + ' · ' + escapeHtml(marketLabel(item.market || item.exchange)) + ' · ' + escapeHtml(item.assetType || "STOCK") + ' · ' + escapeHtml(item.currency || "-") + '</span>',
+      '<span>' + escapeHtml(item.source || "-") + ' · ' + escapeHtml(item.stale ? "갱신 필요" : "신선") + '</span>',
+      '</div>',
+      '<div class="right">',
+      '<strong>' + escapeHtml(item.sector || "-") + '</strong>',
+      '<span>' + escapeHtml(item.lastSeenAt ? formatClock(item.lastSeenAt) : "초기 데이터") + '</span>',
+      '<button class="mini-button" data-symbol-add-watch="' + escapeHtml(symbol) + '"' + (already ? " disabled" : "") + '>' + (already ? "관심 등록됨" : "관심 추가") + '</button>',
+      '</div>',
+      '</div>'
+    ].join("");
+  }
+
   function renderEditableWatchRow(symbol, item) {
     var original = String(symbol || "").toUpperCase();
     if (state.editingWatchSymbol === original) {
@@ -4989,6 +5191,7 @@
       renderSettingField("telegramChatId", "Telegram Chat ID", "text", "chat id", { preserveConfigured: true }),
       renderSettingField("notifyLinkUrl", "알림 링크 URL", "url", "http://127.0.0.1:3000?tab=notifications"),
       renderSettingField("notifyIntervalMinutes", "알림 주기(분)", "number", "10"),
+      renderSettingField("symbolUniverseMaxAgeHours", "전체 종목 신선도(시간)", "number", "24"),
       '<label class="setting-field wide">',
       '<span>환율 설정</span>',
       '<textarea data-setting="fxRates" rows="2" autocomplete="off" placeholder="USD=1400">' + escapeHtml(settingValue("fxRates") || defaultSettings.fxRates) + '</textarea>',
@@ -5339,6 +5542,35 @@
       });
     }
 
+    var symbolSearchForm = app.querySelector("[data-symbol-search-form]");
+    if (symbolSearchForm) {
+      symbolSearchForm.addEventListener("submit", function (event) {
+        event.preventDefault();
+        var query = symbolSearchForm.querySelector("[data-symbol-query]");
+        var market = symbolSearchForm.querySelector("[data-symbol-market]");
+        state.symbolUniverseQuery = query ? query.value.trim() : "";
+        state.symbolUniverseMarket = market ? market.value : "";
+        loadSymbolUniverse();
+      });
+    }
+
+    var refreshSymbols = app.querySelector('[data-action="refresh-symbol-universe"]');
+    if (refreshSymbols) {
+      refreshSymbols.addEventListener("click", function () {
+        refreshSymbolUniverse();
+      });
+    }
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-symbol-add-watch]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        var symbol = String(button.getAttribute("data-symbol-add-watch") || "").toUpperCase();
+        if (!symbol) return;
+        var symbols = watchlistSymbols();
+        if (symbols.indexOf(symbol) >= 0) return;
+        saveWatchlistSymbols(symbols.concat(symbol));
+      });
+    });
+
     Array.prototype.slice.call(app.querySelectorAll("[data-watch-edit]")).forEach(function (button) {
       button.addEventListener("click", function () {
         state.editingWatchSymbol = String(button.getAttribute("data-watch-edit") || "").toUpperCase();
@@ -5404,7 +5636,7 @@
     }
   }
 
-  Promise.all([loadServerSettings(), loadServiceAccounts(), loadNotificationTemplates()]).finally(function () {
+  Promise.all([loadServerSettings(), loadServiceAccounts(), loadNotificationTemplates(), loadSymbolUniverse()]).finally(function () {
     load();
   });
 }());

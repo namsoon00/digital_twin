@@ -1327,6 +1327,7 @@ function requestExternalJson(method, targetUrl, options) {
       {
         method: method,
         hostname: parsed.hostname,
+        port: parsed.port || undefined,
         path: parsed.path,
         headers: headers,
         timeout: options.timeout || 7000
@@ -1458,8 +1459,16 @@ function normalizeTossHoldings(payload) {
 function normalizeTossPosition(item) {
   const marketValue = decimalNumber(item.marketValue) || decimalNumber(item.evaluationAmount);
   const profitLoss = decimalNumber(item.profitLoss) || decimalNumber(item.unrealizedProfitLoss);
-  const averagePrice = decimalNumber(item.averagePrice) || decimalNumber(item.avgPrice) || decimalNumber(item.purchasePrice);
-  const currentPrice = decimalNumber(item.currentPrice) || decimalNumber(item.price) || decimalNumber(item.closePrice);
+  const averagePrice =
+    decimalNumber(item.averagePrice) ||
+    decimalNumber(item.avgPrice) ||
+    decimalNumber(item.purchasePrice) ||
+    decimalNumber(item.averagePurchasePrice);
+  const currentPrice =
+    decimalNumber(item.currentPrice) ||
+    decimalNumber(item.price) ||
+    decimalNumber(item.closePrice) ||
+    decimalNumber(item.lastPrice);
   const rawRate = item.profitLossRate != null
     ? decimalNumber(item.profitLossRate)
     : item.unrealizedProfitLossRate != null

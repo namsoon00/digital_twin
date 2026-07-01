@@ -88,6 +88,88 @@ function assertOk(condition, message) {
   if (!condition) throw new Error(message);
 }
 
+function withFakeTossApi(callback) {
+  const server = http.createServer(function (req, res) {
+    if (req.method === "POST" && req.url === "/oauth2/token") {
+      req.resume();
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({
+        token_type: "Bearer",
+        access_token: "fake-token",
+        expires_in: 3600
+      }));
+      return;
+    }
+
+    if (req.method === "GET" && req.url === "/api/v1/accounts") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({
+        result: [
+          {
+            accountSeq: "1",
+            accountNo: "1234567890",
+            accountType: "BROKERAGE",
+            orderableAmount: "250000",
+            currency: "KRW"
+          }
+        ]
+      }));
+      return;
+    }
+
+    if (req.method === "GET" && req.url === "/api/v1/holdings") {
+      if (req.headers.authorization !== "Bearer fake-token" || req.headers["x-tossinvest-account"] !== "1") {
+        res.writeHead(401, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "unauthorized" }));
+        return;
+      }
+
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({
+        result: {
+          totalPurchaseAmount: { krw: "130000", usd: "0" },
+          marketValue: { amount: { krw: "144000", usd: "0" } },
+          profitLoss: { amount: { krw: "14000", usd: "0" }, rate: "10.77" },
+          items: [
+            {
+              symbol: "005930",
+              name: "삼성전자",
+              marketCountry: "KR",
+              currency: "KRW",
+              quantity: "2",
+              lastPrice: "72000",
+              averagePurchasePrice: "65000",
+              marketValue: "144000",
+              profitLoss: "14000"
+            }
+          ]
+        }
+      }));
+      return;
+    }
+
+    res.writeHead(404, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "not_found" }));
+  });
+
+  return new Promise(function (resolve, reject) {
+    server.on("error", reject);
+    server.listen(0, "127.0.0.1", async function () {
+      const port = server.address().port;
+      try {
+        await callback("http://127.0.0.1:" + port);
+        server.close(function () {
+          resolve();
+        });
+      } catch (error) {
+        server.close(function () {
+          reject(error);
+        });
+      }
+    });
+  });
+}
+
 async function withServer(extraEnv, callback) {
   const serverProcess = childProcess.spawn(process.execPath, ["server.js"], {
     cwd: rootDir,
@@ -178,8 +260,28 @@ async function checkShareMode(port) {
   assertOk(bootstrap.statusCode === 200, "공유 토큰 쿠키로 API 접근이 허용되지 않았습니다.");
 }
 
+async function checkLiveTossMode(port) {
+  const tossLens = await request(port, "/api/flow-lens");
+  assertOk(tossLens.statusCode === 200, "live 토스 판단 API 응답 코드가 200이 아닙니다: " + tossLens.statusCode);
+  const payload = JSON.parse(tossLens.body);
+  assertOk(payload.toss && payload.toss.mode === "live", "토스 live 모드가 아닙니다.");
+  assertOk(Array.isArray(payload.toss.positions), "토스 live 보유 종목 배열이 없습니다.");
+  assertOk(payload.toss.positions.length === 1, "토스 live 보유 종목 수가 맞지 않습니다.");
+  const position = payload.toss.positions[0];
+  assertOk(position.symbol === "005930", "토스 live 보유 종목 코드가 맞지 않습니다.");
+  assertOk(position.currentPrice === 72000, "토스 live 현재가 매핑이 맞지 않습니다.");
+  assertOk(position.averagePrice === 65000, "토스 live 평균단가 매핑이 맞지 않습니다.");
+}
+
 async function main() {
   await withServer({}, checkNormalMode);
+  await withFakeTossApi(async function (baseUrl) {
+    await withServer({
+      TOSS_API_BASE_URL: baseUrl,
+      TOSS_CLIENT_ID: "fake-client-id",
+      TOSS_CLIENT_SECRET: "fake-client-secret"
+    }, checkLiveTossMode);
+  });
   await withServer({ SHARE_TOKEN: "ci-token" }, checkShareMode);
   console.log("Smoke test passed");
 }

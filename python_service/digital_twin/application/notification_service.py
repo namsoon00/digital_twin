@@ -36,6 +36,9 @@ class NotificationQueueRunner:
                 self.queue.mark_failed(job, "empty notification text")
                 continue
             message = self.render(job)
+            if not message:
+                self.queue.mark_failed(job, "empty rendered notification text")
+                continue
             if self.dry_run:
                 print(message)
                 processed += 1

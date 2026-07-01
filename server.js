@@ -3213,6 +3213,32 @@ async function api(req, res, pathname) {
     }
   }
 
+  if (pathname === "/api/notification-templates") {
+    if (req.method === "GET") {
+      return json(res, 200, await pythonServiceJson(["templates", "list"]));
+    }
+    if (req.method === "PUT" || req.method === "POST") {
+      if (configuredValue(process.env.SHARE_TOKEN)) {
+        return json(res, 403, { error: "공유 모드에서는 알림 템플릿을 변경할 수 없습니다." });
+      }
+      const body = await readBody(req);
+      return json(res, 200, await pythonServiceJson(["templates", "save"], body));
+    }
+  }
+
+  const notificationTemplateMatch = pathname.match(/^\/api\/notification-templates\/([^/]+)$/);
+  if (notificationTemplateMatch && req.method === "DELETE") {
+    if (configuredValue(process.env.SHARE_TOKEN)) {
+      return json(res, 403, { error: "공유 모드에서는 알림 템플릿을 변경할 수 없습니다." });
+    }
+    return json(res, 200, await pythonServiceJson([
+      "templates",
+      "reset",
+      "--message-type",
+      decodeURIComponent(notificationTemplateMatch[1])
+    ]));
+  }
+
   if (pathname === "/api/economic-feed/rss") {
     if (req.method === "OPTIONS") return corsText(res, 204, "", "text/plain");
     if (req.method === "GET") {

@@ -12,9 +12,10 @@ from .application.notification_service import NotificationQueueScheduler
 from .application.scheduler import MIN_REALTIME_INTERVAL_SECONDS, RealtimeScheduler
 from .domain.accounts import AccountConfig, split_symbols
 from .domain.monitoring import RealtimeMonitor
+from .domain.notification_templates import template_variables, text_context
 from .domain.portfolio import AlertEvent
 from .infrastructure.event_bus import default_event_bus
-from .infrastructure.sqlite_operational import SQLiteAppStore, SQLiteModelReviewJobStore, SQLiteMonitorStore, SQLiteNotificationJobStore
+from .infrastructure.sqlite_operational import SQLiteAppStore, SQLiteModelReviewJobStore, SQLiteMonitorStore, SQLiteNotificationJobStore, SQLiteNotificationTemplateStore
 from .infrastructure.notifications import queued_notifier_for_account, send_events
 from .infrastructure.service_factory import build_model_review_runner, build_monitor_runner, build_notification_queue_runner
 from .infrastructure.settings import (
@@ -306,6 +307,35 @@ def app_store_command(args) -> int:
     return 1
 
 
+def templates_command(args) -> int:
+    store = SQLiteNotificationTemplateStore()
+    if args.templates_action == "list":
+        payload = {
+            "templates": [item.to_dict() for item in store.list()],
+            "variables": template_variables(),
+        }
+        print(json.dumps(payload, ensure_ascii=False))
+        return 0
+    if args.templates_action == "save":
+        payload = json.loads(sys.stdin.read() or "{}")
+        message_type = str(payload.get("messageType") or payload.get("message_type") or "").strip()
+        template = str(payload.get("template") or "")
+        description = str(payload.get("description") or "")
+        enabled = payload.get("enabled")
+        saved = store.upsert(message_type, template, description, enabled is not False)
+        print(json.dumps({"template": saved.to_dict()}, ensure_ascii=False))
+        return 0
+    if args.templates_action == "reset":
+        saved = store.reset(args.message_type)
+        print(json.dumps({"template": saved.to_dict()}, ensure_ascii=False))
+        return 0
+    if args.templates_action == "preview":
+        context = text_context(args.body, args.message_type)
+        print(store.render(args.message_type, context))
+        return 0
+    return 1
+
+
 def handoff_command(args) -> int:
     if args.handoff_action != "notify":
         return 1
@@ -420,6 +450,17 @@ def build_parser() -> argparse.ArgumentParser:
     app_store_actions.add_parser("raw-json")
     app_store_actions.add_parser("replace-json")
     app_store.set_defaults(func=app_store_command)
+
+    templates = subparsers.add_parser("templates", help="Manage notification message templates")
+    templates_actions = templates.add_subparsers(dest="templates_action", required=True)
+    templates_actions.add_parser("list")
+    templates_actions.add_parser("save")
+    reset_template = templates_actions.add_parser("reset")
+    reset_template.add_argument("--message-type", required=True)
+    preview_template = templates_actions.add_parser("preview")
+    preview_template.add_argument("--message-type", required=True)
+    preview_template.add_argument("--body", default="샘플 알림")
+    templates.set_defaults(func=templates_command)
 
     handoff = subparsers.add_parser("handoff", help="Send development handoff notifications")
     handoff_actions = handoff.add_subparsers(dest="handoff_action", required=True)

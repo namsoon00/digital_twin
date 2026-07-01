@@ -31,8 +31,10 @@ jobs:
       - name: Validate static app
         run: npm run check
 
-      - name: Generate static Pages assets
-        run: npm run generate:static
+      - name: Verify committed static Pages assets
+        run: |
+          test -f public/index.html
+          test -f public/admin/config.json
 
       - name: Publish gh-pages branch
         shell: bash

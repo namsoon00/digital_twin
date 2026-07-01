@@ -153,33 +153,9 @@ npm run share
 
 공유 모드에서는 임시 토큰 URL을 사용합니다. `.env`, `.env.local`, `data/store.json`, API key, 토스 credentials, 개인 계좌 데이터는 이슈나 PR에 올리지 않습니다.
 
-## 로컬 알림
+## Python 서비스
 
-로컬 PC에서 토스 계좌를 조회한 뒤 점검 요약을 콘솔, 텔레그램, 또는 카카오톡 나에게 보내기로 발송할 수 있습니다.
-
-```bash
-npm run notify -- --dry-run
-npm run notify
-npm run notify:watch
-npm run notify:realtime
-npm run notify:realtime:status
-npm run notify:realtime:restart
-npm run notify:realtime:stop
-```
-
-`notify`는 한 번 실행하고, `notify:watch`는 기본 10분(`NOTIFY_INTERVAL_MINUTES`) 간격으로 반복 실행합니다. 알림은 토스 연결 실패, 장전/마감 요약, 각 보유 종목의 상태와 매도/추가매수 검토 타이밍, 섹터 집중, 한국장/미국장별 현금 비중 부족을 점검합니다. 한국장과 미국장의 장전/장중/장후/장외 상태를 종목별로 반영하고, 장중이 아닐 때는 개장 후 확인 또는 다음 정규장 재점검 중심으로 안내합니다. 웹의 알림 탭에서 가격, 모델, 수급, 보유 리스크, 기록 성과, 데이터 상태 규칙과 임계값을 설정할 수 있습니다. 매수/매도 문구는 주문 지시가 아니라 사용자가 확인할 조건과 기준입니다.
-
-알림 워커는 기본적으로 토스 실제 데이터를 사용합니다. 개발용 mock 발송이 필요할 때만 `--mock --allow-mock`을 함께 지정합니다.
-
-`notify:realtime`은 백그라운드 실시간 워커를 시작하고 `data/notify-realtime.pid`, `data/notify-realtime.log`로 상태를 남깁니다. 기존 워커가 이전 코드로 떠 있거나 멈춘 것 같으면 `npm run notify:realtime:status`로 확인하고 `npm run notify:realtime:restart`로 재시작합니다. 포그라운드에서 직접 붙여 실행하려면 `npm run notify:realtime:daemon`을 사용합니다.
-
-실시간 워커는 기존 주기 알림과 별개로 기본 10분(`REALTIME_NOTIFY_INTERVAL_SECONDS`)마다 확인합니다. 환경변수로 더 짧게 지정해도 최소 10분보다 자주 보내지 않습니다. 정규장 장중이고 보유 종목에 매도/손절/분할매도 조건 또는 추가매수 검토 조건이 잡힐 때 메시지를 보내며, 직전 실제 토스 스냅샷과 비교해 새 보유/제외, 수량 변경, 손익률 급변, 평가액 급변, 현금비중 급변, 판단 변화, 연결 상태 변화를 특이사항으로 보냅니다. 워커가 살아 있는지 확인하기 쉽도록 상태 확인 메시지도 보냅니다. 알림 설정의 `메시지 주기`에서 `holdingTiming=10`, `monitorHeartbeat=60`, `monitorPnlChange=30`처럼 각 메시지 타입별 재발송 간격을 분 단위로 조정합니다. 최소 주기는 10분이며, 상태 확인 메시지가 필요 없으면 `monitorHeartbeat=0`으로 끕니다. 비교 기준은 `data/monitor-state.json`에 로컬로만 저장합니다. 보유 종목 알림은 읽기 쉽도록 종목마다 별도 메시지로 나누어 보냅니다. 한 번만 확인하려면 `npm run notify:realtime:once -- --dry-run`을 사용합니다.
-
-장 시간 판별은 평일 기준의 일반 세션을 사용합니다. 한국장은 09:00-15:30 KST 정규장, 미국장은 09:30-16:00 ET 정규장을 기준으로 보며, 거래소 휴장일과 조기폐장은 아직 별도 캘린더로 보정하지 않습니다.
-
-## Python 서비스 전환
-
-다중 계정, 실시간 모니터링, 스케줄링, 모델 개발 로직은 Python 서비스 레이어로 이전 중입니다. 기존 웹은 유지하되 Python 서비스가 SQLite DB인 `data/service.db`의 여러 계정을 순회하고 계정별 이전 스냅샷과 메시지 주기를 `data/python-monitor-state.json`에 저장합니다. 토스 credentials와 텔레그램 발송 정보도 계정별 DB row로 관리합니다.
+다중 계정, 실시간 모니터링, 스케줄링, 모델 리뷰 로직은 Python 서비스가 담당합니다. Python 서비스는 SQLite DB인 `data/service.db`의 여러 계정을 순회하고, 계정별 이전 스냅샷과 메시지 주기를 `data/python-monitor-state.json`에 저장합니다. 토스 credentials와 텔레그램 발송 정보도 계정별 DB row로 관리합니다.
 
 ```bash
 npm run python:accounts -- list
@@ -187,21 +163,18 @@ npm run python:accounts -- add --id main --label "메인" --client-id "$TOSS_CLI
 npm run python:monitor:once -- --dry-run --force
 npm run python:monitor:status
 npm run python:monitor:watch
+npm run python:model-review:once -- --dry-run
+npm run python:model-review:status
+npm run python:model-review:watch
 npm run python:service:start
 npm run python:service:status
 npm run python:service:restart
 npm run python:service:stop
 ```
 
-Python 서비스는 계정별 연결 상태, 보유 종목 변화, 손익률/평가액 급변, 현금비중 급변, 판단 변화, 보유 타이밍을 감지합니다. 모델 공식은 제한된 안전 수식 평가기로 실행해 임의 Python 코드 실행을 막습니다. 자세한 구조는 `docs/python-service.md`에 정리되어 있습니다.
+`python:service:start`는 실시간 모니터와 비동기 모델 리뷰 worker를 함께 시작합니다. Python 서비스는 계정별 연결 상태, 보유 종목 변화, 손익률/평가액 급변, 현금비중 급변, 판단 변화, 보유 타이밍을 감지합니다. 판단 변화는 즉시 알림을 보내고, 별도 모델 리뷰 큐에서 Codex/LLM 또는 로컬 fallback 분석으로 추가 리뷰 메시지를 보냅니다.
 
-텔레그램 발송을 쓰려면 봇에게 `/start`를 보낸 뒤 `.env.local`에 `NOTIFY_PROVIDER=telegram`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`를 넣습니다. `TELEGRAM_CHAT_ID`는 토큰을 넣은 상태에서 아래 명령으로 확인합니다.
-
-```bash
-npm run notify:telegram-chat
-```
-
-카카오 발송을 쓰려면 `NOTIFY_PROVIDER=kakao`와 `KAKAO_ACCESS_TOKEN`을 넣거나, 장기 실행용으로 `KAKAO_REST_API_KEY`와 `KAKAO_REFRESH_TOKEN`을 `.env.local`에 넣습니다. 토큰과 알림 중복 방지 상태는 `data/kakao-token.json`, `data/notification-state.json`에 로컬로 저장되며 커밋하지 않습니다.
+텔레그램 발송을 쓰려면 봇에게 `/start`를 보낸 뒤 계정 설정에 `notify-provider telegram`, `telegram-bot-token`, `telegram-chat-id`를 저장합니다. 자세한 구조는 `docs/python-service.md`에 정리되어 있습니다.
 
 ## 참고
 

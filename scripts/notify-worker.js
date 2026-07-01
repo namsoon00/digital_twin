@@ -94,8 +94,85 @@ function signedPct(value) {
   return (number > 0 ? "+" : "") + Math.round(number * 10) / 10 + "%";
 }
 
+function notificationIntervalMinutes() {
+  return Math.max(1, Number(runtimeSettings().notifyIntervalMinutes || process.env.NOTIFY_INTERVAL_MINUTES || 10));
+}
+
+function intervalBucketKey(parts) {
+  const interval = notificationIntervalMinutes();
+  const bucket = Math.floor(parts.minutes / interval);
+  return [parts.date, interval + "m", bucket].join(":");
+}
+
 function event(severity, key, line) {
   return { severity: severity, key: key, line: line };
+}
+
+function sectorRatio(portfolio, sector) {
+  const entry = (portfolio.sectors || []).find(function (item) {
+    return item.sector === sector;
+  });
+  return entry ? Number(entry.ratio || 0) : 0;
+}
+
+function cashRatio(portfolio) {
+  const total = Number(portfolio.total || 0);
+  if (total <= 0) return 0;
+  return Math.round((Number(portfolio.cash || 0) / total) * 100);
+}
+
+function holdingSeverity(item) {
+  if (item.tone === "danger") return "ALERT";
+  if (item.tone === "caution" || item.tone === "hold") return "WATCH";
+  return "INFO";
+}
+
+function sellTiming(item, ratio) {
+  const pnlRate = Number(item.profitLossRate || 0);
+  if (item.tone === "danger") {
+    if (pnlRate <= -8) return "손절 기준 즉시 재확인";
+    return "분할매도 기준 즉시 확인";
+  }
+  if (item.tone === "caution") return "일부 익절/비중축소 기준 확인";
+  if (pnlRate <= -8) return "손실 허용폭/손절 기준 재확인";
+  if (ratio >= 50) return "섹터 쏠림 완화 기준 확인";
+  if (pnlRate >= 8) return "급등 시 일부 익절 기준 대기";
+  return "보유 조건 이탈 때만 축소 검토";
+}
+
+function buyTiming(item, accountCashRatio) {
+  const pnlRate = Number(item.profitLossRate || 0);
+  if (accountCashRatio <= 10) return "현금 " + accountCashRatio + "%라 추가매수 대기";
+  if (item.tone === "danger") return "리스크 해소 전 추가매수 보류";
+  if (pnlRate <= -8) return "하락 사유 해소 후만 분할 검토";
+  if (pnlRate >= 10) return "추격매수 보류";
+  if (item.tone === "hold") return "목표비중 이하에서만 분할 검토";
+  return "기준가와 현금 여유 충족 시 분할 검토";
+}
+
+function buildHoldingTimingEvents(snapshot, now) {
+  const portfolio = snapshot.portfolio || {};
+  const decision = snapshot.tossDecision || {};
+  const items = (Array.isArray(decision.items) ? decision.items : []).filter(function (item) {
+    return item.source === "holding";
+  });
+  const accountCashRatio = cashRatio(portfolio);
+  const bucket = intervalBucketKey(now);
+
+  return items.map(function (item) {
+    const ratio = sectorRatio(portfolio, item.sector);
+    const line = [
+      item.name + ": 상태 " + item.decision,
+      "손익 " + signedPct(item.profitLossRate),
+      "매도 " + sellTiming(item, ratio),
+      "매수 " + buyTiming(item, accountCashRatio)
+    ].join(" · ");
+    return event(
+      holdingSeverity(item),
+      [bucket, "holding-timing", item.symbol || item.name, item.decision].join(":"),
+      line
+    );
+  });
 }
 
 function buildEvents(snapshot, kind) {
@@ -124,19 +201,9 @@ function buildEvents(snapshot, kind) {
     ));
   }
 
-  items
-    .filter(function (item) {
-      return item.source === "holding" && (item.tone === "danger" || item.tone === "caution");
-    })
-    .slice(0, 5)
-    .forEach(function (item) {
-      const severity = item.tone === "danger" ? "ALERT" : "WATCH";
-      events.push(event(
-        severity,
-        [now.date, "risk", item.symbol, item.decision].join(":"),
-        item.name + " " + item.decision + " · 손익률 " + signedPct(item.profitLossRate)
-      ));
-    });
+  buildHoldingTimingEvents(snapshot, now).forEach(function (item) {
+    events.push(item);
+  });
 
   const concentration = Number(portfolio.concentration || 0);
   if (concentration >= 50) {
@@ -519,7 +586,7 @@ async function runOnce() {
 }
 
 async function runDaemon() {
-  const intervalMinutes = Math.max(1, Number(runtimeSettings().notifyIntervalMinutes || process.env.NOTIFY_INTERVAL_MINUTES || 10));
+  const intervalMinutes = notificationIntervalMinutes();
   console.log("Notify worker started. interval=" + intervalMinutes + "m");
   await runOnce();
   setInterval(function () {

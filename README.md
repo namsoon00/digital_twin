@@ -151,7 +151,7 @@ npm run notify
 npm run notify:watch
 ```
 
-`notify`는 한 번 실행하고, `notify:watch`는 `NOTIFY_INTERVAL_MINUTES` 간격으로 반복 실행합니다. 알림은 토스 연결 실패, 장전/마감 요약, 보유 종목 리스크, 섹터 집중, 현금 비중 부족을 점검합니다.
+`notify`는 한 번 실행하고, `notify:watch`는 기본 10분(`NOTIFY_INTERVAL_MINUTES`) 간격으로 반복 실행합니다. 알림은 토스 연결 실패, 장전/마감 요약, 각 보유 종목의 상태와 매도/추가매수 검토 타이밍, 섹터 집중, 현금 비중 부족을 점검합니다. 매수/매도 문구는 주문 지시가 아니라 사용자가 확인할 조건과 기준입니다.
 
 텔레그램 발송을 쓰려면 봇에게 `/start`를 보낸 뒤 `.env.local`에 `NOTIFY_PROVIDER=telegram`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`를 넣습니다. `TELEGRAM_CHAT_ID`는 토큰을 넣은 상태에서 아래 명령으로 확인합니다.
 

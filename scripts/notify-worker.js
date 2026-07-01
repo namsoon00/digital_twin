@@ -175,10 +175,42 @@ function sectorRatio(portfolio, sector) {
   return entry ? Number(entry.ratio || 0) : 0;
 }
 
-function cashRatio(portfolio) {
+function portfolioCashRatio(portfolio) {
   const total = Number(portfolio.total || 0);
   if (total <= 0) return 0;
   return Math.round((Number(portfolio.cash || 0) / total) * 100);
+}
+
+function marketCashExposure(portfolio, item) {
+  const profile = marketProfile(item);
+  const markets = Array.isArray(portfolio.markets) ? portfolio.markets : [];
+  return markets.find(function (entry) {
+    return entry.key === profile.id;
+  }) || null;
+}
+
+function cashRatio(portfolio, item) {
+  const exposure = item ? marketCashExposure(portfolio, item) : null;
+  if (exposure && Number(exposure.total || 0) > 0) return Number(exposure.cashRatio || 0);
+  return portfolioCashRatio(portfolio);
+}
+
+function cashLabel(portfolio, item) {
+  const exposure = item ? marketCashExposure(portfolio, item) : null;
+  if (exposure && Number(exposure.total || 0) > 0) {
+    return exposure.label + " 현금 " + Number(exposure.cashRatio || 0) + "%";
+  }
+  return "현금 " + portfolioCashRatio(portfolio) + "%";
+}
+
+function marketCashSummary(portfolio) {
+  const markets = Array.isArray(portfolio.markets) ? portfolio.markets : [];
+  const lines = markets.filter(function (entry) {
+    return Number(entry.total || 0) > 0;
+  }).map(function (entry) {
+    return entry.label + " 현금 " + Number(entry.cashRatio || 0) + "%";
+  });
+  return lines.length ? lines.join(" / ") : "현금 " + formatMoney(portfolio.cash);
 }
 
 function holdingSeverity(item) {
@@ -200,9 +232,9 @@ function sellTimingCore(item, ratio) {
   return "보유 조건 이탈 때만 축소 검토";
 }
 
-function buyTimingCore(item, accountCashRatio) {
+function buyTimingCore(item, accountCashRatio, accountCashLabel) {
   const pnlRate = Number(item.profitLossRate || 0);
-  if (accountCashRatio <= 10) return "현금 " + accountCashRatio + "%라 추가매수 대기";
+  if (accountCashRatio <= 10) return accountCashLabel + "라 추가매수 대기";
   if (item.tone === "danger") return "리스크 해소 전 추가매수 보류";
   if (pnlRate <= -8) return "하락 사유 해소 후만 분할 검토";
   if (pnlRate >= 10) return "추격매수 보류";
@@ -229,8 +261,8 @@ function sellTiming(item, ratio, session) {
   return "장외라 주문보다 기준 정리";
 }
 
-function buyTiming(item, accountCashRatio, session) {
-  const core = buyTimingCore(item, accountCashRatio);
+function buyTiming(item, accountCashRatio, accountCashLabel, session) {
+  const core = buyTimingCore(item, accountCashRatio, accountCashLabel);
   if (session.phase === "open") return core;
   if (session.phase === "pre") return "개장 후 가격 확인";
   if (session.phase === "after") return "장후 추격보다 다음 정규장 대기";
@@ -243,18 +275,19 @@ function buildHoldingTimingEvents(snapshot, now, date) {
   const items = (Array.isArray(decision.items) ? decision.items : []).filter(function (item) {
     return item.source === "holding";
   });
-  const accountCashRatio = cashRatio(portfolio);
   const bucket = intervalBucketKey(now);
 
   return items.map(function (item) {
     const ratio = sectorRatio(portfolio, item.sector);
     const session = marketSession(item, date);
+    const itemCashRatio = cashRatio(portfolio, item);
+    const itemCashLabel = cashLabel(portfolio, item);
     const line = [
       item.name + ": " + session.label + " " + session.localTime,
       "상태 " + item.decision,
       "손익 " + signedPct(item.profitLossRate),
       "매도 " + sellTiming(item, ratio, session),
-      "매수 " + buyTiming(item, accountCashRatio, session)
+      "매수 " + buyTiming(item, itemCashRatio, itemCashLabel, session)
     ].join(" · ");
     return event(
       holdingSeverity(item),
@@ -262,6 +295,39 @@ function buildHoldingTimingEvents(snapshot, now, date) {
       line
     );
   });
+}
+
+function buildCashEvents(portfolio, now) {
+  let markets = Array.isArray(portfolio.markets) ? portfolio.markets.filter(function (entry) {
+    return Number(entry.total || 0) > 0;
+  }) : [];
+  if (!markets.length && Number(portfolio.total || 0) > 0) {
+    markets = [{
+      key: "total",
+      label: "전체",
+      total: portfolio.total,
+      cashRatio: portfolioCashRatio(portfolio)
+    }];
+  }
+
+  const events = [];
+  markets.forEach(function (entry) {
+    const ratio = Number(entry.cashRatio || 0);
+    if (ratio <= 5) {
+      events.push(event(
+        "ALERT",
+        [now.date, "cash-low", entry.key, ratio].join(":"),
+        entry.label + " 현금 비중이 " + ratio + "%입니다. 신규 매수 전 유동성 확인 필요."
+      ));
+    } else if (ratio <= 10) {
+      events.push(event(
+        "WATCH",
+        [now.date, "cash-low", entry.key, ratio].join(":"),
+        entry.label + " 현금 비중이 " + ratio + "%입니다."
+      ));
+    }
+  });
+  return events;
 }
 
 function buildEvents(snapshot, kind) {
@@ -310,22 +376,9 @@ function buildEvents(snapshot, kind) {
     ));
   }
 
-  const total = Number(portfolio.total || 0);
-  const cash = Number(portfolio.cash || 0);
-  const cashRatio = total > 0 ? Math.round((cash / total) * 100) : 0;
-  if (total > 0 && cashRatio <= 5) {
-    events.push(event(
-      "ALERT",
-      [now.date, "cash-low", cashRatio].join(":"),
-      "현금 비중이 " + cashRatio + "%입니다. 신규 매수 전 유동성 확인 필요."
-    ));
-  } else if (total > 0 && cashRatio <= 10) {
-    events.push(event(
-      "WATCH",
-      [now.date, "cash-low", cashRatio].join(":"),
-      "현금 비중이 " + cashRatio + "%입니다."
-    ));
-  }
+  buildCashEvents(portfolio, now).forEach(function (item) {
+    events.push(item);
+  });
 
   if (kind === "morning" || kind === "close" || kind === "status") {
     const lead = items[0];
@@ -333,7 +386,7 @@ function buildEvents(snapshot, kind) {
     const summaryLine = [
       "보유 " + (decision.holdingCount || 0) + "개 / 관심 " + (decision.watchCount || 0) + "개",
       "평가 " + formatMoney(portfolio.invested),
-      "현금 " + formatMoney(portfolio.cash),
+      marketCashSummary(portfolio),
       sector ? "최대 노출 " + sector.sector + " " + sector.ratio + "%" : "",
       lead ? "우선 점검 " + lead.name + " · " + lead.decision : ""
     ].filter(Boolean).join(" · ");

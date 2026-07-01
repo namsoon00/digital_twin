@@ -2851,6 +2851,11 @@
 
   function renderPortfolioPanel(snapshot) {
     var portfolio = snapshot.portfolio || { sectors: [] };
+    var marketCashRows = (portfolio.markets || []).filter(function (market) {
+      return Number(market.total || 0) > 0;
+    }).map(function (market) {
+      return '<div class="source-row"><span>' + escapeHtml(market.label + " 현금비중") + '</span><strong>' + escapeHtml(pct(market.cashRatio || 0)) + '</strong></div>';
+    }).join("");
     return [
       '<article class="panel">',
       '<div class="panel-head">',
@@ -2863,6 +2868,7 @@
       '<div class="allocation">',
       '<div class="source-row"><span>투자 평가액</span><strong>' + escapeHtml(formatMoney(portfolio.invested || 0)) + '</strong></div>',
       '<div class="source-row"><span>현금/주문 가능</span><strong>' + escapeHtml(formatMoney(portfolio.cash || 0)) + '</strong></div>',
+      marketCashRows,
       (portfolio.sectors || []).map(function (sector) {
         return [
           '<div class="bar-row">',

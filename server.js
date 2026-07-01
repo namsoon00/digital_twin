@@ -2705,16 +2705,64 @@ function isCashPosition(item) {
   return sector === "현금" || String(item.symbol || "").toUpperCase() === "CASH";
 }
 
+function marketBucketForCash(currency) {
+  const normalized = String(currency || "").trim().toUpperCase();
+  if (normalized === "USD") return "US";
+  if (normalized === "KRW" || !normalized) return "KR";
+  return "OTHER";
+}
+
+function marketBucketForPosition(item) {
+  const market = String(item.market || "").trim().toUpperCase();
+  const currency = String(item.currency || "").trim().toUpperCase();
+  const symbol = String(item.symbol || "").trim();
+  if (isCashPosition(item)) return marketBucketForCash(currency);
+  if (market === "KR" || market === "KOSPI" || market === "KOSDAQ" || currency === "KRW" || /^[0-9]{6}$/.test(symbol)) return "KR";
+  if (market === "US" || currency === "USD") return "US";
+  return "OTHER";
+}
+
+function emptyMarketExposure(key) {
+  const labels = {
+    KR: "한국장",
+    US: "미국장",
+    OTHER: "기타"
+  };
+  return {
+    key: key,
+    label: labels[key] || key,
+    invested: 0,
+    cash: 0,
+    total: 0,
+    cashRatio: 0
+  };
+}
+
 function buildTossPortfolio(positions, account) {
-  const cashFromPositions = positions.filter(isCashPosition).reduce(function (sum, item) {
-    return sum + Math.max(0, decimalNumber(item.marketValue));
+  const marketMap = {};
+  function marketExposure(key) {
+    if (!marketMap[key]) marketMap[key] = emptyMarketExposure(key);
+    return marketMap[key];
+  }
+
+  const cashPositions = positions.filter(isCashPosition);
+  const cashFromPositions = cashPositions.reduce(function (sum, item) {
+    const value = Math.max(0, decimalNumber(item.marketValue));
+    marketExposure(marketBucketForPosition(item)).cash += value;
+    return sum + value;
   }, 0);
+  if (!cashFromPositions) {
+    const accountCash = Math.max(0, decimalNumber(account && account.orderableAmount));
+    if (accountCash) marketExposure(marketBucketForCash(account && account.currency)).cash += accountCash;
+  }
   const cash = cashFromPositions || decimalNumber(account && account.orderableAmount);
   const investPositions = positions.filter(function (item) {
     return !isCashPosition(item);
   });
   const invested = investPositions.reduce(function (sum, item) {
-    return sum + Math.max(0, decimalNumber(item.marketValue));
+    const value = Math.max(0, decimalNumber(item.marketValue));
+    marketExposure(marketBucketForPosition(item)).invested += value;
+    return sum + value;
   }, 0);
   const total = invested + cash;
   const sectorMap = {};
@@ -2734,6 +2782,16 @@ function buildTossPortfolio(positions, account) {
     .sort(function (a, b) {
       return b.value - a.value;
     });
+  const markets = ["KR", "US", "OTHER"]
+    .map(function (key) {
+      const exposure = marketExposure(key);
+      exposure.total = exposure.invested + exposure.cash;
+      exposure.cashRatio = exposure.total ? Math.round((exposure.cash / exposure.total) * 100) : 0;
+      return exposure;
+    })
+    .filter(function (entry) {
+      return entry.total > 0;
+    });
   const concentration = sectors.filter(function (entry) {
     return entry.sector !== "현금";
   })[0] || { ratio: 0 };
@@ -2741,6 +2799,7 @@ function buildTossPortfolio(positions, account) {
     total: total,
     invested: invested,
     cash: cash,
+    markets: markets,
     sectors: sectors,
     concentration: concentration.ratio
   };

@@ -34,7 +34,14 @@ After making project changes:
 
 1. Run the relevant validation, normally `npm test`.
 2. Commit the completed work and push it to `origin/main` unless the user explicitly says not to.
-3. Leave the final response with the commit hash, push result, and any validation that could not be run.
+3. Send a work-complete notification through the project notifier so the owner and other local workers can see that the task finished:
+
+```bash
+npm run python:handoff:notify -- --summary "<short summary>" --commit "$(git rev-parse --short HEAD)" --validation "npm test 통과" --push "origin/main 성공"
+```
+
+Use `--dry-run` only when Telegram or the configured notifier is unavailable, and report that clearly.
+4. Leave the final response with the commit hash, push result, handoff notification result, and any validation that could not be run.
 
 For GitHub issue automation, the important handoff is that local Codex performed the work on a self-hosted runner, then validated, committed, pushed, and commented on the issue. Do not treat starting the app server as part of that automation unless the issue explicitly asks for runtime verification.
 

@@ -11,6 +11,7 @@ This project uses a local-first, DDD-oriented, event-driven architecture. Future
 - Do not pass API keys, Telegram tokens, client secrets, or raw account credentials through events, docs, tests, or git-tracked files.
 - Keep old top-level Python modules only as compatibility re-export modules. New code should import from the layer package directly.
 - Run `npm test` before handoff, then commit and push to `origin/main` unless explicitly told not to.
+- After commit and push, send a work-complete notification with `npm run python:handoff:notify -- --summary "<short summary>" --commit "$(git rev-parse --short HEAD)" --validation "npm test 통과" --push "origin/main 성공"` so other local workers can see the task is finished.
 
 ## Python Layer Map
 
@@ -85,3 +86,13 @@ When a change touches more than one slice, keep the cross-slice contract in `dom
 - Add tests around model-review text when alert explanations, validation checks, or improvement hints change.
 - Add infrastructure tests only for repository/adapter behavior that can run without real credentials.
 - Preserve local-first behavior: no test should require real Toss, Telegram, or private account data.
+
+## Completion Notifications
+
+Every development session that changes the project should finish with the same observable handoff:
+
+```bash
+npm run python:handoff:notify -- --summary "<short summary>" --commit "$(git rev-parse --short HEAD)" --validation "npm test 통과" --push "origin/main 성공"
+```
+
+The notification is sent through the configured local notifier, usually the account-level Telegram channel. Do not include API keys, Telegram tokens, client secrets, raw account numbers, or private account data in the summary or details. If the notifier is unavailable, use `--dry-run`, keep the console output in the final response, and state that no external notification was delivered.

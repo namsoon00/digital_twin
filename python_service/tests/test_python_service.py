@@ -13,6 +13,7 @@ from digital_twin.admin_preview import admin_preview_config, write_admin_preview
 from digital_twin.application.account_service import AccountApplicationService
 from digital_twin.application.model_review_service import ModelReviewRunner
 from digital_twin.application.monitoring_service import MonitorRunner as ApplicationMonitorRunner
+from digital_twin.cli import build_handoff_message
 from digital_twin.cli import preserve_existing_secrets
 from digital_twin.cli import build_parser
 from digital_twin.domain.accounts import AccountConfig
@@ -249,6 +250,21 @@ class PythonServiceTests(unittest.TestCase):
         self.assertFalse(args.send)
         self.assertFalse(args.json)
         self.assertEqual("message-types", args.monitor_action)
+
+    def test_handoff_message_includes_summary_without_secrets(self):
+        message = build_handoff_message(
+            "환율 평가액 수정",
+            commit="abc1234",
+            validation="npm test 통과",
+            push="origin/main 성공",
+            details="토큰 없음",
+        )
+
+        self.assertTrue(message.startswith("작업 완료"))
+        self.assertIn("환율 평가액 수정", message)
+        self.assertIn("abc1234", message)
+        self.assertNotIn("telegram", message.lower())
+        self.assertNotIn("secret", message.lower())
 
     def test_decision_change_message_includes_model_review(self):
         previous_position = normalize_position({

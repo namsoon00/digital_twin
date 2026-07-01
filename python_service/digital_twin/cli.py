@@ -15,9 +15,9 @@ from .domain.portfolio import AlertEvent
 from .infrastructure.event_bus import default_event_bus
 from .infrastructure.json_monitor_state import MonitorStore
 from .infrastructure.model_review_queue import ModelReviewJobStore
-from .infrastructure.notifications import send_events
+from .infrastructure.notifications import notifier_for_account, send_events
 from .infrastructure.service_factory import build_model_review_runner, build_monitor_runner
-from .infrastructure.settings import runtime_settings
+from .infrastructure.settings import runtime_settings, utc_now
 from .infrastructure.sqlite_accounts import AccountRegistry
 from .infrastructure.toss_snapshots import build_snapshot
 
@@ -78,6 +78,39 @@ def print_message_type_report(events: List[AlertEvent], skipped: List[str]) -> N
         print(event.message())
     for item in skipped:
         print("Skipped " + item)
+
+
+def build_handoff_message(summary: str, commit: str = "", validation: str = "", push: str = "", details: str = "") -> str:
+    lines = [
+        "요약: " + (summary or "작업 완료"),
+        "검증: " + (validation or "미기재"),
+    ]
+    if commit:
+        lines.append("커밋: " + commit)
+    if push:
+        lines.append("푸시: " + push)
+    if details:
+        lines.append("메모: " + details)
+    lines.append("시각: " + utc_now())
+    return "작업 완료\n" + "\n".join(["- " + line for line in lines])
+
+
+def notification_targets(accounts: List[AccountConfig]) -> List[AccountConfig]:
+    selected = []
+    seen = set()
+    for account in accounts:
+        key = (
+            str(account.notify_provider or "").lower(),
+            account.telegram_bot_token or "",
+            account.telegram_chat_id or "",
+        )
+        if not key[1] and not key[2]:
+            key = ("account", account.account_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        selected.append(account)
+    return selected
 
 
 def accounts_command(args) -> int:
@@ -194,6 +227,27 @@ def model_review_command(args) -> int:
     return 1
 
 
+def handoff_command(args) -> int:
+    if args.handoff_action != "notify":
+        return 1
+    registry = AccountRegistry()
+    accounts = notification_targets(registry.load())
+    message = build_handoff_message(args.summary, args.commit, args.validation, args.push, args.details)
+    if args.dry_run:
+        print(message)
+        return 0
+    results = []
+    targets = accounts or [None]
+    for account in targets:
+        result = notifier_for_account(account).send(message)
+        results.append(result)
+    delivered = sum(1 for result in results if result.delivered)
+    failed = len(results) - delivered
+    reason = next((result.reason for result in results if not result.delivered and result.reason), "")
+    print("handoffNotifications=" + str(len(results)) + " delivered=" + str(delivered) + " failed=" + str(failed) + (" reason=" + reason if reason else ""))
+    return 0 if failed == 0 else 1
+
+
 def admin_preview_command(args) -> int:
     payload = write_admin_preview(Path(args.output))
     print(json.dumps({"output": args.output, "buildId": payload.get("buildId")}, ensure_ascii=False))
@@ -255,6 +309,17 @@ def build_parser() -> argparse.ArgumentParser:
     review_watch.add_argument("--limit", default="")
     model_review_actions.add_parser("status")
     model_review.set_defaults(func=model_review_command)
+
+    handoff = subparsers.add_parser("handoff", help="Send development handoff notifications")
+    handoff_actions = handoff.add_subparsers(dest="handoff_action", required=True)
+    notify = handoff_actions.add_parser("notify")
+    notify.add_argument("--summary", required=True)
+    notify.add_argument("--commit", default="")
+    notify.add_argument("--validation", default="")
+    notify.add_argument("--push", default="")
+    notify.add_argument("--details", default="")
+    notify.add_argument("--dry-run", action="store_true")
+    handoff.set_defaults(func=handoff_command)
 
     admin_preview = subparsers.add_parser("admin-preview", help="Generate GitHub Pages admin preview")
     admin_preview.add_argument("--output", default="public/admin")

@@ -16,6 +16,8 @@
     "issue:watch": "node scripts/issue-workflow.js watch",
     "python:accounts": "python3 python_service/service.py accounts",
     "python:check": "python3 -m compileall -q python_service/service.py python_service/monitor_service.py python_service/digital_twin python_service/tests",
+    "python:handoff": "python3 python_service/service.py handoff",
+    "python:handoff:notify": "python3 python_service/service.py handoff notify",
     "python:monitor": "python3 python_service/service.py monitor",
     "python:monitor:message-types": "python3 python_service/service.py monitor message-types",
     "python:monitor:once": "python3 python_service/service.py monitor once",

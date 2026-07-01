@@ -12,7 +12,6 @@ const dataDir = path.join(rootDir, "data");
 const notificationStatePath = path.join(dataDir, "notification-state.json");
 const kakaoTokenPath = path.join(dataDir, "kakao-token.json");
 
-const severityRank = { INFO: 1, WATCH: 2, ALERT: 3 };
 const defaultAlertRules = {
   tossConnection: 1,
   holdingTiming: 1,
@@ -589,12 +588,6 @@ function markSent(events, state) {
   writePrivateJson(notificationStatePath, state);
 }
 
-function maxSeverity(events) {
-  return events.reduce(function (current, item) {
-    return severityRank[item.severity] > severityRank[current] ? item.severity : current;
-  }, "INFO");
-}
-
 function notificationTitle(kind) {
   const labels = {
     morning: "장전 점검",
@@ -606,21 +599,38 @@ function notificationTitle(kind) {
   return labels[kind] || "알림";
 }
 
-function composeMessage(events, kind) {
-  const severity = maxSeverity(events);
-  const lines = [
-    "[Twin " + severity + "] " + notificationTitle(kind)
-  ].concat(events.map(function (item) {
-    return "- " + item.line;
-  }));
-  const text = lines.join("\n");
-  return text.length > 900 ? text.slice(0, 897) + "..." : text;
+function messageTitle(kind, item) {
+  const name = item && item.meta && item.meta.name ? String(item.meta.name).trim() : "";
+  return name ? name + " " + notificationTitle(kind) : notificationTitle(kind);
+}
+
+function pushMessageChunk(messages, lines) {
+  if (lines.length > 1) messages.push(lines.join("\n"));
+}
+
+function composeBundledMessages(events, kind) {
+  const messages = [];
+  const title = notificationTitle(kind);
+  let lines = [title];
+  events.forEach(function (item) {
+    const nextLine = "- " + item.line;
+    if (lines.length > 1 && (lines.join("\n").length + nextLine.length + 1) > 850) {
+      pushMessageChunk(messages, lines);
+      lines = [title];
+    }
+    lines.push(nextLine);
+  });
+  pushMessageChunk(messages, lines);
+  return messages;
 }
 
 function composeSingleEventMessage(item, kind) {
-  const titleName = item.meta && item.meta.name ? " · " + item.meta.name : "";
-  const lines = ["[Twin " + item.severity + "] " + notificationTitle(kind) + titleName];
-  String(item.line || "").split(" · ").forEach(function (part) {
+  const name = item.meta && item.meta.name ? String(item.meta.name).trim() : "";
+  const lines = [messageTitle(kind, item)];
+  String(item.line || "").split(" · ").forEach(function (part, index) {
+    if (index === 0 && name && part.indexOf(name + ":") === 0) {
+      part = part.slice(name.length + 1).trim();
+    }
     if (part) lines.push("- " + part);
   });
   const text = lines.join("\n");
@@ -628,13 +638,13 @@ function composeSingleEventMessage(item, kind) {
 }
 
 function composeMessages(events, kind) {
-  const bundled = events.filter(function (item) {
-    return !(item.meta && item.meta.splitMessage);
-  });
   const split = events.filter(function (item) {
-    return item.meta && item.meta.splitMessage;
+    return item.meta && (item.meta.splitMessage || item.meta.symbol || item.meta.name);
   });
-  const messages = bundled.length ? [composeMessage(bundled, kind)] : [];
+  const bundled = events.filter(function (item) {
+    return !(item.meta && (item.meta.splitMessage || item.meta.symbol || item.meta.name));
+  });
+  const messages = composeBundledMessages(bundled, kind);
   split.forEach(function (item) {
     messages.push(composeSingleEventMessage(item, kind));
   });

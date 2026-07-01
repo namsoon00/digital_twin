@@ -176,6 +176,80 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(1000000, next(item for item in portfolio.markets if item["key"] == "KR")["invested"])
         self.assertEqual(1400000, next(item for item in portfolio.markets if item["key"] == "US")["invested"])
 
+    def test_normalize_position_preserves_flow_metrics(self):
+        position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "currency": "KRW",
+            "currentPrice": 72000,
+            "volume": "1000",
+            "executionStrength": "128.4",
+            "marketValue": 720000,
+        })
+
+        self.assertEqual(128.4, position.trade_strength)
+        self.assertEqual(1000, position.volume)
+        self.assertEqual(72000000, position.trading_value)
+
+    def test_monitor_spike_messages_include_flow_context(self):
+        previous_position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "marketValue": 1000000,
+            "quantity": 20,
+            "currentPrice": 50000,
+            "profitLossRate": 5,
+            "sellableQuantity": 20,
+            "sector": "반도체",
+        })
+        current_position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "marketValue": 1200000,
+            "quantity": 20,
+            "currentPrice": 60000,
+            "profitLossRate": 9,
+            "sellableQuantity": 20,
+            "tradeStrength": 128,
+            "volume": 30000,
+            "sector": "반도체",
+        })
+        previous_portfolio = portfolio_summary([previous_position])
+        current_portfolio = portfolio_summary([current_position])
+        previous_snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "ok",
+            utc_now_iso(),
+            previous_portfolio,
+            [previous_position],
+            decisions_for_positions([previous_position], previous_portfolio),
+        )
+        current_snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "ok",
+            utc_now_iso(),
+            current_portfolio,
+            [current_position],
+            decisions_for_positions([current_position], current_portfolio),
+        )
+
+        events = RealtimeMonitor().events_for_snapshot(current_snapshot, previous_snapshot.to_monitor_state())
+        pnl_message = next(event for event in events if event.rule == "monitorPnlChange").message()
+        value_message = next(event for event in events if event.rule == "monitorValueChange").message()
+
+        self.assertIn("수급 체결강도 128 · 거래액 18억 원", pnl_message)
+        self.assertIn("수급 체결강도 128 · 거래액 18억 원", value_message)
+
     def test_monitor_value_change_formats_usd_with_krw_basis(self):
         previous_position = normalize_position({
             "symbol": "AAPL",

@@ -30,6 +30,9 @@ def position_payload(position: Position) -> Dict[str, object]:
         "marketValue": position.market_value,
         "profitLoss": position.profit_loss,
         "profitLossRate": position.profit_loss_rate,
+        "tradeStrength": position.trade_strength,
+        "tradingValue": position.trading_value,
+        "volume": position.volume,
         "sector": position.sector,
     }
 

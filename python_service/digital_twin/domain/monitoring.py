@@ -82,6 +82,16 @@ def pct_delta(current: float, previous: float) -> float:
     return ((float(current or 0) / base) - 1) * 100
 
 
+def compact_number(value: float) -> str:
+    amount = number(value)
+    if not amount:
+        return "-"
+    rounded = round(amount, 1)
+    if rounded == round(rounded):
+        return format(round(rounded), ",")
+    return format(rounded, ",")
+
+
 class RealtimeMonitor:
     def __init__(self, settings: Dict[str, str] = None):
         settings = settings or {}
@@ -196,6 +206,23 @@ class RealtimeMonitor:
     def position_market_value(self, position: Dict[str, object]) -> float:
         return number(position.get("market_value") if "market_value" in position else position.get("marketValue"))
 
+    def position_current_price(self, position: Dict[str, object]) -> float:
+        return number(position.get("current_price") if "current_price" in position else position.get("currentPrice"))
+
+    def position_volume(self, position: Dict[str, object]) -> float:
+        return number(position.get("volume"))
+
+    def position_trade_strength(self, position: Dict[str, object]) -> float:
+        return number(position.get("trade_strength") if "trade_strength" in position else position.get("tradeStrength"))
+
+    def position_trading_value(self, position: Dict[str, object]) -> float:
+        value = number(position.get("trading_value") if "trading_value" in position else position.get("tradingValue"))
+        if value:
+            return value
+        volume = self.position_volume(position)
+        price = self.position_current_price(position)
+        return volume * price if volume and price else 0.0
+
     def position_value_base(self, position: Dict[str, object]) -> float:
         return value_in_base(self.position_market_value(position), self.position_currency(position), self.fx_rates)
 
@@ -211,6 +238,11 @@ class RealtimeMonitor:
     def value_delta_basis_label(self, before: Dict[str, object], item: Dict[str, object]) -> str:
         currencies = {self.position_currency(before), self.position_currency(item)}
         return " (KRW 환산 기준)" if currencies != {"KRW"} else ""
+
+    def flow_context_line(self, position: Dict[str, object]) -> str:
+        trading_value = self.position_trading_value(position)
+        trading_value_label = money(trading_value, self.position_currency(position)) if trading_value else "-"
+        return "수급 체결강도 " + compact_number(self.position_trade_strength(position)) + " · 거래액 " + trading_value_label
 
     def previous_with_decision_delta(self, state: Dict[str, object], symbol: str) -> Dict[str, object]:
         previous = deepcopy(state)
@@ -295,10 +327,10 @@ class RealtimeMonitor:
                 events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "WATCH", "monitorPositionChange", snapshot.account_id + ":quantity:" + symbol + ":" + str(item.get("quantity")), item["name"], ["보유 수량 변경", "이전 " + str(before.get("quantity", 0)), "현재 " + str(item.get("quantity", 0))], symbol))
             pnl_delta = float(item.get("profit_loss_rate") or 0) - float(before.get("profit_loss_rate") or 0)
             if abs(pnl_delta) >= float(self.thresholds.get("monitorPnlDelta", 0)):
-                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "ALERT" if pnl_delta < 0 else "WATCH", "monitorPnlChange", snapshot.account_id + ":pnl:" + symbol + ":" + signed_pct(pnl_delta), item["name"], ["손익률 급변", "이전 " + signed_pct(float(before.get("profit_loss_rate") or 0)), "현재 " + signed_pct(float(item.get("profit_loss_rate") or 0)), "변화 " + signed_pct(pnl_delta, "%p")], symbol))
+                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "ALERT" if pnl_delta < 0 else "WATCH", "monitorPnlChange", snapshot.account_id + ":pnl:" + symbol + ":" + signed_pct(pnl_delta), item["name"], ["손익률 급변", "이전 " + signed_pct(float(before.get("profit_loss_rate") or 0)), "현재 " + signed_pct(float(item.get("profit_loss_rate") or 0)), "변화 " + signed_pct(pnl_delta, "%p"), self.flow_context_line(item)], symbol))
             value_delta = pct_delta(self.position_value_base(item), self.position_value_base(before))
             if abs(value_delta) >= float(self.thresholds.get("monitorValueDelta", 0)):
-                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "ALERT" if value_delta < 0 else "WATCH", "monitorValueChange", snapshot.account_id + ":value:" + symbol + ":" + signed_pct(value_delta), item["name"], ["평가액 급변", "이전 " + self.position_value_label(before), "현재 " + self.position_value_label(item), "변화 " + signed_pct(value_delta) + self.value_delta_basis_label(before, item)], symbol))
+                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "ALERT" if value_delta < 0 else "WATCH", "monitorValueChange", snapshot.account_id + ":value:" + symbol + ":" + signed_pct(value_delta), item["name"], ["평가액 급변", "이전 " + self.position_value_label(before), "현재 " + self.position_value_label(item), "변화 " + signed_pct(value_delta) + self.value_delta_basis_label(before, item), self.flow_context_line(item)], symbol))
             decision = current_decisions.get(symbol) or {}
             previous_decision = previous_decisions.get(symbol) or {}
             pressure_delta = float(decision.get("exit_pressure") or 0) - float(previous_decision.get("exit_pressure") or 0)

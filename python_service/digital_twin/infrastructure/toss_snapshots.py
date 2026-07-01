@@ -52,6 +52,9 @@ def demo_positions() -> List[Position]:
             "marketValue": 864000,
             "profitLoss": 84000,
             "profitLossRate": 10.8,
+            "tradeStrength": 118,
+            "tradingValue": 912000000,
+            "volume": 12666,
             "sector": "반도체",
         }),
         normalize_position({
@@ -66,6 +69,9 @@ def demo_positions() -> List[Position]:
             "marketValue": 486.2,
             "profitLoss": 66.2,
             "profitLossRate": 15.8,
+            "tradeStrength": 106,
+            "tradingValue": 142000000,
+            "volume": 584000,
             "sector": "AI/플랫폼",
         }),
         normalize_position({

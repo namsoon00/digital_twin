@@ -20,6 +20,9 @@ class Position:
     market_value: float = 0.0
     profit_loss: float = 0.0
     profit_loss_rate: float = 0.0
+    trade_strength: float = 0.0
+    trading_value: float = 0.0
+    volume: float = 0.0
     sector: str = "기타"
 
     def key(self) -> str:

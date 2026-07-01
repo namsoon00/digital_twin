@@ -23,6 +23,13 @@ def number(value) -> float:
         return 0.0
 
 
+def first_number(item: Dict[str, object], keys: List[str]) -> float:
+    for key in keys:
+        if key in item and item.get(key) not in (None, ""):
+            return number(item.get(key))
+    return 0.0
+
+
 def clamp(value: float, lower: float, upper: float) -> float:
     return max(lower, min(upper, value))
 
@@ -78,6 +85,36 @@ def normalize_position(item: Dict[str, object]) -> Position:
     )
     if not raw_rate and market_value and profit_loss:
         raw_rate = profit_loss / max(1.0, market_value - profit_loss) * 100
+    trade_strength = first_number(item, [
+        "tradeStrength",
+        "trade_strength",
+        "executionStrength",
+        "contractStrength",
+        "tradePower",
+        "체결강도",
+    ])
+    volume = first_number(item, [
+        "volume",
+        "tradingVolume",
+        "tradeVolume",
+        "accumulatedVolume",
+        "accTradeVolume",
+        "거래량",
+    ])
+    trading_value = first_number(item, [
+        "tradingValue",
+        "trading_value",
+        "tradeValue",
+        "tradingAmount",
+        "tradeAmount",
+        "turnover",
+        "accumulatedTradeAmount",
+        "accTradeAmount",
+        "거래대금",
+        "거래액",
+    ])
+    if not trading_value and volume and current_price:
+        trading_value = volume * current_price
     symbol = str(item.get("symbol") or item.get("stockCode") or item.get("code") or "").upper()
     info = known_stock(symbol)
     market = str(item.get("marketCountry") or item.get("market") or info["market"])
@@ -100,6 +137,9 @@ def normalize_position(item: Dict[str, object]) -> Position:
         market_value=market_value,
         profit_loss=profit_loss,
         profit_loss_rate=raw_rate,
+        trade_strength=trade_strength,
+        trading_value=trading_value,
+        volume=volume,
         sector=str(item.get("sector") or info["sector"]),
     )
 

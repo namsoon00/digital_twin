@@ -11,6 +11,7 @@ from ..domain.portfolio import Position, utc_now_iso
 from ..infrastructure.settings import currency_rates, runtime_settings
 from ..infrastructure.sqlite_accounts import AccountRegistry
 from ..infrastructure.toss_snapshots import build_snapshot, demo_positions
+from .symbol_universe_service import SymbolUniverseService
 
 
 def clamp_score(value: float) -> int:
@@ -203,8 +204,12 @@ def parse_watchlist(raw_value: str = "") -> List[Dict[str, object]]:
         if symbol not in unique:
             unique.append(symbol)
     items = []
+    universe = SymbolUniverseService()
     for symbol in unique[:30]:
-        info = known_stock(symbol)
+        try:
+            info = universe.enrich(symbol)
+        except Exception:
+            info = known_stock(symbol)
         items.append({
             "symbol": info["symbol"],
             "name": info["name"],

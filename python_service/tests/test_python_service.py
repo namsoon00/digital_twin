@@ -16,6 +16,7 @@ from digital_twin.application.flow_lens_service import flow_lens_snapshot
 from digital_twin.application.model_review_service import ModelReviewRunner
 from digital_twin.application.monitoring_service import MonitorRunner as ApplicationMonitorRunner
 from digital_twin.application.notification_service import NotificationQueueRunner
+from digital_twin.application.symbol_universe_service import SymbolUniverseService
 from digital_twin.cli import build_handoff_message
 from digital_twin.cli import preserve_existing_secrets
 from digital_twin.cli import build_parser
@@ -33,7 +34,8 @@ from digital_twin.infrastructure.model_review_queue import ModelReviewEnqueuer, 
 from digital_twin.infrastructure.mock_market import mock_market_payload
 from digital_twin.infrastructure.notifications import send_events
 from digital_twin.infrastructure.settings import runtime_settings
-from digital_twin.infrastructure.sqlite_operational import SQLiteAppStore, SQLiteEventLog, SQLiteModelReviewJobStore, SQLiteMonitorStore, SQLiteNotificationJobStore, SQLiteNotificationTemplateStore, SQLiteRuntimeSettingsStore
+from digital_twin.infrastructure.sqlite_operational import SQLiteAppStore, SQLiteEventLog, SQLiteModelReviewJobStore, SQLiteMonitorStore, SQLiteNotificationJobStore, SQLiteNotificationTemplateStore, SQLiteRuntimeSettingsStore, SQLiteSymbolUniverseStore
+from digital_twin.infrastructure.symbol_sources import parse_krx_kind_table, parse_nasdaq_listed
 from digital_twin.infrastructure.sqlite_accounts import AccountRegistry
 from digital_twin.scheduler import MonitorRunner
 
@@ -356,6 +358,37 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(1, DEFAULT_ALERT_RULES["modelSell"])
         self.assertEqual(10, DEFAULT_CADENCE["modelBuy"])
         self.assertEqual(10, DEFAULT_CADENCE["modelSell"])
+
+    def test_symbol_universe_parsers_and_store_support_market_catalog(self):
+        nasdaq_text = "\n".join([
+            "Symbol|Security Name|Market Category|Test Issue|Financial Status|Round Lot Size|ETF|NextShares",
+            "AAPL|Apple Inc. - Common Stock|Q|N|N|100|N|N",
+            "TEST|Test Issue|G|Y|N|100|N|N",
+            "File Creation Time: 0701202600|||||||",
+        ])
+        krx_html = """
+        <table><tr><th>회사명</th><th>종목코드</th><th>업종</th></tr>
+        <tr><td>삼성전자</td><td>5930</td><td>전기전자</td></tr></table>
+        """
+        nasdaq = parse_nasdaq_listed(nasdaq_text, fetched_at="2026-07-01T00:00:00Z")
+        krx = parse_krx_kind_table(krx_html, "KOSPI", fetched_at="2026-07-01T00:00:00Z")
+        store = SQLiteSymbolUniverseStore(Path(self.temp.name) / "service.db")
+
+        self.assertEqual(["AAPL"], [item.symbol for item in nasdaq])
+        self.assertEqual("005930", krx[0].symbol)
+        self.assertEqual(2, store.upsert_many(nasdaq + krx))
+        self.assertEqual({"KOSPI": 1, "NASDAQ": 1}, store.counts_by_market())
+        self.assertEqual("Apple Inc. - Common Stock", store.get("AAPL").name)
+        self.assertEqual("삼성전자", store.search(query="삼성", market="KOSPI")[0].name)
+
+    def test_symbol_universe_service_seeds_and_reports_freshness(self):
+        service = SymbolUniverseService(SQLiteSymbolUniverseStore(Path(self.temp.name) / "service.db"), runtime_settings())
+
+        payload = service.search(query="TSLA")
+
+        self.assertTrue(any(item["symbol"] == "TSLA" for item in payload["items"]))
+        self.assertTrue(payload["summary"]["total"] >= 1)
+        self.assertTrue(any(item["market"] == "NASDAQ" for item in payload["summary"]["markets"]))
 
     def test_flow_lens_mock_contract_is_python_native(self):
         payload = flow_lens_snapshot(mock=True, watchlist_symbols="TSLA,AAPL,NVDA")

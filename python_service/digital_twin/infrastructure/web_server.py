@@ -16,6 +16,7 @@ from typing import Dict, List
 
 from ..application.account_service import AccountApplicationService
 from ..application.flow_lens_service import flow_lens_snapshot
+from ..application.symbol_universe_service import SymbolUniverseService
 from ..domain.notification_templates import template_variables
 from ..domain.portfolio import utc_now_iso
 from ..infrastructure.event_bus import default_event_bus
@@ -179,6 +180,7 @@ def settings_status_payload() -> Dict[str, object]:
         "alertRules",
         "alertThresholds",
         "alertCadenceMinutes",
+        "symbolUniverseMaxAgeHours",
     ]
     public = {key: settings.get(key, "") for key in public_keys}
     public.update({
@@ -235,6 +237,29 @@ def reset_template_payload(message_type: str) -> Dict[str, object]:
 def account_service() -> AccountApplicationService:
     registry = AccountRegistry()
     return AccountApplicationService(registry, registry.settings, event_publisher=default_event_bus())
+
+
+def symbol_universe_service() -> SymbolUniverseService:
+    return SymbolUniverseService()
+
+
+def symbol_universe_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
+    return symbol_universe_service().search(
+        query=first_query(query, "query") or first_query(query, "q"),
+        market=first_query(query, "market"),
+        limit=int(first_query(query, "limit") or 80),
+    )
+
+
+def refresh_symbol_universe_payload(payload: Dict[str, object]) -> Dict[str, object]:
+    raw_markets = payload.get("markets") if isinstance(payload, dict) else None
+    if isinstance(raw_markets, str):
+        markets = [item.strip() for item in raw_markets.split(",") if item.strip()]
+    elif isinstance(raw_markets, list):
+        markets = [str(item or "").strip() for item in raw_markets if str(item or "").strip()]
+    else:
+        markets = None
+    return symbol_universe_service().refresh(markets)
 
 
 def service_accounts_payload() -> Dict[str, object]:
@@ -802,6 +827,15 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
                 if not self.ensure_writable("공유 모드에서는 서버 설정을 변경할 수 없습니다."):
                     return
                 return self.send_payload(200, save_settings_payload(self.read_json_body()))
+
+        if path == "/api/symbol-universe":
+            if self.command == "GET":
+                return self.send_payload(200, symbol_universe_payload(query))
+
+        if path == "/api/symbol-universe/refresh" and self.command == "POST":
+            if not self.ensure_writable("공유 모드에서는 종목 유니버스를 갱신할 수 없습니다."):
+                return
+            return self.send_payload(200, refresh_symbol_universe_payload(self.read_json_body()))
 
         if path == "/api/notification-templates":
             if self.command == "GET":

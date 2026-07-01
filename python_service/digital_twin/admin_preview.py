@@ -207,6 +207,24 @@ def admin_preview_config() -> Dict[str, object]:
                 },
             },
             {
+                "id": "symbol-universe",
+                "title": "전체 종목 카탈로그",
+                "summary": "코스피, 코스닥, 나스닥 전체 종목 목록을 SQLite에 저장하고 소스별 신선도를 추적합니다.",
+                "localEndpoints": ["GET /api/symbol-universe", "POST /api/symbol-universe/refresh"],
+                "commands": [
+                    "npm run python:symbols:refresh -- --markets KOSPI,KOSDAQ,NASDAQ",
+                    "npm run python:symbols:search -- --query AAPL --market NASDAQ",
+                    "npm run python:symbols:status",
+                ],
+                "storage": ["data/service.db: symbol_universe", "data/service.db: symbol_universe_sources"],
+                "fields": [
+                    {"key": "symbol", "label": "티커/종목코드", "type": "text"},
+                    {"key": "market", "label": "시장", "type": "select", "options": ["KOSPI", "KOSDAQ", "NASDAQ"]},
+                    {"key": "lastSeenAt", "label": "마지막 원천 확인", "type": "datetime"},
+                    {"key": "stale", "label": "신선도 만료", "type": "boolean"},
+                ],
+            },
+            {
                 "id": "model-review",
                 "title": "모델 리뷰 워커",
                 "summary": "monitorDecisionChange 이벤트를 큐에 넣고, Codex 또는 로컬 fallback으로 판단 변화 원인과 다음 실험을 작성합니다.",

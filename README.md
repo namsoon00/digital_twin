@@ -50,12 +50,25 @@ npm run generate:static
 
 - `public/`: Exit Lens 웹 대시보드
 - `GET /api/flow-lens`: 토스 계좌/보유자산, 주문 가능 금액, 관심 종목, 내 계좌 기준 오늘 먼저 점검할 종목 집계
+- `GET /api/symbol-universe`, `POST /api/symbol-universe/refresh`: 코스피·코스닥·나스닥 전체 종목 카탈로그 검색과 원천 목록 갱신
 - `GET /api/bootstrap`, `GET/POST /api/memories`, `GET/POST /api/items`: 로컬 SQLite DB의 `app_store` 기반 앱 데이터 조회와 저장
 - `GET/PUT /api/settings`: 로컬 SQLite DB의 `runtime_settings` 기반 Toss/알림 설정 조회와 저장. secret 원문은 GET 응답에 포함하지 않음
 - `python_service/digital_twin/infrastructure/web_server.py`: 정적 웹 자산 서빙과 로컬 API 라우팅
 - `python_service/digital_twin/application/flow_lens_service.py`: 토스 계좌/보유자산 스냅샷, 관심 종목 파싱, 매도 검토 fallback 생성
 
 토스 호출은 서버에서만 수행합니다. 브라우저에 `client_secret`, access token, `X-Tossinvest-Account` 값이 내려가지 않습니다. 토스증권 공개 Open API에는 토스 앱의 관심 종목 목록 조회 endpoint가 확인되지 않아, 관심 종목은 앱 내부 목록으로 관리합니다.
+
+## 전체 종목 카탈로그
+
+모니터링 탭의 `전체 종목 카탈로그`는 코스피, 코스닥, 나스닥 종목을 `data/service.db`의 `symbol_universe`에 저장합니다. 코스피/코스닥은 KRX KIND 상장법인 목록, 나스닥은 Nasdaq Trader Symbol Directory를 사용하며, 소스별 마지막 성공 시각과 stale 여부를 함께 표시합니다. 원천 호출이 실패해도 마지막 성공 목록은 유지됩니다.
+
+```bash
+npm run python:symbols:refresh -- --markets KOSPI,KOSDAQ,NASDAQ
+npm run python:symbols:search -- --query AAPL --market NASDAQ
+npm run python:symbols:status
+```
+
+기본 신선도 기준은 `SYMBOL_UNIVERSE_MAX_AGE_HOURS=24`입니다.
 
 ## 매도 판단 모델
 
@@ -124,6 +137,8 @@ npm run python:model-review:watch
 npm run python:notifications:once
 npm run python:notifications:status
 npm run python:notifications:watch
+npm run python:symbols:refresh -- --markets KOSPI,KOSDAQ,NASDAQ
+npm run python:symbols:status
 npm run python:templates -- list
 npm run python:service:start
 npm run python:service:status

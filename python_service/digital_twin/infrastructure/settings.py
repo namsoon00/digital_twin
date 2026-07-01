@@ -45,6 +45,7 @@ TEXT_SETTING_KEYS = [
     "notificationQueueIntervalSeconds",
     "notificationQueueBatchSize",
     "notificationSendGapSeconds",
+    "symbolUniverseMaxAgeHours",
 ]
 
 SECRET_SETTING_KEYS = [
@@ -198,6 +199,7 @@ def runtime_settings() -> Dict[str, str]:
         "notificationQueueIntervalSeconds": value("notificationQueueIntervalSeconds", "NOTIFICATION_QUEUE_INTERVAL_SECONDS", "30"),
         "notificationQueueBatchSize": value("notificationQueueBatchSize", "NOTIFICATION_QUEUE_BATCH_SIZE", "10"),
         "notificationSendGapSeconds": value("notificationSendGapSeconds", "NOTIFICATION_SEND_GAP_SECONDS", "1"),
+        "symbolUniverseMaxAgeHours": value("symbolUniverseMaxAgeHours", "SYMBOL_UNIVERSE_MAX_AGE_HOURS", "24"),
         "fxRates": value("fxRates", "FX_RATES", "KRW=1\nUSD=1400"),
     }
 

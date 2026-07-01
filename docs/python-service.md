@@ -146,7 +146,7 @@ When a `monitorDecisionChange` alert is emitted, the message includes:
 
 The same decision-change alert also queues a deeper asynchronous model review. The realtime alert path does not wait for LLM/Codex output.
 
-The app store is stored in `app_store`, runtime settings are stored in `runtime_settings`, snapshots are stored in `monitor_snapshots`, cadence is stored per account, rule, and symbol in `monitor_sent`, notification templates are stored in `notification_templates`, and outgoing notification jobs are stored in `notification_jobs` inside `data/service.db`.
+The app store is stored in `app_store`, runtime settings are stored in `runtime_settings`, listed symbols are stored in `symbol_universe` with source freshness in `symbol_universe_sources`, snapshots are stored in `monitor_snapshots`, cadence is stored per account, rule, and symbol in `monitor_sent`, notification templates are stored in `notification_templates`, and outgoing notification jobs are stored in `notification_jobs` inside `data/service.db`.
 
 ## Event Sourcing and Outbox
 

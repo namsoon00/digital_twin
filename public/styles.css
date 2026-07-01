@@ -812,6 +812,7 @@ h3 {
 .admin-overview-panel,
 .admin-account-panel,
 .admin-message-panel,
+.symbol-universe-panel,
 .model-guide-panel,
 .admin-modeling-panel,
 .admin-grid .alert-delivery-panel {
@@ -2232,6 +2233,11 @@ h3 {
   gap: 8px;
 }
 
+.symbol-search-form {
+  grid-template-columns: 120px minmax(0, 1fr) auto auto;
+  padding: 12px 0;
+}
+
 .watch-edit-row {
   grid-template-columns: minmax(0, 1fr) auto auto;
   padding: 12px 0;
@@ -2239,6 +2245,7 @@ h3 {
 }
 
 .watch-add-form input,
+.watch-add-form select,
 .watch-edit-row input {
   min-width: 0;
   border: 1px solid var(--line);
@@ -2251,6 +2258,7 @@ h3 {
 }
 
 .watch-add-form input:focus,
+.watch-add-form select:focus,
 .watch-edit-row input:focus {
   outline: 2px solid #afd7ca;
   outline-offset: 1px;
@@ -2584,7 +2592,8 @@ h3 {
   }
 
   .service-account-row,
-  .admin-message-row {
+  .admin-message-row,
+  .symbol-search-form {
     grid-template-columns: 1fr;
   }
 

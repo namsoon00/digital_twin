@@ -10,6 +10,7 @@ from .application.account_service import AccountApplicationService
 from .application.model_review_service import ModelReviewScheduler
 from .application.notification_service import NotificationQueueScheduler
 from .application.scheduler import MIN_REALTIME_INTERVAL_SECONDS, RealtimeScheduler
+from .application.symbol_universe_service import SymbolUniverseService
 from .domain.accounts import AccountConfig, split_symbols
 from .domain.monitoring import RealtimeMonitor
 from .domain.notification_templates import template_variables, text_context
@@ -336,6 +337,21 @@ def templates_command(args) -> int:
     return 1
 
 
+def symbols_command(args) -> int:
+    service = SymbolUniverseService()
+    if args.symbols_action == "status":
+        print(json.dumps({"summary": service.summary()}, ensure_ascii=False))
+        return 0
+    if args.symbols_action == "search":
+        print(json.dumps(service.search(query=args.query, market=args.market, limit=int(args.limit or 80)), ensure_ascii=False))
+        return 0
+    if args.symbols_action == "refresh":
+        markets = [item.strip().upper() for item in str(args.markets or "").split(",") if item.strip()]
+        print(json.dumps(service.refresh(markets or None), ensure_ascii=False))
+        return 0
+    return 1
+
+
 def handoff_command(args) -> int:
     if args.handoff_action != "notify":
         return 1
@@ -468,6 +484,17 @@ def build_parser() -> argparse.ArgumentParser:
     preview_template.add_argument("--message-type", required=True)
     preview_template.add_argument("--body", default="샘플 알림")
     templates.set_defaults(func=templates_command)
+
+    symbols = subparsers.add_parser("symbols", help="Manage listed symbol universe")
+    symbol_actions = symbols.add_subparsers(dest="symbols_action", required=True)
+    symbol_actions.add_parser("status")
+    symbol_search = symbol_actions.add_parser("search")
+    symbol_search.add_argument("--query", default="")
+    symbol_search.add_argument("--market", default="")
+    symbol_search.add_argument("--limit", default="80")
+    symbol_refresh = symbol_actions.add_parser("refresh")
+    symbol_refresh.add_argument("--markets", default="")
+    symbols.set_defaults(func=symbols_command)
 
     handoff = subparsers.add_parser("handoff", help="Send development handoff notifications")
     handoff_actions = handoff.add_subparsers(dest="handoff_action", required=True)

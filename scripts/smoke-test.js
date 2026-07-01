@@ -136,6 +136,48 @@ function checkFrontendAdminRender() {
       ],
       variables: ["title", "lines", "rawLines", "body", "messageType"]
     },
+    "/api/symbol-universe": {
+      items: [
+        {
+          symbol: "005930",
+          name: "삼성전자",
+          market: "KOSPI",
+          exchange: "KOSPI",
+          currency: "KRW",
+          sector: "반도체",
+          assetType: "STOCK",
+          source: "KRX KIND Listed Companies",
+          sourceUrl: "https://kind.krx.co.kr/",
+          fetchedAt: "2026-07-01T00:00:00.000Z",
+          lastSeenAt: "2026-07-01T00:00:00.000Z",
+          stale: false
+        },
+        {
+          symbol: "AAPL",
+          name: "Apple Inc.",
+          market: "NASDAQ",
+          exchange: "NASDAQ Global Select",
+          currency: "USD",
+          sector: "AI/플랫폼",
+          assetType: "STOCK",
+          source: "Nasdaq Trader Symbol Directory",
+          sourceUrl: "https://www.nasdaqtrader.com/dynamic/symdir/nasdaqlisted.txt",
+          fetchedAt: "2026-07-01T00:00:00.000Z",
+          lastSeenAt: "2026-07-01T00:00:00.000Z",
+          stale: false
+        }
+      ],
+      summary: {
+        total: 2,
+        maxAgeHours: 24,
+        sources: [],
+        markets: [
+          { market: "KOSPI", count: 1, lastSeenAt: "2026-07-01T00:00:00.000Z", stale: false, source: "KRX KIND Listed Companies", sourceUrl: "https://kind.krx.co.kr/" },
+          { market: "KOSDAQ", count: 0, lastSeenAt: "", stale: true, source: "KRX KIND Listed Companies", sourceUrl: "https://kind.krx.co.kr/" },
+          { market: "NASDAQ", count: 1, lastSeenAt: "2026-07-01T00:00:00.000Z", stale: false, source: "Nasdaq Trader Symbol Directory", sourceUrl: "https://www.nasdaqtrader.com/dynamic/symdir/nasdaqlisted.txt" }
+        ]
+      }
+    },
     "admin/config.json": {
       mode: "github-pages-readonly-preview",
       localData: {
@@ -353,6 +395,9 @@ function checkFrontendAdminRender() {
     assertOk(modelingHtml.indexOf("웹에서 운영하는 매수·매도 타이밍 모델") < 0, "타이밍 모델 제목이 아직 렌더링됩니다.");
     assertOk(monitoringHtml.indexOf("watchlist-panel") >= 0, "모니터링 탭에 관심 종목 관리 패널이 렌더링되지 않았습니다.");
     assertOk(monitoringHtml.indexOf("토스 앱의 관심 목록") >= 0, "관심 종목 API 한계 안내가 렌더링되지 않았습니다.");
+    assertOk(monitoringHtml.indexOf("symbol-universe-panel") >= 0, "전체 종목 카탈로그 패널이 렌더링되지 않았습니다.");
+    assertOk(monitoringHtml.indexOf("전체 종목 카탈로그") >= 0, "전체 종목 카탈로그 제목이 렌더링되지 않았습니다.");
+    assertOk(monitoringHtml.indexOf("AAPL") >= 0, "종목 유니버스 검색 결과가 렌더링되지 않았습니다.");
     assertOk(staticAccountHtml.indexOf('value="Pages DB 계정"') >= 0, "정적 빌드 DB 계정 표시 이름이 폼에 채워지지 않았습니다.");
     assertOk(staticAccountHtml.indexOf('value="MSFT,035720"') >= 0, "정적 빌드 관심 종목이 폼에 채워지지 않았습니다.");
     assertOk(staticAccountHtml.indexOf('value="true"') < 0, "정적 빌드의 마스킹된 boolean 값이 계정 폼에 그대로 표시됩니다.");
@@ -485,6 +530,13 @@ async function checkNormalMode(port) {
   assertOk(Object.prototype.hasOwnProperty.call(settingsPayload.settings, "modelDecisionThresholds"), "설정 API에 모델 판단 기준 필드가 없습니다.");
   assertOk(settingsPayload.settings.watchlistSymbols.indexOf("TSLA") >= 0, "기본 관심 종목에 TSLA가 없습니다.");
   assertOk(settingsPayload.settings.watchlistSymbols.indexOf("AAPL") >= 0, "기본 관심 종목에 AAPL이 없습니다.");
+
+  const universe = await request(port, "/api/symbol-universe?query=AAPL");
+  assertOk(universe.statusCode === 200, "종목 유니버스 API 응답 코드가 200이 아닙니다: " + universe.statusCode);
+  const universePayload = JSON.parse(universe.body);
+  assertOk(Array.isArray(universePayload.items), "종목 유니버스 items가 배열이 아닙니다.");
+  assertOk(universePayload.items.some(function (item) { return item.symbol === "AAPL"; }), "종목 유니버스에 AAPL seed가 없습니다.");
+  assertOk(universePayload.summary && Array.isArray(universePayload.summary.markets), "종목 유니버스 시장별 신선도 요약이 없습니다.");
 
   const savedSettings = await request(port, "/api/settings", {
     method: "PUT",

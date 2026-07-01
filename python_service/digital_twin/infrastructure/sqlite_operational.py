@@ -10,6 +10,7 @@ from ..domain.model_review import ModelReviewJob
 from ..domain.notification_templates import DEFAULT_NOTIFICATION_TEMPLATES, NotificationTemplate, render_notification
 from ..domain.notifications import NotificationJob
 from ..domain.portfolio import AccountSnapshot, AlertEvent
+from ..domain.symbol_universe import ListedSymbol, normalize_market, normalize_symbol, utc_now_iso as symbol_utc_now_iso
 from .settings import data_dir, read_json, service_db_path, settings_path, utc_now
 
 
@@ -132,6 +133,42 @@ class OperationalConnection:
                     template TEXT NOT NULL,
                     description TEXT NOT NULL DEFAULT '',
                     enabled INTEGER NOT NULL DEFAULT 1,
+                    updated_at TEXT NOT NULL
+                )
+            """)
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS symbol_universe (
+                    market TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    name TEXT NOT NULL DEFAULT '',
+                    exchange TEXT NOT NULL DEFAULT '',
+                    currency TEXT NOT NULL DEFAULT '',
+                    sector TEXT NOT NULL DEFAULT '',
+                    asset_type TEXT NOT NULL DEFAULT 'STOCK',
+                    source TEXT NOT NULL DEFAULT '',
+                    source_url TEXT NOT NULL DEFAULT '',
+                    active INTEGER NOT NULL DEFAULT 1,
+                    fetched_at TEXT NOT NULL DEFAULT '',
+                    first_seen_at TEXT NOT NULL DEFAULT '',
+                    last_seen_at TEXT NOT NULL DEFAULT '',
+                    payload_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (market, symbol)
+                )
+            """)
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_symbol_universe_symbol ON symbol_universe(symbol)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_symbol_universe_name ON symbol_universe(name)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_symbol_universe_market_seen ON symbol_universe(market, last_seen_at)")
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS symbol_universe_sources (
+                    market TEXT PRIMARY KEY,
+                    source TEXT NOT NULL DEFAULT '',
+                    source_url TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT '',
+                    record_count INTEGER NOT NULL DEFAULT 0,
+                    last_attempt_at TEXT NOT NULL DEFAULT '',
+                    last_success_at TEXT NOT NULL DEFAULT '',
+                    last_error TEXT NOT NULL DEFAULT '',
                     updated_at TEXT NOT NULL
                 )
             """)
@@ -284,6 +321,214 @@ class SQLiteAppStore(OperationalConnection):
                 """,
                 (json_dumps(payload), stamp),
             )
+
+
+class SQLiteSymbolUniverseStore(OperationalConnection):
+    def upsert_many(self, symbols: Iterable[ListedSymbol]) -> int:
+        items = [item for item in symbols if item.symbol and item.market]
+        if not items:
+            return 0
+        stamp = utc_now()
+        with self.connect() as connection:
+            for item in items:
+                existing = connection.execute(
+                    "SELECT first_seen_at FROM symbol_universe WHERE market = ? AND symbol = ?",
+                    (item.market, item.symbol),
+                ).fetchone()
+                if existing and existing["first_seen_at"]:
+                    item.first_seen_at = existing["first_seen_at"]
+                payload = item.to_dict(max_age_hours=24)
+                connection.execute(
+                    """
+                    INSERT INTO symbol_universe (
+                        market, symbol, name, exchange, currency, sector, asset_type,
+                        source, source_url, active, fetched_at, first_seen_at, last_seen_at,
+                        payload_json, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(market, symbol) DO UPDATE SET
+                        name = excluded.name,
+                        exchange = excluded.exchange,
+                        currency = excluded.currency,
+                        sector = excluded.sector,
+                        asset_type = excluded.asset_type,
+                        source = excluded.source,
+                        source_url = excluded.source_url,
+                        active = excluded.active,
+                        fetched_at = excluded.fetched_at,
+                        last_seen_at = excluded.last_seen_at,
+                        payload_json = excluded.payload_json,
+                        updated_at = excluded.updated_at
+                    """,
+                    (
+                        item.market,
+                        item.symbol,
+                        item.name,
+                        item.exchange,
+                        item.currency,
+                        item.sector,
+                        item.asset_type,
+                        item.source,
+                        item.source_url,
+                        1 if item.active else 0,
+                        item.fetched_at,
+                        item.first_seen_at,
+                        item.last_seen_at,
+                        json_dumps(payload),
+                        stamp,
+                    ),
+                )
+        return len(items)
+
+    def row_to_symbol(self, row) -> ListedSymbol:
+        try:
+            payload = json.loads(row["payload_json"])
+        except json.JSONDecodeError:
+            payload = {}
+        payload.update({
+            "symbol": row["symbol"],
+            "name": row["name"],
+            "market": row["market"],
+            "exchange": row["exchange"],
+            "currency": row["currency"],
+            "sector": row["sector"],
+            "assetType": row["asset_type"],
+            "source": row["source"],
+            "sourceUrl": row["source_url"],
+            "active": bool(row["active"]),
+            "fetchedAt": row["fetched_at"],
+            "firstSeenAt": row["first_seen_at"],
+            "lastSeenAt": row["last_seen_at"],
+        })
+        return ListedSymbol.from_dict(payload)
+
+    def search(self, query: str = "", market: str = "", limit: int = 80) -> List[ListedSymbol]:
+        query_value = str(query or "").strip()
+        market_value = normalize_market(market)
+        clauses = ["active = 1"]
+        params: List[object] = []
+        if market_value:
+            clauses.append("market = ?")
+            params.append(market_value)
+        if query_value:
+            clauses.append("(symbol LIKE ? OR name LIKE ?)")
+            like = "%" + query_value.upper() + "%"
+            params.extend([like, "%" + query_value + "%"])
+        params.append(max(1, min(500, int(limit or 80))))
+        exact_symbol = normalize_symbol(query_value)
+        sql = """
+            SELECT * FROM symbol_universe
+            WHERE """ + " AND ".join(clauses) + """
+            ORDER BY
+                CASE WHEN ? != '' AND symbol = ? THEN 0 WHEN ? != '' AND symbol LIKE ? THEN 1 ELSE 2 END,
+                CASE market WHEN 'KOSPI' THEN 1 WHEN 'KOSDAQ' THEN 2 WHEN 'NASDAQ' THEN 3 ELSE 9 END,
+                symbol
+            LIMIT ?
+        """
+        with self.connect() as connection:
+            rows = connection.execute(sql, params[:-1] + [exact_symbol, exact_symbol, exact_symbol, exact_symbol + "%", params[-1]]).fetchall()
+        return [self.row_to_symbol(row) for row in rows]
+
+    def get(self, symbol: str, market: str = "") -> Optional[ListedSymbol]:
+        clean_symbol = normalize_symbol(symbol)
+        clean_market = normalize_market(market)
+        if not clean_symbol:
+            return None
+        with self.connect() as connection:
+            if clean_market:
+                row = connection.execute(
+                    "SELECT * FROM symbol_universe WHERE market = ? AND symbol = ?",
+                    (clean_market, clean_symbol),
+                ).fetchone()
+            else:
+                row = connection.execute(
+                    """
+                    SELECT * FROM symbol_universe
+                    WHERE symbol = ?
+                    ORDER BY CASE market WHEN 'KOSPI' THEN 1 WHEN 'KOSDAQ' THEN 2 WHEN 'NASDAQ' THEN 3 ELSE 9 END
+                    LIMIT 1
+                    """,
+                    (clean_symbol,),
+                ).fetchone()
+        return self.row_to_symbol(row) if row else None
+
+    def counts_by_market(self) -> Dict[str, int]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT market, COUNT(*) AS count FROM symbol_universe WHERE active = 1 GROUP BY market"
+            ).fetchall()
+        return {row["market"]: int(row["count"]) for row in rows}
+
+    def latest_seen_by_market(self) -> Dict[str, str]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT market, MAX(last_seen_at) AS last_seen_at FROM symbol_universe WHERE active = 1 GROUP BY market"
+            ).fetchall()
+        return {row["market"]: row["last_seen_at"] or "" for row in rows}
+
+    def mark_source(self, market: str, source: str, source_url: str, status: str, count: int = 0, error: str = "") -> None:
+        stamp = symbol_utc_now_iso()
+        success_at = stamp if status == "ok" else ""
+        with self.connect() as connection:
+            existing = connection.execute(
+                "SELECT last_success_at FROM symbol_universe_sources WHERE market = ?",
+                (normalize_market(market),),
+            ).fetchone()
+            last_success_at = success_at or (existing["last_success_at"] if existing else "")
+            connection.execute(
+                """
+                INSERT INTO symbol_universe_sources (
+                    market, source, source_url, status, record_count, last_attempt_at,
+                    last_success_at, last_error, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(market) DO UPDATE SET
+                    source = excluded.source,
+                    source_url = excluded.source_url,
+                    status = excluded.status,
+                    record_count = excluded.record_count,
+                    last_attempt_at = excluded.last_attempt_at,
+                    last_success_at = excluded.last_success_at,
+                    last_error = excluded.last_error,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    normalize_market(market),
+                    str(source or ""),
+                    str(source_url or ""),
+                    str(status or ""),
+                    int(count or 0),
+                    stamp,
+                    last_success_at,
+                    str(error or ""),
+                    stamp,
+                ),
+            )
+
+    def source_states(self) -> List[Dict[str, object]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT market, source, source_url, status, record_count, last_attempt_at,
+                       last_success_at, last_error, updated_at
+                FROM symbol_universe_sources
+                ORDER BY CASE market WHEN 'KOSPI' THEN 1 WHEN 'KOSDAQ' THEN 2 WHEN 'NASDAQ' THEN 3 ELSE 9 END
+                """
+            ).fetchall()
+        return [
+            {
+                "market": row["market"],
+                "source": row["source"],
+                "sourceUrl": row["source_url"],
+                "status": row["status"],
+                "recordCount": int(row["record_count"]),
+                "lastAttemptAt": row["last_attempt_at"],
+                "lastSuccessAt": row["last_success_at"],
+                "lastError": row["last_error"],
+                "updatedAt": row["updated_at"],
+            }
+            for row in rows
+        ]
 
 
 class SQLiteRuntimeSettingsStore(OperationalConnection):

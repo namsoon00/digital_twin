@@ -121,8 +121,7 @@ function checkFrontendAdminRender() {
       generatedAt: "2026-07-01T00:00:00.000Z",
       headline: "테스트 스냅샷",
       exitScore: 0,
-      mock: true,
-      toss: { mode: "mock", status: "ok", account: {}, positions: [], watchlist: [] },
+      toss: { mode: "live", status: "ok", account: {}, positions: [], watchlist: [] },
       tossDecision: { items: [], rules: [], holdingCount: 0, watchCount: 0, overallPressure: 0 },
       portfolio: { total: 0, invested: 0, cash: 0, markets: [], sectors: [] },
       checklist: [],
@@ -209,6 +208,9 @@ function checkFrontendAdminRender() {
     ["overview", "accounts", "notifications", "modeling", "monitoring"].forEach(function (tab) {
       assertOk(overviewHtml.indexOf('data-tab="' + tab + '"') >= 0, "새 탭이 렌더링되지 않았습니다: " + tab);
     });
+    assertOk(overviewHtml.indexOf("data-mode=") < 0, "Mock 데이터 전환 버튼이 아직 렌더링됩니다.");
+    assertOk(overviewHtml.indexOf(">Mock<") < 0, "Mock 데이터 버튼 라벨이 아직 렌더링됩니다.");
+    assertOk(overviewHtml.indexOf("Mock 데이터") < 0, "Mock 데이터 표시 문구가 아직 렌더링됩니다.");
     ["decision", "lab", "alerts", "holdings", "feed", "watchlist"].forEach(function (tab) {
       assertOk(overviewHtml.indexOf('data-tab="' + tab + '"') < 0, "기존 탭이 남아 있습니다: " + tab);
     });
@@ -220,6 +222,8 @@ function checkFrontendAdminRender() {
     assertOk(notificationHtml.indexOf("admin-message-row") >= 0, "메시지 타입별 알림 설정이 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("tab=notifications") >= 0, "알림 링크 기본값이 새 알림 탭을 가리키지 않습니다.");
     assertOk(modelingHtml.indexOf("admin-modeling-panel") >= 0, "모델링 설정 패널이 렌더링되지 않았습니다.");
+    assertOk(modelingHtml.indexOf("model-timing-panel") < 0, "Mock 시계열 기반 타이밍 패널이 아직 렌더링됩니다.");
+    assertOk(modelingHtml.indexOf("웹에서 운영하는 매수·매도 타이밍 모델") < 0, "타이밍 모델 제목이 아직 렌더링됩니다.");
   });
 }
 

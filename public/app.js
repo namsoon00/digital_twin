@@ -287,7 +287,6 @@
     feed: null,
     feedLoading: false,
     feedError: "",
-    dataMode: initialDataMode(),
     activeTab: initialTab(),
     settings: loadSettings(),
     settingsOpen: false,
@@ -381,22 +380,6 @@
     var params = new URLSearchParams(window.location.search);
     var requested = String(params.get("tab") || "").toLowerCase();
     return tabs.some(function (tab) { return tab.id === requested; }) ? requested : "overview";
-  }
-
-  function initialDataMode() {
-    var params = new URLSearchParams(window.location.search);
-    var queryMode = String(params.get("mock") || params.get("mode") || "").toLowerCase();
-    if (queryMode === "1" || queryMode === "true" || queryMode === "mock") return "mock";
-    if (isStaticPreviewHost()) return "mock";
-    return "live";
-  }
-
-  function persistDataMode(value) {
-    try {
-      window.localStorage.setItem("exitLensDataMode", value);
-    } catch (error) {
-      // Storage can be unavailable in private contexts; the in-memory state is enough.
-    }
   }
 
   function loadSettings() {
@@ -790,7 +773,6 @@
 
   function tossLensPath() {
     var params = new URLSearchParams();
-    if (state.dataMode === "mock") params.set("mock", "1");
     var symbols = watchlistSymbols().join(",");
     if (symbols) params.set("watchlistSymbols", symbols);
     var query = params.toString();
@@ -1007,13 +989,8 @@
         state.feedError = "";
       })
       .catch(function (error) {
-        if (state.dataMode === "mock") {
-          state.feed = staticFeedSnapshot(error.message || "피드 조회 실패");
-          state.feedError = "";
-        } else {
-          state.feed = null;
-          state.feedError = error.message || "피드를 불러오지 못했습니다.";
-        }
+        state.feed = null;
+        state.feedError = error.message || "피드를 불러오지 못했습니다.";
       })
       .finally(function () {
         state.feedLoading = false;
@@ -1021,168 +998,41 @@
       });
   }
 
-  function staticMockSnapshot() {
+  function staticPreviewSnapshot() {
     var stamped = new Date().toISOString();
-    var positions = [
-      {
-        symbol: "005930",
-        name: "삼성전자",
-        source: "holding",
-        sector: "반도체",
-        market: "KR",
-        currency: "KRW",
-        quantity: "12",
-        sellableQuantity: "12",
-        averagePrice: 65000,
-        currentPrice: 72000,
-        marketValue: 864000,
-        profitLoss: 84000,
-        profitLossRate: 10.8
-      },
-      {
-        symbol: "AAPL",
-        name: "Apple",
-        source: "holding",
-        sector: "AI/플랫폼",
-        market: "US",
-        currency: "USD",
-        quantity: "2",
-        sellableQuantity: "2",
-        averagePrice: 210,
-        currentPrice: 243.1,
-        marketValue: 486.2,
-        profitLoss: 66.2,
-        profitLossRate: 15.8
-      },
-      {
-        symbol: "CASH",
-        name: "대기 현금",
-        source: "cash",
-        sector: "현금",
-        market: "CASH",
-        currency: "KRW",
-        quantity: "1",
-        sellableQuantity: "1",
-        averagePrice: 0,
-        currentPrice: 0,
-        marketValue: 1250000,
-        profitLoss: 0,
-        profitLossRate: 0
-      }
-    ];
-    var holdingSymbols = positions.map(function (item) { return String(item.symbol || "").toUpperCase(); });
-    var watchlist = watchlistSymbols()
-      .filter(function (symbol) { return holdingSymbols.indexOf(symbol) < 0; })
-      .map(function (symbol) {
-        return Object.assign(clientKnownStockInfo(symbol), {
-          source: "watchlist",
-          quoteStatus: "시세 조회 대기"
-        });
-      });
-    var decisionItems = [
-      {
-        symbol: "AAPL",
-        name: "Apple",
-        source: "holding",
-        sector: "AI/플랫폼",
-        market: "US",
-        currency: "USD",
-        marketValue: 486.2,
-        profitLoss: 66.2,
-        profitLossRate: 15.8,
-        exitPressure: 72,
-        decision: "분할 매도 기준 확인",
-        tone: "danger",
-        reasons: ["토스 잔고 기준 수익률이 +15.8%입니다.", "보유 수량 2주가 모두 매도 가능 수량으로 잡혀 있습니다."],
-        triggers: ["분할 매도 비율", "평균단가 대비 목표 수익률", "매도 가능 수량"]
-      },
-      {
-        symbol: "005930",
-        name: "삼성전자",
-        source: "holding",
-        sector: "반도체",
-        market: "KR",
-        currency: "KRW",
-        marketValue: 864000,
-        profitLoss: 84000,
-        profitLossRate: 10.8,
-        exitPressure: 64,
-        decision: "일부 익절 기준 확인",
-        tone: "caution",
-        reasons: ["토스 잔고 기준 수익률이 +10.8%입니다.", "반도체 보유 평가액이 계좌 내 주요 노출입니다."],
-        triggers: ["평가손익", "보유 비중", "매도 가능 수량"]
-      },
-      {
-        symbol: "NVDA",
-        name: "NVIDIA",
-        source: "watchlist",
-        sector: "반도체",
-        market: "US",
-        currency: "USD",
-        marketValue: 0,
-        profitLoss: 0,
-        profitLossRate: 0,
-        exitPressure: 36,
-        decision: "시세 기준 대기",
-        tone: "hold",
-        reasons: ["관심 종목은 토스 시세 연결 후 현재가와 기준가를 비교해야 합니다."],
-        triggers: ["관심 종목", "현재가", "기준가"]
-      }
-    ].filter(function (item) {
-      if (item.source !== "watchlist") return true;
-      return watchlist.some(function (watchItem) {
-        return watchItem.symbol === item.symbol;
-      });
-    });
     return {
       generatedAt: stamped,
-      dataMode: "mock",
-      mock: true,
-      headline: "내 토스 계좌 기준으로 AAPL 분할 매도 기준 점검이 우선입니다.",
-      exitScore: 57,
-      regime: "토스 조회 전용",
-      summary: [
-        "보유 종목 2개와 관심 종목 " + watchlist.length + "개를 토스 API 범위 안에서 분리했습니다.",
-        "체결강도, 거래량, 매수/매도 체결량은 수급 탭에서 별도 조합합니다.",
-        "판단 근거는 수익률, 평가손익, 매도 가능 수량, 보유 비중으로 제한합니다."
-      ],
+      preview: true,
+      headline: "로컬 서버에서 계정과 알림 설정을 관리합니다.",
+      exitScore: 0,
+      regime: "정적 미리보기",
+      summary: [],
       toss: {
-        mode: "mock",
+        mode: "preview",
         configured: false,
-        status: "GitHub Pages mock 데이터",
-        account: { displayNumber: "demo", type: "BROKERAGE", orderableAmount: 1250000, currency: "KRW" },
-        positions: positions,
-        watchlist: watchlist
+        status: "정적 미리보기",
+        account: {},
+        positions: [],
+        watchlist: []
       },
       portfolio: {
-        total: 2114486.2,
-        invested: 864486.2,
-        cash: 1250000,
-        concentration: 41,
-        sectors: [
-          { sector: "현금", value: 1250000, ratio: 59 },
-          { sector: "반도체", value: 864000, ratio: 41 },
-          { sector: "AI/플랫폼", value: 486.2, ratio: 0 }
-        ]
+        total: 0,
+        invested: 0,
+        cash: 0,
+        concentration: 0,
+        markets: [],
+        sectors: []
       },
       tossDecision: {
-        headline: "내 토스 계좌 기준으로 AAPL 분할 매도 기준 점검이 우선입니다.",
-        overallPressure: 57,
-        urgentCount: 2,
-        holdingCount: 2,
-        watchCount: watchlist.length,
-        items: decisionItems,
-        rules: [
-          "수익률과 평가손익은 토스 잔고에서 확인 가능한 값만 사용합니다.",
-          "관심 종목은 보유가 아니므로 매도 판단 대신 시세 기준 대기 상태로 둡니다.",
-          "외부 텍스트 신호는 토스 전용 판단 점수에 반영하지 않습니다."
-        ]
+        headline: "로컬 서버에서 실제 계정 데이터를 조회합니다.",
+        overallPressure: 0,
+        urgentCount: 0,
+        holdingCount: 0,
+        watchCount: 0,
+        items: [],
+        rules: []
       },
-      checklist: [
-        { label: "토스 잔고의 수익률, 평가손익, 매도 가능 수량 확인", status: "정상" },
-        { label: "관심 종목은 토스 시세 연결 후 현재가 기준만 비교", status: "대기" },
-        { label: "주문 실행은 읽기 전용 검증 이후 별도 단계에서만 열기", status: "잠금" }
-      ]
+      checklist: []
     };
   }
 
@@ -2101,18 +1951,34 @@
 
   function modelFormulaVariables(item) {
     var valuation = item.valuation || {};
+    var signal = item.signal || {};
     var draft = labDraftForItem(item);
     var weights = formulaWeights();
     var valuationGap = Number(valuation.gap || 0);
     var expensivePenalty = valuationGap < 0 ? Math.min(18, Math.abs(valuationGap) / 2) : 0;
     var undervalueBonus = valuationGap > 0 ? Math.min(14, valuationGap / 3) : 0;
+    var current = Number(item.currentPrice || 0);
+    var ma20 = Number(item.ma20 || signal.ma20 || 0);
+    var ma60 = Number(item.ma60 || signal.ma60 || 0);
+    var buyShare = Number(item.buyShare || buyVolumeShare(signal) || 0);
     return Object.assign({}, weights, {
       buyScore: Number(item.buyScore || 0),
       sellScore: Number(item.sellScore || 0),
       systemBuyScore: Number(item.buyScore || 0),
       systemSellScore: Number(item.sellScore || 0),
-      buyShare: Number(item.buyShare || 0),
-      currentPrice: Number(item.currentPrice || 0),
+      tradeStrength: Number(signal.tradeStrength || 0),
+      volumeRatio: Number(signal.volumeRatio || 0),
+      buyVolume: Number(signal.buyVolume || 0),
+      sellVolume: Number(signal.sellVolume || 0),
+      buyShare: buyShare,
+      sellShare: Math.max(0, 100 - buyShare),
+      bidAskImbalance: Number(signal.bidAskImbalance || 0),
+      priceChangeRate: Number(signal.priceChangeRate || 0),
+      ma20: ma20,
+      ma60: ma60,
+      trendDistance20: current && ma20 ? ((current / ma20) - 1) * 100 : 0,
+      trendDistance60: current && ma60 ? ((current / ma60) - 1) * 100 : 0,
+      currentPrice: current,
       averagePrice: Number(item.averagePrice || 0),
       fairValue: Number(valuation.fairValue || 0),
       fairValueGap: valuationGap,
@@ -2142,8 +2008,8 @@
     return { label: "내 모델 관망", tone: "hold", rank: 5 };
   }
 
-  function customModelScores(item) {
-    var variables = modelFormulaVariables(item);
+  function customModelScoresFromVariables(item, variables) {
+    variables = variables || {};
     var fallbackBuy = variables.buyScore * 0.35
       + variables.thesisScore * Number(variables.thesisWeight || 0.25)
       + variables.confidenceScore * Number(variables.confidenceWeight || 0.15)
@@ -2172,6 +2038,10 @@
       errors: errors,
       variables: variables
     };
+  }
+
+  function customModelScores(item) {
+    return customModelScoresFromVariables(item, modelFormulaVariables(item));
   }
 
   function modelStatsForItems(items) {
@@ -2666,8 +2536,8 @@
     if (toss.mode !== "live") {
       addAlert(alerts, rules, {
         rule: "tossConnection",
-        severity: state.dataMode === "mock" ? "info" : "caution",
-        title: state.dataMode === "mock" ? "Mock 데이터 사용 중" : "토스 live 연결 확인",
+        severity: "caution",
+        title: "토스 live 연결 확인",
         message: toss.status || "토스 live 연결 상태를 확인해야 합니다.",
         value: toss.mode || "unknown",
         threshold: "live",
@@ -2782,12 +2652,9 @@
     state.error = "";
     render();
 
-    var loadPromise = state.dataMode === "mock" && isStaticPreviewHost()
-      ? Promise.resolve(staticMockSnapshot())
-      : requestJson(tossLensPath()).catch(function (error) {
-        if (state.dataMode === "mock") return staticMockSnapshot();
-        throw error;
-      });
+    var loadPromise = isStaticPreviewHost()
+      ? Promise.resolve(staticPreviewSnapshot())
+      : requestJson(tossLensPath());
 
     return loadPromise
       .then(function (snapshot) {
@@ -2856,8 +2723,8 @@
 
   function renderDashboard(snapshot) {
     var toss = snapshot.toss || { mode: "demo" };
-    var modeLabel = snapshot.mock ? "Mock" : (toss.mode === "live" ? "Toss live" : "Demo");
-    var modeClass = snapshot.mock ? "mock" : (toss.mode === "live" ? "live" : "demo");
+    var modeLabel = snapshot.preview ? "Pages preview" : (toss.mode === "live" ? "Toss live" : "Local server");
+    var modeClass = toss.mode === "live" ? "live" : "demo";
     return [
       '<main class="shell">',
       '<section class="topbar">',
@@ -2867,10 +2734,6 @@
       '<p class="subtle">Python 서비스의 계정 등록, 메시지 타입별 알림, 모델링 설정을 이 화면에서 관리합니다. 마지막 데이터 ' + escapeHtml(formatClock(snapshot.generatedAt)) + "</p>",
       '</div>',
       '<div class="toolbar">',
-      '<div class="mode-toggle" role="group" aria-label="데이터 모드">',
-      '<button class="' + (state.dataMode === "live" ? "active" : "") + '" data-mode="live">실데이터</button>',
-      '<button class="' + (state.dataMode === "mock" ? "active" : "") + '" data-mode="mock">Mock</button>',
-      '</div>',
       '<span class="status-pill ' + modeClass + '">' + escapeHtml(modeLabel) + "</span>",
       '<button class="icon-button" data-action="open-settings" title="설정" aria-label="설정">⚙</button>',
       '<button class="icon-button" data-action="refresh" title="새로고침">' + (state.refreshing ? "…" : "↻") + "</button>",
@@ -2962,7 +2825,7 @@
       '<p class="label">Operations</p>',
       '<h2>서비스 운영 상태</h2>',
       '</div>',
-      '<span class="status-pill ' + (isStaticPreviewHost() ? "mock" : "live") + '">' + (isStaticPreviewHost() ? "Pages preview" : "Local server") + '</span>',
+      '<span class="status-pill ' + (isStaticPreviewHost() ? "demo" : "live") + '">' + (isStaticPreviewHost() ? "Pages preview" : "Local server") + '</span>',
       '</div>',
       '<div class="admin-stat-grid">',
       renderAdminStat("등록 계정", accounts.length, "개"),
@@ -2970,7 +2833,7 @@
       renderAdminStat("최소 주기", (realtimeCadence === 9999 ? "-" : realtimeCadence), realtimeCadence === 9999 ? "" : "분"),
       renderAdminStat("모델", settingValue("modelName") || defaultSettings.modelName, ""),
       renderAdminStat("평가 자산", formatMoney(portfolio.total || 0), ""),
-      renderAdminStat("데이터", snapshot.mock ? "Mock" : "Live", ""),
+      renderAdminStat("데이터", snapshot.preview ? "Preview" : "Live", ""),
       '</div>',
       '<div class="rule-strip">',
       '<span>메인 화면은 계정, 메시지 타입, 주기, 모델 기준을 관리하는 운영 콘솔입니다.</span>',
@@ -3014,7 +2877,7 @@
       '<p class="label">Monitoring</p>',
       '<h2>모니터링 실행 상태</h2>',
       '</div>',
-      '<span class="status-pill ' + (snapshot.mock ? "mock" : "live") + '">' + escapeHtml(snapshot.mock ? "Mock" : "Live") + '</span>',
+      '<span class="status-pill ' + (snapshot.preview ? "demo" : "live") + '">' + escapeHtml(snapshot.preview ? "Preview" : "Live") + '</span>',
       '</div>',
       '<div class="admin-stat-grid">',
       renderAdminStat("활성 계정", enabledCount + "/" + accounts.length, ""),
@@ -3026,7 +2889,7 @@
       '</div>',
       '<div class="admin-monitor-grid">',
       '<div class="source-stack">',
-      '<div class="source-row"><span>데이터 모드</span><strong>' + escapeHtml(snapshot.mock ? "Mock" : "실데이터") + '</strong></div>',
+      '<div class="source-row"><span>데이터 모드</span><strong>' + escapeHtml(snapshot.preview ? "정적 미리보기" : "실데이터") + '</strong></div>',
       '<div class="source-row"><span>토스 연결</span><strong>' + escapeHtml(toss.status || "-") + '</strong></div>',
       marketRows,
       '</div>',
@@ -3273,7 +3136,7 @@
       '</div>',
       '</div>',
       '<div class="source-stack">',
-      '<div class="source-row"><span>표시 모드</span><strong>' + escapeHtml(snapshot.mock ? "Mock 데이터" : "실제 데이터") + '</strong></div>',
+      '<div class="source-row"><span>표시 모드</span><strong>' + escapeHtml(snapshot.preview ? "정적 미리보기" : "실제 데이터") + '</strong></div>',
       '<div class="source-row"><span>토스</span><strong>' + escapeHtml(toss.status || "-") + '</strong></div>',
       '<div class="source-row"><span>계좌</span><strong>' + escapeHtml(account.displayNumber || "-") + '</strong></div>',
       '<div class="source-row"><span>주문 가능 금액</span><strong>' + escapeHtml(formatCurrency(account.orderableAmount || 0, account.currency || "KRW")) + '</strong></div>',
@@ -3951,6 +3814,14 @@
     return [
       ["buyScore", "수급/가치 기반 시스템 매수 점수"],
       ["sellScore", "수급/가치 기반 시스템 매도 점수"],
+      ["tradeStrength", "체결강도"],
+      ["volumeRatio", "거래량 배율"],
+      ["buyShare", "매수 체결 비중"],
+      ["sellShare", "매도 체결 비중"],
+      ["bidAskImbalance", "호가 불균형"],
+      ["priceChangeRate", "가격 변화율"],
+      ["trendDistance20", "20일선 대비 괴리"],
+      ["trendDistance60", "60일선 대비 괴리"],
       ["thesisScore", "실험실에서 입력한 내 매수 점수"],
       ["riskScore", "실험실에서 입력한 리스크 점수"],
       ["confidenceScore", "확신 점수"],
@@ -4814,19 +4685,6 @@
         exportModelVersions();
       });
     }
-
-    Array.prototype.slice.call(app.querySelectorAll("[data-mode]")).forEach(function (button) {
-      button.addEventListener("click", function () {
-        var nextMode = button.getAttribute("data-mode") || "live";
-        if (nextMode === state.dataMode || state.refreshing) return;
-        state.dataMode = nextMode === "mock" ? "mock" : "live";
-        state.snapshot = null;
-        state.feed = null;
-        state.feedError = "";
-        persistDataMode(state.dataMode);
-        load();
-      });
-    });
 
     Array.prototype.slice.call(app.querySelectorAll("[data-setting]")).forEach(function (field) {
       field.addEventListener("input", function () {

@@ -114,7 +114,7 @@ def admin_preview_config() -> Dict[str, object]:
             {
                 "id": "deployment",
                 "title": "GitHub Pages 배포",
-                "summary": "main 브랜치에 기능이 반영되면 GitHub Actions가 정적 mock 데이터와 Python admin preview를 다시 생성해 gh-pages에 배포합니다.",
+                "summary": "main 브랜치에 기능이 반영되면 GitHub Actions가 정적 웹 자산과 Python admin preview를 다시 생성해 gh-pages에 배포합니다.",
                 "workflow": ".github/workflows/pages.yml",
                 "trigger": "push to main 또는 workflow_dispatch",
                 "commands": ["npm run check", "npm run generate:static"],

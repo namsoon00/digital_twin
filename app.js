@@ -80,7 +80,13 @@
       "tossConnection=1",
       "orderPending=1",
       "orderReject=1",
-      "holdingTiming=1"
+      "holdingTiming=1",
+      "monitorConnection=1",
+      "monitorPositionChange=1",
+      "monitorPnlChange=1",
+      "monitorValueChange=1",
+      "monitorCashChange=1",
+      "monitorDecisionChange=1"
     ].join("\n"),
     alertThresholds: [
       "modelBuyScore=74",
@@ -103,7 +109,11 @@
       "recordLoss=-5",
       "priceNearPercent=1",
       "staleMinutes=30",
-      "pendingOrderMinutes=30"
+      "pendingOrderMinutes=30",
+      "monitorPnlDelta=2",
+      "monitorValueDelta=5",
+      "monitorCashDelta=10",
+      "monitorExitPressureDelta=15"
     ].join("\n")
   };
   var tabs = [
@@ -191,7 +201,13 @@
     { key: "tossConnection", group: "데이터", label: "토스 연결 상태", description: "토스 live 연결이 아니거나 비어 있을 때" },
     { key: "orderPending", group: "주문", label: "미체결 주문", description: "주문 데이터가 연결되면 오래된 미체결을 표시" },
     { key: "orderReject", group: "주문", label: "거부/실패 주문", description: "주문 데이터가 연결되면 거부 또는 실패 주문을 표시" },
-    { key: "holdingTiming", group: "푸시", label: "보유 타이밍 푸시", description: "알림 워커가 보유 종목 장중 점검을 보낼 때" }
+    { key: "holdingTiming", group: "푸시", label: "보유 타이밍 푸시", description: "알림 워커가 보유 종목 장중 점검을 보낼 때" },
+    { key: "monitorConnection", group: "실시간", label: "연결 상태 변화", description: "실시간 모니터링 중 토스 연결 상태가 바뀔 때" },
+    { key: "monitorPositionChange", group: "실시간", label: "보유 종목 변화", description: "새 보유, 제외, 수량 변경이 감지될 때" },
+    { key: "monitorPnlChange", group: "실시간", label: "손익률 급변", description: "직전 조회 대비 손익률 변화가 커질 때" },
+    { key: "monitorValueChange", group: "실시간", label: "평가액 급변", description: "직전 조회 대비 평가액 변화가 커질 때" },
+    { key: "monitorCashChange", group: "실시간", label: "현금비중 급변", description: "시장별 현금비중이 빠르게 변할 때" },
+    { key: "monitorDecisionChange", group: "실시간", label: "판단 변화", description: "종목 판단이나 리스크 점수가 바뀔 때" }
   ];
   var alertThresholdCatalog = [
     { key: "modelBuyScore", label: "모델 매수 점수", unit: "점", step: "1" },
@@ -214,7 +230,11 @@
     { key: "recordLoss", label: "기록 성과 하단", unit: "%", step: "0.1" },
     { key: "priceNearPercent", label: "가격 접근 허용폭", unit: "%", step: "0.1" },
     { key: "staleMinutes", label: "데이터 지연 시간", unit: "분", step: "1" },
-    { key: "pendingOrderMinutes", label: "미체결 점검 시간", unit: "분", step: "1" }
+    { key: "pendingOrderMinutes", label: "미체결 점검 시간", unit: "분", step: "1" },
+    { key: "monitorPnlDelta", label: "실시간 손익률 변화", unit: "%p", step: "0.1" },
+    { key: "monitorValueDelta", label: "실시간 평가액 변화", unit: "%", step: "0.1" },
+    { key: "monitorCashDelta", label: "실시간 현금비중 변화", unit: "%p", step: "1" },
+    { key: "monitorExitPressureDelta", label: "실시간 판단 점수 변화", unit: "점", step: "1" }
   ];
   var settingsMemoryStore = "";
   var labDraftsMemoryStore = "";

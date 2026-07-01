@@ -20,6 +20,7 @@ Domain:
 - `python_service/digital_twin/domain/portfolio.py`: positions, portfolio summaries, decisions, alert events
 - `python_service/digital_twin/domain/analytics.py`: scoring formulas, portfolio calculations, position normalization
 - `python_service/digital_twin/domain/monitoring.py`: realtime monitoring rules and cadence filtering
+- `python_service/digital_twin/domain/model_review.py`: model-change explanation, data validation, and improvement hints for alert messages
 - `python_service/digital_twin/domain/events.py`: event names and event payload factories
 - `python_service/digital_twin/domain/repositories.py`: application-facing ports
 - `python_service/digital_twin/domain/parsing.py`: pure parsing helpers shared by domain rules
@@ -68,6 +69,7 @@ Use these slices when multiple chat windows work independently:
 - Notifications: `infrastructure/notifications.py` plus event handlers subscribed to monitoring events
 - Providers/data collection: `infrastructure/toss_snapshots.py`
 - Model scoring: `domain/analytics.py` and future model-lab application services
+- Model review and validation: `domain/model_review.py` plus tests for decision-change explanations
 - Runtime/configuration: `infrastructure/settings.py`, `infrastructure/service_factory.py`, `service_manager.py`
 
 When a change touches more than one slice, keep the cross-slice contract in `domain/events.py` or `domain/repositories.py` and keep each implementation inside its own layer.
@@ -76,6 +78,6 @@ When a change touches more than one slice, keep the cross-slice contract in `dom
 
 - Add unit tests around application services when a use case changes.
 - Add tests around event contracts when adding or changing event payloads.
+- Add tests around model-review text when alert explanations, validation checks, or improvement hints change.
 - Add infrastructure tests only for repository/adapter behavior that can run without real credentials.
 - Preserve local-first behavior: no test should require real Toss, Telegram, or private account data.
-

@@ -123,6 +123,12 @@ The monitor emits account-scoped events for:
 - decision score changes
 - holding timing checks
 
+When a `monitorDecisionChange` alert is emitted, the message includes:
+
+- why the decision changed or why exit pressure crossed the threshold
+- short model data validation, such as missing price/quantity/sector fields or unusually large P/L moves
+- a concise model-improvement hint for the next feature iteration
+
 Cadence is stored per account, rule, and symbol in `data/python-monitor-state.json`.
 
 ## Model Development

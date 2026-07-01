@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 from typing import Dict, List
 
+from .model_review import decision_change_review_lines
 from .parsing import parse_assignments
 from .portfolio import AccountSnapshot, AlertEvent
 from .repositories import MonitorStateRepository
@@ -162,7 +163,14 @@ class RealtimeMonitor:
             pressure_delta = float(decision.get("exit_pressure") or 0) - float(previous_decision.get("exit_pressure") or 0)
             changed = decision.get("decision") and previous_decision.get("decision") and decision.get("decision") != previous_decision.get("decision")
             if changed or abs(pressure_delta) >= float(self.thresholds.get("monitorExitPressureDelta", 0)):
-                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "ALERT" if decision.get("tone") == "danger" else "WATCH", "monitorDecisionChange", snapshot.account_id + ":decision:" + symbol + ":" + str(decision.get("decision")), item["name"], ["판단 변화", "이전 " + str(previous_decision.get("decision") or "-") + " " + str(previous_decision.get("exit_pressure") or 0) + "점", "현재 " + str(decision.get("decision") or "-") + " " + str(decision.get("exit_pressure") or 0) + "점"], symbol))
+                review_lines = decision_change_review_lines(
+                    item,
+                    before,
+                    decision,
+                    previous_decision,
+                    float(self.thresholds.get("monitorExitPressureDelta", 0)),
+                )
+                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "ALERT" if decision.get("tone") == "danger" else "WATCH", "monitorDecisionChange", snapshot.account_id + ":decision:" + symbol + ":" + str(decision.get("decision")), item["name"], ["판단 변화", "이전 " + str(previous_decision.get("decision") or "-") + " " + str(previous_decision.get("exit_pressure") or 0) + "점", "현재 " + str(decision.get("decision") or "-") + " " + str(decision.get("exit_pressure") or 0) + "점"] + review_lines, symbol))
         return events
 
     def cash_events(self, snapshot: AccountSnapshot, previous: Dict[str, object]) -> List[AlertEvent]:
@@ -214,4 +222,3 @@ class RealtimeMonitor:
             if now - previous >= minutes * 60 * 1000:
                 filtered.append(event)
         return filtered
-

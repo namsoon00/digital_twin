@@ -173,6 +173,63 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(any(event.rule == "monitorHeartbeat" for event in first_events))
         self.assertFalse(any(event.rule == "monitorHeartbeat" for event in second_events))
 
+    def test_decision_change_message_includes_model_review(self):
+        previous_position = normalize_position({
+            "symbol": "AAPL",
+            "name": "Apple",
+            "marketValue": 1000,
+            "quantity": 1,
+            "sellableQuantity": 1,
+            "averagePrice": 100,
+            "currentPrice": 103,
+            "profitLossRate": 3,
+            "sector": "AI/플랫폼",
+        })
+        previous_portfolio = portfolio_summary([previous_position])
+        previous_snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "ok",
+            utc_now_iso(),
+            previous_portfolio,
+            [previous_position],
+            decisions_for_positions([previous_position], previous_portfolio),
+        )
+        current_position = normalize_position({
+            "symbol": "AAPL",
+            "name": "Apple",
+            "marketValue": 1250,
+            "quantity": 1,
+            "sellableQuantity": 1,
+            "averagePrice": 100,
+            "currentPrice": 125,
+            "profitLossRate": 25,
+            "sector": "AI/플랫폼",
+        })
+        current_portfolio = portfolio_summary([current_position])
+        current_snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "ok",
+            utc_now_iso(),
+            current_portfolio,
+            [current_position],
+            decisions_for_positions([current_position], current_portfolio),
+        )
+
+        events = RealtimeMonitor().events_for_snapshot(current_snapshot, previous_snapshot.to_monitor_state())
+        decision_event = next(event for event in events if event.rule == "monitorDecisionChange")
+        message = decision_event.message()
+
+        self.assertIn("Codex 답변:", message)
+        self.assertIn("데이터 검증:", message)
+        self.assertIn("모델 보완:", message)
+        self.assertIn("손익률 급변", message)
+
     def test_runner_uses_provider_snapshot(self):
         account = AccountConfig("main", "메인", "toss", "https://example.test", "", "", "", ["AAPL"])
 

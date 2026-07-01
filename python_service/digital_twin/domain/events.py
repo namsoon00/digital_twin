@@ -78,11 +78,13 @@ def alerts_detected_event(events: Iterable[AlertEvent]) -> DomainEvent:
             "events": [
                 {
                     "accountId": item.account_id,
+                    "accountLabel": item.account_label,
                     "severity": item.severity,
                     "rule": item.rule,
                     "key": item.key,
                     "title": item.title,
                     "symbol": item.symbol,
+                    "lines": item.lines,
                 }
                 for item in items
             ],
@@ -108,4 +110,3 @@ def monitoring_cycle_completed_event(
             "delivered": delivered,
         },
     )
-

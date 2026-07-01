@@ -99,5 +99,9 @@ def runtime_settings() -> Dict[str, str]:
         "sellScoreFormula": value("sellScoreFormula", "SELL_SCORE_FORMULA", ""),
         "formulaWeights": value("formulaWeights", "FORMULA_WEIGHTS", ""),
         "modelDecisionThresholds": value("modelDecisionThresholds", "MODEL_DECISION_THRESHOLDS", ""),
+        "modelReviewCommand": value("modelReviewCommand", "MODEL_REVIEW_COMMAND", ""),
+        "modelReviewUseCodex": value("modelReviewUseCodex", "MODEL_REVIEW_USE_CODEX", "1"),
+        "modelReviewTimeoutSeconds": value("modelReviewTimeoutSeconds", "MODEL_REVIEW_TIMEOUT_SECONDS", "180"),
+        "modelReviewIntervalSeconds": value("modelReviewIntervalSeconds", "MODEL_REVIEW_INTERVAL_SECONDS", "300"),
+        "modelReviewBatchSize": value("modelReviewBatchSize", "MODEL_REVIEW_BATCH_SIZE", "1"),
     }
-

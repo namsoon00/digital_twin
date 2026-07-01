@@ -5,11 +5,13 @@ import sys
 from typing import List
 
 from .application.account_service import AccountApplicationService
+from .application.model_review_service import ModelReviewScheduler
 from .application.scheduler import MIN_REALTIME_INTERVAL_SECONDS, RealtimeScheduler
 from .domain.accounts import AccountConfig, split_symbols
 from .infrastructure.event_bus import default_event_bus
 from .infrastructure.json_monitor_state import MonitorStore
-from .infrastructure.service_factory import build_monitor_runner
+from .infrastructure.model_review_queue import ModelReviewJobStore
+from .infrastructure.service_factory import build_model_review_runner, build_monitor_runner
 from .infrastructure.settings import runtime_settings
 from .infrastructure.sqlite_accounts import AccountRegistry
 
@@ -94,6 +96,25 @@ def monitor_command(args) -> int:
     return 1
 
 
+def model_review_command(args) -> int:
+    store = ModelReviewJobStore()
+    if args.model_review_action == "status":
+        summary = store.summary()
+        print(json.dumps({"jobs": summary}, ensure_ascii=False))
+        return 0
+    settings = runtime_settings()
+    limit = int(args.limit or settings.get("modelReviewBatchSize") or 1)
+    runner = build_model_review_runner(dry_run=args.dry_run)
+    if args.model_review_action == "once":
+        runner.run_once(limit=limit)
+        return 0
+    if args.model_review_action == "watch":
+        interval = int(os.environ.get("MODEL_REVIEW_INTERVAL_SECONDS") or settings.get("modelReviewIntervalSeconds") or 300)
+        ModelReviewScheduler(runner, interval).run_forever(limit=limit)
+        return 0
+    return 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Digiter Twin Python service")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -131,6 +152,17 @@ def build_parser() -> argparse.ArgumentParser:
     monitor_actions.add_parser("watch")
     monitor_actions.add_parser("status")
     monitor.set_defaults(func=monitor_command)
+
+    model_review = subparsers.add_parser("model-review", help="Run async model review worker")
+    model_review_actions = model_review.add_subparsers(dest="model_review_action", required=True)
+    review_once = model_review_actions.add_parser("once")
+    review_once.add_argument("--dry-run", action="store_true")
+    review_once.add_argument("--limit", default="")
+    review_watch = model_review_actions.add_parser("watch")
+    review_watch.add_argument("--dry-run", action="store_true")
+    review_watch.add_argument("--limit", default="")
+    model_review_actions.add_parser("status")
+    model_review.set_defaults(func=model_review_command)
     return parser
 
 

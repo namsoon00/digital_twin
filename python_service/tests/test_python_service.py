@@ -9,16 +9,19 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.application.account_service import AccountApplicationService
+from digital_twin.application.model_review_service import ModelReviewRunner
 from digital_twin.application.monitoring_service import MonitorRunner as ApplicationMonitorRunner
 from digital_twin.cli import preserve_existing_secrets
 from digital_twin.domain.accounts import AccountConfig
 from digital_twin.domain.analytics import SafeFormula, StrategyModel, decisions_for_positions, normalize_position, portfolio_summary
-from digital_twin.domain.events import ACCOUNT_SAVED, MONITORING_ALERTS_DETECTED, MONITORING_CYCLE_COMPLETED, MONITORING_SNAPSHOT_COLLECTED
+from digital_twin.domain.events import ACCOUNT_SAVED, MONITORING_ALERTS_DETECTED, MONITORING_CYCLE_COMPLETED, MONITORING_SNAPSHOT_COLLECTED, alerts_detected_event
 from digital_twin.domain.monitoring import RealtimeMonitor
+from digital_twin.domain.model_review import ModelReviewJob, local_model_review
 from digital_twin.domain.parsing import parse_assignments
 from digital_twin.domain.portfolio import AccountSnapshot, utc_now_iso
 from digital_twin.infrastructure.event_bus import EventBus, JsonEventLog
 from digital_twin.infrastructure.json_monitor_state import MonitorStore
+from digital_twin.infrastructure.model_review_queue import ModelReviewEnqueuer, ModelReviewJobStore
 from digital_twin.infrastructure.sqlite_accounts import AccountRegistry
 from digital_twin.scheduler import MonitorRunner
 
@@ -229,6 +232,61 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("데이터 검증:", message)
         self.assertIn("모델 보완:", message)
         self.assertIn("손익률 급변", message)
+
+    def test_decision_change_event_enqueues_async_model_review(self):
+        event = alerts_detected_event([
+            SimpleNamespace(
+                account_id="main",
+                account_label="메인",
+                severity="WATCH",
+                rule="monitorDecisionChange",
+                key="main:decision:AAPL",
+                title="Apple",
+                symbol="AAPL",
+                lines=["판단 변화", "Codex 답변: 판단 변경"],
+            )
+        ])
+        store = ModelReviewJobStore(Path(self.temp.name) / "model-review-queue.json")
+
+        ModelReviewEnqueuer(store).handle(event)
+        ModelReviewEnqueuer(store).handle(event)
+
+        jobs = store.pending(limit=10)
+        self.assertEqual(1, len(jobs))
+        self.assertEqual("main", jobs[0].account_id)
+        self.assertEqual("AAPL", jobs[0].symbol)
+        self.assertIn("Codex 답변", "\n".join(jobs[0].alert_lines))
+
+    def test_model_review_runner_sends_deferred_review_message(self):
+        registry = AccountRegistry()
+        registry.upsert(AccountConfig("main", "메인", "toss", "https://example.test", "", "", "", ["AAPL"]))
+        store = ModelReviewJobStore(Path(self.temp.name) / "model-review-queue.json")
+        store.enqueue(ModelReviewJob.create({
+            "accountId": "main",
+            "accountLabel": "메인",
+            "symbol": "AAPL",
+            "title": "Apple",
+            "key": "main:decision:AAPL",
+            "lines": ["판단 변화", "데이터 검증: 평가액, 수량, 손익률, 판단 라벨이 모두 비교 가능"],
+        }))
+        sent = []
+
+        class FakeReviewer:
+            def review(self, job):
+                return local_model_review(job)
+
+        class FakeNotifier:
+            def send(self, message):
+                sent.append(message)
+                return SimpleNamespace(delivered=True, reason="")
+
+        runner = ModelReviewRunner(store, FakeReviewer(), registry, lambda _account: FakeNotifier())
+
+        processed = runner.run_once(limit=1)
+
+        self.assertEqual(1, processed)
+        self.assertEqual({"done": 1}, store.summary())
+        self.assertIn("모델 리뷰", sent[0])
 
     def test_runner_uses_provider_snapshot(self):
         account = AccountConfig("main", "메인", "toss", "https://example.test", "", "", "", ["AAPL"])

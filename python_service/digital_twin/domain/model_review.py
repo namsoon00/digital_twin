@@ -1,4 +1,115 @@
+import uuid
+from dataclasses import asdict, dataclass, field
 from typing import Dict, List
+
+from .portfolio import utc_now_iso
+
+
+MODEL_REVIEW_PROMPT_VERSION = "model-review-v1"
+
+
+@dataclass
+class ModelReviewJob:
+    job_id: str
+    account_id: str
+    account_label: str
+    symbol: str
+    title: str
+    alert_key: str
+    alert_lines: List[str]
+    created_at: str = field(default_factory=utc_now_iso)
+    updated_at: str = ""
+    status: str = "pending"
+    attempts: int = 0
+    result: str = ""
+    last_error: str = ""
+
+    @classmethod
+    def create(cls, payload: Dict[str, object]) -> "ModelReviewJob":
+        seed = str(payload.get("key") or payload.get("alertKey") or uuid.uuid4().hex)
+        return cls(
+            job_id=uuid.uuid5(uuid.NAMESPACE_URL, "digital-twin:model-review:" + seed).hex,
+            account_id=str(payload.get("accountId") or ""),
+            account_label=str(payload.get("accountLabel") or ""),
+            symbol=str(payload.get("symbol") or ""),
+            title=str(payload.get("title") or ""),
+            alert_key=seed,
+            alert_lines=[str(line) for line in payload.get("lines") or [] if str(line).strip()],
+        )
+
+    @classmethod
+    def from_dict(cls, payload: Dict[str, object]) -> "ModelReviewJob":
+        return cls(
+            job_id=str(payload.get("jobId") or payload.get("job_id") or uuid.uuid4().hex),
+            account_id=str(payload.get("accountId") or ""),
+            account_label=str(payload.get("accountLabel") or ""),
+            symbol=str(payload.get("symbol") or ""),
+            title=str(payload.get("title") or ""),
+            alert_key=str(payload.get("alertKey") or ""),
+            alert_lines=[str(line) for line in payload.get("alertLines") or [] if str(line).strip()],
+            created_at=str(payload.get("createdAt") or utc_now_iso()),
+            updated_at=str(payload.get("updatedAt") or ""),
+            status=str(payload.get("status") or "pending"),
+            attempts=int(payload.get("attempts") or 0),
+            result=str(payload.get("result") or ""),
+            last_error=str(payload.get("lastError") or ""),
+        )
+
+    def to_dict(self) -> Dict[str, object]:
+        payload = asdict(self)
+        return {
+            "jobId": payload["job_id"],
+            "accountId": payload["account_id"],
+            "accountLabel": payload["account_label"],
+            "symbol": payload["symbol"],
+            "title": payload["title"],
+            "alertKey": payload["alert_key"],
+            "alertLines": payload["alert_lines"],
+            "createdAt": payload["created_at"],
+            "updatedAt": payload["updated_at"],
+            "status": payload["status"],
+            "attempts": payload["attempts"],
+            "result": payload["result"],
+            "lastError": payload["last_error"],
+        }
+
+
+def build_model_review_prompt(job: ModelReviewJob) -> str:
+    lines = "\n".join(["- " + line for line in job.alert_lines])
+    return "\n".join([
+        "너는 투자 모델을 지속적으로 개선하는 금융 데이터 모델 리뷰어다.",
+        "매수/매도 지시가 아니라 모델 판단 변화의 원인, 데이터 검증, 다음 실험을 분석한다.",
+        "한국어로 텔레그램 메시지에 맞게 간결하지만 충분히 분석해라.",
+        "섹션은 반드시 다음 순서로 작성한다: 판단 변화 원인, 데이터 검증, 모델 보완, 다음 실험.",
+        "API 키, 토큰, 계좌 식별정보를 추정하거나 요청하지 마라.",
+        "",
+        "리뷰 버전: " + MODEL_REVIEW_PROMPT_VERSION,
+        "계정: " + (job.account_label or job.account_id or "-"),
+        "종목: " + (job.symbol or job.title or "-"),
+        "알림 제목: " + (job.title or "-"),
+        "알림 키: " + job.alert_key,
+        "실시간 알림 내용:",
+        lines or "- 없음",
+    ])
+
+
+def local_model_review(job: ModelReviewJob) -> str:
+    joined = "\n".join(job.alert_lines)
+    validation = "실시간 알림의 데이터 검증 라인을 우선 확인하고, 가격/수량/평가액/손익률 원천이 모두 같은 시점인지 대조하세요."
+    improvement = "체결강도, 거래량, 이동평균, 투자자별 수급을 feature로 추가해 같은 판단 변화가 반복 재현되는지 검증하세요."
+    if "손익률 급변" in joined:
+        validation = "손익률 급변이 가격 원천 변경, 환율, 분할/배당, 장중 급등락 중 무엇에서 왔는지 먼저 분리하세요."
+        improvement = "손익률 단독 변화와 거래량/체결강도 동반 변화를 분리해 급변 이벤트의 신뢰도를 점수화하세요."
+    if "현재가/평단 없음" in joined or "평가액 없음" in joined:
+        validation = "가격 또는 평가액 필드가 부족하므로 판단 변화의 근거가 약합니다. 원천 API 매핑부터 보완하세요."
+        improvement = "필수 feature 누락 시 점수 산출을 보류하거나 confidence를 낮추는 게 좋습니다."
+    return "\n".join([
+        (job.account_label + " " if job.account_label else "") + (job.symbol or job.title or "판단 변화") + " 모델 리뷰",
+        "- 판단 변화 원인: 실시간 모델이 감지한 판단 라벨 또는 exit pressure 변화가 기준선을 넘었습니다.",
+        "- 데이터 검증: " + validation,
+        "- 모델 보완: " + improvement,
+        "- 다음 실험: 동일 조건을 최근 20회 판단 변화에 재적용해 false positive와 이후 손익 경로를 비교하세요.",
+    ])
 
 
 def value(payload: Dict[str, object], key: str) -> float:

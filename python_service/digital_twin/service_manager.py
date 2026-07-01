@@ -4,18 +4,32 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import List
+from typing import Dict, List
 
 from .infrastructure.settings import ROOT_DIR, data_dir
 
 
-PID_PATH = data_dir() / "python-monitor.pid"
-LOG_PATH = data_dir() / "python-monitor.log"
+WORKERS = {
+    "monitor": {
+        "label": "Python realtime monitor",
+        "pid": data_dir() / "python-monitor.pid",
+        "log": data_dir() / "python-monitor.log",
+        "command": [sys.executable, "-u", "python_service/service.py", "monitor", "watch"],
+        "needle": "python_service/service.py monitor watch",
+    },
+    "model-review": {
+        "label": "Python model review worker",
+        "pid": data_dir() / "python-model-review.pid",
+        "log": data_dir() / "python-model-review.log",
+        "command": [sys.executable, "-u", "python_service/service.py", "model-review", "watch"],
+        "needle": "python_service/service.py model-review watch",
+    },
+}
 
 
-def read_pid() -> int:
+def read_pid(path: Path) -> int:
     try:
-        return int(PID_PATH.read_text(encoding="utf-8").strip())
+        return int(path.read_text(encoding="utf-8").strip())
     except (OSError, ValueError):
         return 0
 
@@ -30,11 +44,11 @@ def command_for_pid(pid: int) -> str:
         return ""
 
 
-def is_worker_command(command: str) -> bool:
-    return "python_service/service.py monitor watch" in command
+def is_worker_command(command: str, spec: Dict[str, object]) -> bool:
+    return str(spec["needle"]) in command
 
 
-def is_running(pid: int) -> bool:
+def is_running(pid: int, spec: Dict[str, object]) -> bool:
     if not pid:
         return False
     try:
@@ -42,20 +56,20 @@ def is_running(pid: int) -> bool:
     except OSError:
         return False
     if os.name != "nt":
-        return is_worker_command(command_for_pid(pid))
+        return is_worker_command(command_for_pid(pid), spec)
     return True
 
 
-def remove_pid() -> None:
+def remove_pid(path: Path) -> None:
     try:
-        PID_PATH.unlink()
+        path.unlink()
     except FileNotFoundError:
         return
 
 
-def append_log(label: str) -> None:
-    LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with LOG_PATH.open("a", encoding="utf-8") as handle:
+def append_log(path: Path, label: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
         handle.write("\n[" + time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()) + "] manager " + label + "\n")
 
 
@@ -67,42 +81,45 @@ def tail(path: Path, count: int = 8) -> List[str]:
         return []
 
 
-def status() -> int:
-    pid = read_pid()
-    running = is_running(pid)
-    print("Python realtime monitor: " + ("running" if running else "stopped"))
+def status_worker(spec: Dict[str, object]) -> int:
+    pid_path = spec["pid"]
+    log_path = spec["log"]
+    pid = read_pid(pid_path)
+    running = is_running(pid, spec)
+    print(str(spec["label"]) + ": " + ("running" if running else "stopped"))
     if pid:
         print("PID: " + str(pid))
     if running:
         print("Command: " + command_for_pid(pid))
-    if LOG_PATH.exists():
-        print("Log: " + str(LOG_PATH))
-        print("Log updated: " + time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(LOG_PATH.stat().st_mtime)))
-        recent = tail(LOG_PATH)
+    if log_path.exists():
+        print("Log: " + str(log_path))
+        print("Log updated: " + time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(log_path.stat().st_mtime)))
+        recent = tail(log_path)
         if recent:
             print("Recent log:")
             for line in recent:
                 print(line)
     else:
-        print("Log: " + str(LOG_PATH) + " (not created)")
+        print("Log: " + str(log_path) + " (not created)")
     if pid and not running:
-        remove_pid()
+        remove_pid(pid_path)
     return 0
 
 
-def start() -> int:
-    existing = read_pid()
-    if is_running(existing):
-        print("Python realtime monitor already running.")
-        return status()
+def start_worker(spec: Dict[str, object]) -> int:
+    pid_path = spec["pid"]
+    log_path = spec["log"]
+    existing = read_pid(pid_path)
+    if is_running(existing, spec):
+        print(str(spec["label"]) + " already running.")
+        return status_worker(spec)
     if existing:
-        remove_pid()
-    LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    append_log("start")
-    out = LOG_PATH.open("a", encoding="utf-8")
-    command = [sys.executable, "-u", "python_service/service.py", "monitor", "watch"]
+        remove_pid(pid_path)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    append_log(log_path, "start")
+    out = log_path.open("a", encoding="utf-8")
     process = subprocess.Popen(
-        command,
+        spec["command"],
         cwd=str(ROOT_DIR),
         env=dict(os.environ, PYTHONUNBUFFERED="1"),
         stdin=subprocess.DEVNULL,
@@ -110,34 +127,54 @@ def start() -> int:
         stderr=out,
         start_new_session=True,
     )
-    PID_PATH.write_text(str(process.pid) + "\n", encoding="utf-8")
-    os.chmod(PID_PATH, 0o600)
-    print("Python realtime monitor started. pid=" + str(process.pid))
-    print("Log: " + str(LOG_PATH))
+    pid_path.write_text(str(process.pid) + "\n", encoding="utf-8")
+    os.chmod(pid_path, 0o600)
+    print(str(spec["label"]) + " started. pid=" + str(process.pid))
+    print("Log: " + str(log_path))
     return 0
 
 
-def stop() -> int:
-    pid = read_pid()
+def stop_worker(spec: Dict[str, object]) -> int:
+    pid_path = spec["pid"]
+    log_path = spec["log"]
+    pid = read_pid(pid_path)
     if not pid:
-        print("Python realtime monitor is not running.")
+        print(str(spec["label"]) + " is not running.")
         return 0
-    if not is_running(pid):
-        remove_pid()
-        print("Python realtime monitor was not running. Removed stale pid file.")
+    if not is_running(pid, spec):
+        remove_pid(pid_path)
+        print(str(spec["label"]) + " was not running. Removed stale pid file.")
         return 0
     os.kill(pid, signal.SIGTERM)
     for _index in range(25):
         time.sleep(0.2)
-        if not is_running(pid):
-            remove_pid()
-            append_log("stop")
-            print("Python realtime monitor stopped. pid=" + str(pid))
+        if not is_running(pid, spec):
+            remove_pid(pid_path)
+            append_log(log_path, "stop")
+            print(str(spec["label"]) + " stopped. pid=" + str(pid))
             return 0
     os.kill(pid, signal.SIGKILL)
-    remove_pid()
-    append_log("kill")
-    print("Python realtime monitor killed. pid=" + str(pid))
+    remove_pid(pid_path)
+    append_log(log_path, "kill")
+    print(str(spec["label"]) + " killed. pid=" + str(pid))
+    return 0
+
+
+def status() -> int:
+    for spec in WORKERS.values():
+        status_worker(spec)
+    return 0
+
+
+def start() -> int:
+    for spec in WORKERS.values():
+        start_worker(spec)
+    return 0
+
+
+def stop() -> int:
+    for spec in reversed(list(WORKERS.values())):
+        stop_worker(spec)
     return 0
 
 

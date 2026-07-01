@@ -65,6 +65,9 @@ npm run python:accounts -- add --id main --label "Main" --client-id "$TOSS_CLIEN
 npm run python:monitor:once -- --dry-run --force
 npm run python:monitor:status
 npm run python:monitor:watch
+npm run python:model-review:once -- --dry-run
+npm run python:model-review:status
+npm run python:model-review:watch
 npm run python:service:start
 npm run python:service:status
 npm run python:service:restart
@@ -75,7 +78,12 @@ The account registry is stored in SQLite at `data/service.db` with `0600` permis
 
 If the SQLite database has no account rows, the service falls back to the existing single-account settings from `data/settings.json` or `.env.local`. If an old `data/accounts.json` exists, it is imported into SQLite on first use.
 
-`python:monitor:watch` runs in the foreground. The `python:service:*` commands run the same scheduler in the background with `data/python-monitor.pid` and `data/python-monitor.log`.
+`python:monitor:watch` runs realtime monitoring in the foreground. `python:model-review:watch` runs the asynchronous model-review worker in the foreground.
+
+The `python:service:*` commands run both background workers:
+
+- realtime monitor: `data/python-monitor.pid`, `data/python-monitor.log`
+- model review worker: `data/python-model-review.pid`, `data/python-model-review.log`
 
 ## Account Database
 
@@ -129,7 +137,30 @@ When a `monitorDecisionChange` alert is emitted, the message includes:
 - short model data validation, such as missing price/quantity/sector fields or unusually large P/L moves
 - a concise model-improvement hint for the next feature iteration
 
+The same decision-change alert also queues a deeper asynchronous model review. The realtime alert path does not wait for LLM/Codex output.
+
 Cadence is stored per account, rule, and symbol in `data/python-monitor-state.json`.
+
+## Async Model Review
+
+Decision-change alerts are queued in `data/model-review-queue.json`, which is ignored by git.
+
+The model-review worker processes that queue separately and sends a second message with:
+
+- decision-change cause
+- data validation
+- model-improvement suggestions
+- next experiment ideas
+
+Configuration:
+
+- `MODEL_REVIEW_COMMAND`: optional command that receives the model-review prompt on stdin and returns the message on stdout.
+- `MODEL_REVIEW_USE_CODEX`: defaults to `1`; when no explicit command is set and `codex` is available on PATH, the worker attempts a read-only Codex analysis command.
+- `MODEL_REVIEW_TIMEOUT_SECONDS`: defaults to `180`.
+- `MODEL_REVIEW_INTERVAL_SECONDS`: defaults to `300`.
+- `MODEL_REVIEW_BATCH_SIZE`: defaults to `1`.
+
+If the configured LLM command fails or is unavailable, the worker sends a local deterministic model review instead of blocking the queue.
 
 ## Model Development
 

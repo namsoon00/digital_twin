@@ -1,5 +1,7 @@
 import argparse
+import json
 import os
+import sys
 from typing import List
 
 from .config import AccountConfig, AccountRegistry, runtime_settings, split_symbols
@@ -18,24 +20,65 @@ def account_from_args(args) -> AccountConfig:
         client_secret=args.client_secret or os.environ.get("TOSS_CLIENT_SECRET", ""),
         account_seq=args.account_seq or "",
         watchlist_symbols=split_symbols(args.watchlist or settings.get("watchlistSymbols", "")),
+        notify_provider=args.notify_provider or settings.get("notifyProvider", ""),
+        telegram_bot_token=args.telegram_bot_token or os.environ.get("TELEGRAM_BOT_TOKEN", "") or settings.get("telegramBotToken", ""),
+        telegram_chat_id=args.telegram_chat_id or os.environ.get("TELEGRAM_CHAT_ID", "") or settings.get("telegramChatId", ""),
+        notify_link_url=args.notify_link_url or settings.get("notifyLinkUrl", ""),
         enabled=not args.disabled,
     )
+
+
+def preserve_existing_secrets(registry: AccountRegistry, payload, account: AccountConfig) -> AccountConfig:
+    existing = {item.account_id: item for item in registry.load_saved()}.get(account.account_id)
+    if not existing or not isinstance(payload, dict):
+        return account
+
+    def missing(*keys):
+        return not any(key in payload for key in keys)
+
+    if missing("clientId", "client_id"):
+        account.client_id = existing.client_id
+    if missing("clientSecret", "client_secret"):
+        account.client_secret = existing.client_secret
+    if missing("telegramBotToken", "telegram_bot_token"):
+        account.telegram_bot_token = existing.telegram_bot_token
+    if missing("telegramChatId", "telegram_chat_id"):
+        account.telegram_chat_id = existing.telegram_chat_id
+    return account
 
 
 def accounts_command(args) -> int:
     registry = AccountRegistry()
     if args.accounts_action == "list":
-        for account in registry.load_all():
-            print(account.masked())
+        accounts = [account.masked() for account in registry.load_all()]
+        if args.json:
+            print(json.dumps({"accounts": accounts}, ensure_ascii=False))
+        else:
+            for account in accounts:
+                print(account)
         return 0
     if args.accounts_action == "add":
         account = account_from_args(args)
         registry.upsert(account)
-        print("Saved account: " + account.account_id)
+        if args.json:
+            print(json.dumps({"account": account.masked()}, ensure_ascii=False))
+        else:
+            print("Saved account: " + account.account_id)
+        return 0
+    if args.accounts_action == "save-json":
+        payload = json.loads(sys.stdin.read() or "{}")
+        raw_account = payload.get("account") or payload
+        account = AccountConfig.from_dict(raw_account, runtime_settings())
+        account = preserve_existing_secrets(registry, raw_account, account)
+        registry.upsert(account)
+        print(json.dumps({"account": account.masked()}, ensure_ascii=False))
         return 0
     if args.accounts_action == "remove":
         removed = registry.remove(args.id)
-        print("Removed account: " + args.id if removed else "Account not found: " + args.id)
+        if args.json:
+            print(json.dumps({"removed": removed, "id": args.id}, ensure_ascii=False))
+        else:
+            print("Removed account: " + args.id if removed else "Account not found: " + args.id)
         return 0 if removed else 1
     return 1
 
@@ -69,7 +112,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     accounts = subparsers.add_parser("accounts", help="Manage service accounts")
     account_actions = accounts.add_subparsers(dest="accounts_action", required=True)
-    account_actions.add_parser("list")
+    list_accounts = account_actions.add_parser("list")
+    list_accounts.add_argument("--json", action="store_true")
     add = account_actions.add_parser("add")
     add.add_argument("--id", required=True)
     add.add_argument("--label", default="")
@@ -79,9 +123,16 @@ def build_parser() -> argparse.ArgumentParser:
     add.add_argument("--client-secret", default="")
     add.add_argument("--account-seq", default="")
     add.add_argument("--watchlist", default="")
+    add.add_argument("--notify-provider", default="")
+    add.add_argument("--telegram-bot-token", default="")
+    add.add_argument("--telegram-chat-id", default="")
+    add.add_argument("--notify-link-url", default="")
     add.add_argument("--disabled", action="store_true")
+    add.add_argument("--json", action="store_true")
+    account_actions.add_parser("save-json")
     remove = account_actions.add_parser("remove")
     remove.add_argument("--id", required=True)
+    remove.add_argument("--json", action="store_true")
     accounts.set_defaults(func=accounts_command)
 
     monitor = subparsers.add_parser("monitor", help="Run realtime monitoring")

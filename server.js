@@ -381,6 +381,40 @@ function readBody(req) {
   });
 }
 
+function pythonServiceJson(args, payload) {
+  return new Promise(function (resolve, reject) {
+    const child = childProcess.spawn(process.env.PYTHON_BIN || "python3", ["python_service/service.py"].concat(args), {
+      cwd: rootDir,
+      env: Object.assign({}, process.env),
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", function (chunk) {
+      stdout += chunk;
+      if (stdout.length > 1024 * 1024) child.kill("SIGKILL");
+    });
+    child.stderr.on("data", function (chunk) {
+      stderr += chunk;
+      if (stderr.length > 1024 * 1024) child.kill("SIGKILL");
+    });
+    child.on("error", reject);
+    child.on("close", function (code) {
+      if (code !== 0) {
+        reject(new Error((stderr || stdout || "Python service failed").trim()));
+        return;
+      }
+      try {
+        resolve(stdout.trim() ? JSON.parse(stdout) : {});
+      } catch (error) {
+        reject(new Error("Python service JSON을 해석하지 못했습니다."));
+      }
+    });
+    if (payload) child.stdin.write(JSON.stringify(payload));
+    child.stdin.end();
+  });
+}
+
 function safeEqual(actual, expected) {
   const actualBuffer = Buffer.from(String(actual || ""));
   const expectedBuffer = Buffer.from(String(expected || ""));
@@ -3022,6 +3056,27 @@ async function flowLensSnapshot(options) {
 }
 
 async function api(req, res, pathname) {
+  if (pathname === "/api/service-accounts") {
+    if (req.method === "GET") {
+      return json(res, 200, await pythonServiceJson(["accounts", "list", "--json"]));
+    }
+    if (req.method === "POST" || req.method === "PUT") {
+      if (configuredValue(process.env.SHARE_TOKEN)) {
+        return json(res, 403, { error: "공유 모드에서는 계정 DB를 변경할 수 없습니다." });
+      }
+      const body = await readBody(req);
+      return json(res, 200, await pythonServiceJson(["accounts", "save-json"], body));
+    }
+  }
+
+  const serviceAccountMatch = pathname.match(/^\/api\/service-accounts\/([^/]+)$/);
+  if (serviceAccountMatch && req.method === "DELETE") {
+    if (configuredValue(process.env.SHARE_TOKEN)) {
+      return json(res, 403, { error: "공유 모드에서는 계정 DB를 변경할 수 없습니다." });
+    }
+    return json(res, 200, await pythonServiceJson(["accounts", "remove", "--id", serviceAccountMatch[1], "--json"]));
+  }
+
   if (pathname === "/api/settings") {
     if (req.method === "GET") return json(res, 200, settingsStatusPayload());
     if (req.method === "PUT") {

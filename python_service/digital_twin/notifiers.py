@@ -3,7 +3,7 @@ import urllib.error
 import urllib.request
 from typing import Dict, Iterable
 
-from .config import runtime_settings
+from .config import AccountConfig, runtime_settings
 from .models import AlertEvent
 
 
@@ -61,14 +61,25 @@ def notifier_from_settings():
     return ConsoleNotifier()
 
 
-def send_events(events: Iterable[AlertEvent], dry_run: bool = False) -> NotificationResult:
+def notifier_for_account(account: AccountConfig = None):
+    if not account:
+        return notifier_from_settings()
+    provider = str(account.notify_provider or "").strip().lower()
+    if provider == "telegram" or (not provider and account.telegram_bot_token and account.telegram_chat_id):
+        return TelegramNotifier(account.telegram_bot_token, account.telegram_chat_id)
+    return notifier_from_settings()
+
+
+def send_events(events: Iterable[AlertEvent], dry_run: bool = False, accounts: Dict[str, AccountConfig] = None) -> NotificationResult:
+    events = list(events)
     messages = [event.message() for event in events]
     if dry_run:
         print("\n\n".join(messages) if messages else "No messages.")
         return NotificationResult(False, "Dry Run", "dry-run")
-    notifier = notifier_from_settings()
-    result = NotificationResult(True, getattr(notifier, "label", "Notification"))
-    for message in messages:
+    account_map = accounts or {}
+    result = NotificationResult(True, "Notification")
+    for event, message in zip(events, messages):
+        notifier = notifier_for_account(account_map.get(event.account_id))
         result = notifier.send(message)
         if not result.delivered:
             if result.reason:

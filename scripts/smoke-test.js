@@ -175,6 +175,7 @@ function withFakeTossApi(callback) {
 }
 
 async function withServer(extraEnv, callback) {
+  const runId = process.pid + "-" + Date.now() + "-" + Math.random();
   const serverProcess = childProcess.spawn(process.execPath, ["server.js"], {
     cwd: rootDir,
     stdio: ["ignore", "pipe", "pipe"],
@@ -182,7 +183,8 @@ async function withServer(extraEnv, callback) {
       HOST: "127.0.0.1",
       PORT: String(randomPort()),
       LOCAL_CODEX_ENABLED: "0",
-      SETTINGS_PATH: path.join(os.tmpdir(), "digital-twin-smoke-settings-" + process.pid + "-" + Date.now() + "-" + Math.random() + ".json")
+      SETTINGS_PATH: path.join(os.tmpdir(), "digital-twin-smoke-settings-" + runId + ".json"),
+      DIGITAL_TWIN_DATA_DIR: path.join(os.tmpdir(), "digital-twin-smoke-data-" + runId)
     }, extraEnv || {})
   });
 
@@ -237,6 +239,45 @@ async function checkNormalMode(port) {
   assertOk(savedSettingsPayload.settings.tossClientSecret === "", "저장 응답이 토스 secret을 내려주고 있습니다.");
   assertOk(savedSettingsPayload.settings.alertRules.indexOf("priceStop=1") >= 0, "저장된 알림 규칙이 응답에 없습니다.");
   assertOk(savedSettingsPayload.settings.modelDecisionThresholds.indexOf("modelBuy=75") >= 0, "저장된 모델 기준값이 응답에 없습니다.");
+
+  const emptyAccounts = await request(port, "/api/service-accounts");
+  assertOk(emptyAccounts.statusCode === 200, "계정 DB API 응답 코드가 200이 아닙니다: " + emptyAccounts.statusCode);
+  const emptyAccountsPayload = JSON.parse(emptyAccounts.body);
+  assertOk(Array.isArray(emptyAccountsPayload.accounts), "계정 DB API accounts가 배열이 아닙니다.");
+  assertOk(emptyAccountsPayload.accounts[0].clientSecret !== "fake-secret", "계정 DB API가 secret 원문을 내려주고 있습니다.");
+
+  const savedAccount = await request(port, "/api/service-accounts", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      account: {
+        id: "db-test",
+        label: "DB 테스트",
+        provider: "toss",
+        baseUrl: "http://127.0.0.1:1",
+        clientId: "db-client",
+        clientSecret: "db-secret",
+        accountSeq: "7",
+        watchlistSymbols: "AAPL,NVDA",
+        notifyProvider: "telegram",
+        telegramBotToken: "telegram-secret",
+        telegramChatId: "9876",
+        notifyLinkUrl: "http://127.0.0.1:3000"
+      }
+    })
+  });
+  assertOk(savedAccount.statusCode === 200, "계정 DB 저장 API 응답 코드가 200이 아닙니다: " + savedAccount.statusCode);
+  const savedAccountPayload = JSON.parse(savedAccount.body);
+  assertOk(savedAccountPayload.account && savedAccountPayload.account.clientSecret === true, "계정 DB 저장 응답이 토스 secret 설정 상태를 내려주지 않습니다.");
+  assertOk(savedAccountPayload.account.telegramBotToken === true, "계정 DB 저장 응답이 텔레그램 토큰 설정 상태를 내려주지 않습니다.");
+
+  const accountList = await request(port, "/api/service-accounts");
+  const accountListPayload = JSON.parse(accountList.body);
+  assertOk(accountListPayload.accounts.some(function (account) { return account.id === "db-test"; }), "계정 DB 목록에 저장한 계정이 없습니다.");
+
+  const removedAccount = await request(port, "/api/service-accounts/db-test", { method: "DELETE" });
+  assertOk(removedAccount.statusCode === 200, "계정 DB 삭제 API 응답 코드가 200이 아닙니다: " + removedAccount.statusCode);
+  assertOk(JSON.parse(removedAccount.body).removed === true, "계정 DB 삭제 응답이 removed=true가 아닙니다.");
 
   const tossLens = await request(port, "/api/flow-lens?mock=1");
   assertOk(tossLens.statusCode === 200, "토스 판단 API 응답 코드가 200이 아닙니다: " + tossLens.statusCode);

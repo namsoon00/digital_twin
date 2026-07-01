@@ -167,11 +167,11 @@ npm run notify:realtime:stop
 
 ## Python 서비스 전환
 
-다중 계정, 실시간 모니터링, 스케줄링, 모델 개발 로직은 Python 서비스 레이어로 이전 중입니다. 기존 웹은 유지하되 Python 서비스가 `data/accounts.json`의 여러 계정을 순회하고 계정별 이전 스냅샷과 메시지 주기를 `data/python-monitor-state.json`에 저장합니다.
+다중 계정, 실시간 모니터링, 스케줄링, 모델 개발 로직은 Python 서비스 레이어로 이전 중입니다. 기존 웹은 유지하되 Python 서비스가 SQLite DB인 `data/service.db`의 여러 계정을 순회하고 계정별 이전 스냅샷과 메시지 주기를 `data/python-monitor-state.json`에 저장합니다. 토스 credentials와 텔레그램 발송 정보도 계정별 DB row로 관리합니다.
 
 ```bash
 npm run python:accounts -- list
-npm run python:accounts -- add --id main --label "메인" --client-id "$TOSS_CLIENT_ID" --client-secret "$TOSS_CLIENT_SECRET" --account-seq "$TOSS_ACCOUNT_SEQ" --watchlist "NVDA,005930"
+npm run python:accounts -- add --id main --label "메인" --client-id "$TOSS_CLIENT_ID" --client-secret "$TOSS_CLIENT_SECRET" --account-seq "$TOSS_ACCOUNT_SEQ" --watchlist "NVDA,005930" --notify-provider telegram --telegram-bot-token "$TELEGRAM_BOT_TOKEN" --telegram-chat-id "$TELEGRAM_CHAT_ID"
 npm run python:monitor:once -- --dry-run --force
 npm run python:monitor:status
 npm run python:monitor:watch

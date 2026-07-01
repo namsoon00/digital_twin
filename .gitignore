@@ -10,6 +10,8 @@ dist/
 data/store.json
 data/settings.json
 data/accounts.json
+data/service.db
+data/service.db-*
 data/notification-state.json
 data/monitor-state.json
 data/python-monitor-state.json

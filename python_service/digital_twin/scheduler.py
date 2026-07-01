@@ -15,6 +15,7 @@ MIN_REALTIME_INTERVAL_SECONDS = 10 * 60
 class MonitorRunner:
     def __init__(self, accounts: Iterable[AccountConfig], store: MonitorStore = None, monitor: RealtimeMonitor = None):
         self.accounts = list(accounts)
+        self.account_map = {account.account_id: account for account in self.accounts}
         self.store = store or MonitorStore()
         self.monitor = monitor or RealtimeMonitor()
 
@@ -29,7 +30,7 @@ class MonitorRunner:
             events = self.monitor.apply_cadence(events, self.store, force=force)
             all_events.extend(events)
         if all_events:
-            result = send_events(all_events, dry_run=dry_run)
+            result = send_events(all_events, dry_run=dry_run, accounts=self.account_map)
             if dry_run:
                 return all_events
             if result.delivered:

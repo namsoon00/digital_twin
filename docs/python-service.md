@@ -26,11 +26,35 @@ npm run python:service:restart
 npm run python:service:stop
 ```
 
-The registry is stored in `data/accounts.json` with `0600` permissions and is ignored by git.
+The account registry is stored in SQLite at `data/service.db` with `0600` permissions and is ignored by git.
 
-If `data/accounts.json` does not exist, the service falls back to the existing single-account settings from `data/settings.json` or `.env.local`.
+If the SQLite database has no account rows, the service falls back to the existing single-account settings from `data/settings.json` or `.env.local`. If an old `data/accounts.json` exists, it is imported into SQLite on first use.
 
 `python:monitor:watch` runs in the foreground. The `python:service:*` commands run the same scheduler in the background with `data/python-monitor.pid` and `data/python-monitor.log`.
+
+## Account Database
+
+SQLite tables:
+
+- `service_accounts`: account id, label, provider, enabled flag, watchlist
+- `toss_credentials`: Toss base URL, client id, client secret, account sequence
+- `telegram_configs`: per-account notify provider, bot token, chat id, link URL
+
+CLI:
+
+```bash
+npm run python:accounts -- list --json
+npm run python:accounts -- add --id main --label "Main" --client-id "$TOSS_CLIENT_ID" --client-secret "$TOSS_CLIENT_SECRET" --account-seq "$TOSS_ACCOUNT_SEQ" --notify-provider telegram --telegram-bot-token "$TELEGRAM_BOT_TOKEN" --telegram-chat-id "$TELEGRAM_CHAT_ID"
+```
+
+Local API:
+
+- `GET /api/service-accounts`
+- `POST /api/service-accounts`
+- `PUT /api/service-accounts`
+- `DELETE /api/service-accounts/{id}`
+
+The API returns masked credentials only. Writes are disabled in shared preview mode.
 
 ## Monitoring Model
 

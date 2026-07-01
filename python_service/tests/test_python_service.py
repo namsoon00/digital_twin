@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.analytics import SafeFormula, StrategyModel, decisions_for_positions, normalize_position, portfolio_summary
 from digital_twin.config import AccountConfig, AccountRegistry, parse_assignments
+from digital_twin.cli import preserve_existing_secrets
 from digital_twin.models import AccountSnapshot, utc_now_iso
 from digital_twin.monitor import MonitorStore, RealtimeMonitor
 from digital_twin.scheduler import MonitorRunner
@@ -35,7 +36,56 @@ class PythonServiceTests(unittest.TestCase):
         accounts = registry.load_all()
 
         self.assertEqual(["main", "ira"], [item.account_id for item in accounts])
-        self.assertTrue((Path(self.temp.name) / "accounts.json").exists())
+        self.assertTrue((Path(self.temp.name) / "service.db").exists())
+        self.assertTrue(accounts[0].client_id)
+
+    def test_account_registry_stores_telegram_per_account(self):
+        registry = AccountRegistry()
+        account = AccountConfig(
+            "main",
+            "메인",
+            "toss",
+            "https://example.test",
+            "id1",
+            "secret1",
+            "1",
+            ["AAPL"],
+            notify_provider="telegram",
+            telegram_bot_token="token",
+            telegram_chat_id="chat",
+            notify_link_url="http://127.0.0.1:3000",
+        )
+        registry.upsert(account)
+
+        loaded = registry.load_all()[0]
+
+        self.assertEqual("telegram", loaded.notify_provider)
+        self.assertEqual("token", loaded.telegram_bot_token)
+        self.assertEqual("chat", loaded.telegram_chat_id)
+
+    def test_save_json_preserves_existing_secrets_when_omitted(self):
+        registry = AccountRegistry()
+        existing = AccountConfig(
+            "main",
+            "메인",
+            "toss",
+            "https://example.test",
+            "id1",
+            "secret1",
+            "1",
+            ["AAPL"],
+            notify_provider="telegram",
+            telegram_bot_token="token",
+            telegram_chat_id="chat",
+        )
+        registry.upsert(existing)
+        updated = AccountConfig.from_dict({"id": "main", "label": "메인 수정", "watchlistSymbols": "NVDA"}, registry.settings)
+
+        preserved = preserve_existing_secrets(registry, {"id": "main", "label": "메인 수정", "watchlistSymbols": "NVDA"}, updated)
+
+        self.assertEqual("secret1", preserved.client_secret)
+        self.assertEqual("token", preserved.telegram_bot_token)
+        self.assertEqual("chat", preserved.telegram_chat_id)
 
     def test_strategy_formula_is_safe_and_scores(self):
         formula = SafeFormula("max(0, buyShare - 50) + abs(priceChangeRate)")

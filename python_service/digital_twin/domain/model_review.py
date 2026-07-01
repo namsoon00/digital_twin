@@ -80,6 +80,7 @@ def build_model_review_prompt(job: ModelReviewJob) -> str:
         "너는 투자 모델을 지속적으로 개선하는 금융 데이터 모델 리뷰어다.",
         "매수/매도 지시가 아니라 모델 판단 변화의 원인, 데이터 검증, 다음 실험을 분석한다.",
         "한국어로 텔레그램 메시지에 맞게 간결하지만 충분히 분석해라.",
+        "메시지 제목에는 계정명이나 계정 ID를 넣지 마라. 계정 정보는 전송 라우팅에만 사용한다.",
         "섹션은 반드시 다음 순서로 작성한다: 판단 변화 원인, 데이터 검증, 모델 보완, 다음 실험.",
         "API 키, 토큰, 계좌 식별정보를 추정하거나 요청하지 마라.",
         "",
@@ -104,7 +105,7 @@ def local_model_review(job: ModelReviewJob) -> str:
         validation = "가격 또는 평가액 필드가 부족하므로 판단 변화의 근거가 약합니다. 원천 API 매핑부터 보완하세요."
         improvement = "필수 feature 누락 시 점수 산출을 보류하거나 confidence를 낮추는 게 좋습니다."
     return "\n".join([
-        (job.account_label + " " if job.account_label else "") + (job.symbol or job.title or "판단 변화") + " 모델 리뷰",
+        (job.symbol or job.title or "판단 변화") + " 모델 리뷰",
         "- 판단 변화 원인: 실시간 모델이 감지한 판단 라벨 또는 exit pressure 변화가 기준선을 넘었습니다.",
         "- 데이터 검증: " + validation,
         "- 모델 보완: " + improvement,

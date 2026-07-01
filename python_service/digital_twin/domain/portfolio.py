@@ -114,8 +114,5 @@ class AlertEvent:
 
     def message(self) -> str:
         title = self.title
-        if self.account_label and self.account_label not in title:
-            title = self.account_label + " " + title
         body = ["- " + line for line in self.lines if line]
         return "\n".join([title] + body)
-

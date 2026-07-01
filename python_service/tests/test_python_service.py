@@ -230,6 +230,8 @@ class PythonServiceTests(unittest.TestCase):
         decision_event = next(event for event in events if event.rule == "monitorDecisionChange")
         message = decision_event.message()
 
+        self.assertEqual("Apple", message.splitlines()[0])
+        self.assertNotIn("메인 Apple", message)
         self.assertIn("Codex 답변:", message)
         self.assertIn("데이터 검증:", message)
         self.assertIn("모델 보완:", message)
@@ -289,6 +291,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(1, processed)
         self.assertEqual({"done": 1}, store.summary())
         self.assertIn("모델 리뷰", sent[0])
+        self.assertTrue(sent[0].startswith("AAPL 모델 리뷰"))
+        self.assertNotIn("메인 AAPL 모델 리뷰", sent[0])
 
     def test_admin_preview_config_is_static_and_sanitized(self):
         with mock.patch.dict(os.environ, {

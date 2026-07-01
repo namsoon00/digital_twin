@@ -211,7 +211,8 @@ function runtimeSettings() {
     decisionThresholds: settingFromStoreOrEnv(store, "decisionThresholds", "DECISION_THRESHOLDS", ""),
     modelDecisionThresholds: settingFromStoreOrEnv(store, "modelDecisionThresholds", "MODEL_DECISION_THRESHOLDS", ""),
     alertRules: settingFromStoreOrEnv(store, "alertRules", "ALERT_RULES", ""),
-    alertThresholds: settingFromStoreOrEnv(store, "alertThresholds", "ALERT_THRESHOLDS", "")
+    alertThresholds: settingFromStoreOrEnv(store, "alertThresholds", "ALERT_THRESHOLDS", ""),
+    alertCadenceMinutes: settingFromStoreOrEnv(store, "alertCadenceMinutes", "ALERT_CADENCE_MINUTES", "")
   };
 }
 

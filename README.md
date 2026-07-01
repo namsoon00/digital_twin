@@ -161,7 +161,7 @@ npm run notify:realtime:stop
 
 `notify:realtime`은 백그라운드 실시간 워커를 시작하고 `data/notify-realtime.pid`, `data/notify-realtime.log`로 상태를 남깁니다. 기존 워커가 이전 코드로 떠 있거나 멈춘 것 같으면 `npm run notify:realtime:status`로 확인하고 `npm run notify:realtime:restart`로 재시작합니다. 포그라운드에서 직접 붙여 실행하려면 `npm run notify:realtime:daemon`을 사용합니다.
 
-실시간 워커는 기존 주기 알림과 별개로 기본 10분(`REALTIME_NOTIFY_INTERVAL_SECONDS`)마다 확인합니다. 환경변수로 더 짧게 지정해도 최소 10분보다 자주 보내지 않습니다. 정규장 장중이고 보유 종목에 매도/손절/분할매도 조건 또는 추가매수 검토 조건이 잡힐 때 메시지를 보내며, 같은 종목의 같은 조건은 하루에 한 번만 보냅니다. 또한 직전 실제 토스 스냅샷과 비교해 새 보유/제외, 수량 변경, 손익률 급변, 평가액 급변, 현금비중 급변, 판단 변화, 연결 상태 변화를 특이사항으로 보냅니다. 워커가 살아 있는지 확인하기 쉽도록 기본 60분마다 짧은 상태 확인 메시지도 보냅니다. 상태 확인 메시지가 필요 없으면 알림 설정의 `monitorHeartbeat=0`으로 끄고, 주기는 `monitorHeartbeatMinutes=60`처럼 조정합니다. 비교 기준은 `data/monitor-state.json`에 로컬로만 저장합니다. 보유 종목 알림은 읽기 쉽도록 종목마다 별도 메시지로 나누어 보냅니다. 한 번만 확인하려면 `npm run notify:realtime:once -- --dry-run`을 사용합니다.
+실시간 워커는 기존 주기 알림과 별개로 기본 10분(`REALTIME_NOTIFY_INTERVAL_SECONDS`)마다 확인합니다. 환경변수로 더 짧게 지정해도 최소 10분보다 자주 보내지 않습니다. 정규장 장중이고 보유 종목에 매도/손절/분할매도 조건 또는 추가매수 검토 조건이 잡힐 때 메시지를 보내며, 직전 실제 토스 스냅샷과 비교해 새 보유/제외, 수량 변경, 손익률 급변, 평가액 급변, 현금비중 급변, 판단 변화, 연결 상태 변화를 특이사항으로 보냅니다. 워커가 살아 있는지 확인하기 쉽도록 상태 확인 메시지도 보냅니다. 알림 설정의 `메시지 주기`에서 `holdingTiming=10`, `monitorHeartbeat=60`, `monitorPnlChange=30`처럼 각 메시지 타입별 재발송 간격을 분 단위로 조정합니다. 최소 주기는 10분이며, 상태 확인 메시지가 필요 없으면 `monitorHeartbeat=0`으로 끕니다. 비교 기준은 `data/monitor-state.json`에 로컬로만 저장합니다. 보유 종목 알림은 읽기 쉽도록 종목마다 별도 메시지로 나누어 보냅니다. 한 번만 확인하려면 `npm run notify:realtime:once -- --dry-run`을 사용합니다.
 
 장 시간 판별은 평일 기준의 일반 세션을 사용합니다. 한국장은 09:00-15:30 KST 정규장, 미국장은 09:30-16:00 ET 정규장을 기준으로 보며, 거래소 휴장일과 조기폐장은 아직 별도 캘린더로 보정하지 않습니다.
 

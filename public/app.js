@@ -89,6 +89,41 @@
       "monitorCashChange=1",
       "monitorDecisionChange=1"
     ].join("\n"),
+    alertCadenceMinutes: [
+      "priceBuyLimit=30",
+      "priceStop=10",
+      "priceTrim=30",
+      "modelBuy=30",
+      "modelSell=30",
+      "modelScoreGap=60",
+      "modelVersionDrift=60",
+      "flowTradeStrength=30",
+      "flowVolume=30",
+      "flowBuyShare=30",
+      "flowSellShare=30",
+      "flowOrderbook=30",
+      "trendMomentum=30",
+      "trendPullback=30",
+      "holdingProfit=60",
+      "holdingLoss=30",
+      "holdingConcentration=60",
+      "sectorConcentration=60",
+      "marketCashLow=60",
+      "recordGain=120",
+      "recordLoss=60",
+      "dataFreshness=60",
+      "tossConnection=30",
+      "orderPending=30",
+      "orderReject=30",
+      "holdingTiming=10",
+      "monitorHeartbeat=60",
+      "monitorConnection=10",
+      "monitorPositionChange=10",
+      "monitorPnlChange=30",
+      "monitorValueChange=30",
+      "monitorCashChange=60",
+      "monitorDecisionChange=30"
+    ].join("\n"),
     alertThresholds: [
       "modelBuyScore=74",
       "modelSellScore=72",
@@ -111,7 +146,6 @@
       "priceNearPercent=1",
       "staleMinutes=30",
       "pendingOrderMinutes=30",
-      "monitorHeartbeatMinutes=60",
       "monitorPnlDelta=2",
       "monitorValueDelta=5",
       "monitorCashDelta=10",
@@ -234,7 +268,6 @@
     { key: "priceNearPercent", label: "가격 접근 허용폭", unit: "%", step: "0.1" },
     { key: "staleMinutes", label: "데이터 지연 시간", unit: "분", step: "1" },
     { key: "pendingOrderMinutes", label: "미체결 점검 시간", unit: "분", step: "1" },
-    { key: "monitorHeartbeatMinutes", label: "실시간 상태 확인 주기", unit: "분", step: "10" },
     { key: "monitorPnlDelta", label: "실시간 손익률 변화", unit: "%p", step: "0.1" },
     { key: "monitorValueDelta", label: "실시간 평가액 변화", unit: "%", step: "0.1" },
     { key: "monitorCashDelta", label: "실시간 현금비중 변화", unit: "%p", step: "1" },
@@ -515,7 +548,8 @@
       decisionThresholds: settingValue("decisionThresholds"),
       modelDecisionThresholds: settingValue("modelDecisionThresholds"),
       alertRules: settingValue("alertRules"),
-      alertThresholds: settingValue("alertThresholds")
+      alertThresholds: settingValue("alertThresholds"),
+      alertCadenceMinutes: settingValue("alertCadenceMinutes")
     };
   }
 
@@ -2088,6 +2122,10 @@
     return parseNumberAssignments(settingValue("alertThresholds"), parseNumberAssignments(defaultSettings.alertThresholds));
   }
 
+  function alertCadenceMinutes() {
+    return parseNumberAssignments(settingValue("alertCadenceMinutes"), parseNumberAssignments(defaultSettings.alertCadenceMinutes));
+  }
+
   function enabledAlertRule(rules, key) {
     return Number((rules || {})[key]) !== 0;
   }
@@ -3285,6 +3323,7 @@
   function renderAlertSettingsPanel() {
     var rules = alertRules();
     var thresholds = alertThresholds();
+    var cadences = alertCadenceMinutes();
     return [
       '<article class="panel alert-settings-panel">',
       '<div class="panel-head">',
@@ -3304,6 +3343,14 @@
       '<div class="alert-threshold-grid">',
       alertThresholdCatalog.map(function (item) {
         return renderAlertThresholdInput(item, thresholds[item.key]);
+      }).join(""),
+      '</div>',
+      '</div>',
+      '<div class="model-section alert-threshold-section">',
+      '<div class="flow-title"><div><strong>메시지 주기</strong><span>같은 타입의 실시간 메시지를 다시 보내기까지 기다리는 시간입니다. 최소 10분입니다.</span></div></div>',
+      '<div class="alert-threshold-grid">',
+      alertRuleCatalog.map(function (rule) {
+        return renderAlertCadenceInput(rule, cadences[rule.key]);
       }).join(""),
       '</div>',
       '</div>',
@@ -3328,6 +3375,15 @@
       '<label class="lab-control alert-threshold">',
       '<span>' + escapeHtml(item.label) + (item.unit ? " (" + escapeHtml(item.unit) + ")" : "") + '</span>',
       '<input data-alert-threshold="' + escapeHtml(item.key) + '" type="number" step="' + escapeHtml(item.step || "1") + '" value="' + escapeHtml(value) + '" />',
+      '</label>'
+    ].join("");
+  }
+
+  function renderAlertCadenceInput(rule, value) {
+    return [
+      '<label class="lab-control alert-threshold">',
+      '<span>' + escapeHtml(rule.label) + ' (분)</span>',
+      '<input data-alert-cadence="' + escapeHtml(rule.key) + '" type="number" min="10" step="10" value="' + escapeHtml(value) + '" />',
       '</label>'
     ].join("");
   }
@@ -4228,6 +4284,12 @@
     Array.prototype.slice.call(app.querySelectorAll("[data-alert-threshold]")).forEach(function (field) {
       field.addEventListener("change", function () {
         updateNumberAssignmentSetting("alertThresholds", field.getAttribute("data-alert-threshold"), field.value);
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-alert-cadence]")).forEach(function (field) {
+      field.addEventListener("change", function () {
+        updateNumberAssignmentSetting("alertCadenceMinutes", field.getAttribute("data-alert-cadence"), field.value);
       });
     });
 

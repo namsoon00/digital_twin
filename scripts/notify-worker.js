@@ -29,11 +29,45 @@ const defaultAlertRules = {
 const defaultAlertThresholds = {
   sectorWeightHigh: 50,
   marketCashLow: 10,
-  monitorHeartbeatMinutes: 60,
   monitorPnlDelta: 2,
   monitorValueDelta: 5,
   monitorCashDelta: 10,
   monitorExitPressureDelta: 15
+};
+const defaultAlertCadenceMinutes = {
+  priceBuyLimit: 30,
+  priceStop: 10,
+  priceTrim: 30,
+  modelBuy: 30,
+  modelSell: 30,
+  modelScoreGap: 60,
+  modelVersionDrift: 60,
+  flowTradeStrength: 30,
+  flowVolume: 30,
+  flowBuyShare: 30,
+  flowSellShare: 30,
+  flowOrderbook: 30,
+  trendMomentum: 30,
+  trendPullback: 30,
+  holdingProfit: 60,
+  holdingLoss: 30,
+  holdingConcentration: 60,
+  sectorConcentration: 60,
+  marketCashLow: 60,
+  recordGain: 120,
+  recordLoss: 60,
+  dataFreshness: 60,
+  tossConnection: 30,
+  orderPending: 30,
+  orderReject: 30,
+  holdingTiming: 10,
+  monitorHeartbeat: 60,
+  monitorConnection: 10,
+  monitorPositionChange: 10,
+  monitorPnlChange: 30,
+  monitorValueChange: 30,
+  monitorCashChange: 60,
+  monitorDecisionChange: 30
 };
 const minRealtimeIntervalSeconds = 10 * 60;
 
@@ -167,6 +201,10 @@ function notificationAlertRules() {
 
 function notificationAlertThresholds() {
   return parseNumberAssignments(runtimeSettings().alertThresholds, defaultAlertThresholds);
+}
+
+function notificationAlertCadenceMinutes() {
+  return parseNumberAssignments(runtimeSettings().alertCadenceMinutes, defaultAlertCadenceMinutes);
 }
 
 function alertRuleEnabled(rules, key) {
@@ -774,10 +812,8 @@ function buildCashMonitorEvents(current, previous, thresholds, now) {
   return events;
 }
 
-function buildHeartbeatMonitorEvents(current, thresholds, now) {
-  const heartbeatMinutes = Math.max(10, Number(thresholds.monitorHeartbeatMinutes || defaultAlertThresholds.monitorHeartbeatMinutes));
+function buildHeartbeatMonitorEvents(current, now) {
   const positionCount = Object.keys(current.positions || {}).length;
-  const bucket = Math.floor(now.minutes / heartbeatMinutes);
   const marketCash = (current.markets || [])
     .filter(function (market) { return Number(market.total || 0) > 0; })
     .map(function (market) {
@@ -787,7 +823,7 @@ function buildHeartbeatMonitorEvents(current, thresholds, now) {
 
   return [event(
     "INFO",
-    [now.date, "monitor-heartbeat", heartbeatMinutes + "m", bucket].join(":"),
+    [now.date, "monitor-heartbeat", now.time].join(":"),
     [
       "모니터링 정상 작동",
       "토스 " + (current.tossStatus || current.tossMode || "-"),
@@ -809,7 +845,7 @@ function buildRealtimeMonitorEvents(snapshot, monitorState, date) {
   buildConnectionMonitorEvents(current, previous, now).forEach(function (item) {
     events.push(item);
   });
-  buildHeartbeatMonitorEvents(current, thresholds, now).forEach(function (item) {
+  buildHeartbeatMonitorEvents(current, now).forEach(function (item) {
     events.push(item);
   });
 
@@ -928,10 +964,44 @@ function unsentEvents(events, state, force) {
   });
 }
 
+function ruleCadenceMinutes(rule, cadence) {
+  const value = Number((cadence || {})[rule] || 0);
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  return Math.max(Math.ceil(minRealtimeIntervalSeconds / 60), value);
+}
+
+function eventCadenceKey(kind, item) {
+  const meta = item.meta || {};
+  const target = meta.symbol || meta.name || "all";
+  return ["cadence", kind || "notification", item.rule || "general", target].join(":");
+}
+
+function scheduledEvents(events, state, cadence, kind, date, force) {
+  if (force) {
+    return events.map(function (item) {
+      item.meta = Object.assign({}, item.meta || {}, {
+        cadenceKey: eventCadenceKey(kind, item)
+      });
+      return item;
+    });
+  }
+  const now = date && !Number.isNaN(date.getTime()) ? date.getTime() : Date.now();
+  return events.filter(function (item) {
+    const minutes = ruleCadenceMinutes(item.rule, cadence);
+    if (minutes <= 0) return !state.sent[item.key];
+    const key = eventCadenceKey(kind, item);
+    item.meta = Object.assign({}, item.meta || {}, { cadenceKey: key });
+    const lastSentAt = Date.parse(state.sent[key] || "");
+    if (!Number.isFinite(lastSentAt)) return true;
+    return now - lastSentAt >= minutes * 60 * 1000;
+  });
+}
+
 function markSent(events, state) {
   const stamp = new Date().toISOString();
   events.forEach(function (item) {
     state.sent[item.key] = stamp;
+    if (item.meta && item.meta.cadenceKey) state.sent[item.meta.cadenceKey] = stamp;
   });
   pruneState(state);
   writePrivateJson(notificationStatePath, state);
@@ -1300,10 +1370,11 @@ async function runRealtimeOnce() {
   const monitorState = loadMonitorState();
   const monitorResult = buildRealtimeMonitorEvents(snapshot, monitorState, runDate);
   const state = loadNotificationState();
-  const events = unsentEvents(filterEventsByRules(
+  const candidateEvents = filterEventsByRules(
     buildRealtimeTimingEvents(snapshot, runDate).concat(monitorResult.events),
     notificationAlertRules()
-  ), state, force);
+  );
+  const events = scheduledEvents(candidateEvents, state, notificationAlertCadenceMinutes(), "realtime", runDate, force);
 
   if (events.length === 0) {
     if (!dryRun) saveMonitorState(monitorResult.current);

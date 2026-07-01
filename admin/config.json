@@ -234,7 +234,7 @@
           },
           {
             "key": "monitorHeartbeat",
-            "default": 60,
+            "default": 10,
             "unit": "minutes"
           },
           {
@@ -249,22 +249,22 @@
           },
           {
             "key": "monitorPnlChange",
-            "default": 30,
+            "default": 10,
             "unit": "minutes"
           },
           {
             "key": "monitorValueChange",
-            "default": 30,
+            "default": 10,
             "unit": "minutes"
           },
           {
             "key": "monitorCashChange",
-            "default": 60,
+            "default": 10,
             "unit": "minutes"
           },
           {
             "key": "monitorDecisionChange",
-            "default": 30,
+            "default": 10,
             "unit": "minutes"
           }
         ],
@@ -330,5 +330,5 @@
       ]
     }
   ],
-  "buildId": "cc1406e8896d"
+  "buildId": "6db0f0d1319c"
 }

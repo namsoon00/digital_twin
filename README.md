@@ -52,7 +52,8 @@ npm run generate:static
 - `GET /api/flow-lens`: 토스 계좌/보유자산, 주문 가능 금액, 관심 종목, 내 계좌 기준 오늘 먼저 점검할 종목 집계
 - `GET /api/bootstrap`, `GET/POST /api/memories`, `GET/POST /api/items`: 로컬 SQLite DB의 `app_store` 기반 앱 데이터 조회와 저장
 - `GET/PUT /api/settings`: 로컬 SQLite DB의 `runtime_settings` 기반 Toss/알림 설정 조회와 저장. secret 원문은 GET 응답에 포함하지 않음
-- `server.js`: 토스 OAuth 토큰 발급, 계좌/보유자산 조회, 관심 종목 파싱, 매도 검토 fallback 생성
+- `python_service/digital_twin/infrastructure/web_server.py`: 정적 웹 자산 서빙과 로컬 API 라우팅
+- `python_service/digital_twin/application/flow_lens_service.py`: 토스 계좌/보유자산 스냅샷, 관심 종목 파싱, 매도 검토 fallback 생성
 
 토스 호출은 서버에서만 수행합니다. 브라우저에 `client_secret`, access token, `X-Tossinvest-Account` 값이 내려가지 않습니다. 토스증권 공개 Open API에는 토스 앱의 관심 종목 목록 조회 endpoint가 확인되지 않아, 관심 종목은 앱 내부 목록으로 관리합니다.
 

@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.admin_preview import admin_preview_config, write_admin_preview
 from digital_twin.application.account_service import AccountApplicationService
+from digital_twin.application.flow_lens_service import flow_lens_snapshot
 from digital_twin.application.model_review_service import ModelReviewRunner
 from digital_twin.application.monitoring_service import MonitorRunner as ApplicationMonitorRunner
 from digital_twin.application.notification_service import NotificationQueueRunner
@@ -29,6 +30,7 @@ from digital_twin.domain.portfolio import AccountSnapshot, AlertEvent, utc_now_i
 from digital_twin.infrastructure.event_bus import EventBus, JsonEventLog
 from digital_twin.infrastructure.json_monitor_state import MonitorStore
 from digital_twin.infrastructure.model_review_queue import ModelReviewEnqueuer, ModelReviewJobStore
+from digital_twin.infrastructure.mock_market import mock_market_payload
 from digital_twin.infrastructure.notifications import send_events
 from digital_twin.infrastructure.settings import runtime_settings
 from digital_twin.infrastructure.sqlite_operational import SQLiteAppStore, SQLiteEventLog, SQLiteModelReviewJobStore, SQLiteMonitorStore, SQLiteNotificationJobStore, SQLiteNotificationTemplateStore, SQLiteRuntimeSettingsStore
@@ -221,6 +223,23 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(1, DEFAULT_ALERT_RULES["modelSell"])
         self.assertEqual(10, DEFAULT_CADENCE["modelBuy"])
         self.assertEqual(10, DEFAULT_CADENCE["modelSell"])
+
+    def test_flow_lens_mock_contract_is_python_native(self):
+        payload = flow_lens_snapshot(mock=True, watchlist_symbols="TSLA,AAPL,NVDA")
+
+        self.assertEqual("mock", payload["dataMode"])
+        self.assertIn("tossDecision", payload)
+        self.assertTrue(any(item["symbol"] == "AAPL" for item in payload["tossDecision"]["items"]))
+        self.assertTrue(any(item["symbol"] == "TSLA" for item in payload["tossDecision"]["items"]))
+        self.assertFalse("news" in payload)
+
+    def test_mock_market_contract_is_python_native(self):
+        payload = mock_market_payload({"scenario": "semiconductor-boom", "symbols": "NVDA,005930", "seed": "unit"})
+
+        self.assertEqual("semiconductor-boom", payload["scenario"]["id"])
+        self.assertEqual(["NVDA", "005930"], payload["request"]["symbols"])
+        self.assertGreaterEqual(len(payload["series"]["NVDA"]["candles"]), 200)
+        self.assertEqual(2, len(payload["signals"]))
 
     def test_monitor_type_check_events_use_real_alert_rules(self):
         position = normalize_position({

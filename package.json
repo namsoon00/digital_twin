@@ -3,8 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "check": "node --check server.js && node --check public/app.js && node --check scripts/smoke-test.js && node --check scripts/share-local.js && node --check scripts/issue-workflow.js && node --check scripts/stamp-flutter-web-build.js && node --check scripts/generate-static-mock-market.js && npm run python:check",
-    "dev": "node server.js",
+    "check": "node --check public/app.js && node --check scripts/smoke-test.js && node --check scripts/share-local.js && node --check scripts/issue-workflow.js && node --check scripts/stamp-flutter-web-build.js && node --check scripts/generate-static-mock-market.js && npm run python:check",
+    "dev": "python3 python_service/service.py web",
     "generate:admin-preview": "python3 python_service/service.py admin-preview",
     "generate:mock-market": "node scripts/generate-static-mock-market.js",
     "generate:static": "npm run generate:mock-market && npm run generate:admin-preview",
@@ -40,7 +40,7 @@
     "share": "node scripts/share-local.js",
     "smoke": "node scripts/smoke-test.js",
     "stamp:flutter-web": "node scripts/stamp-flutter-web-build.js",
-    "start": "node server.js",
+    "start": "python3 python_service/service.py web",
     "test": "npm run check && npm run smoke && npm run python:test"
   },
   "dependencies": {},

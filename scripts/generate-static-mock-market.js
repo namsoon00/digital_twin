@@ -107,7 +107,7 @@ function writeJson(fileName, payload) {
 }
 
 async function withServer(callback) {
-  const serverProcess = childProcess.spawn(process.execPath, ["server.js"], {
+  const serverProcess = childProcess.spawn(process.env.PYTHON_BIN || "python3", ["python_service/service.py", "web"], {
     cwd: rootDir,
     stdio: ["ignore", "pipe", "pipe"],
     env: Object.assign({}, process.env, {

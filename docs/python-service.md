@@ -14,6 +14,7 @@ The Python service is the migration target for account-scale monitoring, schedul
 - `python_service/digital_twin/scheduler.py`: compatibility factory for the composed monitor runner
 - `python_service/digital_twin/notifiers.py`: compatibility re-export for notification adapters
 - `python_service/digital_twin/cli.py`: account and monitor CLI
+- `python_service/digital_twin/infrastructure/web_server.py`: local HTTP API and static web server used by `npm start`
 
 The development methodology is documented in `docs/development-methodology.md` and referenced from `AGENTS.md` so future local Codex sessions can load the same rules.
 
@@ -72,6 +73,7 @@ npm run python:notifications:once
 npm run python:notifications:status
 npm run python:notifications:watch
 npm run python:templates -- list
+npm start
 npm run python:service:start
 npm run python:service:status
 npm run python:service:restart

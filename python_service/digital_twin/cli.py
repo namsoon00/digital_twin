@@ -371,6 +371,13 @@ def admin_preview_command(args) -> int:
     return 0
 
 
+def web_command(args) -> int:
+    from .infrastructure.web_server import serve
+
+    serve(args.host, int(args.port))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Digiter Twin Python service")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -476,6 +483,11 @@ def build_parser() -> argparse.ArgumentParser:
     admin_preview = subparsers.add_parser("admin-preview", help="Generate GitHub Pages admin preview")
     admin_preview.add_argument("--output", default="public/admin")
     admin_preview.set_defaults(func=admin_preview_command)
+
+    web = subparsers.add_parser("web", help="Run local Python web server")
+    web.add_argument("--host", default=os.environ.get("HOST", "127.0.0.1"))
+    web.add_argument("--port", default=os.environ.get("PORT", "3000"))
+    web.set_defaults(func=web_command)
     return parser
 
 

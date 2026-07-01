@@ -18,6 +18,7 @@ const defaultAlertRules = {
   holdingTiming: 1,
   sectorConcentration: 1,
   marketCashLow: 1,
+  monitorHeartbeat: 1,
   monitorConnection: 1,
   monitorPositionChange: 1,
   monitorPnlChange: 1,
@@ -28,6 +29,7 @@ const defaultAlertRules = {
 const defaultAlertThresholds = {
   sectorWeightHigh: 50,
   marketCashLow: 10,
+  monitorHeartbeatMinutes: 60,
   monitorPnlDelta: 2,
   monitorValueDelta: 5,
   monitorCashDelta: 10,
@@ -38,6 +40,22 @@ const minRealtimeIntervalSeconds = 10 * 60;
 function hasArg(name) {
   return process.argv.indexOf(name) >= 0;
 }
+
+function enableLogTimestamps() {
+  const originalLog = console.log;
+  const originalError = console.error;
+  function prefix(args) {
+    return [new Date().toISOString()].concat(Array.prototype.slice.call(args));
+  }
+  console.log = function () {
+    originalLog.apply(console, prefix(arguments));
+  };
+  console.error = function () {
+    originalError.apply(console, prefix(arguments));
+  };
+}
+
+if (hasArg("--timestamps")) enableLogTimestamps();
 
 function argValue(name, fallback) {
   const prefix = name + "=";
@@ -756,6 +774,31 @@ function buildCashMonitorEvents(current, previous, thresholds, now) {
   return events;
 }
 
+function buildHeartbeatMonitorEvents(current, thresholds, now) {
+  const heartbeatMinutes = Math.max(10, Number(thresholds.monitorHeartbeatMinutes || defaultAlertThresholds.monitorHeartbeatMinutes));
+  const positionCount = Object.keys(current.positions || {}).length;
+  const bucket = Math.floor(now.minutes / heartbeatMinutes);
+  const marketCash = (current.markets || [])
+    .filter(function (market) { return Number(market.total || 0) > 0; })
+    .map(function (market) {
+      return (market.label || market.key) + " 현금 " + Number(market.cashRatio || 0) + "%";
+    })
+    .join(" / ");
+
+  return [event(
+    "INFO",
+    [now.date, "monitor-heartbeat", heartbeatMinutes + "m", bucket].join(":"),
+    [
+      "모니터링 정상 작동",
+      "토스 " + (current.tossStatus || current.tossMode || "-"),
+      "보유 " + positionCount + "개",
+      "평가 " + formatMoney(current.portfolio && current.portfolio.invested),
+      marketCash
+    ].filter(Boolean).join(" · "),
+    "monitorHeartbeat"
+  )];
+}
+
 function buildRealtimeMonitorEvents(snapshot, monitorState, date) {
   const now = kstParts(date);
   const thresholds = notificationAlertThresholds();
@@ -764,6 +807,9 @@ function buildRealtimeMonitorEvents(snapshot, monitorState, date) {
   const events = [];
 
   buildConnectionMonitorEvents(current, previous, now).forEach(function (item) {
+    events.push(item);
+  });
+  buildHeartbeatMonitorEvents(current, thresholds, now).forEach(function (item) {
     events.push(item);
   });
 

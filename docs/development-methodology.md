@@ -36,7 +36,7 @@ Infrastructure:
 
 - `python_service/digital_twin/infrastructure/settings.py`: env fallback and SQLite-backed runtime settings facade
 - `python_service/digital_twin/infrastructure/sqlite_accounts.py`: SQLite account repository
-- `python_service/digital_twin/infrastructure/sqlite_operational.py`: SQLite app store, runtime settings, snapshots, cadence, domain events, model-review jobs, and notification jobs
+- `python_service/digital_twin/infrastructure/sqlite_operational.py`: SQLite app store, runtime settings, snapshots, cadence, domain events, model-review jobs, notification jobs, and notification templates
 - `python_service/digital_twin/infrastructure/json_monitor_state.py`: legacy JSON monitor state compatibility only
 - `python_service/digital_twin/infrastructure/toss_snapshots.py`: Toss adapter and demo snapshot fallback
 - `python_service/digital_twin/application/notification_service.py`: queued notification delivery worker
@@ -73,7 +73,7 @@ Use these slices when multiple chat windows work independently:
 
 - Account management: `domain/accounts.py`, `application/account_service.py`, `infrastructure/sqlite_accounts.py`
 - Monitoring and scheduling: `domain/monitoring.py`, `application/monitoring_service.py`, `application/scheduler.py`, `infrastructure/sqlite_operational.py`
-- Notifications: `domain/notifications.py`, `application/notification_service.py`, `infrastructure/notifications.py`, and `infrastructure/sqlite_operational.py`
+- Notifications: `domain/notifications.py`, `domain/notification_templates.py`, `application/notification_service.py`, `infrastructure/notifications.py`, and `infrastructure/sqlite_operational.py`
 - Providers/data collection: `infrastructure/toss_snapshots.py`
 - Model scoring: `domain/analytics.py` and future model-lab application services
 - Model review and validation: `domain/model_review.py`, `application/model_review_service.py`, `infrastructure/sqlite_operational.py`, `infrastructure/model_review_queue.py`, `infrastructure/model_reviewer.py`

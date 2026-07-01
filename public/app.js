@@ -297,6 +297,12 @@
     serverSettingsError: "",
     serverSettingsLocked: false,
     serverConfigured: {},
+    notificationTemplates: [],
+    notificationTemplateVariables: [],
+    notificationTemplatesLoading: false,
+    notificationTemplatesLoaded: false,
+    notificationTemplatesError: "",
+    notificationTemplatesSaved: false,
     staticBuildConfig: null,
     staticBuildConfigError: "",
     serviceAccounts: [],
@@ -546,6 +552,142 @@
     state.serverSettingsError = "";
     state.settingsSaved = true;
     persistSettings();
+  }
+
+  function defaultNotificationTemplates() {
+    var items = [
+      {
+        messageType: "default",
+        template: "{title}\n{lines}",
+        description: "기본 알림 템플릿"
+      }
+    ];
+    alertRuleCatalog.forEach(function (rule) {
+      items.push({
+        messageType: rule.key,
+        template: "{title}\n{lines}",
+        description: rule.label + " · " + rule.description
+      });
+    });
+    [
+      { messageType: "modelReview", template: "{body}", description: "비동기 모델 리뷰 결과" },
+      { messageType: "workHandoff", template: "{body}", description: "작업 완료 핸드오프" },
+      { messageType: "notification", template: "{body}", description: "일반 텍스트 알림" }
+    ].forEach(function (item) {
+      items.push(item);
+    });
+    var seen = {};
+    return items.filter(function (item) {
+      if (seen[item.messageType]) return false;
+      seen[item.messageType] = true;
+      return true;
+    }).map(function (item) {
+      return Object.assign({ enabled: true, updatedAt: "" }, item);
+    });
+  }
+
+  function applyNotificationTemplates(payload) {
+    state.notificationTemplates = Array.isArray(payload.templates) && payload.templates.length
+      ? payload.templates
+      : defaultNotificationTemplates();
+    state.notificationTemplateVariables = Array.isArray(payload.variables) && payload.variables.length
+      ? payload.variables
+      : ["title", "lines", "rawLines", "body", "messageType", "symbol", "severity"];
+    state.notificationTemplatesLoaded = true;
+    state.notificationTemplatesLoading = false;
+    state.notificationTemplatesError = "";
+  }
+
+  function loadNotificationTemplates() {
+    state.notificationTemplatesLoading = true;
+    state.notificationTemplatesError = "";
+    if (isStaticPreviewHost()) {
+      applyNotificationTemplates({ templates: defaultNotificationTemplates() });
+      state.notificationTemplatesLoading = false;
+      return Promise.resolve();
+    }
+    return requestJson("/api/notification-templates")
+      .then(function (payload) {
+        applyNotificationTemplates(payload);
+      })
+      .catch(function (error) {
+        state.notificationTemplatesError = error.message || "알림 템플릿을 읽지 못했습니다.";
+        state.notificationTemplates = defaultNotificationTemplates();
+      })
+      .finally(function () {
+        state.notificationTemplatesLoading = false;
+        if (state.snapshot) render();
+      });
+  }
+
+  function notificationTemplateByType(messageType) {
+    return (state.notificationTemplates || []).filter(function (item) {
+      return item.messageType === messageType;
+    })[0] || null;
+  }
+
+  function updateNotificationTemplate(messageType, value) {
+    var existing = notificationTemplateByType(messageType);
+    if (!existing) return;
+    existing.template = value;
+    state.notificationTemplatesSaved = false;
+    state.notificationTemplatesError = "";
+  }
+
+  function saveNotificationTemplate(messageType) {
+    if (isStaticPreviewHost() || state.serverSettingsLocked) {
+      state.notificationTemplatesError = "공유 모드에서는 알림 템플릿을 변경할 수 없습니다.";
+      render();
+      return Promise.resolve();
+    }
+    var item = notificationTemplateByType(messageType);
+    if (!item) return Promise.resolve();
+    state.notificationTemplatesLoading = true;
+    state.notificationTemplatesError = "";
+    render();
+    return sendJson("/api/notification-templates", "PUT", item)
+      .then(function (payload) {
+        var saved = payload.template || item;
+        state.notificationTemplates = (state.notificationTemplates || []).map(function (current) {
+          return current.messageType === saved.messageType ? saved : current;
+        });
+        state.notificationTemplatesSaved = true;
+      })
+      .catch(function (error) {
+        state.notificationTemplatesError = error.message || "알림 템플릿을 저장하지 못했습니다.";
+      })
+      .finally(function () {
+        state.notificationTemplatesLoading = false;
+        render();
+      });
+  }
+
+  function resetNotificationTemplate(messageType) {
+    if (isStaticPreviewHost() || state.serverSettingsLocked) {
+      state.notificationTemplatesError = "공유 모드에서는 알림 템플릿을 변경할 수 없습니다.";
+      render();
+      return Promise.resolve();
+    }
+    state.notificationTemplatesLoading = true;
+    state.notificationTemplatesError = "";
+    render();
+    return sendJson("/api/notification-templates/" + encodeURIComponent(messageType), "DELETE", {})
+      .then(function (payload) {
+        var saved = payload.template;
+        if (saved) {
+          state.notificationTemplates = (state.notificationTemplates || []).map(function (current) {
+            return current.messageType === saved.messageType ? saved : current;
+          });
+        }
+        state.notificationTemplatesSaved = true;
+      })
+      .catch(function (error) {
+        state.notificationTemplatesError = error.message || "알림 템플릿을 초기화하지 못했습니다.";
+      })
+      .finally(function () {
+        state.notificationTemplatesLoading = false;
+        render();
+      });
   }
 
   function textValueUnlessBoolean(value) {
@@ -3207,6 +3349,7 @@
         return renderAdminMessageRow(rule, enabledAlertRule(rules, rule.key), cadences[rule.key]);
       }).join(""),
       '</div>',
+      renderNotificationTemplatePanel(),
       '<div class="model-section alert-threshold-section">',
       '<div class="flow-title"><div><strong>임계값</strong><span>모델과 실시간 알림의 발생 기준입니다.</span></div></div>',
       '<div class="alert-threshold-grid">',
@@ -3233,6 +3376,55 @@
       '<b>분</b>',
       '</span>',
       '</label>'
+    ].join("");
+  }
+
+  function notificationTemplateLabel(messageType) {
+    var found = alertRuleCatalog.filter(function (rule) { return rule.key === messageType; })[0];
+    if (found) return found.label;
+    var labels = {
+      default: "기본 템플릿",
+      modelReview: "모델 리뷰",
+      workHandoff: "작업 완료",
+      notification: "일반 알림"
+    };
+    return labels[messageType] || messageType;
+  }
+
+  function renderNotificationTemplatePanel() {
+    var templates = state.notificationTemplates.length ? state.notificationTemplates : defaultNotificationTemplates();
+    var variables = state.notificationTemplateVariables.length ? state.notificationTemplateVariables : ["title", "lines", "rawLines", "body", "messageType", "symbol", "severity"];
+    return [
+      '<div class="model-section notification-template-section">',
+      '<div class="flow-title"><div><strong>메시지 템플릿</strong><span>타입별 포맷입니다. 템플릿만 바꾸면 다음 발송부터 새 포맷이 적용됩니다.</span></div></div>',
+      state.notificationTemplatesError ? '<p class="form-error">' + escapeHtml(state.notificationTemplatesError) + '</p>' : '',
+      state.notificationTemplatesSaved ? '<p class="lab-message">알림 템플릿을 저장했습니다.</p>' : '',
+      '<div class="template-variable-row">',
+      variables.map(function (name) {
+        return '<span class="chip">{' + escapeHtml(name) + '}</span>';
+      }).join(""),
+      '</div>',
+      '<div class="notification-template-list">',
+      templates.map(renderNotificationTemplateRow).join(""),
+      '</div>',
+      '</div>'
+    ].join("");
+  }
+
+  function renderNotificationTemplateRow(item) {
+    var disabled = state.serverSettingsLocked || isStaticPreviewHost();
+    return [
+      '<div class="notification-template-row">',
+      '<div class="notification-template-meta">',
+      '<strong>' + escapeHtml(notificationTemplateLabel(item.messageType)) + '</strong>',
+      '<span>' + escapeHtml(item.messageType || "-") + (item.description ? " · " + escapeHtml(item.description) : "") + '</span>',
+      '</div>',
+      '<textarea data-notification-template="' + escapeHtml(item.messageType || "") + '" rows="3"' + (disabled ? " disabled" : "") + '>' + escapeHtml(item.template || "") + '</textarea>',
+      '<div class="settings-actions">',
+      '<button class="text-button primary" data-template-save="' + escapeHtml(item.messageType || "") + '"' + (disabled || state.notificationTemplatesLoading ? ' disabled' : '') + '>템플릿 저장</button>',
+      '<button class="text-button" data-template-reset="' + escapeHtml(item.messageType || "") + '"' + (disabled || state.notificationTemplatesLoading ? ' disabled' : '') + '>기본값</button>',
+      '</div>',
+      '</div>'
     ].join("");
   }
 
@@ -5061,6 +5253,24 @@
       });
     });
 
+    Array.prototype.slice.call(app.querySelectorAll("[data-notification-template]")).forEach(function (field) {
+      field.addEventListener("input", function () {
+        updateNotificationTemplate(field.getAttribute("data-notification-template"), field.value);
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-template-save]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        saveNotificationTemplate(button.getAttribute("data-template-save"));
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-template-reset]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        resetNotificationTemplate(button.getAttribute("data-template-reset"));
+      });
+    });
+
     var saveModelVersionButton = app.querySelector('[data-action="save-model-version"]');
     if (saveModelVersionButton) {
       saveModelVersionButton.addEventListener("click", function () {
@@ -5194,7 +5404,7 @@
     }
   }
 
-  Promise.all([loadServerSettings(), loadServiceAccounts()]).finally(function () {
+  Promise.all([loadServerSettings(), loadServiceAccounts(), loadNotificationTemplates()]).finally(function () {
     load();
   });
 }());

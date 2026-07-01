@@ -226,6 +226,22 @@ def admin_preview_config() -> Dict[str, object]:
                 "promptVersion": MODEL_REVIEW_PROMPT_VERSION,
             },
             {
+                "id": "notification-templates",
+                "title": "알림 템플릿",
+                "summary": "메시지 타입별 포맷을 SQLite 템플릿으로 관리합니다. 포맷 변경은 템플릿 수정만으로 다음 발송에 적용됩니다.",
+                "commands": [
+                    "npm run python:templates -- list",
+                    "python3 python_service/service.py templates save < template.json",
+                    "python3 python_service/service.py templates reset --message-type monitorHeartbeat",
+                ],
+                "storage": ["data/service.db: notification_templates", "data/service.db: notification_jobs"],
+                "fields": [
+                    {"key": "messageType", "label": "메시지 타입"},
+                    {"key": "template", "label": "템플릿 본문"},
+                    {"key": "variables", "label": "{title}, {lines}, {rawLines}, {body}, {messageType}"},
+                ],
+            },
+            {
                 "id": "deployment",
                 "title": "GitHub Pages 배포",
                 "summary": "main 브랜치에 기능이 반영되면 GitHub Actions가 정적 웹 자산과 Python admin preview를 다시 생성해 gh-pages에 배포합니다.",

@@ -117,6 +117,25 @@ function checkFrontendAdminRender() {
         }
       ]
     },
+    "/api/notification-templates": {
+      templates: [
+        {
+          messageType: "monitorHeartbeat",
+          template: "[{messageType}] {title}\n{rawLines}",
+          description: "상태 확인 템플릿",
+          enabled: true,
+          updatedAt: "2026-07-01T00:00:00.000Z"
+        },
+        {
+          messageType: "modelReview",
+          template: "{body}",
+          description: "모델 리뷰 템플릿",
+          enabled: true,
+          updatedAt: "2026-07-01T00:00:00.000Z"
+        }
+      ],
+      variables: ["title", "lines", "rawLines", "body", "messageType"]
+    },
     "admin/config.json": {
       mode: "github-pages-readonly-preview",
       localData: {
@@ -319,6 +338,9 @@ function checkFrontendAdminRender() {
     assertOk(accountHtml.indexOf('value="NVDA,005930"') >= 0, "로컬 DB 관심 종목이 폼에 채워지지 않았습니다.");
     assertOk(accountHtml.indexOf('value="true"') < 0, "마스킹된 boolean 값이 계정 폼에 그대로 표시됩니다.");
     assertOk(notificationHtml.indexOf("admin-message-row") >= 0, "메시지 타입별 알림 설정이 렌더링되지 않았습니다.");
+    assertOk(notificationHtml.indexOf("notification-template-row") >= 0, "알림 템플릿 편집기가 렌더링되지 않았습니다.");
+    assertOk(notificationHtml.indexOf("data-notification-template=\"monitorHeartbeat\"") >= 0, "상태 확인 템플릿 textarea가 렌더링되지 않았습니다.");
+    assertOk(notificationHtml.indexOf("{rawLines}") >= 0, "알림 템플릿 변수가 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("tab=notifications") >= 0, "알림 링크 기본값이 새 알림 탭을 가리키지 않습니다.");
     assertOk(modelingHtml.indexOf("model-guide-panel") >= 0, "모델 운영 가이드가 렌더링되지 않았습니다.");
     assertOk(modelingHtml.indexOf("내 매수·매도 기준 운영 순서") >= 0, "모델 운영 순서 제목이 렌더링되지 않았습니다.");
@@ -488,6 +510,26 @@ async function checkNormalMode(port) {
   assertOk(savedSettingsPayload.settings.watchlistSymbols === "TSLA,AAPL,NVDA", "저장된 관심 종목 값이 응답에 없습니다.");
   assertOk(savedSettingsPayload.settings.alertRules.indexOf("priceStop=1") >= 0, "저장된 알림 규칙이 응답에 없습니다.");
   assertOk(savedSettingsPayload.settings.modelDecisionThresholds.indexOf("modelBuy=75") >= 0, "저장된 모델 기준값이 응답에 없습니다.");
+
+  const templates = await request(port, "/api/notification-templates");
+  assertOk(templates.statusCode === 200, "알림 템플릿 API 응답 코드가 200이 아닙니다: " + templates.statusCode);
+  const templatesPayload = JSON.parse(templates.body);
+  assertOk(Array.isArray(templatesPayload.templates), "알림 템플릿 API templates가 배열이 아닙니다.");
+  assertOk(templatesPayload.templates.some(function (item) { return item.messageType === "monitorHeartbeat"; }), "상태 확인 템플릿이 없습니다.");
+  assertOk(Array.isArray(templatesPayload.variables) && templatesPayload.variables.indexOf("body") >= 0, "알림 템플릿 변수 목록이 없습니다.");
+
+  const savedTemplate = await request(port, "/api/notification-templates", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      messageType: "monitorHeartbeat",
+      template: "[{messageType}] {title}\n{rawLines}",
+      description: "상태 확인 템플릿"
+    })
+  });
+  assertOk(savedTemplate.statusCode === 200, "알림 템플릿 저장 API 응답 코드가 200이 아닙니다: " + savedTemplate.statusCode);
+  const savedTemplatePayload = JSON.parse(savedTemplate.body);
+  assertOk(savedTemplatePayload.template.template.indexOf("{rawLines}") >= 0, "저장된 알림 템플릿 응답이 맞지 않습니다.");
 
   const emptyAccounts = await request(port, "/api/service-accounts");
   assertOk(emptyAccounts.statusCode === 200, "계정 DB API 응답 코드가 200이 아닙니다: " + emptyAccounts.statusCode);

@@ -30,6 +30,7 @@
     "python:notifications:once": "python3 python_service/service.py notifications once",
     "python:notifications:status": "python3 python_service/service.py notifications status",
     "python:notifications:watch": "python3 python_service/service.py notifications watch",
+    "python:templates": "python3 python_service/service.py templates",
     "python:service": "python3 python_service/monitor_service.py",
     "python:service:restart": "python3 python_service/monitor_service.py restart",
     "python:service:start": "python3 python_service/monitor_service.py start",

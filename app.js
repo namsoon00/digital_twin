@@ -9,7 +9,7 @@
     notifyProvider: "",
     telegramBotToken: "",
     telegramChatId: "",
-    notifyLinkUrl: "http://127.0.0.1:3000",
+    notifyLinkUrl: "http://127.0.0.1:3000?tab=alerts",
     notifyIntervalMinutes: "10",
     valuationAssumptions: [
       "AAPL,7.5,28,15",
@@ -53,12 +53,64 @@
       "modelSell=72",
       "modelReduce=64",
       "modelHold=55"
+    ].join("\n"),
+    alertRules: [
+      "priceBuyLimit=1",
+      "priceStop=1",
+      "priceTrim=1",
+      "modelBuy=1",
+      "modelSell=1",
+      "modelScoreGap=1",
+      "modelVersionDrift=1",
+      "flowTradeStrength=1",
+      "flowVolume=1",
+      "flowBuyShare=1",
+      "flowSellShare=1",
+      "flowOrderbook=1",
+      "trendMomentum=1",
+      "trendPullback=1",
+      "holdingProfit=1",
+      "holdingLoss=1",
+      "holdingConcentration=1",
+      "sectorConcentration=1",
+      "marketCashLow=1",
+      "recordGain=1",
+      "recordLoss=1",
+      "dataFreshness=1",
+      "tossConnection=1",
+      "orderPending=1",
+      "orderReject=1",
+      "holdingTiming=1"
+    ].join("\n"),
+    alertThresholds: [
+      "modelBuyScore=74",
+      "modelSellScore=72",
+      "modelScoreGap=15",
+      "tradeStrengthHigh=120",
+      "tradeStrengthLow=80",
+      "volumeRatioHigh=2",
+      "buyShareHigh=65",
+      "sellShareHigh=65",
+      "orderbookImbalance=25",
+      "momentumUp=3",
+      "momentumDown=-3",
+      "profitRateHigh=20",
+      "lossRateLow=-8",
+      "positionWeightHigh=30",
+      "sectorWeightHigh=50",
+      "marketCashLow=10",
+      "recordGain=10",
+      "recordLoss=-5",
+      "priceNearPercent=1",
+      "staleMinutes=30",
+      "pendingOrderMinutes=30"
     ].join("\n")
   };
   var tabs = [
     { id: "decision", label: "판단" },
     { id: "lab", label: "실험실" },
     { id: "model", label: "모델" },
+    { id: "alerts", label: "알림" },
     { id: "holdings", label: "보유" },
     { id: "feed", label: "피드" },
     { id: "watchlist", label: "관심" }
@@ -112,6 +164,57 @@
       query: '"stock market" OR "central bank" OR semiconductor OR Korea OR cryptocurrency',
       tags: ["글로벌", "교차검증", "뉴스"]
     }
+  ];
+  var alertRuleCatalog = [
+    { key: "priceBuyLimit", group: "가격", label: "매수 상한 접근", description: "현재가가 실험실 매수 상한에 접근하거나 하회할 때" },
+    { key: "priceStop", group: "가격", label: "손절 기준 접근", description: "현재가가 손절 기준선에 접근하거나 하회할 때" },
+    { key: "priceTrim", group: "가격", label: "분할매도 기준 접근", description: "현재가가 1차 또는 2차 매도 기준에 접근할 때" },
+    { key: "modelBuy", group: "모델", label: "내 모델 매수", description: "내 모델 매수 점수가 기준을 넘을 때" },
+    { key: "modelSell", group: "모델", label: "내 모델 매도", description: "내 모델 매도 점수가 기준을 넘을 때" },
+    { key: "modelScoreGap", group: "모델", label: "모델 방향성", description: "매수와 매도 점수 차이가 크게 벌어질 때" },
+    { key: "modelVersionDrift", group: "모델", label: "모델 버전 변화", description: "저장한 실험 버전과 현재 모델 점수가 크게 달라질 때" },
+    { key: "flowTradeStrength", group: "수급", label: "체결강도", description: "체결강도가 강세 또는 약세 임계값을 벗어날 때" },
+    { key: "flowVolume", group: "수급", label: "거래량 급증", description: "거래량 배율이 설정값 이상으로 커질 때" },
+    { key: "flowBuyShare", group: "수급", label: "매수 체결 우위", description: "매수 체결 비중이 높아질 때" },
+    { key: "flowSellShare", group: "수급", label: "매도 체결 우위", description: "매도 체결 비중이 높아질 때" },
+    { key: "flowOrderbook", group: "수급", label: "호가 불균형", description: "호가 불균형이 설정값 이상으로 커질 때" },
+    { key: "trendMomentum", group: "추세", label: "상승 모멘텀", description: "단기 가격 변화율이 상승 임계값을 넘을 때" },
+    { key: "trendPullback", group: "추세", label: "하락 압력", description: "단기 가격 변화율이 하락 임계값을 밑돌 때" },
+    { key: "holdingProfit", group: "보유", label: "수익 구간", description: "보유 종목 수익률이 익절 점검 기준을 넘을 때" },
+    { key: "holdingLoss", group: "보유", label: "손실 구간", description: "보유 종목 손실률이 리스크 기준을 밑돌 때" },
+    { key: "holdingConcentration", group: "보유", label: "종목 비중 쏠림", description: "단일 보유 종목 비중이 높아질 때" },
+    { key: "sectorConcentration", group: "보유", label: "섹터 쏠림", description: "계좌의 최대 섹터 노출이 높아질 때" },
+    { key: "marketCashLow", group: "보유", label: "시장별 현금 부족", description: "한국장 또는 미국장별 현금 비중이 낮을 때" },
+    { key: "recordGain", group: "기록", label: "저장 후 성과", description: "실험 버전 저장 후 성과가 목표 이상일 때" },
+    { key: "recordLoss", group: "기록", label: "저장 후 손실", description: "실험 버전 저장 후 성과가 손실 기준을 밑돌 때" },
+    { key: "dataFreshness", group: "데이터", label: "데이터 지연", description: "마지막 데이터 생성 시각이 오래되었을 때" },
+    { key: "tossConnection", group: "데이터", label: "토스 연결 상태", description: "토스 live 연결이 아니거나 비어 있을 때" },
+    { key: "orderPending", group: "주문", label: "미체결 주문", description: "주문 데이터가 연결되면 오래된 미체결을 표시" },
+    { key: "orderReject", group: "주문", label: "거부/실패 주문", description: "주문 데이터가 연결되면 거부 또는 실패 주문을 표시" },
+    { key: "holdingTiming", group: "푸시", label: "보유 타이밍 푸시", description: "알림 워커가 보유 종목 장중 점검을 보낼 때" }
+  ];
+  var alertThresholdCatalog = [
+    { key: "modelBuyScore", label: "모델 매수 점수", unit: "점", step: "1" },
+    { key: "modelSellScore", label: "모델 매도 점수", unit: "점", step: "1" },
+    { key: "modelScoreGap", label: "모델 점수 차이", unit: "점", step: "1" },
+    { key: "tradeStrengthHigh", label: "체결강도 상단", unit: "", step: "1" },
+    { key: "tradeStrengthLow", label: "체결강도 하단", unit: "", step: "1" },
+    { key: "volumeRatioHigh", label: "거래량 배율", unit: "x", step: "0.1" },
+    { key: "buyShareHigh", label: "매수 체결 비중", unit: "%", step: "1" },
+    { key: "sellShareHigh", label: "매도 체결 비중", unit: "%", step: "1" },
+    { key: "orderbookImbalance", label: "호가 불균형", unit: "%", step: "1" },
+    { key: "momentumUp", label: "상승 변화율", unit: "%", step: "0.1" },
+    { key: "momentumDown", label: "하락 변화율", unit: "%", step: "0.1" },
+    { key: "profitRateHigh", label: "익절 점검 수익률", unit: "%", step: "0.1" },
+    { key: "lossRateLow", label: "손실 점검 수익률", unit: "%", step: "0.1" },
+    { key: "positionWeightHigh", label: "단일 종목 비중", unit: "%", step: "1" },
+    { key: "sectorWeightHigh", label: "섹터 비중", unit: "%", step: "1" },
+    { key: "marketCashLow", label: "시장별 현금 하단", unit: "%", step: "1" },
+    { key: "recordGain", label: "기록 성과 상단", unit: "%", step: "0.1" },
+    { key: "recordLoss", label: "기록 성과 하단", unit: "%", step: "0.1" },
+    { key: "priceNearPercent", label: "가격 접근 허용폭", unit: "%", step: "0.1" },
+    { key: "staleMinutes", label: "데이터 지연 시간", unit: "분", step: "1" },
+    { key: "pendingOrderMinutes", label: "미체결 점검 시간", unit: "분", step: "1" }
   ];
   var settingsMemoryStore = "";
   var labDraftsMemoryStore = "";
@@ -378,7 +481,21 @@
       telegramBotToken: settingValue("telegramBotToken"),
       telegramChatId: settingValue("telegramChatId"),
       notifyLinkUrl: settingValue("notifyLinkUrl"),
-      notifyIntervalMinutes: settingValue("notifyIntervalMinutes")
+      notifyIntervalMinutes: settingValue("notifyIntervalMinutes"),
+      valuationAssumptions: settingValue("valuationAssumptions"),
+      marketSignalInputs: settingValue("marketSignalInputs"),
+      fairValueFormula: settingValue("fairValueFormula"),
+      buyScoreFormula: settingValue("buyScoreFormula"),
+      sellScoreFormula: settingValue("sellScoreFormula"),
+      modelName: settingValue("modelName"),
+      modelHypothesis: settingValue("modelHypothesis"),
+      customBuyModelFormula: settingValue("customBuyModelFormula"),
+      customSellModelFormula: settingValue("customSellModelFormula"),
+      formulaWeights: settingValue("formulaWeights"),
+      decisionThresholds: settingValue("decisionThresholds"),
+      modelDecisionThresholds: settingValue("modelDecisionThresholds"),
+      alertRules: settingValue("alertRules"),
+      alertThresholds: settingValue("alertThresholds")
     };
   }
 
@@ -1133,8 +1250,20 @@
     map[key] = numeric(value);
     state.settings[settingName] = serializeNumberAssignments(map, assignmentOrder(settingName));
     persistSettings();
+    state.settingsSaved = false;
     state.modelSaved = false;
     state.modelError = "";
+    render();
+  }
+
+  function updateBooleanAssignmentSetting(settingName, key, enabled) {
+    if (!Object.prototype.hasOwnProperty.call(defaultSettings, settingName)) return;
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(String(key || ""))) return;
+    var map = parseNumberAssignments(settingValue(settingName), parseNumberAssignments(defaultSettings[settingName]));
+    map[key] = enabled ? 1 : 0;
+    state.settings[settingName] = serializeNumberAssignments(map, assignmentOrder(settingName));
+    persistSettings();
+    state.settingsSaved = false;
     render();
   }
 
@@ -1584,6 +1713,7 @@
     map[key][field] = numeric(value);
     state.settings.valuationAssumptions = serializeValuationAssumptions(map);
     persistSettings();
+    state.settingsSaved = false;
     render();
   }
 
@@ -1854,6 +1984,8 @@
       formulaWeights: formulaWeights(),
       decisionThresholds: decisionThresholds(),
       modelDecisionThresholds: modelDecisionThresholds(),
+      alertRules: alertRules(),
+      alertThresholds: alertThresholds(),
       stats: modelStatsForItems(items || [])
     };
   }
@@ -1926,6 +2058,495 @@
 
   function exportModelVersions() {
     downloadText("model-versions.json", JSON.stringify(state.modelVersions || [], null, 2), "application/json;charset=utf-8");
+  }
+
+  function alertRules() {
+    return parseNumberAssignments(settingValue("alertRules"), parseNumberAssignments(defaultSettings.alertRules));
+  }
+
+  function alertThresholds() {
+    return parseNumberAssignments(settingValue("alertThresholds"), parseNumberAssignments(defaultSettings.alertThresholds));
+  }
+
+  function enabledAlertRule(rules, key) {
+    return Number((rules || {})[key]) !== 0;
+  }
+
+  function alertSeverityRank(severity) {
+    var ranks = { danger: 4, caution: 3, watch: 2, info: 1 };
+    return ranks[severity] || 0;
+  }
+
+  function alertSeverityLabel(severity) {
+    var labels = { danger: "긴급", caution: "주의", watch: "관찰", info: "정보" };
+    return labels[severity] || "정보";
+  }
+
+  function alertRuleLabel(key) {
+    var rule = alertRuleCatalog.filter(function (item) { return item.key === key; })[0];
+    return rule ? rule.label : key;
+  }
+
+  function addAlert(alerts, rules, alert) {
+    if (!alert || !alert.rule || !enabledAlertRule(rules, alert.rule)) return;
+    alerts.push(Object.assign({
+      id: [alert.rule, alert.symbol || "account", alert.title || ""].join(":"),
+      severity: "info",
+      value: "",
+      threshold: "",
+      source: alertRuleLabel(alert.rule)
+    }, alert));
+  }
+
+  function labActionPriceMap(item) {
+    var map = {};
+    labActionPrices(item).forEach(function (line) {
+      map[line.label] = Number(line.value || 0);
+    });
+    return map;
+  }
+
+  function priceBelowOrNear(current, target, nearPercent) {
+    if (!current || !target) return false;
+    return current <= target * (1 + Number(nearPercent || 0) / 100);
+  }
+
+  function priceAboveOrNear(current, target, nearPercent) {
+    if (!current || !target) return false;
+    return current >= target * (1 - Number(nearPercent || 0) / 100);
+  }
+
+  function addPriceAlerts(alerts, rules, thresholds, item) {
+    var current = Number(item.currentPrice || 0);
+    if (!current) return;
+    var prices = labActionPriceMap(item);
+    var near = Number(thresholds.priceNearPercent || 0);
+    if (priceBelowOrNear(current, prices["매수 상한"], near)) {
+      addAlert(alerts, rules, {
+        rule: "priceBuyLimit",
+        severity: "watch",
+        symbol: item.symbol,
+        title: item.name + " 매수 상한 접근",
+        message: "현재가가 실험실 매수 상한 기준에 접근했습니다.",
+        value: formatPrice(current, item.currency),
+        threshold: formatPrice(prices["매수 상한"], item.currency),
+        source: "가격선"
+      });
+    }
+    if (priceBelowOrNear(current, prices["손절 기준"], near)) {
+      addAlert(alerts, rules, {
+        rule: "priceStop",
+        severity: item.source === "watchlist" ? "caution" : "danger",
+        symbol: item.symbol,
+        title: item.name + " 손절 기준 접근",
+        message: "현재가가 손절 기준선에 접근했습니다. 보유 사유와 리스크 허용폭을 다시 확인해야 합니다.",
+        value: formatPrice(current, item.currency),
+        threshold: formatPrice(prices["손절 기준"], item.currency),
+        source: "가격선"
+      });
+    }
+    if (priceAboveOrNear(current, prices["2차 매도"], near) || priceAboveOrNear(current, prices["1차 매도"], near)) {
+      var trimTarget = priceAboveOrNear(current, prices["2차 매도"], near) ? prices["2차 매도"] : prices["1차 매도"];
+      addAlert(alerts, rules, {
+        rule: "priceTrim",
+        severity: priceAboveOrNear(current, prices["2차 매도"], near) ? "danger" : "caution",
+        symbol: item.symbol,
+        title: item.name + " 분할매도 기준 접근",
+        message: "현재가가 실험실 매도 기준선에 접근했습니다.",
+        value: formatPrice(current, item.currency),
+        threshold: formatPrice(trimTarget, item.currency),
+        source: "가격선"
+      });
+    }
+  }
+
+  function addModelAlerts(alerts, rules, thresholds, item) {
+    var model = customModelScores(item);
+    var latest = latestLabRecordFor(item.symbol);
+    if (model.buyScore >= Number(thresholds.modelBuyScore || 0)) {
+      addAlert(alerts, rules, {
+        rule: "modelBuy",
+        severity: item.source === "watchlist" ? "watch" : "info",
+        symbol: item.symbol,
+        title: item.name + " 내 모델 매수 신호",
+        message: model.action,
+        value: Math.round(model.buyScore) + "점",
+        threshold: Math.round(thresholds.modelBuyScore || 0) + "점",
+        source: "내 모델"
+      });
+    }
+    if (model.sellScore >= Number(thresholds.modelSellScore || 0)) {
+      addAlert(alerts, rules, {
+        rule: "modelSell",
+        severity: item.source === "watchlist" ? "caution" : "danger",
+        symbol: item.symbol,
+        title: item.name + " 내 모델 매도 신호",
+        message: model.action,
+        value: Math.round(model.sellScore) + "점",
+        threshold: Math.round(thresholds.modelSellScore || 0) + "점",
+        source: "내 모델"
+      });
+    }
+    var gap = Math.abs(Number(model.buyScore || 0) - Number(model.sellScore || 0));
+    if (gap >= Number(thresholds.modelScoreGap || 0)) {
+      addAlert(alerts, rules, {
+        rule: "modelScoreGap",
+        severity: model.sellScore > model.buyScore ? "caution" : "watch",
+        symbol: item.symbol,
+        title: item.name + " 모델 방향성 확대",
+        message: "매수 점수와 매도 점수의 차이가 커졌습니다.",
+        value: Math.round(model.buyScore) + " / " + Math.round(model.sellScore),
+        threshold: Math.round(thresholds.modelScoreGap || 0) + "점 차이",
+        source: "내 모델"
+      });
+    }
+    if (latest) {
+      var buyDrift = Math.abs(Number(model.buyScore || 0) - Number(latest.modelBuyScore || 0));
+      var sellDrift = Math.abs(Number(model.sellScore || 0) - Number(latest.modelSellScore || 0));
+      if (Math.max(buyDrift, sellDrift) >= Number(thresholds.modelScoreGap || 0)) {
+        addAlert(alerts, rules, {
+          rule: "modelVersionDrift",
+          severity: "info",
+          symbol: item.symbol,
+          title: item.name + " 저장 버전 대비 변화",
+          message: "최근 저장한 실험 버전과 현재 모델 점수가 달라졌습니다.",
+          value: "매수 " + Math.round(buyDrift) + " / 매도 " + Math.round(sellDrift),
+          threshold: Math.round(thresholds.modelScoreGap || 0) + "점",
+          source: "버전 기록"
+        });
+      }
+    }
+  }
+
+  function addFlowAlerts(alerts, rules, thresholds, item) {
+    var signal = item.signal || {};
+    if (!item.hasData) return;
+    var strength = Number(signal.tradeStrength || 0);
+    var volumeRatio = Number(signal.volumeRatio || 0);
+    var buyShare = Number(item.buyShare || 0);
+    var sellShare = Math.max(0, 100 - buyShare);
+    var imbalance = Number(signal.bidAskImbalance || 0);
+    var priceChange = Number(signal.priceChangeRate || 0);
+    if (strength >= Number(thresholds.tradeStrengthHigh || 0) || strength <= Number(thresholds.tradeStrengthLow || 0)) {
+      addAlert(alerts, rules, {
+        rule: "flowTradeStrength",
+        severity: strength >= Number(thresholds.tradeStrengthHigh || 0) ? "watch" : "caution",
+        symbol: item.symbol,
+        title: item.name + " 체결강도 이탈",
+        message: strength >= Number(thresholds.tradeStrengthHigh || 0) ? "강한 매수 체결 흐름입니다." : "체결강도가 약해졌습니다.",
+        value: formatSignalNumber(strength, ""),
+        threshold: formatSignalNumber(strength >= Number(thresholds.tradeStrengthHigh || 0) ? thresholds.tradeStrengthHigh : thresholds.tradeStrengthLow, ""),
+        source: "수급"
+      });
+    }
+    if (volumeRatio >= Number(thresholds.volumeRatioHigh || 0)) {
+      addAlert(alerts, rules, {
+        rule: "flowVolume",
+        severity: "watch",
+        symbol: item.symbol,
+        title: item.name + " 거래량 급증",
+        message: "평소보다 거래량이 커졌습니다.",
+        value: formatSignalRatio(volumeRatio),
+        threshold: formatSignalRatio(thresholds.volumeRatioHigh),
+        source: "수급"
+      });
+    }
+    if (buyShare >= Number(thresholds.buyShareHigh || 0)) {
+      addAlert(alerts, rules, {
+        rule: "flowBuyShare",
+        severity: "watch",
+        symbol: item.symbol,
+        title: item.name + " 매수 체결 우위",
+        message: "매수 체결 비중이 높습니다.",
+        value: pct(buyShare),
+        threshold: pct(thresholds.buyShareHigh),
+        source: "수급"
+      });
+    }
+    if (sellShare >= Number(thresholds.sellShareHigh || 0)) {
+      addAlert(alerts, rules, {
+        rule: "flowSellShare",
+        severity: item.source === "watchlist" ? "caution" : "danger",
+        symbol: item.symbol,
+        title: item.name + " 매도 체결 우위",
+        message: "매도 체결 비중이 높습니다.",
+        value: pct(sellShare),
+        threshold: pct(thresholds.sellShareHigh),
+        source: "수급"
+      });
+    }
+    if (Math.abs(imbalance) >= Number(thresholds.orderbookImbalance || 0)) {
+      addAlert(alerts, rules, {
+        rule: "flowOrderbook",
+        severity: imbalance < 0 ? "caution" : "watch",
+        symbol: item.symbol,
+        title: item.name + " 호가 불균형",
+        message: imbalance < 0 ? "매도 호가 쪽 압력이 큽니다." : "매수 호가 쪽 압력이 큽니다.",
+        value: signedPct(imbalance),
+        threshold: pct(thresholds.orderbookImbalance),
+        source: "수급"
+      });
+    }
+    if (priceChange >= Number(thresholds.momentumUp || 0)) {
+      addAlert(alerts, rules, {
+        rule: "trendMomentum",
+        severity: "watch",
+        symbol: item.symbol,
+        title: item.name + " 상승 모멘텀",
+        message: "단기 가격 변화율이 상승 임계값을 넘었습니다.",
+        value: signedPct(priceChange),
+        threshold: signedPct(thresholds.momentumUp),
+        source: "추세"
+      });
+    }
+    if (priceChange <= Number(thresholds.momentumDown || 0)) {
+      addAlert(alerts, rules, {
+        rule: "trendPullback",
+        severity: item.source === "watchlist" ? "caution" : "danger",
+        symbol: item.symbol,
+        title: item.name + " 하락 압력",
+        message: "단기 가격 변화율이 하락 임계값을 밑돌았습니다.",
+        value: signedPct(priceChange),
+        threshold: signedPct(thresholds.momentumDown),
+        source: "추세"
+      });
+    }
+  }
+
+  function addHoldingAlerts(alerts, rules, thresholds, item, portfolio) {
+    if (item.source === "watchlist") return;
+    var profitRate = Number(item.profitLossRate || 0);
+    if (profitRate >= Number(thresholds.profitRateHigh || 0)) {
+      addAlert(alerts, rules, {
+        rule: "holdingProfit",
+        severity: "caution",
+        symbol: item.symbol,
+        title: item.name + " 수익 구간",
+        message: "익절 또는 비중 조절 기준을 확인할 구간입니다.",
+        value: signedPct(profitRate),
+        threshold: signedPct(thresholds.profitRateHigh),
+        source: "보유"
+      });
+    }
+    if (profitRate <= Number(thresholds.lossRateLow || 0)) {
+      addAlert(alerts, rules, {
+        rule: "holdingLoss",
+        severity: "danger",
+        symbol: item.symbol,
+        title: item.name + " 손실 구간",
+        message: "손실 허용폭과 손절 기준을 다시 확인할 구간입니다.",
+        value: signedPct(profitRate),
+        threshold: signedPct(thresholds.lossRateLow),
+        source: "보유"
+      });
+    }
+    var invested = Number(portfolio && (portfolio.invested || portfolio.total) || 0);
+    var weight = invested ? (Number(item.marketValue || 0) / invested) * 100 : 0;
+    if (weight >= Number(thresholds.positionWeightHigh || 0)) {
+      addAlert(alerts, rules, {
+        rule: "holdingConcentration",
+        severity: "caution",
+        symbol: item.symbol,
+        title: item.name + " 단일 종목 비중 확대",
+        message: "단일 보유 종목 비중이 설정값 이상입니다.",
+        value: pct(weight),
+        threshold: pct(thresholds.positionWeightHigh),
+        source: "보유"
+      });
+    }
+  }
+
+  function addRecordAlerts(alerts, rules, thresholds, item) {
+    var latest = latestLabRecordFor(item.symbol);
+    if (!latest) return;
+    var result = labRecordReturn(latest, item.currentPrice);
+    if (result >= Number(thresholds.recordGain || 0)) {
+      addAlert(alerts, rules, {
+        rule: "recordGain",
+        severity: "watch",
+        symbol: item.symbol,
+        title: item.name + " 저장 후 성과 도달",
+        message: "최근 실험 버전 저장 이후 성과가 목표값을 넘었습니다.",
+        value: signedPct(result),
+        threshold: signedPct(thresholds.recordGain),
+        source: "버전 기록"
+      });
+    }
+    if (result <= Number(thresholds.recordLoss || 0)) {
+      addAlert(alerts, rules, {
+        rule: "recordLoss",
+        severity: "caution",
+        symbol: item.symbol,
+        title: item.name + " 저장 후 손실 확대",
+        message: "최근 실험 버전 저장 이후 성과가 손실 기준을 밑돌았습니다.",
+        value: signedPct(result),
+        threshold: signedPct(thresholds.recordLoss),
+        source: "버전 기록"
+      });
+    }
+  }
+
+  function addPortfolioAlerts(alerts, rules, thresholds, snapshot) {
+    var portfolio = snapshot.portfolio || {};
+    (portfolio.sectors || []).forEach(function (sector) {
+      if (!sector || sector.sector === "현금") return;
+      var ratio = Number(sector.ratio || 0);
+      if (ratio >= Number(thresholds.sectorWeightHigh || 0)) {
+        addAlert(alerts, rules, {
+          rule: "sectorConcentration",
+          severity: "caution",
+          title: sector.sector + " 섹터 비중 확대",
+          message: "계좌 내 섹터 노출이 설정값 이상입니다.",
+          value: pct(ratio),
+          threshold: pct(thresholds.sectorWeightHigh),
+          source: "포트폴리오"
+        });
+      }
+    });
+    var markets = Array.isArray(portfolio.markets) ? portfolio.markets : [];
+    if (!markets.length && Number(portfolio.total || 0) > 0) {
+      markets = [{
+        key: "total",
+        label: "전체",
+        cashRatio: Math.round((Number(portfolio.cash || 0) / Number(portfolio.total || 1)) * 100)
+      }];
+    }
+    markets.forEach(function (market) {
+      var cashRatio = Number(market.cashRatio || 0);
+      if (cashRatio <= Number(thresholds.marketCashLow || 0)) {
+        addAlert(alerts, rules, {
+          rule: "marketCashLow",
+          severity: cashRatio <= Number(thresholds.marketCashLow || 0) / 2 ? "danger" : "caution",
+          title: (market.label || "전체") + " 현금 비중 부족",
+          message: "신규 매수 전에 시장별 주문 가능 현금과 목표 비중을 확인해야 합니다.",
+          value: pct(cashRatio),
+          threshold: pct(thresholds.marketCashLow),
+          source: "포트폴리오"
+        });
+      }
+    });
+  }
+
+  function snapshotStamp(snapshot) {
+    var toss = snapshot.toss || {};
+    var raw = snapshot.generatedAt || snapshot.updatedAt || snapshot.asOf || toss.generatedAt || toss.updatedAt || toss.fetchedAt || "";
+    var stamp = Date.parse(raw);
+    return Number.isFinite(stamp) ? { raw: raw, stamp: stamp } : null;
+  }
+
+  function addDataAlerts(alerts, rules, thresholds, snapshot) {
+    var toss = snapshot.toss || {};
+    if (toss.mode !== "live") {
+      addAlert(alerts, rules, {
+        rule: "tossConnection",
+        severity: state.dataMode === "mock" ? "info" : "caution",
+        title: state.dataMode === "mock" ? "Mock 데이터 사용 중" : "토스 live 연결 확인",
+        message: toss.status || "토스 live 연결 상태를 확인해야 합니다.",
+        value: toss.mode || "unknown",
+        threshold: "live",
+        source: "데이터"
+      });
+    }
+    if (toss.mode === "live" && Array.isArray(toss.positions) && toss.positions.length === 0) {
+      addAlert(alerts, rules, {
+        rule: "tossConnection",
+        severity: "caution",
+        title: "보유 종목 없음",
+        message: "토스 연결은 성공했지만 보유 종목 배열이 비어 있습니다.",
+        value: "0개",
+        threshold: "1개 이상",
+        source: "데이터"
+      });
+    }
+    var stamp = snapshotStamp(snapshot);
+    if (stamp) {
+      var minutes = (Date.now() - stamp.stamp) / 60000;
+      if (minutes >= Number(thresholds.staleMinutes || 0)) {
+        addAlert(alerts, rules, {
+          rule: "dataFreshness",
+          severity: minutes >= Number(thresholds.staleMinutes || 0) * 2 ? "caution" : "info",
+          title: "데이터 갱신 지연",
+          message: "마지막 데이터 생성 시각이 설정값보다 오래되었습니다.",
+          value: Math.round(minutes) + "분",
+          threshold: Math.round(thresholds.staleMinutes || 0) + "분",
+          source: "데이터"
+        });
+      }
+    }
+  }
+
+  function orderCandidates(snapshot) {
+    var toss = snapshot.toss || {};
+    return []
+      .concat(Array.isArray(snapshot.orders) ? snapshot.orders : [])
+      .concat(Array.isArray(toss.orders) ? toss.orders : [])
+      .concat(Array.isArray(toss.orderStatus) ? toss.orderStatus : []);
+  }
+
+  function addOrderAlerts(alerts, rules, thresholds, snapshot) {
+    orderCandidates(snapshot).forEach(function (order) {
+      var status = String(order.status || order.orderStatus || order.state || "").toLowerCase();
+      var symbol = String(order.symbol || order.ticker || order.stockCode || "").toUpperCase();
+      var name = order.name || order.stockName || symbol || "주문";
+      var createdAt = Date.parse(order.createdAt || order.orderTime || order.orderedAt || "");
+      var ageMinutes = Number.isFinite(createdAt) ? (Date.now() - createdAt) / 60000 : 0;
+      if (/pending|open|wait|partial|미체결|접수|부분/.test(status) && ageMinutes >= Number(thresholds.pendingOrderMinutes || 0)) {
+        addAlert(alerts, rules, {
+          rule: "orderPending",
+          severity: "caution",
+          symbol: symbol,
+          title: name + " 미체결 주문",
+          message: "미체결 주문이 설정 시간보다 오래 남아 있습니다.",
+          value: Math.round(ageMinutes) + "분",
+          threshold: Math.round(thresholds.pendingOrderMinutes || 0) + "분",
+          source: "주문"
+        });
+      }
+      if (/reject|fail|error|거부|실패/.test(status)) {
+        addAlert(alerts, rules, {
+          rule: "orderReject",
+          severity: "danger",
+          symbol: symbol,
+          title: name + " 주문 실패",
+          message: "주문 상태가 거부 또는 실패로 표시되었습니다.",
+          value: order.status || order.orderStatus || "-",
+          threshold: "정상",
+          source: "주문"
+        });
+      }
+    });
+  }
+
+  function buildAlertItems(snapshot) {
+    if (!snapshot) return [];
+    var rules = alertRules();
+    var thresholds = alertThresholds();
+    var alerts = [];
+    var items = buildTradeSignalItems(snapshot);
+    var portfolio = snapshot.portfolio || {};
+    items.forEach(function (item) {
+      addPriceAlerts(alerts, rules, thresholds, item);
+      addModelAlerts(alerts, rules, thresholds, item);
+      addFlowAlerts(alerts, rules, thresholds, item);
+      addHoldingAlerts(alerts, rules, thresholds, item, portfolio);
+      addRecordAlerts(alerts, rules, thresholds, item);
+    });
+    addPortfolioAlerts(alerts, rules, thresholds, snapshot);
+    addDataAlerts(alerts, rules, thresholds, snapshot);
+    addOrderAlerts(alerts, rules, thresholds, snapshot);
+    return alerts.sort(function (a, b) {
+      var severityDiff = alertSeverityRank(b.severity) - alertSeverityRank(a.severity);
+      if (severityDiff) return severityDiff;
+      return String(a.title || "").localeCompare(String(b.title || ""), "ko");
+    });
+  }
+
+  function alertStats(alerts) {
+    return alerts.reduce(function (stats, alert) {
+      stats.total += 1;
+      stats[alert.severity] = (stats[alert.severity] || 0) + 1;
+      return stats;
+    }, { total: 0, danger: 0, caution: 0, watch: 0, info: 0 });
   }
 
   function load() {
@@ -2060,6 +2681,16 @@
         renderModelStudioPanel(snapshot),
         renderModelVersionPanel(snapshot),
         renderModelPreviewPanel(snapshot),
+        '</section>'
+      ].join("");
+    }
+    if (state.activeTab === "alerts") {
+      return [
+        '<section class="content-grid">',
+        renderAlertCenterPanel(snapshot),
+        renderAlertSettingsPanel(),
+        renderAlertModelSettingsPanel(snapshot),
+        renderAlertDeliveryPanel(),
         '</section>'
       ].join("");
     }
@@ -2569,6 +3200,191 @@
       model.errors.length ? '<div class="exit-reasons">' + model.errors.map(function (error) { return '<p>' + escapeHtml(error) + '</p>'; }).join("") + '</div>' : '',
       '</div>',
       '</div>'
+    ].join("");
+  }
+
+  function renderAlertCenterPanel(snapshot) {
+    var alerts = buildAlertItems(snapshot);
+    var stats = alertStats(alerts);
+    return [
+      '<article class="panel alert-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Alert Center</p>',
+      '<h2>매수·매도 타이밍 알림</h2>',
+      '</div>',
+      '<span class="metric">' + escapeHtml(stats.total) + '</span>',
+      '</div>',
+      '<div class="alert-stat-grid">',
+      renderAlertStat("긴급", stats.danger, "danger"),
+      renderAlertStat("주의", stats.caution, "caution"),
+      renderAlertStat("관찰", stats.watch, "watch"),
+      renderAlertStat("정보", stats.info, "info"),
+      '</div>',
+      '<div class="alert-list">',
+      alerts.length ? alerts.map(renderAlertRow).join("") : '<p class="subtle">현재 켜진 규칙에서 발생한 알림이 없습니다.</p>',
+      '</div>',
+      '<div class="rule-strip"><span>알림은 주문 지시가 아니라 가격선, 수급, 모델 점수, 보유 리스크를 다시 확인하라는 신호입니다.</span></div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderAlertStat(label, value, severity) {
+    return [
+      '<span class="alert-stat ' + escapeHtml(severity) + '">',
+      '<em>' + escapeHtml(label) + '</em>',
+      '<strong>' + escapeHtml(value) + '</strong>',
+      '</span>'
+    ].join("");
+  }
+
+  function renderAlertRow(alert) {
+    var meta = [
+      alert.symbol || "",
+      alert.source || "",
+      alert.value ? "현재 " + alert.value : "",
+      alert.threshold ? "기준 " + alert.threshold : ""
+    ].filter(Boolean);
+    return [
+      '<div class="alert-row ' + escapeHtml(alert.severity || "info") + '">',
+      '<span class="alert-severity ' + escapeHtml(alert.severity || "info") + '">' + escapeHtml(alertSeverityLabel(alert.severity)) + '</span>',
+      '<div class="alert-main">',
+      '<div class="flow-title">',
+      '<div>',
+      '<strong>' + escapeHtml(alert.title || "-") + '</strong>',
+      '<span>' + escapeHtml(meta.join(" · ")) + '</span>',
+      '</div>',
+      '<span class="tone-chip hold">' + escapeHtml(alertRuleLabel(alert.rule)) + '</span>',
+      '</div>',
+      '<p>' + escapeHtml(alert.message || "") + '</p>',
+      '</div>',
+      '</div>'
+    ].join("");
+  }
+
+  function renderAlertSettingsPanel() {
+    var rules = alertRules();
+    var thresholds = alertThresholds();
+    return [
+      '<article class="panel alert-settings-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Alert Rules</p>',
+      '<h2>알림 규칙과 기준값</h2>',
+      '</div>',
+      '<span class="metric">' + escapeHtml(alertRuleCatalog.filter(function (rule) { return enabledAlertRule(rules, rule.key); }).length) + '</span>',
+      '</div>',
+      '<div class="alert-rule-grid">',
+      alertRuleCatalog.map(function (rule) {
+        return renderAlertRuleToggle(rule, enabledAlertRule(rules, rule.key));
+      }).join(""),
+      '</div>',
+      '<div class="model-section alert-threshold-section">',
+      '<div class="flow-title"><div><strong>임계값</strong><span>알림 발생 기준입니다. 값 변경 즉시 다시 계산됩니다.</span></div></div>',
+      '<div class="alert-threshold-grid">',
+      alertThresholdCatalog.map(function (item) {
+        return renderAlertThresholdInput(item, thresholds[item.key]);
+      }).join(""),
+      '</div>',
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderAlertRuleToggle(rule, checked) {
+    return [
+      '<label class="alert-rule">',
+      '<input type="checkbox" data-alert-rule="' + escapeHtml(rule.key) + '"' + (checked ? " checked" : "") + ' />',
+      '<span>',
+      '<strong>' + escapeHtml(rule.label) + '</strong>',
+      '<em>' + escapeHtml(rule.group + " · " + rule.description) + '</em>',
+      '</span>',
+      '</label>'
+    ].join("");
+  }
+
+  function renderAlertThresholdInput(item, value) {
+    return [
+      '<label class="lab-control alert-threshold">',
+      '<span>' + escapeHtml(item.label) + (item.unit ? " (" + escapeHtml(item.unit) + ")" : "") + '</span>',
+      '<input data-alert-threshold="' + escapeHtml(item.key) + '" type="number" step="' + escapeHtml(item.step || "1") + '" value="' + escapeHtml(value) + '" />',
+      '</label>'
+    ].join("");
+  }
+
+  function renderAlertModelSettingsPanel(snapshot) {
+    var items = buildTradeSignalItems(snapshot);
+    var stats = modelStatsForItems(items);
+    var weights = formulaWeights();
+    var thresholds = modelDecisionThresholds();
+    return [
+      '<article class="panel alert-model-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Model Settings</p>',
+      '<h2>모델 설정</h2>',
+      '</div>',
+      '<span class="metric">' + escapeHtml(Math.round(stats.buyAverage)) + '</span>',
+      '</div>',
+      '<div class="lab-stats-grid model-stats-grid">',
+      renderLabStat("모델 매수 평균", Math.round(stats.buyAverage), "점"),
+      renderLabStat("모델 매도 평균", Math.round(stats.sellAverage), "점"),
+      renderLabStat("모델 신호", stats.actionCount, "개"),
+      renderLabStat("실험 기록", stats.recordCount, "개"),
+      renderLabStat("평균 성과", signedPct(stats.averageReturn), ""),
+      renderLabStat("승률", pct(stats.winRate), ""),
+      '</div>',
+      '<div class="model-editor">',
+      '<div class="settings-grid">',
+      renderModelSettingField("modelName", "모델 이름", "text", "나의 모델"),
+      renderModelFormulaField("modelHypothesis", "모델 가설", "어떤 조건에서 매수/매도할지"),
+      renderModelFormulaField("customBuyModelFormula", "내 모델 매수 공식", "buyScore * 0.35 + thesisScore * thesisWeight"),
+      renderModelFormulaField("customSellModelFormula", "내 모델 매도 공식", "sellScore * 0.35 + riskScore * riskControlWeight"),
+      '</div>',
+      '<div class="model-section">',
+      '<div class="flow-title"><div><strong>가중치</strong><span>모델과 알림이 함께 사용하는 공식 변수입니다.</span></div></div>',
+      renderNumberSettingGrid("formulaWeights", weights, ["growthWeight", "qualityWeight", "riskWeight", "flowWeight", "valuationWeight", "thesisWeight", "confidenceWeight", "riskControlWeight"]),
+      '</div>',
+      '<div class="model-section">',
+      '<div class="flow-title"><div><strong>모델 판단 기준</strong><span>내 모델 점수가 이 기준을 넘으면 판단 라벨과 알림이 바뀝니다.</span></div></div>',
+      renderNumberSettingGrid("modelDecisionThresholds", thresholds, ["modelBuy", "modelAdd", "modelSell", "modelReduce", "modelHold"]),
+      '</div>',
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderAlertDeliveryPanel() {
+    var secretType = state.showSecrets ? "text" : "password";
+    return [
+      '<article class="panel alert-delivery-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Delivery</p>',
+      '<h2>웹·푸시 알림 설정</h2>',
+      '</div>',
+      '<span class="tone-chip ' + (state.settingsSaved ? "watch" : "hold") + '">' + (state.settingsSaved ? "저장됨" : "수정 중") + '</span>',
+      '</div>',
+      '<div class="settings-body">',
+      '<div class="settings-note">',
+      '<strong>저장 위치</strong>',
+      '<p>웹 알림 규칙, 모델 설정, 푸시 채널 설정은 같은 설정 저장소를 사용합니다. 저장하면 로컬 서버의 알림 워커도 같은 값을 읽습니다.</p>',
+      state.serverSettingsError ? '<p class="form-error">' + escapeHtml(state.serverSettingsError) + '</p>' : '',
+      state.serverSettingsLocked ? '<p class="form-error">공유 모드에서는 서버 설정 저장이 잠겨 있습니다.</p>' : '',
+      '</div>',
+      '<div class="settings-grid">',
+      renderSettingField("notifyProvider", "알림 제공자", "text", "telegram"),
+      renderSettingField("notifyLinkUrl", "알림 링크 URL", "url", "http://127.0.0.1:3000?tab=alerts"),
+      renderSettingField("notifyIntervalMinutes", "알림 주기(분)", "number", "10"),
+      renderSettingField("telegramBotToken", "Telegram Bot Token", secretType, "bot token", { preserveConfigured: true }),
+      renderSettingField("telegramChatId", "Telegram Chat ID", "text", "chat id", { preserveConfigured: true }),
+      '</div>',
+      '<div class="settings-actions">',
+      '<button class="text-button primary" data-action="save-settings"' + (state.serverSettingsLocked ? ' disabled' : '') + '>설정 저장</button>',
+      '<button class="text-button" data-action="toggle-secrets">' + (state.showSecrets ? "secret 숨기기" : "secret 보기") + '</button>',
+      '</div>',
+      '</div>',
+      '</article>'
     ].join("");
   }
 
@@ -3191,7 +4007,7 @@
       renderSettingField("notifyProvider", "알림 제공자", "text", "telegram"),
       renderSettingField("telegramBotToken", "Telegram Bot Token", secretType, "bot token", { preserveConfigured: true }),
       renderSettingField("telegramChatId", "Telegram Chat ID", "text", "chat id", { preserveConfigured: true }),
-      renderSettingField("notifyLinkUrl", "알림 링크 URL", "url", "http://127.0.0.1:3000"),
+      renderSettingField("notifyLinkUrl", "알림 링크 URL", "url", "http://127.0.0.1:3000?tab=alerts"),
       renderSettingField("notifyIntervalMinutes", "알림 주기(분)", "number", "10"),
       '<label class="setting-field wide">',
       '<span>밸류에이션 가정</span>',
@@ -3362,11 +4178,13 @@
         if (!name) return;
         state.settings[name] = field.value;
         persistSettings();
+        state.settingsSaved = false;
         state.modelSaved = false;
         state.modelError = "";
       });
       field.addEventListener("change", function () {
         persistSettings();
+        state.settingsSaved = false;
         render();
       });
     });
@@ -3378,6 +4196,18 @@
           field.getAttribute("data-number-key"),
           field.value
         );
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-alert-rule]")).forEach(function (field) {
+      field.addEventListener("change", function () {
+        updateBooleanAssignmentSetting("alertRules", field.getAttribute("data-alert-rule"), field.checked);
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-alert-threshold]")).forEach(function (field) {
+      field.addEventListener("change", function () {
+        updateNumberAssignmentSetting("alertThresholds", field.getAttribute("data-alert-threshold"), field.value);
       });
     });
 
@@ -3423,8 +4253,7 @@
       });
     });
 
-    var saveSettings = app.querySelector('[data-action="save-settings"]');
-    if (saveSettings) {
+    Array.prototype.slice.call(app.querySelectorAll('[data-action="save-settings"]')).forEach(function (saveSettings) {
       saveSettings.addEventListener("click", function () {
         saveSettings.disabled = true;
         saveSettingsToServer()
@@ -3440,7 +4269,7 @@
             render();
           });
       });
-    }
+    });
 
     var watchAddForm = app.querySelector("[data-watch-add-form]");
     if (watchAddForm) {
@@ -3512,13 +4341,12 @@
       });
     }
 
-    var toggleSecrets = app.querySelector('[data-action="toggle-secrets"]');
-    if (toggleSecrets) {
+    Array.prototype.slice.call(app.querySelectorAll('[data-action="toggle-secrets"]')).forEach(function (toggleSecrets) {
       toggleSecrets.addEventListener("click", function () {
         state.showSecrets = !state.showSecrets;
         render();
       });
-    }
+    });
 
     var clearSettingsButton = app.querySelector('[data-action="clear-settings"]');
     if (clearSettingsButton) {

@@ -3,8 +3,8 @@ import os
 from collections import defaultdict
 from typing import Callable, DefaultDict, Iterable, List
 
-from ..config import data_dir
 from ..domain.events import DomainEvent
+from .settings import data_dir
 
 
 EventHandler = Callable[[DomainEvent], None]

@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 from typing import List
 
-from .config import ROOT_DIR, data_dir
+from .infrastructure.settings import ROOT_DIR, data_dir
 
 
 PID_PATH = data_dir() / "python-monitor.pid"

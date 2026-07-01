@@ -7,23 +7,25 @@ The Python service is the migration target for account-scale monitoring, schedul
 - `python_service/digital_twin/domain/`: account, portfolio, alert domain objects and repository/provider ports
 - `python_service/digital_twin/application/`: use cases that coordinate repositories, snapshot providers, monitors, and notification delivery
 - `python_service/digital_twin/infrastructure/`: SQLite, local JSON state, Toss snapshot, and notification adapters
-- `python_service/digital_twin/config.py`: local env, settings, and the current SQLite account registry implementation
-- `python_service/digital_twin/providers.py`: Toss portfolio adapter and demo fallback
-- `python_service/digital_twin/analytics.py`: portfolio summary, decision scoring, safe strategy formulas
-- `python_service/digital_twin/monitor.py`: realtime anomaly detection and per-message cadence
-- `python_service/digital_twin/scheduler.py`: long-running realtime scheduler
-- `python_service/digital_twin/notifiers.py`: console and Telegram delivery
+- `python_service/digital_twin/config.py`: compatibility re-export for old settings/account imports
+- `python_service/digital_twin/providers.py`: compatibility re-export for Toss snapshot adapter
+- `python_service/digital_twin/analytics.py`: compatibility re-export for domain analytics
+- `python_service/digital_twin/monitor.py`: compatibility re-export for monitoring rules and JSON monitor state
+- `python_service/digital_twin/scheduler.py`: compatibility factory for the composed monitor runner
+- `python_service/digital_twin/notifiers.py`: compatibility re-export for notification adapters
 - `python_service/digital_twin/cli.py`: account and monitor CLI
+
+The development methodology is documented in `docs/development-methodology.md` and referenced from `AGENTS.md` so future local Codex sessions can load the same rules.
 
 ## DDD Boundaries
 
 The Python service now follows a conservative DDD layout:
 
-- Domain objects are plain Python dataclasses in `domain/` and do not call SQLite, Toss, Telegram, files, or environment variables.
+- Domain objects and domain services live in `domain/` and do not call SQLite, Toss, Telegram, files, or environment variables.
 - Domain ports in `domain/repositories.py` define what the application needs from account storage, snapshot loading, monitor state, and notifications.
 - Application services in `application/` own use cases such as saving account settings and running one monitoring cycle.
 - Infrastructure adapters satisfy those ports with local implementations.
-- Legacy import paths such as `digital_twin.models`, `digital_twin.config.AccountConfig`, and `digital_twin.scheduler.MonitorRunner` remain available so the Node API and existing scripts keep working.
+- Legacy import paths such as `digital_twin.models`, `digital_twin.config.AccountConfig`, and `digital_twin.scheduler.MonitorRunner` remain available as thin wrappers so the Node API and existing scripts keep working.
 
 When adding a feature, put business vocabulary and state transitions in `domain/`, orchestration in `application/`, and vendor/file/database code in `infrastructure/` or an existing adapter. UI and API routes should call application services rather than reaching into repositories directly.
 

@@ -5,10 +5,13 @@ import sys
 from typing import List
 
 from .application.account_service import AccountApplicationService
-from .config import AccountConfig, AccountRegistry, runtime_settings, split_symbols
+from .application.scheduler import MIN_REALTIME_INTERVAL_SECONDS, RealtimeScheduler
+from .domain.accounts import AccountConfig, split_symbols
 from .infrastructure.event_bus import default_event_bus
-from .monitor import MonitorStore
-from .scheduler import MIN_REALTIME_INTERVAL_SECONDS, MonitorRunner, RealtimeScheduler
+from .infrastructure.json_monitor_state import MonitorStore
+from .infrastructure.service_factory import build_monitor_runner
+from .infrastructure.settings import runtime_settings
+from .infrastructure.sqlite_accounts import AccountRegistry
 
 
 def account_from_args(args) -> AccountConfig:
@@ -80,7 +83,7 @@ def monitor_command(args) -> int:
         print("Sent cadence keys: " + str(len([key for key in store.sent.keys() if str(key).startswith("cadence:")])))
         return 0
 
-    runner = MonitorRunner(accounts)
+    runner = build_monitor_runner(accounts)
     if args.monitor_action == "once":
         runner.run_once(dry_run=args.dry_run, force=args.force)
         return 0

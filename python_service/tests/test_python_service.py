@@ -10,13 +10,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.application.account_service import AccountApplicationService
 from digital_twin.application.monitoring_service import MonitorRunner as ApplicationMonitorRunner
-from digital_twin.analytics import SafeFormula, StrategyModel, decisions_for_positions, normalize_position, portfolio_summary
-from digital_twin.config import AccountConfig, AccountRegistry, parse_assignments
 from digital_twin.cli import preserve_existing_secrets
+from digital_twin.domain.accounts import AccountConfig
+from digital_twin.domain.analytics import SafeFormula, StrategyModel, decisions_for_positions, normalize_position, portfolio_summary
 from digital_twin.domain.events import ACCOUNT_SAVED, MONITORING_ALERTS_DETECTED, MONITORING_CYCLE_COMPLETED, MONITORING_SNAPSHOT_COLLECTED
+from digital_twin.domain.monitoring import RealtimeMonitor
+from digital_twin.domain.parsing import parse_assignments
+from digital_twin.domain.portfolio import AccountSnapshot, utc_now_iso
 from digital_twin.infrastructure.event_bus import EventBus, JsonEventLog
-from digital_twin.models import AccountSnapshot, utc_now_iso
-from digital_twin.monitor import MonitorStore, RealtimeMonitor
+from digital_twin.infrastructure.json_monitor_state import MonitorStore
+from digital_twin.infrastructure.sqlite_accounts import AccountRegistry
 from digital_twin.scheduler import MonitorRunner
 
 

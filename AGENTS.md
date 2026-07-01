@@ -17,6 +17,17 @@ npm test
 
 This runs syntax checks and a local smoke test against the home page and `/api/bootstrap`.
 
+## Development Methodology
+
+Before changing Python service architecture or adding feature work, read and follow `docs/development-methodology.md`.
+
+Key rules:
+
+- Use DDD layers: `domain/` for business concepts, `application/` for use cases, `infrastructure/` for DB/files/API/vendors/runtime wiring.
+- Use domain events for cross-feature contracts so multiple development sessions can work independently.
+- Keep top-level Python modules such as `config.py`, `analytics.py`, `monitor.py`, `providers.py`, `notifiers.py`, and `scheduler.py` as compatibility wrappers only.
+- Do not put API keys, Telegram tokens, client secrets, raw account credentials, `data/domain-events.jsonl`, or other private local data into git.
+
 ## Required Handoff
 
 After making project changes:

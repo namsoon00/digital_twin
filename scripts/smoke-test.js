@@ -310,6 +310,20 @@ async function checkNormalMode(port) {
   assertOk(staticMockMarketPayload.request && staticMockMarketPayload.request.staticFile === true, "정적 mock market JSON 표시가 없습니다.");
   assertOk(staticMockMarketPayload.series && Array.isArray(staticMockMarketPayload.series.NVDA.candles), "정적 NVDA mock candle 배열이 없습니다.");
 
+  const adminRedirect = await request(port, "/admin");
+  assertOk(adminRedirect.statusCode === 302 && adminRedirect.headers.location === "/admin/", "Python admin preview 디렉터리 리다이렉트가 없습니다.");
+
+  const adminPreview = await request(port, "/admin/");
+  assertOk(adminPreview.statusCode === 200, "Python admin preview 응답 코드가 200이 아닙니다: " + adminPreview.statusCode);
+  assertOk(adminPreview.body.indexOf("Exit Lens Python Admin") >= 0, "Python admin preview 제목이 없습니다.");
+
+  const adminConfig = await request(port, "/admin/config.json");
+  assertOk(adminConfig.statusCode === 200, "Python admin config 응답 코드가 200이 아닙니다: " + adminConfig.statusCode);
+  const adminConfigPayload = JSON.parse(adminConfig.body);
+  assertOk(adminConfigPayload.mode === "github-pages-readonly-preview", "Python admin config 모드가 정적 미리보기가 아닙니다.");
+  assertOk(Array.isArray(adminConfigPayload.pages) && adminConfigPayload.pages.some(function (page) { return page.id === "model-review"; }), "Python admin config에 모델 리뷰 구성이 없습니다.");
+  assertOk(adminConfig.body.indexOf("fake-secret") < 0, "Python admin config가 테스트 secret을 포함했습니다.");
+
   const preflight = await request(port, "/api/data-api/opendart/company", {
     method: "OPTIONS",
     headers: {

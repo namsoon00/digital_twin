@@ -642,8 +642,16 @@ function normalizeOpenDartCompanyUrl(query) {
 
 function serveStatic(req, res, pathname) {
   const target = pathname === "/" ? "/index.html" : pathname;
-  const filePath = path.normalize(path.join(publicDir, target));
+  let filePath = path.normalize(path.join(publicDir, target));
   if (!filePath.startsWith(publicDir)) return text(res, 403, "Forbidden", "text/plain");
+  if (fs.existsSync(filePath) && fs.statSync(filePath).isDirectory()) {
+    if (!pathname.endsWith("/")) {
+      res.writeHead(302, { Location: pathname + "/" });
+      res.end();
+      return;
+    }
+    filePath = path.join(filePath, "index.html");
+  }
   if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) return text(res, 404, "Not found", "text/plain");
 
   const ext = path.extname(filePath);

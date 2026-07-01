@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import tempfile
@@ -8,6 +9,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from digital_twin.admin_preview import admin_preview_config, write_admin_preview
 from digital_twin.application.account_service import AccountApplicationService
 from digital_twin.application.model_review_service import ModelReviewRunner
 from digital_twin.application.monitoring_service import MonitorRunner as ApplicationMonitorRunner
@@ -287,6 +289,32 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(1, processed)
         self.assertEqual({"done": 1}, store.summary())
         self.assertIn("모델 리뷰", sent[0])
+
+    def test_admin_preview_config_is_static_and_sanitized(self):
+        with mock.patch.dict(os.environ, {
+            "TOSS_CLIENT_SECRET": "secret-that-must-not-leak",
+            "TELEGRAM_BOT_TOKEN": "telegram-secret-that-must-not-leak",
+        }, clear=False):
+            payload = admin_preview_config()
+
+        encoded = json.dumps(payload, ensure_ascii=False)
+        self.assertEqual("github-pages-readonly-preview", payload["mode"])
+        self.assertTrue(payload["buildId"])
+        self.assertTrue(any(page["id"] == "model-review" for page in payload["pages"]))
+        self.assertIn("clientSecret", encoded)
+        self.assertNotIn("secret-that-must-not-leak", encoded)
+        self.assertNotIn("telegram-secret-that-must-not-leak", encoded)
+
+    def test_admin_preview_writes_pages_assets(self):
+        output_dir = Path(self.temp.name) / "admin"
+
+        payload = write_admin_preview(output_dir)
+
+        html = (output_dir / "index.html").read_text(encoding="utf-8")
+        config = json.loads((output_dir / "config.json").read_text(encoding="utf-8"))
+        self.assertEqual(payload["buildId"], config["buildId"])
+        self.assertIn("Exit Lens Python Admin", html)
+        self.assertIn("config.json?v=" + payload["buildId"], html)
 
     def test_runner_uses_provider_snapshot(self):
         account = AccountConfig("main", "메인", "toss", "https://example.test", "", "", "", ["AAPL"])

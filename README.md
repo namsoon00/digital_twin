@@ -17,6 +17,12 @@ GitHub Pages mock preview는 아래 URL에서 확인합니다.
 https://namsoon00.github.io/digital_twin/?mock=1
 ```
 
+Python 서비스 어드민 구성 미리보기는 아래 URL에서 확인합니다. 실제 계좌 DB와 secret은 포함하지 않는 읽기 전용 정적 페이지입니다.
+
+```text
+https://namsoon00.github.io/digital_twin/admin/
+```
+
 토스 실계좌 조회를 켜려면 `.env.local`에 아래 값을 넣습니다. 값이 없으면 앱은 데모 포트폴리오로 동작합니다.
 
 ```bash
@@ -58,6 +64,12 @@ curl "http://127.0.0.1:3000/mock-data/market/semiconductor-boom.json"
 
 ```bash
 npm run generate:mock-market
+```
+
+GitHub Pages에 올라가는 모든 정적 산출물은 아래 명령으로 함께 갱신합니다.
+
+```bash
+npm run generate:static
 ```
 
 로컬 서버에서는 같은 generator를 API 형태로도 확인할 수 있습니다.
@@ -131,7 +143,7 @@ npm test
 
 ## GitHub Pages 배포
 
-`main` 브랜치에 푸시하면 `.github/workflows/pages.yml`이 실행되어 GitHub Pages용 `gh-pages` 브랜치를 갱신합니다. 배포 직전에 `npm run generate:mock-market`를 실행하므로 서버의 mock market generator만 바뀌어도 정적 JSON이 함께 갱신됩니다.
+`main` 브랜치에 푸시하면 `.github/workflows/pages.yml`이 실행되어 GitHub Pages용 `gh-pages` 브랜치를 갱신합니다. 배포 직전에 `npm run generate:static`를 실행하므로 서버의 mock market generator와 Python admin preview 구성이 바뀌어도 정적 산출물이 함께 갱신됩니다.
 
 ## 공유 미리보기
 

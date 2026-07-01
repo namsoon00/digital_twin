@@ -2,8 +2,10 @@ import argparse
 import json
 import os
 import sys
+from pathlib import Path
 from typing import List
 
+from .admin_preview import write_admin_preview
 from .application.account_service import AccountApplicationService
 from .application.model_review_service import ModelReviewScheduler
 from .application.scheduler import MIN_REALTIME_INTERVAL_SECONDS, RealtimeScheduler
@@ -115,6 +117,12 @@ def model_review_command(args) -> int:
     return 1
 
 
+def admin_preview_command(args) -> int:
+    payload = write_admin_preview(Path(args.output))
+    print(json.dumps({"output": args.output, "buildId": payload.get("buildId")}, ensure_ascii=False))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Digiter Twin Python service")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -163,6 +171,10 @@ def build_parser() -> argparse.ArgumentParser:
     review_watch.add_argument("--limit", default="")
     model_review_actions.add_parser("status")
     model_review.set_defaults(func=model_review_command)
+
+    admin_preview = subparsers.add_parser("admin-preview", help="Generate GitHub Pages admin preview")
+    admin_preview.add_argument("--output", default="public/admin")
+    admin_preview.set_defaults(func=admin_preview_command)
     return parser
 
 

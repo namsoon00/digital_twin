@@ -1,8 +1,10 @@
 const childProcess = require("child_process");
 const crypto = require("crypto");
+const fs = require("fs");
 const http = require("http");
 const os = require("os");
 const path = require("path");
+const vm = require("vm");
 
 const rootDir = path.resolve(__dirname, "..");
 
@@ -90,6 +92,103 @@ function request(port, pathname, options) {
 
 function assertOk(condition, message) {
   if (!condition) throw new Error(message);
+}
+
+function checkFrontendAdminRender() {
+  const code = fs.readFileSync(path.join(rootDir, "public", "app.js"), "utf8");
+  let html = "";
+  const app = {
+    get innerHTML() {
+      return html;
+    },
+    set innerHTML(value) {
+      html = String(value);
+    },
+    querySelector: function () {
+      return null;
+    },
+    querySelectorAll: function () {
+      return [];
+    }
+  };
+  const storage = new Map();
+  const payloads = {
+    "/api/settings": { settings: {}, configured: {}, locked: false },
+    "/api/service-accounts": {
+      accounts: [
+        {
+          id: "main",
+          label: "메인",
+          provider: "toss",
+          enabled: true,
+          watchlistSymbols: ["NVDA"],
+          clientId: true,
+          clientSecret: true,
+          telegramBotToken: true
+        }
+      ]
+    },
+    "/api/flow-lens": {
+      generatedAt: "2026-07-01T00:00:00.000Z",
+      headline: "테스트 스냅샷",
+      exitScore: 0,
+      mock: true,
+      toss: { mode: "mock", status: "ok", account: {}, positions: [], watchlist: [] },
+      tossDecision: { items: [], rules: [], holdingCount: 0, watchCount: 0, overallPressure: 0 },
+      portfolio: { total: 0, invested: 0, cash: 0, markets: [], sectors: [] },
+      checklist: [],
+      summary: []
+    }
+  };
+
+  vm.runInNewContext(code, {
+    console: console,
+    setTimeout: setTimeout,
+    clearTimeout: clearTimeout,
+    URLSearchParams: URLSearchParams,
+    document: {
+      getElementById: function (id) {
+        return id === "app" ? app : null;
+      }
+    },
+    window: {
+      location: { protocol: "http:", hostname: "127.0.0.1", search: "" },
+      localStorage: {
+        getItem: function (key) {
+          return storage.has(key) ? storage.get(key) : null;
+        },
+        setItem: function (key, value) {
+          storage.set(key, String(value));
+        },
+        removeItem: function (key) {
+          storage.delete(key);
+        }
+      }
+    },
+    fetch: function (requestedPath) {
+      const key = String(requestedPath).split("?")[0];
+      if (!payloads[key]) throw new Error("unexpected frontend fetch: " + requestedPath);
+      return Promise.resolve({
+        ok: true,
+        json: function () {
+          return Promise.resolve(payloads[key]);
+        },
+        text: function () {
+          return Promise.resolve(JSON.stringify(payloads[key]));
+        }
+      });
+    }
+  }, { filename: "public/app.js" });
+
+  return new Promise(function (resolve) {
+    setTimeout(function () {
+      assertOk(html.indexOf("계정·알림·모델 운영 콘솔") >= 0, "메인 운영 콘솔 제목이 렌더링되지 않았습니다.");
+      assertOk(html.indexOf("data-account-form") >= 0, "계정 등록 폼이 렌더링되지 않았습니다.");
+      assertOk(html.indexOf("admin-message-row") >= 0, "메시지 타입별 알림 설정이 렌더링되지 않았습니다.");
+      assertOk(html.indexOf("admin-modeling-panel") >= 0, "모델링 설정 패널이 렌더링되지 않았습니다.");
+      resolve();
+    }, 50);
+  });
 }
 
 function withFakeTossApi(callback) {
@@ -369,6 +468,7 @@ async function checkLiveTossMode(port) {
 }
 
 async function main() {
+  await checkFrontendAdminRender();
   await withServer({}, checkNormalMode);
   await withFakeTossApi(async function (baseUrl) {
     await withServer({

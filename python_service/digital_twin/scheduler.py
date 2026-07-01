@@ -4,6 +4,7 @@ from typing import Iterable
 
 from .application.monitoring_service import MonitorRunner as ApplicationMonitorRunner
 from .config import AccountConfig
+from .infrastructure.event_bus import default_event_bus
 from .monitor import MonitorStore, RealtimeMonitor
 from .notifiers import send_events
 from .providers import build_snapshot
@@ -20,6 +21,7 @@ class MonitorRunner(ApplicationMonitorRunner):
         monitor: RealtimeMonitor = None,
         snapshot_builder=None,
         event_sender=None,
+        event_publisher=None,
     ):
         super().__init__(
             accounts,
@@ -27,6 +29,7 @@ class MonitorRunner(ApplicationMonitorRunner):
             monitor=monitor or RealtimeMonitor(),
             snapshot_builder=snapshot_builder or build_snapshot,
             event_sender=event_sender or send_events,
+            event_publisher=event_publisher or default_event_bus(),
         )
 
 

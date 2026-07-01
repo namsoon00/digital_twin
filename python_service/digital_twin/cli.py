@@ -6,6 +6,7 @@ from typing import List
 
 from .application.account_service import AccountApplicationService
 from .config import AccountConfig, AccountRegistry, runtime_settings, split_symbols
+from .infrastructure.event_bus import default_event_bus
 from .monitor import MonitorStore
 from .scheduler import MIN_REALTIME_INTERVAL_SECONDS, MonitorRunner, RealtimeScheduler
 
@@ -35,7 +36,7 @@ def preserve_existing_secrets(registry: AccountRegistry, payload, account: Accou
 
 def accounts_command(args) -> int:
     registry = AccountRegistry()
-    service = AccountApplicationService(registry, registry.settings)
+    service = AccountApplicationService(registry, registry.settings, event_publisher=default_event_bus())
     if args.accounts_action == "list":
         accounts = service.list_masked()
         if args.json:

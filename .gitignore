@@ -15,6 +15,7 @@ data/service.db-*
 data/notification-state.json
 data/monitor-state.json
 data/python-monitor-state.json
+data/domain-events.jsonl
 data/kakao-token.json
 data/*.pid
 data/python-monitor.log

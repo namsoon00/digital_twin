@@ -27,6 +27,34 @@ The Python service now follows a conservative DDD layout:
 
 When adding a feature, put business vocabulary and state transitions in `domain/`, orchestration in `application/`, and vendor/file/database code in `infrastructure/` or an existing adapter. UI and API routes should call application services rather than reaching into repositories directly.
 
+## Event-Driven Feature Slices
+
+Use events as the contract between independently developed features:
+
+- Shared event names and payload factories live in `python_service/digital_twin/domain/events.py`.
+- Runtime dispatch lives in `python_service/digital_twin/infrastructure/event_bus.py`.
+- Application services publish events after completing their own transaction or monitoring step.
+- Event payloads must not include API keys, Telegram tokens, client secrets, or raw account credentials.
+- Local events are appended to `data/domain-events.jsonl`, which is ignored by git.
+
+Current event contracts:
+
+- `account.saved`: emitted by account settings writes with masked account data.
+- `account.removed`: emitted after a saved account is removed.
+- `monitoring.snapshot_collected`: emitted once per collected account snapshot.
+- `monitoring.alerts_detected`: emitted when a monitoring cycle finds alert events.
+- `monitoring.cycle_completed`: emitted after each monitoring cycle with snapshot and alert counts.
+
+For parallel work across multiple chat windows, keep each conversation inside one slice:
+
+- Account management: `domain/accounts.py`, `application/account_service.py`, `infrastructure/sqlite_accounts.py`
+- Monitoring and scheduling: `domain/portfolio.py`, `application/monitoring_service.py`, `monitor.py`, `scheduler.py`
+- Notifications: `notifiers.py`, `infrastructure/notifications.py`, and handlers subscribed to monitoring events
+- Providers/data collection: `providers.py`, `infrastructure/toss_snapshots.py`
+- Model scoring: `analytics.py` and future model-lab modules
+
+If a feature needs another feature's result, subscribe to or publish a domain event instead of importing the other feature's application service. This keeps separate development sessions from editing the same orchestration code.
+
 ## Local Commands
 
 ```bash

@@ -13,6 +13,8 @@ from digital_twin.application.monitoring_service import MonitorRunner as Applica
 from digital_twin.analytics import SafeFormula, StrategyModel, decisions_for_positions, normalize_position, portfolio_summary
 from digital_twin.config import AccountConfig, AccountRegistry, parse_assignments
 from digital_twin.cli import preserve_existing_secrets
+from digital_twin.domain.events import ACCOUNT_SAVED, MONITORING_ALERTS_DETECTED, MONITORING_CYCLE_COMPLETED, MONITORING_SNAPSHOT_COLLECTED
+from digital_twin.infrastructure.event_bus import EventBus, JsonEventLog
 from digital_twin.models import AccountSnapshot, utc_now_iso
 from digital_twin.monitor import MonitorStore, RealtimeMonitor
 from digital_twin.scheduler import MonitorRunner
@@ -92,7 +94,8 @@ class PythonServiceTests(unittest.TestCase):
 
     def test_account_application_service_manages_account_use_cases(self):
         registry = AccountRegistry()
-        service = AccountApplicationService(registry, registry.settings)
+        event_bus = EventBus()
+        service = AccountApplicationService(registry, registry.settings, event_publisher=event_bus)
         existing = AccountConfig(
             "main",
             "메인",
@@ -115,6 +118,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("token", updated.telegram_bot_token)
         self.assertEqual(["NVDA"], masked["watchlistSymbols"])
         self.assertTrue(masked["clientSecret"])
+        self.assertEqual([ACCOUNT_SAVED, ACCOUNT_SAVED], [event.name for event in event_bus.published])
+        self.assertFalse(event_bus.published[-1].payload["account"]["clientSecret"] == "secret1")
 
     def test_strategy_formula_is_safe_and_scores(self):
         formula = SafeFormula("max(0, buyShare - 50) + abs(priceChangeRate)")
@@ -191,16 +196,66 @@ class PythonServiceTests(unittest.TestCase):
             sent.extend(events)
             return SimpleNamespace(delivered=True)
 
+        event_bus = EventBus()
         events = ApplicationMonitorRunner(
             [account],
             store=MonitorStore(),
             monitor=RealtimeMonitor(),
             snapshot_builder=snapshot_builder,
             event_sender=sender,
+            event_publisher=event_bus,
         ).run_once(dry_run=True, force=True)
 
         self.assertTrue(events)
         self.assertEqual(events, sent)
+        self.assertEqual(
+            [MONITORING_SNAPSHOT_COLLECTED, MONITORING_ALERTS_DETECTED, MONITORING_CYCLE_COMPLETED],
+            [event.name for event in event_bus.published],
+        )
+        self.assertEqual(1, event_bus.published[-1].payload["snapshotCount"])
+        self.assertEqual(len(events), event_bus.published[-1].payload["alertCount"])
+
+    def test_event_bus_dispatches_named_and_wildcard_handlers(self):
+        registry = AccountRegistry()
+        named = []
+        all_events = []
+        event_bus = EventBus()
+        event_bus.subscribe(ACCOUNT_SAVED, named.append)
+        event_bus.subscribe_all(all_events.append)
+        service = AccountApplicationService(registry, registry.settings, event_publisher=event_bus)
+
+        service.save(AccountConfig("main", "메인", "toss", "https://example.test", "id1", "secret1", "1", ["AAPL"]))
+
+        self.assertEqual(1, len(named))
+        self.assertEqual(named, all_events)
+
+    def test_event_bus_records_handler_errors_without_breaking_publish(self):
+        event_bus = EventBus()
+
+        def fail(_event):
+            raise RuntimeError("handler failed")
+
+        event_bus.subscribe_all(fail)
+        registry = AccountRegistry()
+        service = AccountApplicationService(registry, registry.settings, event_publisher=event_bus)
+
+        service.save(AccountConfig("main", "메인", "toss", "https://example.test", "id1", "secret1", "1", ["AAPL"]))
+
+        self.assertEqual(1, len(event_bus.published))
+        self.assertEqual(1, len(event_bus.handler_errors))
+
+    def test_json_event_log_writes_jsonl(self):
+        event_bus = EventBus()
+        event_log = JsonEventLog(Path(self.temp.name) / "domain-events.jsonl")
+        event_bus.subscribe_all(event_log.handle)
+        registry = AccountRegistry()
+        service = AccountApplicationService(registry, registry.settings, event_publisher=event_bus)
+
+        service.save(AccountConfig("main", "메인", "toss", "https://example.test", "id1", "secret1", "1", ["AAPL"]))
+
+        payload = (Path(self.temp.name) / "domain-events.jsonl").read_text(encoding="utf-8")
+        self.assertIn('"name": "account.saved"', payload)
+        self.assertNotIn("secret1", payload)
 
 
 class AssignmentTests(unittest.TestCase):

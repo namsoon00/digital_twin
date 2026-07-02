@@ -4628,7 +4628,7 @@
       '<button class="text-button primary"' + (locked ? " disabled" : "") + '>' + escapeHtml(state.watchlistSavingAccountId === accountId ? "저장 중" : "추가") + '</button>',
       '</form>',
       '<div class="watch-suggest-box" data-watch-suggest-list data-watch-account-id="' + escapeHtml(accountId) + '">' + renderWatchSuggestList() + '</div>',
-      '<p class="subtle">검색 결과는 전체 종목 DB와 현재 시세 스냅샷을 함께 사용합니다. 저장하면 이 계정의 알림·모니터링 기준으로 쓰입니다.</p>',
+      '<p class="subtle">검색 후 저장하면 이 계정의 알림·모니터링 기준으로 쓰입니다. 시장 전체 목록은 전체종목 탭에서 따로 봅니다.</p>',
       state.watchlistError ? '<p class="form-error">' + escapeHtml(state.watchlistError) + '</p>' : '',
       '</div>',
       '<div class="account-watch-symbol-list">',
@@ -5435,7 +5435,7 @@
       '</div>',
       '<div class="rule-strip">',
       '<span>주문 실행이 아니라 매매 타이밍을 찾기 위한 읽기 전용 계산판입니다.</span>',
-      full ? '<span>EPS, 목표 PER, 안전마진을 바꾸면 적정가와 가격 기준선이 다시 계산됩니다.</span>' : '<span>전체 종목은 관심종목 탭에서 봅니다.</span>',
+      full ? '<span>EPS, 목표 PER, 안전마진을 바꾸면 적정가와 가격 기준선이 다시 계산됩니다.</span>' : '<span>시장 전체 목록은 전체종목 탭에서 봅니다.</span>',
       '</div>',
       '</article>'
     ].join("");

@@ -542,6 +542,7 @@ function checkFrontendAdminRender() {
     assertOk(watchlistHtml.indexOf("watch-row-meta") >= 0, "관심종목 알림/시세 상태가 렌더링되지 않았습니다.");
     assertOk(watchlistHtml.indexOf("시세 알림") >= 0, "관심종목 시세 알림 상태가 표시되지 않았습니다.");
     assertOk(watchlistHtml.indexOf("symbol-result-list") < 0, "관심종목 탭에 전체 종목 결과 리스트가 남아 있습니다.");
+    assertOk(watchlistHtml.indexOf("전체 종목 DB") < 0, "관심종목 탭에 전체 종목 DB 안내가 남아 있습니다.");
     assertOk(watchlistHtml.indexOf("NVDA") >= 0 && watchlistHtml.indexOf("005930") >= 0, "DB 계정 관심 종목이 렌더링되지 않았습니다.");
     assertOk(symbolUniverseHtml.indexOf("<h1>전체종목</h1>") >= 0, "전체종목 탭 제목이 상단에 렌더링되지 않았습니다.");
     assertOk(symbolUniverseHtml.indexOf("symbol-result-list") >= 0, "전체종목 탭에 종목 결과 리스트가 렌더링되지 않았습니다.");

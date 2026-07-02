@@ -396,7 +396,11 @@ function checkFrontendAdminRender() {
     const staticAccountHtml = pages[6];
     const symbolUniverseHtml = watchlistHtml;
 
-    assertOk(overviewHtml.indexOf("계정·알림·모델 운영 콘솔") >= 0, "메인 운영 콘솔 제목이 렌더링되지 않았습니다.");
+    assertOk(overviewHtml.indexOf("계정·알림·모델 운영 콘솔") < 0, "이전 고정 운영 콘솔 제목이 아직 렌더링됩니다.");
+    assertOk(overviewHtml.indexOf("<h1>홈</h1>") >= 0, "홈 탭 제목이 상단에 렌더링되지 않았습니다.");
+    assertOk(accountHtml.indexOf("<h1>계정</h1>") >= 0, "계정 탭 제목이 상단에 렌더링되지 않았습니다.");
+    assertOk(code.indexOf("settings-section-stack") >= 0, "설정 화면이 섹션 구조로 구성되지 않았습니다.");
+    assertOk(code.indexOf("settings-top-button") >= 0, "상단 설정 버튼 전용 스타일이 적용되지 않았습니다.");
     ["overview", "accounts", "watchlist", "monitoring", "notifications", "modeling"].forEach(function (tab) {
       assertOk(overviewHtml.indexOf('data-tab="' + tab + '"') >= 0, "새 탭이 렌더링되지 않았습니다: " + tab);
     });

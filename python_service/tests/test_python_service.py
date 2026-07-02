@@ -1053,7 +1053,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("전체", schedule["recentTargets"][0]["target"] or "전체")
         self.assertIn("실시간 모니터링", schedule["triggerSummary"])
 
-    def test_notification_template_test_send_uses_live_snapshot_and_template(self):
+    def test_notification_template_test_send_queues_live_snapshot_message(self):
         registry = AccountRegistry()
         account = AccountConfig(
             "main",
@@ -1095,25 +1095,24 @@ class PythonServiceTests(unittest.TestCase):
             decisions_for_positions([position], portfolio),
         )
         SQLiteNotificationTemplateStore().upsert("monitorHeartbeat", "[{messageType}] {title}\n{rawLines}", "상태 확인 템플릿", True)
-        sent = []
 
-        class FakeNotifier:
-            label = "Fake"
-
-            def send(self, message):
-                sent.append(message)
-                return SimpleNamespace(delivered=True, label=self.label, reason="")
-
-        with mock.patch("digital_twin.infrastructure.web_server.build_snapshot", return_value=snapshot), \
-                mock.patch("digital_twin.infrastructure.web_server.notifier_for_account", return_value=FakeNotifier()):
+        with mock.patch("digital_twin.infrastructure.web_server.build_snapshot", return_value=snapshot):
             status, payload = notification_template_test_payload({"messageType": "monitorHeartbeat"})
 
-        self.assertEqual(200, status)
-        self.assertTrue(payload["delivered"])
+        self.assertEqual(202, status)
+        self.assertFalse(payload["delivered"])
+        self.assertTrue(payload["queued"])
         self.assertEqual("monitorHeartbeat", payload["event"]["messageType"])
-        self.assertEqual(1, len(sent))
-        self.assertTrue(sent[0].startswith("[monitorHeartbeat]"))
-        self.assertIn("토스 계좌 동기화", sent[0])
+        jobs = SQLiteNotificationJobStore().pending(limit=10)
+        self.assertEqual(1, len(jobs))
+        self.assertEqual("pending", jobs[0].status)
+        self.assertEqual("monitorHeartbeat", jobs[0].message_type)
+        self.assertIn("상태 토스 계좌 동기화", jobs[0].context["rawLines"])
+        self.assertEqual("notification.test_requested", jobs[0].source_event_name)
+        self.assertTrue(jobs[0].source_event_id)
+        counts = SQLiteEventLog().event_counts()
+        self.assertEqual(1, counts["notification.test_requested"])
+        self.assertEqual(1, counts["notification.job_queued"])
 
     def test_notification_template_test_send_rejects_demo_snapshot_by_default(self):
         registry = AccountRegistry()

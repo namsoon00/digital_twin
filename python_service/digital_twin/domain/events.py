@@ -11,6 +11,18 @@ ACCOUNT_REMOVED = "account.removed"
 MONITORING_SNAPSHOT_COLLECTED = "monitoring.snapshot_collected"
 MONITORING_ALERTS_DETECTED = "monitoring.alerts_detected"
 MONITORING_CYCLE_COMPLETED = "monitoring.cycle_completed"
+SETTINGS_UPDATED = "settings.updated"
+NOTIFICATION_TEMPLATE_UPDATED = "notification_template.updated"
+NOTIFICATION_TEST_REQUESTED = "notification.test_requested"
+NOTIFICATION_JOB_QUEUED = "notification.job_queued"
+APP_PROFILE_UPDATED = "app.profile_updated"
+APP_MEMORY_RECORDED = "app.memory_recorded"
+APP_MEMORY_UPDATED = "app.memory_updated"
+APP_MEMORY_REMOVED = "app.memory_removed"
+APP_ITEM_UPDATED = "app.item_updated"
+APP_ITEM_REMOVED = "app.item_removed"
+CHAT_MESSAGE_APPENDED = "chat.message_appended"
+SYMBOL_UNIVERSE_REFRESHED = "symbol_universe.refreshed"
 
 
 @dataclass(frozen=True)

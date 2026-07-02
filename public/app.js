@@ -201,7 +201,7 @@
     { id: "symbols", label: "전체종목", description: "시장 목록" },
     { id: "monitoring", label: "모니터링", description: "보유·타이밍" },
     { id: "notifications", label: "알림", description: "메시지 타입" },
-    { id: "modeling", label: "모델링", description: "판단 기준" },
+    { id: "modeling", label: "투자전략", description: "모델링 관리" },
     { id: "settings", label: "설정", description: "런타임 환경" }
   ];
 
@@ -343,6 +343,9 @@
   var watchSuggestTimer = null;
   var watchSuggestRequestId = 0;
   var snackbarTimer = null;
+  var realtimeSocket = null;
+  var realtimeReconnectTimer = null;
+  var realtimeReloadTimer = null;
   var state = {
     loading: true,
     refreshing: false,
@@ -355,6 +358,13 @@
     previousTab: "",
     settings: loadSettings(),
     snackbar: null,
+    realtime: {
+      supported: typeof window.WebSocket !== "undefined",
+      connected: false,
+      lastEvent: "",
+      lastEventAt: "",
+      reconnects: 0
+    },
     showSecrets: false,
     settingsSaving: false,
     settingsSaved: false,
@@ -464,6 +474,86 @@
         }
         return body;
       });
+    });
+  }
+
+  function realtimeWebSocketUrl() {
+    var protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    var host = window.location.host || window.location.hostname || "127.0.0.1:3000";
+    return protocol + "//" + host + "/ws";
+  }
+
+  function markRealtimeState(connected, eventName) {
+    state.realtime.connected = Boolean(connected);
+    state.realtime.lastEvent = eventName || state.realtime.lastEvent || "";
+    state.realtime.lastEventAt = new Date().toISOString();
+    if (state.snapshot) render();
+  }
+
+  function queueRealtimeReload(eventType) {
+    if (isStaticPreviewHost()) return;
+    if (realtimeReloadTimer) clearTimeout(realtimeReloadTimer);
+    realtimeReloadTimer = setTimeout(function () {
+      var tasks = [];
+      if (/^settings\./.test(eventType)) {
+        tasks.push(loadServerSettings());
+        tasks.push(loadNotificationSchedules());
+      } else if (/^account\./.test(eventType)) {
+        tasks.push(loadServiceAccounts());
+        tasks.push(load());
+      } else if (/^notification_template\.|^notification\./.test(eventType)) {
+        tasks.push(loadNotificationTemplates());
+        tasks.push(loadNotificationSchedules());
+      } else if (/^symbol_universe\./.test(eventType)) {
+        tasks.push(loadSymbolUniverse());
+      } else if (/^app\.|^chat\./.test(eventType)) {
+        tasks.push(load());
+      }
+      if (!tasks.length) tasks.push(load());
+      Promise.all(tasks.map(function (task) {
+        return task.catch(function () { return null; });
+      })).finally(function () {
+        render();
+      });
+    }, 250);
+  }
+
+  function handleRealtimeMessage(message) {
+    var eventType = message.type || (message.payload && message.payload.event && message.payload.event.name) || "";
+    if (!eventType || eventType === "realtime.heartbeat" || eventType === "realtime.pong") return;
+    markRealtimeState(true, eventType);
+    if (eventType !== "realtime.connected") queueRealtimeReload(eventType);
+  }
+
+  function connectRealtime() {
+    if (isStaticPreviewHost() || !state.realtime.supported || realtimeSocket) return;
+    try {
+      realtimeSocket = new window.WebSocket(realtimeWebSocketUrl());
+    } catch (error) {
+      state.realtime.supported = false;
+      return;
+    }
+    realtimeSocket.addEventListener("open", function () {
+      state.realtime.reconnects = 0;
+      markRealtimeState(true, "realtime.connected");
+    });
+    realtimeSocket.addEventListener("message", function (event) {
+      try {
+        handleRealtimeMessage(JSON.parse(event.data || "{}"));
+      } catch (error) {
+        handleRealtimeMessage({ type: "realtime.message" });
+      }
+    });
+    realtimeSocket.addEventListener("close", function () {
+      realtimeSocket = null;
+      markRealtimeState(false, "realtime.disconnected");
+      if (realtimeReconnectTimer) clearTimeout(realtimeReconnectTimer);
+      var delay = Math.min(15000, 1000 + state.realtime.reconnects * 1500);
+      state.realtime.reconnects += 1;
+      realtimeReconnectTimer = setTimeout(connectRealtime, delay);
+    });
+    realtimeSocket.addEventListener("error", function () {
+      markRealtimeState(false, "realtime.error");
     });
   }
 
@@ -1148,7 +1238,7 @@
     return sendJson("/api/notification-templates/test-send", "POST", { messageType: messageType })
       .then(function (payload) {
         var event = payload.event || {};
-        showSnackbar("실제 데이터 알림을 보냈습니다: " + (event.title || notificationTemplateLabel(messageType)));
+        showSnackbar("알림 발송 요청을 큐에 적재했습니다: " + (event.title || notificationTemplateLabel(messageType)));
         return loadNotificationSchedules();
       })
       .catch(function (error) {
@@ -4113,6 +4203,7 @@
       return [
         '<section class="admin-grid">',
         renderModelOperatingGuidePanel(snapshot),
+        renderStrategyBeginnerPanel(snapshot),
         renderAdminModelingPanel(snapshot),
         renderModelVersionPanel(snapshot),
         renderModelPreviewPanel(snapshot),
@@ -4176,7 +4267,7 @@
       '<div class="home-action-grid">',
       renderHomeAction("accounts", "계정", configuredAccounts + "개 API 연결", "토스·텔레그램"),
       renderHomeAction("notifications", "알림", enabledRules + "개 활성", "템플릿 테스트"),
-      renderHomeAction("modeling", "모델", settingValue("modelName") || "기준 관리", "판단 임계값"),
+      renderHomeAction("modeling", "투자전략", settingValue("modelName") || "모델링 관리", "판단 임계값"),
       '</div>',
       '</div>',
       '<div class="admin-stat-grid home-stat-grid">',
@@ -4190,6 +4281,7 @@
       '<div class="home-signal-strip">',
       renderHomeSignal("토스", configuredAccounts ? "API 정보 저장됨" : "API 정보 필요", configuredAccounts ? "ok" : "warn"),
       renderHomeSignal("알림", telegramAccounts ? "텔레그램 연결됨" : "알림 채널 확인", telegramAccounts ? "ok" : "warn"),
+      renderHomeSignal("실시간", state.realtime.connected ? "웹소켓 연결됨" : "HTTP 대기", state.realtime.connected ? "ok" : "warn"),
       renderHomeSignal("저장소", isStaticPreviewHost() ? "정적 미리보기" : "로컬 SQLite 사용", isStaticPreviewHost() ? "warn" : "ok"),
       '</div>',
       '</article>'
@@ -4962,8 +5054,8 @@
       '<article class="panel model-guide-panel">',
       '<div class="panel-head">',
       '<div>',
-      '<p class="label">Model Operation</p>',
-      '<h2>내 매수·매도 기준 운영 순서</h2>',
+      '<p class="label">Strategy Modeling</p>',
+      '<h2>투자전략 모델링 관리</h2>',
       '</div>',
       '<span class="metric">' + escapeHtml(stats.actionCount) + '</span>',
       '</div>',
@@ -4976,6 +5068,107 @@
       }).join(""),
       '</div>',
       '<div class="rule-strip"><span>이 화면은 주문 실행이 아니라 판단 기준을 만들고 검증하는 계산판입니다.</span><span>재료는 문헌과 실무에서 쓰이는 값이지만 계수는 초기 추천값이므로 저장 실험과 알림 이력으로 검증해야 합니다.</span></div>',
+      '</article>'
+    ].join("");
+  }
+
+  function strongestModelExample(items) {
+    return items.slice().map(function (item) {
+      return Object.assign({}, item, { model: customModelScores(item) });
+    }).sort(function (a, b) {
+      if (a.hasData !== b.hasData) return a.hasData ? -1 : 1;
+      return Math.max(b.model.buyScore, b.model.sellScore) - Math.max(a.model.buyScore, a.model.sellScore);
+    })[0] || null;
+  }
+
+  function valuationBeginnerText(item) {
+    var valuation = item && item.valuation ? item.valuation : {};
+    if (!item || !item.currentPrice || !valuation.fairValue) {
+      return "가격 예시는 현재가와 적정가가 모두 있을 때 계산됩니다.";
+    }
+    var gap = Number(valuation.gap || 0);
+    var direction = gap >= 0 ? "적정가보다 낮게 거래되어 싸게 보는 쪽" : "적정가보다 높게 거래되어 비싸게 보는 쪽";
+    return item.name + " 예시: 현재가 " + formatPrice(item.currentPrice, item.currency)
+      + ", 적정가 " + formatPrice(valuation.fairValue, item.currency)
+      + "입니다. 괴리율 " + signedPct(gap) + "라 " + direction + "입니다.";
+  }
+
+  function tradeStrengthBeginnerText(item, variables) {
+    var strength = Number(variables.tradeStrength || 0);
+    if (!strength) return "체결강도는 100을 중립으로 봅니다. 값이 들어오면 매수 체결과 매도 체결 중 어느 쪽이 강한지 설명합니다.";
+    var direction = strength >= 100 ? "매수 체결이 더 강한 편" : "매도 체결이 더 강한 편";
+    return item.name + "의 체결강도는 " + formatSignalNumber(strength, "")
+      + "입니다. 100보다 " + (strength >= 100 ? "높아서 " : "낮아서 ") + direction + "으로 봅니다.";
+  }
+
+  function volumeBeginnerText(item, variables) {
+    var ratio = Number(variables.volumeRatio || 0);
+    var pressure = Number(variables.directionalVolumePressure || 0);
+    if (!ratio) return "거래량은 평소보다 관심이 늘었는지 보는 값입니다. 방향성 거래량은 그 관심이 매수 쪽인지 매도 쪽인지 분리합니다.";
+    var direction = pressure > 0 ? "매수 쪽 거래량 확인" : (pressure < 0 ? "매도 쪽 거래량 확인" : "아직 뚜렷한 방향 없음");
+    return item.name + "의 거래량은 평소 대비 " + formatSignalRatio(ratio)
+      + "이고 방향성 거래량은 " + signedNumber(pressure) + "입니다. 이 예시는 " + direction + "으로 읽습니다.";
+  }
+
+  function decisionBeginnerText(item, model) {
+    return item.name + "의 종합 판단은 매수 " + model.buyScore + "점, 매도 " + model.sellScore
+      + "점입니다. 현재 라벨은 '" + model.action + "'이며, 실제 주문 전에 가격·수급·리스크를 다시 확인하는 신호로 봅니다.";
+  }
+
+  function beginnerModelRows(item, model) {
+    if (!item || !model) {
+      return [
+        ["가격", "보유 또는 관심 종목 데이터가 들어오면 현재가와 적정가 예시를 표시합니다."],
+        ["수급", "체결강도, 거래량, 매수비중, 이동평균을 쉬운 문장으로 풀어 표시합니다."],
+        ["판단", "매수 점수와 매도 점수를 비교해 왜 해당 라벨이 나왔는지 설명합니다."]
+      ];
+    }
+    var variables = model.variables || modelFormulaVariables(item);
+    return [
+      ["가격", valuationBeginnerText(item)],
+      ["체결강도", tradeStrengthBeginnerText(item, variables)],
+      ["거래량", volumeBeginnerText(item, variables)],
+      ["종합", decisionBeginnerText(item, model)]
+    ];
+  }
+
+  function renderStrategyBeginnerPanel(snapshot) {
+    var items = buildTradeSignalItems(snapshot);
+    var example = strongestModelExample(items);
+    var model = example ? example.model : null;
+    var rows = beginnerModelRows(example, model);
+    var glossary = [
+      ["적정가", "내가 계산한 합리적인 기준 가격입니다. 현재가가 적정가보다 낮으면 싸게 보는 근거가 됩니다."],
+      ["체결강도", "100을 기준으로 실제 거래가 매수 쪽에 붙는지, 매도 쪽에 붙는지 보는 값입니다."],
+      ["거래량", "평소보다 사람들이 많이 사고파는지 보는 값입니다. 방향이 없으면 신호로 약하게 봅니다."],
+      ["이동평균", "20일선과 60일선으로 가격의 큰 방향을 확인하는 값입니다."],
+      ["투자자 수급", "외국인, 기관, 개인 중 누가 순매수하는지 보는 값입니다."]
+    ];
+    return [
+      '<article class="panel model-beginner-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Beginner Guide</p>',
+      '<h2>처음 보는 사람용 쉬운 설명</h2>',
+      '</div>',
+      '<span class="tone-chip hold">' + escapeHtml(example ? "현재 데이터 예시" : "데이터 대기") + '</span>',
+      '</div>',
+      '<div class="settings-body">',
+      '<div class="settings-note model-settings-note">',
+      '<strong>읽는 순서</strong>',
+      '<p>먼저 현재가가 적정가보다 싼지 비싼지 보고, 다음으로 체결강도와 거래량이 같은 방향인지 확인합니다. 마지막으로 매수 점수와 매도 점수 중 어느 쪽이 높은지 봅니다.</p>',
+      '</div>',
+      '<div class="variable-grid">',
+      rows.map(function (row) {
+        return '<span><strong>' + escapeHtml(row[0]) + '</strong>' + escapeHtml(row[1]) + '</span>';
+      }).join(""),
+      '</div>',
+      '<div class="variable-grid">',
+      glossary.map(function (row) {
+        return '<span><strong>' + escapeHtml(row[0]) + '</strong>' + escapeHtml(row[1]) + '</span>';
+      }).join(""),
+      '</div>',
+      '</div>',
       '</article>'
     ].join("");
   }
@@ -5057,8 +5250,8 @@
       '<article class="panel admin-modeling-panel">',
       '<div class="panel-head">',
       '<div>',
-      '<p class="label">Decision Rules</p>',
-      '<h2>매매 판단 기준 관리</h2>',
+      '<p class="label">Strategy Rules</p>',
+      '<h2>투자전략 판단 기준 관리</h2>',
       '</div>',
       '<div class="settings-actions">',
       '<button class="text-button" data-action="save-model-version">모델 버전 저장</button>',
@@ -5078,7 +5271,7 @@
       '<div class="model-editor">',
       '<div class="settings-note model-settings-note">',
       '<strong>처음 운영할 때</strong>',
-      '<p>기본 공식은 방향성 거래량, 이동평균, 투자자 수급을 함께 쓰는 추천식입니다. 먼저 feature 기여도를 확인하고, 아래 가중치와 판단 기준만 조정해도 라벨이 다시 계산됩니다.</p>',
+      '<p>기본 공식은 방향성 거래량, 이동평균, 투자자 수급을 함께 쓰는 추천식입니다. 처음에는 쉬운 해석과 feature 기여도를 먼저 보고, 아래 가중치와 판단 기준만 조정해도 라벨이 다시 계산됩니다.</p>',
       '</div>',
       '<div class="settings-grid">',
       renderModelSettingField("modelName", "모델 이름", "text", "나의 모델"),
@@ -5583,8 +5776,26 @@
       '<span>기본 매수 점수 <strong>' + escapeHtml(item.hasData ? item.buyScore : "-") + '</strong></span>',
       '<span>기본 매도 점수 <strong>' + escapeHtml(item.hasData ? item.sellScore : "-") + '</strong></span>',
       '</div>',
+      renderModelPlainLanguageExplanation(item, model),
       renderModelFeatureAudit(item, model),
       model.errors.length ? '<div class="exit-reasons">' + model.errors.map(function (error) { return '<p>' + escapeHtml(error) + '</p>'; }).join("") + '</div>' : '',
+      '</div>',
+      '</div>'
+    ].join("");
+  }
+
+  function renderModelPlainLanguageExplanation(item, model) {
+    var rows = beginnerModelRows(item, model);
+    return [
+      '<div class="model-feature-audit model-plain-explain">',
+      '<div class="feature-audit-head">',
+      '<strong>쉬운 해석</strong>',
+      '<span class="tone-chip hold">실제 데이터 예시</span>',
+      '</div>',
+      '<div class="variable-grid">',
+      rows.map(function (row) {
+        return '<span><strong>' + escapeHtml(row[0]) + '</strong>' + escapeHtml(row[1]) + '</span>';
+      }).join(""),
       '</div>',
       '</div>'
     ].join("");
@@ -6842,7 +7053,7 @@
       '<div>',
       '<p class="settings-section-label">Local first</p>',
       '<strong>앱 표시와 외부 연결 설정</strong>',
-      '<span>계정 연결은 계정 탭에서, 매매 판단 기준은 모델링 탭에서 관리합니다.</span>',
+      '<span>계정 연결은 계정 탭에서, 매매 판단 기준은 투자전략 탭에서 관리합니다.</span>',
       '</div>',
       '<span class="tone-chip ' + settingsStatusTone() + '">' + settingsStatusLabel() + '</span>',
       state.settingsSaving ? '<p class="lab-message">설정을 로컬 SQLite DB에 저장하는 중입니다.</p>' : '',
@@ -7447,6 +7658,7 @@
   }
 
   applyAppTheme();
+  connectRealtime();
   Promise.all([loadServerSettings(), loadServiceAccounts(), loadNotificationTemplates(), loadNotificationSchedules(), loadSymbolUniverse()]).finally(function () {
     load();
   });

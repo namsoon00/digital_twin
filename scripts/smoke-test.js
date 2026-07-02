@@ -2,6 +2,7 @@ const childProcess = require("child_process");
 const crypto = require("crypto");
 const fs = require("fs");
 const http = require("http");
+const net = require("net");
 const os = require("os");
 const path = require("path");
 const vm = require("vm");
@@ -90,6 +91,41 @@ function request(port, pathname, options) {
   });
 }
 
+function websocketHandshake(port) {
+  return new Promise(function (resolve, reject) {
+    const key = crypto.randomBytes(16).toString("base64");
+    const socket = net.createConnection({ host: "127.0.0.1", port: port }, function () {
+      socket.write([
+        "GET /ws HTTP/1.1",
+        "Host: 127.0.0.1:" + port,
+        "Upgrade: websocket",
+        "Connection: Upgrade",
+        "Sec-WebSocket-Key: " + key,
+        "Sec-WebSocket-Version: 13",
+        "",
+        ""
+      ].join("\r\n"));
+    });
+    let data = "";
+    const timer = setTimeout(function () {
+      socket.destroy();
+      reject(new Error("웹소켓 핸드셰이크 시간이 초과되었습니다."));
+    }, 5000);
+    socket.on("data", function (chunk) {
+      data += chunk.toString("latin1");
+      if (data.indexOf("\r\n\r\n") >= 0) {
+        clearTimeout(timer);
+        socket.end();
+        resolve(data);
+      }
+    });
+    socket.on("error", function (error) {
+      clearTimeout(timer);
+      reject(error);
+    });
+  });
+}
+
 function assertOk(condition, message) {
   if (!condition) throw new Error(message);
 }
@@ -112,8 +148,12 @@ function checkFrontendAdminRender() {
   const styles = fs.readFileSync(path.join(rootDir, "public", "styles.css"), "utf8");
   const designSystemDoc = fs.readFileSync(path.join(rootDir, "docs", "design-system.md"), "utf8");
   assertOk(styles.indexOf("--ds-color-bg") >= 0, "전역 디자인 시스템 색상 토큰이 없습니다.");
+  assertOk(styles.indexOf("--ds-color-on-action") >= 0, "주요 액션 텍스트 토큰이 없습니다.");
   assertOk(styles.indexOf("--ds-control-height-md") >= 0, "전역 컨트롤 높이 토큰이 없습니다.");
+  assertOk(styles.indexOf("font-variant-numeric: tabular-nums") >= 0, "금융 숫자 표시 규칙이 없습니다.");
   assertOk(styles.indexOf(".settings-save-panel") >= 0, "설정 화면 저장 액션 위치 규칙이 없습니다.");
+  assertOk(designSystemDoc.indexOf("Finance App Tone") >= 0, "디자인 시스템 문서에 금융앱 룩앤필 기준이 없습니다.");
+  assertOk(designSystemDoc.indexOf("Page Contracts") >= 0, "디자인 시스템 문서에 페이지별 UI 계약이 없습니다.");
   assertOk(designSystemDoc.indexOf("Button Placement") >= 0, "디자인 시스템 문서에 버튼 위치 정책이 없습니다.");
   assertOk(designSystemDoc.indexOf("aria-current") >= 0, "디자인 시스템 문서에 내비게이션 접근성 기준이 없습니다.");
   assertOk(code.indexOf('appTheme: settingValue("appTheme")') >= 0, "설정 저장 payload에 화면 테마가 포함되지 않았습니다.");
@@ -464,6 +504,8 @@ function checkFrontendAdminRender() {
     assertOk(code.indexOf("settings-top-button") >= 0, "상단 설정 버튼 전용 스타일이 적용되지 않았습니다.");
     assertOk(code.indexOf("pushState") >= 0 && code.indexOf("popstate") >= 0, "탭 이동이 브라우저 뒤로가기와 동기화되지 않았습니다.");
     assertOk(code.indexOf("settingsSaving") >= 0 && code.indexOf("로컬 SQLite DB") >= 0, "설정 저장 진행 상태가 렌더링되지 않습니다.");
+    assertOk(code.indexOf("new window.WebSocket") >= 0, "프론트가 웹소켓 실시간 연결을 생성하지 않습니다.");
+    assertOk(overviewHtml.indexOf("실시간") >= 0, "홈 요약에 실시간 연결 상태가 렌더링되지 않습니다.");
     ["overview", "accounts", "watchlist", "symbols", "monitoring", "notifications", "modeling", "settings"].forEach(function (tab) {
       assertOk(overviewHtml.indexOf('data-tab="' + tab + '"') >= 0, "새 탭이 렌더링되지 않았습니다: " + tab);
     });
@@ -520,9 +562,12 @@ function checkFrontendAdminRender() {
     assertOk(notificationHtml.indexOf("{rawLines}") >= 0, "알림 템플릿 변수가 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("tab=notifications") >= 0, "알림 링크 기본값이 새 알림 탭을 가리키지 않습니다.");
     assertOk(modelingHtml.indexOf("model-guide-panel") >= 0, "모델 운영 가이드가 렌더링되지 않았습니다.");
-    assertOk(modelingHtml.indexOf("내 매수·매도 기준 운영 순서") >= 0, "모델 운영 순서 제목이 렌더링되지 않았습니다.");
+    assertOk(modelingHtml.indexOf("투자전략 모델링 관리") >= 0, "투자전략 모델링 관리 제목이 렌더링되지 않았습니다.");
+    assertOk(modelingHtml.indexOf("처음 보는 사람용 쉬운 설명") >= 0, "초보자용 쉬운 설명 패널이 렌더링되지 않았습니다.");
+    assertOk(modelingHtml.indexOf("실제 데이터 예시") >= 0, "실제 데이터 예시 설명이 렌더링되지 않았습니다.");
+    assertOk(modelingHtml.indexOf("쉬운 해석") >= 0, "종목별 쉬운 해석이 렌더링되지 않았습니다.");
     assertOk(modelingHtml.indexOf("admin-modeling-panel") >= 0, "모델링 설정 패널이 렌더링되지 않았습니다.");
-    assertOk(modelingHtml.indexOf("매매 판단 기준 관리") >= 0, "쉬운 모델 판단 기준 제목이 렌더링되지 않았습니다.");
+    assertOk(modelingHtml.indexOf("투자전략 판단 기준 관리") >= 0, "투자전략 판단 기준 제목이 렌더링되지 않았습니다.");
     assertOk(modelingHtml.indexOf("투자자별 수급") >= 0, "투자자별 수급 feature 설명이 렌더링되지 않았습니다.");
     assertOk(modelingHtml.indexOf("방향성 거래량") >= 0, "방향성 거래량 feature 설명이 렌더링되지 않았습니다.");
     assertOk(modelingHtml.indexOf("feature 기여도") >= 0, "feature 기여도 블록이 렌더링되지 않았습니다.");
@@ -746,6 +791,15 @@ async function checkNormalMode(port, context) {
   assertOk(settingsPayload.settings.watchlistSymbols.indexOf("TSLA") >= 0, "기본 관심 종목에 TSLA가 없습니다.");
   assertOk(settingsPayload.settings.watchlistSymbols.indexOf("AAPL") >= 0, "기본 관심 종목에 AAPL이 없습니다.");
 
+  const websocketResponse = await websocketHandshake(port);
+  assertOk(websocketResponse.indexOf("101 Switching Protocols") >= 0, "웹소켓 업그레이드 응답이 101이 아닙니다.");
+  assertOk(websocketResponse.toLowerCase().indexOf("sec-websocket-accept") >= 0, "웹소켓 accept 헤더가 없습니다.");
+
+  const realtimeStatus = await request(port, "/api/realtime/status");
+  assertOk(realtimeStatus.statusCode === 200, "실시간 상태 API 응답 코드가 200이 아닙니다: " + realtimeStatus.statusCode);
+  const realtimeStatusPayload = JSON.parse(realtimeStatus.body);
+  assertOk(Object.prototype.hasOwnProperty.call(realtimeStatusPayload, "connectedClients"), "실시간 상태 API에 연결 수가 없습니다.");
+
   const universe = await request(port, "/api/symbol-universe?query=AAPL");
   assertOk(universe.statusCode === 200, "종목 유니버스 API 응답 코드가 200이 아닙니다: " + universe.statusCode);
   const universePayload = JSON.parse(universe.body);
@@ -783,6 +837,8 @@ async function checkNormalMode(port, context) {
   assertOk(readSqliteSetting(context.serviceDbPath, "notifyProvider") === "telegram", "알림 제공자 설정이 SQLite DB에 저장되지 않았습니다.");
   assertOk(readSqliteSetting(context.serviceDbPath, "telegramChatId") === "1234", "Telegram Chat ID 설정이 SQLite DB에 저장되지 않았습니다.");
   assertOk(readSqliteSetting(context.serviceDbPath, "tossClientSecret") === "fake-secret", "Toss secret 설정이 SQLite DB에 저장되지 않았습니다.");
+  const eventStatusAfterSettings = JSON.parse((await request(port, "/api/realtime/status")).body);
+  assertOk(eventStatusAfterSettings.events["settings.updated"] >= 1, "설정 저장 이벤트가 이벤트 로그에 없습니다.");
 
   const templates = await request(port, "/api/notification-templates");
   assertOk(templates.statusCode === 200, "알림 템플릿 API 응답 코드가 200이 아닙니다: " + templates.statusCode);
@@ -804,6 +860,8 @@ async function checkNormalMode(port, context) {
   assertOk(savedTemplate.statusCode === 200, "알림 템플릿 저장 API 응답 코드가 200이 아닙니다: " + savedTemplate.statusCode);
   const savedTemplatePayload = JSON.parse(savedTemplate.body);
   assertOk(savedTemplatePayload.template.template.indexOf("{rawLines}") >= 0, "저장된 알림 템플릿 응답이 맞지 않습니다.");
+  const eventStatusAfterTemplate = JSON.parse((await request(port, "/api/realtime/status")).body);
+  assertOk(eventStatusAfterTemplate.events["notification_template.updated"] >= 1, "알림 템플릿 저장 이벤트가 이벤트 로그에 없습니다.");
 
   const emptyAccounts = await request(port, "/api/service-accounts");
   assertOk(emptyAccounts.statusCode === 200, "계정 DB API 응답 코드가 200이 아닙니다: " + emptyAccounts.statusCode);
@@ -835,6 +893,8 @@ async function checkNormalMode(port, context) {
   const savedAccountPayload = JSON.parse(savedAccount.body);
   assertOk(savedAccountPayload.account && savedAccountPayload.account.clientSecret === true, "계정 DB 저장 응답이 토스 secret 설정 상태를 내려주지 않습니다.");
   assertOk(savedAccountPayload.account.telegramBotToken === true, "계정 DB 저장 응답이 텔레그램 토큰 설정 상태를 내려주지 않습니다.");
+  const eventStatusAfterAccount = JSON.parse((await request(port, "/api/realtime/status")).body);
+  assertOk(eventStatusAfterAccount.events["account.saved"] >= 1, "계정 저장 이벤트가 이벤트 로그에 없습니다.");
 
   const accountList = await request(port, "/api/service-accounts");
   const accountListPayload = JSON.parse(accountList.body);

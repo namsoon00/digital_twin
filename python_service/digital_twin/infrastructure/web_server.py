@@ -1,11 +1,16 @@
+import base64
 import csv
+import hashlib
 import hmac
 import json
 import mimetypes
 import os
 import re
+import select
+import socket
 import subprocess
 import tempfile
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -18,16 +23,31 @@ from typing import Dict, List
 from ..application.account_service import AccountApplicationService
 from ..application.flow_lens_service import flow_lens_snapshot
 from ..application.symbol_universe_service import SymbolUniverseService
+from ..domain.events import (
+    APP_ITEM_REMOVED,
+    APP_ITEM_UPDATED,
+    APP_MEMORY_RECORDED,
+    APP_MEMORY_REMOVED,
+    APP_MEMORY_UPDATED,
+    APP_PROFILE_UPDATED,
+    CHAT_MESSAGE_APPENDED,
+    NOTIFICATION_JOB_QUEUED,
+    NOTIFICATION_TEMPLATE_UPDATED,
+    NOTIFICATION_TEST_REQUESTED,
+    SETTINGS_UPDATED,
+    SYMBOL_UNIVERSE_REFRESHED,
+    DomainEvent,
+)
 from ..domain.monitoring import DEFAULT_ALERT_RULES, DEFAULT_CADENCE, RealtimeMonitor
+from ..domain.notifications import NotificationJob
 from ..domain.notification_templates import DEFAULT_NOTIFICATION_TEMPLATES, MESSAGE_TYPE_LABELS, TRIGGER_SUMMARIES, alert_context, template_variables
 from ..domain.parsing import parse_assignments
 from ..domain.portfolio import utc_now_iso
 from ..infrastructure.event_bus import default_event_bus
 from ..infrastructure.mock_market import mock_market_payload, mock_market_scenario_list
-from ..infrastructure.notifications import notifier_for_account
 from ..infrastructure.settings import ROOT_DIR, runtime_settings, save_runtime_settings
 from ..infrastructure.sqlite_accounts import AccountRegistry
-from ..infrastructure.sqlite_operational import SQLiteAppStore, SQLiteMonitorStore, SQLiteNotificationTemplateStore
+from ..infrastructure.sqlite_operational import SQLiteAppStore, SQLiteEventLog, SQLiteMonitorStore, SQLiteNotificationJobStore, SQLiteNotificationTemplateStore
 from ..infrastructure.toss_snapshots import build_snapshot
 
 
@@ -46,6 +66,121 @@ NON_CADENCE_MESSAGE_GUIDES = {
 
 def now() -> str:
     return utc_now_iso()
+
+
+WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+
+def websocket_accept_key(key: str) -> str:
+    digest = hashlib.sha1((key + WEBSOCKET_GUID).encode("ascii")).digest()
+    return base64.b64encode(digest).decode("ascii")
+
+
+def websocket_frame(payload, opcode: int = 0x1) -> bytes:
+    raw = payload if isinstance(payload, bytes) else str(payload).encode("utf-8")
+    length = len(raw)
+    header = bytearray([0x80 | opcode])
+    if length < 126:
+        header.append(length)
+    elif length <= 65535:
+        header.extend([126, (length >> 8) & 0xFF, length & 0xFF])
+    else:
+        header.append(127)
+        header.extend(length.to_bytes(8, "big"))
+    return bytes(header) + raw
+
+
+def socket_read_exact(sock, length: int) -> bytes:
+    chunks = []
+    remaining = length
+    while remaining > 0:
+        chunk = sock.recv(remaining)
+        if not chunk:
+            return b""
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
+
+
+def read_websocket_frame(sock):
+    header = socket_read_exact(sock, 2)
+    if len(header) < 2:
+        return 0x8, b""
+    opcode = header[0] & 0x0F
+    length = header[1] & 0x7F
+    masked = bool(header[1] & 0x80)
+    if length == 126:
+        length = int.from_bytes(socket_read_exact(sock, 2), "big")
+    elif length == 127:
+        length = int.from_bytes(socket_read_exact(sock, 8), "big")
+    mask = socket_read_exact(sock, 4) if masked else b""
+    payload = socket_read_exact(sock, length) if length else b""
+    if masked and mask:
+        payload = bytes(payload[index] ^ mask[index % 4] for index in range(len(payload)))
+    return opcode, payload
+
+
+class RealtimeHub:
+    def __init__(self):
+        self.clients = set()
+        self.lock = threading.Lock()
+
+    def add(self, client) -> None:
+        with self.lock:
+            self.clients.add(client)
+
+    def remove(self, client) -> None:
+        with self.lock:
+            self.clients.discard(client)
+
+    def status(self) -> Dict[str, object]:
+        with self.lock:
+            connected = len(self.clients)
+        return {"connectedClients": connected}
+
+    def send(self, client, payload, opcode: int = 0x1) -> bool:
+        body = payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        try:
+            client.sendall(websocket_frame(body, opcode=opcode))
+            return True
+        except OSError:
+            self.remove(client)
+            return False
+
+    def broadcast(self, event_type: str, payload: Dict[str, object] = None) -> None:
+        message = {
+            "type": event_type,
+            "payload": dict(payload or {}),
+            "occurredAt": now(),
+        }
+        with self.lock:
+            clients = list(self.clients)
+        for client in clients:
+            self.send(client, message)
+
+    def broadcast_event(self, event: DomainEvent) -> None:
+        self.broadcast(event.name, {"event": event.to_dict(), **dict(event.payload or {})})
+
+
+REALTIME_HUB = RealtimeHub()
+
+
+class RealtimeEventBridge:
+    def __init__(self):
+        self.inner = default_event_bus()
+
+    def publish(self, event: DomainEvent) -> None:
+        self.inner.publish(event)
+        REALTIME_HUB.broadcast_event(event)
+
+
+def publish_domain_event(event: DomainEvent) -> DomainEvent:
+    RealtimeEventBridge().publish(event)
+    return event
+
+
+def new_domain_event(name: str, aggregate_id: str, payload: Dict[str, object] = None) -> DomainEvent:
+    return publish_domain_event(DomainEvent(name=name, aggregate_id=aggregate_id, payload=dict(payload or {})))
 
 
 def new_id(prefix: str) -> str:
@@ -234,12 +369,26 @@ def settings_status_payload() -> Dict[str, object]:
 
 
 def save_settings_payload(payload: Dict[str, object]) -> Dict[str, object]:
-    save_runtime_settings(payload.get("settings") if isinstance(payload.get("settings"), dict) else payload)
-    return settings_status_payload()
+    requested = payload.get("settings") if isinstance(payload.get("settings"), dict) else payload
+    save_runtime_settings(requested if isinstance(requested, dict) else {})
+    status = settings_status_payload()
+    new_domain_event(
+        SETTINGS_UPDATED,
+        "runtime",
+        {
+            "keys": sorted([str(key) for key in (requested or {}).keys()]) if isinstance(requested, dict) else [],
+            "configured": status.get("configured") or {},
+        },
+    )
+    return status
 
 
 def notification_store() -> SQLiteNotificationTemplateStore:
     return SQLiteNotificationTemplateStore()
+
+
+def notification_queue_store() -> SQLiteNotificationJobStore:
+    return SQLiteNotificationJobStore()
 
 
 def list_templates_payload() -> Dict[str, object]:
@@ -346,11 +495,23 @@ def save_template_payload(payload: Dict[str, object]) -> Dict[str, object]:
     template = str(payload.get("template") or "")
     description = str(payload.get("description") or "")
     enabled = payload.get("enabled") is not False
-    return {"template": notification_store().upsert(message_type, template, description, enabled).to_dict()}
+    saved = notification_store().upsert(message_type, template, description, enabled)
+    event = new_domain_event(
+        NOTIFICATION_TEMPLATE_UPDATED,
+        saved.message_type,
+        {"messageType": saved.message_type, "enabled": saved.enabled, "updatedAt": saved.updated_at},
+    )
+    return {"template": saved.to_dict(), "eventId": event.event_id}
 
 
 def reset_template_payload(message_type: str) -> Dict[str, object]:
-    return {"template": notification_store().reset(message_type).to_dict()}
+    saved = notification_store().reset(message_type)
+    event = new_domain_event(
+        NOTIFICATION_TEMPLATE_UPDATED,
+        saved.message_type,
+        {"messageType": saved.message_type, "enabled": saved.enabled, "updatedAt": saved.updated_at, "reset": True},
+    )
+    return {"template": saved.to_dict(), "eventId": event.event_id}
 
 
 def alert_event_public_payload(event) -> Dict[str, object]:
@@ -428,27 +589,53 @@ def notification_template_test_payload(payload: Dict[str, object]):
             "message": message,
             "event": alert_event_public_payload(event),
         }
-    delivery = notifier_for_account(account).send(message)
-    if not delivery.delivered:
-        return 502, {
+    public_event = alert_event_public_payload(event)
+    source_event = new_domain_event(
+        NOTIFICATION_TEST_REQUESTED,
+        event.key or message_type,
+        {"messageType": message_type, "accountId": account.account_id, "accountLabel": account.label, "event": public_event},
+    )
+    job = NotificationJob.create(
+        message,
+        account_id=account.account_id,
+        account_label=account.label,
+        message_type=event.rule or message_type,
+        source_event_id=source_event.event_id,
+        source_event_name=source_event.name,
+        context=alert_context(event),
+    )
+    if not notification_queue_store().enqueue(job):
+        return 409, {
             "delivered": False,
-            "provider": delivery.label,
-            "reason": delivery.reason,
+            "queued": False,
+            "provider": "Notification Queue",
             "messageType": message_type,
-            "event": alert_event_public_payload(event),
-            "error": delivery.reason or "알림 발송 실패",
+            "event": public_event,
+            "error": "알림 작업을 큐에 적재하지 못했습니다.",
         }
-    return 200, {
-        "delivered": True,
-        "provider": delivery.label,
+    new_domain_event(
+        NOTIFICATION_JOB_QUEUED,
+        job.job_id,
+        {
+            "jobId": job.job_id,
+            "messageType": job.message_type,
+            "accountId": job.account_id,
+            "sourceEventId": source_event.event_id,
+        },
+    )
+    return 202, {
+        "delivered": False,
+        "queued": True,
+        "jobId": job.job_id,
+        "provider": "Notification Queue",
         "messageType": message_type,
-        "event": alert_event_public_payload(event),
+        "event": public_event,
     }
 
 
 def account_service() -> AccountApplicationService:
     registry = AccountRegistry()
-    return AccountApplicationService(registry, registry.settings, event_publisher=default_event_bus())
+    return AccountApplicationService(registry, registry.settings, event_publisher=RealtimeEventBridge())
 
 
 def symbol_universe_service() -> SymbolUniverseService:
@@ -472,7 +659,13 @@ def refresh_symbol_universe_payload(payload: Dict[str, object]) -> Dict[str, obj
         markets = [str(item or "").strip() for item in raw_markets if str(item or "").strip()]
     else:
         markets = None
-    return symbol_universe_service().refresh(markets)
+    result = symbol_universe_service().refresh(markets)
+    new_domain_event(
+        SYMBOL_UNIVERSE_REFRESHED,
+        ",".join(markets or []) or "all",
+        {"summary": result.get("summary") or {}, "markets": markets or []},
+    )
+    return result
 
 
 def service_accounts_payload() -> Dict[str, object]:
@@ -738,15 +931,30 @@ def persist_memory_candidates(candidates: List[Dict[str, object]]) -> List[Dict[
             saved.append(memory)
 
     save_store(mutate)
+    if saved:
+        new_domain_event(
+            APP_MEMORY_RECORDED,
+            "conversation",
+            {"count": len(saved), "memoryIds": [item.get("id") for item in saved], "source": "conversation"},
+        )
     return saved
 
 
-def append_message(role: str, content: str) -> None:
+def append_message(role: str, content: str) -> Dict[str, object]:
+    message = {}
+
     def mutate(store):
-        store["messages"].append({"id": new_id("msg"), "role": role, "content": content, "createdAt": now()})
+        message.update({"id": new_id("msg"), "role": role, "content": content, "createdAt": now()})
+        store["messages"].append(message)
         store["messages"] = store["messages"][-80:]
 
     save_store(mutate)
+    new_domain_event(
+        CHAT_MESSAGE_APPENDED,
+        message.get("id") or role,
+        {"messageId": message.get("id"), "role": role},
+    )
+    return message
 
 
 def run_local_codex(message: str) -> str:
@@ -909,6 +1117,9 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
         self.handle_request()
 
     def do_GET(self):
+        if self.headers.get("Upgrade", "").lower() == "websocket":
+            self.handle_websocket()
+            return
         self.handle_request()
 
     def do_POST(self):
@@ -931,6 +1142,51 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
 
     def path_name(self) -> str:
         return urllib.parse.unquote(self.parsed().path or "/")
+
+    def handle_websocket(self):
+        if self.path_name() != "/ws":
+            return self.send_payload(404, {"error": "웹소켓 엔드포인트를 찾지 못했습니다."})
+        if not self.authorize_share():
+            return
+        key = configured(self.headers.get("Sec-WebSocket-Key"))
+        if not key:
+            return self.send_payload(400, {"error": "Sec-WebSocket-Key가 필요합니다."})
+        self.send_response(101, "Switching Protocols")
+        self.send_header("Upgrade", "websocket")
+        self.send_header("Connection", "Upgrade")
+        self.send_header("Sec-WebSocket-Accept", websocket_accept_key(key))
+        self.end_headers()
+        self.close_connection = True
+        client = self.connection
+        REALTIME_HUB.add(client)
+        REALTIME_HUB.send(client, {
+            "type": "realtime.connected",
+            "payload": REALTIME_HUB.status(),
+            "occurredAt": now(),
+        })
+        try:
+            while True:
+                readable, _, _ = select.select([client], [], [], 25)
+                if not readable:
+                    if not REALTIME_HUB.send(client, {"type": "realtime.heartbeat", "payload": REALTIME_HUB.status(), "occurredAt": now()}):
+                        break
+                    continue
+                opcode, payload = read_websocket_frame(client)
+                if opcode == 0x8:
+                    break
+                if opcode == 0x9:
+                    REALTIME_HUB.send(client, payload, opcode=0xA)
+                    continue
+                if opcode == 0x1 and payload.strip() == b"ping":
+                    REALTIME_HUB.send(client, {"type": "realtime.pong", "payload": {}, "occurredAt": now()})
+        except (OSError, ValueError, socket.timeout):
+            pass
+        finally:
+            REALTIME_HUB.remove(client)
+            try:
+                client.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
 
     def read_json_body(self) -> Dict[str, object]:
         length = int(self.headers.get("Content-Length") or "0")
@@ -1116,11 +1372,26 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
         if path == "/api/bootstrap" and self.command == "GET":
             return self.send_payload(200, snapshot_payload())
 
+        if path == "/api/realtime/status" and self.command == "GET":
+            return self.send_payload(200, {
+                **REALTIME_HUB.status(),
+                "events": SQLiteEventLog().event_counts(),
+                "notificationJobs": notification_queue_store().summary(),
+            })
+
         if path == "/api/profile" and self.command == "PUT":
             body = self.read_json_body()
             if not body.get("ownerName") or not body.get("assistantName"):
                 return self.send_payload(400, {"error": "이름과 비서 이름은 필요합니다."})
             store = save_store(lambda draft: draft.update({"profile": {**draft["profile"], **body}}))
+            new_domain_event(
+                APP_PROFILE_UPDATED,
+                "profile",
+                {
+                    "ownerName": store["profile"].get("ownerName"),
+                    "assistantName": store["profile"].get("assistantName"),
+                },
+            )
             return self.send_payload(200, {"profile": store["profile"]})
 
         if path == "/api/chat" and self.command == "POST":
@@ -1146,6 +1417,11 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
                     "updatedAt": stamped,
                 }
                 store = save_store(lambda draft: draft["memories"].insert(0, memory))
+                new_domain_event(
+                    APP_MEMORY_RECORDED,
+                    memory["id"],
+                    {"memoryId": memory["id"], "category": memory["category"], "source": "manual"},
+                )
                 return self.send_payload(200, {"memory": memory, "memories": store["memories"]})
 
         memory_match = re.match(r"^/api/memories/([^/]+)$", path)
@@ -1166,10 +1442,12 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
                 draft["memories"] = next_memories
 
             store = save_store(mutate)
+            new_domain_event(APP_MEMORY_UPDATED, memory_id, {"memoryId": memory_id})
             return self.send_payload(200, {"memories": store["memories"]})
         if memory_match and self.command == "DELETE":
             memory_id = memory_match.group(1)
             store = save_store(lambda draft: draft.update({"memories": [memory for memory in draft["memories"] if memory.get("id") != memory_id]}))
+            new_domain_event(APP_MEMORY_REMOVED, memory_id, {"memoryId": memory_id})
             return self.send_payload(200, {"memories": store["memories"]})
 
         if path == "/api/items":
@@ -1197,6 +1475,11 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
                     "updatedAt": stamped,
                 }
                 store = save_store(lambda draft: draft["items"].insert(0, item))
+                new_domain_event(
+                    APP_ITEM_UPDATED,
+                    item["id"],
+                    {"itemId": item["id"], "type": item["type"], "status": item["status"]},
+                )
                 return self.send_payload(200, {"item": item, "items": store["items"]})
 
         item_match = re.match(r"^/api/items/([^/]+)$", path)
@@ -1204,10 +1487,12 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
             item_id = item_match.group(1)
             body = self.read_json_body()
             store = save_store(lambda draft: draft.update({"items": [patch_item(item, body) if item.get("id") == item_id else item for item in draft["items"]]}))
+            new_domain_event(APP_ITEM_UPDATED, item_id, {"itemId": item_id, "patched": True})
             return self.send_payload(200, {"items": store["items"]})
         if item_match and self.command == "DELETE":
             item_id = item_match.group(1)
             store = save_store(lambda draft: draft.update({"items": [item for item in draft["items"] if item.get("id") != item_id]}))
+            new_domain_event(APP_ITEM_REMOVED, item_id, {"itemId": item_id})
             return self.send_payload(200, {"items": store["items"]})
 
         if path == "/api/stocks" and self.command == "GET":

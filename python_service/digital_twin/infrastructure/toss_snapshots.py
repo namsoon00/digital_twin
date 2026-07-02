@@ -7,7 +7,7 @@ from dataclasses import replace
 from typing import Dict, List, Tuple
 
 from ..domain.accounts import AccountConfig
-from ..domain.analytics import decisions_for_positions, normalize_position, number, portfolio_summary, technical_indicators_from_candles
+from ..domain.analytics import decisions_for_positions, known_stock, normalize_position, number, portfolio_summary, technical_indicators_from_candles
 from ..domain.portfolio import AccountSnapshot, Position, utc_now_iso
 from .external_signals import ExternalSignalProvider
 from .settings import currency_rates
@@ -30,6 +30,72 @@ def normalize_accounts(payload: Dict[str, object]) -> List[Dict[str, object]]:
     if isinstance(accounts, list):
         return [item for item in accounts if isinstance(item, dict)]
     return []
+
+
+def account_identifiers(account: Dict[str, object]) -> List[str]:
+    keys = [
+        "accountSeq",
+        "account_seq",
+        "accountId",
+        "account_id",
+        "id",
+        "accountNo",
+        "accountNumber",
+        "account_number",
+    ]
+    values = []
+    for key in keys:
+        value = str(account.get(key) or "").strip()
+        if value:
+            values.append(value)
+    return values
+
+
+def select_account(accounts: List[Dict[str, object]], configured_seq: str = "") -> Dict[str, object]:
+    requested = str(configured_seq or "").strip()
+    if requested:
+        for account in accounts:
+            if requested in account_identifiers(account):
+                return account
+    return accounts[0] if accounts else {}
+
+
+def account_cash_amount(account: Dict[str, object]) -> float:
+    keys = [
+        "orderableAmount",
+        "orderable_amount",
+        "orderAvailableAmount",
+        "availableOrderAmount",
+        "availableAmount",
+        "available_amount",
+        "availableCash",
+        "cashAvailable",
+        "cashBalance",
+        "cash_balance",
+        "withdrawableAmount",
+        "withdrawable_amount",
+        "depositAmount",
+        "deposit",
+        "balance",
+        "cash",
+        "주문가능금액",
+        "주문가능",
+        "출금가능금액",
+        "현금",
+    ]
+    for key in keys:
+        if key in account and account.get(key) not in (None, ""):
+            amount = number(account.get(key))
+            if amount:
+                return amount
+    balances = account.get("balances") or account.get("cashBalances") or account.get("cash_balances")
+    if isinstance(balances, list):
+        for item in balances:
+            if isinstance(item, dict):
+                amount = account_cash_amount(item)
+                if amount:
+                    return amount
+    return 0.0
 
 
 def normalize_holdings(payload: Dict[str, object]) -> List[Dict[str, object]]:
@@ -133,9 +199,9 @@ class TossProvider:
         self.account = account
         self.base_url = account.base_url.rstrip("/")
 
-    def fetch_positions(self) -> Tuple[str, str, List[Position], float, str]:
+    def fetch_positions(self) -> Tuple[str, str, List[Position], float, str, List[Position]]:
         if not self.account.client_id or not self.account.client_secret:
-            return "demo", "토스 credentials 미설정", demo_positions(), 1250000.0, "KRW"
+            return "demo", "토스 credentials 미설정", demo_positions(), 1250000.0, "KRW", []
         try:
             token_payload = http_json(
                 "POST",
@@ -152,12 +218,16 @@ class TossProvider:
                 raise RuntimeError("토스 access_token이 없습니다.")
             accounts_payload = http_json("GET", self.base_url + "/api/v1/accounts", {"Authorization": "Bearer " + token})
             accounts = normalize_accounts(accounts_payload)
-            selected = accounts[0] if accounts else {}
+            selected = select_account(accounts, self.account.account_seq)
             account_seq = self.account.account_seq or str(selected.get("accountSeq") or selected.get("id") or "")
-            account_cash = number(selected.get("orderableAmount") or selected.get("availableAmount") or selected.get("cashBalance"))
+            account_cash = account_cash_amount(selected)
             account_currency = str(selected.get("currency") or "KRW")
             if not account_seq:
-                return "live", "계좌 식별값 없음", [], account_cash, account_currency
+                return "live", "계좌 식별값 없음", [], account_cash, account_currency, []
+            buying_power = self.fetch_buying_power(token, account_seq)
+            if buying_power:
+                account_cash = buying_power
+                account_currency = "KRW"
             holdings_payload = http_json(
                 "GET",
                 self.base_url + "/api/v1/holdings",
@@ -165,9 +235,28 @@ class TossProvider:
             )
             positions = [normalize_position(item) for item in normalize_holdings(holdings_payload)]
             positions = self.enrich_positions_with_candles(token, positions)
-            return "live", "토스 계좌 동기화", positions, account_cash, account_currency
+            watchlist = self.fetch_watchlist_quotes(token, positions)
+            return "live", "토스 계좌 동기화", positions, account_cash, account_currency, watchlist
         except (urllib.error.URLError, urllib.error.HTTPError, RuntimeError, ValueError) as error:
-            return "demo", "토스 조회 실패 · " + str(error), demo_positions(), 1250000.0, "KRW"
+            return "demo", "토스 조회 실패 · " + str(error), demo_positions(), 1250000.0, "KRW", []
+
+    def fetch_buying_power(self, token: str, account_seq: str) -> float:
+        total = 0.0
+        rates = currency_rates()
+        for currency in ["KRW", "USD"]:
+            try:
+                query = urllib.parse.urlencode({"currency": currency})
+                payload = http_json(
+                    "GET",
+                    self.base_url + "/api/v1/buying-power?" + query,
+                    {"Authorization": "Bearer " + token, "X-Tossinvest-Account": account_seq},
+                )
+            except (urllib.error.URLError, urllib.error.HTTPError, RuntimeError, ValueError):
+                continue
+            data = payload.get("data") or payload.get("result") or payload
+            amount = number(data.get("cashBuyingPower") if isinstance(data, dict) else 0)
+            total += amount * rates.get(currency, 1.0)
+        return total
 
     def fetch_daily_candles(self, token: str, symbol: str) -> List[Dict[str, object]]:
         query = urllib.parse.urlencode({
@@ -218,11 +307,55 @@ class TossProvider:
                 enriched.append(position)
         return enriched
 
+    def fetch_watchlist_quotes(self, token: str, positions: List[Position]) -> List[Position]:
+        holding_symbols = {position.symbol.upper() for position in positions if position.symbol}
+        watchlist: List[Position] = []
+        chart_calls = 0
+        for symbol in self.account.watchlist_symbols[:30]:
+            normalized = str(symbol or "").upper()
+            if not normalized or normalized in holding_symbols:
+                continue
+            info = known_stock(normalized)
+            base = normalize_position({
+                "symbol": info.get("symbol") or normalized,
+                "name": info.get("name") or normalized,
+                "market": info.get("market") or "",
+                "currency": info.get("currency") or "",
+                "sector": info.get("sector") or "",
+            })
+            try:
+                if chart_calls:
+                    time.sleep(0.22)
+                candles = self.fetch_daily_candles(token, normalized)
+                chart_calls += 1
+                indicators = technical_indicators_from_candles(candles)
+                if not indicators:
+                    watchlist.append(base)
+                    continue
+                watchlist.append(replace(
+                    base,
+                    current_price=number(indicators.get("currentPrice")),
+                    volume=number(indicators.get("volume")),
+                    volume_ratio=number(indicators.get("volumeRatio")),
+                    ma5=number(indicators.get("ma5")),
+                    ma20=number(indicators.get("ma20")),
+                    ma60=number(indicators.get("ma60")),
+                    ma120=number(indicators.get("ma120")),
+                    ma200=number(indicators.get("ma200")),
+                    ma20_slope=number(indicators.get("ma20Slope")),
+                    ma60_slope=number(indicators.get("ma60Slope")),
+                    ma20_distance=number(indicators.get("ma20Distance")),
+                    ma60_distance=number(indicators.get("ma60Distance")),
+                ))
+            except (urllib.error.URLError, urllib.error.HTTPError, RuntimeError, ValueError, OSError):
+                watchlist.append(base)
+        return watchlist
+
 
 def build_snapshot(account: AccountConfig) -> AccountSnapshot:
     provider = TossProvider(account)
-    mode, status, positions, cash, currency = provider.fetch_positions()
-    external_signals = ExternalSignalProvider().signals_for_positions(positions)
+    mode, status, positions, cash, currency, watchlist = provider.fetch_positions()
+    external_signals = ExternalSignalProvider().signals_for_positions(positions + watchlist)
     portfolio = portfolio_summary(positions, cash, currency, currency_rates())
     decisions = decisions_for_positions(positions, portfolio)
     return AccountSnapshot(
@@ -236,4 +369,5 @@ def build_snapshot(account: AccountConfig) -> AccountSnapshot:
         positions=positions,
         decisions=decisions,
         external_signals=external_signals,
+        watchlist=watchlist,
     )

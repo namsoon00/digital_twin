@@ -21,6 +21,14 @@ DEFAULT_NOTIFICATION_TEMPLATES = {
         "template": DEFAULT_TEMPLATE,
         "description": "모델 매도 조건 알림",
     },
+    "watchlistQuote": {
+        "template": DEFAULT_TEMPLATE,
+        "description": "관심종목 시세 수집 알림",
+    },
+    "watchlistQuotePending": {
+        "template": DEFAULT_TEMPLATE,
+        "description": "관심종목 시세 대기 알림",
+    },
     "holdingTiming": {
         "template": DEFAULT_TEMPLATE,
         "description": "보유 종목 타이밍 점검 알림",

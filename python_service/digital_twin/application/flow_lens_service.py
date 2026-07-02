@@ -79,6 +79,7 @@ def demo_toss_portfolio(reason: str = "") -> Dict[str, object]:
             "currency": "KRW",
         },
         "positions": [position_payload(item) for item in demo_positions()],
+        "watchlistQuotes": [],
     }
 
 
@@ -102,6 +103,7 @@ def toss_portfolio_for_account(account: AccountConfig) -> Dict[str, object]:
             "currency": "KRW",
         },
         "positions": [position_payload(item) for item in snapshot.positions],
+        "watchlistQuotes": [position_payload(item) for item in snapshot.watchlist],
     }
 
 
@@ -247,9 +249,34 @@ def build_toss_watchlist(positions: List[Dict[str, object]], watchlist_symbols: 
         if str(item.get("symbol") or "").upper() in holding_symbols:
             continue
         next_item = dict(item)
-        next_item["quoteStatus"] = "시세 조회 대기"
         result.append(next_item)
     return result
+
+
+def merge_watchlist_quotes(watchlist: List[Dict[str, object]], quotes: List[Dict[str, object]]) -> List[Dict[str, object]]:
+    quote_map = {
+        str(item.get("symbol") or "").upper(): item
+        for item in quotes
+        if isinstance(item, dict) and item.get("symbol")
+    }
+    merged = []
+    for item in watchlist:
+        symbol = str(item.get("symbol") or "").upper()
+        quote = quote_map.get(symbol) or {}
+        next_item = dict(item)
+        if quote:
+            next_item.update({
+                key: value
+                for key, value in quote.items()
+                if value not in (None, "")
+            })
+        next_item["quoteStatus"] = "토스 시세 반영" if number(next_item.get("currentPrice")) else "시세 조회 대기"
+        if not number(next_item.get("currentPrice")):
+            next_item["quoteMessage"] = "토스 candles 응답이 없거나 아직 해당 종목 시세를 받지 못했습니다."
+        else:
+            next_item["quoteMessage"] = "현재가와 이동평균은 토스 candles 기준입니다."
+        merged.append(next_item)
+    return merged
 
 
 def profit_loss_rate(item: Dict[str, object]) -> float:
@@ -373,7 +400,10 @@ def build_toss_decision(toss: Dict[str, object], portfolio: Dict[str, object], w
 def build_toss_lens_snapshot(toss: Dict[str, object], mock: bool = False, watchlist_symbols: str = "") -> Dict[str, object]:
     positions = list(toss.get("positions") or [])
     portfolio = build_toss_portfolio(positions, dict(toss.get("account") or {}))
-    watchlist = build_toss_watchlist(positions, watchlist_symbols)
+    watchlist = merge_watchlist_quotes(
+        build_toss_watchlist(positions, watchlist_symbols),
+        list(toss.get("watchlistQuotes") or []),
+    )
     toss["watchlist"] = watchlist
     toss_decision = build_toss_decision(toss, portfolio, watchlist)
     return {

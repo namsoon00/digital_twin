@@ -3,7 +3,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Dict, List
 
-from .analytics import DEFAULT_FX_RATES, number, value_in_base
+from .analytics import DEFAULT_FX_RATES, StrategyModel, number, value_in_base
 from .model_review import decision_change_review_lines
 from .parsing import parse_assignments
 from .portfolio import AccountSnapshot, AlertEvent
@@ -13,6 +13,8 @@ from .repositories import MonitorStateRepository
 DEFAULT_ALERT_RULES = {
     "modelBuy": 1,
     "modelSell": 1,
+    "watchlistQuote": 1,
+    "watchlistQuotePending": 1,
     "holdingTiming": 1,
     "monitorHeartbeat": 1,
     "monitorConnection": 1,
@@ -30,6 +32,9 @@ DEFAULT_ALERT_RULES = {
 }
 
 DEFAULT_THRESHOLDS = {
+    "modelBuyScore": 74,
+    "modelSellScore": 72,
+    "watchlistPriceDelta": 3,
     "monitorPnlDelta": 2,
     "monitorValueDelta": 5,
     "monitorMaDistance": 8,
@@ -44,6 +49,8 @@ DEFAULT_THRESHOLDS = {
 DEFAULT_CADENCE = {
     "modelBuy": 10,
     "modelSell": 10,
+    "watchlistQuote": 10,
+    "watchlistQuotePending": 60,
     "holdingTiming": 10,
     "monitorHeartbeat": 10,
     "monitorConnection": 10,
@@ -127,6 +134,7 @@ class RealtimeMonitor:
             str(key).upper(): float(value or 0)
             for key, value in parse_assignments(settings.get("fxRates", ""), DEFAULT_FX_RATES).items()
         }
+        self.strategy_model = StrategyModel(settings)
 
     def enabled(self, rule: str) -> bool:
         return self.rules.get(rule, 1) != 0
@@ -139,9 +147,11 @@ class RealtimeMonitor:
         events: List[AlertEvent] = []
         events.extend(self.connection_events(snapshot, previous))
         events.extend(self.heartbeat_events(snapshot))
+        events.extend(self.model_score_events(snapshot))
         if previous:
             events.extend(self.position_change_events(snapshot, previous))
             events.extend(self.cash_events(snapshot, previous))
+        events.extend(self.watchlist_quote_events(snapshot, previous or {}))
         events.extend(self.external_signal_events(snapshot, previous or {}))
         events.extend(self.holding_timing_events(snapshot))
         return [event for event in events if self.enabled(event.rule)]
@@ -150,6 +160,9 @@ class RealtimeMonitor:
         events: List[AlertEvent] = []
         events.extend(self.connection_events(snapshot, {"status": "이전 연결 상태"}))
         events.extend(self.heartbeat_events(snapshot))
+        model_events = self.model_score_events(snapshot)
+        events.extend(self.only_rule("modelBuy", model_events) or self.model_sample_events(snapshot, "modelBuy"))
+        events.extend(self.only_rule("modelSell", model_events) or self.model_sample_events(snapshot, "modelSell"))
 
         state = snapshot.to_monitor_state()
         symbols = sorted(state.get("positions", {}).keys())
@@ -181,6 +194,15 @@ class RealtimeMonitor:
             ))
 
         events.extend(self.only_rule("monitorCashChange", self.cash_events(snapshot, self.previous_with_cash_delta(state))))
+        watchlist_snapshot = self.snapshot_with_sample_watchlist(snapshot)
+        events.extend(self.only_rule("watchlistQuote", self.watchlist_quote_events(
+            watchlist_snapshot,
+            self.previous_with_watchlist_delta(watchlist_snapshot.to_monitor_state()),
+        )))
+        events.extend(self.only_rule("watchlistQuotePending", self.watchlist_quote_events(
+            self.snapshot_with_pending_watchlist(watchlist_snapshot),
+            {},
+        )))
         external_snapshot = self.snapshot_with_sample_external_signals(snapshot)
         external_state = external_snapshot.to_monitor_state()
         events.extend(self.external_signal_events(external_snapshot, self.previous_with_external_delta(external_state)))
@@ -248,6 +270,51 @@ class RealtimeMonitor:
                 for item in snapshot.positions
             ])
         return snapshot
+
+    def snapshot_with_sample_watchlist(self, snapshot: AccountSnapshot) -> AccountSnapshot:
+        if snapshot.watchlist:
+            return snapshot
+        sample = replace(
+            snapshot.positions[0],
+            quantity=0,
+            sellable_quantity=0,
+            average_price=0,
+            market_value=0,
+            profit_loss=0,
+            profit_loss_rate=0,
+        ) if snapshot.positions else None
+        if sample:
+            return replace(snapshot, watchlist=[sample])
+        return snapshot
+
+    def snapshot_with_pending_watchlist(self, snapshot: AccountSnapshot) -> AccountSnapshot:
+        if snapshot.watchlist:
+            return replace(snapshot, watchlist=[
+                replace(
+                    item,
+                    current_price=0,
+                    volume=0,
+                    volume_ratio=0,
+                    ma20=0,
+                    ma60=0,
+                    ma20_distance=0,
+                    ma60_distance=0,
+                )
+                for item in snapshot.watchlist
+            ])
+        return snapshot
+
+    def previous_with_watchlist_delta(self, state: Dict[str, object]) -> Dict[str, object]:
+        previous = deepcopy(state)
+        watchlist = previous.get("watchlist") or {}
+        for item in watchlist.values():
+            if not isinstance(item, dict):
+                continue
+            current = self.position_current_price(item)
+            if current:
+                item["current_price"] = current / 1.05
+                break
+        return previous
 
     def previous_with_trend_delta(self, state: Dict[str, object], symbol: str) -> Dict[str, object]:
         previous = deepcopy(state)
@@ -393,6 +460,95 @@ class RealtimeMonitor:
             elif before_has_cross and before_spread >= 0 > current_spread:
                 signals.append("20/60일선 데드크로스")
         return signals
+
+    def model_score_events(self, snapshot: AccountSnapshot) -> List[AlertEvent]:
+        events: List[AlertEvent] = []
+        buy_threshold = float(self.thresholds.get("modelBuyScore", 0))
+        sell_threshold = float(self.thresholds.get("modelSellScore", 0))
+        watch_symbols = {item.symbol.upper() for item in snapshot.watchlist if item.symbol}
+        items = [item for item in snapshot.positions + snapshot.watchlist if not item.is_cash() and item.symbol]
+        for position in items:
+            if not (position.current_price or position.market_value or position.volume or position.trade_strength):
+                continue
+            scores = self.strategy_model.score(position.to_dict())
+            symbol = position.symbol.upper()
+            source = "관심" if symbol in watch_symbols else "보유"
+            common_lines = [
+                source + " 종목",
+                "현재 " + money(position.current_price, position.currency),
+                self.flow_context_line(position.to_dict()),
+                self.trend_context_line(position.to_dict()),
+            ]
+            buy_score = float(scores.get("buyScore") or 0)
+            if buy_threshold and buy_score >= buy_threshold:
+                events.append(AlertEvent(
+                    snapshot.account_id,
+                    snapshot.account_label,
+                    "WATCH",
+                    "modelBuy",
+                    ":".join([snapshot.account_id, "model-buy", symbol, str(round(buy_score, 1))]),
+                    position.name,
+                    ["모델 매수 점수 " + str(round(buy_score, 1)) + "점", *common_lines],
+                    symbol,
+                ))
+            sell_score = float(scores.get("sellScore") or 0)
+            if symbol not in watch_symbols and sell_threshold and sell_score >= sell_threshold:
+                events.append(AlertEvent(
+                    snapshot.account_id,
+                    snapshot.account_label,
+                    "ALERT",
+                    "modelSell",
+                    ":".join([snapshot.account_id, "model-sell", symbol, str(round(sell_score, 1))]),
+                    position.name,
+                    [
+                        "모델 매도 점수 " + str(round(sell_score, 1)) + "점",
+                        "손익률 " + signed_pct(position.profit_loss_rate),
+                        *common_lines,
+                    ],
+                    symbol,
+                ))
+        return events
+
+    def model_sample_events(self, snapshot: AccountSnapshot, rule: str) -> List[AlertEvent]:
+        candidates = [item for item in snapshot.watchlist + snapshot.positions if not item.is_cash() and item.symbol]
+        if not candidates:
+            return []
+        position = candidates[0] if rule == "modelBuy" else next((item for item in snapshot.positions if not item.is_cash() and item.symbol), candidates[0])
+        scores = self.strategy_model.score(position.to_dict())
+        symbol = position.symbol.upper()
+        if rule == "modelSell":
+            return [AlertEvent(
+                snapshot.account_id,
+                snapshot.account_label,
+                "ALERT",
+                "modelSell",
+                ":".join([snapshot.account_id, "model-sell-test", symbol]),
+                position.name,
+                [
+                    "모델 매도 점수 " + str(round(float(scores.get("sellScore") or 0), 1)) + "점",
+                    "현재 데이터 기준 템플릿 테스트",
+                    "손익률 " + signed_pct(position.profit_loss_rate),
+                    self.flow_context_line(position.to_dict()),
+                    self.trend_context_line(position.to_dict()),
+                ],
+                symbol,
+            )]
+        return [AlertEvent(
+            snapshot.account_id,
+            snapshot.account_label,
+            "WATCH",
+            "modelBuy",
+            ":".join([snapshot.account_id, "model-buy-test", symbol]),
+            position.name,
+            [
+                "모델 매수 점수 " + str(round(float(scores.get("buyScore") or 0), 1)) + "점",
+                "현재 데이터 기준 템플릿 테스트",
+                "현재 " + money(position.current_price, position.currency),
+                self.flow_context_line(position.to_dict()),
+                self.trend_context_line(position.to_dict()),
+            ],
+            symbol,
+        )]
 
     def trend_severity(self, signals: List[str]) -> str:
         joined = " ".join(signals)
@@ -739,6 +895,62 @@ class RealtimeMonitor:
             ratio_delta = float(market.get("cashRatio") or 0) - float(before.get("cashRatio") or 0)
             if abs(ratio_delta) >= float(self.thresholds.get("monitorCashDelta", 0)):
                 events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "ALERT" if ratio_delta < 0 else "WATCH", "monitorCashChange", snapshot.account_id + ":cash:" + key + ":" + signed_pct(ratio_delta, "p"), "현금비중", [str(market.get("label") or key), "이전 " + signed_pct(float(before.get("cashRatio") or 0)), "현재 " + signed_pct(float(market.get("cashRatio") or 0)), "변화 " + signed_pct(ratio_delta, "%p")]))
+        return events
+
+    def watchlist_quote_events(self, snapshot: AccountSnapshot, previous: Dict[str, object]) -> List[AlertEvent]:
+        current_watchlist = snapshot.to_monitor_state().get("watchlist") or {}
+        previous_watchlist = previous.get("watchlist") or {}
+        events: List[AlertEvent] = []
+        threshold = float(self.thresholds.get("watchlistPriceDelta", 0))
+        for symbol in sorted(current_watchlist.keys()):
+            item = current_watchlist.get(symbol) or {}
+            before = previous_watchlist.get(symbol) or {}
+            price = self.position_current_price(item)
+            before_price = self.position_current_price(before) if isinstance(before, dict) else 0.0
+            name = str(item.get("name") or symbol)
+            currency = self.position_currency(item)
+            if not price:
+                if before and not before_price:
+                    continue
+                events.append(AlertEvent(
+                    snapshot.account_id,
+                    snapshot.account_label,
+                    "INFO",
+                    "watchlistQuotePending",
+                    ":".join([snapshot.account_id, "watchlist-pending", symbol]),
+                    name,
+                    [
+                        "관심종목 시세 대기",
+                        "현재가를 아직 받지 못했습니다.",
+                        "토스 candles 응답, 종목 코드, 허용 IP를 확인하세요.",
+                    ],
+                    symbol,
+                ))
+                continue
+            price_delta = pct_delta(price, before_price)
+            if before_price and threshold and abs(price_delta) < threshold:
+                continue
+            lines = [
+                "관심종목 시세 수집",
+                "현재 " + money(price, currency),
+            ]
+            if before_price:
+                lines.append("직전 " + money(before_price, currency) + " · 변화 " + signed_pct(price_delta))
+            lines.extend([
+                self.flow_context_line(item),
+                self.trend_context_line(item),
+                "관심종목 알림 기준과 매수 후보를 확인하세요.",
+            ])
+            events.append(AlertEvent(
+                snapshot.account_id,
+                snapshot.account_label,
+                "ALERT" if before_price and price_delta < 0 else "WATCH",
+                "watchlistQuote",
+                ":".join([snapshot.account_id, "watchlist-quote", symbol, signed_pct(price_delta)]),
+                name,
+                [line for line in lines if line],
+                symbol,
+            ))
         return events
 
     def holding_timing_events(self, snapshot: AccountSnapshot) -> List[AlertEvent]:

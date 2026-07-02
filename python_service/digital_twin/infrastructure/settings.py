@@ -12,6 +12,7 @@ ROOT_DIR = Path(__file__).resolve().parents[3]
 DEFAULT_DATA_DIR = ROOT_DIR / "data"
 
 TEXT_SETTING_KEYS = [
+    "appTheme",
     "watchlistSymbols",
     "tossApiBaseUrl",
     "tossAccountSeq",
@@ -174,6 +175,7 @@ def runtime_settings() -> Dict[str, str]:
         return fallback
 
     return {
+        "appTheme": value("appTheme", "APP_THEME", "light"),
         "watchlistSymbols": value("watchlistSymbols", "WATCHLIST_SYMBOLS", "TSLA,AAPL,NVDA,000660"),
         "tossApiBaseUrl": value("tossApiBaseUrl", "TOSS_API_BASE_URL", "https://openapi.tossinvest.com"),
         "tossClientId": value("tossClientId", "TOSS_CLIENT_ID"),

@@ -96,6 +96,7 @@ function assertOk(condition, message) {
 
 function checkFrontendAdminRender() {
   const code = fs.readFileSync(path.join(rootDir, "public", "app.js"), "utf8");
+  assertOk(code.indexOf('appTheme: settingValue("appTheme")') >= 0, "설정 저장 payload에 화면 테마가 포함되지 않았습니다.");
   const payloads = {
     "/api/settings": { settings: {}, configured: {}, locked: false },
     "/api/service-accounts": {
@@ -302,6 +303,12 @@ function checkFrontendAdminRender() {
         return [];
       }
     };
+    const documentElement = {
+      attributes: {},
+      setAttribute: function (name, value) {
+        this.attributes[name] = String(value);
+      }
+    };
 
     vm.runInNewContext(code, {
       console: console,
@@ -309,12 +316,20 @@ function checkFrontendAdminRender() {
       clearTimeout: clearTimeout,
       URLSearchParams: URLSearchParams,
       document: {
+        documentElement: documentElement,
         getElementById: function (id) {
           return id === "app" ? app : null;
         }
       },
       window: {
         location: { protocol: "http:", hostname: hostname || "127.0.0.1", search: search || "" },
+        matchMedia: function () {
+          return {
+            matches: false,
+            addEventListener: function () {},
+            addListener: function () {}
+          };
+        },
         localStorage: {
           getItem: function (key) {
             return storage.has(key) ? storage.get(key) : null;
@@ -356,7 +371,6 @@ function checkFrontendAdminRender() {
     renderForSearch("?tab=notifications"),
     renderForSearch("?tab=modeling"),
     renderForSearch("?tab=monitoring"),
-    renderForSearch("?tab=symbols"),
     renderForSearch("?tab=accounts", "namsoon00.github.io")
   ]).then(function (pages) {
     const overviewHtml = pages[0];
@@ -365,14 +379,14 @@ function checkFrontendAdminRender() {
     const notificationHtml = pages[3];
     const modelingHtml = pages[4];
     const monitoringHtml = pages[5];
-    const symbolsHtml = pages[6];
-    const staticAccountHtml = pages[7];
-    const symbolUniverseHtml = monitoringHtml.indexOf("symbol-universe-panel") >= 0 ? monitoringHtml : symbolsHtml;
+    const staticAccountHtml = pages[6];
+    const symbolUniverseHtml = watchlistHtml;
 
     assertOk(overviewHtml.indexOf("계정·알림·모델 운영 콘솔") >= 0, "메인 운영 콘솔 제목이 렌더링되지 않았습니다.");
-    ["overview", "accounts", "watchlist", "monitoring", "notifications", "modeling", "symbols"].forEach(function (tab) {
+    ["overview", "accounts", "watchlist", "monitoring", "notifications", "modeling"].forEach(function (tab) {
       assertOk(overviewHtml.indexOf('data-tab="' + tab + '"') >= 0, "새 탭이 렌더링되지 않았습니다: " + tab);
     });
+    assertOk(overviewHtml.indexOf('data-tab="symbols"') < 0, "전체종목 별도 탭이 아직 렌더링됩니다.");
     assertOk(overviewHtml.indexOf("data-mode=") < 0, "Mock 데이터 전환 버튼이 아직 렌더링됩니다.");
     assertOk(overviewHtml.indexOf(">Mock<") < 0, "Mock 데이터 버튼 라벨이 아직 렌더링됩니다.");
     assertOk(overviewHtml.indexOf("Mock 데이터") < 0, "Mock 데이터 표시 문구가 아직 렌더링됩니다.");
@@ -385,14 +399,27 @@ function checkFrontendAdminRender() {
     assertOk(overviewHtml.indexOf("DB 저장 계정") >= 0, "DB 계정 제목이 렌더링되지 않았습니다.");
     assertOk(accountHtml.indexOf("data-account-form") >= 0, "계정 등록 폼이 렌더링되지 않았습니다.");
     assertOk(accountHtml.indexOf("DB 저장 계정") >= 0, "계정 탭에 DB 계정 목록이 렌더링되지 않았습니다.");
+    assertOk(accountHtml.indexOf("account-credential-grid") >= 0, "계정 보안 상태 요약이 렌더링되지 않았습니다.");
+    assertOk(accountHtml.indexOf("Bot token 설정됨") >= 0, "텔레그램 bot token 설정 상태가 표시되지 않습니다.");
+    assertOk(accountHtml.indexOf("Secret 설정됨") >= 0, "토스 secret 설정 상태가 표시되지 않습니다.");
     assertOk(accountHtml.indexOf('value="DB 계정"') >= 0, "로컬 DB 계정 표시 이름이 폼에 채워지지 않았습니다.");
     assertOk(accountHtml.indexOf('value="NVDA,005930"') >= 0, "로컬 DB 관심 종목이 폼에 채워지지 않았습니다.");
     assertOk(accountHtml.indexOf('value="true"') < 0, "마스킹된 boolean 값이 계정 폼에 그대로 표시됩니다.");
     assertOk(watchlistHtml.indexOf("계정별 관심 종목") >= 0, "관심종목 탭에 계정별 관심 종목이 렌더링되지 않았습니다.");
     assertOk(watchlistHtml.indexOf("watchlist-panel") >= 0, "관심종목 탭에 관심 종목 관리 패널이 렌더링되지 않았습니다.");
+    assertOk(watchlistHtml.indexOf("data-watch-symbol-input") >= 0, "관심종목 검색 입력창이 렌더링되지 않았습니다.");
+    assertOk(watchlistHtml.indexOf("data-watch-suggest-list") >= 0, "관심종목 서제스트 영역이 렌더링되지 않았습니다.");
+    assertOk(watchlistHtml.indexOf("watch-row-meta") >= 0, "관심종목 알림/시세 상태가 렌더링되지 않았습니다.");
+    assertOk(watchlistHtml.indexOf("시세 알림") >= 0, "관심종목 시세 알림 상태가 표시되지 않았습니다.");
+    assertOk(watchlistHtml.indexOf("symbol-result-list") >= 0, "관심종목 탭에 전체 종목 결과 리스트가 렌더링되지 않았습니다.");
+    assertOk(watchlistHtml.indexOf("symbol-summary-card") >= 0, "관심종목 탭에 전체 종목 시장 요약 카드가 렌더링되지 않았습니다.");
     assertOk(watchlistHtml.indexOf("NVDA") >= 0 && watchlistHtml.indexOf("005930") >= 0, "DB 계정 관심 종목이 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("admin-message-row") >= 0, "메시지 타입별 알림 설정이 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("notification-template-row") >= 0, "알림 템플릿 편집기가 렌더링되지 않았습니다.");
+    assertOk(notificationHtml.indexOf("notification-template-preview") >= 0, "알림 템플릿 미리보기가 렌더링되지 않았습니다.");
+    assertOk(notificationHtml.indexOf("data-template-test-send") >= 0, "실제 데이터 알림 테스트 발송 버튼이 렌더링되지 않았습니다.");
+    assertOk(notificationHtml.indexOf("모니터링 정상 작동") >= 0, "상태 확인 템플릿 미리보기 샘플이 렌더링되지 않았습니다.");
+    assertOk(notificationHtml.indexOf("매수 점수") >= 0, "타입별 템플릿 미리보기 샘플이 구분되지 않습니다.");
     assertOk(notificationHtml.indexOf("data-notification-template=\"monitorHeartbeat\"") >= 0, "상태 확인 템플릿 textarea가 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("{rawLines}") >= 0, "알림 템플릿 변수가 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("tab=notifications") >= 0, "알림 링크 기본값이 새 알림 탭을 가리키지 않습니다.");
@@ -439,11 +466,26 @@ function withFakeTossApi(callback) {
           {
             accountSeq: "1",
             accountNo: "1234567890",
-            accountType: "BROKERAGE",
-            orderableAmount: "250000",
-            currency: "KRW"
+            accountType: "BROKERAGE"
           }
         ]
+      }));
+      return;
+    }
+
+    if (req.method === "GET" && req.url.indexOf("/api/v1/buying-power") === 0) {
+      if (req.headers.authorization !== "Bearer fake-token" || req.headers["x-tossinvest-account"] !== "1") {
+        res.writeHead(401, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "unauthorized" }));
+        return;
+      }
+      const currency = new URL("http://127.0.0.1" + req.url).searchParams.get("currency");
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({
+        result: {
+          currency: currency,
+          cashBuyingPower: currency === "USD" ? "100" : "250000"
+        }
       }));
       return;
     }
@@ -575,6 +617,7 @@ async function checkNormalMode(port) {
   assertOk(settingsPayload.settings.tossClientSecret === "", "설정 API가 secret 원문을 내려주고 있습니다.");
   assertOk(Object.prototype.hasOwnProperty.call(settingsPayload.settings, "alertRules"), "설정 API에 알림 규칙 필드가 없습니다.");
   assertOk(Object.prototype.hasOwnProperty.call(settingsPayload.settings, "modelDecisionThresholds"), "설정 API에 모델 판단 기준 필드가 없습니다.");
+  assertOk(Object.prototype.hasOwnProperty.call(settingsPayload.settings, "appTheme"), "설정 API에 화면 테마 필드가 없습니다.");
   assertOk(settingsPayload.settings.watchlistSymbols.indexOf("TSLA") >= 0, "기본 관심 종목에 TSLA가 없습니다.");
   assertOk(settingsPayload.settings.watchlistSymbols.indexOf("AAPL") >= 0, "기본 관심 종목에 AAPL이 없습니다.");
 
@@ -594,6 +637,7 @@ async function checkNormalMode(port) {
         tossApiBaseUrl: "http://127.0.0.1:1",
         tossClientId: "fake-client",
         tossClientSecret: "fake-secret",
+        appTheme: "dark",
         notifyProvider: "telegram",
         telegramBotToken: "fake-telegram-token",
         telegramChatId: "1234",
@@ -609,12 +653,14 @@ async function checkNormalMode(port) {
   assertOk(savedSettingsPayload.settings.watchlistSymbols === "TSLA,AAPL,NVDA", "저장된 관심 종목 값이 응답에 없습니다.");
   assertOk(savedSettingsPayload.settings.alertRules.indexOf("priceStop=1") >= 0, "저장된 알림 규칙이 응답에 없습니다.");
   assertOk(savedSettingsPayload.settings.modelDecisionThresholds.indexOf("modelBuy=75") >= 0, "저장된 모델 기준값이 응답에 없습니다.");
+  assertOk(savedSettingsPayload.settings.appTheme === "dark", "저장된 화면 테마 값이 응답에 없습니다.");
 
   const templates = await request(port, "/api/notification-templates");
   assertOk(templates.statusCode === 200, "알림 템플릿 API 응답 코드가 200이 아닙니다: " + templates.statusCode);
   const templatesPayload = JSON.parse(templates.body);
   assertOk(Array.isArray(templatesPayload.templates), "알림 템플릿 API templates가 배열이 아닙니다.");
   assertOk(templatesPayload.templates.some(function (item) { return item.messageType === "monitorHeartbeat"; }), "상태 확인 템플릿이 없습니다.");
+  assertOk(templatesPayload.templates.some(function (item) { return item.messageType === "watchlistQuote"; }), "관심종목 시세 템플릿이 없습니다.");
   assertOk(Array.isArray(templatesPayload.variables) && templatesPayload.variables.indexOf("body") >= 0, "알림 템플릿 변수 목록이 없습니다.");
 
   const savedTemplate = await request(port, "/api/notification-templates", {
@@ -766,6 +812,8 @@ async function checkLiveTossMode(port) {
   assertOk(position.ma20 > 0, "토스 live 캔들 기반 20일 이동평균이 없습니다.");
   assertOk(position.ma60 > 0, "토스 live 캔들 기반 60일 이동평균이 없습니다.");
   assertOk(position.ma20Distance !== 0, "토스 live 이동평균 괴리율이 계산되지 않았습니다.");
+  assertOk(payload.toss.account.orderableAmount === 390000, "토스 live 매수 가능 금액이 buying-power API로 계산되지 않았습니다.");
+  assertOk(payload.portfolio.cash === 390000, "토스 live 포트폴리오 현금이 buying-power API 값을 반영하지 않았습니다.");
 }
 
 async function main() {

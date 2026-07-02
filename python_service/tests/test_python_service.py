@@ -38,6 +38,8 @@ from digital_twin.infrastructure.settings import runtime_settings
 from digital_twin.infrastructure.sqlite_operational import SQLiteAppStore, SQLiteEventLog, SQLiteExternalSignalCache, SQLiteModelReviewJobStore, SQLiteMonitorStore, SQLiteNotificationJobStore, SQLiteNotificationTemplateStore, SQLiteRuntimeSettingsStore, SQLiteSymbolUniverseStore
 from digital_twin.infrastructure.symbol_sources import parse_krx_kind_table, parse_nasdaq_listed
 from digital_twin.infrastructure.sqlite_accounts import AccountRegistry
+from digital_twin.infrastructure.toss_snapshots import account_cash_amount, select_account
+from digital_twin.infrastructure.web_server import notification_template_test_payload
 from digital_twin.scheduler import MonitorRunner
 
 
@@ -64,6 +66,27 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(["main", "ira"], [item.account_id for item in accounts])
         self.assertTrue((Path(self.temp.name) / "service.db").exists())
         self.assertTrue(accounts[0].client_id)
+
+    def test_toss_account_selection_uses_configured_account_seq(self):
+        accounts = [
+            {"accountSeq": "1", "orderableAmount": "0"},
+            {"accountSeq": "2", "withdrawableAmount": {"amount": {"krw": "350000"}}},
+        ]
+
+        selected = select_account(accounts, "2")
+
+        self.assertEqual("2", selected["accountSeq"])
+        self.assertEqual(350000.0, account_cash_amount(selected))
+
+    def test_toss_account_cash_accepts_alternate_nested_fields(self):
+        account = {
+            "accountNo": "123",
+            "cashBalances": [
+                {"currency": "KRW", "availableOrderAmount": {"krw": "125000"}},
+            ],
+        }
+
+        self.assertEqual(125000.0, account_cash_amount(account))
 
     def test_account_registry_stores_telegram_per_account(self):
         registry = AccountRegistry()
@@ -586,6 +609,10 @@ class PythonServiceTests(unittest.TestCase):
 
         self.assertEqual(
             {
+                "modelBuy",
+                "modelSell",
+                "watchlistQuote",
+                "watchlistQuotePending",
                 "holdingTiming",
                 "monitorHeartbeat",
                 "monitorConnection",
@@ -974,6 +1001,92 @@ class PythonServiceTests(unittest.TestCase):
 
         self.assertEqual(1, runner.run_once(limit=10))
         self.assertEqual("[monitorHeartbeat] 상태 확인\n정상", sent[0])
+
+    def test_notification_template_test_send_uses_live_snapshot_and_template(self):
+        registry = AccountRegistry()
+        account = AccountConfig(
+            "main",
+            "메인",
+            "toss",
+            "https://example.test",
+            "id",
+            "secret",
+            "1",
+            ["AAPL"],
+            notify_provider="telegram",
+            telegram_bot_token="token",
+            telegram_chat_id="chat",
+        )
+        registry.upsert(account)
+        position = normalize_position({
+            "symbol": "AAPL",
+            "name": "Apple",
+            "market": "US",
+            "currency": "USD",
+            "marketValue": 1000,
+            "quantity": 2,
+            "sellableQuantity": 2,
+            "averagePrice": 100,
+            "currentPrice": 125,
+            "profitLossRate": 25,
+            "sector": "AI/플랫폼",
+        })
+        portfolio = portfolio_summary([position], 300, "KRW")
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "토스 계좌 동기화",
+            utc_now_iso(),
+            portfolio,
+            [position],
+            decisions_for_positions([position], portfolio),
+        )
+        SQLiteNotificationTemplateStore().upsert("monitorHeartbeat", "[{messageType}] {title}\n{rawLines}", "상태 확인 템플릿", True)
+        sent = []
+
+        class FakeNotifier:
+            label = "Fake"
+
+            def send(self, message):
+                sent.append(message)
+                return SimpleNamespace(delivered=True, label=self.label, reason="")
+
+        with mock.patch("digital_twin.infrastructure.web_server.build_snapshot", return_value=snapshot), \
+                mock.patch("digital_twin.infrastructure.web_server.notifier_for_account", return_value=FakeNotifier()):
+            status, payload = notification_template_test_payload({"messageType": "monitorHeartbeat"})
+
+        self.assertEqual(200, status)
+        self.assertTrue(payload["delivered"])
+        self.assertEqual("monitorHeartbeat", payload["event"]["messageType"])
+        self.assertEqual(1, len(sent))
+        self.assertTrue(sent[0].startswith("[monitorHeartbeat]"))
+        self.assertIn("토스 계좌 동기화", sent[0])
+
+    def test_notification_template_test_send_rejects_demo_snapshot_by_default(self):
+        registry = AccountRegistry()
+        account = AccountConfig("main", "메인", "toss", "https://example.test", "", "", "", ["AAPL"])
+        registry.upsert(account)
+        portfolio = portfolio_summary([], 0, "KRW")
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "demo",
+            "토스 credentials 미설정",
+            utc_now_iso(),
+            portfolio,
+            [],
+            [],
+        )
+
+        with mock.patch("digital_twin.infrastructure.web_server.build_snapshot", return_value=snapshot):
+            status, payload = notification_template_test_payload({"messageType": "monitorHeartbeat"})
+
+        self.assertEqual(409, status)
+        self.assertFalse(payload["delivered"])
+        self.assertIn("실제 토스 데이터를", payload["error"])
 
     def test_admin_preview_config_is_static_and_sanitized(self):
         registry = AccountRegistry()

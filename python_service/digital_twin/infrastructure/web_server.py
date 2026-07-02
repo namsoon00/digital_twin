@@ -17,13 +17,16 @@ from typing import Dict, List
 from ..application.account_service import AccountApplicationService
 from ..application.flow_lens_service import flow_lens_snapshot
 from ..application.symbol_universe_service import SymbolUniverseService
-from ..domain.notification_templates import template_variables
+from ..domain.monitoring import RealtimeMonitor
+from ..domain.notification_templates import alert_context, template_variables
 from ..domain.portfolio import utc_now_iso
 from ..infrastructure.event_bus import default_event_bus
 from ..infrastructure.mock_market import mock_market_payload, mock_market_scenario_list
+from ..infrastructure.notifications import notifier_for_account
 from ..infrastructure.settings import ROOT_DIR, runtime_settings, save_runtime_settings
 from ..infrastructure.sqlite_accounts import AccountRegistry
 from ..infrastructure.sqlite_operational import SQLiteAppStore, SQLiteNotificationTemplateStore
+from ..infrastructure.toss_snapshots import build_snapshot
 
 
 PUBLIC_DIR = ROOT_DIR / "public"
@@ -159,6 +162,7 @@ def snapshot_payload() -> Dict[str, object]:
 def settings_status_payload() -> Dict[str, object]:
     settings = runtime_settings()
     public_keys = [
+        "appTheme",
         "watchlistSymbols",
         "tossApiBaseUrl",
         "notifyProvider",
@@ -246,6 +250,99 @@ def save_template_payload(payload: Dict[str, object]) -> Dict[str, object]:
 
 def reset_template_payload(message_type: str) -> Dict[str, object]:
     return {"template": notification_store().reset(message_type).to_dict()}
+
+
+def alert_event_public_payload(event) -> Dict[str, object]:
+    return {
+        "accountId": event.account_id,
+        "accountLabel": event.account_label,
+        "messageType": event.rule,
+        "rule": event.rule,
+        "severity": event.severity,
+        "symbol": event.symbol,
+        "title": event.title,
+        "lines": list(event.lines or []),
+        "key": event.key,
+    }
+
+
+def selected_notification_test_account(payload: Dict[str, object]):
+    requested = configured(payload.get("accountId") or payload.get("account_id"))
+    accounts = AccountRegistry().load()
+    if requested:
+        for account in accounts:
+            if account.account_id == requested:
+                return account
+        raise ValueError("요청한 계정을 찾지 못했습니다.")
+    if not accounts:
+        raise ValueError("테스트 발송에 사용할 계정이 없습니다.")
+    return accounts[0]
+
+
+def notification_test_event(message_type: str, snapshot):
+    monitor = RealtimeMonitor(runtime_settings())
+    events = monitor.type_check_events_for_snapshot(snapshot)
+    for event in events:
+        if event.rule == message_type:
+            return event
+    for event in monitor.events_for_snapshot(snapshot, {}):
+        if event.rule == message_type:
+            return event
+    return None
+
+
+def notification_template_test_payload(payload: Dict[str, object]):
+    message_type = configured(payload.get("messageType") or payload.get("message_type"))
+    if not message_type:
+        raise ValueError("messageType은 필요합니다.")
+    dry_run = bool(payload.get("dryRun") or payload.get("dry_run"))
+    account = selected_notification_test_account(payload)
+    snapshot = build_snapshot(account)
+    if snapshot.mode != "live" and not payload.get("allowDemo"):
+        return 409, {
+            "delivered": False,
+            "messageType": message_type,
+            "error": "실제 토스 데이터를 가져오지 못했습니다: " + (snapshot.status or snapshot.mode),
+            "snapshot": {
+                "accountId": snapshot.account_id,
+                "accountLabel": snapshot.account_label,
+                "mode": snapshot.mode,
+                "status": snapshot.status,
+                "generatedAt": snapshot.generated_at,
+            },
+        }
+    event = notification_test_event(message_type, snapshot)
+    if not event:
+        return 422, {
+            "delivered": False,
+            "messageType": message_type,
+            "error": "현재 데이터로 만들 수 있는 알림 이벤트가 없습니다.",
+        }
+    message = notification_store().render(event.rule, alert_context(event))
+    if dry_run:
+        return 200, {
+            "delivered": False,
+            "dryRun": True,
+            "messageType": message_type,
+            "message": message,
+            "event": alert_event_public_payload(event),
+        }
+    delivery = notifier_for_account(account).send(message)
+    if not delivery.delivered:
+        return 502, {
+            "delivered": False,
+            "provider": delivery.label,
+            "reason": delivery.reason,
+            "messageType": message_type,
+            "event": alert_event_public_payload(event),
+            "error": delivery.reason or "알림 발송 실패",
+        }
+    return 200, {
+        "delivered": True,
+        "provider": delivery.label,
+        "messageType": message_type,
+        "event": alert_event_public_payload(event),
+    }
 
 
 def account_service() -> AccountApplicationService:
@@ -859,6 +956,12 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
                 if not self.ensure_writable("공유 모드에서는 알림 템플릿을 변경할 수 없습니다."):
                     return
                 return self.send_payload(200, save_template_payload(self.read_json_body()))
+
+        if path == "/api/notification-templates/test-send" and self.command == "POST":
+            if not self.ensure_writable("공유 모드에서는 실제 알림을 발송할 수 없습니다."):
+                return
+            status, payload = notification_template_test_payload(self.read_json_body())
+            return self.send_payload(status, payload)
 
         template_match = re.match(r"^/api/notification-templates/([^/]+)$", path)
         if template_match and self.command == "DELETE":

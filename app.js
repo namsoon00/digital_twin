@@ -189,12 +189,13 @@
     ].join("\n")
   };
   var tabs = [
-    { id: "overview", label: "대시보드" },
-    { id: "symbols", label: "전체종목" },
-    { id: "accounts", label: "계정" },
-    { id: "notifications", label: "알림" },
-    { id: "modeling", label: "모델링" },
-    { id: "monitoring", label: "모니터링" }
+    { id: "overview", label: "홈", description: "운영 요약" },
+    { id: "accounts", label: "계정", description: "DB 계정" },
+    { id: "watchlist", label: "관심종목", description: "알림 대상" },
+    { id: "monitoring", label: "모니터링", description: "보유·타이밍" },
+    { id: "notifications", label: "알림", description: "메시지 타입" },
+    { id: "modeling", label: "모델링", description: "판단 기준" },
+    { id: "symbols", label: "전체종목", description: "종목 검색" }
   ];
   var feedChannels = [
     {
@@ -1169,7 +1170,14 @@
     state.watchlistError = "";
     persistSettings();
     state.snapshot = null;
-    return load();
+    var save = isStaticPreviewHost()
+      ? Promise.resolve()
+      : saveSettingsToServer().catch(function (error) {
+        state.watchlistError = error.message || "관심 종목을 서버 설정 DB에 저장하지 못했습니다.";
+      });
+    return save.then(function () {
+      return load();
+    });
   }
 
   function tossLensPath() {
@@ -3368,8 +3376,12 @@
       '<button class="icon-button" data-action="refresh" title="새로고침">' + (state.refreshing ? "…" : "↻") + "</button>",
       '</div>',
       '</section>',
+      '<section class="workspace-layout">',
       renderTabs(),
+      '<div class="workspace-main">',
       renderActiveTab(snapshot),
+      '</div>',
+      '</section>',
       state.settingsOpen ? renderSettingsOverlay() : '',
       '</main>'
     ].join("");
@@ -3379,7 +3391,7 @@
     return [
       '<nav class="tab-bar" aria-label="앱 탭" style="--tab-count:' + tabs.length + '">',
       tabs.map(function (tab) {
-        return '<button class="' + (state.activeTab === tab.id ? "active" : "") + '" data-tab="' + escapeHtml(tab.id) + '">' + escapeHtml(tab.label) + '</button>';
+        return '<button class="' + (state.activeTab === tab.id ? "active" : "") + '" data-tab="' + escapeHtml(tab.id) + '"><span class="tab-label">' + escapeHtml(tab.label) + '</span><span class="tab-description">' + escapeHtml(tab.description || "") + '</span></button>';
       }).join(""),
       '</nav>'
     ].join("");
@@ -3390,6 +3402,8 @@
       return [
         '<section class="admin-grid">',
         renderAdminOverviewPanel(snapshot),
+        renderAccountDirectoryPanel({ compact: true }),
+        renderAccountWatchlistPanel({ compact: true }),
         renderAdminMonitoringPanel(snapshot),
         '</section>'
       ].join("");
@@ -3397,7 +3411,17 @@
     if (state.activeTab === "accounts") {
       return [
         '<section class="admin-grid">',
+        renderAccountDirectoryPanel({ full: true }),
         renderAdminAccountPanel(),
+        '</section>'
+      ].join("");
+    }
+    if (state.activeTab === "watchlist") {
+      return [
+        '<section class="admin-grid watchlist-view">',
+        renderAccountWatchlistPanel({ full: true }),
+        renderWatchlistPanel(snapshot),
+        renderSymbolUniversePanel({ full: false }),
         '</section>'
       ].join("");
     }
@@ -3487,6 +3511,115 @@
       '<em>' + escapeHtml(label) + '</em>',
       '<strong>' + escapeHtml(value) + escapeHtml(suffix || "") + '</strong>',
       '</span>'
+    ].join("");
+  }
+
+  function accountWatchlistSymbols(account) {
+    if (!account) return [];
+    return Array.isArray(account.watchlistSymbols)
+      ? normalizeSymbols(account.watchlistSymbols.join(","))
+      : normalizeSymbols(account.watchlistSymbols || "");
+  }
+
+  function allAccountWatchlistSymbols() {
+    var seen = {};
+    var symbols = [];
+    (state.serviceAccounts || []).forEach(function (account) {
+      accountWatchlistSymbols(account).forEach(function (symbol) {
+        if (seen[symbol]) return;
+        seen[symbol] = true;
+        symbols.push(symbol);
+      });
+    });
+    return symbols;
+  }
+
+  function renderAccountDirectoryPanel(options) {
+    options = options || {};
+    var accounts = state.serviceAccounts || [];
+    var enabled = accounts.filter(function (account) { return account.enabled !== false; }).length;
+    var classes = "panel account-directory-panel" + (options.full ? " account-directory-wide" : "");
+    return [
+      '<article class="' + classes + '">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Account DB</p>',
+      '<h2>DB 저장 계정</h2>',
+      '</div>',
+      '<span class="metric">' + escapeHtml(enabled + "/" + accounts.length) + '</span>',
+      '</div>',
+      '<div class="account-card-list">',
+      state.serviceAccountsLoading ? '<p class="subtle">계정 DB를 읽는 중입니다.</p>' : '',
+      state.serviceAccountsError ? '<p class="form-error">' + escapeHtml(state.serviceAccountsError) + '</p>' : '',
+      accounts.length ? accounts.map(function (account) {
+        return renderAccountDirectoryRow(account, options);
+      }).join("") : '<p class="subtle">아직 DB에 저장된 계정이 없습니다. 계정 탭에서 등록하세요.</p>',
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderAccountDirectoryRow(account, options) {
+    options = options || {};
+    var symbols = accountWatchlistSymbols(account);
+    var enabled = account.enabled !== false;
+    return [
+      '<div class="account-card">',
+      '<div class="account-card-head">',
+      '<div>',
+      '<strong>' + escapeHtml(account.label || account.id || "-") + '</strong>',
+      '<span>' + escapeHtml(account.id || "-") + ' · ' + escapeHtml(account.provider || "toss") + ' · ' + escapeHtml(enabled ? "사용" : "중지") + '</span>',
+      '</div>',
+      '<button class="mini-button" data-account-edit="' + escapeHtml(account.id || "") + '">수정</button>',
+      '</div>',
+      '<div class="account-card-meta">',
+      '<span class="chip ' + (account.clientId ? "ok" : "") + '">API key ' + (account.clientId ? "설정" : "없음") + '</span>',
+      '<span class="chip ' + (account.clientSecret ? "ok" : "") + '">Secret ' + (account.clientSecret ? "설정" : "없음") + '</span>',
+      '<span class="chip ' + (account.telegramBotToken ? "ok" : "") + '">Telegram ' + (account.telegramBotToken ? "설정" : "없음") + '</span>',
+      '<span class="chip">관심 ' + escapeHtml(symbols.length) + '개</span>',
+      '</div>',
+      options.compact ? '' : '<div class="chip-row">' + (symbols.length ? symbols.map(function (symbol) {
+        return '<span class="chip">' + escapeHtml(symbol) + '</span>';
+      }).join("") : '<span class="subtle">계정에 저장된 관심 종목이 없습니다.</span>') + '</div>',
+      '</div>'
+    ].join("");
+  }
+
+  function renderAccountWatchlistPanel(options) {
+    options = options || {};
+    var accounts = state.serviceAccounts || [];
+    var merged = allAccountWatchlistSymbols();
+    var classes = "panel account-watchlist-panel" + (options.full ? " account-watchlist-wide" : "");
+    return [
+      '<article class="' + classes + '">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Account Watchlist</p>',
+      '<h2>계정별 관심 종목</h2>',
+      '</div>',
+      '<span class="metric">' + escapeHtml(merged.length) + '</span>',
+      '</div>',
+      '<div class="watch-account-list">',
+      accounts.length ? accounts.map(renderAccountWatchlistRow).join("") : '<p class="subtle">계정 DB를 읽으면 계정별 관심 종목이 여기에 표시됩니다.</p>',
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderAccountWatchlistRow(account) {
+    var symbols = accountWatchlistSymbols(account);
+    return [
+      '<div class="watch-account-row">',
+      '<div>',
+      '<strong>' + escapeHtml(account.label || account.id || "-") + '</strong>',
+      '<span>' + escapeHtml(account.id || "-") + ' · ' + escapeHtml(account.enabled === false ? "중지" : "사용") + '</span>',
+      '</div>',
+      '<div class="chip-row">',
+      symbols.length ? symbols.map(function (symbol) {
+        return '<span class="chip">' + escapeHtml(symbol) + '</span>';
+      }).join("") : '<span class="subtle">저장된 관심 종목 없음</span>',
+      '</div>',
+      '</div>'
     ].join("");
   }
 
@@ -5606,6 +5739,7 @@
         state.accountDraft = accountDraftFromAccount(account);
         state.accountSaved = false;
         state.serviceAccountsError = "";
+        state.activeTab = "accounts";
         render();
       });
     });

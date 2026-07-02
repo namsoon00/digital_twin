@@ -3796,7 +3796,7 @@
       '<h1>토스 계좌 판단판을 만들지 못했습니다</h1>',
       '<p class="subtle">' + escapeHtml(state.error || "알 수 없는 오류") + "</p>",
       '</div>',
-      '<button class="icon-button" data-action="refresh" title="새로고침">↻</button>',
+      '<button class="icon-button" type="button" data-action="refresh" title="새로고침" aria-label="새로고침">↻</button>',
       '</section>',
       '</main>'
     ].join("");
@@ -3818,8 +3818,8 @@
       '</div>',
       '<div class="toolbar topbar-actions">',
       '<span class="status-pill ' + modeClass + '">' + escapeHtml(modeLabel) + "</span>",
-      '<button class="icon-button" data-action="refresh" title="새로고침">' + (state.refreshing ? "…" : "↻") + "</button>",
-      '<button class="icon-button settings-top-button" data-action="open-settings" title="설정" aria-label="설정">⚙</button>',
+      '<button class="icon-button" type="button" data-action="refresh" title="새로고침" aria-label="새로고침">' + (state.refreshing ? "…" : "↻") + "</button>",
+      '<button class="icon-button settings-top-button" type="button" data-action="open-settings" title="설정" aria-label="설정">⚙</button>',
       '</div>',
       '</section>',
       '<section class="workspace-layout">',
@@ -3837,7 +3837,8 @@
     return [
       '<nav class="tab-bar" aria-label="앱 탭" style="--tab-count:' + tabs.length + '">',
       tabs.map(function (tab) {
-        return '<button class="' + (state.activeTab === tab.id ? "active" : "") + '" data-tab="' + escapeHtml(tab.id) + '"><span class="tab-label">' + escapeHtml(tab.label) + '</span><span class="tab-description">' + escapeHtml(tab.description || "") + '</span></button>';
+        var active = state.activeTab === tab.id;
+        return '<button type="button" class="' + (active ? "active" : "") + '" data-tab="' + escapeHtml(tab.id) + '"' + (active ? ' aria-current="page"' : "") + '><span class="tab-label">' + escapeHtml(tab.label) + '</span><span class="tab-description">' + escapeHtml(tab.description || "") + '</span></button>';
       }).join(""),
       '</nav>'
     ].join("");
@@ -6378,7 +6379,7 @@
       '<div class="settings-body">',
       '<div class="settings-actions settings-page-actions">',
       '<button class="text-button primary" type="button" data-action="save-settings"' + (state.serverSettingsLocked ? ' disabled' : '') + '>설정 저장</button>',
-      '<button class="text-button" data-action="toggle-secrets">' + (state.showSecrets ? "secret 숨기기" : "secret 보기") + '</button>',
+      '<button class="text-button" type="button" data-action="toggle-secrets">' + (state.showSecrets ? "secret 숨기기" : "secret 보기") + '</button>',
       '</div>',
       '</div>',
       '</article>'

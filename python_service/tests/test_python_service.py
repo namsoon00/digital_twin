@@ -1135,6 +1135,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(payload["buildId"], config["buildId"])
         self.assertIn("Exit Lens Python Admin", html)
         self.assertIn("로컬 DB 빌드 스냅샷", html)
+        self.assertIn("--ds-color-bg", html)
         self.assertIn("config.json?v=" + payload["buildId"], html)
 
     def test_runner_uses_provider_snapshot(self):

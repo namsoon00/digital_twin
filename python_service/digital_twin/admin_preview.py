@@ -450,14 +450,30 @@ def render_admin_html(payload: Dict[str, object]) -> str:
     <style>
       :root {{
         color-scheme: light;
-        --bg: #f6f7f9;
-        --surface: #ffffff;
-        --text: #18202b;
-        --muted: #667085;
-        --line: #d9dee7;
-        --accent: #166a5b;
-        --warn: #9b5b00;
-        --info: #295b9f;
+        --ds-color-bg: #f7f8fa;
+        --ds-color-panel: #ffffff;
+        --ds-color-panel-soft: #f9fafb;
+        --ds-color-ink: #191f28;
+        --ds-color-muted: #6b7684;
+        --ds-color-line: #e5e8eb;
+        --ds-color-positive: #00a661;
+        --ds-color-positive-soft: #e9f8f1;
+        --ds-color-action: #3182f6;
+        --ds-color-action-soft: #e8f3ff;
+        --ds-color-warning: #f08c00;
+        --ds-color-warning-soft: #fff4e5;
+        --ds-radius-control: 8px;
+        --ds-radius-panel: 8px;
+        --ds-shadow-panel: 0 8px 28px rgba(25, 31, 40, 0.06);
+        --bg: var(--ds-color-bg);
+        --surface: var(--ds-color-panel);
+        --surface-soft: var(--ds-color-panel-soft);
+        --text: var(--ds-color-ink);
+        --muted: var(--ds-color-muted);
+        --line: var(--ds-color-line);
+        --accent: var(--ds-color-positive);
+        --warn: var(--ds-color-warning);
+        --info: var(--ds-color-action);
       }}
       * {{ box-sizing: border-box; }}
       body {{
@@ -466,9 +482,10 @@ def render_admin_html(payload: Dict[str, object]) -> str:
         color: var(--text);
         background: var(--bg);
         line-height: 1.5;
+        letter-spacing: 0;
       }}
       header {{
-        padding: 28px clamp(16px, 4vw, 48px) 22px;
+        padding: 20px clamp(16px, 4vw, 48px) 18px;
         background: var(--surface);
         border-bottom: 1px solid var(--line);
       }}
@@ -481,7 +498,8 @@ def render_admin_html(payload: Dict[str, object]) -> str:
       }}
       h1 {{
         margin: 0;
-        font-size: clamp(28px, 5vw, 44px);
+        font-size: 28px;
+        line-height: 1.12;
         letter-spacing: 0;
       }}
       .subtitle {{
@@ -491,11 +509,12 @@ def render_admin_html(payload: Dict[str, object]) -> str:
       }}
       .badge {{
         border: 1px solid var(--line);
-        border-radius: 999px;
+        border-radius: var(--ds-radius-control);
         padding: 6px 10px;
         font-size: 13px;
-        background: #f9fafb;
-        color: var(--accent);
+        font-weight: 800;
+        background: var(--surface-soft);
+        color: var(--info);
         white-space: nowrap;
       }}
       nav {{
@@ -508,9 +527,11 @@ def render_admin_html(payload: Dict[str, object]) -> str:
         color: var(--text);
         text-decoration: none;
         border: 1px solid var(--line);
-        border-radius: 6px;
+        border-radius: var(--ds-radius-control);
         padding: 7px 10px;
-        background: #fbfcfd;
+        background: var(--surface-soft);
+        font-size: 13px;
+        font-weight: 800;
       }}
       main {{
         padding: 24px clamp(16px, 4vw, 48px) 48px;
@@ -519,9 +540,9 @@ def render_admin_html(payload: Dict[str, object]) -> str:
         display: grid;
         gap: 8px;
         padding: 14px 16px;
-        border: 1px solid #d8c7a8;
-        border-radius: 8px;
-        background: #fffaf0;
+        border: 1px solid var(--warn);
+        border-radius: var(--ds-radius-panel);
+        background: var(--ds-color-warning-soft);
         color: #43320b;
         margin-bottom: 20px;
       }}
@@ -562,9 +583,10 @@ def render_admin_html(payload: Dict[str, object]) -> str:
       .panel {{
         background: var(--surface);
         border: 1px solid var(--line);
-        border-radius: 8px;
+        border-radius: var(--ds-radius-panel);
         padding: 14px;
         min-width: 0;
+        box-shadow: var(--ds-shadow-panel);
       }}
       .panel.wide {{
         grid-column: span 1;
@@ -581,12 +603,12 @@ def render_admin_html(payload: Dict[str, object]) -> str:
         margin: 0 6px 6px 0;
         padding: 4px 8px;
         border: 1px solid var(--line);
-        border-radius: 6px;
-        background: #f9fafb;
+        border-radius: var(--ds-radius-control);
+        background: var(--surface-soft);
         font-size: 13px;
         color: #263241;
       }}
-      .chip.ok {{ border-color: #b9d8cf; background: #eef8f5; color: var(--accent); }}
+      .chip.ok {{ border-color: var(--accent); background: var(--ds-color-positive-soft); color: var(--accent); }}
       .defaults {{
         margin-top: 12px;
         border-top: 1px solid var(--line);
@@ -610,8 +632,9 @@ def render_admin_html(payload: Dict[str, object]) -> str:
         align-items: start;
         background: var(--surface);
         border: 1px solid var(--line);
-        border-radius: 8px;
+        border-radius: var(--ds-radius-panel);
         padding: 14px;
+        box-shadow: var(--ds-shadow-panel);
       }}
       .account-card p {{
         margin: 4px 0 0;

@@ -13,7 +13,7 @@
     "공유 미리보기에서는 서버 설정과 계정 DB 쓰기를 차단합니다."
   ],
   "localData": {
-    "generatedAt": "2026-07-02T01:17:48.965875Z",
+    "generatedAt": "2026-07-02T02:14:50.980211Z",
     "sources": {
       "serviceDb": "data/service.db",
       "serviceDbExists": true,
@@ -56,14 +56,24 @@
       "modelReviewUseCodex": "1",
       "modelReviewTimeoutSeconds": "180",
       "modelReviewIntervalSeconds": "300",
-      "modelReviewBatchSize": "1"
+      "modelReviewBatchSize": "1",
+      "externalApiFetchIntervalMinutes": "60",
+      "externalFredSeries": "DGS10,DGS2,DFF",
+      "externalCryptoIds": "bitcoin,ethereum",
+      "externalAlphaMaxSymbols": "3",
+      "externalDartLookbackDays": "14",
+      "externalDartCorpCodes": "005930=00126380\n000660=00164779\n035420=00266961"
     },
     "configured": {
       "tossClientId": true,
       "tossClientSecret": true,
       "tossAccountSeq": false,
       "telegramBotToken": true,
-      "telegramChatId": true
+      "telegramChatId": true,
+      "alphaVantageApiKey": false,
+      "coingeckoApiKey": false,
+      "fredApiKey": false,
+      "opendartApiKey": false
     },
     "notification": {
       "alertRules": [
@@ -121,6 +131,31 @@
           "key": "monitorDecisionChange",
           "default": 1,
           "unit": ""
+        },
+        {
+          "key": "externalEquityMove",
+          "default": 1,
+          "unit": ""
+        },
+        {
+          "key": "externalCryptoMove",
+          "default": 1,
+          "unit": ""
+        },
+        {
+          "key": "externalMacroShift",
+          "default": 1,
+          "unit": ""
+        },
+        {
+          "key": "externalDartDisclosure",
+          "default": 1,
+          "unit": ""
+        },
+        {
+          "key": "externalDataConnection",
+          "default": 1,
+          "unit": ""
         }
       ],
       "alertThresholds": [
@@ -146,6 +181,26 @@
         },
         {
           "key": "monitorExitPressureDelta",
+          "default": 15,
+          "unit": ""
+        },
+        {
+          "key": "externalEquityChangePct",
+          "default": 3,
+          "unit": ""
+        },
+        {
+          "key": "externalCryptoChange24hPct",
+          "default": 4,
+          "unit": ""
+        },
+        {
+          "key": "externalCryptoChange7dPct",
+          "default": 10,
+          "unit": ""
+        },
+        {
+          "key": "externalMacroRateDeltaBp",
           "default": 15,
           "unit": ""
         }
@@ -204,6 +259,31 @@
         {
           "key": "monitorDecisionChange",
           "default": 10,
+          "unit": "minutes"
+        },
+        {
+          "key": "externalEquityMove",
+          "default": 60,
+          "unit": "minutes"
+        },
+        {
+          "key": "externalCryptoMove",
+          "default": 60,
+          "unit": "minutes"
+        },
+        {
+          "key": "externalMacroShift",
+          "default": 60,
+          "unit": "minutes"
+        },
+        {
+          "key": "externalDartDisclosure",
+          "default": 60,
+          "unit": "minutes"
+        },
+        {
+          "key": "externalDataConnection",
+          "default": 60,
           "unit": "minutes"
         }
       ],
@@ -335,6 +415,45 @@
           "default": "http://127.0.0.1:3000?tab=notifications"
         },
         {
+          "key": "alphaVantageApiKey",
+          "label": "Alpha Vantage API Key",
+          "type": "secret",
+          "masked": true
+        },
+        {
+          "key": "coingeckoApiKey",
+          "label": "CoinGecko API Key",
+          "type": "secret",
+          "masked": true
+        },
+        {
+          "key": "fredApiKey",
+          "label": "FRED API Key",
+          "type": "secret",
+          "masked": true
+        },
+        {
+          "key": "opendartApiKey",
+          "label": "OpenDART API Key",
+          "type": "secret",
+          "masked": true
+        },
+        {
+          "key": "externalFredSeries",
+          "label": "FRED 지표",
+          "type": "text"
+        },
+        {
+          "key": "externalCryptoIds",
+          "label": "CoinGecko 코인 ID",
+          "type": "text"
+        },
+        {
+          "key": "externalDartCorpCodes",
+          "label": "OpenDART 종목 매핑",
+          "type": "assignmentText"
+        },
+        {
           "key": "formulaWeights",
           "label": "공식 가중치",
           "type": "assignmentText"
@@ -417,6 +536,31 @@
             "key": "monitorDecisionChange",
             "default": 1,
             "unit": ""
+          },
+          {
+            "key": "externalEquityMove",
+            "default": 1,
+            "unit": ""
+          },
+          {
+            "key": "externalCryptoMove",
+            "default": 1,
+            "unit": ""
+          },
+          {
+            "key": "externalMacroShift",
+            "default": 1,
+            "unit": ""
+          },
+          {
+            "key": "externalDartDisclosure",
+            "default": 1,
+            "unit": ""
+          },
+          {
+            "key": "externalDataConnection",
+            "default": 1,
+            "unit": ""
           }
         ],
         "alertThresholds": [
@@ -442,6 +586,26 @@
           },
           {
             "key": "monitorExitPressureDelta",
+            "default": 15,
+            "unit": ""
+          },
+          {
+            "key": "externalEquityChangePct",
+            "default": 3,
+            "unit": ""
+          },
+          {
+            "key": "externalCryptoChange24hPct",
+            "default": 4,
+            "unit": ""
+          },
+          {
+            "key": "externalCryptoChange7dPct",
+            "default": 10,
+            "unit": ""
+          },
+          {
+            "key": "externalMacroRateDeltaBp",
             "default": 15,
             "unit": ""
           }
@@ -500,6 +664,31 @@
           {
             "key": "monitorDecisionChange",
             "default": 10,
+            "unit": "minutes"
+          },
+          {
+            "key": "externalEquityMove",
+            "default": 60,
+            "unit": "minutes"
+          },
+          {
+            "key": "externalCryptoMove",
+            "default": 60,
+            "unit": "minutes"
+          },
+          {
+            "key": "externalMacroShift",
+            "default": 60,
+            "unit": "minutes"
+          },
+          {
+            "key": "externalDartDisclosure",
+            "default": 60,
+            "unit": "minutes"
+          },
+          {
+            "key": "externalDataConnection",
+            "default": 60,
             "unit": "minutes"
           }
         ],
@@ -638,5 +827,5 @@
       ]
     }
   ],
-  "buildId": "36dc2d7d0421"
+  "buildId": "f149165ae05a"
 }

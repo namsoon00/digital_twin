@@ -200,7 +200,8 @@
     { id: "watchlist", label: "관심종목", description: "알림 대상" },
     { id: "monitoring", label: "모니터링", description: "보유·타이밍" },
     { id: "notifications", label: "알림", description: "메시지 타입" },
-    { id: "modeling", label: "모델링", description: "판단 기준" }
+    { id: "modeling", label: "모델링", description: "판단 기준" },
+    { id: "settings", label: "설정", description: "런타임 환경" }
   ];
 
   function activeTabMeta() {
@@ -351,7 +352,6 @@
     feedError: "",
     activeTab: initialTab(),
     settings: loadSettings(),
-    settingsOpen: false,
     snackbar: null,
     showSecrets: false,
     settingsSaved: false,
@@ -574,17 +574,6 @@
     try {
       var storage = window.localStorage;
       if (storage) storage.setItem("exitLensSettings", payload);
-      return true;
-    } catch (error) {
-      return true;
-    }
-  }
-
-  function removeStoredSettings() {
-    settingsMemoryStore = "";
-    try {
-      var storage = window.localStorage;
-      if (storage) storage.removeItem("exitLensSettings");
       return true;
     } catch (error) {
       return true;
@@ -1249,17 +1238,6 @@
       .then(function (payload) {
         applyServerSettings(payload);
       });
-  }
-
-  function clearSettings() {
-    state.settings = Object.assign({}, defaultSettings);
-    state.showSecrets = false;
-    state.settingsSaved = false;
-    state.editingWatchSymbol = "";
-    state.watchlistError = "";
-    if (!removeStoredSettings()) {
-      state.error = "브라우저 저장소에서 설정을 삭제하지 못했습니다.";
-    }
   }
 
   function normalizeSymbols(value) {
@@ -3804,7 +3782,6 @@
       renderActiveTab(snapshot),
       '</div>',
       '</section>',
-      state.settingsOpen ? renderSettingsOverlay() : '',
       renderSnackbar(),
       '</main>'
     ].join("");
@@ -3875,6 +3852,9 @@
         renderHoldingsPanel(snapshot),
         '</section>'
       ].join("");
+    }
+    if (state.activeTab === "settings") {
+      return renderSettingsPage();
     }
     return [
       '<section class="admin-grid">',
@@ -6163,6 +6143,41 @@
     ].join("");
   }
 
+  function renderRuntimeSettingsSummary() {
+    var externalConfiguredCount = [
+      "alphaVantageApiKey",
+      "coingeckoApiKey",
+      "fredApiKey",
+      "opendartApiKey"
+    ].filter(function (name) { return isConfiguredSetting(name); }).length;
+    return [
+      '<div class="settings-api-grid">',
+      renderSettingsApiCard("앱 환경", appThemeLabel(settingValue("appTheme") || defaultSettings.appTheme), [
+        configuredChip("테마", true, appThemeLabel(settingValue("appTheme") || defaultSettings.appTheme)),
+        configuredChip("종목 카탈로그", Boolean(settingValue("symbolUniverseMaxAgeHours")), (settingValue("symbolUniverseMaxAgeHours") || defaultSettings.symbolUniverseMaxAgeHours) + "시간")
+      ]),
+      renderSettingsApiCard("알림 전달", settingValue("notifyProvider") || "telegram", [
+        configuredChip("Bot token", isConfiguredSetting("telegramBotToken")),
+        configuredChip("Chat ID", isConfiguredSetting("telegramChatId"), isConfiguredSetting("telegramChatId") ? "저장됨" : ""),
+        configuredChip("알림 링크", Boolean(settingValue("notifyLinkUrl")))
+      ]),
+      renderSettingsApiCard("외부 데이터", externalConfiguredCount + "/4개 API", [
+        configuredChip("Alpha", isConfiguredSetting("alphaVantageApiKey")),
+        configuredChip("CoinGecko", isConfiguredSetting("coingeckoApiKey")),
+        configuredChip("FRED", isConfiguredSetting("fredApiKey")),
+        configuredChip("OpenDART", isConfiguredSetting("opendartApiKey"))
+      ]),
+      '</div>'
+    ].join("");
+  }
+
+  function appThemeLabel(value) {
+    var key = String(value || "light").toLowerCase();
+    if (key === "dark") return "다크";
+    if (key === "system") return "시스템 설정";
+    return "라이트";
+  }
+
   function renderSettingsApiCard(title, subtitle, chips) {
     return [
       '<div class="settings-api-card">',
@@ -6187,32 +6202,25 @@
     ].join("");
   }
 
-  function renderSettingsSection(label, title, description, body, extraClass) {
-    var classes = "settings-section" + (extraClass ? " " + extraClass : "");
+  function renderSettingsPage() {
     return [
-      '<section class="' + escapeHtml(classes) + '">',
-      '<div class="settings-section-head">',
-      '<div>',
-      '<p class="settings-section-label">' + escapeHtml(label) + '</p>',
-      '<h3>' + escapeHtml(title) + '</h3>',
-      description ? '<span>' + escapeHtml(description) + '</span>' : '',
-      '</div>',
-      '</div>',
-      '<div class="settings-section-body">',
-      body,
-      '</div>',
+      '<section class="admin-grid settings-view">',
+      renderSettingsOverviewPanel(),
+      renderSettingsEnvironmentPanel(),
+      renderSettingsDeliverySettingsPanel(),
+      renderSettingsExternalDataPanel(),
+      renderSettingsSavePanel(),
       '</section>'
     ].join("");
   }
 
-  function renderSettingsPanel() {
-    var secretType = state.showSecrets ? "text" : "password";
+  function renderSettingsOverviewPanel() {
     return [
-      '<article class="panel settings-panel">',
+      '<article class="panel settings-overview-panel">',
       '<div class="panel-head">',
       '<div>',
       '<p class="label">App Settings</p>',
-      '<h2>토스 API 설정</h2>',
+      '<h2>런타임 설정</h2>',
       '</div>',
       '<span class="tone-chip ' + (state.settingsSaved ? "watch" : "hold") + '">' + (state.settingsSaved ? "DB 저장됨" : "수정 중") + '</span>',
       '</div>',
@@ -6220,121 +6228,110 @@
       '<div class="settings-hero">',
       '<div>',
       '<p class="settings-section-label">Local first</p>',
-      '<strong>설정 정보</strong>',
-      '<span>토스와 알림 설정은 이 PC의 로컬 DB에 저장되고 서버가 직접 사용합니다. secret 원문은 다시 표시하지 않습니다.</span>',
+      '<strong>앱 표시와 외부 연결 설정</strong>',
+      '<span>계정 연결은 계정 탭에서, 매매 판단 기준은 모델링 탭에서 관리합니다.</span>',
       '</div>',
       '<span class="tone-chip ' + (state.settingsSaved ? "watch" : "hold") + '">' + (state.settingsSaved ? "DB 저장됨" : "수정 중") + '</span>',
       state.serverSettingsError ? '<p class="form-error">' + escapeHtml(state.serverSettingsError) + '</p>' : '',
       state.serverSettingsLocked ? '<p class="form-error">공유 모드에서는 서버 설정 저장이 잠겨 있습니다.</p>' : '',
       '</div>',
-      renderSettingsApiSummary(),
-      '<div class="settings-section-stack">',
-      renderSettingsSection("App", "앱 환경", "테마, 관심 종목, 종목 카탈로그 신선도를 관리합니다.", [
-        '<div class="settings-grid">',
-        renderSettingSelect("appTheme", "화면 테마", [
-          { value: "light", label: "라이트" },
-          { value: "dark", label: "다크" },
-          { value: "system", label: "시스템 설정" }
-        ]),
-        renderSettingField("watchlistSymbols", "관심 종목", "text", "TSLA,AAPL,NVDA,000660"),
-        renderSettingField("symbolUniverseMaxAgeHours", "전체 종목 신선도(시간)", "number", "24"),
-        '</div>'
-      ].join("")),
-      renderSettingsSection("Toss", "토스 계좌 API", "허용 IP가 적용되는 토스 Open API 연결 정보입니다.", [
-        '<div class="settings-grid">',
-        renderSettingField("tossApiBaseUrl", "Toss API Base URL", "url", "https://openapi.tossinvest.com"),
-        renderSettingField("tossClientId", "Toss Client ID", secretType, "client id", { preserveConfigured: true }),
-        renderSettingField("tossClientSecret", "Toss Client Secret", secretType, "client secret", { preserveConfigured: true }),
-        renderSettingField("tossAccountSeq", "Toss Account Seq", "text", "선택", { preserveConfigured: true }),
-        '</div>'
-      ].join("")),
-      renderSettingsSection("Alert", "텔레그램 알림", "봇 토큰, chat id, 기본 링크와 발송 주기를 관리합니다.", [
-        '<div class="settings-grid">',
-        renderSettingField("notifyProvider", "알림 제공자", "text", "telegram"),
-        renderSettingField("telegramBotToken", "Telegram Bot Token", secretType, "bot token", { preserveConfigured: true }),
-        renderSettingField("telegramChatId", "Telegram Chat ID", "text", "chat id", { preserveConfigured: true }),
-        renderSettingField("notifyLinkUrl", "알림 링크 URL", "url", "http://127.0.0.1:3000?tab=notifications"),
-        renderSettingField("notifyIntervalMinutes", "알림 주기(분)", "number", "10"),
-        '</div>'
-      ].join("")),
-      renderSettingsSection("Data", "외부 데이터 API", "가격, 크립토, 거시, 공시 데이터를 모델 판단에 붙입니다.", [
-        '<div class="settings-grid">',
-        renderSettingField("alphaVantageApiKey", "Alpha Vantage API Key", secretType, "api key", { preserveConfigured: true }),
-        renderSettingField("coingeckoApiKey", "CoinGecko API Key", secretType, "api key", { preserveConfigured: true }),
-        renderSettingField("fredApiKey", "FRED API Key", secretType, "api key", { preserveConfigured: true }),
-        renderSettingField("opendartApiKey", "OpenDART API Key", secretType, "api key", { preserveConfigured: true }),
-        renderSettingField("externalApiFetchIntervalMinutes", "외부 API 캐시(분)", "number", "60"),
-        renderSettingField("externalAlphaMaxSymbols", "미장 조회 종목 수", "number", "3"),
-        renderSettingField("externalDartLookbackDays", "공시 조회 기간(일)", "number", "14"),
-        renderSettingField("externalFredSeries", "FRED 지표", "text", "DGS10,DGS2,DFF"),
-        renderSettingField("externalCryptoIds", "CoinGecko 코인 ID", "text", "bitcoin,ethereum"),
-        '<label class="setting-field wide">',
-        '<span>OpenDART 종목 매핑</span>',
-        '<textarea data-setting="externalDartCorpCodes" rows="3" autocomplete="off" placeholder="005930=00126380">' + escapeHtml(settingValue("externalDartCorpCodes") || defaultSettings.externalDartCorpCodes) + '</textarea>',
-        '</label>',
-        '</div>'
-      ].join("")),
-      renderSettingsSection("Model", "모델 입력과 공식", "환율, 밸류에이션, 수급 신호, 점수 공식과 판단 기준입니다.", [
-        '<div class="settings-grid">',
-        '<label class="setting-field wide">',
-        '<span>환율 설정</span>',
-        '<textarea data-setting="fxRates" rows="2" autocomplete="off" placeholder="USD=1400">' + escapeHtml(settingValue("fxRates") || defaultSettings.fxRates) + '</textarea>',
-        '</label>',
-        '<label class="setting-field wide">',
-        '<span>밸류에이션 가정</span>',
-        '<textarea data-setting="valuationAssumptions" rows="4" autocomplete="off" placeholder="SYMBOL, EPS, 목표PER, 안전마진%">' + escapeHtml(settingValue("valuationAssumptions")) + '</textarea>',
-        '</label>',
-        '<label class="setting-field wide">',
-        '<span>수급 신호 입력</span>',
-        '<textarea data-setting="marketSignalInputs" rows="6" autocomplete="off" placeholder="SYMBOL, 체결강도, 거래량배율, 매수량, 매도량, 호가불균형%, 가격변화%, 20일선, 60일선, 외국인순매수, 기관순매수, 개인순매수">' + escapeHtml(settingValue("marketSignalInputs")) + '</textarea>',
-        '</label>',
-        '<label class="setting-field wide">',
-        '<span>적정가 공식</span>',
-        '<textarea data-setting="fairValueFormula" rows="2" autocomplete="off" placeholder="eps * targetPer">' + escapeHtml(formulaSetting("fairValueFormula")) + '</textarea>',
-        '</label>',
-        '<label class="setting-field wide">',
-        '<span>매수 점수 공식</span>',
-        '<textarea data-setting="buyScoreFormula" rows="3" autocomplete="off" placeholder="50 + ...">' + escapeHtml(formulaSetting("buyScoreFormula")) + '</textarea>',
-        '</label>',
-        '<label class="setting-field wide">',
-        '<span>매도 점수 공식</span>',
-        '<textarea data-setting="sellScoreFormula" rows="3" autocomplete="off" placeholder="50 + ...">' + escapeHtml(formulaSetting("sellScoreFormula")) + '</textarea>',
-        '</label>',
-        '<label class="setting-field wide">',
-        '<span>추가 가중치</span>',
-        '<textarea data-setting="formulaWeights" rows="5" autocomplete="off" placeholder="flowWeight=1">' + escapeHtml(settingValue("formulaWeights") || defaultSettings.formulaWeights) + '</textarea>',
-        '</label>',
-        '<label class="setting-field wide">',
-        '<span>판단 기준값</span>',
-        '<textarea data-setting="decisionThresholds" rows="5" autocomplete="off" placeholder="buyCandidate=78">' + escapeHtml(settingValue("decisionThresholds") || defaultSettings.decisionThresholds) + '</textarea>',
-        '</label>',
-        '</div>'
-      ].join(""), "wide"),
+      renderRuntimeSettingsSummary(),
       '</div>',
-      '<div class="settings-actions settings-actions-sticky">',
-      '<button class="text-button primary" data-action="save-settings"' + (state.serverSettingsLocked ? ' disabled' : '') + '>저장</button>',
-      '<button class="text-button" data-action="toggle-secrets">' + (state.showSecrets ? "숨기기" : "secret 보기") + '</button>',
-      '<button class="text-button danger" data-action="clear-settings">삭제</button>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderSettingsEnvironmentPanel() {
+    return [
+      '<article class="panel settings-environment-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Display</p>',
+      '<h2>앱 환경</h2>',
+      '</div>',
+      '</div>',
+      '<div class="settings-body">',
+      '<div class="settings-grid">',
+      renderSettingSelect("appTheme", "화면 테마", [
+        { value: "light", label: "라이트" },
+        { value: "dark", label: "다크" },
+        { value: "system", label: "시스템 설정" }
+      ]),
+      renderSettingField("symbolUniverseMaxAgeHours", "전체 종목 신선도(시간)", "number", "24"),
       '</div>',
       '</div>',
       '</article>'
     ].join("");
   }
 
-  function renderSettingsOverlay() {
+  function renderSettingsDeliverySettingsPanel() {
+    var secretType = state.showSecrets ? "text" : "password";
     return [
-      '<div class="settings-overlay" data-settings-overlay>',
-      '<section class="settings-dialog" role="dialog" aria-modal="true" aria-label="설정">',
-      '<div class="settings-dialog-head">',
+      '<article class="panel settings-delivery-panel">',
+      '<div class="panel-head">',
       '<div>',
-      '<p class="label">Settings</p>',
-      '<h2>설정</h2>',
+      '<p class="label">Delivery</p>',
+      '<h2>알림 전달 설정</h2>',
       '</div>',
-      '<button class="icon-button" data-action="close-settings" title="닫기" aria-label="닫기">×</button>',
       '</div>',
-      renderSettingsPanel(),
-      '</section>',
-      '</div>'
+      '<div class="settings-body">',
+      '<div class="settings-grid">',
+      renderSettingField("notifyProvider", "알림 제공자", "text", "telegram"),
+      renderSettingField("telegramBotToken", "Telegram Bot Token", secretType, "bot token", { preserveConfigured: true }),
+      renderSettingField("telegramChatId", "Telegram Chat ID", "text", "chat id", { preserveConfigured: true }),
+      renderSettingField("notifyLinkUrl", "알림 링크 URL", "url", "http://127.0.0.1:3000?tab=notifications"),
+      renderSettingField("notifyIntervalMinutes", "알림 주기(분)", "number", "10"),
+      '</div>',
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderSettingsExternalDataPanel() {
+    var secretType = state.showSecrets ? "text" : "password";
+    return [
+      '<article class="panel settings-external-data-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">External Data</p>',
+      '<h2>외부 데이터 연결</h2>',
+      '</div>',
+      '</div>',
+      '<div class="settings-body">',
+      '<div class="settings-grid">',
+      renderSettingField("alphaVantageApiKey", "Alpha Vantage API Key", secretType, "api key", { preserveConfigured: true }),
+      renderSettingField("coingeckoApiKey", "CoinGecko API Key", secretType, "api key", { preserveConfigured: true }),
+      renderSettingField("fredApiKey", "FRED API Key", secretType, "api key", { preserveConfigured: true }),
+      renderSettingField("opendartApiKey", "OpenDART API Key", secretType, "api key", { preserveConfigured: true }),
+      renderSettingField("externalApiFetchIntervalMinutes", "외부 API 캐시(분)", "number", "60"),
+      renderSettingField("externalAlphaMaxSymbols", "미장 조회 종목 수", "number", "3"),
+      renderSettingField("externalDartLookbackDays", "공시 조회 기간(일)", "number", "14"),
+      renderSettingField("externalFredSeries", "FRED 지표", "text", "DGS10,DGS2,DFF"),
+      renderSettingField("externalCryptoIds", "CoinGecko 코인 ID", "text", "bitcoin,ethereum"),
+      '<label class="setting-field wide">',
+      '<span>OpenDART 종목 매핑</span>',
+      '<textarea data-setting="externalDartCorpCodes" rows="3" autocomplete="off" placeholder="005930=00126380">' + escapeHtml(settingValue("externalDartCorpCodes") || defaultSettings.externalDartCorpCodes) + '</textarea>',
+      '</label>',
+      '<label class="setting-field wide">',
+      '<span>환율 설정</span>',
+      '<textarea data-setting="fxRates" rows="2" autocomplete="off" placeholder="USD=1400">' + escapeHtml(settingValue("fxRates") || defaultSettings.fxRates) + '</textarea>',
+      '</label>',
+      '</div>',
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderSettingsSavePanel() {
+    return [
+      '<article class="panel settings-save-panel">',
+      '<div class="settings-body">',
+      '<div class="settings-actions settings-page-actions">',
+      '<button class="text-button primary" data-action="save-settings"' + (state.serverSettingsLocked ? ' disabled' : '') + '>설정 저장</button>',
+      '<button class="text-button" data-action="toggle-secrets">' + (state.showSecrets ? "secret 숨기기" : "secret 보기") + '</button>',
+      '</div>',
+      '</div>',
+      '</article>'
     ].join("");
   }
 
@@ -6381,24 +6378,7 @@
     var openSettings = app.querySelector('[data-action="open-settings"]');
     if (openSettings) {
       openSettings.addEventListener("click", function () {
-        state.settingsOpen = true;
-        render();
-      });
-    }
-
-    var closeSettings = app.querySelector('[data-action="close-settings"]');
-    if (closeSettings) {
-      closeSettings.addEventListener("click", function () {
-        state.settingsOpen = false;
-        render();
-      });
-    }
-
-    var settingsOverlay = app.querySelector("[data-settings-overlay]");
-    if (settingsOverlay) {
-      settingsOverlay.addEventListener("click", function (event) {
-        if (event.target !== settingsOverlay) return;
-        state.settingsOpen = false;
+        state.activeTab = "settings";
         render();
       });
     }
@@ -6610,7 +6590,6 @@
         saveSettings.disabled = true;
         saveSettingsToServer()
           .then(function () {
-            state.settingsOpen = false;
             state.settingsSaved = true;
             showSnackbar("설정을 저장했습니다.");
           })
@@ -6754,14 +6733,6 @@
         render();
       });
     });
-
-    var clearSettingsButton = app.querySelector('[data-action="clear-settings"]');
-    if (clearSettingsButton) {
-      clearSettingsButton.addEventListener("click", function () {
-        clearSettings();
-        render();
-      });
-    }
   }
 
   if (window.matchMedia) {

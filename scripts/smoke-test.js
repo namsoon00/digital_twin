@@ -385,6 +385,7 @@ function checkFrontendAdminRender() {
     renderForSearch("?tab=notifications"),
     renderForSearch("?tab=modeling"),
     renderForSearch("?tab=monitoring"),
+    renderForSearch("?tab=settings"),
     renderForSearch("?tab=accounts", "namsoon00.github.io")
   ]).then(function (pages) {
     const overviewHtml = pages[0];
@@ -393,15 +394,17 @@ function checkFrontendAdminRender() {
     const notificationHtml = pages[3];
     const modelingHtml = pages[4];
     const monitoringHtml = pages[5];
-    const staticAccountHtml = pages[6];
+    const settingsHtml = pages[6];
+    const staticAccountHtml = pages[7];
     const symbolUniverseHtml = watchlistHtml;
 
     assertOk(overviewHtml.indexOf("계정·알림·모델 운영 콘솔") < 0, "이전 고정 운영 콘솔 제목이 아직 렌더링됩니다.");
     assertOk(overviewHtml.indexOf("<h1>홈</h1>") >= 0, "홈 탭 제목이 상단에 렌더링되지 않았습니다.");
     assertOk(accountHtml.indexOf("<h1>계정</h1>") >= 0, "계정 탭 제목이 상단에 렌더링되지 않았습니다.");
-    assertOk(code.indexOf("settings-section-stack") >= 0, "설정 화면이 섹션 구조로 구성되지 않았습니다.");
+    assertOk(settingsHtml.indexOf("<h1>설정</h1>") >= 0, "설정 탭 제목이 상단에 렌더링되지 않았습니다.");
+    assertOk(settingsHtml.indexOf("settings-view") >= 0, "설정 화면이 페이지 구조로 렌더링되지 않았습니다.");
     assertOk(code.indexOf("settings-top-button") >= 0, "상단 설정 버튼 전용 스타일이 적용되지 않았습니다.");
-    ["overview", "accounts", "watchlist", "monitoring", "notifications", "modeling"].forEach(function (tab) {
+    ["overview", "accounts", "watchlist", "monitoring", "notifications", "modeling", "settings"].forEach(function (tab) {
       assertOk(overviewHtml.indexOf('data-tab="' + tab + '"') >= 0, "새 탭이 렌더링되지 않았습니다: " + tab);
     });
     assertOk(overviewHtml.indexOf('data-tab="symbols"') < 0, "전체종목 별도 탭이 아직 렌더링됩니다.");
@@ -464,6 +467,22 @@ function checkFrontendAdminRender() {
     assertOk(modelingHtml.indexOf("웹에서 운영하는 매수·매도 타이밍 모델") < 0, "타이밍 모델 제목이 아직 렌더링됩니다.");
     assertOk(monitoringHtml.indexOf("watchlist-panel") >= 0, "모니터링 탭에 관심 종목 관리 패널이 렌더링되지 않았습니다.");
     assertOk(monitoringHtml.indexOf("토스 앱의 관심 목록") >= 0, "관심 종목 API 한계 안내가 렌더링되지 않았습니다.");
+    assertOk(settingsHtml.indexOf("settings-overview-panel") >= 0, "설정 탭 요약 패널이 렌더링되지 않았습니다.");
+    assertOk(settingsHtml.indexOf("settings-environment-panel") >= 0, "설정 탭 앱 환경 패널이 렌더링되지 않았습니다.");
+    assertOk(settingsHtml.indexOf("settings-delivery-panel") >= 0, "설정 탭 알림 전달 패널이 렌더링되지 않았습니다.");
+    assertOk(settingsHtml.indexOf("settings-external-data-panel") >= 0, "설정 탭 외부 데이터 패널이 렌더링되지 않았습니다.");
+    assertOk(settingsHtml.indexOf("settings-save-panel") >= 0, "설정 탭 저장 패널이 렌더링되지 않았습니다.");
+    assertOk(settingsHtml.indexOf("Telegram Bot Token") >= 0, "설정 탭에 알림 전달 설정이 없습니다.");
+    assertOk(settingsHtml.indexOf("Alpha Vantage API Key") >= 0, "설정 탭에 외부 데이터 API 설정이 없습니다.");
+    assertOk(settingsHtml.indexOf('data-setting="tossClientId"') < 0, "설정 탭에 계정 Client ID 입력이 남아 있습니다.");
+    assertOk(settingsHtml.indexOf('data-setting="tossClientSecret"') < 0, "설정 탭에 계정 Secret 입력이 남아 있습니다.");
+    assertOk(settingsHtml.indexOf('data-setting="tossAccountSeq"') < 0, "설정 탭에 계좌 순번 입력이 남아 있습니다.");
+    assertOk(settingsHtml.indexOf('data-setting="watchlistSymbols"') < 0, "설정 탭에 관심 종목 입력이 남아 있습니다.");
+    assertOk(settingsHtml.indexOf('data-setting="modelName"') < 0, "설정 탭에 모델 이름 입력이 남아 있습니다.");
+    assertOk(settingsHtml.indexOf('data-setting="customBuyModelFormula"') < 0, "설정 탭에 모델 공식 입력이 남아 있습니다.");
+    assertOk(settingsHtml.indexOf('data-setting="modelDecisionThresholds"') < 0, "설정 탭에 모델 기준 입력이 남아 있습니다.");
+    assertOk(settingsHtml.indexOf("Toss Client") < 0, "설정 탭에 토스 계정 입력 라벨이 남아 있습니다.");
+    assertOk(settingsHtml.indexOf("모델 입력과 공식") < 0, "설정 탭에 모델 설정 섹션이 남아 있습니다.");
     assertOk(symbolUniverseHtml.indexOf("symbol-universe-panel") >= 0, "전체 종목 카탈로그 패널이 렌더링되지 않았습니다.");
     assertOk(symbolUniverseHtml.indexOf("전체 종목 카탈로그") >= 0 || symbolUniverseHtml.indexOf("전체 종목 정보") >= 0, "전체 종목 카탈로그 제목이 렌더링되지 않았습니다.");
     assertOk(symbolUniverseHtml.indexOf("AAPL") >= 0, "종목 유니버스 검색 결과가 렌더링되지 않았습니다.");

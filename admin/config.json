@@ -13,7 +13,7 @@
     "공유 미리보기에서는 서버 설정과 계정 DB 쓰기를 차단합니다."
   ],
   "localData": {
-    "generatedAt": "2026-07-02T02:14:50.980211Z",
+    "generatedAt": "2026-07-02T21:23:16.036155Z",
     "sources": {
       "serviceDb": "data/service.db",
       "serviceDbExists": true,
@@ -37,7 +37,10 @@
           "TSLA",
           "AAPL",
           "NVDA",
-          "000660"
+          "000660",
+          "005930",
+          "PLTR",
+          "005380"
         ],
         "notifyProvider": "telegram",
         "telegramBotToken": true,
@@ -47,12 +50,15 @@
       }
     ],
     "settings": {
-      "watchlistSymbols": "TSLA,AAPL,NVDA,000660",
+      "watchlistSymbols": "TSLA,AAPL,NVDA,000660,005930,PLTR,005380",
       "tossApiBaseUrl": "https://openapi.tossinvest.com",
       "notifyProvider": "telegram",
       "notifyLinkUrl": "http://127.0.0.1:3000",
       "notifyIntervalMinutes": "10",
       "fxRates": "KRW=1\nUSD=1400",
+      "valuationAssumptions": "AAPL,7.5,28,15\n005930,6500,12,20",
+      "marketSignalInputs": "005930,118,1.8,620000,480000,18,2.1,71000,68000,14500000000,8200000000,-11200000000\nAAPL,86,1.4,320000,410000,-12,-1.8,205,212,-4200000,-1800000,5200000\nNVDA,132,2.3,780000,520000,22,3.5,174,159,11800000,7400000,-9300000\nTSLA,91,1.2,210000,260000,-8,-0.9,182,197,-6300000,-2100000,7600000\n000660,122,1.7,510000,390000,15,2.4,236000,218000,9800000000,13400000000,-15100000000",
+      "alertCadenceMinutes": "priceBuyLimit=10\npriceStop=10\npriceTrim=10\nmodelBuy=10\nmodelSell=10\nmodelScoreGap=10\nmodelVersionDrift=10\nflowTradeStrength=10\nflowVolume=10\nflowBuyShare=10\nflowSellShare=10\nflowOrderbook=10\ntrendMomentum=10\ntrendPullback=10\nholdingProfit=10\nholdingLoss=10\nholdingConcentration=10\nsectorConcentration=10\nmarketCashLow=10\nrecordGain=10\nrecordLoss=10\ndataFreshness=10\ntossConnection=10\norderPending=10\norderReject=10\nholdingTiming=10\nmonitorHeartbeat=10\nmonitorConnection=10\nmonitorPositionChange=10\nmonitorPnlChange=10\nmonitorValueChange=10\nmonitorTrendChange=10\nmonitorCashChange=10\nmonitorDecisionChange=10\nexternalEquityMove=10\nexternalCryptoMove=10\nexternalMacroShift=10\nexternalDartDisclosure=10\nexternalDataConnection=10",
       "modelReviewUseCodex": "1",
       "modelReviewTimeoutSeconds": "180",
       "modelReviewIntervalSeconds": "300",
@@ -70,10 +76,10 @@
       "tossAccountSeq": false,
       "telegramBotToken": true,
       "telegramChatId": true,
-      "alphaVantageApiKey": false,
-      "coingeckoApiKey": false,
-      "fredApiKey": false,
-      "opendartApiKey": false
+      "alphaVantageApiKey": true,
+      "coingeckoApiKey": true,
+      "fredApiKey": true,
+      "opendartApiKey": true
     },
     "notification": {
       "alertRules": [
@@ -84,6 +90,16 @@
         },
         {
           "key": "modelSell",
+          "default": 1,
+          "unit": ""
+        },
+        {
+          "key": "watchlistQuote",
+          "default": 1,
+          "unit": ""
+        },
+        {
+          "key": "watchlistQuotePending",
           "default": 1,
           "unit": ""
         },
@@ -160,6 +176,21 @@
       ],
       "alertThresholds": [
         {
+          "key": "modelBuyScore",
+          "default": 74,
+          "unit": ""
+        },
+        {
+          "key": "modelSellScore",
+          "default": 72,
+          "unit": ""
+        },
+        {
+          "key": "watchlistPriceDelta",
+          "default": 3,
+          "unit": ""
+        },
+        {
           "key": "monitorPnlDelta",
           "default": 2,
           "unit": ""
@@ -208,82 +239,207 @@
       "alertCadenceMinutes": [
         {
           "key": "modelBuy",
-          "default": 10,
+          "default": 10.0,
           "unit": "minutes"
         },
         {
           "key": "modelSell",
+          "default": 10.0,
+          "unit": "minutes"
+        },
+        {
+          "key": "watchlistQuote",
           "default": 10,
+          "unit": "minutes"
+        },
+        {
+          "key": "watchlistQuotePending",
+          "default": 60,
           "unit": "minutes"
         },
         {
           "key": "holdingTiming",
-          "default": 10,
+          "default": 10.0,
           "unit": "minutes"
         },
         {
           "key": "monitorHeartbeat",
-          "default": 10,
+          "default": 10.0,
           "unit": "minutes"
         },
         {
           "key": "monitorConnection",
-          "default": 10,
+          "default": 10.0,
           "unit": "minutes"
         },
         {
           "key": "monitorPositionChange",
-          "default": 10,
+          "default": 10.0,
           "unit": "minutes"
         },
         {
           "key": "monitorPnlChange",
-          "default": 10,
+          "default": 10.0,
           "unit": "minutes"
         },
         {
           "key": "monitorValueChange",
-          "default": 10,
+          "default": 10.0,
           "unit": "minutes"
         },
         {
           "key": "monitorTrendChange",
-          "default": 10,
+          "default": 10.0,
           "unit": "minutes"
         },
         {
           "key": "monitorCashChange",
-          "default": 10,
+          "default": 10.0,
           "unit": "minutes"
         },
         {
           "key": "monitorDecisionChange",
-          "default": 10,
+          "default": 10.0,
           "unit": "minutes"
         },
         {
           "key": "externalEquityMove",
-          "default": 60,
+          "default": 10.0,
           "unit": "minutes"
         },
         {
           "key": "externalCryptoMove",
-          "default": 60,
+          "default": 10.0,
           "unit": "minutes"
         },
         {
           "key": "externalMacroShift",
-          "default": 60,
+          "default": 10.0,
           "unit": "minutes"
         },
         {
           "key": "externalDartDisclosure",
-          "default": 60,
+          "default": 10.0,
           "unit": "minutes"
         },
         {
           "key": "externalDataConnection",
-          "default": 60,
+          "default": 10.0,
+          "unit": "minutes"
+        },
+        {
+          "key": "priceBuyLimit",
+          "default": 10.0,
+          "unit": "minutes"
+        },
+        {
+          "key": "priceStop",
+          "default": 10.0,
+          "unit": "minutes"
+        },
+        {
+          "key": "priceTrim",
+          "default": 10.0,
+          "unit": "minutes"
+        },
+        {
+          "key": "modelScoreGap",
+          "default": 10.0,
+          "unit": "minutes"
+        },
+        {
+          "key": "modelVersionDrift",
+          "default": 10.0,
+          "unit": "minutes"
+        },
+        {
+          "key": "flowTradeStrength",
+          "default": 10.0,
+          "unit": "minutes"
+        },
+        {
+          "key": "flowVolume",
+          "default": 10.0,
+          "unit": "minutes"
+        },
+        {
+          "key": "flowBuyShare",
+          "default": 10.0,
+          "unit": "minutes"
+        },
+        {
+          "key": "flowSellShare",
+          "default": 10.0,
+          "unit": "minutes"
+        },
+        {
+          "key": "flowOrderbook",
+          "default": 10.0,
+          "unit": "minutes"
+        },
+        {
+          "key": "trendMomentum",
+          "default": 10.0,
+          "unit": "minutes"
+        },
+        {
+          "key": "trendPullback",
+          "default": 10.0,
+          "unit": "minutes"
+        },
+        {
+          "key": "holdingProfit",
+          "default": 10.0,
+          "unit": "minutes"
+        },
+        {
+          "key": "holdingLoss",
+          "default": 10.0,
+          "unit": "minutes"
+        },
+        {
+          "key": "holdingConcentration",
+          "default": 10.0,
+          "unit": "minutes"
+        },
+        {
+          "key": "sectorConcentration",
+          "default": 10.0,
+          "unit": "minutes"
+        },
+        {
+          "key": "marketCashLow",
+          "default": 10.0,
+          "unit": "minutes"
+        },
+        {
+          "key": "recordGain",
+          "default": 10.0,
+          "unit": "minutes"
+        },
+        {
+          "key": "recordLoss",
+          "default": 10.0,
+          "unit": "minutes"
+        },
+        {
+          "key": "dataFreshness",
+          "default": 10.0,
+          "unit": "minutes"
+        },
+        {
+          "key": "tossConnection",
+          "default": 10.0,
+          "unit": "minutes"
+        },
+        {
+          "key": "orderPending",
+          "default": 10.0,
+          "unit": "minutes"
+        },
+        {
+          "key": "orderReject",
+          "default": 10.0,
           "unit": "minutes"
         }
       ],
@@ -493,6 +649,16 @@
             "unit": ""
           },
           {
+            "key": "watchlistQuote",
+            "default": 1,
+            "unit": ""
+          },
+          {
+            "key": "watchlistQuotePending",
+            "default": 1,
+            "unit": ""
+          },
+          {
             "key": "holdingTiming",
             "default": 1,
             "unit": ""
@@ -565,6 +731,21 @@
         ],
         "alertThresholds": [
           {
+            "key": "modelBuyScore",
+            "default": 74,
+            "unit": ""
+          },
+          {
+            "key": "modelSellScore",
+            "default": 72,
+            "unit": ""
+          },
+          {
+            "key": "watchlistPriceDelta",
+            "default": 3,
+            "unit": ""
+          },
+          {
             "key": "monitorPnlDelta",
             "default": 2,
             "unit": ""
@@ -619,6 +800,16 @@
           {
             "key": "modelSell",
             "default": 10,
+            "unit": "minutes"
+          },
+          {
+            "key": "watchlistQuote",
+            "default": 10,
+            "unit": "minutes"
+          },
+          {
+            "key": "watchlistQuotePending",
+            "default": 60,
             "unit": "minutes"
           },
           {
@@ -793,6 +984,11 @@
         "python3 python_service/service.py templates save < template.json",
         "python3 python_service/service.py templates reset --message-type monitorHeartbeat"
       ],
+      "localEndpoints": [
+        "GET /api/notification-templates",
+        "GET /api/notification-schedules",
+        "POST /api/notification-templates/test-send"
+      ],
       "storage": [
         "data/service.db: notification_templates",
         "data/service.db: notification_jobs"
@@ -807,8 +1003,12 @@
           "label": "템플릿 본문"
         },
         {
+          "key": "schedule",
+          "label": "마지막 발송, 다음 가능 시각, 최근 대상"
+        },
+        {
           "key": "variables",
-          "label": "{title}, {lines}, {rawLines}, {body}, {messageType}"
+          "label": "{readableMessage}, {title}, {dataLines}, {triggerSummary}, {body}"
         }
       ]
     },
@@ -827,5 +1027,5 @@
       ]
     }
   ],
-  "buildId": "f149165ae05a"
+  "buildId": "9d6d010617fb"
 }

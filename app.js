@@ -367,6 +367,10 @@
     notificationTemplatesError: "",
     notificationTemplatesSaved: false,
     notificationTemplateSending: "",
+    messageSchedules: [],
+    messageSchedulesLoading: false,
+    messageSchedulesError: "",
+    messageSchedulesLoaded: false,
     staticBuildConfig: null,
     staticBuildConfigError: "",
     serviceAccounts: [],
@@ -712,14 +716,14 @@
     var items = [
       {
         messageType: "default",
-        template: "{title}\n{lines}",
+        template: "{readableMessage}",
         description: "기본 알림 템플릿"
       }
     ];
     alertRuleCatalog.forEach(function (rule) {
       items.push({
         messageType: rule.key,
-        template: "{title}\n{lines}",
+        template: "{readableMessage}",
         description: rule.label + " · " + rule.description
       });
     });
@@ -746,7 +750,7 @@
       : defaultNotificationTemplates();
     state.notificationTemplateVariables = Array.isArray(payload.variables) && payload.variables.length
       ? payload.variables
-      : ["title", "lines", "rawLines", "body", "messageType", "symbol", "severity"];
+      : ["title", "readableMessage", "dataLines", "triggerSummary", "lines", "rawLines", "body", "messageType", "symbol", "severity"];
     state.notificationTemplatesLoaded = true;
     state.notificationTemplatesLoading = false;
     state.notificationTemplatesError = "";
@@ -772,6 +776,41 @@
         state.notificationTemplatesLoading = false;
         if (state.snapshot) render();
       });
+  }
+
+  function applyNotificationSchedules(payload) {
+    state.messageSchedules = Array.isArray(payload.schedules) ? payload.schedules : [];
+    state.messageSchedulesLoaded = true;
+    state.messageSchedulesLoading = false;
+    state.messageSchedulesError = "";
+  }
+
+  function loadNotificationSchedules() {
+    state.messageSchedulesLoading = true;
+    state.messageSchedulesError = "";
+    if (isStaticPreviewHost()) {
+      applyNotificationSchedules({ schedules: [] });
+      state.messageSchedulesLoading = false;
+      return Promise.resolve();
+    }
+    return requestJson("/api/notification-schedules")
+      .then(function (payload) {
+        applyNotificationSchedules(payload);
+      })
+      .catch(function (error) {
+        state.messageSchedulesError = error.message || "메시지 스케줄을 읽지 못했습니다.";
+        state.messageSchedules = [];
+      })
+      .finally(function () {
+        state.messageSchedulesLoading = false;
+        if (state.snapshot) render();
+      });
+  }
+
+  function messageScheduleByType(messageType) {
+    return (state.messageSchedules || []).filter(function (item) {
+      return item.messageType === messageType;
+    })[0] || null;
   }
 
   function notificationTemplateByType(messageType) {
@@ -927,16 +966,47 @@
     var sample = samples[type] || samples.default;
     var rawLines = Array.isArray(sample.lines) ? sample.lines.join("\n") : "";
     var lines = rawLines ? rawLines.split("\n").map(function (line) { return "- " + line; }).join("\n") : "";
-    var body = sample.body || [sample.title, lines].filter(Boolean).join("\n");
+    var rule = alertRuleCatalog.filter(function (item) { return item.key === type; })[0] || {};
+    var messageTypeLabel = rule.label || notificationTemplateLabel(type);
+    var severityLabel = sample.severity === "ALERT" ? "주의" : sample.severity === "WATCH" ? "관찰" : "정보";
+    var symbolLine = sample.symbol ? "종목: " + sample.symbol : "";
+    var typeLine = messageTypeLabel ? "유형: " + messageTypeLabel : "";
+    var severityLine = severityLabel ? "상태: " + severityLabel : "";
+    var triggerSummary = rule.description ? rule.description : "조건이 실제 데이터에서 충족될 때 보냅니다.";
+    var triggerLine = triggerSummary ? "발생 조건: " + triggerSummary : "";
+    var dataLines = lines;
+    var readableMessage = [
+      sample.title,
+      symbolLine,
+      typeLine,
+      severityLine,
+      triggerLine,
+      dataLines ? "" : "",
+      dataLines ? "실제 데이터" : "",
+      dataLines
+    ].filter(function (line, index, list) {
+      if (line === "") return index > 0 && list[index - 1] !== "";
+      return String(line || "").trim();
+    }).join("\n").trim();
+    var body = sample.body || readableMessage || [sample.title, lines].filter(Boolean).join("\n");
     return {
       title: sample.title || samples.default.title,
       lines: lines,
       rawLines: rawLines,
+      dataLines: dataLines,
       body: body,
+      readableMessage: readableMessage,
       messageType: type,
+      messageTypeLabel: messageTypeLabel,
       symbol: sample.symbol || "",
+      symbolLine: symbolLine,
       severity: sample.severity || "INFO",
+      severityLabel: severityLabel,
+      severityLine: severityLine,
       rule: type,
+      typeLine: typeLine,
+      triggerSummary: triggerSummary,
+      triggerLine: triggerLine,
       key: type + ":preview",
       target: sample.symbol || type,
       accountLabel: "기본 계정",
@@ -946,9 +1016,23 @@
 
   function renderNotificationTemplatePreviewText(template, messageType) {
     var context = notificationTemplatePreviewContext(messageType);
-    return String(template || "").replace(/\{([A-Za-z0-9_]+)\}/g, function (match, key) {
+    var rendered = String(template || "").replace(/\{([A-Za-z0-9_]+)\}/g, function (match, key) {
       return Object.prototype.hasOwnProperty.call(context, key) ? String(context[key]) : match;
-    }).trim() || "(빈 메시지)";
+    }).trim();
+    var compacted = [];
+    var previousBlank = false;
+    rendered.split(/\r?\n/).forEach(function (line) {
+      var cleaned = line.replace(/\s+$/, "");
+      if (cleaned.trim()) {
+        compacted.push(cleaned);
+        previousBlank = false;
+      } else if (compacted.length && !previousBlank) {
+        compacted.push("");
+        previousBlank = true;
+      }
+    });
+    while (compacted.length && !compacted[compacted.length - 1].trim()) compacted.pop();
+    return compacted.join("\n") || "(빈 메시지)";
   }
 
   function saveNotificationTemplate(messageType) {
@@ -1033,6 +1117,7 @@
       .then(function (payload) {
         var event = payload.event || {};
         showSnackbar("실제 데이터 알림을 보냈습니다: " + (event.title || notificationTemplateLabel(messageType)));
+        return loadNotificationSchedules();
       })
       .catch(function (error) {
         state.notificationTemplatesError = error.message || "실제 데이터 알림을 보내지 못했습니다.";
@@ -1283,6 +1368,7 @@
     return sendJson("/api/settings", "PUT", { settings: serverSettingsPayload() })
       .then(function (payload) {
         applyServerSettings(payload);
+        return loadNotificationSchedules();
       });
   }
 
@@ -4369,13 +4455,14 @@
       '<button class="text-button primary" data-action="save-settings"' + (state.serverSettingsLocked ? ' disabled' : '') + '>알림 설정 저장</button>',
       '</div>',
       '<div class="settings-body">',
+      state.messageSchedulesError ? '<p class="form-error">' + escapeHtml(state.messageSchedulesError) + '</p>' : '',
       '<div class="settings-grid admin-delivery-grid">',
       renderSettingField("notifyIntervalMinutes", "기본 알림 주기(분)", "number", "10"),
       renderSettingField("notifyLinkUrl", "알림 링크 URL", "url", "http://127.0.0.1:3000?tab=notifications"),
       '</div>',
       '<div class="admin-message-list">',
       alertRuleCatalog.map(function (rule) {
-        return renderAdminMessageRow(rule, enabledAlertRule(rules, rule.key), cadences[rule.key]);
+        return renderAdminMessageRow(rule, enabledAlertRule(rules, rule.key), cadences[rule.key], messageScheduleByType(rule.key));
       }).join(""),
       '</div>',
       renderNotificationTemplatePanel(),
@@ -4392,7 +4479,7 @@
     ].join("");
   }
 
-  function renderAdminMessageRow(rule, checked, cadence) {
+  function renderAdminMessageRow(rule, checked, cadence, schedule) {
     return [
       '<label class="admin-message-row">',
       '<input type="checkbox" data-alert-rule="' + escapeHtml(rule.key) + '"' + (checked ? " checked" : "") + ' />',
@@ -4404,6 +4491,9 @@
       '<input data-alert-cadence="' + escapeHtml(rule.key) + '" type="number" min="10" step="10" value="' + escapeHtml(cadence) + '" />',
       '<b>분</b>',
       '</span>',
+      '<div class="admin-message-schedule">',
+      renderMessageScheduleSummary(schedule),
+      '</div>',
       '</label>'
     ].join("");
   }
@@ -4420,9 +4510,62 @@
     return labels[messageType] || messageType;
   }
 
+  function scheduleStatusLabel(schedule) {
+    if (!schedule) return "이력 없음";
+    if (schedule.status === "event") return "이벤트 발생 시";
+    if (schedule.status === "disabled") return "꺼짐";
+    if (schedule.status === "waiting") return "대기 중";
+    if (schedule.status === "ready") return "발송 가능";
+    return schedule.status || "확인 필요";
+  }
+
+  function scheduleStatusClass(schedule) {
+    if (!schedule) return "muted";
+    if (schedule.status === "event") return "watch";
+    if (schedule.status === "disabled") return "muted";
+    if (schedule.status === "waiting") return "hold";
+    if (schedule.status === "ready") return "watch";
+    return "muted";
+  }
+
+  function scheduleTimeText(value) {
+    return value ? formatClock(value) : "-";
+  }
+
+  function scheduleTargetText(targets) {
+    if (!Array.isArray(targets) || !targets.length) return "최근 실제 발송 대상 없음";
+    return targets.slice(0, 3).map(function (item) {
+      var target = item.target ? item.target : "전체";
+      return target + " · " + scheduleTimeText(item.sentAt);
+    }).join(" / ");
+  }
+
+  function renderMessageScheduleSummary(schedule) {
+    if (!schedule) {
+      return [
+        '<div class="message-schedule-summary muted">',
+        '<span>로컬 서버에서 실제 발송 이력을 읽으면 표시됩니다.</span>',
+        '</div>'
+      ].join("");
+    }
+    return [
+      '<div class="message-schedule-summary">',
+      '<span class="tone-chip ' + escapeHtml(scheduleStatusClass(schedule)) + '">' + escapeHtml(scheduleStatusLabel(schedule)) + '</span>',
+      '<span>' + escapeHtml(schedule.cadenceText || "조건 충족 시 발송") + '</span>',
+      '<span>마지막 ' + escapeHtml(scheduleTimeText(schedule.lastSentAt)) + '</span>',
+      '<span>다음 가능 ' + escapeHtml(scheduleTimeText(schedule.nextEligibleAt)) + '</span>',
+      '</div>',
+      '<div class="message-schedule-detail">',
+      '<strong>언제 오나</strong>',
+      '<p>' + escapeHtml(schedule.triggerSummary || "조건이 실제 데이터에서 충족될 때 보냅니다.") + '</p>',
+      '<em>' + escapeHtml(scheduleTargetText(schedule.recentTargets)) + '</em>',
+      '</div>'
+    ].join("");
+  }
+
   function renderNotificationTemplatePanel() {
     var templates = state.notificationTemplates.length ? state.notificationTemplates : defaultNotificationTemplates();
-    var variables = state.notificationTemplateVariables.length ? state.notificationTemplateVariables : ["title", "lines", "rawLines", "body", "messageType", "symbol", "severity"];
+    var variables = state.notificationTemplateVariables.length ? state.notificationTemplateVariables : ["title", "readableMessage", "dataLines", "triggerSummary", "lines", "rawLines", "body", "messageType", "symbol", "severity"];
     return [
       '<div class="model-section notification-template-section">',
       '<div class="flow-title"><div><strong>메시지 템플릿</strong><span>타입별 포맷입니다. 템플릿만 바꾸면 다음 발송부터 새 포맷이 적용됩니다.</span></div></div>',
@@ -4445,11 +4588,15 @@
     var preview = renderNotificationTemplatePreviewText(item.template || "", item.messageType);
     var canTest = canSendNotificationTemplateTest(item.messageType);
     var sending = state.notificationTemplateSending === item.messageType;
+    var schedule = messageScheduleByType(item.messageType);
     return [
       '<div class="notification-template-row">',
       '<div class="notification-template-meta">',
       '<strong>' + escapeHtml(notificationTemplateLabel(item.messageType)) + '</strong>',
       '<span>' + escapeHtml(item.messageType || "-") + (item.description ? " · " + escapeHtml(item.description) : "") + '</span>',
+      '<div class="template-schedule-compact">',
+      renderMessageScheduleSummary(schedule),
+      '</div>',
       '</div>',
       '<textarea data-notification-template="' + escapeHtml(item.messageType || "") + '" rows="3"' + (disabled ? " disabled" : "") + '>' + escapeHtml(item.template || "") + '</textarea>',
       '<div class="settings-actions">',
@@ -6808,7 +6955,7 @@
   }
 
   applyAppTheme();
-  Promise.all([loadServerSettings(), loadServiceAccounts(), loadNotificationTemplates(), loadSymbolUniverse()]).finally(function () {
+  Promise.all([loadServerSettings(), loadServiceAccounts(), loadNotificationTemplates(), loadNotificationSchedules(), loadSymbolUniverse()]).finally(function () {
     load();
   });
 }());

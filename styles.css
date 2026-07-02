@@ -1657,14 +1657,16 @@ h3 {
 }
 
 .feature-audit-grid,
-.feature-delta-grid {
+.feature-delta-grid,
+.feature-contribution-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 6px;
 }
 
 .feature-audit-grid span,
-.feature-delta-grid span {
+.feature-delta-grid span,
+.feature-contribution-grid span {
   display: grid;
   gap: 3px;
   min-width: 0;
@@ -1679,9 +1681,17 @@ h3 {
 
 .feature-audit-grid strong,
 .feature-delta-grid strong,
-.feature-delta-grid b {
+.feature-delta-grid b,
+.feature-contribution-grid strong,
+.feature-contribution-grid b {
   color: var(--ink);
   overflow-wrap: anywhere;
+}
+
+.feature-contribution-grid > strong {
+  grid-column: 1 / -1;
+  color: var(--ink);
+  font-size: 13px;
 }
 
 .feature-delta-grid span.changed {
@@ -1692,7 +1702,24 @@ h3 {
   color: var(--red);
 }
 
-.feature-delta-grid em {
+.feature-contribution-grid span.buy {
+  background: #edf8f3;
+}
+
+.feature-contribution-grid span.buy strong {
+  color: var(--green);
+}
+
+.feature-contribution-grid span.sell {
+  background: #fff7ed;
+}
+
+.feature-contribution-grid span.sell strong {
+  color: var(--amber);
+}
+
+.feature-delta-grid em,
+.feature-contribution-grid em {
   color: var(--muted);
   font-size: 11px;
   font-style: normal;
@@ -2636,6 +2663,7 @@ h3 {
   .signal-metric-grid.compact,
   .feature-audit-grid,
   .feature-delta-grid,
+  .feature-contribution-grid,
   .variable-grid,
   .valuation-grid,
   .feed-stat-grid {

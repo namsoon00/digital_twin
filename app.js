@@ -42,8 +42,8 @@
       "000660,122,1.7,510000,390000,15,2.4,236000,218000,9800000000,13400000000,-15100000000"
     ].join("\n"),
     fairValueFormula: "eps * targetPer * growthWeight * qualityWeight * riskWeight",
-    buyScoreFormula: "50 + ((tradeStrength - 100) * 0.22 + volumePressure + (buyShare - 50) * 0.32 + bidAskImbalance * 0.22 + priceChangeRate * 0.8 + trendScore * 0.45 + investorFlowScore * 0.35) * flowWeight + undervalueBonus * valuationWeight - expensivePenalty * valuationWeight",
-    sellScoreFormula: "50 + ((100 - tradeStrength) * 0.2 + volumePressure * 0.55 + (50 - buyShare) * 0.38 - bidAskImbalance * 0.22 - priceChangeRate * 0.9 - trendScore * 0.35 - investorFlowScore * 0.3) * flowWeight + expensiveBonus * valuationWeight",
+    buyScoreFormula: "50 + (executionScore * 0.42 + directionalVolumePressure * 0.9 + buyShareScore * 0.55 + orderbookScore * 0.32 + momentumScore * 0.35 + trendScore * 0.45 + investorFlowScore * 0.35) * flowWeight + undervalueBonus * valuationWeight - expensivePenalty * valuationWeight",
+    sellScoreFormula: "50 + (-executionScore * 0.38 - directionalVolumePressure * 0.85 - buyShareScore * 0.55 - orderbookScore * 0.3 - momentumScore * 0.4 - trendScore * 0.35 - investorFlowScore * 0.3) * flowWeight + expensiveBonus * valuationWeight",
     modelName: "나의 매수/매도 모델",
     modelHypothesis: "수급, 가치, 내 점수, 리스크를 함께 봐서 매수 후보와 매도 후보를 분리한다.",
     customBuyModelFormula: "buyScore * 0.35 + thesisScore * thesisWeight + confidenceScore * confidenceWeight + max(0, targetReturn) * 0.15 + undervalueBonus * valuationWeight - riskScore * riskControlWeight",
@@ -1973,8 +1973,8 @@
     var current = currentPriceOf(item);
     var ma20 = Number(signal.ma20 || item.ma20 || 0);
     var ma60 = Number(signal.ma60 || item.ma60 || 0);
-    var tradeStrength = Number(signal.tradeStrength || 0);
-    var volumeRatio = Number(signal.volumeRatio || 0);
+    var tradeStrength = Number(signal.tradeStrength || 100);
+    var volumeRatio = Number(signal.volumeRatio || 1);
     var buyVolume = Number(signal.buyVolume || 0);
     var sellVolume = Number(signal.sellVolume || 0);
     var buyShare = buyVolumeShare(signal);
@@ -1984,31 +1984,59 @@
     var smartMoneyNet = foreignNet + institutionNet;
     var investorBase = Math.abs(foreignNet) + Math.abs(institutionNet) + Math.abs(individualNet);
     var investorBalance = smartMoneyNet - individualNet * 0.35;
+    var bidAskImbalance = Number(signal.bidAskImbalance || 0);
+    var priceChangeRate = Number(signal.priceChangeRate || 0);
     var trendDistance20 = current && ma20 ? ((current / ma20) - 1) * 100 : 0;
     var trendDistance60 = current && ma60 ? ((current / ma60) - 1) * 100 : 0;
     var maSpread = ma20 && ma60 ? ((ma20 / ma60) - 1) * 100 : 0;
+    var volumePressure = clamp((volumeRatio - 1) * 10, -10, 25);
+    var trendScore = clamp(trendDistance20 * 0.35 + trendDistance60 * 0.2 + maSpread * 0.4, -15, 15);
+    var investorFlowScore = investorBase ? clamp((investorBalance / investorBase) * 100, -30, 30) : 0;
+    var executionScore = clamp((tradeStrength - 100) * 0.5, -25, 25);
+    var buyShareScore = clamp((buyShare - 50) * 0.7, -25, 25);
+    var orderbookScore = clamp(bidAskImbalance * 0.5, -20, 20);
+    var momentumScore = clamp(priceChangeRate * 4, -20, 20);
+    var flowDirectionScore = clamp(
+      executionScore * 0.35
+        + buyShareScore * 0.35
+        + orderbookScore * 0.2
+        + momentumScore * 0.25
+        + trendScore * 0.25
+        + investorFlowScore * 0.2,
+      -25,
+      25
+    );
+    var volumeConfirmation = clamp(flowDirectionScore / 12, -1, 1);
     return {
       tradeStrength: tradeStrength,
       volumeRatio: volumeRatio,
-      volumePressure: clamp((volumeRatio - 1) * 10, -10, 25),
+      volumePressure: volumePressure,
+      directionalVolumePressure: volumePressure * volumeConfirmation,
+      volumeConfirmation: volumeConfirmation,
+      volumeDryness: volumeRatio && volumeRatio < 1 ? clamp((1 - volumeRatio) * 10, 0, 10) : 0,
       buyVolume: buyVolume,
       sellVolume: sellVolume,
       buyShare: buyShare,
       sellShare: Math.max(0, 100 - buyShare),
-      bidAskImbalance: Number(signal.bidAskImbalance || 0),
-      priceChangeRate: Number(signal.priceChangeRate || 0),
+      bidAskImbalance: bidAskImbalance,
+      priceChangeRate: priceChangeRate,
+      executionScore: executionScore,
+      buyShareScore: buyShareScore,
+      orderbookScore: orderbookScore,
+      momentumScore: momentumScore,
+      flowDirectionScore: flowDirectionScore,
       ma20: ma20,
       ma60: ma60,
       trendDistance20: trendDistance20,
       trendDistance60: trendDistance60,
       maSpread: maSpread,
-      trendScore: clamp(trendDistance20 * 0.35 + trendDistance60 * 0.2 + maSpread * 0.4, -15, 15),
+      trendScore: trendScore,
       foreignNet: foreignNet,
       institutionNet: institutionNet,
       individualNet: individualNet,
       smartMoneyNet: smartMoneyNet,
       investorFlowBalance: investorBalance,
-      investorFlowScore: investorBase ? clamp((investorBalance / investorBase) * 100, -30, 30) : 0,
+      investorFlowScore: investorFlowScore,
       currentPrice: current,
       fairValue: Number(valuation.fairValue || 0),
       fairValueGap: Number(valuation.gap || 0),
@@ -2022,15 +2050,12 @@
     var item = context.item || {};
     var weights = formulaWeights();
     var featureVars = modelFeatureVariables(item, signal, valuation);
-    var strength = featureVars.tradeStrength || 100;
-    var volumeRatio = featureVars.volumeRatio || 1;
-    var imbalance = featureVars.bidAskImbalance || 0;
-    var priceChange = featureVars.priceChangeRate || 0;
-    var buyShare = featureVars.buyShare;
     var valuationGap = Number(valuation.gap || 0);
     var expensivePenalty = valuationGap < 0 ? Math.min(18, Math.abs(valuationGap) / 2) : 0;
     var undervalueBonus = valuationGap > 0 ? Math.min(14, valuationGap / 3) : 0;
     var expensiveBonus = expensivePenalty;
+    var flowWeight = Number(weights.flowWeight || 1);
+    var valuationWeight = Number(weights.valuationWeight || 1);
     var variables = Object.assign({}, weights, featureVars, {
       expensivePenalty: expensivePenalty,
       expensiveBonus: expensiveBonus,
@@ -2041,21 +2066,28 @@
       watchlist: item.source === "watchlist" ? 1 : 0
     });
     var fallbackBuyScore = 50
-      + (strength - 100) * 0.22
-      + featureVars.volumePressure
-      + (buyShare - 50) * 0.32
-      + imbalance * 0.22
-      + priceChange * 0.8
-      + featureVars.trendScore * 0.45
-      + featureVars.investorFlowScore * 0.35;
+      + (
+        featureVars.executionScore * 0.42
+        + featureVars.directionalVolumePressure * 0.9
+        + featureVars.buyShareScore * 0.55
+        + featureVars.orderbookScore * 0.32
+        + featureVars.momentumScore * 0.35
+        + featureVars.trendScore * 0.45
+        + featureVars.investorFlowScore * 0.35
+      ) * flowWeight
+      + undervalueBonus * valuationWeight
+      - expensivePenalty * valuationWeight;
     var fallbackSellScore = 50
-      + (100 - strength) * 0.2
-      + featureVars.volumePressure * 0.55
-      + (50 - buyShare) * 0.38
-      - imbalance * 0.22
-      - priceChange * 0.9
-      - featureVars.trendScore * 0.35
-      - featureVars.investorFlowScore * 0.3;
+      + (
+        -featureVars.executionScore * 0.38
+        - featureVars.directionalVolumePressure * 0.85
+        - featureVars.buyShareScore * 0.55
+        - featureVars.orderbookScore * 0.3
+        - featureVars.momentumScore * 0.4
+        - featureVars.trendScore * 0.35
+        - featureVars.investorFlowScore * 0.3
+      ) * flowWeight
+      + expensiveBonus * valuationWeight;
     var buyResult = evaluateConfiguredFormula(formulaSetting("buyScoreFormula"), variables, fallbackBuyScore);
     var sellResult = evaluateConfiguredFormula(formulaSetting("sellScoreFormula"), variables, fallbackSellScore);
     var errors = [];
@@ -2064,7 +2096,7 @@
     return {
       buyScore: Math.round(clamp(buyResult.value, 0, 100)),
       sellScore: Math.round(clamp(sellResult.value, 0, 100)),
-      buyShare: Math.round(clamp(buyShare, 0, 100)),
+      buyShare: Math.round(clamp(featureVars.buyShare, 0, 100)),
       errors: errors
     };
   }
@@ -2553,6 +2585,70 @@
     return customModelScores(nextItem);
   }
 
+  function modelFeatureContributions(variables) {
+    variables = variables || {};
+    var flowWeight = Number(variables.flowWeight || 1);
+    var valuationWeight = Number(variables.valuationWeight || 1);
+    return [
+      {
+        key: "execution",
+        label: "체결강도",
+        buy: Number(variables.executionScore || 0) * 0.42 * flowWeight,
+        sell: -Number(variables.executionScore || 0) * 0.38 * flowWeight,
+        description: "100을 중립으로 둔 체결 방향"
+      },
+      {
+        key: "directionalVolume",
+        label: "방향성 거래량",
+        buy: Number(variables.directionalVolumePressure || 0) * 0.9 * flowWeight,
+        sell: -Number(variables.directionalVolumePressure || 0) * 0.85 * flowWeight,
+        description: "거래량 급증이 매수 쪽인지 매도 쪽인지 확인"
+      },
+      {
+        key: "buyShare",
+        label: "매수비중",
+        buy: Number(variables.buyShareScore || 0) * 0.55 * flowWeight,
+        sell: -Number(variables.buyShareScore || 0) * 0.55 * flowWeight,
+        description: "매수 체결량과 매도 체결량의 상대 비중"
+      },
+      {
+        key: "orderbook",
+        label: "호가",
+        buy: Number(variables.orderbookScore || 0) * 0.32 * flowWeight,
+        sell: -Number(variables.orderbookScore || 0) * 0.3 * flowWeight,
+        description: "호가 잔량 불균형"
+      },
+      {
+        key: "momentum",
+        label: "가격 변화",
+        buy: Number(variables.momentumScore || 0) * 0.35 * flowWeight,
+        sell: -Number(variables.momentumScore || 0) * 0.4 * flowWeight,
+        description: "당일 또는 입력 기간 가격 변화"
+      },
+      {
+        key: "trend",
+        label: "이동평균",
+        buy: Number(variables.trendScore || 0) * 0.45 * flowWeight,
+        sell: -Number(variables.trendScore || 0) * 0.35 * flowWeight,
+        description: "20일선, 60일선, 단기/중기 간격"
+      },
+      {
+        key: "investor",
+        label: "투자자 수급",
+        buy: Number(variables.investorFlowScore || 0) * 0.35 * flowWeight,
+        sell: -Number(variables.investorFlowScore || 0) * 0.3 * flowWeight,
+        description: "외국인과 기관 순매수 대비 개인 순매수"
+      },
+      {
+        key: "valuation",
+        label: "밸류에이션",
+        buy: (Number(variables.undervalueBonus || 0) - Number(variables.expensivePenalty || 0)) * valuationWeight,
+        sell: Number(variables.expensiveBonus || variables.expensivePenalty || 0) * valuationWeight,
+        description: "적정가 대비 저평가 또는 고평가"
+      }
+    ];
+  }
+
   function modelFeatureAudit(item, model) {
     var baseline = model || customModelScores(item);
     var replay = customModelScoresFromVariables(item, Object.assign({}, baseline.variables || modelFormulaVariables(item)));
@@ -2573,7 +2669,8 @@
         changed: changed
       };
     });
-    return { stable: stable, replay: replay, groups: groups, variables: baseline.variables || {} };
+    var variables = baseline.variables || {};
+    return { stable: stable, replay: replay, groups: groups, variables: variables, contributions: modelFeatureContributions(variables) };
   }
 
   function modelStatsForItems(items) {
@@ -3655,20 +3752,20 @@
       },
       {
         label: "3. 수급",
-        value: "체결·거래량·투자자",
-        description: "체결강도, 거래량, 이동평균, 투자자별 수급으로 판단 변화를 검증합니다."
+        value: "방향성 거래량",
+        description: "거래량은 체결강도, 매수비중, 추세와 같은 방향일 때만 강하게 반영합니다."
       },
       {
         label: "4. 행동",
         value: Math.round(thresholds.modelBuy || 0) + " / " + Math.round(thresholds.modelSell || 0) + "점",
-        description: "매수 후보와 분할매도 기준을 넘으면 종목 라벨이 바뀝니다."
+        description: "기준 근처에서는 feature 기여도와 판단 변화 가능성을 먼저 확인합니다."
       }
     ];
     var steps = [
       ["기본값으로 보기", "처음에는 수식을 바꾸지 말고 모델이 어떤 종목에 신호를 내는지 확인합니다."],
+      ["기여도 확인", "점수보다 먼저 체결강도, 방향성 거래량, 이동평균, 투자자 수급 중 무엇이 라벨을 움직였는지 봅니다."],
       ["가중치 조정", "가치, 수급, 리스크 중 더 믿는 축만 0.1~0.5씩 천천히 바꿉니다."],
-      ["판단 기준 조정", "신호가 너무 많으면 기준 점수를 올리고, 너무 적으면 조금 낮춥니다."],
-      ["알림으로 운영", "판단 기준을 넘는 종목만 알림으로 받아보고 실제 주문 전 데이터를 다시 확인합니다."]
+      ["판단 기준 조정", "신호가 너무 많으면 기준 점수를 올리고, 너무 적으면 조금 낮춥니다."]
     ];
     return [
       '<article class="panel model-guide-panel">',
@@ -3687,7 +3784,7 @@
         return '<div><b>' + escapeHtml(index + 1) + '</b><span><strong>' + escapeHtml(step[0]) + '</strong><em>' + escapeHtml(step[1]) + '</em></span></div>';
       }).join(""),
       '</div>',
-      '<div class="rule-strip"><span>이 화면은 주문 실행이 아니라 판단 기준을 만들고 검증하는 계산판입니다.</span><span>일반 사용자는 가중치와 판단 기준부터 조정하고, 공식은 필요할 때만 고칩니다.</span></div>',
+      '<div class="rule-strip"><span>이 화면은 주문 실행이 아니라 판단 기준을 만들고 검증하는 계산판입니다.</span><span>재료는 문헌과 실무에서 쓰이는 값이지만 계수는 초기 추천값이므로 저장 실험과 알림 이력으로 검증해야 합니다.</span></div>',
       '</article>'
     ].join("");
   }
@@ -3790,7 +3887,7 @@
       '<div class="model-editor">',
       '<div class="settings-note model-settings-note">',
       '<strong>처음 운영할 때</strong>',
-      '<p>수식은 그대로 두고, 아래 가중치와 판단 기준만 조정해도 매수 후보·보유 강화·분할매도·리스크 축소 라벨이 다시 계산됩니다.</p>',
+      '<p>기본 공식은 방향성 거래량, 이동평균, 투자자 수급을 함께 쓰는 추천식입니다. 먼저 feature 기여도를 확인하고, 아래 가중치와 판단 기준만 조정해도 라벨이 다시 계산됩니다.</p>',
       '</div>',
       '<div class="settings-grid">',
       renderModelSettingField("modelName", "모델 이름", "text", "나의 모델"),
@@ -3812,7 +3909,7 @@
       '</div>',
       '<div class="settings-note model-settings-note">',
       '<strong>공식 변수 도움말</strong>',
-      '<p>아래 이름들은 고급 공식에서 사용할 수 있는 값입니다. 수식 편집이 익숙하지 않으면 기본 공식과 위의 가중치만 사용해도 됩니다.</p>',
+      '<p>아래 이름들은 고급 공식에서 사용할 수 있는 값입니다. 수식 편집이 익숙하지 않으면 기본 공식과 위의 가중치만 사용하고, 계수는 저장 실험으로 검증하세요.</p>',
       '</div>',
       renderVariableGuide(modelVariableGuide()),
       '<div class="rule-strip"><span>공식은 +, -, *, /, 괄호와 min, max, abs, round, sqrt, pow, clamp 함수를 지원합니다.</span><span>공식 오류가 있으면 기본 공식으로 계산하고 종목 카드에 오류를 표시합니다.</span></div>',
@@ -4310,16 +4407,21 @@
         '<strong>feature 재현성</strong>',
         '<span class="tone-chip hold">데이터 부족</span>',
         '</div>',
-        '<div class="feature-audit-grid"><span>체결강도, 거래량, 이동평균, 투자자별 수급을 입력하면 같은 입력 재계산과 feature 제거 실험을 실행합니다.</span></div>',
+        '<div class="feature-audit-grid"><span>체결강도, 방향성 거래량, 이동평균, 투자자별 수급을 입력하면 같은 입력 재계산과 feature 제거 실험을 실행합니다.</span></div>',
         '</div>'
       ].join("");
     }
     var audit = modelFeatureAudit(item, model);
     var variables = audit.variables || {};
     var signal = item.signal || {};
+    var contributionRows = (audit.contributions || []).slice().sort(function (a, b) {
+      return (Math.abs(b.buy) + Math.abs(b.sell)) - (Math.abs(a.buy) + Math.abs(a.sell));
+    }).slice(0, 6);
     var featureRows = [
       ["체결강도", formatSignalNumber(variables.tradeStrength, "")],
       ["거래량", formatSignalRatio(variables.volumeRatio)],
+      ["방향성 거래량", signedNumber(variables.directionalVolumePressure)],
+      ["흐름 방향", signedNumber(variables.flowDirectionScore)],
       ["20일 괴리", formatSignalNumber(variables.trendDistance20, "%")],
       ["60일 괴리", formatSignalNumber(variables.trendDistance60, "%")],
       ["외국인", formatSignalVolume(signal.foreignNet)],
@@ -4342,6 +4444,13 @@
       audit.groups.map(function (group) {
         var tone = group.changed ? "changed" : "stable";
         return '<span class="' + tone + '"><b>' + escapeHtml(group.label) + '</b><strong>매수 ' + escapeHtml(signedNumber(group.buyDelta)) + ' / 매도 ' + escapeHtml(signedNumber(group.sellDelta)) + '</strong><em>' + escapeHtml(group.changed ? "판단 변화 가능" : "판단 유지") + '</em></span>';
+      }).join(""),
+      '</div>',
+      '<div class="feature-contribution-grid">',
+      '<strong>feature 기여도</strong>',
+      contributionRows.map(function (row) {
+        var tone = Math.abs(row.buy) >= Math.abs(row.sell) ? "buy" : "sell";
+        return '<span class="' + tone + '"><b>' + escapeHtml(row.label) + '</b><strong>매수 ' + escapeHtml(signedNumber(row.buy)) + ' / 매도 ' + escapeHtml(signedNumber(row.sell)) + '</strong><em>' + escapeHtml(row.description) + '</em></span>';
       }).join(""),
       '</div>',
       '</div>'
@@ -4598,7 +4707,14 @@
       ["sellShare", "매도 체결 비중"],
       ["bidAskImbalance", "호가 불균형"],
       ["priceChangeRate", "가격 변화율"],
-      ["volumePressure", "거래량 배율을 점수화한 값"],
+      ["executionScore", "체결강도를 -25~25 범위로 점수화"],
+      ["volumePressure", "거래량 배율을 -10~25 범위로 점수화"],
+      ["directionalVolumePressure", "거래량이 매수/매도 어느 방향을 확인하는지 반영"],
+      ["volumeConfirmation", "거래량 방향 확인 강도"],
+      ["buyShareScore", "매수 체결 비중을 -25~25 범위로 점수화"],
+      ["orderbookScore", "호가 불균형을 -20~20 범위로 점수화"],
+      ["momentumScore", "가격 변화율을 -20~20 범위로 점수화"],
+      ["flowDirectionScore", "체결, 비중, 호가, 가격, 추세, 투자자 수급의 합성 방향"],
       ["ma20", "20일 이동평균"],
       ["ma60", "60일 이동평균"],
       ["trendDistance20", "20일선 대비 괴리"],
@@ -4721,16 +4837,21 @@
   function renderTradeSignalMethodPanel() {
     var rows = [
       ["체결강도", "100 이상이면 매수 체결 우위, 100 미만이면 매도 체결 우위"],
-      ["거래량 배율", "평균 대비 거래량이 커질수록 신호 가중치 상승"],
+      ["거래량 배율", "평균 대비 거래량이 커질수록 신호 영향은 커지지만 방향은 별도로 확인"],
       ["매수/매도량", "실제 체결 방향의 비중으로 매수·매도 압력 분리"],
+      ["거래량 방향성", "거래량 급증이 체결강도, 매수비중, 호가, 가격, 추세와 같은 방향일 때만 강한 신호로 처리"],
       ["이동평균", "20일·60일선 대비 괴리와 두 이동평균의 간격으로 추세 확인"],
       ["투자자별 수급", "외국인·기관·개인의 순매수 균형을 점수화해 수급 반복성을 검증"],
+      ["정규화", "서로 단위가 다른 값을 제한된 점수 범위로 바꾼 뒤 합산"],
       ["호가 불균형", "매수잔량 우위는 양수, 매도잔량 우위는 음수로 입력"],
       ["최종 라벨", "매수/매도 점수 + 보유 여부 + 기준값을 조합"]
     ];
     var variables = [
       ["tradeStrength", "체결강도"],
       ["volumeRatio", "거래량 배율"],
+      ["executionScore", "정규화된 체결강도"],
+      ["directionalVolumePressure", "방향성 거래량 압력"],
+      ["flowDirectionScore", "수급 방향 합성 점수"],
       ["buyShare", "매수 체결 비중"],
       ["bidAskImbalance", "호가 불균형"],
       ["priceChangeRate", "가격 변화율"],

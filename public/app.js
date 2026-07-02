@@ -3980,9 +3980,8 @@
         '<section class="admin-grid">',
         renderAdminMonitoringPanel(snapshot),
         renderAlertCenterPanel(snapshot),
-        renderWatchlistPanel(snapshot),
+        renderMonitoringInstrumentPanel(snapshot),
         renderPortfolioPanel(snapshot),
-        renderHoldingsPanel(snapshot),
         '</section>'
       ].join("");
     }
@@ -5920,6 +5919,77 @@
       '<strong>' + escapeHtml(formatCurrency(item.marketValue, item.currency)) + '</strong>',
       '<span>' + escapeHtml(signedMoney(item.profitLoss, item.currency)) + ' · ' + escapeHtml(signedPct(item.profitLossRate)) + '</span>',
       '<span>매도 가능 ' + escapeHtml(item.sellableQuantity || item.quantity || "-") + '</span>',
+      '</div>',
+      '</div>'
+    ].join("");
+  }
+
+  function renderMonitoringInstrumentPanel(snapshot) {
+    var items = instrumentItems(snapshot);
+    var signalMap = {};
+    buildTradeSignalItems(snapshot).forEach(function (item) {
+      signalMap[item.symbol] = item;
+    });
+    var holdings = items.filter(function (item) { return item.source !== "watchlist"; }).length;
+    var watch = items.length - holdings;
+    var priced = items.filter(function (item) { return Boolean(currentPriceOf(item)); }).length;
+    return [
+      '<article class="panel monitoring-instrument-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Monitoring Universe</p>',
+      '<h2>보유·관심 종목 통합</h2>',
+      '</div>',
+      '<span class="metric">' + escapeHtml(items.length) + '</span>',
+      '</div>',
+      '<div class="monitoring-instrument-summary">',
+      '<div><span>보유</span><strong>' + escapeHtml(holdings) + '</strong></div>',
+      '<div><span>관심</span><strong>' + escapeHtml(watch) + '</strong></div>',
+      '<div><span>시세</span><strong>' + escapeHtml(priced) + '</strong></div>',
+      '</div>',
+      '<div class="monitoring-instrument-list">',
+      items.length ? items.map(function (item) {
+        var symbol = String(item.symbol || "").toUpperCase();
+        return renderMonitoringInstrumentRow(item, signalMap[symbol]);
+      }).join("") : '<p class="subtle">보유 또는 관심 종목을 찾지 못했습니다.</p>',
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderMonitoringInstrumentRow(item, signal) {
+    var symbol = String(item.symbol || "").toUpperCase();
+    var holding = item.source !== "watchlist";
+    var price = currentPriceOf(item);
+    var sourceLabel = holding ? "보유" : "관심";
+    var sourceClass = holding ? "holding" : "watchlist";
+    var valueText = holding
+      ? formatCurrency(item.marketValue || 0, item.currency)
+      : (price ? formatCurrency(price, item.currency) : "시세 대기");
+    var detailText = holding
+      ? "수량 " + (item.quantity || "-") + " · 평단 " + formatCurrency(item.averagePrice || 0, item.currency)
+      : (item.quoteStatus || "관심 기준 관찰");
+    var performanceText = holding
+      ? signedMoney(item.profitLoss, item.currency) + " · " + signedPct(item.profitLossRate)
+      : (item.changeRate == null ? "등락률 대기" : signedPct(item.changeRate));
+    var signalText = signal && signal.hasData
+      ? "매수 " + signal.buyScore + " · 매도 " + signal.sellScore
+      : "수급 입력 필요";
+    return [
+      '<div class="monitoring-instrument-row">',
+      '<div class="monitoring-instrument-main">',
+      '<div class="monitoring-instrument-title">',
+      '<strong>' + escapeHtml(item.name || symbol) + '</strong>',
+      '<span class="source-chip ' + escapeHtml(sourceClass) + '">' + escapeHtml(sourceLabel) + '</span>',
+      '</div>',
+      '<span>' + escapeHtml(symbol) + ' · ' + escapeHtml(marketLabel(item.market || "-")) + ' · ' + escapeHtml(item.sector || "-") + '</span>',
+      '<span>' + escapeHtml(detailText) + '</span>',
+      '</div>',
+      '<div class="monitoring-instrument-side">',
+      '<strong>' + escapeHtml(valueText) + '</strong>',
+      '<span>' + escapeHtml(performanceText) + '</span>',
+      '<span class="tone-chip ' + escapeHtml(signal && signal.tone ? signal.tone : "hold") + '">' + escapeHtml(signal && signal.action ? signal.action : "관찰") + '</span>',
+      '<em>' + escapeHtml(signalText) + '</em>',
       '</div>',
       '</div>'
     ].join("");

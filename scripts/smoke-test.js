@@ -266,7 +266,23 @@ function checkFrontendAdminRender() {
         mode: "live",
         status: "ok",
         account: {},
-        positions: [],
+        positions: [
+          {
+            symbol: "005930",
+            name: "삼성전자",
+            market: "KR",
+            currency: "KRW",
+            sector: "반도체",
+            quantity: 2,
+            sellableQuantity: 2,
+            averagePrice: 65000,
+            currentPrice: 72000,
+            marketValue: 144000,
+            profitLoss: 14000,
+            profitLossRate: 10.7,
+            source: "holding"
+          }
+        ],
         watchlist: [
           { symbol: "NVDA", name: "NVIDIA", market: "US", currency: "USD", sector: "반도체", currentPrice: 180 }
         ]
@@ -494,8 +510,11 @@ function checkFrontendAdminRender() {
     assertOk(modelingHtml.indexOf("같은 입력 재현됨") >= 0, "같은 입력 재계산 검증 결과가 렌더링되지 않았습니다.");
     assertOk(modelingHtml.indexOf("model-timing-panel") < 0, "Mock 시계열 기반 타이밍 패널이 아직 렌더링됩니다.");
     assertOk(modelingHtml.indexOf("웹에서 운영하는 매수·매도 타이밍 모델") < 0, "타이밍 모델 제목이 아직 렌더링됩니다.");
-    assertOk(monitoringHtml.indexOf("watchlist-panel") >= 0, "모니터링 탭에 관심 종목 관리 패널이 렌더링되지 않았습니다.");
-    assertOk(monitoringHtml.indexOf("토스 앱의 관심 목록") >= 0, "관심 종목 API 한계 안내가 렌더링되지 않았습니다.");
+    assertOk(monitoringHtml.indexOf("monitoring-instrument-panel") >= 0, "모니터링 탭에 보유·관심 통합 패널이 렌더링되지 않았습니다.");
+    assertOk(monitoringHtml.indexOf("보유·관심 종목 통합") >= 0, "모니터링 탭 통합 패널 제목이 렌더링되지 않았습니다.");
+    assertOk(monitoringHtml.indexOf("삼성전자") >= 0 && monitoringHtml.indexOf("NVIDIA") >= 0, "보유 종목과 관심 종목이 함께 렌더링되지 않았습니다.");
+    assertOk(monitoringHtml.indexOf(">보유<") >= 0 && monitoringHtml.indexOf(">관심<") >= 0, "보유/관심 상태 라벨이 함께 렌더링되지 않았습니다.");
+    assertOk(monitoringHtml.indexOf("watchlist-panel") < 0, "모니터링 탭에 관심 종목 관리 패널이 따로 남아 있습니다.");
     assertOk(settingsHtml.indexOf("settings-overview-panel") >= 0, "설정 탭 요약 패널이 렌더링되지 않았습니다.");
     assertOk(settingsHtml.indexOf("settings-environment-panel") >= 0, "설정 탭 앱 환경 패널이 렌더링되지 않았습니다.");
     assertOk(settingsHtml.indexOf("settings-delivery-panel") >= 0, "설정 탭 알림 전달 패널이 렌더링되지 않았습니다.");

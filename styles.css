@@ -1343,7 +1343,7 @@ h3 {
 
 .symbol-filter-form {
   display: grid;
-  grid-template-columns: minmax(130px, 0.55fr) minmax(260px, 1.4fr) minmax(110px, 0.45fr) auto auto;
+  grid-template-columns: minmax(130px, 0.55fr) minmax(260px, 1.2fr) minmax(110px, 0.42fr) minmax(150px, 0.62fr) auto auto;
   align-items: end;
   gap: 8px;
   padding: 14px 16px 10px;
@@ -1475,6 +1475,16 @@ h3 {
   max-width: 180px;
   color: var(--ink);
   font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.symbol-result-side span {
+  max-width: 190px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1746,6 +1756,142 @@ h3 {
   align-items: start;
 }
 
+.account-watchlist-workbench {
+  display: grid;
+  grid-template-columns: minmax(250px, 0.72fr) minmax(0, 1.28fr);
+  gap: 14px;
+  padding: 16px;
+}
+
+.watch-account-rail,
+.account-watchlist-editor {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-width: 0;
+}
+
+.watch-account-row.selectable {
+  width: 100%;
+  border: 1px solid var(--line);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  appearance: none;
+}
+
+.watch-account-row.selectable:hover,
+.watch-account-row.selectable:focus {
+  border-color: var(--blue);
+  outline: 2px solid var(--blue-soft);
+  outline-offset: 1px;
+}
+
+.watch-account-row.active {
+  border-color: var(--blue);
+  background: var(--blue-soft);
+}
+
+.watch-account-action {
+  justify-self: end;
+  min-height: 26px;
+  border-radius: 8px;
+  background: var(--input);
+  color: var(--blue);
+  padding: 5px 8px;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.account-watchlist-editor.empty {
+  min-height: 180px;
+}
+
+.account-watchlist-editor-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+}
+
+.account-watchlist-editor-head > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.account-watchlist-editor-head strong {
+  color: var(--ink);
+  font-size: 15px;
+  overflow-wrap: anywhere;
+}
+
+.account-watchlist-editor-head span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.account-watch-editor {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+}
+
+.account-watch-symbol-list {
+  display: grid;
+  gap: 10px;
+}
+
+.account-watch-symbol-row,
+.account-watch-edit-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 0.42fr);
+  gap: 12px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+}
+
+.account-watch-edit-row {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+}
+
+.account-watch-symbol-main,
+.account-watch-symbol-side {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  min-width: 0;
+}
+
+.account-watch-symbol-main strong,
+.account-watch-symbol-side strong {
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.account-watch-symbol-main span,
+.account-watch-symbol-side span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.account-watch-symbol-side {
+  justify-items: end;
+  text-align: right;
+}
+
 .account-card-head {
   display: grid;
   gap: 10px;
@@ -1965,6 +2111,10 @@ h3 {
   gap: 6px;
 }
 
+.admin-template-variable-row {
+  padding: 2px 0 4px;
+}
+
 .notification-template-list {
   display: grid;
   gap: 10px;
@@ -1980,6 +2130,18 @@ h3 {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--panel-soft);
+}
+
+.admin-message-template.notification-template-row {
+  grid-column: 2 / -1;
+  grid-template-columns: minmax(0, 1fr) auto;
+  background: var(--panel);
+}
+
+.admin-message-template .notification-template-meta,
+.admin-message-template textarea,
+.admin-message-template .notification-template-preview {
+  grid-column: 1 / -1;
 }
 
 .notification-template-meta {
@@ -3370,7 +3532,8 @@ h3 {
 }
 
 .watch-add-form,
-.watch-edit-row {
+.watch-edit-row,
+.account-watch-edit-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
@@ -3387,9 +3550,14 @@ h3 {
   border-top: 1px solid var(--line);
 }
 
+.account-watch-edit-row {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
 .watch-add-form input,
 .watch-add-form select,
-.watch-edit-row input {
+.watch-edit-row input,
+.account-watch-edit-row input {
   min-width: 0;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -3402,7 +3570,8 @@ h3 {
 
 .watch-add-form input:focus,
 .watch-add-form select:focus,
-.watch-edit-row input:focus {
+.watch-edit-row input:focus,
+.account-watch-edit-row input:focus {
   outline: 2px solid var(--focus);
   outline-offset: 1px;
 }
@@ -3705,6 +3874,7 @@ h3 {
   }
 
   .admin-account-layout,
+  .account-watchlist-workbench,
   .home-command-grid,
   .lab-body-grid,
   .notification-template-row {
@@ -3721,6 +3891,10 @@ h3 {
 
   .admin-message-row {
     grid-template-columns: auto minmax(0, 1fr) minmax(96px, 116px);
+  }
+
+  .admin-message-template.notification-template-row {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -3880,13 +4054,17 @@ h3 {
   .service-account-row,
   .admin-message-row,
   .account-credential-grid,
+  .watch-account-row,
+  .account-watch-symbol-row,
+  .account-watch-edit-row,
   .symbol-filter-form,
   .symbol-filter-form.compact,
   .symbol-result-row {
     grid-template-columns: 1fr;
   }
 
-  .admin-message-schedule {
+  .admin-message-schedule,
+  .admin-message-template.notification-template-row {
     grid-column: auto;
   }
 
@@ -3896,6 +4074,16 @@ h3 {
 
   .symbol-result-side {
     justify-items: start;
+  }
+
+  .account-watchlist-editor-head,
+  .account-watch-symbol-side {
+    justify-items: start;
+    text-align: left;
+  }
+
+  .account-watchlist-editor-head {
+    display: grid;
   }
 
   .alert-row {

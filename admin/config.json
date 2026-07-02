@@ -13,7 +13,7 @@
     "공유 미리보기에서는 서버 설정과 계정 DB 쓰기를 차단합니다."
   ],
   "localData": {
-    "generatedAt": "2026-07-02T21:23:16.036155Z",
+    "generatedAt": "2026-07-02T21:33:38.702287Z",
     "sources": {
       "serviceDb": "data/service.db",
       "serviceDbExists": true,
@@ -1027,5 +1027,5 @@
       ]
     }
   ],
-  "buildId": "9d6d010617fb"
+  "buildId": "31b5b40b93c2"
 }

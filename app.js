@@ -198,6 +198,7 @@
     { id: "overview", label: "홈", description: "운영 요약" },
     { id: "accounts", label: "계정", description: "DB 계정" },
     { id: "watchlist", label: "관심종목", description: "알림 대상" },
+    { id: "symbols", label: "전체종목", description: "시장 목록" },
     { id: "monitoring", label: "모니터링", description: "보유·타이밍" },
     { id: "notifications", label: "알림", description: "메시지 타입" },
     { id: "modeling", label: "모델링", description: "판단 기준" },
@@ -355,6 +356,7 @@
     settings: loadSettings(),
     snackbar: null,
     showSecrets: false,
+    settingsSaving: false,
     settingsSaved: false,
     serverSettingsLoaded: false,
     serverSettingsError: "",
@@ -387,7 +389,10 @@
     labRecordError: "",
     modelSaved: false,
     modelError: "",
+    activeWatchAccountId: "",
+    editingWatchAccountId: "",
     editingWatchSymbol: "",
+    watchlistSavingAccountId: "",
     watchlistError: "",
     watchSuggestQuery: "",
     watchSuggestItems: [],
@@ -546,6 +551,7 @@
     var localData = staticLocalData(payload);
     state.serviceAccounts = Array.isArray(localData.accounts) ? localData.accounts : [];
     state.serviceAccountsLoaded = true;
+    syncActiveWatchAccountId();
     syncAccountDraftFromLoadedAccounts(Boolean(forceDraft));
   }
 
@@ -556,7 +562,6 @@
 
   function normalizeTabId(value) {
     var requested = String(value || "").toLowerCase();
-    if (requested === "symbols") return "watchlist";
     return tabs.some(function (tab) { return tab.id === requested; }) ? requested : "overview";
   }
 
@@ -819,9 +824,36 @@
     })[0] || null;
   }
 
+  function isAlertTemplateType(messageType) {
+    return alertRuleCatalog.some(function (rule) { return rule.key === messageType; });
+  }
+
+  function notificationTemplateForEdit(messageType) {
+    var found = notificationTemplateByType(messageType);
+    if (found) return found;
+    return defaultNotificationTemplates().filter(function (item) {
+      return item.messageType === messageType;
+    })[0] || {
+      messageType: messageType,
+      template: "{readableMessage}",
+      description: "",
+      enabled: true,
+      updatedAt: ""
+    };
+  }
+
+  function notificationTemplateVariables() {
+    return state.notificationTemplateVariables.length
+      ? state.notificationTemplateVariables
+      : ["title", "readableMessage", "dataLines", "triggerSummary", "lines", "rawLines", "body", "messageType", "symbol", "severity"];
+  }
+
   function updateNotificationTemplate(messageType, value) {
     var existing = notificationTemplateByType(messageType);
-    if (!existing) return;
+    if (!existing) {
+      existing = notificationTemplateForEdit(messageType);
+      state.notificationTemplates = (state.notificationTemplates || []).concat(existing);
+    }
     existing.template = value;
     state.notificationTemplatesSaved = false;
     state.notificationTemplatesError = "";
@@ -1187,6 +1219,7 @@
       .then(function (payload) {
         state.serviceAccounts = Array.isArray(payload.accounts) ? payload.accounts : [];
         state.serviceAccountsLoaded = true;
+        syncActiveWatchAccountId();
         syncAccountDraftFromLoadedAccounts(Boolean(options.forceDraft));
       })
       .catch(function (error) {
@@ -1302,6 +1335,108 @@
       });
   }
 
+  function accountWatchlistPayload(account, symbols) {
+    return {
+      id: accountIdOf(account),
+      label: String(account.label || account.id || "").trim(),
+      provider: String(account.provider || "toss").trim(),
+      baseUrl: String(account.baseUrl || "https://openapi.tossinvest.com").trim(),
+      accountSeq: textValueUnlessBoolean(account.accountSeq),
+      watchlistSymbols: normalizeSymbols((symbols || []).join(",")).join(","),
+      notifyProvider: String(account.notifyProvider || settingValue("notifyProvider") || "telegram").trim(),
+      notifyLinkUrl: String(account.notifyLinkUrl || settingValue("notifyLinkUrl") || "").trim(),
+      enabled: account.enabled !== false
+    };
+  }
+
+  function saveAccountWatchlistSymbols(accountId, symbols) {
+    var account = accountById(accountId);
+    if (!account) {
+      state.watchlistError = "관심 종목을 저장할 계정을 선택하세요.";
+      render();
+      return Promise.resolve();
+    }
+    if (isStaticPreviewHost() || state.serverSettingsLocked) {
+      state.watchlistError = "GitHub Pages에서는 계정별 관심 종목을 저장할 수 없습니다. 로컬 서버에서 사용하세요.";
+      showSnackbar(state.watchlistError, "danger");
+      render();
+      return Promise.resolve();
+    }
+    state.watchlistSavingAccountId = accountIdOf(account);
+    state.watchlistError = "";
+    state.watchSuggestQuery = "";
+    state.watchSuggestItems = [];
+    state.watchSuggestLoading = false;
+    state.watchSuggestError = "";
+    render();
+    return sendJson("/api/service-accounts", "POST", { account: accountWatchlistPayload(account, symbols) })
+      .then(function () {
+        state.activeWatchAccountId = accountIdOf(account);
+        state.editingWatchAccountId = "";
+        state.editingWatchSymbol = "";
+        return loadServiceAccounts();
+      })
+      .then(function () {
+        showSnackbar("계정별 관심 종목을 저장했습니다.");
+      })
+      .catch(function (error) {
+        state.watchlistError = error.message || "계정별 관심 종목을 저장하지 못했습니다.";
+        showSnackbar(state.watchlistError, "danger");
+      })
+      .finally(function () {
+        state.watchlistSavingAccountId = "";
+        render();
+      });
+  }
+
+  function addAccountWatchSymbol(accountId, symbol) {
+    var next = normalizeSymbols(symbol || "");
+    if (!next.length) {
+      state.watchlistError = "추가할 티커나 종목코드를 입력하세요.";
+      render();
+      return Promise.resolve();
+    }
+    var account = accountById(accountId);
+    var symbols = accountWatchlistSymbols(account);
+    if (symbols.indexOf(next[0]) >= 0) {
+      state.watchlistError = "선택한 계정에 이미 추가된 관심 종목입니다.";
+      render();
+      return Promise.resolve();
+    }
+    return saveAccountWatchlistSymbols(accountId, symbols.concat(next[0]));
+  }
+
+  function removeAccountWatchSymbol(accountId, symbol) {
+    var removeSymbol = String(symbol || "").toUpperCase();
+    return saveAccountWatchlistSymbols(accountId, accountWatchlistSymbols(accountById(accountId)).filter(function (item) {
+      return item !== removeSymbol;
+    }));
+  }
+
+  function replaceAccountWatchSymbol(accountId, original, nextValue) {
+    var originalSymbol = String(original || "").toUpperCase();
+    var next = normalizeSymbols(nextValue || "");
+    if (!next.length) {
+      state.watchlistError = "수정할 티커나 종목코드를 입력하세요.";
+      render();
+      return Promise.resolve();
+    }
+    var symbols = accountWatchlistSymbols(accountById(accountId));
+    if (next[0] !== originalSymbol && symbols.indexOf(next[0]) >= 0) {
+      state.watchlistError = "선택한 계정에 이미 추가된 관심 종목입니다.";
+      render();
+      return Promise.resolve();
+    }
+    return saveAccountWatchlistSymbols(accountId, symbols.map(function (symbol) {
+      return symbol === originalSymbol ? next[0] : symbol;
+    }));
+  }
+
+  function addSymbolToPreferredWatchlist(symbol) {
+    var account = activeWatchAccount();
+    return account ? addAccountWatchSymbol(accountIdOf(account), symbol) : addWatchSymbol(symbol);
+  }
+
   function loadServerSettings() {
     if (isStaticPreviewHost()) {
       return loadStaticBuildConfig().then(function (payload) {
@@ -1368,7 +1503,10 @@
     return sendJson("/api/settings", "PUT", { settings: serverSettingsPayload() })
       .then(function (payload) {
         applyServerSettings(payload);
-        return loadNotificationSchedules();
+        return loadNotificationSchedules()
+          .catch(function (error) {
+            state.messageSchedulesError = error.message || "메시지 스케줄을 다시 읽지 못했습니다.";
+          });
       });
   }
 
@@ -1708,8 +1846,9 @@
 
   function tossLensPath() {
     var params = new URLSearchParams();
-    var symbols = watchlistSymbols().join(",");
-    if (symbols) params.set("watchlistSymbols", symbols);
+    var symbols = allAccountWatchlistSymbols();
+    if (!symbols.length) symbols = watchlistSymbols();
+    if (symbols.length) params.set("watchlistSymbols", symbols.join(","));
     var query = params.toString();
     return "/api/flow-lens" + (query ? "?" + query : "");
   }
@@ -3951,9 +4090,14 @@
     if (state.activeTab === "watchlist") {
       return [
         '<section class="admin-grid watchlist-view">',
-        renderAccountWatchlistPanel({ full: true }),
-        renderWatchlistPanel(snapshot),
-        renderSymbolUniversePanel({ full: false }),
+        renderAccountWatchlistPanel({ full: true, editable: true }, snapshot),
+        '</section>'
+      ].join("");
+    }
+    if (state.activeTab === "symbols") {
+      return [
+        '<section class="admin-grid symbol-universe-view">',
+        renderSymbolUniversePanel({ full: true }),
         '</section>'
       ].join("");
     }
@@ -4092,6 +4236,42 @@
     return Array.isArray(account.watchlistSymbols)
       ? normalizeSymbols(account.watchlistSymbols.join(","))
       : normalizeSymbols(account.watchlistSymbols || "");
+  }
+
+  function accountIdOf(account) {
+    return String((account && (account.id || account.accountId)) || "").trim();
+  }
+
+  function accountById(id) {
+    var normalized = String(id || "").trim();
+    return (state.serviceAccounts || []).filter(function (account) {
+      return accountIdOf(account) === normalized;
+    })[0] || null;
+  }
+
+  function syncActiveWatchAccountId() {
+    var accounts = state.serviceAccounts || [];
+    if (!accounts.length) {
+      state.activeWatchAccountId = "";
+      return;
+    }
+    if (accountById(state.activeWatchAccountId)) return;
+    state.activeWatchAccountId = accountIdOf(accounts[0]);
+  }
+
+  function activeWatchAccount() {
+    syncActiveWatchAccountId();
+    return accountById(state.activeWatchAccountId);
+  }
+
+  function preferredWatchlistSymbols() {
+    var account = activeWatchAccount();
+    return account ? accountWatchlistSymbols(account) : watchlistSymbols();
+  }
+
+  function watchlistAccountLabel(account) {
+    account = account || activeWatchAccount();
+    return account ? String(account.label || account.id || "계정") : "기본 관심목록";
   }
 
   function allAccountWatchlistSymbols() {
@@ -4242,31 +4422,59 @@
     return '<span class="status-pill ' + (ready ? "live" : "demo") + '">' + escapeHtml(ready ? "연결 완료" : "설정 확인") + '</span>';
   }
 
-  function renderAccountWatchlistPanel(options) {
+  function renderAccountWatchlistPanel(options, snapshot) {
     options = options || {};
     var accounts = state.serviceAccounts || [];
     var merged = allAccountWatchlistSymbols();
+    var activeAccount = activeWatchAccount();
+    var editable = Boolean(options.editable);
     var classes = "panel account-watchlist-panel" + (options.full ? " account-watchlist-wide" : "");
     return [
       '<article class="' + classes + '">',
       '<div class="panel-head">',
       '<div>',
       '<p class="label">Account Watchlist</p>',
-      '<h2>계정별 관심 종목</h2>',
+      '<h2>' + escapeHtml(editable ? "계정별 관심 종목 등록" : "계정별 관심 종목") + '</h2>',
       '</div>',
       '<span class="metric">' + escapeHtml(merged.length) + '</span>',
       '</div>',
-      '<div class="watch-account-list">',
-      accounts.length ? accounts.map(renderAccountWatchlistRow).join("") : '<p class="subtle">계정 DB를 읽으면 계정별 관심 종목이 여기에 표시됩니다.</p>',
-      '</div>',
+      editable ? renderAccountWatchlistWorkbench(accounts, activeAccount, snapshot) : [
+        '<div class="watch-account-list">',
+        accounts.length ? accounts.map(function (account) {
+          return renderAccountWatchlistRow(account, { selectable: false });
+        }).join("") : '<p class="subtle">계정 DB를 읽으면 계정별 관심 종목이 여기에 표시됩니다.</p>',
+        '</div>'
+      ].join(""),
       '</article>'
     ].join("");
   }
 
-  function renderAccountWatchlistRow(account) {
-    var symbols = accountWatchlistSymbols(account);
+  function renderAccountWatchlistWorkbench(accounts, activeAccount, snapshot) {
     return [
-      '<div class="watch-account-row">',
+      '<div class="account-watchlist-workbench">',
+      '<div class="watch-account-rail">',
+      '<div class="account-column-head"><strong>계정 선택</strong><span>관심 종목은 선택한 계정에 저장됩니다.</span></div>',
+      state.serviceAccountsLoading ? '<p class="subtle">계정 DB를 읽는 중입니다.</p>' : '',
+      state.serviceAccountsError ? '<p class="form-error">' + escapeHtml(state.serviceAccountsError) + '</p>' : '',
+      accounts.length ? accounts.map(function (account) {
+        return renderAccountWatchlistRow(account, { selectable: true });
+      }).join("") : '<p class="subtle">계정 탭에서 먼저 계정을 등록하세요.</p>',
+      '</div>',
+      renderAccountWatchlistEditor(activeAccount, snapshot),
+      '</div>'
+    ].join("");
+  }
+
+  function renderAccountWatchlistRow(account, options) {
+    options = options || {};
+    var symbols = accountWatchlistSymbols(account);
+    var active = accountIdOf(account) === state.activeWatchAccountId;
+    var tag = options.selectable ? "button" : "div";
+    var attrs = options.selectable
+      ? ' type="button" data-watch-account-select="' + escapeHtml(accountIdOf(account)) + '"'
+      : "";
+    return [
+      '<' + tag + ' class="watch-account-row' + (options.selectable ? " selectable" : "") + (active ? " active" : "") + '"' + attrs + '>',
       '<div>',
       '<strong>' + escapeHtml(account.label || account.id || "-") + '</strong>',
       '<span>' + escapeHtml(account.id || "-") + ' · ' + escapeHtml(account.enabled === false ? "중지" : "사용") + '</span>',
@@ -4275,6 +4483,98 @@
       symbols.length ? symbols.map(function (symbol) {
         return '<span class="chip">' + escapeHtml(symbol) + '</span>';
       }).join("") : '<span class="subtle">저장된 관심 종목 없음</span>',
+      '</div>',
+      options.selectable ? '<span class="watch-account-action">' + escapeHtml(active ? "선택됨" : "관리") + '</span>' : '',
+      '</' + tag + '>'
+    ].join("");
+  }
+
+  function accountWatchlistQuoteLookup(snapshot) {
+    var toss = snapshot && snapshot.toss ? snapshot.toss : {};
+    var lookup = {};
+    (toss.watchlist || []).forEach(function (item) {
+      lookup[String(item.symbol || "").toUpperCase()] = item;
+    });
+    ((toss.positions || []) || []).forEach(function (item) {
+      var symbol = String(item.symbol || "").toUpperCase();
+      if (!symbol) return;
+      lookup[symbol] = Object.assign({}, item, {
+        source: item.source || "holding",
+        quoteStatus: "보유 종목으로 분류됨"
+      });
+    });
+    return lookup;
+  }
+
+  function renderAccountWatchlistEditor(account, snapshot) {
+    if (!account) {
+      return [
+        '<div class="account-watchlist-editor empty">',
+        '<div class="settings-note">',
+        '<strong>계정이 필요합니다</strong>',
+        '<p>관심 종목은 계정별로 저장됩니다. 계정 탭에서 계정을 만든 뒤 이 화면에서 종목을 등록하세요.</p>',
+        '</div>',
+        '</div>'
+      ].join("");
+    }
+    var accountId = accountIdOf(account);
+    var symbols = accountWatchlistSymbols(account);
+    var lookup = accountWatchlistQuoteLookup(snapshot);
+    var locked = isStaticPreviewHost() || state.serverSettingsLocked || state.watchlistSavingAccountId === accountId;
+    return [
+      '<div class="account-watchlist-editor">',
+      '<div class="account-watchlist-editor-head">',
+      '<div>',
+      '<strong>' + escapeHtml(watchlistAccountLabel(account)) + '</strong>',
+      '<span>' + escapeHtml(accountId + " · 관심 " + symbols.length + "개 · " + (account.enabled === false ? "중지" : "사용")) + '</span>',
+      '</div>',
+      '<button class="mini-button" type="button" data-account-edit="' + escapeHtml(accountId) + '">계정 설정</button>',
+      '</div>',
+      '<div class="watch-editor account-watch-editor">',
+      '<form class="watch-add-form" data-watch-add-form data-watch-account-id="' + escapeHtml(accountId) + '">',
+      '<input name="symbol" data-watch-symbol-input placeholder="종목명, 티커, 코드 검색" value="' + escapeHtml(state.watchSuggestQuery || "") + '" autocomplete="off"' + (locked ? " disabled" : "") + ' />',
+      '<button class="text-button primary"' + (locked ? " disabled" : "") + '>' + escapeHtml(state.watchlistSavingAccountId === accountId ? "저장 중" : "추가") + '</button>',
+      '</form>',
+      '<div class="watch-suggest-box" data-watch-suggest-list data-watch-account-id="' + escapeHtml(accountId) + '">' + renderWatchSuggestList() + '</div>',
+      '<p class="subtle">검색 결과는 전체 종목 DB와 현재 시세 스냅샷을 함께 사용합니다. 저장하면 이 계정의 알림·모니터링 기준으로 쓰입니다.</p>',
+      state.watchlistError ? '<p class="form-error">' + escapeHtml(state.watchlistError) + '</p>' : '',
+      '</div>',
+      '<div class="account-watch-symbol-list">',
+      symbols.length ? symbols.map(function (symbol) {
+        return renderAccountWatchSymbolRow(account, symbol, lookup[symbol] || clientKnownStockInfo(symbol), locked);
+      }).join("") : '<p class="subtle">이 계정에 등록된 관심 종목이 없습니다.</p>',
+      '</div>',
+      '</div>'
+    ].join("");
+  }
+
+  function renderAccountWatchSymbolRow(account, symbol, item, locked) {
+    var accountId = accountIdOf(account);
+    var original = String(symbol || "").toUpperCase();
+    if (state.editingWatchAccountId === accountId && state.editingWatchSymbol === original) {
+      return [
+        '<form class="account-watch-edit-row" data-account-watch-edit-form="' + escapeHtml(original) + '" data-watch-account-id="' + escapeHtml(accountId) + '">',
+        '<input name="symbol" value="' + escapeHtml(original) + '" autocomplete="off" />',
+        '<button class="text-button primary">저장</button>',
+        '<button class="text-button" type="button" data-account-watch-cancel>취소</button>',
+        '</form>'
+      ].join("");
+    }
+    var merged = Object.assign({}, item || {}, { symbol: original });
+    return [
+      '<div class="account-watch-symbol-row">',
+      '<div class="account-watch-symbol-main">',
+      '<strong>' + escapeHtml(merged.name || original) + '</strong>',
+      '<span>' + escapeHtml(original + " · " + marketLabel(merged.market || "-") + " · " + (merged.sector || "-")) + '</span>',
+      renderWatchAlertMeta(merged),
+      '</div>',
+      '<div class="account-watch-symbol-side">',
+      '<strong>' + escapeHtml(merged.currentPrice ? formatCurrency(merged.currentPrice, merged.currency) : "시세 대기") + '</strong>',
+      '<span>' + escapeHtml(merged.changeRate == null ? merged.quoteStatus || "토스 시세 연결 후 표시" : signedPct(merged.changeRate)) + '</span>',
+      '<div class="row-actions">',
+      '<button class="mini-button" data-account-watch-edit="' + escapeHtml(original) + '" data-watch-account-id="' + escapeHtml(accountId) + '"' + (locked ? " disabled" : "") + '>수정</button>',
+      '<button class="mini-button danger" data-account-watch-remove="' + escapeHtml(original) + '" data-watch-account-id="' + escapeHtml(accountId) + '"' + (locked ? " disabled" : "") + '>삭제</button>',
+      '</div>',
       '</div>',
       '</div>'
     ].join("");
@@ -4459,9 +4759,20 @@
       renderSettingField("notifyIntervalMinutes", "기본 알림 주기(분)", "number", "10"),
       renderSettingField("notifyLinkUrl", "알림 링크 URL", "url", "http://127.0.0.1:3000?tab=notifications"),
       '</div>',
+      '<div class="template-variable-row admin-template-variable-row">',
+      notificationTemplateVariables().map(function (name) {
+        return '<span class="chip">{' + escapeHtml(name) + '}</span>';
+      }).join(""),
+      '</div>',
       '<div class="admin-message-list">',
       alertRuleCatalog.map(function (rule) {
-        return renderAdminMessageRow(rule, enabledAlertRule(rules, rule.key), cadences[rule.key], messageScheduleByType(rule.key));
+        return renderAdminMessageRow(
+          rule,
+          enabledAlertRule(rules, rule.key),
+          cadences[rule.key],
+          messageScheduleByType(rule.key),
+          notificationTemplateForEdit(rule.key)
+        );
       }).join(""),
       '</div>',
       renderNotificationTemplatePanel(),
@@ -4478,14 +4789,15 @@
     ].join("");
   }
 
-  function renderAdminMessageRow(rule, checked, cadence, schedule) {
+  function renderAdminMessageRow(rule, checked, cadence, schedule, template) {
+    var ruleId = "alert-rule-" + String(rule.key || "").replace(/[^A-Za-z0-9_-]/g, "-");
     return [
-      '<label class="admin-message-row">',
-      '<input type="checkbox" data-alert-rule="' + escapeHtml(rule.key) + '"' + (checked ? " checked" : "") + ' />',
-      '<span class="admin-message-main">',
+      '<div class="admin-message-row">',
+      '<input id="' + escapeHtml(ruleId) + '" type="checkbox" data-alert-rule="' + escapeHtml(rule.key) + '"' + (checked ? " checked" : "") + ' />',
+      '<label class="admin-message-main" for="' + escapeHtml(ruleId) + '">',
       '<strong>' + escapeHtml(rule.label) + '</strong>',
       '<em>' + escapeHtml(rule.group + " · " + rule.description) + '</em>',
-      '</span>',
+      '</label>',
       '<span class="admin-cadence-field">',
       '<input data-alert-cadence="' + escapeHtml(rule.key) + '" type="number" min="10" step="10" value="' + escapeHtml(cadence) + '" />',
       '<b>분</b>',
@@ -4493,7 +4805,8 @@
       '<div class="admin-message-schedule">',
       renderMessageScheduleSummary(schedule),
       '</div>',
-      '</label>'
+      renderNotificationTemplateRow(template, { inline: true }),
+      '</div>'
     ].join("");
   }
 
@@ -4563,11 +4876,14 @@
   }
 
   function renderNotificationTemplatePanel() {
-    var templates = state.notificationTemplates.length ? state.notificationTemplates : defaultNotificationTemplates();
-    var variables = state.notificationTemplateVariables.length ? state.notificationTemplateVariables : ["title", "readableMessage", "dataLines", "triggerSummary", "lines", "rawLines", "body", "messageType", "symbol", "severity"];
+    var templates = (state.notificationTemplates.length ? state.notificationTemplates : defaultNotificationTemplates()).filter(function (item) {
+      return !isAlertTemplateType(item.messageType);
+    });
+    if (!templates.length) return "";
+    var variables = notificationTemplateVariables();
     return [
       '<div class="model-section notification-template-section">',
-      '<div class="flow-title"><div><strong>메시지 템플릿</strong><span>타입별 포맷입니다. 템플릿만 바꾸면 다음 발송부터 새 포맷이 적용됩니다.</span></div></div>',
+      '<div class="flow-title"><div><strong>시스템 템플릿</strong><span>알림 타입이 아닌 기본, 모델 리뷰, 작업 완료 메시지 포맷입니다.</span></div></div>',
       state.notificationTemplatesError ? '<p class="form-error">' + escapeHtml(state.notificationTemplatesError) + '</p>' : '',
       state.notificationTemplatesSaved ? '<p class="lab-message">알림 템플릿을 저장했습니다.</p>' : '',
       '<div class="template-variable-row">',
@@ -4582,20 +4898,19 @@
     ].join("");
   }
 
-  function renderNotificationTemplateRow(item) {
+  function renderNotificationTemplateRow(item, options) {
+    options = options || {};
     var disabled = state.serverSettingsLocked || isStaticPreviewHost();
     var preview = renderNotificationTemplatePreviewText(item.template || "", item.messageType);
     var canTest = canSendNotificationTemplateTest(item.messageType);
     var sending = state.notificationTemplateSending === item.messageType;
     var schedule = messageScheduleByType(item.messageType);
     return [
-      '<div class="notification-template-row">',
+      '<div class="notification-template-row' + (options.inline ? " admin-message-template" : "") + '">',
       '<div class="notification-template-meta">',
-      '<strong>' + escapeHtml(notificationTemplateLabel(item.messageType)) + '</strong>',
-      '<span>' + escapeHtml(item.messageType || "-") + (item.description ? " · " + escapeHtml(item.description) : "") + '</span>',
-      '<div class="template-schedule-compact">',
-      renderMessageScheduleSummary(schedule),
-      '</div>',
+      '<strong>' + escapeHtml(options.inline ? "템플릿" : notificationTemplateLabel(item.messageType)) + '</strong>',
+      '<span>' + escapeHtml(item.messageType || "-") + (item.description && !options.inline ? " · " + escapeHtml(item.description) : "") + '</span>',
+      options.inline ? '' : '<div class="template-schedule-compact">' + renderMessageScheduleSummary(schedule) + '</div>',
       '</div>',
       '<textarea data-notification-template="' + escapeHtml(item.messageType || "") + '" rows="3"' + (disabled ? " disabled" : "") + '>' + escapeHtml(item.template || "") + '</textarea>',
       '<div class="settings-actions">',
@@ -6099,6 +6414,7 @@
       full ? '<label><span>표시 수</span><select name="limit" data-symbol-limit>' + [80, 200, 500].map(function (value) {
         return '<option value="' + value + '"' + (Number(state.symbolUniverseLimit || 80) === value ? " selected" : "") + '>' + value + '개</option>';
       }).join("") + '</select></label>' : '',
+      full ? '<label><span>추가 대상</span><select name="watchAccount" data-symbol-add-account>' + renderWatchAccountSelectOptions() + '</select></label>' : '',
       '<button class="text-button primary">검색</button>',
       '<button class="text-button" type="button" data-action="refresh-symbol-universe">' + escapeHtml(state.symbolUniverseRefreshing ? "갱신 중" : "목록 갱신") + '</button>',
       '</form>',
@@ -6133,9 +6449,19 @@
     ].join("");
   }
 
+  function renderWatchAccountSelectOptions() {
+    var accounts = state.serviceAccounts || [];
+    return accounts.length ? accounts.map(function (account) {
+      var id = accountIdOf(account);
+      return '<option value="' + escapeHtml(id) + '"' + (id === state.activeWatchAccountId ? " selected" : "") + '>' + escapeHtml(account.label || id) + '</option>';
+    }).join("") : '<option value="">기본 관심목록</option>';
+  }
+
   function renderSymbolUniverseRow(item) {
     var symbol = String(item.symbol || "").toUpperCase();
-    var already = watchlistSymbols().indexOf(symbol) >= 0;
+    var account = activeWatchAccount();
+    var already = preferredWatchlistSymbols().indexOf(symbol) >= 0;
+    var targetText = account ? watchlistAccountLabel(account) : "기본 관심목록";
     return [
       '<div class="symbol-result-row">',
       '<div class="symbol-result-main">',
@@ -6153,7 +6479,8 @@
       '</div>',
       '<div class="symbol-result-side">',
       '<strong>' + escapeHtml(item.sector || "섹터 미분류") + '</strong>',
-      '<button class="mini-button" data-symbol-add-watch="' + escapeHtml(symbol) + '"' + (already ? " disabled" : "") + '>' + (already ? "관심 등록됨" : "관심 추가") + '</button>',
+      '<span>' + escapeHtml(targetText) + '</span>',
+      '<button class="mini-button" data-symbol-add-watch="' + escapeHtml(symbol) + '"' + (already ? " disabled" : "") + '>' + (already ? "등록됨" : "관심 추가") + '</button>',
       '</div>',
       '</div>'
     ].join("");
@@ -6466,6 +6793,24 @@
     ].join("");
   }
 
+  function settingsSaveDisabledAttr() {
+    return state.serverSettingsLocked || state.settingsSaving ? ' disabled' : '';
+  }
+
+  function settingsSaveButtonLabel() {
+    return state.settingsSaving ? "저장 중" : "설정 저장";
+  }
+
+  function settingsStatusLabel() {
+    if (state.settingsSaving) return "DB 저장 중";
+    return state.settingsSaved ? "DB 저장됨" : "수정 중";
+  }
+
+  function settingsStatusTone() {
+    if (state.settingsSaving) return "caution";
+    return state.settingsSaved ? "watch" : "hold";
+  }
+
   function renderSettingsPage() {
     return [
       '<section class="admin-grid settings-view">',
@@ -6488,8 +6833,8 @@
       '</div>',
       '<div class="settings-actions">',
       '<button class="text-button" type="button" data-action="settings-back">이전</button>',
-      '<button class="text-button primary" type="button" data-action="save-settings"' + (state.serverSettingsLocked ? ' disabled' : '') + '>설정 저장</button>',
-      '<span class="tone-chip ' + (state.settingsSaved ? "watch" : "hold") + '">' + (state.settingsSaved ? "DB 저장됨" : "수정 중") + '</span>',
+      '<button class="text-button primary" type="button" data-action="save-settings"' + settingsSaveDisabledAttr() + '>' + settingsSaveButtonLabel() + '</button>',
+      '<span class="tone-chip ' + settingsStatusTone() + '">' + settingsStatusLabel() + '</span>',
       '</div>',
       '</div>',
       '<div class="settings-body">',
@@ -6499,7 +6844,8 @@
       '<strong>앱 표시와 외부 연결 설정</strong>',
       '<span>계정 연결은 계정 탭에서, 매매 판단 기준은 모델링 탭에서 관리합니다.</span>',
       '</div>',
-      '<span class="tone-chip ' + (state.settingsSaved ? "watch" : "hold") + '">' + (state.settingsSaved ? "DB 저장됨" : "수정 중") + '</span>',
+      '<span class="tone-chip ' + settingsStatusTone() + '">' + settingsStatusLabel() + '</span>',
+      state.settingsSaving ? '<p class="lab-message">설정을 로컬 SQLite DB에 저장하는 중입니다.</p>' : '',
       state.serverSettingsError ? '<p class="form-error">' + escapeHtml(state.serverSettingsError) + '</p>' : '',
       state.serverSettingsLocked ? '<p class="form-error">공유 모드에서는 서버 설정 저장이 잠겨 있습니다.</p>' : '',
       '</div>',
@@ -6595,7 +6941,7 @@
       '<article class="panel settings-save-panel">',
       '<div class="settings-body">',
       '<div class="settings-actions settings-page-actions">',
-      '<button class="text-button primary" type="button" data-action="save-settings"' + (state.serverSettingsLocked ? ' disabled' : '') + '>설정 저장</button>',
+      '<button class="text-button primary" type="button" data-action="save-settings"' + settingsSaveDisabledAttr() + '>' + settingsSaveButtonLabel() + '</button>',
       '<button class="text-button" type="button" data-action="toggle-secrets">' + (state.showSecrets ? "secret 숨기기" : "secret 보기") + '</button>',
       '</div>',
       '</div>',
@@ -6713,6 +7059,18 @@
     Array.prototype.slice.call(app.querySelectorAll("[data-account-remove]")).forEach(function (button) {
       button.addEventListener("click", function () {
         removeServiceAccount(button.getAttribute("data-account-remove"));
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-watch-account-select]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        state.activeWatchAccountId = button.getAttribute("data-watch-account-select") || "";
+        state.editingWatchAccountId = "";
+        state.editingWatchSymbol = "";
+        state.watchlistError = "";
+        state.watchSuggestQuery = "";
+        state.watchSuggestItems = [];
+        render();
       });
     });
 
@@ -6860,7 +7218,10 @@
 
     Array.prototype.slice.call(app.querySelectorAll('[data-action="save-settings"]')).forEach(function (saveSettings) {
       saveSettings.addEventListener("click", function () {
-        saveSettings.disabled = true;
+        if (state.settingsSaving) return;
+        state.settingsSaving = true;
+        state.serverSettingsError = "";
+        render();
         saveSettingsToServer()
           .then(function () {
             state.settingsSaved = true;
@@ -6870,6 +7231,9 @@
             state.serverSettingsError = error.message || "설정을 저장하지 못했습니다.";
             state.settingsSaved = false;
             showSnackbar(state.serverSettingsError, "danger");
+          })
+          .finally(function () {
+            state.settingsSaving = false;
             render();
           });
       });
@@ -6892,7 +7256,12 @@
       watchAddForm.addEventListener("submit", function (event) {
         event.preventDefault();
         var input = watchAddForm.querySelector('input[name="symbol"]');
-        addWatchSymbol(input ? input.value : "");
+        var accountId = watchAddForm.getAttribute("data-watch-account-id") || "";
+        if (accountId) {
+          addAccountWatchSymbol(accountId, input ? input.value : "");
+        } else {
+          addWatchSymbol(input ? input.value : "");
+        }
       });
     }
 
@@ -6905,7 +7274,12 @@
         }
         if (!target || target === watchSuggestList) return;
         event.preventDefault();
-        addWatchSymbol(target.getAttribute("data-watch-suggest-symbol"));
+        var accountId = watchSuggestList.getAttribute("data-watch-account-id") || "";
+        if (accountId) {
+          addAccountWatchSymbol(accountId, target.getAttribute("data-watch-suggest-symbol"));
+        } else {
+          addWatchSymbol(target.getAttribute("data-watch-suggest-symbol"));
+        }
       });
     }
 
@@ -6931,6 +7305,14 @@
       });
     }
 
+    var symbolAddAccount = app.querySelector("[data-symbol-add-account]");
+    if (symbolAddAccount) {
+      symbolAddAccount.addEventListener("change", function () {
+        state.activeWatchAccountId = symbolAddAccount.value || "";
+        render();
+      });
+    }
+
     Array.prototype.slice.call(app.querySelectorAll("[data-symbol-page]")).forEach(function (button) {
       button.addEventListener("click", function () {
         var direction = button.getAttribute("data-symbol-page");
@@ -6947,9 +7329,49 @@
     Array.prototype.slice.call(app.querySelectorAll("[data-symbol-add-watch]")).forEach(function (button) {
       button.addEventListener("click", function () {
         var symbol = String(button.getAttribute("data-symbol-add-watch") || "").toUpperCase();
-        addWatchSymbol(symbol);
+        addSymbolToPreferredWatchlist(symbol);
       });
     });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-account-watch-edit]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        state.editingWatchAccountId = button.getAttribute("data-watch-account-id") || "";
+        state.editingWatchSymbol = String(button.getAttribute("data-account-watch-edit") || "").toUpperCase();
+        state.watchlistError = "";
+        render();
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-account-watch-remove]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        removeAccountWatchSymbol(
+          button.getAttribute("data-watch-account-id") || "",
+          button.getAttribute("data-account-watch-remove") || ""
+        );
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-account-watch-edit-form]")).forEach(function (form) {
+      form.addEventListener("submit", function (event) {
+        event.preventDefault();
+        var input = form.querySelector('input[name="symbol"]');
+        replaceAccountWatchSymbol(
+          form.getAttribute("data-watch-account-id") || "",
+          form.getAttribute("data-account-watch-edit-form") || "",
+          input ? input.value : ""
+        );
+      });
+    });
+
+    var accountWatchCancel = app.querySelector("[data-account-watch-cancel]");
+    if (accountWatchCancel) {
+      accountWatchCancel.addEventListener("click", function () {
+        state.editingWatchAccountId = "";
+        state.editingWatchSymbol = "";
+        state.watchlistError = "";
+        render();
+      });
+    }
 
     Array.prototype.slice.call(app.querySelectorAll("[data-watch-edit]")).forEach(function (button) {
       button.addEventListener("click", function () {

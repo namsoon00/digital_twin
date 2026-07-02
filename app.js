@@ -82,7 +82,6 @@
       "modelSell=1",
       "modelScoreGap=1",
       "modelVersionDrift=1",
-      "flowTradeStrength=1",
       "flowVolume=1",
       "flowBuyShare=1",
       "flowSellShare=1",
@@ -125,7 +124,6 @@
       "modelSell=10",
       "modelScoreGap=10",
       "modelVersionDrift=10",
-      "flowTradeStrength=10",
       "flowVolume=10",
       "flowBuyShare=10",
       "flowSellShare=10",
@@ -164,8 +162,6 @@
       "modelBuyScore=74",
       "modelSellScore=72",
       "modelScoreGap=15",
-      "tradeStrengthHigh=120",
-      "tradeStrengthLow=80",
       "volumeRatioHigh=2",
       "buyShareHigh=65",
       "sellShareHigh=65",
@@ -267,7 +263,6 @@
     { key: "modelSell", group: "모델", label: "내 모델 매도", description: "내 모델 매도 점수가 기준을 넘을 때" },
     { key: "modelScoreGap", group: "모델", label: "모델 방향성", description: "매수와 매도 점수 차이가 크게 벌어질 때" },
     { key: "modelVersionDrift", group: "모델", label: "모델 버전 변화", description: "저장한 실험 버전과 현재 모델 점수가 크게 달라질 때" },
-    { key: "flowTradeStrength", group: "수급", label: "체결강도", description: "체결강도가 강세 또는 약세 임계값을 벗어날 때" },
     { key: "flowVolume", group: "수급", label: "거래량 급증", description: "거래량 배율이 설정값 이상으로 커질 때" },
     { key: "flowBuyShare", group: "수급", label: "매수 체결 우위", description: "매수 체결 비중이 높아질 때" },
     { key: "flowSellShare", group: "수급", label: "매도 체결 우위", description: "매도 체결 비중이 높아질 때" },
@@ -306,8 +301,6 @@
     { key: "modelBuyScore", label: "모델 매수 점수", unit: "점", step: "1" },
     { key: "modelSellScore", label: "모델 매도 점수", unit: "점", step: "1" },
     { key: "modelScoreGap", label: "모델 점수 차이", unit: "점", step: "1" },
-    { key: "tradeStrengthHigh", label: "체결강도 상단", unit: "", step: "1" },
-    { key: "tradeStrengthLow", label: "체결강도 하단", unit: "", step: "1" },
     { key: "volumeRatioHigh", label: "거래량 배율", unit: "x", step: "0.1" },
     { key: "buyShareHigh", label: "매수 체결 비중", unit: "%", step: "1" },
     { key: "sellShareHigh", label: "매도 체결 비중", unit: "%", step: "1" },
@@ -962,7 +955,7 @@
         title: "삼성전자 매수 후보",
         symbol: "005930",
         severity: "WATCH",
-        lines: ["모델 매수 점수 78점", "적정가 대비 -12.4%", "체결강도와 거래량이 기준 이상"]
+        lines: ["모델 매수 점수 78점", "적정가 대비 -12.4%", "거래량과 이동평균이 기준 이상"]
       },
       modelSell: {
         title: "엔비디아 분할매도 검토",
@@ -1097,15 +1090,22 @@
     var triggerSummary = rule.description ? rule.description : "조건이 실제 데이터에서 충족될 때 보냅니다.";
     var triggerLine = triggerSummary ? "발생 조건: " + triggerSummary : "";
     var dataLines = lines;
+    var headline = severityLabel && messageTypeLabel
+      ? "[" + severityLabel + "] " + messageTypeLabel
+      : messageTypeLabel || (severityLabel ? "[" + severityLabel + "] " + sample.title : sample.title);
+    var targetValue = [sample.title, sample.symbol && sample.symbol !== sample.title ? sample.symbol : ""]
+      .filter(Boolean)
+      .join(" / ");
+    var targetLine = targetValue ? "대상: " + targetValue : "";
+    var triggerBlock = triggerSummary ? "조건\n- " + triggerSummary : "";
+    var dataBlock = dataLines ? "데이터\n" + dataLines : "";
     var readableMessage = [
-      sample.title,
-      symbolLine,
-      typeLine,
-      severityLine,
-      triggerLine,
-      dataLines ? "" : "",
-      dataLines ? "실제 데이터" : "",
-      dataLines
+      headline,
+      targetLine,
+      "",
+      triggerBlock,
+      dataBlock ? "" : "",
+      dataBlock
     ].filter(function (line, index, list) {
       if (line === "") return index > 0 && list[index - 1] !== "";
       return String(line || "").trim();
@@ -1121,6 +1121,10 @@
       messageType: type,
       messageTypeLabel: messageTypeLabel,
       symbol: sample.symbol || "",
+      headline: headline,
+      targetLine: targetLine,
+      triggerBlock: triggerBlock,
+      dataBlock: dataBlock,
       symbolLine: symbolLine,
       severity: sample.severity || "INFO",
       severityLabel: severityLabel,
@@ -2901,10 +2905,10 @@
 
   function tradeSignalReasons(signal, scores, valuation, hasData) {
     if (!hasData) {
-      return ["설정에서 체결강도, 거래량 배율, 매수/매도 체결량을 입력하면 신호를 계산합니다."];
+      return ["설정에서 거래량 배율, 매수/매도 체결량, 이동평균을 입력하면 신호를 계산합니다."];
     }
     var reasons = [
-      "체결강도: " + formatSignalNumber(signal.tradeStrength, "") + ", 거래량: " + formatSignalRatio(signal.volumeRatio) + "을 함께 봅니다.",
+      "거래량: " + formatSignalRatio(signal.volumeRatio) + "을 먼저 보고 이동평균과 가격 변화를 함께 확인합니다.",
       "매수 체결 비중은 " + scores.buyShare + "%이고 호가 불균형은 " + formatSignalNumber(signal.bidAskImbalance, "%") + "입니다."
     ];
     if (signal.ma20 || signal.ma60) {
@@ -2961,7 +2965,7 @@
         tone: decision.tone,
         priority: decision.priority,
         reasons: tradeSignalReasons(signal, scores, valuation, hasData),
-        triggers: ["체결강도", "거래량", "이동평균", "투자자 수급", "호가", "가격변화"]
+        triggers: ["거래량", "이동평균", "투자자 수급", "호가", "가격변화"]
       };
     }).sort(function (a, b) {
       if (a.priority !== b.priority) return a.priority - b.priority;
@@ -3013,7 +3017,7 @@
     var valuation = item.valuation || {};
     var notes = [];
     if (!item.hasData) {
-      notes.push("체결강도와 거래량 입력이 없어 수급 판단은 대기 상태입니다.");
+      notes.push("거래량과 이동평균 입력이 없어 수급 판단은 대기 상태입니다.");
     } else if (item.buyScore > item.sellScore + 10) {
       notes.push("매수 압력이 매도 압력보다 뚜렷해 추가 관찰 우선입니다.");
     } else if (item.sellScore > item.buyScore + 10) {
@@ -3305,7 +3309,7 @@
     return [
       {
         key: "execution",
-        label: "체결강도",
+        label: "체결량/호가",
         neutral: function () {
           return { tradeStrength: 100, buyVolume: 50, sellVolume: 50, bidAskImbalance: 0 };
         }
@@ -3357,10 +3361,10 @@
     return [
       {
         key: "execution",
-        label: "체결강도",
+        label: "체결 방향",
         buy: Number(variables.executionScore || 0) * 0.42 * flowWeight,
         sell: -Number(variables.executionScore || 0) * 0.38 * flowWeight,
-        description: "100을 중립으로 둔 체결 방향"
+        description: "실제 데이터가 연결될 때만 반영되는 체결 방향"
       },
       {
         key: "directionalVolume",
@@ -3713,24 +3717,11 @@
   function addFlowAlerts(alerts, rules, thresholds, item) {
     var signal = item.signal || {};
     if (!item.hasData) return;
-    var strength = Number(signal.tradeStrength || 0);
     var volumeRatio = Number(signal.volumeRatio || 0);
     var buyShare = Number(item.buyShare || 0);
     var sellShare = Math.max(0, 100 - buyShare);
     var imbalance = Number(signal.bidAskImbalance || 0);
     var priceChange = Number(signal.priceChangeRate || 0);
-    if (strength >= Number(thresholds.tradeStrengthHigh || 0) || strength <= Number(thresholds.tradeStrengthLow || 0)) {
-      addAlert(alerts, rules, {
-        rule: "flowTradeStrength",
-        severity: strength >= Number(thresholds.tradeStrengthHigh || 0) ? "watch" : "caution",
-        symbol: item.symbol,
-        title: item.name + " 체결강도 이탈",
-        message: strength >= Number(thresholds.tradeStrengthHigh || 0) ? "강한 매수 체결 흐름입니다." : "체결강도가 약해졌습니다.",
-        value: formatSignalNumber(strength, ""),
-        threshold: formatSignalNumber(strength >= Number(thresholds.tradeStrengthHigh || 0) ? thresholds.tradeStrengthHigh : thresholds.tradeStrengthLow, ""),
-        source: "수급"
-      });
-    }
     if (volumeRatio >= Number(thresholds.volumeRatioHigh || 0)) {
       addAlert(alerts, rules, {
         rule: "flowVolume",
@@ -5036,7 +5027,7 @@
       {
         label: "3. 수급",
         value: "방향성 거래량",
-        description: "거래량은 체결강도, 매수비중, 추세와 같은 방향일 때만 강하게 반영합니다."
+        description: "거래량은 매수비중, 가격 변화, 추세와 같은 방향일 때만 강하게 반영합니다."
       },
       {
         label: "4. 행동",
@@ -5046,7 +5037,7 @@
     ];
     var steps = [
       ["기본값으로 보기", "처음에는 수식을 바꾸지 말고 모델이 어떤 종목에 신호를 내는지 확인합니다."],
-      ["기여도 확인", "점수보다 먼저 체결강도, 방향성 거래량, 이동평균, 투자자 수급 중 무엇이 라벨을 움직였는지 봅니다."],
+      ["기여도 확인", "점수보다 먼저 거래량, 이동평균, 가격 변화 중 무엇이 라벨을 움직였는지 봅니다."],
       ["가중치 조정", "가치, 수급, 리스크 중 더 믿는 축만 0.1~0.5씩 천천히 바꿉니다."],
       ["판단 기준 조정", "신호가 너무 많으면 기준 점수를 올리고, 너무 적으면 조금 낮춥니다."]
     ];
@@ -5095,10 +5086,10 @@
 
   function tradeStrengthBeginnerText(item, variables) {
     var strength = Number(variables.tradeStrength || 0);
-    if (!strength) return "체결강도는 100을 중립으로 봅니다. 값이 들어오면 매수 체결과 매도 체결 중 어느 쪽이 강한지 설명합니다.";
+    if (!strength) return "이 항목은 현재 실제 데이터로 안정 제공되지 않아 기본값으로만 처리합니다.";
     var direction = strength >= 100 ? "매수 체결이 더 강한 편" : "매도 체결이 더 강한 편";
-    return item.name + "의 체결강도는 " + formatSignalNumber(strength, "")
-      + "입니다. 100보다 " + (strength >= 100 ? "높아서 " : "낮아서 ") + direction + "으로 봅니다.";
+    return item.name + "의 체결 방향 참고값은 " + formatSignalNumber(strength, "")
+      + "입니다. 실제 데이터가 연결될 때만 " + direction + "으로 참고합니다.";
   }
 
   function volumeBeginnerText(item, variables) {
@@ -5119,14 +5110,13 @@
     if (!item || !model) {
       return [
         ["가격", "보유 또는 관심 종목 데이터가 들어오면 현재가와 적정가 예시를 표시합니다."],
-        ["수급", "체결강도, 거래량, 매수비중, 이동평균을 쉬운 문장으로 풀어 표시합니다."],
+        ["수급", "거래량, 매수비중, 이동평균을 쉬운 문장으로 풀어 표시합니다."],
         ["판단", "매수 점수와 매도 점수를 비교해 왜 해당 라벨이 나왔는지 설명합니다."]
       ];
     }
     var variables = model.variables || modelFormulaVariables(item);
     return [
       ["가격", valuationBeginnerText(item)],
-      ["체결강도", tradeStrengthBeginnerText(item, variables)],
       ["거래량", volumeBeginnerText(item, variables)],
       ["종합", decisionBeginnerText(item, model)]
     ];
@@ -5139,7 +5129,6 @@
     var rows = beginnerModelRows(example, model);
     var glossary = [
       ["적정가", "내가 계산한 합리적인 기준 가격입니다. 현재가가 적정가보다 낮으면 싸게 보는 근거가 됩니다."],
-      ["체결강도", "100을 기준으로 실제 거래가 매수 쪽에 붙는지, 매도 쪽에 붙는지 보는 값입니다."],
       ["거래량", "평소보다 사람들이 많이 사고파는지 보는 값입니다. 방향이 없으면 신호로 약하게 봅니다."],
       ["이동평균", "20일선과 60일선으로 가격의 큰 방향을 확인하는 값입니다."],
       ["투자자 수급", "외국인, 기관, 개인 중 누가 순매수하는지 보는 값입니다."]
@@ -5156,7 +5145,7 @@
       '<div class="settings-body">',
       '<div class="settings-note model-settings-note">',
       '<strong>읽는 순서</strong>',
-      '<p>먼저 현재가가 적정가보다 싼지 비싼지 보고, 다음으로 체결강도와 거래량이 같은 방향인지 확인합니다. 마지막으로 매수 점수와 매도 점수 중 어느 쪽이 높은지 봅니다.</p>',
+      '<p>먼저 현재가가 적정가보다 싼지 비싼지 보고, 다음으로 거래량과 이동평균이 같은 방향인지 확인합니다. 마지막으로 매수 점수와 매도 점수 중 어느 쪽이 높은지 봅니다.</p>',
       '</div>',
       '<div class="variable-grid">',
       rows.map(function (row) {
@@ -5186,7 +5175,7 @@
   function modelWeightCatalog() {
     return [
       { key: "valuationWeight", label: "적정가 영향", description: "현재가가 적정가보다 싼지 비싼지를 얼마나 크게 볼지", step: "0.05", unit: "배" },
-      { key: "flowWeight", label: "수급 영향", description: "체결강도, 거래량, 매수비중을 얼마나 크게 볼지", step: "0.05", unit: "배" },
+      { key: "flowWeight", label: "수급 영향", description: "거래량, 매수비중, 이동평균을 얼마나 크게 볼지", step: "0.05", unit: "배" },
       { key: "riskControlWeight", label: "리스크 영향", description: "리스크 점수가 높을 때 매수 점수를 낮추고 매도 점수를 높이는 정도", step: "0.05", unit: "배" },
       { key: "thesisWeight", label: "내 판단 영향", description: "종목별로 입력한 내 매수 점수를 얼마나 반영할지", step: "0.05", unit: "배" },
       { key: "confidenceWeight", label: "확신 영향", description: "확신 점수가 높을 때 매수 판단을 얼마나 보강할지", step: "0.05", unit: "배" },
@@ -5520,7 +5509,6 @@
       renderLabDraftControl(item.symbol, "positionSize", "비중 계획 %", draft.positionSize, "1"),
       '</div>',
       '<div class="signal-metric-grid compact">',
-      '<span>체결강도 <strong>' + escapeHtml(formatSignalNumber(signal.tradeStrength, "")) + '</strong></span>',
       '<span>거래량 <strong>' + escapeHtml(formatSignalRatio(signal.volumeRatio)) + '</strong></span>',
       '<span>매수비중 <strong>' + escapeHtml(item.hasData ? item.buyShare + "%" : "-") + '</strong></span>',
       '<span>호가 <strong>' + escapeHtml(formatSignalNumber(signal.bidAskImbalance, "%")) + '</strong></span>',
@@ -5602,7 +5590,7 @@
     var rows = [
       ["핵심 질문", "지금 추가매수, 보유, 분할매도, 손절 기준 중 어디에 가까운지 계산"],
       ["가격 기준선", "현재가, 평단, 안전마진 매수가, 손절선, 1·2차 매도가를 한 번에 비교"],
-      ["수급 판단", "체결강도, 거래량, 매수 비중, 호가 불균형을 매수·매도 점수로 분리"],
+      ["수급 판단", "거래량, 매수 비중, 호가 불균형을 매수·매도 점수로 분리"],
       ["가치 판단", "EPS, 목표 PER, 안전마진과 사용자 공식을 이용해 적정가를 계산"],
       ["입력 기록", "내 매수 점수, 리스크, 확신, 목표 수익률, 손절률, 비중 계획을 종목별로 저장"],
       ["성과 분석", "버전 저장 시점의 가격과 현재가를 비교해 평균 성과와 승률을 계산"]
@@ -5611,7 +5599,6 @@
       ["eps", "주당순이익"],
       ["targetPer", "목표 PER"],
       ["margin", "안전마진"],
-      ["tradeStrength", "체결강도"],
       ["volumeRatio", "거래량 배율"],
       ["buyShare", "매수 체결 비중"],
       ["fairValueGap", "적정가 괴리"],
@@ -5809,7 +5796,7 @@
         '<strong>feature 재현성</strong>',
         '<span class="tone-chip hold">데이터 부족</span>',
         '</div>',
-        '<div class="feature-audit-grid"><span>체결강도, 방향성 거래량, 이동평균, 투자자별 수급을 입력하면 같은 입력 재계산과 feature 제거 실험을 실행합니다.</span></div>',
+        '<div class="feature-audit-grid"><span>거래량, 이동평균, 투자자별 수급을 입력하면 같은 입력 재계산과 feature 제거 실험을 실행합니다.</span></div>',
         '</div>'
       ].join("");
     }
@@ -5820,7 +5807,6 @@
       return (Math.abs(b.buy) + Math.abs(b.sell)) - (Math.abs(a.buy) + Math.abs(a.sell));
     }).slice(0, 6);
     var featureRows = [
-      ["체결강도", formatSignalNumber(variables.tradeStrength, "")],
       ["거래량", formatSignalRatio(variables.volumeRatio)],
       ["방향성 거래량", signedNumber(variables.directionalVolumePressure)],
       ["흐름 방향", signedNumber(variables.flowDirectionScore)],
@@ -6104,13 +6090,11 @@
     return [
       ["buyScore", "수급/가치 기반 시스템 매수 점수"],
       ["sellScore", "수급/가치 기반 시스템 매도 점수"],
-      ["tradeStrength", "체결강도"],
       ["volumeRatio", "거래량 배율"],
       ["buyShare", "매수 체결 비중"],
       ["sellShare", "매도 체결 비중"],
       ["bidAskImbalance", "호가 불균형"],
       ["priceChangeRate", "가격 변화율"],
-      ["executionScore", "체결강도를 -25~25 범위로 점수화"],
       ["volumePressure", "거래량 배율을 -10~25 범위로 점수화"],
       ["directionalVolumePressure", "거래량이 매수/매도 어느 방향을 확인하는지 반영"],
       ["volumeConfirmation", "거래량 방향 확인 강도"],
@@ -6191,7 +6175,6 @@
       '<span>가치 판단 <strong>' + escapeHtml(valuationText) + '</strong></span>',
       '</div>',
       '<div class="signal-metric-grid">',
-      '<span>체결강도 <strong>' + escapeHtml(formatSignalNumber(signal.tradeStrength, "")) + '</strong></span>',
       '<span>거래량 <strong>' + escapeHtml(formatSignalRatio(signal.volumeRatio)) + '</strong></span>',
       '<span>매수량 <strong>' + escapeHtml(formatSignalVolume(signal.buyVolume)) + '</strong></span>',
       '<span>매도량 <strong>' + escapeHtml(formatSignalVolume(signal.sellVolume)) + '</strong></span>',
@@ -6239,10 +6222,9 @@
 
   function renderTradeSignalMethodPanel() {
     var rows = [
-      ["체결강도", "100 이상이면 매수 체결 우위, 100 미만이면 매도 체결 우위"],
       ["거래량 배율", "평균 대비 거래량이 커질수록 신호 영향은 커지지만 방향은 별도로 확인"],
       ["매수/매도량", "실제 체결 방향의 비중으로 매수·매도 압력 분리"],
-      ["거래량 방향성", "거래량 급증이 체결강도, 매수비중, 호가, 가격, 추세와 같은 방향일 때만 강한 신호로 처리"],
+      ["거래량 방향성", "거래량 급증이 매수비중, 호가, 가격, 추세와 같은 방향일 때만 강한 신호로 처리"],
       ["이동평균", "20일·60일선 대비 괴리와 두 이동평균의 간격으로 추세 확인"],
       ["투자자별 수급", "외국인·기관·개인의 순매수 균형을 점수화해 수급 반복성을 검증"],
       ["정규화", "서로 단위가 다른 값을 제한된 점수 범위로 바꾼 뒤 합산"],
@@ -6250,9 +6232,7 @@
       ["최종 라벨", "매수/매도 점수 + 보유 여부 + 기준값을 조합"]
     ];
     var variables = [
-      ["tradeStrength", "체결강도"],
       ["volumeRatio", "거래량 배율"],
-      ["executionScore", "정규화된 체결강도"],
       ["directionalVolumePressure", "방향성 거래량 압력"],
       ["flowDirectionScore", "수급 방향 합성 점수"],
       ["buyShare", "매수 체결 비중"],
@@ -6284,7 +6264,7 @@
       renderFormulaBlock("매도 점수 공식", formulaSetting("sellScoreFormula")),
       '</div>',
       renderVariableGuide(variables),
-      '<div class="rule-strip"><span>입력 형식: SYMBOL, 체결강도, 거래량배율, 매수량, 매도량, 호가불균형%, 가격변화%, 20일선, 60일선, 외국인순매수, 기관순매수, 개인순매수</span></div>',
+      '<div class="rule-strip"><span>입력 형식: SYMBOL, 거래량배율, 매수량, 매도량, 호가불균형%, 가격변화%, 20일선, 60일선, 외국인순매수, 기관순매수, 개인순매수</span></div>',
       '</article>'
     ].join("");
   }

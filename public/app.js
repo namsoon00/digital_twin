@@ -351,6 +351,7 @@
     feedLoading: false,
     feedError: "",
     activeTab: initialTab(),
+    previousTab: "",
     settings: loadSettings(),
     snackbar: null,
     showSecrets: false,
@@ -546,9 +547,54 @@
 
   function initialTab() {
     var params = new URLSearchParams(window.location.search);
-    var requested = String(params.get("tab") || "").toLowerCase();
+    return normalizeTabId(params.get("tab"));
+  }
+
+  function normalizeTabId(value) {
+    var requested = String(value || "").toLowerCase();
     if (requested === "symbols") return "watchlist";
     return tabs.some(function (tab) { return tab.id === requested; }) ? requested : "overview";
+  }
+
+  function tabUrl(tab) {
+    var normalized = normalizeTabId(tab);
+    var params = new URLSearchParams(window.location.search);
+    if (normalized === "overview") {
+      params.delete("tab");
+    } else {
+      params.set("tab", normalized);
+    }
+    var path = window.location.pathname || "/";
+    var query = params.toString();
+    var hash = window.location.hash || "";
+    return path + (query ? "?" + query : "") + hash;
+  }
+
+  function writeTabHistory(tab, replace) {
+    if (!window.history) return;
+    var method = replace ? "replaceState" : "pushState";
+    if (!window.history[method]) return;
+    var normalized = normalizeTabId(tab);
+    window.history[method]({ tab: normalized }, "", tabUrl(normalized));
+  }
+
+  function navigateToTab(tab, options) {
+    options = options || {};
+    var nextTab = normalizeTabId(tab);
+    if (nextTab === state.activeTab) return;
+    var priorTab = state.activeTab;
+    state.activeTab = nextTab;
+    if (!options.skipPrevious) state.previousTab = priorTab;
+    if (!options.skipHistory) writeTabHistory(nextTab, Boolean(options.replace));
+    render();
+  }
+
+  function syncTabFromLocation() {
+    var nextTab = initialTab();
+    if (nextTab === state.activeTab) return;
+    state.previousTab = state.activeTab;
+    state.activeTab = nextTab;
+    render();
   }
 
   function loadSettings() {
@@ -6222,7 +6268,11 @@
       '<p class="label">App Settings</p>',
       '<h2>런타임 설정</h2>',
       '</div>',
+      '<div class="settings-actions">',
+      '<button class="text-button" type="button" data-action="settings-back">이전</button>',
+      '<button class="text-button primary" type="button" data-action="save-settings"' + (state.serverSettingsLocked ? ' disabled' : '') + '>설정 저장</button>',
       '<span class="tone-chip ' + (state.settingsSaved ? "watch" : "hold") + '">' + (state.settingsSaved ? "DB 저장됨" : "수정 중") + '</span>',
+      '</div>',
       '</div>',
       '<div class="settings-body">',
       '<div class="settings-hero">',
@@ -6327,7 +6377,7 @@
       '<article class="panel settings-save-panel">',
       '<div class="settings-body">',
       '<div class="settings-actions settings-page-actions">',
-      '<button class="text-button primary" data-action="save-settings"' + (state.serverSettingsLocked ? ' disabled' : '') + '>설정 저장</button>',
+      '<button class="text-button primary" type="button" data-action="save-settings"' + (state.serverSettingsLocked ? ' disabled' : '') + '>설정 저장</button>',
       '<button class="text-button" data-action="toggle-secrets">' + (state.showSecrets ? "secret 숨기기" : "secret 보기") + '</button>',
       '</div>',
       '</div>',
@@ -6370,16 +6420,21 @@
       button.addEventListener("click", function () {
         var nextTab = button.getAttribute("data-tab") || "overview";
         if (nextTab === state.activeTab) return;
-        state.activeTab = nextTab;
-        render();
+        navigateToTab(nextTab);
       });
     });
 
     var openSettings = app.querySelector('[data-action="open-settings"]');
     if (openSettings) {
       openSettings.addEventListener("click", function () {
-        state.activeTab = "settings";
-        render();
+        navigateToTab("settings");
+      });
+    }
+
+    var settingsBack = app.querySelector('[data-action="settings-back"]');
+    if (settingsBack) {
+      settingsBack.addEventListener("click", function () {
+        navigateToTab(state.previousTab || "overview", { replace: true, skipPrevious: true });
       });
     }
 
@@ -6745,6 +6800,10 @@
     } else if (systemThemeQuery.addListener) {
       systemThemeQuery.addListener(handleSystemThemeChange);
     }
+  }
+
+  if (window.addEventListener) {
+    window.addEventListener("popstate", syncTabFromLocation);
   }
 
   applyAppTheme();

@@ -30,7 +30,7 @@ The official OpenAPI document was available as OpenAPI `3.1.0`, API title `토�
   - Account and asset: accounts, holdings
   - Order: create, modify, cancel, list, detail, buying power, sellable quantity, commissions
 - No public endpoint for reading the user's Toss app watchlist was present in the official OpenAPI document reviewed here. Digiter Twin manages watchlist symbols as app-local user settings and can pass those symbols to its own BFF query, but it does not claim to sync Toss app watchlists.
-- The `수급` screen is designed around the market data group: current price and price change from current-price/candle style responses, trade strength and buy/sell prints from trades, and bid/ask imbalance from orderbook. Until those live mappings are connected, Web mock mode uses app-local manual signal input with the same normalized field names.
+- The `수급` screen is designed around the market data group: current price and price change from current-price/candle style responses, trade strength and buy/sell prints from trades, bid/ask imbalance from orderbook, and moving-average indicators calculated locally from Toss daily candles. Toss OpenAPI returns OHLCV candles, not `ma20`/`ma60` fields, so Digiter Twin owns moving-average calculation. Until live mappings are connected, Web mock mode uses app-local manual signal input with the same normalized field names.
 - Fair value, buy score, and sell score are user-configurable formulas in the client. The app ships a recommended default formula set, but user-defined weights and threshold values are treated as local strategy settings, not Toss raw data.
 
 ## Product Decisions
@@ -165,6 +165,10 @@ These are Digiter Twin BFF models. They are not claimed to be Toss raw response 
   "buyVolume": "620000",
   "sellVolume": "480000",
   "bidAskImbalance": "18",
+  "ma20": "69000",
+  "ma60": "66000",
+  "ma20Distance": "4.3",
+  "ma60Distance": "9.1",
   "source": "toss-market-data",
   "syncedAt": "2026-06-25T09:05:00+09:00"
 }

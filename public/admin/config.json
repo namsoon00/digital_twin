@@ -13,7 +13,7 @@
     "공유 미리보기에서는 서버 설정과 계정 DB 쓰기를 차단합니다."
   ],
   "localData": {
-    "generatedAt": "2026-07-01T23:55:39.069542Z",
+    "generatedAt": "2026-07-02T00:00:35.490394Z",
     "sources": {
       "serviceDb": "data/service.db",
       "serviceDbExists": true,
@@ -108,6 +108,11 @@
           "unit": ""
         },
         {
+          "key": "monitorTrendChange",
+          "default": 1,
+          "unit": ""
+        },
+        {
           "key": "monitorCashChange",
           "default": 1,
           "unit": ""
@@ -127,6 +132,11 @@
         {
           "key": "monitorValueDelta",
           "default": 5,
+          "unit": ""
+        },
+        {
+          "key": "monitorMaDistance",
+          "default": 8,
           "unit": ""
         },
         {
@@ -178,6 +188,11 @@
         },
         {
           "key": "monitorValueChange",
+          "default": 10,
+          "unit": "minutes"
+        },
+        {
+          "key": "monitorTrendChange",
           "default": 10,
           "unit": "minutes"
         },
@@ -389,6 +404,11 @@
             "unit": ""
           },
           {
+            "key": "monitorTrendChange",
+            "default": 1,
+            "unit": ""
+          },
+          {
             "key": "monitorCashChange",
             "default": 1,
             "unit": ""
@@ -408,6 +428,11 @@
           {
             "key": "monitorValueDelta",
             "default": 5,
+            "unit": ""
+          },
+          {
+            "key": "monitorMaDistance",
+            "default": 8,
             "unit": ""
           },
           {
@@ -459,6 +484,11 @@
           },
           {
             "key": "monitorValueChange",
+            "default": 10,
+            "unit": "minutes"
+          },
+          {
+            "key": "monitorTrendChange",
             "default": 10,
             "unit": "minutes"
           },
@@ -608,5 +638,5 @@
       ]
     }
   ],
-  "buildId": "4583a7ca2553"
+  "buildId": "807119f0aaef"
 }

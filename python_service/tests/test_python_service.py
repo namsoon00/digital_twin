@@ -21,7 +21,7 @@ from digital_twin.cli import build_handoff_message
 from digital_twin.cli import preserve_existing_secrets
 from digital_twin.cli import build_parser
 from digital_twin.domain.accounts import AccountConfig
-from digital_twin.domain.analytics import SafeFormula, StrategyModel, decisions_for_positions, normalize_position, portfolio_summary
+from digital_twin.domain.analytics import SafeFormula, StrategyModel, decisions_for_positions, normalize_position, portfolio_summary, technical_indicators_from_candles
 from digital_twin.domain.events import ACCOUNT_SAVED, MONITORING_ALERTS_DETECTED, MONITORING_CYCLE_COMPLETED, MONITORING_SNAPSHOT_COLLECTED, alerts_detected_event
 from digital_twin.domain.monitoring import DEFAULT_ALERT_RULES, DEFAULT_CADENCE, RealtimeMonitor
 from digital_twin.domain.model_review import ModelReviewJob, local_model_review
@@ -193,6 +193,24 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(1000, position.volume)
         self.assertEqual(72000000, position.trading_value)
 
+    def test_technical_indicators_are_calculated_from_candles(self):
+        candles = [
+            {
+                "timestamp": "2026-01-" + str(index + 1).zfill(2) + "T09:00:00+09:00",
+                "closePrice": str(index + 1),
+                "volume": str(1000 + index),
+            }
+            for index in range(28)
+        ]
+
+        indicators = technical_indicators_from_candles(candles)
+
+        self.assertEqual(28, indicators["currentPrice"])
+        self.assertEqual(26, indicators["ma5"])
+        self.assertEqual(18.5, indicators["ma20"])
+        self.assertAlmostEqual(((28 / 18.5) - 1) * 100, indicators["ma20Distance"])
+        self.assertGreater(indicators["ma20Slope"], 0)
+
     def test_monitor_spike_messages_include_flow_context(self):
         previous_position = normalize_position({
             "symbol": "005930",
@@ -251,6 +269,76 @@ class PythonServiceTests(unittest.TestCase):
 
         self.assertIn("수급 체결강도 128 · 거래액 18억 원", pnl_message)
         self.assertIn("수급 체결강도 128 · 거래액 18억 원", value_message)
+
+    def test_monitor_trend_change_uses_moving_average_data(self):
+        previous_position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "currentPrice": 98000,
+            "marketValue": 1000000,
+            "quantity": 10,
+            "profitLossRate": 5,
+            "ma20": 100000,
+            "ma60": 105000,
+            "sector": "반도체",
+        })
+        current_position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "currentPrice": 106000,
+            "marketValue": 1000000,
+            "quantity": 10,
+            "profitLossRate": 5,
+            "tradeStrength": 121,
+            "tradingValue": 2400000000,
+            "ma20": 104000,
+            "ma60": 103000,
+            "ma20Slope": 0.8,
+            "ma60Slope": 0.2,
+            "sector": "반도체",
+        })
+        previous_portfolio = portfolio_summary([previous_position])
+        current_portfolio = portfolio_summary([current_position])
+        previous_snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "ok",
+            utc_now_iso(),
+            previous_portfolio,
+            [previous_position],
+            decisions_for_positions([previous_position], previous_portfolio),
+        )
+        current_snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "ok",
+            utc_now_iso(),
+            current_portfolio,
+            [current_position],
+            decisions_for_positions([current_position], current_portfolio),
+        )
+
+        event = next(
+            event
+            for event in RealtimeMonitor().events_for_snapshot(current_snapshot, previous_snapshot.to_monitor_state())
+            if event.rule == "monitorTrendChange"
+        )
+        message = event.message()
+
+        self.assertEqual("WATCH", event.severity)
+        self.assertIn("20일선 상향 돌파", message)
+        self.assertIn("60일선 상향 돌파", message)
+        self.assertIn("20/60일선 골든크로스", message)
+        self.assertIn("추세 현재 11만 원", message)
+        self.assertIn("수급 체결강도 121 · 거래액 24억 원", message)
 
     def test_monitor_value_change_formats_usd_with_krw_basis(self):
         previous_position = normalize_position({
@@ -442,6 +530,7 @@ class PythonServiceTests(unittest.TestCase):
                 "monitorPositionChange",
                 "monitorPnlChange",
                 "monitorValueChange",
+                "monitorTrendChange",
                 "monitorCashChange",
                 "monitorDecisionChange",
             },

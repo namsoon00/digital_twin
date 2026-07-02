@@ -45,6 +45,10 @@ DEFAULT_NOTIFICATION_TEMPLATES = {
         "template": DEFAULT_TEMPLATE,
         "description": "평가액 변화 알림",
     },
+    "monitorTrendChange": {
+        "template": DEFAULT_TEMPLATE,
+        "description": "이동평균/추세 변화 알림",
+    },
     "monitorCashChange": {
         "template": DEFAULT_TEMPLATE,
         "description": "현금 비중 변화 알림",

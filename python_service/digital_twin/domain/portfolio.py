@@ -23,6 +23,15 @@ class Position:
     trade_strength: float = 0.0
     trading_value: float = 0.0
     volume: float = 0.0
+    ma5: float = 0.0
+    ma20: float = 0.0
+    ma60: float = 0.0
+    ma120: float = 0.0
+    ma200: float = 0.0
+    ma20_slope: float = 0.0
+    ma60_slope: float = 0.0
+    ma20_distance: float = 0.0
+    ma60_distance: float = 0.0
     sector: str = "기타"
 
     def key(self) -> str:

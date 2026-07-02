@@ -91,6 +91,7 @@
       "monitorPositionChange=1",
       "monitorPnlChange=1",
       "monitorValueChange=1",
+      "monitorTrendChange=1",
       "monitorCashChange=1",
       "monitorDecisionChange=1"
     ].join("\n"),
@@ -126,6 +127,7 @@
       "monitorPositionChange=10",
       "monitorPnlChange=10",
       "monitorValueChange=10",
+      "monitorTrendChange=10",
       "monitorCashChange=10",
       "monitorDecisionChange=10"
     ].join("\n"),
@@ -153,6 +155,7 @@
       "pendingOrderMinutes=30",
       "monitorPnlDelta=2",
       "monitorValueDelta=5",
+      "monitorMaDistance=8",
       "monitorCashDelta=10",
       "monitorExitPressureDelta=15"
     ].join("\n")
@@ -246,6 +249,7 @@
     { key: "monitorPositionChange", group: "실시간", label: "보유 종목 변화", description: "새 보유, 제외, 수량 변경이 감지될 때" },
     { key: "monitorPnlChange", group: "실시간", label: "손익률 급변", description: "직전 조회 대비 손익률 변화가 커질 때" },
     { key: "monitorValueChange", group: "실시간", label: "평가액 급변", description: "직전 조회 대비 평가액 변화가 커질 때" },
+    { key: "monitorTrendChange", group: "실시간", label: "이동평균 변화", description: "20/60일선 돌파, 크로스, 큰 괴리가 감지될 때" },
     { key: "monitorCashChange", group: "실시간", label: "현금비중 급변", description: "시장별 현금비중이 빠르게 변할 때" },
     { key: "monitorDecisionChange", group: "실시간", label: "판단 변화", description: "종목 판단이나 리스크 점수가 바뀔 때" }
   ];
@@ -273,6 +277,7 @@
     { key: "pendingOrderMinutes", label: "미체결 점검 시간", unit: "분", step: "1" },
     { key: "monitorPnlDelta", label: "실시간 손익률 변화", unit: "%p", step: "0.1" },
     { key: "monitorValueDelta", label: "실시간 평가액 변화", unit: "%", step: "0.1" },
+    { key: "monitorMaDistance", label: "이동평균 괴리", unit: "%", step: "0.1" },
     { key: "monitorCashDelta", label: "실시간 현금비중 변화", unit: "%p", step: "1" },
     { key: "monitorExitPressureDelta", label: "실시간 판단 점수 변화", unit: "점", step: "1" }
   ];

@@ -464,6 +464,31 @@ function withFakeTossApi(callback) {
       return;
     }
 
+    if (req.method === "GET" && req.url.indexOf("/api/v1/candles") === 0) {
+      if (req.headers.authorization !== "Bearer fake-token") {
+        res.writeHead(401, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "unauthorized" }));
+        return;
+      }
+      const candles = [];
+      for (let index = 199; index >= 0; index--) {
+        const date = new Date(Date.UTC(2026, 0, 1 + index));
+        const close = 52000 + index * 100;
+        candles.push({
+          timestamp: date.toISOString().replace("Z", "+09:00"),
+          openPrice: String(close - 100),
+          highPrice: String(close + 200),
+          lowPrice: String(close - 200),
+          closePrice: String(close),
+          volume: String(1000000 + index * 1000),
+          currency: "KRW"
+        });
+      }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ result: { candles: candles, nextBefore: null } }));
+      return;
+    }
+
     res.writeHead(404, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: "not_found" }));
   });
@@ -712,6 +737,9 @@ async function checkLiveTossMode(port) {
   assertOk(position.symbol === "005930", "토스 live 보유 종목 코드가 맞지 않습니다.");
   assertOk(position.currentPrice === 72000, "토스 live 현재가 매핑이 맞지 않습니다.");
   assertOk(position.averagePrice === 65000, "토스 live 평균단가 매핑이 맞지 않습니다.");
+  assertOk(position.ma20 > 0, "토스 live 캔들 기반 20일 이동평균이 없습니다.");
+  assertOk(position.ma60 > 0, "토스 live 캔들 기반 60일 이동평균이 없습니다.");
+  assertOk(position.ma20Distance !== 0, "토스 live 이동평균 괴리율이 계산되지 않았습니다.");
 }
 
 async function main() {

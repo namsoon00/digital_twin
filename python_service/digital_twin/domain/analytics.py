@@ -30,6 +30,68 @@ def first_number(item: Dict[str, object], keys: List[str]) -> float:
     return 0.0
 
 
+def moving_average(values: List[float], period: int) -> float:
+    usable = [number(value) for value in values if number(value) > 0]
+    if not usable:
+        return 0.0
+    window = usable[-period:] if len(usable) >= period else usable
+    return sum(window) / len(window)
+
+
+def previous_moving_average(values: List[float], period: int) -> float:
+    usable = [number(value) for value in values if number(value) > 0]
+    if len(usable) < 2:
+        return 0.0
+    return moving_average(usable[:-1], period)
+
+
+def pct_distance(value: float, reference: float) -> float:
+    base = number(reference)
+    if not base:
+        return 0.0
+    return ((number(value) / base) - 1) * 100
+
+
+def sorted_candles(candles: Iterable[Dict[str, object]]) -> List[Dict[str, object]]:
+    items = [item for item in candles if isinstance(item, dict)]
+    if not items:
+        return []
+    if any(item.get("timestamp") or item.get("date") for item in items):
+        return sorted(items, key=lambda item: str(item.get("timestamp") or item.get("date") or ""))
+    return items
+
+
+def candle_close(candle: Dict[str, object]) -> float:
+    return number(candle.get("closePrice") or candle.get("close") or candle.get("price"))
+
+
+def technical_indicators_from_candles(candles: Iterable[Dict[str, object]]) -> Dict[str, float]:
+    ordered = sorted_candles(candles)
+    closes = [candle_close(item) for item in ordered if candle_close(item) > 0]
+    if not closes:
+        return {}
+    latest = closes[-1]
+    ma5 = moving_average(closes, 5)
+    ma20 = moving_average(closes, 20)
+    ma60 = moving_average(closes, 60)
+    ma120 = moving_average(closes, 120)
+    ma200 = moving_average(closes, 200)
+    prev_ma20 = previous_moving_average(closes, 20)
+    prev_ma60 = previous_moving_average(closes, 60)
+    return {
+        "currentPrice": latest,
+        "ma5": ma5,
+        "ma20": ma20,
+        "ma60": ma60,
+        "ma120": ma120,
+        "ma200": ma200,
+        "ma20Slope": pct_distance(ma20, prev_ma20),
+        "ma60Slope": pct_distance(ma60, prev_ma60),
+        "ma20Distance": pct_distance(latest, ma20),
+        "ma60Distance": pct_distance(latest, ma60),
+    }
+
+
 def clamp(value: float, lower: float, upper: float) -> float:
     return max(lower, min(upper, value))
 
@@ -140,6 +202,15 @@ def normalize_position(item: Dict[str, object]) -> Position:
         trade_strength=trade_strength,
         trading_value=trading_value,
         volume=volume,
+        ma5=first_number(item, ["ma5", "movingAverage5", "sma5"]),
+        ma20=first_number(item, ["ma20", "movingAverage20", "sma20"]),
+        ma60=first_number(item, ["ma60", "movingAverage60", "sma60"]),
+        ma120=first_number(item, ["ma120", "movingAverage120", "sma120"]),
+        ma200=first_number(item, ["ma200", "movingAverage200", "sma200"]),
+        ma20_slope=first_number(item, ["ma20Slope", "ma20_slope", "movingAverage20Slope"]),
+        ma60_slope=first_number(item, ["ma60Slope", "ma60_slope", "movingAverage60Slope"]),
+        ma20_distance=first_number(item, ["ma20Distance", "ma20_distance"]),
+        ma60_distance=first_number(item, ["ma60Distance", "ma60_distance"]),
         sector=str(item.get("sector") or info["sector"]),
     )
 

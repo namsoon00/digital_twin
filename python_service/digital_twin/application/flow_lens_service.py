@@ -34,6 +34,15 @@ def position_payload(position: Position) -> Dict[str, object]:
         "tradeStrength": position.trade_strength,
         "tradingValue": position.trading_value,
         "volume": position.volume,
+        "ma5": position.ma5,
+        "ma20": position.ma20,
+        "ma60": position.ma60,
+        "ma120": position.ma120,
+        "ma200": position.ma200,
+        "ma20Slope": position.ma20_slope,
+        "ma60Slope": position.ma60_slope,
+        "ma20Distance": position.ma20_distance,
+        "ma60Distance": position.ma60_distance,
         "sector": position.sector,
     }
 

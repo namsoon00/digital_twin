@@ -19,6 +19,7 @@ DEFAULT_ALERT_RULES = {
     "monitorPositionChange": 1,
     "monitorPnlChange": 1,
     "monitorValueChange": 1,
+    "monitorTrendChange": 1,
     "monitorCashChange": 1,
     "monitorDecisionChange": 1,
 }
@@ -26,6 +27,7 @@ DEFAULT_ALERT_RULES = {
 DEFAULT_THRESHOLDS = {
     "monitorPnlDelta": 2,
     "monitorValueDelta": 5,
+    "monitorMaDistance": 8,
     "monitorCashDelta": 10,
     "monitorExitPressureDelta": 15,
 }
@@ -39,6 +41,7 @@ DEFAULT_CADENCE = {
     "monitorPositionChange": 10,
     "monitorPnlChange": 10,
     "monitorValueChange": 10,
+    "monitorTrendChange": 10,
     "monitorCashChange": 10,
     "monitorDecisionChange": 10,
 }
@@ -141,6 +144,14 @@ class RealtimeMonitor:
                 "monitorValueChange",
                 self.position_change_events(snapshot, self.previous_with_value_delta(state, symbol)),
             ))
+            trend_snapshot = self.snapshot_with_trend_metrics(snapshot, symbol)
+            events.extend(self.only_rule(
+                "monitorTrendChange",
+                self.position_change_events(
+                    trend_snapshot,
+                    self.previous_with_trend_delta(trend_snapshot.to_monitor_state(), symbol),
+                ),
+            ))
             events.extend(self.only_rule(
                 "monitorDecisionChange",
                 self.position_change_events(snapshot, self.previous_with_decision_delta(state, symbol)),
@@ -191,6 +202,39 @@ class RealtimeMonitor:
         position["market_value"] = current / (1 + threshold / 100) if current else 1
         return previous
 
+    def snapshot_with_trend_metrics(self, snapshot: AccountSnapshot, symbol: str) -> AccountSnapshot:
+        for position in snapshot.positions:
+            if position.symbol.upper() != symbol:
+                continue
+            if position.current_price and position.ma20 and position.ma60:
+                return snapshot
+            price = position.current_price or (position.market_value / max(1.0, position.quantity or 1)) or 100.0
+            replacement = replace(
+                position,
+                current_price=price,
+                ma20=price * 0.98,
+                ma60=price * 1.02,
+                ma20_distance=pct_delta(price, price * 0.98),
+                ma60_distance=pct_delta(price, price * 1.02),
+            )
+            return replace(snapshot, positions=[
+                replacement if item.symbol.upper() == symbol else item
+                for item in snapshot.positions
+            ])
+        return snapshot
+
+    def previous_with_trend_delta(self, state: Dict[str, object], symbol: str) -> Dict[str, object]:
+        previous = deepcopy(state)
+        position = previous.get("positions", {}).get(symbol, {})
+        ma20 = number(position.get("ma20"))
+        ma60 = number(position.get("ma60"))
+        if ma20:
+            position["current_price"] = ma20 * 0.98
+        if ma20 and ma60:
+            position["ma20"] = min(ma20, ma60 * 0.98)
+            position["ma60"] = max(ma60, ma20 * 1.02)
+        return previous
+
     def position_currency(self, position: Dict[str, object]) -> str:
         currency = str(position.get("currency") or "").upper()
         if currency:
@@ -208,6 +252,9 @@ class RealtimeMonitor:
 
     def position_current_price(self, position: Dict[str, object]) -> float:
         return number(position.get("current_price") if "current_price" in position else position.get("currentPrice"))
+
+    def position_ma(self, position: Dict[str, object], period: int) -> float:
+        return number(position.get("ma" + str(period)) or position.get("movingAverage" + str(period)) or position.get("sma" + str(period)))
 
     def position_volume(self, position: Dict[str, object]) -> float:
         return number(position.get("volume"))
@@ -243,6 +290,61 @@ class RealtimeMonitor:
         trading_value = self.position_trading_value(position)
         trading_value_label = money(trading_value, self.position_currency(position)) if trading_value else "-"
         return "수급 체결강도 " + compact_number(self.position_trade_strength(position)) + " · 거래액 " + trading_value_label
+
+    def ma_distance(self, position: Dict[str, object], period: int) -> float:
+        return pct_delta(self.position_current_price(position), self.position_ma(position, period))
+
+    def trend_context_line(self, position: Dict[str, object]) -> str:
+        price = self.position_current_price(position)
+        ma20 = self.position_ma(position, 20)
+        ma60 = self.position_ma(position, 60)
+        if not price or not ma20 or not ma60:
+            return ""
+        currency = self.position_currency(position)
+        return (
+            "추세 현재 " + money(price, currency)
+            + " · 20일선 " + money(ma20, currency) + "(" + signed_pct(self.ma_distance(position, 20)) + ")"
+            + " · 60일선 " + money(ma60, currency) + "(" + signed_pct(self.ma_distance(position, 60)) + ")"
+        )
+
+    def trend_slope_line(self, position: Dict[str, object]) -> str:
+        slope20 = number(position.get("ma20_slope") if "ma20_slope" in position else position.get("ma20Slope"))
+        slope60 = number(position.get("ma60_slope") if "ma60_slope" in position else position.get("ma60Slope"))
+        if not slope20 and not slope60:
+            return ""
+        return "기울기 20일선 " + signed_pct(slope20) + " · 60일선 " + signed_pct(slope60)
+
+    def trend_signals(self, before: Dict[str, object], item: Dict[str, object]) -> List[str]:
+        signals: List[str] = []
+        threshold = float(self.thresholds.get("monitorMaDistance", 0))
+        for period in [20, 60]:
+            if not self.position_ma(item, period) or not self.position_current_price(item):
+                continue
+            label = str(period) + "일선"
+            before_has_ma = bool(self.position_ma(before, period) and self.position_current_price(before))
+            before_distance = self.ma_distance(before, period) if before_has_ma else 0.0
+            current_distance = self.ma_distance(item, period)
+            if before_has_ma and before_distance <= 0 < current_distance:
+                signals.append(label + " 상향 돌파")
+            elif before_has_ma and before_distance >= 0 > current_distance:
+                signals.append(label + " 하향 이탈")
+            elif threshold and abs(current_distance) >= threshold and (not before_has_ma or abs(before_distance) < threshold):
+                signals.append(label + " 괴리 " + signed_pct(current_distance))
+        if self.position_ma(item, 20) and self.position_ma(item, 60):
+            current_spread = pct_delta(self.position_ma(item, 20), self.position_ma(item, 60))
+            before_has_cross = bool(self.position_ma(before, 20) and self.position_ma(before, 60))
+            before_spread = pct_delta(self.position_ma(before, 20), self.position_ma(before, 60)) if before_has_cross else 0.0
+            if before_has_cross and before_spread <= 0 < current_spread:
+                signals.append("20/60일선 골든크로스")
+            elif before_has_cross and before_spread >= 0 > current_spread:
+                signals.append("20/60일선 데드크로스")
+        return signals
+
+    def trend_severity(self, signals: List[str]) -> str:
+        joined = " ".join(signals)
+        if "하향" in joined or "데드" in joined or "괴리 -" in joined:
+            return "ALERT"
+        return "WATCH"
 
     def previous_with_decision_delta(self, state: Dict[str, object], symbol: str) -> Dict[str, object]:
         previous = deepcopy(state)
@@ -327,10 +429,13 @@ class RealtimeMonitor:
                 events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "WATCH", "monitorPositionChange", snapshot.account_id + ":quantity:" + symbol + ":" + str(item.get("quantity")), item["name"], ["보유 수량 변경", "이전 " + str(before.get("quantity", 0)), "현재 " + str(item.get("quantity", 0))], symbol))
             pnl_delta = float(item.get("profit_loss_rate") or 0) - float(before.get("profit_loss_rate") or 0)
             if abs(pnl_delta) >= float(self.thresholds.get("monitorPnlDelta", 0)):
-                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "ALERT" if pnl_delta < 0 else "WATCH", "monitorPnlChange", snapshot.account_id + ":pnl:" + symbol + ":" + signed_pct(pnl_delta), item["name"], ["손익률 급변", "이전 " + signed_pct(float(before.get("profit_loss_rate") or 0)), "현재 " + signed_pct(float(item.get("profit_loss_rate") or 0)), "변화 " + signed_pct(pnl_delta, "%p"), self.flow_context_line(item)], symbol))
+                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "ALERT" if pnl_delta < 0 else "WATCH", "monitorPnlChange", snapshot.account_id + ":pnl:" + symbol + ":" + signed_pct(pnl_delta), item["name"], ["손익률 급변", "이전 " + signed_pct(float(before.get("profit_loss_rate") or 0)), "현재 " + signed_pct(float(item.get("profit_loss_rate") or 0)), "변화 " + signed_pct(pnl_delta, "%p"), self.flow_context_line(item), self.trend_context_line(item)], symbol))
             value_delta = pct_delta(self.position_value_base(item), self.position_value_base(before))
             if abs(value_delta) >= float(self.thresholds.get("monitorValueDelta", 0)):
-                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "ALERT" if value_delta < 0 else "WATCH", "monitorValueChange", snapshot.account_id + ":value:" + symbol + ":" + signed_pct(value_delta), item["name"], ["평가액 급변", "이전 " + self.position_value_label(before), "현재 " + self.position_value_label(item), "변화 " + signed_pct(value_delta) + self.value_delta_basis_label(before, item), self.flow_context_line(item)], symbol))
+                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "ALERT" if value_delta < 0 else "WATCH", "monitorValueChange", snapshot.account_id + ":value:" + symbol + ":" + signed_pct(value_delta), item["name"], ["평가액 급변", "이전 " + self.position_value_label(before), "현재 " + self.position_value_label(item), "변화 " + signed_pct(value_delta) + self.value_delta_basis_label(before, item), self.flow_context_line(item), self.trend_context_line(item)], symbol))
+            trend_signals = self.trend_signals(before, item)
+            if trend_signals:
+                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, self.trend_severity(trend_signals), "monitorTrendChange", snapshot.account_id + ":trend:" + symbol + ":" + ",".join(trend_signals[:2]), item["name"], ["이동평균 변화", "신호 " + " · ".join(trend_signals), self.trend_context_line(item), self.trend_slope_line(item), self.flow_context_line(item)], symbol))
             decision = current_decisions.get(symbol) or {}
             previous_decision = previous_decisions.get(symbol) or {}
             pressure_delta = float(decision.get("exit_pressure") or 0) - float(previous_decision.get("exit_pressure") or 0)

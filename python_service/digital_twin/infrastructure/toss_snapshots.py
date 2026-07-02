@@ -1,11 +1,13 @@
 import json
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from dataclasses import replace
 from typing import Dict, List, Tuple
 
 from ..domain.accounts import AccountConfig
-from ..domain.analytics import decisions_for_positions, normalize_position, number, portfolio_summary
+from ..domain.analytics import decisions_for_positions, normalize_position, number, portfolio_summary, technical_indicators_from_candles
 from ..domain.portfolio import AccountSnapshot, Position, utc_now_iso
 from .settings import currency_rates
 
@@ -38,6 +40,14 @@ def normalize_holdings(payload: Dict[str, object]) -> List[Dict[str, object]]:
     return []
 
 
+def normalize_candles(payload: Dict[str, object]) -> List[Dict[str, object]]:
+    data = payload.get("data") or payload.get("result") or payload
+    candles = data.get("candles") if isinstance(data, dict) else data
+    if isinstance(candles, list):
+        return [item for item in candles if isinstance(item, dict)]
+    return []
+
+
 def demo_positions() -> List[Position]:
     return [
         normalize_position({
@@ -55,6 +65,15 @@ def demo_positions() -> List[Position]:
             "tradeStrength": 118,
             "tradingValue": 912000000,
             "volume": 12666,
+            "ma5": 70500,
+            "ma20": 69000,
+            "ma60": 66000,
+            "ma120": 64000,
+            "ma200": 62000,
+            "ma20Slope": 0.4,
+            "ma60Slope": 0.2,
+            "ma20Distance": 4.3,
+            "ma60Distance": 9.1,
             "sector": "반도체",
         }),
         normalize_position({
@@ -72,6 +91,15 @@ def demo_positions() -> List[Position]:
             "tradeStrength": 106,
             "tradingValue": 142000000,
             "volume": 584000,
+            "ma5": 239,
+            "ma20": 232,
+            "ma60": 218,
+            "ma120": 205,
+            "ma200": 198,
+            "ma20Slope": 0.3,
+            "ma60Slope": 0.2,
+            "ma20Distance": 4.8,
+            "ma60Distance": 11.5,
             "sector": "AI/플랫폼",
         }),
         normalize_position({
@@ -121,9 +149,57 @@ class TossProvider:
                 {"Authorization": "Bearer " + token, "X-Tossinvest-Account": account_seq},
             )
             positions = [normalize_position(item) for item in normalize_holdings(holdings_payload)]
+            positions = self.enrich_positions_with_candles(token, positions)
             return "live", "토스 계좌 동기화", positions, account_cash, account_currency
         except (urllib.error.URLError, urllib.error.HTTPError, RuntimeError, ValueError) as error:
             return "demo", "토스 조회 실패 · " + str(error), demo_positions(), 1250000.0, "KRW"
+
+    def fetch_daily_candles(self, token: str, symbol: str) -> List[Dict[str, object]]:
+        query = urllib.parse.urlencode({
+            "symbol": symbol,
+            "interval": "1d",
+            "count": "200",
+            "adjusted": "true",
+        })
+        payload = http_json(
+            "GET",
+            self.base_url + "/api/v1/candles?" + query,
+            {"Authorization": "Bearer " + token},
+        )
+        return normalize_candles(payload)
+
+    def enrich_positions_with_candles(self, token: str, positions: List[Position]) -> List[Position]:
+        enriched: List[Position] = []
+        chart_calls = 0
+        for position in positions:
+            if position.is_cash() or not position.symbol:
+                enriched.append(position)
+                continue
+            try:
+                if chart_calls:
+                    time.sleep(0.22)
+                candles = self.fetch_daily_candles(token, position.symbol)
+                chart_calls += 1
+                indicators = technical_indicators_from_candles(candles)
+                if not indicators:
+                    enriched.append(position)
+                    continue
+                enriched.append(replace(
+                    position,
+                    current_price=position.current_price or indicators.get("currentPrice", 0.0),
+                    ma5=number(indicators.get("ma5")),
+                    ma20=number(indicators.get("ma20")),
+                    ma60=number(indicators.get("ma60")),
+                    ma120=number(indicators.get("ma120")),
+                    ma200=number(indicators.get("ma200")),
+                    ma20_slope=number(indicators.get("ma20Slope")),
+                    ma60_slope=number(indicators.get("ma60Slope")),
+                    ma20_distance=number(indicators.get("ma20Distance")),
+                    ma60_distance=number(indicators.get("ma60Distance")),
+                ))
+            except (urllib.error.URLError, urllib.error.HTTPError, RuntimeError, ValueError, OSError):
+                enriched.append(position)
+        return enriched
 
 
 def build_snapshot(account: AccountConfig) -> AccountSnapshot:

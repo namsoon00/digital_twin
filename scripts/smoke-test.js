@@ -98,7 +98,21 @@ function checkFrontendAdminRender() {
   const code = fs.readFileSync(path.join(rootDir, "public", "app.js"), "utf8");
   assertOk(code.indexOf('appTheme: settingValue("appTheme")') >= 0, "설정 저장 payload에 화면 테마가 포함되지 않았습니다.");
   const payloads = {
-    "/api/settings": { settings: {}, configured: {}, locked: false },
+    "/api/settings": {
+      settings: {
+        tossApiBaseUrl: "https://openapi.tossinvest.com",
+        notifyProvider: "telegram",
+        notifyLinkUrl: "http://127.0.0.1:3000?tab=notifications"
+      },
+      configured: {
+        tossClientId: true,
+        tossClientSecret: true,
+        tossAccountSeq: true,
+        telegramBotToken: true,
+        telegramChatId: true
+      },
+      locked: false
+    },
     "/api/service-accounts": {
       accounts: [
         {
@@ -397,11 +411,17 @@ function checkFrontendAdminRender() {
     assertOk(overviewHtml.indexOf("account-directory-panel") >= 0, "홈에 DB 계정 패널이 렌더링되지 않았습니다.");
     assertOk(overviewHtml.indexOf("account-watchlist-panel") >= 0, "홈에 계정별 관심 종목 패널이 렌더링되지 않았습니다.");
     assertOk(overviewHtml.indexOf("DB 저장 계정") >= 0, "DB 계정 제목이 렌더링되지 않았습니다.");
+    assertOk(overviewHtml.indexOf("home-command-grid") >= 0, "홈 운영 요약 카드가 렌더링되지 않았습니다.");
+    assertOk(overviewHtml.indexOf("home-action") >= 0, "홈 빠른 이동 카드가 렌더링되지 않았습니다.");
+    assertOk(overviewHtml.indexOf("토스 실데이터 연결됨") >= 0, "홈에 토스 연결 상태가 표시되지 않습니다.");
     assertOk(accountHtml.indexOf("data-account-form") >= 0, "계정 등록 폼이 렌더링되지 않았습니다.");
     assertOk(accountHtml.indexOf("DB 저장 계정") >= 0, "계정 탭에 DB 계정 목록이 렌더링되지 않았습니다.");
+    assertOk(accountHtml.indexOf("account-manager-summary") >= 0, "계정 탭 요약 카드가 렌더링되지 않았습니다.");
+    assertOk(accountHtml.indexOf("account-credential-pills") >= 0, "계정 API 상태 칩이 렌더링되지 않았습니다.");
     assertOk(accountHtml.indexOf("account-credential-grid") >= 0, "계정 보안 상태 요약이 렌더링되지 않았습니다.");
     assertOk(accountHtml.indexOf("Bot token 설정됨") >= 0, "텔레그램 bot token 설정 상태가 표시되지 않습니다.");
     assertOk(accountHtml.indexOf("Secret 설정됨") >= 0, "토스 secret 설정 상태가 표시되지 않습니다.");
+    assertOk(accountHtml.indexOf("저장됨 - 새 값 입력 시 교체") >= 0, "저장된 API 값의 교체 안내가 표시되지 않습니다.");
     assertOk(accountHtml.indexOf('value="DB 계정"') >= 0, "로컬 DB 계정 표시 이름이 폼에 채워지지 않았습니다.");
     assertOk(accountHtml.indexOf('value="NVDA,005930"') >= 0, "로컬 DB 관심 종목이 폼에 채워지지 않았습니다.");
     assertOk(accountHtml.indexOf('value="true"') < 0, "마스킹된 boolean 값이 계정 폼에 그대로 표시됩니다.");
@@ -417,6 +437,9 @@ function checkFrontendAdminRender() {
     assertOk(notificationHtml.indexOf("admin-message-row") >= 0, "메시지 타입별 알림 설정이 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("notification-template-row") >= 0, "알림 템플릿 편집기가 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("notification-template-preview") >= 0, "알림 템플릿 미리보기가 렌더링되지 않았습니다.");
+    assertOk(notificationHtml.indexOf("settings-api-grid") >= 0, "설정 API 상태 요약이 렌더링되지 않았습니다.");
+    assertOk(notificationHtml.indexOf("Client ID 설정됨") >= 0, "설정 화면에 토스 Client ID 상태가 표시되지 않습니다.");
+    assertOk(notificationHtml.indexOf("Bot token 설정됨") >= 0, "설정 화면에 텔레그램 bot token 상태가 표시되지 않습니다.");
     assertOk(notificationHtml.indexOf("data-template-test-send") >= 0, "실제 데이터 알림 테스트 발송 버튼이 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("모니터링 정상 작동") >= 0, "상태 확인 템플릿 미리보기 샘플이 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("매수 점수") >= 0, "타입별 템플릿 미리보기 샘플이 구분되지 않습니다.");

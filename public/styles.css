@@ -1806,6 +1806,66 @@ h3 {
   font-size: 12px;
 }
 
+.admin-message-schedule {
+  grid-column: 2 / -1;
+  min-width: 0;
+}
+
+.message-schedule-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.message-schedule-summary > span:not(.tone-chip) {
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.message-schedule-summary.muted {
+  color: var(--muted);
+}
+
+.message-schedule-detail {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--line) 78%, transparent);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.message-schedule-detail strong {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.message-schedule-detail p,
+.message-schedule-detail em {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 750;
+  line-height: 1.4;
+}
+
+.message-schedule-detail em {
+  overflow-wrap: anywhere;
+}
+
 .notification-template-section {
   padding-top: 8px;
 }
@@ -1848,6 +1908,16 @@ h3 {
   font-size: 12px;
   line-height: 1.35;
   overflow-wrap: anywhere;
+}
+
+.template-schedule-compact {
+  display: grid;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.template-schedule-compact .message-schedule-detail {
+  padding: 7px;
 }
 
 .notification-template-row textarea {
@@ -3715,6 +3785,10 @@ h3 {
   .symbol-filter-form.compact,
   .symbol-result-row {
     grid-template-columns: 1fr;
+  }
+
+  .admin-message-schedule {
+    grid-column: auto;
   }
 
   .service-account-meta {

@@ -5,8 +5,57 @@ from typing import Dict, List
 from .portfolio import AlertEvent
 
 
-DEFAULT_TEMPLATE = "{title}\n{lines}"
+LEGACY_DEFAULT_TEMPLATE = "{title}\n{lines}"
+DEFAULT_TEMPLATE = "{readableMessage}"
 BODY_TEMPLATE = "{body}"
+
+MESSAGE_TYPE_LABELS = {
+    "modelBuy": "모델 매수",
+    "modelSell": "모델 매도",
+    "watchlistQuote": "관심종목 시세",
+    "watchlistQuotePending": "관심종목 시세 대기",
+    "holdingTiming": "보유 타이밍",
+    "monitorHeartbeat": "실시간 상태",
+    "monitorConnection": "연결 상태",
+    "monitorPositionChange": "보유 변화",
+    "monitorPnlChange": "손익률 변화",
+    "monitorValueChange": "평가액 변화",
+    "monitorTrendChange": "이동평균 변화",
+    "monitorCashChange": "현금비중 변화",
+    "monitorDecisionChange": "판단 변화",
+    "externalEquityMove": "미장 가격/거래량",
+    "externalCryptoMove": "크립토 변동",
+    "externalMacroShift": "거시 지표 변화",
+    "externalDartDisclosure": "국내 공시",
+    "externalDataConnection": "외부 데이터 연결",
+}
+
+TRIGGER_SUMMARIES = {
+    "modelBuy": "내 매수 모델 점수가 기준을 넘을 때 보냅니다.",
+    "modelSell": "내 매도 모델 점수가 기준을 넘을 때 보냅니다.",
+    "watchlistQuote": "관심 종목의 시세와 추세 데이터가 갱신될 때 보냅니다.",
+    "watchlistQuotePending": "관심 종목 시세를 아직 받지 못했을 때 보냅니다.",
+    "holdingTiming": "보유 종목의 매수·매도 점검 데이터가 기준에 걸릴 때 보냅니다.",
+    "monitorHeartbeat": "실시간 모니터링 워커가 정상 작동 중인지 확인할 때 보냅니다.",
+    "monitorConnection": "Toss 연결 상태가 바뀔 때 보냅니다.",
+    "monitorPositionChange": "새 보유, 제외, 수량 변경이 감지될 때 보냅니다.",
+    "monitorPnlChange": "직전 스냅샷 대비 손익률 변화가 임계값을 넘을 때 보냅니다.",
+    "monitorValueChange": "직전 스냅샷 대비 평가액 변화가 임계값을 넘을 때 보냅니다.",
+    "monitorTrendChange": "이동평균 돌파, 크로스, 큰 괴리가 감지될 때 보냅니다.",
+    "monitorCashChange": "시장별 현금 비중 변화가 임계값을 넘을 때 보냅니다.",
+    "monitorDecisionChange": "종목 판단이나 리스크 점수가 바뀔 때 보냅니다.",
+    "externalEquityMove": "Alpha Vantage 기준 미국 보유 종목의 가격 변화가 임계값을 넘을 때 보냅니다.",
+    "externalCryptoMove": "CoinGecko 기준 크립토 가격 변화가 임계값을 넘을 때 보냅니다.",
+    "externalMacroShift": "FRED 금리·스프레드 변화가 임계값을 넘을 때 보냅니다.",
+    "externalDartDisclosure": "OpenDART에서 보유 국내 종목의 새 공시가 감지될 때 보냅니다.",
+    "externalDataConnection": "외부 데이터 API 응답 오류나 호출 제한이 감지될 때 보냅니다.",
+}
+
+SEVERITY_LABELS = {
+    "INFO": "정보",
+    "WATCH": "관찰",
+    "ALERT": "주의",
+}
 
 DEFAULT_NOTIFICATION_TEMPLATES = {
     "default": {
@@ -129,19 +178,46 @@ class NotificationTemplate:
 def alert_context(event: AlertEvent) -> Dict[str, object]:
     raw_lines = [str(line) for line in event.lines if str(line).strip()]
     lines = "\n".join(["- " + line for line in raw_lines])
-    body = "\n".join([event.title] + ([lines] if lines else []))
+    message_type_label = MESSAGE_TYPE_LABELS.get(event.rule, event.rule)
+    severity_label = SEVERITY_LABELS.get(str(event.severity or "").upper(), event.severity or "")
+    trigger_summary = TRIGGER_SUMMARIES.get(event.rule, "설정한 조건이 실제 데이터에서 충족될 때 보냅니다.")
+    symbol_line = ("종목: " + event.symbol) if event.symbol else ""
+    severity_line = ("상태: " + severity_label) if severity_label else ""
+    type_line = ("유형: " + message_type_label) if message_type_label else ""
+    trigger_line = ("발생 조건: " + trigger_summary) if trigger_summary else ""
+    data_lines = lines
+    readable_parts = [
+        event.title,
+        symbol_line,
+        type_line,
+        severity_line,
+        trigger_line,
+    ]
+    if data_lines:
+        readable_parts.extend(["", "실제 데이터", data_lines])
+    readable_message = "\n".join(part for part in readable_parts if str(part).strip() or part == "").strip()
+    body = readable_message or "\n".join([event.title] + ([lines] if lines else []))
     return {
         "messageType": event.rule,
         "accountId": event.account_id,
         "accountLabel": event.account_label,
         "severity": event.severity,
+        "severityLabel": severity_label,
         "rule": event.rule,
         "key": event.key,
         "title": event.title,
         "symbol": event.symbol,
         "target": event.target(),
+        "messageTypeLabel": message_type_label,
+        "triggerSummary": trigger_summary,
+        "symbolLine": symbol_line,
+        "severityLine": severity_line,
+        "typeLine": type_line,
+        "triggerLine": trigger_line,
+        "dataLines": data_lines,
         "lines": lines,
         "rawLines": "\n".join(raw_lines),
+        "readableMessage": readable_message,
         "body": body,
     }
 
@@ -179,6 +255,19 @@ def render_template(template: str, context: Dict[str, object]) -> str:
         return context_value(values.get(match.group(1), ""))
 
     rendered = PLACEHOLDER_PATTERN.sub(replace, str(template or BODY_TEMPLATE)).strip()
+    compacted = []
+    previous_blank = False
+    for line in rendered.splitlines():
+        cleaned = line.rstrip()
+        if cleaned.strip():
+            compacted.append(cleaned)
+            previous_blank = False
+        elif compacted and not previous_blank:
+            compacted.append("")
+            previous_blank = True
+    while compacted and not compacted[-1].strip():
+        compacted.pop()
+    rendered = "\n".join(compacted)
     return rendered or context_value(values.get("body") or values.get("title") or "")
 
 
@@ -194,12 +283,21 @@ def template_variables() -> List[str]:
         "accountId",
         "accountLabel",
         "severity",
+        "severityLabel",
         "rule",
         "key",
         "title",
         "symbol",
         "target",
+        "messageTypeLabel",
+        "triggerSummary",
+        "symbolLine",
+        "severityLine",
+        "typeLine",
+        "triggerLine",
+        "dataLines",
         "lines",
         "rawLines",
+        "readableMessage",
         "body",
     ]

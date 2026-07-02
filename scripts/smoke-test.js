@@ -143,7 +143,7 @@ function checkFrontendAdminRender() {
       templates: [
         {
           messageType: "monitorHeartbeat",
-          template: "[{messageType}] {title}\n{rawLines}",
+          template: "{readableMessage}",
           description: "상태 확인 템플릿",
           enabled: true,
           updatedAt: "2026-07-01T00:00:00.000Z"
@@ -156,7 +156,27 @@ function checkFrontendAdminRender() {
           updatedAt: "2026-07-01T00:00:00.000Z"
         }
       ],
-      variables: ["title", "lines", "rawLines", "body", "messageType"]
+      variables: ["title", "readableMessage", "dataLines", "triggerSummary", "lines", "rawLines", "body", "messageType"]
+    },
+    "/api/notification-schedules": {
+      generatedAt: "2026-07-01T00:00:00.000Z",
+      schedules: [
+        {
+          messageType: "monitorHeartbeat",
+          label: "실시간 상태",
+          enabled: true,
+          status: "waiting",
+          cadenceMinutes: 10,
+          cadenceText: "조건이 다시 충족되면 최소 10분 간격으로 보냅니다.",
+          triggerSummary: "실시간 모니터링 워커가 정상 작동 중인지 확인할 때 보냅니다.",
+          lastSentAt: "2026-07-01T00:00:00.000Z",
+          nextEligibleAt: "2026-07-01T00:10:00.000Z",
+          eligibleNow: false,
+          recentTargets: [
+            { accountId: "main", accountLabel: "DB 계정", target: "", sentAt: "2026-07-01T00:00:00.000Z" }
+          ]
+        }
+      ]
     },
     "/api/symbol-universe": {
       items: [

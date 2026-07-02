@@ -54,7 +54,7 @@ npm run generate:static
 
 ## 화면 구성
 
-웹은 `홈`, `계정`, `관심종목`, `모니터링`, `알림`, `모델링`, `설정` 탭으로 구성됩니다. desktop에서는 왼쪽 고정 내비게이션, mobile에서는 하단 탭 내비게이션을 사용합니다. `계정` 탭은 로컬 SQLite DB에 저장된 계정 값을 폼에 채우고, secret 원문은 다시 표시하지 않습니다. `알림` 탭에서는 메시지 타입별 활성화, 주기, 임계값, 발송 채널, 타입별 메시지 템플릿을 관리하고, `모델링` 탭에서는 모델 공식과 판단 기준을 관리합니다.
+웹은 `홈`, `계정`, `관심종목`, `모니터링`, `알림`, `모델링`, `설정` 탭으로 구성됩니다. desktop에서는 왼쪽 고정 내비게이션, mobile에서는 하단 탭 내비게이션을 사용합니다. `계정` 탭은 로컬 SQLite DB에 저장된 계정 값을 폼에 채우고, secret 원문은 다시 표시하지 않습니다. `알림` 탭에서는 메시지 타입별 활성화, 주기, 임계값, 발송 채널, 마지막 발송 시각, 다음 발송 가능 시각, 타입별 메시지 템플릿을 관리하고, `모델링` 탭에서는 모델 공식과 판단 기준을 관리합니다.
 
 `설정` 탭에서는 앱 테마, 외부 데이터 API, 텔레그램 알림 전달 설정을 로컬 SQLite DB(`data/service.db`)의 `runtime_settings` 테이블에 저장합니다. 계정별 Toss API 연결은 `계정` 탭에서, 관심 종목은 `관심종목` 탭에서, 모델 기준은 `모델링` 탭에서 관리합니다. `client_secret`, 외부 API key, bot token은 서버가 사용하는 로컬 DB에만 저장하고, API 응답과 화면에는 원문을 다시 표시하지 않습니다. GitHub Pages 정적 미리보기에서는 서버 DB가 없으므로 민감 설정 저장을 사용하지 않습니다.
 
@@ -67,6 +67,7 @@ npm run generate:static
 - `GET /api/symbol-universe`, `POST /api/symbol-universe/refresh`: 코스피·코스닥·나스닥 전체 종목 카탈로그 검색과 원천 목록 갱신
 - `GET /api/bootstrap`, `GET/POST /api/memories`, `GET/POST /api/items`: 로컬 SQLite DB의 `app_store` 기반 앱 데이터 조회와 저장
 - `GET/PUT /api/settings`: 로컬 SQLite DB의 `runtime_settings` 기반 Toss/알림 설정 조회와 저장. secret 원문은 GET 응답에 포함하지 않음
+- `GET /api/notification-schedules`: 메시지 타입별 실제 마지막 발송, 다음 가능 시각, 최근 대상, 발송 조건 설명 조회
 - `python_service/digital_twin/infrastructure/web_server.py`: 정적 웹 자산 서빙과 로컬 API 라우팅
 - `python_service/digital_twin/application/flow_lens_service.py`: 토스 계좌/보유자산 스냅샷, 관심 종목 파싱, 매도 검토 fallback 생성
 

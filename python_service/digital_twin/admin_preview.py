@@ -269,11 +269,13 @@ def admin_preview_config() -> Dict[str, object]:
                     "python3 python_service/service.py templates save < template.json",
                     "python3 python_service/service.py templates reset --message-type monitorHeartbeat",
                 ],
+                "localEndpoints": ["GET /api/notification-templates", "GET /api/notification-schedules", "POST /api/notification-templates/test-send"],
                 "storage": ["data/service.db: notification_templates", "data/service.db: notification_jobs"],
                 "fields": [
                     {"key": "messageType", "label": "메시지 타입"},
                     {"key": "template", "label": "템플릿 본문"},
-                    {"key": "variables", "label": "{title}, {lines}, {rawLines}, {body}, {messageType}"},
+                    {"key": "schedule", "label": "마지막 발송, 다음 가능 시각, 최근 대상"},
+                    {"key": "variables", "label": "{readableMessage}, {title}, {dataLines}, {triggerSummary}, {body}"},
                 ],
             },
             {

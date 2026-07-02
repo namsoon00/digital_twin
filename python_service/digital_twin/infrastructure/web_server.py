@@ -10,6 +10,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Dict, List
@@ -17,15 +18,16 @@ from typing import Dict, List
 from ..application.account_service import AccountApplicationService
 from ..application.flow_lens_service import flow_lens_snapshot
 from ..application.symbol_universe_service import SymbolUniverseService
-from ..domain.monitoring import RealtimeMonitor
-from ..domain.notification_templates import alert_context, template_variables
+from ..domain.monitoring import DEFAULT_ALERT_RULES, DEFAULT_CADENCE, RealtimeMonitor
+from ..domain.notification_templates import DEFAULT_NOTIFICATION_TEMPLATES, MESSAGE_TYPE_LABELS, TRIGGER_SUMMARIES, alert_context, template_variables
+from ..domain.parsing import parse_assignments
 from ..domain.portfolio import utc_now_iso
 from ..infrastructure.event_bus import default_event_bus
 from ..infrastructure.mock_market import mock_market_payload, mock_market_scenario_list
 from ..infrastructure.notifications import notifier_for_account
 from ..infrastructure.settings import ROOT_DIR, runtime_settings, save_runtime_settings
 from ..infrastructure.sqlite_accounts import AccountRegistry
-from ..infrastructure.sqlite_operational import SQLiteAppStore, SQLiteNotificationTemplateStore
+from ..infrastructure.sqlite_operational import SQLiteAppStore, SQLiteMonitorStore, SQLiteNotificationTemplateStore
 from ..infrastructure.toss_snapshots import build_snapshot
 
 
@@ -33,6 +35,13 @@ PUBLIC_DIR = ROOT_DIR / "public"
 MEMORY_CATEGORIES = ["identity", "preference", "finance", "travel", "asset", "schedule", "work", "other"]
 DOMAIN_TYPES = ["stock", "trip", "asset", "schedule", "task", "note"]
 MAX_BODY_BYTES = 1024 * 1024
+
+NON_CADENCE_MESSAGE_GUIDES = {
+    "modelReview": "판단 변화 알림이 발생하면 별도 워커가 충분히 분석한 뒤 보냅니다.",
+    "workHandoff": "작업이 끝나고 커밋, 검증, 푸시, 재시작 결과를 공유할 때 보냅니다.",
+    "notification": "사용자가 직접 만든 일반 알림이나 시스템 안내가 있을 때 보냅니다.",
+    "default": "타입별 템플릿이 없을 때 fallback으로 사용됩니다.",
+}
 
 
 def now() -> str:
@@ -237,6 +246,98 @@ def list_templates_payload() -> Dict[str, object]:
     return {
         "templates": [item.to_dict() for item in notification_store().list()],
         "variables": template_variables(),
+    }
+
+
+def parse_utc(value: str):
+    try:
+        parsed = datetime.fromisoformat(str(value or "").replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def utc_iso(value: datetime) -> str:
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def cadence_records_for_type(sent: Dict[str, object], message_type: str) -> List[Dict[str, object]]:
+    records = []
+    prefix = "cadence:python:"
+    for key, sent_at in sent.items():
+        if not str(key).startswith(prefix):
+            continue
+        parts = str(key).split(":", 4)
+        if len(parts) != 5 or parts[3] != message_type:
+            continue
+        parsed = parse_utc(str(sent_at or ""))
+        if not parsed:
+            continue
+        records.append({
+            "accountId": parts[2],
+            "target": parts[4],
+            "sentAt": utc_iso(parsed),
+            "sentAtEpoch": parsed.timestamp(),
+        })
+    records.sort(key=lambda item: float(item.get("sentAtEpoch") or 0), reverse=True)
+    return records
+
+
+def notification_schedules_payload() -> Dict[str, object]:
+    settings = runtime_settings()
+    rules = parse_assignments(settings.get("alertRules", ""), DEFAULT_ALERT_RULES)
+    cadence = parse_assignments(settings.get("alertCadenceMinutes", ""), DEFAULT_CADENCE)
+    store = SQLiteMonitorStore()
+    accounts = {account.account_id: account for account in AccountRegistry().load()}
+    now_at = datetime.now(timezone.utc)
+    message_types = list(dict.fromkeys(list(DEFAULT_CADENCE.keys()) + list(DEFAULT_NOTIFICATION_TEMPLATES.keys())))
+    schedules = []
+    for message_type in message_types:
+        has_cadence = message_type in DEFAULT_CADENCE
+        minutes = int(cadence.get(message_type, DEFAULT_CADENCE.get(message_type, 0)) or 0)
+        records = cadence_records_for_type(store.sent, message_type)
+        last_record = records[0] if records else {}
+        last_sent_at = parse_utc(str(last_record.get("sentAt") or "")) if last_record else None
+        next_eligible_at = last_sent_at + timedelta(minutes=max(10, minutes)) if last_sent_at and minutes else None
+        enabled = bool(rules.get(message_type, 1)) if has_cadence else True
+        recent_targets = []
+        for record in records[:4]:
+            account = accounts.get(str(record.get("accountId") or ""))
+            target = str(record.get("target") or "all")
+            recent_targets.append({
+                "accountId": record.get("accountId") or "",
+                "accountLabel": account.label if account else str(record.get("accountId") or ""),
+                "target": "" if target == "all" else target,
+                "sentAt": record.get("sentAt") or "",
+            })
+        if not has_cadence:
+            status = "event"
+        elif not enabled:
+            status = "disabled"
+        elif next_eligible_at and next_eligible_at > now_at:
+            status = "waiting"
+        else:
+            status = "ready"
+        if minutes:
+            cadence_text = "조건이 다시 충족되면 최소 " + str(max(10, minutes)) + "분 간격으로 보냅니다."
+        else:
+            cadence_text = "정해진 주기 없이 해당 이벤트가 생길 때만 보냅니다."
+        schedules.append({
+            "messageType": message_type,
+            "label": MESSAGE_TYPE_LABELS.get(message_type, message_type),
+            "enabled": enabled,
+            "status": status,
+            "cadenceMinutes": max(10, minutes) if minutes else 0,
+            "cadenceText": cadence_text,
+            "triggerSummary": TRIGGER_SUMMARIES.get(message_type) or NON_CADENCE_MESSAGE_GUIDES.get(message_type) or "설정한 조건이 실제 데이터에서 충족될 때 보냅니다.",
+            "lastSentAt": utc_iso(last_sent_at) if last_sent_at else "",
+            "nextEligibleAt": utc_iso(next_eligible_at) if next_eligible_at else "",
+            "eligibleNow": bool(enabled and (not next_eligible_at or next_eligible_at <= now_at)),
+            "recentTargets": recent_targets,
+        })
+    return {
+        "generatedAt": utc_now_iso(),
+        "schedules": schedules,
     }
 
 
@@ -956,6 +1057,9 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
                 if not self.ensure_writable("공유 모드에서는 알림 템플릿을 변경할 수 없습니다."):
                     return
                 return self.send_payload(200, save_template_payload(self.read_json_body()))
+
+        if path == "/api/notification-schedules" and self.command == "GET":
+            return self.send_payload(200, notification_schedules_payload())
 
         if path == "/api/notification-templates/test-send" and self.command == "POST":
             if not self.ensure_writable("공유 모드에서는 실제 알림을 발송할 수 없습니다."):

@@ -7,7 +7,7 @@ from typing import Dict, Iterable, List, Optional
 
 from ..domain.events import DomainEvent, MONITORING_ALERTS_DETECTED
 from ..domain.model_review import ModelReviewJob
-from ..domain.notification_templates import DEFAULT_NOTIFICATION_TEMPLATES, NotificationTemplate, render_notification
+from ..domain.notification_templates import DEFAULT_NOTIFICATION_TEMPLATES, LEGACY_DEFAULT_TEMPLATE, NotificationTemplate, render_notification
 from ..domain.notifications import NotificationJob
 from ..domain.portfolio import AccountSnapshot, AlertEvent
 from ..domain.symbol_universe import ListedSymbol, normalize_market, normalize_symbol, utc_now_iso as symbol_utc_now_iso
@@ -192,6 +192,8 @@ class SQLiteNotificationTemplateStore(OperationalConnection):
         stamp = utc_now()
         with self.connect() as connection:
             for message_type, payload in DEFAULT_NOTIFICATION_TEMPLATES.items():
+                template = str(payload.get("template") or "")
+                description = str(payload.get("description") or "")
                 connection.execute(
                     """
                     INSERT OR IGNORE INTO notification_templates (
@@ -201,11 +203,20 @@ class SQLiteNotificationTemplateStore(OperationalConnection):
                     """,
                     (
                         message_type,
-                        str(payload.get("template") or ""),
-                        str(payload.get("description") or ""),
+                        template,
+                        description,
                         stamp,
                     ),
                 )
+                if template != LEGACY_DEFAULT_TEMPLATE:
+                    connection.execute(
+                        """
+                        UPDATE notification_templates
+                        SET template = ?, description = ?, updated_at = ?
+                        WHERE message_type = ? AND template = ?
+                        """,
+                        (template, description, stamp, message_type, LEGACY_DEFAULT_TEMPLATE),
+                    )
 
     def row_to_template(self, row) -> NotificationTemplate:
         return NotificationTemplate(

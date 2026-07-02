@@ -25,6 +25,7 @@ from digital_twin.domain.analytics import SafeFormula, StrategyModel, decisions_
 from digital_twin.domain.events import ACCOUNT_SAVED, MONITORING_ALERTS_DETECTED, MONITORING_CYCLE_COMPLETED, MONITORING_SNAPSHOT_COLLECTED, alerts_detected_event
 from digital_twin.domain.monitoring import DEFAULT_ALERT_RULES, DEFAULT_CADENCE, RealtimeMonitor
 from digital_twin.domain.model_review import ModelReviewJob, local_model_review
+from digital_twin.domain.notification_templates import alert_context
 from digital_twin.domain.notifications import NotificationJob
 from digital_twin.domain.parsing import parse_assignments
 from digital_twin.domain.portfolio import AccountSnapshot, AlertEvent, utc_now_iso
@@ -39,7 +40,7 @@ from digital_twin.infrastructure.sqlite_operational import SQLiteAppStore, SQLit
 from digital_twin.infrastructure.symbol_sources import parse_krx_kind_table, parse_nasdaq_listed
 from digital_twin.infrastructure.sqlite_accounts import AccountRegistry
 from digital_twin.infrastructure.toss_snapshots import account_cash_amount, select_account
-from digital_twin.infrastructure.web_server import notification_template_test_payload
+from digital_twin.infrastructure.web_server import notification_schedules_payload, notification_template_test_payload
 from digital_twin.scheduler import MonitorRunner
 
 
@@ -1001,6 +1002,48 @@ class PythonServiceTests(unittest.TestCase):
 
         self.assertEqual(1, runner.run_once(limit=10))
         self.assertEqual("[monitorHeartbeat] 상태 확인\n정상", sent[0])
+
+    def test_default_notification_template_is_readable_and_skips_empty_fields(self):
+        db_path = Path(self.temp.name) / "service.db"
+        templates = SQLiteNotificationTemplateStore(db_path)
+        event = AlertEvent(
+            "main",
+            "메인",
+            "WATCH",
+            "monitorTrendChange",
+            "main:trend:AAPL",
+            "Apple",
+            ["이동평균 변화", "", "신호 20일선 상향 돌파"],
+            "AAPL",
+        )
+
+        message = templates.render(event.rule, alert_context(event))
+
+        self.assertIn("Apple", message)
+        self.assertIn("종목: AAPL", message)
+        self.assertIn("유형: 이동평균 변화", message)
+        self.assertIn("발생 조건:", message)
+        self.assertIn("실제 데이터", message)
+        self.assertIn("- 신호 20일선 상향 돌파", message)
+        self.assertNotIn("\n\n\n", message)
+
+    def test_notification_schedules_use_real_monitor_sent_history(self):
+        registry = AccountRegistry()
+        registry.upsert(AccountConfig("main", "메인", "toss", "https://example.test", "", "", "", ["AAPL"]))
+        store = SQLiteMonitorStore(Path(self.temp.name) / "service.db")
+        event = AlertEvent("main", "메인", "WATCH", "monitorHeartbeat", "main:heartbeat", "상태 확인", ["정상"], "")
+        store.mark_sent([event])
+
+        payload = notification_schedules_payload()
+        schedule = next(item for item in payload["schedules"] if item["messageType"] == "monitorHeartbeat")
+
+        self.assertTrue(schedule["enabled"])
+        self.assertEqual(10, schedule["cadenceMinutes"])
+        self.assertTrue(schedule["lastSentAt"])
+        self.assertTrue(schedule["nextEligibleAt"])
+        self.assertEqual("waiting", schedule["status"])
+        self.assertEqual("전체", schedule["recentTargets"][0]["target"] or "전체")
+        self.assertIn("실시간 모니터링", schedule["triggerSummary"])
 
     def test_notification_template_test_send_uses_live_snapshot_and_template(self):
         registry = AccountRegistry()

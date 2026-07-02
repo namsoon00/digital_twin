@@ -185,7 +185,10 @@ Template management:
 - `npm run python:templates -- list`: list all templates and supported variables.
 - `python3 python_service/service.py templates save < payload.json`: save one `{ "messageType": "...", "template": "..." }`.
 - `python3 python_service/service.py templates reset --message-type monitorHeartbeat`: restore a type's default template.
-- Available variables include `{title}`, `{lines}`, `{rawLines}`, `{body}`, `{messageType}`, `{symbol}`, `{severity}`, `{accountId}`, and `{accountLabel}`.
+- Available variables include `{readableMessage}`, `{title}`, `{dataLines}`, `{triggerSummary}`, `{messageTypeLabel}`, `{symbolLine}`, `{severityLine}`, `{lines}`, `{rawLines}`, `{body}`, `{messageType}`, `{symbol}`, `{severity}`, `{accountId}`, and `{accountLabel}`.
+- `GET /api/notification-schedules`: returns each message type's enabled state, cadence, last real send time, next eligible send time, recent targets, and a plain-language trigger explanation based on `monitor_sent` and `alertCadenceMinutes`.
+
+Default alert templates use `{readableMessage}`. It renders only fields that exist for that event: title, symbol, message type, severity, trigger condition, and non-empty data lines. Existing templates that still match the old default `{title}\n{lines}` are upgraded automatically; custom templates are left unchanged.
 
 Configuration:
 

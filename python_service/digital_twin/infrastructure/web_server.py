@@ -181,6 +181,12 @@ def settings_status_payload() -> Dict[str, object]:
         "alertThresholds",
         "alertCadenceMinutes",
         "symbolUniverseMaxAgeHours",
+        "externalApiFetchIntervalMinutes",
+        "externalFredSeries",
+        "externalCryptoIds",
+        "externalAlphaMaxSymbols",
+        "externalDartLookbackDays",
+        "externalDartCorpCodes",
     ]
     public = {key: settings.get(key, "") for key in public_keys}
     public.update({
@@ -189,6 +195,10 @@ def settings_status_payload() -> Dict[str, object]:
         "tossAccountSeq": "",
         "telegramBotToken": "",
         "telegramChatId": "",
+        "alphaVantageApiKey": "",
+        "coingeckoApiKey": "",
+        "fredApiKey": "",
+        "opendartApiKey": "",
     })
     for optional_key in ["valuationAssumptions", "marketSignalInputs"]:
         if configured(settings.get(optional_key)):
@@ -201,6 +211,10 @@ def settings_status_payload() -> Dict[str, object]:
             "tossAccountSeq": bool(settings.get("tossAccountSeq")),
             "telegramBotToken": bool(settings.get("telegramBotToken")),
             "telegramChatId": bool(settings.get("telegramChatId")),
+            "alphaVantageApiKey": bool(settings.get("alphaVantageApiKey")),
+            "coingeckoApiKey": bool(settings.get("coingeckoApiKey")),
+            "fredApiKey": bool(settings.get("fredApiKey")),
+            "opendartApiKey": bool(settings.get("opendartApiKey")),
         },
         "locked": bool(configured(os.environ.get("SHARE_TOKEN"))),
     }

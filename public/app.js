@@ -12,6 +12,20 @@
     notifyLinkUrl: "http://127.0.0.1:3000?tab=notifications",
     notifyIntervalMinutes: "10",
     symbolUniverseMaxAgeHours: "24",
+    externalApiFetchIntervalMinutes: "60",
+    externalFredSeries: "DGS10,DGS2,DFF",
+    externalCryptoIds: "bitcoin,ethereum",
+    externalAlphaMaxSymbols: "3",
+    externalDartLookbackDays: "14",
+    externalDartCorpCodes: [
+      "005930=00126380",
+      "000660=00164779",
+      "035420=00266961"
+    ].join("\n"),
+    alphaVantageApiKey: "",
+    coingeckoApiKey: "",
+    fredApiKey: "",
+    opendartApiKey: "",
     fxRates: [
       "KRW=1",
       "USD=1400"
@@ -93,7 +107,12 @@
       "monitorValueChange=1",
       "monitorTrendChange=1",
       "monitorCashChange=1",
-      "monitorDecisionChange=1"
+      "monitorDecisionChange=1",
+      "externalEquityMove=1",
+      "externalCryptoMove=1",
+      "externalMacroShift=1",
+      "externalDartDisclosure=1",
+      "externalDataConnection=1"
     ].join("\n"),
     alertCadenceMinutes: [
       "priceBuyLimit=10",
@@ -129,7 +148,12 @@
       "monitorValueChange=10",
       "monitorTrendChange=10",
       "monitorCashChange=10",
-      "monitorDecisionChange=10"
+      "monitorDecisionChange=10",
+      "externalEquityMove=60",
+      "externalCryptoMove=60",
+      "externalMacroShift=60",
+      "externalDartDisclosure=60",
+      "externalDataConnection=60"
     ].join("\n"),
     alertThresholds: [
       "modelBuyScore=74",
@@ -157,7 +181,11 @@
       "monitorValueDelta=5",
       "monitorMaDistance=8",
       "monitorCashDelta=10",
-      "monitorExitPressureDelta=15"
+      "monitorExitPressureDelta=15",
+      "externalEquityChangePct=3",
+      "externalCryptoChange24hPct=4",
+      "externalCryptoChange7dPct=10",
+      "externalMacroRateDeltaBp=15"
     ].join("\n")
   };
   var tabs = [
@@ -252,7 +280,12 @@
     { key: "monitorValueChange", group: "실시간", label: "평가액 급변", description: "직전 조회 대비 평가액 변화가 커질 때" },
     { key: "monitorTrendChange", group: "실시간", label: "이동평균 변화", description: "20/60일선 돌파, 크로스, 큰 괴리가 감지될 때" },
     { key: "monitorCashChange", group: "실시간", label: "현금비중 급변", description: "시장별 현금비중이 빠르게 변할 때" },
-    { key: "monitorDecisionChange", group: "실시간", label: "판단 변화", description: "종목 판단이나 리스크 점수가 바뀔 때" }
+    { key: "monitorDecisionChange", group: "실시간", label: "판단 변화", description: "종목 판단이나 리스크 점수가 바뀔 때" },
+    { key: "externalEquityMove", group: "외부 API", label: "미장 가격/거래량", description: "Alpha Vantage 현재가와 거래량이 임계값을 넘을 때" },
+    { key: "externalCryptoMove", group: "외부 API", label: "크립토 변동", description: "CoinGecko BTC/ETH 등 크립토 변동이 커질 때" },
+    { key: "externalMacroShift", group: "외부 API", label: "거시 금리 변화", description: "FRED 금리와 10Y-2Y 스프레드가 크게 움직일 때" },
+    { key: "externalDartDisclosure", group: "외부 API", label: "국내 공시", description: "OpenDART에서 보유 국내 종목의 신규 공시가 감지될 때" },
+    { key: "externalDataConnection", group: "외부 API", label: "외부 API 연결", description: "외부 데이터 API 키, 한도, 응답 오류가 감지될 때" }
   ];
   var alertThresholdCatalog = [
     { key: "modelBuyScore", label: "모델 매수 점수", unit: "점", step: "1" },
@@ -280,7 +313,11 @@
     { key: "monitorValueDelta", label: "실시간 평가액 변화", unit: "%", step: "0.1" },
     { key: "monitorMaDistance", label: "이동평균 괴리", unit: "%", step: "0.1" },
     { key: "monitorCashDelta", label: "실시간 현금비중 변화", unit: "%p", step: "1" },
-    { key: "monitorExitPressureDelta", label: "실시간 판단 점수 변화", unit: "점", step: "1" }
+    { key: "monitorExitPressureDelta", label: "실시간 판단 점수 변화", unit: "점", step: "1" },
+    { key: "externalEquityChangePct", label: "미장 가격 변화", unit: "%", step: "0.1" },
+    { key: "externalCryptoChange24hPct", label: "크립토 24h 변화", unit: "%", step: "0.1" },
+    { key: "externalCryptoChange7dPct", label: "크립토 7d 변화", unit: "%", step: "0.1" },
+    { key: "externalMacroRateDeltaBp", label: "거시 금리 변화", unit: "bp", step: "1" }
   ];
   var settingsMemoryStore = "";
   var labDraftsMemoryStore = "";
@@ -899,6 +936,16 @@
       notifyLinkUrl: settingValue("notifyLinkUrl"),
       notifyIntervalMinutes: settingValue("notifyIntervalMinutes"),
       symbolUniverseMaxAgeHours: settingValue("symbolUniverseMaxAgeHours"),
+      externalApiFetchIntervalMinutes: settingValue("externalApiFetchIntervalMinutes"),
+      externalFredSeries: settingValue("externalFredSeries"),
+      externalCryptoIds: settingValue("externalCryptoIds"),
+      externalAlphaMaxSymbols: settingValue("externalAlphaMaxSymbols"),
+      externalDartLookbackDays: settingValue("externalDartLookbackDays"),
+      externalDartCorpCodes: settingValue("externalDartCorpCodes"),
+      alphaVantageApiKey: settingValue("alphaVantageApiKey"),
+      coingeckoApiKey: settingValue("coingeckoApiKey"),
+      fredApiKey: settingValue("fredApiKey"),
+      opendartApiKey: settingValue("opendartApiKey"),
       fxRates: settingValue("fxRates"),
       valuationAssumptions: settingValue("valuationAssumptions"),
       marketSignalInputs: settingValue("marketSignalInputs"),
@@ -5244,6 +5291,26 @@
       renderSettingField("notifyLinkUrl", "알림 링크 URL", "url", "http://127.0.0.1:3000?tab=notifications"),
       renderSettingField("notifyIntervalMinutes", "알림 주기(분)", "number", "10"),
       renderSettingField("symbolUniverseMaxAgeHours", "전체 종목 신선도(시간)", "number", "24"),
+      '</div>',
+      '<div class="model-section">',
+      '<div class="flow-title"><div><strong>외부 데이터 API</strong><span>보유 종목 판단에 붙일 가격, 크립토, 거시, 공시 데이터입니다.</span></div></div>',
+      '<div class="settings-grid">',
+      renderSettingField("alphaVantageApiKey", "Alpha Vantage API Key", secretType, "api key", { preserveConfigured: true }),
+      renderSettingField("coingeckoApiKey", "CoinGecko API Key", secretType, "api key", { preserveConfigured: true }),
+      renderSettingField("fredApiKey", "FRED API Key", secretType, "api key", { preserveConfigured: true }),
+      renderSettingField("opendartApiKey", "OpenDART API Key", secretType, "api key", { preserveConfigured: true }),
+      renderSettingField("externalApiFetchIntervalMinutes", "외부 API 캐시(분)", "number", "60"),
+      renderSettingField("externalAlphaMaxSymbols", "미장 조회 종목 수", "number", "3"),
+      renderSettingField("externalDartLookbackDays", "공시 조회 기간(일)", "number", "14"),
+      renderSettingField("externalFredSeries", "FRED 지표", "text", "DGS10,DGS2,DFF"),
+      renderSettingField("externalCryptoIds", "CoinGecko 코인 ID", "text", "bitcoin,ethereum"),
+      '<label class="setting-field wide">',
+      '<span>OpenDART 종목 매핑</span>',
+      '<textarea data-setting="externalDartCorpCodes" rows="3" autocomplete="off" placeholder="005930=00126380">' + escapeHtml(settingValue("externalDartCorpCodes") || defaultSettings.externalDartCorpCodes) + '</textarea>',
+      '</label>',
+      '</div>',
+      '</div>',
+      '<div class="settings-grid">',
       '<label class="setting-field wide">',
       '<span>환율 설정</span>',
       '<textarea data-setting="fxRates" rows="2" autocomplete="off" placeholder="USD=1400">' + escapeHtml(settingValue("fxRates") || defaultSettings.fxRates) + '</textarea>',

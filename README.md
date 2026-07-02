@@ -32,6 +32,18 @@ TOSS_ACCOUNT_SEQ=... # 선택
 WATCHLIST_SYMBOLS=TSLA,AAPL,NVDA,000660 # 선택
 ```
 
+미장 현재가/거래량, 크립토, 거시 금리, 국내 공시 알림을 켜려면 아래 외부 데이터 API 키를 `.env.local` 또는 상단 설정 화면에 저장합니다. 키 원문은 로컬 DB와 환경 파일에서만 사용하고, API 응답과 정적 미리보기에는 포함하지 않습니다.
+
+```bash
+ALPHA_VANTAGE_API_KEY=...
+COINGECKO_API_KEY=...
+FRED_API_KEY=...
+OPENDART_API_KEY=...
+EXTERNAL_FRED_SERIES=DGS10,DGS2,DFF
+EXTERNAL_CRYPTO_IDS=bitcoin,ethereum
+EXTERNAL_DART_CORP_CODES="005930=00126380;000660=00164779"
+```
+
 토스 개발자 콘솔에서 허용 IP를 관리하는 경우, 브라우저 IP가 아니라 이 로컬 서버가 외부로 나가는 공인 IP를 등록해야 합니다. GitHub Pages 같은 정적 웹 페이지에서 브라우저가 직접 토스 API를 호출하는 구조는 `client_secret` 노출과 사용자별 유동 IP 문제 때문에 사용하지 않습니다.
 
 GitHub Pages에 올라가는 모든 정적 산출물은 아래 명령으로 함께 갱신합니다.
@@ -44,7 +56,7 @@ npm run generate:static
 
 웹은 `대시보드`, `계정`, `알림`, `모델링`, `모니터링` 하단 탭으로 구성됩니다. 기존 판단/실험실/보유/피드/관심 탭은 메인 내비게이션에서 제거했고, Python 서비스 운영에 필요한 기능별 화면으로 재구성했습니다. `계정` 탭은 로컬 SQLite DB에 저장된 계정 값을 폼에 채우고, secret 원문은 다시 표시하지 않습니다. `알림` 탭에서는 메시지 타입별 활성화, 주기, 임계값, 발송 채널, 타입별 메시지 템플릿을 관리하고, `모델링` 탭에서는 모델 공식과 판단 기준을 관리합니다.
 
-상단 설정 버튼에서는 관심 종목, Toss API, 텔레그램 알림 설정을 로컬 SQLite DB(`data/service.db`)의 `runtime_settings` 테이블에 저장합니다. `client_secret`과 bot token은 서버가 사용하는 로컬 DB에만 저장하고, API 응답과 화면에는 원문을 다시 표시하지 않습니다. GitHub Pages 정적 미리보기에서는 서버 DB가 없으므로 민감 설정 저장을 사용하지 않습니다.
+상단 설정 버튼에서는 관심 종목, Toss API, 외부 데이터 API, 텔레그램 알림 설정을 로컬 SQLite DB(`data/service.db`)의 `runtime_settings` 테이블에 저장합니다. `client_secret`, 외부 API key, bot token은 서버가 사용하는 로컬 DB에만 저장하고, API 응답과 화면에는 원문을 다시 표시하지 않습니다. GitHub Pages 정적 미리보기에서는 서버 DB가 없으므로 민감 설정 저장을 사용하지 않습니다.
 
 ## 앱 구조
 

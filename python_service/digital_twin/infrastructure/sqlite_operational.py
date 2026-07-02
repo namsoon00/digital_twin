@@ -323,6 +323,38 @@ class SQLiteAppStore(OperationalConnection):
             )
 
 
+class SQLiteExternalSignalCache(OperationalConnection):
+    store_id = "external_signals"
+
+    def load(self) -> Dict[str, object]:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM app_store WHERE store_id = ?",
+                (self.store_id,),
+            ).fetchone()
+        if not row:
+            return {}
+        try:
+            payload = json.loads(row["payload_json"])
+            return payload if isinstance(payload, dict) else {}
+        except json.JSONDecodeError:
+            return {}
+
+    def replace(self, payload: Dict[str, object]) -> None:
+        stamp = utc_now()
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO app_store (store_id, payload_json, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(store_id) DO UPDATE SET
+                    payload_json = excluded.payload_json,
+                    updated_at = excluded.updated_at
+                """,
+                (self.store_id, json_dumps(payload), stamp),
+            )
+
+
 class SQLiteSymbolUniverseStore(OperationalConnection):
     def upsert_many(self, symbols: Iterable[ListedSymbol]) -> int:
         items = [item for item in symbols if item.symbol and item.market]

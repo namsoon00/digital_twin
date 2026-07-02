@@ -93,6 +93,7 @@ class AccountSnapshot:
     portfolio: PortfolioSummary
     positions: List[Position] = field(default_factory=list)
     decisions: List[DecisionItem] = field(default_factory=list)
+    external_signals: Dict[str, object] = field(default_factory=dict)
 
     def to_monitor_state(self) -> Dict[str, object]:
         return {
@@ -113,6 +114,7 @@ class AccountSnapshot:
                 for item in self.decisions
                 if item.source == "holding"
             },
+            "externalSignals": dict(self.external_signals or {}),
         }
 
 

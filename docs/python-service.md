@@ -137,6 +137,11 @@ The monitor emits account-scoped events for:
 - market cash ratio moves
 - decision score changes
 - holding timing checks
+- Alpha Vantage US quote/volume moves
+- CoinGecko crypto market moves
+- FRED macro rate/spread shifts
+- OpenDART disclosure changes for configured Korean holdings
+- external data API connection errors
 
 When a `monitorDecisionChange` alert is emitted, the message includes:
 
@@ -147,6 +152,27 @@ When a `monitorDecisionChange` alert is emitted, the message includes:
 The same decision-change alert also queues a deeper asynchronous model review. The realtime alert path does not wait for LLM/Codex output.
 
 The app store is stored in `app_store`, runtime settings are stored in `runtime_settings`, listed symbols are stored in `symbol_universe` with source freshness in `symbol_universe_sources`, snapshots are stored in `monitor_snapshots`, cadence is stored per account, rule, and symbol in `monitor_sent`, notification templates are stored in `notification_templates`, and outgoing notification jobs are stored in `notification_jobs` inside `data/service.db`.
+
+External data signals are collected in `python_service/digital_twin/infrastructure/external_signals.py` and cached in `app_store` with the `external_signals` store id. The cache is separated by the holdings/settings combination so multiple accounts do not reuse the wrong symbol set, and it prevents each realtime monitoring tick from calling every vendor API. `AccountSnapshot.external_signals` carries normalized data into the domain monitor, and `RealtimeMonitor.external_signal_events()` decides whether to emit:
+
+- `externalEquityMove`: Alpha Vantage `GLOBAL_QUOTE` for USD/US holdings.
+- `externalCryptoMove`: CoinGecko market data for configured crypto ids.
+- `externalMacroShift`: FRED series observations and the 10Y-2Y spread when `DGS10` and `DGS2` are configured.
+- `externalDartDisclosure`: OpenDART recent disclosures for configured Korean ticker to corp-code mappings.
+- `externalDataConnection`: provider errors such as missing/invalid response, API limit, or key problems.
+
+Configuration:
+
+- `ALPHA_VANTAGE_API_KEY`: Alpha Vantage key, used for US equity quote and volume alerts.
+- `COINGECKO_API_KEY`: CoinGecko demo/pro key, optional for higher quota.
+- `FRED_API_KEY`: FRED key, used for macro series alerts.
+- `OPENDART_API_KEY`: OpenDART certificate key, used for Korean disclosure alerts.
+- `EXTERNAL_API_FETCH_INTERVAL_MINUTES`: cache duration, minimum 10 minutes, default 60.
+- `EXTERNAL_FRED_SERIES`: comma-separated FRED series ids, default `DGS10,DGS2,DFF`.
+- `EXTERNAL_CRYPTO_IDS`: comma-separated CoinGecko ids, default `bitcoin,ethereum`.
+- `EXTERNAL_ALPHA_MAX_SYMBOLS`: max US holdings queried per refresh, default 3.
+- `EXTERNAL_DART_LOOKBACK_DAYS`: OpenDART disclosure lookback, default 14.
+- `EXTERNAL_DART_CORP_CODES`: ticker-to-corp-code mappings, for example `005930=00126380;000660=00164779`.
 
 ## Event Sourcing and Outbox
 

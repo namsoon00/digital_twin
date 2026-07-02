@@ -40,6 +40,12 @@ PUBLIC_SETTING_KEYS = [
     "modelReviewTimeoutSeconds",
     "modelReviewIntervalSeconds",
     "modelReviewBatchSize",
+    "externalApiFetchIntervalMinutes",
+    "externalFredSeries",
+    "externalCryptoIds",
+    "externalAlphaMaxSymbols",
+    "externalDartLookbackDays",
+    "externalDartCorpCodes",
 ]
 
 
@@ -98,6 +104,10 @@ def configured_runtime_flags(settings: Dict[str, str]) -> Dict[str, bool]:
         "tossAccountSeq": configured(settings.get("tossAccountSeq")),
         "telegramBotToken": configured(settings.get("telegramBotToken")),
         "telegramChatId": configured(settings.get("telegramChatId")),
+        "alphaVantageApiKey": configured(settings.get("alphaVantageApiKey")),
+        "coingeckoApiKey": configured(settings.get("coingeckoApiKey")),
+        "fredApiKey": configured(settings.get("fredApiKey")),
+        "opendartApiKey": configured(settings.get("opendartApiKey")),
     }
 
 
@@ -184,6 +194,13 @@ def admin_preview_config() -> Dict[str, object]:
                     {"key": "telegramBotToken", "label": "Telegram Bot Token", "type": "secret", "masked": True},
                     {"key": "telegramChatId", "label": "Telegram Chat ID", "type": "secret", "masked": True},
                     {"key": "notifyLinkUrl", "label": "알림 링크 URL", "type": "url", "default": "http://127.0.0.1:3000?tab=notifications"},
+                    {"key": "alphaVantageApiKey", "label": "Alpha Vantage API Key", "type": "secret", "masked": True},
+                    {"key": "coingeckoApiKey", "label": "CoinGecko API Key", "type": "secret", "masked": True},
+                    {"key": "fredApiKey", "label": "FRED API Key", "type": "secret", "masked": True},
+                    {"key": "opendartApiKey", "label": "OpenDART API Key", "type": "secret", "masked": True},
+                    {"key": "externalFredSeries", "label": "FRED 지표", "type": "text"},
+                    {"key": "externalCryptoIds", "label": "CoinGecko 코인 ID", "type": "text"},
+                    {"key": "externalDartCorpCodes", "label": "OpenDART 종목 매핑", "type": "assignmentText"},
                     {"key": "formulaWeights", "label": "공식 가중치", "type": "assignmentText"},
                     {"key": "modelDecisionThresholds", "label": "모델 판단 기준", "type": "assignmentText"},
                 ],

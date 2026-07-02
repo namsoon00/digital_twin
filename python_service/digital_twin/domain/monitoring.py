@@ -22,6 +22,11 @@ DEFAULT_ALERT_RULES = {
     "monitorTrendChange": 1,
     "monitorCashChange": 1,
     "monitorDecisionChange": 1,
+    "externalEquityMove": 1,
+    "externalCryptoMove": 1,
+    "externalMacroShift": 1,
+    "externalDartDisclosure": 1,
+    "externalDataConnection": 1,
 }
 
 DEFAULT_THRESHOLDS = {
@@ -30,6 +35,10 @@ DEFAULT_THRESHOLDS = {
     "monitorMaDistance": 8,
     "monitorCashDelta": 10,
     "monitorExitPressureDelta": 15,
+    "externalEquityChangePct": 3,
+    "externalCryptoChange24hPct": 4,
+    "externalCryptoChange7dPct": 10,
+    "externalMacroRateDeltaBp": 15,
 }
 
 DEFAULT_CADENCE = {
@@ -44,6 +53,11 @@ DEFAULT_CADENCE = {
     "monitorTrendChange": 10,
     "monitorCashChange": 10,
     "monitorDecisionChange": 10,
+    "externalEquityMove": 60,
+    "externalCryptoMove": 60,
+    "externalMacroShift": 60,
+    "externalDartDisclosure": 60,
+    "externalDataConnection": 60,
 }
 
 MIN_CADENCE_MINUTES = 10
@@ -128,6 +142,7 @@ class RealtimeMonitor:
         if previous:
             events.extend(self.position_change_events(snapshot, previous))
             events.extend(self.cash_events(snapshot, previous))
+        events.extend(self.external_signal_events(snapshot, previous or {}))
         events.extend(self.holding_timing_events(snapshot))
         return [event for event in events if self.enabled(event.rule)]
 
@@ -166,6 +181,9 @@ class RealtimeMonitor:
             ))
 
         events.extend(self.only_rule("monitorCashChange", self.cash_events(snapshot, self.previous_with_cash_delta(state))))
+        external_snapshot = self.snapshot_with_sample_external_signals(snapshot)
+        external_state = external_snapshot.to_monitor_state()
+        events.extend(self.external_signal_events(external_snapshot, self.previous_with_external_delta(external_state)))
         timing_events = self.holding_timing_events(snapshot)
         if not timing_events and snapshot.decisions:
             timing_snapshot = replace(snapshot, decisions=[
@@ -382,6 +400,169 @@ class RealtimeMonitor:
             return "ALERT"
         return "WATCH"
 
+    def external_signal_events(self, snapshot: AccountSnapshot, previous: Dict[str, object]) -> List[AlertEvent]:
+        signals = snapshot.external_signals or {}
+        if not signals:
+            return []
+        previous_signals = previous.get("externalSignals") or {}
+        events: List[AlertEvent] = []
+        events.extend(self.external_data_connection_events(snapshot, signals))
+        events.extend(self.external_equity_events(snapshot, signals))
+        events.extend(self.external_crypto_events(snapshot, signals))
+        events.extend(self.external_macro_events(snapshot, signals, previous_signals))
+        events.extend(self.external_dart_events(snapshot, signals, previous_signals))
+        return events
+
+    def external_data_connection_events(self, snapshot: AccountSnapshot, signals: Dict[str, object]) -> List[AlertEvent]:
+        events: List[AlertEvent] = []
+        for item in signals.get("statuses") or []:
+            if not isinstance(item, dict) or item.get("ok", True):
+                continue
+            source = str(item.get("source") or "외부 API")
+            message = str(item.get("message") or "연결 확인 필요")
+            events.append(AlertEvent(
+                snapshot.account_id,
+                snapshot.account_label,
+                "WATCH",
+                "externalDataConnection",
+                ":".join([snapshot.account_id, "external", source, message[:32]]),
+                "외부 데이터 연결",
+                [source, message, "키/호출 제한/응답 형식 확인"],
+            ))
+        return events
+
+    def external_equity_events(self, snapshot: AccountSnapshot, signals: Dict[str, object]) -> List[AlertEvent]:
+        threshold = float(self.thresholds.get("externalEquityChangePct", 0))
+        events: List[AlertEvent] = []
+        quotes = signals.get("equityQuotes") or {}
+        for symbol, quote in quotes.items():
+            if not isinstance(quote, dict):
+                continue
+            change = number(quote.get("changePercent"))
+            if threshold and abs(change) < threshold:
+                continue
+            symbol_label = str(symbol or "").upper()
+            events.append(AlertEvent(
+                snapshot.account_id,
+                snapshot.account_label,
+                "ALERT" if change < 0 else "WATCH",
+                "externalEquityMove",
+                ":".join([snapshot.account_id, "alpha", symbol_label, signed_pct(change)]),
+                symbol_label,
+                [
+                    "미장 가격 변동 " + signed_pct(change),
+                    "가격 " + money(number(quote.get("price")), "USD"),
+                    "거래량 " + compact_number(number(quote.get("volume"))),
+                    "기준일 " + str(quote.get("latestTradingDay") or "-"),
+                    "출처 " + str(quote.get("provider") or "Alpha Vantage"),
+                ],
+                symbol_label,
+            ))
+        return events
+
+    def external_crypto_events(self, snapshot: AccountSnapshot, signals: Dict[str, object]) -> List[AlertEvent]:
+        day_threshold = float(self.thresholds.get("externalCryptoChange24hPct", 0))
+        week_threshold = float(self.thresholds.get("externalCryptoChange7dPct", 0))
+        events: List[AlertEvent] = []
+        markets = signals.get("cryptoMarkets") or {}
+        for coin_id, item in markets.items():
+            if not isinstance(item, dict):
+                continue
+            change24h = number(item.get("change24h"))
+            change7d = number(item.get("change7d"))
+            if day_threshold and abs(change24h) < day_threshold and week_threshold and abs(change7d) < week_threshold:
+                continue
+            symbol = str(item.get("symbol") or coin_id).upper()
+            severity = "ALERT" if change24h < 0 or change7d < 0 else "WATCH"
+            events.append(AlertEvent(
+                snapshot.account_id,
+                snapshot.account_label,
+                severity,
+                "externalCryptoMove",
+                ":".join([snapshot.account_id, "crypto", symbol, signed_pct(change24h)]),
+                "크립토 변동",
+                [
+                    symbol + " 24h " + signed_pct(change24h) + " · 7d " + signed_pct(change7d),
+                    "가격 " + money(number(item.get("price")), "USD"),
+                    "24h 거래액 " + money(number(item.get("volume24h")), "USD"),
+                    "출처 " + str(item.get("provider") or "CoinGecko"),
+                    "MSTR/STRC 등 비트코인 민감 종목 점검",
+                ],
+                symbol,
+            ))
+        return events
+
+    def external_macro_events(self, snapshot: AccountSnapshot, signals: Dict[str, object], previous_signals: Dict[str, object]) -> List[AlertEvent]:
+        threshold_bp = float(self.thresholds.get("externalMacroRateDeltaBp", 0))
+        macro = signals.get("macro") if isinstance(signals.get("macro"), dict) else {}
+        previous_macro = previous_signals.get("macro") if isinstance(previous_signals.get("macro"), dict) else {}
+        series = macro.get("series") if isinstance(macro.get("series"), dict) else {}
+        previous_series = previous_macro.get("series") if isinstance(previous_macro.get("series"), dict) else {}
+        events: List[AlertEvent] = []
+        lines: List[str] = []
+        for series_id, item in series.items():
+            if not isinstance(item, dict):
+                continue
+            previous_item = previous_series.get(series_id) if isinstance(previous_series.get(series_id), dict) else {}
+            if not previous_item:
+                continue
+            current_value = number(item.get("value"))
+            previous_value = number(previous_item.get("value"))
+            delta_bp = (current_value - previous_value) * 100
+            if threshold_bp and abs(delta_bp) < threshold_bp:
+                continue
+            lines.append(str(series_id) + " " + compact_number(current_value) + "% (" + signed_number(delta_bp) + "bp)")
+        if "yieldSpread10y2y" in macro and "yieldSpread10y2y" in previous_macro:
+            spread = number(macro.get("yieldSpread10y2y"))
+            previous_spread = number(previous_macro.get("yieldSpread10y2y"))
+            spread_delta_bp = (spread - previous_spread) * 100
+            if not threshold_bp or abs(spread_delta_bp) >= threshold_bp:
+                lines.append("10Y-2Y " + compact_number(spread) + "% (" + signed_number(spread_delta_bp) + "bp)")
+        if not lines:
+            return events
+        severity = "ALERT" if any("(-" in line for line in lines) else "WATCH"
+        events.append(AlertEvent(
+            snapshot.account_id,
+            snapshot.account_label,
+            severity,
+            "externalMacroShift",
+            ":".join([snapshot.account_id, "macro", ",".join(lines[:2])]),
+            "거시 지표 변화",
+            ["FRED 금리/스프레드 변화"] + lines + ["모델 위험 선호 점수 재확인"],
+        ))
+        return events
+
+    def external_dart_events(self, snapshot: AccountSnapshot, signals: Dict[str, object], previous_signals: Dict[str, object]) -> List[AlertEvent]:
+        disclosures = signals.get("dartDisclosures") if isinstance(signals.get("dartDisclosures"), dict) else {}
+        previous_disclosures = previous_signals.get("dartDisclosures") if isinstance(previous_signals.get("dartDisclosures"), dict) else {}
+        events: List[AlertEvent] = []
+        for symbol, item in disclosures.items():
+            if not isinstance(item, dict):
+                continue
+            previous_item = previous_disclosures.get(symbol) if isinstance(previous_disclosures.get(symbol), dict) else {}
+            previous_receipt = str(previous_item.get("receiptNo") or "")
+            receipt = str(item.get("receiptNo") or "")
+            if not previous_receipt or not receipt or previous_receipt == receipt:
+                continue
+            symbol_label = str(symbol or "").upper()
+            events.append(AlertEvent(
+                snapshot.account_id,
+                snapshot.account_label,
+                "WATCH",
+                "externalDartDisclosure",
+                ":".join([snapshot.account_id, "dart", symbol_label, receipt]),
+                str(item.get("corpName") or symbol_label),
+                [
+                    "신규 공시 감지",
+                    str(item.get("reportName") or "-"),
+                    "접수일 " + str(item.get("receiptDate") or "-"),
+                    "최근 공시 " + compact_number(number(item.get("count"))) + "건",
+                    "출처 " + str(item.get("provider") or "OpenDART"),
+                ],
+                symbol_label,
+            ))
+        return events
+
     def previous_with_decision_delta(self, state: Dict[str, object], symbol: str) -> Dict[str, object]:
         previous = deepcopy(state)
         decision = previous.get("decisions", {}).get(symbol, {})
@@ -399,6 +580,66 @@ class RealtimeMonitor:
         first = markets[0]
         current = float(first.get("cashRatio") or 0)
         first["cashRatio"] = current + float(self.thresholds.get("monitorCashDelta", 0)) + 1
+        return previous
+
+    def snapshot_with_sample_external_signals(self, snapshot: AccountSnapshot) -> AccountSnapshot:
+        signals = snapshot.external_signals if snapshot.external_signals else {
+            "equityQuotes": {
+                "AAPL": {
+                    "provider": "Alpha Vantage",
+                    "price": 125.5,
+                    "changePercent": 4.2,
+                    "volume": 58000000,
+                    "latestTradingDay": "2026-07-01",
+                }
+            },
+            "cryptoMarkets": {
+                "bitcoin": {
+                    "provider": "CoinGecko",
+                    "symbol": "BTC",
+                    "name": "Bitcoin",
+                    "price": 108000,
+                    "volume24h": 42000000000,
+                    "change24h": -5.4,
+                    "change7d": -11.2,
+                }
+            },
+            "macro": {
+                "series": {
+                    "DGS10": {"provider": "FRED", "date": "2026-07-01", "value": 4.35},
+                    "DGS2": {"provider": "FRED", "date": "2026-07-01", "value": 3.95},
+                },
+                "yieldSpread10y2y": 0.4,
+            },
+            "dartDisclosures": {
+                "005930": {
+                    "provider": "OpenDART",
+                    "corpName": "삼성전자",
+                    "reportName": "주요사항보고서",
+                    "receiptNo": "20260701000001",
+                    "receiptDate": "20260701",
+                    "count": 1,
+                }
+            },
+            "statuses": [{"source": "FRED", "ok": False, "message": "샘플 연결 오류"}],
+        }
+        return replace(snapshot, external_signals=signals)
+
+    def previous_with_external_delta(self, state: Dict[str, object]) -> Dict[str, object]:
+        previous = deepcopy(state)
+        signals = previous.setdefault("externalSignals", {})
+        series = (signals.setdefault("macro", {}).setdefault("series", {}))
+        if "DGS10" in series:
+            series["DGS10"]["value"] = number(series["DGS10"].get("value")) - 0.25
+        if "DGS2" in series:
+            series["DGS2"]["value"] = number(series["DGS2"].get("value")) + 0.05
+        if "yieldSpread10y2y" in signals.get("macro", {}):
+            signals["macro"]["yieldSpread10y2y"] = number(signals["macro"].get("yieldSpread10y2y")) - 0.3
+        disclosures = signals.setdefault("dartDisclosures", {})
+        for disclosure in disclosures.values():
+            if isinstance(disclosure, dict):
+                disclosure["receiptNo"] = "previous-" + str(disclosure.get("receiptNo") or "")
+                break
         return previous
 
     def connection_events(self, snapshot: AccountSnapshot, previous: Dict[str, object]) -> List[AlertEvent]:

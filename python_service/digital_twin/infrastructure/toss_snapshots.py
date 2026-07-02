@@ -9,6 +9,7 @@ from typing import Dict, List, Tuple
 from ..domain.accounts import AccountConfig
 from ..domain.analytics import decisions_for_positions, normalize_position, number, portfolio_summary, technical_indicators_from_candles
 from ..domain.portfolio import AccountSnapshot, Position, utc_now_iso
+from .external_signals import ExternalSignalProvider
 from .settings import currency_rates
 
 
@@ -221,6 +222,7 @@ class TossProvider:
 def build_snapshot(account: AccountConfig) -> AccountSnapshot:
     provider = TossProvider(account)
     mode, status, positions, cash, currency = provider.fetch_positions()
+    external_signals = ExternalSignalProvider().signals_for_positions(positions)
     portfolio = portfolio_summary(positions, cash, currency, currency_rates())
     decisions = decisions_for_positions(positions, portfolio)
     return AccountSnapshot(
@@ -233,4 +235,5 @@ def build_snapshot(account: AccountConfig) -> AccountSnapshot:
         portfolio=portfolio,
         positions=positions,
         decisions=decisions,
+        external_signals=external_signals,
     )

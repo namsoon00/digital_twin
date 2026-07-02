@@ -57,6 +57,26 @@ DEFAULT_NOTIFICATION_TEMPLATES = {
         "template": DEFAULT_TEMPLATE,
         "description": "매수/매도 판단 변화 알림",
     },
+    "externalEquityMove": {
+        "template": DEFAULT_TEMPLATE,
+        "description": "Alpha Vantage 기반 미장 가격/거래량 변동 알림",
+    },
+    "externalCryptoMove": {
+        "template": DEFAULT_TEMPLATE,
+        "description": "CoinGecko 기반 크립토 변동 알림",
+    },
+    "externalMacroShift": {
+        "template": DEFAULT_TEMPLATE,
+        "description": "FRED 기반 금리/스프레드 변화 알림",
+    },
+    "externalDartDisclosure": {
+        "template": DEFAULT_TEMPLATE,
+        "description": "OpenDART 기반 국내 종목 공시 변화 알림",
+    },
+    "externalDataConnection": {
+        "template": DEFAULT_TEMPLATE,
+        "description": "외부 데이터 API 연결 상태 알림",
+    },
     "modelReview": {
         "template": BODY_TEMPLATE,
         "description": "비동기 모델 리뷰 결과 알림",

@@ -46,12 +46,22 @@ TEXT_SETTING_KEYS = [
     "notificationQueueBatchSize",
     "notificationSendGapSeconds",
     "symbolUniverseMaxAgeHours",
+    "externalApiFetchIntervalMinutes",
+    "externalFredSeries",
+    "externalCryptoIds",
+    "externalAlphaMaxSymbols",
+    "externalDartLookbackDays",
+    "externalDartCorpCodes",
 ]
 
 SECRET_SETTING_KEYS = [
     "tossClientId",
     "tossClientSecret",
     "telegramBotToken",
+    "alphaVantageApiKey",
+    "coingeckoApiKey",
+    "fredApiKey",
+    "opendartApiKey",
 ]
 
 
@@ -200,6 +210,16 @@ def runtime_settings() -> Dict[str, str]:
         "notificationQueueBatchSize": value("notificationQueueBatchSize", "NOTIFICATION_QUEUE_BATCH_SIZE", "10"),
         "notificationSendGapSeconds": value("notificationSendGapSeconds", "NOTIFICATION_SEND_GAP_SECONDS", "1"),
         "symbolUniverseMaxAgeHours": value("symbolUniverseMaxAgeHours", "SYMBOL_UNIVERSE_MAX_AGE_HOURS", "24"),
+        "externalApiFetchIntervalMinutes": value("externalApiFetchIntervalMinutes", "EXTERNAL_API_FETCH_INTERVAL_MINUTES", "60"),
+        "externalFredSeries": value("externalFredSeries", "EXTERNAL_FRED_SERIES", "DGS10,DGS2,DFF"),
+        "externalCryptoIds": value("externalCryptoIds", "EXTERNAL_CRYPTO_IDS", "bitcoin,ethereum"),
+        "externalAlphaMaxSymbols": value("externalAlphaMaxSymbols", "EXTERNAL_ALPHA_MAX_SYMBOLS", "3"),
+        "externalDartLookbackDays": value("externalDartLookbackDays", "EXTERNAL_DART_LOOKBACK_DAYS", "14"),
+        "externalDartCorpCodes": value("externalDartCorpCodes", "EXTERNAL_DART_CORP_CODES", "005930=00126380\n000660=00164779\n035420=00266961"),
+        "alphaVantageApiKey": value("alphaVantageApiKey", "ALPHA_VANTAGE_API_KEY"),
+        "coingeckoApiKey": value("coingeckoApiKey", "COINGECKO_API_KEY"),
+        "fredApiKey": value("fredApiKey", "FRED_API_KEY"),
+        "opendartApiKey": value("opendartApiKey", "OPENDART_API_KEY"),
         "fxRates": value("fxRates", "FX_RATES", "KRW=1\nUSD=1400"),
     }
 

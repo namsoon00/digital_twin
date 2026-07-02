@@ -29,12 +29,13 @@ from digital_twin.domain.notifications import NotificationJob
 from digital_twin.domain.parsing import parse_assignments
 from digital_twin.domain.portfolio import AccountSnapshot, AlertEvent, utc_now_iso
 from digital_twin.infrastructure.event_bus import EventBus, JsonEventLog
+from digital_twin.infrastructure.external_signals import ExternalSignalProvider
 from digital_twin.infrastructure.json_monitor_state import MonitorStore
 from digital_twin.infrastructure.model_review_queue import ModelReviewEnqueuer, ModelReviewJobStore
 from digital_twin.infrastructure.mock_market import mock_market_payload
 from digital_twin.infrastructure.notifications import send_events
 from digital_twin.infrastructure.settings import runtime_settings
-from digital_twin.infrastructure.sqlite_operational import SQLiteAppStore, SQLiteEventLog, SQLiteModelReviewJobStore, SQLiteMonitorStore, SQLiteNotificationJobStore, SQLiteNotificationTemplateStore, SQLiteRuntimeSettingsStore, SQLiteSymbolUniverseStore
+from digital_twin.infrastructure.sqlite_operational import SQLiteAppStore, SQLiteEventLog, SQLiteExternalSignalCache, SQLiteModelReviewJobStore, SQLiteMonitorStore, SQLiteNotificationJobStore, SQLiteNotificationTemplateStore, SQLiteRuntimeSettingsStore, SQLiteSymbolUniverseStore
 from digital_twin.infrastructure.symbol_sources import parse_krx_kind_table, parse_nasdaq_listed
 from digital_twin.infrastructure.sqlite_accounts import AccountRegistry
 from digital_twin.scheduler import MonitorRunner
@@ -467,7 +468,9 @@ class PythonServiceTests(unittest.TestCase):
 
     def test_default_message_type_cadence_is_ten_minutes(self):
         self.assertTrue(DEFAULT_CADENCE)
-        self.assertEqual({10}, set(DEFAULT_CADENCE.values()))
+        self.assertTrue(all(value >= 10 for value in DEFAULT_CADENCE.values()))
+        self.assertEqual(10, DEFAULT_CADENCE["monitorHeartbeat"])
+        self.assertEqual(60, DEFAULT_CADENCE["externalMacroShift"])
 
     def test_default_watchlist_and_model_alerts_include_requested_symbols(self):
         symbols = runtime_settings()["watchlistSymbols"].split(",")
@@ -569,10 +572,174 @@ class PythonServiceTests(unittest.TestCase):
                 "monitorTrendChange",
                 "monitorCashChange",
                 "monitorDecisionChange",
+                "externalEquityMove",
+                "externalCryptoMove",
+                "externalMacroShift",
+                "externalDartDisclosure",
+                "externalDataConnection",
             },
             {event.rule for event in events},
         )
         self.assertTrue(all(not event.message().startswith("메인 ") for event in events))
+
+    def test_external_signal_alerts_cover_configured_data_apis(self):
+        position = normalize_position({
+            "symbol": "AAPL",
+            "name": "Apple",
+            "market": "US",
+            "currency": "USD",
+            "marketValue": 1000,
+            "quantity": 2,
+            "currentPrice": 125,
+            "profitLossRate": 25,
+            "sector": "AI/플랫폼",
+        })
+        kr_position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "marketValue": 1000000,
+            "quantity": 10,
+            "currentPrice": 100000,
+            "sector": "반도체",
+        })
+        portfolio = portfolio_summary([position, kr_position], 300, "KRW")
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "토스 계좌 동기화",
+            utc_now_iso(),
+            portfolio,
+            [position, kr_position],
+            decisions_for_positions([position, kr_position], portfolio),
+            external_signals={
+                "equityQuotes": {
+                    "AAPL": {
+                        "provider": "Alpha Vantage",
+                        "price": 130,
+                        "changePercent": 4.5,
+                        "volume": 58000000,
+                        "latestTradingDay": "2026-07-01",
+                    }
+                },
+                "cryptoMarkets": {
+                    "bitcoin": {
+                        "provider": "CoinGecko",
+                        "symbol": "BTC",
+                        "price": 108000,
+                        "volume24h": 42000000000,
+                        "change24h": -5.2,
+                        "change7d": -12.1,
+                    }
+                },
+                "macro": {
+                    "series": {
+                        "DGS10": {"provider": "FRED", "date": "2026-07-01", "value": 4.35},
+                        "DGS2": {"provider": "FRED", "date": "2026-07-01", "value": 3.95},
+                    },
+                    "yieldSpread10y2y": 0.4,
+                },
+                "dartDisclosures": {
+                    "005930": {
+                        "provider": "OpenDART",
+                        "corpName": "삼성전자",
+                        "reportName": "주요사항보고서",
+                        "receiptNo": "20260701000001",
+                        "receiptDate": "20260701",
+                        "count": 2,
+                    }
+                },
+                "statuses": [{"source": "FRED", "ok": False, "message": "rate limit"}],
+            },
+        )
+        previous = json.loads(json.dumps(snapshot.to_monitor_state()))
+        previous["externalSignals"]["macro"]["series"]["DGS10"]["value"] = 4.0
+        previous["externalSignals"]["macro"]["yieldSpread10y2y"] = 0.0
+        previous["externalSignals"]["dartDisclosures"]["005930"]["receiptNo"] = "20260630000001"
+
+        events = RealtimeMonitor().external_signal_events(snapshot, previous)
+        messages = {event.rule: event.message() for event in events}
+
+        self.assertIn("externalEquityMove", messages)
+        self.assertIn("Alpha Vantage", messages["externalEquityMove"])
+        self.assertIn("externalCryptoMove", messages)
+        self.assertIn("CoinGecko", messages["externalCryptoMove"])
+        self.assertIn("externalMacroShift", messages)
+        self.assertIn("DGS10", messages["externalMacroShift"])
+        self.assertIn("externalDartDisclosure", messages)
+        self.assertIn("주요사항보고서", messages["externalDartDisclosure"])
+        self.assertIn("externalDataConnection", messages)
+
+    def test_external_signal_provider_normalizes_api_responses_and_caches(self):
+        calls = []
+
+        def fake_fetch(url, headers=None):
+            calls.append(url)
+            if "alphavantage" in url:
+                return {"Global Quote": {
+                    "05. price": "130.25",
+                    "06. volume": "58000000",
+                    "07. latest trading day": "2026-07-01",
+                    "09. change": "5.25",
+                    "10. change percent": "4.2%",
+                }}
+            if "coingecko" in url:
+                return [{
+                    "id": "bitcoin",
+                    "symbol": "btc",
+                    "name": "Bitcoin",
+                    "current_price": 108000,
+                    "market_cap": 2100000000000,
+                    "total_volume": 42000000000,
+                    "price_change_percentage_24h_in_currency": -5.4,
+                    "price_change_percentage_7d_in_currency": -11.2,
+                }]
+            if "fred" in url:
+                return {"observations": [{"date": "2026-07-01", "value": "4.35"}]}
+            if "opendart" in url:
+                return {"status": "000", "list": [{
+                    "corp_name": "삼성전자",
+                    "report_nm": "주요사항보고서",
+                    "rcept_no": "20260701000001",
+                    "rcept_dt": "20260701",
+                }]}
+            return {}
+
+        settings = {
+            "alphaVantageApiKey": "alpha-key",
+            "coingeckoApiKey": "cg-key",
+            "fredApiKey": "fred-key",
+            "opendartApiKey": "dart-key",
+            "externalApiFetchIntervalMinutes": "60",
+            "externalFredSeries": "DGS10",
+            "externalCryptoIds": "bitcoin",
+            "externalAlphaMaxSymbols": "2",
+            "externalDartLookbackDays": "14",
+            "externalDartCorpCodes": "005930=00126380",
+        }
+        provider = ExternalSignalProvider(
+            settings=settings,
+            cache=SQLiteExternalSignalCache(Path(self.temp.name) / "service.db"),
+            fetch_json=fake_fetch,
+        )
+        positions = [
+            normalize_position({"symbol": "AAPL", "name": "Apple", "market": "US", "currency": "USD"}),
+            normalize_position({"symbol": "005930", "name": "삼성전자", "market": "KR", "currency": "KRW"}),
+            normalize_position({"symbol": "123456", "name": "미매핑", "market": "KR", "currency": "KRW"}),
+        ]
+
+        signals = provider.signals_for_positions(positions)
+        cached_signals = provider.signals_for_positions(positions)
+
+        self.assertEqual(4, len(calls))
+        self.assertEqual(signals, cached_signals)
+        self.assertEqual(4.2, signals["equityQuotes"]["AAPL"]["changePercent"])
+        self.assertEqual(-5.4, signals["cryptoMarkets"]["bitcoin"]["change24h"])
+        self.assertEqual(4.35, signals["macro"]["series"]["DGS10"]["value"])
+        self.assertEqual("20260701000001", signals["dartDisclosures"]["005930"]["receiptNo"])
 
     def test_message_type_check_command_does_not_send_by_default(self):
         args = build_parser().parse_args(["monitor", "message-types"])

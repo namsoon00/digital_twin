@@ -543,6 +543,90 @@ h3 {
   padding: 16px;
 }
 
+.monitoring-instrument-panel {
+  grid-column: 1 / -1;
+}
+
+.monitoring-instrument-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 14px 16px 0;
+}
+
+.monitoring-instrument-summary > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+}
+
+.monitoring-instrument-summary span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.monitoring-instrument-summary strong {
+  color: var(--ink);
+  font-size: 18px;
+}
+
+.monitoring-instrument-list {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+}
+
+.monitoring-instrument-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(190px, 0.35fr);
+  gap: 14px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+}
+
+.monitoring-instrument-main,
+.monitoring-instrument-side {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  min-width: 0;
+}
+
+.monitoring-instrument-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.monitoring-instrument-title strong,
+.monitoring-instrument-side strong {
+  overflow-wrap: anywhere;
+}
+
+.monitoring-instrument-main span,
+.monitoring-instrument-side span,
+.monitoring-instrument-side em {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 780;
+  line-height: 1.35;
+}
+
+.monitoring-instrument-side {
+  justify-items: end;
+  text-align: right;
+}
+
 .exit-panel {
   grid-column: 1 / -1;
 }
@@ -611,6 +695,11 @@ h3 {
 .source-chip {
   background: var(--blue-soft);
   color: var(--blue);
+}
+
+.source-chip.holding {
+  background: var(--green-soft);
+  color: var(--green);
 }
 
 .source-chip.watchlist {
@@ -3701,6 +3790,16 @@ h3 {
   .symbol-pager div {
     display: grid;
     grid-template-columns: 1fr 1fr;
+  }
+
+  .monitoring-instrument-summary,
+  .monitoring-instrument-row {
+    grid-template-columns: 1fr;
+  }
+
+  .monitoring-instrument-side {
+    justify-items: start;
+    text-align: left;
   }
 
   h1 {

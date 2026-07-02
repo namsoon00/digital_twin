@@ -70,7 +70,7 @@ The BFF contract remains the target for Flutter Web, public previews, or any fut
 | `GET` | `/api/toss/accounts` | List user accounts with masked display numbers | `GET /api/v1/accounts` | 2 |
 | `GET` | `/api/toss/portfolio` | Return holdings plus overview totals | `GET /api/v1/holdings` | 2 |
 | `GET` | `/api/toss/positions` | Return normalized position rows | `GET /api/v1/holdings` | 2 |
-| `GET` | `/api/toss/market-signals?symbols=AAPL,005930` | Return normalized trade strength, volume, buy/sell pressure, and orderbook imbalance | market data: current prices, trades, orderbook, candles | 2 |
+| `GET` | `/api/toss/market-signals?symbols=AAPL,005930` | Return normalized trade strength, volume, buy/sell pressure, investor flow, and orderbook imbalance | market data: current prices, trades, orderbook, candles, and any available investor flow source | 2 |
 | `GET` | `/api/toss/buying-power?currency=KRW` | Return cash buying power | `GET /api/v1/buying-power` | 3 |
 | `GET` | `/api/toss/sellable-quantity?symbol=AAPL` | Return sellable quantity for a symbol | `GET /api/v1/sellable-quantity` | 3 |
 | `GET` | `/api/toss/commissions` | Return account commission rates | `GET /api/v1/commissions` | 3 |
@@ -162,8 +162,15 @@ These are Digiter Twin BFF models. They are not claimed to be Toss raw response 
   "priceChangeRate": "2.1",
   "tradeStrength": "118",
   "volumeRatio": "1.8",
+  "volume": "3521000",
   "buyVolume": "620000",
   "sellVolume": "480000",
+  "foreignBuyVolume": "420000",
+  "foreignSellVolume": "275000",
+  "foreignNetVolume": "145000",
+  "institutionBuyVolume": "310000",
+  "institutionSellVolume": "228000",
+  "institutionNetVolume": "82000",
   "bidAskImbalance": "18",
   "ma20": "69000",
   "ma60": "66000",

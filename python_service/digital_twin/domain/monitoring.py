@@ -95,6 +95,14 @@ def compact_number(value: float) -> str:
     return format(rounded, ",")
 
 
+def signed_number(value: float) -> str:
+    amount = number(value)
+    if not amount:
+        return "-"
+    prefix = "+" if amount > 0 else ""
+    return prefix + compact_number(amount)
+
+
 class RealtimeMonitor:
     def __init__(self, settings: Dict[str, str] = None):
         settings = settings or {}
@@ -259,6 +267,9 @@ class RealtimeMonitor:
     def position_volume(self, position: Dict[str, object]) -> float:
         return number(position.get("volume"))
 
+    def position_volume_ratio(self, position: Dict[str, object]) -> float:
+        return number(position.get("volume_ratio") if "volume_ratio" in position else position.get("volumeRatio"))
+
     def position_trade_strength(self, position: Dict[str, object]) -> float:
         return number(position.get("trade_strength") if "trade_strength" in position else position.get("tradeStrength"))
 
@@ -289,7 +300,32 @@ class RealtimeMonitor:
     def flow_context_line(self, position: Dict[str, object]) -> str:
         trading_value = self.position_trading_value(position)
         trading_value_label = money(trading_value, self.position_currency(position)) if trading_value else "-"
-        return "수급 체결강도 " + compact_number(self.position_trade_strength(position)) + " · 거래액 " + trading_value_label
+        volume = self.position_volume(position)
+        ratio = self.position_volume_ratio(position)
+        volume_label = compact_number(volume)
+        if ratio:
+            volume_label += "(" + compact_number(ratio) + "x)"
+        return "수급 체결강도 " + compact_number(self.position_trade_strength(position)) + " · 거래량 " + volume_label + " · 거래액 " + trading_value_label
+
+    def investor_value(self, position: Dict[str, object], snake_key: str, camel_key: str) -> float:
+        return number(position.get(snake_key) if snake_key in position else position.get(camel_key))
+
+    def investor_summary(self, label: str, buy: float, sell: float, net: float) -> str:
+        if buy or sell:
+            effective_net = net if net else buy - sell
+            return label + " " + signed_number(effective_net) + "(매수 " + compact_number(buy) + "/매도 " + compact_number(sell) + ")"
+        if net:
+            return label + " " + signed_number(net)
+        return label + " -"
+
+    def investor_context_line(self, position: Dict[str, object]) -> str:
+        foreign_buy = self.investor_value(position, "foreign_buy_volume", "foreignBuyVolume")
+        foreign_sell = self.investor_value(position, "foreign_sell_volume", "foreignSellVolume")
+        foreign_net = self.investor_value(position, "foreign_net_volume", "foreignNetVolume")
+        institution_buy = self.investor_value(position, "institution_buy_volume", "institutionBuyVolume")
+        institution_sell = self.investor_value(position, "institution_sell_volume", "institutionSellVolume")
+        institution_net = self.investor_value(position, "institution_net_volume", "institutionNetVolume")
+        return "투자자 " + self.investor_summary("외국인", foreign_buy, foreign_sell, foreign_net) + " · " + self.investor_summary("기관", institution_buy, institution_sell, institution_net)
 
     def ma_distance(self, position: Dict[str, object], period: int) -> float:
         return pct_delta(self.position_current_price(position), self.position_ma(position, period))
@@ -417,7 +453,7 @@ class RealtimeMonitor:
             item = current_positions.get(symbol)
             before = previous_positions.get(symbol)
             if item and not before:
-                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "WATCH", "monitorPositionChange", snapshot.account_id + ":new:" + symbol, item["name"], ["새 보유 종목", "수량 " + str(item.get("quantity", 0)), "평가 " + self.position_value_label(item)], symbol))
+                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "WATCH", "monitorPositionChange", snapshot.account_id + ":new:" + symbol, item["name"], ["새 보유 종목", "수량 " + str(item.get("quantity", 0)), "평가 " + self.position_value_label(item), self.flow_context_line(item), self.investor_context_line(item)], symbol))
                 continue
             if before and not item:
                 events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "WATCH", "monitorPositionChange", snapshot.account_id + ":removed:" + symbol, before["name"], ["보유 목록에서 사라졌습니다", "매도/이관/데이터 변경 여부 확인"], symbol))
@@ -426,16 +462,16 @@ class RealtimeMonitor:
                 continue
             quantity_delta = float(item.get("quantity") or 0) - float(before.get("quantity") or 0)
             if quantity_delta:
-                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "WATCH", "monitorPositionChange", snapshot.account_id + ":quantity:" + symbol + ":" + str(item.get("quantity")), item["name"], ["보유 수량 변경", "이전 " + str(before.get("quantity", 0)), "현재 " + str(item.get("quantity", 0))], symbol))
+                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "WATCH", "monitorPositionChange", snapshot.account_id + ":quantity:" + symbol + ":" + str(item.get("quantity")), item["name"], ["보유 수량 변경", "이전 " + str(before.get("quantity", 0)), "현재 " + str(item.get("quantity", 0)), self.flow_context_line(item), self.investor_context_line(item)], symbol))
             pnl_delta = float(item.get("profit_loss_rate") or 0) - float(before.get("profit_loss_rate") or 0)
             if abs(pnl_delta) >= float(self.thresholds.get("monitorPnlDelta", 0)):
-                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "ALERT" if pnl_delta < 0 else "WATCH", "monitorPnlChange", snapshot.account_id + ":pnl:" + symbol + ":" + signed_pct(pnl_delta), item["name"], ["손익률 급변", "이전 " + signed_pct(float(before.get("profit_loss_rate") or 0)), "현재 " + signed_pct(float(item.get("profit_loss_rate") or 0)), "변화 " + signed_pct(pnl_delta, "%p"), self.flow_context_line(item), self.trend_context_line(item)], symbol))
+                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "ALERT" if pnl_delta < 0 else "WATCH", "monitorPnlChange", snapshot.account_id + ":pnl:" + symbol + ":" + signed_pct(pnl_delta), item["name"], ["손익률 급변", "이전 " + signed_pct(float(before.get("profit_loss_rate") or 0)), "현재 " + signed_pct(float(item.get("profit_loss_rate") or 0)), "변화 " + signed_pct(pnl_delta, "%p"), self.flow_context_line(item), self.investor_context_line(item), self.trend_context_line(item)], symbol))
             value_delta = pct_delta(self.position_value_base(item), self.position_value_base(before))
             if abs(value_delta) >= float(self.thresholds.get("monitorValueDelta", 0)):
-                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "ALERT" if value_delta < 0 else "WATCH", "monitorValueChange", snapshot.account_id + ":value:" + symbol + ":" + signed_pct(value_delta), item["name"], ["평가액 급변", "이전 " + self.position_value_label(before), "현재 " + self.position_value_label(item), "변화 " + signed_pct(value_delta) + self.value_delta_basis_label(before, item), self.flow_context_line(item), self.trend_context_line(item)], symbol))
+                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "ALERT" if value_delta < 0 else "WATCH", "monitorValueChange", snapshot.account_id + ":value:" + symbol + ":" + signed_pct(value_delta), item["name"], ["평가액 급변", "이전 " + self.position_value_label(before), "현재 " + self.position_value_label(item), "변화 " + signed_pct(value_delta) + self.value_delta_basis_label(before, item), self.flow_context_line(item), self.investor_context_line(item), self.trend_context_line(item)], symbol))
             trend_signals = self.trend_signals(before, item)
             if trend_signals:
-                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, self.trend_severity(trend_signals), "monitorTrendChange", snapshot.account_id + ":trend:" + symbol + ":" + ",".join(trend_signals[:2]), item["name"], ["이동평균 변화", "신호 " + " · ".join(trend_signals), self.trend_context_line(item), self.trend_slope_line(item), self.flow_context_line(item)], symbol))
+                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, self.trend_severity(trend_signals), "monitorTrendChange", snapshot.account_id + ":trend:" + symbol + ":" + ",".join(trend_signals[:2]), item["name"], ["이동평균 변화", "신호 " + " · ".join(trend_signals), self.trend_context_line(item), self.trend_slope_line(item), self.flow_context_line(item), self.investor_context_line(item)], symbol))
             decision = current_decisions.get(symbol) or {}
             previous_decision = previous_decisions.get(symbol) or {}
             pressure_delta = float(decision.get("exit_pressure") or 0) - float(previous_decision.get("exit_pressure") or 0)
@@ -448,7 +484,7 @@ class RealtimeMonitor:
                     previous_decision,
                     float(self.thresholds.get("monitorExitPressureDelta", 0)),
                 )
-                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "ALERT" if decision.get("tone") == "danger" else "WATCH", "monitorDecisionChange", snapshot.account_id + ":decision:" + symbol + ":" + str(decision.get("decision")), item["name"], ["판단 변화", "이전 " + str(previous_decision.get("decision") or "-") + " " + str(previous_decision.get("exit_pressure") or 0) + "점", "현재 " + str(decision.get("decision") or "-") + " " + str(decision.get("exit_pressure") or 0) + "점"] + review_lines, symbol))
+                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "ALERT" if decision.get("tone") == "danger" else "WATCH", "monitorDecisionChange", snapshot.account_id + ":decision:" + symbol + ":" + str(decision.get("decision")), item["name"], ["판단 변화", "이전 " + str(previous_decision.get("decision") or "-") + " " + str(previous_decision.get("exit_pressure") or 0) + "점", "현재 " + str(decision.get("decision") or "-") + " " + str(decision.get("exit_pressure") or 0) + "점", self.flow_context_line(item), self.investor_context_line(item), self.trend_context_line(item)] + review_lines, symbol))
         return events
 
     def cash_events(self, snapshot: AccountSnapshot, previous: Dict[str, object]) -> List[AlertEvent]:
@@ -466,9 +502,11 @@ class RealtimeMonitor:
 
     def holding_timing_events(self, snapshot: AccountSnapshot) -> List[AlertEvent]:
         events: List[AlertEvent] = []
+        positions = {item.symbol.upper(): item.to_dict() for item in snapshot.positions if not item.is_cash()}
         for item in snapshot.decisions:
             if item.tone not in {"danger", "caution"} and item.profit_loss_rate > -8:
                 continue
+            position = positions.get(item.symbol.upper()) or item.to_dict()
             events.append(AlertEvent(
                 snapshot.account_id,
                 snapshot.account_label,
@@ -476,7 +514,7 @@ class RealtimeMonitor:
                 "holdingTiming",
                 snapshot.account_id + ":timing:" + item.symbol + ":" + item.decision,
                 item.name,
-                ["상태 " + item.decision, "손익 " + signed_pct(item.profit_loss_rate), "매도/매수 기준 재확인"],
+                ["상태 " + item.decision, "손익 " + signed_pct(item.profit_loss_rate), self.flow_context_line(position), self.investor_context_line(position), self.trend_context_line(position), "매도/매수 기준 재확인"],
                 item.symbol,
             ))
         return events

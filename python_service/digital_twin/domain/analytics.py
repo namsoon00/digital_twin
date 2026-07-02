@@ -70,7 +70,10 @@ def technical_indicators_from_candles(candles: Iterable[Dict[str, object]]) -> D
     closes = [candle_close(item) for item in ordered if candle_close(item) > 0]
     if not closes:
         return {}
+    volumes = [number(item.get("volume")) for item in ordered if number(item.get("volume")) > 0]
     latest = closes[-1]
+    latest_volume = volumes[-1] if volumes else 0.0
+    volume_ma20 = moving_average(volumes, 20) if volumes else 0.0
     ma5 = moving_average(closes, 5)
     ma20 = moving_average(closes, 20)
     ma60 = moving_average(closes, 60)
@@ -89,6 +92,9 @@ def technical_indicators_from_candles(candles: Iterable[Dict[str, object]]) -> D
         "ma60Slope": pct_distance(ma60, prev_ma60),
         "ma20Distance": pct_distance(latest, ma20),
         "ma60Distance": pct_distance(latest, ma60),
+        "volume": latest_volume,
+        "volumeMa20": volume_ma20,
+        "volumeRatio": latest_volume / volume_ma20 if volume_ma20 else 0.0,
     }
 
 
@@ -163,6 +169,83 @@ def normalize_position(item: Dict[str, object]) -> Position:
         "accTradeVolume",
         "거래량",
     ])
+    volume_ratio = first_number(item, [
+        "volumeRatio",
+        "volume_ratio",
+        "relativeVolume",
+        "volumeMultiple",
+        "거래량배율",
+    ])
+    buy_volume = first_number(item, [
+        "buyVolume",
+        "buyTradeVolume",
+        "bidVolume",
+        "buyExecutionVolume",
+        "매수량",
+        "매수체결량",
+    ])
+    sell_volume = first_number(item, [
+        "sellVolume",
+        "sellTradeVolume",
+        "askVolume",
+        "sellExecutionVolume",
+        "매도량",
+        "매도체결량",
+    ])
+    foreign_buy_volume = first_number(item, [
+        "foreignBuyVolume",
+        "foreignerBuyVolume",
+        "foreignInvestorBuyVolume",
+        "foreignBuy",
+        "외국인매수량",
+        "외국인매수",
+    ])
+    foreign_sell_volume = first_number(item, [
+        "foreignSellVolume",
+        "foreignerSellVolume",
+        "foreignInvestorSellVolume",
+        "foreignSell",
+        "외국인매도량",
+        "외국인매도",
+    ])
+    foreign_net_volume = (
+        foreign_buy_volume - foreign_sell_volume
+        if foreign_buy_volume or foreign_sell_volume
+        else first_number(item, [
+            "foreignNet",
+            "foreignNetBuy",
+            "foreignerNetBuy",
+            "foreignInvestorNet",
+            "외국인순매수",
+        ])
+    )
+    institution_buy_volume = first_number(item, [
+        "institutionBuyVolume",
+        "institutionalBuyVolume",
+        "institutionInvestorBuyVolume",
+        "institutionBuy",
+        "기관매수량",
+        "기관매수",
+    ])
+    institution_sell_volume = first_number(item, [
+        "institutionSellVolume",
+        "institutionalSellVolume",
+        "institutionInvestorSellVolume",
+        "institutionSell",
+        "기관매도량",
+        "기관매도",
+    ])
+    institution_net_volume = (
+        institution_buy_volume - institution_sell_volume
+        if institution_buy_volume or institution_sell_volume
+        else first_number(item, [
+            "institutionNet",
+            "institutionNetBuy",
+            "institutionalNet",
+            "institutionInvestorNet",
+            "기관순매수",
+        ])
+    )
     trading_value = first_number(item, [
         "tradingValue",
         "trading_value",
@@ -202,6 +285,15 @@ def normalize_position(item: Dict[str, object]) -> Position:
         trade_strength=trade_strength,
         trading_value=trading_value,
         volume=volume,
+        volume_ratio=volume_ratio,
+        buy_volume=buy_volume,
+        sell_volume=sell_volume,
+        foreign_buy_volume=foreign_buy_volume,
+        foreign_sell_volume=foreign_sell_volume,
+        foreign_net_volume=foreign_net_volume,
+        institution_buy_volume=institution_buy_volume,
+        institution_sell_volume=institution_sell_volume,
+        institution_net_volume=institution_net_volume,
         ma5=first_number(item, ["ma5", "movingAverage5", "sma5"]),
         ma20=first_number(item, ["ma20", "movingAverage20", "sma20"]),
         ma60=first_number(item, ["ma60", "movingAverage60", "sma60"]),

@@ -185,12 +185,28 @@ class PythonServiceTests(unittest.TestCase):
             "currency": "KRW",
             "currentPrice": 72000,
             "volume": "1000",
+            "volumeRatio": "1.7",
+            "buyVolume": "620",
+            "sellVolume": "380",
+            "foreignBuyVolume": "420",
+            "foreignSellVolume": "275",
+            "institutionBuyVolume": "310",
+            "institutionSellVolume": "228",
             "executionStrength": "128.4",
             "marketValue": 720000,
         })
 
         self.assertEqual(128.4, position.trade_strength)
         self.assertEqual(1000, position.volume)
+        self.assertEqual(1.7, position.volume_ratio)
+        self.assertEqual(620, position.buy_volume)
+        self.assertEqual(380, position.sell_volume)
+        self.assertEqual(420, position.foreign_buy_volume)
+        self.assertEqual(275, position.foreign_sell_volume)
+        self.assertEqual(145, position.foreign_net_volume)
+        self.assertEqual(310, position.institution_buy_volume)
+        self.assertEqual(228, position.institution_sell_volume)
+        self.assertEqual(82, position.institution_net_volume)
         self.assertEqual(72000000, position.trading_value)
 
     def test_technical_indicators_are_calculated_from_candles(self):
@@ -210,6 +226,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(18.5, indicators["ma20"])
         self.assertAlmostEqual(((28 / 18.5) - 1) * 100, indicators["ma20Distance"])
         self.assertGreater(indicators["ma20Slope"], 0)
+        self.assertEqual(1027, indicators["volume"])
+        self.assertGreater(indicators["volumeRatio"], 1)
 
     def test_monitor_spike_messages_include_flow_context(self):
         previous_position = normalize_position({
@@ -236,6 +254,11 @@ class PythonServiceTests(unittest.TestCase):
             "sellableQuantity": 20,
             "tradeStrength": 128,
             "volume": 30000,
+            "volumeRatio": 1.8,
+            "foreignBuyVolume": 420000,
+            "foreignSellVolume": 275000,
+            "institutionBuyVolume": 310000,
+            "institutionSellVolume": 228000,
             "sector": "반도체",
         })
         previous_portfolio = portfolio_summary([previous_position])
@@ -267,8 +290,10 @@ class PythonServiceTests(unittest.TestCase):
         pnl_message = next(event for event in events if event.rule == "monitorPnlChange").message()
         value_message = next(event for event in events if event.rule == "monitorValueChange").message()
 
-        self.assertIn("수급 체결강도 128 · 거래액 18억 원", pnl_message)
-        self.assertIn("수급 체결강도 128 · 거래액 18억 원", value_message)
+        self.assertIn("수급 체결강도 128 · 거래량 30,000(1.8x) · 거래액 18억 원", pnl_message)
+        self.assertIn("투자자 외국인 +145,000(매수 420,000/매도 275,000) · 기관 +82,000(매수 310,000/매도 228,000)", pnl_message)
+        self.assertIn("수급 체결강도 128 · 거래량 30,000(1.8x) · 거래액 18억 원", value_message)
+        self.assertIn("투자자 외국인 +145,000(매수 420,000/매도 275,000) · 기관 +82,000(매수 310,000/매도 228,000)", value_message)
 
     def test_monitor_trend_change_uses_moving_average_data(self):
         previous_position = normalize_position({
@@ -295,6 +320,12 @@ class PythonServiceTests(unittest.TestCase):
             "profitLossRate": 5,
             "tradeStrength": 121,
             "tradingValue": 2400000000,
+            "volume": 40000,
+            "volumeRatio": 2.1,
+            "foreignBuyVolume": 510000,
+            "foreignSellVolume": 440000,
+            "institutionBuyVolume": 350000,
+            "institutionSellVolume": 315000,
             "ma20": 104000,
             "ma60": 103000,
             "ma20Slope": 0.8,
@@ -338,7 +369,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("60일선 상향 돌파", message)
         self.assertIn("20/60일선 골든크로스", message)
         self.assertIn("추세 현재 11만 원", message)
-        self.assertIn("수급 체결강도 121 · 거래액 24억 원", message)
+        self.assertIn("수급 체결강도 121 · 거래량 40,000(2.1x) · 거래액 24억 원", message)
+        self.assertIn("투자자 외국인 +70,000(매수 510,000/매도 440,000) · 기관 +35,000(매수 350,000/매도 315,000)", message)
 
     def test_monitor_value_change_formats_usd_with_krw_basis(self):
         previous_position = normalize_position({

@@ -97,10 +97,10 @@ def build_model_review_prompt(job: ModelReviewJob) -> str:
 def local_model_review(job: ModelReviewJob) -> str:
     joined = "\n".join(job.alert_lines)
     validation = "실시간 알림의 데이터 검증 라인을 우선 확인하고, 가격/수량/평가액/손익률 원천이 모두 같은 시점인지 대조하세요."
-    improvement = "체결강도, 거래량, 이동평균, 투자자별 수급을 feature로 추가해 같은 판단 변화가 반복 재현되는지 검증하세요."
+    improvement = "거래량, 이동평균, 평가액 변화를 feature로 추가해 같은 판단 변화가 반복 재현되는지 검증하세요."
     if "손익률 급변" in joined:
         validation = "손익률 급변이 가격 원천 변경, 환율, 분할/배당, 장중 급등락 중 무엇에서 왔는지 먼저 분리하세요."
-        improvement = "손익률 단독 변화와 거래량/체결강도 동반 변화를 분리해 급변 이벤트의 신뢰도를 점수화하세요."
+        improvement = "손익률 단독 변화와 거래량/이동평균 동반 변화를 분리해 급변 이벤트의 신뢰도를 점수화하세요."
     if "현재가/평단 없음" in joined or "평가액 없음" in joined:
         validation = "가격 또는 평가액 필드가 부족하므로 판단 변화의 근거가 약합니다. 원천 API 매핑부터 보완하세요."
         improvement = "필수 feature 누락 시 점수 산출을 보류하거나 confidence를 낮추는 게 좋습니다."
@@ -216,9 +216,9 @@ def model_improvement_hint(
     if abs(pressure_delta) < float(pressure_threshold or 0) and text(current_decision, "decision") != text(previous_decision, "decision"):
         return "판단 경계값 근처 흔들림을 줄이도록 히스테리시스와 최소 유지 시간을 추가"
     if abs(pnl_delta) >= 5:
-        return "체결강도, 거래량, 이동평균으로 손익률 급변이 추세인지 일시 변동인지 검증"
+        return "거래량과 이동평균으로 손익률 급변이 추세인지 일시 변동인지 검증"
     if value(current_position, "current_price") <= 0:
         return "현재가 원천을 연결해 평가액 기반 점수의 신뢰도를 먼저 보강"
     if not text(current_position, "sector"):
         return "섹터 매핑을 보강해 집중도 기반 exit pressure의 오탐을 줄이기"
-    return "체결강도, 거래량, 이동평균, 투자자별 수급을 feature로 추가해 판단 변화의 재현성을 검증"
+    return "거래량, 이동평균, 평가액 변화를 feature로 추가해 판단 변화의 재현성을 검증"

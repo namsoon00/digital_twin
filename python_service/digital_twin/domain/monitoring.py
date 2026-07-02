@@ -383,14 +383,23 @@ class RealtimeMonitor:
         return " (KRW 환산 기준)" if currencies != {"KRW"} else ""
 
     def flow_context_line(self, position: Dict[str, object]) -> str:
-        trading_value = self.position_trading_value(position)
-        trading_value_label = money(trading_value, self.position_currency(position)) if trading_value else "-"
+        parts: List[str] = []
         volume = self.position_volume(position)
         ratio = self.position_volume_ratio(position)
-        volume_label = compact_number(volume)
-        if ratio:
-            volume_label += "(" + compact_number(ratio) + "x)"
-        return "수급 체결강도 " + compact_number(self.position_trade_strength(position)) + " · 거래량 " + volume_label + " · 거래액 " + trading_value_label
+        if volume > 0:
+            volume_label = compact_number(volume)
+            if ratio > 0:
+                volume_label += "(" + compact_number(ratio) + "x)"
+            parts.append("거래량 " + volume_label)
+        elif ratio > 0:
+            parts.append("거래량 배율 " + compact_number(ratio) + "x")
+
+        trading_value = self.position_trading_value(position)
+        if trading_value > 0:
+            parts.append("거래액 " + money(trading_value, self.position_currency(position)))
+        if not parts:
+            return ""
+        return "수급 " + " · ".join(parts)
 
     def investor_value(self, position: Dict[str, object], snake_key: str, camel_key: str) -> float:
         return number(position.get(snake_key) if snake_key in position else position.get(camel_key))
@@ -401,7 +410,7 @@ class RealtimeMonitor:
             return label + " " + signed_number(effective_net) + "(매수 " + compact_number(buy) + "/매도 " + compact_number(sell) + ")"
         if net:
             return label + " " + signed_number(net)
-        return label + " -"
+        return ""
 
     def investor_context_line(self, position: Dict[str, object]) -> str:
         foreign_buy = self.investor_value(position, "foreign_buy_volume", "foreignBuyVolume")
@@ -410,7 +419,14 @@ class RealtimeMonitor:
         institution_buy = self.investor_value(position, "institution_buy_volume", "institutionBuyVolume")
         institution_sell = self.investor_value(position, "institution_sell_volume", "institutionSellVolume")
         institution_net = self.investor_value(position, "institution_net_volume", "institutionNetVolume")
-        return "투자자 " + self.investor_summary("외국인", foreign_buy, foreign_sell, foreign_net) + " · " + self.investor_summary("기관", institution_buy, institution_sell, institution_net)
+        summaries = [
+            self.investor_summary("외국인", foreign_buy, foreign_sell, foreign_net),
+            self.investor_summary("기관", institution_buy, institution_sell, institution_net),
+        ]
+        parts = [summary for summary in summaries if summary]
+        if not parts:
+            return ""
+        return "투자자 " + " · ".join(parts)
 
     def ma_distance(self, position: Dict[str, object], period: int) -> float:
         return pct_delta(self.position_current_price(position), self.position_ma(position, period))
@@ -431,9 +447,14 @@ class RealtimeMonitor:
     def trend_slope_line(self, position: Dict[str, object]) -> str:
         slope20 = number(position.get("ma20_slope") if "ma20_slope" in position else position.get("ma20Slope"))
         slope60 = number(position.get("ma60_slope") if "ma60_slope" in position else position.get("ma60Slope"))
-        if not slope20 and not slope60:
+        parts = []
+        if slope20:
+            parts.append("20일선 " + signed_pct(slope20))
+        if slope60:
+            parts.append("60일선 " + signed_pct(slope60))
+        if not parts:
             return ""
-        return "기울기 20일선 " + signed_pct(slope20) + " · 60일선 " + signed_pct(slope60)
+        return "기울기 " + " · ".join(parts)
 
     def trend_signals(self, before: Dict[str, object], item: Dict[str, object]) -> List[str]:
         signals: List[str] = []

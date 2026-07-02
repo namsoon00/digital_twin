@@ -176,7 +176,7 @@ class NotificationTemplate:
 
 
 def alert_context(event: AlertEvent) -> Dict[str, object]:
-    raw_lines = [str(line) for line in event.lines if str(line).strip()]
+    raw_lines = [str(line).strip() for line in event.lines if str(line).strip()]
     lines = "\n".join(["- " + line for line in raw_lines])
     message_type_label = MESSAGE_TYPE_LABELS.get(event.rule, event.rule)
     severity_label = SEVERITY_LABELS.get(str(event.severity or "").upper(), event.severity or "")
@@ -186,15 +186,24 @@ def alert_context(event: AlertEvent) -> Dict[str, object]:
     type_line = ("유형: " + message_type_label) if message_type_label else ""
     trigger_line = ("발생 조건: " + trigger_summary) if trigger_summary else ""
     data_lines = lines
-    readable_parts = [
-        event.title,
-        symbol_line,
-        type_line,
-        severity_line,
-        trigger_line,
-    ]
+    if severity_label and message_type_label:
+        headline = "[" + severity_label + "] " + message_type_label
+    elif message_type_label:
+        headline = message_type_label
+    elif severity_label:
+        headline = "[" + severity_label + "] " + event.title
+    else:
+        headline = event.title
+    target_parts = [event.title]
+    if event.symbol and event.symbol != event.title:
+        target_parts.append(event.symbol)
+    target_value = " / ".join(part for part in target_parts if part)
+    target_line = "대상: " + target_value if target_value else ""
+    trigger_block = ("조건\n- " + trigger_summary) if trigger_summary else ""
+    data_block = ("데이터\n" + data_lines) if data_lines else ""
+    readable_parts = [headline, target_line, "", trigger_block]
     if data_lines:
-        readable_parts.extend(["", "실제 데이터", data_lines])
+        readable_parts.extend(["", data_block])
     readable_message = "\n".join(part for part in readable_parts if str(part).strip() or part == "").strip()
     body = readable_message or "\n".join([event.title] + ([lines] if lines else []))
     return {
@@ -210,6 +219,10 @@ def alert_context(event: AlertEvent) -> Dict[str, object]:
         "target": event.target(),
         "messageTypeLabel": message_type_label,
         "triggerSummary": trigger_summary,
+        "headline": headline,
+        "targetLine": target_line,
+        "triggerBlock": trigger_block,
+        "dataBlock": data_block,
         "symbolLine": symbol_line,
         "severityLine": severity_line,
         "typeLine": type_line,
@@ -291,6 +304,10 @@ def template_variables() -> List[str]:
         "target",
         "messageTypeLabel",
         "triggerSummary",
+        "headline",
+        "targetLine",
+        "triggerBlock",
+        "dataBlock",
         "symbolLine",
         "severityLine",
         "typeLine",

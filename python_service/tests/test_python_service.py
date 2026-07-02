@@ -346,9 +346,9 @@ class PythonServiceTests(unittest.TestCase):
         pnl_message = next(event for event in events if event.rule == "monitorPnlChange").message()
         value_message = next(event for event in events if event.rule == "monitorValueChange").message()
 
-        self.assertIn("수급 체결강도 128 · 거래량 30,000(1.8x) · 거래액 18억 원", pnl_message)
+        self.assertIn("수급 거래량 30,000(1.8x) · 거래액 18억 원", pnl_message)
         self.assertIn("투자자 외국인 +145,000(매수 420,000/매도 275,000) · 기관 +82,000(매수 310,000/매도 228,000)", pnl_message)
-        self.assertIn("수급 체결강도 128 · 거래량 30,000(1.8x) · 거래액 18억 원", value_message)
+        self.assertIn("수급 거래량 30,000(1.8x) · 거래액 18억 원", value_message)
         self.assertIn("투자자 외국인 +145,000(매수 420,000/매도 275,000) · 기관 +82,000(매수 310,000/매도 228,000)", value_message)
 
     def test_monitor_trend_change_uses_moving_average_data(self):
@@ -425,7 +425,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("60일선 상향 돌파", message)
         self.assertIn("20/60일선 골든크로스", message)
         self.assertIn("추세 현재 11만 원", message)
-        self.assertIn("수급 체결강도 121 · 거래량 40,000(2.1x) · 거래액 24억 원", message)
+        self.assertIn("수급 거래량 40,000(2.1x) · 거래액 24억 원", message)
         self.assertIn("투자자 외국인 +70,000(매수 510,000/매도 440,000) · 기관 +35,000(매수 350,000/매도 315,000)", message)
 
     def test_monitor_value_change_formats_usd_with_krw_basis(self):
@@ -1028,12 +1028,32 @@ class PythonServiceTests(unittest.TestCase):
         message = templates.render(event.rule, alert_context(event))
 
         self.assertIn("Apple", message)
-        self.assertIn("종목: AAPL", message)
-        self.assertIn("유형: 이동평균 변화", message)
-        self.assertIn("발생 조건:", message)
-        self.assertIn("실제 데이터", message)
+        self.assertIn("[관찰] 이동평균 변화", message)
+        self.assertIn("대상: Apple / AAPL", message)
+        self.assertIn("조건", message)
+        self.assertIn("데이터", message)
         self.assertIn("- 신호 20일선 상향 돌파", message)
         self.assertNotIn("\n\n\n", message)
+
+    def test_monitor_context_lines_skip_unavailable_market_data(self):
+        position = normalize_position({
+            "symbol": "AAPL",
+            "name": "Apple",
+            "market": "US",
+            "currency": "USD",
+            "currentPrice": 180,
+            "marketValue": 1000,
+            "profitLossRate": -9,
+            "sector": "AI/플랫폼",
+        }).to_dict()
+        monitor = RealtimeMonitor()
+
+        self.assertEqual("", monitor.flow_context_line(position))
+        self.assertEqual("", monitor.investor_context_line(position))
+        self.assertNotIn("체결강도", "\n".join([
+            monitor.flow_context_line(position),
+            monitor.investor_context_line(position),
+        ]))
 
     def test_notification_schedules_use_real_monitor_sent_history(self):
         registry = AccountRegistry()

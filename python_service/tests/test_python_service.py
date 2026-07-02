@@ -468,6 +468,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual({"KOSPI": 1, "NASDAQ": 1}, store.counts_by_market())
         self.assertEqual("Apple Inc. - Common Stock", store.get("AAPL").name)
         self.assertEqual("삼성전자", store.search(query="삼성", market="KOSPI")[0].name)
+        self.assertEqual(2, store.search_count())
+        self.assertEqual(["AAPL"], [item.symbol for item in store.search(limit=1, offset=1)])
 
     def test_symbol_universe_service_seeds_and_reports_freshness(self):
         service = SymbolUniverseService(SQLiteSymbolUniverseStore(Path(self.temp.name) / "service.db"), runtime_settings())
@@ -477,6 +479,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(any(item["symbol"] == "TSLA" for item in payload["items"]))
         self.assertTrue(payload["summary"]["total"] >= 1)
         self.assertTrue(any(item["market"] == "NASDAQ" for item in payload["summary"]["markets"]))
+        self.assertEqual(0, payload["offset"])
+        self.assertIn("hasMore", payload)
 
     def test_flow_lens_mock_contract_is_python_native(self):
         payload = flow_lens_snapshot(mock=True, watchlist_symbols="TSLA,AAPL,NVDA")

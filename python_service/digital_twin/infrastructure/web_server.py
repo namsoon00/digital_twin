@@ -248,6 +248,7 @@ def symbol_universe_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
         query=first_query(query, "query") or first_query(query, "q"),
         market=first_query(query, "market"),
         limit=int(first_query(query, "limit") or 80),
+        offset=int(first_query(query, "offset") or 0),
     )
 
 

@@ -402,7 +402,7 @@ class SQLiteSymbolUniverseStore(OperationalConnection):
         })
         return ListedSymbol.from_dict(payload)
 
-    def search(self, query: str = "", market: str = "", limit: int = 80) -> List[ListedSymbol]:
+    def symbol_search_clauses(self, query: str = "", market: str = ""):
         query_value = str(query or "").strip()
         market_value = normalize_market(market)
         clauses = ["active = 1"]
@@ -414,7 +414,12 @@ class SQLiteSymbolUniverseStore(OperationalConnection):
             clauses.append("(symbol LIKE ? OR name LIKE ?)")
             like = "%" + query_value.upper() + "%"
             params.extend([like, "%" + query_value + "%"])
-        params.append(max(1, min(500, int(limit or 80))))
+        return query_value, clauses, params
+
+    def search(self, query: str = "", market: str = "", limit: int = 80, offset: int = 0) -> List[ListedSymbol]:
+        query_value, clauses, params = self.symbol_search_clauses(query, market)
+        limit_value = max(1, min(500, int(limit or 80)))
+        offset_value = max(0, int(offset or 0))
         exact_symbol = normalize_symbol(query_value)
         sql = """
             SELECT * FROM symbol_universe
@@ -423,11 +428,21 @@ class SQLiteSymbolUniverseStore(OperationalConnection):
                 CASE WHEN ? != '' AND symbol = ? THEN 0 WHEN ? != '' AND symbol LIKE ? THEN 1 ELSE 2 END,
                 CASE market WHEN 'KOSPI' THEN 1 WHEN 'KOSDAQ' THEN 2 WHEN 'NASDAQ' THEN 3 ELSE 9 END,
                 symbol
-            LIMIT ?
+            LIMIT ? OFFSET ?
         """
         with self.connect() as connection:
-            rows = connection.execute(sql, params[:-1] + [exact_symbol, exact_symbol, exact_symbol, exact_symbol + "%", params[-1]]).fetchall()
+            rows = connection.execute(
+                sql,
+                params + [exact_symbol, exact_symbol, exact_symbol, exact_symbol + "%", limit_value, offset_value],
+            ).fetchall()
         return [self.row_to_symbol(row) for row in rows]
+
+    def search_count(self, query: str = "", market: str = "") -> int:
+        _, clauses, params = self.symbol_search_clauses(query, market)
+        sql = "SELECT COUNT(*) AS count FROM symbol_universe WHERE " + " AND ".join(clauses)
+        with self.connect() as connection:
+            row = connection.execute(sql, params).fetchone()
+        return int(row["count"] if row else 0)
 
     def get(self, symbol: str, market: str = "") -> Optional[ListedSymbol]:
         clean_symbol = normalize_symbol(symbol)

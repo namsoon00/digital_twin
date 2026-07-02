@@ -162,6 +162,7 @@
   };
   var tabs = [
     { id: "overview", label: "대시보드" },
+    { id: "symbols", label: "전체종목" },
     { id: "accounts", label: "계정" },
     { id: "notifications", label: "알림" },
     { id: "modeling", label: "모델링" },
@@ -333,7 +334,9 @@
     symbolUniverseLoaded: false,
     symbolUniverseError: "",
     symbolUniverseQuery: "",
-    symbolUniverseMarket: ""
+    symbolUniverseMarket: "",
+    symbolUniverseOffset: 0,
+    symbolUniverseLimit: 80
   };
 
   function escapeHtml(value) {
@@ -1008,8 +1011,17 @@
         stale: true
       });
     });
+    var query = String(state.symbolUniverseQuery || "").trim().toUpperCase();
+    var marketFilter = String(state.symbolUniverseMarket || "").trim().toUpperCase();
+    var filtered = items.filter(function (item) {
+      var marketOk = !marketFilter || item.market === marketFilter;
+      var queryOk = !query || String(item.symbol || "").toUpperCase().indexOf(query) >= 0 || String(item.name || "").toUpperCase().indexOf(query) >= 0;
+      return marketOk && queryOk;
+    });
+    var limit = Math.max(1, Math.min(500, Number(state.symbolUniverseLimit || 80)));
+    var offset = Math.max(0, Number(state.symbolUniverseOffset || 0));
     return {
-      items: items,
+      items: filtered.slice(offset, offset + limit),
       summary: {
         total: items.length,
         maxAgeHours: 24,
@@ -1024,15 +1036,25 @@
             sourceUrl: ""
           };
         })
-      }
+      },
+      resultTotal: filtered.length,
+      limit: limit,
+      offset: offset,
+      hasMore: offset + limit < filtered.length
     };
   }
 
   function applySymbolUniverse(payload) {
     state.symbolUniverse = {
       items: Array.isArray(payload.items) ? payload.items : [],
-      summary: payload.summary || { markets: [], sources: [], total: 0, maxAgeHours: 24 }
+      summary: payload.summary || { markets: [], sources: [], total: 0, maxAgeHours: 24 },
+      resultTotal: Number(payload.resultTotal || 0),
+      limit: Number(payload.limit || state.symbolUniverseLimit || 80),
+      offset: Number(payload.offset || state.symbolUniverseOffset || 0),
+      hasMore: Boolean(payload.hasMore)
     };
+    state.symbolUniverseLimit = state.symbolUniverse.limit;
+    state.symbolUniverseOffset = state.symbolUniverse.offset;
     state.symbolUniverseLoaded = true;
     state.symbolUniverseError = "";
   }
@@ -1041,7 +1063,8 @@
     var params = new URLSearchParams();
     if (state.symbolUniverseQuery) params.set("query", state.symbolUniverseQuery);
     if (state.symbolUniverseMarket) params.set("market", state.symbolUniverseMarket);
-    params.set("limit", "80");
+    params.set("limit", String(state.symbolUniverseLimit || 80));
+    params.set("offset", String(state.symbolUniverseOffset || 0));
     return "/api/symbol-universe?" + params.toString();
   }
 
@@ -3234,6 +3257,13 @@
         '</section>'
       ].join("");
     }
+    if (state.activeTab === "symbols") {
+      return [
+        '<section class="admin-grid symbol-universe-view">',
+        renderSymbolUniversePanel({ full: true }),
+        '</section>'
+      ].join("");
+    }
     if (state.activeTab === "notifications") {
       return [
         '<section class="admin-grid">',
@@ -3257,7 +3287,6 @@
         '<section class="admin-grid">',
         renderAdminMonitoringPanel(snapshot),
         renderAlertCenterPanel(snapshot),
-        renderSymbolUniversePanel(),
         renderWatchlistPanel(snapshot),
         renderPortfolioPanel(snapshot),
         renderHoldingsPanel(snapshot),
@@ -4907,17 +4936,28 @@
     return (item.stale ? "갱신 필요" : "신선") + " · " + formatClock(item.lastSeenAt);
   }
 
-  function renderSymbolUniversePanel() {
+  function renderSymbolUniversePanel(options) {
+    var full = Boolean(options && options.full);
     var universe = state.symbolUniverse || {};
     var summary = universe.summary || {};
     var items = universe.items || [];
     var markets = summary.markets || [];
+    var sources = summary.sources || [];
+    var limit = Number(universe.limit || state.symbolUniverseLimit || 80);
+    var offset = Number(universe.offset || state.symbolUniverseOffset || 0);
+    var resultTotal = Number(universe.resultTotal || 0);
+    if (!resultTotal) resultTotal = state.symbolUniverseQuery || state.symbolUniverseMarket ? items.length : Number(summary.total || items.length || 0);
+    var visibleFrom = resultTotal && items.length ? offset + 1 : 0;
+    var visibleTo = resultTotal ? Math.min(offset + items.length, resultTotal) : items.length;
+    var hasPrev = offset > 0;
+    var hasNext = Boolean(universe.hasMore || (resultTotal && offset + items.length < resultTotal));
+    var renderedItems = full ? items : items.slice(0, 12);
     return [
-      '<article class="panel symbol-universe-panel">',
+      '<article class="panel symbol-universe-panel' + (full ? " symbol-universe-full" : "") + '">',
       '<div class="panel-head">',
       '<div>',
       '<p class="label">Symbol Universe</p>',
-      '<h2>전체 종목 카탈로그</h2>',
+      '<h2>' + escapeHtml(full ? "전체 종목 정보" : "전체 종목 카탈로그") + '</h2>',
       '</div>',
       '<span class="metric">' + escapeHtml(summary.total || items.length || 0) + '</span>',
       '</div>',
@@ -4926,6 +4966,9 @@
         return '<div class="source-row"><span>' + escapeHtml(marketLabel(market.market)) + '</span><strong>' + escapeHtml(market.count || 0) + '종목 · ' + escapeHtml(freshnessLabel(market)) + '</strong></div>';
       }).join("") : '<p class="subtle">아직 저장된 전체 종목 목록이 없습니다.</p>',
       '</div>',
+      full && sources.length ? '<div class="source-stack api-source-stack">' + sources.map(function (source) {
+        return '<div class="source-row"><span>' + escapeHtml(marketLabel(source.market)) + ' API</span><strong>' + escapeHtml(source.status || "-") + ' · ' + escapeHtml(source.lastSuccessAt ? formatClock(source.lastSuccessAt) : "성공 기록 없음") + '</strong></div>';
+      }).join("") + '</div>' : '',
       '<form class="watch-add-form symbol-search-form" data-symbol-search-form>',
       '<select name="market" data-symbol-market>',
       '<option value="">전체 시장</option>',
@@ -4934,13 +4977,17 @@
       }).join(""),
       '</select>',
       '<input name="query" data-symbol-query placeholder="종목명 또는 티커 검색" value="' + escapeHtml(state.symbolUniverseQuery || "") + '" autocomplete="off" />',
+      full ? '<select name="limit" data-symbol-limit>' + [80, 200, 500].map(function (value) {
+        return '<option value="' + value + '"' + (Number(state.symbolUniverseLimit || 80) === value ? " selected" : "") + '>' + value + '개</option>';
+      }).join("") + '</select>' : '',
       '<button class="text-button primary">검색</button>',
       '<button class="text-button" type="button" data-action="refresh-symbol-universe">' + escapeHtml(state.symbolUniverseRefreshing ? "갱신 중" : "목록 갱신") + '</button>',
       '</form>',
       state.symbolUniverseError ? '<p class="form-error">' + escapeHtml(state.symbolUniverseError) + '</p>' : '',
       '<p class="subtle">코스피·코스닥은 KRX KIND, 나스닥은 Nasdaq Trader 심볼 디렉터리를 로컬 SQLite에 저장합니다. 원천 호출이 실패해도 마지막 성공 목록을 계속 사용합니다.</p>',
+      full ? '<div class="symbol-pager"><span>' + escapeHtml(resultTotal ? visibleFrom + "-" + visibleTo + " / " + resultTotal + "개 표시" : "표시할 종목 없음") + '</span><div><button class="mini-button" data-symbol-page="prev"' + (hasPrev ? "" : " disabled") + '>이전</button><button class="mini-button" data-symbol-page="next"' + (hasNext ? "" : " disabled") + '>다음</button></div></div>' : '',
       '<div class="position-list">',
-      state.symbolUniverseLoading ? '<p class="subtle">종목 목록을 읽는 중입니다.</p>' : (items.length ? items.slice(0, 12).map(renderSymbolUniverseRow).join("") : '<p class="subtle">검색 결과가 없습니다. 목록 갱신을 실행하세요.</p>'),
+      state.symbolUniverseLoading ? '<p class="subtle">종목 목록을 읽는 중입니다.</p>' : (renderedItems.length ? renderedItems.map(renderSymbolUniverseRow).join("") : '<p class="subtle">검색 결과가 없습니다. 목록 갱신을 실행하세요.</p>'),
       '</div>',
       '</article>'
     ].join("");
@@ -5553,8 +5600,11 @@
         event.preventDefault();
         var query = symbolSearchForm.querySelector("[data-symbol-query]");
         var market = symbolSearchForm.querySelector("[data-symbol-market]");
+        var limit = symbolSearchForm.querySelector("[data-symbol-limit]");
         state.symbolUniverseQuery = query ? query.value.trim() : "";
         state.symbolUniverseMarket = market ? market.value : "";
+        state.symbolUniverseLimit = limit ? Number(limit.value || 80) : state.symbolUniverseLimit;
+        state.symbolUniverseOffset = 0;
         loadSymbolUniverse();
       });
     }
@@ -5565,6 +5615,19 @@
         refreshSymbolUniverse();
       });
     }
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-symbol-page]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        var direction = button.getAttribute("data-symbol-page");
+        var limit = Number(state.symbolUniverseLimit || 80);
+        if (direction === "prev") {
+          state.symbolUniverseOffset = Math.max(0, Number(state.symbolUniverseOffset || 0) - limit);
+        } else if (direction === "next") {
+          state.symbolUniverseOffset = Number(state.symbolUniverseOffset || 0) + limit;
+        }
+        loadSymbolUniverse();
+      });
+    });
 
     Array.prototype.slice.call(app.querySelectorAll("[data-symbol-add-watch]")).forEach(function (button) {
       button.addEventListener("click", function () {

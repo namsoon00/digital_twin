@@ -68,12 +68,20 @@ class SymbolUniverseService:
             "total": sum(counts.values()),
         }
 
-    def search(self, query: str = "", market: str = "", limit: int = 80) -> Dict[str, object]:
+    def search(self, query: str = "", market: str = "", limit: int = 80, offset: int = 0) -> Dict[str, object]:
         self.ensure_seed()
         max_age = self.max_age_hours()
+        limit_value = max(1, min(500, int(limit or 80)))
+        offset_value = max(0, int(offset or 0))
+        result_total = self.store.search_count(query=query, market=market)
+        items = self.store.search(query=query, market=market, limit=limit_value, offset=offset_value)
         return {
-            "items": [item.to_dict(max_age) for item in self.store.search(query=query, market=market, limit=limit)],
+            "items": [item.to_dict(max_age) for item in items],
             "summary": self.summary(),
+            "resultTotal": result_total,
+            "limit": limit_value,
+            "offset": offset_value,
+            "hasMore": offset_value + len(items) < result_total,
         }
 
     def refresh(self, markets: Iterable[str] = None) -> Dict[str, object]:

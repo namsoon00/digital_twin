@@ -355,6 +355,7 @@ function checkFrontendAdminRender() {
     renderForSearch("?tab=notifications"),
     renderForSearch("?tab=modeling"),
     renderForSearch("?tab=monitoring"),
+    renderForSearch("?tab=symbols"),
     renderForSearch("?tab=accounts", "namsoon00.github.io")
   ]).then(function (pages) {
     const overviewHtml = pages[0];
@@ -362,7 +363,9 @@ function checkFrontendAdminRender() {
     const notificationHtml = pages[2];
     const modelingHtml = pages[3];
     const monitoringHtml = pages[4];
-    const staticAccountHtml = pages[5];
+    const symbolsHtml = pages[5];
+    const staticAccountHtml = pages[6];
+    const symbolUniverseHtml = monitoringHtml.indexOf("symbol-universe-panel") >= 0 ? monitoringHtml : symbolsHtml;
 
     assertOk(overviewHtml.indexOf("계정·알림·모델 운영 콘솔") >= 0, "메인 운영 콘솔 제목이 렌더링되지 않았습니다.");
     ["overview", "accounts", "notifications", "modeling", "monitoring"].forEach(function (tab) {
@@ -395,9 +398,9 @@ function checkFrontendAdminRender() {
     assertOk(modelingHtml.indexOf("웹에서 운영하는 매수·매도 타이밍 모델") < 0, "타이밍 모델 제목이 아직 렌더링됩니다.");
     assertOk(monitoringHtml.indexOf("watchlist-panel") >= 0, "모니터링 탭에 관심 종목 관리 패널이 렌더링되지 않았습니다.");
     assertOk(monitoringHtml.indexOf("토스 앱의 관심 목록") >= 0, "관심 종목 API 한계 안내가 렌더링되지 않았습니다.");
-    assertOk(monitoringHtml.indexOf("symbol-universe-panel") >= 0, "전체 종목 카탈로그 패널이 렌더링되지 않았습니다.");
-    assertOk(monitoringHtml.indexOf("전체 종목 카탈로그") >= 0, "전체 종목 카탈로그 제목이 렌더링되지 않았습니다.");
-    assertOk(monitoringHtml.indexOf("AAPL") >= 0, "종목 유니버스 검색 결과가 렌더링되지 않았습니다.");
+    assertOk(symbolUniverseHtml.indexOf("symbol-universe-panel") >= 0, "전체 종목 카탈로그 패널이 렌더링되지 않았습니다.");
+    assertOk(symbolUniverseHtml.indexOf("전체 종목 카탈로그") >= 0 || symbolUniverseHtml.indexOf("전체 종목 정보") >= 0, "전체 종목 카탈로그 제목이 렌더링되지 않았습니다.");
+    assertOk(symbolUniverseHtml.indexOf("AAPL") >= 0, "종목 유니버스 검색 결과가 렌더링되지 않았습니다.");
     assertOk(staticAccountHtml.indexOf('value="Pages DB 계정"') >= 0, "정적 빌드 DB 계정 표시 이름이 폼에 채워지지 않았습니다.");
     assertOk(staticAccountHtml.indexOf('value="MSFT,035720"') >= 0, "정적 빌드 관심 종목이 폼에 채워지지 않았습니다.");
     assertOk(staticAccountHtml.indexOf('value="true"') < 0, "정적 빌드의 마스킹된 boolean 값이 계정 폼에 그대로 표시됩니다.");
@@ -456,7 +459,14 @@ function withFakeTossApi(callback) {
               lastPrice: "72000",
               averagePurchasePrice: "65000",
               marketValue: "144000",
-              profitLoss: "14000"
+              profitLoss: "14000",
+              tradeStrength: "118",
+              volume: "3521000",
+              volumeRatio: "1.8",
+              foreignBuyVolume: "420000",
+              foreignSellVolume: "275000",
+              institutionBuyVolume: "310000",
+              institutionSellVolume: "228000"
             }
           ]
         }
@@ -737,6 +747,10 @@ async function checkLiveTossMode(port) {
   assertOk(position.symbol === "005930", "토스 live 보유 종목 코드가 맞지 않습니다.");
   assertOk(position.currentPrice === 72000, "토스 live 현재가 매핑이 맞지 않습니다.");
   assertOk(position.averagePrice === 65000, "토스 live 평균단가 매핑이 맞지 않습니다.");
+  assertOk(position.tradeStrength === 118, "토스 live 체결강도 매핑이 맞지 않습니다.");
+  assertOk(position.volume === 3521000, "토스 live 거래량 매핑이 맞지 않습니다.");
+  assertOk(position.foreignBuyVolume === 420000, "토스 live 외국인 매수량 매핑이 맞지 않습니다.");
+  assertOk(position.institutionSellVolume === 228000, "토스 live 기관 매도량 매핑이 맞지 않습니다.");
   assertOk(position.ma20 > 0, "토스 live 캔들 기반 20일 이동평균이 없습니다.");
   assertOk(position.ma60 > 0, "토스 live 캔들 기반 60일 이동평균이 없습니다.");
   assertOk(position.ma20Distance !== 0, "토스 live 이동평균 괴리율이 계산되지 않았습니다.");

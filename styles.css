@@ -3944,6 +3944,7 @@ h3 {
   .home-signal-strip,
   .admin-grid,
   .admin-account-layout,
+  .account-watchlist-workbench,
   .admin-monitor-grid,
   .notification-template-row,
   .settings-grid,
@@ -4114,6 +4115,20 @@ h3 {
 
   .account-watchlist-editor-head {
     display: grid;
+  }
+
+  .account-watchlist-workbench {
+    gap: 12px;
+    padding: 12px;
+  }
+
+  .watch-account-row .chip-row,
+  .account-watch-symbol-side .row-actions {
+    justify-content: flex-start;
+  }
+
+  .watch-account-action {
+    justify-self: start;
   }
 
   .alert-row {

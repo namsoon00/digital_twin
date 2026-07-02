@@ -3816,7 +3816,7 @@
   function renderActiveTab(snapshot) {
     if (state.activeTab === "overview") {
       return [
-        '<section class="admin-grid">',
+        '<section class="admin-grid home-view">',
         renderAdminOverviewPanel(snapshot),
         renderAccountDirectoryPanel({ compact: true }),
         renderAccountWatchlistPanel({ compact: true }),
@@ -3826,8 +3826,7 @@
     }
     if (state.activeTab === "accounts") {
       return [
-        '<section class="admin-grid">',
-        renderAccountDirectoryPanel({ full: true }),
+        '<section class="admin-grid accounts-view">',
         renderAdminAccountPanel(),
         '</section>'
       ].join("");
@@ -3889,28 +3888,74 @@
     }, 9999);
     var portfolio = snapshot.portfolio || {};
     var accounts = state.serviceAccounts || [];
+    var activeAccounts = accounts.filter(function (account) { return account.enabled !== false; }).length;
+    var configuredAccounts = accounts.filter(function (account) {
+      return account.clientId && account.clientSecret;
+    }).length;
+    var telegramAccounts = accounts.filter(function (account) {
+      return account.telegramBotToken && account.telegramChatId;
+    }).length;
     return [
       '<article class="panel admin-overview-panel">',
       '<div class="panel-head">',
       '<div>',
-      '<p class="label">Operations</p>',
-      '<h2>서비스 운영 상태</h2>',
+      '<p class="label">Home</p>',
+      '<h2>운영 요약</h2>',
       '</div>',
       '<span class="status-pill ' + (isStaticPreviewHost() ? "demo" : "live") + '">' + (isStaticPreviewHost() ? "Pages preview" : "Local server") + '</span>',
       '</div>',
-      '<div class="admin-stat-grid">',
-      renderAdminStat("등록 계정", accounts.length, "개"),
-      renderAdminStat("활성 알림", enabledRules + "/" + alertRuleCatalog.length, ""),
-      renderAdminStat("최소 주기", (realtimeCadence === 9999 ? "-" : realtimeCadence), realtimeCadence === 9999 ? "" : "분"),
-      renderAdminStat("모델", settingValue("modelName") || defaultSettings.modelName, ""),
+      '<div class="home-command-grid">',
+      '<div class="home-command-main">',
+      '<span class="home-kicker">계정 ' + escapeHtml(activeAccounts + "/" + accounts.length) + ' · 알림 ' + escapeHtml(enabledRules + "/" + alertRuleCatalog.length) + '</span>',
+      '<strong>' + escapeHtml(tossModeLabel(snapshot)) + '</strong>',
+      '<p>계정 연결, 관심종목, 알림 템플릿, 모델 기준을 한 곳에서 운영합니다.</p>',
+      '</div>',
+      '<div class="home-action-grid">',
+      renderHomeAction("accounts", "계정", configuredAccounts + "개 API 연결", "토스·텔레그램"),
+      renderHomeAction("notifications", "알림", enabledRules + "개 활성", "템플릿 테스트"),
+      renderHomeAction("modeling", "모델", settingValue("modelName") || "기준 관리", "판단 임계값"),
+      '</div>',
+      '</div>',
+      '<div class="admin-stat-grid home-stat-grid">',
+      renderAdminStat("활성 계정", activeAccounts + "/" + accounts.length, ""),
+      renderAdminStat("토스 API", configuredAccounts, "개"),
+      renderAdminStat("텔레그램", telegramAccounts, "개"),
+      renderAdminStat("최소 알림 주기", (realtimeCadence === 9999 ? "-" : realtimeCadence), realtimeCadence === 9999 ? "" : "분"),
       renderAdminStat("평가 자산", formatMoney(portfolio.total || 0), ""),
       renderAdminStat("데이터", snapshot.preview ? "Preview" : "Live", ""),
       '</div>',
-      '<div class="rule-strip">',
-      '<span>메인 화면은 계정, 메시지 타입, 주기, 모델 기준을 관리하는 운영 콘솔입니다.</span>',
-      isStaticPreviewHost() ? '<span>GitHub Pages에서는 저장 API가 없으므로 빌드 시점의 마스킹된 로컬 DB 스냅샷만 표시합니다.</span>' : '<span>저장하면 로컬 SQLite와 설정 파일을 Python 모니터링 서비스가 읽습니다.</span>',
+      '<div class="home-signal-strip">',
+      renderHomeSignal("토스", configuredAccounts ? "API 정보 저장됨" : "API 정보 필요", configuredAccounts ? "ok" : "warn"),
+      renderHomeSignal("알림", telegramAccounts ? "텔레그램 연결됨" : "알림 채널 확인", telegramAccounts ? "ok" : "warn"),
+      renderHomeSignal("저장소", isStaticPreviewHost() ? "정적 미리보기" : "로컬 SQLite 사용", isStaticPreviewHost() ? "warn" : "ok"),
       '</div>',
       '</article>'
+    ].join("");
+  }
+
+  function tossModeLabel(snapshot) {
+    var toss = snapshot.toss || {};
+    if (snapshot.preview) return "정적 미리보기 모드";
+    if (toss.mode === "live") return "토스 실데이터 연결됨";
+    return "로컬 서버 대기";
+  }
+
+  function renderHomeAction(tab, label, value, caption) {
+    return [
+      '<button class="home-action" data-tab="' + escapeHtml(tab) + '">',
+      '<span>' + escapeHtml(label) + '</span>',
+      '<strong>' + escapeHtml(value) + '</strong>',
+      '<em>' + escapeHtml(caption) + '</em>',
+      '</button>'
+    ].join("");
+  }
+
+  function renderHomeSignal(label, value, tone) {
+    return [
+      '<span class="home-signal ' + escapeHtml(tone || "ok") + '">',
+      '<em>' + escapeHtml(label) + '</em>',
+      '<strong>' + escapeHtml(value) + '</strong>',
+      '</span>'
     ].join("");
   }
 
@@ -3947,6 +3992,8 @@
     options = options || {};
     var accounts = state.serviceAccounts || [];
     var enabled = accounts.filter(function (account) { return account.enabled !== false; }).length;
+    var tossReady = accounts.filter(function (account) { return account.clientId && account.clientSecret; }).length;
+    var telegramReady = accounts.filter(function (account) { return account.telegramBotToken && account.telegramChatId; }).length;
     var classes = "panel account-directory-panel" + (options.full ? " account-directory-wide" : "");
     return [
       '<article class="' + classes + '">',
@@ -3956,6 +4003,11 @@
       '<h2>DB 저장 계정</h2>',
       '</div>',
       '<span class="metric">' + escapeHtml(enabled + "/" + accounts.length) + '</span>',
+      '</div>',
+      '<div class="account-directory-summary">',
+      renderDirectoryStat("활성", enabled + "/" + accounts.length),
+      renderDirectoryStat("토스 API", tossReady + "개"),
+      renderDirectoryStat("텔레그램", telegramReady + "개"),
       '</div>',
       '<div class="account-card-list">',
       state.serviceAccountsLoading ? '<p class="subtle">계정 DB를 읽는 중입니다.</p>' : '',
@@ -3968,24 +4020,46 @@
     ].join("");
   }
 
+  function renderDirectoryStat(label, value) {
+    return [
+      '<span>',
+      '<em>' + escapeHtml(label) + '</em>',
+      '<strong>' + escapeHtml(value) + '</strong>',
+      '</span>'
+    ].join("");
+  }
+
   function renderAccountDirectoryRow(account, options) {
     options = options || {};
     var symbols = accountWatchlistSymbols(account);
     var enabled = account.enabled !== false;
+    var provider = String(account.provider || "toss").toUpperCase();
     return [
       '<div class="account-card">',
       '<div class="account-card-head">',
+      '<span class="account-provider-badge">' + escapeHtml(provider.slice(0, 4)) + '</span>',
       '<div>',
       '<strong>' + escapeHtml(account.label || account.id || "-") + '</strong>',
       '<span>' + escapeHtml(account.id || "-") + ' · ' + escapeHtml(account.provider || "toss") + ' · ' + escapeHtml(enabled ? "사용" : "중지") + '</span>',
       '</div>',
       '<button class="mini-button" data-account-edit="' + escapeHtml(account.id || "") + '">수정</button>',
       '</div>',
-      renderAccountCredentialSummary(account),
+      options.compact ? renderAccountCredentialPills(account) : renderAccountCredentialSummary(account),
       '<div class="account-card-meta"><span class="chip">관심 ' + escapeHtml(symbols.length) + '개</span></div>',
       options.compact ? '' : '<div class="chip-row">' + (symbols.length ? symbols.map(function (symbol) {
         return '<span class="chip">' + escapeHtml(symbol) + '</span>';
       }).join("") : '<span class="subtle">계정에 저장된 관심 종목이 없습니다.</span>') + '</div>',
+      '</div>'
+    ].join("");
+  }
+
+  function renderAccountCredentialPills(account) {
+    account = account || {};
+    return [
+      '<div class="account-credential-pills">',
+      configuredChip("Toss API", Boolean(account.clientId && account.clientSecret)),
+      configuredChip("계좌 seq", Boolean(account.accountSeq), account.accountSeq || "선택"),
+      configuredChip("Telegram", Boolean(account.telegramBotToken && account.telegramChatId)),
       '</div>'
     ].join("");
   }
@@ -4024,6 +4098,29 @@
       '</div>',
       '</div>'
     ].join("");
+  }
+
+  function renderEmptyAccountCredentialSummary() {
+    return [
+      '<div class="account-credential-grid empty">',
+      '<div>',
+      '<strong>토스</strong>',
+      '<span>새 계정을 저장하면 API key, secret, 계좌 seq 설정 상태가 여기에 표시됩니다.</span>',
+      '<div class="chip-row">' + configuredChip("API key", false) + configuredChip("Secret", false) + '</div>',
+      '</div>',
+      '<div>',
+      '<strong>텔레그램</strong>',
+      '<span>알림 채널 저장 후 bot token과 chat id 상태를 확인할 수 있습니다.</span>',
+      '<div class="chip-row">' + configuredChip("Bot token", false) + configuredChip("Chat ID", false) + '</div>',
+      '</div>',
+      '</div>'
+    ].join("");
+  }
+
+  function accountRowStatusChip(account) {
+    var ready = Boolean(account.clientId && account.clientSecret && account.telegramBotToken && account.telegramChatId);
+    if (account.enabled === false) return '<span class="status-pill demo">중지</span>';
+    return '<span class="status-pill ' + (ready ? "live" : "demo") + '">' + escapeHtml(ready ? "연결 완료" : "설정 확인") + '</span>';
   }
 
   function renderAccountWatchlistPanel(options) {
@@ -4123,20 +4220,30 @@
     var editingAccount = accounts.filter(function (account) {
       return account.id === state.editingAccountId;
     })[0] || null;
+    var active = accounts.filter(function (account) { return account.enabled !== false; }).length;
+    var tossReady = accounts.filter(function (account) { return account.clientId && account.clientSecret; }).length;
+    var telegramReady = accounts.filter(function (account) { return account.telegramBotToken && account.telegramChatId; }).length;
     return [
-      '<article class="panel admin-account-panel">',
+      '<article class="panel admin-account-panel account-manager-panel">',
       '<div class="panel-head">',
       '<div>',
       '<p class="label">Accounts</p>',
-      '<h2>계정 등록</h2>',
+      '<h2>DB 저장 계정</h2>',
       '</div>',
       '<div class="settings-actions">',
       '<button class="text-button" data-action="new-service-account">새 계정</button>',
       '<span class="metric">' + escapeHtml(accounts.length) + '</span>',
       '</div>',
       '</div>',
+      '<div class="account-manager-summary">',
+      renderDirectoryStat("등록", accounts.length + "개"),
+      renderDirectoryStat("활성", active + "개"),
+      renderDirectoryStat("토스 API", tossReady + "개"),
+      renderDirectoryStat("텔레그램", telegramReady + "개"),
+      '</div>',
       '<div class="admin-account-layout">',
       '<div class="admin-account-list">',
+      '<div class="account-column-head"><strong>저장된 계정</strong><span>API 원문은 표시하지 않습니다.</span></div>',
       state.serviceAccountsLoading ? '<p class="subtle">계정 정보를 읽는 중입니다.</p>' : '',
       state.serviceAccountsError ? '<p class="form-error">' + escapeHtml(state.serviceAccountsError) + '</p>' : '',
       state.accountSaved ? '<p class="lab-message">계정 설정을 저장했습니다.</p>' : '',
@@ -4145,21 +4252,21 @@
       '<form class="admin-account-form" data-account-form>',
       '<div class="settings-note">',
       '<strong>' + escapeHtml(state.editingAccountId ? "계정 수정" : "새 계정 등록") + '</strong>',
-      '<p>API key와 secret은 저장 여부만 표시됩니다. 수정하지 않을 secret 칸은 비워두세요.</p>',
+      '<p>저장된 API 값은 아래 상태 칩으로 확인하세요. 수정하지 않을 secret 칸은 비워두면 기존 값을 유지합니다.</p>',
       '</div>',
-      editingAccount ? renderAccountCredentialSummary(editingAccount) : '',
+      editingAccount ? renderAccountCredentialSummary(editingAccount) : renderEmptyAccountCredentialSummary(),
       '<div class="admin-form-grid">',
       renderAccountField("id", "계정 ID", "text", "main", { required: true, disabled: Boolean(state.editingAccountId) }),
       renderAccountField("label", "표시 이름", "text", "메인 계정", { required: true }),
       renderAccountField("provider", "증권사", "text", "toss"),
       renderAccountField("baseUrl", "Toss API Base URL", "url", "https://openapi.tossinvest.com"),
-      renderAccountField("clientId", "Toss API Key", state.showSecrets ? "text" : "password", "새 값 입력 시 교체"),
-      renderAccountField("clientSecret", "Toss Secret Key", state.showSecrets ? "text" : "password", "새 값 입력 시 교체"),
-      renderAccountField("accountSeq", "계좌 순번", "text", "선택"),
+      renderAccountField("clientId", "Toss API Key", state.showSecrets ? "text" : "password", "새 값 입력 시 교체", { configured: Boolean(editingAccount && editingAccount.clientId) }),
+      renderAccountField("clientSecret", "Toss Secret Key", state.showSecrets ? "text" : "password", "새 값 입력 시 교체", { configured: Boolean(editingAccount && editingAccount.clientSecret) }),
+      renderAccountField("accountSeq", "계좌 순번", "text", "선택", { configured: Boolean(editingAccount && editingAccount.accountSeq) }),
       renderAccountField("watchlistSymbols", "관심 종목", "text", "NVDA,005930"),
       renderAccountField("notifyProvider", "알림 채널", "text", "telegram"),
-      renderAccountField("telegramBotToken", "Telegram Bot Token", state.showSecrets ? "text" : "password", "새 값 입력 시 교체"),
-      renderAccountField("telegramChatId", "Telegram Chat ID", "text", "chat id"),
+      renderAccountField("telegramBotToken", "Telegram Bot Token", state.showSecrets ? "text" : "password", "새 값 입력 시 교체", { configured: Boolean(editingAccount && editingAccount.telegramBotToken) }),
+      renderAccountField("telegramChatId", "Telegram Chat ID", "text", "chat id", { configured: Boolean(editingAccount && editingAccount.telegramChatId) }),
       renderAccountField("notifyLinkUrl", "알림 링크 URL", "url", "http://127.0.0.1:3000?tab=notifications"),
       '<label class="admin-check-field">',
       '<input data-account-field="enabled" type="checkbox"' + (draft.enabled !== false ? " checked" : "") + ' />',
@@ -4181,10 +4288,12 @@
     options = options || {};
     var draft = state.accountDraft || defaultAccountDraft();
     var value = draft[name] == null ? "" : draft[name];
+    var fieldPlaceholder = options.configured && !value ? "저장됨 - 새 값 입력 시 교체" : (placeholder || "");
     return [
       '<label class="setting-field">',
       '<span>' + escapeHtml(label) + '</span>',
-      '<input data-account-field="' + escapeHtml(name) + '" name="' + escapeHtml(name) + '" type="' + escapeHtml(type || "text") + '" value="' + escapeHtml(value) + '" placeholder="' + escapeHtml(placeholder || "") + '" autocomplete="off"' + (options.required ? " required" : "") + (options.disabled ? " disabled" : "") + ' />',
+      '<input data-account-field="' + escapeHtml(name) + '" name="' + escapeHtml(name) + '" type="' + escapeHtml(type || "text") + '" value="' + escapeHtml(value) + '" placeholder="' + escapeHtml(fieldPlaceholder) + '" autocomplete="off"' + (options.required ? " required" : "") + (options.disabled ? " disabled" : "") + ' />',
+      options.configured ? '<em class="setting-field-note">저장됨</em>' : '',
       '</label>'
     ].join("");
   }
@@ -4194,10 +4303,13 @@
     return [
       '<div class="service-account-row">',
       '<div>',
+      '<div class="service-account-title">',
       '<strong>' + escapeHtml(account.label || account.id || "-") + '</strong>',
+      accountRowStatusChip(account),
+      '</div>',
       '<span>' + escapeHtml(account.id || "-") + ' · ' + escapeHtml(account.provider || "toss") + ' · ' + escapeHtml(account.enabled === false ? "중지" : "사용") + '</span>',
       '<span>관심 ' + escapeHtml(watchlist || "-") + '</span>',
-      renderAccountCredentialSummary(account),
+      renderAccountCredentialPills(account),
       '</div>',
       '<div class="service-account-meta">',
       '<div class="row-actions">',
@@ -5228,6 +5340,7 @@
       state.serverSettingsError ? '<p class="form-error">' + escapeHtml(state.serverSettingsError) + '</p>' : '',
       state.serverSettingsLocked ? '<p class="form-error">공유 모드에서는 서버 설정 저장이 잠겨 있습니다.</p>' : '',
       '</div>',
+      renderSettingsApiSummary(),
       '<div class="settings-grid">',
       renderSettingField("notifyProvider", "알림 제공자", "text", "telegram"),
       renderSettingField("notifyLinkUrl", "알림 링크 URL", "url", "http://127.0.0.1:3000?tab=notifications"),
@@ -6010,11 +6123,46 @@
     if (options.preserveConfigured && isConfiguredSetting(name)) {
       fieldPlaceholder = "설정됨 - 새 값 입력 시 교체";
     }
+    var configuredNote = options.preserveConfigured && isConfiguredSetting(name);
     return [
       '<label class="setting-field">',
       '<span>' + escapeHtml(label) + '</span>',
       '<input data-setting="' + escapeHtml(name) + '" type="' + escapeHtml(type || "text") + '" value="' + escapeHtml(settingValue(name)) + '" placeholder="' + escapeHtml(fieldPlaceholder) + '" autocomplete="off" />',
+      configuredNote ? '<em class="setting-field-note">저장됨</em>' : '',
       '</label>'
+    ].join("");
+  }
+
+  function renderSettingsApiSummary() {
+    return [
+      '<div class="settings-api-grid">',
+      renderSettingsApiCard("토스 API", settingValue("tossApiBaseUrl") || defaultSettings.tossApiBaseUrl, [
+        configuredChip("Client ID", isConfiguredSetting("tossClientId")),
+        configuredChip("Secret", isConfiguredSetting("tossClientSecret")),
+        configuredChip("Account Seq", isConfiguredSetting("tossAccountSeq"), isConfiguredSetting("tossAccountSeq") ? "저장됨" : "선택")
+      ]),
+      renderSettingsApiCard("텔레그램", settingValue("notifyProvider") || "telegram", [
+        configuredChip("Bot token", isConfiguredSetting("telegramBotToken")),
+        configuredChip("Chat ID", isConfiguredSetting("telegramChatId"), isConfiguredSetting("telegramChatId") ? "저장됨" : ""),
+        configuredChip("알림 링크", Boolean(settingValue("notifyLinkUrl")))
+      ]),
+      renderSettingsApiCard("외부 데이터", "가격·크립토·거시·공시", [
+        configuredChip("Alpha", isConfiguredSetting("alphaVantageApiKey")),
+        configuredChip("CoinGecko", isConfiguredSetting("coingeckoApiKey")),
+        configuredChip("FRED", isConfiguredSetting("fredApiKey")),
+        configuredChip("OpenDART", isConfiguredSetting("opendartApiKey"))
+      ]),
+      '</div>'
+    ].join("");
+  }
+
+  function renderSettingsApiCard(title, subtitle, chips) {
+    return [
+      '<div class="settings-api-card">',
+      '<strong>' + escapeHtml(title) + '</strong>',
+      '<span>' + escapeHtml(subtitle || "-") + '</span>',
+      '<div class="chip-row">' + chips.join("") + '</div>',
+      '</div>'
     ].join("");
   }
 
@@ -6050,6 +6198,7 @@
       state.serverSettingsError ? '<p class="form-error">' + escapeHtml(state.serverSettingsError) + '</p>' : '',
       state.serverSettingsLocked ? '<p class="form-error">공유 모드에서는 서버 설정 저장이 잠겨 있습니다.</p>' : '',
       '</div>',
+      renderSettingsApiSummary(),
       '<div class="settings-grid">',
       renderSettingSelect("appTheme", "화면 테마", [
         { value: "light", label: "라이트" },

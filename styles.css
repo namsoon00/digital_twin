@@ -879,6 +879,42 @@ h3 {
   display: none;
 }
 
+.settings-api-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.settings-api-card {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+}
+
+.settings-api-card strong {
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.settings-api-card > span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.setting-field-note {
+  color: var(--blue);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 900;
+}
+
 .snackbar {
   position: fixed;
   right: 18px;
@@ -920,6 +956,20 @@ h3 {
   gap: 14px;
 }
 
+.home-view {
+  grid-template-columns: minmax(0, 1.08fr) minmax(360px, 0.92fr);
+  align-items: start;
+}
+
+.home-view .admin-overview-panel,
+.home-view .admin-monitoring-panel {
+  grid-column: 1 / -1;
+}
+
+.accounts-view {
+  grid-template-columns: 1fr;
+}
+
 .admin-overview-panel,
 .admin-monitoring-panel,
 .admin-account-panel,
@@ -956,6 +1006,133 @@ h3 {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--panel-soft);
+}
+
+.home-command-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(360px, 1.1fr);
+  gap: 12px;
+  padding: 16px 16px 0;
+}
+
+.home-command-main {
+  display: grid;
+  align-content: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+}
+
+.home-kicker {
+  color: var(--blue);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.home-command-main strong {
+  color: var(--ink);
+  font-size: 22px;
+  line-height: 1.2;
+}
+
+.home-command-main p {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.home-action-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.home-action {
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  min-height: 104px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--input);
+  color: var(--ink);
+  padding: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.home-action:hover,
+.home-action:focus {
+  border-color: var(--blue);
+  outline: 2px solid var(--blue-soft);
+  outline-offset: 1px;
+}
+
+.home-action span {
+  color: var(--blue);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.home-action strong {
+  color: var(--ink);
+  font-size: 15px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.home-action em {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.home-stat-grid {
+  padding-top: 12px;
+}
+
+.home-signal-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 0 16px 16px;
+}
+
+.home-signal {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--chip);
+}
+
+.home-signal.ok {
+  border-color: var(--blue);
+  background: var(--blue-soft);
+}
+
+.home-signal.warn {
+  border-color: var(--amber);
+  background: var(--amber-soft);
+}
+
+.home-signal em {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 900;
+}
+
+.home-signal strong {
+  color: var(--ink);
+  font-size: 13px;
+  overflow-wrap: anywhere;
 }
 
 .symbol-source-card.ok {
@@ -1179,9 +1356,43 @@ h3 {
 
 .admin-account-layout {
   display: grid;
-  grid-template-columns: minmax(280px, 0.8fr) minmax(0, 1.2fr);
+  grid-template-columns: minmax(320px, 0.78fr) minmax(0, 1.22fr);
   gap: 16px;
   padding: 16px;
+}
+
+.account-manager-summary,
+.account-directory-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+  padding: 14px 16px 0;
+}
+
+.account-manager-summary span,
+.account-directory-summary span {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+}
+
+.account-manager-summary em,
+.account-directory-summary em {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 900;
+}
+
+.account-manager-summary strong,
+.account-directory-summary strong {
+  color: var(--ink);
+  font-size: 16px;
+  overflow-wrap: anywhere;
 }
 
 .admin-account-list,
@@ -1192,9 +1403,27 @@ h3 {
   min-width: 0;
 }
 
+.account-column-head {
+  display: grid;
+  gap: 3px;
+  padding: 4px 2px 2px;
+}
+
+.account-column-head strong {
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.account-column-head span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
 .service-account-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(220px, auto);
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
   gap: 12px;
   min-width: 0;
   padding: 12px;
@@ -1219,6 +1448,25 @@ h3 {
 
 .service-account-meta {
   justify-items: end;
+}
+
+.service-account-meta .row-actions {
+  justify-content: flex-end;
+  flex-wrap: nowrap;
+}
+
+.service-account-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.service-account-title .status-pill {
+  min-height: 28px;
+  font-size: 12px;
+  white-space: nowrap;
 }
 
 .chip {
@@ -1272,6 +1520,10 @@ h3 {
   background: var(--input);
 }
 
+.account-credential-grid.empty > div {
+  border-style: dashed;
+}
+
 .account-credential-grid strong {
   color: var(--ink);
   font-size: 13px;
@@ -1312,9 +1564,13 @@ h3 {
   background: var(--panel-soft);
 }
 
-.account-card-head,
+.account-card-head {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+}
+
 .watch-account-row {
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(120px, 0.65fr) minmax(0, 1.35fr);
   align-items: start;
 }
 
@@ -1328,6 +1584,18 @@ h3 {
   display: grid;
   gap: 4px;
   min-width: 0;
+}
+
+.account-provider-badge {
+  display: inline-grid;
+  place-items: center;
+  width: 38px;
+  min-height: 30px;
+  border-radius: 8px;
+  background: var(--blue-soft);
+  color: var(--blue);
+  font-size: 11px;
+  font-weight: 900;
 }
 
 .account-card strong,
@@ -1347,6 +1615,13 @@ h3 {
 
 .account-card-meta,
 .chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.account-credential-pills {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
@@ -3133,6 +3408,7 @@ h3 {
   }
 
   .admin-account-layout,
+  .home-command-grid,
   .lab-body-grid,
   .notification-template-row {
     grid-template-columns: 1fr;
@@ -3161,11 +3437,16 @@ h3 {
   .topbar,
   .hero-grid,
   .content-grid,
+  .home-view,
+  .home-command-grid,
+  .home-action-grid,
+  .home-signal-strip,
   .admin-grid,
   .admin-account-layout,
   .admin-monitor-grid,
   .notification-template-row,
-  .settings-grid {
+  .settings-grid,
+  .settings-api-grid {
     grid-template-columns: 1fr;
   }
 

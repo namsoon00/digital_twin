@@ -392,6 +392,9 @@ function checkFrontendAdminRender() {
     assertOk(modelingHtml.indexOf("admin-modeling-panel") >= 0, "모델링 설정 패널이 렌더링되지 않았습니다.");
     assertOk(modelingHtml.indexOf("매매 판단 기준 관리") >= 0, "쉬운 모델 판단 기준 제목이 렌더링되지 않았습니다.");
     assertOk(modelingHtml.indexOf("투자자별 수급") >= 0, "투자자별 수급 feature 설명이 렌더링되지 않았습니다.");
+    assertOk(modelingHtml.indexOf("방향성 거래량") >= 0, "방향성 거래량 feature 설명이 렌더링되지 않았습니다.");
+    assertOk(modelingHtml.indexOf("feature 기여도") >= 0, "feature 기여도 블록이 렌더링되지 않았습니다.");
+    assertOk(modelingHtml.indexOf("directionalVolumePressure") >= 0, "방향성 거래량 공식 변수가 렌더링되지 않았습니다.");
     assertOk(modelingHtml.indexOf("feature 재현성") >= 0, "feature 재현성 검증 블록이 렌더링되지 않았습니다.");
     assertOk(modelingHtml.indexOf("같은 입력 재현됨") >= 0, "같은 입력 재계산 검증 결과가 렌더링되지 않았습니다.");
     assertOk(modelingHtml.indexOf("model-timing-panel") < 0, "Mock 시계열 기반 타이밍 패널이 아직 렌더링됩니다.");

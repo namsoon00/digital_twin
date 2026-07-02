@@ -143,8 +143,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertFalse(event_bus.published[-1].payload["account"]["clientSecret"] == "secret1")
 
     def test_strategy_formula_is_safe_and_scores(self):
-        formula = SafeFormula("max(0, buyShare - 50) + abs(priceChangeRate)")
-        self.assertEqual(17, formula.evaluate({"buyShare": 65, "priceChangeRate": -2}))
+        formula = SafeFormula("max(0, buyShare - 50) + abs(priceChangeRate) + clamp(9, 0, 3)")
+        self.assertEqual(20, formula.evaluate({"buyShare": 65, "priceChangeRate": -2}))
         with self.assertRaises(ValueError):
             SafeFormula("__import__('os').system('echo no')")
 
@@ -156,6 +156,29 @@ class PythonServiceTests(unittest.TestCase):
         score = model.score({"tradeStrength": 120, "priceChangeRate": -3})
         self.assertEqual(62, score["buyScore"])
         self.assertEqual(53, score["sellScore"])
+
+    def test_strategy_default_formula_uses_directional_volume(self):
+        model = StrategyModel({"formulaWeights": "flowWeight=1\nvaluationWeight=1"})
+
+        buy_side = model.score({
+            "tradeStrength": 130,
+            "volumeRatio": 2.2,
+            "buyVolume": 700,
+            "sellVolume": 300,
+            "bidAskImbalance": 14,
+            "priceChangeRate": 2.0,
+        })
+        sell_side = model.score({
+            "tradeStrength": 72,
+            "volumeRatio": 2.2,
+            "buyVolume": 300,
+            "sellVolume": 700,
+            "bidAskImbalance": -14,
+            "priceChangeRate": -2.0,
+        })
+
+        self.assertGreater(buy_side["buyScore"], buy_side["sellScore"])
+        self.assertGreater(sell_side["sellScore"], sell_side["buyScore"])
 
     def test_portfolio_summary_converts_usd_holdings_to_krw_base(self):
         kr_position = normalize_position({

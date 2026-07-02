@@ -28,6 +28,7 @@ class AccountConfig:
 
     @classmethod
     def from_dict(cls, payload: Dict[str, object], settings: Dict[str, str]) -> "AccountConfig":
+        watchlist_raw = payload.get("watchlistSymbols") if "watchlistSymbols" in payload else settings.get("watchlistSymbols")
         return cls(
             account_id=configured(payload.get("id") or payload.get("accountId") or "default"),
             label=configured(payload.get("label") or payload.get("name") or payload.get("id") or "기본 계정"),
@@ -36,7 +37,7 @@ class AccountConfig:
             client_id=configured(payload.get("clientId") or payload.get("client_id") or ""),
             client_secret=configured(payload.get("clientSecret") or payload.get("client_secret") or ""),
             account_seq=configured(payload.get("accountSeq") or payload.get("account_seq") or ""),
-            watchlist_symbols=split_symbols(configured(payload.get("watchlistSymbols") or settings.get("watchlistSymbols"))),
+            watchlist_symbols=split_symbols(configured(watchlist_raw)),
             notify_provider=configured(payload.get("notifyProvider") or payload.get("notify_provider") or settings.get("notifyProvider")),
             telegram_bot_token=configured(payload.get("telegramBotToken") or payload.get("telegram_bot_token") or settings.get("telegramBotToken")),
             telegram_chat_id=configured(payload.get("telegramChatId") or payload.get("telegram_chat_id") or settings.get("telegramChatId")),
@@ -77,4 +78,3 @@ class AccountConfig:
             "notifyLinkUrl": self.notify_link_url,
             "enabled": self.enabled,
         }
-

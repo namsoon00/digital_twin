@@ -94,6 +94,19 @@ function assertOk(condition, message) {
   if (!condition) throw new Error(message);
 }
 
+function readSqliteSetting(dbPath, key) {
+  const script = [
+    "import sqlite3, sys",
+    "connection = sqlite3.connect(sys.argv[1])",
+    "row = connection.execute('SELECT value FROM runtime_settings WHERE key = ?', (sys.argv[2],)).fetchone()",
+    "print('' if row is None else row[0])"
+  ].join("\n");
+  return childProcess.execFileSync(process.env.PYTHON_BIN || "python3", ["-c", script, dbPath, key], {
+    cwd: rootDir,
+    encoding: "utf8"
+  }).trim();
+}
+
 function checkFrontendAdminRender() {
   const code = fs.readFileSync(path.join(rootDir, "public", "app.js"), "utf8");
   const styles = fs.readFileSync(path.join(rootDir, "public", "styles.css"), "utf8");
@@ -425,6 +438,7 @@ function checkFrontendAdminRender() {
     renderForSearch(""),
     renderForSearch("?tab=accounts"),
     renderForSearch("?tab=watchlist"),
+    renderForSearch("?tab=symbols"),
     renderForSearch("?tab=notifications"),
     renderForSearch("?tab=modeling"),
     renderForSearch("?tab=monitoring"),
@@ -434,12 +448,12 @@ function checkFrontendAdminRender() {
     const overviewHtml = pages[0];
     const accountHtml = pages[1];
     const watchlistHtml = pages[2];
-    const notificationHtml = pages[3];
-    const modelingHtml = pages[4];
-    const monitoringHtml = pages[5];
-    const settingsHtml = pages[6];
-    const staticAccountHtml = pages[7];
-    const symbolUniverseHtml = watchlistHtml;
+    const symbolUniverseHtml = pages[3];
+    const notificationHtml = pages[4];
+    const modelingHtml = pages[5];
+    const monitoringHtml = pages[6];
+    const settingsHtml = pages[7];
+    const staticAccountHtml = pages[8];
 
     assertOk(overviewHtml.indexOf("계정·알림·모델 운영 콘솔") < 0, "이전 고정 운영 콘솔 제목이 아직 렌더링됩니다.");
     assertOk(overviewHtml.indexOf("<h1>홈</h1>") >= 0, "홈 탭 제목이 상단에 렌더링되지 않았습니다.");
@@ -449,10 +463,10 @@ function checkFrontendAdminRender() {
     assertOk(settingsHtml.indexOf("settings-view") >= 0, "설정 화면이 페이지 구조로 렌더링되지 않았습니다.");
     assertOk(code.indexOf("settings-top-button") >= 0, "상단 설정 버튼 전용 스타일이 적용되지 않았습니다.");
     assertOk(code.indexOf("pushState") >= 0 && code.indexOf("popstate") >= 0, "탭 이동이 브라우저 뒤로가기와 동기화되지 않았습니다.");
-    ["overview", "accounts", "watchlist", "monitoring", "notifications", "modeling", "settings"].forEach(function (tab) {
+    assertOk(code.indexOf("settingsSaving") >= 0 && code.indexOf("로컬 SQLite DB") >= 0, "설정 저장 진행 상태가 렌더링되지 않습니다.");
+    ["overview", "accounts", "watchlist", "symbols", "monitoring", "notifications", "modeling", "settings"].forEach(function (tab) {
       assertOk(overviewHtml.indexOf('data-tab="' + tab + '"') >= 0, "새 탭이 렌더링되지 않았습니다: " + tab);
     });
-    assertOk(overviewHtml.indexOf('data-tab="symbols"') < 0, "전체종목 별도 탭이 아직 렌더링됩니다.");
     assertOk(overviewHtml.indexOf("data-mode=") < 0, "Mock 데이터 전환 버튼이 아직 렌더링됩니다.");
     assertOk(overviewHtml.indexOf(">Mock<") < 0, "Mock 데이터 버튼 라벨이 아직 렌더링됩니다.");
     assertOk(overviewHtml.indexOf("Mock 데이터") < 0, "Mock 데이터 표시 문구가 아직 렌더링됩니다.");
@@ -478,14 +492,19 @@ function checkFrontendAdminRender() {
     assertOk(accountHtml.indexOf('value="NVDA,005930"') >= 0, "로컬 DB 관심 종목이 폼에 채워지지 않았습니다.");
     assertOk(accountHtml.indexOf('value="true"') < 0, "마스킹된 boolean 값이 계정 폼에 그대로 표시됩니다.");
     assertOk(watchlistHtml.indexOf("계정별 관심 종목") >= 0, "관심종목 탭에 계정별 관심 종목이 렌더링되지 않았습니다.");
-    assertOk(watchlistHtml.indexOf("watchlist-panel") >= 0, "관심종목 탭에 관심 종목 관리 패널이 렌더링되지 않았습니다.");
+    assertOk(watchlistHtml.indexOf("account-watchlist-workbench") >= 0, "관심종목 탭에 계정별 편집 워크벤치가 렌더링되지 않았습니다.");
+    assertOk(watchlistHtml.indexOf("data-watch-account-select") >= 0, "관심종목 탭에 계정 선택 버튼이 렌더링되지 않았습니다.");
+    assertOk(watchlistHtml.indexOf("data-watch-account-id=\"main\"") >= 0, "관심종목 추가 폼이 선택 계정에 연결되지 않았습니다.");
     assertOk(watchlistHtml.indexOf("data-watch-symbol-input") >= 0, "관심종목 검색 입력창이 렌더링되지 않았습니다.");
     assertOk(watchlistHtml.indexOf("data-watch-suggest-list") >= 0, "관심종목 서제스트 영역이 렌더링되지 않았습니다.");
     assertOk(watchlistHtml.indexOf("watch-row-meta") >= 0, "관심종목 알림/시세 상태가 렌더링되지 않았습니다.");
     assertOk(watchlistHtml.indexOf("시세 알림") >= 0, "관심종목 시세 알림 상태가 표시되지 않았습니다.");
-    assertOk(watchlistHtml.indexOf("symbol-result-list") >= 0, "관심종목 탭에 전체 종목 결과 리스트가 렌더링되지 않았습니다.");
-    assertOk(watchlistHtml.indexOf("symbol-summary-card") >= 0, "관심종목 탭에 전체 종목 시장 요약 카드가 렌더링되지 않았습니다.");
+    assertOk(watchlistHtml.indexOf("symbol-result-list") < 0, "관심종목 탭에 전체 종목 결과 리스트가 남아 있습니다.");
     assertOk(watchlistHtml.indexOf("NVDA") >= 0 && watchlistHtml.indexOf("005930") >= 0, "DB 계정 관심 종목이 렌더링되지 않았습니다.");
+    assertOk(symbolUniverseHtml.indexOf("<h1>전체종목</h1>") >= 0, "전체종목 탭 제목이 상단에 렌더링되지 않았습니다.");
+    assertOk(symbolUniverseHtml.indexOf("symbol-result-list") >= 0, "전체종목 탭에 종목 결과 리스트가 렌더링되지 않았습니다.");
+    assertOk(symbolUniverseHtml.indexOf("symbol-summary-card") >= 0, "전체종목 탭에 시장 요약 카드가 렌더링되지 않았습니다.");
+    assertOk(symbolUniverseHtml.indexOf("data-symbol-add-account") >= 0, "전체종목 탭에 관심 추가 대상 계정 선택이 없습니다.");
     assertOk(notificationHtml.indexOf("admin-message-row") >= 0, "메시지 타입별 알림 설정이 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("notification-template-row") >= 0, "알림 템플릿 편집기가 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("admin-message-template") >= 0, "알림 타입 행 안에 템플릿 편집기가 렌더링되지 않았습니다.");
@@ -677,6 +696,8 @@ function withFakeTossApi(callback) {
 
 async function withServer(extraEnv, callback) {
   const runId = process.pid + "-" + Date.now() + "-" + Math.random();
+  const settingsPath = path.join(os.tmpdir(), "digital-twin-smoke-settings-" + runId + ".json");
+  const dataDir = path.join(os.tmpdir(), "digital-twin-smoke-data-" + runId);
   const serverProcess = childProcess.spawn(process.env.PYTHON_BIN || "python3", ["python_service/service.py", "web"], {
     cwd: rootDir,
     stdio: ["ignore", "pipe", "pipe"],
@@ -685,20 +706,24 @@ async function withServer(extraEnv, callback) {
       PORT: String(randomPort()),
       LOCAL_CODEX_ENABLED: "0",
       WATCHLIST_SYMBOLS: "TSLA,AAPL,NVDA,000660",
-      SETTINGS_PATH: path.join(os.tmpdir(), "digital-twin-smoke-settings-" + runId + ".json"),
-      DIGITAL_TWIN_DATA_DIR: path.join(os.tmpdir(), "digital-twin-smoke-data-" + runId)
+      SETTINGS_PATH: settingsPath,
+      DIGITAL_TWIN_DATA_DIR: dataDir
     }, extraEnv || {})
   });
 
   try {
     const port = await waitForServer(serverProcess);
-    await callback(port);
+    await callback(port, {
+      dataDir: dataDir,
+      serviceDbPath: path.join(dataDir, "service.db"),
+      settingsPath: settingsPath
+    });
   } finally {
     serverProcess.kill("SIGTERM");
   }
 }
 
-async function checkNormalMode(port) {
+async function checkNormalMode(port, context) {
   const home = await request(port, "/");
   assertOk(home.statusCode === 200, "홈 화면 응답 코드가 200이 아닙니다: " + home.statusCode);
   assertOk(home.body.indexOf('id="app"') >= 0, "홈 화면에 앱 루트가 없습니다.");
@@ -754,6 +779,10 @@ async function checkNormalMode(port) {
   assertOk(savedSettingsPayload.settings.alertRules.indexOf("priceStop=1") >= 0, "저장된 알림 규칙이 응답에 없습니다.");
   assertOk(savedSettingsPayload.settings.modelDecisionThresholds.indexOf("modelBuy=75") >= 0, "저장된 모델 기준값이 응답에 없습니다.");
   assertOk(savedSettingsPayload.settings.appTheme === "dark", "저장된 화면 테마 값이 응답에 없습니다.");
+  assertOk(readSqliteSetting(context.serviceDbPath, "appTheme") === "dark", "화면 테마 설정이 SQLite DB에 저장되지 않았습니다.");
+  assertOk(readSqliteSetting(context.serviceDbPath, "notifyProvider") === "telegram", "알림 제공자 설정이 SQLite DB에 저장되지 않았습니다.");
+  assertOk(readSqliteSetting(context.serviceDbPath, "telegramChatId") === "1234", "Telegram Chat ID 설정이 SQLite DB에 저장되지 않았습니다.");
+  assertOk(readSqliteSetting(context.serviceDbPath, "tossClientSecret") === "fake-secret", "Toss secret 설정이 SQLite DB에 저장되지 않았습니다.");
 
   const templates = await request(port, "/api/notification-templates");
   assertOk(templates.statusCode === 200, "알림 템플릿 API 응답 코드가 200이 아닙니다: " + templates.statusCode);

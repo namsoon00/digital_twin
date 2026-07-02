@@ -166,6 +166,14 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual([ACCOUNT_SAVED, ACCOUNT_SAVED], [event.name for event in event_bus.published])
         self.assertFalse(event_bus.published[-1].payload["account"]["clientSecret"] == "secret1")
 
+    def test_account_config_allows_empty_watchlist_override(self):
+        account = AccountConfig.from_dict(
+            {"id": "main", "label": "메인", "watchlistSymbols": ""},
+            {"watchlistSymbols": "TSLA,AAPL"},
+        )
+
+        self.assertEqual([], account.watchlist_symbols)
+
     def test_strategy_formula_is_safe_and_scores(self):
         formula = SafeFormula("max(0, buyShare - 50) + abs(priceChangeRate) + clamp(9, 0, 3)")
         self.assertEqual(20, formula.evaluate({"buyShare": 65, "priceChangeRate": -2}))

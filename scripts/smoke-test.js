@@ -488,7 +488,9 @@ function checkFrontendAdminRender() {
     assertOk(watchlistHtml.indexOf("NVDA") >= 0 && watchlistHtml.indexOf("005930") >= 0, "DB 계정 관심 종목이 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("admin-message-row") >= 0, "메시지 타입별 알림 설정이 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("notification-template-row") >= 0, "알림 템플릿 편집기가 렌더링되지 않았습니다.");
+    assertOk(notificationHtml.indexOf("admin-message-template") >= 0, "알림 타입 행 안에 템플릿 편집기가 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("notification-template-preview") >= 0, "알림 템플릿 미리보기가 렌더링되지 않았습니다.");
+    assertOk(notificationHtml.indexOf("시스템 템플릿") >= 0, "시스템 템플릿 섹션이 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("settings-api-grid") >= 0, "설정 API 상태 요약이 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("Client ID 설정됨") >= 0, "설정 화면에 토스 Client ID 상태가 표시되지 않습니다.");
     assertOk(notificationHtml.indexOf("Bot token 설정됨") >= 0, "설정 화면에 텔레그램 bot token 상태가 표시되지 않습니다.");

@@ -819,9 +819,36 @@
     })[0] || null;
   }
 
+  function isAlertTemplateType(messageType) {
+    return alertRuleCatalog.some(function (rule) { return rule.key === messageType; });
+  }
+
+  function notificationTemplateForEdit(messageType) {
+    var found = notificationTemplateByType(messageType);
+    if (found) return found;
+    return defaultNotificationTemplates().filter(function (item) {
+      return item.messageType === messageType;
+    })[0] || {
+      messageType: messageType,
+      template: "{readableMessage}",
+      description: "",
+      enabled: true,
+      updatedAt: ""
+    };
+  }
+
+  function notificationTemplateVariables() {
+    return state.notificationTemplateVariables.length
+      ? state.notificationTemplateVariables
+      : ["title", "readableMessage", "dataLines", "triggerSummary", "lines", "rawLines", "body", "messageType", "symbol", "severity"];
+  }
+
   function updateNotificationTemplate(messageType, value) {
     var existing = notificationTemplateByType(messageType);
-    if (!existing) return;
+    if (!existing) {
+      existing = notificationTemplateForEdit(messageType);
+      state.notificationTemplates = (state.notificationTemplates || []).concat(existing);
+    }
     existing.template = value;
     state.notificationTemplatesSaved = false;
     state.notificationTemplatesError = "";
@@ -4459,9 +4486,20 @@
       renderSettingField("notifyIntervalMinutes", "기본 알림 주기(분)", "number", "10"),
       renderSettingField("notifyLinkUrl", "알림 링크 URL", "url", "http://127.0.0.1:3000?tab=notifications"),
       '</div>',
+      '<div class="template-variable-row admin-template-variable-row">',
+      notificationTemplateVariables().map(function (name) {
+        return '<span class="chip">{' + escapeHtml(name) + '}</span>';
+      }).join(""),
+      '</div>',
       '<div class="admin-message-list">',
       alertRuleCatalog.map(function (rule) {
-        return renderAdminMessageRow(rule, enabledAlertRule(rules, rule.key), cadences[rule.key], messageScheduleByType(rule.key));
+        return renderAdminMessageRow(
+          rule,
+          enabledAlertRule(rules, rule.key),
+          cadences[rule.key],
+          messageScheduleByType(rule.key),
+          notificationTemplateForEdit(rule.key)
+        );
       }).join(""),
       '</div>',
       renderNotificationTemplatePanel(),
@@ -4478,14 +4516,15 @@
     ].join("");
   }
 
-  function renderAdminMessageRow(rule, checked, cadence, schedule) {
+  function renderAdminMessageRow(rule, checked, cadence, schedule, template) {
+    var ruleId = "alert-rule-" + String(rule.key || "").replace(/[^A-Za-z0-9_-]/g, "-");
     return [
-      '<label class="admin-message-row">',
-      '<input type="checkbox" data-alert-rule="' + escapeHtml(rule.key) + '"' + (checked ? " checked" : "") + ' />',
-      '<span class="admin-message-main">',
+      '<div class="admin-message-row">',
+      '<input id="' + escapeHtml(ruleId) + '" type="checkbox" data-alert-rule="' + escapeHtml(rule.key) + '"' + (checked ? " checked" : "") + ' />',
+      '<label class="admin-message-main" for="' + escapeHtml(ruleId) + '">',
       '<strong>' + escapeHtml(rule.label) + '</strong>',
       '<em>' + escapeHtml(rule.group + " · " + rule.description) + '</em>',
-      '</span>',
+      '</label>',
       '<span class="admin-cadence-field">',
       '<input data-alert-cadence="' + escapeHtml(rule.key) + '" type="number" min="10" step="10" value="' + escapeHtml(cadence) + '" />',
       '<b>분</b>',
@@ -4493,7 +4532,8 @@
       '<div class="admin-message-schedule">',
       renderMessageScheduleSummary(schedule),
       '</div>',
-      '</label>'
+      renderNotificationTemplateRow(template, { inline: true }),
+      '</div>'
     ].join("");
   }
 
@@ -4563,11 +4603,14 @@
   }
 
   function renderNotificationTemplatePanel() {
-    var templates = state.notificationTemplates.length ? state.notificationTemplates : defaultNotificationTemplates();
-    var variables = state.notificationTemplateVariables.length ? state.notificationTemplateVariables : ["title", "readableMessage", "dataLines", "triggerSummary", "lines", "rawLines", "body", "messageType", "symbol", "severity"];
+    var templates = (state.notificationTemplates.length ? state.notificationTemplates : defaultNotificationTemplates()).filter(function (item) {
+      return !isAlertTemplateType(item.messageType);
+    });
+    if (!templates.length) return "";
+    var variables = notificationTemplateVariables();
     return [
       '<div class="model-section notification-template-section">',
-      '<div class="flow-title"><div><strong>메시지 템플릿</strong><span>타입별 포맷입니다. 템플릿만 바꾸면 다음 발송부터 새 포맷이 적용됩니다.</span></div></div>',
+      '<div class="flow-title"><div><strong>시스템 템플릿</strong><span>알림 타입이 아닌 기본, 모델 리뷰, 작업 완료 메시지 포맷입니다.</span></div></div>',
       state.notificationTemplatesError ? '<p class="form-error">' + escapeHtml(state.notificationTemplatesError) + '</p>' : '',
       state.notificationTemplatesSaved ? '<p class="lab-message">알림 템플릿을 저장했습니다.</p>' : '',
       '<div class="template-variable-row">',
@@ -4582,20 +4625,19 @@
     ].join("");
   }
 
-  function renderNotificationTemplateRow(item) {
+  function renderNotificationTemplateRow(item, options) {
+    options = options || {};
     var disabled = state.serverSettingsLocked || isStaticPreviewHost();
     var preview = renderNotificationTemplatePreviewText(item.template || "", item.messageType);
     var canTest = canSendNotificationTemplateTest(item.messageType);
     var sending = state.notificationTemplateSending === item.messageType;
     var schedule = messageScheduleByType(item.messageType);
     return [
-      '<div class="notification-template-row">',
+      '<div class="notification-template-row' + (options.inline ? " admin-message-template" : "") + '">',
       '<div class="notification-template-meta">',
-      '<strong>' + escapeHtml(notificationTemplateLabel(item.messageType)) + '</strong>',
-      '<span>' + escapeHtml(item.messageType || "-") + (item.description ? " · " + escapeHtml(item.description) : "") + '</span>',
-      '<div class="template-schedule-compact">',
-      renderMessageScheduleSummary(schedule),
-      '</div>',
+      '<strong>' + escapeHtml(options.inline ? "템플릿" : notificationTemplateLabel(item.messageType)) + '</strong>',
+      '<span>' + escapeHtml(item.messageType || "-") + (item.description && !options.inline ? " · " + escapeHtml(item.description) : "") + '</span>',
+      options.inline ? '' : '<div class="template-schedule-compact">' + renderMessageScheduleSummary(schedule) + '</div>',
       '</div>',
       '<textarea data-notification-template="' + escapeHtml(item.messageType || "") + '" rows="3"' + (disabled ? " disabled" : "") + '>' + escapeHtml(item.template || "") + '</textarea>',
       '<div class="settings-actions">',

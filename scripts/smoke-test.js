@@ -152,6 +152,8 @@ function checkFrontendAdminRender() {
   assertOk(styles.indexOf("--ds-control-height-md") >= 0, "전역 컨트롤 높이 토큰이 없습니다.");
   assertOk(styles.indexOf("font-variant-numeric: tabular-nums") >= 0, "금융 숫자 표시 규칙이 없습니다.");
   assertOk(styles.indexOf(".settings-save-panel") >= 0, "설정 화면 저장 액션 위치 규칙이 없습니다.");
+  assertOk(/@media \(max-width: 860px\)[\s\S]*\.account-watchlist-workbench[\s\S]*grid-template-columns: 1fr;/.test(styles), "모바일 관심종목 워크벤치가 1열로 접히지 않습니다.");
+  assertOk(/@media \(max-width: 860px\)[\s\S]*\.watch-account-row \.chip-row[\s\S]*justify-content: flex-start;/.test(styles), "모바일 관심종목 계정 칩 정렬이 왼쪽 기준이 아닙니다.");
   assertOk(designSystemDoc.indexOf("Finance App Tone") >= 0, "디자인 시스템 문서에 금융앱 룩앤필 기준이 없습니다.");
   assertOk(designSystemDoc.indexOf("Page Contracts") >= 0, "디자인 시스템 문서에 페이지별 UI 계약이 없습니다.");
   assertOk(designSystemDoc.indexOf("Button Placement") >= 0, "디자인 시스템 문서에 버튼 위치 정책이 없습니다.");

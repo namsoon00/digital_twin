@@ -1,6 +1,7 @@
 (function () {
   var app = document.getElementById("app");
   var defaultSettings = {
+    appTheme: "light",
     watchlistSymbols: "TSLA,AAPL,NVDA,000660",
     tossApiBaseUrl: "https://openapi.tossinvest.com",
     tossClientId: "",
@@ -99,6 +100,8 @@
       "tossConnection=1",
       "orderPending=1",
       "orderReject=1",
+      "watchlistQuote=1",
+      "watchlistQuotePending=1",
       "holdingTiming=1",
       "monitorHeartbeat=1",
       "monitorConnection=1",
@@ -140,6 +143,8 @@
       "tossConnection=10",
       "orderPending=10",
       "orderReject=10",
+      "watchlistQuote=10",
+      "watchlistQuotePending=60",
       "holdingTiming=10",
       "monitorHeartbeat=10",
       "monitorConnection=10",
@@ -177,6 +182,7 @@
       "priceNearPercent=1",
       "staleMinutes=30",
       "pendingOrderMinutes=30",
+      "watchlistPriceDelta=3",
       "monitorPnlDelta=2",
       "monitorValueDelta=5",
       "monitorMaDistance=8",
@@ -194,8 +200,7 @@
     { id: "watchlist", label: "관심종목", description: "알림 대상" },
     { id: "monitoring", label: "모니터링", description: "보유·타이밍" },
     { id: "notifications", label: "알림", description: "메시지 타입" },
-    { id: "modeling", label: "모델링", description: "판단 기준" },
-    { id: "symbols", label: "전체종목", description: "종목 검색" }
+    { id: "modeling", label: "모델링", description: "판단 기준" }
   ];
   var feedChannels = [
     {
@@ -273,6 +278,8 @@
     { key: "tossConnection", group: "데이터", label: "토스 연결 상태", description: "토스 live 연결이 아니거나 비어 있을 때" },
     { key: "orderPending", group: "주문", label: "미체결 주문", description: "주문 데이터가 연결되면 오래된 미체결을 표시" },
     { key: "orderReject", group: "주문", label: "거부/실패 주문", description: "주문 데이터가 연결되면 거부 또는 실패 주문을 표시" },
+    { key: "watchlistQuote", group: "관심종목", label: "관심종목 시세", description: "관심종목 현재가와 이동평균이 수집되거나 크게 변할 때" },
+    { key: "watchlistQuotePending", group: "관심종목", label: "시세 대기", description: "관심종목 현재가를 아직 받지 못했을 때" },
     { key: "holdingTiming", group: "푸시", label: "보유 타이밍 푸시", description: "알림 워커가 보유 종목 장중 점검을 보낼 때" },
     { key: "monitorHeartbeat", group: "실시간", label: "상태 확인 메시지", description: "실시간 워커가 살아 있는지 주기적으로 짧게 보낼 때" },
     { key: "monitorConnection", group: "실시간", label: "연결 상태 변화", description: "실시간 모니터링 중 토스 연결 상태가 바뀔 때" },
@@ -310,6 +317,7 @@
     { key: "priceNearPercent", label: "가격 접근 허용폭", unit: "%", step: "0.1" },
     { key: "staleMinutes", label: "데이터 지연 시간", unit: "분", step: "1" },
     { key: "pendingOrderMinutes", label: "미체결 점검 시간", unit: "분", step: "1" },
+    { key: "watchlistPriceDelta", label: "관심종목 현재가 변화", unit: "%", step: "0.1" },
     { key: "monitorPnlDelta", label: "실시간 손익률 변화", unit: "%p", step: "0.1" },
     { key: "monitorValueDelta", label: "실시간 평가액 변화", unit: "%", step: "0.1" },
     { key: "monitorMaDistance", label: "이동평균 괴리", unit: "%", step: "0.1" },
@@ -325,6 +333,9 @@
   var labRecordsMemoryStore = "";
   var modelVersionsMemoryStore = "";
   var staticBuildConfigPromise = null;
+  var watchSuggestTimer = null;
+  var watchSuggestRequestId = 0;
+  var snackbarTimer = null;
   var state = {
     loading: true,
     refreshing: false,
@@ -336,6 +347,7 @@
     activeTab: initialTab(),
     settings: loadSettings(),
     settingsOpen: false,
+    snackbar: null,
     showSecrets: false,
     settingsSaved: false,
     serverSettingsLoaded: false,
@@ -348,6 +360,7 @@
     notificationTemplatesLoaded: false,
     notificationTemplatesError: "",
     notificationTemplatesSaved: false,
+    notificationTemplateSending: "",
     staticBuildConfig: null,
     staticBuildConfigError: "",
     serviceAccounts: [],
@@ -366,6 +379,10 @@
     modelError: "",
     editingWatchSymbol: "",
     watchlistError: "",
+    watchSuggestQuery: "",
+    watchSuggestItems: [],
+    watchSuggestLoading: false,
+    watchSuggestError: "",
     symbolUniverse: { items: [], summary: { markets: [], sources: [], total: 0, maxAgeHours: 24 } },
     symbolUniverseLoading: false,
     symbolUniverseRefreshing: false,
@@ -435,6 +452,48 @@
     });
   }
 
+  function showSnackbar(message, tone) {
+    state.snackbar = {
+      message: String(message || ""),
+      tone: tone || "success"
+    };
+    if (snackbarTimer) clearTimeout(snackbarTimer);
+    snackbarTimer = setTimeout(function () {
+      state.snackbar = null;
+      render();
+    }, 2600);
+    render();
+  }
+
+  function renderSnackbar() {
+    if (!state.snackbar || !state.snackbar.message) return "";
+    return [
+      '<div class="snackbar ' + escapeHtml(state.snackbar.tone || "success") + '" role="status">',
+      escapeHtml(state.snackbar.message),
+      '</div>'
+    ].join("");
+  }
+
+  function currentAppTheme() {
+    var value = String((state.settings && state.settings.appTheme) || defaultSettings.appTheme || "light").toLowerCase();
+    if (["light", "dark", "system"].indexOf(value) < 0) return "light";
+    return value;
+  }
+
+  function resolvedAppTheme() {
+    var theme = currentAppTheme();
+    if (theme === "system" && window.matchMedia) {
+      return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    }
+    return theme;
+  }
+
+  function applyAppTheme() {
+    var theme = resolvedAppTheme();
+    document.documentElement.setAttribute("data-theme", theme);
+    document.documentElement.setAttribute("data-theme-setting", currentAppTheme());
+  }
+
   function isStaticPreviewHost() {
     return window.location.protocol === "file:" || /\.github\.io$/i.test(window.location.hostname);
   }
@@ -483,6 +542,7 @@
   function initialTab() {
     var params = new URLSearchParams(window.location.search);
     var requested = String(params.get("tab") || "").toLowerCase();
+    if (requested === "symbols") return "watchlist";
     return tabs.some(function (tab) { return tab.id === requested; }) ? requested : "overview";
   }
 
@@ -688,6 +748,169 @@
     state.notificationTemplatesError = "";
   }
 
+  function notificationTemplatePreviewContext(messageType) {
+    var type = messageType || "monitorHeartbeat";
+    var samples = {
+      default: {
+        title: "삼성전자 관찰 알림",
+        symbol: "005930",
+        severity: "WATCH",
+        lines: ["현재가 71,000원", "관찰 기준 유지", "다음 장에서 수급 재확인"]
+      },
+      modelBuy: {
+        title: "삼성전자 매수 후보",
+        symbol: "005930",
+        severity: "WATCH",
+        lines: ["모델 매수 점수 78점", "적정가 대비 -12.4%", "체결강도와 거래량이 기준 이상"]
+      },
+      modelSell: {
+        title: "엔비디아 분할매도 검토",
+        symbol: "NVDA",
+        severity: "ALERT",
+        lines: ["모델 매도 점수 74점", "목표 수익률 도달", "20일선 이탈 여부 확인"]
+      },
+      watchlistQuote: {
+        title: "엔비디아",
+        symbol: "NVDA",
+        severity: "WATCH",
+        lines: ["관심종목 시세 수집", "현재 $180", "20일선 $172(+4.7%)", "관심종목 알림 기준과 매수 후보를 확인하세요."]
+      },
+      watchlistQuotePending: {
+        title: "카카오",
+        symbol: "035720",
+        severity: "INFO",
+        lines: ["관심종목 시세 대기", "현재가를 아직 받지 못했습니다.", "토스 candles 응답, 종목 코드, 허용 IP를 확인하세요."]
+      },
+      holdingTiming: {
+        title: "SK하이닉스 매수·매도 타이밍",
+        symbol: "000660",
+        severity: "WATCH",
+        lines: ["상태 조건부 보유", "손익 -3.2%", "매도/매수 기준 재확인"]
+      },
+      monitorHeartbeat: {
+        title: "실시간 모니터링",
+        symbol: "",
+        severity: "INFO",
+        lines: ["모니터링 정상 작동", "상태 토스 계좌 동기화", "보유 5개", "평가 5,081만 원"]
+      },
+      monitorConnection: {
+        title: "연결 상태 변화",
+        symbol: "",
+        severity: "WATCH",
+        lines: ["이전 토스 응답 지연", "현재 토스 계좌 동기화", "다음 주기부터 실제 잔고 반영"]
+      },
+      monitorPositionChange: {
+        title: "SK하이닉스",
+        symbol: "000660",
+        severity: "WATCH",
+        lines: ["보유 수량 변경", "이전 4주", "현재 5주", "평가액 1,114만 원"]
+      },
+      monitorPnlChange: {
+        title: "SK하이닉스",
+        symbol: "000660",
+        severity: "WATCH",
+        lines: ["손익률 급변", "이전 -16.3%", "현재 -13.3%", "변화 +3.0%p"]
+      },
+      monitorValueChange: {
+        title: "SK하이닉스",
+        symbol: "000660",
+        severity: "WATCH",
+        lines: ["평가액 급변", "이전 1,051만 원", "현재 1,114만 원", "변화 +6.0%"]
+      },
+      monitorTrendChange: {
+        title: "SK하이닉스",
+        symbol: "000660",
+        severity: "ALERT",
+        lines: ["이동평균 변화", "20일선 하향 이탈", "60일선 상향 돌파", "추세 재확인 필요"]
+      },
+      monitorCashChange: {
+        title: "현금비중",
+        symbol: "",
+        severity: "ALERT",
+        lines: ["한국장", "이전 +12.0%", "현재 +1.0%", "변화 -11.0%p"]
+      },
+      monitorDecisionChange: {
+        title: "SK하이닉스",
+        symbol: "000660",
+        severity: "WATCH",
+        lines: ["판단 변화", "이전 리스크 관찰 36점", "현재 조건부 보유 52점", "Codex 답변: 판단명이 바뀌어 재검토 필요"]
+      },
+      externalEquityMove: {
+        title: "미국 주식 변동",
+        symbol: "AAPL",
+        severity: "WATCH",
+        lines: ["AAPL 24h +3.1%", "거래량 평소 대비 1.8배", "출처 Alpha Vantage"]
+      },
+      externalCryptoMove: {
+        title: "크립토 변동",
+        symbol: "BTC",
+        severity: "WATCH",
+        lines: ["BTC 24h +4.5%", "가격 $61,227", "MSTR 등 비트코인 민감 종목 점검"]
+      },
+      externalMacroShift: {
+        title: "매크로 지표 변화",
+        symbol: "DGS10",
+        severity: "WATCH",
+        lines: ["미국 10년물 금리 +12bp", "2년/10년 스프레드 확대", "성장주 할인율 재점검"]
+      },
+      externalDartDisclosure: {
+        title: "국내 공시 감지",
+        symbol: "005930",
+        severity: "INFO",
+        lines: ["삼성전자 신규 공시", "단일판매·공급계약", "출처 OpenDART"]
+      },
+      externalDataConnection: {
+        title: "외부 데이터 연결 상태",
+        symbol: "",
+        severity: "INFO",
+        lines: ["Alpha Vantage 정상", "CoinGecko 정상", "FRED 응답 지연"]
+      },
+      modelReview: {
+        title: "내 매매 모델 점검",
+        symbol: "005930",
+        severity: "INFO",
+        body: "내 매매 모델 점검\n- 매수 후보 2개\n- 분할매도 검토 1개\n- 기준값 변경 전후를 비교하세요."
+      },
+      workHandoff: {
+        title: "작업 완료 핸드오프",
+        symbol: "",
+        severity: "INFO",
+        body: "작업 완료 핸드오프\n- 커밋 abc1234\n- npm test 통과\n- origin/main push 완료"
+      },
+      notification: {
+        title: "일반 알림",
+        symbol: "",
+        severity: "INFO",
+        body: "일반 알림\n- 테스트 메시지입니다.\n- 템플릿 변경 후 발송 포맷을 확인하세요."
+      }
+    };
+    var sample = samples[type] || samples.default;
+    var rawLines = Array.isArray(sample.lines) ? sample.lines.join("\n") : "";
+    var lines = rawLines ? rawLines.split("\n").map(function (line) { return "- " + line; }).join("\n") : "";
+    var body = sample.body || [sample.title, lines].filter(Boolean).join("\n");
+    return {
+      title: sample.title || samples.default.title,
+      lines: lines,
+      rawLines: rawLines,
+      body: body,
+      messageType: type,
+      symbol: sample.symbol || "",
+      severity: sample.severity || "INFO",
+      rule: type,
+      key: type + ":preview",
+      target: sample.symbol || type,
+      accountLabel: "기본 계정",
+      accountId: "default"
+    };
+  }
+
+  function renderNotificationTemplatePreviewText(template, messageType) {
+    var context = notificationTemplatePreviewContext(messageType);
+    return String(template || "").replace(/\{([A-Za-z0-9_]+)\}/g, function (match, key) {
+      return Object.prototype.hasOwnProperty.call(context, key) ? String(context[key]) : match;
+    }).trim() || "(빈 메시지)";
+  }
+
   function saveNotificationTemplate(messageType) {
     if (isStaticPreviewHost() || state.serverSettingsLocked) {
       state.notificationTemplatesError = "공유 모드에서는 알림 템플릿을 변경할 수 없습니다.";
@@ -706,9 +929,11 @@
           return current.messageType === saved.messageType ? saved : current;
         });
         state.notificationTemplatesSaved = true;
+        showSnackbar("알림 템플릿을 저장했습니다.");
       })
       .catch(function (error) {
         state.notificationTemplatesError = error.message || "알림 템플릿을 저장하지 못했습니다.";
+        showSnackbar(state.notificationTemplatesError, "danger");
       })
       .finally(function () {
         state.notificationTemplatesLoading = false;
@@ -734,12 +959,47 @@
           });
         }
         state.notificationTemplatesSaved = true;
+        showSnackbar("알림 템플릿을 기본값으로 되돌렸습니다.");
       })
       .catch(function (error) {
         state.notificationTemplatesError = error.message || "알림 템플릿을 초기화하지 못했습니다.";
+        showSnackbar(state.notificationTemplatesError, "danger");
       })
       .finally(function () {
         state.notificationTemplatesLoading = false;
+        render();
+      });
+  }
+
+  function canSendNotificationTemplateTest(messageType) {
+    return alertRuleCatalog.some(function (rule) { return rule.key === messageType; });
+  }
+
+  function sendNotificationTemplateTest(messageType) {
+    if (!canSendNotificationTemplateTest(messageType)) {
+      showSnackbar("실제 데이터 발송은 알림 이벤트 타입에서만 가능합니다.", "danger");
+      return Promise.resolve();
+    }
+    if (isStaticPreviewHost() || state.serverSettingsLocked) {
+      state.notificationTemplatesError = "공유 모드에서는 실제 알림을 발송할 수 없습니다.";
+      showSnackbar(state.notificationTemplatesError, "danger");
+      render();
+      return Promise.resolve();
+    }
+    state.notificationTemplateSending = messageType;
+    state.notificationTemplatesError = "";
+    render();
+    return sendJson("/api/notification-templates/test-send", "POST", { messageType: messageType })
+      .then(function (payload) {
+        var event = payload.event || {};
+        showSnackbar("실제 데이터 알림을 보냈습니다: " + (event.title || notificationTemplateLabel(messageType)));
+      })
+      .catch(function (error) {
+        state.notificationTemplatesError = error.message || "실제 데이터 알림을 보내지 못했습니다.";
+        showSnackbar(state.notificationTemplatesError, "danger");
+      })
+      .finally(function () {
+        state.notificationTemplateSending = "";
         render();
       });
   }
@@ -873,8 +1133,12 @@
         state.editingAccountId = "";
         return loadServiceAccounts({ forceDraft: true });
       })
+      .then(function () {
+        showSnackbar("계정을 저장했습니다.");
+      })
       .catch(function (error) {
         state.serviceAccountsError = error.message || "계정을 저장하지 못했습니다.";
+        showSnackbar(state.serviceAccountsError, "danger");
       })
       .finally(function () {
         state.serviceAccountsLoading = false;
@@ -900,8 +1164,12 @@
         }
         return loadServiceAccounts({ forceDraft: true });
       })
+      .then(function () {
+        showSnackbar("계정을 삭제했습니다.");
+      })
       .catch(function (error) {
         state.serviceAccountsError = error.message || "계정을 삭제하지 못했습니다.";
+        showSnackbar(state.serviceAccountsError, "danger");
       })
       .finally(function () {
         state.serviceAccountsLoading = false;
@@ -926,6 +1194,7 @@
 
   function serverSettingsPayload() {
     return {
+      appTheme: settingValue("appTheme"),
       watchlistSymbols: settingValue("watchlistSymbols"),
       tossApiBaseUrl: settingValue("tossApiBaseUrl"),
       tossClientId: settingValue("tossClientId"),
@@ -1141,6 +1410,7 @@
   function refreshSymbolUniverse() {
     if (isStaticPreviewHost() || state.serverSettingsLocked) {
       state.symbolUniverseError = "공유 모드에서는 종목 유니버스를 갱신할 수 없습니다.";
+      showSnackbar(state.symbolUniverseError, "danger");
       render();
       return Promise.resolve();
     }
@@ -1153,10 +1423,12 @@
         if (payload.summary) {
           state.symbolUniverse.summary = payload.summary;
         }
+        showSnackbar("전체 종목 목록을 갱신했습니다.");
         return loadSymbolUniverse();
       })
       .catch(function (error) {
         state.symbolUniverseError = error.message || "종목 유니버스를 갱신하지 못했습니다.";
+        showSnackbar(state.symbolUniverseError, "danger");
       })
       .finally(function () {
         state.symbolUniverseRefreshing = false;
@@ -1164,20 +1436,159 @@
       });
   }
 
+  function suggestionKey(item) {
+    return String((item && item.symbol) || "").trim().toUpperCase();
+  }
+
+  function mergeSuggestionItems(primary, secondary, limit) {
+    var seen = {};
+    var merged = [];
+    [primary || [], secondary || []].forEach(function (items) {
+      items.forEach(function (item) {
+        var key = suggestionKey(item);
+        if (!key || seen[key]) return;
+        seen[key] = true;
+        merged.push(item);
+      });
+    });
+    return merged.slice(0, limit || 8);
+  }
+
+  function localWatchSuggestItems(query) {
+    var normalized = String(query || "").trim().toUpperCase();
+    if (!normalized) return [];
+    var candidates = [];
+    (state.symbolUniverse.items || []).forEach(function (item) {
+      candidates.push(item);
+    });
+    watchlistSymbols().concat(allAccountWatchlistSymbols()).forEach(function (symbol) {
+      candidates.push(clientKnownStockInfo(symbol));
+    });
+    var toss = state.snapshot && state.snapshot.toss ? state.snapshot.toss : {};
+    (toss.positions || []).concat(toss.watchlist || []).forEach(function (item) {
+      if (item && item.symbol) candidates.push(item);
+    });
+    return mergeSuggestionItems(candidates.filter(function (item) {
+      return String(item.symbol || "").toUpperCase().indexOf(normalized) >= 0
+        || String(item.name || "").toUpperCase().indexOf(normalized) >= 0;
+    }), [], 8);
+  }
+
+  function watchSuggestPath(query) {
+    var params = new URLSearchParams();
+    params.set("query", String(query || "").trim());
+    params.set("limit", "8");
+    params.set("offset", "0");
+    return "/api/symbol-universe?" + params.toString();
+  }
+
+  function renderWatchSuggestList() {
+    var query = String(state.watchSuggestQuery || "").trim();
+    if (!query) return "";
+    if (state.watchSuggestLoading) {
+      return '<p class="subtle watch-suggest-message">종목을 검색하는 중입니다.</p>';
+    }
+    if (state.watchSuggestError) {
+      return '<p class="form-error">' + escapeHtml(state.watchSuggestError) + '</p>';
+    }
+    var items = state.watchSuggestItems || [];
+    if (!items.length) {
+      return '<p class="subtle watch-suggest-message">검색 결과가 없습니다. 티커나 종목코드를 직접 입력할 수 있습니다.</p>';
+    }
+    return items.map(function (item) {
+      var symbol = suggestionKey(item);
+      return [
+        '<button class="watch-suggest-option" type="button" data-watch-suggest-symbol="' + escapeHtml(symbol) + '">',
+        '<span>',
+        '<strong>' + escapeHtml(item.name || symbol) + '</strong>',
+        '<em>' + escapeHtml(symbol + " · " + marketLabel(item.market || item.exchange) + " · " + (item.currency || item.assetType || "-")) + '</em>',
+        '</span>',
+        '<b>추가</b>',
+        '</button>'
+      ].join("");
+    }).join("");
+  }
+
+  function updateWatchSuggestBox(box) {
+    if (box) box.innerHTML = renderWatchSuggestList();
+  }
+
+  function loadWatchSuggestions(query, box, input) {
+    var normalized = String(query || "").trim();
+    state.watchSuggestQuery = normalized;
+    state.watchSuggestError = "";
+    if (!normalized) {
+      state.watchSuggestItems = [];
+      state.watchSuggestLoading = false;
+      updateWatchSuggestBox(box);
+      return;
+    }
+    if (watchSuggestTimer) clearTimeout(watchSuggestTimer);
+    watchSuggestTimer = setTimeout(function () {
+      var requestId = ++watchSuggestRequestId;
+      var localItems = localWatchSuggestItems(normalized);
+      state.watchSuggestItems = localItems;
+      state.watchSuggestLoading = true;
+      updateWatchSuggestBox(box);
+      var request = isStaticPreviewHost()
+        ? Promise.resolve({ items: localItems })
+        : requestJson(watchSuggestPath(normalized));
+      request
+        .then(function (payload) {
+          if (requestId !== watchSuggestRequestId) return;
+          if (input && String(input.value || "").trim() !== normalized) return;
+          state.watchSuggestItems = mergeSuggestionItems(payload.items || [], localItems, 8);
+          state.watchSuggestError = "";
+        })
+        .catch(function (error) {
+          if (requestId !== watchSuggestRequestId) return;
+          state.watchSuggestItems = localItems;
+          state.watchSuggestError = localItems.length ? "" : (error.message || "종목 검색에 실패했습니다.");
+        })
+        .finally(function () {
+          if (requestId !== watchSuggestRequestId) return;
+          state.watchSuggestLoading = false;
+          updateWatchSuggestBox(box);
+        });
+    }, 180);
+  }
+
   function saveWatchlistSymbols(symbols) {
     state.settings.watchlistSymbols = normalizeSymbols(symbols.join(",")).join(",");
     state.editingWatchSymbol = "";
     state.watchlistError = "";
+    state.watchSuggestQuery = "";
+    state.watchSuggestItems = [];
+    state.watchSuggestLoading = false;
+    state.watchSuggestError = "";
     persistSettings();
-    state.snapshot = null;
     var save = isStaticPreviewHost()
       ? Promise.resolve()
-      : saveSettingsToServer().catch(function (error) {
-        state.watchlistError = error.message || "관심 종목을 서버 설정 DB에 저장하지 못했습니다.";
-      });
+      : saveSettingsToServer();
     return save.then(function () {
-      return load();
+      showSnackbar("관심 종목을 저장했습니다.");
+    }).catch(function (error) {
+      state.watchlistError = error.message || "관심 종목을 서버 설정 DB에 저장하지 못했습니다.";
+      showSnackbar(state.watchlistError, "danger");
+    }).finally(function () {
+      render();
     });
+  }
+
+  function addWatchSymbol(symbol) {
+    var next = normalizeSymbols(symbol || "");
+    if (!next.length) {
+      state.watchlistError = "추가할 티커나 종목코드를 입력하세요.";
+      render();
+      return Promise.resolve();
+    }
+    var symbols = watchlistSymbols();
+    if (symbols.indexOf(next[0]) >= 0) {
+      state.watchlistError = "이미 추가된 관심 종목입니다.";
+      render();
+      return Promise.resolve();
+    }
+    return saveWatchlistSymbols(symbols.concat(next[0]));
   }
 
   function tossLensPath() {
@@ -2365,6 +2776,7 @@
     })[0];
     if (!item) {
       state.labRecordError = "저장할 종목을 찾지 못했습니다.";
+      showSnackbar(state.labRecordError, "danger");
       render();
       return;
     }
@@ -2417,6 +2829,7 @@
     state.labRecords = (state.labRecords || []).concat(record);
     state.labRecordSaved = persistLabRecords();
     state.labRecordError = state.labRecordSaved ? "" : "실험 기록을 저장하지 못했습니다.";
+    showSnackbar(state.labRecordSaved ? "실험 기록을 저장했습니다." : state.labRecordError, state.labRecordSaved ? "success" : "danger");
     render();
   }
 
@@ -2734,6 +3147,7 @@
     state.modelVersions = (state.modelVersions || []).concat(version);
     state.modelSaved = persistModelVersions();
     state.modelError = state.modelSaved ? "" : "모델 버전을 저장하지 못했습니다.";
+    showSnackbar(state.modelSaved ? "모델 버전을 저장했습니다." : state.modelError, state.modelSaved ? "success" : "danger");
     render();
   }
 
@@ -3309,6 +3723,7 @@
   }
 
   function render() {
+    applyAppTheme();
     if (state.loading && !state.snapshot) {
       app.innerHTML = renderLoading();
       return;
@@ -3383,6 +3798,7 @@
       '</div>',
       '</section>',
       state.settingsOpen ? renderSettingsOverlay() : '',
+      renderSnackbar(),
       '</main>'
     ].join("");
   }
@@ -3422,13 +3838,6 @@
         renderAccountWatchlistPanel({ full: true }),
         renderWatchlistPanel(snapshot),
         renderSymbolUniversePanel({ full: false }),
-        '</section>'
-      ].join("");
-    }
-    if (state.activeTab === "symbols") {
-      return [
-        '<section class="admin-grid symbol-universe-view">',
-        renderSymbolUniversePanel({ full: true }),
         '</section>'
       ].join("");
     }
@@ -3572,15 +3981,47 @@
       '</div>',
       '<button class="mini-button" data-account-edit="' + escapeHtml(account.id || "") + '">수정</button>',
       '</div>',
-      '<div class="account-card-meta">',
-      '<span class="chip ' + (account.clientId ? "ok" : "") + '">API key ' + (account.clientId ? "설정" : "없음") + '</span>',
-      '<span class="chip ' + (account.clientSecret ? "ok" : "") + '">Secret ' + (account.clientSecret ? "설정" : "없음") + '</span>',
-      '<span class="chip ' + (account.telegramBotToken ? "ok" : "") + '">Telegram ' + (account.telegramBotToken ? "설정" : "없음") + '</span>',
-      '<span class="chip">관심 ' + escapeHtml(symbols.length) + '개</span>',
-      '</div>',
+      renderAccountCredentialSummary(account),
+      '<div class="account-card-meta"><span class="chip">관심 ' + escapeHtml(symbols.length) + '개</span></div>',
       options.compact ? '' : '<div class="chip-row">' + (symbols.length ? symbols.map(function (symbol) {
         return '<span class="chip">' + escapeHtml(symbol) + '</span>';
       }).join("") : '<span class="subtle">계정에 저장된 관심 종목이 없습니다.</span>') + '</div>',
+      '</div>'
+    ].join("");
+  }
+
+  function configuredChip(label, configured, detail) {
+    return [
+      '<span class="chip ' + (configured ? "ok" : "missing") + '">',
+      escapeHtml(label + " " + (configured ? "설정됨" : "미설정")),
+      detail ? '<em>' + escapeHtml(detail) + '</em>' : '',
+      '</span>'
+    ].join("");
+  }
+
+  function renderAccountCredentialSummary(account) {
+    account = account || {};
+    var provider = account.notifyProvider || settingValue("notifyProvider") || "-";
+    return [
+      '<div class="account-credential-grid">',
+      '<div>',
+      '<strong>토스</strong>',
+      '<span>' + escapeHtml(account.baseUrl || "https://openapi.tossinvest.com") + '</span>',
+      '<div class="chip-row">',
+      configuredChip("API key", Boolean(account.clientId)),
+      configuredChip("Secret", Boolean(account.clientSecret)),
+      configuredChip("계좌 seq", Boolean(account.accountSeq), account.accountSeq || "선택 안함"),
+      '</div>',
+      '</div>',
+      '<div>',
+      '<strong>텔레그램</strong>',
+      '<span>' + escapeHtml(provider + (account.notifyLinkUrl ? " · " + account.notifyLinkUrl : "")) + '</span>',
+      '<div class="chip-row">',
+      configuredChip("Bot token", Boolean(account.telegramBotToken)),
+      configuredChip("Chat ID", Boolean(account.telegramChatId), account.telegramChatId ? "저장됨" : ""),
+      configuredChip("알림 링크", Boolean(account.notifyLinkUrl)),
+      '</div>',
+      '</div>',
       '</div>'
     ].join("");
   }
@@ -3679,6 +4120,9 @@
     var accounts = state.serviceAccounts || [];
     var draft = state.accountDraft || defaultAccountDraft();
     var locked = state.serverSettingsLocked || isStaticPreviewHost();
+    var editingAccount = accounts.filter(function (account) {
+      return account.id === state.editingAccountId;
+    })[0] || null;
     return [
       '<article class="panel admin-account-panel">',
       '<div class="panel-head">',
@@ -3703,6 +4147,7 @@
       '<strong>' + escapeHtml(state.editingAccountId ? "계정 수정" : "새 계정 등록") + '</strong>',
       '<p>API key와 secret은 저장 여부만 표시됩니다. 수정하지 않을 secret 칸은 비워두세요.</p>',
       '</div>',
+      editingAccount ? renderAccountCredentialSummary(editingAccount) : '',
       '<div class="admin-form-grid">',
       renderAccountField("id", "계정 ID", "text", "main", { required: true, disabled: Boolean(state.editingAccountId) }),
       renderAccountField("label", "표시 이름", "text", "메인 계정", { required: true }),
@@ -3752,11 +4197,9 @@
       '<strong>' + escapeHtml(account.label || account.id || "-") + '</strong>',
       '<span>' + escapeHtml(account.id || "-") + ' · ' + escapeHtml(account.provider || "toss") + ' · ' + escapeHtml(account.enabled === false ? "중지" : "사용") + '</span>',
       '<span>관심 ' + escapeHtml(watchlist || "-") + '</span>',
+      renderAccountCredentialSummary(account),
       '</div>',
       '<div class="service-account-meta">',
-      '<span class="chip ' + (account.clientId ? "ok" : "") + '">API key ' + (account.clientId ? "설정" : "없음") + '</span>',
-      '<span class="chip ' + (account.clientSecret ? "ok" : "") + '">Secret ' + (account.clientSecret ? "설정" : "없음") + '</span>',
-      '<span class="chip ' + (account.telegramBotToken ? "ok" : "") + '">Telegram ' + (account.telegramBotToken ? "설정" : "없음") + '</span>',
       '<div class="row-actions">',
       '<button class="mini-button" data-account-edit="' + escapeHtml(account.id || "") + '">수정</button>',
       '<button class="mini-button danger" data-account-remove="' + escapeHtml(account.id || "") + '">삭제</button>',
@@ -3853,6 +4296,9 @@
 
   function renderNotificationTemplateRow(item) {
     var disabled = state.serverSettingsLocked || isStaticPreviewHost();
+    var preview = renderNotificationTemplatePreviewText(item.template || "", item.messageType);
+    var canTest = canSendNotificationTemplateTest(item.messageType);
+    var sending = state.notificationTemplateSending === item.messageType;
     return [
       '<div class="notification-template-row">',
       '<div class="notification-template-meta">',
@@ -3863,6 +4309,11 @@
       '<div class="settings-actions">',
       '<button class="text-button primary" data-template-save="' + escapeHtml(item.messageType || "") + '"' + (disabled || state.notificationTemplatesLoading ? ' disabled' : '') + '>템플릿 저장</button>',
       '<button class="text-button" data-template-reset="' + escapeHtml(item.messageType || "") + '"' + (disabled || state.notificationTemplatesLoading ? ' disabled' : '') + '>기본값</button>',
+      canTest ? '<button class="text-button" data-template-test-send="' + escapeHtml(item.messageType || "") + '"' + (disabled || state.notificationTemplatesLoading || state.notificationTemplateSending ? ' disabled' : '') + '>' + escapeHtml(sending ? "발송 중" : "실제 데이터 발송") + '</button>' : '',
+      '</div>',
+      '<div class="notification-template-preview">',
+      '<strong>미리보기</strong>',
+      '<pre data-template-preview="' + escapeHtml(item.messageType || "") + '">' + escapeHtml(preview) + '</pre>',
       '</div>',
       '</div>'
     ].join("");
@@ -4184,7 +4635,7 @@
       '</div>',
       '<div class="rule-strip">',
       '<span>주문 실행이 아니라 매매 타이밍을 찾기 위한 읽기 전용 계산판입니다.</span>',
-      full ? '<span>EPS, 목표 PER, 안전마진을 바꾸면 적정가와 가격 기준선이 다시 계산됩니다.</span>' : '<span>전체 종목은 실험실 탭에서 봅니다.</span>',
+      full ? '<span>EPS, 목표 PER, 안전마진을 바꾸면 적정가와 가격 기준선이 다시 계산됩니다.</span>' : '<span>전체 종목은 관심종목 탭에서 봅니다.</span>',
       '</div>',
       '</article>'
     ].join("");
@@ -5207,9 +5658,10 @@
       '</div>',
       '<div class="watch-editor">',
       '<form class="watch-add-form" data-watch-add-form>',
-      '<input name="symbol" placeholder="티커 또는 종목코드 추가" autocomplete="off" />',
+      '<input name="symbol" data-watch-symbol-input placeholder="티커/종목명 검색 후 추가" value="' + escapeHtml(state.watchSuggestQuery || "") + '" autocomplete="off" />',
       '<button class="text-button primary">추가</button>',
       '</form>',
+      '<div class="watch-suggest-box" data-watch-suggest-list>' + renderWatchSuggestList() + '</div>',
       '<p class="subtle">토스 앱의 관심 목록은 공개 API에서 직접 읽지 못해, 여기 저장한 관심 종목을 기준으로 점검합니다.</p>',
       state.watchlistError ? '<p class="form-error">' + escapeHtml(state.watchlistError) + '</p>' : '',
       '</div>',
@@ -5262,35 +5714,58 @@
       '</div>',
       '<span class="metric">' + escapeHtml(summary.total || items.length || 0) + '</span>',
       '</div>',
-      '<div class="source-stack">',
-      markets.length ? markets.map(function (market) {
-        return '<div class="source-row"><span>' + escapeHtml(marketLabel(market.market)) + '</span><strong>' + escapeHtml(market.count || 0) + '종목 · ' + escapeHtml(freshnessLabel(market)) + '</strong></div>';
-      }).join("") : '<p class="subtle">아직 저장된 전체 종목 목록이 없습니다.</p>',
+      '<div class="symbol-summary-grid">',
+      markets.length ? markets.map(renderSymbolMarketSummary).join("") : '<p class="subtle">아직 저장된 전체 종목 목록이 없습니다.</p>',
       '</div>',
-      full && sources.length ? '<div class="source-stack api-source-stack">' + sources.map(function (source) {
-        return '<div class="source-row"><span>' + escapeHtml(marketLabel(source.market)) + ' API</span><strong>' + escapeHtml(source.status || "-") + ' · ' + escapeHtml(source.lastSuccessAt ? formatClock(source.lastSuccessAt) : "성공 기록 없음") + '</strong></div>';
-      }).join("") + '</div>' : '',
-      '<form class="watch-add-form symbol-search-form" data-symbol-search-form>',
+      full && sources.length ? '<div class="symbol-source-grid">' + sources.map(renderSymbolSourceSummary).join("") + '</div>' : '',
+      '<form class="symbol-filter-form ' + (full ? "full" : "compact") + '" data-symbol-search-form>',
+      '<label>',
+      '<span>시장</span>',
       '<select name="market" data-symbol-market>',
       '<option value="">전체 시장</option>',
       ["KOSPI", "KOSDAQ", "NASDAQ"].map(function (market) {
         return '<option value="' + escapeHtml(market) + '"' + (state.symbolUniverseMarket === market ? " selected" : "") + '>' + escapeHtml(marketLabel(market)) + '</option>';
       }).join(""),
       '</select>',
+      '</label>',
+      '<label>',
+      '<span>검색어</span>',
       '<input name="query" data-symbol-query placeholder="종목명 또는 티커 검색" value="' + escapeHtml(state.symbolUniverseQuery || "") + '" autocomplete="off" />',
-      full ? '<select name="limit" data-symbol-limit>' + [80, 200, 500].map(function (value) {
+      '</label>',
+      full ? '<label><span>표시 수</span><select name="limit" data-symbol-limit>' + [80, 200, 500].map(function (value) {
         return '<option value="' + value + '"' + (Number(state.symbolUniverseLimit || 80) === value ? " selected" : "") + '>' + value + '개</option>';
-      }).join("") + '</select>' : '',
+      }).join("") + '</select></label>' : '',
       '<button class="text-button primary">검색</button>',
       '<button class="text-button" type="button" data-action="refresh-symbol-universe">' + escapeHtml(state.symbolUniverseRefreshing ? "갱신 중" : "목록 갱신") + '</button>',
       '</form>',
       state.symbolUniverseError ? '<p class="form-error">' + escapeHtml(state.symbolUniverseError) + '</p>' : '',
-      '<p class="subtle">코스피·코스닥은 KRX KIND, 나스닥은 Nasdaq Trader 심볼 디렉터리를 로컬 SQLite에 저장합니다. 원천 호출이 실패해도 마지막 성공 목록을 계속 사용합니다.</p>',
+      '<p class="symbol-universe-note subtle">코스피·코스닥은 KRX KIND, 나스닥은 Nasdaq Trader 심볼 디렉터리를 로컬 SQLite에 저장합니다. 원천 호출이 실패해도 마지막 성공 목록을 계속 사용합니다.</p>',
       full ? '<div class="symbol-pager"><span>' + escapeHtml(resultTotal ? visibleFrom + "-" + visibleTo + " / " + resultTotal + "개 표시" : "표시할 종목 없음") + '</span><div><button class="mini-button" data-symbol-page="prev"' + (hasPrev ? "" : " disabled") + '>이전</button><button class="mini-button" data-symbol-page="next"' + (hasNext ? "" : " disabled") + '>다음</button></div></div>' : '',
-      '<div class="position-list">',
+      '<div class="symbol-result-list">',
       state.symbolUniverseLoading ? '<p class="subtle">종목 목록을 읽는 중입니다.</p>' : (renderedItems.length ? renderedItems.map(renderSymbolUniverseRow).join("") : '<p class="subtle">검색 결과가 없습니다. 목록 갱신을 실행하세요.</p>'),
       '</div>',
       '</article>'
+    ].join("");
+  }
+
+  function renderSymbolMarketSummary(market) {
+    return [
+      '<div class="symbol-summary-card">',
+      '<span>' + escapeHtml(marketLabel(market.market)) + '</span>',
+      '<strong>' + escapeHtml(market.count || 0) + '</strong>',
+      '<em>' + escapeHtml(freshnessLabel(market)) + '</em>',
+      '</div>'
+    ].join("");
+  }
+
+  function renderSymbolSourceSummary(source) {
+    var ok = String(source.status || "").toLowerCase() === "ok";
+    return [
+      '<div class="symbol-source-card ' + (ok ? "ok" : "warn") + '">',
+      '<span>' + escapeHtml(marketLabel(source.market)) + ' API</span>',
+      '<strong>' + escapeHtml(source.status || "-") + '</strong>',
+      '<em>' + escapeHtml(source.lastSuccessAt ? formatClock(source.lastSuccessAt) : "성공 기록 없음") + '</em>',
+      '</div>'
     ].join("");
   }
 
@@ -5298,15 +5773,22 @@
     var symbol = String(item.symbol || "").toUpperCase();
     var already = watchlistSymbols().indexOf(symbol) >= 0;
     return [
-      '<div class="position-row rich-row">',
-      '<div>',
+      '<div class="symbol-result-row">',
+      '<div class="symbol-result-main">',
+      '<div class="symbol-result-title">',
       '<strong>' + escapeHtml(item.name || symbol) + '</strong>',
-      '<span>' + escapeHtml(symbol) + ' · ' + escapeHtml(marketLabel(item.market || item.exchange)) + ' · ' + escapeHtml(item.assetType || "STOCK") + ' · ' + escapeHtml(item.currency || "-") + '</span>',
-      '<span>' + escapeHtml(item.source || "-") + ' · ' + escapeHtml(item.stale ? "갱신 필요" : "신선") + '</span>',
+      '<span>' + escapeHtml(symbol) + '</span>',
       '</div>',
-      '<div class="right">',
-      '<strong>' + escapeHtml(item.sector || "-") + '</strong>',
-      '<span>' + escapeHtml(item.lastSeenAt ? formatClock(item.lastSeenAt) : "초기 데이터") + '</span>',
+      '<div class="symbol-result-meta">',
+      '<span>' + escapeHtml(marketLabel(item.market || item.exchange)) + '</span>',
+      '<span>' + escapeHtml(item.assetType || "STOCK") + '</span>',
+      '<span>' + escapeHtml(item.currency || "-") + '</span>',
+      '<span>' + escapeHtml(item.stale ? "갱신 필요" : "신선") + '</span>',
+      '</div>',
+      '<p>' + escapeHtml(item.source || "-") + ' · ' + escapeHtml(item.lastSeenAt ? formatClock(item.lastSeenAt) : "초기 데이터") + '</p>',
+      '</div>',
+      '<div class="symbol-result-side">',
+      '<strong>' + escapeHtml(item.sector || "섹터 미분류") + '</strong>',
       '<button class="mini-button" data-symbol-add-watch="' + escapeHtml(symbol) + '"' + (already ? " disabled" : "") + '>' + (already ? "관심 등록됨" : "관심 추가") + '</button>',
       '</div>',
       '</div>'
@@ -5327,6 +5809,26 @@
     return renderWatchRow(Object.assign({}, item, { symbol: original }), true);
   }
 
+  function renderWatchAlertMeta(item) {
+    var rules = alertRules();
+    var hasPrice = Boolean(item.currentPrice);
+    var quoteRule = enabledAlertRule(rules, "watchlistQuote");
+    var pendingRule = enabledAlertRule(rules, "watchlistQuotePending");
+    var chips = [
+      '<span class="chip ' + (hasPrice ? "ok" : "missing") + '">' + escapeHtml(item.quoteStatus || (hasPrice ? "시세 수집" : "시세 대기")) + '</span>',
+      '<span class="chip ' + (quoteRule ? "ok" : "missing") + '">시세 알림 ' + escapeHtml(quoteRule ? "ON" : "OFF") + '</span>'
+    ];
+    if (!hasPrice) {
+      chips.push('<span class="chip ' + (pendingRule ? "ok" : "missing") + '">대기 알림 ' + escapeHtml(pendingRule ? "ON" : "OFF") + '</span>');
+    }
+    return [
+      '<div class="watch-row-meta">',
+      '<div class="chip-row">' + chips.join("") + '</div>',
+      item.quoteMessage ? '<p>' + escapeHtml(item.quoteMessage) + '</p>' : '',
+      '</div>'
+    ].join("");
+  }
+
   function renderWatchRow(item) {
     var editable = arguments.length > 1 && arguments[1];
     var source = item.source === "holding" ? "보유" : "관심";
@@ -5335,6 +5837,7 @@
       '<div>',
       '<strong>' + escapeHtml(item.name || item.symbol) + '</strong>',
       '<span>' + escapeHtml(item.symbol) + ' · ' + escapeHtml(item.market || "-") + ' · ' + escapeHtml(item.sector || "-") + ' · ' + escapeHtml(source) + '</span>',
+      renderWatchAlertMeta(item),
       '</div>',
       '<div class="right">',
       '<strong>' + escapeHtml(item.currentPrice ? formatCurrency(item.currentPrice, item.currency) : "시세 대기") + '</strong>',
@@ -5515,6 +6018,20 @@
     ].join("");
   }
 
+  function renderSettingSelect(name, label, options) {
+    var current = settingValue(name) || defaultSettings[name] || "";
+    return [
+      '<label class="setting-field">',
+      '<span>' + escapeHtml(label) + '</span>',
+      '<select data-setting="' + escapeHtml(name) + '">',
+      options.map(function (option) {
+        return '<option value="' + escapeHtml(option.value) + '"' + (String(current) === String(option.value) ? " selected" : "") + '>' + escapeHtml(option.label) + '</option>';
+      }).join(""),
+      '</select>',
+      '</label>'
+    ].join("");
+  }
+
   function renderSettingsPanel() {
     var secretType = state.showSecrets ? "text" : "password";
     return [
@@ -5534,6 +6051,11 @@
       state.serverSettingsLocked ? '<p class="form-error">공유 모드에서는 서버 설정 저장이 잠겨 있습니다.</p>' : '',
       '</div>',
       '<div class="settings-grid">',
+      renderSettingSelect("appTheme", "화면 테마", [
+        { value: "light", label: "라이트" },
+        { value: "dark", label: "다크" },
+        { value: "system", label: "시스템 설정" }
+      ]),
       renderSettingField("watchlistSymbols", "관심 종목", "text", "TSLA,AAPL,NVDA,000660"),
       renderSettingField("tossApiBaseUrl", "Toss API Base URL", "url", "https://openapi.tossinvest.com"),
       renderSettingField("tossClientId", "Toss Client ID", secretType, "client id", { preserveConfigured: true }),
@@ -5832,7 +6354,13 @@
 
     Array.prototype.slice.call(app.querySelectorAll("[data-notification-template]")).forEach(function (field) {
       field.addEventListener("input", function () {
-        updateNotificationTemplate(field.getAttribute("data-notification-template"), field.value);
+        var messageType = field.getAttribute("data-notification-template");
+        updateNotificationTemplate(messageType, field.value);
+        var row = field.closest ? field.closest(".notification-template-row") : null;
+        var preview = row ? row.querySelector("[data-template-preview]") : null;
+        if (preview) {
+          preview.textContent = renderNotificationTemplatePreviewText(field.value, messageType);
+        }
       });
     });
 
@@ -5845,6 +6373,12 @@
     Array.prototype.slice.call(app.querySelectorAll("[data-template-reset]")).forEach(function (button) {
       button.addEventListener("click", function () {
         resetNotificationTemplate(button.getAttribute("data-template-reset"));
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-template-test-send]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        sendNotificationTemplateTest(button.getAttribute("data-template-test-send"));
       });
     });
 
@@ -5869,12 +6403,15 @@
     }
 
     Array.prototype.slice.call(app.querySelectorAll("[data-setting]")).forEach(function (field) {
-      field.addEventListener("input", function () {
+      var updateSettingField = function () {
         var name = field.getAttribute("data-setting");
         if (!name) return;
         state.settings[name] = field.value;
         state.settingsSaved = false;
-      });
+        if (name === "appTheme") applyAppTheme();
+      };
+      field.addEventListener("input", updateSettingField);
+      field.addEventListener("change", updateSettingField);
     });
 
     Array.prototype.slice.call(app.querySelectorAll('[data-action="save-settings"]')).forEach(function (saveSettings) {
@@ -5882,14 +6419,14 @@
         saveSettings.disabled = true;
         saveSettingsToServer()
           .then(function () {
-            state.snapshot = null;
-            state.feed = null;
             state.settingsOpen = false;
-            return load();
+            state.settingsSaved = true;
+            showSnackbar("설정을 저장했습니다.");
           })
           .catch(function (error) {
             state.serverSettingsError = error.message || "설정을 저장하지 못했습니다.";
             state.settingsSaved = false;
+            showSnackbar(state.serverSettingsError, "danger");
             render();
           });
       });
@@ -5897,22 +6434,35 @@
 
     var watchAddForm = app.querySelector("[data-watch-add-form]");
     if (watchAddForm) {
+      var watchSymbolInput = watchAddForm.querySelector("[data-watch-symbol-input]");
+      var watchSuggestBox = app.querySelector("[data-watch-suggest-list]");
+      if (watchSymbolInput) {
+        watchSymbolInput.addEventListener("input", function () {
+          loadWatchSuggestions(watchSymbolInput.value, watchSuggestBox, watchSymbolInput);
+        });
+        watchSymbolInput.addEventListener("focus", function () {
+          if (watchSymbolInput.value) {
+            loadWatchSuggestions(watchSymbolInput.value, watchSuggestBox, watchSymbolInput);
+          }
+        });
+      }
       watchAddForm.addEventListener("submit", function (event) {
         event.preventDefault();
         var input = watchAddForm.querySelector('input[name="symbol"]');
-        var next = normalizeSymbols(input ? input.value : "");
-        if (!next.length) {
-          state.watchlistError = "추가할 티커나 종목코드를 입력하세요.";
-          render();
-          return;
+        addWatchSymbol(input ? input.value : "");
+      });
+    }
+
+    var watchSuggestList = app.querySelector("[data-watch-suggest-list]");
+    if (watchSuggestList) {
+      watchSuggestList.addEventListener("click", function (event) {
+        var target = event.target;
+        while (target && target !== watchSuggestList && !target.getAttribute("data-watch-suggest-symbol")) {
+          target = target.parentNode;
         }
-        var symbols = watchlistSymbols();
-        if (symbols.indexOf(next[0]) >= 0) {
-          state.watchlistError = "이미 추가된 관심 종목입니다.";
-          render();
-          return;
-        }
-        saveWatchlistSymbols(symbols.concat(next[0]));
+        if (!target || target === watchSuggestList) return;
+        event.preventDefault();
+        addWatchSymbol(target.getAttribute("data-watch-suggest-symbol"));
       });
     }
 
@@ -5954,10 +6504,7 @@
     Array.prototype.slice.call(app.querySelectorAll("[data-symbol-add-watch]")).forEach(function (button) {
       button.addEventListener("click", function () {
         var symbol = String(button.getAttribute("data-symbol-add-watch") || "").toUpperCase();
-        if (!symbol) return;
-        var symbols = watchlistSymbols();
-        if (symbols.indexOf(symbol) >= 0) return;
-        saveWatchlistSymbols(symbols.concat(symbol));
+        addWatchSymbol(symbol);
       });
     });
 
@@ -6026,6 +6573,19 @@
     }
   }
 
+  if (window.matchMedia) {
+    var systemThemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
+    var handleSystemThemeChange = function () {
+      if (currentAppTheme() === "system") applyAppTheme();
+    };
+    if (systemThemeQuery.addEventListener) {
+      systemThemeQuery.addEventListener("change", handleSystemThemeChange);
+    } else if (systemThemeQuery.addListener) {
+      systemThemeQuery.addListener(handleSystemThemeChange);
+    }
+  }
+
+  applyAppTheme();
   Promise.all([loadServerSettings(), loadServiceAccounts(), loadNotificationTemplates(), loadSymbolUniverse()]).finally(function () {
     load();
   });

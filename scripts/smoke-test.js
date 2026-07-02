@@ -352,6 +352,7 @@ function checkFrontendAdminRender() {
   return Promise.all([
     renderForSearch(""),
     renderForSearch("?tab=accounts"),
+    renderForSearch("?tab=watchlist"),
     renderForSearch("?tab=notifications"),
     renderForSearch("?tab=modeling"),
     renderForSearch("?tab=monitoring"),
@@ -360,28 +361,36 @@ function checkFrontendAdminRender() {
   ]).then(function (pages) {
     const overviewHtml = pages[0];
     const accountHtml = pages[1];
-    const notificationHtml = pages[2];
-    const modelingHtml = pages[3];
-    const monitoringHtml = pages[4];
-    const symbolsHtml = pages[5];
-    const staticAccountHtml = pages[6];
+    const watchlistHtml = pages[2];
+    const notificationHtml = pages[3];
+    const modelingHtml = pages[4];
+    const monitoringHtml = pages[5];
+    const symbolsHtml = pages[6];
+    const staticAccountHtml = pages[7];
     const symbolUniverseHtml = monitoringHtml.indexOf("symbol-universe-panel") >= 0 ? monitoringHtml : symbolsHtml;
 
     assertOk(overviewHtml.indexOf("계정·알림·모델 운영 콘솔") >= 0, "메인 운영 콘솔 제목이 렌더링되지 않았습니다.");
-    ["overview", "accounts", "notifications", "modeling", "monitoring"].forEach(function (tab) {
+    ["overview", "accounts", "watchlist", "monitoring", "notifications", "modeling", "symbols"].forEach(function (tab) {
       assertOk(overviewHtml.indexOf('data-tab="' + tab + '"') >= 0, "새 탭이 렌더링되지 않았습니다: " + tab);
     });
     assertOk(overviewHtml.indexOf("data-mode=") < 0, "Mock 데이터 전환 버튼이 아직 렌더링됩니다.");
     assertOk(overviewHtml.indexOf(">Mock<") < 0, "Mock 데이터 버튼 라벨이 아직 렌더링됩니다.");
     assertOk(overviewHtml.indexOf("Mock 데이터") < 0, "Mock 데이터 표시 문구가 아직 렌더링됩니다.");
-    ["decision", "lab", "alerts", "holdings", "feed", "watchlist"].forEach(function (tab) {
+    ["decision", "lab", "alerts", "holdings", "feed"].forEach(function (tab) {
       assertOk(overviewHtml.indexOf('data-tab="' + tab + '"') < 0, "기존 탭이 남아 있습니다: " + tab);
     });
     assertOk(overviewHtml.indexOf("admin-monitoring-panel") >= 0, "모니터링 상태 패널이 렌더링되지 않았습니다.");
+    assertOk(overviewHtml.indexOf("account-directory-panel") >= 0, "홈에 DB 계정 패널이 렌더링되지 않았습니다.");
+    assertOk(overviewHtml.indexOf("account-watchlist-panel") >= 0, "홈에 계정별 관심 종목 패널이 렌더링되지 않았습니다.");
+    assertOk(overviewHtml.indexOf("DB 저장 계정") >= 0, "DB 계정 제목이 렌더링되지 않았습니다.");
     assertOk(accountHtml.indexOf("data-account-form") >= 0, "계정 등록 폼이 렌더링되지 않았습니다.");
+    assertOk(accountHtml.indexOf("DB 저장 계정") >= 0, "계정 탭에 DB 계정 목록이 렌더링되지 않았습니다.");
     assertOk(accountHtml.indexOf('value="DB 계정"') >= 0, "로컬 DB 계정 표시 이름이 폼에 채워지지 않았습니다.");
     assertOk(accountHtml.indexOf('value="NVDA,005930"') >= 0, "로컬 DB 관심 종목이 폼에 채워지지 않았습니다.");
     assertOk(accountHtml.indexOf('value="true"') < 0, "마스킹된 boolean 값이 계정 폼에 그대로 표시됩니다.");
+    assertOk(watchlistHtml.indexOf("계정별 관심 종목") >= 0, "관심종목 탭에 계정별 관심 종목이 렌더링되지 않았습니다.");
+    assertOk(watchlistHtml.indexOf("watchlist-panel") >= 0, "관심종목 탭에 관심 종목 관리 패널이 렌더링되지 않았습니다.");
+    assertOk(watchlistHtml.indexOf("NVDA") >= 0 && watchlistHtml.indexOf("005930") >= 0, "DB 계정 관심 종목이 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("admin-message-row") >= 0, "메시지 타입별 알림 설정이 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("notification-template-row") >= 0, "알림 템플릿 편집기가 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("data-notification-template=\"monitorHeartbeat\"") >= 0, "상태 확인 템플릿 textarea가 렌더링되지 않았습니다.");

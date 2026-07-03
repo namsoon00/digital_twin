@@ -7,18 +7,28 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 DEFAULT_MARKET_HOUR_SESSIONS: Dict[str, Dict[str, object]] = {
     "KR": {
         "market": "KR",
-        "label": "국장 정규장",
+        "label": "국장",
         "timezone": "Asia/Seoul",
-        "openTime": "09:00",
-        "closeTime": "15:30",
+        "openTime": "08:00",
+        "closeTime": "20:00",
+        "sessions": [
+            {"key": "pre", "label": "프리마켓", "openTime": "08:00", "closeTime": "08:50"},
+            {"key": "regular", "label": "정규장", "openTime": "09:00", "closeTime": "15:30"},
+            {"key": "after", "label": "애프터마켓", "openTime": "15:30", "closeTime": "20:00"},
+        ],
         "weekdays": [0, 1, 2, 3, 4],
     },
     "US": {
         "market": "US",
-        "label": "미장 정규장",
+        "label": "미장",
         "timezone": "America/New_York",
-        "openTime": "09:30",
-        "closeTime": "16:00",
+        "openTime": "04:00",
+        "closeTime": "20:00",
+        "sessions": [
+            {"key": "pre", "label": "프리마켓", "openTime": "04:00", "closeTime": "09:30"},
+            {"key": "regular", "label": "정규장", "openTime": "09:30", "closeTime": "16:00"},
+            {"key": "after", "label": "애프터마켓", "openTime": "16:00", "closeTime": "20:00"},
+        ],
         "weekdays": [0, 1, 2, 3, 4],
     },
 }
@@ -137,6 +147,30 @@ def market_time(now: datetime, timezone_name: str) -> datetime:
     return now.astimezone(zone)
 
 
+def session_items(market_session: Dict[str, object]) -> List[Dict[str, object]]:
+    raw_sessions = market_session.get("sessions") if isinstance(market_session.get("sessions"), list) else []
+    sessions = [item for item in raw_sessions if isinstance(item, dict) and item.get("openTime") and item.get("closeTime")]
+    if sessions:
+        return sessions
+    return [{
+        "key": "regular",
+        "label": market_session.get("label") or "정규장",
+        "openTime": market_session.get("openTime") or "",
+        "closeTime": market_session.get("closeTime") or "",
+    }]
+
+
+def session_summary(sessions: List[Dict[str, object]]) -> str:
+    parts = []
+    for item in sessions:
+        label = str(item.get("label") or "").strip()
+        open_time = str(item.get("openTime") or "")
+        close_time = str(item.get("closeTime") or "")
+        if open_time and close_time:
+            parts.append((label + " " if label else "") + open_time + "-" + close_time)
+    return " · ".join(parts)
+
+
 def evaluate_market_hours(
     message_type: str,
     context: Dict[str, object],
@@ -157,30 +191,37 @@ def evaluate_market_hours(
     if not session:
         return MarketHoursDecision(True, market=market, status="unknown", reason="장 시간 세션 없음")
 
+    sessions = session_items(session)
     current = market_time(now or datetime.now(timezone.utc), str(session.get("timezone") or "UTC"))
-    open_hour, open_minute = parse_hhmm(session.get("openTime"))
-    close_hour, close_minute = parse_hhmm(session.get("closeTime"))
-    open_at = current.replace(hour=open_hour, minute=open_minute, second=0, microsecond=0)
-    close_at = current.replace(hour=close_hour, minute=close_minute, second=0, microsecond=0)
     weekdays = session.get("weekdays") if isinstance(session.get("weekdays"), list) else [0, 1, 2, 3, 4]
     is_weekday = current.weekday() in weekdays
-    is_open = bool(is_weekday and open_at <= current < close_at)
-    label = str(session.get("label") or market)
-    open_time = str(session.get("openTime") or "")
-    close_time = str(session.get("closeTime") or "")
+    matched_session = None
+    for item in sessions:
+        open_hour, open_minute = parse_hhmm(item.get("openTime"))
+        close_hour, close_minute = parse_hhmm(item.get("closeTime"))
+        open_at = current.replace(hour=open_hour, minute=open_minute, second=0, microsecond=0)
+        close_at = current.replace(hour=close_hour, minute=close_minute, second=0, microsecond=0)
+        if is_weekday and open_at <= current < close_at:
+            matched_session = item
+            break
+    market_label = str(session.get("label") or market)
+    session_label = str((matched_session or {}).get("label") or "").strip()
+    label = " ".join(part for part in [market_label, session_label] if part).strip()
+    open_time = str((matched_session or session).get("openTime") or "")
+    close_time = str((matched_session or session).get("closeTime") or "")
     local_time = current.isoformat()
-    if is_open:
+    if matched_session:
         reason = label + " 열림 (" + open_time + "-" + close_time + ")"
         status = "open"
     else:
-        reason = label + " 닫힘 (" + open_time + "-" + close_time + ")"
+        reason = market_label + " 닫힘 (" + session_summary(sessions) + ")"
         status = "closed"
     return MarketHoursDecision(
         True,
         market=market,
         label=label,
         status=status,
-        should_send=is_open,
+        should_send=bool(matched_session),
         reason=reason,
         local_time=local_time,
         open_time=open_time,

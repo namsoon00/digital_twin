@@ -268,8 +268,32 @@ function checkFrontendAdminRender() {
       ],
       defaultThreshold: 45,
       marketHoursSessions: [
-        { market: "KR", label: "국장 정규장", timezone: "Asia/Seoul", openTime: "09:00", closeTime: "15:30", weekdays: [0, 1, 2, 3, 4] },
-        { market: "US", label: "미장 정규장", timezone: "America/New_York", openTime: "09:30", closeTime: "16:00", weekdays: [0, 1, 2, 3, 4] }
+        {
+          market: "KR",
+          label: "국장",
+          timezone: "Asia/Seoul",
+          openTime: "08:00",
+          closeTime: "20:00",
+          weekdays: [0, 1, 2, 3, 4],
+          sessions: [
+            { key: "pre", label: "프리마켓", openTime: "08:00", closeTime: "08:50" },
+            { key: "regular", label: "정규장", openTime: "09:00", closeTime: "15:30" },
+            { key: "after", label: "애프터마켓", openTime: "15:30", closeTime: "20:00" }
+          ]
+        },
+        {
+          market: "US",
+          label: "미장",
+          timezone: "America/New_York",
+          openTime: "04:00",
+          closeTime: "20:00",
+          weekdays: [0, 1, 2, 3, 4],
+          sessions: [
+            { key: "pre", label: "프리마켓", openTime: "04:00", closeTime: "09:30" },
+            { key: "regular", label: "정규장", openTime: "09:30", closeTime: "16:00" },
+            { key: "after", label: "애프터마켓", openTime: "16:00", closeTime: "20:00" }
+          ]
+        }
       ]
     },
     "/api/notification-jobs": {
@@ -301,13 +325,13 @@ function checkFrontendAdminRender() {
           honeySuppressionReason: "market_closed",
           marketHoursEnabled: true,
           marketHoursMarket: "US",
-          marketHoursLabel: "미장 정규장",
+          marketHoursLabel: "미장",
           marketHoursStatus: "closed",
           marketHoursDecision: "suppressed",
-          marketHoursReason: "미장 정규장 닫힘 (09:30-16:00)",
-          marketHoursLocalTime: "2026-07-01T17:00:00-04:00",
-          marketHoursOpenTime: "09:30",
-          marketHoursCloseTime: "16:00",
+          marketHoursReason: "미장 닫힘 (프리마켓 04:00-09:30 · 정규장 09:30-16:00 · 애프터마켓 16:00-20:00)",
+          marketHoursLocalTime: "2026-07-01T20:30:00-04:00",
+          marketHoursOpenTime: "04:00",
+          marketHoursCloseTime: "20:00",
           marketHoursTimezone: "America/New_York"
         }
       ],
@@ -665,7 +689,8 @@ function checkFrontendAdminRender() {
     assertOk(notificationHtml.indexOf("data-notification-rule-similarity-enabled") >= 0, "유사 메시지 억제 토글이 없습니다.");
     assertOk(notificationHtml.indexOf("data-notification-rule-fields") >= 0, "유사 메시지 fingerprint 필드 입력이 없습니다.");
     assertOk(notificationHtml.indexOf("장 시간 필터") >= 0, "장 시간 필터 설정이 렌더링되지 않았습니다.");
-    assertOk(notificationHtml.indexOf("국장 정규장") >= 0 && notificationHtml.indexOf("미장 정규장") >= 0, "국장/미장 장 시간 설정이 표시되지 않았습니다.");
+    assertOk(notificationHtml.indexOf("국장") >= 0 && notificationHtml.indexOf("미장") >= 0, "국장/미장 장 시간 설정이 표시되지 않았습니다.");
+    assertOk(notificationHtml.indexOf("프리마켓") >= 0 && notificationHtml.indexOf("애프터마켓") >= 0, "프리/애프터마켓 장 시간 설정이 표시되지 않았습니다.");
     assertOk(notificationHtml.indexOf("data-notification-rule-market-hours-enabled") >= 0, "장 시간 필터 토글이 없습니다.");
     assertOk(notificationHtml.indexOf("data-notification-rule-market-hours-market") >= 0, "장 시간 시장 선택 체크박스가 없습니다.");
     assertOk(notificationHtml.indexOf("data-notification-rule-condition-value") >= 0, "꿀점수 조건 값 편집 입력이 없습니다.");
@@ -674,7 +699,7 @@ function checkFrontendAdminRender() {
     assertOk(notificationHtml.indexOf("최근 알림 판단") >= 0, "최근 알림 판단 제목이 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("꿀점수 30/45점") >= 0, "최근 알림 판단의 꿀점수가 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("360분 내 7회 · -55점") >= 0, "최근 알림 판단의 유사 메시지 감점이 렌더링되지 않았습니다.");
-    assertOk(notificationHtml.indexOf("미장 정규장 닫힘") >= 0, "최근 알림 판단의 장 시간 외 보류 사유가 렌더링되지 않았습니다.");
+    assertOk(notificationHtml.indexOf("미장 닫힘") >= 0, "최근 알림 판단의 장 시간 외 보류 사유가 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("messageType=externalcryptomove|symbol=eth") >= 0, "최근 알림 판단 fingerprint가 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf('data-action="refresh-notification-jobs"') >= 0, "최근 알림 판단 새로고침 버튼이 없습니다.");
     assertOk(notificationHtml.indexOf("시스템 템플릿") >= 0, "시스템 템플릿 섹션이 렌더링되지 않았습니다.");

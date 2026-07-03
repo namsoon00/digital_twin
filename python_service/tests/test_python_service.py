@@ -1191,7 +1191,7 @@ class PythonServiceTests(unittest.TestCase):
         )
         decision = evaluate_notification_rule(job, rule)
 
-        decision = apply_market_hours_rule(decision, rule, job, datetime(2026, 7, 3, 7, 0, tzinfo=timezone.utc))
+        decision = apply_market_hours_rule(decision, rule, job, datetime(2026, 7, 3, 11, 30, tzinfo=timezone.utc))
 
         self.assertFalse(decision.should_send)
         self.assertEqual("market_closed", decision.suppression_reason)
@@ -1216,6 +1216,43 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("US", decision.market_hours_market)
         self.assertEqual("open", decision.market_hours_status)
         self.assertIn("미장", decision.market_hours_reason)
+
+    def test_market_hours_rule_allows_extended_sessions_by_default(self):
+        rule = default_notification_rule("holdingTiming")
+        kr_job = NotificationJob.create(
+            "보유 타이밍",
+            account_id="main",
+            account_label="메인",
+            message_type="holdingTiming",
+            context={"symbol": "005930", "title": "삼성전자"},
+        )
+        us_job = NotificationJob.create(
+            "보유 타이밍",
+            account_id="main",
+            account_label="메인",
+            message_type="holdingTiming",
+            context={"symbol": "AAPL", "title": "Apple"},
+        )
+
+        kr_decision = apply_market_hours_rule(
+            evaluate_notification_rule(kr_job, rule),
+            rule,
+            kr_job,
+            datetime(2026, 7, 2, 23, 30, tzinfo=timezone.utc),
+        )
+        us_decision = apply_market_hours_rule(
+            evaluate_notification_rule(us_job, rule),
+            rule,
+            us_job,
+            datetime(2026, 7, 2, 21, 0, tzinfo=timezone.utc),
+        )
+
+        self.assertTrue(kr_decision.should_send)
+        self.assertEqual("open", kr_decision.market_hours_status)
+        self.assertIn("프리마켓", kr_decision.market_hours_reason)
+        self.assertTrue(us_decision.should_send)
+        self.assertEqual("open", us_decision.market_hours_status)
+        self.assertIn("애프터마켓", us_decision.market_hours_reason)
 
     def test_notification_rule_penalizes_similar_recent_messages(self):
         db_path = Path(self.temp.name) / "service.db"

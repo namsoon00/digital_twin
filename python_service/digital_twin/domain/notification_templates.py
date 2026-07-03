@@ -211,6 +211,29 @@ def html_bullet(text: str) -> str:
     return "• " + html.escape(cleaned, quote=False) if cleaned else ""
 
 
+def split_label_value(text: str):
+    cleaned = str(text or "").strip()
+    if ": " not in cleaned:
+        return "", cleaned
+    label, value = cleaned.split(": ", 1)
+    if 0 < len(label.strip()) <= 18 and value.strip():
+        return label.strip(), value.strip()
+    return "", cleaned
+
+
+def criterion_row(text: str, rich: bool = False) -> str:
+    label, value = split_label_value(text)
+    if label and value:
+        if rich:
+            return "• <b>" + html.escape(label, quote=False) + "</b>: <code>" + html.escape(value, quote=False) + "</code>"
+        return "• " + label + ": " + value
+    return html_bullet(text) if rich else plain_bullet(text)
+
+
+def criterion_rows(items: List[str], rich: bool = False) -> str:
+    return "\n".join(criterion_row(item, rich) for item in items if str(item or "").strip())
+
+
 def split_data_line(line: str):
     text = str(line or "").strip()
     for label in DATA_LABEL_PREFIXES:
@@ -298,6 +321,119 @@ def grouped_data_rows(items: List[str], per_row: int = 2) -> List[str]:
     return rows
 
 
+def data_value(raw_lines: List[str], label: str) -> str:
+    for line in raw_lines:
+        parsed_label, value = split_data_line(line)
+        if parsed_label == label and value:
+            return value
+    return ""
+
+
+def first_line_containing(raw_lines: List[str], terms: List[str]) -> str:
+    for line in raw_lines:
+        text = str(line or "").strip()
+        if all(term in text for term in terms):
+            return text
+    return ""
+
+
+def inferred_criterion_lines(event: AlertEvent, raw_lines: List[str], trigger_summary: str) -> List[str]:
+    details: List[str] = []
+    rule = str(event.rule or "")
+    previous = data_value(raw_lines, "이전")
+    current = data_value(raw_lines, "현재")
+    change = data_value(raw_lines, "변화")
+    signal = data_value(raw_lines, "신호")
+    status = data_value(raw_lines, "상태")
+    profit = data_value(raw_lines, "손익")
+
+    if rule == "modelBuy":
+        score = data_value(raw_lines, "모델 매수 점수")
+        if score:
+            details.append("감지: 모델 매수 점수 " + score)
+    elif rule == "modelSell":
+        score = data_value(raw_lines, "모델 매도 점수")
+        if score:
+            details.append("감지: 모델 매도 점수 " + score)
+    elif rule == "holdingTiming":
+        detected = ", ".join(part for part in ["상태 " + status if status else "", "손익 " + profit if profit else ""] if part)
+        if detected:
+            details.append("감지: " + detected)
+    elif rule in {"monitorPnlChange", "monitorValueChange", "monitorCashChange"}:
+        detected = ", ".join(part for part in ["변화 " + change if change else "", "이전 " + previous if previous else "", "현재 " + current if current else ""] if part)
+        if detected:
+            details.append("감지: " + detected)
+    elif rule == "monitorTrendChange":
+        if signal:
+            details.append("감지: " + signal)
+        trend = data_value(raw_lines, "추세")
+        if trend:
+            details.append("확인 데이터: " + trend)
+    elif rule == "monitorDecisionChange":
+        detected = ", ".join(part for part in ["이전 " + previous if previous else "", "현재 " + current if current else ""] if part)
+        if detected:
+            details.append("감지: " + detected)
+    elif rule == "externalEquityMove":
+        change_value = data_value(raw_lines, "미장 가격 변동")
+        price = data_value(raw_lines, "가격")
+        detected = ", ".join(part for part in ["가격 변동 " + change_value if change_value else "", "가격 " + price if price else ""] if part)
+        if detected:
+            details.append("감지: " + detected)
+    elif rule == "externalCryptoMove":
+        crypto_line = first_line_containing(raw_lines, ["24h"])
+        if crypto_line:
+            details.append("감지: " + crypto_line)
+    elif rule == "externalMacroShift":
+        macro_lines = [line for line in raw_lines if "bp" in str(line)]
+        if macro_lines:
+            details.append("감지: " + ", ".join(macro_lines[:3]))
+    elif rule == "externalDartDisclosure":
+        report = raw_lines[1] if len(raw_lines) > 1 else ""
+        receipt_date = data_value(raw_lines, "접수일")
+        detected = ", ".join(part for part in [report, "접수일 " + receipt_date if receipt_date else ""] if part)
+        if detected:
+            details.append("감지: " + detected)
+    elif rule == "externalDataConnection":
+        if raw_lines:
+            details.append("감지: " + ", ".join(raw_lines[:2]))
+    elif rule == "monitorPositionChange":
+        if previous or current:
+            details.append("감지: " + ", ".join(part for part in ["이전 " + previous if previous else "", "현재 " + current if current else ""] if part))
+        elif raw_lines:
+            details.append("감지: " + raw_lines[0])
+    elif rule == "watchlistQuote":
+        quote_change = first_line_containing(raw_lines, ["변화"])
+        if quote_change:
+            details.append("감지: " + quote_change)
+        else:
+            current_price = data_value(raw_lines, "현재")
+            if current_price:
+                details.append("감지: 현재가 " + current_price)
+    elif rule == "watchlistQuotePending":
+        if len(raw_lines) > 1:
+            details.append("감지: " + raw_lines[1])
+    elif rule == "monitorConnection":
+        detected = ", ".join(part for part in ["이전 " + previous if previous else "", "현재 " + current if current else ""] if part)
+        details.append("감지: " + (detected or ", ".join(raw_lines[:2])))
+    elif rule == "monitorHeartbeat":
+        status_value = status or (raw_lines[0] if raw_lines else "")
+        if status_value:
+            details.append("감지: " + status_value)
+
+    if not details and raw_lines:
+        details.append("감지: " + raw_lines[0])
+    if details:
+        return ["설정: " + trigger_summary] + details
+    return [trigger_summary] if trigger_summary else []
+
+
+def event_criterion_lines(event: AlertEvent, raw_lines: List[str], trigger_summary: str) -> List[str]:
+    explicit = [str(item or "").strip() for item in getattr(event, "criteria", []) if str(item or "").strip()]
+    if explicit:
+        return explicit
+    return inferred_criterion_lines(event, raw_lines, trigger_summary)
+
+
 @dataclass
 class NotificationTemplate:
     message_type: str
@@ -342,8 +478,9 @@ def alert_context(event: AlertEvent) -> Dict[str, object]:
         target_parts.append(event.symbol)
     target_value = " / ".join(part for part in target_parts if part)
     target_line = "대상: " + target_value if target_value else ""
-    trigger_bullet = plain_bullet(trigger_summary)
-    trigger_block = ("발송 기준\n" + trigger_bullet) if trigger_bullet else ""
+    criteria = event_criterion_lines(event, raw_lines, trigger_summary)
+    trigger_block_rows = criterion_rows(criteria, False)
+    trigger_block = ("발송 기준\n" + trigger_block_rows) if trigger_block_rows else ""
     data_rows = plain_data_rows(raw_lines)
     data_block = ("데이터\n" + data_rows) if data_rows else ""
     readable_parts = [
@@ -356,7 +493,7 @@ def alert_context(event: AlertEvent) -> Dict[str, object]:
         readable_parts.extend(["", trigger_block])
     readable_message = "\n".join(part for part in readable_parts if str(part).strip() or part == "").strip()
     escaped_target = html.escape(target_value, quote=False)
-    telegram_trigger_bullet = html_bullet(trigger_summary)
+    telegram_trigger_rows = criterion_rows(criteria, True)
     telegram_data_lines = telegram_data_rows(raw_lines)
     telegram_parts = [
         "<b>" + html.escape(headline, quote=False) + "</b>",
@@ -364,8 +501,8 @@ def alert_context(event: AlertEvent) -> Dict[str, object]:
     ]
     if telegram_data_lines:
         telegram_parts.extend(["", "<b>데이터</b>", telegram_data_lines])
-    if telegram_trigger_bullet:
-        telegram_parts.extend(["", "<b>발송 기준</b>", telegram_trigger_bullet])
+    if telegram_trigger_rows:
+        telegram_parts.extend(["", "<b>발송 기준</b>", telegram_trigger_rows])
     telegram_message = "\n".join(part for part in telegram_parts if str(part).strip() or part == "").strip()
     body = telegram_message or readable_message or "\n".join([event.title] + ([lines] if lines else []))
     return {
@@ -387,6 +524,7 @@ def alert_context(event: AlertEvent) -> Dict[str, object]:
         "targetLine": target_line,
         "triggerBlock": trigger_block,
         "criterionBlock": trigger_block,
+        "criterionLines": "\n".join(criteria),
         "dataBlock": data_block,
         "divider": "",
         "telegramMessage": telegram_message,
@@ -479,6 +617,7 @@ def template_variables() -> List[str]:
         "targetLine",
         "triggerBlock",
         "criterionBlock",
+        "criterionLines",
         "dataBlock",
         "divider",
         "telegramMessage",

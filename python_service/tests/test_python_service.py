@@ -427,6 +427,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("추세: 현재 11만 원", message)
         self.assertIn("수급: 거래량 40,000(2.1x), 거래액 24억 원", message)
         self.assertIn("투자자: 외국인 +70,000(매수 510,000/매도 440,000), 기관 +35,000(매수 350,000/매도 315,000)", message)
+        self.assertIn("설정: 20일/60일 이동평균 돌파, 크로스, 또는 괴리 ±8% 이상", event.criteria)
+        self.assertTrue(any("20일선 상향 돌파" in item for item in event.criteria))
 
     def test_monitor_value_change_formats_usd_with_krw_basis(self):
         previous_position = normalize_position({
@@ -731,6 +733,10 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("externalDartDisclosure", messages)
         self.assertIn("주요사항보고서", messages["externalDartDisclosure"])
         self.assertIn("externalDataConnection", messages)
+        criteria_by_rule = {event.rule: event.criteria for event in events}
+        self.assertTrue(any("±3% 이상" in item for item in criteria_by_rule["externalEquityMove"]))
+        self.assertTrue(any("24h -5.2%" in item for item in criteria_by_rule["externalCryptoMove"]))
+        self.assertTrue(any("±15bp 이상" in item for item in criteria_by_rule["externalMacroShift"]))
 
     def test_external_signal_provider_normalizes_api_responses_and_caches(self):
         calls = []
@@ -1055,6 +1061,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("<b>데이터</b>", message)
         self.assertLess(message.index("<b>데이터</b>"), message.index("<b>발송 기준</b>"))
         self.assertIn("• <b>신호</b>: <code>20일선 상향 돌파</code>", message)
+        self.assertIn("• <b>설정</b>: <code>이동평균 돌파, 크로스, 큰 괴리가 감지될 때 보냅니다.</code>", message)
+        self.assertIn("• <b>감지</b>: <code>20일선 상향 돌파</code>", message)
         self.assertNotIn("\n\n\n", message)
 
     def test_external_equity_alert_uses_colon_pairs_without_divider(self):
@@ -1085,6 +1093,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("• <b>거래량</b>: <code>71,917,610</code>, <b>기준일</b>: <code>2026-07-02</code>", message)
         self.assertIn("• <b>출처</b>: <code>Alpha Vantage</code>", message)
         self.assertLess(message.index("<b>데이터</b>"), message.index("<b>발송 기준</b>"))
+        self.assertIn("• <b>감지</b>: <code>가격 변동 -7.5%, 가격 $393.45</code>", message)
 
     def test_flow_and_trend_lines_use_colon_pair_template_format(self):
         db_path = Path(self.temp.name) / "service.db"
@@ -1112,6 +1121,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn(flow_line + "\n" + trend_line + "\n" + investor_line, message)
         self.assertLess(message.index(flow_line), message.index(trend_line))
         self.assertLess(message.index(trend_line), message.index(investor_line))
+        self.assertIn("• <b>설정</b>: <code>이동평균 돌파, 크로스, 큰 괴리가 감지될 때 보냅니다.</code>", message)
 
     def test_status_profit_flow_and_trend_are_separate_ordered_rows(self):
         db_path = Path(self.temp.name) / "service.db"
@@ -1130,6 +1140,10 @@ class PythonServiceTests(unittest.TestCase):
                 "상태 조건부 보유",
             ],
             "000660",
+            criteria=[
+                "설정: 판단 톤이 danger/caution 이거나 손익률이 -8% 이하일 때",
+                "감지: 상태 조건부 보유, 손익 -3.2%",
+            ],
         )
 
         message = templates.render(event.rule, alert_context(event))
@@ -1141,6 +1155,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn(status_line + "\n" + profit_line + "\n" + flow_line + "\n" + trend_line, message)
         self.assertLess(message.index(status_line), message.index(profit_line))
         self.assertLess(message.index(flow_line), message.index(trend_line))
+        self.assertIn("• <b>설정</b>: <code>판단 톤이 danger/caution 이거나 손익률이 -8% 이하일 때</code>", message)
+        self.assertIn("• <b>감지</b>: <code>상태 조건부 보유, 손익 -3.2%</code>", message)
 
     def test_notification_template_seed_migrates_previous_readable_default(self):
         db_path = Path(self.temp.name) / "service.db"

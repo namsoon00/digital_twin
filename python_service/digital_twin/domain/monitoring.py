@@ -143,6 +143,17 @@ class RealtimeMonitor:
         value = int(self.cadence.get(rule, DEFAULT_CADENCE.get(rule, MIN_CADENCE_MINUTES)) or 0)
         return max(MIN_CADENCE_MINUTES, value)
 
+    def criteria(self, setting: str, detected: str = "") -> List[str]:
+        lines = []
+        if str(setting or "").strip():
+            lines.append("설정: " + str(setting).strip())
+        if str(detected or "").strip():
+            lines.append("감지: " + str(detected).strip())
+        return lines
+
+    def threshold_text(self, key: str, suffix: str = "") -> str:
+        return compact_number(float(self.thresholds.get(key, DEFAULT_THRESHOLDS.get(key, 0)) or 0)) + suffix
+
     def events_for_snapshot(self, snapshot: AccountSnapshot, previous: Dict[str, object]) -> List[AlertEvent]:
         events: List[AlertEvent] = []
         events.extend(self.connection_events(snapshot, previous))
@@ -506,12 +517,16 @@ class RealtimeMonitor:
                     snapshot.account_id,
                     snapshot.account_label,
                     "WATCH",
-                    "modelBuy",
-                    ":".join([snapshot.account_id, "model-buy", symbol, str(round(buy_score, 1))]),
-                    position.name,
-                    ["모델 매수 점수 " + str(round(buy_score, 1)) + "점", *common_lines],
-                    symbol,
-                ))
+                "modelBuy",
+                ":".join([snapshot.account_id, "model-buy", symbol, str(round(buy_score, 1))]),
+                position.name,
+                ["모델 매수 점수 " + str(round(buy_score, 1)) + "점", *common_lines],
+                symbol,
+                criteria=self.criteria(
+                    "모델 매수 점수 " + self.threshold_text("modelBuyScore", "점") + " 이상",
+                    "모델 매수 점수 " + str(round(buy_score, 1)) + "점",
+                ),
+            ))
             sell_score = float(scores.get("sellScore") or 0)
             if symbol not in watch_symbols and sell_threshold and sell_score >= sell_threshold:
                 events.append(AlertEvent(
@@ -527,6 +542,10 @@ class RealtimeMonitor:
                         *common_lines,
                     ],
                     symbol,
+                    criteria=self.criteria(
+                        "모델 매도 점수 " + self.threshold_text("modelSellScore", "점") + " 이상",
+                        "모델 매도 점수 " + str(round(sell_score, 1)) + "점",
+                    ),
                 ))
         return events
 
@@ -553,6 +572,10 @@ class RealtimeMonitor:
                     self.trend_context_line(position.to_dict()),
                 ],
                 symbol,
+                criteria=self.criteria(
+                    "모델 매도 점수 " + self.threshold_text("modelSellScore", "점") + " 이상",
+                    "현재 데이터 기준 템플릿 테스트",
+                ),
             )]
         return [AlertEvent(
             snapshot.account_id,
@@ -569,6 +592,10 @@ class RealtimeMonitor:
                 self.trend_context_line(position.to_dict()),
             ],
             symbol,
+            criteria=self.criteria(
+                "모델 매수 점수 " + self.threshold_text("modelBuyScore", "점") + " 이상",
+                "현재 데이터 기준 템플릿 테스트",
+            ),
         )]
 
     def trend_severity(self, signals: List[str]) -> str:
@@ -605,6 +632,10 @@ class RealtimeMonitor:
                 ":".join([snapshot.account_id, "external", source, message[:32]]),
                 "외부 데이터 연결",
                 [source, message, "키/호출 제한/응답 형식 확인"],
+                criteria=self.criteria(
+                    "외부 데이터 API 응답 오류, 호출 제한, 또는 응답 형식 문제가 감지될 때",
+                    source + " - " + message,
+                ),
             ))
         return events
 
@@ -634,6 +665,10 @@ class RealtimeMonitor:
                     "출처 " + str(quote.get("provider") or "Alpha Vantage"),
                 ],
                 symbol_label,
+                criteria=self.criteria(
+                    "미장 가격 변동률 ±" + self.threshold_text("externalEquityChangePct", "%") + " 이상",
+                    "가격 변동 " + signed_pct(change) + ", 가격 " + money(number(quote.get("price")), "USD"),
+                ),
             ))
         return events
 
@@ -666,6 +701,10 @@ class RealtimeMonitor:
                     "MSTR/STRC 등 비트코인 민감 종목 점검",
                 ],
                 symbol,
+                criteria=self.criteria(
+                    "크립토 24h ±" + self.threshold_text("externalCryptoChange24hPct", "%") + " 또는 7d ±" + self.threshold_text("externalCryptoChange7dPct", "%") + " 이상",
+                    "24h " + signed_pct(change24h) + ", 7d " + signed_pct(change7d),
+                ),
             ))
         return events
 
@@ -706,6 +745,10 @@ class RealtimeMonitor:
             ":".join([snapshot.account_id, "macro", ",".join(lines[:2])]),
             "거시 지표 변화",
             ["FRED 금리/스프레드 변화"] + lines + ["모델 위험 선호 점수 재확인"],
+            criteria=self.criteria(
+                "FRED 금리 또는 10Y-2Y 스프레드 변화 ±" + self.threshold_text("externalMacroRateDeltaBp", "bp") + " 이상",
+                ", ".join(lines[:3]),
+            ),
         ))
         return events
 
@@ -737,6 +780,10 @@ class RealtimeMonitor:
                     "출처 " + str(item.get("provider") or "OpenDART"),
                 ],
                 symbol_label,
+                criteria=self.criteria(
+                    "OpenDART 접수번호가 직전 조회와 다를 때",
+                    "접수번호 " + receipt + ", 접수일 " + str(item.get("receiptDate") or "-"),
+                ),
             ))
         return events
 
@@ -830,6 +877,10 @@ class RealtimeMonitor:
                 ":".join([snapshot.account_id, "connection", snapshot.mode, snapshot.status]),
                 "연결 상태",
                 ["토스 연결 상태가 live가 아닙니다", snapshot.status or snapshot.mode],
+                criteria=self.criteria(
+                    "토스 연결 모드가 live가 아닐 때",
+                    "mode=" + str(snapshot.mode or "-") + ", status=" + str(snapshot.status or "-"),
+                ),
             ))
         previous_status = previous.get("status") if previous else ""
         if previous_status and previous_status != snapshot.status:
@@ -841,6 +892,10 @@ class RealtimeMonitor:
                 ":".join([snapshot.account_id, "connection-change", snapshot.status]),
                 "연결 상태 변화",
                 ["이전 " + str(previous_status), "현재 " + snapshot.status],
+                criteria=self.criteria(
+                    "직전 스냅샷의 토스 연결 상태와 현재 상태가 다를 때",
+                    "이전 " + str(previous_status) + ", 현재 " + snapshot.status,
+                ),
             ))
         return events
 
@@ -858,6 +913,10 @@ class RealtimeMonitor:
                 "보유 " + str(len([item for item in snapshot.positions if not item.is_cash()])) + "개",
                 "평가 " + money(snapshot.portfolio.invested, "KRW"),
             ],
+            criteria=self.criteria(
+                "실시간 모니터링 워커 생존 확인 주기",
+                "상태 " + (snapshot.status or snapshot.mode) + ", 보유 " + str(len([item for item in snapshot.positions if not item.is_cash()])) + "개",
+            ),
         )]
 
     def position_change_events(self, snapshot: AccountSnapshot, previous: Dict[str, object]) -> List[AlertEvent]:
@@ -871,25 +930,25 @@ class RealtimeMonitor:
             item = current_positions.get(symbol)
             before = previous_positions.get(symbol)
             if item and not before:
-                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "WATCH", "monitorPositionChange", snapshot.account_id + ":new:" + symbol, item["name"], ["새 보유 종목", "수량 " + str(item.get("quantity", 0)), "평가 " + self.position_value_label(item), self.flow_context_line(item), self.investor_context_line(item)], symbol))
+                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "WATCH", "monitorPositionChange", snapshot.account_id + ":new:" + symbol, item["name"], ["새 보유 종목", "수량 " + str(item.get("quantity", 0)), "평가 " + self.position_value_label(item), self.flow_context_line(item), self.investor_context_line(item)], symbol, criteria=self.criteria("직전 스냅샷에 없던 보유 종목이 현재 스냅샷에 생겼을 때", "신규 보유, 수량 " + str(item.get("quantity", 0)))))
                 continue
             if before and not item:
-                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "WATCH", "monitorPositionChange", snapshot.account_id + ":removed:" + symbol, before["name"], ["보유 목록에서 사라졌습니다", "매도/이관/데이터 변경 여부 확인"], symbol))
+                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "WATCH", "monitorPositionChange", snapshot.account_id + ":removed:" + symbol, before["name"], ["보유 목록에서 사라졌습니다", "매도/이관/데이터 변경 여부 확인"], symbol, criteria=self.criteria("직전 스냅샷에 있던 보유 종목이 현재 보유 목록에서 사라졌을 때", "보유 제외 감지")))
                 continue
             if not item or not before:
                 continue
             quantity_delta = float(item.get("quantity") or 0) - float(before.get("quantity") or 0)
             if quantity_delta:
-                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "WATCH", "monitorPositionChange", snapshot.account_id + ":quantity:" + symbol + ":" + str(item.get("quantity")), item["name"], ["보유 수량 변경", "이전 " + str(before.get("quantity", 0)), "현재 " + str(item.get("quantity", 0)), self.flow_context_line(item), self.investor_context_line(item)], symbol))
+                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "WATCH", "monitorPositionChange", snapshot.account_id + ":quantity:" + symbol + ":" + str(item.get("quantity")), item["name"], ["보유 수량 변경", "이전 " + str(before.get("quantity", 0)), "현재 " + str(item.get("quantity", 0)), self.flow_context_line(item), self.investor_context_line(item)], symbol, criteria=self.criteria("직전 스냅샷 대비 보유 수량이 달라졌을 때", "이전 " + str(before.get("quantity", 0)) + ", 현재 " + str(item.get("quantity", 0)))))
             pnl_delta = float(item.get("profit_loss_rate") or 0) - float(before.get("profit_loss_rate") or 0)
             if abs(pnl_delta) >= float(self.thresholds.get("monitorPnlDelta", 0)):
-                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "ALERT" if pnl_delta < 0 else "WATCH", "monitorPnlChange", snapshot.account_id + ":pnl:" + symbol + ":" + signed_pct(pnl_delta), item["name"], ["손익률 급변", "이전 " + signed_pct(float(before.get("profit_loss_rate") or 0)), "현재 " + signed_pct(float(item.get("profit_loss_rate") or 0)), "변화 " + signed_pct(pnl_delta, "%p"), self.flow_context_line(item), self.investor_context_line(item), self.trend_context_line(item)], symbol))
+                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "ALERT" if pnl_delta < 0 else "WATCH", "monitorPnlChange", snapshot.account_id + ":pnl:" + symbol + ":" + signed_pct(pnl_delta), item["name"], ["손익률 급변", "이전 " + signed_pct(float(before.get("profit_loss_rate") or 0)), "현재 " + signed_pct(float(item.get("profit_loss_rate") or 0)), "변화 " + signed_pct(pnl_delta, "%p"), self.flow_context_line(item), self.investor_context_line(item), self.trend_context_line(item)], symbol, criteria=self.criteria("손익률 변화폭 ±" + self.threshold_text("monitorPnlDelta", "%p") + " 이상", "변화 " + signed_pct(pnl_delta, "%p") + ", 이전 " + signed_pct(float(before.get("profit_loss_rate") or 0)) + ", 현재 " + signed_pct(float(item.get("profit_loss_rate") or 0)))))
             value_delta = pct_delta(self.position_value_base(item), self.position_value_base(before))
             if abs(value_delta) >= float(self.thresholds.get("monitorValueDelta", 0)):
-                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "ALERT" if value_delta < 0 else "WATCH", "monitorValueChange", snapshot.account_id + ":value:" + symbol + ":" + signed_pct(value_delta), item["name"], ["평가액 급변", "이전 " + self.position_value_label(before), "현재 " + self.position_value_label(item), "변화 " + signed_pct(value_delta) + self.value_delta_basis_label(before, item), self.flow_context_line(item), self.investor_context_line(item), self.trend_context_line(item)], symbol))
+                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "ALERT" if value_delta < 0 else "WATCH", "monitorValueChange", snapshot.account_id + ":value:" + symbol + ":" + signed_pct(value_delta), item["name"], ["평가액 급변", "이전 " + self.position_value_label(before), "현재 " + self.position_value_label(item), "변화 " + signed_pct(value_delta) + self.value_delta_basis_label(before, item), self.flow_context_line(item), self.investor_context_line(item), self.trend_context_line(item)], symbol, criteria=self.criteria("평가액 변화율 ±" + self.threshold_text("monitorValueDelta", "%") + " 이상", "변화 " + signed_pct(value_delta) + ", 이전 " + self.position_value_label(before) + ", 현재 " + self.position_value_label(item))))
             trend_signals = self.trend_signals(before, item)
             if trend_signals:
-                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, self.trend_severity(trend_signals), "monitorTrendChange", snapshot.account_id + ":trend:" + symbol + ":" + ",".join(trend_signals[:2]), item["name"], ["이동평균 변화", "신호 " + " · ".join(trend_signals), self.trend_context_line(item), self.trend_slope_line(item), self.flow_context_line(item), self.investor_context_line(item)], symbol))
+                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, self.trend_severity(trend_signals), "monitorTrendChange", snapshot.account_id + ":trend:" + symbol + ":" + ",".join(trend_signals[:2]), item["name"], ["이동평균 변화", "신호 " + " · ".join(trend_signals), self.trend_context_line(item), self.trend_slope_line(item), self.flow_context_line(item), self.investor_context_line(item)], symbol, criteria=self.criteria("20일/60일 이동평균 돌파, 크로스, 또는 괴리 ±" + self.threshold_text("monitorMaDistance", "%") + " 이상", "신호 " + " · ".join(trend_signals))))
             decision = current_decisions.get(symbol) or {}
             previous_decision = previous_decisions.get(symbol) or {}
             pressure_delta = float(decision.get("exit_pressure") or 0) - float(previous_decision.get("exit_pressure") or 0)
@@ -902,7 +961,7 @@ class RealtimeMonitor:
                     previous_decision,
                     float(self.thresholds.get("monitorExitPressureDelta", 0)),
                 )
-                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "ALERT" if decision.get("tone") == "danger" else "WATCH", "monitorDecisionChange", snapshot.account_id + ":decision:" + symbol + ":" + str(decision.get("decision")), item["name"], ["판단 변화", "이전 " + str(previous_decision.get("decision") or "-") + " " + str(previous_decision.get("exit_pressure") or 0) + "점", "현재 " + str(decision.get("decision") or "-") + " " + str(decision.get("exit_pressure") or 0) + "점", self.flow_context_line(item), self.investor_context_line(item), self.trend_context_line(item)] + review_lines, symbol))
+                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "ALERT" if decision.get("tone") == "danger" else "WATCH", "monitorDecisionChange", snapshot.account_id + ":decision:" + symbol + ":" + str(decision.get("decision")), item["name"], ["판단 변화", "이전 " + str(previous_decision.get("decision") or "-") + " " + str(previous_decision.get("exit_pressure") or 0) + "점", "현재 " + str(decision.get("decision") or "-") + " " + str(decision.get("exit_pressure") or 0) + "점", self.flow_context_line(item), self.investor_context_line(item), self.trend_context_line(item)] + review_lines, symbol, criteria=self.criteria("판단 라벨 변경 또는 리스크 점수 변화 " + self.threshold_text("monitorExitPressureDelta", "점") + " 이상", "이전 " + str(previous_decision.get("decision") or "-") + " " + str(previous_decision.get("exit_pressure") or 0) + "점, 현재 " + str(decision.get("decision") or "-") + " " + str(decision.get("exit_pressure") or 0) + "점")))
         return events
 
     def cash_events(self, snapshot: AccountSnapshot, previous: Dict[str, object]) -> List[AlertEvent]:
@@ -915,7 +974,7 @@ class RealtimeMonitor:
                 continue
             ratio_delta = float(market.get("cashRatio") or 0) - float(before.get("cashRatio") or 0)
             if abs(ratio_delta) >= float(self.thresholds.get("monitorCashDelta", 0)):
-                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "ALERT" if ratio_delta < 0 else "WATCH", "monitorCashChange", snapshot.account_id + ":cash:" + key + ":" + signed_pct(ratio_delta, "p"), "현금비중", [str(market.get("label") or key), "이전 " + signed_pct(float(before.get("cashRatio") or 0)), "현재 " + signed_pct(float(market.get("cashRatio") or 0)), "변화 " + signed_pct(ratio_delta, "%p")]))
+                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "ALERT" if ratio_delta < 0 else "WATCH", "monitorCashChange", snapshot.account_id + ":cash:" + key + ":" + signed_pct(ratio_delta, "p"), "현금비중", [str(market.get("label") or key), "이전 " + signed_pct(float(before.get("cashRatio") or 0)), "현재 " + signed_pct(float(market.get("cashRatio") or 0)), "변화 " + signed_pct(ratio_delta, "%p")], criteria=self.criteria("시장별 현금 비중 변화폭 ±" + self.threshold_text("monitorCashDelta", "%p") + " 이상", "변화 " + signed_pct(ratio_delta, "%p") + ", 이전 " + signed_pct(float(before.get("cashRatio") or 0)) + ", 현재 " + signed_pct(float(market.get("cashRatio") or 0)))))
         return events
 
     def watchlist_quote_events(self, snapshot: AccountSnapshot, previous: Dict[str, object]) -> List[AlertEvent]:
@@ -946,6 +1005,10 @@ class RealtimeMonitor:
                         "토스 candles 응답, 종목 코드, 허용 IP를 확인하세요.",
                     ],
                     symbol,
+                    criteria=self.criteria(
+                        "관심종목 현재가가 아직 수집되지 않았을 때",
+                        "현재가 없음, Toss candles 응답 확인 필요",
+                    ),
                 ))
                 continue
             price_delta = pct_delta(price, before_price)
@@ -971,6 +1034,10 @@ class RealtimeMonitor:
                 name,
                 [line for line in lines if line],
                 symbol,
+                criteria=self.criteria(
+                    "관심종목 가격 변화율 ±" + self.threshold_text("watchlistPriceDelta", "%") + " 이상",
+                    ("변화 " + signed_pct(price_delta) + ", 현재 " + money(price, currency)) if before_price else "현재가 " + money(price, currency) + " 수집",
+                ),
             ))
         return events
 
@@ -990,6 +1057,10 @@ class RealtimeMonitor:
                 item.name,
                 ["상태 " + item.decision, "손익 " + signed_pct(item.profit_loss_rate), self.flow_context_line(position), self.investor_context_line(position), self.trend_context_line(position), "매도/매수 기준 재확인"],
                 item.symbol,
+                criteria=self.criteria(
+                    "판단 톤이 danger/caution 이거나 손익률이 -8% 이하일 때",
+                    "상태 " + item.decision + ", 손익 " + signed_pct(item.profit_loss_rate),
+                ),
             ))
         return events
 

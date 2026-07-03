@@ -134,6 +134,7 @@ class AlertEvent:
     title: str
     lines: List[str]
     symbol: str = ""
+    criteria: List[str] = field(default_factory=list)
 
     def target(self) -> str:
         return self.symbol or "all"

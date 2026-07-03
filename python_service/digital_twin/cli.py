@@ -75,6 +75,7 @@ def event_to_dict(event: AlertEvent):
         "symbol": event.symbol,
         "title": event.title,
         "lines": event.lines,
+        "criteria": event.criteria,
         "message": event.message(),
     }
 

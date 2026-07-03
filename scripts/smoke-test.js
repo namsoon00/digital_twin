@@ -58,36 +58,63 @@ function waitForServer(child) {
 function request(port, pathname, options) {
   return new Promise(function (resolve, reject) {
     const method = options && options.method ? options.method : "GET";
-    const headers = options && options.method ? options.headers || {} : options || {};
+    const inputHeaders = options && options.method ? options.headers || {} : options || {};
     const body = options && options.body ? options.body : "";
-    if (body && !headers["Content-Length"]) headers["Content-Length"] = Buffer.byteLength(body);
-    const req = http.request(
-      {
-        hostname: "127.0.0.1",
-        port: port,
-        path: pathname,
-        method: method,
-        headers: headers || {},
-        timeout: 5000
-      },
-      function (res) {
-        let body = "";
-        res.setEncoding("utf8");
-        res.on("data", function (chunk) {
-          body += chunk;
-        });
-        res.on("end", function () {
-          resolve({ statusCode: res.statusCode, headers: res.headers, body: body });
-        });
-      }
-    );
-
-    req.on("timeout", function () {
-      req.destroy(new Error("요청 시간이 초과되었습니다: " + pathname));
+    const headers = Object.assign({}, inputHeaders || {});
+    const hasContentLength = Object.keys(headers).some(function (name) {
+      return name.toLowerCase() === "content-length";
     });
-    req.on("error", reject);
-    if (body) req.write(body);
-    req.end();
+    headers.Host = "127.0.0.1:" + port;
+    headers.Connection = "close";
+    if (body && !hasContentLength) headers["Content-Length"] = Buffer.byteLength(body);
+
+    const socket = net.createConnection({ host: "127.0.0.1", port: port }, function () {
+      const lines = [method + " " + pathname + " HTTP/1.1"];
+      Object.keys(headers).forEach(function (name) {
+        const value = headers[name];
+        if (value == null) return;
+        lines.push(name + ": " + value);
+      });
+      lines.push("", "");
+      socket.write(lines.join("\r\n"));
+      if (body) socket.write(body);
+      socket.end();
+    });
+    const chunks = [];
+    socket.setTimeout(5000);
+    socket.on("data", function (chunk) {
+      chunks.push(chunk);
+    });
+    socket.on("timeout", function () {
+      socket.destroy(new Error("요청 시간이 초과되었습니다: " + pathname));
+    });
+    socket.on("error", reject);
+    socket.on("end", function () {
+      try {
+        const payload = Buffer.concat(chunks);
+        const headerEnd = payload.indexOf(Buffer.from("\r\n\r\n"));
+        if (headerEnd < 0) throw new Error("HTTP 응답 헤더를 찾지 못했습니다: " + pathname);
+        const headerText = payload.slice(0, headerEnd).toString("latin1");
+        const lines = headerText.split("\r\n");
+        const statusMatch = lines.shift().match(/^HTTP\/\d(?:\.\d)?\s+(\d+)/);
+        if (!statusMatch) throw new Error("HTTP 상태 줄이 올바르지 않습니다: " + headerText.split("\r\n")[0]);
+        const responseHeaders = {};
+        lines.forEach(function (line) {
+          const index = line.indexOf(":");
+          if (index < 0) return;
+          const name = line.slice(0, index).trim().toLowerCase();
+          const value = line.slice(index + 1).trim();
+          responseHeaders[name] = responseHeaders[name] ? responseHeaders[name] + ", " + value : value;
+        });
+        resolve({
+          statusCode: Number(statusMatch[1]),
+          headers: responseHeaders,
+          body: payload.slice(headerEnd + 4).toString("utf8")
+        });
+      } catch (error) {
+        reject(error);
+      }
+    });
   });
 }
 

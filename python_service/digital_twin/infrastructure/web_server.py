@@ -1302,8 +1302,11 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
         return json.loads(raw) if raw else {}
 
     def send_payload(self, status: int, payload, content_type: str = "application/json; charset=utf-8", cors: bool = False):
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8") if content_type.startswith("application/json") else (
-            payload if isinstance(payload, bytes) else str(payload).encode("utf-8")
+        no_body = status in {204, 304} or self.command == "HEAD"
+        body = b"" if no_body else (
+            json.dumps(payload, ensure_ascii=False).encode("utf-8") if content_type.startswith("application/json") else (
+                payload if isinstance(payload, bytes) else str(payload).encode("utf-8")
+            )
         )
         self.send_response(status)
         self.send_header("Content-Type", content_type)
@@ -1312,7 +1315,7 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
             self.add_cors_headers()
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        if self.command != "HEAD":
+        if not no_body:
             self.wfile.write(body)
 
     def add_cors_headers(self):
@@ -1328,6 +1331,7 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
         if cookie:
             self.send_header("Set-Cookie", cookie)
         self.send_header("Location", location)
+        self.send_header("Content-Length", "0")
         self.end_headers()
 
     def authorize_share(self) -> bool:

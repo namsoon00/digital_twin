@@ -80,6 +80,10 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
                 label = "매도 기준 미달"
         return label + " (" + compact_number(value) + "점)"
 
+    def decision_score_phrase(self, label: object, score: object) -> str:
+        text = str(label or "-").strip() or "-"
+        return text + " (" + compact_number(float(score or 0)) + "점)"
+
     def events_for_snapshot(self, snapshot: AccountSnapshot, previous: Dict[str, object]) -> List[AlertEvent]:
         events: List[AlertEvent] = []
         events.extend(self.connection_events(snapshot, previous))
@@ -592,6 +596,8 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
             pressure_delta = float(decision.get("exit_pressure") or 0) - float(previous_decision.get("exit_pressure") or 0)
             changed = decision.get("decision") and previous_decision.get("decision") and decision.get("decision") != previous_decision.get("decision")
             if changed or abs(pressure_delta) >= float(self.thresholds.get("monitorExitPressureDelta", 0)):
+                previous_phrase = self.decision_score_phrase(previous_decision.get("decision") or "-", previous_decision.get("exit_pressure"))
+                current_phrase = self.decision_score_phrase(decision.get("decision") or "-", decision.get("exit_pressure"))
                 review_lines = decision_change_review_lines(
                     item,
                     before,
@@ -599,7 +605,7 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
                     previous_decision,
                     float(self.thresholds.get("monitorExitPressureDelta", 0)),
                 )
-                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "ALERT" if decision.get("tone") == "danger" else "WATCH", "monitorDecisionChange", snapshot.account_id + ":decision:" + symbol + ":" + str(decision.get("decision")), item["name"], ["판단 변화", "이전 " + str(previous_decision.get("decision") or "-") + " " + str(previous_decision.get("exit_pressure") or 0) + "점", "현재 " + str(decision.get("decision") or "-") + " " + str(decision.get("exit_pressure") or 0) + "점", self.flow_context_line(item), self.investor_context_line(item), self.trend_context_line(item)] + review_lines, symbol, criteria=self.criteria("판단 라벨 변경 또는 리스크 점수 변화 " + self.threshold_text("monitorExitPressureDelta", "점") + " 이상", "이전 " + str(previous_decision.get("decision") or "-") + " " + str(previous_decision.get("exit_pressure") or 0) + "점, 현재 " + str(decision.get("decision") or "-") + " " + str(decision.get("exit_pressure") or 0) + "점")))
+                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "ALERT" if decision.get("tone") == "danger" else "WATCH", "monitorDecisionChange", snapshot.account_id + ":decision:" + symbol + ":" + str(decision.get("decision")), item["name"], ["판단 변화", "이전 " + previous_phrase, "현재 " + current_phrase, self.flow_context_line(item), self.investor_context_line(item), self.trend_context_line(item)] + review_lines, symbol, criteria=self.criteria("판단 라벨 변경 또는 리스크 점수 변화 " + self.threshold_text("monitorExitPressureDelta", "점") + " 이상", "이전 " + previous_phrase + ", 현재 " + current_phrase)))
         return events
 
     def cash_events(self, snapshot: AccountSnapshot, previous: Dict[str, object]) -> List[AlertEvent]:
@@ -686,6 +692,7 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
             if item.tone not in {"danger", "caution"} and item.profit_loss_rate > -8:
                 continue
             position = positions.get(item.symbol.upper()) or item.to_dict()
+            decision_phrase = self.decision_score_phrase(item.decision, item.exit_pressure)
             events.append(AlertEvent(
                 snapshot.account_id,
                 snapshot.account_label,
@@ -693,11 +700,11 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
                 "holdingTiming",
                 snapshot.account_id + ":timing:" + item.symbol + ":" + item.decision,
                 item.name,
-                ["상태 " + item.decision, "손익 " + signed_pct(item.profit_loss_rate), self.flow_context_line(position), self.investor_context_line(position), self.trend_context_line(position), "매도/매수 기준 재확인"],
+                ["상태 " + decision_phrase, "손익 " + signed_pct(item.profit_loss_rate), self.flow_context_line(position), self.investor_context_line(position), self.trend_context_line(position), "매도/매수 기준 재확인"],
                 item.symbol,
                 criteria=self.criteria(
                     "판단 톤이 danger/caution 이거나 손익률이 -8% 이하일 때",
-                    "상태 " + item.decision + ", 손익 " + signed_pct(item.profit_loss_rate),
+                    "상태 " + decision_phrase + ", 손익 " + signed_pct(item.profit_loss_rate),
                 ),
             ))
         return events

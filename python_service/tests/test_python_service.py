@@ -482,6 +482,37 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("수급: 거래량 30,000(1.8x), 거래액 18억 원", value_message)
         self.assertIn("투자자: 외국인 +145,000(매수 420,000/매도 275,000), 기관 +82,000(매수 310,000/매도 228,000)", value_message)
 
+    def test_holding_timing_status_includes_model_score_parentheses(self):
+        position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "marketValue": 1000000,
+            "quantity": 10,
+            "currentPrice": 100000,
+            "profitLossRate": -9,
+            "sector": "반도체",
+        })
+        portfolio = portfolio_summary([position])
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "ok",
+            utc_now_iso(),
+            portfolio,
+            [position],
+            decisions_for_positions([position], portfolio),
+        )
+
+        event = RealtimeMonitor().holding_timing_events(snapshot)[0]
+        message = event.message()
+
+        self.assertRegex(message, r"상태 .+ \([0-9.]+점\)")
+        self.assertTrue(any("상태 " in item and "점)" in item for item in event.criteria))
+
     def test_monitor_trend_change_uses_moving_average_data(self):
         previous_position = normalize_position({
             "symbol": "005930",
@@ -1159,6 +1190,9 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("데이터 검증:", message)
         self.assertIn("모델 보완:", message)
         self.assertIn("손익률 급변", message)
+        self.assertRegex(message, r"이전 .+ \([0-9.]+점\)")
+        self.assertRegex(message, r"현재 .+ \([0-9.]+점\)")
+        self.assertTrue(any("(" in item and "점)" in item for item in decision_event.criteria))
 
     def test_decision_change_event_enqueues_async_model_review(self):
         event = alerts_detected_event([
@@ -1684,18 +1718,18 @@ class PythonServiceTests(unittest.TestCase):
                 "추세: 현재 15만 원, 20일선 14만 원(+4.2%)",
                 "손익 -3.2%",
                 "수급: 거래량 31,000(1.7x), 거래액 48억 원",
-                "상태 조건부 보유",
+                "상태 조건부 보유 (52점)",
             ],
             "000660",
             criteria=[
                 "설정: 판단 톤이 danger/caution 이거나 손익률이 -8% 이하일 때",
-                "감지: 상태 조건부 보유, 손익 -3.2%",
+                "감지: 상태 조건부 보유 (52점), 손익 -3.2%",
             ],
         )
 
         message = templates.render(event.rule, alert_context(event))
 
-        status_line = "• <b>상태</b>: <code>조건부 보유</code>"
+        status_line = "• <b>상태</b>: <code>조건부 보유 (52점)</code>"
         profit_line = "• <b>손익</b>: <code>-3.2%</code>"
         flow_line = "• <b>수급</b>: <code>거래량 31,000(1.7x), 거래액 48억 원</code>"
         trend_line = "• <b>추세</b>: <code>현재 15만 원, 20일선 14만 원(+4.2%)</code>"
@@ -1703,7 +1737,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertLess(message.index(status_line), message.index(profit_line))
         self.assertLess(message.index(flow_line), message.index(trend_line))
         self.assertIn("• <b>설정</b>: <code>판단 톤이 danger/caution 이거나 손익률이 -8% 이하일 때</code>", message)
-        self.assertIn("• <b>감지</b>: <code>상태 조건부 보유, 손익 -3.2%</code>", message)
+        self.assertIn("• <b>감지</b>: <code>상태 조건부 보유 (52점), 손익 -3.2%</code>", message)
 
     def test_notification_template_seed_migrates_previous_readable_default(self):
         db_path = Path(self.temp.name) / "service.db"

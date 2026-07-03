@@ -384,6 +384,7 @@
     notificationRulesLoaded: false,
     notificationRulesError: "",
     notificationRulesSaved: false,
+    notificationExpandedTypes: {},
     notificationMarketHoursSessions: [],
     notificationJobItems: [],
     notificationJobsLoading: false,
@@ -5714,7 +5715,11 @@
       '<p class="label">Messages</p>',
       '<h2>메시지 타입별 알림</h2>',
       '</div>',
+      '<div class="settings-actions">',
+      '<button class="text-button compact" data-action="expand-message-types">전체 펼치기</button>',
+      '<button class="text-button compact" data-action="collapse-message-types">전체 접기</button>',
       '<button class="text-button primary" data-action="save-settings"' + (state.serverSettingsLocked ? ' disabled' : '') + '>알림 설정 저장</button>',
+      '</div>',
       '</div>',
       '<div class="settings-body">',
       state.messageSchedulesError ? '<p class="form-error">' + escapeHtml(state.messageSchedulesError) + '</p>' : '',
@@ -5754,10 +5759,15 @@
     ].join("");
   }
 
+  function notificationTypeExpanded(messageType) {
+    return Boolean(state.notificationExpandedTypes && state.notificationExpandedTypes[messageType]);
+  }
+
   function renderAdminMessageRow(rule, checked, cadence, schedule, template) {
     var ruleId = "alert-rule-" + String(rule.key || "").replace(/[^A-Za-z0-9_-]/g, "-");
+    var expanded = notificationTypeExpanded(rule.key);
     return [
-      '<div class="admin-message-row">',
+      '<div class="admin-message-row ' + (expanded ? "expanded" : "collapsed") + '">',
       '<input id="' + escapeHtml(ruleId) + '" type="checkbox" data-alert-rule="' + escapeHtml(rule.key) + '"' + (checked ? " checked" : "") + ' />',
       '<label class="admin-message-main" for="' + escapeHtml(ruleId) + '">',
       '<strong>' + escapeHtml(rule.label) + '</strong>',
@@ -5767,11 +5777,16 @@
       '<input data-alert-cadence="' + escapeHtml(rule.key) + '" type="number" min="10" step="10" value="' + escapeHtml(cadence) + '" />',
       '<b>분</b>',
       '</span>',
+      '<button class="mini-button admin-message-toggle" type="button" data-message-toggle="' + escapeHtml(rule.key) + '" aria-expanded="' + escapeHtml(expanded ? "true" : "false") + '">' + escapeHtml(expanded ? "접기" : "상세") + '</button>',
       '<div class="admin-message-schedule">',
-      renderMessageScheduleSummary(schedule),
+      renderMessageScheduleSummary(schedule, !expanded),
       '</div>',
+      '<div class="admin-message-details"' + (expanded ? '' : ' hidden') + '>',
+      '<div class="admin-message-detail-grid">',
       renderNotificationTemplateRow(template, { inline: true }),
       renderNotificationRuleEditor(rule.key, { inline: true }),
+      '</div>',
+      '</div>',
       '</div>'
     ].join("");
   }
@@ -5907,7 +5922,7 @@
     }).join(" / ");
   }
 
-  function renderMessageScheduleSummary(schedule) {
+  function renderMessageScheduleSummary(schedule, compact) {
     if (!schedule) {
       return [
         '<div class="message-schedule-summary muted">',
@@ -5922,6 +5937,7 @@
       '<span>마지막 ' + escapeHtml(scheduleTimeText(schedule.lastSentAt)) + '</span>',
       '<span>다음 가능 ' + escapeHtml(scheduleTimeText(schedule.nextEligibleAt)) + '</span>',
       '</div>',
+      compact ? '' :
       '<div class="message-schedule-detail">',
       '<strong>언제 오나</strong>',
       '<p>' + escapeHtml(schedule.triggerSummary || "조건이 실제 데이터에서 충족될 때 보냅니다.") + '</p>',
@@ -8443,6 +8459,33 @@
         updateBooleanAssignmentSetting("alertRules", field.getAttribute("data-alert-rule"), field.checked);
       });
     });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-message-toggle]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        var messageType = button.getAttribute("data-message-toggle");
+        state.notificationExpandedTypes[messageType] = !notificationTypeExpanded(messageType);
+        render();
+      });
+    });
+
+    var expandMessageTypes = app.querySelector('[data-action="expand-message-types"]');
+    if (expandMessageTypes) {
+      expandMessageTypes.addEventListener("click", function () {
+        state.notificationExpandedTypes = {};
+        alertRuleCatalog.forEach(function (rule) {
+          state.notificationExpandedTypes[rule.key] = true;
+        });
+        render();
+      });
+    }
+
+    var collapseMessageTypes = app.querySelector('[data-action="collapse-message-types"]');
+    if (collapseMessageTypes) {
+      collapseMessageTypes.addEventListener("click", function () {
+        state.notificationExpandedTypes = {};
+        render();
+      });
+    }
 
     Array.prototype.slice.call(app.querySelectorAll("[data-alert-threshold]")).forEach(function (field) {
       field.addEventListener("change", function () {

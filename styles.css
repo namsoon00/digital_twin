@@ -2001,7 +2001,7 @@ h3 {
 
 .admin-message-row {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) 116px;
+  grid-template-columns: auto minmax(0, 1fr) 116px auto;
   align-items: start;
   gap: 10px;
   min-width: 0;
@@ -2062,6 +2062,31 @@ h3 {
   grid-column: 2 / -1;
   min-width: 0;
   padding-top: 2px;
+}
+
+.admin-message-toggle {
+  min-height: 38px;
+  white-space: nowrap;
+}
+
+.admin-message-details {
+  grid-column: 2 / -1;
+  min-width: 0;
+}
+
+.admin-message-details[hidden] {
+  display: none;
+}
+
+.admin-message-detail-grid {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.admin-message-detail-grid .admin-message-template.notification-template-row,
+.admin-message-detail-grid .admin-message-rule.notification-rule-editor {
+  grid-column: auto;
 }
 
 .message-schedule-summary {
@@ -4218,7 +4243,7 @@ h3 {
   }
 
   .admin-message-row {
-    grid-template-columns: auto minmax(0, 1fr) minmax(96px, 116px);
+    grid-template-columns: auto minmax(0, 1fr) minmax(96px, 116px) auto;
   }
 
   .symbol-filter-form,
@@ -4414,6 +4439,7 @@ h3 {
   }
 
   .admin-message-schedule,
+  .admin-message-details,
   .admin-message-template.notification-template-row,
   .admin-message-rule.notification-rule-editor {
     grid-column: auto;

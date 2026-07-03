@@ -1160,7 +1160,6 @@
   }
 
   function notificationTemplatePreviewContext(messageType) {
-    var mobileWrapWidth = 24;
     var dataLabelPrefixes = [
       "미장 가격 변동",
       "크립토 변동",
@@ -1183,32 +1182,13 @@
       "보유",
       "신호"
     ];
-    function wrapMobileText(text) {
-      var words = String(text || "").trim().split(/\s+/).filter(Boolean);
-      var lines = [];
-      var current = "";
-      words.forEach(function (word) {
-        if (!current) {
-          current = word;
-        } else if ((current + " " + word).length <= mobileWrapWidth) {
-          current += " " + word;
-        } else {
-          lines.push(current);
-          current = word;
-        }
-      });
-      if (current) lines.push(current);
-      return lines.length ? lines : (String(text || "").trim() ? [String(text || "").trim()] : []);
-    }
     function plainBullet(text) {
-      var parts = wrapMobileText(text);
-      if (!parts.length) return "";
-      return "• " + parts[0] + (parts.length > 1 ? "\n  " + parts.slice(1).join("\n  ") : "");
+      var cleaned = String(text || "").trim();
+      return cleaned ? "• " + cleaned : "";
     }
     function htmlBullet(text) {
-      var parts = wrapMobileText(text).map(function (part) { return escapeHtml(part); });
-      if (!parts.length) return "";
-      return "• " + parts[0] + (parts.length > 1 ? "\n  " + parts.slice(1).join("\n  ") : "");
+      var cleaned = String(text || "").trim();
+      return cleaned ? "• " + escapeHtml(cleaned) : "";
     }
     function splitDataLine(line) {
       var text = String(line || "").trim();
@@ -1222,30 +1202,47 @@
       }
       return { label: "", value: text };
     }
+    function groupedDataRows(items) {
+      var rows = [];
+      for (var index = 0; index < items.length; index += 2) {
+        rows.push("• " + items.slice(index, index + 2).join(", "));
+      }
+      return rows;
+    }
     function plainDataRows(rawItems) {
       var rows = [];
+      var pairs = [];
       rawItems.forEach(function (line) {
         var pair = splitDataLine(line);
         if (pair.label && pair.value) {
-          rows.push("• " + pair.label);
-          rows.push("  " + pair.value);
+          pairs.push(pair.label + ": " + pair.value);
         } else {
+          if (pairs.length) {
+            rows = rows.concat(groupedDataRows(pairs));
+            pairs = [];
+          }
           rows.push(plainBullet(line));
         }
       });
+      if (pairs.length) rows = rows.concat(groupedDataRows(pairs));
       return rows.filter(Boolean).join("\n");
     }
     function htmlDataRows(rawItems) {
       var rows = [];
+      var pairs = [];
       rawItems.forEach(function (line) {
         var pair = splitDataLine(line);
         if (pair.label && pair.value) {
-          rows.push("• <b>" + escapeHtml(pair.label) + "</b>");
-          rows.push("  <code>" + escapeHtml(pair.value) + "</code>");
+          pairs.push("<b>" + escapeHtml(pair.label) + "</b>: <code>" + escapeHtml(pair.value) + "</code>");
         } else {
+          if (pairs.length) {
+            rows = rows.concat(groupedDataRows(pairs));
+            pairs = [];
+          }
           rows.push(htmlBullet(line));
         }
       });
+      if (pairs.length) rows = rows.concat(groupedDataRows(pairs));
       return rows.filter(Boolean).join("\n");
     }
     var type = messageType || "monitorHeartbeat";
@@ -1407,13 +1404,10 @@
     var triggerBlock = triggerSummary ? "조건\n" + plainBullet(triggerSummary) : "";
     var dataRows = plainDataRows(rawItems);
     var dataBlock = dataRows ? "데이터\n" + dataRows : "";
-    var divider = "━━━━━━━━━━";
+    var divider = "";
     var readableMessage = [
-      divider,
-      statusHeadline,
-      titleHeadline,
+      headline,
       targetValue,
-      divider,
       "",
       triggerBlock,
       dataBlock ? "" : "",
@@ -1424,11 +1418,8 @@
     }).join("\n").trim();
     var telegramDataLines = htmlDataRows(rawItems);
     var telegramMessage = [
-      divider,
-      statusHeadline ? "<b>" + escapeHtml(statusHeadline) + "</b>" : "",
-      titleHeadline ? "<b>" + escapeHtml(titleHeadline) + "</b>" : "",
+      "<b>" + escapeHtml(headline) + "</b>",
       targetValue ? "<code>" + escapeHtml(targetValue) + "</code>" : "",
-      divider,
       "",
       "<b>조건</b>",
       htmlBullet(triggerSummary),

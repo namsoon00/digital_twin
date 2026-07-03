@@ -34,7 +34,7 @@ from digital_twin.infrastructure.external_signals import ExternalSignalProvider
 from digital_twin.infrastructure.json_monitor_state import MonitorStore
 from digital_twin.infrastructure.model_review_queue import ModelReviewEnqueuer, ModelReviewJobStore
 from digital_twin.infrastructure.mock_market import mock_market_payload
-from digital_twin.infrastructure.notifications import send_events
+from digital_twin.infrastructure.notifications import TelegramNotifier, send_events
 from digital_twin.infrastructure.settings import runtime_settings
 from digital_twin.infrastructure.sqlite_operational import SQLiteAppStore, SQLiteEventLog, SQLiteExternalSignalCache, SQLiteModelReviewJobStore, SQLiteMonitorStore, SQLiteNotificationJobStore, SQLiteNotificationRuleStore, SQLiteNotificationTemplateStore, SQLiteRuntimeSettingsStore, SQLiteSymbolUniverseStore
 from digital_twin.infrastructure.symbol_sources import parse_krx_kind_table, parse_nasdaq_listed
@@ -1048,12 +1048,47 @@ class PythonServiceTests(unittest.TestCase):
         message = templates.render(event.rule, alert_context(event))
 
         self.assertIn("Apple", message)
-        self.assertIn("[관찰] 이동평균 변화", message)
-        self.assertIn("대상: Apple / AAPL", message)
-        self.assertIn("조건", message)
-        self.assertIn("데이터", message)
-        self.assertIn("- 신호 20일선 상향 돌파", message)
+        self.assertIn("━━━━━━━━", message)
+        self.assertIn("<b>[관찰] 이동평균 변화</b>", message)
+        self.assertIn("<code>Apple / AAPL</code>", message)
+        self.assertIn("<b>조건</b>", message)
+        self.assertIn("<b>데이터</b>", message)
+        self.assertIn("• 신호 20일선 상향 돌파", message)
         self.assertNotIn("\n\n\n", message)
+
+    def test_notification_template_seed_migrates_previous_readable_default(self):
+        db_path = Path(self.temp.name) / "service.db"
+        templates = SQLiteNotificationTemplateStore(db_path)
+        templates.upsert("monitorHeartbeat", "{readableMessage}", "이전 기본 템플릿", True)
+
+        refreshed = SQLiteNotificationTemplateStore(db_path)
+
+        self.assertEqual("{telegramMessage}", refreshed.get("monitorHeartbeat").template)
+
+    def test_telegram_notifier_uses_html_parse_mode_for_rich_messages(self):
+        sent_payloads = []
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return b'{"ok": true}'
+
+        def fake_urlopen(request, timeout=0):
+            sent_payloads.append(json.loads(request.data.decode("utf-8")))
+            return FakeResponse()
+
+        notifier = TelegramNotifier("token", "chat")
+        with mock.patch("digital_twin.infrastructure.notifications.urllib.request.urlopen", side_effect=fake_urlopen):
+            result = notifier.send("<b>[관찰] 이동평균 변화</b>\n<code>AAPL</code>")
+
+        self.assertTrue(result.delivered)
+        self.assertEqual("HTML", sent_payloads[0]["parse_mode"])
+        self.assertEqual("<b>[관찰] 이동평균 변화</b>\n<code>AAPL</code>", sent_payloads[0]["text"])
 
     def test_monitor_context_lines_skip_unavailable_market_data(self):
         position = normalize_position({

@@ -1,3 +1,4 @@
+import html
 import re
 from dataclasses import asdict, dataclass
 from typing import Dict, List
@@ -6,8 +7,10 @@ from .portfolio import AlertEvent
 
 
 LEGACY_DEFAULT_TEMPLATE = "{title}\n{lines}"
-DEFAULT_TEMPLATE = "{readableMessage}"
+PREVIOUS_DEFAULT_TEMPLATE = "{readableMessage}"
+DEFAULT_TEMPLATE = "{telegramMessage}"
 BODY_TEMPLATE = "{body}"
+MESSAGE_DIVIDER = "━━━━━━━━━━━━━━━━━━━━"
 
 MESSAGE_TYPE_LABELS = {
     "modelBuy": "모델 매수",
@@ -178,6 +181,7 @@ class NotificationTemplate:
 def alert_context(event: AlertEvent) -> Dict[str, object]:
     raw_lines = [str(line).strip() for line in event.lines if str(line).strip()]
     lines = "\n".join(["- " + line for line in raw_lines])
+    bullet_lines = "\n".join(["• " + line for line in raw_lines])
     message_type_label = MESSAGE_TYPE_LABELS.get(event.rule, event.rule)
     severity_label = SEVERITY_LABELS.get(str(event.severity or "").upper(), event.severity or "")
     trigger_summary = TRIGGER_SUMMARIES.get(event.rule, "설정한 조건이 실제 데이터에서 충족될 때 보냅니다.")
@@ -199,13 +203,29 @@ def alert_context(event: AlertEvent) -> Dict[str, object]:
         target_parts.append(event.symbol)
     target_value = " / ".join(part for part in target_parts if part)
     target_line = "대상: " + target_value if target_value else ""
-    trigger_block = ("조건\n- " + trigger_summary) if trigger_summary else ""
-    data_block = ("데이터\n" + data_lines) if data_lines else ""
-    readable_parts = [headline, target_line, "", trigger_block]
-    if data_lines:
+    trigger_block = ("조건\n• " + trigger_summary) if trigger_summary else ""
+    data_block = ("데이터\n" + bullet_lines) if bullet_lines else ""
+    readable_parts = [MESSAGE_DIVIDER, headline, target_line, MESSAGE_DIVIDER, "", trigger_block]
+    if bullet_lines:
         readable_parts.extend(["", data_block])
     readable_message = "\n".join(part for part in readable_parts if str(part).strip() or part == "").strip()
-    body = readable_message or "\n".join([event.title] + ([lines] if lines else []))
+    escaped_headline = html.escape(headline, quote=False)
+    escaped_target = html.escape(target_value, quote=False)
+    escaped_trigger = html.escape(trigger_summary, quote=False)
+    telegram_data_lines = "\n".join(["• " + html.escape(line, quote=False) for line in raw_lines])
+    telegram_parts = [
+        MESSAGE_DIVIDER,
+        "<b>" + escaped_headline + "</b>",
+        ("<code>" + escaped_target + "</code>") if escaped_target else "",
+        MESSAGE_DIVIDER,
+        "",
+        "<b>조건</b>",
+        "• " + escaped_trigger if escaped_trigger else "",
+    ]
+    if telegram_data_lines:
+        telegram_parts.extend(["", "<b>데이터</b>", telegram_data_lines])
+    telegram_message = "\n".join(part for part in telegram_parts if str(part).strip() or part == "").strip()
+    body = telegram_message or readable_message or "\n".join([event.title] + ([lines] if lines else []))
     return {
         "messageType": event.rule,
         "accountId": event.account_id,
@@ -223,11 +243,15 @@ def alert_context(event: AlertEvent) -> Dict[str, object]:
         "targetLine": target_line,
         "triggerBlock": trigger_block,
         "dataBlock": data_block,
+        "divider": MESSAGE_DIVIDER,
+        "telegramMessage": telegram_message,
+        "telegramDataLines": telegram_data_lines,
         "symbolLine": symbol_line,
         "severityLine": severity_line,
         "typeLine": type_line,
         "triggerLine": trigger_line,
         "dataLines": data_lines,
+        "bulletLines": bullet_lines,
         "lines": lines,
         "rawLines": "\n".join(raw_lines),
         "readableMessage": readable_message,
@@ -308,11 +332,15 @@ def template_variables() -> List[str]:
         "targetLine",
         "triggerBlock",
         "dataBlock",
+        "divider",
+        "telegramMessage",
+        "telegramDataLines",
         "symbolLine",
         "severityLine",
         "typeLine",
         "triggerLine",
         "dataLines",
+        "bulletLines",
         "lines",
         "rawLines",
         "readableMessage",

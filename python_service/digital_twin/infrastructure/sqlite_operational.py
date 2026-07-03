@@ -8,7 +8,7 @@ from typing import Dict, Iterable, List, Optional
 from ..domain.events import DomainEvent, MONITORING_ALERTS_DETECTED
 from ..domain.model_review import ModelReviewJob
 from ..domain.notification_rules import DEFAULT_NOTIFICATION_RULES, NotificationRuleConfig, default_notification_rule, evaluate_notification_rule
-from ..domain.notification_templates import DEFAULT_NOTIFICATION_TEMPLATES, LEGACY_DEFAULT_TEMPLATE, NotificationTemplate, render_notification
+from ..domain.notification_templates import DEFAULT_NOTIFICATION_TEMPLATES, LEGACY_DEFAULT_TEMPLATE, PREVIOUS_DEFAULT_TEMPLATE, NotificationTemplate, render_notification
 from ..domain.notifications import NotificationJob
 from ..domain.portfolio import AccountSnapshot, AlertEvent
 from ..domain.symbol_universe import ListedSymbol, normalize_market, normalize_symbol, utc_now_iso as symbol_utc_now_iso
@@ -228,6 +228,15 @@ class SQLiteNotificationTemplateStore(OperationalConnection):
                         WHERE message_type = ? AND template = ?
                         """,
                         (template, description, stamp, message_type, LEGACY_DEFAULT_TEMPLATE),
+                    )
+                if template != PREVIOUS_DEFAULT_TEMPLATE:
+                    connection.execute(
+                        """
+                        UPDATE notification_templates
+                        SET template = ?, description = ?, updated_at = ?
+                        WHERE message_type = ? AND template = ?
+                        """,
+                        (template, description, stamp, message_type, PREVIOUS_DEFAULT_TEMPLATE),
                     )
 
     def row_to_template(self, row) -> NotificationTemplate:

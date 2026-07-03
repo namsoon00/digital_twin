@@ -808,17 +808,18 @@
   }
 
   function defaultNotificationTemplates() {
+    var richTemplate = "{telegramMessage}";
     var items = [
       {
         messageType: "default",
-        template: "{readableMessage}",
+        template: richTemplate,
         description: "기본 알림 템플릿"
       }
     ];
     alertRuleCatalog.forEach(function (rule) {
       items.push({
         messageType: rule.key,
-        template: "{readableMessage}",
+        template: richTemplate,
         description: rule.label + " · " + rule.description
       });
     });
@@ -926,7 +927,7 @@
       : defaultNotificationTemplates();
     state.notificationTemplateVariables = Array.isArray(payload.variables) && payload.variables.length
       ? payload.variables
-      : ["title", "readableMessage", "dataLines", "triggerSummary", "lines", "rawLines", "body", "messageType", "symbol", "severity"];
+      : ["title", "telegramMessage", "readableMessage", "dataLines", "telegramDataLines", "triggerSummary", "lines", "rawLines", "body", "messageType", "symbol", "severity"];
     state.notificationTemplatesLoaded = true;
     state.notificationTemplatesLoading = false;
     state.notificationTemplatesError = "";
@@ -1041,7 +1042,7 @@
       return item.messageType === messageType;
     })[0] || {
       messageType: messageType,
-      template: "{readableMessage}",
+      template: "{telegramMessage}",
       description: "",
       enabled: true,
       updatedAt: ""
@@ -1051,7 +1052,7 @@
   function notificationTemplateVariables() {
     return state.notificationTemplateVariables.length
       ? state.notificationTemplateVariables
-      : ["title", "readableMessage", "dataLines", "triggerSummary", "lines", "rawLines", "body", "messageType", "symbol", "severity"];
+      : ["title", "telegramMessage", "readableMessage", "dataLines", "telegramDataLines", "triggerSummary", "lines", "rawLines", "body", "messageType", "symbol", "severity"];
   }
 
   function clampInteger(value, min, max, fallback) {
@@ -1297,6 +1298,7 @@
     var sample = samples[type] || samples.default;
     var rawLines = Array.isArray(sample.lines) ? sample.lines.join("\n") : "";
     var lines = rawLines ? rawLines.split("\n").map(function (line) { return "- " + line; }).join("\n") : "";
+    var bulletLines = rawLines ? rawLines.split("\n").map(function (line) { return "• " + line; }).join("\n") : "";
     var rule = alertRuleCatalog.filter(function (item) { return item.key === type; })[0] || {};
     var messageTypeLabel = rule.label || notificationTemplateLabel(type);
     var severityLabel = sample.severity === "ALERT" ? "주의" : sample.severity === "WATCH" ? "관찰" : "정보";
@@ -1313,15 +1315,34 @@
       .filter(Boolean)
       .join(" / ");
     var targetLine = targetValue ? "대상: " + targetValue : "";
-    var triggerBlock = triggerSummary ? "조건\n- " + triggerSummary : "";
-    var dataBlock = dataLines ? "데이터\n" + dataLines : "";
+    var triggerBlock = triggerSummary ? "조건\n• " + triggerSummary : "";
+    var dataBlock = bulletLines ? "데이터\n" + bulletLines : "";
+    var divider = "━━━━━━━━━━━━━━━━━━━━";
     var readableMessage = [
+      divider,
       headline,
       targetLine,
+      divider,
       "",
       triggerBlock,
       dataBlock ? "" : "",
       dataBlock
+    ].filter(function (line, index, list) {
+      if (line === "") return index > 0 && list[index - 1] !== "";
+      return String(line || "").trim();
+    }).join("\n").trim();
+    var telegramDataLines = rawLines ? rawLines.split("\n").map(function (line) { return "• " + escapeHtml(line); }).join("\n") : "";
+    var telegramMessage = [
+      divider,
+      "<b>" + escapeHtml(headline) + "</b>",
+      targetValue ? "<code>" + escapeHtml(targetValue) + "</code>" : "",
+      divider,
+      "",
+      "<b>조건</b>",
+      triggerSummary ? "• " + escapeHtml(triggerSummary) : "",
+      telegramDataLines ? "" : "",
+      telegramDataLines ? "<b>데이터</b>" : "",
+      telegramDataLines
     ].filter(function (line, index, list) {
       if (line === "") return index > 0 && list[index - 1] !== "";
       return String(line || "").trim();
@@ -1332,8 +1353,11 @@
       lines: lines,
       rawLines: rawLines,
       dataLines: dataLines,
+      bulletLines: bulletLines,
       body: body,
       readableMessage: readableMessage,
+      telegramMessage: telegramMessage,
+      telegramDataLines: telegramDataLines,
       messageType: type,
       messageTypeLabel: messageTypeLabel,
       symbol: sample.symbol || "",
@@ -1341,6 +1365,7 @@
       targetLine: targetLine,
       triggerBlock: triggerBlock,
       dataBlock: dataBlock,
+      divider: divider,
       symbolLine: symbolLine,
       severity: sample.severity || "INFO",
       severityLabel: severityLabel,

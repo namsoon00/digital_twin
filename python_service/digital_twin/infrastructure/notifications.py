@@ -1,6 +1,8 @@
 import json
+import re
 import urllib.error
 import urllib.request
+from html import unescape
 from typing import Dict, Iterable
 
 from ..domain.accounts import AccountConfig
@@ -9,6 +11,18 @@ from ..domain.notification_templates import alert_context, text_context
 from ..domain.notifications import NotificationJob
 from ..domain.portfolio import AlertEvent
 from .settings import runtime_settings
+
+
+TELEGRAM_HTML_PATTERN = re.compile(r"</?(?:b|strong|i|em|u|ins|s|strike|del|code|pre|a|blockquote)(?:\s+[^>]*)?>", re.IGNORECASE)
+
+
+def uses_telegram_html(text: str) -> bool:
+    return bool(TELEGRAM_HTML_PATTERN.search(str(text or "")))
+
+
+def telegram_plain_text(text: str) -> str:
+    without_tags = TELEGRAM_HTML_PATTERN.sub("", str(text or ""))
+    return unescape(without_tags)
 
 
 class NotificationResult:
@@ -34,13 +48,10 @@ class TelegramNotifier:
         self.bot_token = bot_token
         self.chat_id = chat_id
 
-    def send(self, text: str) -> NotificationResult:
-        if not self.bot_token or not self.chat_id:
-            return NotificationResult(False, self.label, "텔레그램 토큰 또는 chat id 미설정")
+    def post_message(self, payload: Dict[str, object]) -> NotificationResult:
         body = json.dumps({
-            "chat_id": self.chat_id,
-            "text": text,
             "disable_web_page_preview": True,
+            **payload,
         }).encode("utf-8")
         request = urllib.request.Request(
             "https://api.telegram.org/bot" + self.bot_token + "/sendMessage",
@@ -56,6 +67,23 @@ class TelegramNotifier:
         except (urllib.error.URLError, urllib.error.HTTPError, ValueError) as error:
             return NotificationResult(False, self.label, str(error))
         return NotificationResult(True, self.label)
+
+    def send(self, text: str) -> NotificationResult:
+        if not self.bot_token or not self.chat_id:
+            return NotificationResult(False, self.label, "텔레그램 토큰 또는 chat id 미설정")
+        payload: Dict[str, object] = {
+            "chat_id": self.chat_id,
+            "text": text,
+        }
+        if uses_telegram_html(text):
+            payload["parse_mode"] = "HTML"
+        result = self.post_message(payload)
+        if not result.delivered and payload.get("parse_mode") == "HTML":
+            fallback = dict(payload)
+            fallback.pop("parse_mode", None)
+            fallback["text"] = telegram_plain_text(text)
+            return self.post_message(fallback)
+        return result
 
 
 def notifier_from_settings():

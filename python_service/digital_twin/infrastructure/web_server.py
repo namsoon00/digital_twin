@@ -32,6 +32,7 @@ from ..domain.events import (
     APP_PROFILE_UPDATED,
     CHAT_MESSAGE_APPENDED,
     NOTIFICATION_JOB_QUEUED,
+    NOTIFICATION_RULE_UPDATED,
     NOTIFICATION_TEMPLATE_UPDATED,
     NOTIFICATION_TEST_REQUESTED,
     SETTINGS_UPDATED,
@@ -39,6 +40,7 @@ from ..domain.events import (
     DomainEvent,
 )
 from ..domain.monitoring import DEFAULT_ALERT_RULES, DEFAULT_CADENCE, RealtimeMonitor
+from ..domain.notification_rules import CONDITION_TYPE_LABELS, DEFAULT_HONEY_THRESHOLD, NotificationRuleConfig
 from ..domain.notifications import NotificationJob
 from ..domain.notification_templates import DEFAULT_NOTIFICATION_TEMPLATES, MESSAGE_TYPE_LABELS, TRIGGER_SUMMARIES, alert_context, template_variables
 from ..domain.parsing import parse_assignments
@@ -47,7 +49,7 @@ from ..infrastructure.event_bus import default_event_bus
 from ..infrastructure.mock_market import mock_market_payload, mock_market_scenario_list
 from ..infrastructure.settings import ROOT_DIR, runtime_settings, save_runtime_settings
 from ..infrastructure.sqlite_accounts import AccountRegistry
-from ..infrastructure.sqlite_operational import SQLiteAppStore, SQLiteEventLog, SQLiteMonitorStore, SQLiteNotificationJobStore, SQLiteNotificationTemplateStore
+from ..infrastructure.sqlite_operational import SQLiteAppStore, SQLiteEventLog, SQLiteMonitorStore, SQLiteNotificationJobStore, SQLiteNotificationRuleStore, SQLiteNotificationTemplateStore
 from ..infrastructure.toss_snapshots import build_snapshot
 
 
@@ -391,10 +393,22 @@ def notification_queue_store() -> SQLiteNotificationJobStore:
     return SQLiteNotificationJobStore()
 
 
+def notification_rule_store() -> SQLiteNotificationRuleStore:
+    return SQLiteNotificationRuleStore()
+
+
 def list_templates_payload() -> Dict[str, object]:
     return {
         "templates": [item.to_dict() for item in notification_store().list()],
         "variables": template_variables(),
+    }
+
+
+def list_notification_rules_payload() -> Dict[str, object]:
+    return {
+        "rules": [item.to_dict() for item in notification_rule_store().list()],
+        "conditionTypes": CONDITION_TYPE_LABELS,
+        "defaultThreshold": DEFAULT_HONEY_THRESHOLD,
     }
 
 
@@ -514,6 +528,41 @@ def reset_template_payload(message_type: str) -> Dict[str, object]:
     return {"template": saved.to_dict(), "eventId": event.event_id}
 
 
+def save_notification_rule_payload(payload: Dict[str, object]) -> Dict[str, object]:
+    requested = payload.get("rule") if isinstance(payload.get("rule"), dict) else payload
+    rule = NotificationRuleConfig.from_dict(requested if isinstance(requested, dict) else {})
+    saved = notification_rule_store().upsert(rule)
+    event = new_domain_event(
+        NOTIFICATION_RULE_UPDATED,
+        saved.message_type,
+        {
+            "messageType": saved.message_type,
+            "enabled": saved.enabled,
+            "threshold": saved.threshold,
+            "baseScore": saved.base_score,
+            "updatedAt": saved.updated_at,
+        },
+    )
+    return {"rule": saved.to_dict(), "eventId": event.event_id}
+
+
+def reset_notification_rule_payload(message_type: str) -> Dict[str, object]:
+    saved = notification_rule_store().reset(message_type)
+    event = new_domain_event(
+        NOTIFICATION_RULE_UPDATED,
+        saved.message_type,
+        {
+            "messageType": saved.message_type,
+            "enabled": saved.enabled,
+            "threshold": saved.threshold,
+            "baseScore": saved.base_score,
+            "updatedAt": saved.updated_at,
+            "reset": True,
+        },
+    )
+    return {"rule": saved.to_dict(), "eventId": event.event_id}
+
+
 def alert_event_public_payload(event) -> Dict[str, object]:
     return {
         "accountId": event.account_id,
@@ -605,6 +654,19 @@ def notification_template_test_payload(payload: Dict[str, object]):
         context=alert_context(event),
     )
     if not notification_queue_store().enqueue(job):
+        if job.status == "suppressed":
+            return 202, {
+                "delivered": False,
+                "queued": False,
+                "suppressed": True,
+                "provider": "Notification Queue",
+                "messageType": message_type,
+                "event": public_event,
+                "score": (job.context or {}).get("honeyScore"),
+                "threshold": (job.context or {}).get("honeyThreshold"),
+                "reasons": (job.context or {}).get("honeyReasons") or [],
+                "error": job.last_error,
+            }
         return 409, {
             "delivered": False,
             "queued": False,
@@ -1314,6 +1376,14 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
                     return
                 return self.send_payload(200, save_template_payload(self.read_json_body()))
 
+        if path == "/api/notification-rules":
+            if self.command == "GET":
+                return self.send_payload(200, list_notification_rules_payload())
+            if self.command in {"POST", "PUT"}:
+                if not self.ensure_writable("공유 모드에서는 알림 룰을 변경할 수 없습니다."):
+                    return
+                return self.send_payload(200, save_notification_rule_payload(self.read_json_body()))
+
         if path == "/api/notification-schedules" and self.command == "GET":
             return self.send_payload(200, notification_schedules_payload())
 
@@ -1328,6 +1398,12 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
             if not self.ensure_writable("공유 모드에서는 알림 템플릿을 변경할 수 없습니다."):
                 return
             return self.send_payload(200, reset_template_payload(urllib.parse.unquote(template_match.group(1))))
+
+        rule_match = re.match(r"^/api/notification-rules/([^/]+)$", path)
+        if rule_match and self.command == "DELETE":
+            if not self.ensure_writable("공유 모드에서는 알림 룰을 변경할 수 없습니다."):
+                return
+            return self.send_payload(200, reset_notification_rule_payload(urllib.parse.unquote(rule_match.group(1))))
 
         if path == "/api/economic-feed/rss":
             if self.command == "OPTIONS":

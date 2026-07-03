@@ -36,7 +36,7 @@ from digital_twin.infrastructure.model_review_queue import ModelReviewEnqueuer, 
 from digital_twin.infrastructure.mock_market import mock_market_payload
 from digital_twin.infrastructure.notifications import send_events
 from digital_twin.infrastructure.settings import runtime_settings
-from digital_twin.infrastructure.sqlite_operational import SQLiteAppStore, SQLiteEventLog, SQLiteExternalSignalCache, SQLiteModelReviewJobStore, SQLiteMonitorStore, SQLiteNotificationJobStore, SQLiteNotificationTemplateStore, SQLiteRuntimeSettingsStore, SQLiteSymbolUniverseStore
+from digital_twin.infrastructure.sqlite_operational import SQLiteAppStore, SQLiteEventLog, SQLiteExternalSignalCache, SQLiteModelReviewJobStore, SQLiteMonitorStore, SQLiteNotificationJobStore, SQLiteNotificationRuleStore, SQLiteNotificationTemplateStore, SQLiteRuntimeSettingsStore, SQLiteSymbolUniverseStore
 from digital_twin.infrastructure.symbol_sources import parse_krx_kind_table, parse_nasdaq_listed
 from digital_twin.infrastructure.sqlite_accounts import AccountRegistry
 from digital_twin.infrastructure.toss_snapshots import account_cash_amount, select_account
@@ -942,7 +942,7 @@ class PythonServiceTests(unittest.TestCase):
     def test_send_events_enqueues_notifications_without_direct_delivery(self):
         account = AccountConfig("main", "메인", "toss", "https://example.test", "", "", "", ["AAPL"])
         queue = SQLiteNotificationJobStore(Path(self.temp.name) / "service.db")
-        event = AlertEvent("main", "메인", "WATCH", "monitorHeartbeat", "main:heartbeat", "상태 확인", ["정상"], "")
+        event = AlertEvent("main", "메인", "ALERT", "monitorTrendChange", "main:trend", "SK하이닉스", ["이동평균 변화", "20일선 하향 이탈"], "000660")
         source_event = alerts_detected_event([event])
 
         result = send_events([event], accounts={"main": account}, queue=queue, source_event=source_event)
@@ -954,22 +954,38 @@ class PythonServiceTests(unittest.TestCase):
         jobs = queue.pending(limit=10)
         self.assertEqual(1, len(jobs))
         self.assertEqual("pending", jobs[0].status)
-        self.assertEqual("monitorHeartbeat", jobs[0].message_type)
+        self.assertEqual("monitorTrendChange", jobs[0].message_type)
         self.assertEqual(source_event.event_id, jobs[0].source_event_id)
         self.assertEqual(source_event.name, jobs[0].source_event_name)
         self.assertTrue(jobs[0].dedupe_key)
-        self.assertEqual("main:heartbeat", jobs[0].context["key"])
-        self.assertEqual("monitorHeartbeat", jobs[0].context["rule"])
-        self.assertEqual("상태 확인", jobs[0].context["title"])
-        self.assertIn("정상", jobs[0].context["lines"])
-        self.assertIn("상태 확인", jobs[0].text)
+        self.assertEqual("main:trend", jobs[0].context["key"])
+        self.assertEqual("monitorTrendChange", jobs[0].context["rule"])
+        self.assertEqual("SK하이닉스", jobs[0].context["title"])
+        self.assertIn("이동평균", jobs[0].context["lines"])
+        self.assertGreaterEqual(jobs[0].context["honeyScore"], jobs[0].context["honeyThreshold"])
+        self.assertIn("SK하이닉스", jobs[0].text)
+
+    def test_notification_rule_suppresses_low_score_heartbeat(self):
+        queue = SQLiteNotificationJobStore(Path(self.temp.name) / "service.db")
+        event = AlertEvent("main", "메인", "INFO", "monitorHeartbeat", "main:heartbeat", "상태 확인", ["모니터링 정상 작동", "보유 5개"], "")
+
+        result = send_events([event], queue=queue)
+
+        self.assertTrue(result.delivered)
+        self.assertEqual(0, result.queued)
+        self.assertEqual([], queue.pending(limit=10))
+        jobs = queue.jobs()
+        self.assertEqual(1, len(jobs))
+        self.assertEqual("suppressed", jobs[0].status)
+        self.assertIn("꿀점수", jobs[0].last_error)
+        self.assertLess(jobs[0].context["honeyScore"], jobs[0].context["honeyThreshold"])
 
     def test_notification_queue_runner_delivers_pending_messages_in_order(self):
         registry = AccountRegistry()
         registry.upsert(AccountConfig("main", "메인", "toss", "https://example.test", "", "", "", ["AAPL"]))
         queue = SQLiteNotificationJobStore(Path(self.temp.name) / "service.db")
-        queue.enqueue(NotificationJob.create("첫 번째", account_id="main", account_label="메인", message_type="test"))
-        queue.enqueue(NotificationJob.create("두 번째", account_id="main", account_label="메인", message_type="test"))
+        queue.enqueue(NotificationJob.create("첫 번째", account_id="main", account_label="메인", message_type="notification"))
+        queue.enqueue(NotificationJob.create("두 번째", account_id="main", account_label="메인", message_type="notification"))
         sent = []
 
         class FakeNotifier:
@@ -991,6 +1007,10 @@ class PythonServiceTests(unittest.TestCase):
         db_path = Path(self.temp.name) / "service.db"
         queue = SQLiteNotificationJobStore(db_path)
         templates = SQLiteNotificationTemplateStore(db_path)
+        rules = SQLiteNotificationRuleStore(db_path)
+        heartbeat_rule = rules.get("monitorHeartbeat")
+        heartbeat_rule.threshold = 0
+        rules.upsert(heartbeat_rule)
         event = AlertEvent("main", "메인", "WATCH", "monitorHeartbeat", "main:heartbeat", "상태 확인", ["정상"], "")
         send_events([event], queue=queue)
         templates.upsert("monitorHeartbeat", "[{messageType}] {title}\n{rawLines}", "테스트 템플릿", True)
@@ -1115,6 +1135,10 @@ class PythonServiceTests(unittest.TestCase):
             decisions_for_positions([position], portfolio),
         )
         SQLiteNotificationTemplateStore().upsert("monitorHeartbeat", "[{messageType}] {title}\n{rawLines}", "상태 확인 템플릿", True)
+        rules = SQLiteNotificationRuleStore()
+        heartbeat_rule = rules.get("monitorHeartbeat")
+        heartbeat_rule.threshold = 0
+        rules.upsert(heartbeat_rule)
 
         with mock.patch("digital_twin.infrastructure.web_server.build_snapshot", return_value=snapshot):
             status, payload = notification_template_test_payload({"messageType": "monitorHeartbeat"})
@@ -1338,7 +1362,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(1, job_store.enqueue_from_event(source_event))
         self.assertEqual(1, len(job_store.pending(limit=10)))
         notification_store = SQLiteNotificationJobStore(db_path)
-        self.assertTrue(notification_store.enqueue(NotificationJob.create("queued", account_id="main", message_type="test")))
+        self.assertTrue(notification_store.enqueue(NotificationJob.create("queued", account_id="main", message_type="notification")))
         self.assertEqual(1, len(notification_store.pending(limit=10)))
         template_store = SQLiteNotificationTemplateStore(db_path)
         template_store.upsert("test", "테스트 {body}", "테스트", True)
@@ -1357,6 +1381,7 @@ class PythonServiceTests(unittest.TestCase):
             self.assertEqual(1, connection.execute("SELECT COUNT(*) FROM model_review_jobs").fetchone()[0])
             self.assertEqual(1, connection.execute("SELECT COUNT(*) FROM notification_jobs").fetchone()[0])
             self.assertGreaterEqual(connection.execute("SELECT COUNT(*) FROM notification_templates").fetchone()[0], 1)
+            self.assertGreaterEqual(connection.execute("SELECT COUNT(*) FROM notification_rules").fetchone()[0], 1)
             self.assertEqual(2, connection.execute("SELECT COUNT(*) FROM runtime_settings").fetchone()[0])
             self.assertEqual(1, connection.execute("SELECT COUNT(*) FROM app_store").fetchone()[0])
 

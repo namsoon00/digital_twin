@@ -213,6 +213,27 @@ function checkFrontendAdminRender() {
       ],
       variables: ["title", "readableMessage", "dataLines", "triggerSummary", "lines", "rawLines", "body", "messageType"]
     },
+    "/api/notification-rules": {
+      rules: [
+        {
+          messageType: "monitorHeartbeat",
+          enabled: true,
+          threshold: 45,
+          baseScore: 15,
+          lowScoreAction: "suppress",
+          conditions: [
+            { id: "severity_watch", label: "관찰 등급", type: "context_equals", field: "severity", value: "WATCH", terms: [], score: 10, enabled: true },
+            { id: "status_noise", label: "상태성 노이즈", type: "text_contains_any", field: "", value: "", terms: ["정상 작동", "시세 대기"], score: -25, enabled: true }
+          ],
+          updatedAt: "2026-07-01T00:00:00.000Z"
+        }
+      ],
+      conditionTypes: [
+        { type: "text_contains_any", label: "메시지에 단어 포함" },
+        { type: "context_equals", label: "컨텍스트 값 일치" }
+      ],
+      defaultThreshold: 45
+    },
     "/api/notification-schedules": {
       generatedAt: "2026-07-01T00:00:00.000Z",
       schedules: [
@@ -554,6 +575,10 @@ function checkFrontendAdminRender() {
     assertOk(notificationHtml.indexOf("notification-template-row") >= 0, "알림 템플릿 편집기가 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("admin-message-template") >= 0, "알림 타입 행 안에 템플릿 편집기가 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("notification-template-preview") >= 0, "알림 템플릿 미리보기가 렌더링되지 않았습니다.");
+    assertOk(notificationHtml.indexOf("notification-rule-editor") >= 0, "꿀점수 룰 편집기가 렌더링되지 않았습니다.");
+    assertOk(notificationHtml.indexOf("최소 꿀점수") >= 0, "꿀점수 기준 입력이 렌더링되지 않았습니다.");
+    assertOk(notificationHtml.indexOf("data-notification-rule-condition-value") >= 0, "꿀점수 조건 값 편집 입력이 없습니다.");
+    assertOk(notificationHtml.indexOf("data-rule-save=\"monitorHeartbeat\"") >= 0, "알림 타입별 룰 저장 버튼이 없습니다.");
     assertOk(notificationHtml.indexOf("시스템 템플릿") >= 0, "시스템 템플릿 섹션이 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("settings-api-grid") >= 0, "설정 API 상태 요약이 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("Client ID 설정됨") >= 0, "설정 화면에 토스 Client ID 상태가 표시되지 않습니다.");
@@ -865,6 +890,36 @@ async function checkNormalMode(port, context) {
   assertOk(savedTemplatePayload.template.template.indexOf("{rawLines}") >= 0, "저장된 알림 템플릿 응답이 맞지 않습니다.");
   const eventStatusAfterTemplate = JSON.parse((await request(port, "/api/realtime/status")).body);
   assertOk(eventStatusAfterTemplate.events["notification_template.updated"] >= 1, "알림 템플릿 저장 이벤트가 이벤트 로그에 없습니다.");
+
+  const rules = await request(port, "/api/notification-rules");
+  assertOk(rules.statusCode === 200, "알림 룰 API 응답 코드가 200이 아닙니다: " + rules.statusCode);
+  const rulesPayload = JSON.parse(rules.body);
+  assertOk(Array.isArray(rulesPayload.rules), "알림 룰 API rules가 배열이 아닙니다.");
+  assertOk(rulesPayload.rules.some(function (item) { return item.messageType === "monitorHeartbeat"; }), "상태 확인 꿀점수 룰이 없습니다.");
+  assertOk(Array.isArray(rulesPayload.conditionTypes) && rulesPayload.conditionTypes.length, "알림 룰 조건 타입 목록이 없습니다.");
+
+  const savedRule = await request(port, "/api/notification-rules", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      messageType: "monitorHeartbeat",
+      enabled: true,
+      threshold: 40,
+      baseScore: 20,
+      lowScoreAction: "suppress",
+      conditions: [
+        { id: "severity_watch", label: "관찰 등급", type: "context_equals", field: "severity", value: "WATCH", terms: [], score: 12, enabled: true }
+      ]
+    })
+  });
+  assertOk(savedRule.statusCode === 200, "알림 룰 저장 API 응답 코드가 200이 아닙니다: " + savedRule.statusCode);
+  const savedRulePayload = JSON.parse(savedRule.body);
+  assertOk(savedRulePayload.rule.threshold === 40, "저장된 알림 룰 기준점이 응답에 없습니다.");
+  assertOk(savedRulePayload.rule.conditions[0].score === 12, "저장된 알림 룰 조건 점수가 응답에 없습니다.");
+  const resetRule = await request(port, "/api/notification-rules/monitorHeartbeat", { method: "DELETE" });
+  assertOk(resetRule.statusCode === 200, "알림 룰 초기화 API 응답 코드가 200이 아닙니다: " + resetRule.statusCode);
+  const eventStatusAfterRule = JSON.parse((await request(port, "/api/realtime/status")).body);
+  assertOk(eventStatusAfterRule.events["notification_rule.updated"] >= 2, "알림 룰 저장 이벤트가 이벤트 로그에 없습니다.");
 
   const emptyAccounts = await request(port, "/api/service-accounts");
   assertOk(emptyAccounts.statusCode === 200, "계정 DB API 응답 코드가 200이 아닙니다: " + emptyAccounts.statusCode);

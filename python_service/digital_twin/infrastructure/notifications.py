@@ -123,7 +123,7 @@ class QueueingNotifier:
         if not job.text:
             return NotificationResult(False, self.label, "empty notification text")
         if not self.queue.enqueue(job):
-            return NotificationResult(False, self.label, "notification queue enqueue failed")
+            return NotificationResult(False, self.label, job.last_error or "notification queue enqueue failed")
         return NotificationResult(True, self.label, "queued=1", queued=1)
 
 

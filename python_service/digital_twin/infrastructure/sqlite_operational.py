@@ -7,6 +7,7 @@ from typing import Dict, Iterable, List, Optional
 
 from ..domain.events import DomainEvent, MONITORING_ALERTS_DETECTED
 from ..domain.model_review import ModelReviewJob
+from ..domain.notification_rules import DEFAULT_NOTIFICATION_RULES, NotificationRuleConfig, default_notification_rule, evaluate_notification_rule
 from ..domain.notification_templates import DEFAULT_NOTIFICATION_TEMPLATES, LEGACY_DEFAULT_TEMPLATE, NotificationTemplate, render_notification
 from ..domain.notifications import NotificationJob
 from ..domain.portfolio import AccountSnapshot, AlertEvent
@@ -133,6 +134,17 @@ class OperationalConnection:
                     template TEXT NOT NULL,
                     description TEXT NOT NULL DEFAULT '',
                     enabled INTEGER NOT NULL DEFAULT 1,
+                    updated_at TEXT NOT NULL
+                )
+            """)
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS notification_rules (
+                    message_type TEXT PRIMARY KEY,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    threshold INTEGER NOT NULL DEFAULT 45,
+                    base_score INTEGER NOT NULL DEFAULT 25,
+                    low_score_action TEXT NOT NULL DEFAULT 'suppress',
+                    conditions_json TEXT NOT NULL DEFAULT '[]',
                     updated_at TEXT NOT NULL
                 )
             """)
@@ -289,6 +301,113 @@ class SQLiteNotificationTemplateStore(OperationalConnection):
         context.setdefault("accountId", job.account_id)
         context.setdefault("accountLabel", job.account_label)
         return self.render(job.message_type, context)
+
+
+class SQLiteNotificationRuleStore(OperationalConnection):
+    def __init__(self, path: Optional[Path] = None):
+        super().__init__(path)
+        self.seed_defaults()
+
+    def seed_defaults(self) -> None:
+        stamp = utc_now()
+        with self.connect() as connection:
+            for message_type, rule in DEFAULT_NOTIFICATION_RULES.items():
+                connection.execute(
+                    """
+                    INSERT OR IGNORE INTO notification_rules (
+                        message_type, enabled, threshold, base_score, low_score_action, conditions_json, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        message_type,
+                        1 if rule.enabled else 0,
+                        int(rule.threshold),
+                        int(rule.base_score),
+                        rule.low_score_action,
+                        json_dumps([condition.to_dict() for condition in rule.conditions]),
+                        stamp,
+                    ),
+                )
+
+    def row_to_rule(self, row) -> NotificationRuleConfig:
+        try:
+            conditions = json.loads(row["conditions_json"] or "[]")
+        except json.JSONDecodeError:
+            conditions = []
+        return NotificationRuleConfig.from_dict({
+            "messageType": row["message_type"],
+            "enabled": bool(row["enabled"]),
+            "threshold": row["threshold"],
+            "baseScore": row["base_score"],
+            "lowScoreAction": row["low_score_action"],
+            "conditions": conditions if isinstance(conditions, list) else [],
+            "updatedAt": row["updated_at"],
+        })
+
+    def list(self) -> List[NotificationRuleConfig]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT message_type, enabled, threshold, base_score, low_score_action, conditions_json, updated_at
+                FROM notification_rules
+                ORDER BY message_type
+                """
+            ).fetchall()
+        return [self.row_to_rule(row) for row in rows]
+
+    def get(self, message_type: str) -> NotificationRuleConfig:
+        key = str(message_type or "notification").strip() or "notification"
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT message_type, enabled, threshold, base_score, low_score_action, conditions_json, updated_at
+                FROM notification_rules
+                WHERE message_type = ?
+                """,
+                (key,),
+            ).fetchone()
+        return self.row_to_rule(row) if row else default_notification_rule(key)
+
+    def upsert(self, rule: NotificationRuleConfig) -> NotificationRuleConfig:
+        normalized = NotificationRuleConfig.from_dict(rule.to_dict() if isinstance(rule, NotificationRuleConfig) else dict(rule or {}))
+        key = str(normalized.message_type or "").strip()
+        if not key:
+            raise ValueError("message_type is required")
+        normalized.message_type = key
+        normalized.updated_at = utc_now()
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO notification_rules (
+                    message_type, enabled, threshold, base_score, low_score_action, conditions_json, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(message_type) DO UPDATE SET
+                    enabled = excluded.enabled,
+                    threshold = excluded.threshold,
+                    base_score = excluded.base_score,
+                    low_score_action = excluded.low_score_action,
+                    conditions_json = excluded.conditions_json,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    normalized.message_type,
+                    1 if normalized.enabled else 0,
+                    int(normalized.threshold),
+                    int(normalized.base_score),
+                    normalized.low_score_action,
+                    json_dumps([condition.to_dict() for condition in normalized.conditions]),
+                    normalized.updated_at,
+                ),
+            )
+        return self.get(key)
+
+    def reset(self, message_type: str) -> NotificationRuleConfig:
+        return self.upsert(default_notification_rule(str(message_type or "notification").strip() or "notification"))
+
+    def evaluate_job(self, job: NotificationJob):
+        return evaluate_notification_rule(job, self.get(job.message_type))
 
 
 class SQLiteAppStore(OperationalConnection):
@@ -1040,6 +1159,20 @@ class SQLiteNotificationJobStore(OperationalConnection):
                 ).fetchone()
                 if existing:
                     return False
+
+        decision = SQLiteNotificationRuleStore(self.path).evaluate_job(job)
+        context = dict(job.context or {})
+        context.update(decision.to_context())
+        job.context = context
+        if not decision.should_send:
+            job.status = "suppressed"
+            job.updated_at = utc_now()
+            job.last_error = "꿀점수 " + str(decision.score) + "점이 기준 " + str(decision.threshold) + "점보다 낮아 발송하지 않았습니다."
+            with self.connect() as connection:
+                self.upsert_job_with_connection(connection, job)
+            return False
+
+        with self.connect() as connection:
             self.upsert_job_with_connection(connection, job)
         return True
 

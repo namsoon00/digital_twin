@@ -2238,6 +2238,139 @@ h3 {
   line-height: 1.5;
 }
 
+.notification-rule-editor {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+}
+
+.admin-message-rule.notification-rule-editor {
+  grid-column: 2 / -1;
+}
+
+.notification-rule-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: start;
+  min-width: 0;
+}
+
+.notification-rule-head > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.notification-rule-head strong {
+  font-size: 13px;
+}
+
+.notification-rule-head span,
+.notification-rule-condition-main em,
+.notification-rule-score-grid span,
+.notification-rule-condition label > span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.notification-rule-toggle {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.notification-rule-toggle input,
+.notification-rule-condition-main input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--green);
+}
+
+.notification-rule-score-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.notification-rule-score-grid label,
+.notification-rule-condition label {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.notification-rule-score-grid input,
+.notification-rule-score-grid select,
+.notification-rule-condition input,
+.notification-rule-condition textarea {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--input);
+  color: var(--ink);
+  padding: 8px;
+  font: inherit;
+  font-size: 12px;
+}
+
+.notification-rule-condition textarea {
+  resize: vertical;
+  line-height: 1.4;
+}
+
+.notification-rule-condition-list {
+  display: grid;
+  gap: 8px;
+}
+
+.notification-rule-condition {
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) 82px minmax(110px, 0.8fr) minmax(180px, 1.2fr);
+  gap: 8px;
+  align-items: start;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.notification-rule-condition-main {
+  display: flex;
+  gap: 8px;
+  align-items: start;
+  min-width: 0;
+}
+
+.notification-rule-condition-main span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.notification-rule-condition-main strong {
+  color: var(--ink);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.notification-rule-condition-value {
+  grid-column: span 1;
+}
+
 .admin-monitor-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
@@ -3925,6 +4058,11 @@ h3 {
   .admin-message-template.notification-template-row {
     grid-template-columns: 1fr;
   }
+
+  .notification-rule-score-grid,
+  .notification-rule-condition {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 860px) {
@@ -4094,7 +4232,8 @@ h3 {
   }
 
   .admin-message-schedule,
-  .admin-message-template.notification-template-row {
+  .admin-message-template.notification-template-row,
+  .admin-message-rule.notification-rule-editor {
     grid-column: auto;
   }
 

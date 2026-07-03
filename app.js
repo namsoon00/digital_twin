@@ -372,6 +372,12 @@
     notificationTemplatesError: "",
     notificationTemplatesSaved: false,
     notificationTemplateSending: "",
+    notificationRules: [],
+    notificationRuleConditionTypes: [],
+    notificationRulesLoading: false,
+    notificationRulesLoaded: false,
+    notificationRulesError: "",
+    notificationRulesSaved: false,
     messageSchedules: [],
     messageSchedulesLoading: false,
     messageSchedulesError: "",
@@ -494,8 +500,9 @@
       } else if (/^account\./.test(eventType)) {
         tasks.push(loadServiceAccounts());
         tasks.push(load());
-      } else if (/^notification_template\.|^notification\./.test(eventType)) {
+      } else if (/^notification_template\.|^notification_rule\.|^notification\./.test(eventType)) {
         tasks.push(loadNotificationTemplates());
+        tasks.push(loadNotificationRules());
         tasks.push(loadNotificationSchedules());
       } else if (/^symbol_universe\./.test(eventType)) {
         tasks.push(loadSymbolUniverse());
@@ -832,6 +839,87 @@
     });
   }
 
+  function defaultNotificationRuleConditionTypes() {
+    return [
+      { type: "text_contains_any", label: "메시지에 단어 포함" },
+      { type: "context_contains_any", label: "컨텍스트 필드에 단어 포함" },
+      { type: "context_equals", label: "컨텍스트 값 일치" },
+      { type: "context_present", label: "컨텍스트 값 존재" },
+      { type: "context_number_gte", label: "컨텍스트 숫자 이상" },
+      { type: "context_number_lte", label: "컨텍스트 숫자 이하" },
+      { type: "always", label: "항상 적용" }
+    ];
+  }
+
+  function defaultNotificationRuleConditions() {
+    return [
+      { id: "severity_alert", label: "주의 등급", type: "context_equals", field: "severity", value: "ALERT", terms: [], score: 25, enabled: true },
+      { id: "severity_watch", label: "관찰 등급", type: "context_equals", field: "severity", value: "WATCH", terms: [], score: 10, enabled: true },
+      { id: "has_symbol", label: "종목 지정", type: "context_present", field: "symbol", value: "", terms: [], score: 10, enabled: true },
+      {
+        id: "important_terms",
+        label: "핵심 투자 단어",
+        type: "text_contains_any",
+        field: "",
+        value: "",
+        terms: ["판단 변화", "모델 매수", "모델 매도", "손익률 급변", "평가액 급변", "보유 수량 변경", "새 보유", "이동평균", "신규 공시", "가격 변동", "크립토 변동", "거시 지표", "손절", "분할매도", "리스크"],
+        score: 15,
+        enabled: true
+      },
+      { id: "confirming_data", label: "확인 데이터 포함", type: "text_contains_any", field: "", value: "", terms: ["수급", "거래량", "투자자", "추세", "20일선", "60일선", "외국인", "기관"], score: 10, enabled: true },
+      { id: "actionable_terms", label: "행동 필요 표현", type: "text_contains_any", field: "", value: "", terms: ["확인", "재확인", "점검", "기준", "후보", "검토"], score: 10, enabled: true },
+      { id: "body_present", label: "본문 있음", type: "context_present", field: "body", value: "", terms: [], score: 5, enabled: true },
+      { id: "status_noise", label: "상태성 노이즈", type: "text_contains_any", field: "", value: "", terms: ["정상 작동", "시세 대기", "현재가를 아직", "연결 확인 필요", "템플릿 테스트"], score: -25, enabled: true }
+    ];
+  }
+
+  function defaultNotificationRuleBaseScore(messageType) {
+    var type = String(messageType || "");
+    var systemTypes = ["default", "modelReview", "workHandoff", "notification"];
+    var highSignalTypes = [
+      "modelBuy", "modelSell", "holdingTiming", "monitorPositionChange", "monitorPnlChange", "monitorValueChange",
+      "monitorTrendChange", "monitorCashChange", "monitorDecisionChange", "externalEquityMove", "externalCryptoMove",
+      "externalMacroShift", "externalDartDisclosure"
+    ];
+    var lowSignalTypes = ["monitorHeartbeat", "watchlistQuotePending", "externalDataConnection"];
+    if (systemTypes.indexOf(type) >= 0) return 85;
+    if (highSignalTypes.indexOf(type) >= 0) return 35;
+    if (lowSignalTypes.indexOf(type) >= 0) return 15;
+    return 25;
+  }
+
+  function defaultNotificationRule(messageType) {
+    var type = String(messageType || "notification").trim() || "notification";
+    var systemTypes = ["default", "modelReview", "workHandoff", "notification"];
+    return {
+      messageType: type,
+      enabled: true,
+      threshold: systemTypes.indexOf(type) >= 0 ? 20 : 45,
+      baseScore: defaultNotificationRuleBaseScore(type),
+      lowScoreAction: "suppress",
+      conditions: defaultNotificationRuleConditions().map(function (condition) {
+        return Object.assign({}, condition, { terms: (condition.terms || []).slice() });
+      }),
+      updatedAt: ""
+    };
+  }
+
+  function defaultNotificationRules() {
+    var seen = {};
+    var keys = [];
+    defaultNotificationTemplates().forEach(function (item) {
+      keys.push(item.messageType);
+    });
+    alertRuleCatalog.forEach(function (rule) {
+      keys.push(rule.key);
+    });
+    return keys.filter(function (key) {
+      if (!key || seen[key]) return false;
+      seen[key] = true;
+      return true;
+    }).map(defaultNotificationRule);
+  }
+
   function applyNotificationTemplates(payload) {
     state.notificationTemplates = Array.isArray(payload.templates) && payload.templates.length
       ? payload.templates
@@ -862,6 +950,41 @@
       })
       .finally(function () {
         state.notificationTemplatesLoading = false;
+        if (state.snapshot) render();
+      });
+  }
+
+  function applyNotificationRules(payload) {
+    state.notificationRules = Array.isArray(payload.rules) && payload.rules.length
+      ? payload.rules
+      : defaultNotificationRules();
+    state.notificationRuleConditionTypes = Array.isArray(payload.conditionTypes) && payload.conditionTypes.length
+      ? payload.conditionTypes
+      : defaultNotificationRuleConditionTypes();
+    state.notificationRulesLoaded = true;
+    state.notificationRulesLoading = false;
+    state.notificationRulesError = "";
+  }
+
+  function loadNotificationRules() {
+    state.notificationRulesLoading = true;
+    state.notificationRulesError = "";
+    if (isStaticPreviewHost()) {
+      applyNotificationRules({ rules: defaultNotificationRules(), conditionTypes: defaultNotificationRuleConditionTypes() });
+      state.notificationRulesLoading = false;
+      return Promise.resolve();
+    }
+    return requestJson("/api/notification-rules")
+      .then(function (payload) {
+        applyNotificationRules(payload);
+      })
+      .catch(function (error) {
+        state.notificationRulesError = error.message || "알림 룰을 읽지 못했습니다.";
+        state.notificationRules = defaultNotificationRules();
+        state.notificationRuleConditionTypes = defaultNotificationRuleConditionTypes();
+      })
+      .finally(function () {
+        state.notificationRulesLoading = false;
         if (state.snapshot) render();
       });
   }
@@ -929,6 +1052,99 @@
     return state.notificationTemplateVariables.length
       ? state.notificationTemplateVariables
       : ["title", "readableMessage", "dataLines", "triggerSummary", "lines", "rawLines", "body", "messageType", "symbol", "severity"];
+  }
+
+  function clampInteger(value, min, max, fallback) {
+    var parsed = parseInt(String(value === 0 ? "0" : value || "").replace(/,/g, ""), 10);
+    if (!Number.isFinite(parsed)) parsed = fallback;
+    return Math.max(min, Math.min(max, parsed));
+  }
+
+  function notificationRuleByType(messageType) {
+    return (state.notificationRules || []).filter(function (item) {
+      return item.messageType === messageType;
+    })[0] || null;
+  }
+
+  function normalizeNotificationRule(rule) {
+    var normalized = Object.assign(defaultNotificationRule(rule && rule.messageType), rule || {});
+    normalized.threshold = clampInteger(normalized.threshold, 0, 100, 45);
+    normalized.baseScore = clampInteger(normalized.baseScore, 0, 100, defaultNotificationRuleBaseScore(normalized.messageType));
+    normalized.enabled = normalized.enabled !== false;
+    normalized.lowScoreAction = normalized.lowScoreAction || "suppress";
+    normalized.conditions = Array.isArray(normalized.conditions) && normalized.conditions.length
+      ? normalized.conditions.map(function (condition) {
+        return Object.assign({
+          id: "",
+          label: "",
+          type: "text_contains_any",
+          field: "",
+          value: "",
+          terms: [],
+          score: 0,
+          enabled: true
+        }, condition, {
+          terms: Array.isArray(condition.terms) ? condition.terms.slice() : String(condition.terms || "").split(",").map(function (term) { return term.trim(); }).filter(Boolean),
+          score: clampInteger(condition.score, -100, 100, 0),
+          enabled: condition.enabled !== false
+        });
+      })
+      : defaultNotificationRuleConditions();
+    return normalized;
+  }
+
+  function notificationRuleForEdit(messageType) {
+    return normalizeNotificationRule(notificationRuleByType(messageType) || defaultNotificationRule(messageType));
+  }
+
+  function ensureNotificationRule(messageType) {
+    var existing = notificationRuleByType(messageType);
+    if (existing) return existing;
+    existing = defaultNotificationRule(messageType);
+    state.notificationRules = (state.notificationRules || []).concat(existing);
+    return existing;
+  }
+
+  function notificationRuleCondition(rule, conditionId) {
+    return (rule.conditions || []).filter(function (condition) {
+      return condition.id === conditionId;
+    })[0] || null;
+  }
+
+  function updateNotificationRuleField(messageType, field, value) {
+    var rule = ensureNotificationRule(messageType);
+    if (field === "enabled") {
+      rule.enabled = Boolean(value);
+    } else if (field === "threshold") {
+      rule.threshold = clampInteger(value, 0, 100, 45);
+    } else if (field === "baseScore") {
+      rule.baseScore = clampInteger(value, 0, 100, defaultNotificationRuleBaseScore(messageType));
+    } else if (field === "lowScoreAction") {
+      rule.lowScoreAction = String(value || "suppress");
+    }
+    state.notificationRulesSaved = false;
+    state.notificationRulesError = "";
+  }
+
+  function updateNotificationRuleCondition(messageType, conditionId, field, value) {
+    var rule = ensureNotificationRule(messageType);
+    var condition = notificationRuleCondition(rule, conditionId);
+    if (!condition) return;
+    if (field === "enabled") {
+      condition.enabled = Boolean(value);
+    } else if (field === "score") {
+      condition.score = clampInteger(value, -100, 100, 0);
+    } else if (field === "field") {
+      condition.field = String(value || "").trim();
+    } else if (field === "value") {
+      if (condition.type === "text_contains_any" || condition.type === "context_contains_any") {
+        condition.terms = String(value || "").split(",").map(function (term) { return term.trim(); }).filter(Boolean);
+      } else {
+        condition.value = String(value || "");
+      }
+    }
+    state.notificationRulesSaved = false;
+    state.notificationRulesError = "";
   }
 
   function updateNotificationTemplate(messageType, value) {
@@ -1221,6 +1437,74 @@
       });
   }
 
+  function saveNotificationRule(messageType) {
+    if (isStaticPreviewHost() || state.serverSettingsLocked) {
+      state.notificationRulesError = "공유 모드에서는 알림 룰을 변경할 수 없습니다.";
+      render();
+      return Promise.resolve();
+    }
+    var item = normalizeNotificationRule(ensureNotificationRule(messageType));
+    state.notificationRulesLoading = true;
+    state.notificationRulesError = "";
+    render();
+    return sendJson("/api/notification-rules", "PUT", item)
+      .then(function (payload) {
+        var saved = payload.rule || item;
+        state.notificationRules = (state.notificationRules || []).map(function (current) {
+          return current.messageType === saved.messageType ? saved : current;
+        });
+        if (!notificationRuleByType(saved.messageType)) {
+          state.notificationRules = (state.notificationRules || []).concat(saved);
+        }
+        state.notificationRulesSaved = true;
+        showSnackbar("알림 룰을 저장했습니다.");
+      })
+      .catch(function (error) {
+        state.notificationRulesError = error.message || "알림 룰을 저장하지 못했습니다.";
+        showSnackbar(state.notificationRulesError, "danger");
+      })
+      .finally(function () {
+        state.notificationRulesLoading = false;
+        render();
+      });
+  }
+
+  function resetNotificationRule(messageType) {
+    if (isStaticPreviewHost() || state.serverSettingsLocked) {
+      state.notificationRulesError = "공유 모드에서는 알림 룰을 변경할 수 없습니다.";
+      render();
+      return Promise.resolve();
+    }
+    state.notificationRulesLoading = true;
+    state.notificationRulesError = "";
+    render();
+    return sendJson("/api/notification-rules/" + encodeURIComponent(messageType), "DELETE", {})
+      .then(function (payload) {
+        var saved = payload.rule;
+        if (saved) {
+          var replaced = false;
+          state.notificationRules = (state.notificationRules || []).map(function (current) {
+            if (current.messageType === saved.messageType) {
+              replaced = true;
+              return saved;
+            }
+            return current;
+          });
+          if (!replaced) state.notificationRules = (state.notificationRules || []).concat(saved);
+        }
+        state.notificationRulesSaved = true;
+        showSnackbar("알림 룰을 기본값으로 되돌렸습니다.");
+      })
+      .catch(function (error) {
+        state.notificationRulesError = error.message || "알림 룰을 초기화하지 못했습니다.";
+        showSnackbar(state.notificationRulesError, "danger");
+      })
+      .finally(function () {
+        state.notificationRulesLoading = false;
+        render();
+      });
+  }
+
   function canSendNotificationTemplateTest(messageType) {
     return alertRuleCatalog.some(function (rule) { return rule.key === messageType; });
   }
@@ -1242,7 +1526,11 @@
     return sendJson("/api/notification-templates/test-send", "POST", { messageType: messageType })
       .then(function (payload) {
         var event = payload.event || {};
-        showSnackbar("알림 발송 요청을 큐에 적재했습니다: " + (event.title || notificationTemplateLabel(messageType)));
+        if (payload.suppressed) {
+          showSnackbar("꿀점수 " + (payload.score || 0) + "/" + (payload.threshold || 0) + "점으로 발송하지 않았습니다.", "danger");
+        } else {
+          showSnackbar("알림 발송 요청을 큐에 적재했습니다: " + (event.title || notificationTemplateLabel(messageType)));
+        }
         return loadNotificationSchedules();
       })
       .catch(function (error) {
@@ -4838,6 +5126,8 @@
       '</div>',
       '<div class="settings-body">',
       state.messageSchedulesError ? '<p class="form-error">' + escapeHtml(state.messageSchedulesError) + '</p>' : '',
+      state.notificationRulesError ? '<p class="form-error">' + escapeHtml(state.notificationRulesError) + '</p>' : '',
+      state.notificationRulesSaved ? '<p class="lab-message">알림 룰을 저장했습니다.</p>' : '',
       '<div class="settings-grid admin-delivery-grid">',
       renderSettingField("notifyIntervalMinutes", "기본 알림 주기(분)", "number", "10"),
       renderSettingField("notifyLinkUrl", "알림 링크 URL", "url", "http://127.0.0.1:3000?tab=notifications"),
@@ -4889,6 +5179,7 @@
       renderMessageScheduleSummary(schedule),
       '</div>',
       renderNotificationTemplateRow(template, { inline: true }),
+      renderNotificationRuleEditor(rule.key, { inline: true }),
       '</div>'
     ].join("");
   }
@@ -4958,6 +5249,73 @@
     ].join("");
   }
 
+  function notificationRuleConditionTypeLabel(type) {
+    var found = (state.notificationRuleConditionTypes || []).filter(function (item) {
+      return item.type === type;
+    })[0];
+    return found ? found.label : type;
+  }
+
+  function notificationRuleConditionValue(condition) {
+    if (condition.type === "text_contains_any" || condition.type === "context_contains_any") {
+      return Array.isArray(condition.terms) ? condition.terms.join(", ") : "";
+    }
+    return String(condition.value || "");
+  }
+
+  function renderNotificationRuleCondition(messageType, condition, disabled) {
+    var conditionId = String(condition.id || "");
+    var fieldNeeded = /^context_/.test(condition.type || "");
+    var valueNeeded = ["context_equals", "context_number_gte", "context_number_lte"].indexOf(condition.type) >= 0;
+    var termsNeeded = condition.type === "text_contains_any" || condition.type === "context_contains_any";
+    return [
+      '<div class="notification-rule-condition">',
+      '<label class="notification-rule-condition-main">',
+      '<input type="checkbox" data-notification-rule-condition-enabled="' + escapeHtml(messageType) + '" data-condition-id="' + escapeHtml(conditionId) + '"' + (condition.enabled !== false ? " checked" : "") + (disabled ? " disabled" : "") + ' />',
+      '<span><strong>' + escapeHtml(condition.label || conditionId) + '</strong><em>' + escapeHtml(notificationRuleConditionTypeLabel(condition.type)) + '</em></span>',
+      '</label>',
+      '<label><span>점수</span><input type="number" min="-100" max="100" step="1" data-notification-rule-condition-score="' + escapeHtml(messageType) + '" data-condition-id="' + escapeHtml(conditionId) + '" value="' + escapeHtml(condition.score) + '"' + (disabled ? " disabled" : "") + ' /></label>',
+      fieldNeeded ? '<label><span>필드</span><input type="text" data-notification-rule-condition-field="' + escapeHtml(messageType) + '" data-condition-id="' + escapeHtml(conditionId) + '" value="' + escapeHtml(condition.field || "") + '"' + (disabled ? " disabled" : "") + ' /></label>' : '',
+      termsNeeded ? '<label class="notification-rule-condition-value"><span>단어</span><textarea rows="2" data-notification-rule-condition-value="' + escapeHtml(messageType) + '" data-condition-id="' + escapeHtml(conditionId) + '"' + (disabled ? " disabled" : "") + '>' + escapeHtml(notificationRuleConditionValue(condition)) + '</textarea></label>' : '',
+      valueNeeded ? '<label class="notification-rule-condition-value"><span>값</span><input type="text" data-notification-rule-condition-value="' + escapeHtml(messageType) + '" data-condition-id="' + escapeHtml(conditionId) + '" value="' + escapeHtml(notificationRuleConditionValue(condition)) + '"' + (disabled ? " disabled" : "") + ' /></label>' : '',
+      '</div>'
+    ].join("");
+  }
+
+  function renderNotificationRuleEditor(messageType, options) {
+    options = options || {};
+    var rule = notificationRuleForEdit(messageType);
+    var disabled = state.serverSettingsLocked || isStaticPreviewHost();
+    var summary = rule.enabled === false
+      ? "룰 꺼짐 · 점수만 기록하지 않고 그대로 보냅니다."
+      : "꿀점수 " + rule.threshold + "점 이상이면 발송합니다.";
+    return [
+      '<div class="notification-rule-editor' + (options.inline ? " admin-message-rule" : "") + '">',
+      '<div class="notification-rule-head">',
+      '<div><strong>꿀점수 룰</strong><span>' + escapeHtml(summary) + '</span></div>',
+      '<label class="notification-rule-toggle"><input type="checkbox" data-notification-rule-enabled="' + escapeHtml(messageType) + '"' + (rule.enabled !== false ? " checked" : "") + (disabled ? " disabled" : "") + ' /> 적용</label>',
+      '</div>',
+      '<div class="notification-rule-score-grid">',
+      '<label><span>최소 꿀점수</span><input type="number" min="0" max="100" step="1" data-notification-rule-number="' + escapeHtml(messageType) + '" data-rule-field="threshold" value="' + escapeHtml(rule.threshold) + '"' + (disabled ? " disabled" : "") + ' /></label>',
+      '<label><span>기본점수</span><input type="number" min="0" max="100" step="1" data-notification-rule-number="' + escapeHtml(messageType) + '" data-rule-field="baseScore" value="' + escapeHtml(rule.baseScore) + '"' + (disabled ? " disabled" : "") + ' /></label>',
+      '<label><span>낮은 점수 처리</span><select data-notification-rule-action="' + escapeHtml(messageType) + '"' + (disabled ? " disabled" : "") + '>',
+      '<option value="suppress"' + (rule.lowScoreAction === "suppress" ? " selected" : "") + '>발송 안 함</option>',
+      '<option value="tag_only"' + (rule.lowScoreAction === "tag_only" ? " selected" : "") + '>점수만 기록</option>',
+      '</select></label>',
+      '</div>',
+      '<div class="notification-rule-condition-list">',
+      (rule.conditions || []).map(function (condition) {
+        return renderNotificationRuleCondition(messageType, condition, disabled);
+      }).join(""),
+      '</div>',
+      '<div class="settings-actions">',
+      '<button class="text-button primary" data-rule-save="' + escapeHtml(messageType) + '"' + (disabled || state.notificationRulesLoading ? ' disabled' : '') + '>룰 저장</button>',
+      '<button class="text-button" data-rule-reset="' + escapeHtml(messageType) + '"' + (disabled || state.notificationRulesLoading ? ' disabled' : '') + '>기본값</button>',
+      '</div>',
+      '</div>'
+    ].join("");
+  }
+
   function renderNotificationTemplatePanel() {
     var templates = (state.notificationTemplates.length ? state.notificationTemplates : defaultNotificationTemplates()).filter(function (item) {
       return !isAlertTemplateType(item.messageType);
@@ -5005,6 +5363,7 @@
       '<strong>미리보기</strong>',
       '<pre data-template-preview="' + escapeHtml(item.messageType || "") + '">' + escapeHtml(preview) + '</pre>',
       '</div>',
+      options.inline ? '' : renderNotificationRuleEditor(item.messageType || "", { inline: true }),
       '</div>'
     ].join("");
   }
@@ -7375,6 +7734,86 @@
       });
     });
 
+    Array.prototype.slice.call(app.querySelectorAll("[data-notification-rule-enabled]")).forEach(function (field) {
+      field.addEventListener("change", function () {
+        updateNotificationRuleField(field.getAttribute("data-notification-rule-enabled"), "enabled", field.checked);
+        render();
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-notification-rule-number]")).forEach(function (field) {
+      field.addEventListener("change", function () {
+        updateNotificationRuleField(
+          field.getAttribute("data-notification-rule-number"),
+          field.getAttribute("data-rule-field"),
+          field.value
+        );
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-notification-rule-action]")).forEach(function (field) {
+      field.addEventListener("change", function () {
+        updateNotificationRuleField(field.getAttribute("data-notification-rule-action"), "lowScoreAction", field.value);
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-notification-rule-condition-enabled]")).forEach(function (field) {
+      field.addEventListener("change", function () {
+        updateNotificationRuleCondition(
+          field.getAttribute("data-notification-rule-condition-enabled"),
+          field.getAttribute("data-condition-id"),
+          "enabled",
+          field.checked
+        );
+        render();
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-notification-rule-condition-score]")).forEach(function (field) {
+      field.addEventListener("change", function () {
+        updateNotificationRuleCondition(
+          field.getAttribute("data-notification-rule-condition-score"),
+          field.getAttribute("data-condition-id"),
+          "score",
+          field.value
+        );
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-notification-rule-condition-field]")).forEach(function (field) {
+      field.addEventListener("change", function () {
+        updateNotificationRuleCondition(
+          field.getAttribute("data-notification-rule-condition-field"),
+          field.getAttribute("data-condition-id"),
+          "field",
+          field.value
+        );
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-notification-rule-condition-value]")).forEach(function (field) {
+      field.addEventListener("change", function () {
+        updateNotificationRuleCondition(
+          field.getAttribute("data-notification-rule-condition-value"),
+          field.getAttribute("data-condition-id"),
+          "value",
+          field.value
+        );
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-rule-save]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        saveNotificationRule(button.getAttribute("data-rule-save"));
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-rule-reset]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        resetNotificationRule(button.getAttribute("data-rule-reset"));
+      });
+    });
+
     var saveModelVersionButton = app.querySelector('[data-action="save-model-version"]');
     if (saveModelVersionButton) {
       saveModelVersionButton.addEventListener("click", function () {
@@ -7639,7 +8078,7 @@
 
   applyAppTheme();
   connectRealtime();
-  Promise.all([loadServerSettings(), loadServiceAccounts(), loadNotificationTemplates(), loadNotificationSchedules(), loadSymbolUniverse()]).finally(function () {
+  Promise.all([loadServerSettings(), loadServiceAccounts(), loadNotificationTemplates(), loadNotificationRules(), loadNotificationSchedules(), loadSymbolUniverse()]).finally(function () {
     load();
   });
 }());

@@ -191,7 +191,9 @@ function checkFrontendAdminRender() {
       settings: {
         tossApiBaseUrl: "https://openapi.tossinvest.com",
         notifyProvider: "telegram",
-        notifyLinkUrl: "http://127.0.0.1:3000?tab=notifications"
+        notifyLinkUrl: "http://127.0.0.1:3000?tab=notifications",
+        valuationAssumptions: "005930,6500,12,20\nNVDA,4.2,45,15",
+        marketSignalInputs: "005930,118,1.8,620000,480000,18,2.1,71000,68000,14500000000,8200000000,-11200000000\nNVDA,132,2.3,780000,520000,22,3.5,174,159,11800000,7400000,-9300000"
       },
       configured: {
         tossClientId: true,
@@ -722,6 +724,10 @@ function checkFrontendAdminRender() {
     assertOk(modelingHtml.indexOf("처음 보는 사람용 쉬운 설명") >= 0, "초보자용 쉬운 설명 패널이 렌더링되지 않았습니다.");
     assertOk(modelingHtml.indexOf("실제 데이터 예시") >= 0, "실제 데이터 예시 설명이 렌더링되지 않았습니다.");
     assertOk(modelingHtml.indexOf("쉬운 해석") >= 0, "종목별 쉬운 해석이 렌더링되지 않았습니다.");
+    assertOk(modelingHtml.indexOf("strategy-data-panel") >= 0, "전략 데이터 점검 패널이 렌더링되지 않았습니다.");
+    assertOk(modelingHtml.indexOf("전략 데이터 점검") >= 0, "전략 데이터 점검 제목이 렌더링되지 않았습니다.");
+    assertOk(modelingHtml.indexOf("체결강도") >= 0, "전략 데이터 점검에 체결강도 항목이 없습니다.");
+    assertOk(modelingHtml.indexOf("모델-알림 기준") >= 0, "전략 데이터 점검에 모델-알림 기준 항목이 없습니다.");
     assertOk(modelingHtml.indexOf("admin-modeling-panel") >= 0, "모델링 설정 패널이 렌더링되지 않았습니다.");
     assertOk(modelingHtml.indexOf("투자전략 판단 기준 관리") >= 0, "투자전략 판단 기준 제목이 렌더링되지 않았습니다.");
     assertOk(modelingHtml.indexOf("투자자별 수급") >= 0, "투자자별 수급 feature 설명이 렌더링되지 않았습니다.");
@@ -946,6 +952,8 @@ async function checkNormalMode(port, context) {
   assertOk(settingsPayload.settings.tossClientSecret === "", "설정 API가 secret 원문을 내려주고 있습니다.");
   assertOk(Object.prototype.hasOwnProperty.call(settingsPayload.settings, "alertRules"), "설정 API에 알림 규칙 필드가 없습니다.");
   assertOk(Object.prototype.hasOwnProperty.call(settingsPayload.settings, "modelDecisionThresholds"), "설정 API에 모델 판단 기준 필드가 없습니다.");
+  assertOk(settingsPayload.settings.modelDecisionThresholds.indexOf("modelBuy=74") >= 0, "설정 API의 모델 기본 판단 기준이 비어 있습니다.");
+  assertOk(settingsPayload.settings.alertThresholds.indexOf("modelBuyScore=74") >= 0, "설정 API의 모델 알림 기준이 비어 있습니다.");
   assertOk(Object.prototype.hasOwnProperty.call(settingsPayload.settings, "appTheme"), "설정 API에 화면 테마 필드가 없습니다.");
   assertOk(settingsPayload.settings.watchlistSymbols.indexOf("TSLA") >= 0, "기본 관심 종목에 TSLA가 없습니다.");
   assertOk(settingsPayload.settings.watchlistSymbols.indexOf("AAPL") >= 0, "기본 관심 종목에 AAPL이 없습니다.");
@@ -994,6 +1002,8 @@ async function checkNormalMode(port, context) {
   assertOk(savedSettingsPayload.settings.watchlistSymbols === "TSLA,AAPL,NVDA", "저장된 관심 종목 값이 응답에 없습니다.");
   assertOk(savedSettingsPayload.settings.alertRules.indexOf("priceStop=1") >= 0, "저장된 알림 규칙이 응답에 없습니다.");
   assertOk(savedSettingsPayload.settings.modelDecisionThresholds.indexOf("modelBuy=75") >= 0, "저장된 모델 기준값이 응답에 없습니다.");
+  assertOk(savedSettingsPayload.settings.alertThresholds.indexOf("modelBuyScore=75") >= 0, "모델 매수 기준이 알림 기준으로 동기화되지 않았습니다.");
+  assertOk(savedSettingsPayload.settings.alertThresholds.indexOf("modelSellScore=70") >= 0, "모델 매도 기준이 알림 기준으로 동기화되지 않았습니다.");
   assertOk(savedSettingsPayload.settings.appTheme === "dark", "저장된 화면 테마 값이 응답에 없습니다.");
   assertOk(readSqliteSetting(context.serviceDbPath, "appTheme") === "dark", "화면 테마 설정이 SQLite DB에 저장되지 않았습니다.");
   assertOk(readSqliteSetting(context.serviceDbPath, "notifyProvider") === "telegram", "알림 제공자 설정이 SQLite DB에 저장되지 않았습니다.");

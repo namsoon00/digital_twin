@@ -3045,6 +3045,53 @@ h3 {
   line-height: 1.4;
 }
 
+.strategy-data-grid {
+  display: grid;
+  gap: 10px;
+  padding: 0 16px 16px;
+}
+
+.strategy-data-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(150px, 220px);
+  gap: 12px;
+  align-items: center;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--input);
+}
+
+.strategy-data-main {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.strategy-data-main strong {
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.strategy-data-main span,
+.strategy-data-main em,
+.strategy-data-status b {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 750;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.strategy-data-status {
+  display: grid;
+  justify-items: end;
+  gap: 6px;
+  min-width: 0;
+}
+
 .model-setting-card-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -4440,6 +4487,7 @@ h3 {
   .lab-record-grid,
   .model-guide-grid,
   .model-step-list,
+  .strategy-data-row,
   .model-setting-card-grid,
   .model-number-grid,
   .alert-stat-grid,
@@ -4474,6 +4522,10 @@ h3 {
   .admin-message-template.notification-template-row,
   .admin-message-rule.notification-rule-editor {
     grid-column: auto;
+  }
+
+  .strategy-data-status {
+    justify-items: start;
   }
 
   .service-account-meta {

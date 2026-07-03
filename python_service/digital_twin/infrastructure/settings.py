@@ -72,6 +72,122 @@ SECRET_SETTING_KEYS = [
     "opendartApiKey",
 ]
 
+DEFAULT_BUY_SCORE_FORMULA = (
+    "50 + (executionScore * 0.42 + directionalVolumePressure * 0.9 + buyShareScore * 0.55 "
+    "+ orderbookScore * 0.32 + momentumScore * 0.35 + trendScore * 0.45 "
+    "+ investorFlowScore * 0.35) * flowWeight + undervalueBonus * valuationWeight - expensivePenalty * valuationWeight"
+)
+DEFAULT_SELL_SCORE_FORMULA = (
+    "50 + (-executionScore * 0.38 - directionalVolumePressure * 0.85 - buyShareScore * 0.55 "
+    "- orderbookScore * 0.3 - momentumScore * 0.4 - trendScore * 0.35 "
+    "- investorFlowScore * 0.3) * flowWeight + expensiveBonus * valuationWeight"
+)
+DEFAULT_FORMULA_WEIGHTS = [
+    ("growthWeight", 1),
+    ("qualityWeight", 1),
+    ("riskWeight", 1),
+    ("flowWeight", 1),
+    ("valuationWeight", 1),
+    ("thesisWeight", 0.25),
+    ("confidenceWeight", 0.15),
+    ("riskControlWeight", 0.35),
+]
+DEFAULT_DECISION_THRESHOLDS = [
+    ("buyCandidate", 78),
+    ("chaseCaution", 70),
+    ("strongHold", 72),
+    ("sellTrim", 70),
+    ("riskReduce", 66),
+    ("sellWatch", 64),
+]
+DEFAULT_MODEL_DECISION_THRESHOLDS = [
+    ("modelBuy", 74),
+    ("modelAdd", 70),
+    ("modelSell", 72),
+    ("modelReduce", 64),
+    ("modelHold", 55),
+]
+DEFAULT_ALERT_THRESHOLDS = [
+    ("modelBuyScore", 74),
+    ("modelSellScore", 72),
+    ("modelScoreGap", 15),
+    ("volumeRatioHigh", 2),
+    ("buyShareHigh", 65),
+    ("sellShareHigh", 65),
+    ("orderbookImbalance", 25),
+    ("momentumUp", 3),
+    ("momentumDown", -3),
+    ("profitRateHigh", 20),
+    ("lossRateLow", -8),
+    ("positionWeightHigh", 30),
+    ("sectorWeightHigh", 50),
+    ("marketCashLow", 10),
+    ("recordGain", 10),
+    ("recordLoss", -5),
+    ("priceNearPercent", 1),
+    ("staleMinutes", 30),
+    ("pendingOrderMinutes", 30),
+    ("watchlistPriceDelta", 3),
+    ("monitorPnlDelta", 2),
+    ("monitorValueDelta", 5),
+    ("monitorMaDistance", 8),
+    ("monitorCashDelta", 10),
+    ("monitorExitPressureDelta", 15),
+    ("externalEquityChangePct", 3),
+    ("externalCryptoChange24hPct", 4),
+    ("externalCryptoChange7dPct", 10),
+    ("externalMacroRateDeltaBp", 15),
+]
+
+
+def format_assignment_number(value) -> str:
+    number = float(value or 0)
+    return str(int(number)) if number.is_integer() else str(number).rstrip("0").rstrip(".")
+
+
+def assignment_text(items) -> str:
+    return "\n".join(str(key) + "=" + format_assignment_number(value) for key, value in items)
+
+
+DEFAULT_STRATEGY_SETTINGS = {
+    "fairValueFormula": "eps * targetPer * growthWeight * qualityWeight * riskWeight",
+    "buyScoreFormula": DEFAULT_BUY_SCORE_FORMULA,
+    "sellScoreFormula": DEFAULT_SELL_SCORE_FORMULA,
+    "modelName": "나의 매수/매도 모델",
+    "modelHypothesis": "수급, 가치, 내 점수, 리스크를 함께 봐서 매수 후보와 매도 후보를 분리한다.",
+    "customBuyModelFormula": "buyScore * 0.35 + thesisScore * thesisWeight + confidenceScore * confidenceWeight + max(0, targetReturn) * 0.15 + undervalueBonus * valuationWeight - riskScore * riskControlWeight",
+    "customSellModelFormula": "sellScore * 0.35 + riskScore * riskControlWeight + expensivePenalty * valuationWeight + max(0, -targetReturn) * 0.2 - thesisScore * 0.1",
+    "formulaWeights": assignment_text(DEFAULT_FORMULA_WEIGHTS),
+    "decisionThresholds": assignment_text(DEFAULT_DECISION_THRESHOLDS),
+    "modelDecisionThresholds": assignment_text(DEFAULT_MODEL_DECISION_THRESHOLDS),
+    "alertThresholds": assignment_text(DEFAULT_ALERT_THRESHOLDS),
+}
+
+
+def assignment_defaults(items) -> Dict[str, float]:
+    return {str(key): float(value) for key, value in items}
+
+
+def assignment_text_from_map(values: Dict[str, float], ordered_items) -> str:
+    ordered_keys = [key for key, _value in ordered_items]
+    seen = set()
+    rows = []
+    for key in ordered_keys:
+        if key in values:
+            rows.append((key, values[key]))
+            seen.add(key)
+    for key in sorted(str(key) for key in values.keys() if str(key) not in seen):
+        rows.append((key, values[key]))
+    return assignment_text(rows)
+
+
+def synced_model_alert_thresholds(alert_thresholds: str, model_thresholds: str) -> str:
+    alerts = parse_assignments(alert_thresholds, assignment_defaults(DEFAULT_ALERT_THRESHOLDS))
+    models = parse_assignments(model_thresholds, assignment_defaults(DEFAULT_MODEL_DECISION_THRESHOLDS))
+    alerts["modelBuyScore"] = models.get("modelBuy", alerts.get("modelBuyScore", 0))
+    alerts["modelSellScore"] = models.get("modelSell", alerts.get("modelSellScore", 0))
+    return assignment_text_from_map(alerts, DEFAULT_ALERT_THRESHOLDS)
+
 
 def data_dir() -> Path:
     return Path(os.environ.get("DIGITAL_TWIN_DATA_DIR", str(DEFAULT_DATA_DIR))).resolve()
@@ -163,6 +279,11 @@ def save_runtime_settings(input_settings: Dict[str, object]) -> Dict[str, str]:
     if input_settings.get("clearTelegramCredentials"):
         for key in ["telegramBotToken", "telegramChatId"]:
             next_settings.pop(key, None)
+    if "modelDecisionThresholds" in input_settings:
+        next_settings["alertThresholds"] = synced_model_alert_thresholds(
+            next_settings.get("alertThresholds", ""),
+            next_settings.get("modelDecisionThresholds", ""),
+        )
     next_settings["updatedAt"] = utc_now()
     write_settings_store(next_settings)
     return runtime_settings()
@@ -181,7 +302,7 @@ def runtime_settings() -> Dict[str, str]:
             return env_value
         return fallback
 
-    return {
+    settings = {
         "appTheme": value("appTheme", "APP_THEME", "light"),
         "watchlistSymbols": value("watchlistSymbols", "WATCHLIST_SYMBOLS", "TSLA,AAPL,NVDA,000660"),
         "tossApiBaseUrl": value("tossApiBaseUrl", "TOSS_API_BASE_URL", "https://openapi.tossinvest.com"),
@@ -195,19 +316,19 @@ def runtime_settings() -> Dict[str, str]:
         "notifyIntervalMinutes": value("notifyIntervalMinutes", "NOTIFY_INTERVAL_MINUTES", "10"),
         "valuationAssumptions": value("valuationAssumptions", "VALUATION_ASSUMPTIONS", ""),
         "marketSignalInputs": value("marketSignalInputs", "MARKET_SIGNAL_INPUTS", ""),
-        "fairValueFormula": value("fairValueFormula", "FAIR_VALUE_FORMULA", ""),
+        "fairValueFormula": value("fairValueFormula", "FAIR_VALUE_FORMULA", DEFAULT_STRATEGY_SETTINGS["fairValueFormula"]),
         "alertRules": value("alertRules", "ALERT_RULES"),
-        "alertThresholds": value("alertThresholds", "ALERT_THRESHOLDS"),
+        "alertThresholds": value("alertThresholds", "ALERT_THRESHOLDS", DEFAULT_STRATEGY_SETTINGS["alertThresholds"]),
         "alertCadenceMinutes": value("alertCadenceMinutes", "ALERT_CADENCE_MINUTES"),
-        "buyScoreFormula": value("buyScoreFormula", "BUY_SCORE_FORMULA", ""),
-        "sellScoreFormula": value("sellScoreFormula", "SELL_SCORE_FORMULA", ""),
-        "modelName": value("modelName", "MODEL_NAME", ""),
-        "modelHypothesis": value("modelHypothesis", "MODEL_HYPOTHESIS", ""),
-        "customBuyModelFormula": value("customBuyModelFormula", "CUSTOM_BUY_MODEL_FORMULA", ""),
-        "customSellModelFormula": value("customSellModelFormula", "CUSTOM_SELL_MODEL_FORMULA", ""),
-        "formulaWeights": value("formulaWeights", "FORMULA_WEIGHTS", ""),
-        "decisionThresholds": value("decisionThresholds", "DECISION_THRESHOLDS", ""),
-        "modelDecisionThresholds": value("modelDecisionThresholds", "MODEL_DECISION_THRESHOLDS", ""),
+        "buyScoreFormula": value("buyScoreFormula", "BUY_SCORE_FORMULA", DEFAULT_STRATEGY_SETTINGS["buyScoreFormula"]),
+        "sellScoreFormula": value("sellScoreFormula", "SELL_SCORE_FORMULA", DEFAULT_STRATEGY_SETTINGS["sellScoreFormula"]),
+        "modelName": value("modelName", "MODEL_NAME", DEFAULT_STRATEGY_SETTINGS["modelName"]),
+        "modelHypothesis": value("modelHypothesis", "MODEL_HYPOTHESIS", DEFAULT_STRATEGY_SETTINGS["modelHypothesis"]),
+        "customBuyModelFormula": value("customBuyModelFormula", "CUSTOM_BUY_MODEL_FORMULA", DEFAULT_STRATEGY_SETTINGS["customBuyModelFormula"]),
+        "customSellModelFormula": value("customSellModelFormula", "CUSTOM_SELL_MODEL_FORMULA", DEFAULT_STRATEGY_SETTINGS["customSellModelFormula"]),
+        "formulaWeights": value("formulaWeights", "FORMULA_WEIGHTS", DEFAULT_STRATEGY_SETTINGS["formulaWeights"]),
+        "decisionThresholds": value("decisionThresholds", "DECISION_THRESHOLDS", DEFAULT_STRATEGY_SETTINGS["decisionThresholds"]),
+        "modelDecisionThresholds": value("modelDecisionThresholds", "MODEL_DECISION_THRESHOLDS", DEFAULT_STRATEGY_SETTINGS["modelDecisionThresholds"]),
         "modelTimingScenario": value("modelTimingScenario", "MODEL_TIMING_SCENARIO", "recent-one-year"),
         "modelTimingSymbols": value("modelTimingSymbols", "MODEL_TIMING_SYMBOLS", "NVDA,AAPL,005930,000660,TSLA"),
         "modelReviewCommand": value("modelReviewCommand", "MODEL_REVIEW_COMMAND", ""),
@@ -238,6 +359,11 @@ def runtime_settings() -> Dict[str, str]:
         "opendartApiKey": value("opendartApiKey", "OPENDART_API_KEY"),
         "fxRates": value("fxRates", "FX_RATES", "KRW=1\nUSD=1400"),
     }
+    settings["alertThresholds"] = synced_model_alert_thresholds(
+        settings.get("alertThresholds", ""),
+        settings.get("modelDecisionThresholds", ""),
+    )
+    return settings
 
 
 def currency_rates(settings: Dict[str, str] = None) -> Dict[str, float]:

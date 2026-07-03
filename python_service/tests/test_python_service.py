@@ -1049,12 +1049,43 @@ class PythonServiceTests(unittest.TestCase):
 
         self.assertIn("Apple", message)
         self.assertIn("━━━━━━━━", message)
-        self.assertIn("<b>[관찰] 이동평균 변화</b>", message)
+        self.assertIn("<b>[관찰]</b>", message)
+        self.assertIn("<b>이동평균 변화</b>", message)
         self.assertIn("<code>Apple / AAPL</code>", message)
         self.assertIn("<b>조건</b>", message)
         self.assertIn("<b>데이터</b>", message)
-        self.assertIn("• 신호 20일선 상향 돌파", message)
+        self.assertIn("• <b>신호</b>\n  <code>20일선 상향 돌파</code>", message)
         self.assertNotIn("\n\n\n", message)
+
+    def test_external_equity_alert_uses_mobile_indented_rows(self):
+        db_path = Path(self.temp.name) / "service.db"
+        templates = SQLiteNotificationTemplateStore(db_path)
+        event = AlertEvent(
+            "main",
+            "메인",
+            "ALERT",
+            "externalEquityMove",
+            "main:alpha:TSLA:-7.5",
+            "TSLA",
+            [
+                "미장 가격 변동 -7.5%",
+                "가격 $393.45",
+                "거래량 71,917,610",
+                "기준일 2026-07-02",
+                "출처 Alpha Vantage",
+            ],
+            "TSLA",
+        )
+
+        message = templates.render(event.rule, alert_context(event))
+
+        self.assertIn("<b>[주의]</b>\n<b>미장 가격/거래량</b>\n<code>TSLA</code>", message)
+        self.assertIn("━━━━━━━━━━", message)
+        self.assertNotIn("━━━━━━━━━━━━━━━━━━━━", message)
+        self.assertIn("• <b>미장 가격 변동</b>\n  <code>-7.5%</code>", message)
+        self.assertIn("• <b>가격</b>\n  <code>$393.45</code>", message)
+        self.assertIn("• <b>거래량</b>\n  <code>71,917,610</code>", message)
+        self.assertIn("• <b>출처</b>\n  <code>Alpha Vantage</code>", message)
 
     def test_notification_template_seed_migrates_previous_readable_default(self):
         db_path = Path(self.temp.name) / "service.db"

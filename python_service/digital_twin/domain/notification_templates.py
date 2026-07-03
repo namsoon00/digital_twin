@@ -1,5 +1,6 @@
 import html
 import re
+import textwrap
 from dataclasses import asdict, dataclass
 from typing import Dict, List
 
@@ -10,7 +11,30 @@ LEGACY_DEFAULT_TEMPLATE = "{title}\n{lines}"
 PREVIOUS_DEFAULT_TEMPLATE = "{readableMessage}"
 DEFAULT_TEMPLATE = "{telegramMessage}"
 BODY_TEMPLATE = "{body}"
-MESSAGE_DIVIDER = "━━━━━━━━━━━━━━━━━━━━"
+MESSAGE_DIVIDER = "━━━━━━━━━━"
+MOBILE_WRAP_WIDTH = 24
+DATA_LABEL_PREFIXES = [
+    "미장 가격 변동",
+    "크립토 변동",
+    "모델 매수 점수",
+    "모델 매도 점수",
+    "적정가 대비",
+    "24h 거래액",
+    "현재가",
+    "기준일",
+    "거래량",
+    "거래액",
+    "가격",
+    "출처",
+    "이전",
+    "현재",
+    "변화",
+    "상태",
+    "손익",
+    "평가",
+    "보유",
+    "신호",
+]
 
 MESSAGE_TYPE_LABELS = {
     "modelBuy": "모델 매수",
@@ -154,6 +178,64 @@ DEFAULT_NOTIFICATION_TEMPLATES = {
 PLACEHOLDER_PATTERN = re.compile(r"\{([A-Za-z][A-Za-z0-9_]*)\}")
 
 
+def wrap_mobile_text(text: str, width: int = MOBILE_WRAP_WIDTH) -> List[str]:
+    cleaned = str(text or "").strip()
+    if not cleaned:
+        return []
+    return textwrap.wrap(cleaned, width=width, break_long_words=False, break_on_hyphens=False) or [cleaned]
+
+
+def plain_bullet(text: str) -> str:
+    parts = wrap_mobile_text(text)
+    if not parts:
+        return ""
+    return "• " + parts[0] + ("\n  " + "\n  ".join(parts[1:]) if len(parts) > 1 else "")
+
+
+def html_bullet(text: str) -> str:
+    parts = wrap_mobile_text(text)
+    if not parts:
+        return ""
+    escaped = [html.escape(part, quote=False) for part in parts]
+    return "• " + escaped[0] + ("\n  " + "\n  ".join(escaped[1:]) if len(escaped) > 1 else "")
+
+
+def split_data_line(line: str):
+    text = str(line or "").strip()
+    for label in DATA_LABEL_PREFIXES:
+        prefix = label + " "
+        if text.startswith(prefix):
+            value = text[len(prefix):].strip()
+            if value:
+                return label, value
+    return "", text
+
+
+def plain_data_rows(raw_lines: List[str]) -> str:
+    rows: List[str] = []
+    for line in raw_lines:
+        label, value = split_data_line(line)
+        if label and value:
+            rows.extend(["• " + label, "  " + value])
+        else:
+            rows.append(plain_bullet(line))
+    return "\n".join(row for row in rows if row)
+
+
+def telegram_data_rows(raw_lines: List[str]) -> str:
+    rows: List[str] = []
+    for line in raw_lines:
+        label, value = split_data_line(line)
+        if label and value:
+            rows.extend([
+                "• <b>" + html.escape(label, quote=False) + "</b>",
+                "  <code>" + html.escape(value, quote=False) + "</code>",
+            ])
+        else:
+            rows.append(html_bullet(line))
+    return "\n".join(row for row in rows if row)
+
+
 @dataclass
 class NotificationTemplate:
     message_type: str
@@ -181,7 +263,7 @@ class NotificationTemplate:
 def alert_context(event: AlertEvent) -> Dict[str, object]:
     raw_lines = [str(line).strip() for line in event.lines if str(line).strip()]
     lines = "\n".join(["- " + line for line in raw_lines])
-    bullet_lines = "\n".join(["• " + line for line in raw_lines])
+    bullet_lines = "\n".join([plain_bullet(line) for line in raw_lines])
     message_type_label = MESSAGE_TYPE_LABELS.get(event.rule, event.rule)
     severity_label = SEVERITY_LABELS.get(str(event.severity or "").upper(), event.severity or "")
     trigger_summary = TRIGGER_SUMMARIES.get(event.rule, "설정한 조건이 실제 데이터에서 충족될 때 보냅니다.")
@@ -190,37 +272,44 @@ def alert_context(event: AlertEvent) -> Dict[str, object]:
     type_line = ("유형: " + message_type_label) if message_type_label else ""
     trigger_line = ("발생 조건: " + trigger_summary) if trigger_summary else ""
     data_lines = lines
-    if severity_label and message_type_label:
-        headline = "[" + severity_label + "] " + message_type_label
-    elif message_type_label:
-        headline = message_type_label
-    elif severity_label:
-        headline = "[" + severity_label + "] " + event.title
-    else:
-        headline = event.title
+    status_headline = ("[" + severity_label + "]") if severity_label else ""
+    title_headline = message_type_label or event.title
+    headline = " ".join(part for part in [status_headline, title_headline] if part)
     target_parts = [event.title]
     if event.symbol and event.symbol != event.title:
         target_parts.append(event.symbol)
     target_value = " / ".join(part for part in target_parts if part)
     target_line = "대상: " + target_value if target_value else ""
-    trigger_block = ("조건\n• " + trigger_summary) if trigger_summary else ""
-    data_block = ("데이터\n" + bullet_lines) if bullet_lines else ""
-    readable_parts = [MESSAGE_DIVIDER, headline, target_line, MESSAGE_DIVIDER, "", trigger_block]
-    if bullet_lines:
+    trigger_bullet = plain_bullet(trigger_summary)
+    trigger_block = ("조건\n" + trigger_bullet) if trigger_bullet else ""
+    data_rows = plain_data_rows(raw_lines)
+    data_block = ("데이터\n" + data_rows) if data_rows else ""
+    readable_parts = [
+        MESSAGE_DIVIDER,
+        status_headline,
+        title_headline,
+        target_value,
+        MESSAGE_DIVIDER,
+        "",
+        trigger_block,
+    ]
+    if data_rows:
         readable_parts.extend(["", data_block])
     readable_message = "\n".join(part for part in readable_parts if str(part).strip() or part == "").strip()
-    escaped_headline = html.escape(headline, quote=False)
+    escaped_status = html.escape(status_headline, quote=False)
+    escaped_title = html.escape(title_headline, quote=False)
     escaped_target = html.escape(target_value, quote=False)
-    escaped_trigger = html.escape(trigger_summary, quote=False)
-    telegram_data_lines = "\n".join(["• " + html.escape(line, quote=False) for line in raw_lines])
+    telegram_trigger_bullet = html_bullet(trigger_summary)
+    telegram_data_lines = telegram_data_rows(raw_lines)
     telegram_parts = [
         MESSAGE_DIVIDER,
-        "<b>" + escaped_headline + "</b>",
+        ("<b>" + escaped_status + "</b>") if escaped_status else "",
+        ("<b>" + escaped_title + "</b>") if escaped_title else "",
         ("<code>" + escaped_target + "</code>") if escaped_target else "",
         MESSAGE_DIVIDER,
         "",
         "<b>조건</b>",
-        "• " + escaped_trigger if escaped_trigger else "",
+        telegram_trigger_bullet,
     ]
     if telegram_data_lines:
         telegram_parts.extend(["", "<b>데이터</b>", telegram_data_lines])
@@ -240,6 +329,8 @@ def alert_context(event: AlertEvent) -> Dict[str, object]:
         "messageTypeLabel": message_type_label,
         "triggerSummary": trigger_summary,
         "headline": headline,
+        "statusHeadline": status_headline,
+        "titleHeadline": title_headline,
         "targetLine": target_line,
         "triggerBlock": trigger_block,
         "dataBlock": data_block,
@@ -329,6 +420,8 @@ def template_variables() -> List[str]:
         "messageTypeLabel",
         "triggerSummary",
         "headline",
+        "statusHeadline",
+        "titleHeadline",
         "targetLine",
         "triggerBlock",
         "dataBlock",

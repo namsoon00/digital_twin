@@ -927,7 +927,7 @@
       : defaultNotificationTemplates();
     state.notificationTemplateVariables = Array.isArray(payload.variables) && payload.variables.length
       ? payload.variables
-      : ["title", "telegramMessage", "readableMessage", "dataLines", "telegramDataLines", "triggerSummary", "lines", "rawLines", "body", "messageType", "symbol", "severity"];
+      : ["title", "statusHeadline", "titleHeadline", "telegramMessage", "readableMessage", "dataLines", "telegramDataLines", "triggerSummary", "lines", "rawLines", "body", "messageType", "symbol", "severity"];
     state.notificationTemplatesLoaded = true;
     state.notificationTemplatesLoading = false;
     state.notificationTemplatesError = "";
@@ -1052,7 +1052,7 @@
   function notificationTemplateVariables() {
     return state.notificationTemplateVariables.length
       ? state.notificationTemplateVariables
-      : ["title", "telegramMessage", "readableMessage", "dataLines", "telegramDataLines", "triggerSummary", "lines", "rawLines", "body", "messageType", "symbol", "severity"];
+      : ["title", "statusHeadline", "titleHeadline", "telegramMessage", "readableMessage", "dataLines", "telegramDataLines", "triggerSummary", "lines", "rawLines", "body", "messageType", "symbol", "severity"];
   }
 
   function clampInteger(value, min, max, fallback) {
@@ -1160,6 +1160,94 @@
   }
 
   function notificationTemplatePreviewContext(messageType) {
+    var mobileWrapWidth = 24;
+    var dataLabelPrefixes = [
+      "미장 가격 변동",
+      "크립토 변동",
+      "모델 매수 점수",
+      "모델 매도 점수",
+      "적정가 대비",
+      "24h 거래액",
+      "현재가",
+      "기준일",
+      "거래량",
+      "거래액",
+      "가격",
+      "출처",
+      "이전",
+      "현재",
+      "변화",
+      "상태",
+      "손익",
+      "평가",
+      "보유",
+      "신호"
+    ];
+    function wrapMobileText(text) {
+      var words = String(text || "").trim().split(/\s+/).filter(Boolean);
+      var lines = [];
+      var current = "";
+      words.forEach(function (word) {
+        if (!current) {
+          current = word;
+        } else if ((current + " " + word).length <= mobileWrapWidth) {
+          current += " " + word;
+        } else {
+          lines.push(current);
+          current = word;
+        }
+      });
+      if (current) lines.push(current);
+      return lines.length ? lines : (String(text || "").trim() ? [String(text || "").trim()] : []);
+    }
+    function plainBullet(text) {
+      var parts = wrapMobileText(text);
+      if (!parts.length) return "";
+      return "• " + parts[0] + (parts.length > 1 ? "\n  " + parts.slice(1).join("\n  ") : "");
+    }
+    function htmlBullet(text) {
+      var parts = wrapMobileText(text).map(function (part) { return escapeHtml(part); });
+      if (!parts.length) return "";
+      return "• " + parts[0] + (parts.length > 1 ? "\n  " + parts.slice(1).join("\n  ") : "");
+    }
+    function splitDataLine(line) {
+      var text = String(line || "").trim();
+      for (var index = 0; index < dataLabelPrefixes.length; index += 1) {
+        var label = dataLabelPrefixes[index];
+        var prefix = label + " ";
+        if (text.indexOf(prefix) === 0) {
+          var value = text.slice(prefix.length).trim();
+          if (value) return { label: label, value: value };
+        }
+      }
+      return { label: "", value: text };
+    }
+    function plainDataRows(rawItems) {
+      var rows = [];
+      rawItems.forEach(function (line) {
+        var pair = splitDataLine(line);
+        if (pair.label && pair.value) {
+          rows.push("• " + pair.label);
+          rows.push("  " + pair.value);
+        } else {
+          rows.push(plainBullet(line));
+        }
+      });
+      return rows.filter(Boolean).join("\n");
+    }
+    function htmlDataRows(rawItems) {
+      var rows = [];
+      rawItems.forEach(function (line) {
+        var pair = splitDataLine(line);
+        if (pair.label && pair.value) {
+          rows.push("• <b>" + escapeHtml(pair.label) + "</b>");
+          rows.push("  <code>" + escapeHtml(pair.value) + "</code>");
+        } else {
+          rows.push(htmlBullet(line));
+        }
+      });
+      return rows.filter(Boolean).join("\n");
+    }
     var type = messageType || "monitorHeartbeat";
     var samples = {
       default: {
@@ -1297,8 +1385,9 @@
     };
     var sample = samples[type] || samples.default;
     var rawLines = Array.isArray(sample.lines) ? sample.lines.join("\n") : "";
+    var rawItems = rawLines ? rawLines.split("\n").filter(function (line) { return String(line || "").trim(); }) : [];
     var lines = rawLines ? rawLines.split("\n").map(function (line) { return "- " + line; }).join("\n") : "";
-    var bulletLines = rawLines ? rawLines.split("\n").map(function (line) { return "• " + line; }).join("\n") : "";
+    var bulletLines = rawItems.map(plainBullet).join("\n");
     var rule = alertRuleCatalog.filter(function (item) { return item.key === type; })[0] || {};
     var messageTypeLabel = rule.label || notificationTemplateLabel(type);
     var severityLabel = sample.severity === "ALERT" ? "주의" : sample.severity === "WATCH" ? "관찰" : "정보";
@@ -1308,20 +1397,22 @@
     var triggerSummary = rule.description ? rule.description : "조건이 실제 데이터에서 충족될 때 보냅니다.";
     var triggerLine = triggerSummary ? "발생 조건: " + triggerSummary : "";
     var dataLines = lines;
-    var headline = severityLabel && messageTypeLabel
-      ? "[" + severityLabel + "] " + messageTypeLabel
-      : messageTypeLabel || (severityLabel ? "[" + severityLabel + "] " + sample.title : sample.title);
+    var statusHeadline = severityLabel ? "[" + severityLabel + "]" : "";
+    var titleHeadline = messageTypeLabel || sample.title;
+    var headline = [statusHeadline, titleHeadline].filter(Boolean).join(" ");
     var targetValue = [sample.title, sample.symbol && sample.symbol !== sample.title ? sample.symbol : ""]
       .filter(Boolean)
       .join(" / ");
     var targetLine = targetValue ? "대상: " + targetValue : "";
-    var triggerBlock = triggerSummary ? "조건\n• " + triggerSummary : "";
-    var dataBlock = bulletLines ? "데이터\n" + bulletLines : "";
-    var divider = "━━━━━━━━━━━━━━━━━━━━";
+    var triggerBlock = triggerSummary ? "조건\n" + plainBullet(triggerSummary) : "";
+    var dataRows = plainDataRows(rawItems);
+    var dataBlock = dataRows ? "데이터\n" + dataRows : "";
+    var divider = "━━━━━━━━━━";
     var readableMessage = [
       divider,
-      headline,
-      targetLine,
+      statusHeadline,
+      titleHeadline,
+      targetValue,
       divider,
       "",
       triggerBlock,
@@ -1331,15 +1422,16 @@
       if (line === "") return index > 0 && list[index - 1] !== "";
       return String(line || "").trim();
     }).join("\n").trim();
-    var telegramDataLines = rawLines ? rawLines.split("\n").map(function (line) { return "• " + escapeHtml(line); }).join("\n") : "";
+    var telegramDataLines = htmlDataRows(rawItems);
     var telegramMessage = [
       divider,
-      "<b>" + escapeHtml(headline) + "</b>",
+      statusHeadline ? "<b>" + escapeHtml(statusHeadline) + "</b>" : "",
+      titleHeadline ? "<b>" + escapeHtml(titleHeadline) + "</b>" : "",
       targetValue ? "<code>" + escapeHtml(targetValue) + "</code>" : "",
       divider,
       "",
       "<b>조건</b>",
-      triggerSummary ? "• " + escapeHtml(triggerSummary) : "",
+      htmlBullet(triggerSummary),
       telegramDataLines ? "" : "",
       telegramDataLines ? "<b>데이터</b>" : "",
       telegramDataLines
@@ -1362,6 +1454,8 @@
       messageTypeLabel: messageTypeLabel,
       symbol: sample.symbol || "",
       headline: headline,
+      statusHeadline: statusHeadline,
+      titleHeadline: titleHeadline,
       targetLine: targetLine,
       triggerBlock: triggerBlock,
       dataBlock: dataBlock,

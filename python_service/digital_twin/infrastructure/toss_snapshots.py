@@ -7,11 +7,13 @@ from dataclasses import replace
 from typing import Dict, List, Optional, Tuple
 
 from ..domain.accounts import AccountConfig
-from ..domain.analytics import decisions_for_positions, known_stock, normalize_position, number, portfolio_summary, technical_indicators_from_candles
+from ..domain.market_data import known_stock, normalize_position, number, technical_indicators_from_candles
 from ..domain.portfolio import AccountSnapshot, Position, utc_now_iso
+from ..domain.portfolio_calculations import portfolio_summary
+from ..domain.strategy import decisions_for_positions
 from .external_signals import ExternalSignalProvider
 from .settings import currency_rates
-from .sqlite_operational import SQLiteMarketQuoteCache
+from .sqlite_monitoring import SQLiteMarketQuoteCache
 
 
 def http_json(method: str, url: str, headers: Dict[str, str], body: bytes = None, timeout: int = 12) -> Dict[str, object]:

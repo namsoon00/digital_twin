@@ -3,6 +3,7 @@ import re
 from dataclasses import asdict, dataclass
 from typing import Dict, List
 
+from .message_types import MESSAGE_TYPE_LABELS, TRIGGER_SUMMARIES
 from .portfolio import AlertEvent
 
 
@@ -74,48 +75,6 @@ SEPARATE_DATA_LABELS = {
     "크립토 거래액",
     "평가",
     "보유",
-}
-
-MESSAGE_TYPE_LABELS = {
-    "modelBuy": "모델 매수",
-    "modelSell": "모델 매도",
-    "watchlistQuote": "관심종목 시세",
-    "watchlistQuotePending": "관심종목 시세 대기",
-    "holdingTiming": "보유 타이밍",
-    "monitorHeartbeat": "실시간 상태",
-    "monitorConnection": "연결 상태",
-    "monitorPositionChange": "보유 변화",
-    "monitorPnlChange": "손익률 변화",
-    "monitorValueChange": "평가액 변화",
-    "monitorTrendChange": "이동평균 변화",
-    "monitorCashChange": "현금비중 변화",
-    "monitorDecisionChange": "판단 변화",
-    "externalEquityMove": "미장 가격/거래량",
-    "externalCryptoMove": "크립토 변동",
-    "externalMacroShift": "거시 지표 변화",
-    "externalDartDisclosure": "국내 공시",
-    "externalDataConnection": "외부 데이터 연결",
-}
-
-TRIGGER_SUMMARIES = {
-    "modelBuy": "내 매수 모델 점수가 기준을 넘을 때 보냅니다.",
-    "modelSell": "내 매도 모델 점수가 기준을 넘을 때 보냅니다.",
-    "watchlistQuote": "관심 종목의 시세와 추세 데이터가 갱신될 때 보냅니다.",
-    "watchlistQuotePending": "관심 종목 시세를 아직 받지 못했을 때 보냅니다.",
-    "holdingTiming": "보유 종목의 매수·매도 점검 데이터가 기준에 걸릴 때 보냅니다.",
-    "monitorHeartbeat": "실시간 모니터링 워커가 정상 작동 중인지 확인할 때 보냅니다.",
-    "monitorConnection": "Toss 연결 상태가 바뀔 때 보냅니다.",
-    "monitorPositionChange": "새 보유, 제외, 수량 변경이 감지될 때 보냅니다.",
-    "monitorPnlChange": "직전 스냅샷 대비 손익률 변화가 임계값을 넘을 때 보냅니다.",
-    "monitorValueChange": "직전 스냅샷 대비 평가액 변화가 임계값을 넘을 때 보냅니다.",
-    "monitorTrendChange": "이동평균 돌파, 크로스, 큰 괴리가 감지될 때 보냅니다.",
-    "monitorCashChange": "시장별 현금 비중 변화가 임계값을 넘을 때 보냅니다.",
-    "monitorDecisionChange": "종목 판단이나 리스크 점수가 바뀔 때 보냅니다.",
-    "externalEquityMove": "Alpha Vantage 기준 미국 보유 종목의 가격 변화가 임계값을 넘을 때 보냅니다.",
-    "externalCryptoMove": "CoinGecko 기준 크립토 가격 변화가 임계값을 넘을 때 보냅니다.",
-    "externalMacroShift": "FRED 금리·스프레드 변화가 임계값을 넘을 때 보냅니다.",
-    "externalDartDisclosure": "OpenDART에서 보유 국내 종목의 새 공시가 감지될 때 보냅니다.",
-    "externalDataConnection": "외부 데이터 API 응답 오류나 호출 제한이 감지될 때 보냅니다.",
 }
 
 SEVERITY_LABELS = {

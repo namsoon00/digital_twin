@@ -5,7 +5,7 @@ import urllib.request
 from html.parser import HTMLParser
 from typing import Dict, List
 
-from ..domain.analytics import sector_from_symbol
+from ..domain.market_data import sector_from_symbol
 from ..domain.symbol_universe import ListedSymbol, utc_now_iso
 
 
@@ -174,3 +174,11 @@ def source_descriptor(market: str) -> Dict[str, str]:
     if normalized in {"KOSPI", "KOSDAQ"}:
         return {"source": "KRX KIND Listed Companies", "sourceUrl": krx_kind_url(normalized)}
     return {"source": "", "sourceUrl": ""}
+
+
+class RemoteSymbolSourceGateway:
+    def fetch_market_symbols(self, market: str) -> List[ListedSymbol]:
+        return fetch_market_symbols(market)
+
+    def source_descriptor(self, market: str) -> Dict[str, str]:
+        return source_descriptor(market)

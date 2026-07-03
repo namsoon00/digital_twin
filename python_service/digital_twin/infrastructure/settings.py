@@ -124,7 +124,7 @@ def utc_now() -> str:
 
 def read_settings_store() -> Dict[str, str]:
     try:
-        from .sqlite_operational import SQLiteRuntimeSettingsStore
+        from .sqlite_runtime import SQLiteRuntimeSettingsStore
 
         return SQLiteRuntimeSettingsStore().load()
     except Exception:
@@ -132,7 +132,7 @@ def read_settings_store() -> Dict[str, str]:
 
 
 def write_settings_store(settings: Dict[str, object]) -> Dict[str, str]:
-    from .sqlite_operational import SQLiteRuntimeSettingsStore
+    from .sqlite_runtime import SQLiteRuntimeSettingsStore
 
     clean = {str(key): str(value or "") for key, value in settings.items()}
     SQLiteRuntimeSettingsStore().replace(clean)

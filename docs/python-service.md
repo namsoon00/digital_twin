@@ -9,7 +9,7 @@ The Python service is the migration target for account-scale monitoring, schedul
 - `python_service/digital_twin/infrastructure/`: SQLite, local JSON state, Toss snapshot, and notification adapters
 - `python_service/digital_twin/config.py`: compatibility re-export for old settings/account imports
 - `python_service/digital_twin/providers.py`: compatibility re-export for Toss snapshot adapter
-- `python_service/digital_twin/analytics.py`: compatibility re-export for domain analytics
+- `python_service/digital_twin/analytics.py`: compatibility re-export for market data, portfolio calculations, and strategy helpers
 - `python_service/digital_twin/monitor.py`: compatibility re-export for monitoring rules and JSON monitor state
 - `python_service/digital_twin/scheduler.py`: compatibility factory for the composed monitor runner
 - `python_service/digital_twin/notifiers.py`: compatibility re-export for notification adapters
@@ -23,9 +23,11 @@ The development methodology is documented in `docs/development-methodology.md` a
 The Python service now follows a conservative DDD layout:
 
 - Domain objects and domain services live in `domain/` and do not call SQLite, Toss, Telegram, files, or environment variables.
-- Domain ports in `domain/repositories.py` define what the application needs from account storage, snapshot loading, monitor state, and notifications.
+- Domain ports in `domain/repositories.py` define what the application needs from account storage, snapshot loading, monitor state, symbol universe storage, symbol sources, and notifications.
 - Application services in `application/` own use cases such as saving account settings and running one monitoring cycle.
 - Infrastructure adapters satisfy those ports with local implementations.
+- Message type ownership lives in `domain/message_types.py`; notification templates and rules read that catalog instead of importing monitoring internals.
+- Strategy ownership lives in `domain/strategy.py`, market-data normalization in `domain/market_data.py`, and portfolio exposure math in `domain/portfolio_calculations.py`.
 - Legacy import paths such as `digital_twin.models`, `digital_twin.config.AccountConfig`, and `digital_twin.scheduler.MonitorRunner` remain available as thin wrappers so the Node API and existing scripts keep working.
 
 When adding a feature, put business vocabulary and state transitions in `domain/`, orchestration in `application/`, and vendor/file/database code in `infrastructure/` or an existing adapter. UI and API routes should call application services rather than reaching into repositories directly.
@@ -51,10 +53,11 @@ Current event contracts:
 For parallel work across multiple chat windows, keep each conversation inside one slice:
 
 - Account management: `domain/accounts.py`, `application/account_service.py`, `infrastructure/sqlite_accounts.py`
-- Monitoring and scheduling: `domain/portfolio.py`, `application/monitoring_service.py`, `monitor.py`, `scheduler.py`
-- Notifications: `notifiers.py`, `infrastructure/notifications.py`, `application/notification_service.py`, and the SQLite notification queue
+- Monitoring and scheduling: `domain/monitoring.py`, `domain/strategy_alerts.py`, `domain/external_signal_alerts.py`, `application/monitoring_service.py`, `monitor.py`, `scheduler.py`
+- Notifications and messages: `domain/message_types.py`, `domain/notifications.py`, `domain/notification_rules.py`, `domain/notification_templates.py`, `infrastructure/notifications.py`, `application/notification_service.py`, and `infrastructure/sqlite_notifications.py`
+- Symbol universe: `domain/symbol_universe.py`, `application/symbol_universe_service.py`, `infrastructure/symbol_sources.py`, and `infrastructure/sqlite_symbols.py`
 - Providers/data collection: `providers.py`, `infrastructure/toss_snapshots.py`
-- Model scoring: `analytics.py` and future model-lab modules
+- Model scoring and strategy: `domain/market_data.py`, `domain/portfolio_calculations.py`, `domain/strategy.py`, and future model-lab modules
 
 If a feature needs another feature's result, subscribe to or publish a domain event instead of importing the other feature's application service. This keeps separate development sessions from editing the same orchestration code.
 

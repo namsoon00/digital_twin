@@ -22,8 +22,6 @@ from pathlib import Path
 from typing import Dict, List
 
 from ..application.account_service import AccountApplicationService
-from ..application.flow_lens_service import flow_lens_snapshot
-from ..application.symbol_universe_service import SymbolUniverseService
 from ..domain.events import (
     APP_ITEM_REMOVED,
     APP_ITEM_UPDATED,
@@ -43,7 +41,8 @@ from ..domain.events import (
     SYMBOL_UNIVERSE_REFRESHED,
     DomainEvent,
 )
-from ..domain.monitoring import DEFAULT_ALERT_RULES, DEFAULT_CADENCE, RealtimeMonitor
+from ..domain.message_types import DEFAULT_ALERT_RULES, DEFAULT_CADENCE
+from ..domain.monitoring import RealtimeMonitor
 from ..domain.notification_rules import CONDITION_TYPE_LABELS, DEFAULT_HONEY_THRESHOLD, NotificationRuleConfig
 from ..domain.notifications import NotificationJob
 from ..domain.notification_templates import DEFAULT_NOTIFICATION_TEMPLATES, MESSAGE_TYPE_LABELS, TRIGGER_SUMMARIES, alert_context, template_variables
@@ -51,9 +50,12 @@ from ..domain.parsing import parse_assignments
 from ..domain.portfolio import utc_now_iso
 from ..infrastructure.event_bus import default_event_bus
 from ..infrastructure.mock_market import mock_market_payload, mock_market_scenario_list
+from ..infrastructure.service_factory import build_symbol_universe_service, flow_lens_snapshot
 from ..infrastructure.settings import ROOT_DIR, runtime_settings, save_runtime_settings
 from ..infrastructure.sqlite_accounts import AccountRegistry
-from ..infrastructure.sqlite_operational import SQLiteAppStore, SQLiteEventLog, SQLiteMonitorStore, SQLiteNotificationJobStore, SQLiteNotificationRuleStore, SQLiteNotificationTemplateStore
+from ..infrastructure.sqlite_monitoring import SQLiteEventLog, SQLiteMonitorStore
+from ..infrastructure.sqlite_notifications import SQLiteNotificationJobStore, SQLiteNotificationRuleStore, SQLiteNotificationTemplateStore
+from ..infrastructure.sqlite_runtime import SQLiteAppStore
 from ..infrastructure.toss_snapshots import build_snapshot
 
 
@@ -796,8 +798,8 @@ def account_service() -> AccountApplicationService:
     return AccountApplicationService(registry, registry.settings, event_publisher=RealtimeEventBridge())
 
 
-def symbol_universe_service() -> SymbolUniverseService:
-    return SymbolUniverseService()
+def symbol_universe_service():
+    return build_symbol_universe_service()
 
 
 def symbol_universe_payload(query: Dict[str, List[str]]) -> Dict[str, object]:

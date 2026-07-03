@@ -20,8 +20,15 @@ Domain:
 
 - `python_service/digital_twin/domain/accounts.py`: account entity/value data
 - `python_service/digital_twin/domain/portfolio.py`: positions, portfolio summaries, decisions, alert events
-- `python_service/digital_twin/domain/analytics.py`: scoring formulas, portfolio calculations, position normalization
-- `python_service/digital_twin/domain/monitoring.py`: realtime monitoring rules and cadence filtering
+- `python_service/digital_twin/domain/analytics.py`: compatibility facade for legacy analytics imports only
+- `python_service/digital_twin/domain/market_data.py`: market-data normalization, symbol hints, moving-average helpers, and numeric coercion
+- `python_service/digital_twin/domain/portfolio_calculations.py`: portfolio exposure, FX conversion, and summary calculations
+- `python_service/digital_twin/domain/strategy.py`: scoring formulas, strategy feature variables, and position decision rules
+- `python_service/digital_twin/domain/message_types.py`: shared message-type catalog, labels, default alert rules, thresholds, and cadence
+- `python_service/digital_twin/domain/alert_formatting.py`: money, percentage, and compact-number formatting used by alerts
+- `python_service/digital_twin/domain/monitoring.py`: realtime monitoring orchestration rules and cadence filtering
+- `python_service/digital_twin/domain/strategy_alerts.py`: strategy-score alert rules
+- `python_service/digital_twin/domain/external_signal_alerts.py`: external market, crypto, macro, DART, and data-connection alert rules
 - `python_service/digital_twin/domain/model_review.py`: model-change explanation, data validation, and improvement hints for alert messages
 - `python_service/digital_twin/domain/events.py`: event names and event payload factories
 - `python_service/digital_twin/domain/repositories.py`: application-facing ports
@@ -30,6 +37,7 @@ Domain:
 Application:
 
 - `python_service/digital_twin/application/account_service.py`: account-management use cases
+- `python_service/digital_twin/application/flow_lens_service.py`: flow-lens snapshot use case with injected account, snapshot, settings, FX, and symbol dependencies
 - `python_service/digital_twin/application/monitoring_service.py`: one monitoring cycle use case
 - `python_service/digital_twin/application/scheduler.py`: long-running scheduling loop around a runner
 
@@ -37,7 +45,12 @@ Infrastructure:
 
 - `python_service/digital_twin/infrastructure/settings.py`: env fallback and SQLite-backed runtime settings facade
 - `python_service/digital_twin/infrastructure/sqlite_accounts.py`: SQLite account repository
-- `python_service/digital_twin/infrastructure/sqlite_operational.py`: SQLite app store, runtime settings, symbol universe, snapshots, cadence, domain events, model-review jobs, notification jobs, and notification templates
+- `python_service/digital_twin/infrastructure/sqlite_operational.py`: shared SQLite schema and compatibility implementation
+- `python_service/digital_twin/infrastructure/sqlite_monitoring.py`: context entrypoint for snapshots, cadence, quote cache, external signal cache, and domain event log stores
+- `python_service/digital_twin/infrastructure/sqlite_notifications.py`: context entrypoint for notification jobs, rules, and templates
+- `python_service/digital_twin/infrastructure/sqlite_symbols.py`: context entrypoint for symbol universe storage
+- `python_service/digital_twin/infrastructure/sqlite_model_review.py`: context entrypoint for model-review job storage
+- `python_service/digital_twin/infrastructure/sqlite_runtime.py`: context entrypoint for runtime settings and app store
 - `python_service/digital_twin/infrastructure/json_monitor_state.py`: legacy JSON monitor state compatibility only
 - `python_service/digital_twin/infrastructure/toss_snapshots.py`: Toss adapter and demo snapshot fallback
 - `python_service/digital_twin/application/notification_service.py`: queued notification delivery worker
@@ -73,12 +86,12 @@ Events are persisted locally to the append-only `domain_events` table in `data/s
 Use these slices when multiple chat windows work independently:
 
 - Account management: `domain/accounts.py`, `application/account_service.py`, `infrastructure/sqlite_accounts.py`
-- Monitoring and scheduling: `domain/monitoring.py`, `application/monitoring_service.py`, `application/scheduler.py`, `infrastructure/sqlite_operational.py`
-- Notifications: `domain/notifications.py`, `domain/notification_templates.py`, `application/notification_service.py`, `infrastructure/notifications.py`, and `infrastructure/sqlite_operational.py`
-- Symbol universe: `domain/symbol_universe.py`, `application/symbol_universe_service.py`, `infrastructure/symbol_sources.py`, and `infrastructure/sqlite_operational.py`
+- Monitoring and scheduling: `domain/monitoring.py`, `domain/strategy_alerts.py`, `domain/external_signal_alerts.py`, `application/monitoring_service.py`, `application/scheduler.py`, and `infrastructure/sqlite_monitoring.py`
+- Notifications and messages: `domain/message_types.py`, `domain/notifications.py`, `domain/notification_rules.py`, `domain/notification_templates.py`, `application/notification_service.py`, `infrastructure/notifications.py`, and `infrastructure/sqlite_notifications.py`
+- Symbol universe: `domain/symbol_universe.py`, `application/symbol_universe_service.py`, `infrastructure/symbol_sources.py`, and `infrastructure/sqlite_symbols.py`
 - Providers/data collection: `infrastructure/toss_snapshots.py`
-- Model scoring: `domain/analytics.py` and future model-lab application services
-- Model review and validation: `domain/model_review.py`, `application/model_review_service.py`, `infrastructure/sqlite_operational.py`, `infrastructure/model_review_queue.py`, `infrastructure/model_reviewer.py`
+- Model scoring and strategy: `domain/market_data.py`, `domain/portfolio_calculations.py`, `domain/strategy.py`, and future model-lab application services
+- Model review and validation: `domain/model_review.py`, `application/model_review_service.py`, `infrastructure/sqlite_model_review.py`, `infrastructure/model_review_queue.py`, `infrastructure/model_reviewer.py`
 - Runtime/configuration: `infrastructure/settings.py`, `infrastructure/service_factory.py`, `service_manager.py`
 
 When a change touches more than one slice, keep the cross-slice contract in `domain/events.py` or `domain/repositories.py` and keep each implementation inside its own layer.

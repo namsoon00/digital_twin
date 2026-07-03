@@ -1,7 +1,12 @@
 from dataclasses import dataclass, field as dataclass_field
 from typing import Dict, Iterable, List
 
-from .monitoring import DEFAULT_ALERT_RULES, DEFAULT_CADENCE
+from .message_types import (
+    DEFAULT_ALERT_RULES,
+    DEFAULT_CADENCE,
+    SYSTEM_MESSAGE_TYPES,
+    notification_message_types,
+)
 from .notification_templates import DEFAULT_NOTIFICATION_TEMPLATES
 from .notifications import NotificationJob
 
@@ -20,7 +25,6 @@ CONDITION_TYPE_LABELS = [
     {"type": "always", "label": "항상 적용", "description": "룰이 켜져 있으면 항상 점수를 더하거나 뺍니다."},
 ]
 
-SYSTEM_MESSAGE_TYPES = {"default", "modelReview", "workHandoff", "notification"}
 HIGH_SIGNAL_MESSAGE_TYPES = {
     "modelBuy",
     "modelSell",
@@ -63,15 +67,7 @@ def bool_value(value, fallback: bool = True) -> bool:
 
 
 def default_rule_message_types() -> List[str]:
-    keys = list(DEFAULT_NOTIFICATION_TEMPLATES.keys()) + list(DEFAULT_ALERT_RULES.keys()) + list(DEFAULT_CADENCE.keys())
-    seen = set()
-    ordered = []
-    for key in keys:
-        normalized = str(key or "").strip()
-        if normalized and normalized not in seen:
-            seen.add(normalized)
-            ordered.append(normalized)
-    return ordered
+    return notification_message_types(list(DEFAULT_NOTIFICATION_TEMPLATES.keys()))
 
 
 def default_base_score(message_type: str) -> int:

@@ -93,7 +93,7 @@ class ModelReviewEnqueuer:
         if store:
             self.store = store
         else:
-            from .sqlite_operational import SQLiteModelReviewJobStore
+            from .sqlite_model_review import SQLiteModelReviewJobStore
 
             self.store = SQLiteModelReviewJobStore()
 

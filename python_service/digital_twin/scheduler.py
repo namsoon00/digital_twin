@@ -10,7 +10,7 @@ class MonitorRunner:
         from .domain.monitoring import RealtimeMonitor
         from .infrastructure.event_bus import default_event_bus
         from .infrastructure.settings import runtime_settings
-        from .infrastructure.sqlite_operational import SQLiteMonitorStore
+        from .infrastructure.sqlite_monitoring import SQLiteMonitorStore
 
         return ApplicationMonitorRunner(
             accounts,

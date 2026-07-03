@@ -1,0 +1,205 @@
+import ast
+import math
+from typing import Dict, Iterable, List
+
+from .market_data import clamp, number
+from .parsing import parse_assignments
+from .portfolio import DecisionItem, PortfolioSummary, Position
+
+
+class SafeFormula:
+    allowed_nodes = (
+        ast.Expression,
+        ast.BinOp,
+        ast.UnaryOp,
+        ast.Num,
+        ast.Constant,
+        ast.Name,
+        ast.Load,
+        ast.Add,
+        ast.Sub,
+        ast.Mult,
+        ast.Div,
+        ast.Mod,
+        ast.Pow,
+        ast.USub,
+        ast.UAdd,
+        ast.Call,
+    )
+    allowed_funcs = {
+        "min": min,
+        "max": max,
+        "abs": abs,
+        "round": round,
+        "sqrt": math.sqrt,
+        "pow": pow,
+        "clamp": clamp,
+    }
+
+    def __init__(self, expression: str):
+        self.expression = expression or "0"
+        self.tree = ast.parse(self.expression, mode="eval")
+        for node in ast.walk(self.tree):
+            if not isinstance(node, self.allowed_nodes):
+                raise ValueError("unsupported formula syntax: " + node.__class__.__name__)
+            if isinstance(node, ast.Call):
+                if not isinstance(node.func, ast.Name) or node.func.id not in self.allowed_funcs:
+                    raise ValueError("unsupported formula function")
+        self.code = compile(self.tree, "<strategy-formula>", "eval")
+
+    def evaluate(self, variables: Dict[str, float]) -> float:
+        scope = dict(self.allowed_funcs)
+        scope.update({key: number(value) for key, value in variables.items()})
+        return number(eval(self.code, {"__builtins__": {}}, scope))
+
+
+class StrategyModel:
+    default_buy_formula = (
+        "50 + (executionScore * 0.42 + directionalVolumePressure * 0.9 + buyShareScore * 0.55 "
+        "+ orderbookScore * 0.32 + momentumScore * 0.35 + trendScore * 0.45 "
+        "+ investorFlowScore * 0.35) * flowWeight + undervalueBonus * valuationWeight - expensivePenalty * valuationWeight"
+    )
+    default_sell_formula = (
+        "50 + (-executionScore * 0.38 - directionalVolumePressure * 0.85 - buyShareScore * 0.55 "
+        "- orderbookScore * 0.3 - momentumScore * 0.4 - trendScore * 0.35 "
+        "- investorFlowScore * 0.3) * flowWeight + expensiveBonus * valuationWeight"
+    )
+
+    def __init__(self, settings: Dict[str, str]):
+        self.weights = parse_assignments(settings.get("formulaWeights", ""), {"flowWeight": 1.0, "valuationWeight": 1.0})
+        self.buy_formula = SafeFormula(settings.get("buyScoreFormula") or self.default_buy_formula)
+        self.sell_formula = SafeFormula(settings.get("sellScoreFormula") or self.default_sell_formula)
+
+    def feature_variables(self, variables: Dict[str, float]) -> Dict[str, float]:
+        enriched = {key: number(value) for key, value in variables.items()}
+        trade_strength = number(enriched.get("tradeStrength")) or 100.0
+        volume_ratio = number(enriched.get("volumeRatio")) or 1.0
+        buy_volume = number(enriched.get("buyVolume"))
+        sell_volume = number(enriched.get("sellVolume"))
+        total_volume = buy_volume + sell_volume
+        buy_share = number(enriched.get("buyShare")) or ((buy_volume / total_volume) * 100 if total_volume else 50.0)
+        current_price = number(enriched.get("currentPrice") or enriched.get("price") or enriched.get("closePrice"))
+        ma20 = number(enriched.get("ma20") or enriched.get("movingAverage20"))
+        ma60 = number(enriched.get("ma60") or enriched.get("movingAverage60"))
+        trend_distance20 = number(enriched.get("trendDistance20")) or (((current_price / ma20) - 1) * 100 if current_price and ma20 else 0.0)
+        trend_distance60 = number(enriched.get("trendDistance60")) or (((current_price / ma60) - 1) * 100 if current_price and ma60 else 0.0)
+        ma_spread = number(enriched.get("maSpread")) or (((ma20 / ma60) - 1) * 100 if ma20 and ma60 else 0.0)
+        trend_score = clamp(trend_distance20 * 0.35 + trend_distance60 * 0.2 + ma_spread * 0.4, -15.0, 15.0)
+        foreign_net = number(enriched.get("foreignNet") or enriched.get("foreignNetVolume") or enriched.get("foreignInvestorNet"))
+        institution_net = number(enriched.get("institutionNet") or enriched.get("institutionNetVolume") or enriched.get("institutionInvestorNet"))
+        individual_net = number(enriched.get("individualNet") or enriched.get("individualNetVolume") or enriched.get("retailNet"))
+        investor_base = abs(foreign_net) + abs(institution_net) + abs(individual_net)
+        investor_balance = foreign_net + institution_net - individual_net * 0.35
+        investor_flow_score = clamp((investor_balance / investor_base) * 100, -30.0, 30.0) if investor_base else 0.0
+        bid_ask_imbalance = number(enriched.get("bidAskImbalance"))
+        price_change_rate = number(enriched.get("priceChangeRate"))
+        volume_pressure = clamp((volume_ratio - 1) * 10, -10.0, 25.0)
+        execution_score = clamp((trade_strength - 100) * 0.5, -25.0, 25.0)
+        buy_share_score = clamp((buy_share - 50) * 0.7, -25.0, 25.0)
+        orderbook_score = clamp(bid_ask_imbalance * 0.5, -20.0, 20.0)
+        momentum_score = clamp(price_change_rate * 4, -20.0, 20.0)
+        flow_direction_score = clamp(
+            execution_score * 0.35
+            + buy_share_score * 0.35
+            + orderbook_score * 0.2
+            + momentum_score * 0.25
+            + trend_score * 0.25
+            + investor_flow_score * 0.2,
+            -25.0,
+            25.0,
+        )
+        volume_confirmation = clamp(flow_direction_score / 12, -1.0, 1.0)
+        enriched.update({
+            "tradeStrength": trade_strength,
+            "volumeRatio": volume_ratio,
+            "buyShare": buy_share,
+            "sellShare": max(0.0, 100.0 - buy_share),
+            "bidAskImbalance": bid_ask_imbalance,
+            "priceChangeRate": price_change_rate,
+            "volumePressure": volume_pressure,
+            "directionalVolumePressure": volume_pressure * volume_confirmation,
+            "volumeConfirmation": volume_confirmation,
+            "volumeDryness": clamp((1 - volume_ratio) * 10, 0.0, 10.0) if volume_ratio < 1 else 0.0,
+            "executionScore": execution_score,
+            "buyShareScore": buy_share_score,
+            "orderbookScore": orderbook_score,
+            "momentumScore": momentum_score,
+            "flowDirectionScore": flow_direction_score,
+            "ma20": ma20,
+            "ma60": ma60,
+            "trendDistance20": trend_distance20,
+            "trendDistance60": trend_distance60,
+            "maSpread": ma_spread,
+            "trendScore": trend_score,
+            "foreignNet": foreign_net,
+            "institutionNet": institution_net,
+            "individualNet": individual_net,
+            "smartMoneyNet": foreign_net + institution_net,
+            "investorFlowBalance": investor_balance,
+            "investorFlowScore": investor_flow_score,
+            "valuationWeight": number(enriched.get("valuationWeight")) or number(self.weights.get("valuationWeight")) or 1.0,
+            "undervalueBonus": number(enriched.get("undervalueBonus")),
+            "expensivePenalty": number(enriched.get("expensivePenalty")),
+            "expensiveBonus": number(enriched.get("expensiveBonus") or enriched.get("expensivePenalty")),
+        })
+        return enriched
+
+    def score(self, variables: Dict[str, float]) -> Dict[str, float]:
+        merged = dict(self.weights)
+        merged.update(self.feature_variables(variables))
+        buy_score = clamp(self.buy_formula.evaluate(merged), 0.0, 100.0)
+        sell_score = clamp(self.sell_formula.evaluate(merged), 0.0, 100.0)
+        return {"buyScore": round(buy_score, 1), "sellScore": round(sell_score, 1), "scoreGap": round(buy_score - sell_score, 1)}
+
+
+def decision_for_position(position: Position, portfolio: PortfolioSummary) -> DecisionItem:
+    sector_ratio = 0.0
+    for item in portfolio.sectors:
+        if item.get("sector") == position.sector:
+            sector_ratio = float(item.get("ratio") or 0)
+            break
+    score = 24.0
+    pnl = position.profit_loss_rate
+    if pnl >= 20:
+        score += 40
+    elif pnl >= 10:
+        score += 28
+    elif pnl >= 5:
+        score += 15
+    elif pnl <= -15:
+        score += 38
+    elif pnl <= -8:
+        score += 24
+    if sector_ratio >= 50:
+        score += 12
+    elif sector_ratio >= 35:
+        score += 6
+    if position.sellable_quantity > 0:
+        score += 4
+    pressure = clamp(score, 0.0, 100.0)
+    if pressure >= 72:
+        label, tone = ("손절 기준 확인", "danger") if pnl <= -8 else ("분할 매도 기준 확인", "danger")
+    elif pressure >= 55:
+        label, tone = "일부 익절 기준 확인", "caution"
+    elif pressure >= 38:
+        label, tone = "조건부 보유", "hold"
+    else:
+        label, tone = "보유 유지", "watch"
+    return DecisionItem(
+        symbol=position.symbol,
+        name=position.name,
+        sector=position.sector,
+        market=position.market,
+        currency=position.currency,
+        market_value=position.market_value,
+        profit_loss=position.profit_loss,
+        profit_loss_rate=round(pnl, 2),
+        exit_pressure=round(pressure, 1),
+        decision=label,
+        tone=tone,
+    )
+
+
+def decisions_for_positions(positions: Iterable[Position], portfolio: PortfolioSummary) -> List[DecisionItem]:
+    decisions = [decision_for_position(item, portfolio) for item in positions if not item.is_cash() and item.market_value > 0]
+    return sorted(decisions, key=lambda item: (-item.exit_pressure, item.symbol))

@@ -104,13 +104,13 @@ def notifier_for_account(account: AccountConfig = None):
 
 
 def notification_queue():
-    from .sqlite_operational import SQLiteNotificationJobStore
+    from .sqlite_notifications import SQLiteNotificationJobStore
 
     return SQLiteNotificationJobStore()
 
 
 def notification_templates():
-    from .sqlite_operational import SQLiteNotificationTemplateStore
+    from .sqlite_notifications import SQLiteNotificationTemplateStore
 
     return SQLiteNotificationTemplateStore()
 

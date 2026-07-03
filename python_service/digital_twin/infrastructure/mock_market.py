@@ -3,7 +3,7 @@ import math
 from datetime import date, timedelta
 from typing import Dict, List
 
-from ..domain.analytics import known_stock
+from ..domain.market_data import known_stock
 from ..domain.portfolio import utc_now_iso
 
 

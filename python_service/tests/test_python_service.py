@@ -14,7 +14,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.admin_preview import admin_preview_config, write_admin_preview
 from digital_twin.application.account_service import AccountApplicationService
-from digital_twin.application.flow_lens_service import flow_lens_snapshot
 from digital_twin.application.model_review_service import ModelReviewRunner
 from digital_twin.application.monitoring_service import MonitorRunner as ApplicationMonitorRunner
 from digital_twin.application.notification_service import NotificationQueueRunner
@@ -23,9 +22,12 @@ from digital_twin.cli import build_handoff_message
 from digital_twin.cli import preserve_existing_secrets
 from digital_twin.cli import build_parser
 from digital_twin.domain.accounts import AccountConfig
-from digital_twin.domain.analytics import SafeFormula, StrategyModel, decisions_for_positions, normalize_position, portfolio_summary, technical_indicators_from_candles
+from digital_twin.domain.market_data import normalize_position, technical_indicators_from_candles
+from digital_twin.domain.message_types import DEFAULT_ALERT_RULES, DEFAULT_CADENCE, MESSAGE_TYPE_LABELS, public_message_catalog
+from digital_twin.domain.portfolio_calculations import portfolio_summary
+from digital_twin.domain.strategy import SafeFormula, StrategyModel, decisions_for_positions
 from digital_twin.domain.events import ACCOUNT_SAVED, MONITORING_ALERTS_DETECTED, MONITORING_CYCLE_COMPLETED, MONITORING_SNAPSHOT_COLLECTED, alerts_detected_event, monitoring_cycle_completed_event
-from digital_twin.domain.monitoring import DEFAULT_ALERT_RULES, DEFAULT_CADENCE, RealtimeMonitor
+from digital_twin.domain.monitoring import RealtimeMonitor
 from digital_twin.domain.model_review import ModelReviewJob, local_model_review
 from digital_twin.domain.notification_templates import alert_context
 from digital_twin.domain.notifications import NotificationJob
@@ -37,9 +39,14 @@ from digital_twin.infrastructure.json_monitor_state import MonitorStore
 from digital_twin.infrastructure.model_review_queue import ModelReviewEnqueuer, ModelReviewJobStore
 from digital_twin.infrastructure.mock_market import mock_market_payload
 from digital_twin.infrastructure.notifications import TelegramNotifier, send_events
+from digital_twin.infrastructure.service_factory import flow_lens_snapshot
 from digital_twin.infrastructure.settings import runtime_settings
-from digital_twin.infrastructure.sqlite_operational import SQLiteAppStore, SQLiteEventLog, SQLiteExternalSignalCache, SQLiteMarketQuoteCache, SQLiteModelReviewJobStore, SQLiteMonitorStore, SQLiteNotificationJobStore, SQLiteNotificationRuleStore, SQLiteNotificationTemplateStore, SQLiteRuntimeSettingsStore, SQLiteSymbolUniverseStore
-from digital_twin.infrastructure.symbol_sources import parse_krx_kind_table, parse_nasdaq_listed
+from digital_twin.infrastructure.sqlite_model_review import SQLiteModelReviewJobStore
+from digital_twin.infrastructure.sqlite_monitoring import SQLiteEventLog, SQLiteExternalSignalCache, SQLiteMarketQuoteCache, SQLiteMonitorStore
+from digital_twin.infrastructure.sqlite_notifications import SQLiteNotificationJobStore, SQLiteNotificationRuleStore, SQLiteNotificationTemplateStore
+from digital_twin.infrastructure.sqlite_runtime import SQLiteAppStore, SQLiteRuntimeSettingsStore
+from digital_twin.infrastructure.sqlite_symbols import SQLiteSymbolUniverseStore
+from digital_twin.infrastructure.symbol_sources import RemoteSymbolSourceGateway, parse_krx_kind_table, parse_nasdaq_listed
 from digital_twin.infrastructure.sqlite_accounts import AccountRegistry
 from digital_twin.infrastructure.toss_snapshots import TossProvider, account_cash_amount, normalize_price_items, select_account
 from digital_twin.infrastructure.web_server import notification_jobs_payload, notification_schedules_payload, notification_template_test_payload, realtime_status_payload
@@ -685,7 +692,11 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(["AAPL"], [item.symbol for item in store.search(limit=1, offset=1)])
 
     def test_symbol_universe_service_seeds_and_reports_freshness(self):
-        service = SymbolUniverseService(SQLiteSymbolUniverseStore(Path(self.temp.name) / "service.db"), runtime_settings())
+        service = SymbolUniverseService(
+            SQLiteSymbolUniverseStore(Path(self.temp.name) / "service.db"),
+            RemoteSymbolSourceGateway(),
+            runtime_settings(),
+        )
 
         payload = service.search(query="TSLA")
 
@@ -694,6 +705,24 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(any(item["market"] == "NASDAQ" for item in payload["summary"]["markets"]))
         self.assertEqual(0, payload["offset"])
         self.assertIn("hasMore", payload)
+
+    def test_application_layer_does_not_import_infrastructure(self):
+        application_dir = Path(__file__).resolve().parents[1] / "digital_twin" / "application"
+        offenders = []
+        for path in application_dir.glob("*.py"):
+            text = path.read_text(encoding="utf-8")
+            if "infrastructure" in text:
+                offenders.append(path.name)
+
+        self.assertEqual([], offenders)
+
+    def test_message_catalog_is_shared_across_monitoring_and_notifications(self):
+        catalog = public_message_catalog()
+
+        self.assertEqual("모델 매수", MESSAGE_TYPE_LABELS["modelBuy"])
+        self.assertEqual(10, catalog["modelBuy"]["cadenceMinutes"])
+        self.assertTrue(catalog["modelBuy"]["monitoring"])
+        self.assertTrue(catalog["workHandoff"]["system"])
 
     def test_flow_lens_mock_contract_is_python_native(self):
         payload = flow_lens_snapshot(mock=True, watchlist_symbols="TSLA,AAPL,NVDA")

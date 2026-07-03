@@ -1,8 +1,10 @@
 from typing import Iterable
 
+from ..application.flow_lens_service import FlowLensService
 from ..application.model_review_service import ModelReviewRunner
 from ..application.monitoring_service import MonitorRunner
 from ..application.notification_service import NotificationQueueRunner
+from ..application.symbol_universe_service import SymbolUniverseService
 from ..domain.accounts import AccountConfig
 from ..domain.monitoring import RealtimeMonitor
 from .event_bus import EventBus, default_event_bus
@@ -11,10 +13,14 @@ from .model_reviewer import reviewer_from_settings
 from .notifications import queued_notifier_for_account
 from .notifications import send_events
 from .notifications import notifier_for_account
-from .settings import runtime_settings
-from .sqlite_operational import SQLiteModelReviewJobStore, SQLiteMonitorStore, SQLiteNotificationJobStore, SQLiteNotificationTemplateStore
+from .settings import currency_rates, runtime_settings
+from .sqlite_model_review import SQLiteModelReviewJobStore
+from .sqlite_monitoring import SQLiteMonitorStore
+from .sqlite_notifications import SQLiteNotificationJobStore, SQLiteNotificationTemplateStore
+from .sqlite_symbols import SQLiteSymbolUniverseStore
 from .sqlite_accounts import AccountRegistry
-from .toss_snapshots import build_snapshot
+from .symbol_sources import RemoteSymbolSourceGateway
+from .toss_snapshots import build_snapshot, demo_positions
 
 
 def monitor_event_bus() -> EventBus:
@@ -56,3 +62,28 @@ def build_notification_queue_runner(dry_run: bool = False) -> NotificationQueueR
         send_gap_seconds=float(settings.get("notificationSendGapSeconds") or 0),
         template_renderer=SQLiteNotificationTemplateStore().render_job,
     )
+
+
+def build_symbol_universe_service(settings=None) -> SymbolUniverseService:
+    return SymbolUniverseService(
+        store=SQLiteSymbolUniverseStore(),
+        source_gateway=RemoteSymbolSourceGateway(),
+        settings=settings or runtime_settings(),
+    )
+
+
+def build_flow_lens_service(settings=None) -> FlowLensService:
+    configured_settings = settings or runtime_settings()
+    symbol_service = build_symbol_universe_service(configured_settings)
+    return FlowLensService(
+        account_repository=AccountRegistry(),
+        snapshot_builder=build_snapshot,
+        demo_positions_provider=demo_positions,
+        settings_provider=lambda: configured_settings,
+        fx_rates_provider=currency_rates,
+        symbol_enricher=symbol_service.enrich,
+    )
+
+
+def flow_lens_snapshot(mock: bool = False, watchlist_symbols: str = ""):
+    return build_flow_lens_service().snapshot(mock=mock, watchlist_symbols=watchlist_symbols)

@@ -10,15 +10,17 @@ from .application.account_service import AccountApplicationService
 from .application.model_review_service import ModelReviewScheduler
 from .application.notification_service import NotificationQueueScheduler
 from .application.scheduler import MIN_REALTIME_INTERVAL_SECONDS, RealtimeScheduler
-from .application.symbol_universe_service import SymbolUniverseService
 from .domain.accounts import AccountConfig, split_symbols
 from .domain.monitoring import RealtimeMonitor
 from .domain.notification_templates import template_variables, text_context
 from .domain.portfolio import AlertEvent
 from .infrastructure.event_bus import default_event_bus
-from .infrastructure.sqlite_operational import SQLiteAppStore, SQLiteModelReviewJobStore, SQLiteMonitorStore, SQLiteNotificationJobStore, SQLiteNotificationTemplateStore
+from .infrastructure.sqlite_model_review import SQLiteModelReviewJobStore
+from .infrastructure.sqlite_monitoring import SQLiteMonitorStore
+from .infrastructure.sqlite_notifications import SQLiteNotificationJobStore, SQLiteNotificationTemplateStore
+from .infrastructure.sqlite_runtime import SQLiteAppStore
 from .infrastructure.notifications import queued_notifier_for_account, send_events
-from .infrastructure.service_factory import build_model_review_runner, build_monitor_runner, build_notification_queue_runner
+from .infrastructure.service_factory import build_model_review_runner, build_monitor_runner, build_notification_queue_runner, build_symbol_universe_service
 from .infrastructure.settings import (
     SECRET_SETTING_KEYS,
     read_settings_store,
@@ -339,7 +341,7 @@ def templates_command(args) -> int:
 
 
 def symbols_command(args) -> int:
-    service = SymbolUniverseService()
+    service = build_symbol_universe_service()
     if args.symbols_action == "status":
         print(json.dumps({"summary": service.summary()}, ensure_ascii=False))
         return 0

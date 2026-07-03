@@ -9,7 +9,7 @@ from .domain.monitoring import (
     pct_delta,
     signed_pct,
 )
-from .infrastructure.sqlite_operational import SQLiteMonitorStore as MonitorStore
+from .infrastructure.sqlite_monitoring import SQLiteMonitorStore as MonitorStore
 
 __all__ = [
     "DEFAULT_ALERT_RULES",

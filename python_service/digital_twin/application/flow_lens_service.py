@@ -1,17 +1,16 @@
-from typing import Dict, List
+from typing import Callable, Dict, List
 
 from ..domain.accounts import AccountConfig, split_symbols
-from ..domain.analytics import (
+from ..domain.market_data import (
     known_stock,
     number,
     sector_from_symbol,
-    value_in_base,
 )
 from ..domain.portfolio import Position, utc_now_iso
-from ..infrastructure.settings import currency_rates, runtime_settings
-from ..infrastructure.sqlite_accounts import AccountRegistry
-from ..infrastructure.toss_snapshots import build_snapshot, demo_positions
-from .symbol_universe_service import SymbolUniverseService
+from ..domain.portfolio_calculations import (
+    normalized_fx_rates,
+    value_in_base,
+)
 
 
 def clamp_score(value: float) -> int:
@@ -73,7 +72,8 @@ def summary_payload(summary) -> Dict[str, object]:
     }
 
 
-def demo_toss_portfolio(reason: str = "") -> Dict[str, object]:
+def demo_toss_portfolio(reason: str = "", demo_positions_provider: Callable = None) -> Dict[str, object]:
+    positions = demo_positions_provider() if demo_positions_provider else []
     return {
         "mode": "demo",
         "configured": False,
@@ -84,7 +84,7 @@ def demo_toss_portfolio(reason: str = "") -> Dict[str, object]:
             "orderableAmount": 1250000,
             "currency": "KRW",
         },
-        "positions": [position_payload(item) for item in demo_positions()],
+        "positions": [position_payload(item) for item in positions],
         "watchlistQuotes": [],
     }
 
@@ -94,10 +94,14 @@ def mask_account(value: str) -> str:
     return "****" + text[-4:] if text else "연결 계좌"
 
 
-def toss_portfolio_for_account(account: AccountConfig) -> Dict[str, object]:
-    snapshot = build_snapshot(account)
+def toss_portfolio_for_account(
+    account: AccountConfig,
+    snapshot_builder: Callable[[AccountConfig], object],
+    demo_positions_provider: Callable = None,
+) -> Dict[str, object]:
+    snapshot = snapshot_builder(account)
     if snapshot.mode != "live":
-        return demo_toss_portfolio(snapshot.status)
+        return demo_toss_portfolio(snapshot.status, demo_positions_provider)
     return {
         "mode": snapshot.mode,
         "configured": bool(account.client_id and account.client_secret),
@@ -162,8 +166,12 @@ def base_market_value(item: Dict[str, object], rates: Dict[str, float]) -> float
     return max(0.0, value_in_base(number(item.get("marketValue")), currency_for_item(item), rates))
 
 
-def build_toss_portfolio(positions: List[Dict[str, object]], account: Dict[str, object]) -> Dict[str, object]:
-    rates = currency_rates()
+def build_toss_portfolio(
+    positions: List[Dict[str, object]],
+    account: Dict[str, object],
+    fx_rates: Dict[str, float] = None,
+) -> Dict[str, object]:
+    rates = normalized_fx_rates(fx_rates)
     market_map: Dict[str, Dict[str, object]] = {}
 
     def exposure(key: str) -> Dict[str, object]:
@@ -221,19 +229,21 @@ def build_toss_portfolio(positions: List[Dict[str, object]], account: Dict[str, 
     }
 
 
-def parse_watchlist(raw_value: str = "") -> List[Dict[str, object]]:
-    settings = runtime_settings()
-    raw = str(raw_value if raw_value is not None and raw_value != "" else settings.get("watchlistSymbols") or "").strip()
+def parse_watchlist(
+    raw_value: str = "",
+    fallback_symbols: str = "",
+    enrich_symbol: Callable[[str], Dict[str, object]] = None,
+) -> List[Dict[str, object]]:
+    raw = str(raw_value if raw_value is not None and raw_value != "" else fallback_symbols or "").strip()
     symbols = split_symbols(raw) if raw else ["TSLA", "AAPL", "NVDA", "000660"]
     unique = []
     for symbol in symbols:
         if symbol not in unique:
             unique.append(symbol)
     items = []
-    universe = SymbolUniverseService()
     for symbol in unique[:30]:
         try:
-            info = universe.enrich(symbol)
+            info = enrich_symbol(symbol) if enrich_symbol else known_stock(symbol)
         except Exception:
             info = known_stock(symbol)
         items.append({
@@ -248,10 +258,15 @@ def parse_watchlist(raw_value: str = "") -> List[Dict[str, object]]:
     return items
 
 
-def build_toss_watchlist(positions: List[Dict[str, object]], watchlist_symbols: str = "") -> List[Dict[str, object]]:
+def build_toss_watchlist(
+    positions: List[Dict[str, object]],
+    watchlist_symbols: str = "",
+    fallback_symbols: str = "",
+    enrich_symbol: Callable[[str], Dict[str, object]] = None,
+) -> List[Dict[str, object]]:
     holding_symbols = {str(item.get("symbol") or "").upper() for item in positions}
     result = []
-    for item in parse_watchlist(watchlist_symbols):
+    for item in parse_watchlist(watchlist_symbols, fallback_symbols, enrich_symbol):
         if str(item.get("symbol") or "").upper() in holding_symbols:
             continue
         next_item = dict(item)
@@ -403,11 +418,18 @@ def build_toss_decision(toss: Dict[str, object], portfolio: Dict[str, object], w
     }
 
 
-def build_toss_lens_snapshot(toss: Dict[str, object], mock: bool = False, watchlist_symbols: str = "") -> Dict[str, object]:
+def build_toss_lens_snapshot(
+    toss: Dict[str, object],
+    mock: bool = False,
+    watchlist_symbols: str = "",
+    fallback_watchlist_symbols: str = "",
+    fx_rates: Dict[str, float] = None,
+    enrich_symbol: Callable[[str], Dict[str, object]] = None,
+) -> Dict[str, object]:
     positions = list(toss.get("positions") or [])
-    portfolio = build_toss_portfolio(positions, dict(toss.get("account") or {}))
+    portfolio = build_toss_portfolio(positions, dict(toss.get("account") or {}), fx_rates)
     watchlist = merge_watchlist_quotes(
-        build_toss_watchlist(positions, watchlist_symbols),
+        build_toss_watchlist(positions, watchlist_symbols, fallback_watchlist_symbols, enrich_symbol),
         list(toss.get("watchlistQuotes") or []),
     )
     toss["watchlist"] = watchlist
@@ -443,13 +465,50 @@ def build_toss_lens_snapshot(toss: Dict[str, object], mock: bool = False, watchl
     }
 
 
-def flow_lens_snapshot(mock: bool = False, watchlist_symbols: str = "") -> Dict[str, object]:
-    if mock:
-        toss = demo_toss_portfolio("웹 mock 데이터")
-        toss["mode"] = "mock"
-        toss["status"] = "웹 mock 데이터"
-        return build_toss_lens_snapshot(toss, mock=True, watchlist_symbols=watchlist_symbols)
-    account = AccountRegistry().load()[0]
-    toss = toss_portfolio_for_account(account)
-    selected_watchlist = watchlist_symbols or ",".join(account.watchlist_symbols)
-    return build_toss_lens_snapshot(toss, mock=False, watchlist_symbols=selected_watchlist)
+class FlowLensService:
+    def __init__(
+        self,
+        account_repository,
+        snapshot_builder: Callable[[AccountConfig], object],
+        demo_positions_provider: Callable = None,
+        settings_provider: Callable[[], Dict[str, str]] = None,
+        fx_rates_provider: Callable[[Dict[str, str]], Dict[str, float]] = None,
+        symbol_enricher: Callable[[str], Dict[str, object]] = None,
+    ):
+        self.account_repository = account_repository
+        self.snapshot_builder = snapshot_builder
+        self.demo_positions_provider = demo_positions_provider
+        self.settings_provider = settings_provider or (lambda: {})
+        self.fx_rates_provider = fx_rates_provider or (lambda settings: {})
+        self.symbol_enricher = symbol_enricher
+
+    def snapshot(self, mock: bool = False, watchlist_symbols: str = "") -> Dict[str, object]:
+        settings = dict(self.settings_provider() or {})
+        rates = self.fx_rates_provider(settings)
+        if mock:
+            toss = demo_toss_portfolio("웹 mock 데이터", self.demo_positions_provider)
+            toss["mode"] = "mock"
+            toss["status"] = "웹 mock 데이터"
+            return build_toss_lens_snapshot(
+                toss,
+                mock=True,
+                watchlist_symbols=watchlist_symbols,
+                fallback_watchlist_symbols=settings.get("watchlistSymbols", ""),
+                fx_rates=rates,
+                enrich_symbol=self.symbol_enricher,
+            )
+        account = self.account_repository.load()[0]
+        toss = toss_portfolio_for_account(account, self.snapshot_builder, self.demo_positions_provider)
+        selected_watchlist = watchlist_symbols or ",".join(account.watchlist_symbols)
+        return build_toss_lens_snapshot(
+            toss,
+            mock=False,
+            watchlist_symbols=selected_watchlist,
+            fallback_watchlist_symbols=settings.get("watchlistSymbols", ""),
+            fx_rates=rates,
+            enrich_symbol=self.symbol_enricher,
+        )
+
+
+def flow_lens_snapshot(service: FlowLensService, mock: bool = False, watchlist_symbols: str = "") -> Dict[str, object]:
+    return service.snapshot(mock=mock, watchlist_symbols=watchlist_symbols)

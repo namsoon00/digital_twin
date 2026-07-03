@@ -5,12 +5,13 @@ from pathlib import Path
 from typing import Dict, Iterable, List
 
 from .domain.model_review import MODEL_REVIEW_PROMPT_VERSION
-from .domain.monitoring import DEFAULT_ALERT_RULES, DEFAULT_CADENCE, DEFAULT_THRESHOLDS, MIN_CADENCE_MINUTES
+from .domain.message_types import DEFAULT_ALERT_RULES, DEFAULT_ALERT_THRESHOLDS, DEFAULT_CADENCE, MIN_CADENCE_MINUTES
 from .domain.parsing import parse_assignments
 from .infrastructure.settings import ROOT_DIR, runtime_settings, service_db_path, settings_path, utc_now
 from .infrastructure.sqlite_accounts import AccountRegistry
 
 
+DEFAULT_THRESHOLDS = DEFAULT_ALERT_THRESHOLDS
 ADMIN_PREVIEW_SCHEMA_VERSION = 1
 
 PUBLIC_SETTING_KEYS = [

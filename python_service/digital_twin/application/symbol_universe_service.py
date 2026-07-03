@@ -1,10 +1,8 @@
 from typing import Dict, Iterable, List
 
-from ..domain.analytics import known_stock
+from ..domain.market_data import known_stock
+from ..domain.repositories import SymbolSourceGateway, SymbolUniverseRepository
 from ..domain.symbol_universe import ListedSymbol, SUPPORTED_MARKETS, is_stale, stale_after_hours
-from ..infrastructure.settings import runtime_settings
-from ..infrastructure.sqlite_operational import SQLiteSymbolUniverseStore
-from ..infrastructure.symbol_sources import fetch_market_symbols, source_descriptor
 
 
 DEFAULT_SYMBOL_SEEDS = ["005930", "000660", "TSLA", "AAPL", "NVDA", "MSFT", "AMD", "MSTR"]
@@ -31,9 +29,15 @@ def seed_symbol(symbol: str) -> ListedSymbol:
 
 
 class SymbolUniverseService:
-    def __init__(self, store: SQLiteSymbolUniverseStore = None, settings: Dict[str, str] = None):
-        self.store = store or SQLiteSymbolUniverseStore()
-        self.settings = settings or runtime_settings()
+    def __init__(
+        self,
+        store: SymbolUniverseRepository,
+        source_gateway: SymbolSourceGateway,
+        settings: Dict[str, str] = None,
+    ):
+        self.store = store
+        self.source_gateway = source_gateway
+        self.settings = dict(settings or {})
 
     def max_age_hours(self) -> int:
         return stale_after_hours(self.settings.get("symbolUniverseMaxAgeHours"), 24)
@@ -52,7 +56,7 @@ class SymbolUniverseService:
         markets = []
         for market in SUPPORTED_MARKETS:
             last_seen = latest.get(market, "")
-            descriptor = source_descriptor(market)
+            descriptor = self.source_gateway.source_descriptor(market)
             markets.append({
                 "market": market,
                 "count": counts.get(market, 0),
@@ -91,9 +95,9 @@ class SymbolUniverseService:
             selected = list(SUPPORTED_MARKETS)
         results: List[Dict[str, object]] = []
         for market in selected:
-            descriptor = source_descriptor(market)
+            descriptor = self.source_gateway.source_descriptor(market)
             try:
-                items = fetch_market_symbols(market)
+                items = self.source_gateway.fetch_market_symbols(market)
                 count = self.store.upsert_many(items)
                 self.store.mark_source(market, descriptor["source"], descriptor["sourceUrl"], "ok", count=count)
                 results.append({"market": market, "status": "ok", "count": count, **descriptor})

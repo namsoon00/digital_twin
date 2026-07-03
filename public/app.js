@@ -927,7 +927,7 @@
       : defaultNotificationTemplates();
     state.notificationTemplateVariables = Array.isArray(payload.variables) && payload.variables.length
       ? payload.variables
-      : ["title", "statusHeadline", "titleHeadline", "telegramMessage", "readableMessage", "dataLines", "telegramDataLines", "triggerSummary", "lines", "rawLines", "body", "messageType", "symbol", "severity"];
+      : ["title", "statusHeadline", "titleHeadline", "telegramMessage", "readableMessage", "dataLines", "telegramDataLines", "triggerSummary", "triggerBlock", "criterionBlock", "lines", "rawLines", "body", "messageType", "symbol", "severity"];
     state.notificationTemplatesLoaded = true;
     state.notificationTemplatesLoading = false;
     state.notificationTemplatesError = "";
@@ -1052,7 +1052,7 @@
   function notificationTemplateVariables() {
     return state.notificationTemplateVariables.length
       ? state.notificationTemplateVariables
-      : ["title", "statusHeadline", "titleHeadline", "telegramMessage", "readableMessage", "dataLines", "telegramDataLines", "triggerSummary", "lines", "rawLines", "body", "messageType", "symbol", "severity"];
+      : ["title", "statusHeadline", "titleHeadline", "telegramMessage", "readableMessage", "dataLines", "telegramDataLines", "triggerSummary", "triggerBlock", "criterionBlock", "lines", "rawLines", "body", "messageType", "symbol", "severity"];
   }
 
   function clampInteger(value, min, max, fallback) {
@@ -1186,6 +1186,26 @@
       "보유",
       "신호"
     ];
+    var dataLabelOrder = {
+      "상태": 10,
+      "손익": 20,
+      "수급": 30,
+      "추세": 40,
+      "기울기": 45,
+      "투자자": 50,
+      "신호": 60
+    };
+    var separateDataLabels = {
+      "상태": true,
+      "손익": true,
+      "수급": true,
+      "추세": true,
+      "기울기": true,
+      "투자자": true,
+      "신호": true,
+      "평가": true,
+      "보유": true
+    };
     function plainBullet(text) {
       var cleaned = String(text || "").trim();
       return cleaned ? "• " + cleaned : "";
@@ -1218,41 +1238,64 @@
       }
       return rows;
     }
-    function plainDataRows(rawItems) {
-      var rows = [];
-      var pairs = [];
-      rawItems.forEach(function (line) {
+    function orderedDataEntries(rawItems) {
+      return rawItems.map(function (line, index) {
         var pair = splitDataLine(line);
         if (pair.label && pair.value) {
-          pairs.push(pair.label + ": " + pair.value);
-        } else {
-          if (pairs.length) {
-            rows = rows.concat(groupedDataRows(pairs));
-            pairs = [];
+          return {
+            kind: "pair",
+            label: pair.label,
+            value: pair.value,
+            index: index,
+            order: Object.prototype.hasOwnProperty.call(dataLabelOrder, pair.label) ? dataLabelOrder[pair.label] : 100 + index
+          };
+        }
+        return {
+          kind: "text",
+          text: String(line || "").trim(),
+          index: index,
+          order: 100 + index
+        };
+      }).sort(function (a, b) {
+        if (a.order !== b.order) return a.order - b.order;
+        return a.index - b.index;
+      });
+    }
+    function dataPairText(label, value, rich) {
+      if (rich) return "<b>" + escapeHtml(label) + "</b>: <code>" + escapeHtml(value) + "</code>";
+      return label + ": " + value;
+    }
+    function formattedDataRows(rawItems, rich) {
+      var rows = [];
+      var pairs = [];
+      function flushPairs() {
+        if (pairs.length) {
+          rows = rows.concat(groupedDataRows(pairs));
+          pairs = [];
+        }
+      }
+      orderedDataEntries(rawItems).forEach(function (entry) {
+        if (entry.kind === "pair") {
+          var pairText = dataPairText(entry.label, entry.value, rich);
+          if (separateDataLabels[entry.label]) {
+            flushPairs();
+            rows.push("• " + pairText);
+          } else {
+            pairs.push(pairText);
           }
-          rows.push(plainBullet(line));
+        } else {
+          flushPairs();
+          rows.push(rich ? htmlBullet(entry.text) : plainBullet(entry.text));
         }
       });
-      if (pairs.length) rows = rows.concat(groupedDataRows(pairs));
+      flushPairs();
       return rows.filter(Boolean).join("\n");
     }
+    function plainDataRows(rawItems) {
+      return formattedDataRows(rawItems, false);
+    }
     function htmlDataRows(rawItems) {
-      var rows = [];
-      var pairs = [];
-      rawItems.forEach(function (line) {
-        var pair = splitDataLine(line);
-        if (pair.label && pair.value) {
-          pairs.push("<b>" + escapeHtml(pair.label) + "</b>: <code>" + escapeHtml(pair.value) + "</code>");
-        } else {
-          if (pairs.length) {
-            rows = rows.concat(groupedDataRows(pairs));
-            pairs = [];
-          }
-          rows.push(htmlBullet(line));
-        }
-      });
-      if (pairs.length) rows = rows.concat(groupedDataRows(pairs));
-      return rows.filter(Boolean).join("\n");
+      return formattedDataRows(rawItems, true);
     }
     var type = messageType || "monitorHeartbeat";
     var samples = {
@@ -1290,7 +1333,7 @@
         title: "SK하이닉스 매수·매도 타이밍",
         symbol: "000660",
         severity: "WATCH",
-        lines: ["상태 조건부 보유", "손익 -3.2%", "매도/매수 기준 재확인"]
+        lines: ["상태 조건부 보유", "손익 -3.2%", "추세: 현재 15만 원, 20일선 14만 원(+4.2%)", "수급: 거래량 31,000(1.7x), 거래액 48억 원", "투자자: 외국인 +22,000, 기관 -8,000", "매도/매수 기준 재확인"]
       },
       monitorHeartbeat: {
         title: "실시간 모니터링",
@@ -1326,7 +1369,7 @@
         title: "SK하이닉스",
         symbol: "000660",
         severity: "ALERT",
-        lines: ["이동평균 변화", "20일선 하향 이탈", "60일선 상향 돌파", "추세 재확인 필요"]
+        lines: ["이동평균 변화", "신호 20일선 하향 이탈 · 60일선 상향 돌파", "추세: 현재 15만 원, 20일선 14만 원(+4.2%), 60일선 13만 원(+9.1%)", "수급: 거래량 31,000(1.7x), 거래액 48억 원", "투자자: 외국인 +22,000, 기관 -8,000"]
       },
       monitorCashChange: {
         title: "현금비중",
@@ -1410,7 +1453,7 @@
       .filter(Boolean)
       .join(" / ");
     var targetLine = targetValue ? "대상: " + targetValue : "";
-    var triggerBlock = triggerSummary ? "조건\n" + plainBullet(triggerSummary) : "";
+    var triggerBlock = triggerSummary ? "발송 기준\n" + plainBullet(triggerSummary) : "";
     var dataRows = plainDataRows(rawItems);
     var dataBlock = dataRows ? "데이터\n" + dataRows : "";
     var divider = "";
@@ -1418,9 +1461,9 @@
       headline,
       targetValue,
       "",
-      triggerBlock,
-      dataBlock ? "" : "",
-      dataBlock
+      dataBlock,
+      triggerBlock ? "" : "",
+      triggerBlock
     ].filter(function (line, index, list) {
       if (line === "") return index > 0 && list[index - 1] !== "";
       return String(line || "").trim();
@@ -1430,11 +1473,11 @@
       "<b>" + escapeHtml(headline) + "</b>",
       targetValue ? "<code>" + escapeHtml(targetValue) + "</code>" : "",
       "",
-      "<b>조건</b>",
-      htmlBullet(triggerSummary),
-      telegramDataLines ? "" : "",
       telegramDataLines ? "<b>데이터</b>" : "",
-      telegramDataLines
+      telegramDataLines,
+      triggerSummary ? "" : "",
+      triggerSummary ? "<b>발송 기준</b>" : "",
+      htmlBullet(triggerSummary)
     ].filter(function (line, index, list) {
       if (line === "") return index > 0 && list[index - 1] !== "";
       return String(line || "").trim();
@@ -1458,6 +1501,7 @@
       titleHeadline: titleHeadline,
       targetLine: targetLine,
       triggerBlock: triggerBlock,
+      criterionBlock: triggerBlock,
       dataBlock: dataBlock,
       divider: divider,
       symbolLine: symbolLine,

@@ -37,6 +37,28 @@ DATA_LABEL_PREFIXES = [
     "신호",
 ]
 
+DATA_LABEL_ORDER = {
+    "상태": 10,
+    "손익": 20,
+    "수급": 30,
+    "추세": 40,
+    "기울기": 45,
+    "투자자": 50,
+    "신호": 60,
+}
+
+SEPARATE_DATA_LABELS = {
+    "상태",
+    "손익",
+    "수급",
+    "추세",
+    "기울기",
+    "투자자",
+    "신호",
+    "평가",
+    "보유",
+}
+
 MESSAGE_TYPE_LABELS = {
     "modelBuy": "모델 매수",
     "modelSell": "모델 매도",
@@ -205,38 +227,68 @@ def split_data_line(line: str):
     return "", text
 
 
-def plain_data_rows(raw_lines: List[str]) -> str:
-    rows: List[str] = []
-    pairs: List[str] = []
-    for line in raw_lines:
+def ordered_data_entries(raw_lines: List[str]) -> List[Dict[str, object]]:
+    entries: List[Dict[str, object]] = []
+    for index, line in enumerate(raw_lines):
         label, value = split_data_line(line)
         if label and value:
-            pairs.append(label + ": " + value)
+            entries.append({
+                "kind": "pair",
+                "label": label,
+                "value": value,
+                "index": index,
+                "order": DATA_LABEL_ORDER.get(label, 100 + index),
+            })
         else:
-            if pairs:
-                rows.extend(grouped_data_rows(pairs))
-                pairs = []
-            rows.append(plain_bullet(line))
-    if pairs:
-        rows.extend(grouped_data_rows(pairs))
+            entries.append({
+                "kind": "text",
+                "text": str(line or "").strip(),
+                "index": index,
+                "order": 100 + index,
+            })
+    return sorted(entries, key=lambda item: (int(item["order"]), int(item["index"])))
+
+
+def data_pair_text(label: str, value: str, rich: bool = False) -> str:
+    if rich:
+        return "<b>" + html.escape(label, quote=False) + "</b>: <code>" + html.escape(value, quote=False) + "</code>"
+    return label + ": " + value
+
+
+def formatted_data_rows(raw_lines: List[str], rich: bool = False) -> str:
+    rows: List[str] = []
+    pairs: List[str] = []
+
+    def flush_pairs():
+        nonlocal pairs
+        if pairs:
+            rows.extend(grouped_data_rows(pairs))
+            pairs = []
+
+    for entry in ordered_data_entries(raw_lines):
+        if entry.get("kind") == "pair":
+            label = str(entry.get("label") or "")
+            value = str(entry.get("value") or "")
+            pair_text = data_pair_text(label, value, rich)
+            if label in SEPARATE_DATA_LABELS:
+                flush_pairs()
+                rows.append("• " + pair_text)
+            else:
+                pairs.append(pair_text)
+            continue
+        flush_pairs()
+        text = str(entry.get("text") or "")
+        rows.append(html_bullet(text) if rich else plain_bullet(text))
+    flush_pairs()
     return "\n".join(row for row in rows if row)
+
+
+def plain_data_rows(raw_lines: List[str]) -> str:
+    return formatted_data_rows(raw_lines, False)
 
 
 def telegram_data_rows(raw_lines: List[str]) -> str:
-    rows: List[str] = []
-    pairs: List[str] = []
-    for line in raw_lines:
-        label, value = split_data_line(line)
-        if label and value:
-            pairs.append("<b>" + html.escape(label, quote=False) + "</b>: <code>" + html.escape(value, quote=False) + "</code>")
-        else:
-            if pairs:
-                rows.extend(grouped_data_rows(pairs))
-                pairs = []
-            rows.append(html_bullet(line))
-    if pairs:
-        rows.extend(grouped_data_rows(pairs))
-    return "\n".join(row for row in rows if row)
+    return formatted_data_rows(raw_lines, True)
 
 
 def grouped_data_rows(items: List[str], per_row: int = 2) -> List[str]:
@@ -291,17 +343,17 @@ def alert_context(event: AlertEvent) -> Dict[str, object]:
     target_value = " / ".join(part for part in target_parts if part)
     target_line = "대상: " + target_value if target_value else ""
     trigger_bullet = plain_bullet(trigger_summary)
-    trigger_block = ("조건\n" + trigger_bullet) if trigger_bullet else ""
+    trigger_block = ("발송 기준\n" + trigger_bullet) if trigger_bullet else ""
     data_rows = plain_data_rows(raw_lines)
     data_block = ("데이터\n" + data_rows) if data_rows else ""
     readable_parts = [
         headline,
         target_value,
-        "",
-        trigger_block,
     ]
     if data_rows:
         readable_parts.extend(["", data_block])
+    if trigger_block:
+        readable_parts.extend(["", trigger_block])
     readable_message = "\n".join(part for part in readable_parts if str(part).strip() or part == "").strip()
     escaped_target = html.escape(target_value, quote=False)
     telegram_trigger_bullet = html_bullet(trigger_summary)
@@ -309,12 +361,11 @@ def alert_context(event: AlertEvent) -> Dict[str, object]:
     telegram_parts = [
         "<b>" + html.escape(headline, quote=False) + "</b>",
         ("<code>" + escaped_target + "</code>") if escaped_target else "",
-        "",
-        "<b>조건</b>",
-        telegram_trigger_bullet,
     ]
     if telegram_data_lines:
         telegram_parts.extend(["", "<b>데이터</b>", telegram_data_lines])
+    if telegram_trigger_bullet:
+        telegram_parts.extend(["", "<b>발송 기준</b>", telegram_trigger_bullet])
     telegram_message = "\n".join(part for part in telegram_parts if str(part).strip() or part == "").strip()
     body = telegram_message or readable_message or "\n".join([event.title] + ([lines] if lines else []))
     return {
@@ -335,6 +386,7 @@ def alert_context(event: AlertEvent) -> Dict[str, object]:
         "titleHeadline": title_headline,
         "targetLine": target_line,
         "triggerBlock": trigger_block,
+        "criterionBlock": trigger_block,
         "dataBlock": data_block,
         "divider": "",
         "telegramMessage": telegram_message,
@@ -426,6 +478,7 @@ def template_variables() -> List[str]:
         "titleHeadline",
         "targetLine",
         "triggerBlock",
+        "criterionBlock",
         "dataBlock",
         "divider",
         "telegramMessage",

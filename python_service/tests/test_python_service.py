@@ -1051,8 +1051,9 @@ class PythonServiceTests(unittest.TestCase):
         self.assertNotIn("━━━━━━━━", message)
         self.assertIn("<b>[관찰] 이동평균 변화</b>", message)
         self.assertIn("<code>Apple / AAPL</code>", message)
-        self.assertIn("<b>조건</b>", message)
+        self.assertIn("<b>발송 기준</b>", message)
         self.assertIn("<b>데이터</b>", message)
+        self.assertLess(message.index("<b>데이터</b>"), message.index("<b>발송 기준</b>"))
         self.assertIn("• <b>신호</b>: <code>20일선 상향 돌파</code>", message)
         self.assertNotIn("\n\n\n", message)
 
@@ -1083,6 +1084,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("• <b>미장 가격 변동</b>: <code>-7.5%</code>, <b>가격</b>: <code>$393.45</code>", message)
         self.assertIn("• <b>거래량</b>: <code>71,917,610</code>, <b>기준일</b>: <code>2026-07-02</code>", message)
         self.assertIn("• <b>출처</b>: <code>Alpha Vantage</code>", message)
+        self.assertLess(message.index("<b>데이터</b>"), message.index("<b>발송 기준</b>"))
 
     def test_flow_and_trend_lines_use_colon_pair_template_format(self):
         db_path = Path(self.temp.name) / "service.db"
@@ -1104,9 +1106,41 @@ class PythonServiceTests(unittest.TestCase):
 
         message = templates.render(event.rule, alert_context(event))
 
-        self.assertIn("• <b>추세</b>: <code>현재 11만 원, 20일선 10만 원(+1.9%), 60일선 10만 원(+2.9%)</code>", message)
-        self.assertIn("<b>수급</b>: <code>거래량 40,000(2.1x), 거래액 24억 원</code>", message)
-        self.assertIn("<b>투자자</b>: <code>외국인 +70,000(매수 510,000/매도 440,000), 기관 +35,000(매수 350,000/매도 315,000)</code>", message)
+        flow_line = "• <b>수급</b>: <code>거래량 40,000(2.1x), 거래액 24억 원</code>"
+        trend_line = "• <b>추세</b>: <code>현재 11만 원, 20일선 10만 원(+1.9%), 60일선 10만 원(+2.9%)</code>"
+        investor_line = "• <b>투자자</b>: <code>외국인 +70,000(매수 510,000/매도 440,000), 기관 +35,000(매수 350,000/매도 315,000)</code>"
+        self.assertIn(flow_line + "\n" + trend_line + "\n" + investor_line, message)
+        self.assertLess(message.index(flow_line), message.index(trend_line))
+        self.assertLess(message.index(trend_line), message.index(investor_line))
+
+    def test_status_profit_flow_and_trend_are_separate_ordered_rows(self):
+        db_path = Path(self.temp.name) / "service.db"
+        templates = SQLiteNotificationTemplateStore(db_path)
+        event = AlertEvent(
+            "main",
+            "메인",
+            "WATCH",
+            "holdingTiming",
+            "main:timing:000660",
+            "SK하이닉스",
+            [
+                "추세: 현재 15만 원, 20일선 14만 원(+4.2%)",
+                "손익 -3.2%",
+                "수급: 거래량 31,000(1.7x), 거래액 48억 원",
+                "상태 조건부 보유",
+            ],
+            "000660",
+        )
+
+        message = templates.render(event.rule, alert_context(event))
+
+        status_line = "• <b>상태</b>: <code>조건부 보유</code>"
+        profit_line = "• <b>손익</b>: <code>-3.2%</code>"
+        flow_line = "• <b>수급</b>: <code>거래량 31,000(1.7x), 거래액 48억 원</code>"
+        trend_line = "• <b>추세</b>: <code>현재 15만 원, 20일선 14만 원(+4.2%)</code>"
+        self.assertIn(status_line + "\n" + profit_line + "\n" + flow_line + "\n" + trend_line, message)
+        self.assertLess(message.index(status_line), message.index(profit_line))
+        self.assertLess(message.index(flow_line), message.index(trend_line))
 
     def test_notification_template_seed_migrates_previous_readable_default(self):
         db_path = Path(self.temp.name) / "service.db"

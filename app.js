@@ -927,7 +927,7 @@
       : defaultNotificationTemplates();
     state.notificationTemplateVariables = Array.isArray(payload.variables) && payload.variables.length
       ? payload.variables
-      : ["title", "statusHeadline", "titleHeadline", "telegramMessage", "readableMessage", "dataLines", "telegramDataLines", "triggerSummary", "triggerBlock", "criterionBlock", "lines", "rawLines", "body", "messageType", "symbol", "severity"];
+      : ["title", "statusHeadline", "titleHeadline", "telegramMessage", "readableMessage", "dataLines", "telegramDataLines", "triggerSummary", "triggerBlock", "criterionBlock", "criterionLines", "lines", "rawLines", "body", "messageType", "symbol", "severity"];
     state.notificationTemplatesLoaded = true;
     state.notificationTemplatesLoading = false;
     state.notificationTemplatesError = "";
@@ -1052,7 +1052,7 @@
   function notificationTemplateVariables() {
     return state.notificationTemplateVariables.length
       ? state.notificationTemplateVariables
-      : ["title", "statusHeadline", "titleHeadline", "telegramMessage", "readableMessage", "dataLines", "telegramDataLines", "triggerSummary", "triggerBlock", "criterionBlock", "lines", "rawLines", "body", "messageType", "symbol", "severity"];
+      : ["title", "statusHeadline", "titleHeadline", "telegramMessage", "readableMessage", "dataLines", "telegramDataLines", "triggerSummary", "triggerBlock", "criterionBlock", "criterionLines", "lines", "rawLines", "body", "messageType", "symbol", "severity"];
   }
 
   function clampInteger(value, min, max, fallback) {
@@ -1214,6 +1214,28 @@
       var cleaned = String(text || "").trim();
       return cleaned ? "• " + escapeHtml(cleaned) : "";
     }
+    function splitLabelValue(text) {
+      var cleaned = String(text || "").trim();
+      var marker = cleaned.indexOf(": ");
+      if (marker > 0 && marker <= 18) {
+        return {
+          label: cleaned.slice(0, marker).trim(),
+          value: cleaned.slice(marker + 2).trim()
+        };
+      }
+      return { label: "", value: cleaned };
+    }
+    function criterionRow(text, rich) {
+      var pair = splitLabelValue(text);
+      if (pair.label && pair.value) {
+        if (rich) return "• <b>" + escapeHtml(pair.label) + "</b>: <code>" + escapeHtml(pair.value) + "</code>";
+        return "• " + pair.label + ": " + pair.value;
+      }
+      return rich ? htmlBullet(text) : plainBullet(text);
+    }
+    function criterionRows(items, rich) {
+      return (items || []).map(function (item) { return criterionRow(item, rich); }).filter(Boolean).join("\n");
+    }
     function splitDataLine(line) {
       var text = String(line || "").trim();
       for (var index = 0; index < dataLabelPrefixes.length; index += 1) {
@@ -1297,121 +1319,154 @@
     function htmlDataRows(rawItems) {
       return formattedDataRows(rawItems, true);
     }
+    function criterionLinesForSample(sample, type, triggerSummary, rawItems) {
+      if (Array.isArray(sample.criteria) && sample.criteria.length) return sample.criteria.slice();
+      var detected = "";
+      if (type === "monitorPnlChange" || type === "monitorValueChange" || type === "monitorCashChange") {
+        detected = rawItems.filter(function (line) { return /^변화\s/.test(line) || /^이전\s/.test(line) || /^현재\s/.test(line); }).join(", ");
+      } else if (type === "monitorTrendChange") {
+        detected = rawItems.filter(function (line) { return /^신호\s/.test(line) || /^추세[:\s]/.test(line); }).join(", ");
+      } else if (type === "externalEquityMove") {
+        detected = rawItems.filter(function (line) { return /^미장 가격 변동\s/.test(line) || /^가격\s/.test(line); }).join(", ");
+      } else if (rawItems.length) {
+        detected = rawItems[0];
+      }
+      return ["설정: " + triggerSummary].concat(detected ? ["감지: " + detected] : []);
+    }
     var type = messageType || "monitorHeartbeat";
     var samples = {
       default: {
         title: "삼성전자 관찰 알림",
         symbol: "005930",
         severity: "WATCH",
-        lines: ["현재가 71,000원", "관찰 기준 유지", "다음 장에서 수급 재확인"]
+        lines: ["현재가 71,000원", "관찰 기준 유지", "다음 장에서 수급 재확인"],
+        criteria: ["설정: 알림 조건이 실제 데이터에서 충족될 때", "감지: 현재가 71,000원"]
       },
       modelBuy: {
         title: "삼성전자 매수 후보",
         symbol: "005930",
         severity: "WATCH",
-        lines: ["모델 매수 점수 78점", "적정가 대비 -12.4%", "거래량과 이동평균이 기준 이상"]
+        lines: ["모델 매수 점수 78점", "적정가 대비 -12.4%", "거래량과 이동평균이 기준 이상"],
+        criteria: ["설정: 모델 매수 점수 74점 이상", "감지: 모델 매수 점수 78점"]
       },
       modelSell: {
         title: "엔비디아 분할매도 검토",
         symbol: "NVDA",
         severity: "ALERT",
-        lines: ["모델 매도 점수 74점", "목표 수익률 도달", "20일선 이탈 여부 확인"]
+        lines: ["모델 매도 점수 74점", "목표 수익률 도달", "20일선 이탈 여부 확인"],
+        criteria: ["설정: 모델 매도 점수 72점 이상", "감지: 모델 매도 점수 74점"]
       },
       watchlistQuote: {
         title: "엔비디아",
         symbol: "NVDA",
         severity: "WATCH",
-        lines: ["관심종목 시세 수집", "현재 $180", "20일선 $172(+4.7%)", "관심종목 알림 기준과 매수 후보를 확인하세요."]
+        lines: ["관심종목 시세 수집", "현재 $180", "20일선 $172(+4.7%)", "관심종목 알림 기준과 매수 후보를 확인하세요."],
+        criteria: ["설정: 관심종목 가격 변화율 ±3% 이상", "감지: 현재가 $180 수집"]
       },
       watchlistQuotePending: {
         title: "카카오",
         symbol: "035720",
         severity: "INFO",
-        lines: ["관심종목 시세 대기", "현재가를 아직 받지 못했습니다.", "토스 candles 응답, 종목 코드, 허용 IP를 확인하세요."]
+        lines: ["관심종목 시세 대기", "현재가를 아직 받지 못했습니다.", "토스 candles 응답, 종목 코드, 허용 IP를 확인하세요."],
+        criteria: ["설정: 관심종목 현재가가 아직 수집되지 않았을 때", "감지: 현재가 없음"]
       },
       holdingTiming: {
         title: "SK하이닉스 매수·매도 타이밍",
         symbol: "000660",
         severity: "WATCH",
-        lines: ["상태 조건부 보유", "손익 -3.2%", "추세: 현재 15만 원, 20일선 14만 원(+4.2%)", "수급: 거래량 31,000(1.7x), 거래액 48억 원", "투자자: 외국인 +22,000, 기관 -8,000", "매도/매수 기준 재확인"]
+        lines: ["상태 조건부 보유", "손익 -3.2%", "추세: 현재 15만 원, 20일선 14만 원(+4.2%)", "수급: 거래량 31,000(1.7x), 거래액 48억 원", "투자자: 외국인 +22,000, 기관 -8,000", "매도/매수 기준 재확인"],
+        criteria: ["설정: 판단 톤이 danger/caution 이거나 손익률이 -8% 이하일 때", "감지: 상태 조건부 보유, 손익 -3.2%"]
       },
       monitorHeartbeat: {
         title: "실시간 모니터링",
         symbol: "",
         severity: "INFO",
-        lines: ["모니터링 정상 작동", "상태 토스 계좌 동기화", "보유 5개", "평가 5,081만 원"]
+        lines: ["모니터링 정상 작동", "상태 토스 계좌 동기화", "보유 5개", "평가 5,081만 원"],
+        criteria: ["설정: 실시간 모니터링 워커 생존 확인 주기", "감지: 상태 토스 계좌 동기화, 보유 5개"]
       },
       monitorConnection: {
         title: "연결 상태 변화",
         symbol: "",
         severity: "WATCH",
-        lines: ["이전 토스 응답 지연", "현재 토스 계좌 동기화", "다음 주기부터 실제 잔고 반영"]
+        lines: ["이전 토스 응답 지연", "현재 토스 계좌 동기화", "다음 주기부터 실제 잔고 반영"],
+        criteria: ["설정: 직전 스냅샷의 토스 연결 상태와 현재 상태가 다를 때", "감지: 이전 토스 응답 지연, 현재 토스 계좌 동기화"]
       },
       monitorPositionChange: {
         title: "SK하이닉스",
         symbol: "000660",
         severity: "WATCH",
-        lines: ["보유 수량 변경", "이전 4주", "현재 5주", "평가액 1,114만 원"]
+        lines: ["보유 수량 변경", "이전 4주", "현재 5주", "평가액 1,114만 원"],
+        criteria: ["설정: 직전 스냅샷 대비 보유 수량이 달라졌을 때", "감지: 이전 4주, 현재 5주"]
       },
       monitorPnlChange: {
         title: "SK하이닉스",
         symbol: "000660",
         severity: "WATCH",
-        lines: ["손익률 급변", "이전 -16.3%", "현재 -13.3%", "변화 +3.0%p"]
+        lines: ["손익률 급변", "이전 -16.3%", "현재 -13.3%", "변화 +3.0%p"],
+        criteria: ["설정: 손익률 변화폭 ±2%p 이상", "감지: 변화 +3.0%p, 이전 -16.3%, 현재 -13.3%"]
       },
       monitorValueChange: {
         title: "SK하이닉스",
         symbol: "000660",
         severity: "WATCH",
-        lines: ["평가액 급변", "이전 1,051만 원", "현재 1,114만 원", "변화 +6.0%"]
+        lines: ["평가액 급변", "이전 1,051만 원", "현재 1,114만 원", "변화 +6.0%"],
+        criteria: ["설정: 평가액 변화율 ±5% 이상", "감지: 변화 +6.0%, 이전 1,051만 원, 현재 1,114만 원"]
       },
       monitorTrendChange: {
         title: "SK하이닉스",
         symbol: "000660",
         severity: "ALERT",
-        lines: ["이동평균 변화", "신호 20일선 하향 이탈 · 60일선 상향 돌파", "추세: 현재 15만 원, 20일선 14만 원(+4.2%), 60일선 13만 원(+9.1%)", "수급: 거래량 31,000(1.7x), 거래액 48억 원", "투자자: 외국인 +22,000, 기관 -8,000"]
+        lines: ["이동평균 변화", "신호 20일선 하향 이탈 · 60일선 상향 돌파", "추세: 현재 15만 원, 20일선 14만 원(+4.2%), 60일선 13만 원(+9.1%)", "수급: 거래량 31,000(1.7x), 거래액 48억 원", "투자자: 외국인 +22,000, 기관 -8,000"],
+        criteria: ["설정: 20일/60일 이동평균 돌파, 크로스, 또는 괴리 ±8% 이상", "감지: 신호 20일선 하향 이탈 · 60일선 상향 돌파"]
       },
       monitorCashChange: {
         title: "현금비중",
         symbol: "",
         severity: "ALERT",
-        lines: ["한국장", "이전 +12.0%", "현재 +1.0%", "변화 -11.0%p"]
+        lines: ["한국장", "이전 +12.0%", "현재 +1.0%", "변화 -11.0%p"],
+        criteria: ["설정: 시장별 현금 비중 변화폭 ±10%p 이상", "감지: 변화 -11.0%p, 이전 +12.0%, 현재 +1.0%"]
       },
       monitorDecisionChange: {
         title: "SK하이닉스",
         symbol: "000660",
         severity: "WATCH",
-        lines: ["판단 변화", "이전 리스크 관찰 36점", "현재 조건부 보유 52점", "Codex 답변: 판단명이 바뀌어 재검토 필요"]
+        lines: ["판단 변화", "이전 리스크 관찰 36점", "현재 조건부 보유 52점", "Codex 답변: 판단명이 바뀌어 재검토 필요"],
+        criteria: ["설정: 판단 라벨 변경 또는 리스크 점수 변화 15점 이상", "감지: 이전 리스크 관찰 36점, 현재 조건부 보유 52점"]
       },
       externalEquityMove: {
         title: "미국 주식 변동",
         symbol: "AAPL",
         severity: "WATCH",
-        lines: ["AAPL 24h +3.1%", "거래량 평소 대비 1.8배", "출처 Alpha Vantage"]
+        lines: ["미장 가격 변동 +3.1%", "가격 $180", "거래량 58,000,000", "출처 Alpha Vantage"],
+        criteria: ["설정: 미장 가격 변동률 ±3% 이상", "감지: 가격 변동 +3.1%, 가격 $180"]
       },
       externalCryptoMove: {
         title: "크립토 변동",
         symbol: "BTC",
         severity: "WATCH",
-        lines: ["BTC 24h +4.5%", "가격 $61,227", "MSTR 등 비트코인 민감 종목 점검"]
+        lines: ["BTC 24h +4.5% · 7d +11.2%", "가격 $61,227", "MSTR 등 비트코인 민감 종목 점검"],
+        criteria: ["설정: 크립토 24h ±4% 또는 7d ±10% 이상", "감지: 24h +4.5%, 7d +11.2%"]
       },
       externalMacroShift: {
         title: "매크로 지표 변화",
         symbol: "DGS10",
         severity: "WATCH",
-        lines: ["미국 10년물 금리 +12bp", "2년/10년 스프레드 확대", "성장주 할인율 재점검"]
+        lines: ["FRED 금리/스프레드 변화", "DGS10 4.35% (+25bp)", "10Y-2Y 0.4% (+30bp)", "성장주 할인율 재점검"],
+        criteria: ["설정: FRED 금리 또는 10Y-2Y 스프레드 변화 ±15bp 이상", "감지: DGS10 +25bp, 10Y-2Y +30bp"]
       },
       externalDartDisclosure: {
         title: "국내 공시 감지",
         symbol: "005930",
         severity: "INFO",
-        lines: ["삼성전자 신규 공시", "단일판매·공급계약", "출처 OpenDART"]
+        lines: ["신규 공시 감지", "단일판매·공급계약", "접수일 20260701", "출처 OpenDART"],
+        criteria: ["설정: OpenDART 접수번호가 직전 조회와 다를 때", "감지: 단일판매·공급계약, 접수일 20260701"]
       },
       externalDataConnection: {
         title: "외부 데이터 연결 상태",
         symbol: "",
         severity: "INFO",
-        lines: ["Alpha Vantage 정상", "CoinGecko 정상", "FRED 응답 지연"]
+        lines: ["FRED", "응답 지연", "키/호출 제한/응답 형식 확인"],
+        criteria: ["설정: 외부 데이터 API 응답 오류, 호출 제한, 또는 응답 형식 문제가 감지될 때", "감지: FRED - 응답 지연"]
       },
       modelReview: {
         title: "내 매매 모델 점검",
@@ -1445,6 +1500,7 @@
     var severityLine = severityLabel ? "상태: " + severityLabel : "";
     var triggerSummary = rule.description ? rule.description : "조건이 실제 데이터에서 충족될 때 보냅니다.";
     var triggerLine = triggerSummary ? "발생 조건: " + triggerSummary : "";
+    var criterionLines = criterionLinesForSample(sample, type, triggerSummary, rawItems);
     var dataLines = lines;
     var statusHeadline = severityLabel ? "[" + severityLabel + "]" : "";
     var titleHeadline = messageTypeLabel || sample.title;
@@ -1453,7 +1509,8 @@
       .filter(Boolean)
       .join(" / ");
     var targetLine = targetValue ? "대상: " + targetValue : "";
-    var triggerBlock = triggerSummary ? "발송 기준\n" + plainBullet(triggerSummary) : "";
+    var triggerBlockRows = criterionRows(criterionLines, false);
+    var triggerBlock = triggerBlockRows ? "발송 기준\n" + triggerBlockRows : "";
     var dataRows = plainDataRows(rawItems);
     var dataBlock = dataRows ? "데이터\n" + dataRows : "";
     var divider = "";
@@ -1475,9 +1532,9 @@
       "",
       telegramDataLines ? "<b>데이터</b>" : "",
       telegramDataLines,
-      triggerSummary ? "" : "",
-      triggerSummary ? "<b>발송 기준</b>" : "",
-      htmlBullet(triggerSummary)
+      criterionLines.length ? "" : "",
+      criterionLines.length ? "<b>발송 기준</b>" : "",
+      criterionRows(criterionLines, true)
     ].filter(function (line, index, list) {
       if (line === "") return index > 0 && list[index - 1] !== "";
       return String(line || "").trim();
@@ -1502,6 +1559,7 @@
       targetLine: targetLine,
       triggerBlock: triggerBlock,
       criterionBlock: triggerBlock,
+      criterionLines: criterionLines.join("\n"),
       dataBlock: dataBlock,
       divider: divider,
       symbolLine: symbolLine,

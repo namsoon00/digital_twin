@@ -1,6 +1,6 @@
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 
 def utc_now_iso() -> str:
@@ -17,6 +17,12 @@ class Position:
     sellable_quantity: float = 0.0
     average_price: float = 0.0
     current_price: float = 0.0
+    change_rate: Optional[float] = None
+    quote_source: str = ""
+    quote_status: str = ""
+    quote_message: str = ""
+    data_quality: str = ""
+    updated_at: str = ""
     market_value: float = 0.0
     profit_loss: float = 0.0
     profit_loss_rate: float = 0.0

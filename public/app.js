@@ -7537,10 +7537,18 @@
     var hasPrice = Boolean(item.currentPrice);
     var quoteRule = enabledAlertRule(rules, "watchlistQuote");
     var pendingRule = enabledAlertRule(rules, "watchlistQuotePending");
+    var quality = String(item.dataQuality || "").toLowerCase();
+    var qualityLabel = quality === "actual" ? "실제 데이터" : (quality === "cached" ? "저장 데이터" : (quality === "mock" ? "mock 데이터" : ""));
     var chips = [
       '<span class="chip ' + (hasPrice ? "ok" : "missing") + '">' + escapeHtml(item.quoteStatus || (hasPrice ? "시세 수집" : "시세 대기")) + '</span>',
       '<span class="chip ' + (quoteRule ? "ok" : "missing") + '">시세 알림 ' + escapeHtml(quoteRule ? "ON" : "OFF") + '</span>'
     ];
+    if (qualityLabel) {
+      chips.push('<span class="chip ' + (quality === "actual" ? "ok" : "") + '">' + escapeHtml(qualityLabel) + '</span>');
+    }
+    if (item.quoteSource) {
+      chips.push('<span class="chip">' + escapeHtml(item.quoteSource) + '</span>');
+    }
     if (!hasPrice) {
       chips.push('<span class="chip ' + (pendingRule ? "ok" : "missing") + '">대기 알림 ' + escapeHtml(pendingRule ? "ON" : "OFF") + '</span>');
     }
@@ -7575,7 +7583,7 @@
     var rows = [
       ["계좌", "계좌 식별, 주문 가능 금액"],
       ["잔고", "보유 종목, 수량, 평가금액, 손익"],
-      ["시세", "관심 종목 현재가, 등락률"],
+      ["시세", "Toss /api/v1/prices 현재가, /api/v1/candles 이동평균"],
       ["거래", "주문/정정/취소는 별도 잠금 단계"]
     ];
     return [

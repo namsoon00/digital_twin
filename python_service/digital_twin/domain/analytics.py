@@ -30,6 +30,13 @@ def first_number(item: Dict[str, object], keys: List[str]) -> float:
     return 0.0
 
 
+def optional_number(item: Dict[str, object], keys: List[str]):
+    for key in keys:
+        if key in item and item.get(key) not in (None, ""):
+            return number(item.get(key))
+    return None
+
+
 def moving_average(values: List[float], period: int) -> float:
     usable = [number(value) for value in values if number(value) > 0]
     if not usable:
@@ -279,6 +286,12 @@ def normalize_position(item: Dict[str, object]) -> Position:
         sellable_quantity=number(item.get("sellableQuantity") or item.get("availableQuantity") or item.get("sellableQty") or item.get("quantity") or item.get("qty")),
         average_price=average_price,
         current_price=current_price,
+        change_rate=optional_number(item, ["changeRate", "priceChangeRate", "changePercent", "changePct", "rate"]),
+        quote_source=str(item.get("quoteSource") or item.get("quote_source") or item.get("provider") or ""),
+        quote_status=str(item.get("quoteStatus") or item.get("quote_status") or ""),
+        quote_message=str(item.get("quoteMessage") or item.get("quote_message") or ""),
+        data_quality=str(item.get("dataQuality") or item.get("data_quality") or ""),
+        updated_at=str(item.get("updatedAt") or item.get("updated_at") or item.get("timestamp") or ""),
         market_value=market_value,
         profit_loss=profit_loss,
         profit_loss_rate=raw_rate,

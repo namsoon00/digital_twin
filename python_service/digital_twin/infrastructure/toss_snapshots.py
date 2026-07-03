@@ -4,13 +4,14 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import replace
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from ..domain.accounts import AccountConfig
 from ..domain.analytics import decisions_for_positions, known_stock, normalize_position, number, portfolio_summary, technical_indicators_from_candles
 from ..domain.portfolio import AccountSnapshot, Position, utc_now_iso
 from .external_signals import ExternalSignalProvider
 from .settings import currency_rates
+from .sqlite_operational import SQLiteMarketQuoteCache
 
 
 def http_json(method: str, url: str, headers: Dict[str, str], body: bytes = None, timeout: int = 12) -> Dict[str, object]:
@@ -115,6 +116,63 @@ def normalize_candles(payload: Dict[str, object]) -> List[Dict[str, object]]:
     return []
 
 
+def normalize_price_items(payload: Dict[str, object]) -> List[Dict[str, object]]:
+    data = payload.get("data") or payload.get("result") or payload
+    if isinstance(data, list):
+        return [item for item in data if isinstance(item, dict)]
+    if not isinstance(data, dict):
+        return []
+    for key in ["prices", "items", "quotes", "result"]:
+        items = data.get(key)
+        if isinstance(items, list):
+            return [item for item in items if isinstance(item, dict)]
+    return []
+
+
+def first_present(item: Dict[str, object], keys: List[str]):
+    for key in keys:
+        if key in item and item.get(key) not in (None, ""):
+            return item.get(key)
+    return None
+
+
+def optional_rate(item: Dict[str, object]):
+    value = first_present(item, ["changeRate", "priceChangeRate", "changePercent", "changePct", "rate"])
+    return number(value) if value not in (None, "") else None
+
+
+def price_symbol(item: Dict[str, object]) -> str:
+    return str(item.get("symbol") or item.get("stockCode") or item.get("code") or "").upper().strip()
+
+
+def normalize_price_payload(item: Dict[str, object]) -> Dict[str, object]:
+    symbol = price_symbol(item)
+    info = known_stock(symbol)
+    price = number(first_present(item, ["lastPrice", "currentPrice", "price", "closePrice"]))
+    volume = number(first_present(item, ["volume", "tradingVolume", "accumulatedVolume", "accTradeVolume"]))
+    trading_value = number(first_present(item, ["tradingValue", "tradeValue", "tradingAmount", "accumulatedTradeAmount", "accTradeAmount"]))
+    if not trading_value and volume and price:
+        trading_value = volume * price
+    timestamp = str(item.get("timestamp") or item.get("updatedAt") or item.get("time") or "")
+    return {
+        "symbol": symbol or info["symbol"],
+        "name": str(item.get("name") or item.get("stockName") or info["name"]),
+        "market": str(item.get("marketCountry") or item.get("market") or info["market"]),
+        "currency": str(item.get("currency") or info["currency"]),
+        "currentPrice": price,
+        "lastPrice": price,
+        "changeRate": optional_rate(item),
+        "volume": volume,
+        "tradingValue": trading_value,
+        "quoteSource": "Toss /api/v1/prices",
+        "quoteStatus": "토스 prices 반영",
+        "quoteMessage": "현재가는 토스 prices, 이동평균은 토스 candles 기준입니다.",
+        "dataQuality": "actual",
+        "provider": "Toss Open API",
+        "updatedAt": timestamp or utc_now_iso(),
+    }
+
+
 def demo_positions() -> List[Position]:
     return [
         normalize_position({
@@ -195,9 +253,10 @@ def demo_positions() -> List[Position]:
 
 
 class TossProvider:
-    def __init__(self, account: AccountConfig):
+    def __init__(self, account: AccountConfig, quote_cache: Optional[SQLiteMarketQuoteCache] = None):
         self.account = account
         self.base_url = account.base_url.rstrip("/")
+        self.quote_cache = quote_cache if quote_cache is not None else SQLiteMarketQuoteCache()
 
     def fetch_positions(self) -> Tuple[str, str, List[Position], float, str, List[Position]]:
         if not self.account.client_id or not self.account.client_secret:
@@ -234,7 +293,8 @@ class TossProvider:
                 {"Authorization": "Bearer " + token, "X-Tossinvest-Account": account_seq},
             )
             positions = [normalize_position(item) for item in normalize_holdings(holdings_payload)]
-            positions = self.enrich_positions_with_candles(token, positions)
+            position_prices = self.safe_fetch_prices(token, [position.symbol for position in positions if position.symbol and not position.is_cash()])
+            positions = self.enrich_positions_with_candles(token, positions, position_prices)
             watchlist = self.fetch_watchlist_quotes(token, positions)
             return "live", "토스 계좌 동기화", positions, account_cash, account_currency, watchlist
         except (urllib.error.URLError, urllib.error.HTTPError, RuntimeError, ValueError) as error:
@@ -258,6 +318,36 @@ class TossProvider:
             total += amount * rates.get(currency, 1.0)
         return total
 
+    def safe_fetch_prices(self, token: str, symbols: List[str]) -> Dict[str, Dict[str, object]]:
+        try:
+            return self.fetch_prices(token, symbols)
+        except (urllib.error.URLError, urllib.error.HTTPError, RuntimeError, ValueError, OSError):
+            return {}
+
+    def fetch_prices(self, token: str, symbols: List[str]) -> Dict[str, Dict[str, object]]:
+        unique = []
+        for symbol in symbols:
+            normalized = str(symbol or "").upper().strip()
+            if normalized and normalized not in unique:
+                unique.append(normalized)
+        quotes: Dict[str, Dict[str, object]] = {}
+        for index in range(0, len(unique), 200):
+            chunk = unique[index:index + 200]
+            if not chunk:
+                continue
+            query = urllib.parse.urlencode({"symbols": ",".join(chunk)})
+            payload = http_json(
+                "GET",
+                self.base_url + "/api/v1/prices?" + query,
+                {"Authorization": "Bearer " + token},
+            )
+            for item in normalize_price_items(payload):
+                normalized = normalize_price_payload(item)
+                symbol = str(normalized.get("symbol") or "").upper()
+                if symbol:
+                    quotes[symbol] = normalized
+        return quotes
+
     def fetch_daily_candles(self, token: str, symbol: str) -> List[Dict[str, object]]:
         query = urllib.parse.urlencode({
             "symbol": symbol,
@@ -272,49 +362,193 @@ class TossProvider:
         )
         return normalize_candles(payload)
 
-    def enrich_positions_with_candles(self, token: str, positions: List[Position]) -> List[Position]:
+    def cached_quote(self, symbol: str) -> Dict[str, object]:
+        try:
+            return self.quote_cache.load("toss", self.account.account_id, symbol)
+        except Exception:
+            return {}
+
+    def save_quote_cache(self, position: Position) -> None:
+        if not position.symbol:
+            return
+        if not any([
+            position.current_price,
+            position.volume,
+            position.ma5,
+            position.ma20,
+            position.ma60,
+            position.ma120,
+            position.ma200,
+        ]):
+            return
+        payload = {
+            "symbol": position.symbol,
+            "name": position.name,
+            "market": position.market,
+            "currency": position.currency,
+            "currentPrice": position.current_price,
+            "changeRate": position.change_rate,
+            "quoteSource": position.quote_source,
+            "quoteStatus": position.quote_status,
+            "quoteMessage": position.quote_message,
+            "dataQuality": position.data_quality or "actual",
+            "updatedAt": position.updated_at or utc_now_iso(),
+            "tradingValue": position.trading_value,
+            "volume": position.volume,
+            "volumeRatio": position.volume_ratio,
+            "tradeStrength": position.trade_strength,
+            "buyVolume": position.buy_volume,
+            "sellVolume": position.sell_volume,
+            "foreignBuyVolume": position.foreign_buy_volume,
+            "foreignSellVolume": position.foreign_sell_volume,
+            "institutionBuyVolume": position.institution_buy_volume,
+            "institutionSellVolume": position.institution_sell_volume,
+            "ma5": position.ma5,
+            "ma20": position.ma20,
+            "ma60": position.ma60,
+            "ma120": position.ma120,
+            "ma200": position.ma200,
+            "ma20Slope": position.ma20_slope,
+            "ma60Slope": position.ma60_slope,
+            "ma20Distance": position.ma20_distance,
+            "ma60Distance": position.ma60_distance,
+            "sector": position.sector,
+        }
+        try:
+            self.quote_cache.save("toss", self.account.account_id, position.symbol, payload)
+        except Exception:
+            return
+
+    def merge_market_data(
+        self,
+        position: Position,
+        quote: Dict[str, object],
+        indicators: Dict[str, object],
+        cached: Dict[str, object],
+        quote_live: bool,
+        indicators_live: bool,
+    ) -> Position:
+        quote = quote or {}
+        indicators = indicators or {}
+        cached = cached or {}
+        cached_price = number(first_present(cached, ["currentPrice", "lastPrice", "price", "closePrice"]))
+        live_price = number(first_present(quote, ["currentPrice", "lastPrice", "price", "closePrice"]))
+        used_cached_price = not live_price and not position.current_price and bool(cached_price)
+        current_price = live_price or position.current_price or cached_price
+        indicator_source = indicators if indicators else cached
+        volume = (
+            position.volume
+            or number(first_present(quote, ["volume", "tradingVolume", "accumulatedVolume"]))
+            or number(indicator_source.get("volume"))
+            or number(cached.get("volume"))
+        )
+        volume_ratio = position.volume_ratio or number(indicator_source.get("volumeRatio")) or number(cached.get("volumeRatio"))
+        trading_value = (
+            position.trading_value
+            or number(first_present(quote, ["tradingValue", "tradeValue", "tradingAmount"]))
+            or number(cached.get("tradingValue"))
+        )
+        if not trading_value and volume and current_price:
+            trading_value = volume * current_price
+        quote_message = "현재가는 토스 prices, 이동평균은 토스 candles 기준입니다."
+        quote_status = "토스 prices 반영" if live_price else ""
+        quote_source = str(quote.get("quoteSource") or "")
+        data_quality = "actual" if live_price or indicators_live else position.data_quality
+        updated_at = str(quote.get("updatedAt") or "")
+        if used_cached_price:
+            quote_status = "마지막 저장 시세"
+            quote_message = "토스 호출 제한 또는 오류로 마지막 저장 시세를 표시합니다."
+            quote_source = str(cached.get("quoteSource") or "Toss Open API cache")
+            data_quality = "cached"
+            updated_at = str(cached.get("updatedAt") or "")
+        elif live_price and not indicators_live and cached:
+            quote_message = "현재가는 토스 prices, 이동평균은 마지막 저장 candles 기준입니다."
+        elif not live_price and indicators_live and not position.current_price:
+            quote_status = "토스 candles 지표 반영"
+            quote_message = "토스 prices 현재가 없이 candles 지표만 반영했습니다."
+            quote_source = "Toss /api/v1/candles"
+        elif not live_price and position.current_price:
+            quote_status = position.quote_status or "토스 잔고 시세"
+            quote_message = position.quote_message or "잔고 응답의 현재가를 표시합니다."
+            quote_source = position.quote_source or "Toss holdings"
+            updated_at = position.updated_at
+        market_value = position.market_value or (position.quantity * current_price if position.quantity and current_price else 0.0)
+        return replace(
+            position,
+            current_price=current_price,
+            change_rate=quote.get("changeRate") if quote.get("changeRate") is not None else position.change_rate,
+            quote_source=quote_source or position.quote_source or str(cached.get("quoteSource") or ""),
+            quote_status=quote_status or position.quote_status or str(cached.get("quoteStatus") or ""),
+            quote_message=quote_message or position.quote_message or str(cached.get("quoteMessage") or ""),
+            data_quality=data_quality or position.data_quality or str(cached.get("dataQuality") or ""),
+            updated_at=updated_at or position.updated_at or str(cached.get("updatedAt") or ""),
+            currency=str(quote.get("currency") or position.currency or cached.get("currency") or ""),
+            market=str(quote.get("market") or position.market or cached.get("market") or ""),
+            market_value=market_value,
+            trading_value=trading_value,
+            volume=volume,
+            volume_ratio=volume_ratio,
+            ma5=number(indicator_source.get("ma5")) or position.ma5,
+            ma20=number(indicator_source.get("ma20")) or position.ma20,
+            ma60=number(indicator_source.get("ma60")) or position.ma60,
+            ma120=number(indicator_source.get("ma120")) or position.ma120,
+            ma200=number(indicator_source.get("ma200")) or position.ma200,
+            ma20_slope=number(indicator_source.get("ma20Slope")) or position.ma20_slope,
+            ma60_slope=number(indicator_source.get("ma60Slope")) or position.ma60_slope,
+            ma20_distance=number(indicator_source.get("ma20Distance")) or position.ma20_distance,
+            ma60_distance=number(indicator_source.get("ma60Distance")) or position.ma60_distance,
+        )
+
+    def enrich_positions_with_candles(
+        self,
+        token: str,
+        positions: List[Position],
+        price_map: Optional[Dict[str, Dict[str, object]]] = None,
+    ) -> List[Position]:
         enriched: List[Position] = []
         chart_calls = 0
+        prices = price_map or {}
         for position in positions:
             if position.is_cash() or not position.symbol:
                 enriched.append(position)
                 continue
+            indicators: Dict[str, object] = {}
+            indicators_live = False
             try:
                 if chart_calls:
                     time.sleep(0.22)
                 candles = self.fetch_daily_candles(token, position.symbol)
                 chart_calls += 1
                 indicators = technical_indicators_from_candles(candles)
-                if not indicators:
-                    enriched.append(position)
-                    continue
-                enriched.append(replace(
-                    position,
-                    current_price=position.current_price or indicators.get("currentPrice", 0.0),
-                    volume=position.volume or number(indicators.get("volume")),
-                    volume_ratio=position.volume_ratio or number(indicators.get("volumeRatio")),
-                    ma5=number(indicators.get("ma5")),
-                    ma20=number(indicators.get("ma20")),
-                    ma60=number(indicators.get("ma60")),
-                    ma120=number(indicators.get("ma120")),
-                    ma200=number(indicators.get("ma200")),
-                    ma20_slope=number(indicators.get("ma20Slope")),
-                    ma60_slope=number(indicators.get("ma60Slope")),
-                    ma20_distance=number(indicators.get("ma20Distance")),
-                    ma60_distance=number(indicators.get("ma60Distance")),
-                ))
+                indicators_live = bool(indicators)
             except (urllib.error.URLError, urllib.error.HTTPError, RuntimeError, ValueError, OSError):
-                enriched.append(position)
+                indicators = {}
+            symbol = position.symbol.upper()
+            merged = self.merge_market_data(
+                position,
+                prices.get(symbol) or {},
+                indicators,
+                self.cached_quote(symbol),
+                quote_live=bool(prices.get(symbol)),
+                indicators_live=indicators_live,
+            )
+            if prices.get(symbol) or indicators_live:
+                self.save_quote_cache(merged)
+            enriched.append(merged)
         return enriched
 
     def fetch_watchlist_quotes(self, token: str, positions: List[Position]) -> List[Position]:
         holding_symbols = {position.symbol.upper() for position in positions if position.symbol}
         watchlist: List[Position] = []
+        symbols = [
+            str(symbol or "").upper()
+            for symbol in self.account.watchlist_symbols[:30]
+            if str(symbol or "").upper() and str(symbol or "").upper() not in holding_symbols
+        ]
+        prices = self.safe_fetch_prices(token, symbols)
         chart_calls = 0
-        for symbol in self.account.watchlist_symbols[:30]:
+        for symbol in symbols:
             normalized = str(symbol or "").upper()
-            if not normalized or normalized in holding_symbols:
-                continue
             info = known_stock(normalized)
             base = normalize_position({
                 "symbol": info.get("symbol") or normalized,
@@ -323,32 +557,29 @@ class TossProvider:
                 "currency": info.get("currency") or "",
                 "sector": info.get("sector") or "",
             })
+            indicators: Dict[str, object] = {}
+            indicators_live = False
             try:
                 if chart_calls:
                     time.sleep(0.22)
                 candles = self.fetch_daily_candles(token, normalized)
                 chart_calls += 1
                 indicators = technical_indicators_from_candles(candles)
-                if not indicators:
-                    watchlist.append(base)
-                    continue
-                watchlist.append(replace(
-                    base,
-                    current_price=number(indicators.get("currentPrice")),
-                    volume=number(indicators.get("volume")),
-                    volume_ratio=number(indicators.get("volumeRatio")),
-                    ma5=number(indicators.get("ma5")),
-                    ma20=number(indicators.get("ma20")),
-                    ma60=number(indicators.get("ma60")),
-                    ma120=number(indicators.get("ma120")),
-                    ma200=number(indicators.get("ma200")),
-                    ma20_slope=number(indicators.get("ma20Slope")),
-                    ma60_slope=number(indicators.get("ma60Slope")),
-                    ma20_distance=number(indicators.get("ma20Distance")),
-                    ma60_distance=number(indicators.get("ma60Distance")),
-                ))
+                indicators_live = bool(indicators)
             except (urllib.error.URLError, urllib.error.HTTPError, RuntimeError, ValueError, OSError):
-                watchlist.append(base)
+                indicators = {}
+            quote = prices.get(normalized) or {}
+            merged = self.merge_market_data(
+                base,
+                quote,
+                indicators,
+                self.cached_quote(normalized),
+                quote_live=bool(quote),
+                indicators_live=indicators_live,
+            )
+            if quote or indicators_live:
+                self.save_quote_cache(merged)
+            watchlist.append(merged)
         return watchlist
 
 

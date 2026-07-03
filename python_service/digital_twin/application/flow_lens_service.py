@@ -28,6 +28,12 @@ def position_payload(position: Position) -> Dict[str, object]:
         "sellableQuantity": str(position.sellable_quantity).rstrip("0").rstrip(".") if position.sellable_quantity else "",
         "averagePrice": position.average_price,
         "currentPrice": position.current_price,
+        "changeRate": position.change_rate,
+        "quoteSource": position.quote_source,
+        "quoteStatus": position.quote_status,
+        "quoteMessage": position.quote_message,
+        "dataQuality": position.data_quality,
+        "updatedAt": position.updated_at,
         "marketValue": position.market_value,
         "profitLoss": position.profit_loss,
         "profitLossRate": position.profit_loss_rate,
@@ -270,11 +276,11 @@ def merge_watchlist_quotes(watchlist: List[Dict[str, object]], quotes: List[Dict
                 for key, value in quote.items()
                 if value not in (None, "")
             })
-        next_item["quoteStatus"] = "토스 시세 반영" if number(next_item.get("currentPrice")) else "시세 조회 대기"
+        next_item["quoteStatus"] = str(next_item.get("quoteStatus") or ("토스 prices 반영" if number(next_item.get("currentPrice")) else "시세 조회 대기"))
         if not number(next_item.get("currentPrice")):
-            next_item["quoteMessage"] = "토스 candles 응답이 없거나 아직 해당 종목 시세를 받지 못했습니다."
+            next_item["quoteMessage"] = next_item.get("quoteMessage") or "토스 prices 응답이 없거나 아직 해당 종목 시세를 받지 못했습니다."
         else:
-            next_item["quoteMessage"] = "현재가와 이동평균은 토스 candles 기준입니다."
+            next_item["quoteMessage"] = next_item.get("quoteMessage") or "현재가는 토스 prices, 이동평균은 토스 candles 기준입니다."
         merged.append(next_item)
     return merged
 

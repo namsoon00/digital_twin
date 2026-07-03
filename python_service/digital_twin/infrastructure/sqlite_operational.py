@@ -129,6 +129,17 @@ class OperationalConnection:
                 )
             """)
             connection.execute("""
+                CREATE TABLE IF NOT EXISTS market_quote_cache (
+                    provider TEXT NOT NULL,
+                    account_id TEXT NOT NULL DEFAULT '',
+                    symbol TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (provider, account_id, symbol)
+                )
+            """)
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_market_quote_cache_account ON market_quote_cache(account_id, symbol)")
+            connection.execute("""
                 CREATE TABLE IF NOT EXISTS notification_templates (
                     message_type TEXT PRIMARY KEY,
                     template TEXT NOT NULL,
@@ -579,6 +590,70 @@ class SQLiteExternalSignalCache(OperationalConnection):
                 """,
                 (self.store_id, json_dumps(payload), stamp),
             )
+
+
+class SQLiteMarketQuoteCache(OperationalConnection):
+    def save(self, provider: str, account_id: str, symbol: str, payload: Dict[str, object]) -> None:
+        clean_symbol = str(symbol or "").upper().strip()
+        if not clean_symbol or not isinstance(payload, dict):
+            return
+        stamp = utc_now()
+        cached = dict(payload)
+        cached.setdefault("updatedAt", stamp)
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO market_quote_cache (provider, account_id, symbol, payload_json, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(provider, account_id, symbol) DO UPDATE SET
+                    payload_json = excluded.payload_json,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    str(provider or "").strip().lower() or "unknown",
+                    str(account_id or "").strip(),
+                    clean_symbol,
+                    json_dumps(cached),
+                    stamp,
+                ),
+            )
+
+    def load(self, provider: str, account_id: str, symbol: str) -> Dict[str, object]:
+        clean_symbol = str(symbol or "").upper().strip()
+        if not clean_symbol:
+            return {}
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT payload_json, updated_at
+                FROM market_quote_cache
+                WHERE provider = ? AND account_id = ? AND symbol = ?
+                """,
+                (
+                    str(provider or "").strip().lower() or "unknown",
+                    str(account_id or "").strip(),
+                    clean_symbol,
+                ),
+            ).fetchone()
+        if not row:
+            return {}
+        try:
+            payload = json.loads(row["payload_json"])
+        except json.JSONDecodeError:
+            return {}
+        if not isinstance(payload, dict):
+            return {}
+        payload.setdefault("updatedAt", row["updated_at"])
+        payload.setdefault("symbol", clean_symbol)
+        return payload
+
+    def load_many(self, provider: str, account_id: str, symbols: Iterable[str]) -> Dict[str, Dict[str, object]]:
+        return {
+            str(symbol or "").upper(): payload
+            for symbol in symbols
+            for payload in [self.load(provider, account_id, str(symbol or ""))]
+            if payload
+        }
 
 
 class SQLiteSymbolUniverseStore(OperationalConnection):

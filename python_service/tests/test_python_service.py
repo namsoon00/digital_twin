@@ -4,6 +4,8 @@ import sqlite3
 import sys
 import tempfile
 import unittest
+import urllib.error
+import urllib.parse
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -36,10 +38,10 @@ from digital_twin.infrastructure.model_review_queue import ModelReviewEnqueuer, 
 from digital_twin.infrastructure.mock_market import mock_market_payload
 from digital_twin.infrastructure.notifications import TelegramNotifier, send_events
 from digital_twin.infrastructure.settings import runtime_settings
-from digital_twin.infrastructure.sqlite_operational import SQLiteAppStore, SQLiteEventLog, SQLiteExternalSignalCache, SQLiteModelReviewJobStore, SQLiteMonitorStore, SQLiteNotificationJobStore, SQLiteNotificationRuleStore, SQLiteNotificationTemplateStore, SQLiteRuntimeSettingsStore, SQLiteSymbolUniverseStore
+from digital_twin.infrastructure.sqlite_operational import SQLiteAppStore, SQLiteEventLog, SQLiteExternalSignalCache, SQLiteMarketQuoteCache, SQLiteModelReviewJobStore, SQLiteMonitorStore, SQLiteNotificationJobStore, SQLiteNotificationRuleStore, SQLiteNotificationTemplateStore, SQLiteRuntimeSettingsStore, SQLiteSymbolUniverseStore
 from digital_twin.infrastructure.symbol_sources import parse_krx_kind_table, parse_nasdaq_listed
 from digital_twin.infrastructure.sqlite_accounts import AccountRegistry
-from digital_twin.infrastructure.toss_snapshots import account_cash_amount, select_account
+from digital_twin.infrastructure.toss_snapshots import TossProvider, account_cash_amount, normalize_price_items, select_account
 from digital_twin.infrastructure.web_server import notification_schedules_payload, notification_template_test_payload, realtime_status_payload
 from digital_twin.scheduler import MonitorRunner
 
@@ -88,6 +90,125 @@ class PythonServiceTests(unittest.TestCase):
         }
 
         self.assertEqual(125000.0, account_cash_amount(account))
+
+    def test_toss_prices_are_primary_quote_source_and_cached(self):
+        calls = []
+        db_path = Path(self.temp.name) / "service.db"
+        account = AccountConfig("main", "메인", "toss", "https://example.test", "id", "secret", "1", ["TSLA"])
+
+        def candles(price):
+            return {
+                "result": {
+                    "candles": [
+                        {
+                            "timestamp": "2026-01-" + str(index + 1).zfill(2) + "T09:00:00+09:00",
+                            "closePrice": str(price + index),
+                            "volume": str(1000 + index),
+                            "currency": "USD",
+                        }
+                        for index in range(28)
+                    ]
+                }
+            }
+
+        def fake_http_json(method, url, headers, body=None, timeout=12):
+            calls.append(url)
+            path = urllib.parse.urlparse(url).path
+            query = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+            if path == "/oauth2/token":
+                return {"access_token": "token"}
+            if path == "/api/v1/accounts":
+                return {"result": [{"accountSeq": "1", "currency": "KRW", "orderableAmount": "1000"}]}
+            if path == "/api/v1/buying-power":
+                return {"result": {"cashBuyingPower": "0"}}
+            if path == "/api/v1/holdings":
+                return {"result": {"holdings": [{
+                    "symbol": "AAPL",
+                    "name": "Apple",
+                    "market": "US",
+                    "currency": "USD",
+                    "quantity": "2",
+                    "averagePrice": "90",
+                }]}}
+            if path == "/api/v1/prices":
+                symbols = set(",".join(query.get("symbols", [])).split(","))
+                result = []
+                if "AAPL" in symbols:
+                    result.append({"symbol": "AAPL", "lastPrice": "101", "currency": "USD", "timestamp": "2026-07-03T09:30:00+09:00"})
+                if "TSLA" in symbols:
+                    result.append({"symbol": "TSLA", "lastPrice": "202", "currency": "USD", "timestamp": "2026-07-03T09:30:00+09:00"})
+                return {"result": result}
+            if path == "/api/v1/candles":
+                symbol = (query.get("symbol") or [""])[0]
+                return candles(50 if symbol == "AAPL" else 150)
+            return {}
+
+        provider = TossProvider(account, quote_cache=SQLiteMarketQuoteCache(db_path))
+        with mock.patch("digital_twin.infrastructure.toss_snapshots.http_json", side_effect=fake_http_json):
+            mode, status, positions, cash, currency, watchlist = provider.fetch_positions()
+
+        aapl = next(item for item in positions if item.symbol == "AAPL")
+        tsla = next(item for item in watchlist if item.symbol == "TSLA")
+        cached = SQLiteMarketQuoteCache(db_path).load("toss", "main", "TSLA")
+
+        self.assertEqual("live", mode)
+        self.assertEqual("토스 계좌 동기화", status)
+        self.assertEqual(101, aapl.current_price)
+        self.assertEqual(202, tsla.current_price)
+        self.assertEqual("Toss /api/v1/prices", tsla.quote_source)
+        self.assertEqual("actual", tsla.data_quality)
+        self.assertGreater(tsla.ma20, 0)
+        self.assertEqual(202, cached["currentPrice"])
+        self.assertTrue(any("/api/v1/prices" in url for url in calls))
+
+    def test_toss_quote_cache_fills_watchlist_when_market_data_is_rate_limited(self):
+        db_path = Path(self.temp.name) / "service.db"
+        cache = SQLiteMarketQuoteCache(db_path)
+        cache.save("toss", "main", "TSLA", {
+            "symbol": "TSLA",
+            "name": "Tesla",
+            "market": "US",
+            "currency": "USD",
+            "currentPrice": 250,
+            "quoteSource": "Toss /api/v1/prices",
+            "quoteStatus": "토스 prices 반영",
+            "dataQuality": "actual",
+            "ma20": 240,
+            "ma60": 220,
+            "updatedAt": "2026-07-03T00:00:00Z",
+        })
+        account = AccountConfig("main", "메인", "toss", "https://example.test", "id", "secret", "1", ["TSLA"])
+
+        def fake_http_json(method, url, headers, body=None, timeout=12):
+            path = urllib.parse.urlparse(url).path
+            if path == "/oauth2/token":
+                return {"access_token": "token"}
+            if path == "/api/v1/accounts":
+                return {"result": [{"accountSeq": "1", "currency": "KRW", "orderableAmount": "1000"}]}
+            if path == "/api/v1/buying-power":
+                return {"result": {"cashBuyingPower": "0"}}
+            if path == "/api/v1/holdings":
+                return {"result": {"holdings": []}}
+            if path in {"/api/v1/prices", "/api/v1/candles"}:
+                raise urllib.error.URLError("rate limit")
+            return {}
+
+        provider = TossProvider(account, quote_cache=cache)
+        with mock.patch("digital_twin.infrastructure.toss_snapshots.http_json", side_effect=fake_http_json):
+            mode, _, _, _, _, watchlist = provider.fetch_positions()
+
+        tsla = next(item for item in watchlist if item.symbol == "TSLA")
+
+        self.assertEqual("live", mode)
+        self.assertEqual(250, tsla.current_price)
+        self.assertEqual(240, tsla.ma20)
+        self.assertEqual("cached", tsla.data_quality)
+        self.assertEqual("마지막 저장 시세", tsla.quote_status)
+
+    def test_toss_price_normalizer_accepts_official_result_shape(self):
+        items = normalize_price_items({"result": [{"symbol": "AAPL", "lastPrice": "185.70", "currency": "USD"}]})
+
+        self.assertEqual("AAPL", items[0]["symbol"])
 
     def test_account_registry_stores_telegram_per_account(self):
         registry = AccountRegistry()

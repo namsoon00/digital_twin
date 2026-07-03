@@ -1051,8 +1051,32 @@
 
   function defaultMarketHoursSessions() {
     return [
-      { market: "KR", label: "국장 정규장", timezone: "Asia/Seoul", openTime: "09:00", closeTime: "15:30", weekdays: [0, 1, 2, 3, 4] },
-      { market: "US", label: "미장 정규장", timezone: "America/New_York", openTime: "09:30", closeTime: "16:00", weekdays: [0, 1, 2, 3, 4] }
+      {
+        market: "KR",
+        label: "국장",
+        timezone: "Asia/Seoul",
+        openTime: "08:00",
+        closeTime: "20:00",
+        weekdays: [0, 1, 2, 3, 4],
+        sessions: [
+          { key: "pre", label: "프리마켓", openTime: "08:00", closeTime: "08:50" },
+          { key: "regular", label: "정규장", openTime: "09:00", closeTime: "15:30" },
+          { key: "after", label: "애프터마켓", openTime: "15:30", closeTime: "20:00" }
+        ]
+      },
+      {
+        market: "US",
+        label: "미장",
+        timezone: "America/New_York",
+        openTime: "04:00",
+        closeTime: "20:00",
+        weekdays: [0, 1, 2, 3, 4],
+        sessions: [
+          { key: "pre", label: "프리마켓", openTime: "04:00", closeTime: "09:30" },
+          { key: "regular", label: "정규장", openTime: "09:30", closeTime: "16:00" },
+          { key: "after", label: "애프터마켓", openTime: "16:00", closeTime: "20:00" }
+        ]
+      }
     ];
   }
 
@@ -5958,6 +5982,11 @@
   }
 
   function marketHoursSessionSummary(session) {
+    if (Array.isArray(session.sessions) && session.sessions.length) {
+      return session.sessions.map(function (item) {
+        return String(item.label || "") + " " + String(item.openTime || "") + "-" + String(item.closeTime || "");
+      }).join(" · ") + " " + String(session.timezone || "");
+    }
     return String(session.openTime || "") + "-" + String(session.closeTime || "") + " " + String(session.timezone || "");
   }
 
@@ -5967,7 +5996,7 @@
     selected = selected.map(function (market) { return String(market || "").trim().toUpperCase(); });
     var summary = rule.marketHoursEnabled === false
       ? "장 시간 필터 꺼짐"
-      : (selected.length ? selected.join(", ") : "시장 미선택") + " 정규장에만 발송";
+      : (selected.length ? selected.join(", ") : "시장 미선택") + " 거래 세션에만 발송";
     return [
       '<div class="notification-rule-market-hours">',
       '<div class="notification-rule-head notification-rule-subhead">',

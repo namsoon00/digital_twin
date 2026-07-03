@@ -384,6 +384,7 @@
     notificationRulesLoaded: false,
     notificationRulesError: "",
     notificationRulesSaved: false,
+    notificationMarketHoursSessions: [],
     notificationJobItems: [],
     notificationJobsLoading: false,
     notificationJobsLoaded: false,
@@ -1048,6 +1049,37 @@
     return ["messageType", "accountId", "symbol", "severity", "title"];
   }
 
+  function defaultMarketHoursSessions() {
+    return [
+      { market: "KR", label: "국장 정규장", timezone: "Asia/Seoul", openTime: "09:00", closeTime: "15:30", weekdays: [0, 1, 2, 3, 4] },
+      { market: "US", label: "미장 정규장", timezone: "America/New_York", openTime: "09:30", closeTime: "16:00", weekdays: [0, 1, 2, 3, 4] }
+    ];
+  }
+
+  function defaultNotificationRuleMarketHoursEnabled(messageType) {
+    return [
+      "modelBuy",
+      "modelSell",
+      "watchlistQuote",
+      "watchlistQuotePending",
+      "holdingTiming",
+      "monitorPositionChange",
+      "monitorPnlChange",
+      "monitorValueChange",
+      "monitorTrendChange",
+      "monitorDecisionChange",
+      "externalEquityMove",
+      "externalDartDisclosure"
+    ].indexOf(String(messageType || "")) >= 0;
+  }
+
+  function defaultNotificationRuleMarketHoursMarkets(messageType) {
+    var type = String(messageType || "");
+    if (type === "externalEquityMove") return ["US"];
+    if (type === "externalDartDisclosure") return ["KR"];
+    return defaultNotificationRuleMarketHoursEnabled(type) ? ["KR", "US"] : [];
+  }
+
   function defaultNotificationRule(messageType) {
     var type = String(messageType || "notification").trim() || "notification";
     var systemTypes = ["default", "modelReview", "workHandoff", "notification"];
@@ -1065,6 +1097,8 @@
       similarityPenalty: defaultNotificationRuleSimilarityPenalty(type),
       similarityBypassScoreDelta: defaultNotificationRuleSimilarityBypassDelta(type),
       similarityFields: defaultNotificationRuleSimilarityFields(),
+      marketHoursEnabled: defaultNotificationRuleMarketHoursEnabled(type),
+      marketHoursMarkets: defaultNotificationRuleMarketHoursMarkets(type),
       updatedAt: ""
     };
   }
@@ -1126,6 +1160,9 @@
     state.notificationRuleConditionTypes = Array.isArray(payload.conditionTypes) && payload.conditionTypes.length
       ? payload.conditionTypes
       : defaultNotificationRuleConditionTypes();
+    state.notificationMarketHoursSessions = Array.isArray(payload.marketHoursSessions) && payload.marketHoursSessions.length
+      ? payload.marketHoursSessions
+      : defaultMarketHoursSessions();
     state.notificationRulesLoaded = true;
     state.notificationRulesLoading = false;
     state.notificationRulesError = "";
@@ -1135,7 +1172,7 @@
     state.notificationRulesLoading = true;
     state.notificationRulesError = "";
     if (isStaticPreviewHost()) {
-      applyNotificationRules({ rules: defaultNotificationRules(), conditionTypes: defaultNotificationRuleConditionTypes() });
+      applyNotificationRules({ rules: defaultNotificationRules(), conditionTypes: defaultNotificationRuleConditionTypes(), marketHoursSessions: defaultMarketHoursSessions() });
       state.notificationRulesLoading = false;
       return Promise.resolve();
     }
@@ -1147,6 +1184,7 @@
         state.notificationRulesError = error.message || "알림 룰을 읽지 못했습니다.";
         state.notificationRules = defaultNotificationRules();
         state.notificationRuleConditionTypes = defaultNotificationRuleConditionTypes();
+        state.notificationMarketHoursSessions = defaultMarketHoursSessions();
       })
       .finally(function () {
         state.notificationRulesLoading = false;
@@ -1278,6 +1316,13 @@
       ? normalized.similarityFields.map(function (field) { return String(field || "").trim(); }).filter(Boolean)
       : String(normalized.similarityFields || "").split(",").map(function (field) { return field.trim(); }).filter(Boolean);
     if (!normalized.similarityFields.length) normalized.similarityFields = defaultNotificationRuleSimilarityFields();
+    normalized.marketHoursEnabled = normalized.marketHoursEnabled !== false;
+    normalized.marketHoursMarkets = Array.isArray(normalized.marketHoursMarkets)
+      ? normalized.marketHoursMarkets.map(function (market) { return String(market || "").trim().toUpperCase(); }).filter(Boolean)
+      : String(normalized.marketHoursMarkets || "").split(",").map(function (market) { return market.trim().toUpperCase(); }).filter(Boolean);
+    if (!normalized.marketHoursMarkets.length && defaultNotificationRuleMarketHoursEnabled(normalized.messageType)) {
+      normalized.marketHoursMarkets = defaultNotificationRuleMarketHoursMarkets(normalized.messageType);
+    }
     normalized.conditions = Array.isArray(normalized.conditions) && normalized.conditions.length
       ? normalized.conditions.map(function (condition) {
         return Object.assign({
@@ -1337,7 +1382,26 @@
       rule.similarityBypassScoreDelta = clampInteger(value, 0, 100, defaultNotificationRuleSimilarityBypassDelta(messageType));
     } else if (field === "similarityFields") {
       rule.similarityFields = String(value || "").split(",").map(function (item) { return item.trim(); }).filter(Boolean);
+    } else if (field === "marketHoursEnabled") {
+      rule.marketHoursEnabled = Boolean(value);
+    } else if (field === "marketHoursMarkets") {
+      rule.marketHoursMarkets = Array.isArray(value)
+        ? value.map(function (item) { return String(item || "").trim().toUpperCase(); }).filter(Boolean)
+        : String(value || "").split(",").map(function (item) { return item.trim().toUpperCase(); }).filter(Boolean);
     }
+    state.notificationRulesSaved = false;
+    state.notificationRulesError = "";
+  }
+
+  function updateNotificationRuleMarket(messageType, market, enabled) {
+    var rule = ensureNotificationRule(messageType);
+    var key = String(market || "").trim().toUpperCase();
+    if (!key) return;
+    var markets = Array.isArray(rule.marketHoursMarkets) ? rule.marketHoursMarkets.slice() : defaultNotificationRuleMarketHoursMarkets(messageType);
+    markets = markets.map(function (item) { return String(item || "").trim().toUpperCase(); }).filter(Boolean);
+    if (enabled && markets.indexOf(key) < 0) markets.push(key);
+    if (!enabled) markets = markets.filter(function (item) { return item !== key; });
+    rule.marketHoursMarkets = markets;
     state.notificationRulesSaved = false;
     state.notificationRulesError = "";
   }
@@ -5713,6 +5777,14 @@
     return windowMinutes + "분 내 " + count + "회 · " + penalty + "점";
   }
 
+  function notificationJobMarketHoursText(job) {
+    if (!job.marketHoursEnabled) return "";
+    if (job.marketHoursReason) return job.marketHoursReason;
+    if (job.marketHoursStatus === "open") return "장 시간 열림";
+    if (job.marketHoursStatus === "closed") return "장 시간 외";
+    return "";
+  }
+
   function renderNotificationDecisionPanel() {
     var jobs = state.notificationJobItems || [];
     var summary = state.notificationJobsSummary || state.realtime.notificationJobs || {};
@@ -5751,6 +5823,7 @@
       '<div class="notification-decision-score">',
       '<span>꿀점수 ' + escapeHtml(notificationJobScoreText(job)) + '</span>',
       '<span>' + escapeHtml(notificationJobSimilarityText(job)) + '</span>',
+      notificationJobMarketHoursText(job) ? '<span>' + escapeHtml(notificationJobMarketHoursText(job)) + '</span>' : '',
       job.honeySimilarityBypassed ? '<span>상승 예외 적용</span>' : '',
       '</div>',
       '<p>' + escapeHtml(job.lastError || job.textPreview || "-") + '</p>',
@@ -5884,6 +5957,38 @@
     ].join("");
   }
 
+  function marketHoursSessionSummary(session) {
+    return String(session.openTime || "") + "-" + String(session.closeTime || "") + " " + String(session.timezone || "");
+  }
+
+  function renderNotificationMarketHoursEditor(messageType, rule, disabled) {
+    var sessions = state.notificationMarketHoursSessions.length ? state.notificationMarketHoursSessions : defaultMarketHoursSessions();
+    var selected = Array.isArray(rule.marketHoursMarkets) ? rule.marketHoursMarkets : defaultNotificationRuleMarketHoursMarkets(messageType);
+    selected = selected.map(function (market) { return String(market || "").trim().toUpperCase(); });
+    var summary = rule.marketHoursEnabled === false
+      ? "장 시간 필터 꺼짐"
+      : (selected.length ? selected.join(", ") : "시장 미선택") + " 정규장에만 발송";
+    return [
+      '<div class="notification-rule-market-hours">',
+      '<div class="notification-rule-head notification-rule-subhead">',
+      '<div><strong>장 시간 필터</strong><span>' + escapeHtml(summary) + '</span></div>',
+      '<label class="notification-rule-toggle"><input type="checkbox" data-notification-rule-market-hours-enabled="' + escapeHtml(messageType) + '"' + (rule.marketHoursEnabled !== false ? " checked" : "") + (disabled ? " disabled" : "") + ' /> 적용</label>',
+      '</div>',
+      '<div class="notification-rule-market-list">',
+      sessions.map(function (session) {
+        var market = String(session.market || "").toUpperCase();
+        return [
+          '<label class="notification-rule-market-option">',
+          '<input type="checkbox" data-notification-rule-market-hours-market="' + escapeHtml(messageType) + '" data-market="' + escapeHtml(market) + '"' + (selected.indexOf(market) >= 0 ? " checked" : "") + (disabled ? " disabled" : "") + ' />',
+          '<span><strong>' + escapeHtml(session.label || market) + '</strong><em>' + escapeHtml(marketHoursSessionSummary(session)) + '</em></span>',
+          '</label>'
+        ].join("");
+      }).join(""),
+      '</div>',
+      '</div>'
+    ].join("");
+  }
+
   function renderNotificationRuleEditor(messageType, options) {
     options = options || {};
     var rule = notificationRuleForEdit(messageType);
@@ -5906,6 +6011,7 @@
       '</select></label>',
       '</div>',
       renderNotificationSimilarityEditor(messageType, rule, disabled),
+      renderNotificationMarketHoursEditor(messageType, rule, disabled),
       '<div class="notification-rule-condition-list">',
       (rule.conditions || []).map(function (condition) {
         return renderNotificationRuleCondition(messageType, condition, disabled);
@@ -8371,6 +8477,24 @@
     Array.prototype.slice.call(app.querySelectorAll("[data-notification-rule-similarity-enabled]")).forEach(function (field) {
       field.addEventListener("change", function () {
         updateNotificationRuleField(field.getAttribute("data-notification-rule-similarity-enabled"), "similarityEnabled", field.checked);
+        render();
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-notification-rule-market-hours-enabled]")).forEach(function (field) {
+      field.addEventListener("change", function () {
+        updateNotificationRuleField(field.getAttribute("data-notification-rule-market-hours-enabled"), "marketHoursEnabled", field.checked);
+        render();
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-notification-rule-market-hours-market]")).forEach(function (field) {
+      field.addEventListener("change", function () {
+        updateNotificationRuleMarket(
+          field.getAttribute("data-notification-rule-market-hours-market"),
+          field.getAttribute("data-market"),
+          field.checked
+        );
         render();
       });
     });

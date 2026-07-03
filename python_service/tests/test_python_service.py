@@ -6,6 +6,7 @@ import tempfile
 import unittest
 import urllib.error
 import urllib.parse
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -30,6 +31,7 @@ from digital_twin.domain.events import ACCOUNT_SAVED, MONITORING_ALERTS_DETECTED
 from digital_twin.domain.monitoring import RealtimeMonitor
 from digital_twin.domain.model_review import ModelReviewJob, local_model_review
 from digital_twin.domain.notification_templates import alert_context
+from digital_twin.domain.notification_rules import apply_market_hours_rule, default_notification_rule, evaluate_notification_rule
 from digital_twin.domain.notifications import NotificationJob
 from digital_twin.domain.parsing import parse_assignments
 from digital_twin.domain.portfolio import AccountSnapshot, AlertEvent, utc_now_iso
@@ -1116,7 +1118,12 @@ class PythonServiceTests(unittest.TestCase):
 
     def test_send_events_enqueues_notifications_without_direct_delivery(self):
         account = AccountConfig("main", "메인", "toss", "https://example.test", "", "", "", ["AAPL"])
-        queue = SQLiteNotificationJobStore(Path(self.temp.name) / "service.db")
+        db_path = Path(self.temp.name) / "service.db"
+        queue = SQLiteNotificationJobStore(db_path)
+        rules = SQLiteNotificationRuleStore(db_path)
+        rule = rules.get("monitorTrendChange")
+        rule.market_hours_enabled = False
+        rules.upsert(rule)
         event = AlertEvent("main", "메인", "ALERT", "monitorTrendChange", "main:trend", "SK하이닉스", ["이동평균 변화", "20일선 하향 이탈"], "000660")
         source_event = alerts_detected_event([event])
 
@@ -1173,6 +1180,43 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(10, payload["limit"])
         self.assertEqual({"suppressed": 1}, payload["summary"])
 
+    def test_market_hours_rule_suppresses_stock_alerts_after_close(self):
+        rule = default_notification_rule("holdingTiming")
+        job = NotificationJob.create(
+            "보유 타이밍",
+            account_id="main",
+            account_label="메인",
+            message_type="holdingTiming",
+            context={"symbol": "005930", "title": "삼성전자"},
+        )
+        decision = evaluate_notification_rule(job, rule)
+
+        decision = apply_market_hours_rule(decision, rule, job, datetime(2026, 7, 3, 7, 0, tzinfo=timezone.utc))
+
+        self.assertFalse(decision.should_send)
+        self.assertEqual("market_closed", decision.suppression_reason)
+        self.assertEqual("KR", decision.market_hours_market)
+        self.assertEqual("closed", decision.market_hours_status)
+        self.assertIn("국장", decision.market_hours_reason)
+
+    def test_market_hours_rule_allows_stock_alerts_during_regular_session(self):
+        rule = default_notification_rule("holdingTiming")
+        job = NotificationJob.create(
+            "보유 타이밍",
+            account_id="main",
+            account_label="메인",
+            message_type="holdingTiming",
+            context={"symbol": "AAPL", "title": "Apple"},
+        )
+        decision = evaluate_notification_rule(job, rule)
+
+        decision = apply_market_hours_rule(decision, rule, job, datetime(2026, 7, 2, 15, 0, tzinfo=timezone.utc))
+
+        self.assertTrue(decision.should_send)
+        self.assertEqual("US", decision.market_hours_market)
+        self.assertEqual("open", decision.market_hours_status)
+        self.assertIn("미장", decision.market_hours_reason)
+
     def test_notification_rule_penalizes_similar_recent_messages(self):
         db_path = Path(self.temp.name) / "service.db"
         queue = SQLiteNotificationJobStore(db_path)
@@ -1184,6 +1228,7 @@ class PythonServiceTests(unittest.TestCase):
         rule.similarity_penalty = -40
         rule.similarity_bypass_score_delta = 20
         rule.similarity_fields = ["messageType", "accountId", "symbol", "severity", "title"]
+        rule.market_hours_enabled = False
         rules.upsert(rule)
         first = AlertEvent("main", "메인", "ALERT", "monitorTrendChange", "main:trend:1", "SK하이닉스", ["이동평균 변화", "20일선 하향 이탈"], "000660")
         second = AlertEvent("main", "메인", "ALERT", "monitorTrendChange", "main:trend:2", "SK하이닉스", ["이동평균 변화", "20일선 하향 이탈", "변화 -0.1%"], "000660")
@@ -1203,6 +1248,10 @@ class PythonServiceTests(unittest.TestCase):
     def test_external_move_rules_suppress_repeated_market_noise(self):
         db_path = Path(self.temp.name) / "service.db"
         queue = SQLiteNotificationJobStore(db_path)
+        rules = SQLiteNotificationRuleStore(db_path)
+        rule = rules.get("externalEquityMove")
+        rule.market_hours_enabled = False
+        rules.upsert(rule)
         first = AlertEvent(
             "main",
             "메인",
@@ -1773,6 +1822,10 @@ class PythonServiceTests(unittest.TestCase):
         db_path = Path(self.temp.name) / "service.db"
         legacy_missing = Path(self.temp.name) / "missing.json"
         store = SQLiteMonitorStore(db_path, legacy_path=legacy_missing)
+        rules = SQLiteNotificationRuleStore(db_path)
+        rule = rules.get("monitorDecisionChange")
+        rule.market_hours_enabled = False
+        rules.upsert(rule)
         account = AccountConfig("main", "메인", "toss", "https://example.test", "", "", "", ["AAPL"])
         alert = AlertEvent(
             "main",

@@ -7,6 +7,7 @@ from .message_types import (
     SYSTEM_MESSAGE_TYPES,
     notification_message_types,
 )
+from .market_hours import default_market_hours_enabled, default_market_hours_markets, evaluate_market_hours
 from .notification_templates import DEFAULT_NOTIFICATION_TEMPLATES
 from .notifications import NotificationJob
 
@@ -172,6 +173,8 @@ class NotificationRuleConfig:
     similarity_penalty: int = -20
     similarity_bypass_score_delta: int = 20
     similarity_fields: List[str] = dataclass_field(default_factory=lambda: list(DEFAULT_SIMILARITY_FIELDS))
+    market_hours_enabled: bool = False
+    market_hours_markets: List[str] = dataclass_field(default_factory=list)
     updated_at: str = ""
 
     @classmethod
@@ -193,6 +196,13 @@ class NotificationRuleConfig:
             similarity_fields = [str(item or "").strip() for item in raw_similarity_fields if str(item or "").strip()]
         else:
             similarity_fields = list(DEFAULT_SIMILARITY_FIELDS)
+        raw_market_hours_markets = payload.get("marketHoursMarkets") if "marketHoursMarkets" in payload else payload.get("market_hours_markets")
+        if isinstance(raw_market_hours_markets, str):
+            market_hours_markets = [item.strip().upper() for item in raw_market_hours_markets.split(",") if item.strip()]
+        elif isinstance(raw_market_hours_markets, list):
+            market_hours_markets = [str(item or "").strip().upper() for item in raw_market_hours_markets if str(item or "").strip()]
+        else:
+            market_hours_markets = default_market_hours_markets(message_type)
         similarity_enabled_value = payload["similarityEnabled"] if "similarityEnabled" in payload else payload.get("similarity_enabled")
         similarity_window_value = payload["similarityWindowMinutes"] if "similarityWindowMinutes" in payload else payload.get("similarity_window_minutes")
         similarity_penalty_value = payload["similarityPenalty"] if "similarityPenalty" in payload else payload.get("similarity_penalty")
@@ -201,6 +211,7 @@ class NotificationRuleConfig:
             if "similarityBypassScoreDelta" in payload
             else payload.get("similarity_bypass_score_delta")
         )
+        market_hours_enabled_value = payload["marketHoursEnabled"] if "marketHoursEnabled" in payload else payload.get("market_hours_enabled")
         return cls(
             message_type=message_type,
             enabled=bool_value(payload.get("enabled"), True),
@@ -213,6 +224,8 @@ class NotificationRuleConfig:
             similarity_penalty=clamp_int(similarity_penalty_value, -100, 0, default_similarity_penalty(message_type)),
             similarity_bypass_score_delta=clamp_int(similarity_bypass_value, 0, 100, default_similarity_bypass_score_delta(message_type)),
             similarity_fields=similarity_fields,
+            market_hours_enabled=bool_value(market_hours_enabled_value, default_market_hours_enabled(message_type)),
+            market_hours_markets=market_hours_markets,
             updated_at=str(payload.get("updatedAt") or payload.get("updated_at") or ""),
         )
 
@@ -229,6 +242,8 @@ class NotificationRuleConfig:
             "similarityPenalty": int(self.similarity_penalty or 0),
             "similarityBypassScoreDelta": int(self.similarity_bypass_score_delta or 0),
             "similarityFields": list(self.similarity_fields or []),
+            "marketHoursEnabled": bool(self.market_hours_enabled),
+            "marketHoursMarkets": list(self.market_hours_markets or []),
             "updatedAt": self.updated_at,
         }
 
@@ -249,6 +264,17 @@ class NotificationRuleDecision:
     similarity_recent_count: int = 0
     similarity_previous_score: int = 0
     similarity_bypassed: bool = False
+    suppression_reason: str = ""
+    market_hours_enabled: bool = False
+    market_hours_market: str = ""
+    market_hours_label: str = ""
+    market_hours_status: str = ""
+    market_hours_reason: str = ""
+    market_hours_local_time: str = ""
+    market_hours_open_time: str = ""
+    market_hours_close_time: str = ""
+    market_hours_timezone: str = ""
+    market_hours_markets: List[str] = dataclass_field(default_factory=list)
 
     def to_context(self) -> Dict[str, object]:
         decision = "send" if self.should_send else "suppressed"
@@ -269,6 +295,18 @@ class NotificationRuleDecision:
             "honeySimilarityRecentCount": self.similarity_recent_count,
             "honeySimilarityPreviousScore": self.similarity_previous_score,
             "honeySimilarityBypassed": bool(self.similarity_bypassed),
+            "honeySuppressionReason": self.suppression_reason,
+            "marketHoursEnabled": bool(self.market_hours_enabled),
+            "marketHoursMarket": self.market_hours_market,
+            "marketHoursLabel": self.market_hours_label,
+            "marketHoursStatus": self.market_hours_status,
+            "marketHoursDecision": "send" if self.market_hours_status != "closed" else "suppressed",
+            "marketHoursReason": self.market_hours_reason,
+            "marketHoursLocalTime": self.market_hours_local_time,
+            "marketHoursOpenTime": self.market_hours_open_time,
+            "marketHoursCloseTime": self.market_hours_close_time,
+            "marketHoursTimezone": self.market_hours_timezone,
+            "marketHoursMarkets": list(self.market_hours_markets or []),
         }
 
 
@@ -345,6 +383,8 @@ def default_notification_rule(message_type: str) -> NotificationRuleConfig:
         similarity_penalty=default_similarity_penalty(key),
         similarity_bypass_score_delta=default_similarity_bypass_score_delta(key),
         similarity_fields=list(DEFAULT_SIMILARITY_FIELDS),
+        market_hours_enabled=default_market_hours_enabled(key),
+        market_hours_markets=default_market_hours_markets(key),
     )
 
 
@@ -520,4 +560,35 @@ def apply_similarity_rule(
         decision.reasons.append("유사 메시지 " + str(config.similarity_window_minutes) + "분 내 반복 " + str(penalty))
     if config.low_score_action == "suppress":
         decision.should_send = decision.score >= decision.threshold
+    return decision
+
+
+def apply_market_hours_rule(
+    decision: NotificationRuleDecision,
+    config: NotificationRuleConfig,
+    job: NotificationJob,
+    now=None,
+) -> NotificationRuleDecision:
+    market_decision = evaluate_market_hours(
+        job.message_type or config.message_type,
+        job.context or {},
+        bool(config.enabled and config.market_hours_enabled),
+        list(config.market_hours_markets or []),
+        now=now,
+    )
+    decision.market_hours_enabled = bool(config.market_hours_enabled)
+    decision.market_hours_market = market_decision.market
+    decision.market_hours_label = market_decision.label
+    decision.market_hours_status = market_decision.status
+    decision.market_hours_reason = market_decision.reason
+    decision.market_hours_local_time = market_decision.local_time
+    decision.market_hours_open_time = market_decision.open_time
+    decision.market_hours_close_time = market_decision.close_time
+    decision.market_hours_timezone = market_decision.timezone
+    decision.market_hours_markets = list(config.market_hours_markets or [])
+    if config.enabled and config.market_hours_enabled and market_decision.status in {"open", "closed"}:
+        decision.reasons.append("장 시간 " + market_decision.reason)
+    if config.enabled and config.market_hours_enabled and not market_decision.should_send:
+        decision.should_send = False
+        decision.suppression_reason = "market_closed" if market_decision.status == "closed" else "market_hours"
     return decision

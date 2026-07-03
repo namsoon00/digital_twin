@@ -253,6 +253,8 @@ function checkFrontendAdminRender() {
           similarityPenalty: -40,
           similarityBypassScoreDelta: 20,
           similarityFields: ["messageType", "accountId", "symbol", "severity", "title"],
+          marketHoursEnabled: true,
+          marketHoursMarkets: ["KR", "US"],
           conditions: [
             { id: "severity_watch", label: "관찰 등급", type: "context_equals", field: "severity", value: "WATCH", terms: [], score: 10, enabled: true },
             { id: "status_noise", label: "상태성 노이즈", type: "text_contains_any", field: "", value: "", terms: ["정상 작동", "시세 대기"], score: -25, enabled: true }
@@ -264,7 +266,11 @@ function checkFrontendAdminRender() {
         { type: "text_contains_any", label: "메시지에 단어 포함" },
         { type: "context_equals", label: "컨텍스트 값 일치" }
       ],
-      defaultThreshold: 45
+      defaultThreshold: 45,
+      marketHoursSessions: [
+        { market: "KR", label: "국장 정규장", timezone: "Asia/Seoul", openTime: "09:00", closeTime: "15:30", weekdays: [0, 1, 2, 3, 4] },
+        { market: "US", label: "미장 정규장", timezone: "America/New_York", openTime: "09:30", closeTime: "16:00", weekdays: [0, 1, 2, 3, 4] }
+      ]
     },
     "/api/notification-jobs": {
       jobs: [
@@ -291,7 +297,18 @@ function checkFrontendAdminRender() {
           honeySimilarityPenalty: -55,
           honeySimilarityWindowMinutes: 360,
           honeySimilarityPreviousScore: 85,
-          honeySimilarityBypassed: false
+          honeySimilarityBypassed: false,
+          honeySuppressionReason: "market_closed",
+          marketHoursEnabled: true,
+          marketHoursMarket: "US",
+          marketHoursLabel: "미장 정규장",
+          marketHoursStatus: "closed",
+          marketHoursDecision: "suppressed",
+          marketHoursReason: "미장 정규장 닫힘 (09:30-16:00)",
+          marketHoursLocalTime: "2026-07-01T17:00:00-04:00",
+          marketHoursOpenTime: "09:30",
+          marketHoursCloseTime: "16:00",
+          marketHoursTimezone: "America/New_York"
         }
       ],
       summary: { done: 2, suppressed: 1, failed: 0 },
@@ -647,12 +664,17 @@ function checkFrontendAdminRender() {
     assertOk(notificationHtml.indexOf("유사 메시지") >= 0, "유사 메시지 억제 설정이 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("data-notification-rule-similarity-enabled") >= 0, "유사 메시지 억제 토글이 없습니다.");
     assertOk(notificationHtml.indexOf("data-notification-rule-fields") >= 0, "유사 메시지 fingerprint 필드 입력이 없습니다.");
+    assertOk(notificationHtml.indexOf("장 시간 필터") >= 0, "장 시간 필터 설정이 렌더링되지 않았습니다.");
+    assertOk(notificationHtml.indexOf("국장 정규장") >= 0 && notificationHtml.indexOf("미장 정규장") >= 0, "국장/미장 장 시간 설정이 표시되지 않았습니다.");
+    assertOk(notificationHtml.indexOf("data-notification-rule-market-hours-enabled") >= 0, "장 시간 필터 토글이 없습니다.");
+    assertOk(notificationHtml.indexOf("data-notification-rule-market-hours-market") >= 0, "장 시간 시장 선택 체크박스가 없습니다.");
     assertOk(notificationHtml.indexOf("data-notification-rule-condition-value") >= 0, "꿀점수 조건 값 편집 입력이 없습니다.");
     assertOk(notificationHtml.indexOf("data-rule-save=\"monitorHeartbeat\"") >= 0, "알림 타입별 룰 저장 버튼이 없습니다.");
     assertOk(notificationHtml.indexOf("notification-decision-panel") >= 0, "최근 알림 판단 패널이 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("최근 알림 판단") >= 0, "최근 알림 판단 제목이 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("꿀점수 30/45점") >= 0, "최근 알림 판단의 꿀점수가 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("360분 내 7회 · -55점") >= 0, "최근 알림 판단의 유사 메시지 감점이 렌더링되지 않았습니다.");
+    assertOk(notificationHtml.indexOf("미장 정규장 닫힘") >= 0, "최근 알림 판단의 장 시간 외 보류 사유가 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("messageType=externalcryptomove|symbol=eth") >= 0, "최근 알림 판단 fingerprint가 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf('data-action="refresh-notification-jobs"') >= 0, "최근 알림 판단 새로고침 버튼이 없습니다.");
     assertOk(notificationHtml.indexOf("시스템 템플릿") >= 0, "시스템 템플릿 섹션이 렌더링되지 않았습니다.");
@@ -981,6 +1003,7 @@ async function checkNormalMode(port, context) {
   assertOk(Array.isArray(rulesPayload.rules), "알림 룰 API rules가 배열이 아닙니다.");
   assertOk(rulesPayload.rules.some(function (item) { return item.messageType === "monitorHeartbeat"; }), "상태 확인 꿀점수 룰이 없습니다.");
   assertOk(Array.isArray(rulesPayload.conditionTypes) && rulesPayload.conditionTypes.length, "알림 룰 조건 타입 목록이 없습니다.");
+  assertOk(Array.isArray(rulesPayload.marketHoursSessions) && rulesPayload.marketHoursSessions.length >= 2, "장 시간 세션 목록이 없습니다.");
 
   const savedRule = await request(port, "/api/notification-rules", {
     method: "PUT",
@@ -996,6 +1019,8 @@ async function checkNormalMode(port, context) {
       similarityPenalty: -35,
       similarityBypassScoreDelta: 12,
       similarityFields: ["messageType", "accountId", "symbol", "title"],
+      marketHoursEnabled: true,
+      marketHoursMarkets: ["KR"],
       conditions: [
         { id: "severity_watch", label: "관찰 등급", type: "context_equals", field: "severity", value: "WATCH", terms: [], score: 12, enabled: true }
       ]
@@ -1008,6 +1033,8 @@ async function checkNormalMode(port, context) {
   assertOk(savedRulePayload.rule.similarityWindowMinutes === 90, "저장된 유사 메시지 억제 시간이 응답에 없습니다.");
   assertOk(savedRulePayload.rule.similarityPenalty === -35, "저장된 유사 메시지 반복 감점이 응답에 없습니다.");
   assertOk(savedRulePayload.rule.similarityFields.indexOf("symbol") >= 0, "저장된 fingerprint 필드가 응답에 없습니다.");
+  assertOk(savedRulePayload.rule.marketHoursEnabled === true, "저장된 장 시간 필터 토글이 응답에 없습니다.");
+  assertOk(savedRulePayload.rule.marketHoursMarkets.indexOf("KR") >= 0, "저장된 장 시간 시장 설정이 응답에 없습니다.");
   const resetRule = await request(port, "/api/notification-rules/monitorHeartbeat", { method: "DELETE" });
   assertOk(resetRule.statusCode === 200, "알림 룰 초기화 API 응답 코드가 200이 아닙니다: " + resetRule.statusCode);
   const eventStatusAfterRule = JSON.parse((await request(port, "/api/realtime/status")).body);

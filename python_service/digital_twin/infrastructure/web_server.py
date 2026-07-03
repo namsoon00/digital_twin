@@ -42,6 +42,7 @@ from ..domain.events import (
     DomainEvent,
 )
 from ..domain.message_types import DEFAULT_ALERT_RULES, DEFAULT_CADENCE
+from ..domain.market_hours import DEFAULT_MARKET_HOUR_SESSIONS
 from ..domain.monitoring import RealtimeMonitor
 from ..domain.notification_rules import CONDITION_TYPE_LABELS, DEFAULT_HONEY_THRESHOLD, NotificationRuleConfig
 from ..domain.notifications import NotificationJob
@@ -448,6 +449,7 @@ def list_notification_rules_payload() -> Dict[str, object]:
         "rules": [item.to_dict() for item in notification_rule_store().list()],
         "conditionTypes": CONDITION_TYPE_LABELS,
         "defaultThreshold": DEFAULT_HONEY_THRESHOLD,
+        "marketHoursSessions": list(DEFAULT_MARKET_HOUR_SESSIONS.values()),
     }
 
 
@@ -487,6 +489,17 @@ def notification_job_public_payload(job: NotificationJob) -> Dict[str, object]:
         "honeySimilarityWindowMinutes": context.get("honeySimilarityWindowMinutes"),
         "honeySimilarityPreviousScore": context.get("honeySimilarityPreviousScore"),
         "honeySimilarityBypassed": bool(context.get("honeySimilarityBypassed")),
+        "honeySuppressionReason": context.get("honeySuppressionReason") or "",
+        "marketHoursEnabled": bool(context.get("marketHoursEnabled")),
+        "marketHoursMarket": context.get("marketHoursMarket") or "",
+        "marketHoursLabel": context.get("marketHoursLabel") or "",
+        "marketHoursStatus": context.get("marketHoursStatus") or "",
+        "marketHoursDecision": context.get("marketHoursDecision") or "",
+        "marketHoursReason": context.get("marketHoursReason") or "",
+        "marketHoursLocalTime": context.get("marketHoursLocalTime") or "",
+        "marketHoursOpenTime": context.get("marketHoursOpenTime") or "",
+        "marketHoursCloseTime": context.get("marketHoursCloseTime") or "",
+        "marketHoursTimezone": context.get("marketHoursTimezone") or "",
     }
 
 

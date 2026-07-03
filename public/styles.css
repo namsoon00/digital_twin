@@ -2431,17 +2431,61 @@ h3 {
 }
 
 .notification-rule-similarity,
+.notification-rule-market-hours,
 .notification-rule-fields {
   display: grid;
   gap: 8px;
   min-width: 0;
 }
 
-.notification-rule-similarity {
+.notification-rule-similarity,
+.notification-rule-market-hours {
   padding: 8px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--panel);
+}
+
+.notification-rule-market-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.notification-rule-market-option {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--input);
+}
+
+.notification-rule-market-option input {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  accent-color: var(--green);
+}
+
+.notification-rule-market-option span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.notification-rule-market-option strong {
+  font-size: 13px;
+}
+
+.notification-rule-market-option em {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 800;
+  line-height: 1.35;
 }
 
 .notification-rule-fields textarea {
@@ -4187,6 +4231,7 @@ h3 {
   }
 
   .notification-rule-score-grid,
+  .notification-rule-market-list,
   .notification-rule-condition {
     grid-template-columns: 1fr;
   }
@@ -4219,6 +4264,12 @@ h3 {
 
   .notification-template-preview {
     grid-column: auto;
+  }
+
+  .notification-rule-score-grid,
+  .notification-rule-market-list,
+  .notification-rule-condition {
+    grid-template-columns: 1fr;
   }
 
   .topbar {

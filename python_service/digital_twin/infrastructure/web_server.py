@@ -2,6 +2,7 @@ import base64
 import csv
 import hashlib
 import hmac
+import html
 import json
 import mimetypes
 import os
@@ -445,6 +446,59 @@ def list_notification_rules_payload() -> Dict[str, object]:
         "rules": [item.to_dict() for item in notification_rule_store().list()],
         "conditionTypes": CONDITION_TYPE_LABELS,
         "defaultThreshold": DEFAULT_HONEY_THRESHOLD,
+    }
+
+
+def compact_notification_text(value: str, limit: int = 260) -> str:
+    text = html.unescape(re.sub(r"<[^>]+>", "", str(value or "")))
+    text = re.sub(r"\s+", " ", text).strip()
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 1)].rstrip() + "…"
+
+
+def notification_job_public_payload(job: NotificationJob) -> Dict[str, object]:
+    context = job.context or {}
+    reasons = context.get("honeyReasons") if isinstance(context.get("honeyReasons"), list) else []
+    title = str(context.get("title") or context.get("headline") or "").strip()
+    return {
+        "jobId": job.job_id,
+        "messageType": job.message_type,
+        "messageTypeLabel": MESSAGE_TYPE_LABELS.get(job.message_type, job.message_type),
+        "status": job.status,
+        "accountId": job.account_id,
+        "accountLabel": job.account_label,
+        "createdAt": job.created_at,
+        "updatedAt": job.updated_at,
+        "sourceEventName": job.source_event_name,
+        "title": title,
+        "symbol": str(context.get("symbol") or "").strip(),
+        "textPreview": compact_notification_text(job.text),
+        "lastError": job.last_error,
+        "honeyScore": context.get("honeyScore"),
+        "honeyThreshold": context.get("honeyThreshold"),
+        "honeyDecision": context.get("honeyDecision") or ("send" if job.status in {"pending", "processing", "done"} else job.status),
+        "honeyReasons": [str(item) for item in reasons],
+        "honeyFingerprint": context.get("honeyFingerprint") or "",
+        "honeySimilarityRecentCount": context.get("honeySimilarityRecentCount"),
+        "honeySimilarityPenalty": context.get("honeySimilarityPenalty"),
+        "honeySimilarityWindowMinutes": context.get("honeySimilarityWindowMinutes"),
+        "honeySimilarityPreviousScore": context.get("honeySimilarityPreviousScore"),
+        "honeySimilarityBypassed": bool(context.get("honeySimilarityBypassed")),
+    }
+
+
+def notification_jobs_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
+    limit = max(1, min(200, int(first_query(query, "limit") or 40)))
+    jobs = notification_queue_store().recent(
+        limit=limit,
+        message_type=first_query(query, "messageType") or first_query(query, "message_type"),
+        status=first_query(query, "status"),
+    )
+    return {
+        "jobs": [notification_job_public_payload(job) for job in jobs],
+        "summary": notification_queue_store().summary(),
+        "limit": limit,
     }
 
 
@@ -1429,6 +1483,9 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
                 if not self.ensure_writable("공유 모드에서는 알림 룰을 변경할 수 없습니다."):
                     return
                 return self.send_payload(200, save_notification_rule_payload(self.read_json_body()))
+
+        if path == "/api/notification-jobs" and self.command == "GET":
+            return self.send_payload(200, notification_jobs_payload(query))
 
         if path == "/api/notification-schedules" and self.command == "GET":
             return self.send_payload(200, notification_schedules_payload())

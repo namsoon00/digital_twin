@@ -266,6 +266,37 @@ function checkFrontendAdminRender() {
       ],
       defaultThreshold: 45
     },
+    "/api/notification-jobs": {
+      jobs: [
+        {
+          jobId: "job-crypto-1",
+          messageType: "externalCryptoMove",
+          messageTypeLabel: "크립토 변동",
+          status: "suppressed",
+          accountId: "main",
+          accountLabel: "DB 계정",
+          createdAt: "2026-07-01T00:00:00.000Z",
+          updatedAt: "2026-07-01T00:00:00.000Z",
+          sourceEventName: "monitoring.alerts_detected",
+          title: "크립토 변동",
+          symbol: "ETH",
+          textPreview: "ETH 24h +5.4%, 7d +10.3%",
+          lastError: "꿀점수 30점이 기준 45점보다 낮아 발송하지 않았습니다.",
+          honeyScore: 30,
+          honeyThreshold: 45,
+          honeyDecision: "suppressed",
+          honeyReasons: ["기본 35점", "유사 메시지 360분 내 반복 -55"],
+          honeyFingerprint: "messageType=externalcryptomove|symbol=eth",
+          honeySimilarityRecentCount: 7,
+          honeySimilarityPenalty: -55,
+          honeySimilarityWindowMinutes: 360,
+          honeySimilarityPreviousScore: 85,
+          honeySimilarityBypassed: false
+        }
+      ],
+      summary: { done: 2, suppressed: 1, failed: 0 },
+      limit: 40
+    },
     "/api/notification-schedules": {
       generatedAt: "2026-07-01T00:00:00.000Z",
       schedules: [
@@ -618,6 +649,12 @@ function checkFrontendAdminRender() {
     assertOk(notificationHtml.indexOf("data-notification-rule-fields") >= 0, "유사 메시지 fingerprint 필드 입력이 없습니다.");
     assertOk(notificationHtml.indexOf("data-notification-rule-condition-value") >= 0, "꿀점수 조건 값 편집 입력이 없습니다.");
     assertOk(notificationHtml.indexOf("data-rule-save=\"monitorHeartbeat\"") >= 0, "알림 타입별 룰 저장 버튼이 없습니다.");
+    assertOk(notificationHtml.indexOf("notification-decision-panel") >= 0, "최근 알림 판단 패널이 렌더링되지 않았습니다.");
+    assertOk(notificationHtml.indexOf("최근 알림 판단") >= 0, "최근 알림 판단 제목이 렌더링되지 않았습니다.");
+    assertOk(notificationHtml.indexOf("꿀점수 30/45점") >= 0, "최근 알림 판단의 꿀점수가 렌더링되지 않았습니다.");
+    assertOk(notificationHtml.indexOf("360분 내 7회 · -55점") >= 0, "최근 알림 판단의 유사 메시지 감점이 렌더링되지 않았습니다.");
+    assertOk(notificationHtml.indexOf("messageType=externalcryptomove|symbol=eth") >= 0, "최근 알림 판단 fingerprint가 렌더링되지 않았습니다.");
+    assertOk(notificationHtml.indexOf('data-action="refresh-notification-jobs"') >= 0, "최근 알림 판단 새로고침 버튼이 없습니다.");
     assertOk(notificationHtml.indexOf("시스템 템플릿") >= 0, "시스템 템플릿 섹션이 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("settings-api-grid") >= 0, "설정 API 상태 요약이 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("Client ID 설정됨") >= 0, "설정 화면에 토스 Client ID 상태가 표시되지 않습니다.");
@@ -975,6 +1012,13 @@ async function checkNormalMode(port, context) {
   assertOk(resetRule.statusCode === 200, "알림 룰 초기화 API 응답 코드가 200이 아닙니다: " + resetRule.statusCode);
   const eventStatusAfterRule = JSON.parse((await request(port, "/api/realtime/status")).body);
   assertOk(eventStatusAfterRule.events["notification_rule.updated"] >= 2, "알림 룰 저장 이벤트가 이벤트 로그에 없습니다.");
+
+  const notificationJobs = await request(port, "/api/notification-jobs?limit=10");
+  assertOk(notificationJobs.statusCode === 200, "최근 알림 판단 API 응답 코드가 200이 아닙니다: " + notificationJobs.statusCode);
+  const notificationJobsPayload = JSON.parse(notificationJobs.body);
+  assertOk(Array.isArray(notificationJobsPayload.jobs), "최근 알림 판단 API jobs가 배열이 아닙니다.");
+  assertOk(notificationJobsPayload.summary && typeof notificationJobsPayload.summary === "object", "최근 알림 판단 API summary가 없습니다.");
+  assertOk(notificationJobsPayload.limit === 10, "최근 알림 판단 API limit이 반영되지 않았습니다.");
 
   const emptyAccounts = await request(port, "/api/service-accounts");
   assertOk(emptyAccounts.statusCode === 200, "계정 DB API 응답 코드가 200이 아닙니다: " + emptyAccounts.statusCode);

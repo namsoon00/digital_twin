@@ -1270,6 +1270,35 @@ class SQLiteNotificationJobStore(OperationalConnection):
                 continue
         return jobs
 
+    def recent(self, limit: int = 40, message_type: str = "", status: str = "") -> List[NotificationJob]:
+        clauses = []
+        params = []
+        if str(message_type or "").strip():
+            clauses.append("message_type = ?")
+            params.append(str(message_type or "").strip())
+        if str(status or "").strip():
+            clauses.append("status = ?")
+            params.append(str(status or "").strip())
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        params.append(max(1, min(200, int(limit or 40))))
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT payload_json FROM notification_jobs
+                """ + where + """
+                ORDER BY created_at DESC, job_id DESC
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+        jobs = []
+        for row in rows:
+            try:
+                jobs.append(NotificationJob.from_dict(json.loads(row["payload_json"])))
+            except json.JSONDecodeError:
+                continue
+        return jobs
+
     def upsert_job_with_connection(self, connection, job: NotificationJob) -> None:
         payload = job.to_dict()
         connection.execute(

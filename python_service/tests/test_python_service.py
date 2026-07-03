@@ -42,7 +42,7 @@ from digital_twin.infrastructure.sqlite_operational import SQLiteAppStore, SQLit
 from digital_twin.infrastructure.symbol_sources import parse_krx_kind_table, parse_nasdaq_listed
 from digital_twin.infrastructure.sqlite_accounts import AccountRegistry
 from digital_twin.infrastructure.toss_snapshots import TossProvider, account_cash_amount, normalize_price_items, select_account
-from digital_twin.infrastructure.web_server import notification_schedules_payload, notification_template_test_payload, realtime_status_payload
+from digital_twin.infrastructure.web_server import notification_jobs_payload, notification_schedules_payload, notification_template_test_payload, realtime_status_payload
 from digital_twin.scheduler import MonitorRunner
 
 
@@ -1108,6 +1108,24 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("suppressed", jobs[0].status)
         self.assertIn("꿀점수", jobs[0].last_error)
         self.assertLess(jobs[0].context["honeyScore"], jobs[0].context["honeyThreshold"])
+
+    def test_notification_jobs_payload_exposes_honey_decisions(self):
+        queue = SQLiteNotificationJobStore()
+        event = AlertEvent("main", "메인", "INFO", "monitorHeartbeat", "main:heartbeat", "상태 확인", ["모니터링 정상 작동", "보유 5개"], "")
+        send_events([event], queue=queue)
+
+        payload = notification_jobs_payload({"limit": ["10"]})
+
+        self.assertEqual(1, len(payload["jobs"]))
+        item = payload["jobs"][0]
+        self.assertEqual("monitorHeartbeat", item["messageType"])
+        self.assertEqual("suppressed", item["status"])
+        self.assertEqual("suppressed", item["honeyDecision"])
+        self.assertIn("꿀점수", item["lastError"])
+        self.assertLess(item["honeyScore"], item["honeyThreshold"])
+        self.assertTrue(item["honeyReasons"])
+        self.assertEqual(10, payload["limit"])
+        self.assertEqual({"suppressed": 1}, payload["summary"])
 
     def test_notification_rule_penalizes_similar_recent_messages(self):
         db_path = Path(self.temp.name) / "service.db"

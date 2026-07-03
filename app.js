@@ -726,7 +726,8 @@
     var localData = staticLocalData(payload);
     var settings = localData.settings && typeof localData.settings === "object" ? localData.settings : null;
     if (!settings) return;
-    state.settings = Object.assign({}, state.settings, settings);
+    settings = settingsWithExplicitDataGaps(settings);
+    state.settings = syncedModelAlertSettings(Object.assign({}, state.settings, settings));
     state.serverConfigured = localData.configured || {};
     state.serverSettingsLoaded = true;
     state.serverSettingsLocked = true;
@@ -832,10 +833,18 @@
   function loadSettings() {
     try {
       var raw = readStoredSettings();
-      return Object.assign({}, defaultSettings, raw ? JSON.parse(raw) : {});
+      return syncedModelAlertSettings(Object.assign({}, defaultSettings, raw ? JSON.parse(raw) : {}));
     } catch (error) {
-      return Object.assign({}, defaultSettings);
+      return syncedModelAlertSettings(Object.assign({}, defaultSettings));
     }
+  }
+
+  function settingsWithExplicitDataGaps(settings) {
+    var next = Object.assign({}, settings || {});
+    ["valuationAssumptions", "marketSignalInputs"].forEach(function (key) {
+      if (!Object.prototype.hasOwnProperty.call(next, key)) next[key] = "";
+    });
+    return next;
   }
 
   function readStoredSettings() {
@@ -930,8 +939,8 @@
   }
 
   function applyServerSettings(payload) {
-    var nextSettings = payload.settings || {};
-    state.settings = Object.assign({}, state.settings, nextSettings);
+    var nextSettings = settingsWithExplicitDataGaps(payload.settings || {});
+    state.settings = syncedModelAlertSettings(Object.assign({}, state.settings, nextSettings));
     state.serverConfigured = payload.configured || {};
     state.serverSettingsLocked = Boolean(payload.locked);
     state.serverSettingsLoaded = true;
@@ -2442,6 +2451,7 @@
   }
 
   function serverSettingsPayload() {
+    syncModelAlertThresholdSettings();
     return {
       appTheme: settingValue("appTheme"),
       watchlistSymbols: settingValue("watchlistSymbols"),
@@ -3353,6 +3363,46 @@
     return map;
   }
 
+  function strategyDefaultSettingNames() {
+    return [
+      "fairValueFormula",
+      "buyScoreFormula",
+      "sellScoreFormula",
+      "modelName",
+      "modelHypothesis",
+      "customBuyModelFormula",
+      "customSellModelFormula",
+      "formulaWeights",
+      "decisionThresholds",
+      "modelDecisionThresholds",
+      "alertThresholds"
+    ];
+  }
+
+  function withDefaultStrategySettings(settings) {
+    var next = Object.assign({}, settings || {});
+    strategyDefaultSettingNames().forEach(function (name) {
+      if (String(next[name] == null ? "" : next[name]).trim() === "") {
+        next[name] = defaultSettings[name] || "";
+      }
+    });
+    return next;
+  }
+
+  function syncedModelAlertSettings(settings) {
+    var next = withDefaultStrategySettings(settings);
+    var modelThresholds = parseNumberAssignments(next.modelDecisionThresholds, parseNumberAssignments(defaultSettings.modelDecisionThresholds));
+    var thresholds = parseNumberAssignments(next.alertThresholds, parseNumberAssignments(defaultSettings.alertThresholds));
+    thresholds.modelBuyScore = modelThresholds.modelBuy;
+    thresholds.modelSellScore = modelThresholds.modelSell;
+    next.alertThresholds = serializeNumberAssignments(thresholds, assignmentOrder("alertThresholds"));
+    return next;
+  }
+
+  function syncModelAlertThresholdSettings() {
+    state.settings = syncedModelAlertSettings(state.settings);
+  }
+
   function formulaWeights() {
     return parseNumberAssignments(settingValue("formulaWeights"), parseNumberAssignments(defaultSettings.formulaWeights));
   }
@@ -3393,6 +3443,9 @@
     var map = parseNumberAssignments(settingValue(settingName), parseNumberAssignments(defaultSettings[settingName]));
     map[key] = numeric(value);
     state.settings[settingName] = serializeNumberAssignments(map, assignmentOrder(settingName));
+    if (settingName === "modelDecisionThresholds") {
+      syncModelAlertThresholdSettings();
+    }
     persistSettings();
     state.settingsSaved = false;
     state.modelSaved = false;
@@ -3866,6 +3919,142 @@
       if (a.priority !== b.priority) return a.priority - b.priority;
       return Math.max(b.buyScore, b.sellScore) - Math.max(a.buyScore, a.sellScore);
     });
+  }
+
+  function compactSymbolList(symbols) {
+    var unique = [];
+    (symbols || []).forEach(function (symbol) {
+      var key = String(symbol || "").toUpperCase();
+      if (key && unique.indexOf(key) < 0) unique.push(key);
+    });
+    if (!unique.length) return "없음";
+    var visible = unique.slice(0, 8).join(", ");
+    return unique.length > 8 ? visible + " 외 " + (unique.length - 8) + "개" : visible;
+  }
+
+  function diagnosticTone(missingCount, totalCount) {
+    if (!totalCount) return "hold";
+    if (missingCount >= totalCount) return "danger";
+    if (missingCount > 0) return "caution";
+    return "watch";
+  }
+
+  function diagnosticCoverage(totalCount, missingCount) {
+    return Math.max(0, totalCount - missingCount) + "/" + totalCount;
+  }
+
+  function settingUsesDefault(name) {
+    return String(settingValue(name) || "").trim() === String(defaultSettings[name] || "").trim();
+  }
+
+  function strategyDataDiagnostics(snapshot) {
+    var items = buildTradeSignalItems(snapshot);
+    var total = items.length;
+    var modelThresholds = modelDecisionThresholds();
+    var thresholds = alertThresholds();
+    var thresholdMismatch = Math.round(Number(modelThresholds.modelBuy || 0)) !== Math.round(Number(thresholds.modelBuyScore || 0))
+      || Math.round(Number(modelThresholds.modelSell || 0)) !== Math.round(Number(thresholds.modelSellScore || 0));
+    var toss = snapshot && snapshot.toss ? snapshot.toss : {};
+
+    function missingSymbols(predicate) {
+      return items.filter(predicate).map(function (item) { return item.symbol; });
+    }
+
+    var missingValuation = missingSymbols(function (item) {
+      return !item.valuation || !Number(item.valuation.fairValue || 0);
+    });
+    var missingPrice = missingSymbols(function (item) {
+      return !Number(item.currentPrice || 0);
+    });
+    var missingTradeStrength = missingSymbols(function (item) {
+      return !Number(item.signal && item.signal.tradeStrength || 0);
+    });
+    var missingExecutionVolume = missingSymbols(function (item) {
+      var signal = item.signal || {};
+      return !Number(signal.buyVolume || 0) || !Number(signal.sellVolume || 0);
+    });
+    var missingInvestorFlow = missingSymbols(function (item) {
+      var signal = item.signal || {};
+      return !Number(signal.foreignNet || 0) && !Number(signal.institutionNet || 0) && !Number(signal.individualNet || 0);
+    });
+    var missingOrderbook = missingSymbols(function (item) {
+      return !Number(item.signal && item.signal.bidAskImbalance || 0);
+    });
+
+    return [
+      {
+        label: "Toss 계좌 데이터",
+        value: toss.mode === "live" ? "live" : (toss.mode || "대기"),
+        tone: toss.mode === "live" ? "watch" : "caution",
+        description: toss.status || "계좌 연결 상태를 확인합니다.",
+        symbols: [],
+        action: "계정 탭의 Toss 연결값 확인"
+      },
+      {
+        label: "현재가",
+        value: diagnosticCoverage(total, missingPrice.length),
+        tone: diagnosticTone(missingPrice.length, total),
+        description: "현재가가 있어야 적정가 괴리와 가격 기준을 계산합니다.",
+        symbols: missingPrice,
+        action: "Toss prices/candles 응답 또는 종목 코드 확인"
+      },
+      {
+        label: "적정가 가정",
+        value: diagnosticCoverage(total, missingValuation.length),
+        tone: diagnosticTone(missingValuation.length, total),
+        description: "EPS, 목표 PER, 안전마진이 있어야 싸다/비싸다 판단이 안정됩니다.",
+        symbols: missingValuation,
+        action: "투자전략 탭의 종목별 EPS/PER 입력"
+      },
+      {
+        label: "체결강도",
+        value: diagnosticCoverage(total, missingTradeStrength.length),
+        tone: diagnosticTone(missingTradeStrength.length, total),
+        description: "체결강도가 없으면 매수/매도 방향 점수가 중립값으로 계산됩니다.",
+        symbols: missingTradeStrength,
+        action: "Toss 체결 데이터 연결 또는 수동 수급 입력"
+      },
+      {
+        label: "매수/매도 체결량",
+        value: diagnosticCoverage(total, missingExecutionVolume.length),
+        tone: diagnosticTone(missingExecutionVolume.length, total),
+        description: "매수 체결 비중과 방향성 거래량을 계산하는 핵심 입력입니다.",
+        symbols: missingExecutionVolume,
+        action: "marketSignalInputs에 매수량/매도량 보강"
+      },
+      {
+        label: "투자자 수급",
+        value: diagnosticCoverage(total, missingInvestorFlow.length),
+        tone: diagnosticTone(missingInvestorFlow.length, total),
+        description: "외국인·기관·개인 순매수가 없으면 스마트머니 점수는 중립 처리됩니다.",
+        symbols: missingInvestorFlow,
+        action: "외국인/기관/개인 순매수 입력 또는 공급자 연결"
+      },
+      {
+        label: "호가 불균형",
+        value: diagnosticCoverage(total, missingOrderbook.length),
+        tone: diagnosticTone(missingOrderbook.length, total),
+        description: "호가 압력이 없으면 단기 진입/축소 신호가 약해집니다.",
+        symbols: missingOrderbook,
+        action: "호가 데이터 연결 또는 수동 수급 입력"
+      },
+      {
+        label: "모델-알림 기준",
+        value: thresholdMismatch ? "불일치" : "동기화",
+        tone: thresholdMismatch ? "caution" : "watch",
+        description: "모델 매수/매도 기준과 실제 알림 발송 기준을 같은 값으로 맞춥니다.",
+        symbols: thresholdMismatch ? ["modelBuy/modelSell"] : [],
+        action: "모델 설정 저장"
+      },
+      {
+        label: "공식 저장 상태",
+        value: settingUsesDefault("buyScoreFormula") && settingUsesDefault("sellScoreFormula") ? "기본 공식" : "사용자 공식",
+        tone: "watch",
+        description: "기본 공식은 방향성 거래량, 이동평균, 투자자 수급을 함께 씁니다.",
+        symbols: [],
+        action: "고급 공식은 필요할 때만 수정"
+      }
+    ];
   }
 
   function pressureLabel(score) {
@@ -5092,6 +5281,7 @@
         '<section class="admin-grid">',
         renderModelOperatingGuidePanel(snapshot),
         renderStrategyBeginnerPanel(snapshot),
+        renderStrategyDataPanel(snapshot),
         renderAdminModelingPanel(snapshot),
         renderModelVersionPanel(snapshot),
         renderModelPreviewPanel(snapshot),
@@ -6388,6 +6578,44 @@
       '</div>',
       '</div>',
       '</article>'
+    ].join("");
+  }
+
+  function renderStrategyDataPanel(snapshot) {
+    var diagnostics = strategyDataDiagnostics(snapshot);
+    var issueCount = diagnostics.filter(function (item) {
+      return item.tone === "caution" || item.tone === "danger";
+    }).length;
+    return [
+      '<article class="panel strategy-data-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Data Readiness</p>',
+      '<h2>전략 데이터 점검</h2>',
+      '</div>',
+      '<span class="metric">' + escapeHtml(issueCount) + '</span>',
+      '</div>',
+      '<div class="strategy-data-grid">',
+      diagnostics.map(renderStrategyDataRow).join(""),
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderStrategyDataRow(item) {
+    var symbols = compactSymbolList(item.symbols || []);
+    return [
+      '<div class="strategy-data-row">',
+      '<div class="strategy-data-main">',
+      '<strong>' + escapeHtml(item.label) + '</strong>',
+      '<span>' + escapeHtml(item.description) + '</span>',
+      '<em>채울 곳: ' + escapeHtml(item.action) + '</em>',
+      '</div>',
+      '<div class="strategy-data-status">',
+      '<span class="tone-chip ' + escapeHtml(item.tone || "hold") + '">' + escapeHtml(item.value) + '</span>',
+      '<b>' + escapeHtml(symbols) + '</b>',
+      '</div>',
+      '</div>'
     ].join("");
   }
 

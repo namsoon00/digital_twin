@@ -695,6 +695,8 @@ function checkFrontendAdminRender() {
     assertOk(notificationHtml.indexOf("data-notification-rule-market-hours-market") >= 0, "장 시간 시장 선택 체크박스가 없습니다.");
     assertOk(notificationHtml.indexOf("data-notification-rule-condition-value") >= 0, "꿀점수 조건 값 편집 입력이 없습니다.");
     assertOk(notificationHtml.indexOf("data-rule-save=\"monitorHeartbeat\"") >= 0, "알림 타입별 룰 저장 버튼이 없습니다.");
+    assertOk(notificationHtml.indexOf('data-rule-save="externalEquityMove"') >= 0, "미장 가격/거래량 룰 저장 버튼이 없습니다.");
+    assertOk(notificationHtml.indexOf('data-notification-rule-number="externalEquityMove" data-rule-field="threshold" value="60"') >= 0, "미장 가격/거래량 기본 발송 기준 60점이 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("notification-decision-panel") >= 0, "최근 알림 판단 패널이 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("최근 알림 판단") >= 0, "최근 알림 판단 제목이 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("꿀점수 30/45점") >= 0, "최근 알림 판단의 꿀점수가 렌더링되지 않았습니다.");

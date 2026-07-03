@@ -83,7 +83,12 @@ def default_base_score(message_type: str) -> int:
 
 
 def default_threshold(message_type: str) -> int:
-    return 20 if str(message_type or "") in SYSTEM_MESSAGE_TYPES else DEFAULT_HONEY_THRESHOLD
+    key = str(message_type or "")
+    if key in SYSTEM_MESSAGE_TYPES:
+        return 20
+    if key == "externalEquityMove":
+        return 60
+    return DEFAULT_HONEY_THRESHOLD
 
 
 def default_similarity_enabled(message_type: str) -> bool:

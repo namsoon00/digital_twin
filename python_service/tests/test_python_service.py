@@ -1287,6 +1287,7 @@ class PythonServiceTests(unittest.TestCase):
         queue = SQLiteNotificationJobStore(db_path)
         rules = SQLiteNotificationRuleStore(db_path)
         rule = rules.get("externalEquityMove")
+        self.assertEqual(60, rule.threshold)
         rule.market_hours_enabled = False
         rules.upsert(rule)
         first = AlertEvent(

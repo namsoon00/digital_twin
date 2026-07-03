@@ -208,7 +208,11 @@ class OperationalConnection:
         }
         for name, definition in columns.items():
             if name not in existing:
-                connection.execute("ALTER TABLE " + table + " ADD COLUMN " + name + " " + definition)
+                try:
+                    connection.execute("ALTER TABLE " + table + " ADD COLUMN " + name + " " + definition)
+                except sqlite3.OperationalError as error:
+                    if "duplicate column name" not in str(error).lower():
+                        raise
 
 
 class SQLiteNotificationTemplateStore(OperationalConnection):

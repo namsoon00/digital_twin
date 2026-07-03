@@ -978,6 +978,33 @@
     return 25;
   }
 
+  function defaultNotificationRuleSimilarityEnabled(messageType) {
+    return ["default", "modelReview", "workHandoff", "notification"].indexOf(String(messageType || "")) < 0;
+  }
+
+  function defaultNotificationRuleSimilarityWindow(messageType) {
+    var type = String(messageType || "");
+    if (type === "monitorHeartbeat") return 360;
+    if (["watchlistQuotePending", "externalDataConnection"].indexOf(type) >= 0) return 180;
+    if (["monitorPnlChange", "monitorValueChange", "monitorTrendChange", "monitorCashChange"].indexOf(type) >= 0) return 60;
+    return 120;
+  }
+
+  function defaultNotificationRuleSimilarityPenalty(messageType) {
+    var type = String(messageType || "");
+    if (type === "monitorHeartbeat") return -40;
+    if (["watchlistQuotePending", "externalDataConnection"].indexOf(type) >= 0) return -30;
+    return -20;
+  }
+
+  function defaultNotificationRuleSimilarityBypassDelta(messageType) {
+    return ["modelBuy", "modelSell", "monitorDecisionChange"].indexOf(String(messageType || "")) >= 0 ? 15 : 20;
+  }
+
+  function defaultNotificationRuleSimilarityFields() {
+    return ["messageType", "accountId", "symbol", "severity", "title"];
+  }
+
   function defaultNotificationRule(messageType) {
     var type = String(messageType || "notification").trim() || "notification";
     var systemTypes = ["default", "modelReview", "workHandoff", "notification"];
@@ -990,6 +1017,11 @@
       conditions: defaultNotificationRuleConditions().map(function (condition) {
         return Object.assign({}, condition, { terms: (condition.terms || []).slice() });
       }),
+      similarityEnabled: defaultNotificationRuleSimilarityEnabled(type),
+      similarityWindowMinutes: defaultNotificationRuleSimilarityWindow(type),
+      similarityPenalty: defaultNotificationRuleSimilarityPenalty(type),
+      similarityBypassScoreDelta: defaultNotificationRuleSimilarityBypassDelta(type),
+      similarityFields: defaultNotificationRuleSimilarityFields(),
       updatedAt: ""
     };
   }
@@ -1162,6 +1194,14 @@
     normalized.baseScore = clampInteger(normalized.baseScore, 0, 100, defaultNotificationRuleBaseScore(normalized.messageType));
     normalized.enabled = normalized.enabled !== false;
     normalized.lowScoreAction = normalized.lowScoreAction || "suppress";
+    normalized.similarityEnabled = normalized.similarityEnabled !== false;
+    normalized.similarityWindowMinutes = clampInteger(normalized.similarityWindowMinutes, 0, 10080, defaultNotificationRuleSimilarityWindow(normalized.messageType));
+    normalized.similarityPenalty = clampInteger(normalized.similarityPenalty, -100, 0, defaultNotificationRuleSimilarityPenalty(normalized.messageType));
+    normalized.similarityBypassScoreDelta = clampInteger(normalized.similarityBypassScoreDelta, 0, 100, defaultNotificationRuleSimilarityBypassDelta(normalized.messageType));
+    normalized.similarityFields = Array.isArray(normalized.similarityFields)
+      ? normalized.similarityFields.map(function (field) { return String(field || "").trim(); }).filter(Boolean)
+      : String(normalized.similarityFields || "").split(",").map(function (field) { return field.trim(); }).filter(Boolean);
+    if (!normalized.similarityFields.length) normalized.similarityFields = defaultNotificationRuleSimilarityFields();
     normalized.conditions = Array.isArray(normalized.conditions) && normalized.conditions.length
       ? normalized.conditions.map(function (condition) {
         return Object.assign({
@@ -1211,6 +1251,16 @@
       rule.baseScore = clampInteger(value, 0, 100, defaultNotificationRuleBaseScore(messageType));
     } else if (field === "lowScoreAction") {
       rule.lowScoreAction = String(value || "suppress");
+    } else if (field === "similarityEnabled") {
+      rule.similarityEnabled = Boolean(value);
+    } else if (field === "similarityWindowMinutes") {
+      rule.similarityWindowMinutes = clampInteger(value, 0, 10080, defaultNotificationRuleSimilarityWindow(messageType));
+    } else if (field === "similarityPenalty") {
+      rule.similarityPenalty = clampInteger(value, -100, 0, defaultNotificationRuleSimilarityPenalty(messageType));
+    } else if (field === "similarityBypassScoreDelta") {
+      rule.similarityBypassScoreDelta = clampInteger(value, 0, 100, defaultNotificationRuleSimilarityBypassDelta(messageType));
+    } else if (field === "similarityFields") {
+      rule.similarityFields = String(value || "").split(",").map(function (item) { return item.trim(); }).filter(Boolean);
     }
     state.notificationRulesSaved = false;
     state.notificationRulesError = "";
@@ -5652,6 +5702,30 @@
     ].join("");
   }
 
+  function notificationRuleSimilarityFieldsText(rule) {
+    return (Array.isArray(rule.similarityFields) ? rule.similarityFields : defaultNotificationRuleSimilarityFields()).join(", ");
+  }
+
+  function renderNotificationSimilarityEditor(messageType, rule, disabled) {
+    var summary = rule.similarityEnabled === false
+      ? "유사 억제 꺼짐"
+      : String(rule.similarityWindowMinutes || 0) + "분 내 같으면 " + String(rule.similarityPenalty || 0) + "점";
+    return [
+      '<div class="notification-rule-similarity">',
+      '<div class="notification-rule-head notification-rule-subhead">',
+      '<div><strong>유사 메시지</strong><span>' + escapeHtml(summary) + '</span></div>',
+      '<label class="notification-rule-toggle"><input type="checkbox" data-notification-rule-similarity-enabled="' + escapeHtml(messageType) + '"' + (rule.similarityEnabled !== false ? " checked" : "") + (disabled ? " disabled" : "") + ' /> 억제</label>',
+      '</div>',
+      '<div class="notification-rule-score-grid">',
+      '<label><span>억제 시간</span><input type="number" min="0" max="10080" step="10" data-notification-rule-number="' + escapeHtml(messageType) + '" data-rule-field="similarityWindowMinutes" value="' + escapeHtml(rule.similarityWindowMinutes) + '"' + (disabled ? " disabled" : "") + ' /></label>',
+      '<label><span>반복 감점</span><input type="number" min="-100" max="0" step="1" data-notification-rule-number="' + escapeHtml(messageType) + '" data-rule-field="similarityPenalty" value="' + escapeHtml(rule.similarityPenalty) + '"' + (disabled ? " disabled" : "") + ' /></label>',
+      '<label><span>상승 예외</span><input type="number" min="0" max="100" step="1" data-notification-rule-number="' + escapeHtml(messageType) + '" data-rule-field="similarityBypassScoreDelta" value="' + escapeHtml(rule.similarityBypassScoreDelta) + '"' + (disabled ? " disabled" : "") + ' /></label>',
+      '</div>',
+      '<label class="notification-rule-fields"><span>fingerprint 필드</span><textarea rows="2" data-notification-rule-fields="' + escapeHtml(messageType) + '"' + (disabled ? " disabled" : "") + '>' + escapeHtml(notificationRuleSimilarityFieldsText(rule)) + '</textarea></label>',
+      '</div>'
+    ].join("");
+  }
+
   function renderNotificationRuleEditor(messageType, options) {
     options = options || {};
     var rule = notificationRuleForEdit(messageType);
@@ -5673,6 +5747,7 @@
       '<option value="tag_only"' + (rule.lowScoreAction === "tag_only" ? " selected" : "") + '>점수만 기록</option>',
       '</select></label>',
       '</div>',
+      renderNotificationSimilarityEditor(messageType, rule, disabled),
       '<div class="notification-rule-condition-list">',
       (rule.conditions || []).map(function (condition) {
         return renderNotificationRuleCondition(messageType, condition, disabled);
@@ -8124,6 +8199,19 @@
     Array.prototype.slice.call(app.querySelectorAll("[data-notification-rule-action]")).forEach(function (field) {
       field.addEventListener("change", function () {
         updateNotificationRuleField(field.getAttribute("data-notification-rule-action"), "lowScoreAction", field.value);
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-notification-rule-similarity-enabled]")).forEach(function (field) {
+      field.addEventListener("change", function () {
+        updateNotificationRuleField(field.getAttribute("data-notification-rule-similarity-enabled"), "similarityEnabled", field.checked);
+        render();
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-notification-rule-fields]")).forEach(function (field) {
+      field.addEventListener("change", function () {
+        updateNotificationRuleField(field.getAttribute("data-notification-rule-fields"), "similarityFields", field.value);
       });
     });
 

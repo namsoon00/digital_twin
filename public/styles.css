@@ -2271,10 +2271,15 @@ h3 {
   font-size: 13px;
 }
 
+.notification-rule-subhead {
+  padding-top: 2px;
+}
+
 .notification-rule-head span,
 .notification-rule-condition-main em,
 .notification-rule-score-grid span,
-.notification-rule-condition label > span {
+.notification-rule-condition label > span,
+.notification-rule-fields span {
   color: var(--muted);
   font-size: 12px;
   font-weight: 800;
@@ -2329,6 +2334,34 @@ h3 {
 .notification-rule-condition textarea {
   resize: vertical;
   line-height: 1.4;
+}
+
+.notification-rule-similarity,
+.notification-rule-fields {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.notification-rule-similarity {
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.notification-rule-fields textarea {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--input);
+  color: var(--ink);
+  padding: 8px;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.4;
+  resize: vertical;
 }
 
 .notification-rule-condition-list {

@@ -988,6 +988,33 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("꿀점수", jobs[0].last_error)
         self.assertLess(jobs[0].context["honeyScore"], jobs[0].context["honeyThreshold"])
 
+    def test_notification_rule_penalizes_similar_recent_messages(self):
+        db_path = Path(self.temp.name) / "service.db"
+        queue = SQLiteNotificationJobStore(db_path)
+        rules = SQLiteNotificationRuleStore(db_path)
+        rule = rules.get("monitorTrendChange")
+        rule.threshold = 80
+        rule.similarity_enabled = True
+        rule.similarity_window_minutes = 120
+        rule.similarity_penalty = -40
+        rule.similarity_bypass_score_delta = 20
+        rule.similarity_fields = ["messageType", "accountId", "symbol", "severity", "title"]
+        rules.upsert(rule)
+        first = AlertEvent("main", "메인", "ALERT", "monitorTrendChange", "main:trend:1", "SK하이닉스", ["이동평균 변화", "20일선 하향 이탈"], "000660")
+        second = AlertEvent("main", "메인", "ALERT", "monitorTrendChange", "main:trend:2", "SK하이닉스", ["이동평균 변화", "20일선 하향 이탈", "변화 -0.1%"], "000660")
+
+        first_result = send_events([first], queue=queue)
+        second_result = send_events([second], queue=queue)
+
+        self.assertEqual(1, first_result.queued)
+        self.assertEqual(0, second_result.queued)
+        jobs = queue.jobs()
+        self.assertEqual(["pending", "suppressed"], [job.status for job in jobs])
+        self.assertEqual(jobs[0].context["honeyFingerprint"], jobs[1].context["honeyFingerprint"])
+        self.assertEqual(1, jobs[1].context["honeySimilarityRecentCount"])
+        self.assertEqual(-40, jobs[1].context["honeySimilarityPenalty"])
+        self.assertLess(jobs[1].context["honeyScore"], jobs[1].context["honeyThreshold"])
+
     def test_notification_queue_runner_delivers_pending_messages_in_order(self):
         registry = AccountRegistry()
         registry.upsert(AccountConfig("main", "메인", "toss", "https://example.test", "", "", "", ["AAPL"]))

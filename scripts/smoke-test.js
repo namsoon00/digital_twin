@@ -221,6 +221,11 @@ function checkFrontendAdminRender() {
           threshold: 45,
           baseScore: 15,
           lowScoreAction: "suppress",
+          similarityEnabled: true,
+          similarityWindowMinutes: 360,
+          similarityPenalty: -40,
+          similarityBypassScoreDelta: 20,
+          similarityFields: ["messageType", "accountId", "symbol", "severity", "title"],
           conditions: [
             { id: "severity_watch", label: "관찰 등급", type: "context_equals", field: "severity", value: "WATCH", terms: [], score: 10, enabled: true },
             { id: "status_noise", label: "상태성 노이즈", type: "text_contains_any", field: "", value: "", terms: ["정상 작동", "시세 대기"], score: -25, enabled: true }
@@ -579,6 +584,9 @@ function checkFrontendAdminRender() {
     assertOk(notificationHtml.indexOf("notification-template-preview") >= 0, "알림 템플릿 미리보기가 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("notification-rule-editor") >= 0, "꿀점수 룰 편집기가 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("최소 꿀점수") >= 0, "꿀점수 기준 입력이 렌더링되지 않았습니다.");
+    assertOk(notificationHtml.indexOf("유사 메시지") >= 0, "유사 메시지 억제 설정이 렌더링되지 않았습니다.");
+    assertOk(notificationHtml.indexOf("data-notification-rule-similarity-enabled") >= 0, "유사 메시지 억제 토글이 없습니다.");
+    assertOk(notificationHtml.indexOf("data-notification-rule-fields") >= 0, "유사 메시지 fingerprint 필드 입력이 없습니다.");
     assertOk(notificationHtml.indexOf("data-notification-rule-condition-value") >= 0, "꿀점수 조건 값 편집 입력이 없습니다.");
     assertOk(notificationHtml.indexOf("data-rule-save=\"monitorHeartbeat\"") >= 0, "알림 타입별 룰 저장 버튼이 없습니다.");
     assertOk(notificationHtml.indexOf("시스템 템플릿") >= 0, "시스템 템플릿 섹션이 렌더링되지 않았습니다.");
@@ -917,6 +925,11 @@ async function checkNormalMode(port, context) {
       threshold: 40,
       baseScore: 20,
       lowScoreAction: "suppress",
+      similarityEnabled: true,
+      similarityWindowMinutes: 90,
+      similarityPenalty: -35,
+      similarityBypassScoreDelta: 12,
+      similarityFields: ["messageType", "accountId", "symbol", "title"],
       conditions: [
         { id: "severity_watch", label: "관찰 등급", type: "context_equals", field: "severity", value: "WATCH", terms: [], score: 12, enabled: true }
       ]
@@ -926,6 +939,9 @@ async function checkNormalMode(port, context) {
   const savedRulePayload = JSON.parse(savedRule.body);
   assertOk(savedRulePayload.rule.threshold === 40, "저장된 알림 룰 기준점이 응답에 없습니다.");
   assertOk(savedRulePayload.rule.conditions[0].score === 12, "저장된 알림 룰 조건 점수가 응답에 없습니다.");
+  assertOk(savedRulePayload.rule.similarityWindowMinutes === 90, "저장된 유사 메시지 억제 시간이 응답에 없습니다.");
+  assertOk(savedRulePayload.rule.similarityPenalty === -35, "저장된 유사 메시지 반복 감점이 응답에 없습니다.");
+  assertOk(savedRulePayload.rule.similarityFields.indexOf("symbol") >= 0, "저장된 fingerprint 필드가 응답에 없습니다.");
   const resetRule = await request(port, "/api/notification-rules/monitorHeartbeat", { method: "DELETE" });
   assertOk(resetRule.statusCode === 200, "알림 룰 초기화 API 응답 코드가 200이 아닙니다: " + resetRule.statusCode);
   const eventStatusAfterRule = JSON.parse((await request(port, "/api/realtime/status")).body);

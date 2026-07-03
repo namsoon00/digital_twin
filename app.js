@@ -1169,9 +1169,13 @@
       "24h 거래액",
       "현재가",
       "기준일",
+      "투자자",
+      "기울기",
       "거래량",
       "거래액",
       "가격",
+      "수급",
+      "추세",
       "출처",
       "이전",
       "현재",
@@ -1194,6 +1198,11 @@
       var text = String(line || "").trim();
       for (var index = 0; index < dataLabelPrefixes.length; index += 1) {
         var label = dataLabelPrefixes[index];
+        var colonPrefix = label + ": ";
+        if (text.indexOf(colonPrefix) === 0) {
+          var colonValue = text.slice(colonPrefix.length).trim();
+          if (colonValue) return { label: label, value: colonValue };
+        }
         var prefix = label + " ";
         if (text.indexOf(prefix) === 0) {
           var value = text.slice(prefix.length).trim();

@@ -111,6 +111,7 @@ def alerts_detected_event(events: Iterable[AlertEvent]) -> DomainEvent:
                     "symbol": item.symbol,
                     "lines": item.lines,
                     "criteria": list(getattr(item, "criteria", []) or []),
+                    "metadata": dict(getattr(item, "metadata", {}) or {}),
                 }
                 for item in items
             ],

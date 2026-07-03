@@ -141,6 +141,7 @@ class AlertEvent:
     lines: List[str]
     symbol: str = ""
     criteria: List[str] = field(default_factory=list)
+    metadata: Dict[str, object] = field(default_factory=dict)
 
     def target(self) -> str:
         return self.symbol or "all"

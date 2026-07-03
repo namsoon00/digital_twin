@@ -648,6 +648,7 @@ def save_notification_rule_payload(payload: Dict[str, object]) -> Dict[str, obje
             "similarityEnabled": saved.similarity_enabled,
             "similarityWindowMinutes": saved.similarity_window_minutes,
             "similarityPenalty": saved.similarity_penalty,
+            "similarityBypassConditionCount": len(saved.similarity_bypass_conditions),
             "updatedAt": saved.updated_at,
         },
     )

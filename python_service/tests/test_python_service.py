@@ -52,7 +52,7 @@ from digital_twin.infrastructure.sqlite_symbols import SQLiteSymbolUniverseStore
 from digital_twin.infrastructure.symbol_sources import RemoteSymbolSourceGateway, parse_krx_kind_table, parse_nasdaq_listed
 from digital_twin.infrastructure.sqlite_accounts import AccountRegistry
 from digital_twin.infrastructure.toss_snapshots import TossProvider, account_cash_amount, normalize_price_items, select_account
-from digital_twin.infrastructure.web_server import notification_jobs_payload, notification_schedules_payload, notification_template_test_payload, realtime_status_payload
+from digital_twin.infrastructure.web_server import list_notification_rules_payload, notification_jobs_payload, notification_schedules_payload, notification_template_test_payload, realtime_status_payload, save_notification_rule_payload
 from digital_twin.scheduler import MonitorRunner
 
 
@@ -1389,6 +1389,7 @@ class PythonServiceTests(unittest.TestCase):
         rules = SQLiteNotificationRuleStore(db_path)
         rule = rules.get("externalEquityMove")
         self.assertEqual(60, rule.threshold)
+        self.assertTrue(rule.similarity_bypass_conditions)
         rule.market_hours_enabled = False
         rules.upsert(rule)
         first = AlertEvent(
@@ -1420,6 +1421,65 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(-55, jobs[1].context["honeySimilarityPenalty"])
         self.assertEqual(360, jobs[1].context["honeySimilarityWindowMinutes"])
         self.assertLess(jobs[1].context["honeyScore"], jobs[1].context["honeyThreshold"])
+
+    def test_external_move_similarity_bypass_sends_material_change(self):
+        db_path = Path(self.temp.name) / "service.db"
+        queue = SQLiteNotificationJobStore(db_path)
+        rules = SQLiteNotificationRuleStore(db_path)
+        rule = rules.get("externalEquityMove")
+        rule.market_hours_enabled = False
+        rules.upsert(rule)
+        first = AlertEvent(
+            "main",
+            "메인",
+            "ALERT",
+            "externalEquityMove",
+            "main:alpha:TSLA:1",
+            "TSLA",
+            ["미장 가격 변동 -7.5%", "가격 $393.45", "거래량 73,915,762", "출처 Alpha Vantage"],
+            "TSLA",
+            metadata={"market": "US", "changePercent": -7.5, "price": 393.45, "volume": 73915762},
+        )
+        second = AlertEvent(
+            "main",
+            "메인",
+            "ALERT",
+            "externalEquityMove",
+            "main:alpha:TSLA:2",
+            "TSLA",
+            ["미장 가격 변동 -10.2%", "가격 $382.10", "거래량 74,500,000", "출처 Alpha Vantage"],
+            "TSLA",
+            metadata={"market": "US", "changePercent": -10.2, "price": 382.10, "volume": 74500000},
+        )
+
+        self.assertEqual(1, send_events([first], queue=queue).queued)
+        self.assertEqual(1, send_events([second], queue=queue).queued)
+
+        jobs = queue.jobs()
+        self.assertEqual(["pending", "pending"], [job.status for job in jobs])
+        self.assertEqual(jobs[0].context["honeyFingerprint"], jobs[1].context["honeyFingerprint"])
+        self.assertEqual(1, jobs[1].context["honeySimilarityRecentCount"])
+        self.assertTrue(jobs[1].context["honeySimilarityBypassed"])
+        self.assertIn("변동률 추가 확대", jobs[1].context["honeySimilarityBypassReason"])
+        self.assertGreaterEqual(jobs[1].context["honeyScore"], jobs[1].context["honeyThreshold"])
+
+    def test_notification_rule_payload_saves_similarity_bypass_conditions(self):
+        payload = list_notification_rules_payload()
+        equity_rule = next(item for item in payload["rules"] if item["messageType"] == "externalEquityMove")
+        self.assertTrue(equity_rule["similarityBypassConditions"])
+        change_condition = next(item for item in equity_rule["similarityBypassConditions"] if item["id"] == "change_abs_delta")
+        change_condition["value"] = 3.5
+        change_condition["enabled"] = False
+
+        saved = save_notification_rule_payload({"rule": equity_rule})["rule"]
+
+        saved_condition = next(item for item in saved["similarityBypassConditions"] if item["id"] == "change_abs_delta")
+        self.assertEqual("3.5", str(saved_condition["value"]))
+        self.assertFalse(saved_condition["enabled"])
+        reloaded = next(item for item in list_notification_rules_payload()["rules"] if item["messageType"] == "externalEquityMove")
+        reloaded_condition = next(item for item in reloaded["similarityBypassConditions"] if item["id"] == "change_abs_delta")
+        self.assertEqual("3.5", str(reloaded_condition["value"]))
+        self.assertFalse(reloaded_condition["enabled"])
 
     def test_notification_queue_runner_delivers_pending_messages_in_order(self):
         registry = AccountRegistry()

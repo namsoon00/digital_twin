@@ -52,6 +52,10 @@ class ExternalSignalAlertMixin:
             if threshold and abs(change) < threshold:
                 continue
             symbol_label = str(symbol or "").upper()
+            price = number(quote.get("price"))
+            volume = number(quote.get("volume"))
+            provider = str(quote.get("provider") or "Alpha Vantage")
+            latest_trading_day = str(quote.get("latestTradingDay") or "")
             events.append(AlertEvent(
                 snapshot.account_id,
                 snapshot.account_label,
@@ -61,16 +65,24 @@ class ExternalSignalAlertMixin:
                 symbol_label,
                 [
                     "미장 가격 변동 " + signed_pct(change),
-                    "가격 " + money(number(quote.get("price")), "USD"),
-                    "거래량 " + compact_number(number(quote.get("volume"))),
-                    "기준일 " + str(quote.get("latestTradingDay") or "-"),
-                    "출처 " + str(quote.get("provider") or "Alpha Vantage"),
+                    "가격 " + money(price, "USD"),
+                    "거래량 " + compact_number(volume),
+                    "기준일 " + (latest_trading_day or "-"),
+                    "출처 " + provider,
                 ],
                 symbol_label,
                 criteria=self.criteria(
                     "미장 가격 변동률 ±" + self.threshold_text("externalEquityChangePct", "%") + " 이상",
-                    "가격 변동 " + signed_pct(change) + ", 가격 " + money(number(quote.get("price")), "USD"),
+                    "가격 변동 " + signed_pct(change) + ", 가격 " + money(price, "USD"),
                 ),
+                metadata={
+                    "market": "US",
+                    "changePercent": change,
+                    "price": price,
+                    "volume": volume,
+                    "latestTradingDay": latest_trading_day,
+                    "provider": provider,
+                },
             ))
         return events
 
@@ -88,6 +100,9 @@ class ExternalSignalAlertMixin:
                 continue
             symbol = str(item.get("symbol") or coin_id).upper()
             coin_name = str(item.get("name") or "").strip()
+            price = number(item.get("price"))
+            volume24h = number(item.get("volume24h"))
+            provider = str(item.get("provider") or "CoinGecko")
             is_bitcoin = symbol == "BTC" or str(coin_id or "").strip().lower() == "bitcoin" or coin_name.lower() == "bitcoin"
             change_label = "비트코인 변동" if is_bitcoin else "크립토 변동"
             change_value = "24h " + signed_pct(change24h) + " · 7d " + signed_pct(change7d)
@@ -101,9 +116,9 @@ class ExternalSignalAlertMixin:
                 "크립토 변동",
                 [
                     change_label + " " + change_value,
-                    "크립토 가격 " + money(number(item.get("price")), "USD"),
-                    "크립토 거래액 " + money(number(item.get("volume24h")), "USD"),
-                    "출처 " + str(item.get("provider") or "CoinGecko"),
+                    "크립토 가격 " + money(price, "USD"),
+                    "크립토 거래액 " + money(volume24h, "USD"),
+                    "출처 " + provider,
                     "MSTR/STRC 등 비트코인 민감 종목 점검",
                 ],
                 symbol,
@@ -111,6 +126,15 @@ class ExternalSignalAlertMixin:
                     "크립토 24h ±" + self.threshold_text("externalCryptoChange24hPct", "%") + " 또는 7d ±" + self.threshold_text("externalCryptoChange7dPct", "%") + " 이상",
                     ("비트코인 " if is_bitcoin else symbol + " ") + "24h " + signed_pct(change24h) + ", 7d " + signed_pct(change7d),
                 ),
+                metadata={
+                    "market": "CRYPTO",
+                    "change24h": change24h,
+                    "change7d": change7d,
+                    "price": price,
+                    "volume24h": volume24h,
+                    "provider": provider,
+                    "coinId": str(coin_id or ""),
+                },
             ))
         return events
 

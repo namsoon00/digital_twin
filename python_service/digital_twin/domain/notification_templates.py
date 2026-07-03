@@ -481,7 +481,8 @@ def alert_context(event: AlertEvent) -> Dict[str, object]:
         telegram_parts.extend(["", "<b>발송 기준</b>", telegram_trigger_rows])
     telegram_message = "\n".join(part for part in telegram_parts if str(part).strip() or part == "").strip()
     body = telegram_message or readable_message or "\n".join([event.title] + ([lines] if lines else []))
-    return {
+    metadata = dict(event.metadata or {})
+    context = {
         "messageType": event.rule,
         "accountId": event.account_id,
         "accountLabel": event.account_label,
@@ -516,6 +517,10 @@ def alert_context(event: AlertEvent) -> Dict[str, object]:
         "readableMessage": readable_message,
         "body": body,
     }
+    context["metadata"] = metadata
+    for key, value in metadata.items():
+        context.setdefault(str(key), value)
+    return context
 
 
 def text_context(
@@ -608,4 +613,13 @@ def template_variables() -> List[str]:
         "rawLines",
         "readableMessage",
         "body",
+        "metadata",
+        "market",
+        "changePercent",
+        "change24h",
+        "change7d",
+        "price",
+        "volume",
+        "volume24h",
+        "provider",
     ]

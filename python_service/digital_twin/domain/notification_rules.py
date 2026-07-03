@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field as dataclass_field
-from typing import Dict, Iterable, List
+from typing import Dict, Iterable, List, Tuple
 
 from .message_types import (
     DEFAULT_ALERT_RULES,
@@ -121,6 +121,61 @@ def default_similarity_bypass_score_delta(message_type: str) -> int:
     return 15 if str(message_type or "") in {"modelBuy", "modelSell", "monitorDecisionChange"} else 20
 
 
+def default_similarity_bypass_conditions(message_type: str) -> List["SimilarityBypassCondition"]:
+    key = str(message_type or "")
+    if key == "externalEquityMove":
+        return [
+            SimilarityBypassCondition(
+                "severity_upgrade",
+                "등급 상승",
+                "severity_upgrade",
+                description="관찰에서 주의처럼 중요도가 올라가면 반복이어도 보냅니다.",
+            ),
+            SimilarityBypassCondition(
+                "change_abs_delta",
+                "변동률 추가 확대",
+                "abs_number_delta_gte",
+                field="changePercent",
+                value=2,
+                description="이전 유사 알림보다 변동률 절대값이 기준 %p 이상 커지면 보냅니다.",
+            ),
+            SimilarityBypassCondition(
+                "volume_multiplier",
+                "거래량 급증",
+                "number_multiplier_gte",
+                field="volume",
+                value=1.5,
+                description="이전 유사 알림보다 거래량이 기준 배수 이상 커지면 보냅니다.",
+            ),
+        ]
+    if key == "externalCryptoMove":
+        return [
+            SimilarityBypassCondition(
+                "severity_upgrade",
+                "등급 상승",
+                "severity_upgrade",
+                description="관찰에서 주의처럼 중요도가 올라가면 반복이어도 보냅니다.",
+            ),
+            SimilarityBypassCondition(
+                "change_24h_abs_delta",
+                "24시간 변동 확대",
+                "abs_number_delta_gte",
+                field="change24h",
+                value=2,
+                description="이전 유사 알림보다 24시간 변동률 절대값이 기준 %p 이상 커지면 보냅니다.",
+            ),
+            SimilarityBypassCondition(
+                "volume_multiplier",
+                "거래액 급증",
+                "number_multiplier_gte",
+                field="volume24h",
+                value=1.5,
+                description="이전 유사 알림보다 거래액이 기준 배수 이상 커지면 보냅니다.",
+            ),
+        ]
+    return []
+
+
 @dataclass
 class NotificationRuleCondition:
     condition_id: str
@@ -166,6 +221,40 @@ class NotificationRuleCondition:
 
 
 @dataclass
+class SimilarityBypassCondition:
+    condition_id: str
+    label: str
+    condition_type: str
+    field: str = ""
+    value: object = ""
+    enabled: bool = True
+    description: str = ""
+
+    @classmethod
+    def from_dict(cls, payload: Dict[str, object]) -> "SimilarityBypassCondition":
+        return cls(
+            condition_id=str(payload.get("id") or payload.get("conditionId") or payload.get("condition_id") or "").strip(),
+            label=str(payload.get("label") or "").strip(),
+            condition_type=str(payload.get("type") or payload.get("conditionType") or payload.get("condition_type") or "").strip(),
+            field=str(payload.get("field") or "").strip(),
+            value=payload.get("value", ""),
+            enabled=payload.get("enabled") is not False,
+            description=str(payload.get("description") or "").strip(),
+        )
+
+    def to_dict(self) -> Dict[str, object]:
+        return {
+            "id": self.condition_id,
+            "label": self.label,
+            "type": self.condition_type,
+            "field": self.field,
+            "value": self.value,
+            "enabled": bool(self.enabled),
+            "description": self.description,
+        }
+
+
+@dataclass
 class NotificationRuleConfig:
     message_type: str
     enabled: bool = True
@@ -177,6 +266,7 @@ class NotificationRuleConfig:
     similarity_window_minutes: int = 120
     similarity_penalty: int = -20
     similarity_bypass_score_delta: int = 20
+    similarity_bypass_conditions: List[SimilarityBypassCondition] = dataclass_field(default_factory=list)
     similarity_fields: List[str] = dataclass_field(default_factory=lambda: list(DEFAULT_SIMILARITY_FIELDS))
     market_hours_enabled: bool = False
     market_hours_markets: List[str] = dataclass_field(default_factory=list)
@@ -193,6 +283,20 @@ class NotificationRuleConfig:
                     if condition.condition_id and condition.condition_type:
                         conditions.append(condition)
         message_type = str(payload.get("messageType") or payload.get("message_type") or "").strip()
+        raw_bypass_conditions = (
+            payload.get("similarityBypassConditions")
+            if "similarityBypassConditions" in payload
+            else payload.get("similarity_bypass_conditions")
+        )
+        bypass_conditions = []
+        if isinstance(raw_bypass_conditions, list):
+            for item in raw_bypass_conditions:
+                if isinstance(item, dict):
+                    condition = SimilarityBypassCondition.from_dict(item)
+                    if condition.condition_id and condition.condition_type:
+                        bypass_conditions.append(condition)
+        else:
+            bypass_conditions = default_similarity_bypass_conditions(message_type)
         base_score_value = payload["baseScore"] if "baseScore" in payload else payload.get("base_score")
         raw_similarity_fields = payload.get("similarityFields") if "similarityFields" in payload else payload.get("similarity_fields")
         if isinstance(raw_similarity_fields, str):
@@ -228,6 +332,7 @@ class NotificationRuleConfig:
             similarity_window_minutes=clamp_int(similarity_window_value, 0, 10080, default_similarity_window_minutes(message_type)),
             similarity_penalty=clamp_int(similarity_penalty_value, -100, 0, default_similarity_penalty(message_type)),
             similarity_bypass_score_delta=clamp_int(similarity_bypass_value, 0, 100, default_similarity_bypass_score_delta(message_type)),
+            similarity_bypass_conditions=bypass_conditions,
             similarity_fields=similarity_fields,
             market_hours_enabled=bool_value(market_hours_enabled_value, default_market_hours_enabled(message_type)),
             market_hours_markets=market_hours_markets,
@@ -246,6 +351,7 @@ class NotificationRuleConfig:
             "similarityWindowMinutes": int(self.similarity_window_minutes or 0),
             "similarityPenalty": int(self.similarity_penalty or 0),
             "similarityBypassScoreDelta": int(self.similarity_bypass_score_delta or 0),
+            "similarityBypassConditions": [condition.to_dict() for condition in self.similarity_bypass_conditions],
             "similarityFields": list(self.similarity_fields or []),
             "marketHoursEnabled": bool(self.market_hours_enabled),
             "marketHoursMarkets": list(self.market_hours_markets or []),
@@ -269,6 +375,7 @@ class NotificationRuleDecision:
     similarity_recent_count: int = 0
     similarity_previous_score: int = 0
     similarity_bypassed: bool = False
+    similarity_bypass_reason: str = ""
     suppression_reason: str = ""
     market_hours_enabled: bool = False
     market_hours_market: str = ""
@@ -300,6 +407,7 @@ class NotificationRuleDecision:
             "honeySimilarityRecentCount": self.similarity_recent_count,
             "honeySimilarityPreviousScore": self.similarity_previous_score,
             "honeySimilarityBypassed": bool(self.similarity_bypassed),
+            "honeySimilarityBypassReason": self.similarity_bypass_reason,
             "honeySuppressionReason": self.suppression_reason,
             "marketHoursEnabled": bool(self.market_hours_enabled),
             "marketHoursMarket": self.market_hours_market,
@@ -387,6 +495,7 @@ def default_notification_rule(message_type: str) -> NotificationRuleConfig:
         similarity_window_minutes=default_similarity_window_minutes(key),
         similarity_penalty=default_similarity_penalty(key),
         similarity_bypass_score_delta=default_similarity_bypass_score_delta(key),
+        similarity_bypass_conditions=[SimilarityBypassCondition.from_dict(condition.to_dict()) for condition in default_similarity_bypass_conditions(key)],
         similarity_fields=list(DEFAULT_SIMILARITY_FIELDS),
         market_hours_enabled=default_market_hours_enabled(key),
         market_hours_markets=default_market_hours_markets(key),
@@ -445,6 +554,22 @@ def numeric_value(value):
         return float(str(value).replace(",", "").replace("%", "").strip())
     except (TypeError, ValueError):
         return None
+
+
+def severity_rank(value) -> int:
+    normalized = normalized_text(value).upper()
+    ranks = {
+        "INFO": 0,
+        "정보": 0,
+        "WATCH": 1,
+        "관찰": 1,
+        "ALERT": 2,
+        "주의": 2,
+        "WARNING": 2,
+        "CRITICAL": 3,
+        "위험": 3,
+    }
+    return ranks.get(normalized, -1)
 
 
 def fingerprint_field_value(job: NotificationJob, field: str):
@@ -512,6 +637,61 @@ def condition_matches(condition: NotificationRuleCondition, job: NotificationJob
     return False
 
 
+def format_rule_number(value: float) -> str:
+    text = ("%.4f" % value).rstrip("0").rstrip(".")
+    return text or "0"
+
+
+def similarity_bypass_match(
+    condition: SimilarityBypassCondition,
+    job: NotificationJob,
+    previous_context: Dict[str, object],
+    decision: NotificationRuleDecision,
+    previous_score: int,
+) -> Tuple[bool, str]:
+    context = job.context or {}
+    condition_type = condition.condition_type
+    label = condition.label or condition.condition_id or "반복 예외"
+    field = condition.field or ""
+    if condition_type == "score_delta_gte":
+        current = int(decision.score or 0)
+        previous = int(previous_score or 0)
+        minimum = numeric_value(condition.value)
+        if minimum is not None and previous and current - previous >= minimum:
+            return True, label + " +" + str(current - previous) + "점"
+        return False, ""
+    if condition_type == "severity_upgrade":
+        target_field = field or "severity"
+        current_rank = severity_rank(field_value(context, target_field))
+        previous_rank = severity_rank(field_value(previous_context, target_field))
+        if current_rank > previous_rank >= 0:
+            return True, label + " " + str(field_value(previous_context, target_field) or "-") + " -> " + str(field_value(context, target_field) or "-")
+        return False, ""
+    if condition_type in {"abs_number_delta_gte", "number_delta_gte", "number_delta_lte", "number_multiplier_gte"}:
+        current = numeric_value(field_value(context, field))
+        previous = numeric_value(field_value(previous_context, field))
+        minimum = numeric_value(condition.value)
+        if current is None or previous is None or minimum is None:
+            return False, ""
+        if condition_type == "abs_number_delta_gte":
+            delta = abs(current) - abs(previous)
+            if delta >= minimum:
+                return True, label + " " + format_rule_number(previous) + " -> " + format_rule_number(current)
+        if condition_type == "number_delta_gte":
+            delta = current - previous
+            if delta >= minimum:
+                return True, label + " +" + format_rule_number(delta)
+        if condition_type == "number_delta_lte":
+            delta = current - previous
+            if delta <= -minimum:
+                return True, label + " " + format_rule_number(delta)
+        if condition_type == "number_multiplier_gte" and previous > 0:
+            multiplier = current / previous
+            if multiplier >= minimum:
+                return True, label + " x" + format_rule_number(multiplier)
+    return False, ""
+
+
 def evaluate_notification_rule(job: NotificationJob, config: NotificationRuleConfig) -> NotificationRuleDecision:
     score = clamp_int(config.base_score, 0, 100, default_base_score(config.message_type))
     reasons = ["기본 " + str(score) + "점"]
@@ -548,16 +728,30 @@ def apply_similarity_rule(
     config: NotificationRuleConfig,
     recent_count: int,
     previous_score: int = 0,
+    previous_context: Dict[str, object] = None,
+    job: NotificationJob = None,
 ) -> NotificationRuleDecision:
     decision.similarity_recent_count = max(0, int(recent_count or 0))
     decision.similarity_previous_score = max(0, int(previous_score or 0))
     if not config.enabled or not config.similarity_enabled or decision.similarity_recent_count <= 0:
         return decision
+    previous_context = previous_context or {}
+    if job is not None:
+        for condition in config.similarity_bypass_conditions or []:
+            if not condition.enabled:
+                continue
+            matched, reason = similarity_bypass_match(condition, job=job, previous_context=previous_context, decision=decision, previous_score=decision.similarity_previous_score)
+            if matched:
+                decision.similarity_bypassed = True
+                decision.similarity_bypass_reason = reason
+                decision.reasons.append("유사 메시지 예외: " + reason)
+                return decision
     score_delta = decision.score - decision.similarity_previous_score if decision.similarity_previous_score else 0
     bypass_delta = int(config.similarity_bypass_score_delta or 0)
     if bypass_delta and decision.similarity_previous_score and score_delta >= bypass_delta:
         decision.similarity_bypassed = True
-        decision.reasons.append("유사 메시지지만 꿀점수 +" + str(score_delta) + "점 상승")
+        decision.similarity_bypass_reason = "꿀점수 +" + str(score_delta) + "점 상승"
+        decision.reasons.append("유사 메시지 예외: " + decision.similarity_bypass_reason)
         return decision
     penalty = clamp_int(config.similarity_penalty, -100, 0, default_similarity_penalty(config.message_type))
     if penalty:

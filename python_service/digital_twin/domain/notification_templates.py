@@ -12,7 +12,12 @@ DEFAULT_TEMPLATE = "{telegramMessage}"
 BODY_TEMPLATE = "{body}"
 DATA_LABEL_PREFIXES = [
     "미장 가격 변동",
+    "비트코인 변동",
     "크립토 변동",
+    "크립토 가격",
+    "크립토 거래액",
+    "매수 판단",
+    "매도 판단",
     "모델 매수 점수",
     "모델 매도 점수",
     "적정가 대비",
@@ -40,21 +45,33 @@ DATA_LABEL_PREFIXES = [
 DATA_LABEL_ORDER = {
     "상태": 10,
     "손익": 20,
+    "매수 판단": 25,
+    "매도 판단": 26,
     "수급": 30,
     "추세": 40,
     "기울기": 45,
     "투자자": 50,
     "신호": 60,
+    "비트코인 변동": 70,
+    "크립토 변동": 71,
+    "크립토 가격": 72,
+    "크립토 거래액": 73,
 }
 
 SEPARATE_DATA_LABELS = {
     "상태",
     "손익",
+    "매수 판단",
+    "매도 판단",
     "수급",
     "추세",
     "기울기",
     "투자자",
     "신호",
+    "비트코인 변동",
+    "크립토 변동",
+    "크립토 가격",
+    "크립토 거래액",
     "평가",
     "보유",
 }
@@ -348,13 +365,13 @@ def inferred_criterion_lines(event: AlertEvent, raw_lines: List[str], trigger_su
     profit = data_value(raw_lines, "손익")
 
     if rule == "modelBuy":
-        score = data_value(raw_lines, "모델 매수 점수")
+        score = data_value(raw_lines, "매수 판단") or data_value(raw_lines, "모델 매수 점수")
         if score:
-            details.append("감지: 모델 매수 점수 " + score)
+            details.append("감지: " + score)
     elif rule == "modelSell":
-        score = data_value(raw_lines, "모델 매도 점수")
+        score = data_value(raw_lines, "매도 판단") or data_value(raw_lines, "모델 매도 점수")
         if score:
-            details.append("감지: 모델 매도 점수 " + score)
+            details.append("감지: " + score)
     elif rule == "holdingTiming":
         detected = ", ".join(part for part in ["상태 " + status if status else "", "손익 " + profit if profit else ""] if part)
         if detected:

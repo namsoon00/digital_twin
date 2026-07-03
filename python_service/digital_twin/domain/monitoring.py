@@ -154,6 +154,28 @@ class RealtimeMonitor:
     def threshold_text(self, key: str, suffix: str = "") -> str:
         return compact_number(float(self.thresholds.get(key, DEFAULT_THRESHOLDS.get(key, 0)) or 0)) + suffix
 
+    def model_score_phrase(self, side: str, score: float) -> str:
+        value = round(float(score or 0), 1)
+        if side == "buy":
+            if value >= 85:
+                label = "강한 매수 후보"
+            elif value >= 74:
+                label = "매수 후보"
+            elif value >= 60:
+                label = "관찰 후보"
+            else:
+                label = "매수 기준 미달"
+        else:
+            if value >= 85:
+                label = "강한 매도 압력"
+            elif value >= 72:
+                label = "분할매도 압력"
+            elif value >= 60:
+                label = "리스크 관찰"
+            else:
+                label = "매도 기준 미달"
+        return label + " (" + compact_number(value) + "점)"
+
     def events_for_snapshot(self, snapshot: AccountSnapshot, previous: Dict[str, object]) -> List[AlertEvent]:
         events: List[AlertEvent] = []
         events.extend(self.connection_events(snapshot, previous))
@@ -513,22 +535,24 @@ class RealtimeMonitor:
             ]
             buy_score = float(scores.get("buyScore") or 0)
             if buy_threshold and buy_score >= buy_threshold:
+                buy_phrase = self.model_score_phrase("buy", buy_score)
                 events.append(AlertEvent(
                     snapshot.account_id,
                     snapshot.account_label,
                     "WATCH",
-                "modelBuy",
-                ":".join([snapshot.account_id, "model-buy", symbol, str(round(buy_score, 1))]),
-                position.name,
-                ["모델 매수 점수 " + str(round(buy_score, 1)) + "점", *common_lines],
-                symbol,
-                criteria=self.criteria(
-                    "모델 매수 점수 " + self.threshold_text("modelBuyScore", "점") + " 이상",
-                    "모델 매수 점수 " + str(round(buy_score, 1)) + "점",
-                ),
-            ))
+                    "modelBuy",
+                    ":".join([snapshot.account_id, "model-buy", symbol, str(round(buy_score, 1))]),
+                    position.name,
+                    ["매수 판단 " + buy_phrase, *common_lines],
+                    symbol,
+                    criteria=self.criteria(
+                        "모델 매수 기준 매수 후보 이상 (" + self.threshold_text("modelBuyScore", "점") + ")",
+                        buy_phrase,
+                    ),
+                ))
             sell_score = float(scores.get("sellScore") or 0)
             if symbol not in watch_symbols and sell_threshold and sell_score >= sell_threshold:
+                sell_phrase = self.model_score_phrase("sell", sell_score)
                 events.append(AlertEvent(
                     snapshot.account_id,
                     snapshot.account_label,
@@ -537,14 +561,14 @@ class RealtimeMonitor:
                     ":".join([snapshot.account_id, "model-sell", symbol, str(round(sell_score, 1))]),
                     position.name,
                     [
-                        "모델 매도 점수 " + str(round(sell_score, 1)) + "점",
+                        "매도 판단 " + sell_phrase,
                         "손익률 " + signed_pct(position.profit_loss_rate),
                         *common_lines,
                     ],
                     symbol,
                     criteria=self.criteria(
-                        "모델 매도 점수 " + self.threshold_text("modelSellScore", "점") + " 이상",
-                        "모델 매도 점수 " + str(round(sell_score, 1)) + "점",
+                        "모델 매도 기준 분할매도 압력 이상 (" + self.threshold_text("modelSellScore", "점") + ")",
+                        sell_phrase,
                     ),
                 ))
         return events
@@ -557,6 +581,7 @@ class RealtimeMonitor:
         scores = self.strategy_model.score(position.to_dict())
         symbol = position.symbol.upper()
         if rule == "modelSell":
+            sell_phrase = self.model_score_phrase("sell", float(scores.get("sellScore") or 0))
             return [AlertEvent(
                 snapshot.account_id,
                 snapshot.account_label,
@@ -565,7 +590,7 @@ class RealtimeMonitor:
                 ":".join([snapshot.account_id, "model-sell-test", symbol]),
                 position.name,
                 [
-                    "모델 매도 점수 " + str(round(float(scores.get("sellScore") or 0), 1)) + "점",
+                    "매도 판단 " + sell_phrase,
                     "현재 데이터 기준 템플릿 테스트",
                     "손익률 " + signed_pct(position.profit_loss_rate),
                     self.flow_context_line(position.to_dict()),
@@ -573,10 +598,11 @@ class RealtimeMonitor:
                 ],
                 symbol,
                 criteria=self.criteria(
-                    "모델 매도 점수 " + self.threshold_text("modelSellScore", "점") + " 이상",
-                    "현재 데이터 기준 템플릿 테스트",
+                    "모델 매도 기준 분할매도 압력 이상 (" + self.threshold_text("modelSellScore", "점") + ")",
+                    sell_phrase,
                 ),
             )]
+        buy_phrase = self.model_score_phrase("buy", float(scores.get("buyScore") or 0))
         return [AlertEvent(
             snapshot.account_id,
             snapshot.account_label,
@@ -585,7 +611,7 @@ class RealtimeMonitor:
             ":".join([snapshot.account_id, "model-buy-test", symbol]),
             position.name,
             [
-                "모델 매수 점수 " + str(round(float(scores.get("buyScore") or 0), 1)) + "점",
+                "매수 판단 " + buy_phrase,
                 "현재 데이터 기준 템플릿 테스트",
                 "현재 " + money(position.current_price, position.currency),
                 self.flow_context_line(position.to_dict()),
@@ -593,8 +619,8 @@ class RealtimeMonitor:
             ],
             symbol,
             criteria=self.criteria(
-                "모델 매수 점수 " + self.threshold_text("modelBuyScore", "점") + " 이상",
-                "현재 데이터 기준 템플릿 테스트",
+                "모델 매수 기준 매수 후보 이상 (" + self.threshold_text("modelBuyScore", "점") + ")",
+                buy_phrase,
             ),
         )]
 
@@ -685,6 +711,10 @@ class RealtimeMonitor:
             if day_threshold and abs(change24h) < day_threshold and week_threshold and abs(change7d) < week_threshold:
                 continue
             symbol = str(item.get("symbol") or coin_id).upper()
+            coin_name = str(item.get("name") or "").strip()
+            is_bitcoin = symbol == "BTC" or str(coin_id or "").strip().lower() == "bitcoin" or coin_name.lower() == "bitcoin"
+            change_label = "비트코인 변동" if is_bitcoin else "크립토 변동"
+            change_value = "24h " + signed_pct(change24h) + " · 7d " + signed_pct(change7d)
             severity = "ALERT" if change24h < 0 or change7d < 0 else "WATCH"
             events.append(AlertEvent(
                 snapshot.account_id,
@@ -694,16 +724,16 @@ class RealtimeMonitor:
                 ":".join([snapshot.account_id, "crypto", symbol, signed_pct(change24h)]),
                 "크립토 변동",
                 [
-                    symbol + " 24h " + signed_pct(change24h) + " · 7d " + signed_pct(change7d),
-                    "가격 " + money(number(item.get("price")), "USD"),
-                    "24h 거래액 " + money(number(item.get("volume24h")), "USD"),
+                    change_label + " " + change_value,
+                    "크립토 가격 " + money(number(item.get("price")), "USD"),
+                    "크립토 거래액 " + money(number(item.get("volume24h")), "USD"),
                     "출처 " + str(item.get("provider") or "CoinGecko"),
                     "MSTR/STRC 등 비트코인 민감 종목 점검",
                 ],
                 symbol,
                 criteria=self.criteria(
                     "크립토 24h ±" + self.threshold_text("externalCryptoChange24hPct", "%") + " 또는 7d ±" + self.threshold_text("externalCryptoChange7dPct", "%") + " 이상",
-                    "24h " + signed_pct(change24h) + ", 7d " + signed_pct(change7d),
+                    ("비트코인 " if is_bitcoin else symbol + " ") + "24h " + signed_pct(change24h) + ", 7d " + signed_pct(change7d),
                 ),
             ))
         return events

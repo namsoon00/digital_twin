@@ -728,6 +728,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("Alpha Vantage", messages["externalEquityMove"])
         self.assertIn("externalCryptoMove", messages)
         self.assertIn("CoinGecko", messages["externalCryptoMove"])
+        self.assertIn("비트코인 변동", messages["externalCryptoMove"])
+        self.assertIn("크립토 거래액", messages["externalCryptoMove"])
         self.assertIn("externalMacroShift", messages)
         self.assertIn("DGS10", messages["externalMacroShift"])
         self.assertIn("externalDartDisclosure", messages)
@@ -1094,6 +1096,58 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("• <b>출처</b>: <code>Alpha Vantage</code>", message)
         self.assertLess(message.index("<b>데이터</b>"), message.index("<b>발송 기준</b>"))
         self.assertIn("• <b>감지</b>: <code>가격 변동 -7.5%, 가격 $393.45</code>", message)
+
+    def test_external_crypto_alert_orders_bitcoin_price_and_trading_value(self):
+        db_path = Path(self.temp.name) / "service.db"
+        templates = SQLiteNotificationTemplateStore(db_path)
+        event = AlertEvent(
+            "main",
+            "메인",
+            "ALERT",
+            "externalCryptoMove",
+            "main:crypto:BTC:-5.2",
+            "크립토 변동",
+            [
+                "비트코인 변동 24h -5.2% · 7d -12.1%",
+                "크립토 가격 $108,000",
+                "크립토 거래액 $42,000,000,000",
+                "출처 CoinGecko",
+            ],
+            "BTC",
+            criteria=[
+                "설정: 크립토 24h ±4% 또는 7d ±10% 이상",
+                "감지: 비트코인 24h -5.2%, 7d -12.1%",
+            ],
+        )
+
+        message = templates.render(event.rule, alert_context(event))
+
+        change_line = "• <b>비트코인 변동</b>: <code>24h -5.2% · 7d -12.1%</code>"
+        price_line = "• <b>크립토 가격</b>: <code>$108,000</code>"
+        value_line = "• <b>크립토 거래액</b>: <code>$42,000,000,000</code>"
+        self.assertIn(change_line + "\n" + price_line + "\n" + value_line, message)
+        self.assertLess(message.index(price_line), message.index(value_line))
+        self.assertIn("• <b>감지</b>: <code>비트코인 24h -5.2%, 7d -12.1%</code>", message)
+
+    def test_model_score_alert_uses_phrase_with_score_in_parentheses(self):
+        db_path = Path(self.temp.name) / "service.db"
+        templates = SQLiteNotificationTemplateStore(db_path)
+        event = AlertEvent(
+            "main",
+            "메인",
+            "WATCH",
+            "modelBuy",
+            "main:model-buy:005930",
+            "삼성전자",
+            ["매수 판단 매수 후보 (78점)", "현재 71,000원"],
+            "005930",
+        )
+
+        message = templates.render(event.rule, alert_context(event))
+
+        self.assertIn("• <b>매수 판단</b>: <code>매수 후보 (78점)</code>", message)
+        self.assertNotIn("모델 매수 점수 78점", message)
+        self.assertIn("• <b>감지</b>: <code>매수 후보 (78점)</code>", message)
 
     def test_flow_and_trend_lines_use_colon_pair_template_format(self):
         db_path = Path(self.temp.name) / "service.db"

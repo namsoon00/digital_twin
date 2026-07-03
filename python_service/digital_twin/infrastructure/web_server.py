@@ -31,6 +31,9 @@ from ..domain.events import (
     APP_MEMORY_UPDATED,
     APP_PROFILE_UPDATED,
     CHAT_MESSAGE_APPENDED,
+    MONITORING_ALERTS_DETECTED,
+    MONITORING_CYCLE_COMPLETED,
+    MONITORING_SNAPSHOT_COLLECTED,
     NOTIFICATION_JOB_QUEUED,
     NOTIFICATION_RULE_UPDATED,
     NOTIFICATION_TEMPLATE_UPDATED,
@@ -183,6 +186,39 @@ def publish_domain_event(event: DomainEvent) -> DomainEvent:
 
 def new_domain_event(name: str, aggregate_id: str, payload: Dict[str, object] = None) -> DomainEvent:
     return publish_domain_event(DomainEvent(name=name, aggregate_id=aggregate_id, payload=dict(payload or {})))
+
+
+def realtime_event_payload(event: DomainEvent) -> Dict[str, object]:
+    return {
+        "name": event.name,
+        "eventId": event.event_id,
+        "aggregateId": event.aggregate_id,
+        "occurredAt": event.occurred_at,
+        "payload": event.payload,
+    }
+
+
+def realtime_status_payload() -> Dict[str, object]:
+    events = SQLiteEventLog().events()
+    counts: Dict[str, int] = {}
+    latest_by_name: Dict[str, DomainEvent] = {}
+    for event in events:
+        counts[event.name] = counts.get(event.name, 0) + 1
+        latest_by_name[event.name] = event
+    monitoring = {}
+    if latest_by_name.get(MONITORING_CYCLE_COMPLETED):
+        monitoring["cycle"] = realtime_event_payload(latest_by_name[MONITORING_CYCLE_COMPLETED])
+    if latest_by_name.get(MONITORING_ALERTS_DETECTED):
+        monitoring["alerts"] = realtime_event_payload(latest_by_name[MONITORING_ALERTS_DETECTED])
+    if latest_by_name.get(MONITORING_SNAPSHOT_COLLECTED):
+        monitoring["snapshot"] = realtime_event_payload(latest_by_name[MONITORING_SNAPSHOT_COLLECTED])
+    return {
+        **REALTIME_HUB.status(),
+        "events": counts,
+        "latestEvents": [realtime_event_payload(event) for event in events[-12:]],
+        "monitoring": monitoring,
+        "notificationJobs": notification_queue_store().summary(),
+    }
 
 
 def new_id(prefix: str) -> str:
@@ -540,6 +576,9 @@ def save_notification_rule_payload(payload: Dict[str, object]) -> Dict[str, obje
             "enabled": saved.enabled,
             "threshold": saved.threshold,
             "baseScore": saved.base_score,
+            "similarityEnabled": saved.similarity_enabled,
+            "similarityWindowMinutes": saved.similarity_window_minutes,
+            "similarityPenalty": saved.similarity_penalty,
             "updatedAt": saved.updated_at,
         },
     )
@@ -556,6 +595,9 @@ def reset_notification_rule_payload(message_type: str) -> Dict[str, object]:
             "enabled": saved.enabled,
             "threshold": saved.threshold,
             "baseScore": saved.base_score,
+            "similarityEnabled": saved.similarity_enabled,
+            "similarityWindowMinutes": saved.similarity_window_minutes,
+            "similarityPenalty": saved.similarity_penalty,
             "updatedAt": saved.updated_at,
             "reset": True,
         },
@@ -1223,14 +1265,14 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
         REALTIME_HUB.add(client)
         REALTIME_HUB.send(client, {
             "type": "realtime.connected",
-            "payload": REALTIME_HUB.status(),
+            "payload": realtime_status_payload(),
             "occurredAt": now(),
         })
         try:
             while True:
                 readable, _, _ = select.select([client], [], [], 25)
                 if not readable:
-                    if not REALTIME_HUB.send(client, {"type": "realtime.heartbeat", "payload": REALTIME_HUB.status(), "occurredAt": now()}):
+                    if not REALTIME_HUB.send(client, {"type": "realtime.status", "payload": realtime_status_payload(), "occurredAt": now()}):
                         break
                     continue
                 opcode, payload = read_websocket_frame(client)
@@ -1240,7 +1282,7 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
                     REALTIME_HUB.send(client, payload, opcode=0xA)
                     continue
                 if opcode == 0x1 and payload.strip() == b"ping":
-                    REALTIME_HUB.send(client, {"type": "realtime.pong", "payload": {}, "occurredAt": now()})
+                    REALTIME_HUB.send(client, {"type": "realtime.pong", "payload": realtime_status_payload(), "occurredAt": now()})
         except (OSError, ValueError, socket.timeout):
             pass
         finally:
@@ -1449,11 +1491,7 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
             return self.send_payload(200, snapshot_payload())
 
         if path == "/api/realtime/status" and self.command == "GET":
-            return self.send_payload(200, {
-                **REALTIME_HUB.status(),
-                "events": SQLiteEventLog().event_counts(),
-                "notificationJobs": notification_queue_store().summary(),
-            })
+            return self.send_payload(200, realtime_status_payload())
 
         if path == "/api/profile" and self.command == "PUT":
             body = self.read_json_body()

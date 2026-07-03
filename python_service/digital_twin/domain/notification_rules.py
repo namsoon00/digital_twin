@@ -8,6 +8,7 @@ from .notifications import NotificationJob
 
 DEFAULT_HONEY_THRESHOLD = 45
 DEFAULT_LOW_SCORE_ACTION = "suppress"
+DEFAULT_SIMILARITY_FIELDS = ["messageType", "accountId", "symbol", "severity", "title"]
 
 CONDITION_TYPE_LABELS = [
     {"type": "text_contains_any", "label": "메시지에 단어 포함", "description": "본문이나 컨텍스트에 지정 단어 중 하나가 있으면 점수를 더합니다."},
@@ -46,6 +47,21 @@ def clamp_int(value, minimum: int, maximum: int, fallback: int) -> int:
     return max(minimum, min(maximum, number))
 
 
+def bool_value(value, fallback: bool = True) -> bool:
+    if value is None:
+        return fallback
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    normalized = str(value).strip().lower()
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    return fallback
+
+
 def default_rule_message_types() -> List[str]:
     keys = list(DEFAULT_NOTIFICATION_TEMPLATES.keys()) + list(DEFAULT_ALERT_RULES.keys()) + list(DEFAULT_CADENCE.keys())
     seen = set()
@@ -71,6 +87,34 @@ def default_base_score(message_type: str) -> int:
 
 def default_threshold(message_type: str) -> int:
     return 20 if str(message_type or "") in SYSTEM_MESSAGE_TYPES else DEFAULT_HONEY_THRESHOLD
+
+
+def default_similarity_enabled(message_type: str) -> bool:
+    return str(message_type or "") not in SYSTEM_MESSAGE_TYPES
+
+
+def default_similarity_window_minutes(message_type: str) -> int:
+    key = str(message_type or "")
+    if key == "monitorHeartbeat":
+        return 360
+    if key in LOW_SIGNAL_MESSAGE_TYPES:
+        return 180
+    if key in {"monitorPnlChange", "monitorValueChange", "monitorTrendChange", "monitorCashChange"}:
+        return 60
+    return 120
+
+
+def default_similarity_penalty(message_type: str) -> int:
+    key = str(message_type or "")
+    if key == "monitorHeartbeat":
+        return -40
+    if key in LOW_SIGNAL_MESSAGE_TYPES:
+        return -30
+    return -20
+
+
+def default_similarity_bypass_score_delta(message_type: str) -> int:
+    return 15 if str(message_type or "") in {"modelBuy", "modelSell", "monitorDecisionChange"} else 20
 
 
 @dataclass
@@ -125,6 +169,11 @@ class NotificationRuleConfig:
     base_score: int = 25
     low_score_action: str = DEFAULT_LOW_SCORE_ACTION
     conditions: List[NotificationRuleCondition] = dataclass_field(default_factory=list)
+    similarity_enabled: bool = True
+    similarity_window_minutes: int = 120
+    similarity_penalty: int = -20
+    similarity_bypass_score_delta: int = 20
+    similarity_fields: List[str] = dataclass_field(default_factory=lambda: list(DEFAULT_SIMILARITY_FIELDS))
     updated_at: str = ""
 
     @classmethod
@@ -139,13 +188,33 @@ class NotificationRuleConfig:
                         conditions.append(condition)
         message_type = str(payload.get("messageType") or payload.get("message_type") or "").strip()
         base_score_value = payload["baseScore"] if "baseScore" in payload else payload.get("base_score")
+        raw_similarity_fields = payload.get("similarityFields") if "similarityFields" in payload else payload.get("similarity_fields")
+        if isinstance(raw_similarity_fields, str):
+            similarity_fields = [item.strip() for item in raw_similarity_fields.split(",") if item.strip()]
+        elif isinstance(raw_similarity_fields, list):
+            similarity_fields = [str(item or "").strip() for item in raw_similarity_fields if str(item or "").strip()]
+        else:
+            similarity_fields = list(DEFAULT_SIMILARITY_FIELDS)
+        similarity_enabled_value = payload["similarityEnabled"] if "similarityEnabled" in payload else payload.get("similarity_enabled")
+        similarity_window_value = payload["similarityWindowMinutes"] if "similarityWindowMinutes" in payload else payload.get("similarity_window_minutes")
+        similarity_penalty_value = payload["similarityPenalty"] if "similarityPenalty" in payload else payload.get("similarity_penalty")
+        similarity_bypass_value = (
+            payload["similarityBypassScoreDelta"]
+            if "similarityBypassScoreDelta" in payload
+            else payload.get("similarity_bypass_score_delta")
+        )
         return cls(
             message_type=message_type,
-            enabled=payload.get("enabled") is not False,
+            enabled=bool_value(payload.get("enabled"), True),
             threshold=clamp_int(payload.get("threshold"), 0, 100, DEFAULT_HONEY_THRESHOLD),
             base_score=clamp_int(base_score_value, 0, 100, default_base_score(message_type)),
             low_score_action=str(payload.get("lowScoreAction") or payload.get("low_score_action") or DEFAULT_LOW_SCORE_ACTION).strip() or DEFAULT_LOW_SCORE_ACTION,
             conditions=conditions,
+            similarity_enabled=bool_value(similarity_enabled_value, default_similarity_enabled(message_type)),
+            similarity_window_minutes=clamp_int(similarity_window_value, 0, 10080, default_similarity_window_minutes(message_type)),
+            similarity_penalty=clamp_int(similarity_penalty_value, -100, 0, default_similarity_penalty(message_type)),
+            similarity_bypass_score_delta=clamp_int(similarity_bypass_value, 0, 100, default_similarity_bypass_score_delta(message_type)),
+            similarity_fields=similarity_fields,
             updated_at=str(payload.get("updatedAt") or payload.get("updated_at") or ""),
         )
 
@@ -157,6 +226,11 @@ class NotificationRuleConfig:
             "baseScore": int(self.base_score or 0),
             "lowScoreAction": self.low_score_action or DEFAULT_LOW_SCORE_ACTION,
             "conditions": [condition.to_dict() for condition in self.conditions],
+            "similarityEnabled": bool(self.similarity_enabled),
+            "similarityWindowMinutes": int(self.similarity_window_minutes or 0),
+            "similarityPenalty": int(self.similarity_penalty or 0),
+            "similarityBypassScoreDelta": int(self.similarity_bypass_score_delta or 0),
+            "similarityFields": list(self.similarity_fields or []),
             "updatedAt": self.updated_at,
         }
 
@@ -170,6 +244,13 @@ class NotificationRuleDecision:
     should_send: bool
     low_score_action: str
     reasons: List[str] = dataclass_field(default_factory=list)
+    fingerprint: str = ""
+    similarity_enabled: bool = False
+    similarity_window_minutes: int = 0
+    similarity_penalty: int = 0
+    similarity_recent_count: int = 0
+    similarity_previous_score: int = 0
+    similarity_bypassed: bool = False
 
     def to_context(self) -> Dict[str, object]:
         decision = "send" if self.should_send else "suppressed"
@@ -183,6 +264,13 @@ class NotificationRuleDecision:
             "honeyReasons": list(self.reasons or []),
             "honeyRuleEnabled": bool(self.enabled),
             "honeyLowScoreAction": self.low_score_action,
+            "honeyFingerprint": self.fingerprint,
+            "honeySimilarityEnabled": bool(self.similarity_enabled),
+            "honeySimilarityWindowMinutes": self.similarity_window_minutes,
+            "honeySimilarityPenalty": self.similarity_penalty,
+            "honeySimilarityRecentCount": self.similarity_recent_count,
+            "honeySimilarityPreviousScore": self.similarity_previous_score,
+            "honeySimilarityBypassed": bool(self.similarity_bypassed),
         }
 
 
@@ -254,6 +342,11 @@ def default_notification_rule(message_type: str) -> NotificationRuleConfig:
         base_score=default_base_score(key),
         low_score_action=DEFAULT_LOW_SCORE_ACTION,
         conditions=[NotificationRuleCondition.from_dict(condition.to_dict()) for condition in default_conditions()],
+        similarity_enabled=default_similarity_enabled(key),
+        similarity_window_minutes=default_similarity_window_minutes(key),
+        similarity_penalty=default_similarity_penalty(key),
+        similarity_bypass_score_delta=default_similarity_bypass_score_delta(key),
+        similarity_fields=list(DEFAULT_SIMILARITY_FIELDS),
     )
 
 
@@ -309,6 +402,34 @@ def numeric_value(value):
         return float(str(value).replace(",", "").replace("%", "").strip())
     except (TypeError, ValueError):
         return None
+
+
+def fingerprint_field_value(job: NotificationJob, field: str):
+    if field == "messageType":
+        return job.message_type
+    if field == "accountId":
+        return job.account_id
+    if field == "accountLabel":
+        return job.account_label
+    if field == "body" or field == "text":
+        return job.text
+    return field_value(job.context or {}, field)
+
+
+def normalize_fingerprint_part(value) -> str:
+    if isinstance(value, (list, tuple, set)):
+        return normalized_text(" ".join(str(item or "") for item in value))
+    if isinstance(value, dict):
+        return normalized_text(" ".join(str(item or "") for item in flattened_strings(value)))
+    return normalized_text(value)
+
+
+def notification_fingerprint(job: NotificationJob, config: NotificationRuleConfig) -> str:
+    parts = []
+    for field in config.similarity_fields or DEFAULT_SIMILARITY_FIELDS:
+        normalized = normalize_fingerprint_part(fingerprint_field_value(job, field))
+        parts.append(str(field) + "=" + normalized)
+    return "|".join(parts)
 
 
 def job_search_blob(job: NotificationJob) -> str:
@@ -372,4 +493,33 @@ def evaluate_notification_rule(job: NotificationJob, config: NotificationRuleCon
         should_send=bool(should_send),
         low_score_action=action,
         reasons=reasons,
+        fingerprint=notification_fingerprint(job, config),
+        similarity_enabled=bool(config.similarity_enabled),
+        similarity_window_minutes=int(config.similarity_window_minutes or 0),
+        similarity_penalty=int(config.similarity_penalty or 0),
     )
+
+
+def apply_similarity_rule(
+    decision: NotificationRuleDecision,
+    config: NotificationRuleConfig,
+    recent_count: int,
+    previous_score: int = 0,
+) -> NotificationRuleDecision:
+    decision.similarity_recent_count = max(0, int(recent_count or 0))
+    decision.similarity_previous_score = max(0, int(previous_score or 0))
+    if not config.enabled or not config.similarity_enabled or decision.similarity_recent_count <= 0:
+        return decision
+    score_delta = decision.score - decision.similarity_previous_score if decision.similarity_previous_score else 0
+    bypass_delta = int(config.similarity_bypass_score_delta or 0)
+    if bypass_delta and decision.similarity_previous_score and score_delta >= bypass_delta:
+        decision.similarity_bypassed = True
+        decision.reasons.append("유사 메시지지만 꿀점수 +" + str(score_delta) + "점 상승")
+        return decision
+    penalty = clamp_int(config.similarity_penalty, -100, 0, default_similarity_penalty(config.message_type))
+    if penalty:
+        decision.score = clamp_int(decision.score + penalty, 0, 100, 0)
+        decision.reasons.append("유사 메시지 " + str(config.similarity_window_minutes) + "분 내 반복 " + str(penalty))
+    if config.low_score_action == "suppress":
+        decision.should_send = decision.score >= decision.threshold
+    return decision

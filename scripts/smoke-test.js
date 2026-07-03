@@ -528,6 +528,8 @@ function checkFrontendAdminRender() {
     assertOk(code.indexOf("pushState") >= 0 && code.indexOf("popstate") >= 0, "탭 이동이 브라우저 뒤로가기와 동기화되지 않았습니다.");
     assertOk(code.indexOf("settingsSaving") >= 0 && code.indexOf("로컬 SQLite DB") >= 0, "설정 저장 진행 상태가 렌더링되지 않습니다.");
     assertOk(code.indexOf("new window.WebSocket") >= 0, "프론트가 웹소켓 실시간 연결을 생성하지 않습니다.");
+    assertOk(code.indexOf("realtime.status") >= 0, "웹소켓 상태 메시지를 처리하지 않습니다.");
+    assertOk(code.indexOf("realtimeEventSnackbar") >= 0, "웹소켓 이벤트를 스낵바로 연결하지 않습니다.");
     assertOk(overviewHtml.indexOf("실시간") >= 0, "홈 요약에 실시간 연결 상태가 렌더링되지 않습니다.");
     ["overview", "accounts", "watchlist", "symbols", "monitoring", "notifications", "modeling", "settings"].forEach(function (tab) {
       assertOk(overviewHtml.indexOf('data-tab="' + tab + '"') >= 0, "새 탭이 렌더링되지 않았습니다: " + tab);
@@ -606,6 +608,9 @@ function checkFrontendAdminRender() {
     assertOk(modelingHtml.indexOf("웹에서 운영하는 매수·매도 타이밍 모델") < 0, "타이밍 모델 제목이 아직 렌더링됩니다.");
     assertOk(monitoringHtml.indexOf("monitoring-instrument-panel") >= 0, "모니터링 탭에 보유·관심 통합 패널이 렌더링되지 않았습니다.");
     assertOk(monitoringHtml.indexOf("보유·관심 종목 통합") >= 0, "모니터링 탭 통합 패널 제목이 렌더링되지 않았습니다.");
+    assertOk(monitoringHtml.indexOf("웹소켓 최근 이벤트") >= 0, "모니터링 탭에 웹소켓 이벤트 상태가 없습니다.");
+    assertOk(monitoringHtml.indexOf("최근 모니터링 사이클") >= 0, "모니터링 탭에 웹소켓 모니터링 사이클 상태가 없습니다.");
+    assertOk(monitoringHtml.indexOf("알림 큐") >= 0, "모니터링 탭에 알림 큐 상태가 없습니다.");
     assertOk(monitoringHtml.indexOf("삼성전자") >= 0 && monitoringHtml.indexOf("NVIDIA") >= 0, "보유 종목과 관심 종목이 함께 렌더링되지 않았습니다.");
     assertOk(monitoringHtml.indexOf(">보유<") >= 0 && monitoringHtml.indexOf(">관심<") >= 0, "보유/관심 상태 라벨이 함께 렌더링되지 않았습니다.");
     assertOk(monitoringHtml.indexOf("watchlist-panel") < 0, "모니터링 탭에 관심 종목 관리 패널이 따로 남아 있습니다.");
@@ -827,6 +832,9 @@ async function checkNormalMode(port, context) {
   assertOk(realtimeStatus.statusCode === 200, "실시간 상태 API 응답 코드가 200이 아닙니다: " + realtimeStatus.statusCode);
   const realtimeStatusPayload = JSON.parse(realtimeStatus.body);
   assertOk(Object.prototype.hasOwnProperty.call(realtimeStatusPayload, "connectedClients"), "실시간 상태 API에 연결 수가 없습니다.");
+  assertOk(Array.isArray(realtimeStatusPayload.latestEvents), "실시간 상태 API에 최근 이벤트 배열이 없습니다.");
+  assertOk(realtimeStatusPayload.monitoring && typeof realtimeStatusPayload.monitoring === "object", "실시간 상태 API에 모니터링 요약이 없습니다.");
+  assertOk(realtimeStatusPayload.notificationJobs && typeof realtimeStatusPayload.notificationJobs === "object", "실시간 상태 API에 알림 큐 요약이 없습니다.");
 
   const universe = await request(port, "/api/symbol-universe?query=AAPL");
   assertOk(universe.statusCode === 200, "종목 유니버스 API 응답 코드가 200이 아닙니다: " + universe.statusCode);
@@ -867,6 +875,7 @@ async function checkNormalMode(port, context) {
   assertOk(readSqliteSetting(context.serviceDbPath, "tossClientSecret") === "fake-secret", "Toss secret 설정이 SQLite DB에 저장되지 않았습니다.");
   const eventStatusAfterSettings = JSON.parse((await request(port, "/api/realtime/status")).body);
   assertOk(eventStatusAfterSettings.events["settings.updated"] >= 1, "설정 저장 이벤트가 이벤트 로그에 없습니다.");
+  assertOk(eventStatusAfterSettings.latestEvents.some(function (event) { return event.name === "settings.updated"; }), "최근 이벤트에 설정 저장 이벤트가 없습니다.");
 
   const templates = await request(port, "/api/notification-templates");
   assertOk(templates.statusCode === 200, "알림 템플릿 API 응답 코드가 200이 아닙니다: " + templates.statusCode);
@@ -890,6 +899,7 @@ async function checkNormalMode(port, context) {
   assertOk(savedTemplatePayload.template.template.indexOf("{rawLines}") >= 0, "저장된 알림 템플릿 응답이 맞지 않습니다.");
   const eventStatusAfterTemplate = JSON.parse((await request(port, "/api/realtime/status")).body);
   assertOk(eventStatusAfterTemplate.events["notification_template.updated"] >= 1, "알림 템플릿 저장 이벤트가 이벤트 로그에 없습니다.");
+  assertOk(eventStatusAfterTemplate.latestEvents.some(function (event) { return event.name === "notification_template.updated"; }), "최근 이벤트에 알림 템플릿 저장 이벤트가 없습니다.");
 
   const rules = await request(port, "/api/notification-rules");
   assertOk(rules.statusCode === 200, "알림 룰 API 응답 코드가 200이 아닙니다: " + rules.statusCode);

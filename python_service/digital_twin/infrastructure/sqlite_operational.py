@@ -1,13 +1,13 @@
 import json
 import os
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
 from ..domain.events import DomainEvent, MONITORING_ALERTS_DETECTED
 from ..domain.model_review import ModelReviewJob
-from ..domain.notification_rules import DEFAULT_NOTIFICATION_RULES, NotificationRuleConfig, default_notification_rule, evaluate_notification_rule
+from ..domain.notification_rules import DEFAULT_NOTIFICATION_RULES, NotificationRuleConfig, apply_similarity_rule, default_notification_rule, evaluate_notification_rule, notification_fingerprint
 from ..domain.notification_templates import DEFAULT_NOTIFICATION_TEMPLATES, LEGACY_DEFAULT_TEMPLATE, PREVIOUS_DEFAULT_TEMPLATE, NotificationTemplate, render_notification
 from ..domain.notifications import NotificationJob
 from ..domain.portfolio import AccountSnapshot, AlertEvent
@@ -145,9 +145,25 @@ class OperationalConnection:
                     base_score INTEGER NOT NULL DEFAULT 25,
                     low_score_action TEXT NOT NULL DEFAULT 'suppress',
                     conditions_json TEXT NOT NULL DEFAULT '[]',
+                    similarity_enabled INTEGER NOT NULL DEFAULT 1,
+                    similarity_window_minutes INTEGER NOT NULL DEFAULT 120,
+                    similarity_penalty INTEGER NOT NULL DEFAULT -20,
+                    similarity_bypass_score_delta INTEGER NOT NULL DEFAULT 20,
+                    similarity_fields_json TEXT NOT NULL DEFAULT '["messageType","accountId","symbol","severity","title"]',
                     updated_at TEXT NOT NULL
                 )
             """)
+            self.ensure_columns(
+                connection,
+                "notification_rules",
+                {
+                    "similarity_enabled": "INTEGER NOT NULL DEFAULT 1",
+                    "similarity_window_minutes": "INTEGER NOT NULL DEFAULT 120",
+                    "similarity_penalty": "INTEGER NOT NULL DEFAULT -20",
+                    "similarity_bypass_score_delta": "INTEGER NOT NULL DEFAULT 20",
+                    "similarity_fields_json": "TEXT NOT NULL DEFAULT '[\"messageType\",\"accountId\",\"symbol\",\"severity\",\"title\"]'",
+                },
+            )
             connection.execute("""
                 CREATE TABLE IF NOT EXISTS symbol_universe (
                     market TEXT NOT NULL,
@@ -324,9 +340,11 @@ class SQLiteNotificationRuleStore(OperationalConnection):
                 connection.execute(
                     """
                     INSERT OR IGNORE INTO notification_rules (
-                        message_type, enabled, threshold, base_score, low_score_action, conditions_json, updated_at
+                        message_type, enabled, threshold, base_score, low_score_action, conditions_json,
+                        similarity_enabled, similarity_window_minutes, similarity_penalty, similarity_bypass_score_delta,
+                        similarity_fields_json, updated_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         message_type,
@@ -335,6 +353,11 @@ class SQLiteNotificationRuleStore(OperationalConnection):
                         int(rule.base_score),
                         rule.low_score_action,
                         json_dumps([condition.to_dict() for condition in rule.conditions]),
+                        1 if rule.similarity_enabled else 0,
+                        int(rule.similarity_window_minutes),
+                        int(rule.similarity_penalty),
+                        int(rule.similarity_bypass_score_delta),
+                        json_dumps(rule.similarity_fields),
                         stamp,
                     ),
                 )
@@ -344,6 +367,10 @@ class SQLiteNotificationRuleStore(OperationalConnection):
             conditions = json.loads(row["conditions_json"] or "[]")
         except json.JSONDecodeError:
             conditions = []
+        try:
+            similarity_fields = json.loads(row["similarity_fields_json"] or "[]")
+        except json.JSONDecodeError:
+            similarity_fields = []
         return NotificationRuleConfig.from_dict({
             "messageType": row["message_type"],
             "enabled": bool(row["enabled"]),
@@ -351,6 +378,11 @@ class SQLiteNotificationRuleStore(OperationalConnection):
             "baseScore": row["base_score"],
             "lowScoreAction": row["low_score_action"],
             "conditions": conditions if isinstance(conditions, list) else [],
+            "similarityEnabled": bool(row["similarity_enabled"]),
+            "similarityWindowMinutes": row["similarity_window_minutes"],
+            "similarityPenalty": row["similarity_penalty"],
+            "similarityBypassScoreDelta": row["similarity_bypass_score_delta"],
+            "similarityFields": similarity_fields if isinstance(similarity_fields, list) else [],
             "updatedAt": row["updated_at"],
         })
 
@@ -358,7 +390,9 @@ class SQLiteNotificationRuleStore(OperationalConnection):
         with self.connect() as connection:
             rows = connection.execute(
                 """
-                SELECT message_type, enabled, threshold, base_score, low_score_action, conditions_json, updated_at
+                SELECT message_type, enabled, threshold, base_score, low_score_action, conditions_json,
+                    similarity_enabled, similarity_window_minutes, similarity_penalty, similarity_bypass_score_delta,
+                    similarity_fields_json, updated_at
                 FROM notification_rules
                 ORDER BY message_type
                 """
@@ -370,7 +404,9 @@ class SQLiteNotificationRuleStore(OperationalConnection):
         with self.connect() as connection:
             row = connection.execute(
                 """
-                SELECT message_type, enabled, threshold, base_score, low_score_action, conditions_json, updated_at
+                SELECT message_type, enabled, threshold, base_score, low_score_action, conditions_json,
+                    similarity_enabled, similarity_window_minutes, similarity_penalty, similarity_bypass_score_delta,
+                    similarity_fields_json, updated_at
                 FROM notification_rules
                 WHERE message_type = ?
                 """,
@@ -389,15 +425,22 @@ class SQLiteNotificationRuleStore(OperationalConnection):
             connection.execute(
                 """
                 INSERT INTO notification_rules (
-                    message_type, enabled, threshold, base_score, low_score_action, conditions_json, updated_at
+                    message_type, enabled, threshold, base_score, low_score_action, conditions_json,
+                    similarity_enabled, similarity_window_minutes, similarity_penalty, similarity_bypass_score_delta,
+                    similarity_fields_json, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(message_type) DO UPDATE SET
                     enabled = excluded.enabled,
                     threshold = excluded.threshold,
                     base_score = excluded.base_score,
                     low_score_action = excluded.low_score_action,
                     conditions_json = excluded.conditions_json,
+                    similarity_enabled = excluded.similarity_enabled,
+                    similarity_window_minutes = excluded.similarity_window_minutes,
+                    similarity_penalty = excluded.similarity_penalty,
+                    similarity_bypass_score_delta = excluded.similarity_bypass_score_delta,
+                    similarity_fields_json = excluded.similarity_fields_json,
                     updated_at = excluded.updated_at
                 """,
                 (
@@ -407,6 +450,11 @@ class SQLiteNotificationRuleStore(OperationalConnection):
                     int(normalized.base_score),
                     normalized.low_score_action,
                     json_dumps([condition.to_dict() for condition in normalized.conditions]),
+                    1 if normalized.similarity_enabled else 0,
+                    int(normalized.similarity_window_minutes),
+                    int(normalized.similarity_penalty),
+                    int(normalized.similarity_bypass_score_delta),
+                    json_dumps(normalized.similarity_fields),
                     normalized.updated_at,
                 ),
             )
@@ -416,7 +464,42 @@ class SQLiteNotificationRuleStore(OperationalConnection):
         return self.upsert(default_notification_rule(str(message_type or "notification").strip() or "notification"))
 
     def evaluate_job(self, job: NotificationJob):
-        return evaluate_notification_rule(job, self.get(job.message_type))
+        rule = self.get(job.message_type)
+        decision = evaluate_notification_rule(job, rule)
+        recent_count, previous_score = self.similar_history(job, rule, decision.fingerprint)
+        return apply_similarity_rule(decision, rule, recent_count, previous_score)
+
+    def similar_history(self, job: NotificationJob, rule: NotificationRuleConfig, fingerprint: str):
+        if not rule.similarity_enabled or not int(rule.similarity_window_minutes or 0) or not fingerprint:
+            return 0, 0
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=int(rule.similarity_window_minutes or 0))
+        cutoff_text = cutoff.isoformat().replace("+00:00", "Z")
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT payload_json FROM notification_jobs
+                WHERE message_type = ? AND created_at >= ?
+                ORDER BY created_at DESC
+                LIMIT 100
+                """,
+                (job.message_type, cutoff_text),
+            ).fetchall()
+        count = 0
+        previous_score = 0
+        for row in rows:
+            try:
+                previous = NotificationJob.from_dict(json.loads(row["payload_json"]))
+            except json.JSONDecodeError:
+                continue
+            if previous.job_id == job.job_id:
+                continue
+            previous_context = previous.context or {}
+            previous_fingerprint = str(previous_context.get("honeyFingerprint") or notification_fingerprint(previous, rule))
+            if previous_fingerprint != fingerprint:
+                continue
+            count += 1
+            previous_score = max(previous_score, int(previous_context.get("honeyScore") or 0))
+        return count, previous_score
 
 
 class SQLiteAppStore(OperationalConnection):

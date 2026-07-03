@@ -339,6 +339,7 @@
   var realtimeSocket = null;
   var realtimeReconnectTimer = null;
   var realtimeReloadTimer = null;
+  var realtimeSeenEventIds = {};
   var state = {
     loading: true,
     refreshing: false,
@@ -356,7 +357,11 @@
       connected: false,
       lastEvent: "",
       lastEventAt: "",
-      reconnects: 0
+      reconnects: 0,
+      eventCounts: {},
+      latestEvents: [],
+      monitoring: {},
+      notificationJobs: {}
     },
     showSecrets: false,
     settingsSaving: false,
@@ -518,9 +523,93 @@
     }, 250);
   }
 
+  function normalizeRealtimeEvent(event) {
+    if (!event || typeof event !== "object") return null;
+    var payload = event.payload && typeof event.payload === "object" ? event.payload : {};
+    return {
+      name: event.name || event.type || "",
+      eventId: event.eventId || event.event_id || "",
+      aggregateId: event.aggregateId || event.aggregate_id || "",
+      occurredAt: event.occurredAt || event.occurred_at || "",
+      payload: payload
+    };
+  }
+
+  function notificationJobSummaryText(jobs) {
+    jobs = jobs || {};
+    var pending = Number(jobs.pending || 0);
+    var processing = Number(jobs.processing || 0);
+    var failed = Number(jobs.failed || 0);
+    var suppressed = Number(jobs.suppressed || 0);
+    if (pending || processing || failed || suppressed) {
+      return "대기 " + pending + " · 처리 " + processing + " · 실패 " + failed + " · 제외 " + suppressed;
+    }
+    if (Number(jobs.done || 0)) return "완료 " + Number(jobs.done || 0);
+    return "-";
+  }
+
+  function realtimeEventSnackbar(event) {
+    var payload = event.payload || {};
+    if (event.name === "notification.job_queued") {
+      return { message: "알림 작업이 큐에 적재됐습니다: " + (payload.messageType || "notification"), tone: "success" };
+    }
+    if (event.name === "notification.test_requested") {
+      return { message: "테스트 알림 요청을 접수했습니다.", tone: "success" };
+    }
+    if (event.name === "notification_template.updated") {
+      return { message: "알림 템플릿이 갱신됐습니다: " + (payload.messageType || event.aggregateId || "-"), tone: "success" };
+    }
+    if (event.name === "notification_rule.updated") {
+      return { message: "알림 발송 룰이 갱신됐습니다: " + (payload.messageType || event.aggregateId || "-"), tone: "success" };
+    }
+    if (event.name === "monitoring.alerts_detected") {
+      return { message: "모니터링 알림 " + Number(payload.count || 0) + "건이 감지됐습니다.", tone: "danger" };
+    }
+    if (event.name === "monitoring.cycle_completed" && Number(payload.alertCount || 0) > 0) {
+      return { message: "모니터링 사이클 완료: 알림 " + Number(payload.alertCount || 0) + "건", tone: "success" };
+    }
+    return null;
+  }
+
+  function recordRealtimeEvent(event, silent) {
+    var normalized = normalizeRealtimeEvent(event);
+    if (!normalized || !normalized.name) return;
+    state.realtime.lastEvent = normalized.name;
+    state.realtime.lastEventAt = normalized.occurredAt || new Date().toISOString();
+    if (normalized.eventId) {
+      if (realtimeSeenEventIds[normalized.eventId]) return;
+      realtimeSeenEventIds[normalized.eventId] = true;
+    }
+    if (!silent) {
+      var snackbar = realtimeEventSnackbar(normalized);
+      if (snackbar) showSnackbar(snackbar.message, snackbar.tone);
+    }
+  }
+
+  function applyRealtimeStatus(payload, silent) {
+    payload = payload || {};
+    state.realtime.eventCounts = payload.events || state.realtime.eventCounts || {};
+    state.realtime.latestEvents = Array.isArray(payload.latestEvents) ? payload.latestEvents : state.realtime.latestEvents || [];
+    state.realtime.monitoring = payload.monitoring || state.realtime.monitoring || {};
+    state.realtime.notificationJobs = payload.notificationJobs || state.realtime.notificationJobs || {};
+    state.realtime.latestEvents.forEach(function (event) {
+      recordRealtimeEvent(event, silent);
+    });
+  }
+
   function handleRealtimeMessage(message) {
     var eventType = message.type || (message.payload && message.payload.event && message.payload.event.name) || "";
-    if (!eventType || eventType === "realtime.heartbeat" || eventType === "realtime.pong") return;
+    if (!eventType || eventType === "realtime.heartbeat") return;
+    if (eventType === "realtime.connected" || eventType === "realtime.status" || eventType === "realtime.pong") {
+      applyRealtimeStatus(message.payload || {}, eventType === "realtime.connected");
+      markRealtimeState(true, eventType);
+      return;
+    }
+    recordRealtimeEvent((message.payload && message.payload.event) || {
+      name: eventType,
+      occurredAt: message.occurredAt,
+      payload: message.payload || {}
+    }, false);
     markRealtimeState(true, eventType);
     if (eventType !== "realtime.connected") queueRealtimeReload(eventType);
   }
@@ -4896,6 +4985,45 @@
     return symbols;
   }
 
+  function realtimeEventLabel(name) {
+    return {
+      "realtime.connected": "웹소켓 연결",
+      "realtime.status": "실시간 상태",
+      "settings.updated": "설정 변경",
+      "account.saved": "계정 저장",
+      "account.removed": "계정 삭제",
+      "notification_template.updated": "알림 템플릿",
+      "notification_rule.updated": "알림 룰",
+      "notification.test_requested": "테스트 알림 요청",
+      "notification.job_queued": "알림 큐 적재",
+      "monitoring.snapshot_collected": "모니터링 스냅샷",
+      "monitoring.alerts_detected": "모니터링 알림",
+      "monitoring.cycle_completed": "모니터링 사이클",
+      "symbol_universe.refreshed": "전체 종목 갱신"
+    }[name] || name || "-";
+  }
+
+  function realtimeLastEventText() {
+    if (!state.realtime.lastEvent) return "-";
+    return realtimeEventLabel(state.realtime.lastEvent) + (state.realtime.lastEventAt ? " · " + formatClock(state.realtime.lastEventAt) : "");
+  }
+
+  function realtimeMonitoringCycleText() {
+    var event = normalizeRealtimeEvent(state.realtime.monitoring && state.realtime.monitoring.cycle);
+    if (!event) return "-";
+    var payload = event.payload || {};
+    return "스냅샷 " + Number(payload.snapshotCount || 0) + " · 알림 " + Number(payload.alertCount || 0)
+      + (event.occurredAt ? " · " + formatClock(event.occurredAt) : "");
+  }
+
+  function realtimeMonitoringAlertText() {
+    var event = normalizeRealtimeEvent(state.realtime.monitoring && state.realtime.monitoring.alerts);
+    if (!event) return "-";
+    var payload = event.payload || {};
+    var symbols = Array.isArray(payload.symbols) && payload.symbols.length ? " · " + payload.symbols.slice(0, 3).join(",") : "";
+    return Number(payload.count || 0) + "건" + symbols + (event.occurredAt ? " · " + formatClock(event.occurredAt) : "");
+  }
+
   function renderAccountDirectoryPanel(options) {
     options = options || {};
     var accounts = state.serviceAccounts || [];
@@ -5222,12 +5350,16 @@
       renderAdminStat("평가 금액", formatMoney(portfolio.total || 0), ""),
       renderAdminStat("상태", toss.status || "-", ""),
       renderAdminStat("마지막 갱신", formatClock(snapshot.generatedAt), ""),
-      renderAdminStat("모델 리뷰", settingValue("modelReviewUseCodex") === "0" ? "로컬" : "Codex", ""),
+      renderAdminStat("최근 이벤트", realtimeEventLabel(state.realtime.lastEvent), ""),
+      renderAdminStat("알림 큐", notificationJobSummaryText(state.realtime.notificationJobs), ""),
       '</div>',
       '<div class="admin-monitor-grid">',
       '<div class="source-stack">',
       '<div class="source-row"><span>데이터 모드</span><strong>' + escapeHtml(snapshot.preview ? "정적 미리보기" : "실데이터") + '</strong></div>',
       '<div class="source-row"><span>토스 연결</span><strong>' + escapeHtml(toss.status || "-") + '</strong></div>',
+      '<div class="source-row"><span>웹소켓 최근 이벤트</span><strong>' + escapeHtml(realtimeLastEventText()) + '</strong></div>',
+      '<div class="source-row"><span>최근 모니터링 사이클</span><strong>' + escapeHtml(realtimeMonitoringCycleText()) + '</strong></div>',
+      '<div class="source-row"><span>최근 모니터링 알림</span><strong>' + escapeHtml(realtimeMonitoringAlertText()) + '</strong></div>',
       marketRows,
       '</div>',
       '<div class="source-stack">',

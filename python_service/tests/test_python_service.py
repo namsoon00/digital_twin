@@ -22,7 +22,7 @@ from digital_twin.cli import preserve_existing_secrets
 from digital_twin.cli import build_parser
 from digital_twin.domain.accounts import AccountConfig
 from digital_twin.domain.analytics import SafeFormula, StrategyModel, decisions_for_positions, normalize_position, portfolio_summary, technical_indicators_from_candles
-from digital_twin.domain.events import ACCOUNT_SAVED, MONITORING_ALERTS_DETECTED, MONITORING_CYCLE_COMPLETED, MONITORING_SNAPSHOT_COLLECTED, alerts_detected_event
+from digital_twin.domain.events import ACCOUNT_SAVED, MONITORING_ALERTS_DETECTED, MONITORING_CYCLE_COMPLETED, MONITORING_SNAPSHOT_COLLECTED, alerts_detected_event, monitoring_cycle_completed_event
 from digital_twin.domain.monitoring import DEFAULT_ALERT_RULES, DEFAULT_CADENCE, RealtimeMonitor
 from digital_twin.domain.model_review import ModelReviewJob, local_model_review
 from digital_twin.domain.notification_templates import alert_context
@@ -40,7 +40,7 @@ from digital_twin.infrastructure.sqlite_operational import SQLiteAppStore, SQLit
 from digital_twin.infrastructure.symbol_sources import parse_krx_kind_table, parse_nasdaq_listed
 from digital_twin.infrastructure.sqlite_accounts import AccountRegistry
 from digital_twin.infrastructure.toss_snapshots import account_cash_amount, select_account
-from digital_twin.infrastructure.web_server import notification_schedules_payload, notification_template_test_payload
+from digital_twin.infrastructure.web_server import notification_schedules_payload, notification_template_test_payload, realtime_status_payload
 from digital_twin.scheduler import MonitorRunner
 
 
@@ -1372,6 +1372,20 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(409, status)
         self.assertFalse(payload["delivered"])
         self.assertIn("실제 토스 데이터를", payload["error"])
+
+    def test_realtime_status_payload_includes_monitoring_and_queue_state(self):
+        event_log = SQLiteEventLog()
+        event_log.handle(monitoring_cycle_completed_event(["main"], 2, 1, False, True))
+        queue = SQLiteNotificationJobStore()
+        queue.enqueue(NotificationJob.create("queued", account_id="main", message_type="monitorHeartbeat"))
+
+        payload = realtime_status_payload()
+
+        self.assertEqual(1, payload["events"][MONITORING_CYCLE_COMPLETED])
+        self.assertEqual(1, sum(payload["notificationJobs"].values()))
+        self.assertTrue(any(event["name"] == MONITORING_CYCLE_COMPLETED for event in payload["latestEvents"]))
+        self.assertEqual(MONITORING_CYCLE_COMPLETED, payload["monitoring"]["cycle"]["name"])
+        self.assertEqual(1, payload["monitoring"]["cycle"]["payload"]["alertCount"])
 
     def test_admin_preview_config_is_static_and_sanitized(self):
         registry = AccountRegistry()

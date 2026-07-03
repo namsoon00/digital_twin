@@ -1020,7 +1020,7 @@
 
   function defaultNotificationRuleSimilarityWindow(messageType) {
     var type = String(messageType || "");
-    if (type === "holdingTiming" || type === "monitorHeartbeat") return 360;
+    if (["holdingTiming", "monitorHeartbeat", "externalEquityMove", "externalCryptoMove"].indexOf(type) >= 0) return 360;
     if (["watchlistQuotePending", "externalDataConnection"].indexOf(type) >= 0) return 180;
     if (["monitorPnlChange", "monitorValueChange", "monitorTrendChange", "monitorCashChange"].indexOf(type) >= 0) return 60;
     return 120;
@@ -1028,6 +1028,7 @@
 
   function defaultNotificationRuleSimilarityPenalty(messageType) {
     var type = String(messageType || "");
+    if (["externalEquityMove", "externalCryptoMove"].indexOf(type) >= 0) return -55;
     if (type === "holdingTiming" || type === "monitorHeartbeat") return -40;
     if (["watchlistQuotePending", "externalDataConnection"].indexOf(type) >= 0) return -30;
     return -20;

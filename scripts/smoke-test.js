@@ -680,6 +680,9 @@ function checkFrontendAdminRender() {
     assertOk(symbolUniverseHtml.indexOf("symbol-summary-card") >= 0, "전체종목 탭에 시장 요약 카드가 렌더링되지 않았습니다.");
     assertOk(symbolUniverseHtml.indexOf("data-symbol-add-account") >= 0, "전체종목 탭에 관심 추가 대상 계정 선택이 없습니다.");
     assertOk(notificationHtml.indexOf("admin-message-row") >= 0, "메시지 타입별 알림 설정이 렌더링되지 않았습니다.");
+    assertOk(notificationHtml.indexOf("data-message-toggle") >= 0, "알림 타입 상세 접기/펼치기 버튼이 없습니다.");
+    assertOk(notificationHtml.indexOf("admin-message-details\" hidden") >= 0, "알림 타입 상세가 기본 접힘 상태가 아닙니다.");
+    assertOk(notificationHtml.indexOf('data-action="expand-message-types"') >= 0 && notificationHtml.indexOf('data-action="collapse-message-types"') >= 0, "알림 타입 전체 펼치기/접기 버튼이 없습니다.");
     assertOk(notificationHtml.indexOf("notification-template-row") >= 0, "알림 템플릿 편집기가 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("admin-message-template") >= 0, "알림 타입 행 안에 템플릿 편집기가 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("notification-template-preview") >= 0, "알림 템플릿 미리보기가 렌더링되지 않았습니다.");

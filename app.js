@@ -384,6 +384,11 @@
     notificationRulesLoaded: false,
     notificationRulesError: "",
     notificationRulesSaved: false,
+    notificationJobItems: [],
+    notificationJobsLoading: false,
+    notificationJobsLoaded: false,
+    notificationJobsError: "",
+    notificationJobsSummary: {},
     messageSchedules: [],
     messageSchedulesLoading: false,
     messageSchedulesError: "",
@@ -509,6 +514,7 @@
       } else if (/^notification_template\.|^notification_rule\.|^notification\./.test(eventType)) {
         tasks.push(loadNotificationTemplates());
         tasks.push(loadNotificationRules());
+        tasks.push(loadNotificationJobs());
         tasks.push(loadNotificationSchedules());
       } else if (/^symbol_universe\./.test(eventType)) {
         tasks.push(loadSymbolUniverse());
@@ -1144,6 +1150,39 @@
       })
       .finally(function () {
         state.notificationRulesLoading = false;
+        if (state.snapshot) render();
+      });
+  }
+
+  function applyNotificationJobs(payload) {
+    state.notificationJobItems = Array.isArray(payload.jobs) ? payload.jobs : [];
+    state.notificationJobsSummary = payload.summary && typeof payload.summary === "object" ? payload.summary : {};
+    state.notificationJobsLoaded = true;
+    state.notificationJobsLoading = false;
+    state.notificationJobsError = "";
+    if (Object.keys(state.notificationJobsSummary).length) {
+      state.realtime.notificationJobs = state.notificationJobsSummary;
+    }
+  }
+
+  function loadNotificationJobs() {
+    state.notificationJobsLoading = true;
+    state.notificationJobsError = "";
+    if (isStaticPreviewHost()) {
+      applyNotificationJobs({ jobs: [], summary: {} });
+      state.notificationJobsLoading = false;
+      return Promise.resolve();
+    }
+    return requestJson("/api/notification-jobs?limit=40")
+      .then(function (payload) {
+        applyNotificationJobs(payload);
+      })
+      .catch(function (error) {
+        state.notificationJobsError = error.message || "최근 알림 판단을 읽지 못했습니다.";
+        state.notificationJobItems = [];
+      })
+      .finally(function () {
+        state.notificationJobsLoading = false;
         if (state.snapshot) render();
       });
   }
@@ -4889,6 +4928,7 @@
       return [
         '<section class="admin-grid">',
         renderAdminMessagePanel(),
+        renderNotificationDecisionPanel(),
         renderAdminDeliveryPanel(),
         '</section>'
       ].join("");
@@ -5638,6 +5678,86 @@
       '</div>',
       renderNotificationTemplateRow(template, { inline: true }),
       renderNotificationRuleEditor(rule.key, { inline: true }),
+      '</div>'
+    ].join("");
+  }
+
+  function notificationJobStatusLabel(status) {
+    var labels = {
+      pending: "대기",
+      processing: "처리 중",
+      done: "발송",
+      failed: "실패",
+      suppressed: "보류"
+    };
+    return labels[status] || status || "-";
+  }
+
+  function notificationJobToneClass(status) {
+    if (status === "done" || status === "pending" || status === "processing") return "watch";
+    if (status === "suppressed") return "muted";
+    if (status === "failed") return "danger";
+    return "muted";
+  }
+
+  function notificationJobScoreText(job) {
+    if (job.honeyScore === null || typeof job.honeyScore === "undefined") return "-";
+    return String(job.honeyScore) + "/" + String(job.honeyThreshold || 0) + "점";
+  }
+
+  function notificationJobSimilarityText(job) {
+    var count = Number(job.honeySimilarityRecentCount || 0);
+    var penalty = Number(job.honeySimilarityPenalty || 0);
+    var windowMinutes = Number(job.honeySimilarityWindowMinutes || 0);
+    if (!count && !penalty) return "유사 감점 없음";
+    return windowMinutes + "분 내 " + count + "회 · " + penalty + "점";
+  }
+
+  function renderNotificationDecisionPanel() {
+    var jobs = state.notificationJobItems || [];
+    var summary = state.notificationJobsSummary || state.realtime.notificationJobs || {};
+    var summaryItems = ["pending", "done", "suppressed", "failed"].map(function (key) {
+      return '<span class="chip">' + escapeHtml(notificationJobStatusLabel(key)) + ' ' + escapeHtml(Number(summary[key] || 0)) + '</span>';
+    }).join("");
+    return [
+      '<article class="panel notification-decision-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Decisions</p>',
+      '<h2>최근 알림 판단</h2>',
+      '</div>',
+      '<button class="text-button" data-action="refresh-notification-jobs"' + (state.notificationJobsLoading ? ' disabled' : '') + '>새로고침</button>',
+      '</div>',
+      '<div class="notification-decision-summary">',
+      summaryItems,
+      '</div>',
+      state.notificationJobsError ? '<p class="form-error">' + escapeHtml(state.notificationJobsError) + '</p>' : '',
+      jobs.length ? '<div class="notification-decision-list">' + jobs.map(renderNotificationDecisionRow).join("") + '</div>' : '<p class="empty-note">최근 알림 판단 기록이 없습니다.</p>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderNotificationDecisionRow(job) {
+    var reasons = Array.isArray(job.honeyReasons) ? job.honeyReasons.slice(0, 5) : [];
+    var target = [job.title, job.symbol && job.symbol !== job.title ? job.symbol : ""].filter(Boolean).join(" / ");
+    return [
+      '<div class="notification-decision-row">',
+      '<div class="notification-decision-top">',
+      '<span class="tone-chip ' + escapeHtml(notificationJobToneClass(job.status)) + '">' + escapeHtml(notificationJobStatusLabel(job.status)) + '</span>',
+      '<strong>' + escapeHtml(job.messageTypeLabel || job.messageType || "-") + '</strong>',
+      '<span>' + escapeHtml(formatClock(job.createdAt)) + '</span>',
+      '</div>',
+      '<div class="notification-decision-target">' + escapeHtml(target || job.messageType || "-") + '</div>',
+      '<div class="notification-decision-score">',
+      '<span>꿀점수 ' + escapeHtml(notificationJobScoreText(job)) + '</span>',
+      '<span>' + escapeHtml(notificationJobSimilarityText(job)) + '</span>',
+      job.honeySimilarityBypassed ? '<span>상승 예외 적용</span>' : '',
+      '</div>',
+      '<p>' + escapeHtml(job.lastError || job.textPreview || "-") + '</p>',
+      reasons.length ? '<div class="notification-decision-reasons">' + reasons.map(function (reason) {
+        return '<span>' + escapeHtml(reason) + '</span>';
+      }).join("") + '</div>' : '',
+      job.honeyFingerprint ? '<code class="notification-fingerprint">' + escapeHtml(job.honeyFingerprint) + '</code>' : '',
       '</div>'
     ].join("");
   }
@@ -8318,6 +8438,14 @@
       });
     });
 
+    var refreshNotificationJobsButton = app.querySelector('[data-action="refresh-notification-jobs"]');
+    if (refreshNotificationJobsButton) {
+      refreshNotificationJobsButton.addEventListener("click", function () {
+        loadNotificationJobs();
+        render();
+      });
+    }
+
     var saveModelVersionButton = app.querySelector('[data-action="save-model-version"]');
     if (saveModelVersionButton) {
       saveModelVersionButton.addEventListener("click", function () {
@@ -8582,7 +8710,7 @@
 
   applyAppTheme();
   connectRealtime();
-  Promise.all([loadServerSettings(), loadServiceAccounts(), loadNotificationTemplates(), loadNotificationRules(), loadNotificationSchedules(), loadSymbolUniverse()]).finally(function () {
+  Promise.all([loadServerSettings(), loadServiceAccounts(), loadNotificationTemplates(), loadNotificationRules(), loadNotificationJobs(), loadNotificationSchedules(), loadSymbolUniverse()]).finally(function () {
     load();
   });
 }());

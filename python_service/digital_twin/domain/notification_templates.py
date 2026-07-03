@@ -19,9 +19,13 @@ DATA_LABEL_PREFIXES = [
     "24h 거래액",
     "현재가",
     "기준일",
+    "투자자",
+    "기울기",
     "거래량",
     "거래액",
     "가격",
+    "수급",
+    "추세",
     "출처",
     "이전",
     "현재",
@@ -188,6 +192,11 @@ def html_bullet(text: str) -> str:
 def split_data_line(line: str):
     text = str(line or "").strip()
     for label in DATA_LABEL_PREFIXES:
+        colon_prefix = label + ": "
+        if text.startswith(colon_prefix):
+            value = text[len(colon_prefix):].strip()
+            if value:
+                return label, value
         prefix = label + " "
         if text.startswith(prefix):
             value = text[len(prefix):].strip()

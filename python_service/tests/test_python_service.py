@@ -346,10 +346,10 @@ class PythonServiceTests(unittest.TestCase):
         pnl_message = next(event for event in events if event.rule == "monitorPnlChange").message()
         value_message = next(event for event in events if event.rule == "monitorValueChange").message()
 
-        self.assertIn("수급 거래량 30,000(1.8x) · 거래액 18억 원", pnl_message)
-        self.assertIn("투자자 외국인 +145,000(매수 420,000/매도 275,000) · 기관 +82,000(매수 310,000/매도 228,000)", pnl_message)
-        self.assertIn("수급 거래량 30,000(1.8x) · 거래액 18억 원", value_message)
-        self.assertIn("투자자 외국인 +145,000(매수 420,000/매도 275,000) · 기관 +82,000(매수 310,000/매도 228,000)", value_message)
+        self.assertIn("수급: 거래량 30,000(1.8x), 거래액 18억 원", pnl_message)
+        self.assertIn("투자자: 외국인 +145,000(매수 420,000/매도 275,000), 기관 +82,000(매수 310,000/매도 228,000)", pnl_message)
+        self.assertIn("수급: 거래량 30,000(1.8x), 거래액 18억 원", value_message)
+        self.assertIn("투자자: 외국인 +145,000(매수 420,000/매도 275,000), 기관 +82,000(매수 310,000/매도 228,000)", value_message)
 
     def test_monitor_trend_change_uses_moving_average_data(self):
         previous_position = normalize_position({
@@ -424,9 +424,9 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("20일선 상향 돌파", message)
         self.assertIn("60일선 상향 돌파", message)
         self.assertIn("20/60일선 골든크로스", message)
-        self.assertIn("추세 현재 11만 원", message)
-        self.assertIn("수급 거래량 40,000(2.1x) · 거래액 24억 원", message)
-        self.assertIn("투자자 외국인 +70,000(매수 510,000/매도 440,000) · 기관 +35,000(매수 350,000/매도 315,000)", message)
+        self.assertIn("추세: 현재 11만 원", message)
+        self.assertIn("수급: 거래량 40,000(2.1x), 거래액 24억 원", message)
+        self.assertIn("투자자: 외국인 +70,000(매수 510,000/매도 440,000), 기관 +35,000(매수 350,000/매도 315,000)", message)
 
     def test_monitor_value_change_formats_usd_with_krw_basis(self):
         previous_position = normalize_position({
@@ -1083,6 +1083,30 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("• <b>미장 가격 변동</b>: <code>-7.5%</code>, <b>가격</b>: <code>$393.45</code>", message)
         self.assertIn("• <b>거래량</b>: <code>71,917,610</code>, <b>기준일</b>: <code>2026-07-02</code>", message)
         self.assertIn("• <b>출처</b>: <code>Alpha Vantage</code>", message)
+
+    def test_flow_and_trend_lines_use_colon_pair_template_format(self):
+        db_path = Path(self.temp.name) / "service.db"
+        templates = SQLiteNotificationTemplateStore(db_path)
+        event = AlertEvent(
+            "main",
+            "메인",
+            "WATCH",
+            "monitorTrendChange",
+            "main:trend:005930",
+            "삼성전자",
+            [
+                "추세: 현재 11만 원, 20일선 10만 원(+1.9%), 60일선 10만 원(+2.9%)",
+                "수급: 거래량 40,000(2.1x), 거래액 24억 원",
+                "투자자: 외국인 +70,000(매수 510,000/매도 440,000), 기관 +35,000(매수 350,000/매도 315,000)",
+            ],
+            "005930",
+        )
+
+        message = templates.render(event.rule, alert_context(event))
+
+        self.assertIn("• <b>추세</b>: <code>현재 11만 원, 20일선 10만 원(+1.9%), 60일선 10만 원(+2.9%)</code>", message)
+        self.assertIn("<b>수급</b>: <code>거래량 40,000(2.1x), 거래액 24억 원</code>", message)
+        self.assertIn("<b>투자자</b>: <code>외국인 +70,000(매수 510,000/매도 440,000), 기관 +35,000(매수 350,000/매도 315,000)</code>", message)
 
     def test_notification_template_seed_migrates_previous_readable_default(self):
         db_path = Path(self.temp.name) / "service.db"

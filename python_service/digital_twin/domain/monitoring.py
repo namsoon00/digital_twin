@@ -399,7 +399,7 @@ class RealtimeMonitor:
             parts.append("거래액 " + money(trading_value, self.position_currency(position)))
         if not parts:
             return ""
-        return "수급 " + " · ".join(parts)
+        return "수급: " + ", ".join(parts)
 
     def investor_value(self, position: Dict[str, object], snake_key: str, camel_key: str) -> float:
         return number(position.get(snake_key) if snake_key in position else position.get(camel_key))
@@ -426,7 +426,7 @@ class RealtimeMonitor:
         parts = [summary for summary in summaries if summary]
         if not parts:
             return ""
-        return "투자자 " + " · ".join(parts)
+        return "투자자: " + ", ".join(parts)
 
     def ma_distance(self, position: Dict[str, object], period: int) -> float:
         return pct_delta(self.position_current_price(position), self.position_ma(position, period))
@@ -439,9 +439,9 @@ class RealtimeMonitor:
             return ""
         currency = self.position_currency(position)
         return (
-            "추세 현재 " + money(price, currency)
-            + " · 20일선 " + money(ma20, currency) + "(" + signed_pct(self.ma_distance(position, 20)) + ")"
-            + " · 60일선 " + money(ma60, currency) + "(" + signed_pct(self.ma_distance(position, 60)) + ")"
+            "추세: 현재 " + money(price, currency)
+            + ", 20일선 " + money(ma20, currency) + "(" + signed_pct(self.ma_distance(position, 20)) + ")"
+            + ", 60일선 " + money(ma60, currency) + "(" + signed_pct(self.ma_distance(position, 60)) + ")"
         )
 
     def trend_slope_line(self, position: Dict[str, object]) -> str:
@@ -454,7 +454,7 @@ class RealtimeMonitor:
             parts.append("60일선 " + signed_pct(slope60))
         if not parts:
             return ""
-        return "기울기 " + " · ".join(parts)
+        return "기울기: " + ", ".join(parts)
 
     def trend_signals(self, before: Dict[str, object], item: Dict[str, object]) -> List[str]:
         signals: List[str] = []

@@ -1053,6 +1053,25 @@
     return ["modelBuy", "modelSell", "monitorDecisionChange"].indexOf(String(messageType || "")) >= 0 ? 15 : 20;
   }
 
+  function defaultNotificationRuleSimilarityBypassConditions(messageType) {
+    var type = String(messageType || "");
+    if (type === "externalEquityMove") {
+      return [
+        { id: "severity_upgrade", label: "등급 상승", type: "severity_upgrade", field: "", value: "", enabled: true, description: "관찰에서 주의처럼 중요도가 올라가면 반복이어도 보냅니다." },
+        { id: "change_abs_delta", label: "변동률 추가 확대", type: "abs_number_delta_gte", field: "changePercent", value: 2, enabled: true, description: "이전 유사 알림보다 변동률 절대값이 기준 %p 이상 커지면 보냅니다." },
+        { id: "volume_multiplier", label: "거래량 급증", type: "number_multiplier_gte", field: "volume", value: 1.5, enabled: true, description: "이전 유사 알림보다 거래량이 기준 배수 이상 커지면 보냅니다." }
+      ];
+    }
+    if (type === "externalCryptoMove") {
+      return [
+        { id: "severity_upgrade", label: "등급 상승", type: "severity_upgrade", field: "", value: "", enabled: true, description: "관찰에서 주의처럼 중요도가 올라가면 반복이어도 보냅니다." },
+        { id: "change_24h_abs_delta", label: "24시간 변동 확대", type: "abs_number_delta_gte", field: "change24h", value: 2, enabled: true, description: "이전 유사 알림보다 24시간 변동률 절대값이 기준 %p 이상 커지면 보냅니다." },
+        { id: "volume_multiplier", label: "거래액 급증", type: "number_multiplier_gte", field: "volume24h", value: 1.5, enabled: true, description: "이전 유사 알림보다 거래액이 기준 배수 이상 커지면 보냅니다." }
+      ];
+    }
+    return [];
+  }
+
   function defaultNotificationRuleSimilarityFields() {
     return ["messageType", "accountId", "symbol", "severity", "title"];
   }
@@ -1127,6 +1146,7 @@
       similarityWindowMinutes: defaultNotificationRuleSimilarityWindow(type),
       similarityPenalty: defaultNotificationRuleSimilarityPenalty(type),
       similarityBypassScoreDelta: defaultNotificationRuleSimilarityBypassDelta(type),
+      similarityBypassConditions: defaultNotificationRuleSimilarityBypassConditions(type),
       similarityFields: defaultNotificationRuleSimilarityFields(),
       marketHoursEnabled: defaultNotificationRuleMarketHoursEnabled(type),
       marketHoursMarkets: defaultNotificationRuleMarketHoursMarkets(type),
@@ -1156,7 +1176,7 @@
       : defaultNotificationTemplates();
     state.notificationTemplateVariables = Array.isArray(payload.variables) && payload.variables.length
       ? payload.variables
-      : ["title", "statusHeadline", "titleHeadline", "telegramMessage", "readableMessage", "dataLines", "telegramDataLines", "triggerSummary", "triggerBlock", "criterionBlock", "criterionLines", "lines", "rawLines", "body", "messageType", "symbol", "severity"];
+      : ["title", "statusHeadline", "titleHeadline", "telegramMessage", "readableMessage", "dataLines", "telegramDataLines", "triggerSummary", "triggerBlock", "criterionBlock", "criterionLines", "lines", "rawLines", "body", "messageType", "symbol", "severity", "metadata", "market", "changePercent", "change24h", "change7d", "price", "volume", "volume24h", "provider"];
     state.notificationTemplatesLoaded = true;
     state.notificationTemplatesLoading = false;
     state.notificationTemplatesError = "";
@@ -1318,7 +1338,7 @@
   function notificationTemplateVariables() {
     return state.notificationTemplateVariables.length
       ? state.notificationTemplateVariables
-      : ["title", "statusHeadline", "titleHeadline", "telegramMessage", "readableMessage", "dataLines", "telegramDataLines", "triggerSummary", "triggerBlock", "criterionBlock", "criterionLines", "lines", "rawLines", "body", "messageType", "symbol", "severity"];
+      : ["title", "statusHeadline", "titleHeadline", "telegramMessage", "readableMessage", "dataLines", "telegramDataLines", "triggerSummary", "triggerBlock", "criterionBlock", "criterionLines", "lines", "rawLines", "body", "messageType", "symbol", "severity", "metadata", "market", "changePercent", "change24h", "change7d", "price", "volume", "volume24h", "provider"];
   }
 
   function clampInteger(value, min, max, fallback) {
@@ -1343,6 +1363,21 @@
     normalized.similarityWindowMinutes = clampInteger(normalized.similarityWindowMinutes, 0, 10080, defaultNotificationRuleSimilarityWindow(normalized.messageType));
     normalized.similarityPenalty = clampInteger(normalized.similarityPenalty, -100, 0, defaultNotificationRuleSimilarityPenalty(normalized.messageType));
     normalized.similarityBypassScoreDelta = clampInteger(normalized.similarityBypassScoreDelta, 0, 100, defaultNotificationRuleSimilarityBypassDelta(normalized.messageType));
+    normalized.similarityBypassConditions = Array.isArray(normalized.similarityBypassConditions) && normalized.similarityBypassConditions.length
+      ? normalized.similarityBypassConditions.map(function (condition) {
+        return Object.assign({
+          id: "",
+          label: "",
+          type: "abs_number_delta_gte",
+          field: "",
+          value: "",
+          enabled: true,
+          description: ""
+        }, condition, {
+          enabled: condition.enabled !== false
+        });
+      })
+      : defaultNotificationRuleSimilarityBypassConditions(normalized.messageType);
     normalized.similarityFields = Array.isArray(normalized.similarityFields)
       ? normalized.similarityFields.map(function (field) { return String(field || "").trim(); }).filter(Boolean)
       : String(normalized.similarityFields || "").split(",").map(function (field) { return field.trim(); }).filter(Boolean);
@@ -1389,6 +1424,12 @@
 
   function notificationRuleCondition(rule, conditionId) {
     return (rule.conditions || []).filter(function (condition) {
+      return condition.id === conditionId;
+    })[0] || null;
+  }
+
+  function notificationRuleBypassCondition(rule, conditionId) {
+    return (rule.similarityBypassConditions || []).filter(function (condition) {
       return condition.id === conditionId;
     })[0] || null;
   }
@@ -1453,6 +1494,24 @@
       } else {
         condition.value = String(value || "");
       }
+    }
+    state.notificationRulesSaved = false;
+    state.notificationRulesError = "";
+  }
+
+  function updateNotificationRuleBypassCondition(messageType, conditionId, field, value) {
+    var rule = ensureNotificationRule(messageType);
+    if (!Array.isArray(rule.similarityBypassConditions)) {
+      rule.similarityBypassConditions = defaultNotificationRuleSimilarityBypassConditions(messageType);
+    }
+    var condition = notificationRuleBypassCondition(rule, conditionId);
+    if (!condition) return;
+    if (field === "enabled") {
+      condition.enabled = Boolean(value);
+    } else if (field === "field") {
+      condition.field = String(value || "").trim();
+    } else if (field === "value") {
+      condition.value = String(value || "").trim();
     }
     state.notificationRulesSaved = false;
     state.notificationRulesError = "";
@@ -5869,7 +5928,7 @@
       '<span>꿀점수 ' + escapeHtml(notificationJobScoreText(job)) + '</span>',
       '<span>' + escapeHtml(notificationJobSimilarityText(job)) + '</span>',
       notificationJobMarketHoursText(job) ? '<span>' + escapeHtml(notificationJobMarketHoursText(job)) + '</span>' : '',
-      job.honeySimilarityBypassed ? '<span>상승 예외 적용</span>' : '',
+      job.honeySimilarityBypassed ? '<span>' + escapeHtml(job.honeySimilarityBypassReason ? "반복 예외 " + job.honeySimilarityBypassReason : "반복 예외 적용") + '</span>' : '',
       '</div>',
       '<p>' + escapeHtml(job.lastError || job.textPreview || "-") + '</p>',
       reasons.length ? '<div class="notification-decision-reasons">' + reasons.map(function (reason) {
@@ -5983,6 +6042,56 @@
     return (Array.isArray(rule.similarityFields) ? rule.similarityFields : defaultNotificationRuleSimilarityFields()).join(", ");
   }
 
+  function notificationRuleBypassTypeLabel(type) {
+    var labels = {
+      severity_upgrade: "등급 상승",
+      score_delta_gte: "꿀점수 상승",
+      abs_number_delta_gte: "절대값 차이 이상",
+      number_delta_gte: "숫자 증가 이상",
+      number_delta_lte: "숫자 감소 이상",
+      number_multiplier_gte: "배수 증가 이상"
+    };
+    return labels[type] || type || "반복 예외";
+  }
+
+  function notificationRuleBypassNeedsField(type) {
+    return ["severity_upgrade", "abs_number_delta_gte", "number_delta_gte", "number_delta_lte", "number_multiplier_gte"].indexOf(type) >= 0;
+  }
+
+  function notificationRuleBypassNeedsValue(type) {
+    return ["score_delta_gte", "abs_number_delta_gte", "number_delta_gte", "number_delta_lte", "number_multiplier_gte"].indexOf(type) >= 0;
+  }
+
+  function renderNotificationBypassCondition(messageType, condition, disabled) {
+    var conditionId = String(condition.id || "");
+    var type = String(condition.type || "");
+    return [
+      '<div class="notification-rule-bypass-condition">',
+      '<label class="notification-rule-condition-main">',
+      '<input type="checkbox" data-notification-rule-bypass-enabled="' + escapeHtml(messageType) + '" data-condition-id="' + escapeHtml(conditionId) + '"' + (condition.enabled !== false ? " checked" : "") + (disabled ? " disabled" : "") + ' />',
+      '<span><strong>' + escapeHtml(condition.label || conditionId) + '</strong><em>' + escapeHtml(notificationRuleBypassTypeLabel(type)) + '</em>' + (condition.description ? '<small>' + escapeHtml(condition.description) + '</small>' : '') + '</span>',
+      '</label>',
+      notificationRuleBypassNeedsField(type) ? '<label><span>필드</span><input type="text" data-notification-rule-bypass-field="' + escapeHtml(messageType) + '" data-condition-id="' + escapeHtml(conditionId) + '" value="' + escapeHtml(condition.field || "") + '"' + (disabled ? " disabled" : "") + ' /></label>' : '',
+      notificationRuleBypassNeedsValue(type) ? '<label><span>기준값</span><input type="number" step="0.1" data-notification-rule-bypass-value="' + escapeHtml(messageType) + '" data-condition-id="' + escapeHtml(conditionId) + '" value="' + escapeHtml(condition.value) + '"' + (disabled ? " disabled" : "") + ' /></label>' : '',
+      '</div>'
+    ].join("");
+  }
+
+  function renderNotificationBypassConditionsEditor(messageType, rule, disabled) {
+    var conditions = Array.isArray(rule.similarityBypassConditions) ? rule.similarityBypassConditions : [];
+    if (!conditions.length) return "";
+    return [
+      '<div class="notification-rule-bypass-list">',
+      '<div class="notification-rule-head notification-rule-subhead">',
+      '<div><strong>반복 예외 조건</strong><span>조건이 맞으면 유사 감점을 적용하지 않고 발송합니다.</span></div>',
+      '</div>',
+      conditions.map(function (condition) {
+        return renderNotificationBypassCondition(messageType, condition, disabled);
+      }).join(""),
+      '</div>'
+    ].join("");
+  }
+
   function renderNotificationSimilarityEditor(messageType, rule, disabled) {
     var summary = rule.similarityEnabled === false
       ? "유사 억제 꺼짐"
@@ -5999,6 +6108,7 @@
       '<label><span>상승 예외</span><input type="number" min="0" max="100" step="1" data-notification-rule-number="' + escapeHtml(messageType) + '" data-rule-field="similarityBypassScoreDelta" value="' + escapeHtml(rule.similarityBypassScoreDelta) + '"' + (disabled ? " disabled" : "") + ' /></label>',
       '</div>',
       '<label class="notification-rule-fields"><span>fingerprint 필드</span><textarea rows="2" data-notification-rule-fields="' + escapeHtml(messageType) + '"' + (disabled ? " disabled" : "") + '>' + escapeHtml(notificationRuleSimilarityFieldsText(rule)) + '</textarea></label>',
+      renderNotificationBypassConditionsEditor(messageType, rule, disabled),
       '</div>'
     ].join("");
   }
@@ -8580,6 +8690,40 @@
     Array.prototype.slice.call(app.querySelectorAll("[data-notification-rule-fields]")).forEach(function (field) {
       field.addEventListener("change", function () {
         updateNotificationRuleField(field.getAttribute("data-notification-rule-fields"), "similarityFields", field.value);
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-notification-rule-bypass-enabled]")).forEach(function (field) {
+      field.addEventListener("change", function () {
+        updateNotificationRuleBypassCondition(
+          field.getAttribute("data-notification-rule-bypass-enabled"),
+          field.getAttribute("data-condition-id"),
+          "enabled",
+          field.checked
+        );
+        render();
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-notification-rule-bypass-field]")).forEach(function (field) {
+      field.addEventListener("change", function () {
+        updateNotificationRuleBypassCondition(
+          field.getAttribute("data-notification-rule-bypass-field"),
+          field.getAttribute("data-condition-id"),
+          "field",
+          field.value
+        );
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-notification-rule-bypass-value]")).forEach(function (field) {
+      field.addEventListener("change", function () {
+        updateNotificationRuleBypassCondition(
+          field.getAttribute("data-notification-rule-bypass-value"),
+          field.getAttribute("data-condition-id"),
+          "value",
+          field.value
+        );
       });
     });
 

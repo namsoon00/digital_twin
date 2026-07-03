@@ -17,6 +17,13 @@ WORKERS = {
         "command": [sys.executable, "-u", "python_service/service.py", "monitor", "watch"],
         "needle": "python_service/service.py monitor watch",
     },
+    "market-data": {
+        "label": "Python market data collector",
+        "pid": data_dir() / "python-market-data.pid",
+        "log": data_dir() / "python-market-data.log",
+        "command": [sys.executable, "-u", "python_service/service.py", "market-data", "watch"],
+        "needle": "python_service/service.py market-data watch",
+    },
     "model-review": {
         "label": "Python model review worker",
         "pid": data_dir() / "python-model-review.pid",

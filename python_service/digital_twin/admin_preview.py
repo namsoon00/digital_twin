@@ -243,6 +243,24 @@ def admin_preview_config() -> Dict[str, object]:
                 ],
             },
             {
+                "id": "market-data-collector",
+                "title": "추천용 시장 데이터 수집",
+                "summary": "전체 종목 카탈로그를 순환하면서 Toss 현재가와 일부 캔들 지표를 SQLite에 저장합니다.",
+                "localEndpoints": [],
+                "commands": [
+                    "npm run python:market-data:once",
+                    "npm run python:market-data:status",
+                    "npm run python:market-data:watch",
+                ],
+                "storage": ["data/service.db: market_quote_cache"],
+                "fields": [
+                    {"key": "marketDataCollectionIntervalSeconds", "label": "수집 주기(초)", "type": "number", "default": "3600"},
+                    {"key": "marketDataPriceBatchSize", "label": "현재가 배치", "type": "number", "default": "200"},
+                    {"key": "marketDataCandleBatchSize", "label": "캔들 배치", "type": "number", "default": "25"},
+                    {"key": "marketDataMaxAgeMinutes", "label": "신선도 기준(분)", "type": "number", "default": "240"},
+                ],
+            },
+            {
                 "id": "model-review",
                 "title": "모델 리뷰 워커",
                 "summary": "monitorDecisionChange 이벤트를 큐에 넣고, Codex 또는 로컬 fallback으로 판단 변화 원인과 다음 실험을 작성합니다.",

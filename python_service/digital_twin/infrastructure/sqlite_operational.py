@@ -731,6 +731,95 @@ class SQLiteMarketQuoteCache(OperationalConnection):
             if payload
         }
 
+    def stale_universe_symbols(
+        self,
+        provider: str,
+        account_id: str,
+        markets: Iterable[str] = None,
+        limit: int = 200,
+        max_age_minutes: int = 240,
+    ) -> List[Dict[str, object]]:
+        clean_markets = [normalize_market(market) for market in (markets or []) if normalize_market(market)]
+        limit_value = max(1, min(1000, int(limit or 200)))
+        age_minutes = max(0, int(max_age_minutes or 0))
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=age_minutes)
+        cutoff_text = cutoff.isoformat().replace("+00:00", "Z")
+        clauses = ["su.active = 1"]
+        params: List[object] = [
+            str(provider or "").strip().lower() or "unknown",
+            str(account_id or "").strip(),
+        ]
+        if clean_markets:
+            clauses.append("su.market IN (" + ",".join(["?"] * len(clean_markets)) + ")")
+            params.extend(clean_markets)
+        clauses.append("(mq.updated_at IS NULL OR mq.updated_at <= ?)")
+        params.append(cutoff_text)
+        sql = """
+            SELECT su.symbol, su.name, su.market, su.exchange, su.currency, su.sector,
+                   su.asset_type, mq.updated_at AS quote_updated_at
+            FROM symbol_universe su
+            LEFT JOIN market_quote_cache mq
+              ON mq.provider = ? AND mq.account_id = ? AND mq.symbol = su.symbol
+            WHERE """ + " AND ".join(clauses) + """
+            ORDER BY
+                CASE WHEN mq.updated_at IS NULL THEN 0 ELSE 1 END,
+                COALESCE(mq.updated_at, ''),
+                CASE su.market WHEN 'KOSPI' THEN 1 WHEN 'KOSDAQ' THEN 2 WHEN 'NASDAQ' THEN 3 ELSE 9 END,
+                su.symbol
+            LIMIT ?
+        """
+        with self.connect() as connection:
+            rows = connection.execute(sql, params + [limit_value]).fetchall()
+        return [
+            {
+                "symbol": row["symbol"],
+                "name": row["name"],
+                "market": row["market"],
+                "exchange": row["exchange"],
+                "currency": row["currency"],
+                "sector": row["sector"],
+                "assetType": row["asset_type"],
+                "quoteUpdatedAt": row["quote_updated_at"] or "",
+            }
+            for row in rows
+        ]
+
+    def summary(self, provider: str, account_id: str) -> Dict[str, object]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT symbol, payload_json, updated_at
+                FROM market_quote_cache
+                WHERE provider = ? AND account_id = ?
+                ORDER BY updated_at DESC
+                """,
+                (
+                    str(provider or "").strip().lower() or "unknown",
+                    str(account_id or "").strip(),
+                ),
+            ).fetchall()
+        markets: Dict[str, int] = {}
+        qualities: Dict[str, int] = {}
+        latest = ""
+        for row in rows:
+            latest = latest or row["updated_at"]
+            try:
+                payload = json.loads(row["payload_json"])
+            except json.JSONDecodeError:
+                payload = {}
+            market = str(payload.get("market") or "UNKNOWN")
+            quality = str(payload.get("dataQuality") or "unknown")
+            markets[market] = markets.get(market, 0) + 1
+            qualities[quality] = qualities.get(quality, 0) + 1
+        return {
+            "provider": str(provider or "").strip().lower() or "unknown",
+            "accountId": str(account_id or "").strip(),
+            "count": len(rows),
+            "latestUpdatedAt": latest,
+            "markets": markets,
+            "dataQuality": qualities,
+        }
+
 
 class SQLiteSymbolUniverseStore(OperationalConnection):
     def upsert_many_with_connection(self, connection, symbols: Iterable[ListedSymbol], stamp: str = "") -> int:

@@ -24,6 +24,7 @@ APP_ITEM_UPDATED = "app.item_updated"
 APP_ITEM_REMOVED = "app.item_removed"
 CHAT_MESSAGE_APPENDED = "chat.message_appended"
 SYMBOL_UNIVERSE_REFRESHED = "symbol_universe.refreshed"
+MARKET_DATA_COLLECTED = "market_data.collected"
 
 
 @dataclass(frozen=True)
@@ -133,5 +134,24 @@ def monitoring_cycle_completed_event(
             "alertCount": alert_count,
             "dryRun": dry_run,
             "delivered": delivered,
+        },
+    )
+
+
+def market_data_collected_event(payload: Dict[str, object]) -> DomainEvent:
+    provider = str(payload.get("provider") or "market-data")
+    markets = ",".join(str(market) for market in payload.get("markets") or []) or "all"
+    return DomainEvent(
+        name=MARKET_DATA_COLLECTED,
+        aggregate_id=provider + ":" + markets,
+        payload={
+            "provider": provider,
+            "markets": list(payload.get("markets") or []),
+            "selectedCount": int(payload.get("selectedCount") or 0),
+            "priceCount": int(payload.get("priceCount") or 0),
+            "candleCount": int(payload.get("candleCount") or 0),
+            "savedCount": int(payload.get("savedCount") or 0),
+            "status": str(payload.get("status") or ""),
+            "dataQuality": str(payload.get("dataQuality") or "actual"),
         },
     )

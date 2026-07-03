@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.admin_preview import admin_preview_config, write_admin_preview
 from digital_twin.application.account_service import AccountApplicationService
+from digital_twin.application.market_data_collection_service import MARKET_DATA_ACCOUNT_ID, MarketDataCollectionRunner
 from digital_twin.application.model_review_service import ModelReviewRunner
 from digital_twin.application.monitoring_service import MonitorRunner as ApplicationMonitorRunner
 from digital_twin.application.notification_service import NotificationQueueRunner
@@ -27,7 +28,7 @@ from digital_twin.domain.market_data import normalize_position, technical_indica
 from digital_twin.domain.message_types import DEFAULT_ALERT_RULES, DEFAULT_CADENCE, MESSAGE_TYPE_LABELS, public_message_catalog
 from digital_twin.domain.portfolio_calculations import portfolio_summary
 from digital_twin.domain.strategy import SafeFormula, StrategyModel, decisions_for_positions
-from digital_twin.domain.events import ACCOUNT_SAVED, MONITORING_ALERTS_DETECTED, MONITORING_CYCLE_COMPLETED, MONITORING_SNAPSHOT_COLLECTED, alerts_detected_event, monitoring_cycle_completed_event
+from digital_twin.domain.events import ACCOUNT_SAVED, MARKET_DATA_COLLECTED, MONITORING_ALERTS_DETECTED, MONITORING_CYCLE_COMPLETED, MONITORING_SNAPSHOT_COLLECTED, alerts_detected_event, monitoring_cycle_completed_event
 from digital_twin.domain.monitoring import RealtimeMonitor
 from digital_twin.domain.model_review import ModelReviewJob, local_model_review
 from digital_twin.domain.notification_templates import alert_context
@@ -724,6 +725,106 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(any(item["market"] == "NASDAQ" for item in payload["summary"]["markets"]))
         self.assertEqual(0, payload["offset"])
         self.assertIn("hasMore", payload)
+
+    def test_market_data_collection_runner_collects_recommendation_universe(self):
+        db_path = Path(self.temp.name) / "service.db"
+        symbol_store = SQLiteSymbolUniverseStore(db_path)
+        quote_cache = SQLiteMarketQuoteCache(db_path)
+        symbol_store.upsert_many([seed_symbol("AAPL"), seed_symbol("TSLA")])
+        registry = AccountRegistry()
+        account = AccountConfig("main", "메인", "toss", "https://example.test", "id", "secret", "1", [])
+        registry.upsert(account)
+
+        class StaticSymbolService:
+            def summary(self):
+                return {
+                    "markets": [{"market": "NASDAQ", "count": 2, "stale": False}],
+                    "sources": [],
+                    "total": 2,
+                }
+
+            def refresh(self, markets=None):
+                return {"results": [], "summary": self.summary()}
+
+        class FakeProvider:
+            def __init__(self, account, cache):
+                self.delegate = TossProvider(account, quote_cache=cache)
+
+            def fetch_access_token(self):
+                return "token"
+
+            def fetch_prices(self, token, symbols):
+                return {
+                    symbol: {
+                        "symbol": symbol,
+                        "currentPrice": 100 + index,
+                        "currency": "USD",
+                        "quoteSource": "Toss /api/v1/prices",
+                        "quoteStatus": "토스 prices 반영",
+                        "dataQuality": "actual",
+                        "updatedAt": "2026-07-04T00:00:00Z",
+                    }
+                    for index, symbol in enumerate(symbols)
+                }
+
+            def fetch_daily_candles(self, token, symbol):
+                return [
+                    {
+                        "timestamp": "2026-01-" + str(index + 1).zfill(2) + "T09:00:00+09:00",
+                        "closePrice": str(80 + index),
+                        "volume": str(1000 + index),
+                    }
+                    for index in range(28)
+                ]
+
+            def merge_market_data(self, *args, **kwargs):
+                return self.delegate.merge_market_data(*args, **kwargs)
+
+        events = EventBus()
+        runner = MarketDataCollectionRunner(
+            registry,
+            StaticSymbolService(),
+            quote_cache,
+            {
+                "marketDataCollectionMarkets": "NASDAQ",
+                "marketDataPriceBatchSize": "2",
+                "marketDataCandleBatchSize": "1",
+                "marketDataMaxAgeMinutes": "240",
+                "marketDataRefreshUniverse": "0",
+            },
+            provider_factory=lambda account, cache: FakeProvider(account, cache),
+            event_publisher=events,
+            sleep_fn=lambda _seconds: None,
+        )
+
+        result = runner.run_once()
+        cached_aapl = quote_cache.load("toss", MARKET_DATA_ACCOUNT_ID, "AAPL")
+        cached_tsla = quote_cache.load("toss", MARKET_DATA_ACCOUNT_ID, "TSLA")
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual(2, result["savedCount"])
+        self.assertEqual(1, result["candleCount"])
+        self.assertEqual("recommendation-universe", cached_aapl["collectionPurpose"])
+        self.assertEqual(100, cached_aapl["currentPrice"])
+        self.assertGreater(cached_aapl["ma20"], 0)
+        self.assertEqual(101, cached_tsla["currentPrice"])
+        self.assertEqual([MARKET_DATA_COLLECTED], [event.name for event in events.published])
+
+    def test_market_quote_cache_selects_stale_symbols_before_fresh_symbols(self):
+        db_path = Path(self.temp.name) / "service.db"
+        symbol_store = SQLiteSymbolUniverseStore(db_path)
+        quote_cache = SQLiteMarketQuoteCache(db_path)
+        symbol_store.upsert_many([seed_symbol("AAPL"), seed_symbol("TSLA")])
+        quote_cache.save("toss", MARKET_DATA_ACCOUNT_ID, "AAPL", {
+            "symbol": "AAPL",
+            "market": "NASDAQ",
+            "currentPrice": 100,
+            "updatedAt": "2026-07-04T00:00:00Z",
+        })
+
+        selected = quote_cache.stale_universe_symbols("toss", MARKET_DATA_ACCOUNT_ID, ["NASDAQ"], limit=2, max_age_minutes=240)
+
+        self.assertEqual("TSLA", selected[0]["symbol"])
 
     def test_application_layer_does_not_import_infrastructure(self):
         application_dir = Path(__file__).resolve().parents[1] / "digital_twin" / "application"

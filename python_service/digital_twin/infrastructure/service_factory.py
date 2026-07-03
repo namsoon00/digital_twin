@@ -1,6 +1,7 @@
 from typing import Iterable
 
 from ..application.flow_lens_service import FlowLensService
+from ..application.market_data_collection_service import MarketDataCollectionRunner
 from ..application.model_review_service import ModelReviewRunner
 from ..application.monitoring_service import MonitorRunner
 from ..application.notification_service import NotificationQueueRunner
@@ -16,11 +17,12 @@ from .notifications import notifier_for_account
 from .settings import currency_rates, runtime_settings
 from .sqlite_model_review import SQLiteModelReviewJobStore
 from .sqlite_monitoring import SQLiteMonitorStore
+from .sqlite_monitoring import SQLiteMarketQuoteCache
 from .sqlite_notifications import SQLiteNotificationJobStore, SQLiteNotificationTemplateStore
 from .sqlite_symbols import SQLiteSymbolUniverseStore
 from .sqlite_accounts import AccountRegistry
 from .symbol_sources import RemoteSymbolSourceGateway
-from .toss_snapshots import build_snapshot, demo_positions
+from .toss_snapshots import TossProvider, build_snapshot, demo_positions
 
 
 def monitor_event_bus() -> EventBus:
@@ -71,6 +73,18 @@ def build_symbol_universe_service(settings=None) -> SymbolUniverseService:
         store=SQLiteSymbolUniverseStore(),
         source_gateway=RemoteSymbolSourceGateway(),
         settings=settings or runtime_settings(),
+    )
+
+
+def build_market_data_collection_runner(settings=None, event_publisher=None) -> MarketDataCollectionRunner:
+    configured_settings = settings or runtime_settings()
+    return MarketDataCollectionRunner(
+        account_repository=AccountRegistry(),
+        symbol_service=build_symbol_universe_service(configured_settings),
+        quote_cache=SQLiteMarketQuoteCache(),
+        settings=configured_settings,
+        provider_factory=lambda account, quote_cache: TossProvider(account, quote_cache=quote_cache),
+        event_publisher=event_publisher or default_event_bus(),
     )
 
 

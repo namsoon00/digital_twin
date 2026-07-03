@@ -260,23 +260,29 @@ class TossProvider:
         self.base_url = account.base_url.rstrip("/")
         self.quote_cache = quote_cache if quote_cache is not None else SQLiteMarketQuoteCache()
 
+    def fetch_access_token(self) -> str:
+        if not self.account.client_id or not self.account.client_secret:
+            raise RuntimeError("토스 credentials 미설정")
+        token_payload = http_json(
+            "POST",
+            self.base_url + "/oauth2/token",
+            {"Content-Type": "application/x-www-form-urlencoded"},
+            form_body({
+                "grant_type": "client_credentials",
+                "client_id": self.account.client_id,
+                "client_secret": self.account.client_secret,
+            }),
+        )
+        token = str(token_payload.get("access_token") or "")
+        if not token:
+            raise RuntimeError("토스 access_token이 없습니다.")
+        return token
+
     def fetch_positions(self) -> Tuple[str, str, List[Position], float, str, List[Position]]:
         if not self.account.client_id or not self.account.client_secret:
             return "demo", "토스 credentials 미설정", demo_positions(), 1250000.0, "KRW", []
         try:
-            token_payload = http_json(
-                "POST",
-                self.base_url + "/oauth2/token",
-                {"Content-Type": "application/x-www-form-urlencoded"},
-                form_body({
-                    "grant_type": "client_credentials",
-                    "client_id": self.account.client_id,
-                    "client_secret": self.account.client_secret,
-                }),
-            )
-            token = str(token_payload.get("access_token") or "")
-            if not token:
-                raise RuntimeError("토스 access_token이 없습니다.")
+            token = self.fetch_access_token()
             accounts_payload = http_json("GET", self.base_url + "/api/v1/accounts", {"Authorization": "Bearer " + token})
             accounts = normalize_accounts(accounts_payload)
             selected = select_account(accounts, self.account.account_seq)

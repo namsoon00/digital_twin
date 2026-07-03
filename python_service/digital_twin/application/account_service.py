@@ -15,8 +15,12 @@ class AccountApplicationService:
         return [account.masked() for account in self.repository.load_all()]
 
     def save(self, account: AccountConfig) -> AccountConfig:
-        self.repository.upsert(account)
-        self.publish(account_saved_event(account))
+        event = account_saved_event(account)
+        if hasattr(self.repository, "upsert_with_event"):
+            self.repository.upsert_with_event(account, event)
+        else:
+            self.repository.upsert(account)
+        self.publish(event)
         return account
 
     def save_payload(self, payload: Dict[str, object]) -> AccountConfig:
@@ -31,9 +35,13 @@ class AccountApplicationService:
         return self.save(account)
 
     def remove(self, account_id: str) -> bool:
-        removed = self.repository.remove(account_id)
+        event = account_removed_event(account_id)
+        if hasattr(self.repository, "remove_with_event"):
+            removed = self.repository.remove_with_event(account_id, event)
+        else:
+            removed = self.repository.remove(account_id)
         if removed:
-            self.publish(account_removed_event(account_id))
+            self.publish(event)
         return removed
 
     def publish(self, event) -> None:

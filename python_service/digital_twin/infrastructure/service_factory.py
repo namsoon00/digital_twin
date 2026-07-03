@@ -31,13 +31,15 @@ def monitor_event_bus() -> EventBus:
 
 def build_monitor_runner(accounts: Iterable[AccountConfig], event_publisher=None) -> MonitorRunner:
     settings = runtime_settings()
+    store = SQLiteMonitorStore()
     return MonitorRunner(
         accounts,
-        store=SQLiteMonitorStore(),
+        store=store,
         monitor=RealtimeMonitor(settings),
         snapshot_builder=build_snapshot,
         event_sender=send_events,
         event_publisher=event_publisher or monitor_event_bus(),
+        cycle_recorder=store,
     )
 
 

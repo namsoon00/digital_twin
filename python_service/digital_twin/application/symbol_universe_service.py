@@ -98,8 +98,11 @@ class SymbolUniverseService:
             descriptor = self.source_gateway.source_descriptor(market)
             try:
                 items = self.source_gateway.fetch_market_symbols(market)
-                count = self.store.upsert_many(items)
-                self.store.mark_source(market, descriptor["source"], descriptor["sourceUrl"], "ok", count=count)
+                if hasattr(self.store, "refresh_market"):
+                    count = self.store.refresh_market(market, descriptor["source"], descriptor["sourceUrl"], items)
+                else:
+                    count = self.store.upsert_many(items)
+                    self.store.mark_source(market, descriptor["source"], descriptor["sourceUrl"], "ok", count=count)
                 results.append({"market": market, "status": "ok", "count": count, **descriptor})
             except Exception as error:  # noqa: BLE001 - one source failure must not discard cached symbols.
                 self.store.mark_source(market, descriptor["source"], descriptor["sourceUrl"], "error", error=str(error))

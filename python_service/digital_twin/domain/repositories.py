@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Protocol
 
 from .accounts import AccountConfig
@@ -59,6 +60,24 @@ class NotificationGateway(Protocol):
         ...
 
 
+@dataclass
+class MonitoringCycleRecordResult:
+    delivered: bool
+    queued: int = 0
+    reason: str = ""
+
+
+class MonitoringCycleRecorder(Protocol):
+    def record_cycle(
+        self,
+        account_ids: List[str],
+        snapshots: List[AccountSnapshot],
+        alert_events: List[AlertEvent],
+        dry_run: bool = False,
+    ) -> MonitoringCycleRecordResult:
+        ...
+
+
 class SymbolUniverseRepository(Protocol):
     def upsert_many(self, symbols: Iterable[ListedSymbol]) -> int:
         ...
@@ -79,6 +98,9 @@ class SymbolUniverseRepository(Protocol):
         ...
 
     def mark_source(self, market: str, source: str, source_url: str, status: str, count: int = 0, error: str = "") -> None:
+        ...
+
+    def refresh_market(self, market: str, source: str, source_url: str, symbols: Iterable[ListedSymbol]) -> int:
         ...
 
     def source_states(self) -> List[Dict[str, object]]:

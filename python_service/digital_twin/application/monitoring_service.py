@@ -4,7 +4,7 @@ from typing import Callable, Iterable, List
 from ..domain.accounts import AccountConfig
 from ..domain.events import alerts_detected_event, monitoring_cycle_completed_event, snapshot_collected_event
 from ..domain.portfolio import AccountSnapshot, AlertEvent
-from ..domain.repositories import MonitorStateRepository, SnapshotMonitor
+from ..domain.repositories import MonitorStateRepository, MonitoringCycleRecorder, SnapshotMonitor
 
 
 class MonitorRunner:
@@ -16,6 +16,7 @@ class MonitorRunner:
         snapshot_builder: Callable[[AccountConfig], AccountSnapshot],
         event_sender: Callable,
         event_publisher=None,
+        cycle_recorder: MonitoringCycleRecorder = None,
     ):
         self.accounts = list(accounts)
         self.account_map = {account.account_id: account for account in self.accounts}
@@ -24,6 +25,7 @@ class MonitorRunner:
         self.snapshot_builder = snapshot_builder
         self.event_sender = event_sender
         self.event_publisher = event_publisher
+        self.cycle_recorder = cycle_recorder
 
     def run_once(self, dry_run: bool = False, force: bool = False) -> List[AlertEvent]:
         all_events: List[AlertEvent] = []
@@ -31,11 +33,22 @@ class MonitorRunner:
         for account in self.accounts:
             snapshot = self.snapshot_builder(account)
             snapshots.append(snapshot)
-            self.publish(snapshot_collected_event(snapshot))
+            if not self.use_cycle_recorder(dry_run):
+                self.publish(snapshot_collected_event(snapshot))
             previous = self.store.previous.get(snapshot.account_id) or {}
             events = self.monitor.events_for_snapshot(snapshot, previous)
             events = self.monitor.apply_cadence(events, self.store, force=force)
             all_events.extend(events)
+        if self.use_cycle_recorder(dry_run):
+            self.cycle_recorder.record_cycle(
+                [account.account_id for account in self.accounts],
+                snapshots,
+                all_events,
+                dry_run=dry_run,
+            )
+            if not all_events:
+                print("No Python realtime monitoring events.")
+            return all_events
         if all_events:
             alert_event = alerts_detected_event(all_events)
             self.publish(alert_event)
@@ -53,6 +66,9 @@ class MonitorRunner:
                 self.store.save_snapshot(snapshot)
             self.store.write()
         return all_events
+
+    def use_cycle_recorder(self, dry_run: bool) -> bool:
+        return self.cycle_recorder is not None and not dry_run
 
     def publish_cycle_completed(self, snapshots, events, dry_run: bool, delivered: bool) -> None:
         self.publish(monitoring_cycle_completed_event(

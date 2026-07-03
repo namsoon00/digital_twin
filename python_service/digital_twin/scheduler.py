@@ -12,13 +12,15 @@ class MonitorRunner:
         from .infrastructure.settings import runtime_settings
         from .infrastructure.sqlite_monitoring import SQLiteMonitorStore
 
+        store = kwargs.get("store") or SQLiteMonitorStore()
         return ApplicationMonitorRunner(
             accounts,
-            store=kwargs.get("store") or SQLiteMonitorStore(),
+            store=store,
             monitor=kwargs.get("monitor") or RealtimeMonitor(runtime_settings()),
             snapshot_builder=kwargs.get("snapshot_builder") or build_snapshot,
             event_sender=kwargs.get("event_sender") or send_events,
             event_publisher=kwargs.get("event_publisher") or default_event_bus(),
+            cycle_recorder=kwargs.get("cycle_recorder") or (store if hasattr(store, "record_cycle") else None),
         )
 
 

@@ -17,7 +17,7 @@ from digital_twin.application.account_service import AccountApplicationService
 from digital_twin.application.model_review_service import ModelReviewRunner
 from digital_twin.application.monitoring_service import MonitorRunner as ApplicationMonitorRunner
 from digital_twin.application.notification_service import NotificationQueueRunner
-from digital_twin.application.symbol_universe_service import SymbolUniverseService
+from digital_twin.application.symbol_universe_service import SymbolUniverseService, seed_symbol
 from digital_twin.cli import build_handoff_message
 from digital_twin.cli import preserve_existing_secrets
 from digital_twin.cli import build_parser
@@ -690,6 +690,23 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("삼성전자", store.search(query="삼성", market="KOSPI")[0].name)
         self.assertEqual(2, store.search_count())
         self.assertEqual(["AAPL"], [item.symbol for item in store.search(limit=1, offset=1)])
+
+    def test_symbol_universe_refresh_market_records_catalog_and_source_together(self):
+        db_path = Path(self.temp.name) / "service.db"
+        store = SQLiteSymbolUniverseStore(db_path)
+        item = seed_symbol("AAPL")
+        item.source = "NASDAQ"
+        item.source_url = "https://example.test/nasdaq"
+
+        count = store.refresh_market("NASDAQ", "NASDAQ", "https://example.test/nasdaq", [item])
+
+        self.assertEqual(1, count)
+        self.assertEqual({"NASDAQ": 1}, store.counts_by_market())
+        sources = store.source_states()
+        self.assertEqual("NASDAQ", sources[0]["market"])
+        self.assertEqual("ok", sources[0]["status"])
+        self.assertEqual(1, sources[0]["recordCount"])
+        self.assertTrue(sources[0]["lastSuccessAt"])
 
     def test_symbol_universe_service_seeds_and_reports_freshness(self):
         service = SymbolUniverseService(
@@ -1724,6 +1741,19 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(1, len(named))
         self.assertEqual(named, all_events)
 
+    def test_account_application_service_logs_event_in_account_transaction(self):
+        registry = AccountRegistry()
+        service = AccountApplicationService(registry, registry.settings)
+
+        service.save(AccountConfig("main", "메인", "toss", "https://example.test", "id1", "secret1", "1", ["AAPL"]))
+
+        with sqlite3.connect(str(Path(self.temp.name) / "service.db")) as connection:
+            rows = connection.execute(
+                "SELECT name, aggregate_id, event_json FROM domain_events ORDER BY occurred_at"
+            ).fetchall()
+        self.assertEqual([(ACCOUNT_SAVED, "main")], [(row[0], row[1]) for row in rows])
+        self.assertNotIn("secret1", rows[0][2])
+
     def test_event_bus_records_handler_errors_without_breaking_publish(self):
         event_bus = EventBus()
 
@@ -1738,6 +1768,89 @@ class PythonServiceTests(unittest.TestCase):
 
         self.assertEqual(1, len(event_bus.published))
         self.assertEqual(1, len(event_bus.handler_errors))
+
+    def test_application_runner_records_monitoring_cycle_transactionally(self):
+        db_path = Path(self.temp.name) / "service.db"
+        legacy_missing = Path(self.temp.name) / "missing.json"
+        store = SQLiteMonitorStore(db_path, legacy_path=legacy_missing)
+        account = AccountConfig("main", "메인", "toss", "https://example.test", "", "", "", ["AAPL"])
+        alert = AlertEvent(
+            "main",
+            "메인",
+            "WATCH",
+            "monitorDecisionChange",
+            "main:decision:AAPL",
+            "Apple",
+            ["판단 변화", "Codex 답변: 판단 변경"],
+            "AAPL",
+        )
+
+        def snapshot_builder(_account):
+            position = normalize_position({
+                "symbol": "AAPL",
+                "name": "Apple",
+                "marketValue": 1000,
+                "profitLossRate": 15,
+                "sellableQuantity": 1,
+            })
+            portfolio = portfolio_summary([position])
+            return AccountSnapshot(
+                "main",
+                "메인",
+                "toss",
+                "live",
+                "ok",
+                utc_now_iso(),
+                portfolio,
+                [position],
+                decisions_for_positions([position], portfolio),
+            )
+
+        class FakeMonitor:
+            def events_for_snapshot(self, _snapshot, _previous):
+                return [alert]
+
+            def apply_cadence(self, events, _store, force=False):
+                return events
+
+        def sender(_events, dry_run=False, accounts=None, source_event=None):
+            raise AssertionError("cycle recorder should own monitor side effects")
+
+        event_bus = EventBus()
+        events = ApplicationMonitorRunner(
+            [account],
+            store=store,
+            monitor=FakeMonitor(),
+            snapshot_builder=snapshot_builder,
+            event_sender=sender,
+            event_publisher=event_bus,
+            cycle_recorder=store,
+        ).run_once(dry_run=False, force=True)
+
+        self.assertEqual([alert], events)
+        self.assertEqual([], event_bus.published)
+        self.assertIn("main", store.previous)
+        self.assertIn(alert.key, store.sent)
+        self.assertIn(alert.cadence_key(), store.sent)
+        with sqlite3.connect(str(db_path)) as connection:
+            event_counts = {
+                row[0]: row[1]
+                for row in connection.execute(
+                    "SELECT name, COUNT(*) FROM domain_events GROUP BY name"
+                ).fetchall()
+            }
+            self.assertEqual(1, connection.execute("SELECT COUNT(*) FROM monitor_snapshots").fetchone()[0])
+            self.assertEqual(2, connection.execute("SELECT COUNT(*) FROM monitor_sent").fetchone()[0])
+            self.assertEqual(1, connection.execute("SELECT COUNT(*) FROM notification_jobs WHERE status = 'pending'").fetchone()[0])
+            self.assertEqual(1, connection.execute("SELECT COUNT(*) FROM model_review_jobs WHERE status = 'pending'").fetchone()[0])
+        self.assertEqual(
+            {
+                MONITORING_SNAPSHOT_COLLECTED: 1,
+                MONITORING_ALERTS_DETECTED: 1,
+                MONITORING_CYCLE_COMPLETED: 1,
+            },
+            event_counts,
+        )
 
     def test_json_event_log_writes_jsonl(self):
         event_bus = EventBus()

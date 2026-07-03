@@ -1,10 +1,16 @@
+import json
 import os
 import sqlite3
 from pathlib import Path
 from typing import List, Optional
 
 from ..domain.accounts import AccountConfig, split_symbols
+from ..domain.events import DomainEvent
 from .settings import data_dir, read_json, runtime_settings, service_db_path, utc_now
+
+
+def json_dumps(payload) -> str:
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
 
 class AccountRegistry:
@@ -62,6 +68,18 @@ class AccountRegistry:
                 )
             """)
             connection.execute("CREATE INDEX IF NOT EXISTS idx_service_accounts_enabled ON service_accounts(enabled)")
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS domain_events (
+                    event_id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    aggregate_id TEXT NOT NULL DEFAULT '',
+                    occurred_at TEXT NOT NULL,
+                    correlation_id TEXT NOT NULL DEFAULT '',
+                    payload_json TEXT NOT NULL,
+                    event_json TEXT NOT NULL
+                )
+            """)
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_domain_events_name_time ON domain_events(name, occurred_at)")
 
     def rows_count(self) -> int:
         with self.connect() as connection:
@@ -230,6 +248,31 @@ class AccountRegistry:
             connection.execute("PRAGMA foreign_keys = ON")
             self.upsert_with_connection(connection, account)
 
+    def insert_event_with_connection(self, connection, event: DomainEvent) -> None:
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO domain_events (
+                event_id, name, aggregate_id, occurred_at, correlation_id, payload_json, event_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                event.event_id,
+                event.name,
+                event.aggregate_id,
+                event.occurred_at,
+                event.correlation_id,
+                json_dumps(event.payload),
+                json_dumps(event.to_dict()),
+            ),
+        )
+
+    def upsert_with_event(self, account: AccountConfig, event: DomainEvent) -> None:
+        with self.connect() as connection:
+            connection.execute("PRAGMA foreign_keys = ON")
+            self.upsert_with_connection(connection, account)
+            self.insert_event_with_connection(connection, event)
+
     def remove(self, account_id: str) -> bool:
         with self.connect() as connection:
             connection.execute("PRAGMA foreign_keys = ON")
@@ -238,3 +281,12 @@ class AccountRegistry:
         if not removed:
             return False
         return True
+
+    def remove_with_event(self, account_id: str, event: DomainEvent) -> bool:
+        with self.connect() as connection:
+            connection.execute("PRAGMA foreign_keys = ON")
+            cursor = connection.execute("DELETE FROM service_accounts WHERE id = ?", (account_id,))
+            removed = cursor.rowcount > 0
+            if removed:
+                self.insert_event_with_connection(connection, event)
+        return removed

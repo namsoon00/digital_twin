@@ -5,18 +5,81 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
-from ..domain.events import DomainEvent, MONITORING_ALERTS_DETECTED
+from ..domain.events import (
+    DomainEvent,
+    MONITORING_ALERTS_DETECTED,
+    alerts_detected_event,
+    monitoring_cycle_completed_event,
+    snapshot_collected_event,
+)
 from ..domain.model_review import ModelReviewJob
 from ..domain.notification_rules import DEFAULT_NOTIFICATION_RULES, NotificationRuleConfig, apply_similarity_rule, default_notification_rule, evaluate_notification_rule, notification_fingerprint
-from ..domain.notification_templates import DEFAULT_NOTIFICATION_TEMPLATES, LEGACY_DEFAULT_TEMPLATE, PREVIOUS_DEFAULT_TEMPLATE, NotificationTemplate, render_notification
+from ..domain.notification_templates import DEFAULT_NOTIFICATION_TEMPLATES, LEGACY_DEFAULT_TEMPLATE, PREVIOUS_DEFAULT_TEMPLATE, NotificationTemplate, alert_context, render_notification
 from ..domain.notifications import NotificationJob
 from ..domain.portfolio import AccountSnapshot, AlertEvent
+from ..domain.repositories import MonitoringCycleRecordResult
 from ..domain.symbol_universe import ListedSymbol, normalize_market, normalize_symbol, utc_now_iso as symbol_utc_now_iso
 from .settings import data_dir, read_json, service_db_path, settings_path, utc_now
 
 
 def json_dumps(payload) -> str:
     return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+
+def insert_domain_event_with_connection(connection, event: DomainEvent) -> None:
+    payload = event.to_dict()
+    connection.execute(
+        """
+        INSERT OR IGNORE INTO domain_events (
+            event_id, name, aggregate_id, occurred_at, correlation_id, payload_json, event_json
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            event.event_id,
+            event.name,
+            event.aggregate_id,
+            event.occurred_at,
+            event.correlation_id,
+            json_dumps(event.payload),
+            json_dumps(payload),
+        ),
+    )
+
+
+def rule_from_row(row) -> NotificationRuleConfig:
+    try:
+        conditions = json.loads(row["conditions_json"] or "[]")
+    except json.JSONDecodeError:
+        conditions = []
+    try:
+        similarity_fields = json.loads(row["similarity_fields_json"] or "[]")
+    except json.JSONDecodeError:
+        similarity_fields = []
+    return NotificationRuleConfig.from_dict({
+        "messageType": row["message_type"],
+        "enabled": bool(row["enabled"]),
+        "threshold": row["threshold"],
+        "baseScore": row["base_score"],
+        "lowScoreAction": row["low_score_action"],
+        "conditions": conditions if isinstance(conditions, list) else [],
+        "similarityEnabled": bool(row["similarity_enabled"]),
+        "similarityWindowMinutes": row["similarity_window_minutes"],
+        "similarityPenalty": row["similarity_penalty"],
+        "similarityBypassScoreDelta": row["similarity_bypass_score_delta"],
+        "similarityFields": similarity_fields if isinstance(similarity_fields, list) else [],
+        "updatedAt": row["updated_at"],
+    })
+
+
+def template_from_row(row) -> NotificationTemplate:
+    return NotificationTemplate(
+        message_type=row["message_type"],
+        template=row["template"],
+        description=row["description"],
+        enabled=bool(row["enabled"]),
+        updated_at=row["updated_at"],
+    )
 
 
 class OperationalConnection:
@@ -271,13 +334,7 @@ class SQLiteNotificationTemplateStore(OperationalConnection):
                     )
 
     def row_to_template(self, row) -> NotificationTemplate:
-        return NotificationTemplate(
-            message_type=row["message_type"],
-            template=row["template"],
-            description=row["description"],
-            enabled=bool(row["enabled"]),
-            updated_at=row["updated_at"],
-        )
+        return template_from_row(row)
 
     def list(self) -> List[NotificationTemplate]:
         with self.connect() as connection:
@@ -378,28 +435,7 @@ class SQLiteNotificationRuleStore(OperationalConnection):
                 )
 
     def row_to_rule(self, row) -> NotificationRuleConfig:
-        try:
-            conditions = json.loads(row["conditions_json"] or "[]")
-        except json.JSONDecodeError:
-            conditions = []
-        try:
-            similarity_fields = json.loads(row["similarity_fields_json"] or "[]")
-        except json.JSONDecodeError:
-            similarity_fields = []
-        return NotificationRuleConfig.from_dict({
-            "messageType": row["message_type"],
-            "enabled": bool(row["enabled"]),
-            "threshold": row["threshold"],
-            "baseScore": row["base_score"],
-            "lowScoreAction": row["low_score_action"],
-            "conditions": conditions if isinstance(conditions, list) else [],
-            "similarityEnabled": bool(row["similarity_enabled"]),
-            "similarityWindowMinutes": row["similarity_window_minutes"],
-            "similarityPenalty": row["similarity_penalty"],
-            "similarityBypassScoreDelta": row["similarity_bypass_score_delta"],
-            "similarityFields": similarity_fields if isinstance(similarity_fields, list) else [],
-            "updatedAt": row["updated_at"],
-        })
+        return rule_from_row(row)
 
     def list(self) -> List[NotificationRuleConfig]:
         with self.connect() as connection:
@@ -657,61 +693,64 @@ class SQLiteMarketQuoteCache(OperationalConnection):
 
 
 class SQLiteSymbolUniverseStore(OperationalConnection):
-    def upsert_many(self, symbols: Iterable[ListedSymbol]) -> int:
+    def upsert_many_with_connection(self, connection, symbols: Iterable[ListedSymbol], stamp: str = "") -> int:
         items = [item for item in symbols if item.symbol and item.market]
         if not items:
             return 0
-        stamp = utc_now()
-        with self.connect() as connection:
-            for item in items:
-                existing = connection.execute(
-                    "SELECT first_seen_at FROM symbol_universe WHERE market = ? AND symbol = ?",
-                    (item.market, item.symbol),
-                ).fetchone()
-                if existing and existing["first_seen_at"]:
-                    item.first_seen_at = existing["first_seen_at"]
-                payload = item.to_dict(max_age_hours=24)
-                connection.execute(
-                    """
-                    INSERT INTO symbol_universe (
-                        market, symbol, name, exchange, currency, sector, asset_type,
-                        source, source_url, active, fetched_at, first_seen_at, last_seen_at,
-                        payload_json, updated_at
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(market, symbol) DO UPDATE SET
-                        name = excluded.name,
-                        exchange = excluded.exchange,
-                        currency = excluded.currency,
-                        sector = excluded.sector,
-                        asset_type = excluded.asset_type,
-                        source = excluded.source,
-                        source_url = excluded.source_url,
-                        active = excluded.active,
-                        fetched_at = excluded.fetched_at,
-                        last_seen_at = excluded.last_seen_at,
-                        payload_json = excluded.payload_json,
-                        updated_at = excluded.updated_at
-                    """,
-                    (
-                        item.market,
-                        item.symbol,
-                        item.name,
-                        item.exchange,
-                        item.currency,
-                        item.sector,
-                        item.asset_type,
-                        item.source,
-                        item.source_url,
-                        1 if item.active else 0,
-                        item.fetched_at,
-                        item.first_seen_at,
-                        item.last_seen_at,
-                        json_dumps(payload),
-                        stamp,
-                    ),
+        stamp = stamp or utc_now()
+        for item in items:
+            existing = connection.execute(
+                "SELECT first_seen_at FROM symbol_universe WHERE market = ? AND symbol = ?",
+                (item.market, item.symbol),
+            ).fetchone()
+            if existing and existing["first_seen_at"]:
+                item.first_seen_at = existing["first_seen_at"]
+            payload = item.to_dict(max_age_hours=24)
+            connection.execute(
+                """
+                INSERT INTO symbol_universe (
+                    market, symbol, name, exchange, currency, sector, asset_type,
+                    source, source_url, active, fetched_at, first_seen_at, last_seen_at,
+                    payload_json, updated_at
                 )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(market, symbol) DO UPDATE SET
+                    name = excluded.name,
+                    exchange = excluded.exchange,
+                    currency = excluded.currency,
+                    sector = excluded.sector,
+                    asset_type = excluded.asset_type,
+                    source = excluded.source,
+                    source_url = excluded.source_url,
+                    active = excluded.active,
+                    fetched_at = excluded.fetched_at,
+                    last_seen_at = excluded.last_seen_at,
+                    payload_json = excluded.payload_json,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    item.market,
+                    item.symbol,
+                    item.name,
+                    item.exchange,
+                    item.currency,
+                    item.sector,
+                    item.asset_type,
+                    item.source,
+                    item.source_url,
+                    1 if item.active else 0,
+                    item.fetched_at,
+                    item.first_seen_at,
+                    item.last_seen_at,
+                    json_dumps(payload),
+                    stamp,
+                ),
+            )
         return len(items)
+
+    def upsert_many(self, symbols: Iterable[ListedSymbol]) -> int:
+        with self.connect() as connection:
+            return self.upsert_many_with_connection(connection, symbols)
 
     def row_to_symbol(self, row) -> ListedSymbol:
         try:
@@ -814,44 +853,64 @@ class SQLiteSymbolUniverseStore(OperationalConnection):
             ).fetchall()
         return {row["market"]: row["last_seen_at"] or "" for row in rows}
 
-    def mark_source(self, market: str, source: str, source_url: str, status: str, count: int = 0, error: str = "") -> None:
-        stamp = symbol_utc_now_iso()
+    def mark_source_with_connection(
+        self,
+        connection,
+        market: str,
+        source: str,
+        source_url: str,
+        status: str,
+        count: int = 0,
+        error: str = "",
+        stamp: str = "",
+    ) -> None:
+        stamp = stamp or symbol_utc_now_iso()
         success_at = stamp if status == "ok" else ""
-        with self.connect() as connection:
-            existing = connection.execute(
-                "SELECT last_success_at FROM symbol_universe_sources WHERE market = ?",
-                (normalize_market(market),),
-            ).fetchone()
-            last_success_at = success_at or (existing["last_success_at"] if existing else "")
-            connection.execute(
-                """
-                INSERT INTO symbol_universe_sources (
-                    market, source, source_url, status, record_count, last_attempt_at,
-                    last_success_at, last_error, updated_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(market) DO UPDATE SET
-                    source = excluded.source,
-                    source_url = excluded.source_url,
-                    status = excluded.status,
-                    record_count = excluded.record_count,
-                    last_attempt_at = excluded.last_attempt_at,
-                    last_success_at = excluded.last_success_at,
-                    last_error = excluded.last_error,
-                    updated_at = excluded.updated_at
-                """,
-                (
-                    normalize_market(market),
-                    str(source or ""),
-                    str(source_url or ""),
-                    str(status or ""),
-                    int(count or 0),
-                    stamp,
-                    last_success_at,
-                    str(error or ""),
-                    stamp,
-                ),
+        existing = connection.execute(
+            "SELECT last_success_at FROM symbol_universe_sources WHERE market = ?",
+            (normalize_market(market),),
+        ).fetchone()
+        last_success_at = success_at or (existing["last_success_at"] if existing else "")
+        connection.execute(
+            """
+            INSERT INTO symbol_universe_sources (
+                market, source, source_url, status, record_count, last_attempt_at,
+                last_success_at, last_error, updated_at
             )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(market) DO UPDATE SET
+                source = excluded.source,
+                source_url = excluded.source_url,
+                status = excluded.status,
+                record_count = excluded.record_count,
+                last_attempt_at = excluded.last_attempt_at,
+                last_success_at = excluded.last_success_at,
+                last_error = excluded.last_error,
+                updated_at = excluded.updated_at
+            """,
+            (
+                normalize_market(market),
+                str(source or ""),
+                str(source_url or ""),
+                str(status or ""),
+                int(count or 0),
+                stamp,
+                last_success_at,
+                str(error or ""),
+                stamp,
+            ),
+        )
+
+    def mark_source(self, market: str, source: str, source_url: str, status: str, count: int = 0, error: str = "") -> None:
+        with self.connect() as connection:
+            self.mark_source_with_connection(connection, market, source, source_url, status, count, error)
+
+    def refresh_market(self, market: str, source: str, source_url: str, symbols: Iterable[ListedSymbol]) -> int:
+        stamp = symbol_utc_now_iso()
+        with self.connect() as connection:
+            count = self.upsert_many_with_connection(connection, symbols, stamp)
+            self.mark_source_with_connection(connection, market, source, source_url, "ok", count=count, stamp=stamp)
+        return count
 
     def source_states(self) -> List[Dict[str, object]]:
         with self.connect() as connection:
@@ -980,54 +1039,159 @@ class SQLiteMonitorStore(OperationalConnection):
     def sent(self) -> Dict[str, object]:
         return self.payload["sent"]
 
-    def upsert_snapshot_state(self, account_id: str, state: Dict[str, object]) -> None:
-        stamp = utc_now()
-        with self.connect() as connection:
-            connection.execute(
-                """
-                INSERT INTO monitor_snapshots (
-                    account_id, account_label, provider, mode, status, generated_at, payload_json, updated_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(account_id) DO UPDATE SET
-                    account_label = excluded.account_label,
-                    provider = excluded.provider,
-                    mode = excluded.mode,
-                    status = excluded.status,
-                    generated_at = excluded.generated_at,
-                    payload_json = excluded.payload_json,
-                    updated_at = excluded.updated_at
-                """,
-                (
-                    account_id,
-                    str(state.get("accountLabel") or ""),
-                    str(state.get("provider") or ""),
-                    str(state.get("mode") or ""),
-                    str(state.get("status") or ""),
-                    str(state.get("generatedAt") or ""),
-                    json_dumps(state),
-                    stamp,
-                ),
+    def upsert_snapshot_state_with_connection(self, connection, account_id: str, state: Dict[str, object], stamp: str = "") -> None:
+        connection.execute(
+            """
+            INSERT INTO monitor_snapshots (
+                account_id, account_label, provider, mode, status, generated_at, payload_json, updated_at
             )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(account_id) DO UPDATE SET
+                account_label = excluded.account_label,
+                provider = excluded.provider,
+                mode = excluded.mode,
+                status = excluded.status,
+                generated_at = excluded.generated_at,
+                payload_json = excluded.payload_json,
+                updated_at = excluded.updated_at
+            """,
+            (
+                account_id,
+                str(state.get("accountLabel") or ""),
+                str(state.get("provider") or ""),
+                str(state.get("mode") or ""),
+                str(state.get("status") or ""),
+                str(state.get("generatedAt") or ""),
+                json_dumps(state),
+                stamp or utc_now(),
+            ),
+        )
+
+    def upsert_snapshot_state(self, account_id: str, state: Dict[str, object]) -> None:
+        with self.connect() as connection:
+            self.upsert_snapshot_state_with_connection(connection, account_id, state)
 
     def save_snapshot(self, snapshot: AccountSnapshot) -> None:
         state = snapshot.to_monitor_state()
-        self.previous[snapshot.account_id] = state
         self.upsert_snapshot_state(snapshot.account_id, state)
+        self.previous[snapshot.account_id] = state
+
+    def sent_entries(self, events: Iterable[AlertEvent], stamp: str) -> Dict[str, str]:
+        entries: Dict[str, str] = {}
+        for event in events:
+            entries[event.key] = stamp
+            entries[event.cadence_key()] = stamp
+        return entries
+
+    def mark_sent_with_connection(self, connection, events: Iterable[AlertEvent], stamp: str) -> Dict[str, str]:
+        entries = self.sent_entries(events, stamp)
+        for key, sent_at in entries.items():
+            connection.execute(
+                "INSERT OR REPLACE INTO monitor_sent (key, sent_at) VALUES (?, ?)",
+                (key, sent_at),
+            )
+        return entries
 
     def mark_sent(self, events: Iterable[AlertEvent]) -> None:
         stamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-        keys = []
-        for event in events:
-            keys.extend([event.key, event.cadence_key()])
-            self.sent[event.key] = stamp
-            self.sent[event.cadence_key()] = stamp
         with self.connect() as connection:
-            for key in keys:
-                connection.execute(
-                    "INSERT OR REPLACE INTO monitor_sent (key, sent_at) VALUES (?, ?)",
-                    (key, stamp),
+            entries = self.mark_sent_with_connection(connection, events, stamp)
+        self.sent.update(entries)
+
+    def record_cycle(
+        self,
+        account_ids: List[str],
+        snapshots: List[AccountSnapshot],
+        alert_events: List[AlertEvent],
+        dry_run: bool = False,
+    ) -> MonitoringCycleRecordResult:
+        if dry_run:
+            return MonitoringCycleRecordResult(False, 0, "dry-run")
+        SQLiteNotificationTemplateStore(self.path)
+        notification_store = SQLiteNotificationJobStore(self.path)
+        model_review_store = SQLiteModelReviewJobStore(self.path)
+        snapshot_states = {
+            snapshot.account_id: snapshot.to_monitor_state()
+            for snapshot in snapshots
+        }
+        delivered = bool(alert_events)
+        alert_source_event = alerts_detected_event(alert_events) if alert_events else None
+        stamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        queued = 0
+        sent_entries: Dict[str, str] = {}
+        with self.connect() as connection:
+            for snapshot in snapshots:
+                insert_domain_event_with_connection(connection, snapshot_collected_event(snapshot))
+            if alert_source_event:
+                insert_domain_event_with_connection(connection, alert_source_event)
+                queued = self.enqueue_alert_notifications_with_connection(
+                    connection,
+                    notification_store,
+                    alert_events,
+                    alert_source_event,
                 )
+                model_review_store.enqueue_from_event_with_connection(connection, alert_source_event)
+                sent_entries = self.mark_sent_with_connection(connection, alert_events, stamp)
+            insert_domain_event_with_connection(
+                connection,
+                monitoring_cycle_completed_event(
+                    list(account_ids or []),
+                    len(snapshots),
+                    len(alert_events),
+                    False,
+                    delivered,
+                ),
+            )
+            for account_id, state in snapshot_states.items():
+                self.upsert_snapshot_state_with_connection(connection, account_id, state, stamp)
+        self.previous.update(snapshot_states)
+        self.sent.update(sent_entries)
+        return MonitoringCycleRecordResult(delivered, queued, "queued=" + str(queued))
+
+    def notification_template_for_connection(self, connection, message_type: str) -> NotificationTemplate:
+        row = connection.execute(
+            """
+            SELECT message_type, template, description, enabled, updated_at
+            FROM notification_templates
+            WHERE message_type = ?
+            """,
+            (str(message_type or "notification"),),
+        ).fetchone()
+        if not row:
+            row = connection.execute(
+                """
+                SELECT message_type, template, description, enabled, updated_at
+                FROM notification_templates
+                WHERE message_type = 'default'
+                """
+            ).fetchone()
+        return template_from_row(row) if row else NotificationTemplate.default("default")
+
+    def enqueue_alert_notifications_with_connection(
+        self,
+        connection,
+        notification_store,
+        events: Iterable[AlertEvent],
+        source_event: DomainEvent,
+    ) -> int:
+        queued = 0
+        for event in events:
+            context = alert_context(event)
+            template = self.notification_template_for_connection(connection, event.rule)
+            message = render_notification(template, context)
+            job = NotificationJob.create(
+                message,
+                account_id=event.account_id,
+                account_label=event.account_label,
+                message_type=event.rule or "alert",
+                source_event_id=source_event.event_id,
+                source_event_name=source_event.name,
+                dedupe_key=":".join(["outbox", source_event.event_id, event.key]),
+                context=context,
+            )
+            if notification_store.enqueue_with_connection(connection, job):
+                queued += 1
+        return queued
 
     def write(self) -> None:
         pass
@@ -1055,27 +1219,11 @@ class SQLiteEventLog(OperationalConnection):
                 self.insert_event_dict(payload)
 
     def insert_event_dict(self, event: Dict[str, object]) -> None:
-        with self.connect() as connection:
-            connection.execute(
-                """
-                INSERT OR IGNORE INTO domain_events (
-                    event_id, name, aggregate_id, occurred_at, correlation_id, payload_json, event_json
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    str(event.get("event_id") or event.get("eventId") or ""),
-                    str(event.get("name") or ""),
-                    str(event.get("aggregate_id") or event.get("aggregateId") or ""),
-                    str(event.get("occurred_at") or event.get("occurredAt") or ""),
-                    str(event.get("correlation_id") or event.get("correlationId") or ""),
-                    json_dumps(event.get("payload") or {}),
-                    json_dumps(event),
-                ),
-            )
+        self.handle(DomainEvent.from_dict(event))
 
     def handle(self, event: DomainEvent) -> None:
-        self.insert_event_dict(event.to_dict())
+        with self.connect() as connection:
+            insert_domain_event_with_connection(connection, event)
 
     def events(self, name: str = "", aggregate_id: str = "", limit: int = 0) -> List[DomainEvent]:
         clauses = []
@@ -1191,24 +1339,31 @@ class SQLiteModelReviewJobStore(OperationalConnection):
         with self.connect() as connection:
             self.upsert_job_with_connection(connection, job)
 
-    def enqueue(self, job: ModelReviewJob) -> bool:
-        with self.connect() as connection:
-            existing = connection.execute("SELECT job_id FROM model_review_jobs WHERE job_id = ?", (job.job_id,)).fetchone()
-            if existing:
-                return False
-            self.upsert_job_with_connection(connection, job)
+    def enqueue_with_connection(self, connection, job: ModelReviewJob) -> bool:
+        existing = connection.execute("SELECT job_id FROM model_review_jobs WHERE job_id = ?", (job.job_id,)).fetchone()
+        if existing:
+            return False
+        self.upsert_job_with_connection(connection, job)
         return True
 
-    def enqueue_from_event(self, event: DomainEvent) -> int:
+    def enqueue(self, job: ModelReviewJob) -> bool:
+        with self.connect() as connection:
+            return self.enqueue_with_connection(connection, job)
+
+    def enqueue_from_event_with_connection(self, connection, event: DomainEvent) -> int:
         if event.name != MONITORING_ALERTS_DETECTED:
             return 0
         count = 0
         for item in event.payload.get("events") or []:
             if not isinstance(item, dict) or item.get("rule") != "monitorDecisionChange":
                 continue
-            if self.enqueue(ModelReviewJob.create(item)):
+            if self.enqueue_with_connection(connection, ModelReviewJob.create(item)):
                 count += 1
         return count
+
+    def enqueue_from_event(self, event: DomainEvent) -> int:
+        with self.connect() as connection:
+            return self.enqueue_from_event_with_connection(connection, event)
 
     def pending(self, limit: int = 1) -> List[ModelReviewJob]:
         with self.connect() as connection:
@@ -1259,6 +1414,10 @@ class SQLiteModelReviewJobStore(OperationalConnection):
 
 
 class SQLiteNotificationJobStore(OperationalConnection):
+    def __init__(self, path: Optional[Path] = None):
+        super().__init__(path)
+        SQLiteNotificationRuleStore(self.path)
+
     def jobs(self) -> List[NotificationJob]:
         with self.connect() as connection:
             rows = connection.execute("SELECT payload_json FROM notification_jobs ORDER BY created_at, job_id").fetchall()
@@ -1345,22 +1504,78 @@ class SQLiteNotificationJobStore(OperationalConnection):
         with self.connect() as connection:
             self.upsert_job_with_connection(connection, job)
 
-    def enqueue(self, job: NotificationJob) -> bool:
+    def rule_for_connection(self, connection, message_type: str) -> NotificationRuleConfig:
+        key = str(message_type or "notification").strip() or "notification"
+        row = connection.execute(
+            """
+            SELECT message_type, enabled, threshold, base_score, low_score_action, conditions_json,
+                similarity_enabled, similarity_window_minutes, similarity_penalty, similarity_bypass_score_delta,
+                similarity_fields_json, updated_at
+            FROM notification_rules
+            WHERE message_type = ?
+            """,
+            (key,),
+        ).fetchone()
+        return rule_from_row(row) if row else default_notification_rule(key)
+
+    def similar_history_with_connection(
+        self,
+        connection,
+        job: NotificationJob,
+        rule: NotificationRuleConfig,
+        fingerprint: str,
+    ):
+        if not rule.similarity_enabled or not int(rule.similarity_window_minutes or 0) or not fingerprint:
+            return 0, 0
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=int(rule.similarity_window_minutes or 0))
+        cutoff_text = cutoff.isoformat().replace("+00:00", "Z")
+        rows = connection.execute(
+            """
+            SELECT payload_json FROM notification_jobs
+            WHERE message_type = ? AND created_at >= ?
+            ORDER BY created_at DESC
+            LIMIT 100
+            """,
+            (job.message_type, cutoff_text),
+        ).fetchall()
+        count = 0
+        previous_score = 0
+        for row in rows:
+            try:
+                previous = NotificationJob.from_dict(json.loads(row["payload_json"]))
+            except json.JSONDecodeError:
+                continue
+            if previous.job_id == job.job_id:
+                continue
+            previous_context = previous.context or {}
+            previous_fingerprint = str(previous_context.get("honeyFingerprint") or notification_fingerprint(previous, rule))
+            if previous_fingerprint != fingerprint:
+                continue
+            count += 1
+            previous_score = max(previous_score, int(previous_context.get("honeyScore") or 0))
+        return count, previous_score
+
+    def evaluate_job_with_connection(self, connection, job: NotificationJob):
+        rule = self.rule_for_connection(connection, job.message_type)
+        decision = evaluate_notification_rule(job, rule)
+        recent_count, previous_score = self.similar_history_with_connection(connection, job, rule, decision.fingerprint)
+        return apply_similarity_rule(decision, rule, recent_count, previous_score)
+
+    def enqueue_with_connection(self, connection, job: NotificationJob) -> bool:
         if not job.text.strip():
             return False
-        with self.connect() as connection:
-            existing = connection.execute("SELECT job_id FROM notification_jobs WHERE job_id = ?", (job.job_id,)).fetchone()
+        existing = connection.execute("SELECT job_id FROM notification_jobs WHERE job_id = ?", (job.job_id,)).fetchone()
+        if existing:
+            return False
+        if job.dedupe_key:
+            existing = connection.execute(
+                "SELECT job_id FROM notification_jobs WHERE dedupe_key = ?",
+                (job.dedupe_key,),
+            ).fetchone()
             if existing:
                 return False
-            if job.dedupe_key:
-                existing = connection.execute(
-                    "SELECT job_id FROM notification_jobs WHERE dedupe_key = ?",
-                    (job.dedupe_key,),
-                ).fetchone()
-                if existing:
-                    return False
 
-        decision = SQLiteNotificationRuleStore(self.path).evaluate_job(job)
+        decision = self.evaluate_job_with_connection(connection, job)
         context = dict(job.context or {})
         context.update(decision.to_context())
         job.context = context
@@ -1368,13 +1583,21 @@ class SQLiteNotificationJobStore(OperationalConnection):
             job.status = "suppressed"
             job.updated_at = utc_now()
             job.last_error = "꿀점수 " + str(decision.score) + "점이 기준 " + str(decision.threshold) + "점보다 낮아 발송하지 않았습니다."
-            with self.connect() as connection:
+            try:
                 self.upsert_job_with_connection(connection, job)
+            except sqlite3.IntegrityError:
+                return False
             return False
 
-        with self.connect() as connection:
+        try:
             self.upsert_job_with_connection(connection, job)
+        except sqlite3.IntegrityError:
+            return False
         return True
+
+    def enqueue(self, job: NotificationJob) -> bool:
+        with self.connect() as connection:
+            return self.enqueue_with_connection(connection, job)
 
     def pending(self, limit: int = 10) -> List[NotificationJob]:
         with self.connect() as connection:

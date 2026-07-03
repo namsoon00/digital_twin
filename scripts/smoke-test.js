@@ -558,6 +558,8 @@ function checkFrontendAdminRender() {
     assertOk(settingsHtml.indexOf("settings-view") >= 0, "설정 화면이 페이지 구조로 렌더링되지 않았습니다.");
     assertOk(code.indexOf("settings-top-button") >= 0, "상단 설정 버튼 전용 스타일이 적용되지 않았습니다.");
     assertOk(code.indexOf("pushState") >= 0 && code.indexOf("popstate") >= 0, "탭 이동이 브라우저 뒤로가기와 동기화되지 않았습니다.");
+    assertOk(code.indexOf("restoreTabBarPosition") >= 0 && code.indexOf("tabBarScrollLeft") >= 0, "하단 탭 위치 복원 로직이 없습니다.");
+    assertOk(styles.indexOf("overscroll-behavior-x: contain") >= 0 && styles.indexOf("scroll-snap-align: center") >= 0, "모바일 하단 탭 스크롤 안정화 규칙이 없습니다.");
     assertOk(code.indexOf("settingsSaving") >= 0 && code.indexOf("로컬 SQLite DB") >= 0, "설정 저장 진행 상태가 렌더링되지 않습니다.");
     assertOk(code.indexOf("new window.WebSocket") >= 0, "프론트가 웹소켓 실시간 연결을 생성하지 않습니다.");
     assertOk(code.indexOf("realtime.status") >= 0, "웹소켓 상태 메시지를 처리하지 않습니다.");

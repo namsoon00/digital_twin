@@ -95,7 +95,7 @@ def default_similarity_enabled(message_type: str) -> bool:
 
 def default_similarity_window_minutes(message_type: str) -> int:
     key = str(message_type or "")
-    if key == "monitorHeartbeat":
+    if key in {"holdingTiming", "monitorHeartbeat"}:
         return 360
     if key in LOW_SIGNAL_MESSAGE_TYPES:
         return 180
@@ -106,7 +106,7 @@ def default_similarity_window_minutes(message_type: str) -> int:
 
 def default_similarity_penalty(message_type: str) -> int:
     key = str(message_type or "")
-    if key == "monitorHeartbeat":
+    if key in {"holdingTiming", "monitorHeartbeat"}:
         return -40
     if key in LOW_SIGNAL_MESSAGE_TYPES:
         return -30

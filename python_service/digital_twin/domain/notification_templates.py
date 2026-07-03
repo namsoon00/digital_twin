@@ -1,6 +1,5 @@
 import html
 import re
-import textwrap
 from dataclasses import asdict, dataclass
 from typing import Dict, List
 
@@ -11,8 +10,6 @@ LEGACY_DEFAULT_TEMPLATE = "{title}\n{lines}"
 PREVIOUS_DEFAULT_TEMPLATE = "{readableMessage}"
 DEFAULT_TEMPLATE = "{telegramMessage}"
 BODY_TEMPLATE = "{body}"
-MESSAGE_DIVIDER = "━━━━━━━━━━"
-MOBILE_WRAP_WIDTH = 24
 DATA_LABEL_PREFIXES = [
     "미장 가격 변동",
     "크립토 변동",
@@ -178,26 +175,14 @@ DEFAULT_NOTIFICATION_TEMPLATES = {
 PLACEHOLDER_PATTERN = re.compile(r"\{([A-Za-z][A-Za-z0-9_]*)\}")
 
 
-def wrap_mobile_text(text: str, width: int = MOBILE_WRAP_WIDTH) -> List[str]:
-    cleaned = str(text or "").strip()
-    if not cleaned:
-        return []
-    return textwrap.wrap(cleaned, width=width, break_long_words=False, break_on_hyphens=False) or [cleaned]
-
-
 def plain_bullet(text: str) -> str:
-    parts = wrap_mobile_text(text)
-    if not parts:
-        return ""
-    return "• " + parts[0] + ("\n  " + "\n  ".join(parts[1:]) if len(parts) > 1 else "")
+    cleaned = str(text or "").strip()
+    return "• " + cleaned if cleaned else ""
 
 
 def html_bullet(text: str) -> str:
-    parts = wrap_mobile_text(text)
-    if not parts:
-        return ""
-    escaped = [html.escape(part, quote=False) for part in parts]
-    return "• " + escaped[0] + ("\n  " + "\n  ".join(escaped[1:]) if len(escaped) > 1 else "")
+    cleaned = str(text or "").strip()
+    return "• " + html.escape(cleaned, quote=False) if cleaned else ""
 
 
 def split_data_line(line: str):
@@ -213,27 +198,43 @@ def split_data_line(line: str):
 
 def plain_data_rows(raw_lines: List[str]) -> str:
     rows: List[str] = []
+    pairs: List[str] = []
     for line in raw_lines:
         label, value = split_data_line(line)
         if label and value:
-            rows.extend(["• " + label, "  " + value])
+            pairs.append(label + ": " + value)
         else:
+            if pairs:
+                rows.extend(grouped_data_rows(pairs))
+                pairs = []
             rows.append(plain_bullet(line))
+    if pairs:
+        rows.extend(grouped_data_rows(pairs))
     return "\n".join(row for row in rows if row)
 
 
 def telegram_data_rows(raw_lines: List[str]) -> str:
     rows: List[str] = []
+    pairs: List[str] = []
     for line in raw_lines:
         label, value = split_data_line(line)
         if label and value:
-            rows.extend([
-                "• <b>" + html.escape(label, quote=False) + "</b>",
-                "  <code>" + html.escape(value, quote=False) + "</code>",
-            ])
+            pairs.append("<b>" + html.escape(label, quote=False) + "</b>: <code>" + html.escape(value, quote=False) + "</code>")
         else:
+            if pairs:
+                rows.extend(grouped_data_rows(pairs))
+                pairs = []
             rows.append(html_bullet(line))
+    if pairs:
+        rows.extend(grouped_data_rows(pairs))
     return "\n".join(row for row in rows if row)
+
+
+def grouped_data_rows(items: List[str], per_row: int = 2) -> List[str]:
+    rows: List[str] = []
+    for index in range(0, len(items), per_row):
+        rows.append("• " + ", ".join(items[index:index + per_row]))
+    return rows
 
 
 @dataclass
@@ -285,28 +286,20 @@ def alert_context(event: AlertEvent) -> Dict[str, object]:
     data_rows = plain_data_rows(raw_lines)
     data_block = ("데이터\n" + data_rows) if data_rows else ""
     readable_parts = [
-        MESSAGE_DIVIDER,
-        status_headline,
-        title_headline,
+        headline,
         target_value,
-        MESSAGE_DIVIDER,
         "",
         trigger_block,
     ]
     if data_rows:
         readable_parts.extend(["", data_block])
     readable_message = "\n".join(part for part in readable_parts if str(part).strip() or part == "").strip()
-    escaped_status = html.escape(status_headline, quote=False)
-    escaped_title = html.escape(title_headline, quote=False)
     escaped_target = html.escape(target_value, quote=False)
     telegram_trigger_bullet = html_bullet(trigger_summary)
     telegram_data_lines = telegram_data_rows(raw_lines)
     telegram_parts = [
-        MESSAGE_DIVIDER,
-        ("<b>" + escaped_status + "</b>") if escaped_status else "",
-        ("<b>" + escaped_title + "</b>") if escaped_title else "",
+        "<b>" + html.escape(headline, quote=False) + "</b>",
         ("<code>" + escaped_target + "</code>") if escaped_target else "",
-        MESSAGE_DIVIDER,
         "",
         "<b>조건</b>",
         telegram_trigger_bullet,
@@ -334,7 +327,7 @@ def alert_context(event: AlertEvent) -> Dict[str, object]:
         "targetLine": target_line,
         "triggerBlock": trigger_block,
         "dataBlock": data_block,
-        "divider": MESSAGE_DIVIDER,
+        "divider": "",
         "telegramMessage": telegram_message,
         "telegramDataLines": telegram_data_lines,
         "symbolLine": symbol_line,

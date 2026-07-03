@@ -1048,16 +1048,15 @@ class PythonServiceTests(unittest.TestCase):
         message = templates.render(event.rule, alert_context(event))
 
         self.assertIn("Apple", message)
-        self.assertIn("━━━━━━━━", message)
-        self.assertIn("<b>[관찰]</b>", message)
-        self.assertIn("<b>이동평균 변화</b>", message)
+        self.assertNotIn("━━━━━━━━", message)
+        self.assertIn("<b>[관찰] 이동평균 변화</b>", message)
         self.assertIn("<code>Apple / AAPL</code>", message)
         self.assertIn("<b>조건</b>", message)
         self.assertIn("<b>데이터</b>", message)
-        self.assertIn("• <b>신호</b>\n  <code>20일선 상향 돌파</code>", message)
+        self.assertIn("• <b>신호</b>: <code>20일선 상향 돌파</code>", message)
         self.assertNotIn("\n\n\n", message)
 
-    def test_external_equity_alert_uses_mobile_indented_rows(self):
+    def test_external_equity_alert_uses_colon_pairs_without_divider(self):
         db_path = Path(self.temp.name) / "service.db"
         templates = SQLiteNotificationTemplateStore(db_path)
         event = AlertEvent(
@@ -1079,13 +1078,11 @@ class PythonServiceTests(unittest.TestCase):
 
         message = templates.render(event.rule, alert_context(event))
 
-        self.assertIn("<b>[주의]</b>\n<b>미장 가격/거래량</b>\n<code>TSLA</code>", message)
-        self.assertIn("━━━━━━━━━━", message)
-        self.assertNotIn("━━━━━━━━━━━━━━━━━━━━", message)
-        self.assertIn("• <b>미장 가격 변동</b>\n  <code>-7.5%</code>", message)
-        self.assertIn("• <b>가격</b>\n  <code>$393.45</code>", message)
-        self.assertIn("• <b>거래량</b>\n  <code>71,917,610</code>", message)
-        self.assertIn("• <b>출처</b>\n  <code>Alpha Vantage</code>", message)
+        self.assertIn("<b>[주의] 미장 가격/거래량</b>\n<code>TSLA</code>", message)
+        self.assertNotIn("━━━━━━━━", message)
+        self.assertIn("• <b>미장 가격 변동</b>: <code>-7.5%</code>, <b>가격</b>: <code>$393.45</code>", message)
+        self.assertIn("• <b>거래량</b>: <code>71,917,610</code>, <b>기준일</b>: <code>2026-07-02</code>", message)
+        self.assertIn("• <b>출처</b>: <code>Alpha Vantage</code>", message)
 
     def test_notification_template_seed_migrates_previous_readable_default(self):
         db_path = Path(self.temp.name) / "service.db"

@@ -1025,6 +1025,13 @@
     return ["default", "modelReview", "workHandoff", "notification"].indexOf(String(messageType || "")) < 0;
   }
 
+  function defaultNotificationRuleThreshold(messageType) {
+    var type = String(messageType || "");
+    if (["default", "modelReview", "workHandoff", "notification"].indexOf(type) >= 0) return 20;
+    if (type === "externalEquityMove") return 60;
+    return 45;
+  }
+
   function defaultNotificationRuleSimilarityWindow(messageType) {
     var type = String(messageType || "");
     if (["holdingTiming", "monitorHeartbeat", "externalEquityMove", "externalCryptoMove"].indexOf(type) >= 0) return 360;
@@ -1106,11 +1113,10 @@
 
   function defaultNotificationRule(messageType) {
     var type = String(messageType || "notification").trim() || "notification";
-    var systemTypes = ["default", "modelReview", "workHandoff", "notification"];
     return {
       messageType: type,
       enabled: true,
-      threshold: systemTypes.indexOf(type) >= 0 ? 20 : 45,
+      threshold: defaultNotificationRuleThreshold(type),
       baseScore: defaultNotificationRuleBaseScore(type),
       lowScoreAction: "suppress",
       conditions: defaultNotificationRuleConditions().map(function (condition) {
@@ -1328,7 +1334,7 @@
 
   function normalizeNotificationRule(rule) {
     var normalized = Object.assign(defaultNotificationRule(rule && rule.messageType), rule || {});
-    normalized.threshold = clampInteger(normalized.threshold, 0, 100, 45);
+    normalized.threshold = clampInteger(normalized.threshold, 0, 100, defaultNotificationRuleThreshold(normalized.messageType));
     normalized.baseScore = clampInteger(normalized.baseScore, 0, 100, defaultNotificationRuleBaseScore(normalized.messageType));
     normalized.enabled = normalized.enabled !== false;
     normalized.lowScoreAction = normalized.lowScoreAction || "suppress";
@@ -1391,7 +1397,7 @@
     if (field === "enabled") {
       rule.enabled = Boolean(value);
     } else if (field === "threshold") {
-      rule.threshold = clampInteger(value, 0, 100, 45);
+      rule.threshold = clampInteger(value, 0, 100, defaultNotificationRuleThreshold(messageType));
     } else if (field === "baseScore") {
       rule.baseScore = clampInteger(value, 0, 100, defaultNotificationRuleBaseScore(messageType));
     } else if (field === "lowScoreAction") {

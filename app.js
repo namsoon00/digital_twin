@@ -350,6 +350,7 @@
     feedError: "",
     activeTab: initialTab(),
     previousTab: "",
+    tabBarScrollLeft: 0,
     settings: loadSettings(),
     snackbar: null,
     realtime: {
@@ -766,10 +767,44 @@
     window.history[method]({ tab: normalized }, "", tabUrl(normalized));
   }
 
+  function currentTabBar() {
+    return app && app.querySelector ? app.querySelector(".tab-bar") : null;
+  }
+
+  function rememberTabBarPosition() {
+    var tabBar = currentTabBar();
+    if (!tabBar) return;
+    state.tabBarScrollLeft = Number(tabBar.scrollLeft || 0);
+  }
+
+  function restoreTabBarPosition() {
+    var tabBar = currentTabBar();
+    if (!tabBar || tabBar.scrollWidth <= tabBar.clientWidth) return;
+    var maxScroll = Math.max(0, tabBar.scrollWidth - tabBar.clientWidth);
+    var targetLeft = Math.max(0, Math.min(Number(state.tabBarScrollLeft || 0), maxScroll));
+    var active = tabBar.querySelector("[aria-current='page']") || tabBar.querySelector(".active");
+    tabBar.scrollLeft = targetLeft;
+    if (active) {
+      var padding = 8;
+      var activeLeft = active.offsetLeft;
+      var activeRight = activeLeft + active.offsetWidth;
+      var visibleLeft = tabBar.scrollLeft;
+      var visibleRight = visibleLeft + tabBar.clientWidth;
+      if (activeLeft < visibleLeft + padding) {
+        targetLeft = Math.max(0, activeLeft - padding);
+      } else if (activeRight > visibleRight - padding) {
+        targetLeft = Math.min(maxScroll, activeRight - tabBar.clientWidth + padding);
+      }
+      tabBar.scrollLeft = targetLeft;
+    }
+    state.tabBarScrollLeft = Number(tabBar.scrollLeft || 0);
+  }
+
   function navigateToTab(tab, options) {
     options = options || {};
     var nextTab = normalizeTabId(tab);
     if (nextTab === state.activeTab) return;
+    rememberTabBarPosition();
     var priorTab = state.activeTab;
     state.activeTab = nextTab;
     if (!options.skipPrevious) state.previousTab = priorTab;
@@ -780,6 +815,7 @@
   function syncTabFromLocation() {
     var nextTab = initialTab();
     if (nextTab === state.activeTab) return;
+    rememberTabBarPosition();
     state.previousTab = state.activeTab;
     state.activeTab = nextTab;
     render();
@@ -4735,6 +4771,7 @@
     }
     app.innerHTML = renderDashboard(state.snapshot);
     bindActions();
+    restoreTabBarPosition();
     if (state.activeTab === "feed" && !state.feed && !state.feedLoading) {
       loadFeed(false);
     }

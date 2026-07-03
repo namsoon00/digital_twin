@@ -1136,6 +1136,39 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(-40, jobs[1].context["honeySimilarityPenalty"])
         self.assertLess(jobs[1].context["honeyScore"], jobs[1].context["honeyThreshold"])
 
+    def test_external_move_rules_suppress_repeated_market_noise(self):
+        db_path = Path(self.temp.name) / "service.db"
+        queue = SQLiteNotificationJobStore(db_path)
+        first = AlertEvent(
+            "main",
+            "메인",
+            "WATCH",
+            "externalEquityMove",
+            "main:alpha:MSTR:1",
+            "MSTR",
+            ["미장 가격 변동 +7.9%", "가격 $100.77", "거래량 34,757,614", "출처 Alpha Vantage"],
+            "MSTR",
+        )
+        second = AlertEvent(
+            "main",
+            "메인",
+            "WATCH",
+            "externalEquityMove",
+            "main:alpha:MSTR:2",
+            "MSTR",
+            ["미장 가격 변동 +7.9%", "가격 $100.77", "거래량 34,757,614", "출처 Alpha Vantage"],
+            "MSTR",
+        )
+
+        self.assertEqual(1, send_events([first], queue=queue).queued)
+        self.assertEqual(0, send_events([second], queue=queue).queued)
+
+        jobs = queue.jobs()
+        self.assertEqual(["pending", "suppressed"], [job.status for job in jobs])
+        self.assertEqual(-55, jobs[1].context["honeySimilarityPenalty"])
+        self.assertEqual(360, jobs[1].context["honeySimilarityWindowMinutes"])
+        self.assertLess(jobs[1].context["honeyScore"], jobs[1].context["honeyThreshold"])
+
     def test_notification_queue_runner_delivers_pending_messages_in_order(self):
         registry = AccountRegistry()
         registry.upsert(AccountConfig("main", "메인", "toss", "https://example.test", "", "", "", ["AAPL"]))

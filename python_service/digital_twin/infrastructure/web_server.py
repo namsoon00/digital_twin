@@ -500,6 +500,11 @@ def notification_job_public_payload(job: NotificationJob) -> Dict[str, object]:
         "marketHoursOpenTime": context.get("marketHoursOpenTime") or "",
         "marketHoursCloseTime": context.get("marketHoursCloseTime") or "",
         "marketHoursTimezone": context.get("marketHoursTimezone") or "",
+        "quietHoursSuppressed": bool(context.get("quietHoursSuppressed")),
+        "quietHoursReason": context.get("quietHoursReason") or "",
+        "quietHoursStart": context.get("quietHoursStart") or "",
+        "quietHoursEnd": context.get("quietHoursEnd") or "",
+        "quietHoursTimezone": context.get("quietHoursTimezone") or "",
     }
 
 

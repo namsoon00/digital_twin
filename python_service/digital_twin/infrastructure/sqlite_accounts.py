@@ -41,10 +41,24 @@ class AccountRegistry:
                     provider TEXT NOT NULL DEFAULT 'toss',
                     enabled INTEGER NOT NULL DEFAULT 1,
                     watchlist_symbols TEXT NOT NULL DEFAULT '',
+                    quiet_hours_enabled INTEGER NOT NULL DEFAULT 1,
+                    quiet_hours_start TEXT NOT NULL DEFAULT '22:00',
+                    quiet_hours_end TEXT NOT NULL DEFAULT '05:00',
+                    quiet_hours_timezone TEXT NOT NULL DEFAULT 'Asia/Seoul',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 )
             """)
+            self.ensure_columns(
+                connection,
+                "service_accounts",
+                {
+                    "quiet_hours_enabled": "INTEGER NOT NULL DEFAULT 1",
+                    "quiet_hours_start": "TEXT NOT NULL DEFAULT '22:00'",
+                    "quiet_hours_end": "TEXT NOT NULL DEFAULT '05:00'",
+                    "quiet_hours_timezone": "TEXT NOT NULL DEFAULT 'Asia/Seoul'",
+                },
+            )
             connection.execute("""
                 CREATE TABLE IF NOT EXISTS toss_credentials (
                     account_id TEXT PRIMARY KEY,
@@ -81,6 +95,15 @@ class AccountRegistry:
             """)
             connection.execute("CREATE INDEX IF NOT EXISTS idx_domain_events_name_time ON domain_events(name, occurred_at)")
 
+    def ensure_columns(self, connection, table: str, columns) -> None:
+        existing = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(" + table + ")").fetchall()
+        }
+        for name, definition in columns.items():
+            if name not in existing:
+                connection.execute("ALTER TABLE " + table + " ADD COLUMN " + name + " " + definition)
+
     def rows_count(self) -> int:
         with self.connect() as connection:
             row = connection.execute("SELECT COUNT(*) AS count FROM service_accounts").fetchone()
@@ -113,6 +136,10 @@ class AccountRegistry:
             telegram_chat_id=row["chat_id"] or self.settings.get("telegramChatId", ""),
             notify_link_url=row["link_url"] or self.settings.get("notifyLinkUrl", ""),
             enabled=bool(row["enabled"]),
+            quiet_hours_enabled=bool(row["quiet_hours_enabled"]),
+            quiet_hours_start=row["quiet_hours_start"] or "22:00",
+            quiet_hours_end=row["quiet_hours_end"] or "05:00",
+            quiet_hours_timezone=row["quiet_hours_timezone"] or "Asia/Seoul",
         )
 
     def select_accounts(self, enabled_only: bool) -> List[AccountConfig]:
@@ -123,6 +150,10 @@ class AccountRegistry:
                 a.provider,
                 a.enabled,
                 a.watchlist_symbols,
+                a.quiet_hours_enabled,
+                a.quiet_hours_start,
+                a.quiet_hours_end,
+                a.quiet_hours_timezone,
                 COALESCE(t.base_url, '') AS base_url,
                 COALESCE(t.client_id, '') AS client_id,
                 COALESCE(t.client_secret, '') AS client_secret,
@@ -190,13 +221,21 @@ class AccountRegistry:
         existing = connection.execute("SELECT created_at FROM service_accounts WHERE id = ?", (account.account_id,)).fetchone()
         connection.execute(
             """
-            INSERT INTO service_accounts (id, label, provider, enabled, watchlist_symbols, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO service_accounts (
+                id, label, provider, enabled, watchlist_symbols,
+                quiet_hours_enabled, quiet_hours_start, quiet_hours_end, quiet_hours_timezone,
+                created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 label = excluded.label,
                 provider = excluded.provider,
                 enabled = excluded.enabled,
                 watchlist_symbols = excluded.watchlist_symbols,
+                quiet_hours_enabled = excluded.quiet_hours_enabled,
+                quiet_hours_start = excluded.quiet_hours_start,
+                quiet_hours_end = excluded.quiet_hours_end,
+                quiet_hours_timezone = excluded.quiet_hours_timezone,
                 updated_at = excluded.updated_at
             """,
             (
@@ -205,6 +244,10 @@ class AccountRegistry:
                 account.provider,
                 1 if account.enabled else 0,
                 ",".join(account.watchlist_symbols),
+                1 if account.quiet_hours_enabled else 0,
+                account.quiet_hours_start,
+                account.quiet_hours_end,
+                account.quiet_hours_timezone,
                 existing["created_at"] if existing else stamp,
                 stamp,
             ),

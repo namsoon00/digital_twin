@@ -1,5 +1,7 @@
 import time
+from datetime import datetime
 from typing import Callable, Dict
+from zoneinfo import ZoneInfo
 
 from ..domain.notifications import NotificationJob
 
@@ -13,6 +15,7 @@ class NotificationQueueRunner:
         dry_run: bool = False,
         send_gap_seconds: float = 0.0,
         template_renderer: Callable = None,
+        now_provider: Callable = None,
     ):
         self.queue = queue
         self.account_repository = account_repository
@@ -20,6 +23,7 @@ class NotificationQueueRunner:
         self.dry_run = dry_run
         self.send_gap_seconds = max(0.0, float(send_gap_seconds or 0))
         self.template_renderer = template_renderer
+        self.now_provider = now_provider or (lambda: datetime.now(ZoneInfo("UTC")))
 
     def account_map(self) -> Dict[str, object]:
         return {account.account_id: account for account in self.account_repository.load_all()}
@@ -43,6 +47,11 @@ class NotificationQueueRunner:
                 print(message)
                 processed += 1
                 continue
+            account = accounts.get(job.account_id)
+            if account and account.quiet_hours_active(self.now_provider(), job.message_type):
+                self.mark_quiet_hours_suppressed(job, account)
+                processed += 1
+                continue
             self.queue.mark_processing(job)
             try:
                 self.deliver(job, accounts, message)
@@ -64,6 +73,22 @@ class NotificationQueueRunner:
         delivery = notifier.send(message)
         if not delivery.delivered:
             raise RuntimeError(delivery.reason or "notification delivery failed")
+
+    def mark_quiet_hours_suppressed(self, job: NotificationJob, account) -> None:
+        reason = account.quiet_hours_reason()
+        context = dict(job.context or {})
+        context.update({
+            "quietHoursSuppressed": True,
+            "quietHoursReason": reason,
+            "quietHoursStart": account.quiet_hours_start,
+            "quietHoursEnd": account.quiet_hours_end,
+            "quietHoursTimezone": account.quiet_hours_timezone,
+        })
+        job.context = context
+        if hasattr(self.queue, "mark_suppressed"):
+            self.queue.mark_suppressed(job, reason)
+        else:
+            self.queue.mark_failed(job, reason)
 
 
 class NotificationQueueScheduler:

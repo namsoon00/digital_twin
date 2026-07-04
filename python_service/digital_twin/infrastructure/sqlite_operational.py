@@ -1807,6 +1807,12 @@ class SQLiteNotificationJobStore(OperationalConnection):
         job.updated_at = utc_now()
         self.update(job)
 
+    def mark_suppressed(self, job: NotificationJob, reason: str) -> None:
+        job.status = "suppressed"
+        job.last_error = str(reason or "알림 정책으로 발송하지 않았습니다.")
+        job.updated_at = utc_now()
+        self.update(job)
+
     def summary(self) -> Dict[str, int]:
         with self.connect() as connection:
             rows = connection.execute("SELECT status, COUNT(*) AS count FROM notification_jobs GROUP BY status").fetchall()

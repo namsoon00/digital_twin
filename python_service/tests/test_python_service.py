@@ -79,6 +79,35 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(["main", "ira"], [item.account_id for item in accounts])
         self.assertTrue((Path(self.temp.name) / "service.db").exists())
         self.assertTrue(accounts[0].client_id)
+        self.assertTrue(accounts[0].quiet_hours_enabled)
+        self.assertEqual("22:00", accounts[0].quiet_hours_start)
+        self.assertEqual("05:00", accounts[0].quiet_hours_end)
+
+    def test_account_registry_persists_quiet_hours_for_many_accounts(self):
+        registry = AccountRegistry()
+        for index in range(60):
+            registry.upsert(AccountConfig(
+                "acct" + str(index).zfill(2),
+                "계정" + str(index),
+                "toss",
+                "https://example.test",
+                "id" + str(index),
+                "secret" + str(index),
+                str(index),
+                ["AAPL"],
+                quiet_hours_enabled=index % 2 == 0,
+                quiet_hours_start="21:30",
+                quiet_hours_end="06:15",
+                quiet_hours_timezone="Asia/Seoul",
+            ))
+
+        accounts = registry.load_all()
+
+        self.assertEqual(60, len(accounts))
+        self.assertEqual(["acct00", "acct01", "acct02"], [item.account_id for item in accounts[:3]])
+        self.assertFalse(accounts[1].quiet_hours_enabled)
+        self.assertEqual("21:30", accounts[0].quiet_hours_start)
+        self.assertEqual("06:15", accounts[0].quiet_hours_end)
 
     def test_toss_account_selection_uses_configured_account_seq(self):
         accounts = [
@@ -335,6 +364,9 @@ class PythonServiceTests(unittest.TestCase):
             notify_provider="telegram",
             telegram_bot_token="token",
             telegram_chat_id="chat",
+            quiet_hours_enabled=False,
+            quiet_hours_start="23:00",
+            quiet_hours_end="06:00",
         )
         registry.upsert(existing)
         updated = AccountConfig.from_dict({"id": "main", "label": "메인 수정", "watchlistSymbols": "NVDA"}, registry.settings)
@@ -361,6 +393,9 @@ class PythonServiceTests(unittest.TestCase):
             notify_provider="telegram",
             telegram_bot_token="token",
             telegram_chat_id="chat",
+            quiet_hours_enabled=False,
+            quiet_hours_start="23:00",
+            quiet_hours_end="06:00",
         )
         service.save(existing)
 
@@ -369,7 +404,11 @@ class PythonServiceTests(unittest.TestCase):
 
         self.assertEqual("secret1", updated.client_secret)
         self.assertEqual("token", updated.telegram_bot_token)
+        self.assertFalse(updated.quiet_hours_enabled)
+        self.assertEqual("23:00", updated.quiet_hours_start)
+        self.assertEqual("06:00", updated.quiet_hours_end)
         self.assertEqual(["NVDA"], masked["watchlistSymbols"])
+        self.assertFalse(masked["quietHoursEnabled"])
         self.assertTrue(masked["clientSecret"])
         self.assertEqual([ACCOUNT_SAVED, ACCOUNT_SAVED], [event.name for event in event_bus.published])
         self.assertFalse(event_bus.published[-1].payload["account"]["clientSecret"] == "secret1")
@@ -1900,13 +1939,69 @@ class PythonServiceTests(unittest.TestCase):
                 sent.append(message)
                 return SimpleNamespace(delivered=True, reason="")
 
-        runner = NotificationQueueRunner(queue, registry, lambda _account: FakeNotifier())
+        runner = NotificationQueueRunner(
+            queue,
+            registry,
+            lambda _account: FakeNotifier(),
+            now_provider=lambda: datetime(2026, 7, 4, 3, 0, tzinfo=timezone.utc),
+        )
 
         processed = runner.run_once(limit=10)
 
         self.assertEqual(2, processed)
         self.assertEqual(["첫 번째", "두 번째"], sent)
         self.assertEqual({"done": 2}, queue.summary())
+
+    def test_notification_queue_runner_suppresses_account_quiet_hours(self):
+        registry = AccountRegistry()
+        registry.upsert(AccountConfig("main", "메인", "toss", "https://example.test", "", "", "", ["AAPL"]))
+        queue = SQLiteNotificationJobStore(Path(self.temp.name) / "service.db")
+        queue.enqueue(NotificationJob.create("밤 알림", account_id="main", account_label="메인", message_type="notification"))
+        sent = []
+
+        class FakeNotifier:
+            def send(self, message):
+                sent.append(message)
+                return SimpleNamespace(delivered=True, reason="")
+
+        runner = NotificationQueueRunner(
+            queue,
+            registry,
+            lambda _account: FakeNotifier(),
+            now_provider=lambda: datetime(2026, 7, 4, 14, 30, tzinfo=timezone.utc),
+        )
+
+        processed = runner.run_once(limit=10)
+
+        self.assertEqual(1, processed)
+        self.assertEqual([], sent)
+        self.assertEqual({"suppressed": 1}, queue.summary())
+        jobs = queue.jobs()
+        self.assertTrue(jobs[0].context["quietHoursSuppressed"])
+        self.assertIn("22:00-05:00", jobs[0].last_error)
+
+    def test_notification_queue_runner_bypasses_quiet_hours_for_work_handoff(self):
+        registry = AccountRegistry()
+        registry.upsert(AccountConfig("main", "메인", "toss", "https://example.test", "", "", "", ["AAPL"]))
+        queue = SQLiteNotificationJobStore(Path(self.temp.name) / "service.db")
+        queue.enqueue(NotificationJob.create("작업 완료", account_id="main", account_label="메인", message_type="workHandoff"))
+        sent = []
+
+        class FakeNotifier:
+            def send(self, message):
+                sent.append(message)
+                return SimpleNamespace(delivered=True, reason="")
+
+        runner = NotificationQueueRunner(
+            queue,
+            registry,
+            lambda _account: FakeNotifier(),
+            now_provider=lambda: datetime(2026, 7, 4, 14, 30, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(1, runner.run_once(limit=10))
+        self.assertEqual(["작업 완료"], sent)
+        self.assertEqual({"done": 1}, queue.summary())
 
     def test_notification_templates_render_pending_jobs_at_delivery_time(self):
         registry = AccountRegistry()
@@ -1943,6 +2038,7 @@ class PythonServiceTests(unittest.TestCase):
             registry,
             lambda _account: FakeNotifier(),
             template_renderer=templates.render_job,
+            now_provider=lambda: datetime(2026, 7, 4, 3, 0, tzinfo=timezone.utc),
         )
 
         self.assertEqual(1, runner.run_once(limit=10))

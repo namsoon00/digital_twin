@@ -64,4 +64,12 @@ class AccountApplicationService:
             account.telegram_bot_token = existing.telegram_bot_token
         if missing("telegramChatId", "telegram_chat_id"):
             account.telegram_chat_id = existing.telegram_chat_id
+        if missing("quietHoursEnabled", "quiet_hours_enabled"):
+            account.quiet_hours_enabled = existing.quiet_hours_enabled
+        if missing("quietHoursStart", "quiet_hours_start"):
+            account.quiet_hours_start = existing.quiet_hours_start
+        if missing("quietHoursEnd", "quiet_hours_end"):
+            account.quiet_hours_end = existing.quiet_hours_end
+        if missing("quietHoursTimezone", "quiet_hours_timezone"):
+            account.quiet_hours_timezone = existing.quiet_hours_timezone
         return account

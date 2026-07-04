@@ -23,6 +23,42 @@ def http_json(method: str, url: str, headers: Dict[str, str], body: bytes = None
         return json.loads(raw) if raw else {}
 
 
+def http_error_text(error: Exception) -> str:
+    if isinstance(error, urllib.error.HTTPError):
+        reason = str(error.reason or "").strip()
+        return "HTTP " + str(error.code) + (" " + reason if reason else "")
+    if isinstance(error, urllib.error.URLError):
+        return "URL error " + str(error.reason or error)[:120]
+    return str(error or type(error).__name__)[:120]
+
+
+def retryable_http_error(error: Exception) -> bool:
+    if isinstance(error, urllib.error.HTTPError):
+        return int(error.code or 0) in {401, 408, 409, 425, 429, 500, 502, 503, 504}
+    return isinstance(error, (urllib.error.URLError, TimeoutError, OSError))
+
+
+def toss_json(
+    stage: str,
+    method: str,
+    url: str,
+    headers: Dict[str, str],
+    body: bytes = None,
+    timeout: int = 12,
+    attempts: int = 2,
+) -> Dict[str, object]:
+    last_error: Exception = RuntimeError("unknown error")
+    for attempt in range(max(1, attempts)):
+        try:
+            return http_json(method, url, headers, body=body, timeout=timeout)
+        except Exception as error:  # noqa: BLE001 - adapter normalizes vendor failures.
+            last_error = error
+            if attempt + 1 >= max(1, attempts) or not retryable_http_error(error):
+                break
+            time.sleep(0.35 * (attempt + 1))
+    raise RuntimeError("Toss " + stage + " 단계 실패 · " + http_error_text(last_error))
+
+
 def form_body(payload: Dict[str, str]) -> bytes:
     return urllib.parse.urlencode(payload).encode("utf-8")
 
@@ -263,7 +299,8 @@ class TossProvider:
     def fetch_access_token(self) -> str:
         if not self.account.client_id or not self.account.client_secret:
             raise RuntimeError("토스 credentials 미설정")
-        token_payload = http_json(
+        token_payload = toss_json(
+            "token",
             "POST",
             self.base_url + "/oauth2/token",
             {"Content-Type": "application/x-www-form-urlencoded"},
@@ -283,7 +320,7 @@ class TossProvider:
             return "demo", "토스 credentials 미설정", demo_positions(), 1250000.0, "KRW", []
         try:
             token = self.fetch_access_token()
-            accounts_payload = http_json("GET", self.base_url + "/api/v1/accounts", {"Authorization": "Bearer " + token})
+            accounts_payload = toss_json("accounts", "GET", self.base_url + "/api/v1/accounts", {"Authorization": "Bearer " + token})
             accounts = normalize_accounts(accounts_payload)
             selected = select_account(accounts, self.account.account_seq)
             account_seq = self.account.account_seq or str(selected.get("accountSeq") or selected.get("id") or "")
@@ -295,7 +332,8 @@ class TossProvider:
             if buying_power:
                 account_cash = buying_power
                 account_currency = "KRW"
-            holdings_payload = http_json(
+            holdings_payload = toss_json(
+                "holdings",
                 "GET",
                 self.base_url + "/api/v1/holdings",
                 {"Authorization": "Bearer " + token, "X-Tossinvest-Account": account_seq},
@@ -314,7 +352,8 @@ class TossProvider:
         for currency in ["KRW", "USD"]:
             try:
                 query = urllib.parse.urlencode({"currency": currency})
-                payload = http_json(
+                payload = toss_json(
+                    "buying-power",
                     "GET",
                     self.base_url + "/api/v1/buying-power?" + query,
                     {"Authorization": "Bearer " + token, "X-Tossinvest-Account": account_seq},
@@ -344,7 +383,8 @@ class TossProvider:
             if not chunk:
                 continue
             query = urllib.parse.urlencode({"symbols": ",".join(chunk)})
-            payload = http_json(
+            payload = toss_json(
+                "prices",
                 "GET",
                 self.base_url + "/api/v1/prices?" + query,
                 {"Authorization": "Bearer " + token},
@@ -363,7 +403,8 @@ class TossProvider:
             "count": "200",
             "adjusted": "true",
         })
-        payload = http_json(
+        payload = toss_json(
+            "candles",
             "GET",
             self.base_url + "/api/v1/candles?" + query,
             {"Authorization": "Bearer " + token},

@@ -215,6 +215,51 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("cached", tsla.data_quality)
         self.assertEqual("마지막 저장 시세", tsla.quote_status)
 
+    def test_toss_retries_transient_accounts_unauthorized(self):
+        account = AccountConfig("main", "메인", "toss", "https://example.test", "id", "secret", "", [])
+        account_calls = []
+
+        def fake_http_json(method, url, headers, body=None, timeout=12):
+            path = urllib.parse.urlparse(url).path
+            if path == "/oauth2/token":
+                return {"access_token": "token"}
+            if path == "/api/v1/accounts":
+                account_calls.append(url)
+                if len(account_calls) == 1:
+                    raise urllib.error.HTTPError(url, 401, "Unauthorized", {}, None)
+                return {"result": [{"accountSeq": "1", "currency": "KRW", "orderableAmount": "1000"}]}
+            if path == "/api/v1/buying-power":
+                return {"result": {"cashBuyingPower": "0"}}
+            if path == "/api/v1/holdings":
+                return {"result": {"holdings": []}}
+            return {}
+
+        provider = TossProvider(account, quote_cache=SQLiteMarketQuoteCache(Path(self.temp.name) / "service.db"))
+        with mock.patch("digital_twin.infrastructure.toss_snapshots.http_json", side_effect=fake_http_json), \
+                mock.patch("digital_twin.infrastructure.toss_snapshots.time.sleep", return_value=None):
+            mode, status, positions, _, _, _ = provider.fetch_positions()
+
+        self.assertEqual("live", mode)
+        self.assertEqual("토스 계좌 동기화", status)
+        self.assertEqual([], positions)
+        self.assertEqual(2, len(account_calls))
+
+    def test_toss_failure_message_includes_stage_without_url(self):
+        account = AccountConfig("main", "메인", "toss", "https://example.test", "id", "secret", "", [])
+
+        def fake_http_json(method, url, headers, body=None, timeout=12):
+            raise urllib.error.HTTPError(url, 401, "Unauthorized", {}, None)
+
+        provider = TossProvider(account, quote_cache=SQLiteMarketQuoteCache(Path(self.temp.name) / "service.db"))
+        with mock.patch("digital_twin.infrastructure.toss_snapshots.http_json", side_effect=fake_http_json), \
+                mock.patch("digital_twin.infrastructure.toss_snapshots.time.sleep", return_value=None):
+            mode, status, _, _, _, _ = provider.fetch_positions()
+
+        self.assertEqual("demo", mode)
+        self.assertIn("Toss token 단계 실패", status)
+        self.assertIn("HTTP 401 Unauthorized", status)
+        self.assertNotIn("https://example.test", status)
+
     def test_toss_price_normalizer_accepts_official_result_shape(self):
         items = normalize_price_items({"result": [{"symbol": "AAPL", "lastPrice": "185.70", "currency": "USD"}]})
 
@@ -1108,6 +1153,100 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(-5.4, signals["cryptoMarkets"]["bitcoin"]["change24h"])
         self.assertEqual(4.35, signals["macro"]["series"]["DGS10"]["value"])
         self.assertEqual("20260701000001", signals["dartDisclosures"]["005930"]["receiptNo"])
+
+    def test_external_signal_provider_rate_limits_repeated_targets(self):
+        calls = []
+
+        def fake_fetch(url, headers=None):
+            calls.append(url)
+            return {"Global Quote": {
+                "05. price": "130.25",
+                "06. volume": "58000000",
+                "07. latest trading day": "2026-07-01",
+                "09. change": "5.25",
+                "10. change percent": "4.2%",
+            }}
+
+        provider = ExternalSignalProvider(
+            settings={
+                "alphaVantageApiKey": "alpha-key",
+                "externalApiRetryAttempts": "1",
+                "externalApiRateLimitSeconds": "3600",
+                "externalApiCircuitFailures": "2",
+                "externalApiCircuitCooldownMinutes": "30",
+            },
+            cache=SQLiteExternalSignalCache(Path(self.temp.name) / "service.db"),
+            fetch_json=fake_fetch,
+            sleep=lambda _: None,
+        )
+        positions = [normalize_position({"symbol": "AAPL", "market": "US", "currency": "USD"})]
+        first = {"equityQuotes": {}, "statuses": []}
+        second = {"equityQuotes": {}, "statuses": []}
+
+        provider.add_alpha_vantage(first, positions)
+        provider.add_alpha_vantage(second, positions)
+
+        self.assertEqual(1, len(calls))
+        self.assertEqual(130.25, first["equityQuotes"]["AAPL"]["price"])
+        self.assertTrue(any("local rate limit" in item["message"] for item in second["statuses"]))
+
+    def test_external_signal_provider_opens_circuit_after_repeated_failures(self):
+        calls = []
+
+        def fake_fetch(url, headers=None):
+            calls.append(url)
+            raise urllib.error.URLError("temporary outage")
+
+        provider = ExternalSignalProvider(
+            settings={
+                "alphaVantageApiKey": "alpha-key",
+                "externalApiRetryAttempts": "1",
+                "externalApiRateLimitSeconds": "0",
+                "externalApiCircuitFailures": "2",
+                "externalApiCircuitCooldownMinutes": "30",
+            },
+            cache=SQLiteExternalSignalCache(Path(self.temp.name) / "service.db"),
+            fetch_json=fake_fetch,
+            sleep=lambda _: None,
+        )
+        positions = [normalize_position({"symbol": "AAPL", "market": "US", "currency": "USD"})]
+
+        for _ in range(2):
+            provider.add_alpha_vantage({"equityQuotes": {}, "statuses": []}, positions)
+        third = {"equityQuotes": {}, "statuses": []}
+        provider.add_alpha_vantage(third, positions)
+
+        self.assertEqual(2, len(calls))
+        self.assertTrue(any("circuit open until" in item["message"] for item in third["statuses"]))
+
+    def test_external_signal_provider_caps_fred_series_bulk(self):
+        calls = []
+
+        def fake_fetch(url, headers=None):
+            calls.append(url)
+            return {"observations": [{"date": "2026-07-01", "value": "4.35"}]}
+
+        provider = ExternalSignalProvider(
+            settings={
+                "fredApiKey": "fred-key",
+                "externalFredSeries": "DGS10,DGS2,DFF",
+                "externalCryptoIds": " ",
+                "externalFredMaxSeries": "2",
+                "externalApiRetryAttempts": "1",
+                "externalApiRateLimitSeconds": "0",
+                "externalApiCircuitFailures": "2",
+                "externalApiCircuitCooldownMinutes": "30",
+            },
+            cache=SQLiteExternalSignalCache(Path(self.temp.name) / "service.db"),
+            fetch_json=fake_fetch,
+            sleep=lambda _: None,
+        )
+
+        signals = provider.fetch_signals([])
+
+        self.assertEqual(2, len(calls))
+        self.assertEqual(["DGS10", "DGS2"], list(signals["macro"]["series"].keys()))
+        self.assertTrue(any(item["source"] == "FRED" and item["ok"] for item in signals["statuses"]))
 
     def test_message_type_check_command_does_not_send_by_default(self):
         args = build_parser().parse_args(["monitor", "message-types"])

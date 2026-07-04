@@ -60,6 +60,13 @@ TEXT_SETTING_KEYS = [
     "externalAlphaMaxSymbols",
     "externalDartLookbackDays",
     "externalDartCorpCodes",
+    "externalApiRetryAttempts",
+    "externalApiRateLimitSeconds",
+    "externalApiCircuitFailures",
+    "externalApiCircuitCooldownMinutes",
+    "externalFredMaxSeries",
+    "externalCryptoMaxIds",
+    "externalDartMaxSymbols",
 ]
 
 SECRET_SETTING_KEYS = [
@@ -353,6 +360,13 @@ def runtime_settings() -> Dict[str, str]:
         "externalAlphaMaxSymbols": value("externalAlphaMaxSymbols", "EXTERNAL_ALPHA_MAX_SYMBOLS", "3"),
         "externalDartLookbackDays": value("externalDartLookbackDays", "EXTERNAL_DART_LOOKBACK_DAYS", "14"),
         "externalDartCorpCodes": value("externalDartCorpCodes", "EXTERNAL_DART_CORP_CODES", "005930=00126380\n000660=00164779\n035420=00266961"),
+        "externalApiRetryAttempts": value("externalApiRetryAttempts", "EXTERNAL_API_RETRY_ATTEMPTS", "2"),
+        "externalApiRateLimitSeconds": value("externalApiRateLimitSeconds", "EXTERNAL_API_RATE_LIMIT_SECONDS", "60"),
+        "externalApiCircuitFailures": value("externalApiCircuitFailures", "EXTERNAL_API_CIRCUIT_FAILURES", "2"),
+        "externalApiCircuitCooldownMinutes": value("externalApiCircuitCooldownMinutes", "EXTERNAL_API_CIRCUIT_COOLDOWN_MINUTES", "30"),
+        "externalFredMaxSeries": value("externalFredMaxSeries", "EXTERNAL_FRED_MAX_SERIES", "5"),
+        "externalCryptoMaxIds": value("externalCryptoMaxIds", "EXTERNAL_CRYPTO_MAX_IDS", "50"),
+        "externalDartMaxSymbols": value("externalDartMaxSymbols", "EXTERNAL_DART_MAX_SYMBOLS", "5"),
         "alphaVantageApiKey": value("alphaVantageApiKey", "ALPHA_VANTAGE_API_KEY"),
         "coingeckoApiKey": value("coingeckoApiKey", "COINGECKO_API_KEY"),
         "fredApiKey": value("fredApiKey", "FRED_API_KEY"),

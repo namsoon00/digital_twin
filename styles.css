@@ -267,6 +267,8 @@ h3 {
   border-radius: var(--ds-radius-panel);
   background: var(--panel);
   box-shadow: var(--shadow);
+  transition: transform 180ms ease, opacity 180ms ease, background-color 120ms ease, box-shadow 120ms ease;
+  will-change: transform;
 }
 
 .app-nav-brand {
@@ -5400,6 +5402,12 @@ h3 {
     box-shadow: var(--shadow-strong);
     -webkit-backdrop-filter: blur(18px);
     backdrop-filter: blur(18px);
+  }
+
+  .app-nav.is-hidden {
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(calc(-100% - 16px - env(safe-area-inset-top)));
   }
 
   .app-nav-brand {

@@ -100,6 +100,11 @@ body {
   min-height: 100%;
 }
 
+html {
+  background: var(--bg);
+  scroll-padding-bottom: calc(var(--bottom-tabs-height) + env(safe-area-inset-bottom) + 18px);
+}
+
 body {
   margin: 0;
   background: var(--bg);
@@ -107,6 +112,21 @@ body {
   font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-variant-numeric: tabular-nums;
   letter-spacing: 0;
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+.app-shell {
+  min-height: 100vh;
+}
+
+@supports (min-height: 100dvh) {
+  html,
+  body,
+  .app-shell {
+    min-height: 100dvh;
+  }
 }
 
 ::selection {
@@ -136,6 +156,10 @@ input,
 select,
 textarea {
   -webkit-tap-highlight-color: transparent;
+}
+
+button {
+  touch-action: manipulation;
 }
 
 button:disabled,
@@ -292,6 +316,7 @@ h3 {
   font-weight: 850;
   white-space: nowrap;
   cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease, transform 120ms ease;
 }
 
 .app-nav-tab span,
@@ -578,6 +603,7 @@ h3 {
   overflow: hidden;
   text-overflow: ellipsis;
   cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease, transform 120ms ease;
 }
 
 .tab-bar button.active {
@@ -620,6 +646,7 @@ h3 {
   font-size: 18px;
   text-decoration: none;
   cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease, transform 120ms ease;
 }
 
 .icon-button:hover,
@@ -4745,6 +4772,7 @@ h3 {
   padding: 0 13px;
   font-weight: 850;
   cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease, transform 120ms ease;
 }
 
 .text-button.primary {
@@ -4963,6 +4991,7 @@ h3 {
   font-size: 12px;
   font-weight: 850;
   cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease, transform 120ms ease;
 }
 
 .mini-button.danger {
@@ -5167,6 +5196,18 @@ h3 {
   }
 }
 
+@media (hover: none) {
+  .app-nav-tab:active,
+  .app-nav-menu-item:active,
+  .tab-bar button:active,
+  .text-button:active,
+  .mini-button:active,
+  .icon-button:active,
+  .watch-suggest-option:active {
+    transform: scale(0.98);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -5235,10 +5276,15 @@ h3 {
 }
 
 @media (max-width: 860px) {
+  body {
+    overscroll-behavior-y: contain;
+  }
+
   .shell {
-    width: min(100vw - 24px, 720px);
-    padding-top: 12px;
-    padding-bottom: calc(28px + var(--bottom-tabs-height) + env(safe-area-inset-bottom));
+    width: 100%;
+    max-width: 720px;
+    min-height: 100dvh;
+    padding: calc(8px + env(safe-area-inset-top)) 12px calc(18px + var(--bottom-tabs-height) + env(safe-area-inset-bottom));
   }
 
   .topbar,
@@ -5316,6 +5362,21 @@ h3 {
 
   .topbar {
     display: grid;
+    margin: 2px 0 12px;
+    padding: 0 2px;
+  }
+
+  .topbar .eyebrow {
+    display: none;
+  }
+
+  .topbar-copy {
+    gap: 5px;
+  }
+
+  .topbar .subtle {
+    font-size: 13px;
+    line-height: 1.35;
   }
 
   .toolbar {
@@ -5327,10 +5388,18 @@ h3 {
   }
 
   .app-nav {
+    position: sticky;
+    top: calc(8px + env(safe-area-inset-top));
+    z-index: 70;
     grid-template-columns: minmax(0, 1fr) auto auto;
     gap: 8px;
-    margin-bottom: 12px;
+    min-height: 54px;
+    margin: 0 -2px 10px;
     padding: 7px;
+    background: color-mix(in srgb, var(--panel) 94%, transparent);
+    box-shadow: var(--shadow-strong);
+    -webkit-backdrop-filter: blur(18px);
+    backdrop-filter: blur(18px);
   }
 
   .app-nav-brand {
@@ -5353,17 +5422,56 @@ h3 {
     display: none;
   }
 
+  .app-nav-tools .icon-button {
+    border-color: var(--blue);
+    background: var(--blue);
+    color: var(--ds-color-on-action);
+  }
+
   .tab-bar {
+    left: 50%;
+    bottom: 0;
     gap: 4px;
     grid-template-columns: repeat(var(--tab-count, 4), minmax(0, 1fr));
+    width: min(100vw, 720px);
+    min-height: calc(var(--bottom-tabs-height) + env(safe-area-inset-bottom));
     overflow: hidden;
-    padding: 5px;
+    padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
+    border-right: 0;
+    border-bottom: 0;
+    border-left: 0;
+    border-radius: 8px 8px 0 0;
+    background: color-mix(in srgb, var(--panel) 96%, transparent);
+    box-shadow: 0 -8px 24px rgba(25, 31, 40, 0.1);
+    -webkit-backdrop-filter: blur(18px);
+    backdrop-filter: blur(18px);
   }
 
   .tab-bar button {
-    min-height: 48px;
+    min-height: 52px;
     padding: 0 2px;
     font-size: 11px;
+  }
+
+  .admin-grid,
+  .content-grid,
+  .grid,
+  .home-view {
+    gap: 10px;
+  }
+
+  .panel {
+    box-shadow: none;
+  }
+
+  .panel-head {
+    padding: 14px;
+  }
+
+  input,
+  select,
+  textarea {
+    font-size: 16px;
   }
 
   .symbol-pager {

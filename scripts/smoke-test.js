@@ -178,6 +178,8 @@ function checkFrontendAdminRender() {
   assertOk(styles.indexOf("--ds-color-on-action") >= 0, "주요 액션 텍스트 토큰이 없습니다.");
   assertOk(styles.indexOf("--ds-control-height-md") >= 0, "전역 컨트롤 높이 토큰이 없습니다.");
   assertOk(styles.indexOf("font-variant-numeric: tabular-nums") >= 0, "금융 숫자 표시 규칙이 없습니다.");
+  assertOk(styles.indexOf(".app-shell") >= 0 && styles.indexOf("100dvh") >= 0, "앱형 100dvh 셸 규칙이 없습니다.");
+  assertOk(styles.indexOf("touch-action: manipulation") >= 0 && styles.indexOf("@media (hover: none)") >= 0, "모바일 터치 반응성 규칙이 없습니다.");
   assertOk(styles.indexOf(".settings-smart-save") >= 0, "설정 화면 스마트 저장 액션 규칙이 없습니다.");
   assertOk(styles.indexOf(".settings-save-panel") < 0, "설정 화면에 하단 sticky 저장 패널 규칙이 남아 있습니다.");
   assertOk(code.indexOf("settingsHasPendingChanges") >= 0 && code.indexOf("refreshSettingsSaveControls") >= 0, "설정 저장 버튼의 상태형 갱신 로직이 없습니다.");
@@ -647,6 +649,7 @@ function checkFrontendAdminRender() {
     assertOk(code.indexOf("bottomTabIds") >= 0 && code.indexOf("managementTabIds") >= 0, "하단 주요 탭과 관리 메뉴 분리 규칙이 없습니다.");
     assertOk(styles.indexOf(".app-nav-tab.active") >= 0 && styles.indexOf(".app-nav-menu") >= 0, "앱 네비게이션 활성 탭과 모바일 관리 메뉴 스타일 규칙이 없습니다.");
     assertOk(styles.indexOf("@media (min-width: 861px)") >= 0 && styles.indexOf(".tab-bar {\n    display: none;") >= 0, "데스크톱에서 하단 탭을 숨기는 규칙이 없습니다.");
+    assertOk(styles.indexOf("position: sticky") >= 0 && styles.indexOf("bottom: 0;") >= 0 && styles.indexOf("backdrop-filter: blur(18px)") >= 0, "모바일 앱바/하단탭 고정 반응형 규칙이 없습니다.");
     assertOk(code.indexOf("settingsSaving") >= 0 && code.indexOf("로컬 SQLite DB") >= 0, "설정 저장 진행 상태가 렌더링되지 않습니다.");
     assertOk(code.indexOf("new window.WebSocket") >= 0, "프론트가 웹소켓 실시간 연결을 생성하지 않습니다.");
     assertOk(code.indexOf("realtime.status") >= 0, "웹소켓 상태 메시지를 처리하지 않습니다.");

@@ -178,7 +178,9 @@ function checkFrontendAdminRender() {
   assertOk(styles.indexOf("--ds-color-on-action") >= 0, "주요 액션 텍스트 토큰이 없습니다.");
   assertOk(styles.indexOf("--ds-control-height-md") >= 0, "전역 컨트롤 높이 토큰이 없습니다.");
   assertOk(styles.indexOf("font-variant-numeric: tabular-nums") >= 0, "금융 숫자 표시 규칙이 없습니다.");
-  assertOk(styles.indexOf(".settings-save-panel") >= 0, "설정 화면 저장 액션 위치 규칙이 없습니다.");
+  assertOk(styles.indexOf(".settings-smart-save") >= 0, "설정 화면 스마트 저장 액션 규칙이 없습니다.");
+  assertOk(styles.indexOf(".settings-save-panel") < 0, "설정 화면에 하단 sticky 저장 패널 규칙이 남아 있습니다.");
+  assertOk(code.indexOf("settingsHasPendingChanges") >= 0 && code.indexOf("refreshSettingsSaveControls") >= 0, "설정 저장 버튼의 상태형 갱신 로직이 없습니다.");
   assertOk(/@media \(max-width: 860px\)[\s\S]*\.account-watchlist-workbench[\s\S]*grid-template-columns: 1fr;/.test(styles), "모바일 관심종목 워크벤치가 1열로 접히지 않습니다.");
   assertOk(/@media \(max-width: 860px\)[\s\S]*\.watch-account-row \.chip-row[\s\S]*justify-content: flex-start;/.test(styles), "모바일 관심종목 계정 칩 정렬이 왼쪽 기준이 아닙니다.");
   assertOk(designSystemDoc.indexOf("Finance App Tone") >= 0, "디자인 시스템 문서에 금융앱 룩앤필 기준이 없습니다.");
@@ -694,10 +696,11 @@ function checkFrontendAdminRender() {
     assertOk(symbolUniverseHtml.indexOf("data-symbol-add-account") >= 0, "전체종목 탭에 관심 추가 대상 계정 선택이 없습니다.");
     assertOk(symbolUniverseHtml.indexOf("symbol-summary-card") < 0 && symbolUniverseHtml.indexOf("symbol-source-card") < 0, "전체종목 탭에 중첩 카드 클래스가 남아 있습니다.");
     assertOk(notificationHtml.indexOf("notification-command-panel") >= 0, "알림 관제 상단 패널이 렌더링되지 않았습니다.");
-    assertOk(notificationHtml.indexOf("notification-section-bar") >= 0, "알림 내부 섹션 상단 버튼 바가 렌더링되지 않았습니다.");
+    assertOk(notificationHtml.indexOf("notification-section-bar") >= 0, "알림 내부 섹션 상단 탭 바가 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("notification-section-tabs") >= 0, "알림 내부 섹션 탭이 렌더링되지 않았습니다.");
+    assertOk(styles.indexOf(".notification-section-tabs") >= 0 && styles.indexOf("border-bottom: 2px solid transparent") >= 0, "알림 내부 섹션이 탭 스트립 스타일로 정의되지 않았습니다.");
     assertOk(notificationHtml.indexOf('data-notification-section="policy"') >= 0 && notificationHtml.indexOf('data-notification-section="templates"') >= 0 && notificationHtml.indexOf('data-notification-section="advanced"') >= 0, "알림 내부 섹션 이동 버튼이 없습니다.");
-    assertOk(notificationHtml.indexOf("notification-section-bar") < notificationHtml.indexOf("notification-command-panel"), "알림 섹션 버튼이 관제 패널 위에 배치되지 않았습니다.");
+    assertOk(notificationHtml.indexOf("notification-section-bar") < notificationHtml.indexOf("notification-command-panel"), "알림 섹션 탭이 관제 패널 위에 배치되지 않았습니다.");
     assertOk(notificationHtml.indexOf("notification-decision-panel") >= 0, "최근 알림 판단 패널이 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("notification-decision-panel") < notificationHtml.indexOf("notification-command-panel"), "기본 현황에서 최근 알림 판단이 관제 지표보다 먼저 보이지 않습니다.");
     assertOk(notificationHtml.indexOf("notification-decision-body") >= 0, "최근 알림 판단 본문 영역이 분리되지 않았습니다.");
@@ -780,8 +783,10 @@ function checkFrontendAdminRender() {
     assertOk(settingsHtml.indexOf("settings-environment-panel") >= 0, "설정 탭 앱 환경 패널이 렌더링되지 않았습니다.");
     assertOk(settingsHtml.indexOf("settings-delivery-panel") >= 0, "설정 탭 알림 전달 패널이 렌더링되지 않았습니다.");
     assertOk(settingsHtml.indexOf("settings-external-data-panel") >= 0, "설정 탭 외부 데이터 패널이 렌더링되지 않았습니다.");
-    assertOk(settingsHtml.indexOf("settings-save-panel") >= 0, "설정 탭 저장 패널이 렌더링되지 않았습니다.");
-    assertOk((settingsHtml.match(/data-action="save-settings"/g) || []).length >= 2, "설정 저장 버튼이 상단과 하단에 모두 렌더링되지 않았습니다.");
+    assertOk(settingsHtml.indexOf("settings-smart-save") >= 0, "설정 탭 스마트 저장 영역이 렌더링되지 않았습니다.");
+    assertOk(settingsHtml.indexOf("settings-save-panel") < 0, "설정 탭에 하단 저장 패널이 남아 있습니다.");
+    assertOk(settingsHtml.indexOf("변경사항 저장됨") >= 0, "설정 탭 스마트 저장 상태 문구가 렌더링되지 않았습니다.");
+    assertOk((settingsHtml.match(/data-action="save-settings"/g) || []).length >= 1, "설정 저장 버튼이 렌더링되지 않았습니다.");
     assertOk(settingsHtml.indexOf('data-action="settings-back"') >= 0, "설정 탭 뒤로가기 버튼이 렌더링되지 않았습니다.");
     assertOk(settingsHtml.indexOf("Telegram Bot Token") >= 0, "설정 탭에 알림 전달 설정이 없습니다.");
     assertOk(settingsHtml.indexOf("Alpha Vantage API Key") >= 0, "설정 탭에 외부 데이터 API 설정이 없습니다.");

@@ -1194,15 +1194,8 @@ h3 {
 }
 
 .settings-overview-panel,
-.settings-external-data-panel,
-.settings-save-panel {
+.settings-external-data-panel {
   grid-column: 1 / -1;
-}
-
-.settings-save-panel {
-  position: sticky;
-  bottom: calc(12px + var(--bottom-tabs-height) + env(safe-area-inset-bottom));
-  z-index: 30;
 }
 
 .settings-api-grid {
@@ -1210,6 +1203,43 @@ h3 {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
   margin-bottom: 0;
+}
+
+.settings-smart-save {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+}
+
+.settings-smart-save-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.settings-smart-save-copy strong,
+.settings-smart-save-copy span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.settings-smart-save-copy strong {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.settings-smart-save-copy span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 1.45;
 }
 
 .settings-api-row {
@@ -2251,9 +2281,10 @@ h3 {
   grid-column: 1 / -1;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 10px;
-  align-items: stretch;
+  gap: 12px;
+  align-items: center;
   min-width: 0;
+  padding: 4px 0 8px;
 }
 
 .notification-section-actions {
@@ -2266,7 +2297,7 @@ h3 {
 }
 
 .notification-section-actions .text-button {
-  min-height: 54px;
+  min-height: 38px;
 }
 
 .notification-command-grid {
@@ -2342,27 +2373,29 @@ h3 {
 .notification-section-tabs {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
+  gap: 0;
   min-width: 0;
+  border-bottom: 1px solid var(--line);
 }
 
 .notification-section-tabs button {
   display: grid;
-  gap: 4px;
+  gap: 3px;
   min-width: 0;
-  min-height: 54px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--input);
+  min-height: 48px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
   color: var(--ink);
-  padding: 9px 10px;
+  padding: 7px 12px 9px;
   text-align: left;
   cursor: pointer;
 }
 
 .notification-section-tabs button.active {
-  border-color: rgba(49, 130, 246, 0.42);
-  background: var(--blue-soft);
+  border-bottom-color: var(--blue);
+  background: transparent;
   color: var(--blue);
 }
 
@@ -5146,6 +5179,10 @@ h3 {
     grid-template-columns: 1fr;
   }
 
+  .settings-smart-save {
+    grid-template-columns: 1fr;
+  }
+
   .notification-template-preview {
     grid-column: auto;
   }
@@ -5166,9 +5203,22 @@ h3 {
   }
 
   .notification-command-grid,
-  .notification-ops-strip,
-  .notification-section-tabs {
+  .notification-ops-strip {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .notification-section-tabs {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .notification-section-tabs button {
+    min-height: 42px;
+    padding: 7px 6px 9px;
+    text-align: center;
+  }
+
+  .notification-section-tabs span {
+    display: none;
   }
 
   .notification-decision-panel .panel-head {
@@ -5350,9 +5400,22 @@ h3 {
   }
 
   .notification-command-grid,
-  .notification-ops-strip,
-  .notification-section-tabs {
+  .notification-ops-strip {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .notification-section-tabs {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .notification-section-tabs button {
+    min-height: 42px;
+    padding: 7px 6px 9px;
+    text-align: center;
+  }
+
+  .notification-section-tabs span {
+    display: none;
   }
 
   .notification-section-bar {

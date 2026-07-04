@@ -6130,7 +6130,7 @@
       '</div>',
       '<div class="notification-section-actions">',
       '<button class="text-button" data-action="refresh-notification-jobs"' + (state.notificationJobsLoading ? ' disabled' : '') + '>판단 새로고침</button>',
-      '<button class="text-button primary" data-action="save-settings"' + (state.serverSettingsLocked ? ' disabled' : '') + '>전체 저장</button>',
+      '<button class="' + settingsSaveButtonClass() + '" data-action="save-settings"' + settingsSaveDisabledAttr() + '>' + settingsSaveButtonLabel() + '</button>',
       '</div>',
       '</div>'
     ].join("");
@@ -6204,7 +6204,7 @@
       '<div class="settings-actions">',
       '<button class="text-button compact" data-action="expand-message-types">그룹 펼치기</button>',
       '<button class="text-button compact" data-action="collapse-message-types">전체 접기</button>',
-      '<button class="text-button primary" data-action="save-settings"' + (state.serverSettingsLocked ? ' disabled' : '') + '>알림 설정 저장</button>',
+      '<button class="' + settingsSaveButtonClass() + '" data-action="save-settings"' + settingsSaveDisabledAttr() + '>' + settingsSaveButtonLabel() + '</button>',
       '</div>',
       '</div>',
       '<div class="settings-body">',
@@ -6700,7 +6700,7 @@
       '<h2>알림 템플릿</h2>',
       '<p class="subtle">메시지 본문, 변수, 미리보기와 테스트 발송만 관리합니다. 점수 룰은 정책 탭에서 수정합니다.</p>',
       '</div>',
-      '<button class="text-button primary" data-action="save-settings"' + (state.serverSettingsLocked ? ' disabled' : '') + '>설정 저장</button>',
+      '<button class="' + settingsSaveButtonClass() + '" data-action="save-settings"' + settingsSaveDisabledAttr() + '>' + settingsSaveButtonLabel() + '</button>',
       '</div>',
       '<div class="settings-body">',
       state.notificationTemplatesError ? '<p class="form-error">' + escapeHtml(state.notificationTemplatesError) + '</p>' : '',
@@ -6838,7 +6838,7 @@
       '<h2>알림 임계값</h2>',
       '<p class="subtle">모델, 실시간, 외부 데이터 알림이 발생하는 기준입니다. 자주 바꾸지 않는 값만 이곳에 모읍니다.</p>',
       '</div>',
-      '<button class="text-button primary" data-action="save-settings"' + (state.serverSettingsLocked ? ' disabled' : '') + '>설정 저장</button>',
+      '<button class="' + settingsSaveButtonClass() + '" data-action="save-settings"' + settingsSaveDisabledAttr() + '>' + settingsSaveButtonLabel() + '</button>',
       '</div>',
       '<div class="alert-threshold-section">',
       '<div class="alert-threshold-grid">',
@@ -7124,7 +7124,7 @@
       '</div>',
       '<div class="settings-actions">',
       '<button class="text-button" data-action="save-model-version">모델 버전 저장</button>',
-      '<button class="text-button primary" data-action="save-settings"' + (state.serverSettingsLocked ? ' disabled' : '') + '>모델 설정 저장</button>',
+      '<button class="' + settingsSaveButtonClass() + '" data-action="save-settings"' + settingsSaveDisabledAttr() + '>' + settingsSaveButtonLabel() + '</button>',
       '</div>',
       '</div>',
       '<div class="lab-stats-grid model-stats-grid">',
@@ -7903,7 +7903,7 @@
       '<p class="label">Delivery</p>',
       '<h2>웹·푸시 알림 설정</h2>',
       '</div>',
-      '<span class="tone-chip ' + (state.settingsSaved ? "watch" : "hold") + '">' + (state.settingsSaved ? "저장됨" : "수정 중") + '</span>',
+      '<span class="tone-chip ' + settingsStatusTone() + '" data-settings-status>' + settingsStatusLabel() + '</span>',
       '</div>',
       '<div class="settings-body">',
       '<div class="settings-note">',
@@ -7921,7 +7921,7 @@
       renderSettingField("telegramChatId", "Telegram Chat ID", "text", "chat id", { preserveConfigured: true }),
       '</div>',
       '<div class="settings-actions">',
-      '<button class="text-button primary" data-action="save-settings"' + (state.serverSettingsLocked ? ' disabled' : '') + '>설정 저장</button>',
+      '<button class="' + settingsSaveButtonClass() + '" data-action="save-settings"' + settingsSaveDisabledAttr() + '>' + settingsSaveButtonLabel() + '</button>',
       '<button class="text-button" data-action="toggle-secrets">' + (state.showSecrets ? "secret 숨기기" : "secret 보기") + '</button>',
       '</div>',
       '</div>',
@@ -8920,21 +8920,54 @@
   }
 
   function settingsSaveDisabledAttr() {
-    return state.serverSettingsLocked || state.settingsSaving ? ' disabled' : '';
+    return state.serverSettingsLocked || state.settingsSaving || !settingsHasPendingChanges() ? ' disabled' : '';
+  }
+
+  function settingsHasPendingChanges() {
+    return !state.settingsSaved || Boolean(state.serverSettingsError);
   }
 
   function settingsSaveButtonLabel() {
-    return state.settingsSaving ? "저장 중" : "설정 저장";
+    if (state.settingsSaving) return "저장 중";
+    if (settingsHasPendingChanges()) return state.serverSettingsError ? "다시 저장" : "변경 저장";
+    return "저장됨";
+  }
+
+  function settingsSaveButtonClass() {
+    return settingsHasPendingChanges() || state.settingsSaving ? "text-button primary" : "text-button";
   }
 
   function settingsStatusLabel() {
     if (state.settingsSaving) return "DB 저장 중";
-    return state.settingsSaved ? "DB 저장됨" : "수정 중";
+    if (state.serverSettingsError) return "저장 실패";
+    return state.settingsSaved ? "DB 저장됨" : "저장 필요";
   }
 
   function settingsStatusTone() {
     if (state.settingsSaving) return "caution";
+    if (state.serverSettingsError) return "danger";
     return state.settingsSaved ? "watch" : "hold";
+  }
+
+  function refreshSettingsSaveControls() {
+    if (!app || !app.querySelectorAll) return;
+    Array.prototype.slice.call(app.querySelectorAll('[data-action="save-settings"]')).forEach(function (button) {
+      button.disabled = Boolean(state.serverSettingsLocked || state.settingsSaving || !settingsHasPendingChanges());
+      button.className = settingsSaveButtonClass();
+      button.textContent = settingsSaveButtonLabel();
+    });
+    Array.prototype.slice.call(app.querySelectorAll("[data-settings-status]")).forEach(function (item) {
+      item.className = "tone-chip " + settingsStatusTone();
+      item.textContent = settingsStatusLabel();
+    });
+    Array.prototype.slice.call(app.querySelectorAll("[data-settings-save-title]")).forEach(function (item) {
+      item.textContent = settingsHasPendingChanges() ? "변경사항 저장 필요" : "변경사항 저장됨";
+    });
+    Array.prototype.slice.call(app.querySelectorAll("[data-settings-save-description]")).forEach(function (item) {
+      item.textContent = settingsHasPendingChanges()
+        ? "현재 화면의 앱 표시, 알림 전달, 외부 API 설정을 로컬 저장소에 반영합니다."
+        : "입력값이 로컬 저장소와 동기화되어 있습니다.";
+    });
   }
 
   function renderSettingsPage() {
@@ -8944,7 +8977,6 @@
       renderSettingsEnvironmentPanel(),
       renderSettingsDeliverySettingsPanel(),
       renderSettingsExternalDataPanel(),
-      renderSettingsSavePanel(),
       '</section>'
     ].join("");
   }
@@ -8959,8 +8991,7 @@
       '</div>',
       '<div class="settings-actions">',
       '<button class="text-button" type="button" data-action="settings-back">이전</button>',
-      '<button class="text-button primary" type="button" data-action="save-settings"' + settingsSaveDisabledAttr() + '>' + settingsSaveButtonLabel() + '</button>',
-      '<span class="tone-chip ' + settingsStatusTone() + '">' + settingsStatusLabel() + '</span>',
+      '<span class="tone-chip ' + settingsStatusTone() + '" data-settings-status>' + settingsStatusLabel() + '</span>',
       '</div>',
       '</div>',
       '<div class="settings-body">',
@@ -8971,7 +9002,7 @@
       '<span>계정 연결은 계정 탭에서, 매매 판단 기준은 투자전략 탭에서 관리합니다.</span>',
       '</div>',
       '<div class="settings-status-stack">',
-      '<span class="tone-chip ' + settingsStatusTone() + '">' + settingsStatusLabel() + '</span>',
+      '<span class="tone-chip ' + settingsStatusTone() + '" data-settings-status>' + settingsStatusLabel() + '</span>',
       '<span class="chip">로컬 DB 우선</span>',
       '</div>',
       state.settingsSaving ? '<p class="lab-message">설정을 로컬 SQLite DB에 저장하는 중입니다.</p>' : '',
@@ -8979,6 +9010,7 @@
       state.serverSettingsLocked ? '<p class="form-error">공유 모드에서는 서버 설정 저장이 잠겨 있습니다.</p>' : '',
       '</div>',
       renderRuntimeSettingsSummary(),
+      renderSettingsSmartSavePanel(),
       '</div>',
       '</article>'
     ].join("");
@@ -9065,16 +9097,18 @@
     ].join("");
   }
 
-  function renderSettingsSavePanel() {
+  function renderSettingsSmartSavePanel() {
     return [
-      '<article class="panel settings-save-panel">',
-      '<div class="settings-body">',
+      '<div class="settings-smart-save">',
+      '<div class="settings-smart-save-copy">',
+      '<strong data-settings-save-title>' + escapeHtml(settingsHasPendingChanges() ? "변경사항 저장 필요" : "변경사항 저장됨") + '</strong>',
+      '<span data-settings-save-description>' + escapeHtml(settingsHasPendingChanges() ? "현재 화면의 앱 표시, 알림 전달, 외부 API 설정을 로컬 저장소에 반영합니다." : "입력값이 로컬 저장소와 동기화되어 있습니다.") + '</span>',
+      '</div>',
       '<div class="settings-actions settings-page-actions">',
-      '<button class="text-button primary" type="button" data-action="save-settings"' + settingsSaveDisabledAttr() + '>' + settingsSaveButtonLabel() + '</button>',
+      '<button class="' + settingsSaveButtonClass() + '" type="button" data-action="save-settings"' + settingsSaveDisabledAttr() + '>' + settingsSaveButtonLabel() + '</button>',
       '<button class="text-button" type="button" data-action="toggle-secrets">' + (state.showSecrets ? "secret 숨기기" : "secret 보기") + '</button>',
       '</div>',
       '</div>',
-      '</article>'
     ].join("");
   }
 
@@ -9240,6 +9274,7 @@
         state.settingsSaved = false;
         state.modelSaved = false;
         state.modelError = "";
+        refreshSettingsSaveControls();
       });
       field.addEventListener("change", function () {
         persistSettings();
@@ -9552,6 +9587,7 @@
         state.settings[name] = field.value;
         state.settingsSaved = false;
         if (name === "appTheme") applyAppTheme();
+        refreshSettingsSaveControls();
       };
       field.addEventListener("input", updateSettingField);
       field.addEventListener("change", updateSettingField);

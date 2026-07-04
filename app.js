@@ -2278,6 +2278,10 @@
       telegramBotToken: "",
       telegramChatId: currentSettings.telegramChatId || "",
       notifyLinkUrl: currentSettings.notifyLinkUrl || defaultSettings.notifyLinkUrl,
+      quietHoursEnabled: true,
+      quietHoursStart: "22:00",
+      quietHoursEnd: "05:00",
+      quietHoursTimezone: "Asia/Seoul",
       enabled: true
     };
   }
@@ -2330,6 +2334,10 @@
       telegramBotToken: "",
       telegramChatId: textValueUnlessBoolean(account.telegramChatId),
       notifyLinkUrl: account.notifyLinkUrl || settingValue("notifyLinkUrl") || defaultSettings.notifyLinkUrl,
+      quietHoursEnabled: account.quietHoursEnabled !== false,
+      quietHoursStart: account.quietHoursStart || "22:00",
+      quietHoursEnd: account.quietHoursEnd || "05:00",
+      quietHoursTimezone: account.quietHoursTimezone || "Asia/Seoul",
       enabled: account.enabled !== false
     };
   }
@@ -2346,6 +2354,10 @@
       notifyProvider: String(draft.notifyProvider || "").trim(),
       telegramChatId: String(draft.telegramChatId || "").trim(),
       notifyLinkUrl: String(draft.notifyLinkUrl || "").trim(),
+      quietHoursEnabled: draft.quietHoursEnabled !== false,
+      quietHoursStart: String(draft.quietHoursStart || "22:00").trim(),
+      quietHoursEnd: String(draft.quietHoursEnd || "05:00").trim(),
+      quietHoursTimezone: String(draft.quietHoursTimezone || "Asia/Seoul").trim(),
       enabled: draft.enabled !== false
     };
     if (String(draft.clientId || "").trim()) payload.clientId = String(draft.clientId || "").trim();
@@ -2430,6 +2442,10 @@
       watchlistSymbols: normalizeSymbols((symbols || []).join(",")).join(","),
       notifyProvider: String(account.notifyProvider || settingValue("notifyProvider") || "telegram").trim(),
       notifyLinkUrl: String(account.notifyLinkUrl || settingValue("notifyLinkUrl") || "").trim(),
+      quietHoursEnabled: account.quietHoursEnabled !== false,
+      quietHoursStart: account.quietHoursStart || "22:00",
+      quietHoursEnd: account.quietHoursEnd || "05:00",
+      quietHoursTimezone: account.quietHoursTimezone || "Asia/Seoul",
       enabled: account.enabled !== false
     };
   }
@@ -5640,6 +5656,7 @@
     var enabled = accounts.filter(function (account) { return account.enabled !== false; }).length;
     var tossReady = accounts.filter(function (account) { return account.clientId && account.clientSecret; }).length;
     var telegramReady = accounts.filter(function (account) { return account.telegramBotToken && account.telegramChatId; }).length;
+    var quietEnabled = accounts.filter(function (account) { return account.quietHoursEnabled !== false; }).length;
     var classes = "panel account-directory-panel" + (options.full ? " account-directory-wide" : "");
     return [
       '<article class="' + classes + '">',
@@ -5654,6 +5671,7 @@
       renderDirectoryStat("활성", enabled + "/" + accounts.length),
       renderDirectoryStat("토스 API", tossReady + "개"),
       renderDirectoryStat("텔레그램", telegramReady + "개"),
+      renderDirectoryStat("알림 금지", quietEnabled + "개"),
       '</div>',
       '<div class="account-card-list">',
       state.serviceAccountsLoading ? '<p class="subtle">계정 DB를 읽는 중입니다.</p>' : '',
@@ -5691,7 +5709,7 @@
       '<button class="mini-button" data-account-edit="' + escapeHtml(account.id || "") + '">수정</button>',
       '</div>',
       options.compact ? renderAccountCredentialPills(account) : renderAccountCredentialSummary(account),
-      '<div class="account-card-meta"><span class="chip">관심 ' + escapeHtml(symbols.length) + '개</span></div>',
+      '<div class="account-card-meta"><span class="chip">관심 ' + escapeHtml(symbols.length) + '개</span><span class="chip">' + escapeHtml(accountQuietHoursText(account)) + '</span></div>',
       options.compact ? '' : '<div class="chip-row">' + (symbols.length ? symbols.map(function (symbol) {
         return '<span class="chip">' + escapeHtml(symbol) + '</span>';
       }).join("") : '<span class="subtle">계정에 저장된 관심 종목이 없습니다.</span>') + '</div>',
@@ -5706,8 +5724,15 @@
       configuredChip("Toss API", Boolean(account.clientId && account.clientSecret)),
       configuredChip("계좌 seq", Boolean(account.accountSeq), account.accountSeq || "선택"),
       configuredChip("Telegram", Boolean(account.telegramBotToken && account.telegramChatId)),
+      configuredChip("알림 금지", account.quietHoursEnabled !== false, accountQuietHoursText(account)),
       '</div>'
     ].join("");
+  }
+
+  function accountQuietHoursText(account) {
+    account = account || {};
+    if (account.quietHoursEnabled === false) return "알림 금지 꺼짐";
+    return "알림 금지 " + String(account.quietHoursStart || "22:00") + "-" + String(account.quietHoursEnd || "05:00") + " " + String(account.quietHoursTimezone || "Asia/Seoul");
   }
 
   function configuredChip(label, configured, detail) {
@@ -5742,6 +5767,13 @@
       configuredChip("알림 링크", Boolean(account.notifyLinkUrl)),
       '</div>',
       '</div>',
+      '<div>',
+      '<strong>알림 금지 시간</strong>',
+      '<span>' + escapeHtml(accountQuietHoursText(account)) + '</span>',
+      '<div class="chip-row">',
+      configuredChip("금지 시간", account.quietHoursEnabled !== false, accountQuietHoursText(account)),
+      '</div>',
+      '</div>',
       '</div>'
     ].join("");
   }
@@ -5758,6 +5790,11 @@
       '<strong>텔레그램</strong>',
       '<span>알림 채널 저장 후 bot token과 chat id 상태를 확인할 수 있습니다.</span>',
       '<div class="chip-row">' + configuredChip("Bot token", false) + configuredChip("Chat ID", false) + '</div>',
+      '</div>',
+      '<div>',
+      '<strong>알림 금지 시간</strong>',
+      '<span>기본값은 22:00-05:00 Asia/Seoul입니다.</span>',
+      '<div class="chip-row">' + configuredChip("금지 시간", true, "22:00-05:00 Asia/Seoul") + '</div>',
       '</div>',
       '</div>'
     ].join("");
@@ -6038,6 +6075,13 @@
       renderAccountField("telegramBotToken", "Telegram Bot Token", state.showSecrets ? "text" : "password", "새 값 입력 시 교체", { configured: Boolean(editingAccount && editingAccount.telegramBotToken) }),
       renderAccountField("telegramChatId", "Telegram Chat ID", "text", "chat id", { configured: Boolean(editingAccount && editingAccount.telegramChatId) }),
       renderAccountField("notifyLinkUrl", "알림 링크 URL", "url", "http://127.0.0.1:3000?tab=notifications"),
+      '<label class="admin-check-field">',
+      '<input data-account-field="quietHoursEnabled" type="checkbox"' + (draft.quietHoursEnabled !== false ? " checked" : "") + ' />',
+      '<span>알림 금지 시간 적용</span>',
+      '</label>',
+      renderAccountField("quietHoursStart", "알림 금지 시작", "time", "22:00"),
+      renderAccountField("quietHoursEnd", "알림 금지 종료", "time", "05:00"),
+      renderAccountField("quietHoursTimezone", "알림 금지 타임존", "text", "Asia/Seoul"),
       '<label class="admin-check-field">',
       '<input data-account-field="enabled" type="checkbox"' + (draft.enabled !== false ? " checked" : "") + ' />',
       '<span>이 계정을 모니터링에 사용</span>',
@@ -6374,6 +6418,11 @@
     return "";
   }
 
+  function notificationJobQuietHoursText(job) {
+    if (!job.quietHoursSuppressed) return "";
+    return job.quietHoursReason || "계정 알림 금지 시간";
+  }
+
   function renderNotificationDecisionPanel() {
     var jobs = state.notificationJobItems || [];
     var summary = state.notificationJobsSummary || state.realtime.notificationJobs || {};
@@ -6430,6 +6479,7 @@
       '<span>꿀점수 ' + escapeHtml(notificationJobScoreText(job)) + '</span>',
       '<span>' + escapeHtml(notificationJobSimilarityText(job)) + '</span>',
       notificationJobMarketHoursText(job) ? '<span>' + escapeHtml(notificationJobMarketHoursText(job)) + '</span>' : '',
+      notificationJobQuietHoursText(job) ? '<span>' + escapeHtml(notificationJobQuietHoursText(job)) + '</span>' : '',
       job.honeySimilarityBypassed ? '<span>' + escapeHtml(job.honeySimilarityBypassReason ? "반복 예외 " + job.honeySimilarityBypassReason : "반복 예외 적용") + '</span>' : '',
       '</div>',
       '<p>' + escapeHtml(job.lastError || job.textPreview || "-") + '</p>',

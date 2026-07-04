@@ -2247,6 +2247,28 @@ h3 {
   align-items: start;
 }
 
+.notification-section-bar {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: stretch;
+  min-width: 0;
+}
+
+.notification-section-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: stretch;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.notification-section-actions .text-button {
+  min-height: 54px;
+}
+
 .notification-command-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -2321,7 +2343,7 @@ h3 {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
-  padding: 14px 16px 16px;
+  min-width: 0;
 }
 
 .notification-section-tabs button {
@@ -2364,6 +2386,10 @@ h3 {
 
 .notification-section-tabs button.active span {
   color: var(--blue);
+}
+
+.notification-command-panel .panel-head {
+  min-height: 0;
 }
 
 .notification-policy-layout {
@@ -2966,6 +2992,40 @@ h3 {
 
 .notification-decision-panel {
   grid-column: 1 / -1;
+}
+
+.notification-state-message {
+  display: grid;
+  gap: 4px;
+  margin: 0 16px 16px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+}
+
+.notification-state-message strong,
+.notification-state-message span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.notification-state-message strong {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.notification-state-message span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 1.45;
+}
+
+.notification-state-message.hold {
+  border-color: rgba(245, 158, 11, 0.32);
+  background: var(--amber-soft);
 }
 
 .notification-decision-summary,
@@ -5256,6 +5316,16 @@ h3 {
   .notification-ops-strip,
   .notification-section-tabs {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .notification-section-bar {
+    grid-template-columns: 1fr;
+  }
+
+  .notification-section-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    justify-content: stretch;
   }
 
   .admin-message-group-list,

@@ -692,9 +692,12 @@ function checkFrontendAdminRender() {
     assertOk(symbolUniverseHtml.indexOf("data-symbol-add-account") >= 0, "전체종목 탭에 관심 추가 대상 계정 선택이 없습니다.");
     assertOk(symbolUniverseHtml.indexOf("symbol-summary-card") < 0 && symbolUniverseHtml.indexOf("symbol-source-card") < 0, "전체종목 탭에 중첩 카드 클래스가 남아 있습니다.");
     assertOk(notificationHtml.indexOf("notification-command-panel") >= 0, "알림 관제 상단 패널이 렌더링되지 않았습니다.");
+    assertOk(notificationHtml.indexOf("notification-section-bar") >= 0, "알림 내부 섹션 상단 버튼 바가 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("notification-section-tabs") >= 0, "알림 내부 섹션 탭이 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf('data-notification-section="policy"') >= 0 && notificationHtml.indexOf('data-notification-section="templates"') >= 0 && notificationHtml.indexOf('data-notification-section="advanced"') >= 0, "알림 내부 섹션 이동 버튼이 없습니다.");
+    assertOk(notificationHtml.indexOf("notification-section-bar") < notificationHtml.indexOf("notification-command-panel"), "알림 섹션 버튼이 관제 패널 위에 배치되지 않았습니다.");
     assertOk(notificationHtml.indexOf("notification-decision-panel") >= 0, "최근 알림 판단 패널이 렌더링되지 않았습니다.");
+    assertOk(code.indexOf("notification-state-message") >= 0, "최근 알림 빈 상태 전용 상태 박스 렌더링 경로가 없습니다.");
     assertOk(notificationHtml.indexOf("admin-message-group-list") < 0, "기본 현황 화면에 정책 목록이 렌더링됩니다.");
     assertOk(notificationHtml.indexOf("notification-template-manager-panel") < 0, "기본 현황 화면에 템플릿 관리 화면이 렌더링됩니다.");
     assertOk(notificationPolicyHtml.indexOf("admin-message-group-list") >= 0, "정책 섹션에 알림 타입 그룹 목록이 렌더링되지 않았습니다.");

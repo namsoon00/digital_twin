@@ -5328,6 +5328,7 @@
       '<div class="toolbar topbar-actions">',
       '<span class="status-pill ' + modeClass + '">' + escapeHtml(modeLabel) + "</span>",
       '<button class="icon-button" type="button" data-action="refresh" title="새로고침" aria-label="새로고침">' + (state.refreshing ? "…" : "↻") + "</button>",
+      state.activeTab === "settings" ? '' : '<button class="text-button compact" type="button" data-action="open-settings">설정</button>',
       '</div>',
       '</section>',
       renderTopActions(),
@@ -6090,6 +6091,7 @@
   function renderNotificationsPage() {
     return [
       '<section class="admin-grid notifications-view">',
+      renderNotificationSectionBar(),
       renderNotificationCommandPanel(),
       renderNotificationSectionContent(),
       '</section>'
@@ -6107,6 +6109,29 @@
     return state.notificationTemplates.length ? state.notificationTemplates : defaultNotificationTemplates();
   }
 
+  function renderNotificationSectionBar() {
+    var section = activeNotificationSectionMeta();
+    return [
+      '<div class="notification-section-bar">',
+      '<div class="notification-section-tabs" role="tablist" aria-label="알림 설정 섹션">',
+      notificationSections.map(function (item) {
+        var active = section.id === item.id;
+        return [
+          '<button type="button" role="tab" class="' + (active ? "active" : "") + '" data-notification-section="' + escapeHtml(item.id) + '"' + (active ? ' aria-selected="true"' : ' aria-selected="false"') + '>',
+          '<strong>' + escapeHtml(item.label) + '</strong>',
+          '<span>' + escapeHtml(item.description) + '</span>',
+          '</button>'
+        ].join("");
+      }).join(""),
+      '</div>',
+      '<div class="notification-section-actions">',
+      '<button class="text-button" data-action="refresh-notification-jobs"' + (state.notificationJobsLoading ? ' disabled' : '') + '>판단 새로고침</button>',
+      '<button class="text-button primary" data-action="save-settings"' + (state.serverSettingsLocked ? ' disabled' : '') + '>전체 저장</button>',
+      '</div>',
+      '</div>'
+    ].join("");
+  }
+
   function renderNotificationCommandPanel() {
     var summary = state.notificationJobsSummary || state.realtime.notificationJobs || {};
     var section = activeNotificationSectionMeta();
@@ -6120,10 +6145,7 @@
       '<h2>알림 관제</h2>',
       '<p class="subtle">기본은 현황만 보고, 정책·템플릿·고급 설정은 필요한 순간에만 엽니다.</p>',
       '</div>',
-      '<div class="settings-actions">',
-      '<button class="text-button" data-action="refresh-notification-jobs"' + (state.notificationJobsLoading ? ' disabled' : '') + '>판단 새로고침</button>',
-      '<button class="text-button primary" data-action="save-settings"' + (state.serverSettingsLocked ? ' disabled' : '') + '>전체 저장</button>',
-      '</div>',
+      '<span class="tone-chip watch">' + escapeHtml(section.label) + '</span>',
       '</div>',
       '<div class="notification-command-grid">',
       renderNotificationCommandMetric("대기", Number(summary.pending || 0), "watch"),
@@ -6136,17 +6158,6 @@
       '<span><strong>' + escapeHtml(settingValue("notifyIntervalMinutes") || defaultSettings.notifyIntervalMinutes) + '분</strong><em>기본 주기</em></span>',
       '<span><strong>' + escapeHtml(templateCount) + '개</strong><em>템플릿</em></span>',
       '<span><strong>' + escapeHtml(scheduleCount || "-") + '</strong><em>스케줄 이력</em></span>',
-      '</div>',
-      '<div class="notification-section-tabs" role="tablist" aria-label="알림 설정 섹션">',
-      notificationSections.map(function (item) {
-        var active = section.id === item.id;
-        return [
-          '<button type="button" role="tab" class="' + (active ? "active" : "") + '" data-notification-section="' + escapeHtml(item.id) + '"' + (active ? ' aria-selected="true"' : ' aria-selected="false"') + '>',
-          '<strong>' + escapeHtml(item.label) + '</strong>',
-          '<span>' + escapeHtml(item.description) + '</span>',
-          '</button>'
-        ].join("");
-      }).join(""),
       '</div>',
       '</article>'
     ].join("");
@@ -6362,6 +6373,7 @@
   function renderNotificationDecisionPanel() {
     var jobs = state.notificationJobItems || [];
     var summary = state.notificationJobsSummary || state.realtime.notificationJobs || {};
+    var hasError = Boolean(state.notificationJobsError);
     var summaryItems = ["pending", "done", "suppressed", "failed"].map(function (key) {
       return '<span class="chip">' + escapeHtml(notificationJobStatusLabel(key)) + ' ' + escapeHtml(Number(summary[key] || 0)) + '</span>';
     }).join("");
@@ -6372,14 +6384,23 @@
       '<p class="label">Decisions</p>',
       '<h2>최근 알림 판단</h2>',
       '</div>',
-      '<button class="text-button" data-action="refresh-notification-jobs"' + (state.notificationJobsLoading ? ' disabled' : '') + '>새로고침</button>',
+      '<span class="tone-chip ' + escapeHtml(hasError ? "hold" : "watch") + '">' + escapeHtml(hasError ? "확인 필요" : "현황") + '</span>',
       '</div>',
       '<div class="notification-decision-summary">',
       summaryItems,
       '</div>',
-      state.notificationJobsError ? '<p class="form-error">' + escapeHtml(state.notificationJobsError) + '</p>' : '',
-      jobs.length ? '<div class="notification-decision-list">' + jobs.map(renderNotificationDecisionRow).join("") + '</div>' : '<p class="empty-note">최근 알림 판단 기록이 없습니다.</p>',
+      hasError ? renderNotificationStateMessage("hold", "최근 판단 API 연결 확인", state.notificationJobsError) : '',
+      jobs.length ? '<div class="notification-decision-list">' + jobs.map(renderNotificationDecisionRow).join("") + '</div>' : (hasError ? '' : renderNotificationStateMessage("muted", "최근 알림 판단 기록 없음", "알림 워커가 발송, 보류, 실패 판단을 남기면 이곳에 시간순으로 표시합니다.")),
       '</article>'
+    ].join("");
+  }
+
+  function renderNotificationStateMessage(tone, title, description) {
+    return [
+      '<div class="notification-state-message ' + escapeHtml(tone || "muted") + '">',
+      '<strong>' + escapeHtml(title) + '</strong>',
+      '<span>' + escapeHtml(description || "") + '</span>',
+      '</div>'
     ].join("");
   }
 

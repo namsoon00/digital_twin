@@ -28,7 +28,7 @@ from digital_twin.domain.market_data import normalize_position, technical_indica
 from digital_twin.domain.message_types import DEFAULT_ALERT_RULES, DEFAULT_CADENCE, MESSAGE_TYPE_LABELS, public_message_catalog
 from digital_twin.domain.portfolio_calculations import portfolio_summary
 from digital_twin.domain.strategy import SafeFormula, StrategyModel, decisions_for_positions
-from digital_twin.domain.events import ACCOUNT_SAVED, MARKET_DATA_COLLECTED, MONITORING_ALERTS_DETECTED, MONITORING_CYCLE_COMPLETED, MONITORING_SNAPSHOT_COLLECTED, alerts_detected_event, monitoring_cycle_completed_event
+from digital_twin.domain.events import ACCOUNT_SAVED, MARKET_DATA_COLLECTED, MONITORING_ALERTS_DETECTED, MONITORING_CYCLE_COMPLETED, MONITORING_SNAPSHOT_COLLECTED, alerts_detected_event, monitoring_cycle_completed_event, snapshot_collected_event
 from digital_twin.domain.monitoring import RealtimeMonitor
 from digital_twin.domain.model_review import ModelReviewJob, local_model_review
 from digital_twin.domain.notification_templates import alert_context
@@ -218,13 +218,15 @@ class PythonServiceTests(unittest.TestCase):
     def test_toss_retries_transient_accounts_unauthorized(self):
         account = AccountConfig("main", "메인", "toss", "https://example.test", "id", "secret", "", [])
         account_calls = []
+        token_calls = []
 
         def fake_http_json(method, url, headers, body=None, timeout=12):
             path = urllib.parse.urlparse(url).path
             if path == "/oauth2/token":
-                return {"access_token": "token"}
+                token_calls.append(url)
+                return {"access_token": "token-" + str(len(token_calls))}
             if path == "/api/v1/accounts":
-                account_calls.append(url)
+                account_calls.append(headers.get("Authorization"))
                 if len(account_calls) == 1:
                     raise urllib.error.HTTPError(url, 401, "Unauthorized", {}, None)
                 return {"result": [{"accountSeq": "1", "currency": "KRW", "orderableAmount": "1000"}]}
@@ -243,6 +245,36 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("토스 계좌 동기화", status)
         self.assertEqual([], positions)
         self.assertEqual(2, len(account_calls))
+        self.assertEqual(["Bearer token-1", "Bearer token-2"], account_calls)
+        self.assertEqual(2, len(token_calls))
+        diagnostics = provider.diagnostics_payload()["toss"]
+        self.assertEqual(1, diagnostics["authRefreshes"])
+        self.assertEqual(1, diagnostics["stageFailures"]["accounts"]["count"])
+        self.assertEqual(1, diagnostics["stageFailures"]["accounts"]["recovered"])
+
+    def test_toss_failure_metadata_tracks_failed_stage(self):
+        account = AccountConfig("main", "메인", "toss", "https://example.test", "id", "secret", "", [])
+
+        def fake_http_json(method, url, headers, body=None, timeout=12):
+            path = urllib.parse.urlparse(url).path
+            if path == "/oauth2/token":
+                return {"access_token": "token"}
+            if path == "/api/v1/accounts":
+                raise urllib.error.HTTPError(url, 401, "Unauthorized", {}, None)
+            return {}
+
+        provider = TossProvider(account, quote_cache=SQLiteMarketQuoteCache(Path(self.temp.name) / "service.db"))
+        with mock.patch("digital_twin.infrastructure.toss_snapshots.http_json", side_effect=fake_http_json), \
+                mock.patch("digital_twin.infrastructure.toss_snapshots.time.sleep", return_value=None):
+            mode, status, _, _, _, _ = provider.fetch_positions()
+
+        diagnostics = provider.diagnostics_payload()["toss"]
+
+        self.assertEqual("demo", mode)
+        self.assertIn("Toss accounts 단계 실패", status)
+        self.assertEqual(1, diagnostics["authRefreshes"])
+        self.assertEqual(2, diagnostics["stageFailures"]["accounts"]["count"])
+        self.assertEqual("HTTP 401 Unauthorized", diagnostics["stageFailures"]["accounts"]["lastError"])
 
     def test_toss_failure_message_includes_stage_without_url(self):
         account = AccountConfig("main", "메인", "toss", "https://example.test", "id", "secret", "", [])
@@ -614,6 +646,97 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(any(event.rule == "monitorConnection" for event in events))
         self.assertFalse(any(event.rule in blocked_rules for event in events))
 
+    def test_connection_failure_is_watch_once_and_alert_when_repeated(self):
+        position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "marketValue": 864000,
+            "quantity": 10,
+            "currentPrice": 86400,
+            "sector": "반도체",
+        })
+        portfolio = portfolio_summary([position], 0, "KRW")
+        previous_live = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "토스 계좌 동기화",
+            utc_now_iso(),
+            portfolio,
+            [position],
+            decisions_for_positions([position], portfolio),
+        )
+        first_failed = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "demo",
+            "토스 조회 실패 · Toss accounts 단계 실패 · HTTP 401 Unauthorized",
+            utc_now_iso(),
+            portfolio,
+            [position],
+            decisions_for_positions([position], portfolio),
+            metadata={"toss": {"stageFailures": {"accounts": {"count": 2, "lastError": "HTTP 401 Unauthorized", "recovered": 0}}, "authRefreshes": 1}},
+        )
+        monitor = RealtimeMonitor()
+
+        first_event = next(event for event in monitor.connection_events(first_failed, previous_live.to_monitor_state()) if event.key.startswith("main:connection:demo"))
+        second_failed = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "demo",
+            "토스 조회 실패 · Toss accounts 단계 실패 · HTTP 401 Unauthorized",
+            utc_now_iso(),
+            portfolio,
+            [position],
+            decisions_for_positions([position], portfolio),
+            metadata={"toss": {"stageFailures": {"accounts": {"count": 2, "lastError": "HTTP 401 Unauthorized", "recovered": 0}}, "authRefreshes": 1}},
+        )
+        second_event = next(event for event in monitor.connection_events(second_failed, first_failed.to_monitor_state()) if event.key.startswith("main:connection:demo"))
+
+        self.assertEqual("WATCH", first_event.severity)
+        self.assertIn("상태 일시 인증 실패", first_event.lines)
+        self.assertIn("연속 실패 1회", first_event.lines)
+        self.assertEqual(1, first_event.metadata["connectionFailureStreak"])
+        self.assertEqual("ALERT", second_event.severity)
+        self.assertIn("상태 연속 인증 실패", second_event.lines)
+        self.assertIn("연속 실패 2회", second_event.lines)
+        self.assertEqual(2, second_event.metadata["connectionFailureStreak"])
+
+    def test_snapshot_collected_event_preserves_toss_failure_metadata(self):
+        position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "marketValue": 864000,
+            "quantity": 10,
+            "currentPrice": 86400,
+            "sector": "반도체",
+        })
+        portfolio = portfolio_summary([position], 0, "KRW")
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "demo",
+            "토스 조회 실패 · Toss accounts 단계 실패 · HTTP 401 Unauthorized",
+            utc_now_iso(),
+            portfolio,
+            [position],
+            decisions_for_positions([position], portfolio),
+            metadata={"connectionFailureStreak": 2, "toss": {"stageFailures": {"accounts": {"count": 2}}}},
+        )
+
+        event = snapshot_collected_event(snapshot)
+
+        self.assertEqual(2, event.payload["metadata"]["connectionFailureStreak"])
+        self.assertEqual(2, event.payload["metadata"]["toss"]["stageFailures"]["accounts"]["count"])
+
     def test_recovery_from_account_data_failure_starts_new_baseline(self):
         failed_position = normalize_position({
             "symbol": "005930",
@@ -951,7 +1074,7 @@ class PythonServiceTests(unittest.TestCase):
                         "updatedAt": "2026-07-04T00:00:00Z",
                     }
                     for index, symbol in enumerate(symbols)
-                }
+                }, token
 
             def fetch_daily_candles(self, token, symbol):
                 return [
@@ -961,7 +1084,7 @@ class PythonServiceTests(unittest.TestCase):
                         "volume": str(1000 + index),
                     }
                     for index in range(28)
-                ]
+                ], token
 
             def merge_market_data(self, *args, **kwargs):
                 return self.delegate.merge_market_data(*args, **kwargs)

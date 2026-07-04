@@ -83,6 +83,7 @@ def snapshot_collected_event(snapshot: AccountSnapshot) -> DomainEvent:
             "portfolioTotal": snapshot.portfolio.total,
             "portfolioInvested": snapshot.portfolio.invested,
             "portfolioCash": snapshot.portfolio.cash,
+            "metadata": dict(getattr(snapshot, "metadata", {}) or {}),
         },
     )
 

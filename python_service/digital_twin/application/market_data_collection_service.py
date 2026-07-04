@@ -138,18 +138,19 @@ class MarketDataCollectionRunner:
             "sector": item.get("sector"),
         })
 
-    def collect_candles(self, provider, token: str, symbols: Iterable[str]) -> Dict[str, Dict[str, object]]:
+    def collect_candles(self, provider, token: str, symbols: Iterable[str]):
         result: Dict[str, Dict[str, object]] = {}
         for index, symbol in enumerate(symbols):
             try:
                 if index:
                     self.sleep_fn(0.22)
-                indicators = technical_indicators_from_candles(provider.fetch_daily_candles(token, symbol))
+                candles, token = provider.fetch_daily_candles(token, symbol)
+                indicators = technical_indicators_from_candles(candles)
                 if indicators:
                     result[symbol] = indicators
             except Exception:
                 continue
-        return result
+        return result, token
 
     def run_once(self, force: bool = False) -> Dict[str, object]:
         if not self.enabled() and not force:
@@ -182,9 +183,9 @@ class MarketDataCollectionRunner:
         provider = self.provider_factory(account, self.quote_cache)
         token = provider.fetch_access_token()
         symbols = [str(item.get("symbol") or "").upper() for item in selected if item.get("symbol")]
-        prices = provider.fetch_prices(token, symbols)
+        prices, token = provider.fetch_prices(token, symbols)
         candle_symbols = symbols[:self.candle_batch_size()]
-        indicators = self.collect_candles(provider, token, candle_symbols)
+        indicators, token = self.collect_candles(provider, token, candle_symbols)
         saved = 0
         for item in selected:
             symbol = str(item.get("symbol") or "").upper()

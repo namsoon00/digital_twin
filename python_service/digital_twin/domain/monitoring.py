@@ -13,7 +13,7 @@ from .message_types import (
 )
 from .model_review import decision_change_review_lines
 from .parsing import parse_assignments
-from .portfolio import AccountSnapshot, AlertEvent, monitor_state_has_live_account_data
+from .portfolio import AccountSnapshot, AlertEvent, monitor_state_has_live_account_data, status_has_account_data_failure
 from .portfolio_calculations import DEFAULT_FX_RATES, value_in_base
 from .repositories import MonitorStateRepository
 from .strategy import StrategyModel
@@ -520,21 +520,76 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
             return "ALERT"
         return "WATCH"
 
+    def toss_diagnostics(self, snapshot: AccountSnapshot) -> Dict[str, object]:
+        metadata = dict(getattr(snapshot, "metadata", {}) or {})
+        toss = metadata.get("toss") if isinstance(metadata.get("toss"), dict) else {}
+        return dict(toss or {})
+
+    def toss_failure_stage(self, snapshot: AccountSnapshot) -> str:
+        toss = self.toss_diagnostics(snapshot)
+        stage_failures = toss.get("stageFailures") if isinstance(toss.get("stageFailures"), dict) else {}
+        if stage_failures:
+            return str(next(reversed(stage_failures.keys())) or "")
+        status = str(snapshot.status or "")
+        marker = "Toss "
+        suffix = " 단계 실패"
+        if marker in status and suffix in status:
+            return status.split(marker, 1)[1].split(suffix, 1)[0].strip()
+        return ""
+
+    def connection_failure_streak(self, snapshot: AccountSnapshot, previous: Dict[str, object]) -> int:
+        if snapshot.mode == "live" and not status_has_account_data_failure(snapshot.status):
+            return 0
+        previous_metadata = dict((previous or {}).get("metadata") or {})
+        previous_streak = int(float(previous_metadata.get("connectionFailureStreak") or 0))
+        previous_failed = (
+            str((previous or {}).get("mode") or "").strip().lower() != "live"
+            or status_has_account_data_failure((previous or {}).get("status"))
+        )
+        return (previous_streak if previous_failed else 0) + 1
+
+    def set_connection_failure_streak(self, snapshot: AccountSnapshot, streak: int) -> None:
+        metadata = dict(getattr(snapshot, "metadata", {}) or {})
+        metadata["connectionFailureStreak"] = int(streak or 0)
+        snapshot.metadata = metadata
+
     def connection_events(self, snapshot: AccountSnapshot, previous: Dict[str, object]) -> List[AlertEvent]:
         events: List[AlertEvent] = []
+        failure_streak = self.connection_failure_streak(snapshot, previous)
+        self.set_connection_failure_streak(snapshot, failure_streak)
         if snapshot.mode != "live":
+            repeated = failure_streak >= 2
+            severity = "ALERT" if repeated else "WATCH"
+            stage = self.toss_failure_stage(snapshot) or "-"
+            toss = self.toss_diagnostics(snapshot)
+            auth_refreshes = int(float(toss.get("authRefreshes") or 0))
+            status_line = "연속 인증 실패" if repeated else "일시 인증 실패"
+            retry_line = "재시도 access token 재발급 " + str(auth_refreshes) + "회" if auth_refreshes else ""
+            lines = [
+                "상태 " + status_line,
+                "연속 실패 " + str(failure_streak) + "회",
+                "실패 단계 " + stage,
+            ]
+            if retry_line:
+                lines.append(retry_line)
+            lines.append(snapshot.status or snapshot.mode)
             events.append(AlertEvent(
                 snapshot.account_id,
                 snapshot.account_label,
-                "ALERT",
+                severity,
                 "monitorConnection",
-                ":".join([snapshot.account_id, "connection", snapshot.mode, snapshot.status]),
+                ":".join([snapshot.account_id, "connection", snapshot.mode, "repeated" if repeated else "single", snapshot.status]),
                 "연결 상태",
-                ["토스 연결 상태가 live가 아닙니다", snapshot.status or snapshot.mode],
+                lines,
                 criteria=self.criteria(
-                    "토스 연결 모드가 live가 아닐 때",
-                    "mode=" + str(snapshot.mode or "-") + ", status=" + str(snapshot.status or "-"),
+                    "토스 연결 모드가 live가 아니며 " + ("2회 이상 연속 실패할 때 주의로 보냅니다" if repeated else "1회성 실패는 관찰로 보냅니다"),
+                    "연속 실패 " + str(failure_streak) + "회, stage=" + stage + ", mode=" + str(snapshot.mode or "-") + ", status=" + str(snapshot.status or "-"),
                 ),
+                metadata={
+                    "connectionFailureStreak": failure_streak,
+                    "tossFailureStage": stage,
+                    "tossAuthRefreshes": auth_refreshes,
+                },
             ))
         previous_status = previous.get("status") if previous else ""
         if previous_status and previous_status != snapshot.status:

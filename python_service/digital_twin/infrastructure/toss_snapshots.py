@@ -16,6 +16,14 @@ from .settings import currency_rates
 from .sqlite_monitoring import SQLiteMarketQuoteCache
 
 
+class TossAPIError(RuntimeError):
+    def __init__(self, stage: str, error: Exception):
+        self.stage = str(stage or "")
+        self.original_error = error
+        self.http_status = int(getattr(error, "code", 0) or 0)
+        super().__init__("Toss " + self.stage + " 단계 실패 · " + http_error_text(error))
+
+
 def http_json(method: str, url: str, headers: Dict[str, str], body: bytes = None, timeout: int = 12) -> Dict[str, object]:
     request = urllib.request.Request(url, data=body, method=method, headers=headers)
     with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -34,7 +42,7 @@ def http_error_text(error: Exception) -> str:
 
 def retryable_http_error(error: Exception) -> bool:
     if isinstance(error, urllib.error.HTTPError):
-        return int(error.code or 0) in {401, 408, 409, 425, 429, 500, 502, 503, 504}
+        return int(error.code or 0) in {408, 409, 425, 429, 500, 502, 503, 504}
     return isinstance(error, (urllib.error.URLError, TimeoutError, OSError))
 
 
@@ -56,7 +64,7 @@ def toss_json(
             if attempt + 1 >= max(1, attempts) or not retryable_http_error(error):
                 break
             time.sleep(0.35 * (attempt + 1))
-    raise RuntimeError("Toss " + stage + " 단계 실패 · " + http_error_text(last_error))
+    raise TossAPIError(stage, last_error)
 
 
 def form_body(payload: Dict[str, str]) -> bytes:
@@ -295,21 +303,83 @@ class TossProvider:
         self.account = account
         self.base_url = account.base_url.rstrip("/")
         self.quote_cache = quote_cache if quote_cache is not None else SQLiteMarketQuoteCache()
+        self.stage_failures: Dict[str, Dict[str, object]] = {}
+        self.auth_refreshes = 0
+
+    def diagnostics_payload(self) -> Dict[str, object]:
+        return {
+            "toss": {
+                "stageFailures": {
+                    stage: dict(payload)
+                    for stage, payload in self.stage_failures.items()
+                },
+                "authRefreshes": self.auth_refreshes,
+            }
+        }
+
+    def record_stage_failure(self, stage: str, error: Exception, recovered: bool = False) -> None:
+        normalized = str(stage or "unknown")
+        entry = self.stage_failures.setdefault(normalized, {
+            "count": 0,
+            "lastError": "",
+            "recovered": 0,
+        })
+        entry["lastError"] = http_error_text(error.original_error if isinstance(error, TossAPIError) else error)
+        if recovered:
+            entry["recovered"] = int(entry.get("recovered") or 0) + 1
+            return
+        entry["count"] = int(entry.get("count") or 0) + 1
+
+    def auth_headers(self, token: str, extra: Dict[str, str] = None) -> Dict[str, str]:
+        headers = {"Authorization": "Bearer " + token}
+        headers.update(extra or {})
+        return headers
+
+    def token_request(
+        self,
+        stage: str,
+        method: str,
+        url: str,
+        token: str,
+        extra_headers: Dict[str, str] = None,
+        body: bytes = None,
+    ) -> Tuple[Dict[str, object], str]:
+        try:
+            payload = toss_json(stage, method, url, self.auth_headers(token, extra_headers), body=body)
+            return payload, token
+        except TossAPIError as error:
+            if error.http_status != 401:
+                self.record_stage_failure(stage, error)
+                raise
+            self.record_stage_failure(stage, error)
+            refreshed = self.fetch_access_token()
+            self.auth_refreshes += 1
+            try:
+                payload = toss_json(stage, method, url, self.auth_headers(refreshed, extra_headers), body=body)
+                self.record_stage_failure(stage, error, recovered=True)
+                return payload, refreshed
+            except TossAPIError as retry_error:
+                self.record_stage_failure(stage, retry_error)
+                raise
 
     def fetch_access_token(self) -> str:
         if not self.account.client_id or not self.account.client_secret:
             raise RuntimeError("토스 credentials 미설정")
-        token_payload = toss_json(
-            "token",
-            "POST",
-            self.base_url + "/oauth2/token",
-            {"Content-Type": "application/x-www-form-urlencoded"},
-            form_body({
-                "grant_type": "client_credentials",
-                "client_id": self.account.client_id,
-                "client_secret": self.account.client_secret,
-            }),
-        )
+        try:
+            token_payload = toss_json(
+                "token",
+                "POST",
+                self.base_url + "/oauth2/token",
+                {"Content-Type": "application/x-www-form-urlencoded"},
+                form_body({
+                    "grant_type": "client_credentials",
+                    "client_id": self.account.client_id,
+                    "client_secret": self.account.client_secret,
+                }),
+            )
+        except TossAPIError as error:
+            self.record_stage_failure("token", error)
+            raise
         token = str(token_payload.get("access_token") or "")
         if not token:
             raise RuntimeError("토스 access_token이 없습니다.")
@@ -320,7 +390,7 @@ class TossProvider:
             return "demo", "토스 credentials 미설정", demo_positions(), 1250000.0, "KRW", []
         try:
             token = self.fetch_access_token()
-            accounts_payload = toss_json("accounts", "GET", self.base_url + "/api/v1/accounts", {"Authorization": "Bearer " + token})
+            accounts_payload, token = self.token_request("accounts", "GET", self.base_url + "/api/v1/accounts", token)
             accounts = normalize_accounts(accounts_payload)
             selected = select_account(accounts, self.account.account_seq)
             account_seq = self.account.account_seq or str(selected.get("accountSeq") or selected.get("id") or "")
@@ -328,50 +398,52 @@ class TossProvider:
             account_currency = str(selected.get("currency") or "KRW")
             if not account_seq:
                 return "live", "계좌 식별값 없음", [], account_cash, account_currency, []
-            buying_power = self.fetch_buying_power(token, account_seq)
+            buying_power, token = self.fetch_buying_power(token, account_seq)
             if buying_power:
                 account_cash = buying_power
                 account_currency = "KRW"
-            holdings_payload = toss_json(
+            holdings_payload, token = self.token_request(
                 "holdings",
                 "GET",
                 self.base_url + "/api/v1/holdings",
-                {"Authorization": "Bearer " + token, "X-Tossinvest-Account": account_seq},
+                token,
+                {"X-Tossinvest-Account": account_seq},
             )
             positions = [normalize_position(item) for item in normalize_holdings(holdings_payload)]
-            position_prices = self.safe_fetch_prices(token, [position.symbol for position in positions if position.symbol and not position.is_cash()])
-            positions = self.enrich_positions_with_candles(token, positions, position_prices)
-            watchlist = self.fetch_watchlist_quotes(token, positions)
+            position_prices, token = self.safe_fetch_prices(token, [position.symbol for position in positions if position.symbol and not position.is_cash()])
+            positions, token = self.enrich_positions_with_candles(token, positions, position_prices)
+            watchlist, token = self.fetch_watchlist_quotes(token, positions)
             return "live", "토스 계좌 동기화", positions, account_cash, account_currency, watchlist
-        except (urllib.error.URLError, urllib.error.HTTPError, RuntimeError, ValueError) as error:
+        except (urllib.error.URLError, urllib.error.HTTPError, RuntimeError, ValueError, OSError) as error:
             return "demo", "토스 조회 실패 · " + str(error), demo_positions(), 1250000.0, "KRW", []
 
-    def fetch_buying_power(self, token: str, account_seq: str) -> float:
+    def fetch_buying_power(self, token: str, account_seq: str) -> Tuple[float, str]:
         total = 0.0
         rates = currency_rates()
         for currency in ["KRW", "USD"]:
             try:
                 query = urllib.parse.urlencode({"currency": currency})
-                payload = toss_json(
+                payload, token = self.token_request(
                     "buying-power",
                     "GET",
                     self.base_url + "/api/v1/buying-power?" + query,
-                    {"Authorization": "Bearer " + token, "X-Tossinvest-Account": account_seq},
+                    token,
+                    {"X-Tossinvest-Account": account_seq},
                 )
             except (urllib.error.URLError, urllib.error.HTTPError, RuntimeError, ValueError):
                 continue
             data = payload.get("data") or payload.get("result") or payload
             amount = number(data.get("cashBuyingPower") if isinstance(data, dict) else 0)
             total += amount * rates.get(currency, 1.0)
-        return total
+        return total, token
 
-    def safe_fetch_prices(self, token: str, symbols: List[str]) -> Dict[str, Dict[str, object]]:
+    def safe_fetch_prices(self, token: str, symbols: List[str]) -> Tuple[Dict[str, Dict[str, object]], str]:
         try:
             return self.fetch_prices(token, symbols)
         except (urllib.error.URLError, urllib.error.HTTPError, RuntimeError, ValueError, OSError):
-            return {}
+            return {}, token
 
-    def fetch_prices(self, token: str, symbols: List[str]) -> Dict[str, Dict[str, object]]:
+    def fetch_prices(self, token: str, symbols: List[str]) -> Tuple[Dict[str, Dict[str, object]], str]:
         unique = []
         for symbol in symbols:
             normalized = str(symbol or "").upper().strip()
@@ -383,33 +455,33 @@ class TossProvider:
             if not chunk:
                 continue
             query = urllib.parse.urlencode({"symbols": ",".join(chunk)})
-            payload = toss_json(
+            payload, token = self.token_request(
                 "prices",
                 "GET",
                 self.base_url + "/api/v1/prices?" + query,
-                {"Authorization": "Bearer " + token},
+                token,
             )
             for item in normalize_price_items(payload):
                 normalized = normalize_price_payload(item)
                 symbol = str(normalized.get("symbol") or "").upper()
                 if symbol:
                     quotes[symbol] = normalized
-        return quotes
+        return quotes, token
 
-    def fetch_daily_candles(self, token: str, symbol: str) -> List[Dict[str, object]]:
+    def fetch_daily_candles(self, token: str, symbol: str) -> Tuple[List[Dict[str, object]], str]:
         query = urllib.parse.urlencode({
             "symbol": symbol,
             "interval": "1d",
             "count": "200",
             "adjusted": "true",
         })
-        payload = toss_json(
+        payload, token = self.token_request(
             "candles",
             "GET",
             self.base_url + "/api/v1/candles?" + query,
-            {"Authorization": "Bearer " + token},
+            token,
         )
-        return normalize_candles(payload)
+        return normalize_candles(payload), token
 
     def cached_quote(self, symbol: str) -> Dict[str, object]:
         try:
@@ -553,7 +625,7 @@ class TossProvider:
         token: str,
         positions: List[Position],
         price_map: Optional[Dict[str, Dict[str, object]]] = None,
-    ) -> List[Position]:
+    ) -> Tuple[List[Position], str]:
         enriched: List[Position] = []
         chart_calls = 0
         prices = price_map or {}
@@ -566,7 +638,7 @@ class TossProvider:
             try:
                 if chart_calls:
                     time.sleep(0.22)
-                candles = self.fetch_daily_candles(token, position.symbol)
+                candles, token = self.fetch_daily_candles(token, position.symbol)
                 chart_calls += 1
                 indicators = technical_indicators_from_candles(candles)
                 indicators_live = bool(indicators)
@@ -584,9 +656,9 @@ class TossProvider:
             if prices.get(symbol) or indicators_live:
                 self.save_quote_cache(merged)
             enriched.append(merged)
-        return enriched
+        return enriched, token
 
-    def fetch_watchlist_quotes(self, token: str, positions: List[Position]) -> List[Position]:
+    def fetch_watchlist_quotes(self, token: str, positions: List[Position]) -> Tuple[List[Position], str]:
         holding_symbols = {position.symbol.upper() for position in positions if position.symbol}
         watchlist: List[Position] = []
         symbols = [
@@ -594,7 +666,7 @@ class TossProvider:
             for symbol in self.account.watchlist_symbols[:30]
             if str(symbol or "").upper() and str(symbol or "").upper() not in holding_symbols
         ]
-        prices = self.safe_fetch_prices(token, symbols)
+        prices, token = self.safe_fetch_prices(token, symbols)
         chart_calls = 0
         for symbol in symbols:
             normalized = str(symbol or "").upper()
@@ -611,7 +683,7 @@ class TossProvider:
             try:
                 if chart_calls:
                     time.sleep(0.22)
-                candles = self.fetch_daily_candles(token, normalized)
+                candles, token = self.fetch_daily_candles(token, normalized)
                 chart_calls += 1
                 indicators = technical_indicators_from_candles(candles)
                 indicators_live = bool(indicators)
@@ -629,7 +701,7 @@ class TossProvider:
             if quote or indicators_live:
                 self.save_quote_cache(merged)
             watchlist.append(merged)
-        return watchlist
+        return watchlist, token
 
 
 def build_snapshot(account: AccountConfig) -> AccountSnapshot:
@@ -650,4 +722,5 @@ def build_snapshot(account: AccountConfig) -> AccountSnapshot:
         decisions=decisions,
         external_signals=external_signals,
         watchlist=watchlist,
+        metadata=provider.diagnostics_payload(),
     )

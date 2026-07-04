@@ -115,6 +115,7 @@ class AccountSnapshot:
     decisions: List[DecisionItem] = field(default_factory=list)
     external_signals: Dict[str, object] = field(default_factory=dict)
     watchlist: List[Position] = field(default_factory=list)
+    metadata: Dict[str, object] = field(default_factory=dict)
 
     def has_live_account_data(self) -> bool:
         return monitor_state_has_live_account_data({"mode": self.mode, "status": self.status})
@@ -144,6 +145,7 @@ class AccountSnapshot:
                 for item in self.watchlist
                 if not item.is_cash()
             },
+            "metadata": dict(self.metadata or {}),
         }
 
 

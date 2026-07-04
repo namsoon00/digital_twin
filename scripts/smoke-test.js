@@ -683,7 +683,9 @@ function checkFrontendAdminRender() {
     assertOk(symbolUniverseHtml.indexOf("data-symbol-add-account") >= 0, "전체종목 탭에 관심 추가 대상 계정 선택이 없습니다.");
     assertOk(notificationHtml.indexOf("admin-message-row") >= 0, "메시지 타입별 알림 설정이 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("data-message-toggle") >= 0, "알림 타입 상세 접기/펼치기 버튼이 없습니다.");
+    assertOk(notificationHtml.indexOf('aria-controls="alert-rule-') >= 0, "알림 타입 상세 토글과 상세 영역이 연결되지 않았습니다.");
     assertOk(notificationHtml.indexOf("admin-message-details\" hidden") >= 0, "알림 타입 상세가 기본 접힘 상태가 아닙니다.");
+    assertOk(notificationHtml.indexOf("admin-message-detail-footer") >= 0 && notificationHtml.indexOf("이 알림 설정 접기") >= 0, "알림 상세 하단 접기 버튼이 없습니다.");
     assertOk(notificationHtml.indexOf('data-action="expand-message-types"') >= 0 && notificationHtml.indexOf('data-action="collapse-message-types"') >= 0, "알림 타입 전체 펼치기/접기 버튼이 없습니다.");
     assertOk(notificationHtml.indexOf("notification-template-row") >= 0, "알림 템플릿 편집기가 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("admin-message-template") >= 0, "알림 타입 행 안에 템플릿 편집기가 렌더링되지 않았습니다.");

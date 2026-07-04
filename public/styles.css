@@ -2011,6 +2011,11 @@ h3 {
   background: var(--panel);
 }
 
+.admin-message-row.expanded {
+  border-color: rgba(49, 130, 246, 0.28);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
+}
+
 .admin-message-row > input {
   width: 18px;
   height: 18px;
@@ -2065,13 +2070,45 @@ h3 {
 }
 
 .admin-message-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   min-height: 38px;
+  min-width: 88px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--ds-radius-control);
+  background: var(--input);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 900;
   white-space: nowrap;
+  cursor: pointer;
+}
+
+.admin-message-toggle:hover {
+  border-color: rgba(49, 130, 246, 0.42);
+  background: var(--blue-soft);
+}
+
+.admin-message-toggle[aria-expanded="true"] {
+  border-color: rgba(49, 130, 246, 0.42);
+  background: var(--blue-soft);
+  color: var(--blue);
 }
 
 .admin-message-details {
   grid-column: 2 / -1;
+  display: grid;
+  gap: 10px;
   min-width: 0;
+  margin-top: 2px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
 }
 
 .admin-message-details[hidden] {
@@ -2082,6 +2119,39 @@ h3 {
   display: grid;
   gap: 10px;
   min-width: 0;
+}
+
+.admin-message-detail-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+  padding-bottom: 2px;
+}
+
+.admin-message-detail-head strong {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.admin-message-detail-head span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 1.35;
+  text-align: right;
+}
+
+.admin-message-detail-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 2px;
+}
+
+.admin-message-collapse-bottom {
+  min-height: 36px;
 }
 
 .admin-message-detail-grid .admin-message-template.notification-template-row,
@@ -4522,6 +4592,48 @@ h3 {
   .admin-message-template.notification-template-row,
   .admin-message-rule.notification-rule-editor {
     grid-column: auto;
+  }
+
+  .admin-message-row > input {
+    justify-self: start;
+  }
+
+  .admin-message-panel .panel-head {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .admin-message-panel .panel-head .settings-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    justify-self: stretch;
+    width: 100%;
+  }
+
+  .admin-message-panel .panel-head .settings-actions .primary {
+    grid-column: 1 / -1;
+  }
+
+  .admin-message-toggle {
+    width: 100%;
+  }
+
+  .admin-message-detail-head {
+    align-items: start;
+    display: grid;
+  }
+
+  .admin-message-detail-head span {
+    text-align: left;
+  }
+
+  .admin-message-detail-footer {
+    justify-content: stretch;
+  }
+
+  .admin-message-detail-footer .text-button {
+    width: 100%;
+    justify-content: center;
   }
 
   .strategy-data-status {

@@ -3,8 +3,22 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 
+ACCOUNT_DATA_FAILURE_TERMS = ("실패", "오류", "unauthorized", "forbidden", "http 4", "http 5", "error", "timeout")
+
+
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def status_has_account_data_failure(status: object) -> bool:
+    normalized = str(status or "").strip().lower()
+    return any(term in normalized for term in ACCOUNT_DATA_FAILURE_TERMS)
+
+
+def monitor_state_has_live_account_data(state: Dict[str, object]) -> bool:
+    if not isinstance(state, dict):
+        return False
+    return str(state.get("mode") or "").strip().lower() == "live" and not status_has_account_data_failure(state.get("status"))
 
 
 @dataclass
@@ -101,6 +115,9 @@ class AccountSnapshot:
     decisions: List[DecisionItem] = field(default_factory=list)
     external_signals: Dict[str, object] = field(default_factory=dict)
     watchlist: List[Position] = field(default_factory=list)
+
+    def has_live_account_data(self) -> bool:
+        return monitor_state_has_live_account_data({"mode": self.mode, "status": self.status})
 
     def to_monitor_state(self) -> Dict[str, object]:
         return {

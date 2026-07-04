@@ -560,6 +560,114 @@ class PythonServiceTests(unittest.TestCase):
         self.assertRegex(message, r"상태 .+ \([0-9.]+점\)")
         self.assertTrue(any("상태 " in item and "점)" in item for item in event.criteria))
 
+    def test_account_data_failure_suppresses_investment_change_alerts(self):
+        live_position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "marketValue": 864000,
+            "quantity": 10,
+            "currentPrice": 86400,
+            "profitLossRate": 3,
+            "sector": "반도체",
+        })
+        failed_position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "marketValue": 864000,
+            "quantity": 10,
+            "currentPrice": 86400,
+            "profitLossRate": 3,
+            "sector": "반도체",
+        })
+        live_portfolio = portfolio_summary([live_position], 1250000, "KRW")
+        failed_portfolio = portfolio_summary([failed_position], 0, "KRW")
+        previous_live = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "토스 계좌 동기화",
+            utc_now_iso(),
+            live_portfolio,
+            [live_position],
+            decisions_for_positions([live_position], live_portfolio),
+        )
+        current_failed = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "demo",
+            "토스 조회 실패 · Toss holdings 단계 실패 · HTTP 401 Unauthorized",
+            utc_now_iso(),
+            failed_portfolio,
+            [failed_position],
+            decisions_for_positions([failed_position], failed_portfolio),
+        )
+
+        events = RealtimeMonitor().events_for_snapshot(current_failed, previous_live.to_monitor_state())
+
+        blocked_rules = {"monitorCashChange", "monitorPositionChange", "monitorPnlChange", "monitorValueChange", "monitorDecisionChange", "holdingTiming"}
+        self.assertTrue(any(event.rule == "monitorConnection" for event in events))
+        self.assertFalse(any(event.rule in blocked_rules for event in events))
+
+    def test_recovery_from_account_data_failure_starts_new_baseline(self):
+        failed_position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "marketValue": 864000,
+            "quantity": 10,
+            "currentPrice": 86400,
+            "profitLossRate": 3,
+            "sector": "반도체",
+        })
+        live_position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "marketValue": 864000,
+            "quantity": 10,
+            "currentPrice": 86400,
+            "profitLossRate": 3,
+            "sector": "반도체",
+        })
+        failed_portfolio = portfolio_summary([failed_position], 1250000, "KRW")
+        live_portfolio = portfolio_summary([live_position], 0, "KRW")
+        previous_failed = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "demo",
+            "토스 조회 실패 · Toss holdings 단계 실패 · HTTP 401 Unauthorized",
+            utc_now_iso(),
+            failed_portfolio,
+            [failed_position],
+            decisions_for_positions([failed_position], failed_portfolio),
+        )
+        current_live = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "토스 계좌 동기화",
+            utc_now_iso(),
+            live_portfolio,
+            [live_position],
+            decisions_for_positions([live_position], live_portfolio),
+        )
+
+        events = RealtimeMonitor().events_for_snapshot(current_live, previous_failed.to_monitor_state())
+
+        baseline_rules = {"monitorCashChange", "monitorPositionChange", "monitorPnlChange", "monitorValueChange", "monitorDecisionChange"}
+        self.assertTrue(any(event.rule == "monitorConnection" for event in events))
+        self.assertFalse(any(event.rule in baseline_rules for event in events))
+
     def test_monitor_trend_change_uses_moving_average_data(self):
         previous_position = normalize_position({
             "symbol": "005930",

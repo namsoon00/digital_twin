@@ -13,7 +13,7 @@ from .message_types import (
 )
 from .model_review import decision_change_review_lines
 from .parsing import parse_assignments
-from .portfolio import AccountSnapshot, AlertEvent
+from .portfolio import AccountSnapshot, AlertEvent, monitor_state_has_live_account_data
 from .portfolio_calculations import DEFAULT_FX_RATES, value_in_base
 from .repositories import MonitorStateRepository
 from .strategy import StrategyModel
@@ -86,15 +86,19 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
 
     def events_for_snapshot(self, snapshot: AccountSnapshot, previous: Dict[str, object]) -> List[AlertEvent]:
         events: List[AlertEvent] = []
+        has_account_data = snapshot.has_live_account_data()
+        previous_has_account_data = monitor_state_has_live_account_data(previous)
         events.extend(self.connection_events(snapshot, previous))
         events.extend(self.heartbeat_events(snapshot))
-        events.extend(self.model_score_events(snapshot))
-        if previous:
+        if has_account_data:
+            events.extend(self.model_score_events(snapshot))
+        if has_account_data and previous_has_account_data:
             events.extend(self.position_change_events(snapshot, previous))
             events.extend(self.cash_events(snapshot, previous))
         events.extend(self.watchlist_quote_events(snapshot, previous or {}))
         events.extend(self.external_signal_events(snapshot, previous or {}))
-        events.extend(self.holding_timing_events(snapshot))
+        if has_account_data:
+            events.extend(self.holding_timing_events(snapshot))
         return [event for event in self.stamp_events(snapshot, events) if self.enabled(event.rule)]
 
     def type_check_events_for_snapshot(self, snapshot: AccountSnapshot) -> List[AlertEvent]:

@@ -6031,6 +6031,7 @@
 
   function renderAdminMessageRow(rule, checked, cadence, schedule, template) {
     var ruleId = "alert-rule-" + String(rule.key || "").replace(/[^A-Za-z0-9_-]/g, "-");
+    var detailsId = ruleId + "-details";
     var expanded = notificationTypeExpanded(rule.key);
     return [
       '<div class="admin-message-row ' + (expanded ? "expanded" : "collapsed") + '">',
@@ -6043,14 +6044,23 @@
       '<input data-alert-cadence="' + escapeHtml(rule.key) + '" type="number" min="10" step="10" value="' + escapeHtml(cadence) + '" />',
       '<b>분</b>',
       '</span>',
-      '<button class="mini-button admin-message-toggle" type="button" data-message-toggle="' + escapeHtml(rule.key) + '" aria-expanded="' + escapeHtml(expanded ? "true" : "false") + '">' + escapeHtml(expanded ? "접기" : "상세") + '</button>',
+      '<button class="admin-message-toggle" type="button" data-message-toggle="' + escapeHtml(rule.key) + '" aria-expanded="' + escapeHtml(expanded ? "true" : "false") + '" aria-controls="' + escapeHtml(detailsId) + '">',
+      '<span>' + escapeHtml(expanded ? "설정 닫기" : "설정 편집") + '</span>',
+      '</button>',
       '<div class="admin-message-schedule">',
       renderMessageScheduleSummary(schedule, !expanded),
       '</div>',
-      '<div class="admin-message-details"' + (expanded ? '' : ' hidden') + '>',
+      '<div id="' + escapeHtml(detailsId) + '" class="admin-message-details"' + (expanded ? '' : ' hidden') + '>',
+      '<div class="admin-message-detail-head">',
+      '<strong>알림 상세 설정</strong>',
+      '<span>메시지 본문과 발송 조건을 이 타입에만 적용합니다.</span>',
+      '</div>',
       '<div class="admin-message-detail-grid">',
       renderNotificationTemplateRow(template, { inline: true }),
       renderNotificationRuleEditor(rule.key, { inline: true }),
+      '</div>',
+      '<div class="admin-message-detail-footer">',
+      '<button class="text-button compact admin-message-collapse-bottom" type="button" data-message-toggle="' + escapeHtml(rule.key) + '">이 알림 설정 접기</button>',
       '</div>',
       '</div>',
       '</div>'

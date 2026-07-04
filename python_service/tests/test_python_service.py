@@ -1358,6 +1358,49 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(any("24h -5.2%" in item for item in criteria_by_rule["externalCryptoMove"]))
         self.assertTrue(any("±15bp 이상" in item for item in criteria_by_rule["externalMacroShift"]))
 
+    def test_bitcoin_crypto_alert_uses_lower_bitcoin_thresholds(self):
+        portfolio = portfolio_summary([])
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "ok",
+            utc_now_iso(),
+            portfolio,
+            [],
+            [],
+            external_signals={
+                "cryptoMarkets": {
+                    "bitcoin": {
+                        "provider": "CoinGecko",
+                        "symbol": "BTC",
+                        "name": "Bitcoin",
+                        "price": 63251,
+                        "volume24h": 20330791035,
+                        "change24h": 1.8,
+                        "change7d": 5.3,
+                    },
+                    "ethereum": {
+                        "provider": "CoinGecko",
+                        "symbol": "ETH",
+                        "name": "Ethereum",
+                        "price": 1791,
+                        "volume24h": 7939639331,
+                        "change24h": 1.8,
+                        "change7d": 5.3,
+                    },
+                }
+            },
+        )
+
+        events = RealtimeMonitor().external_signal_events(snapshot, {})
+
+        crypto_events = [event for event in events if event.rule == "externalCryptoMove"]
+        self.assertEqual(["BTC"], [event.symbol for event in crypto_events])
+        self.assertIn("비트코인 변동", crypto_events[0].message())
+        self.assertTrue(any("비트코인 24h ±3% 또는 7d ±4% 이상" in item for item in crypto_events[0].criteria))
+
     def test_external_signal_provider_normalizes_api_responses_and_caches(self):
         calls = []
 

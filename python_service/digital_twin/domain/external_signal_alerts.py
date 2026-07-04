@@ -87,8 +87,10 @@ class ExternalSignalAlertMixin:
         return events
 
     def external_crypto_events(self, snapshot: AccountSnapshot, signals: Dict[str, object]) -> List[AlertEvent]:
-        day_threshold = float(self.thresholds.get("externalCryptoChange24hPct", 0))
-        week_threshold = float(self.thresholds.get("externalCryptoChange7dPct", 0))
+        default_day_threshold = float(self.thresholds.get("externalCryptoChange24hPct", 0))
+        default_week_threshold = float(self.thresholds.get("externalCryptoChange7dPct", 0))
+        bitcoin_day_threshold = float(self.thresholds.get("externalBitcoinChange24hPct", default_day_threshold))
+        bitcoin_week_threshold = float(self.thresholds.get("externalBitcoinChange7dPct", default_week_threshold))
         events: List[AlertEvent] = []
         markets = signals.get("cryptoMarkets") or {}
         for coin_id, item in markets.items():
@@ -96,17 +98,24 @@ class ExternalSignalAlertMixin:
                 continue
             change24h = number(item.get("change24h"))
             change7d = number(item.get("change7d"))
-            if day_threshold and abs(change24h) < day_threshold and week_threshold and abs(change7d) < week_threshold:
-                continue
             symbol = str(item.get("symbol") or coin_id).upper()
             coin_name = str(item.get("name") or "").strip()
+            is_bitcoin = symbol == "BTC" or str(coin_id or "").strip().lower() == "bitcoin" or coin_name.lower() == "bitcoin"
+            day_threshold = bitcoin_day_threshold if is_bitcoin else default_day_threshold
+            week_threshold = bitcoin_week_threshold if is_bitcoin else default_week_threshold
+            if day_threshold and abs(change24h) < day_threshold and week_threshold and abs(change7d) < week_threshold:
+                continue
             price = number(item.get("price"))
             volume24h = number(item.get("volume24h"))
             provider = str(item.get("provider") or "CoinGecko")
-            is_bitcoin = symbol == "BTC" or str(coin_id or "").strip().lower() == "bitcoin" or coin_name.lower() == "bitcoin"
             change_label = "비트코인 변동" if is_bitcoin else "크립토 변동"
             change_value = "24h " + signed_pct(change24h) + " · 7d " + signed_pct(change7d)
             severity = "ALERT" if change24h < 0 or change7d < 0 else "WATCH"
+            threshold_label = (
+                "비트코인 24h ±" + self.threshold_text("externalBitcoinChange24hPct", "%") + " 또는 7d ±" + self.threshold_text("externalBitcoinChange7dPct", "%") + " 이상"
+                if is_bitcoin
+                else "크립토 24h ±" + self.threshold_text("externalCryptoChange24hPct", "%") + " 또는 7d ±" + self.threshold_text("externalCryptoChange7dPct", "%") + " 이상"
+            )
             events.append(AlertEvent(
                 snapshot.account_id,
                 snapshot.account_label,
@@ -123,7 +132,7 @@ class ExternalSignalAlertMixin:
                 ],
                 symbol,
                 criteria=self.criteria(
-                    "크립토 24h ±" + self.threshold_text("externalCryptoChange24hPct", "%") + " 또는 7d ±" + self.threshold_text("externalCryptoChange7dPct", "%") + " 이상",
+                    threshold_label,
                     ("비트코인 " if is_bitcoin else symbol + " ") + "24h " + signed_pct(change24h) + ", 7d " + signed_pct(change7d),
                 ),
                 metadata={

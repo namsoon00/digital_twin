@@ -187,6 +187,8 @@
       "externalEquityChangePct=3",
       "externalCryptoChange24hPct=4",
       "externalCryptoChange7dPct=10",
+      "externalBitcoinChange24hPct=3",
+      "externalBitcoinChange7dPct=4",
       "externalMacroRateDeltaBp=15"
     ].join("\n")
   };
@@ -334,6 +336,8 @@
     { key: "externalEquityChangePct", label: "미장 가격 변화", unit: "%", step: "0.1" },
     { key: "externalCryptoChange24hPct", label: "크립토 24h 변화", unit: "%", step: "0.1" },
     { key: "externalCryptoChange7dPct", label: "크립토 7d 변화", unit: "%", step: "0.1" },
+    { key: "externalBitcoinChange24hPct", label: "비트코인 24h 변화", unit: "%", step: "0.1" },
+    { key: "externalBitcoinChange7dPct", label: "비트코인 7d 변화", unit: "%", step: "0.1" },
     { key: "externalMacroRateDeltaBp", label: "거시 금리 변화", unit: "bp", step: "1" }
   ];
   var settingsMemoryStore = "";

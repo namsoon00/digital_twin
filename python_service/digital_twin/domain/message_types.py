@@ -87,6 +87,8 @@ DEFAULT_ALERT_THRESHOLDS = {
     "externalEquityChangePct": 3,
     "externalCryptoChange24hPct": 4,
     "externalCryptoChange7dPct": 10,
+    "externalBitcoinChange24hPct": 3,
+    "externalBitcoinChange7dPct": 4,
     "externalMacroRateDeltaBp": 15,
 }
 

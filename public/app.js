@@ -203,7 +203,7 @@
     { id: "settings", label: "설정", description: "런타임 환경" }
   ];
   var bottomTabIds = ["overview", "watchlist", "monitoring", "notifications"];
-  var topActionTabIds = ["accounts", "symbols", "modeling", "settings"];
+  var managementTabIds = ["accounts", "symbols", "modeling", "settings"];
   var notificationSections = [
     { id: "status", label: "현황", description: "발송 판단" },
     { id: "policy", label: "정책", description: "타입별 룰" },
@@ -5343,16 +5343,12 @@
     var subtitle = (tab.description || "운영") + " · 마지막 데이터 " + formatClock(snapshot.generatedAt);
     return [
       '<main class="shell">',
-      renderTopActions(),
+      renderAppNavigation(tab, modeLabel, modeClass),
       '<section class="topbar">',
       '<div class="topbar-copy">',
       '<p class="eyebrow">Exit Lens Admin</p>',
       '<h1>' + escapeHtml(tab.label || "홈") + '</h1>',
       '<p class="subtle">' + escapeHtml(subtitle) + '</p>',
-      '</div>',
-      '<div class="toolbar topbar-actions">',
-      '<span class="status-pill ' + modeClass + '">' + escapeHtml(modeLabel) + "</span>",
-      '<button class="icon-button" type="button" data-action="refresh" title="새로고침" aria-label="새로고침">' + (state.refreshing ? "…" : "↻") + "</button>",
       '</div>',
       '</section>',
       '<section class="workspace-layout">',
@@ -5366,21 +5362,52 @@
     ].join("");
   }
 
-  function renderTopActions() {
-    var actionTabs = tabs.filter(function (tab) {
-      return topActionTabIds.indexOf(tab.id) >= 0;
+  function navTabButton(tab, className) {
+    var active = state.activeTab === tab.id;
+    return [
+      '<button type="button" class="' + escapeHtml(className) + (active ? " active" : "") + '" data-tab="' + escapeHtml(tab.id) + '"' + (active ? ' aria-current="page"' : "") + '>',
+      '<span>' + escapeHtml(tab.label) + '</span>',
+      '</button>'
+    ].join("");
+  }
+
+  function renderAppNavigation(activeTab, modeLabel, modeClass) {
+    var primaryTabs = tabs.filter(function (tab) {
+      return bottomTabIds.indexOf(tab.id) >= 0;
+    });
+    var managementTabs = tabs.filter(function (tab) {
+      return managementTabIds.indexOf(tab.id) >= 0;
+    });
+    var managementActive = managementTabs.some(function (tab) {
+      return tab.id === state.activeTab;
     });
     return [
-      '<nav class="top-action-bar" aria-label="관리 화면">',
-      actionTabs.map(function (tab) {
-        var active = state.activeTab === tab.id;
-        return [
-          '<button type="button" class="top-action-button' + (active ? " active" : "") + '" data-tab="' + escapeHtml(tab.id) + '"' + (active ? ' aria-current="page"' : "") + '>',
-          '<strong>' + escapeHtml(tab.label) + '</strong>',
-          '<span>' + escapeHtml(tab.description || "") + '</span>',
-          '</button>'
-        ].join("");
+      '<nav class="app-nav" aria-label="앱 네비게이션">',
+      '<div class="app-nav-brand">',
+      '<strong>Exit Lens</strong>',
+      '<span>' + escapeHtml(activeTab.description || "운영 콘솔") + '</span>',
+      '</div>',
+      '<div class="app-nav-tabs" aria-label="전체 탭">',
+      primaryTabs.map(function (tab) {
+        return navTabButton(tab, "app-nav-tab primary");
       }).join(""),
+      '<span class="app-nav-divider" aria-hidden="true"></span>',
+      managementTabs.map(function (tab) {
+        return navTabButton(tab, "app-nav-tab admin");
+      }).join(""),
+      '</div>',
+      '<details class="app-nav-menu">',
+      '<summary><strong>관리</strong><span>' + escapeHtml(managementActive ? activeTab.label : "설정·계정") + '</span></summary>',
+      '<div class="app-nav-menu-list">',
+      managementTabs.map(function (tab) {
+        return navTabButton(tab, "app-nav-menu-item");
+      }).join(""),
+      '</div>',
+      '</details>',
+      '<div class="app-nav-tools">',
+      '<span class="status-pill ' + modeClass + '">' + escapeHtml(modeLabel) + "</span>",
+      '<button class="icon-button" type="button" data-action="refresh" title="새로고침" aria-label="새로고침">' + (state.refreshing ? "…" : "↻") + "</button>",
+      '</div>',
       '</nav>'
     ].join("");
   }

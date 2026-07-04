@@ -202,8 +202,8 @@
     { id: "modeling", label: "투자전략", description: "모델링 관리" },
     { id: "settings", label: "설정", description: "런타임 환경" }
   ];
-  var bottomTabIds = ["overview", "watchlist", "monitoring", "notifications"];
-  var managementTabIds = ["accounts", "symbols", "modeling", "settings"];
+  var bottomTabIds = ["overview", "watchlist", "monitoring", "modeling"];
+  var managementTabIds = ["accounts", "symbols", "notifications", "settings"];
   var notificationSections = [
     { id: "status", label: "현황", description: "발송 판단" },
     { id: "policy", label: "정책", description: "타입별 룰" },
@@ -352,6 +352,9 @@
   var realtimeReconnectTimer = null;
   var realtimeReloadTimer = null;
   var realtimeSeenEventIds = {};
+  var appNavLastScrollY = 0;
+  var appNavHidden = false;
+  var appNavScrollTicking = false;
   var state = {
     loading: true,
     refreshing: false,
@@ -831,6 +834,56 @@
     window.history.replaceState({ tab: "notifications", notification: normalized }, "", notificationSectionUrl(normalized));
   }
 
+  function currentAppNav() {
+    return app && app.querySelector ? app.querySelector(".app-nav") : null;
+  }
+
+  function closeAppNavMenu() {
+    var menu = app && app.querySelector ? app.querySelector(".app-nav-menu") : null;
+    if (menu) menu.open = false;
+  }
+
+  function setAppNavHidden(hidden) {
+    appNavHidden = Boolean(hidden);
+    var nav = currentAppNav();
+    if (!nav) return;
+    nav.classList.toggle("is-hidden", appNavHidden);
+    if (appNavHidden) closeAppNavMenu();
+  }
+
+  function syncAppNavScrollState() {
+    var scrollY = Math.max(0, Number(window.pageYOffset || document.documentElement.scrollTop || 0));
+    var mobile = window.matchMedia ? window.matchMedia("(max-width: 860px)").matches : false;
+    if (!mobile) {
+      setAppNavHidden(false);
+      appNavLastScrollY = scrollY;
+      return;
+    }
+    var delta = scrollY - appNavLastScrollY;
+    if (Math.abs(delta) > 3) closeAppNavMenu();
+    if (scrollY > 96 && delta > 8) {
+      setAppNavHidden(true);
+    } else if (scrollY < 48 || delta < -8) {
+      setAppNavHidden(false);
+    } else {
+      var nav = currentAppNav();
+      if (nav) nav.classList.toggle("is-hidden", appNavHidden);
+    }
+    appNavLastScrollY = scrollY;
+  }
+
+  function scheduleAppNavScrollState() {
+    if (appNavScrollTicking) return;
+    appNavScrollTicking = true;
+    var frame = window.requestAnimationFrame || function (callback) {
+      return window.setTimeout(callback, 16);
+    };
+    frame(function () {
+      appNavScrollTicking = false;
+      syncAppNavScrollState();
+    });
+  }
+
   function currentTabBar() {
     return app && app.querySelector ? app.querySelector(".tab-bar") : null;
   }
@@ -873,6 +926,7 @@
     state.activeTab = nextTab;
     if (!options.skipPrevious) state.previousTab = priorTab;
     if (!options.skipHistory) writeTabHistory(nextTab, Boolean(options.replace));
+    setAppNavHidden(false);
     render();
   }
 
@@ -5262,6 +5316,7 @@
     app.innerHTML = renderDashboard(state.snapshot);
     bindActions();
     restoreTabBarPosition();
+    syncAppNavScrollState();
     if (state.activeTab === "feed" && !state.feed && !state.feedLoading) {
       loadFeed(false);
     }
@@ -5397,7 +5452,7 @@
       }).join(""),
       '</div>',
       '<details class="app-nav-menu">',
-      '<summary><strong>관리</strong><span>' + escapeHtml(managementActive ? activeTab.label : "설정·계정") + '</span></summary>',
+      '<summary><strong>운영</strong><span>' + escapeHtml(managementActive ? activeTab.label : "알림·설정") + '</span></summary>',
       '<div class="app-nav-menu-list">',
       managementTabs.map(function (tab) {
         return navTabButton(tab, "app-nav-menu-item");
@@ -9909,6 +9964,8 @@
 
   if (window.addEventListener) {
     window.addEventListener("popstate", syncTabFromLocation);
+    window.addEventListener("scroll", scheduleAppNavScrollState, { passive: true });
+    window.addEventListener("resize", scheduleAppNavScrollState);
   }
 
   applyAppTheme();

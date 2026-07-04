@@ -200,9 +200,8 @@
     { id: "modeling", label: "투자전략", description: "모델링 관리" },
     { id: "settings", label: "설정", description: "런타임 환경" }
   ];
-  var primaryMobileTabIds = ["overview", "watchlist", "monitoring", "notifications"];
-  var secondaryTabIds = ["accounts", "symbols", "modeling", "settings"];
-  var moreTabMeta = { id: "more", label: "더보기", description: "계정·종목·전략·설정" };
+  var bottomTabIds = ["overview", "watchlist", "monitoring", "notifications"];
+  var topActionTabIds = ["accounts", "symbols", "modeling", "settings"];
   var notificationSections = [
     { id: "status", label: "현황", description: "발송 판단" },
     { id: "policy", label: "정책", description: "타입별 룰" },
@@ -211,7 +210,6 @@
   ];
 
   function activeTabMeta() {
-    if (state.activeTab === moreTabMeta.id) return moreTabMeta;
     return tabs.filter(function (tab) { return tab.id === state.activeTab; })[0] || tabs[0];
   }
 
@@ -770,7 +768,7 @@
 
   function normalizeTabId(value) {
     var requested = String(value || "").toLowerCase();
-    if (requested === moreTabMeta.id) return moreTabMeta.id;
+    if (requested === "more") return "overview";
     return tabs.some(function (tab) { return tab.id === requested; }) ? requested : "overview";
   }
 
@@ -5321,9 +5319,9 @@
       '<div class="toolbar topbar-actions">',
       '<span class="status-pill ' + modeClass + '">' + escapeHtml(modeLabel) + "</span>",
       '<button class="icon-button" type="button" data-action="refresh" title="새로고침" aria-label="새로고침">' + (state.refreshing ? "…" : "↻") + "</button>",
-      '<button class="icon-button settings-top-button" type="button" data-action="open-settings" title="설정" aria-label="설정">⚙</button>',
       '</div>',
       '</section>',
+      renderTopActions(),
       '<section class="workspace-layout">',
       renderTabs(),
       '<div class="workspace-main">',
@@ -5335,16 +5333,35 @@
     ].join("");
   }
 
-  function renderTabs() {
-    var moreActive = state.activeTab === moreTabMeta.id || secondaryTabIds.indexOf(state.activeTab) >= 0;
+  function renderTopActions() {
+    var actionTabs = tabs.filter(function (tab) {
+      return topActionTabIds.indexOf(tab.id) >= 0;
+    });
     return [
-      '<nav class="tab-bar" aria-label="앱 탭" style="--tab-count:' + tabs.length + '; --mobile-tab-count:' + (primaryMobileTabIds.length + 1) + '">',
-      tabs.map(function (tab) {
+      '<nav class="top-action-bar" aria-label="관리 화면">',
+      actionTabs.map(function (tab) {
         var active = state.activeTab === tab.id;
-        var priority = primaryMobileTabIds.indexOf(tab.id) >= 0 ? " tab-primary" : " tab-secondary";
-        return '<button type="button" class="' + (active ? "active" : "") + priority + '" data-tab="' + escapeHtml(tab.id) + '"' + (active ? ' aria-current="page"' : "") + '><span class="tab-label">' + escapeHtml(tab.label) + '</span><span class="tab-description">' + escapeHtml(tab.description || "") + '</span></button>';
+        return [
+          '<button type="button" class="top-action-button' + (active ? " active" : "") + '" data-tab="' + escapeHtml(tab.id) + '"' + (active ? ' aria-current="page"' : "") + '>',
+          '<strong>' + escapeHtml(tab.label) + '</strong>',
+          '<span>' + escapeHtml(tab.description || "") + '</span>',
+          '</button>'
+        ].join("");
       }).join(""),
-      '<button type="button" class="mobile-more-tab' + (moreActive ? " active" : "") + '" data-tab="' + escapeHtml(moreTabMeta.id) + '"' + (moreActive ? ' aria-current="page"' : "") + '><span class="tab-label">' + escapeHtml(moreTabMeta.label) + '</span><span class="tab-description">' + escapeHtml(moreTabMeta.description) + '</span></button>',
+      '</nav>'
+    ].join("");
+  }
+
+  function renderTabs() {
+    var bottomTabs = tabs.filter(function (tab) {
+      return bottomTabIds.indexOf(tab.id) >= 0;
+    });
+    return [
+      '<nav class="tab-bar" aria-label="주요 탭" style="--tab-count:' + bottomTabs.length + '">',
+      bottomTabs.map(function (tab) {
+        var active = state.activeTab === tab.id;
+        return '<button type="button" class="' + (active ? "active" : "") + '" data-tab="' + escapeHtml(tab.id) + '"' + (active ? ' aria-current="page"' : "") + '><span class="tab-label">' + escapeHtml(tab.label) + '</span><span class="tab-description">' + escapeHtml(tab.description || "") + '</span></button>';
+      }).join(""),
       '</nav>'
     ].join("");
   }
@@ -5409,42 +5426,10 @@
     if (state.activeTab === "settings") {
       return renderSettingsPage();
     }
-    if (state.activeTab === "more") {
-      return renderMorePage();
-    }
     return [
       '<section class="admin-grid">',
       renderAdminOverviewPanel(snapshot),
       renderAdminMonitoringPanel(snapshot),
-      '</section>'
-    ].join("");
-  }
-
-  function renderMorePage() {
-    var secondaryTabs = tabs.filter(function (tab) {
-      return secondaryTabIds.indexOf(tab.id) >= 0;
-    });
-    return [
-      '<section class="admin-grid more-view">',
-      '<article class="panel more-panel">',
-      '<div class="panel-head">',
-      '<div>',
-      '<p class="label">More</p>',
-      '<h2>보조 업무</h2>',
-      '</div>',
-      '<span class="metric">' + escapeHtml(secondaryTabs.length) + '</span>',
-      '</div>',
-      '<div class="more-action-list">',
-      secondaryTabs.map(function (tab) {
-        return [
-          '<button type="button" class="more-action-row" data-tab="' + escapeHtml(tab.id) + '">',
-          '<span><strong>' + escapeHtml(tab.label) + '</strong><em>' + escapeHtml(tab.description || "") + '</em></span>',
-          '<b>열기</b>',
-          '</button>'
-        ].join("");
-      }).join(""),
-      '</div>',
-      '</article>',
       '</section>'
     ].join("");
   }

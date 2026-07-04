@@ -636,11 +636,11 @@ function checkFrontendAdminRender() {
     assertOk(overviewHtml.indexOf('aria-current="page"') >= 0, "활성 탭 접근성 상태가 렌더링되지 않았습니다.");
     assertOk(settingsHtml.indexOf("<h1>설정</h1>") >= 0, "설정 탭 제목이 상단에 렌더링되지 않았습니다.");
     assertOk(settingsHtml.indexOf("settings-view") >= 0, "설정 화면이 페이지 구조로 렌더링되지 않았습니다.");
-    assertOk(code.indexOf("settings-top-button") >= 0, "상단 설정 버튼 전용 스타일이 적용되지 않았습니다.");
+    assertOk(code.indexOf("renderTopActions") >= 0 && styles.indexOf(".top-action-bar") >= 0, "상단 관리 버튼 구조가 렌더링되지 않습니다.");
     assertOk(code.indexOf("pushState") >= 0 && code.indexOf("popstate") >= 0, "탭 이동이 브라우저 뒤로가기와 동기화되지 않았습니다.");
     assertOk(code.indexOf("restoreTabBarPosition") >= 0 && code.indexOf("tabBarScrollLeft") >= 0, "하단 탭 위치 복원 로직이 없습니다.");
-    assertOk(code.indexOf("primaryMobileTabIds") >= 0 && code.indexOf("secondaryTabIds") >= 0, "모바일 핵심 탭과 보조 탭 분리 규칙이 없습니다.");
-    assertOk(styles.indexOf("grid-template-columns: repeat(var(--mobile-tab-count, 5), minmax(0, 1fr))") >= 0 && styles.indexOf(".tab-bar .tab-secondary") >= 0 && styles.indexOf(".tab-bar .mobile-more-tab") >= 0, "모바일 하단 탭 고정 더보기 규칙이 없습니다.");
+    assertOk(code.indexOf("bottomTabIds") >= 0 && code.indexOf("topActionTabIds") >= 0, "하단 주요 탭과 상단 관리 버튼 분리 규칙이 없습니다.");
+    assertOk(styles.indexOf("grid-template-columns: repeat(var(--tab-count, 4), minmax(0, 1fr))") >= 0 && styles.indexOf(".top-action-button.active") >= 0, "하단 4탭과 상단 활성 버튼 스타일 규칙이 없습니다.");
     assertOk(code.indexOf("settingsSaving") >= 0 && code.indexOf("로컬 SQLite DB") >= 0, "설정 저장 진행 상태가 렌더링되지 않습니다.");
     assertOk(code.indexOf("new window.WebSocket") >= 0, "프론트가 웹소켓 실시간 연결을 생성하지 않습니다.");
     assertOk(code.indexOf("realtime.status") >= 0, "웹소켓 상태 메시지를 처리하지 않습니다.");
@@ -649,7 +649,7 @@ function checkFrontendAdminRender() {
     ["overview", "accounts", "watchlist", "symbols", "monitoring", "notifications", "modeling", "settings"].forEach(function (tab) {
       assertOk(overviewHtml.indexOf('data-tab="' + tab + '"') >= 0, "새 탭이 렌더링되지 않았습니다: " + tab);
     });
-    assertOk(overviewHtml.indexOf('data-tab="more"') >= 0, "모바일 더보기 탭이 렌더링되지 않았습니다.");
+    assertOk(overviewHtml.indexOf('data-tab="more"') < 0, "더보기 탭이 아직 렌더링됩니다.");
     assertOk(overviewHtml.indexOf("data-mode=") < 0, "Mock 데이터 전환 버튼이 아직 렌더링됩니다.");
     assertOk(overviewHtml.indexOf(">Mock<") < 0, "Mock 데이터 버튼 라벨이 아직 렌더링됩니다.");
     assertOk(overviewHtml.indexOf("Mock 데이터") < 0, "Mock 데이터 표시 문구가 아직 렌더링됩니다.");

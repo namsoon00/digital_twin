@@ -609,6 +609,9 @@ function checkFrontendAdminRender() {
     renderForSearch("?tab=watchlist"),
     renderForSearch("?tab=symbols"),
     renderForSearch("?tab=notifications"),
+    renderForSearch("?tab=notifications&notification=policy"),
+    renderForSearch("?tab=notifications&notification=templates"),
+    renderForSearch("?tab=notifications&notification=advanced"),
     renderForSearch("?tab=modeling"),
     renderForSearch("?tab=monitoring"),
     renderForSearch("?tab=settings"),
@@ -619,10 +622,13 @@ function checkFrontendAdminRender() {
     const watchlistHtml = pages[2];
     const symbolUniverseHtml = pages[3];
     const notificationHtml = pages[4];
-    const modelingHtml = pages[5];
-    const monitoringHtml = pages[6];
-    const settingsHtml = pages[7];
-    const staticAccountHtml = pages[8];
+    const notificationPolicyHtml = pages[5];
+    const notificationTemplateHtml = pages[6];
+    const notificationAdvancedHtml = pages[7];
+    const modelingHtml = pages[8];
+    const monitoringHtml = pages[9];
+    const settingsHtml = pages[10];
+    const staticAccountHtml = pages[11];
 
     assertOk(overviewHtml.indexOf("계정·알림·모델 운영 콘솔") < 0, "이전 고정 운영 콘솔 제목이 아직 렌더링됩니다.");
     assertOk(overviewHtml.indexOf("<h1>홈</h1>") >= 0, "홈 탭 제목이 상단에 렌더링되지 않았습니다.");
@@ -685,20 +691,24 @@ function checkFrontendAdminRender() {
     assertOk(symbolUniverseHtml.indexOf("symbol-bulk-bar") >= 0 && symbolUniverseHtml.indexOf('data-action="add-visible-symbols"') >= 0, "전체종목 탭에 페이지 일괄 추가 액션이 없습니다.");
     assertOk(symbolUniverseHtml.indexOf("data-symbol-add-account") >= 0, "전체종목 탭에 관심 추가 대상 계정 선택이 없습니다.");
     assertOk(symbolUniverseHtml.indexOf("symbol-summary-card") < 0 && symbolUniverseHtml.indexOf("symbol-source-card") < 0, "전체종목 탭에 중첩 카드 클래스가 남아 있습니다.");
-    assertOk(notificationHtml.indexOf("admin-message-group-list") >= 0, "알림 타입 그룹 목록이 렌더링되지 않았습니다.");
-    assertOk(notificationHtml.indexOf("data-message-group-toggle") >= 0, "알림 타입 그룹 접기/펼치기 버튼이 없습니다.");
-    assertOk(notificationHtml.indexOf("admin-message-row") >= 0, "메시지 타입별 알림 설정이 렌더링되지 않았습니다.");
-    assertOk(notificationHtml.indexOf("data-message-toggle") >= 0, "알림 타입 상세 접기/펼치기 버튼이 없습니다.");
-    assertOk(notificationHtml.indexOf('aria-controls="alert-rule-') >= 0, "알림 타입 상세 토글과 상세 영역이 연결되지 않았습니다.");
-    assertOk(notificationHtml.indexOf("admin-message-details") < 0, "알림 상세 편집기가 기본 화면에 미리 렌더링됩니다.");
-    assertOk(notificationHtml.indexOf('data-action="expand-message-types"') >= 0 && notificationHtml.indexOf('data-action="collapse-message-types"') >= 0, "알림 타입 전체 펼치기/접기 버튼이 없습니다.");
-    assertOk(notificationHtml.indexOf("notification-template-row") >= 0, "알림 템플릿 편집기가 렌더링되지 않았습니다.");
-    assertOk(notificationHtml.indexOf("admin-message-template") < 0, "알림 타입 행 안에 템플릿 편집기가 기본 렌더링됩니다.");
-    assertOk(notificationHtml.indexOf("notification-template-preview") >= 0, "알림 템플릿 미리보기가 렌더링되지 않았습니다.");
-    assertOk(notificationHtml.indexOf("notification-rule-editor") >= 0, "꿀점수 룰 편집기가 렌더링되지 않았습니다.");
-    assertOk(notificationHtml.indexOf("최소 꿀점수") >= 0, "꿀점수 기준 입력이 렌더링되지 않았습니다.");
-    assertOk(code.indexOf("renderNotificationTemplateRow(template, { inline: true })") >= 0, "알림 타입별 템플릿 상세 렌더링 경로가 없습니다.");
-    assertOk(code.indexOf("renderNotificationRuleEditor(rule.key, { inline: true })") >= 0, "알림 타입별 룰 상세 렌더링 경로가 없습니다.");
+    assertOk(notificationHtml.indexOf("notification-command-panel") >= 0, "알림 관제 상단 패널이 렌더링되지 않았습니다.");
+    assertOk(notificationHtml.indexOf("notification-section-tabs") >= 0, "알림 내부 섹션 탭이 렌더링되지 않았습니다.");
+    assertOk(notificationHtml.indexOf('data-notification-section="policy"') >= 0 && notificationHtml.indexOf('data-notification-section="templates"') >= 0 && notificationHtml.indexOf('data-notification-section="advanced"') >= 0, "알림 내부 섹션 이동 버튼이 없습니다.");
+    assertOk(notificationHtml.indexOf("notification-decision-panel") >= 0, "최근 알림 판단 패널이 렌더링되지 않았습니다.");
+    assertOk(notificationHtml.indexOf("admin-message-group-list") < 0, "기본 현황 화면에 정책 목록이 렌더링됩니다.");
+    assertOk(notificationHtml.indexOf("notification-template-manager-panel") < 0, "기본 현황 화면에 템플릿 관리 화면이 렌더링됩니다.");
+    assertOk(notificationPolicyHtml.indexOf("admin-message-group-list") >= 0, "정책 섹션에 알림 타입 그룹 목록이 렌더링되지 않았습니다.");
+    assertOk(notificationPolicyHtml.indexOf("data-message-group-toggle") >= 0, "정책 섹션에 그룹 접기/펼치기 버튼이 없습니다.");
+    assertOk(notificationPolicyHtml.indexOf("admin-message-row") < 0, "정책 섹션 기본 화면에 메시지 타입 행이 펼쳐져 있습니다.");
+    assertOk(code.indexOf("data-message-select") >= 0, "정책 섹션에 상세 편집 선택 버튼 경로가 없습니다.");
+    assertOk(notificationPolicyHtml.indexOf("notification-policy-detail") >= 0, "정책 섹션에 선택 상세 패널이 없습니다.");
+    assertOk(notificationPolicyHtml.indexOf("notification-policy-template") >= 0, "정책 상세에 선택 타입 템플릿 편집기가 없습니다.");
+    assertOk(notificationPolicyHtml.indexOf("notification-rule-editor") >= 0, "정책 상세에 꿀점수 룰 편집기가 렌더링되지 않았습니다.");
+    assertOk(notificationPolicyHtml.indexOf("최소 꿀점수") >= 0, "정책 상세에 꿀점수 기준 입력이 렌더링되지 않았습니다.");
+    assertOk(notificationPolicyHtml.indexOf("admin-message-details") < 0, "정책 행 안에 inline 상세 편집기가 남아 있습니다.");
+    assertOk(code.indexOf("renderNotificationTemplateRow(template, { policyDetail: true })") >= 0, "알림 타입별 템플릿 상세 렌더링 경로가 없습니다.");
+    assertOk(code.indexOf("renderNotificationRuleEditor(rule.key, { inline: true, compact: true })") >= 0, "정책 상세의 compact 룰 편집 경로가 없습니다.");
+    assertOk(code.indexOf("renderNotificationRuleEditor(rule.key, { inline: true })") >= 0, "고급 섹션의 전체 룰 상세 렌더링 경로가 없습니다.");
     assertOk(code.indexOf("유사 메시지") >= 0 && code.indexOf("data-notification-rule-similarity-enabled") >= 0, "유사 메시지 억제 설정 경로가 없습니다.");
     assertOk(code.indexOf("data-notification-rule-fields") >= 0, "유사 메시지 fingerprint 필드 입력 경로가 없습니다.");
     assertOk(code.indexOf("장 시간 필터") >= 0 && code.indexOf("data-notification-rule-market-hours-enabled") >= 0, "장 시간 필터 설정 경로가 없습니다.");
@@ -708,23 +718,29 @@ function checkFrontendAdminRender() {
     assertOk(code.indexOf("data-notification-rule-condition-value") >= 0, "꿀점수 조건 값 편집 입력 경로가 없습니다.");
     assertOk(code.indexOf("data-rule-save") >= 0 && code.indexOf("monitorHeartbeat") >= 0, "알림 타입별 룰 저장 경로가 없습니다.");
     assertOk(code.indexOf("externalEquityMove") >= 0 && code.indexOf("externalEquityMove=60") >= 0, "미장 가격/거래량 기본 발송 기준 60점 계약이 없습니다.");
-    assertOk(notificationHtml.indexOf("notification-decision-panel") >= 0, "최근 알림 판단 패널이 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("최근 알림 판단") >= 0, "최근 알림 판단 제목이 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("꿀점수 30/45점") >= 0, "최근 알림 판단의 꿀점수가 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("360분 내 7회 · -55점") >= 0, "최근 알림 판단의 유사 메시지 감점이 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("미장 닫힘") >= 0, "최근 알림 판단의 장 시간 외 보류 사유가 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("messageType=externalcryptomove|symbol=eth") >= 0, "최근 알림 판단 fingerprint가 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf('data-action="refresh-notification-jobs"') >= 0, "최근 알림 판단 새로고침 버튼이 없습니다.");
-    assertOk(notificationHtml.indexOf("시스템 템플릿") >= 0, "시스템 템플릿 섹션이 렌더링되지 않았습니다.");
-    assertOk(notificationHtml.indexOf("settings-api-grid") >= 0, "설정 API 상태 요약이 렌더링되지 않았습니다.");
-    assertOk(notificationHtml.indexOf("Client ID 설정됨") >= 0, "설정 화면에 토스 Client ID 상태가 표시되지 않습니다.");
-    assertOk(notificationHtml.indexOf("Bot token 설정됨") >= 0, "설정 화면에 텔레그램 bot token 상태가 표시되지 않습니다.");
+    assertOk(notificationTemplateHtml.indexOf("notification-template-manager-panel") >= 0, "템플릿 섹션이 렌더링되지 않았습니다.");
+    assertOk(notificationTemplateHtml.indexOf("notification-template-workbench") >= 0, "템플릿 섹션이 선택형 워크벤치로 렌더링되지 않았습니다.");
+    assertOk(notificationTemplateHtml.indexOf("notification-template-select-row") >= 0 && notificationTemplateHtml.indexOf("data-template-select") >= 0, "템플릿 섹션에 선택 목록이 없습니다.");
+    assertOk(notificationTemplateHtml.indexOf("notification-template-detail") >= 0, "템플릿 섹션에 선택 상세 패널이 없습니다.");
+    assertOk(notificationTemplateHtml.indexOf("notification-template-row") >= 0, "템플릿 상세에 편집 행이 렌더링되지 않았습니다.");
+    assertOk(notificationTemplateHtml.indexOf("notification-template-preview") >= 0, "템플릿 상세에 미리보기가 렌더링되지 않았습니다.");
+    assertOk(notificationTemplateHtml.indexOf("notification-rule-editor") < 0, "템플릿 섹션에 룰 편집기가 섞여 있습니다.");
+    assertOk(notificationAdvancedHtml.indexOf("settings-api-grid") >= 0, "고급 섹션에 설정 API 상태 요약이 렌더링되지 않았습니다.");
+    assertOk(notificationAdvancedHtml.indexOf("Client ID 설정됨") >= 0, "고급 섹션에 토스 Client ID 상태가 표시되지 않습니다.");
+    assertOk(notificationAdvancedHtml.indexOf("Bot token 설정됨") >= 0, "고급 섹션에 텔레그램 bot token 상태가 표시되지 않습니다.");
+    assertOk(notificationAdvancedHtml.indexOf("notification-threshold-panel") >= 0 && notificationAdvancedHtml.indexOf("alert-threshold-grid") >= 0, "고급 섹션에 알림 임계값 패널이 없습니다.");
     assertOk(code.indexOf("data-template-test-send") >= 0, "실제 데이터 알림 테스트 발송 경로가 없습니다.");
     assertOk(code.indexOf("모니터링 정상 작동") >= 0, "상태 확인 템플릿 미리보기 샘플 경로가 없습니다.");
     assertOk(code.indexOf("매수 점수") >= 0, "타입별 템플릿 미리보기 샘플 경로가 없습니다.");
     assertOk(code.indexOf("data-notification-template") >= 0 && code.indexOf("monitorHeartbeat") >= 0, "상태 확인 템플릿 textarea 경로가 없습니다.");
-    assertOk(notificationHtml.indexOf("{rawLines}") >= 0, "알림 템플릿 변수가 렌더링되지 않았습니다.");
-    assertOk(notificationHtml.indexOf("tab=notifications") >= 0, "알림 링크 기본값이 새 알림 탭을 가리키지 않습니다.");
+    assertOk(notificationTemplateHtml.indexOf("{rawLines}") >= 0, "알림 템플릿 변수가 렌더링되지 않았습니다.");
+    assertOk(notificationAdvancedHtml.indexOf("tab=notifications") >= 0, "알림 링크 기본값이 새 알림 탭을 가리키지 않습니다.");
     assertOk(modelingHtml.indexOf("model-guide-panel") >= 0, "모델 운영 가이드가 렌더링되지 않았습니다.");
     assertOk(modelingHtml.indexOf("투자전략 모델링 관리") >= 0, "투자전략 모델링 관리 제목이 렌더링되지 않았습니다.");
     assertOk(modelingHtml.indexOf("처음 보는 사람용 쉬운 설명") >= 0, "초보자용 쉬운 설명 패널이 렌더링되지 않았습니다.");

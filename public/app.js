@@ -203,6 +203,12 @@
   var primaryMobileTabIds = ["overview", "watchlist", "monitoring", "notifications"];
   var secondaryTabIds = ["accounts", "symbols", "modeling", "settings"];
   var moreTabMeta = { id: "more", label: "더보기", description: "계정·종목·전략·설정" };
+  var notificationSections = [
+    { id: "status", label: "현황", description: "발송 판단" },
+    { id: "policy", label: "정책", description: "타입별 룰" },
+    { id: "templates", label: "템플릿", description: "본문·미리보기" },
+    { id: "advanced", label: "고급", description: "채널·임계값" }
+  ];
 
   function activeTabMeta() {
     if (state.activeTab === moreTabMeta.id) return moreTabMeta;
@@ -389,7 +395,10 @@
     notificationRulesError: "",
     notificationRulesSaved: false,
     notificationExpandedTypes: {},
-    notificationExpandedGroups: { "실시간": true, "모델": true },
+    notificationExpandedGroups: {},
+    activeNotificationSection: initialNotificationSection(),
+    activeNotificationMessageType: "monitorHeartbeat",
+    activeNotificationTemplateType: "monitorHeartbeat",
     notificationMarketHoursSessions: [],
     notificationJobItems: [],
     notificationJobsLoading: false,
@@ -754,19 +763,51 @@
     return normalizeTabId(params.get("tab"));
   }
 
+  function initialNotificationSection() {
+    var params = new URLSearchParams(window.location.search);
+    return normalizeNotificationSection(params.get("notification"));
+  }
+
   function normalizeTabId(value) {
     var requested = String(value || "").toLowerCase();
     if (requested === moreTabMeta.id) return moreTabMeta.id;
     return tabs.some(function (tab) { return tab.id === requested; }) ? requested : "overview";
   }
 
+  function normalizeNotificationSection(value) {
+    var requested = String(value || "").toLowerCase();
+    return notificationSections.some(function (section) { return section.id === requested; }) ? requested : "status";
+  }
+
+  function activeNotificationSectionMeta() {
+    return notificationSections.filter(function (section) {
+      return section.id === state.activeNotificationSection;
+    })[0] || notificationSections[0];
+  }
+
   function tabUrl(tab) {
     var normalized = normalizeTabId(tab);
     var params = new URLSearchParams(window.location.search);
+    if (normalized !== "notifications") params.delete("notification");
     if (normalized === "overview") {
       params.delete("tab");
     } else {
       params.set("tab", normalized);
+    }
+    var path = window.location.pathname || "/";
+    var query = params.toString();
+    var hash = window.location.hash || "";
+    return path + (query ? "?" + query : "") + hash;
+  }
+
+  function notificationSectionUrl(section) {
+    var normalized = normalizeNotificationSection(section);
+    var params = new URLSearchParams(window.location.search);
+    params.set("tab", "notifications");
+    if (normalized === "status") {
+      params.delete("notification");
+    } else {
+      params.set("notification", normalized);
     }
     var path = window.location.pathname || "/";
     var query = params.toString();
@@ -780,6 +821,12 @@
     if (!window.history[method]) return;
     var normalized = normalizeTabId(tab);
     window.history[method]({ tab: normalized }, "", tabUrl(normalized));
+  }
+
+  function writeNotificationSectionHistory(section) {
+    if (!window.history || !window.history.replaceState) return;
+    var normalized = normalizeNotificationSection(section);
+    window.history.replaceState({ tab: "notifications", notification: normalized }, "", notificationSectionUrl(normalized));
   }
 
   function currentTabBar() {
@@ -829,7 +876,13 @@
 
   function syncTabFromLocation() {
     var nextTab = initialTab();
-    if (nextTab === state.activeTab) return;
+    var nextNotificationSection = initialNotificationSection();
+    var sectionChanged = nextNotificationSection !== state.activeNotificationSection;
+    state.activeNotificationSection = nextNotificationSection;
+    if (nextTab === state.activeTab) {
+      if (sectionChanged && nextTab === "notifications") render();
+      return;
+    }
     rememberTabBarPosition();
     state.previousTab = state.activeTab;
     state.activeTab = nextTab;
@@ -5329,13 +5382,7 @@
       ].join("");
     }
     if (state.activeTab === "notifications") {
-      return [
-        '<section class="admin-grid">',
-        renderAdminMessagePanel(),
-        renderNotificationDecisionPanel(),
-        renderAdminDeliveryPanel(),
-        '</section>'
-      ].join("");
+      return renderNotificationsPage();
     }
     if (state.activeTab === "modeling") {
       return [
@@ -6046,10 +6093,97 @@
     ].join("");
   }
 
+  function renderNotificationsPage() {
+    return [
+      '<section class="admin-grid notifications-view">',
+      renderNotificationCommandPanel(),
+      renderNotificationSectionContent(),
+      '</section>'
+    ].join("");
+  }
+
+  function notificationEnabledRuleCount() {
+    var rules = alertRules();
+    return alertRuleCatalog.filter(function (rule) {
+      return enabledAlertRule(rules, rule.key);
+    }).length;
+  }
+
+  function notificationTemplateItems() {
+    return state.notificationTemplates.length ? state.notificationTemplates : defaultNotificationTemplates();
+  }
+
+  function renderNotificationCommandPanel() {
+    var summary = state.notificationJobsSummary || state.realtime.notificationJobs || {};
+    var section = activeNotificationSectionMeta();
+    var templateCount = notificationTemplateItems().length;
+    var scheduleCount = Array.isArray(state.messageSchedules) ? state.messageSchedules.length : 0;
+    return [
+      '<article class="panel notification-command-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Notification Ops</p>',
+      '<h2>알림 관제</h2>',
+      '<p class="subtle">기본은 현황만 보고, 정책·템플릿·고급 설정은 필요한 순간에만 엽니다.</p>',
+      '</div>',
+      '<div class="settings-actions">',
+      '<button class="text-button" data-action="refresh-notification-jobs"' + (state.notificationJobsLoading ? ' disabled' : '') + '>판단 새로고침</button>',
+      '<button class="text-button primary" data-action="save-settings"' + (state.serverSettingsLocked ? ' disabled' : '') + '>전체 저장</button>',
+      '</div>',
+      '</div>',
+      '<div class="notification-command-grid">',
+      renderNotificationCommandMetric("대기", Number(summary.pending || 0), "watch"),
+      renderNotificationCommandMetric("발송", Number(summary.done || 0), "watch"),
+      renderNotificationCommandMetric("보류", Number(summary.suppressed || 0), "muted"),
+      renderNotificationCommandMetric("실패", Number(summary.failed || 0), Number(summary.failed || 0) ? "danger" : "muted"),
+      '</div>',
+      '<div class="notification-ops-strip">',
+      '<span><strong>' + escapeHtml(notificationEnabledRuleCount() + "/" + alertRuleCatalog.length) + '</strong><em>사용 중인 룰</em></span>',
+      '<span><strong>' + escapeHtml(settingValue("notifyIntervalMinutes") || defaultSettings.notifyIntervalMinutes) + '분</strong><em>기본 주기</em></span>',
+      '<span><strong>' + escapeHtml(templateCount) + '개</strong><em>템플릿</em></span>',
+      '<span><strong>' + escapeHtml(scheduleCount || "-") + '</strong><em>스케줄 이력</em></span>',
+      '</div>',
+      '<div class="notification-section-tabs" role="tablist" aria-label="알림 설정 섹션">',
+      notificationSections.map(function (item) {
+        var active = section.id === item.id;
+        return [
+          '<button type="button" role="tab" class="' + (active ? "active" : "") + '" data-notification-section="' + escapeHtml(item.id) + '"' + (active ? ' aria-selected="true"' : ' aria-selected="false"') + '>',
+          '<strong>' + escapeHtml(item.label) + '</strong>',
+          '<span>' + escapeHtml(item.description) + '</span>',
+          '</button>'
+        ].join("");
+      }).join(""),
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderNotificationCommandMetric(label, value, tone) {
+    return [
+      '<span class="notification-command-metric ' + escapeHtml(tone || "muted") + '">',
+      '<em>' + escapeHtml(label) + '</em>',
+      '<strong>' + escapeHtml(value) + '</strong>',
+      '</span>'
+    ].join("");
+  }
+
+  function renderNotificationSectionContent() {
+    var section = normalizeNotificationSection(state.activeNotificationSection);
+    if (section === "policy") return renderAdminMessagePanel();
+    if (section === "templates") return renderNotificationTemplateManagerPanel();
+    if (section === "advanced") {
+      return [
+        renderAdminDeliveryPanel(),
+        renderNotificationAdvancedRulePanel(),
+        renderNotificationThresholdPanel()
+      ].join("");
+    }
+    return renderNotificationDecisionPanel();
+  }
+
   function renderAdminMessagePanel() {
     var rules = alertRules();
     var cadences = alertCadenceMinutes();
-    var thresholds = alertThresholds();
     var groups = alertRuleGroups();
     return [
       '<article class="panel admin-message-panel">',
@@ -6068,28 +6202,13 @@
       state.messageSchedulesError ? '<p class="form-error">' + escapeHtml(state.messageSchedulesError) + '</p>' : '',
       state.notificationRulesError ? '<p class="form-error">' + escapeHtml(state.notificationRulesError) + '</p>' : '',
       state.notificationRulesSaved ? '<p class="lab-message">알림 룰을 저장했습니다.</p>' : '',
-      '<div class="settings-grid admin-delivery-grid">',
-      renderSettingField("notifyIntervalMinutes", "기본 알림 주기(분)", "number", "10"),
-      renderSettingField("notifyLinkUrl", "알림 링크 URL", "url", "http://127.0.0.1:3000?tab=notifications"),
-      '</div>',
-      '<div class="template-variable-row admin-template-variable-row">',
-      notificationTemplateVariables().map(function (name) {
-        return '<span class="chip">{' + escapeHtml(name) + '}</span>';
-      }).join(""),
-      '</div>',
+      '<div class="notification-policy-layout">',
       '<div class="admin-message-group-list">',
       groups.map(function (group) {
         return renderAdminMessageGroup(group, rules, cadences);
       }).join(""),
       '</div>',
-      renderNotificationTemplatePanel(),
-      '<div class="model-section alert-threshold-section">',
-      '<div class="flow-title"><div><strong>임계값</strong><span>모델과 실시간 알림의 발생 기준입니다.</span></div></div>',
-      '<div class="alert-threshold-grid">',
-      alertThresholdCatalog.map(function (item) {
-        return renderAlertThresholdInput(item, thresholds[item.key]);
-      }).join(""),
-      '</div>',
+      renderNotificationPolicyDetailPanel(),
       '</div>',
       '</div>',
       '</article>'
@@ -6121,13 +6240,13 @@
     var enabledCount = group.rules.filter(function (rule) {
       return enabledAlertRule(rules, rule.key);
     }).length;
-    var openDetails = group.rules.filter(function (rule) {
-      return notificationTypeExpanded(rule.key);
-    }).length;
+    var selectedInGroup = group.rules.some(function (rule) {
+      return rule.key === activeNotificationRule().key;
+    });
     return [
       '<section class="admin-message-group">',
       '<button class="admin-message-group-head" type="button" data-message-group-toggle="' + escapeHtml(group.name) + '" aria-expanded="' + escapeHtml(expanded ? "true" : "false") + '">',
-      '<span><strong>' + escapeHtml(group.name) + '</strong><em>' + escapeHtml(enabledCount + "/" + group.rules.length + "개 사용 · 상세 " + openDetails + "개 열림") + '</em></span>',
+      '<span><strong>' + escapeHtml(group.name) + '</strong><em>' + escapeHtml(enabledCount + "/" + group.rules.length + "개 사용" + (selectedInGroup ? " · 선택됨" : "")) + '</em></span>',
       '<b>' + escapeHtml(expanded ? "접기" : "보기") + '</b>',
       '</button>',
       expanded ? '<div class="admin-message-list">' + group.rules.map(function (rule) {
@@ -6149,25 +6268,9 @@
 
   function renderAdminMessageRow(rule, checked, cadence, schedule, template) {
     var ruleId = "alert-rule-" + String(rule.key || "").replace(/[^A-Za-z0-9_-]/g, "-");
-    var detailsId = ruleId + "-details";
-    var expanded = notificationTypeExpanded(rule.key);
-    var details = expanded ? [
-      '<div id="' + escapeHtml(detailsId) + '" class="admin-message-details">',
-      '<div class="admin-message-detail-head">',
-      '<strong>알림 상세 설정</strong>',
-      '<span>메시지 본문과 발송 조건을 이 타입에만 적용합니다.</span>',
-      '</div>',
-      '<div class="admin-message-detail-grid">',
-      renderNotificationTemplateRow(template, { inline: true }),
-      renderNotificationRuleEditor(rule.key, { inline: true }),
-      '</div>',
-      '<div class="admin-message-detail-footer">',
-      '<button class="text-button compact admin-message-collapse-bottom" type="button" data-message-toggle="' + escapeHtml(rule.key) + '">이 알림 설정 접기</button>',
-      '</div>',
-      '</div>'
-    ].join("") : "";
+    var active = activeNotificationRule().key === rule.key;
     return [
-      '<div class="admin-message-row ' + (expanded ? "expanded" : "collapsed") + '">',
+      '<div class="admin-message-row ' + (active ? "active" : "collapsed") + '">',
       '<input id="' + escapeHtml(ruleId) + '" type="checkbox" data-alert-rule="' + escapeHtml(rule.key) + '"' + (checked ? " checked" : "") + ' />',
       '<label class="admin-message-main" for="' + escapeHtml(ruleId) + '">',
       '<strong>' + escapeHtml(rule.label) + '</strong>',
@@ -6177,14 +6280,49 @@
       '<input data-alert-cadence="' + escapeHtml(rule.key) + '" type="number" min="10" step="10" value="' + escapeHtml(cadence) + '" />',
       '<b>분</b>',
       '</span>',
-      '<button class="admin-message-toggle" type="button" data-message-toggle="' + escapeHtml(rule.key) + '" aria-expanded="' + escapeHtml(expanded ? "true" : "false") + '" aria-controls="' + escapeHtml(detailsId) + '">',
-      '<span>' + escapeHtml(expanded ? "설정 닫기" : "설정 편집") + '</span>',
+      '<button class="admin-message-toggle" type="button" data-message-select="' + escapeHtml(rule.key) + '" aria-pressed="' + escapeHtml(active ? "true" : "false") + '">',
+      '<span>' + escapeHtml(active ? "편집 중" : "상세 편집") + '</span>',
       '</button>',
       '<div class="admin-message-schedule">',
-      renderMessageScheduleSummary(schedule, !expanded),
+      renderMessageScheduleSummary(schedule, true),
       '</div>',
-      details,
       '</div>'
+    ].join("");
+  }
+
+  function notificationRuleByKey(key) {
+    return alertRuleCatalog.filter(function (rule) {
+      return rule.key === key;
+    })[0] || null;
+  }
+
+  function activeNotificationRule() {
+    var selected = notificationRuleByKey(state.activeNotificationMessageType);
+    return selected || notificationRuleByKey("monitorHeartbeat") || alertRuleCatalog[0];
+  }
+
+  function renderNotificationPolicyDetailPanel() {
+    var rule = activeNotificationRule();
+    var template = notificationTemplateForEdit(rule.key);
+    var schedule = messageScheduleByType(rule.key);
+    return [
+      '<aside class="notification-policy-detail" aria-label="선택한 알림 상세">',
+      '<div class="notification-policy-detail-head">',
+      '<div>',
+      '<p class="label">Selected Policy</p>',
+      '<h3>' + escapeHtml(rule.label) + '</h3>',
+      '<span>' + escapeHtml(rule.group + " · " + rule.description) + '</span>',
+      '</div>',
+      '<span class="tone-chip ' + escapeHtml(scheduleStatusClass(schedule)) + '">' + escapeHtml(scheduleStatusLabel(schedule)) + '</span>',
+      '</div>',
+      '<div class="notification-policy-schedule">',
+      renderMessageScheduleSummary(schedule),
+      '</div>',
+      '<div class="notification-policy-editor">',
+      renderNotificationTemplateRow(template, { policyDetail: true }),
+      renderNotificationRuleEditor(rule.key, { inline: true, compact: true }),
+      '</div>',
+      '</aside>'
     ].join("");
   }
 
@@ -6492,6 +6630,7 @@
     options = options || {};
     var rule = notificationRuleForEdit(messageType);
     var disabled = state.serverSettingsLocked || isStaticPreviewHost();
+    var compact = Boolean(options.compact);
     var summary = rule.enabled === false
       ? "룰 꺼짐 · 점수만 기록하지 않고 그대로 보냅니다."
       : "꿀점수 " + rule.threshold + "점 이상이면 발송합니다.";
@@ -6509,18 +6648,83 @@
       '<option value="tag_only"' + (rule.lowScoreAction === "tag_only" ? " selected" : "") + '>점수만 기록</option>',
       '</select></label>',
       '</div>',
-      renderNotificationSimilarityEditor(messageType, rule, disabled),
-      renderNotificationMarketHoursEditor(messageType, rule, disabled),
-      '<div class="notification-rule-condition-list">',
-      (rule.conditions || []).map(function (condition) {
+      compact ? '<p class="subtle">유사 메시지, 장 시간 필터, 세부 조건은 고급 탭에서 조정합니다.</p>' : renderNotificationSimilarityEditor(messageType, rule, disabled),
+      compact ? '' : renderNotificationMarketHoursEditor(messageType, rule, disabled),
+      compact ? '' : '<div class="notification-rule-condition-list">',
+      compact ? '' : (rule.conditions || []).map(function (condition) {
         return renderNotificationRuleCondition(messageType, condition, disabled);
       }).join(""),
-      '</div>',
+      compact ? '' : '</div>',
       '<div class="settings-actions">',
       '<button class="text-button primary" data-rule-save="' + escapeHtml(messageType) + '"' + (disabled || state.notificationRulesLoading ? ' disabled' : '') + '>룰 저장</button>',
       '<button class="text-button" data-rule-reset="' + escapeHtml(messageType) + '"' + (disabled || state.notificationRulesLoading ? ' disabled' : '') + '>기본값</button>',
       '</div>',
       '</div>'
+    ].join("");
+  }
+
+  function renderNotificationTemplateManagerPanel() {
+    var templates = notificationTemplateItems();
+    var selected = activeNotificationTemplate();
+    return [
+      '<article class="panel notification-template-manager-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Templates</p>',
+      '<h2>알림 템플릿</h2>',
+      '<p class="subtle">메시지 본문, 변수, 미리보기와 테스트 발송만 관리합니다. 점수 룰은 정책 탭에서 수정합니다.</p>',
+      '</div>',
+      '<button class="text-button primary" data-action="save-settings"' + (state.serverSettingsLocked ? ' disabled' : '') + '>설정 저장</button>',
+      '</div>',
+      '<div class="settings-body">',
+      state.notificationTemplatesError ? '<p class="form-error">' + escapeHtml(state.notificationTemplatesError) + '</p>' : '',
+      state.notificationTemplatesSaved ? '<p class="lab-message">알림 템플릿을 저장했습니다.</p>' : '',
+      '<div class="template-variable-row admin-template-variable-row">',
+      notificationTemplateVariables().map(function (name) {
+        return '<span class="chip">{' + escapeHtml(name) + '}</span>';
+      }).join(""),
+      '</div>',
+      '<div class="notification-template-workbench">',
+      '<div class="notification-template-index">',
+      '<div class="flow-title"><div><strong>템플릿 목록</strong><span>타입을 선택하면 오른쪽에서 본문과 미리보기를 편집합니다.</span></div></div>',
+      '<div class="notification-template-select-list">',
+      templates.map(renderNotificationTemplateSelector).join(""),
+      '</div>',
+      '</div>',
+      '<aside class="notification-template-detail" aria-label="선택한 템플릿 상세">',
+      '<div class="notification-policy-detail-head">',
+      '<div>',
+      '<p class="label">' + escapeHtml(isAlertTemplateType(selected.messageType) ? "Alert Template" : "System Template") + '</p>',
+      '<h3>' + escapeHtml(notificationTemplateLabel(selected.messageType)) + '</h3>',
+      '<span>' + escapeHtml(selected.messageType || "-") + (selected.description ? " · " + selected.description : "") + '</span>',
+      '</div>',
+      '<span class="tone-chip watch">편집</span>',
+      '</div>',
+      renderNotificationTemplateRow(selected, { templateDetail: true }),
+      '</aside>',
+      '</div>',
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function activeNotificationTemplate() {
+    var templates = notificationTemplateItems();
+    var selected = templates.filter(function (item) {
+      return item.messageType === state.activeNotificationTemplateType;
+    })[0];
+    if (selected) return selected;
+    return templates.filter(function (item) { return item.messageType === "monitorHeartbeat"; })[0] || templates[0] || defaultNotificationTemplates()[0];
+  }
+
+  function renderNotificationTemplateSelector(item) {
+    var active = activeNotificationTemplate().messageType === item.messageType;
+    var kind = isAlertTemplateType(item.messageType) ? "알림" : "시스템";
+    return [
+      '<button type="button" class="notification-template-select-row' + (active ? " active" : "") + '" data-template-select="' + escapeHtml(item.messageType || "") + '" aria-pressed="' + escapeHtml(active ? "true" : "false") + '">',
+      '<span><strong>' + escapeHtml(notificationTemplateLabel(item.messageType)) + '</strong><em>' + escapeHtml(kind + " · " + (item.messageType || "-")) + '</em></span>',
+      '<b>' + escapeHtml(active ? "편집 중" : "선택") + '</b>',
+      '</button>'
     ].join("");
   }
 
@@ -6541,7 +6745,9 @@
       }).join(""),
       '</div>',
       '<div class="notification-template-list">',
-      templates.map(renderNotificationTemplateRow).join(""),
+      templates.map(function (item) {
+        return renderNotificationTemplateRow(item, { templateOnly: true });
+      }).join(""),
       '</div>',
       '</div>'
     ].join("");
@@ -6549,17 +6755,18 @@
 
   function renderNotificationTemplateRow(item, options) {
     options = options || {};
+    var detailMode = Boolean(options.inline || options.policyDetail || options.templateDetail);
     var disabled = state.serverSettingsLocked || isStaticPreviewHost();
     var preview = renderNotificationTemplatePreviewText(item.template || "", item.messageType);
     var canTest = canSendNotificationTemplateTest(item.messageType);
     var sending = state.notificationTemplateSending === item.messageType;
     var schedule = messageScheduleByType(item.messageType);
     return [
-      '<div class="notification-template-row' + (options.inline ? " admin-message-template" : "") + '">',
+      '<div class="notification-template-row' + (options.inline ? " admin-message-template" : "") + (options.policyDetail ? " notification-policy-template" : "") + (options.templateDetail ? " notification-template-detail-row" : "") + '">',
       '<div class="notification-template-meta">',
-      '<strong>' + escapeHtml(options.inline ? "템플릿" : notificationTemplateLabel(item.messageType)) + '</strong>',
-      '<span>' + escapeHtml(item.messageType || "-") + (item.description && !options.inline ? " · " + escapeHtml(item.description) : "") + '</span>',
-      options.inline ? '' : '<div class="template-schedule-compact">' + renderMessageScheduleSummary(schedule) + '</div>',
+      '<strong>' + escapeHtml(detailMode ? "템플릿" : notificationTemplateLabel(item.messageType)) + '</strong>',
+      '<span>' + escapeHtml(item.messageType || "-") + (item.description && !detailMode ? " · " + escapeHtml(item.description) : "") + '</span>',
+      detailMode ? '' : '<div class="template-schedule-compact">' + renderMessageScheduleSummary(schedule) + '</div>',
       '</div>',
       '<textarea data-notification-template="' + escapeHtml(item.messageType || "") + '" rows="3"' + (disabled ? " disabled" : "") + '>' + escapeHtml(item.template || "") + '</textarea>',
       '<div class="settings-actions">',
@@ -6571,8 +6778,50 @@
       '<strong>미리보기</strong>',
       '<pre data-template-preview="' + escapeHtml(item.messageType || "") + '">' + escapeHtml(preview) + '</pre>',
       '</div>',
-      options.inline ? '' : renderNotificationRuleEditor(item.messageType || "", { inline: true }),
+      (detailMode || options.templateOnly) ? '' : renderNotificationRuleEditor(item.messageType || "", { inline: true }),
       '</div>'
+    ].join("");
+  }
+
+  function renderNotificationAdvancedRulePanel() {
+    var rule = activeNotificationRule();
+    return [
+      '<article class="panel notification-advanced-rule-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Advanced Rule</p>',
+      '<h2>선택 알림 고급 조건</h2>',
+      '<p class="subtle">정책 탭에서 선택한 타입의 유사 메시지, 장 시간, 조건 점수를 세부 조정합니다.</p>',
+      '</div>',
+      '<span class="tone-chip hold">' + escapeHtml(rule.label) + '</span>',
+      '</div>',
+      '<div class="settings-body">',
+      renderNotificationRuleEditor(rule.key, { inline: true }),
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderNotificationThresholdPanel() {
+    var thresholds = alertThresholds();
+    return [
+      '<article class="panel notification-threshold-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Advanced</p>',
+      '<h2>알림 임계값</h2>',
+      '<p class="subtle">모델, 실시간, 외부 데이터 알림이 발생하는 기준입니다. 자주 바꾸지 않는 값만 이곳에 모읍니다.</p>',
+      '</div>',
+      '<button class="text-button primary" data-action="save-settings"' + (state.serverSettingsLocked ? ' disabled' : '') + '>설정 저장</button>',
+      '</div>',
+      '<div class="alert-threshold-section">',
+      '<div class="alert-threshold-grid">',
+      alertThresholdCatalog.map(function (item) {
+        return renderAlertThresholdInput(item, thresholds[item.key]);
+      }).join(""),
+      '</div>',
+      '</div>',
+      '</article>'
     ].join("");
   }
 
@@ -8993,6 +9242,34 @@
     Array.prototype.slice.call(app.querySelectorAll("[data-alert-rule]")).forEach(function (field) {
       field.addEventListener("change", function () {
         updateBooleanAssignmentSetting("alertRules", field.getAttribute("data-alert-rule"), field.checked);
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-notification-section]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        var section = normalizeNotificationSection(button.getAttribute("data-notification-section"));
+        if (section === state.activeNotificationSection) return;
+        state.activeNotificationSection = section;
+        writeNotificationSectionHistory(section);
+        render();
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-message-select]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        var messageType = button.getAttribute("data-message-select") || "";
+        if (!notificationRuleByKey(messageType)) return;
+        state.activeNotificationMessageType = messageType;
+        render();
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-template-select]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        var messageType = button.getAttribute("data-template-select") || "";
+        if (!notificationTemplateItems().some(function (item) { return item.messageType === messageType; })) return;
+        state.activeNotificationTemplateType = messageType;
+        render();
       });
     });
 

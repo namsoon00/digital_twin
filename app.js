@@ -2308,16 +2308,27 @@
     return typeof value === "boolean" ? "" : String(value || "");
   }
 
-  function syncAccountDraftFromLoadedAccounts(force) {
+  function syncAccountDraftFromLoadedAccounts(force, preferredAccountId) {
     var accounts = state.serviceAccounts || [];
     if (!accounts.length) {
       if (force) state.accountDraft = defaultAccountDraft();
       return;
     }
+    var preferred = String(preferredAccountId || "").trim();
+    if (preferred) {
+      var matched = accounts.filter(function (account) {
+        return accountIdOf(account) === preferred;
+      })[0];
+      if (matched) {
+        state.editingAccountId = accountIdOf(matched);
+        state.accountDraft = accountDraftFromAccount(matched);
+        return;
+      }
+    }
     if (!force && state.editingAccountId) return;
     if (!force && state.accountDraft && state.accountDraft.id && state.accountDraft.id !== "main") return;
     var selected = accounts[0];
-    state.editingAccountId = selected.id || "";
+    state.editingAccountId = accountIdOf(selected);
     state.accountDraft = accountDraftFromAccount(selected);
   }
 
@@ -2344,6 +2355,27 @@
     };
   }
 
+  function createNewAccountDraft() {
+    var draft = defaultAccountDraft();
+    var usedIds = {};
+    (state.serviceAccounts || []).forEach(function (account) {
+      var id = accountIdOf(account);
+      if (id) usedIds[id] = true;
+    });
+    if (!usedIds[draft.id]) return draft;
+    for (var index = 2; index < 1000; index += 1) {
+      var candidate = "account-" + index;
+      if (!usedIds[candidate]) {
+        draft.id = candidate;
+        draft.label = "추가 계정 " + index;
+        return draft;
+      }
+    }
+    draft.id = "account-" + Date.now();
+    draft.label = "추가 계정";
+    return draft;
+  }
+
   function loadServiceAccounts(options) {
     options = options || {};
     state.serviceAccountsLoading = true;
@@ -2367,7 +2399,7 @@
         state.serviceAccounts = Array.isArray(payload.accounts) ? payload.accounts : [];
         state.serviceAccountsLoaded = true;
         syncActiveWatchAccountId();
-        syncAccountDraftFromLoadedAccounts(Boolean(options.forceDraft));
+        syncAccountDraftFromLoadedAccounts(Boolean(options.forceDraft), options.draftAccountId);
       })
       .catch(function (error) {
         state.serviceAccountsError = error.message || "계정 DB를 읽지 못했습니다.";
@@ -2443,8 +2475,8 @@
     return sendJson("/api/service-accounts", "POST", { account: account })
       .then(function () {
         state.accountSaved = true;
-        state.editingAccountId = "";
-        return loadServiceAccounts({ forceDraft: true });
+        state.editingAccountId = account.id;
+        return loadServiceAccounts({ forceDraft: true, draftAccountId: account.id });
       })
       .then(function () {
         showSnackbar("계정을 저장했습니다.");
@@ -9305,7 +9337,7 @@
     if (newServiceAccount) {
       newServiceAccount.addEventListener("click", function () {
         state.editingAccountId = "";
-        state.accountDraft = defaultAccountDraft();
+        state.accountDraft = createNewAccountDraft();
         state.accountSaved = false;
         state.serviceAccountsError = "";
         render();

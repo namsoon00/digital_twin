@@ -530,8 +530,10 @@ function checkFrontendAdminRender() {
     }
   };
 
-  function renderForSearch(search, hostname) {
+  function renderForSearch(search, hostname, options) {
+    options = options || {};
     let html = "";
+    const capturedActions = {};
     const storage = new Map();
     const app = {
       get innerHTML() {
@@ -540,7 +542,18 @@ function checkFrontendAdminRender() {
       set innerHTML(value) {
         html = String(value);
       },
-      querySelector: function () {
+      querySelector: function (selector) {
+        if (
+          options.captureNewAccountButton &&
+          selector === '[data-action="new-service-account"]' &&
+          html.indexOf('data-action="new-service-account"') >= 0
+        ) {
+          return {
+            addEventListener: function (type, handler) {
+              if (type === "click") capturedActions.newAccount = handler;
+            }
+          };
+        }
         return null;
       },
       querySelectorAll: function () {
@@ -601,9 +614,19 @@ function checkFrontendAdminRender() {
       }
     }, { filename: "public/app.js" });
 
-    return new Promise(function (resolve) {
+    return new Promise(function (resolve, reject) {
       setTimeout(function () {
-        resolve(html);
+        try {
+          if (options.clickNewAccount) {
+            if (!capturedActions.newAccount) {
+              throw new Error("새 계정 버튼 click handler가 등록되지 않았습니다.");
+            }
+            capturedActions.newAccount();
+          }
+          resolve(html);
+        } catch (error) {
+          reject(error);
+        }
       }, 80);
     });
   }
@@ -620,7 +643,8 @@ function checkFrontendAdminRender() {
     renderForSearch("?tab=modeling"),
     renderForSearch("?tab=monitoring"),
     renderForSearch("?tab=settings"),
-    renderForSearch("?tab=accounts", "namsoon00.github.io")
+    renderForSearch("?tab=accounts", "namsoon00.github.io"),
+    renderForSearch("?tab=accounts", null, { captureNewAccountButton: true, clickNewAccount: true })
   ]).then(function (pages) {
     const overviewHtml = pages[0];
     const accountHtml = pages[1];
@@ -634,6 +658,7 @@ function checkFrontendAdminRender() {
     const monitoringHtml = pages[9];
     const settingsHtml = pages[10];
     const staticAccountHtml = pages[11];
+    const newAccountHtml = pages[12];
 
     assertOk(overviewHtml.indexOf("계정·알림·모델 운영 콘솔") < 0, "이전 고정 운영 콘솔 제목이 아직 렌더링됩니다.");
     assertOk(overviewHtml.indexOf("<h1>홈</h1>") >= 0, "홈 탭 제목이 상단에 렌더링되지 않았습니다.");
@@ -682,6 +707,13 @@ function checkFrontendAdminRender() {
     assertOk(accountHtml.indexOf("Bot token 설정됨") >= 0, "텔레그램 bot token 설정 상태가 표시되지 않습니다.");
     assertOk(accountHtml.indexOf("Secret 설정됨") >= 0, "토스 secret 설정 상태가 표시되지 않습니다.");
     assertOk(accountHtml.indexOf("저장됨 - 새 값 입력 시 교체") >= 0, "저장된 API 값의 교체 안내가 표시되지 않습니다.");
+    assertOk(code.indexOf("function createNewAccountDraft") >= 0, "새 계정 전용 draft 생성 로직이 없습니다.");
+    assertOk(code.indexOf("state.accountDraft = createNewAccountDraft();") >= 0, "새 계정 버튼이 새 draft 생성 로직과 연결되지 않았습니다.");
+    assertOk(code.indexOf('"account-" + index') >= 0, "새 계정 ID 중복 방지 로직이 없습니다.");
+    assertOk(code.indexOf("draftAccountId: account.id") >= 0, "계정 저장 후 저장한 계정을 계속 선택하지 않습니다.");
+    assertOk(newAccountHtml.indexOf('value="account-2"') >= 0, "새 계정 클릭 후 중복 없는 계정 ID가 채워지지 않았습니다.");
+    assertOk(newAccountHtml.indexOf('value="추가 계정 2"') >= 0, "새 계정 클릭 후 새 표시 이름이 채워지지 않았습니다.");
+    assertOk(newAccountHtml.indexOf("새 계정 등록") >= 0, "새 계정 클릭 후 등록 모드로 전환되지 않았습니다.");
     assertOk(accountHtml.indexOf('value="DB 계정"') >= 0, "로컬 DB 계정 표시 이름이 폼에 채워지지 않았습니다.");
     assertOk(accountHtml.indexOf('value="NVDA,005930"') >= 0, "로컬 DB 관심 종목이 폼에 채워지지 않았습니다.");
     assertOk(accountHtml.indexOf('value="true"') < 0, "마스킹된 boolean 값이 계정 폼에 그대로 표시됩니다.");

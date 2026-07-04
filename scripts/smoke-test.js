@@ -637,6 +637,8 @@ function checkFrontendAdminRender() {
     assertOk(settingsHtml.indexOf("<h1>설정</h1>") >= 0, "설정 탭 제목이 상단에 렌더링되지 않았습니다.");
     assertOk(settingsHtml.indexOf("settings-view") >= 0, "설정 화면이 페이지 구조로 렌더링되지 않았습니다.");
     assertOk(code.indexOf("renderTopActions") >= 0 && styles.indexOf(".top-action-bar") >= 0, "상단 관리 버튼 구조가 렌더링되지 않습니다.");
+    assertOk(overviewHtml.indexOf("top-action-bar") < overviewHtml.indexOf("topbar"), "상단 관리 버튼이 최상단에 렌더링되지 않습니다.");
+    assertOk(code.indexOf('data-action="open-settings"') < 0, "topbar 설정 버튼이 상단 관리 탭과 중복됩니다.");
     assertOk(code.indexOf("pushState") >= 0 && code.indexOf("popstate") >= 0, "탭 이동이 브라우저 뒤로가기와 동기화되지 않았습니다.");
     assertOk(code.indexOf("restoreTabBarPosition") >= 0 && code.indexOf("tabBarScrollLeft") >= 0, "하단 탭 위치 복원 로직이 없습니다.");
     assertOk(code.indexOf("bottomTabIds") >= 0 && code.indexOf("topActionTabIds") >= 0, "하단 주요 탭과 상단 관리 버튼 분리 규칙이 없습니다.");
@@ -697,6 +699,9 @@ function checkFrontendAdminRender() {
     assertOk(notificationHtml.indexOf('data-notification-section="policy"') >= 0 && notificationHtml.indexOf('data-notification-section="templates"') >= 0 && notificationHtml.indexOf('data-notification-section="advanced"') >= 0, "알림 내부 섹션 이동 버튼이 없습니다.");
     assertOk(notificationHtml.indexOf("notification-section-bar") < notificationHtml.indexOf("notification-command-panel"), "알림 섹션 버튼이 관제 패널 위에 배치되지 않았습니다.");
     assertOk(notificationHtml.indexOf("notification-decision-panel") >= 0, "최근 알림 판단 패널이 렌더링되지 않았습니다.");
+    assertOk(notificationHtml.indexOf("notification-decision-panel") < notificationHtml.indexOf("notification-command-panel"), "기본 현황에서 최근 알림 판단이 관제 지표보다 먼저 보이지 않습니다.");
+    assertOk(notificationHtml.indexOf("notification-decision-body") >= 0, "최근 알림 판단 본문 영역이 분리되지 않았습니다.");
+    assertOk(code.indexOf('indexOf("API를 찾지 못했습니다")') >= 0, "최근 알림 판단 API 미지원 상태를 빈 상태로 처리하지 않습니다.");
     assertOk(code.indexOf("notification-state-message") >= 0, "최근 알림 빈 상태 전용 상태 박스 렌더링 경로가 없습니다.");
     assertOk(notificationHtml.indexOf("admin-message-group-list") < 0, "기본 현황 화면에 정책 목록이 렌더링됩니다.");
     assertOk(notificationHtml.indexOf("notification-template-manager-panel") < 0, "기본 현황 화면에 템플릿 관리 화면이 렌더링됩니다.");

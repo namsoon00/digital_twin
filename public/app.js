@@ -1333,6 +1333,10 @@
         applyNotificationJobs(payload);
       })
       .catch(function (error) {
+        if (String(error.message || "").indexOf("API를 찾지 못했습니다") >= 0) {
+          applyNotificationJobs({ jobs: [], summary: {} });
+          return;
+        }
         state.notificationJobsError = error.message || "최근 알림 판단을 읽지 못했습니다.";
         state.notificationJobItems = [];
       })
@@ -5319,6 +5323,7 @@
     var subtitle = (tab.description || "운영") + " · 마지막 데이터 " + formatClock(snapshot.generatedAt);
     return [
       '<main class="shell">',
+      renderTopActions(),
       '<section class="topbar">',
       '<div class="topbar-copy">',
       '<p class="eyebrow">Exit Lens Admin</p>',
@@ -5328,10 +5333,8 @@
       '<div class="toolbar topbar-actions">',
       '<span class="status-pill ' + modeClass + '">' + escapeHtml(modeLabel) + "</span>",
       '<button class="icon-button" type="button" data-action="refresh" title="새로고침" aria-label="새로고침">' + (state.refreshing ? "…" : "↻") + "</button>",
-      state.activeTab === "settings" ? '' : '<button class="text-button compact" type="button" data-action="open-settings">설정</button>',
       '</div>',
       '</section>',
-      renderTopActions(),
       '<section class="workspace-layout">',
       renderTabs(),
       '<div class="workspace-main">',
@@ -6089,11 +6092,12 @@
   }
 
   function renderNotificationsPage() {
+    var section = normalizeNotificationSection(state.activeNotificationSection);
     return [
       '<section class="admin-grid notifications-view">',
       renderNotificationSectionBar(),
-      renderNotificationCommandPanel(),
-      renderNotificationSectionContent(),
+      section === "status" ? renderNotificationSectionContent() : renderNotificationCommandPanel(),
+      section === "status" ? renderNotificationCommandPanel() : renderNotificationSectionContent(),
       '</section>'
     ].join("");
   }
@@ -6377,6 +6381,9 @@
     var summaryItems = ["pending", "done", "suppressed", "failed"].map(function (key) {
       return '<span class="chip">' + escapeHtml(notificationJobStatusLabel(key)) + ' ' + escapeHtml(Number(summary[key] || 0)) + '</span>';
     }).join("");
+    var stateMessage = hasError
+      ? renderNotificationStateMessage("hold", "최근 판단 API 연결 확인", state.notificationJobsError)
+      : renderNotificationStateMessage("muted", "최근 알림 판단 기록 없음", "알림 워커가 발송, 보류, 실패 판단을 남기면 이곳에 시간순으로 표시합니다.");
     return [
       '<article class="panel notification-decision-panel">',
       '<div class="panel-head">',
@@ -6384,13 +6391,17 @@
       '<p class="label">Decisions</p>',
       '<h2>최근 알림 판단</h2>',
       '</div>',
-      '<span class="tone-chip ' + escapeHtml(hasError ? "hold" : "watch") + '">' + escapeHtml(hasError ? "확인 필요" : "현황") + '</span>',
-      '</div>',
       '<div class="notification-decision-summary">',
       summaryItems,
       '</div>',
-      hasError ? renderNotificationStateMessage("hold", "최근 판단 API 연결 확인", state.notificationJobsError) : '',
-      jobs.length ? '<div class="notification-decision-list">' + jobs.map(renderNotificationDecisionRow).join("") + '</div>' : (hasError ? '' : renderNotificationStateMessage("muted", "최근 알림 판단 기록 없음", "알림 워커가 발송, 보류, 실패 판단을 남기면 이곳에 시간순으로 표시합니다.")),
+      '</div>',
+      '<div class="notification-decision-body">',
+      '<div class="notification-decision-status">',
+      '<span class="tone-chip ' + escapeHtml(hasError ? "hold" : "watch") + '">' + escapeHtml(hasError ? "확인 필요" : "현황") + '</span>',
+      '<span>' + escapeHtml(jobs.length ? "최근 " + jobs.length + "건" : (hasError ? "연결 상태 확인" : "기록 없음")) + '</span>',
+      '</div>',
+      jobs.length ? '<div class="notification-decision-list">' + jobs.map(renderNotificationDecisionRow).join("") + '</div>' : stateMessage,
+      '</div>',
       '</article>'
     ].join("");
   }
@@ -9105,13 +9116,6 @@
         navigateToTab(nextTab);
       });
     });
-
-    var openSettings = app.querySelector('[data-action="open-settings"]');
-    if (openSettings) {
-      openSettings.addEventListener("click", function () {
-        navigateToTab("settings");
-      });
-    }
 
     var settingsBack = app.querySelector('[data-action="settings-back"]');
     if (settingsBack) {

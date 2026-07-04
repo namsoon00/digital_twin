@@ -234,7 +234,7 @@ h3 {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
-  margin: 0 0 16px;
+  margin: 0 0 12px;
 }
 
 .top-action-button {
@@ -2994,10 +2994,38 @@ h3 {
   grid-column: 1 / -1;
 }
 
+.notification-decision-panel .panel-head {
+  align-items: center;
+}
+
+.notification-decision-panel .notification-decision-summary {
+  justify-content: flex-end;
+}
+
+.notification-decision-body {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px 16px 16px;
+}
+
+.notification-decision-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+.notification-decision-status span:not(.tone-chip) {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
 .notification-state-message {
   display: grid;
   gap: 4px;
-  margin: 0 16px 16px;
   padding: 12px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -5141,6 +5169,15 @@ h3 {
   .notification-ops-strip,
   .notification-section-tabs {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .notification-decision-panel .panel-head {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .notification-decision-panel .notification-decision-summary {
+    justify-content: flex-start;
   }
 
   .topbar {

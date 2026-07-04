@@ -1185,7 +1185,7 @@
       : defaultNotificationTemplates();
     state.notificationTemplateVariables = Array.isArray(payload.variables) && payload.variables.length
       ? payload.variables
-      : ["title", "statusHeadline", "titleHeadline", "telegramMessage", "readableMessage", "dataLines", "telegramDataLines", "triggerSummary", "triggerBlock", "criterionBlock", "criterionLines", "lines", "rawLines", "body", "messageType", "symbol", "severity", "metadata", "market", "changePercent", "change24h", "change7d", "price", "volume", "volume24h", "provider"];
+      : ["title", "statusHeadline", "titleHeadline", "telegramMessage", "readableMessage", "dataLines", "telegramDataLines", "triggerSummary", "triggerBlock", "criterionBlock", "criterionLines", "lines", "rawLines", "referenceDate", "eventGeneratedAt", "body", "messageType", "symbol", "severity", "metadata", "market", "changePercent", "change24h", "change7d", "price", "volume", "volume24h", "provider"];
     state.notificationTemplatesLoaded = true;
     state.notificationTemplatesLoading = false;
     state.notificationTemplatesError = "";
@@ -1347,7 +1347,7 @@
   function notificationTemplateVariables() {
     return state.notificationTemplateVariables.length
       ? state.notificationTemplateVariables
-      : ["title", "statusHeadline", "titleHeadline", "telegramMessage", "readableMessage", "dataLines", "telegramDataLines", "triggerSummary", "triggerBlock", "criterionBlock", "criterionLines", "lines", "rawLines", "body", "messageType", "symbol", "severity", "metadata", "market", "changePercent", "change24h", "change7d", "price", "volume", "volume24h", "provider"];
+      : ["title", "statusHeadline", "titleHeadline", "telegramMessage", "readableMessage", "dataLines", "telegramDataLines", "triggerSummary", "triggerBlock", "criterionBlock", "criterionLines", "lines", "rawLines", "referenceDate", "eventGeneratedAt", "body", "messageType", "symbol", "severity", "metadata", "market", "changePercent", "change24h", "change7d", "price", "volume", "volume24h", "provider"];
   }
 
   function clampInteger(value, min, max, fallback) {
@@ -1582,7 +1582,9 @@
       "비트코인 변동": 70,
       "크립토 변동": 71,
       "크립토 가격": 72,
-      "크립토 거래액": 73
+      "크립토 거래액": 73,
+      "출처": 88,
+      "기준일": 89
     };
     var separateDataLabels = {
       "상태": true,
@@ -1598,9 +1600,19 @@
       "크립토 변동": true,
       "크립토 가격": true,
       "크립토 거래액": true,
+      "출처": true,
+      "기준일": true,
       "평가": true,
       "보유": true
     };
+    function previewReferenceDate() {
+      var now = new Date();
+      var shifted = new Date(now.getTime() + 9 * 60 * 60000);
+      function pad(value) {
+        return String(value).padStart(2, "0");
+      }
+      return shifted.getUTCFullYear() + "-" + pad(shifted.getUTCMonth() + 1) + "-" + pad(shifted.getUTCDate()) + " " + pad(shifted.getUTCHours()) + ":" + pad(shifted.getUTCMinutes()) + " KST";
+    }
     function plainBullet(text) {
       var cleaned = String(text || "").trim();
       return cleaned ? "• " + cleaned : "";
@@ -1883,9 +1895,12 @@
       }
     };
     var sample = samples[type] || samples.default;
-    var rawLines = Array.isArray(sample.lines) ? sample.lines.join("\n") : "";
-    var rawItems = rawLines ? rawLines.split("\n").filter(function (line) { return String(line || "").trim(); }) : [];
-    var lines = rawLines ? rawLines.split("\n").map(function (line) { return "- " + line; }).join("\n") : "";
+    var rawItems = Array.isArray(sample.lines) ? sample.lines.filter(function (line) { return String(line || "").trim(); }) : [];
+    var hasReferenceDate = rawItems.some(function (line) { return splitDataLine(line).label === "기준일"; });
+    var referenceDate = sample.referenceDate || previewReferenceDate();
+    if (!hasReferenceDate && referenceDate) rawItems.push("기준일 " + referenceDate);
+    var rawLines = rawItems.join("\n");
+    var lines = rawItems.map(function (line) { return "- " + line; }).join("\n");
     var bulletLines = rawItems.map(plainBullet).join("\n");
     var rule = alertRuleCatalog.filter(function (item) { return item.key === type; })[0] || {};
     var messageTypeLabel = rule.label || notificationTemplateLabel(type);
@@ -1939,6 +1954,8 @@
       title: sample.title || samples.default.title,
       lines: lines,
       rawLines: rawLines,
+      referenceDate: referenceDate,
+      eventGeneratedAt: referenceDate,
       dataLines: dataLines,
       bulletLines: bulletLines,
       body: body,

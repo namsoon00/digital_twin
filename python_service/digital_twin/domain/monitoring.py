@@ -95,7 +95,7 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
         events.extend(self.watchlist_quote_events(snapshot, previous or {}))
         events.extend(self.external_signal_events(snapshot, previous or {}))
         events.extend(self.holding_timing_events(snapshot))
-        return [event for event in events if self.enabled(event.rule)]
+        return [event for event in self.stamp_events(snapshot, events) if self.enabled(event.rule)]
 
     def type_check_events_for_snapshot(self, snapshot: AccountSnapshot) -> List[AlertEvent]:
         events: List[AlertEvent] = []
@@ -155,7 +155,15 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
             ])
             timing_events = self.holding_timing_events(timing_snapshot)
         events.extend(self.only_rule("holdingTiming", timing_events))
-        return self.unique_rules([event for event in events if self.enabled(event.rule)])
+        return self.unique_rules([event for event in self.stamp_events(snapshot, events) if self.enabled(event.rule)])
+
+    def stamp_events(self, snapshot: AccountSnapshot, events: List[AlertEvent]) -> List[AlertEvent]:
+        generated_at = str(snapshot.generated_at or "").strip()
+        if not generated_at:
+            return events
+        for event in events:
+            event.generated_at = generated_at
+        return events
 
     def only_rule(self, rule: str, events: List[AlertEvent]) -> List[AlertEvent]:
         return [event for event in events if event.rule == rule]

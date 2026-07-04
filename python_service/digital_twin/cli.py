@@ -80,6 +80,7 @@ def event_to_dict(event: AlertEvent):
         "lines": event.lines,
         "criteria": event.criteria,
         "metadata": dict(getattr(event, "metadata", {}) or {}),
+        "generatedAt": getattr(event, "generated_at", ""),
         "message": event.message(),
     }
 

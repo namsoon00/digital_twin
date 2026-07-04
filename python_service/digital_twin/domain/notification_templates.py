@@ -1,6 +1,7 @@
 import html
 import re
 from dataclasses import asdict, dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List
 
 from .message_types import MESSAGE_TYPE_LABELS, TRIGGER_SUMMARIES
@@ -11,6 +12,7 @@ LEGACY_DEFAULT_TEMPLATE = "{title}\n{lines}"
 PREVIOUS_DEFAULT_TEMPLATE = "{readableMessage}"
 DEFAULT_TEMPLATE = "{telegramMessage}"
 BODY_TEMPLATE = "{body}"
+KST = timezone(timedelta(hours=9))
 DATA_LABEL_PREFIXES = [
     "미장 가격 변동",
     "비트코인 변동",
@@ -57,6 +59,8 @@ DATA_LABEL_ORDER = {
     "크립토 변동": 71,
     "크립토 가격": 72,
     "크립토 거래액": 73,
+    "출처": 88,
+    "기준일": 89,
 }
 
 SEPARATE_DATA_LABELS = {
@@ -73,6 +77,8 @@ SEPARATE_DATA_LABELS = {
     "크립토 변동",
     "크립토 가격",
     "크립토 거래액",
+    "출처",
+    "기준일",
     "평가",
     "보유",
 }
@@ -305,6 +311,44 @@ def data_value(raw_lines: List[str], label: str) -> str:
     return ""
 
 
+def event_generated_at(event: AlertEvent) -> str:
+    metadata = dict(getattr(event, "metadata", {}) or {})
+    return str(
+        getattr(event, "generated_at", "")
+        or getattr(event, "generatedAt", "")
+        or metadata.get("generatedAt")
+        or metadata.get("updatedAt")
+        or metadata.get("asOf")
+        or ""
+    ).strip()
+
+
+def current_utc_iso() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def reference_date_text(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(KST).strftime("%Y-%m-%d %H:%M KST")
+    except ValueError:
+        return text
+
+
+def raw_lines_with_reference_date(event: AlertEvent, raw_lines: List[str]) -> List[str]:
+    if data_value(raw_lines, "기준일"):
+        return list(raw_lines)
+    reference_date = reference_date_text(event_generated_at(event) or current_utc_iso())
+    if not reference_date:
+        return list(raw_lines)
+    return list(raw_lines) + ["기준일 " + reference_date]
+
+
 def first_line_containing(raw_lines: List[str], terms: List[str]) -> str:
     for line in raw_lines:
         text = str(line or "").strip()
@@ -435,7 +479,7 @@ class NotificationTemplate:
 
 
 def alert_context(event: AlertEvent) -> Dict[str, object]:
-    raw_lines = [str(line).strip() for line in event.lines if str(line).strip()]
+    raw_lines = raw_lines_with_reference_date(event, [str(line).strip() for line in event.lines if str(line).strip()])
     lines = "\n".join(["- " + line for line in raw_lines])
     bullet_lines = "\n".join([plain_bullet(line) for line in raw_lines])
     message_type_label = MESSAGE_TYPE_LABELS.get(event.rule, event.rule)
@@ -482,6 +526,8 @@ def alert_context(event: AlertEvent) -> Dict[str, object]:
     telegram_message = "\n".join(part for part in telegram_parts if str(part).strip() or part == "").strip()
     body = telegram_message or readable_message or "\n".join([event.title] + ([lines] if lines else []))
     metadata = dict(event.metadata or {})
+    generated_at = event_generated_at(event)
+    reference_date = data_value(raw_lines, "기준일") or reference_date_text(generated_at)
     context = {
         "messageType": event.rule,
         "accountId": event.account_id,
@@ -514,6 +560,8 @@ def alert_context(event: AlertEvent) -> Dict[str, object]:
         "bulletLines": bullet_lines,
         "lines": lines,
         "rawLines": "\n".join(raw_lines),
+        "referenceDate": reference_date,
+        "eventGeneratedAt": generated_at,
         "readableMessage": readable_message,
         "body": body,
     }
@@ -611,6 +659,8 @@ def template_variables() -> List[str]:
         "bulletLines",
         "lines",
         "rawLines",
+        "referenceDate",
+        "eventGeneratedAt",
         "readableMessage",
         "body",
         "metadata",

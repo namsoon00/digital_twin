@@ -142,6 +142,7 @@ class AlertEvent:
     symbol: str = ""
     criteria: List[str] = field(default_factory=list)
     metadata: Dict[str, object] = field(default_factory=dict)
+    generated_at: str = field(default_factory=utc_now_iso)
 
     def target(self) -> str:
         return self.symbol or "all"

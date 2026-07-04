@@ -506,13 +506,14 @@ class PythonServiceTests(unittest.TestCase):
             [previous_position],
             decisions_for_positions([previous_position], previous_portfolio),
         )
+        current_generated_at = "2026-07-03T06:58:00Z"
         current_snapshot = AccountSnapshot(
             "main",
             "메인",
             "toss",
             "live",
             "ok",
-            utc_now_iso(),
+            current_generated_at,
             current_portfolio,
             [current_position],
             decisions_for_positions([current_position], current_portfolio),
@@ -522,6 +523,7 @@ class PythonServiceTests(unittest.TestCase):
         pnl_message = next(event for event in events if event.rule == "monitorPnlChange").message()
         value_message = next(event for event in events if event.rule == "monitorValueChange").message()
 
+        self.assertTrue(all(event.generated_at == current_generated_at for event in events))
         self.assertIn("수급: 거래량 30,000(1.8x), 거래액 18억 원", pnl_message)
         self.assertIn("투자자: 외국인 +145,000(매수 420,000/매도 275,000), 기관 +82,000(매수 310,000/매도 228,000)", pnl_message)
         self.assertIn("수급: 거래량 30,000(1.8x), 거래액 18억 원", value_message)
@@ -1685,7 +1687,17 @@ class PythonServiceTests(unittest.TestCase):
         heartbeat_rule = rules.get("monitorHeartbeat")
         heartbeat_rule.threshold = 0
         rules.upsert(heartbeat_rule)
-        event = AlertEvent("main", "메인", "WATCH", "monitorHeartbeat", "main:heartbeat", "상태 확인", ["정상"], "")
+        event = AlertEvent(
+            "main",
+            "메인",
+            "WATCH",
+            "monitorHeartbeat",
+            "main:heartbeat",
+            "상태 확인",
+            ["정상"],
+            "",
+            generated_at="2026-07-03T06:58:00Z",
+        )
         send_events([event], queue=queue)
         templates.upsert("monitorHeartbeat", "[{messageType}] {title}\n{rawLines}", "테스트 템플릿", True)
         sent = []
@@ -1703,7 +1715,7 @@ class PythonServiceTests(unittest.TestCase):
         )
 
         self.assertEqual(1, runner.run_once(limit=10))
-        self.assertEqual("[monitorHeartbeat] 상태 확인\n정상", sent[0])
+        self.assertEqual("[monitorHeartbeat] 상태 확인\n정상\n기준일 2026-07-03 15:58 KST", sent[0])
 
     def test_default_notification_template_is_readable_and_skips_empty_fields(self):
         db_path = Path(self.temp.name) / "service.db"
@@ -1758,8 +1770,10 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("<b>[주의] 미장 가격/거래량</b>\n<code>TSLA</code>", message)
         self.assertNotIn("━━━━━━━━", message)
         self.assertIn("• <b>미장 가격 변동</b>: <code>-7.5%</code>, <b>가격</b>: <code>$393.45</code>", message)
-        self.assertIn("• <b>거래량</b>: <code>71,917,610</code>, <b>기준일</b>: <code>2026-07-02</code>", message)
+        self.assertIn("• <b>거래량</b>: <code>71,917,610</code>", message)
+        self.assertIn("• <b>기준일</b>: <code>2026-07-02</code>", message)
         self.assertIn("• <b>출처</b>: <code>Alpha Vantage</code>", message)
+        self.assertEqual(1, message.count("<b>기준일</b>"))
         self.assertLess(message.index("<b>데이터</b>"), message.index("<b>발송 기준</b>"))
         self.assertIn("• <b>감지</b>: <code>가격 변동 -7.5%, 가격 $393.45</code>", message)
 
@@ -1784,6 +1798,7 @@ class PythonServiceTests(unittest.TestCase):
                 "설정: 크립토 24h ±4% 또는 7d ±10% 이상",
                 "감지: 비트코인 24h -5.2%, 7d -12.1%",
             ],
+            generated_at="2026-07-03T06:58:00Z",
         )
 
         message = templates.render(event.rule, alert_context(event))
@@ -1793,7 +1808,27 @@ class PythonServiceTests(unittest.TestCase):
         value_line = "• <b>크립토 거래액</b>: <code>$42,000,000,000</code>"
         self.assertIn(change_line + "\n" + price_line + "\n" + value_line, message)
         self.assertLess(message.index(price_line), message.index(value_line))
+        self.assertIn("• <b>기준일</b>: <code>2026-07-03 15:58 KST</code>", message)
         self.assertIn("• <b>감지</b>: <code>비트코인 24h -5.2%, 7d -12.1%</code>", message)
+
+    def test_alert_context_adds_reference_date_when_missing(self):
+        event = AlertEvent(
+            "main",
+            "메인",
+            "WATCH",
+            "externalCryptoMove",
+            "main:crypto:ETH:11.7",
+            "크립토 변동",
+            ["크립토 변동 24h +3.6% · 7d +11.7%", "크립토 가격 $1,758", "크립토 거래액 $10,240,123,215", "출처 CoinGecko"],
+            "ETH",
+            generated_at="2026-07-03T06:58:00Z",
+        )
+
+        context = alert_context(event)
+
+        self.assertIn("기준일 2026-07-03 15:58 KST", context["rawLines"])
+        self.assertEqual("2026-07-03 15:58 KST", context["referenceDate"])
+        self.assertIn("• <b>기준일</b>: <code>2026-07-03 15:58 KST</code>", context["telegramDataLines"])
 
     def test_model_score_alert_uses_phrase_with_score_in_parentheses(self):
         db_path = Path(self.temp.name) / "service.db"

@@ -200,8 +200,12 @@
     { id: "modeling", label: "투자전략", description: "모델링 관리" },
     { id: "settings", label: "설정", description: "런타임 환경" }
   ];
+  var primaryMobileTabIds = ["overview", "watchlist", "monitoring", "notifications"];
+  var secondaryTabIds = ["accounts", "symbols", "modeling", "settings"];
+  var moreTabMeta = { id: "more", label: "더보기", description: "계정·종목·전략·설정" };
 
   function activeTabMeta() {
+    if (state.activeTab === moreTabMeta.id) return moreTabMeta;
     return tabs.filter(function (tab) { return tab.id === state.activeTab; })[0] || tabs[0];
   }
 
@@ -385,6 +389,7 @@
     notificationRulesError: "",
     notificationRulesSaved: false,
     notificationExpandedTypes: {},
+    notificationExpandedGroups: { "실시간": true, "모델": true },
     notificationMarketHoursSessions: [],
     notificationJobItems: [],
     notificationJobsLoading: false,
@@ -751,6 +756,7 @@
 
   function normalizeTabId(value) {
     var requested = String(value || "").toLowerCase();
+    if (requested === moreTabMeta.id) return moreTabMeta.id;
     return tabs.some(function (tab) { return tab.id === requested; }) ? requested : "overview";
   }
 
@@ -5181,17 +5187,52 @@
     return [
       '<main class="shell">',
       '<section class="topbar">',
-      '<div>',
+      '<div class="topbar-copy">',
       '<p class="eyebrow">Toss Lens</p>',
-      '<h1>토스 계좌 판단판을 불러오는 중</h1>',
+      '<h1>운영 데이터를 준비하는 중</h1>',
+      '<p class="subtle">계좌, 관심 종목, 알림 워커, 모델 기준을 나눠 확인하고 있습니다.</p>',
+      '</div>',
+      '<div class="toolbar topbar-actions">',
+      '<span class="status-pill demo">초기 동기화</span>',
       '</div>',
       '</section>',
-      '<section class="grid">',
-      '<div class="panel skeleton tall"></div>',
-      '<div class="panel skeleton"></div>',
-      '<div class="panel skeleton"></div>',
+      '<section class="loading-grid">',
+      '<article class="panel loading-status-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Startup</p>',
+      '<h2>먼저 볼 수 있는 화면을 준비합니다</h2>',
+      '</div>',
+      '<span class="metric">4</span>',
+      '</div>',
+      '<div class="loading-source-list">',
+      renderLoadingSource("계좌 연결", "토스 live 또는 로컬 저장 계정 상태 확인"),
+      renderLoadingSource("관심 종목", "계정별 관심 목록과 전체 종목 캐시 준비"),
+      renderLoadingSource("알림 판단", "최근 발송 이력과 룰 설정 동기화"),
+      renderLoadingSource("투자전략", "모델 기준과 현재 종목 판단 계산"),
+      '</div>',
+      '</article>',
+      '<article class="panel loading-preview-panel">',
+      '<div class="panel-head"><div><p class="label">Preview</p><h2>화면 골격</h2></div></div>',
+      '<div class="loading-shell-preview">',
+      '<span></span><span></span><span></span>',
+      '<span></span><span></span><span></span>',
+      '</div>',
+      '</article>',
       '</section>',
       '</main>'
+    ].join("");
+  }
+
+  function renderLoadingSource(title, description) {
+    return [
+      '<div class="loading-source-row">',
+      '<span class="loading-dot" aria-hidden="true"></span>',
+      '<div>',
+      '<strong>' + escapeHtml(title) + '</strong>',
+      '<em>' + escapeHtml(description) + '</em>',
+      '</div>',
+      '</div>'
     ].join("");
   }
 
@@ -5242,12 +5283,15 @@
   }
 
   function renderTabs() {
+    var moreActive = state.activeTab === moreTabMeta.id || secondaryTabIds.indexOf(state.activeTab) >= 0;
     return [
-      '<nav class="tab-bar" aria-label="앱 탭" style="--tab-count:' + tabs.length + '">',
+      '<nav class="tab-bar" aria-label="앱 탭" style="--tab-count:' + tabs.length + '; --mobile-tab-count:' + (primaryMobileTabIds.length + 1) + '">',
       tabs.map(function (tab) {
         var active = state.activeTab === tab.id;
-        return '<button type="button" class="' + (active ? "active" : "") + '" data-tab="' + escapeHtml(tab.id) + '"' + (active ? ' aria-current="page"' : "") + '><span class="tab-label">' + escapeHtml(tab.label) + '</span><span class="tab-description">' + escapeHtml(tab.description || "") + '</span></button>';
+        var priority = primaryMobileTabIds.indexOf(tab.id) >= 0 ? " tab-primary" : " tab-secondary";
+        return '<button type="button" class="' + (active ? "active" : "") + priority + '" data-tab="' + escapeHtml(tab.id) + '"' + (active ? ' aria-current="page"' : "") + '><span class="tab-label">' + escapeHtml(tab.label) + '</span><span class="tab-description">' + escapeHtml(tab.description || "") + '</span></button>';
       }).join(""),
+      '<button type="button" class="mobile-more-tab' + (moreActive ? " active" : "") + '" data-tab="' + escapeHtml(moreTabMeta.id) + '"' + (moreActive ? ' aria-current="page"' : "") + '><span class="tab-label">' + escapeHtml(moreTabMeta.label) + '</span><span class="tab-description">' + escapeHtml(moreTabMeta.description) + '</span></button>',
       '</nav>'
     ].join("");
   }
@@ -5318,10 +5362,42 @@
     if (state.activeTab === "settings") {
       return renderSettingsPage();
     }
+    if (state.activeTab === "more") {
+      return renderMorePage();
+    }
     return [
       '<section class="admin-grid">',
       renderAdminOverviewPanel(snapshot),
       renderAdminMonitoringPanel(snapshot),
+      '</section>'
+    ].join("");
+  }
+
+  function renderMorePage() {
+    var secondaryTabs = tabs.filter(function (tab) {
+      return secondaryTabIds.indexOf(tab.id) >= 0;
+    });
+    return [
+      '<section class="admin-grid more-view">',
+      '<article class="panel more-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">More</p>',
+      '<h2>보조 업무</h2>',
+      '</div>',
+      '<span class="metric">' + escapeHtml(secondaryTabs.length) + '</span>',
+      '</div>',
+      '<div class="more-action-list">',
+      secondaryTabs.map(function (tab) {
+        return [
+          '<button type="button" class="more-action-row" data-tab="' + escapeHtml(tab.id) + '">',
+          '<span><strong>' + escapeHtml(tab.label) + '</strong><em>' + escapeHtml(tab.description || "") + '</em></span>',
+          '<b>열기</b>',
+          '</button>'
+        ].join("");
+      }).join(""),
+      '</div>',
+      '</article>',
       '</section>'
     ].join("");
   }
@@ -5974,6 +6050,7 @@
     var rules = alertRules();
     var cadences = alertCadenceMinutes();
     var thresholds = alertThresholds();
+    var groups = alertRuleGroups();
     return [
       '<article class="panel admin-message-panel">',
       '<div class="panel-head">',
@@ -5982,7 +6059,7 @@
       '<h2>메시지 타입별 알림</h2>',
       '</div>',
       '<div class="settings-actions">',
-      '<button class="text-button compact" data-action="expand-message-types">전체 펼치기</button>',
+      '<button class="text-button compact" data-action="expand-message-types">그룹 펼치기</button>',
       '<button class="text-button compact" data-action="collapse-message-types">전체 접기</button>',
       '<button class="text-button primary" data-action="save-settings"' + (state.serverSettingsLocked ? ' disabled' : '') + '>알림 설정 저장</button>',
       '</div>',
@@ -6000,15 +6077,9 @@
         return '<span class="chip">{' + escapeHtml(name) + '}</span>';
       }).join(""),
       '</div>',
-      '<div class="admin-message-list">',
-      alertRuleCatalog.map(function (rule) {
-        return renderAdminMessageRow(
-          rule,
-          enabledAlertRule(rules, rule.key),
-          cadences[rule.key],
-          messageScheduleByType(rule.key),
-          notificationTemplateForEdit(rule.key)
-        );
+      '<div class="admin-message-group-list">',
+      groups.map(function (group) {
+        return renderAdminMessageGroup(group, rules, cadences);
       }).join(""),
       '</div>',
       renderNotificationTemplatePanel(),
@@ -6025,6 +6096,53 @@
     ].join("");
   }
 
+  function alertRuleGroups() {
+    var order = [];
+    var byGroup = {};
+    alertRuleCatalog.forEach(function (rule) {
+      var group = rule.group || "기타";
+      if (!byGroup[group]) {
+        byGroup[group] = [];
+        order.push(group);
+      }
+      byGroup[group].push(rule);
+    });
+    return order.map(function (group) {
+      return { name: group, rules: byGroup[group] };
+    });
+  }
+
+  function notificationGroupExpanded(group) {
+    return Boolean(state.notificationExpandedGroups && state.notificationExpandedGroups[group]);
+  }
+
+  function renderAdminMessageGroup(group, rules, cadences) {
+    var expanded = notificationGroupExpanded(group.name);
+    var enabledCount = group.rules.filter(function (rule) {
+      return enabledAlertRule(rules, rule.key);
+    }).length;
+    var openDetails = group.rules.filter(function (rule) {
+      return notificationTypeExpanded(rule.key);
+    }).length;
+    return [
+      '<section class="admin-message-group">',
+      '<button class="admin-message-group-head" type="button" data-message-group-toggle="' + escapeHtml(group.name) + '" aria-expanded="' + escapeHtml(expanded ? "true" : "false") + '">',
+      '<span><strong>' + escapeHtml(group.name) + '</strong><em>' + escapeHtml(enabledCount + "/" + group.rules.length + "개 사용 · 상세 " + openDetails + "개 열림") + '</em></span>',
+      '<b>' + escapeHtml(expanded ? "접기" : "보기") + '</b>',
+      '</button>',
+      expanded ? '<div class="admin-message-list">' + group.rules.map(function (rule) {
+        return renderAdminMessageRow(
+          rule,
+          enabledAlertRule(rules, rule.key),
+          cadences[rule.key],
+          messageScheduleByType(rule.key),
+          notificationTemplateForEdit(rule.key)
+        );
+      }).join("") + '</div>' : '',
+      '</section>'
+    ].join("");
+  }
+
   function notificationTypeExpanded(messageType) {
     return Boolean(state.notificationExpandedTypes && state.notificationExpandedTypes[messageType]);
   }
@@ -6033,6 +6151,21 @@
     var ruleId = "alert-rule-" + String(rule.key || "").replace(/[^A-Za-z0-9_-]/g, "-");
     var detailsId = ruleId + "-details";
     var expanded = notificationTypeExpanded(rule.key);
+    var details = expanded ? [
+      '<div id="' + escapeHtml(detailsId) + '" class="admin-message-details">',
+      '<div class="admin-message-detail-head">',
+      '<strong>알림 상세 설정</strong>',
+      '<span>메시지 본문과 발송 조건을 이 타입에만 적용합니다.</span>',
+      '</div>',
+      '<div class="admin-message-detail-grid">',
+      renderNotificationTemplateRow(template, { inline: true }),
+      renderNotificationRuleEditor(rule.key, { inline: true }),
+      '</div>',
+      '<div class="admin-message-detail-footer">',
+      '<button class="text-button compact admin-message-collapse-bottom" type="button" data-message-toggle="' + escapeHtml(rule.key) + '">이 알림 설정 접기</button>',
+      '</div>',
+      '</div>'
+    ].join("") : "";
     return [
       '<div class="admin-message-row ' + (expanded ? "expanded" : "collapsed") + '">',
       '<input id="' + escapeHtml(ruleId) + '" type="checkbox" data-alert-rule="' + escapeHtml(rule.key) + '"' + (checked ? " checked" : "") + ' />',
@@ -6050,19 +6183,7 @@
       '<div class="admin-message-schedule">',
       renderMessageScheduleSummary(schedule, !expanded),
       '</div>',
-      '<div id="' + escapeHtml(detailsId) + '" class="admin-message-details"' + (expanded ? '' : ' hidden') + '>',
-      '<div class="admin-message-detail-head">',
-      '<strong>알림 상세 설정</strong>',
-      '<span>메시지 본문과 발송 조건을 이 타입에만 적용합니다.</span>',
-      '</div>',
-      '<div class="admin-message-detail-grid">',
-      renderNotificationTemplateRow(template, { inline: true }),
-      renderNotificationRuleEditor(rule.key, { inline: true }),
-      '</div>',
-      '<div class="admin-message-detail-footer">',
-      '<button class="text-button compact admin-message-collapse-bottom" type="button" data-message-toggle="' + escapeHtml(rule.key) + '">이 알림 설정 접기</button>',
-      '</div>',
-      '</div>',
+      details,
       '</div>'
     ].join("");
   }
@@ -6648,7 +6769,7 @@
 
   function renderModelGuideCard(card) {
     return [
-      '<div class="model-guide-card">',
+      '<div class="model-guide-step">',
       '<em>' + escapeHtml(card.label) + '</em>',
       '<strong>' + escapeHtml(card.value) + '</strong>',
       '<p>' + escapeHtml(card.description) + '</p>',
@@ -8096,6 +8217,7 @@
       state.symbolUniverseError ? '<p class="form-error">' + escapeHtml(state.symbolUniverseError) + '</p>' : '',
       '<p class="symbol-universe-note subtle">코스피·코스닥은 KRX KIND, 나스닥은 Nasdaq Trader 심볼 디렉터리를 로컬 SQLite에 저장합니다. 원천 호출이 실패해도 마지막 성공 목록을 계속 사용합니다.</p>',
       full ? '<div class="symbol-pager"><span>' + escapeHtml(resultTotal ? visibleFrom + "-" + visibleTo + " / " + resultTotal + "개 표시" : "표시할 종목 없음") + '</span><div><button class="mini-button" data-symbol-page="prev"' + (hasPrev ? "" : " disabled") + '>이전</button><button class="mini-button" data-symbol-page="next"' + (hasNext ? "" : " disabled") + '>다음</button></div></div>' : '',
+      full ? renderSymbolBulkActionBar(renderedItems) : '',
       '<div class="symbol-result-list">',
       state.symbolUniverseLoading ? '<p class="subtle">종목 목록을 읽는 중입니다.</p>' : (renderedItems.length ? renderedItems.map(renderSymbolUniverseRow).join("") : '<p class="subtle">검색 결과가 없습니다. 목록 갱신을 실행하세요.</p>'),
       '</div>',
@@ -8105,7 +8227,7 @@
 
   function renderSymbolMarketSummary(market) {
     return [
-      '<div class="symbol-summary-card">',
+      '<div class="symbol-summary-metric">',
       '<span>' + escapeHtml(marketLabel(market.market)) + '</span>',
       '<strong>' + escapeHtml(market.count || 0) + '</strong>',
       '<em>' + escapeHtml(freshnessLabel(market)) + '</em>',
@@ -8116,7 +8238,7 @@
   function renderSymbolSourceSummary(source) {
     var ok = String(source.status || "").toLowerCase() === "ok";
     return [
-      '<div class="symbol-source-card ' + (ok ? "ok" : "warn") + '">',
+      '<div class="symbol-source-status ' + (ok ? "ok" : "warn") + '">',
       '<span>' + escapeHtml(marketLabel(source.market)) + ' API</span>',
       '<strong>' + escapeHtml(source.status || "-") + '</strong>',
       '<em>' + escapeHtml(source.lastSuccessAt ? formatClock(source.lastSuccessAt) : "성공 기록 없음") + '</em>',
@@ -8130,6 +8252,52 @@
       var id = accountIdOf(account);
       return '<option value="' + escapeHtml(id) + '"' + (id === state.activeWatchAccountId ? " selected" : "") + '>' + escapeHtml(account.label || id) + '</option>';
     }).join("") : '<option value="">기본 관심목록</option>';
+  }
+
+  function visibleSymbolUniverseSymbols(items) {
+    var seen = {};
+    var symbols = [];
+    (items || []).forEach(function (item) {
+      var symbol = String(item.symbol || "").toUpperCase();
+      if (!symbol || seen[symbol]) return;
+      seen[symbol] = true;
+      symbols.push(symbol);
+    });
+    return symbols;
+  }
+
+  function renderSymbolBulkActionBar(items) {
+    var symbols = visibleSymbolUniverseSymbols(items);
+    var registered = preferredWatchlistSymbols();
+    var missing = symbols.filter(function (symbol) {
+      return registered.indexOf(symbol) < 0;
+    });
+    var account = activeWatchAccount();
+    return [
+      '<div class="symbol-bulk-bar">',
+      '<div>',
+      '<strong>' + escapeHtml(account ? watchlistAccountLabel(account) : "기본 관심목록") + '</strong>',
+      '<span>' + escapeHtml("현재 페이지 " + symbols.length + "개 중 " + missing.length + "개 추가 가능") + '</span>',
+      '</div>',
+      '<button class="text-button primary" type="button" data-action="add-visible-symbols"' + (missing.length ? "" : " disabled") + '>페이지 종목 일괄 추가</button>',
+      '</div>'
+    ].join("");
+  }
+
+  function addVisibleSymbolsToPreferredWatchlist() {
+    var symbols = visibleSymbolUniverseSymbols(state.symbolUniverse.items || []);
+    var registered = preferredWatchlistSymbols();
+    var missing = symbols.filter(function (symbol) {
+      return registered.indexOf(symbol) < 0;
+    });
+    if (!missing.length) {
+      showSnackbar("현재 페이지 종목은 이미 관심목록에 있습니다.");
+      return Promise.resolve();
+    }
+    var account = activeWatchAccount();
+    return account
+      ? saveAccountWatchlistSymbols(accountIdOf(account), registered.concat(missing))
+      : saveWatchlistSymbols(registered.concat(missing));
   }
 
   function renderSymbolUniverseRow(item) {
@@ -8155,7 +8323,7 @@
       '<div class="symbol-result-side">',
       '<strong>' + escapeHtml(item.sector || "섹터 미분류") + '</strong>',
       '<span>' + escapeHtml(targetText) + '</span>',
-      '<button class="mini-button" data-symbol-add-watch="' + escapeHtml(symbol) + '"' + (already ? " disabled" : "") + '>' + (already ? "등록됨" : "관심 추가") + '</button>',
+      '<button class="mini-button subtle" data-symbol-add-watch="' + escapeHtml(symbol) + '"' + (already ? " disabled" : "") + '>' + (already ? "등록됨" : "추가") + '</button>',
       '</div>',
       '</div>'
     ].join("");
@@ -8454,7 +8622,7 @@
 
   function renderSettingsApiCard(title, subtitle, chips) {
     return [
-      '<div class="settings-api-card">',
+      '<div class="settings-api-row">',
       '<strong>' + escapeHtml(title) + '</strong>',
       '<span>' + escapeHtml(subtitle || "-") + '</span>',
       '<div class="chip-row">' + chips.join("") + '</div>',
@@ -8521,13 +8689,16 @@
       '</div>',
       '</div>',
       '<div class="settings-body">',
-      '<div class="settings-hero">',
-      '<div>',
+      '<div class="settings-status-band">',
+      '<div class="settings-status-copy">',
       '<p class="settings-section-label">Local first</p>',
       '<strong>앱 표시와 외부 연결 설정</strong>',
       '<span>계정 연결은 계정 탭에서, 매매 판단 기준은 투자전략 탭에서 관리합니다.</span>',
       '</div>',
+      '<div class="settings-status-stack">',
       '<span class="tone-chip ' + settingsStatusTone() + '">' + settingsStatusLabel() + '</span>',
+      '<span class="chip">로컬 DB 우선</span>',
+      '</div>',
       state.settingsSaving ? '<p class="lab-message">설정을 로컬 SQLite DB에 저장하는 중입니다.</p>' : '',
       state.serverSettingsError ? '<p class="form-error">' + escapeHtml(state.serverSettingsError) + '</p>' : '',
       state.serverSettingsLocked ? '<p class="form-error">공유 모드에서는 서버 설정 저장이 잠겨 있습니다.</p>' : '',
@@ -8833,12 +9004,22 @@
       });
     });
 
+    Array.prototype.slice.call(app.querySelectorAll("[data-message-group-toggle]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        var group = button.getAttribute("data-message-group-toggle") || "";
+        if (!group) return;
+        state.notificationExpandedGroups[group] = !notificationGroupExpanded(group);
+        render();
+      });
+    });
+
     var expandMessageTypes = app.querySelector('[data-action="expand-message-types"]');
     if (expandMessageTypes) {
       expandMessageTypes.addEventListener("click", function () {
         state.notificationExpandedTypes = {};
-        alertRuleCatalog.forEach(function (rule) {
-          state.notificationExpandedTypes[rule.key] = true;
+        state.notificationExpandedGroups = {};
+        alertRuleGroups().forEach(function (group) {
+          state.notificationExpandedGroups[group.name] = true;
         });
         render();
       });
@@ -8848,6 +9029,7 @@
     if (collapseMessageTypes) {
       collapseMessageTypes.addEventListener("click", function () {
         state.notificationExpandedTypes = {};
+        state.notificationExpandedGroups = {};
         render();
       });
     }
@@ -9165,6 +9347,13 @@
     if (refreshSymbols) {
       refreshSymbols.addEventListener("click", function () {
         refreshSymbolUniverse();
+      });
+    }
+
+    var addVisibleSymbols = app.querySelector('[data-action="add-visible-symbols"]');
+    if (addVisibleSymbols) {
+      addVisibleSymbols.addEventListener("click", function () {
+        addVisibleSymbolsToPreferredWatchlist();
       });
     }
 

@@ -765,6 +765,9 @@ function checkFrontendAdminRender() {
     assertOk(symbolUniverseHtml.indexOf("data-symbol-add-account") >= 0, "전체종목 탭에 관심 추가 대상 계정 선택이 없습니다.");
     assertOk(symbolUniverseHtml.indexOf("symbol-summary-card") < 0 && symbolUniverseHtml.indexOf("symbol-source-card") < 0, "전체종목 탭에 중첩 카드 클래스가 남아 있습니다.");
     assertOk(notificationHtml.indexOf("notification-command-panel") >= 0, "알림 관제 상단 패널이 렌더링되지 않았습니다.");
+    assertOk(notificationPolicyHtml.indexOf("notification-command-panel") < 0, "정책 섹션에 알림 관제 패널이 중복 렌더링됩니다.");
+    assertOk(notificationTemplateHtml.indexOf("notification-command-panel") < 0, "템플릿 섹션에 알림 관제 패널이 중복 렌더링됩니다.");
+    assertOk(notificationAdvancedHtml.indexOf("notification-command-panel") < 0, "고급 섹션에 알림 관제 패널이 중복 렌더링됩니다.");
     assertOk(notificationHtml.indexOf("notification-section-bar") >= 0, "알림 내부 섹션 상단 탭 바가 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("notification-section-tabs") >= 0, "알림 내부 섹션 탭이 렌더링되지 않았습니다.");
     assertOk(styles.indexOf(".notification-section-tabs") >= 0 && styles.indexOf("border-bottom: 2px solid transparent") >= 0, "알림 내부 섹션이 탭 스트립 스타일로 정의되지 않았습니다.");

@@ -6388,11 +6388,12 @@
 
   function renderNotificationsPage() {
     var section = normalizeNotificationSection(state.activeNotificationSection);
+    var content = renderNotificationSectionContent();
     return [
       '<section class="admin-grid notifications-view">',
       renderNotificationSectionBar(),
-      section === "status" ? renderNotificationSectionContent() : renderNotificationCommandPanel(),
-      section === "status" ? renderNotificationCommandPanel() : renderNotificationSectionContent(),
+      content,
+      section === "status" ? renderNotificationCommandPanel() : '',
       '</section>'
     ].join("");
   }

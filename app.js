@@ -447,7 +447,8 @@
     symbolUniverseQuery: "",
     symbolUniverseMarket: "",
     symbolUniverseOffset: 0,
-    symbolUniverseLimit: 80
+    symbolUniverseLimit: 80,
+    monitoringDetail: null
   };
 
   function escapeHtml(value) {
@@ -924,6 +925,7 @@
     rememberTabBarPosition();
     var priorTab = state.activeTab;
     state.activeTab = nextTab;
+    if (nextTab !== "monitoring") state.monitoringDetail = null;
     if (!options.skipPrevious) state.previousTab = priorTab;
     if (!options.skipHistory) writeTabHistory(nextTab, Boolean(options.replace));
     setAppNavHidden(false);
@@ -942,6 +944,7 @@
     rememberTabBarPosition();
     state.previousTab = state.activeTab;
     state.activeTab = nextTab;
+    if (nextTab !== "monitoring") state.monitoringDetail = null;
     render();
   }
 
@@ -5580,7 +5583,8 @@
         renderAlertCenterPanel(snapshot),
         renderMonitoringInstrumentPanel(snapshot),
         renderPortfolioPanel(snapshot),
-        '</section>'
+        '</section>',
+        renderMonitoringDetailOverlay(snapshot)
       ].join("");
     }
     if (state.activeTab === "settings") {
@@ -7925,7 +7929,9 @@
       renderAlertStat("정보", stats.info, "info"),
       '</div>',
       '<div class="alert-list">',
-      alerts.length ? alerts.map(renderAlertRow).join("") : '<p class="subtle">현재 켜진 규칙에서 발생한 알림이 없습니다.</p>',
+      alerts.length ? alerts.map(function (alert, index) {
+        return renderAlertRow(alert, index);
+      }).join("") : '<p class="subtle">현재 켜진 규칙에서 발생한 알림이 없습니다.</p>',
       '</div>',
       '<div class="rule-strip"><span>알림은 주문 지시가 아니라 가격선, 수급, 모델 점수, 보유 리스크를 다시 확인하라는 신호입니다.</span></div>',
       '</article>'
@@ -7941,7 +7947,7 @@
     ].join("");
   }
 
-  function renderAlertRow(alert) {
+  function renderAlertRow(alert, index) {
     var meta = [
       alert.symbol || "",
       alert.source || "",
@@ -7949,7 +7955,7 @@
       alert.threshold ? "기준 " + alert.threshold : ""
     ].filter(Boolean);
     return [
-      '<div class="alert-row ' + escapeHtml(alert.severity || "info") + '">',
+      '<div class="alert-row ' + escapeHtml(alert.severity || "info") + '" role="button" tabindex="0" data-monitor-alert-detail="' + escapeHtml(index) + '" aria-label="' + escapeHtml((alert.title || "알림") + " 상세 보기") + '">',
       '<span class="alert-severity ' + escapeHtml(alert.severity || "info") + '">' + escapeHtml(alertSeverityLabel(alert.severity)) + '</span>',
       '<div class="alert-main">',
       '<div class="flow-title">',
@@ -8543,7 +8549,7 @@
       ? "매수 " + signal.buyScore + " · 매도 " + signal.sellScore
       : "수급 입력 필요";
     return [
-      '<div class="monitoring-instrument-row">',
+      '<div class="monitoring-instrument-row" role="button" tabindex="0" data-monitor-instrument-detail="' + escapeHtml(symbol) + '" aria-label="' + escapeHtml((item.name || symbol) + " 상세 보기") + '">',
       '<div class="monitoring-instrument-main">',
       '<div class="monitoring-instrument-title">',
       '<strong>' + escapeHtml(item.name || symbol) + '</strong>',
@@ -8558,6 +8564,239 @@
       '<span class="tone-chip ' + escapeHtml(signal && signal.tone ? signal.tone : "hold") + '">' + escapeHtml(signal && signal.action ? signal.action : "관찰") + '</span>',
       '<em>' + escapeHtml(signalText) + '</em>',
       '</div>',
+      '</div>'
+    ].join("");
+  }
+
+  function monitoringSignalItemBySymbol(snapshot, symbol) {
+    var target = String(symbol || "").toUpperCase();
+    if (!target) return null;
+    var items = buildTradeSignalItems(snapshot || state.snapshot || {});
+    return items.filter(function (item) {
+      return String(item.symbol || "").toUpperCase() === target;
+    })[0] || null;
+  }
+
+  function monitoringAlertByIndex(snapshot, index) {
+    var alerts = buildAlertItems(snapshot || state.snapshot || {});
+    var selectedIndex = Number(index);
+    if (!Number.isFinite(selectedIndex) || selectedIndex < 0 || selectedIndex >= alerts.length) return null;
+    return alerts[selectedIndex];
+  }
+
+  function monitoringDetailCurrency(value, currency) {
+    var number = Number(value || 0);
+    if (!Number.isFinite(number) || number === 0) return "-";
+    return formatCurrency(number, currency);
+  }
+
+  function monitoringDetailQuantity(value) {
+    var number = Number(value || 0);
+    if (!Number.isFinite(number) || number === 0) return "-";
+    return number.toLocaleString("ko-KR", {
+      maximumFractionDigits: Number.isInteger(number) ? 0 : 4
+    });
+  }
+
+  function renderMonitoringDetailMetric(label, value, tone) {
+    var displayValue = value == null || value === "" ? "-" : value;
+    return [
+      '<span class="monitoring-detail-metric ' + escapeHtml(tone || "") + '">',
+      '<em>' + escapeHtml(label) + '</em>',
+      '<strong>' + escapeHtml(displayValue) + '</strong>',
+      '</span>'
+    ].join("");
+  }
+
+  function renderMonitoringDetailSignalGrid(item) {
+    var signal = item.signal || {};
+    return [
+      '<div class="monitoring-detail-block">',
+      '<div class="flow-title">',
+      '<div>',
+      '<strong>신호 입력값</strong>',
+      '<span>매수·매도 점수를 만든 수급, 추세, 투자자별 데이터입니다.</span>',
+      '</div>',
+      '</div>',
+      '<div class="monitoring-detail-signal-grid">',
+      renderMonitoringDetailMetric("거래량 배율", formatSignalRatio(signal.volumeRatio)),
+      renderMonitoringDetailMetric("매수량", formatSignalVolume(signal.buyVolume)),
+      renderMonitoringDetailMetric("매도량", formatSignalVolume(signal.sellVolume)),
+      renderMonitoringDetailMetric("호가 불균형", formatSignalNumber(signal.bidAskImbalance, "%")),
+      renderMonitoringDetailMetric("가격 변화", formatSignalNumber(signal.priceChangeRate, "%")),
+      renderMonitoringDetailMetric("20일선", formatSignalNumber(signal.ma20, "")),
+      renderMonitoringDetailMetric("60일선", formatSignalNumber(signal.ma60, "")),
+      renderMonitoringDetailMetric("외국인 순매수", formatSignalVolume(signal.foreignNet)),
+      renderMonitoringDetailMetric("기관 순매수", formatSignalVolume(signal.institutionNet)),
+      renderMonitoringDetailMetric("개인 순매수", formatSignalVolume(signal.individualNet)),
+      '</div>',
+      '</div>'
+    ].join("");
+  }
+
+  function renderMonitoringDetailReasons(item) {
+    var reasons = Array.isArray(item.reasons) ? item.reasons : [];
+    return [
+      '<div class="monitoring-detail-block">',
+      '<div class="flow-title">',
+      '<div>',
+      '<strong>판단 근거</strong>',
+      '<span>현재 라벨을 만든 데이터 해석입니다.</span>',
+      '</div>',
+      '</div>',
+      '<div class="monitoring-detail-reasons">',
+      reasons.length ? reasons.map(function (reason) {
+        return '<p>' + escapeHtml(reason) + '</p>';
+      }).join("") : '<p>표시할 판단 근거가 없습니다.</p>',
+      '</div>',
+      '</div>'
+    ].join("");
+  }
+
+  function renderMonitoringDetailTriggers(item) {
+    var triggers = Array.isArray(item.triggers) ? item.triggers : [];
+    if (!triggers.length) return "";
+    return [
+      '<div class="trigger-list monitoring-detail-triggers">',
+      triggers.map(function (trigger) {
+        return '<span>' + escapeHtml(trigger) + '</span>';
+      }).join(""),
+      '</div>'
+    ].join("");
+  }
+
+  function renderMonitoringInstrumentDetail(item) {
+    var sourceClass = item.source === "holding" ? "holding" : "watchlist";
+    var valuationText = item.valuation && item.valuation.status ? item.valuation.status : "가정 대기";
+    var pnlText = item.source === "holding"
+      ? signedMoney(item.profitLoss, item.currency) + " · " + signedPct(item.profitLossRate)
+      : "-";
+    return [
+      '<div class="monitoring-detail-content">',
+      '<div class="monitoring-detail-head">',
+      '<div>',
+      '<p class="label">Instrument Detail</p>',
+      '<h2>' + escapeHtml(item.name || item.symbol || "-") + '</h2>',
+      '<span>' + escapeHtml(item.symbol || "-") + ' · ' + escapeHtml(marketLabel(item.market || "-")) + ' · ' + escapeHtml(item.sector || "-") + '</span>',
+      '</div>',
+      '<div class="monitoring-detail-badges">',
+      '<span class="source-chip ' + escapeHtml(sourceClass) + '">' + escapeHtml(sourceLabel(item.source)) + '</span>',
+      '<span class="tone-chip ' + escapeHtml(item.tone || "hold") + '">' + escapeHtml(item.action || "관망") + '</span>',
+      '</div>',
+      '</div>',
+      '<div class="monitoring-detail-metric-grid">',
+      renderMonitoringDetailMetric("현재가", monitoringDetailCurrency(item.currentPrice, item.currency)),
+      renderMonitoringDetailMetric("평가액", monitoringDetailCurrency(item.marketValue, item.currency)),
+      renderMonitoringDetailMetric("평단", monitoringDetailCurrency(item.averagePrice, item.currency)),
+      renderMonitoringDetailMetric("수량", monitoringDetailQuantity(item.quantity)),
+      renderMonitoringDetailMetric("손익", pnlText, Number(item.profitLoss || 0) < 0 ? "sell" : "buy"),
+      renderMonitoringDetailMetric("매수 점수", item.hasData ? Math.round(item.buyScore) + "점" : "-", "buy"),
+      renderMonitoringDetailMetric("매도 점수", item.hasData ? Math.round(item.sellScore) + "점" : "-", "sell"),
+      renderMonitoringDetailMetric("매수 체결비중", item.hasData ? pct(item.buyShare) : "-"),
+      renderMonitoringDetailMetric("가치 판단", valuationText),
+      '</div>',
+      renderMonitoringDetailSignalGrid(item),
+      renderMonitoringDetailReasons(item),
+      renderMonitoringDetailTriggers(item),
+      '</div>'
+    ].join("");
+  }
+
+  function renderMonitoringAlertRelatedInstrument(item) {
+    if (!item) return "";
+    return [
+      '<div class="monitoring-detail-block">',
+      '<div class="flow-title">',
+      '<div>',
+      '<strong>관련 종목 신호</strong>',
+      '<span>알림이 가리키는 종목의 현재 매수·매도 판단입니다.</span>',
+      '</div>',
+      '<span class="tone-chip ' + escapeHtml(item.tone || "hold") + '">' + escapeHtml(item.action || "관망") + '</span>',
+      '</div>',
+      '<div class="monitoring-detail-metric-grid compact">',
+      renderMonitoringDetailMetric("현재가", monitoringDetailCurrency(item.currentPrice, item.currency)),
+      renderMonitoringDetailMetric("매수 점수", item.hasData ? Math.round(item.buyScore) + "점" : "-", "buy"),
+      renderMonitoringDetailMetric("매도 점수", item.hasData ? Math.round(item.sellScore) + "점" : "-", "sell"),
+      renderMonitoringDetailMetric("매수 체결비중", item.hasData ? pct(item.buyShare) : "-"),
+      '</div>',
+      '<div class="monitoring-detail-reasons compact">',
+      (item.reasons || []).map(function (reason) {
+        return '<p>' + escapeHtml(reason) + '</p>';
+      }).join(""),
+      '</div>',
+      '</div>'
+    ].join("");
+  }
+
+  function renderMonitoringAlertDetail(alert, relatedItem) {
+    var severity = alert.severity || "info";
+    return [
+      '<div class="monitoring-detail-content">',
+      '<div class="monitoring-detail-head">',
+      '<div>',
+      '<p class="label">Alert Detail</p>',
+      '<h2>' + escapeHtml(alert.title || "알림 상세") + '</h2>',
+      '<span>' + escapeHtml([alert.symbol || "", alert.source || "", alertRuleLabel(alert.rule)].filter(Boolean).join(" · ")) + '</span>',
+      '</div>',
+      '<div class="monitoring-detail-badges">',
+      '<span class="alert-severity ' + escapeHtml(severity) + '">' + escapeHtml(alertSeverityLabel(severity)) + '</span>',
+      '<span class="tone-chip hold">' + escapeHtml(alertRuleLabel(alert.rule)) + '</span>',
+      '</div>',
+      '</div>',
+      '<div class="monitoring-detail-message">',
+      '<strong>알림 메시지</strong>',
+      '<p>' + escapeHtml(alert.message || "세부 메시지가 없습니다.") + '</p>',
+      '</div>',
+      '<div class="monitoring-detail-metric-grid">',
+      renderMonitoringDetailMetric("종목", alert.symbol || "-"),
+      renderMonitoringDetailMetric("출처", alert.source || "-"),
+      renderMonitoringDetailMetric("현재", alert.value || "-"),
+      renderMonitoringDetailMetric("기준", alert.threshold || "-"),
+      renderMonitoringDetailMetric("심각도", alertSeverityLabel(severity)),
+      renderMonitoringDetailMetric("규칙", alertRuleLabel(alert.rule)),
+      '</div>',
+      renderMonitoringAlertRelatedInstrument(relatedItem),
+      '</div>'
+    ].join("");
+  }
+
+  function renderMonitoringDetailEmpty() {
+    return [
+      '<div class="monitoring-detail-content">',
+      '<div class="monitoring-detail-head">',
+      '<div>',
+      '<p class="label">Detail</p>',
+      '<h2>상세 데이터를 찾지 못했습니다</h2>',
+      '<span>스냅샷이 갱신되었거나 선택 항목이 사라졌습니다.</span>',
+      '</div>',
+      '</div>',
+      '</div>'
+    ].join("");
+  }
+
+  function renderMonitoringDetailOverlay(snapshot) {
+    var selection = state.monitoringDetail || {};
+    if (!selection.type) return "";
+    var content = "";
+    if (selection.type === "instrument") {
+      var item = monitoringSignalItemBySymbol(snapshot, selection.symbol);
+      content = item ? renderMonitoringInstrumentDetail(item) : renderMonitoringDetailEmpty();
+    } else if (selection.type === "alert") {
+      var alert = monitoringAlertByIndex(snapshot, selection.index);
+      var relatedItem = alert && alert.symbol ? monitoringSignalItemBySymbol(snapshot, alert.symbol) : null;
+      content = alert ? renderMonitoringAlertDetail(alert, relatedItem) : renderMonitoringDetailEmpty();
+    } else {
+      content = renderMonitoringDetailEmpty();
+    }
+    return [
+      '<div class="monitoring-detail-backdrop" data-monitoring-detail-close>',
+      '<aside class="monitoring-detail-drawer" role="dialog" aria-modal="true" aria-label="모니터링 상세">',
+      '<div class="monitoring-detail-toolbar">',
+      '<span>상세 보기</span>',
+      '<button class="icon-button" type="button" data-monitoring-detail-close aria-label="상세 닫기">&times;</button>',
+      '</div>',
+      content,
+      '</aside>',
       '</div>'
     ].join("");
   }
@@ -9352,6 +9591,44 @@
       });
     });
 
+    Array.prototype.slice.call(app.querySelectorAll("[data-monitor-instrument-detail]")).forEach(function (row) {
+      var openInstrumentDetail = function () {
+        var symbol = String(row.getAttribute("data-monitor-instrument-detail") || "").toUpperCase();
+        if (!symbol) return;
+        state.monitoringDetail = { type: "instrument", symbol: symbol };
+        render();
+      };
+      row.addEventListener("click", openInstrumentDetail);
+      row.addEventListener("keydown", function (event) {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        openInstrumentDetail();
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-monitor-alert-detail]")).forEach(function (row) {
+      var openAlertDetail = function () {
+        var index = Number(row.getAttribute("data-monitor-alert-detail"));
+        if (!Number.isFinite(index)) return;
+        state.monitoringDetail = { type: "alert", index: index };
+        render();
+      };
+      row.addEventListener("click", openAlertDetail);
+      row.addEventListener("keydown", function (event) {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        openAlertDetail();
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-monitoring-detail-close]")).forEach(function (button) {
+      button.addEventListener("click", function (event) {
+        if (button.classList && button.classList.contains("monitoring-detail-backdrop") && event.target !== button) return;
+        state.monitoringDetail = null;
+        render();
+      });
+    });
+
     var settingsBack = app.querySelector('[data-action="settings-back"]');
     if (settingsBack) {
       settingsBack.addEventListener("click", function () {
@@ -10031,6 +10308,11 @@
     window.addEventListener("popstate", syncTabFromLocation);
     window.addEventListener("scroll", scheduleAppNavScrollState, { passive: true });
     window.addEventListener("resize", scheduleAppNavScrollState);
+    window.addEventListener("keydown", function (event) {
+      if (event.key !== "Escape" || !state.monitoringDetail) return;
+      state.monitoringDetail = null;
+      render();
+    });
   }
 
   applyAppTheme();

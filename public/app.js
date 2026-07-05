@@ -1215,7 +1215,7 @@
   function defaultNotificationRuleThreshold(messageType) {
     var type = String(messageType || "");
     if (["default", "modelReview", "workHandoff", "notification"].indexOf(type) >= 0) return 20;
-    if (type === "externalEquityMove") return 60;
+    if (type === "externalEquityMove" || type === "externalCryptoMove") return 60;
     return 45;
   }
 
@@ -1252,6 +1252,7 @@
       return [
         { id: "severity_upgrade", label: "등급 상승", type: "severity_upgrade", field: "", value: "", enabled: true, description: "관찰에서 주의처럼 중요도가 올라가면 반복이어도 보냅니다." },
         { id: "change_24h_abs_delta", label: "24시간 변동 확대", type: "abs_number_delta_gte", field: "change24h", value: 2, enabled: true, description: "이전 유사 알림보다 24시간 변동률 절대값이 기준 %p 이상 커지면 보냅니다." },
+        { id: "change_7d_abs_delta", label: "7일 변동 확대", type: "abs_number_delta_gte", field: "change7d", value: 3, enabled: true, description: "이전 유사 알림보다 7일 변동률 절대값이 기준 %p 이상 커지면 보냅니다." },
         { id: "volume_multiplier", label: "거래액 급증", type: "number_multiplier_gte", field: "volume24h", value: 1.5, enabled: true, description: "이전 유사 알림보다 거래액이 기준 배수 이상 커지면 보냅니다." }
       ];
     }
@@ -1260,6 +1261,14 @@
 
   function defaultNotificationRuleSimilarityFields() {
     return ["messageType", "accountId", "symbol", "severity", "title"];
+  }
+
+  function defaultNotificationRuleStateCooldownEnabled(messageType) {
+    return ["externalEquityMove", "externalCryptoMove"].indexOf(String(messageType || "")) >= 0;
+  }
+
+  function defaultNotificationRuleStateCooldownMinutes(messageType) {
+    return defaultNotificationRuleStateCooldownEnabled(messageType) ? 360 : 0;
   }
 
   function defaultMarketHoursSessions() {
@@ -1334,6 +1343,8 @@
       similarityBypassScoreDelta: defaultNotificationRuleSimilarityBypassDelta(type),
       similarityBypassConditions: defaultNotificationRuleSimilarityBypassConditions(type),
       similarityFields: defaultNotificationRuleSimilarityFields(),
+      stateCooldownEnabled: defaultNotificationRuleStateCooldownEnabled(type),
+      stateCooldownMinutes: defaultNotificationRuleStateCooldownMinutes(type),
       marketHoursEnabled: defaultNotificationRuleMarketHoursEnabled(type),
       marketHoursMarkets: defaultNotificationRuleMarketHoursMarkets(type),
       updatedAt: ""
@@ -1572,6 +1583,8 @@
       ? normalized.similarityFields.map(function (field) { return String(field || "").trim(); }).filter(Boolean)
       : String(normalized.similarityFields || "").split(",").map(function (field) { return field.trim(); }).filter(Boolean);
     if (!normalized.similarityFields.length) normalized.similarityFields = defaultNotificationRuleSimilarityFields();
+    normalized.stateCooldownEnabled = normalized.stateCooldownEnabled !== false;
+    normalized.stateCooldownMinutes = clampInteger(normalized.stateCooldownMinutes, 0, 10080, defaultNotificationRuleStateCooldownMinutes(normalized.messageType));
     normalized.marketHoursEnabled = normalized.marketHoursEnabled !== false;
     normalized.marketHoursMarkets = Array.isArray(normalized.marketHoursMarkets)
       ? normalized.marketHoursMarkets.map(function (market) { return String(market || "").trim().toUpperCase(); }).filter(Boolean)
@@ -1644,6 +1657,10 @@
       rule.similarityBypassScoreDelta = clampInteger(value, 0, 100, defaultNotificationRuleSimilarityBypassDelta(messageType));
     } else if (field === "similarityFields") {
       rule.similarityFields = String(value || "").split(",").map(function (item) { return item.trim(); }).filter(Boolean);
+    } else if (field === "stateCooldownEnabled") {
+      rule.stateCooldownEnabled = Boolean(value);
+    } else if (field === "stateCooldownMinutes") {
+      rule.stateCooldownMinutes = clampInteger(value, 0, 10080, defaultNotificationRuleStateCooldownMinutes(messageType));
     } else if (field === "marketHoursEnabled") {
       rule.marketHoursEnabled = Boolean(value);
     } else if (field === "marketHoursMarkets") {
@@ -6705,6 +6722,16 @@
     return job.quietHoursReason || "계정 알림 금지 시간";
   }
 
+  function notificationJobStateCooldownText(job) {
+    if (!job.honeyStateCooldownEnabled && !job.honeyStateReason) return "";
+    if (job.honeyStateReason) return job.honeyStateReason;
+    if (job.honeyStateDecision === "new_threshold") return "신규 임계값 상태";
+    if (job.honeyStateDecision === "material_change") return "의미 있는 추가 확대";
+    if (job.honeyStateDecision === "sustained_summary") return "지속 상태 요약";
+    if (job.honeyStateDecision === "cooldown") return "같은 임계값 상태 지속";
+    return "";
+  }
+
   function renderNotificationDecisionPanel() {
     var jobs = state.notificationJobItems || [];
     var summary = state.notificationJobsSummary || state.realtime.notificationJobs || {};
@@ -6760,6 +6787,7 @@
       '<div class="notification-decision-score">',
       '<span>꿀점수 ' + escapeHtml(notificationJobScoreText(job)) + '</span>',
       '<span>' + escapeHtml(notificationJobSimilarityText(job)) + '</span>',
+      notificationJobStateCooldownText(job) ? '<span>' + escapeHtml(notificationJobStateCooldownText(job)) + '</span>' : '',
       notificationJobMarketHoursText(job) ? '<span>' + escapeHtml(notificationJobMarketHoursText(job)) + '</span>' : '',
       notificationJobQuietHoursText(job) ? '<span>' + escapeHtml(notificationJobQuietHoursText(job)) + '</span>' : '',
       job.honeySimilarityBypassed ? '<span>' + escapeHtml(job.honeySimilarityBypassReason ? "반복 예외 " + job.honeySimilarityBypassReason : "반복 예외 적용") + '</span>' : '',
@@ -6947,6 +6975,26 @@
     ].join("");
   }
 
+  function renderNotificationStateCooldownEditor(messageType, rule, disabled) {
+    var summary = rule.stateCooldownEnabled === false
+      ? "상태 지속 억제 꺼짐"
+      : "같은 임계값 상태는 " + String(rule.stateCooldownMinutes || 0) + "분 뒤 요약만 발송";
+    return [
+      '<div class="notification-rule-state">',
+      '<div class="notification-rule-head notification-rule-subhead">',
+      '<div><strong>상태 지속 억제</strong><span>' + escapeHtml(summary) + '</span></div>',
+      '<label class="notification-rule-toggle"><input type="checkbox" data-notification-rule-state-enabled="' + escapeHtml(messageType) + '"' + (rule.stateCooldownEnabled !== false ? " checked" : "") + (disabled ? " disabled" : "") + ' /> 적용</label>',
+      '</div>',
+      '<div class="notification-rule-score-grid">',
+      '<label><span>요약 쿨다운</span><input type="number" min="0" max="10080" step="10" data-notification-rule-number="' + escapeHtml(messageType) + '" data-rule-field="stateCooldownMinutes" value="' + escapeHtml(rule.stateCooldownMinutes) + '"' + (disabled ? " disabled" : "") + ' /></label>',
+      '<label><span>신규 돌파</span><input type="text" value="발송" disabled /></label>',
+      '<label><span>같은 상태</span><input type="text" value="보류" disabled /></label>',
+      '</div>',
+      '<p class="subtle">추가 확대 조건은 반복 예외 조건을 사용하고, fingerprint 필드가 같은 알림을 같은 상태로 봅니다.</p>',
+      '</div>'
+    ].join("");
+  }
+
   function marketHoursSessionSummary(session) {
     if (Array.isArray(session.sessions) && session.sessions.length) {
       return session.sessions.map(function (item) {
@@ -7006,7 +7054,8 @@
       '<option value="tag_only"' + (rule.lowScoreAction === "tag_only" ? " selected" : "") + '>점수만 기록</option>',
       '</select></label>',
       '</div>',
-      compact ? '<p class="subtle">유사 메시지, 장 시간 필터, 세부 조건은 고급 탭에서 조정합니다.</p>' : renderNotificationSimilarityEditor(messageType, rule, disabled),
+      compact ? '<p class="subtle">유사 메시지, 상태 지속 억제, 장 시간 필터, 세부 조건은 고급 탭에서 조정합니다.</p>' : renderNotificationSimilarityEditor(messageType, rule, disabled),
+      compact ? '' : renderNotificationStateCooldownEditor(messageType, rule, disabled),
       compact ? '' : renderNotificationMarketHoursEditor(messageType, rule, disabled),
       compact ? '' : '<div class="notification-rule-condition-list">',
       compact ? '' : (rule.conditions || []).map(function (condition) {
@@ -10207,6 +10256,13 @@
     Array.prototype.slice.call(app.querySelectorAll("[data-notification-rule-similarity-enabled]")).forEach(function (field) {
       field.addEventListener("change", function () {
         updateNotificationRuleField(field.getAttribute("data-notification-rule-similarity-enabled"), "similarityEnabled", field.checked);
+        render();
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-notification-rule-state-enabled]")).forEach(function (field) {
+      field.addEventListener("change", function () {
+        updateNotificationRuleField(field.getAttribute("data-notification-rule-state-enabled"), "stateCooldownEnabled", field.checked);
         render();
       });
     });

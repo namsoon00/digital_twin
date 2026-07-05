@@ -6,7 +6,7 @@ import tempfile
 import unittest
 import urllib.error
 import urllib.parse
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -2000,9 +2000,10 @@ class PythonServiceTests(unittest.TestCase):
 
         jobs = queue.jobs()
         self.assertEqual(["pending", "suppressed"], [job.status for job in jobs])
-        self.assertEqual(-55, jobs[1].context["honeySimilarityPenalty"])
+        self.assertEqual("cooldown", jobs[1].context["honeyStateDecision"])
+        self.assertTrue(jobs[1].context["honeyStateSuppressed"])
         self.assertEqual(360, jobs[1].context["honeySimilarityWindowMinutes"])
-        self.assertLess(jobs[1].context["honeyScore"], jobs[1].context["honeyThreshold"])
+        self.assertIn("같은 임계값 상태 지속", jobs[1].last_error)
 
     def test_external_move_similarity_bypass_sends_material_change(self):
         db_path = Path(self.temp.name) / "service.db"
@@ -2045,23 +2046,157 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("변동률 추가 확대", jobs[1].context["honeySimilarityBypassReason"])
         self.assertGreaterEqual(jobs[1].context["honeyScore"], jobs[1].context["honeyThreshold"])
 
+    def test_crypto_state_cooldown_suppresses_same_threshold_state(self):
+        db_path = Path(self.temp.name) / "service.db"
+        queue = SQLiteNotificationJobStore(db_path)
+        rules = SQLiteNotificationRuleStore(db_path)
+        rule = rules.get("externalCryptoMove")
+        self.assertEqual(60, rule.threshold)
+        self.assertTrue(rule.state_cooldown_enabled)
+        self.assertEqual(360, rule.state_cooldown_minutes)
+        self.assertTrue(any(condition.condition_id == "change_7d_abs_delta" for condition in rule.similarity_bypass_conditions))
+        first = AlertEvent(
+            "main",
+            "메인",
+            "ALERT",
+            "externalCryptoMove",
+            "main:crypto:ETH:1",
+            "크립토 변동",
+            ["크립토 변동 24h -0.7% · 7d +13.4%", "크립토 가격 $1,780", "크립토 거래액 $9,941,259,360", "출처 CoinGecko"],
+            "ETH",
+            metadata={"market": "CRYPTO", "change24h": -0.7, "change7d": 13.4, "volume24h": 9941259360},
+        )
+        second = AlertEvent(
+            "main",
+            "메인",
+            "ALERT",
+            "externalCryptoMove",
+            "main:crypto:ETH:2",
+            "크립토 변동",
+            ["크립토 변동 24h -0.7% · 7d +13.4%", "크립토 가격 $1,780", "크립토 거래액 $9,941,259,360", "출처 CoinGecko"],
+            "ETH",
+            metadata={"market": "CRYPTO", "change24h": -0.7, "change7d": 13.4, "volume24h": 9941259360},
+        )
+
+        self.assertEqual(1, send_events([first], queue=queue).queued)
+        self.assertEqual(0, send_events([second], queue=queue).queued)
+
+        jobs = queue.jobs()
+        self.assertEqual(["pending", "suppressed"], [job.status for job in jobs])
+        self.assertEqual("new_threshold", jobs[0].context["honeyStateDecision"])
+        self.assertEqual("cooldown", jobs[1].context["honeyStateDecision"])
+        self.assertTrue(jobs[1].context["honeyStateSuppressed"])
+        self.assertIn("같은 임계값 상태 지속", jobs[1].last_error)
+
+    def test_crypto_state_cooldown_allows_material_7d_expansion(self):
+        db_path = Path(self.temp.name) / "service.db"
+        queue = SQLiteNotificationJobStore(db_path)
+        first = AlertEvent(
+            "main",
+            "메인",
+            "ALERT",
+            "externalCryptoMove",
+            "main:crypto:ETH:1",
+            "크립토 변동",
+            ["크립토 변동 24h -0.7% · 7d +13.4%", "크립토 가격 $1,780", "크립토 거래액 $9,941,259,360", "출처 CoinGecko"],
+            "ETH",
+            metadata={"market": "CRYPTO", "change24h": -0.7, "change7d": 13.4, "volume24h": 9941259360},
+        )
+        expanded = AlertEvent(
+            "main",
+            "메인",
+            "ALERT",
+            "externalCryptoMove",
+            "main:crypto:ETH:3",
+            "크립토 변동",
+            ["크립토 변동 24h -0.8% · 7d +16.8%", "크립토 가격 $1,825", "크립토 거래액 $10,000,000,000", "출처 CoinGecko"],
+            "ETH",
+            metadata={"market": "CRYPTO", "change24h": -0.8, "change7d": 16.8, "volume24h": 10000000000},
+        )
+
+        self.assertEqual(1, send_events([first], queue=queue).queued)
+        self.assertEqual(1, send_events([expanded], queue=queue).queued)
+
+        jobs = queue.jobs()
+        self.assertEqual(["pending", "pending"], [job.status for job in jobs])
+        self.assertEqual("material_change", jobs[1].context["honeyStateDecision"])
+        self.assertTrue(jobs[1].context["honeySimilarityBypassed"])
+        self.assertIn("7일 변동 확대", jobs[1].context["honeyStateReason"])
+
+    def test_crypto_state_cooldown_allows_sustained_summary_after_cooldown(self):
+        db_path = Path(self.temp.name) / "service.db"
+        queue = SQLiteNotificationJobStore(db_path)
+        rules = SQLiteNotificationRuleStore(db_path)
+        rule = rules.get("externalCryptoMove")
+        rule.state_cooldown_minutes = 10
+        rules.upsert(rule)
+        old_job = NotificationJob.create(
+            "크립토 변동 ETH",
+            account_id="main",
+            account_label="메인",
+            message_type="externalCryptoMove",
+            context={
+                "messageType": "externalCryptoMove",
+                "accountId": "main",
+                "accountLabel": "메인",
+                "severity": "ALERT",
+                "title": "크립토 변동",
+                "symbol": "ETH",
+                "body": "크립토 변동 24h -0.7% · 7d +13.4%",
+                "change24h": -0.7,
+                "change7d": 13.4,
+                "volume24h": 9941259360,
+            },
+        )
+        old_job.created_at = (datetime.now(timezone.utc) - timedelta(minutes=15)).isoformat().replace("+00:00", "Z")
+        new_job = NotificationJob.create(
+            "크립토 변동 ETH",
+            account_id="main",
+            account_label="메인",
+            message_type="externalCryptoMove",
+            context={
+                "messageType": "externalCryptoMove",
+                "accountId": "main",
+                "accountLabel": "메인",
+                "severity": "ALERT",
+                "title": "크립토 변동",
+                "symbol": "ETH",
+                "body": "크립토 변동 24h -0.7% · 7d +13.4%",
+                "change24h": -0.7,
+                "change7d": 13.4,
+                "volume24h": 9941259360,
+            },
+        )
+
+        self.assertTrue(queue.enqueue(old_job))
+        self.assertTrue(queue.enqueue(new_job))
+
+        jobs = queue.jobs()
+        self.assertEqual(["pending", "pending"], [job.status for job in jobs])
+        self.assertEqual("sustained_summary", jobs[1].context["honeyStateDecision"])
+        self.assertIn("지속 상태 요약", jobs[1].context["honeyStateReason"])
+
     def test_notification_rule_payload_saves_similarity_bypass_conditions(self):
         payload = list_notification_rules_payload()
         equity_rule = next(item for item in payload["rules"] if item["messageType"] == "externalEquityMove")
         self.assertTrue(equity_rule["similarityBypassConditions"])
+        self.assertTrue(equity_rule["stateCooldownEnabled"])
         change_condition = next(item for item in equity_rule["similarityBypassConditions"] if item["id"] == "change_abs_delta")
         change_condition["value"] = 3.5
         change_condition["enabled"] = False
+        equity_rule["stateCooldownMinutes"] = 720
 
         saved = save_notification_rule_payload({"rule": equity_rule})["rule"]
 
         saved_condition = next(item for item in saved["similarityBypassConditions"] if item["id"] == "change_abs_delta")
         self.assertEqual("3.5", str(saved_condition["value"]))
         self.assertFalse(saved_condition["enabled"])
+        self.assertEqual(720, saved["stateCooldownMinutes"])
         reloaded = next(item for item in list_notification_rules_payload()["rules"] if item["messageType"] == "externalEquityMove")
         reloaded_condition = next(item for item in reloaded["similarityBypassConditions"] if item["id"] == "change_abs_delta")
         self.assertEqual("3.5", str(reloaded_condition["value"]))
         self.assertFalse(reloaded_condition["enabled"])
+        self.assertEqual(720, reloaded["stateCooldownMinutes"])
 
     def test_notification_queue_runner_delivers_pending_messages_in_order(self):
         registry = AccountRegistry()

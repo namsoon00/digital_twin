@@ -13,7 +13,7 @@ from ..domain.events import (
     snapshot_collected_event,
 )
 from ..domain.model_review import ModelReviewJob
-from ..domain.notification_rules import DEFAULT_NOTIFICATION_RULES, NotificationRuleConfig, apply_market_hours_rule, apply_similarity_rule, default_notification_rule, evaluate_notification_rule, notification_fingerprint
+from ..domain.notification_rules import DEFAULT_NOTIFICATION_RULES, NotificationRuleConfig, apply_market_hours_rule, apply_similarity_rule, apply_state_cooldown_rule, default_notification_rule, evaluate_notification_rule, notification_fingerprint
 from ..domain.notification_templates import DEFAULT_NOTIFICATION_TEMPLATES, LEGACY_DEFAULT_TEMPLATE, PREVIOUS_DEFAULT_TEMPLATE, NotificationTemplate, alert_context, render_notification
 from ..domain.notifications import NotificationJob
 from ..domain.portfolio import AccountSnapshot, AlertEvent
@@ -24,6 +24,22 @@ from .settings import data_dir, read_json, service_db_path, settings_path, utc_n
 
 def json_dumps(payload) -> str:
     return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+
+def parse_utc_datetime(value: str):
+    try:
+        parsed = datetime.fromisoformat(str(value or "").replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def age_minutes_since(value: str, now=None) -> int:
+    parsed = parse_utc_datetime(value)
+    if not parsed:
+        return 0
+    current = now or datetime.now(timezone.utc)
+    return max(0, int((current.astimezone(timezone.utc) - parsed.astimezone(timezone.utc)).total_seconds() // 60))
 
 
 def insert_domain_event_with_connection(connection, event: DomainEvent) -> None:
@@ -84,6 +100,8 @@ def rule_from_row(row) -> NotificationRuleConfig:
         "similarityBypassScoreDelta": row["similarity_bypass_score_delta"],
         "similarityBypassConditions": similarity_bypass_conditions if isinstance(similarity_bypass_conditions, list) else [],
         "similarityFields": similarity_fields if isinstance(similarity_fields, list) else [],
+        "stateCooldownEnabled": bool(row["state_cooldown_enabled"]) if "state_cooldown_enabled" in row_keys else None,
+        "stateCooldownMinutes": row["state_cooldown_minutes"] if "state_cooldown_minutes" in row_keys else None,
         "marketHoursEnabled": bool(row["market_hours_enabled"]) if "market_hours_enabled" in row_keys else None,
         "marketHoursMarkets": market_hours_markets if isinstance(market_hours_markets, list) else [],
         "updatedAt": row["updated_at"],
@@ -243,6 +261,8 @@ class OperationalConnection:
                     similarity_bypass_score_delta INTEGER NOT NULL DEFAULT 20,
                     similarity_bypass_conditions_json TEXT NOT NULL DEFAULT '[]',
                     similarity_fields_json TEXT NOT NULL DEFAULT '["messageType","accountId","symbol","severity","title"]',
+                    state_cooldown_enabled INTEGER NOT NULL DEFAULT 0,
+                    state_cooldown_minutes INTEGER NOT NULL DEFAULT 0,
                     market_hours_enabled INTEGER NOT NULL DEFAULT 0,
                     market_hours_markets_json TEXT NOT NULL DEFAULT '[]',
                     updated_at TEXT NOT NULL
@@ -258,10 +278,28 @@ class OperationalConnection:
                     "similarity_bypass_score_delta": "INTEGER NOT NULL DEFAULT 20",
                     "similarity_bypass_conditions_json": "TEXT NOT NULL DEFAULT '[]'",
                     "similarity_fields_json": "TEXT NOT NULL DEFAULT '[\"messageType\",\"accountId\",\"symbol\",\"severity\",\"title\"]'",
+                    "state_cooldown_enabled": "INTEGER NOT NULL DEFAULT 0",
+                    "state_cooldown_minutes": "INTEGER NOT NULL DEFAULT 0",
                     "market_hours_enabled": "INTEGER NOT NULL DEFAULT 0",
                     "market_hours_markets_json": "TEXT NOT NULL DEFAULT '[]'",
                 },
             )
+            if {"state_cooldown_enabled", "state_cooldown_minutes"} & set(added_rule_columns):
+                stamp = utc_now()
+                for message_type, rule in DEFAULT_NOTIFICATION_RULES.items():
+                    connection.execute(
+                        """
+                        UPDATE notification_rules
+                        SET state_cooldown_enabled = ?, state_cooldown_minutes = ?, updated_at = ?
+                        WHERE message_type = ?
+                        """,
+                        (
+                            1 if rule.state_cooldown_enabled else 0,
+                            int(rule.state_cooldown_minutes),
+                            stamp,
+                            message_type,
+                        ),
+                    )
             if {"market_hours_enabled", "market_hours_markets_json"} & set(added_rule_columns):
                 stamp = utc_now()
                 for message_type, rule in DEFAULT_NOTIFICATION_RULES.items():
@@ -472,9 +510,10 @@ class SQLiteNotificationRuleStore(OperationalConnection):
                     INSERT OR IGNORE INTO notification_rules (
                         message_type, enabled, threshold, base_score, low_score_action, conditions_json,
                         similarity_enabled, similarity_window_minutes, similarity_penalty, similarity_bypass_score_delta,
-                        similarity_bypass_conditions_json, similarity_fields_json, market_hours_enabled, market_hours_markets_json, updated_at
+                        similarity_bypass_conditions_json, similarity_fields_json, state_cooldown_enabled, state_cooldown_minutes,
+                        market_hours_enabled, market_hours_markets_json, updated_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         message_type,
@@ -489,9 +528,57 @@ class SQLiteNotificationRuleStore(OperationalConnection):
                         int(rule.similarity_bypass_score_delta),
                         json_dumps([condition.to_dict() for condition in rule.similarity_bypass_conditions]),
                         json_dumps(rule.similarity_fields),
+                        1 if rule.state_cooldown_enabled else 0,
+                        int(rule.state_cooldown_minutes),
                         1 if rule.market_hours_enabled else 0,
                         json_dumps(rule.market_hours_markets),
                         stamp,
+                    ),
+                )
+            for message_type, rule in DEFAULT_NOTIFICATION_RULES.items():
+                row = connection.execute(
+                    """
+                    SELECT threshold, similarity_bypass_conditions_json
+                    FROM notification_rules
+                    WHERE message_type = ?
+                    """,
+                    (message_type,),
+                ).fetchone()
+                if not row:
+                    continue
+                try:
+                    configured_conditions = json.loads(row["similarity_bypass_conditions_json"] or "[]")
+                except json.JSONDecodeError:
+                    configured_conditions = []
+                if not isinstance(configured_conditions, list):
+                    configured_conditions = []
+                existing_ids = {
+                    str(item.get("id") or "")
+                    for item in configured_conditions
+                    if isinstance(item, dict)
+                }
+                missing_conditions = [
+                    condition.to_dict()
+                    for condition in rule.similarity_bypass_conditions
+                    if condition.condition_id and condition.condition_id not in existing_ids
+                ]
+                if not missing_conditions:
+                    continue
+                configured_conditions.extend(missing_conditions)
+                threshold = int(row["threshold"] or 0)
+                if message_type == "externalCryptoMove" and threshold == 45:
+                    threshold = int(rule.threshold)
+                connection.execute(
+                    """
+                    UPDATE notification_rules
+                    SET threshold = ?, similarity_bypass_conditions_json = ?, updated_at = ?
+                    WHERE message_type = ?
+                    """,
+                    (
+                        threshold,
+                        json_dumps(configured_conditions),
+                        stamp,
+                        message_type,
                     ),
                 )
 
@@ -504,7 +591,8 @@ class SQLiteNotificationRuleStore(OperationalConnection):
                 """
                 SELECT message_type, enabled, threshold, base_score, low_score_action, conditions_json,
                     similarity_enabled, similarity_window_minutes, similarity_penalty, similarity_bypass_score_delta,
-                    similarity_bypass_conditions_json, similarity_fields_json, market_hours_enabled, market_hours_markets_json, updated_at
+                    similarity_bypass_conditions_json, similarity_fields_json, state_cooldown_enabled, state_cooldown_minutes,
+                    market_hours_enabled, market_hours_markets_json, updated_at
                 FROM notification_rules
                 ORDER BY message_type
                 """
@@ -518,7 +606,8 @@ class SQLiteNotificationRuleStore(OperationalConnection):
                 """
                 SELECT message_type, enabled, threshold, base_score, low_score_action, conditions_json,
                     similarity_enabled, similarity_window_minutes, similarity_penalty, similarity_bypass_score_delta,
-                    similarity_bypass_conditions_json, similarity_fields_json, market_hours_enabled, market_hours_markets_json, updated_at
+                    similarity_bypass_conditions_json, similarity_fields_json, state_cooldown_enabled, state_cooldown_minutes,
+                    market_hours_enabled, market_hours_markets_json, updated_at
                 FROM notification_rules
                 WHERE message_type = ?
                 """,
@@ -539,9 +628,10 @@ class SQLiteNotificationRuleStore(OperationalConnection):
                 INSERT INTO notification_rules (
                     message_type, enabled, threshold, base_score, low_score_action, conditions_json,
                     similarity_enabled, similarity_window_minutes, similarity_penalty, similarity_bypass_score_delta,
-                    similarity_bypass_conditions_json, similarity_fields_json, market_hours_enabled, market_hours_markets_json, updated_at
+                    similarity_bypass_conditions_json, similarity_fields_json, state_cooldown_enabled, state_cooldown_minutes,
+                    market_hours_enabled, market_hours_markets_json, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(message_type) DO UPDATE SET
                     enabled = excluded.enabled,
                     threshold = excluded.threshold,
@@ -554,6 +644,8 @@ class SQLiteNotificationRuleStore(OperationalConnection):
                     similarity_bypass_score_delta = excluded.similarity_bypass_score_delta,
                     similarity_bypass_conditions_json = excluded.similarity_bypass_conditions_json,
                     similarity_fields_json = excluded.similarity_fields_json,
+                    state_cooldown_enabled = excluded.state_cooldown_enabled,
+                    state_cooldown_minutes = excluded.state_cooldown_minutes,
                     market_hours_enabled = excluded.market_hours_enabled,
                     market_hours_markets_json = excluded.market_hours_markets_json,
                     updated_at = excluded.updated_at
@@ -571,6 +663,8 @@ class SQLiteNotificationRuleStore(OperationalConnection):
                     int(normalized.similarity_bypass_score_delta),
                     json_dumps([condition.to_dict() for condition in normalized.similarity_bypass_conditions]),
                     json_dumps(normalized.similarity_fields),
+                    1 if normalized.state_cooldown_enabled else 0,
+                    int(normalized.state_cooldown_minutes),
                     1 if normalized.market_hours_enabled else 0,
                     json_dumps(normalized.market_hours_markets),
                     normalized.updated_at,
@@ -584,20 +678,33 @@ class SQLiteNotificationRuleStore(OperationalConnection):
     def evaluate_job(self, job: NotificationJob):
         rule = self.get(job.message_type)
         decision = evaluate_notification_rule(job, rule)
-        recent_count, previous_score, previous_context = self.similar_history(job, rule, decision.fingerprint)
+        recent_count, previous_score, previous_context, last_sent_at = self.similar_history(job, rule, decision.fingerprint)
+        decision = apply_state_cooldown_rule(
+            decision,
+            rule,
+            recent_count,
+            previous_score,
+            previous_context,
+            last_sent_at,
+            age_minutes_since(last_sent_at),
+            job,
+        )
         decision = apply_similarity_rule(decision, rule, recent_count, previous_score, previous_context, job)
         return apply_market_hours_rule(decision, rule, job)
 
     def similar_history(self, job: NotificationJob, rule: NotificationRuleConfig, fingerprint: str):
-        if not rule.similarity_enabled or not int(rule.similarity_window_minutes or 0) or not fingerprint:
-            return 0, 0, {}
-        cutoff = datetime.now(timezone.utc) - timedelta(minutes=int(rule.similarity_window_minutes or 0))
+        similarity_minutes = int(rule.similarity_window_minutes or 0) if rule.similarity_enabled else 0
+        state_minutes = int(rule.state_cooldown_minutes or 0) + 60 if rule.state_cooldown_enabled and int(rule.state_cooldown_minutes or 0) else 0
+        history_minutes = max(similarity_minutes, state_minutes)
+        if not history_minutes or not fingerprint:
+            return 0, 0, {}, ""
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=history_minutes)
         cutoff_text = cutoff.isoformat().replace("+00:00", "Z")
         with self.connect() as connection:
             rows = connection.execute(
                 """
-                SELECT payload_json FROM notification_jobs
-                WHERE message_type = ? AND created_at >= ?
+                SELECT payload_json, created_at FROM notification_jobs
+                WHERE message_type = ? AND created_at >= ? AND status IN ('pending', 'processing', 'done')
                 ORDER BY created_at DESC
                 LIMIT 100
                 """,
@@ -606,6 +713,7 @@ class SQLiteNotificationRuleStore(OperationalConnection):
         count = 0
         previous_score = 0
         most_recent_context: Dict[str, object] = {}
+        most_recent_at = ""
         for row in rows:
             try:
                 previous = NotificationJob.from_dict(json.loads(row["payload_json"]))
@@ -620,8 +728,9 @@ class SQLiteNotificationRuleStore(OperationalConnection):
             count += 1
             if not most_recent_context:
                 most_recent_context = dict(previous_context)
+                most_recent_at = row["created_at"] or previous.created_at
             previous_score = max(previous_score, int(previous_context.get("honeyScore") or 0))
-        return count, previous_score, most_recent_context
+        return count, previous_score, most_recent_context, most_recent_at
 
 
 class SQLiteAppStore(OperationalConnection):
@@ -1670,7 +1779,8 @@ class SQLiteNotificationJobStore(OperationalConnection):
             """
             SELECT message_type, enabled, threshold, base_score, low_score_action, conditions_json,
                 similarity_enabled, similarity_window_minutes, similarity_penalty, similarity_bypass_score_delta,
-                similarity_bypass_conditions_json, similarity_fields_json, market_hours_enabled, market_hours_markets_json, updated_at
+                similarity_bypass_conditions_json, similarity_fields_json, state_cooldown_enabled, state_cooldown_minutes,
+                market_hours_enabled, market_hours_markets_json, updated_at
             FROM notification_rules
             WHERE message_type = ?
             """,
@@ -1686,13 +1796,19 @@ class SQLiteNotificationJobStore(OperationalConnection):
         fingerprint: str,
     ):
         if not rule.similarity_enabled or not int(rule.similarity_window_minutes or 0) or not fingerprint:
-            return 0, 0, {}
-        cutoff = datetime.now(timezone.utc) - timedelta(minutes=int(rule.similarity_window_minutes or 0))
+            similarity_minutes = 0
+        else:
+            similarity_minutes = int(rule.similarity_window_minutes or 0)
+        state_minutes = int(rule.state_cooldown_minutes or 0) + 60 if rule.state_cooldown_enabled and int(rule.state_cooldown_minutes or 0) else 0
+        history_minutes = max(similarity_minutes, state_minutes)
+        if not history_minutes or not fingerprint:
+            return 0, 0, {}, ""
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=history_minutes)
         cutoff_text = cutoff.isoformat().replace("+00:00", "Z")
         rows = connection.execute(
             """
-            SELECT payload_json FROM notification_jobs
-            WHERE message_type = ? AND created_at >= ?
+            SELECT payload_json, created_at FROM notification_jobs
+            WHERE message_type = ? AND created_at >= ? AND status IN ('pending', 'processing', 'done')
             ORDER BY created_at DESC
             LIMIT 100
             """,
@@ -1701,6 +1817,7 @@ class SQLiteNotificationJobStore(OperationalConnection):
         count = 0
         previous_score = 0
         most_recent_context: Dict[str, object] = {}
+        most_recent_at = ""
         for row in rows:
             try:
                 previous = NotificationJob.from_dict(json.loads(row["payload_json"]))
@@ -1715,13 +1832,24 @@ class SQLiteNotificationJobStore(OperationalConnection):
             count += 1
             if not most_recent_context:
                 most_recent_context = dict(previous_context)
+                most_recent_at = row["created_at"] or previous.created_at
             previous_score = max(previous_score, int(previous_context.get("honeyScore") or 0))
-        return count, previous_score, most_recent_context
+        return count, previous_score, most_recent_context, most_recent_at
 
     def evaluate_job_with_connection(self, connection, job: NotificationJob):
         rule = self.rule_for_connection(connection, job.message_type)
         decision = evaluate_notification_rule(job, rule)
-        recent_count, previous_score, previous_context = self.similar_history_with_connection(connection, job, rule, decision.fingerprint)
+        recent_count, previous_score, previous_context, last_sent_at = self.similar_history_with_connection(connection, job, rule, decision.fingerprint)
+        decision = apply_state_cooldown_rule(
+            decision,
+            rule,
+            recent_count,
+            previous_score,
+            previous_context,
+            last_sent_at,
+            age_minutes_since(last_sent_at),
+            job,
+        )
         decision = apply_similarity_rule(decision, rule, recent_count, previous_score, previous_context, job)
         return apply_market_hours_rule(decision, rule, job)
 
@@ -1748,6 +1876,8 @@ class SQLiteNotificationJobStore(OperationalConnection):
             job.updated_at = utc_now()
             if decision.suppression_reason == "market_closed":
                 job.last_error = "장 시간 외라 발송하지 않았습니다. " + str(decision.market_hours_reason or "")
+            elif decision.suppression_reason == "state_cooldown":
+                job.last_error = decision.state_reason or "같은 임계값 상태가 지속되어 발송하지 않았습니다."
             else:
                 job.last_error = "꿀점수 " + str(decision.score) + "점이 기준 " + str(decision.threshold) + "점보다 낮아 발송하지 않았습니다."
             try:

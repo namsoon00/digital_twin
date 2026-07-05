@@ -3847,6 +3847,7 @@ h3 {
 }
 
 .notification-rule-similarity,
+.notification-rule-state,
 .notification-rule-market-hours,
 .notification-rule-bypass-list,
 .notification-rule-fields {
@@ -3856,6 +3857,7 @@ h3 {
 }
 
 .notification-rule-similarity,
+.notification-rule-state,
 .notification-rule-market-hours {
   padding: 8px;
   border: 1px solid var(--line);

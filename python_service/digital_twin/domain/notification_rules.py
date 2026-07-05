@@ -15,6 +15,7 @@ from .notifications import NotificationJob
 DEFAULT_HONEY_THRESHOLD = 45
 DEFAULT_LOW_SCORE_ACTION = "suppress"
 DEFAULT_SIMILARITY_FIELDS = ["messageType", "accountId", "symbol", "severity", "title"]
+STATE_COOLDOWN_MESSAGE_TYPES = {"externalEquityMove", "externalCryptoMove"}
 
 CONDITION_TYPE_LABELS = [
     {"type": "text_contains_any", "label": "메시지에 단어 포함", "description": "본문이나 컨텍스트에 지정 단어 중 하나가 있으면 점수를 더합니다."},
@@ -86,7 +87,7 @@ def default_threshold(message_type: str) -> int:
     key = str(message_type or "")
     if key in SYSTEM_MESSAGE_TYPES:
         return 20
-    if key == "externalEquityMove":
+    if key in {"externalEquityMove", "externalCryptoMove"}:
         return 60
     return DEFAULT_HONEY_THRESHOLD
 
@@ -119,6 +120,14 @@ def default_similarity_penalty(message_type: str) -> int:
 
 def default_similarity_bypass_score_delta(message_type: str) -> int:
     return 15 if str(message_type or "") in {"modelBuy", "modelSell", "monitorDecisionChange"} else 20
+
+
+def default_state_cooldown_enabled(message_type: str) -> bool:
+    return str(message_type or "") in STATE_COOLDOWN_MESSAGE_TYPES
+
+
+def default_state_cooldown_minutes(message_type: str) -> int:
+    return 360 if default_state_cooldown_enabled(message_type) else 0
 
 
 def default_similarity_bypass_conditions(message_type: str) -> List["SimilarityBypassCondition"]:
@@ -163,6 +172,14 @@ def default_similarity_bypass_conditions(message_type: str) -> List["SimilarityB
                 field="change24h",
                 value=2,
                 description="이전 유사 알림보다 24시간 변동률 절대값이 기준 %p 이상 커지면 보냅니다.",
+            ),
+            SimilarityBypassCondition(
+                "change_7d_abs_delta",
+                "7일 변동 확대",
+                "abs_number_delta_gte",
+                field="change7d",
+                value=3,
+                description="이전 유사 알림보다 7일 변동률 절대값이 기준 %p 이상 커지면 보냅니다.",
             ),
             SimilarityBypassCondition(
                 "volume_multiplier",
@@ -268,6 +285,8 @@ class NotificationRuleConfig:
     similarity_bypass_score_delta: int = 20
     similarity_bypass_conditions: List[SimilarityBypassCondition] = dataclass_field(default_factory=list)
     similarity_fields: List[str] = dataclass_field(default_factory=lambda: list(DEFAULT_SIMILARITY_FIELDS))
+    state_cooldown_enabled: bool = False
+    state_cooldown_minutes: int = 0
     market_hours_enabled: bool = False
     market_hours_markets: List[str] = dataclass_field(default_factory=list)
     updated_at: str = ""
@@ -320,11 +339,13 @@ class NotificationRuleConfig:
             if "similarityBypassScoreDelta" in payload
             else payload.get("similarity_bypass_score_delta")
         )
+        state_cooldown_enabled_value = payload["stateCooldownEnabled"] if "stateCooldownEnabled" in payload else payload.get("state_cooldown_enabled")
+        state_cooldown_minutes_value = payload["stateCooldownMinutes"] if "stateCooldownMinutes" in payload else payload.get("state_cooldown_minutes")
         market_hours_enabled_value = payload["marketHoursEnabled"] if "marketHoursEnabled" in payload else payload.get("market_hours_enabled")
         return cls(
             message_type=message_type,
             enabled=bool_value(payload.get("enabled"), True),
-            threshold=clamp_int(payload.get("threshold"), 0, 100, DEFAULT_HONEY_THRESHOLD),
+            threshold=clamp_int(payload.get("threshold"), 0, 100, default_threshold(message_type)),
             base_score=clamp_int(base_score_value, 0, 100, default_base_score(message_type)),
             low_score_action=str(payload.get("lowScoreAction") or payload.get("low_score_action") or DEFAULT_LOW_SCORE_ACTION).strip() or DEFAULT_LOW_SCORE_ACTION,
             conditions=conditions,
@@ -334,6 +355,8 @@ class NotificationRuleConfig:
             similarity_bypass_score_delta=clamp_int(similarity_bypass_value, 0, 100, default_similarity_bypass_score_delta(message_type)),
             similarity_bypass_conditions=bypass_conditions,
             similarity_fields=similarity_fields,
+            state_cooldown_enabled=bool_value(state_cooldown_enabled_value, default_state_cooldown_enabled(message_type)),
+            state_cooldown_minutes=clamp_int(state_cooldown_minutes_value, 0, 10080, default_state_cooldown_minutes(message_type)),
             market_hours_enabled=bool_value(market_hours_enabled_value, default_market_hours_enabled(message_type)),
             market_hours_markets=market_hours_markets,
             updated_at=str(payload.get("updatedAt") or payload.get("updated_at") or ""),
@@ -353,6 +376,8 @@ class NotificationRuleConfig:
             "similarityBypassScoreDelta": int(self.similarity_bypass_score_delta or 0),
             "similarityBypassConditions": [condition.to_dict() for condition in self.similarity_bypass_conditions],
             "similarityFields": list(self.similarity_fields or []),
+            "stateCooldownEnabled": bool(self.state_cooldown_enabled),
+            "stateCooldownMinutes": int(self.state_cooldown_minutes or 0),
             "marketHoursEnabled": bool(self.market_hours_enabled),
             "marketHoursMarkets": list(self.market_hours_markets or []),
             "updatedAt": self.updated_at,
@@ -377,6 +402,14 @@ class NotificationRuleDecision:
     similarity_bypassed: bool = False
     similarity_bypass_reason: str = ""
     suppression_reason: str = ""
+    state_cooldown_enabled: bool = False
+    state_cooldown_minutes: int = 0
+    state_recent_sent_count: int = 0
+    state_last_sent_at: str = ""
+    state_last_sent_age_minutes: int = 0
+    state_decision: str = ""
+    state_reason: str = ""
+    state_suppressed: bool = False
     market_hours_enabled: bool = False
     market_hours_market: str = ""
     market_hours_label: str = ""
@@ -409,6 +442,14 @@ class NotificationRuleDecision:
             "honeySimilarityBypassed": bool(self.similarity_bypassed),
             "honeySimilarityBypassReason": self.similarity_bypass_reason,
             "honeySuppressionReason": self.suppression_reason,
+            "honeyStateCooldownEnabled": bool(self.state_cooldown_enabled),
+            "honeyStateCooldownMinutes": self.state_cooldown_minutes,
+            "honeyStateRecentSentCount": self.state_recent_sent_count,
+            "honeyStateLastSentAt": self.state_last_sent_at,
+            "honeyStateLastSentAgeMinutes": self.state_last_sent_age_minutes,
+            "honeyStateDecision": self.state_decision,
+            "honeyStateReason": self.state_reason,
+            "honeyStateSuppressed": bool(self.state_suppressed),
             "marketHoursEnabled": bool(self.market_hours_enabled),
             "marketHoursMarket": self.market_hours_market,
             "marketHoursLabel": self.market_hours_label,
@@ -497,6 +538,8 @@ def default_notification_rule(message_type: str) -> NotificationRuleConfig:
         similarity_bypass_score_delta=default_similarity_bypass_score_delta(key),
         similarity_bypass_conditions=[SimilarityBypassCondition.from_dict(condition.to_dict()) for condition in default_similarity_bypass_conditions(key)],
         similarity_fields=list(DEFAULT_SIMILARITY_FIELDS),
+        state_cooldown_enabled=default_state_cooldown_enabled(key),
+        state_cooldown_minutes=default_state_cooldown_minutes(key),
         market_hours_enabled=default_market_hours_enabled(key),
         market_hours_markets=default_market_hours_markets(key),
     )
@@ -733,6 +776,8 @@ def apply_similarity_rule(
 ) -> NotificationRuleDecision:
     decision.similarity_recent_count = max(0, int(recent_count or 0))
     decision.similarity_previous_score = max(0, int(previous_score or 0))
+    if decision.suppression_reason == "state_cooldown" or decision.similarity_bypassed:
+        return decision
     if not config.enabled or not config.similarity_enabled or decision.similarity_recent_count <= 0:
         return decision
     previous_context = previous_context or {}
@@ -759,6 +804,69 @@ def apply_similarity_rule(
         decision.reasons.append("유사 메시지 " + str(config.similarity_window_minutes) + "분 내 반복 " + str(penalty))
     if config.low_score_action == "suppress":
         decision.should_send = decision.score >= decision.threshold
+    return decision
+
+
+def apply_state_cooldown_rule(
+    decision: NotificationRuleDecision,
+    config: NotificationRuleConfig,
+    sent_count: int,
+    previous_score: int = 0,
+    previous_context: Dict[str, object] = None,
+    last_sent_at: str = "",
+    last_sent_age_minutes: int = 0,
+    job: NotificationJob = None,
+) -> NotificationRuleDecision:
+    decision.state_cooldown_enabled = bool(config.state_cooldown_enabled)
+    decision.state_cooldown_minutes = clamp_int(config.state_cooldown_minutes, 0, 10080, default_state_cooldown_minutes(config.message_type))
+    decision.state_recent_sent_count = max(0, int(sent_count or 0))
+    decision.state_last_sent_at = str(last_sent_at or "")
+    decision.state_last_sent_age_minutes = max(0, int(last_sent_age_minutes or 0))
+    if not config.enabled or not config.state_cooldown_enabled:
+        decision.state_decision = "bypass"
+        decision.state_reason = "상태 지속 억제 꺼짐"
+        return decision
+    if not decision.fingerprint:
+        decision.state_decision = "unknown"
+        decision.state_reason = "상태 fingerprint 없음"
+        return decision
+    if decision.state_recent_sent_count <= 0:
+        decision.state_decision = "new_threshold"
+        decision.state_reason = "신규 임계값 상태"
+        decision.reasons.append("상태 정책: " + decision.state_reason)
+        return decision
+    previous_context = previous_context or {}
+    if job is not None:
+        for condition in config.similarity_bypass_conditions or []:
+            if not condition.enabled:
+                continue
+            matched, reason = similarity_bypass_match(condition, job=job, previous_context=previous_context, decision=decision, previous_score=previous_score)
+            if matched:
+                decision.state_decision = "material_change"
+                decision.state_reason = "의미 있는 추가 확대: " + reason
+                decision.similarity_bypassed = True
+                decision.similarity_bypass_reason = reason
+                decision.reasons.append("상태 정책: " + decision.state_reason)
+                return decision
+    if decision.state_cooldown_minutes and decision.state_last_sent_age_minutes >= decision.state_cooldown_minutes:
+        decision.state_decision = "sustained_summary"
+        decision.state_reason = "지속 상태 요약 " + str(decision.state_cooldown_minutes) + "분 경과"
+        decision.similarity_bypassed = True
+        decision.similarity_bypass_reason = decision.state_reason
+        decision.reasons.append("상태 정책: " + decision.state_reason)
+        return decision
+    decision.state_decision = "cooldown"
+    decision.state_suppressed = True
+    decision.state_reason = (
+        "같은 임계값 상태 지속: 마지막 발송 후 "
+        + str(decision.state_last_sent_age_minutes)
+        + "분, 쿨다운 "
+        + str(decision.state_cooldown_minutes)
+        + "분"
+    )
+    decision.should_send = False
+    decision.suppression_reason = "state_cooldown"
+    decision.reasons.append("상태 정책: " + decision.state_reason)
     return decision
 
 

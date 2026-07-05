@@ -758,6 +758,8 @@ function checkFrontendAdminRender() {
     assertOk(watchlistHtml.indexOf("symbol-result-list") < 0, "관심종목 탭에 전체 종목 결과 리스트가 남아 있습니다.");
     assertOk(watchlistHtml.indexOf("전체 종목 DB") < 0, "관심종목 탭에 전체 종목 DB 안내가 남아 있습니다.");
     assertOk(watchlistHtml.indexOf("NVDA") >= 0 && watchlistHtml.indexOf("005930") >= 0, "DB 계정 관심 종목이 렌더링되지 않았습니다.");
+    assertOk(watchlistHtml.indexOf("NVIDIA · NVDA") >= 0 && watchlistHtml.indexOf("삼성전자 · 005930") >= 0, "관심 종목이 회사명 우선으로 렌더링되지 않았습니다.");
+    assertOk(accountHtml.indexOf("관심 NVIDIA · NVDA, 삼성전자 · 005930") >= 0, "계정 목록 관심 종목 요약이 회사명 우선이 아닙니다.");
     assertOk(symbolUniverseHtml.indexOf("<h1>전체종목</h1>") >= 0, "전체종목 탭 제목이 상단에 렌더링되지 않았습니다.");
     assertOk(symbolUniverseHtml.indexOf("symbol-result-list") >= 0, "전체종목 탭에 종목 결과 리스트가 렌더링되지 않았습니다.");
     assertOk(symbolUniverseHtml.indexOf("symbol-summary-metric") >= 0, "전체종목 탭에 시장 요약 지표가 렌더링되지 않았습니다.");

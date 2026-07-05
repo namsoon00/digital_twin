@@ -873,11 +873,29 @@ h3 {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(190px, 0.35fr);
   gap: 14px;
+  width: 100%;
   min-width: 0;
   padding: 12px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--panel-soft);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  appearance: none;
+  transition: border-color 120ms ease, background-color 120ms ease, transform 120ms ease;
+}
+
+.monitoring-instrument-row:hover,
+.monitoring-instrument-row:focus-visible {
+  border-color: var(--blue);
+  background: var(--input);
+  outline: none;
+}
+
+.monitoring-instrument-row:active {
+  transform: translateY(1px);
 }
 
 .monitoring-instrument-main,
@@ -913,6 +931,173 @@ h3 {
 .monitoring-instrument-side {
   justify-items: end;
   text-align: right;
+}
+
+.monitoring-detail-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 140;
+  display: grid;
+  justify-items: end;
+  padding: 18px;
+  background: rgba(2, 6, 18, 0.55);
+}
+
+.monitoring-detail-drawer {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(580px, 100%);
+  max-height: calc(100vh - 36px);
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: var(--shadow-strong);
+}
+
+.monitoring-detail-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.monitoring-detail-toolbar span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0;
+}
+
+.monitoring-detail-content {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  min-width: 0;
+  overflow: auto;
+  padding: 16px;
+}
+
+.monitoring-detail-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  min-width: 0;
+}
+
+.monitoring-detail-head > div:first-child {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.monitoring-detail-head h2 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 22px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.monitoring-detail-head span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 780;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.monitoring-detail-badges {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.monitoring-detail-metric-grid,
+.monitoring-detail-signal-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  gap: 8px;
+}
+
+.monitoring-detail-metric-grid.compact {
+  grid-template-columns: repeat(auto-fit, minmax(116px, 1fr));
+}
+
+.monitoring-detail-metric {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+}
+
+.monitoring-detail-metric em {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 850;
+  line-height: 1.35;
+}
+
+.monitoring-detail-metric strong {
+  color: var(--ink);
+  font-size: 15px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.monitoring-detail-metric.buy strong {
+  color: var(--green);
+}
+
+.monitoring-detail-metric.sell strong {
+  color: var(--red);
+}
+
+.monitoring-detail-block,
+.monitoring-detail-message {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--input);
+}
+
+.monitoring-detail-message strong {
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.monitoring-detail-message p,
+.monitoring-detail-reasons p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 760;
+  line-height: 1.5;
+}
+
+.monitoring-detail-reasons {
+  display: grid;
+  gap: 8px;
+}
+
+.monitoring-detail-reasons.compact {
+  padding-top: 2px;
+}
+
+.monitoring-detail-triggers {
+  padding: 0;
 }
 
 .exit-panel {
@@ -4322,12 +4507,30 @@ h3 {
   display: grid;
   grid-template-columns: 62px minmax(0, 1fr);
   gap: 12px;
+  width: 100%;
   min-width: 0;
   padding: 13px;
   border: 1px solid var(--line);
   border-left: 4px solid var(--blue);
   border-radius: 8px;
   background: var(--panel-soft);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  appearance: none;
+  transition: border-color 120ms ease, background-color 120ms ease, transform 120ms ease;
+}
+
+.alert-row:hover,
+.alert-row:focus-visible {
+  border-color: var(--blue);
+  background: var(--input);
+  outline: none;
+}
+
+.alert-row:active {
+  transform: translateY(1px);
 }
 
 .alert-row.danger {
@@ -5234,7 +5437,9 @@ h3 {
   .text-button:active,
   .mini-button:active,
   .icon-button:active,
-  .watch-suggest-option:active {
+  .watch-suggest-option:active,
+  .monitoring-instrument-row:active,
+  .alert-row:active {
     transform: scale(0.98);
   }
 }
@@ -5547,6 +5752,25 @@ h3 {
   .monitoring-instrument-side {
     justify-items: start;
     text-align: left;
+  }
+
+  .monitoring-detail-backdrop {
+    align-items: end;
+    justify-items: stretch;
+    padding: 10px 10px calc(10px + var(--bottom-tabs-height) + env(safe-area-inset-bottom));
+  }
+
+  .monitoring-detail-drawer {
+    width: 100%;
+    max-height: min(82vh, calc(100vh - var(--bottom-tabs-height) - 22px));
+  }
+
+  .monitoring-detail-head {
+    display: grid;
+  }
+
+  .monitoring-detail-badges {
+    justify-content: flex-start;
   }
 
   h1 {

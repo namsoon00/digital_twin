@@ -824,6 +824,11 @@ function checkFrontendAdminRender() {
     assertOk(monitoringHtml.indexOf("알림 큐") >= 0, "모니터링 탭에 알림 큐 상태가 없습니다.");
     assertOk(monitoringHtml.indexOf("삼성전자") >= 0 && monitoringHtml.indexOf("NVIDIA") >= 0, "보유 종목과 관심 종목이 함께 렌더링되지 않았습니다.");
     assertOk(monitoringHtml.indexOf(">보유<") >= 0 && monitoringHtml.indexOf(">관심<") >= 0, "보유/관심 상태 라벨이 함께 렌더링되지 않았습니다.");
+    assertOk(monitoringHtml.indexOf("data-monitor-instrument-detail") >= 0, "보유·관심 통합 행에 상세 열기 액션이 없습니다.");
+    assertOk(monitoringHtml.indexOf("data-monitor-alert-detail") >= 0, "매수·매도 타이밍 알림 행에 상세 열기 액션이 없습니다.");
+    assertOk(code.indexOf("renderMonitoringDetailOverlay") >= 0 && code.indexOf("monitoring-detail-drawer") >= 0, "모니터링 상세 드로어 렌더링 경로가 없습니다.");
+    assertOk(code.indexOf("Instrument Detail") >= 0 && code.indexOf("Alert Detail") >= 0, "종목/알림 상세 콘텐츠가 분리되어 있지 않습니다.");
+    assertOk(styles.indexOf(".monitoring-detail-backdrop") >= 0 && styles.indexOf(".monitoring-detail-drawer") >= 0, "모니터링 상세 드로어 스타일이 없습니다.");
     assertOk(monitoringHtml.indexOf("watchlist-panel") < 0, "모니터링 탭에 관심 종목 관리 패널이 따로 남아 있습니다.");
     assertOk(settingsHtml.indexOf("settings-overview-panel") >= 0, "설정 탭 요약 패널이 렌더링되지 않았습니다.");
     assertOk(settingsHtml.indexOf("settings-environment-panel") >= 0, "설정 탭 앱 환경 패널이 렌더링되지 않았습니다.");

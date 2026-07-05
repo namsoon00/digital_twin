@@ -785,8 +785,8 @@ function checkFrontendAdminRender() {
     assertOk(notificationPolicyHtml.indexOf("admin-message-row") < 0, "정책 섹션 기본 화면에 메시지 타입 행이 펼쳐져 있습니다.");
     assertOk(code.indexOf("data-message-select") >= 0, "정책 섹션에 상세 편집 선택 버튼 경로가 없습니다.");
     assertOk(notificationPolicyHtml.indexOf("notification-policy-detail") < 0, "정책 섹션 목록 화면에 상세 편집 패널이 같이 렌더링됩니다.");
-    assertOk(code.indexOf("notificationPolicyEditorOpen") >= 0 && code.indexOf('data-action="back-message-types"') >= 0, "정책 섹션 상세 편집 전용 화면 전환 경로가 없습니다.");
-    assertOk(code.indexOf("notification-policy-editor-screen") >= 0 && code.indexOf("renderNotificationPolicyDetailPanel()") >= 0, "정책 상세 편집 화면 렌더링 경로가 없습니다.");
+    assertOk(code.indexOf("notificationPolicyEditorOpen") >= 0 && code.indexOf("data-notification-editor-close") >= 0, "정책 섹션 상세 편집 레이어 닫기 경로가 없습니다.");
+    assertOk(code.indexOf("notification-policy-modal-backdrop") >= 0 && code.indexOf("renderNotificationPolicyDetailPanel()") >= 0, "정책 상세 편집 레이어 렌더링 경로가 없습니다.");
     assertOk(notificationPolicyHtml.indexOf("admin-message-details") < 0, "정책 행 안에 inline 상세 편집기가 남아 있습니다.");
     assertOk(code.indexOf("renderNotificationTemplateRow(template, { policyDetail: true })") >= 0, "알림 타입별 템플릿 상세 렌더링 경로가 없습니다.");
     assertOk(code.indexOf("renderNotificationRuleEditor(rule.key, { inline: true })") >= 0, "정책 상세의 전체 룰 편집 경로가 없습니다.");

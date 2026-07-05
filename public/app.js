@@ -410,6 +410,7 @@
     activeNotificationSection: initialNotificationSection(),
     activeStrategySection: initialStrategySection(),
     activeNotificationMessageType: "monitorHeartbeat",
+    notificationPolicyEditorOpen: false,
     activeNotificationTemplateType: "monitorHeartbeat",
     notificationMarketHoursSessions: [],
     notificationJobItems: [],
@@ -973,6 +974,7 @@
     var priorTab = state.activeTab;
     state.activeTab = nextTab;
     if (nextTab !== "monitoring") state.monitoringDetail = null;
+    if (nextTab !== "notifications") state.notificationPolicyEditorOpen = false;
     if (!options.skipPrevious) state.previousTab = priorTab;
     if (!options.skipHistory) writeTabHistory(nextTab, Boolean(options.replace));
     setAppNavHidden(false);
@@ -987,6 +989,7 @@
     var strategySectionChanged = nextStrategySection !== state.activeStrategySection;
     state.activeNotificationSection = nextNotificationSection;
     state.activeStrategySection = nextStrategySection;
+    if (nextTab !== "notifications" || sectionChanged) state.notificationPolicyEditorOpen = false;
     if (nextTab === state.activeTab) {
       if (sectionChanged && nextTab === "notifications") render();
       if (strategySectionChanged && nextTab === "modeling") render();
@@ -6481,16 +6484,18 @@
     var rules = alertRules();
     var cadences = alertCadenceMinutes();
     var groups = alertRuleGroups();
+    var editorOpen = Boolean(state.notificationPolicyEditorOpen);
     return [
       '<article class="panel admin-message-panel">',
       '<div class="panel-head">',
       '<div>',
       '<p class="label">Messages</p>',
-      '<h2>메시지 타입별 알림</h2>',
+      '<h2>' + escapeHtml(editorOpen ? "알림 상세 편집" : "메시지 타입별 알림") + '</h2>',
+      '<p class="subtle">' + escapeHtml(editorOpen ? "선택한 메시지 타입의 템플릿, 발송 기준, 반복 억제 조건을 한 화면에서 수정합니다." : "메시지 타입을 그룹별로 확인하고 상세 편집은 전용 화면에서 엽니다.") + '</p>',
       '</div>',
       '<div class="settings-actions">',
-      '<button class="text-button compact" data-action="expand-message-types">그룹 펼치기</button>',
-      '<button class="text-button compact" data-action="collapse-message-types">전체 접기</button>',
+      editorOpen ? '<button class="text-button compact" data-action="back-message-types">목록으로</button>' : '<button class="text-button compact" data-action="expand-message-types">그룹 펼치기</button>',
+      editorOpen ? '' : '<button class="text-button compact" data-action="collapse-message-types">전체 접기</button>',
       '<button class="' + settingsSaveButtonClass() + '" data-action="save-settings"' + settingsSaveDisabledAttr() + '>' + settingsSaveButtonLabel() + '</button>',
       '</div>',
       '</div>',
@@ -6498,16 +6503,22 @@
       state.messageSchedulesError ? '<p class="form-error">' + escapeHtml(state.messageSchedulesError) + '</p>' : '',
       state.notificationRulesError ? '<p class="form-error">' + escapeHtml(state.notificationRulesError) + '</p>' : '',
       state.notificationRulesSaved ? '<p class="lab-message">알림 룰을 저장했습니다.</p>' : '',
-      '<div class="notification-policy-layout">',
+      editorOpen ? renderNotificationPolicyEditorScreen() : renderNotificationPolicyListScreen(groups, rules, cadences),
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderNotificationPolicyListScreen(groups, rules, cadences) {
+    return [
+      '<div class="notification-policy-list-screen">',
+      '<div class="flow-title"><div><strong>메시지 타입</strong><span>상세 편집을 누르면 목록을 벗어나 전용 편집 화면으로 이동합니다.</span></div></div>',
       '<div class="admin-message-group-list">',
       groups.map(function (group) {
         return renderAdminMessageGroup(group, rules, cadences);
       }).join(""),
       '</div>',
-      renderNotificationPolicyDetailPanel(),
-      '</div>',
-      '</div>',
-      '</article>'
+      '</div>'
     ].join("");
   }
 
@@ -6565,6 +6576,7 @@
   function renderAdminMessageRow(rule, checked, cadence, schedule, template) {
     var ruleId = "alert-rule-" + String(rule.key || "").replace(/[^A-Za-z0-9_-]/g, "-");
     var active = activeNotificationRule().key === rule.key;
+    var editing = active && state.notificationPolicyEditorOpen;
     return [
       '<div class="admin-message-row ' + (active ? "active" : "collapsed") + '">',
       '<input id="' + escapeHtml(ruleId) + '" type="checkbox" data-alert-rule="' + escapeHtml(rule.key) + '"' + (checked ? " checked" : "") + ' />',
@@ -6576,8 +6588,8 @@
       '<input data-alert-cadence="' + escapeHtml(rule.key) + '" type="number" min="10" step="10" value="' + escapeHtml(cadence) + '" />',
       '<b>분</b>',
       '</span>',
-      '<button class="admin-message-toggle" type="button" data-message-select="' + escapeHtml(rule.key) + '" aria-pressed="' + escapeHtml(active ? "true" : "false") + '">',
-      '<span>' + escapeHtml(active ? "편집 중" : "상세 편집") + '</span>',
+      '<button class="admin-message-toggle" type="button" data-message-select="' + escapeHtml(rule.key) + '" aria-pressed="' + escapeHtml(editing ? "true" : "false") + '">',
+      '<span>' + escapeHtml(editing ? "편집 중" : "상세 편집") + '</span>',
       '</button>',
       '<div class="admin-message-schedule">',
       renderMessageScheduleSummary(schedule, true),
@@ -6616,9 +6628,17 @@
       '</div>',
       '<div class="notification-policy-editor">',
       renderNotificationTemplateRow(template, { policyDetail: true }),
-      renderNotificationRuleEditor(rule.key, { inline: true, compact: true }),
+      renderNotificationRuleEditor(rule.key, { inline: true }),
       '</div>',
       '</aside>'
+    ].join("");
+  }
+
+  function renderNotificationPolicyEditorScreen() {
+    return [
+      '<div class="notification-policy-editor-screen">',
+      renderNotificationPolicyDetailPanel(),
+      '</div>'
     ].join("");
   }
 
@@ -10002,6 +10022,7 @@
         var section = normalizeNotificationSection(button.getAttribute("data-notification-section"));
         if (section === state.activeNotificationSection) return;
         state.activeNotificationSection = section;
+        state.notificationPolicyEditorOpen = false;
         writeNotificationSectionHistory(section);
         render();
       });
@@ -10022,9 +10043,18 @@
         var messageType = button.getAttribute("data-message-select") || "";
         if (!notificationRuleByKey(messageType)) return;
         state.activeNotificationMessageType = messageType;
+        state.notificationPolicyEditorOpen = true;
         render();
       });
     });
+
+    var backMessageTypes = app.querySelector('[data-action="back-message-types"]');
+    if (backMessageTypes) {
+      backMessageTypes.addEventListener("click", function () {
+        state.notificationPolicyEditorOpen = false;
+        render();
+      });
+    }
 
     Array.prototype.slice.call(app.querySelectorAll("[data-template-select]")).forEach(function (button) {
       button.addEventListener("click", function () {

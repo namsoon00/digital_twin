@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "title": "Exit Lens Python Admin",
+  "title": "Orbit Alpha Python Admin",
   "route": "/admin/",
   "mode": "github-pages-readonly-preview",
   "description": "Python 서비스의 계정, 알림, 모니터링, 모델 리뷰 구성을 GitHub Pages에서 확인하기 위한 정적 미리보기입니다.",

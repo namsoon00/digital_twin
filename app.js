@@ -202,6 +202,8 @@
     { id: "modeling", label: "투자전략", description: "모델링 관리" },
     { id: "settings", label: "설정", description: "런타임 환경" }
   ];
+  var appBrandName = "Orbit Alpha";
+  var appBrandSubtitle = "포트폴리오 신호 궤도 관제";
   var bottomTabIds = ["overview", "watchlist", "monitoring", "modeling"];
   var managementTabIds = ["accounts", "symbols", "notifications", "settings"];
   var notificationSections = [
@@ -2836,7 +2838,7 @@
         market: market,
         exchange: market,
         assetType: "STOCK",
-        source: "Exit Lens seed",
+        source: "Orbit Alpha seed",
         sourceUrl: "local-default",
         fetchedAt: "",
         lastSeenAt: "",
@@ -5429,8 +5431,8 @@
       '<main class="shell">',
       '<section class="topbar">',
       '<div class="topbar-copy">',
-      '<p class="eyebrow">Toss Lens</p>',
-      '<h1>운영 데이터를 준비하는 중</h1>',
+      '<p class="eyebrow">' + escapeHtml(appBrandName) + '</p>',
+      '<h1>신호 궤도를 준비하는 중</h1>',
       '<p class="subtle">계좌, 관심 종목, 알림 워커, 모델 기준을 나눠 확인하고 있습니다.</p>',
       '</div>',
       '<div class="toolbar topbar-actions">',
@@ -5482,8 +5484,8 @@
       '<main class="shell">',
       '<section class="topbar">',
       '<div>',
-      '<p class="eyebrow">Toss Lens</p>',
-      '<h1>토스 계좌 판단판을 만들지 못했습니다</h1>',
+      '<p class="eyebrow">' + escapeHtml(appBrandName) + '</p>',
+      '<h1>' + escapeHtml(appBrandName) + '를 불러오지 못했습니다</h1>',
       '<p class="subtle">' + escapeHtml(state.error || "알 수 없는 오류") + "</p>",
       '</div>',
       '<button class="icon-button" type="button" data-action="refresh" title="새로고침" aria-label="새로고침">↻</button>',
@@ -5503,7 +5505,7 @@
       renderAppNavigation(tab, modeLabel, modeClass),
       '<section class="topbar">',
       '<div class="topbar-copy">',
-      '<p class="eyebrow">Exit Lens Admin</p>',
+      '<p class="eyebrow">' + escapeHtml(appBrandName) + ' Console</p>',
       '<h1>' + escapeHtml(tab.label || "홈") + '</h1>',
       '<p class="subtle">' + escapeHtml(subtitle) + '</p>',
       '</div>',
@@ -5541,8 +5543,11 @@
     return [
       '<nav class="app-nav" aria-label="앱 네비게이션">',
       '<div class="app-nav-brand">',
-      '<strong>Exit Lens</strong>',
-      '<span>' + escapeHtml(activeTab.description || "운영 콘솔") + '</span>',
+      '<span class="app-brand-mark" aria-hidden="true"><span></span></span>',
+      '<div class="app-brand-copy">',
+      '<strong>' + escapeHtml(appBrandName) + '</strong>',
+      '<span class="app-brand-subtitle">' + escapeHtml(activeTab.description || appBrandSubtitle) + '</span>',
+      '</div>',
       '</div>',
       '<div class="app-nav-tabs" aria-label="전체 탭">',
       primaryTabs.map(function (tab) {

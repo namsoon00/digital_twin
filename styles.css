@@ -20,6 +20,10 @@
   --ds-color-danger-soft: #fff0f2;
   --ds-color-accent: #5b6472;
   --ds-color-accent-soft: #eef2f6;
+  --ds-color-orbit-core: #172033;
+  --ds-color-orbit-line: #6aa7ff;
+  --ds-color-orbit-signal: #00a86b;
+  --ds-color-star-line: rgba(49, 130, 246, 0.08);
   --ds-shadow-panel: 0 1px 2px rgba(17, 24, 39, 0.04), 0 10px 24px rgba(17, 24, 39, 0.045);
   --ds-shadow-floating: 0 10px 30px rgba(17, 24, 39, 0.12);
   --ds-focus: #3182f6;
@@ -87,6 +91,10 @@ html[data-theme="dark"] {
   --ds-color-danger-soft: #33151b;
   --ds-color-accent: #94a3b8;
   --ds-color-accent-soft: #202b38;
+  --ds-color-orbit-core: #0c1322;
+  --ds-color-orbit-line: #7bb0ff;
+  --ds-color-orbit-signal: #22c55e;
+  --ds-color-star-line: rgba(123, 176, 255, 0.11);
   --ds-shadow-panel: 0 1px 2px rgba(0, 0, 0, 0.28), 0 10px 24px rgba(0, 0, 0, 0.22);
   --ds-shadow-floating: 0 12px 34px rgba(0, 0, 0, 0.34);
   --ds-focus: #4c8dff;
@@ -108,7 +116,10 @@ html {
 
 body {
   margin: 0;
-  background: var(--bg);
+  background:
+    linear-gradient(135deg, var(--ds-color-star-line) 0 1px, transparent 1px 42px),
+    linear-gradient(45deg, rgba(0, 168, 107, 0.035) 0 1px, transparent 1px 48px),
+    var(--bg);
   color: var(--ink);
   font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-variant-numeric: tabular-nums;
@@ -119,7 +130,22 @@ body {
 }
 
 .app-shell {
+  position: relative;
   min-height: 100vh;
+}
+
+.app-shell::before {
+  content: "";
+  position: fixed;
+  top: -160px;
+  right: max(-180px, calc((100vw - var(--ds-shell-width)) / 2 - 230px));
+  z-index: 0;
+  width: 520px;
+  height: 520px;
+  border: 1px solid color-mix(in srgb, var(--ds-color-orbit-line) 18%, transparent);
+  border-radius: 50%;
+  transform: rotate(-18deg) scaleY(0.62);
+  pointer-events: none;
 }
 
 @supports (min-height: 100dvh) {
@@ -185,6 +211,8 @@ a {
 }
 
 .shell {
+  position: relative;
+  z-index: 1;
   width: min(var(--ds-shell-width), calc(100vw - 32px));
   margin: 0 auto;
   padding: 18px 0 calc(32px + var(--bottom-tabs-height) + env(safe-area-inset-bottom));
@@ -274,18 +302,70 @@ h3 {
 
 .app-nav-brand {
   display: grid;
-  gap: 2px;
-  min-width: 118px;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  min-width: 148px;
 }
 
-.app-nav-brand strong {
+.app-brand-mark {
+  position: relative;
+  display: block;
+  width: 32px;
+  height: 32px;
+  border: 1px solid color-mix(in srgb, var(--ds-color-orbit-line) 34%, transparent);
+  border-radius: 8px;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--ds-color-orbit-core) 92%, var(--blue) 8%), var(--ds-color-orbit-core));
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06), 0 8px 18px rgba(17, 24, 39, 0.12);
+  overflow: hidden;
+}
+
+.app-brand-mark::before {
+  content: "";
+  position: absolute;
+  inset: 7px 3px;
+  border: 1.5px solid color-mix(in srgb, var(--ds-color-orbit-line) 82%, transparent);
+  border-radius: 50%;
+  transform: rotate(-26deg);
+}
+
+.app-brand-mark::after {
+  content: "";
+  position: absolute;
+  right: 7px;
+  top: 8px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--ds-color-orbit-signal);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ds-color-orbit-signal) 22%, transparent);
+}
+
+.app-brand-mark span {
+  position: absolute;
+  left: 13px;
+  top: 13px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #ffffff;
+}
+
+.app-brand-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.app-brand-copy strong {
   color: var(--ink);
   font-size: 15px;
   font-weight: 900;
   white-space: nowrap;
 }
 
-.app-nav-brand span {
+.app-brand-subtitle {
   color: var(--muted);
   font-size: 11px;
   font-weight: 800;
@@ -5798,7 +5878,7 @@ h3 {
     min-width: 0;
   }
 
-  .app-nav-brand span {
+  .app-brand-subtitle {
     display: none;
   }
 

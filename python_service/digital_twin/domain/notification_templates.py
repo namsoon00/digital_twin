@@ -27,6 +27,7 @@ DATA_LABEL_PREFIXES = [
     "24h 거래액",
     "현재가",
     "기준일",
+    "발송시각",
     "연속 실패",
     "실패 단계",
     "재시도",
@@ -67,6 +68,7 @@ DATA_LABEL_ORDER = {
     "크립토 거래액": 73,
     "출처": 88,
     "기준일": 89,
+    "발송시각": 90,
 }
 
 SEPARATE_DATA_LABELS = {
@@ -88,6 +90,7 @@ SEPARATE_DATA_LABELS = {
     "크립토 거래액",
     "출처",
     "기준일",
+    "발송시각",
     "평가",
     "보유",
 }
@@ -670,6 +673,9 @@ def template_variables() -> List[str]:
         "rawLines",
         "referenceDate",
         "eventGeneratedAt",
+        "sentAt",
+        "sentTime",
+        "sentLine",
         "readableMessage",
         "body",
         "metadata",

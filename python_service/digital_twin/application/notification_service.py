@@ -1,5 +1,5 @@
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Callable, Dict
 from zoneinfo import ZoneInfo
 
@@ -64,9 +64,55 @@ class NotificationQueueRunner:
         return processed
 
     def render(self, job: NotificationJob) -> str:
+        self.apply_send_time_context(job)
         if self.template_renderer:
             return str(self.template_renderer(job) or "").strip()
         return job.text.strip()
+
+    def apply_send_time_context(self, job: NotificationJob) -> None:
+        now = self.now_provider()
+        if not isinstance(now, datetime):
+            now = datetime.now(ZoneInfo("UTC"))
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=ZoneInfo("UTC"))
+        sent_at = now.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+        sent_time = now.astimezone(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d %H:%M KST")
+        context = dict(job.context or {})
+        context.update({
+            "sentAt": sent_at,
+            "sentTime": sent_time,
+            "sentLine": "발송시각 " + sent_time,
+        })
+        if job.message_type == "holdingTiming":
+            self.append_holding_timing_sent_time(context, sent_time)
+        job.context = context
+
+    def append_holding_timing_sent_time(self, context: Dict[str, object], sent_time: str) -> None:
+        plain_line = "발송시각 " + sent_time
+        rich_line = "• <b>발송시각</b>: <code>" + sent_time + "</code>"
+        raw_lines = str(context.get("rawLines") or "")
+        if "발송시각" not in raw_lines:
+            context["rawLines"] = "\n".join(part for part in [raw_lines, plain_line] if str(part or "").strip())
+        telegram_data = str(context.get("telegramDataLines") or "")
+        if "발송시각" not in telegram_data:
+            context["telegramDataLines"] = "\n".join(part for part in [telegram_data, rich_line] if str(part or "").strip())
+        telegram_message = str(context.get("telegramMessage") or "")
+        if telegram_message and "발송시각" not in telegram_message:
+            marker = "\n\n<b>발송 기준</b>"
+            if marker in telegram_message:
+                telegram_message = telegram_message.replace(marker, "\n" + rich_line + marker, 1)
+            else:
+                telegram_message = telegram_message + "\n" + rich_line
+            context["telegramMessage"] = telegram_message
+        readable_message = str(context.get("readableMessage") or "")
+        if readable_message and "발송시각" not in readable_message:
+            plain_bullet = "• 발송시각: " + sent_time
+            marker = "\n\n발송 기준"
+            if marker in readable_message:
+                readable_message = readable_message.replace(marker, "\n" + plain_bullet + marker, 1)
+            else:
+                readable_message = readable_message + "\n" + plain_bullet
+            context["readableMessage"] = readable_message
 
     def deliver(self, job: NotificationJob, accounts: Dict[str, object], message: str) -> None:
         notifier = self.notifier_factory(accounts.get(job.account_id))

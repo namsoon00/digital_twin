@@ -2128,6 +2128,57 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(1, runner.run_once(limit=10))
         self.assertEqual("[monitorHeartbeat] 상태 확인\n정상\n기준일 2026-07-03 15:58 KST", sent[0])
 
+    def test_holding_timing_delivery_adds_sent_time(self):
+        registry = AccountRegistry()
+        registry.upsert(AccountConfig("main", "메인", "toss", "https://example.test", "", "", "", ["AAPL"]))
+        db_path = Path(self.temp.name) / "service.db"
+        queue = SQLiteNotificationJobStore(db_path)
+        templates = SQLiteNotificationTemplateStore(db_path)
+        rules = SQLiteNotificationRuleStore(db_path)
+        timing_rule = rules.get("holdingTiming")
+        timing_rule.threshold = 0
+        timing_rule.market_hours_enabled = False
+        rules.upsert(timing_rule)
+        event = AlertEvent(
+            "main",
+            "메인",
+            "WATCH",
+            "holdingTiming",
+            "main:timing:005930",
+            "삼성전자",
+            ["상태 조건부 보유 (52점)", "손익 -3.2%"],
+            "005930",
+            generated_at="2026-07-05T00:00:00Z",
+        )
+        context = alert_context(event)
+        queue.enqueue(NotificationJob.create(
+            templates.render(event.rule, context),
+            account_id="main",
+            account_label="메인",
+            message_type=event.rule,
+            context=context,
+        ))
+        sent = []
+
+        class FakeNotifier:
+            def send(self, message):
+                sent.append(message)
+                return SimpleNamespace(delivered=True, reason="")
+
+        runner = NotificationQueueRunner(
+            queue,
+            registry,
+            lambda _account: FakeNotifier(),
+            template_renderer=templates.render_job,
+            now_provider=lambda: datetime(2026, 7, 5, 0, 6, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(1, runner.run_once(limit=10))
+        self.assertIn("• <b>발송시각</b>: <code>2026-07-05 09:06 KST</code>", sent[0])
+        self.assertLess(sent[0].index("<b>데이터</b>"), sent[0].index("<b>발송시각</b>"))
+        self.assertLess(sent[0].index("<b>발송시각</b>"), sent[0].index("<b>발송 기준</b>"))
+        self.assertEqual("2026-07-05 09:06 KST", queue.jobs()[0].context["sentTime"])
+
     def test_default_notification_template_is_readable_and_skips_empty_fields(self):
         db_path = Path(self.temp.name) / "service.db"
         templates = SQLiteNotificationTemplateStore(db_path)

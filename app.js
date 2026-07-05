@@ -5847,6 +5847,32 @@
     return account ? String(account.label || account.id || "계정") : "기본 관심목록";
   }
 
+  function watchSymbolDisplay(symbol, item) {
+    var original = String(symbol || (item && item.symbol) || "").trim().toUpperCase();
+    var merged = Object.assign(clientKnownStockInfo(original), item || {}, { symbol: original });
+    var name = String(merged.name || "").trim();
+    if (!name || name.toUpperCase() === original) {
+      name = original || "관심 종목";
+    }
+    return {
+      symbol: original,
+      name: name,
+      label: original && name.toUpperCase() !== original ? name + " · " + original : name
+    };
+  }
+
+  function watchSymbolListText(symbols) {
+    var labels = (symbols || []).map(function (symbol) {
+      return watchSymbolDisplay(symbol).label;
+    }).filter(Boolean);
+    return labels.length ? labels.join(", ") : "-";
+  }
+
+  function renderWatchSymbolChip(symbol, item) {
+    var display = watchSymbolDisplay(symbol, item);
+    return '<span class="chip" title="' + escapeHtml(display.symbol || display.name) + '">' + escapeHtml(display.label) + '</span>';
+  }
+
   function allAccountWatchlistSymbols() {
     var seen = {};
     var symbols = [];
@@ -5960,7 +5986,7 @@
       options.compact ? renderAccountCredentialPills(account) : renderAccountCredentialSummary(account),
       '<div class="account-card-meta"><span class="chip">관심 ' + escapeHtml(symbols.length) + '개</span><span class="chip">' + escapeHtml(accountQuietHoursText(account)) + '</span></div>',
       options.compact ? '' : '<div class="chip-row">' + (symbols.length ? symbols.map(function (symbol) {
-        return '<span class="chip">' + escapeHtml(symbol) + '</span>';
+        return renderWatchSymbolChip(symbol);
       }).join("") : '<span class="subtle">계정에 저장된 관심 종목이 없습니다.</span>') + '</div>',
       '</div>'
     ].join("");
@@ -6114,7 +6140,7 @@
       '</div>',
       '<div class="chip-row">',
       symbols.length ? symbols.map(function (symbol) {
-        return '<span class="chip">' + escapeHtml(symbol) + '</span>';
+        return renderWatchSymbolChip(symbol);
       }).join("") : '<span class="subtle">저장된 관심 종목 없음</span>',
       '</div>',
       options.selectable ? '<span class="watch-account-action">' + escapeHtml(active ? "선택됨" : "관리") + '</span>' : '',
@@ -6193,7 +6219,7 @@
         '</form>'
       ].join("");
     }
-    var merged = Object.assign({}, item || {}, { symbol: original });
+    var merged = Object.assign(clientKnownStockInfo(original), item || {}, { symbol: original });
     return [
       '<div class="account-watch-symbol-row">',
       '<div class="account-watch-symbol-main">',
@@ -6362,7 +6388,7 @@
   }
 
   function renderServiceAccountRow(account) {
-    var watchlist = Array.isArray(account.watchlistSymbols) ? account.watchlistSymbols.join(", ") : String(account.watchlistSymbols || "");
+    var watchlist = watchSymbolListText(accountWatchlistSymbols(account));
     return [
       '<div class="service-account-row">',
       '<div class="service-account-main">',
@@ -9404,6 +9430,7 @@
   }
 
   function renderWatchRow(item) {
+    item = Object.assign(clientKnownStockInfo(item && item.symbol), item || {});
     var editable = arguments.length > 1 && arguments[1];
     var source = item.source === "holding" ? "보유" : "관심";
     return [

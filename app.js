@@ -8614,6 +8614,7 @@
     var items = universe.items || [];
     var markets = summary.markets || [];
     var sources = summary.sources || [];
+    var marketData = summary.marketData || {};
     var limit = Number(universe.limit || state.symbolUniverseLimit || 80);
     var offset = Number(universe.offset || state.symbolUniverseOffset || 0);
     var resultTotal = Number(universe.resultTotal || 0);
@@ -8633,7 +8634,7 @@
       '<span class="metric">' + escapeHtml(summary.total || items.length || 0) + '</span>',
       '</div>',
       '<div class="symbol-summary-grid">',
-      markets.length ? markets.map(renderSymbolMarketSummary).join("") : '<p class="subtle">아직 저장된 전체 종목 목록이 없습니다.</p>',
+      (markets.length ? markets.map(renderSymbolMarketSummary).join("") : '<p class="subtle">아직 저장된 전체 종목 목록이 없습니다.</p>') + renderSymbolMarketDataSummary(marketData),
       '</div>',
       full && sources.length ? '<div class="symbol-source-grid">' + sources.map(renderSymbolSourceSummary).join("") + '</div>' : '',
       '<form class="symbol-filter-form ' + (full ? "full" : "compact") + '" data-symbol-search-form>',
@@ -8674,6 +8675,17 @@
       '<span>' + escapeHtml(marketLabel(market.market)) + '</span>',
       '<strong>' + escapeHtml(market.count || 0) + '</strong>',
       '<em>' + escapeHtml(freshnessLabel(market)) + '</em>',
+      '</div>'
+    ].join("");
+  }
+
+  function renderSymbolMarketDataSummary(summary) {
+    if (!summary || !summary.count) return "";
+    return [
+      '<div class="symbol-summary-metric">',
+      '<span>수집 시세</span>',
+      '<strong>' + escapeHtml(summary.count || 0) + '</strong>',
+      '<em>' + escapeHtml(summary.latestUpdatedAt ? formatClock(summary.latestUpdatedAt) : "수집 대기") + '</em>',
       '</div>'
     ].join("");
   }
@@ -8748,6 +8760,13 @@
     var account = activeWatchAccount();
     var already = preferredWatchlistSymbols().indexOf(symbol) >= 0;
     var targetText = account ? watchlistAccountLabel(account) : "기본 관심목록";
+    var hasPrice = Boolean(item.currentPrice);
+    var priceText = hasPrice ? formatCurrency(item.currentPrice, item.currency) : "시세 수집 대기";
+    var quality = String(item.dataQuality || "").toLowerCase();
+    var qualityLabel = quality === "actual" ? "실제 데이터" : (quality === "cached" ? "저장 데이터" : "");
+    var dataLine = hasPrice
+      ? [qualityLabel, item.quoteSource || "", item.marketDataUpdatedAt ? formatClock(item.marketDataUpdatedAt) : ""].filter(Boolean).join(" · ")
+      : (item.quoteStatus || "추천용 시세 수집 순서를 기다리는 중");
     return [
       '<div class="symbol-result-row">',
       '<div class="symbol-result-main">',
@@ -8762,10 +8781,11 @@
       '<span>' + escapeHtml(item.stale ? "갱신 필요" : "신선") + '</span>',
       '</div>',
       '<p>' + escapeHtml(item.source || "-") + ' · ' + escapeHtml(item.lastSeenAt ? formatClock(item.lastSeenAt) : "초기 데이터") + '</p>',
+      '<p>' + escapeHtml(dataLine) + '</p>',
       '</div>',
       '<div class="symbol-result-side">',
-      '<strong>' + escapeHtml(item.sector || "섹터 미분류") + '</strong>',
-      '<span>' + escapeHtml(targetText) + '</span>',
+      '<strong>' + escapeHtml(priceText) + '</strong>',
+      '<span>' + escapeHtml((item.sector || "섹터 미분류") + " · " + targetText) + '</span>',
       '<button class="mini-button subtle" data-symbol-add-watch="' + escapeHtml(symbol) + '"' + (already ? " disabled" : "") + '>' + (already ? "등록됨" : "추가") + '</button>',
       '</div>',
       '</div>'

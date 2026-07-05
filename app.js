@@ -6496,12 +6496,12 @@
       '<div class="panel-head">',
       '<div>',
       '<p class="label">Messages</p>',
-      '<h2>' + escapeHtml(editorOpen ? "알림 상세 편집" : "메시지 타입별 알림") + '</h2>',
-      '<p class="subtle">' + escapeHtml(editorOpen ? "선택한 메시지 타입의 템플릿, 발송 기준, 반복 억제 조건을 한 화면에서 수정합니다." : "메시지 타입을 그룹별로 확인하고 상세 편집은 전용 화면에서 엽니다.") + '</p>',
+      '<h2>메시지 타입별 알림</h2>',
+      '<p class="subtle">메시지 타입을 그룹별로 확인하고 상세 편집은 레이어로 띄워 수정합니다.</p>',
       '</div>',
       '<div class="settings-actions">',
-      editorOpen ? '<button class="text-button compact" data-action="back-message-types">목록으로</button>' : '<button class="text-button compact" data-action="expand-message-types">그룹 펼치기</button>',
-      editorOpen ? '' : '<button class="text-button compact" data-action="collapse-message-types">전체 접기</button>',
+      '<button class="text-button compact" data-action="expand-message-types">그룹 펼치기</button>',
+      '<button class="text-button compact" data-action="collapse-message-types">전체 접기</button>',
       '<button class="' + settingsSaveButtonClass() + '" data-action="save-settings"' + settingsSaveDisabledAttr() + '>' + settingsSaveButtonLabel() + '</button>',
       '</div>',
       '</div>',
@@ -6509,8 +6509,9 @@
       state.messageSchedulesError ? '<p class="form-error">' + escapeHtml(state.messageSchedulesError) + '</p>' : '',
       state.notificationRulesError ? '<p class="form-error">' + escapeHtml(state.notificationRulesError) + '</p>' : '',
       state.notificationRulesSaved ? '<p class="lab-message">알림 룰을 저장했습니다.</p>' : '',
-      editorOpen ? renderNotificationPolicyEditorScreen() : renderNotificationPolicyListScreen(groups, rules, cadences),
+      renderNotificationPolicyListScreen(groups, rules, cadences),
       '</div>',
+      editorOpen ? renderNotificationPolicyEditorLayer() : '',
       '</article>'
     ].join("");
   }
@@ -6518,7 +6519,7 @@
   function renderNotificationPolicyListScreen(groups, rules, cadences) {
     return [
       '<div class="notification-policy-list-screen">',
-      '<div class="flow-title"><div><strong>메시지 타입</strong><span>상세 편집을 누르면 목록을 벗어나 전용 편집 화면으로 이동합니다.</span></div></div>',
+      '<div class="flow-title"><div><strong>메시지 타입</strong><span>상세 편집을 누르면 목록 위로 편집 레이어가 열립니다.</span></div></div>',
       '<div class="admin-message-group-list">',
       groups.map(function (group) {
         return renderAdminMessageGroup(group, rules, cadences);
@@ -6640,11 +6641,20 @@
     ].join("");
   }
 
-  function renderNotificationPolicyEditorScreen() {
+  function renderNotificationPolicyEditorLayer() {
     return [
-      '<div class="notification-policy-editor-screen">',
+      '<div class="notification-policy-modal-backdrop" data-notification-editor-close></div>',
+      '<section class="notification-policy-editor-layer" role="dialog" aria-modal="true" aria-label="알림 상세 편집">',
+      '<div class="notification-policy-modal-head">',
+      '<div>',
+      '<p class="label">Edit Policy</p>',
+      '<h2>알림 상세 편집</h2>',
+      '<span>템플릿, 발송 기준, 반복 억제 조건을 수정합니다.</span>',
+      '</div>',
+      '<button class="icon-button" type="button" data-notification-editor-close aria-label="상세 편집 닫기">&times;</button>',
+      '</div>',
       renderNotificationPolicyDetailPanel(),
-      '</div>'
+      '</section>'
     ].join("");
   }
 
@@ -10054,13 +10064,12 @@
       });
     });
 
-    var backMessageTypes = app.querySelector('[data-action="back-message-types"]');
-    if (backMessageTypes) {
-      backMessageTypes.addEventListener("click", function () {
+    Array.prototype.slice.call(app.querySelectorAll("[data-notification-editor-close]")).forEach(function (button) {
+      button.addEventListener("click", function () {
         state.notificationPolicyEditorOpen = false;
         render();
       });
-    }
+    });
 
     Array.prototype.slice.call(app.querySelectorAll("[data-template-select]")).forEach(function (button) {
       button.addEventListener("click", function () {

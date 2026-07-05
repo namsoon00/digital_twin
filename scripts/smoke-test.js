@@ -177,10 +177,11 @@ function checkFrontendAdminRender() {
   const designSystemDoc = fs.readFileSync(path.join(rootDir, "docs", "design-system.md"), "utf8");
   assertOk(styles.indexOf("--ds-color-bg") >= 0, "전역 디자인 시스템 색상 토큰이 없습니다.");
   assertOk(styles.indexOf("--ds-color-on-action") >= 0, "주요 액션 텍스트 토큰이 없습니다.");
-  assertOk(styles.indexOf("--ds-color-bg: #f5f7fa") >= 0, "Soft Graphite 배경 토큰이 적용되지 않았습니다.");
-  assertOk(styles.indexOf("--ds-color-ink: #111827") >= 0, "Soft Graphite 차콜 텍스트 토큰이 적용되지 않았습니다.");
-  assertOk(styles.indexOf("--ds-color-line: #dde3ea") >= 0, "Soft Graphite 라인 토큰이 적용되지 않았습니다.");
-  assertOk(styles.indexOf("--surface: var(--ds-color-panel-soft)") >= 0, "Soft Graphite 보조 표면 alias가 없습니다.");
+  assertOk(styles.indexOf("--ds-color-bg: #f2f6fb") >= 0, "Orbit Light 배경 토큰이 적용되지 않았습니다.");
+  assertOk(styles.indexOf("--ds-color-action: #246bfe") >= 0, "Orbit Alpha 액션 블루 토큰이 적용되지 않았습니다.");
+  assertOk(styles.indexOf("--ds-color-orbit-line: #4f8cff") >= 0, "Orbit Alpha 궤도 라인 토큰이 적용되지 않았습니다.");
+  assertOk(styles.indexOf("--ds-color-orbit-signal: #00b386") >= 0, "Orbit Alpha 시그널 그린 토큰이 적용되지 않았습니다.");
+  assertOk(styles.indexOf("--surface: var(--ds-color-panel-soft)") >= 0, "Orbit Light 보조 표면 alias가 없습니다.");
   assertOk(styles.indexOf("--ds-control-height-md") >= 0, "전역 컨트롤 높이 토큰이 없습니다.");
   assertOk(styles.indexOf("font-variant-numeric: tabular-nums") >= 0, "금융 숫자 표시 규칙이 없습니다.");
   assertOk(styles.indexOf(".app-shell") >= 0 && styles.indexOf("100dvh") >= 0, "앱형 100dvh 셸 규칙이 없습니다.");
@@ -198,7 +199,7 @@ function checkFrontendAdminRender() {
   assertOk(indexHtml.indexOf("<title>Orbit Alpha</title>") >= 0 && indexHtml.indexOf("favicon.svg") >= 0, "Orbit Alpha 문서 제목 또는 파비콘 링크가 없습니다.");
   assertOk(styles.indexOf(".app-brand-mark") >= 0 && styles.indexOf("--ds-color-orbit-line") >= 0, "Orbit Alpha 궤도형 브랜드 마크 규칙이 없습니다.");
   assertOk(fs.existsSync(path.join(rootDir, "public", "favicon.svg")), "Orbit Alpha SVG 파비콘이 없습니다.");
-  assertOk(designSystemDoc.indexOf("Soft Graphite") >= 0 && designSystemDoc.indexOf("#F5F7FA") >= 0, "디자인 시스템 문서에 Soft Graphite 팔레트가 없습니다.");
+  assertOk(designSystemDoc.indexOf("Orbit Light") >= 0 && designSystemDoc.indexOf("#F2F6FB") >= 0, "디자인 시스템 문서에 Orbit Light 팔레트가 없습니다.");
   assertOk(designSystemDoc.indexOf("Page Contracts") >= 0, "디자인 시스템 문서에 페이지별 UI 계약이 없습니다.");
   assertOk(designSystemDoc.indexOf("Button Placement") >= 0, "디자인 시스템 문서에 버튼 위치 정책이 없습니다.");
   assertOk(designSystemDoc.indexOf("aria-current") >= 0, "디자인 시스템 문서에 내비게이션 접근성 기준이 없습니다.");
@@ -1288,6 +1289,7 @@ async function checkNormalMode(port, context) {
   const adminPreview = await request(port, "/admin/");
   assertOk(adminPreview.statusCode === 200, "Python admin preview 응답 코드가 200이 아닙니다: " + adminPreview.statusCode);
   assertOk(adminPreview.body.indexOf("Orbit Alpha Python Admin") >= 0, "Python admin preview 제목이 없습니다.");
+  assertOk(adminPreview.body.indexOf("--ds-color-bg: #f2f6fb") >= 0 && adminPreview.body.indexOf("--ds-color-action: #246bfe") >= 0, "Python admin preview에 Orbit Alpha 팔레트가 적용되지 않았습니다.");
 
   const adminConfig = await request(port, "/admin/config.json");
   assertOk(adminConfig.statusCode === 200, "Python admin config 응답 코드가 200이 아닙니다: " + adminConfig.statusCode);

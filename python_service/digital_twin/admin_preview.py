@@ -472,18 +472,20 @@ def render_admin_html(payload: Dict[str, object]) -> str:
     <style>
       :root {{
         color-scheme: light;
-        --ds-color-bg: #f7f8fa;
+        --ds-color-bg: #f2f6fb;
         --ds-color-panel: #ffffff;
-        --ds-color-panel-soft: #f9fafb;
-        --ds-color-ink: #191f28;
-        --ds-color-muted: #6b7684;
-        --ds-color-line: #e5e8eb;
-        --ds-color-positive: #00a661;
-        --ds-color-positive-soft: #e9f8f1;
-        --ds-color-action: #3182f6;
-        --ds-color-action-soft: #e8f3ff;
-        --ds-color-warning: #f08c00;
-        --ds-color-warning-soft: #fff4e5;
+        --ds-color-panel-soft: #f6f9fd;
+        --ds-color-ink: #121829;
+        --ds-color-muted: #64748b;
+        --ds-color-line: #d8e3f2;
+        --ds-color-positive: #00b386;
+        --ds-color-positive-soft: #e2f8f1;
+        --ds-color-action: #246bfe;
+        --ds-color-action-soft: #e6efff;
+        --ds-color-warning: #d97706;
+        --ds-color-warning-soft: #fff3dc;
+        --ds-color-orbit-line: #4f8cff;
+        --ds-color-orbit-glow: rgba(79, 140, 255, 0.16);
         --ds-radius-control: 8px;
         --ds-radius-panel: 8px;
         --ds-shadow-panel: 0 8px 28px rgba(25, 31, 40, 0.06);
@@ -502,14 +504,17 @@ def render_admin_html(payload: Dict[str, object]) -> str:
         margin: 0;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
         color: var(--text);
-        background: var(--bg);
+        background:
+          radial-gradient(circle at 88% -12%, var(--ds-color-orbit-glow), transparent 34%),
+          linear-gradient(135deg, rgba(36, 107, 254, 0.08) 0 1px, transparent 1px 44px),
+          var(--bg);
         line-height: 1.5;
         letter-spacing: 0;
       }}
       header {{
         padding: 20px clamp(16px, 4vw, 48px) 18px;
-        background: var(--surface);
-        border-bottom: 1px solid var(--line);
+        background: linear-gradient(135deg, color-mix(in srgb, var(--surface) 94%, var(--ds-color-orbit-line) 6%), var(--surface));
+        border-bottom: 1px solid color-mix(in srgb, var(--line) 76%, var(--ds-color-orbit-line) 24%);
       }}
       .topline {{
         display: flex;

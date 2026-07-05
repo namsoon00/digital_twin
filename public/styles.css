@@ -1627,6 +1627,7 @@ h3 {
 .admin-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: start;
   gap: 14px;
 }
 
@@ -1684,6 +1685,12 @@ h3 {
 .admin-modeling-panel,
 .admin-grid .alert-delivery-panel {
   grid-column: 1 / -1;
+}
+
+.model-beginner-panel,
+.strategy-data-panel {
+  grid-column: 1 / -1;
+  align-self: start;
 }
 
 .symbol-universe-view {
@@ -4121,24 +4128,26 @@ h3 {
 
 .model-section {
   display: grid;
-  gap: 10px;
+  gap: 12px;
 }
 
 .model-guide-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
-  gap: 10px;
-  padding: 0 16px 16px;
+  gap: 12px;
+  padding: 0 16px 18px;
 }
 
 .model-guide-step,
 .model-setting-card {
   display: grid;
-  gap: 8px;
+  gap: 10px;
   min-width: 0;
-  padding: 2px 12px 2px 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
   border-left: 3px solid var(--blue);
-  background: transparent;
+  border-radius: 8px;
+  background: var(--panel-soft);
 }
 
 .model-guide-step em,
@@ -4161,22 +4170,23 @@ h3 {
   margin: 0;
   color: var(--ink);
   font-size: 13px;
-  line-height: 1.45;
+  line-height: 1.5;
 }
 
 .model-step-list {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 10px;
-  padding: 0 16px 16px;
+  gap: 12px;
+  padding: 0 16px 18px;
 }
 
 .model-step-list div {
   display: grid;
   grid-template-columns: 28px minmax(0, 1fr);
-  gap: 9px;
+  align-items: start;
+  gap: 10px;
   min-width: 0;
-  padding: 10px;
+  padding: 12px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--input);
@@ -4214,8 +4224,9 @@ h3 {
 
 .strategy-data-grid {
   display: grid;
-  gap: 10px;
-  padding: 0 16px 16px;
+  align-content: start;
+  gap: 12px;
+  padding: 0 16px 18px;
 }
 
 .strategy-data-row {
@@ -4224,7 +4235,7 @@ h3 {
   gap: 12px;
   align-items: center;
   min-width: 0;
-  padding: 12px;
+  padding: 14px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--input);
@@ -4232,13 +4243,14 @@ h3 {
 
 .strategy-data-main {
   display: grid;
-  gap: 4px;
+  gap: 5px;
   min-width: 0;
 }
 
 .strategy-data-main strong {
   color: var(--ink);
-  font-size: 14px;
+  font-size: 15px;
+  line-height: 1.35;
 }
 
 .strategy-data-main span,
@@ -4255,14 +4267,14 @@ h3 {
 .strategy-data-status {
   display: grid;
   justify-items: end;
-  gap: 6px;
+  gap: 8px;
   min-width: 0;
 }
 
 .model-setting-card-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 8px;
+  gap: 10px;
 }
 
 .model-setting-card {
@@ -4311,7 +4323,7 @@ h3 {
 .model-number-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 8px;
+  gap: 10px;
 }
 
 .model-version-list {
@@ -4352,48 +4364,81 @@ h3 {
   background: var(--input);
 }
 
+.model-preview-row .signal-main {
+  gap: 12px;
+}
+
 .model-feature-audit {
   display: grid;
-  gap: 8px;
-  padding: 10px;
+  gap: 12px;
+  padding: 12px;
   border: 1px solid var(--line);
+  border-left: 3px solid var(--blue);
   border-radius: 8px;
   background: var(--panel-soft);
 }
 
+.model-plain-explain {
+  border-left-color: var(--green);
+}
+
 .feature-audit-head {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 8px;
+  gap: 10px;
+  min-width: 0;
 }
 
 .feature-audit-head strong {
   color: var(--ink);
   font-size: 13px;
+  line-height: 1.35;
+}
+
+.feature-audit-head .tone-chip {
+  flex: 0 0 auto;
 }
 
 .feature-audit-grid,
 .feature-delta-grid,
 .feature-contribution-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: 6px;
+  grid-template-columns: repeat(auto-fit, minmax(156px, 1fr));
+  gap: 8px;
 }
 
 .feature-audit-grid span,
 .feature-delta-grid span,
 .feature-contribution-grid span {
   display: grid;
-  gap: 3px;
+  gap: 4px;
   min-width: 0;
-  padding: 8px;
+  padding: 10px;
   border-radius: 8px;
   background: var(--input);
   color: var(--muted);
   font-size: 12px;
   font-weight: 800;
   line-height: 1.35;
+}
+
+.model-beginner-panel .settings-body {
+  gap: 14px;
+}
+
+.model-beginner-panel .variable-grid,
+.model-feature-audit .variable-grid {
+  gap: 10px;
+  padding: 0;
+}
+
+.model-beginner-panel .variable-grid {
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+.model-feature-audit .variable-grid {
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
 }
 
 .feature-audit-grid strong,
@@ -5957,6 +6002,18 @@ h3 {
 
   .strategy-data-status {
     justify-items: start;
+    text-align: left;
+  }
+
+  .feature-audit-head {
+    display: grid;
+    justify-items: start;
+  }
+
+  .model-guide-grid,
+  .model-step-list,
+  .strategy-data-grid {
+    padding-bottom: 16px;
   }
 
   .service-account-meta {

@@ -480,7 +480,17 @@ function checkFrontendAdminRender() {
         ]
       },
       tossDecision: { items: [], rules: [], holdingCount: 0, watchCount: 1, overallPressure: 0 },
-      portfolio: { total: 0, invested: 0, cash: 0, markets: [], sectors: [] },
+      portfolio: {
+        total: 1394000,
+        invested: 144000,
+        cash: 1250000,
+        markets: [{ key: "KR", label: "한국장", invested: 144000, cash: 1250000, total: 1394000, cashRatio: 90 }],
+        sectors: [
+          { sector: "현금", value: 1250000, ratio: 90 },
+          { sector: "반도체", value: 144000, ratio: 10 }
+        ],
+        concentration: 10
+      },
       checklist: [],
       summary: []
     },
@@ -829,6 +839,9 @@ function checkFrontendAdminRender() {
     assertOk(code.indexOf("renderMonitoringDetailOverlay") >= 0 && code.indexOf("monitoring-detail-drawer") >= 0, "모니터링 상세 드로어 렌더링 경로가 없습니다.");
     assertOk(code.indexOf("Instrument Detail") >= 0 && code.indexOf("Alert Detail") >= 0, "종목/알림 상세 콘텐츠가 분리되어 있지 않습니다.");
     assertOk(styles.indexOf(".monitoring-detail-backdrop") >= 0 && styles.indexOf(".monitoring-detail-drawer") >= 0, "모니터링 상세 드로어 스타일이 없습니다.");
+    assertOk(monitoringHtml.indexOf("노출 계산 기준") >= 0, "계좌 노출 패널에 계산 기준이 표시되지 않습니다.");
+    assertOk(monitoringHtml.indexOf("총 평가 산식") >= 0 && monitoringHtml.indexOf("보유 원장 합계") >= 0, "계좌 노출 검산 행이 렌더링되지 않았습니다.");
+    assertOk(monitoringHtml.indexOf("시장 합계 차이") >= 0 && monitoringHtml.indexOf("섹터 합계 차이") >= 0, "계좌 노출 시장/섹터 합계 차이가 표시되지 않습니다.");
     assertOk(monitoringHtml.indexOf("watchlist-panel") < 0, "모니터링 탭에 관심 종목 관리 패널이 따로 남아 있습니다.");
     assertOk(settingsHtml.indexOf("settings-overview-panel") >= 0, "설정 탭 요약 패널이 렌더링되지 않았습니다.");
     assertOk(settingsHtml.indexOf("settings-environment-panel") >= 0, "설정 탭 앱 환경 패널이 렌더링되지 않았습니다.");

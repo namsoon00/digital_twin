@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.admin_preview import admin_preview_config, write_admin_preview
 from digital_twin.application.account_service import AccountApplicationService
+from digital_twin.application.flow_lens_service import FlowLensService
 from digital_twin.application.market_data_collection_service import MARKET_DATA_ACCOUNT_ID, MarketDataCollectionRunner
 from digital_twin.application.model_review_service import ModelReviewRunner
 from digital_twin.application.monitoring_service import MonitorRunner as ApplicationMonitorRunner
@@ -35,7 +36,7 @@ from digital_twin.domain.notification_templates import alert_context
 from digital_twin.domain.notification_rules import apply_market_hours_rule, default_notification_rule, evaluate_notification_rule
 from digital_twin.domain.notifications import NotificationJob
 from digital_twin.domain.parsing import parse_assignments
-from digital_twin.domain.portfolio import AccountSnapshot, AlertEvent, utc_now_iso
+from digital_twin.domain.portfolio import AccountSnapshot, AlertEvent, Position, utc_now_iso
 from digital_twin.infrastructure.event_bus import EventBus, JsonEventLog
 from digital_twin.infrastructure.external_signals import ExternalSignalProvider
 from digital_twin.infrastructure.json_monitor_state import MonitorStore
@@ -495,6 +496,58 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(2400000, portfolio.total)
         self.assertEqual(1000000, next(item for item in portfolio.markets if item["key"] == "KR")["invested"])
         self.assertEqual(1400000, next(item for item in portfolio.markets if item["key"] == "US")["invested"])
+
+    def test_portfolio_summary_uses_detected_sector_for_empty_sector(self):
+        position = Position(symbol="005930", name="삼성전자", market="KR", currency="KRW", market_value=1000000, sector="")
+
+        portfolio = portfolio_summary([position])
+
+        self.assertEqual("반도체", portfolio.sectors[0]["sector"])
+        self.assertEqual(1000000, portfolio.sectors[0]["value"])
+
+    def test_flow_lens_preserves_provider_portfolio_market_breakdown(self):
+        account = AccountConfig("main", "메인", "toss", "https://example.test", "id", "secret", "1", [])
+        kr_position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "marketValue": 1000000,
+        })
+        portfolio = portfolio_summary([kr_position], 10, "USD", fx_rates={"KRW": 1, "USD": 1400})
+
+        class Repo:
+            def load(self):
+                return [account]
+
+        def snapshot_builder(_account):
+            return AccountSnapshot(
+                "main",
+                "메인",
+                "toss",
+                "live",
+                "토스 계좌 동기화",
+                utc_now_iso(),
+                portfolio,
+                [kr_position],
+                decisions_for_positions([kr_position], portfolio),
+            )
+
+        service = FlowLensService(
+            Repo(),
+            snapshot_builder,
+            settings_provider=lambda: {"fxRates": "KRW=1\nUSD=1400"},
+            fx_rates_provider=lambda _settings: {"KRW": 1, "USD": 1400},
+        )
+
+        payload = service.snapshot()
+        us_market = next(item for item in payload["portfolio"]["markets"] if item["key"] == "US")
+        kr_market = next(item for item in payload["portfolio"]["markets"] if item["key"] == "KR")
+
+        self.assertEqual(14000, us_market["cash"])
+        self.assertEqual(0, us_market["invested"])
+        self.assertEqual(1000000, kr_market["invested"])
+        self.assertEqual(portfolio.total, payload["portfolio"]["total"])
 
     def test_normalize_position_preserves_flow_metrics(self):
         position = normalize_position({

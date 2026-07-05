@@ -72,7 +72,8 @@ def portfolio_summary(
         value = max(0.0, value_in_base(item.market_value, item.currency, rates))
         invested += value
         exposure(market_key(item))["invested"] = float(exposure(market_key(item))["invested"]) + value
-        sector_map[item.sector or sector_from_symbol(item.symbol)] = sector_map.get(item.sector or "기타", 0.0) + value
+        sector = item.sector or sector_from_symbol(item.symbol)
+        sector_map[sector] = sector_map.get(sector, 0.0) + value
 
     total = invested + cash
     sectors = sorted(

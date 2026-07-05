@@ -1,3 +1,4 @@
+from dataclasses import asdict
 from typing import Callable, Dict, List
 
 from ..domain.accounts import AccountConfig, split_symbols
@@ -61,6 +62,12 @@ def position_payload(position: Position) -> Dict[str, object]:
     }
 
 
+def portfolio_payload(portfolio) -> Dict[str, object]:
+    if isinstance(portfolio, dict):
+        return dict(portfolio)
+    return asdict(portfolio)
+
+
 def summary_payload(summary) -> Dict[str, object]:
     return {
         "total": summary.total,
@@ -112,6 +119,7 @@ def toss_portfolio_for_account(
             "orderableAmount": snapshot.portfolio.cash,
             "currency": "KRW",
         },
+        "portfolio": portfolio_payload(snapshot.portfolio),
         "positions": [position_payload(item) for item in snapshot.positions],
         "watchlistQuotes": [position_payload(item) for item in snapshot.watchlist],
     }
@@ -427,7 +435,7 @@ def build_toss_lens_snapshot(
     enrich_symbol: Callable[[str], Dict[str, object]] = None,
 ) -> Dict[str, object]:
     positions = list(toss.get("positions") or [])
-    portfolio = build_toss_portfolio(positions, dict(toss.get("account") or {}), fx_rates)
+    portfolio = dict(toss.get("portfolio") or {}) or build_toss_portfolio(positions, dict(toss.get("account") or {}), fx_rates)
     watchlist = merge_watchlist_quotes(
         build_toss_watchlist(positions, watchlist_symbols, fallback_watchlist_symbols, enrich_symbol),
         list(toss.get("watchlistQuotes") or []),

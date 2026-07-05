@@ -1,32 +1,33 @@
 :root {
   color-scheme: light;
-  --ds-color-bg: #f5f7fa;
-  --ds-color-ink: #111827;
-  --ds-color-muted: #6b7280;
-  --ds-color-line: #dde3ea;
+  --ds-color-bg: #f2f6fb;
+  --ds-color-ink: #121829;
+  --ds-color-muted: #64748b;
+  --ds-color-line: #d8e3f2;
   --ds-color-panel: #ffffff;
-  --ds-color-panel-soft: #f8fafc;
-  --ds-color-chip: #eef2f6;
-  --ds-color-chip-strong: #dde3ea;
-  --ds-color-input: #ffffff;
+  --ds-color-panel-soft: #f6f9fd;
+  --ds-color-chip: #eaf1fa;
+  --ds-color-chip-strong: #d5e1f1;
+  --ds-color-input: #fbfdff;
   --ds-color-on-action: #ffffff;
-  --ds-color-positive: #00a86b;
-  --ds-color-positive-soft: #e8f7f0;
-  --ds-color-action: #3182f6;
-  --ds-color-action-soft: #eaf3ff;
-  --ds-color-warning: #f08c00;
-  --ds-color-warning-soft: #fff4e5;
-  --ds-color-danger: #e5484d;
-  --ds-color-danger-soft: #fff0f2;
-  --ds-color-accent: #5b6472;
-  --ds-color-accent-soft: #eef2f6;
-  --ds-color-orbit-core: #172033;
-  --ds-color-orbit-line: #6aa7ff;
-  --ds-color-orbit-signal: #00a86b;
-  --ds-color-star-line: rgba(49, 130, 246, 0.08);
-  --ds-shadow-panel: 0 1px 2px rgba(17, 24, 39, 0.04), 0 10px 24px rgba(17, 24, 39, 0.045);
-  --ds-shadow-floating: 0 10px 30px rgba(17, 24, 39, 0.12);
-  --ds-focus: #3182f6;
+  --ds-color-positive: #00b386;
+  --ds-color-positive-soft: #e2f8f1;
+  --ds-color-action: #246bfe;
+  --ds-color-action-soft: #e6efff;
+  --ds-color-warning: #d97706;
+  --ds-color-warning-soft: #fff3dc;
+  --ds-color-danger: #dc3f52;
+  --ds-color-danger-soft: #ffedf1;
+  --ds-color-accent: #6657d8;
+  --ds-color-accent-soft: #eeeafd;
+  --ds-color-orbit-core: #101827;
+  --ds-color-orbit-line: #4f8cff;
+  --ds-color-orbit-signal: #00b386;
+  --ds-color-star-line: rgba(36, 107, 254, 0.1);
+  --ds-color-orbit-glow: rgba(79, 140, 255, 0.16);
+  --ds-shadow-panel: 0 1px 2px rgba(16, 24, 39, 0.04), 0 10px 24px rgba(36, 107, 254, 0.045);
+  --ds-shadow-floating: 0 12px 34px rgba(16, 24, 39, 0.14);
+  --ds-focus: #246bfe;
   --ds-space-1: 4px;
   --ds-space-2: 6px;
   --ds-space-3: 8px;
@@ -71,33 +72,34 @@
 
 html[data-theme="dark"] {
   color-scheme: dark;
-  --ds-color-bg: #0f1720;
-  --ds-color-ink: #e5e7eb;
-  --ds-color-muted: #9aa4b2;
-  --ds-color-line: #273142;
-  --ds-color-panel: #151c26;
-  --ds-color-panel-soft: #1b2430;
-  --ds-color-chip: #222d3b;
-  --ds-color-chip-strong: #2b3748;
-  --ds-color-input: #101722;
+  --ds-color-bg: #0b1020;
+  --ds-color-ink: #edf4ff;
+  --ds-color-muted: #a3b2c8;
+  --ds-color-line: #263755;
+  --ds-color-panel: #111827;
+  --ds-color-panel-soft: #172033;
+  --ds-color-chip: #1f2c44;
+  --ds-color-chip-strong: #2b3d5c;
+  --ds-color-input: #0d1424;
   --ds-color-on-action: #ffffff;
-  --ds-color-positive: #22c55e;
-  --ds-color-positive-soft: #102b1d;
-  --ds-color-action: #4c8dff;
-  --ds-color-action-soft: #132844;
-  --ds-color-warning: #fbbf24;
-  --ds-color-warning-soft: #30230c;
-  --ds-color-danger: #f0525f;
-  --ds-color-danger-soft: #33151b;
-  --ds-color-accent: #94a3b8;
-  --ds-color-accent-soft: #202b38;
-  --ds-color-orbit-core: #0c1322;
-  --ds-color-orbit-line: #7bb0ff;
-  --ds-color-orbit-signal: #22c55e;
-  --ds-color-star-line: rgba(123, 176, 255, 0.11);
-  --ds-shadow-panel: 0 1px 2px rgba(0, 0, 0, 0.28), 0 10px 24px rgba(0, 0, 0, 0.22);
-  --ds-shadow-floating: 0 12px 34px rgba(0, 0, 0, 0.34);
-  --ds-focus: #4c8dff;
+  --ds-color-positive: #2dd4a3;
+  --ds-color-positive-soft: #0b2f28;
+  --ds-color-action: #6ea6ff;
+  --ds-color-action-soft: #132a4f;
+  --ds-color-warning: #f6b84b;
+  --ds-color-warning-soft: #35260c;
+  --ds-color-danger: #ff6b7a;
+  --ds-color-danger-soft: #381823;
+  --ds-color-accent: #a996ff;
+  --ds-color-accent-soft: #241f45;
+  --ds-color-orbit-core: #080d19;
+  --ds-color-orbit-line: #7db2ff;
+  --ds-color-orbit-signal: #2dd4a3;
+  --ds-color-star-line: rgba(125, 178, 255, 0.13);
+  --ds-color-orbit-glow: rgba(125, 178, 255, 0.22);
+  --ds-shadow-panel: 0 1px 2px rgba(0, 0, 0, 0.3), 0 10px 24px rgba(0, 0, 0, 0.22);
+  --ds-shadow-floating: 0 14px 38px rgba(0, 0, 0, 0.38);
+  --ds-focus: #7db2ff;
 }
 
 * {
@@ -118,7 +120,8 @@ body {
   margin: 0;
   background:
     linear-gradient(135deg, var(--ds-color-star-line) 0 1px, transparent 1px 42px),
-    linear-gradient(45deg, rgba(0, 168, 107, 0.035) 0 1px, transparent 1px 48px),
+    radial-gradient(circle at 86% -12%, var(--ds-color-orbit-glow), transparent 34%),
+    linear-gradient(45deg, color-mix(in srgb, var(--ds-color-orbit-signal) 8%, transparent) 0 1px, transparent 1px 48px),
     var(--bg);
   color: var(--ink);
   font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -292,9 +295,10 @@ h3 {
   min-width: 0;
   margin-bottom: 14px;
   padding: 8px;
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in srgb, var(--line) 76%, var(--ds-color-orbit-line) 24%);
   border-radius: var(--ds-radius-panel);
-  background: var(--panel);
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--panel) 94%, var(--ds-color-orbit-line) 6%), var(--panel));
   box-shadow: var(--shadow);
   transition: transform 180ms ease, opacity 180ms ease, background-color 120ms ease, box-shadow 120ms ease;
   will-change: transform;
@@ -317,7 +321,7 @@ h3 {
   border-radius: 8px;
   background:
     linear-gradient(135deg, color-mix(in srgb, var(--ds-color-orbit-core) 92%, var(--blue) 8%), var(--ds-color-orbit-core));
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06), 0 8px 18px rgba(17, 24, 39, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08), 0 8px 18px var(--ds-color-orbit-glow);
   overflow: hidden;
 }
 
@@ -649,7 +653,7 @@ h3 {
 }
 
 .mode-toggle button.active {
-  background: var(--blue);
+  background: linear-gradient(135deg, var(--blue), var(--ds-color-orbit-line));
   color: var(--ds-color-on-action);
 }
 
@@ -665,9 +669,10 @@ h3 {
   min-height: var(--bottom-tabs-height);
   margin: 0;
   padding: 6px;
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in srgb, var(--line) 72%, var(--ds-color-orbit-line) 28%);
   border-radius: var(--ds-radius-panel);
-  background: var(--panel);
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--panel) 95%, var(--ds-color-orbit-line) 5%), var(--panel));
   box-shadow: var(--shadow);
   transform: translateX(-50%);
 }
@@ -690,8 +695,9 @@ h3 {
 }
 
 .tab-bar button.active {
-  background: var(--blue-soft);
-  color: var(--blue);
+  background: linear-gradient(135deg, var(--blue), var(--ds-color-orbit-line));
+  color: var(--ds-color-on-action);
+  box-shadow: 0 6px 14px var(--ds-color-orbit-glow);
 }
 
 .tab-bar button:hover {
@@ -700,8 +706,8 @@ h3 {
 }
 
 .tab-bar button.active:hover {
-  background: var(--blue-soft);
-  color: var(--blue);
+  background: linear-gradient(135deg, var(--blue), var(--ds-color-orbit-line));
+  color: var(--ds-color-on-action);
 }
 
 .tab-label,
@@ -720,11 +726,11 @@ h3 {
 .open-link {
   width: var(--ds-control-height-md);
   height: var(--ds-control-height-md);
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in srgb, var(--line) 82%, var(--ds-color-orbit-line) 18%);
   border-radius: var(--ds-radius-control);
   display: grid;
   place-items: center;
-  background: var(--panel);
+  background: color-mix(in srgb, var(--panel) 94%, var(--ds-color-orbit-line) 6%);
   color: var(--ink);
   font-size: 18px;
   text-decoration: none;
@@ -741,7 +747,7 @@ h3 {
 }
 
 .text-button.primary:hover {
-  background: var(--blue);
+  background: linear-gradient(135deg, var(--blue), var(--ds-color-orbit-line));
   color: var(--ds-color-on-action);
 }
 
@@ -775,9 +781,10 @@ h3 {
 
 .panel {
   min-width: 0;
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in srgb, var(--line) 86%, var(--ds-color-orbit-line) 14%);
   border-radius: var(--ds-radius-panel);
-  background: var(--panel);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--panel) 96%, var(--ds-color-orbit-line) 4%), var(--panel) 74%);
   box-shadow: var(--shadow);
   overflow: hidden;
 }
@@ -5193,9 +5200,9 @@ h3 {
 
 .text-button {
   min-height: var(--ds-control-height-md);
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in srgb, var(--line) 84%, var(--ds-color-orbit-line) 16%);
   border-radius: var(--ds-radius-control);
-  background: var(--panel);
+  background: var(--input);
   color: var(--ink);
   padding: 0 13px;
   font-weight: 850;
@@ -5205,8 +5212,9 @@ h3 {
 
 .text-button.primary {
   border-color: var(--blue);
-  background: var(--blue);
+  background: linear-gradient(135deg, var(--blue), var(--ds-color-orbit-line));
   color: var(--ds-color-on-action);
+  box-shadow: 0 8px 18px var(--ds-color-orbit-glow);
 }
 
 .text-button.compact {

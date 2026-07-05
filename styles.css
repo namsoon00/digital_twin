@@ -2851,9 +2851,15 @@ h3 {
   align-items: start;
 }
 
+.notification-policy-list-screen,
+.notification-policy-editor-screen {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
 .notification-policy-detail {
-  position: sticky;
-  top: 12px;
+  position: static;
   display: grid;
   gap: 12px;
   min-width: 0;
@@ -2916,10 +2922,7 @@ h3 {
 .admin-message-group-list {
   display: grid;
   gap: 10px;
-  max-height: min(58vh, 620px);
-  overflow: auto;
-  overscroll-behavior: contain;
-  padding-right: 2px;
+  min-width: 0;
 }
 
 .admin-message-group {
@@ -6046,7 +6049,6 @@ h3 {
     justify-content: stretch;
   }
 
-  .admin-message-group-list,
   .notification-template-select-list {
     max-height: 360px;
   }

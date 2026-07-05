@@ -809,9 +809,9 @@ function checkFrontendAdminRender() {
     assertOk(notificationTemplateHtml.indexOf("notification-template-manager-panel") >= 0, "템플릿 섹션이 렌더링되지 않았습니다.");
     assertOk(notificationTemplateHtml.indexOf("notification-template-workbench") >= 0, "템플릿 섹션이 선택형 워크벤치로 렌더링되지 않았습니다.");
     assertOk(notificationTemplateHtml.indexOf("notification-template-select-row") >= 0 && notificationTemplateHtml.indexOf("data-template-select") >= 0, "템플릿 섹션에 선택 목록이 없습니다.");
-    assertOk(notificationTemplateHtml.indexOf("notification-template-detail") >= 0, "템플릿 섹션에 선택 상세 패널이 없습니다.");
-    assertOk(notificationTemplateHtml.indexOf("notification-template-row") >= 0, "템플릿 상세에 편집 행이 렌더링되지 않았습니다.");
-    assertOk(notificationTemplateHtml.indexOf("notification-template-preview") >= 0, "템플릿 상세에 미리보기가 렌더링되지 않았습니다.");
+    assertOk(notificationTemplateHtml.indexOf("notification-template-detail") < 0, "템플릿 섹션 목록 화면에 상세 편집 패널이 같이 렌더링됩니다.");
+    assertOk(code.indexOf("notificationTemplateEditorOpen") >= 0 && code.indexOf("data-notification-template-editor-close") >= 0, "템플릿 상세 편집 레이어 닫기 경로가 없습니다.");
+    assertOk(code.indexOf("notification-template-modal-backdrop") >= 0 && code.indexOf("renderNotificationTemplateRow(selected, { templateDetail: true })") >= 0, "템플릿 상세 편집 레이어 렌더링 경로가 없습니다.");
     assertOk(notificationTemplateHtml.indexOf("notification-rule-editor") < 0, "템플릿 섹션에 룰 편집기가 섞여 있습니다.");
     assertOk(notificationAdvancedHtml.indexOf("settings-api-grid") >= 0, "고급 섹션에 설정 API 상태 요약이 렌더링되지 않았습니다.");
     assertOk(notificationAdvancedHtml.indexOf("Client ID 설정됨") >= 0, "고급 섹션에 토스 Client ID 상태가 표시되지 않습니다.");

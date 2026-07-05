@@ -2944,7 +2944,8 @@ h3 {
   min-width: 0;
 }
 
-.notification-policy-modal-backdrop {
+.notification-policy-modal-backdrop,
+.notification-template-modal-backdrop {
   position: fixed;
   inset: 0;
   z-index: 80;
@@ -2952,7 +2953,8 @@ h3 {
   backdrop-filter: blur(3px);
 }
 
-.notification-policy-editor-layer {
+.notification-policy-editor-layer,
+.notification-template-editor-layer {
   position: fixed;
   top: max(16px, env(safe-area-inset-top));
   right: max(16px, env(safe-area-inset-right));
@@ -2972,7 +2974,8 @@ h3 {
   box-shadow: var(--ds-shadow-floating);
 }
 
-.notification-policy-modal-head {
+.notification-policy-modal-head,
+.notification-template-modal-head {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: start;
@@ -2981,12 +2984,14 @@ h3 {
   padding-bottom: 2px;
 }
 
-.notification-policy-modal-head h2 {
+.notification-policy-modal-head h2,
+.notification-template-modal-head h2 {
   margin: 0;
   font-size: 18px;
 }
 
-.notification-policy-modal-head span {
+.notification-policy-modal-head span,
+.notification-template-modal-head span {
   display: block;
   color: var(--muted);
   font-size: 12px;
@@ -3395,6 +3400,10 @@ h3 {
   grid-template-columns: minmax(260px, 0.8fr) minmax(0, 1.2fr);
   gap: 16px;
   align-items: start;
+}
+
+.notification-template-list-workbench {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .notification-template-index,
@@ -5848,7 +5857,8 @@ h3 {
     position: static;
   }
 
-  .notification-policy-editor-layer {
+  .notification-policy-editor-layer,
+  .notification-template-editor-layer {
     top: calc(8px + env(safe-area-inset-top));
     right: 8px;
     bottom: calc(8px + var(--bottom-tabs-height) + env(safe-area-inset-bottom));

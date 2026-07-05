@@ -1,11 +1,12 @@
 from typing import Dict, Iterable, List
 
 from ..domain.market_data import known_stock
-from ..domain.repositories import SymbolSourceGateway, SymbolUniverseRepository
+from ..domain.repositories import MarketQuoteRepository, SymbolSourceGateway, SymbolUniverseRepository
 from ..domain.symbol_universe import ListedSymbol, SUPPORTED_MARKETS, is_stale, stale_after_hours
 
 
 DEFAULT_SYMBOL_SEEDS = ["005930", "000660", "TSLA", "AAPL", "NVDA", "MSFT", "AMD", "MSTR"]
+MARKET_DATA_ACCOUNT_ID = "__market_data__"
 
 
 def seed_symbol(symbol: str) -> ListedSymbol:
@@ -34,10 +35,12 @@ class SymbolUniverseService:
         store: SymbolUniverseRepository,
         source_gateway: SymbolSourceGateway,
         settings: Dict[str, str] = None,
+        quote_cache: MarketQuoteRepository = None,
     ):
         self.store = store
         self.source_gateway = source_gateway
         self.settings = dict(settings or {})
+        self.quote_cache = quote_cache
 
     def max_age_hours(self) -> int:
         return stale_after_hours(self.settings.get("symbolUniverseMaxAgeHours"), 24)
@@ -65,12 +68,51 @@ class SymbolUniverseService:
                 "source": descriptor["source"],
                 "sourceUrl": descriptor["sourceUrl"],
             })
-        return {
+        payload = {
             "markets": markets,
             "sources": self.store.source_states(),
             "maxAgeHours": max_age,
             "total": sum(counts.values()),
         }
+        if self.quote_cache:
+            payload["marketData"] = self.quote_cache.summary("toss", MARKET_DATA_ACCOUNT_ID)
+        return payload
+
+    def attach_market_data(self, items: List[Dict[str, object]]) -> List[Dict[str, object]]:
+        if not self.quote_cache or not items:
+            return items
+        quotes = self.quote_cache.load_many("toss", MARKET_DATA_ACCOUNT_ID, [item.get("symbol") for item in items])
+        merged = []
+        for item in items:
+            symbol = str(item.get("symbol") or "").upper()
+            quote = quotes.get(symbol) or {}
+            next_item = dict(item)
+            if quote:
+                for key in [
+                    "currentPrice",
+                    "changeRate",
+                    "quoteSource",
+                    "quoteStatus",
+                    "quoteMessage",
+                    "dataQuality",
+                    "volume",
+                    "volumeRatio",
+                    "tradingValue",
+                    "ma5",
+                    "ma20",
+                    "ma60",
+                    "ma120",
+                    "ma200",
+                    "ma20Slope",
+                    "ma60Slope",
+                    "ma20Distance",
+                    "ma60Distance",
+                ]:
+                    if quote.get(key) not in (None, ""):
+                        next_item[key] = quote.get(key)
+                next_item["marketDataUpdatedAt"] = quote.get("updatedAt") or ""
+            merged.append(next_item)
+        return merged
 
     def search(self, query: str = "", market: str = "", limit: int = 80, offset: int = 0) -> Dict[str, object]:
         self.ensure_seed()
@@ -79,8 +121,9 @@ class SymbolUniverseService:
         offset_value = max(0, int(offset or 0))
         result_total = self.store.search_count(query=query, market=market)
         items = self.store.search(query=query, market=market, limit=limit_value, offset=offset_value)
+        payload_items = [item.to_dict(max_age) for item in items]
         return {
-            "items": [item.to_dict(max_age) for item in items],
+            "items": self.attach_market_data(payload_items),
             "summary": self.summary(),
             "resultTotal": result_total,
             "limit": limit_value,

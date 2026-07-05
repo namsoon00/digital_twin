@@ -113,3 +113,11 @@ class SymbolSourceGateway(Protocol):
 
     def source_descriptor(self, market: str) -> Dict[str, str]:
         ...
+
+
+class MarketQuoteRepository(Protocol):
+    def load_many(self, provider: str, account_id: str, symbols: Iterable[str]) -> Dict[str, Dict[str, object]]:
+        ...
+
+    def summary(self, provider: str, account_id: str) -> Dict[str, object]:
+        ...

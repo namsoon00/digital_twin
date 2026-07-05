@@ -73,6 +73,7 @@ def build_symbol_universe_service(settings=None) -> SymbolUniverseService:
         store=SQLiteSymbolUniverseStore(),
         source_gateway=RemoteSymbolSourceGateway(),
         settings=settings or runtime_settings(),
+        quote_cache=SQLiteMarketQuoteCache(),
     )
 
 

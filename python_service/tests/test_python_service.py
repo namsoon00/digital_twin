@@ -350,6 +350,21 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("token", loaded.telegram_bot_token)
         self.assertEqual("chat", loaded.telegram_chat_id)
 
+    def test_account_registry_falls_back_to_runtime_toss_credentials(self):
+        SQLiteRuntimeSettingsStore(Path(self.temp.name) / "service.db").save({
+            "tossClientId": "runtime-id",
+            "tossClientSecret": "runtime-secret",
+            "tossAccountSeq": "9",
+        })
+        registry = AccountRegistry()
+        registry.upsert(AccountConfig("main", "메인", "toss", "https://example.test", "", "", "", ["AAPL"]))
+
+        loaded = AccountRegistry().load()[0]
+
+        self.assertEqual("runtime-id", loaded.client_id)
+        self.assertEqual("runtime-secret", loaded.client_secret)
+        self.assertEqual("9", loaded.account_seq)
+
     def test_save_json_preserves_existing_secrets_when_omitted(self):
         registry = AccountRegistry()
         existing = AccountConfig(
@@ -1073,6 +1088,32 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(any(item["market"] == "NASDAQ" for item in payload["summary"]["markets"]))
         self.assertEqual(0, payload["offset"])
         self.assertIn("hasMore", payload)
+
+    def test_symbol_universe_search_includes_collected_market_data(self):
+        db_path = Path(self.temp.name) / "service.db"
+        symbol_store = SQLiteSymbolUniverseStore(db_path)
+        quote_cache = SQLiteMarketQuoteCache(db_path)
+        symbol_store.upsert_many([seed_symbol("AAPL")])
+        quote_cache.save("toss", MARKET_DATA_ACCOUNT_ID, "AAPL", {
+            "symbol": "AAPL",
+            "market": "NASDAQ",
+            "currency": "USD",
+            "currentPrice": 185.7,
+            "quoteSource": "Toss /api/v1/prices",
+            "dataQuality": "actual",
+            "updatedAt": "2026-07-04T00:00:00Z",
+            "ma20": 180,
+        })
+        service = SymbolUniverseService(symbol_store, RemoteSymbolSourceGateway(), runtime_settings(), quote_cache=quote_cache)
+
+        payload = service.search(query="AAPL")
+        item = payload["items"][0]
+
+        self.assertEqual(185.7, item["currentPrice"])
+        self.assertEqual("Toss /api/v1/prices", item["quoteSource"])
+        self.assertEqual("actual", item["dataQuality"])
+        self.assertEqual(180, item["ma20"])
+        self.assertEqual(1, payload["summary"]["marketData"]["count"])
 
     def test_market_data_collection_runner_collects_recommendation_universe(self):
         db_path = Path(self.temp.name) / "service.db"

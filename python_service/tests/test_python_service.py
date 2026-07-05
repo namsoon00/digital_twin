@@ -2648,7 +2648,7 @@ class PythonServiceTests(unittest.TestCase):
         html = (output_dir / "index.html").read_text(encoding="utf-8")
         config = json.loads((output_dir / "config.json").read_text(encoding="utf-8"))
         self.assertEqual(payload["buildId"], config["buildId"])
-        self.assertIn("Exit Lens Python Admin", html)
+        self.assertIn("Orbit Alpha Python Admin", html)
         self.assertIn("로컬 DB 빌드 스냅샷", html)
         self.assertIn("--ds-color-bg", html)
         self.assertIn("config.json?v=" + payload["buildId"], html)

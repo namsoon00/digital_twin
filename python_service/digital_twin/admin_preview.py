@@ -149,7 +149,7 @@ def local_data_snapshot() -> Dict[str, object]:
 def admin_preview_config() -> Dict[str, object]:
     payload: Dict[str, object] = {
         "schemaVersion": ADMIN_PREVIEW_SCHEMA_VERSION,
-        "title": "Exit Lens Python Admin",
+        "title": "Orbit Alpha Python Admin",
         "route": "/admin/",
         "mode": "github-pages-readonly-preview",
         "description": "Python 서비스의 계정, 알림, 모니터링, 모델 리뷰 구성을 GitHub Pages에서 확인하기 위한 정적 미리보기입니다.",
@@ -468,6 +468,7 @@ def render_admin_html(payload: Dict[str, object]) -> str:
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
     <title>{title}</title>
+    <link rel="icon" type="image/svg+xml" href="../favicon.svg" />
     <style>
       :root {{
         color-scheme: light;

@@ -173,6 +173,7 @@ function readSqliteSetting(dbPath, key) {
 function checkFrontendAdminRender() {
   const code = fs.readFileSync(path.join(rootDir, "public", "app.js"), "utf8");
   const styles = fs.readFileSync(path.join(rootDir, "public", "styles.css"), "utf8");
+  const indexHtml = fs.readFileSync(path.join(rootDir, "public", "index.html"), "utf8");
   const designSystemDoc = fs.readFileSync(path.join(rootDir, "docs", "design-system.md"), "utf8");
   assertOk(styles.indexOf("--ds-color-bg") >= 0, "전역 디자인 시스템 색상 토큰이 없습니다.");
   assertOk(styles.indexOf("--ds-color-on-action") >= 0, "주요 액션 텍스트 토큰이 없습니다.");
@@ -193,6 +194,10 @@ function checkFrontendAdminRender() {
   assertOk(/@media \(max-width: 860px\)[\s\S]*\.account-watchlist-workbench[\s\S]*grid-template-columns: 1fr;/.test(styles), "모바일 관심종목 워크벤치가 1열로 접히지 않습니다.");
   assertOk(/@media \(max-width: 860px\)[\s\S]*\.watch-account-row \.chip-row[\s\S]*justify-content: flex-start;/.test(styles), "모바일 관심종목 계정 칩 정렬이 왼쪽 기준이 아닙니다.");
   assertOk(designSystemDoc.indexOf("Finance App Tone") >= 0, "디자인 시스템 문서에 금융앱 룩앤필 기준이 없습니다.");
+  assertOk(code.indexOf('appBrandName = "Orbit Alpha"') >= 0, "Orbit Alpha 브랜드명이 앱에 적용되지 않았습니다.");
+  assertOk(indexHtml.indexOf("<title>Orbit Alpha</title>") >= 0 && indexHtml.indexOf("favicon.svg") >= 0, "Orbit Alpha 문서 제목 또는 파비콘 링크가 없습니다.");
+  assertOk(styles.indexOf(".app-brand-mark") >= 0 && styles.indexOf("--ds-color-orbit-line") >= 0, "Orbit Alpha 궤도형 브랜드 마크 규칙이 없습니다.");
+  assertOk(fs.existsSync(path.join(rootDir, "public", "favicon.svg")), "Orbit Alpha SVG 파비콘이 없습니다.");
   assertOk(designSystemDoc.indexOf("Soft Graphite") >= 0 && designSystemDoc.indexOf("#F5F7FA") >= 0, "디자인 시스템 문서에 Soft Graphite 팔레트가 없습니다.");
   assertOk(designSystemDoc.indexOf("Page Contracts") >= 0, "디자인 시스템 문서에 페이지별 UI 계약이 없습니다.");
   assertOk(designSystemDoc.indexOf("Button Placement") >= 0, "디자인 시스템 문서에 버튼 위치 정책이 없습니다.");
@@ -1282,7 +1287,7 @@ async function checkNormalMode(port, context) {
 
   const adminPreview = await request(port, "/admin/");
   assertOk(adminPreview.statusCode === 200, "Python admin preview 응답 코드가 200이 아닙니다: " + adminPreview.statusCode);
-  assertOk(adminPreview.body.indexOf("Exit Lens Python Admin") >= 0, "Python admin preview 제목이 없습니다.");
+  assertOk(adminPreview.body.indexOf("Orbit Alpha Python Admin") >= 0, "Python admin preview 제목이 없습니다.");
 
   const adminConfig = await request(port, "/admin/config.json");
   assertOk(adminConfig.statusCode === 200, "Python admin config 응답 코드가 200이 아닙니다: " + adminConfig.statusCode);

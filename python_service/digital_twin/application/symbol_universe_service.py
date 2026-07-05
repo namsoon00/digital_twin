@@ -24,7 +24,7 @@ def seed_symbol(symbol: str) -> ListedSymbol:
         currency=info.get("currency") or "",
         sector=info.get("sector") or "",
         asset_type="STOCK",
-        source="Exit Lens seed",
+        source="Orbit Alpha seed",
         source_url="local-default",
     )
 

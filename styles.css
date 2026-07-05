@@ -2626,11 +2626,13 @@ h3 {
   accent-color: var(--green);
 }
 
-.notifications-view {
+.notifications-view,
+.strategy-view {
   align-items: start;
 }
 
-.notification-section-bar {
+.notification-section-bar,
+.strategy-section-bar {
   grid-column: 1 / -1;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -2640,7 +2642,8 @@ h3 {
   padding: 4px 0 8px;
 }
 
-.notification-section-actions {
+.notification-section-actions,
+.strategy-section-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
@@ -2649,7 +2652,8 @@ h3 {
   min-width: 0;
 }
 
-.notification-section-actions .text-button {
+.notification-section-actions .text-button,
+.strategy-section-actions .text-button {
   min-height: 38px;
 }
 
@@ -2723,7 +2727,8 @@ h3 {
   font-weight: 800;
 }
 
-.notification-section-tabs {
+.notification-section-tabs,
+.strategy-section-tabs {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 0;
@@ -2731,7 +2736,8 @@ h3 {
   border-bottom: 1px solid var(--line);
 }
 
-.notification-section-tabs button {
+.notification-section-tabs button,
+.strategy-section-tabs button {
   display: grid;
   gap: 3px;
   min-width: 0;
@@ -2746,31 +2752,37 @@ h3 {
   cursor: pointer;
 }
 
-.notification-section-tabs button.active {
+.notification-section-tabs button.active,
+.strategy-section-tabs button.active {
   border-bottom-color: var(--blue);
   background: transparent;
   color: var(--blue);
 }
 
 .notification-section-tabs strong,
-.notification-section-tabs span {
+.notification-section-tabs span,
+.strategy-section-tabs strong,
+.strategy-section-tabs span {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.notification-section-tabs strong {
+.notification-section-tabs strong,
+.strategy-section-tabs strong {
   font-size: 14px;
 }
 
-.notification-section-tabs span {
+.notification-section-tabs span,
+.strategy-section-tabs span {
   color: var(--muted);
   font-size: 12px;
   font-weight: 800;
 }
 
-.notification-section-tabs button.active span {
+.notification-section-tabs button.active span,
+.strategy-section-tabs button.active span {
   color: var(--blue);
 }
 
@@ -5627,17 +5639,20 @@ h3 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .notification-section-tabs {
+  .notification-section-tabs,
+  .strategy-section-tabs {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
-  .notification-section-tabs button {
+  .notification-section-tabs button,
+  .strategy-section-tabs button {
     min-height: 42px;
     padding: 7px 6px 9px;
     text-align: center;
   }
 
-  .notification-section-tabs span {
+  .notification-section-tabs span,
+  .strategy-section-tabs span {
     display: none;
   }
 
@@ -5922,25 +5937,30 @@ h3 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .notification-section-tabs {
+  .notification-section-tabs,
+  .strategy-section-tabs {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
-  .notification-section-tabs button {
+  .notification-section-tabs button,
+  .strategy-section-tabs button {
     min-height: 42px;
     padding: 7px 6px 9px;
     text-align: center;
   }
 
-  .notification-section-tabs span {
+  .notification-section-tabs span,
+  .strategy-section-tabs span {
     display: none;
   }
 
-  .notification-section-bar {
+  .notification-section-bar,
+  .strategy-section-bar {
     grid-template-columns: 1fr;
   }
 
-  .notification-section-actions {
+  .notification-section-actions,
+  .strategy-section-actions {
     display: grid;
     grid-template-columns: 1fr 1fr;
     justify-content: stretch;

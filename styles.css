@@ -864,6 +864,7 @@ h3 {
 
 .monitoring-instrument-list {
   display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
   gap: 10px;
   padding: 16px;
 }
@@ -1456,6 +1457,33 @@ h3 {
 
 .accounts-view {
   grid-template-columns: 1fr;
+}
+
+.monitoring-view {
+  grid-template-columns: minmax(0, 0.9fr) minmax(420px, 1.1fr);
+  grid-template-areas:
+    "status alerts"
+    "universe universe"
+    "portfolio portfolio";
+  align-items: start;
+}
+
+.monitoring-view .admin-monitoring-panel {
+  grid-area: status;
+  grid-column: auto;
+}
+
+.monitoring-view .alert-panel {
+  grid-area: alerts;
+  grid-column: auto;
+}
+
+.monitoring-view .monitoring-instrument-panel {
+  grid-area: universe;
+}
+
+.monitoring-view .portfolio-exposure-panel {
+  grid-area: portfolio;
 }
 
 .admin-overview-panel,
@@ -5312,6 +5340,15 @@ h3 {
     grid-template-columns: 1fr;
   }
 
+  .monitoring-view {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "status"
+      "alerts"
+      "universe"
+      "portfolio";
+  }
+
   .settings-smart-save {
     grid-template-columns: 1fr;
   }
@@ -5500,6 +5537,10 @@ h3 {
 
   .monitoring-instrument-summary,
   .monitoring-instrument-row {
+    grid-template-columns: 1fr;
+  }
+
+  .monitoring-instrument-list {
     grid-template-columns: 1fr;
   }
 

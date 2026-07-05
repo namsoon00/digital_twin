@@ -5562,7 +5562,7 @@
     }
     if (state.activeTab === "monitoring") {
       return [
-        '<section class="admin-grid">',
+        '<section class="admin-grid monitoring-view">',
         renderAdminMonitoringPanel(snapshot),
         renderAlertCenterPanel(snapshot),
         renderMonitoringInstrumentPanel(snapshot),
@@ -8415,7 +8415,7 @@
       return '<div class="source-row"><span>' + escapeHtml(market.label + " 현금비중") + '</span><strong>' + escapeHtml(pct(market.cashRatio || 0)) + '</strong></div>';
     }).join("");
     return [
-      '<article class="panel">',
+      '<article class="panel portfolio-exposure-panel">',
       '<div class="panel-head">',
       '<div>',
       '<p class="label">Toss Portfolio</p>',

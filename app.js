@@ -414,6 +414,7 @@
     activeNotificationMessageType: "monitorHeartbeat",
     notificationPolicyEditorOpen: false,
     activeNotificationTemplateType: "monitorHeartbeat",
+    notificationTemplateEditorOpen: false,
     notificationMarketHoursSessions: [],
     notificationJobItems: [],
     notificationJobsLoading: false,
@@ -977,6 +978,7 @@
     state.activeTab = nextTab;
     if (nextTab !== "monitoring") state.monitoringDetail = null;
     if (nextTab !== "notifications") state.notificationPolicyEditorOpen = false;
+    if (nextTab !== "notifications") state.notificationTemplateEditorOpen = false;
     if (!options.skipPrevious) state.previousTab = priorTab;
     if (!options.skipHistory) writeTabHistory(nextTab, Boolean(options.replace));
     setAppNavHidden(false);
@@ -992,6 +994,7 @@
     state.activeNotificationSection = nextNotificationSection;
     state.activeStrategySection = nextStrategySection;
     if (nextTab !== "notifications" || sectionChanged) state.notificationPolicyEditorOpen = false;
+    if (nextTab !== "notifications" || sectionChanged) state.notificationTemplateEditorOpen = false;
     if (nextTab === state.activeTab) {
       if (sectionChanged && nextTab === "notifications") render();
       if (strategySectionChanged && nextTab === "modeling") render();
@@ -7020,14 +7023,14 @@
 
   function renderNotificationTemplateManagerPanel() {
     var templates = notificationTemplateItems();
-    var selected = activeNotificationTemplate();
+    var editorOpen = Boolean(state.notificationTemplateEditorOpen);
     return [
       '<article class="panel notification-template-manager-panel">',
       '<div class="panel-head">',
       '<div>',
       '<p class="label">Templates</p>',
       '<h2>알림 템플릿</h2>',
-      '<p class="subtle">메시지 본문, 변수, 미리보기와 테스트 발송만 관리합니다. 점수 룰은 정책 탭에서 수정합니다.</p>',
+      '<p class="subtle">템플릿 목록을 유지한 채 본문, 변수, 미리보기와 테스트 발송은 레이어에서 수정합니다.</p>',
       '</div>',
       '<button class="' + settingsSaveButtonClass() + '" data-action="save-settings"' + settingsSaveDisabledAttr() + '>' + settingsSaveButtonLabel() + '</button>',
       '</div>',
@@ -7039,26 +7042,16 @@
         return '<span class="chip">{' + escapeHtml(name) + '}</span>';
       }).join(""),
       '</div>',
-      '<div class="notification-template-workbench">',
+      '<div class="notification-template-workbench notification-template-list-workbench">',
       '<div class="notification-template-index">',
-      '<div class="flow-title"><div><strong>템플릿 목록</strong><span>타입을 선택하면 오른쪽에서 본문과 미리보기를 편집합니다.</span></div></div>',
+      '<div class="flow-title"><div><strong>템플릿 목록</strong><span>수정을 누르면 목록 위로 템플릿 편집 레이어가 열립니다.</span></div></div>',
       '<div class="notification-template-select-list">',
       templates.map(renderNotificationTemplateSelector).join(""),
       '</div>',
       '</div>',
-      '<aside class="notification-template-detail" aria-label="선택한 템플릿 상세">',
-      '<div class="notification-policy-detail-head">',
-      '<div>',
-      '<p class="label">' + escapeHtml(isAlertTemplateType(selected.messageType) ? "Alert Template" : "System Template") + '</p>',
-      '<h3>' + escapeHtml(notificationTemplateLabel(selected.messageType)) + '</h3>',
-      '<span>' + escapeHtml(selected.messageType || "-") + (selected.description ? " · " + selected.description : "") + '</span>',
-      '</div>',
-      '<span class="tone-chip watch">편집</span>',
-      '</div>',
-      renderNotificationTemplateRow(selected, { templateDetail: true }),
-      '</aside>',
       '</div>',
       '</div>',
+      editorOpen ? renderNotificationTemplateEditorLayer() : '',
       '</article>'
     ].join("");
   }
@@ -7074,12 +7067,31 @@
 
   function renderNotificationTemplateSelector(item) {
     var active = activeNotificationTemplate().messageType === item.messageType;
+    var editing = active && state.notificationTemplateEditorOpen;
     var kind = isAlertTemplateType(item.messageType) ? "알림" : "시스템";
     return [
-      '<button type="button" class="notification-template-select-row' + (active ? " active" : "") + '" data-template-select="' + escapeHtml(item.messageType || "") + '" aria-pressed="' + escapeHtml(active ? "true" : "false") + '">',
+      '<button type="button" class="notification-template-select-row' + (editing ? " active" : "") + '" data-template-select="' + escapeHtml(item.messageType || "") + '" aria-pressed="' + escapeHtml(editing ? "true" : "false") + '">',
       '<span><strong>' + escapeHtml(notificationTemplateLabel(item.messageType)) + '</strong><em>' + escapeHtml(kind + " · " + (item.messageType || "-")) + '</em></span>',
-      '<b>' + escapeHtml(active ? "편집 중" : "선택") + '</b>',
+      '<b>' + escapeHtml(editing ? "편집 중" : "수정") + '</b>',
       '</button>'
+    ].join("");
+  }
+
+  function renderNotificationTemplateEditorLayer() {
+    var selected = activeNotificationTemplate();
+    return [
+      '<div class="notification-template-modal-backdrop" data-notification-template-editor-close></div>',
+      '<section class="notification-template-editor-layer" role="dialog" aria-modal="true" aria-label="템플릿 상세 편집">',
+      '<div class="notification-template-modal-head">',
+      '<div>',
+      '<p class="label">' + escapeHtml(isAlertTemplateType(selected.messageType) ? "Alert Template" : "System Template") + '</p>',
+      '<h2>' + escapeHtml(notificationTemplateLabel(selected.messageType)) + '</h2>',
+      '<span>' + escapeHtml(selected.messageType || "-") + (selected.description ? " · " + selected.description : "") + '</span>',
+      '</div>',
+      '<button class="icon-button" type="button" data-notification-template-editor-close aria-label="템플릿 편집 닫기">&times;</button>',
+      '</div>',
+      renderNotificationTemplateRow(selected, { templateDetail: true }),
+      '</section>'
     ].join("");
   }
 
@@ -10039,6 +10051,7 @@
         if (section === state.activeNotificationSection) return;
         state.activeNotificationSection = section;
         state.notificationPolicyEditorOpen = false;
+        state.notificationTemplateEditorOpen = false;
         writeNotificationSectionHistory(section);
         render();
       });
@@ -10076,6 +10089,14 @@
         var messageType = button.getAttribute("data-template-select") || "";
         if (!notificationTemplateItems().some(function (item) { return item.messageType === messageType; })) return;
         state.activeNotificationTemplateType = messageType;
+        state.notificationTemplateEditorOpen = true;
+        render();
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-notification-template-editor-close]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        state.notificationTemplateEditorOpen = false;
         render();
       });
     });

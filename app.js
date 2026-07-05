@@ -8426,13 +8426,121 @@
     ].join("");
   }
 
-  function renderPortfolioPanel(snapshot) {
-    var portfolio = snapshot.portfolio || { sectors: [] };
-    var marketCashRows = (portfolio.markets || []).filter(function (market) {
+  function portfolioFxRates() {
+    return parseNumberAssignments(settingValue("fxRates"), parseNumberAssignments(defaultSettings.fxRates));
+  }
+
+  function portfolioFxRateText(rates) {
+    return Object.keys(rates || {}).sort().map(function (key) {
+      return key.toUpperCase() + "=" + Number(rates[key] || 0).toLocaleString("ko-KR");
+    }).join(", ");
+  }
+
+  function portfolioItemCurrency(item) {
+    var explicit = String(item && item.currency || "").toUpperCase();
+    if (explicit) return explicit;
+    var market = String(item && item.market || "").toUpperCase();
+    var symbol = String(item && item.symbol || "");
+    if (market === "US") return "USD";
+    if (market === "KR" || market === "KOSPI" || market === "KOSDAQ" || symbol.match(/^\d{6}$/)) return "KRW";
+    return "KRW";
+  }
+
+  function portfolioValueInBase(value, currency, rates) {
+    var code = String(currency || "KRW").toUpperCase();
+    return Math.max(0, numeric(value) * Number((rates || {})[code] || 1));
+  }
+
+  function portfolioPositionBaseValue(item, rates) {
+    var marketValue = numeric(item && item.marketValue);
+    if (!marketValue && numeric(item && item.quantity) && currentPriceOf(item || {})) {
+      marketValue = numeric(item.quantity) * currentPriceOf(item);
+    }
+    return portfolioValueInBase(marketValue, portfolioItemCurrency(item || {}), rates);
+  }
+
+  function portfolioHoldingPositions(snapshot) {
+    var toss = snapshot.toss || {};
+    return (toss.positions || []).filter(function (item) {
+      return item && item.source !== "cash" && item.sector !== "현금" && String(item.symbol || "").toUpperCase() !== "CASH";
+    });
+  }
+
+  function portfolioCashPositions(snapshot) {
+    var toss = snapshot.toss || {};
+    return (toss.positions || []).filter(function (item) {
+      return item && (item.source === "cash" || item.sector === "현금" || String(item.symbol || "").toUpperCase() === "CASH");
+    });
+  }
+
+  function portfolioSum(items, picker) {
+    return (items || []).reduce(function (total, item) {
+      return total + numeric(picker(item));
+    }, 0);
+  }
+
+  function exposureDiffText(actual, expected) {
+    var diff = numeric(actual) - numeric(expected);
+    if (Math.abs(diff) < 1) return "일치";
+    return "차이 " + (diff > 0 ? "+" : "-") + formatMoney(Math.abs(diff));
+  }
+
+  function portfolioCashBasisText(snapshot, portfolio) {
+    var cashPositions = portfolioCashPositions(snapshot);
+    var account = (snapshot.toss || {}).account || {};
+    if (cashPositions.length) return "CASH 포지션 marketValue 우선";
+    if (numeric(account.orderableAmount)) return "계좌 orderableAmount / buying-power";
+    if (numeric(portfolio.cash)) return "계좌 현금 필드";
+    return "현금 없음 또는 API 미응답";
+  }
+
+  function renderPortfolioMarketRows(portfolio) {
+    return (portfolio.markets || []).filter(function (market) {
       return Number(market.total || 0) > 0;
     }).map(function (market) {
-      return '<div class="source-row"><span>' + escapeHtml(market.label + " 현금비중") + '</span><strong>' + escapeHtml(pct(market.cashRatio || 0)) + '</strong></div>';
+      var label = market.label || market.key || "-";
+      var value = [
+        "투자 " + formatMoney(market.invested || 0),
+        "현금 " + formatMoney(market.cash || 0),
+        "합계 " + formatMoney(market.total || 0),
+        "현금비중 " + pct(market.cashRatio || 0)
+      ].join(" · ");
+      return '<div class="source-row"><span>' + escapeHtml(label) + '</span><strong>' + escapeHtml(value) + '</strong></div>';
     }).join("");
+  }
+
+  function renderPortfolioBasisRows(snapshot, portfolio) {
+    var rates = portfolioFxRates();
+    var holdings = portfolioHoldingPositions(snapshot);
+    var ledgerInvested = holdings.reduce(function (total, item) {
+      return total + portfolioPositionBaseValue(item, rates);
+    }, 0);
+    var marketTotal = portfolioSum(portfolio.markets || [], function (market) { return market.total; });
+    var sectorTotal = portfolioSum(portfolio.sectors || [], function (sector) { return sector.value; });
+    var formulaTotal = numeric(portfolio.invested) + numeric(portfolio.cash);
+    var source = (snapshot.toss && snapshot.toss.status ? snapshot.toss.status : "토스 스냅샷") + " · " + (snapshot.dataMode || (snapshot.mock ? "mock" : "live"));
+    var rows = [
+      ["데이터 원천", source],
+      ["노출 계산 기준", "KRW 기준 원화환산 · 총 평가 = 투자 평가액 + 현금/주문 가능"],
+      ["환율 기준", portfolioFxRateText(rates)],
+      ["현금 기준", portfolioCashBasisText(snapshot, portfolio)],
+      ["총 평가 산식", formatMoney(portfolio.invested || 0) + " + " + formatMoney(portfolio.cash || 0) + " = " + formatMoney(formulaTotal)],
+      ["총 평가 차이", exposureDiffText(portfolio.total || 0, formulaTotal)],
+      ["보유 원장 합계", holdings.length + "개 marketValue 원화환산 = " + formatMoney(ledgerInvested)],
+      ["투자 평가액 차이", exposureDiffText(portfolio.invested || 0, ledgerInvested)],
+      ["시장별 합계", (portfolio.markets || []).length + "개 시장 total = " + formatMoney(marketTotal)],
+      ["시장 합계 차이", exposureDiffText(portfolio.total || 0, marketTotal)],
+      ["섹터별 합계", (portfolio.sectors || []).length + "개 sector value = " + formatMoney(sectorTotal)],
+      ["섹터 합계 차이", exposureDiffText(portfolio.total || 0, sectorTotal)]
+    ];
+    return rows.map(function (row) {
+      return '<div class="source-row"><span>' + escapeHtml(row[0]) + '</span><strong>' + escapeHtml(row[1]) + '</strong></div>';
+    }).join("");
+  }
+
+  function renderPortfolioPanel(snapshot) {
+    var portfolio = snapshot.portfolio || { sectors: [] };
+    var marketRows = renderPortfolioMarketRows(portfolio);
     return [
       '<article class="panel portfolio-exposure-panel">',
       '<div class="panel-head">',
@@ -8445,7 +8553,7 @@
       '<div class="allocation">',
       '<div class="source-row"><span>투자 평가액</span><strong>' + escapeHtml(formatMoney(portfolio.invested || 0)) + '</strong></div>',
       '<div class="source-row"><span>현금/주문 가능</span><strong>' + escapeHtml(formatMoney(portfolio.cash || 0)) + '</strong></div>',
-      marketCashRows,
+      marketRows,
       (portfolio.sectors || []).map(function (sector) {
         return [
           '<div class="bar-row">',
@@ -8455,6 +8563,10 @@
         ].join("");
       }).join(""),
       '</div>',
+      '<div class="source-stack">',
+      renderPortfolioBasisRows(snapshot, portfolio),
+      '</div>',
+      '<div class="rule-strip"><span>금액이 맞지 않으면 먼저 보유 원장 합계, 현금 기준, 환율 기준의 차이 행을 확인하세요.</span></div>',
       '</article>'
     ].join("");
   }

@@ -210,6 +210,12 @@
     { id: "templates", label: "템플릿", description: "본문·미리보기" },
     { id: "advanced", label: "고급", description: "채널·임계값" }
   ];
+  var strategySections = [
+    { id: "overview", label: "개요", description: "읽는 법" },
+    { id: "data", label: "데이터", description: "준비도 점검" },
+    { id: "rules", label: "판단 기준", description: "공식·가중치" },
+    { id: "results", label: "모델 결과", description: "종목별 판단" }
+  ];
 
   function activeTabMeta() {
     return tabs.filter(function (tab) { return tab.id === state.activeTab; })[0] || tabs[0];
@@ -402,6 +408,7 @@
     notificationExpandedTypes: {},
     notificationExpandedGroups: {},
     activeNotificationSection: initialNotificationSection(),
+    activeStrategySection: initialStrategySection(),
     activeNotificationMessageType: "monitorHeartbeat",
     activeNotificationTemplateType: "monitorHeartbeat",
     notificationMarketHoursSessions: [],
@@ -774,6 +781,11 @@
     return normalizeNotificationSection(params.get("notification"));
   }
 
+  function initialStrategySection() {
+    var params = new URLSearchParams(window.location.search);
+    return normalizeStrategySection(params.get("strategy"));
+  }
+
   function normalizeTabId(value) {
     var requested = String(value || "").toLowerCase();
     if (requested === "more") return "overview";
@@ -785,16 +797,28 @@
     return notificationSections.some(function (section) { return section.id === requested; }) ? requested : "status";
   }
 
+  function normalizeStrategySection(value) {
+    var requested = String(value || "").toLowerCase();
+    return strategySections.some(function (section) { return section.id === requested; }) ? requested : "overview";
+  }
+
   function activeNotificationSectionMeta() {
     return notificationSections.filter(function (section) {
       return section.id === state.activeNotificationSection;
     })[0] || notificationSections[0];
   }
 
+  function activeStrategySectionMeta() {
+    return strategySections.filter(function (section) {
+      return section.id === state.activeStrategySection;
+    })[0] || strategySections[0];
+  }
+
   function tabUrl(tab) {
     var normalized = normalizeTabId(tab);
     var params = new URLSearchParams(window.location.search);
     if (normalized !== "notifications") params.delete("notification");
+    if (normalized !== "modeling") params.delete("strategy");
     if (normalized === "overview") {
       params.delete("tab");
     } else {
@@ -810,10 +834,27 @@
     var normalized = normalizeNotificationSection(section);
     var params = new URLSearchParams(window.location.search);
     params.set("tab", "notifications");
+    params.delete("strategy");
     if (normalized === "status") {
       params.delete("notification");
     } else {
       params.set("notification", normalized);
+    }
+    var path = window.location.pathname || "/";
+    var query = params.toString();
+    var hash = window.location.hash || "";
+    return path + (query ? "?" + query : "") + hash;
+  }
+
+  function strategySectionUrl(section) {
+    var normalized = normalizeStrategySection(section);
+    var params = new URLSearchParams(window.location.search);
+    params.set("tab", "modeling");
+    params.delete("notification");
+    if (normalized === "overview") {
+      params.delete("strategy");
+    } else {
+      params.set("strategy", normalized);
     }
     var path = window.location.pathname || "/";
     var query = params.toString();
@@ -833,6 +874,12 @@
     if (!window.history || !window.history.replaceState) return;
     var normalized = normalizeNotificationSection(section);
     window.history.replaceState({ tab: "notifications", notification: normalized }, "", notificationSectionUrl(normalized));
+  }
+
+  function writeStrategySectionHistory(section) {
+    if (!window.history || !window.history.replaceState) return;
+    var normalized = normalizeStrategySection(section);
+    window.history.replaceState({ tab: "modeling", strategy: normalized }, "", strategySectionUrl(normalized));
   }
 
   function currentAppNav() {
@@ -935,10 +982,14 @@
   function syncTabFromLocation() {
     var nextTab = initialTab();
     var nextNotificationSection = initialNotificationSection();
+    var nextStrategySection = initialStrategySection();
     var sectionChanged = nextNotificationSection !== state.activeNotificationSection;
+    var strategySectionChanged = nextStrategySection !== state.activeStrategySection;
     state.activeNotificationSection = nextNotificationSection;
+    state.activeStrategySection = nextStrategySection;
     if (nextTab === state.activeTab) {
       if (sectionChanged && nextTab === "notifications") render();
+      if (strategySectionChanged && nextTab === "modeling") render();
       return;
     }
     rememberTabBarPosition();
@@ -5565,16 +5616,7 @@
       return renderNotificationsPage();
     }
     if (state.activeTab === "modeling") {
-      return [
-        '<section class="admin-grid">',
-        renderModelOperatingGuidePanel(snapshot),
-        renderStrategyBeginnerPanel(snapshot),
-        renderStrategyDataPanel(snapshot),
-        renderAdminModelingPanel(snapshot),
-        renderModelVersionPanel(snapshot),
-        renderModelPreviewPanel(snapshot),
-        '</section>'
-      ].join("");
+      return renderStrategyModelingPage(snapshot);
     }
     if (state.activeTab === "monitoring") {
       return [
@@ -5595,6 +5637,50 @@
       renderAdminOverviewPanel(snapshot),
       renderAdminMonitoringPanel(snapshot),
       '</section>'
+    ].join("");
+  }
+
+  function renderStrategyModelingPage(snapshot) {
+    return [
+      '<section class="admin-grid strategy-view">',
+      renderStrategySectionBar(),
+      renderStrategySectionContent(snapshot),
+      '</section>'
+    ].join("");
+  }
+
+  function renderStrategySectionBar() {
+    var section = activeStrategySectionMeta();
+    return [
+      '<div class="strategy-section-bar">',
+      '<div class="strategy-section-tabs" role="tablist" aria-label="투자전략 섹션">',
+      strategySections.map(function (item) {
+        var active = section.id === item.id;
+        return [
+          '<button type="button" role="tab" class="' + (active ? "active" : "") + '" data-strategy-section="' + escapeHtml(item.id) + '"' + (active ? ' aria-selected="true"' : ' aria-selected="false"') + '>',
+          '<strong>' + escapeHtml(item.label) + '</strong>',
+          '<span>' + escapeHtml(item.description) + '</span>',
+          '</button>'
+        ].join("");
+      }).join(""),
+      '</div>',
+      '</div>'
+    ].join("");
+  }
+
+  function renderStrategySectionContent(snapshot) {
+    var section = normalizeStrategySection(state.activeStrategySection);
+    if (section === "data") return renderStrategyDataPanel(snapshot);
+    if (section === "rules") {
+      return [
+        renderAdminModelingPanel(snapshot),
+        renderModelVersionPanel(snapshot)
+      ].join("");
+    }
+    if (section === "results") return renderModelPreviewPanel(snapshot);
+    return [
+      renderModelOperatingGuidePanel(snapshot),
+      renderStrategyBeginnerPanel(snapshot)
     ].join("");
   }
 
@@ -9895,6 +9981,16 @@
         if (section === state.activeNotificationSection) return;
         state.activeNotificationSection = section;
         writeNotificationSectionHistory(section);
+        render();
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-strategy-section]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        var section = normalizeStrategySection(button.getAttribute("data-strategy-section"));
+        if (section === state.activeStrategySection) return;
+        state.activeStrategySection = section;
+        writeStrategySectionHistory(section);
         render();
       });
     });

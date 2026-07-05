@@ -656,6 +656,9 @@ function checkFrontendAdminRender() {
     renderForSearch("?tab=notifications&notification=templates"),
     renderForSearch("?tab=notifications&notification=advanced"),
     renderForSearch("?tab=modeling"),
+    renderForSearch("?tab=modeling&strategy=data"),
+    renderForSearch("?tab=modeling&strategy=rules"),
+    renderForSearch("?tab=modeling&strategy=results"),
     renderForSearch("?tab=monitoring"),
     renderForSearch("?tab=settings"),
     renderForSearch("?tab=accounts", "namsoon00.github.io"),
@@ -670,10 +673,13 @@ function checkFrontendAdminRender() {
     const notificationTemplateHtml = pages[6];
     const notificationAdvancedHtml = pages[7];
     const modelingHtml = pages[8];
-    const monitoringHtml = pages[9];
-    const settingsHtml = pages[10];
-    const staticAccountHtml = pages[11];
-    const newAccountHtml = pages[12];
+    const modelingDataHtml = pages[9];
+    const modelingRulesHtml = pages[10];
+    const modelingResultsHtml = pages[11];
+    const monitoringHtml = pages[12];
+    const settingsHtml = pages[13];
+    const staticAccountHtml = pages[14];
+    const newAccountHtml = pages[15];
 
     assertOk(overviewHtml.indexOf("계정·알림·모델 운영 콘솔") < 0, "이전 고정 운영 콘솔 제목이 아직 렌더링됩니다.");
     assertOk(overviewHtml.indexOf("<h1>홈</h1>") >= 0, "홈 탭 제목이 상단에 렌더링되지 않았습니다.");
@@ -806,25 +812,33 @@ function checkFrontendAdminRender() {
     assertOk(code.indexOf("data-notification-template") >= 0 && code.indexOf("monitorHeartbeat") >= 0, "상태 확인 템플릿 textarea 경로가 없습니다.");
     assertOk(notificationTemplateHtml.indexOf("{rawLines}") >= 0, "알림 템플릿 변수가 렌더링되지 않았습니다.");
     assertOk(notificationAdvancedHtml.indexOf("tab=notifications") >= 0, "알림 링크 기본값이 새 알림 탭을 가리키지 않습니다.");
-    assertOk(modelingHtml.indexOf("model-guide-panel") >= 0, "모델 운영 가이드가 렌더링되지 않았습니다.");
-    assertOk(modelingHtml.indexOf("투자전략 모델링 관리") >= 0, "투자전략 모델링 관리 제목이 렌더링되지 않았습니다.");
-    assertOk(modelingHtml.indexOf("처음 보는 사람용 쉬운 설명") >= 0, "초보자용 쉬운 설명 패널이 렌더링되지 않았습니다.");
-    assertOk(modelingHtml.indexOf("실제 데이터 예시") >= 0, "실제 데이터 예시 설명이 렌더링되지 않았습니다.");
-    assertOk(modelingHtml.indexOf("쉬운 해석") >= 0, "종목별 쉬운 해석이 렌더링되지 않았습니다.");
-    assertOk(modelingHtml.indexOf("strategy-data-panel") >= 0, "전략 데이터 점검 패널이 렌더링되지 않았습니다.");
-    assertOk(modelingHtml.indexOf("전략 데이터 점검") >= 0, "전략 데이터 점검 제목이 렌더링되지 않았습니다.");
-    assertOk(modelingHtml.indexOf("체결강도") >= 0, "전략 데이터 점검에 체결강도 항목이 없습니다.");
-    assertOk(modelingHtml.indexOf("모델-알림 기준") >= 0, "전략 데이터 점검에 모델-알림 기준 항목이 없습니다.");
-    assertOk(modelingHtml.indexOf("admin-modeling-panel") >= 0, "모델링 설정 패널이 렌더링되지 않았습니다.");
-    assertOk(modelingHtml.indexOf("투자전략 판단 기준 관리") >= 0, "투자전략 판단 기준 제목이 렌더링되지 않았습니다.");
-    assertOk(modelingHtml.indexOf("투자자별 수급") >= 0, "투자자별 수급 feature 설명이 렌더링되지 않았습니다.");
-    assertOk(modelingHtml.indexOf("방향성 거래량") >= 0, "방향성 거래량 feature 설명이 렌더링되지 않았습니다.");
-    assertOk(modelingHtml.indexOf("feature 기여도") >= 0, "feature 기여도 블록이 렌더링되지 않았습니다.");
-    assertOk(modelingHtml.indexOf("directionalVolumePressure") >= 0, "방향성 거래량 공식 변수가 렌더링되지 않았습니다.");
-    assertOk(modelingHtml.indexOf("feature 재현성") >= 0, "feature 재현성 검증 블록이 렌더링되지 않았습니다.");
-    assertOk(modelingHtml.indexOf("같은 입력 재현됨") >= 0, "같은 입력 재계산 검증 결과가 렌더링되지 않았습니다.");
-    assertOk(modelingHtml.indexOf("model-timing-panel") < 0, "Mock 시계열 기반 타이밍 패널이 아직 렌더링됩니다.");
-    assertOk(modelingHtml.indexOf("웹에서 운영하는 매수·매도 타이밍 모델") < 0, "타이밍 모델 제목이 아직 렌더링됩니다.");
+    assertOk(modelingHtml.indexOf("strategy-section-bar") >= 0, "투자전략 내부 섹션 탭 바가 렌더링되지 않았습니다.");
+    assertOk(modelingHtml.indexOf("strategy-section-tabs") >= 0, "투자전략 내부 섹션 탭이 렌더링되지 않았습니다.");
+    assertOk(styles.indexOf(".strategy-section-tabs") >= 0 && styles.indexOf(".strategy-section-bar") >= 0, "투자전략 내부 섹션 스타일이 정의되지 않았습니다.");
+    assertOk(modelingHtml.indexOf('data-strategy-section="data"') >= 0 && modelingHtml.indexOf('data-strategy-section="rules"') >= 0 && modelingHtml.indexOf('data-strategy-section="results"') >= 0, "투자전략 내부 섹션 이동 버튼이 없습니다.");
+    assertOk(code.indexOf("writeStrategySectionHistory") >= 0 && code.indexOf("strategySectionUrl") >= 0, "투자전략 내부 탭 URL 동기화 경로가 없습니다.");
+    assertOk(modelingHtml.indexOf("model-guide-panel") >= 0, "개요 탭에 모델 운영 가이드가 렌더링되지 않았습니다.");
+    assertOk(modelingHtml.indexOf("투자전략 모델링 관리") >= 0, "개요 탭에 투자전략 모델링 관리 제목이 렌더링되지 않았습니다.");
+    assertOk(modelingHtml.indexOf("처음 보는 사람용 쉬운 설명") >= 0, "개요 탭에 초보자용 쉬운 설명 패널이 렌더링되지 않았습니다.");
+    assertOk(modelingHtml.indexOf("읽는 순서") >= 0, "개요 탭에 초보자용 읽는 순서 설명이 렌더링되지 않았습니다.");
+    assertOk(modelingHtml.indexOf("strategy-data-panel") < 0 && modelingHtml.indexOf("admin-modeling-panel") < 0 && modelingHtml.indexOf("model-preview-panel") < 0, "개요 탭에 다른 투자전략 섹션 패널이 섞여 있습니다.");
+    assertOk(modelingDataHtml.indexOf("strategy-data-panel") >= 0, "데이터 탭에 전략 데이터 점검 패널이 렌더링되지 않았습니다.");
+    assertOk(modelingDataHtml.indexOf("전략 데이터 점검") >= 0, "데이터 탭에 전략 데이터 점검 제목이 렌더링되지 않았습니다.");
+    assertOk(modelingDataHtml.indexOf("체결강도") >= 0, "데이터 탭에 체결강도 항목이 없습니다.");
+    assertOk(modelingDataHtml.indexOf("모델-알림 기준") >= 0, "데이터 탭에 모델-알림 기준 항목이 없습니다.");
+    assertOk(modelingRulesHtml.indexOf("admin-modeling-panel") >= 0, "판단 기준 탭에 모델링 설정 패널이 렌더링되지 않았습니다.");
+    assertOk(modelingRulesHtml.indexOf("투자전략 판단 기준 관리") >= 0, "판단 기준 탭에 투자전략 판단 기준 제목이 렌더링되지 않았습니다.");
+    assertOk(modelingRulesHtml.indexOf("투자자별 수급") >= 0, "판단 기준 탭에 투자자별 수급 feature 설명이 렌더링되지 않았습니다.");
+    assertOk(modelingRulesHtml.indexOf("방향성 거래량") >= 0, "판단 기준 탭에 방향성 거래량 feature 설명이 렌더링되지 않았습니다.");
+    assertOk(modelingRulesHtml.indexOf("directionalVolumePressure") >= 0, "판단 기준 탭에 방향성 거래량 공식 변수가 렌더링되지 않았습니다.");
+    assertOk(modelingResultsHtml.indexOf("model-preview-panel") >= 0, "모델 결과 탭에 현재 종목 판단 결과 패널이 렌더링되지 않았습니다.");
+    assertOk(modelingResultsHtml.indexOf("실제 데이터 예시") >= 0, "모델 결과 탭에 실제 데이터 예시 설명이 렌더링되지 않았습니다.");
+    assertOk(modelingResultsHtml.indexOf("쉬운 해석") >= 0, "모델 결과 탭에 종목별 쉬운 해석이 렌더링되지 않았습니다.");
+    assertOk(modelingResultsHtml.indexOf("feature 기여도") >= 0, "모델 결과 탭에 feature 기여도 블록이 렌더링되지 않았습니다.");
+    assertOk(modelingResultsHtml.indexOf("feature 재현성") >= 0, "모델 결과 탭에 feature 재현성 검증 블록이 렌더링되지 않았습니다.");
+    assertOk(modelingResultsHtml.indexOf("같은 입력 재현됨") >= 0, "모델 결과 탭에 같은 입력 재계산 검증 결과가 렌더링되지 않았습니다.");
+    assertOk(modelingHtml.indexOf("model-timing-panel") < 0 && modelingResultsHtml.indexOf("model-timing-panel") < 0, "Mock 시계열 기반 타이밍 패널이 아직 렌더링됩니다.");
+    assertOk(modelingHtml.indexOf("웹에서 운영하는 매수·매도 타이밍 모델") < 0 && modelingResultsHtml.indexOf("웹에서 운영하는 매수·매도 타이밍 모델") < 0, "타이밍 모델 제목이 아직 렌더링됩니다.");
     assertOk(monitoringHtml.indexOf("monitoring-view") >= 0, "모니터링 탭에 PC 전용 레이아웃 클래스가 없습니다.");
     assertOk(styles.indexOf(".monitoring-view") >= 0 && styles.indexOf("grid-template-areas") >= 0, "모니터링 탭 PC 그리드 레이아웃 CSS가 없습니다.");
     assertOk(monitoringHtml.indexOf("monitoring-instrument-panel") >= 0, "모니터링 탭에 보유·관심 통합 패널이 렌더링되지 않았습니다.");

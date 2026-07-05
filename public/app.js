@@ -6287,15 +6287,15 @@
       renderAccountField("id", "계정 ID", "text", "main", { required: true, disabled: Boolean(state.editingAccountId) }),
       renderAccountField("label", "표시 이름", "text", "메인 계정", { required: true }),
       renderAccountField("provider", "증권사", "text", "toss"),
-      renderAccountField("baseUrl", "Toss API Base URL", "url", "https://openapi.tossinvest.com"),
+      renderAccountField("baseUrl", "Toss API Base URL", "url", "https://openapi.tossinvest.com", { wide: true }),
       renderAccountField("clientId", "Toss API Key", state.showSecrets ? "text" : "password", "새 값 입력 시 교체", { configured: Boolean(editingAccount && editingAccount.clientId) }),
       renderAccountField("clientSecret", "Toss Secret Key", state.showSecrets ? "text" : "password", "새 값 입력 시 교체", { configured: Boolean(editingAccount && editingAccount.clientSecret) }),
       renderAccountField("accountSeq", "계좌 순번", "text", "선택", { configured: Boolean(editingAccount && editingAccount.accountSeq) }),
-      renderAccountField("watchlistSymbols", "관심 종목", "text", "NVDA,005930"),
+      renderAccountField("watchlistSymbols", "관심 종목", "text", "NVDA,005930", { wide: true }),
       renderAccountField("notifyProvider", "알림 채널", "text", "telegram"),
       renderAccountField("telegramBotToken", "Telegram Bot Token", state.showSecrets ? "text" : "password", "새 값 입력 시 교체", { configured: Boolean(editingAccount && editingAccount.telegramBotToken) }),
       renderAccountField("telegramChatId", "Telegram Chat ID", "text", "chat id", { configured: Boolean(editingAccount && editingAccount.telegramChatId) }),
-      renderAccountField("notifyLinkUrl", "알림 링크 URL", "url", "http://127.0.0.1:3000?tab=notifications"),
+      renderAccountField("notifyLinkUrl", "알림 링크 URL", "url", "http://127.0.0.1:3000?tab=notifications", { wide: true }),
       '<label class="admin-check-field">',
       '<input data-account-field="quietHoursEnabled" type="checkbox"' + (draft.quietHoursEnabled !== false ? " checked" : "") + ' />',
       '<span>알림 금지 시간 적용</span>',
@@ -6325,7 +6325,7 @@
     var value = draft[name] == null ? "" : draft[name];
     var fieldPlaceholder = options.configured && !value ? "저장됨 - 새 값 입력 시 교체" : (placeholder || "");
     return [
-      '<label class="setting-field">',
+      '<label class="setting-field' + (options.wide ? " wide" : "") + '">',
       '<span>' + escapeHtml(label) + '</span>',
       '<input data-account-field="' + escapeHtml(name) + '" name="' + escapeHtml(name) + '" type="' + escapeHtml(type || "text") + '" value="' + escapeHtml(value) + '" placeholder="' + escapeHtml(fieldPlaceholder) + '" autocomplete="off"' + (options.required ? " required" : "") + (options.disabled ? " disabled" : "") + ' />',
       options.configured ? '<em class="setting-field-note">저장됨</em>' : '',
@@ -6337,14 +6337,14 @@
     var watchlist = Array.isArray(account.watchlistSymbols) ? account.watchlistSymbols.join(", ") : String(account.watchlistSymbols || "");
     return [
       '<div class="service-account-row">',
-      '<div>',
+      '<div class="service-account-main">',
       '<div class="service-account-title">',
       '<strong>' + escapeHtml(account.label || account.id || "-") + '</strong>',
       accountRowStatusChip(account),
       '</div>',
-      '<span>' + escapeHtml(account.id || "-") + ' · ' + escapeHtml(account.provider || "toss") + ' · ' + escapeHtml(account.enabled === false ? "중지" : "사용") + '</span>',
-      '<span>관심 ' + escapeHtml(watchlist || "-") + '</span>',
-      renderAccountCredentialPills(account),
+      '<span class="service-account-line">' + escapeHtml(account.id || "-") + ' · ' + escapeHtml(account.provider || "toss") + ' · ' + escapeHtml(account.enabled === false ? "중지" : "사용") + '</span>',
+      '<span class="service-account-line">관심 ' + escapeHtml(watchlist || "-") + '</span>',
+      renderAccountExposureGrid(account),
       '</div>',
       '<div class="service-account-meta">',
       '<div class="row-actions">',
@@ -6353,6 +6353,28 @@
       '</div>',
       '</div>',
       '</div>'
+    ].join("");
+  }
+
+  function renderAccountExposureGrid(account) {
+    account = account || {};
+    var symbols = accountWatchlistSymbols(account);
+    return [
+      '<div class="account-exposure-grid" aria-label="계정 노출 상태">',
+      renderAccountExposureItem("토스 API", account.clientId && account.clientSecret ? "연결" : "확인", account.clientId && account.clientSecret ? "ok" : "warn"),
+      renderAccountExposureItem("계좌 seq", account.accountSeq ? String(account.accountSeq) : "선택 안함", account.accountSeq ? "ok" : "warn"),
+      renderAccountExposureItem("텔레그램", account.telegramBotToken && account.telegramChatId ? "연결" : "미설정", account.telegramBotToken && account.telegramChatId ? "ok" : "warn"),
+      renderAccountExposureItem("관심종목", symbols.length + "개", symbols.length ? "ok" : "neutral"),
+      '</div>'
+    ].join("");
+  }
+
+  function renderAccountExposureItem(label, value, tone) {
+    return [
+      '<span class="account-exposure-item ' + escapeHtml(tone || "neutral") + '">',
+      '<em>' + escapeHtml(label) + '</em>',
+      '<strong>' + escapeHtml(value) + '</strong>',
+      '</span>'
     ].join("");
   }
 

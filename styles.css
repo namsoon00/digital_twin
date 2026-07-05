@@ -1645,6 +1645,10 @@ h3 {
   grid-template-columns: 1fr;
 }
 
+.accounts-view .account-manager-panel {
+  min-height: 0;
+}
+
 .monitoring-view {
   grid-template-columns: minmax(0, 0.9fr) minmax(420px, 1.1fr);
   grid-template-areas:
@@ -2178,7 +2182,7 @@ h3 {
 
 .admin-account-layout {
   display: grid;
-  grid-template-columns: minmax(320px, 0.78fr) minmax(0, 1.22fr);
+  grid-template-columns: minmax(380px, 0.9fr) minmax(0, 1.1fr);
   gap: 16px;
   padding: 16px;
 }
@@ -2245,23 +2249,23 @@ h3 {
 .service-account-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 12px;
+  align-items: start;
+  gap: 14px;
   min-width: 0;
-  padding: 12px;
+  padding: 14px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--panel-soft);
 }
 
-.service-account-row > div:first-child,
+.service-account-main,
 .service-account-meta {
   display: grid;
-  gap: 5px;
+  gap: 7px;
   min-width: 0;
 }
 
-.service-account-row span {
+.service-account-line {
   color: var(--muted);
   font-size: 12px;
   font-weight: 800;
@@ -2289,6 +2293,52 @@ h3 {
   min-height: 28px;
   font-size: 12px;
   white-space: nowrap;
+}
+
+.account-exposure-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  min-width: 0;
+}
+
+.account-exposure-item {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding: 8px 9px;
+  border: 1px solid var(--line);
+  border-left-width: 3px;
+  border-radius: 8px;
+  background: var(--input);
+}
+
+.account-exposure-item.ok {
+  border-left-color: var(--green);
+}
+
+.account-exposure-item.warn {
+  border-left-color: var(--amber);
+}
+
+.account-exposure-item.neutral {
+  border-left-color: var(--blue);
+}
+
+.account-exposure-item em {
+  color: var(--muted);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 900;
+  line-height: 1.2;
+}
+
+.account-exposure-item strong {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
 }
 
 .chip {
@@ -2608,6 +2658,10 @@ h3 {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
+}
+
+.account-manager-panel .admin-form-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .admin-check-field {
@@ -5526,7 +5580,26 @@ h3 {
   }
 }
 
-@media (max-width: 1180px) and (min-width: 861px) {
+@media (max-width: 1180px) and (min-width: 981px) {
+  .admin-account-layout {
+    grid-template-columns: minmax(340px, 0.88fr) minmax(0, 1.12fr);
+    gap: 12px;
+  }
+
+  .account-watchlist-workbench {
+    grid-template-columns: minmax(260px, 0.72fr) minmax(0, 1.28fr);
+  }
+
+  .account-exposure-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .account-manager-panel .admin-form-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 980px) and (min-width: 861px) {
   .workspace-layout {
     display: block;
   }
@@ -5565,6 +5638,11 @@ h3 {
   .notification-rule-bypass-condition,
   .notification-rule-condition {
     grid-template-columns: 1fr;
+  }
+
+  .account-exposure-grid,
+  .account-manager-panel .admin-form-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -5881,6 +5959,7 @@ h3 {
   .gauge-grid,
   .admin-stat-grid,
   .admin-form-grid,
+  .account-manager-panel .admin-form-grid,
   .flow-lanes,
   .flow-row,
   .lab-stats-grid,
@@ -5910,6 +5989,7 @@ h3 {
   }
 
   .service-account-row,
+  .account-exposure-grid,
   .admin-message-row,
   .account-credential-grid,
   .watch-account-row,

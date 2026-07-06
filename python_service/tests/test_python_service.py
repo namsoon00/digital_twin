@@ -2319,6 +2319,45 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(4.35, signals["macro"]["series"]["DGS10"]["value"])
         self.assertEqual("20260701000001", signals["dartDisclosures"]["005930"]["receiptNo"])
 
+    def test_external_signal_provider_skips_disabled_sources(self):
+        calls = []
+
+        def fake_fetch(url, headers=None):
+            calls.append(url)
+            return {}
+
+        settings = {
+            "alphaVantageApiKey": "alpha-key",
+            "coingeckoApiKey": "cg-key",
+            "fredApiKey": "fred-key",
+            "opendartApiKey": "dart-key",
+            "externalAlphaEnabled": "0",
+            "externalCoinGeckoEnabled": "0",
+            "externalFredEnabled": "0",
+            "externalDartEnabled": "0",
+            "externalSecEnabled": "0",
+            "externalDartCorpCodes": "005930=00126380",
+            "externalSecCompanyCiks": "AAPL=0000320193",
+        }
+        provider = ExternalSignalProvider(
+            settings=settings,
+            cache=SQLiteExternalSignalCache(Path(self.temp.name) / "service.db"),
+            fetch_json=fake_fetch,
+        )
+        positions = [
+            normalize_position({"symbol": "AAPL", "name": "Apple", "market": "US", "currency": "USD"}),
+            normalize_position({"symbol": "005930", "name": "삼성전자", "market": "KR", "currency": "KRW"}),
+        ]
+
+        signals = provider.fetch_signals(positions)
+
+        self.assertEqual([], calls)
+        self.assertEqual({}, signals["equityQuotes"])
+        self.assertEqual({}, signals["cryptoMarkets"])
+        self.assertEqual({}, signals["macro"])
+        self.assertEqual({}, signals["secFilings"])
+        self.assertEqual({}, signals["dartDisclosures"])
+
     def test_external_signal_provider_rate_limits_repeated_targets(self):
         calls = []
 

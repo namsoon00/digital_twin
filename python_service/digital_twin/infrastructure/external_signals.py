@@ -14,6 +14,7 @@ from .sqlite_monitoring import SQLiteExternalSignalCache
 
 
 JsonFetcher = Callable[[str, Dict[str, str]], object]
+DISABLED_SETTING_VALUES = {"0", "false", "no", "off", "disabled"}
 
 
 def default_json_fetcher(url: str, headers: Dict[str, str] = None) -> Dict[str, object]:
@@ -203,8 +204,8 @@ class ExternalSignalProvider:
     def cache_key_for_positions(self, positions: List[Position]) -> str:
         payload = {
             "alphaSymbols": self.alpha_symbols(positions),
-            "cryptoIds": symbol_list(self.settings.get("externalCryptoIds") or "bitcoin,ethereum"),
-            "fredSeries": symbol_list(self.settings.get("externalFredSeries") or "DGS10,DGS2,DFF"),
+            "cryptoIds": symbol_list(self.settings.get("externalCryptoIds") or "bitcoin,ethereum") if self.external_api_enabled("externalCoinGeckoEnabled") else [],
+            "fredSeries": symbol_list(self.settings.get("externalFredSeries") or "DGS10,DGS2,DFF") if self.external_api_enabled("externalFredEnabled") else [],
             "secSymbols": self.sec_symbols(positions),
             "dartSymbols": self.dart_symbols(positions),
             "alphaMax": str(self.settings.get("externalAlphaMaxSymbols") or "3"),
@@ -213,12 +214,19 @@ class ExternalSignalProvider:
             "dartLookbackDays": str(self.settings.get("externalDartLookbackDays") or "14"),
             "dartMappings": symbol_assignments(self.settings.get("externalDartCorpCodes") or ""),
             "settingsUpdatedAt": str(self.settings.get("updatedAt") or ""),
+            "enabled": {
+                "alpha": self.external_api_enabled("externalAlphaEnabled"),
+                "coingecko": self.external_api_enabled("externalCoinGeckoEnabled"),
+                "fred": self.external_api_enabled("externalFredEnabled"),
+                "opendart": self.external_api_enabled("externalDartEnabled"),
+                "sec": self.sec_enabled(),
+            },
             "configured": {
-                "alpha": bool(str(self.settings.get("alphaVantageApiKey") or "").strip()),
-                "coingecko": bool(str(self.settings.get("coingeckoApiKey") or "").strip()),
-                "fred": bool(str(self.settings.get("fredApiKey") or "").strip()),
-                "opendart": bool(str(self.settings.get("opendartApiKey") or "").strip()),
-                "sec": str(self.settings.get("externalSecEnabled") or "1").strip() != "0",
+                "alpha": self.external_api_enabled("externalAlphaEnabled") and bool(str(self.settings.get("alphaVantageApiKey") or "").strip()),
+                "coingecko": self.external_api_enabled("externalCoinGeckoEnabled"),
+                "fred": self.external_api_enabled("externalFredEnabled") and bool(str(self.settings.get("fredApiKey") or "").strip()),
+                "opendart": self.external_api_enabled("externalDartEnabled") and bool(str(self.settings.get("opendartApiKey") or "").strip()),
+                "sec": self.sec_enabled(),
             },
         }
         raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -254,6 +262,9 @@ class ExternalSignalProvider:
         value = fallback if str(raw or "").strip() == "" else int(number(raw))
         return max(minimum, value)
 
+    def external_api_enabled(self, key: str) -> bool:
+        return str(self.settings.get(key) or "1").strip().lower() not in DISABLED_SETTING_VALUES
+
     def guarded_call(self, source: str, target: str, fetch: Callable[[], object]):
         guard = ExternalApiGuard(self.provider_state, sleep=self.sleep)
         return guard.call(
@@ -283,6 +294,8 @@ class ExternalSignalProvider:
         self.status(signals, source, isinstance(error, ExternalRateLimited), message + str(error)[:120])
 
     def add_alpha_vantage(self, signals: Dict[str, object], positions: List[Position]) -> None:
+        if not self.external_api_enabled("externalAlphaEnabled"):
+            return
         api_key = str(self.settings.get("alphaVantageApiKey") or "").strip()
         if not api_key:
             return
@@ -314,6 +327,8 @@ class ExternalSignalProvider:
                 self.status_for_error(signals, "Alpha Vantage", symbol + " ", error)
 
     def alpha_symbols(self, positions: List[Position]) -> List[str]:
+        if not self.external_api_enabled("externalAlphaEnabled"):
+            return []
         max_symbols = int(number(self.settings.get("externalAlphaMaxSymbols")) or 3)
         symbols = []
         seen = set()
@@ -329,7 +344,7 @@ class ExternalSignalProvider:
         return symbols[:max(1, max_symbols)]
 
     def sec_enabled(self) -> bool:
-        return str(self.settings.get("externalSecEnabled") or "1").strip().lower() not in {"0", "false", "no", "off", "disabled"}
+        return self.external_api_enabled("externalSecEnabled")
 
     def sec_user_agent(self) -> str:
         return str(self.settings.get("externalSecUserAgent") or "DigitalTwin/1.0 local-contact").strip() or "DigitalTwin/1.0 local-contact"
@@ -499,6 +514,8 @@ class ExternalSignalProvider:
         return {}
 
     def add_coingecko(self, signals: Dict[str, object]) -> None:
+        if not self.external_api_enabled("externalCoinGeckoEnabled"):
+            return
         ids = self.limited_targets(
             signals,
             "CoinGecko",
@@ -551,6 +568,8 @@ class ExternalSignalProvider:
             self.status_for_error(signals, "CoinGecko", "", error)
 
     def add_fred(self, signals: Dict[str, object]) -> None:
+        if not self.external_api_enabled("externalFredEnabled"):
+            return
         api_key = str(self.settings.get("fredApiKey") or "").strip()
         if not api_key:
             return
@@ -592,6 +611,8 @@ class ExternalSignalProvider:
             macro["yieldSpread10y2y"] = number(series["DGS10"].get("value")) - number(series["DGS2"].get("value"))
 
     def add_opendart(self, signals: Dict[str, object], positions: List[Position]) -> None:
+        if not self.external_api_enabled("externalDartEnabled"):
+            return
         api_key = str(self.settings.get("opendartApiKey") or "").strip()
         if not api_key:
             return
@@ -644,6 +665,8 @@ class ExternalSignalProvider:
                 self.status_for_error(signals, "OpenDART", symbol + " ", error)
 
     def dart_symbols(self, positions: List[Position]) -> List[str]:
+        if not self.external_api_enabled("externalDartEnabled"):
+            return []
         symbols = []
         seen = set()
         for position in positions:

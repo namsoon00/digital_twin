@@ -552,11 +552,20 @@ class PythonServiceTests(unittest.TestCase):
             legacy_by_symbol={"000660": {"exitPressure": 76, "decisionBasis": "lossCut"}},
             portfolio_id="main",
         )
+        payload = graph.to_dict()
 
         self.assertEqual("ontology-first", graph.worldview["model"])
+        self.assertEqual("TBox", payload["tbox"]["box"])
+        self.assertEqual("ABox", payload["abox"]["box"])
+        self.assertIn("Stock", payload["tbox"]["classes"])
+        self.assertIn("HOLDS", payload["tbox"]["relationTypes"])
+        self.assertGreater(payload["abox"]["entityCount"], 0)
         self.assertTrue(any(item.relation_type == "HOLDS" for item in graph.relations))
         self.assertTrue(any(item.relation_type == "EXPOSED_TO" for item in graph.relations))
+        self.assertTrue(any(item.kind == "tbox-class" for item in graph.entities))
         self.assertIn("온톨로지 그래프 JSON", graph.prompt)
+        self.assertIn("TBox", graph.prompt)
+        self.assertIn("ABox", graph.prompt)
         self.assertTrue(graph.opinion_for_symbol("000660").dominant_risks)
 
     def test_neo4j_ontology_repository_builds_relation_statements(self):
@@ -572,8 +581,12 @@ class PythonServiceTests(unittest.TestCase):
         repository = Neo4jOntologyGraphRepository("http://127.0.0.1:7474", user="neo4j", password="secret")
 
         statements = repository.statements(graph)
+        entity_rows = repository.rows_for_entities(graph)
+        relation_rows = repository.rows_for_relations(graph)
 
         self.assertEqual("CONTRADICTS", safe_relation_type("contradicts"))
+        self.assertIn("TBox", {row["ontologyBox"] for row in entity_rows})
+        self.assertIn("ABox", {row["ontologyBox"] for row in relation_rows})
         self.assertTrue(any("OntologyEntity" in item["statement"] for item in statements))
         self.assertTrue(any("MERGE (a)-[r:HOLDS]" in item["statement"] for item in statements))
         self.assertFalse(NullOntologyGraphRepository().save_graph(graph)["saved"])

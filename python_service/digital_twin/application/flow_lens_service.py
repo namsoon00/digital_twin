@@ -469,6 +469,8 @@ def build_toss_decision(
         ],
         "ontologyStrategy": {
             "promptVersion": ONTOLOGY_PROMPT_VERSION,
+            "tbox": ontology.to_dict().get("tbox", {}),
+            "abox": ontology.to_dict().get("abox", {}),
             "worldview": dict(ontology.worldview or {}),
             "entityCount": len(ontology.entities),
             "relationCount": len(ontology.relations),

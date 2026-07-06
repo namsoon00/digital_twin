@@ -7889,6 +7889,8 @@
     var decision = snapshot.tossDecision || {};
     var strategy = decision.ontologyStrategy || {};
     var worldview = strategy.worldview || {};
+    var tbox = strategy.tbox || {};
+    var abox = strategy.abox || {};
     var items = (decision.items || []).filter(function (item) { return item.ontologyOpinion; });
     return [
       '<article class="panel lab-panel">',
@@ -7901,6 +7903,8 @@
       '</div>',
       '<div class="lab-stats-grid">',
       renderLabStat("전략 모델", worldview.model || "ontology-first", ""),
+      renderLabStat("TBox", (tbox.classes || []).length || 0, "개 클래스"),
+      renderLabStat("ABox", abox.entityCount || 0, "개 assertion"),
       renderLabStat("관계", strategy.relationCount || 0, "개"),
       renderLabStat("evidence", strategy.evidenceCount || 0, "개"),
       renderLabStat("충돌", worldview.contradictionCount || 0, "개"),

@@ -13,6 +13,15 @@
 - `Belief`: evidence에서 도출된 지지 또는 위험 판단.
 - `Opinion`: 온톨로지 관계로 만든 종목별 투자 의견.
 
+## TBox And ABox
+
+이 모델은 TBox와 ABox를 분리한다.
+
+- `TBox`: 투자 온톨로지의 스키마 계층이다. `Portfolio`, `Stock`, `Sector`, `Risk`, `Evidence`, `Belief`, `Opinion` 같은 클래스와 `HOLDS`, `EXPOSED_TO`, `CONTRADICTS`, `HAS_EVIDENCE` 같은 관계 타입, 그리고 추론 규칙을 정의한다.
+- `ABox`: 현재 계좌 스냅샷에서 만들어진 실제 assertion 계층이다. 실제 보유 종목, 섹터 노출, 수급 evidence, 추세 evidence, 위험 belief, 종목별 opinion이 여기에 들어간다.
+
+AI 프롬프트에는 TBox와 ABox를 함께 전달한다. AI는 TBox를 해석 규칙으로 읽고, ABox를 현재 투자 상태의 사실 집합으로 읽어야 한다. Neo4j 저장 시 노드와 관계에는 `ontologyBox` 속성을 붙여 `TBox`와 `ABox`를 구분한다.
+
 ## Relation Types
 
 - `HOLDS`: 포트폴리오가 종목을 보유한다.
@@ -32,10 +41,11 @@
 1. Toss 계좌와 시장 데이터를 `Position`, `PortfolioSummary`로 정규화한다.
 2. 기존 공식 기반 `exitPressure`, `profitTakePressure`, `lossCutPressure`를 계산한다.
 3. `domain/ontology.py`가 포트폴리오 온톨로지 그래프를 만든다.
-4. 종목별 `OntologyOpinion`을 생성해 `DecisionItem.ontology_opinion`과 `DecisionItem.ai_context`에 붙인다.
-5. 실시간 모니터링은 결정 변화 알림 metadata에 `ontologyReviewContext`를 포함한다.
-6. 모델 리뷰 워커는 이 컨텍스트를 AI 프롬프트에 넣어 세계관, 관계, 충돌, 데이터 검증, 다음 실험을 분석한다.
-7. `NEO4J_URI`가 설정되어 있으면 `infrastructure/neo4j_ontology.py`가 동일 그래프를 Neo4j에 저장한다.
+4. TBox 클래스/관계 정의와 ABox 인스턴스 assertion을 같은 그래프 payload에 담는다.
+5. 종목별 `OntologyOpinion`을 생성해 `DecisionItem.ontology_opinion`과 `DecisionItem.ai_context`에 붙인다.
+6. 실시간 모니터링은 결정 변화 알림 metadata에 `ontologyReviewContext`를 포함한다.
+7. 모델 리뷰 워커는 이 컨텍스트를 AI 프롬프트에 넣어 세계관, 관계, 충돌, 데이터 검증, 다음 실험을 분석한다.
+8. `NEO4J_URI`가 설정되어 있으면 `infrastructure/neo4j_ontology.py`가 동일 그래프를 Neo4j에 저장한다.
 
 ## Neo4j Configuration
 
@@ -55,6 +65,8 @@ HTTP URI는 Neo4j transactional endpoint로 전송한다. `bolt://` 또는 `neo4
 AI에는 다음 데이터를 함께 전달한다.
 
 - 포트폴리오 세계관: 지배 섹터, 현금, risk/support belief count, 충돌 수.
+- TBox: 클래스, 관계 타입, 추론 규칙.
+- ABox: 현재 포트폴리오 assertion count와 실제 instance 집합.
 - 관계 그래프: 포트폴리오-종목-섹터-시장-통화-리스크-기회 관계.
 - Evidence: 기존 점수, 노출, 추세, 수급, 데이터 품질.
 - Belief: 지지/위험 판단.

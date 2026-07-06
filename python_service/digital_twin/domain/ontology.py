@@ -7,7 +7,48 @@ from .market_data import clamp, number
 from .portfolio import PortfolioSummary, Position
 
 
-ONTOLOGY_PROMPT_VERSION = "ontology-investment-v1"
+ONTOLOGY_PROMPT_VERSION = "ontology-investment-v2-tbox-abox"
+
+TBOX_CLASSES = [
+    "Portfolio",
+    "Stock",
+    "Sector",
+    "Market",
+    "Currency",
+    "Cash",
+    "Risk",
+    "Opportunity",
+    "Contradiction",
+    "Evidence",
+    "Belief",
+    "Opinion",
+    "AIReview",
+    "LegacyScoreModel",
+]
+
+TBOX_RELATION_TYPES = [
+    "HOLDS",
+    "HOLDS_CASH",
+    "BELONGS_TO",
+    "TRADED_IN",
+    "DENOMINATED_IN",
+    "EXPOSED_TO",
+    "SUPPORTED_BY",
+    "CONTRADICTS",
+    "USES_EVIDENCE_FROM",
+    "REQUESTS_OPINION_FROM",
+    "HAS_EVIDENCE",
+    "HAS_BELIEF",
+    "HAS_OPINION",
+]
+
+TBOX_REASONING_RULES = [
+    "sector concentration and position weight create exposure risk beliefs",
+    "trend and smart-money flow create support or risk beliefs",
+    "legacy score disagreement with trend or flow creates contradiction beliefs",
+    "data quality controls AI opinion confidence",
+    "legacy score model remains supporting evidence, not the primary decision model",
+]
 
 
 @dataclass
@@ -102,6 +143,8 @@ class PortfolioOntology:
     def to_dict(self) -> Dict[str, object]:
         return {
             "portfolioId": self.portfolio_id,
+            "tbox": ontology_tbox(),
+            "abox": ontology_abox(self),
             "entities": [item.to_dict() for item in self.entities],
             "relations": [item.to_dict() for item in self.relations],
             "evidence": [item.to_dict() for item in self.evidence],
@@ -123,6 +166,72 @@ class PortfolioOntology:
 def entity_id(kind: str, value: str) -> str:
     normalized = re.sub(r"[^A-Za-z0-9가-힣_.:-]+", "-", str(value or "").strip())
     return kind + ":" + (normalized or "unknown")
+
+
+def ontology_tbox() -> Dict[str, object]:
+    return {
+        "box": "TBox",
+        "description": "Investment ontology schema: classes, relation types, and reasoning rules.",
+        "classes": list(TBOX_CLASSES),
+        "relationTypes": list(TBOX_RELATION_TYPES),
+        "reasoningRules": list(TBOX_REASONING_RULES),
+    }
+
+
+def ontology_abox(graph: PortfolioOntology) -> Dict[str, object]:
+    return {
+        "box": "ABox",
+        "description": "Runtime portfolio assertions: holdings, evidence, beliefs, and opinions.",
+        "portfolioId": graph.portfolio_id,
+        "entityCount": len([item for item in graph.entities if item.properties.get("ontologyBox") != "TBox"]),
+        "relationCount": len([item for item in graph.relations if item.properties.get("ontologyBox") != "TBox"]),
+        "evidenceCount": len(graph.evidence),
+        "beliefCount": len(graph.beliefs),
+        "opinionCount": len(graph.opinions),
+    }
+
+
+def tbox_entities() -> List[OntologyEntity]:
+    entities = [
+        OntologyEntity(entity_id("ontology-box", "TBox"), "TBox", "ontology-box", {
+            "ontologyBox": "TBox",
+            "description": "Schema layer for investment ontology concepts.",
+        }),
+        OntologyEntity(entity_id("ontology-box", "ABox"), "ABox", "ontology-box", {
+            "ontologyBox": "TBox",
+            "description": "Assertion layer for runtime portfolio facts.",
+        }),
+    ]
+    for name in TBOX_CLASSES:
+        entities.append(OntologyEntity(entity_id("tbox-class", name), name, "tbox-class", {
+            "ontologyBox": "TBox",
+            "box": "TBox",
+        }))
+    for name in TBOX_RELATION_TYPES:
+        entities.append(OntologyEntity(entity_id("tbox-relation", name), name, "tbox-relation", {
+            "ontologyBox": "TBox",
+            "box": "TBox",
+        }))
+    return entities
+
+
+def tbox_relations() -> List[OntologyRelation]:
+    relations: List[OntologyRelation] = []
+    tbox_id = entity_id("ontology-box", "TBox")
+    abox_id = entity_id("ontology-box", "ABox")
+    for name in TBOX_CLASSES:
+        relations.append(OntologyRelation(tbox_id, entity_id("tbox-class", name), "DEFINES_CLASS", properties={"ontologyBox": "TBox"}))
+    for name in TBOX_RELATION_TYPES:
+        relations.append(OntologyRelation(tbox_id, entity_id("tbox-relation", name), "DEFINES_RELATION", properties={"ontologyBox": "TBox"}))
+    relations.append(OntologyRelation(tbox_id, abox_id, "CONSTRAINS_ASSERTIONS", properties={"ontologyBox": "TBox"}))
+    return relations
+
+
+def abox_properties(properties: Dict[str, object] = None) -> Dict[str, object]:
+    payload = dict(properties or {})
+    payload.setdefault("ontologyBox", "ABox")
+    payload.setdefault("box", "ABox")
+    return payload
 
 
 def symbol_key(position: Position) -> str:
@@ -301,61 +410,69 @@ def build_portfolio_ontology(
     external_signals = external_signals or {}
     clean_positions = [item for item in positions if not item.is_cash() and number(item.market_value) > 0]
     graph = PortfolioOntology(portfolio_id=portfolio_id)
-    graph.entities.append(OntologyEntity(entity_id("portfolio", portfolio_id), "투자 포트폴리오", "portfolio", {
+    graph.entities.extend(tbox_entities())
+    graph.relations.extend(tbox_relations())
+    graph.entities.append(OntologyEntity(entity_id("portfolio", portfolio_id), "투자 포트폴리오", "portfolio", abox_properties({
         "total": number(portfolio.total),
         "invested": number(portfolio.invested),
         "cash": number(portfolio.cash),
         "concentration": number(portfolio.concentration),
-    }))
-    graph.entities.append(OntologyEntity(entity_id("concept", "legacy-score-model"), "기존 점수 모델", "model", {
+    })))
+    graph.entities.append(OntologyEntity(entity_id("concept", "legacy-score-model"), "기존 점수 모델", "model", abox_properties({
         "role": "supporting-evidence",
-    }))
-    graph.entities.append(OntologyEntity(entity_id("concept", "ai-investment-review"), "AI 투자 의견", "ai-review", {
+        "tboxClass": "LegacyScoreModel",
+    })))
+    graph.entities.append(OntologyEntity(entity_id("concept", "ai-investment-review"), "AI 투자 의견", "ai-review", abox_properties({
         "promptVersion": ONTOLOGY_PROMPT_VERSION,
-    }))
+        "tboxClass": "AIReview",
+    })))
     if portfolio.cash:
-        graph.entities.append(OntologyEntity(entity_id("asset", "cash"), "대기 현금", "cash", {
+        graph.entities.append(OntologyEntity(entity_id("asset", "cash"), "대기 현금", "cash", abox_properties({
             "value": number(portfolio.cash),
             "cashRatio": round((number(portfolio.cash) / number(portfolio.total)) * 100, 2) if number(portfolio.total) else 0,
-        }))
+            "tboxClass": "Cash",
+        })))
         graph.relations.append(OntologyRelation(
             entity_id("portfolio", portfolio_id),
             entity_id("asset", "cash"),
             "HOLDS_CASH",
             weight=1.0,
+            properties=abox_properties(),
         ))
     sector_weights: Dict[str, float] = {}
     for sector in portfolio.sectors:
         label = str(sector.get("sector") or "기타")
         sector_weights[label] = number(sector.get("ratio"))
-        graph.entities.append(OntologyEntity(entity_id("sector", label), label, "sector", dict(sector)))
+        graph.entities.append(OntologyEntity(entity_id("sector", label), label, "sector", abox_properties({**dict(sector), "tboxClass": "Sector"})))
         graph.relations.append(OntologyRelation(
             entity_id("portfolio", portfolio_id),
             entity_id("sector", label),
             "EXPOSED_TO",
             weight=round(number(sector.get("ratio")) / 100, 4),
-            properties={"basis": "sector-weight"},
+            properties=abox_properties({"basis": "sector-weight"}),
         ))
     for position in clean_positions:
         symbol = symbol_key(position)
         stock_id = entity_id("stock", symbol)
-        graph.entities.append(OntologyEntity(stock_id, position.name or symbol, "stock", {
+        graph.entities.append(OntologyEntity(stock_id, position.name or symbol, "stock", abox_properties({
             "symbol": symbol,
             "market": position.market,
             "currency": position.currency,
             "sector": position.sector,
             "marketValue": number(position.market_value),
             "profitLossRate": number(position.profit_loss_rate),
-        }))
+            "tboxClass": "Stock",
+        })))
         for kind, label in [("market", position.market or "unknown"), ("currency", position.currency or "unknown")]:
-            graph.entities.append(OntologyEntity(entity_id(kind, label), label, kind, {}))
+            tbox_class = "Market" if kind == "market" else "Currency"
+            graph.entities.append(OntologyEntity(entity_id(kind, label), label, kind, abox_properties({"tboxClass": tbox_class})))
         graph.relations.extend([
-            OntologyRelation(entity_id("portfolio", portfolio_id), stock_id, "HOLDS", weight=round(position_weight(position, portfolio) / 100, 4)),
-            OntologyRelation(stock_id, entity_id("sector", position.sector or "기타"), "BELONGS_TO", weight=1.0),
-            OntologyRelation(stock_id, entity_id("market", position.market or "unknown"), "TRADED_IN", weight=1.0),
-            OntologyRelation(stock_id, entity_id("currency", position.currency or "unknown"), "DENOMINATED_IN", weight=1.0),
-            OntologyRelation(stock_id, entity_id("concept", "legacy-score-model"), "USES_EVIDENCE_FROM", weight=0.55),
-            OntologyRelation(stock_id, entity_id("concept", "ai-investment-review"), "REQUESTS_OPINION_FROM", weight=1.0),
+            OntologyRelation(entity_id("portfolio", portfolio_id), stock_id, "HOLDS", weight=round(position_weight(position, portfolio) / 100, 4), properties=abox_properties()),
+            OntologyRelation(stock_id, entity_id("sector", position.sector or "기타"), "BELONGS_TO", weight=1.0, properties=abox_properties()),
+            OntologyRelation(stock_id, entity_id("market", position.market or "unknown"), "TRADED_IN", weight=1.0, properties=abox_properties()),
+            OntologyRelation(stock_id, entity_id("currency", position.currency or "unknown"), "DENOMINATED_IN", weight=1.0, properties=abox_properties()),
+            OntologyRelation(stock_id, entity_id("concept", "legacy-score-model"), "USES_EVIDENCE_FROM", weight=0.55, properties=abox_properties()),
+            OntologyRelation(stock_id, entity_id("concept", "ai-investment-review"), "REQUESTS_OPINION_FROM", weight=1.0, properties=abox_properties()),
         ])
         legacy = legacy_by_symbol.get(symbol) or legacy_by_symbol.get(position.symbol) or {}
         opinion = build_position_opinion(position, portfolio, legacy)
@@ -390,21 +507,21 @@ def build_portfolio_ontology(
             graph.beliefs.append(OntologyBelief("belief:" + symbol + ":risk:" + str(index), stock_id, label, "risk", 0.7, opinion.evidence_ids))
         for risk in opinion.dominant_risks:
             risk_id = entity_id("risk", risk)
-            graph.entities.append(OntologyEntity(risk_id, risk, "risk", {}))
-            graph.relations.append(OntologyRelation(stock_id, risk_id, "EXPOSED_TO", weight=0.75, evidence_ids=opinion.evidence_ids))
+            graph.entities.append(OntologyEntity(risk_id, risk, "risk", abox_properties({"tboxClass": "Risk"})))
+            graph.relations.append(OntologyRelation(stock_id, risk_id, "EXPOSED_TO", weight=0.75, evidence_ids=opinion.evidence_ids, properties=abox_properties()))
         if opinion.opportunities:
             opportunity_id = entity_id("opportunity", opinion.opportunities[0])
-            graph.entities.append(OntologyEntity(opportunity_id, opinion.opportunities[0], "opportunity", {}))
-            graph.relations.append(OntologyRelation(stock_id, opportunity_id, "SUPPORTED_BY", weight=0.65, evidence_ids=opinion.evidence_ids))
+            graph.entities.append(OntologyEntity(opportunity_id, opinion.opportunities[0], "opportunity", abox_properties({"tboxClass": "Opportunity"})))
+            graph.relations.append(OntologyRelation(stock_id, opportunity_id, "SUPPORTED_BY", weight=0.65, evidence_ids=opinion.evidence_ids, properties=abox_properties()))
         if opinion.contradictions:
             contradiction_id = entity_id("contradiction", opinion.contradictions[0])
-            graph.entities.append(OntologyEntity(contradiction_id, opinion.contradictions[0], "contradiction", {}))
-            graph.relations.append(OntologyRelation(stock_id, contradiction_id, "CONTRADICTS", weight=0.8, evidence_ids=opinion.evidence_ids))
-    graph.worldview = portfolio_worldview(graph, portfolio, external_signals)
-    graph.prompt = build_investment_opinion_prompt(graph)
+            graph.entities.append(OntologyEntity(contradiction_id, opinion.contradictions[0], "contradiction", abox_properties({"tboxClass": "Contradiction"})))
+            graph.relations.append(OntologyRelation(stock_id, contradiction_id, "CONTRADICTS", weight=0.8, evidence_ids=opinion.evidence_ids, properties=abox_properties()))
     graph.entities = dedupe_entities(graph.entities)
     graph.relations = dedupe_relations(graph.relations)
     graph.evidence = dedupe_evidence(graph.evidence)
+    graph.worldview = portfolio_worldview(graph, portfolio, external_signals)
+    graph.prompt = build_investment_opinion_prompt(graph)
     return graph
 
 
@@ -450,6 +567,10 @@ def portfolio_worldview(
     top_sector = portfolio.sectors[0] if portfolio.sectors else {}
     return {
         "model": "ontology-first",
+        "ontologyBoxes": {
+            "tbox": ontology_tbox(),
+            "abox": ontology_abox(graph),
+        },
         "legacyModelRole": "supporting-evidence",
         "dominantSector": top_sector.get("sector") or "",
         "dominantSectorRatio": number(top_sector.get("ratio")) if top_sector else 0.0,
@@ -464,6 +585,8 @@ def portfolio_worldview(
 
 def prompt_payload(graph: PortfolioOntology) -> Dict[str, object]:
     return {
+        "tbox": ontology_tbox(),
+        "abox": ontology_abox(graph),
         "worldview": graph.worldview,
         "opinions": [item.to_dict() for item in graph.opinions],
         "relations": [item.to_dict() for item in graph.relations[:80]],
@@ -476,6 +599,7 @@ def build_investment_opinion_prompt(graph: PortfolioOntology) -> str:
     payload = json.dumps(prompt_payload(graph), ensure_ascii=False, sort_keys=True)
     return "\n".join([
         "너는 투자전략 온톨로지 그래프를 읽는 AI 투자 의견 리뷰어다.",
+        "TBox는 투자 세계관의 클래스·관계·추론 규칙이고, ABox는 현재 계좌의 실제 보유·evidence·belief·opinion assertion이다.",
         "매수/매도 명령을 확정하지 말고, 포트폴리오 세계관·관계·모순·데이터 공백을 분석해라.",
         "기존 점수 모델은 보조 데이터로만 사용하고, 최종 판단은 온톨로지 관계와 evidence 충돌을 기준으로 설명해라.",
         "계좌번호, API 키, 토큰, 개인 식별정보를 추정하거나 요청하지 마라.",

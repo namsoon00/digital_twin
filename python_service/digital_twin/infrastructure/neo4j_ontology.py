@@ -53,6 +53,7 @@ class Neo4jOntologyGraphRepository:
                 "id": item.entity_id,
                 "label": item.label,
                 "kind": item.kind,
+                "ontologyBox": str((item.properties or {}).get("ontologyBox") or "ABox"),
                 "propertiesJson": json.dumps(item.properties or {}, ensure_ascii=False, sort_keys=True),
             }
             for item in graph.entities
@@ -65,6 +66,7 @@ class Neo4jOntologyGraphRepository:
                 "target": item.target,
                 "type": safe_relation_type(item.relation_type),
                 "weight": float(item.weight or 0),
+                "ontologyBox": str((item.properties or {}).get("ontologyBox") or "ABox"),
                 "evidenceIds": [str(value) for value in item.evidence_ids],
                 "propertiesJson": json.dumps(item.properties or {}, ensure_ascii=False, sort_keys=True),
             }
@@ -79,6 +81,7 @@ class Neo4jOntologyGraphRepository:
                 "kind": item.kind,
                 "source": item.source,
                 "summary": item.summary,
+                "ontologyBox": "ABox",
                 "valueJson": json.dumps(item.value or {}, ensure_ascii=False, sort_keys=True),
                 "confidence": float(item.confidence or 0),
             }
@@ -93,6 +96,7 @@ class Neo4jOntologyGraphRepository:
                 "label": item.label,
                 "polarity": item.polarity,
                 "confidence": float(item.confidence or 0),
+                "ontologyBox": "ABox",
                 "evidenceIds": [str(value) for value in item.evidence_ids],
             }
             for item in graph.beliefs
@@ -107,6 +111,7 @@ class Neo4jOntologyGraphRepository:
                 "tone": item.tone,
                 "conviction": float(item.conviction or 0),
                 "ontologyPressure": float(item.ontology_pressure or 0),
+                "ontologyBox": "ABox",
                 "payloadJson": json.dumps(item.to_dict(), ensure_ascii=False, sort_keys=True),
             }
             for item in graph.opinions
@@ -120,7 +125,7 @@ class Neo4jOntologyGraphRepository:
                     "UNWIND $rows AS row "
                     "MERGE (n:OntologyEntity {id: row.id}) "
                     "SET n.label = row.label, n.kind = row.kind, "
-                    "n.propertiesJson = row.propertiesJson, n.updatedAt = $updatedAt"
+                    "n.ontologyBox = row.ontologyBox, n.propertiesJson = row.propertiesJson, n.updatedAt = $updatedAt"
                 ),
                 "parameters": {"rows": self.rows_for_entities(graph), "updatedAt": updated_at},
             },
@@ -128,7 +133,7 @@ class Neo4jOntologyGraphRepository:
                 "statement": (
                     "UNWIND $rows AS row "
                     "MERGE (n:OntologyEvidence {id: row.id}) "
-                    "SET n.kind = row.kind, n.source = row.source, n.summary = row.summary, "
+                    "SET n.kind = row.kind, n.source = row.source, n.summary = row.summary, n.ontologyBox = row.ontologyBox, "
                     "n.valueJson = row.valueJson, n.confidence = row.confidence, n.updatedAt = $updatedAt "
                     "WITH row, n MATCH (s:OntologyEntity {id: row.subject}) "
                     "MERGE (s)-[:HAS_EVIDENCE]->(n)"
@@ -140,7 +145,7 @@ class Neo4jOntologyGraphRepository:
                     "UNWIND $rows AS row "
                     "MERGE (n:OntologyBelief {id: row.id}) "
                     "SET n.label = row.label, n.polarity = row.polarity, "
-                    "n.confidence = row.confidence, n.evidenceIds = row.evidenceIds, n.updatedAt = $updatedAt "
+                    "n.confidence = row.confidence, n.ontologyBox = row.ontologyBox, n.evidenceIds = row.evidenceIds, n.updatedAt = $updatedAt "
                     "WITH row, n MATCH (s:OntologyEntity {id: row.subject}) "
                     "MERGE (s)-[:HAS_BELIEF]->(n)"
                 ),
@@ -152,7 +157,7 @@ class Neo4jOntologyGraphRepository:
                     "MERGE (n:OntologyOpinion {id: row.id}) "
                     "SET n.symbol = row.symbol, n.action = row.action, n.tone = row.tone, "
                     "n.conviction = row.conviction, n.ontologyPressure = row.ontologyPressure, "
-                    "n.payloadJson = row.payloadJson, n.updatedAt = $updatedAt "
+                    "n.ontologyBox = row.ontologyBox, n.payloadJson = row.payloadJson, n.updatedAt = $updatedAt "
                     "WITH row, n, 'stock:' + row.symbol AS stockId MATCH (s:OntologyEntity {id: stockId}) "
                     "MERGE (s)-[:HAS_OPINION]->(n)"
                 ),
@@ -167,7 +172,7 @@ class Neo4jOntologyGraphRepository:
                     "MATCH (b:OntologyEntity {id: row.target}) "
                     "MERGE (a)-[r:" + relation_type + "]->(b) "
                     "SET r.weight = row.weight, r.evidenceIds = row.evidenceIds, "
-                    "r.propertiesJson = row.propertiesJson, r.updatedAt = $updatedAt"
+                    "r.ontologyBox = row.ontologyBox, r.propertiesJson = row.propertiesJson, r.updatedAt = $updatedAt"
                 ),
                 "parameters": {"rows": rows, "updatedAt": updated_at},
             })

@@ -475,6 +475,11 @@ def build_toss_decision(
             "entityCount": len(ontology.entities),
             "relationCount": len(ontology.relations),
             "evidenceCount": len(ontology.evidence),
+            "entities": [item.to_dict() for item in ontology.entities[:80]],
+            "relations": [item.to_dict() for item in ontology.relations[:120]],
+            "evidence": [item.to_dict() for item in ontology.evidence[:80]],
+            "beliefs": [item.to_dict() for item in ontology.beliefs[:80]],
+            "opinions": [item.to_dict() for item in ontology.opinions[:40]],
             "prompt": ontology.prompt,
         },
     }

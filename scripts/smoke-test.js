@@ -832,8 +832,9 @@ function checkFrontendAdminRender() {
     assertOk(styles.indexOf(".strategy-section-tabs") >= 0 && styles.indexOf(".strategy-section-bar") >= 0, "투자전략 내부 섹션 스타일이 정의되지 않았습니다.");
     assertOk(modelingHtml.indexOf('data-strategy-section="data"') >= 0 && modelingHtml.indexOf('data-strategy-section="rules"') >= 0 && modelingHtml.indexOf('data-strategy-section="results"') >= 0, "투자전략 내부 섹션 이동 버튼이 없습니다.");
     assertOk(modelingHtml.indexOf('data-strategy-section="ontology"') < 0, "온톨로지가 투자전략 내부 섹션에 남아 있습니다.");
-    assertOk(ontologyHtml.indexOf("ontology-view") >= 0 && ontologyHtml.indexOf("Ontology Strategy") >= 0, "온톨로지 상위 탭이 렌더링되지 않았습니다.");
+    assertOk(ontologyHtml.indexOf("ontology-view") >= 0 && ontologyHtml.indexOf("Ontology Control") >= 0, "온톨로지 상위 탭이 렌더링되지 않았습니다.");
     assertOk(ontologyHtml.indexOf("TBox") >= 0 && ontologyHtml.indexOf("ABox") >= 0, "온톨로지 탭에 TBox/ABox 요약이 없습니다.");
+    assertOk(ontologyHtml.indexOf("ontology-map-svg") >= 0 && ontologyHtml.indexOf("ontology-relation-table") >= 0 && ontologyHtml.indexOf("ontology-rule-list") >= 0, "온톨로지 시각화 구성요소가 렌더링되지 않았습니다.");
     assertOk(code.indexOf("writeStrategySectionHistory") >= 0 && code.indexOf("strategySectionUrl") >= 0, "투자전략 내부 탭 URL 동기화 경로가 없습니다.");
     assertOk(modelingHtml.indexOf("model-guide-panel") >= 0, "개요 탭에 모델 운영 가이드가 렌더링되지 않았습니다.");
     assertOk(modelingHtml.indexOf("투자전략 모델링 관리") >= 0, "개요 탭에 투자전략 모델링 관리 제목이 렌더링되지 않았습니다.");

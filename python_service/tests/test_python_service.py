@@ -3155,6 +3155,37 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("• <b>기준일</b>: <code>2026-07-03 15:58 KST</code>", message)
         self.assertIn("• <b>감지</b>: <code>비트코인 24h -5.2%, 7d -12.1%</code>", message)
 
+    def test_external_crypto_alert_title_uses_dominant_change_direction(self):
+        db_path = Path(self.temp.name) / "service.db"
+        templates = SQLiteNotificationTemplateStore(db_path)
+        event = AlertEvent(
+            "main",
+            "메인",
+            "ALERT",
+            "externalCryptoMove",
+            "main:crypto:ETH:+11.8",
+            "크립토 변동",
+            [
+                "크립토 변동 24h -0.1% · 7d +11.8%",
+                "크립토 가격 $1,765",
+                "크립토 거래액 $9,319,846,169",
+                "출처 CoinGecko",
+            ],
+            "ETH",
+            criteria=[
+                "설정: 크립토 24h ±4% 또는 7d ±10% 이상",
+                "감지: ETH 24h -0.1%, 7d +11.8%",
+            ],
+            generated_at="2026-07-06T08:45:00Z",
+            metadata={"market": "CRYPTO", "change24h": -0.1, "change7d": 11.8},
+        )
+
+        message = templates.render(event.rule, alert_context(event))
+
+        self.assertIn("<b>[주의] 크립토 가격 급등</b>", message)
+        self.assertNotIn("<b>[주의] 크립토 가격 급락</b>", message)
+        self.assertIn("• <b>크립토 변동</b>: <code>24h -0.1% · 7d +11.8%</code>", message)
+
     def test_alert_context_adds_reference_date_when_missing(self):
         event = AlertEvent(
             "main",

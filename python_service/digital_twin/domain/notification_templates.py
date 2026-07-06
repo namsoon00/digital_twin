@@ -341,8 +341,23 @@ def signed_direction(value: str) -> int:
     return 1 if match.group(1) == "+" else -1
 
 
+def dominant_signed_direction(value: str) -> int:
+    signed_values: List[float] = []
+    for match in re.finditer(r"([+-])\s*(\d+(?:\.\d+)?)", str(value or "")):
+        sign = -1 if match.group(1) == "-" else 1
+        signed_values.append(sign * float(match.group(2)))
+    if not signed_values:
+        return 0
+    dominant = max(signed_values, key=lambda item: abs(item))
+    if dominant > 0:
+        return 1
+    if dominant < 0:
+        return -1
+    return 0
+
+
 def title_from_change(value: str, positive: str, negative: str, neutral: str) -> str:
-    direction = signed_direction(value)
+    direction = dominant_signed_direction(value)
     if direction > 0:
         return positive
     if direction < 0:

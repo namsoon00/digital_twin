@@ -308,7 +308,7 @@
     { key: "monitorValueChange", group: "실시간", label: "평가액 급변", description: "직전 조회 대비 평가액 변화가 커질 때" },
     { key: "monitorTrendChange", group: "실시간", label: "이동평균 변화", description: "20/60일선 돌파, 크로스, 큰 괴리가 감지될 때" },
     { key: "monitorCashChange", group: "실시간", label: "현금비중 급변", description: "시장별 현금비중이 빠르게 변할 때" },
-    { key: "monitorDecisionChange", group: "실시간", label: "판단 변화", description: "종목 판단이나 리스크 점수가 바뀔 때" },
+    { key: "monitorDecisionChange", group: "실시간", label: "판단 변화", description: "종목 판단이나 위험 점수가 바뀔 때" },
     { key: "externalEquityMove", group: "외부 API", label: "미장 가격/거래량", description: "Alpha Vantage 현재가와 거래량이 임계값을 넘을 때" },
     { key: "externalCryptoMove", group: "외부 API", label: "크립토 변동", description: "CoinGecko BTC/ETH 등 크립토 변동이 커질 때" },
     { key: "externalMacroShift", group: "외부 API", label: "거시 금리 변화", description: "FRED 금리와 10Y-2Y 스프레드가 크게 움직일 때" },
@@ -1995,7 +1995,7 @@
         symbol: "000660",
         severity: "WATCH",
         lines: ["상태 조건부 보유 (52점)", "손익 -3.2%", "추세: 현재 15만 원, 20일선 14만 원(+4.2%)", "수급: 거래량 31,000(1.7x), 거래액 48억 원", "투자자: 외국인 +22,000, 기관 -8,000", "매도/매수 기준 재확인"],
-        criteria: ["설정: 판단 톤이 danger/caution 이거나 손익률이 -8% 이하일 때", "감지: 상태 조건부 보유 (52점), 손익 -3.2%"]
+        criteria: ["설정: 판단 상태가 위험/주의이거나 손익률이 -8% 이하일 때", "감지: 상태 조건부 보유 (52점), 손익 -3.2%"]
       },
       monitorHeartbeat: {
         title: "실시간 모니터링",
@@ -2050,8 +2050,8 @@
         title: "SK하이닉스",
         symbol: "000660",
         severity: "WATCH",
-        lines: ["판단 변화", "이전 리스크 관찰 (36점)", "현재 조건부 보유 (52점)", "Codex 답변: 판단명이 바뀌어 재검토 필요"],
-        criteria: ["설정: 판단 라벨 변경 또는 리스크 점수 변화 15점 이상", "감지: 이전 리스크 관찰 (36점), 현재 조건부 보유 (52점)"]
+        lines: ["판단 변화", "이전 위험 관찰 (36점)", "현재 조건부 보유 (52점)", "Codex 답변: 판단명이 바뀌어 재검토 필요"],
+        criteria: ["설정: 판단 이름 변경 또는 위험 점수 변화 15점 이상", "감지: 이전 위험 관찰 (36점), 현재 조건부 보유 (52점)"]
       },
       externalEquityMove: {
         title: "미국 주식 변동",
@@ -7472,7 +7472,7 @@
     return [
       { key: "valuationWeight", label: "적정가 영향", description: "현재가가 적정가보다 싼지 비싼지를 얼마나 크게 볼지", step: "0.05", unit: "배" },
       { key: "flowWeight", label: "수급 영향", description: "거래량, 매수비중, 이동평균을 얼마나 크게 볼지", step: "0.05", unit: "배" },
-      { key: "riskControlWeight", label: "리스크 영향", description: "리스크 점수가 높을 때 매수 점수를 낮추고 매도 점수를 높이는 정도", step: "0.05", unit: "배" },
+      { key: "riskControlWeight", label: "위험 영향", description: "위험 점수가 높을 때 매수 점수를 낮추고 매도 점수를 높이는 정도", step: "0.05", unit: "배" },
       { key: "thesisWeight", label: "내 판단 영향", description: "종목별로 입력한 내 매수 점수를 얼마나 반영할지", step: "0.05", unit: "배" },
       { key: "confidenceWeight", label: "확신 영향", description: "확신 점수가 높을 때 매수 판단을 얼마나 보강할지", step: "0.05", unit: "배" },
       { key: "growthWeight", label: "성장성", description: "적정가 계산에서 성장 기대를 얼마나 반영할지", step: "0.05", unit: "배" },
@@ -7798,7 +7798,7 @@
       '</div>',
       '<div class="lab-draft-grid">',
       renderLabDraftControl(item.symbol, "thesisScore", "내 매수 점수", draft.thesisScore, "1"),
-      renderLabDraftControl(item.symbol, "riskScore", "리스크 점수", draft.riskScore, "1"),
+      renderLabDraftControl(item.symbol, "riskScore", "위험 점수", draft.riskScore, "1"),
       renderLabDraftControl(item.symbol, "confidenceScore", "확신 점수", draft.confidenceScore, "1"),
       renderLabDraftControl(item.symbol, "targetReturn", "목표 수익률 %", draft.targetReturn, "0.1"),
       renderLabDraftControl(item.symbol, "stopLoss", "허용 손절 %", draft.stopLoss, "0.1"),
@@ -7900,7 +7900,7 @@
       ["fairValueGap", "적정가 괴리"],
       ["profitLossRate", "평단 대비 수익률"],
       ["thesisScore", "사용자 매수 점수"],
-      ["riskScore", "사용자 리스크 점수"]
+      ["riskScore", "사용자 위험 점수"]
     ];
     return [
       '<article class="panel lab-method-panel">',
@@ -8412,7 +8412,7 @@
       ["smartMoneyNet", "외국인+기관 순매수"],
       ["investorFlowScore", "투자자별 수급 점수"],
       ["thesisScore", "실험실에서 입력한 내 매수 점수"],
-      ["riskScore", "실험실에서 입력한 리스크 점수"],
+      ["riskScore", "실험실에서 입력한 위험 점수"],
       ["confidenceScore", "확신 점수"],
       ["targetReturn", "목표 수익률"],
       ["stopLoss", "허용 손절률"],

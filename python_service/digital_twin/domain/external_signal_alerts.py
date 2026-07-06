@@ -5,6 +5,128 @@ from .market_data import number
 from .portfolio import AccountSnapshot, AlertEvent
 
 
+def _ratio_to_threshold(change: float, threshold: float) -> float:
+    threshold_value = abs(float(threshold or 0))
+    if threshold_value <= 0:
+        return 0.0
+    return abs(float(change or 0)) / threshold_value
+
+
+def _threshold_triggered(change: float, threshold: float) -> bool:
+    threshold_value = abs(float(threshold or 0))
+    if threshold_value <= 0:
+        return abs(float(change or 0)) > 0
+    return abs(float(change or 0)) >= threshold_value
+
+
+def _threshold_pct_text(value: float) -> str:
+    rounded = round(abs(float(value or 0)), 1)
+    if rounded == round(rounded):
+        return str(int(round(rounded))) + "%"
+    return str(rounded).rstrip("0").rstrip(".") + "%"
+
+
+def crypto_move_model(symbol: str, asset_label: str, change24h: float, change7d: float, day_threshold: float, week_threshold: float) -> Dict[str, object]:
+    day_ratio = _ratio_to_threshold(change24h, day_threshold)
+    week_ratio = _ratio_to_threshold(change7d, week_threshold)
+    day_triggered = _threshold_triggered(change24h, day_threshold)
+    week_triggered = _threshold_triggered(change7d, week_threshold)
+    candidates: List[Dict[str, object]] = []
+    if day_triggered:
+        candidates.append({
+            "period": "24h",
+            "periodLabel": "24시간",
+            "change": float(change24h or 0),
+            "threshold": float(day_threshold or 0),
+            "ratio": day_ratio,
+        })
+    if week_triggered:
+        candidates.append({
+            "period": "7d",
+            "periodLabel": "7일",
+            "change": float(change7d or 0),
+            "threshold": float(week_threshold or 0),
+            "ratio": week_ratio,
+        })
+    dominant = max(candidates, key=lambda item: (float(item.get("ratio") or 0), abs(float(item.get("change") or 0)))) if candidates else {
+        "period": "",
+        "periodLabel": "",
+        "change": 0.0,
+        "threshold": 0.0,
+        "ratio": 0.0,
+    }
+    dominant_change = float(dominant.get("change") or 0)
+    direction = "up" if dominant_change > 0 else "down" if dominant_change < 0 else "flat"
+    direction_label = "상승" if direction == "up" else "하락" if direction == "down" else "변동"
+    move_label = "급등" if direction == "up" else "급락" if direction == "down" else "급변"
+    title_label = asset_label + " 가격 " + move_label
+    model_score = round(max(0.0, min(100.0, max(day_ratio, week_ratio) * 60.0)), 1)
+    dominant_threshold = float(dominant.get("threshold") or 0)
+    threshold_text = "기준 ±" + _threshold_pct_text(dominant_threshold) if dominant_threshold else "기준값 없음"
+    reason = (
+        str(dominant.get("periodLabel") or "대표")
+        + " 변동률 "
+        + signed_pct(dominant_change)
+        + "가 "
+        + threshold_text
+        + "를 넘어서 "
+        + title_label
+        + "으로 판단했습니다."
+    ) if candidates else "기준을 넘은 크립토 변동이 없습니다."
+    detected_text = (
+        "크립토 변동 모델 "
+        + ("%g" % model_score)
+        + "점, "
+        + str(dominant.get("periodLabel") or "대표")
+        + " "
+        + signed_pct(dominant_change)
+        + " ("
+        + threshold_text
+        + "), 24시간 "
+        + signed_pct(change24h)
+        + ", 7일 "
+        + signed_pct(change7d)
+    )
+    audit = {
+        "key": "cryptoMoveScoreFormula",
+        "label": "크립토 변동 공식",
+        "expression": "min(100, max(abs(change24h)/dayThreshold, abs(change7d)/weekThreshold) * 60)",
+        "result": model_score,
+        "selected": True,
+        "variables": {
+            "change24h": float(change24h or 0),
+            "change7d": float(change7d or 0),
+            "dayThreshold": float(day_threshold or 0),
+            "weekThreshold": float(week_threshold or 0),
+            "dayRatio": round(day_ratio, 4),
+            "weekRatio": round(week_ratio, 4),
+            "dominantChange": dominant_change,
+            "dominantRatio": round(float(dominant.get("ratio") or 0), 4),
+        },
+        "missing": [],
+        "note": reason,
+    }
+    return {
+        "triggered": bool(candidates),
+        "symbol": str(symbol or "").upper(),
+        "score": model_score,
+        "direction": direction,
+        "directionLabel": direction_label,
+        "dominantPeriod": str(dominant.get("period") or ""),
+        "dominantPeriodLabel": str(dominant.get("periodLabel") or ""),
+        "dominantChange": dominant_change,
+        "dominantThreshold": dominant_threshold,
+        "dominantRatio": round(float(dominant.get("ratio") or 0), 4),
+        "dayTriggered": day_triggered,
+        "weekTriggered": week_triggered,
+        "titleLabel": title_label,
+        "severity": "ALERT" if direction == "down" else "WATCH",
+        "reason": reason,
+        "detectedText": detected_text,
+        "formulaAudit": audit,
+    }
+
+
 class ExternalSignalAlertMixin:
     def external_signal_events(self, snapshot: AccountSnapshot, previous: Dict[str, object]) -> List[AlertEvent]:
         signals = snapshot.external_signals or {}
@@ -103,17 +225,16 @@ class ExternalSignalAlertMixin:
             is_bitcoin = symbol == "BTC" or str(coin_id or "").strip().lower() == "bitcoin" or coin_name.lower() == "bitcoin"
             day_threshold = bitcoin_day_threshold if is_bitcoin else default_day_threshold
             week_threshold = bitcoin_week_threshold if is_bitcoin else default_week_threshold
-            day_triggered = abs(change24h) >= day_threshold if day_threshold else True
-            week_triggered = abs(change7d) >= week_threshold if week_threshold else True
-            if not day_triggered and not week_triggered:
+            asset_label = "비트코인" if is_bitcoin else "크립토"
+            model = crypto_move_model(symbol, asset_label, change24h, change7d, day_threshold, week_threshold)
+            if not model.get("triggered"):
                 continue
             price = number(item.get("price"))
             volume24h = number(item.get("volume24h"))
             provider = str(item.get("provider") or "CoinGecko")
             change_label = "비트코인 변동" if is_bitcoin else "크립토 변동"
             change_value = "24h " + signed_pct(change24h) + " · 7d " + signed_pct(change7d)
-            has_negative_trigger = (day_triggered and change24h < 0) or (week_triggered and change7d < 0)
-            severity = "ALERT" if has_negative_trigger else "WATCH"
+            severity = str(model.get("severity") or "WATCH")
             threshold_label = (
                 "비트코인 24h ±" + self.threshold_text("externalBitcoinChange24hPct", "%") + " 또는 7d ±" + self.threshold_text("externalBitcoinChange7dPct", "%") + " 이상"
                 if is_bitcoin
@@ -124,7 +245,7 @@ class ExternalSignalAlertMixin:
                 snapshot.account_label,
                 severity,
                 "externalCryptoMove",
-                ":".join([snapshot.account_id, "crypto", symbol, signed_pct(change24h)]),
+                ":".join([snapshot.account_id, "crypto", symbol, str(model.get("dominantPeriod") or ""), signed_pct(float(model.get("dominantChange") or 0))]),
                 "크립토 변동",
                 [
                     change_label + " " + change_value,
@@ -136,7 +257,7 @@ class ExternalSignalAlertMixin:
                 symbol,
                 criteria=self.criteria(
                     threshold_label,
-                    ("비트코인 " if is_bitcoin else symbol + " ") + "24h " + signed_pct(change24h) + ", 7d " + signed_pct(change7d),
+                    str(model.get("detectedText") or (("비트코인 " if is_bitcoin else symbol + " ") + "24h " + signed_pct(change24h) + ", 7d " + signed_pct(change7d))),
                 ),
                 metadata={
                     "market": "CRYPTO",
@@ -146,6 +267,14 @@ class ExternalSignalAlertMixin:
                     "volume24h": volume24h,
                     "provider": provider,
                     "coinId": str(coin_id or ""),
+                    "cryptoMoveModel": model,
+                    "cryptoMoveScore": model.get("score"),
+                    "cryptoMoveDirection": model.get("directionLabel"),
+                    "cryptoMoveDominantPeriod": model.get("dominantPeriodLabel"),
+                    "cryptoMoveDominantChange": model.get("dominantChange"),
+                    "cryptoMoveTitle": model.get("titleLabel"),
+                    "cryptoMoveReason": model.get("reason"),
+                    "formulaAudits": [model.get("formulaAudit")],
                 },
             ))
         return events

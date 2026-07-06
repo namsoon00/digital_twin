@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List
 
+from .alert_formatting import signed_pct
 from .message_types import MESSAGE_TYPE_LABELS, TRIGGER_SUMMARIES
 from .portfolio import AlertEvent
 from .scoring import notification_signal_labels
@@ -432,6 +433,11 @@ def notification_title_headline(rule: str, raw_lines: List[str], event: AlertEve
         equity_change = data_value(raw_lines, "미장 가격 변동")
         return title_from_change(equity_change, "미장 가격 급등", "미장 가격 급락", "미장 가격·거래량 급변")
     if key == "externalCryptoMove":
+        metadata = dict(getattr(event, "metadata", {}) or {})
+        crypto_model = metadata.get("cryptoMoveModel") if isinstance(metadata.get("cryptoMoveModel"), dict) else {}
+        model_title = str(crypto_model.get("titleLabel") or metadata.get("cryptoMoveTitle") or "").strip()
+        if model_title:
+            return model_title
         crypto_line = first_data_text(raw_lines, r"(비트코인|크립토).*?(24h|7d)")
         asset = "비트코인" if "비트코인" in crypto_line or symbol == "BTC" else "크립토"
         return title_from_change(crypto_line, asset + " 가격 급등", asset + " 가격 급락", asset + " 가격 급변")
@@ -1011,7 +1017,34 @@ def strategy_formula_line(context: Dict[str, object]) -> str:
             label = "익절 점검 공식" if formula_key == "profitTakeScoreFormula" else "손실 관리 공식"
             return "판단 공식: " + label + "(" + formula_key + ")"
         return "판단 공식: 익절 점검 공식(profitTakeScoreFormula) / 손실 관리 공식(lossCutScoreFormula)"
+    if message_type == "externalCryptoMove":
+        return "판단 공식: 크립토 변동 공식(cryptoMoveScoreFormula)"
     return ""
+
+
+def crypto_model_summary_lines(context: Dict[str, object]) -> List[str]:
+    if context_message_type(context) != "externalCryptoMove":
+        return []
+    model = context.get("cryptoMoveModel") if isinstance(context, dict) else {}
+    if not isinstance(model, dict):
+        model = {}
+    title = str(model.get("titleLabel") or context.get("cryptoMoveTitle") or "").strip()
+    score = model.get("score", context.get("cryptoMoveScore"))
+    period = str(model.get("dominantPeriodLabel") or context.get("cryptoMoveDominantPeriod") or "").strip()
+    change = model.get("dominantChange", context.get("cryptoMoveDominantChange"))
+    reason = str(model.get("reason") or context.get("cryptoMoveReason") or "").strip()
+    lines: List[str] = []
+    if title or score not in (None, ""):
+        result = title or "크립토 가격 변동"
+        if score not in (None, ""):
+            result += " (모델 점수 " + format_score_value(score) + "점)"
+        lines.append("판단 결과: " + result)
+    if period or change not in (None, ""):
+        change_text = signed_pct(change) if isinstance(change, (int, float)) else str(change or "").strip()
+        lines.append("대표 변화: " + " ".join(part for part in [period, change_text] if part))
+    if reason:
+        lines.append("핵심 이유: " + reason)
+    return lines
 
 
 def modeling_lines(context: Dict[str, object]) -> List[str]:
@@ -1026,6 +1059,7 @@ def modeling_lines(context: Dict[str, object]) -> List[str]:
     data_hint = MODEL_DATA_HINTS.get(message_type)
     if data_hint:
         lines.append("사용 데이터: " + data_hint)
+    lines.extend(crypto_model_summary_lines(context))
     return lines
 
 
@@ -1068,6 +1102,10 @@ def investment_score_lines(context: Dict[str, object]) -> List[str]:
     if message_type in {"holdingTiming", "monitorDecisionChange"} and any(has_score_value(item) for item in [status_value, previous_value, current_value]):
         lines.append(
             "보유 모델 점수: 사용자가 설정한 익절 공식과 손절/손실 관리 공식을 따로 계산한 뒤, 수익 중이면 익절 점수, 손실 중이면 손실 관리 점수를 선택합니다. 공식에는 기본 점수, 손익률 구간, 한 업종에 몰린 정도, 팔 수 있는 수량, 수급·추세 흐름이 들어갑니다."
+        )
+    if message_type == "externalCryptoMove" and (context or {}).get("cryptoMoveScore") not in (None, ""):
+        lines.append(
+            "크립토 변동 모델 점수: 24시간 변화율과 7일 변화율이 각각의 기준값을 얼마나 넘었는지 비교해 0~100점으로 계산합니다. 모델은 더 강하게 기준을 넘은 기간을 대표 변화로 고르고, 그 방향으로 제목과 관찰/주의 등급을 정합니다."
         )
     return lines
 
@@ -1222,4 +1260,11 @@ def template_variables() -> List[str]:
         "volume",
         "volume24h",
         "provider",
+        "cryptoMoveModel",
+        "cryptoMoveScore",
+        "cryptoMoveDirection",
+        "cryptoMoveDominantPeriod",
+        "cryptoMoveDominantChange",
+        "cryptoMoveTitle",
+        "cryptoMoveReason",
     ]

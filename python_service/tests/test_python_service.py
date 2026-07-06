@@ -1690,7 +1690,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("externalDataConnection", messages)
         criteria_by_rule = {event.rule: event.criteria for event in events}
         self.assertTrue(any("±3% 이상" in item for item in criteria_by_rule["externalEquityMove"]))
-        self.assertTrue(any("24h -5.2%" in item for item in criteria_by_rule["externalCryptoMove"]))
+        self.assertTrue(any("크립토 변동 모델" in item for item in criteria_by_rule["externalCryptoMove"]))
+        self.assertTrue(any("7일 -12.1%" in item for item in criteria_by_rule["externalCryptoMove"]))
         self.assertTrue(any("±15bp 이상" in item for item in criteria_by_rule["externalMacroShift"]))
 
     def test_bitcoin_crypto_alert_uses_lower_bitcoin_thresholds(self):
@@ -1769,13 +1770,30 @@ class PythonServiceTests(unittest.TestCase):
         event = events[0]
         self.assertEqual("externalCryptoMove", event.rule)
         self.assertEqual("WATCH", event.severity)
-        self.assertTrue(any("ETH 24h -0.1%, 7d +11.8%" in item for item in event.criteria))
+        self.assertTrue(any("크립토 변동 모델 70.8점" in item for item in event.criteria))
+        self.assertTrue(any("7일 +11.8%" in item for item in event.criteria))
+        model = event.metadata.get("cryptoMoveModel")
+        self.assertEqual("크립토 가격 급등", model.get("titleLabel"))
+        self.assertEqual("상승", model.get("directionLabel"))
+        self.assertEqual("7d", model.get("dominantPeriod"))
+        self.assertEqual(70.8, model.get("score"))
+        self.assertEqual("크립토 가격 급등", event.metadata.get("cryptoMoveTitle"))
+        self.assertEqual(70.8, event.metadata.get("cryptoMoveScore"))
+        self.assertEqual("cryptoMoveScoreFormula", event.metadata.get("formulaAudits")[0].get("key"))
 
         db_path = Path(self.temp.name) / "service.db"
         templates = SQLiteNotificationTemplateStore(db_path)
         message = templates.render(event.rule, alert_context(event))
         self.assertIn("<b>[관찰] 크립토 가격 급등</b>", message)
         self.assertNotIn("크립토 가격 급락", message)
+        self.assertIn("판단 결과", message)
+        self.assertIn("크립토 가격 급등 (모델 점수 70.8점)", message)
+        self.assertIn("대표 변화", message)
+        self.assertIn("7일 +11.8%", message)
+        self.assertIn("크립토 변동 공식(cryptoMoveScoreFormula)", message)
+        self.assertIn("change7d=11.8", message)
+        self.assertIn("weekThreshold=10", message)
+        self.assertIn("핵심 이유", message)
 
     def test_external_signal_provider_normalizes_api_responses_and_caches(self):
         calls = []

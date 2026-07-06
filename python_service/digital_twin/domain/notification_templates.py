@@ -102,9 +102,7 @@ SEVERITY_LABELS = {
 }
 
 SCORE_EXPLANATION_SKIP_TYPES = {
-    "modelReview",
     "workHandoff",
-    "notification",
 }
 
 SCORE_VALUE_PATTERN = re.compile(r"\d+(?:\.\d+)?점")

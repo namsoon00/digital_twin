@@ -2456,6 +2456,23 @@ class PythonServiceTests(unittest.TestCase):
         self.assertNotIn("danger", message.lower())
         self.assertNotIn("caution", message.lower())
 
+    def test_model_review_message_includes_delivery_score_explanation(self):
+        db_path = Path(self.temp.name) / "service.db"
+        templates = SQLiteNotificationTemplateStore(db_path)
+
+        message = templates.render("modelReview", {
+            "messageType": "modelReview",
+            "body": "AAPL 모델 리뷰\n- 판단 변화 원인: 판단 이름이 바뀜",
+            "honeyScore": 85,
+            "honeyThreshold": 20,
+            "honeyReasons": ["기본 85점", "본문 있음 +5"],
+        })
+
+        self.assertIn("AAPL 모델 리뷰", message)
+        self.assertIn("점수 계산", message)
+        self.assertIn("발송 점수", message)
+        self.assertIn("기본 점수 85점", message)
+
     def test_default_notification_template_is_readable_and_skips_empty_fields(self):
         db_path = Path(self.temp.name) / "service.db"
         templates = SQLiteNotificationTemplateStore(db_path)

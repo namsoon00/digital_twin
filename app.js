@@ -1267,7 +1267,7 @@
     if (type === "holdingTiming") {
       return [
         { id: "severity_upgrade", label: "등급 상승", type: "severity_upgrade", field: "", value: "", enabled: true, description: "관찰에서 주의처럼 중요도가 올라가면 반복이어도 보냅니다." },
-        { id: "holding_score_delta", label: "보유 판단 점수 변화", type: "abs_number_delta_gte", field: "holdingDecisionScore", value: 8, enabled: true, description: "이전 보유 타이밍 알림보다 판단 점수가 기준점 이상 달라지면 보냅니다." },
+        { id: "holding_score_delta", label: "보유 모델 점수 변화", type: "abs_number_delta_gte", field: "holdingDecisionScore", value: 8, enabled: true, description: "이전 보유 타이밍 알림보다 모델 점수가 기준점 이상 달라지면 보냅니다." },
         { id: "loss_rate_worsened", label: "손익률 추가 악화", type: "number_delta_lte", field: "profitLossRate", value: 2, enabled: true, description: "이전 보유 타이밍 알림보다 손익률이 기준 %p 이상 나빠지면 보냅니다." }
       ];
     }
@@ -2403,7 +2403,7 @@
       .then(function (payload) {
         var event = payload.event || {};
         if (payload.suppressed) {
-          showSnackbar("꿀점수 " + (payload.score || 0) + "/" + (payload.threshold || 0) + "점으로 발송하지 않았습니다.", "danger");
+          showSnackbar("발송 우선도 " + (payload.score || 0) + "/" + (payload.threshold || 0) + "로 발송하지 않았습니다.", "danger");
         } else {
           showSnackbar("알림 발송 요청을 큐에 적재했습니다: " + (event.title || notificationTemplateLabel(messageType)));
         }
@@ -6763,7 +6763,7 @@
 
   function notificationJobScoreText(job) {
     if (job.honeyScore === null || typeof job.honeyScore === "undefined") return "-";
-    return String(job.honeyScore) + "/" + String(job.honeyThreshold || 0) + "점";
+    return String(job.honeyScore) + "/" + String(job.honeyThreshold || 0);
   }
 
   function notificationJobSimilarityText(job) {
@@ -6771,7 +6771,7 @@
     var penalty = Number(job.honeySimilarityPenalty || 0);
     var windowMinutes = Number(job.honeySimilarityWindowMinutes || 0);
     if (!count && !penalty) return "유사 감점 없음";
-    return windowMinutes + "분 내 " + count + "회 · " + penalty + "점";
+    return windowMinutes + "분 내 " + count + "회 · 우선도 " + penalty;
   }
 
   function notificationJobMarketHoursText(job) {
@@ -6850,7 +6850,7 @@
       '</div>',
       '<div class="notification-decision-target">' + escapeHtml(target || job.messageType || "-") + '</div>',
       '<div class="notification-decision-score">',
-      '<span>꿀점수 ' + escapeHtml(notificationJobScoreText(job)) + '</span>',
+      '<span>발송 우선도 ' + escapeHtml(notificationJobScoreText(job)) + '</span>',
       '<span>' + escapeHtml(notificationJobSimilarityText(job)) + '</span>',
       notificationJobStateCooldownText(job) ? '<span>' + escapeHtml(notificationJobStateCooldownText(job)) + '</span>' : '',
       notificationJobMarketHoursText(job) ? '<span>' + escapeHtml(notificationJobMarketHoursText(job)) + '</span>' : '',
@@ -6972,7 +6972,7 @@
   function notificationRuleBypassTypeLabel(type) {
     var labels = {
       severity_upgrade: "등급 상승",
-      score_delta_gte: "꿀점수 상승",
+      score_delta_gte: "발송 우선도 상승",
       abs_number_delta_gte: "절대값 차이 이상",
       number_delta_gte: "숫자 증가 이상",
       number_delta_lte: "숫자 감소 이상",
@@ -7031,8 +7031,8 @@
       '</div>',
       '<div class="notification-rule-score-grid">',
       '<label><span>억제 시간</span><input type="number" min="0" max="10080" step="10" data-notification-rule-number="' + escapeHtml(messageType) + '" data-rule-field="similarityWindowMinutes" value="' + escapeHtml(rule.similarityWindowMinutes) + '"' + (disabled ? " disabled" : "") + ' /></label>',
-      '<label><span>반복 감점</span><input type="number" min="-100" max="0" step="1" data-notification-rule-number="' + escapeHtml(messageType) + '" data-rule-field="similarityPenalty" value="' + escapeHtml(rule.similarityPenalty) + '"' + (disabled ? " disabled" : "") + ' /></label>',
-      '<label><span>상승 예외</span><input type="number" min="0" max="100" step="1" data-notification-rule-number="' + escapeHtml(messageType) + '" data-rule-field="similarityBypassScoreDelta" value="' + escapeHtml(rule.similarityBypassScoreDelta) + '"' + (disabled ? " disabled" : "") + ' /></label>',
+      '<label><span>반복 우선도 조정</span><input type="number" min="-100" max="0" step="1" data-notification-rule-number="' + escapeHtml(messageType) + '" data-rule-field="similarityPenalty" value="' + escapeHtml(rule.similarityPenalty) + '"' + (disabled ? " disabled" : "") + ' /></label>',
+      '<label><span>우선도 상승 예외</span><input type="number" min="0" max="100" step="1" data-notification-rule-number="' + escapeHtml(messageType) + '" data-rule-field="similarityBypassScoreDelta" value="' + escapeHtml(rule.similarityBypassScoreDelta) + '"' + (disabled ? " disabled" : "") + ' /></label>',
       '</div>',
       '<label class="notification-rule-fields"><span>fingerprint 필드</span><textarea rows="2" data-notification-rule-fields="' + escapeHtml(messageType) + '"' + (disabled ? " disabled" : "") + '>' + escapeHtml(notificationRuleSimilarityFieldsText(rule)) + '</textarea></label>',
       renderNotificationBypassConditionsEditor(messageType, rule, disabled),
@@ -7104,19 +7104,19 @@
     var compact = Boolean(options.compact);
     var summary = rule.enabled === false
       ? "룰 꺼짐 · 점수만 기록하지 않고 그대로 보냅니다."
-      : "꿀점수 " + rule.threshold + "점 이상이면 발송합니다.";
+      : "발송 우선도 " + rule.threshold + " 이상이면 발송합니다.";
     return [
       '<div class="notification-rule-editor' + (options.inline ? " admin-message-rule" : "") + '">',
       '<div class="notification-rule-head">',
-      '<div><strong>꿀점수 룰</strong><span>' + escapeHtml(summary) + '</span></div>',
+      '<div><strong>발송 우선도 룰</strong><span>' + escapeHtml(summary) + '</span></div>',
       '<label class="notification-rule-toggle"><input type="checkbox" data-notification-rule-enabled="' + escapeHtml(messageType) + '"' + (rule.enabled !== false ? " checked" : "") + (disabled ? " disabled" : "") + ' /> 적용</label>',
       '</div>',
       '<div class="notification-rule-score-grid">',
-      '<label><span>최소 꿀점수</span><input type="number" min="0" max="100" step="1" data-notification-rule-number="' + escapeHtml(messageType) + '" data-rule-field="threshold" value="' + escapeHtml(rule.threshold) + '"' + (disabled ? " disabled" : "") + ' /></label>',
-      '<label><span>기본점수</span><input type="number" min="0" max="100" step="1" data-notification-rule-number="' + escapeHtml(messageType) + '" data-rule-field="baseScore" value="' + escapeHtml(rule.baseScore) + '"' + (disabled ? " disabled" : "") + ' /></label>',
-      '<label><span>낮은 점수 처리</span><select data-notification-rule-action="' + escapeHtml(messageType) + '"' + (disabled ? " disabled" : "") + '>',
+      '<label><span>최소 발송 우선도</span><input type="number" min="0" max="100" step="1" data-notification-rule-number="' + escapeHtml(messageType) + '" data-rule-field="threshold" value="' + escapeHtml(rule.threshold) + '"' + (disabled ? " disabled" : "") + ' /></label>',
+      '<label><span>기본 우선도</span><input type="number" min="0" max="100" step="1" data-notification-rule-number="' + escapeHtml(messageType) + '" data-rule-field="baseScore" value="' + escapeHtml(rule.baseScore) + '"' + (disabled ? " disabled" : "") + ' /></label>',
+      '<label><span>낮은 우선도 처리</span><select data-notification-rule-action="' + escapeHtml(messageType) + '"' + (disabled ? " disabled" : "") + '>',
       '<option value="suppress"' + (rule.lowScoreAction === "suppress" ? " selected" : "") + '>발송 안 함</option>',
-      '<option value="tag_only"' + (rule.lowScoreAction === "tag_only" ? " selected" : "") + '>점수만 기록</option>',
+      '<option value="tag_only"' + (rule.lowScoreAction === "tag_only" ? " selected" : "") + '>우선도만 기록</option>',
       '</select></label>',
       '</div>',
       compact ? '<p class="subtle">유사 메시지, 상태 지속 억제, 장 시간 필터, 세부 조건은 고급 탭에서 조정합니다.</p>' : renderNotificationSimilarityEditor(messageType, rule, disabled),
@@ -7610,7 +7610,7 @@
       renderModelWeightGrid(weights),
       '</div>',
       '<div class="model-section advanced-model-section">',
-      '<div class="flow-title"><div><strong>고급 공식</strong><span>기본값으로 시작하고, 직접 점수 계산 방식을 바꾸고 싶을 때만 수정합니다.</span></div></div>',
+      '<div class="flow-title"><div><strong>고급 공식</strong><span>기본값으로 시작하고, 직접 모델 판단이나 알림 발송 계산식을 바꾸고 싶을 때만 수정합니다.</span></div></div>',
       '<div class="settings-grid">',
       renderModelFormulaField("customBuyModelFormula", "매수 판단 공식", "buyScore * 0.35 + thesisScore * thesisWeight"),
       renderModelFormulaField("customSellModelFormula", "매도 판단 공식", "sellScore * 0.35 + riskScore * riskControlWeight"),
@@ -8105,8 +8105,8 @@
       '<span class="tone-chip ' + escapeHtml(model.tone || "hold") + '">' + escapeHtml(model.action) + '</span>',
       '</div>',
       '<div class="lab-model-grid">',
-      '<span>매수 판단 점수 <strong class="buy">' + escapeHtml(model.buyScore) + '</strong></span>',
-      '<span>매도 판단 점수 <strong class="sell">' + escapeHtml(model.sellScore) + '</strong></span>',
+      '<span>매수 모델 점수 <strong class="buy">' + escapeHtml(model.buyScore) + '</strong></span>',
+      '<span>매도 모델 점수 <strong class="sell">' + escapeHtml(model.sellScore) + '</strong></span>',
       '<span>기본 매수 점수 <strong>' + escapeHtml(item.hasData ? item.buyScore : "-") + '</strong></span>',
       '<span>기본 매도 점수 <strong>' + escapeHtml(item.hasData ? item.sellScore : "-") + '</strong></span>',
       '</div>',
@@ -8475,13 +8475,13 @@
       ["undervalueBonus", "저평가 보너스"],
       ["expensivePenalty", "고평가/매도 보너스"],
       ["profitLossRate", "보유 수익률"],
-      ["baseScore", "보유 판단 기본 점수"],
+      ["baseScore", "보유 모델 기본 점수"],
       ["profitTakePnlScore", "수익 구간에서 익절을 점검하게 하는 점수"],
       ["lossCutPnlScore", "손실 구간에서 손실 관리를 점검하게 하는 점수"],
       ["sectorConcentrationScore", "한 업종에 많이 몰렸을 때 더하는 점수"],
       ["sellableScore", "팔 수 있는 수량이 있을 때 더하는 점수"],
       ["holdingSignalScore", "수급과 이동평균 흐름을 반영한 보유 점수"],
-      ["rawScore", "알림 조건을 모두 더한 기본 발송 점수"],
+      ["rawScore", "알림 조건을 모두 더한 기본 발송 우선도"],
       ["symbolScore", "종목명이 있는 알림에 더하는 점수"],
       ["confirmingDataScore", "수급·추세 같은 확인 데이터가 있는 알림 점수"],
       ["actionableScore", "확인이나 점검이 필요한 알림 점수"],

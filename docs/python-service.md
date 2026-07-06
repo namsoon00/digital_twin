@@ -28,6 +28,7 @@ The Python service now follows a conservative DDD layout:
 - Infrastructure adapters satisfy those ports with local implementations.
 - Message type ownership lives in `domain/message_types.py`; notification templates and rules read that catalog instead of importing monitoring internals.
 - Strategy ownership lives in `domain/strategy.py`, market-data normalization in `domain/market_data.py`, and portfolio exposure math in `domain/portfolio_calculations.py`.
+- Reusable scoring signals live in `domain/scoring.py`; notification templates should consume those signals instead of deriving scores from rendered message text.
 - Legacy import paths such as `digital_twin.models`, `digital_twin.config.AccountConfig`, and `digital_twin.scheduler.MonitorRunner` remain available as thin wrappers so the Node API and existing scripts keep working.
 
 When adding a feature, put business vocabulary and state transitions in `domain/`, orchestration in `application/`, and vendor/file/database code in `infrastructure/` or an existing adapter. UI and API routes should call application services rather than reaching into repositories directly.
@@ -54,10 +55,10 @@ For parallel work across multiple chat windows, keep each conversation inside on
 
 - Account management: `domain/accounts.py`, `application/account_service.py`, `infrastructure/sqlite_accounts.py`
 - Monitoring and scheduling: `domain/monitoring.py`, `domain/strategy_alerts.py`, `domain/external_signal_alerts.py`, `application/monitoring_service.py`, `monitor.py`, `scheduler.py`
-- Notifications and messages: `domain/message_types.py`, `domain/notifications.py`, `domain/notification_rules.py`, `domain/notification_templates.py`, `infrastructure/notifications.py`, `application/notification_service.py`, and `infrastructure/sqlite_notifications.py`
+- Notifications and messages: `domain/message_types.py`, `domain/notifications.py`, `domain/notification_rules.py`, `domain/notification_templates.py`, `domain/scoring.py`, `infrastructure/notifications.py`, `application/notification_service.py`, and `infrastructure/sqlite_notifications.py`
 - Symbol universe: `domain/symbol_universe.py`, `application/symbol_universe_service.py`, `infrastructure/symbol_sources.py`, and `infrastructure/sqlite_symbols.py`
 - Providers/data collection: `providers.py`, `infrastructure/toss_snapshots.py`
-- Model scoring and strategy: `domain/market_data.py`, `domain/portfolio_calculations.py`, `domain/strategy.py`, and future model-lab modules
+- Model scoring and strategy: `domain/market_data.py`, `domain/portfolio_calculations.py`, `domain/strategy.py`, `domain/scoring.py`, and future model-lab modules
 
 If a feature needs another feature's result, subscribe to or publish a domain event instead of importing the other feature's application service. This keeps separate development sessions from editing the same orchestration code.
 

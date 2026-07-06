@@ -24,6 +24,7 @@ Domain:
 - `python_service/digital_twin/domain/market_data.py`: market-data normalization, symbol hints, moving-average helpers, and numeric coercion
 - `python_service/digital_twin/domain/portfolio_calculations.py`: portfolio exposure, FX conversion, and summary calculations
 - `python_service/digital_twin/domain/strategy.py`: scoring formulas, strategy feature variables, and position decision rules
+- `python_service/digital_twin/domain/scoring.py`: reusable scoring signals and fallback vocabularies used by notification and strategy-adjacent scores
 - `python_service/digital_twin/domain/message_types.py`: shared message-type catalog, labels, default alert rules, thresholds, and cadence
 - `python_service/digital_twin/domain/alert_formatting.py`: money, percentage, and compact-number formatting used by alerts
 - `python_service/digital_twin/domain/monitoring.py`: realtime monitoring orchestration rules and cadence filtering
@@ -87,10 +88,10 @@ Use these slices when multiple chat windows work independently:
 
 - Account management: `domain/accounts.py`, `application/account_service.py`, `infrastructure/sqlite_accounts.py`
 - Monitoring and scheduling: `domain/monitoring.py`, `domain/strategy_alerts.py`, `domain/external_signal_alerts.py`, `application/monitoring_service.py`, `application/scheduler.py`, and `infrastructure/sqlite_monitoring.py`
-- Notifications and messages: `domain/message_types.py`, `domain/notifications.py`, `domain/notification_rules.py`, `domain/notification_templates.py`, `application/notification_service.py`, `infrastructure/notifications.py`, and `infrastructure/sqlite_notifications.py`
+- Notifications and messages: `domain/message_types.py`, `domain/notifications.py`, `domain/notification_rules.py`, `domain/notification_templates.py`, `domain/scoring.py`, `application/notification_service.py`, `infrastructure/notifications.py`, and `infrastructure/sqlite_notifications.py`
 - Symbol universe: `domain/symbol_universe.py`, `application/symbol_universe_service.py`, `infrastructure/symbol_sources.py`, and `infrastructure/sqlite_symbols.py`
 - Providers/data collection: `infrastructure/toss_snapshots.py`
-- Model scoring and strategy: `domain/market_data.py`, `domain/portfolio_calculations.py`, `domain/strategy.py`, and future model-lab application services
+- Model scoring and strategy: `domain/market_data.py`, `domain/portfolio_calculations.py`, `domain/strategy.py`, `domain/scoring.py`, and future model-lab application services
 - Model review and validation: `domain/model_review.py`, `application/model_review_service.py`, `infrastructure/sqlite_model_review.py`, `infrastructure/model_review_queue.py`, `infrastructure/model_reviewer.py`
 - Runtime/configuration: `infrastructure/settings.py`, `infrastructure/service_factory.py`, `service_manager.py`
 

@@ -6,6 +6,7 @@ from typing import Dict, List
 
 from .message_types import MESSAGE_TYPE_LABELS, TRIGGER_SUMMARIES
 from .portfolio import AlertEvent
+from .scoring import notification_signal_labels
 
 
 LEGACY_DEFAULT_TEMPLATE = "{title}\n{lines}"
@@ -106,52 +107,6 @@ SCORE_EXPLANATION_SKIP_TYPES = {
 }
 
 SCORE_VALUE_PATTERN = re.compile(r"\d+(?:\.\d+)?점")
-
-IMPORTANT_SIGNAL_RULES = {
-    "modelBuy",
-    "modelSell",
-    "holdingTiming",
-    "monitorPositionChange",
-    "monitorPnlChange",
-    "monitorValueChange",
-    "monitorTrendChange",
-    "monitorCashChange",
-    "monitorDecisionChange",
-    "externalEquityMove",
-    "externalCryptoMove",
-    "externalMacroShift",
-    "externalDartDisclosure",
-}
-
-ACTIONABLE_SIGNAL_RULES = {
-    "modelBuy",
-    "modelSell",
-    "holdingTiming",
-    "monitorDecisionChange",
-    "watchlistQuote",
-    "externalDataConnection",
-}
-
-LOW_SIGNAL_RULES = {
-    "monitorHeartbeat",
-    "watchlistQuotePending",
-    "externalDataConnection",
-}
-
-CONFIRMING_DATA_LABELS = {
-    "수급",
-    "거래량",
-    "거래액",
-    "투자자",
-    "추세",
-    "기울기",
-    "신호",
-    "미장 가격 변동",
-    "비트코인 변동",
-    "크립토 변동",
-    "크립토 가격",
-    "크립토 거래액",
-}
 
 DEFAULT_NOTIFICATION_TEMPLATES = {
     "default": {
@@ -518,21 +473,6 @@ def event_criterion_lines(event: AlertEvent, raw_lines: List[str], trigger_summa
     return inferred_criterion_lines(event, raw_lines, trigger_summary)
 
 
-def notification_signals(event: AlertEvent, raw_lines: List[str]) -> List[str]:
-    rule = str(event.rule or "").strip()
-    labels = {split_data_line(line)[0] for line in raw_lines}
-    signals: List[str] = []
-    if rule in IMPORTANT_SIGNAL_RULES:
-        signals.append("important")
-    if labels.intersection(CONFIRMING_DATA_LABELS):
-        signals.append("confirmingData")
-    if rule in ACTIONABLE_SIGNAL_RULES:
-        signals.append("actionable")
-    if rule in LOW_SIGNAL_RULES:
-        signals.append("statusNoise")
-    return signals
-
-
 @dataclass
 class NotificationTemplate:
     message_type: str
@@ -578,7 +518,7 @@ def alert_context(event: AlertEvent) -> Dict[str, object]:
     target_value = " / ".join(part for part in target_parts if part)
     target_line = "대상: " + target_value if target_value else ""
     criteria = event_criterion_lines(event, raw_lines, trigger_summary)
-    signals = notification_signals(event, raw_lines)
+    signals = notification_signal_labels(event.rule, raw_lines)
     trigger_block_rows = criterion_rows(criteria, False)
     trigger_block = ("발송 기준\n" + trigger_block_rows) if trigger_block_rows else ""
     data_rows = plain_data_rows(raw_lines)

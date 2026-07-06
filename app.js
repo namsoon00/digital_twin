@@ -1893,6 +1893,82 @@
       }
       return { label: "", value: text };
     }
+    function dataValue(rawItems, label) {
+      for (var index = 0; index < (rawItems || []).length; index += 1) {
+        var pair = splitDataLine(rawItems[index]);
+        if (pair.label === label && pair.value) return pair.value;
+      }
+      return "";
+    }
+    function signedDirection(value) {
+      var match = String(value || "").match(/([+-])\s*\d/);
+      if (!match) return 0;
+      return match[1] === "+" ? 1 : -1;
+    }
+    function titleFromChange(value, positive, negative, neutral) {
+      var direction = signedDirection(value);
+      if (direction > 0) return positive;
+      if (direction < 0) return negative;
+      return neutral;
+    }
+    function firstDataText(rawItems, pattern) {
+      var regex = new RegExp(pattern);
+      for (var index = 0; index < (rawItems || []).length; index += 1) {
+        var text = String(rawItems[index] || "").trim();
+        if (regex.test(text)) return text;
+      }
+      return "";
+    }
+    function notificationTitleHeadline(type, rawItems, sample, fallback) {
+      var status = dataValue(rawItems, "상태");
+      var profit = dataValue(rawItems, "손익");
+      var change = dataValue(rawItems, "변화");
+      var signal = dataValue(rawItems, "신호");
+      var titleText = String(sample && sample.title || "");
+      var symbol = String(sample && sample.symbol || "").toUpperCase();
+      if (type === "modelBuy" || type === "watchlistBuyCandidate") return "매수 후보 감지";
+      if (type === "modelSell") return "매도 기준 점검";
+      if (type === "watchlistQuote") return "관심종목 시세 갱신";
+      if (type === "watchlistQuotePending") return "관심종목 시세 미수집";
+      if (type === "holdingTiming") {
+        var statusBlob = [status, profit, titleText].join(" ");
+        if (/분할|익절|수익/.test(statusBlob)) return "보유 익절·분할매도 점검";
+        if (/손절|손실/.test(statusBlob) || signedDirection(profit) < 0) return "보유 손실 관리 점검";
+        if (statusBlob.indexOf("조건부") >= 0) return "보유 조건 재점검";
+        return "보유 매수·매도 점검";
+      }
+      if (type === "monitorHeartbeat") return "모니터링 상태 확인";
+      if (type === "monitorConnection") {
+        var connectionBlob = [status, (rawItems || []).slice(0, 2).join(" ")].join(" ").toLowerCase();
+        if (/실패|오류|unauthorized|forbidden|timeout|error/.test(connectionBlob)) return "토스 연결 오류";
+        return "토스 연결 상태 변경";
+      }
+      if (type === "monitorPositionChange") {
+        var body = (rawItems || []).join(" ");
+        if (body.indexOf("신규") >= 0) return "신규 보유 감지";
+        if (/제외|청산|매도 완료/.test(body)) return "보유 제외 감지";
+        return "보유 수량 변경";
+      }
+      if (type === "monitorPnlChange") return titleFromChange(change, "손익률 개선", "손익률 악화", "손익률 변화");
+      if (type === "monitorValueChange") return titleFromChange(change, "평가액 증가", "평가액 감소", "평가액 변화");
+      if (type === "monitorTrendChange") {
+        if (signal.indexOf("하향") >= 0 || signal.indexOf("이탈") >= 0) return "이동평균 하향 신호";
+        if (signal.indexOf("상향") >= 0 || signal.indexOf("돌파") >= 0) return "이동평균 상향 신호";
+        return "이동평균·추세 신호";
+      }
+      if (type === "monitorCashChange") return titleFromChange(change, "현금 비중 증가", "현금 비중 감소", "현금 비중 변화");
+      if (type === "monitorDecisionChange") return "보유 모델 판단 변경";
+      if (type === "externalEquityMove") return titleFromChange(dataValue(rawItems, "미장 가격 변동"), "미장 가격 급등", "미장 가격 급락", "미장 가격·거래량 급변");
+      if (type === "externalCryptoMove") {
+        var cryptoLine = firstDataText(rawItems, "(비트코인|크립토).*?(24h|7d)");
+        var asset = cryptoLine.indexOf("비트코인") >= 0 || symbol === "BTC" ? "비트코인" : "크립토";
+        return titleFromChange(cryptoLine, asset + " 가격 급등", asset + " 가격 급락", asset + " 가격 급변");
+      }
+      if (type === "externalMacroShift") return "금리·거시 지표 변화";
+      if (type === "externalDartDisclosure") return "국내 공시 감지";
+      if (type === "externalDataConnection") return rawItems && rawItems[0] ? String(rawItems[0]).trim() + " 연결 점검" : "외부 API 연결 점검";
+      return fallback || titleText || type;
+    }
     function groupedDataRows(items) {
       var rows = [];
       for (var index = 0; index < items.length; index += 2) {
@@ -2157,7 +2233,7 @@
     var criterionLines = criterionLinesForSample(sample, type, triggerSummary, rawItems);
     var dataLines = lines;
     var statusHeadline = severityLabel ? "[" + severityLabel + "]" : "";
-    var titleHeadline = messageTypeLabel || sample.title;
+    var titleHeadline = notificationTitleHeadline(type, rawItems, sample, messageTypeLabel || sample.title);
     var headline = [statusHeadline, titleHeadline].filter(Boolean).join(" ");
     var targetValue = [sample.title, sample.symbol && sample.symbol !== sample.title ? sample.symbol : ""]
       .filter(Boolean)

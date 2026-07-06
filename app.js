@@ -7693,6 +7693,9 @@
       '<div class="exit-score">',
       '<strong>' + escapeHtml(item.exitPressure || 0) + '</strong>',
       '<span>검토</span>',
+      item.source === "holding" && (item.profitTakePressure || item.lossCutPressure)
+        ? '<small>익절 ' + escapeHtml(item.profitTakePressure || 0) + ' · 손절 ' + escapeHtml(item.lossCutPressure || 0) + '</small>'
+        : '',
       item.source === "holding" ? '<em>' + escapeHtml(signedPct(item.profitLossRate)) + '</em>' : '<em>watch</em>',
       '</div>',
       '</div>'

@@ -17,6 +17,7 @@ class StrategyAlertMixin:
             if not (position.current_price or position.market_value or position.volume or position.trade_strength):
                 continue
             scores = self.strategy_model.score(position.to_dict())
+            formula_audits = self.strategy_model.score_formula_audits(position.to_dict(), scores)
             symbol = position.symbol.upper()
             common_lines = [
                 source + " 종목",
@@ -25,6 +26,7 @@ class StrategyAlertMixin:
                 self.trend_context_line(position.to_dict()),
             ]
             buy_score = float(scores.get("buyScore") or 0)
+            sell_score = float(scores.get("sellScore") or 0)
             if source == "관심" and watchlist_buy_threshold and buy_score >= watchlist_buy_threshold:
                 buy_phrase = self.model_score_phrase("buy", buy_score)
                 events.append(AlertEvent(
@@ -42,7 +44,9 @@ class StrategyAlertMixin:
                     ),
                     metadata={
                         "modelBuyScore": round(buy_score, 1),
+                        "modelSellScore": round(sell_score, 1),
                         "watchlistBuyScore": round(buy_score, 1),
+                        "formulaAudits": formula_audits,
                     },
                 ))
             if source != "관심" and buy_threshold and buy_score >= buy_threshold:
@@ -60,8 +64,12 @@ class StrategyAlertMixin:
                         "내 매수 기준에서 매수 후보 이상 (" + self.threshold_text("modelBuyScore", "점") + ")",
                         buy_phrase,
                     ),
+                    metadata={
+                        "modelBuyScore": round(buy_score, 1),
+                        "modelSellScore": round(sell_score, 1),
+                        "formulaAudits": formula_audits,
+                    },
                 ))
-            sell_score = float(scores.get("sellScore") or 0)
             if source != "관심" and sell_threshold and sell_score >= sell_threshold:
                 sell_phrase = self.model_score_phrase("sell", sell_score)
                 events.append(AlertEvent(
@@ -81,6 +89,11 @@ class StrategyAlertMixin:
                         "내 매도 기준에서 분할매도 점검 이상 (" + self.threshold_text("modelSellScore", "점") + ")",
                         sell_phrase,
                     ),
+                    metadata={
+                        "modelBuyScore": round(buy_score, 1),
+                        "modelSellScore": round(sell_score, 1),
+                        "formulaAudits": formula_audits,
+                    },
                 ))
         return events
 
@@ -90,6 +103,7 @@ class StrategyAlertMixin:
             return []
         position = candidates[0] if rule in {"modelBuy", "watchlistBuyCandidate"} else next((item for item in snapshot.positions if not item.is_cash() and item.symbol), candidates[0])
         scores = self.strategy_model.score(position.to_dict())
+        formula_audits = self.strategy_model.score_formula_audits(position.to_dict(), scores)
         symbol = position.symbol.upper()
         if rule == "modelSell":
             sell_phrase = self.model_score_phrase("sell", float(scores.get("sellScore") or 0))
@@ -112,6 +126,11 @@ class StrategyAlertMixin:
                     "내 매도 기준에서 분할매도 점검 이상 (" + self.threshold_text("modelSellScore", "점") + ")",
                     sell_phrase,
                 ),
+                metadata={
+                    "modelBuyScore": round(float(scores.get("buyScore") or 0), 1),
+                    "modelSellScore": round(float(scores.get("sellScore") or 0), 1),
+                    "formulaAudits": formula_audits,
+                },
             )]
         buy_phrase = self.model_score_phrase("buy", float(scores.get("buyScore") or 0))
         if rule == "watchlistBuyCandidate":
@@ -137,6 +156,8 @@ class StrategyAlertMixin:
                 metadata={
                     "modelBuyScore": round(float(scores.get("buyScore") or 0), 1),
                     "watchlistBuyScore": round(float(scores.get("buyScore") or 0), 1),
+                    "modelSellScore": round(float(scores.get("sellScore") or 0), 1),
+                    "formulaAudits": formula_audits,
                 },
             )]
         return [AlertEvent(
@@ -158,4 +179,9 @@ class StrategyAlertMixin:
                 "내 매수 기준에서 매수 후보 이상 (" + self.threshold_text("modelBuyScore", "점") + ")",
                 buy_phrase,
             ),
+            metadata={
+                "modelBuyScore": round(float(scores.get("buyScore") or 0), 1),
+                "modelSellScore": round(float(scores.get("sellScore") or 0), 1),
+                "formulaAudits": formula_audits,
+            },
         )]

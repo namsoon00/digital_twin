@@ -13,7 +13,7 @@ from .message_types import (
 )
 from .model_review import decision_change_review_lines
 from .parsing import parse_assignments
-from .portfolio import AccountSnapshot, AlertEvent, monitor_state_has_live_account_data, status_has_account_data_failure
+from .portfolio import AccountSnapshot, AlertEvent, Position, monitor_state_has_live_account_data, status_has_account_data_failure
 from .portfolio_calculations import DEFAULT_FX_RATES, value_in_base
 from .repositories import MonitorStateRepository
 from .strategy import StrategyModel, decisions_for_positions
@@ -194,6 +194,57 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
             for key in keys
             if str(self.settings.get(key) or "").strip()
         }
+
+    def position_from_state(self, item: Dict[str, object]) -> Position:
+        return Position(
+            symbol=str(item.get("symbol") or ""),
+            name=str(item.get("name") or ""),
+            market=str(item.get("market") or ""),
+            currency=str(item.get("currency") or ""),
+            quantity=number(item.get("quantity")),
+            sellable_quantity=number(item.get("sellable_quantity") if "sellable_quantity" in item else item.get("sellableQuantity")),
+            average_price=number(item.get("average_price") if "average_price" in item else item.get("averagePrice")),
+            current_price=number(item.get("current_price") if "current_price" in item else item.get("currentPrice")),
+            market_value=number(item.get("market_value") if "market_value" in item else item.get("marketValue")),
+            profit_loss=number(item.get("profit_loss") if "profit_loss" in item else item.get("profitLoss")),
+            profit_loss_rate=number(item.get("profit_loss_rate") if "profit_loss_rate" in item else item.get("profitLossRate")),
+            trade_strength=number(item.get("trade_strength") if "trade_strength" in item else item.get("tradeStrength")),
+            trading_value=number(item.get("trading_value") if "trading_value" in item else item.get("tradingValue")),
+            volume=number(item.get("volume")),
+            volume_ratio=number(item.get("volume_ratio") if "volume_ratio" in item else item.get("volumeRatio")),
+            buy_volume=number(item.get("buy_volume") if "buy_volume" in item else item.get("buyVolume")),
+            sell_volume=number(item.get("sell_volume") if "sell_volume" in item else item.get("sellVolume")),
+            foreign_buy_volume=number(item.get("foreign_buy_volume") if "foreign_buy_volume" in item else item.get("foreignBuyVolume")),
+            foreign_sell_volume=number(item.get("foreign_sell_volume") if "foreign_sell_volume" in item else item.get("foreignSellVolume")),
+            foreign_net_volume=number(item.get("foreign_net_volume") if "foreign_net_volume" in item else item.get("foreignNetVolume")),
+            institution_buy_volume=number(item.get("institution_buy_volume") if "institution_buy_volume" in item else item.get("institutionBuyVolume")),
+            institution_sell_volume=number(item.get("institution_sell_volume") if "institution_sell_volume" in item else item.get("institutionSellVolume")),
+            institution_net_volume=number(item.get("institution_net_volume") if "institution_net_volume" in item else item.get("institutionNetVolume")),
+            ma20=number(item.get("ma20")),
+            ma60=number(item.get("ma60")),
+            ma20_slope=number(item.get("ma20_slope") if "ma20_slope" in item else item.get("ma20Slope")),
+            ma60_slope=number(item.get("ma60_slope") if "ma60_slope" in item else item.get("ma60Slope")),
+            ma20_distance=number(item.get("ma20_distance") if "ma20_distance" in item else item.get("ma20Distance")),
+            ma60_distance=number(item.get("ma60_distance") if "ma60_distance" in item else item.get("ma60Distance")),
+            sector=str(item.get("sector") or "기타"),
+        )
+
+    def sector_ratio_for_position(self, snapshot: AccountSnapshot, sector: str) -> float:
+        for item in snapshot.portfolio.sectors:
+            if item.get("sector") == sector:
+                return number(item.get("ratio"))
+        return 0.0
+
+    def holding_formula_audits(self, snapshot: AccountSnapshot, position_state: Dict[str, object], decision_state: Dict[str, object] = None) -> List[Dict[str, object]]:
+        position = self.position_from_state(position_state)
+        sector_ratio = self.sector_ratio_for_position(snapshot, position.sector)
+        scores = None
+        if isinstance(decision_state, dict):
+            scores = {
+                "profitTakePressure": number(decision_state.get("profit_take_pressure") if "profit_take_pressure" in decision_state else decision_state.get("profitTakePressure")),
+                "lossCutPressure": number(decision_state.get("loss_cut_pressure") if "loss_cut_pressure" in decision_state else decision_state.get("lossCutPressure")),
+            }
+        return self.strategy_model.holding_formula_audits(position, sector_ratio, scores)
 
     def only_rule(self, rule: str, events: List[AlertEvent]) -> List[AlertEvent]:
         return [event for event in events if event.rule == rule]
@@ -691,6 +742,7 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
             if changed or abs(pressure_delta) >= float(self.thresholds.get("monitorExitPressureDelta", 0)):
                 previous_phrase = self.decision_score_phrase(previous_decision.get("decision") or "-", previous_decision.get("exit_pressure"))
                 current_phrase = self.decision_score_phrase(decision.get("decision") or "-", decision.get("exit_pressure"))
+                formula_audits = self.holding_formula_audits(snapshot, item, decision)
                 review_lines = decision_change_review_lines(
                     item,
                     before,
@@ -698,7 +750,13 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
                     previous_decision,
                     float(self.thresholds.get("monitorExitPressureDelta", 0)),
                 )
-                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "ALERT" if decision.get("tone") == "danger" else "WATCH", "monitorDecisionChange", snapshot.account_id + ":decision:" + symbol + ":" + str(decision.get("decision")), item["name"], ["판단 변화", "이전 " + previous_phrase, "현재 " + current_phrase, self.flow_context_line(item), self.investor_context_line(item), self.trend_context_line(item)] + review_lines, symbol, criteria=self.criteria("판단 이름 변경 또는 위험 점수 변화 " + self.threshold_text("monitorExitPressureDelta", "점") + " 이상", "이전 " + previous_phrase + ", 현재 " + current_phrase)))
+                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "ALERT" if decision.get("tone") == "danger" else "WATCH", "monitorDecisionChange", snapshot.account_id + ":decision:" + symbol + ":" + str(decision.get("decision")), item["name"], ["판단 변화", "이전 " + previous_phrase, "현재 " + current_phrase, self.flow_context_line(item), self.investor_context_line(item), self.trend_context_line(item)] + review_lines, symbol, criteria=self.criteria("판단 이름 변경 또는 위험 점수 변화 " + self.threshold_text("monitorExitPressureDelta", "점") + " 이상", "이전 " + previous_phrase + ", 현재 " + current_phrase), metadata={
+                    "holdingDecision": decision.get("decision") or "",
+                    "holdingDecisionBasis": decision.get("decision_basis") or "",
+                    "holdingDecisionScore": round(float(decision.get("exit_pressure") or 0), 1),
+                    "profitLossRate": round(float(item.get("profit_loss_rate") or 0), 2),
+                    "formulaAudits": formula_audits,
+                }))
         return events
 
     def cash_events(self, snapshot: AccountSnapshot, previous: Dict[str, object]) -> List[AlertEvent]:
@@ -786,6 +844,7 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
                 continue
             position = positions.get(item.symbol.upper()) or item.to_dict()
             decision_phrase = self.decision_score_phrase(item.decision, item.exit_pressure)
+            formula_audits = self.holding_formula_audits(snapshot, position, item.to_dict())
             events.append(AlertEvent(
                 snapshot.account_id,
                 snapshot.account_label,
@@ -804,6 +863,7 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
                     "holdingDecisionBasis": item.decision_basis,
                     "holdingDecisionScore": round(float(item.exit_pressure or 0), 1),
                     "profitLossRate": round(float(item.profit_loss_rate or 0), 2),
+                    "formulaAudits": formula_audits,
                 },
             ))
         return events

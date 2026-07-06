@@ -52,6 +52,14 @@ class SafeFormula:
         scope.update({key: number(value) for key, value in variables.items()})
         return number(eval(self.code, {"__builtins__": {}}, scope))
 
+    def variable_names(self) -> List[str]:
+        names = {
+            node.id
+            for node in ast.walk(self.tree)
+            if isinstance(node, ast.Name) and node.id not in self.allowed_funcs
+        }
+        return sorted(names)
+
 
 class StrategyModel:
     default_buy_formula = (
@@ -158,6 +166,148 @@ class StrategyModel:
         buy_score = clamp(self.buy_formula.evaluate(merged), 0.0, 100.0)
         sell_score = clamp(self.sell_formula.evaluate(merged), 0.0, 100.0)
         return {"buyScore": round(buy_score, 1), "sellScore": round(sell_score, 1), "scoreGap": round(buy_score - sell_score, 1)}
+
+    def score_formula_audits(self, variables: Dict[str, float], scores: Dict[str, float] = None) -> List[Dict[str, object]]:
+        merged = dict(self.weights)
+        merged.update(self.feature_variables(variables))
+        scores = scores or self.score(variables)
+        missing = self.market_formula_missing_inputs(variables)
+        return [
+            self.formula_audit(
+                "buyScoreFormula",
+                "매수 공식",
+                self.buy_formula,
+                merged,
+                scores.get("buyScore"),
+                missing,
+            ),
+            self.formula_audit(
+                "sellScoreFormula",
+                "매도 공식",
+                self.sell_formula,
+                merged,
+                scores.get("sellScore"),
+                missing,
+            ),
+        ]
+
+    def holding_formula_audits(self, position: Position, sector_ratio: float = 0.0, scores: Dict[str, object] = None) -> List[Dict[str, object]]:
+        variables = self.holding_variables(position, sector_ratio)
+        scores = scores or self.holding_pressure_scores(position, sector_ratio)
+        missing = self.holding_formula_missing_inputs(position, sector_ratio)
+        audits = [
+            self.formula_audit(
+                "profitTakeScoreFormula",
+                "익절 점검 공식",
+                self.profit_take_formula,
+                variables,
+                scores.get("profitTakePressure"),
+                missing,
+            ),
+            self.formula_audit(
+                "lossCutScoreFormula",
+                "손실 관리 공식",
+                self.loss_cut_formula,
+                variables,
+                scores.get("lossCutPressure"),
+                missing,
+            ),
+        ]
+        selected_key = "lossCutScoreFormula" if (position.profit_loss_rate or 0) < 0 else "profitTakeScoreFormula"
+        for audit in audits:
+            audit["selected"] = audit.get("key") == selected_key
+        return audits
+
+    def formula_audit(
+        self,
+        key: str,
+        label: str,
+        formula: SafeFormula,
+        variables: Dict[str, float],
+        result,
+        missing_candidates: Dict[str, str] = None,
+    ) -> Dict[str, object]:
+        names = formula.variable_names()
+        missing_candidates = missing_candidates or {}
+        missing = [
+            missing_candidates[name]
+            for name in names
+            if name in missing_candidates
+        ]
+        missing.extend([name for name in names if name not in variables])
+        return {
+            "key": key,
+            "label": label,
+            "expression": formula.expression,
+            "result": round(number(result), 1),
+            "variables": {
+                name: round(number(variables.get(name)), 4)
+                for name in names
+                if name in variables
+            },
+            "missing": sorted(set(item for item in missing if str(item or "").strip())),
+        }
+
+    def market_formula_missing_inputs(self, raw: Dict[str, float]) -> Dict[str, str]:
+        raw = raw or {}
+        missing: Dict[str, str] = {}
+        trade_strength = number(raw.get("tradeStrength") or raw.get("trade_strength"))
+        volume_ratio = number(raw.get("volumeRatio") or raw.get("volume_ratio"))
+        buy_volume = number(raw.get("buyVolume") or raw.get("buy_volume"))
+        sell_volume = number(raw.get("sellVolume") or raw.get("sell_volume"))
+        current_price = number(raw.get("currentPrice") or raw.get("current_price") or raw.get("price") or raw.get("closePrice"))
+        ma20 = number(raw.get("ma20") or raw.get("movingAverage20"))
+        ma60 = number(raw.get("ma60") or raw.get("movingAverage60"))
+        bid_ask = number(raw.get("bidAskImbalance") or raw.get("bid_ask_imbalance"))
+        price_change = number(raw.get("priceChangeRate") or raw.get("price_change_rate"))
+        foreign_net = number(raw.get("foreignNet") or raw.get("foreignNetVolume") or raw.get("foreign_net_volume"))
+        institution_net = number(raw.get("institutionNet") or raw.get("institutionNetVolume") or raw.get("institution_net_volume"))
+        individual_net = number(raw.get("individualNet") or raw.get("individualNetVolume") or raw.get("individual_net_volume"))
+        if not trade_strength:
+            missing["tradeStrength"] = "체결강도 없음 -> 100 기준값"
+            missing["executionScore"] = "체결강도 없음 -> 0점"
+        if not volume_ratio:
+            missing["volumeRatio"] = "거래량 배율 없음 -> 1배"
+            missing["volumePressure"] = "거래량 배율 없음 -> 0점"
+            missing["directionalVolumePressure"] = "거래량 방향 확인값 없음 -> 0점"
+        if not (buy_volume + sell_volume):
+            missing["buyShare"] = "매수/매도 체결량 없음 -> 50%"
+            missing["buyShareScore"] = "매수 체결 비중 없음 -> 0점"
+            missing["sellShare"] = "매수/매도 체결량 없음 -> 50%"
+            missing["directionalVolumePressure"] = "매수/매도 방향 없음 -> 0점"
+        if not bid_ask:
+            missing["bidAskImbalance"] = "호가 불균형 없음 -> 0"
+            missing["orderbookScore"] = "호가 불균형 없음 -> 0점"
+        if not price_change:
+            missing["priceChangeRate"] = "가격 변화율 없음 -> 0%"
+            missing["momentumScore"] = "가격 움직임 없음 -> 0점"
+        if not current_price or not ma20 or not ma60:
+            missing["trendScore"] = "현재가 또는 이동평균 없음 -> 0점"
+            missing["trendDistance20"] = "20일선 괴리 없음 -> 0%"
+            missing["trendDistance60"] = "60일선 괴리 없음 -> 0%"
+            missing["maSpread"] = "20/60일선 간격 없음 -> 0%"
+        if not (foreign_net or institution_net or individual_net):
+            missing["investorFlowScore"] = "투자자별 수급 없음 -> 0점"
+        if not number(raw.get("undervalueBonus")):
+            missing["undervalueBonus"] = "저평가 보너스 없음 -> 0점"
+        if not number(raw.get("expensivePenalty") or raw.get("expensiveBonus")):
+            missing["expensivePenalty"] = "고평가 패널티 없음 -> 0점"
+            missing["expensiveBonus"] = "고평가 보너스 없음 -> 0점"
+        return missing
+
+    def holding_formula_missing_inputs(self, position: Position, sector_ratio: float = 0.0) -> Dict[str, str]:
+        missing = self.market_formula_missing_inputs(position.to_dict())
+        if not position.profit_loss_rate:
+            missing["profitLossRate"] = "손익률 없음 또는 0% -> 손익 구간 점수 0점"
+            missing["profitTakePnlScore"] = "수익 구간 아님 -> 0점"
+            missing["lossCutPnlScore"] = "손실 구간 아님 -> 0점"
+        if not sector_ratio:
+            missing["sectorConcentrationScore"] = "업종 비중 없음 또는 낮음 -> 0점"
+        if not position.sellable_quantity:
+            missing["sellableScore"] = "매도 가능 수량 없음 -> 0점"
+        if not number(position.buy_volume + position.sell_volume) and not number(position.trade_strength) and not number(position.ma20_distance):
+            missing["holdingSignalScore"] = "수급·추세 보유 신호 부족 -> 0점 기준"
+        return missing
 
     def holding_variables(self, position: Position, sector_ratio: float = 0.0) -> Dict[str, float]:
         pnl = float(position.profit_loss_rate or 0.0)

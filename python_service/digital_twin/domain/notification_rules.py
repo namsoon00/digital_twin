@@ -459,6 +459,7 @@ class NotificationRuleDecision:
     market_hours_close_time: str = ""
     market_hours_timezone: str = ""
     market_hours_markets: List[str] = dataclass_field(default_factory=list)
+    notification_formula_audit: Dict[str, object] = dataclass_field(default_factory=dict)
 
     def to_context(self) -> Dict[str, object]:
         decision = "send" if self.should_send else "suppressed"
@@ -500,6 +501,7 @@ class NotificationRuleDecision:
             "marketHoursCloseTime": self.market_hours_close_time,
             "marketHoursTimezone": self.market_hours_timezone,
             "marketHoursMarkets": list(self.market_hours_markets or []),
+            "notificationFormulaAudit": dict(self.notification_formula_audit or {}),
         }
 
 
@@ -805,7 +807,7 @@ def evaluate_notification_rule(job: NotificationJob, config: NotificationRuleCon
     threshold = clamp_int(config.threshold, 0, 100, default_threshold(config.message_type))
     raw_score = clamp_int(score, 0, 100, 0)
     formula_variables["rawScore"] = float(raw_score)
-    score = notification_formula_score(job.context or {}, formula_variables, raw_score, reasons)
+    score, formula_audit = notification_formula_score(job.context or {}, formula_variables, raw_score, reasons)
     action = config.low_score_action or DEFAULT_LOW_SCORE_ACTION
     should_send = True
     if config.enabled and action == "suppress":
@@ -822,6 +824,7 @@ def evaluate_notification_rule(job: NotificationJob, config: NotificationRuleCon
         similarity_enabled=bool(config.similarity_enabled),
         similarity_window_minutes=int(config.similarity_window_minutes or 0),
         similarity_penalty=int(config.similarity_penalty or 0),
+        notification_formula_audit=formula_audit,
     )
 
 
@@ -830,17 +833,39 @@ def notification_formula_score(
     variables: Dict[str, float],
     raw_score: int,
     reasons: List[str],
-) -> int:
+) -> Tuple[int, Dict[str, object]]:
     formula_text = str(context.get("notificationScoreFormula") or "").strip()
-    if not formula_text or formula_text == DEFAULT_NOTIFICATION_SCORE_FORMULA:
-        return raw_score
+    if not formula_text:
+        formula_text = DEFAULT_NOTIFICATION_SCORE_FORMULA
+    formula = None
+    missing = []
+    used_variables = {"rawScore": float(raw_score)}
     try:
-        score = clamp_int(SafeFormula(formula_text).evaluate(variables), 0, 100, raw_score)
+        formula = SafeFormula(formula_text)
+        used_names = formula.variable_names()
+        missing = [name for name in used_names if name not in variables]
+        used_variables = {
+            name: round(float(variables.get(name, 0.0)), 4)
+            for name in used_names
+            if name in variables
+        }
+        score = clamp_int(formula.evaluate(variables), 0, 100, raw_score)
     except (SyntaxError, ValueError, NameError, ArithmeticError) as error:
         reasons.append("사용자 발송 공식 오류: " + str(error))
-        return raw_score
-    reasons.append("사용자 발송 공식 적용 " + str(score) + "점")
-    return score
+        score = raw_score
+    else:
+        if formula_text != DEFAULT_NOTIFICATION_SCORE_FORMULA:
+            reasons.append("사용자 발송 공식 적용 " + str(score) + "점")
+    audit = {
+        "key": "notificationScoreFormula",
+        "label": "알림 발송 공식",
+        "expression": formula_text,
+        "result": score,
+        "variables": used_variables,
+        "missing": missing,
+        "note": "반복 알림 패널티나 장 시간 정책 적용 전의 공식 결과입니다.",
+    }
+    return score, audit
 
 
 def apply_similarity_rule(

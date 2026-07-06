@@ -711,6 +711,89 @@ def friendly_score_reason(value: object) -> str:
     return text
 
 
+def formula_number(value: object) -> str:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value or "").strip()
+    if number.is_integer():
+        return str(int(number))
+    return ("%.4f" % number).rstrip("0").rstrip(".")
+
+
+def formula_audit_items(context: Dict[str, object]) -> List[Dict[str, object]]:
+    audits: List[Dict[str, object]] = []
+    raw_audits = (context or {}).get("formulaAudits")
+    if isinstance(raw_audits, list):
+        audits.extend([item for item in raw_audits if isinstance(item, dict)])
+    notification_audit = (context or {}).get("notificationFormulaAudit")
+    if isinstance(notification_audit, dict) and notification_audit:
+        audits.append(notification_audit)
+    elif (context or {}).get("honeyScore") not in (None, ""):
+        expression = str((context or {}).get("notificationScoreFormula") or "rawScore").strip() or "rawScore"
+        audits.append({
+            "key": "notificationScoreFormula",
+            "label": "알림 발송 공식",
+            "expression": expression,
+            "result": context.get("honeyScore"),
+            "variables": {"rawScore": context.get("honeyScore")},
+            "missing": [],
+            "note": "상세 발송 변수표가 없는 이전 알림이어서 최종 발송 점수를 rawScore로 표시합니다.",
+        })
+    seen = set()
+    unique: List[Dict[str, object]] = []
+    for audit in audits:
+        key = str(audit.get("key") or audit.get("label") or "").strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        unique.append(audit)
+    return unique
+
+
+def formula_variables_text(audit: Dict[str, object]) -> str:
+    variables = audit.get("variables") if isinstance(audit, dict) else {}
+    if not isinstance(variables, dict) or not variables:
+        return "없음"
+    return ", ".join(
+        str(key) + "=" + formula_number(variables.get(key))
+        for key in sorted(variables.keys())
+    )
+
+
+def formula_missing_text(audit: Dict[str, object]) -> str:
+    missing = audit.get("missing") if isinstance(audit, dict) else []
+    if isinstance(missing, str):
+        missing = [missing]
+    if not isinstance(missing, list) or not missing:
+        return "없음"
+    return ", ".join(str(item) for item in missing if str(item or "").strip()) or "없음"
+
+
+def formula_audit_lines(context: Dict[str, object]) -> List[str]:
+    lines: List[str] = []
+    for audit in formula_audit_items(context):
+        key = str(audit.get("key") or "").strip()
+        label = str(audit.get("label") or key or "공식").strip()
+        expression = str(audit.get("expression") or "").strip()
+        result = formula_number(audit.get("result"))
+        selected = "선택됨, " if audit.get("selected") else ""
+        if expression:
+            lines.append("적용 공식: " + label + "(" + key + ") = " + expression + " -> " + selected + result + "점")
+        else:
+            lines.append("적용 공식: " + label + "(" + key + ") -> " + selected + result + "점")
+        lines.append("대입값: " + label + " " + formula_variables_text(audit))
+        lines.append("없는 값: " + label + " " + formula_missing_text(audit))
+        if key == "notificationScoreFormula" and (context or {}).get("honeyScore") not in (None, ""):
+            final_score = formula_number((context or {}).get("honeyScore"))
+            if result and final_score and result != final_score:
+                lines.append("최종 발송 점수: 공식 결과 " + result + "점에서 반복·장 시간 정책 반영 후 " + final_score + "점")
+        note = str(audit.get("note") or "").strip()
+        if note:
+            lines.append("계산 참고: " + note)
+    return lines
+
+
 MODELING_LABELS = {
     "modelBuy": "매수 판단 모델",
     "modelSell": "매도 판단 모델",
@@ -864,6 +947,7 @@ def score_explanation_lines(context: Dict[str, object]) -> List[str]:
     if context_message_type(context) in SCORE_EXPLANATION_SKIP_TYPES:
         return []
     lines = modeling_lines(context)
+    lines.extend(formula_audit_lines(context))
     lines.extend(delivery_score_lines(context))
     lines.extend(investment_score_lines(context))
     return lines
@@ -966,6 +1050,8 @@ def template_variables() -> List[str]:
         "honeyDecision",
         "honeyReasons",
         "metadata",
+        "formulaAudits",
+        "notificationFormulaAudit",
         "buyScoreFormula",
         "sellScoreFormula",
         "profitTakeScoreFormula",

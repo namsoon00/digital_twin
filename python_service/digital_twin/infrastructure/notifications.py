@@ -14,6 +14,13 @@ from .settings import runtime_settings
 
 
 TELEGRAM_HTML_PATTERN = re.compile(r"</?(?:b|strong|i|em|u|ins|s|strike|del|code|pre|a|blockquote)(?:\s+[^>]*)?>", re.IGNORECASE)
+FORMULA_SETTING_KEYS = [
+    "buyScoreFormula",
+    "sellScoreFormula",
+    "profitTakeScoreFormula",
+    "lossCutScoreFormula",
+    "notificationScoreFormula",
+]
 
 
 def uses_telegram_html(text: str) -> bool:
@@ -115,6 +122,15 @@ def notification_templates():
     return SQLiteNotificationTemplateStore()
 
 
+def formula_settings_context() -> Dict[str, object]:
+    settings = runtime_settings()
+    return {
+        key: str(settings.get(key) or "").strip()
+        for key in FORMULA_SETTING_KEYS
+        if str(settings.get(key) or "").strip()
+    }
+
+
 class QueueingNotifier:
     label = "Notification Queue"
 
@@ -133,6 +149,13 @@ class QueueingNotifier:
         self.dedupe_key = dedupe_key
 
     def send(self, text: str) -> NotificationResult:
+        context = text_context(
+            text,
+            self.message_type,
+            self.account.account_id if self.account else "",
+            self.account.label if self.account else "",
+        )
+        context.update({key: value for key, value in formula_settings_context().items() if key not in context})
         job = NotificationJob.create(
             text,
             account_id=self.account.account_id if self.account else "",
@@ -141,12 +164,7 @@ class QueueingNotifier:
             source_event_id=self.source_event.event_id if self.source_event else "",
             source_event_name=self.source_event.name if self.source_event else "",
             dedupe_key=self.dedupe_key,
-            context=text_context(
-                text,
-                self.message_type,
-                self.account.account_id if self.account else "",
-                self.account.label if self.account else "",
-            ),
+            context=context,
         )
         if not job.text:
             return NotificationResult(False, self.label, "empty notification text")
@@ -201,13 +219,19 @@ def send_events(
 ) -> NotificationResult:
     events = list(events)
     templates = notification_templates()
-    messages = [templates.render(event.rule, alert_context(event)) for event in events]
+    formula_context = formula_settings_context()
+    contexts = []
+    for event in events:
+        context = alert_context(event)
+        context.update({key: value for key, value in formula_context.items() if key not in context})
+        contexts.append(context)
+    messages = [templates.render(event.rule, context) for event, context in zip(events, contexts)]
     if dry_run:
         print("\n\n".join(messages) if messages else "No messages.")
         return NotificationResult(False, "Dry Run", "dry-run")
     target_queue = queue or notification_queue()
     queued = 0
-    for event, message in zip(events, messages):
+    for event, message, context in zip(events, messages, contexts):
         job = NotificationJob.create(
             message,
             account_id=event.account_id,
@@ -216,7 +240,7 @@ def send_events(
             source_event_id=source_event.event_id if source_event else "",
             source_event_name=source_event.name if source_event else "",
             dedupe_key=":".join(["outbox", source_event.event_id, event.key]) if source_event else "",
-            context=alert_context(event),
+            context=context,
         )
         if target_queue.enqueue(job):
             queued += 1

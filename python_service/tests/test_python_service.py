@@ -2155,6 +2155,10 @@ class PythonServiceTests(unittest.TestCase):
 
         self.assertEqual(45, decision.score)
         self.assertIn("사용자 발송 공식 적용 45점", decision.reasons)
+        audit = decision.to_context()["notificationFormulaAudit"]
+        self.assertEqual("notificationScoreFormula", audit["key"])
+        self.assertEqual("baseScore + symbolScore", audit["expression"])
+        self.assertEqual({"baseScore": 35.0, "symbolScore": 10.0}, audit["variables"])
 
     def test_notification_rule_seed_migrates_default_text_conditions_to_signals(self):
         db_path = Path(self.temp.name) / "service.db"
@@ -2800,9 +2804,59 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("수급·추세 같은 확인 데이터 포함 +10점", message)
         self.assertIn("보유 판단 점수", message)
         self.assertIn("사용자가 설정한 익절 공식과 손절/손실 관리 공식", message)
+        self.assertIn("적용 공식", message)
+        self.assertIn("알림 발송 공식(notificationScoreFormula)", message)
+        self.assertIn("대입값", message)
+        self.assertIn("rawScore=70", message)
+        self.assertIn("없는 값", message)
         self.assertNotIn("honey", message.lower())
         self.assertNotIn("danger", message.lower())
         self.assertNotIn("caution", message.lower())
+
+    def test_formula_audit_details_render_for_holding_messages(self):
+        db_path = Path(self.temp.name) / "service.db"
+        templates = SQLiteNotificationTemplateStore(db_path)
+        event = AlertEvent(
+            "main",
+            "메인",
+            "WATCH",
+            "holdingTiming",
+            "main:timing:000660",
+            "SK하이닉스",
+            ["상태 손실 관리 조건부 보유 (40점)", "손익 -3.2%"],
+            "000660",
+        )
+        context = alert_context(event)
+        context.update({
+            "honeyScore": 55,
+            "honeyThreshold": 45,
+            "honeyReasons": ["기본 35점", "관찰 등급 +10"],
+            "formulaAudits": [{
+                "key": "lossCutScoreFormula",
+                "label": "손실 관리 공식",
+                "expression": "baseScore + lossCutPnlScore + sellableScore",
+                "result": 40,
+                "selected": True,
+                "variables": {"baseScore": 24, "lossCutPnlScore": 10, "sellableScore": 0},
+                "missing": ["매도 가능 수량 없음 -> 0점"],
+            }],
+            "notificationFormulaAudit": {
+                "key": "notificationScoreFormula",
+                "label": "알림 발송 공식",
+                "expression": "rawScore",
+                "result": 55,
+                "variables": {"rawScore": 55},
+                "missing": [],
+            },
+        })
+
+        message = templates.render(event.rule, context)
+
+        self.assertIn("손실 관리 공식(lossCutScoreFormula)", message)
+        self.assertIn("baseScore + lossCutPnlScore + sellableScore", message)
+        self.assertIn("baseScore=24", message)
+        self.assertIn("lossCutPnlScore=10", message)
+        self.assertIn("매도 가능 수량 없음", message)
 
     def test_model_review_message_includes_delivery_score_explanation(self):
         db_path = Path(self.temp.name) / "service.db"
@@ -2955,6 +3009,49 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("• <b>감지</b>: <code>매수 후보 (78점)</code>", message)
         self.assertIn("매수 판단 점수", message)
         self.assertIn("체결 흐름", message)
+
+    def test_model_score_event_renders_formula_audit_details(self):
+        db_path = Path(self.temp.name) / "service.db"
+        templates = SQLiteNotificationTemplateStore(db_path)
+        position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "marketValue": 1000000,
+            "currentPrice": 71000,
+            "tradeStrength": 130,
+            "volumeRatio": 2.1,
+            "buyVolume": 700,
+            "sellVolume": 300,
+            "priceChangeRate": 2.4,
+            "ma20": 69000,
+            "ma60": 65000,
+            "sector": "반도체",
+        })
+        portfolio = portfolio_summary([position])
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "ok",
+            utc_now_iso(),
+            portfolio,
+            [position],
+            decisions_for_positions([position], portfolio),
+        )
+        monitor = RealtimeMonitor({"alertThresholds": "modelBuyScore=1\nmodelSellScore=99\nwatchlistBuyScore=99"})
+        event = next(item for item in monitor.model_score_events(snapshot) if item.rule == "modelBuy")
+
+        message = templates.render(event.rule, alert_context(event))
+
+        self.assertTrue(event.metadata.get("formulaAudits"))
+        self.assertIn("매수 공식(buyScoreFormula)", message)
+        self.assertIn("매도 공식(sellScoreFormula)", message)
+        self.assertIn("대입값", message)
+        self.assertIn("executionScore", message)
+        self.assertIn("없는 값", message)
 
     def test_model_sell_alert_explains_sell_score_inputs(self):
         db_path = Path(self.temp.name) / "service.db"

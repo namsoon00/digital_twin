@@ -2082,7 +2082,7 @@ class PythonServiceTests(unittest.TestCase):
         jobs = queue.jobs()
         self.assertEqual(1, len(jobs))
         self.assertEqual("suppressed", jobs[0].status)
-        self.assertIn("꿀점수", jobs[0].last_error)
+        self.assertIn("발송 우선도", jobs[0].last_error)
         self.assertLess(jobs[0].context["honeyScore"], jobs[0].context["honeyThreshold"])
 
     def test_notification_jobs_payload_exposes_honey_decisions(self):
@@ -2097,7 +2097,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("monitorHeartbeat", item["messageType"])
         self.assertEqual("suppressed", item["status"])
         self.assertEqual("suppressed", item["honeyDecision"])
-        self.assertIn("꿀점수", item["lastError"])
+        self.assertIn("발송 우선도", item["lastError"])
         self.assertLess(item["honeyScore"], item["honeyThreshold"])
         self.assertTrue(item["honeyReasons"])
         self.assertEqual(10, payload["limit"])
@@ -2713,9 +2713,9 @@ class PythonServiceTests(unittest.TestCase):
 
         self.assertEqual(1, runner.run_once(limit=10))
         self.assertTrue(sent[0].startswith("[monitorHeartbeat] 상태 확인\n정상\n기준일 2026-07-03 15:58 KST"))
-        self.assertIn("점수 계산", sent[0])
-        self.assertIn("발송 점수", sent[0])
-        self.assertIn("기본 점수", sent[0])
+        self.assertIn("알림 발송", sent[0])
+        self.assertIn("발송 우선도", sent[0])
+        self.assertIn("기본 우선도", sent[0])
 
     def test_holding_timing_delivery_adds_sent_time(self):
         registry = AccountRegistry()
@@ -2794,21 +2794,25 @@ class PythonServiceTests(unittest.TestCase):
 
         message = templates.render(event.rule, context)
 
-        self.assertIn("<b>점수 계산</b>", message)
-        self.assertIn("계산 모델", message)
+        self.assertIn("<b>모델 판단</b>", message)
+        self.assertIn("<b>알림 발송</b>", message)
+        self.assertIn("모델", message)
         self.assertIn("보유 타이밍 모델", message)
         self.assertIn("손실 관리 공식(lossCutScoreFormula)", message)
         self.assertIn("알림 발송 공식(notificationScoreFormula)", message)
-        self.assertIn("발송 점수", message)
-        self.assertIn("기본 점수 35점", message)
+        self.assertIn("발송 우선도", message)
+        self.assertIn("기본 우선도 35점", message)
         self.assertIn("수급·추세 같은 확인 데이터 포함 +10점", message)
-        self.assertIn("보유 판단 점수", message)
+        self.assertIn("보유 모델 점수", message)
         self.assertIn("사용자가 설정한 익절 공식과 손절/손실 관리 공식", message)
-        self.assertIn("적용 공식", message)
+        self.assertIn("발송 공식", message)
         self.assertIn("알림 발송 공식(notificationScoreFormula)", message)
-        self.assertIn("대입값", message)
+        self.assertIn("발송 대입값", message)
         self.assertIn("rawScore=70", message)
-        self.assertIn("없는 값", message)
+        self.assertIn("발송 부족 데이터", message)
+        self.assertNotIn("점수 계산", message)
+        self.assertNotIn("발송 점수", message)
+        self.assertNotIn("보유 판단 점수", message)
         self.assertNotIn("honey", message.lower())
         self.assertNotIn("danger", message.lower())
         self.assertNotIn("caution", message.lower())
@@ -2857,6 +2861,10 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("baseScore=24", message)
         self.assertIn("lossCutPnlScore=10", message)
         self.assertIn("매도 가능 수량 없음", message)
+        self.assertIn("모델 공식", message)
+        self.assertIn("모델 대입값", message)
+        self.assertIn("모델 부족 데이터", message)
+        self.assertIn("발송 공식", message)
 
     def test_model_review_message_includes_delivery_score_explanation(self):
         db_path = Path(self.temp.name) / "service.db"
@@ -2871,9 +2879,9 @@ class PythonServiceTests(unittest.TestCase):
         })
 
         self.assertIn("AAPL 모델 리뷰", message)
-        self.assertIn("점수 계산", message)
-        self.assertIn("발송 점수", message)
-        self.assertIn("기본 점수 85점", message)
+        self.assertIn("알림 발송", message)
+        self.assertIn("발송 우선도", message)
+        self.assertIn("기본 우선도 85점", message)
 
     def test_default_notification_template_is_readable_and_skips_empty_fields(self):
         db_path = Path(self.temp.name) / "service.db"
@@ -3007,7 +3015,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("• <b>매수 판단</b>: <code>매수 후보 (78점)</code>", message)
         self.assertNotIn("모델 매수 점수 78점", message)
         self.assertIn("• <b>감지</b>: <code>매수 후보 (78점)</code>", message)
-        self.assertIn("매수 판단 점수", message)
+        self.assertIn("매수 모델 점수", message)
         self.assertIn("체결 흐름", message)
 
     def test_model_score_event_renders_formula_audit_details(self):
@@ -3049,9 +3057,9 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(event.metadata.get("formulaAudits"))
         self.assertIn("매수 공식(buyScoreFormula)", message)
         self.assertIn("매도 공식(sellScoreFormula)", message)
-        self.assertIn("대입값", message)
+        self.assertIn("모델 대입값", message)
         self.assertIn("executionScore", message)
-        self.assertIn("없는 값", message)
+        self.assertIn("모델 부족 데이터", message)
 
     def test_model_sell_alert_explains_sell_score_inputs(self):
         db_path = Path(self.temp.name) / "service.db"
@@ -3070,7 +3078,7 @@ class PythonServiceTests(unittest.TestCase):
         message = templates.render(event.rule, alert_context(event))
 
         self.assertIn("• <b>매도 판단</b>: <code>분할매도 점검 (82점)</code>", message)
-        self.assertIn("매도 판단 점수", message)
+        self.assertIn("매도 모델 점수", message)
         self.assertIn("손절 기준", message)
 
     def test_flow_and_trend_lines_use_colon_pair_template_format(self):

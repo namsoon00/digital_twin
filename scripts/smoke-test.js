@@ -331,7 +331,7 @@ function checkFrontendAdminRender() {
           title: "크립토 변동",
           symbol: "ETH",
           textPreview: "ETH 24h +5.4%, 7d +10.3%",
-          lastError: "꿀점수 30점이 기준 45점보다 낮아 발송하지 않았습니다.",
+          lastError: "발송 우선도 30이 기준 45보다 낮아 발송하지 않았습니다.",
           honeyScore: 30,
           honeyThreshold: 45,
           honeyDecision: "suppressed",
@@ -792,19 +792,19 @@ function checkFrontendAdminRender() {
     assertOk(notificationPolicyHtml.indexOf("admin-message-details") < 0, "정책 행 안에 inline 상세 편집기가 남아 있습니다.");
     assertOk(code.indexOf("renderNotificationTemplateRow(template, { policyDetail: true })") >= 0, "알림 타입별 템플릿 상세 렌더링 경로가 없습니다.");
     assertOk(code.indexOf("renderNotificationRuleEditor(rule.key, { inline: true })") >= 0, "정책 상세의 전체 룰 편집 경로가 없습니다.");
-    assertOk(notificationAdvancedHtml.indexOf("notification-rule-editor") >= 0 && notificationAdvancedHtml.indexOf("최소 꿀점수") >= 0, "고급 섹션의 전체 룰 상세가 렌더링되지 않았습니다.");
+    assertOk(notificationAdvancedHtml.indexOf("notification-rule-editor") >= 0 && notificationAdvancedHtml.indexOf("최소 발송 우선도") >= 0, "고급 섹션의 전체 룰 상세가 렌더링되지 않았습니다.");
     assertOk(code.indexOf("유사 메시지") >= 0 && code.indexOf("data-notification-rule-similarity-enabled") >= 0, "유사 메시지 억제 설정 경로가 없습니다.");
     assertOk(code.indexOf("data-notification-rule-fields") >= 0, "유사 메시지 fingerprint 필드 입력 경로가 없습니다.");
     assertOk(code.indexOf("장 시간 필터") >= 0 && code.indexOf("data-notification-rule-market-hours-enabled") >= 0, "장 시간 필터 설정 경로가 없습니다.");
     assertOk(code.indexOf("국장") >= 0 && code.indexOf("미장") >= 0, "국장/미장 장 시간 설정 경로가 없습니다.");
     assertOk(code.indexOf("프리마켓") >= 0 && code.indexOf("애프터마켓") >= 0, "프리/애프터마켓 장 시간 설정 경로가 없습니다.");
     assertOk(code.indexOf("data-notification-rule-market-hours-market") >= 0, "장 시간 시장 선택 체크박스 경로가 없습니다.");
-    assertOk(code.indexOf("data-notification-rule-condition-value") >= 0, "꿀점수 조건 값 편집 입력 경로가 없습니다.");
+    assertOk(code.indexOf("data-notification-rule-condition-value") >= 0, "발송 우선도 조건 값 편집 입력 경로가 없습니다.");
     assertOk(code.indexOf("data-rule-save") >= 0 && code.indexOf("monitorHeartbeat") >= 0, "알림 타입별 룰 저장 경로가 없습니다.");
     assertOk(code.indexOf("externalEquityMove") >= 0 && code.indexOf("externalEquityMove=60") >= 0, "미장 가격/거래량 기본 발송 기준 60점 계약이 없습니다.");
     assertOk(notificationHtml.indexOf("최근 알림 판단") >= 0, "최근 알림 판단 제목이 렌더링되지 않았습니다.");
-    assertOk(notificationHtml.indexOf("꿀점수 30/45점") >= 0, "최근 알림 판단의 꿀점수가 렌더링되지 않았습니다.");
-    assertOk(notificationHtml.indexOf("360분 내 7회 · -55점") >= 0, "최근 알림 판단의 유사 메시지 감점이 렌더링되지 않았습니다.");
+    assertOk(notificationHtml.indexOf("발송 우선도 30/45") >= 0, "최근 알림 판단의 발송 우선도가 렌더링되지 않았습니다.");
+    assertOk(notificationHtml.indexOf("360분 내 7회 · 우선도 -55") >= 0, "최근 알림 판단의 유사 메시지 감점이 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("미장 닫힘") >= 0, "최근 알림 판단의 장 시간 외 보류 사유가 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("messageType=externalcryptomove|symbol=eth") >= 0, "최근 알림 판단 fingerprint가 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf('data-action="refresh-notification-jobs"') >= 0, "최근 알림 판단 새로고침 버튼이 없습니다.");
@@ -1170,7 +1170,7 @@ async function checkNormalMode(port, context) {
   assertOk(rules.statusCode === 200, "알림 룰 API 응답 코드가 200이 아닙니다: " + rules.statusCode);
   const rulesPayload = JSON.parse(rules.body);
   assertOk(Array.isArray(rulesPayload.rules), "알림 룰 API rules가 배열이 아닙니다.");
-  assertOk(rulesPayload.rules.some(function (item) { return item.messageType === "monitorHeartbeat"; }), "상태 확인 꿀점수 룰이 없습니다.");
+  assertOk(rulesPayload.rules.some(function (item) { return item.messageType === "monitorHeartbeat"; }), "상태 확인 발송 우선도 룰이 없습니다.");
   assertOk(Array.isArray(rulesPayload.conditionTypes) && rulesPayload.conditionTypes.length, "알림 룰 조건 타입 목록이 없습니다.");
   assertOk(Array.isArray(rulesPayload.marketHoursSessions) && rulesPayload.marketHoursSessions.length >= 2, "장 시간 세션 목록이 없습니다.");
 

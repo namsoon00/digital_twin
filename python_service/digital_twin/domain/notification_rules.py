@@ -214,7 +214,7 @@ def default_similarity_bypass_conditions(message_type: str) -> List["SimilarityB
             ),
             SimilarityBypassCondition(
                 "holding_score_delta",
-                "보유 판단 점수 변화",
+                "보유 모델 점수 변화",
                 "abs_number_delta_gte",
                 field="holdingDecisionScore",
                 value=8,
@@ -897,7 +897,7 @@ def apply_similarity_rule(
     bypass_delta = int(config.similarity_bypass_score_delta or 0)
     if bypass_delta and decision.similarity_previous_score and score_delta >= bypass_delta:
         decision.similarity_bypassed = True
-        decision.similarity_bypass_reason = "꿀점수 +" + str(score_delta) + "점 상승"
+        decision.similarity_bypass_reason = "발송 우선도 +" + str(score_delta) + " 상승"
         decision.reasons.append("유사 메시지 예외: " + decision.similarity_bypass_reason)
         return decision
     penalty = clamp_int(config.similarity_penalty, -100, 0, default_similarity_penalty(config.message_type))

@@ -1922,7 +1922,7 @@ class SQLiteNotificationJobStore(OperationalConnection):
             elif decision.suppression_reason == "state_cooldown":
                 job.last_error = decision.state_reason or "같은 임계값 상태가 지속되어 발송하지 않았습니다."
             else:
-                job.last_error = "꿀점수 " + str(decision.score) + "점이 기준 " + str(decision.threshold) + "점보다 낮아 발송하지 않았습니다."
+                job.last_error = "발송 우선도 " + str(decision.score) + "이 기준 " + str(decision.threshold) + "보다 낮아 발송하지 않았습니다."
             try:
                 self.upsert_job_with_connection(connection, job)
             except sqlite3.IntegrityError:

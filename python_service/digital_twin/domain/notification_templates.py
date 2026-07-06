@@ -682,7 +682,7 @@ def score_reason_items(value: object) -> List[str]:
 def friendly_score_reason(value: object) -> str:
     text = str(value or "").strip()
     replacements = [
-        ("기본 ", "기본 점수 "),
+        ("기본 ", "기본 우선도 "),
         ("주의 등급", "주의 알림"),
         ("관찰 등급", "관찰 알림"),
         ("종목 지정", "종목 코드/이름 포함"),
@@ -721,25 +721,29 @@ def formula_number(value: object) -> str:
     return ("%.4f" % number).rstrip("0").rstrip(".")
 
 
-def formula_audit_items(context: Dict[str, object]) -> List[Dict[str, object]]:
+def formula_audit_items(context: Dict[str, object], domain: str = "all") -> List[Dict[str, object]]:
     audits: List[Dict[str, object]] = []
-    raw_audits = (context or {}).get("formulaAudits")
+    if domain in {"all", "model"}:
+        raw_audits = (context or {}).get("formulaAudits")
+    else:
+        raw_audits = []
     if isinstance(raw_audits, list):
         audits.extend([item for item in raw_audits if isinstance(item, dict)])
-    notification_audit = (context or {}).get("notificationFormulaAudit")
-    if isinstance(notification_audit, dict) and notification_audit:
-        audits.append(notification_audit)
-    elif (context or {}).get("honeyScore") not in (None, ""):
-        expression = str((context or {}).get("notificationScoreFormula") or "rawScore").strip() or "rawScore"
-        audits.append({
-            "key": "notificationScoreFormula",
-            "label": "알림 발송 공식",
-            "expression": expression,
-            "result": context.get("honeyScore"),
-            "variables": {"rawScore": context.get("honeyScore")},
-            "missing": [],
-            "note": "상세 발송 변수표가 없는 이전 알림이어서 최종 발송 점수를 rawScore로 표시합니다.",
-        })
+    if domain in {"all", "delivery"}:
+        notification_audit = (context or {}).get("notificationFormulaAudit")
+        if isinstance(notification_audit, dict) and notification_audit:
+            audits.append(notification_audit)
+        elif (context or {}).get("honeyScore") not in (None, ""):
+            expression = str((context or {}).get("notificationScoreFormula") or "rawScore").strip() or "rawScore"
+            audits.append({
+                "key": "notificationScoreFormula",
+                "label": "알림 발송 공식",
+                "expression": expression,
+                "result": context.get("honeyScore"),
+                "variables": {"rawScore": context.get("honeyScore")},
+                "missing": [],
+                "note": "상세 발송 변수표가 없는 이전 알림이어서 최종 발송 우선도를 rawScore로 표시합니다.",
+            })
     seen = set()
     unique: List[Dict[str, object]] = []
     for audit in audits:
@@ -770,27 +774,43 @@ def formula_missing_text(audit: Dict[str, object]) -> str:
     return ", ".join(str(item) for item in missing if str(item or "").strip()) or "없음"
 
 
-def formula_audit_lines(context: Dict[str, object]) -> List[str]:
+def formula_detail_text(label: str, detail: str) -> str:
+    return "없음" if detail == "없음" else label + " " + detail
+
+
+def formula_audit_lines(context: Dict[str, object], domain: str = "model") -> List[str]:
     lines: List[str] = []
-    for audit in formula_audit_items(context):
+    is_delivery = domain == "delivery"
+    for audit in formula_audit_items(context, domain):
         key = str(audit.get("key") or "").strip()
         label = str(audit.get("label") or key or "공식").strip()
         expression = str(audit.get("expression") or "").strip()
         result = formula_number(audit.get("result"))
-        selected = "선택됨, " if audit.get("selected") else ""
-        if expression:
-            lines.append("적용 공식: " + label + "(" + key + ") = " + expression + " -> " + selected + result + "점")
+        if is_delivery:
+            result_text = "우선도 " + result
+            formula_label = "발송 공식"
+            variable_label = "발송 대입값"
+            missing_label = "발송 부족 데이터"
+            note_label = "발송 참고"
         else:
-            lines.append("적용 공식: " + label + "(" + key + ") -> " + selected + result + "점")
-        lines.append("대입값: " + label + " " + formula_variables_text(audit))
-        lines.append("없는 값: " + label + " " + formula_missing_text(audit))
-        if key == "notificationScoreFormula" and (context or {}).get("honeyScore") not in (None, ""):
+            result_text = ("선택됨, " if audit.get("selected") else "") + result + "점"
+            formula_label = "모델 공식"
+            variable_label = "모델 대입값"
+            missing_label = "모델 부족 데이터"
+            note_label = "모델 참고"
+        if expression:
+            lines.append(formula_label + ": " + label + "(" + key + ") = " + expression + " -> " + result_text)
+        else:
+            lines.append(formula_label + ": " + label + "(" + key + ") -> " + result_text)
+        lines.append(variable_label + ": " + formula_detail_text(label, formula_variables_text(audit)))
+        lines.append(missing_label + ": " + formula_detail_text(label, formula_missing_text(audit)))
+        if is_delivery and key == "notificationScoreFormula" and (context or {}).get("honeyScore") not in (None, ""):
             final_score = formula_number((context or {}).get("honeyScore"))
             if result and final_score and result != final_score:
-                lines.append("최종 발송 점수: 공식 결과 " + result + "점에서 반복·장 시간 정책 반영 후 " + final_score + "점")
+                lines.append("최종 발송 우선도: 공식 결과 " + result + "에서 반복·장 시간 정책 반영 후 " + final_score)
         note = str(audit.get("note") or "").strip()
         if note:
-            lines.append("계산 참고: " + note)
+            lines.append(note_label + ": " + note)
     return lines
 
 
@@ -824,7 +844,7 @@ MODEL_DATA_HINTS = {
     "modelSell": "토스 시세·수급·추세·손절/가치평가 데이터",
     "watchlistBuyCandidate": "관심종목 시세·수급·추세·가치평가 데이터",
     "holdingTiming": "보유 스냅샷, 손익률, 수급, 추세, 매도 가능 수량",
-    "monitorDecisionChange": "이전/현재 보유 판단 점수와 보유 스냅샷",
+    "monitorDecisionChange": "이전/현재 보유 모델 점수와 보유 스냅샷",
     "monitorTrendChange": "현재가와 이동평균선 거리",
     "monitorPnlChange": "이전/현재 손익률",
     "monitorValueChange": "이전/현재 평가액",
@@ -888,15 +908,13 @@ def modeling_lines(context: Dict[str, object]) -> List[str]:
     if message_type in SCORE_EXPLANATION_SKIP_TYPES:
         return []
     label = MODELING_LABELS.get(message_type, "알림 발송 모델")
-    lines = ["계산 모델: " + label]
+    lines = ["모델: " + label]
     formula_line = strategy_formula_line(context)
     if formula_line:
         lines.append(formula_line)
     data_hint = MODEL_DATA_HINTS.get(message_type)
     if data_hint:
         lines.append("사용 데이터: " + data_hint)
-    if (context or {}).get("honeyScore") not in (None, ""):
-        lines.append("발송 모델: 알림 발송 공식(notificationScoreFormula)")
     return lines
 
 
@@ -906,15 +924,15 @@ def delivery_score_lines(context: Dict[str, object]) -> List[str]:
     score = format_score_value(context.get("honeyScore"))
     threshold = format_score_value(context.get("honeyThreshold"))
     lines = [
-        "발송 점수: " + score + "/" + threshold + "점",
-        "발송 점수는 이 알림을 실제로 보낼 만큼 중요한지 보는 값입니다. 사용자가 설정한 발송 공식으로 기본 점수와 데이터 중요도를 계산한 뒤, 반복 여부 같은 발송 정책을 더하고 뺍니다.",
+        "발송 우선도: " + score + "/" + threshold,
+        "발송 우선도는 투자 모델 점수가 아니라 이 알림을 실제로 보낼지 판단하는 별도 값입니다. 발송 공식으로 알림 중요도를 계산한 뒤 반복 여부와 장 시간 정책을 반영합니다.",
     ]
     formula = str(context.get("notificationScoreFormula") or "").strip()
     if formula and formula != "rawScore":
-        lines.append("사용자 발송 공식: " + formula)
+        lines.append("발송 공식: " + formula)
     reasons = score_reason_items(context.get("honeyReasons"))
     if reasons:
-        lines.append("계산 내역: " + ", ".join(reasons))
+        lines.append("발송 판정 내역: " + ", ".join(reasons))
     return lines
 
 
@@ -930,43 +948,62 @@ def investment_score_lines(context: Dict[str, object]) -> List[str]:
 
     if message_type in {"modelBuy", "watchlistBuyCandidate"} and has_score_value(buy_value):
         lines.append(
-            "매수 판단 점수: 체결 흐름, 방향 있는 거래량, 매수 비중, 호가 균형, 가격 움직임, 이동평균 흐름, 투자자 수급, 적정가 대비를 합쳐 0~100점으로 계산합니다. 점수가 높을수록 매수 후보에 가깝습니다."
+            "매수 모델 점수: 체결 흐름, 방향 있는 거래량, 매수 비중, 호가 균형, 가격 움직임, 이동평균 흐름, 투자자 수급, 적정가 대비를 합쳐 0~100점으로 계산합니다. 점수가 높을수록 매수 후보에 가깝습니다."
         )
     if message_type == "modelSell" and has_score_value(sell_value):
         lines.append(
-            "매도 판단 점수: 매도 압력, 거래량 변화, 가격 움직임, 이동평균 흐름, 투자자 수급, 적정가 대비, 손절 기준을 합쳐 0~100점으로 계산합니다. 점수가 높을수록 분할매도나 손절 기준을 다시 봐야 합니다."
+            "매도 모델 점수: 매도 압력, 거래량 변화, 가격 움직임, 이동평균 흐름, 투자자 수급, 적정가 대비, 손절 기준을 합쳐 0~100점으로 계산합니다. 점수가 높을수록 분할매도나 손절 기준을 다시 봐야 합니다."
         )
     if message_type in {"holdingTiming", "monitorDecisionChange"} and any(has_score_value(item) for item in [status_value, previous_value, current_value]):
         lines.append(
-            "보유 판단 점수: 사용자가 설정한 익절 공식과 손절/손실 관리 공식을 따로 계산한 뒤, 수익 중이면 익절 점수, 손실 중이면 손실 관리 점수를 선택합니다. 공식에는 기본 점수, 손익률 구간, 한 업종에 몰린 정도, 팔 수 있는 수량, 수급·추세 흐름이 들어갑니다."
+            "보유 모델 점수: 사용자가 설정한 익절 공식과 손절/손실 관리 공식을 따로 계산한 뒤, 수익 중이면 익절 점수, 손실 중이면 손실 관리 점수를 선택합니다. 공식에는 기본 점수, 손익률 구간, 한 업종에 몰린 정도, 팔 수 있는 수량, 수급·추세 흐름이 들어갑니다."
         )
     return lines
 
 
-def score_explanation_lines(context: Dict[str, object]) -> List[str]:
+def score_explanation_sections(context: Dict[str, object]) -> List[tuple]:
     if context_message_type(context) in SCORE_EXPLANATION_SKIP_TYPES:
         return []
-    lines = modeling_lines(context)
-    lines.extend(formula_audit_lines(context))
-    lines.extend(delivery_score_lines(context))
-    lines.extend(investment_score_lines(context))
+    model_lines = modeling_lines(context)
+    model_lines.extend(formula_audit_lines(context, "model"))
+    model_lines.extend(investment_score_lines(context))
+    delivery_lines = delivery_score_lines(context)
+    delivery_lines.extend(formula_audit_lines(context, "delivery"))
+    sections = []
+    if model_lines:
+        sections.append(("모델 판단", model_lines))
+    if delivery_lines:
+        sections.append(("알림 발송", delivery_lines))
+    return sections
+
+
+def score_explanation_lines(context: Dict[str, object]) -> List[str]:
+    lines: List[str] = []
+    for _title, section_lines in score_explanation_sections(context):
+        lines.extend(section_lines)
     return lines
 
 
 def score_explanation_block(context: Dict[str, object], rich: bool = False) -> str:
-    lines = score_explanation_lines(context)
-    if not lines:
+    sections = score_explanation_sections(context)
+    if not sections:
         return ""
-    if rich:
-        rows = []
-        for line in lines:
-            label, value = split_label_value(line)
-            if label and value:
-                rows.append("• <b>" + html.escape(label, quote=False) + "</b>: " + html.escape(value, quote=False))
-            else:
-                rows.append(html_bullet(line))
-        return "<b>점수 계산</b>\n" + "\n".join(rows)
-    return "점수 계산\n" + "\n".join(plain_bullet(line) for line in lines)
+    blocks = []
+    for title, lines in sections:
+        if not lines:
+            continue
+        if rich:
+            rows = []
+            for line in lines:
+                label, value = split_label_value(line)
+                if label and value:
+                    rows.append("• <b>" + html.escape(label, quote=False) + "</b>: " + html.escape(value, quote=False))
+                else:
+                    rows.append(html_bullet(line))
+            blocks.append("<b>" + html.escape(title, quote=False) + "</b>\n" + "\n".join(rows))
+        else:
+            blocks.append(title + "\n" + "\n".join(plain_bullet(line) for line in lines))
+    return "\n\n".join(blocks)
 
 
 def context_with_score_explanation(context: Dict[str, object]) -> Dict[str, object]:
@@ -982,7 +1019,8 @@ def template_prefers_rich_score(template: str, rendered: str) -> bool:
 
 
 def append_score_explanation(rendered: str, context: Dict[str, object], rich: bool = False) -> str:
-    if not str(rendered or "").strip() or "점수 계산" in str(rendered or ""):
+    rendered_text = str(rendered or "")
+    if not rendered_text.strip() or "점수 계산" in rendered_text or "모델 판단" in rendered_text or "알림 발송" in rendered_text:
         return rendered
     block = score_explanation_block(context, rich)
     if not block:

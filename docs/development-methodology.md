@@ -13,6 +13,7 @@ This project uses a local-first, DDD-oriented, event-driven architecture. Future
 - Run `npm test` before handoff, then commit and push to `origin/main` unless explicitly told not to.
 - After commit and push, restart project-managed local runtime processes with `npm run python:service:restart`, then confirm with `npm run python:service:status`. Also restart any web, preview, share, or watcher process that the current Codex session started. Do not kill unrelated or user-started processes that cannot be safely identified; report any process that could not be restarted.
 - After commit and push, send a work-complete notification with `npm run python:handoff:notify -- --summary "<short summary>" --commit "$(git rev-parse --short HEAD)" --validation "npm test 통과" --push "origin/main 성공"` so other local workers can see the task is finished.
+- Notification wording must keep investment model scores separate from notification delivery priority. Follow `docs/notification-terminology.md` when changing alert messages, rule labels, or notification UI.
 
 ## Python Layer Map
 

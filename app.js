@@ -8401,7 +8401,7 @@
       renderOntologyControlStrip(tbox, abox, aboxRelations, evidence, beliefs, opinions),
       renderOntologyBoxSummary(tbox, abox, worldview, strategy),
       renderOntologyRelationMatrixPanel(tbox, relationCounts),
-      renderOntologyRelationshipGraphs(tbox, aboxEntities, aboxRelations, evidence, beliefs, opinions, entityLabels, relationCounts),
+      renderOntologyRelationshipGraphs(tbox, abox, aboxEntities, aboxRelations, evidence, beliefs, opinions, entityLabels, relationCounts),
       renderOntologyRelationalProjectionPanel(entities, relations, evidence, beliefs, opinions),
       renderOntologyClassPanel(tbox),
       renderOntologyAboxPanel(abox, aboxEntities, evidence, beliefs, opinions),
@@ -8474,11 +8474,11 @@
     ].join("");
   }
 
-  function renderOntologyRelationshipGraphs(tbox, aboxEntities, aboxRelations, evidence, beliefs, opinions, entityLabels, relationCounts) {
+  function renderOntologyRelationshipGraphs(tbox, abox, aboxEntities, aboxRelations, evidence, beliefs, opinions, entityLabels, relationCounts) {
     return [
       '<section class="ontology-relationship-graphs" aria-label="TBox ABox 관계 그래프">',
       renderOntologyTboxGraph(tbox, relationCounts),
-      renderOntologyAboxGraph(aboxEntities, aboxRelations, evidence, beliefs, opinions, entityLabels),
+      renderOntologyAboxGraph(abox, aboxEntities, aboxRelations, evidence, beliefs, opinions, entityLabels),
       '</section>'
     ].join("");
   }
@@ -8684,13 +8684,14 @@
     return { nodesById: nodesById, edges: edges };
   }
 
-  function renderOntologyAboxGraph(aboxEntities, aboxRelations, evidence, beliefs, opinions, entityLabels) {
+  function renderOntologyAboxGraph(abox, aboxEntities, aboxRelations, evidence, beliefs, opinions, entityLabels) {
+    var portfolioId = String(abox && abox.portfolioId || "flow-lens");
     return [
       '<section class="ontology-graph-panel ontology-abox-graph">',
       '<div class="ontology-surface-head">',
       '<div>',
       '<strong>ABox Runtime Relation Graph</strong>',
-      '<span>현재 포트폴리오 assertion, evidence, belief, opinion 관계</span>',
+      '<span>실제 /api/flow-lens 포트폴리오 assertion, evidence, belief, opinion 관계</span>',
       '</div>',
       '<div class="ontology-graph-actions">',
       '<button class="icon-button" type="button" data-ontology-graph-fit="abox" title="ABox 그래프 맞춤" aria-label="ABox 그래프 맞춤">⌖</button>',
@@ -8699,6 +8700,7 @@
       '</div>',
       '<div class="ontology-graph-meta">',
       '<span>' + escapeHtml(aboxEntities.length) + ' entity rows · ' + escapeHtml(aboxRelations.length) + ' relation rows · ' + escapeHtml((beliefs || []).length) + ' beliefs</span>',
+      '<span>actual runtime data · portfolio ' + escapeHtml(portfolioId) + '</span>',
       '</div>',
       '<div class="ontology-cytoscape" data-ontology-cytoscape="abox"><span>그래프 엔진 초기화 중</span></div>',
       '<div class="ontology-graph-caption">',

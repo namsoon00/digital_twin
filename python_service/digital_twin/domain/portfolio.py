@@ -97,6 +97,9 @@ class DecisionItem:
     decision: str
     tone: str
     source: str = "holding"
+    profit_take_pressure: float = 0.0
+    loss_cut_pressure: float = 0.0
+    decision_basis: str = ""
 
     def to_dict(self) -> Dict[str, object]:
         return asdict(self)

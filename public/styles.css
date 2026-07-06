@@ -1328,11 +1328,17 @@ h3 {
 }
 
 .exit-score span,
-.exit-score em {
+.exit-score em,
+.exit-score small {
   color: var(--muted);
   font-size: 11px;
   font-style: normal;
   font-weight: 800;
+}
+
+.exit-score small {
+  max-width: 92px;
+  line-height: 1.25;
 }
 
 .rule-strip {

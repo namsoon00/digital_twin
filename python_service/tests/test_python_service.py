@@ -550,6 +550,24 @@ class PythonServiceTests(unittest.TestCase):
             "sellableQuantity": 10,
             "sector": "반도체",
         })
+        small_loss_position = normalize_position({
+            "symbol": "035720",
+            "name": "카카오",
+            "market": "KR",
+            "currency": "KRW",
+            "marketValue": 1000,
+            "profitLossRate": -1.2,
+            "sellableQuantity": 10,
+            "sector": "플랫폼",
+        })
+        diversifier_position = normalize_position({
+            "symbol": "AAPL",
+            "name": "Apple",
+            "market": "US",
+            "currency": "USD",
+            "marketValue": 9000,
+            "sector": "AI/플랫폼",
+        })
 
         loss_decision = next(item for item in decisions_for_positions(
             [loss_position],
@@ -559,11 +577,23 @@ class PythonServiceTests(unittest.TestCase):
             [profit_position],
             portfolio_summary([profit_position]),
         ) if item.symbol == "005930")
+        small_loss_decision = next(item for item in decisions_for_positions(
+            [small_loss_position, diversifier_position],
+            portfolio_summary([small_loss_position, diversifier_position]),
+        ) if item.symbol == "035720")
 
         self.assertGreaterEqual(loss_decision.exit_pressure, 55)
         self.assertEqual("손절 기준 확인", loss_decision.decision)
         self.assertNotIn("익절", loss_decision.decision)
+        self.assertEqual("lossCut", loss_decision.decision_basis)
+        self.assertEqual(loss_decision.loss_cut_pressure, loss_decision.exit_pressure)
+        self.assertLess(loss_decision.profit_take_pressure, loss_decision.loss_cut_pressure)
+        self.assertLess(loss_decision.profit_take_pressure, 55)
         self.assertEqual("일부 익절 기준 확인", profit_decision.decision)
+        self.assertEqual("profitTake", profit_decision.decision_basis)
+        self.assertEqual(profit_decision.profit_take_pressure, profit_decision.exit_pressure)
+        self.assertEqual("보유 유지", small_loss_decision.decision)
+        self.assertEqual("lossCut", small_loss_decision.decision_basis)
 
     def test_portfolio_summary_converts_usd_holdings_to_krw_base(self):
         kr_position = normalize_position({
@@ -2487,7 +2517,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("기본 점수 35점", message)
         self.assertIn("수급·추세 같은 확인 데이터 포함 +10점", message)
         self.assertIn("보유 판단 점수", message)
-        self.assertIn("0~37점은 보유 유지", message)
+        self.assertIn("익절 압력과 손절/손실 관리 압력을 따로 계산", message)
         self.assertNotIn("honey", message.lower())
         self.assertNotIn("danger", message.lower())
         self.assertNotIn("caution", message.lower())

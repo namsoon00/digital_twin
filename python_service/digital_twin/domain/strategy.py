@@ -158,26 +158,9 @@ def decision_for_position(position: Position, portfolio: PortfolioSummary) -> De
         if item.get("sector") == position.sector:
             sector_ratio = float(item.get("ratio") or 0)
             break
-    score = 24.0
     pnl = position.profit_loss_rate
-    if pnl >= 20:
-        score += 40
-    elif pnl >= 10:
-        score += 28
-    elif pnl >= 5:
-        score += 15
-    elif pnl <= -15:
-        score += 38
-    elif pnl <= -8:
-        score += 24
-    if sector_ratio >= 50:
-        score += 12
-    elif sector_ratio >= 35:
-        score += 6
-    if position.sellable_quantity > 0:
-        score += 4
-    score += holding_signal_adjustment(position, pnl)
-    pressure = clamp(score, 0.0, 100.0)
+    scores = holding_pressure_scores(position, sector_ratio)
+    pressure = scores["exitPressure"]
     label, tone = holding_decision_label(pressure, pnl)
     return DecisionItem(
         symbol=position.symbol,
@@ -191,7 +174,52 @@ def decision_for_position(position: Position, portfolio: PortfolioSummary) -> De
         exit_pressure=round(pressure, 1),
         decision=label,
         tone=tone,
+        profit_take_pressure=round(scores["profitTakePressure"], 1),
+        loss_cut_pressure=round(scores["lossCutPressure"], 1),
+        decision_basis=scores["decisionBasis"],
     )
+
+
+def holding_pressure_scores(position: Position, sector_ratio: float = 0.0) -> Dict[str, object]:
+    pnl = float(position.profit_loss_rate or 0.0)
+    common = 24.0
+    if sector_ratio >= 50:
+        common += 12
+    elif sector_ratio >= 35:
+        common += 6
+    if position.sellable_quantity > 0:
+        common += 4
+    signal_adjustment = holding_signal_adjustment(position, pnl)
+    profit_take_pressure = common + profit_take_pnl_component(pnl) + signal_adjustment
+    loss_cut_pressure = common + loss_cut_pnl_component(pnl) + signal_adjustment
+    decision_basis = "lossCut" if pnl < 0 else "profitTake"
+    selected = loss_cut_pressure if decision_basis == "lossCut" else profit_take_pressure
+    return {
+        "profitTakePressure": clamp(profit_take_pressure, 0.0, 100.0),
+        "lossCutPressure": clamp(loss_cut_pressure, 0.0, 100.0),
+        "exitPressure": clamp(selected, 0.0, 100.0),
+        "decisionBasis": decision_basis,
+    }
+
+
+def profit_take_pnl_component(pnl: float) -> float:
+    if pnl >= 20:
+        return 40.0
+    if pnl >= 10:
+        return 28.0
+    if pnl >= 5:
+        return 15.0
+    return 0.0
+
+
+def loss_cut_pnl_component(pnl: float) -> float:
+    if pnl <= -15:
+        return 42.0
+    if pnl <= -8:
+        return 28.0
+    if pnl <= -3:
+        return 10.0
+    return 0.0
 
 
 def holding_decision_label(pressure: float, pnl: float):

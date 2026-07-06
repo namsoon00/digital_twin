@@ -12,7 +12,7 @@ from ..domain.portfolio_calculations import (
     normalized_fx_rates,
     value_in_base,
 )
-from ..domain.strategy import holding_decision_label, holding_signal_adjustment
+from ..domain.strategy import holding_decision_label, holding_pressure_scores
 
 
 def clamp_score(value: float) -> int:
@@ -323,24 +323,7 @@ def toss_decision_for_holding(item: Dict[str, object], portfolio: Dict[str, obje
     sector = str(item.get("sector") or sector_from_symbol(str(item.get("symbol") or item.get("name") or "")))
     sector_entry = next((entry for entry in portfolio.get("sectors", []) if entry.get("sector") == sector), {"ratio": 0})
     sellable = number(item.get("sellableQuantity") or item.get("quantity"))
-    score = 24.0
-    if pnl_rate >= 20:
-        score += 40
-    elif pnl_rate >= 10:
-        score += 28
-    elif pnl_rate >= 5:
-        score += 15
-    elif pnl_rate <= -15:
-        score += 38
-    elif pnl_rate <= -8:
-        score += 24
-    if number(sector_entry.get("ratio")) >= 50:
-        score += 12
-    elif number(sector_entry.get("ratio")) >= 35:
-        score += 6
-    if sellable > 0:
-        score += 4
-    score += holding_signal_adjustment(Position(
+    decision_position = Position(
         symbol=str(item.get("symbol") or ""),
         name=str(item.get("name") or ""),
         market=str(item.get("market") or ""),
@@ -370,8 +353,9 @@ def toss_decision_for_holding(item: Dict[str, object], portfolio: Dict[str, obje
         ma20_distance=number(item.get("ma20Distance")),
         ma60_distance=number(item.get("ma60Distance")),
         sector=sector,
-    ), pnl_rate)
-    exit_pressure = clamp_score(score)
+    )
+    pressure_scores = holding_pressure_scores(decision_position, number(sector_entry.get("ratio")))
+    exit_pressure = clamp_score(pressure_scores.get("exitPressure"))
     label, tone = holding_decision_label(exit_pressure, pnl_rate)
     if exit_pressure >= 72:
         priority = 1
@@ -400,6 +384,9 @@ def toss_decision_for_holding(item: Dict[str, object], portfolio: Dict[str, obje
         "profitLoss": number(item.get("profitLoss")),
         "profitLossRate": pnl_rate,
         "exitPressure": exit_pressure,
+        "profitTakePressure": clamp_score(pressure_scores.get("profitTakePressure")),
+        "lossCutPressure": clamp_score(pressure_scores.get("lossCutPressure")),
+        "decisionBasis": pressure_scores.get("decisionBasis"),
         "decision": label,
         "tone": tone,
         "priority": priority,

@@ -13,7 +13,7 @@
     "공유 미리보기에서는 서버 설정과 계정 DB 쓰기를 차단합니다."
   ],
   "localData": {
-    "generatedAt": "2026-07-06T11:08:31.575540Z",
+    "generatedAt": "2026-07-06T14:05:13.874748Z",
     "sources": {
       "serviceDb": "data/service.db",
       "serviceDbExists": true,
@@ -78,6 +78,10 @@
       "modelReviewTimeoutSeconds": "180",
       "modelReviewIntervalSeconds": "300",
       "modelReviewBatchSize": "1",
+      "kisMarketSignalsEnabled": "1",
+      "kisMarketSignalMaxSymbols": "20",
+      "kisMarketSignalCacheMinutes": "10",
+      "kisMarketSignalGapSeconds": "0.35",
       "externalApiFetchIntervalMinutes": "60",
       "externalFredSeries": "DGS10,DGS2,DFF",
       "externalCryptoIds": "bitcoin,ethereum",
@@ -1288,5 +1292,5 @@
       ]
     }
   ],
-  "buildId": "a33b1c31594d"
+  "buildId": "a48a1bd1abb8"
 }

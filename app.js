@@ -2970,6 +2970,12 @@
     var map = {
       "005930": { name: "삼성전자", market: "KR", currency: "KRW", sector: "반도체" },
       "000660": { name: "SK하이닉스", market: "KR", currency: "KRW", sector: "반도체" },
+      "005380": { name: "현대차", market: "KR", currency: "KRW", sector: "모빌리티" },
+      "000020": { name: "동화약품", market: "KR", currency: "KRW", sector: "헬스케어" },
+      "035420": { name: "NAVER", market: "KR", currency: "KRW", sector: "AI/플랫폼" },
+      "035720": { name: "카카오", market: "KR", currency: "KRW", sector: "AI/플랫폼" },
+      "051910": { name: "LG화학", market: "KR", currency: "KRW", sector: "소재" },
+      "068270": { name: "셀트리온", market: "KR", currency: "KRW", sector: "헬스케어" },
       AAPL: { name: "Apple", market: "US", currency: "USD", sector: "AI/플랫폼" },
       MSFT: { name: "Microsoft", market: "US", currency: "USD", sector: "AI/플랫폼" },
       NVDA: { name: "NVIDIA", market: "US", currency: "USD", sector: "반도체" },
@@ -2987,6 +2993,10 @@
       currency: "",
       sector: ""
     }, map[normalized] || {});
+  }
+
+  function fallbackKnownStockSymbols() {
+    return ["005930", "000660", "005380", "000020", "035420", "035720", "051910", "068270", "AAPL", "MSFT", "NVDA", "AMD", "TSLA", "MSTR", "STRC", "GOOGL", "META"];
   }
 
   function clientKnownStockInfo(symbol) {
@@ -3040,6 +3050,25 @@
     var replaced = text.replace(new RegExp("\\b" + escapeRegExp(original) + "\\b", "g"), display);
     replaced = replaced.replace(new RegExp(escapeRegExp(display) + "\\s*[/·]\\s*" + escapeRegExp(display), "g"), display);
     return replaced;
+  }
+
+  function textWithKnownDisplaySymbols(value, preferredSymbol, item) {
+    var text = textWithDisplaySymbol(value, preferredSymbol, item);
+    fallbackKnownStockSymbols().forEach(function (symbol) {
+      text = textWithDisplaySymbol(text, symbol, Object.assign({}, item || {}, { symbol: symbol }));
+    });
+    return text;
+  }
+
+  function inferKnownStockSymbolFromText(value) {
+    var text = String(value || "").toUpperCase();
+    if (!text) return "";
+    var known = fallbackKnownStockSymbols();
+    for (var index = 0; index < known.length; index += 1) {
+      if (new RegExp("\\b" + escapeRegExp(known[index]) + "\\b").test(text)) return known[index];
+    }
+    var match = text.match(/\b\d{6}\b/);
+    return match ? match[0] : "";
   }
 
   function defaultSymbolUniversePayload() {
@@ -5737,6 +5766,7 @@
       '<p class="subtle">' + escapeHtml(subtitle) + '</p>',
       '</div>',
       '</section>',
+      renderDeskbar(snapshot, modeLabel, modeClass),
       '<section class="workspace-layout">',
       renderTabs(),
       '<div class="workspace-main">',
@@ -5745,6 +5775,43 @@
       '</section>',
       renderSnackbar(),
       '</main>'
+    ].join("");
+  }
+
+  function renderDeskbar(snapshot, modeLabel, modeClass) {
+    var portfolio = snapshot.portfolio || {};
+    var toss = snapshot.toss || {};
+    var positions = Array.isArray(toss.positions) ? toss.positions.filter(function (item) {
+      return item && item.source !== "cash";
+    }).length : 0;
+    var rules = alertRules();
+    var enabledRules = alertRuleCatalog.filter(function (rule) {
+      return enabledAlertRule(rules, rule.key);
+    }).length;
+    var thresholds = modelDecisionThresholds();
+    var decision = snapshot.tossDecision || {};
+    var strategy = decision.ontologyStrategy || {};
+    var abox = strategy.abox || {};
+    var tbox = strategy.tbox || {};
+    var relationCount = Number(abox.relationCount || strategy.relationCount || 0);
+    return [
+      '<section class="deskbar" aria-label="운영 상태 요약">',
+      renderDeskbarCell("Data", modeLabel, "Last " + formatClock(snapshot.generatedAt), modeClass),
+      renderDeskbarCell("Portfolio", formatMoney(portfolio.total || 0), positions + " positions", "neutral"),
+      renderDeskbarCell("Model", settingValue("modelName") || defaultSettings.modelName, "Buy " + Math.round(thresholds.modelBuy || 0) + " · Sell " + Math.round(thresholds.modelSell || 0), "neutral"),
+      renderDeskbarCell("Ontology", (tbox.classes || []).length + " TBox / " + relationCount + " rel", (abox.entityCount || 0) + " ABox entities", "neutral"),
+      renderDeskbarCell("Alerts", enabledRules + "/" + alertRuleCatalog.length, state.realtime.connected ? "WebSocket live" : "HTTP polling", state.realtime.connected ? "live" : "demo"),
+      '</section>'
+    ].join("");
+  }
+
+  function renderDeskbarCell(label, value, detail, tone) {
+    return [
+      '<div class="deskbar-cell ' + escapeHtml(tone || "neutral") + '">',
+      '<em>' + escapeHtml(label) + '</em>',
+      '<strong>' + escapeHtml(value || "-") + '</strong>',
+      '<span>' + escapeHtml(detail || "") + '</span>',
+      '</div>'
     ].join("");
   }
 
@@ -5919,14 +5986,106 @@
     if (section === "data") return renderStrategyDataPanel(snapshot);
     if (section === "rules") {
       return [
+        renderFormulaLedgerPanel(),
         renderAdminModelingPanel(snapshot),
         renderModelVersionPanel(snapshot)
       ].join("");
     }
     if (section === "results") return renderModelPreviewPanel(snapshot);
     return [
+      renderStrategyProcessPanel(snapshot),
       renderModelOperatingGuidePanel(snapshot),
       renderStrategyBeginnerPanel(snapshot)
+    ].join("");
+  }
+
+  function renderStrategyProcessPanel(snapshot) {
+    var items = buildTradeSignalItems(snapshot);
+    var stats = modelStatsForItems(items);
+    var thresholds = modelDecisionThresholds();
+    var steps = [
+      ["01", "데이터 정합", "보유·관심·시장 입력", items.length + " symbols"],
+      ["02", "Feature 산출", "수급·추세·가치 변수", modelVariableGuide().length + " variables"],
+      ["03", "공식 평가", "매수·매도·알림 공식", "8 formulas"],
+      ["04", "Threshold", "판단 기준 적용", "Buy " + Math.round(thresholds.modelBuy || 0) + " / Sell " + Math.round(thresholds.modelSell || 0)],
+      ["05", "Result", "종목별 판단 결과", Math.round(stats.buyAverage || 0) + " / " + Math.round(stats.sellAverage || 0)],
+      ["06", "Alert", "룰·주기·템플릿 연결", notificationEnabledRuleCount() + " rules"]
+    ];
+    return [
+      '<article class="panel strategy-process-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Strategy Workflow</p>',
+      '<h2>데이터에서 알림까지의 계산 순서</h2>',
+      '</div>',
+      '<span class="tone-chip hold">read-only model</span>',
+      '</div>',
+      '<div class="process-rail">',
+      steps.map(renderProcessStep).join(""),
+      '</div>',
+      '<div class="rule-strip">',
+      '<span>모델링 화면은 입력값, 공식, 기준값, 결과를 순서대로 검증하는 운영 화면입니다.</span>',
+      '<span>공식 오류는 기본값으로 대체하고 결과 카드에 오류를 표시합니다.</span>',
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderProcessStep(step) {
+    return [
+      '<div class="process-step">',
+      '<b>' + escapeHtml(step[0]) + '</b>',
+      '<span>',
+      '<strong>' + escapeHtml(step[1]) + '</strong>',
+      '<em>' + escapeHtml(step[2]) + '</em>',
+      '</span>',
+      '<i>' + escapeHtml(step[3]) + '</i>',
+      '</div>'
+    ].join("");
+  }
+
+  function modelFormulaRows() {
+    return [
+      ["Valuation", "적정가 공식", formulaSetting("fairValueFormula")],
+      ["Signal", "매수 점수 공식", formulaSetting("buyScoreFormula")],
+      ["Signal", "매도 점수 공식", formulaSetting("sellScoreFormula")],
+      ["Custom", "내 모델 매수 공식", formulaSetting("customBuyModelFormula")],
+      ["Custom", "내 모델 매도 공식", formulaSetting("customSellModelFormula")],
+      ["Holding", "익절 점검 공식", formulaSetting("profitTakeScoreFormula")],
+      ["Holding", "손실 관리 공식", formulaSetting("lossCutScoreFormula")],
+      ["Delivery", "알림 발송 공식", formulaSetting("notificationScoreFormula")]
+    ];
+  }
+
+  function renderFormulaLedgerPanel() {
+    return [
+      '<article class="panel formula-ledger-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Formula Ledger</p>',
+      '<h2>공식 전체 목록</h2>',
+      '<p class="subtle">전통 금융 시스템처럼 공식의 목적, 영역, 표현식을 한 표에서 확인합니다.</p>',
+      '</div>',
+      '<span class="metric">' + escapeHtml(modelFormulaRows().length) + '</span>',
+      '</div>',
+      '<div class="formula-ledger">',
+      modelFormulaRows().map(renderFormulaLedgerRow).join(""),
+      '</div>',
+      '<div class="rule-strip">',
+      '<span>지원 연산: +, -, *, /, 괄호, min, max, abs, round, sqrt, pow, clamp</span>',
+      '<span>공식은 저장 전후 같은 입력으로 재현성 검증을 통과해야 운영 기준으로 봅니다.</span>',
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderFormulaLedgerRow(row) {
+    return [
+      '<div class="formula-ledger-row">',
+      '<em>' + escapeHtml(row[0]) + '</em>',
+      '<strong>' + escapeHtml(row[1]) + '</strong>',
+      '<code>' + escapeHtml(row[2] || "-") + '</code>',
+      '</div>'
     ].join("");
   }
 
@@ -7016,17 +7175,18 @@
 
   function renderNotificationDecisionRow(job) {
     var reasons = Array.isArray(job.honeyReasons) ? job.honeyReasons.slice(0, 5) : [];
-    var displaySymbol = job.symbol ? stockDisplayName(job.symbol, job) : "";
-    var title = textWithDisplaySymbol(job.title || "", job.symbol, job);
+    var resolvedSymbol = notificationJobResolvedSymbol(job);
+    var displaySymbol = resolvedSymbol ? stockDisplayName(resolvedSymbol, job) : "";
+    var title = textWithKnownDisplaySymbols(job.title || "", resolvedSymbol, job);
     var target = title || displaySymbol || job.messageType || "-";
-    if (displaySymbol && job.symbol && target.toUpperCase() === String(job.symbol || "").toUpperCase()) {
+    if (displaySymbol && resolvedSymbol && target.toUpperCase() === String(resolvedSymbol || "").toUpperCase()) {
       target = displaySymbol;
     }
     if (displaySymbol && title && title.indexOf(displaySymbol) < 0) {
       target = title + " / " + displaySymbol;
     }
-    var preview = textWithDisplaySymbol(job.lastError || job.textPreview || "-", job.symbol, job);
-    var fingerprint = textWithDisplaySymbol(job.honeyFingerprint || "", job.symbol, job);
+    var preview = textWithKnownDisplaySymbols(job.lastError || job.textPreview || "-", resolvedSymbol, job);
+    var fingerprint = textWithKnownDisplaySymbols(job.honeyFingerprint || "", resolvedSymbol, job);
     return [
       '<div class="notification-decision-row">',
       '<div class="notification-decision-top">',
@@ -7045,11 +7205,24 @@
       '</div>',
       '<p>' + escapeHtml(preview) + '</p>',
       reasons.length ? '<div class="notification-decision-reasons">' + reasons.map(function (reason) {
-        return '<span>' + escapeHtml(textWithDisplaySymbol(reason, job.symbol, job)) + '</span>';
+        return '<span>' + escapeHtml(textWithKnownDisplaySymbols(reason, resolvedSymbol, job)) + '</span>';
       }).join("") + '</div>' : '',
       fingerprint ? '<code class="notification-fingerprint">' + escapeHtml(fingerprint) + '</code>' : '',
       '</div>'
     ].join("");
+  }
+
+  function notificationJobResolvedSymbol(job) {
+    var explicit = String(job && (job.symbol || job.rawSymbol) || "").trim().toUpperCase();
+    if (explicit) return explicit;
+    var reasons = Array.isArray(job && job.honeyReasons) ? job.honeyReasons.join(" ") : "";
+    return inferKnownStockSymbolFromText([
+      job && job.title,
+      job && job.textPreview,
+      job && job.lastError,
+      job && job.honeyFingerprint,
+      reasons
+    ].join(" "));
   }
 
   function notificationTemplateLabel(messageType) {
@@ -8113,8 +8286,10 @@
       '<span class="metric">' + escapeHtml(items.length) + '</span>',
       '</div>',
       '<div class="ontology-dashboard">',
-      renderOntologyRelationshipGraphs(tbox, aboxEntities, aboxRelations, evidence, beliefs, opinions, entityLabels, relationCounts),
+      renderOntologyControlStrip(tbox, abox, aboxRelations, evidence, beliefs, opinions),
       renderOntologyBoxSummary(tbox, abox, worldview, strategy),
+      renderOntologyRelationMatrixPanel(tbox, relationCounts),
+      renderOntologyRelationshipGraphs(tbox, aboxEntities, aboxRelations, evidence, beliefs, opinions, entityLabels, relationCounts),
       renderOntologyRelationalProjectionPanel(entities, relations, evidence, beliefs, opinions),
       renderOntologyClassPanel(tbox),
       renderOntologyAboxPanel(abox, aboxEntities, evidence, beliefs, opinions),
@@ -8129,6 +8304,61 @@
       '<span>ABox 그래프는 현재 포트폴리오 assertion과 rule evaluation이 만든 evidence·belief·opinion 관계를 보여줍니다.</span>',
       '</div>',
       '</article>'
+    ].join("");
+  }
+
+  function renderOntologyControlStrip(tbox, abox, relations, evidence, beliefs, opinions) {
+    var steps = [
+      ["TBox", "Schema", (tbox.classes || []).length + " classes"],
+      ["ABox", "Assertions", (abox.entityCount || 0) + " entities"],
+      ["Relation", "Runtime rows", relations.length + " rows"],
+      ["Evidence", "Facts", evidence.length + " rows"],
+      ["Belief", "Derived", beliefs.length + " rows"],
+      ["Opinion", "Output", opinions.length + " rows"]
+    ];
+    return [
+      '<section class="ontology-control-strip" aria-label="온톨로지 추론 순서">',
+      steps.map(function (step, index) {
+        return [
+          '<div class="ontology-control-step">',
+          '<b>' + escapeHtml(String(index + 1).padStart(2, "0")) + '</b>',
+          '<span>',
+          '<strong>' + escapeHtml(step[0]) + '</strong>',
+          '<em>' + escapeHtml(step[1]) + '</em>',
+          '</span>',
+          '<i>' + escapeHtml(step[2]) + '</i>',
+          '</div>'
+        ].join("");
+      }).join(""),
+      '</section>'
+    ].join("");
+  }
+
+  function renderOntologyRelationMatrixPanel(tbox, relationCounts) {
+    var relationTypes = (tbox.relationTypes || []).slice(0, 12);
+    return [
+      '<section class="ontology-surface ontology-matrix-surface">',
+      '<div class="ontology-surface-head">',
+      '<strong>Relation Matrix</strong>',
+      '<span>TBox 허용 타입과 현재 ABox 사용량</span>',
+      '</div>',
+      '<div class="relation-matrix">',
+      relationTypes.length ? relationTypes.map(function (type) {
+        return renderRelationMatrixRow(type, relationCounts[type] || 0);
+      }).join("") : '<div class="ontology-empty">relation type 없음</div>',
+      '</div>',
+      '</section>'
+    ].join("");
+  }
+
+  function renderRelationMatrixRow(type, count) {
+    var active = Number(count || 0) > 0;
+    return [
+      '<div class="relation-matrix-row ' + (active ? "active" : "empty") + '">',
+      '<strong>' + escapeHtml(type) + '</strong>',
+      '<span>' + escapeHtml(active ? "ABox linked" : "schema only") + '</span>',
+      '<em>' + escapeHtml(count) + '</em>',
+      '</div>'
     ].join("");
   }
 

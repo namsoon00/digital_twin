@@ -24,6 +24,17 @@
     externalFredSeries: "DGS10,DGS2,DFF",
     externalCryptoIds: "bitcoin,ethereum",
     externalAlphaMaxSymbols: "3",
+    externalSecEnabled: "1",
+    externalSecMaxSymbols: "3",
+    externalSecCompanyCiks: [
+      "AAPL=0000320193",
+      "MSFT=0000789019",
+      "NVDA=0001045810",
+      "TSLA=0001318605",
+      "AMD=0000002488",
+      "MSTR=0001050446"
+    ].join("\n"),
+    externalSecUserAgent: "DigitalTwin/1.0 local-contact",
     externalDartLookbackDays: "14",
     externalDartCorpCodes: [
       "005930=00126380",
@@ -253,7 +264,7 @@
     { id: "symbols", label: "전체종목", description: "시장 목록" },
     { id: "monitoring", label: "모니터링", description: "보유·타이밍" },
     { id: "notifications", label: "알림", description: "메시지 타입" },
-    { id: "modeling", label: "투자전략", description: "모델링 관리" },
+    { id: "modeling", label: "전략 운영", description: "모델·알림 정책" },
     { id: "ontology", label: "온톨로지", description: "관계 그래프" },
     { id: "settings", label: "설정", description: "런타임 환경" }
   ];
@@ -268,10 +279,9 @@
     { id: "advanced", label: "고급", description: "채널·임계값" }
   ];
   var strategySections = [
-    { id: "overview", label: "관계 모델", description: "운영 방식" },
+    { id: "overview", label: "운영 개요", description: "역할·흐름" },
     { id: "data", label: "데이터", description: "증거 준비도" },
-    { id: "rules", label: "관계 규칙", description: "온톨로지 룰" },
-    { id: "prompts", label: "프롬프트", description: "AI 질문 관리" },
+    { id: "policy", label: "모델·알림", description: "공식·기준" },
     { id: "results", label: "판단 결과", description: "종목별 신호" }
   ];
 
@@ -861,6 +871,7 @@
 
   function normalizeStrategySection(value) {
     var requested = String(value || "").toLowerCase();
+    if (requested === "rules" || requested === "prompts") return "policy";
     return strategySections.some(function (section) { return section.id === requested; }) ? requested : "overview";
   }
 
@@ -2944,6 +2955,10 @@
       externalFredSeries: settingValue("externalFredSeries"),
       externalCryptoIds: settingValue("externalCryptoIds"),
       externalAlphaMaxSymbols: settingValue("externalAlphaMaxSymbols"),
+      externalSecEnabled: settingValue("externalSecEnabled"),
+      externalSecMaxSymbols: settingValue("externalSecMaxSymbols"),
+      externalSecCompanyCiks: settingValue("externalSecCompanyCiks"),
+      externalSecUserAgent: settingValue("externalSecUserAgent"),
       externalDartLookbackDays: settingValue("externalDartLookbackDays"),
       externalDartCorpCodes: settingValue("externalDartCorpCodes"),
       dartDisclosureAiAnalysisEnabled: settingValue("dartDisclosureAiAnalysisEnabled"),
@@ -4593,7 +4608,7 @@
         tone: diagnosticTone(missingValuation.length, total),
         description: "EPS, 목표 PER, 안전마진이 있어야 싸다/비싸다 판단이 안정됩니다.",
         symbols: missingValuation,
-        action: "투자전략 탭의 종목별 EPS/PER 입력"
+        action: "전략 운영 탭의 종목별 EPS/PER 입력"
       },
       {
         label: "체결강도",
@@ -5790,7 +5805,7 @@
       renderLoadingSource("계좌 연결", "토스 live 또는 로컬 저장 계정 상태 확인"),
       renderLoadingSource("관심 종목", "계정별 관심 목록과 전체 종목 캐시 준비"),
       renderLoadingSource("알림 판단", "최근 발송 이력과 룰 설정 동기화"),
-      renderLoadingSource("투자전략", "모델 기준과 현재 종목 판단 계산"),
+      renderLoadingSource("전략 운영", "모델 기준과 현재 종목 판단 계산"),
       '</div>',
       '</article>',
       '<article class="panel loading-preview-panel">',
@@ -6166,7 +6181,7 @@
     var section = activeStrategySectionMeta();
     return [
       '<div class="strategy-section-bar">',
-      '<div class="strategy-section-tabs" role="tablist" aria-label="투자전략 섹션">',
+      '<div class="strategy-section-tabs" role="tablist" aria-label="전략 운영 섹션">',
       strategySections.map(function (item) {
         var active = section.id === item.id;
         return [
@@ -6184,13 +6199,12 @@
   function renderStrategySectionContent(snapshot) {
     var section = normalizeStrategySection(state.activeStrategySection);
     if (section === "data") return renderStrategyDataPanel(snapshot);
-    if (section === "rules") {
+    if (section === "policy") {
       return [
-        renderOntologyRuleEditorPanel(snapshot),
+        renderAdminModelingPanel(snapshot),
         renderModelVersionPanel(snapshot)
       ].join("");
     }
-    if (section === "prompts") return renderAiPromptRegistryPanel(snapshot);
     if (section === "results") return renderModelPreviewPanel(snapshot);
     return [
       renderStrategyProcessPanel(snapshot),
@@ -6325,7 +6339,7 @@
       '<div class="home-action-grid">',
       renderHomeAction("accounts", "계정", configuredAccounts + "개 API 연결", "토스·텔레그램"),
       renderHomeAction("notifications", "알림", enabledRules + "개 활성", "템플릿 테스트"),
-      renderHomeAction("modeling", "투자전략", settingValue("modelName") || "모델링 관리", "판단 임계값"),
+      renderHomeAction("modeling", "전략 운영", settingValue("modelName") || "모델링 관리", "판단 임계값"),
       renderHomeAction("ontology", "온톨로지", "TBox/ABox", "관계 그래프"),
       '</div>',
       '</div>',
@@ -7892,8 +7906,8 @@
       '<article class="panel model-guide-panel">',
       '<div class="panel-head">',
       '<div>',
-      '<p class="label">Strategy Modeling</p>',
-      '<h2>투자전략 모델링 관리</h2>',
+      '<p class="label">Strategy Operations</p>',
+      '<h2>전략 운영 기준 관리</h2>',
       '</div>',
       '<span class="metric">' + escapeHtml(stats.actionCount) + '</span>',
       '</div>',
@@ -8124,8 +8138,8 @@
       '<article class="panel admin-modeling-panel">',
       '<div class="panel-head">',
       '<div>',
-      '<p class="label">Strategy Rules</p>',
-      '<h2>투자전략 판단 기준 관리</h2>',
+      '<p class="label">Operations Policy</p>',
+      '<h2>모델·알림 정책 관리</h2>',
       '</div>',
       '<div class="settings-actions">',
       '<button class="text-button" data-action="save-model-version">모델 버전 저장</button>',
@@ -8145,11 +8159,11 @@
       '<div class="model-editor">',
       '<div class="settings-note model-settings-note">',
       '<strong>처음 운영할 때</strong>',
-      '<p>기본 공식은 방향성 거래량, 이동평균, 투자자 수급을 함께 쓰는 추천식입니다. 처음에는 쉬운 해석과 feature 기여도를 먼저 보고, 아래 가중치와 판단 기준만 조정해도 라벨이 다시 계산됩니다.</p>',
+      '<p>온톨로지 관계 판단을 보완하는 공식 점수와 알림 발송 기준입니다. 기본값으로 운영하고, 반복 알림이나 과소 알림이 보일 때만 기준값을 조정합니다.</p>',
       '</div>',
       '<div class="settings-grid">',
-      renderModelSettingField("modelName", "모델 이름", "text", "나의 모델"),
-      renderModelFormulaField("modelHypothesis", "내 투자 가설", "예: 수급이 살아 있고 적정가보다 싸며 리스크가 낮을 때만 산다."),
+      renderModelSettingField("modelName", "운영 정책 이름", "text", "나의 모델"),
+      renderModelFormulaField("modelHypothesis", "보조 모델 가설", "예: 수급이 살아 있고 적정가보다 싸며 리스크가 낮을 때만 산다."),
       '</div>',
       '<div class="model-section">',
       '<div class="flow-title"><div><strong>판단 기준</strong><span>점수가 기준 이상이면 종목 카드와 알림 라벨이 바뀝니다.</span></div></div>',
@@ -8494,7 +8508,9 @@
       '<span>TBox 그래프는 허용 클래스·관계 타입·추론 규칙의 내부 연결을 보여줍니다.</span>',
       '<span>ABox 그래프는 현재 포트폴리오 assertion과 rule evaluation이 만든 evidence·belief·opinion 관계를 보여줍니다.</span>',
       '</div>',
-      '</article>'
+      '</article>',
+      renderOntologyRuleEditorPanel(snapshot),
+      renderAiPromptRegistryPanel(snapshot)
     ].join("");
   }
 
@@ -9444,8 +9460,8 @@
       '<article class="panel model-panel ontology-rule-panel">',
       '<div class="panel-head">',
       '<div>',
-      '<p class="label">Ontology Rules</p>',
-      '<h2>관계 규칙 기반 매수·매도 판단</h2>',
+      '<p class="label">Ontology Rule Registry</p>',
+      '<h2>온톨로지 관계 규칙 관리</h2>',
       '</div>',
       '<span class="metric">' + escapeHtml(rules.length) + '</span>',
       '</div>',
@@ -9456,9 +9472,9 @@
       renderLabStat("손실 기준", signedPct(alertThresholdValues.lossRateLow || -8), ""),
       '</div>',
       '<div class="model-editor">',
-      '<div class="settings-grid">',
-      renderModelSettingField("modelName", "전략 이름", "text", "나의 모델"),
-      renderModelFormulaField("modelHypothesis", "전략 가설", "어떤 관계를 보고 매수·매도 타이밍을 판단할지"),
+      '<div class="settings-note model-settings-note">',
+      '<strong>온톨로지 런타임 레지스트리</strong>',
+      '<p>저장된 관계 규칙 메타데이터는 백엔드 relation context의 label, relation type, signal type, prompt hint에 반영됩니다. 조건 평가는 검증된 엔진을 사용합니다.</p>',
       '</div>',
       '<div class="model-section">',
       '<div class="flow-title"><div><strong>관계 규칙 원본</strong><span>형식: ruleId | label | condition | relationType | signalType | promptHint</span></div></div>',
@@ -9502,7 +9518,7 @@
       '<div class="settings-body">',
       '<div class="settings-note">',
       '<strong>프롬프트는 관계 규칙의 해석 레이어입니다.</strong>',
-      '<p>결정론적 알림은 관계 규칙으로 발생하고, AI는 성립 이유, 반대 증거, 부족 데이터, 모델 개선점을 비동기로 설명합니다.</p>',
+      '<p>결정론적 알림은 관계 규칙으로 발생하고, 저장된 템플릿은 백엔드 promptContext.promptTemplate으로 반영됩니다. AI는 성립 이유, 반대 증거, 부족 데이터, 모델 개선점을 비동기로 설명합니다.</p>',
       '</div>',
       '<div class="model-section">',
       '<div class="flow-title"><div><strong>프롬프트 정책</strong><span>AI가 데이터를 해석할 때 반드시 지켜야 하는 경계입니다.</span></div></div>',
@@ -9638,7 +9654,7 @@
       '<div class="settings-body">',
       '<div class="settings-note">',
       '<strong>버전 저장</strong>',
-      '<p>현재 전략 이름, 가설, 관계 규칙, AI 프롬프트, 기준값, 현재 성과 통계를 하나의 버전으로 저장합니다.</p>',
+      '<p>현재 전략 운영 이름, 가설, 보조 공식, 기준값, 현재 성과 통계를 하나의 버전으로 저장합니다. 온톨로지 관계 규칙과 AI 프롬프트는 온톨로지 탭에서 관리합니다.</p>',
       '</div>',
       '<div class="settings-actions">',
       '<button class="text-button primary" data-action="save-model-version">모델 버전 저장</button>',
@@ -11484,7 +11500,7 @@
       '<div class="settings-status-copy">',
       '<p class="settings-section-label">Local first</p>',
       '<strong>앱 표시와 외부 연결 설정</strong>',
-      '<span>계정 연결은 계정 탭에서, 매매 판단 기준은 투자전략 탭에서 관리합니다.</span>',
+      '<span>계정 연결은 계정 탭에서, 매매 판단 기준은 전략 운영 탭에서 관리합니다.</span>',
       '</div>',
       '<div class="settings-status-stack">',
       '<span class="tone-chip ' + settingsStatusTone() + '" data-settings-status>' + settingsStatusLabel() + '</span>',
@@ -11581,6 +11597,12 @@
       renderSettingField("opendartApiKey", "OpenDART API Key", secretType, "api key", { preserveConfigured: true }),
       renderSettingField("externalApiFetchIntervalMinutes", "외부 API 캐시(분)", "number", "60"),
       renderSettingField("externalAlphaMaxSymbols", "미장 조회 종목 수", "number", "3"),
+      renderSettingSelect("externalSecEnabled", "SEC EDGAR 수집", [
+        { value: "1", label: "사용" },
+        { value: "0", label: "사용 안 함" }
+      ]),
+      renderSettingField("externalSecMaxSymbols", "SEC 조회 종목 수", "number", "3"),
+      renderSettingField("externalSecUserAgent", "SEC User-Agent", "text", "DigitalTwin/1.0 local-contact"),
       renderSettingField("externalDartLookbackDays", "공시 조회 기간(일)", "number", "14"),
       renderSettingSelect("dartDisclosureAiAnalysisEnabled", "공시 AI 해석", [
         { value: "1", label: "사용" },
@@ -11597,6 +11619,10 @@
       '<label class="setting-field wide">',
       '<span>OpenDART 종목 매핑</span>',
       '<textarea data-setting="externalDartCorpCodes" rows="3" autocomplete="off" placeholder="005930=00126380">' + escapeHtml(settingValue("externalDartCorpCodes") || defaultSettings.externalDartCorpCodes) + '</textarea>',
+      '</label>',
+      '<label class="setting-field wide">',
+      '<span>SEC CIK 매핑</span>',
+      '<textarea data-setting="externalSecCompanyCiks" rows="3" autocomplete="off" placeholder="AAPL=0000320193">' + escapeHtml(settingValue("externalSecCompanyCiks") || defaultSettings.externalSecCompanyCiks) + '</textarea>',
       '</label>',
       '<label class="setting-field wide">',
       '<span>환율 설정</span>',

@@ -2036,6 +2036,8 @@ h3 {
   grid-column: span 5;
 }
 
+.ontology-view .ontology-rule-panel,
+.ontology-view .prompt-registry-panel,
 .strategy-view .admin-modeling-panel,
 .strategy-view .model-panel,
 .strategy-view .model-version-panel,

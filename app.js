@@ -1394,7 +1394,7 @@
       : defaultNotificationTemplates();
     state.notificationTemplateVariables = Array.isArray(payload.variables) && payload.variables.length
       ? payload.variables
-      : ["title", "statusHeadline", "titleHeadline", "telegramMessage", "readableMessage", "dataLines", "telegramDataLines", "triggerSummary", "triggerBlock", "criterionBlock", "criterionLines", "lines", "rawLines", "referenceDate", "eventGeneratedAt", "sentAt", "sentTime", "sentLine", "body", "messageType", "symbol", "severity", "metadata", "market", "changePercent", "change24h", "change7d", "price", "volume", "volume24h", "provider"];
+      : ["title", "statusHeadline", "titleHeadline", "telegramMessage", "readableMessage", "dataLines", "telegramDataLines", "triggerSummary", "triggerBlock", "criterionBlock", "criterionLines", "lines", "rawLines", "referenceDate", "eventGeneratedAt", "sentAt", "sentTime", "sentLine", "body", "messageType", "symbol", "rawSymbol", "symbolDisplayName", "severity", "metadata", "market", "changePercent", "change24h", "change7d", "price", "volume", "volume24h", "provider"];
     state.notificationTemplatesLoaded = true;
     state.notificationTemplatesLoading = false;
     state.notificationTemplatesError = "";
@@ -1560,7 +1560,7 @@
   function notificationTemplateVariables() {
     return state.notificationTemplateVariables.length
       ? state.notificationTemplateVariables
-      : ["title", "statusHeadline", "titleHeadline", "telegramMessage", "readableMessage", "dataLines", "telegramDataLines", "triggerSummary", "triggerBlock", "criterionBlock", "criterionLines", "lines", "rawLines", "referenceDate", "eventGeneratedAt", "sentAt", "sentTime", "sentLine", "body", "messageType", "symbol", "severity", "metadata", "market", "changePercent", "change24h", "change7d", "price", "volume", "volume24h", "provider"];
+      : ["title", "statusHeadline", "titleHeadline", "telegramMessage", "readableMessage", "dataLines", "telegramDataLines", "triggerSummary", "triggerBlock", "criterionBlock", "criterionLines", "lines", "rawLines", "referenceDate", "eventGeneratedAt", "sentAt", "sentTime", "sentLine", "body", "messageType", "symbol", "rawSymbol", "symbolDisplayName", "severity", "metadata", "market", "changePercent", "change24h", "change7d", "price", "volume", "volume24h", "provider"];
   }
 
   function clampInteger(value, min, max, fallback) {
@@ -2252,7 +2252,8 @@
     var rule = alertRuleCatalog.filter(function (item) { return item.key === type; })[0] || {};
     var messageTypeLabel = rule.label || notificationTemplateLabel(type);
     var severityLabel = sample.severity === "ALERT" ? "주의" : sample.severity === "WATCH" ? "관찰" : "정보";
-    var symbolLine = sample.symbol ? "종목: " + sample.symbol : "";
+    var displaySymbol = sample.symbol ? stockDisplayName(sample.symbol, sample) : "";
+    var symbolLine = displaySymbol ? "종목: " + displaySymbol : "";
     var typeLine = messageTypeLabel ? "유형: " + messageTypeLabel : "";
     var severityLine = severityLabel ? "상태: " + severityLabel : "";
     var triggerSummary = rule.description ? rule.description : "조건이 실제 데이터에서 충족될 때 보냅니다.";
@@ -2262,9 +2263,13 @@
     var statusHeadline = severityLabel ? "[" + severityLabel + "]" : "";
     var titleHeadline = notificationTitleHeadline(type, rawItems, sample, messageTypeLabel || sample.title);
     var headline = [statusHeadline, titleHeadline].filter(Boolean).join(" ");
-    var targetValue = [sample.title, sample.symbol && sample.symbol !== sample.title ? sample.symbol : ""]
-      .filter(Boolean)
-      .join(" / ");
+    var targetValue = sample.title || displaySymbol || "";
+    if (displaySymbol && sample.symbol && targetValue.toUpperCase() === String(sample.symbol || "").toUpperCase()) {
+      targetValue = displaySymbol;
+    }
+    if (displaySymbol && targetValue && targetValue.indexOf(displaySymbol) < 0) {
+      targetValue += " / " + displaySymbol;
+    }
     var targetLine = targetValue ? "대상: " + targetValue : "";
     var triggerBlockRows = criterionRows(criterionLines, false);
     var triggerBlock = triggerBlockRows ? "발송 기준\n" + triggerBlockRows : "";
@@ -2314,7 +2319,9 @@
       telegramDataLines: telegramDataLines,
       messageType: type,
       messageTypeLabel: messageTypeLabel,
-      symbol: sample.symbol || "",
+      symbol: displaySymbol || sample.symbol || "",
+      rawSymbol: sample.symbol || "",
+      symbolDisplayName: displaySymbol,
       headline: headline,
       statusHeadline: statusHeadline,
       titleHeadline: titleHeadline,
@@ -2333,7 +2340,8 @@
       triggerSummary: triggerSummary,
       triggerLine: triggerLine,
       key: type + ":preview",
-      target: sample.symbol || type,
+      target: targetValue || type,
+      rawTarget: sample.symbol || type,
       accountLabel: "기본 계정",
       accountId: "default",
       cryptoMoveModel: sample.cryptoMoveModel || "",
@@ -2994,6 +3002,40 @@
     return fallbackKnownStockInfo(normalized);
   }
 
+  function stockDisplayName(symbol, item) {
+    var original = String(symbol || (item && (item.rawSymbol || item.symbol)) || "").trim().toUpperCase();
+    var merged = Object.assign(clientKnownStockInfo(original), item || {}, { symbol: original });
+    var explicit = String(
+      (item && (item.symbolName || item.symbolDisplayName || item.displaySymbolName || item.displayName)) || ""
+    ).trim();
+    var name = explicit || String(merged.name || "").trim();
+    if (!name || (original && name.toUpperCase() === original)) {
+      name = original || "종목";
+    }
+    return name;
+  }
+
+  function stockDisplayMeta(item, parts) {
+    return (parts || [])
+      .map(function (part) { return String(part || "").trim(); })
+      .filter(Boolean)
+      .join(" · ");
+  }
+
+  function escapeRegExp(value) {
+    return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+
+  function textWithDisplaySymbol(value, symbol, item) {
+    var text = String(value || "");
+    var original = String(symbol || (item && (item.rawSymbol || item.symbol)) || "").trim().toUpperCase();
+    var display = stockDisplayName(original, item);
+    if (!text || !original || !display || display.toUpperCase() === original) return text;
+    var replaced = text.replace(new RegExp("\\b" + escapeRegExp(original) + "\\b", "g"), display);
+    replaced = replaced.replace(new RegExp(escapeRegExp(display) + "\\s*[/·]\\s*" + escapeRegExp(display), "g"), display);
+    return replaced;
+  }
+
   function defaultSymbolUniversePayload() {
     var items = ["005930", "000660", "TSLA", "AAPL", "NVDA", "MSFT", "AMD"].map(function (symbol) {
       var info = fallbackKnownStockInfo(symbol);
@@ -3181,8 +3223,8 @@
       return [
         '<button class="watch-suggest-option" type="button" data-watch-suggest-symbol="' + escapeHtml(symbol) + '">',
         '<span>',
-        '<strong>' + escapeHtml(item.name || symbol) + '</strong>',
-        '<em>' + escapeHtml(symbol + " · " + marketLabel(item.market || item.exchange) + " · " + (item.currency || item.assetType || "-")) + '</em>',
+        '<strong>' + escapeHtml(stockDisplayName(symbol, item)) + '</strong>',
+        '<em>' + escapeHtml(stockDisplayMeta(item, [marketLabel(item.market || item.exchange), item.currency || item.assetType || "-"])) + '</em>',
         '</span>',
         '<b>추가</b>',
         '</button>'
@@ -4361,7 +4403,9 @@
       if (key && unique.indexOf(key) < 0) unique.push(key);
     });
     if (!unique.length) return "없음";
-    var visible = unique.slice(0, 8).join(", ");
+    var visible = unique.slice(0, 8).map(function (symbol) {
+      return stockDisplayName(symbol);
+    }).join(", ");
     return unique.length > 8 ? visible + " 외 " + (unique.length - 8) + "개" : visible;
   }
 
@@ -6018,15 +6062,11 @@
 
   function watchSymbolDisplay(symbol, item) {
     var original = String(symbol || (item && item.symbol) || "").trim().toUpperCase();
-    var merged = Object.assign(clientKnownStockInfo(original), item || {}, { symbol: original });
-    var name = String(merged.name || "").trim();
-    if (!name || name.toUpperCase() === original) {
-      name = original || "관심 종목";
-    }
+    var name = stockDisplayName(original, item);
     return {
       symbol: original,
       name: name,
-      label: original && name.toUpperCase() !== original ? name + " · " + original : name
+      label: name
     };
   }
 
@@ -6039,7 +6079,7 @@
 
   function renderWatchSymbolChip(symbol, item) {
     var display = watchSymbolDisplay(symbol, item);
-    return '<span class="chip" title="' + escapeHtml(display.symbol || display.name) + '">' + escapeHtml(display.label) + '</span>';
+    return '<span class="chip" title="' + escapeHtml(display.name) + '">' + escapeHtml(display.label) + '</span>';
   }
 
   function allAccountWatchlistSymbols() {
@@ -6392,8 +6432,8 @@
     return [
       '<div class="account-watch-symbol-row">',
       '<div class="account-watch-symbol-main">',
-      '<strong>' + escapeHtml(merged.name || original) + '</strong>',
-      '<span>' + escapeHtml(original + " · " + marketLabel(merged.market || "-") + " · " + (merged.sector || "-")) + '</span>',
+      '<strong>' + escapeHtml(stockDisplayName(original, merged)) + '</strong>',
+      '<span>' + escapeHtml(stockDisplayMeta(merged, [marketLabel(merged.market || "-"), merged.sector || "-"])) + '</span>',
       renderWatchAlertMeta(merged),
       '</div>',
       '<div class="account-watch-symbol-side">',
@@ -6970,7 +7010,17 @@
 
   function renderNotificationDecisionRow(job) {
     var reasons = Array.isArray(job.honeyReasons) ? job.honeyReasons.slice(0, 5) : [];
-    var target = [job.title, job.symbol && job.symbol !== job.title ? job.symbol : ""].filter(Boolean).join(" / ");
+    var displaySymbol = job.symbol ? stockDisplayName(job.symbol, job) : "";
+    var title = textWithDisplaySymbol(job.title || "", job.symbol, job);
+    var target = title || displaySymbol || job.messageType || "-";
+    if (displaySymbol && job.symbol && target.toUpperCase() === String(job.symbol || "").toUpperCase()) {
+      target = displaySymbol;
+    }
+    if (displaySymbol && title && title.indexOf(displaySymbol) < 0) {
+      target = title + " / " + displaySymbol;
+    }
+    var preview = textWithDisplaySymbol(job.lastError || job.textPreview || "-", job.symbol, job);
+    var fingerprint = textWithDisplaySymbol(job.honeyFingerprint || "", job.symbol, job);
     return [
       '<div class="notification-decision-row">',
       '<div class="notification-decision-top">',
@@ -6987,11 +7037,11 @@
       notificationJobQuietHoursText(job) ? '<span>' + escapeHtml(notificationJobQuietHoursText(job)) + '</span>' : '',
       job.honeySimilarityBypassed ? '<span>' + escapeHtml(job.honeySimilarityBypassReason ? "반복 예외 " + job.honeySimilarityBypassReason : "반복 예외 적용") + '</span>' : '',
       '</div>',
-      '<p>' + escapeHtml(job.lastError || job.textPreview || "-") + '</p>',
+      '<p>' + escapeHtml(preview) + '</p>',
       reasons.length ? '<div class="notification-decision-reasons">' + reasons.map(function (reason) {
-        return '<span>' + escapeHtml(reason) + '</span>';
+        return '<span>' + escapeHtml(textWithDisplaySymbol(reason, job.symbol, job)) + '</span>';
       }).join("") + '</div>' : '',
-      job.honeyFingerprint ? '<code class="notification-fingerprint">' + escapeHtml(job.honeyFingerprint) + '</code>' : '',
+      fingerprint ? '<code class="notification-fingerprint">' + escapeHtml(fingerprint) + '</code>' : '',
       '</div>'
     ].join("");
   }
@@ -7033,7 +7083,7 @@
   function scheduleTargetText(targets) {
     if (!Array.isArray(targets) || !targets.length) return "최근 실제 발송 대상 없음";
     return targets.slice(0, 3).map(function (item) {
-      var target = item.target ? item.target : "전체";
+      var target = item.target ? textWithDisplaySymbol(item.target, item.target, item) : "전체";
       return target + " · " + scheduleTimeText(item.sentAt);
     }).join(" / ");
   }
@@ -7838,13 +7888,14 @@
   }
 
   function renderDecisionRow(item) {
+    var displayName = stockDisplayName(item.symbol, item);
     return [
       '<div class="exit-row">',
       '<div class="exit-main">',
       '<div class="exit-title">',
       '<div>',
-      '<h3>' + escapeHtml(item.name) + '</h3>',
-      '<p class="subtle">' + escapeHtml(item.symbol) + ' · ' + escapeHtml(item.sector || "-") + '</p>',
+      '<h3>' + escapeHtml(displayName) + '</h3>',
+      '<p class="subtle">' + escapeHtml(stockDisplayMeta(item, [item.sector || "-", sourceLabel(item.source)])) + '</p>',
       '</div>',
       '<div class="exit-badges">',
       '<span class="source-chip ' + escapeHtml(item.source) + '">' + escapeHtml(sourceLabel(item.source)) + '</span>',
@@ -8535,12 +8586,13 @@
     var risks = ontologyRisksOf(opinion);
     var contradictions = Array.isArray(opinion.contradictions) ? opinion.contradictions : [];
     var supports = Array.isArray(opinion.supporting_beliefs) ? opinion.supporting_beliefs : [];
+    var displayName = stockDisplayName(item.symbol, item);
     return [
       '<div class="lab-row">',
       '<div class="lab-row-head">',
       '<div>',
-      '<strong>' + escapeHtml(item.name || item.symbol) + '</strong>',
-      '<span>' + escapeHtml(item.symbol || "-") + ' · ' + escapeHtml(item.sector || "-") + '</span>',
+      '<strong>' + escapeHtml(displayName) + '</strong>',
+      '<span>' + escapeHtml(stockDisplayMeta(item, [item.sector || "-", sourceLabel(item.source)])) + '</span>',
       '</div>',
       '<div class="exit-badges">',
       '<span class="tone-chip ' + escapeHtml(opinion.tone || item.tone || "hold") + '">' + escapeHtml(opinion.action || "-") + '</span>',
@@ -8623,12 +8675,13 @@
     var latest = latestLabRecordFor(item.symbol);
     var versionCount = labRecordsForSymbol(item.symbol).length;
     var model = customModelScores(item);
+    var displayName = stockDisplayName(item.symbol, item);
     return [
       '<div class="lab-row">',
       '<div class="lab-row-head">',
       '<div>',
-      '<strong>' + escapeHtml(item.name) + '</strong>',
-      '<span>' + escapeHtml(item.symbol) + ' · ' + escapeHtml(item.sector || "-") + ' · ' + escapeHtml(sourceLabel(item.source)) + '</span>',
+      '<strong>' + escapeHtml(displayName) + '</strong>',
+      '<span>' + escapeHtml(stockDisplayMeta(item, [item.sector || "-", sourceLabel(item.source)])) + '</span>',
       '</div>',
       '<div class="exit-badges">',
       '<span class="source-chip ' + escapeHtml(item.source) + '">' + escapeHtml(sourceLabel(item.source)) + '</span>',
@@ -8912,13 +8965,14 @@
 
   function renderModelPreviewRow(item) {
     var model = item.model || customModelScores(item);
+    var displayName = stockDisplayName(item.symbol, item);
     return [
       '<div class="signal-row model-preview-row">',
       '<div class="signal-main">',
       '<div class="flow-title">',
       '<div>',
-      '<strong>' + escapeHtml(item.name) + '</strong>',
-      '<span>' + escapeHtml(item.symbol) + ' · ' + escapeHtml(sourceLabel(item.source)) + ' · 현재 ' + escapeHtml(item.currentPrice ? formatPrice(item.currentPrice, item.currency) : "-") + '</span>',
+      '<strong>' + escapeHtml(displayName) + '</strong>',
+      '<span>' + escapeHtml(stockDisplayMeta(item, [sourceLabel(item.source), "현재 " + (item.currentPrice ? formatPrice(item.currentPrice, item.currency) : "-")])) + '</span>',
       '</div>',
       '<span class="tone-chip ' + escapeHtml(model.tone || "hold") + '">' + escapeHtml(model.action) + '</span>',
       '</div>',
@@ -9048,19 +9102,21 @@
   }
 
   function renderAlertRow(alert, index) {
+    var displaySymbol = alert.symbol ? stockDisplayName(alert.symbol, alert) : "";
+    var title = textWithDisplaySymbol(alert.title || "-", alert.symbol, alert);
     var meta = [
-      alert.symbol || "",
+      displaySymbol || "",
       alert.source || "",
       alert.value ? "현재 " + alert.value : "",
       alert.threshold ? "기준 " + alert.threshold : ""
     ].filter(Boolean);
     return [
-      '<div class="alert-row ' + escapeHtml(alert.severity || "info") + '" role="button" tabindex="0" data-monitor-alert-detail="' + escapeHtml(index) + '" aria-label="' + escapeHtml((alert.title || "알림") + " 상세 보기") + '">',
+      '<div class="alert-row ' + escapeHtml(alert.severity || "info") + '" role="button" tabindex="0" data-monitor-alert-detail="' + escapeHtml(index) + '" aria-label="' + escapeHtml((title || "알림") + " 상세 보기") + '">',
       '<span class="alert-severity ' + escapeHtml(alert.severity || "info") + '">' + escapeHtml(alertSeverityLabel(alert.severity)) + '</span>',
       '<div class="alert-main">',
       '<div class="flow-title">',
       '<div>',
-      '<strong>' + escapeHtml(alert.title || "-") + '</strong>',
+      '<strong>' + escapeHtml(title) + '</strong>',
       '<span>' + escapeHtml(meta.join(" · ")) + '</span>',
       '</div>',
       '<span class="tone-chip hold">' + escapeHtml(alertRuleLabel(alert.rule)) + '</span>',
@@ -9336,13 +9392,14 @@
   function renderTradeSignalRow(item) {
     var signal = item.signal || {};
     var valuationText = item.valuation && item.valuation.status ? item.valuation.status : "가정 대기";
+    var displayName = stockDisplayName(item.symbol, item);
     return [
       '<div class="signal-row">',
       '<div class="signal-main">',
       '<div class="flow-title">',
       '<div>',
-      '<strong>' + escapeHtml(item.name) + '</strong>',
-      '<span>' + escapeHtml(item.symbol) + ' · ' + escapeHtml(item.sector || "-") + ' · ' + escapeHtml(sourceLabel(item.source)) + '</span>',
+      '<strong>' + escapeHtml(displayName) + '</strong>',
+      '<span>' + escapeHtml(stockDisplayMeta(item, [item.sector || "-", sourceLabel(item.source)])) + '</span>',
       '</div>',
       '<div class="exit-badges">',
       '<span class="source-chip ' + escapeHtml(item.source) + '">' + escapeHtml(sourceLabel(item.source)) + '</span>',
@@ -9477,13 +9534,14 @@
 
   function renderValuationRow(item) {
     var hasValue = item.currentPrice && item.fairValue;
+    var displayName = stockDisplayName(item.symbol, item);
     return [
       '<div class="valuation-row">',
       '<div class="valuation-main">',
       '<div class="flow-title">',
       '<div>',
-      '<strong>' + escapeHtml(item.name) + '</strong>',
-      '<span>' + escapeHtml(item.symbol) + ' · 현재 ' + escapeHtml(item.currentPrice ? formatPrice(item.currentPrice, item.currency) : "-") + '</span>',
+      '<strong>' + escapeHtml(displayName) + '</strong>',
+      '<span>' + escapeHtml("현재 " + (item.currentPrice ? formatPrice(item.currentPrice, item.currency) : "-")) + '</span>',
       '</div>',
       '<span class="tone-chip ' + escapeHtml(item.tone || "hold") + '">' + escapeHtml(item.status) + '</span>',
       '</div>',
@@ -9710,11 +9768,12 @@
   }
 
   function renderHoldingRow(item) {
+    var displayName = stockDisplayName(item.symbol, item);
     return [
       '<div class="position-row rich-row">',
       '<div>',
-      '<strong>' + escapeHtml(item.name) + '</strong>',
-      '<span>' + escapeHtml(item.symbol) + ' · ' + escapeHtml(item.market || "-") + ' · 수량 ' + escapeHtml(item.quantity || "-") + '</span>',
+      '<strong>' + escapeHtml(displayName) + '</strong>',
+      '<span>' + escapeHtml(stockDisplayMeta(item, [marketLabel(item.market || "-"), "수량 " + (item.quantity || "-")])) + '</span>',
       '<span>평균 ' + escapeHtml(formatCurrency(item.averagePrice || 0, item.currency)) + ' · 현재 ' + escapeHtml(formatCurrency(item.currentPrice || 0, item.currency)) + '</span>',
       '</div>',
       '<div class="right">',
@@ -9777,14 +9836,15 @@
     var signalText = signal && signal.hasData
       ? "매수 " + signal.buyScore + " · 매도 " + signal.sellScore
       : "수급 입력 필요";
+    var displayName = stockDisplayName(symbol, item);
     return [
-      '<div class="monitoring-instrument-row" role="button" tabindex="0" data-monitor-instrument-detail="' + escapeHtml(symbol) + '" aria-label="' + escapeHtml((item.name || symbol) + " 상세 보기") + '">',
+      '<div class="monitoring-instrument-row" role="button" tabindex="0" data-monitor-instrument-detail="' + escapeHtml(symbol) + '" aria-label="' + escapeHtml(displayName + " 상세 보기") + '">',
       '<div class="monitoring-instrument-main">',
       '<div class="monitoring-instrument-title">',
-      '<strong>' + escapeHtml(item.name || symbol) + '</strong>',
+      '<strong>' + escapeHtml(displayName) + '</strong>',
       '<span class="source-chip ' + escapeHtml(sourceClass) + '">' + escapeHtml(sourceLabel) + '</span>',
       '</div>',
-      '<span>' + escapeHtml(symbol) + ' · ' + escapeHtml(marketLabel(item.market || "-")) + ' · ' + escapeHtml(item.sector || "-") + '</span>',
+      '<span>' + escapeHtml(stockDisplayMeta(item, [marketLabel(item.market || "-"), item.sector || "-"])) + '</span>',
       '<span>' + escapeHtml(detailText) + '</span>',
       '</div>',
       '<div class="monitoring-instrument-side">',
@@ -9900,13 +9960,14 @@
     var pnlText = item.source === "holding"
       ? signedMoney(item.profitLoss, item.currency) + " · " + signedPct(item.profitLossRate)
       : "-";
+    var displayName = stockDisplayName(item.symbol, item);
     return [
       '<div class="monitoring-detail-content">',
       '<div class="monitoring-detail-head">',
       '<div>',
       '<p class="label">Instrument Detail</p>',
-      '<h2>' + escapeHtml(item.name || item.symbol || "-") + '</h2>',
-      '<span>' + escapeHtml(item.symbol || "-") + ' · ' + escapeHtml(marketLabel(item.market || "-")) + ' · ' + escapeHtml(item.sector || "-") + '</span>',
+      '<h2>' + escapeHtml(displayName) + '</h2>',
+      '<span>' + escapeHtml(stockDisplayMeta(item, [marketLabel(item.market || "-"), item.sector || "-"])) + '</span>',
       '</div>',
       '<div class="monitoring-detail-badges">',
       '<span class="source-chip ' + escapeHtml(sourceClass) + '">' + escapeHtml(sourceLabel(item.source)) + '</span>',
@@ -9959,13 +10020,16 @@
 
   function renderMonitoringAlertDetail(alert, relatedItem) {
     var severity = alert.severity || "info";
+    var displaySymbol = alert.symbol ? stockDisplayName(alert.symbol, relatedItem || alert) : "";
+    var title = textWithDisplaySymbol(alert.title || "알림 상세", alert.symbol, relatedItem || alert);
+    var message = textWithDisplaySymbol(alert.message || "세부 메시지가 없습니다.", alert.symbol, relatedItem || alert);
     return [
       '<div class="monitoring-detail-content">',
       '<div class="monitoring-detail-head">',
       '<div>',
       '<p class="label">Alert Detail</p>',
-      '<h2>' + escapeHtml(alert.title || "알림 상세") + '</h2>',
-      '<span>' + escapeHtml([alert.symbol || "", alert.source || "", alertRuleLabel(alert.rule)].filter(Boolean).join(" · ")) + '</span>',
+      '<h2>' + escapeHtml(title) + '</h2>',
+      '<span>' + escapeHtml([displaySymbol || "", alert.source || "", alertRuleLabel(alert.rule)].filter(Boolean).join(" · ")) + '</span>',
       '</div>',
       '<div class="monitoring-detail-badges">',
       '<span class="alert-severity ' + escapeHtml(severity) + '">' + escapeHtml(alertSeverityLabel(severity)) + '</span>',
@@ -9974,10 +10038,10 @@
       '</div>',
       '<div class="monitoring-detail-message">',
       '<strong>알림 메시지</strong>',
-      '<p>' + escapeHtml(alert.message || "세부 메시지가 없습니다.") + '</p>',
+      '<p>' + escapeHtml(message) + '</p>',
       '</div>',
       '<div class="monitoring-detail-metric-grid">',
-      renderMonitoringDetailMetric("종목", alert.symbol || "-"),
+      renderMonitoringDetailMetric("종목", displaySymbol || "-"),
       renderMonitoringDetailMetric("출처", alert.source || "-"),
       renderMonitoringDetailMetric("현재", alert.value || "-"),
       renderMonitoringDetailMetric("기준", alert.threshold || "-"),
@@ -10252,8 +10316,8 @@
       '<div class="symbol-result-row">',
       '<div class="symbol-result-main">',
       '<div class="symbol-result-title">',
-      '<strong>' + escapeHtml(item.name || symbol) + '</strong>',
-      '<span>' + escapeHtml(symbol) + '</span>',
+      '<strong>' + escapeHtml(stockDisplayName(symbol, item)) + '</strong>',
+      '<span>' + escapeHtml(stockDisplayMeta(item, [marketLabel(item.market || item.exchange), item.sector || item.assetType || "STOCK"])) + '</span>',
       '</div>',
       '<div class="symbol-result-meta">',
       '<span>' + escapeHtml(marketLabel(item.market || item.exchange)) + '</span>',
@@ -10319,11 +10383,12 @@
     item = Object.assign(clientKnownStockInfo(item && item.symbol), item || {});
     var editable = arguments.length > 1 && arguments[1];
     var source = item.source === "holding" ? "보유" : "관심";
+    var displayName = stockDisplayName(item.symbol, item);
     return [
       '<div class="position-row rich-row">',
       '<div>',
-      '<strong>' + escapeHtml(item.name || item.symbol) + '</strong>',
-      '<span>' + escapeHtml(item.symbol) + ' · ' + escapeHtml(item.market || "-") + ' · ' + escapeHtml(item.sector || "-") + ' · ' + escapeHtml(source) + '</span>',
+      '<strong>' + escapeHtml(displayName) + '</strong>',
+      '<span>' + escapeHtml(stockDisplayMeta(item, [marketLabel(item.market || "-"), item.sector || "-", source])) + '</span>',
       renderWatchAlertMeta(item),
       '</div>',
       '<div class="right">',

@@ -6930,8 +6930,8 @@
     return renderManagedPage("notifications", state.snapshot || {}, [
       '<section class="admin-grid notifications-view">',
       renderNotificationSectionBar(),
+      section === "status" ? renderNotificationOpsRail() : '',
       content,
-      section === "status" ? renderNotificationCommandPanel() : '',
       '</section>'
     ].join(""));
   }
@@ -6970,42 +6970,33 @@
     ].join("");
   }
 
-  function renderNotificationCommandPanel() {
+  function renderNotificationOpsRail() {
     var summary = state.notificationJobsSummary || state.realtime.notificationJobs || {};
-    var section = activeNotificationSectionMeta();
     var templateCount = notificationTemplateItems().length;
     var scheduleCount = Array.isArray(state.messageSchedules) ? state.messageSchedules.length : 0;
+    var interval = settingValue("notifyIntervalMinutes") || defaultSettings.notifyIntervalMinutes;
+    var items = [
+      ["대기", Number(summary.pending || 0), "watch"],
+      ["발송", Number(summary.done || 0), "watch"],
+      ["보류", Number(summary.suppressed || 0), "muted"],
+      ["실패", Number(summary.failed || 0), Number(summary.failed || 0) ? "danger" : "muted"],
+      ["사용 룰", notificationEnabledRuleCount() + "/" + alertRuleCatalog.length, "policy"],
+      ["기본 주기", interval + "분", "muted"],
+      ["템플릿", templateCount + "개", "muted"],
+      ["스케줄", scheduleCount || "-", "muted"]
+    ];
     return [
-      '<article class="panel notification-command-panel">',
-      '<div class="panel-head">',
-      '<div>',
-      '<p class="label">Notification Ops</p>',
-      '<h2>알림 관제</h2>',
-      '<p class="subtle">기본은 현황만 보고, 정책·템플릿·고급 설정은 필요한 순간에만 엽니다.</p>',
-      '</div>',
-      '<span class="tone-chip watch">' + escapeHtml(section.label) + '</span>',
-      '</div>',
-      '<div class="notification-command-grid">',
-      renderNotificationCommandMetric("대기", Number(summary.pending || 0), "watch"),
-      renderNotificationCommandMetric("발송", Number(summary.done || 0), "watch"),
-      renderNotificationCommandMetric("보류", Number(summary.suppressed || 0), "muted"),
-      renderNotificationCommandMetric("실패", Number(summary.failed || 0), Number(summary.failed || 0) ? "danger" : "muted"),
-      '</div>',
-      '<div class="notification-ops-strip">',
-      '<span><strong>' + escapeHtml(notificationEnabledRuleCount() + "/" + alertRuleCatalog.length) + '</strong><em>사용 중인 룰</em></span>',
-      '<span><strong>' + escapeHtml(settingValue("notifyIntervalMinutes") || defaultSettings.notifyIntervalMinutes) + '분</strong><em>기본 주기</em></span>',
-      '<span><strong>' + escapeHtml(templateCount) + '개</strong><em>템플릿</em></span>',
-      '<span><strong>' + escapeHtml(scheduleCount || "-") + '</strong><em>스케줄 이력</em></span>',
-      '</div>',
-      '</article>'
+      '<section class="notification-ops-rail" aria-label="알림 상태 요약">',
+      items.map(renderNotificationOpsCell).join(""),
+      '</section>'
     ].join("");
   }
 
-  function renderNotificationCommandMetric(label, value, tone) {
+  function renderNotificationOpsCell(item) {
     return [
-      '<span class="notification-command-metric ' + escapeHtml(tone || "muted") + '">',
-      '<em>' + escapeHtml(label) + '</em>',
-      '<strong>' + escapeHtml(value) + '</strong>',
+      '<span class="notification-ops-cell ' + escapeHtml(item[2] || "muted") + '">',
+      '<em>' + escapeHtml(item[0]) + '</em>',
+      '<strong>' + escapeHtml(String(item[1])) + '</strong>',
       '</span>'
     ].join("");
   }

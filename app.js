@@ -21,6 +21,9 @@
     notifyIntervalMinutes: "10",
     symbolUniverseMaxAgeHours: "24",
     externalApiFetchIntervalMinutes: "60",
+    externalAlphaEnabled: "1",
+    externalCoinGeckoEnabled: "1",
+    externalFredEnabled: "1",
     externalFredSeries: "DGS10,DGS2,DFF",
     externalCryptoIds: "bitcoin,ethereum",
     externalAlphaMaxSymbols: "3",
@@ -35,6 +38,7 @@
       "MSTR=0001050446"
     ].join("\n"),
     externalSecUserAgent: "DigitalTwin/1.0 local-contact",
+    externalDartEnabled: "1",
     externalDartLookbackDays: "14",
     externalDartCorpCodes: [
       "005930=00126380",
@@ -2952,6 +2956,9 @@
       notifyIntervalMinutes: settingValue("notifyIntervalMinutes"),
       symbolUniverseMaxAgeHours: settingValue("symbolUniverseMaxAgeHours"),
       externalApiFetchIntervalMinutes: settingValue("externalApiFetchIntervalMinutes"),
+      externalAlphaEnabled: settingValue("externalAlphaEnabled"),
+      externalCoinGeckoEnabled: settingValue("externalCoinGeckoEnabled"),
+      externalFredEnabled: settingValue("externalFredEnabled"),
       externalFredSeries: settingValue("externalFredSeries"),
       externalCryptoIds: settingValue("externalCryptoIds"),
       externalAlphaMaxSymbols: settingValue("externalAlphaMaxSymbols"),
@@ -2959,6 +2966,7 @@
       externalSecMaxSymbols: settingValue("externalSecMaxSymbols"),
       externalSecCompanyCiks: settingValue("externalSecCompanyCiks"),
       externalSecUserAgent: settingValue("externalSecUserAgent"),
+      externalDartEnabled: settingValue("externalDartEnabled"),
       externalDartLookbackDays: settingValue("externalDartLookbackDays"),
       externalDartCorpCodes: settingValue("externalDartCorpCodes"),
       dartDisclosureAiAnalysisEnabled: settingValue("dartDisclosureAiAnalysisEnabled"),
@@ -4549,6 +4557,11 @@
 
   function settingUsesDefault(name) {
     return String(settingValue(name) || "").trim() === String(defaultSettings[name] || "").trim();
+  }
+
+  function settingEnabled(name) {
+    var value = String(settingValue(name) || defaultSettings[name] || "1").trim().toLowerCase();
+    return ["0", "false", "no", "off", "disabled"].indexOf(value) < 0;
   }
 
   function strategyDataDiagnostics(snapshot) {
@@ -11350,10 +11363,11 @@
         configuredChip("알림 링크", Boolean(settingValue("notifyLinkUrl")))
       ]),
       renderSettingsApiCard("외부 데이터", "가격·크립토·거시·공시", [
-        configuredChip("Alpha", isConfiguredSetting("alphaVantageApiKey")),
-        configuredChip("CoinGecko", isConfiguredSetting("coingeckoApiKey")),
-        configuredChip("FRED", isConfiguredSetting("fredApiKey")),
-        configuredChip("OpenDART", isConfiguredSetting("opendartApiKey")),
+        configuredChip("Alpha", settingEnabled("externalAlphaEnabled"), isConfiguredSetting("alphaVantageApiKey") ? "키 저장됨" : "키 필요"),
+        configuredChip("CoinGecko", settingEnabled("externalCoinGeckoEnabled"), isConfiguredSetting("coingeckoApiKey") ? "키 저장됨" : "키 없음"),
+        configuredChip("FRED", settingEnabled("externalFredEnabled"), isConfiguredSetting("fredApiKey") ? "키 저장됨" : "키 필요"),
+        configuredChip("OpenDART", settingEnabled("externalDartEnabled"), isConfiguredSetting("opendartApiKey") ? "키 저장됨" : "키 필요"),
+        configuredChip("SEC", settingEnabled("externalSecEnabled"), "무키"),
         configuredChip("공시 AI", settingValue("dartDisclosureAiAnalysisEnabled") !== "0", settingValue("dartDisclosureAiUseCodex") === "0" ? "로컬" : "AI")
       ]),
       '</div>'
@@ -11361,12 +11375,13 @@
   }
 
   function renderRuntimeSettingsSummary() {
-    var externalConfiguredCount = [
-      "alphaVantageApiKey",
-      "coingeckoApiKey",
-      "fredApiKey",
-      "opendartApiKey"
-    ].filter(function (name) { return isConfiguredSetting(name); }).length;
+    var externalEnabledCount = [
+      "externalAlphaEnabled",
+      "externalCoinGeckoEnabled",
+      "externalFredEnabled",
+      "externalSecEnabled",
+      "externalDartEnabled"
+    ].filter(settingEnabled).length;
     return [
       '<div class="settings-api-grid">',
       renderSettingsApiCard("앱 환경", appThemeLabel(settingValue("appTheme") || defaultSettings.appTheme), [
@@ -11378,11 +11393,12 @@
         configuredChip("Chat ID", isConfiguredSetting("telegramChatId"), isConfiguredSetting("telegramChatId") ? "저장됨" : ""),
         configuredChip("알림 링크", Boolean(settingValue("notifyLinkUrl")))
       ]),
-      renderSettingsApiCard("외부 데이터", externalConfiguredCount + "/4개 API", [
-        configuredChip("Alpha", isConfiguredSetting("alphaVantageApiKey")),
-        configuredChip("CoinGecko", isConfiguredSetting("coingeckoApiKey")),
-        configuredChip("FRED", isConfiguredSetting("fredApiKey")),
-        configuredChip("OpenDART", isConfiguredSetting("opendartApiKey")),
+      renderSettingsApiCard("외부 데이터", externalEnabledCount + "/5개 수집 사용", [
+        configuredChip("Alpha", settingEnabled("externalAlphaEnabled"), isConfiguredSetting("alphaVantageApiKey") ? "키 저장됨" : "키 필요"),
+        configuredChip("CoinGecko", settingEnabled("externalCoinGeckoEnabled"), isConfiguredSetting("coingeckoApiKey") ? "키 저장됨" : "키 없음"),
+        configuredChip("FRED", settingEnabled("externalFredEnabled"), isConfiguredSetting("fredApiKey") ? "키 저장됨" : "키 필요"),
+        configuredChip("OpenDART", settingEnabled("externalDartEnabled"), isConfiguredSetting("opendartApiKey") ? "키 저장됨" : "키 필요"),
+        configuredChip("SEC", settingEnabled("externalSecEnabled"), "무키"),
         configuredChip("공시 AI", settingValue("dartDisclosureAiAnalysisEnabled") !== "0", settingValue("dartDisclosureAiUseCodex") === "0" ? "로컬" : "AI")
       ]),
       '</div>'
@@ -11591,9 +11607,25 @@
       renderSettingField("kisMarketSignalMaxSymbols", "KIS 수급 종목 수", "number", "20"),
       renderSettingField("kisMarketSignalCacheMinutes", "KIS 수급 캐시(분)", "number", "10"),
       renderSettingField("kisMarketSignalGapSeconds", "KIS 호출 간격(초)", "number", "0.35"),
+      renderSettingSelect("externalAlphaEnabled", "Alpha Vantage 수집", [
+        { value: "1", label: "사용" },
+        { value: "0", label: "사용 안 함" }
+      ]),
       renderSettingField("alphaVantageApiKey", "Alpha Vantage API Key", secretType, "api key", { preserveConfigured: true }),
+      renderSettingSelect("externalCoinGeckoEnabled", "CoinGecko 수집", [
+        { value: "1", label: "사용" },
+        { value: "0", label: "사용 안 함" }
+      ]),
       renderSettingField("coingeckoApiKey", "CoinGecko API Key", secretType, "api key", { preserveConfigured: true }),
+      renderSettingSelect("externalFredEnabled", "FRED 수집", [
+        { value: "1", label: "사용" },
+        { value: "0", label: "사용 안 함" }
+      ]),
       renderSettingField("fredApiKey", "FRED API Key", secretType, "api key", { preserveConfigured: true }),
+      renderSettingSelect("externalDartEnabled", "OpenDART 수집", [
+        { value: "1", label: "사용" },
+        { value: "0", label: "사용 안 함" }
+      ]),
       renderSettingField("opendartApiKey", "OpenDART API Key", secretType, "api key", { preserveConfigured: true }),
       renderSettingField("externalApiFetchIntervalMinutes", "외부 API 캐시(분)", "number", "60"),
       renderSettingField("externalAlphaMaxSymbols", "미장 조회 종목 수", "number", "3"),

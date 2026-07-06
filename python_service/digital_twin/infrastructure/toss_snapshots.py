@@ -12,6 +12,7 @@ from ..domain.portfolio import AccountSnapshot, Position, utc_now_iso
 from ..domain.portfolio_calculations import portfolio_summary
 from ..domain.strategy import decisions_for_positions
 from .external_signals import ExternalSignalProvider
+from .kis_market_signals import KISMarketSignalProvider
 from .settings import currency_rates
 from .sqlite_monitoring import SQLiteMarketQuoteCache
 
@@ -707,9 +708,13 @@ class TossProvider:
 def build_snapshot(account: AccountConfig) -> AccountSnapshot:
     provider = TossProvider(account)
     mode, status, positions, cash, currency, watchlist = provider.fetch_positions()
+    kis_provider = KISMarketSignalProvider()
+    positions, watchlist = kis_provider.enrich_collections(positions, watchlist)
     external_signals = ExternalSignalProvider().signals_for_positions(positions + watchlist)
     portfolio = portfolio_summary(positions, cash, currency, currency_rates())
     decisions = decisions_for_positions(positions, portfolio)
+    metadata = provider.diagnostics_payload()
+    metadata.update(kis_provider.diagnostics_payload())
     return AccountSnapshot(
         account_id=account.account_id,
         account_label=account.label,
@@ -722,5 +727,5 @@ def build_snapshot(account: AccountConfig) -> AccountSnapshot:
         decisions=decisions,
         external_signals=external_signals,
         watchlist=watchlist,
-        metadata=provider.diagnostics_payload(),
+        metadata=metadata,
     )

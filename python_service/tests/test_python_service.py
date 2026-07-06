@@ -42,6 +42,7 @@ from digital_twin.domain.portfolio import AccountSnapshot, AlertEvent, Position,
 from digital_twin.infrastructure.event_bus import EventBus, JsonEventLog
 from digital_twin.infrastructure.external_signals import ExternalSignalProvider
 from digital_twin.infrastructure.json_monitor_state import MonitorStore
+from digital_twin.infrastructure.kis_market_signals import KIS_CACHE_ACCOUNT_ID, KIS_CACHE_PROVIDER, KISMarketSignalProvider
 from digital_twin.infrastructure.model_review_queue import ModelReviewEnqueuer, ModelReviewJobStore
 from digital_twin.infrastructure.mock_market import mock_market_payload
 from digital_twin.infrastructure.neo4j_ontology import Neo4jOntologyGraphRepository, NullOntologyGraphRepository, safe_relation_type
@@ -247,6 +248,135 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(240, tsla.ma20)
         self.assertEqual("cached", tsla.data_quality)
         self.assertEqual("마지막 저장 시세", tsla.quote_status)
+
+    def test_kis_market_signal_provider_enriches_kr_positions(self):
+        db_path = Path(self.temp.name) / "service.db"
+        calls = []
+
+        def fake_fetch_json(method, url, headers, body=None, query=None, timeout=12):
+            path = urllib.parse.urlparse(url).path
+            calls.append((method, path, headers.get("tr_id"), query))
+            if path == "/oauth2/tokenP":
+                self.assertEqual("POST", method)
+                return {"access_token": "kis-token", "expires_in": 86400}
+            self.assertEqual("Bearer kis-token", headers.get("authorization"))
+            self.assertEqual({"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": "005930"}, query)
+            if path.endswith("/inquire-price"):
+                return {"rt_cd": "0", "output": {
+                    "stck_prpr": "72000",
+                    "prdy_ctrt": "1.25",
+                    "acml_vol": "1000000",
+                    "acml_tr_pbmn": "72000000000",
+                    "prdy_vrss_vol_rate": "185.0",
+                    "frgn_ntby_qty": "900",
+                }}
+            if path.endswith("/inquire-ccnl"):
+                return {"rt_cd": "0", "output": [
+                    {"stck_prpr": "72000", "tday_rltv": "118.5", "cntg_vol": "120", "prdy_ctrt": "1.25"},
+                    {"stck_prpr": "71900", "tday_rltv": "117.0", "cntg_vol": "-80", "prdy_ctrt": "1.11"},
+                ]}
+            if path.endswith("/inquire-investor"):
+                return {"rt_cd": "0", "output": [{
+                    "prsn_ntby_qty": "-400",
+                    "frgn_ntby_qty": "700",
+                    "orgn_ntby_qty": "300",
+                    "prsn_shnu_vol": "2000",
+                    "frgn_shnu_vol": "1300",
+                    "orgn_shnu_vol": "900",
+                    "prsn_seln_vol": "2400",
+                    "frgn_seln_vol": "600",
+                    "orgn_seln_vol": "600",
+                }]}
+            return {"rt_cd": "1", "msg1": "unexpected path"}
+
+        provider = KISMarketSignalProvider(
+            settings={
+                "kisBaseUrl": "https://kis.example.test",
+                "kisAppKey": "app-key",
+                "kisAppSecret": "app-secret",
+                "kisMarketSignalsEnabled": "1",
+                "kisMarketSignalGapSeconds": "0",
+                "kisMarketSignalCacheMinutes": "10",
+                "kisMarketSignalMaxSymbols": "5",
+                "externalApiRetryAttempts": "1",
+            },
+            quote_cache=SQLiteMarketQuoteCache(db_path),
+            fetch_json=fake_fetch_json,
+            sleep=lambda _seconds: None,
+        )
+        samsung = normalize_position({"symbol": "005930", "name": "삼성전자", "market": "KR", "currency": "KRW", "quantity": "2"})
+        apple = normalize_position({"symbol": "AAPL", "name": "Apple", "market": "US", "currency": "USD"})
+
+        positions, watchlist = provider.enrich_collections([samsung, apple], [])
+        enriched = next(item for item in positions if item.symbol == "005930")
+        untouched = next(item for item in positions if item.symbol == "AAPL")
+        cached = SQLiteMarketQuoteCache(db_path).load(KIS_CACHE_PROVIDER, KIS_CACHE_ACCOUNT_ID, "005930")
+
+        self.assertEqual([], watchlist)
+        self.assertEqual(72000, enriched.current_price)
+        self.assertEqual(144000, enriched.market_value)
+        self.assertEqual(1.25, enriched.change_rate)
+        self.assertEqual(118.5, enriched.trade_strength)
+        self.assertEqual(120, enriched.buy_volume)
+        self.assertEqual(80, enriched.sell_volume)
+        self.assertEqual(1.85, enriched.volume_ratio)
+        self.assertEqual(700, enriched.foreign_net_volume)
+        self.assertEqual(1300, enriched.foreign_buy_volume)
+        self.assertEqual(600, enriched.foreign_sell_volume)
+        self.assertEqual(300, enriched.institution_net_volume)
+        self.assertEqual(-400, enriched.individual_net_volume)
+        self.assertIn("KIS Open API", enriched.quote_source)
+        self.assertEqual("actual", enriched.data_quality)
+        self.assertEqual(0, untouched.current_price)
+        self.assertEqual(700, cached["foreignNetVolume"])
+        self.assertEqual(["/oauth2/tokenP", "/uapi/domestic-stock/v1/quotations/inquire-price", "/uapi/domestic-stock/v1/quotations/inquire-ccnl", "/uapi/domestic-stock/v1/quotations/inquire-investor"], [item[1] for item in calls])
+
+    def test_kis_market_signal_provider_uses_fresh_cache_without_token(self):
+        db_path = Path(self.temp.name) / "service.db"
+        cache = SQLiteMarketQuoteCache(db_path)
+        cache.save(KIS_CACHE_PROVIDER, KIS_CACHE_ACCOUNT_ID, "005930", {
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "currentPrice": 71000,
+            "tradeStrength": 109,
+            "foreignNetVolume": 500,
+            "institutionNetVolume": -120,
+            "individualNetVolume": -380,
+            "quoteSource": "KIS Open API",
+            "quoteStatus": "KIS 현재가/수급 반영",
+            "quoteMessage": "cached",
+            "dataQuality": "actual",
+            "updatedAt": utc_now_iso(),
+        })
+
+        def fail_fetch_json(*_args, **_kwargs):
+            raise AssertionError("fresh KIS cache should avoid live token and quote calls")
+
+        provider = KISMarketSignalProvider(
+            settings={
+                "kisBaseUrl": "https://kis.example.test",
+                "kisAppKey": "app-key",
+                "kisAppSecret": "app-secret",
+                "kisMarketSignalsEnabled": "1",
+                "kisMarketSignalCacheMinutes": "10",
+            },
+            quote_cache=cache,
+            fetch_json=fail_fetch_json,
+        )
+        samsung = normalize_position({"symbol": "005930", "name": "삼성전자", "market": "KR", "currency": "KRW"})
+
+        positions, _watchlist = provider.enrich_collections([samsung], [])
+        enriched = positions[0]
+
+        self.assertEqual(71000, enriched.current_price)
+        self.assertEqual(109, enriched.trade_strength)
+        self.assertEqual(500, enriched.foreign_net_volume)
+        self.assertEqual(-120, enriched.institution_net_volume)
+        self.assertEqual(-380, enriched.individual_net_volume)
+        self.assertEqual(1, provider.diagnostics["cached"])
+        self.assertEqual(0, provider.diagnostics["live"])
 
     def test_toss_retries_transient_accounts_unauthorized(self):
         account = AccountConfig("main", "메인", "toss", "https://example.test", "id", "secret", "", [])
@@ -823,6 +953,8 @@ class PythonServiceTests(unittest.TestCase):
             "foreignSellVolume": "275",
             "institutionBuyVolume": "310",
             "institutionSellVolume": "228",
+            "individualBuyVolume": "230",
+            "individualSellVolume": "450",
             "executionStrength": "128.4",
             "marketValue": 720000,
         })
@@ -838,6 +970,9 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(310, position.institution_buy_volume)
         self.assertEqual(228, position.institution_sell_volume)
         self.assertEqual(82, position.institution_net_volume)
+        self.assertEqual(230, position.individual_buy_volume)
+        self.assertEqual(450, position.individual_sell_volume)
+        self.assertEqual(-220, position.individual_net_volume)
         self.assertEqual(72000000, position.trading_value)
 
     def test_technical_indicators_are_calculated_from_candles(self):

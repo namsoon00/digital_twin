@@ -52,6 +52,9 @@ def position_payload(position: Position) -> Dict[str, object]:
         "institutionBuyVolume": position.institution_buy_volume,
         "institutionSellVolume": position.institution_sell_volume,
         "institutionNetVolume": position.institution_net_volume,
+        "individualBuyVolume": position.individual_buy_volume,
+        "individualSellVolume": position.individual_sell_volume,
+        "individualNetVolume": position.individual_net_volume,
         "ma5": position.ma5,
         "ma20": position.ma20,
         "ma60": position.ma60,
@@ -111,7 +114,13 @@ def toss_portfolio_for_account(
 ) -> Dict[str, object]:
     snapshot = snapshot_builder(account)
     if snapshot.mode != "live":
-        return demo_toss_portfolio(snapshot.status, demo_positions_provider)
+        payload = demo_toss_portfolio(snapshot.status, demo_positions_provider)
+        if snapshot.positions:
+            payload["positions"] = [position_payload(item) for item in snapshot.positions]
+        if snapshot.watchlist:
+            payload["watchlistQuotes"] = [position_payload(item) for item in snapshot.watchlist]
+        payload["portfolio"] = portfolio_payload(snapshot.portfolio)
+        return payload
     return {
         "mode": snapshot.mode,
         "configured": bool(account.client_id and account.client_secret),
@@ -348,6 +357,9 @@ def toss_decision_for_holding(item: Dict[str, object], portfolio: Dict[str, obje
         institution_buy_volume=number(item.get("institutionBuyVolume")),
         institution_sell_volume=number(item.get("institutionSellVolume")),
         institution_net_volume=number(item.get("institutionNetVolume")),
+        individual_buy_volume=number(item.get("individualBuyVolume")),
+        individual_sell_volume=number(item.get("individualSellVolume")),
+        individual_net_volume=number(item.get("individualNetVolume")),
         ma20=number(item.get("ma20")),
         ma60=number(item.get("ma60")),
         ma20_slope=number(item.get("ma20Slope")),

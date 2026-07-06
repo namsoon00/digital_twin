@@ -146,7 +146,13 @@ def normalize_position(item: Dict[str, object]) -> Position:
         or item.get("purchasePrice")
         or item.get("averagePurchasePrice")
     )
-    current_price = number(item.get("currentPrice") or item.get("price") or item.get("closePrice") or item.get("lastPrice"))
+    current_price = number(
+        item.get("currentPrice")
+        or item.get("price")
+        or item.get("closePrice")
+        or item.get("lastPrice")
+        or item.get("stck_prpr")
+    )
     raw_rate = (
         number(item.get("profitLossRate"))
         if item.get("profitLossRate") is not None
@@ -160,6 +166,7 @@ def normalize_position(item: Dict[str, object]) -> Position:
         "executionStrength",
         "contractStrength",
         "tradePower",
+        "tday_rltv",
         "체결강도",
     ])
     volume = first_number(item, [
@@ -168,6 +175,7 @@ def normalize_position(item: Dict[str, object]) -> Position:
         "tradeVolume",
         "accumulatedVolume",
         "accTradeVolume",
+        "acml_vol",
         "거래량",
     ])
     volume_ratio = first_number(item, [
@@ -198,6 +206,8 @@ def normalize_position(item: Dict[str, object]) -> Position:
         "foreignerBuyVolume",
         "foreignInvestorBuyVolume",
         "foreignBuy",
+        "frgn_shnu_vol",
+        "frgn_shnu_qty",
         "외국인매수량",
         "외국인매수",
     ])
@@ -206,6 +216,8 @@ def normalize_position(item: Dict[str, object]) -> Position:
         "foreignerSellVolume",
         "foreignInvestorSellVolume",
         "foreignSell",
+        "frgn_seln_vol",
+        "frgn_seln_qty",
         "외국인매도량",
         "외국인매도",
     ])
@@ -217,6 +229,8 @@ def normalize_position(item: Dict[str, object]) -> Position:
             "foreignNetBuy",
             "foreignerNetBuy",
             "foreignInvestorNet",
+            "foreignNetVolume",
+            "frgn_ntby_qty",
             "외국인순매수",
         ])
     )
@@ -225,6 +239,8 @@ def normalize_position(item: Dict[str, object]) -> Position:
         "institutionalBuyVolume",
         "institutionInvestorBuyVolume",
         "institutionBuy",
+        "orgn_shnu_vol",
+        "orgn_shnu_qty",
         "기관매수량",
         "기관매수",
     ])
@@ -233,6 +249,8 @@ def normalize_position(item: Dict[str, object]) -> Position:
         "institutionalSellVolume",
         "institutionInvestorSellVolume",
         "institutionSell",
+        "orgn_seln_vol",
+        "orgn_seln_qty",
         "기관매도량",
         "기관매도",
     ])
@@ -244,7 +262,42 @@ def normalize_position(item: Dict[str, object]) -> Position:
             "institutionNetBuy",
             "institutionalNet",
             "institutionInvestorNet",
+            "institutionNetVolume",
+            "orgn_ntby_qty",
             "기관순매수",
+        ])
+    )
+    individual_buy_volume = first_number(item, [
+        "individualBuyVolume",
+        "retailBuyVolume",
+        "personalBuyVolume",
+        "individualBuy",
+        "prsn_shnu_vol",
+        "prsn_shnu_qty",
+        "개인매수량",
+        "개인매수",
+    ])
+    individual_sell_volume = first_number(item, [
+        "individualSellVolume",
+        "retailSellVolume",
+        "personalSellVolume",
+        "individualSell",
+        "prsn_seln_vol",
+        "prsn_seln_qty",
+        "개인매도량",
+        "개인매도",
+    ])
+    individual_net_volume = (
+        individual_buy_volume - individual_sell_volume
+        if individual_buy_volume or individual_sell_volume
+        else first_number(item, [
+            "individualNet",
+            "individualNetBuy",
+            "individualNetVolume",
+            "retailNet",
+            "personalNetBuy",
+            "prsn_ntby_qty",
+            "개인순매수",
         ])
     )
     trading_value = first_number(item, [
@@ -256,6 +309,7 @@ def normalize_position(item: Dict[str, object]) -> Position:
         "turnover",
         "accumulatedTradeAmount",
         "accTradeAmount",
+        "acml_tr_pbmn",
         "거래대금",
         "거래액",
     ])
@@ -280,7 +334,7 @@ def normalize_position(item: Dict[str, object]) -> Position:
         sellable_quantity=number(item.get("sellableQuantity") or item.get("availableQuantity") or item.get("sellableQty") or item.get("quantity") or item.get("qty")),
         average_price=average_price,
         current_price=current_price,
-        change_rate=optional_number(item, ["changeRate", "priceChangeRate", "changePercent", "changePct", "rate"]),
+        change_rate=optional_number(item, ["changeRate", "priceChangeRate", "changePercent", "changePct", "rate", "prdy_ctrt"]),
         quote_source=str(item.get("quoteSource") or item.get("quote_source") or item.get("provider") or ""),
         quote_status=str(item.get("quoteStatus") or item.get("quote_status") or ""),
         quote_message=str(item.get("quoteMessage") or item.get("quote_message") or ""),
@@ -301,6 +355,9 @@ def normalize_position(item: Dict[str, object]) -> Position:
         institution_buy_volume=institution_buy_volume,
         institution_sell_volume=institution_sell_volume,
         institution_net_volume=institution_net_volume,
+        individual_buy_volume=individual_buy_volume,
+        individual_sell_volume=individual_sell_volume,
+        individual_net_volume=individual_net_volume,
         ma5=first_number(item, ["ma5", "movingAverage5", "sma5"]),
         ma20=first_number(item, ["ma20", "movingAverage20", "sma20"]),
         ma60=first_number(item, ["ma60", "movingAverage60", "sma60"]),

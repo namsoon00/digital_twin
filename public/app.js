@@ -7,6 +7,12 @@
     tossClientId: "",
     tossClientSecret: "",
     tossAccountSeq: "",
+    kisEnv: "prod",
+    kisBaseUrl: "https://openapi.koreainvestment.com:9443",
+    kisMarketSignalsEnabled: "1",
+    kisMarketSignalMaxSymbols: "20",
+    kisMarketSignalCacheMinutes: "10",
+    kisMarketSignalGapSeconds: "0.35",
     notifyProvider: "",
     telegramBotToken: "",
     telegramChatId: "",
@@ -4111,23 +4117,23 @@
 
   function marketSignalForItem(item, signalMap) {
     var symbol = String(item.symbol || "").toUpperCase();
-    var fromItem = item.marketSignal || item.tradeSignal || item.signal || {};
+    var fromItem = Object.assign({}, item || {}, item.marketSignal || item.tradeSignal || item.signal || {});
     var fromSettings = signalMap[symbol] || {};
     var merged = Object.assign({}, fromItem, fromSettings);
     return {
       symbol: symbol,
-      tradeStrength: signalValue(merged, ["tradeStrength", "executionStrength"]),
-      volumeRatio: signalValue(merged, ["volumeRatio", "relativeVolume", "volumeMultiple"]),
-      buyVolume: signalValue(merged, ["buyVolume", "buyTradeVolume", "bidVolume"]),
-      sellVolume: signalValue(merged, ["sellVolume", "sellTradeVolume", "askVolume"]),
+      tradeStrength: signalValue(merged, ["tradeStrength", "trade_strength", "executionStrength"]),
+      volumeRatio: signalValue(merged, ["volumeRatio", "volume_ratio", "relativeVolume", "volumeMultiple"]),
+      buyVolume: signalValue(merged, ["buyVolume", "buy_volume", "buyTradeVolume", "bidVolume"]),
+      sellVolume: signalValue(merged, ["sellVolume", "sell_volume", "sellTradeVolume", "askVolume"]),
       bidAskImbalance: signalValue(merged, ["bidAskImbalance", "orderbookImbalance", "imbalance"]),
       priceChangeRate: signalValue(merged, ["priceChangeRate", "changeRate", "changePercent"]),
       ma20: signalValue(merged, ["ma20", "movingAverage20", "sma20"]),
       ma60: signalValue(merged, ["ma60", "movingAverage60", "sma60"]),
-      foreignNet: signalValue(merged, ["foreignNet", "foreignNetBuy", "foreignInvestorNet", "foreignerNetBuy"]),
-      institutionNet: signalValue(merged, ["institutionNet", "institutionNetBuy", "institutionalNet", "institutionInvestorNet"]),
-      individualNet: signalValue(merged, ["individualNet", "individualNetBuy", "retailNet", "personalNetBuy"]),
-      source: merged.source || (Object.keys(fromItem).length ? "toss" : "")
+      foreignNet: signalValue(merged, ["foreignNet", "foreignNetVolume", "foreign_net_volume", "foreignNetBuy", "foreignInvestorNet", "foreignerNetBuy"]),
+      institutionNet: signalValue(merged, ["institutionNet", "institutionNetVolume", "institution_net_volume", "institutionNetBuy", "institutionalNet", "institutionInvestorNet"]),
+      individualNet: signalValue(merged, ["individualNet", "individualNetVolume", "individual_net_volume", "individualNetBuy", "retailNet", "personalNetBuy"]),
+      source: merged.signalSource || merged.provider || merged.quoteSource || (Object.keys(fromItem).length ? "account" : "")
     };
   }
 
@@ -10820,6 +10826,13 @@
       renderSettingField("kisAppSecret", "KIS App Secret", secretType, "app secret", { preserveConfigured: true }),
       renderSettingField("kisAccountNo", "KIS 계좌번호", secretType, "계좌번호 앞 8자리", { preserveConfigured: true }),
       renderSettingField("kisAccountProductCode", "KIS 상품코드", secretType, "계좌번호 뒤 2자리", { preserveConfigured: true }),
+      renderSettingSelect("kisMarketSignalsEnabled", "KIS 수급 수집", [
+        { value: "1", label: "사용" },
+        { value: "0", label: "사용 안 함" }
+      ]),
+      renderSettingField("kisMarketSignalMaxSymbols", "KIS 수급 종목 수", "number", "20"),
+      renderSettingField("kisMarketSignalCacheMinutes", "KIS 수급 캐시(분)", "number", "10"),
+      renderSettingField("kisMarketSignalGapSeconds", "KIS 호출 간격(초)", "number", "0.35"),
       renderSettingField("alphaVantageApiKey", "Alpha Vantage API Key", secretType, "api key", { preserveConfigured: true }),
       renderSettingField("coingeckoApiKey", "CoinGecko API Key", secretType, "api key", { preserveConfigured: true }),
       renderSettingField("fredApiKey", "FRED API Key", secretType, "api key", { preserveConfigured: true }),

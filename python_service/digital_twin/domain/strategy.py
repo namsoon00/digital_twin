@@ -351,6 +351,7 @@ class StrategyModel:
             "trendDistance60": position.ma60_distance,
             "foreignNet": number(position.foreign_net_volume) or number(position.foreign_buy_volume) - number(position.foreign_sell_volume),
             "institutionNet": number(position.institution_net_volume) or number(position.institution_buy_volume) - number(position.institution_sell_volume),
+            "individualNet": number(position.individual_net_volume) or number(position.individual_buy_volume) - number(position.individual_sell_volume),
         })
         variables.update({
             "baseScore": 24.0,

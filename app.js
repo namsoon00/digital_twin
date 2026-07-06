@@ -1976,6 +1976,9 @@
       if (type === "monitorDecisionChange") return "보유 모델 판단 변경";
       if (type === "externalEquityMove") return titleFromChange(dataValue(rawItems, "미장 가격 변동"), "미장 가격 급등", "미장 가격 급락", "미장 가격·거래량 급변");
       if (type === "externalCryptoMove") {
+        var cryptoModel = sample && sample.cryptoMoveModel && typeof sample.cryptoMoveModel === "object" ? sample.cryptoMoveModel : {};
+        var modelTitle = String(cryptoModel.titleLabel || sample && sample.cryptoMoveTitle || "").trim();
+        if (modelTitle) return modelTitle;
         var cryptoLine = firstDataText(rawItems, "(비트코인|크립토).*?(24h|7d)");
         var asset = cryptoLine.indexOf("비트코인") >= 0 || symbol === "BTC" ? "비트코인" : "크립토";
         return titleFromChange(cryptoLine, asset + " 가격 급등", asset + " 가격 급락", asset + " 가격 급변");
@@ -2184,7 +2187,14 @@
         symbol: "BTC",
         severity: "WATCH",
         lines: ["비트코인 변동 24h +4.5% · 7d +11.2%", "크립토 가격 $61,227", "크립토 거래액 $42,000,000,000", "MSTR 등 비트코인 민감 종목 점검"],
-        criteria: ["설정: 크립토 24h ±4% 또는 7d ±10% 이상", "감지: 비트코인 24h +4.5%, 7d +11.2%"]
+        criteria: ["설정: 크립토 24h ±4% 또는 7d ±10% 이상", "감지: 크립토 변동 모델 100점, 7일 +11.2% (기준 ±4%), 24시간 +4.5%, 7일 +11.2%"],
+        cryptoMoveTitle: "비트코인 가격 급등",
+        cryptoMoveScore: 100,
+        cryptoMoveDirection: "상승",
+        cryptoMoveDominantPeriod: "7일",
+        cryptoMoveDominantChange: 11.2,
+        cryptoMoveReason: "7일 변동률 +11.2%가 기준 ±4%를 넘어서 비트코인 가격 급등으로 판단했습니다.",
+        cryptoMoveModel: { titleLabel: "비트코인 가격 급등", score: 100, dominantPeriodLabel: "7일", dominantChange: 11.2, reason: "7일 변동률 +11.2%가 기준 ±4%를 넘어서 비트코인 가격 급등으로 판단했습니다." }
       },
       externalMacroShift: {
         title: "매크로 지표 변화",
@@ -2324,7 +2334,14 @@
       key: type + ":preview",
       target: sample.symbol || type,
       accountLabel: "기본 계정",
-      accountId: "default"
+      accountId: "default",
+      cryptoMoveModel: sample.cryptoMoveModel || "",
+      cryptoMoveScore: sample.cryptoMoveScore || "",
+      cryptoMoveDirection: sample.cryptoMoveDirection || "",
+      cryptoMoveDominantPeriod: sample.cryptoMoveDominantPeriod || "",
+      cryptoMoveDominantChange: sample.cryptoMoveDominantChange || "",
+      cryptoMoveTitle: sample.cryptoMoveTitle || "",
+      cryptoMoveReason: sample.cryptoMoveReason || ""
     };
   }
 

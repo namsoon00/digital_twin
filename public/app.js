@@ -1259,6 +1259,13 @@
         { id: "volume_multiplier", label: "거래액 급증", type: "number_multiplier_gte", field: "volume24h", value: 1.5, enabled: true, description: "이전 유사 알림보다 거래액이 기준 배수 이상 커지면 보냅니다." }
       ];
     }
+    if (type === "holdingTiming") {
+      return [
+        { id: "severity_upgrade", label: "등급 상승", type: "severity_upgrade", field: "", value: "", enabled: true, description: "관찰에서 주의처럼 중요도가 올라가면 반복이어도 보냅니다." },
+        { id: "holding_score_delta", label: "보유 판단 점수 변화", type: "abs_number_delta_gte", field: "holdingDecisionScore", value: 8, enabled: true, description: "이전 보유 타이밍 알림보다 판단 점수가 기준점 이상 달라지면 보냅니다." },
+        { id: "loss_rate_worsened", label: "손익률 추가 악화", type: "number_delta_lte", field: "profitLossRate", value: 2, enabled: true, description: "이전 보유 타이밍 알림보다 손익률이 기준 %p 이상 나빠지면 보냅니다." }
+      ];
+    }
     return [];
   }
 
@@ -1267,7 +1274,7 @@
   }
 
   function defaultNotificationRuleStateCooldownEnabled(messageType) {
-    return ["externalEquityMove", "externalCryptoMove"].indexOf(String(messageType || "")) >= 0;
+    return ["holdingTiming", "externalEquityMove", "externalCryptoMove"].indexOf(String(messageType || "")) >= 0;
   }
 
   function defaultNotificationRuleStateCooldownMinutes(messageType) {

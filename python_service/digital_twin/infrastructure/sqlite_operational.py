@@ -538,7 +538,8 @@ class SQLiteNotificationRuleStore(OperationalConnection):
             for message_type, rule in DEFAULT_NOTIFICATION_RULES.items():
                 row = connection.execute(
                     """
-                    SELECT threshold, conditions_json, similarity_bypass_conditions_json
+                    SELECT threshold, conditions_json, similarity_bypass_conditions_json,
+                        state_cooldown_enabled, state_cooldown_minutes
                     FROM notification_rules
                     WHERE message_type = ?
                     """,
@@ -592,18 +593,33 @@ class SQLiteNotificationRuleStore(OperationalConnection):
                 threshold = int(row["threshold"] or 0)
                 if message_type == "externalCryptoMove" and threshold == 45:
                     threshold = int(rule.threshold)
-                if not missing_conditions and not rule_conditions_changed and int(row["threshold"] or 0) == threshold:
+                state_cooldown_enabled = int(row["state_cooldown_enabled"] or 0)
+                state_cooldown_minutes = int(row["state_cooldown_minutes"] or 0)
+                state_cooldown_changed = False
+                if missing_conditions and rule.state_cooldown_enabled and not state_cooldown_enabled and not state_cooldown_minutes:
+                    state_cooldown_enabled = 1
+                    state_cooldown_minutes = int(rule.state_cooldown_minutes)
+                    state_cooldown_changed = True
+                if (
+                    not missing_conditions
+                    and not rule_conditions_changed
+                    and not state_cooldown_changed
+                    and int(row["threshold"] or 0) == threshold
+                ):
                     continue
                 connection.execute(
                     """
                     UPDATE notification_rules
-                    SET threshold = ?, conditions_json = ?, similarity_bypass_conditions_json = ?, updated_at = ?
+                    SET threshold = ?, conditions_json = ?, similarity_bypass_conditions_json = ?,
+                        state_cooldown_enabled = ?, state_cooldown_minutes = ?, updated_at = ?
                     WHERE message_type = ?
                     """,
                     (
                         threshold,
                         json_dumps(configured_rule_conditions),
                         json_dumps(configured_conditions),
+                        state_cooldown_enabled,
+                        state_cooldown_minutes,
                         stamp,
                         message_type,
                     ),

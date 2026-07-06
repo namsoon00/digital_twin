@@ -17,7 +17,7 @@ from .strategy import SafeFormula
 DEFAULT_HONEY_THRESHOLD = 45
 DEFAULT_LOW_SCORE_ACTION = "suppress"
 DEFAULT_SIMILARITY_FIELDS = ["messageType", "accountId", "symbol", "severity", "title"]
-STATE_COOLDOWN_MESSAGE_TYPES = {"externalEquityMove", "externalCryptoMove"}
+STATE_COOLDOWN_MESSAGE_TYPES = {"holdingTiming", "externalEquityMove", "externalCryptoMove"}
 DEFAULT_NOTIFICATION_SCORE_FORMULA = "rawScore"
 FORMULA_VARIABLE_BY_CONDITION_ID = {
     "severity_alert": "severityScore",
@@ -201,6 +201,31 @@ def default_similarity_bypass_conditions(message_type: str) -> List["SimilarityB
                 field="volume24h",
                 value=1.5,
                 description="이전 유사 알림보다 거래액이 기준 배수 이상 커지면 보냅니다.",
+            ),
+        ]
+    if key == "holdingTiming":
+        return [
+            SimilarityBypassCondition(
+                "severity_upgrade",
+                "등급 상승",
+                "severity_upgrade",
+                description="관찰에서 주의처럼 중요도가 올라가면 반복이어도 보냅니다.",
+            ),
+            SimilarityBypassCondition(
+                "holding_score_delta",
+                "보유 판단 점수 변화",
+                "abs_number_delta_gte",
+                field="holdingDecisionScore",
+                value=8,
+                description="이전 보유 타이밍 알림보다 판단 점수가 기준점 이상 달라지면 보냅니다.",
+            ),
+            SimilarityBypassCondition(
+                "loss_rate_worsened",
+                "손익률 추가 악화",
+                "number_delta_lte",
+                field="profitLossRate",
+                value=2,
+                description="이전 보유 타이밍 알림보다 손익률이 기준 %p 이상 나빠지면 보냅니다.",
             ),
         ]
     return []

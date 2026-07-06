@@ -707,6 +707,110 @@ def friendly_score_reason(value: object) -> str:
     return text
 
 
+MODELING_LABELS = {
+    "modelBuy": "매수 판단 모델",
+    "modelSell": "매도 판단 모델",
+    "watchlistQuote": "관심종목 시세 변화 감지 모델",
+    "watchlistQuotePending": "관심종목 시세 수집 대기 모델",
+    "holdingTiming": "보유 타이밍 모델",
+    "monitorHeartbeat": "실시간 모니터링 상태 모델",
+    "monitorConnection": "토스 연결 상태 모델",
+    "monitorPositionChange": "보유 수량 변화 감지 모델",
+    "monitorPnlChange": "손익률 변화 감지 모델",
+    "monitorValueChange": "평가액 변화 감지 모델",
+    "monitorTrendChange": "이동평균/추세 변화 감지 모델",
+    "monitorCashChange": "현금 비중 변화 감지 모델",
+    "monitorDecisionChange": "보유 판단 변화 감지 모델",
+    "externalEquityMove": "미장 가격/거래량 변동 모델",
+    "externalCryptoMove": "크립토 변동 모델",
+    "externalMacroShift": "거시 지표 변화 모델",
+    "externalDartDisclosure": "공시 변화 감지 모델",
+    "externalDataConnection": "외부 API 연결 상태 모델",
+    "modelReview": "비동기 모델 리뷰 모델",
+    "notification": "일반 알림 발송 모델",
+    "default": "기본 알림 발송 모델",
+}
+
+MODEL_DATA_HINTS = {
+    "modelBuy": "토스 시세·수급·추세·가치평가 데이터",
+    "modelSell": "토스 시세·수급·추세·손절/가치평가 데이터",
+    "holdingTiming": "보유 스냅샷, 손익률, 수급, 추세, 매도 가능 수량",
+    "monitorDecisionChange": "이전/현재 보유 판단 점수와 보유 스냅샷",
+    "monitorTrendChange": "현재가와 이동평균선 거리",
+    "monitorPnlChange": "이전/현재 손익률",
+    "monitorValueChange": "이전/현재 평가액",
+    "monitorCashChange": "이전/현재 현금 비중",
+    "externalEquityMove": "Alpha Vantage 가격·거래량",
+    "externalCryptoMove": "CoinGecko 24시간/7일 변동률·가격·거래액",
+    "externalMacroShift": "FRED 금리·거시 시계열",
+    "externalDartDisclosure": "OpenDART 공시",
+    "externalDataConnection": "외부 API 호출 결과",
+}
+
+
+def context_number(context: Dict[str, object], key: str):
+    value = (context or {}).get(key)
+    if value in (None, ""):
+        raw_value = data_value(context_raw_lines(context), key)
+        value = raw_value
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value or "").replace(",", "")
+    match = re.search(r"-?\d+(?:\.\d+)?", text)
+    if not match:
+        return None
+    try:
+        return float(match.group(0))
+    except ValueError:
+        return None
+
+
+def selected_holding_formula_key(context: Dict[str, object]) -> str:
+    basis = str((context or {}).get("holdingDecisionBasis") or "").strip()
+    if basis == "profitTake":
+        return "profitTakeScoreFormula"
+    if basis == "lossCut":
+        return "lossCutScoreFormula"
+    pnl = context_number(context, "profitLossRate")
+    if pnl is None:
+        pnl = context_number(context, "손익")
+    if pnl is not None:
+        return "lossCutScoreFormula" if pnl < 0 else "profitTakeScoreFormula"
+    return ""
+
+
+def strategy_formula_line(context: Dict[str, object]) -> str:
+    message_type = context_message_type(context)
+    if message_type == "modelBuy":
+        return "판단 공식: 매수 공식(buyScoreFormula)"
+    if message_type == "modelSell":
+        return "판단 공식: 매도 공식(sellScoreFormula)"
+    if message_type in {"holdingTiming", "monitorDecisionChange"}:
+        formula_key = selected_holding_formula_key(context)
+        if formula_key:
+            label = "익절 점검 공식" if formula_key == "profitTakeScoreFormula" else "손실 관리 공식"
+            return "판단 공식: " + label + "(" + formula_key + ")"
+        return "판단 공식: 익절 점검 공식(profitTakeScoreFormula) / 손실 관리 공식(lossCutScoreFormula)"
+    return ""
+
+
+def modeling_lines(context: Dict[str, object]) -> List[str]:
+    message_type = context_message_type(context)
+    if message_type in SCORE_EXPLANATION_SKIP_TYPES:
+        return []
+    label = MODELING_LABELS.get(message_type, "알림 발송 모델")
+    lines = ["계산 모델: " + label]
+    formula_line = strategy_formula_line(context)
+    if formula_line:
+        lines.append(formula_line)
+    data_hint = MODEL_DATA_HINTS.get(message_type)
+    if data_hint:
+        lines.append("사용 데이터: " + data_hint)
+    if (context or {}).get("honeyScore") not in (None, ""):
+        lines.append("발송 모델: 알림 발송 공식(notificationScoreFormula)")
+    return lines
+
+
 def delivery_score_lines(context: Dict[str, object]) -> List[str]:
     if not isinstance(context, dict) or context.get("honeyScore") in (None, ""):
         return []
@@ -753,7 +857,8 @@ def investment_score_lines(context: Dict[str, object]) -> List[str]:
 def score_explanation_lines(context: Dict[str, object]) -> List[str]:
     if context_message_type(context) in SCORE_EXPLANATION_SKIP_TYPES:
         return []
-    lines = delivery_score_lines(context)
+    lines = modeling_lines(context)
+    lines.extend(delivery_score_lines(context))
     lines.extend(investment_score_lines(context))
     return lines
 
@@ -855,6 +960,15 @@ def template_variables() -> List[str]:
         "honeyDecision",
         "honeyReasons",
         "metadata",
+        "buyScoreFormula",
+        "sellScoreFormula",
+        "profitTakeScoreFormula",
+        "lossCutScoreFormula",
+        "notificationScoreFormula",
+        "holdingDecision",
+        "holdingDecisionBasis",
+        "holdingDecisionScore",
+        "profitLossRate",
         "market",
         "changePercent",
         "change24h",

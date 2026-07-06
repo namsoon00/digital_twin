@@ -2358,6 +2358,88 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(jobs[1].context["honeyStateSuppressed"])
         self.assertIn("같은 임계값 상태 지속", jobs[1].last_error)
 
+    def test_holding_timing_state_cooldown_suppresses_same_status(self):
+        db_path = Path(self.temp.name) / "service.db"
+        queue = SQLiteNotificationJobStore(db_path)
+        rules = SQLiteNotificationRuleStore(db_path)
+        rule = rules.get("holdingTiming")
+        self.assertTrue(rule.state_cooldown_enabled)
+        self.assertEqual(360, rule.state_cooldown_minutes)
+        self.assertTrue(any(condition.condition_id == "holding_score_delta" for condition in rule.similarity_bypass_conditions))
+        rule.market_hours_enabled = False
+        rules.upsert(rule)
+        first = AlertEvent(
+            "main",
+            "메인",
+            "WATCH",
+            "holdingTiming",
+            "main:timing:000660:1",
+            "SK하이닉스",
+            ["상태 손절 기준 확인 (63점)", "손익 -8.4%", "수급: 거래량 6,373,255(0.6x)", "추세: 현재 236만 원"],
+            "000660",
+            metadata={"holdingDecision": "손절 기준 확인", "holdingDecisionBasis": "lossCut", "holdingDecisionScore": 63, "profitLossRate": -8.4},
+        )
+        second = AlertEvent(
+            "main",
+            "메인",
+            "WATCH",
+            "holdingTiming",
+            "main:timing:000660:2",
+            "SK하이닉스",
+            ["상태 손절 기준 확인 (63점)", "손익 -8.4%", "수급: 거래량 6,373,255(0.6x)", "추세: 현재 236만 원"],
+            "000660",
+            metadata={"holdingDecision": "손절 기준 확인", "holdingDecisionBasis": "lossCut", "holdingDecisionScore": 63, "profitLossRate": -8.4},
+        )
+
+        self.assertEqual(1, send_events([first], queue=queue).queued)
+        self.assertEqual(0, send_events([second], queue=queue).queued)
+
+        jobs = queue.jobs()
+        self.assertEqual(["pending", "suppressed"], [job.status for job in jobs])
+        self.assertEqual("new_threshold", jobs[0].context["honeyStateDecision"])
+        self.assertEqual("cooldown", jobs[1].context["honeyStateDecision"])
+        self.assertTrue(jobs[1].context["honeyStateSuppressed"])
+        self.assertIn("같은 임계값 상태 지속", jobs[1].last_error)
+
+    def test_holding_timing_state_cooldown_allows_material_worsening(self):
+        db_path = Path(self.temp.name) / "service.db"
+        queue = SQLiteNotificationJobStore(db_path)
+        rules = SQLiteNotificationRuleStore(db_path)
+        rule = rules.get("holdingTiming")
+        rule.market_hours_enabled = False
+        rules.upsert(rule)
+        first = AlertEvent(
+            "main",
+            "메인",
+            "WATCH",
+            "holdingTiming",
+            "main:timing:000660:1",
+            "SK하이닉스",
+            ["상태 손절 기준 확인 (63점)", "손익 -8.4%"],
+            "000660",
+            metadata={"holdingDecision": "손절 기준 확인", "holdingDecisionBasis": "lossCut", "holdingDecisionScore": 63, "profitLossRate": -8.4},
+        )
+        worsened = AlertEvent(
+            "main",
+            "메인",
+            "WATCH",
+            "holdingTiming",
+            "main:timing:000660:2",
+            "SK하이닉스",
+            ["상태 손절 기준 확인 (64점)", "손익 -10.7%"],
+            "000660",
+            metadata={"holdingDecision": "손절 기준 확인", "holdingDecisionBasis": "lossCut", "holdingDecisionScore": 64, "profitLossRate": -10.7},
+        )
+
+        self.assertEqual(1, send_events([first], queue=queue).queued)
+        self.assertEqual(1, send_events([worsened], queue=queue).queued)
+
+        jobs = queue.jobs()
+        self.assertEqual(["pending", "pending"], [job.status for job in jobs])
+        self.assertEqual("material_change", jobs[1].context["honeyStateDecision"])
+        self.assertTrue(jobs[1].context["honeySimilarityBypassed"])
+        self.assertIn("손익률 추가 악화", jobs[1].context["honeyStateReason"])
+
     def test_crypto_state_cooldown_allows_material_7d_expansion(self):
         db_path = Path(self.temp.name) / "service.db"
         queue = SQLiteNotificationJobStore(db_path)
@@ -2658,11 +2740,19 @@ class PythonServiceTests(unittest.TestCase):
             "honeyScore": 70,
             "honeyThreshold": 45,
             "honeyReasons": ["기본 35점", "관찰 등급 +10", "확인 데이터 포함 +10", "행동 필요 표현 +10", "본문 있음 +5"],
+            "holdingDecisionBasis": "lossCut",
+            "holdingDecisionScore": 52,
+            "profitLossRate": -3.2,
+            "notificationScoreFormula": "rawScore",
         })
 
         message = templates.render(event.rule, context)
 
         self.assertIn("<b>점수 계산</b>", message)
+        self.assertIn("계산 모델", message)
+        self.assertIn("보유 타이밍 모델", message)
+        self.assertIn("손실 관리 공식(lossCutScoreFormula)", message)
+        self.assertIn("알림 발송 공식(notificationScoreFormula)", message)
         self.assertIn("발송 점수", message)
         self.assertIn("기본 점수 35점", message)
         self.assertIn("수급·추세 같은 확인 데이터 포함 +10점", message)

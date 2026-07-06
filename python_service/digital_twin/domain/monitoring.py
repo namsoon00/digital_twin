@@ -182,6 +182,8 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
 
     def notification_formula_metadata(self) -> Dict[str, object]:
         keys = [
+            "buyScoreFormula",
+            "sellScoreFormula",
             "profitTakeScoreFormula",
             "lossCutScoreFormula",
             "notificationScoreFormula",
@@ -796,6 +798,12 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
                     "판단 상태가 위험/주의이거나 손익률이 -8% 이하일 때",
                     "상태 " + decision_phrase + ", 손익 " + signed_pct(item.profit_loss_rate),
                 ),
+                metadata={
+                    "holdingDecision": item.decision,
+                    "holdingDecisionBasis": item.decision_basis,
+                    "holdingDecisionScore": round(float(item.exit_pressure or 0), 1),
+                    "profitLossRate": round(float(item.profit_loss_rate or 0), 2),
+                },
             ))
         return events
 

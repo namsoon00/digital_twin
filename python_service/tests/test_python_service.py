@@ -2443,8 +2443,32 @@ class PythonServiceTests(unittest.TestCase):
 
         self.assertEqual("005930", context["symbol"])
         self.assertEqual("삼성전자", context["symbolDisplayName"])
-        self.assertIn("삼성전자", message)
-        self.assertNotIn("005930", message)
+        self.assertEqual("삼성전자 / 005930", context["symbolWithCode"])
+        self.assertIn("삼성전자 / 005930", message)
+
+    def test_notification_render_falls_back_to_company_name_before_symbol_code(self):
+        event = AlertEvent(
+            "main",
+            "메인",
+            "WATCH",
+            "monitorDecisionChange",
+            "main:decision:035420",
+            "035420",
+            ["판단 변화", "이전 조건부 보유 (52점)", "현재 손실 관리 기준 확인 (56점)"],
+            "035420",
+        )
+
+        context = alert_context(event)
+        message = render_notification(
+            NotificationTemplate("monitorDecisionChange", "{symbol}\n{symbolLine}\n{targetLine}\n{telegramMessage}"),
+            context,
+        )
+
+        self.assertEqual("035420", context["symbol"])
+        self.assertEqual("NAVER", context["symbolDisplayName"])
+        self.assertEqual("NAVER / 035420", context["symbolWithCode"])
+        self.assertIn("NAVER / 035420", message)
+        self.assertNotIn("<code>035420</code>", message)
 
     def test_notification_delivery_score_uses_user_formula(self):
         event = AlertEvent(
@@ -3372,8 +3396,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("Apple", message)
         self.assertNotIn("━━━━━━━━", message)
         self.assertIn("<b>[관찰] 이동평균 상향 신호</b>", message)
-        self.assertIn("<code>Apple</code>", message)
-        self.assertNotIn("Apple / AAPL", message)
+        self.assertIn("<code>Apple / AAPL</code>", message)
         self.assertIn("<b>발송 기준</b>", message)
         self.assertIn("<b>데이터</b>", message)
         self.assertLess(message.index("<b>데이터</b>"), message.index("<b>발송 기준</b>"))
@@ -3404,7 +3427,7 @@ class PythonServiceTests(unittest.TestCase):
 
         message = templates.render(event.rule, alert_context(event))
 
-        self.assertIn("<b>[주의] 미장 가격 급락</b>\n<code>Tesla</code>", message)
+        self.assertIn("<b>[주의] 미장 가격 급락</b>\n<code>Tesla / TSLA</code>", message)
         self.assertNotIn("<code>TSLA</code>", message)
         self.assertNotIn("━━━━━━━━", message)
         self.assertIn("• <b>미장 가격 변동</b>: <code>-7.5%</code>, <b>가격</b>: <code>$393.45</code>", message)

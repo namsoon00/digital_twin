@@ -18,7 +18,10 @@ KST = timezone(timedelta(hours=9))
 SYMBOL_DISPLAY_NAMES = {
     "005930": "삼성전자",
     "000660": "SK하이닉스",
+    "035420": "NAVER",
     "035720": "카카오",
+    "005380": "현대차",
+    "000020": "동화약품",
     "AAPL": "Apple",
     "MSFT": "Microsoft",
     "NVDA": "NVIDIA",
@@ -645,15 +648,30 @@ def symbol_display_name(symbol: object, title: object = "") -> str:
     return raw_symbol
 
 
+def symbol_with_code(display_symbol: object, raw_symbol: object) -> str:
+    raw_text = str(raw_symbol or "").strip().upper()
+    display_text = str(display_symbol or "").strip()
+    if display_text and raw_text and display_text.upper() != raw_text:
+        return display_text + " / " + raw_text
+    return display_text or raw_text
+
+
 def target_display_value(title: object, raw_symbol: object, display_symbol: object) -> str:
     title_text = str(title or "").strip()
     raw_text = str(raw_symbol or "").strip().upper()
     display_text = str(display_symbol or "").strip()
+    symbol_text = symbol_with_code(display_text, raw_text)
     if title_text and raw_text and title_text.upper() == raw_text and display_text:
-        return display_text
-    if title_text and display_text and display_text not in title_text:
-        return title_text + " / " + display_text
-    return title_text or display_text
+        return symbol_text
+    if title_text and symbol_text:
+        if title_text == display_text:
+            return symbol_text
+        if raw_text and raw_text in title_text:
+            return title_text
+        if display_text and display_text in title_text:
+            return title_text + (" / " + raw_text if raw_text else "")
+        return title_text + " / " + symbol_text
+    return title_text or symbol_text
 
 
 def alert_context(event: AlertEvent) -> Dict[str, object]:
@@ -665,7 +683,8 @@ def alert_context(event: AlertEvent) -> Dict[str, object]:
     trigger_summary = TRIGGER_SUMMARIES.get(event.rule, "설정한 조건이 실제 데이터에서 충족될 때 보냅니다.")
     raw_symbol = str(event.symbol or "").strip()
     display_symbol = symbol_display_name(raw_symbol, event.title) if raw_symbol else ""
-    symbol_line = ("종목: " + display_symbol) if display_symbol else ""
+    symbol_text = symbol_with_code(display_symbol, raw_symbol)
+    symbol_line = ("종목: " + symbol_text) if symbol_text else ""
     severity_line = ("상태: " + severity_label) if severity_label else ""
     type_line = ("유형: " + message_type_label) if message_type_label else ""
     trigger_line = ("발생 조건: " + trigger_summary) if trigger_summary else ""
@@ -719,6 +738,7 @@ def alert_context(event: AlertEvent) -> Dict[str, object]:
         "rawSymbol": raw_symbol,
         "symbolDisplayName": display_symbol,
         "displaySymbolName": display_symbol,
+        "symbolWithCode": symbol_text,
         "target": event.target(),
         "rawTarget": event.target(),
         "displayTarget": target_value,
@@ -1206,11 +1226,12 @@ def context_with_score_explanation(context: Dict[str, object]) -> Dict[str, obje
         or SYMBOL_DISPLAY_NAMES.get(raw_symbol, "")
         or ""
     ).strip()
-    if display_symbol:
-        values["symbol"] = display_symbol
+    symbol_text = str(values.get("symbolWithCode") or "").strip() or symbol_with_code(display_symbol, raw_symbol)
+    if symbol_text:
+        values["symbol"] = symbol_text
     display_target = str(values.get("displayTarget") or "").strip()
-    if not display_target and display_symbol and str(values.get("target") or "").strip().upper() == raw_symbol:
-        display_target = display_symbol
+    if not display_target and symbol_text and str(values.get("target") or "").strip().upper() == raw_symbol:
+        display_target = symbol_text
     if display_target:
         values["target"] = display_target
     values["scoreExplanation"] = score_explanation_block(values, False)

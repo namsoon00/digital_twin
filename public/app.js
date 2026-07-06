@@ -1,5 +1,6 @@
 (function () {
   var app = document.getElementById("app");
+  var ontologyGraphInstances = {};
   var defaultSettings = {
     appTheme: "light",
     watchlistSymbols: "TSLA,AAPL,NVDA,000660",
@@ -5664,6 +5665,7 @@
 
   function render() {
     applyAppTheme();
+    destroyOntologyCytoscapeGraphs();
     if (state.loading && !state.snapshot) {
       app.innerHTML = renderLoading();
       return;
@@ -5675,6 +5677,7 @@
     }
     app.innerHTML = renderDashboard(state.snapshot);
     bindActions();
+    initOntologyCytoscapeGraphs();
     restoreTabBarPosition();
     syncAppNavScrollState();
     if (state.activeTab === "feed" && !state.feed && !state.feedLoading) {
@@ -8543,15 +8546,22 @@
   }
 
   function renderOntologyTboxGraph(tbox, relationCounts) {
-    var nodesById = ontologyTboxGraphNodes(tbox);
-    var edges = ontologyTboxGraphEdges(tbox);
     return [
       '<section class="ontology-graph-panel ontology-tbox-graph">',
       '<div class="ontology-surface-head">',
+      '<div>',
       '<strong>TBox Relation Graph</strong>',
+      '<span>schema class, relation type, rule 간의 허용 관계</span>',
+      '</div>',
+      '<div class="ontology-graph-actions">',
+      '<button class="icon-button" type="button" data-ontology-graph-fit="tbox" title="TBox 그래프 맞춤" aria-label="TBox 그래프 맞춤">⌖</button>',
+      '<button class="icon-button" type="button" data-ontology-graph-layout="tbox" title="TBox 자동 배치" aria-label="TBox 자동 배치">↺</button>',
+      '</div>',
+      '</div>',
+      '<div class="ontology-graph-meta">',
       '<span>' + escapeHtml((tbox.classes || []).length || 0) + ' classes · ' + escapeHtml((tbox.relationTypes || []).length || 0) + ' relation types · ' + escapeHtml((tbox.reasoningRules || []).length || 0) + ' rules</span>',
       '</div>',
-      renderOntologyGraphSvg("tbox", Object.keys(nodesById).map(function (key) { return nodesById[key]; }), edges, nodesById, 900, 486),
+      '<div class="ontology-cytoscape" data-ontology-cytoscape="tbox"><span>그래프 엔진 초기화 중</span></div>',
       '<div class="ontology-graph-caption">',
       '<span>굵은 실선은 허용 relation type입니다.</span>',
       '<span>점선 rule edge는 TBox 규칙이 어떤 개념을 생성·제약하는지 나타냅니다.</span>',
@@ -8675,14 +8685,22 @@
   }
 
   function renderOntologyAboxGraph(aboxEntities, aboxRelations, evidence, beliefs, opinions, entityLabels) {
-    var graph = ontologyBuildAboxGraph(aboxEntities, aboxRelations, evidence, beliefs, opinions, entityLabels);
     return [
       '<section class="ontology-graph-panel ontology-abox-graph">',
       '<div class="ontology-surface-head">',
+      '<div>',
       '<strong>ABox Runtime Relation Graph</strong>',
+      '<span>현재 포트폴리오 assertion, evidence, belief, opinion 관계</span>',
+      '</div>',
+      '<div class="ontology-graph-actions">',
+      '<button class="icon-button" type="button" data-ontology-graph-fit="abox" title="ABox 그래프 맞춤" aria-label="ABox 그래프 맞춤">⌖</button>',
+      '<button class="icon-button" type="button" data-ontology-graph-layout="abox" title="ABox 자동 배치" aria-label="ABox 자동 배치">↺</button>',
+      '</div>',
+      '</div>',
+      '<div class="ontology-graph-meta">',
       '<span>' + escapeHtml(aboxEntities.length) + ' entity rows · ' + escapeHtml(aboxRelations.length) + ' relation rows · ' + escapeHtml((beliefs || []).length) + ' beliefs</span>',
       '</div>',
-      renderOntologyGraphSvg("abox", Object.keys(graph.nodesById).map(function (key) { return graph.nodesById[key]; }), graph.edges, graph.nodesById, 960, 500),
+      '<div class="ontology-cytoscape" data-ontology-cytoscape="abox"><span>그래프 엔진 초기화 중</span></div>',
       '<div class="ontology-graph-caption">',
       '<span>실선은 현재 ABox relation row입니다.</span>',
       '<span>점선은 evidence가 runtime rule을 거쳐 belief/opinion row로 파생되는 관계입니다.</span>',
@@ -8696,53 +8714,204 @@
     return label.replace("USES_EVIDENCE_FROM", "USES_EVIDENCE").replace("REQUESTS_OPINION_FROM", "REQUESTS_OPINION");
   }
 
-  function renderOntologyGraphSvg(name, nodes, edges, nodesById, width, height) {
-    var markerId = "ontology-" + name + "-arrow";
-    return [
-      '<svg class="ontology-graph-svg ontology-' + escapeHtml(name) + '-svg" viewBox="0 0 ' + escapeHtml(width) + ' ' + escapeHtml(height) + '" role="img" aria-label="' + escapeHtml(name) + ' ontology relation graph">',
-      '<defs><marker id="' + escapeHtml(markerId) + '" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z"></path></marker></defs>',
-      '<g class="ontology-graph-edges">',
-      (edges || []).map(function (edge) { return renderOntologyGraphEdge(edge, nodesById, markerId); }).join(""),
-      '</g>',
-      '<g class="ontology-graph-nodes">',
-      (nodes || []).map(renderOntologyGraphNode).join(""),
-      '</g>',
-      '</svg>'
-    ].join("");
+  function ontologyGraphClass(value) {
+    return String(value || "entity").toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
   }
 
-  function renderOntologyGraphEdge(edge, nodesById, markerId) {
-    var source = nodesById[edge.source];
-    var target = nodesById[edge.target];
-    if (!source || !target) return "";
-    var sameColumn = Math.abs(Number(source.x || 0) - Number(target.x || 0)) < 24;
-    var curve = sameColumn ? 58 : Math.max(40, Math.min(110, Math.abs(Number(target.x || 0) - Number(source.x || 0)) * 0.48));
-    var controlA = sameColumn ? (Number(source.x || 0) + curve) + " " + Number(source.y || 0) : (Number(source.x || 0) + curve) + " " + Number(source.y || 0);
-    var controlB = sameColumn ? (Number(target.x || 0) + curve) + " " + Number(target.y || 0) : (Number(target.x || 0) - curve) + " " + Number(target.y || 0);
-    var d = "M" + Number(source.x || 0) + " " + Number(source.y || 0) + " C" + controlA + ", " + controlB + ", " + Number(target.x || 0) + " " + Number(target.y || 0);
-    var labelX = sameColumn ? Number(source.x || 0) + curve + 12 : (Number(source.x || 0) + Number(target.x || 0)) / 2;
-    var labelY = (Number(source.y || 0) + Number(target.y || 0)) / 2 - 7;
-    return [
-      '<g class="ontology-graph-edge ' + escapeHtml(edge.kind || "assertion") + '">',
-      '<path d="' + escapeHtml(d) + '" marker-end="url(#' + escapeHtml(markerId) + ')"></path>',
-      '<text x="' + escapeHtml(labelX) + '" y="' + escapeHtml(labelY) + '">' + escapeHtml(ontologyShortText(ontologyEdgeLabel(edge.type), 18)) + '</text>',
-      '<title>' + escapeHtml((source.label || source.id) + " " + (edge.type || "") + " " + (target.label || target.id)) + '</title>',
-      '</g>'
-    ].join("");
+  function ontologyCyColor(name, fallback) {
+    var styles = window.getComputedStyle ? window.getComputedStyle(document.documentElement) : null;
+    var value = styles ? String(styles.getPropertyValue(name) || "").trim() : "";
+    return value || fallback;
   }
 
-  function renderOntologyGraphNode(node) {
-    var width = node.kind === "rule" ? 58 : 116;
-    var height = node.kind === "rule" ? 34 : 38;
-    var x = Number(node.x || 0) - width / 2;
-    var y = Number(node.y || 0) - height / 2;
+  function ontologyCyElements(nodesById, edges) {
+    var nodes = Object.keys(nodesById || {}).map(function (id) {
+      var node = nodesById[id] || {};
+      return {
+        group: "nodes",
+        data: {
+          id: id,
+          label: ontologyShortText(node.label || id, node.kind === "rule" ? 10 : 18),
+          fullLabel: node.label || id,
+          kind: node.kind || "entity",
+          title: node.title || node.label || id
+        },
+        position: {
+          x: Number(node.x || 0),
+          y: Number(node.y || 0)
+        },
+        classes: "node-" + ontologyGraphClass(node.kind)
+      };
+    });
+    var seen = {};
+    var edgeItems = (edges || []).filter(function (edge) {
+      return edge && nodesById[edge.source] && nodesById[edge.target];
+    }).map(function (edge, index) {
+      var key = [edge.source, edge.type, edge.target, edge.kind, index].join("|");
+      var id = "edge:" + key;
+      if (seen[id]) id += ":" + index;
+      seen[id] = true;
+      return {
+        group: "edges",
+        data: {
+          id: id,
+          source: edge.source,
+          target: edge.target,
+          label: ontologyShortText(ontologyEdgeLabel(edge.type), 18),
+          fullLabel: edge.type || "",
+          kind: edge.kind || "assertion"
+        },
+        classes: "edge-" + ontologyGraphClass(edge.kind)
+      };
+    });
+    return nodes.concat(edgeItems);
+  }
+
+  function ontologyCurrentGraphData() {
+    var snapshot = state.snapshot || {};
+    var decision = snapshot.tossDecision || {};
+    var strategy = decision.ontologyStrategy || {};
+    var tbox = strategy.tbox || {};
+    var entities = Array.isArray(strategy.entities) ? strategy.entities : [];
+    var relations = Array.isArray(strategy.relations) ? strategy.relations : [];
+    var evidence = Array.isArray(strategy.evidence) ? strategy.evidence : [];
+    var beliefs = Array.isArray(strategy.beliefs) ? strategy.beliefs : [];
+    var opinions = Array.isArray(strategy.opinions) ? strategy.opinions : [];
+    var aboxEntities = ontologyAboxEntities(entities);
+    var aboxRelations = ontologyAboxRelations(relations);
+    var entityLabels = ontologyEntityLabelMap(entities);
+    var tboxNodes = ontologyTboxGraphNodes(tbox);
+    var tboxEdges = ontologyTboxGraphEdges(tbox);
+    var aboxGraph = ontologyBuildAboxGraph(aboxEntities, aboxRelations, evidence, beliefs, opinions, entityLabels);
+    return {
+      tbox: { elements: ontologyCyElements(tboxNodes, tboxEdges) },
+      abox: { elements: ontologyCyElements(aboxGraph.nodesById, aboxGraph.edges) }
+    };
+  }
+
+  function ontologyCytoscapeStyle() {
+    var ink = ontologyCyColor("--ink", "#172033");
+    var muted = ontologyCyColor("--muted", "#64748b");
+    var panel = ontologyCyColor("--panel", "#ffffff");
+    var blue = ontologyCyColor("--blue", "#2563eb");
+    var green = ontologyCyColor("--green", "#059669");
+    var red = ontologyCyColor("--red", "#dc2626");
+    var amber = ontologyCyColor("--amber", "#d97706");
+    var violet = ontologyCyColor("--violet", "#7c3aed");
+    var line = ontologyCyColor("--line", "#d8e0ea");
     return [
-      '<g class="ontology-graph-node ' + escapeHtml(node.kind || "entity") + '" transform="translate(' + escapeHtml(x) + ' ' + escapeHtml(y) + ')">',
-      '<rect width="' + escapeHtml(width) + '" height="' + escapeHtml(height) + '" rx="8"></rect>',
-      '<text x="' + escapeHtml(width / 2) + '" y="' + escapeHtml(height / 2 + 4) + '" text-anchor="middle">' + escapeHtml(ontologyShortText(node.label, node.kind === "rule" ? 8 : 15)) + '</text>',
-      '<title>' + escapeHtml(node.title || node.label || node.id) + '</title>',
-      '</g>'
-    ].join("");
+      {
+        selector: "node",
+        style: {
+          "shape": "round-rectangle",
+          "width": 112,
+          "height": 38,
+          "background-color": panel,
+          "border-width": 1.2,
+          "border-color": line,
+          "label": "data(label)",
+          "color": ink,
+          "font-size": 11,
+          "font-weight": 800,
+          "text-valign": "center",
+          "text-halign": "center",
+          "text-wrap": "ellipsis",
+          "text-max-width": 96
+        }
+      },
+      { selector: ".node-rule", style: { "width": 58, "height": 34, "background-color": "#fff7ed", "border-color": amber, "color": amber } },
+      { selector: ".node-schema, .node-portfolio, .node-stock", style: { "background-color": "#eff6ff", "border-color": blue } },
+      { selector: ".node-sector, .node-market, .node-currency, .node-cash", style: { "background-color": "#ecfdf5", "border-color": green } },
+      { selector: ".node-risk", style: { "background-color": "#fef2f2", "border-color": red } },
+      { selector: ".node-evidence, .node-belief, .node-opinion, .node-review, .node-model", style: { "background-color": "#f5f3ff", "border-color": violet } },
+      {
+        selector: "edge",
+        style: {
+          "curve-style": "bezier",
+          "target-arrow-shape": "triangle",
+          "target-arrow-color": blue,
+          "line-color": blue,
+          "width": 1.35,
+          "label": "data(label)",
+          "font-size": 8,
+          "font-weight": 700,
+          "color": muted,
+          "text-background-color": panel,
+          "text-background-opacity": 0.88,
+          "text-background-padding": 2,
+          "text-rotation": "autorotate",
+          "text-margin-y": -6
+        }
+      },
+      { selector: ".edge-schema", style: { "line-color": blue, "target-arrow-color": blue, "width": 1.8 } },
+      { selector: ".edge-assertion", style: { "line-color": green, "target-arrow-color": green } },
+      { selector: ".edge-derived", style: { "line-color": violet, "target-arrow-color": violet, "line-style": "dashed" } },
+      { selector: ".edge-rule", style: { "line-color": amber, "target-arrow-color": amber, "line-style": "dashed" } },
+      { selector: ":selected", style: { "border-width": 3, "border-color": ink, "line-color": ink, "target-arrow-color": ink } }
+    ];
+  }
+
+  function destroyOntologyCytoscapeGraphs() {
+    Object.keys(ontologyGraphInstances || {}).forEach(function (key) {
+      var instance = ontologyGraphInstances[key];
+      if (instance && typeof instance.destroy === "function") instance.destroy();
+    });
+    ontologyGraphInstances = {};
+  }
+
+  function initOntologyCytoscapeGraphs() {
+    var containers = Array.prototype.slice.call(app.querySelectorAll("[data-ontology-cytoscape]"));
+    if (!containers.length) return;
+    if (!window.cytoscape) {
+      containers.forEach(function (container) {
+        container.innerHTML = '<span>Cytoscape.js를 불러오지 못했습니다.</span>';
+      });
+      return;
+    }
+    var graphs = ontologyCurrentGraphData();
+    containers.forEach(function (container) {
+      var graphId = container.getAttribute("data-ontology-cytoscape") || "";
+      var graph = graphs[graphId];
+      if (!graph || !graph.elements.length) {
+        container.innerHTML = '<span>표시할 그래프 관계가 없습니다.</span>';
+        return;
+      }
+      container.innerHTML = "";
+      ontologyGraphInstances[graphId] = window.cytoscape({
+        container: container,
+        elements: graph.elements,
+        style: ontologyCytoscapeStyle(),
+        layout: { name: "preset", fit: true, padding: 28 },
+        minZoom: 0.25,
+        maxZoom: 2.4,
+        wheelSensitivity: 0.18,
+        boxSelectionEnabled: false,
+        autoungrabify: false
+      });
+      ontologyGraphInstances[graphId].ready(function () {
+        this.fit(undefined, 30);
+      });
+    });
+  }
+
+  function fitOntologyGraph(graphId) {
+    var instance = ontologyGraphInstances[graphId];
+    if (!instance) return;
+    instance.fit(undefined, 30);
+    instance.center();
+  }
+
+  function layoutOntologyGraph(graphId) {
+    var instance = ontologyGraphInstances[graphId];
+    if (!instance) return;
+    instance.layout({
+      name: graphId === "abox" ? "cose" : "breadthfirst",
+      directed: graphId === "tbox",
+      padding: 36,
+      animate: true,
+      animationDuration: 260,
+      fit: true
+    }).run();
   }
 
   function renderOntologyBoxSummary(tbox, abox, worldview, strategy) {
@@ -11250,6 +11419,18 @@
         if (!state.refreshing) load();
       });
     }
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-ontology-graph-fit]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        fitOntologyGraph(button.getAttribute("data-ontology-graph-fit"));
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-ontology-graph-layout]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        layoutOntologyGraph(button.getAttribute("data-ontology-graph-layout"));
+      });
+    });
 
     Array.prototype.slice.call(app.querySelectorAll("[data-tab]")).forEach(function (button) {
       button.addEventListener("click", function () {

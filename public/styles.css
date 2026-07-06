@@ -4483,6 +4483,7 @@ h3 {
   background: var(--panel-soft);
 }
 
+.ontology-cytoscape,
 .ontology-graph-svg {
   display: block;
   width: 100%;
@@ -4493,8 +4494,47 @@ h3 {
   background: var(--input);
 }
 
+.ontology-cytoscape {
+  position: relative;
+  height: min(64vh, 560px);
+  min-height: 430px;
+  overflow: hidden;
+}
+
+.ontology-cytoscape span {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.ontology-abox-graph .ontology-cytoscape,
 .ontology-abox-svg {
   min-height: 470px;
+}
+
+.ontology-graph-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.ontology-graph-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ontology-graph-meta span {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+  overflow-wrap: anywhere;
 }
 
 .ontology-graph-svg marker path {

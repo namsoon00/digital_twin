@@ -49,6 +49,8 @@
     "start": "python3 python_service/service.py web",
     "test": "npm run check && npm run smoke && npm run python:test"
   },
-  "dependencies": {},
+  "dependencies": {
+    "cytoscape": "^3.34.0"
+  },
   "devDependencies": {}
 }

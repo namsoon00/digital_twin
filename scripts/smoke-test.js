@@ -897,7 +897,7 @@ function checkFrontendAdminRender() {
     assertOk(ontologyHtml.indexOf("ontology-view") >= 0 && ontologyHtml.indexOf("Ontology Control") >= 0, "온톨로지 상위 탭이 렌더링되지 않았습니다.");
     assertOk(ontologyHtml.indexOf("TBox") >= 0 && ontologyHtml.indexOf("ABox") >= 0, "온톨로지 탭에 TBox/ABox 요약이 없습니다.");
     assertOk(ontologyHtml.indexOf("ontology-control-strip") >= 0 && ontologyHtml.indexOf("Relation Matrix") >= 0 && ontologyHtml.indexOf("relation-matrix") >= 0, "온톨로지 탭에 추론 순서나 관계 매트릭스가 없습니다.");
-    assertOk(ontologyHtml.indexOf("TBox Relation Graph") >= 0 && ontologyHtml.indexOf("ABox Runtime Relation Graph") >= 0 && ontologyHtml.indexOf("ontology-graph-svg") >= 0, "온톨로지 TBox/ABox 관계 그래프가 렌더링되지 않았습니다.");
+    assertOk(ontologyHtml.indexOf("TBox Relation Graph") >= 0 && ontologyHtml.indexOf("ABox Runtime Relation Graph") >= 0 && ontologyHtml.indexOf("ontology-cytoscape") >= 0, "온톨로지 TBox/ABox Cytoscape 관계 그래프가 렌더링되지 않았습니다.");
     assertOk(ontologyHtml.indexOf("ontology-relation-table") >= 0 && ontologyHtml.indexOf("ontology-rule-list") >= 0, "온톨로지 관계/규칙 보조 표가 렌더링되지 않았습니다.");
     assertOk(ontologyHtml.indexOf("Relational Row Projection") >= 0 && ontologyHtml.indexOf("Rule Trace") >= 0, "온톨로지 탭에 TBox/ABox 관계형 규칙 추적이 없습니다.");
     assertOk(code.indexOf("writeStrategySectionHistory") >= 0 && code.indexOf("strategySectionUrl") >= 0, "투자전략 내부 탭 URL 동기화 경로가 없습니다.");

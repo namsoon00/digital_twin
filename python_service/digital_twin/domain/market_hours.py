@@ -75,6 +75,7 @@ def default_market_hours_enabled(message_type: str) -> bool:
     return str(message_type or "") in {
         "modelBuy",
         "modelSell",
+        "watchlistBuyCandidate",
         "watchlistQuote",
         "watchlistQuotePending",
         "holdingTiming",

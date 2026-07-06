@@ -111,6 +111,8 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
         model_events = self.model_score_events(snapshot)
         events.extend(self.only_rule("modelBuy", model_events) or self.model_sample_events(snapshot, "modelBuy"))
         events.extend(self.only_rule("modelSell", model_events) or self.model_sample_events(snapshot, "modelSell"))
+        watchlist_snapshot = self.snapshot_with_sample_watchlist(snapshot)
+        events.extend(self.only_rule("watchlistBuyCandidate", model_events) or self.model_sample_events(watchlist_snapshot, "watchlistBuyCandidate"))
 
         state = snapshot.to_monitor_state()
         symbols = sorted(state.get("positions", {}).keys())
@@ -142,7 +144,6 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
             ))
 
         events.extend(self.only_rule("monitorCashChange", self.cash_events(snapshot, self.previous_with_cash_delta(state))))
-        watchlist_snapshot = self.snapshot_with_sample_watchlist(snapshot)
         events.extend(self.only_rule("watchlistQuote", self.watchlist_quote_events(
             watchlist_snapshot,
             self.previous_with_watchlist_delta(watchlist_snapshot.to_monitor_state()),

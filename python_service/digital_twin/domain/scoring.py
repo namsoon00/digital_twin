@@ -4,6 +4,7 @@ from typing import Iterable, List
 IMPORTANT_NOTIFICATION_RULES = {
     "modelBuy",
     "modelSell",
+    "watchlistBuyCandidate",
     "holdingTiming",
     "monitorPositionChange",
     "monitorPnlChange",
@@ -20,6 +21,7 @@ IMPORTANT_NOTIFICATION_RULES = {
 ACTIONABLE_NOTIFICATION_RULES = {
     "modelBuy",
     "modelSell",
+    "watchlistBuyCandidate",
     "holdingTiming",
     "monitorDecisionChange",
     "watchlistQuote",
@@ -51,6 +53,7 @@ DEFAULT_SIGNAL_FALLBACK_TERMS = {
     "important_terms": [
         "판단 변화",
         "모델 매수",
+        "관심종목 매수",
         "모델 매도",
         "내 매수 기준",
         "내 매도 기준",

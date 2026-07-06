@@ -860,6 +860,42 @@ class PythonServiceTests(unittest.TestCase):
         self.assertRegex(message, r"상태 .+ \([0-9.]+점\)")
         self.assertTrue(any("상태 " in item and "점)" in item for item in event.criteria))
 
+    def test_watchlist_buy_candidate_uses_dedicated_message_type(self):
+        watch = normalize_position({
+            "symbol": "AAPL",
+            "name": "Apple",
+            "market": "US",
+            "currency": "USD",
+            "currentPrice": 185,
+            "volume": 1200000,
+            "volumeRatio": 1.4,
+            "sector": "AI/플랫폼",
+        })
+        portfolio = portfolio_summary([])
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "ok",
+            utc_now_iso(),
+            portfolio,
+            [],
+            [],
+            watchlist=[watch],
+        )
+
+        events = RealtimeMonitor({
+            "buyScoreFormula": "80",
+            "alertThresholds": "modelBuyScore=99\nwatchlistBuyScore=74",
+        }).events_for_snapshot(snapshot, {})
+
+        candidate = next(event for event in events if event.rule == "watchlistBuyCandidate")
+        self.assertEqual("AAPL", candidate.symbol)
+        self.assertIn("관심종목 매수 후보", candidate.message())
+        self.assertTrue(any("관심종목 매수 기준" in item for item in candidate.criteria))
+        self.assertFalse(any(event.rule == "modelBuy" for event in events))
+
     def test_realtime_monitor_recomputes_decisions_with_user_formulas(self):
         position = normalize_position({
             "symbol": "005930",
@@ -1281,8 +1317,10 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("AAPL", symbols)
         self.assertEqual(1, DEFAULT_ALERT_RULES["modelBuy"])
         self.assertEqual(1, DEFAULT_ALERT_RULES["modelSell"])
+        self.assertEqual(1, DEFAULT_ALERT_RULES["watchlistBuyCandidate"])
         self.assertEqual(10, DEFAULT_CADENCE["modelBuy"])
         self.assertEqual(10, DEFAULT_CADENCE["modelSell"])
+        self.assertEqual(10, DEFAULT_CADENCE["watchlistBuyCandidate"])
 
     def test_symbol_universe_parsers_and_store_support_market_catalog(self):
         nasdaq_text = "\n".join([
@@ -1480,8 +1518,11 @@ class PythonServiceTests(unittest.TestCase):
         catalog = public_message_catalog()
 
         self.assertEqual("모델 매수", MESSAGE_TYPE_LABELS["modelBuy"])
+        self.assertEqual("관심종목 매수 후보", MESSAGE_TYPE_LABELS["watchlistBuyCandidate"])
         self.assertEqual(10, catalog["modelBuy"]["cadenceMinutes"])
+        self.assertEqual(10, catalog["watchlistBuyCandidate"]["cadenceMinutes"])
         self.assertTrue(catalog["modelBuy"]["monitoring"])
+        self.assertTrue(catalog["watchlistBuyCandidate"]["monitoring"])
         self.assertTrue(catalog["workHandoff"]["system"])
 
     def test_flow_lens_mock_contract_is_python_native(self):
@@ -1532,6 +1573,7 @@ class PythonServiceTests(unittest.TestCase):
             {
                 "modelBuy",
                 "modelSell",
+                "watchlistBuyCandidate",
                 "watchlistQuote",
                 "watchlistQuotePending",
                 "holdingTiming",

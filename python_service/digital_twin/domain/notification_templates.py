@@ -121,6 +121,10 @@ DEFAULT_NOTIFICATION_TEMPLATES = {
         "template": DEFAULT_TEMPLATE,
         "description": "모델 매도 조건 알림",
     },
+    "watchlistBuyCandidate": {
+        "template": DEFAULT_TEMPLATE,
+        "description": "관심종목 매수 후보 알림",
+    },
     "watchlistQuote": {
         "template": DEFAULT_TEMPLATE,
         "description": "관심종목 시세 수집 알림",
@@ -386,7 +390,7 @@ def inferred_criterion_lines(event: AlertEvent, raw_lines: List[str], trigger_su
     status = data_value(raw_lines, "상태")
     profit = data_value(raw_lines, "손익")
 
-    if rule == "modelBuy":
+    if rule in {"modelBuy", "watchlistBuyCandidate"}:
         score = data_value(raw_lines, "매수 판단") or data_value(raw_lines, "모델 매수 점수")
         if score:
             details.append("감지: " + score)
@@ -710,6 +714,7 @@ def friendly_score_reason(value: object) -> str:
 MODELING_LABELS = {
     "modelBuy": "매수 판단 모델",
     "modelSell": "매도 판단 모델",
+    "watchlistBuyCandidate": "관심종목 매수 후보 모델",
     "watchlistQuote": "관심종목 시세 변화 감지 모델",
     "watchlistQuotePending": "관심종목 시세 수집 대기 모델",
     "holdingTiming": "보유 타이밍 모델",
@@ -734,6 +739,7 @@ MODELING_LABELS = {
 MODEL_DATA_HINTS = {
     "modelBuy": "토스 시세·수급·추세·가치평가 데이터",
     "modelSell": "토스 시세·수급·추세·손절/가치평가 데이터",
+    "watchlistBuyCandidate": "관심종목 시세·수급·추세·가치평가 데이터",
     "holdingTiming": "보유 스냅샷, 손익률, 수급, 추세, 매도 가능 수량",
     "monitorDecisionChange": "이전/현재 보유 판단 점수와 보유 스냅샷",
     "monitorTrendChange": "현재가와 이동평균선 거리",
@@ -781,7 +787,7 @@ def selected_holding_formula_key(context: Dict[str, object]) -> str:
 
 def strategy_formula_line(context: Dict[str, object]) -> str:
     message_type = context_message_type(context)
-    if message_type == "modelBuy":
+    if message_type in {"modelBuy", "watchlistBuyCandidate"}:
         return "판단 공식: 매수 공식(buyScoreFormula)"
     if message_type == "modelSell":
         return "판단 공식: 매도 공식(sellScoreFormula)"
@@ -839,7 +845,7 @@ def investment_score_lines(context: Dict[str, object]) -> List[str]:
     previous_value = data_value(raw_lines, "이전")
     current_value = data_value(raw_lines, "현재")
 
-    if message_type == "modelBuy" and has_score_value(buy_value):
+    if message_type in {"modelBuy", "watchlistBuyCandidate"} and has_score_value(buy_value):
         lines.append(
             "매수 판단 점수: 체결 흐름, 방향 있는 거래량, 매수 비중, 호가 균형, 가격 움직임, 이동평균 흐름, 투자자 수급, 적정가 대비를 합쳐 0~100점으로 계산합니다. 점수가 높을수록 매수 후보에 가깝습니다."
         )

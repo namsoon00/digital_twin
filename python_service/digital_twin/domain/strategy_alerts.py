@@ -8,15 +8,16 @@ class StrategyAlertMixin:
     def model_score_events(self, snapshot: AccountSnapshot) -> List[AlertEvent]:
         events: List[AlertEvent] = []
         buy_threshold = float(self.thresholds.get("modelBuyScore", 0))
+        watchlist_buy_threshold = float(self.thresholds.get("watchlistBuyScore", buy_threshold) or buy_threshold)
         sell_threshold = float(self.thresholds.get("modelSellScore", 0))
-        watch_symbols = {item.symbol.upper() for item in snapshot.watchlist if item.symbol}
-        items = [item for item in snapshot.positions + snapshot.watchlist if not item.is_cash() and item.symbol]
-        for position in items:
+        holding_symbols = {item.symbol.upper() for item in snapshot.positions if item.symbol and not item.is_cash()}
+        watchlist_items = [item for item in snapshot.watchlist if item.symbol and item.symbol.upper() not in holding_symbols]
+        items = [(item, "보유") for item in snapshot.positions if item.symbol and not item.is_cash()] + [(item, "관심") for item in watchlist_items]
+        for position, source in items:
             if not (position.current_price or position.market_value or position.volume or position.trade_strength):
                 continue
             scores = self.strategy_model.score(position.to_dict())
             symbol = position.symbol.upper()
-            source = "관심" if symbol in watch_symbols else "보유"
             common_lines = [
                 source + " 종목",
                 "현재 " + money(position.current_price, position.currency),
@@ -24,7 +25,27 @@ class StrategyAlertMixin:
                 self.trend_context_line(position.to_dict()),
             ]
             buy_score = float(scores.get("buyScore") or 0)
-            if buy_threshold and buy_score >= buy_threshold:
+            if source == "관심" and watchlist_buy_threshold and buy_score >= watchlist_buy_threshold:
+                buy_phrase = self.model_score_phrase("buy", buy_score)
+                events.append(AlertEvent(
+                    snapshot.account_id,
+                    snapshot.account_label,
+                    "WATCH",
+                    "watchlistBuyCandidate",
+                    ":".join([snapshot.account_id, "watchlist-buy", symbol, str(round(buy_score, 1))]),
+                    position.name,
+                    ["관심종목 매수 후보 " + buy_phrase, *common_lines],
+                    symbol,
+                    criteria=self.criteria(
+                        "관심종목 매수 기준 이상 (" + self.threshold_text("watchlistBuyScore", "점") + ")",
+                        buy_phrase,
+                    ),
+                    metadata={
+                        "modelBuyScore": round(buy_score, 1),
+                        "watchlistBuyScore": round(buy_score, 1),
+                    },
+                ))
+            if source != "관심" and buy_threshold and buy_score >= buy_threshold:
                 buy_phrase = self.model_score_phrase("buy", buy_score)
                 events.append(AlertEvent(
                     snapshot.account_id,
@@ -41,7 +62,7 @@ class StrategyAlertMixin:
                     ),
                 ))
             sell_score = float(scores.get("sellScore") or 0)
-            if symbol not in watch_symbols and sell_threshold and sell_score >= sell_threshold:
+            if source != "관심" and sell_threshold and sell_score >= sell_threshold:
                 sell_phrase = self.model_score_phrase("sell", sell_score)
                 events.append(AlertEvent(
                     snapshot.account_id,
@@ -67,7 +88,7 @@ class StrategyAlertMixin:
         candidates = [item for item in snapshot.watchlist + snapshot.positions if not item.is_cash() and item.symbol]
         if not candidates:
             return []
-        position = candidates[0] if rule == "modelBuy" else next((item for item in snapshot.positions if not item.is_cash() and item.symbol), candidates[0])
+        position = candidates[0] if rule in {"modelBuy", "watchlistBuyCandidate"} else next((item for item in snapshot.positions if not item.is_cash() and item.symbol), candidates[0])
         scores = self.strategy_model.score(position.to_dict())
         symbol = position.symbol.upper()
         if rule == "modelSell":
@@ -93,6 +114,31 @@ class StrategyAlertMixin:
                 ),
             )]
         buy_phrase = self.model_score_phrase("buy", float(scores.get("buyScore") or 0))
+        if rule == "watchlistBuyCandidate":
+            return [AlertEvent(
+                snapshot.account_id,
+                snapshot.account_label,
+                "WATCH",
+                "watchlistBuyCandidate",
+                ":".join([snapshot.account_id, "watchlist-buy-test", symbol]),
+                position.name,
+                [
+                    "관심종목 매수 후보 " + buy_phrase,
+                    "현재 데이터 기준 템플릿 테스트",
+                    "현재 " + money(position.current_price, position.currency),
+                    self.flow_context_line(position.to_dict()),
+                    self.trend_context_line(position.to_dict()),
+                ],
+                symbol,
+                criteria=self.criteria(
+                    "관심종목 매수 기준 이상 (" + self.threshold_text("watchlistBuyScore", "점") + ")",
+                    buy_phrase,
+                ),
+                metadata={
+                    "modelBuyScore": round(float(scores.get("buyScore") or 0), 1),
+                    "watchlistBuyScore": round(float(scores.get("buyScore") or 0), 1),
+                },
+            )]
         return [AlertEvent(
             snapshot.account_id,
             snapshot.account_label,

@@ -43,6 +43,7 @@ CONDITION_TYPE_LABELS = [
 HIGH_SIGNAL_MESSAGE_TYPES = {
     "modelBuy",
     "modelSell",
+    "watchlistBuyCandidate",
     "holdingTiming",
     "monitorPositionChange",
     "monitorPnlChange",
@@ -132,7 +133,7 @@ def default_similarity_penalty(message_type: str) -> int:
 
 
 def default_similarity_bypass_score_delta(message_type: str) -> int:
-    return 15 if str(message_type or "") in {"modelBuy", "modelSell", "monitorDecisionChange"} else 20
+    return 15 if str(message_type or "") in {"modelBuy", "modelSell", "watchlistBuyCandidate", "monitorDecisionChange"} else 20
 
 
 def default_state_cooldown_enabled(message_type: str) -> bool:

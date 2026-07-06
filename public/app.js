@@ -83,6 +83,7 @@
       "priceTrim=1",
       "modelBuy=1",
       "modelSell=1",
+      "watchlistBuyCandidate=1",
       "modelScoreGap=1",
       "modelVersionDrift=1",
       "flowVolume=1",
@@ -125,6 +126,7 @@
       "priceTrim=10",
       "modelBuy=10",
       "modelSell=10",
+      "watchlistBuyCandidate=10",
       "modelScoreGap=10",
       "modelVersionDrift=10",
       "flowVolume=10",
@@ -164,6 +166,7 @@
     alertThresholds: [
       "modelBuyScore=74",
       "modelSellScore=72",
+      "watchlistBuyScore=74",
       "modelScoreGap=15",
       "volumeRatioHigh=2",
       "buyShareHigh=65",
@@ -282,6 +285,7 @@
     { key: "priceTrim", group: "가격", label: "분할매도 기준 접근", description: "현재가가 1차 또는 2차 매도 기준에 접근할 때" },
     { key: "modelBuy", group: "모델", label: "내 모델 매수", description: "내 모델 매수 점수가 기준을 넘을 때" },
     { key: "modelSell", group: "모델", label: "내 모델 매도", description: "내 모델 매도 점수가 기준을 넘을 때" },
+    { key: "watchlistBuyCandidate", group: "관심종목", label: "관심종목 매수 후보", description: "관심 종목의 매수 점수가 기준을 넘을 때" },
     { key: "modelScoreGap", group: "모델", label: "모델 방향성", description: "매수와 매도 점수 차이가 크게 벌어질 때" },
     { key: "modelVersionDrift", group: "모델", label: "모델 버전 변화", description: "저장한 실험 버전과 현재 모델 점수가 크게 달라질 때" },
     { key: "flowVolume", group: "수급", label: "거래량 급증", description: "거래량 배율이 설정값 이상으로 커질 때" },
@@ -321,6 +325,7 @@
   var alertThresholdCatalog = [
     { key: "modelBuyScore", label: "모델 매수 점수", unit: "점", step: "1" },
     { key: "modelSellScore", label: "모델 매도 점수", unit: "점", step: "1" },
+    { key: "watchlistBuyScore", label: "관심종목 매수 점수", unit: "점", step: "1" },
     { key: "modelScoreGap", label: "모델 점수 차이", unit: "점", step: "1" },
     { key: "volumeRatioHigh", label: "거래량 배율", unit: "x", step: "0.1" },
     { key: "buyShareHigh", label: "매수 체결 비중", unit: "%", step: "1" },
@@ -1200,7 +1205,7 @@
     var type = String(messageType || "");
     var systemTypes = ["default", "modelReview", "workHandoff", "notification"];
     var highSignalTypes = [
-      "modelBuy", "modelSell", "holdingTiming", "monitorPositionChange", "monitorPnlChange", "monitorValueChange",
+      "modelBuy", "modelSell", "watchlistBuyCandidate", "holdingTiming", "monitorPositionChange", "monitorPnlChange", "monitorValueChange",
       "monitorTrendChange", "monitorCashChange", "monitorDecisionChange", "externalEquityMove", "externalCryptoMove",
       "externalMacroShift", "externalDartDisclosure"
     ];
@@ -1239,7 +1244,7 @@
   }
 
   function defaultNotificationRuleSimilarityBypassDelta(messageType) {
-    return ["modelBuy", "modelSell", "monitorDecisionChange"].indexOf(String(messageType || "")) >= 0 ? 15 : 20;
+    return ["modelBuy", "modelSell", "watchlistBuyCandidate", "monitorDecisionChange"].indexOf(String(messageType || "")) >= 0 ? 15 : 20;
   }
 
   function defaultNotificationRuleSimilarityBypassConditions(messageType) {
@@ -1316,6 +1321,7 @@
     return [
       "modelBuy",
       "modelSell",
+      "watchlistBuyCandidate",
       "watchlistQuote",
       "watchlistQuotePending",
       "holdingTiming",
@@ -1985,6 +1991,13 @@
         severity: "ALERT",
         lines: ["매도 판단 분할매도 압력 (74점)", "목표 수익률 도달", "20일선 이탈 여부 확인"],
         criteria: ["설정: 모델 매도 기준 분할매도 압력 이상 (72점)", "감지: 분할매도 압력 (74점)"]
+      },
+      watchlistBuyCandidate: {
+        title: "Apple 관심종목 매수 후보",
+        symbol: "AAPL",
+        severity: "WATCH",
+        lines: ["관심종목 매수 후보 (78점)", "관심 종목", "현재 $185", "거래량과 이동평균이 기준 이상"],
+        criteria: ["설정: 관심종목 매수 기준 이상 (74점)", "감지: 매수 후보 (78점)"]
       },
       watchlistQuote: {
         title: "엔비디아",
@@ -3695,6 +3708,7 @@
     var modelThresholds = parseNumberAssignments(next.modelDecisionThresholds, parseNumberAssignments(defaultSettings.modelDecisionThresholds));
     var thresholds = parseNumberAssignments(next.alertThresholds, parseNumberAssignments(defaultSettings.alertThresholds));
     thresholds.modelBuyScore = modelThresholds.modelBuy;
+    thresholds.watchlistBuyScore = modelThresholds.modelBuy;
     thresholds.modelSellScore = modelThresholds.modelSell;
     next.alertThresholds = serializeNumberAssignments(thresholds, assignmentOrder("alertThresholds"));
     return next;

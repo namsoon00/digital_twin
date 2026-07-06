@@ -1080,6 +1080,7 @@ async function checkNormalMode(port, context) {
   assertOk(Object.prototype.hasOwnProperty.call(settingsPayload.settings, "modelDecisionThresholds"), "설정 API에 모델 판단 기준 필드가 없습니다.");
   assertOk(settingsPayload.settings.modelDecisionThresholds.indexOf("modelBuy=74") >= 0, "설정 API의 모델 기본 판단 기준이 비어 있습니다.");
   assertOk(settingsPayload.settings.alertThresholds.indexOf("modelBuyScore=74") >= 0, "설정 API의 모델 알림 기준이 비어 있습니다.");
+  assertOk(settingsPayload.settings.alertThresholds.indexOf("watchlistBuyScore=74") >= 0, "설정 API의 관심종목 매수 기준이 비어 있습니다.");
   assertOk(Object.prototype.hasOwnProperty.call(settingsPayload.settings, "appTheme"), "설정 API에 화면 테마 필드가 없습니다.");
   assertOk(settingsPayload.settings.watchlistSymbols.indexOf("TSLA") >= 0, "기본 관심 종목에 TSLA가 없습니다.");
   assertOk(settingsPayload.settings.watchlistSymbols.indexOf("AAPL") >= 0, "기본 관심 종목에 AAPL이 없습니다.");
@@ -1129,6 +1130,7 @@ async function checkNormalMode(port, context) {
   assertOk(savedSettingsPayload.settings.alertRules.indexOf("priceStop=1") >= 0, "저장된 알림 규칙이 응답에 없습니다.");
   assertOk(savedSettingsPayload.settings.modelDecisionThresholds.indexOf("modelBuy=75") >= 0, "저장된 모델 기준값이 응답에 없습니다.");
   assertOk(savedSettingsPayload.settings.alertThresholds.indexOf("modelBuyScore=75") >= 0, "모델 매수 기준이 알림 기준으로 동기화되지 않았습니다.");
+  assertOk(savedSettingsPayload.settings.alertThresholds.indexOf("watchlistBuyScore=75") >= 0, "관심종목 매수 기준이 모델 매수 기준과 동기화되지 않았습니다.");
   assertOk(savedSettingsPayload.settings.alertThresholds.indexOf("modelSellScore=70") >= 0, "모델 매도 기준이 알림 기준으로 동기화되지 않았습니다.");
   assertOk(savedSettingsPayload.settings.appTheme === "dark", "저장된 화면 테마 값이 응답에 없습니다.");
   assertOk(readSqliteSetting(context.serviceDbPath, "appTheme") === "dark", "화면 테마 설정이 SQLite DB에 저장되지 않았습니다.");
@@ -1145,6 +1147,7 @@ async function checkNormalMode(port, context) {
   assertOk(Array.isArray(templatesPayload.templates), "알림 템플릿 API templates가 배열이 아닙니다.");
   assertOk(templatesPayload.templates.some(function (item) { return item.messageType === "monitorHeartbeat"; }), "상태 확인 템플릿이 없습니다.");
   assertOk(templatesPayload.templates.some(function (item) { return item.messageType === "watchlistQuote"; }), "관심종목 시세 템플릿이 없습니다.");
+  assertOk(templatesPayload.templates.some(function (item) { return item.messageType === "watchlistBuyCandidate"; }), "관심종목 매수 후보 템플릿이 없습니다.");
   assertOk(Array.isArray(templatesPayload.variables) && templatesPayload.variables.indexOf("body") >= 0, "알림 템플릿 변수 목록이 없습니다.");
 
   const savedTemplate = await request(port, "/api/notification-templates", {

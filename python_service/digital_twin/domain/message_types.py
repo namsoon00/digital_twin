@@ -3,6 +3,7 @@ from typing import Dict, List
 
 MODEL_BUY = "modelBuy"
 MODEL_SELL = "modelSell"
+WATCHLIST_BUY_CANDIDATE = "watchlistBuyCandidate"
 WATCHLIST_QUOTE = "watchlistQuote"
 WATCHLIST_QUOTE_PENDING = "watchlistQuotePending"
 HOLDING_TIMING = "holdingTiming"
@@ -27,6 +28,7 @@ DEFAULT_MESSAGE = "default"
 MONITORING_MESSAGE_TYPES = [
     MODEL_BUY,
     MODEL_SELL,
+    WATCHLIST_BUY_CANDIDATE,
     WATCHLIST_QUOTE,
     WATCHLIST_QUOTE_PENDING,
     HOLDING_TIMING,
@@ -57,6 +59,7 @@ MIN_CADENCE_MINUTES = 10
 DEFAULT_ALERT_RULES = {
     MODEL_BUY: 1,
     MODEL_SELL: 1,
+    WATCHLIST_BUY_CANDIDATE: 1,
     WATCHLIST_QUOTE: 1,
     WATCHLIST_QUOTE_PENDING: 1,
     HOLDING_TIMING: 1,
@@ -78,6 +81,7 @@ DEFAULT_ALERT_RULES = {
 DEFAULT_ALERT_THRESHOLDS = {
     "modelBuyScore": 74,
     "modelSellScore": 72,
+    "watchlistBuyScore": 74,
     "watchlistPriceDelta": 3,
     "monitorPnlDelta": 2,
     "monitorValueDelta": 5,
@@ -95,6 +99,7 @@ DEFAULT_ALERT_THRESHOLDS = {
 DEFAULT_CADENCE = {
     MODEL_BUY: 10,
     MODEL_SELL: 10,
+    WATCHLIST_BUY_CANDIDATE: 10,
     WATCHLIST_QUOTE: 10,
     WATCHLIST_QUOTE_PENDING: 60,
     HOLDING_TIMING: 10,
@@ -116,6 +121,7 @@ DEFAULT_CADENCE = {
 MESSAGE_TYPE_LABELS = {
     MODEL_BUY: "모델 매수",
     MODEL_SELL: "모델 매도",
+    WATCHLIST_BUY_CANDIDATE: "관심종목 매수 후보",
     WATCHLIST_QUOTE: "관심종목 시세",
     WATCHLIST_QUOTE_PENDING: "관심종목 시세 대기",
     HOLDING_TIMING: "보유 타이밍",
@@ -137,6 +143,7 @@ MESSAGE_TYPE_LABELS = {
 TRIGGER_SUMMARIES = {
     MODEL_BUY: "내가 정한 매수 점수가 기준값을 넘을 때 보냅니다.",
     MODEL_SELL: "내가 정한 매도 점수가 기준값을 넘을 때 보냅니다.",
+    WATCHLIST_BUY_CANDIDATE: "관심 종목의 매수 점수가 기준값을 넘을 때 보냅니다.",
     WATCHLIST_QUOTE: "관심 종목의 시세와 추세 데이터가 갱신될 때 보냅니다.",
     WATCHLIST_QUOTE_PENDING: "관심 종목 시세를 아직 받지 못했을 때 보냅니다.",
     HOLDING_TIMING: "보유 종목의 매수·매도 점검 데이터가 기준에 걸릴 때 보냅니다.",

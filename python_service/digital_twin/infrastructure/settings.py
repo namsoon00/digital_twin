@@ -127,6 +127,7 @@ DEFAULT_MODEL_DECISION_THRESHOLDS = [
 DEFAULT_ALERT_THRESHOLDS = [
     ("modelBuyScore", 74),
     ("modelSellScore", 72),
+    ("watchlistBuyScore", 74),
     ("modelScoreGap", 15),
     ("volumeRatioHigh", 2),
     ("buyShareHigh", 65),
@@ -207,6 +208,7 @@ def synced_model_alert_thresholds(alert_thresholds: str, model_thresholds: str) 
     alerts = parse_assignments(alert_thresholds, assignment_defaults(DEFAULT_ALERT_THRESHOLDS))
     models = parse_assignments(model_thresholds, assignment_defaults(DEFAULT_MODEL_DECISION_THRESHOLDS))
     alerts["modelBuyScore"] = models.get("modelBuy", alerts.get("modelBuyScore", 0))
+    alerts["watchlistBuyScore"] = models.get("modelBuy", alerts.get("watchlistBuyScore", alerts.get("modelBuyScore", 0)))
     alerts["modelSellScore"] = models.get("modelSell", alerts.get("modelSellScore", 0))
     return assignment_text_from_map(alerts, DEFAULT_ALERT_THRESHOLDS)
 

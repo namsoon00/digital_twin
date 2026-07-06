@@ -6988,6 +6988,368 @@ h3 {
   }
 }
 
+@media (min-width: 1181px) {
+  .workspace-main {
+    padding-right: 8px;
+  }
+
+  .managed-page {
+    gap: 12px;
+  }
+
+  .admin-grid {
+    gap: 14px;
+  }
+
+  .admin-stat-grid,
+  .account-manager-summary,
+  .account-directory-summary,
+  .symbol-summary-grid,
+  .symbol-source-grid,
+  .monitoring-instrument-summary,
+  .model-setting-card-grid,
+  .lab-record-grid {
+    gap: 0;
+    padding-right: 16px;
+    padding-left: 16px;
+    border-top: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+    background: color-mix(in srgb, var(--panel) 76%, transparent);
+  }
+
+  .admin-stat-grid span,
+  .account-manager-summary span,
+  .account-directory-summary span,
+  .symbol-summary-metric,
+  .symbol-source-status,
+  .monitoring-instrument-summary > div,
+  .model-setting-card,
+  .lab-record-grid span {
+    min-height: 58px;
+    padding: 10px 12px;
+    border: 0;
+    border-left: 1px solid var(--line);
+    border-radius: 0;
+    background: transparent;
+  }
+
+  .admin-stat-grid span:first-child,
+  .account-manager-summary span:first-child,
+  .account-directory-summary span:first-child,
+  .symbol-summary-metric:first-child,
+  .symbol-source-status:first-child,
+  .monitoring-instrument-summary > div:first-child,
+  .model-setting-card:first-child,
+  .lab-record-grid span:first-child {
+    border-left: 0;
+  }
+
+  .home-command-grid {
+    grid-template-columns: minmax(360px, 0.78fr) minmax(0, 1.22fr);
+    gap: 0;
+    padding: 14px 16px 0;
+  }
+
+  .home-command-main {
+    min-height: 0;
+    padding: 12px 14px;
+    border-radius: 0;
+    border-right: 0;
+    background: transparent;
+  }
+
+  .home-action-grid {
+    gap: 0;
+    border: 1px solid var(--line);
+    border-radius: var(--ds-radius-panel);
+    background: var(--panel);
+    overflow: hidden;
+  }
+
+  .home-action {
+    min-height: 76px;
+    padding: 11px 12px;
+    border: 0;
+    border-left: 1px solid var(--line);
+    border-radius: 0;
+    background: transparent;
+  }
+
+  .home-action:first-child {
+    border-left: 0;
+  }
+
+  .home-action span {
+    color: var(--muted);
+  }
+
+  .home-signal-strip {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0;
+    margin: 0 16px 16px;
+    padding: 0;
+    border: 1px solid var(--line);
+    border-radius: var(--ds-radius-panel);
+    background: var(--panel);
+    overflow: hidden;
+  }
+
+  .home-signal {
+    min-height: 62px;
+    padding: 9px 12px;
+    border: 0;
+    border-left: 1px solid var(--line);
+    border-radius: 0;
+    background: transparent;
+  }
+
+  .home-signal:first-child {
+    border-left: 0;
+  }
+
+  .home-signal.ok,
+  .home-signal.warn {
+    background: transparent;
+  }
+
+  .home-signal.ok {
+    box-shadow: inset 2px 0 0 var(--green);
+  }
+
+  .home-signal.warn {
+    box-shadow: inset 2px 0 0 var(--amber);
+  }
+
+  .home-view .account-directory-panel:not(.account-directory-wide) .account-card {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+
+  .home-view .account-directory-panel:not(.account-directory-wide) .account-card-head {
+    grid-template-columns: 42px minmax(0, 1fr) auto;
+  }
+
+  .home-view .account-directory-panel:not(.account-directory-wide) .account-credential-pills,
+  .home-view .account-directory-panel:not(.account-directory-wide) .account-card-meta {
+    min-width: 0;
+    justify-content: flex-start;
+  }
+
+  .account-card-list,
+  .watch-account-list,
+  .account-watch-symbol-list,
+  .monitoring-instrument-list {
+    display: block;
+    gap: 0;
+    padding-top: 0;
+    border-top: 1px solid var(--line);
+  }
+
+  .account-card,
+  .watch-account-row,
+  .account-watch-symbol-row,
+  .account-watch-edit-row,
+  .monitoring-instrument-row,
+  .service-account-row {
+    gap: 12px;
+    padding: 12px 0;
+    border: 0;
+    border-bottom: 1px solid var(--line);
+    border-radius: 0;
+    background: transparent;
+  }
+
+  .account-card {
+    grid-template-columns: minmax(260px, 0.95fr) minmax(260px, 1.05fr) auto;
+    align-items: center;
+  }
+
+  .account-card-head {
+    grid-template-columns: 42px minmax(0, 1fr) auto;
+    align-items: center;
+  }
+
+  .account-credential-pills,
+  .account-card-meta {
+    align-items: center;
+    justify-content: flex-start;
+  }
+
+  .watch-account-row {
+    grid-template-columns: minmax(190px, 0.52fr) minmax(0, 1fr) auto;
+    align-items: center;
+  }
+
+  .watch-account-row .chip-row {
+    justify-content: flex-start;
+  }
+
+  .watch-account-rail .watch-account-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+  }
+
+  .watch-account-rail .watch-account-row .chip-row {
+    grid-column: 1 / -1;
+  }
+
+  .watch-account-action {
+    background: transparent;
+  }
+
+  .watch-account-row.active {
+    background: color-mix(in srgb, var(--blue-soft) 42%, transparent);
+    box-shadow: inset 3px 0 0 var(--blue);
+  }
+
+  .account-watchlist-workbench {
+    grid-template-columns: minmax(360px, 0.58fr) minmax(0, 1.42fr);
+    gap: 16px;
+  }
+
+  .account-watchlist-editor-head,
+  .account-watch-editor {
+    border-radius: var(--ds-radius-panel);
+    background: transparent;
+  }
+
+  .account-watch-symbol-row {
+    grid-template-columns: minmax(0, 1fr) minmax(220px, 0.34fr);
+    align-items: center;
+  }
+
+  .monitoring-instrument-list {
+    grid-template-columns: 1fr;
+  }
+
+  .monitoring-view {
+    grid-template-areas:
+      "status status status status status alerts alerts alerts alerts alerts alerts alerts"
+      "universe universe universe universe universe universe universe universe portfolio portfolio portfolio portfolio";
+  }
+
+  .monitoring-instrument-row {
+    grid-template-columns: minmax(0, 1fr) minmax(240px, 0.32fr);
+    align-items: center;
+  }
+
+  .monitoring-instrument-row:hover,
+  .monitoring-instrument-row:focus-visible,
+  .watch-account-row.selectable:hover,
+  .watch-account-row.selectable:focus {
+    background: color-mix(in srgb, var(--blue-soft) 34%, transparent);
+  }
+
+  .gauge-grid,
+  .flow-lanes,
+  .model-guide-grid,
+  .model-step-list {
+    gap: 0;
+    padding-right: 16px;
+    padding-left: 16px;
+    border-top: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+    background: color-mix(in srgb, var(--panel) 76%, transparent);
+  }
+
+  .gauge-card,
+  .flow-lane,
+  .model-guide-step,
+  .model-step-list div {
+    min-height: 64px;
+    padding: 10px 12px;
+    border: 0;
+    border-left: 1px solid var(--line);
+    border-radius: 0;
+    background: transparent;
+  }
+
+  .gauge-card.watch,
+  .gauge-card.hold,
+  .gauge-card.caution,
+  .gauge-card.danger,
+  .flow-lane.watch,
+  .flow-lane.hold,
+  .flow-lane.danger {
+    background: transparent;
+  }
+
+  .gauge-card.watch,
+  .flow-lane.watch {
+    box-shadow: inset 2px 0 0 var(--green);
+  }
+
+  .gauge-card.hold,
+  .flow-lane.hold {
+    box-shadow: inset 2px 0 0 var(--blue);
+  }
+
+  .gauge-card.caution {
+    box-shadow: inset 2px 0 0 var(--amber);
+  }
+
+  .gauge-card.danger,
+  .flow-lane.danger {
+    box-shadow: inset 2px 0 0 var(--red);
+  }
+
+  .gauge-card:first-child,
+  .flow-lane:first-child,
+  .model-guide-step:first-child,
+  .model-step-list div:first-child {
+    border-left: 0;
+  }
+
+  .model-guide-step,
+  .model-setting-card {
+    border-left-color: var(--line);
+  }
+
+  .relation-matrix,
+  .ontology-class-grid {
+    gap: 0;
+    border-top: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+  }
+
+  .relation-matrix {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .relation-matrix-row,
+  .ontology-class-grid span {
+    border: 0;
+    border-left: 1px solid var(--line);
+    border-radius: 0;
+    background: transparent;
+  }
+
+  .relation-matrix-row {
+    min-height: 58px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .relation-matrix-row:nth-child(4n + 1),
+  .ontology-class-grid span:first-child {
+    border-left: 0;
+  }
+
+  .relation-matrix-row.active {
+    box-shadow: inset 2px 0 0 var(--green);
+  }
+
+  .relation-matrix-row.empty {
+    opacity: 0.62;
+  }
+
+  .relation-matrix-row em {
+    min-width: 28px;
+    min-height: 24px;
+    border-radius: 4px;
+    background: var(--chip);
+  }
+}
+
 @media (max-width: 980px) and (min-width: 861px) {
   .shell {
     display: block;

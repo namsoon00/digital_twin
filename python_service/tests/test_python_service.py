@@ -2969,6 +2969,58 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("모델 부족 데이터", message)
         self.assertIn("발송 공식", message)
 
+    def test_holding_formula_audit_reports_missing_signal_inputs(self):
+        db_path = Path(self.temp.name) / "service.db"
+        templates = SQLiteNotificationTemplateStore(db_path)
+        position = Position(
+            symbol="MSTR",
+            name="스트래티지",
+            market="US",
+            currency="USD",
+            market_value=1000,
+            profit_loss_rate=18.5,
+            sellable_quantity=1,
+            current_price=105.36,
+            volume=90863,
+            trading_value=3543834187,
+            ma20=108.07,
+            ma60=144.62,
+            ma20_distance=-2.5,
+            ma60_distance=-27.1,
+            sector="BTC",
+        )
+        audits = StrategyModel({}).holding_formula_audits(position, 50)
+        event = AlertEvent(
+            "main",
+            "메인",
+            "ALERT",
+            "holdingTiming",
+            "main:timing:MSTR",
+            "스트래티지",
+            [
+                "상태: 분할 매도 기준 확인 (80점)",
+                "손익: +18.5%",
+                "수급: 거래량 90,863(0x), 거래액 $3,543,834,187",
+                "추세: 현재 $105.36, 20일선 $108.07(-2.5%), 60일선 $144.62(-27.1%)",
+            ],
+            "MSTR",
+        )
+        context = alert_context(event)
+        context.update({
+            "honeyScore": 100,
+            "honeyThreshold": 45,
+            "honeyReasons": ["기본 35점", "주의 등급 +25"],
+            "formulaAudits": audits,
+            "holdingDecisionBasis": "profitTake",
+        })
+
+        message = templates.render(event.rule, context)
+
+        self.assertIn("체결강도 없음", message)
+        self.assertIn("거래량 배율 없음", message)
+        self.assertIn("매수/매도 체결량 없음", message)
+        self.assertIn("투자자별 수급 없음", message)
+
     def test_model_review_message_includes_delivery_score_explanation(self):
         db_path = Path(self.temp.name) / "service.db"
         templates = SQLiteNotificationTemplateStore(db_path)
@@ -3004,7 +3056,7 @@ class PythonServiceTests(unittest.TestCase):
 
         self.assertIn("Apple", message)
         self.assertNotIn("━━━━━━━━", message)
-        self.assertIn("<b>[관찰] 이동평균 변화</b>", message)
+        self.assertIn("<b>[관찰] 이동평균 상향 신호</b>", message)
         self.assertIn("<code>Apple / AAPL</code>", message)
         self.assertIn("<b>발송 기준</b>", message)
         self.assertIn("<b>데이터</b>", message)
@@ -3036,7 +3088,7 @@ class PythonServiceTests(unittest.TestCase):
 
         message = templates.render(event.rule, alert_context(event))
 
-        self.assertIn("<b>[주의] 미장 가격/거래량</b>\n<code>TSLA</code>", message)
+        self.assertIn("<b>[주의] 미장 가격 급락</b>\n<code>TSLA</code>", message)
         self.assertNotIn("━━━━━━━━", message)
         self.assertIn("• <b>미장 가격 변동</b>: <code>-7.5%</code>, <b>가격</b>: <code>$393.45</code>", message)
         self.assertIn("• <b>거래량</b>: <code>71,917,610</code>", message)
@@ -3045,6 +3097,29 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(1, message.count("<b>기준일</b>"))
         self.assertLess(message.index("<b>데이터</b>"), message.index("<b>발송 기준</b>"))
         self.assertIn("• <b>감지</b>: <code>가격 변동 -7.5%, 가격 $393.45</code>", message)
+
+    def test_holding_timing_alert_title_uses_detected_decision(self):
+        db_path = Path(self.temp.name) / "service.db"
+        templates = SQLiteNotificationTemplateStore(db_path)
+        event = AlertEvent(
+            "main",
+            "메인",
+            "ALERT",
+            "holdingTiming",
+            "main:timing:MSTR",
+            "스트래티지",
+            [
+                "상태: 분할 매도 기준 확인 (80점)",
+                "손익: +18.5%",
+                "수급: 거래량 90,863(0x), 거래액 $3,543,834,187",
+            ],
+            "MSTR",
+        )
+
+        message = templates.render(event.rule, alert_context(event))
+
+        self.assertIn("<b>[주의] 보유 익절·분할매도 점검</b>", message)
+        self.assertNotIn("<b>[주의] 보유 타이밍</b>", message)
 
     def test_external_crypto_alert_orders_bitcoin_price_and_trading_value(self):
         db_path = Path(self.temp.name) / "service.db"

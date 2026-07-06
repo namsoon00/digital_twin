@@ -334,6 +334,102 @@ def data_value(raw_lines: List[str], label: str) -> str:
     return ""
 
 
+def signed_direction(value: str) -> int:
+    match = re.search(r"([+-])\s*\d", str(value or ""))
+    if not match:
+        return 0
+    return 1 if match.group(1) == "+" else -1
+
+
+def title_from_change(value: str, positive: str, negative: str, neutral: str) -> str:
+    direction = signed_direction(value)
+    if direction > 0:
+        return positive
+    if direction < 0:
+        return negative
+    return neutral
+
+
+def first_data_text(raw_lines: List[str], pattern: str) -> str:
+    compiled = re.compile(pattern)
+    for line in raw_lines:
+        text = str(line or "").strip()
+        if compiled.search(text):
+            return text
+    return ""
+
+
+def notification_title_headline(rule: str, raw_lines: List[str], event: AlertEvent, fallback: str) -> str:
+    key = str(rule or "")
+    status = data_value(raw_lines, "상태")
+    profit = data_value(raw_lines, "손익")
+    change = data_value(raw_lines, "변화")
+    signal = data_value(raw_lines, "신호")
+    title_text = str(getattr(event, "title", "") or "")
+    symbol = str(getattr(event, "symbol", "") or "").upper()
+
+    if key in {"modelBuy", "watchlistBuyCandidate"}:
+        return "매수 후보 감지"
+    if key == "modelSell":
+        return "매도 기준 점검"
+    if key == "watchlistQuote":
+        return "관심종목 시세 갱신"
+    if key == "watchlistQuotePending":
+        return "관심종목 시세 미수집"
+    if key == "holdingTiming":
+        status_blob = " ".join([status, profit, title_text]).strip()
+        if any(term in status_blob for term in ["분할", "익절", "수익"]):
+            return "보유 익절·분할매도 점검"
+        if any(term in status_blob for term in ["손절", "손실"]) or signed_direction(profit) < 0:
+            return "보유 손실 관리 점검"
+        if "조건부" in status_blob:
+            return "보유 조건 재점검"
+        return "보유 매수·매도 점검"
+    if key == "monitorHeartbeat":
+        return "모니터링 상태 확인"
+    if key == "monitorConnection":
+        status_blob = " ".join([status, " ".join(raw_lines[:2])])
+        if any(term in status_blob.lower() for term in ["실패", "오류", "unauthorized", "forbidden", "timeout", "error"]):
+            return "토스 연결 오류"
+        return "토스 연결 상태 변경"
+    if key == "monitorPositionChange":
+        body = " ".join(raw_lines)
+        if "신규" in body:
+            return "신규 보유 감지"
+        if any(term in body for term in ["제외", "청산", "매도 완료"]):
+            return "보유 제외 감지"
+        return "보유 수량 변경"
+    if key == "monitorPnlChange":
+        return title_from_change(change, "손익률 개선", "손익률 악화", "손익률 변화")
+    if key == "monitorValueChange":
+        return title_from_change(change, "평가액 증가", "평가액 감소", "평가액 변화")
+    if key == "monitorTrendChange":
+        if "하향" in signal or "이탈" in signal:
+            return "이동평균 하향 신호"
+        if "상향" in signal or "돌파" in signal:
+            return "이동평균 상향 신호"
+        return "이동평균·추세 신호"
+    if key == "monitorCashChange":
+        return title_from_change(change, "현금 비중 증가", "현금 비중 감소", "현금 비중 변화")
+    if key == "monitorDecisionChange":
+        return "보유 모델 판단 변경"
+    if key == "externalEquityMove":
+        equity_change = data_value(raw_lines, "미장 가격 변동")
+        return title_from_change(equity_change, "미장 가격 급등", "미장 가격 급락", "미장 가격·거래량 급변")
+    if key == "externalCryptoMove":
+        crypto_line = first_data_text(raw_lines, r"(비트코인|크립토).*?(24h|7d)")
+        asset = "비트코인" if "비트코인" in crypto_line or symbol == "BTC" else "크립토"
+        return title_from_change(crypto_line, asset + " 가격 급등", asset + " 가격 급락", asset + " 가격 급변")
+    if key == "externalMacroShift":
+        return "금리·거시 지표 변화"
+    if key == "externalDartDisclosure":
+        return "국내 공시 감지"
+    if key == "externalDataConnection":
+        provider = raw_lines[0] if raw_lines else ""
+        return (provider + " 연결 점검").strip() if provider else "외부 API 연결 점검"
+    return fallback or title_text or key
+
+
 def event_generated_at(event: AlertEvent) -> str:
     metadata = dict(getattr(event, "metadata", {}) or {})
     return str(
@@ -514,7 +610,7 @@ def alert_context(event: AlertEvent) -> Dict[str, object]:
     trigger_line = ("발생 조건: " + trigger_summary) if trigger_summary else ""
     data_lines = lines
     status_headline = ("[" + severity_label + "]") if severity_label else ""
-    title_headline = message_type_label or event.title
+    title_headline = notification_title_headline(event.rule, raw_lines, event, message_type_label or event.title)
     headline = " ".join(part for part in [status_headline, title_headline] if part)
     target_parts = [event.title]
     if event.symbol and event.symbol != event.title:

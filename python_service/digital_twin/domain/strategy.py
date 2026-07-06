@@ -7,6 +7,21 @@ from .parsing import parse_assignments
 from .portfolio import DecisionItem, PortfolioSummary, Position
 
 
+DERIVED_FORMULA_DEPENDENCIES = {
+    "holdingSignalScore": [
+        "tradeStrength",
+        "volumeRatio",
+        "buyShare",
+        "sellShare",
+        "investorFlowScore",
+        "trendScore",
+        "trendDistance20",
+        "trendDistance60",
+        "maSpread",
+    ],
+}
+
+
 class SafeFormula:
     allowed_nodes = (
         ast.Expression,
@@ -234,6 +249,10 @@ class StrategyModel:
             for name in names
             if name in missing_candidates
         ]
+        for name in names:
+            for dependency in DERIVED_FORMULA_DEPENDENCIES.get(name, []):
+                if dependency in missing_candidates:
+                    missing.append(missing_candidates[dependency])
         missing.extend([name for name in names if name not in variables])
         return {
             "key": key,

@@ -2,6 +2,7 @@ from typing import Dict, List
 
 from .alert_formatting import compact_number, money, signed_number, signed_pct
 from .market_data import number
+from .ontology_rules import AI_PROMPT_REGISTRY_VERSION, strength_label
 from .portfolio import AccountSnapshot, AlertEvent
 
 
@@ -74,7 +75,7 @@ def crypto_move_model(symbol: str, asset_label: str, change24h: float, change7d:
         + "으로 판단했습니다."
     ) if candidates else "기준을 넘은 크립토 변동이 없습니다."
     detected_text = (
-        "크립토 변동 모델 "
+        "관계 규칙 강도 "
         + ("%g" % model_score)
         + "점, "
         + str(dominant.get("periodLabel") or "대표")
@@ -124,6 +125,77 @@ def crypto_move_model(symbol: str, asset_label: str, change24h: float, change7d:
         "reason": reason,
         "detectedText": detected_text,
         "formulaAudit": audit,
+    }
+
+
+def crypto_relation_context(model: Dict[str, object], item: Dict[str, object], is_bitcoin: bool) -> Dict[str, object]:
+    symbol = str(model.get("symbol") or item.get("symbol") or "").upper()
+    score = float(model.get("score") or 0)
+    rule_id = "external.crypto.btc_sensitivity.v1" if is_bitcoin else "external.crypto.market_move.v1"
+    label = "비트코인 급변 -> 민감 종목 연동 점검" if is_bitcoin else "크립토 급변 -> 시장 위험 선호 점검"
+    evidence = [
+        "24h " + signed_pct(number(item.get("change24h"))),
+        "7d " + signed_pct(number(item.get("change7d"))),
+        "거래액 " + money(number(item.get("volume24h")), "USD"),
+    ]
+    matched_rule = {
+        "ruleId": rule_id,
+        "rule_id": rule_id,
+        "label": label,
+        "version": "v1",
+        "relationType": "EXTERNAL_MARKET_MOVE",
+        "relation_type": "EXTERNAL_MARKET_MOVE",
+        "signalType": "cross_asset" if is_bitcoin else "risk_appetite",
+        "signal_type": "cross_asset" if is_bitcoin else "risk_appetite",
+        "matched": True,
+        "strengthScore": round(score, 1),
+        "strength_score": round(score, 1),
+        "strengthLabel": strength_label(score),
+        "strength_label": strength_label(score),
+        "confidence": 85.0,
+        "evidence": evidence,
+        "missing": [],
+        "promptHint": "민감 종목 보유 여부와 가격 반응 시차를 확인합니다." if is_bitcoin else "외부 위험 선호 변화가 보유 종목에 직접 연결되는지 확인합니다.",
+    }
+    prompt_context = {
+        "promptVersion": AI_PROMPT_REGISTRY_VERSION,
+        "promptRegistryVersion": AI_PROMPT_REGISTRY_VERSION,
+        "promptId": "externalCryptoMove",
+        "promptPolicy": "providedDataOnly=1\nshowMissingData=1\nseparateInvestmentJudgmentAndDelivery=1",
+        "matchedRules": [matched_rule],
+        "missingData": [],
+        "guardrails": [
+            "크립토 가격만으로 주식 매매 결론을 내리지 않습니다.",
+            "민감 종목이 없으면 시장 참고 신호로만 표현합니다.",
+        ],
+    }
+    return {
+        "engineVersion": "ontology-relation-rules-v1",
+        "subject": {"symbol": symbol, "market": "CRYPTO", "asset": str(item.get("name") or symbol)},
+        "facts": {
+            "symbol": symbol,
+            "price": number(item.get("price")),
+            "volume24h": number(item.get("volume24h")),
+            "change24h": number(item.get("change24h")),
+            "change7d": number(item.get("change7d")),
+            "provider": str(item.get("provider") or "CoinGecko"),
+        },
+        "matchedRules": [matched_rule],
+        "activeRules": [matched_rule],
+        "referenceRules": [],
+        "missingData": [],
+        "dominantSignals": [label],
+        "signalStrength": round(score, 1),
+        "signalStrengthLabel": strength_label(score),
+        "confidence": 85.0,
+        "decision": {
+            "label": "비트코인 민감도 점검" if is_bitcoin else "크립토 시장 변동 점검",
+            "tone": str(model.get("severity") or "WATCH").lower(),
+            "score": round(score, 1),
+            "basis": "ontologyRelationRules",
+            "selectedRuleId": rule_id,
+        },
+        "promptContext": prompt_context,
     }
 
 
@@ -229,6 +301,8 @@ class ExternalSignalAlertMixin:
             model = crypto_move_model(symbol, asset_label, change24h, change7d, day_threshold, week_threshold)
             if not model.get("triggered"):
                 continue
+            relation_context = crypto_relation_context(model, item, is_bitcoin)
+            prompt_context = relation_context.get("promptContext") if isinstance(relation_context.get("promptContext"), dict) else {}
             price = number(item.get("price"))
             volume24h = number(item.get("volume24h"))
             provider = str(item.get("provider") or "CoinGecko")
@@ -274,7 +348,9 @@ class ExternalSignalAlertMixin:
                     "cryptoMoveDominantChange": model.get("dominantChange"),
                     "cryptoMoveTitle": model.get("titleLabel"),
                     "cryptoMoveReason": model.get("reason"),
-                    "formulaAudits": [model.get("formulaAudit")],
+                    "ontologyRelationContext": relation_context,
+                    "ontologyPromptContext": prompt_context,
+                    "legacyFormulaAudits": [model.get("formulaAudit")],
                 },
             ))
         return events

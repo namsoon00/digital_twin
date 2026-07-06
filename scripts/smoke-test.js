@@ -711,6 +711,7 @@ function checkFrontendAdminRender() {
     renderForSearch("?tab=ontology"),
     renderForSearch("?tab=modeling&strategy=data"),
     renderForSearch("?tab=modeling&strategy=rules"),
+    renderForSearch("?tab=modeling&strategy=prompts"),
     renderForSearch("?tab=modeling&strategy=results"),
     renderForSearch("?tab=monitoring"),
     renderForSearch("?tab=settings"),
@@ -729,11 +730,12 @@ function checkFrontendAdminRender() {
     const ontologyHtml = pages[9];
     const modelingDataHtml = pages[10];
     const modelingRulesHtml = pages[11];
-    const modelingResultsHtml = pages[12];
-    const monitoringHtml = pages[13];
-    const settingsHtml = pages[14];
-    const staticAccountHtml = pages[15];
-    const newAccountHtml = pages[16];
+    const modelingPromptHtml = pages[12];
+    const modelingResultsHtml = pages[13];
+    const monitoringHtml = pages[14];
+    const settingsHtml = pages[15];
+    const staticAccountHtml = pages[16];
+    const newAccountHtml = pages[17];
 
     [
       ["overview", overviewHtml],
@@ -892,7 +894,7 @@ function checkFrontendAdminRender() {
     assertOk(modelingHtml.indexOf("strategy-section-bar") >= 0, "투자전략 내부 섹션 탭 바가 렌더링되지 않았습니다.");
     assertOk(modelingHtml.indexOf("strategy-section-tabs") >= 0, "투자전략 내부 섹션 탭이 렌더링되지 않았습니다.");
     assertOk(styles.indexOf(".strategy-section-tabs") >= 0 && styles.indexOf(".strategy-section-bar") >= 0, "투자전략 내부 섹션 스타일이 정의되지 않았습니다.");
-    assertOk(modelingHtml.indexOf('data-strategy-section="data"') >= 0 && modelingHtml.indexOf('data-strategy-section="rules"') >= 0 && modelingHtml.indexOf('data-strategy-section="results"') >= 0, "투자전략 내부 섹션 이동 버튼이 없습니다.");
+    assertOk(modelingHtml.indexOf('data-strategy-section="data"') >= 0 && modelingHtml.indexOf('data-strategy-section="rules"') >= 0 && modelingHtml.indexOf('data-strategy-section="prompts"') >= 0 && modelingHtml.indexOf('data-strategy-section="results"') >= 0, "투자전략 내부 섹션 이동 버튼이 없습니다.");
     assertOk(modelingHtml.indexOf('data-strategy-section="ontology"') < 0, "온톨로지가 투자전략 내부 섹션에 남아 있습니다.");
     assertOk(ontologyHtml.indexOf("ontology-view") >= 0 && ontologyHtml.indexOf("Ontology Control") >= 0, "온톨로지 상위 탭이 렌더링되지 않았습니다.");
     assertOk(ontologyHtml.indexOf("TBox") >= 0 && ontologyHtml.indexOf("ABox") >= 0, "온톨로지 탭에 TBox/ABox 요약이 없습니다.");
@@ -911,12 +913,14 @@ function checkFrontendAdminRender() {
     assertOk(modelingDataHtml.indexOf("전략 데이터 점검") >= 0, "데이터 탭에 전략 데이터 점검 제목이 렌더링되지 않았습니다.");
     assertOk(modelingDataHtml.indexOf("체결강도") >= 0, "데이터 탭에 체결강도 항목이 없습니다.");
     assertOk(modelingDataHtml.indexOf("모델-알림 기준") >= 0, "데이터 탭에 모델-알림 기준 항목이 없습니다.");
-    assertOk(modelingRulesHtml.indexOf("formula-ledger-panel") >= 0 && modelingRulesHtml.indexOf("Formula Ledger") >= 0 && modelingRulesHtml.indexOf("내 모델 매수 공식") >= 0, "판단 기준 탭에 공식 ledger가 없습니다.");
-    assertOk(modelingRulesHtml.indexOf("admin-modeling-panel") >= 0, "판단 기준 탭에 모델링 설정 패널이 렌더링되지 않았습니다.");
-    assertOk(modelingRulesHtml.indexOf("투자전략 판단 기준 관리") >= 0, "판단 기준 탭에 투자전략 판단 기준 제목이 렌더링되지 않았습니다.");
-    assertOk(modelingRulesHtml.indexOf("투자자별 수급") >= 0, "판단 기준 탭에 투자자별 수급 feature 설명이 렌더링되지 않았습니다.");
-    assertOk(modelingRulesHtml.indexOf("방향성 거래량") >= 0, "판단 기준 탭에 방향성 거래량 feature 설명이 렌더링되지 않았습니다.");
-    assertOk(modelingRulesHtml.indexOf("directionalVolumePressure") >= 0, "판단 기준 탭에 방향성 거래량 공식 변수가 렌더링되지 않았습니다.");
+    assertOk(modelingRulesHtml.indexOf("ontology-rule-panel") >= 0 && modelingRulesHtml.indexOf("Ontology Rules") >= 0, "관계 규칙 탭에 온톨로지 규칙 패널이 없습니다.");
+    assertOk(modelingRulesHtml.indexOf('data-model-setting="ontologyRelationRules"') >= 0, "관계 규칙 탭에 관계 규칙 편집기가 없습니다.");
+    assertOk(modelingRulesHtml.indexOf("수익 보유 + 추세 약화") >= 0, "관계 규칙 탭에 익절 점검 관계 규칙이 렌더링되지 않았습니다.");
+    assertOk(modelingRulesHtml.indexOf("핵심 데이터 부족") >= 0, "관계 규칙 탭에 부족 데이터 가드 규칙이 렌더링되지 않았습니다.");
+    assertOk(modelingRulesHtml.indexOf("model-version-panel") >= 0, "관계 규칙 탭에 모델 버전 패널이 렌더링되지 않았습니다.");
+    assertOk(modelingPromptHtml.indexOf("prompt-registry-panel") >= 0 && modelingPromptHtml.indexOf("Prompt Registry") >= 0, "프롬프트 탭에 프롬프트 레지스트리가 없습니다.");
+    assertOk(modelingPromptHtml.indexOf('data-model-setting="aiPromptTemplates"') >= 0 && modelingPromptHtml.indexOf('data-model-setting="aiPromptPolicy"') >= 0, "프롬프트 탭에 템플릿/정책 편집기가 없습니다.");
+    assertOk(modelingPromptHtml.indexOf("보유 타이밍 AI 분석") >= 0 && modelingPromptHtml.indexOf("providedDataOnly=1") >= 0, "프롬프트 탭에 기본 프롬프트와 정책이 렌더링되지 않았습니다.");
     assertOk(modelingResultsHtml.indexOf("model-preview-panel") >= 0, "모델 결과 탭에 현재 종목 판단 결과 패널이 렌더링되지 않았습니다.");
     assertOk(modelingResultsHtml.indexOf("실제 데이터 예시") >= 0, "모델 결과 탭에 실제 데이터 예시 설명이 렌더링되지 않았습니다.");
     assertOk(modelingResultsHtml.indexOf("쉬운 해석") >= 0, "모델 결과 탭에 종목별 쉬운 해석이 렌더링되지 않았습니다.");
@@ -1155,6 +1159,10 @@ async function checkNormalMode(port, context) {
   assertOk(settingsPayload.settings.tossClientSecret === "", "설정 API가 secret 원문을 내려주고 있습니다.");
   assertOk(Object.prototype.hasOwnProperty.call(settingsPayload.settings, "alertRules"), "설정 API에 알림 규칙 필드가 없습니다.");
   assertOk(Object.prototype.hasOwnProperty.call(settingsPayload.settings, "modelDecisionThresholds"), "설정 API에 모델 판단 기준 필드가 없습니다.");
+  assertOk(Object.prototype.hasOwnProperty.call(settingsPayload.settings, "ontologyRelationRules"), "설정 API에 온톨로지 관계 규칙 필드가 없습니다.");
+  assertOk(Object.prototype.hasOwnProperty.call(settingsPayload.settings, "aiPromptTemplates"), "설정 API에 AI 프롬프트 템플릿 필드가 없습니다.");
+  assertOk(Object.prototype.hasOwnProperty.call(settingsPayload.settings, "aiPromptPolicy"), "설정 API에 AI 프롬프트 정책 필드가 없습니다.");
+  assertOk(settingsPayload.settings.ontologyRelationRules.indexOf("holding.loss_guard.breakdown.v1") >= 0, "설정 API의 기본 관계 규칙이 비어 있습니다.");
   assertOk(settingsPayload.settings.modelDecisionThresholds.indexOf("modelBuy=74") >= 0, "설정 API의 모델 기본 판단 기준이 비어 있습니다.");
   assertOk(settingsPayload.settings.alertThresholds.indexOf("modelBuyScore=74") >= 0, "설정 API의 모델 알림 기준이 비어 있습니다.");
   assertOk(settingsPayload.settings.alertThresholds.indexOf("watchlistBuyScore=74") >= 0, "설정 API의 관심종목 매수 기준이 비어 있습니다.");

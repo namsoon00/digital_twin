@@ -38,7 +38,8 @@ class ModelReviewJob:
             alert_key=seed,
             alert_lines=[str(line) for line in payload.get("lines") or [] if str(line).strip()],
             review_context=dict(
-                metadata.get("ontologyReviewContext")
+                metadata.get("ontologyRelationContext")
+                or metadata.get("ontologyReviewContext")
                 or metadata.get("ontologyPromptContext")
                 or metadata.get("ontologyOpinion")
                 or {}
@@ -95,11 +96,11 @@ def build_model_review_prompt(job: ModelReviewJob) -> str:
         ])
     return "\n".join([
         "너는 투자 판단 기준을 지속적으로 개선하는 금융 데이터 리뷰어다.",
-        "이번 모델은 단순 점수 계산이 아니라 투자 세계관 온톨로지, 관계, evidence 충돌을 우선한다.",
+        "이번 모델은 단순 점수 계산이 아니라 온톨로지 관계 규칙, 증거, 부족 데이터, evidence 충돌을 우선한다.",
         "매수/매도 지시가 아니라 판단 변화의 원인, 데이터 검증, 다음 실험을 분석한다.",
         "한국어로 텔레그램 메시지에 맞게 간결하지만 충분히 분석해라. 영어 또는 어려운 용어는 쉬운 한국어로 풀어 써라.",
         "메시지 제목에는 계정명이나 계정 ID를 넣지 마라. 계정 정보는 전송 라우팅에만 사용한다.",
-        "섹션은 반드시 다음 순서로 작성한다: 세계관 변화, 관계/모순, 데이터 검증, 모델 보완, 다음 실험.",
+        "섹션은 반드시 다음 순서로 작성한다: 성립 규칙, 관계/모순, 부족 데이터, 모델 보완, 다음 실험.",
         "기존 점수 모델은 보조 데이터로만 다뤄라.",
         "API 키, 토큰, 계좌 식별정보를 추정하거나 요청하지 마라.",
         "",
@@ -130,13 +131,22 @@ def local_model_review(job: ModelReviewJob) -> str:
         worldview = job.review_context.get("worldview") if isinstance(job.review_context, dict) else {}
         thesis = str((opinion or {}).get("thesis") or "").strip()
         dominant_sector = str((worldview or {}).get("dominantSector") or "").strip()
-        ontology_line = (
-            "온톨로지 thesis는 " + (thesis or "요약 없음")
-            + ("이며, 지배 섹터는 " + dominant_sector + "입니다." if dominant_sector else "입니다.")
-        )
+        matched_rules = job.review_context.get("activeRules") or job.review_context.get("matchedRules") or []
+        rule_names = [
+            str(item.get("label") or item.get("ruleId") or item.get("rule_id") or "")
+            for item in matched_rules
+            if isinstance(item, dict) and not item.get("referenceOnly") and not item.get("reference_only")
+        ]
+        if rule_names:
+            ontology_line = "성립 규칙은 " + " · ".join(rule_names[:3]) + "입니다."
+        else:
+            ontology_line = (
+                "온톨로지 thesis는 " + (thesis or "요약 없음")
+                + ("이며, 지배 섹터는 " + dominant_sector + "입니다." if dominant_sector else "입니다.")
+            )
     return "\n".join([
         (job.symbol or job.title or "판단 변화") + " 모델 리뷰",
-        "- 세계관 변화: 실시간 판단 기준이 감지한 판단 이름 또는 매도/손절 압력 점수 변화가 기준선을 넘었습니다.",
+        "- 성립 규칙: 실시간 판단 기준이 감지한 관계 규칙 또는 관계 신호 강도 변화가 기준선을 넘었습니다.",
         "- 관계/모순: " + ontology_line,
         "- 데이터 검증: " + validation,
         "- 모델 보완: " + improvement,
@@ -187,7 +197,7 @@ def decision_change_review_lines(
     if decision_changed:
         reasons.append("판단명이 " + (text(previous_decision, "decision") or "-") + "에서 " + (text(current_decision, "decision") or "-") + "로 바뀜")
     if abs(pressure_delta) >= float(pressure_threshold or 0):
-        reasons.append("매도/손절 압력 점수가 " + signed_pct(pressure_delta, "점") + " 변해 기준 " + str(round(float(pressure_threshold or 0), 1)) + "점 이상")
+        reasons.append("관계 신호 강도가 " + signed_pct(pressure_delta, "점") + " 변해 기준 " + str(round(float(pressure_threshold or 0), 1)) + "점 이상")
 
     drivers: List[str] = []
     if abs(pnl_delta) >= 1:

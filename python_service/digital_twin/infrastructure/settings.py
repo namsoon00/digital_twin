@@ -5,6 +5,11 @@ from pathlib import Path
 from typing import Dict
 
 from ..domain.accounts import configured
+from ..domain.ontology_rules import (
+    default_ai_prompt_policy_text,
+    default_ai_prompt_templates_text,
+    default_ontology_relation_rules_text,
+)
 from ..domain.parsing import parse_assignments
 
 
@@ -35,6 +40,9 @@ TEXT_SETTING_KEYS = [
     "profitTakeScoreFormula",
     "lossCutScoreFormula",
     "notificationScoreFormula",
+    "ontologyRelationRules",
+    "aiPromptTemplates",
+    "aiPromptPolicy",
     "modelName",
     "modelHypothesis",
     "customBuyModelFormula",
@@ -196,6 +204,9 @@ DEFAULT_STRATEGY_SETTINGS = {
     "profitTakeScoreFormula": DEFAULT_PROFIT_TAKE_SCORE_FORMULA,
     "lossCutScoreFormula": DEFAULT_LOSS_CUT_SCORE_FORMULA,
     "notificationScoreFormula": DEFAULT_NOTIFICATION_SCORE_FORMULA,
+    "ontologyRelationRules": default_ontology_relation_rules_text(),
+    "aiPromptTemplates": default_ai_prompt_templates_text(),
+    "aiPromptPolicy": default_ai_prompt_policy_text(),
     "modelName": "나의 매수/매도 모델",
     "modelHypothesis": "수급, 가치, 내 점수, 리스크를 함께 봐서 매수 후보와 매도 후보를 분리한다.",
     "customBuyModelFormula": "buyScore * 0.35 + thesisScore * thesisWeight + confidenceScore * confidenceWeight + max(0, targetReturn) * 0.15 + undervalueBonus * valuationWeight - riskScore * riskControlWeight",
@@ -379,6 +390,9 @@ def runtime_settings() -> Dict[str, str]:
         "profitTakeScoreFormula": value("profitTakeScoreFormula", "PROFIT_TAKE_SCORE_FORMULA", DEFAULT_STRATEGY_SETTINGS["profitTakeScoreFormula"]),
         "lossCutScoreFormula": value("lossCutScoreFormula", "LOSS_CUT_SCORE_FORMULA", DEFAULT_STRATEGY_SETTINGS["lossCutScoreFormula"]),
         "notificationScoreFormula": value("notificationScoreFormula", "NOTIFICATION_SCORE_FORMULA", DEFAULT_STRATEGY_SETTINGS["notificationScoreFormula"]),
+        "ontologyRelationRules": value("ontologyRelationRules", "ONTOLOGY_RELATION_RULES", DEFAULT_STRATEGY_SETTINGS["ontologyRelationRules"]),
+        "aiPromptTemplates": value("aiPromptTemplates", "AI_PROMPT_TEMPLATES", DEFAULT_STRATEGY_SETTINGS["aiPromptTemplates"]),
+        "aiPromptPolicy": value("aiPromptPolicy", "AI_PROMPT_POLICY", DEFAULT_STRATEGY_SETTINGS["aiPromptPolicy"]),
         "modelName": value("modelName", "MODEL_NAME", DEFAULT_STRATEGY_SETTINGS["modelName"]),
         "modelHypothesis": value("modelHypothesis", "MODEL_HYPOTHESIS", DEFAULT_STRATEGY_SETTINGS["modelHypothesis"]),
         "customBuyModelFormula": value("customBuyModelFormula", "CUSTOM_BUY_MODEL_FORMULA", DEFAULT_STRATEGY_SETTINGS["customBuyModelFormula"]),

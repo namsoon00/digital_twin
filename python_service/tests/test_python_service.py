@@ -27,7 +27,8 @@ from digital_twin.cli import build_parser
 from digital_twin.domain.accounts import AccountConfig
 from digital_twin.domain.market_data import normalize_position, technical_indicators_from_candles
 from digital_twin.domain.message_types import DEFAULT_ALERT_RULES, DEFAULT_CADENCE, MESSAGE_TYPE_LABELS, public_message_catalog
-from digital_twin.domain.ontology import ONTOLOGY_PROMPT_VERSION, build_portfolio_ontology
+from digital_twin.domain.ontology import build_portfolio_ontology
+from digital_twin.domain.ontology_rules import evaluate_position_relation_rules
 from digital_twin.domain.portfolio_calculations import portfolio_summary
 from digital_twin.domain.strategy import SafeFormula, StrategyModel, decisions_for_positions
 from digital_twin.domain.events import ACCOUNT_SAVED, MARKET_DATA_COLLECTED, MONITORING_ALERTS_DETECTED, MONITORING_CYCLE_COMPLETED, MONITORING_SNAPSHOT_COLLECTED, alerts_detected_event, monitoring_cycle_completed_event, snapshot_collected_event
@@ -518,6 +519,9 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("app-secret", settings["kisAppSecret"])
         self.assertEqual("", status["settings"]["kisAppKey"])
         self.assertEqual("", status["settings"]["kisAppSecret"])
+        self.assertIn("ontologyRelationRules", status["settings"])
+        self.assertIn("aiPromptTemplates", status["settings"])
+        self.assertIn("aiPromptPolicy", status["settings"])
         self.assertTrue(status["configured"]["kisAppKey"])
         self.assertTrue(status["configured"]["kisAppSecret"])
         self.assertTrue(status["configured"]["kisAccountNo"])
@@ -632,7 +636,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertGreater(buy_side["buyScore"], buy_side["sellScore"])
         self.assertGreater(sell_side["sellScore"], sell_side["buyScore"])
 
-    def test_holding_decision_uses_user_score_formulas(self):
+    def test_holding_decision_keeps_user_score_formulas_as_supporting_evidence(self):
         loss_position = normalize_position({
             "symbol": "000660",
             "name": "SK하이닉스",
@@ -666,14 +670,15 @@ class PythonServiceTests(unittest.TestCase):
         loss_decision = next(item for item in decisions if item.symbol == "000660")
         profit_decision = next(item for item in decisions if item.symbol == "005930")
 
-        self.assertEqual(88, loss_decision.exit_pressure)
-        self.assertEqual("lossCut", loss_decision.decision_basis)
+        self.assertEqual(88, loss_decision.loss_cut_pressure)
+        self.assertEqual("ontologyRelationRules", loss_decision.decision_basis)
         self.assertEqual("손절 기준 확인", loss_decision.decision)
-        self.assertEqual(77, profit_decision.exit_pressure)
-        self.assertEqual("profitTake", profit_decision.decision_basis)
-        self.assertEqual("분할 매도 기준 확인", profit_decision.decision)
+        self.assertEqual(77, profit_decision.profit_take_pressure)
+        self.assertEqual("ontologyRelationRules", profit_decision.decision_basis)
+        self.assertEqual("리밸런싱 기준 확인", profit_decision.decision)
         self.assertEqual("supporting-evidence", loss_decision.ai_context["legacyModelRole"])
-        self.assertEqual(ONTOLOGY_PROMPT_VERSION, loss_decision.ai_context["promptVersion"])
+        self.assertEqual("ontology-relation-rule-ai-review", loss_decision.ai_context["role"])
+        self.assertIn("relationRuleContext", loss_decision.ai_context)
         self.assertIn("온톨로지 그래프 JSON", loss_decision.ai_context["prompt"])
         self.assertIn("legacy_model", loss_decision.ontology_opinion)
 
@@ -799,7 +804,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("caution", weak_signal_decision.tone)
         self.assertGreaterEqual(weak_signal_decision.exit_pressure - neutral_decision.exit_pressure, 12)
 
-    def test_holding_decision_uses_loss_label_for_negative_pnl(self):
+    def test_holding_decision_uses_ontology_relation_rules(self):
         loss_position = normalize_position({
             "symbol": "000660",
             "name": "SK하이닉스",
@@ -855,15 +860,15 @@ class PythonServiceTests(unittest.TestCase):
         self.assertGreaterEqual(loss_decision.exit_pressure, 55)
         self.assertEqual("손절 기준 확인", loss_decision.decision)
         self.assertNotIn("익절", loss_decision.decision)
-        self.assertEqual("lossCut", loss_decision.decision_basis)
-        self.assertEqual(loss_decision.loss_cut_pressure, loss_decision.exit_pressure)
-        self.assertLess(loss_decision.profit_take_pressure, loss_decision.loss_cut_pressure)
-        self.assertLess(loss_decision.profit_take_pressure, 55)
-        self.assertEqual("일부 익절 기준 확인", profit_decision.decision)
-        self.assertEqual("profitTake", profit_decision.decision_basis)
-        self.assertEqual(profit_decision.profit_take_pressure, profit_decision.exit_pressure)
-        self.assertEqual("보유 유지", small_loss_decision.decision)
-        self.assertEqual("lossCut", small_loss_decision.decision_basis)
+        self.assertEqual("ontologyRelationRules", loss_decision.decision_basis)
+        self.assertIn("holding.loss_guard.breakdown.v1", [
+            item.get("rule_id") or item.get("ruleId")
+            for item in loss_decision.relation_rule_context.get("activeRules", [])
+        ])
+        self.assertEqual("리밸런싱 기준 확인", profit_decision.decision)
+        self.assertEqual("ontologyRelationRules", profit_decision.decision_basis)
+        self.assertEqual("관계 규칙 관찰", small_loss_decision.decision)
+        self.assertEqual("ontologyRelationRules", small_loss_decision.decision_basis)
 
     def test_portfolio_summary_converts_usd_holdings_to_krw_base(self):
         kr_position = normalize_position({
@@ -894,6 +899,49 @@ class PythonServiceTests(unittest.TestCase):
 
         self.assertEqual("반도체", portfolio.sectors[0]["sector"])
         self.assertEqual(1000000, portfolio.sectors[0]["value"])
+
+    def test_ontology_relation_rules_include_prompt_and_missing_data(self):
+        position = Position(
+            symbol="MSTR",
+            name="Strategy",
+            market="US",
+            currency="USD",
+            market_value=1000,
+            profit_loss_rate=18.5,
+            sellable_quantity=1,
+            current_price=105.36,
+            ma20=108.07,
+            ma60=144.62,
+            ma20_distance=-2.5,
+            ma60_distance=-27.1,
+            sector="BTC",
+        )
+        portfolio = portfolio_summary([position], fx_rates={"USD": 1400, "KRW": 1})
+
+        context = evaluate_position_relation_rules(
+            position,
+            portfolio,
+            external_signals={
+                "cryptoMarkets": {
+                    "bitcoin": {
+                        "provider": "CoinGecko",
+                        "symbol": "BTC",
+                        "price": 108000,
+                        "volume24h": 42000000000,
+                        "change24h": 3.8,
+                        "change7d": 9.7,
+                    }
+                }
+            },
+        )
+
+        active_ids = [item.get("rule_id") or item.get("ruleId") for item in context["activeRules"]]
+        missing_labels = [item["label"] for item in context["missingData"]]
+        self.assertIn("holding.profit_take.trend_weakness.v1", active_ids)
+        self.assertIn("external.crypto.btc_sensitivity.v1", active_ids)
+        self.assertIn("체결강도", missing_labels)
+        self.assertEqual("holdingTiming", context["promptContext"]["promptId"])
+        self.assertEqual("ontologyRelationRules", context["decision"]["basis"])
 
     def test_flow_lens_preserves_provider_portfolio_market_breakdown(self):
         account = AccountConfig("main", "메인", "toss", "https://example.test", "id", "secret", "1", [])
@@ -1164,7 +1212,9 @@ class PythonServiceTests(unittest.TestCase):
             AlertEvent("main", "메인", "WATCH", "holdingTiming", "main:timing:005930", "삼성전자", ["상태 손절 기준 확인 (91점)"], "005930")
         ])
 
-        self.assertEqual(91, rescored.decisions[0].exit_pressure)
+        self.assertEqual(91, rescored.decisions[0].loss_cut_pressure)
+        self.assertEqual("ontologyRelationRules", rescored.decisions[0].decision_basis)
+        self.assertNotEqual(91, rescored.decisions[0].exit_pressure)
         self.assertEqual("baseScore + symbolScore", stamped[0].metadata["notificationScoreFormula"])
 
     def test_account_data_failure_suppresses_investment_change_alerts(self):
@@ -1923,7 +1973,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("externalDataConnection", messages)
         criteria_by_rule = {event.rule: event.criteria for event in events}
         self.assertTrue(any("±3% 이상" in item for item in criteria_by_rule["externalEquityMove"]))
-        self.assertTrue(any("크립토 변동 모델" in item for item in criteria_by_rule["externalCryptoMove"]))
+        self.assertTrue(any("관계 규칙 강도" in item for item in criteria_by_rule["externalCryptoMove"]))
         self.assertTrue(any("7일 -12.1%" in item for item in criteria_by_rule["externalCryptoMove"]))
         self.assertTrue(any("±15bp 이상" in item for item in criteria_by_rule["externalMacroShift"]))
 
@@ -2003,7 +2053,7 @@ class PythonServiceTests(unittest.TestCase):
         event = events[0]
         self.assertEqual("externalCryptoMove", event.rule)
         self.assertEqual("WATCH", event.severity)
-        self.assertTrue(any("크립토 변동 모델 70.8점" in item for item in event.criteria))
+        self.assertTrue(any("관계 규칙 강도 70.8점" in item for item in event.criteria))
         self.assertTrue(any("7일 +11.8%" in item for item in event.criteria))
         model = event.metadata.get("cryptoMoveModel")
         self.assertEqual("크립토 가격 급등", model.get("titleLabel"))
@@ -2012,21 +2062,21 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(70.8, model.get("score"))
         self.assertEqual("크립토 가격 급등", event.metadata.get("cryptoMoveTitle"))
         self.assertEqual(70.8, event.metadata.get("cryptoMoveScore"))
-        self.assertEqual("cryptoMoveScoreFormula", event.metadata.get("formulaAudits")[0].get("key"))
+        self.assertEqual("external.crypto.market_move.v1", event.metadata.get("ontologyRelationContext", {}).get("activeRules", [{}])[0].get("ruleId"))
+        self.assertEqual("cryptoMoveScoreFormula", event.metadata.get("legacyFormulaAudits")[0].get("key"))
 
         db_path = Path(self.temp.name) / "service.db"
         templates = SQLiteNotificationTemplateStore(db_path)
         message = templates.render(event.rule, alert_context(event))
         self.assertIn("<b>[관찰] 크립토 가격 급등</b>", message)
         self.assertNotIn("크립토 가격 급락", message)
-        self.assertIn("판단 결과", message)
-        self.assertIn("크립토 가격 급등 (모델 점수 70.8점)", message)
+        self.assertIn("관계 규칙", message)
+        self.assertIn("크립토 급변", message)
+        self.assertIn("온톨로지 판단", message)
         self.assertIn("대표 변화", message)
         self.assertIn("7일 +11.8%", message)
-        self.assertIn("크립토 변동 공식(cryptoMoveScoreFormula)", message)
-        self.assertIn("change7d=11.8", message)
-        self.assertIn("weekThreshold=10", message)
-        self.assertIn("핵심 이유", message)
+        self.assertIn("AI 프롬프트", message)
+        self.assertNotIn("크립토 변동 공식(cryptoMoveScoreFormula)", message)
 
     def test_external_signal_provider_normalizes_api_responses_and_caches(self):
         calls = []
@@ -2225,7 +2275,16 @@ class PythonServiceTests(unittest.TestCase):
             "profitLossRate": 3,
             "sector": "AI/플랫폼",
         })
-        previous_portfolio = portfolio_summary([previous_position])
+        previous_diversifier = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "marketValue": 100000000,
+            "quantity": 10,
+            "sector": "반도체",
+        })
+        previous_portfolio = portfolio_summary([previous_position, previous_diversifier])
         previous_snapshot = AccountSnapshot(
             "main",
             "메인",
@@ -2234,8 +2293,8 @@ class PythonServiceTests(unittest.TestCase):
             "ok",
             utc_now_iso(),
             previous_portfolio,
-            [previous_position],
-            decisions_for_positions([previous_position], previous_portfolio),
+            [previous_position, previous_diversifier],
+            decisions_for_positions([previous_position, previous_diversifier], previous_portfolio),
         )
         current_position = normalize_position({
             "symbol": "AAPL",
@@ -2469,6 +2528,50 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("NAVER / 035420", context["symbolWithCode"])
         self.assertIn("NAVER / 035420", message)
         self.assertNotIn("<code>035420</code>", message)
+
+    def test_notification_render_shows_ontology_rule_context(self):
+        db_path = Path(self.temp.name) / "service.db"
+        templates = SQLiteNotificationTemplateStore(db_path)
+        position = Position(
+            symbol="MSTR",
+            name="Strategy",
+            market="US",
+            currency="USD",
+            market_value=1000,
+            profit_loss_rate=18.5,
+            sellable_quantity=1,
+            current_price=105.36,
+            ma20=108.07,
+            ma60=144.62,
+            ma20_distance=-2.5,
+            ma60_distance=-27.1,
+            sector="BTC",
+        )
+        relation_context = evaluate_position_relation_rules(position, portfolio_summary([position]))
+        event = AlertEvent(
+            "main",
+            "메인",
+            "WATCH",
+            "holdingTiming",
+            "main:timing:MSTR",
+            "Strategy",
+            ["상태 분할 매도 기준 확인 (80점)", "손익 +18.5%"],
+            "MSTR",
+            metadata={
+                "ontologyRelationContext": relation_context,
+                "ontologyPromptContext": relation_context["promptContext"],
+            },
+        )
+
+        message = templates.render(event.rule, alert_context(event))
+
+        self.assertIn("관계 규칙", message)
+        self.assertIn("수익 보유 + 추세 약화", message)
+        self.assertIn("AI 분석 기준", message)
+        self.assertIn("부족 데이터", message)
+        self.assertIn("체결강도", message)
+        self.assertIn("온톨로지 판단", message)
+        self.assertNotIn("모델 공식", message)
 
     def test_notification_delivery_score_uses_user_formula(self):
         event = AlertEvent(

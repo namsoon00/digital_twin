@@ -656,6 +656,139 @@ def symbol_with_code(display_symbol: object, raw_symbol: object) -> str:
     return display_text or raw_text
 
 
+def ontology_relation_context(context_or_metadata: Dict[str, object]) -> Dict[str, object]:
+    if not isinstance(context_or_metadata, dict):
+        return {}
+    context = context_or_metadata.get("ontologyRelationContext")
+    if isinstance(context, dict) and context:
+        return dict(context)
+    metadata = context_or_metadata.get("metadata")
+    if isinstance(metadata, dict):
+        context = metadata.get("ontologyRelationContext")
+        if isinstance(context, dict) and context:
+            return dict(context)
+    review = context_or_metadata.get("ontologyReviewContext")
+    if isinstance(review, dict):
+        nested = review.get("relationRuleContext")
+        if isinstance(nested, dict) and nested:
+            return dict(nested)
+    return {}
+
+
+def ontology_prompt_context(context_or_metadata: Dict[str, object]) -> Dict[str, object]:
+    if not isinstance(context_or_metadata, dict):
+        return {}
+    context = context_or_metadata.get("ontologyPromptContext")
+    if isinstance(context, dict) and context:
+        return dict(context)
+    metadata = context_or_metadata.get("metadata")
+    if isinstance(metadata, dict):
+        context = metadata.get("ontologyPromptContext")
+        if isinstance(context, dict) and context:
+            return dict(context)
+    relation_context = ontology_relation_context(context_or_metadata)
+    nested = relation_context.get("promptContext") if isinstance(relation_context, dict) else {}
+    return dict(nested or {}) if isinstance(nested, dict) else {}
+
+
+def ontology_missing_data(context_or_metadata: Dict[str, object]) -> List[Dict[str, object]]:
+    relation_context = ontology_relation_context(context_or_metadata)
+    missing = relation_context.get("missingData") if isinstance(relation_context, dict) else []
+    if not isinstance(missing, list):
+        return []
+    rows = []
+    for item in missing:
+        if isinstance(item, dict):
+            label = str(item.get("label") or item.get("key") or "").strip()
+            effect = str(item.get("effect") or "").strip()
+            rows.append({"label": label, "effect": effect})
+        elif str(item or "").strip():
+            rows.append({"label": str(item).strip(), "effect": ""})
+    return [item for item in rows if item.get("label")]
+
+
+def rule_value(item: Dict[str, object], *keys):
+    for key in keys:
+        if isinstance(item, dict) and item.get(key) not in (None, ""):
+            return item.get(key)
+    return ""
+
+
+def ontology_rule_lines(context_or_metadata: Dict[str, object]) -> List[str]:
+    relation_context = ontology_relation_context(context_or_metadata)
+    if not relation_context:
+        return []
+    lines: List[str] = []
+    strength = relation_context.get("signalStrength")
+    label = str(relation_context.get("signalStrengthLabel") or "").strip()
+    confidence = relation_context.get("confidence")
+    if strength not in (None, ""):
+        suffix = "신뢰도 " + format_score_value(confidence) if confidence not in (None, "") else ""
+        lines.append("관계 신호: " + " ".join(part for part in [label + " (" + format_score_value(strength) + "점)", suffix] if part))
+    rules = relation_context.get("activeRules") or relation_context.get("matchedRules") or []
+    for item in rules:
+        if not isinstance(item, dict):
+            continue
+        if item.get("referenceOnly") or item.get("reference_only"):
+            continue
+        rule_label = str(rule_value(item, "label", "rule_id", "ruleId")).strip()
+        score = rule_value(item, "strengthScore", "strength_score")
+        evidence = item.get("evidence") if isinstance(item.get("evidence"), list) else []
+        evidence_text = ", ".join(str(value) for value in evidence[:3] if str(value or "").strip())
+        value = rule_label
+        if score not in (None, ""):
+            value += " (" + format_score_value(score) + "점)"
+        if evidence_text:
+            value += " - " + evidence_text
+        if value.strip():
+            lines.append("성립 규칙: " + value)
+    prompt_context = ontology_prompt_context(context_or_metadata)
+    prompt_id = str(prompt_context.get("promptId") or "").strip()
+    if prompt_id:
+        lines.append("AI 질문: " + prompt_id)
+    return lines
+
+
+def ai_prompt_lines(context_or_metadata: Dict[str, object]) -> List[str]:
+    prompt_context = ontology_prompt_context(context_or_metadata)
+    if not prompt_context:
+        return []
+    template = prompt_context.get("promptTemplate") if isinstance(prompt_context.get("promptTemplate"), dict) else {}
+    label = str(template.get("label") or prompt_context.get("promptId") or "").strip()
+    version = str(prompt_context.get("promptVersion") or template.get("version") or "").strip()
+    lines = []
+    if label:
+        lines.append("프롬프트: " + label + ((" / " + version) if version else ""))
+    guardrails = prompt_context.get("guardrails") if isinstance(prompt_context.get("guardrails"), list) else []
+    if guardrails:
+        lines.append("가드레일: " + " · ".join(str(item) for item in guardrails[:2] if str(item or "").strip()))
+    return lines
+
+
+def missing_data_lines(context_or_metadata: Dict[str, object]) -> List[str]:
+    rows = ontology_missing_data(context_or_metadata)
+    lines = []
+    for item in rows:
+        text = str(item.get("label") or "").strip()
+        effect = str(item.get("effect") or "").strip()
+        if effect:
+            text += ": " + effect
+        lines.append(text)
+    return lines
+
+
+def block_from_lines(title: str, lines: List[str]) -> str:
+    if not lines:
+        return ""
+    return title + "\n" + "\n".join(plain_bullet(line) for line in lines)
+
+
+def telegram_block_from_lines(title: str, lines: List[str]) -> str:
+    if not lines:
+        return ""
+    return "<b>" + html.escape(title, quote=False) + "</b>\n" + "\n".join(html_bullet(line) for line in lines)
+
+
 def target_display_value(title: object, raw_symbol: object, display_symbol: object) -> str:
     title_text = str(title or "").strip()
     raw_text = str(raw_symbol or "").strip().upper()
@@ -676,6 +809,7 @@ def target_display_value(title: object, raw_symbol: object, display_symbol: obje
 
 def alert_context(event: AlertEvent) -> Dict[str, object]:
     raw_lines = raw_lines_with_reference_date(event, [str(line).strip() for line in event.lines if str(line).strip()])
+    metadata = dict(event.metadata or {})
     lines = "\n".join(["- " + line for line in raw_lines])
     bullet_lines = "\n".join([plain_bullet(line) for line in raw_lines])
     message_type_label = MESSAGE_TYPE_LABELS.get(event.rule, event.rule)
@@ -700,29 +834,49 @@ def alert_context(event: AlertEvent) -> Dict[str, object]:
     trigger_block = ("발송 기준\n" + trigger_block_rows) if trigger_block_rows else ""
     data_rows = plain_data_rows(raw_lines)
     data_block = ("데이터\n" + data_rows) if data_rows else ""
+    ontology_lines = ontology_rule_lines(metadata)
+    ai_lines = ai_prompt_lines(metadata)
+    missing_lines = missing_data_lines(metadata)
+    ontology_block = block_from_lines("관계 규칙", ontology_lines)
+    ai_prompt_block = block_from_lines("AI 분석 기준", ai_lines)
+    missing_data_block = block_from_lines("부족 데이터", missing_lines)
     readable_parts = [
         headline,
         target_value,
     ]
     if data_rows:
         readable_parts.extend(["", data_block])
+    if ontology_block:
+        readable_parts.extend(["", ontology_block])
+    if ai_prompt_block:
+        readable_parts.extend(["", ai_prompt_block])
+    if missing_data_block:
+        readable_parts.extend(["", missing_data_block])
     if trigger_block:
         readable_parts.extend(["", trigger_block])
     readable_message = "\n".join(part for part in readable_parts if str(part).strip() or part == "").strip()
     escaped_target = html.escape(target_value, quote=False)
     telegram_trigger_rows = criterion_rows(criteria, True)
     telegram_data_lines = telegram_data_rows(raw_lines)
+    telegram_ontology_block = telegram_block_from_lines("관계 규칙", ontology_lines)
+    telegram_ai_prompt_block = telegram_block_from_lines("AI 분석 기준", ai_lines)
+    telegram_missing_data_block = telegram_block_from_lines("부족 데이터", missing_lines)
     telegram_parts = [
         "<b>" + html.escape(headline, quote=False) + "</b>",
         ("<code>" + escaped_target + "</code>") if escaped_target else "",
     ]
     if telegram_data_lines:
         telegram_parts.extend(["", "<b>데이터</b>", telegram_data_lines])
+    if telegram_ontology_block:
+        telegram_parts.extend(["", telegram_ontology_block])
+    if telegram_ai_prompt_block:
+        telegram_parts.extend(["", telegram_ai_prompt_block])
+    if telegram_missing_data_block:
+        telegram_parts.extend(["", telegram_missing_data_block])
     if telegram_trigger_rows:
         telegram_parts.extend(["", "<b>발송 기준</b>", telegram_trigger_rows])
     telegram_message = "\n".join(part for part in telegram_parts if str(part).strip() or part == "").strip()
     body = telegram_message or readable_message or "\n".join([event.title] + ([lines] if lines else []))
-    metadata = dict(event.metadata or {})
     generated_at = event_generated_at(event)
     reference_date = data_value(raw_lines, "기준일") or reference_date_text(generated_at)
     context = {
@@ -752,9 +906,15 @@ def alert_context(event: AlertEvent) -> Dict[str, object]:
         "criterionBlock": trigger_block,
         "criterionLines": "\n".join(criteria),
         "dataBlock": data_block,
+        "ontologyRelationBlock": ontology_block,
+        "aiPromptBlock": ai_prompt_block,
+        "missingDataBlock": missing_data_block,
         "divider": "",
         "telegramMessage": telegram_message,
         "telegramDataLines": telegram_data_lines,
+        "telegramOntologyRelationBlock": telegram_ontology_block,
+        "telegramAiPromptBlock": telegram_ai_prompt_block,
+        "telegramMissingDataBlock": telegram_missing_data_block,
         "symbolLine": symbol_line,
         "severityLine": severity_line,
         "typeLine": type_line,
@@ -1172,17 +1332,85 @@ def investment_score_lines(context: Dict[str, object]) -> List[str]:
     return lines
 
 
+def ontology_modeling_lines(context: Dict[str, object]) -> List[str]:
+    relation_context = ontology_relation_context(context)
+    if not relation_context:
+        return []
+    subject = relation_context.get("subject") if isinstance(relation_context.get("subject"), dict) else {}
+    subject_text = " / ".join(
+        str(value)
+        for value in [subject.get("name"), subject.get("symbol"), subject.get("market")]
+        if str(value or "").strip()
+    )
+    lines = [
+        "모델: 온톨로지 관계 규칙 모델",
+        "엔진: " + str(relation_context.get("engineVersion") or "-"),
+    ]
+    if subject_text:
+        lines.append("대상: " + subject_text)
+    strength = relation_context.get("signalStrength")
+    if strength not in (None, ""):
+        lines.append(
+            "관계 신호: "
+            + str(relation_context.get("signalStrengthLabel") or "")
+            + " ("
+            + format_score_value(strength)
+            + "점)"
+        )
+    decision = relation_context.get("decision") if isinstance(relation_context.get("decision"), dict) else {}
+    if decision:
+        selected = str(decision.get("selectedRuleId") or "").strip()
+        lines.append("판단: " + str(decision.get("label") or "-") + ((" / 선택 규칙 " + selected) if selected else ""))
+    if context_message_type(context) == "externalCryptoMove":
+        model = context.get("cryptoMoveModel") if isinstance(context.get("cryptoMoveModel"), dict) else {}
+        period = str(model.get("dominantPeriodLabel") or context.get("cryptoMoveDominantPeriod") or "").strip()
+        change = model.get("dominantChange", context.get("cryptoMoveDominantChange"))
+        if period or change not in (None, ""):
+            change_text = signed_pct(change) if isinstance(change, (int, float)) else str(change or "").strip()
+            lines.append("대표 변화: " + " ".join(part for part in [period, change_text] if part))
+    for line in ontology_rule_lines(context)[:4]:
+        lines.append(line)
+    return lines
+
+
+def ontology_missing_lines(context: Dict[str, object]) -> List[str]:
+    lines = missing_data_lines(context)
+    return ["부족 데이터 없음"] if ontology_relation_context(context) and not lines else lines
+
+
+def ontology_prompt_section_lines(context: Dict[str, object]) -> List[str]:
+    lines = ai_prompt_lines(context)
+    prompt_context = ontology_prompt_context(context)
+    policy = str(prompt_context.get("promptPolicy") or "").strip()
+    if policy:
+        compact_policy = ", ".join(line.strip() for line in policy.splitlines() if line.strip())
+        if compact_policy:
+            lines.append("정책: " + compact_policy)
+    return lines
+
+
 def score_explanation_sections(context: Dict[str, object]) -> List[tuple]:
     if context_message_type(context) in SCORE_EXPLANATION_SKIP_TYPES:
         return []
-    model_lines = modeling_lines(context)
-    model_lines.extend(formula_audit_lines(context, "model"))
-    model_lines.extend(investment_score_lines(context))
+    if ontology_relation_context(context):
+        model_lines = ontology_modeling_lines(context)
+        missing_lines = ontology_missing_lines(context)
+        prompt_lines = ontology_prompt_section_lines(context)
+    else:
+        model_lines = modeling_lines(context)
+        model_lines.extend(formula_audit_lines(context, "model"))
+        model_lines.extend(investment_score_lines(context))
+        missing_lines = []
+        prompt_lines = []
     delivery_lines = delivery_score_lines(context)
     delivery_lines.extend(formula_audit_lines(context, "delivery"))
     sections = []
     if model_lines:
-        sections.append(("모델 판단", model_lines))
+        sections.append(("온톨로지 판단" if ontology_relation_context(context) else "모델 판단", model_lines))
+    if missing_lines:
+        sections.append(("부족 데이터", missing_lines))
+    if prompt_lines:
+        sections.append(("AI 프롬프트", prompt_lines))
     if delivery_lines:
         sections.append(("알림 발송", delivery_lines))
     return sections
@@ -1246,7 +1474,7 @@ def template_prefers_rich_score(template: str, rendered: str) -> bool:
 
 def append_score_explanation(rendered: str, context: Dict[str, object], rich: bool = False) -> str:
     rendered_text = str(rendered or "")
-    if not rendered_text.strip() or "점수 계산" in rendered_text or "모델 판단" in rendered_text or "알림 발송" in rendered_text:
+    if not rendered_text.strip() or "점수 계산" in rendered_text or "모델 판단" in rendered_text or "온톨로지 판단" in rendered_text or "알림 발송" in rendered_text:
         return rendered
     block = score_explanation_block(context, rich)
     if not block:
@@ -1291,9 +1519,15 @@ def template_variables() -> List[str]:
         "criterionBlock",
         "criterionLines",
         "dataBlock",
+        "ontologyRelationBlock",
+        "aiPromptBlock",
+        "missingDataBlock",
         "divider",
         "telegramMessage",
         "telegramDataLines",
+        "telegramOntologyRelationBlock",
+        "telegramAiPromptBlock",
+        "telegramMissingDataBlock",
         "symbolLine",
         "severityLine",
         "typeLine",
@@ -1324,6 +1558,9 @@ def template_variables() -> List[str]:
         "honeyReasons",
         "metadata",
         "formulaAudits",
+        "legacyFormulaAudits",
+        "ontologyRelationContext",
+        "ontologyPromptContext",
         "notificationFormulaAudit",
         "buyScoreFormula",
         "sellScoreFormula",

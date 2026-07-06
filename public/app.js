@@ -59,6 +59,43 @@
     profitTakeScoreFormula: "baseScore + profitTakePnlScore + sectorConcentrationScore + sellableScore + holdingSignalScore",
     lossCutScoreFormula: "baseScore + lossCutPnlScore + sectorConcentrationScore + sellableScore + holdingSignalScore",
     notificationScoreFormula: "rawScore",
+    ontologyRelationRules: [
+      "holding.profit_take.trend_weakness.v1 | 수익 보유 + 추세 약화 -> 익절 점검 | 손익률 +10% 이상이고 20일선 아래이거나 60일선 대비 약해질 때 | PROFIT_TAKE_REVIEW | exit_timing | 분할 매도, 추세 회복 조건, 유지 조건을 함께 비교",
+      "holding.loss_guard.breakdown.v1 | 손실 보유 + 기준선 이탈 -> 손실 관리 | 손익률 -8% 이하이거나 현재가가 20일선보다 5% 이상 낮을 때 | LOSS_GUARD | risk_control | 손실 확대 요인, 회복 조건, 분할 대응 기준을 분리",
+      "holding.concentration.rebalance.v1 | 업종 집중 + 보유 비중 과대 -> 리밸런싱 점검 | 업종 비중 50% 이상 또는 단일 종목 비중 30% 이상일 때 | CONCENTRATION_RISK | portfolio_risk | 개별 종목 판단과 포트폴리오 리스크를 분리",
+      "holding.trend_flow.confirmation.v1 | 추세와 수급 방향 일치 -> 판단 신뢰도 보강 | 추세와 외국인·기관 순매수 방향이 같은 쪽으로 움직일 때 | EVIDENCE_SUPPORT | confirmation | 같은 방향 증거와 반대 증거를 나눠 검토",
+      "external.crypto.btc_sensitivity.v1 | 비트코인 급변 + 민감 종목 -> 연동 점검 | BTC가 24시간 또는 7일 기준을 넘고 MSTR/STRC 같은 민감 종목을 보유할 때 | EXTERNAL_SENSITIVITY | cross_asset | BTC 변화와 보유 종목 가격 변화의 시차를 확인",
+      "data.quality.guard.v1 | 핵심 데이터 부족 -> 판단 보류 | 현재가, 이동평균, 수급, 체결강도 중 판단에 필요한 데이터가 빠졌을 때 | DATA_QUALITY_GUARD | data_quality | 없는 데이터는 추정하지 않고 판단 영향만 설명"
+    ].join("\n"),
+    aiPromptTemplates: [
+      "[holdingTiming]",
+      "label=보유 타이밍 AI 분석",
+      "version=ai-prompt-registry-v1",
+      "purpose=보유 종목의 매수, 보유, 분할 매도, 손실 관리 타이밍을 관계 규칙 기반으로 설명",
+      "system=제공된 데이터와 관계 규칙만 사용한다.",
+      "user=성립 규칙, 증거, 부족 데이터를 보고 왜 알림이 발생했는지 설명하고 다음 확인 질문 3개를 제시한다.",
+      "",
+      "[monitorDecisionChange]",
+      "label=판단 변화 AI 분석",
+      "version=ai-prompt-registry-v1",
+      "purpose=이전 판단과 현재 판단이 달라진 이유를 관계 규칙과 데이터 변화로 분해",
+      "system=실시간 모니터링 변화 원인을 설명한다.",
+      "user=이전 상태와 현재 상태의 차이를 비교해 판단 변화 원인, 노이즈 가능성, 재확인 조건을 설명한다.",
+      "",
+      "[externalCryptoMove]",
+      "label=크립토 연동 AI 분석",
+      "version=ai-prompt-registry-v1",
+      "purpose=BTC/ETH 급변이 보유 주식과 어떤 관계를 가질 수 있는지 분리해 설명",
+      "system=외부 시장 신호와 보유 종목의 연결 관계를 검토한다.",
+      "user=크립토 변화율, 거래액, 민감 종목 보유 여부를 근거로 확인할 연결 관계와 노이즈 가능성을 설명한다."
+    ].join("\n"),
+    aiPromptPolicy: [
+      "providedDataOnly=1",
+      "separateInvestmentJudgmentAndDelivery=1",
+      "showMissingData=1",
+      "askBeforeInventingNewData=1",
+      "preferRelationRulesOverFormulaScores=1"
+    ].join("\n"),
     modelName: "나의 매수/매도 모델",
     modelHypothesis: "수급, 가치, 내 점수, 리스크를 함께 봐서 매수 후보와 매도 후보를 분리한다.",
     customBuyModelFormula: "buyScore * 0.35 + thesisScore * thesisWeight + confidenceScore * confidenceWeight + max(0, targetReturn) * 0.15 + undervalueBonus * valuationWeight - riskScore * riskControlWeight",
@@ -231,10 +268,11 @@
     { id: "advanced", label: "고급", description: "채널·임계값" }
   ];
   var strategySections = [
-    { id: "overview", label: "개요", description: "읽는 법" },
-    { id: "data", label: "데이터", description: "준비도 점검" },
-    { id: "rules", label: "판단 기준", description: "공식·가중치" },
-    { id: "results", label: "모델 결과", description: "종목별 판단" }
+    { id: "overview", label: "관계 모델", description: "운영 방식" },
+    { id: "data", label: "데이터", description: "증거 준비도" },
+    { id: "rules", label: "관계 규칙", description: "온톨로지 룰" },
+    { id: "prompts", label: "프롬프트", description: "AI 질문 관리" },
+    { id: "results", label: "판단 결과", description: "종목별 신호" }
   ];
 
   function activeTabMeta() {
@@ -2925,6 +2963,9 @@
       profitTakeScoreFormula: settingValue("profitTakeScoreFormula"),
       lossCutScoreFormula: settingValue("lossCutScoreFormula"),
       notificationScoreFormula: settingValue("notificationScoreFormula"),
+      ontologyRelationRules: settingValue("ontologyRelationRules"),
+      aiPromptTemplates: settingValue("aiPromptTemplates"),
+      aiPromptPolicy: settingValue("aiPromptPolicy"),
       modelName: settingValue("modelName"),
       modelHypothesis: settingValue("modelHypothesis"),
       customBuyModelFormula: settingValue("customBuyModelFormula"),
@@ -3878,6 +3919,9 @@
       "profitTakeScoreFormula",
       "lossCutScoreFormula",
       "notificationScoreFormula",
+      "ontologyRelationRules",
+      "aiPromptTemplates",
+      "aiPromptPolicy",
       "modelName",
       "modelHypothesis",
       "customBuyModelFormula",
@@ -4387,6 +4431,35 @@
     return reasons;
   }
 
+  function clientOntologyRuleMatches(item, signal, hasData) {
+    var matches = [];
+    var pnl = numeric(item.profitLossRate);
+    var ma20Distance = numeric(signal && signal.trendDistance20);
+    var ma60Distance = numeric(signal && signal.trendDistance60);
+    var foreignNet = numeric(signal && signal.foreignNet);
+    var institutionNet = numeric(signal && signal.institutionNet);
+    var symbol = String(item.symbol || "").toUpperCase();
+    if (pnl >= 10 && (ma20Distance <= -2 || ma60Distance <= -5)) {
+      matches.push({ label: "수익 보유 + 추세 약화", score: Math.min(100, 55 + Math.abs(ma20Distance) + Math.max(0, pnl - 10)), tone: "caution" });
+    }
+    if (pnl <= -8 || ma20Distance <= -5) {
+      matches.push({ label: "손실 보유 + 기준선 이탈", score: Math.min(100, 60 + Math.abs(pnl) + Math.abs(ma20Distance)), tone: "danger" });
+    }
+    if ((foreignNet || institutionNet) && ma20Distance) {
+      var sameDirection = (ma20Distance > 0 && foreignNet + institutionNet > 0) || (ma20Distance < 0 && foreignNet + institutionNet < 0);
+      if (sameDirection) {
+        matches.push({ label: "추세와 수급 방향 일치", score: 55 + Math.min(25, Math.abs(ma20Distance)), tone: "watch" });
+      }
+    }
+    if (["MSTR", "STRC", "COIN", "MARA", "RIOT"].indexOf(symbol) >= 0) {
+      matches.push({ label: "비트코인 민감 종목", score: 55, tone: "watch" });
+    }
+    if (!hasData || !numeric(signal && signal.tradeStrength) || !numeric(signal && signal.ma20)) {
+      matches.push({ label: "핵심 데이터 부족", score: 45, tone: "hold" });
+    }
+    return matches.sort(function (a, b) { return b.score - a.score; });
+  }
+
   function buildTradeSignalItems(snapshot) {
     var signalMap = parseMarketSignals();
     var valuationMap = {};
@@ -4400,6 +4473,7 @@
       var valuation = valuationMap[symbol] || null;
       var scores = hasData ? marketSignalScores(signal, { item: item, valuation: valuation }) : { buyScore: 0, sellScore: 0, buyShare: 0, errors: [] };
       var decision = tradeSignalDecision(item, scores, valuation, hasData);
+      var relationRules = clientOntologyRuleMatches(item, signal, hasData);
       return {
         symbol: symbol,
         name: item.name || symbol,
@@ -4423,6 +4497,8 @@
         action: decision.label,
         tone: decision.tone,
         priority: decision.priority,
+        relationRules: relationRules,
+        relationStrength: relationRules.length ? relationRules[0].score : 0,
         reasons: tradeSignalReasons(signal, scores, valuation, hasData),
         triggers: ["거래량", "이동평균", "투자자 수급", "호가", "가격변화"]
       };
@@ -5076,6 +5152,9 @@
       profitTakeScoreFormula: formulaSetting("profitTakeScoreFormula"),
       lossCutScoreFormula: formulaSetting("lossCutScoreFormula"),
       notificationScoreFormula: formulaSetting("notificationScoreFormula"),
+      ontologyRelationRules: settingValue("ontologyRelationRules") || defaultSettings.ontologyRelationRules,
+      aiPromptTemplates: settingValue("aiPromptTemplates") || defaultSettings.aiPromptTemplates,
+      aiPromptPolicy: settingValue("aiPromptPolicy") || defaultSettings.aiPromptPolicy,
       customBuyModelFormula: formulaSetting("customBuyModelFormula"),
       customSellModelFormula: formulaSetting("customSellModelFormula"),
       formulaWeights: formulaWeights(),
@@ -6107,11 +6186,11 @@
     if (section === "data") return renderStrategyDataPanel(snapshot);
     if (section === "rules") {
       return [
-        renderFormulaLedgerPanel(),
-        renderAdminModelingPanel(snapshot),
+        renderOntologyRuleEditorPanel(snapshot),
         renderModelVersionPanel(snapshot)
       ].join("");
     }
+    if (section === "prompts") return renderAiPromptRegistryPanel(snapshot);
     if (section === "results") return renderModelPreviewPanel(snapshot);
     return [
       renderStrategyProcessPanel(snapshot),
@@ -6126,11 +6205,11 @@
     var thresholds = modelDecisionThresholds();
     var steps = [
       ["01", "데이터 정합", "보유·관심·시장 입력", items.length + " symbols"],
-      ["02", "Feature 산출", "수급·추세·가치 변수", modelVariableGuide().length + " variables"],
-      ["03", "공식 평가", "매수·매도·알림 공식", "8 formulas"],
-      ["04", "Threshold", "판단 기준 적용", "Buy " + Math.round(thresholds.modelBuy || 0) + " / Sell " + Math.round(thresholds.modelSell || 0)],
+      ["02", "증거 추출", "손익·수급·추세·외부 신호", modelVariableGuide().length + " fields"],
+      ["03", "관계 규칙", "온톨로지 룰 성립 여부", ontologyRuleRows().length + " rules"],
+      ["04", "AI Prompt", "비동기 해석 컨텍스트", promptTemplateRows().length + " prompts"],
       ["05", "Result", "종목별 판단 결과", Math.round(stats.buyAverage || 0) + " / " + Math.round(stats.sellAverage || 0)],
-      ["06", "Alert", "룰·주기·템플릿 연결", notificationEnabledRuleCount() + " rules"]
+      ["06", "Alert", "주기·템플릿·발송 정책 연결", notificationEnabledRuleCount() + " types"]
     ];
     return [
       '<article class="panel strategy-process-panel">',
@@ -9314,25 +9393,161 @@
     ].join("");
   }
 
+  function ontologyRuleRows() {
+    return String(settingValue("ontologyRelationRules") || defaultSettings.ontologyRelationRules || "")
+      .split(/\r?\n/)
+      .map(function (line) { return line.trim(); })
+      .filter(Boolean)
+      .map(function (line) {
+        var parts = line.split("|").map(function (part) { return part.trim(); });
+        return {
+          id: parts[0] || "",
+          label: parts[1] || parts[0] || "",
+          condition: parts[2] || "",
+          relation: parts[3] || "",
+          signal: parts[4] || "",
+          prompt: parts.slice(5).join(" | ")
+        };
+      });
+  }
+
+  function promptTemplateRows() {
+    var rows = [];
+    var current = null;
+    String(settingValue("aiPromptTemplates") || defaultSettings.aiPromptTemplates || "")
+      .split(/\r?\n/)
+      .forEach(function (line) {
+        var cleaned = line.trim();
+        if (!cleaned) return;
+        var header = cleaned.match(/^\[([^\]]+)\]$/);
+        if (header) {
+          current = { id: header[1], label: header[1], purpose: "", version: "" };
+          rows.push(current);
+          return;
+        }
+        if (!current || cleaned.indexOf("=") < 0) return;
+        var key = cleaned.split("=", 1)[0].trim();
+        var value = cleaned.slice(cleaned.indexOf("=") + 1).trim();
+        current[key] = value;
+        if (key === "label") current.label = value;
+        if (key === "purpose") current.purpose = value;
+        if (key === "version") current.version = value;
+      });
+    return rows;
+  }
+
+  function renderOntologyRuleEditorPanel(snapshot) {
+    var rules = ontologyRuleRows();
+    var thresholds = modelDecisionThresholds();
+    var alertThresholdValues = alertThresholds();
+    return [
+      '<article class="panel model-panel ontology-rule-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Ontology Rules</p>',
+      '<h2>관계 규칙 기반 매수·매도 판단</h2>',
+      '</div>',
+      '<span class="metric">' + escapeHtml(rules.length) + '</span>',
+      '</div>',
+      '<div class="lab-stats-grid model-stats-grid">',
+      renderLabStat("관계 규칙", rules.length, "개"),
+      renderLabStat("보유 종목", (snapshot.positions || []).filter(function (item) { return item.symbol !== "CASH"; }).length, "개"),
+      renderLabStat("판단 기준", Math.round(thresholds.modelSell || 0), "점"),
+      renderLabStat("손실 기준", signedPct(alertThresholdValues.lossRateLow || -8), ""),
+      '</div>',
+      '<div class="model-editor">',
+      '<div class="settings-grid">',
+      renderModelSettingField("modelName", "전략 이름", "text", "나의 모델"),
+      renderModelFormulaField("modelHypothesis", "전략 가설", "어떤 관계를 보고 매수·매도 타이밍을 판단할지"),
+      '</div>',
+      '<div class="model-section">',
+      '<div class="flow-title"><div><strong>관계 규칙 원본</strong><span>형식: ruleId | label | condition | relationType | signalType | promptHint</span></div></div>',
+      '<label class="setting-field wide"><textarea data-model-setting="ontologyRelationRules" rows="10" autocomplete="off">' + escapeHtml(settingValue("ontologyRelationRules") || defaultSettings.ontologyRelationRules) + '</textarea></label>',
+      '</div>',
+      '<div class="model-section">',
+      '<div class="flow-title"><div><strong>성립 가능한 관계</strong><span>알림은 이 관계가 실제 데이터와 연결될 때 발생합니다.</span></div></div>',
+      '<div class="source-stack ontology-rule-list">',
+      rules.map(function (rule) {
+        return [
+          '<div class="source-row">',
+          '<span>' + escapeHtml(rule.signal || rule.relation || "relation") + '</span>',
+          '<strong>' + escapeHtml(rule.label) + '</strong>',
+          '<em>' + escapeHtml(rule.condition || rule.prompt || rule.id) + '</em>',
+          '</div>'
+        ].join("");
+      }).join("") || '<p class="subtle">등록된 관계 규칙이 없습니다.</p>',
+      '</div>',
+      '</div>',
+      '<div class="model-section">',
+      '<div class="flow-title"><div><strong>관계 성립 기준값</strong><span>손익, 비중, 외부 신호 임계값은 알림 정책과 공유합니다.</span></div></div>',
+      renderNumberSettingGrid("alertThresholds", alertThresholdValues, ["lossRateLow", "profitRateHigh", "sectorWeightHigh", "positionWeightHigh", "externalBitcoinChange24hPct", "externalBitcoinChange7dPct"]),
+      '</div>',
+      '<div class="rule-strip"><span>공식 점수는 참고 자료입니다. 실제 보유 타이밍 메시지는 관계 규칙, 증거, 부족 데이터, AI 프롬프트 컨텍스트를 기준으로 생성됩니다.</span></div>',
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderAiPromptRegistryPanel(snapshot) {
+    var prompts = promptTemplateRows();
+    return [
+      '<article class="panel model-panel prompt-registry-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Prompt Registry</p>',
+      '<h2>AI 분석 프롬프트 관리</h2>',
+      '</div>',
+      '<span class="metric">' + escapeHtml(prompts.length) + '</span>',
+      '</div>',
+      '<div class="settings-body">',
+      '<div class="settings-note">',
+      '<strong>프롬프트는 관계 규칙의 해석 레이어입니다.</strong>',
+      '<p>결정론적 알림은 관계 규칙으로 발생하고, AI는 성립 이유, 반대 증거, 부족 데이터, 모델 개선점을 비동기로 설명합니다.</p>',
+      '</div>',
+      '<div class="model-section">',
+      '<div class="flow-title"><div><strong>프롬프트 정책</strong><span>AI가 데이터를 해석할 때 반드시 지켜야 하는 경계입니다.</span></div></div>',
+      '<label class="setting-field wide"><textarea data-model-setting="aiPromptPolicy" rows="6" autocomplete="off">' + escapeHtml(settingValue("aiPromptPolicy") || defaultSettings.aiPromptPolicy) + '</textarea></label>',
+      '</div>',
+      '<div class="model-section">',
+      '<div class="flow-title"><div><strong>프롬프트 템플릿</strong><span>알림 타입별 AI 질문과 출력 계약입니다.</span></div></div>',
+      '<label class="setting-field wide"><textarea data-model-setting="aiPromptTemplates" rows="14" autocomplete="off">' + escapeHtml(settingValue("aiPromptTemplates") || defaultSettings.aiPromptTemplates) + '</textarea></label>',
+      '</div>',
+      '<div class="source-stack">',
+      prompts.map(function (prompt) {
+        return [
+          '<div class="source-row">',
+          '<span>' + escapeHtml(prompt.id) + '</span>',
+          '<strong>' + escapeHtml(prompt.label || prompt.id) + '</strong>',
+          '<em>' + escapeHtml([prompt.version, prompt.purpose].filter(Boolean).join(" · ")) + '</em>',
+          '</div>'
+        ].join("");
+      }).join("") || '<p class="subtle">등록된 프롬프트가 없습니다.</p>',
+      '</div>',
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
   function renderLabMethodPanel() {
     var rows = [
-      ["핵심 질문", "지금 추가매수, 보유, 분할매도, 손절 기준 중 어디에 가까운지 계산"],
-      ["가격 기준선", "현재가, 평단, 안전마진 매수가, 손절선, 1·2차 매도가를 한 번에 비교"],
-      ["수급 판단", "거래량, 매수 비중, 호가 불균형을 매수·매도 점수로 분리"],
-      ["가치 판단", "EPS, 목표 PER, 안전마진과 사용자 공식을 이용해 적정가를 계산"],
-      ["입력 기록", "내 매수 점수, 리스크, 확신, 목표 수익률, 손절률, 비중 계획을 종목별로 저장"],
-      ["성과 분석", "버전 저장 시점의 가격과 현재가를 비교해 평균 성과와 승률을 계산"]
+      ["핵심 질문", "지금 어떤 관계가 성립해서 매수·보유·분할매도·손실관리 중 어디를 봐야 하는가"],
+      ["관계 규칙", "보유, 추세, 수급, 외부 신호, 공시, 부족 데이터를 관계 타입으로 연결"],
+      ["증거 분리", "성립한 증거, 반대 증거, 부족 데이터를 같은 메시지 안에서 분리"],
+      ["AI 해석", "결정론적 규칙이 만든 컨텍스트를 비동기 프롬프트가 설명"],
+      ["입력 기록", "내 점수와 판단 메모는 버전으로 저장해 성과 분석에 사용"],
+      ["성과 분석", "규칙 버전과 프롬프트 버전별 알림 결과와 실제 성과를 비교"]
     ];
     var variables = [
-      ["eps", "주당순이익"],
-      ["targetPer", "목표 PER"],
-      ["margin", "안전마진"],
+      ["profitLossRate", "평단 대비 손익률"],
       ["volumeRatio", "거래량 배율"],
-      ["buyShare", "매수 체결 비중"],
-      ["fairValueGap", "적정가 괴리"],
-      ["profitLossRate", "평단 대비 수익률"],
-      ["thesisScore", "사용자 매수 점수"],
-      ["riskScore", "사용자 위험 점수"]
+      ["tradeStrength", "체결강도"],
+      ["ma20Distance", "20일선 괴리"],
+      ["ma60Distance", "60일선 괴리"],
+      ["foreignNetVolume", "외국인 순매수"],
+      ["institutionNetVolume", "기관 순매수"],
+      ["sectorRatio", "업종 비중"],
+      ["btcChange7d", "BTC 7일 변화율"],
+      ["missingData", "부족 데이터 목록"]
     ];
     return [
       '<article class="panel lab-method-panel">',
@@ -9347,16 +9562,13 @@
         return '<div class="source-row"><span>' + escapeHtml(row[0]) + '</span><strong>' + escapeHtml(row[1]) + '</strong></div>';
       }).join(""),
       '</div>',
-      '<div class="formula-stack">',
-      renderFormulaBlock("적정가 공식", formulaSetting("fairValueFormula")),
-      renderFormulaBlock("매수 점수 공식", formulaSetting("buyScoreFormula")),
-      renderFormulaBlock("매도 점수 공식", formulaSetting("sellScoreFormula")),
-      renderFormulaBlock("익절 점검 공식", formulaSetting("profitTakeScoreFormula")),
-      renderFormulaBlock("손실 관리 공식", formulaSetting("lossCutScoreFormula")),
-      renderFormulaBlock("알림 발송 공식", formulaSetting("notificationScoreFormula")),
+      '<div class="source-stack">',
+      ontologyRuleRows().slice(0, 4).map(function (rule) {
+        return '<div class="source-row"><span>' + escapeHtml(rule.signal || rule.relation) + '</span><strong>' + escapeHtml(rule.label) + '</strong><em>' + escapeHtml(rule.condition) + '</em></div>';
+      }).join(""),
       '</div>',
       renderVariableGuide(variables),
-      '<div class="rule-strip"><span>가격 기준선은 참고용입니다. 실제 주문 API 연결은 별도 승인 단계에서만 다룹니다.</span></div>',
+      '<div class="rule-strip"><span>가격 기준선과 공식 점수는 참고용입니다. 실제 판단 메시지는 온톨로지 관계, 증거, 부족 데이터, AI 프롬프트 컨텍스트를 기준으로 만듭니다.</span></div>',
       '</article>'
     ].join("");
   }
@@ -9426,7 +9638,7 @@
       '<div class="settings-body">',
       '<div class="settings-note">',
       '<strong>버전 저장</strong>',
-      '<p>현재 모델 이름, 가설, 공식, 가중치, 기준값, 현재 성과 통계를 하나의 버전으로 저장합니다.</p>',
+      '<p>현재 전략 이름, 가설, 관계 규칙, AI 프롬프트, 기준값, 현재 성과 통계를 하나의 버전으로 저장합니다.</p>',
       '</div>',
       '<div class="settings-actions">',
       '<button class="text-button primary" data-action="save-model-version">모델 버전 저장</button>',
@@ -9492,15 +9704,35 @@
       '</div>',
       '<span class="tone-chip ' + escapeHtml(model.tone || "hold") + '">' + escapeHtml(model.action) + '</span>',
       '</div>',
+      renderModelRelationRuleSummary(item),
       '<div class="lab-model-grid">',
-      '<span>매수 모델 점수 <strong class="buy">' + escapeHtml(model.buyScore) + '</strong></span>',
-      '<span>매도 모델 점수 <strong class="sell">' + escapeHtml(model.sellScore) + '</strong></span>',
+      '<span>관계 신호 <strong>' + escapeHtml(Math.round(item.relationStrength || 0)) + '</strong></span>',
+      '<span>성립 규칙 <strong>' + escapeHtml((item.relationRules || []).length) + '</strong></span>',
+      '<span>참고 매수 <strong class="buy">' + escapeHtml(model.buyScore) + '</strong></span>',
+      '<span>참고 매도 <strong class="sell">' + escapeHtml(model.sellScore) + '</strong></span>',
       '<span>기본 매수 점수 <strong>' + escapeHtml(item.hasData ? item.buyScore : "-") + '</strong></span>',
       '<span>기본 매도 점수 <strong>' + escapeHtml(item.hasData ? item.sellScore : "-") + '</strong></span>',
       '</div>',
       renderModelPlainLanguageExplanation(item, model),
       renderModelFeatureAudit(item, model),
       model.errors.length ? '<div class="exit-reasons">' + model.errors.map(function (error) { return '<p>' + escapeHtml(error) + '</p>'; }).join("") + '</div>' : '',
+      '</div>',
+      '</div>'
+    ].join("");
+  }
+
+  function renderModelRelationRuleSummary(item) {
+    var rules = item.relationRules || [];
+    return [
+      '<div class="model-feature-audit model-relation-summary">',
+      '<div class="feature-audit-head">',
+      '<strong>관계 규칙</strong>',
+      '<span class="tone-chip ' + escapeHtml((rules[0] && rules[0].tone) || "hold") + '">' + escapeHtml(rules.length ? Math.round(rules[0].score) + "점" : "대기") + '</span>',
+      '</div>',
+      '<div class="feature-audit-grid">',
+      rules.length ? rules.slice(0, 4).map(function (rule) {
+        return '<span>' + escapeHtml(rule.label) + ' <strong>' + escapeHtml(Math.round(rule.score || 0)) + '</strong></span>';
+      }).join("") : '<span>성립한 관계 규칙이 없습니다.</span>',
       '</div>',
       '</div>'
     ].join("");

@@ -4,6 +4,7 @@ from typing import Dict, Iterable, List
 
 from .market_data import clamp, number
 from .ontology import ONTOLOGY_PROMPT_VERSION, build_portfolio_ontology, build_position_opinion
+from .ontology_rules import evaluate_position_relation_rules
 from .parsing import parse_assignments
 from .portfolio import DecisionItem, PortfolioSummary, Position
 
@@ -96,6 +97,8 @@ class StrategyModel:
     )
 
     def __init__(self, settings: Dict[str, str]):
+        settings = settings or {}
+        self.settings = dict(settings or {})
         self.weights = parse_assignments(settings.get("formulaWeights", ""), {"flowWeight": 1.0, "valuationWeight": 1.0})
         self.buy_formula = SafeFormula(settings.get("buyScoreFormula") or self.default_buy_formula)
         self.sell_formula = SafeFormula(settings.get("sellScoreFormula") or self.default_sell_formula)
@@ -433,8 +436,25 @@ def decision_for_position(
     ontology_opinion=None,
     ontology_worldview: Dict[str, object] = None,
     ontology_prompt: str = "",
+    relation_context: Dict[str, object] = None,
 ) -> DecisionItem:
     payload = legacy_payload or legacy_decision_payload(position, portfolio, strategy_model)
+    relation_context = relation_context or evaluate_position_relation_rules(
+        position,
+        portfolio,
+        settings=getattr(strategy_model, "settings", {}) if strategy_model else {},
+        legacy_model=payload,
+    )
+    relation_decision = relation_context.get("decision") if isinstance(relation_context, dict) else {}
+    if not isinstance(relation_decision, dict):
+        relation_decision = {}
+    prompt_context = relation_context.get("promptContext") if isinstance(relation_context, dict) else {}
+    if not isinstance(prompt_context, dict):
+        prompt_context = {}
+    exit_pressure = float(relation_decision.get("score") or relation_context.get("signalStrength") or payload.get("exitPressure") or 0)
+    decision_label = str(relation_decision.get("label") or payload.get("decision") or "")
+    decision_tone = str(relation_decision.get("tone") or payload.get("tone") or "")
+    decision_basis = str(relation_decision.get("basis") or "ontologyRelationRules")
     opinion = ontology_opinion or build_position_opinion(position, portfolio, payload)
     opinion_payload = opinion.to_dict()
     worldview = dict(ontology_worldview or {})
@@ -447,21 +467,26 @@ def decision_for_position(
         market_value=position.market_value,
         profit_loss=position.profit_loss,
         profit_loss_rate=float(payload.get("profitLossRate") or 0),
-        exit_pressure=float(payload.get("exitPressure") or 0),
-        decision=str(payload.get("decision") or ""),
-        tone=str(payload.get("tone") or ""),
+        exit_pressure=exit_pressure,
+        decision=decision_label,
+        tone=decision_tone,
         profit_take_pressure=float(payload.get("profitTakePressure") or 0),
         loss_cut_pressure=float(payload.get("lossCutPressure") or 0),
-        decision_basis=str(payload.get("decisionBasis") or ""),
+        decision_basis=decision_basis,
         ontology_opinion=opinion_payload,
         ontology_worldview=worldview,
+        relation_rule_context=relation_context,
+        ai_prompt_context=prompt_context,
         ai_context={
-            "promptVersion": ONTOLOGY_PROMPT_VERSION,
-            "role": "ontology-first-investment-opinion",
+            "promptVersion": prompt_context.get("promptVersion") or ONTOLOGY_PROMPT_VERSION,
+            "role": "ontology-relation-rule-ai-review",
             "legacyModelRole": "supporting-evidence",
             "worldview": worldview,
             "opinion": opinion_payload,
             "prompt": ontology_prompt,
+            "relationRuleContext": relation_context,
+            "promptContext": prompt_context,
+            "promptTemplate": prompt_context.get("promptTemplate") if isinstance(prompt_context, dict) else {},
         },
     )
 
@@ -579,7 +604,12 @@ def holding_signal_adjustment(position: Position, pnl: float = None) -> float:
     return clamp(adjustment, -12.0, 18.0)
 
 
-def decisions_for_positions(positions: Iterable[Position], portfolio: PortfolioSummary, strategy_model: StrategyModel = None) -> List[DecisionItem]:
+def decisions_for_positions(
+    positions: Iterable[Position],
+    portfolio: PortfolioSummary,
+    strategy_model: StrategyModel = None,
+    external_signals: Dict[str, object] = None,
+) -> List[DecisionItem]:
     active_positions = [item for item in positions if not item.is_cash() and item.market_value > 0]
     legacy_by_symbol = {
         item.symbol.upper(): legacy_decision_payload(item, portfolio, strategy_model)
@@ -589,16 +619,26 @@ def decisions_for_positions(positions: Iterable[Position], portfolio: PortfolioS
         active_positions,
         portfolio,
         legacy_by_symbol=legacy_by_symbol,
+        external_signals=external_signals or {},
     )
     decisions = []
     for item in active_positions:
+        legacy_payload = legacy_by_symbol.get(item.symbol.upper())
+        relation_context = evaluate_position_relation_rules(
+            item,
+            portfolio,
+            external_signals=external_signals or {},
+            settings=getattr(strategy_model, "settings", {}) if strategy_model else {},
+            legacy_model=legacy_payload,
+        )
         decisions.append(decision_for_position(
             item,
             portfolio,
             strategy_model,
-            legacy_payload=legacy_by_symbol.get(item.symbol.upper()),
+            legacy_payload=legacy_payload,
             ontology_opinion=ontology.opinion_for_symbol(item.symbol),
             ontology_worldview=ontology.worldview,
             ontology_prompt=ontology.prompt,
+            relation_context=relation_context,
         ))
     return sorted(decisions, key=lambda item: (-item.exit_pressure, item.symbol))

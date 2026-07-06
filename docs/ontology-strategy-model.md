@@ -1,6 +1,6 @@
 # Ontology Strategy Model
 
-투자전략의 기준 모델은 온톨로지 우선 구조다. 기존 익절/손절 공식과 매수/매도 점수는 제거하지 않고 `legacyModelRole=supporting-evidence`로 격하시켜 보조 evidence로만 사용한다.
+투자전략의 기준 모델은 온톨로지 관계 규칙 구조다. 기존 익절/손절 공식과 매수/매도 점수는 최종 판단 주체가 아니며 `legacyModelRole=supporting-evidence`로 보조 evidence에만 남긴다.
 
 ## Domain Vocabulary
 
@@ -12,6 +12,8 @@
 - `Evidence`: 기존 점수, 포트폴리오 노출, 추세, 수급, 데이터 품질.
 - `Belief`: evidence에서 도출된 지지 또는 위험 판단.
 - `Opinion`: 온톨로지 관계로 만든 종목별 투자 의견.
+- `RelationRule`: 런타임 데이터에서 성립 여부를 판단하는 관계 규칙. 예: 수익 보유 + 추세 약화 -> 익절 점검.
+- `PromptTemplate`: 성립한 관계 규칙, 증거, 부족 데이터를 AI가 설명하기 위한 질문 계약.
 
 ## TBox And ABox
 
@@ -38,14 +40,25 @@ AI 프롬프트에는 TBox와 ABox를 함께 전달한다. AI는 TBox를 해석 
 
 ## Runtime Flow
 
-1. Toss 계좌와 시장 데이터를 `Position`, `PortfolioSummary`로 정규화한다.
-2. 기존 공식 기반 `exitPressure`, `profitTakePressure`, `lossCutPressure`를 계산한다.
-3. `domain/ontology.py`가 포트폴리오 온톨로지 그래프를 만든다.
-4. TBox 클래스/관계 정의와 ABox 인스턴스 assertion을 같은 그래프 payload에 담는다.
-5. 종목별 `OntologyOpinion`을 생성해 `DecisionItem.ontology_opinion`과 `DecisionItem.ai_context`에 붙인다.
-6. 실시간 모니터링은 결정 변화 알림 metadata에 `ontologyReviewContext`를 포함한다.
-7. 모델 리뷰 워커는 이 컨텍스트를 AI 프롬프트에 넣어 세계관, 관계, 충돌, 데이터 검증, 다음 실험을 분석한다.
-8. `NEO4J_URI`가 설정되어 있으면 `infrastructure/neo4j_ontology.py`가 동일 그래프를 Neo4j에 저장한다.
+1. Toss 계좌, 시장 데이터, 외부 API 데이터를 `Position`, `PortfolioSummary`, `externalSignals`로 정규화한다.
+2. `domain/ontology_rules.py`가 종목별 fact, 부족 데이터, 관계 규칙 성립 여부를 만든다.
+3. `DecisionItem.decision`, `exit_pressure`, `decision_basis`는 관계 규칙 결과에서 나온다. `decision_basis`는 `ontologyRelationRules`다.
+4. 기존 공식 기반 `profitTakePressure`, `lossCutPressure`, 매수/매도 점수는 보조 evidence와 과거 비교용으로만 보관한다.
+5. `domain/ontology.py`가 TBox/ABox 그래프와 `OntologyOpinion`을 만든다.
+6. `DecisionItem.relation_rule_context`, `ai_prompt_context`, `ai_context`에 관계 규칙 결과와 프롬프트 입력 계약을 함께 붙인다.
+7. 실시간 모니터링은 알림 metadata에 `ontologyRelationContext`, `ontologyPromptContext`, `ontologyReviewContext`를 포함한다.
+8. 모델 리뷰 워커는 이 컨텍스트를 비동기 AI 프롬프트에 넣어 판단 변화 원인, 노이즈 가능성, 부족 데이터, 다음 규칙 개선안을 분석한다.
+9. `NEO4J_URI`가 설정되어 있으면 `infrastructure/neo4j_ontology.py`가 동일 그래프를 Neo4j에 저장한다.
+
+## Runtime Settings
+
+관계 규칙과 프롬프트는 런타임 설정으로 관리한다.
+
+- `ontologyRelationRules`: `ruleId | label | condition | relationType | signalType | promptHint` 형식의 관계 규칙 목록.
+- `aiPromptTemplates`: 알림 타입별 AI 질문 템플릿.
+- `aiPromptPolicy`: 제공 데이터만 사용, 부족 데이터 표시, 투자 판단과 발송 우선도 분리 같은 공통 가드레일.
+
+코드의 결정론적 matcher는 안전한 기본 규칙을 실행한다. 설정의 관계 규칙과 프롬프트는 UI, 메시지, AI 리뷰 컨텍스트의 운영 계약이며, 새 규칙 matcher를 추가할 때도 이 키를 함께 갱신해야 한다.
 
 ## Neo4j Configuration
 
@@ -64,19 +77,20 @@ HTTP URI는 Neo4j transactional endpoint로 전송한다. `bolt://` 또는 `neo4
 
 AI에는 다음 데이터를 함께 전달한다.
 
-- 포트폴리오 세계관: 지배 섹터, 현금, risk/support belief count, 충돌 수.
-- TBox: 클래스, 관계 타입, 추론 규칙.
-- ABox: 현재 포트폴리오 assertion count와 실제 instance 집합.
-- 관계 그래프: 포트폴리오-종목-섹터-시장-통화-리스크-기회 관계.
-- Evidence: 기존 점수, 노출, 추세, 수급, 데이터 품질.
-- Belief: 지지/위험 판단.
-- Opinion: 종목별 thesis, 충돌, 주요 리스크, 기회, 온톨로지 관계 압력.
+- Subject: 종목, 시장, 섹터, 계좌 맥락.
+- Facts: 손익률, 현재가, 이동평균, 거래량, 체결강도, 투자자별 수급, 외부 신호.
+- Matched rules: 성립한 관계 규칙, 관계 타입, 신호 타입, 강도, 증거.
+- Missing data: 없는 데이터와 판단 영향.
+- Prompt policy: 없는 데이터 추정 금지, 투자 판단과 발송 우선도 분리.
+- Ontology graph: 필요할 때 TBox/ABox, evidence, belief, opinion을 함께 전달한다.
 
 프롬프트는 매수/매도 명령을 확정하지 않고, 관계와 evidence 충돌을 설명하는 투자 의견을 요구한다. API 키, 토큰, 계좌번호 같은 민감 정보는 전달하지 않는다.
 
 ## Extension Rules
 
 - 새 리스크나 기회는 `domain/ontology.py`의 vocabulary와 relation으로 추가한다.
+- 새 런타임 판단은 먼저 `domain/ontology_rules.py`의 관계 규칙과 fact builder로 추가한다.
+- 새 AI 설명은 `aiPromptTemplates`와 `aiPromptPolicy`의 계약을 함께 갱신한다.
 - 외부 뉴스, 공시, 매크로 데이터는 먼저 `Evidence`로 정규화한 뒤 belief를 만든다.
 - 기존 공식 점수를 다시 최종 판단 주체로 올리지 않는다. 공식은 보조 evidence로만 둔다.
 - Neo4j 저장 실패가 실시간 알림, snapshot 저장, notification outbox를 막으면 안 된다.

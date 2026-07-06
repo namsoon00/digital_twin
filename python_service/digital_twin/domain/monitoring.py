@@ -12,6 +12,7 @@ from .message_types import (
     MIN_CADENCE_MINUTES,
 )
 from .model_review import decision_change_review_lines
+from .ontology_rules import relation_rule_context_summary_lines
 from .parsing import parse_assignments
 from .portfolio import AccountSnapshot, AlertEvent, Position, monitor_state_has_live_account_data, status_has_account_data_failure
 from .portfolio_calculations import DEFAULT_FX_RATES, value_in_base
@@ -178,7 +179,12 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
     def snapshot_with_strategy_scores(self, snapshot: AccountSnapshot) -> AccountSnapshot:
         if not snapshot.has_live_account_data():
             return snapshot
-        snapshot.decisions = decisions_for_positions(snapshot.positions, snapshot.portfolio, self.strategy_model)
+        snapshot.decisions = decisions_for_positions(
+            snapshot.positions,
+            snapshot.portfolio,
+            self.strategy_model,
+            external_signals=snapshot.external_signals,
+        )
         return snapshot
 
     def notification_formula_metadata(self) -> Dict[str, object]:
@@ -266,6 +272,41 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
             return {}
         context = decision_state.get("ai_context") if "ai_context" in decision_state else decision_state.get("aiContext")
         return dict(context or {}) if isinstance(context, dict) else {}
+
+    def relation_context_from_decision(self, decision_state: Dict[str, object]) -> Dict[str, object]:
+        if not isinstance(decision_state, dict):
+            return {}
+        context = (
+            decision_state.get("relation_rule_context")
+            if "relation_rule_context" in decision_state
+            else decision_state.get("relationRuleContext")
+        )
+        if isinstance(context, dict) and context:
+            return dict(context)
+        ai_context = self.ai_context_from_decision(decision_state)
+        nested = ai_context.get("relationRuleContext") if isinstance(ai_context, dict) else {}
+        return dict(nested or {}) if isinstance(nested, dict) else {}
+
+    def prompt_context_from_decision(self, decision_state: Dict[str, object]) -> Dict[str, object]:
+        if not isinstance(decision_state, dict):
+            return {}
+        context = (
+            decision_state.get("ai_prompt_context")
+            if "ai_prompt_context" in decision_state
+            else decision_state.get("aiPromptContext")
+        )
+        if isinstance(context, dict) and context:
+            return dict(context)
+        relation_context = self.relation_context_from_decision(decision_state)
+        nested = relation_context.get("promptContext") if isinstance(relation_context, dict) else {}
+        if isinstance(nested, dict) and nested:
+            return dict(nested)
+        ai_context = self.ai_context_from_decision(decision_state)
+        nested = ai_context.get("promptContext") if isinstance(ai_context, dict) else {}
+        return dict(nested or {}) if isinstance(nested, dict) else {}
+
+    def relation_context_lines(self, decision_state: Dict[str, object]) -> List[str]:
+        return relation_rule_context_summary_lines(self.relation_context_from_decision(decision_state))
 
     def ontology_context_lines(self, decision_state: Dict[str, object]) -> List[str]:
         opinion = self.ontology_opinion_from_decision(decision_state)
@@ -783,7 +824,7 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
             if changed or abs(pressure_delta) >= float(self.thresholds.get("monitorExitPressureDelta", 0)):
                 previous_phrase = self.decision_score_phrase(previous_decision.get("decision") or "-", previous_decision.get("exit_pressure"))
                 current_phrase = self.decision_score_phrase(decision.get("decision") or "-", decision.get("exit_pressure"))
-                formula_audits = self.holding_formula_audits(snapshot, item, decision)
+                legacy_formula_audits = self.holding_formula_audits(snapshot, item, decision)
                 review_lines = decision_change_review_lines(
                     item,
                     before,
@@ -791,13 +832,18 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
                     previous_decision,
                     float(self.thresholds.get("monitorExitPressureDelta", 0)),
                 )
+                relation_context = self.relation_context_from_decision(decision)
+                prompt_context = self.prompt_context_from_decision(decision)
+                relation_lines = self.relation_context_lines(decision)
                 ontology_lines = self.ontology_context_lines(decision)
-                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "ALERT" if decision.get("tone") == "danger" else "WATCH", "monitorDecisionChange", snapshot.account_id + ":decision:" + symbol + ":" + str(decision.get("decision")), item["name"], ["판단 변화", "이전 " + previous_phrase, "현재 " + current_phrase, self.flow_context_line(item), self.investor_context_line(item), self.trend_context_line(item)] + ontology_lines + review_lines, symbol, criteria=self.criteria("판단 이름 변경 또는 위험 점수 변화 " + self.threshold_text("monitorExitPressureDelta", "점") + " 이상", "이전 " + previous_phrase + ", 현재 " + current_phrase), metadata={
+                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "ALERT" if decision.get("tone") == "danger" else "WATCH", "monitorDecisionChange", snapshot.account_id + ":decision:" + symbol + ":" + str(decision.get("decision")), item["name"], ["판단 변화", "이전 " + previous_phrase, "현재 " + current_phrase, self.flow_context_line(item), self.investor_context_line(item), self.trend_context_line(item)] + relation_lines + ontology_lines + review_lines, symbol, criteria=self.criteria("온톨로지 관계 규칙의 판단 이름이 바뀌거나 관계 신호 강도 변화가 " + self.threshold_text("monitorExitPressureDelta", "점") + " 이상일 때", "이전 " + previous_phrase + ", 현재 " + current_phrase + (", " + " · ".join(relation_lines[:2]) if relation_lines else "")), metadata={
                     "holdingDecision": decision.get("decision") or "",
                     "holdingDecisionBasis": decision.get("decision_basis") or "",
                     "holdingDecisionScore": round(float(decision.get("exit_pressure") or 0), 1),
                     "profitLossRate": round(float(item.get("profit_loss_rate") or 0), 2),
-                    "formulaAudits": formula_audits,
+                    "legacyFormulaAudits": legacy_formula_audits,
+                    "ontologyRelationContext": relation_context,
+                    "ontologyPromptContext": prompt_context,
                     "ontologyOpinion": self.ontology_opinion_from_decision(decision),
                     "ontologyWorldview": self.ontology_worldview_from_decision(decision),
                     "ontologyReviewContext": self.ai_context_from_decision(decision),
@@ -889,7 +935,11 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
                 continue
             position = positions.get(item.symbol.upper()) or item.to_dict()
             decision_phrase = self.decision_score_phrase(item.decision, item.exit_pressure)
-            formula_audits = self.holding_formula_audits(snapshot, position, item.to_dict())
+            decision_state = item.to_dict()
+            legacy_formula_audits = self.holding_formula_audits(snapshot, position, decision_state)
+            relation_context = self.relation_context_from_decision(decision_state)
+            prompt_context = self.prompt_context_from_decision(decision_state)
+            relation_lines = self.relation_context_lines(decision_state)
             events.append(AlertEvent(
                 snapshot.account_id,
                 snapshot.account_label,
@@ -897,18 +947,20 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
                 "holdingTiming",
                 snapshot.account_id + ":timing:" + item.symbol + ":" + item.decision,
                 item.name,
-                ["상태 " + decision_phrase, "손익 " + signed_pct(item.profit_loss_rate), self.flow_context_line(position), self.investor_context_line(position), self.trend_context_line(position)] + self.ontology_context_lines(item.to_dict()) + ["매도/매수 기준 재확인"],
+                ["상태 " + decision_phrase, "손익 " + signed_pct(item.profit_loss_rate), self.flow_context_line(position), self.investor_context_line(position), self.trend_context_line(position)] + relation_lines + self.ontology_context_lines(decision_state) + ["매도/매수 기준 재확인"],
                 item.symbol,
                 criteria=self.criteria(
-                    "판단 상태가 위험/주의이거나 손익률이 -8% 이하일 때",
-                    "상태 " + decision_phrase + ", 손익 " + signed_pct(item.profit_loss_rate),
+                    "온톨로지 관계 규칙이 위험/주의 상태로 성립하거나 손익률이 -8% 이하일 때",
+                    "상태 " + decision_phrase + ", 손익 " + signed_pct(item.profit_loss_rate) + (", " + " · ".join(relation_lines[:2]) if relation_lines else ""),
                 ),
                 metadata={
                     "holdingDecision": item.decision,
                     "holdingDecisionBasis": item.decision_basis,
                     "holdingDecisionScore": round(float(item.exit_pressure or 0), 1),
                     "profitLossRate": round(float(item.profit_loss_rate or 0), 2),
-                    "formulaAudits": formula_audits,
+                    "legacyFormulaAudits": legacy_formula_audits,
+                    "ontologyRelationContext": relation_context,
+                    "ontologyPromptContext": prompt_context,
                     "ontologyOpinion": dict(item.ontology_opinion or {}),
                     "ontologyWorldview": dict(item.ontology_worldview or {}),
                     "ontologyReviewContext": dict(item.ai_context or {}),

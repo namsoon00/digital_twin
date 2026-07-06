@@ -7,7 +7,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
-from ..domain.market_data import known_stock, number
+from ..domain.market_data import known_stock, number, pct_distance
 from ..domain.portfolio import Position, utc_now_iso
 from .settings import runtime_settings
 from .sqlite_monitoring import SQLiteMarketQuoteCache
@@ -18,6 +18,23 @@ KIS_CACHE_ACCOUNT_ID = "__market_signals__"
 PRICE_PATH = "/uapi/domestic-stock/v1/quotations/inquire-price"
 CCNL_PATH = "/uapi/domestic-stock/v1/quotations/inquire-ccnl"
 INVESTOR_PATH = "/uapi/domestic-stock/v1/quotations/inquire-investor"
+ORDERBOOK_PATH = "/uapi/domestic-stock/v1/quotations/inquire-asking-price-exp-ccn"
+DETAIL_SIGNAL_KEYS = [
+    "tradeStrength",
+    "buyVolume",
+    "sellVolume",
+    "foreignBuyVolume",
+    "foreignSellVolume",
+    "institutionBuyVolume",
+    "institutionSellVolume",
+    "individualBuyVolume",
+    "individualSellVolume",
+    "institutionNetVolume",
+    "individualNetVolume",
+    "orderbookBidVolume",
+    "orderbookAskVolume",
+    "bidAskImbalance",
+]
 
 JsonFetcher = Callable[[str, str, Dict[str, str], Optional[Dict[str, object]], Optional[Dict[str, str]], int], Dict[str, object]]
 
@@ -308,6 +325,11 @@ class KISMarketSignalProvider:
             return False
         return datetime.now(timezone.utc) - updated_at < timedelta(minutes=self.cache_minutes())
 
+    def is_signal_complete(self, payload: Dict[str, object]) -> bool:
+        if not payload:
+            return False
+        return any(key in payload and payload.get(key) not in (None, "") for key in DETAIL_SIGNAL_KEYS)
+
     def save_signal(self, symbol: str, payload: Dict[str, object]) -> None:
         try:
             self.quote_cache.save(KIS_CACHE_PROVIDER, KIS_CACHE_ACCOUNT_ID, symbol, payload)
@@ -325,7 +347,7 @@ class KISMarketSignalProvider:
             return None
         try:
             payload = self.request(stage, "GET", path, self.auth_headers(tr_id), query=self.query(symbol))
-            return payload.get("output")
+            return payload.get("output") or payload.get("output1") or payload.get("output2")
         except KISAPIError as error:
             self.record_failure(stage, symbol, error)
             return None
@@ -335,6 +357,7 @@ class KISMarketSignalProvider:
         price = self.fetch_stage(symbol, "price", PRICE_PATH, "FHKST01010100")
         ccnl = self.fetch_stage(symbol, "ccnl", CCNL_PATH, "FHKST01010300")
         investor = self.fetch_stage(symbol, "investor", INVESTOR_PATH, "FHKST01010900")
+        orderbook = self.fetch_stage(symbol, "orderbook", ORDERBOOK_PATH, "FHKST01010200")
 
         signal: Dict[str, object] = {}
         if isinstance(price, dict):
@@ -343,6 +366,8 @@ class KISMarketSignalProvider:
             merge_if_present(signal, normalize_ccnl(ccnl))
         if isinstance(investor, list):
             merge_if_present(signal, normalize_investor(investor))
+        if isinstance(orderbook, dict):
+            merge_if_present(signal, normalize_orderbook(orderbook))
         if not signal:
             raise RuntimeError("KIS 수급 응답 없음")
 
@@ -352,8 +377,29 @@ class KISMarketSignalProvider:
         signal.setdefault("market", "KR")
         signal.setdefault("currency", "KRW")
         signal["quoteSource"] = "KIS Open API"
-        signal["quoteStatus"] = "KIS 현재가/수급 반영"
-        signal["quoteMessage"] = "KIS 현재가, 체결강도, 외국인/기관/개인 수급을 모델링 데이터에 반영했습니다."
+        included = []
+        if signal.get("currentPrice"):
+            included.append("현재가")
+        if signal.get("tradeStrength"):
+            included.append("체결강도")
+        if signal.get("buyVolume") is not None or signal.get("sellVolume") is not None:
+            included.append("매수/매도 체결량")
+        if any(signal.get(key) is not None for key in [
+            "foreignBuyVolume",
+            "foreignSellVolume",
+            "institutionBuyVolume",
+            "institutionSellVolume",
+            "individualBuyVolume",
+            "individualSellVolume",
+            "institutionNetVolume",
+            "individualNetVolume",
+        ]):
+            included.append("투자자별 수급")
+        if signal.get("orderbookBidVolume") is not None or signal.get("orderbookAskVolume") is not None:
+            included.append("호가 잔량")
+        included_text = ", ".join(included) if included else "응답 데이터"
+        signal["quoteStatus"] = "KIS " + included_text + " 반영"
+        signal["quoteMessage"] = "KIS " + included_text + "을 모델링 데이터에 반영했습니다."
         signal["dataQuality"] = "actual"
         signal["updatedAt"] = utc_now_iso()
         return signal
@@ -380,17 +426,26 @@ class KISMarketSignalProvider:
         stale_symbols: List[Tuple[str, Dict[str, object]]] = []
         for symbol in symbols:
             cached = self.cached_signal(symbol)
-            if self.is_cache_fresh(cached):
+            if self.is_cache_fresh(cached) and self.is_signal_complete(cached):
                 cached = dict(cached)
                 cached["dataQuality"] = cached.get("dataQuality") or "cached"
                 signals[symbol] = cached
                 self.diagnostics["cached"] = int(self.diagnostics.get("cached") or 0) + 1
             else:
+                if self.is_cache_fresh(cached) and cached:
+                    self.diagnostics["partialCached"] = int(self.diagnostics.get("partialCached") or 0) + 1
                 stale_symbols.append((symbol, cached))
 
         if not stale_symbols or not self.configured():
             if stale_symbols and not self.configured():
-                self.diagnostics["skipped"] = int(self.diagnostics.get("skipped") or 0) + len(stale_symbols)
+                for symbol, cached in stale_symbols:
+                    if cached:
+                        cached = dict(cached)
+                        cached["dataQuality"] = "cached"
+                        signals[symbol] = cached
+                        self.diagnostics["cached"] = int(self.diagnostics.get("cached") or 0) + 1
+                    else:
+                        self.diagnostics["skipped"] = int(self.diagnostics.get("skipped") or 0) + 1
             return signals
 
         for symbol, cached in stale_symbols:
@@ -441,6 +496,9 @@ class KISMarketSignalProvider:
         trade_strength = optional_number(signal, ["tradeStrength", "executionStrength"])
         buy_volume = optional_number(signal, ["buyVolume"])
         sell_volume = optional_number(signal, ["sellVolume"])
+        orderbook_bid_volume = optional_number(signal, ["orderbookBidVolume"])
+        orderbook_ask_volume = optional_number(signal, ["orderbookAskVolume"])
+        bid_ask_imbalance = optional_number(signal, ["bidAskImbalance"])
         foreign_buy_volume = optional_number(signal, ["foreignBuyVolume"])
         foreign_sell_volume = optional_number(signal, ["foreignSellVolume"])
         foreign_net_volume = optional_number(signal, ["foreignNetVolume", "foreignNet"])
@@ -459,6 +517,8 @@ class KISMarketSignalProvider:
         data_quality = str(signal.get("dataQuality") or "")
         if position.data_quality == "actual" and data_quality == "cached":
             data_quality = position.data_quality
+        ma20_distance = pct_distance(merged_price, position.ma20) if merged_price and position.ma20 else position.ma20_distance
+        ma60_distance = pct_distance(merged_price, position.ma60) if merged_price and position.ma60 else position.ma60_distance
 
         return replace(
             position,
@@ -480,6 +540,9 @@ class KISMarketSignalProvider:
             volume_ratio=volume_ratio if volume_ratio is not None else position.volume_ratio,
             buy_volume=buy_volume if buy_volume is not None else position.buy_volume,
             sell_volume=sell_volume if sell_volume is not None else position.sell_volume,
+            orderbook_bid_volume=orderbook_bid_volume if orderbook_bid_volume is not None else position.orderbook_bid_volume,
+            orderbook_ask_volume=orderbook_ask_volume if orderbook_ask_volume is not None else position.orderbook_ask_volume,
+            bid_ask_imbalance=bid_ask_imbalance if bid_ask_imbalance is not None else position.bid_ask_imbalance,
             foreign_buy_volume=foreign_buy_volume if foreign_buy_volume is not None else position.foreign_buy_volume,
             foreign_sell_volume=foreign_sell_volume if foreign_sell_volume is not None else position.foreign_sell_volume,
             foreign_net_volume=foreign_net_volume if foreign_net_volume is not None else position.foreign_net_volume,
@@ -489,6 +552,8 @@ class KISMarketSignalProvider:
             individual_buy_volume=individual_buy_volume if individual_buy_volume is not None else position.individual_buy_volume,
             individual_sell_volume=individual_sell_volume if individual_sell_volume is not None else position.individual_sell_volume,
             individual_net_volume=individual_net_volume if individual_net_volume is not None else position.individual_net_volume,
+            ma20_distance=ma20_distance,
+            ma60_distance=ma60_distance,
         )
 
 
@@ -575,4 +640,16 @@ def normalize_investor(items: List[Dict[str, object]]) -> Dict[str, object]:
         "individualNetVolume": individual_net if individual_net is not None else (
             individual_buy - individual_sell if individual_buy is not None and individual_sell is not None else None
         ),
+    }
+
+
+def normalize_orderbook(payload: Dict[str, object]) -> Dict[str, object]:
+    bid_volume = optional_number(payload, ["total_bidp_rsqn"])
+    ask_volume = optional_number(payload, ["total_askp_rsqn"])
+    base = number(bid_volume) + number(ask_volume)
+    imbalance = ((number(bid_volume) - number(ask_volume)) / base) * 100 if base else None
+    return {
+        "orderbookBidVolume": bid_volume,
+        "orderbookAskVolume": ask_volume,
+        "bidAskImbalance": imbalance,
     }

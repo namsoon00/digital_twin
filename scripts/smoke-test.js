@@ -710,8 +710,7 @@ function checkFrontendAdminRender() {
     renderForSearch("?tab=modeling"),
     renderForSearch("?tab=ontology"),
     renderForSearch("?tab=modeling&strategy=data"),
-    renderForSearch("?tab=modeling&strategy=rules"),
-    renderForSearch("?tab=modeling&strategy=prompts"),
+    renderForSearch("?tab=modeling&strategy=policy"),
     renderForSearch("?tab=modeling&strategy=results"),
     renderForSearch("?tab=monitoring"),
     renderForSearch("?tab=settings"),
@@ -729,13 +728,12 @@ function checkFrontendAdminRender() {
     const modelingHtml = pages[8];
     const ontologyHtml = pages[9];
     const modelingDataHtml = pages[10];
-    const modelingRulesHtml = pages[11];
-    const modelingPromptHtml = pages[12];
-    const modelingResultsHtml = pages[13];
-    const monitoringHtml = pages[14];
-    const settingsHtml = pages[15];
-    const staticAccountHtml = pages[16];
-    const newAccountHtml = pages[17];
+    const modelingPolicyHtml = pages[11];
+    const modelingResultsHtml = pages[12];
+    const monitoringHtml = pages[13];
+    const settingsHtml = pages[14];
+    const staticAccountHtml = pages[15];
+    const newAccountHtml = pages[16];
 
     [
       ["overview", overviewHtml],
@@ -764,7 +762,7 @@ function checkFrontendAdminRender() {
     assertOk(code.indexOf('data-action="open-settings"') < 0, "topbar 설정 버튼이 상단 관리 탭과 중복됩니다.");
     assertOk(code.indexOf("pushState") >= 0 && code.indexOf("popstate") >= 0, "탭 이동이 브라우저 뒤로가기와 동기화되지 않았습니다.");
     assertOk(code.indexOf("restoreTabBarPosition") >= 0 && code.indexOf("tabBarScrollLeft") >= 0, "하단 탭 위치 복원 로직이 없습니다.");
-    assertOk(code.indexOf('var bottomTabIds = ["overview", "watchlist", "monitoring", "modeling", "ontology"];') >= 0, "하단 핵심 탭에 투자전략과 온톨로지가 배치되지 않았습니다.");
+    assertOk(code.indexOf('var bottomTabIds = ["overview", "watchlist", "monitoring", "modeling", "ontology"];') >= 0, "하단 핵심 탭에 전략 운영과 온톨로지가 배치되지 않았습니다.");
     assertOk(code.indexOf('var managementTabIds = ["accounts", "symbols", "notifications", "settings"];') >= 0, "상단 운영 메뉴 탭 구성이 역할과 맞지 않습니다.");
     assertOk(styles.indexOf(".app-nav-tab.active") >= 0 && styles.indexOf(".app-nav-menu") >= 0, "앱 네비게이션 활성 탭과 모바일 관리 메뉴 스타일 규칙이 없습니다.");
     assertOk(styles.indexOf("@media (min-width: 861px)") >= 0 && styles.indexOf(".tab-bar {\n    display: none;") >= 0, "데스크톱에서 하단 탭을 숨기는 규칙이 없습니다.");
@@ -891,36 +889,40 @@ function checkFrontendAdminRender() {
     assertOk(code.indexOf("data-notification-template") >= 0 && code.indexOf("monitorHeartbeat") >= 0, "상태 확인 템플릿 textarea 경로가 없습니다.");
     assertOk(notificationTemplateHtml.indexOf("{rawLines}") >= 0, "알림 템플릿 변수가 렌더링되지 않았습니다.");
     assertOk(notificationAdvancedHtml.indexOf("tab=notifications") >= 0, "알림 링크 기본값이 새 알림 탭을 가리키지 않습니다.");
-    assertOk(modelingHtml.indexOf("strategy-section-bar") >= 0, "투자전략 내부 섹션 탭 바가 렌더링되지 않았습니다.");
-    assertOk(modelingHtml.indexOf("strategy-section-tabs") >= 0, "투자전략 내부 섹션 탭이 렌더링되지 않았습니다.");
-    assertOk(styles.indexOf(".strategy-section-tabs") >= 0 && styles.indexOf(".strategy-section-bar") >= 0, "투자전략 내부 섹션 스타일이 정의되지 않았습니다.");
-    assertOk(modelingHtml.indexOf('data-strategy-section="data"') >= 0 && modelingHtml.indexOf('data-strategy-section="rules"') >= 0 && modelingHtml.indexOf('data-strategy-section="prompts"') >= 0 && modelingHtml.indexOf('data-strategy-section="results"') >= 0, "투자전략 내부 섹션 이동 버튼이 없습니다.");
-    assertOk(modelingHtml.indexOf('data-strategy-section="ontology"') < 0, "온톨로지가 투자전략 내부 섹션에 남아 있습니다.");
+    assertOk(modelingHtml.indexOf("strategy-section-bar") >= 0, "전략 운영 내부 섹션 탭 바가 렌더링되지 않았습니다.");
+    assertOk(modelingHtml.indexOf("strategy-section-tabs") >= 0, "전략 운영 내부 섹션 탭이 렌더링되지 않았습니다.");
+    assertOk(styles.indexOf(".strategy-section-tabs") >= 0 && styles.indexOf(".strategy-section-bar") >= 0, "전략 운영 내부 섹션 스타일이 정의되지 않았습니다.");
+    assertOk(modelingHtml.indexOf('data-strategy-section="data"') >= 0 && modelingHtml.indexOf('data-strategy-section="policy"') >= 0 && modelingHtml.indexOf('data-strategy-section="results"') >= 0, "전략 운영 내부 섹션 이동 버튼이 없습니다.");
+    assertOk(modelingHtml.indexOf('data-strategy-section="rules"') < 0 && modelingHtml.indexOf('data-strategy-section="prompts"') < 0, "온톨로지 규칙/프롬프트가 전략 운영 내부 섹션에 남아 있습니다.");
+    assertOk(modelingHtml.indexOf('data-strategy-section="ontology"') < 0, "온톨로지가 전략 운영 내부 섹션에 남아 있습니다.");
     assertOk(ontologyHtml.indexOf("ontology-view") >= 0 && ontologyHtml.indexOf("Ontology Control") >= 0, "온톨로지 상위 탭이 렌더링되지 않았습니다.");
     assertOk(ontologyHtml.indexOf("TBox") >= 0 && ontologyHtml.indexOf("ABox") >= 0, "온톨로지 탭에 TBox/ABox 요약이 없습니다.");
     assertOk(ontologyHtml.indexOf("ontology-control-strip") >= 0 && ontologyHtml.indexOf("Relation Matrix") >= 0 && ontologyHtml.indexOf("relation-matrix") >= 0, "온톨로지 탭에 추론 순서나 관계 매트릭스가 없습니다.");
     assertOk(ontologyHtml.indexOf("TBox Relation Graph") >= 0 && ontologyHtml.indexOf("ABox Runtime Relation Graph") >= 0 && ontologyHtml.indexOf("ontology-cytoscape") >= 0, "온톨로지 TBox/ABox Cytoscape 관계 그래프가 렌더링되지 않았습니다.");
     assertOk(ontologyHtml.indexOf("ontology-relation-table") >= 0 && ontologyHtml.indexOf("ontology-rule-list") >= 0, "온톨로지 관계/규칙 보조 표가 렌더링되지 않았습니다.");
     assertOk(ontologyHtml.indexOf("Relational Row Projection") >= 0 && ontologyHtml.indexOf("Rule Trace") >= 0, "온톨로지 탭에 TBox/ABox 관계형 규칙 추적이 없습니다.");
-    assertOk(code.indexOf("writeStrategySectionHistory") >= 0 && code.indexOf("strategySectionUrl") >= 0, "투자전략 내부 탭 URL 동기화 경로가 없습니다.");
-    assertOk(modelingHtml.indexOf("strategy-process-panel") >= 0 && modelingHtml.indexOf("Strategy Workflow") >= 0 && modelingHtml.indexOf("데이터에서 알림까지의 계산 순서") >= 0, "투자전략 개요에 계산 순서 UI가 없습니다.");
+    assertOk(ontologyHtml.indexOf("ontology-rule-panel") >= 0 && ontologyHtml.indexOf("Ontology Rule Registry") >= 0, "온톨로지 탭에 관계 규칙 레지스트리가 없습니다.");
+    assertOk(ontologyHtml.indexOf('data-model-setting="ontologyRelationRules"') >= 0, "온톨로지 탭에 관계 규칙 편집기가 없습니다.");
+    assertOk(ontologyHtml.indexOf("수익 보유 + 추세 약화") >= 0 && ontologyHtml.indexOf("핵심 데이터 부족") >= 0, "온톨로지 탭에 기본 관계 규칙이 렌더링되지 않았습니다.");
+    assertOk(ontologyHtml.indexOf("prompt-registry-panel") >= 0 && ontologyHtml.indexOf("Prompt Registry") >= 0, "온톨로지 탭에 프롬프트 레지스트리가 없습니다.");
+    assertOk(ontologyHtml.indexOf('data-model-setting="aiPromptTemplates"') >= 0 && ontologyHtml.indexOf('data-model-setting="aiPromptPolicy"') >= 0, "온톨로지 탭에 템플릿/정책 편집기가 없습니다.");
+    assertOk(ontologyHtml.indexOf("보유 타이밍 AI 분석") >= 0 && ontologyHtml.indexOf("providedDataOnly=1") >= 0, "온톨로지 탭에 기본 프롬프트와 정책이 렌더링되지 않았습니다.");
+    assertOk(code.indexOf("writeStrategySectionHistory") >= 0 && code.indexOf("strategySectionUrl") >= 0, "전략 운영 내부 탭 URL 동기화 경로가 없습니다.");
+    assertOk(modelingHtml.indexOf("<h1>전략 운영</h1>") >= 0, "전략 운영 탭 제목이 상단에 렌더링되지 않았습니다.");
+    assertOk(modelingHtml.indexOf("strategy-process-panel") >= 0 && modelingHtml.indexOf("Strategy Workflow") >= 0 && modelingHtml.indexOf("데이터에서 알림까지의 계산 순서") >= 0, "전략 운영 개요에 계산 순서 UI가 없습니다.");
     assertOk(modelingHtml.indexOf("model-guide-panel") >= 0, "개요 탭에 모델 운영 가이드가 렌더링되지 않았습니다.");
-    assertOk(modelingHtml.indexOf("투자전략 모델링 관리") >= 0, "개요 탭에 투자전략 모델링 관리 제목이 렌더링되지 않았습니다.");
+    assertOk(modelingHtml.indexOf("전략 운영 기준 관리") >= 0, "개요 탭에 전략 운영 기준 관리 제목이 렌더링되지 않았습니다.");
     assertOk(modelingHtml.indexOf("처음 보는 사람용 쉬운 설명") >= 0, "개요 탭에 초보자용 쉬운 설명 패널이 렌더링되지 않았습니다.");
     assertOk(modelingHtml.indexOf("읽는 순서") >= 0, "개요 탭에 초보자용 읽는 순서 설명이 렌더링되지 않았습니다.");
-    assertOk(modelingHtml.indexOf("strategy-data-panel") < 0 && modelingHtml.indexOf("admin-modeling-panel") < 0 && modelingHtml.indexOf("model-preview-panel") < 0, "개요 탭에 다른 투자전략 섹션 패널이 섞여 있습니다.");
+    assertOk(modelingHtml.indexOf("strategy-data-panel") < 0 && modelingHtml.indexOf("admin-modeling-panel") < 0 && modelingHtml.indexOf("model-preview-panel") < 0, "개요 탭에 다른 전략 운영 섹션 패널이 섞여 있습니다.");
     assertOk(modelingDataHtml.indexOf("strategy-data-panel") >= 0, "데이터 탭에 전략 데이터 점검 패널이 렌더링되지 않았습니다.");
     assertOk(modelingDataHtml.indexOf("전략 데이터 점검") >= 0, "데이터 탭에 전략 데이터 점검 제목이 렌더링되지 않았습니다.");
     assertOk(modelingDataHtml.indexOf("체결강도") >= 0, "데이터 탭에 체결강도 항목이 없습니다.");
     assertOk(modelingDataHtml.indexOf("모델-알림 기준") >= 0, "데이터 탭에 모델-알림 기준 항목이 없습니다.");
-    assertOk(modelingRulesHtml.indexOf("ontology-rule-panel") >= 0 && modelingRulesHtml.indexOf("Ontology Rules") >= 0, "관계 규칙 탭에 온톨로지 규칙 패널이 없습니다.");
-    assertOk(modelingRulesHtml.indexOf('data-model-setting="ontologyRelationRules"') >= 0, "관계 규칙 탭에 관계 규칙 편집기가 없습니다.");
-    assertOk(modelingRulesHtml.indexOf("수익 보유 + 추세 약화") >= 0, "관계 규칙 탭에 익절 점검 관계 규칙이 렌더링되지 않았습니다.");
-    assertOk(modelingRulesHtml.indexOf("핵심 데이터 부족") >= 0, "관계 규칙 탭에 부족 데이터 가드 규칙이 렌더링되지 않았습니다.");
-    assertOk(modelingRulesHtml.indexOf("model-version-panel") >= 0, "관계 규칙 탭에 모델 버전 패널이 렌더링되지 않았습니다.");
-    assertOk(modelingPromptHtml.indexOf("prompt-registry-panel") >= 0 && modelingPromptHtml.indexOf("Prompt Registry") >= 0, "프롬프트 탭에 프롬프트 레지스트리가 없습니다.");
-    assertOk(modelingPromptHtml.indexOf('data-model-setting="aiPromptTemplates"') >= 0 && modelingPromptHtml.indexOf('data-model-setting="aiPromptPolicy"') >= 0, "프롬프트 탭에 템플릿/정책 편집기가 없습니다.");
-    assertOk(modelingPromptHtml.indexOf("보유 타이밍 AI 분석") >= 0 && modelingPromptHtml.indexOf("providedDataOnly=1") >= 0, "프롬프트 탭에 기본 프롬프트와 정책이 렌더링되지 않았습니다.");
+    assertOk(modelingPolicyHtml.indexOf("admin-modeling-panel") >= 0 && modelingPolicyHtml.indexOf("모델·알림 정책 관리") >= 0, "모델·알림 섹션에 운영 정책 패널이 없습니다.");
+    assertOk(modelingPolicyHtml.indexOf("model-version-panel") >= 0, "모델·알림 섹션에 모델 버전 패널이 렌더링되지 않았습니다.");
+    assertOk(modelingPolicyHtml.indexOf('data-model-setting="notificationScoreFormula"') >= 0, "모델·알림 섹션에 알림 발송 공식 편집기가 없습니다.");
+    assertOk(modelingPolicyHtml.indexOf("ontology-rule-panel") < 0 && modelingPolicyHtml.indexOf("prompt-registry-panel") < 0, "모델·알림 섹션에 온톨로지 규칙/프롬프트 편집기가 섞여 있습니다.");
     assertOk(modelingResultsHtml.indexOf("model-preview-panel") >= 0, "모델 결과 탭에 현재 종목 판단 결과 패널이 렌더링되지 않았습니다.");
     assertOk(modelingResultsHtml.indexOf("실제 데이터 예시") >= 0, "모델 결과 탭에 실제 데이터 예시 설명이 렌더링되지 않았습니다.");
     assertOk(modelingResultsHtml.indexOf("쉬운 해석") >= 0, "모델 결과 탭에 종목별 쉬운 해석이 렌더링되지 않았습니다.");
@@ -1123,6 +1125,9 @@ async function withServer(extraEnv, callback) {
       PORT: String(randomPort()),
       LOCAL_CODEX_ENABLED: "0",
       WATCHLIST_SYMBOLS: "TSLA,AAPL,NVDA,000660",
+      KIS_MARKET_SIGNALS_ENABLED: "0",
+      EXTERNAL_SEC_ENABLED: "0",
+      EXTERNAL_CRYPTO_IDS: "",
       SETTINGS_PATH: settingsPath,
       DIGITAL_TWIN_DATA_DIR: dataDir
     }, extraEnv || {})
@@ -1198,6 +1203,7 @@ async function checkNormalMode(port, context) {
       settings: {
         watchlistSymbols: "TSLA,AAPL,NVDA",
         tossApiBaseUrl: "http://127.0.0.1:1",
+        kisMarketSignalsEnabled: "0",
         tossClientId: "fake-client",
         tossClientSecret: "fake-secret",
         appTheme: "dark",

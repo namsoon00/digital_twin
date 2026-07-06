@@ -288,6 +288,11 @@ class PythonServiceTests(unittest.TestCase):
                     "frgn_seln_vol": "600",
                     "orgn_seln_vol": "600",
                 }]}
+            if path.endswith("/inquire-asking-price-exp-ccn"):
+                return {"rt_cd": "0", "output1": {
+                    "total_bidp_rsqn": "9000",
+                    "total_askp_rsqn": "3000",
+                }}
             return {"rt_cd": "1", "msg1": "unexpected path"}
 
         provider = KISMarketSignalProvider(
@@ -320,6 +325,9 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(118.5, enriched.trade_strength)
         self.assertEqual(120, enriched.buy_volume)
         self.assertEqual(80, enriched.sell_volume)
+        self.assertEqual(9000, enriched.orderbook_bid_volume)
+        self.assertEqual(3000, enriched.orderbook_ask_volume)
+        self.assertEqual(50, enriched.bid_ask_imbalance)
         self.assertEqual(1.85, enriched.volume_ratio)
         self.assertEqual(700, enriched.foreign_net_volume)
         self.assertEqual(1300, enriched.foreign_buy_volume)
@@ -330,7 +338,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("actual", enriched.data_quality)
         self.assertEqual(0, untouched.current_price)
         self.assertEqual(700, cached["foreignNetVolume"])
-        self.assertEqual(["/oauth2/tokenP", "/uapi/domestic-stock/v1/quotations/inquire-price", "/uapi/domestic-stock/v1/quotations/inquire-ccnl", "/uapi/domestic-stock/v1/quotations/inquire-investor"], [item[1] for item in calls])
+        self.assertEqual(50, cached["bidAskImbalance"])
+        self.assertEqual(["/oauth2/tokenP", "/uapi/domestic-stock/v1/quotations/inquire-price", "/uapi/domestic-stock/v1/quotations/inquire-ccnl", "/uapi/domestic-stock/v1/quotations/inquire-investor", "/uapi/domestic-stock/v1/quotations/inquire-asking-price-exp-ccn"], [item[1] for item in calls])
 
     def test_kis_market_signal_provider_uses_fresh_cache_without_token(self):
         db_path = Path(self.temp.name) / "service.db"
@@ -378,6 +387,86 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(-380, enriched.individual_net_volume)
         self.assertEqual(1, provider.diagnostics["cached"])
         self.assertEqual(0, provider.diagnostics["live"])
+
+    def test_kis_market_signal_provider_refreshes_partial_fresh_cache(self):
+        db_path = Path(self.temp.name) / "service.db"
+        cache = SQLiteMarketQuoteCache(db_path)
+        cache.save(KIS_CACHE_PROVIDER, KIS_CACHE_ACCOUNT_ID, "005930", {
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "currentPrice": 71000,
+            "quoteSource": "KIS Open API",
+            "quoteStatus": "KIS 현재가 반영",
+            "quoteMessage": "partial",
+            "dataQuality": "actual",
+            "updatedAt": utc_now_iso(),
+        })
+        calls = []
+
+        def fake_fetch_json(method, url, headers=None, body=None, query=None, timeout=12):
+            path = urllib.parse.urlparse(url).path
+            calls.append(path)
+            if path.endswith("/oauth2/tokenP"):
+                return {"access_token": "kis-token"}
+            if path.endswith("/inquire-price"):
+                return {"rt_cd": "0", "output": {"stck_prpr": "72000", "acml_vol": "1000"}}
+            if path.endswith("/inquire-ccnl"):
+                return {"rt_cd": "0", "output": [{"stck_prpr": "72000", "tday_rltv": "118.5", "cntg_vol": "120"}]}
+            if path.endswith("/inquire-investor"):
+                return {"rt_cd": "0", "output": [{"frgn_ntby_qty": "700", "orgn_ntby_qty": "300", "prsn_ntby_qty": "-400"}]}
+            if path.endswith("/inquire-asking-price-exp-ccn"):
+                return {"rt_cd": "0", "output": {}}
+            return {"rt_cd": "0", "output": {}}
+
+        provider = KISMarketSignalProvider(
+            settings={
+                "kisBaseUrl": "https://kis.example.test",
+                "kisAppKey": "app-key",
+                "kisAppSecret": "app-secret",
+                "kisMarketSignalsEnabled": "1",
+                "kisMarketSignalCacheMinutes": "10",
+                "kisMarketSignalGapSeconds": "0",
+                "externalApiRetryAttempts": "1",
+            },
+            quote_cache=cache,
+            fetch_json=fake_fetch_json,
+            sleep=lambda _seconds: None,
+        )
+        samsung = normalize_position({"symbol": "005930", "name": "삼성전자", "market": "KR", "currency": "KRW"})
+
+        positions, _watchlist = provider.enrich_collections([samsung], [])
+
+        self.assertEqual(118.5, positions[0].trade_strength)
+        self.assertEqual(1, provider.diagnostics["partialCached"])
+        self.assertEqual(1, provider.diagnostics["live"])
+        self.assertIn("/uapi/domestic-stock/v1/quotations/inquire-ccnl", calls)
+
+    def test_kis_merge_recomputes_moving_average_distance_after_price_update(self):
+        provider = KISMarketSignalProvider(settings={"kisMarketSignalsEnabled": "0"})
+        position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "currentPrice": 312500,
+            "ma20": 329300,
+            "ma60": 286275,
+            "ma20Distance": -5.1,
+            "ma60Distance": 9.16,
+        })
+
+        merged = provider.merge_position(position, {
+            "currentPrice": 318000,
+            "quoteSource": "KIS Open API",
+            "quoteStatus": "KIS 현재가 반영",
+            "quoteMessage": "KIS 현재가를 모델링 데이터에 반영했습니다.",
+            "dataQuality": "actual",
+        })
+
+        self.assertAlmostEqual(-3.4315214090, merged.ma20_distance, places=4)
+        self.assertAlmostEqual(11.0820015719, merged.ma60_distance, places=4)
 
     def test_toss_retries_transient_accounts_unauthorized(self):
         account = AccountConfig("main", "메인", "toss", "https://example.test", "id", "secret", "", [])
@@ -943,6 +1032,64 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("holdingTiming", context["promptContext"]["promptId"])
         self.assertEqual("ontologyRelationRules", context["decision"]["basis"])
 
+    def test_ontology_settings_drive_rule_metadata_and_ai_prompt_template(self):
+        position = Position(
+            symbol="000660",
+            name="SK하이닉스",
+            market="KR",
+            currency="KRW",
+            market_value=1000000,
+            profit_loss_rate=-9.5,
+            sellable_quantity=10,
+            current_price=90000,
+            ma20=100000,
+            ma60=110000,
+            ma20_distance=-10,
+            ma60_distance=-18.2,
+            trade_strength=82,
+            buy_volume=420,
+            sell_volume=580,
+            foreign_net_volume=-210,
+            institution_net_volume=-160,
+            individual_net_volume=370,
+            sector="반도체",
+        )
+        portfolio = portfolio_summary([position], fx_rates={"KRW": 1})
+
+        context = evaluate_position_relation_rules(
+            position,
+            portfolio,
+            settings={
+                "ontologyRelationRules": "holding.loss_guard.breakdown.v1 | 사용자 손실 규칙 | custom condition | CUSTOM_LOSS | custom_signal | 사용자 prompt hint",
+                "aiPromptTemplates": "\n".join([
+                    "[holdingTiming]",
+                    "label=사용자 보유 질문",
+                    "version=custom-prompt-v9",
+                    "purpose=사용자 목적",
+                    "system=custom system",
+                    "user=custom user",
+                    "guardrails=custom guard 1 / custom guard 2",
+                ]),
+                "aiPromptPolicy": "providedDataOnly=1\ncustomPolicy=1",
+            },
+        )
+
+        active_rules = context["activeRules"]
+        loss_rule = next(item for item in active_rules if item.get("rule_id") == "holding.loss_guard.breakdown.v1")
+        self.assertEqual("사용자 손실 규칙", loss_rule["label"])
+        self.assertEqual("CUSTOM_LOSS", loss_rule["relation_type"])
+        self.assertEqual("custom_signal", loss_rule["signal_type"])
+        self.assertEqual("사용자 prompt hint", loss_rule["prompt_hint"])
+        trend_rule = next(item for item in active_rules if item.get("rule_id") == "holding.trend_flow.confirmation.v1")
+        self.assertEqual("EVIDENCE_SUPPORT", trend_rule["relation_type"])
+        prompt_context = context["promptContext"]
+        prompt_template = prompt_context["promptTemplate"]
+        self.assertEqual("custom-prompt-v9", prompt_context["promptVersion"])
+        self.assertEqual("사용자 보유 질문", prompt_template["label"])
+        self.assertEqual("custom user", prompt_template["userPrompt"])
+        self.assertIn("customPolicy=1", prompt_context["promptPolicy"])
+        self.assertIn("custom guard 1", prompt_context["guardrails"])
+
     def test_flow_lens_preserves_provider_portfolio_market_breakdown(self):
         account = AccountConfig("main", "메인", "toss", "https://example.test", "id", "secret", "1", [])
         kr_position = normalize_position({
@@ -997,6 +1144,8 @@ class PythonServiceTests(unittest.TestCase):
             "volumeRatio": "1.7",
             "buyVolume": "620",
             "sellVolume": "380",
+            "orderbookBidVolume": "900",
+            "orderbookAskVolume": "300",
             "foreignBuyVolume": "420",
             "foreignSellVolume": "275",
             "institutionBuyVolume": "310",
@@ -1012,6 +1161,9 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(1.7, position.volume_ratio)
         self.assertEqual(620, position.buy_volume)
         self.assertEqual(380, position.sell_volume)
+        self.assertEqual(900, position.orderbook_bid_volume)
+        self.assertEqual(300, position.orderbook_ask_volume)
+        self.assertEqual(50, position.bid_ask_imbalance)
         self.assertEqual(420, position.foreign_buy_volume)
         self.assertEqual(275, position.foreign_sell_volume)
         self.assertEqual(145, position.foreign_net_volume)
@@ -2104,6 +2256,23 @@ class PythonServiceTests(unittest.TestCase):
                 }]
             if "fred" in url:
                 return {"observations": [{"date": "2026-07-01", "value": "4.35"}]}
+            if "data.sec.gov/submissions" in url:
+                return {"name": "Apple Inc.", "filings": {"recent": {
+                    "form": ["4", "10-Q"],
+                    "filingDate": ["2026-06-17", "2026-05-01"],
+                    "reportDate": ["2026-06-16", "2026-03-28"],
+                    "accessionNumber": ["0000320193-26-000001", "0000320193-26-000002"],
+                    "primaryDocument": ["xslF345X05/wk-form4_1.xml", "aapl-20260328.htm"],
+                }}}
+            if "data.sec.gov/api/xbrl/companyfacts" in url:
+                return {"entityName": "Apple Inc.", "facts": {"us-gaap": {
+                    "RevenueFromContractWithCustomerExcludingAssessedTax": {"units": {"USD": [
+                        {"val": 95359000000, "end": "2026-03-28", "filed": "2026-05-01", "fy": 2026, "fp": "Q2", "form": "10-Q"},
+                    ]}},
+                    "NetIncomeLoss": {"units": {"USD": [
+                        {"val": 24780000000, "end": "2026-03-28", "filed": "2026-05-01", "fy": 2026, "fp": "Q2", "form": "10-Q"},
+                    ]}},
+                }}}
             if "opendart" in url:
                 return {"status": "000", "list": [{
                     "corp_name": "삼성전자",
@@ -2122,6 +2291,8 @@ class PythonServiceTests(unittest.TestCase):
             "externalFredSeries": "DGS10",
             "externalCryptoIds": "bitcoin",
             "externalAlphaMaxSymbols": "2",
+            "externalSecMaxSymbols": "2",
+            "externalSecCompanyCiks": "AAPL=0000320193",
             "externalDartLookbackDays": "14",
             "externalDartCorpCodes": "005930=00126380",
         }
@@ -2139,9 +2310,11 @@ class PythonServiceTests(unittest.TestCase):
         signals = provider.signals_for_positions(positions)
         cached_signals = provider.signals_for_positions(positions)
 
-        self.assertEqual(4, len(calls))
+        self.assertEqual(6, len(calls))
         self.assertEqual(signals, cached_signals)
         self.assertEqual(4.2, signals["equityQuotes"]["AAPL"]["changePercent"])
+        self.assertEqual("10-Q", signals["secFilings"]["AAPL"]["latestFiling"]["form"])
+        self.assertEqual(95359000000, signals["secFilings"]["AAPL"]["facts"]["revenue"]["value"])
         self.assertEqual(-5.4, signals["cryptoMarkets"]["bitcoin"]["change24h"])
         self.assertEqual(4.35, signals["macro"]["series"]["DGS10"]["value"])
         self.assertEqual("20260701000001", signals["dartDisclosures"]["005930"]["receiptNo"])

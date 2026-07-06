@@ -201,6 +201,35 @@ def normalize_position(item: Dict[str, object]) -> Position:
         "매도량",
         "매도체결량",
     ])
+    orderbook_bid_volume = first_number(item, [
+        "orderbookBidVolume",
+        "orderbook_bid_volume",
+        "bidOrderbookVolume",
+        "totalBidVolume",
+        "totalBidResidualQuantity",
+        "total_bidp_rsqn",
+        "총매수호가잔량",
+        "매수호가잔량",
+    ])
+    orderbook_ask_volume = first_number(item, [
+        "orderbookAskVolume",
+        "orderbook_ask_volume",
+        "askOrderbookVolume",
+        "totalAskVolume",
+        "totalAskResidualQuantity",
+        "total_askp_rsqn",
+        "총매도호가잔량",
+        "매도호가잔량",
+    ])
+    bid_ask_imbalance = first_number(item, [
+        "bidAskImbalance",
+        "bid_ask_imbalance",
+        "orderbookImbalance",
+        "호가불균형",
+    ])
+    if not bid_ask_imbalance and (orderbook_bid_volume or orderbook_ask_volume):
+        base = orderbook_bid_volume + orderbook_ask_volume
+        bid_ask_imbalance = ((orderbook_bid_volume - orderbook_ask_volume) / base) * 100 if base else 0.0
     foreign_buy_volume = first_number(item, [
         "foreignBuyVolume",
         "foreignerBuyVolume",
@@ -349,6 +378,9 @@ def normalize_position(item: Dict[str, object]) -> Position:
         volume_ratio=volume_ratio,
         buy_volume=buy_volume,
         sell_volume=sell_volume,
+        orderbook_bid_volume=orderbook_bid_volume,
+        orderbook_ask_volume=orderbook_ask_volume,
+        bid_ask_imbalance=bid_ask_imbalance,
         foreign_buy_volume=foreign_buy_volume,
         foreign_sell_volume=foreign_sell_volume,
         foreign_net_volume=foreign_net_volume,

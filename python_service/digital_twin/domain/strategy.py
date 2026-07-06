@@ -347,6 +347,7 @@ class StrategyModel:
             "buyVolume": buy_volume,
             "sellVolume": sell_volume,
             "buyShare": buy_share,
+            "bidAskImbalance": position.bid_ask_imbalance,
             "currentPrice": position.current_price,
             "ma20": position.ma20,
             "ma60": position.ma60,

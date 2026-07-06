@@ -7,7 +7,7 @@ from dataclasses import replace
 from typing import Dict, List, Optional, Tuple
 
 from ..domain.accounts import AccountConfig
-from ..domain.market_data import known_stock, normalize_position, number, technical_indicators_from_candles
+from ..domain.market_data import known_stock, normalize_position, number, pct_distance, technical_indicators_from_candles
 from ..domain.portfolio import AccountSnapshot, Position, utc_now_iso
 from ..domain.portfolio_calculations import portfolio_summary
 from ..domain.strategy import decisions_for_positions
@@ -595,6 +595,10 @@ class TossProvider:
             quote_source = position.quote_source or "Toss holdings"
             updated_at = position.updated_at
         market_value = position.market_value or (position.quantity * current_price if position.quantity and current_price else 0.0)
+        ma20 = number(indicator_source.get("ma20")) or position.ma20
+        ma60 = number(indicator_source.get("ma60")) or position.ma60
+        ma20_distance = pct_distance(current_price, ma20) if current_price and ma20 else number(indicator_source.get("ma20Distance")) or position.ma20_distance
+        ma60_distance = pct_distance(current_price, ma60) if current_price and ma60 else number(indicator_source.get("ma60Distance")) or position.ma60_distance
         return replace(
             position,
             current_price=current_price,
@@ -611,14 +615,14 @@ class TossProvider:
             volume=volume,
             volume_ratio=volume_ratio,
             ma5=number(indicator_source.get("ma5")) or position.ma5,
-            ma20=number(indicator_source.get("ma20")) or position.ma20,
-            ma60=number(indicator_source.get("ma60")) or position.ma60,
+            ma20=ma20,
+            ma60=ma60,
             ma120=number(indicator_source.get("ma120")) or position.ma120,
             ma200=number(indicator_source.get("ma200")) or position.ma200,
             ma20_slope=number(indicator_source.get("ma20Slope")) or position.ma20_slope,
             ma60_slope=number(indicator_source.get("ma60Slope")) or position.ma60_slope,
-            ma20_distance=number(indicator_source.get("ma20Distance")) or position.ma20_distance,
-            ma60_distance=number(indicator_source.get("ma60Distance")) or position.ma60_distance,
+            ma20_distance=ma20_distance,
+            ma60_distance=ma60_distance,
         )
 
     def enrich_positions_with_candles(
@@ -712,7 +716,7 @@ def build_snapshot(account: AccountConfig) -> AccountSnapshot:
     positions, watchlist = kis_provider.enrich_collections(positions, watchlist)
     external_signals = ExternalSignalProvider().signals_for_positions(positions + watchlist)
     portfolio = portfolio_summary(positions, cash, currency, currency_rates())
-    decisions = decisions_for_positions(positions, portfolio)
+    decisions = decisions_for_positions(positions, portfolio, external_signals=external_signals)
     metadata = provider.diagnostics_payload()
     metadata.update(kis_provider.diagnostics_payload())
     return AccountSnapshot(

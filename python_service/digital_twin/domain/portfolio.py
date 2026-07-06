@@ -46,6 +46,9 @@ class Position:
     volume_ratio: float = 0.0
     buy_volume: float = 0.0
     sell_volume: float = 0.0
+    orderbook_bid_volume: float = 0.0
+    orderbook_ask_volume: float = 0.0
+    bid_ask_imbalance: float = 0.0
     foreign_buy_volume: float = 0.0
     foreign_sell_volume: float = 0.0
     foreign_net_volume: float = 0.0

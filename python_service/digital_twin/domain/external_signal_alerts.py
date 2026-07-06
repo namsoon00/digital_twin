@@ -103,14 +103,17 @@ class ExternalSignalAlertMixin:
             is_bitcoin = symbol == "BTC" or str(coin_id or "").strip().lower() == "bitcoin" or coin_name.lower() == "bitcoin"
             day_threshold = bitcoin_day_threshold if is_bitcoin else default_day_threshold
             week_threshold = bitcoin_week_threshold if is_bitcoin else default_week_threshold
-            if day_threshold and abs(change24h) < day_threshold and week_threshold and abs(change7d) < week_threshold:
+            day_triggered = abs(change24h) >= day_threshold if day_threshold else True
+            week_triggered = abs(change7d) >= week_threshold if week_threshold else True
+            if not day_triggered and not week_triggered:
                 continue
             price = number(item.get("price"))
             volume24h = number(item.get("volume24h"))
             provider = str(item.get("provider") or "CoinGecko")
             change_label = "비트코인 변동" if is_bitcoin else "크립토 변동"
             change_value = "24h " + signed_pct(change24h) + " · 7d " + signed_pct(change7d)
-            severity = "ALERT" if change24h < 0 or change7d < 0 else "WATCH"
+            has_negative_trigger = (day_triggered and change24h < 0) or (week_triggered and change7d < 0)
+            severity = "ALERT" if has_negative_trigger else "WATCH"
             threshold_label = (
                 "비트코인 24h ±" + self.threshold_text("externalBitcoinChange24hPct", "%") + " 또는 7d ±" + self.threshold_text("externalBitcoinChange7dPct", "%") + " 이상"
                 if is_bitcoin

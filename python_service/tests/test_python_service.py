@@ -1736,6 +1736,47 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("비트코인 변동", crypto_events[0].message())
         self.assertTrue(any("비트코인 24h ±3% 또는 7d ±4% 이상" in item for item in crypto_events[0].criteria))
 
+    def test_external_crypto_positive_weekly_move_with_minor_day_drop_is_watch(self):
+        portfolio = portfolio_summary([])
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "ok",
+            utc_now_iso(),
+            portfolio,
+            [],
+            [],
+            external_signals={
+                "cryptoMarkets": {
+                    "ethereum": {
+                        "provider": "CoinGecko",
+                        "symbol": "ETH",
+                        "name": "Ethereum",
+                        "price": 1765,
+                        "volume24h": 9319846169,
+                        "change24h": -0.1,
+                        "change7d": 11.8,
+                    },
+                }
+            },
+        )
+
+        events = RealtimeMonitor().external_signal_events(snapshot, {})
+
+        self.assertEqual(1, len(events))
+        event = events[0]
+        self.assertEqual("externalCryptoMove", event.rule)
+        self.assertEqual("WATCH", event.severity)
+        self.assertTrue(any("ETH 24h -0.1%, 7d +11.8%" in item for item in event.criteria))
+
+        db_path = Path(self.temp.name) / "service.db"
+        templates = SQLiteNotificationTemplateStore(db_path)
+        message = templates.render(event.rule, alert_context(event))
+        self.assertIn("<b>[관찰] 크립토 가격 급등</b>", message)
+        self.assertNotIn("크립토 가격 급락", message)
+
     def test_external_signal_provider_normalizes_api_responses_and_caches(self):
         calls = []
 

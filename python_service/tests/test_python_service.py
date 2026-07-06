@@ -2368,7 +2368,10 @@ class PythonServiceTests(unittest.TestCase):
         )
 
         self.assertEqual(1, runner.run_once(limit=10))
-        self.assertEqual("[monitorHeartbeat] 상태 확인\n정상\n기준일 2026-07-03 15:58 KST", sent[0])
+        self.assertTrue(sent[0].startswith("[monitorHeartbeat] 상태 확인\n정상\n기준일 2026-07-03 15:58 KST"))
+        self.assertIn("점수 계산", sent[0])
+        self.assertIn("발송 점수", sent[0])
+        self.assertIn("기본 점수", sent[0])
 
     def test_holding_timing_delivery_adds_sent_time(self):
         registry = AccountRegistry()
@@ -2420,6 +2423,38 @@ class PythonServiceTests(unittest.TestCase):
         self.assertLess(sent[0].index("<b>데이터</b>"), sent[0].index("<b>발송시각</b>"))
         self.assertLess(sent[0].index("<b>발송시각</b>"), sent[0].index("<b>발송 기준</b>"))
         self.assertEqual("2026-07-05 09:06 KST", queue.jobs()[0].context["sentTime"])
+
+    def test_notification_score_explanation_uses_friendly_korean(self):
+        db_path = Path(self.temp.name) / "service.db"
+        templates = SQLiteNotificationTemplateStore(db_path)
+        event = AlertEvent(
+            "main",
+            "메인",
+            "WATCH",
+            "holdingTiming",
+            "main:timing:000660",
+            "SK하이닉스",
+            ["상태 조건부 보유 (52점)", "손익 -3.2%", "수급: 거래량 31,000(1.7x), 거래액 48억 원"],
+            "000660",
+        )
+        context = alert_context(event)
+        context.update({
+            "honeyScore": 70,
+            "honeyThreshold": 45,
+            "honeyReasons": ["기본 35점", "관찰 등급 +10", "확인 데이터 포함 +10", "행동 필요 표현 +10", "본문 있음 +5"],
+        })
+
+        message = templates.render(event.rule, context)
+
+        self.assertIn("<b>점수 계산</b>", message)
+        self.assertIn("발송 점수", message)
+        self.assertIn("기본 점수 35점", message)
+        self.assertIn("수급·추세 같은 확인 데이터 포함 +10점", message)
+        self.assertIn("보유 판단 점수", message)
+        self.assertIn("0~37점은 보유 유지", message)
+        self.assertNotIn("honey", message.lower())
+        self.assertNotIn("danger", message.lower())
+        self.assertNotIn("caution", message.lower())
 
     def test_default_notification_template_is_readable_and_skips_empty_fields(self):
         db_path = Path(self.temp.name) / "service.db"
@@ -2553,6 +2588,28 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("• <b>매수 판단</b>: <code>매수 후보 (78점)</code>", message)
         self.assertNotIn("모델 매수 점수 78점", message)
         self.assertIn("• <b>감지</b>: <code>매수 후보 (78점)</code>", message)
+        self.assertIn("매수 판단 점수", message)
+        self.assertIn("체결 흐름", message)
+
+    def test_model_sell_alert_explains_sell_score_inputs(self):
+        db_path = Path(self.temp.name) / "service.db"
+        templates = SQLiteNotificationTemplateStore(db_path)
+        event = AlertEvent(
+            "main",
+            "메인",
+            "ALERT",
+            "modelSell",
+            "main:model-sell:005930",
+            "삼성전자",
+            ["매도 판단 분할매도 점검 (82점)", "손익률 -9.2%", "현재 71,000원"],
+            "005930",
+        )
+
+        message = templates.render(event.rule, alert_context(event))
+
+        self.assertIn("• <b>매도 판단</b>: <code>분할매도 점검 (82점)</code>", message)
+        self.assertIn("매도 판단 점수", message)
+        self.assertIn("손절 기준", message)
 
     def test_flow_and_trend_lines_use_colon_pair_template_format(self):
         db_path = Path(self.temp.name) / "service.db"
@@ -2600,7 +2657,7 @@ class PythonServiceTests(unittest.TestCase):
             ],
             "000660",
             criteria=[
-                "설정: 판단 톤이 danger/caution 이거나 손익률이 -8% 이하일 때",
+                "설정: 판단 상태가 위험/주의이거나 손익률이 -8% 이하일 때",
                 "감지: 상태 조건부 보유 (52점), 손익 -3.2%",
             ],
         )
@@ -2614,7 +2671,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn(status_line + "\n" + profit_line + "\n" + flow_line + "\n" + trend_line, message)
         self.assertLess(message.index(status_line), message.index(profit_line))
         self.assertLess(message.index(flow_line), message.index(trend_line))
-        self.assertIn("• <b>설정</b>: <code>판단 톤이 danger/caution 이거나 손익률이 -8% 이하일 때</code>", message)
+        self.assertIn("• <b>설정</b>: <code>판단 상태가 위험/주의이거나 손익률이 -8% 이하일 때</code>", message)
         self.assertIn("• <b>감지</b>: <code>상태 조건부 보유 (52점), 손익 -3.2%</code>", message)
 
     def test_notification_template_seed_migrates_previous_readable_default(self):

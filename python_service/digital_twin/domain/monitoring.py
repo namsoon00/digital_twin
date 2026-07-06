@@ -672,7 +672,7 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
                     previous_decision,
                     float(self.thresholds.get("monitorExitPressureDelta", 0)),
                 )
-                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "ALERT" if decision.get("tone") == "danger" else "WATCH", "monitorDecisionChange", snapshot.account_id + ":decision:" + symbol + ":" + str(decision.get("decision")), item["name"], ["판단 변화", "이전 " + previous_phrase, "현재 " + current_phrase, self.flow_context_line(item), self.investor_context_line(item), self.trend_context_line(item)] + review_lines, symbol, criteria=self.criteria("판단 라벨 변경 또는 리스크 점수 변화 " + self.threshold_text("monitorExitPressureDelta", "점") + " 이상", "이전 " + previous_phrase + ", 현재 " + current_phrase)))
+                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "ALERT" if decision.get("tone") == "danger" else "WATCH", "monitorDecisionChange", snapshot.account_id + ":decision:" + symbol + ":" + str(decision.get("decision")), item["name"], ["판단 변화", "이전 " + previous_phrase, "현재 " + current_phrase, self.flow_context_line(item), self.investor_context_line(item), self.trend_context_line(item)] + review_lines, symbol, criteria=self.criteria("판단 이름 변경 또는 위험 점수 변화 " + self.threshold_text("monitorExitPressureDelta", "점") + " 이상", "이전 " + previous_phrase + ", 현재 " + current_phrase)))
         return events
 
     def cash_events(self, snapshot: AccountSnapshot, previous: Dict[str, object]) -> List[AlertEvent]:
@@ -770,7 +770,7 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
                 ["상태 " + decision_phrase, "손익 " + signed_pct(item.profit_loss_rate), self.flow_context_line(position), self.investor_context_line(position), self.trend_context_line(position), "매도/매수 기준 재확인"],
                 item.symbol,
                 criteria=self.criteria(
-                    "판단 톤이 danger/caution 이거나 손익률이 -8% 이하일 때",
+                    "판단 상태가 위험/주의이거나 손익률이 -8% 이하일 때",
                     "상태 " + decision_phrase + ", 손익 " + signed_pct(item.profit_loss_rate),
                 ),
             ))

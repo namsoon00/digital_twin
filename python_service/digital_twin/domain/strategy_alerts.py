@@ -36,7 +36,7 @@ class StrategyAlertMixin:
                     ["매수 판단 " + buy_phrase, *common_lines],
                     symbol,
                     criteria=self.criteria(
-                        "모델 매수 기준 매수 후보 이상 (" + self.threshold_text("modelBuyScore", "점") + ")",
+                        "내 매수 기준에서 매수 후보 이상 (" + self.threshold_text("modelBuyScore", "점") + ")",
                         buy_phrase,
                     ),
                 ))
@@ -57,7 +57,7 @@ class StrategyAlertMixin:
                     ],
                     symbol,
                     criteria=self.criteria(
-                        "모델 매도 기준 분할매도 압력 이상 (" + self.threshold_text("modelSellScore", "점") + ")",
+                        "내 매도 기준에서 분할매도 점검 이상 (" + self.threshold_text("modelSellScore", "점") + ")",
                         sell_phrase,
                     ),
                 ))
@@ -88,7 +88,7 @@ class StrategyAlertMixin:
                 ],
                 symbol,
                 criteria=self.criteria(
-                    "모델 매도 기준 분할매도 압력 이상 (" + self.threshold_text("modelSellScore", "점") + ")",
+                    "내 매도 기준에서 분할매도 점검 이상 (" + self.threshold_text("modelSellScore", "점") + ")",
                     sell_phrase,
                 ),
             )]
@@ -109,8 +109,7 @@ class StrategyAlertMixin:
             ],
             symbol,
             criteria=self.criteria(
-                "모델 매수 기준 매수 후보 이상 (" + self.threshold_text("modelBuyScore", "점") + ")",
+                "내 매수 기준에서 매수 후보 이상 (" + self.threshold_text("modelBuyScore", "점") + ")",
                 buy_phrase,
             ),
         )]
-

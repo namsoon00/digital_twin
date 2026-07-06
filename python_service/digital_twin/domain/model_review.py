@@ -77,9 +77,9 @@ class ModelReviewJob:
 def build_model_review_prompt(job: ModelReviewJob) -> str:
     lines = "\n".join(["- " + line for line in job.alert_lines])
     return "\n".join([
-        "너는 투자 모델을 지속적으로 개선하는 금융 데이터 모델 리뷰어다.",
-        "매수/매도 지시가 아니라 모델 판단 변화의 원인, 데이터 검증, 다음 실험을 분석한다.",
-        "한국어로 텔레그램 메시지에 맞게 간결하지만 충분히 분석해라.",
+        "너는 투자 판단 기준을 지속적으로 개선하는 금융 데이터 리뷰어다.",
+        "매수/매도 지시가 아니라 판단 변화의 원인, 데이터 검증, 다음 실험을 분석한다.",
+        "한국어로 텔레그램 메시지에 맞게 간결하지만 충분히 분석해라. 영어 또는 어려운 용어는 쉬운 한국어로 풀어 써라.",
         "메시지 제목에는 계정명이나 계정 ID를 넣지 마라. 계정 정보는 전송 라우팅에만 사용한다.",
         "섹션은 반드시 다음 순서로 작성한다: 판단 변화 원인, 데이터 검증, 모델 보완, 다음 실험.",
         "API 키, 토큰, 계좌 식별정보를 추정하거나 요청하지 마라.",
@@ -97,19 +97,19 @@ def build_model_review_prompt(job: ModelReviewJob) -> str:
 def local_model_review(job: ModelReviewJob) -> str:
     joined = "\n".join(job.alert_lines)
     validation = "실시간 알림의 데이터 검증 라인을 우선 확인하고, 가격/수량/평가액/손익률 원천이 모두 같은 시점인지 대조하세요."
-    improvement = "거래량, 이동평균, 평가액 변화를 feature로 추가해 같은 판단 변화가 반복 재현되는지 검증하세요."
+    improvement = "거래량, 이동평균, 평가액 변화를 판단 요소로 추가해 같은 판단 변화가 반복 재현되는지 검증하세요."
     if "손익률 급변" in joined:
         validation = "손익률 급변이 가격 원천 변경, 환율, 분할/배당, 장중 급등락 중 무엇에서 왔는지 먼저 분리하세요."
         improvement = "손익률 단독 변화와 거래량/이동평균 동반 변화를 분리해 급변 이벤트의 신뢰도를 점수화하세요."
     if "현재가/평단 없음" in joined or "평가액 없음" in joined:
         validation = "가격 또는 평가액 필드가 부족하므로 판단 변화의 근거가 약합니다. 원천 API 매핑부터 보완하세요."
-        improvement = "필수 feature 누락 시 점수 산출을 보류하거나 confidence를 낮추는 게 좋습니다."
+        improvement = "필수 판단 요소가 빠졌을 때는 점수 산출을 보류하거나 신뢰도를 낮추는 게 좋습니다."
     return "\n".join([
         (job.symbol or job.title or "판단 변화") + " 모델 리뷰",
-        "- 판단 변화 원인: 실시간 모델이 감지한 판단 라벨 또는 exit pressure 변화가 기준선을 넘었습니다.",
+        "- 판단 변화 원인: 실시간 판단 기준이 감지한 판단 이름 또는 매도/손절 압력 점수 변화가 기준선을 넘었습니다.",
         "- 데이터 검증: " + validation,
         "- 모델 보완: " + improvement,
-        "- 다음 실험: 동일 조건을 최근 20회 판단 변화에 재적용해 false positive와 이후 손익 경로를 비교하세요.",
+        "- 다음 실험: 동일 조건을 최근 20회 판단 변화에 다시 적용해 잘못 울린 알림과 이후 손익 흐름을 비교하세요.",
     ])
 
 
@@ -156,7 +156,7 @@ def decision_change_review_lines(
     if decision_changed:
         reasons.append("판단명이 " + (text(previous_decision, "decision") or "-") + "에서 " + (text(current_decision, "decision") or "-") + "로 바뀜")
     if abs(pressure_delta) >= float(pressure_threshold or 0):
-        reasons.append("exit pressure가 " + signed_pct(pressure_delta, "점") + " 변해 기준 " + str(round(float(pressure_threshold or 0), 1)) + "점 이상")
+        reasons.append("매도/손절 압력 점수가 " + signed_pct(pressure_delta, "점") + " 변해 기준 " + str(round(float(pressure_threshold or 0), 1)) + "점 이상")
 
     drivers: List[str] = []
     if abs(pnl_delta) >= 1:
@@ -214,11 +214,11 @@ def model_improvement_hint(
     pressure_threshold: float,
 ) -> str:
     if abs(pressure_delta) < float(pressure_threshold or 0) and text(current_decision, "decision") != text(previous_decision, "decision"):
-        return "판단 경계값 근처 흔들림을 줄이도록 히스테리시스와 최소 유지 시간을 추가"
+        return "판단 기준값 근처 흔들림을 줄이도록 완충 구간과 최소 유지 시간을 추가"
     if abs(pnl_delta) >= 5:
         return "거래량과 이동평균으로 손익률 급변이 추세인지 일시 변동인지 검증"
     if value(current_position, "current_price") <= 0:
         return "현재가 원천을 연결해 평가액 기반 점수의 신뢰도를 먼저 보강"
     if not text(current_position, "sector"):
-        return "섹터 매핑을 보강해 집중도 기반 exit pressure의 오탐을 줄이기"
-    return "거래량, 이동평균, 평가액 변화를 feature로 추가해 판단 변화의 재현성을 검증"
+        return "업종 매핑을 보강해 집중도 기반 매도/손절 압력 점수의 잘못된 알림을 줄이기"
+    return "거래량, 이동평균, 평가액 변화를 판단 요소로 추가해 판단 변화의 재현성을 검증"

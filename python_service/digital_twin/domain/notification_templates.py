@@ -101,6 +101,14 @@ SEVERITY_LABELS = {
     "ALERT": "주의",
 }
 
+SCORE_EXPLANATION_SKIP_TYPES = {
+    "modelReview",
+    "workHandoff",
+    "notification",
+}
+
+SCORE_VALUE_PATTERN = re.compile(r"\d+(?:\.\d+)?점")
+
 DEFAULT_NOTIFICATION_TEMPLATES = {
     "default": {
         "template": DEFAULT_TEMPLATE,
@@ -632,10 +640,164 @@ def render_template(template: str, context: Dict[str, object]) -> str:
     return rendered or context_value(values.get("body") or values.get("title") or "")
 
 
+def context_raw_lines(context: Dict[str, object]) -> List[str]:
+    raw = context.get("rawLines") if isinstance(context, dict) else ""
+    if isinstance(raw, list):
+        return [str(item or "").strip() for item in raw if str(item or "").strip()]
+    return [line.strip() for line in str(raw or "").splitlines() if line.strip()]
+
+
+def has_score_value(value: str) -> bool:
+    return bool(SCORE_VALUE_PATTERN.search(str(value or "")))
+
+
+def format_score_value(value: object) -> str:
+    try:
+        number = float(str(value).replace(",", "").strip())
+    except (TypeError, ValueError):
+        return str(value or "").strip()
+    if number.is_integer():
+        return str(int(number))
+    return ("%.1f" % number).rstrip("0").rstrip(".")
+
+
+def context_message_type(context: Dict[str, object]) -> str:
+    return str((context or {}).get("messageType") or (context or {}).get("rule") or "").strip()
+
+
+def score_reason_items(value: object) -> List[str]:
+    if isinstance(value, list):
+        items = value
+    else:
+        items = str(value or "").splitlines()
+    return [friendly_score_reason(item) for item in items if str(item or "").strip()]
+
+
+def friendly_score_reason(value: object) -> str:
+    text = str(value or "").strip()
+    replacements = [
+        ("기본 ", "기본 점수 "),
+        ("주의 등급", "주의 알림"),
+        ("관찰 등급", "관찰 알림"),
+        ("종목 지정", "종목 코드/이름 포함"),
+        ("핵심 투자 단어", "중요 투자 표현 포함"),
+        ("확인 데이터 포함", "수급·추세 같은 확인 데이터 포함"),
+        ("행동 필요 표현", "확인·점검 표현 포함"),
+        ("본문 있음", "알림 내용 있음"),
+        ("상태성 노이즈", "단순 상태 알림"),
+        ("유사 메시지", "비슷한 알림 반복"),
+        ("상태 정책", "반복 알림 조절"),
+        ("장 시간", "장 운영 시간"),
+        ("신규 임계값 상태", "새 기준값 상태"),
+        ("같은 임계값 상태 지속", "같은 기준값 상태 지속"),
+        ("임계값", "기준값"),
+        ("리스크", "위험"),
+        ("모델 매수", "내 매수 기준"),
+        ("모델 매도", "내 매도 기준"),
+        ("danger", "위험"),
+        ("caution", "주의"),
+        ("ALERT", "주의"),
+        ("WATCH", "관찰"),
+    ]
+    for before, after in replacements:
+        text = text.replace(before, after)
+    text = re.sub(r"([+-]\d+(?:\.\d+)?)$", r"\1점", text)
+    return text
+
+
+def delivery_score_lines(context: Dict[str, object]) -> List[str]:
+    if not isinstance(context, dict) or context.get("honeyScore") in (None, ""):
+        return []
+    score = format_score_value(context.get("honeyScore"))
+    threshold = format_score_value(context.get("honeyThreshold"))
+    lines = [
+        "발송 점수: " + score + "/" + threshold + "점",
+        "발송 점수는 이 알림을 실제로 보낼 만큼 중요한지 보는 값입니다. 기본 점수에서 알림 중요도, 종목 포함 여부, 확인할 데이터, 반복 여부를 더하고 뺍니다.",
+    ]
+    reasons = score_reason_items(context.get("honeyReasons"))
+    if reasons:
+        lines.append("계산 내역: " + ", ".join(reasons))
+    return lines
+
+
+def investment_score_lines(context: Dict[str, object]) -> List[str]:
+    message_type = context_message_type(context)
+    raw_lines = context_raw_lines(context)
+    lines: List[str] = []
+    buy_value = data_value(raw_lines, "매수 판단") or data_value(raw_lines, "모델 매수 점수")
+    sell_value = data_value(raw_lines, "매도 판단") or data_value(raw_lines, "모델 매도 점수")
+    status_value = data_value(raw_lines, "상태")
+    previous_value = data_value(raw_lines, "이전")
+    current_value = data_value(raw_lines, "현재")
+
+    if message_type == "modelBuy" and has_score_value(buy_value):
+        lines.append(
+            "매수 판단 점수: 체결 흐름, 방향 있는 거래량, 매수 비중, 호가 균형, 가격 움직임, 이동평균 흐름, 투자자 수급, 적정가 대비를 합쳐 0~100점으로 계산합니다. 점수가 높을수록 매수 후보에 가깝습니다."
+        )
+    if message_type == "modelSell" and has_score_value(sell_value):
+        lines.append(
+            "매도 판단 점수: 매도 압력, 거래량 변화, 가격 움직임, 이동평균 흐름, 투자자 수급, 적정가 대비, 손절 기준을 합쳐 0~100점으로 계산합니다. 점수가 높을수록 분할매도나 손절 기준을 다시 봐야 합니다."
+        )
+    if message_type in {"holdingTiming", "monitorDecisionChange"} and any(has_score_value(item) for item in [status_value, previous_value, current_value]):
+        lines.append(
+            "보유 판단 점수: 기본 24점에서 손익률 구간, 한 업종에 몰린 정도, 팔 수 있는 수량을 더한 0~100점입니다. 0~37점은 보유 유지, 38~54점은 조건부 보유, 55~71점은 일부 익절 점검, 72점 이상은 손절 또는 분할매도 기준 확인입니다."
+        )
+    return lines
+
+
+def score_explanation_lines(context: Dict[str, object]) -> List[str]:
+    if context_message_type(context) in SCORE_EXPLANATION_SKIP_TYPES:
+        return []
+    lines = delivery_score_lines(context)
+    lines.extend(investment_score_lines(context))
+    return lines
+
+
+def score_explanation_block(context: Dict[str, object], rich: bool = False) -> str:
+    lines = score_explanation_lines(context)
+    if not lines:
+        return ""
+    if rich:
+        rows = []
+        for line in lines:
+            label, value = split_label_value(line)
+            if label and value:
+                rows.append("• <b>" + html.escape(label, quote=False) + "</b>: " + html.escape(value, quote=False))
+            else:
+                rows.append(html_bullet(line))
+        return "<b>점수 계산</b>\n" + "\n".join(rows)
+    return "점수 계산\n" + "\n".join(plain_bullet(line) for line in lines)
+
+
+def context_with_score_explanation(context: Dict[str, object]) -> Dict[str, object]:
+    values = dict(context or {})
+    values["scoreExplanation"] = score_explanation_block(values, False)
+    values["telegramScoreExplanation"] = score_explanation_block(values, True)
+    return values
+
+
+def template_prefers_rich_score(template: str, rendered: str) -> bool:
+    text = str(template or "")
+    return "{telegramMessage}" in text or "<b>" in rendered or "<code>" in rendered
+
+
+def append_score_explanation(rendered: str, context: Dict[str, object], rich: bool = False) -> str:
+    if not str(rendered or "").strip() or "점수 계산" in str(rendered or ""):
+        return rendered
+    block = score_explanation_block(context, rich)
+    if not block:
+        return rendered
+    return str(rendered).rstrip() + "\n\n" + block
+
+
 def render_notification(template: NotificationTemplate, context: Dict[str, object]) -> str:
+    values = context_with_score_explanation(context)
     if template and template.enabled:
-        return render_template(template.template, context)
-    return render_template(BODY_TEMPLATE, context)
+        rendered = render_template(template.template, values)
+        return append_score_explanation(rendered, values, template_prefers_rich_score(template.template, rendered))
+    rendered = render_template(BODY_TEMPLATE, values)
+    return append_score_explanation(rendered, values, template_prefers_rich_score(BODY_TEMPLATE, rendered))
+
 
 
 def template_variables() -> List[str]:
@@ -678,6 +840,13 @@ def template_variables() -> List[str]:
         "sentLine",
         "readableMessage",
         "body",
+        "scoreExplanation",
+        "telegramScoreExplanation",
+        "honeyScore",
+        "honeyThreshold",
+        "honeyScoreText",
+        "honeyDecision",
+        "honeyReasons",
         "metadata",
         "market",
         "changePercent",

@@ -478,6 +478,8 @@ def default_conditions() -> List[NotificationRuleCondition]:
                 "판단 변화",
                 "모델 매수",
                 "모델 매도",
+                "내 매수 기준",
+                "내 매도 기준",
                 "손익률 급변",
                 "평가액 급변",
                 "보유 수량 변경",
@@ -490,6 +492,7 @@ def default_conditions() -> List[NotificationRuleCondition]:
                 "손절",
                 "분할매도",
                 "리스크",
+                "위험",
             ],
         ),
         NotificationRuleCondition(

@@ -225,6 +225,7 @@
   var strategySections = [
     { id: "overview", label: "개요", description: "읽는 법" },
     { id: "data", label: "데이터", description: "준비도 점검" },
+    { id: "ontology", label: "온톨로지", description: "관계·AI 의견" },
     { id: "rules", label: "판단 기준", description: "공식·가중치" },
     { id: "results", label: "모델 결과", description: "종목별 판단" }
   ];
@@ -5855,6 +5856,7 @@
   function renderStrategySectionContent(snapshot) {
     var section = normalizeStrategySection(state.activeStrategySection);
     if (section === "data") return renderStrategyDataPanel(snapshot);
+    if (section === "ontology") return renderOntologyStrategyPanel(snapshot);
     if (section === "rules") {
       return [
         renderAdminModelingPanel(snapshot),
@@ -7842,6 +7844,7 @@
       (item.reasons || []).map(function (reason) {
         return '<p>' + escapeHtml(reason) + '</p>';
       }).join(""),
+      renderOntologyInline(item),
       '</div>',
       '<div class="trigger-list">',
       (item.triggers || []).map(function (trigger) {
@@ -7856,6 +7859,92 @@
         ? '<small>익절 ' + escapeHtml(item.profitTakePressure || 0) + ' · 손절 ' + escapeHtml(item.lossCutPressure || 0) + '</small>'
         : '',
       item.source === "holding" ? '<em>' + escapeHtml(signedPct(item.profitLossRate)) + '</em>' : '<em>watch</em>',
+      '</div>',
+      '</div>'
+    ].join("");
+  }
+
+  function ontologyOpinionOf(item) {
+    return item && item.ontologyOpinion ? item.ontologyOpinion : {};
+  }
+
+  function ontologyRisksOf(opinion) {
+    return Array.isArray(opinion.dominant_risks) ? opinion.dominant_risks : (Array.isArray(opinion.dominantRisks) ? opinion.dominantRisks : []);
+  }
+
+  function ontologyPressureOf(opinion) {
+    return Number(opinion.ontology_pressure || opinion.ontologyPressure || 0);
+  }
+
+  function renderOntologyInline(item) {
+    var opinion = ontologyOpinionOf(item);
+    if (!opinion || !opinion.action) return "";
+    return [
+      '<p>온톨로지: ' + escapeHtml(opinion.action) + ' · 관계 압력 ' + escapeHtml(Math.round(ontologyPressureOf(opinion))) + '점 · 확신 ' + escapeHtml(opinion.conviction || 0) + '점</p>',
+      opinion.thesis ? '<p>thesis: ' + escapeHtml(opinion.thesis) + '</p>' : ''
+    ].join("");
+  }
+
+  function renderOntologyStrategyPanel(snapshot) {
+    var decision = snapshot.tossDecision || {};
+    var strategy = decision.ontologyStrategy || {};
+    var worldview = strategy.worldview || {};
+    var items = (decision.items || []).filter(function (item) { return item.ontologyOpinion; });
+    return [
+      '<article class="panel lab-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Ontology Strategy</p>',
+      '<h2>관계 그래프 기반 투자 세계관</h2>',
+      '</div>',
+      '<span class="metric">' + escapeHtml(items.length) + '</span>',
+      '</div>',
+      '<div class="lab-stats-grid">',
+      renderLabStat("전략 모델", worldview.model || "ontology-first", ""),
+      renderLabStat("관계", strategy.relationCount || 0, "개"),
+      renderLabStat("evidence", strategy.evidenceCount || 0, "개"),
+      renderLabStat("충돌", worldview.contradictionCount || 0, "개"),
+      renderLabStat("지배 섹터", worldview.dominantSector || "-", ""),
+      renderLabStat("기존 모델", worldview.legacyModelRole || "supporting-evidence", ""),
+      '</div>',
+      '<div class="lab-list">',
+      items.length ? items.map(renderOntologyRow).join("") : '<p class="subtle">온톨로지 의견을 만들 보유 종목이 없습니다.</p>',
+      '</div>',
+      '<div class="rule-strip">',
+      '<span>Neo4j에는 Portfolio, Stock, Sector, Risk, Evidence, Belief, Opinion 노드와 관계를 저장합니다.</span>',
+      '<span>AI 프롬프트는 포트폴리오 세계관, 관계, evidence, 기존 점수 모델을 함께 전달합니다.</span>',
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderOntologyRow(item) {
+    var opinion = ontologyOpinionOf(item);
+    var risks = ontologyRisksOf(opinion);
+    var contradictions = Array.isArray(opinion.contradictions) ? opinion.contradictions : [];
+    var supports = Array.isArray(opinion.supporting_beliefs) ? opinion.supporting_beliefs : [];
+    return [
+      '<div class="lab-row">',
+      '<div class="lab-row-head">',
+      '<div>',
+      '<strong>' + escapeHtml(item.name || item.symbol) + '</strong>',
+      '<span>' + escapeHtml(item.symbol || "-") + ' · ' + escapeHtml(item.sector || "-") + '</span>',
+      '</div>',
+      '<div class="exit-badges">',
+      '<span class="tone-chip ' + escapeHtml(opinion.tone || item.tone || "hold") + '">' + escapeHtml(opinion.action || "-") + '</span>',
+      '</div>',
+      '</div>',
+      '<div class="lab-model-grid">',
+      '<span>관계 압력 <strong>' + escapeHtml(Math.round(ontologyPressureOf(opinion))) + '</strong></span>',
+      '<span>확신 <strong>' + escapeHtml(opinion.conviction || 0) + '</strong></span>',
+      '<span>기존 검토 <strong>' + escapeHtml(item.exitPressure || 0) + '</strong></span>',
+      '<span>모델 역할 <strong>보조 evidence</strong></span>',
+      '</div>',
+      '<div class="exit-reasons">',
+      opinion.thesis ? '<p>' + escapeHtml(opinion.thesis) + '</p>' : '',
+      risks.slice(0, 3).map(function (risk) { return '<p>리스크: ' + escapeHtml(risk) + '</p>'; }).join(""),
+      contradictions.slice(0, 2).map(function (risk) { return '<p>충돌: ' + escapeHtml(risk) + '</p>'; }).join(""),
+      supports.slice(0, 2).map(function (support) { return '<p>지지: ' + escapeHtml(support) + '</p>'; }).join(""),
       '</div>',
       '</div>'
     ].join("");

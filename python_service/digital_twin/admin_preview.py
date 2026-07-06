@@ -213,6 +213,11 @@ def admin_preview_config() -> Dict[str, object]:
                     {"key": "dartDisclosureAiUseCodex", "label": "공시 해석 Codex 사용", "type": "toggle", "default": "1"},
                     {"key": "dartDisclosureAiCommand", "label": "공시 해석 명령", "type": "text"},
                     {"key": "dartDisclosureAiTimeoutSeconds", "label": "공시 해석 타임아웃", "type": "number", "default": "90", "unit": "seconds"},
+                    {"key": "ontologyNeo4jEnabled", "label": "온톨로지 Neo4j 저장", "type": "toggle", "default": "1"},
+                    {"key": "neo4jUri", "label": "Neo4j URI", "type": "url"},
+                    {"key": "neo4jUser", "label": "Neo4j 사용자", "type": "text", "default": "neo4j"},
+                    {"key": "neo4jPassword", "label": "Neo4j Password", "type": "secret", "masked": True},
+                    {"key": "neo4jDatabase", "label": "Neo4j Database", "type": "text", "default": "neo4j"},
                     {"key": "formulaWeights", "label": "공식 가중치", "type": "assignmentText"},
                     {"key": "profitTakeScoreFormula", "label": "익절 점검 공식", "type": "formula"},
                     {"key": "lossCutScoreFormula", "label": "손실 관리 공식", "type": "formula"},
@@ -277,7 +282,7 @@ def admin_preview_config() -> Dict[str, object]:
             {
                 "id": "model-review",
                 "title": "모델 리뷰 워커",
-                "summary": "monitorDecisionChange 이벤트를 큐에 넣고, Codex 또는 로컬 fallback으로 판단 변화 원인과 다음 실험을 작성합니다.",
+                "summary": "monitorDecisionChange 이벤트를 큐에 넣고, 온톨로지 세계관·관계·모순과 다음 실험을 작성합니다.",
                 "commands": [
                     "npm run python:model-review:once -- --dry-run",
                     "npm run python:model-review:watch",

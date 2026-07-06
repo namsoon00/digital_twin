@@ -3,6 +3,7 @@ import math
 from typing import Dict, Iterable, List
 
 from .market_data import clamp, number
+from .ontology import ONTOLOGY_PROMPT_VERSION, build_portfolio_ontology, build_position_opinion
 from .parsing import parse_assignments
 from .portfolio import DecisionItem, PortfolioSummary, Position
 
@@ -390,16 +391,52 @@ class StrategyModel:
         }
 
 
-def decision_for_position(position: Position, portfolio: PortfolioSummary, strategy_model: StrategyModel = None) -> DecisionItem:
+def sector_ratio_for_holding(position: Position, portfolio: PortfolioSummary) -> float:
     sector_ratio = 0.0
     for item in portfolio.sectors:
         if item.get("sector") == position.sector:
             sector_ratio = float(item.get("ratio") or 0)
             break
+    return sector_ratio
+
+
+def legacy_decision_payload(position: Position, portfolio: PortfolioSummary, strategy_model: StrategyModel = None) -> Dict[str, object]:
+    sector_ratio = sector_ratio_for_holding(position, portfolio)
     pnl = position.profit_loss_rate
     scores = holding_pressure_scores(position, sector_ratio, strategy_model)
     pressure = scores["exitPressure"]
     label, tone = holding_decision_label(pressure, pnl)
+    return {
+        "symbol": position.symbol,
+        "name": position.name,
+        "sector": position.sector,
+        "market": position.market,
+        "currency": position.currency,
+        "marketValue": position.market_value,
+        "profitLoss": position.profit_loss,
+        "profitLossRate": round(pnl, 2),
+        "exitPressure": round(pressure, 1),
+        "decision": label,
+        "tone": tone,
+        "profitTakePressure": round(scores["profitTakePressure"], 1),
+        "lossCutPressure": round(scores["lossCutPressure"], 1),
+        "decisionBasis": scores["decisionBasis"],
+    }
+
+
+def decision_for_position(
+    position: Position,
+    portfolio: PortfolioSummary,
+    strategy_model: StrategyModel = None,
+    legacy_payload: Dict[str, object] = None,
+    ontology_opinion=None,
+    ontology_worldview: Dict[str, object] = None,
+    ontology_prompt: str = "",
+) -> DecisionItem:
+    payload = legacy_payload or legacy_decision_payload(position, portfolio, strategy_model)
+    opinion = ontology_opinion or build_position_opinion(position, portfolio, payload)
+    opinion_payload = opinion.to_dict()
+    worldview = dict(ontology_worldview or {})
     return DecisionItem(
         symbol=position.symbol,
         name=position.name,
@@ -408,13 +445,23 @@ def decision_for_position(position: Position, portfolio: PortfolioSummary, strat
         currency=position.currency,
         market_value=position.market_value,
         profit_loss=position.profit_loss,
-        profit_loss_rate=round(pnl, 2),
-        exit_pressure=round(pressure, 1),
-        decision=label,
-        tone=tone,
-        profit_take_pressure=round(scores["profitTakePressure"], 1),
-        loss_cut_pressure=round(scores["lossCutPressure"], 1),
-        decision_basis=scores["decisionBasis"],
+        profit_loss_rate=float(payload.get("profitLossRate") or 0),
+        exit_pressure=float(payload.get("exitPressure") or 0),
+        decision=str(payload.get("decision") or ""),
+        tone=str(payload.get("tone") or ""),
+        profit_take_pressure=float(payload.get("profitTakePressure") or 0),
+        loss_cut_pressure=float(payload.get("lossCutPressure") or 0),
+        decision_basis=str(payload.get("decisionBasis") or ""),
+        ontology_opinion=opinion_payload,
+        ontology_worldview=worldview,
+        ai_context={
+            "promptVersion": ONTOLOGY_PROMPT_VERSION,
+            "role": "ontology-first-investment-opinion",
+            "legacyModelRole": "supporting-evidence",
+            "worldview": worldview,
+            "opinion": opinion_payload,
+            "prompt": ontology_prompt,
+        },
     )
 
 
@@ -532,9 +579,25 @@ def holding_signal_adjustment(position: Position, pnl: float = None) -> float:
 
 
 def decisions_for_positions(positions: Iterable[Position], portfolio: PortfolioSummary, strategy_model: StrategyModel = None) -> List[DecisionItem]:
-    decisions = [
-        decision_for_position(item, portfolio, strategy_model)
-        for item in positions
-        if not item.is_cash() and item.market_value > 0
-    ]
+    active_positions = [item for item in positions if not item.is_cash() and item.market_value > 0]
+    legacy_by_symbol = {
+        item.symbol.upper(): legacy_decision_payload(item, portfolio, strategy_model)
+        for item in active_positions
+    }
+    ontology = build_portfolio_ontology(
+        active_positions,
+        portfolio,
+        legacy_by_symbol=legacy_by_symbol,
+    )
+    decisions = []
+    for item in active_positions:
+        decisions.append(decision_for_position(
+            item,
+            portfolio,
+            strategy_model,
+            legacy_payload=legacy_by_symbol.get(item.symbol.upper()),
+            ontology_opinion=ontology.opinion_for_symbol(item.symbol),
+            ontology_worldview=ontology.worldview,
+            ontology_prompt=ontology.prompt,
+        ))
     return sorted(decisions, key=lambda item: (-item.exit_pressure, item.symbol))

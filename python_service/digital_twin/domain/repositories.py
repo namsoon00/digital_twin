@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Protocol
 
 from .accounts import AccountConfig
+from .ontology import PortfolioOntology
 from .portfolio import AccountSnapshot, AlertEvent
 from .symbol_universe import ListedSymbol
 
@@ -75,6 +76,11 @@ class MonitoringCycleRecorder(Protocol):
         alert_events: List[AlertEvent],
         dry_run: bool = False,
     ) -> MonitoringCycleRecordResult:
+        ...
+
+
+class OntologyGraphRepository(Protocol):
+    def save_graph(self, graph: PortfolioOntology) -> Dict[str, object]:
         ...
 
 

@@ -4,10 +4,12 @@ from typing import Callable, Dict, List
 from ..domain.accounts import AccountConfig, split_symbols
 from ..domain.market_data import (
     known_stock,
+    normalize_position,
     number,
     sector_from_symbol,
 )
-from ..domain.portfolio import Position, utc_now_iso
+from ..domain.ontology import ONTOLOGY_PROMPT_VERSION, build_portfolio_ontology
+from ..domain.portfolio import PortfolioSummary, Position, utc_now_iso
 from ..domain.portfolio_calculations import (
     normalized_fx_rates,
     value_in_base,
@@ -427,6 +429,22 @@ def build_toss_decision(
         if not is_cash_position(item) and number(item.get("marketValue")) > 0
     ]
     holding_items = [toss_decision_for_holding(item, portfolio, strategy_model) for item in positions]
+    ontology = build_toss_ontology(positions, portfolio, holding_items)
+    for item in holding_items:
+        opinion = ontology.opinion_for_symbol(str(item.get("symbol") or ""))
+        if not opinion:
+            continue
+        opinion_payload = opinion.to_dict()
+        item["ontologyOpinion"] = opinion_payload
+        item["ontologyWorldview"] = dict(ontology.worldview or {})
+        item["aiContext"] = {
+            "promptVersion": ONTOLOGY_PROMPT_VERSION,
+            "role": "ontology-first-investment-opinion",
+            "legacyModelRole": "supporting-evidence",
+            "worldview": dict(ontology.worldview or {}),
+            "opinion": opinion_payload,
+            "prompt": ontology.prompt,
+        }
     watch_items = [toss_decision_for_watch(item) for item in watchlist]
     items = sorted(holding_items + watch_items, key=lambda item: (item.get("priority", 9), -number(item.get("exitPressure"))))
     urgent_count = len([item for item in holding_items if item.get("tone") in {"danger", "caution"}])
@@ -444,12 +462,51 @@ def build_toss_decision(
         "watchCount": len(watch_items),
         "items": items,
         "rules": [
-            "수익률과 평가손익은 토스 잔고에서 확인 가능한 값만 사용합니다.",
-            "보유 모델 점수는 사용자가 저장한 익절/손절 공식으로 계산합니다.",
+            "투자전략은 온톨로지 관계 그래프를 우선하고 기존 공식 점수는 보조 evidence로 유지합니다.",
+            "수익률, 평가손익, 수급, 추세, 섹터 집중도를 AI 의견 컨텍스트에 함께 넣습니다.",
             "관심 종목은 보유가 아니므로 매도 판단 대신 시세 기준 대기 상태로 둡니다.",
-            "외부 텍스트 신호는 토스 전용 판단 점수에 반영하지 않습니다.",
+            "Neo4j 설정이 있으면 같은 관계 그래프를 저장합니다.",
         ],
+        "ontologyStrategy": {
+            "promptVersion": ONTOLOGY_PROMPT_VERSION,
+            "worldview": dict(ontology.worldview or {}),
+            "entityCount": len(ontology.entities),
+            "relationCount": len(ontology.relations),
+            "evidenceCount": len(ontology.evidence),
+            "prompt": ontology.prompt,
+        },
     }
+
+
+def build_toss_ontology(
+    positions: List[Dict[str, object]],
+    portfolio: Dict[str, object],
+    holding_items: List[Dict[str, object]],
+):
+    normalized_positions = [normalize_position(item) for item in positions]
+    summary = PortfolioSummary(
+        total=number(portfolio.get("total")),
+        invested=number(portfolio.get("invested")),
+        cash=number(portfolio.get("cash")),
+        markets=list(portfolio.get("markets") or []),
+        sectors=list(portfolio.get("sectors") or []),
+        concentration=number(portfolio.get("concentration")),
+    )
+    legacy_by_symbol = {
+        str(item.get("symbol") or "").upper(): {
+            "exitPressure": number(item.get("exitPressure")),
+            "profitTakePressure": number(item.get("profitTakePressure")),
+            "lossCutPressure": number(item.get("lossCutPressure")),
+            "decisionBasis": str(item.get("decisionBasis") or ""),
+        }
+        for item in holding_items
+    }
+    return build_portfolio_ontology(
+        normalized_positions,
+        summary,
+        legacy_by_symbol=legacy_by_symbol,
+        portfolio_id="flow-lens",
+    )
 
 
 def build_toss_lens_snapshot(

@@ -44,6 +44,16 @@ EXTERNAL_CRYPTO_IDS=bitcoin,ethereum
 EXTERNAL_DART_CORP_CODES="005930=00126380;000660=00164779"
 ```
 
+온톨로지 전략 관계를 Neo4j에 저장하려면 `.env.local`에 아래 값을 추가합니다. URI가 없으면 앱은 온톨로지 판단과 AI 프롬프트를 만들지만 Neo4j 저장은 건너뜁니다.
+
+```bash
+ONTOLOGY_NEO4J_ENABLED=1
+NEO4J_URI=http://127.0.0.1:7474
+NEO4J_USER=neo4j
+NEO4J_PASSWORD=...
+NEO4J_DATABASE=neo4j
+```
+
 토스 개발자 콘솔에서 허용 IP를 관리하는 경우, 브라우저 IP가 아니라 이 로컬 서버가 외부로 나가는 공인 IP를 등록해야 합니다. GitHub Pages 같은 정적 웹 페이지에서 브라우저가 직접 토스 API를 호출하는 구조는 `client_secret` 노출과 사용자별 유동 IP 문제 때문에 사용하지 않습니다.
 
 GitHub Pages에 올라가는 모든 정적 산출물은 아래 명령으로 함께 갱신합니다.
@@ -88,6 +98,8 @@ npm run python:symbols:status
 ## 매도 판단 모델
 
 앱은 주문을 실행하지 않고 읽기 전용 판단판만 제공합니다. 보유 종목은 수익률, 평가손익, 매도 가능 수량, 계좌 내 노출 비중으로 `분할 매도 기준 확인`, `일부 익절 기준 확인`, `조건부 보유`, `보유 유지`로 분류합니다. 관심 종목은 보유가 아니므로 매도 판단을 만들지 않고, 토스 시세 연결 후 현재가 기준을 비교하는 대기 상태로 둡니다.
+
+투자전략 모델의 기본 구조는 온톨로지 우선입니다. 보유 종목, 섹터, 시장, 통화, 리스크, 기회, evidence, belief, AI 의견을 관계 그래프로 만들고, 기존 익절/손절 점수는 `legacyModelRole=supporting-evidence`로 보조 데이터에 둡니다. 자세한 구조는 `docs/ontology-strategy-model.md`에 정리되어 있습니다.
 
 ## 수급 신호
 

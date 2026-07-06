@@ -46,6 +46,11 @@ TEXT_SETTING_KEYS = [
     "modelReviewTimeoutSeconds",
     "modelReviewIntervalSeconds",
     "modelReviewBatchSize",
+    "ontologyNeo4jEnabled",
+    "neo4jUri",
+    "neo4jUser",
+    "neo4jDatabase",
+    "neo4jTimeoutSeconds",
     "dartDisclosureAiAnalysisEnabled",
     "dartDisclosureAiUseCodex",
     "dartDisclosureAiCommand",
@@ -84,6 +89,7 @@ SECRET_SETTING_KEYS = [
     "coingeckoApiKey",
     "fredApiKey",
     "opendartApiKey",
+    "neo4jPassword",
 ]
 
 DEFAULT_BUY_SCORE_FORMULA = (
@@ -367,6 +373,12 @@ def runtime_settings() -> Dict[str, str]:
         "modelReviewTimeoutSeconds": value("modelReviewTimeoutSeconds", "MODEL_REVIEW_TIMEOUT_SECONDS", "180"),
         "modelReviewIntervalSeconds": value("modelReviewIntervalSeconds", "MODEL_REVIEW_INTERVAL_SECONDS", "300"),
         "modelReviewBatchSize": value("modelReviewBatchSize", "MODEL_REVIEW_BATCH_SIZE", "1"),
+        "ontologyNeo4jEnabled": value("ontologyNeo4jEnabled", "ONTOLOGY_NEO4J_ENABLED", "1"),
+        "neo4jUri": value("neo4jUri", "NEO4J_URI", ""),
+        "neo4jUser": value("neo4jUser", "NEO4J_USER", "neo4j"),
+        "neo4jPassword": value("neo4jPassword", "NEO4J_PASSWORD", ""),
+        "neo4jDatabase": value("neo4jDatabase", "NEO4J_DATABASE", "neo4j"),
+        "neo4jTimeoutSeconds": value("neo4jTimeoutSeconds", "NEO4J_TIMEOUT_SECONDS", "8"),
         "dartDisclosureAiAnalysisEnabled": value("dartDisclosureAiAnalysisEnabled", "DART_DISCLOSURE_AI_ANALYSIS_ENABLED", "1"),
         "dartDisclosureAiUseCodex": value("dartDisclosureAiUseCodex", "DART_DISCLOSURE_AI_USE_CODEX", "1"),
         "dartDisclosureAiCommand": value("dartDisclosureAiCommand", "DART_DISCLOSURE_AI_COMMAND", ""),

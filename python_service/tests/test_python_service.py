@@ -27,6 +27,7 @@ from digital_twin.cli import build_parser
 from digital_twin.domain.accounts import AccountConfig
 from digital_twin.domain.market_data import normalize_position, technical_indicators_from_candles
 from digital_twin.domain.message_types import DEFAULT_ALERT_RULES, DEFAULT_CADENCE, MESSAGE_TYPE_LABELS, public_message_catalog
+from digital_twin.domain.ontology import ONTOLOGY_PROMPT_VERSION, build_portfolio_ontology
 from digital_twin.domain.portfolio_calculations import portfolio_summary
 from digital_twin.domain.strategy import SafeFormula, StrategyModel, decisions_for_positions
 from digital_twin.domain.events import ACCOUNT_SAVED, MARKET_DATA_COLLECTED, MONITORING_ALERTS_DETECTED, MONITORING_CYCLE_COMPLETED, MONITORING_SNAPSHOT_COLLECTED, alerts_detected_event, monitoring_cycle_completed_event, snapshot_collected_event
@@ -43,6 +44,7 @@ from digital_twin.infrastructure.external_signals import ExternalSignalProvider
 from digital_twin.infrastructure.json_monitor_state import MonitorStore
 from digital_twin.infrastructure.model_review_queue import ModelReviewEnqueuer, ModelReviewJobStore
 from digital_twin.infrastructure.mock_market import mock_market_payload
+from digital_twin.infrastructure.neo4j_ontology import Neo4jOntologyGraphRepository, NullOntologyGraphRepository, safe_relation_type
 from digital_twin.infrastructure.notifications import TelegramNotifier, send_events
 from digital_twin.infrastructure.service_factory import flow_lens_snapshot
 from digital_twin.infrastructure.settings import runtime_settings
@@ -516,6 +518,65 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(77, profit_decision.exit_pressure)
         self.assertEqual("profitTake", profit_decision.decision_basis)
         self.assertEqual("분할 매도 기준 확인", profit_decision.decision)
+        self.assertEqual("supporting-evidence", loss_decision.ai_context["legacyModelRole"])
+        self.assertEqual(ONTOLOGY_PROMPT_VERSION, loss_decision.ai_context["promptVersion"])
+        self.assertIn("온톨로지 그래프 JSON", loss_decision.ai_context["prompt"])
+        self.assertIn("legacy_model", loss_decision.ontology_opinion)
+
+    def test_portfolio_ontology_builds_relations_and_ai_prompt(self):
+        semis = normalize_position({
+            "symbol": "000660",
+            "name": "SK하이닉스",
+            "market": "KR",
+            "currency": "KRW",
+            "marketValue": 7000,
+            "profitLossRate": -9,
+            "ma20Distance": -6,
+            "sector": "반도체",
+        })
+        platform = normalize_position({
+            "symbol": "AAPL",
+            "name": "Apple",
+            "market": "US",
+            "currency": "USD",
+            "marketValue": 3000,
+            "profitLossRate": 14,
+            "ma20Distance": 5,
+            "sector": "AI/플랫폼",
+        })
+        portfolio = portfolio_summary([semis, platform], 500, "KRW")
+
+        graph = build_portfolio_ontology(
+            [semis, platform],
+            portfolio,
+            legacy_by_symbol={"000660": {"exitPressure": 76, "decisionBasis": "lossCut"}},
+            portfolio_id="main",
+        )
+
+        self.assertEqual("ontology-first", graph.worldview["model"])
+        self.assertTrue(any(item.relation_type == "HOLDS" for item in graph.relations))
+        self.assertTrue(any(item.relation_type == "EXPOSED_TO" for item in graph.relations))
+        self.assertIn("온톨로지 그래프 JSON", graph.prompt)
+        self.assertTrue(graph.opinion_for_symbol("000660").dominant_risks)
+
+    def test_neo4j_ontology_repository_builds_relation_statements(self):
+        position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "marketValue": 1000,
+            "profitLossRate": 3,
+            "sector": "반도체",
+        })
+        portfolio = portfolio_summary([position])
+        graph = build_portfolio_ontology([position], portfolio)
+        repository = Neo4jOntologyGraphRepository("http://127.0.0.1:7474", user="neo4j", password="secret")
+
+        statements = repository.statements(graph)
+
+        self.assertEqual("CONTRADICTS", safe_relation_type("contradicts"))
+        self.assertTrue(any("OntologyEntity" in item["statement"] for item in statements))
+        self.assertTrue(any("MERGE (a)-[r:HOLDS]" in item["statement"] for item in statements))
+        self.assertFalse(NullOntologyGraphRepository().save_graph(graph)["saved"])
 
     def test_holding_decision_score_uses_flow_and_trend_context(self):
         other_position = normalize_position({

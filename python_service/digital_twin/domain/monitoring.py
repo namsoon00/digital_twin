@@ -246,6 +246,44 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
             }
         return self.strategy_model.holding_formula_audits(position, sector_ratio, scores)
 
+    def ontology_opinion_from_decision(self, decision_state: Dict[str, object]) -> Dict[str, object]:
+        if not isinstance(decision_state, dict):
+            return {}
+        opinion = decision_state.get("ontology_opinion") if "ontology_opinion" in decision_state else decision_state.get("ontologyOpinion")
+        return dict(opinion or {}) if isinstance(opinion, dict) else {}
+
+    def ontology_worldview_from_decision(self, decision_state: Dict[str, object]) -> Dict[str, object]:
+        if not isinstance(decision_state, dict):
+            return {}
+        worldview = decision_state.get("ontology_worldview") if "ontology_worldview" in decision_state else decision_state.get("ontologyWorldview")
+        return dict(worldview or {}) if isinstance(worldview, dict) else {}
+
+    def ai_context_from_decision(self, decision_state: Dict[str, object]) -> Dict[str, object]:
+        if not isinstance(decision_state, dict):
+            return {}
+        context = decision_state.get("ai_context") if "ai_context" in decision_state else decision_state.get("aiContext")
+        return dict(context or {}) if isinstance(context, dict) else {}
+
+    def ontology_context_lines(self, decision_state: Dict[str, object]) -> List[str]:
+        opinion = self.ontology_opinion_from_decision(decision_state)
+        if not opinion:
+            return []
+        lines = [
+            "온톨로지: " + str(opinion.get("action") or "-")
+            + " · 관계 압력 " + compact_number(float(opinion.get("ontology_pressure") or opinion.get("ontologyPressure") or 0)) + "점"
+            + " · 확신 " + compact_number(float(opinion.get("conviction") or 0)) + "점",
+        ]
+        thesis = str(opinion.get("thesis") or "").strip()
+        if thesis:
+            lines.append("thesis: " + thesis)
+        contradictions = opinion.get("contradictions") if isinstance(opinion.get("contradictions"), list) else []
+        if contradictions:
+            lines.append("관계 충돌: " + " · ".join(str(item) for item in contradictions[:2]))
+        risks = opinion.get("dominant_risks") if isinstance(opinion.get("dominant_risks"), list) else opinion.get("dominantRisks")
+        if isinstance(risks, list) and risks:
+            lines.append("주요 리스크: " + " · ".join(str(item) for item in risks[:2]))
+        return lines
+
     def only_rule(self, rule: str, events: List[AlertEvent]) -> List[AlertEvent]:
         return [event for event in events if event.rule == rule]
 
@@ -750,12 +788,16 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
                     previous_decision,
                     float(self.thresholds.get("monitorExitPressureDelta", 0)),
                 )
-                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "ALERT" if decision.get("tone") == "danger" else "WATCH", "monitorDecisionChange", snapshot.account_id + ":decision:" + symbol + ":" + str(decision.get("decision")), item["name"], ["판단 변화", "이전 " + previous_phrase, "현재 " + current_phrase, self.flow_context_line(item), self.investor_context_line(item), self.trend_context_line(item)] + review_lines, symbol, criteria=self.criteria("판단 이름 변경 또는 위험 점수 변화 " + self.threshold_text("monitorExitPressureDelta", "점") + " 이상", "이전 " + previous_phrase + ", 현재 " + current_phrase), metadata={
+                ontology_lines = self.ontology_context_lines(decision)
+                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "ALERT" if decision.get("tone") == "danger" else "WATCH", "monitorDecisionChange", snapshot.account_id + ":decision:" + symbol + ":" + str(decision.get("decision")), item["name"], ["판단 변화", "이전 " + previous_phrase, "현재 " + current_phrase, self.flow_context_line(item), self.investor_context_line(item), self.trend_context_line(item)] + ontology_lines + review_lines, symbol, criteria=self.criteria("판단 이름 변경 또는 위험 점수 변화 " + self.threshold_text("monitorExitPressureDelta", "점") + " 이상", "이전 " + previous_phrase + ", 현재 " + current_phrase), metadata={
                     "holdingDecision": decision.get("decision") or "",
                     "holdingDecisionBasis": decision.get("decision_basis") or "",
                     "holdingDecisionScore": round(float(decision.get("exit_pressure") or 0), 1),
                     "profitLossRate": round(float(item.get("profit_loss_rate") or 0), 2),
                     "formulaAudits": formula_audits,
+                    "ontologyOpinion": self.ontology_opinion_from_decision(decision),
+                    "ontologyWorldview": self.ontology_worldview_from_decision(decision),
+                    "ontologyReviewContext": self.ai_context_from_decision(decision),
                 }))
         return events
 
@@ -852,7 +894,7 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
                 "holdingTiming",
                 snapshot.account_id + ":timing:" + item.symbol + ":" + item.decision,
                 item.name,
-                ["상태 " + decision_phrase, "손익 " + signed_pct(item.profit_loss_rate), self.flow_context_line(position), self.investor_context_line(position), self.trend_context_line(position), "매도/매수 기준 재확인"],
+                ["상태 " + decision_phrase, "손익 " + signed_pct(item.profit_loss_rate), self.flow_context_line(position), self.investor_context_line(position), self.trend_context_line(position)] + self.ontology_context_lines(item.to_dict()) + ["매도/매수 기준 재확인"],
                 item.symbol,
                 criteria=self.criteria(
                     "판단 상태가 위험/주의이거나 손익률이 -8% 이하일 때",
@@ -864,6 +906,9 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
                     "holdingDecisionScore": round(float(item.exit_pressure or 0), 1),
                     "profitLossRate": round(float(item.profit_loss_rate or 0), 2),
                     "formulaAudits": formula_audits,
+                    "ontologyOpinion": dict(item.ontology_opinion or {}),
+                    "ontologyWorldview": dict(item.ontology_worldview or {}),
+                    "ontologyReviewContext": dict(item.ai_context or {}),
                 },
             ))
         return events

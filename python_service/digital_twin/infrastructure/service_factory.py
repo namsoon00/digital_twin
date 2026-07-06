@@ -12,6 +12,7 @@ from .event_bus import EventBus, default_event_bus
 from .disclosure_analyzer import disclosure_analyzer_from_settings
 from .model_review_queue import ModelReviewEnqueuer
 from .model_reviewer import reviewer_from_settings
+from .neo4j_ontology import ontology_repository_from_settings
 from .notifications import queued_notifier_for_account
 from .notifications import send_events
 from .notifications import notifier_for_account
@@ -43,6 +44,7 @@ def build_monitor_runner(accounts: Iterable[AccountConfig], event_publisher=None
         event_sender=send_events,
         event_publisher=event_publisher or monitor_event_bus(),
         cycle_recorder=store,
+        ontology_repository=ontology_repository_from_settings(settings),
     )
 
 

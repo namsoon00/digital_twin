@@ -373,6 +373,11 @@ def settings_status_payload() -> Dict[str, object]:
         "alertRules",
         "alertThresholds",
         "alertCadenceMinutes",
+        "ontologyNeo4jEnabled",
+        "neo4jUri",
+        "neo4jUser",
+        "neo4jDatabase",
+        "neo4jTimeoutSeconds",
         "symbolUniverseMaxAgeHours",
         "externalApiFetchIntervalMinutes",
         "externalFredSeries",
@@ -396,6 +401,7 @@ def settings_status_payload() -> Dict[str, object]:
         "coingeckoApiKey": "",
         "fredApiKey": "",
         "opendartApiKey": "",
+        "neo4jPassword": "",
     })
     for optional_key in ["valuationAssumptions", "marketSignalInputs"]:
         if configured(settings.get(optional_key)):
@@ -412,6 +418,7 @@ def settings_status_payload() -> Dict[str, object]:
             "coingeckoApiKey": bool(settings.get("coingeckoApiKey")),
             "fredApiKey": bool(settings.get("fredApiKey")),
             "opendartApiKey": bool(settings.get("opendartApiKey")),
+            "neo4jPassword": bool(settings.get("neo4jPassword")),
         },
         "locked": bool(configured(os.environ.get("SHARE_TOKEN"))),
     }

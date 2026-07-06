@@ -3,6 +3,7 @@ from typing import Callable, Iterable, List
 
 from ..domain.accounts import AccountConfig
 from ..domain.events import alerts_detected_event, monitoring_cycle_completed_event, snapshot_collected_event
+from ..domain.ontology import build_portfolio_ontology
 from ..domain.portfolio import AccountSnapshot, AlertEvent
 from ..domain.repositories import MonitorStateRepository, MonitoringCycleRecorder, SnapshotMonitor
 
@@ -17,6 +18,7 @@ class MonitorRunner:
         event_sender: Callable,
         event_publisher=None,
         cycle_recorder: MonitoringCycleRecorder = None,
+        ontology_repository=None,
     ):
         self.accounts = list(accounts)
         self.account_map = {account.account_id: account for account in self.accounts}
@@ -26,6 +28,7 @@ class MonitorRunner:
         self.event_sender = event_sender
         self.event_publisher = event_publisher
         self.cycle_recorder = cycle_recorder
+        self.ontology_repository = ontology_repository
 
     def run_once(self, dry_run: bool = False, force: bool = False) -> List[AlertEvent]:
         all_events: List[AlertEvent] = []
@@ -37,6 +40,8 @@ class MonitorRunner:
                 self.publish(snapshot_collected_event(snapshot))
             previous = self.store.previous.get(snapshot.account_id) or {}
             events = self.monitor.events_for_snapshot(snapshot, previous)
+            if not dry_run:
+                self.persist_ontology(snapshot)
             events = self.monitor.apply_cadence(events, self.store, force=force)
             all_events.extend(events)
         if self.use_cycle_recorder(dry_run):
@@ -82,6 +87,26 @@ class MonitorRunner:
     def publish(self, event) -> None:
         if self.event_publisher:
             self.event_publisher.publish(event)
+
+    def persist_ontology(self, snapshot: AccountSnapshot) -> None:
+        if not self.ontology_repository or not snapshot.has_live_account_data():
+            return
+        try:
+            legacy_by_symbol = {
+                item.symbol.upper(): item.to_dict()
+                for item in snapshot.decisions
+            }
+            graph = build_portfolio_ontology(
+                snapshot.positions,
+                snapshot.portfolio,
+                legacy_by_symbol=legacy_by_symbol,
+                external_signals=snapshot.external_signals,
+                portfolio_id=snapshot.account_id,
+            )
+            result = self.ontology_repository.save_graph(graph)
+        except Exception as error:  # noqa: BLE001 - graph persistence must not block monitoring.
+            result = {"saved": False, "status": "error", "reason": str(error)[:180]}
+        snapshot.metadata.setdefault("ontology", {})["neo4j"] = result
 
     def send_alert_events(self, events, dry_run: bool, source_event):
         parameters = inspect.signature(self.event_sender).parameters

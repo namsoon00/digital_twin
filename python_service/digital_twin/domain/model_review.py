@@ -5,7 +5,7 @@ from typing import Dict, List
 from .portfolio import utc_now_iso
 
 
-MODEL_REVIEW_PROMPT_VERSION = "model-review-v1"
+MODEL_REVIEW_PROMPT_VERSION = "model-review-v2-ontology"
 
 
 @dataclass
@@ -23,10 +23,12 @@ class ModelReviewJob:
     attempts: int = 0
     result: str = ""
     last_error: str = ""
+    review_context: Dict[str, object] = field(default_factory=dict)
 
     @classmethod
     def create(cls, payload: Dict[str, object]) -> "ModelReviewJob":
         seed = str(payload.get("key") or payload.get("alertKey") or uuid.uuid4().hex)
+        metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
         return cls(
             job_id=uuid.uuid5(uuid.NAMESPACE_URL, "digital-twin:model-review:" + seed).hex,
             account_id=str(payload.get("accountId") or ""),
@@ -35,6 +37,12 @@ class ModelReviewJob:
             title=str(payload.get("title") or ""),
             alert_key=seed,
             alert_lines=[str(line) for line in payload.get("lines") or [] if str(line).strip()],
+            review_context=dict(
+                metadata.get("ontologyReviewContext")
+                or metadata.get("ontologyPromptContext")
+                or metadata.get("ontologyOpinion")
+                or {}
+            ),
         )
 
     @classmethod
@@ -53,6 +61,7 @@ class ModelReviewJob:
             attempts=int(payload.get("attempts") or 0),
             result=str(payload.get("result") or ""),
             last_error=str(payload.get("lastError") or ""),
+            review_context=dict(payload.get("reviewContext") or {}),
         )
 
     def to_dict(self) -> Dict[str, object]:
@@ -71,17 +80,27 @@ class ModelReviewJob:
             "attempts": payload["attempts"],
             "result": payload["result"],
             "lastError": payload["last_error"],
+            "reviewContext": payload["review_context"],
         }
 
 
 def build_model_review_prompt(job: ModelReviewJob) -> str:
     lines = "\n".join(["- " + line for line in job.alert_lines])
+    ontology_context = ""
+    if job.review_context:
+        ontology_context = "\n".join([
+            "",
+            "온톨로지/AI 투자 의견 컨텍스트:",
+            str(job.review_context),
+        ])
     return "\n".join([
         "너는 투자 판단 기준을 지속적으로 개선하는 금융 데이터 리뷰어다.",
+        "이번 모델은 단순 점수 계산이 아니라 투자 세계관 온톨로지, 관계, evidence 충돌을 우선한다.",
         "매수/매도 지시가 아니라 판단 변화의 원인, 데이터 검증, 다음 실험을 분석한다.",
         "한국어로 텔레그램 메시지에 맞게 간결하지만 충분히 분석해라. 영어 또는 어려운 용어는 쉬운 한국어로 풀어 써라.",
         "메시지 제목에는 계정명이나 계정 ID를 넣지 마라. 계정 정보는 전송 라우팅에만 사용한다.",
-        "섹션은 반드시 다음 순서로 작성한다: 판단 변화 원인, 데이터 검증, 모델 보완, 다음 실험.",
+        "섹션은 반드시 다음 순서로 작성한다: 세계관 변화, 관계/모순, 데이터 검증, 모델 보완, 다음 실험.",
+        "기존 점수 모델은 보조 데이터로만 다뤄라.",
         "API 키, 토큰, 계좌 식별정보를 추정하거나 요청하지 마라.",
         "",
         "리뷰 버전: " + MODEL_REVIEW_PROMPT_VERSION,
@@ -91,6 +110,7 @@ def build_model_review_prompt(job: ModelReviewJob) -> str:
         "알림 키: " + job.alert_key,
         "실시간 알림 내용:",
         lines or "- 없음",
+        ontology_context,
     ])
 
 
@@ -104,9 +124,20 @@ def local_model_review(job: ModelReviewJob) -> str:
     if "현재가/평단 없음" in joined or "평가액 없음" in joined:
         validation = "가격 또는 평가액 필드가 부족하므로 판단 변화의 근거가 약합니다. 원천 API 매핑부터 보완하세요."
         improvement = "필수 판단 요소가 빠졌을 때는 점수 산출을 보류하거나 신뢰도를 낮추는 게 좋습니다."
+    ontology_line = "온톨로지 컨텍스트가 없어서 알림 라인과 기존 점수 evidence만 사용했습니다."
+    if job.review_context:
+        opinion = job.review_context.get("opinion") if isinstance(job.review_context, dict) else {}
+        worldview = job.review_context.get("worldview") if isinstance(job.review_context, dict) else {}
+        thesis = str((opinion or {}).get("thesis") or "").strip()
+        dominant_sector = str((worldview or {}).get("dominantSector") or "").strip()
+        ontology_line = (
+            "온톨로지 thesis는 " + (thesis or "요약 없음")
+            + ("이며, 지배 섹터는 " + dominant_sector + "입니다." if dominant_sector else "입니다.")
+        )
     return "\n".join([
         (job.symbol or job.title or "판단 변화") + " 모델 리뷰",
-        "- 판단 변화 원인: 실시간 판단 기준이 감지한 판단 이름 또는 매도/손절 압력 점수 변화가 기준선을 넘었습니다.",
+        "- 세계관 변화: 실시간 판단 기준이 감지한 판단 이름 또는 매도/손절 압력 점수 변화가 기준선을 넘었습니다.",
+        "- 관계/모순: " + ontology_line,
         "- 데이터 검증: " + validation,
         "- 모델 보완: " + improvement,
         "- 다음 실험: 동일 조건을 최근 20회 판단 변화에 다시 적용해 잘못 울린 알림과 이후 손익 흐름을 비교하세요.",

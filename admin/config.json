@@ -13,7 +13,7 @@
     "공유 미리보기에서는 서버 설정과 계정 DB 쓰기를 차단합니다."
   ],
   "localData": {
-    "generatedAt": "2026-07-06T07:54:51.866096Z",
+    "generatedAt": "2026-07-06T11:00:40.725530Z",
     "sources": {
       "serviceDb": "data/service.db",
       "serviceDbExists": true,
@@ -762,6 +762,35 @@
           "unit": "seconds"
         },
         {
+          "key": "ontologyNeo4jEnabled",
+          "label": "온톨로지 Neo4j 저장",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
+          "key": "neo4jUri",
+          "label": "Neo4j URI",
+          "type": "url"
+        },
+        {
+          "key": "neo4jUser",
+          "label": "Neo4j 사용자",
+          "type": "text",
+          "default": "neo4j"
+        },
+        {
+          "key": "neo4jPassword",
+          "label": "Neo4j Password",
+          "type": "secret",
+          "masked": true
+        },
+        {
+          "key": "neo4jDatabase",
+          "label": "Neo4j Database",
+          "type": "text",
+          "default": "neo4j"
+        },
+        {
           "key": "formulaWeights",
           "label": "공식 가중치",
           "type": "assignmentText"
@@ -1166,7 +1195,7 @@
     {
       "id": "model-review",
       "title": "모델 리뷰 워커",
-      "summary": "monitorDecisionChange 이벤트를 큐에 넣고, Codex 또는 로컬 fallback으로 판단 변화 원인과 다음 실험을 작성합니다.",
+      "summary": "monitorDecisionChange 이벤트를 큐에 넣고, 온톨로지 세계관·관계·모순과 다음 실험을 작성합니다.",
       "commands": [
         "npm run python:model-review:once -- --dry-run",
         "npm run python:model-review:watch",
@@ -1205,7 +1234,7 @@
           "default": "1"
         }
       ],
-      "promptVersion": "model-review-v1"
+      "promptVersion": "model-review-v2-ontology"
     },
     {
       "id": "notification-templates",
@@ -1259,5 +1288,5 @@
       ]
     }
   ],
-  "buildId": "81bec56ba78f"
+  "buildId": "88338a6ff616"
 }

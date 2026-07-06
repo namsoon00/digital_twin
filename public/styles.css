@@ -4077,6 +4077,150 @@ h3 {
   background: var(--panel-soft);
 }
 
+.ontology-relationship-graphs {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.ontology-graph-panel {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+}
+
+.ontology-graph-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  min-height: 420px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--input);
+}
+
+.ontology-abox-svg {
+  min-height: 470px;
+}
+
+.ontology-graph-svg marker path {
+  fill: var(--blue);
+}
+
+.ontology-graph-edge path {
+  fill: none;
+  stroke: color-mix(in srgb, var(--blue) 58%, var(--line));
+  stroke-width: 1.35;
+  opacity: 0.86;
+}
+
+.ontology-graph-edge.schema path {
+  stroke: color-mix(in srgb, var(--blue) 68%, var(--line));
+  stroke-width: 1.55;
+}
+
+.ontology-graph-edge.assertion path {
+  stroke: color-mix(in srgb, var(--green) 62%, var(--line));
+}
+
+.ontology-graph-edge.derived path {
+  stroke: color-mix(in srgb, var(--violet) 58%, var(--line));
+  stroke-dasharray: 5 5;
+}
+
+.ontology-graph-edge.rule path {
+  stroke: color-mix(in srgb, var(--amber) 72%, var(--line));
+  stroke-dasharray: 4 6;
+}
+
+.ontology-graph-edge text {
+  fill: var(--muted);
+  stroke: var(--input);
+  stroke-width: 4px;
+  paint-order: stroke;
+  font-size: 9px;
+  font-weight: 850;
+}
+
+.ontology-graph-node rect {
+  fill: var(--panel);
+  stroke: var(--line);
+  stroke-width: 1.2;
+}
+
+.ontology-graph-node.schema rect,
+.ontology-graph-node.portfolio rect,
+.ontology-graph-node.stock rect {
+  stroke: color-mix(in srgb, var(--blue) 60%, var(--line));
+  fill: color-mix(in srgb, var(--blue-soft) 38%, var(--panel));
+}
+
+.ontology-graph-node.sector rect,
+.ontology-graph-node.market rect,
+.ontology-graph-node.currency rect,
+.ontology-graph-node.cash rect {
+  stroke: color-mix(in srgb, var(--green) 58%, var(--line));
+  fill: color-mix(in srgb, var(--green-soft) 34%, var(--panel));
+}
+
+.ontology-graph-node.risk rect {
+  stroke: color-mix(in srgb, var(--red) 54%, var(--line));
+  fill: color-mix(in srgb, var(--red-soft) 34%, var(--panel));
+}
+
+.ontology-graph-node.support rect,
+.ontology-graph-node.opportunity rect {
+  stroke: color-mix(in srgb, var(--green) 62%, var(--line));
+}
+
+.ontology-graph-node.evidence rect,
+.ontology-graph-node.belief rect,
+.ontology-graph-node.opinion rect,
+.ontology-graph-node.review rect,
+.ontology-graph-node.model rect {
+  stroke: color-mix(in srgb, var(--violet) 52%, var(--line));
+  fill: color-mix(in srgb, var(--violet-soft) 34%, var(--panel));
+}
+
+.ontology-graph-node.rule rect {
+  stroke: color-mix(in srgb, var(--amber) 70%, var(--line));
+  fill: color-mix(in srgb, var(--amber-soft) 52%, var(--panel));
+}
+
+.ontology-graph-node text {
+  fill: var(--ink);
+  font-size: 11px;
+  font-weight: 950;
+}
+
+.ontology-graph-node.rule text {
+  fill: var(--amber);
+}
+
+.ontology-graph-caption {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ontology-graph-caption span {
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--input);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  overflow-wrap: anywhere;
+}
+
 .ontology-map {
   grid-row: span 2;
   min-height: 280px;

@@ -607,6 +607,103 @@ h3 {
   min-width: 0;
 }
 
+.managed-page {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.page-command-strip {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 0.34fr);
+  gap: 10px;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--ds-radius-panel);
+  background: color-mix(in srgb, var(--panel) 94%, var(--ds-color-accent-soft) 6%);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.page-command-flow,
+.page-command-metrics {
+  display: grid;
+  min-width: 0;
+}
+
+.page-command-flow {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.page-command-metrics {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border-left: 1px solid var(--line);
+}
+
+.page-command-step,
+.page-command-metric {
+  display: grid;
+  align-content: center;
+  gap: 3px;
+  min-width: 0;
+  min-height: 58px;
+  padding: 10px 12px;
+  border-left: 1px solid var(--line);
+}
+
+.page-command-step:first-child,
+.page-command-metric:first-child {
+  border-left: 0;
+}
+
+.page-command-step {
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 9px;
+}
+
+.page-command-step b {
+  grid-row: span 2;
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: var(--chip);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1;
+}
+
+.page-command-step strong,
+.page-command-step em,
+.page-command-metric strong,
+.page-command-metric em {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.page-command-step strong {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 950;
+}
+
+.page-command-step em,
+.page-command-metric em {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 850;
+}
+
+.page-command-metric strong {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 950;
+}
+
 .loading-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr);
@@ -6827,21 +6924,88 @@ h3 {
 
 @media (min-width: 861px) {
   .shell {
-    padding-bottom: 32px;
+    height: calc(100dvh - 48px);
+    min-height: 720px;
+    padding-bottom: 24px;
+    overflow: hidden;
   }
 
   .workspace-layout {
     display: block;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .workspace-main {
+    height: 100%;
+    min-height: 0;
+    overflow: auto;
+    overscroll-behavior: contain;
+    padding-right: 2px;
+    scrollbar-gutter: stable;
+  }
+
+  .managed-page {
+    min-height: 100%;
+    padding-bottom: 6px;
+  }
+
+  .admin-grid {
+    grid-auto-flow: dense;
   }
 
   .tab-bar {
     display: none;
+  }
+
+  .app-nav {
+    height: 100%;
+    min-height: 0;
+    max-height: 100%;
+    overflow: hidden;
+  }
+
+  .app-nav-tabs {
+    overflow: auto;
+    scrollbar-width: thin;
+  }
+
+  .notification-decision-list,
+  .symbol-result-list,
+  .account-card-list,
+  .watch-account-list,
+  .account-watch-symbol-list,
+  .monitoring-instrument-list,
+  .admin-message-group-list {
+    max-height: calc(100dvh - 460px);
+    overflow: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+  }
+
+  .admin-account-layout,
+  .account-watchlist-workbench {
+    min-height: min(620px, calc(100dvh - 330px));
+  }
+
+  .admin-account-list,
+  .admin-account-form,
+  .watch-account-rail,
+  .account-watchlist-editor {
+    min-height: 0;
+  }
+
+  .ontology-dashboard {
+    max-height: none;
   }
 }
 
 @media (max-width: 980px) and (min-width: 861px) {
   .shell {
     display: block;
+    height: auto;
+    min-height: 100dvh;
+    overflow: visible;
     width: min(1180px, calc(100vw - 32px));
     padding: 18px 0 32px;
   }
@@ -6862,6 +7026,7 @@ h3 {
     gap: 10px;
     align-items: center;
     min-height: 0;
+    max-height: none;
     margin-bottom: 14px;
     padding: 8px;
   }
@@ -6930,6 +7095,12 @@ h3 {
   .workspace-layout {
     grid-column: auto;
     grid-row: auto;
+    overflow: visible;
+  }
+
+  .workspace-main {
+    height: auto;
+    overflow: visible;
   }
 
   .deskbar {
@@ -6946,6 +7117,15 @@ h3 {
   .admin-grid {
     grid-template-columns: repeat(8, minmax(0, 1fr));
     gap: 14px;
+  }
+
+  .page-command-strip {
+    grid-template-columns: 1fr;
+  }
+
+  .page-command-metrics {
+    border-top: 1px solid var(--line);
+    border-left: 0;
   }
 
   .home-view .admin-overview-panel,
@@ -7012,7 +7192,8 @@ h3 {
 
   .app-nav {
     top: 18px;
-    min-height: calc(100vh - 36px);
+    height: 100%;
+    min-height: 0;
     padding: 12px;
   }
 
@@ -7197,6 +7378,9 @@ h3 {
   .hero-grid,
   .content-grid,
   .loading-grid,
+  .page-command-strip,
+  .page-command-flow,
+  .page-command-metrics,
   .home-view,
   .home-command-grid,
   .home-action-grid,
@@ -7212,6 +7396,29 @@ h3 {
   .settings-grid,
   .settings-api-grid {
     grid-template-columns: 1fr;
+  }
+
+  .page-command-strip {
+    gap: 0;
+    margin-bottom: 0;
+  }
+
+  .page-command-flow {
+    display: none;
+  }
+
+  .page-command-metrics {
+    border-top: 0;
+    border-left: 0;
+  }
+
+  .page-command-metric {
+    border-left: 0;
+    border-top: 1px solid var(--line);
+  }
+
+  .page-command-metric:first-child {
+    border-top: 0;
   }
 
   .monitoring-view {

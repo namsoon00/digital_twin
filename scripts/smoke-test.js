@@ -191,6 +191,10 @@ function checkFrontendAdminRender() {
   assertOk(styles.indexOf("--ds-shell-width: 1720px") >= 0 && styles.indexOf("--ds-sidebar-width: 256px") >= 0, "PC 중심 shell/sidebar 레이아웃 토큰이 없습니다.");
   assertOk(styles.indexOf("grid-template-columns: var(--ds-sidebar-width) minmax(0, 1fr)") >= 0, "PC shell이 좌측 네비게이션과 작업 영역으로 분리되지 않습니다.");
   assertOk(styles.indexOf("grid-template-columns: repeat(12, minmax(0, 1fr))") >= 0, "PC 본문 12컬럼 그리드가 없습니다.");
+  assertOk(code.indexOf("renderManagedPage") >= 0 && styles.indexOf(".managed-page") >= 0, "전체 탭 공통 관리 페이지 템플릿이 없습니다.");
+  assertOk(code.indexOf("renderPageCommandStrip") >= 0 && styles.indexOf(".page-command-strip") >= 0, "페이지 작업 상태 strip 템플릿이 없습니다.");
+  assertOk(/@media \(min-width: 861px\)[\s\S]*height: calc\(100dvh - 48px\);/.test(styles), "PC shell이 100dvh 관리 콘솔로 고정되지 않습니다.");
+  assertOk(/@media \(min-width: 861px\)[\s\S]*\.workspace-main[\s\S]*overflow: auto;/.test(styles), "PC 본문이 내부 스크롤 작업대로 분리되지 않습니다.");
   assertOk(/@media \(max-width: 1180px\) and \(min-width: 981px\)[\s\S]*grid-template-columns: 224px minmax\(0, 1fr\);/.test(styles), "981px 이상 태블릿이 PC형 좌측 네비게이션으로 유지되지 않습니다.");
   assertOk(/@media \(max-width: 980px\) and \(min-width: 861px\)[\s\S]*\.app-nav[\s\S]*grid-template-columns: auto minmax\(0, 1fr\) auto;/.test(styles), "좁은 태블릿에서 상단 네비게이션으로 전환되지 않습니다.");
   assertOk(code.indexOf("renderDeskbar") >= 0 && styles.indexOf(".deskbar") >= 0, "PC/태블릿 데스크 바가 없습니다.");
@@ -726,6 +730,21 @@ function checkFrontendAdminRender() {
     const settingsHtml = pages[14];
     const staticAccountHtml = pages[15];
     const newAccountHtml = pages[16];
+
+    [
+      ["overview", overviewHtml],
+      ["accounts", accountHtml],
+      ["watchlist", watchlistHtml],
+      ["symbols", symbolUniverseHtml],
+      ["notifications", notificationHtml],
+      ["modeling", modelingHtml],
+      ["ontology", ontologyHtml],
+      ["monitoring", monitoringHtml],
+      ["settings", settingsHtml]
+    ].forEach(function (entry) {
+      assertOk(entry[1].indexOf("managed-page managed-page-" + entry[0]) >= 0, "탭이 공통 관리 페이지 템플릿을 거치지 않습니다: " + entry[0]);
+      assertOk(entry[1].indexOf("page-command-strip") >= 0, "탭에 페이지 작업 상태 strip이 없습니다: " + entry[0]);
+    });
 
     assertOk(overviewHtml.indexOf("계정·알림·모델 운영 콘솔") < 0, "이전 고정 운영 콘솔 제목이 아직 렌더링됩니다.");
     assertOk(overviewHtml.indexOf("<h1>홈</h1>") >= 0, "홈 탭 제목이 상단에 렌더링되지 않았습니다.");

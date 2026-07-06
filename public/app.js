@@ -5884,35 +5884,35 @@
 
   function renderActiveTab(snapshot) {
     if (state.activeTab === "overview") {
-      return [
+      return renderManagedPage("overview", snapshot, [
         '<section class="admin-grid home-view">',
         renderAdminOverviewPanel(snapshot),
         renderAccountDirectoryPanel({ compact: true }),
         renderAccountWatchlistPanel({ compact: true }),
         renderAdminMonitoringPanel(snapshot),
         '</section>'
-      ].join("");
+      ].join(""));
     }
     if (state.activeTab === "accounts") {
-      return [
+      return renderManagedPage("accounts", snapshot, [
         '<section class="admin-grid accounts-view">',
         renderAdminAccountPanel(),
         '</section>'
-      ].join("");
+      ].join(""));
     }
     if (state.activeTab === "watchlist") {
-      return [
+      return renderManagedPage("watchlist", snapshot, [
         '<section class="admin-grid watchlist-view">',
         renderAccountWatchlistPanel({ full: true, editable: true }, snapshot),
         '</section>'
-      ].join("");
+      ].join(""));
     }
     if (state.activeTab === "symbols") {
-      return [
+      return renderManagedPage("symbols", snapshot, [
         '<section class="admin-grid symbol-universe-view">',
         renderSymbolUniversePanel({ full: true }),
         '</section>'
-      ].join("");
+      ].join(""));
     }
     if (state.activeTab === "notifications") {
       return renderNotificationsPage();
@@ -5924,7 +5924,7 @@
       return renderOntologyPage(snapshot);
     }
     if (state.activeTab === "monitoring") {
-      return [
+      return renderManagedPage("monitoring", snapshot, [
         '<section class="admin-grid monitoring-view">',
         renderAdminMonitoringPanel(snapshot),
         renderAlertCenterPanel(snapshot),
@@ -5932,34 +5932,152 @@
         renderPortfolioPanel(snapshot),
         '</section>',
         renderMonitoringDetailOverlay(snapshot)
-      ].join("");
+      ].join(""));
     }
     if (state.activeTab === "settings") {
       return renderSettingsPage();
     }
-    return [
+    return renderManagedPage("overview", snapshot, [
       '<section class="admin-grid">',
       renderAdminOverviewPanel(snapshot),
       renderAdminMonitoringPanel(snapshot),
       '</section>'
+    ].join(""));
+  }
+
+  function renderManagedPage(pageId, snapshot, content) {
+    return [
+      '<div class="managed-page managed-page-' + escapeHtml(pageId || "overview") + '">',
+      renderPageCommandStrip(pageId, snapshot),
+      content,
+      '</div>'
+    ].join("");
+  }
+
+  function pageCommandProfile(pageId, snapshot) {
+    var toss = snapshot.toss || {};
+    var positions = Array.isArray(toss.positions) ? toss.positions.filter(function (item) {
+      return item && item.source !== "cash";
+    }) : [];
+    var watchlist = Array.isArray(toss.watchlist) ? toss.watchlist : [];
+    var portfolio = snapshot.portfolio || {};
+    var strategy = (snapshot.tossDecision || {}).ontologyStrategy || {};
+    var abox = strategy.abox || {};
+    var enabledRules = notificationEnabledRuleCount();
+    var profiles = {
+      overview: {
+        steps: [["01", "Status", "계정·데이터"], ["02", "Risk", "모니터링"], ["03", "Action", "알림·전략"]],
+        metrics: [["계정", serviceAccounts().length || 0], ["평가", formatMoney(portfolio.total || 0)], ["알림", enabledRules + "/" + alertRuleCatalog.length]]
+      },
+      accounts: {
+        steps: [["01", "Directory", "계정 목록"], ["02", "Exposure", "노출 상태"], ["03", "Save", "DB 저장"]],
+        metrics: [["활성", enabledServiceAccounts().length + "/" + serviceAccounts().length], ["Toss", configuredCount(["tossClientId", "tossClientSecret"]) + "/2"], ["Telegram", configuredCount(["telegramBotToken", "telegramChatId"]) + "/2"]]
+      },
+      watchlist: {
+        steps: [["01", "Account", "대상 선택"], ["02", "Universe", "종목 검색"], ["03", "Notify", "알림 연결"]],
+        metrics: [["계정", serviceAccounts().length || 0], ["관심", allAccountWatchlistSymbols().length || watchlistSymbols().length], ["시세", watchlist.length]]
+      },
+      symbols: {
+        steps: [["01", "Catalog", "시장 목록"], ["02", "Filter", "검색·필터"], ["03", "Add", "계정 편입"]],
+        metrics: [["기본", watchlistSymbols().length], ["계정", allAccountWatchlistSymbols().length], ["시장", symbolMarketCount()]]
+      },
+      notifications: {
+        steps: [["01", "Decision", "최근 판단"], ["02", "Policy", "타입 룰"], ["03", "Template", "본문·발송"]],
+        metrics: [["사용 룰", enabledRules + "/" + alertRuleCatalog.length], ["템플릿", notificationTemplateItems().length], ["큐", notificationJobSummaryText(state.realtime.notificationJobs)]]
+      },
+      modeling: {
+        steps: [["01", "Input", "데이터"], ["02", "Formula", "공식"], ["03", "Result", "판단"]],
+        metrics: [["보유", positions.length], ["관심", watchlist.length], ["공식", modelFormulaRows().length]]
+      },
+      ontology: {
+        steps: [["01", "TBox", "스키마"], ["02", "ABox", "실체"], ["03", "Relation", "관계·근거"]],
+        metrics: [["TBox", ((strategy.tbox || {}).classes || []).length], ["ABox", abox.entityCount || 0], ["관계", abox.relationCount || strategy.relationCount || 0]]
+      },
+      monitoring: {
+        steps: [["01", "Snapshot", "수집"], ["02", "Alert", "감지"], ["03", "Detail", "종목 상세"]],
+        metrics: [["보유", positions.length], ["관심", watchlist.length], ["평가", formatMoney(portfolio.total || 0)]]
+      },
+      settings: {
+        steps: [["01", "Local", "설정 DB"], ["02", "Provider", "외부 연결"], ["03", "Save", "변경 반영"]],
+        metrics: [["저장", state.settingsSaved ? "완료" : "대기"], ["잠금", state.serverSettingsLocked ? "읽기전용" : "수정"], ["API", configuredCount(["alphaVantageApiKey", "coingeckoApiKey", "fredApiKey", "opendartApiKey"]) + "/4"]]
+      }
+    };
+    return profiles[pageId] || profiles.overview;
+  }
+
+  function symbolMarketCount() {
+    var seen = {};
+    (state.symbolUniverse.items || []).forEach(function (item) {
+      var market = String(item.market || item.exchange || "").trim();
+      if (market) seen[market] = true;
+    });
+    return Object.keys(seen).length || "-";
+  }
+
+  function serviceAccounts() {
+    return Array.isArray(state.serviceAccounts) ? state.serviceAccounts : [];
+  }
+
+  function enabledServiceAccounts() {
+    return serviceAccounts().filter(function (account) {
+      return account && account.enabled !== false;
+    });
+  }
+
+  function configuredCount(keys) {
+    return (keys || []).filter(function (key) {
+      return isConfiguredSetting(key);
+    }).length;
+  }
+
+  function renderPageCommandStrip(pageId, snapshot) {
+    var profile = pageCommandProfile(pageId, snapshot);
+    return [
+      '<section class="page-command-strip" aria-label="페이지 작업 상태">',
+      '<div class="page-command-flow">',
+      profile.steps.map(renderPageCommandStep).join(""),
+      '</div>',
+      '<div class="page-command-metrics">',
+      profile.metrics.map(renderPageCommandMetric).join(""),
+      '</div>',
+      '</section>'
+    ].join("");
+  }
+
+  function renderPageCommandStep(step) {
+    return [
+      '<span class="page-command-step">',
+      '<b>' + escapeHtml(step[0]) + '</b>',
+      '<strong>' + escapeHtml(step[1]) + '</strong>',
+      '<em>' + escapeHtml(step[2]) + '</em>',
+      '</span>'
+    ].join("");
+  }
+
+  function renderPageCommandMetric(metric) {
+    return [
+      '<span class="page-command-metric">',
+      '<em>' + escapeHtml(metric[0]) + '</em>',
+      '<strong>' + escapeHtml(metric[1]) + '</strong>',
+      '</span>'
     ].join("");
   }
 
   function renderStrategyModelingPage(snapshot) {
-    return [
+    return renderManagedPage("modeling", snapshot, [
       '<section class="admin-grid strategy-view">',
       renderStrategySectionBar(),
       renderStrategySectionContent(snapshot),
       '</section>'
-    ].join("");
+    ].join(""));
   }
 
   function renderOntologyPage(snapshot) {
-    return [
+    return renderManagedPage("ontology", snapshot, [
       '<section class="admin-grid ontology-view">',
       renderOntologyStrategyPanel(snapshot),
       '</section>'
-    ].join("");
+    ].join(""));
   }
 
   function renderStrategySectionBar() {
@@ -6809,13 +6927,13 @@
   function renderNotificationsPage() {
     var section = normalizeNotificationSection(state.activeNotificationSection);
     var content = renderNotificationSectionContent();
-    return [
+    return renderManagedPage("notifications", state.snapshot || {}, [
       '<section class="admin-grid notifications-view">',
       renderNotificationSectionBar(),
       content,
       section === "status" ? renderNotificationCommandPanel() : '',
       '</section>'
-    ].join("");
+    ].join(""));
   }
 
   function notificationEnabledRuleCount() {
@@ -10944,14 +11062,14 @@
   }
 
   function renderSettingsPage() {
-    return [
+    return renderManagedPage("settings", state.snapshot || {}, [
       '<section class="admin-grid settings-view">',
       renderSettingsOverviewPanel(),
       renderSettingsEnvironmentPanel(),
       renderSettingsDeliverySettingsPanel(),
       renderSettingsExternalDataPanel(),
       '</section>'
-    ].join("");
+    ].join(""));
   }
 
   function renderSettingsOverviewPanel() {

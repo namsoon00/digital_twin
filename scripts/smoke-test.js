@@ -188,6 +188,10 @@ function checkFrontendAdminRender() {
   assertOk(styles.indexOf("touch-action: manipulation") >= 0 && styles.indexOf("@media (hover: none)") >= 0, "모바일 터치 반응성 규칙이 없습니다.");
   assertOk(code.indexOf("syncAppNavScrollState") >= 0 && styles.indexOf(".app-nav.is-hidden") >= 0, "모바일 상단 앱바 자동 접힘 규칙이 없습니다.");
   assertOk(styles.indexOf("@media (max-width: 1180px) and (min-width: 981px)") >= 0 && styles.indexOf("@media (max-width: 980px) and (min-width: 861px)") >= 0, "PC/태블릿 레이아웃 분기 규칙이 없습니다.");
+  assertOk(styles.indexOf("--ds-shell-width: 1720px") >= 0 && styles.indexOf("--ds-sidebar-width: 256px") >= 0, "PC 중심 shell/sidebar 레이아웃 토큰이 없습니다.");
+  assertOk(styles.indexOf("grid-template-columns: var(--ds-sidebar-width) minmax(0, 1fr)") >= 0, "PC shell이 좌측 네비게이션과 작업 영역으로 분리되지 않습니다.");
+  assertOk(styles.indexOf("grid-template-columns: repeat(12, minmax(0, 1fr))") >= 0, "PC 본문 12컬럼 그리드가 없습니다.");
+  assertOk(/@media \(max-width: 1180px\) and \(min-width: 861px\)[\s\S]*\.app-nav[\s\S]*grid-template-columns: auto minmax\(0, 1fr\) auto;/.test(styles), "태블릿에서 상단 네비게이션으로 전환되지 않습니다.");
   assertOk(styles.indexOf(".account-exposure-grid") >= 0 && styles.indexOf(".account-manager-panel .admin-form-grid") >= 0, "PC 계좌 노출 최적화 규칙이 없습니다.");
   assertOk(styles.indexOf(".settings-smart-save") >= 0, "설정 화면 스마트 저장 액션 규칙이 없습니다.");
   assertOk(styles.indexOf(".settings-save-panel") < 0, "설정 화면에 하단 sticky 저장 패널 규칙이 남아 있습니다.");
@@ -201,6 +205,7 @@ function checkFrontendAdminRender() {
   assertOk(fs.existsSync(path.join(rootDir, "public", "favicon.svg")), "Orbit Alpha SVG 파비콘이 없습니다.");
   assertOk(designSystemDoc.indexOf("Orbit Light") >= 0 && designSystemDoc.indexOf("#F2F6FB") >= 0, "디자인 시스템 문서에 Orbit Light 팔레트가 없습니다.");
   assertOk(designSystemDoc.indexOf("Page Contracts") >= 0, "디자인 시스템 문서에 페이지별 UI 계약이 없습니다.");
+  assertOk(designSystemDoc.indexOf("12컬럼") >= 0 && designSystemDoc.indexOf("8컬럼") >= 0, "디자인 시스템 문서에 PC/태블릿 컬럼 기준이 없습니다.");
   assertOk(designSystemDoc.indexOf("Button Placement") >= 0, "디자인 시스템 문서에 버튼 위치 정책이 없습니다.");
   assertOk(designSystemDoc.indexOf("aria-current") >= 0, "디자인 시스템 문서에 내비게이션 접근성 기준이 없습니다.");
   assertOk(code.indexOf('appTheme: settingValue("appTheme")') >= 0, "설정 저장 payload에 화면 테마가 포함되지 않았습니다.");
@@ -862,6 +867,8 @@ function checkFrontendAdminRender() {
     assertOk(modelingHtml.indexOf("웹에서 운영하는 매수·매도 타이밍 모델") < 0 && modelingResultsHtml.indexOf("웹에서 운영하는 매수·매도 타이밍 모델") < 0, "타이밍 모델 제목이 아직 렌더링됩니다.");
     assertOk(monitoringHtml.indexOf("monitoring-view") >= 0, "모니터링 탭에 PC 전용 레이아웃 클래스가 없습니다.");
     assertOk(styles.indexOf(".monitoring-view") >= 0 && styles.indexOf("grid-template-areas") >= 0, "모니터링 탭 PC 그리드 레이아웃 CSS가 없습니다.");
+    assertOk(styles.indexOf(".monitoring-view .admin-monitoring-panel {\n  grid-area: status;\n  grid-column: auto;") < 0, "모니터링 상태 패널의 PC grid-area가 1컬럼으로 압축될 수 있습니다.");
+    assertOk(styles.indexOf(".monitoring-view .alert-panel {\n  grid-area: alerts;\n  grid-column: auto;") < 0, "모니터링 알림 패널의 PC grid-area가 1컬럼으로 압축될 수 있습니다.");
     assertOk(monitoringHtml.indexOf("monitoring-instrument-panel") >= 0, "모니터링 탭에 보유·관심 통합 패널이 렌더링되지 않았습니다.");
     assertOk(monitoringHtml.indexOf("보유·관심 종목 통합") >= 0, "모니터링 탭 통합 패널 제목이 렌더링되지 않았습니다.");
     assertOk(monitoringHtml.indexOf("웹소켓 최근 이벤트") >= 0, "모니터링 탭에 웹소켓 이벤트 상태가 없습니다.");

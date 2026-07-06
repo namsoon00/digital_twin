@@ -4,11 +4,12 @@ from ..application.flow_lens_service import FlowLensService
 from ..application.market_data_collection_service import MarketDataCollectionRunner
 from ..application.model_review_service import ModelReviewRunner
 from ..application.monitoring_service import MonitorRunner
-from ..application.notification_service import NotificationQueueRunner
+from ..application.notification_service import DisclosureAnalysisNotificationEnricher, NotificationQueueRunner
 from ..application.symbol_universe_service import SymbolUniverseService
 from ..domain.accounts import AccountConfig
 from ..domain.monitoring import RealtimeMonitor
 from .event_bus import EventBus, default_event_bus
+from .disclosure_analyzer import disclosure_analyzer_from_settings
 from .model_review_queue import ModelReviewEnqueuer
 from .model_reviewer import reviewer_from_settings
 from .notifications import queued_notifier_for_account
@@ -65,6 +66,10 @@ def build_notification_queue_runner(dry_run: bool = False) -> NotificationQueueR
         dry_run=dry_run,
         send_gap_seconds=float(settings.get("notificationSendGapSeconds") or 0),
         template_renderer=SQLiteNotificationTemplateStore().render_job,
+        context_enricher=DisclosureAnalysisNotificationEnricher(
+            disclosure_analyzer_from_settings(settings),
+            settings,
+        ),
     )
 
 

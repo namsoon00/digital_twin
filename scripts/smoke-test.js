@@ -881,6 +881,8 @@ function checkFrontendAdminRender() {
     assertOk(settingsHtml.indexOf('data-action="settings-back"') >= 0, "설정 탭 뒤로가기 버튼이 렌더링되지 않았습니다.");
     assertOk(settingsHtml.indexOf("Telegram Bot Token") >= 0, "설정 탭에 알림 전달 설정이 없습니다.");
     assertOk(settingsHtml.indexOf("Alpha Vantage API Key") >= 0, "설정 탭에 외부 데이터 API 설정이 없습니다.");
+    assertOk(settingsHtml.indexOf('data-setting="dartDisclosureAiAnalysisEnabled"') >= 0, "설정 탭에 공시 AI 해석 옵션이 없습니다.");
+    assertOk(settingsHtml.indexOf('data-setting="dartDisclosureAiTimeoutSeconds"') >= 0, "설정 탭에 공시 AI 타임아웃 옵션이 없습니다.");
     assertOk(settingsHtml.indexOf('data-setting="tossClientId"') < 0, "설정 탭에 계정 Client ID 입력이 남아 있습니다.");
     assertOk(settingsHtml.indexOf('data-setting="tossClientSecret"') < 0, "설정 탭에 계정 Secret 입력이 남아 있습니다.");
     assertOk(settingsHtml.indexOf('data-setting="tossAccountSeq"') < 0, "설정 탭에 계좌 순번 입력이 남아 있습니다.");
@@ -1082,6 +1084,8 @@ async function checkNormalMode(port, context) {
   assertOk(settingsPayload.settings.alertThresholds.indexOf("modelBuyScore=74") >= 0, "설정 API의 모델 알림 기준이 비어 있습니다.");
   assertOk(settingsPayload.settings.alertThresholds.indexOf("watchlistBuyScore=74") >= 0, "설정 API의 관심종목 매수 기준이 비어 있습니다.");
   assertOk(Object.prototype.hasOwnProperty.call(settingsPayload.settings, "appTheme"), "설정 API에 화면 테마 필드가 없습니다.");
+  assertOk(settingsPayload.settings.dartDisclosureAiAnalysisEnabled === "1", "설정 API의 공시 AI 해석 기본값이 없습니다.");
+  assertOk(settingsPayload.settings.dartDisclosureAiTimeoutSeconds === "90", "설정 API의 공시 AI 타임아웃 기본값이 없습니다.");
   assertOk(settingsPayload.settings.watchlistSymbols.indexOf("TSLA") >= 0, "기본 관심 종목에 TSLA가 없습니다.");
   assertOk(settingsPayload.settings.watchlistSymbols.indexOf("AAPL") >= 0, "기본 관심 종목에 AAPL이 없습니다.");
 
@@ -1117,6 +1121,9 @@ async function checkNormalMode(port, context) {
         notifyProvider: "telegram",
         telegramBotToken: "fake-telegram-token",
         telegramChatId: "1234",
+        dartDisclosureAiAnalysisEnabled: "1",
+        dartDisclosureAiUseCodex: "0",
+        dartDisclosureAiTimeoutSeconds: "45",
         alertRules: "priceStop=1\nmodelSell=1",
         modelDecisionThresholds: "modelBuy=75\nmodelSell=70"
       }
@@ -1133,9 +1140,12 @@ async function checkNormalMode(port, context) {
   assertOk(savedSettingsPayload.settings.alertThresholds.indexOf("watchlistBuyScore=75") >= 0, "관심종목 매수 기준이 모델 매수 기준과 동기화되지 않았습니다.");
   assertOk(savedSettingsPayload.settings.alertThresholds.indexOf("modelSellScore=70") >= 0, "모델 매도 기준이 알림 기준으로 동기화되지 않았습니다.");
   assertOk(savedSettingsPayload.settings.appTheme === "dark", "저장된 화면 테마 값이 응답에 없습니다.");
+  assertOk(savedSettingsPayload.settings.dartDisclosureAiUseCodex === "0", "저장된 공시 AI 엔진 설정이 응답에 없습니다.");
+  assertOk(savedSettingsPayload.settings.dartDisclosureAiTimeoutSeconds === "45", "저장된 공시 AI 타임아웃 설정이 응답에 없습니다.");
   assertOk(readSqliteSetting(context.serviceDbPath, "appTheme") === "dark", "화면 테마 설정이 SQLite DB에 저장되지 않았습니다.");
   assertOk(readSqliteSetting(context.serviceDbPath, "notifyProvider") === "telegram", "알림 제공자 설정이 SQLite DB에 저장되지 않았습니다.");
   assertOk(readSqliteSetting(context.serviceDbPath, "telegramChatId") === "1234", "Telegram Chat ID 설정이 SQLite DB에 저장되지 않았습니다.");
+  assertOk(readSqliteSetting(context.serviceDbPath, "dartDisclosureAiUseCodex") === "0", "공시 AI 엔진 설정이 SQLite DB에 저장되지 않았습니다.");
   assertOk(readSqliteSetting(context.serviceDbPath, "tossClientSecret") === "fake-secret", "Toss secret 설정이 SQLite DB에 저장되지 않았습니다.");
   const eventStatusAfterSettings = JSON.parse((await request(port, "/api/realtime/status")).body);
   assertOk(eventStatusAfterSettings.events["settings.updated"] >= 1, "설정 저장 이벤트가 이벤트 로그에 없습니다.");

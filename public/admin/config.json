@@ -13,15 +13,15 @@
     "공유 미리보기에서는 서버 설정과 계정 DB 쓰기를 차단합니다."
   ],
   "localData": {
-    "generatedAt": "2026-07-03T21:47:24.775003Z",
+    "generatedAt": "2026-07-06T07:54:51.866096Z",
     "sources": {
       "serviceDb": "data/service.db",
       "serviceDbExists": true,
       "settings": "data/settings.json",
       "settingsExists": false
     },
-    "accountSource": "runtime-default",
-    "savedAccountCount": 0,
+    "accountSource": "sqlite",
+    "savedAccountCount": 1,
     "accountCount": 1,
     "enabledAccountCount": 1,
     "accounts": [
@@ -40,7 +40,8 @@
           "000660",
           "005930",
           "PLTR",
-          "005380"
+          "005380",
+          "000020"
         ],
         "notifyProvider": "telegram",
         "telegramBotToken": true,
@@ -58,6 +59,20 @@
       "fxRates": "KRW=1\nUSD=1400",
       "valuationAssumptions": "AAPL,7.5,28,15\n005930,6500,12,20",
       "marketSignalInputs": "005930,118,1.8,620000,480000,18,2.1,71000,68000,14500000000,8200000000,-11200000000\nAAPL,86,1.4,320000,410000,-12,-1.8,205,212,-4200000,-1800000,5200000\nNVDA,132,2.3,780000,520000,22,3.5,174,159,11800000,7400000,-9300000\nTSLA,91,1.2,210000,260000,-8,-0.9,182,197,-6300000,-2100000,7600000\n000660,122,1.7,510000,390000,15,2.4,236000,218000,9800000000,13400000000,-15100000000",
+      "fairValueFormula": "eps * targetPer * growthWeight * qualityWeight * riskWeight",
+      "buyScoreFormula": "50 + (executionScore * 0.42 + directionalVolumePressure * 0.9 + buyShareScore * 0.55 + orderbookScore * 0.32 + momentumScore * 0.35 + trendScore * 0.45 + investorFlowScore * 0.35) * flowWeight + undervalueBonus * valuationWeight - expensivePenalty * valuationWeight",
+      "sellScoreFormula": "50 + (-executionScore * 0.38 - directionalVolumePressure * 0.85 - buyShareScore * 0.55 - orderbookScore * 0.3 - momentumScore * 0.4 - trendScore * 0.35 - investorFlowScore * 0.3) * flowWeight + expensiveBonus * valuationWeight",
+      "profitTakeScoreFormula": "baseScore + profitTakePnlScore + sectorConcentrationScore + sellableScore + holdingSignalScore",
+      "lossCutScoreFormula": "baseScore + lossCutPnlScore + sectorConcentrationScore + sellableScore + holdingSignalScore",
+      "notificationScoreFormula": "rawScore",
+      "modelName": "나의 매수/매도 모델",
+      "modelHypothesis": "수급, 가치, 내 점수, 리스크를 함께 봐서 매수 후보와 매도 후보를 분리한다.",
+      "customBuyModelFormula": "buyScore * 0.35 + thesisScore * thesisWeight + confidenceScore * confidenceWeight + max(0, targetReturn) * 0.15 + undervalueBonus * valuationWeight - riskScore * riskControlWeight",
+      "customSellModelFormula": "sellScore * 0.35 + riskScore * riskControlWeight + expensivePenalty * valuationWeight + max(0, -targetReturn) * 0.2 - thesisScore * 0.1",
+      "formulaWeights": "growthWeight=1\nqualityWeight=1\nriskWeight=1\nflowWeight=1\nvaluationWeight=1\nthesisWeight=0.25\nconfidenceWeight=0.15\nriskControlWeight=0.35",
+      "decisionThresholds": "buyCandidate=78\nchaseCaution=70\nstrongHold=72\nsellTrim=70\nriskReduce=66\nsellWatch=64",
+      "modelDecisionThresholds": "modelBuy=74\nmodelAdd=70\nmodelSell=72\nmodelReduce=64\nmodelHold=55",
+      "alertThresholds": "modelBuyScore=74\nmodelSellScore=72\nwatchlistBuyScore=74\nmodelScoreGap=15\nvolumeRatioHigh=2\nbuyShareHigh=65\nsellShareHigh=65\norderbookImbalance=25\nmomentumUp=3\nmomentumDown=-3\nprofitRateHigh=20\nlossRateLow=-8\npositionWeightHigh=30\nsectorWeightHigh=50\nmarketCashLow=10\nrecordGain=10\nrecordLoss=-5\npriceNearPercent=1\nstaleMinutes=30\npendingOrderMinutes=30\nwatchlistPriceDelta=3\nmonitorPnlDelta=2\nmonitorValueDelta=5\nmonitorMaDistance=8\nmonitorCashDelta=10\nmonitorExitPressureDelta=15\nexternalEquityChangePct=3\nexternalCryptoChange24hPct=4\nexternalCryptoChange7dPct=10\nexternalBitcoinChange24hPct=3\nexternalBitcoinChange7dPct=4\nexternalMacroRateDeltaBp=15",
       "alertCadenceMinutes": "priceBuyLimit=10\npriceStop=10\npriceTrim=10\nmodelBuy=10\nmodelSell=10\nmodelScoreGap=10\nmodelVersionDrift=10\nflowTradeStrength=10\nflowVolume=10\nflowBuyShare=10\nflowSellShare=10\nflowOrderbook=10\ntrendMomentum=10\ntrendPullback=10\nholdingProfit=10\nholdingLoss=10\nholdingConcentration=10\nsectorConcentration=10\nmarketCashLow=10\nrecordGain=10\nrecordLoss=10\ndataFreshness=10\ntossConnection=10\norderPending=10\norderReject=10\nholdingTiming=10\nmonitorHeartbeat=10\nmonitorConnection=10\nmonitorPositionChange=10\nmonitorPnlChange=10\nmonitorValueChange=10\nmonitorTrendChange=10\nmonitorCashChange=10\nmonitorDecisionChange=10\nexternalEquityMove=10\nexternalCryptoMove=10\nexternalMacroShift=10\nexternalDartDisclosure=10\nexternalDataConnection=10",
       "modelReviewUseCodex": "1",
       "modelReviewTimeoutSeconds": "180",
@@ -68,7 +83,10 @@
       "externalCryptoIds": "bitcoin,ethereum",
       "externalAlphaMaxSymbols": "3",
       "externalDartLookbackDays": "14",
-      "externalDartCorpCodes": "005930=00126380\n000660=00164779\n035420=00266961"
+      "externalDartCorpCodes": "005930=00126380\n000660=00164779\n035420=00266961",
+      "dartDisclosureAiAnalysisEnabled": "1",
+      "dartDisclosureAiUseCodex": "1",
+      "dartDisclosureAiTimeoutSeconds": "90"
     },
     "configured": {
       "tossClientId": true,
@@ -90,6 +108,11 @@
         },
         {
           "key": "modelSell",
+          "default": 1,
+          "unit": ""
+        },
+        {
+          "key": "watchlistBuyCandidate",
           "default": 1,
           "unit": ""
         },
@@ -177,62 +200,162 @@
       "alertThresholds": [
         {
           "key": "modelBuyScore",
-          "default": 74,
+          "default": 74.0,
           "unit": ""
         },
         {
           "key": "modelSellScore",
-          "default": 72,
+          "default": 72.0,
+          "unit": ""
+        },
+        {
+          "key": "watchlistBuyScore",
+          "default": 74.0,
           "unit": ""
         },
         {
           "key": "watchlistPriceDelta",
-          "default": 3,
+          "default": 3.0,
           "unit": ""
         },
         {
           "key": "monitorPnlDelta",
-          "default": 2,
+          "default": 2.0,
           "unit": ""
         },
         {
           "key": "monitorValueDelta",
-          "default": 5,
+          "default": 5.0,
           "unit": ""
         },
         {
           "key": "monitorMaDistance",
-          "default": 8,
+          "default": 8.0,
           "unit": ""
         },
         {
           "key": "monitorCashDelta",
-          "default": 10,
+          "default": 10.0,
           "unit": ""
         },
         {
           "key": "monitorExitPressureDelta",
-          "default": 15,
+          "default": 15.0,
           "unit": ""
         },
         {
           "key": "externalEquityChangePct",
-          "default": 3,
+          "default": 3.0,
           "unit": ""
         },
         {
           "key": "externalCryptoChange24hPct",
-          "default": 4,
+          "default": 4.0,
           "unit": ""
         },
         {
           "key": "externalCryptoChange7dPct",
-          "default": 10,
+          "default": 10.0,
+          "unit": ""
+        },
+        {
+          "key": "externalBitcoinChange24hPct",
+          "default": 3.0,
+          "unit": ""
+        },
+        {
+          "key": "externalBitcoinChange7dPct",
+          "default": 4.0,
           "unit": ""
         },
         {
           "key": "externalMacroRateDeltaBp",
-          "default": 15,
+          "default": 15.0,
+          "unit": ""
+        },
+        {
+          "key": "modelScoreGap",
+          "default": 15.0,
+          "unit": ""
+        },
+        {
+          "key": "volumeRatioHigh",
+          "default": 2.0,
+          "unit": ""
+        },
+        {
+          "key": "buyShareHigh",
+          "default": 65.0,
+          "unit": ""
+        },
+        {
+          "key": "sellShareHigh",
+          "default": 65.0,
+          "unit": ""
+        },
+        {
+          "key": "orderbookImbalance",
+          "default": 25.0,
+          "unit": ""
+        },
+        {
+          "key": "momentumUp",
+          "default": 3.0,
+          "unit": ""
+        },
+        {
+          "key": "momentumDown",
+          "default": -3.0,
+          "unit": ""
+        },
+        {
+          "key": "profitRateHigh",
+          "default": 20.0,
+          "unit": ""
+        },
+        {
+          "key": "lossRateLow",
+          "default": -8.0,
+          "unit": ""
+        },
+        {
+          "key": "positionWeightHigh",
+          "default": 30.0,
+          "unit": ""
+        },
+        {
+          "key": "sectorWeightHigh",
+          "default": 50.0,
+          "unit": ""
+        },
+        {
+          "key": "marketCashLow",
+          "default": 10.0,
+          "unit": ""
+        },
+        {
+          "key": "recordGain",
+          "default": 10.0,
+          "unit": ""
+        },
+        {
+          "key": "recordLoss",
+          "default": -5.0,
+          "unit": ""
+        },
+        {
+          "key": "priceNearPercent",
+          "default": 1.0,
+          "unit": ""
+        },
+        {
+          "key": "staleMinutes",
+          "default": 30.0,
+          "unit": ""
+        },
+        {
+          "key": "pendingOrderMinutes",
+          "default": 30.0,
           "unit": ""
         }
       ],
@@ -245,6 +368,11 @@
         {
           "key": "modelSell",
           "default": 10.0,
+          "unit": "minutes"
+        },
+        {
+          "key": "watchlistBuyCandidate",
+          "default": 10,
           "unit": "minutes"
         },
         {
@@ -610,6 +738,30 @@
           "type": "assignmentText"
         },
         {
+          "key": "dartDisclosureAiAnalysisEnabled",
+          "label": "공시 AI 해석 사용",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
+          "key": "dartDisclosureAiUseCodex",
+          "label": "공시 해석 Codex 사용",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
+          "key": "dartDisclosureAiCommand",
+          "label": "공시 해석 명령",
+          "type": "text"
+        },
+        {
+          "key": "dartDisclosureAiTimeoutSeconds",
+          "label": "공시 해석 타임아웃",
+          "type": "number",
+          "default": "90",
+          "unit": "seconds"
+        },
+        {
           "key": "formulaWeights",
           "label": "공식 가중치",
           "type": "assignmentText"
@@ -660,6 +812,11 @@
           },
           {
             "key": "modelSell",
+            "default": 1,
+            "unit": ""
+          },
+          {
+            "key": "watchlistBuyCandidate",
             "default": 1,
             "unit": ""
           },
@@ -756,6 +913,11 @@
             "unit": ""
           },
           {
+            "key": "watchlistBuyScore",
+            "default": 74,
+            "unit": ""
+          },
+          {
             "key": "watchlistPriceDelta",
             "default": 3,
             "unit": ""
@@ -801,6 +963,16 @@
             "unit": ""
           },
           {
+            "key": "externalBitcoinChange24hPct",
+            "default": 3,
+            "unit": ""
+          },
+          {
+            "key": "externalBitcoinChange7dPct",
+            "default": 4,
+            "unit": ""
+          },
+          {
             "key": "externalMacroRateDeltaBp",
             "default": 15,
             "unit": ""
@@ -814,6 +986,11 @@
           },
           {
             "key": "modelSell",
+            "default": 10,
+            "unit": "minutes"
+          },
+          {
+            "key": "watchlistBuyCandidate",
             "default": 10,
             "unit": "minutes"
           },
@@ -1082,5 +1259,5 @@
       ]
     }
   ],
-  "buildId": "b8b65b4a2b54"
+  "buildId": "81bec56ba78f"
 }

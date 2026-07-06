@@ -19,7 +19,7 @@ from digital_twin.application.flow_lens_service import FlowLensService
 from digital_twin.application.market_data_collection_service import MARKET_DATA_ACCOUNT_ID, MarketDataCollectionRunner
 from digital_twin.application.model_review_service import ModelReviewRunner
 from digital_twin.application.monitoring_service import MonitorRunner as ApplicationMonitorRunner
-from digital_twin.application.notification_service import NotificationQueueRunner
+from digital_twin.application.notification_service import DisclosureAnalysisNotificationEnricher, NotificationQueueRunner
 from digital_twin.application.symbol_universe_service import SymbolUniverseService, seed_symbol
 from digital_twin.cli import build_handoff_message
 from digital_twin.cli import preserve_existing_secrets
@@ -32,6 +32,7 @@ from digital_twin.domain.strategy import SafeFormula, StrategyModel, decisions_f
 from digital_twin.domain.events import ACCOUNT_SAVED, MARKET_DATA_COLLECTED, MONITORING_ALERTS_DETECTED, MONITORING_CYCLE_COMPLETED, MONITORING_SNAPSHOT_COLLECTED, alerts_detected_event, monitoring_cycle_completed_event, snapshot_collected_event
 from digital_twin.domain.monitoring import RealtimeMonitor
 from digital_twin.domain.model_review import ModelReviewJob, local_model_review
+from digital_twin.domain.disclosure_analysis import DisclosureAnalysisResult, local_disclosure_analysis
 from digital_twin.domain.notification_templates import alert_context
 from digital_twin.domain.notification_rules import apply_market_hours_rule, default_notification_rule, evaluate_notification_rule
 from digital_twin.domain.notifications import NotificationJob
@@ -2716,6 +2717,108 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("알림 발송", sent[0])
         self.assertIn("발송 우선도", sent[0])
         self.assertIn("기본 우선도", sent[0])
+
+    def test_dart_disclosure_notification_includes_ai_analysis_at_delivery_time(self):
+        registry = AccountRegistry()
+        registry.upsert(AccountConfig("main", "메인", "toss", "https://example.test", "", "", "", ["005930"]))
+        db_path = Path(self.temp.name) / "service.db"
+        queue = SQLiteNotificationJobStore(db_path)
+        templates = SQLiteNotificationTemplateStore(db_path)
+        rules = SQLiteNotificationRuleStore(db_path)
+        dart_rule = rules.get("externalDartDisclosure")
+        dart_rule.threshold = 0
+        dart_rule.market_hours_enabled = False
+        rules.upsert(dart_rule)
+        event = AlertEvent(
+            "main",
+            "메인",
+            "WATCH",
+            "externalDartDisclosure",
+            "main:dart:005930:20260701000001",
+            "삼성전자",
+            [
+                "신규 공시 감지",
+                "단일판매·공급계약체결",
+                "접수일 20260701",
+                "최근 공시 2건",
+                "출처 OpenDART",
+            ],
+            "005930",
+            criteria=[
+                "설정: OpenDART 접수번호가 직전 조회와 다를 때",
+                "감지: 접수번호 20260701000001, 접수일 20260701",
+            ],
+            metadata={
+                "provider": "OpenDART",
+                "corpCode": "00126380",
+                "corpName": "삼성전자",
+                "reportName": "단일판매·공급계약체결",
+                "receiptNo": "20260701000001",
+                "receiptDate": "20260701",
+            },
+            generated_at="2026-07-03T06:58:00Z",
+        )
+        queue.enqueue(NotificationJob.create(
+            templates.render(event.rule, alert_context(event)),
+            account_id="main",
+            account_label="메인",
+            message_type=event.rule,
+            context=alert_context(event),
+        ))
+        sent = []
+        analyzed = []
+
+        class FakeDisclosureAnalyzer:
+            def analyze(self, context):
+                analyzed.append(context)
+                return DisclosureAnalysisResult([
+                    "의미: 계약 매출 가능성을 알리는 수주성 공시입니다.",
+                    "영향: 규모가 크면 실적 가시성과 투자심리에 긍정적일 수 있습니다.",
+                    "확인: 계약금액의 매출 대비 비중과 상대방을 확인하세요.",
+                    "대응: 원문 확인 전 추격 비중은 제한하고 분할 대응하세요.",
+                ], "테스트 AI")
+
+        class FakeNotifier:
+            def send(self, message):
+                sent.append(message)
+                return SimpleNamespace(delivered=True, reason="")
+
+        runner = NotificationQueueRunner(
+            queue,
+            registry,
+            lambda _account: FakeNotifier(),
+            template_renderer=templates.render_job,
+            context_enricher=DisclosureAnalysisNotificationEnricher(FakeDisclosureAnalyzer(), {
+                "dartDisclosureAiAnalysisEnabled": "1",
+            }),
+            now_provider=lambda: datetime(2026, 7, 4, 3, 0, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(1, runner.run_once(limit=10))
+        self.assertEqual(1, len(analyzed))
+        self.assertIn("<b>AI 공시 해석</b>", sent[0])
+        self.assertIn("<b>의미</b>: 계약 매출 가능성을 알리는 수주성 공시입니다.", sent[0])
+        self.assertIn("<b>영향</b>: 규모가 크면 실적 가시성과 투자심리에 긍정적일 수 있습니다.", sent[0])
+        self.assertIn("<b>대응</b>: 원문 확인 전 추격 비중은 제한하고 분할 대응하세요.", sent[0])
+        self.assertIn("<b>분석출처</b>: 테스트 AI", sent[0])
+        self.assertLess(sent[0].index("<b>AI 공시 해석</b>"), sent[0].index("<b>발송 기준</b>"))
+        saved_job = queue.jobs()[0]
+        self.assertEqual("done", saved_job.status)
+        self.assertEqual("테스트 AI", saved_job.context["disclosureAnalysisSource"])
+
+    def test_local_disclosure_analysis_classifies_financing_dilution(self):
+        result = local_disclosure_analysis({
+            "metadata": {
+                "corpName": "테스트",
+                "symbol": "123456",
+                "reportName": "주요사항보고서(유상증자결정)",
+                "receiptNo": "20260701000002",
+            },
+            "rawLines": "신규 공시 감지\n주요사항보고서(유상증자결정)\n출처 OpenDART",
+        })
+
+        self.assertTrue(any("희석" in line for line in result.lines))
+        self.assertTrue(any("발행 규모" in line for line in result.lines))
 
     def test_holding_timing_delivery_adds_sent_time(self):
         registry = AccountRegistry()

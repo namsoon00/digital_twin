@@ -380,6 +380,10 @@ def settings_status_payload() -> Dict[str, object]:
         "externalAlphaMaxSymbols",
         "externalDartLookbackDays",
         "externalDartCorpCodes",
+        "dartDisclosureAiAnalysisEnabled",
+        "dartDisclosureAiUseCodex",
+        "dartDisclosureAiCommand",
+        "dartDisclosureAiTimeoutSeconds",
     ]
     public = {key: settings.get(key, "") for key in public_keys}
     public.update({

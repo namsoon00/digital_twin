@@ -23,6 +23,10 @@
       "000660=00164779",
       "035420=00266961"
     ].join("\n"),
+    dartDisclosureAiAnalysisEnabled: "1",
+    dartDisclosureAiUseCodex: "1",
+    dartDisclosureAiCommand: "",
+    dartDisclosureAiTimeoutSeconds: "90",
     alphaVantageApiKey: "",
     coingeckoApiKey: "",
     fredApiKey: "",
@@ -2779,6 +2783,10 @@
       externalAlphaMaxSymbols: settingValue("externalAlphaMaxSymbols"),
       externalDartLookbackDays: settingValue("externalDartLookbackDays"),
       externalDartCorpCodes: settingValue("externalDartCorpCodes"),
+      dartDisclosureAiAnalysisEnabled: settingValue("dartDisclosureAiAnalysisEnabled"),
+      dartDisclosureAiUseCodex: settingValue("dartDisclosureAiUseCodex"),
+      dartDisclosureAiCommand: settingValue("dartDisclosureAiCommand"),
+      dartDisclosureAiTimeoutSeconds: settingValue("dartDisclosureAiTimeoutSeconds"),
       alphaVantageApiKey: settingValue("alphaVantageApiKey"),
       coingeckoApiKey: settingValue("coingeckoApiKey"),
       fredApiKey: settingValue("fredApiKey"),
@@ -9706,7 +9714,8 @@
         configuredChip("Alpha", isConfiguredSetting("alphaVantageApiKey")),
         configuredChip("CoinGecko", isConfiguredSetting("coingeckoApiKey")),
         configuredChip("FRED", isConfiguredSetting("fredApiKey")),
-        configuredChip("OpenDART", isConfiguredSetting("opendartApiKey"))
+        configuredChip("OpenDART", isConfiguredSetting("opendartApiKey")),
+        configuredChip("공시 AI", settingValue("dartDisclosureAiAnalysisEnabled") !== "0", settingValue("dartDisclosureAiUseCodex") === "0" ? "로컬" : "AI")
       ]),
       '</div>'
     ].join("");
@@ -9734,7 +9743,8 @@
         configuredChip("Alpha", isConfiguredSetting("alphaVantageApiKey")),
         configuredChip("CoinGecko", isConfiguredSetting("coingeckoApiKey")),
         configuredChip("FRED", isConfiguredSetting("fredApiKey")),
-        configuredChip("OpenDART", isConfiguredSetting("opendartApiKey"))
+        configuredChip("OpenDART", isConfiguredSetting("opendartApiKey")),
+        configuredChip("공시 AI", settingValue("dartDisclosureAiAnalysisEnabled") !== "0", settingValue("dartDisclosureAiUseCodex") === "0" ? "로컬" : "AI")
       ]),
       '</div>'
     ].join("");
@@ -9933,6 +9943,16 @@
       renderSettingField("externalApiFetchIntervalMinutes", "외부 API 캐시(분)", "number", "60"),
       renderSettingField("externalAlphaMaxSymbols", "미장 조회 종목 수", "number", "3"),
       renderSettingField("externalDartLookbackDays", "공시 조회 기간(일)", "number", "14"),
+      renderSettingSelect("dartDisclosureAiAnalysisEnabled", "공시 AI 해석", [
+        { value: "1", label: "사용" },
+        { value: "0", label: "사용 안 함" }
+      ]),
+      renderSettingSelect("dartDisclosureAiUseCodex", "공시 해석 엔진", [
+        { value: "1", label: "Codex AI" },
+        { value: "0", label: "로컬 규칙" }
+      ]),
+      renderSettingField("dartDisclosureAiTimeoutSeconds", "공시 AI 타임아웃(초)", "number", "90"),
+      renderSettingField("dartDisclosureAiCommand", "공시 AI 명령", "text", "비우면 Codex 사용"),
       renderSettingField("externalFredSeries", "FRED 지표", "text", "DGS10,DGS2,DFF"),
       renderSettingField("externalCryptoIds", "CoinGecko 코인 ID", "text", "bitcoin,ethereum"),
       '<label class="setting-field wide">',

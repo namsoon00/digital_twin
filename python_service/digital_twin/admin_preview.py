@@ -50,6 +50,10 @@ PUBLIC_SETTING_KEYS = [
     "externalAlphaMaxSymbols",
     "externalDartLookbackDays",
     "externalDartCorpCodes",
+    "dartDisclosureAiAnalysisEnabled",
+    "dartDisclosureAiUseCodex",
+    "dartDisclosureAiCommand",
+    "dartDisclosureAiTimeoutSeconds",
 ]
 
 
@@ -205,6 +209,10 @@ def admin_preview_config() -> Dict[str, object]:
                     {"key": "externalFredSeries", "label": "FRED 지표", "type": "text"},
                     {"key": "externalCryptoIds", "label": "CoinGecko 코인 ID", "type": "text"},
                     {"key": "externalDartCorpCodes", "label": "OpenDART 종목 매핑", "type": "assignmentText"},
+                    {"key": "dartDisclosureAiAnalysisEnabled", "label": "공시 AI 해석 사용", "type": "toggle", "default": "1"},
+                    {"key": "dartDisclosureAiUseCodex", "label": "공시 해석 Codex 사용", "type": "toggle", "default": "1"},
+                    {"key": "dartDisclosureAiCommand", "label": "공시 해석 명령", "type": "text"},
+                    {"key": "dartDisclosureAiTimeoutSeconds", "label": "공시 해석 타임아웃", "type": "number", "default": "90", "unit": "seconds"},
                     {"key": "formulaWeights", "label": "공식 가중치", "type": "assignmentText"},
                     {"key": "profitTakeScoreFormula", "label": "익절 점검 공식", "type": "formula"},
                     {"key": "lossCutScoreFormula", "label": "손실 관리 공식", "type": "formula"},

@@ -204,6 +204,7 @@ class ExternalSignalAlertMixin:
             if not previous_receipt or not receipt or previous_receipt == receipt:
                 continue
             symbol_label = str(symbol or "").upper()
+            provider = str(item.get("provider") or "OpenDART")
             events.append(AlertEvent(
                 snapshot.account_id,
                 snapshot.account_label,
@@ -216,12 +217,22 @@ class ExternalSignalAlertMixin:
                     str(item.get("reportName") or "-"),
                     "접수일 " + str(item.get("receiptDate") or "-"),
                     "최근 공시 " + compact_number(number(item.get("count"))) + "건",
-                    "출처 " + str(item.get("provider") or "OpenDART"),
+                    "출처 " + provider,
                 ],
                 symbol_label,
                 criteria=self.criteria(
                     "OpenDART 접수번호가 직전 조회와 다를 때",
                     "접수번호 " + receipt + ", 접수일 " + str(item.get("receiptDate") or "-"),
                 ),
+                metadata={
+                    "market": "KR",
+                    "provider": provider,
+                    "corpCode": str(item.get("corpCode") or ""),
+                    "corpName": str(item.get("corpName") or symbol_label),
+                    "reportName": str(item.get("reportName") or ""),
+                    "receiptNo": receipt,
+                    "receiptDate": str(item.get("receiptDate") or ""),
+                    "disclosureCount": number(item.get("count")),
+                },
             ))
         return events

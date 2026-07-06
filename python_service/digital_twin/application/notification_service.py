@@ -3,7 +3,28 @@ from datetime import datetime, timezone
 from typing import Callable, Dict
 from zoneinfo import ZoneInfo
 
+from ..domain.disclosure_analysis import context_with_disclosure_analysis, local_disclosure_analysis
 from ..domain.notifications import NotificationJob
+
+
+class DisclosureAnalysisNotificationEnricher:
+    def __init__(self, analyzer=None, settings: Dict[str, object] = None):
+        self.analyzer = analyzer
+        self.settings = settings or {}
+
+    def __call__(self, job: NotificationJob) -> None:
+        if str(job.message_type or "") != "externalDartDisclosure":
+            return
+        if str(self.settings.get("dartDisclosureAiAnalysisEnabled", "1")).strip() == "0":
+            return
+        context = dict(job.context or {})
+        if context.get("disclosureAnalysis") or "AI 공시 해석" in str(context.get("telegramMessage") or ""):
+            return
+        try:
+            result = self.analyzer.analyze(context) if self.analyzer else local_disclosure_analysis(context)
+        except Exception:  # noqa: BLE001 - disclosure delivery must not fail because AI enrichment failed.
+            result = local_disclosure_analysis(context, "로컬 fallback")
+        job.context = context_with_disclosure_analysis(context, result)
 
 
 class NotificationQueueRunner:
@@ -15,6 +36,7 @@ class NotificationQueueRunner:
         dry_run: bool = False,
         send_gap_seconds: float = 0.0,
         template_renderer: Callable = None,
+        context_enricher: Callable = None,
         now_provider: Callable = None,
     ):
         self.queue = queue
@@ -23,6 +45,7 @@ class NotificationQueueRunner:
         self.dry_run = dry_run
         self.send_gap_seconds = max(0.0, float(send_gap_seconds or 0))
         self.template_renderer = template_renderer
+        self.context_enricher = context_enricher
         self.now_provider = now_provider or (lambda: datetime.now(ZoneInfo("UTC")))
 
     def account_map(self) -> Dict[str, object]:
@@ -65,6 +88,8 @@ class NotificationQueueRunner:
 
     def render(self, job: NotificationJob) -> str:
         self.apply_send_time_context(job)
+        if self.context_enricher:
+            self.context_enricher(job)
         if self.template_renderer:
             return str(self.template_renderer(job) or "").strip()
         return job.text.strip()

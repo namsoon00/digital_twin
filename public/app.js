@@ -8051,12 +8051,12 @@
       '<div class="panel-head">',
       '<div>',
       '<p class="label">Ontology Control</p>',
-      '<h2>TBox·ABox 규칙 관계</h2>',
+      '<h2>TBox·ABox 관계 그래프</h2>',
       '</div>',
       '<span class="metric">' + escapeHtml(items.length) + '</span>',
       '</div>',
       '<div class="ontology-dashboard">',
-      renderOntologyMap(tbox, abox, worldview, strategy, relationCounts, evidence, beliefs, opinions),
+      renderOntologyRelationshipGraphs(tbox, aboxEntities, aboxRelations, evidence, beliefs, opinions, entityLabels, relationCounts),
       renderOntologyBoxSummary(tbox, abox, worldview, strategy),
       renderOntologyRelationalProjectionPanel(entities, relations, evidence, beliefs, opinions),
       renderOntologyClassPanel(tbox),
@@ -8068,76 +8068,284 @@
       items.length ? items.map(renderOntologyRow).join("") : '<p class="subtle">온톨로지 의견을 만들 보유 종목이 없습니다.</p>',
       '</div>',
       '<div class="rule-strip">',
-      '<span>기본 운영 기준은 SQLite/service.db의 관계형 row와 JSON payload입니다.</span>',
-      '<span>Neo4j는 선택적 graph export이고, 이 탭은 TBox-ABox-Rules 관계형 투영을 우선 표시합니다.</span>',
+      '<span>TBox 그래프는 허용 클래스·관계 타입·추론 규칙의 내부 연결을 보여줍니다.</span>',
+      '<span>ABox 그래프는 현재 포트폴리오 assertion과 rule evaluation이 만든 evidence·belief·opinion 관계를 보여줍니다.</span>',
       '</div>',
       '</article>'
     ].join("");
   }
 
-  function renderOntologyMap(tbox, abox, worldview, strategy, relationCounts, evidence, beliefs, opinions) {
-    var tboxClasses = (tbox.classes || []).length || 0;
-    var relationTypes = (tbox.relationTypes || []).length || 0;
-    var aboxAssertions = Number(abox.entityCount || 0) + Number(abox.relationCount || 0);
-    var rules = (tbox.reasoningRules || []).length || 0;
-    var riskBeliefs = Number(worldview.riskBeliefCount || 0);
-    var supportBeliefs = Number(worldview.supportBeliefCount || 0);
-    var evidenceRows = (evidence || []).length;
-    var opinionRows = (opinions || []).length;
+  function renderOntologyRelationshipGraphs(tbox, aboxEntities, aboxRelations, evidence, beliefs, opinions, entityLabels, relationCounts) {
     return [
-      '<section class="ontology-map ontology-rule-map" aria-label="TBox ABox 규칙 관계형 지도">',
-      '<svg class="ontology-map-svg" viewBox="0 0 860 330" role="img" aria-label="TBox ABox Rules 관계형 투영">',
-      '<defs>',
-      '<marker id="ontology-arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z"></path></marker>',
-      '</defs>',
-      '<path class="ontology-flow-line strong" d="M190 86 C230 86 246 86 286 86" marker-end="url(#ontology-arrow)"></path>',
-      '<path class="ontology-flow-line" d="M390 106 C430 130 442 176 482 198" marker-end="url(#ontology-arrow)"></path>',
-      '<path class="ontology-flow-line" d="M390 66 C434 64 448 64 492 64" marker-end="url(#ontology-arrow)"></path>',
-      '<path class="ontology-flow-line strong" d="M642 132 C680 132 696 132 734 132" marker-end="url(#ontology-arrow)"></path>',
-      '<path class="ontology-flow-line muted" d="M190 230 C304 286 620 284 734 210" marker-end="url(#ontology-arrow)"></path>',
-      '<g class="ontology-db-node schema" transform="translate(28 42)">',
-      '<rect width="166" height="112" rx="8"></rect>',
-      '<text x="16" y="26">TBox schema</text>',
-      '<text class="sub" x="16" y="50">class rows ' + escapeHtml(tboxClasses) + '</text>',
-      '<text class="sub" x="16" y="70">relation type rows ' + escapeHtml(relationTypes) + '</text>',
-      '<text class="sub" x="16" y="90">rule rows ' + escapeHtml(rules) + '</text>',
-      '</g>',
-      '<g class="ontology-db-node relation" transform="translate(292 42)">',
-      '<rect width="118" height="92" rx="8"></rect>',
-      '<text x="14" y="26">Constraints</text>',
-      '<text class="sub" x="14" y="50">FK source/target</text>',
-      '<text class="sub" x="14" y="70">allowed type</text>',
-      '</g>',
-      '<g class="ontology-db-node assertion" transform="translate(292 178)">',
-      '<rect width="140" height="104" rx="8"></rect>',
-      '<text x="14" y="26">ABox rows</text>',
-      '<text class="sub" x="14" y="50">entity ' + escapeHtml(abox.entityCount || 0) + '</text>',
-      '<text class="sub" x="14" y="70">relation ' + escapeHtml(abox.relationCount || 0) + '</text>',
-      '<text class="sub" x="14" y="90">assertions ' + escapeHtml(aboxAssertions) + '</text>',
-      '</g>',
-      '<g class="ontology-db-node engine" transform="translate(494 42)">',
-      '<rect width="160" height="180" rx="8"></rect>',
-      '<text x="16" y="28">Rule evaluation</text>',
-      '<text class="sub" x="16" y="56">HOLDS ' + escapeHtml(relationCounts.HOLDS || 0) + '</text>',
-      '<text class="sub" x="16" y="76">EXPOSED_TO ' + escapeHtml(relationCounts.EXPOSED_TO || 0) + '</text>',
-      '<text class="sub" x="16" y="96">evidence ' + escapeHtml(evidenceRows) + '</text>',
-      '<text class="sub" x="16" y="116">risk ' + escapeHtml(riskBeliefs) + ' · support ' + escapeHtml(supportBeliefs) + '</text>',
-      '<text class="sub" x="16" y="136">conflicts ' + escapeHtml(worldview.contradictionCount || 0) + '</text>',
-      '<text class="sub" x="16" y="156">legacy = evidence only</text>',
-      '</g>',
-      '<g class="ontology-db-node output" transform="translate(738 88)">',
-      '<rect width="102" height="114" rx="8"></rect>',
-      '<text x="14" y="26">Outputs</text>',
-      '<text class="sub" x="14" y="50">belief rows ' + escapeHtml((beliefs || []).length) + '</text>',
-      '<text class="sub" x="14" y="70">opinion rows ' + escapeHtml(opinionRows) + '</text>',
-      '<text class="sub" x="14" y="90">AI context</text>',
-      '</g>',
-      '<g class="ontology-db-badge" transform="translate(28 258)">',
-      '<rect width="190" height="42" rx="8"></rect>',
-      '<text x="14" y="26">SQLite/service.db row projection</text>',
-      '</g>',
-      '</svg>',
+      '<section class="ontology-relationship-graphs" aria-label="TBox ABox 관계 그래프">',
+      renderOntologyTboxGraph(tbox, relationCounts),
+      renderOntologyAboxGraph(aboxEntities, aboxRelations, evidence, beliefs, opinions, entityLabels),
       '</section>'
+    ].join("");
+  }
+
+  function ontologyShortText(value, limit) {
+    var text = String(value || "");
+    var max = limit || 16;
+    return text.length > max ? text.slice(0, Math.max(1, max - 1)) + "…" : text;
+  }
+
+  function ontologyTboxGraphNodes(tbox) {
+    var rules = tbox.reasoningRules || [];
+    return {
+      Portfolio: { id: "Portfolio", label: "Portfolio", kind: "schema", x: 92, y: 210 },
+      Cash: { id: "Cash", label: "Cash", kind: "schema", x: 92, y: 86 },
+      Stock: { id: "Stock", label: "Stock", kind: "schema", x: 258, y: 210 },
+      Sector: { id: "Sector", label: "Sector", kind: "schema", x: 426, y: 76 },
+      Market: { id: "Market", label: "Market", kind: "schema", x: 426, y: 148 },
+      Currency: { id: "Currency", label: "Currency", kind: "schema", x: 426, y: 220 },
+      Evidence: { id: "Evidence", label: "Evidence", kind: "evidence", x: 426, y: 322 },
+      Risk: { id: "Risk", label: "Risk", kind: "risk", x: 620, y: 76 },
+      Opportunity: { id: "Opportunity", label: "Opportunity", kind: "support", x: 620, y: 148 },
+      Contradiction: { id: "Contradiction", label: "Contradiction", kind: "risk", x: 620, y: 220 },
+      Belief: { id: "Belief", label: "Belief", kind: "belief", x: 620, y: 322 },
+      Opinion: { id: "Opinion", label: "Opinion", kind: "opinion", x: 778, y: 322 },
+      AIReview: { id: "AIReview", label: "AIReview", kind: "review", x: 778, y: 210 },
+      LegacyScoreModel: { id: "LegacyScoreModel", label: "Legacy Score", kind: "model", x: 258, y: 322 },
+      Rule1: { id: "Rule1", label: "R1", kind: "rule", x: 92, y: 430, title: rules[0] || "sector concentration rule" },
+      Rule2: { id: "Rule2", label: "R2", kind: "rule", x: 224, y: 430, title: rules[1] || "trend and flow rule" },
+      Rule3: { id: "Rule3", label: "R3", kind: "rule", x: 356, y: 430, title: rules[2] || "contradiction rule" },
+      Rule4: { id: "Rule4", label: "R4", kind: "rule", x: 488, y: 430, title: rules[3] || "data quality rule" },
+      Rule5: { id: "Rule5", label: "R5", kind: "rule", x: 620, y: 430, title: rules[4] || "legacy evidence rule" }
+    };
+  }
+
+  function ontologyTboxGraphEdges(tbox) {
+    var allowed = (tbox.relationTypes || []).reduce(function (memo, type) {
+      memo[String(type || "").toUpperCase()] = true;
+      return memo;
+    }, {});
+    function relation(source, target, type) {
+      return allowed[type] !== false ? { source: source, target: target, type: type, kind: "schema" } : null;
+    }
+    return [
+      relation("Portfolio", "Stock", "HOLDS"),
+      relation("Portfolio", "Cash", "HOLDS_CASH"),
+      relation("Portfolio", "Sector", "EXPOSED_TO"),
+      relation("Stock", "Sector", "BELONGS_TO"),
+      relation("Stock", "Market", "TRADED_IN"),
+      relation("Stock", "Currency", "DENOMINATED_IN"),
+      relation("Stock", "Risk", "EXPOSED_TO"),
+      relation("Stock", "Opportunity", "SUPPORTED_BY"),
+      relation("Stock", "Contradiction", "CONTRADICTS"),
+      relation("Stock", "LegacyScoreModel", "USES_EVIDENCE_FROM"),
+      relation("Stock", "AIReview", "REQUESTS_OPINION_FROM"),
+      relation("Stock", "Evidence", "HAS_EVIDENCE"),
+      relation("Stock", "Belief", "HAS_BELIEF"),
+      relation("Stock", "Opinion", "HAS_OPINION"),
+      { source: "Rule1", target: "Risk", type: "derives", kind: "rule" },
+      { source: "Rule2", target: "Belief", type: "derives", kind: "rule" },
+      { source: "Rule3", target: "Contradiction", type: "guards", kind: "rule" },
+      { source: "Rule4", target: "Opinion", type: "confidence", kind: "rule" },
+      { source: "Rule5", target: "LegacyScoreModel", type: "evidence-only", kind: "rule" }
+    ].filter(Boolean);
+  }
+
+  function renderOntologyTboxGraph(tbox, relationCounts) {
+    var nodesById = ontologyTboxGraphNodes(tbox);
+    var edges = ontologyTboxGraphEdges(tbox);
+    return [
+      '<section class="ontology-graph-panel ontology-tbox-graph">',
+      '<div class="ontology-surface-head">',
+      '<strong>TBox Relation Graph</strong>',
+      '<span>' + escapeHtml((tbox.classes || []).length || 0) + ' classes · ' + escapeHtml((tbox.relationTypes || []).length || 0) + ' relation types · ' + escapeHtml((tbox.reasoningRules || []).length || 0) + ' rules</span>',
+      '</div>',
+      renderOntologyGraphSvg("tbox", Object.keys(nodesById).map(function (key) { return nodesById[key]; }), edges, nodesById, 900, 486),
+      '<div class="ontology-graph-caption">',
+      '<span>굵은 실선은 허용 relation type입니다.</span>',
+      '<span>점선 rule edge는 TBox 규칙이 어떤 개념을 생성·제약하는지 나타냅니다.</span>',
+      '</div>',
+      '</section>'
+    ].join("");
+  }
+
+  function ontologyEntityGraphLabel(entity) {
+    var properties = entity && entity.properties ? entity.properties : {};
+    return properties.symbol || entity.label || entity.id || "-";
+  }
+
+  function ontologyAddGraphNode(nodesById, id, label, kind, title, symbol) {
+    if (!id || nodesById[id]) return;
+    nodesById[id] = {
+      id: id,
+      label: label || id,
+      kind: kind || "entity",
+      title: title || label || id,
+      symbol: symbol || ""
+    };
+  }
+
+  function ontologyAboxKind(entity) {
+    var kind = String(entity && entity.kind || "entity");
+    if (kind === "ai-review") return "review";
+    if (kind === "model") return "model";
+    return kind;
+  }
+
+  function ontologyAboxSymbolFromId(id) {
+    var value = String(id || "");
+    return value.indexOf("stock:") === 0 ? value.slice(6).toUpperCase() : "";
+  }
+
+  function ontologyPositionAboxGraphNodes(nodesById) {
+    var groups = {};
+    Object.keys(nodesById).forEach(function (id) {
+      var node = nodesById[id];
+      var kind = node.kind || "entity";
+      if (!groups[kind]) groups[kind] = [];
+      groups[kind].push(node);
+    });
+    Object.keys(groups).forEach(function (kind) {
+      groups[kind].sort(function (a, b) { return String(a.label).localeCompare(String(b.label)); });
+    });
+    var layout = {
+      portfolio: { x: 82, y: 245, step: 70 },
+      cash: { x: 82, y: 86, step: 70 },
+      stock: { x: 236, y: 148, step: 104 },
+      sector: { x: 404, y: 72, step: 66 },
+      market: { x: 404, y: 214, step: 66 },
+      currency: { x: 404, y: 296, step: 66 },
+      risk: { x: 572, y: 78, step: 74 },
+      opportunity: { x: 572, y: 184, step: 74 },
+      model: { x: 572, y: 292, step: 74 },
+      review: { x: 572, y: 368, step: 74 },
+      evidence: { x: 720, y: 132, step: 104 },
+      rule: { x: 720, y: 274, step: 80 },
+      belief: { x: 850, y: 132, step: 104 },
+      opinion: { x: 850, y: 208, step: 104 },
+      entity: { x: 404, y: 380, step: 62 }
+    };
+    Object.keys(groups).forEach(function (kind) {
+      var spec = layout[kind] || layout.entity;
+      groups[kind].forEach(function (node, index) {
+        node.x = spec.x;
+        node.y = spec.y + index * spec.step;
+      });
+    });
+    var stockY = {};
+    (groups.stock || []).forEach(function (node) {
+      var symbol = node.symbol || ontologyAboxSymbolFromId(node.id);
+      if (symbol) stockY[symbol] = node.y;
+    });
+    Object.keys(nodesById).forEach(function (id) {
+      var node = nodesById[id];
+      if (!node.symbol || !stockY[node.symbol]) return;
+      if (node.kind === "evidence") node.y = Math.max(70, stockY[node.symbol] - 34);
+      if (node.kind === "belief") node.y = Math.max(70, stockY[node.symbol] - 34);
+      if (node.kind === "opinion") node.y = stockY[node.symbol] + 30;
+    });
+  }
+
+  function ontologyBuildAboxGraph(aboxEntities, aboxRelations, evidence, beliefs, opinions, entityLabels) {
+    var nodesById = {};
+    var entityById = (aboxEntities || []).reduce(function (memo, entity) {
+      if (entity && entity.id) memo[entity.id] = entity;
+      return memo;
+    }, {});
+    (aboxRelations || []).forEach(function (relation) {
+      [relation.source, relation.target].forEach(function (id) {
+        var entity = entityById[id] || { id: id, label: ontologyEndpointLabel(id, entityLabels), kind: "entity" };
+        ontologyAddGraphNode(nodesById, id, ontologyEntityGraphLabel(entity), ontologyAboxKind(entity), entity.label || id, ontologyAboxSymbolFromId(id));
+      });
+    });
+    var edges = (aboxRelations || []).map(function (relation) {
+      return { source: relation.source, target: relation.target, type: ontologyTypeOf(relation), kind: "assertion" };
+    });
+    ontologyAddGraphNode(nodesById, "runtime-rules", "Runtime Rules", "rule", "ABox assertions evaluated by TBox reasoning rules");
+    (opinions || []).slice(0, 5).forEach(function (opinion) {
+      var symbol = String(opinion && opinion.symbol || "").toUpperCase();
+      var stockId = "stock:" + symbol;
+      if (!symbol || !nodesById[stockId]) return;
+      var stockEvidence = (evidence || []).filter(function (item) { return String(item && item.subject || "") === stockId; });
+      var stockBeliefs = (beliefs || []).filter(function (item) { return String(item && item.subject || "") === stockId; });
+      var evidenceId = "evidence-set:" + symbol;
+      var beliefId = "belief-set:" + symbol;
+      var opinionId = "opinion:" + symbol;
+      ontologyAddGraphNode(nodesById, evidenceId, "Evidence " + stockEvidence.length, "evidence", symbol + " evidence rows", symbol);
+      ontologyAddGraphNode(nodesById, beliefId, "Belief " + stockBeliefs.length, "belief", symbol + " belief rows", symbol);
+      ontologyAddGraphNode(nodesById, opinionId, "Opinion " + symbol, "opinion", opinion.thesis || opinion.action || symbol, symbol);
+      edges.push({ source: stockId, target: evidenceId, type: "HAS_EVIDENCE", kind: "derived" });
+      edges.push({ source: evidenceId, target: "runtime-rules", type: "EVALUATED_BY", kind: "rule" });
+      edges.push({ source: "runtime-rules", target: beliefId, type: "DERIVES", kind: "rule" });
+      edges.push({ source: beliefId, target: opinionId, type: "HAS_OPINION", kind: "derived" });
+    });
+    ontologyPositionAboxGraphNodes(nodesById);
+    return { nodesById: nodesById, edges: edges };
+  }
+
+  function renderOntologyAboxGraph(aboxEntities, aboxRelations, evidence, beliefs, opinions, entityLabels) {
+    var graph = ontologyBuildAboxGraph(aboxEntities, aboxRelations, evidence, beliefs, opinions, entityLabels);
+    return [
+      '<section class="ontology-graph-panel ontology-abox-graph">',
+      '<div class="ontology-surface-head">',
+      '<strong>ABox Runtime Relation Graph</strong>',
+      '<span>' + escapeHtml(aboxEntities.length) + ' entity rows · ' + escapeHtml(aboxRelations.length) + ' relation rows · ' + escapeHtml((beliefs || []).length) + ' beliefs</span>',
+      '</div>',
+      renderOntologyGraphSvg("abox", Object.keys(graph.nodesById).map(function (key) { return graph.nodesById[key]; }), graph.edges, graph.nodesById, 960, 500),
+      '<div class="ontology-graph-caption">',
+      '<span>실선은 현재 ABox relation row입니다.</span>',
+      '<span>점선은 evidence가 runtime rule을 거쳐 belief/opinion row로 파생되는 관계입니다.</span>',
+      '</div>',
+      '</section>'
+    ].join("");
+  }
+
+  function ontologyEdgeLabel(type) {
+    var label = String(type || "");
+    return label.replace("USES_EVIDENCE_FROM", "USES_EVIDENCE").replace("REQUESTS_OPINION_FROM", "REQUESTS_OPINION");
+  }
+
+  function renderOntologyGraphSvg(name, nodes, edges, nodesById, width, height) {
+    var markerId = "ontology-" + name + "-arrow";
+    return [
+      '<svg class="ontology-graph-svg ontology-' + escapeHtml(name) + '-svg" viewBox="0 0 ' + escapeHtml(width) + ' ' + escapeHtml(height) + '" role="img" aria-label="' + escapeHtml(name) + ' ontology relation graph">',
+      '<defs><marker id="' + escapeHtml(markerId) + '" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z"></path></marker></defs>',
+      '<g class="ontology-graph-edges">',
+      (edges || []).map(function (edge) { return renderOntologyGraphEdge(edge, nodesById, markerId); }).join(""),
+      '</g>',
+      '<g class="ontology-graph-nodes">',
+      (nodes || []).map(renderOntologyGraphNode).join(""),
+      '</g>',
+      '</svg>'
+    ].join("");
+  }
+
+  function renderOntologyGraphEdge(edge, nodesById, markerId) {
+    var source = nodesById[edge.source];
+    var target = nodesById[edge.target];
+    if (!source || !target) return "";
+    var sameColumn = Math.abs(Number(source.x || 0) - Number(target.x || 0)) < 24;
+    var curve = sameColumn ? 58 : Math.max(40, Math.min(110, Math.abs(Number(target.x || 0) - Number(source.x || 0)) * 0.48));
+    var controlA = sameColumn ? (Number(source.x || 0) + curve) + " " + Number(source.y || 0) : (Number(source.x || 0) + curve) + " " + Number(source.y || 0);
+    var controlB = sameColumn ? (Number(target.x || 0) + curve) + " " + Number(target.y || 0) : (Number(target.x || 0) - curve) + " " + Number(target.y || 0);
+    var d = "M" + Number(source.x || 0) + " " + Number(source.y || 0) + " C" + controlA + ", " + controlB + ", " + Number(target.x || 0) + " " + Number(target.y || 0);
+    var labelX = sameColumn ? Number(source.x || 0) + curve + 12 : (Number(source.x || 0) + Number(target.x || 0)) / 2;
+    var labelY = (Number(source.y || 0) + Number(target.y || 0)) / 2 - 7;
+    return [
+      '<g class="ontology-graph-edge ' + escapeHtml(edge.kind || "assertion") + '">',
+      '<path d="' + escapeHtml(d) + '" marker-end="url(#' + escapeHtml(markerId) + ')"></path>',
+      '<text x="' + escapeHtml(labelX) + '" y="' + escapeHtml(labelY) + '">' + escapeHtml(ontologyShortText(ontologyEdgeLabel(edge.type), 18)) + '</text>',
+      '<title>' + escapeHtml((source.label || source.id) + " " + (edge.type || "") + " " + (target.label || target.id)) + '</title>',
+      '</g>'
+    ].join("");
+  }
+
+  function renderOntologyGraphNode(node) {
+    var width = node.kind === "rule" ? 58 : 116;
+    var height = node.kind === "rule" ? 34 : 38;
+    var x = Number(node.x || 0) - width / 2;
+    var y = Number(node.y || 0) - height / 2;
+    return [
+      '<g class="ontology-graph-node ' + escapeHtml(node.kind || "entity") + '" transform="translate(' + escapeHtml(x) + ' ' + escapeHtml(y) + ')">',
+      '<rect width="' + escapeHtml(width) + '" height="' + escapeHtml(height) + '" rx="8"></rect>',
+      '<text x="' + escapeHtml(width / 2) + '" y="' + escapeHtml(height / 2 + 4) + '" text-anchor="middle">' + escapeHtml(ontologyShortText(node.label, node.kind === "rule" ? 8 : 15)) + '</text>',
+      '<title>' + escapeHtml(node.title || node.label || node.id) + '</title>',
+      '</g>'
     ].join("");
   }
 
@@ -10538,6 +10746,15 @@
       '</div>',
       '<div class="settings-body">',
       '<div class="settings-grid">',
+      renderSettingSelect("kisEnv", "KIS 환경", [
+        { value: "prod", label: "실전" },
+        { value: "vts", label: "모의" }
+      ]),
+      renderSettingField("kisBaseUrl", "KIS Base URL", "url", "https://openapi.koreainvestment.com:9443"),
+      renderSettingField("kisAppKey", "KIS App Key", secretType, "app key", { preserveConfigured: true }),
+      renderSettingField("kisAppSecret", "KIS App Secret", secretType, "app secret", { preserveConfigured: true }),
+      renderSettingField("kisAccountNo", "KIS 계좌번호", secretType, "계좌번호 앞 8자리", { preserveConfigured: true }),
+      renderSettingField("kisAccountProductCode", "KIS 상품코드", secretType, "계좌번호 뒤 2자리", { preserveConfigured: true }),
       renderSettingField("alphaVantageApiKey", "Alpha Vantage API Key", secretType, "api key", { preserveConfigured: true }),
       renderSettingField("coingeckoApiKey", "CoinGecko API Key", secretType, "api key", { preserveConfigured: true }),
       renderSettingField("fredApiKey", "FRED API Key", secretType, "api key", { preserveConfigured: true }),

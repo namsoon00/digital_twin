@@ -47,7 +47,7 @@ from digital_twin.infrastructure.mock_market import mock_market_payload
 from digital_twin.infrastructure.neo4j_ontology import Neo4jOntologyGraphRepository, NullOntologyGraphRepository, safe_relation_type
 from digital_twin.infrastructure.notifications import TelegramNotifier, send_events
 from digital_twin.infrastructure.service_factory import flow_lens_snapshot
-from digital_twin.infrastructure.settings import runtime_settings
+from digital_twin.infrastructure.settings import runtime_settings, save_runtime_settings
 from digital_twin.infrastructure.sqlite_model_review import SQLiteModelReviewJobStore
 from digital_twin.infrastructure.sqlite_monitoring import SQLiteEventLog, SQLiteExternalSignalCache, SQLiteMarketQuoteCache, SQLiteMonitorStore
 from digital_twin.infrastructure.sqlite_notifications import SQLiteNotificationJobStore, SQLiteNotificationRuleStore, SQLiteNotificationTemplateStore
@@ -56,7 +56,7 @@ from digital_twin.infrastructure.sqlite_symbols import SQLiteSymbolUniverseStore
 from digital_twin.infrastructure.symbol_sources import RemoteSymbolSourceGateway, parse_krx_kind_table, parse_nasdaq_listed
 from digital_twin.infrastructure.sqlite_accounts import AccountRegistry
 from digital_twin.infrastructure.toss_snapshots import TossProvider, account_cash_amount, normalize_price_items, select_account
-from digital_twin.infrastructure.web_server import list_notification_rules_payload, notification_jobs_payload, notification_schedules_payload, notification_template_test_payload, realtime_status_payload, save_notification_rule_payload
+from digital_twin.infrastructure.web_server import list_notification_rules_payload, notification_jobs_payload, notification_schedules_payload, notification_template_test_payload, realtime_status_payload, save_notification_rule_payload, settings_status_payload
 from digital_twin.scheduler import MonitorRunner
 
 
@@ -368,6 +368,30 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("runtime-id", loaded.client_id)
         self.assertEqual("runtime-secret", loaded.client_secret)
         self.assertEqual("9", loaded.account_seq)
+
+    def test_runtime_settings_store_masks_kis_credentials(self):
+        save_runtime_settings({
+            "kisEnv": "prod",
+            "kisBaseUrl": "https://openapi.koreainvestment.com:9443",
+            "kisAppKey": "app-key",
+            "kisAppSecret": "app-secret",
+            "kisAccountNo": "12345678",
+            "kisAccountProductCode": "01",
+        })
+
+        settings = runtime_settings()
+        status = settings_status_payload()
+
+        self.assertEqual("prod", settings["kisEnv"])
+        self.assertEqual("https://openapi.koreainvestment.com:9443", settings["kisBaseUrl"])
+        self.assertEqual("app-key", settings["kisAppKey"])
+        self.assertEqual("app-secret", settings["kisAppSecret"])
+        self.assertEqual("", status["settings"]["kisAppKey"])
+        self.assertEqual("", status["settings"]["kisAppSecret"])
+        self.assertTrue(status["configured"]["kisAppKey"])
+        self.assertTrue(status["configured"]["kisAppSecret"])
+        self.assertTrue(status["configured"]["kisAccountNo"])
+        self.assertTrue(status["configured"]["kisAccountProductCode"])
 
     def test_save_json_preserves_existing_secrets_when_omitted(self):
         registry = AccountRegistry()

@@ -4083,11 +4083,19 @@ h3 {
   overflow: hidden;
 }
 
+.ontology-rule-map {
+  min-height: 330px;
+}
+
 .ontology-map-svg {
   display: block;
   width: 100%;
   height: 100%;
   min-height: 280px;
+}
+
+.ontology-rule-map .ontology-map-svg {
+  min-height: 330px;
 }
 
 .ontology-map-svg .ontology-flow-line {
@@ -4110,21 +4118,28 @@ h3 {
   fill: var(--blue);
 }
 
-.ontology-node rect {
+.ontology-node rect,
+.ontology-db-node rect,
+.ontology-db-badge rect {
   fill: var(--input);
   stroke: var(--line);
   stroke-width: 1.4;
 }
 
-.ontology-node.schema rect {
+.ontology-node.schema rect,
+.ontology-db-node.schema rect {
   stroke: color-mix(in srgb, var(--blue) 55%, var(--line));
 }
 
-.ontology-node.assertion rect {
+.ontology-node.assertion rect,
+.ontology-db-node.assertion rect,
+.ontology-db-node.output rect {
   stroke: color-mix(in srgb, var(--green) 55%, var(--line));
 }
 
-.ontology-node.engine rect {
+.ontology-node.engine rect,
+.ontology-db-node.engine rect,
+.ontology-db-node.relation rect {
   stroke: color-mix(in srgb, var(--amber) 55%, var(--line));
 }
 
@@ -4133,13 +4148,26 @@ h3 {
   stroke: color-mix(in srgb, var(--violet) 45%, var(--line));
 }
 
-.ontology-node text {
+.ontology-db-badge rect {
+  fill: color-mix(in srgb, var(--blue-soft) 56%, var(--panel-soft));
+  stroke: color-mix(in srgb, var(--blue) 45%, var(--line));
+}
+
+.ontology-node text,
+.ontology-db-node text,
+.ontology-db-badge text {
   fill: var(--ink);
   font-size: 14px;
   font-weight: 900;
 }
 
-.ontology-node .sub {
+.ontology-db-badge text {
+  font-size: 12px;
+  font-weight: 950;
+}
+
+.ontology-node .sub,
+.ontology-db-node .sub {
   fill: var(--muted);
   font-size: 11px;
   font-weight: 800;
@@ -4202,6 +4230,12 @@ h3 {
   align-content: start;
   gap: 12px;
   padding: 12px;
+}
+
+.ontology-projection-surface,
+.ontology-relation-surface,
+.ontology-rule-trace-surface {
+  grid-column: 1 / -1;
 }
 
 .ontology-surface-head {
@@ -4333,6 +4367,58 @@ h3 {
   font-size: 15px;
 }
 
+.ontology-projection-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 6px;
+  min-width: 0;
+}
+
+.ontology-projection-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.9fr) minmax(0, 1.2fr) 42px;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--input);
+}
+
+.ontology-projection-row strong,
+.ontology-projection-row span,
+.ontology-projection-row em {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.ontology-projection-row strong {
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 950;
+}
+
+.ontology-projection-row span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 780;
+}
+
+.ontology-projection-row em {
+  justify-self: end;
+  min-width: 30px;
+  min-height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--green-soft);
+  color: var(--green);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 950;
+}
+
 .ontology-relation-table,
 .ontology-rule-list {
   display: grid;
@@ -4406,6 +4492,11 @@ h3 {
   background: var(--input);
 }
 
+.ontology-rule-trace-row {
+  grid-template-columns: 30px minmax(0, 1fr) 46px;
+  align-items: center;
+}
+
 .ontology-rule-row b {
   width: 26px;
   height: 26px;
@@ -4424,6 +4515,44 @@ h3 {
   font-weight: 800;
   line-height: 1.4;
   overflow-wrap: anywhere;
+}
+
+.ontology-rule-body {
+  display: grid;
+  gap: 3px;
+}
+
+.ontology-rule-body strong,
+.ontology-rule-body em {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.ontology-rule-body strong {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.ontology-rule-body em {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 780;
+}
+
+.ontology-rule-trace-row > i {
+  justify-self: end;
+  min-width: 34px;
+  min-height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--amber-soft);
+  color: var(--amber);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 950;
 }
 
 .lab-message {
@@ -6536,8 +6665,16 @@ h3 {
   .symbol-filter-form,
   .symbol-filter-form.compact,
   .symbol-result-row,
-  .ontology-relation-row {
+  .ontology-projection-row,
+  .ontology-relation-row,
+  .ontology-rule-trace-row {
     grid-template-columns: 1fr;
+  }
+
+  .ontology-projection-row em,
+  .ontology-relation-row em,
+  .ontology-rule-trace-row > i {
+    justify-self: start;
   }
 
   .notification-policy-detail {

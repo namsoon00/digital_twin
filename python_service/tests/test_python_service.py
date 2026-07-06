@@ -529,6 +529,42 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("caution", weak_signal_decision.tone)
         self.assertGreaterEqual(weak_signal_decision.exit_pressure - neutral_decision.exit_pressure, 12)
 
+    def test_holding_decision_uses_loss_label_for_negative_pnl(self):
+        loss_position = normalize_position({
+            "symbol": "000660",
+            "name": "SK하이닉스",
+            "market": "KR",
+            "currency": "KRW",
+            "marketValue": 1000,
+            "profitLossRate": -8.2,
+            "sellableQuantity": 10,
+            "sector": "반도체",
+        })
+        profit_position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "marketValue": 1000,
+            "profitLossRate": 6,
+            "sellableQuantity": 10,
+            "sector": "반도체",
+        })
+
+        loss_decision = next(item for item in decisions_for_positions(
+            [loss_position],
+            portfolio_summary([loss_position]),
+        ) if item.symbol == "000660")
+        profit_decision = next(item for item in decisions_for_positions(
+            [profit_position],
+            portfolio_summary([profit_position]),
+        ) if item.symbol == "005930")
+
+        self.assertGreaterEqual(loss_decision.exit_pressure, 55)
+        self.assertEqual("손절 기준 확인", loss_decision.decision)
+        self.assertNotIn("익절", loss_decision.decision)
+        self.assertEqual("일부 익절 기준 확인", profit_decision.decision)
+
     def test_portfolio_summary_converts_usd_holdings_to_krw_base(self):
         kr_position = normalize_position({
             "symbol": "005930",

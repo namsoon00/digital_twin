@@ -178,14 +178,7 @@ def decision_for_position(position: Position, portfolio: PortfolioSummary) -> De
         score += 4
     score += holding_signal_adjustment(position, pnl)
     pressure = clamp(score, 0.0, 100.0)
-    if pressure >= 72:
-        label, tone = ("손절 기준 확인", "danger") if pnl <= -8 else ("분할 매도 기준 확인", "danger")
-    elif pressure >= 55:
-        label, tone = "일부 익절 기준 확인", "caution"
-    elif pressure >= 38:
-        label, tone = "조건부 보유", "hold"
-    else:
-        label, tone = "보유 유지", "watch"
+    label, tone = holding_decision_label(pressure, pnl)
     return DecisionItem(
         symbol=position.symbol,
         name=position.name,
@@ -199,6 +192,26 @@ def decision_for_position(position: Position, portfolio: PortfolioSummary) -> De
         decision=label,
         tone=tone,
     )
+
+
+def holding_decision_label(pressure: float, pnl: float):
+    if pressure >= 72:
+        if pnl <= -8:
+            return "손절 기준 확인", "danger"
+        if pnl < 0:
+            return "손실 축소 기준 확인", "danger"
+        return "분할 매도 기준 확인", "danger"
+    if pressure >= 55:
+        if pnl <= -8:
+            return "손절 기준 확인", "danger"
+        if pnl < 0:
+            return "손실 관리 기준 확인", "caution"
+        return "일부 익절 기준 확인", "caution"
+    if pressure >= 38:
+        if pnl <= -8:
+            return "손실 관리 조건부 보유", "hold"
+        return "조건부 보유", "hold"
+    return "보유 유지", "watch"
 
 
 def holding_signal_adjustment(position: Position, pnl: float = None) -> float:

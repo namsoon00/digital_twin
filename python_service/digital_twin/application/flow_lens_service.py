@@ -12,7 +12,7 @@ from ..domain.portfolio_calculations import (
     normalized_fx_rates,
     value_in_base,
 )
-from ..domain.strategy import holding_signal_adjustment
+from ..domain.strategy import holding_decision_label, holding_signal_adjustment
 
 
 def clamp_score(value: float) -> int:
@@ -372,14 +372,15 @@ def toss_decision_for_holding(item: Dict[str, object], portfolio: Dict[str, obje
         sector=sector,
     ), pnl_rate)
     exit_pressure = clamp_score(score)
+    label, tone = holding_decision_label(exit_pressure, pnl_rate)
     if exit_pressure >= 72:
-        label, tone, priority = ("손절 기준 확인", "danger", 1) if pnl_rate <= -8 else ("분할 매도 기준 확인", "danger", 1)
+        priority = 1
     elif exit_pressure >= 55:
-        label, tone, priority = "일부 익절 기준 확인", "caution", 2
+        priority = 2
     elif exit_pressure >= 38:
-        label, tone, priority = "조건부 보유", "hold", 3
+        priority = 3
     else:
-        label, tone, priority = "보유 유지", "watch", 4
+        priority = 4
     reasons = [
         "토스 잔고 기준 수익률이 " + ("+" if pnl_rate > 0 else "") + str(pnl_rate) + "%입니다.",
         "평가손익은 " + format(round(number(item.get("profitLoss"))), ",") + " " + str(item.get("currency") or "") + "입니다.",

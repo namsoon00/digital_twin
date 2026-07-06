@@ -738,7 +738,7 @@ def investment_score_lines(context: Dict[str, object]) -> List[str]:
         )
     if message_type in {"holdingTiming", "monitorDecisionChange"} and any(has_score_value(item) for item in [status_value, previous_value, current_value]):
         lines.append(
-            "보유 판단 점수: 기본 24점에서 손익률 구간, 한 업종에 몰린 정도, 팔 수 있는 수량을 더한 0~100점입니다. 0~37점은 보유 유지, 38~54점은 조건부 보유, 55~71점은 일부 익절 점검, 72점 이상은 손절 또는 분할매도 기준 확인입니다."
+            "보유 판단 점수: 기본 24점에서 손익률 구간, 한 업종에 몰린 정도, 팔 수 있는 수량을 더한 0~100점입니다. 0~37점은 보유 유지, 38~54점은 조건부 보유입니다. 55점 이상은 수익 중이면 일부 익절/분할매도, 손실 중이면 손실 관리 또는 손절 기준 확인으로 봅니다."
         )
     return lines
 

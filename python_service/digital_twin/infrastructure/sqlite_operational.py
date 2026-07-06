@@ -538,7 +538,7 @@ class SQLiteNotificationRuleStore(OperationalConnection):
             for message_type, rule in DEFAULT_NOTIFICATION_RULES.items():
                 row = connection.execute(
                     """
-                    SELECT threshold, similarity_bypass_conditions_json
+                    SELECT threshold, conditions_json, similarity_bypass_conditions_json
                     FROM notification_rules
                     WHERE message_type = ?
                     """,
@@ -552,6 +552,32 @@ class SQLiteNotificationRuleStore(OperationalConnection):
                     configured_conditions = []
                 if not isinstance(configured_conditions, list):
                     configured_conditions = []
+                try:
+                    configured_rule_conditions = json.loads(row["conditions_json"] or "[]")
+                except json.JSONDecodeError:
+                    configured_rule_conditions = []
+                if not isinstance(configured_rule_conditions, list):
+                    configured_rule_conditions = []
+                default_conditions_by_id = {
+                    condition.condition_id: condition.to_dict()
+                    for condition in rule.conditions
+                    if condition.condition_id
+                }
+                migrated_condition_ids = {"important_terms", "confirming_data", "actionable_terms", "status_noise"}
+                rule_conditions_changed = False
+                for item in configured_rule_conditions:
+                    if not isinstance(item, dict):
+                        continue
+                    condition_id = str(item.get("id") or "")
+                    if condition_id not in migrated_condition_ids:
+                        continue
+                    default_condition = default_conditions_by_id.get(condition_id)
+                    if not default_condition:
+                        continue
+                    for field_name in ["type", "field", "terms"]:
+                        if item.get(field_name) != default_condition.get(field_name):
+                            item[field_name] = default_condition.get(field_name)
+                            rule_conditions_changed = True
                 existing_ids = {
                     str(item.get("id") or "")
                     for item in configured_conditions
@@ -562,20 +588,21 @@ class SQLiteNotificationRuleStore(OperationalConnection):
                     for condition in rule.similarity_bypass_conditions
                     if condition.condition_id and condition.condition_id not in existing_ids
                 ]
-                if not missing_conditions:
-                    continue
                 configured_conditions.extend(missing_conditions)
                 threshold = int(row["threshold"] or 0)
                 if message_type == "externalCryptoMove" and threshold == 45:
                     threshold = int(rule.threshold)
+                if not missing_conditions and not rule_conditions_changed and int(row["threshold"] or 0) == threshold:
+                    continue
                 connection.execute(
                     """
                     UPDATE notification_rules
-                    SET threshold = ?, similarity_bypass_conditions_json = ?, updated_at = ?
+                    SET threshold = ?, conditions_json = ?, similarity_bypass_conditions_json = ?, updated_at = ?
                     WHERE message_type = ?
                     """,
                     (
                         threshold,
+                        json_dumps(configured_rule_conditions),
                         json_dumps(configured_conditions),
                         stamp,
                         message_type,

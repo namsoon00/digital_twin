@@ -1983,6 +1983,52 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(10, payload["limit"])
         self.assertEqual({"suppressed": 1}, payload["summary"])
 
+    def test_alert_context_scores_from_structured_notification_signals(self):
+        event = AlertEvent(
+            "main",
+            "메인",
+            "WATCH",
+            "monitorTrendChange",
+            "main:trend:000660",
+            "SK하이닉스",
+            ["추세: 현재 236만 원, 20일선 249만 원(-5.4%)", "수급: 거래량 4,816,364(0.5x)"],
+            "000660",
+        )
+        context = alert_context(event)
+        job = NotificationJob.create(
+            "구조화 신호 검증",
+            account_id="main",
+            account_label="메인",
+            message_type=event.rule,
+            context=context,
+        )
+
+        decision = evaluate_notification_rule(job, default_notification_rule(event.rule))
+
+        self.assertIn("important", context["notificationSignals"])
+        self.assertIn("confirmingData", context["notificationSignals"])
+        self.assertIn("핵심 투자 단어 +15", decision.reasons)
+        self.assertIn("확인 데이터 포함 +10", decision.reasons)
+
+    def test_notification_rule_seed_migrates_default_text_conditions_to_signals(self):
+        db_path = Path(self.temp.name) / "service.db"
+        store = SQLiteNotificationRuleStore(db_path)
+        rule = store.get("holdingTiming")
+        important = next(condition for condition in rule.conditions if condition.condition_id == "important_terms")
+        important.condition_type = "text_contains_any"
+        important.field = ""
+        important.terms = ["손절"]
+        important.score = 17
+        store.upsert(rule)
+
+        refreshed = SQLiteNotificationRuleStore(db_path)
+        migrated = next(condition for condition in refreshed.get("holdingTiming").conditions if condition.condition_id == "important_terms")
+
+        self.assertEqual("context_contains_any", migrated.condition_type)
+        self.assertEqual("notificationSignals", migrated.field)
+        self.assertEqual(["important"], migrated.terms)
+        self.assertEqual(17, migrated.score)
+
     def test_market_hours_rule_suppresses_stock_alerts_after_close(self):
         rule = default_notification_rule("holdingTiming")
         job = NotificationJob.create(

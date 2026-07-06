@@ -472,42 +472,26 @@ def default_conditions() -> List[NotificationRuleCondition]:
         NotificationRuleCondition(
             "important_terms",
             "핵심 투자 단어",
-            "text_contains_any",
+            "context_contains_any",
             15,
-            terms=[
-                "판단 변화",
-                "모델 매수",
-                "모델 매도",
-                "내 매수 기준",
-                "내 매도 기준",
-                "손익률 급변",
-                "평가액 급변",
-                "보유 수량 변경",
-                "새 보유",
-                "이동평균",
-                "신규 공시",
-                "가격 변동",
-                "크립토 변동",
-                "거시 지표",
-                "손절",
-                "분할매도",
-                "리스크",
-                "위험",
-            ],
+            field="notificationSignals",
+            terms=["important"],
         ),
         NotificationRuleCondition(
             "confirming_data",
             "확인 데이터 포함",
-            "text_contains_any",
+            "context_contains_any",
             10,
-            terms=["수급", "거래량", "투자자", "추세", "20일선", "60일선", "외국인", "기관"],
+            field="notificationSignals",
+            terms=["confirmingData"],
         ),
         NotificationRuleCondition(
             "actionable_terms",
             "행동 필요 표현",
-            "text_contains_any",
+            "context_contains_any",
             10,
-            terms=["확인", "재확인", "점검", "기준", "후보", "검토"],
+            field="notificationSignals",
+            terms=["actionable"],
         ),
         NotificationRuleCondition(
             "body_present",
@@ -519,9 +503,10 @@ def default_conditions() -> List[NotificationRuleCondition]:
         NotificationRuleCondition(
             "status_noise",
             "상태성 노이즈",
-            "text_contains_any",
+            "context_contains_any",
             -25,
-            terms=["정상 작동", "시세 대기", "현재가를 아직", "연결 확인 필요", "템플릿 테스트"],
+            field="notificationSignals",
+            terms=["statusNoise"],
         ),
     ]
 
@@ -667,7 +652,9 @@ def condition_matches(condition: NotificationRuleCondition, job: NotificationJob
         return any(term in blob for term in terms)
     if condition_type == "context_contains_any":
         value = normalized_text(" ".join(flattened_strings(field_value(context, condition.field))))
-        return any(term in value for term in terms)
+        if any(term in value for term in terms):
+            return True
+        return default_signal_fallback_matches(condition, blob, context)
     if condition_type == "context_equals":
         return normalized_text(field_value(context, condition.field)) == normalized_text(condition.value)
     if condition_type == "context_present":
@@ -681,6 +668,38 @@ def condition_matches(condition: NotificationRuleCondition, job: NotificationJob
         right = numeric_value(condition.value)
         return left is not None and right is not None and left <= right
     return False
+
+
+def default_signal_fallback_matches(condition: NotificationRuleCondition, blob: str, context: Dict[str, object]) -> bool:
+    if is_present(field_value(context, condition.field)):
+        return False
+    terms_by_condition = {
+        "important_terms": [
+            "판단 변화",
+            "모델 매수",
+            "모델 매도",
+            "내 매수 기준",
+            "내 매도 기준",
+            "손익률 급변",
+            "평가액 급변",
+            "보유 수량 변경",
+            "새 보유",
+            "이동평균",
+            "신규 공시",
+            "가격 변동",
+            "크립토 변동",
+            "거시 지표",
+            "손절",
+            "분할매도",
+            "리스크",
+            "위험",
+        ],
+        "confirming_data": ["수급", "거래량", "투자자", "추세", "20일선", "60일선", "외국인", "기관"],
+        "actionable_terms": ["확인", "재확인", "점검", "기준", "후보", "검토"],
+        "status_noise": ["정상 작동", "시세 대기", "현재가를 아직", "연결 확인 필요", "템플릿 테스트"],
+    }
+    fallback_terms = [normalized_text(term) for term in terms_by_condition.get(condition.condition_id, [])]
+    return any(term in blob for term in fallback_terms if term)
 
 
 def format_rule_number(value: float) -> str:

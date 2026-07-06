@@ -495,20 +495,20 @@ def render_admin_html(payload: Dict[str, object]) -> str:
     <style>
       :root {{
         color-scheme: light;
-        --ds-color-bg: #f2f6fb;
+        --ds-color-bg: #edf2f7;
         --ds-color-panel: #ffffff;
-        --ds-color-panel-soft: #f6f9fd;
-        --ds-color-ink: #121829;
-        --ds-color-muted: #64748b;
-        --ds-color-line: #d8e3f2;
-        --ds-color-positive: #00b386;
-        --ds-color-positive-soft: #e2f8f1;
-        --ds-color-action: #246bfe;
-        --ds-color-action-soft: #e6efff;
-        --ds-color-warning: #d97706;
-        --ds-color-warning-soft: #fff3dc;
-        --ds-color-orbit-line: #4f8cff;
-        --ds-color-orbit-glow: rgba(79, 140, 255, 0.16);
+        --ds-color-panel-soft: #f7f9fc;
+        --ds-color-ink: #111827;
+        --ds-color-muted: #5f6f84;
+        --ds-color-line: #cbd6e3;
+        --ds-color-positive: #008a63;
+        --ds-color-positive-soft: #e0f5ed;
+        --ds-color-action: #1f5eff;
+        --ds-color-action-soft: #e4ecff;
+        --ds-color-warning: #b86b00;
+        --ds-color-warning-soft: #fff0d5;
+        --ds-color-orbit-line: #3f6fd8;
+        --ds-color-orbit-glow: rgba(31, 94, 255, 0.08);
         --ds-radius-control: 8px;
         --ds-radius-panel: 8px;
         --ds-shadow-panel: 0 8px 28px rgba(25, 31, 40, 0.06);
@@ -527,10 +527,7 @@ def render_admin_html(payload: Dict[str, object]) -> str:
         margin: 0;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
         color: var(--text);
-        background:
-          radial-gradient(circle at 88% -12%, var(--ds-color-orbit-glow), transparent 34%),
-          linear-gradient(135deg, rgba(36, 107, 254, 0.08) 0 1px, transparent 1px 44px),
-          var(--bg);
+        background: linear-gradient(180deg, #f7f9fc 0, var(--bg) 260px, #e9eef5 100%);
         line-height: 1.5;
         letter-spacing: 0;
       }}

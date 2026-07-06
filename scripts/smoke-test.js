@@ -177,11 +177,11 @@ function checkFrontendAdminRender() {
   const designSystemDoc = fs.readFileSync(path.join(rootDir, "docs", "design-system.md"), "utf8");
   assertOk(styles.indexOf("--ds-color-bg") >= 0, "전역 디자인 시스템 색상 토큰이 없습니다.");
   assertOk(styles.indexOf("--ds-color-on-action") >= 0, "주요 액션 텍스트 토큰이 없습니다.");
-  assertOk(styles.indexOf("--ds-color-bg: #f2f6fb") >= 0, "Orbit Light 배경 토큰이 적용되지 않았습니다.");
-  assertOk(styles.indexOf("--ds-color-action: #246bfe") >= 0, "Orbit Alpha 액션 블루 토큰이 적용되지 않았습니다.");
-  assertOk(styles.indexOf("--ds-color-orbit-line: #4f8cff") >= 0, "Orbit Alpha 궤도 라인 토큰이 적용되지 않았습니다.");
-  assertOk(styles.indexOf("--ds-color-orbit-signal: #00b386") >= 0, "Orbit Alpha 시그널 그린 토큰이 적용되지 않았습니다.");
-  assertOk(styles.indexOf("--surface: var(--ds-color-panel-soft)") >= 0, "Orbit Light 보조 표면 alias가 없습니다.");
+  assertOk(styles.indexOf("--ds-color-bg: #edf2f7") >= 0, "전통 금융 콘솔 배경 토큰이 적용되지 않았습니다.");
+  assertOk(styles.indexOf("--ds-color-action: #1f5eff") >= 0, "Orbit Alpha 액션 블루 토큰이 적용되지 않았습니다.");
+  assertOk(styles.indexOf("--ds-color-orbit-line: #3f6fd8") >= 0, "Orbit Alpha 궤도 라인 토큰이 적용되지 않았습니다.");
+  assertOk(styles.indexOf("--ds-color-orbit-signal: #008a63") >= 0, "Orbit Alpha 시그널 그린 토큰이 적용되지 않았습니다.");
+  assertOk(styles.indexOf("--surface: var(--ds-color-panel-soft)") >= 0, "보조 표면 alias가 없습니다.");
   assertOk(styles.indexOf("--ds-control-height-md") >= 0, "전역 컨트롤 높이 토큰이 없습니다.");
   assertOk(styles.indexOf("font-variant-numeric: tabular-nums") >= 0, "금융 숫자 표시 규칙이 없습니다.");
   assertOk(styles.indexOf(".app-shell") >= 0 && styles.indexOf("100dvh") >= 0, "앱형 100dvh 셸 규칙이 없습니다.");
@@ -191,19 +191,21 @@ function checkFrontendAdminRender() {
   assertOk(styles.indexOf("--ds-shell-width: 1720px") >= 0 && styles.indexOf("--ds-sidebar-width: 256px") >= 0, "PC 중심 shell/sidebar 레이아웃 토큰이 없습니다.");
   assertOk(styles.indexOf("grid-template-columns: var(--ds-sidebar-width) minmax(0, 1fr)") >= 0, "PC shell이 좌측 네비게이션과 작업 영역으로 분리되지 않습니다.");
   assertOk(styles.indexOf("grid-template-columns: repeat(12, minmax(0, 1fr))") >= 0, "PC 본문 12컬럼 그리드가 없습니다.");
-  assertOk(/@media \(max-width: 1180px\) and \(min-width: 861px\)[\s\S]*\.app-nav[\s\S]*grid-template-columns: auto minmax\(0, 1fr\) auto;/.test(styles), "태블릿에서 상단 네비게이션으로 전환되지 않습니다.");
+  assertOk(/@media \(max-width: 1180px\) and \(min-width: 981px\)[\s\S]*grid-template-columns: 224px minmax\(0, 1fr\);/.test(styles), "981px 이상 태블릿이 PC형 좌측 네비게이션으로 유지되지 않습니다.");
+  assertOk(/@media \(max-width: 980px\) and \(min-width: 861px\)[\s\S]*\.app-nav[\s\S]*grid-template-columns: auto minmax\(0, 1fr\) auto;/.test(styles), "좁은 태블릿에서 상단 네비게이션으로 전환되지 않습니다.");
+  assertOk(code.indexOf("renderDeskbar") >= 0 && styles.indexOf(".deskbar") >= 0, "PC/태블릿 데스크 바가 없습니다.");
   assertOk(styles.indexOf(".account-exposure-grid") >= 0 && styles.indexOf(".account-manager-panel .admin-form-grid") >= 0, "PC 계좌 노출 최적화 규칙이 없습니다.");
   assertOk(styles.indexOf(".settings-smart-save") >= 0, "설정 화면 스마트 저장 액션 규칙이 없습니다.");
   assertOk(styles.indexOf(".settings-save-panel") < 0, "설정 화면에 하단 sticky 저장 패널 규칙이 남아 있습니다.");
   assertOk(code.indexOf("settingsHasPendingChanges") >= 0 && code.indexOf("refreshSettingsSaveControls") >= 0, "설정 저장 버튼의 상태형 갱신 로직이 없습니다.");
   assertOk(/@media \(max-width: 860px\)[\s\S]*\.account-watchlist-workbench[\s\S]*grid-template-columns: 1fr;/.test(styles), "모바일 관심종목 워크벤치가 1열로 접히지 않습니다.");
   assertOk(/@media \(max-width: 860px\)[\s\S]*\.watch-account-row \.chip-row[\s\S]*justify-content: flex-start;/.test(styles), "모바일 관심종목 계정 칩 정렬이 왼쪽 기준이 아닙니다.");
-  assertOk(designSystemDoc.indexOf("Finance App Tone") >= 0, "디자인 시스템 문서에 금융앱 룩앤필 기준이 없습니다.");
+  assertOk(designSystemDoc.indexOf("Institutional Finance Tone") >= 0, "디자인 시스템 문서에 전통 금융앱 룩앤필 기준이 없습니다.");
   assertOk(code.indexOf('appBrandName = "Orbit Alpha"') >= 0, "Orbit Alpha 브랜드명이 앱에 적용되지 않았습니다.");
   assertOk(indexHtml.indexOf("<title>Orbit Alpha</title>") >= 0 && indexHtml.indexOf("favicon.svg") >= 0, "Orbit Alpha 문서 제목 또는 파비콘 링크가 없습니다.");
   assertOk(styles.indexOf(".app-brand-mark") >= 0 && styles.indexOf("--ds-color-orbit-line") >= 0, "Orbit Alpha 궤도형 브랜드 마크 규칙이 없습니다.");
   assertOk(fs.existsSync(path.join(rootDir, "public", "favicon.svg")), "Orbit Alpha SVG 파비콘이 없습니다.");
-  assertOk(designSystemDoc.indexOf("Orbit Light") >= 0 && designSystemDoc.indexOf("#F2F6FB") >= 0, "디자인 시스템 문서에 Orbit Light 팔레트가 없습니다.");
+  assertOk(designSystemDoc.indexOf("#EDF2F7") >= 0 && designSystemDoc.indexOf("Relation Matrix") >= 0, "디자인 시스템 문서에 전통 금융 콘솔 팔레트나 관계 UI 기준이 없습니다.");
   assertOk(designSystemDoc.indexOf("Page Contracts") >= 0, "디자인 시스템 문서에 페이지별 UI 계약이 없습니다.");
   assertOk(designSystemDoc.indexOf("12컬럼") >= 0 && designSystemDoc.indexOf("8컬럼") >= 0, "디자인 시스템 문서에 PC/태블릿 컬럼 기준이 없습니다.");
   assertOk(designSystemDoc.indexOf("Button Placement") >= 0, "디자인 시스템 문서에 버튼 위치 정책이 없습니다.");
@@ -324,6 +326,35 @@ function checkFrontendAdminRender() {
     "/api/notification-jobs": {
       jobs: [
         {
+          jobId: "job-kr-1",
+          messageType: "modelReview",
+          messageTypeLabel: "모델 리뷰",
+          status: "suppressed",
+          accountId: "main",
+          accountLabel: "DB 계정",
+          createdAt: "2026-07-01T00:05:00.000Z",
+          updatedAt: "2026-07-01T00:05:00.000Z",
+          sourceEventName: "monitoring.alerts_detected",
+          title: "035420 판단 리뷰",
+          symbol: "",
+          textPreview: "035420 판단 리뷰: 조건부 보유에서 손실 관리 기준 확인으로 방어 쪽으로 이동.",
+          honeyScore: 55,
+          honeyThreshold: 74,
+          honeyDecision: "suppressed",
+          honeyReasons: ["035420 관찰 등급", "국장 닫힘"],
+          honeyFingerprint: "messageType=modelreview|accountId=main|symbol=|title=035420 판단 리뷰",
+          honeySimilarityRecentCount: 0,
+          honeySimilarityPenalty: 0,
+          honeySimilarityWindowMinutes: 360,
+          honeySimilarityBypassed: false,
+          marketHoursEnabled: true,
+          marketHoursMarket: "KR",
+          marketHoursLabel: "국장",
+          marketHoursStatus: "closed",
+          marketHoursDecision: "suppressed",
+          marketHoursReason: "국장 닫힘"
+        },
+        {
           jobId: "job-crypto-1",
           messageType: "externalCryptoMove",
           messageTypeLabel: "크립토 변동",
@@ -360,7 +391,7 @@ function checkFrontendAdminRender() {
           marketHoursTimezone: "America/New_York"
         }
       ],
-      summary: { done: 2, suppressed: 1, failed: 0 },
+      summary: { done: 2, suppressed: 2, failed: 0 },
       limit: 40
     },
     "/api/notification-schedules": {
@@ -785,6 +816,8 @@ function checkFrontendAdminRender() {
     assertOk(notificationHtml.indexOf("notification-decision-panel") >= 0, "최근 알림 판단 패널이 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("notification-decision-panel") < notificationHtml.indexOf("notification-command-panel"), "기본 현황에서 최근 알림 판단이 관제 지표보다 먼저 보이지 않습니다.");
     assertOk(notificationHtml.indexOf("notification-decision-body") >= 0, "최근 알림 판단 본문 영역이 분리되지 않았습니다.");
+    assertOk(notificationHtml.indexOf("NAVER") >= 0, "최근 알림 판단에서 국내 종목명이 코드 대신 렌더링되지 않습니다.");
+    assertOk(notificationHtml.indexOf("035420 판단") < 0 && notificationHtml.indexOf("symbol=035420") < 0 && notificationHtml.indexOf(">035420<") < 0, "최근 알림 판단에 국내 종목코드가 그대로 노출됩니다.");
     assertOk(code.indexOf('indexOf("API를 찾지 못했습니다")') >= 0, "최근 알림 판단 API 미지원 상태를 빈 상태로 처리하지 않습니다.");
     assertOk(code.indexOf("notification-state-message") >= 0, "최근 알림 빈 상태 전용 상태 박스 렌더링 경로가 없습니다.");
     assertOk(notificationHtml.indexOf("admin-message-group-list") < 0, "기본 현황 화면에 정책 목록이 렌더링됩니다.");
@@ -839,10 +872,12 @@ function checkFrontendAdminRender() {
     assertOk(modelingHtml.indexOf('data-strategy-section="ontology"') < 0, "온톨로지가 투자전략 내부 섹션에 남아 있습니다.");
     assertOk(ontologyHtml.indexOf("ontology-view") >= 0 && ontologyHtml.indexOf("Ontology Control") >= 0, "온톨로지 상위 탭이 렌더링되지 않았습니다.");
     assertOk(ontologyHtml.indexOf("TBox") >= 0 && ontologyHtml.indexOf("ABox") >= 0, "온톨로지 탭에 TBox/ABox 요약이 없습니다.");
+    assertOk(ontologyHtml.indexOf("ontology-control-strip") >= 0 && ontologyHtml.indexOf("Relation Matrix") >= 0 && ontologyHtml.indexOf("relation-matrix") >= 0, "온톨로지 탭에 추론 순서나 관계 매트릭스가 없습니다.");
     assertOk(ontologyHtml.indexOf("TBox Relation Graph") >= 0 && ontologyHtml.indexOf("ABox Runtime Relation Graph") >= 0 && ontologyHtml.indexOf("ontology-graph-svg") >= 0, "온톨로지 TBox/ABox 관계 그래프가 렌더링되지 않았습니다.");
     assertOk(ontologyHtml.indexOf("ontology-relation-table") >= 0 && ontologyHtml.indexOf("ontology-rule-list") >= 0, "온톨로지 관계/규칙 보조 표가 렌더링되지 않았습니다.");
     assertOk(ontologyHtml.indexOf("Relational Row Projection") >= 0 && ontologyHtml.indexOf("Rule Trace") >= 0, "온톨로지 탭에 TBox/ABox 관계형 규칙 추적이 없습니다.");
     assertOk(code.indexOf("writeStrategySectionHistory") >= 0 && code.indexOf("strategySectionUrl") >= 0, "투자전략 내부 탭 URL 동기화 경로가 없습니다.");
+    assertOk(modelingHtml.indexOf("strategy-process-panel") >= 0 && modelingHtml.indexOf("Strategy Workflow") >= 0 && modelingHtml.indexOf("데이터에서 알림까지의 계산 순서") >= 0, "투자전략 개요에 계산 순서 UI가 없습니다.");
     assertOk(modelingHtml.indexOf("model-guide-panel") >= 0, "개요 탭에 모델 운영 가이드가 렌더링되지 않았습니다.");
     assertOk(modelingHtml.indexOf("투자전략 모델링 관리") >= 0, "개요 탭에 투자전략 모델링 관리 제목이 렌더링되지 않았습니다.");
     assertOk(modelingHtml.indexOf("처음 보는 사람용 쉬운 설명") >= 0, "개요 탭에 초보자용 쉬운 설명 패널이 렌더링되지 않았습니다.");
@@ -852,6 +887,7 @@ function checkFrontendAdminRender() {
     assertOk(modelingDataHtml.indexOf("전략 데이터 점검") >= 0, "데이터 탭에 전략 데이터 점검 제목이 렌더링되지 않았습니다.");
     assertOk(modelingDataHtml.indexOf("체결강도") >= 0, "데이터 탭에 체결강도 항목이 없습니다.");
     assertOk(modelingDataHtml.indexOf("모델-알림 기준") >= 0, "데이터 탭에 모델-알림 기준 항목이 없습니다.");
+    assertOk(modelingRulesHtml.indexOf("formula-ledger-panel") >= 0 && modelingRulesHtml.indexOf("Formula Ledger") >= 0 && modelingRulesHtml.indexOf("내 모델 매수 공식") >= 0, "판단 기준 탭에 공식 ledger가 없습니다.");
     assertOk(modelingRulesHtml.indexOf("admin-modeling-panel") >= 0, "판단 기준 탭에 모델링 설정 패널이 렌더링되지 않았습니다.");
     assertOk(modelingRulesHtml.indexOf("투자전략 판단 기준 관리") >= 0, "판단 기준 탭에 투자전략 판단 기준 제목이 렌더링되지 않았습니다.");
     assertOk(modelingRulesHtml.indexOf("투자자별 수급") >= 0, "판단 기준 탭에 투자자별 수급 feature 설명이 렌더링되지 않았습니다.");
@@ -1322,7 +1358,7 @@ async function checkNormalMode(port, context) {
   const adminPreview = await request(port, "/admin/");
   assertOk(adminPreview.statusCode === 200, "Python admin preview 응답 코드가 200이 아닙니다: " + adminPreview.statusCode);
   assertOk(adminPreview.body.indexOf("Orbit Alpha Python Admin") >= 0, "Python admin preview 제목이 없습니다.");
-  assertOk(adminPreview.body.indexOf("--ds-color-bg: #f2f6fb") >= 0 && adminPreview.body.indexOf("--ds-color-action: #246bfe") >= 0, "Python admin preview에 Orbit Alpha 팔레트가 적용되지 않았습니다.");
+  assertOk(adminPreview.body.indexOf("--ds-color-bg: #edf2f7") >= 0 && adminPreview.body.indexOf("--ds-color-action: #1f5eff") >= 0, "Python admin preview에 Orbit Alpha 팔레트가 적용되지 않았습니다.");
 
   const adminConfig = await request(port, "/admin/config.json");
   assertOk(adminConfig.statusCode === 200, "Python admin config 응답 코드가 200이 아닙니다: " + adminConfig.statusCode);

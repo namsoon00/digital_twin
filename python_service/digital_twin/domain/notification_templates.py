@@ -15,6 +15,22 @@ PREVIOUS_DEFAULT_TEMPLATE = "{readableMessage}"
 DEFAULT_TEMPLATE = "{telegramMessage}"
 BODY_TEMPLATE = "{body}"
 KST = timezone(timedelta(hours=9))
+SYMBOL_DISPLAY_NAMES = {
+    "005930": "삼성전자",
+    "000660": "SK하이닉스",
+    "035720": "카카오",
+    "AAPL": "Apple",
+    "MSFT": "Microsoft",
+    "NVDA": "NVIDIA",
+    "AMD": "AMD",
+    "TSLA": "Tesla",
+    "MSTR": "Strategy",
+    "STRC": "Strategy Preferred",
+    "GOOGL": "Alphabet",
+    "META": "Meta",
+    "BTC": "비트코인",
+    "ETH": "이더리움",
+}
 DATA_LABEL_PREFIXES = [
     "미장 가격 변동",
     "비트코인 변동",
@@ -618,6 +634,28 @@ class NotificationTemplate:
         }
 
 
+def symbol_display_name(symbol: object, title: object = "") -> str:
+    raw_symbol = str(symbol or "").strip().upper()
+    known = SYMBOL_DISPLAY_NAMES.get(raw_symbol, "")
+    if known:
+        return known
+    title_text = str(title or "").strip()
+    if title_text and title_text.upper() != raw_symbol:
+        return title_text
+    return raw_symbol
+
+
+def target_display_value(title: object, raw_symbol: object, display_symbol: object) -> str:
+    title_text = str(title or "").strip()
+    raw_text = str(raw_symbol or "").strip().upper()
+    display_text = str(display_symbol or "").strip()
+    if title_text and raw_text and title_text.upper() == raw_text and display_text:
+        return display_text
+    if title_text and display_text and display_text not in title_text:
+        return title_text + " / " + display_text
+    return title_text or display_text
+
+
 def alert_context(event: AlertEvent) -> Dict[str, object]:
     raw_lines = raw_lines_with_reference_date(event, [str(line).strip() for line in event.lines if str(line).strip()])
     lines = "\n".join(["- " + line for line in raw_lines])
@@ -625,7 +663,9 @@ def alert_context(event: AlertEvent) -> Dict[str, object]:
     message_type_label = MESSAGE_TYPE_LABELS.get(event.rule, event.rule)
     severity_label = SEVERITY_LABELS.get(str(event.severity or "").upper(), event.severity or "")
     trigger_summary = TRIGGER_SUMMARIES.get(event.rule, "설정한 조건이 실제 데이터에서 충족될 때 보냅니다.")
-    symbol_line = ("종목: " + event.symbol) if event.symbol else ""
+    raw_symbol = str(event.symbol or "").strip()
+    display_symbol = symbol_display_name(raw_symbol, event.title) if raw_symbol else ""
+    symbol_line = ("종목: " + display_symbol) if display_symbol else ""
     severity_line = ("상태: " + severity_label) if severity_label else ""
     type_line = ("유형: " + message_type_label) if message_type_label else ""
     trigger_line = ("발생 조건: " + trigger_summary) if trigger_summary else ""
@@ -633,10 +673,7 @@ def alert_context(event: AlertEvent) -> Dict[str, object]:
     status_headline = ("[" + severity_label + "]") if severity_label else ""
     title_headline = notification_title_headline(event.rule, raw_lines, event, message_type_label or event.title)
     headline = " ".join(part for part in [status_headline, title_headline] if part)
-    target_parts = [event.title]
-    if event.symbol and event.symbol != event.title:
-        target_parts.append(event.symbol)
-    target_value = " / ".join(part for part in target_parts if part)
+    target_value = target_display_value(event.title, raw_symbol, display_symbol)
     target_line = "대상: " + target_value if target_value else ""
     criteria = event_criterion_lines(event, raw_lines, trigger_summary)
     signals = notification_signal_labels(event.rule, raw_lines)
@@ -679,7 +716,12 @@ def alert_context(event: AlertEvent) -> Dict[str, object]:
         "key": event.key,
         "title": event.title,
         "symbol": event.symbol,
+        "rawSymbol": raw_symbol,
+        "symbolDisplayName": display_symbol,
+        "displaySymbolName": display_symbol,
         "target": event.target(),
+        "rawTarget": event.target(),
+        "displayTarget": target_value,
         "messageTypeLabel": message_type_label,
         "triggerSummary": trigger_summary,
         "headline": headline,
@@ -1157,6 +1199,20 @@ def score_explanation_block(context: Dict[str, object], rich: bool = False) -> s
 
 def context_with_score_explanation(context: Dict[str, object]) -> Dict[str, object]:
     values = dict(context or {})
+    raw_symbol = str(values.get("rawSymbol") or values.get("symbol") or "").strip().upper()
+    display_symbol = str(
+        values.get("symbolDisplayName")
+        or values.get("displaySymbolName")
+        or SYMBOL_DISPLAY_NAMES.get(raw_symbol, "")
+        or ""
+    ).strip()
+    if display_symbol:
+        values["symbol"] = display_symbol
+    display_target = str(values.get("displayTarget") or "").strip()
+    if not display_target and display_symbol and str(values.get("target") or "").strip().upper() == raw_symbol:
+        display_target = display_symbol
+    if display_target:
+        values["target"] = display_target
     values["scoreExplanation"] = score_explanation_block(values, False)
     values["telegramScoreExplanation"] = score_explanation_block(values, True)
     return values
@@ -1198,7 +1254,12 @@ def template_variables() -> List[str]:
         "key",
         "title",
         "symbol",
+        "rawSymbol",
+        "symbolDisplayName",
+        "displaySymbolName",
         "target",
+        "rawTarget",
+        "displayTarget",
         "messageTypeLabel",
         "triggerSummary",
         "headline",

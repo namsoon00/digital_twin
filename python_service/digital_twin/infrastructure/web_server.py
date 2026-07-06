@@ -501,6 +501,8 @@ def notification_job_public_payload(job: NotificationJob) -> Dict[str, object]:
         "sourceEventName": job.source_event_name,
         "title": title,
         "symbol": str(context.get("symbol") or "").strip(),
+        "rawSymbol": str(context.get("rawSymbol") or context.get("symbol") or "").strip(),
+        "symbolName": str(context.get("symbolDisplayName") or context.get("displaySymbolName") or "").strip(),
         "textPreview": compact_notification_text(job.text),
         "lastError": job.last_error,
         "honeyScore": context.get("honeyScore"),
@@ -718,6 +720,7 @@ def reset_notification_rule_payload(message_type: str) -> Dict[str, object]:
 
 
 def alert_event_public_payload(event) -> Dict[str, object]:
+    context = alert_context(event)
     return {
         "accountId": event.account_id,
         "accountLabel": event.account_label,
@@ -725,6 +728,8 @@ def alert_event_public_payload(event) -> Dict[str, object]:
         "rule": event.rule,
         "severity": event.severity,
         "symbol": event.symbol,
+        "rawSymbol": context.get("rawSymbol") or event.symbol,
+        "symbolName": context.get("symbolDisplayName") or "",
         "title": event.title,
         "lines": list(event.lines or []),
         "key": event.key,

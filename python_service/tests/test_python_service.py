@@ -34,7 +34,7 @@ from digital_twin.domain.events import ACCOUNT_SAVED, MARKET_DATA_COLLECTED, MON
 from digital_twin.domain.monitoring import RealtimeMonitor
 from digital_twin.domain.model_review import ModelReviewJob, local_model_review
 from digital_twin.domain.disclosure_analysis import DisclosureAnalysisResult, local_disclosure_analysis
-from digital_twin.domain.notification_templates import alert_context
+from digital_twin.domain.notification_templates import NotificationTemplate, alert_context, render_notification
 from digital_twin.domain.notification_rules import apply_market_hours_rule, default_notification_rule, evaluate_notification_rule
 from digital_twin.domain.notifications import NotificationJob
 from digital_twin.domain.parsing import parse_assignments
@@ -2288,6 +2288,29 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("핵심 투자 단어 +15", decision.reasons)
         self.assertIn("확인 데이터 포함 +10", decision.reasons)
 
+    def test_notification_render_uses_symbol_display_name(self):
+        event = AlertEvent(
+            "main",
+            "메인",
+            "WATCH",
+            "holdingTiming",
+            "main:timing:005930",
+            "삼성전자",
+            ["상태 손절 기준 확인 (91점)"],
+            "005930",
+        )
+
+        context = alert_context(event)
+        message = render_notification(
+            NotificationTemplate("holdingTiming", "{symbol}\n{symbolLine}\n{targetLine}\n{readableMessage}"),
+            context,
+        )
+
+        self.assertEqual("005930", context["symbol"])
+        self.assertEqual("삼성전자", context["symbolDisplayName"])
+        self.assertIn("삼성전자", message)
+        self.assertNotIn("005930", message)
+
     def test_notification_delivery_score_uses_user_formula(self):
         event = AlertEvent(
             "main",
@@ -3214,7 +3237,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("Apple", message)
         self.assertNotIn("━━━━━━━━", message)
         self.assertIn("<b>[관찰] 이동평균 상향 신호</b>", message)
-        self.assertIn("<code>Apple / AAPL</code>", message)
+        self.assertIn("<code>Apple</code>", message)
+        self.assertNotIn("Apple / AAPL", message)
         self.assertIn("<b>발송 기준</b>", message)
         self.assertIn("<b>데이터</b>", message)
         self.assertLess(message.index("<b>데이터</b>"), message.index("<b>발송 기준</b>"))
@@ -3245,7 +3269,8 @@ class PythonServiceTests(unittest.TestCase):
 
         message = templates.render(event.rule, alert_context(event))
 
-        self.assertIn("<b>[주의] 미장 가격 급락</b>\n<code>TSLA</code>", message)
+        self.assertIn("<b>[주의] 미장 가격 급락</b>\n<code>Tesla</code>", message)
+        self.assertNotIn("<code>TSLA</code>", message)
         self.assertNotIn("━━━━━━━━", message)
         self.assertIn("• <b>미장 가격 변동</b>: <code>-7.5%</code>, <b>가격</b>: <code>$393.45</code>", message)
         self.assertIn("• <b>거래량</b>: <code>71,917,610</code>", message)

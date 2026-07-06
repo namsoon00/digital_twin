@@ -615,6 +615,21 @@
           "type": "assignmentText"
         },
         {
+          "key": "profitTakeScoreFormula",
+          "label": "익절 점검 공식",
+          "type": "formula"
+        },
+        {
+          "key": "lossCutScoreFormula",
+          "label": "손실 관리 공식",
+          "type": "formula"
+        },
+        {
+          "key": "notificationScoreFormula",
+          "label": "알림 발송 공식",
+          "type": "formula"
+        },
+        {
           "key": "modelDecisionThresholds",
           "label": "모델 판단 기준",
           "type": "assignmentText"

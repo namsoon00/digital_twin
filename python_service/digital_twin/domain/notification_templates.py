@@ -714,8 +714,11 @@ def delivery_score_lines(context: Dict[str, object]) -> List[str]:
     threshold = format_score_value(context.get("honeyThreshold"))
     lines = [
         "발송 점수: " + score + "/" + threshold + "점",
-        "발송 점수는 이 알림을 실제로 보낼 만큼 중요한지 보는 값입니다. 기본 점수에서 알림 중요도, 종목 포함 여부, 확인할 데이터, 반복 여부를 더하고 뺍니다.",
+        "발송 점수는 이 알림을 실제로 보낼 만큼 중요한지 보는 값입니다. 사용자가 설정한 발송 공식으로 기본 점수와 데이터 중요도를 계산한 뒤, 반복 여부 같은 발송 정책을 더하고 뺍니다.",
     ]
+    formula = str(context.get("notificationScoreFormula") or "").strip()
+    if formula and formula != "rawScore":
+        lines.append("사용자 발송 공식: " + formula)
     reasons = score_reason_items(context.get("honeyReasons"))
     if reasons:
         lines.append("계산 내역: " + ", ".join(reasons))
@@ -742,7 +745,7 @@ def investment_score_lines(context: Dict[str, object]) -> List[str]:
         )
     if message_type in {"holdingTiming", "monitorDecisionChange"} and any(has_score_value(item) for item in [status_value, previous_value, current_value]):
         lines.append(
-            "보유 판단 점수: 익절 압력과 손절/손실 관리 압력을 따로 계산한 뒤, 수익 중이면 익절 압력, 손실 중이면 손절/손실 관리 압력을 선택합니다. 기본 점수에 손익률 구간, 한 업종에 몰린 정도, 팔 수 있는 수량, 수급·추세 흐름을 더하고 뺀 0~100점입니다."
+            "보유 판단 점수: 사용자가 설정한 익절 공식과 손절/손실 관리 공식을 따로 계산한 뒤, 수익 중이면 익절 점수, 손실 중이면 손실 관리 점수를 선택합니다. 공식에는 기본 점수, 손익률 구간, 한 업종에 몰린 정도, 팔 수 있는 수량, 수급·추세 흐름이 들어갑니다."
         )
     return lines
 

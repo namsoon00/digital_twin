@@ -16,7 +16,7 @@ from .parsing import parse_assignments
 from .portfolio import AccountSnapshot, AlertEvent, monitor_state_has_live_account_data, status_has_account_data_failure
 from .portfolio_calculations import DEFAULT_FX_RATES, value_in_base
 from .repositories import MonitorStateRepository
-from .strategy import StrategyModel
+from .strategy import StrategyModel, decisions_for_positions
 from .strategy_alerts import StrategyAlertMixin
 from .external_signal_alerts import ExternalSignalAlertMixin
 
@@ -31,6 +31,7 @@ def now_ms() -> int:
 class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
     def __init__(self, settings: Dict[str, str] = None):
         settings = settings or {}
+        self.settings = dict(settings)
         self.rules = parse_assignments(settings.get("alertRules", ""), DEFAULT_ALERT_RULES)
         self.thresholds = parse_assignments(settings.get("alertThresholds", ""), DEFAULT_THRESHOLDS)
         self.cadence = parse_assignments(settings.get("alertCadenceMinutes", ""), DEFAULT_CADENCE)
@@ -86,6 +87,7 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
 
     def events_for_snapshot(self, snapshot: AccountSnapshot, previous: Dict[str, object]) -> List[AlertEvent]:
         events: List[AlertEvent] = []
+        snapshot = self.snapshot_with_strategy_scores(snapshot)
         has_account_data = snapshot.has_live_account_data()
         previous_has_account_data = monitor_state_has_live_account_data(previous)
         events.extend(self.connection_events(snapshot, previous))
@@ -103,6 +105,7 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
 
     def type_check_events_for_snapshot(self, snapshot: AccountSnapshot) -> List[AlertEvent]:
         events: List[AlertEvent] = []
+        snapshot = self.snapshot_with_strategy_scores(snapshot)
         events.extend(self.connection_events(snapshot, {"status": "이전 연결 상태"}))
         events.extend(self.heartbeat_events(snapshot))
         model_events = self.model_score_events(snapshot)
@@ -163,11 +166,31 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
 
     def stamp_events(self, snapshot: AccountSnapshot, events: List[AlertEvent]) -> List[AlertEvent]:
         generated_at = str(snapshot.generated_at or "").strip()
-        if not generated_at:
-            return events
+        formula_metadata = self.notification_formula_metadata()
         for event in events:
-            event.generated_at = generated_at
+            if generated_at:
+                event.generated_at = generated_at
+            if formula_metadata:
+                event.metadata.update({key: value for key, value in formula_metadata.items() if key not in event.metadata})
         return events
+
+    def snapshot_with_strategy_scores(self, snapshot: AccountSnapshot) -> AccountSnapshot:
+        if not snapshot.has_live_account_data():
+            return snapshot
+        snapshot.decisions = decisions_for_positions(snapshot.positions, snapshot.portfolio, self.strategy_model)
+        return snapshot
+
+    def notification_formula_metadata(self) -> Dict[str, object]:
+        keys = [
+            "profitTakeScoreFormula",
+            "lossCutScoreFormula",
+            "notificationScoreFormula",
+        ]
+        return {
+            key: str(self.settings.get(key) or "").strip()
+            for key in keys
+            if str(self.settings.get(key) or "").strip()
+        }
 
     def only_rule(self, rule: str, events: List[AlertEvent]) -> List[AlertEvent]:
         return [event for event in events if event.rule == rule]

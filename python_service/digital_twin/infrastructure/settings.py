@@ -26,6 +26,9 @@ TEXT_SETTING_KEYS = [
     "fairValueFormula",
     "buyScoreFormula",
     "sellScoreFormula",
+    "profitTakeScoreFormula",
+    "lossCutScoreFormula",
+    "notificationScoreFormula",
     "modelName",
     "modelHypothesis",
     "customBuyModelFormula",
@@ -89,6 +92,13 @@ DEFAULT_SELL_SCORE_FORMULA = (
     "- orderbookScore * 0.3 - momentumScore * 0.4 - trendScore * 0.35 "
     "- investorFlowScore * 0.3) * flowWeight + expensiveBonus * valuationWeight"
 )
+DEFAULT_PROFIT_TAKE_SCORE_FORMULA = (
+    "baseScore + profitTakePnlScore + sectorConcentrationScore + sellableScore + holdingSignalScore"
+)
+DEFAULT_LOSS_CUT_SCORE_FORMULA = (
+    "baseScore + lossCutPnlScore + sectorConcentrationScore + sellableScore + holdingSignalScore"
+)
+DEFAULT_NOTIFICATION_SCORE_FORMULA = "rawScore"
 DEFAULT_FORMULA_WEIGHTS = [
     ("growthWeight", 1),
     ("qualityWeight", 1),
@@ -162,6 +172,9 @@ DEFAULT_STRATEGY_SETTINGS = {
     "fairValueFormula": "eps * targetPer * growthWeight * qualityWeight * riskWeight",
     "buyScoreFormula": DEFAULT_BUY_SCORE_FORMULA,
     "sellScoreFormula": DEFAULT_SELL_SCORE_FORMULA,
+    "profitTakeScoreFormula": DEFAULT_PROFIT_TAKE_SCORE_FORMULA,
+    "lossCutScoreFormula": DEFAULT_LOSS_CUT_SCORE_FORMULA,
+    "notificationScoreFormula": DEFAULT_NOTIFICATION_SCORE_FORMULA,
     "modelName": "나의 매수/매도 모델",
     "modelHypothesis": "수급, 가치, 내 점수, 리스크를 함께 봐서 매수 후보와 매도 후보를 분리한다.",
     "customBuyModelFormula": "buyScore * 0.35 + thesisScore * thesisWeight + confidenceScore * confidenceWeight + max(0, targetReturn) * 0.15 + undervalueBonus * valuationWeight - riskScore * riskControlWeight",
@@ -331,6 +344,9 @@ def runtime_settings() -> Dict[str, str]:
         "alertCadenceMinutes": value("alertCadenceMinutes", "ALERT_CADENCE_MINUTES"),
         "buyScoreFormula": value("buyScoreFormula", "BUY_SCORE_FORMULA", DEFAULT_STRATEGY_SETTINGS["buyScoreFormula"]),
         "sellScoreFormula": value("sellScoreFormula", "SELL_SCORE_FORMULA", DEFAULT_STRATEGY_SETTINGS["sellScoreFormula"]),
+        "profitTakeScoreFormula": value("profitTakeScoreFormula", "PROFIT_TAKE_SCORE_FORMULA", DEFAULT_STRATEGY_SETTINGS["profitTakeScoreFormula"]),
+        "lossCutScoreFormula": value("lossCutScoreFormula", "LOSS_CUT_SCORE_FORMULA", DEFAULT_STRATEGY_SETTINGS["lossCutScoreFormula"]),
+        "notificationScoreFormula": value("notificationScoreFormula", "NOTIFICATION_SCORE_FORMULA", DEFAULT_STRATEGY_SETTINGS["notificationScoreFormula"]),
         "modelName": value("modelName", "MODEL_NAME", DEFAULT_STRATEGY_SETTINGS["modelName"]),
         "modelHypothesis": value("modelHypothesis", "MODEL_HYPOTHESIS", DEFAULT_STRATEGY_SETTINGS["modelHypothesis"]),
         "customBuyModelFormula": value("customBuyModelFormula", "CUSTOM_BUY_MODEL_FORMULA", DEFAULT_STRATEGY_SETTINGS["customBuyModelFormula"]),

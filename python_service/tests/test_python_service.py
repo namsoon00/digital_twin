@@ -475,6 +475,47 @@ class PythonServiceTests(unittest.TestCase):
         self.assertGreater(buy_side["buyScore"], buy_side["sellScore"])
         self.assertGreater(sell_side["sellScore"], sell_side["buyScore"])
 
+    def test_holding_decision_uses_user_score_formulas(self):
+        loss_position = normalize_position({
+            "symbol": "000660",
+            "name": "SK하이닉스",
+            "market": "KR",
+            "currency": "KRW",
+            "marketValue": 1000,
+            "profitLossRate": -8.2,
+            "sellableQuantity": 10,
+            "sector": "반도체",
+        })
+        profit_position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "marketValue": 1200,
+            "profitLossRate": 11.5,
+            "sellableQuantity": 10,
+            "sector": "반도체",
+        })
+        model = StrategyModel({
+            "profitTakeScoreFormula": "77",
+            "lossCutScoreFormula": "88",
+        })
+
+        decisions = decisions_for_positions(
+            [loss_position, profit_position],
+            portfolio_summary([loss_position, profit_position]),
+            model,
+        )
+        loss_decision = next(item for item in decisions if item.symbol == "000660")
+        profit_decision = next(item for item in decisions if item.symbol == "005930")
+
+        self.assertEqual(88, loss_decision.exit_pressure)
+        self.assertEqual("lossCut", loss_decision.decision_basis)
+        self.assertEqual("손절 기준 확인", loss_decision.decision)
+        self.assertEqual(77, profit_decision.exit_pressure)
+        self.assertEqual("profitTake", profit_decision.decision_basis)
+        self.assertEqual("분할 매도 기준 확인", profit_decision.decision)
+
     def test_holding_decision_score_uses_flow_and_trend_context(self):
         other_position = normalize_position({
             "symbol": "AAPL",
@@ -818,6 +859,43 @@ class PythonServiceTests(unittest.TestCase):
 
         self.assertRegex(message, r"상태 .+ \([0-9.]+점\)")
         self.assertTrue(any("상태 " in item and "점)" in item for item in event.criteria))
+
+    def test_realtime_monitor_recomputes_decisions_with_user_formulas(self):
+        position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "marketValue": 1000000,
+            "quantity": 10,
+            "currentPrice": 100000,
+            "profitLossRate": -9,
+            "sector": "반도체",
+        })
+        portfolio = portfolio_summary([position])
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "ok",
+            utc_now_iso(),
+            portfolio,
+            [position],
+            decisions_for_positions([position], portfolio),
+        )
+        monitor = RealtimeMonitor({
+            "lossCutScoreFormula": "91",
+            "notificationScoreFormula": "baseScore + symbolScore",
+        })
+
+        rescored = monitor.snapshot_with_strategy_scores(snapshot)
+        stamped = monitor.stamp_events(snapshot, [
+            AlertEvent("main", "메인", "WATCH", "holdingTiming", "main:timing:005930", "삼성전자", ["상태 손절 기준 확인 (91점)"], "005930")
+        ])
+
+        self.assertEqual(91, rescored.decisions[0].exit_pressure)
+        self.assertEqual("baseScore + symbolScore", stamped[0].metadata["notificationScoreFormula"])
 
     def test_account_data_failure_suppresses_investment_change_alerts(self):
         live_position = normalize_position({
@@ -2010,6 +2088,32 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("핵심 투자 단어 +15", decision.reasons)
         self.assertIn("확인 데이터 포함 +10", decision.reasons)
 
+    def test_notification_delivery_score_uses_user_formula(self):
+        event = AlertEvent(
+            "main",
+            "메인",
+            "WATCH",
+            "monitorTrendChange",
+            "main:trend:000660",
+            "SK하이닉스",
+            ["추세: 현재 236만 원, 20일선 249만 원(-5.4%)", "수급: 거래량 4,816,364(0.5x)"],
+            "000660",
+            metadata={"notificationScoreFormula": "baseScore + symbolScore"},
+        )
+        context = alert_context(event)
+        job = NotificationJob.create(
+            "사용자 공식 검증",
+            account_id="main",
+            account_label="메인",
+            message_type=event.rule,
+            context=context,
+        )
+
+        decision = evaluate_notification_rule(job, default_notification_rule(event.rule))
+
+        self.assertEqual(45, decision.score)
+        self.assertIn("사용자 발송 공식 적용 45점", decision.reasons)
+
     def test_notification_rule_seed_migrates_default_text_conditions_to_signals(self):
         db_path = Path(self.temp.name) / "service.db"
         store = SQLiteNotificationRuleStore(db_path)
@@ -2563,7 +2667,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("기본 점수 35점", message)
         self.assertIn("수급·추세 같은 확인 데이터 포함 +10점", message)
         self.assertIn("보유 판단 점수", message)
-        self.assertIn("익절 압력과 손절/손실 관리 압력을 따로 계산", message)
+        self.assertIn("사용자가 설정한 익절 공식과 손절/손실 관리 공식", message)
         self.assertNotIn("honey", message.lower())
         self.assertNotIn("danger", message.lower())
         self.assertNotIn("caution", message.lower())

@@ -12,7 +12,7 @@ from ..domain.portfolio_calculations import (
     normalized_fx_rates,
     value_in_base,
 )
-from ..domain.strategy import holding_decision_label, holding_pressure_scores
+from ..domain.strategy import StrategyModel, holding_decision_label, holding_pressure_scores
 
 
 def clamp_score(value: float) -> int:
@@ -318,7 +318,7 @@ def profit_loss_rate(item: Dict[str, object]) -> float:
     return round((profit_loss / cost_basis) * 1000) / 10
 
 
-def toss_decision_for_holding(item: Dict[str, object], portfolio: Dict[str, object]) -> Dict[str, object]:
+def toss_decision_for_holding(item: Dict[str, object], portfolio: Dict[str, object], strategy_model: StrategyModel = None) -> Dict[str, object]:
     pnl_rate = number(item.get("profitLossRate")) if item.get("profitLossRate") is not None else profit_loss_rate(item)
     sector = str(item.get("sector") or sector_from_symbol(str(item.get("symbol") or item.get("name") or "")))
     sector_entry = next((entry for entry in portfolio.get("sectors", []) if entry.get("sector") == sector), {"ratio": 0})
@@ -354,7 +354,7 @@ def toss_decision_for_holding(item: Dict[str, object], portfolio: Dict[str, obje
         ma60_distance=number(item.get("ma60Distance")),
         sector=sector,
     )
-    pressure_scores = holding_pressure_scores(decision_position, number(sector_entry.get("ratio")))
+    pressure_scores = holding_pressure_scores(decision_position, number(sector_entry.get("ratio")), strategy_model)
     exit_pressure = clamp_score(pressure_scores.get("exitPressure"))
     label, tone = holding_decision_label(exit_pressure, pnl_rate)
     if exit_pressure >= 72:
@@ -415,13 +415,18 @@ def toss_decision_for_watch(item: Dict[str, object]) -> Dict[str, object]:
     }
 
 
-def build_toss_decision(toss: Dict[str, object], portfolio: Dict[str, object], watchlist: List[Dict[str, object]]) -> Dict[str, object]:
+def build_toss_decision(
+    toss: Dict[str, object],
+    portfolio: Dict[str, object],
+    watchlist: List[Dict[str, object]],
+    strategy_model: StrategyModel = None,
+) -> Dict[str, object]:
     positions = [
         item
         for item in toss.get("positions", [])
         if not is_cash_position(item) and number(item.get("marketValue")) > 0
     ]
-    holding_items = [toss_decision_for_holding(item, portfolio) for item in positions]
+    holding_items = [toss_decision_for_holding(item, portfolio, strategy_model) for item in positions]
     watch_items = [toss_decision_for_watch(item) for item in watchlist]
     items = sorted(holding_items + watch_items, key=lambda item: (item.get("priority", 9), -number(item.get("exitPressure"))))
     urgent_count = len([item for item in holding_items if item.get("tone") in {"danger", "caution"}])
@@ -440,6 +445,7 @@ def build_toss_decision(toss: Dict[str, object], portfolio: Dict[str, object], w
         "items": items,
         "rules": [
             "수익률과 평가손익은 토스 잔고에서 확인 가능한 값만 사용합니다.",
+            "보유 판단 점수는 사용자가 저장한 익절/손절 공식으로 계산합니다.",
             "관심 종목은 보유가 아니므로 매도 판단 대신 시세 기준 대기 상태로 둡니다.",
             "외부 텍스트 신호는 토스 전용 판단 점수에 반영하지 않습니다.",
         ],
@@ -453,6 +459,7 @@ def build_toss_lens_snapshot(
     fallback_watchlist_symbols: str = "",
     fx_rates: Dict[str, float] = None,
     enrich_symbol: Callable[[str], Dict[str, object]] = None,
+    strategy_model: StrategyModel = None,
 ) -> Dict[str, object]:
     positions = list(toss.get("positions") or [])
     portfolio = dict(toss.get("portfolio") or {}) or build_toss_portfolio(positions, dict(toss.get("account") or {}), fx_rates)
@@ -461,7 +468,7 @@ def build_toss_lens_snapshot(
         list(toss.get("watchlistQuotes") or []),
     )
     toss["watchlist"] = watchlist
-    toss_decision = build_toss_decision(toss, portfolio, watchlist)
+    toss_decision = build_toss_decision(toss, portfolio, watchlist, strategy_model)
     return {
         "generatedAt": utc_now_iso(),
         "dataMode": "mock" if mock else "live",
@@ -513,6 +520,7 @@ class FlowLensService:
     def snapshot(self, mock: bool = False, watchlist_symbols: str = "") -> Dict[str, object]:
         settings = dict(self.settings_provider() or {})
         rates = self.fx_rates_provider(settings)
+        strategy_model = StrategyModel(settings)
         if mock:
             toss = demo_toss_portfolio("웹 mock 데이터", self.demo_positions_provider)
             toss["mode"] = "mock"
@@ -524,6 +532,7 @@ class FlowLensService:
                 fallback_watchlist_symbols=settings.get("watchlistSymbols", ""),
                 fx_rates=rates,
                 enrich_symbol=self.symbol_enricher,
+                strategy_model=strategy_model,
             )
         account = self.account_repository.load()[0]
         toss = toss_portfolio_for_account(account, self.snapshot_builder, self.demo_positions_provider)
@@ -535,6 +544,7 @@ class FlowLensService:
             fallback_watchlist_symbols=settings.get("watchlistSymbols", ""),
             fx_rates=rates,
             enrich_symbol=self.symbol_enricher,
+            strategy_model=strategy_model,
         )
 
 

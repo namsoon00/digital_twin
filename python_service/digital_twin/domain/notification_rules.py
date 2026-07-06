@@ -11,12 +11,24 @@ from .market_hours import default_market_hours_enabled, default_market_hours_mar
 from .notification_templates import DEFAULT_NOTIFICATION_TEMPLATES
 from .notifications import NotificationJob
 from .scoring import fallback_terms_for_condition
+from .strategy import SafeFormula
 
 
 DEFAULT_HONEY_THRESHOLD = 45
 DEFAULT_LOW_SCORE_ACTION = "suppress"
 DEFAULT_SIMILARITY_FIELDS = ["messageType", "accountId", "symbol", "severity", "title"]
 STATE_COOLDOWN_MESSAGE_TYPES = {"externalEquityMove", "externalCryptoMove"}
+DEFAULT_NOTIFICATION_SCORE_FORMULA = "rawScore"
+FORMULA_VARIABLE_BY_CONDITION_ID = {
+    "severity_alert": "severityScore",
+    "severity_watch": "severityScore",
+    "has_symbol": "symbolScore",
+    "important_terms": "importantScore",
+    "confirming_data": "confirmingDataScore",
+    "actionable_terms": "actionableScore",
+    "body_present": "bodyScore",
+    "status_noise": "noisePenalty",
+}
 
 CONDITION_TYPE_LABELS = [
     {"type": "text_contains_any", "label": "메시지에 단어 포함", "description": "본문이나 컨텍스트에 지정 단어 중 하나가 있으면 점수를 더합니다."},
@@ -734,17 +746,40 @@ def similarity_bypass_match(
 
 
 def evaluate_notification_rule(job: NotificationJob, config: NotificationRuleConfig) -> NotificationRuleDecision:
-    score = clamp_int(config.base_score, 0, 100, default_base_score(config.message_type))
+    base_score = clamp_int(config.base_score, 0, 100, default_base_score(config.message_type))
+    score = base_score
     reasons = ["기본 " + str(score) + "점"]
+    formula_variables = {
+        "baseScore": float(base_score),
+        "severityScore": 0.0,
+        "symbolScore": 0.0,
+        "importantScore": 0.0,
+        "confirmingDataScore": 0.0,
+        "actionableScore": 0.0,
+        "bodyScore": 0.0,
+        "noisePenalty": 0.0,
+        "conditionScore": 0.0,
+        "threshold": float(clamp_int(config.threshold, 0, 100, default_threshold(config.message_type))),
+        "severityRank": float(severity_rank((job.context or {}).get("severity"))),
+        "hasSymbol": 1.0 if is_present((job.context or {}).get("symbol")) else 0.0,
+        "hasBody": 1.0 if is_present((job.context or {}).get("body")) else 0.0,
+        "signalCount": float(len((job.context or {}).get("notificationSignals") or [])),
+    }
     blob = job_search_blob(job)
     for condition in config.conditions:
         if not condition.enabled:
             continue
         if condition_matches(condition, job, blob):
             score += int(condition.score or 0)
+            formula_variables["conditionScore"] += float(condition.score or 0)
+            variable_name = FORMULA_VARIABLE_BY_CONDITION_ID.get(condition.condition_id)
+            if variable_name:
+                formula_variables[variable_name] += float(condition.score or 0)
             reasons.append(condition.label + " " + ("+" if condition.score >= 0 else "") + str(condition.score))
-    score = clamp_int(score, 0, 100, 0)
     threshold = clamp_int(config.threshold, 0, 100, default_threshold(config.message_type))
+    raw_score = clamp_int(score, 0, 100, 0)
+    formula_variables["rawScore"] = float(raw_score)
+    score = notification_formula_score(job.context or {}, formula_variables, raw_score, reasons)
     action = config.low_score_action or DEFAULT_LOW_SCORE_ACTION
     should_send = True
     if config.enabled and action == "suppress":
@@ -762,6 +797,24 @@ def evaluate_notification_rule(job: NotificationJob, config: NotificationRuleCon
         similarity_window_minutes=int(config.similarity_window_minutes or 0),
         similarity_penalty=int(config.similarity_penalty or 0),
     )
+
+
+def notification_formula_score(
+    context: Dict[str, object],
+    variables: Dict[str, float],
+    raw_score: int,
+    reasons: List[str],
+) -> int:
+    formula_text = str(context.get("notificationScoreFormula") or "").strip()
+    if not formula_text or formula_text == DEFAULT_NOTIFICATION_SCORE_FORMULA:
+        return raw_score
+    try:
+        score = clamp_int(SafeFormula(formula_text).evaluate(variables), 0, 100, raw_score)
+    except (SyntaxError, ValueError, NameError, ArithmeticError) as error:
+        reasons.append("사용자 발송 공식 오류: " + str(error))
+        return raw_score
+    reasons.append("사용자 발송 공식 적용 " + str(score) + "점")
+    return score
 
 
 def apply_similarity_rule(

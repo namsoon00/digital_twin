@@ -64,11 +64,19 @@ class StrategyModel:
         "- orderbookScore * 0.3 - momentumScore * 0.4 - trendScore * 0.35 "
         "- investorFlowScore * 0.3) * flowWeight + expensiveBonus * valuationWeight"
     )
+    default_profit_take_formula = (
+        "baseScore + profitTakePnlScore + sectorConcentrationScore + sellableScore + holdingSignalScore"
+    )
+    default_loss_cut_formula = (
+        "baseScore + lossCutPnlScore + sectorConcentrationScore + sellableScore + holdingSignalScore"
+    )
 
     def __init__(self, settings: Dict[str, str]):
         self.weights = parse_assignments(settings.get("formulaWeights", ""), {"flowWeight": 1.0, "valuationWeight": 1.0})
         self.buy_formula = SafeFormula(settings.get("buyScoreFormula") or self.default_buy_formula)
         self.sell_formula = SafeFormula(settings.get("sellScoreFormula") or self.default_sell_formula)
+        self.profit_take_formula = SafeFormula(settings.get("profitTakeScoreFormula") or self.default_profit_take_formula)
+        self.loss_cut_formula = SafeFormula(settings.get("lossCutScoreFormula") or self.default_loss_cut_formula)
 
     def feature_variables(self, variables: Dict[str, float]) -> Dict[str, float]:
         enriched = {key: number(value) for key, value in variables.items()}
@@ -151,15 +159,76 @@ class StrategyModel:
         sell_score = clamp(self.sell_formula.evaluate(merged), 0.0, 100.0)
         return {"buyScore": round(buy_score, 1), "sellScore": round(sell_score, 1), "scoreGap": round(buy_score - sell_score, 1)}
 
+    def holding_variables(self, position: Position, sector_ratio: float = 0.0) -> Dict[str, float]:
+        pnl = float(position.profit_loss_rate or 0.0)
+        buy_volume = number(position.buy_volume)
+        sell_volume = number(position.sell_volume)
+        total_volume = buy_volume + sell_volume
+        buy_share = (buy_volume / total_volume) * 100.0 if total_volume else 50.0
+        sector_concentration_score = 12.0 if sector_ratio >= 50 else 6.0 if sector_ratio >= 35 else 0.0
+        sellable_score = 4.0 if position.sellable_quantity > 0 else 0.0
+        holding_signal_score = holding_signal_adjustment(position, pnl)
+        variables = self.feature_variables({
+            "tradeStrength": position.trade_strength,
+            "volumeRatio": position.volume_ratio,
+            "buyVolume": buy_volume,
+            "sellVolume": sell_volume,
+            "buyShare": buy_share,
+            "currentPrice": position.current_price,
+            "ma20": position.ma20,
+            "ma60": position.ma60,
+            "trendDistance20": position.ma20_distance,
+            "trendDistance60": position.ma60_distance,
+            "foreignNet": number(position.foreign_net_volume) or number(position.foreign_buy_volume) - number(position.foreign_sell_volume),
+            "institutionNet": number(position.institution_net_volume) or number(position.institution_buy_volume) - number(position.institution_sell_volume),
+        })
+        variables.update({
+            "baseScore": 24.0,
+            "profitTakePnlScore": profit_take_pnl_component(pnl),
+            "lossCutPnlScore": loss_cut_pnl_component(pnl),
+            "sectorRatio": float(sector_ratio or 0.0),
+            "sectorConcentrationScore": sector_concentration_score,
+            "sellableScore": sellable_score,
+            "holdingSignalScore": holding_signal_score,
+            "commonScore": 24.0 + sector_concentration_score + sellable_score + holding_signal_score,
+            "profitLossRate": pnl,
+            "pnl": pnl,
+            "quantity": number(position.quantity),
+            "sellableQuantity": number(position.sellable_quantity),
+            "marketValue": number(position.market_value),
+            "profitLoss": number(position.profit_loss),
+            "ma20Slope": number(position.ma20_slope),
+            "ma60Slope": number(position.ma60_slope),
+            "ma20Distance": number(position.ma20_distance),
+            "ma60Distance": number(position.ma60_distance),
+        })
+        merged = dict(self.weights)
+        merged.update(variables)
+        return merged
 
-def decision_for_position(position: Position, portfolio: PortfolioSummary) -> DecisionItem:
+    def holding_pressure_scores(self, position: Position, sector_ratio: float = 0.0) -> Dict[str, object]:
+        pnl = float(position.profit_loss_rate or 0.0)
+        variables = self.holding_variables(position, sector_ratio)
+        profit_take_pressure = self.profit_take_formula.evaluate(variables)
+        loss_cut_pressure = self.loss_cut_formula.evaluate(variables)
+        decision_basis = "lossCut" if pnl < 0 else "profitTake"
+        selected = loss_cut_pressure if decision_basis == "lossCut" else profit_take_pressure
+        return {
+            "profitTakePressure": clamp(profit_take_pressure, 0.0, 100.0),
+            "lossCutPressure": clamp(loss_cut_pressure, 0.0, 100.0),
+            "exitPressure": clamp(selected, 0.0, 100.0),
+            "decisionBasis": decision_basis,
+        }
+
+
+def decision_for_position(position: Position, portfolio: PortfolioSummary, strategy_model: StrategyModel = None) -> DecisionItem:
     sector_ratio = 0.0
     for item in portfolio.sectors:
         if item.get("sector") == position.sector:
             sector_ratio = float(item.get("ratio") or 0)
             break
     pnl = position.profit_loss_rate
-    scores = holding_pressure_scores(position, sector_ratio)
+    scores = holding_pressure_scores(position, sector_ratio, strategy_model)
     pressure = scores["exitPressure"]
     label, tone = holding_decision_label(pressure, pnl)
     return DecisionItem(
@@ -180,26 +249,9 @@ def decision_for_position(position: Position, portfolio: PortfolioSummary) -> De
     )
 
 
-def holding_pressure_scores(position: Position, sector_ratio: float = 0.0) -> Dict[str, object]:
-    pnl = float(position.profit_loss_rate or 0.0)
-    common = 24.0
-    if sector_ratio >= 50:
-        common += 12
-    elif sector_ratio >= 35:
-        common += 6
-    if position.sellable_quantity > 0:
-        common += 4
-    signal_adjustment = holding_signal_adjustment(position, pnl)
-    profit_take_pressure = common + profit_take_pnl_component(pnl) + signal_adjustment
-    loss_cut_pressure = common + loss_cut_pnl_component(pnl) + signal_adjustment
-    decision_basis = "lossCut" if pnl < 0 else "profitTake"
-    selected = loss_cut_pressure if decision_basis == "lossCut" else profit_take_pressure
-    return {
-        "profitTakePressure": clamp(profit_take_pressure, 0.0, 100.0),
-        "lossCutPressure": clamp(loss_cut_pressure, 0.0, 100.0),
-        "exitPressure": clamp(selected, 0.0, 100.0),
-        "decisionBasis": decision_basis,
-    }
+def holding_pressure_scores(position: Position, sector_ratio: float = 0.0, strategy_model: StrategyModel = None) -> Dict[str, object]:
+    model = strategy_model or StrategyModel({})
+    return model.holding_pressure_scores(position, sector_ratio)
 
 
 def profit_take_pnl_component(pnl: float) -> float:
@@ -310,6 +362,10 @@ def holding_signal_adjustment(position: Position, pnl: float = None) -> float:
     return clamp(adjustment, -12.0, 18.0)
 
 
-def decisions_for_positions(positions: Iterable[Position], portfolio: PortfolioSummary) -> List[DecisionItem]:
-    decisions = [decision_for_position(item, portfolio) for item in positions if not item.is_cash() and item.market_value > 0]
+def decisions_for_positions(positions: Iterable[Position], portfolio: PortfolioSummary, strategy_model: StrategyModel = None) -> List[DecisionItem]:
+    decisions = [
+        decision_for_position(item, portfolio, strategy_model)
+        for item in positions
+        if not item.is_cash() and item.market_value > 0
+    ]
     return sorted(decisions, key=lambda item: (-item.exit_pressure, item.symbol))

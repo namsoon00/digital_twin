@@ -664,6 +664,7 @@ function checkFrontendAdminRender() {
     renderForSearch("?tab=notifications&notification=templates"),
     renderForSearch("?tab=notifications&notification=advanced"),
     renderForSearch("?tab=modeling"),
+    renderForSearch("?tab=ontology"),
     renderForSearch("?tab=modeling&strategy=data"),
     renderForSearch("?tab=modeling&strategy=rules"),
     renderForSearch("?tab=modeling&strategy=results"),
@@ -681,13 +682,14 @@ function checkFrontendAdminRender() {
     const notificationTemplateHtml = pages[6];
     const notificationAdvancedHtml = pages[7];
     const modelingHtml = pages[8];
-    const modelingDataHtml = pages[9];
-    const modelingRulesHtml = pages[10];
-    const modelingResultsHtml = pages[11];
-    const monitoringHtml = pages[12];
-    const settingsHtml = pages[13];
-    const staticAccountHtml = pages[14];
-    const newAccountHtml = pages[15];
+    const ontologyHtml = pages[9];
+    const modelingDataHtml = pages[10];
+    const modelingRulesHtml = pages[11];
+    const modelingResultsHtml = pages[12];
+    const monitoringHtml = pages[13];
+    const settingsHtml = pages[14];
+    const staticAccountHtml = pages[15];
+    const newAccountHtml = pages[16];
 
     assertOk(overviewHtml.indexOf("계정·알림·모델 운영 콘솔") < 0, "이전 고정 운영 콘솔 제목이 아직 렌더링됩니다.");
     assertOk(overviewHtml.indexOf("<h1>홈</h1>") >= 0, "홈 탭 제목이 상단에 렌더링되지 않았습니다.");
@@ -701,7 +703,7 @@ function checkFrontendAdminRender() {
     assertOk(code.indexOf('data-action="open-settings"') < 0, "topbar 설정 버튼이 상단 관리 탭과 중복됩니다.");
     assertOk(code.indexOf("pushState") >= 0 && code.indexOf("popstate") >= 0, "탭 이동이 브라우저 뒤로가기와 동기화되지 않았습니다.");
     assertOk(code.indexOf("restoreTabBarPosition") >= 0 && code.indexOf("tabBarScrollLeft") >= 0, "하단 탭 위치 복원 로직이 없습니다.");
-    assertOk(code.indexOf('var bottomTabIds = ["overview", "watchlist", "monitoring", "modeling"];') >= 0, "하단 핵심 탭에 투자전략이 배치되지 않았습니다.");
+    assertOk(code.indexOf('var bottomTabIds = ["overview", "watchlist", "monitoring", "modeling", "ontology"];') >= 0, "하단 핵심 탭에 투자전략과 온톨로지가 배치되지 않았습니다.");
     assertOk(code.indexOf('var managementTabIds = ["accounts", "symbols", "notifications", "settings"];') >= 0, "상단 운영 메뉴 탭 구성이 역할과 맞지 않습니다.");
     assertOk(styles.indexOf(".app-nav-tab.active") >= 0 && styles.indexOf(".app-nav-menu") >= 0, "앱 네비게이션 활성 탭과 모바일 관리 메뉴 스타일 규칙이 없습니다.");
     assertOk(styles.indexOf("@media (min-width: 861px)") >= 0 && styles.indexOf(".tab-bar {\n    display: none;") >= 0, "데스크톱에서 하단 탭을 숨기는 규칙이 없습니다.");
@@ -711,7 +713,7 @@ function checkFrontendAdminRender() {
     assertOk(code.indexOf("realtime.status") >= 0, "웹소켓 상태 메시지를 처리하지 않습니다.");
     assertOk(code.indexOf("realtimeEventSnackbar") >= 0, "웹소켓 이벤트를 스낵바로 연결하지 않습니다.");
     assertOk(overviewHtml.indexOf("실시간") >= 0, "홈 요약에 실시간 연결 상태가 렌더링되지 않습니다.");
-    ["overview", "accounts", "watchlist", "symbols", "monitoring", "notifications", "modeling", "settings"].forEach(function (tab) {
+    ["overview", "accounts", "watchlist", "symbols", "monitoring", "notifications", "modeling", "ontology", "settings"].forEach(function (tab) {
       assertOk(overviewHtml.indexOf('data-tab="' + tab + '"') >= 0, "새 탭이 렌더링되지 않았습니다: " + tab);
     });
     assertOk(overviewHtml.indexOf('data-tab="more"') < 0, "더보기 탭이 아직 렌더링됩니다.");
@@ -829,6 +831,9 @@ function checkFrontendAdminRender() {
     assertOk(modelingHtml.indexOf("strategy-section-tabs") >= 0, "투자전략 내부 섹션 탭이 렌더링되지 않았습니다.");
     assertOk(styles.indexOf(".strategy-section-tabs") >= 0 && styles.indexOf(".strategy-section-bar") >= 0, "투자전략 내부 섹션 스타일이 정의되지 않았습니다.");
     assertOk(modelingHtml.indexOf('data-strategy-section="data"') >= 0 && modelingHtml.indexOf('data-strategy-section="rules"') >= 0 && modelingHtml.indexOf('data-strategy-section="results"') >= 0, "투자전략 내부 섹션 이동 버튼이 없습니다.");
+    assertOk(modelingHtml.indexOf('data-strategy-section="ontology"') < 0, "온톨로지가 투자전략 내부 섹션에 남아 있습니다.");
+    assertOk(ontologyHtml.indexOf("ontology-view") >= 0 && ontologyHtml.indexOf("Ontology Strategy") >= 0, "온톨로지 상위 탭이 렌더링되지 않았습니다.");
+    assertOk(ontologyHtml.indexOf("TBox") >= 0 && ontologyHtml.indexOf("ABox") >= 0, "온톨로지 탭에 TBox/ABox 요약이 없습니다.");
     assertOk(code.indexOf("writeStrategySectionHistory") >= 0 && code.indexOf("strategySectionUrl") >= 0, "투자전략 내부 탭 URL 동기화 경로가 없습니다.");
     assertOk(modelingHtml.indexOf("model-guide-panel") >= 0, "개요 탭에 모델 운영 가이드가 렌더링되지 않았습니다.");
     assertOk(modelingHtml.indexOf("투자전략 모델링 관리") >= 0, "개요 탭에 투자전략 모델링 관리 제목이 렌더링되지 않았습니다.");

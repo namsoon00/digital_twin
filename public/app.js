@@ -210,11 +210,12 @@
     { id: "monitoring", label: "모니터링", description: "보유·타이밍" },
     { id: "notifications", label: "알림", description: "메시지 타입" },
     { id: "modeling", label: "투자전략", description: "모델링 관리" },
+    { id: "ontology", label: "온톨로지", description: "관계 그래프" },
     { id: "settings", label: "설정", description: "런타임 환경" }
   ];
   var appBrandName = "Orbit Alpha";
   var appBrandSubtitle = "포트폴리오 신호 궤도 관제";
-  var bottomTabIds = ["overview", "watchlist", "monitoring", "modeling"];
+  var bottomTabIds = ["overview", "watchlist", "monitoring", "modeling", "ontology"];
   var managementTabIds = ["accounts", "symbols", "notifications", "settings"];
   var notificationSections = [
     { id: "status", label: "현황", description: "발송 판단" },
@@ -225,7 +226,6 @@
   var strategySections = [
     { id: "overview", label: "개요", description: "읽는 법" },
     { id: "data", label: "데이터", description: "준비도 점검" },
-    { id: "ontology", label: "온톨로지", description: "관계·AI 의견" },
     { id: "rules", label: "판단 기준", description: "공식·가중치" },
     { id: "results", label: "모델 결과", description: "종목별 판단" }
   ];
@@ -5803,6 +5803,9 @@
     if (state.activeTab === "modeling") {
       return renderStrategyModelingPage(snapshot);
     }
+    if (state.activeTab === "ontology") {
+      return renderOntologyPage(snapshot);
+    }
     if (state.activeTab === "monitoring") {
       return [
         '<section class="admin-grid monitoring-view">',
@@ -5834,6 +5837,14 @@
     ].join("");
   }
 
+  function renderOntologyPage(snapshot) {
+    return [
+      '<section class="admin-grid ontology-view">',
+      renderOntologyStrategyPanel(snapshot),
+      '</section>'
+    ].join("");
+  }
+
   function renderStrategySectionBar() {
     var section = activeStrategySectionMeta();
     return [
@@ -5856,7 +5867,6 @@
   function renderStrategySectionContent(snapshot) {
     var section = normalizeStrategySection(state.activeStrategySection);
     if (section === "data") return renderStrategyDataPanel(snapshot);
-    if (section === "ontology") return renderOntologyStrategyPanel(snapshot);
     if (section === "rules") {
       return [
         renderAdminModelingPanel(snapshot),
@@ -5907,6 +5917,7 @@
       renderHomeAction("accounts", "계정", configuredAccounts + "개 API 연결", "토스·텔레그램"),
       renderHomeAction("notifications", "알림", enabledRules + "개 활성", "템플릿 테스트"),
       renderHomeAction("modeling", "투자전략", settingValue("modelName") || "모델링 관리", "판단 임계값"),
+      renderHomeAction("ontology", "온톨로지", "TBox/ABox", "관계 그래프"),
       '</div>',
       '</div>',
       '<div class="admin-stat-grid home-stat-grid">',

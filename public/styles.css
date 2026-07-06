@@ -25,7 +25,7 @@
   --ds-color-orbit-signal: #008a63;
   --ds-color-star-line: rgba(71, 85, 105, 0.08);
   --ds-color-orbit-glow: rgba(31, 94, 255, 0.08);
-  --ds-shadow-panel: 0 1px 2px rgba(17, 24, 39, 0.05);
+  --ds-shadow-panel: none;
   --ds-shadow-floating: 0 14px 38px rgba(17, 24, 39, 0.2);
   --ds-focus: #1f5eff;
   --ds-space-1: 4px;
@@ -37,8 +37,8 @@
   --ds-space-7: 16px;
   --ds-space-8: 18px;
   --ds-space-9: 24px;
-  --ds-radius-control: 8px;
-  --ds-radius-panel: 8px;
+  --ds-radius-control: 6px;
+  --ds-radius-panel: 6px;
   --ds-control-height-sm: 30px;
   --ds-control-height-md: 38px;
   --ds-control-height-lg: 44px;
@@ -97,7 +97,7 @@ html[data-theme="dark"] {
   --ds-color-orbit-signal: #2dd4a3;
   --ds-color-star-line: rgba(125, 178, 255, 0.13);
   --ds-color-orbit-glow: rgba(125, 178, 255, 0.22);
-  --ds-shadow-panel: 0 1px 2px rgba(0, 0, 0, 0.3), 0 10px 24px rgba(0, 0, 0, 0.22);
+  --ds-shadow-panel: none;
   --ds-shadow-floating: 0 14px 38px rgba(0, 0, 0, 0.38);
   --ds-focus: #7db2ff;
 }
@@ -122,6 +122,7 @@ body {
   color: var(--ink);
   font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-variant-numeric: tabular-nums;
+  line-height: 1.45;
   letter-spacing: 0;
   overflow-x: hidden;
   -webkit-font-smoothing: antialiased;
@@ -242,12 +243,19 @@ a {
   min-width: 0;
 }
 
-.eyebrow,
-.label {
+.eyebrow {
   margin: 0 0 5px;
   color: var(--blue);
   font-size: 12px;
   font-weight: 800;
+  text-transform: uppercase;
+}
+
+.label {
+  margin: 0 0 5px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
   text-transform: uppercase;
 }
 
@@ -990,7 +998,7 @@ h3 {
   gap: 14px;
   padding: 14px 16px;
   border-bottom: 1px solid var(--line);
-  background: linear-gradient(180deg, color-mix(in srgb, var(--panel-soft) 72%, var(--panel)), var(--panel));
+  background: color-mix(in srgb, var(--panel) 88%, var(--panel-soft) 12%);
   min-width: 0;
 }
 

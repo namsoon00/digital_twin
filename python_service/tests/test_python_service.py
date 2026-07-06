@@ -475,6 +475,60 @@ class PythonServiceTests(unittest.TestCase):
         self.assertGreater(buy_side["buyScore"], buy_side["sellScore"])
         self.assertGreater(sell_side["sellScore"], sell_side["buyScore"])
 
+    def test_holding_decision_score_uses_flow_and_trend_context(self):
+        other_position = normalize_position({
+            "symbol": "AAPL",
+            "name": "Apple",
+            "market": "US",
+            "currency": "USD",
+            "marketValue": 4000,
+            "sector": "AI/플랫폼",
+        })
+        neutral_position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "marketValue": 1000,
+            "profitLossRate": 6,
+            "sellableQuantity": 10,
+            "sector": "반도체",
+        })
+        weak_signal_position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "marketValue": 1000,
+            "profitLossRate": 6,
+            "sellableQuantity": 10,
+            "volumeRatio": 1.8,
+            "buyVolume": 300,
+            "sellVolume": 700,
+            "foreignBuyVolume": 100,
+            "foreignSellVolume": 500,
+            "institutionBuyVolume": 80,
+            "institutionSellVolume": 340,
+            "tradeStrength": 78,
+            "ma20Distance": -4,
+            "ma20Slope": -1.2,
+            "ma60Slope": -0.7,
+            "sector": "반도체",
+        })
+
+        neutral_decision = next(item for item in decisions_for_positions(
+            [neutral_position, other_position],
+            portfolio_summary([neutral_position, other_position]),
+        ) if item.symbol == "005930")
+        weak_signal_decision = next(item for item in decisions_for_positions(
+            [weak_signal_position, other_position],
+            portfolio_summary([weak_signal_position, other_position]),
+        ) if item.symbol == "005930")
+
+        self.assertEqual("hold", neutral_decision.tone)
+        self.assertEqual("caution", weak_signal_decision.tone)
+        self.assertGreaterEqual(weak_signal_decision.exit_pressure - neutral_decision.exit_pressure, 12)
+
     def test_portfolio_summary_converts_usd_holdings_to_krw_base(self):
         kr_position = normalize_position({
             "symbol": "005930",

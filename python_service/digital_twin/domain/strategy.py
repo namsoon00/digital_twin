@@ -176,6 +176,7 @@ def decision_for_position(position: Position, portfolio: PortfolioSummary) -> De
         score += 6
     if position.sellable_quantity > 0:
         score += 4
+    score += holding_signal_adjustment(position, pnl)
     pressure = clamp(score, 0.0, 100.0)
     if pressure >= 72:
         label, tone = ("손절 기준 확인", "danger") if pnl <= -8 else ("분할 매도 기준 확인", "danger")
@@ -198,6 +199,74 @@ def decision_for_position(position: Position, portfolio: PortfolioSummary) -> De
         decision=label,
         tone=tone,
     )
+
+
+def holding_signal_adjustment(position: Position, pnl: float = None) -> float:
+    pnl_rate = position.profit_loss_rate if pnl is None else float(pnl or 0.0)
+    adjustment = 0.0
+    buy_volume = number(position.buy_volume)
+    sell_volume = number(position.sell_volume)
+    total_volume = buy_volume + sell_volume
+    volume_ratio = number(position.volume_ratio)
+    if total_volume:
+        buy_share = (buy_volume / total_volume) * 100.0
+        sell_share = 100.0 - buy_share
+        if sell_share >= 62 and volume_ratio >= 1.2:
+            adjustment += 6
+        elif sell_share >= 56:
+            adjustment += 3
+        if buy_share >= 62 and volume_ratio >= 1.2:
+            adjustment -= 5
+        elif buy_share >= 56:
+            adjustment -= 2
+    foreign_net = number(position.foreign_net_volume) or number(position.foreign_buy_volume) - number(position.foreign_sell_volume)
+    institution_net = number(position.institution_net_volume) or number(position.institution_buy_volume) - number(position.institution_sell_volume)
+    investor_base = abs(foreign_net) + abs(institution_net)
+    if investor_base:
+        smart_money_ratio = (foreign_net + institution_net) / investor_base
+        if smart_money_ratio <= -0.35:
+            adjustment += 5
+        elif smart_money_ratio <= -0.15:
+            adjustment += 2
+        elif smart_money_ratio >= 0.35:
+            adjustment -= 4
+        elif smart_money_ratio >= 0.15:
+            adjustment -= 2
+    trade_strength = number(position.trade_strength)
+    if trade_strength:
+        if trade_strength <= 85:
+            adjustment += 3
+        elif trade_strength >= 120:
+            adjustment -= 3
+    ma20_distance = number(position.ma20_distance)
+    ma60_distance = number(position.ma60_distance)
+    ma20_slope = number(position.ma20_slope)
+    ma60_slope = number(position.ma60_slope)
+    if ma20_distance:
+        if ma20_distance <= -5:
+            adjustment += 7
+        elif ma20_distance <= -2:
+            adjustment += 4
+        elif ma20_distance >= 8 and pnl_rate >= 10:
+            adjustment += 3
+        elif ma20_distance > 0 and pnl_rate > -8:
+            adjustment -= 2
+    if ma60_distance:
+        if ma60_distance <= -4:
+            adjustment += 4
+        elif ma60_distance > 0 and pnl_rate > -8:
+            adjustment -= 1
+    if ma20_slope:
+        if ma20_slope <= -1:
+            adjustment += 4
+        elif ma20_slope >= 0.5 and pnl_rate > -8:
+            adjustment -= 2
+    if ma60_slope:
+        if ma60_slope <= -0.5:
+            adjustment += 2
+        elif ma60_slope > 0 and pnl_rate > -8:
+            adjustment -= 1
+    return clamp(adjustment, -12.0, 18.0)
 
 
 def decisions_for_positions(positions: Iterable[Position], portfolio: PortfolioSummary) -> List[DecisionItem]:

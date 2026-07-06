@@ -12,6 +12,7 @@ from ..domain.portfolio_calculations import (
     normalized_fx_rates,
     value_in_base,
 )
+from ..domain.strategy import holding_signal_adjustment
 
 
 def clamp_score(value: float) -> int:
@@ -339,6 +340,37 @@ def toss_decision_for_holding(item: Dict[str, object], portfolio: Dict[str, obje
         score += 6
     if sellable > 0:
         score += 4
+    score += holding_signal_adjustment(Position(
+        symbol=str(item.get("symbol") or ""),
+        name=str(item.get("name") or ""),
+        market=str(item.get("market") or ""),
+        currency=str(item.get("currency") or ""),
+        quantity=number(item.get("quantity")),
+        sellable_quantity=sellable,
+        current_price=number(item.get("currentPrice")),
+        market_value=number(item.get("marketValue")),
+        profit_loss=number(item.get("profitLoss")),
+        profit_loss_rate=pnl_rate,
+        trade_strength=number(item.get("tradeStrength") or item.get("executionStrength")),
+        trading_value=number(item.get("tradingValue")),
+        volume=number(item.get("volume")),
+        volume_ratio=number(item.get("volumeRatio")),
+        buy_volume=number(item.get("buyVolume")),
+        sell_volume=number(item.get("sellVolume")),
+        foreign_buy_volume=number(item.get("foreignBuyVolume")),
+        foreign_sell_volume=number(item.get("foreignSellVolume")),
+        foreign_net_volume=number(item.get("foreignNetVolume")),
+        institution_buy_volume=number(item.get("institutionBuyVolume")),
+        institution_sell_volume=number(item.get("institutionSellVolume")),
+        institution_net_volume=number(item.get("institutionNetVolume")),
+        ma20=number(item.get("ma20")),
+        ma60=number(item.get("ma60")),
+        ma20_slope=number(item.get("ma20Slope")),
+        ma60_slope=number(item.get("ma60Slope")),
+        ma20_distance=number(item.get("ma20Distance")),
+        ma60_distance=number(item.get("ma60Distance")),
+        sector=sector,
+    ), pnl_rate)
     exit_pressure = clamp_score(score)
     if exit_pressure >= 72:
         label, tone, priority = ("손절 기준 확인", "danger", 1) if pnl_rate <= -8 else ("분할 매도 기준 확인", "danger", 1)

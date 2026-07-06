@@ -42,8 +42,8 @@
   --ds-control-height-sm: 30px;
   --ds-control-height-md: 38px;
   --ds-control-height-lg: 44px;
-  --ds-shell-width: 1280px;
-  --ds-sidebar-width: 224px;
+  --ds-shell-width: 1720px;
+  --ds-sidebar-width: 256px;
   --bg: var(--ds-color-bg);
   --ink: var(--ds-color-ink);
   --muted: var(--ds-color-muted);
@@ -216,17 +216,27 @@ a {
 .shell {
   position: relative;
   z-index: 1;
-  width: min(var(--ds-shell-width), calc(100vw - 32px));
+  display: grid;
+  grid-template-columns: var(--ds-sidebar-width) minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  column-gap: 24px;
+  row-gap: 16px;
+  width: min(var(--ds-shell-width), calc(100vw - 48px));
   margin: 0 auto;
-  padding: 18px 0 calc(32px + var(--bottom-tabs-height) + env(safe-area-inset-bottom));
+  padding: 24px 0 36px;
 }
 
 .topbar {
+  grid-column: 2;
+  grid-row: 1;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  margin-bottom: 16px;
+  min-height: 76px;
+  margin-bottom: 0;
+  padding: 2px 0 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 78%, transparent);
   min-width: 0;
 }
 
@@ -253,7 +263,7 @@ p {
 }
 
 h1 {
-  font-size: 28px;
+  font-size: 30px;
   line-height: 1.12;
 }
 
@@ -287,14 +297,19 @@ h3 {
 }
 
 .app-nav {
-  position: relative;
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  position: sticky;
+  top: 24px;
+  z-index: 40;
+  grid-column: 1;
+  grid-row: 1 / span 2;
+  display: flex;
+  flex-direction: column;
   gap: 12px;
-  align-items: center;
+  align-self: start;
+  min-height: calc(100vh - 48px);
   min-width: 0;
-  margin-bottom: 14px;
-  padding: 8px;
+  margin-bottom: 0;
+  padding: 14px;
   border: 1px solid color-mix(in srgb, var(--line) 76%, var(--ds-color-orbit-line) 24%);
   border-radius: var(--ds-radius-panel);
   background:
@@ -306,17 +321,19 @@ h3 {
 
 .app-nav-brand {
   display: grid;
-  grid-template-columns: 34px minmax(0, 1fr);
+  grid-template-columns: 40px minmax(0, 1fr);
   align-items: center;
-  gap: 9px;
-  min-width: 148px;
+  gap: 10px;
+  min-width: 0;
+  padding: 2px 2px 14px;
+  border-bottom: 1px solid var(--line);
 }
 
 .app-brand-mark {
   position: relative;
   display: block;
-  width: 32px;
-  height: 32px;
+  width: 38px;
+  height: 38px;
   border: 1px solid color-mix(in srgb, var(--ds-color-orbit-line) 34%, transparent);
   border-radius: 8px;
   background:
@@ -348,8 +365,8 @@ h3 {
 
 .app-brand-mark span {
   position: absolute;
-  left: 13px;
-  top: 13px;
+  left: 16px;
+  top: 16px;
   width: 6px;
   height: 6px;
   border-radius: 50%;
@@ -364,7 +381,7 @@ h3 {
 
 .app-brand-copy strong {
   color: var(--ink);
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 900;
   white-space: nowrap;
 }
@@ -379,29 +396,34 @@ h3 {
 }
 
 .app-nav-tabs {
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
   gap: 4px;
   min-width: 0;
-  padding: 4px;
+  padding: 2px 0;
   border-radius: 8px;
-  background: var(--panel-soft);
-  overflow: hidden;
+  background: transparent;
+  overflow: visible;
 }
 
 .app-nav-tab,
 .app-nav-menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
   min-width: 0;
-  min-height: 36px;
+  min-height: 40px;
+  width: 100%;
   border: 0;
   border-radius: 7px;
   background: transparent;
   color: var(--muted);
-  padding: 0 10px;
-  font-size: 12px;
+  padding: 0 12px;
+  font-size: 13px;
   font-weight: 850;
   white-space: nowrap;
+  text-align: left;
   cursor: pointer;
   transition: background-color 120ms ease, color 120ms ease, transform 120ms ease;
 }
@@ -426,18 +448,22 @@ h3 {
 }
 
 .app-nav-divider {
-  width: 1px;
-  height: 20px;
-  margin: 0 2px;
+  width: 100%;
+  height: 1px;
+  margin: 6px 0;
   background: var(--line);
 }
 
 .app-nav-tools {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: stretch;
   gap: 8px;
   min-width: 0;
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
 }
 
 .app-nav-menu {
@@ -503,7 +529,9 @@ h3 {
 }
 
 .workspace-layout {
-  display: block;
+  grid-column: 2;
+  grid-row: 2;
+  min-width: 0;
 }
 
 .workspace-main {
@@ -1605,8 +1633,7 @@ h3 {
   align-items: start;
 }
 
-.settings-overview-panel,
-.settings-external-data-panel {
+.settings-overview-panel {
   grid-column: 1 / -1;
 }
 
@@ -1685,7 +1712,7 @@ h3 {
 .snackbar {
   position: fixed;
   right: 18px;
-  bottom: calc(18px + var(--bottom-tabs-height));
+  bottom: 18px;
   z-index: 120;
   width: min(420px, calc(100vw - 32px));
   min-height: 44px;
@@ -1719,23 +1746,33 @@ h3 {
 
 .admin-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: repeat(12, minmax(0, 1fr));
   align-items: start;
-  gap: 14px;
+  gap: 16px;
 }
 
 .home-view {
-  grid-template-columns: minmax(0, 1.08fr) minmax(360px, 0.92fr);
   align-items: start;
 }
 
-.home-view .admin-overview-panel,
+.home-view .admin-overview-panel {
+  grid-column: span 8;
+}
+
+.home-view .account-directory-panel {
+  grid-column: span 4;
+}
+
+.home-view .account-watchlist-panel {
+  grid-column: span 5;
+}
+
 .home-view .admin-monitoring-panel {
-  grid-column: 1 / -1;
+  grid-column: span 7;
 }
 
 .accounts-view {
-  grid-template-columns: 1fr;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
 }
 
 .accounts-view .account-manager-panel {
@@ -1743,22 +1780,19 @@ h3 {
 }
 
 .monitoring-view {
-  grid-template-columns: minmax(0, 0.9fr) minmax(420px, 1.1fr);
+  grid-template-columns: repeat(12, minmax(0, 1fr));
   grid-template-areas:
-    "status alerts"
-    "universe universe"
-    "portfolio portfolio";
+    "status status status status alerts alerts alerts alerts alerts alerts alerts alerts"
+    "universe universe universe universe universe universe universe universe portfolio portfolio portfolio portfolio";
   align-items: start;
 }
 
 .monitoring-view .admin-monitoring-panel {
   grid-area: status;
-  grid-column: auto;
 }
 
 .monitoring-view .alert-panel {
   grid-area: alerts;
-  grid-column: auto;
 }
 
 .monitoring-view .monitoring-instrument-panel {
@@ -1788,6 +1822,66 @@ h3 {
 .strategy-data-panel {
   grid-column: 1 / -1;
   align-self: start;
+}
+
+.accounts-view .admin-account-panel,
+.watchlist-view .account-watchlist-panel,
+.symbol-universe-view .symbol-universe-panel,
+.ontology-view .ontology-panel {
+  grid-column: 1 / -1;
+}
+
+.notifications-view .notification-section-bar,
+.strategy-view .strategy-section-bar {
+  grid-column: 1 / -1;
+}
+
+.notifications-view .notification-decision-panel {
+  grid-column: span 8;
+}
+
+.notifications-view .notification-command-panel {
+  grid-column: span 4;
+}
+
+.notifications-view .admin-message-panel,
+.notifications-view .notification-template-manager-panel {
+  grid-column: 1 / -1;
+}
+
+.notifications-view .notification-advanced-rule-panel,
+.notifications-view .notification-threshold-panel,
+.notifications-view .alert-delivery-panel {
+  grid-column: span 6;
+}
+
+.strategy-view .model-guide-panel {
+  grid-column: span 7;
+}
+
+.strategy-view .model-beginner-panel,
+.strategy-view .strategy-data-panel {
+  grid-column: span 5;
+}
+
+.strategy-view .admin-modeling-panel,
+.strategy-view .model-panel,
+.strategy-view .model-version-panel,
+.strategy-view .model-preview-panel {
+  grid-column: 1 / -1;
+}
+
+.settings-view .settings-overview-panel {
+  grid-column: 1 / -1;
+}
+
+.settings-view .settings-environment-panel,
+.settings-view .settings-delivery-panel {
+  grid-column: span 6;
+}
+
+.settings-view .settings-external-data-panel {
+  grid-column: 1 / -1;
 }
 
 .symbol-universe-view {
@@ -2275,7 +2369,7 @@ h3 {
 
 .admin-account-layout {
   display: grid;
-  grid-template-columns: minmax(380px, 0.9fr) minmax(0, 1.1fr);
+  grid-template-columns: minmax(400px, 0.85fr) minmax(0, 1.15fr);
   gap: 16px;
   padding: 16px;
 }
@@ -2541,7 +2635,7 @@ h3 {
 
 .account-watchlist-workbench {
   display: grid;
-  grid-template-columns: minmax(250px, 0.72fr) minmax(0, 1.28fr);
+  grid-template-columns: minmax(320px, 0.72fr) minmax(0, 1.28fr);
   gap: 14px;
   padding: 16px;
 }
@@ -6377,6 +6471,147 @@ h3 {
   }
 }
 
+@media (max-width: 1180px) and (min-width: 861px) {
+  .shell {
+    display: block;
+    width: min(1180px, calc(100vw - 32px));
+    padding: 18px 0 32px;
+  }
+
+  .topbar {
+    min-height: 0;
+    margin-bottom: 14px;
+    padding: 0;
+    border-bottom: 0;
+  }
+
+  .app-nav {
+    position: sticky;
+    top: 12px;
+    z-index: 70;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 10px;
+    align-items: center;
+    min-height: 0;
+    margin-bottom: 14px;
+    padding: 8px;
+  }
+
+  .app-nav-brand {
+    grid-template-columns: 34px minmax(0, 1fr);
+    gap: 9px;
+    min-width: 148px;
+    padding: 0;
+    border-bottom: 0;
+  }
+
+  .app-brand-mark {
+    width: 32px;
+    height: 32px;
+  }
+
+  .app-brand-mark span {
+    left: 13px;
+    top: 13px;
+  }
+
+  .app-brand-copy strong {
+    font-size: 15px;
+  }
+
+  .app-nav-tabs {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 4px;
+    padding: 4px;
+    background: var(--panel-soft);
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .app-nav-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .app-nav-tab,
+  .app-nav-menu-item {
+    justify-content: center;
+    min-height: 36px;
+    width: auto;
+    padding: 0 10px;
+    font-size: 12px;
+    text-align: center;
+  }
+
+  .app-nav-divider {
+    width: 1px;
+    height: 20px;
+    margin: 0 2px;
+  }
+
+  .app-nav-tools {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 0;
+    padding-top: 0;
+    border-top: 0;
+  }
+
+  .workspace-layout {
+    grid-column: auto;
+    grid-row: auto;
+  }
+
+  .admin-grid {
+    grid-template-columns: repeat(8, minmax(0, 1fr));
+    gap: 14px;
+  }
+
+  .home-view .admin-overview-panel,
+  .home-view .admin-monitoring-panel,
+  .accounts-view .admin-account-panel,
+  .watchlist-view .account-watchlist-panel,
+  .symbol-universe-view .symbol-universe-panel,
+  .ontology-view .ontology-panel,
+  .notifications-view .notification-section-bar,
+  .strategy-view .strategy-section-bar,
+  .notifications-view .notification-decision-panel,
+  .notifications-view .notification-command-panel,
+  .notifications-view .admin-message-panel,
+  .notifications-view .notification-template-manager-panel,
+  .notifications-view .notification-advanced-rule-panel,
+  .notifications-view .notification-threshold-panel,
+  .notifications-view .alert-delivery-panel,
+  .strategy-view .admin-modeling-panel,
+  .strategy-view .model-panel,
+  .strategy-view .model-version-panel,
+  .strategy-view .model-preview-panel,
+  .settings-view .settings-overview-panel,
+  .settings-view .settings-external-data-panel {
+    grid-column: 1 / -1;
+  }
+
+  .home-view .account-directory-panel,
+  .home-view .account-watchlist-panel,
+  .strategy-view .model-guide-panel,
+  .strategy-view .model-beginner-panel,
+  .strategy-view .strategy-data-panel,
+  .settings-view .settings-environment-panel,
+  .settings-view .settings-delivery-panel {
+    grid-column: span 4;
+  }
+
+  .monitoring-view {
+    grid-template-columns: repeat(8, minmax(0, 1fr));
+    grid-template-areas:
+      "status status status alerts alerts alerts alerts alerts"
+      "universe universe universe universe universe universe universe universe"
+      "portfolio portfolio portfolio portfolio portfolio portfolio portfolio portfolio";
+  }
+}
+
 @media (max-width: 1180px) and (min-width: 981px) {
   .admin-account-layout {
     grid-template-columns: minmax(340px, 0.88fr) minmax(0, 1.12fr);
@@ -6449,6 +6684,7 @@ h3 {
   }
 
   .shell {
+    display: block;
     width: 100%;
     max-width: 720px;
     min-height: 100dvh;
@@ -6484,6 +6720,37 @@ h3 {
       "alerts"
       "universe"
       "portfolio";
+  }
+
+  .home-view .admin-overview-panel,
+  .home-view .account-directory-panel,
+  .home-view .account-watchlist-panel,
+  .home-view .admin-monitoring-panel,
+  .accounts-view .admin-account-panel,
+  .watchlist-view .account-watchlist-panel,
+  .symbol-universe-view .symbol-universe-panel,
+  .ontology-view .ontology-panel,
+  .notifications-view .notification-section-bar,
+  .notifications-view .notification-decision-panel,
+  .notifications-view .notification-command-panel,
+  .notifications-view .admin-message-panel,
+  .notifications-view .notification-template-manager-panel,
+  .notifications-view .notification-advanced-rule-panel,
+  .notifications-view .notification-threshold-panel,
+  .notifications-view .alert-delivery-panel,
+  .strategy-view .strategy-section-bar,
+  .strategy-view .model-guide-panel,
+  .strategy-view .model-beginner-panel,
+  .strategy-view .strategy-data-panel,
+  .strategy-view .admin-modeling-panel,
+  .strategy-view .model-panel,
+  .strategy-view .model-version-panel,
+  .strategy-view .model-preview-panel,
+  .settings-view .settings-overview-panel,
+  .settings-view .settings-environment-panel,
+  .settings-view .settings-delivery-panel,
+  .settings-view .settings-external-data-panel {
+    grid-column: 1 / -1;
   }
 
   .settings-smart-save {
@@ -6551,9 +6818,13 @@ h3 {
   }
 
   .topbar {
+    grid-column: auto;
+    grid-row: auto;
     display: grid;
     margin: 2px 0 12px;
     padding: 0 2px;
+    min-height: 0;
+    border-bottom: 0;
   }
 
   .topbar .eyebrow {
@@ -6581,6 +6852,10 @@ h3 {
     position: sticky;
     top: calc(8px + env(safe-area-inset-top));
     z-index: 70;
+    display: grid;
+    flex-direction: initial;
+    grid-column: auto;
+    grid-row: auto;
     grid-template-columns: minmax(0, 1fr) auto auto;
     gap: 8px;
     min-height: 54px;
@@ -6600,6 +6875,8 @@ h3 {
 
   .app-nav-brand {
     min-width: 0;
+    padding: 0;
+    border-bottom: 0;
   }
 
   .app-brand-subtitle {
@@ -6616,6 +6893,14 @@ h3 {
 
   .app-nav-tools .status-pill {
     display: none;
+  }
+
+  .app-nav-tools {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 0;
+    padding-top: 0;
+    border-top: 0;
   }
 
   .app-nav-tools .icon-button {
@@ -6658,6 +6943,10 @@ h3 {
 
   .panel {
     box-shadow: none;
+  }
+
+  .snackbar {
+    bottom: calc(18px + var(--bottom-tabs-height) + env(safe-area-inset-bottom));
   }
 
   .panel-head {

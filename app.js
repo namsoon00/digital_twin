@@ -1905,8 +1905,24 @@
       if (!match) return 0;
       return match[1] === "+" ? 1 : -1;
     }
+    function dominantSignedDirection(value) {
+      var text = String(value || "");
+      var regex = /([+-])\s*(\d+(?:\.\d+)?)/g;
+      var match;
+      var dominant = 0;
+      while ((match = regex.exec(text)) !== null) {
+        var sign = match[1] === "-" ? -1 : 1;
+        var numeric = parseFloat(match[2]);
+        if (!Number.isNaN(numeric) && Math.abs(numeric) > Math.abs(dominant)) {
+          dominant = sign * numeric;
+        }
+      }
+      if (dominant > 0) return 1;
+      if (dominant < 0) return -1;
+      return 0;
+    }
     function titleFromChange(value, positive, negative, neutral) {
-      var direction = signedDirection(value);
+      var direction = dominantSignedDirection(value);
       if (direction > 0) return positive;
       if (direction < 0) return negative;
       return neutral;

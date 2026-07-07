@@ -413,9 +413,9 @@ class PythonServiceTests(unittest.TestCase):
             if path.endswith("/inquire-price"):
                 return {"rt_cd": "0", "output": {"stck_prpr": "72000", "acml_vol": "1000"}}
             if path.endswith("/inquire-ccnl"):
-                return {"rt_cd": "0", "output": [{"stck_prpr": "72000", "tday_rltv": "118.5", "cntg_vol": "120"}]}
+                return {"rt_cd": "0", "output": [{"stck_prpr": "72000", "tday_rltv": "118.5", "total_shnu_qty": "900", "total_seln_qty": "700"}]}
             if path.endswith("/inquire-investor"):
-                return {"rt_cd": "0", "output": [{"frgn_ntby_qty": "700", "orgn_ntby_qty": "300", "prsn_ntby_qty": "-400"}]}
+                return {"rt_cd": "0", "output": {"frgn_ntby_qty": "700", "orgn_ntby_qty": "300", "prsn_ntby_qty": "-400"}}
             if path.endswith("/inquire-asking-price-exp-ccn"):
                 return {"rt_cd": "0", "output": {}}
             return {"rt_cd": "0", "output": {}}
@@ -439,6 +439,11 @@ class PythonServiceTests(unittest.TestCase):
         positions, _watchlist = provider.enrich_collections([samsung], [])
 
         self.assertEqual(118.5, positions[0].trade_strength)
+        self.assertEqual(900, positions[0].buy_volume)
+        self.assertEqual(700, positions[0].sell_volume)
+        self.assertEqual(700, positions[0].foreign_net_volume)
+        self.assertEqual(300, positions[0].institution_net_volume)
+        self.assertEqual(-400, positions[0].individual_net_volume)
         self.assertEqual(1, provider.diagnostics["partialCached"])
         self.assertEqual(1, provider.diagnostics["live"])
         self.assertIn("/uapi/domestic-stock/v1/quotations/inquire-ccnl", calls)
@@ -2767,7 +2772,7 @@ class PythonServiceTests(unittest.TestCase):
             "holdingTiming",
             "main:timing:MSTR",
             "Strategy",
-            ["상태 분할 매도 기준 확인 (80점)", "손익 +18.5%"],
+            ["상태 분할 매도 기준 확인 (80점)", "손익 +18.5%", "온톨로지: 보유 유지 · 관계 압력 21점", "thesis: 내부 용어 노출"],
             "MSTR",
             metadata={
                 "ontologyRelationContext": relation_context,
@@ -2783,6 +2788,9 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("부족 데이터", message)
         self.assertIn("체결강도", message)
         self.assertIn("온톨로지 판단", message)
+        self.assertNotIn("온톨로지: 온톨로지", message)
+        self.assertNotIn("온톨로지: 보유 유지", message)
+        self.assertNotIn("thesis:", message)
         self.assertNotIn("모델 공식", message)
 
     def test_notification_delivery_score_uses_user_formula(self):
@@ -4061,6 +4069,20 @@ class PythonServiceTests(unittest.TestCase):
             monitor.flow_context_line(position),
             monitor.investor_context_line(position),
         ]))
+
+        position.update({
+            "volume": 5004985,
+            "volumeRatio": 0.2097,
+            "tradingValue": 1516201852750,
+            "tradeStrength": 70.87,
+            "orderbookBidVolume": 509290,
+            "orderbookAskVolume": 76754,
+            "bidAskImbalance": 73.806,
+        })
+        flow_line = monitor.flow_context_line(position)
+        self.assertIn("체결강도 70.9", flow_line)
+        self.assertIn("호가잔량 매수", flow_line)
+        self.assertIn("호가불균형 +73.8%", flow_line)
 
     def test_notification_schedules_use_real_monitor_sent_history(self):
         registry = AccountRegistry()

@@ -366,6 +366,8 @@ class KISMarketSignalProvider:
             merge_if_present(signal, normalize_ccnl(ccnl))
         if isinstance(investor, list):
             merge_if_present(signal, normalize_investor(investor))
+        elif isinstance(investor, dict):
+            merge_if_present(signal, normalize_investor([investor]))
         if isinstance(orderbook, dict):
             merge_if_present(signal, normalize_orderbook(orderbook))
         if not signal:
@@ -383,7 +385,7 @@ class KISMarketSignalProvider:
         if signal.get("tradeStrength"):
             included.append("체결강도")
         if signal.get("buyVolume") is not None or signal.get("sellVolume") is not None:
-            included.append("매수/매도 체결량")
+            included.append("방향별 체결량")
         if any(signal.get(key) is not None for key in [
             "foreignBuyVolume",
             "foreignSellVolume",
@@ -588,6 +590,24 @@ def normalize_ccnl(items: List[Dict[str, object]]) -> Dict[str, object]:
         "currentPrice": optional_number(latest, ["stck_prpr"]),
         "changeRate": optional_number(latest, ["prdy_ctrt"]),
     }
+    aggregate_buy = optional_number(latest, [
+        "total_shnu_qty",
+        "shnu_cntg_smtn",
+        "shnu_cntg_qty",
+        "tday_shnu_vol",
+        "tday_buy_vol",
+    ])
+    aggregate_sell = optional_number(latest, [
+        "total_seln_qty",
+        "seln_cntg_smtn",
+        "seln_cntg_qty",
+        "tday_seln_vol",
+        "tday_sell_vol",
+    ])
+    if aggregate_buy is not None and aggregate_sell is not None:
+        signal["buyVolume"] = aggregate_buy
+        signal["sellVolume"] = aggregate_sell
+        return signal
     buy_volume = 0.0
     sell_volume = 0.0
     has_buy = False

@@ -115,6 +115,18 @@ SEPARATE_DATA_LABELS = {
     "평가",
     "보유",
 }
+ONTOLOGY_INTERNAL_DATA_PREFIXES = (
+    "관계 신호",
+    "성립 규칙",
+    "AI 질문",
+    "온톨로지:",
+    "온톨로지 판단",
+    "thesis:",
+    "판단 근거:",
+    "관계 충돌:",
+    "주요 위험:",
+    "부족 데이터 ",
+)
 
 SEVERITY_LABELS = {
     "INFO": "정보",
@@ -295,6 +307,17 @@ def ordered_data_entries(raw_lines: List[str]) -> List[Dict[str, object]]:
                 "order": 100 + index,
             })
     return sorted(entries, key=lambda item: (int(item["order"]), int(item["index"])))
+
+
+def is_ontology_internal_data_line(line: str) -> bool:
+    text = str(line or "").strip()
+    return any(text.startswith(prefix) for prefix in ONTOLOGY_INTERNAL_DATA_PREFIXES)
+
+
+def notification_data_lines(raw_lines: List[str], metadata: Dict[str, object]) -> List[str]:
+    if not ontology_relation_context(metadata):
+        return list(raw_lines)
+    return [line for line in raw_lines if not is_ontology_internal_data_line(line)]
 
 
 def data_pair_text(label: str, value: str, rich: bool = False) -> str:
@@ -832,7 +855,8 @@ def alert_context(event: AlertEvent) -> Dict[str, object]:
     signals = notification_signal_labels(event.rule, raw_lines)
     trigger_block_rows = criterion_rows(criteria, False)
     trigger_block = ("발송 기준\n" + trigger_block_rows) if trigger_block_rows else ""
-    data_rows = plain_data_rows(raw_lines)
+    display_raw_lines = notification_data_lines(raw_lines, metadata)
+    data_rows = plain_data_rows(display_raw_lines)
     data_block = ("데이터\n" + data_rows) if data_rows else ""
     ontology_lines = ontology_rule_lines(metadata)
     ai_lines = ai_prompt_lines(metadata)
@@ -857,7 +881,7 @@ def alert_context(event: AlertEvent) -> Dict[str, object]:
     readable_message = "\n".join(part for part in readable_parts if str(part).strip() or part == "").strip()
     escaped_target = html.escape(target_value, quote=False)
     telegram_trigger_rows = criterion_rows(criteria, True)
-    telegram_data_lines = telegram_data_rows(raw_lines)
+    telegram_data_lines = telegram_data_rows(display_raw_lines)
     telegram_ontology_block = telegram_block_from_lines("관계 규칙", ontology_lines)
     telegram_ai_prompt_block = telegram_block_from_lines("AI 분석 기준", ai_lines)
     telegram_missing_data_block = telegram_block_from_lines("부족 데이터", missing_lines)

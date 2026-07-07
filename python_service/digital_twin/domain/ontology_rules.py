@@ -492,7 +492,7 @@ def position_signal_facts(
     if not facts["tradeStrength"]:
         missing.append(_missing("tradeStrength", "체결강도", "매수·매도 체결 압력을 직접 반영하지 못합니다."))
     if not total_execution_volume:
-        missing.append(_missing("executionVolume", "매수/매도 체결량", "매수·매도 체결 비중을 판단하지 못합니다."))
+        missing.append(_missing("executionVolume", "방향별 매수/매도 체결량", "체결강도는 확인해도 매수·매도 방향별 체결 비중은 직접 판단하지 못합니다."))
     if not facts["investorFlowBase"]:
         missing.append(_missing("investorFlow", "투자자별 수급", "외국인·기관·개인 순매수 방향을 확인하지 못합니다."))
     if facts["isBtcSensitive"] and not btc:

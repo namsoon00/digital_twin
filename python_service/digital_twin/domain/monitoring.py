@@ -316,13 +316,13 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
         if not opinion:
             return []
         lines = [
-            "온톨로지: " + str(opinion.get("action") or "-")
+            "온톨로지 판단: " + str(opinion.get("action") or "-")
             + " · 관계 압력 " + compact_number(float(opinion.get("ontology_pressure") or opinion.get("ontologyPressure") or 0)) + "점"
             + " · 확신 " + compact_number(float(opinion.get("conviction") or 0)) + "점",
         ]
         thesis = str(opinion.get("thesis") or "").strip()
         if thesis:
-            lines.append("thesis: " + thesis)
+            lines.append("판단 근거: " + thesis)
         contradictions = opinion.get("contradictions") if isinstance(opinion.get("contradictions"), list) else []
         if contradictions:
             lines.append("관계 충돌: " + " · ".join(str(item) for item in contradictions[:2]))
@@ -550,10 +550,10 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
         return number(position.get("volume_ratio") if "volume_ratio" in position else position.get("volumeRatio"))
 
     def position_trade_strength(self, position: Dict[str, object]) -> float:
-        return number(position.get("trade_strength") if "trade_strength" in position else position.get("tradeStrength"))
+        return number(position.get("trade_strength")) or number(position.get("tradeStrength"))
 
     def position_trading_value(self, position: Dict[str, object]) -> float:
-        value = number(position.get("trading_value") if "trading_value" in position else position.get("tradingValue"))
+        value = number(position.get("trading_value")) or number(position.get("tradingValue"))
         if value:
             return value
         volume = self.position_volume(position)
@@ -591,6 +591,16 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
         trading_value = self.position_trading_value(position)
         if trading_value > 0:
             parts.append("거래액 " + money(trading_value, self.position_currency(position)))
+        trade_strength = self.position_trade_strength(position)
+        if trade_strength > 0:
+            parts.append("체결강도 " + compact_number(trade_strength))
+        orderbook_bid = number(position.get("orderbook_bid_volume")) or number(position.get("orderbookBidVolume"))
+        orderbook_ask = number(position.get("orderbook_ask_volume")) or number(position.get("orderbookAskVolume"))
+        if orderbook_bid or orderbook_ask:
+            parts.append("호가잔량 매수 " + compact_number(orderbook_bid) + "/매도 " + compact_number(orderbook_ask))
+        bid_ask_imbalance = number(position.get("bid_ask_imbalance")) or number(position.get("bidAskImbalance"))
+        if bid_ask_imbalance:
+            parts.append("호가불균형 " + signed_pct(bid_ask_imbalance))
         if not parts:
             return ""
         return "수급: " + ", ".join(parts)

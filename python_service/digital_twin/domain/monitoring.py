@@ -3,7 +3,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Dict, List
 
-from .alert_formatting import compact_number, money, pct_delta, signed_number, signed_pct
+from .alert_formatting import compact_number, money, pct_delta, price_money, signed_number, signed_pct
 from .market_data import number
 from .message_types import (
     DEFAULT_ALERT_RULES,
@@ -569,13 +569,13 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
         price = self.position_current_price(position)
         if not price:
             return ""
-        return "현재가: " + money(price, self.position_currency(position))
+        return "현재가: " + price_money(price, self.position_currency(position))
 
     def average_price_line(self, position: Dict[str, object]) -> str:
         price = self.position_average_price(position)
         if not price:
             return ""
-        return "평단가: " + money(price, self.position_currency(position))
+        return "평단가: " + price_money(price, self.position_currency(position))
 
     def profit_rate_line(self, position: Dict[str, object]) -> str:
         if not self.has_position_field(position, "profit_loss_rate", "profitLossRate"):
@@ -732,7 +732,7 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
         ma_value = self.position_ma(position, period)
         if not ma_value:
             return ""
-        label = str(period) + "일선 " + money(ma_value, self.position_currency(position))
+        label = str(period) + "일선 " + price_money(ma_value, self.position_currency(position))
         distance = self.ma_distance(position, period)
         value = compact_number(abs(distance))
         if distance > 0:
@@ -1025,7 +1025,7 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
                 self.current_price_line(item),
             ]
             if before_price:
-                lines.append("직전 " + money(before_price, currency) + " · 변화 " + signed_pct(price_delta))
+                lines.append("직전 " + price_money(before_price, currency) + " · 변화 " + signed_pct(price_delta))
             lines.extend([
                 self.flow_context_line(item),
                 self.trend_context_line(item),
@@ -1042,7 +1042,7 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
                 symbol,
                 criteria=self.criteria(
                     "관심종목 가격 변화율 ±" + self.threshold_text("watchlistPriceDelta", "%") + " 이상",
-                    ("변화 " + signed_pct(price_delta) + ", 현재가 " + money(price, currency)) if before_price else "현재가 " + money(price, currency) + " 수집",
+                    ("변화 " + signed_pct(price_delta) + ", 현재가 " + price_money(price, currency)) if before_price else "현재가 " + price_money(price, currency) + " 수집",
                 ),
             ))
         return events

@@ -1,6 +1,6 @@
 from typing import Dict, List
 
-from .alert_formatting import compact_number, money, signed_number, signed_pct
+from .alert_formatting import compact_number, money, price_money, signed_number, signed_pct
 from .market_data import number
 from .ontology_rules import AI_PROMPT_REGISTRY_VERSION, strength_label
 from .portfolio import AccountSnapshot, AlertEvent
@@ -255,7 +255,7 @@ class ExternalSignalAlertMixin:
             if position_context and price:
                 position_context["current_price"] = price
                 position_context["currency"] = position_context.get("currency") or "USD"
-            price_lines = self.holding_price_lines(position_context) if position_context else ["현재가: " + money(price, "USD")]
+            price_lines = self.holding_price_lines(position_context) if position_context else ["현재가: " + price_money(price, "USD")]
             events.append(AlertEvent(
                 snapshot.account_id,
                 snapshot.account_label,
@@ -273,7 +273,7 @@ class ExternalSignalAlertMixin:
                 symbol_label,
                 criteria=self.criteria(
                     "미장 가격 변동률 ±" + self.threshold_text("externalEquityChangePct", "%") + " 이상",
-                    "가격 변동 " + signed_pct(change) + ", 현재가 " + money(price, "USD"),
+                    "가격 변동 " + signed_pct(change) + ", 현재가 " + price_money(price, "USD"),
                 ),
                 metadata={
                     "market": "US",
@@ -329,7 +329,7 @@ class ExternalSignalAlertMixin:
                 "크립토 변동",
                 [
                     change_label + " " + change_value,
-                    "크립토 가격 " + money(price, "USD"),
+                    "크립토 가격 " + price_money(price, "USD"),
                     "크립토 거래액 " + money(volume24h, "USD"),
                     "출처 " + provider,
                     "MSTR/STRC 등 비트코인 민감 종목 점검",

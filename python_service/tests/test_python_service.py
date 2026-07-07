@@ -1722,8 +1722,8 @@ class PythonServiceTests(unittest.TestCase):
         message = event.message()
 
         self.assertRegex(message, r"상태 .+ \([0-9.]+점\)")
-        self.assertIn("현재가: 10만 원", message)
-        self.assertIn("평단가: 11만 원", message)
+        self.assertIn("현재가: 100,000원", message)
+        self.assertIn("평단가: 110,000원", message)
         self.assertIn("수익률: -9.0%", message)
         self.assertTrue(any("상태 " in item and "점)" in item for item in event.criteria))
         self.assertTrue(any("수익률 -9.0%" in item for item in event.criteria))
@@ -2080,10 +2080,10 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("20일선 상향 돌파", message)
         self.assertIn("60일선 상향 돌파", message)
         self.assertIn("20/60일선 골든크로스", message)
-        self.assertIn("현재가: 11만 원", message)
-        self.assertIn("평단가: 10만 원", message)
+        self.assertIn("현재가: 106,000원", message)
+        self.assertIn("평단가: 100,000원", message)
         self.assertIn("수익률: +5.0%", message)
-        self.assertIn("추세: 20일선 10만 원보다 1.9% 높음, 60일선 10만 원보다 2.9% 높음", message)
+        self.assertIn("추세: 20일선 104,000원보다 1.9% 높음, 60일선 103,000원보다 2.9% 높음", message)
         self.assertIn("수급: 거래량 40,000(2.1x), 거래액 24억 원", message)
         self.assertIn("투자자: 외국인 +70,000(매수 510,000/매도 440,000), 기관 +35,000(매수 350,000/매도 315,000)", message)
         self.assertIn("설정: 20일/60일 이동평균 돌파, 크로스, 또는 현재가가 이동평균보다 8% 이상 높거나 낮을 때", event.criteria)
@@ -2574,8 +2574,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("DGS10", messages["externalMacroShift"])
         self.assertIn("externalDartDisclosure", messages)
         self.assertIn("주요사항보고서", messages["externalDartDisclosure"])
-        self.assertIn("현재가: 10만 원", messages["externalDartDisclosure"])
-        self.assertIn("평단가: 10만 원", messages["externalDartDisclosure"])
+        self.assertIn("현재가: 100,000원", messages["externalDartDisclosure"])
+        self.assertIn("평단가: 95,000원", messages["externalDartDisclosure"])
         self.assertIn("수익률: +5.3%", messages["externalDartDisclosure"])
         self.assertIn("externalDataConnection", messages)
         criteria_by_rule = {event.rule: event.criteria for event in events}
@@ -3290,7 +3290,7 @@ class PythonServiceTests(unittest.TestCase):
             "monitorTrendChange",
             "main:trend:000660",
             "SK하이닉스",
-            ["추세: 현재 236만 원, 20일선 249만 원(-5.4%)", "수급: 거래량 4,816,364(0.5x)"],
+            ["추세: 현재 2,360,000원, 20일선 2,490,000원(-5.4%)", "수급: 거래량 4,816,364(0.5x)"],
             "000660",
         )
         context = alert_context(event)
@@ -3430,7 +3430,7 @@ class PythonServiceTests(unittest.TestCase):
             "monitorTrendChange",
             "main:trend:000660",
             "SK하이닉스",
-            ["추세: 현재 236만 원, 20일선 249만 원(-5.4%)", "수급: 거래량 4,816,364(0.5x)"],
+            ["추세: 현재 2,360,000원, 20일선 2,490,000원(-5.4%)", "수급: 거래량 4,816,364(0.5x)"],
             "000660",
             metadata={"notificationScoreFormula": "baseScore + symbolScore"},
         )
@@ -3713,7 +3713,7 @@ class PythonServiceTests(unittest.TestCase):
             "holdingTiming",
             "main:timing:000660:1",
             "SK하이닉스",
-            ["상태 손절 기준 확인 (63점)", "손익 -8.4%", "수급: 거래량 6,373,255(0.6x)", "추세: 현재 236만 원"],
+            ["상태 손절 기준 확인 (63점)", "손익 -8.4%", "수급: 거래량 6,373,255(0.6x)", "추세: 현재 2,360,000원"],
             "000660",
             metadata={"holdingDecision": "손절 기준 확인", "holdingDecisionBasis": "lossCut", "holdingDecisionScore": 63, "profitLossRate": -8.4},
         )
@@ -3724,7 +3724,7 @@ class PythonServiceTests(unittest.TestCase):
             "holdingTiming",
             "main:timing:000660:2",
             "SK하이닉스",
-            ["상태 손절 기준 확인 (63점)", "손익 -8.4%", "수급: 거래량 6,373,255(0.6x)", "추세: 현재 236만 원"],
+            ["상태 손절 기준 확인 (63점)", "손익 -8.4%", "수급: 거래량 6,373,255(0.6x)", "추세: 현재 2,360,000원"],
             "000660",
             metadata={"holdingDecision": "손절 기준 확인", "holdingDecisionBasis": "lossCut", "holdingDecisionScore": 63, "profitLossRate": -8.4},
         )
@@ -4344,7 +4344,7 @@ class PythonServiceTests(unittest.TestCase):
                 "상태: 손실 관리 기준 확인 (80점)",
                 "손익: -9.5%",
                 "수급: 거래량 230,091(0x), 거래액 294427억 원",
-                "추세: 현재 9만 원, 20일선 10만 원(-10.0%), 60일선 11만 원(-18.2%)",
+                "추세: 현재 90,000원, 20일선 100,000원(-10.0%), 60일선 110,000원(-18.2%)",
             ],
             "000660",
         )
@@ -4699,8 +4699,8 @@ class PythonServiceTests(unittest.TestCase):
         message = templates.render(event.rule, alert_context(event))
 
         self.assertTrue(event.metadata.get("formulaAudits"))
-        self.assertIn("• <b>현재가</b>: <code>7만 원</code>", message)
-        self.assertIn("• <b>평단가</b>: <code>7만 원</code>", message)
+        self.assertIn("• <b>현재가</b>: <code>71,000원</code>", message)
+        self.assertIn("• <b>평단가</b>: <code>74,000원</code>", message)
         self.assertIn("• <b>수익률</b>: <code>-4.1%</code>", message)
         self.assertIn("매수 공식(buyScoreFormula)", message)
         self.assertIn("매도 공식(sellScoreFormula)", message)
@@ -4739,7 +4739,7 @@ class PythonServiceTests(unittest.TestCase):
             "main:trend:005930",
             "삼성전자",
             [
-                "추세: 현재 11만 원, 20일선 10만 원(+1.9%), 60일선 10만 원(+2.9%)",
+                "추세: 현재 106,000원, 20일선 104,000원(+1.9%), 60일선 103,000원(+2.9%)",
                 "수급: 거래량 40,000(2.1x), 거래액 24억 원",
                 "투자자: 외국인 +70,000(매수 510,000/매도 440,000), 기관 +35,000(매수 350,000/매도 315,000)",
             ],
@@ -4749,7 +4749,7 @@ class PythonServiceTests(unittest.TestCase):
         message = templates.render(event.rule, alert_context(event))
 
         flow_line = "• <b>수급</b>: <code>거래량 40,000(2.1x), 거래액 24억 원</code>"
-        trend_line = "• <b>추세</b>: <code>현재 11만 원, 20일선 10만 원(+1.9%), 60일선 10만 원(+2.9%)</code>"
+        trend_line = "• <b>추세</b>: <code>현재 106,000원, 20일선 104,000원(+1.9%), 60일선 103,000원(+2.9%)</code>"
         investor_line = "• <b>투자자</b>: <code>외국인 +70,000(매수 510,000/매도 440,000), 기관 +35,000(매수 350,000/매도 315,000)</code>"
         self.assertIn(flow_line + "\n" + trend_line + "\n" + investor_line, message)
         self.assertLess(message.index(flow_line), message.index(trend_line))
@@ -4767,7 +4767,7 @@ class PythonServiceTests(unittest.TestCase):
             "main:timing:000660",
             "SK하이닉스",
             [
-                "추세: 현재 15만 원, 20일선 14만 원(+4.2%)",
+                "추세: 현재 150,000원, 20일선 144,000원(+4.2%)",
                 "손익 -3.2%",
                 "수급: 거래량 31,000(1.7x), 거래액 48억 원",
                 "상태 조건부 보유 (52점)",
@@ -4784,7 +4784,7 @@ class PythonServiceTests(unittest.TestCase):
         status_line = "• <b>상태</b>: <code>조건부 보유 (52점)</code>"
         profit_line = "• <b>손익</b>: <code>-3.2%</code>"
         flow_line = "• <b>수급</b>: <code>거래량 31,000(1.7x), 거래액 48억 원</code>"
-        trend_line = "• <b>추세</b>: <code>현재 15만 원, 20일선 14만 원(+4.2%)</code>"
+        trend_line = "• <b>추세</b>: <code>현재 150,000원, 20일선 144,000원(+4.2%)</code>"
         self.assertIn(status_line + "\n" + profit_line + "\n" + flow_line + "\n" + trend_line, message)
         self.assertLess(message.index(status_line), message.index(profit_line))
         self.assertLess(message.index(flow_line), message.index(trend_line))

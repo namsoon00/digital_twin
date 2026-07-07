@@ -21,6 +21,18 @@ def money(value: float, currency: str = "KRW") -> str:
     return format(round(amount), ",") + "원"
 
 
+def price_money(value: float, currency: str = "KRW") -> str:
+    amount = number(value)
+    code = str(currency or "KRW").upper()
+    if amount <= 0:
+        return "-"
+    if code == "KRW":
+        return format(round(amount), ",") + "원"
+    if code == "USD":
+        return "$" + format(round(amount, 2), ",").rstrip("0").rstrip(".")
+    return format(round(amount, 2), ",").rstrip("0").rstrip(".") + " " + code
+
+
 def signed_pct(value: float, suffix: str = "%") -> str:
     rounded = round(float(value or 0), 1)
     return ("+" if rounded > 0 else "") + str(rounded) + suffix

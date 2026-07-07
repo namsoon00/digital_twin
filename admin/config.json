@@ -13,7 +13,7 @@
     "공유 미리보기에서는 서버 설정과 계정 DB 쓰기를 차단합니다."
   ],
   "localData": {
-    "generatedAt": "2026-07-06T14:05:13.874748Z",
+    "generatedAt": "2026-07-07T11:47:20.604581Z",
     "sources": {
       "serviceDb": "data/service.db",
       "serviceDbExists": true,
@@ -63,16 +63,16 @@
       "buyScoreFormula": "50 + (executionScore * 0.42 + directionalVolumePressure * 0.9 + buyShareScore * 0.55 + orderbookScore * 0.32 + momentumScore * 0.35 + trendScore * 0.45 + investorFlowScore * 0.35) * flowWeight + undervalueBonus * valuationWeight - expensivePenalty * valuationWeight",
       "sellScoreFormula": "50 + (-executionScore * 0.38 - directionalVolumePressure * 0.85 - buyShareScore * 0.55 - orderbookScore * 0.3 - momentumScore * 0.4 - trendScore * 0.35 - investorFlowScore * 0.3) * flowWeight + expensiveBonus * valuationWeight",
       "profitTakeScoreFormula": "baseScore + profitTakePnlScore + sectorConcentrationScore + sellableScore + holdingSignalScore",
-      "lossCutScoreFormula": "baseScore + lossCutPnlScore + sectorConcentrationScore + sellableScore + holdingSignalScore",
+      "lossCutScoreFormula": "baseScore + lossCutPnlScore + sectorConcentrationScore + sellableScore + holdingSignalScore + lossGuardConfirmationScore - lossGuardWeakEvidencePenalty",
       "notificationScoreFormula": "rawScore",
       "modelName": "나의 매수/매도 모델",
       "modelHypothesis": "수급, 가치, 내 점수, 리스크를 함께 봐서 매수 후보와 매도 후보를 분리한다.",
-      "customBuyModelFormula": "buyScore * 0.35 + thesisScore * thesisWeight + confidenceScore * confidenceWeight + max(0, targetReturn) * 0.15 + undervalueBonus * valuationWeight - riskScore * riskControlWeight",
-      "customSellModelFormula": "sellScore * 0.35 + riskScore * riskControlWeight + expensivePenalty * valuationWeight + max(0, -targetReturn) * 0.2 - thesisScore * 0.1",
-      "formulaWeights": "growthWeight=1\nqualityWeight=1\nriskWeight=1\nflowWeight=1\nvaluationWeight=1\nthesisWeight=0.25\nconfidenceWeight=0.15\nriskControlWeight=0.35",
+      "customBuyModelFormula": "buyScore * 0.35 + buyReasonScore * buyReasonWeight + confidenceScore * confidenceWeight + max(0, targetReturn) * 0.15 + undervalueBonus * valuationWeight - riskScore * riskControlWeight",
+      "customSellModelFormula": "sellScore * 0.35 + riskScore * riskControlWeight + expensivePenalty * valuationWeight + max(0, -targetReturn) * 0.2 - buyReasonScore * 0.1",
+      "formulaWeights": "growthWeight=1\nqualityWeight=1\nriskWeight=1\nflowWeight=1\nvaluationWeight=1\nbuyReasonWeight=0.25\nconfidenceWeight=0.15\nriskControlWeight=0.35",
       "decisionThresholds": "buyCandidate=78\nchaseCaution=70\nstrongHold=72\nsellTrim=70\nriskReduce=66\nsellWatch=64",
       "modelDecisionThresholds": "modelBuy=74\nmodelAdd=70\nmodelSell=72\nmodelReduce=64\nmodelHold=55",
-      "alertThresholds": "modelBuyScore=74\nmodelSellScore=72\nwatchlistBuyScore=74\nmodelScoreGap=15\nvolumeRatioHigh=2\nbuyShareHigh=65\nsellShareHigh=65\norderbookImbalance=25\nmomentumUp=3\nmomentumDown=-3\nprofitRateHigh=20\nlossRateLow=-8\npositionWeightHigh=30\nsectorWeightHigh=50\nmarketCashLow=10\nrecordGain=10\nrecordLoss=-5\npriceNearPercent=1\nstaleMinutes=30\npendingOrderMinutes=30\nwatchlistPriceDelta=3\nmonitorPnlDelta=2\nmonitorValueDelta=5\nmonitorMaDistance=8\nmonitorCashDelta=10\nmonitorExitPressureDelta=15\nexternalEquityChangePct=3\nexternalCryptoChange24hPct=4\nexternalCryptoChange7dPct=10\nexternalBitcoinChange24hPct=3\nexternalBitcoinChange7dPct=4\nexternalMacroRateDeltaBp=15",
+      "alertThresholds": "modelBuyScore=74\nmodelSellScore=72\nwatchlistBuyScore=74\nmodelScoreGap=15\nvolumeRatioHigh=2\nbuyShareHigh=65\nsellShareHigh=65\norderbookImbalance=25\nmomentumUp=3\nmomentumDown=-3\nprofitRateHigh=20\nlossRateLow=-8\nlossRateBufferPct=1\nlossGuardVolumeConfirmRatio=0.8\nlossGuardMa60SupportPct=0\nlossGuardWeakEvidencePenalty=30\npositionWeightHigh=30\nsectorWeightHigh=50\nmarketCashLow=10\nrecordGain=10\nrecordLoss=-5\npriceNearPercent=1\nstaleMinutes=30\npendingOrderMinutes=30\nwatchlistPriceDelta=3\nmonitorPnlDelta=2\nmonitorValueDelta=5\nmonitorMaDistance=8\nmonitorCashDelta=10\nmonitorExitPressureDelta=15\nexternalEquityChangePct=3\nexternalCryptoChange24hPct=4\nexternalCryptoChange7dPct=10\nexternalBitcoinChange24hPct=3\nexternalBitcoinChange7dPct=4\nexternalMacroRateDeltaBp=15",
       "alertCadenceMinutes": "priceBuyLimit=10\npriceStop=10\npriceTrim=10\nmodelBuy=10\nmodelSell=10\nmodelScoreGap=10\nmodelVersionDrift=10\nflowTradeStrength=10\nflowVolume=10\nflowBuyShare=10\nflowSellShare=10\nflowOrderbook=10\ntrendMomentum=10\ntrendPullback=10\nholdingProfit=10\nholdingLoss=10\nholdingConcentration=10\nsectorConcentration=10\nmarketCashLow=10\nrecordGain=10\nrecordLoss=10\ndataFreshness=10\ntossConnection=10\norderPending=10\norderReject=10\nholdingTiming=10\nmonitorHeartbeat=10\nmonitorConnection=10\nmonitorPositionChange=10\nmonitorPnlChange=10\nmonitorValueChange=10\nmonitorTrendChange=10\nmonitorCashChange=10\nmonitorDecisionChange=10\nexternalEquityMove=10\nexternalCryptoMove=10\nexternalMacroShift=10\nexternalDartDisclosure=10\nexternalDataConnection=10",
       "modelReviewUseCodex": "1",
       "modelReviewTimeoutSeconds": "180",
@@ -83,9 +83,17 @@
       "kisMarketSignalCacheMinutes": "10",
       "kisMarketSignalGapSeconds": "0.35",
       "externalApiFetchIntervalMinutes": "60",
+      "externalAlphaEnabled": "1",
+      "externalCoinGeckoEnabled": "1",
+      "externalFredEnabled": "1",
       "externalFredSeries": "DGS10,DGS2,DFF",
       "externalCryptoIds": "bitcoin,ethereum",
       "externalAlphaMaxSymbols": "3",
+      "externalSecEnabled": "1",
+      "externalSecMaxSymbols": "3",
+      "externalSecCompanyCiks": "AAPL=0000320193\nMSFT=0000789019\nNVDA=0001045810\nTSLA=0001318605\nAMD=0000002488\nMSTR=0001050446",
+      "externalSecUserAgent": "DigitalTwin/1.0 local-contact",
+      "externalDartEnabled": "1",
       "externalDartLookbackDays": "14",
       "externalDartCorpCodes": "005930=00126380\n000660=00164779\n035420=00266961",
       "dartDisclosureAiAnalysisEnabled": "1",
@@ -223,6 +231,31 @@
           "unit": ""
         },
         {
+          "key": "lossRateLow",
+          "default": -8.0,
+          "unit": ""
+        },
+        {
+          "key": "lossRateBufferPct",
+          "default": 1.0,
+          "unit": ""
+        },
+        {
+          "key": "lossGuardVolumeConfirmRatio",
+          "default": 0.8,
+          "unit": ""
+        },
+        {
+          "key": "lossGuardMa60SupportPct",
+          "default": 0.0,
+          "unit": ""
+        },
+        {
+          "key": "lossGuardWeakEvidencePenalty",
+          "default": 30.0,
+          "unit": ""
+        },
+        {
           "key": "monitorPnlDelta",
           "default": 2.0,
           "unit": ""
@@ -245,6 +278,11 @@
         {
           "key": "monitorExitPressureDelta",
           "default": 15.0,
+          "unit": ""
+        },
+        {
+          "key": "monitorDecisionLabelBuffer",
+          "default": 5,
           "unit": ""
         },
         {
@@ -315,11 +353,6 @@
         {
           "key": "profitRateHigh",
           "default": 20.0,
-          "unit": ""
-        },
-        {
-          "key": "lossRateLow",
-          "default": -8.0,
           "unit": ""
         },
         {
@@ -709,10 +742,22 @@
           "masked": true
         },
         {
+          "key": "externalAlphaEnabled",
+          "label": "Alpha Vantage 수집 사용",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
           "key": "coingeckoApiKey",
           "label": "CoinGecko API Key",
           "type": "secret",
           "masked": true
+        },
+        {
+          "key": "externalCoinGeckoEnabled",
+          "label": "CoinGecko 수집 사용",
+          "type": "toggle",
+          "default": "1"
         },
         {
           "key": "fredApiKey",
@@ -721,10 +766,22 @@
           "masked": true
         },
         {
+          "key": "externalFredEnabled",
+          "label": "FRED 수집 사용",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
           "key": "opendartApiKey",
           "label": "OpenDART API Key",
           "type": "secret",
           "masked": true
+        },
+        {
+          "key": "externalDartEnabled",
+          "label": "OpenDART 수집 사용",
+          "type": "toggle",
+          "default": "1"
         },
         {
           "key": "externalFredSeries",
@@ -767,7 +824,7 @@
         },
         {
           "key": "ontologyNeo4jEnabled",
-          "label": "온톨로지 Neo4j 저장",
+          "label": "관계 분석 Neo4j 저장",
           "type": "toggle",
           "default": "1"
         },
@@ -956,6 +1013,31 @@
             "unit": ""
           },
           {
+            "key": "lossRateLow",
+            "default": -8,
+            "unit": ""
+          },
+          {
+            "key": "lossRateBufferPct",
+            "default": 1,
+            "unit": ""
+          },
+          {
+            "key": "lossGuardVolumeConfirmRatio",
+            "default": 0.8,
+            "unit": ""
+          },
+          {
+            "key": "lossGuardMa60SupportPct",
+            "default": 0,
+            "unit": ""
+          },
+          {
+            "key": "lossGuardWeakEvidencePenalty",
+            "default": 30,
+            "unit": ""
+          },
+          {
             "key": "monitorPnlDelta",
             "default": 2,
             "unit": ""
@@ -978,6 +1060,11 @@
           {
             "key": "monitorExitPressureDelta",
             "default": 15,
+            "unit": ""
+          },
+          {
+            "key": "monitorDecisionLabelBuffer",
+            "default": 5,
             "unit": ""
           },
           {
@@ -1199,7 +1286,7 @@
     {
       "id": "model-review",
       "title": "모델 리뷰 워커",
-      "summary": "monitorDecisionChange 이벤트를 큐에 넣고, 온톨로지 세계관·관계·모순과 다음 실험을 작성합니다.",
+      "summary": "monitorDecisionChange 이벤트를 큐에 넣고, 관계 분석의 투자 관점·관계·반대 신호와 다음 실험을 작성합니다.",
       "commands": [
         "npm run python:model-review:once -- --dry-run",
         "npm run python:model-review:watch",
@@ -1292,5 +1379,5 @@
       ]
     }
   ],
-  "buildId": "a48a1bd1abb8"
+  "buildId": "0edda7d31f95"
 }

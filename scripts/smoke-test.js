@@ -981,8 +981,13 @@ function checkFrontendAdminRender() {
     assertOk(styles.indexOf(".monitoring-view .alert-panel {\n  grid-area: alerts;\n  grid-column: auto;") < 0, "모니터링 알림 패널의 PC grid-area가 1컬럼으로 압축될 수 있습니다.");
     assertOk(monitoringHtml.indexOf("monitor-status-board") >= 0 && monitoringHtml.indexOf("monitor-runtime-strip") >= 0, "모니터링 실행 상태 패널이 ledger/strip 구조로 렌더링되지 않습니다.");
     assertOk(monitoringHtml.indexOf("monitor-runtime-board") >= 0 && monitoringHtml.indexOf("monitor-runtime-timeline") >= 0, "모니터링 런타임 상태가 타임라인 구조로 분리되지 않았습니다.");
+    assertOk(monitoringHtml.indexOf("monitor-board") >= 0 && monitoringHtml.indexOf("monitor-board-section") >= 0, "모니터링 실행 상태 패널이 공통 보드 섹션 구조로 렌더링되지 않습니다.");
+    assertOk(monitoringHtml.indexOf("현재 실행 상태") >= 0 && monitoringHtml.indexOf("런타임 신호") >= 0, "모니터링 실행 상태 패널의 섹션 헤더가 없습니다.");
     assertOk(monitoringHtml.indexOf("monitor-alert-summary") >= 0, "최근 모니터링 알림이 별도 요약 영역으로 분리되지 않았습니다.");
     assertOk(styles.indexOf(".monitor-runtime-row") >= 0 && styles.indexOf(".monitor-alert-summary") >= 0, "모니터링 런타임/알림 요약 스타일이 없습니다.");
+    assertOk(styles.indexOf(".monitor-board-section") >= 0 && styles.indexOf(".monitor-section-head") >= 0, "모니터링 실행 상태 보드 섹션 스타일이 없습니다.");
+    assertOk(styles.indexOf('"status status status status status status alerts alerts alerts alerts alerts alerts"') >= 0, "모니터링 탭 PC 상태/알림 영역이 균형형 6:6 배치가 아닙니다.");
+    assertOk(styles.indexOf('"status status status alerts alerts alerts alerts alerts"') < 0, "모니터링 상태 패널이 태블릿 폭에서 3컬럼으로 압축될 수 있습니다.");
     assertOk(styles.indexOf(".monitor-ledger-cell") >= 0, "모니터링 실행 상태 ledger 스타일이 없습니다.");
     assertOk(monitoringHtml.indexOf("npm run python:monitor:once") < 0 && monitoringHtml.indexOf("npm run python:service:status") < 0, "모니터링 실행 상태 패널에 CLI 명령어 목록이 노출됩니다.");
     assertOk(monitoringHtml.indexOf("monitoring-instrument-panel") >= 0, "모니터링 탭에 보유·관심 통합 패널이 렌더링되지 않았습니다.");

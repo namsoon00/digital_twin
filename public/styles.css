@@ -1992,7 +1992,7 @@ h3 {
 .monitoring-view {
   grid-template-columns: repeat(12, minmax(0, 1fr));
   grid-template-areas:
-    "status status status status alerts alerts alerts alerts alerts alerts alerts alerts"
+    "status status status status status status alerts alerts alerts alerts alerts alerts"
     "universe universe universe universe universe universe universe universe portfolio portfolio portfolio portfolio";
   align-items: start;
 }
@@ -2011,6 +2011,10 @@ h3 {
 
 .monitoring-view .portfolio-exposure-panel {
   grid-area: portfolio;
+}
+
+.admin-monitoring-panel {
+  container-type: inline-size;
 }
 
 .admin-overview-panel,
@@ -4308,17 +4312,64 @@ h3 {
   grid-column: span 1;
 }
 
-.monitor-status-board {
+.monitor-board {
   display: grid;
   min-width: 0;
+  border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.monitor-board-section {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px 16px;
+  border-top: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel) 94%, var(--ds-color-accent-soft) 6%);
+}
+
+.monitor-board-section:first-child {
+  border-top: 0;
+}
+
+.monitor-section-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 0.54fr);
+  align-items: start;
+  gap: 8px 14px;
+  min-width: 0;
+}
+
+.monitor-section-head strong,
+.monitor-section-head span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.monitor-section-head strong {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 950;
+  line-height: 1.25;
+}
+
+.monitor-section-head span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.35;
+  text-align: right;
+}
+
+.monitor-status-board {
+  align-content: start;
 }
 
 .monitor-primary-state {
   display: grid;
   align-items: center;
   min-width: 0;
-  padding: 16px;
 }
 
 .monitor-primary-state > div {
@@ -4350,45 +4401,44 @@ h3 {
 .monitor-health-ledger,
 .monitor-market-ledger {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 8px;
   min-width: 0;
 }
 
 .monitor-health-ledger {
-  border-top: 1px solid var(--line);
-  background: color-mix(in srgb, var(--panel) 82%, transparent);
+  background: transparent;
 }
 
 .monitor-market-ledger {
-  border-bottom: 1px solid var(--line);
-  background: color-mix(in srgb, var(--panel) 76%, transparent);
-}
-
-.monitor-market-ledger {
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  background: transparent;
 }
 
 .monitor-runtime-strip {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(220px, 0.46fr);
+  grid-template-columns: 1fr;
+  gap: 10px;
   min-width: 0;
-  border-bottom: 1px solid var(--line);
-  background: color-mix(in srgb, var(--panel) 78%, transparent);
+  background: color-mix(in srgb, var(--panel) 92%, var(--blue-soft) 8%);
 }
 
 .monitor-runtime-timeline {
   display: grid;
   min-width: 0;
-  border-right: 1px solid var(--line);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--ds-radius-control);
+  background: var(--panel);
 }
 
 .monitor-runtime-row {
   display: grid;
-  grid-template-columns: minmax(118px, 0.34fr) minmax(0, 1fr);
-  gap: 3px 12px;
+  grid-template-columns: minmax(132px, 0.34fr) minmax(0, 1fr);
+  gap: 4px 14px;
   min-width: 0;
-  min-height: 56px;
-  padding: 11px 14px;
+  min-height: 58px;
+  padding: 11px 12px;
   border-bottom: 1px solid var(--line);
 }
 
@@ -4397,7 +4447,7 @@ h3 {
 }
 
 .monitor-runtime-row.live {
-  box-shadow: inset 2px 0 0 var(--green);
+  box-shadow: inset 3px 0 0 var(--green);
 }
 
 .monitor-runtime-row span,
@@ -4434,16 +4484,20 @@ h3 {
   align-content: center;
   gap: 5px;
   min-width: 0;
-  padding: 14px;
+  min-height: 118px;
+  padding: 13px 14px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--line);
+  border-radius: var(--ds-radius-control);
   background: var(--panel);
 }
 
 .monitor-alert-summary.active {
-  box-shadow: inset 3px 0 0 var(--red);
+  border-left-color: var(--red);
 }
 
 .monitor-alert-summary.idle {
-  box-shadow: inset 3px 0 0 var(--line);
+  border-left-color: color-mix(in srgb, var(--line) 88%, var(--ink) 12%);
 }
 
 .monitor-alert-summary span,
@@ -4488,17 +4542,16 @@ h3 {
   align-content: center;
   gap: 4px;
   min-width: 0;
-  min-height: 62px;
-  padding: 12px 14px;
-  border-left: 1px solid var(--line);
-}
-
-.monitor-ledger-cell:first-child {
-  border-left: 0;
+  min-height: 58px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-left: 3px solid color-mix(in srgb, var(--line) 88%, var(--ink) 12%);
+  border-radius: var(--ds-radius-control);
+  background: var(--panel);
 }
 
 .monitor-ledger-cell.live {
-  box-shadow: inset 2px 0 0 var(--green);
+  border-left-color: var(--green);
 }
 
 .monitor-ledger-cell span,
@@ -4518,6 +4571,21 @@ h3 {
   font-size: 15px;
   font-weight: 950;
   line-height: 1.25;
+}
+
+@container (min-width: 760px) {
+  .monitor-runtime-board {
+    grid-template-columns: minmax(0, 1fr) minmax(230px, 0.44fr);
+    align-items: stretch;
+  }
+
+  .monitor-runtime-board .monitor-section-head {
+    grid-column: 1 / -1;
+  }
+
+  .monitor-alert-summary {
+    min-height: auto;
+  }
 }
 
 .admin-delivery-grid {
@@ -7548,7 +7616,7 @@ h3 {
 
   .monitoring-view {
     grid-template-areas:
-      "status status status status status alerts alerts alerts alerts alerts alerts alerts"
+      "status status status status status status alerts alerts alerts alerts alerts alerts"
       "universe universe universe universe universe universe universe universe portfolio portfolio portfolio portfolio";
   }
 
@@ -8173,7 +8241,7 @@ h3 {
   .monitoring-view {
     grid-template-columns: repeat(8, minmax(0, 1fr));
     grid-template-areas:
-      "status status status alerts alerts alerts alerts alerts"
+      "status status status status alerts alerts alerts alerts"
       "universe universe universe universe universe universe universe universe"
       "portfolio portfolio portfolio portfolio portfolio portfolio portfolio portfolio";
   }
@@ -8302,7 +8370,7 @@ h3 {
   .monitoring-view {
     grid-template-columns: repeat(8, minmax(0, 1fr));
     grid-template-areas:
-      "status status status alerts alerts alerts alerts alerts"
+      "status status status status alerts alerts alerts alerts"
       "universe universe universe universe universe universe universe universe"
       "portfolio portfolio portfolio portfolio portfolio portfolio portfolio portfolio";
   }
@@ -8333,17 +8401,6 @@ h3 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .monitor-runtime-strip {
-    grid-template-columns: 1fr;
-  }
-
-  .monitor-runtime-timeline {
-    border-right: 0;
-  }
-
-  .monitor-alert-summary {
-    border-top: 1px solid var(--line);
-  }
 }
 
 @media (max-width: 980px) and (min-width: 861px) {
@@ -8392,17 +8449,6 @@ h3 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .monitor-runtime-strip {
-    grid-template-columns: 1fr;
-  }
-
-  .monitor-runtime-timeline {
-    border-right: 0;
-  }
-
-  .monitor-alert-summary {
-    border-top: 1px solid var(--line);
-  }
 }
 
 @media (max-width: 860px) {
@@ -8789,16 +8835,17 @@ h3 {
     grid-template-columns: 1fr;
   }
 
-  .monitor-runtime-strip {
+  .monitor-section-head,
+  .monitor-runtime-row {
     grid-template-columns: 1fr;
   }
 
-  .monitor-runtime-timeline {
-    border-right: 0;
+  .monitor-section-head span {
+    text-align: left;
   }
 
-  .monitor-alert-summary {
-    border-top: 1px solid var(--line);
+  .monitor-runtime-row em {
+    grid-column: auto;
   }
 
   .monitoring-instrument-side {

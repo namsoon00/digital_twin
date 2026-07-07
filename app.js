@@ -555,6 +555,7 @@
     notificationJobsLoaded: false,
     notificationJobsError: "",
     notificationJobsSummary: {},
+    notificationExpandedJobs: {},
     messageSchedules: [],
     messageSchedulesLoading: false,
     messageSchedulesError: "",
@@ -1671,6 +1672,13 @@
 
   function applyNotificationJobs(payload) {
     state.notificationJobItems = Array.isArray(payload.jobs) ? payload.jobs : [];
+    var visibleJobs = {};
+    state.notificationJobItems.forEach(function (job) {
+      visibleJobs[notificationJobKey(job)] = true;
+    });
+    Object.keys(state.notificationExpandedJobs || {}).forEach(function (key) {
+      if (!visibleJobs[key]) delete state.notificationExpandedJobs[key];
+    });
     state.notificationJobsSummary = payload.summary && typeof payload.summary === "object" ? payload.summary : {};
     state.notificationJobsLoaded = true;
     state.notificationJobsLoading = false;
@@ -7615,6 +7623,18 @@
     ].join("");
   }
 
+  function notificationJobKey(job) {
+    return String((job && job.jobId) || [job && job.createdAt, job && job.messageType, job && job.title].join(":"));
+  }
+
+  function notificationJobFullText(job, resolvedSymbol) {
+    return textWithKnownDisplaySymbols(String((job && (job.fullText || job.text)) || ""), resolvedSymbol, job);
+  }
+
+  function notificationJobExpanded(job) {
+    return Boolean((state.notificationExpandedJobs || {})[notificationJobKey(job)]);
+  }
+
   function renderNotificationDecisionRow(job) {
     var reasons = Array.isArray(job.honeyReasons) ? job.honeyReasons.slice(0, 5) : [];
     var resolvedSymbol = notificationJobResolvedSymbol(job);
@@ -7628,6 +7648,17 @@
       target = title + " / " + displaySymbol;
     }
     var preview = textWithKnownDisplaySymbols(job.lastError || job.textPreview || "-", resolvedSymbol, job);
+    var fullText = notificationJobFullText(job, resolvedSymbol);
+    var expanded = notificationJobExpanded(job);
+    var canExpand = Boolean(fullText && fullText !== preview);
+    var fullMessageToggle = canExpand ? [
+      '<div class="notification-decision-actions">',
+      '<button type="button" class="mini-button" data-notification-full-toggle="' + escapeHtml(notificationJobKey(job)) + '" aria-expanded="' + escapeHtml(expanded ? "true" : "false") + '">',
+      escapeHtml(expanded ? "접기" : "전체 메시지"),
+      '</button>',
+      '</div>'
+    ].join("") : "";
+    var fullMessageBlock = canExpand && expanded ? '<pre class="notification-full-message">' + escapeHtml(fullText) + '</pre>' : "";
     var fingerprint = textWithKnownDisplaySymbols(job.honeyFingerprint || "", resolvedSymbol, job);
     return [
       '<div class="notification-decision-row">',
@@ -7646,6 +7677,8 @@
       job.honeySimilarityBypassed ? '<span>' + escapeHtml(job.honeySimilarityBypassReason ? "반복 예외 " + job.honeySimilarityBypassReason : "반복 예외 적용") + '</span>' : '',
       '</div>',
       '<p>' + escapeHtml(preview) + '</p>',
+      fullMessageToggle,
+      fullMessageBlock,
       reasons.length ? '<div class="notification-decision-reasons">' + reasons.map(function (reason) {
         return '<span>' + escapeHtml(textWithKnownDisplaySymbols(reason, resolvedSymbol, job)) + '</span>';
       }).join("") + '</div>' : '',
@@ -12449,6 +12482,15 @@
         render();
       });
     }
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-notification-full-toggle]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        var key = button.getAttribute("data-notification-full-toggle") || "";
+        if (!key) return;
+        state.notificationExpandedJobs[key] = !state.notificationExpandedJobs[key];
+        render();
+      });
+    });
 
     var saveModelVersionButton = app.querySelector('[data-action="save-model-version"]');
     if (saveModelVersionButton) {

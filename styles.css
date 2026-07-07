@@ -3921,7 +3921,8 @@ h3 {
 
 .notification-decision-summary,
 .notification-decision-score,
-.notification-decision-reasons {
+.notification-decision-reasons,
+.notification-decision-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
@@ -3992,6 +3993,22 @@ h3 {
   font-size: 12px;
   line-height: 1.45;
   overflow-wrap: anywhere;
+}
+
+.notification-full-message {
+  max-height: 360px;
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-soft);
+  color: var(--ink);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.55;
 }
 
 .notification-fingerprint {

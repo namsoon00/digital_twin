@@ -492,10 +492,10 @@
     { key: "priceBuyLimit", group: "가격", label: "매수 상한 접근", description: "현재가가 실험실 매수 상한에 접근하거나 하회할 때" },
     { key: "priceStop", group: "가격", label: "손절 기준 접근", description: "현재가가 손절 기준선에 접근하거나 하회할 때" },
     { key: "priceTrim", group: "가격", label: "분할매도 기준 접근", description: "현재가가 1차 또는 2차 매도 기준에 접근할 때" },
-    { key: "investmentInsight", group: "온톨로지", label: "투자 인사이트", description: "관계 그래프에서 의미 있는 투자 인사이트가 생성될 때" },
-    { key: "modelBuy", group: "모델", label: "내 모델 매수", description: "내 모델 매수 점수가 기준을 넘을 때" },
-    { key: "modelSell", group: "모델", label: "내 모델 매도", description: "내 모델 매도 점수가 기준을 넘을 때" },
-    { key: "watchlistBuyCandidate", group: "관심종목", label: "관심종목 매수 후보", description: "관심 종목의 매수 점수가 기준을 넘을 때" },
+    { key: "investmentInsight", group: "투자 알림", label: "온톨로지 투자 인사이트", description: "관계 그래프에서 의미 있는 투자 인사이트가 생성될 때 실제 발송" },
+    { key: "modelBuy", group: "온톨로지 근거", label: "모델 매수 신호", description: "투자 인사이트에 넣을 모델 매수 근거 신호" },
+    { key: "modelSell", group: "온톨로지 근거", label: "모델 매도 신호", description: "투자 인사이트에 넣을 모델 매도 근거 신호" },
+    { key: "watchlistBuyCandidate", group: "온톨로지 근거", label: "관심종목 매수 후보 신호", description: "투자 인사이트에 넣을 관심종목 후보 근거 신호" },
     { key: "modelScoreGap", group: "모델", label: "모델 방향성", description: "매수와 매도 점수 차이가 크게 벌어질 때" },
     { key: "modelVersionDrift", group: "모델", label: "모델 버전 변화", description: "저장한 실험 버전과 현재 모델 점수가 크게 달라질 때" },
     { key: "flowVolume", group: "수급", label: "거래량 급증", description: "거래량 배율이 설정값 이상으로 커질 때" },
@@ -515,23 +515,31 @@
     { key: "tossConnection", group: "데이터", label: "토스 연결 상태", description: "토스 live 연결이 아니거나 비어 있을 때" },
     { key: "orderPending", group: "주문", label: "미체결 주문", description: "주문 데이터가 연결되면 오래된 미체결을 표시" },
     { key: "orderReject", group: "주문", label: "거부/실패 주문", description: "주문 데이터가 연결되면 거부 또는 실패 주문을 표시" },
-    { key: "watchlistQuote", group: "관심종목", label: "관심종목 시세", description: "관심종목 현재가와 이동평균이 수집되거나 크게 변할 때" },
-    { key: "watchlistQuotePending", group: "관심종목", label: "시세 대기", description: "관심종목 현재가를 아직 받지 못했을 때" },
-    { key: "holdingTiming", group: "푸시", label: "보유 타이밍 푸시", description: "알림 워커가 보유 종목 장중 점검을 보낼 때" },
+    { key: "watchlistQuote", group: "온톨로지 근거", label: "관심종목 시세 신호", description: "투자 인사이트에 넣을 관심종목 시세 근거 신호" },
+    { key: "watchlistQuotePending", group: "온톨로지 근거", label: "시세 대기 신호", description: "투자 인사이트에 넣을 데이터 신뢰도 근거 신호" },
+    { key: "holdingTiming", group: "온톨로지 근거", label: "보유 타이밍 신호", description: "투자 인사이트에 넣을 보유 종목 타이밍 근거 신호" },
     { key: "monitorHeartbeat", group: "실시간", label: "상태 확인 메시지", description: "실시간 워커가 살아 있는지 주기적으로 짧게 보낼 때" },
     { key: "monitorConnection", group: "실시간", label: "연결 상태 변화", description: "실시간 모니터링 중 토스 연결 상태가 바뀔 때" },
-    { key: "monitorPositionChange", group: "실시간", label: "보유 종목 변화", description: "새 보유, 제외, 수량 변경이 감지될 때" },
-    { key: "monitorPnlChange", group: "실시간", label: "손익률 급변", description: "직전 조회 대비 손익률 변화가 커질 때" },
-    { key: "monitorValueChange", group: "실시간", label: "평가액 급변", description: "직전 조회 대비 평가액 변화가 커질 때" },
-    { key: "monitorTrendChange", group: "실시간", label: "이동평균 변화", description: "20/60일선 돌파, 크로스, 현재가와 이동평균 차이가 커질 때" },
-    { key: "monitorCashChange", group: "실시간", label: "현금비중 급변", description: "시장별 현금비중이 빠르게 변할 때" },
-    { key: "monitorDecisionChange", group: "실시간", label: "판단 변화", description: "종목 판단이나 위험 점수가 바뀔 때" },
-    { key: "externalEquityMove", group: "외부 API", label: "미장 가격/거래량", description: "Alpha Vantage 현재가와 거래량이 임계값을 넘을 때" },
-    { key: "externalCryptoMove", group: "외부 API", label: "크립토 변동", description: "CoinGecko BTC/ETH 등 크립토 변동이 커질 때" },
-    { key: "externalMacroShift", group: "외부 API", label: "거시 금리 변화", description: "FRED 금리와 10Y-2Y 스프레드가 크게 움직일 때" },
-    { key: "externalDartDisclosure", group: "외부 API", label: "국내 공시", description: "OpenDART에서 보유 국내 종목의 신규 공시가 감지될 때" },
+    { key: "monitorPositionChange", group: "온톨로지 근거", label: "보유 종목 변화 신호", description: "투자 인사이트에 넣을 보유 수량 변화 근거 신호" },
+    { key: "monitorPnlChange", group: "온톨로지 근거", label: "손익률 변화 신호", description: "투자 인사이트에 넣을 손익률 변화 근거 신호" },
+    { key: "monitorValueChange", group: "온톨로지 근거", label: "평가액 변화 신호", description: "투자 인사이트에 넣을 평가액 변화 근거 신호" },
+    { key: "monitorTrendChange", group: "온톨로지 근거", label: "추세 변화 신호", description: "투자 인사이트에 넣을 이동평균·추세 근거 신호" },
+    { key: "monitorCashChange", group: "온톨로지 근거", label: "현금비중 변화 신호", description: "투자 인사이트에 넣을 유동성 근거 신호" },
+    { key: "monitorDecisionChange", group: "온톨로지 근거", label: "판단 변화 신호", description: "투자 인사이트와 모델 리뷰에 넣을 판단 변화 근거 신호" },
+    { key: "externalEquityMove", group: "온톨로지 근거", label: "미장 가격/거래량 신호", description: "투자 인사이트에 넣을 미장 가격·거래량 근거 신호" },
+    { key: "externalCryptoMove", group: "온톨로지 근거", label: "크립토 변동 신호", description: "투자 인사이트에 넣을 크립토 변동 근거 신호" },
+    { key: "externalMacroShift", group: "온톨로지 근거", label: "거시 금리 변화 신호", description: "투자 인사이트에 넣을 거시 환경 근거 신호" },
+    { key: "externalDartDisclosure", group: "온톨로지 근거", label: "국내 공시 신호", description: "투자 인사이트에 넣을 공시 근거 신호" },
     { key: "externalDataConnection", group: "외부 API", label: "외부 API 연결", description: "외부 데이터 API 키, 한도, 응답 오류가 감지될 때" }
   ];
+  var ontologyEvidenceSignalTypes = [
+    "modelBuy", "modelSell", "watchlistBuyCandidate", "watchlistQuote", "watchlistQuotePending", "holdingTiming",
+    "monitorPositionChange", "monitorPnlChange", "monitorValueChange", "monitorTrendChange", "monitorCashChange",
+    "monitorDecisionChange", "externalEquityMove", "externalCryptoMove", "externalMacroShift", "externalDartDisclosure"
+  ];
+  function ontologyEvidenceSignalRule(key) {
+    return ontologyEvidenceSignalTypes.indexOf(String(key || "")) >= 0;
+  }
   var notificationTypeEmojis = {
     default: "🔔",
     priceBuyLimit: "🟢",
@@ -1772,7 +1780,7 @@
   }
 
   function defaultNotificationRuleStateCooldownEnabled(messageType) {
-    return ["holdingTiming", "externalEquityMove", "externalCryptoMove"].indexOf(String(messageType || "")) >= 0;
+    return ["investmentInsight", "holdingTiming", "externalEquityMove", "externalCryptoMove"].indexOf(String(messageType || "")) >= 0;
   }
 
   function defaultNotificationRuleStateCooldownMinutes(messageType) {
@@ -7179,7 +7187,9 @@
     var rules = alertRules();
     var cadences = alertCadenceMinutes();
     var enabledRules = alertRuleCatalog.filter(function (rule) { return enabledAlertRule(rules, rule.key); }).length;
-    var realtimeKeys = alertRuleCatalog.filter(function (rule) { return rule.group === "실시간" || rule.group === "푸시"; }).map(function (rule) { return rule.key; });
+    var realtimeKeys = alertRuleCatalog.filter(function (rule) {
+      return ["투자 알림", "온톨로지 근거", "실시간"].indexOf(rule.group) >= 0;
+    }).map(function (rule) { return rule.key; });
     var realtimeCadence = realtimeKeys.reduce(function (min, key) {
       var value = Number(cadences[key] || 0);
       return value > 0 ? Math.min(min, value) : min;
@@ -8064,7 +8074,7 @@
   function renderNotificationPolicyListScreen(groups, rules, cadences) {
     return [
       '<div class="notification-policy-list-screen">',
-      '<div class="flow-title"><div><strong>메시지 타입</strong><span>상세 편집을 누르면 목록 위로 편집 레이어가 열립니다.</span></div></div>',
+      '<div class="flow-title"><div><strong>투자 인사이트와 근거 신호</strong><span>투자 인사이트는 실제 발송 타입이고, 온톨로지 근거 신호는 인사이트 합성 입력입니다.</span></div></div>',
       '<div class="admin-message-group-list">',
       groups.map(function (group) {
         return renderAdminMessageGroup(group, rules, cadences);
@@ -11053,7 +11063,7 @@
       '</div>',
       '</div>',
       '<div class="model-section alert-threshold-section">',
-      '<div class="flow-title"><div><strong>메시지 주기</strong><span>같은 타입의 실시간 메시지를 다시 보내기까지 기다리는 시간입니다. 최소 10분입니다.</span></div></div>',
+      '<div class="flow-title"><div><strong>발송·근거 주기</strong><span>투자 인사이트는 실제 발송 쿨다운이고, 근거 신호 주기는 호환 알림과 테스트 발송에 사용됩니다. 최소 10분입니다.</span></div></div>',
       '<div class="alert-threshold-grid">',
       alertRuleCatalog.map(function (rule) {
         return renderAlertCadenceInput(rule, cadences[rule.key]);
@@ -11065,12 +11075,13 @@
   }
 
   function renderAlertRuleToggle(rule, checked) {
+    var role = ontologyEvidenceSignalRule(rule.key) ? "근거 신호" : rule.key === "investmentInsight" ? "실제 발송" : rule.group;
     return [
       '<label class="alert-rule">',
       '<input type="checkbox" data-alert-rule="' + escapeHtml(rule.key) + '"' + (checked ? " checked" : "") + ' />',
       '<span>',
       '<strong>' + escapeHtml(rule.label) + '</strong>',
-      '<em>' + escapeHtml(rule.group + " · " + rule.description) + '</em>',
+      '<em>' + escapeHtml(role + " · " + rule.description) + '</em>',
       '</span>',
       '</label>'
     ].join("");
@@ -11086,9 +11097,10 @@
   }
 
   function renderAlertCadenceInput(rule, value) {
+    var role = ontologyEvidenceSignalRule(rule.key) ? "근거" : rule.key === "investmentInsight" ? "발송" : "메시지";
     return [
       '<label class="lab-control alert-threshold">',
-      '<span>' + escapeHtml(rule.label) + ' (분)</span>',
+      '<span>' + escapeHtml(rule.label + " " + role) + ' (분)</span>',
       '<input data-alert-cadence="' + escapeHtml(rule.key) + '" type="number" min="10" step="10" value="' + escapeHtml(value) + '" />',
       '</label>'
     ].join("");

@@ -1904,6 +1904,73 @@ class PythonServiceTests(unittest.TestCase):
         self.assertFalse(any(event.rule == "modelBuy" for event in events))
         self.assertFalse(any(event.rule == "watchlistBuyCandidate" for event in events))
 
+    def test_legacy_signal_rule_controls_ontology_insight_sources(self):
+        watch = normalize_position({
+            "symbol": "AAPL",
+            "name": "Apple",
+            "market": "US",
+            "currency": "USD",
+            "currentPrice": 185,
+            "volume": 1200000,
+            "volumeRatio": 1.4,
+            "sector": "AI/플랫폼",
+        })
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "ok",
+            utc_now_iso(),
+            portfolio_summary([]),
+            [],
+            [],
+            watchlist=[watch],
+        )
+
+        events = RealtimeMonitor({
+            "buyScoreFormula": "80",
+            "alertRules": "watchlistBuyCandidate=0\ninvestmentInsight=1",
+            "alertThresholds": "modelBuyScore=99\nwatchlistBuyScore=74",
+        }).events_for_snapshot(snapshot, {})
+
+        insight = self.insight_event(events, "AAPL")
+        self.assertNotIn("watchlistBuyCandidate", self.insight_source_rules(insight))
+        self.assertFalse(any(event.rule == "watchlistBuyCandidate" for event in events))
+
+    def test_investment_insight_rule_controls_final_investment_dispatch(self):
+        watch = normalize_position({
+            "symbol": "AAPL",
+            "name": "Apple",
+            "market": "US",
+            "currency": "USD",
+            "currentPrice": 185,
+            "volume": 1200000,
+            "volumeRatio": 1.4,
+            "sector": "AI/플랫폼",
+        })
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "ok",
+            utc_now_iso(),
+            portfolio_summary([]),
+            [],
+            [],
+            watchlist=[watch],
+        )
+
+        events = RealtimeMonitor({
+            "buyScoreFormula": "80",
+            "alertRules": "watchlistBuyCandidate=1\ninvestmentInsight=0",
+            "alertThresholds": "modelBuyScore=99\nwatchlistBuyScore=74",
+        }).events_for_snapshot(snapshot, {})
+
+        self.assertFalse(any(event.rule == "investmentInsight" for event in events))
+        self.assertFalse(any(event.rule == "watchlistBuyCandidate" for event in events))
+
     def test_realtime_monitor_recomputes_decisions_with_user_formulas(self):
         position = normalize_position({
             "symbol": "005930",

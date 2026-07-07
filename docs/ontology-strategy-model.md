@@ -55,7 +55,7 @@ AI 프롬프트에는 TBox와 ABox를 함께 전달한다. AI는 TBox를 해석 
 관계 규칙과 프롬프트는 런타임 설정으로 관리한다.
 
 - `ontologyRelationRules`: `ruleId | label | condition | relationType | signalType | promptHint` 형식의 관계 규칙 목록.
-- `aiPromptTemplates`: 알림 타입별 AI 의견/질문 템플릿. 기본값은 `modelBuy`, `holdingTiming`, `monitorTrendChange`, `externalDartDisclosure` 같은 모든 투자 알림 타입을 포함하며, 사용자가 일부만 수정해도 나머지는 기본 템플릿을 유지한다.
+- `aiPromptTemplates`: 투자 인사이트와 근거 신호별 AI 의견/질문 템플릿. 실제 투자 발송 타입은 `investmentInsight`이며, `modelBuy`, `holdingTiming`, `monitorTrendChange`, `externalDartDisclosure` 같은 타입은 인사이트 합성에 들어가는 근거 신호 템플릿으로 유지한다. 사용자가 일부만 수정해도 나머지는 기본 템플릿을 유지한다.
 - `aiPromptPolicy`: 제공 데이터만 사용, 부족 데이터 표시, 투자 판단과 발송 우선도 분리 같은 공통 가드레일.
 
 코드의 기본 matcher는 안전한 기본 규칙을 실행한다. 설정의 관계 규칙과 프롬프트는 UI, 메시지, AI 리뷰 정보의 운영 계약이며, 새 규칙 matcher를 추가할 때도 이 키를 함께 갱신해야 한다.

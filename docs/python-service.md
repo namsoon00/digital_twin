@@ -130,7 +130,7 @@ Each account produces an independent snapshot:
 - per-position decision
 - previous snapshot comparison
 
-The monitor emits account-scoped events for:
+The monitor detects account-scoped operational alerts and investment evidence for:
 
 - heartbeat
 - connection changes
@@ -147,13 +147,15 @@ The monitor emits account-scoped events for:
 - OpenDART disclosure changes for configured Korean holdings
 - external data API connection errors
 
-When a `monitorDecisionChange` alert is emitted, the message includes:
+Investment signals are no longer dispatched as separate portfolio alerts. `modelBuy`, `holdingTiming`, `monitorDecisionChange`, `externalCryptoMove`, and the other investment signal types are evidence nodes. The realtime monitor merges enabled evidence signals into a single `investmentInsight` event with `metadata.ontologyInsight`, `metadata.sourceSignalTypes`, and `metadata.sourceAlertEvents`. `investmentInsight` is the actual investment notification type; `externalDataConnection`, `monitorConnection`, and `monitorHeartbeat` remain operational alerts.
+
+When a decision-change evidence signal is included in an `investmentInsight`, its source payload includes:
 
 - why the decision changed or why exit pressure crossed the threshold
 - short model data validation, such as missing price/quantity/sector fields or unusually large P/L moves
 - a concise model-improvement hint for the next feature iteration
 
-The same decision-change alert also queues a deeper asynchronous model review. The realtime alert path does not wait for LLM/Codex output.
+The decision-change evidence signal also queues a deeper asynchronous model review through `investmentInsight.sourceAlertEvents`. The realtime alert path does not wait for LLM/Codex output.
 
 The app store is stored in `app_store`, runtime settings are stored in `runtime_settings`, listed symbols are stored in `symbol_universe` with source freshness in `symbol_universe_sources`, recommendation-universe quote/trend snapshots are stored in `market_quote_cache` with account id `__market_data__`, snapshots are stored in `monitor_snapshots`, cadence is stored per account, rule, and symbol in `monitor_sent`, notification templates are stored in `notification_templates`, and outgoing notification jobs are stored in `notification_jobs` inside `data/service.db`.
 
@@ -169,13 +171,13 @@ Configuration:
 - `MARKET_DATA_CANDLE_BATCH_SIZE`: daily-candle indicator symbols per cycle, default 25.
 - `MARKET_DATA_REFRESH_UNIVERSE`: refresh stale symbol catalog before collection, default `1`.
 
-External data signals are collected in `python_service/digital_twin/infrastructure/external_signals.py` and cached in `app_store` with the `external_signals` store id. The cache is separated by the holdings/settings combination so multiple accounts do not reuse the wrong symbol set, and it prevents each realtime monitoring tick from calling every vendor API. `AccountSnapshot.external_signals` carries normalized data into the domain monitor, and `RealtimeMonitor.external_signal_events()` decides whether to emit:
+External data signals are collected in `python_service/digital_twin/infrastructure/external_signals.py` and cached in `app_store` with the `external_signals` store id. The cache is separated by the holdings/settings combination so multiple accounts do not reuse the wrong symbol set, and it prevents each realtime monitoring tick from calling every vendor API. `AccountSnapshot.external_signals` carries normalized data into the domain monitor, and `RealtimeMonitor.external_signal_events()` decides whether to create evidence signals:
 
 - `externalEquityMove`: Alpha Vantage `GLOBAL_QUOTE` for USD/US holdings.
 - `externalCryptoMove`: CoinGecko market data for configured crypto ids.
 - `externalMacroShift`: FRED series observations and the 10Y-2Y spread when `DGS10` and `DGS2` are configured.
 - `externalDartDisclosure`: OpenDART recent disclosures for configured Korean ticker to corp-code mappings.
-- `externalDataConnection`: provider errors such as missing/invalid response, API limit, or key problems.
+- `externalDataConnection`: provider errors such as missing/invalid response, API limit, or key problems. This one remains an operational alert instead of investment evidence.
 
 Configuration:
 

@@ -82,7 +82,7 @@ Current events:
 
 Events are persisted locally to the append-only `domain_events` table in `data/service.db` through `SQLiteEventLog`. Rebuild projections by replaying that event stream where practical instead of coupling features to mutable state tables. Event handlers must not break publishers by default. If one feature needs another feature's result, publish or subscribe to an event instead of importing the other feature's application service.
 
-`monitoring.alerts_detected` also feeds asynchronous model-review jobs for `monitorDecisionChange` alerts. Realtime alerts must never wait for LLM/Codex output; deep analysis belongs in the model-review queue and worker. Notification producers should enqueue jobs in the notification outbox and leave external delivery to the notification worker. Jobs derived from a domain event should carry `source_event_id` and a stable `dedupe_key`.
+`monitoring.alerts_detected` now carries investment notifications as `investmentInsight` events. Legacy investment alert types such as `monitorDecisionChange`, `modelBuy`, and `externalCryptoMove` are evidence signals inside `metadata.sourceAlertEvents`, not direct investment dispatches. The model-review queue must read decision-change evidence from `investmentInsight.sourceAlertEvents` as well as the legacy direct shape for compatibility. Realtime alerts must never wait for LLM/Codex output; deep analysis belongs in the model-review queue and worker. Notification producers should enqueue jobs in the notification outbox and leave external delivery to the notification worker. Jobs derived from a domain event should carry `source_event_id` and a stable `dedupe_key`.
 
 ## Parallel Development Slices
 

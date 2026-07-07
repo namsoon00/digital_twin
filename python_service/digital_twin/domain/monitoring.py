@@ -111,6 +111,9 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
     def decision_action_group(self, label: object) -> str:
         return decision_action_group_for_label(label)
 
+    def enabled_signal_events(self, events: List[AlertEvent]) -> List[AlertEvent]:
+        return [event for event in events or [] if self.enabled(event.rule)]
+
     def meaningful_decision_change(self, current_decision: Dict[str, object], previous_decision: Dict[str, object], pressure_delta: float) -> bool:
         current_label = str(current_decision.get("decision") or "").strip()
         previous_label = str(previous_decision.get("decision") or "").strip()
@@ -138,6 +141,7 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
         if has_account_data:
             raw_events.extend(self.holding_timing_events(snapshot))
         system_events, signal_events = split_operational_and_investment_events(raw_events)
+        signal_events = self.enabled_signal_events(signal_events)
         events = [*system_events, *build_investment_insight_events(snapshot, signal_events)]
         return [event for event in self.stamp_events(snapshot, events) if self.enabled(event.rule)]
 
@@ -201,7 +205,7 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
             ])
             timing_events = self.holding_timing_events(timing_snapshot)
         events.extend(self.only_rule("holdingTiming", timing_events))
-        investment_insights = build_investment_insight_events(snapshot, events)
+        investment_insights = build_investment_insight_events(snapshot, self.enabled_signal_events(events))
         events.extend(self.only_rule(INVESTMENT_INSIGHT, investment_insights))
         return self.unique_rules([event for event in self.stamp_events(snapshot, events) if self.enabled(event.rule)])
 

@@ -7401,12 +7401,12 @@
       return stockDisplayName(symbol, clientKnownStockInfo(symbol));
     }).join(", ") : "최근 감지된 모니터링 알림 없음";
     return [
-      '<div class="monitor-alert-summary ' + escapeHtml(count ? "active" : "idle") + '">',
+      '<section class="monitor-alert-summary ' + escapeHtml(count ? "active" : "idle") + '">',
       '<span>최근 모니터링 알림</span>',
       '<strong>' + escapeHtml(count ? count + "건 감지" : "대기 중") + '</strong>',
       '<p>' + escapeHtml(symbolText) + '</p>',
       '<em>' + escapeHtml(event && event.occurredAt ? formatClock(event.occurredAt) : "알림 이벤트 대기") + '</em>',
-      '</div>'
+      '</section>'
     ].join("");
   }
 
@@ -7418,14 +7418,18 @@
       : "사이클 대기";
     var cycleDetail = cycleEvent && cycleEvent.occurredAt ? formatClock(cycleEvent.occurredAt) : "모니터링 사이클 이벤트 대기";
     return [
-      '<div class="monitor-runtime-strip monitor-runtime-board" aria-label="모니터링 런타임 상태">',
+      '<section class="monitor-board-section monitor-runtime-strip monitor-runtime-board" aria-label="모니터링 런타임 상태">',
+      '<div class="monitor-section-head">',
+      '<strong>런타임 신호</strong>',
+      '<span>실시간 연결, 사이클, 큐 상태</span>',
+      '</div>',
       '<div class="monitor-runtime-timeline">',
       renderMonitorRuntimeRow("웹소켓 최근 이벤트", state.realtime.lastEvent ? realtimeEventLabel(state.realtime.lastEvent) : "이벤트 대기", state.realtime.lastEventAt ? formatClock(state.realtime.lastEventAt) : "연결 이벤트 대기", state.realtime.connected ? "live" : ""),
       renderMonitorRuntimeRow("최근 모니터링 사이클", cycleValue, cycleDetail, ""),
       renderMonitorRuntimeRow("알림 큐", notificationJobSummaryText(state.realtime.notificationJobs), "notification worker queue", "live"),
       '</div>',
       renderMonitorAlertSummary(),
-      '</div>'
+      '</section>'
     ].join("");
   }
 
@@ -7457,7 +7461,12 @@
       '</div>',
       '<span class="status-pill ' + (snapshot.preview ? "demo" : "live") + '">' + escapeHtml(snapshot.preview ? "Preview" : "Live") + '</span>',
       '</div>',
-      '<div class="monitor-status-board">',
+      '<div class="monitor-board">',
+      '<section class="monitor-board-section monitor-status-board">',
+      '<div class="monitor-section-head">',
+      '<strong>현재 실행 상태</strong>',
+      '<span>연결 상태와 핵심 지표</span>',
+      '</div>',
       '<div class="monitor-primary-state">',
       '<div>',
       '<span class="tone-chip ' + (snapshot.preview ? "hold" : "watch") + '">' + escapeHtml(liveLabel) + '</span>',
@@ -7470,9 +7479,10 @@
         return renderMonitorLedgerCell(row[0], row[1], row[2]);
       }).join(""),
       '</div>',
-      '</div>',
+      '</section>',
       renderMonitorRuntimeBoard(),
-      marketRows ? '<div class="monitor-market-ledger">' + marketRows + '</div>' : '',
+      marketRows ? '<section class="monitor-board-section monitor-market-section"><div class="monitor-section-head"><strong>시장별 현금</strong><span>매수 여력 기준</span></div><div class="monitor-market-ledger">' + marketRows + '</div></section>' : '',
+      '</div>',
       '<div class="rule-strip"><span>실제 백그라운드 워커 실행/중지는 로컬 명령으로 관리하고, 웹은 저장된 계정과 알림 설정을 같은 로컬 DB/설정 파일에 기록합니다.</span></div>',
       '</article>'
     ].join("");

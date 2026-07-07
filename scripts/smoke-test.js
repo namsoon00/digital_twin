@@ -205,6 +205,9 @@ function checkFrontendAdminRender() {
   assertOk(/@media \(max-width: 1180px\) and \(min-width: 981px\)[\s\S]*grid-template-columns: 224px minmax\(0, 1fr\);/.test(styles), "981px 이상 태블릿이 PC형 좌측 네비게이션으로 유지되지 않습니다.");
   assertOk(/@media \(max-width: 980px\) and \(min-width: 861px\)[\s\S]*\.app-nav[\s\S]*grid-template-columns: auto minmax\(0, 1fr\) auto;/.test(styles), "좁은 태블릿에서 상단 네비게이션으로 전환되지 않습니다.");
   assertOk(code.indexOf("renderDeskbar") >= 0 && styles.indexOf(".deskbar") >= 0, "PC/태블릿 데스크 바가 없습니다.");
+  assertOk(code.indexOf("loadCachedSnapshot") >= 0 && code.indexOf("writeCachedSnapshot") >= 0 && code.indexOf("snapshotFromCache") >= 0, "리로드 시 직전 화면 유지 로직이 없습니다.");
+  assertOk(code.indexOf("snapshotPrerequisites") >= 0 && code.indexOf("supportingBootstrapTasks") >= 0, "초기 데이터 로드가 메인/보조 작업으로 병렬 분리되지 않았습니다.");
+  assertOk(styles.indexOf(".deskbar.deskbar-compact") >= 0 && styles.indexOf(".deskbar-full") >= 0, "탭 역할별 deskbar 스타일이 분리되지 않았습니다.");
   assertOk(styles.indexOf(".account-exposure-grid") >= 0 && styles.indexOf(".account-manager-panel .admin-form-grid") >= 0, "PC 계좌 노출 최적화 규칙이 없습니다.");
   assertOk(styles.indexOf(".settings-smart-save") >= 0, "설정 화면 스마트 저장 액션 규칙이 없습니다.");
   assertOk(styles.indexOf(".settings-save-panel") < 0, "설정 화면에 하단 sticky 저장 패널 규칙이 남아 있습니다.");
@@ -669,6 +672,17 @@ function checkFrontendAdminRender() {
           removeItem: function (key) {
             storage.delete(key);
           }
+        },
+        sessionStorage: {
+          getItem: function (key) {
+            return storage.has(key) ? storage.get(key) : null;
+          },
+          setItem: function (key, value) {
+            storage.set(key, String(value));
+          },
+          removeItem: function (key) {
+            storage.delete(key);
+          }
         }
       },
       fetch: function (requestedPath) {
@@ -764,6 +778,11 @@ function checkFrontendAdminRender() {
     assertOk(code.indexOf("renderAppNavigation") >= 0 && styles.indexOf(".app-nav") >= 0, "앱 네비게이션 바 구조가 렌더링되지 않습니다.");
     assertOk(overviewHtml.indexOf("app-nav") < overviewHtml.indexOf("topbar"), "앱 네비게이션 바가 topbar 위에 렌더링되지 않습니다.");
     assertOk(overviewHtml.indexOf("top-action-bar") < 0, "기존 상단 버튼 나열 구조가 아직 렌더링됩니다.");
+    assertOk(overviewHtml.indexOf("deskbar deskbar-full") >= 0, "홈 탭은 full deskbar를 사용해야 합니다.");
+    assertOk(monitoringHtml.indexOf("deskbar deskbar-full") >= 0, "모니터링 탭은 full deskbar를 사용해야 합니다.");
+    assertOk(accountHtml.indexOf("deskbar deskbar-compact") >= 0 && accountHtml.indexOf("deskbar deskbar-full") < 0, "계정 탭은 compact deskbar를 사용해야 합니다.");
+    assertOk(settingsHtml.indexOf("deskbar deskbar-compact") >= 0 && settingsHtml.indexOf("deskbar deskbar-full") < 0, "설정 탭은 compact deskbar를 사용해야 합니다.");
+    assertOk(accountHtml.indexOf("<em>Ontology</em>") < 0, "업무 탭 compact deskbar에 온톨로지 셀이 노출됩니다.");
     assertOk(code.indexOf('data-action="open-settings"') < 0, "topbar 설정 버튼이 상단 관리 탭과 중복됩니다.");
     assertOk(code.indexOf("pushState") >= 0 && code.indexOf("popstate") >= 0, "탭 이동이 브라우저 뒤로가기와 동기화되지 않았습니다.");
     assertOk(code.indexOf("restoreTabBarPosition") >= 0 && code.indexOf("tabBarScrollLeft") >= 0, "하단 탭 위치 복원 로직이 없습니다.");

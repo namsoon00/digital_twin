@@ -1,0 +1,335 @@
+from dataclasses import asdict, dataclass
+from typing import Dict, List, Optional
+
+
+@dataclass(frozen=True)
+class TBoxBoundedContext:
+    key: str
+    label: str
+    description: str
+
+
+@dataclass(frozen=True)
+class TBoxClassDef:
+    name: str
+    bounded_context: str
+    label: str = ""
+    parent: str = ""
+    description: str = ""
+
+
+@dataclass(frozen=True)
+class TBoxRelationDef:
+    name: str
+    bounded_context: str
+    source_context: str = ""
+    target_context: str = ""
+    description: str = ""
+
+
+@dataclass(frozen=True)
+class TBoxRuleDef:
+    text: str
+    bounded_context: str
+    description: str = ""
+
+
+BOUNDED_CONTEXTS: List[TBoxBoundedContext] = [
+    TBoxBoundedContext(
+        "investment-core",
+        "투자 핵심",
+        "계좌, 포트폴리오, 투자 대상, 보유/관심 상태, 현금과 노출을 정의합니다.",
+    ),
+    TBoxBoundedContext(
+        "observation-data",
+        "관측 데이터",
+        "가격, 수급, 기술 지표, 외부 이벤트, 데이터 출처와 신선도를 정의합니다.",
+    ),
+    TBoxBoundedContext(
+        "strategy-thesis",
+        "전략 가설",
+        "투자 가설, 진입/청산/리밸런싱/비중 규칙과 기존 모델 점수의 역할을 정의합니다.",
+    ),
+    TBoxBoundedContext(
+        "risk-exposure",
+        "리스크 노출",
+        "시장, 유동성, 집중, 통화, 이벤트, 데이터 품질, 모델, 실행 리스크를 분류합니다.",
+    ),
+    TBoxBoundedContext(
+        "reasoning-insight",
+        "추론 인사이트",
+        "신호, 근거, 판단 근거, 의견, 모순, 기회, 인사이트와 AI 리뷰를 정의합니다.",
+    ),
+    TBoxBoundedContext(
+        "operations-dispatch",
+        "운영과 알림",
+        "데이터 수집, 분석 실행, 추론 주기, 알림 디스패치와 억제 정책을 정의합니다.",
+    ),
+]
+
+
+CLASS_DEFS: List[TBoxClassDef] = [
+    TBoxClassDef("Portfolio", "investment-core", "포트폴리오", description="투자 계좌의 전체 자산과 노출 집합입니다."),
+    TBoxClassDef("Account", "investment-core", "계좌", description="데이터와 주문 권한이 연결되는 투자 계좌입니다."),
+    TBoxClassDef("Instrument", "investment-core", "투자 대상", description="주식, ETF, 크립토, 현금성 자산 등 투자 가능한 대상입니다."),
+    TBoxClassDef("Equity", "investment-core", "주식", parent="Instrument"),
+    TBoxClassDef("ETF", "investment-core", "ETF", parent="Instrument"),
+    TBoxClassDef("CryptoAsset", "investment-core", "크립토 자산", parent="Instrument"),
+    TBoxClassDef("CashAsset", "investment-core", "현금성 자산", parent="Instrument"),
+    TBoxClassDef("Derivative", "investment-core", "파생상품", parent="Instrument"),
+    TBoxClassDef("Index", "investment-core", "지수", parent="Instrument"),
+    TBoxClassDef("FXPair", "investment-core", "환율쌍", parent="Instrument"),
+    TBoxClassDef("Stock", "investment-core", "종목", parent="Equity"),
+    TBoxClassDef("Position", "investment-core", "포지션", description="보유 또는 관찰 중인 투자 대상의 계좌상 행입니다."),
+    TBoxClassDef("Watchlist", "investment-core", "관심 목록"),
+    TBoxClassDef("WatchlistCandidate", "investment-core", "관심 후보", parent="Position"),
+    TBoxClassDef("Sector", "investment-core", "섹터"),
+    TBoxClassDef("Market", "investment-core", "시장"),
+    TBoxClassDef("Currency", "investment-core", "통화"),
+    TBoxClassDef("Cash", "investment-core", "대기 현금", parent="CashAsset"),
+    TBoxClassDef("MarketExposure", "investment-core", "시장 노출"),
+    TBoxClassDef("Observation", "observation-data", "관측값", description="특정 시점과 출처에서 들어온 사실입니다."),
+    TBoxClassDef("PriceObservation", "observation-data", "가격 관측", parent="Observation"),
+    TBoxClassDef("VolumeObservation", "observation-data", "거래량 관측", parent="Observation"),
+    TBoxClassDef("TechnicalObservation", "observation-data", "기술 지표 관측", parent="Observation"),
+    TBoxClassDef("FlowObservation", "observation-data", "수급 관측", parent="Observation"),
+    TBoxClassDef("FundamentalObservation", "observation-data", "펀더멘털 관측", parent="Observation"),
+    TBoxClassDef("ExternalObservation", "observation-data", "외부 관측", parent="Observation"),
+    TBoxClassDef("PriceMetric", "observation-data", "가격 지표", parent="PriceObservation"),
+    TBoxClassDef("TechnicalIndicator", "observation-data", "기술 지표", parent="TechnicalObservation"),
+    TBoxClassDef("TradeFlow", "observation-data", "거래/수급", parent="FlowObservation"),
+    TBoxClassDef("DataQuality", "observation-data", "데이터 품질", parent="Observation"),
+    TBoxClassDef("DataSource", "observation-data", "데이터 출처"),
+    TBoxClassDef("DataFreshness", "observation-data", "데이터 신선도"),
+    TBoxClassDef("MissingData", "observation-data", "부족 데이터"),
+    TBoxClassDef("Provenance", "observation-data", "출처 이력"),
+    TBoxClassDef("TimeWindow", "observation-data", "시간 구간"),
+    TBoxClassDef("ObservationTime", "observation-data", "관측 시점"),
+    TBoxClassDef("SignalHorizon", "observation-data", "신호 기간"),
+    TBoxClassDef("HoldingPeriod", "observation-data", "보유 기간"),
+    TBoxClassDef("ValidityInterval", "observation-data", "유효 기간"),
+    TBoxClassDef("Staleness", "observation-data", "노후화"),
+    TBoxClassDef("ValidationRule", "observation-data", "검증 규칙"),
+    TBoxClassDef("ExternalSignal", "observation-data", "외부 신호", parent="ExternalObservation"),
+    TBoxClassDef("NewsEvent", "observation-data", "뉴스 이벤트", parent="ExternalSignal"),
+    TBoxClassDef("DisclosureEvent", "observation-data", "공시 이벤트", parent="ExternalSignal"),
+    TBoxClassDef("MacroIndicator", "observation-data", "거시 지표", parent="ExternalSignal"),
+    TBoxClassDef("RateSignal", "observation-data", "금리 신호", parent="ExternalSignal"),
+    TBoxClassDef("CreditSpreadSignal", "observation-data", "크레딧 스프레드 신호", parent="ExternalSignal"),
+    TBoxClassDef("CryptoMarketSignal", "observation-data", "크립토 시장 신호", parent="ExternalSignal"),
+    TBoxClassDef("EarningsEvent", "observation-data", "실적 이벤트", parent="ExternalSignal"),
+    TBoxClassDef("CorporateAction", "observation-data", "기업 액션", parent="ExternalSignal"),
+    TBoxClassDef("RegulatoryEvent", "observation-data", "규제 이벤트", parent="ExternalSignal"),
+    TBoxClassDef("Strategy", "strategy-thesis", "투자전략"),
+    TBoxClassDef("InvestmentThesis", "strategy-thesis", "투자 가설"),
+    TBoxClassDef("EntryCondition", "strategy-thesis", "진입 조건"),
+    TBoxClassDef("ExitCondition", "strategy-thesis", "청산 조건"),
+    TBoxClassDef("RiskManagementRule", "strategy-thesis", "위험 관리 규칙"),
+    TBoxClassDef("RebalancingRule", "strategy-thesis", "리밸런싱 규칙"),
+    TBoxClassDef("PositionSizingRule", "strategy-thesis", "비중 규칙"),
+    TBoxClassDef("Scenario", "strategy-thesis", "시나리오"),
+    TBoxClassDef("StrategyExperiment", "strategy-thesis", "전략 실험"),
+    TBoxClassDef("StrategySignal", "strategy-thesis", "전략 신호"),
+    TBoxClassDef("ModelScore", "strategy-thesis", "모델 점수", parent="StrategySignal"),
+    TBoxClassDef("Threshold", "strategy-thesis", "기준값"),
+    TBoxClassDef("RuntimeSetting", "strategy-thesis", "런타임 설정"),
+    TBoxClassDef("AlertRule", "strategy-thesis", "알림 규칙", parent="RuntimeSetting"),
+    TBoxClassDef("PromptTemplate", "strategy-thesis", "프롬프트 템플릿", parent="RuntimeSetting"),
+    TBoxClassDef("ValuationAssumption", "strategy-thesis", "밸류에이션 가정"),
+    TBoxClassDef("LegacyScoreModel", "strategy-thesis", "기존 점수 모델"),
+    TBoxClassDef("Risk", "risk-exposure", "리스크"),
+    TBoxClassDef("MarketRisk", "risk-exposure", "시장 리스크", parent="Risk"),
+    TBoxClassDef("LiquidityRisk", "risk-exposure", "유동성 리스크", parent="Risk"),
+    TBoxClassDef("ConcentrationRisk", "risk-exposure", "집중 리스크", parent="Risk"),
+    TBoxClassDef("CurrencyRisk", "risk-exposure", "통화 리스크", parent="Risk"),
+    TBoxClassDef("VolatilityRisk", "risk-exposure", "변동성 리스크", parent="Risk"),
+    TBoxClassDef("EventRisk", "risk-exposure", "이벤트 리스크", parent="Risk"),
+    TBoxClassDef("DataQualityRisk", "risk-exposure", "데이터 품질 리스크", parent="Risk"),
+    TBoxClassDef("ModelRisk", "risk-exposure", "모델 리스크", parent="Risk"),
+    TBoxClassDef("ExecutionRisk", "risk-exposure", "실행 리스크", parent="Risk"),
+    TBoxClassDef("CorrelationRisk", "risk-exposure", "상관 리스크", parent="Risk"),
+    TBoxClassDef("RegimeRisk", "risk-exposure", "레짐 리스크", parent="Risk"),
+    TBoxClassDef("Signal", "reasoning-insight", "신호"),
+    TBoxClassDef("PriceSignal", "reasoning-insight", "가격 신호", parent="Signal"),
+    TBoxClassDef("TrendSignal", "reasoning-insight", "추세 신호", parent="Signal"),
+    TBoxClassDef("FlowSignal", "reasoning-insight", "수급 신호", parent="Signal"),
+    TBoxClassDef("ValuationSignal", "reasoning-insight", "밸류에이션 신호", parent="Signal"),
+    TBoxClassDef("MacroSignal", "reasoning-insight", "거시 신호", parent="Signal"),
+    TBoxClassDef("DisclosureSignal", "reasoning-insight", "공시 신호", parent="Signal"),
+    TBoxClassDef("CryptoSignal", "reasoning-insight", "크립토 신호", parent="Signal"),
+    TBoxClassDef("DataQualitySignal", "reasoning-insight", "데이터 품질 신호", parent="Signal"),
+    TBoxClassDef("Evidence", "reasoning-insight", "근거"),
+    TBoxClassDef("Belief", "reasoning-insight", "판단 근거"),
+    TBoxClassDef("Opinion", "reasoning-insight", "AI 의견"),
+    TBoxClassDef("Opportunity", "reasoning-insight", "기회"),
+    TBoxClassDef("Contradiction", "reasoning-insight", "모순"),
+    TBoxClassDef("Insight", "reasoning-insight", "인사이트"),
+    TBoxClassDef("InsightType", "reasoning-insight", "인사이트 타입"),
+    TBoxClassDef("InsightPolicy", "reasoning-insight", "인사이트 정책"),
+    TBoxClassDef("ReasoningRule", "reasoning-insight", "추론 규칙"),
+    TBoxClassDef("ReasoningCard", "reasoning-insight", "추론 카드"),
+    TBoxClassDef("ConfidenceScore", "reasoning-insight", "확신도"),
+    TBoxClassDef("ReliabilityScore", "reasoning-insight", "신뢰도"),
+    TBoxClassDef("AIReview", "reasoning-insight", "AI 리뷰"),
+    TBoxClassDef("DataPipeline", "operations-dispatch", "데이터 파이프라인"),
+    TBoxClassDef("CollectionSchedule", "operations-dispatch", "수집 주기"),
+    TBoxClassDef("CollectionPolicy", "operations-dispatch", "수집 정책"),
+    TBoxClassDef("MarketSnapshot", "operations-dispatch", "시장 스냅샷", parent="DataPipeline"),
+    TBoxClassDef("WatchlistSnapshot", "operations-dispatch", "관심 스냅샷", parent="DataPipeline"),
+    TBoxClassDef("ExternalSignalCollection", "operations-dispatch", "외부 신호 수집", parent="DataPipeline"),
+    TBoxClassDef("AnalysisJob", "operations-dispatch", "분석 작업"),
+    TBoxClassDef("ReasoningCycle", "operations-dispatch", "추론 주기"),
+    TBoxClassDef("NotificationPolicy", "operations-dispatch", "알림 정책"),
+    TBoxClassDef("NotificationDispatch", "operations-dispatch", "알림 디스패치"),
+    TBoxClassDef("CooldownPolicy", "operations-dispatch", "쿨다운 정책", parent="NotificationPolicy"),
+    TBoxClassDef("NoveltyPolicy", "operations-dispatch", "신규성 정책", parent="NotificationPolicy"),
+    TBoxClassDef("SuppressionPolicy", "operations-dispatch", "억제 정책", parent="NotificationPolicy"),
+    TBoxClassDef("MarketSession", "operations-dispatch", "시장 세션"),
+    TBoxClassDef("OperationalEvent", "operations-dispatch", "운영 이벤트"),
+]
+
+
+RELATION_DEFS: List[TBoxRelationDef] = [
+    TBoxRelationDef("DEFINES_BOUNDED_CONTEXT", "operations-dispatch", "operations-dispatch", "operations-dispatch"),
+    TBoxRelationDef("DEFINES_CLASS", "operations-dispatch", "operations-dispatch", "operations-dispatch"),
+    TBoxRelationDef("DEFINES_RELATION", "operations-dispatch", "operations-dispatch", "operations-dispatch"),
+    TBoxRelationDef("CONSTRAINS_ASSERTIONS", "operations-dispatch", "operations-dispatch", "operations-dispatch"),
+    TBoxRelationDef("IS_A", "investment-core", "investment-core", "investment-core"),
+    TBoxRelationDef("HOLDS", "investment-core", "investment-core", "investment-core"),
+    TBoxRelationDef("WATCHES", "investment-core", "investment-core", "investment-core"),
+    TBoxRelationDef("HOLDS_CASH", "investment-core", "investment-core", "investment-core"),
+    TBoxRelationDef("MANAGES_PORTFOLIO", "investment-core", "investment-core", "investment-core"),
+    TBoxRelationDef("HAS_POSITION", "investment-core", "investment-core", "investment-core"),
+    TBoxRelationDef("HAS_WATCHLIST", "investment-core", "investment-core", "investment-core"),
+    TBoxRelationDef("REPRESENTS_STOCK", "investment-core", "investment-core", "investment-core"),
+    TBoxRelationDef("REPRESENTS_INSTRUMENT", "investment-core", "investment-core", "investment-core"),
+    TBoxRelationDef("HAS_MARKET_EXPOSURE", "investment-core", "investment-core", "investment-core"),
+    TBoxRelationDef("BELONGS_TO", "investment-core", "investment-core", "investment-core"),
+    TBoxRelationDef("TRADED_IN", "investment-core", "investment-core", "investment-core"),
+    TBoxRelationDef("DENOMINATED_IN", "investment-core", "investment-core", "investment-core"),
+    TBoxRelationDef("EXPOSED_TO", "risk-exposure", "investment-core", "risk-exposure"),
+    TBoxRelationDef("HAS_OBSERVATION", "observation-data", "investment-core", "observation-data"),
+    TBoxRelationDef("OBSERVED_FROM", "observation-data", "investment-core", "observation-data"),
+    TBoxRelationDef("HAS_PRICE", "observation-data", "investment-core", "observation-data"),
+    TBoxRelationDef("HAS_TECHNICAL_INDICATOR", "observation-data", "investment-core", "observation-data"),
+    TBoxRelationDef("HAS_TRADE_FLOW", "observation-data", "investment-core", "observation-data"),
+    TBoxRelationDef("HAS_DATA_QUALITY", "observation-data", "investment-core", "observation-data"),
+    TBoxRelationDef("HAS_EXTERNAL_SIGNAL", "observation-data", "investment-core", "observation-data"),
+    TBoxRelationDef("HAS_PROVENANCE", "observation-data", "observation-data", "observation-data"),
+    TBoxRelationDef("PRODUCES_OBSERVATION", "observation-data", "operations-dispatch", "observation-data"),
+    TBoxRelationDef("MEASURED_AT", "observation-data", "observation-data", "observation-data"),
+    TBoxRelationDef("VALID_DURING", "observation-data", "observation-data", "observation-data"),
+    TBoxRelationDef("HAS_TIME_HORIZON", "observation-data", "investment-core", "observation-data"),
+    TBoxRelationDef("APPLIES_TO_HORIZON", "observation-data", "strategy-thesis", "observation-data"),
+    TBoxRelationDef("HAS_VALUATION", "strategy-thesis", "investment-core", "strategy-thesis"),
+    TBoxRelationDef("HAS_MODEL_SCORE", "strategy-thesis", "investment-core", "strategy-thesis"),
+    TBoxRelationDef("HAS_THRESHOLD", "strategy-thesis", "strategy-thesis", "strategy-thesis"),
+    TBoxRelationDef("HAS_RUNTIME_SETTING", "strategy-thesis", "investment-core", "strategy-thesis"),
+    TBoxRelationDef("HAS_ALERT_RULE", "strategy-thesis", "strategy-thesis", "strategy-thesis"),
+    TBoxRelationDef("HAS_PROMPT_TEMPLATE", "strategy-thesis", "strategy-thesis", "strategy-thesis"),
+    TBoxRelationDef("USES_STRATEGY", "strategy-thesis", "investment-core", "strategy-thesis"),
+    TBoxRelationDef("BASED_ON_THESIS", "strategy-thesis", "investment-core", "strategy-thesis"),
+    TBoxRelationDef("HAS_ENTRY_CONDITION", "strategy-thesis", "strategy-thesis", "strategy-thesis"),
+    TBoxRelationDef("HAS_EXIT_CONDITION", "strategy-thesis", "strategy-thesis", "strategy-thesis"),
+    TBoxRelationDef("HAS_RISK_MANAGEMENT_RULE", "strategy-thesis", "strategy-thesis", "strategy-thesis"),
+    TBoxRelationDef("HAS_POSITION_SIZING_RULE", "strategy-thesis", "strategy-thesis", "strategy-thesis"),
+    TBoxRelationDef("HAS_REBALANCING_RULE", "strategy-thesis", "strategy-thesis", "strategy-thesis"),
+    TBoxRelationDef("SUPPORTS_THESIS", "strategy-thesis", "reasoning-insight", "strategy-thesis"),
+    TBoxRelationDef("WEAKENS_THESIS", "strategy-thesis", "risk-exposure", "strategy-thesis"),
+    TBoxRelationDef("INVALIDATES_THESIS", "strategy-thesis", "reasoning-insight", "strategy-thesis"),
+    TBoxRelationDef("TRIGGERS_ENTRY", "strategy-thesis", "reasoning-insight", "strategy-thesis"),
+    TBoxRelationDef("TRIGGERS_EXIT", "strategy-thesis", "risk-exposure", "strategy-thesis"),
+    TBoxRelationDef("REQUIRES_CONFIRMATION", "strategy-thesis", "strategy-thesis", "observation-data"),
+    TBoxRelationDef("CONFIGURES", "strategy-thesis", "investment-core", "strategy-thesis"),
+    TBoxRelationDef("DERIVES_SIGNAL", "reasoning-insight", "observation-data", "reasoning-insight"),
+    TBoxRelationDef("USED_AS_EVIDENCE", "reasoning-insight", "reasoning-insight", "reasoning-insight"),
+    TBoxRelationDef("CONFIRMS_SIGNAL", "reasoning-insight", "reasoning-insight", "reasoning-insight"),
+    TBoxRelationDef("DIVERGES_FROM", "reasoning-insight", "reasoning-insight", "reasoning-insight"),
+    TBoxRelationDef("DERIVES", "reasoning-insight", "reasoning-insight", "reasoning-insight"),
+    TBoxRelationDef("AFFECTS", "reasoning-insight", "observation-data", "reasoning-insight"),
+    TBoxRelationDef("IMPACTS_OPINION", "reasoning-insight", "reasoning-insight", "reasoning-insight"),
+    TBoxRelationDef("CONTRIBUTES_TO", "reasoning-insight", "reasoning-insight", "strategy-thesis"),
+    TBoxRelationDef("SUPPORTED_BY", "reasoning-insight", "investment-core", "reasoning-insight"),
+    TBoxRelationDef("CONTRADICTS", "reasoning-insight", "reasoning-insight", "reasoning-insight"),
+    TBoxRelationDef("USES_EVIDENCE_FROM", "reasoning-insight", "investment-core", "reasoning-insight"),
+    TBoxRelationDef("REQUESTS_OPINION_FROM", "reasoning-insight", "investment-core", "reasoning-insight"),
+    TBoxRelationDef("HAS_EVIDENCE", "reasoning-insight", "investment-core", "reasoning-insight"),
+    TBoxRelationDef("HAS_BELIEF", "reasoning-insight", "investment-core", "reasoning-insight"),
+    TBoxRelationDef("HAS_OPINION", "reasoning-insight", "investment-core", "reasoning-insight"),
+    TBoxRelationDef("HAS_REASONING_CARD", "reasoning-insight", "investment-core", "reasoning-insight"),
+    TBoxRelationDef("HAS_CONFIDENCE", "reasoning-insight", "reasoning-insight", "reasoning-insight"),
+    TBoxRelationDef("LOWERS_CONFIDENCE_OF", "reasoning-insight", "risk-exposure", "reasoning-insight"),
+    TBoxRelationDef("AMPLIFIES_RISK", "risk-exposure", "reasoning-insight", "risk-exposure"),
+    TBoxRelationDef("MITIGATES_RISK", "risk-exposure", "reasoning-insight", "risk-exposure"),
+    TBoxRelationDef("HAS_PIPELINE", "operations-dispatch", "investment-core", "operations-dispatch"),
+    TBoxRelationDef("COLLECTS_DATA_FROM", "operations-dispatch", "operations-dispatch", "observation-data"),
+    TBoxRelationDef("RUNS_ON_SCHEDULE", "operations-dispatch", "operations-dispatch", "operations-dispatch"),
+    TBoxRelationDef("RUNS_AFTER_EVENT", "operations-dispatch", "operations-dispatch", "operations-dispatch"),
+    TBoxRelationDef("USES_COLLECTION_POLICY", "operations-dispatch", "operations-dispatch", "operations-dispatch"),
+    TBoxRelationDef("HAS_DATA_FRESHNESS", "operations-dispatch", "operations-dispatch", "observation-data"),
+    TBoxRelationDef("UPDATES_GRAPH", "operations-dispatch", "operations-dispatch", "investment-core"),
+    TBoxRelationDef("TRIGGERS_REASONING", "operations-dispatch", "operations-dispatch", "operations-dispatch"),
+    TBoxRelationDef("HAS_REASONING_CYCLE", "operations-dispatch", "investment-core", "operations-dispatch"),
+    TBoxRelationDef("SCHEDULES_ANALYSIS", "operations-dispatch", "operations-dispatch", "operations-dispatch"),
+    TBoxRelationDef("PRODUCES_INSIGHT", "operations-dispatch", "operations-dispatch", "reasoning-insight"),
+    TBoxRelationDef("HAS_INSIGHT_TYPE", "reasoning-insight", "reasoning-insight", "reasoning-insight"),
+    TBoxRelationDef("CREATED_FROM_RELATION", "reasoning-insight", "investment-core", "reasoning-insight"),
+    TBoxRelationDef("EVALUATED_BY", "reasoning-insight", "reasoning-insight", "reasoning-insight"),
+    TBoxRelationDef("USES_INSIGHT_POLICY", "operations-dispatch", "operations-dispatch", "reasoning-insight"),
+    TBoxRelationDef("HAS_NOTIFICATION_POLICY", "operations-dispatch", "investment-core", "operations-dispatch"),
+    TBoxRelationDef("HAS_NOTIFICATION_DISPATCH", "operations-dispatch", "investment-core", "operations-dispatch"),
+    TBoxRelationDef("DISPATCHED_BY", "operations-dispatch", "reasoning-insight", "operations-dispatch"),
+    TBoxRelationDef("SUPPRESSED_BY_POLICY", "operations-dispatch", "operations-dispatch", "operations-dispatch"),
+    TBoxRelationDef("HAS_COOLDOWN_POLICY", "operations-dispatch", "operations-dispatch", "operations-dispatch"),
+    TBoxRelationDef("HAS_NOVELTY_POLICY", "operations-dispatch", "operations-dispatch", "operations-dispatch"),
+    TBoxRelationDef("OBSERVES_MARKET_SESSION", "operations-dispatch", "investment-core", "operations-dispatch"),
+    TBoxRelationDef("TRIGGERS_ALERT", "operations-dispatch", "reasoning-insight", "operations-dispatch"),
+]
+
+
+RULE_DEFS: List[TBoxRuleDef] = [
+    TBoxRuleDef("portfolio exposure, position weight, and sector concentration create risk beliefs", "risk-exposure"),
+    TBoxRuleDef("price, trend, volume, and smart-money flow observations derive investable signals", "observation-data"),
+    TBoxRuleDef("signals support, weaken, or invalidate an investment thesis before AI forms an opinion", "strategy-thesis"),
+    TBoxRuleDef("legacy score model remains supporting evidence, not the primary decision model", "strategy-thesis"),
+    TBoxRuleDef("legacy score disagreement with trend, flow, or risk creates contradiction beliefs", "reasoning-insight"),
+    TBoxRuleDef("data quality, freshness, provenance, and missing data control AI opinion confidence", "observation-data"),
+    TBoxRuleDef("watchlist candidates create observation assertions and entry checks, not sell decisions", "investment-core"),
+    TBoxRuleDef("all runtime concepts become ABox nodes before AI receives an opinion packet", "operations-dispatch"),
+    TBoxRuleDef("relations with opinionImpact, riskImpact, supportImpact, or polarity change AI opinion pressure", "reasoning-insight"),
+    TBoxRuleDef("data collection, analysis, reasoning, and notification dispatch are first-class ontology concepts", "operations-dispatch"),
+    TBoxRuleDef("notification dispatch is driven by meaningful ontology insights, not by alert-type polling alone", "operations-dispatch"),
+    TBoxRuleDef("collection schedules describe data freshness targets while cooldown, novelty, and suppression policies control delivery noise", "operations-dispatch"),
+]
+
+
+TBOX_CLASSES = [item.name for item in CLASS_DEFS]
+TBOX_RELATION_TYPES = [item.name for item in RELATION_DEFS]
+TBOX_REASONING_RULES = [item.text for item in RULE_DEFS]
+
+_CLASS_BY_NAME: Dict[str, TBoxClassDef] = {item.name: item for item in CLASS_DEFS}
+_RELATION_BY_NAME: Dict[str, TBoxRelationDef] = {item.name: item for item in RELATION_DEFS}
+
+
+def tbox_class_def(name: str) -> Optional[TBoxClassDef]:
+    return _CLASS_BY_NAME.get(str(name or ""))
+
+
+def tbox_relation_def(name: str) -> Optional[TBoxRelationDef]:
+    return _RELATION_BY_NAME.get(str(name or "").upper())
+
+
+def bounded_contexts_payload() -> List[Dict[str, object]]:
+    return [asdict(item) for item in BOUNDED_CONTEXTS]
+
+
+def class_definitions_payload() -> List[Dict[str, object]]:
+    return [asdict(item) for item in CLASS_DEFS]
+
+
+def relation_definitions_payload() -> List[Dict[str, object]]:
+    return [asdict(item) for item in RELATION_DEFS]
+
+
+def rule_definitions_payload() -> List[Dict[str, object]]:
+    return [asdict(item) for item in RULE_DEFS]

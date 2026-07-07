@@ -4,16 +4,16 @@
 
 ## Domain Vocabulary
 
-- `Portfolio`: 계좌 단위 투자 관점의 루트.
-- `Stock`: 보유 종목.
-- `Sector`, `Market`, `Currency`: 종목이 속한 노출 축.
-- `Risk`: 집중도, 손실로 보유 이유가 약해지는 상황, 추세 약화, 수급 악화, 데이터 품질 저하.
-- `Opportunity`: 추세, 수급, 분산 효과처럼 보유 이유를 뒷받침하는 관계.
-- `Evidence`: 기존 점수, 포트폴리오 노출, 추세, 수급, 데이터 품질 같은 근거.
-- `Belief`: 근거에서 도출된 지지 또는 위험 판단.
-- `Opinion`: 관계 규칙으로 만든 종목별 투자 의견.
-- `RelationRule`: 실행 중인 데이터에서 성립 여부를 판단하는 관계 규칙. 예: 수익 보유 + 추세 약화 -> 익절 점검.
-- `PromptTemplate`: 성립한 관계 규칙, 근거, 부족 데이터를 AI가 설명하기 위한 질문 양식.
+TBox 정의는 `python_service/digital_twin/domain/ontology_tbox.py`에 둔다. `domain/ontology.py`는 이 TBox를 사용해 현재 계좌 스냅샷을 ABox로 만든다.
+
+바운디드 컨텍스트는 6개다.
+
+- `investment-core`: `Account`, `Portfolio`, `Instrument`, `Stock`, `Position`, `Watchlist`, `Cash`, `Sector`, `Market`, `Currency`, `MarketExposure`.
+- `observation-data`: `Observation`, `PriceObservation`, `TechnicalObservation`, `FlowObservation`, `ExternalSignal`, `DataSource`, `DataFreshness`, `Provenance`, `SignalHorizon`, `MissingData`.
+- `strategy-thesis`: `Strategy`, `InvestmentThesis`, `EntryCondition`, `ExitCondition`, `RiskManagementRule`, `RebalancingRule`, `PositionSizingRule`, `ModelScore`, `LegacyScoreModel`, `RuntimeSetting`.
+- `risk-exposure`: `Risk`, `MarketRisk`, `LiquidityRisk`, `ConcentrationRisk`, `CurrencyRisk`, `EventRisk`, `DataQualityRisk`, `ModelRisk`, `RegimeRisk`.
+- `reasoning-insight`: `Signal`, `Evidence`, `Belief`, `Opinion`, `Opportunity`, `Contradiction`, `Insight`, `ReasoningCard`, `AIReview`.
+- `operations-dispatch`: `DataPipeline`, `CollectionSchedule`, `CollectionPolicy`, `AnalysisJob`, `ReasoningCycle`, `NotificationDispatch`, `CooldownPolicy`, `NoveltyPolicy`, `SuppressionPolicy`, `MarketSession`.
 
 ## TBox And ABox
 
@@ -22,7 +22,9 @@
 - `TBox`: 투자 관계 분석의 규칙 구조다. `Portfolio`, `Stock`, `Sector`, `Risk`, `Evidence`, `Belief`, `Opinion` 같은 클래스와 `HOLDS`, `EXPOSED_TO`, `CONTRADICTS`, `HAS_EVIDENCE` 같은 관계 타입, 그리고 판단 규칙을 정의한다.
 - `ABox`: 현재 계좌 스냅샷에서 만들어진 실제 데이터 계층이다. 실제 보유 종목, 섹터 노출, 수급 근거, 추세 근거, 위험 판단 근거, 종목별 의견이 여기에 들어간다.
 
-AI 프롬프트에는 TBox와 ABox를 함께 전달한다. AI는 TBox를 해석 규칙으로 읽고, ABox를 현재 투자 상태의 사실 집합으로 읽어야 한다. Neo4j 저장 시 노드와 관계에는 `ontologyBox` 속성을 붙여 `TBox`와 `ABox`를 구분한다.
+AI 프롬프트에는 TBox, `boundedContexts`, ABox, operational ontology, reasoning card를 함께 전달한다. AI는 TBox를 해석 규칙으로 읽고, ABox를 현재 투자 상태의 사실 집합으로 읽어야 한다. Neo4j 저장 시 노드와 관계에는 `ontologyBox` 속성을 붙여 `TBox`와 `ABox`를 구분하고, ABox 노드/관계에는 가능하면 `boundedContext`도 붙인다.
+
+데이터 수집 주기 자체도 세계관의 일부다. `marketSnapshot`, `watchlistSnapshot`, `externalSignals`는 ABox의 `DataPipeline` 노드이며, 각 파이프라인은 `CollectionSchedule`, `DataFreshness`, `CollectionPolicy`, `ReasoningCycle`에 연결된다. 즉 3분/5분/30분 같은 값은 TBox 클래스가 아니라, `CollectionSchedule` 클래스의 현재 실행 인스턴스다.
 
 ## Relation Types
 
@@ -32,6 +34,11 @@ AI 프롬프트에는 TBox와 ABox를 함께 전달한다. AI는 TBox를 해석 
 - `TRADED_IN`: 종목이 시장에 상장되어 있다.
 - `DENOMINATED_IN`: 종목 평가 통화.
 - `EXPOSED_TO`: 포트폴리오 또는 종목이 리스크/섹터에 노출되어 있다.
+- `HAS_OBSERVATION`: 종목 또는 포트폴리오가 가격, 기술 지표, 수급, 외부 신호 관측값을 가진다.
+- `USES_STRATEGY`: 포트폴리오가 적용 중인 투자전략.
+- `BASED_ON_THESIS`: 종목 또는 전략이 투자 가설에 의해 평가된다.
+- `SUPPORTS_THESIS`, `WEAKENS_THESIS`, `INVALIDATES_THESIS`: 근거, 기회, 리스크, 모순이 투자 가설에 미치는 방향.
+- `HAS_TIME_HORIZON`, `APPLIES_TO_HORIZON`: 보유/관심 판단의 유효 기간과 관찰 범위.
 - `SUPPORTED_BY`: 종목 보유 이유를 뒷받침하는 기회 관계.
 - `CONTRADICTS`: 기존 점수, 추세, 수급, 집중도 사이에 충돌이 있다.
 - `USES_EVIDENCE_FROM`: 기존 점수 모델을 보조 근거로 사용한다.
@@ -44,11 +51,13 @@ AI 프롬프트에는 TBox와 ABox를 함께 전달한다. AI는 TBox를 해석 
 2. `domain/ontology_rules.py`가 종목별 fact, 부족 데이터, 관계 규칙 성립 여부를 만든다.
 3. `DecisionItem.decision`, `exit_pressure`, `decision_basis`는 관계 규칙 결과에서 나온다. `decision_basis`는 `ontologyRelationRules`다.
 4. 기존 공식 기반 `profitTakePressure`, `lossCutPressure`, 매수/매도 점수는 보조 근거와 과거 비교용으로만 보관한다.
-5. `domain/ontology.py`가 TBox/ABox 그래프와 `OntologyOpinion`을 만든다.
+5. `domain/ontology.py`가 TBox/ABox 그래프와 `OntologyOpinion`을 만든다. 이때 `Strategy`, `InvestmentThesis`, `Observation`, `Risk`, `Insight`, `NotificationDispatch`까지 모두 ABox 노드로 만든다.
 6. `DecisionItem.relation_rule_context`, `ai_prompt_context`, `ai_context`에 관계 규칙 결과와 프롬프트 입력 계약을 함께 붙인다.
 7. 실시간 모니터링은 알림 metadata에 `ontologyRelationContext`, `ontologyPromptContext`, `ontologyReviewContext`를 포함한다.
 8. 모델 리뷰 워커는 이 정보를 비동기 AI 프롬프트에 넣어 판단 변화 원인, 노이즈 가능성, 부족 데이터, 다음 규칙 개선안을 분석한다.
 9. `NEO4J_URI`가 설정되어 있으면 `infrastructure/neo4j_ontology.py`가 동일 그래프를 Neo4j에 저장한다.
+
+알림은 투자 이벤트 타입별 폴링으로 직접 발송하지 않는다. 기존 `modelBuy`, `holdingTiming`, `externalDartDisclosure` 같은 이벤트는 `investmentInsight.metadata.sourceAlertEvents`의 근거 신호로 남고, 최종 발송은 `Insight -> DISPATCHED_BY -> NotificationDispatch(investmentInsight)` 관계가 담당한다.
 
 ## Runtime Settings
 
@@ -83,14 +92,17 @@ AI에는 다음 데이터를 함께 전달한다.
 - Missing data: 없는 데이터와 판단 영향.
 - Prompt policy: 없는 데이터 추정 금지, 투자 판단과 발송 우선도 분리.
 - Relation graph: 필요할 때 규칙 구조, 현재 데이터, 근거, 판단 근거, AI 의견을 함께 전달한다.
+- Bounded contexts: 각 노드/관계가 투자 핵심, 관측 데이터, 전략 가설, 리스크, 추론 인사이트, 운영/알림 중 어디에 속하는지 전달한다.
 
 프롬프트는 매수/매도 명령을 확정하지 않고, 관계와 근거끼리의 충돌을 설명하는 투자 의견을 요구한다. API 키, 토큰, 계좌번호 같은 민감 정보는 전달하지 않는다.
 
 ## Extension Rules
 
-- 새 리스크나 기회는 `domain/ontology.py`의 vocabulary와 relation으로 추가한다.
+- 새 TBox 클래스, 관계 타입, 바운디드 컨텍스트 규칙은 `domain/ontology_tbox.py`에 추가한다.
+- 새 ABox 인스턴스 생성은 `domain/ontology.py`에 추가하고, `tboxClass` 또는 `tboxClasses`를 지정해 `boundedContext`가 자동 부여되게 한다.
 - 새 런타임 판단은 먼저 `domain/ontology_rules.py`의 관계 규칙과 fact builder로 추가한다.
 - 새 AI 설명은 `aiPromptTemplates`와 `aiPromptPolicy`의 계약을 함께 갱신한다.
-- 외부 뉴스, 공시, 매크로 데이터는 먼저 `Evidence`로 정규화한 뒤 판단 근거를 만든다.
+- 외부 뉴스, 공시, 매크로 데이터는 먼저 `ExternalSignal` 또는 구체 클래스(`NewsEvent`, `DisclosureEvent`, `MacroIndicator`)의 ABox 관측값으로 만들고, 필요하면 `Evidence`, `Belief`, `Insight`로 파생한다.
+- 새 관계가 AI 의견을 바꿔야 하면 relation properties에 `polarity`, `opinionImpact`, `riskImpact`, `supportImpact`, `aiInfluenceLabel`을 명시한다.
 - 기존 공식 점수를 다시 최종 판단 주체로 올리지 않는다. 공식은 보조 근거로만 둔다.
 - Neo4j 저장 실패가 실시간 알림, snapshot 저장, notification outbox를 막으면 안 된다.

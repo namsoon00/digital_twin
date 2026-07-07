@@ -4,144 +4,22 @@ from dataclasses import asdict, dataclass, field
 from typing import Dict, Iterable, List, Optional
 
 from .market_data import clamp, number
+from .ontology_tbox import (
+    BOUNDED_CONTEXTS,
+    TBOX_CLASSES,
+    TBOX_REASONING_RULES,
+    TBOX_RELATION_TYPES,
+    bounded_contexts_payload,
+    class_definitions_payload,
+    relation_definitions_payload,
+    rule_definitions_payload,
+    tbox_class_def,
+    tbox_relation_def,
+)
 from .portfolio import PortfolioSummary, Position
 
 
 ONTOLOGY_PROMPT_VERSION = "ontology-investment-v2-tbox-abox"
-
-TBOX_CLASSES = [
-    "Portfolio",
-    "Account",
-    "Stock",
-    "Position",
-    "Watchlist",
-    "Sector",
-    "Market",
-    "Currency",
-    "Cash",
-    "WatchlistCandidate",
-    "DataPipeline",
-    "CollectionSchedule",
-    "CollectionPolicy",
-    "DataFreshness",
-    "MarketSnapshot",
-    "WatchlistSnapshot",
-    "ExternalSignalCollection",
-    "DataSource",
-    "PriceMetric",
-    "TechnicalIndicator",
-    "TradeFlow",
-    "DataQuality",
-    "ValuationAssumption",
-    "StrategySignal",
-    "ModelScore",
-    "Threshold",
-    "RuntimeSetting",
-    "NotificationPolicy",
-    "AlertRule",
-    "PromptTemplate",
-    "ExternalSignal",
-    "MarketExposure",
-    "AnalysisJob",
-    "ReasoningCycle",
-    "ReasoningRule",
-    "Insight",
-    "InsightType",
-    "InsightPolicy",
-    "NotificationDispatch",
-    "CooldownPolicy",
-    "NoveltyPolicy",
-    "SuppressionPolicy",
-    "MarketSession",
-    "OperationalEvent",
-    "Risk",
-    "Opportunity",
-    "Contradiction",
-    "Evidence",
-    "Belief",
-    "Opinion",
-    "ReasoningCard",
-    "AIReview",
-    "LegacyScoreModel",
-]
-
-TBOX_RELATION_TYPES = [
-    "DEFINES_CLASS",
-    "DEFINES_RELATION",
-    "CONSTRAINS_ASSERTIONS",
-    "HOLDS",
-    "WATCHES",
-    "HOLDS_CASH",
-    "MANAGES_PORTFOLIO",
-    "HAS_POSITION",
-    "HAS_WATCHLIST",
-    "HAS_PIPELINE",
-    "REPRESENTS_STOCK",
-    "HAS_MARKET_EXPOSURE",
-    "BELONGS_TO",
-    "TRADED_IN",
-    "DENOMINATED_IN",
-    "OBSERVED_FROM",
-    "HAS_PRICE",
-    "HAS_TECHNICAL_INDICATOR",
-    "HAS_TRADE_FLOW",
-    "HAS_DATA_QUALITY",
-    "HAS_VALUATION",
-    "HAS_MODEL_SCORE",
-    "HAS_THRESHOLD",
-    "HAS_RUNTIME_SETTING",
-    "HAS_NOTIFICATION_POLICY",
-    "HAS_ALERT_RULE",
-    "HAS_PROMPT_TEMPLATE",
-    "HAS_EXTERNAL_SIGNAL",
-    "COLLECTS_DATA_FROM",
-    "RUNS_ON_SCHEDULE",
-    "RUNS_AFTER_EVENT",
-    "USES_COLLECTION_POLICY",
-    "HAS_DATA_FRESHNESS",
-    "UPDATES_GRAPH",
-    "TRIGGERS_REASONING",
-    "HAS_REASONING_CYCLE",
-    "SCHEDULES_ANALYSIS",
-    "PRODUCES_INSIGHT",
-    "HAS_INSIGHT_TYPE",
-    "CREATED_FROM_RELATION",
-    "USES_INSIGHT_POLICY",
-    "HAS_NOTIFICATION_DISPATCH",
-    "DISPATCHED_BY",
-    "SUPPRESSED_BY_POLICY",
-    "HAS_COOLDOWN_POLICY",
-    "HAS_NOVELTY_POLICY",
-    "OBSERVES_MARKET_SESSION",
-    "AFFECTS",
-    "IMPACTS_OPINION",
-    "DERIVES",
-    "CONFIGURES",
-    "TRIGGERS_ALERT",
-    "EXPOSED_TO",
-    "SUPPORTED_BY",
-    "CONTRADICTS",
-    "USES_EVIDENCE_FROM",
-    "REQUESTS_OPINION_FROM",
-    "HAS_EVIDENCE",
-    "HAS_BELIEF",
-    "HAS_OPINION",
-    "HAS_REASONING_CARD",
-]
-
-TBOX_REASONING_RULES = [
-    "sector concentration and position weight create exposure risk beliefs",
-    "trend and smart-money flow create support or risk beliefs",
-    "legacy score disagreement with trend or flow creates contradiction beliefs",
-    "data quality controls AI opinion confidence",
-    "legacy score model remains supporting evidence, not the primary decision model",
-    "watchlist candidates create observation assertions, not sell decisions",
-    "all runtime concepts become ABox nodes before AI receives an opinion packet",
-    "relations with opinionImpact, riskImpact, supportImpact, or polarity change AI opinion pressure",
-    "data collection, analysis, reasoning, and notification dispatch are first-class ontology concepts",
-    "notification dispatch is driven by meaningful ontology insights, not by alert-type polling alone",
-    "collection schedules describe data freshness targets while cooldown and novelty policies control delivery noise",
-]
 
 SENSITIVE_SETTING_TOKENS = ("secret", "token", "password", "clientid", "client_id", "accountseq", "account_seq", "chatid", "chat_id", "key")
 
@@ -248,6 +126,80 @@ INSIGHT_TYPES = [
     ("portfolioExposureShift", "포트폴리오 노출 변화"),
     ("watchlistEntrySignal", "관심종목 진입 관찰"),
 ]
+
+
+def unique_list(values: Iterable[str]) -> List[str]:
+    seen = set()
+    rows: List[str] = []
+    for value in values:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        rows.append(text)
+    return rows
+
+
+def metric_tbox_classes(tbox_class: str, field_name: str) -> List[str]:
+    if tbox_class == "PriceMetric":
+        return ["Observation", "PriceObservation", "PriceMetric"]
+    if tbox_class == "TechnicalIndicator":
+        return ["Observation", "TechnicalObservation", "TechnicalIndicator", "TrendSignal"]
+    if tbox_class == "TradeFlow":
+        if field_name == "volume":
+            return ["Observation", "VolumeObservation", "TradeFlow", "FlowSignal"]
+        return ["Observation", "FlowObservation", "TradeFlow", "FlowSignal"]
+    if tbox_class == "DataQuality":
+        return ["Observation", "DataQuality", "DataQualitySignal"]
+    return [tbox_class]
+
+
+def instrument_tbox_classes(position: Position) -> List[str]:
+    market = str(position.market or "").lower()
+    symbol = str(position.symbol or "").upper()
+    if market in {"crypto", "coin"} or symbol in {"BTC", "ETH", "SOL"}:
+        return ["Instrument", "CryptoAsset"]
+    if "etf" in str(position.name or "").lower():
+        return ["Instrument", "ETF"]
+    return ["Instrument", "Equity", "Stock"]
+
+
+def external_signal_classes(group: str) -> List[str]:
+    text = str(group or "").lower()
+    classes = ["Observation", "ExternalObservation", "ExternalSignal", "Signal"]
+    if "dart" in text or "disclosure" in text or "filing" in text:
+        classes.extend(["DisclosureEvent", "DisclosureSignal", "EventRisk"])
+    if "news" in text or "headline" in text:
+        classes.extend(["NewsEvent", "EventRisk"])
+    if "macro" in text or "rate" in text or "yield" in text:
+        classes.extend(["MacroIndicator", "MacroSignal", "RateSignal", "RegimeRisk"])
+    if "credit" in text or "spread" in text:
+        classes.extend(["CreditSpreadSignal", "MacroSignal", "RegimeRisk"])
+    if "crypto" in text or "coin" in text or "btc" in text:
+        classes.extend(["CryptoMarketSignal", "CryptoSignal"])
+    if "earning" in text or "result" in text:
+        classes.extend(["EarningsEvent", "ValuationSignal"])
+    if "regulat" in text or "policy" in text:
+        classes.extend(["RegulatoryEvent", "EventRisk"])
+    return unique_list(classes)
+
+
+def risk_tbox_classes(label: str) -> List[str]:
+    text = str(label or "")
+    classes = ["Risk"]
+    if any(token in text for token in ["비중", "노출", "집중", "단일 종목"]):
+        classes.append("ConcentrationRisk")
+    if any(token in text for token in ["수급", "유동성", "거래량", "체결"]):
+        classes.append("LiquidityRisk")
+    if any(token in text for token in ["추세", "손실", "수익", "가격"]):
+        classes.append("MarketRisk")
+    if any(token in text for token in ["데이터", "부족", "품질"]):
+        classes.append("DataQualityRisk")
+    if any(token in text for token in ["기존", "모델", "점수"]):
+        classes.append("ModelRisk")
+    if any(token in text for token in ["공시", "뉴스", "규제", "이벤트"]):
+        classes.append("EventRisk")
+    return unique_list(classes)
 
 
 @dataclass
@@ -374,10 +326,14 @@ def entity_id(kind: str, value: str) -> str:
 def ontology_tbox() -> Dict[str, object]:
     return {
         "box": "TBox",
-        "description": "Investment ontology schema: classes, relation types, and reasoning rules.",
+        "description": "Investment ontology schema: bounded contexts, classes, relation types, and reasoning rules.",
+        "boundedContexts": bounded_contexts_payload(),
         "classes": list(TBOX_CLASSES),
+        "classDefinitions": class_definitions_payload(),
         "relationTypes": list(TBOX_RELATION_TYPES),
+        "relationDefinitions": relation_definitions_payload(),
         "reasoningRules": list(TBOX_REASONING_RULES),
+        "reasoningRuleDefinitions": rule_definitions_payload(),
     }
 
 
@@ -405,15 +361,35 @@ def tbox_entities() -> List[OntologyEntity]:
             "description": "Assertion layer for runtime portfolio facts.",
         }),
     ]
+    for context in BOUNDED_CONTEXTS:
+        entities.append(OntologyEntity(entity_id("bounded-context", context.key), context.label, "bounded-context", {
+            "ontologyBox": "TBox",
+            "box": "TBox",
+            "boundedContext": context.key,
+            "label": context.label,
+            "description": context.description,
+        }))
     for name in TBOX_CLASSES:
+        definition = tbox_class_def(name)
         entities.append(OntologyEntity(entity_id("tbox-class", name), name, "tbox-class", {
             "ontologyBox": "TBox",
             "box": "TBox",
+            "className": name,
+            "boundedContext": definition.bounded_context if definition else "",
+            "label": definition.label if definition else name,
+            "parentClass": definition.parent if definition else "",
+            "description": definition.description if definition else "",
         }))
     for name in TBOX_RELATION_TYPES:
+        definition = tbox_relation_def(name)
         entities.append(OntologyEntity(entity_id("tbox-relation", name), name, "tbox-relation", {
             "ontologyBox": "TBox",
             "box": "TBox",
+            "relationType": name,
+            "boundedContext": definition.bounded_context if definition else "",
+            "sourceContext": definition.source_context if definition else "",
+            "targetContext": definition.target_context if definition else "",
+            "description": definition.description if definition else "",
         }))
     return entities
 
@@ -422,10 +398,34 @@ def tbox_relations() -> List[OntologyRelation]:
     relations: List[OntologyRelation] = []
     tbox_id = entity_id("ontology-box", "TBox")
     abox_id = entity_id("ontology-box", "ABox")
+    for context in BOUNDED_CONTEXTS:
+        context_id = entity_id("bounded-context", context.key)
+        relations.append(OntologyRelation(tbox_id, context_id, "DEFINES_BOUNDED_CONTEXT", properties={
+            "ontologyBox": "TBox",
+            "boundedContext": context.key,
+        }))
     for name in TBOX_CLASSES:
-        relations.append(OntologyRelation(tbox_id, entity_id("tbox-class", name), "DEFINES_CLASS", properties={"ontologyBox": "TBox"}))
+        definition = tbox_class_def(name)
+        class_id = entity_id("tbox-class", name)
+        owner_id = entity_id("bounded-context", definition.bounded_context) if definition else tbox_id
+        relations.append(OntologyRelation(owner_id, class_id, "DEFINES_CLASS", properties={
+            "ontologyBox": "TBox",
+            "boundedContext": definition.bounded_context if definition else "",
+        }))
+        if definition and definition.parent:
+            relations.append(OntologyRelation(class_id, entity_id("tbox-class", definition.parent), "IS_A", properties={
+                "ontologyBox": "TBox",
+                "boundedContext": definition.bounded_context,
+            }))
     for name in TBOX_RELATION_TYPES:
-        relations.append(OntologyRelation(tbox_id, entity_id("tbox-relation", name), "DEFINES_RELATION", properties={"ontologyBox": "TBox"}))
+        definition = tbox_relation_def(name)
+        owner_id = entity_id("bounded-context", definition.bounded_context) if definition else tbox_id
+        relations.append(OntologyRelation(owner_id, entity_id("tbox-relation", name), "DEFINES_RELATION", properties={
+            "ontologyBox": "TBox",
+            "boundedContext": definition.bounded_context if definition else "",
+            "sourceContext": definition.source_context if definition else "",
+            "targetContext": definition.target_context if definition else "",
+        }))
     relations.append(OntologyRelation(tbox_id, abox_id, "CONSTRAINS_ASSERTIONS", properties={"ontologyBox": "TBox"}))
     return relations
 
@@ -434,6 +434,27 @@ def abox_properties(properties: Dict[str, object] = None) -> Dict[str, object]:
     payload = dict(properties or {})
     payload.setdefault("ontologyBox", "ABox")
     payload.setdefault("box", "ABox")
+    if not payload.get("boundedContext"):
+        class_names = []
+        if payload.get("tboxClass"):
+            class_names.append(str(payload.get("tboxClass")))
+        class_names.extend(str(value) for value in payload.get("tboxClasses") or [] if value)
+        for class_name in class_names:
+            definition = tbox_class_def(class_name)
+            if definition:
+                payload["boundedContext"] = definition.bounded_context
+                break
+    return payload
+
+
+def abox_relation_properties(relation_type: str, properties: Dict[str, object] = None) -> Dict[str, object]:
+    payload = abox_properties(properties or {})
+    definition = tbox_relation_def(relation_type)
+    if definition and not payload.get("boundedContext"):
+        payload["boundedContext"] = definition.bounded_context
+    if definition:
+        payload.setdefault("sourceContext", definition.source_context)
+        payload.setdefault("targetContext", definition.target_context)
     return payload
 
 
@@ -458,7 +479,7 @@ def add_relation(
         relation_type,
         weight=weight,
         evidence_ids=list(evidence_ids or []),
-        properties=abox_properties(properties or {}),
+        properties=abox_relation_properties(relation_type, properties or {}),
     ))
 
 
@@ -790,11 +811,20 @@ def add_metric_concepts(graph: PortfolioOntology, stock_id: str, position: Posit
             continue
         metric_id = add_entity(graph, kind + "-metric", symbol + ":" + public_key, label, {
             "tboxClass": tbox_class,
+            "tboxClasses": metric_tbox_classes(tbox_class, field_name),
             "field": public_key,
             "value": round(value, 4),
             "source": source,
         })
         properties = metric_relation_properties(field_name, value, source)
+        add_relation(
+            graph,
+            stock_id,
+            metric_id,
+            "HAS_OBSERVATION",
+            weight=1.0,
+            properties={**properties, "observationField": public_key},
+        )
         add_relation(
             graph,
             stock_id,
@@ -806,6 +836,7 @@ def add_metric_concepts(graph: PortfolioOntology, stock_id: str, position: Posit
     quality = data_quality_score(position)
     quality_id = add_entity(graph, "data-quality", symbol, "데이터 품질", {
         "tboxClass": "DataQuality",
+        "tboxClasses": metric_tbox_classes("DataQuality", "dataQuality"),
         "qualityScore": round(quality, 2),
         "dataQuality": position.data_quality,
         "quoteStatus": position.quote_status,
@@ -813,6 +844,7 @@ def add_metric_concepts(graph: PortfolioOntology, stock_id: str, position: Posit
     quality_properties = {"field": "dataQuality", "source": source, "aiInfluenceLabel": "데이터 품질"}
     if quality < 60:
         quality_properties.update({"polarity": "risk", "opinionImpact": round((60 - quality) * 0.2, 2)})
+    add_relation(graph, stock_id, quality_id, "HAS_OBSERVATION", weight=round(quality / 100, 4), properties=quality_properties)
     add_relation(graph, stock_id, quality_id, "HAS_DATA_QUALITY", weight=round(quality / 100, 4), properties=quality_properties)
 
 
@@ -820,11 +852,13 @@ def add_data_source_concept(graph: PortfolioOntology, stock_id: str, position: P
     label = str(position.quote_source or position.data_quality or source or "runtime-data")
     source_id = add_entity(graph, "data-source", label, label, {
         "tboxClass": "DataSource",
+        "tboxClasses": ["DataSource", "Provenance"],
         "quoteStatus": position.quote_status,
         "quoteMessage": position.quote_message,
         "dataQuality": position.data_quality,
     })
     add_relation(graph, stock_id, source_id, "OBSERVED_FROM", weight=1.0, properties={"source": source, "basis": "quote-source"})
+    add_relation(graph, stock_id, source_id, "HAS_PROVENANCE", weight=1.0, properties={"source": source, "basis": "quote-source"})
 
 
 def add_legacy_model_score_concepts(graph: PortfolioOntology, stock_id: str, symbol: str, legacy: Dict[str, object]) -> None:
@@ -840,6 +874,7 @@ def add_legacy_model_score_concepts(graph: PortfolioOntology, stock_id: str, sym
             continue
         score_id = add_entity(graph, "model-score", symbol + ":" + key, label, {
             "tboxClass": "ModelScore",
+            "tboxClasses": ["Signal", "StrategySignal", "ModelScore"],
             "field": key,
             "value": round(value, 2),
             "modelRole": "supporting-evidence",
@@ -850,6 +885,7 @@ def add_legacy_model_score_concepts(graph: PortfolioOntology, stock_id: str, sym
         if polarity == "support" and value >= 55:
             properties["supportImpact"] = min(14.0, (value - 45) * 0.35)
         add_relation(graph, stock_id, score_id, "HAS_MODEL_SCORE", weight=round(value / 100, 4), properties=properties)
+        add_relation(graph, score_id, stock_id, "USED_AS_EVIDENCE", weight=round(value / 100, 4), properties={**properties, "source": "legacy-model"})
 
 
 def add_runtime_setting_concepts(graph: PortfolioOntology, portfolio_node_id: str, runtime_context: Dict[str, object]) -> None:
@@ -1002,6 +1038,53 @@ def add_operational_world_concepts(
         add_relation(graph, pipeline_id, reasoning_id, "TRIGGERS_REASONING", properties={"source": "operational-ontology"})
 
 
+def add_strategy_world_concepts(
+    graph: PortfolioOntology,
+    portfolio_node_id: str,
+    runtime_context: Dict[str, object],
+) -> str:
+    settings = runtime_settings(runtime_context)
+    strategy_id = add_entity(graph, "strategy", "ontology-first-investment-strategy", "온톨로지 투자전략", {
+        "tboxClass": "Strategy",
+        "mode": "ontology-first",
+        "description": "계산 점수보다 TBox/ABox 관계, 근거 충돌, 데이터 품질, 운영 정책을 먼저 읽습니다.",
+    })
+    thesis_id = add_entity(graph, "investment-thesis", "portfolio-relation-thesis", "포트폴리오 관계 투자 가설", {
+        "tboxClass": "InvestmentThesis",
+        "scope": "portfolio",
+        "thesis": "실세계 관측값과 포트폴리오 노출이 투자 의견의 주 근거이며 기존 점수는 보조 근거입니다.",
+    })
+    entry_id = add_entity(graph, "entry-condition", "evidence-confirmed-entry", "근거 확인 진입 조건", {
+        "tboxClass": "EntryCondition",
+        "requires": ["price-observation", "trend-signal", "flow-signal", "data-quality"],
+    })
+    exit_id = add_entity(graph, "exit-condition", "risk-invalidates-thesis", "가설 약화 청산 조건", {
+        "tboxClass": "ExitCondition",
+        "requires": ["risk-amplification", "contradiction", "position-sizing-check"],
+    })
+    risk_rule_id = add_entity(graph, "risk-management-rule", "relation-risk-first", "관계 리스크 우선 규칙", {
+        "tboxClass": "RiskManagementRule",
+        "minimumDataQuality": 60,
+        "riskPressureThreshold": 55,
+    })
+    sizing_id = add_entity(graph, "position-sizing-rule", "exposure-aware-sizing", "노출 기반 비중 규칙", {
+        "tboxClass": "PositionSizingRule",
+        "uses": ["positionWeight", "sectorWeight", "cashRatio"],
+    })
+    rebalance_id = add_entity(graph, "rebalancing-rule", "meaningful-exposure-change", "의미 있는 노출 변화 리밸런싱", {
+        "tboxClass": "RebalancingRule",
+        "noveltyThreshold": number(settings.get("notificationNoveltyThreshold")) or 0.65,
+    })
+    add_relation(graph, portfolio_node_id, strategy_id, "USES_STRATEGY", properties={"source": "strategy-ontology"})
+    add_relation(graph, strategy_id, thesis_id, "BASED_ON_THESIS", properties={"source": "strategy-ontology"})
+    add_relation(graph, strategy_id, entry_id, "HAS_ENTRY_CONDITION", properties={"source": "strategy-ontology"})
+    add_relation(graph, strategy_id, exit_id, "HAS_EXIT_CONDITION", properties={"source": "strategy-ontology"})
+    add_relation(graph, strategy_id, risk_rule_id, "HAS_RISK_MANAGEMENT_RULE", properties={"source": "strategy-ontology"})
+    add_relation(graph, strategy_id, sizing_id, "HAS_POSITION_SIZING_RULE", properties={"source": "strategy-ontology"})
+    add_relation(graph, strategy_id, rebalance_id, "HAS_REBALANCING_RULE", properties={"source": "strategy-ontology"})
+    return strategy_id
+
+
 def add_decision_item_concepts(graph: PortfolioOntology, runtime_context: Dict[str, object]) -> None:
     items = runtime_context.get("decisionItems") if isinstance(runtime_context, dict) else []
     if not isinstance(items, list):
@@ -1015,6 +1098,7 @@ def add_decision_item_concepts(graph: PortfolioOntology, runtime_context: Dict[s
         stock_id = entity_id("stock", symbol)
         signal_id = add_entity(graph, "strategy-signal", symbol + ":" + str(item.get("decision") or "decision"), str(item.get("decision") or "전략 판단"), {
             "tboxClass": "StrategySignal",
+            "tboxClasses": ["Signal", "StrategySignal"],
             "source": str(item.get("source") or ""),
             "tone": str(item.get("tone") or ""),
             "priority": number(item.get("priority")),
@@ -1026,6 +1110,7 @@ def add_decision_item_concepts(graph: PortfolioOntology, runtime_context: Dict[s
         if number(item.get("exitPressure")) >= 55:
             properties.update({"polarity": "risk", "opinionImpact": min(16.0, (number(item.get("exitPressure")) - 45) * 0.3)})
         add_relation(graph, stock_id, signal_id, "DERIVES", weight=round(number(item.get("exitPressure")) / 100, 4), properties=properties)
+        add_relation(graph, signal_id, stock_id, "USED_AS_EVIDENCE", weight=0.55, properties={"source": "decision-item"})
 
 
 def add_external_signal_concepts(graph: PortfolioOntology, portfolio_node_id: str, external_signals: Dict[str, object]) -> None:
@@ -1034,6 +1119,7 @@ def add_external_signal_concepts(graph: PortfolioOntology, portfolio_node_id: st
     for key, value in sorted(external_signals.items()):
         signal_id = add_entity(graph, "external-signal", key, str(key), {
             "tboxClass": "ExternalSignal",
+            "tboxClasses": external_signal_classes(str(key)),
             "key": str(key),
             "value": safe_setting_value(str(key), value),
         })
@@ -1043,6 +1129,7 @@ def add_external_signal_concepts(graph: PortfolioOntology, portfolio_node_id: st
             if magnitude >= 3:
                 properties.update({"polarity": "risk", "opinionImpact": min(12.0, magnitude)})
         add_relation(graph, portfolio_node_id, signal_id, "HAS_EXTERNAL_SIGNAL", weight=1.0, properties=properties)
+        add_relation(graph, portfolio_node_id, signal_id, "HAS_OBSERVATION", weight=1.0, properties=properties)
 
 
 def symbol_external_signal_items(external_signals: Dict[str, object], symbol: str) -> List[Dict[str, object]]:
@@ -1083,10 +1170,19 @@ def add_symbol_external_signal_concepts(graph: PortfolioOntology, stock_id: str,
         group = str(row.get("group") or "")
         signal_id = add_entity(graph, "external-signal", symbol + ":" + group, group + " 외부 신호", {
             "tboxClass": "ExternalSignal",
+            "tboxClasses": external_signal_classes(group),
             "symbol": symbol,
             "group": group,
             "value": safe_setting_value(group, row.get("value")),
         })
+        add_relation(
+            graph,
+            stock_id,
+            signal_id,
+            "HAS_OBSERVATION",
+            weight=1.0,
+            properties=external_signal_relation_properties(group, row.get("value")),
+        )
         add_relation(
             graph,
             stock_id,
@@ -1164,6 +1260,7 @@ def build_portfolio_ontology(
     add_runtime_setting_concepts(graph, portfolio_node_id, runtime_context)
     add_runtime_metadata_concepts(graph, portfolio_node_id, runtime_context)
     add_operational_world_concepts(graph, portfolio_node_id, runtime_context, observed_positions)
+    strategy_id = add_strategy_world_concepts(graph, portfolio_node_id, runtime_context)
     add_external_signal_concepts(graph, portfolio_node_id, external_signals)
     watchlist_id = ""
     if any(is_watchlist_position(item) for item in observed_positions):
@@ -1189,7 +1286,7 @@ def build_portfolio_ontology(
         stock_id = entity_id("stock", symbol)
         source = "watchlist" if is_watchlist_position(position) else "holding"
         holding = is_holding_position(position)
-        stock_tbox_classes = ["Stock"] + (["WatchlistCandidate"] if source == "watchlist" else [])
+        stock_tbox_classes = instrument_tbox_classes(position) + (["WatchlistCandidate"] if source == "watchlist" else [])
         graph.entities.append(OntologyEntity(stock_id, position.name or symbol, "stock", abox_properties({
             "symbol": symbol,
             "market": position.market,
@@ -1247,6 +1344,26 @@ def build_portfolio_ontology(
         add_symbol_external_signal_concepts(graph, stock_id, symbol, external_signals)
         opinion = build_position_opinion(position, portfolio, legacy) if holding else build_watchlist_opinion(position, legacy)
         graph.opinions.append(opinion)
+        thesis_id = add_entity(graph, "investment-thesis", symbol, (position.name or symbol) + " 투자 가설", {
+            "tboxClass": "InvestmentThesis",
+            "symbol": symbol,
+            "source": source,
+            "thesis": opinion.thesis,
+            "action": opinion.action,
+            "confidence": number(opinion.conviction),
+            "ontologyPressure": number(opinion.ontology_pressure),
+        })
+        horizon_id = add_entity(graph, "signal-horizon", symbol + ":" + source, "보유 점검 기간" if holding else "관심 관찰 기간", {
+            "tboxClass": "SignalHorizon",
+            "symbol": symbol,
+            "source": source,
+            "horizon": "position-risk-review" if holding else "watchlist-entry-check",
+            "validity": "until-next-data-update",
+        })
+        add_relation(graph, stock_id, thesis_id, "BASED_ON_THESIS", weight=round(number(opinion.conviction) / 100, 4), properties={"source": "ontology-opinion"})
+        add_relation(graph, strategy_id, thesis_id, "BASED_ON_THESIS", weight=round(number(opinion.conviction) / 100, 4), properties={"source": "ontology-opinion"})
+        add_relation(graph, stock_id, horizon_id, "HAS_TIME_HORIZON", weight=1.0, properties={"source": "ontology-opinion"})
+        add_relation(graph, thesis_id, horizon_id, "APPLIES_TO_HORIZON", weight=1.0, properties={"source": "ontology-opinion"})
         weight = position_weight(position, portfolio)
         trend = trend_score(position)
         flow = smart_money_score(position)
@@ -1289,16 +1406,35 @@ def build_portfolio_ontology(
             graph.beliefs.append(OntologyBelief("belief:" + symbol + ":risk:" + str(index), stock_id, label, "risk", 0.7, opinion.evidence_ids))
         for risk in opinion.dominant_risks:
             risk_id = entity_id("risk", risk)
-            graph.entities.append(OntologyEntity(risk_id, risk, "risk", abox_properties({"tboxClass": "Risk"})))
-            graph.relations.append(OntologyRelation(stock_id, risk_id, "EXPOSED_TO", weight=0.75, evidence_ids=opinion.evidence_ids, properties=abox_properties()))
+            graph.entities.append(OntologyEntity(risk_id, risk, "risk", abox_properties({
+                "tboxClass": "Risk",
+                "tboxClasses": risk_tbox_classes(risk),
+            })))
+            graph.relations.append(OntologyRelation(stock_id, risk_id, "EXPOSED_TO", weight=0.75, evidence_ids=opinion.evidence_ids, properties=abox_relation_properties("EXPOSED_TO")))
+            graph.relations.append(OntologyRelation(risk_id, thesis_id, "WEAKENS_THESIS", weight=0.72, evidence_ids=opinion.evidence_ids, properties=abox_relation_properties("WEAKENS_THESIS", {
+                "polarity": "context",
+                "aiInfluenceLabel": risk,
+            })))
+            graph.relations.append(OntologyRelation(risk_id, stock_id, "AMPLIFIES_RISK", weight=0.62, evidence_ids=opinion.evidence_ids, properties=abox_relation_properties("AMPLIFIES_RISK", {
+                "polarity": "context",
+                "aiInfluenceLabel": risk,
+            })))
         if opinion.opportunities:
             opportunity_id = entity_id("opportunity", opinion.opportunities[0])
             graph.entities.append(OntologyEntity(opportunity_id, opinion.opportunities[0], "opportunity", abox_properties({"tboxClass": "Opportunity"})))
-            graph.relations.append(OntologyRelation(stock_id, opportunity_id, "SUPPORTED_BY", weight=0.65, evidence_ids=opinion.evidence_ids, properties=abox_properties()))
+            graph.relations.append(OntologyRelation(stock_id, opportunity_id, "SUPPORTED_BY", weight=0.65, evidence_ids=opinion.evidence_ids, properties=abox_relation_properties("SUPPORTED_BY")))
+            graph.relations.append(OntologyRelation(opportunity_id, thesis_id, "SUPPORTS_THESIS", weight=0.62, evidence_ids=opinion.evidence_ids, properties=abox_relation_properties("SUPPORTS_THESIS", {
+                "polarity": "context",
+                "aiInfluenceLabel": opinion.opportunities[0],
+            })))
         if opinion.contradictions:
             contradiction_id = entity_id("contradiction", opinion.contradictions[0])
             graph.entities.append(OntologyEntity(contradiction_id, opinion.contradictions[0], "contradiction", abox_properties({"tboxClass": "Contradiction"})))
-            graph.relations.append(OntologyRelation(stock_id, contradiction_id, "CONTRADICTS", weight=0.8, evidence_ids=opinion.evidence_ids, properties=abox_properties()))
+            graph.relations.append(OntologyRelation(stock_id, contradiction_id, "CONTRADICTS", weight=0.8, evidence_ids=opinion.evidence_ids, properties=abox_relation_properties("CONTRADICTS")))
+            graph.relations.append(OntologyRelation(contradiction_id, thesis_id, "INVALIDATES_THESIS", weight=0.7, evidence_ids=opinion.evidence_ids, properties=abox_relation_properties("INVALIDATES_THESIS", {
+                "polarity": "context",
+                "aiInfluenceLabel": opinion.contradictions[0],
+            })))
     add_decision_item_concepts(graph, runtime_context)
     graph.entities = dedupe_entities(graph.entities)
     graph.relations = dedupe_relations(graph.relations)
@@ -1326,6 +1462,8 @@ def dedupe_entities(items: List[OntologyEntity]) -> List[OntologyEntity]:
 def dedupe_relations(items: List[OntologyRelation]) -> List[OntologyRelation]:
     merged: Dict[str, OntologyRelation] = {}
     for item in items:
+        if (item.properties or {}).get("ontologyBox") != "TBox":
+            item.properties = abox_relation_properties(item.relation_type, item.properties or {})
         key = "|".join([item.source, item.relation_type, item.target])
         if key in merged:
             merged[key].weight = max(number(merged[key].weight), number(item.weight))
@@ -1576,6 +1714,18 @@ def build_reasoning_cards(graph: PortfolioOntology) -> List[Dict[str, object]]:
             ]
             + ["Evidence", "Belief", "Opinion", "AIReview"]
         ))
+        bounded_contexts = sorted(set(
+            [
+                str((entities.get(entity_id_value).properties or {}).get("boundedContext") or "")
+                for entity_id_value in neighbor_ids
+                if entities.get(entity_id_value) and (entities.get(entity_id_value).properties or {}).get("boundedContext")
+            ]
+            + [
+                str((relation.properties or {}).get("boundedContext") or "")
+                for relation in relations
+                if (relation.properties or {}).get("boundedContext")
+            ]
+        ))
         gaps = reasoning_card_data_gaps(evidence_rows)
         source = str(properties.get("source") or "holding")
         portfolio_relation = next((
@@ -1606,6 +1756,7 @@ def build_reasoning_cards(graph: PortfolioOntology) -> List[Dict[str, object]]:
             "dataGaps": gaps,
             "graphContext": {
                 "stockEntityId": stock.entity_id,
+                "boundedContexts": bounded_contexts,
                 "tboxClasses": tbox_classes,
                 "aboxEntityIds": neighbor_ids,
                 "relationIds": [relation_key(item) for item in relations],
@@ -1632,10 +1783,11 @@ def build_ai_inference_packet(graph: PortfolioOntology) -> Dict[str, object]:
         "role": "ontology-first-investment-opinion",
         "legacyModelRole": "supporting-evidence",
         "notificationRole": "insight-driven-dispatch",
-        "inputOrder": ["tbox", "abox", "operationalOntology", "reasoningCards", "relationInfluences", "insights", "relations", "evidence", "beliefs", "opinions"],
+        "inputOrder": ["tbox", "boundedContexts", "abox", "operationalOntology", "reasoningCards", "relationInfluences", "insights", "relations", "evidence", "beliefs", "opinions"],
         "reasoningCardCount": len(graph.reasoning_cards),
         "reasoningCardIds": [item.get("id") for item in graph.reasoning_cards],
         "graphInputs": {
+            "boundedContextCount": len(BOUNDED_CONTEXTS),
             "entityCount": len(graph.entities),
             "relationCount": len(graph.relations),
             "evidenceCount": len(graph.evidence),
@@ -1674,6 +1826,11 @@ def portfolio_worldview(
     pipeline_nodes = [item for item in graph.entities if item.kind == "data-pipeline"]
     insight_nodes = [item for item in graph.entities if item.kind == "insight"]
     dispatch_nodes = [item for item in graph.entities if item.kind == "notification-dispatch"]
+    bounded_context_counts: Dict[str, int] = {}
+    for item in graph.entities:
+        context = str((item.properties or {}).get("boundedContext") or "")
+        if context and (item.properties or {}).get("ontologyBox") != "TBox":
+            bounded_context_counts[context] = bounded_context_counts.get(context, 0) + 1
     top_sector = portfolio.sectors[0] if portfolio.sectors else {}
     return {
         "model": "ontology-first",
@@ -1681,6 +1838,8 @@ def portfolio_worldview(
             "tbox": ontology_tbox(),
             "abox": ontology_abox(graph),
         },
+        "boundedContexts": bounded_contexts_payload(),
+        "aboxBoundedContextCounts": bounded_context_counts,
         "legacyModelRole": "supporting-evidence",
         "dominantSector": top_sector.get("sector") or "",
         "dominantSectorRatio": number(top_sector.get("ratio")) if top_sector else 0.0,
@@ -1710,6 +1869,7 @@ def portfolio_worldview(
 def prompt_payload(graph: PortfolioOntology) -> Dict[str, object]:
     return {
         "tbox": ontology_tbox(),
+        "boundedContexts": bounded_contexts_payload(),
         "abox": ontology_abox(graph),
         "worldview": graph.worldview,
         "aiInferencePacket": build_ai_inference_packet(graph),
@@ -1727,10 +1887,11 @@ def build_investment_opinion_prompt(graph: PortfolioOntology) -> str:
     payload = json.dumps(prompt_payload(graph), ensure_ascii=False, sort_keys=True)
     return "\n".join([
         "너는 투자전략 관계 분석 데이터를 읽는 AI 투자 의견 리뷰어다.",
-        "규칙 구조는 투자 기준, 데이터 수집, 분석, 추론, 인사이트, 알림 디스패치까지 포함한 세계관이다.",
+        "규칙 구조는 투자 핵심, 관측 데이터, 전략 가설, 리스크, 추론 인사이트, 운영/알림 바운디드 컨텍스트로 나뉜 세계관이다.",
         "현재 데이터는 계좌의 실제 보유, 근거, 판단 근거, 운영 정책, 의견 기록이다.",
         "매수/매도 명령을 확정하지 말고, 포트폴리오 투자 관점, 관계, 반대 신호, 데이터 공백을 분석해라.",
         "기존 점수 모델은 보조 데이터로만 사용하고, 최종 판단은 관계 규칙과 근거 충돌을 기준으로 설명해라.",
+        "새 관측값이나 관계가 추가되면 어떤 투자 가설, 리스크, 인사이트, 알림 정책에 영향을 주는지 먼저 추론해라.",
         "알림은 알림 타입별 주기가 아니라 온톨로지 인사이트의 신규성, 신뢰도, 쿨다운, 억제 정책으로 설명해라.",
         "계좌번호, API 키, 토큰, 개인 식별정보를 추정하거나 요청하지 마라.",
         "응답 섹션은 반드시 투자 관점, 핵심 관계, 보유 이유와 반대 신호, 종목별 의견, 다음 검증 순서로 작성해라.",

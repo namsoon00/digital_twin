@@ -9745,59 +9745,95 @@
   }
 
   function ontologyTboxGraphNodes(tbox) {
-    var rules = tbox.reasoningRules || [];
-    return {
-      Portfolio: { id: "Portfolio", label: "계좌", kind: "schema", x: 92, y: 210 },
-      Cash: { id: "Cash", label: "현금", kind: "schema", x: 92, y: 86 },
-      Stock: { id: "Stock", label: "종목", kind: "schema", x: 258, y: 210 },
-      Sector: { id: "Sector", label: "업종", kind: "schema", x: 426, y: 76 },
-      Market: { id: "Market", label: "시장", kind: "schema", x: 426, y: 148 },
-      Currency: { id: "Currency", label: "통화", kind: "schema", x: 426, y: 220 },
-      Evidence: { id: "Evidence", label: "근거", kind: "evidence", x: 426, y: 322 },
-      Risk: { id: "Risk", label: "위험", kind: "risk", x: 620, y: 76 },
-      Opportunity: { id: "Opportunity", label: "기회", kind: "support", x: 620, y: 148 },
-      Contradiction: { id: "Contradiction", label: "반대 신호", kind: "risk", x: 620, y: 220 },
-      Belief: { id: "Belief", label: "판단 근거", kind: "belief", x: 620, y: 322 },
-      Opinion: { id: "Opinion", label: "AI 의견", kind: "opinion", x: 778, y: 322 },
-      AIReview: { id: "AIReview", label: "AI 리뷰", kind: "review", x: 778, y: 210 },
-      LegacyScoreModel: { id: "LegacyScoreModel", label: "기존 점수", kind: "model", x: 258, y: 322 },
-      Rule1: { id: "Rule1", label: "R1", kind: "rule", x: 92, y: 430, title: rules[0] || "업종 집중 규칙" },
-      Rule2: { id: "Rule2", label: "R2", kind: "rule", x: 224, y: 430, title: rules[1] || "추세와 수급 규칙" },
-      Rule3: { id: "Rule3", label: "R3", kind: "rule", x: 356, y: 430, title: rules[2] || "반대 신호 규칙" },
-      Rule4: { id: "Rule4", label: "R4", kind: "rule", x: 488, y: 430, title: rules[3] || "데이터 품질 규칙" },
-      Rule5: { id: "Rule5", label: "R5", kind: "rule", x: 620, y: 430, title: rules[4] || "기존 점수 보조 규칙" }
-    };
+    var contexts = tbox.boundedContexts || [];
+    var classDefs = tbox.classDefinitions || (tbox.classes || []).map(function (name) {
+      return { name: name, label: name, bounded_context: "investment-core", parent: "" };
+    });
+    var ruleDefs = tbox.reasoningRuleDefinitions || (tbox.reasoningRules || []).map(function (text) {
+      return { text: text, bounded_context: "reasoning-insight" };
+    });
+    var nodes = {};
+    var contextIndex = {};
+    contexts.forEach(function (context, index) {
+      var key = String(context.key || context.id || "context-" + index);
+      contextIndex[key] = index;
+      nodes["ctx:" + key] = {
+        id: "ctx:" + key,
+        label: context.label || key,
+        kind: "context",
+        title: (context.label || key) + " · " + (context.description || ""),
+        x: 90 + index * 160,
+        y: 72
+      };
+    });
+    var contextCounts = {};
+    classDefs.forEach(function (item) {
+      var name = String(item.name || item.className || "");
+      if (!name) return;
+      var contextKey = String(item.bounded_context || item.boundedContext || "investment-core");
+      var index = contextIndex[contextKey];
+      if (index === undefined) index = 0;
+      var count = contextCounts[contextKey] || 0;
+      contextCounts[contextKey] = count + 1;
+      nodes["class:" + name] = {
+        id: "class:" + name,
+        label: item.label || name,
+        kind: "schema",
+        title: name + (item.description ? " · " + item.description : ""),
+        x: 90 + index * 160,
+        y: 150 + count * 42
+      };
+    });
+    ruleDefs.forEach(function (item, index) {
+      var contextKey = String(item.bounded_context || item.boundedContext || "reasoning-insight");
+      var ctxIndex = contextIndex[contextKey];
+      if (ctxIndex === undefined) ctxIndex = Math.min(contexts.length - 1, 4);
+      nodes["rule:" + index] = {
+        id: "rule:" + index,
+        label: "R" + (index + 1),
+        kind: "rule",
+        title: item.text || item,
+        x: 90 + ctxIndex * 160,
+        y: 500 + (index % 4) * 48
+      };
+    });
+    return nodes;
   }
 
   function ontologyTboxGraphEdges(tbox) {
-    var allowed = (tbox.relationTypes || []).reduce(function (memo, type) {
-      memo[String(type || "").toUpperCase()] = true;
-      return memo;
-    }, {});
-    function relation(source, target, type) {
-      return allowed[type] !== false ? { source: source, target: target, type: type, kind: "schema" } : null;
-    }
-    return [
-      relation("Portfolio", "Stock", "HOLDS"),
-      relation("Portfolio", "Cash", "HOLDS_CASH"),
-      relation("Portfolio", "Sector", "EXPOSED_TO"),
-      relation("Stock", "Sector", "BELONGS_TO"),
-      relation("Stock", "Market", "TRADED_IN"),
-      relation("Stock", "Currency", "DENOMINATED_IN"),
-      relation("Stock", "Risk", "EXPOSED_TO"),
-      relation("Stock", "Opportunity", "SUPPORTED_BY"),
-      relation("Stock", "Contradiction", "CONTRADICTS"),
-      relation("Stock", "LegacyScoreModel", "USES_EVIDENCE_FROM"),
-      relation("Stock", "AIReview", "REQUESTS_OPINION_FROM"),
-      relation("Stock", "Evidence", "HAS_EVIDENCE"),
-      relation("Stock", "Belief", "HAS_BELIEF"),
-      relation("Stock", "Opinion", "HAS_OPINION"),
-      { source: "Rule1", target: "Risk", type: "derives", kind: "rule" },
-      { source: "Rule2", target: "Belief", type: "derives", kind: "rule" },
-      { source: "Rule3", target: "Contradiction", type: "guards", kind: "rule" },
-      { source: "Rule4", target: "Opinion", type: "confidence", kind: "rule" },
-      { source: "Rule5", target: "LegacyScoreModel", type: "evidence-only", kind: "rule" }
-    ].filter(Boolean);
+    var classDefs = tbox.classDefinitions || (tbox.classes || []).map(function (name) {
+      return { name: name, bounded_context: "investment-core", parent: "" };
+    });
+    var relationDefs = tbox.relationDefinitions || [];
+    var ruleDefs = tbox.reasoningRuleDefinitions || (tbox.reasoningRules || []).map(function (text) {
+      return { text: text, bounded_context: "reasoning-insight" };
+    });
+    var edges = [];
+    classDefs.forEach(function (item) {
+      var name = String(item.name || item.className || "");
+      var contextKey = String(item.bounded_context || item.boundedContext || "investment-core");
+      if (!name) return;
+      edges.push({ source: "ctx:" + contextKey, target: "class:" + name, type: "DEFINES_CLASS", kind: "schema" });
+      if (item.parent) {
+        edges.push({ source: "class:" + name, target: "class:" + item.parent, type: "IS_A", kind: "schema" });
+      }
+    });
+    var relationSeen = {};
+    relationDefs.forEach(function (item) {
+      var sourceContext = String(item.source_context || item.sourceContext || item.bounded_context || item.boundedContext || "");
+      var targetContext = String(item.target_context || item.targetContext || item.bounded_context || item.boundedContext || "");
+      var name = String(item.name || item.relationType || "");
+      if (!sourceContext || !targetContext || !name) return;
+      var key = sourceContext + "|" + targetContext + "|" + name;
+      if (relationSeen[key]) return;
+      relationSeen[key] = true;
+      edges.push({ source: "ctx:" + sourceContext, target: "ctx:" + targetContext, type: name, kind: "schema" });
+    });
+    ruleDefs.forEach(function (item, index) {
+      var contextKey = String(item.bounded_context || item.boundedContext || "reasoning-insight");
+      edges.push({ source: "rule:" + index, target: "ctx:" + contextKey, type: "CONSTRAINS_ASSERTIONS", kind: "rule" });
+    });
+    return edges;
   }
 
   function renderOntologyTboxGraph(tbox, relationCounts) {
@@ -9814,7 +9850,7 @@
       '</div>',
       '</div>',
       '<div class="ontology-graph-meta">',
-      '<span>' + escapeHtml((tbox.classes || []).length || 0) + ' 분류 · ' + escapeHtml((tbox.relationTypes || []).length || 0) + ' 관계 타입 · ' + escapeHtml((tbox.reasoningRules || []).length || 0) + ' 규칙</span>',
+      '<span>' + escapeHtml(((tbox.boundedContexts || []).length || 0)) + ' 컨텍스트 · ' + escapeHtml((tbox.classes || []).length || 0) + ' 분류 · ' + escapeHtml((tbox.relationTypes || []).length || 0) + ' 관계 타입 · ' + escapeHtml((tbox.reasoningRules || []).length || 0) + ' 규칙</span>',
       '</div>',
       '<div class="ontology-cytoscape" data-ontology-cytoscape="tbox"><span>그래프 엔진 초기화 중</span></div>',
       '<div class="ontology-graph-caption">',
@@ -10077,6 +10113,7 @@
           "text-max-width": 96
         }
       },
+      { selector: ".node-context", style: { "width": 120, "height": 42, "background-color": "#eef2ff", "border-color": violet, "color": ink } },
       { selector: ".node-rule", style: { "width": 58, "height": 34, "background-color": "#fff7ed", "border-color": amber, "color": amber } },
       { selector: ".node-schema, .node-portfolio, .node-stock", style: { "background-color": "#eff6ff", "border-color": blue } },
       { selector: ".node-sector, .node-market, .node-currency, .node-cash", style: { "background-color": "#ecfdf5", "border-color": green } },
@@ -10175,6 +10212,7 @@
   function renderOntologyBoxSummary(tbox, abox, worldview, strategy) {
     return [
       '<section class="ontology-ledger">',
+      renderOntologyLedgerItem("컨텍스트", ((tbox.boundedContexts || []).length || 0), "schema"),
       renderOntologyLedgerItem("규칙 분류", (tbox.classes || []).length || 0, "schema"),
       renderOntologyLedgerItem("관계 종류", (tbox.relationTypes || []).length || 0, "schema"),
       renderOntologyLedgerItem("현재 데이터", abox.entityCount || 0, "assertion"),
@@ -10197,17 +10235,38 @@
   function renderOntologyClassPanel(tbox) {
     var classes = tbox.classes || [];
     var relationTypes = tbox.relationTypes || [];
+    var contexts = tbox.boundedContexts || [];
+    var classDefs = tbox.classDefinitions || [];
+    var grouped = {};
+    classDefs.forEach(function (item) {
+      var key = String(item.bounded_context || item.boundedContext || "schema");
+      if (!grouped[key]) grouped[key] = [];
+      grouped[key].push(item);
+    });
     return [
       '<section class="ontology-surface ontology-tbox-surface">',
       '<div class="ontology-surface-head">',
       '<strong>규칙 구조</strong>',
-      '<span>' + escapeHtml(classes.length) + ' 분류 · ' + escapeHtml(relationTypes.length) + ' 관계 종류</span>',
+      '<span>' + escapeHtml(contexts.length || 0) + ' 컨텍스트 · ' + escapeHtml(classes.length) + ' 분류 · ' + escapeHtml(relationTypes.length) + ' 관계 종류</span>',
       '</div>',
-      '<div class="ontology-class-grid">',
-      classes.length ? classes.map(function (item) {
+      contexts.length && classDefs.length ? '<div class="ontology-context-class-grid">' + contexts.map(function (context) {
+        var key = String(context.key || "");
+        var rows = grouped[key] || [];
+        return [
+          '<div class="ontology-context-class-group">',
+          '<strong>' + escapeHtml(context.label || key) + '</strong>',
+          '<span>' + escapeHtml(context.description || "") + '</span>',
+          '<div class="ontology-class-grid">',
+          rows.slice(0, 18).map(function (item) {
+            return '<em>' + escapeHtml(item.label || item.name) + '</em>';
+          }).join("") || '<em>분류 없음</em>',
+          rows.length > 18 ? '<em>+' + escapeHtml(rows.length - 18) + '</em>' : '',
+          '</div>',
+          '</div>'
+        ].join("");
+      }).join("") + '</div>' : '<div class="ontology-class-grid">' + (classes.length ? classes.map(function (item) {
         return '<span>' + escapeHtml(item) + '</span>';
-      }).join("") : '<span>등록된 규칙 분류 없음</span>',
-      '</div>',
+      }).join("") : '<span>등록된 규칙 분류 없음</span>') + '</div>',
       '</section>'
     ].join("");
   }

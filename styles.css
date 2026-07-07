@@ -4250,17 +4250,103 @@ h3 {
   grid-column: span 1;
 }
 
-.admin-monitor-grid {
+.monitor-status-board {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 12px;
-  padding: 0 16px 16px;
+  min-width: 0;
+  border-bottom: 1px solid var(--line);
 }
 
-.admin-monitor-grid code {
-  font-size: 12px;
-  white-space: normal;
+.monitor-primary-state {
+  display: grid;
+  align-items: center;
+  min-width: 0;
+  padding: 16px;
+}
+
+.monitor-primary-state > div {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.monitor-primary-state .tone-chip {
+  justify-self: start;
+}
+
+.monitor-primary-state strong {
+  color: var(--ink);
+  font-size: 18px;
+  line-height: 1.25;
   overflow-wrap: anywhere;
+}
+
+.monitor-primary-state em {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 800;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.monitor-health-ledger,
+.monitor-runtime-strip,
+.monitor-market-ledger {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  min-width: 0;
+}
+
+.monitor-health-ledger {
+  border-top: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel) 82%, transparent);
+}
+
+.monitor-runtime-strip,
+.monitor-market-ledger {
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel) 76%, transparent);
+}
+
+.monitor-market-ledger {
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+
+.monitor-ledger-cell {
+  display: grid;
+  align-content: center;
+  gap: 4px;
+  min-width: 0;
+  min-height: 62px;
+  padding: 12px 14px;
+  border-left: 1px solid var(--line);
+}
+
+.monitor-ledger-cell:first-child {
+  border-left: 0;
+}
+
+.monitor-ledger-cell.live {
+  box-shadow: inset 2px 0 0 var(--green);
+}
+
+.monitor-ledger-cell span,
+.monitor-ledger-cell strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.monitor-ledger-cell span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.monitor-ledger-cell strong {
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 950;
+  line-height: 1.25;
 }
 
 .admin-delivery-grid {
@@ -7836,7 +7922,6 @@ h3 {
   .admin-grid,
   .admin-account-layout,
   .account-watchlist-workbench,
-  .admin-monitor-grid,
   .notification-template-row,
   .notification-template-columns,
   .notification-template-workbench,

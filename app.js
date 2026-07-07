@@ -7052,6 +7052,15 @@
     ].join("");
   }
 
+  function renderMonitorLedgerCell(label, value, tone) {
+    return [
+      '<div class="monitor-ledger-cell ' + escapeHtml(tone || "") + '">',
+      '<span>' + escapeHtml(label || "-") + '</span>',
+      '<strong>' + escapeHtml(value == null ? "-" : value) + '</strong>',
+      '</div>'
+    ].join("");
+  }
+
   function renderAdminMonitoringPanel(snapshot) {
     var toss = snapshot.toss || {};
     var portfolio = snapshot.portfolio || {};
@@ -7060,16 +7069,23 @@
     var positions = ((toss.positions || []) || []).filter(function (item) {
       return item.source !== "cash" && item.sector !== "현금";
     });
-    var marketRows = (portfolio.markets || []).map(function (market) {
-      return '<div class="source-row"><span>' + escapeHtml(market.label || market.key || "-") + '</span><strong>현금 ' + escapeHtml(pct(market.cashRatio || 0)) + '</strong></div>';
-    }).join("");
-    var commands = [
-      ["계정 확인", "npm run python:accounts -- list --json"],
-      ["1회 점검", "npm run python:monitor:once -- --dry-run --force"],
-      ["모니터 시작", "npm run python:service:start"],
-      ["서비스 상태", "npm run python:service:status"],
-      ["모델 리뷰", "npm run python:model-review:status"]
+    var healthRows = [
+      ["활성 계정", enabledCount + "/" + accounts.length, "live"],
+      ["보유 종목", positions.length + "개", ""],
+      ["평가 금액", formatMoney(portfolio.total || 0), ""],
+      ["토스 연결", toss.status || "-", ""],
+      ["마지막 갱신", formatClock(snapshot.generatedAt), ""]
     ];
+    var runtimeRows = [
+      ["웹소켓 최근 이벤트", realtimeLastEventText(), ""],
+      ["최근 모니터링 사이클", realtimeMonitoringCycleText(), ""],
+      ["최근 모니터링 알림", realtimeMonitoringAlertText(), ""],
+      ["알림 큐", notificationJobSummaryText(state.realtime.notificationJobs), "live"]
+    ];
+    var marketRows = (portfolio.markets || []).map(function (market) {
+      return renderMonitorLedgerCell(market.label || market.key || "-", "현금 " + pct(market.cashRatio || 0), "");
+    }).join("");
+    var liveLabel = snapshot.preview ? "정적 미리보기" : "실데이터 실행";
     return [
       '<article class="panel admin-monitoring-panel">',
       '<div class="panel-head">',
@@ -7079,30 +7095,26 @@
       '</div>',
       '<span class="status-pill ' + (snapshot.preview ? "demo" : "live") + '">' + escapeHtml(snapshot.preview ? "Preview" : "Live") + '</span>',
       '</div>',
-      '<div class="admin-stat-grid">',
-      renderAdminStat("활성 계정", enabledCount + "/" + accounts.length, ""),
-      renderAdminStat("보유 종목", positions.length, "개"),
-      renderAdminStat("평가 금액", formatMoney(portfolio.total || 0), ""),
-      renderAdminStat("상태", toss.status || "-", ""),
-      renderAdminStat("마지막 갱신", formatClock(snapshot.generatedAt), ""),
-      renderAdminStat("최근 이벤트", realtimeEventLabel(state.realtime.lastEvent), ""),
-      renderAdminStat("알림 큐", notificationJobSummaryText(state.realtime.notificationJobs), ""),
+      '<div class="monitor-status-board">',
+      '<div class="monitor-primary-state">',
+      '<div>',
+      '<span class="tone-chip ' + (snapshot.preview ? "hold" : "watch") + '">' + escapeHtml(liveLabel) + '</span>',
+      '<strong>' + escapeHtml(toss.status || "연결 상태 확인") + '</strong>',
+      '<em>최근 데이터 ' + escapeHtml(formatClock(snapshot.generatedAt)) + ' · ' + escapeHtml(realtimeEventLabel(state.realtime.lastEvent)) + '</em>',
       '</div>',
-      '<div class="admin-monitor-grid">',
-      '<div class="source-stack">',
-      '<div class="source-row"><span>데이터 모드</span><strong>' + escapeHtml(snapshot.preview ? "정적 미리보기" : "실데이터") + '</strong></div>',
-      '<div class="source-row"><span>토스 연결</span><strong>' + escapeHtml(toss.status || "-") + '</strong></div>',
-      '<div class="source-row"><span>웹소켓 최근 이벤트</span><strong>' + escapeHtml(realtimeLastEventText()) + '</strong></div>',
-      '<div class="source-row"><span>최근 모니터링 사이클</span><strong>' + escapeHtml(realtimeMonitoringCycleText()) + '</strong></div>',
-      '<div class="source-row"><span>최근 모니터링 알림</span><strong>' + escapeHtml(realtimeMonitoringAlertText()) + '</strong></div>',
-      marketRows,
       '</div>',
-      '<div class="source-stack">',
-      commands.map(function (row) {
-        return '<div class="source-row"><span>' + escapeHtml(row[0]) + '</span><strong><code>' + escapeHtml(row[1]) + '</code></strong></div>';
+      '<div class="monitor-health-ledger">',
+      healthRows.map(function (row) {
+        return renderMonitorLedgerCell(row[0], row[1], row[2]);
       }).join(""),
       '</div>',
       '</div>',
+      '<div class="monitor-runtime-strip">',
+      runtimeRows.map(function (row) {
+        return renderMonitorLedgerCell(row[0], row[1], row[2]);
+      }).join(""),
+      '</div>',
+      marketRows ? '<div class="monitor-market-ledger">' + marketRows + '</div>' : '',
       '<div class="rule-strip"><span>실제 백그라운드 워커 실행/중지는 로컬 명령으로 관리하고, 웹은 저장된 계정과 알림 설정을 같은 로컬 DB/설정 파일에 기록합니다.</span></div>',
       '</article>'
     ].join("");

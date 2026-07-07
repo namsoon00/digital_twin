@@ -82,6 +82,89 @@ class OntologyPromptTemplate:
         return payload
 
 
+@dataclass(frozen=True)
+class ScoreBandDefinition:
+    key: str
+    label: str
+    min_score: float
+    action_level: str
+    meaning: str
+    next_stage_at: float = 0.0
+
+    def contains(self, score: float) -> bool:
+        return float(score or 0) >= self.min_score
+
+    def to_dict(self) -> Dict[str, object]:
+        return {
+            "key": self.key,
+            "label": self.label,
+            "minScore": self.min_score,
+            "actionLevel": self.action_level,
+            "meaning": self.meaning,
+            "nextStageAt": self.next_stage_at,
+        }
+
+
+@dataclass(frozen=True)
+class DecisionStageDefinition:
+    stage_key: str
+    action_group: str
+    action_level: str
+    label: str
+    tone: str
+    min_score: float = 0.0
+    next_stage_at: float = 0.0
+
+    def to_dict(self) -> Dict[str, object]:
+        return {
+            "stageKey": self.stage_key,
+            "actionGroup": self.action_group,
+            "actionLevel": self.action_level,
+            "label": self.label,
+            "tone": self.tone,
+            "minScore": self.min_score,
+            "nextStageAt": self.next_stage_at,
+        }
+
+
+SCORE_BANDS = [
+    ScoreBandDefinition("URGENT", "매우 강함", 85.0, "urgent", "즉시 재확인이 필요한 매우 강한 관계 압력", 0.0),
+    ScoreBandDefinition("ACTION", "강함", 70.0, "action", "대응 기준을 확인할 만큼 강한 관계 압력", 85.0),
+    ScoreBandDefinition("REVIEW", "주의", 55.0, "review", "관찰을 유지해야 하는 관계 압력", 70.0),
+    ScoreBandDefinition("WATCH", "관찰", 35.0, "watch", "추적은 필요하지만 단독 판단 근거는 약한 관계 압력", 55.0),
+    ScoreBandDefinition("LOW", "낮음", 0.0, "reference", "참고 수준의 약한 관계 압력", 35.0),
+]
+
+
+DECISION_STAGE_DEFINITIONS = {
+    "RELATION_WATCH": DecisionStageDefinition("RELATION_WATCH", "holdWatch", "watch", "관계 규칙 관찰", "hold", 35.0, 55.0),
+    "HOLD_KEEP": DecisionStageDefinition("HOLD_KEEP", "holdWatch", "watch", "보유 유지", "watch", 0.0, 35.0),
+    "LOSS_WATCH": DecisionStageDefinition("LOSS_WATCH", "lossControl", "watch", "손실 방어 관망", "hold", 0.0, 55.0),
+    "LOSS_REDUCE": DecisionStageDefinition("LOSS_REDUCE", "lossControl", "review", "손실 축소 권장", "caution", 55.0, 70.0),
+    "LOSS_CUT": DecisionStageDefinition("LOSS_CUT", "lossControl", "action", "손절·분할축소 권장", "danger", 70.0, 85.0),
+    "PROFIT_PARTIAL": DecisionStageDefinition("PROFIT_PARTIAL", "profitTake", "review", "일부 익절 권장", "caution", 55.0, 70.0),
+    "PROFIT_SPLIT": DecisionStageDefinition("PROFIT_SPLIT", "profitTake", "action", "분할매도 권장", "caution", 70.0, 85.0),
+    "REBALANCE_REVIEW": DecisionStageDefinition("REBALANCE_REVIEW", "rebalance", "review", "리밸런싱 점검", "caution", 55.0, 70.0),
+    "REBALANCE_ACTION": DecisionStageDefinition("REBALANCE_ACTION", "rebalance", "action", "리밸런싱 권장", "caution", 70.0, 85.0),
+    "BTC_REVIEW": DecisionStageDefinition("BTC_REVIEW", "cryptoSensitivity", "review", "비트코인 민감도 점검", "watch", 55.0, 70.0),
+    "BTC_REDUCE": DecisionStageDefinition("BTC_REDUCE", "cryptoSensitivity", "action", "비트코인 민감도 축소 검토", "caution", 70.0, 85.0),
+    "DISCLOSURE_REVIEW": DecisionStageDefinition("DISCLOSURE_REVIEW", "disclosure", "review", "공시 리스크 대응 검토", "caution", 55.0, 70.0),
+    "FLOW_WATCH": DecisionStageDefinition("FLOW_WATCH", "flowTrend", "watch", "수급·추세 관찰", "watch", 35.0, 55.0),
+    "FLOW_DEFENSE": DecisionStageDefinition("FLOW_DEFENSE", "flowTrend", "review", "수급·추세 방어 권장", "caution", 55.0, 70.0),
+}
+
+
+DECISION_LABEL_ALIASES = {
+    "조건부 보유": "HOLD_KEEP",
+    "손절 기준 확인": "LOSS_CUT",
+    "손실 관리 기준 확인": "LOSS_REDUCE",
+    "손실 기준 근접 관찰": "LOSS_REDUCE",
+    "분할 매도 기준 확인": "PROFIT_SPLIT",
+    "익절 점검": "PROFIT_PARTIAL",
+    "리밸런싱 점검": "REBALANCE_REVIEW",
+}
+
+
 DEFAULT_RELATION_RULES = [
     RelationRuleDefinition(
         "holding.profit_take.trend_weakness.v1",
@@ -365,30 +448,78 @@ def prompt_template(prompt_id: str, settings: Optional[Dict[str, object]] = None
     return templates[0]
 
 
-def strength_label(score: float) -> str:
+def score_band(score: float) -> ScoreBandDefinition:
     value = float(score or 0)
-    if value >= 85:
-        return "매우 강함"
-    if value >= 70:
-        return "강함"
-    if value >= 55:
-        return "주의"
-    if value >= 35:
-        return "관찰"
-    return "낮음"
+    for band in SCORE_BANDS:
+        if band.contains(value):
+            return band
+    return SCORE_BANDS[-1]
+
+
+def strength_label(score: float) -> str:
+    return score_band(score).label
 
 
 def relation_score_meaning(score: float) -> str:
+    return score_band(score).meaning
+
+
+def decision_stage_by_key(stage_key: str) -> DecisionStageDefinition:
+    return DECISION_STAGE_DEFINITIONS.get(stage_key, DECISION_STAGE_DEFINITIONS["HOLD_KEEP"])
+
+
+def decision_action_group_for_label(label: object) -> str:
+    text = str(label or "").strip()
+    if not text:
+        return ""
+    stage_key = DECISION_LABEL_ALIASES.get(text)
+    if not stage_key:
+        for key, stage in DECISION_STAGE_DEFINITIONS.items():
+            if text == stage.label:
+                stage_key = key
+                break
+    if stage_key:
+        return decision_stage_by_key(stage_key).action_group
+    if "비트코인" in text or "크립토" in text or "민감도" in text:
+        return "cryptoSensitivity"
+    if any(term in text for term in ["손절", "손실", "분할축소"]):
+        return "lossControl"
+    if any(term in text for term in ["분할매도", "익절", "수익"]):
+        return "profitTake"
+    if "리밸런싱" in text:
+        return "rebalance"
+    if "공시" in text:
+        return "disclosure"
+    if any(term in text for term in ["보유", "관망", "관찰", "유지"]):
+        return "holdWatch"
+    return text
+
+
+def _stage_for_score(review_stage: str, action_stage: str, score: float) -> DecisionStageDefinition:
+    return decision_stage_by_key(action_stage if float(score or 0) >= 70 else review_stage)
+
+
+def resolve_decision_stage(rule_id: str, score: float, facts: Dict[str, object]) -> DecisionStageDefinition:
     value = float(score or 0)
-    if value >= 85:
-        return "즉시 재확인이 필요한 매우 강한 관계 압력"
-    if value >= 70:
-        return "대응 기준을 확인할 만큼 강한 관계 압력"
-    if value >= 55:
-        return "관찰을 유지해야 하는 관계 압력"
-    if value >= 35:
-        return "추적은 필요하지만 단독 판단 근거는 약한 관계 압력"
-    return "참고 수준의 약한 관계 압력"
+    pnl = float(facts.get("profitLossRate") or 0)
+    loss_threshold = float(facts.get("lossThreshold") or DEFAULT_RELATION_THRESHOLDS["lossRateLow"])
+    if rule_id == "holding.loss_guard.breakdown.v1":
+        if value >= 70 and pnl <= loss_threshold:
+            return decision_stage_by_key("LOSS_CUT")
+        if value >= 55:
+            return decision_stage_by_key("LOSS_REDUCE")
+        return decision_stage_by_key("LOSS_WATCH")
+    if rule_id == "holding.profit_take.trend_weakness.v1":
+        return _stage_for_score("PROFIT_PARTIAL", "PROFIT_SPLIT", value)
+    if rule_id == "holding.concentration.rebalance.v1":
+        return _stage_for_score("REBALANCE_REVIEW", "REBALANCE_ACTION", value)
+    if rule_id == "external.crypto.btc_sensitivity.v1":
+        return _stage_for_score("BTC_REVIEW", "BTC_REDUCE", value)
+    if rule_id == "disclosure.material_event.v1":
+        return decision_stage_by_key("DISCLOSURE_REVIEW")
+    if rule_id == "holding.trend_flow.confirmation.v1":
+        return decision_stage_by_key("FLOW_DEFENSE" if value >= 55 else "FLOW_WATCH")
+    return decision_stage_by_key("HOLD_KEEP")
 
 
 def relation_score_direction_meaning(delta: float) -> str:
@@ -613,12 +744,19 @@ def _match(
 def decision_from_matches(facts: Dict[str, object], matches: List[OntologyRuleMatch]) -> Dict[str, object]:
     active = [item for item in matches if item.matched and not item.reference_only]
     if not active:
+        stage = decision_stage_by_key("RELATION_WATCH")
+        band = score_band(35.0)
         return {
-            "label": "관계 규칙 관찰",
-            "tone": "hold",
+            "label": stage.label,
+            "tone": stage.tone,
             "score": 35.0,
             "basis": "ontologyRelationRules",
             "selectedRuleId": "",
+            "decisionStage": stage.stage_key,
+            "actionGroup": stage.action_group,
+            "actionLevel": stage.action_level,
+            "scoreBand": band.to_dict(),
+            "nextStageAt": stage.next_stage_at,
         }
     priority = {
         "holding.loss_guard.breakdown.v1": 40,
@@ -628,40 +766,22 @@ def decision_from_matches(facts: Dict[str, object], matches: List[OntologyRuleMa
         "holding.concentration.rebalance.v1": 20,
     }
     selected = max(active, key=lambda item: (priority.get(item.rule_id, 10), item.strength_score, item.confidence))
-    pnl = float(facts.get("profitLossRate") or 0)
-    loss_threshold = float(facts.get("lossThreshold") or DEFAULT_RELATION_THRESHOLDS["lossRateLow"])
-    if selected.rule_id == "holding.loss_guard.breakdown.v1":
-        if selected.strength_score >= 70 and pnl <= loss_threshold:
-            label = "손절·분할축소 권장"
-        elif selected.strength_score >= 55:
-            label = "손실 축소 권장"
-        else:
-            label = "손실 방어 관망"
-        tone = "danger" if selected.strength_score >= 70 else "caution" if selected.strength_score >= 55 else "hold"
-    elif selected.rule_id == "holding.profit_take.trend_weakness.v1":
-        label = "분할매도 권장" if selected.strength_score >= 70 else "일부 익절 권장"
-        tone = "danger" if selected.strength_score >= 80 else "caution"
-    elif selected.rule_id == "holding.concentration.rebalance.v1":
-        label = "리밸런싱 권장"
-        tone = "caution"
-    elif selected.rule_id == "external.crypto.btc_sensitivity.v1":
-        label = "비트코인 민감도 축소 검토" if selected.strength_score >= 70 else "비트코인 민감도 점검"
-        tone = "caution" if selected.strength_score >= 70 else "watch"
-    elif selected.rule_id == "disclosure.material_event.v1":
-        label = "공시 리스크 대응 검토"
-        tone = "caution"
-    elif selected.rule_id == "holding.trend_flow.confirmation.v1":
-        label = "수급·추세 방어 권장" if selected.strength_score >= 55 else "수급·추세 관찰"
-        tone = "caution" if selected.strength_score >= 55 else "watch"
-    else:
-        label = "보유 유지"
-        tone = "watch"
+    stage = resolve_decision_stage(selected.rule_id, selected.strength_score, facts)
+    band = score_band(selected.strength_score)
+    tone = stage.tone
+    if selected.rule_id == "holding.profit_take.trend_weakness.v1" and selected.strength_score >= 80:
+        tone = "danger"
     return {
-        "label": label,
+        "label": stage.label,
         "tone": tone,
         "score": round(float(selected.strength_score or 0), 1),
         "basis": "ontologyRelationRules",
         "selectedRuleId": selected.rule_id,
+        "decisionStage": stage.stage_key,
+        "actionGroup": stage.action_group,
+        "actionLevel": stage.action_level,
+        "scoreBand": band.to_dict(),
+        "nextStageAt": stage.next_stage_at,
     }
 
 

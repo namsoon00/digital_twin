@@ -294,6 +294,12 @@
     { id: "policy", label: "모델·알림", description: "공식·기준" },
     { id: "results", label: "판단 결과", description: "종목별 신호" }
   ];
+  var ontologySections = [
+    { id: "overview", label: "개요", description: "요약·상태" },
+    { id: "graphs", label: "관계 그래프", description: "TBox·ABox" },
+    { id: "registry", label: "규칙·프롬프트", description: "런타임 관리" },
+    { id: "trace", label: "관계 추적", description: "행·룰 검증" }
+  ];
 
   function activeTabMeta() {
     return tabs.filter(function (tab) { return tab.id === state.activeTab; })[0] || tabs[0];
@@ -548,6 +554,7 @@
     notificationExpandedGroups: {},
     activeNotificationSection: initialNotificationSection(),
     activeStrategySection: initialStrategySection(),
+    activeOntologySection: initialOntologySection(),
     activeNotificationMessageType: "monitorHeartbeat",
     notificationPolicyEditorOpen: false,
     activeNotificationTemplateType: "monitorHeartbeat",
@@ -972,6 +979,11 @@
     return normalizeStrategySection(params.get("strategy"));
   }
 
+  function initialOntologySection() {
+    var params = new URLSearchParams(window.location.search);
+    return normalizeOntologySection(params.get("ontology"));
+  }
+
   function normalizeTabId(value) {
     var requested = String(value || "").toLowerCase();
     if (requested === "more") return "overview";
@@ -989,6 +1001,14 @@
     return strategySections.some(function (section) { return section.id === requested; }) ? requested : "overview";
   }
 
+  function normalizeOntologySection(value) {
+    var requested = String(value || "").toLowerCase();
+    if (requested === "graph") return "graphs";
+    if (requested === "rules" || requested === "prompts") return "registry";
+    if (requested === "relations" || requested === "rules-trace") return "trace";
+    return ontologySections.some(function (section) { return section.id === requested; }) ? requested : "overview";
+  }
+
   function activeNotificationSectionMeta() {
     return notificationSections.filter(function (section) {
       return section.id === state.activeNotificationSection;
@@ -1001,11 +1021,18 @@
     })[0] || strategySections[0];
   }
 
+  function activeOntologySectionMeta() {
+    return ontologySections.filter(function (section) {
+      return section.id === state.activeOntologySection;
+    })[0] || ontologySections[0];
+  }
+
   function tabUrl(tab) {
     var normalized = normalizeTabId(tab);
     var params = new URLSearchParams(window.location.search);
     if (normalized !== "notifications") params.delete("notification");
     if (normalized !== "modeling") params.delete("strategy");
+    if (normalized !== "ontology") params.delete("ontology");
     if (normalized === "overview") {
       params.delete("tab");
     } else {
@@ -1022,6 +1049,7 @@
     var params = new URLSearchParams(window.location.search);
     params.set("tab", "notifications");
     params.delete("strategy");
+    params.delete("ontology");
     if (normalized === "status") {
       params.delete("notification");
     } else {
@@ -1038,10 +1066,28 @@
     var params = new URLSearchParams(window.location.search);
     params.set("tab", "modeling");
     params.delete("notification");
+    params.delete("ontology");
     if (normalized === "overview") {
       params.delete("strategy");
     } else {
       params.set("strategy", normalized);
+    }
+    var path = window.location.pathname || "/";
+    var query = params.toString();
+    var hash = window.location.hash || "";
+    return path + (query ? "?" + query : "") + hash;
+  }
+
+  function ontologySectionUrl(section) {
+    var normalized = normalizeOntologySection(section);
+    var params = new URLSearchParams(window.location.search);
+    params.set("tab", "ontology");
+    params.delete("notification");
+    params.delete("strategy");
+    if (normalized === "overview") {
+      params.delete("ontology");
+    } else {
+      params.set("ontology", normalized);
     }
     var path = window.location.pathname || "/";
     var query = params.toString();
@@ -1069,7 +1115,13 @@
     window.history.replaceState({ tab: "modeling", strategy: normalized }, "", strategySectionUrl(normalized));
   }
 
-  function scrollKeyForTab(tab, notificationSection, strategySection) {
+  function writeOntologySectionHistory(section) {
+    if (!window.history || !window.history.replaceState) return;
+    var normalized = normalizeOntologySection(section);
+    window.history.replaceState({ tab: "ontology", ontology: normalized }, "", ontologySectionUrl(normalized));
+  }
+
+  function scrollKeyForTab(tab, notificationSection, strategySection, ontologySection) {
     var normalized = normalizeTabId(tab || state.activeTab);
     if (normalized === "notifications") {
       return normalized + ":" + normalizeNotificationSection(notificationSection || state.activeNotificationSection);
@@ -1077,11 +1129,14 @@
     if (normalized === "modeling") {
       return normalized + ":" + normalizeStrategySection(strategySection || state.activeStrategySection);
     }
+    if (normalized === "ontology") {
+      return normalized + ":" + normalizeOntologySection(ontologySection || state.activeOntologySection);
+    }
     return normalized;
   }
 
   function activeScrollKey() {
-    return scrollKeyForTab(state.activeTab, state.activeNotificationSection, state.activeStrategySection);
+    return scrollKeyForTab(state.activeTab, state.activeNotificationSection, state.activeStrategySection, state.activeOntologySection);
   }
 
   function currentWorkspaceMain() {
@@ -1258,15 +1313,19 @@
     var nextTab = initialTab();
     var nextNotificationSection = initialNotificationSection();
     var nextStrategySection = initialStrategySection();
+    var nextOntologySection = initialOntologySection();
     var sectionChanged = nextNotificationSection !== state.activeNotificationSection;
     var strategySectionChanged = nextStrategySection !== state.activeStrategySection;
+    var ontologySectionChanged = nextOntologySection !== state.activeOntologySection;
     state.activeNotificationSection = nextNotificationSection;
     state.activeStrategySection = nextStrategySection;
+    state.activeOntologySection = nextOntologySection;
     if (nextTab !== "notifications" || sectionChanged) state.notificationPolicyEditorOpen = false;
     if (nextTab !== "notifications" || sectionChanged) state.notificationTemplateEditorOpen = false;
     if (nextTab === state.activeTab) {
       if (sectionChanged && nextTab === "notifications") render();
       if (strategySectionChanged && nextTab === "modeling") render();
+      if (ontologySectionChanged && nextTab === "ontology") render();
       return;
     }
     rememberTabBarPosition();
@@ -6493,9 +6552,29 @@
   function renderOntologyPage(snapshot) {
     return renderManagedPage("ontology", snapshot, [
       '<section class="admin-grid ontology-view">',
+      renderOntologySectionBar(),
       renderOntologyStrategyPanel(snapshot),
       '</section>'
     ].join(""));
+  }
+
+  function renderOntologySectionBar() {
+    var section = activeOntologySectionMeta();
+    return [
+      '<div class="ontology-section-bar">',
+      '<div class="ontology-section-tabs" role="tablist" aria-label="온톨로지 섹션">',
+      ontologySections.map(function (item) {
+        var active = section.id === item.id;
+        return [
+          '<button type="button" role="tab" class="' + (active ? "active" : "") + '" data-ontology-section="' + escapeHtml(item.id) + '"' + (active ? ' aria-selected="true"' : ' aria-selected="false"') + '>',
+          '<strong>' + escapeHtml(item.label) + '</strong>',
+          '<span>' + escapeHtml(item.description) + '</span>',
+          '</button>'
+        ].join("");
+      }).join(""),
+      '</div>',
+      '</div>'
+    ].join("");
   }
 
   function renderStrategySectionBar() {
@@ -8839,12 +8918,59 @@
     var relationCounts = ontologyRelationCounts(aboxRelations);
     var entityLabels = ontologyEntityLabelMap(entities);
     var items = (decision.items || []).filter(function (item) { return item.ontologyOpinion; });
+    var section = normalizeOntologySection(state.activeOntologySection);
+    if (section === "graphs") {
+      return [
+        '<article class="panel ontology-panel">',
+        '<div class="panel-head">',
+        '<div>',
+        '<p class="label">Ontology Graphs</p>',
+        '<h2>TBox·ABox 관계 그래프</h2>',
+        '</div>',
+        '<span class="metric">' + escapeHtml(aboxRelations.length) + '</span>',
+        '</div>',
+        '<div class="ontology-dashboard">',
+        renderOntologyRelationshipGraphs(tbox, abox, aboxEntities, aboxRelations, evidence, beliefs, opinions, entityLabels, relationCounts),
+        renderOntologyClassPanel(tbox),
+        renderOntologyAboxPanel(abox, aboxEntities, evidence, beliefs, opinions),
+        '</div>',
+        '<div class="rule-strip">',
+        '<span>TBox 그래프는 허용 클래스·관계 타입·추론 규칙의 내부 연결을 보여줍니다.</span>',
+        '<span>ABox 그래프는 현재 포트폴리오 assertion과 rule evaluation이 만든 evidence·belief·opinion 관계를 보여줍니다.</span>',
+        '</div>',
+        '</article>'
+      ].join("");
+    }
+    if (section === "registry") {
+      return [
+        renderOntologyRuleEditorPanel(snapshot),
+        renderAiPromptRegistryPanel(snapshot)
+      ].join("");
+    }
+    if (section === "trace") {
+      return [
+        '<article class="panel ontology-panel ontology-trace-panel">',
+        '<div class="panel-head">',
+        '<div>',
+        '<p class="label">Relation Trace</p>',
+        '<h2>관계형 데이터·규칙 추적</h2>',
+        '</div>',
+        '<span class="metric">' + escapeHtml(relations.length) + '</span>',
+        '</div>',
+        '<div class="ontology-dashboard">',
+        renderOntologyRelationalProjectionPanel(entities, relations, evidence, beliefs, opinions),
+        renderOntologyRelationPanel(tbox, relations, aboxRelations, relationCounts, entityLabels),
+        renderOntologyRulePanel(tbox, relationCounts, evidence, beliefs, opinions),
+        '</div>',
+        '</article>'
+      ].join("");
+    }
     return [
       '<article class="panel ontology-panel">',
       '<div class="panel-head">',
       '<div>',
       '<p class="label">Ontology Control</p>',
-      '<h2>TBox·ABox 관계 그래프</h2>',
+      '<h2>온톨로지 운영 개요</h2>',
       '</div>',
       '<span class="metric">' + escapeHtml(items.length) + '</span>',
       '</div>',
@@ -8852,23 +8978,15 @@
       renderOntologyControlStrip(tbox, abox, aboxRelations, evidence, beliefs, opinions),
       renderOntologyBoxSummary(tbox, abox, worldview, strategy),
       renderOntologyRelationMatrixPanel(tbox, relationCounts),
-      renderOntologyRelationshipGraphs(tbox, abox, aboxEntities, aboxRelations, evidence, beliefs, opinions, entityLabels, relationCounts),
-      renderOntologyRelationalProjectionPanel(entities, relations, evidence, beliefs, opinions),
-      renderOntologyClassPanel(tbox),
-      renderOntologyAboxPanel(abox, aboxEntities, evidence, beliefs, opinions),
-      renderOntologyRelationPanel(tbox, relations, aboxRelations, relationCounts, entityLabels),
-      renderOntologyRulePanel(tbox, relationCounts, evidence, beliefs, opinions),
       '</div>',
       '<div class="lab-list">',
       items.length ? items.map(renderOntologyRow).join("") : '<p class="subtle">온톨로지 의견을 만들 보유 종목이 없습니다.</p>',
       '</div>',
       '<div class="rule-strip">',
-      '<span>TBox 그래프는 허용 클래스·관계 타입·추론 규칙의 내부 연결을 보여줍니다.</span>',
-      '<span>ABox 그래프는 현재 포트폴리오 assertion과 rule evaluation이 만든 evidence·belief·opinion 관계를 보여줍니다.</span>',
+      '<span>그래프와 관계 추적은 상단 내부 탭에서 분리해 확인합니다.</span>',
+      '<span>관계 규칙과 AI 프롬프트 레지스트리는 규칙·프롬프트 탭에서 관리합니다.</span>',
       '</div>',
-      '</article>',
-      renderOntologyRuleEditorPanel(snapshot),
-      renderAiPromptRegistryPanel(snapshot)
+      '</article>'
     ].join("");
   }
 
@@ -12293,6 +12411,16 @@
         if (section === state.activeStrategySection) return;
         state.activeStrategySection = section;
         writeStrategySectionHistory(section);
+        render();
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-ontology-section]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        var section = normalizeOntologySection(button.getAttribute("data-ontology-section"));
+        if (section === state.activeOntologySection) return;
+        state.activeOntologySection = section;
+        writeOntologySectionHistory(section);
         render();
       });
     });

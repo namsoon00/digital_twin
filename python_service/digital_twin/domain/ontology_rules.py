@@ -128,11 +128,11 @@ class DecisionStageDefinition:
 
 
 SCORE_BANDS = [
-    ScoreBandDefinition("URGENT", "매우 강함", 85.0, "urgent", "즉시 재확인이 필요한 매우 강한 관계 압력", 0.0),
-    ScoreBandDefinition("ACTION", "강함", 70.0, "action", "대응 기준을 확인할 만큼 강한 관계 압력", 85.0),
-    ScoreBandDefinition("REVIEW", "주의", 55.0, "review", "관찰을 유지해야 하는 관계 압력", 70.0),
-    ScoreBandDefinition("WATCH", "관찰", 35.0, "watch", "추적은 필요하지만 단독 판단 근거는 약한 관계 압력", 55.0),
-    ScoreBandDefinition("LOW", "낮음", 0.0, "reference", "참고 수준의 약한 관계 압력", 35.0),
+    ScoreBandDefinition("URGENT", "매우 강함", 85.0, "urgent", "즉시 재확인이 필요한 매우 강한 관계 신호", 0.0),
+    ScoreBandDefinition("ACTION", "강함", 70.0, "action", "대응 기준을 확인할 만큼 강한 관계 신호", 85.0),
+    ScoreBandDefinition("REVIEW", "주의", 55.0, "review", "관찰을 유지해야 하는 관계 신호", 70.0),
+    ScoreBandDefinition("WATCH", "관찰", 35.0, "watch", "추적은 필요하지만 단독 판단 근거는 약한 관계 신호", 55.0),
+    ScoreBandDefinition("LOW", "낮음", 0.0, "reference", "참고 수준의 약한 관계 신호", 35.0),
 ]
 
 
@@ -203,7 +203,7 @@ DEFAULT_RELATION_RULES = [
         "EVIDENCE_SUPPORT",
         "confirmation",
         "20일/60일 추세와 외국인·기관 순매수 방향이 같은 쪽으로 움직일 때",
-        "같은 방향 증거와 반대 증거를 나눠 AI에게 검토시킵니다.",
+        "같은 방향 근거와 반대 근거를 나눠 AI에게 검토시킵니다.",
         ["ma20Distance", "ma60Distance", "foreignNetVolume", "institutionNetVolume"],
     ),
     RelationRuleDefinition(
@@ -314,12 +314,12 @@ DEFAULT_PROMPT_TEMPLATES = [
     _prompt(
         "holdingTiming",
         "보유 타이밍 AI 분석",
-        "보유 종목의 매수, 보유, 분할 매도, 손실 관리 타이밍을 온톨로지 관계 규칙 기반으로 설명합니다.",
-        "대상 종목, 성립한 관계 규칙, 증거, 부족 데이터를 보고 왜 알림이 발생했는지 설명하고 다음 확인 질문 3개를 제시한다.",
+        "보유 종목의 매수, 보유, 분할 매도, 손실 관리 타이밍을 관계 규칙 기반으로 설명합니다.",
+        "대상 종목, 성립한 관계 규칙, 근거, 부족 데이터를 보고 왜 알림이 발생했는지 설명하고 다음 확인 질문 3개를 제시한다.",
         guardrails=[
             "제공되지 않은 값은 추정하지 않습니다.",
             "매수/매도 지시 대신 확인 기준과 시나리오를 제시합니다.",
-            "공식 점수보다 관계 규칙, 증거, 부족 데이터를 우선합니다.",
+            "공식 점수보다 관계 규칙, 근거, 부족 데이터를 우선합니다.",
         ],
     ),
     _prompt(

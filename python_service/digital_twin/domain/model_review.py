@@ -147,17 +147,17 @@ def build_model_review_prompt(job: ModelReviewJob) -> str:
     if job.review_context:
         ontology_context = "\n".join([
             "",
-            "온톨로지/AI 투자 의견 컨텍스트:",
+            "관계 분석/AI 투자 의견 정보:",
             str(job.review_context),
         ])
     return "\n".join([
         "너는 투자 판단 기준을 지속적으로 개선하는 금융 데이터 리뷰어다.",
-        "이번 모델은 단순 점수 계산이 아니라 온톨로지 관계 규칙, 증거, 부족 데이터, evidence 충돌을 우선한다.",
+        "이번 모델은 단순 점수 계산이 아니라 관계 규칙, 근거, 부족 데이터, 근거끼리의 충돌을 우선한다.",
         "매수/매도 지시가 아니라 판단 변화의 원인, 데이터 검증, 다음 실험을 분석한다.",
         "한국어로 텔레그램 메시지에 맞게 간결하지만 충분히 분석해라. 영어 또는 어려운 용어는 쉬운 한국어로 풀어 써라.",
         "메시지 제목에는 계정명이나 계정 ID를 넣지 마라. 계정 정보는 전송 라우팅에만 사용한다.",
         "메시지 첫 줄에는 종목코드만 쓰지 말고 반드시 종목명 / 종목코드 형태의 대상을 먼저 써라.",
-        "섹션은 반드시 다음 순서로 작성한다: 성립 규칙, 관계/모순, 부족 데이터, 모델 보완, 다음 실험.",
+        "섹션은 반드시 다음 순서로 작성한다: 성립 규칙, 관계/반대 신호, 부족 데이터, 모델 보완, 다음 실험.",
         "판단 점수가 같은데 판단명이 바뀐 경우에는 점수 악화가 아니라 선택 규칙, 성립 규칙 조합, 라벨 체계 변경 중 무엇 때문인지 분리해서 설명해라.",
         "기존 점수 모델은 보조 데이터로만 다뤄라.",
         "API 키, 토큰, 계좌 식별정보를 추정하거나 요청하지 마라.",
@@ -341,7 +341,7 @@ def local_model_review(job: ModelReviewJob) -> str:
     if "현재가/평단 없음" in joined or "평가액 없음" in joined:
         validation = "가격 또는 평가액 필드가 부족하므로 판단 변화의 근거가 약합니다. 원천 API 매핑부터 보완하세요."
         improvement = "필수 판단 요소가 빠졌을 때는 점수 산출을 보류하거나 신뢰도를 낮추는 게 좋습니다."
-    ontology_line = "온톨로지 컨텍스트가 없어서 알림 라인과 기존 점수 evidence만 사용했습니다."
+    ontology_line = "관계 분석 정보가 없어서 알림 라인과 기존 점수 근거만 사용했습니다."
     if job.review_context:
         opinion = job.review_context.get("opinion") if isinstance(job.review_context, dict) else {}
         worldview = job.review_context.get("worldview") if isinstance(job.review_context, dict) else {}
@@ -357,7 +357,7 @@ def local_model_review(job: ModelReviewJob) -> str:
             ontology_line = "성립 규칙은 " + " · ".join(rule_names[:3]) + "입니다."
         else:
             ontology_line = (
-                "온톨로지 thesis는 " + (thesis or "요약 없음")
+                "보유 이유는 " + (thesis or "요약 없음")
                 + ("이며, 지배 섹터는 " + dominant_sector + "입니다." if dominant_sector else "입니다.")
             )
     if same_score_label_changed and previous_alert and current_alert:

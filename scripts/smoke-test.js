@@ -313,7 +313,7 @@ function checkFrontendAdminRender() {
       ],
       conditionTypes: [
         { type: "text_contains_any", label: "메시지에 단어 포함" },
-        { type: "context_equals", label: "컨텍스트 값 일치" }
+        { type: "context_equals", label: "정보 값 일치" }
       ],
       defaultThreshold: 45,
       marketHoursSessions: [
@@ -794,14 +794,14 @@ function checkFrontendAdminRender() {
     assertOk(monitoringHtml.indexOf("deskbar deskbar-full") >= 0, "모니터링 탭은 full deskbar를 사용해야 합니다.");
     assertOk(accountHtml.indexOf("deskbar deskbar-compact") >= 0 && accountHtml.indexOf("deskbar deskbar-full") < 0, "계정 탭은 compact deskbar를 사용해야 합니다.");
     assertOk(settingsHtml.indexOf("deskbar deskbar-compact") >= 0 && settingsHtml.indexOf("deskbar deskbar-full") < 0, "설정 탭은 compact deskbar를 사용해야 합니다.");
-    assertOk(accountHtml.indexOf("<em>Ontology</em>") < 0, "업무 탭 compact deskbar에 온톨로지 셀이 노출됩니다.");
+    assertOk(accountHtml.indexOf("<em>Relation</em>") < 0, "업무 탭 compact deskbar에 관계 분석 셀이 노출됩니다.");
     assertOk(code.indexOf('data-action="open-settings"') < 0, "topbar 설정 버튼이 상단 관리 탭과 중복됩니다.");
     assertOk(code.indexOf("pushState") >= 0 && code.indexOf("popstate") >= 0, "탭 이동이 브라우저 뒤로가기와 동기화되지 않았습니다.");
     assertOk(code.indexOf("restoreTabBarPosition") >= 0 && code.indexOf("tabBarScrollLeft") >= 0, "하단 탭 위치 복원 로직이 없습니다.");
     assertOk(code.indexOf("tabScrollPositions") >= 0 && code.indexOf("restoreRenderedPageScrollPosition") >= 0 && code.indexOf("rememberRenderedPageScrollPosition") >= 0, "탭별 본문 스크롤 복원 로직이 없습니다.");
     assertOk(overviewHtml.indexOf('data-scroll-key="overview"') >= 0, "탭 본문에 스크롤 관리 키가 렌더링되지 않습니다.");
     assertOk(designSystemDoc.indexOf("각 탭은 독립된 스크롤 위치") >= 0, "디자인 시스템 문서에 탭별 스크롤 정책이 없습니다.");
-    assertOk(code.indexOf('var bottomTabIds = ["overview", "watchlist", "monitoring", "modeling", "ontology"];') >= 0, "하단 핵심 탭에 전략 운영과 온톨로지가 배치되지 않았습니다.");
+    assertOk(code.indexOf('var bottomTabIds = ["overview", "watchlist", "monitoring", "modeling", "ontology"];') >= 0, "하단 핵심 탭에 전략 운영과 관계 분석이 배치되지 않았습니다.");
     assertOk(code.indexOf('var managementTabIds = ["accounts", "symbols", "notifications", "settings"];') >= 0, "상단 운영 메뉴 탭 구성이 역할과 맞지 않습니다.");
     assertOk(styles.indexOf(".app-nav-tab.active") >= 0 && styles.indexOf(".app-nav-menu") >= 0, "앱 네비게이션 활성 탭과 모바일 관리 메뉴 스타일 규칙이 없습니다.");
     assertOk(styles.indexOf("@media (min-width: 861px)") >= 0 && styles.indexOf(".tab-bar {\n    display: none;") >= 0, "데스크톱에서 하단 탭을 숨기는 규칙이 없습니다.");
@@ -932,25 +932,25 @@ function checkFrontendAdminRender() {
     assertOk(modelingHtml.indexOf("strategy-section-tabs") >= 0, "전략 운영 내부 섹션 탭이 렌더링되지 않았습니다.");
     assertOk(styles.indexOf(".strategy-section-tabs") >= 0 && styles.indexOf(".strategy-section-bar") >= 0, "전략 운영 내부 섹션 스타일이 정의되지 않았습니다.");
     assertOk(modelingHtml.indexOf('data-strategy-section="data"') >= 0 && modelingHtml.indexOf('data-strategy-section="policy"') >= 0 && modelingHtml.indexOf('data-strategy-section="results"') >= 0, "전략 운영 내부 섹션 이동 버튼이 없습니다.");
-    assertOk(modelingHtml.indexOf('data-strategy-section="rules"') < 0 && modelingHtml.indexOf('data-strategy-section="prompts"') < 0, "온톨로지 규칙/프롬프트가 전략 운영 내부 섹션에 남아 있습니다.");
-    assertOk(modelingHtml.indexOf('data-strategy-section="ontology"') < 0, "온톨로지가 전략 운영 내부 섹션에 남아 있습니다.");
-    assertOk(ontologyHtml.indexOf("ontology-view") >= 0 && ontologyHtml.indexOf("Ontology Control") >= 0, "온톨로지 상위 탭이 렌더링되지 않았습니다.");
-    assertOk(ontologyHtml.indexOf("ontology-section-bar") >= 0 && ontologyHtml.indexOf("ontology-section-tabs") >= 0, "온톨로지 내부 섹션 탭이 렌더링되지 않았습니다.");
-    assertOk(styles.indexOf(".ontology-section-tabs") >= 0 && styles.indexOf(".ontology-section-bar") >= 0, "온톨로지 내부 섹션 스타일이 정의되지 않았습니다.");
-    assertOk(ontologyHtml.indexOf('data-ontology-section="graphs"') >= 0 && ontologyHtml.indexOf('data-ontology-section="registry"') >= 0 && ontologyHtml.indexOf('data-ontology-section="trace"') >= 0, "온톨로지 내부 섹션 이동 버튼이 없습니다.");
-    assertOk(ontologyHtml.indexOf("TBox") >= 0 && ontologyHtml.indexOf("ABox") >= 0, "온톨로지 탭에 TBox/ABox 요약이 없습니다.");
-    assertOk(ontologyHtml.indexOf("ontology-control-strip") >= 0 && ontologyHtml.indexOf("Relation Matrix") >= 0 && ontologyHtml.indexOf("relation-matrix") >= 0, "온톨로지 탭에 추론 순서나 관계 매트릭스가 없습니다.");
-    assertOk(ontologyHtml.indexOf("TBox Relation Graph") < 0 && ontologyHtml.indexOf("Ontology Rule Registry") < 0 && ontologyHtml.indexOf("Relational Row Projection") < 0, "온톨로지 개요 탭에 상세 그래프/레지스트리/추적 패널이 섞여 있습니다.");
-    assertOk(ontologyGraphHtml.indexOf("TBox Relation Graph") >= 0 && ontologyGraphHtml.indexOf("ABox Runtime Relation Graph") >= 0 && ontologyGraphHtml.indexOf("ontology-cytoscape") >= 0, "온톨로지 관계 그래프 섹션이 렌더링되지 않았습니다.");
-    assertOk(ontologyGraphHtml.indexOf("TBox Schema") >= 0 && ontologyGraphHtml.indexOf("ABox Assertions") >= 0, "온톨로지 관계 그래프 섹션에 TBox/ABox 보조 패널이 없습니다.");
-    assertOk(ontologyRegistryHtml.indexOf("ontology-rule-panel") >= 0 && ontologyRegistryHtml.indexOf("Ontology Rule Registry") >= 0, "온톨로지 규칙·프롬프트 섹션에 관계 규칙 레지스트리가 없습니다.");
-    assertOk(ontologyRegistryHtml.indexOf('data-model-setting="ontologyRelationRules"') >= 0, "온톨로지 규칙·프롬프트 섹션에 관계 규칙 편집기가 없습니다.");
-    assertOk(ontologyRegistryHtml.indexOf("수익 보유 + 추세 약화") >= 0 && ontologyRegistryHtml.indexOf("핵심 데이터 부족") >= 0, "온톨로지 규칙·프롬프트 섹션에 기본 관계 규칙이 렌더링되지 않았습니다.");
-    assertOk(ontologyRegistryHtml.indexOf("prompt-registry-panel") >= 0 && ontologyRegistryHtml.indexOf("Prompt Registry") >= 0, "온톨로지 규칙·프롬프트 섹션에 프롬프트 레지스트리가 없습니다.");
-    assertOk(ontologyRegistryHtml.indexOf('data-model-setting="aiPromptTemplates"') >= 0 && ontologyRegistryHtml.indexOf('data-model-setting="aiPromptPolicy"') >= 0, "온톨로지 규칙·프롬프트 섹션에 템플릿/정책 편집기가 없습니다.");
-    assertOk(ontologyRegistryHtml.indexOf("보유 타이밍 AI 분석") >= 0 && ontologyRegistryHtml.indexOf("providedDataOnly=1") >= 0, "온톨로지 규칙·프롬프트 섹션에 기본 프롬프트와 정책이 렌더링되지 않았습니다.");
-    assertOk(ontologyTraceHtml.indexOf("Relational Row Projection") >= 0 && ontologyTraceHtml.indexOf("Rule Trace") >= 0, "온톨로지 관계 추적 섹션에 TBox/ABox 관계형 규칙 추적이 없습니다.");
-    assertOk(ontologyTraceHtml.indexOf("ontology-relation-table") >= 0 && ontologyTraceHtml.indexOf("ontology-rule-list") >= 0, "온톨로지 관계 추적 섹션에 관계/규칙 보조 표가 렌더링되지 않았습니다.");
+    assertOk(modelingHtml.indexOf('data-strategy-section="rules"') < 0 && modelingHtml.indexOf('data-strategy-section="prompts"') < 0, "관계 규칙/프롬프트가 전략 운영 내부 섹션에 남아 있습니다.");
+    assertOk(modelingHtml.indexOf('data-strategy-section="ontology"') < 0, "관계 분석이 전략 운영 내부 섹션에 남아 있습니다.");
+    assertOk(ontologyHtml.indexOf("ontology-view") >= 0 && ontologyHtml.indexOf("Relation Control") >= 0, "관계 분석 상위 탭이 렌더링되지 않았습니다.");
+    assertOk(ontologyHtml.indexOf("ontology-section-bar") >= 0 && ontologyHtml.indexOf("ontology-section-tabs") >= 0, "관계 분석 내부 섹션 탭이 렌더링되지 않았습니다.");
+    assertOk(styles.indexOf(".ontology-section-tabs") >= 0 && styles.indexOf(".ontology-section-bar") >= 0, "관계 분석 내부 섹션 스타일이 정의되지 않았습니다.");
+    assertOk(ontologyHtml.indexOf('data-ontology-section="graphs"') >= 0 && ontologyHtml.indexOf('data-ontology-section="registry"') >= 0 && ontologyHtml.indexOf('data-ontology-section="trace"') >= 0, "관계 분석 내부 섹션 이동 버튼이 없습니다.");
+    assertOk(ontologyHtml.indexOf("규칙 분류") >= 0 && ontologyHtml.indexOf("현재 데이터") >= 0, "관계 분석 탭에 규칙/현재 데이터 요약이 없습니다.");
+    assertOk(ontologyHtml.indexOf("ontology-control-strip") >= 0 && ontologyHtml.indexOf("관계 매트릭스") >= 0 && ontologyHtml.indexOf("relation-matrix") >= 0, "관계 분석 탭에 추론 순서나 관계 매트릭스가 없습니다.");
+    assertOk(ontologyHtml.indexOf("규칙 구조 관계 그래프") < 0 && ontologyHtml.indexOf("Relation Rule Registry") < 0 && ontologyHtml.indexOf("테이블 저장 구조") < 0, "관계 분석 개요 탭에 상세 그래프/레지스트리/추적 패널이 섞여 있습니다.");
+    assertOk(ontologyGraphHtml.indexOf("규칙 구조 관계 그래프") >= 0 && ontologyGraphHtml.indexOf("현재 데이터 관계 그래프") >= 0 && ontologyGraphHtml.indexOf("ontology-cytoscape") >= 0, "관계 분석 그래프 섹션이 렌더링되지 않았습니다.");
+    assertOk(ontologyGraphHtml.indexOf("규칙 구조") >= 0 && ontologyGraphHtml.indexOf("현재 데이터") >= 0, "관계 분석 그래프 섹션에 규칙/현재 데이터 보조 패널이 없습니다.");
+    assertOk(ontologyRegistryHtml.indexOf("ontology-rule-panel") >= 0 && ontologyRegistryHtml.indexOf("Relation Rule Registry") >= 0, "관계 규칙·프롬프트 섹션에 관계 규칙 레지스트리가 없습니다.");
+    assertOk(ontologyRegistryHtml.indexOf('data-model-setting="ontologyRelationRules"') >= 0, "관계 규칙·프롬프트 섹션에 관계 규칙 편집기가 없습니다.");
+    assertOk(ontologyRegistryHtml.indexOf("수익 보유 + 추세 약화") >= 0 && ontologyRegistryHtml.indexOf("핵심 데이터 부족") >= 0, "관계 규칙·프롬프트 섹션에 기본 관계 규칙이 렌더링되지 않았습니다.");
+    assertOk(ontologyRegistryHtml.indexOf("prompt-registry-panel") >= 0 && ontologyRegistryHtml.indexOf("Prompt Registry") >= 0, "관계 규칙·프롬프트 섹션에 프롬프트 레지스트리가 없습니다.");
+    assertOk(ontologyRegistryHtml.indexOf('data-model-setting="aiPromptTemplates"') >= 0 && ontologyRegistryHtml.indexOf('data-model-setting="aiPromptPolicy"') >= 0, "관계 규칙·프롬프트 섹션에 템플릿/정책 편집기가 없습니다.");
+    assertOk(ontologyRegistryHtml.indexOf("보유 타이밍 AI 분석") >= 0 && ontologyRegistryHtml.indexOf("providedDataOnly=1") >= 0, "관계 규칙·프롬프트 섹션에 기본 프롬프트와 정책이 렌더링되지 않았습니다.");
+    assertOk(ontologyTraceHtml.indexOf("테이블 저장 구조") >= 0 && ontologyTraceHtml.indexOf("규칙 추적") >= 0, "관계 추적 섹션에 관계형 규칙 추적이 없습니다.");
+    assertOk(ontologyTraceHtml.indexOf("ontology-relation-table") >= 0 && ontologyTraceHtml.indexOf("ontology-rule-list") >= 0, "관계 추적 섹션에 관계/규칙 보조 표가 렌더링되지 않았습니다.");
     assertOk(code.indexOf("writeStrategySectionHistory") >= 0 && code.indexOf("strategySectionUrl") >= 0, "전략 운영 내부 탭 URL 동기화 경로가 없습니다.");
     assertOk(modelingHtml.indexOf("<h1>전략 운영</h1>") >= 0, "전략 운영 탭 제목이 상단에 렌더링되지 않았습니다.");
     assertOk(modelingHtml.indexOf("strategy-process-panel") >= 0 && modelingHtml.indexOf("Strategy Workflow") >= 0 && modelingHtml.indexOf("데이터에서 알림까지의 계산 순서") >= 0, "전략 운영 개요에 계산 순서 UI가 없습니다.");
@@ -966,7 +966,7 @@ function checkFrontendAdminRender() {
     assertOk(modelingPolicyHtml.indexOf("admin-modeling-panel") >= 0 && modelingPolicyHtml.indexOf("모델·알림 정책 관리") >= 0, "모델·알림 섹션에 운영 정책 패널이 없습니다.");
     assertOk(modelingPolicyHtml.indexOf("model-version-panel") >= 0, "모델·알림 섹션에 모델 버전 패널이 렌더링되지 않았습니다.");
     assertOk(modelingPolicyHtml.indexOf('data-model-setting="notificationScoreFormula"') >= 0, "모델·알림 섹션에 알림 발송 공식 편집기가 없습니다.");
-    assertOk(modelingPolicyHtml.indexOf("ontology-rule-panel") < 0 && modelingPolicyHtml.indexOf("prompt-registry-panel") < 0, "모델·알림 섹션에 온톨로지 규칙/프롬프트 편집기가 섞여 있습니다.");
+    assertOk(modelingPolicyHtml.indexOf("ontology-rule-panel") < 0 && modelingPolicyHtml.indexOf("prompt-registry-panel") < 0, "모델·알림 섹션에 관계 규칙/프롬프트 편집기가 섞여 있습니다.");
     assertOk(modelingResultsHtml.indexOf("model-preview-panel") >= 0, "모델 결과 탭에 현재 종목 판단 결과 패널이 렌더링되지 않았습니다.");
     assertOk(modelingResultsHtml.indexOf("실제 데이터 예시") >= 0, "모델 결과 탭에 실제 데이터 예시 설명이 렌더링되지 않았습니다.");
     assertOk(modelingResultsHtml.indexOf("쉬운 해석") >= 0, "모델 결과 탭에 종목별 쉬운 해석이 렌더링되지 않았습니다.");
@@ -1220,7 +1220,7 @@ async function checkNormalMode(port, context) {
   assertOk(settingsPayload.settings.tossClientSecret === "", "설정 API가 secret 원문을 내려주고 있습니다.");
   assertOk(Object.prototype.hasOwnProperty.call(settingsPayload.settings, "alertRules"), "설정 API에 알림 규칙 필드가 없습니다.");
   assertOk(Object.prototype.hasOwnProperty.call(settingsPayload.settings, "modelDecisionThresholds"), "설정 API에 모델 판단 기준 필드가 없습니다.");
-  assertOk(Object.prototype.hasOwnProperty.call(settingsPayload.settings, "ontologyRelationRules"), "설정 API에 온톨로지 관계 규칙 필드가 없습니다.");
+  assertOk(Object.prototype.hasOwnProperty.call(settingsPayload.settings, "ontologyRelationRules"), "설정 API에 관계 규칙 필드가 없습니다.");
   assertOk(Object.prototype.hasOwnProperty.call(settingsPayload.settings, "aiPromptTemplates"), "설정 API에 AI 프롬프트 템플릿 필드가 없습니다.");
   assertOk(Object.prototype.hasOwnProperty.call(settingsPayload.settings, "aiPromptPolicy"), "설정 API에 AI 프롬프트 정책 필드가 없습니다.");
   assertOk(settingsPayload.settings.ontologyRelationRules.indexOf("holding.loss_guard.breakdown.v1") >= 0, "설정 API의 기본 관계 규칙이 비어 있습니다.");

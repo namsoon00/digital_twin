@@ -332,8 +332,8 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
         if not opinion:
             return []
         lines = [
-            "온톨로지 판단: " + str(opinion.get("action") or "-")
-            + " · 관계 압력 " + compact_number(float(opinion.get("ontology_pressure") or opinion.get("ontologyPressure") or 0)) + "점"
+            "관계 판단: " + str(opinion.get("action") or "-")
+            + " · 관계 신호 " + compact_number(float(opinion.get("ontology_pressure") or opinion.get("ontologyPressure") or 0)) + "점"
             + " · 확신 " + compact_number(float(opinion.get("conviction") or 0)) + "점",
         ]
         thesis = str(opinion.get("thesis") or "").strip()
@@ -1073,7 +1073,7 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
                 ["상태 " + decision_phrase, *self.holding_price_lines(position), self.flow_context_line(position), self.investor_context_line(position), self.trend_context_line(position), self.holding_action_line(item.decision, item.profit_loss_rate)] + relation_lines + self.ontology_context_lines(decision_state),
                 item.symbol,
                 criteria=self.criteria(
-                    "온톨로지 관계 규칙이 위험/주의 상태로 성립하거나 손익률이 손실 기준 "
+                    "관계 규칙이 위험/주의 상태로 성립하거나 손익률이 손실 기준 "
                     + compact_number(loss_threshold)
                     + "%에서 완충 "
                     + compact_number(loss_buffer)

@@ -14,6 +14,44 @@ from .infrastructure.sqlite_accounts import AccountRegistry
 DEFAULT_THRESHOLDS = DEFAULT_ALERT_THRESHOLDS
 ADMIN_PREVIEW_SCHEMA_VERSION = 1
 
+DISPLAY_KEY_LABELS = {
+    "modelHypothesis": "모델 설명",
+    "customBuyModelFormula": "내 모델 매수 공식",
+    "customSellModelFormula": "내 모델 매도 공식",
+    "formulaWeights": "공식 가중치",
+    "lossGuardWeakEvidencePenalty": "확인 약할 때 감점",
+    "lossGuardConfirmationScore": "손실 관리 확인 점수",
+    "lossGuardConfirmationCount": "손실 관리 확인 신호 수",
+    "ontologyNeo4jEnabled": "관계 분석 Neo4j 저장",
+}
+
+BEGINNER_REPLACEMENTS = [
+    ("thesisScore", "buyReasonScore"),
+    ("thesisWeight", "buyReasonWeight"),
+    ("온톨로지 판단", "관계 판단"),
+    ("온톨로지 컨텍스트", "관계 분석 정보"),
+    ("온톨로지 그래프", "관계 분석 데이터"),
+    ("온톨로지", "관계 분석"),
+    ("세계관", "투자 관점"),
+    ("관계 압력", "관계 신호"),
+    ("증거", "근거"),
+    ("컨텍스트", "정보"),
+    ("가설", "설명"),
+    ("thesis", "보유 이유"),
+]
+
+
+def beginner_friendly_text(value: object) -> str:
+    text = str(value or "")
+    for before, after in BEGINNER_REPLACEMENTS:
+        text = text.replace(before, after)
+    return text
+
+
+def display_key(key: object) -> str:
+    raw = str(key or "")
+    return DISPLAY_KEY_LABELS.get(raw, beginner_friendly_text(raw))
+
 PUBLIC_SETTING_KEYS = [
     "watchlistSymbols",
     "tossApiBaseUrl",
@@ -229,7 +267,7 @@ def admin_preview_config() -> Dict[str, object]:
                     {"key": "dartDisclosureAiUseCodex", "label": "공시 해석 Codex 사용", "type": "toggle", "default": "1"},
                     {"key": "dartDisclosureAiCommand", "label": "공시 해석 명령", "type": "text"},
                     {"key": "dartDisclosureAiTimeoutSeconds", "label": "공시 해석 타임아웃", "type": "number", "default": "90", "unit": "seconds"},
-                    {"key": "ontologyNeo4jEnabled", "label": "온톨로지 Neo4j 저장", "type": "toggle", "default": "1"},
+                    {"key": "ontologyNeo4jEnabled", "label": "관계 분석 Neo4j 저장", "type": "toggle", "default": "1"},
                     {"key": "neo4jUri", "label": "Neo4j URI", "type": "url"},
                     {"key": "neo4jUser", "label": "Neo4j 사용자", "type": "text", "default": "neo4j"},
                     {"key": "neo4jPassword", "label": "Neo4j Password", "type": "secret", "masked": True},
@@ -298,7 +336,7 @@ def admin_preview_config() -> Dict[str, object]:
             {
                 "id": "model-review",
                 "title": "모델 리뷰 워커",
-                "summary": "monitorDecisionChange 이벤트를 큐에 넣고, 온톨로지 세계관·관계·모순과 다음 실험을 작성합니다.",
+                "summary": "monitorDecisionChange 이벤트를 큐에 넣고, 관계 분석의 투자 관점·관계·반대 신호와 다음 실험을 작성합니다.",
                 "commands": [
                     "npm run python:model-review:once -- --dry-run",
                     "npm run python:model-review:watch",
@@ -376,13 +414,13 @@ def render_defaults(defaults: Dict[str, object]) -> str:
     for group, value in defaults.items():
         if isinstance(value, list):
             rendered = "".join(
-                '<span class="chip">' + escape(str(item.get("key"))) + "=" + escape(str(item.get("default"))) + escape(str(item.get("unit") or "")) + "</span>"
+                '<span class="chip">' + escape(display_key(item.get("key"))) + "=" + escape(beginner_friendly_text(item.get("default"))) + escape(str(item.get("unit") or "")) + "</span>"
                 for item in value
                 if isinstance(item, dict)
             )
         else:
-            rendered = '<span class="chip">' + escape(str(value)) + "</span>"
-        rows.append('<div class="default-row"><strong>' + escape(str(group)) + "</strong><div>" + rendered + "</div></div>")
+            rendered = '<span class="chip">' + escape(beginner_friendly_text(value)) + "</span>"
+        rows.append('<div class="default-row"><strong>' + escape(display_key(group)) + "</strong><div>" + rendered + "</div></div>")
     return '<div class="defaults">' + "".join(rows) + "</div>"
 
 
@@ -396,7 +434,7 @@ def render_setting_chips(settings: Dict[str, object]) -> str:
     if not settings:
         return '<span class="muted">저장된 공개 설정 없음</span>'
     return "".join(
-        '<span class="chip">' + escape(str(key)) + "=" + escape(str(value)) + "</span>"
+        '<span class="chip">' + escape(display_key(key)) + "=" + escape(beginner_friendly_text(value)) + "</span>"
         for key, value in settings.items()
     )
 

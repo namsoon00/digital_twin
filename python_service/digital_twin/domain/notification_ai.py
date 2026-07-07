@@ -162,7 +162,7 @@ def opinion_lines_for_type(message_type: str, context: Dict[str, object]) -> Lis
         next_check = action or "비중 확대 여부보다 손실 기준, 분할 대응 기준, 추세 회복 조건을 먼저 확인하세요."
         return [
             "해석: " + target + "에서 " + rule_text + " 신호가 성립했습니다.",
-            "의견: " + (state or "보유 판단") + ("이고 " + pnl if pnl else "") + "라서 새 매수보다 기존 보유 thesis와 비중 관리 기준을 먼저 보는 쪽이 맞습니다.",
+            "의견: " + (state or "보유 판단") + ("이고 " + pnl if pnl else "") + "라서 새 매수보다 기존 보유 이유와 비중 관리 기준을 먼저 보는 쪽이 맞습니다.",
             "다음 확인: " + next_check,
         ]
     if message_type == "monitorDecisionChange":

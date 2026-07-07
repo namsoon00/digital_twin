@@ -960,7 +960,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("supporting-evidence", loss_decision.ai_context["legacyModelRole"])
         self.assertEqual("ontology-relation-rule-ai-review", loss_decision.ai_context["role"])
         self.assertIn("relationRuleContext", loss_decision.ai_context)
-        self.assertIn("온톨로지 그래프 JSON", loss_decision.ai_context["prompt"])
+        self.assertIn("관계 분석 데이터 JSON", loss_decision.ai_context["prompt"])
         self.assertIn("legacy_model", loss_decision.ontology_opinion)
 
     def test_loss_guard_near_threshold_requires_confirmation(self):
@@ -1073,7 +1073,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(any(item.relation_type == "HOLDS" for item in graph.relations))
         self.assertTrue(any(item.relation_type == "EXPOSED_TO" for item in graph.relations))
         self.assertTrue(any(item.kind == "tbox-class" for item in graph.entities))
-        self.assertIn("온톨로지 그래프 JSON", graph.prompt)
+        self.assertIn("관계 분석 데이터 JSON", graph.prompt)
         self.assertIn("TBox", graph.prompt)
         self.assertIn("ABox", graph.prompt)
         self.assertTrue(graph.opinion_for_symbol("000660").dominant_risks)
@@ -2679,7 +2679,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertNotIn("크립토 가격 급락", message)
         self.assertIn("관계 규칙", message)
         self.assertIn("크립토 급변", message)
-        self.assertIn("온톨로지 판단", message)
+        self.assertIn("관계 판단", message)
         self.assertIn("대표 변화", message)
         self.assertIn("7일 +11.8%", message)
         self.assertIn("AI 프롬프트", message)
@@ -3422,6 +3422,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertNotIn("온톨로지: 온톨로지", message)
         self.assertNotIn("온톨로지: 보유 유지", message)
         self.assertNotIn("thesis:", message)
+        self.assertNotIn("thesis", message)
+        self.assertNotIn("관계 압력", message)
         self.assertNotIn("모델 공식", message)
 
     def test_all_alert_types_have_managed_ai_prompt_templates(self):
@@ -3472,6 +3474,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("• <b>분석출처</b>: 알림 AI 의견 / holdingTiming", message)
         self.assertIn("<b>AI 프롬프트</b>", message)
         self.assertIn("보유 타이밍 AI 분석", message)
+        self.assertNotIn("thesis", message)
         self.assertLess(message.index("<b>데이터</b>"), message.index("<b>AI 의견</b>"))
         self.assertLess(message.index("<b>AI 의견</b>"), message.index("<b>발송 기준</b>"))
 

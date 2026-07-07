@@ -31,12 +31,12 @@ FORMULA_VARIABLE_BY_CONDITION_ID = {
 }
 
 CONDITION_TYPE_LABELS = [
-    {"type": "text_contains_any", "label": "메시지에 단어 포함", "description": "본문이나 컨텍스트에 지정 단어 중 하나가 있으면 점수를 더합니다."},
-    {"type": "context_contains_any", "label": "컨텍스트 필드에 단어 포함", "description": "선택한 컨텍스트 필드에 지정 단어 중 하나가 있으면 점수를 더합니다."},
-    {"type": "context_equals", "label": "컨텍스트 값 일치", "description": "선택한 컨텍스트 필드가 지정 값과 같으면 점수를 더합니다."},
-    {"type": "context_present", "label": "컨텍스트 값 존재", "description": "선택한 컨텍스트 필드가 비어 있지 않으면 점수를 더합니다."},
-    {"type": "context_number_gte", "label": "컨텍스트 숫자 이상", "description": "선택한 컨텍스트 필드의 숫자가 기준 이상이면 점수를 더합니다."},
-    {"type": "context_number_lte", "label": "컨텍스트 숫자 이하", "description": "선택한 컨텍스트 필드의 숫자가 기준 이하이면 점수를 더합니다."},
+    {"type": "text_contains_any", "label": "메시지에 단어 포함", "description": "본문이나 알림 정보에 지정 단어 중 하나가 있으면 점수를 더합니다."},
+    {"type": "context_contains_any", "label": "정보 필드에 단어 포함", "description": "선택한 정보 필드에 지정 단어 중 하나가 있으면 점수를 더합니다."},
+    {"type": "context_equals", "label": "정보 값 일치", "description": "선택한 정보 필드가 지정 값과 같으면 점수를 더합니다."},
+    {"type": "context_present", "label": "정보 값 존재", "description": "선택한 정보 필드가 비어 있지 않으면 점수를 더합니다."},
+    {"type": "context_number_gte", "label": "정보 숫자 이상", "description": "선택한 정보 필드의 숫자가 기준 이상이면 점수를 더합니다."},
+    {"type": "context_number_lte", "label": "정보 숫자 이하", "description": "선택한 정보 필드의 숫자가 기준 이하이면 점수를 더합니다."},
     {"type": "always", "label": "항상 적용", "description": "룰이 켜져 있으면 항상 점수를 더하거나 뺍니다."},
 ]
 

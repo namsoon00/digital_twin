@@ -258,20 +258,53 @@ DEFAULT_NOTIFICATION_TEMPLATES = {
 }
 
 PLACEHOLDER_PATTERN = re.compile(r"\{([A-Za-z][A-Za-z0-9_]*)\}")
+BEGINNER_FRIENDLY_REPLACEMENTS = [
+    ("opinion assertion", "의견 기록"),
+    ("supporting-evidence", "보조 근거"),
+    ("legacyModelRole", "기존 모델 역할"),
+    ("온톨로지 판단", "관계 판단"),
+    ("온톨로지 컨텍스트", "관계 분석 정보"),
+    ("온톨로지 그래프", "관계 분석 데이터"),
+    ("온톨로지", "관계 분석"),
+    ("세계관 집중도", "관련 종목 비중"),
+    ("세계관", "투자 관점"),
+    ("손실 thesis 재검증", "손실 구간 보유 이유 재확인"),
+    ("thesis 충돌", "보유 이유와 충돌"),
+    ("thesis 훼손", "보유 이유 약화"),
+    ("보유 thesis", "보유 이유"),
+    ("종목 thesis", "종목 보유 이유"),
+    ("기존 thesis", "기존 보유 이유"),
+    ("thesis", "보유 이유"),
+    ("evidence", "근거"),
+    ("belief", "판단 근거"),
+    ("assertion", "기록"),
+    ("legacy score", "기존 점수"),
+    ("legacy", "기존"),
+    ("증거", "근거"),
+    ("컨텍스트", "정보"),
+    ("가설", "설명"),
+]
+
+
+def beginner_friendly_text(value: object) -> str:
+    text = str(value or "")
+    for before, after in BEGINNER_FRIENDLY_REPLACEMENTS:
+        text = text.replace(before, after)
+    return text
 
 
 def plain_bullet(text: str) -> str:
-    cleaned = str(text or "").strip()
+    cleaned = beginner_friendly_text(text).strip()
     return "• " + cleaned if cleaned else ""
 
 
 def html_bullet(text: str) -> str:
-    cleaned = str(text or "").strip()
+    cleaned = beginner_friendly_text(text).strip()
     return "• " + html.escape(cleaned, quote=False) if cleaned else ""
 
 
 def split_label_value(text: str):
-    cleaned = str(text or "").strip()
+    cleaned = beginner_friendly_text(text).strip()
     if ": " not in cleaned:
         return "", cleaned
     label, value = cleaned.split(": ", 1)
@@ -294,7 +327,7 @@ def criterion_rows(items: List[str], rich: bool = False) -> str:
 
 
 def split_data_line(line: str):
-    text = str(line or "").strip()
+    text = beginner_friendly_text(line).strip()
     for label in DATA_LABEL_PREFIXES:
         colon_prefix = label + ": "
         if text.startswith(colon_prefix):
@@ -343,6 +376,8 @@ def notification_data_lines(raw_lines: List[str], metadata: Dict[str, object]) -
 
 
 def data_pair_text(label: str, value: str, rich: bool = False) -> str:
+    label = beginner_friendly_text(label)
+    value = beginner_friendly_text(value)
     if rich:
         return "<b>" + html.escape(label, quote=False) + "</b>: <code>" + html.escape(value, quote=False) + "</code>"
     return label + ": " + value
@@ -1160,7 +1195,7 @@ def render_template(template: str, context: Dict[str, object]) -> str:
     while compacted and not compacted[-1].strip():
         compacted.pop()
     rendered = "\n".join(compacted)
-    return rendered or context_value(values.get("body") or values.get("title") or "")
+    return beginner_friendly_text(rendered or context_value(values.get("body") or values.get("title") or ""))
 
 
 def context_raw_lines(context: Dict[str, object]) -> List[str]:
@@ -1523,7 +1558,7 @@ def ontology_modeling_lines(context: Dict[str, object]) -> List[str]:
         if str(value or "").strip()
     )
     lines = [
-        "모델: 온톨로지 관계 규칙 모델",
+        "모델: 관계 규칙 모델",
         "엔진: " + str(relation_context.get("engineVersion") or "-"),
     ]
     if subject_text:
@@ -1586,7 +1621,7 @@ def score_explanation_sections(context: Dict[str, object]) -> List[tuple]:
     delivery_lines.extend(formula_audit_lines(context, "delivery"))
     sections = []
     if model_lines:
-        sections.append(("온톨로지 판단" if ontology_relation_context(context) else "모델 판단", model_lines))
+        sections.append(("관계 판단" if ontology_relation_context(context) else "모델 판단", model_lines))
     if missing_lines:
         sections.append(("부족 데이터", missing_lines))
     if prompt_lines:
@@ -1678,7 +1713,7 @@ def append_score_explanation(rendered: str, context: Dict[str, object], rich: bo
         and any(marker in rendered_text for marker in ["관계 규칙", "AI 분석 기준", "부족 데이터"])
     ):
         return rendered
-    if not rendered_text.strip() or "점수 계산" in rendered_text or "모델 판단" in rendered_text or "온톨로지 판단" in rendered_text or "알림 발송" in rendered_text:
+    if not rendered_text.strip() or "점수 계산" in rendered_text or "모델 판단" in rendered_text or "관계 판단" in rendered_text or "온톨로지 판단" in rendered_text or "알림 발송" in rendered_text:
         return rendered
     block = score_explanation_block(context, rich)
     if not block:
@@ -1700,6 +1735,8 @@ def append_ai_opinion(rendered: str, context: Dict[str, object], rich: bool = Fa
         "\n\n발송 기준",
         "\n\n<b>모델 판단</b>",
         "\n\n모델 판단",
+        "\n\n<b>관계 판단</b>",
+        "\n\n관계 판단",
         "\n\n<b>온톨로지 판단</b>",
         "\n\n온톨로지 판단",
     ]
@@ -1715,11 +1752,11 @@ def render_notification(template: NotificationTemplate, context: Dict[str, objec
         rendered = render_template(template.template, values)
         rich = template_prefers_rich_score(template.template, rendered)
         rendered = append_ai_opinion(rendered, values, rich)
-        return append_score_explanation(rendered, values, rich)
+        return beginner_friendly_text(append_score_explanation(rendered, values, rich))
     rendered = render_template(BODY_TEMPLATE, values)
     rich = template_prefers_rich_score(BODY_TEMPLATE, rendered)
     rendered = append_ai_opinion(rendered, values, rich)
-    return append_score_explanation(rendered, values, rich)
+    return beginner_friendly_text(append_score_explanation(rendered, values, rich))
 
 
 

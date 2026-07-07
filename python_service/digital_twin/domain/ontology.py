@@ -290,17 +290,17 @@ def evidence_id(symbol: str, kind: str) -> str:
 def ontology_action_label(pressure: float, pnl: float, contradictions: List[str], risks: List[str]) -> (str, str):
     if pressure >= 72:
         if pnl < 0:
-            return "온톨로지: 손실 thesis 재검증", "danger"
-        return "온톨로지: 일부 이익 보호", "danger"
+            return "관계 판단: 손실 구간 보유 이유 재확인", "danger"
+        return "관계 판단: 일부 이익 보호", "danger"
     if pressure >= 55:
         if contradictions:
-            return "온톨로지: thesis 충돌 점검", "caution"
-        return "온톨로지: 비중 축소 후보", "caution"
+            return "관계 판단: 보유 이유와 반대 신호 점검", "caution"
+        return "관계 판단: 비중 축소 후보", "caution"
     if pressure >= 38:
-        return "온톨로지: 조건부 보유", "hold"
+        return "관계 판단: 조건부 보유", "hold"
     if risks:
-        return "온톨로지: 보유 thesis 유지", "watch"
-    return "온톨로지: 보유 유지", "watch"
+        return "관계 판단: 보유 이유 유지", "watch"
+    return "관계 판단: 보유 유지", "watch"
 
 
 def build_position_opinion(
@@ -325,29 +325,29 @@ def build_position_opinion(
     opportunities: List[str] = []
 
     if sector_weight >= 50:
-        risks.append(position.sector + " 세계관 집중도가 매우 높음")
+        risks.append(position.sector + " 관련 종목 비중이 매우 높음")
     elif sector_weight >= 35:
         risks.append(position.sector + " 노출이 높은 편")
     if weight >= 30:
         risks.append("단일 종목 비중이 큼")
     if pnl <= -8:
-        risks.append("손실이 thesis 훼손 구간")
+        risks.append("손실이 보유 이유를 다시 확인할 구간")
     elif pnl >= 20:
         risks.append("큰 수익 구간으로 이익 보호 필요")
     if trend <= -8:
         risks.append("추세 관계가 약화")
     elif trend >= 8:
-        supporting.append("추세 관계가 thesis를 지지")
+        supporting.append("추세 흐름이 보유 이유를 뒷받침")
         opportunities.append("가격 추세가 우호적")
     if flow <= -25:
         risks.append("외국인·기관 수급 관계가 부정적")
     elif flow >= 25:
         supporting.append("외국인·기관 수급 관계가 우호적")
-        opportunities.append("수급 주체가 thesis를 지지")
+        opportunities.append("외국인·기관 수급이 보유 이유를 뒷받침")
     if quality < 60:
         contradictions.append("핵심 데이터가 부족해 AI 판단 신뢰도가 낮음")
     if legacy_pressure >= 70 and (trend >= 8 or flow >= 25):
-        contradictions.append("기존 매도 압력은 높지만 추세/수급 세계관은 우호적")
+        contradictions.append("기존 매도 압력은 높지만 추세와 수급은 우호적")
     if legacy_pressure < 45 and (sector_weight >= 50 or pnl <= -8):
         contradictions.append("기존 압력은 낮지만 포트폴리오 관계 리스크가 큼")
 
@@ -376,7 +376,7 @@ def build_position_opinion(
         thesis_parts.append("리스크: " + ", ".join(risks[:2]))
     if contradictions:
         thesis_parts.append("충돌: " + ", ".join(contradictions[:1]))
-    thesis = "; ".join(thesis_parts) or "관계 그래프에서 강한 모순은 없고 보유 thesis를 유지합니다."
+    thesis = "; ".join(thesis_parts) or "관계 분석에서 강한 반대 신호는 없고 보유 이유를 유지합니다."
     confidence = clamp(quality * 0.006 + len(evidence_ids) * 0.06 - len(contradictions) * 0.08, 0.2, 0.92)
     return OntologyOpinion(
         symbol=symbol,
@@ -482,7 +482,7 @@ def build_portfolio_ontology(
         flow = smart_money_score(position)
         quality = data_quality_score(position)
         evidence_rows = [
-            ("legacy-model", "legacyModel", "기존 점수 모델을 보조 evidence로 사용", opinion.legacy_model, 0.75),
+            ("legacy-model", "legacyModel", "기존 점수 모델을 보조 근거로 사용", opinion.legacy_model, 0.75),
             ("portfolio-exposure", "portfolio", "포트폴리오/섹터 노출 관계", {
                 "positionWeight": round(weight, 2),
                 "sectorWeight": round(sector_weights.get(position.sector, 0.0), 2),
@@ -598,14 +598,14 @@ def prompt_payload(graph: PortfolioOntology) -> Dict[str, object]:
 def build_investment_opinion_prompt(graph: PortfolioOntology) -> str:
     payload = json.dumps(prompt_payload(graph), ensure_ascii=False, sort_keys=True)
     return "\n".join([
-        "너는 투자전략 온톨로지 그래프를 읽는 AI 투자 의견 리뷰어다.",
-        "TBox는 투자 세계관의 클래스·관계·추론 규칙이고, ABox는 현재 계좌의 실제 보유·evidence·belief·opinion assertion이다.",
-        "매수/매도 명령을 확정하지 말고, 포트폴리오 세계관·관계·모순·데이터 공백을 분석해라.",
-        "기존 점수 모델은 보조 데이터로만 사용하고, 최종 판단은 온톨로지 관계와 evidence 충돌을 기준으로 설명해라.",
+        "너는 투자전략 관계 분석 데이터를 읽는 AI 투자 의견 리뷰어다.",
+        "규칙 구조는 투자 기준의 분류, 관계 타입, 판단 규칙이고, 현재 데이터는 계좌의 실제 보유, 근거, 판단 근거, 의견 기록이다.",
+        "매수/매도 명령을 확정하지 말고, 포트폴리오 투자 관점, 관계, 반대 신호, 데이터 공백을 분석해라.",
+        "기존 점수 모델은 보조 데이터로만 사용하고, 최종 판단은 관계 규칙과 근거 충돌을 기준으로 설명해라.",
         "계좌번호, API 키, 토큰, 개인 식별정보를 추정하거나 요청하지 마라.",
-        "응답 섹션은 반드시 세계관, 핵심 관계, thesis 충돌, 종목별 의견, 다음 검증 순서로 작성해라.",
+        "응답 섹션은 반드시 투자 관점, 핵심 관계, 보유 이유와 반대 신호, 종목별 의견, 다음 검증 순서로 작성해라.",
         "",
         "프롬프트 버전: " + ONTOLOGY_PROMPT_VERSION,
-        "온톨로지 그래프 JSON:",
+        "관계 분석 데이터 JSON:",
         payload,
     ])

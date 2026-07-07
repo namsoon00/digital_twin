@@ -652,13 +652,28 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
             return ""
         return "투자자: " + ", ".join(parts)
 
-    def holding_action_line(self, decision_text: str, pnl_rate: float) -> str:
+    def holding_action_text(self, decision_text: str, pnl_rate: float) -> str:
         blob = str(decision_text or "")
-        if "손절" in blob or "손실" in blob or pnl_rate < 0:
-            return "확인 행동: 손절 기준, 분할 축소 수량, 20일선 회복 조건을 재확인"
-        if "분할" in blob or "익절" in blob or "수익" in blob or pnl_rate > 0:
-            return "확인 행동: 분할매도 기준, 목표 수익률, 추세 이탈 조건을 재확인"
-        return "확인 행동: 보유 유지 조건, 추가매수 기준, 손실 제한 기준을 재확인"
+        if "손절" in blob or "손실" in blob or pnl_rate <= -8:
+            return "손절·분할축소 우선, 20일선 회복 전 추가매수 보류"
+        if "축소" in blob or (pnl_rate < 0 and ("방어" in blob or "관망" in blob)):
+            return "손실 축소 우선, 회복 조건 확인 전 비중 확대 보류"
+        if "분할매도" in blob or "익절" in blob or "수익" in blob:
+            return "분할매도 우선, 목표 수익률과 20일선 이탈 조건을 함께 적용"
+        if "리밸런싱" in blob:
+            return "초과 비중 축소 우선, 같은 섹터 추가매수 보류"
+        if "비트코인" in blob:
+            return "비트코인 민감 비중 축소 검토, 크립토 변동 안정 전 추가매수 보류"
+        if "공시" in blob:
+            return "공시 원문 확인 전 추가매수 보류, 변동성 확대 시 비중 축소 검토"
+        if "매수" in blob:
+            return "분할매수 후보, 첫 매수는 작게 시작하고 손절 기준을 먼저 설정"
+        if pnl_rate > 0:
+            return "보유 유지, 수익 보호용 분할매도 기준만 대기"
+        return "보유 유지, 추가매수는 새 매수 신호가 뜰 때까지 보류"
+
+    def holding_action_line(self, decision_text: str, pnl_rate: float) -> str:
+        return "권장 액션: " + self.holding_action_text(decision_text, pnl_rate)
 
     def ma_distance(self, position: Dict[str, object], period: int) -> float:
         return pct_delta(self.position_current_price(position), self.position_ma(position, period))
@@ -877,7 +892,7 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
                 prompt_context = self.prompt_context_from_decision(decision)
                 relation_lines = self.relation_context_lines(decision)
                 ontology_lines = self.ontology_context_lines(decision)
-                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "ALERT" if decision.get("tone") == "danger" else "WATCH", "monitorDecisionChange", snapshot.account_id + ":decision:" + symbol + ":" + str(decision.get("decision")), item["name"], ["판단 변화", "이전 " + previous_phrase, "현재 " + current_phrase, self.flow_context_line(item), self.investor_context_line(item), self.trend_context_line(item)] + relation_lines + ontology_lines + review_lines, symbol, criteria=self.criteria("온톨로지 관계 규칙의 판단 이름이 바뀌거나 관계 신호 강도 변화가 " + self.threshold_text("monitorExitPressureDelta", "점") + " 이상일 때", "이전 " + previous_phrase + ", 현재 " + current_phrase + (", " + " · ".join(relation_lines[:2]) if relation_lines else "")), metadata={
+                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "ALERT" if decision.get("tone") == "danger" else "WATCH", "monitorDecisionChange", snapshot.account_id + ":decision:" + symbol + ":" + str(decision.get("decision")), item["name"], ["보유 종목 판단 변화", "이전 " + previous_phrase, "현재 " + current_phrase, self.holding_action_line(decision.get("decision") or "", float(item.get("profit_loss_rate") or 0)), self.flow_context_line(item), self.investor_context_line(item), self.trend_context_line(item)] + relation_lines + ontology_lines + review_lines, symbol, criteria=self.criteria("보유 종목의 온톨로지 판단 이름이 바뀌거나 관계 신호 강도 변화가 " + self.threshold_text("monitorExitPressureDelta", "점") + " 이상일 때", "이전 " + previous_phrase + ", 현재 " + current_phrase + (", " + " · ".join(relation_lines[:2]) if relation_lines else "")), metadata={
                     "holdingDecision": decision.get("decision") or "",
                     "holdingDecisionBasis": decision.get("decision_basis") or "",
                     "holdingDecisionScore": round(float(decision.get("exit_pressure") or 0), 1),

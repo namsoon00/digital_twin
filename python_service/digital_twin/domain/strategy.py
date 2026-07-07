@@ -610,19 +610,19 @@ def loss_guard_confirmation_components(position: Position, pnl: float, threshold
 def holding_decision_label(pressure: float, pnl: float):
     if pressure >= 72:
         if pnl <= -8:
-            return "손절 기준 확인", "danger"
+            return "손절·분할축소 권장", "danger"
         if pnl < 0:
-            return "손실 축소 기준 확인", "danger"
-        return "분할 매도 기준 확인", "danger"
+            return "손실 축소 권장", "danger"
+        return "분할매도 권장", "danger"
     if pressure >= 55:
         if pnl <= -8:
-            return "손절 기준 확인", "danger"
+            return "손절·분할축소 권장", "danger"
         if pnl < 0:
-            return "손실 관리 기준 확인", "caution"
-        return "일부 익절 기준 확인", "caution"
+            return "손실 축소 권장", "caution"
+        return "일부 익절 권장", "caution"
     if pressure >= 38:
         if pnl <= -8:
-            return "손실 관리 조건부 보유", "hold"
+            return "손실 방어 관망", "hold"
         return "조건부 보유", "hold"
     return "보유 유지", "watch"
 

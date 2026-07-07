@@ -56,6 +56,7 @@ DATA_LABEL_PREFIXES = [
     "투자자",
     "기울기",
     "확인 행동",
+    "권장 액션",
     "거래량",
     "거래액",
     "가격",
@@ -83,6 +84,7 @@ DATA_LABEL_ORDER = {
     "수급": 30,
     "추세": 40,
     "확인 행동": 41,
+    "권장 액션": 41,
     "기울기": 45,
     "투자자": 50,
     "신호": 60,
@@ -106,6 +108,7 @@ SEPARATE_DATA_LABELS = {
     "수급",
     "추세",
     "확인 행동",
+    "권장 액션",
     "기울기",
     "투자자",
     "신호",
@@ -441,10 +444,10 @@ def notification_title_icon(rule: str, raw_lines: List[str], event: AlertEvent) 
         return "🔴"
     if key == "holdingTiming":
         status_blob = " ".join([status, profit, title_text]).strip()
-        if any(term in status_blob for term in ["분할", "익절", "수익"]):
-            return "💰"
         if any(term in status_blob for term in ["손절", "손실"]) or signed_direction(profit) < 0:
             return "🛡️"
+        if any(term in status_blob for term in ["분할", "익절", "수익"]):
+            return "💰"
         return "⚖️"
     if key == "monitorPnlChange":
         return "📈" if dominant_signed_direction(change) > 0 else "📉" if dominant_signed_direction(change) < 0 else "📊"
@@ -462,6 +465,8 @@ def notification_title_icon(rule: str, raw_lines: List[str], event: AlertEvent) 
             return "🛡️"
         if any(term in current for term in ["분할", "익절", "수익"]):
             return "💰"
+        if "리밸런싱" in current:
+            return "⚖️"
         return "🔁"
     if key == "externalCryptoMove":
         return "🪙"
@@ -487,15 +492,15 @@ def notification_title_headline(rule: str, raw_lines: List[str], event: AlertEve
         return "관심종목 시세 미수집"
     if key == "holdingTiming":
         status_blob = " ".join([status, profit, title_text]).strip()
-        if any(term in status_blob for term in ["분할", "익절", "수익"]):
-            profit_text = percent_text(profit)
-            return ("수익 " + profit_text + ": " if profit_text else "") + "분할매도 기준 확인"
         if any(term in status_blob for term in ["손절", "손실"]) or signed_direction(profit) < 0:
             profit_text = percent_text(profit)
-            return ("손실 " + profit_text + ": " if profit_text else "") + "손절·축소 기준 재확인"
+            return ("손실 " + profit_text + ": " if profit_text else "") + "손절·분할축소 권장"
+        if any(term in status_blob for term in ["분할", "익절", "수익"]):
+            profit_text = percent_text(profit)
+            return ("수익 " + profit_text + ": " if profit_text else "") + "분할매도 권장"
         if "조건부" in status_blob:
-            return "조건부 보유: 유지 조건 재점검"
-        return "보유 판단: 매수·매도 기준 확인"
+            return "조건부 보유: 추가매수 보류"
+        return "보유 판단: 유지·대기"
     if key == "monitorHeartbeat":
         return "모니터링 상태 확인"
     if key == "monitorConnection":
@@ -525,10 +530,14 @@ def notification_title_headline(rule: str, raw_lines: List[str], event: AlertEve
     if key == "monitorDecisionChange":
         current = data_value(raw_lines, "현재")
         if any(term in current for term in ["손절", "손실"]):
-            return "판단 변경: 손실 관리 기준 재확인"
+            return "판단 변경: 손절·분할축소 권장"
         if any(term in current for term in ["분할", "익절", "수익"]):
-            return "판단 변경: 분할매도 기준 확인"
-        return "판단 변경: 보유 조건 재확인"
+            return "판단 변경: 분할매도 권장"
+        if "리밸런싱" in current:
+            return "판단 변경: 리밸런싱 권장"
+        if "보유" in current:
+            return "판단 변경: 보유 유지"
+        return "판단 변경: 대응 액션 변경"
     if key == "externalEquityMove":
         equity_change = data_value(raw_lines, "미장 가격 변동")
         return title_from_change(equity_change, "미장 가격 급등", "미장 가격 급락", "미장 가격·거래량 급변")

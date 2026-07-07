@@ -622,29 +622,29 @@ def decision_from_matches(facts: Dict[str, object], matches: List[OntologyRuleMa
     loss_threshold = float(facts.get("lossThreshold") or DEFAULT_RELATION_THRESHOLDS["lossRateLow"])
     if selected.rule_id == "holding.loss_guard.breakdown.v1":
         if selected.strength_score >= 70 and pnl <= loss_threshold:
-            label = "손절 기준 확인"
+            label = "손절·분할축소 권장"
         elif selected.strength_score >= 55:
-            label = "손실 관리 기준 확인"
+            label = "손실 축소 권장"
         else:
-            label = "손실 기준 근접 관찰"
+            label = "손실 방어 관망"
         tone = "danger" if selected.strength_score >= 70 else "caution" if selected.strength_score >= 55 else "hold"
     elif selected.rule_id == "holding.profit_take.trend_weakness.v1":
-        label = "분할 매도 기준 확인" if selected.strength_score >= 70 else "익절 조건 점검"
+        label = "분할매도 권장" if selected.strength_score >= 70 else "일부 익절 권장"
         tone = "danger" if selected.strength_score >= 80 else "caution"
     elif selected.rule_id == "holding.concentration.rebalance.v1":
-        label = "리밸런싱 기준 확인"
+        label = "리밸런싱 권장"
         tone = "caution"
     elif selected.rule_id == "external.crypto.btc_sensitivity.v1":
-        label = "비트코인 민감도 점검"
+        label = "비트코인 민감도 축소 검토"
         tone = "caution"
     elif selected.rule_id == "disclosure.material_event.v1":
-        label = "공시 이벤트 점검"
+        label = "공시 리스크 대응 검토"
         tone = "caution"
     elif selected.rule_id == "holding.trend_flow.confirmation.v1":
-        label = "수급·추세 위험 점검" if selected.strength_score >= 55 else "수급·추세 확인"
+        label = "수급·추세 방어 권장" if selected.strength_score >= 55 else "수급·추세 관찰"
         tone = "caution" if selected.strength_score >= 55 else "watch"
     else:
-        label = "보유 조건 재확인"
+        label = "보유 유지"
         tone = "watch"
     return {
         "label": label,

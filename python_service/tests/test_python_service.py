@@ -1825,6 +1825,70 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("수급: 거래량 30,000(1.8x), 거래액 18억 원", value_message)
         self.assertIn("투자자: 외국인 +145,000(매수 420,000/매도 275,000), 기관 +82,000(매수 310,000/매도 228,000)", value_message)
 
+    def test_investment_insight_promotes_reference_data_and_action_title(self):
+        position = normalize_position({
+            "symbol": "MSTR",
+            "name": "Strategy",
+            "market": "US",
+            "currency": "USD",
+            "marketValue": 10130,
+            "quantity": 100,
+            "sellableQuantity": 100,
+            "averagePrice": 90.2,
+            "currentPrice": 101.3,
+            "profitLossRate": 12.2,
+            "volume": 90863,
+            "volumeRatio": 1.4,
+            "tradingValue": 3543834187,
+            "ma20": 108.07,
+            "ma60": 144.09,
+            "sector": "디지털자산",
+        })
+        external_signals = {
+            "cryptoMarkets": {
+                "bitcoin": {
+                    "provider": "CoinGecko",
+                    "symbol": "BTC",
+                    "price": 108000,
+                    "volume24h": 42000000000,
+                    "change24h": 2.6,
+                    "change7d": 7.1,
+                }
+            }
+        }
+        portfolio = portfolio_summary([position])
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "ok",
+            utc_now_iso(),
+            portfolio,
+            [position],
+            decisions_for_positions([position], portfolio, external_signals=external_signals),
+            external_signals=external_signals,
+        )
+
+        events = RealtimeMonitor().events_for_snapshot(snapshot, {})
+        insight = self.insight_event(events, "MSTR")
+        db_path = Path(self.temp.name) / "service.db"
+        message = SQLiteNotificationTemplateStore(db_path).render(insight.rule, alert_context(insight))
+
+        self.assertEqual("investmentInsight", insight.rule)
+        self.assertIn("holdingTiming", self.insight_source_rules(insight))
+        self.assertIn("상태: 분할매도 권장", "\n".join(insight.lines))
+        self.assertIn("현재가: $101.3", "\n".join(insight.lines))
+        self.assertIn("평단가: $90.2", "\n".join(insight.lines))
+        self.assertIn("수익률: +12.2%", "\n".join(insight.lines))
+        self.assertIn("수급: 거래량 90,863(1.4x), 거래액 $3,543,834,187", "\n".join(insight.lines))
+        self.assertIn("추세: 20일선 $108.07보다 6.3% 낮음", "\n".join(insight.lines))
+        self.assertIn("권장 액션: 분할매도", "\n".join(insight.lines))
+        self.assertIn("<b>[관찰] 💰 수익 +12.2%: 분할매도·리밸런싱 점검</b>", message)
+        self.assertIn("현재가", message)
+        self.assertIn("평단가", message)
+        self.assertIn("수익률", message)
+
     def test_holding_timing_status_includes_model_score_parentheses(self):
         position = normalize_position({
             "symbol": "005930",

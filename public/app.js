@@ -2465,7 +2465,16 @@
       var signal = dataValue(rawItems, "신호");
       var titleText = String(sample && sample.title || "");
       if (type === "modelBuy" || type === "watchlistBuyCandidate") return "🟢";
-      if (type === "investmentInsight") return "🧭";
+      if (type === "investmentInsight") {
+        var insightTypeIcon = dataValue(rawItems, "인사이트 유형");
+        var actionIcon = dataValue(rawItems, "권장 액션");
+        var insightBlobIcon = [status, profit, actionIcon, insightTypeIcon, titleText].join(" ");
+        if (/손절|손실|축소/.test(insightBlobIcon)) return "🛡️";
+        if (/분할|익절|수익|리밸런싱/.test(insightBlobIcon)) return "💰";
+        if (/매수|기회/.test(insightBlobIcon)) return "🟢";
+        if (insightBlobIcon.indexOf("외부") >= 0) return "🌐";
+        return "🧭";
+      }
       if (type === "modelSell") return "🔴";
       if (type === "holdingTiming") {
         var statusBlob = [status, profit, titleText].join(" ");
@@ -2501,7 +2510,14 @@
       var symbol = String(sample && sample.symbol || "").toUpperCase();
       if (type === "investmentInsight") {
         var insightType = dataValue(rawItems, "인사이트 유형");
-        return insightType ? "투자 인사이트: " + insightType : "온톨로지 투자 인사이트";
+        var action = dataValue(rawItems, "권장 액션");
+        var insightBlob = [status, profit, action, insightType, dataValue(rawItems, "핵심 결론"), titleText].join(" ");
+        var profitText = percentText(profit);
+        if (/손절|손실|축소/.test(insightBlob)) return (profitText && signedDirection(profit) < 0 ? "손실 " + profitText + ": " : "") + "손절·분할축소 점검";
+        if (/분할|익절|수익|리밸런싱/.test(insightBlob)) return (profitText && signedDirection(profit) > 0 ? "수익 " + profitText + ": " : "") + "분할매도·리밸런싱 점검";
+        if (/매수|기회/.test(insightBlob)) return "매수 후보: 진입 조건 점검";
+        if (insightBlob.indexOf("외부") >= 0) return "외부 신호: 보유 영향 점검";
+        return insightType ? insightType + ": 대응 기준 점검" : "투자 인사이트: 대응 기준 점검";
       }
       if (type === "modelBuy" || type === "watchlistBuyCandidate") return "매수 후보 감지";
       if (type === "modelSell") return "매도 기준 점검";
@@ -2650,7 +2666,7 @@
         title: "삼성전자",
         symbol: "005930",
         severity: "WATCH",
-        lines: ["인사이트 유형: 리스크 관리", "핵심 결론: 보유 판단과 외부 신호가 리스크 관리 쪽으로 기울었습니다.", "근거 신호: 보유 타이밍, 판단 변화, 거시 지표 변화", "다음 확인: 손절/분할축소 기준과 다음 조회 유지 여부를 확인하세요."],
+        lines: ["인사이트 유형: 리스크 관리", "상태: 분할매도 권장 (77.6점)", "현재가: 101,300원", "평단가: 90,200원", "수익률: +12.2%", "수급: 거래량 1,200,000(1.4x), 거래액 1216억 원", "추세: 20일선보다 6.5% 낮음, 60일선보다 30.7% 낮음", "권장 액션: 분할매도·리밸런싱 기준 점검", "핵심 결론: 보유 판단과 외부 신호가 리스크 관리 쪽으로 기울었습니다.", "근거 신호: 보유 타이밍, 판단 변화, 거시 지표 변화", "다음 확인: 손절/분할축소 기준과 다음 조회 유지 여부를 확인하세요."],
         criteria: ["설정: 온톨로지 관계 그래프에서 의미 있는 투자 인사이트가 생성될 때", "감지: 보유 타이밍, 판단 변화 · 관계 강도 72점 · 신뢰도 81%"]
       },
       modelBuy: {

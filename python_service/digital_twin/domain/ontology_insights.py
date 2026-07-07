@@ -108,6 +108,20 @@ ONTOLOGY_CONTEXT_KEYS = (
     "ontologyWorldview",
     "ontologyReviewContext",
 )
+PROMOTED_REFERENCE_LABELS = (
+    "상태",
+    "현재가",
+    "평단가",
+    "수익률",
+    "손익",
+    "평가",
+    "수급",
+    "투자자",
+    "추세",
+    "기울기",
+    "권장 액션",
+    "주요 리스크",
+)
 
 
 def split_operational_and_investment_events(events: Iterable[AlertEvent]) -> Tuple[List[AlertEvent], List[AlertEvent]]:
@@ -243,6 +257,35 @@ def compact_source_line(event: AlertEvent) -> str:
     return label + ": " + text
 
 
+def labeled_line_value(line: str, labels: Iterable[str]) -> Tuple[str, str]:
+    text = str(line or "").strip()
+    if not text:
+        return "", ""
+    for label in labels:
+        prefix = str(label or "").strip()
+        if not prefix:
+            continue
+        if text.startswith(prefix + ":"):
+            return prefix, text.split(":", 1)[1].strip()
+        if text.startswith(prefix + " "):
+            return prefix, text[len(prefix):].strip()
+    return "", ""
+
+
+def promoted_reference_lines(events: List[AlertEvent]) -> List[str]:
+    values: Dict[str, str] = {}
+    for event in events or []:
+        for line in event.lines or []:
+            label, value = labeled_line_value(str(line or ""), PROMOTED_REFERENCE_LABELS)
+            if label and value and label not in values:
+                values[label] = value
+    return [
+        label + ": " + values[label]
+        for label in PROMOTED_REFERENCE_LABELS
+        if values.get(label)
+    ]
+
+
 def insight_thesis(insight_type: str, subject_name: str, source_labels: List[str], score: float) -> str:
     sources = ", ".join(source_labels[:4]) if source_labels else "관계 신호"
     score_text = compact_number(round(score, 1))
@@ -323,6 +366,7 @@ def build_investment_insight_events(snapshot: AccountSnapshot, signal_events: It
         subject_name = subject_display_name(snapshot, subject, events)
         thesis = insight_thesis(insight_type, subject_name, source_labels, score)
         next_check = next_check_for_insight(insight_type, source_types)
+        reference_lines = promoted_reference_lines(events)
         source_lines = unique_preserve(compact_source_line(event) for event in events)[:7]
         source_key = "|".join(sorted(source_types))
         score_bucket = str(int(round(score / 5.0) * 5))
@@ -349,6 +393,7 @@ def build_investment_insight_events(snapshot: AccountSnapshot, signal_events: It
                 "nextCheck": next_check,
                 "dispatchMode": "insight-driven-only",
                 "legacyAlertTypesRole": "evidence-only",
+                "referenceDataLines": reference_lines,
             },
             "sourceSignalTypes": source_types,
             "sourceAlertEvents": [
@@ -383,6 +428,7 @@ def build_investment_insight_events(snapshot: AccountSnapshot, signal_events: It
             subject_name,
             [
                 "인사이트 유형: " + insight_label,
+                *reference_lines,
                 "핵심 결론: " + thesis,
                 "근거 신호: " + ", ".join(source_labels),
                 *["근거: " + line for line in source_lines],

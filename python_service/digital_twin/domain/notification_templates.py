@@ -505,6 +505,19 @@ def notification_title_icon(rule: str, raw_lines: List[str], event: AlertEvent) 
 
     if key in {"modelBuy", "watchlistBuyCandidate"}:
         return "🟢"
+    if key == "investmentInsight":
+        insight_type = data_value(raw_lines, "인사이트 유형")
+        action = data_value(raw_lines, "권장 액션")
+        blob = " ".join([status, profit, action, insight_type, title_text])
+        if any(term in blob for term in ["손절", "손실", "축소"]):
+            return "🛡️"
+        if any(term in blob for term in ["분할", "익절", "수익", "리밸런싱"]):
+            return "💰"
+        if any(term in blob for term in ["매수", "기회"]):
+            return "🟢"
+        if "외부" in blob:
+            return "🌐"
+        return "🧭"
     if key == "modelSell":
         return "🔴"
     if key == "holdingTiming":
@@ -551,6 +564,22 @@ def notification_title_headline(rule: str, raw_lines: List[str], event: AlertEve
 
     if key in {"modelBuy", "watchlistBuyCandidate"}:
         return "매수 후보 감지"
+    if key == "investmentInsight":
+        insight_type = data_value(raw_lines, "인사이트 유형")
+        action = data_value(raw_lines, "권장 액션")
+        blob = " ".join([status, profit, action, insight_type, data_value(raw_lines, "핵심 결론"), title_text])
+        profit_text = percent_text(profit)
+        if any(term in blob for term in ["손절", "손실", "축소"]):
+            return ("손실 " + profit_text + ": " if profit_text and signed_direction(profit) < 0 else "") + "손절·분할축소 점검"
+        if any(term in blob for term in ["분할", "익절", "수익", "리밸런싱"]):
+            return ("수익 " + profit_text + ": " if profit_text and signed_direction(profit) > 0 else "") + "분할매도·리밸런싱 점검"
+        if any(term in blob for term in ["매수", "기회"]):
+            return "매수 후보: 진입 조건 점검"
+        if "외부" in blob:
+            return "외부 신호: 보유 영향 점검"
+        if insight_type:
+            return insight_type + ": 대응 기준 점검"
+        return "투자 인사이트: 대응 기준 점검"
     if key == "modelSell":
         return "매도 기준 점검"
     if key == "watchlistQuote":

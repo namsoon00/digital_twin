@@ -184,7 +184,7 @@ TRIGGER_SUMMARIES = {
     MONITOR_POSITION_CHANGE: "새 보유, 제외, 수량 변경이 감지될 때 보냅니다.",
     MONITOR_PNL_CHANGE: "직전 기록과 비교해 손익률 변화가 기준값을 넘을 때 보냅니다.",
     MONITOR_VALUE_CHANGE: "직전 기록과 비교해 평가액 변화가 기준값을 넘을 때 보냅니다.",
-    MONITOR_TREND_CHANGE: "이동평균 돌파, 크로스, 큰 괴리가 감지될 때 보냅니다.",
+    MONITOR_TREND_CHANGE: "이동평균 돌파, 크로스, 현재가와 이동평균 차이가 커질 때 보냅니다.",
     MONITOR_CASH_CHANGE: "시장별 현금 비중 변화가 기준값을 넘을 때 보냅니다.",
     MONITOR_DECISION_CHANGE: "종목 판단이나 위험 점수가 바뀔 때 보냅니다.",
     EXTERNAL_EQUITY_MOVE: "Alpha Vantage 기준 미국 보유 종목의 가격 변화가 기준값을 넘을 때 보냅니다.",

@@ -1878,11 +1878,13 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("20일선 상향 돌파", message)
         self.assertIn("60일선 상향 돌파", message)
         self.assertIn("20/60일선 골든크로스", message)
-        self.assertIn("추세: 현재 11만 원", message)
+        self.assertIn("현재가: 11만 원", message)
+        self.assertIn("추세: 20일선 10만 원보다 1.9% 높음, 60일선 10만 원보다 2.9% 높음", message)
         self.assertIn("수급: 거래량 40,000(2.1x), 거래액 24억 원", message)
         self.assertIn("투자자: 외국인 +70,000(매수 510,000/매도 440,000), 기관 +35,000(매수 350,000/매도 315,000)", message)
-        self.assertIn("설정: 20일/60일 이동평균 돌파, 크로스, 또는 괴리 ±8% 이상", event.criteria)
+        self.assertIn("설정: 20일/60일 이동평균 돌파, 크로스, 또는 현재가가 이동평균보다 8% 이상 높거나 낮을 때", event.criteria)
         self.assertTrue(any("20일선 상향 돌파" in item for item in event.criteria))
+        self.assertNotIn("괴리", message)
 
     def test_monitor_value_change_formats_usd_with_krw_basis(self):
         previous_position = normalize_position({
@@ -4240,7 +4242,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("<b>데이터</b>", message)
         self.assertLess(message.index("<b>데이터</b>"), message.index("<b>발송 기준</b>"))
         self.assertIn("• <b>신호</b>: <code>20일선 상향 돌파</code>", message)
-        self.assertIn("• <b>설정</b>: <code>이동평균 돌파, 크로스, 큰 괴리가 감지될 때 보냅니다.</code>", message)
+        self.assertIn("• <b>설정</b>: <code>이동평균 돌파, 크로스, 현재가와 이동평균 차이가 커질 때 보냅니다.</code>", message)
         self.assertIn("• <b>감지</b>: <code>20일선 상향 돌파</code>", message)
         self.assertNotIn("\n\n\n", message)
 
@@ -4280,7 +4282,7 @@ class PythonServiceTests(unittest.TestCase):
             "TSLA",
             [
                 "미장 가격 변동 -7.5%",
-                "가격 $393.45",
+                "현재가: $393.45",
                 "거래량 71,917,610",
                 "기준일 2026-07-02",
                 "출처 Alpha Vantage",
@@ -4293,13 +4295,14 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("<b>[주의] 🇺🇸 미장 가격 급락</b>\n<code>Tesla / TSLA</code>", message)
         self.assertNotIn("<code>TSLA</code>", message)
         self.assertNotIn("━━━━━━━━", message)
-        self.assertIn("• <b>미장 가격 변동</b>: <code>-7.5%</code>, <b>가격</b>: <code>$393.45</code>", message)
+        self.assertIn("• <b>현재가</b>: <code>$393.45</code>", message)
+        self.assertIn("• <b>미장 가격 변동</b>: <code>-7.5%</code>", message)
         self.assertIn("• <b>거래량</b>: <code>71,917,610</code>", message)
         self.assertIn("• <b>기준일</b>: <code>2026-07-02</code>", message)
         self.assertIn("• <b>출처</b>: <code>Alpha Vantage</code>", message)
         self.assertEqual(1, message.count("<b>기준일</b>"))
         self.assertLess(message.index("<b>데이터</b>"), message.index("<b>발송 기준</b>"))
-        self.assertIn("• <b>감지</b>: <code>가격 변동 -7.5%, 가격 $393.45</code>", message)
+        self.assertIn("• <b>감지</b>: <code>가격 변동 -7.5%, 현재가 $393.45</code>", message)
 
     def test_holding_timing_alert_title_uses_detected_decision(self):
         db_path = Path(self.temp.name) / "service.db"
@@ -4533,7 +4536,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn(flow_line + "\n" + trend_line + "\n" + investor_line, message)
         self.assertLess(message.index(flow_line), message.index(trend_line))
         self.assertLess(message.index(trend_line), message.index(investor_line))
-        self.assertIn("• <b>설정</b>: <code>이동평균 돌파, 크로스, 큰 괴리가 감지될 때 보냅니다.</code>", message)
+        self.assertIn("• <b>설정</b>: <code>이동평균 돌파, 크로스, 현재가와 이동평균 차이가 커질 때 보냅니다.</code>", message)
 
     def test_status_profit_flow_and_trend_are_separate_ordered_rows(self):
         db_path = Path(self.temp.name) / "service.db"

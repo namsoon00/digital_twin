@@ -476,6 +476,16 @@ def _missing(key: str, label: str, effect: str) -> Dict[str, str]:
     return {"key": key, "label": label, "effect": effect}
 
 
+def moving_average_distance_text(label: str, distance: float) -> str:
+    value = abs(round(float(distance or 0), 1))
+    value_text = str(int(value)) if value.is_integer() else str(value)
+    if distance > 0:
+        return label + "보다 " + value_text + "% 높음"
+    if distance < 0:
+        return label + "보다 " + value_text + "% 낮음"
+    return label + "과 같음"
+
+
 def position_signal_facts(
     position: Position,
     portfolio: PortfolioSummary,
@@ -719,8 +729,8 @@ def evaluate_position_relation_rules(
             data_quality,
             [
                 "손익률 " + ("%.1f" % pnl) + "%",
-                "20일선 괴리 " + ("%.1f" % ma20_distance) + "%",
-                "60일선 괴리 " + ("%.1f" % ma60_distance) + "%",
+                moving_average_distance_text("20일선", ma20_distance),
+                moving_average_distance_text("60일선", ma60_distance),
             ],
             missing_labels,
             definitions=relation_definitions,
@@ -762,8 +772,8 @@ def evaluate_position_relation_rules(
                 "손익률 " + ("%.1f" % pnl) + "%",
                 "손실 기준 " + ("%.1f" % loss_threshold) + "%",
                 "손실 완충 " + ("%.1f" % loss_buffer) + "%p",
-                "20일선 괴리 " + ("%.1f" % ma20_distance) + "%",
-                "60일선 괴리 " + ("%.1f" % ma60_distance) + "%",
+                moving_average_distance_text("20일선", ma20_distance),
+                moving_average_distance_text("60일선", ma60_distance),
                 "거래량 배율 " + ("%.1f" % volume_ratio) + "x",
                 "확인 신호 " + str(confirmation_count) + "/5",
                 ("약한 확인 신호 감점 -" + ("%.1f" % weak_evidence_penalty) + "점") if weak_near_threshold else "",

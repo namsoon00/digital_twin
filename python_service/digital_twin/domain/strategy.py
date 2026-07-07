@@ -331,8 +331,8 @@ class StrategyModel:
             missing["momentumScore"] = "가격 움직임 없음 -> 0점"
         if not current_price or not ma20 or not ma60:
             missing["trendScore"] = "현재가 또는 이동평균 없음 -> 0점"
-            missing["trendDistance20"] = "20일선 괴리 없음 -> 0%"
-            missing["trendDistance60"] = "60일선 괴리 없음 -> 0%"
+            missing["trendDistance20"] = "20일선과 현재가 차이 없음 -> 0%"
+            missing["trendDistance60"] = "60일선과 현재가 차이 없음 -> 0%"
             missing["maSpread"] = "20/60일선 간격 없음 -> 0%"
         if expects_kr_signals and not (foreign_net or institution_net or individual_net):
             missing["investorFlowScore"] = "투자자별 수급 없음 -> 0점"

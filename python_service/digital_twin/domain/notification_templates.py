@@ -79,9 +79,13 @@ DATA_LABEL_ORDER = {
     "실패 단계": 12,
     "재시도": 13,
     "손익": 20,
+    "미장 가격 변동": 20,
+    "현재가": 21,
     "매수 판단": 25,
     "매도 판단": 26,
     "수급": 30,
+    "거래량": 31,
+    "거래액": 32,
     "추세": 40,
     "확인 행동": 41,
     "권장 액션": 41,
@@ -103,6 +107,8 @@ SEPARATE_DATA_LABELS = {
     "실패 단계",
     "재시도",
     "손익",
+    "미장 가격 변동",
+    "현재가",
     "매수 판단",
     "매도 판단",
     "수급",
@@ -112,6 +118,8 @@ SEPARATE_DATA_LABELS = {
     "기울기",
     "투자자",
     "신호",
+    "거래량",
+    "거래액",
     "비트코인 변동",
     "크립토 변동",
     "크립토 가격",
@@ -660,8 +668,8 @@ def inferred_criterion_lines(event: AlertEvent, raw_lines: List[str], trigger_su
             details.append("감지: " + detected)
     elif rule == "externalEquityMove":
         change_value = data_value(raw_lines, "미장 가격 변동")
-        price = data_value(raw_lines, "가격")
-        detected = ", ".join(part for part in ["가격 변동 " + change_value if change_value else "", "가격 " + price if price else ""] if part)
+        price = data_value(raw_lines, "현재가") or data_value(raw_lines, "가격")
+        detected = ", ".join(part for part in ["가격 변동 " + change_value if change_value else "", "현재가 " + price if price else ""] if part)
         if detected:
             details.append("감지: " + detected)
     elif rule == "externalCryptoMove":
@@ -691,7 +699,7 @@ def inferred_criterion_lines(event: AlertEvent, raw_lines: List[str], trigger_su
         if quote_change:
             details.append("감지: " + quote_change)
         else:
-            current_price = data_value(raw_lines, "현재")
+            current_price = data_value(raw_lines, "현재가") or data_value(raw_lines, "현재")
             if current_price:
                 details.append("감지: 현재가 " + current_price)
     elif rule == "watchlistQuotePending":
@@ -1294,7 +1302,7 @@ MODEL_DATA_HINTS = {
     "watchlistBuyCandidate": "관심종목 시세·수급·추세·가치평가 데이터",
     "holdingTiming": "보유 스냅샷, 손익률, 수급, 추세, 매도 가능 수량",
     "monitorDecisionChange": "이전/현재 보유 모델 점수와 보유 스냅샷",
-    "monitorTrendChange": "현재가와 이동평균선 거리",
+    "monitorTrendChange": "현재가와 20일/60일 이동평균 비교",
     "monitorPnlChange": "이전/현재 손익률",
     "monitorValueChange": "이전/현재 평가액",
     "monitorCashChange": "이전/현재 현금 비중",

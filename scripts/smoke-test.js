@@ -1485,7 +1485,7 @@ async function checkLiveTossMode(port) {
   assertOk(position.institutionSellVolume === 228000, "토스 live 기관 매도량 매핑이 맞지 않습니다.");
   assertOk(position.ma20 > 0, "토스 live 캔들 기반 20일 이동평균이 없습니다.");
   assertOk(position.ma60 > 0, "토스 live 캔들 기반 60일 이동평균이 없습니다.");
-  assertOk(position.ma20Distance !== 0, "토스 live 이동평균 괴리율이 계산되지 않았습니다.");
+  assertOk(position.ma20Distance !== 0, "토스 live 이동평균과 현재가 차이가 계산되지 않았습니다.");
   assertOk(payload.toss.account.orderableAmount === 390000, "토스 live 매수 가능 금액이 buying-power API로 계산되지 않았습니다.");
   assertOk(payload.portfolio.cash === 390000, "토스 live 포트폴리오 현금이 buying-power API 값을 반영하지 않았습니다.");
 }

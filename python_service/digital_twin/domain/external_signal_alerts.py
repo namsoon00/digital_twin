@@ -259,7 +259,7 @@ class ExternalSignalAlertMixin:
                 symbol_label,
                 [
                     "미장 가격 변동 " + signed_pct(change),
-                    "가격 " + money(price, "USD"),
+                    "현재가: " + money(price, "USD"),
                     "거래량 " + compact_number(volume),
                     "기준일 " + (latest_trading_day or "-"),
                     "출처 " + provider,
@@ -267,7 +267,7 @@ class ExternalSignalAlertMixin:
                 symbol_label,
                 criteria=self.criteria(
                     "미장 가격 변동률 ±" + self.threshold_text("externalEquityChangePct", "%") + " 이상",
-                    "가격 변동 " + signed_pct(change) + ", 가격 " + money(price, "USD"),
+                    "가격 변동 " + signed_pct(change) + ", 현재가 " + money(price, "USD"),
                 ),
                 metadata={
                     "market": "US",
@@ -402,6 +402,7 @@ class ExternalSignalAlertMixin:
     def external_dart_events(self, snapshot: AccountSnapshot, signals: Dict[str, object], previous_signals: Dict[str, object]) -> List[AlertEvent]:
         disclosures = signals.get("dartDisclosures") if isinstance(signals.get("dartDisclosures"), dict) else {}
         previous_disclosures = previous_signals.get("dartDisclosures") if isinstance(previous_signals.get("dartDisclosures"), dict) else {}
+        positions = {item.symbol.upper(): item.to_dict() for item in snapshot.positions if item.symbol and not item.is_cash()}
         events: List[AlertEvent] = []
         for symbol, item in disclosures.items():
             if not isinstance(item, dict):
@@ -413,6 +414,7 @@ class ExternalSignalAlertMixin:
                 continue
             symbol_label = str(symbol or "").upper()
             provider = str(item.get("provider") or "OpenDART")
+            current_price = self.current_price_line(positions.get(symbol_label) or {})
             events.append(AlertEvent(
                 snapshot.account_id,
                 snapshot.account_label,
@@ -423,6 +425,7 @@ class ExternalSignalAlertMixin:
                 [
                     "신규 공시 감지",
                     str(item.get("reportName") or "-"),
+                    current_price,
                     "접수일 " + str(item.get("receiptDate") or "-"),
                     "최근 공시 " + compact_number(number(item.get("count"))) + "건",
                     "출처 " + provider,

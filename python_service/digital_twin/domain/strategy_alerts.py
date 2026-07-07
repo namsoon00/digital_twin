@@ -1,6 +1,6 @@
 from typing import List
 
-from .alert_formatting import money, signed_pct
+from .alert_formatting import signed_pct
 from .portfolio import AccountSnapshot, AlertEvent
 
 
@@ -21,7 +21,7 @@ class StrategyAlertMixin:
             symbol = position.symbol.upper()
             common_lines = [
                 source + " 종목",
-                "현재 " + money(position.current_price, position.currency),
+                self.current_price_line(position.to_dict()),
                 self.flow_context_line(position.to_dict()),
                 self.trend_context_line(position.to_dict()),
             ]
@@ -118,6 +118,7 @@ class StrategyAlertMixin:
                     "매도 판단 " + sell_phrase,
                     "현재 데이터 기준 템플릿 테스트",
                     "손익률 " + signed_pct(position.profit_loss_rate),
+                    self.current_price_line(position.to_dict()),
                     self.flow_context_line(position.to_dict()),
                     self.trend_context_line(position.to_dict()),
                 ],
@@ -144,7 +145,7 @@ class StrategyAlertMixin:
                 [
                     "관심종목 매수 후보 " + buy_phrase,
                     "현재 데이터 기준 템플릿 테스트",
-                    "현재 " + money(position.current_price, position.currency),
+                    self.current_price_line(position.to_dict()),
                     self.flow_context_line(position.to_dict()),
                     self.trend_context_line(position.to_dict()),
                 ],
@@ -170,7 +171,7 @@ class StrategyAlertMixin:
             [
                 "매수 판단 " + buy_phrase,
                 "현재 데이터 기준 템플릿 테스트",
-                "현재 " + money(position.current_price, position.currency),
+                self.current_price_line(position.to_dict()),
                 self.flow_context_line(position.to_dict()),
                 self.trend_context_line(position.to_dict()),
             ],

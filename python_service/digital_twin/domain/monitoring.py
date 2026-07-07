@@ -226,12 +226,15 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
             foreign_buy_volume=number(item.get("foreign_buy_volume") if "foreign_buy_volume" in item else item.get("foreignBuyVolume")),
             foreign_sell_volume=number(item.get("foreign_sell_volume") if "foreign_sell_volume" in item else item.get("foreignSellVolume")),
             foreign_net_volume=number(item.get("foreign_net_volume") if "foreign_net_volume" in item else item.get("foreignNetVolume")),
+            foreign_net_amount=number(item.get("foreign_net_amount")) or number(item.get("foreignNetAmount")),
             institution_buy_volume=number(item.get("institution_buy_volume") if "institution_buy_volume" in item else item.get("institutionBuyVolume")),
             institution_sell_volume=number(item.get("institution_sell_volume") if "institution_sell_volume" in item else item.get("institutionSellVolume")),
             institution_net_volume=number(item.get("institution_net_volume") if "institution_net_volume" in item else item.get("institutionNetVolume")),
+            institution_net_amount=number(item.get("institution_net_amount")) or number(item.get("institutionNetAmount")),
             individual_buy_volume=number(item.get("individual_buy_volume") if "individual_buy_volume" in item else item.get("individualBuyVolume")),
             individual_sell_volume=number(item.get("individual_sell_volume") if "individual_sell_volume" in item else item.get("individualSellVolume")),
             individual_net_volume=number(item.get("individual_net_volume") if "individual_net_volume" in item else item.get("individualNetVolume")),
+            individual_net_amount=number(item.get("individual_net_amount")) or number(item.get("individualNetAmount")),
             ma20=number(item.get("ma20")),
             ma60=number(item.get("ma60")),
             ma20_slope=number(item.get("ma20_slope") if "ma20_slope" in item else item.get("ma20Slope")),
@@ -606,26 +609,43 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
         return "수급: " + ", ".join(parts)
 
     def investor_value(self, position: Dict[str, object], snake_key: str, camel_key: str) -> float:
-        return number(position.get(snake_key) if snake_key in position else position.get(camel_key))
+        return number(position.get(snake_key)) or number(position.get(camel_key))
 
-    def investor_summary(self, label: str, buy: float, sell: float, net: float) -> str:
+    def investor_amount_text(self, value: float, currency: str) -> str:
+        amount = number(value)
+        if not amount:
+            return ""
+        return ("+" if amount > 0 else "-") + money(abs(amount), currency)
+
+    def investor_summary(self, label: str, buy: float, sell: float, net: float, net_amount: float, currency: str) -> str:
+        amount_text = (" · 금액 " + self.investor_amount_text(net_amount, currency)) if net_amount else ""
         if buy or sell:
             effective_net = net if net else buy - sell
-            return label + " " + signed_number(effective_net) + "(매수 " + compact_number(buy) + "/매도 " + compact_number(sell) + ")"
+            return label + " " + signed_number(effective_net) + "(매수 " + compact_number(buy) + "/매도 " + compact_number(sell) + ")" + amount_text
         if net:
-            return label + " " + signed_number(net)
+            return label + " " + signed_number(net) + amount_text
+        if net_amount:
+            return label + " 금액 " + self.investor_amount_text(net_amount, currency)
         return ""
 
     def investor_context_line(self, position: Dict[str, object]) -> str:
+        currency = self.position_currency(position)
         foreign_buy = self.investor_value(position, "foreign_buy_volume", "foreignBuyVolume")
         foreign_sell = self.investor_value(position, "foreign_sell_volume", "foreignSellVolume")
         foreign_net = self.investor_value(position, "foreign_net_volume", "foreignNetVolume")
+        foreign_net_amount = self.investor_value(position, "foreign_net_amount", "foreignNetAmount")
         institution_buy = self.investor_value(position, "institution_buy_volume", "institutionBuyVolume")
         institution_sell = self.investor_value(position, "institution_sell_volume", "institutionSellVolume")
         institution_net = self.investor_value(position, "institution_net_volume", "institutionNetVolume")
+        institution_net_amount = self.investor_value(position, "institution_net_amount", "institutionNetAmount")
+        individual_buy = self.investor_value(position, "individual_buy_volume", "individualBuyVolume")
+        individual_sell = self.investor_value(position, "individual_sell_volume", "individualSellVolume")
+        individual_net = self.investor_value(position, "individual_net_volume", "individualNetVolume")
+        individual_net_amount = self.investor_value(position, "individual_net_amount", "individualNetAmount")
         summaries = [
-            self.investor_summary("외국인", foreign_buy, foreign_sell, foreign_net),
-            self.investor_summary("기관", institution_buy, institution_sell, institution_net),
+            self.investor_summary("외국인", foreign_buy, foreign_sell, foreign_net, foreign_net_amount, currency),
+            self.investor_summary("기관", institution_buy, institution_sell, institution_net, institution_net_amount, currency),
+            self.investor_summary("개인", individual_buy, individual_sell, individual_net, individual_net_amount, currency),
         ]
         parts = [summary for summary in summaries if summary]
         if not parts:

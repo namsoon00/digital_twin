@@ -263,6 +263,16 @@ def normalize_position(item: Dict[str, object]) -> Position:
             "외국인순매수",
         ])
     )
+    foreign_net_amount = first_number(item, [
+        "foreignNetAmount",
+        "foreign_net_amount",
+        "foreignNetTradeAmount",
+        "foreignInvestorNetAmount",
+        "foreignNetTradingValue",
+        "frgn_ntby_tr_pbmn",
+        "외국인순매수금액",
+        "외국인순매수거래대금",
+    ])
     institution_buy_volume = first_number(item, [
         "institutionBuyVolume",
         "institutionalBuyVolume",
@@ -296,6 +306,16 @@ def normalize_position(item: Dict[str, object]) -> Position:
             "기관순매수",
         ])
     )
+    institution_net_amount = first_number(item, [
+        "institutionNetAmount",
+        "institution_net_amount",
+        "institutionNetTradeAmount",
+        "institutionInvestorNetAmount",
+        "institutionNetTradingValue",
+        "orgn_ntby_tr_pbmn",
+        "기관순매수금액",
+        "기관순매수거래대금",
+    ])
     individual_buy_volume = first_number(item, [
         "individualBuyVolume",
         "retailBuyVolume",
@@ -329,6 +349,17 @@ def normalize_position(item: Dict[str, object]) -> Position:
             "개인순매수",
         ])
     )
+    individual_net_amount = first_number(item, [
+        "individualNetAmount",
+        "individual_net_amount",
+        "individualNetTradeAmount",
+        "retailNetAmount",
+        "personalNetAmount",
+        "individualNetTradingValue",
+        "prsn_ntby_tr_pbmn",
+        "개인순매수금액",
+        "개인순매수거래대금",
+    ])
     trading_value = first_number(item, [
         "tradingValue",
         "trading_value",
@@ -384,12 +415,15 @@ def normalize_position(item: Dict[str, object]) -> Position:
         foreign_buy_volume=foreign_buy_volume,
         foreign_sell_volume=foreign_sell_volume,
         foreign_net_volume=foreign_net_volume,
+        foreign_net_amount=foreign_net_amount,
         institution_buy_volume=institution_buy_volume,
         institution_sell_volume=institution_sell_volume,
         institution_net_volume=institution_net_volume,
+        institution_net_amount=institution_net_amount,
         individual_buy_volume=individual_buy_volume,
         individual_sell_volume=individual_sell_volume,
         individual_net_volume=individual_net_volume,
+        individual_net_amount=individual_net_amount,
         ma5=first_number(item, ["ma5", "movingAverage5", "sma5"]),
         ma20=first_number(item, ["ma20", "movingAverage20", "sma20"]),
         ma60=first_number(item, ["ma60", "movingAverage60", "sma60"]),

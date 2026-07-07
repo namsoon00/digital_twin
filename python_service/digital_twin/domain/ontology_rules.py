@@ -380,16 +380,22 @@ def _position_weight(position: Position, portfolio: PortfolioSummary) -> float:
 
 
 def _investor_flow(position: Position) -> Dict[str, float]:
-    foreign = number(position.foreign_net_volume) or number(position.foreign_buy_volume) - number(position.foreign_sell_volume)
-    institution = number(position.institution_net_volume) or number(position.institution_buy_volume) - number(position.institution_sell_volume)
-    individual = number(position.individual_net_volume) or number(position.individual_buy_volume) - number(position.individual_sell_volume)
+    foreign_volume = number(position.foreign_net_volume) or number(position.foreign_buy_volume) - number(position.foreign_sell_volume)
+    institution_volume = number(position.institution_net_volume) or number(position.institution_buy_volume) - number(position.institution_sell_volume)
+    individual_volume = number(position.individual_net_volume) or number(position.individual_buy_volume) - number(position.individual_sell_volume)
+    foreign = foreign_volume or number(position.foreign_net_amount)
+    institution = institution_volume or number(position.institution_net_amount)
+    individual = individual_volume or number(position.individual_net_amount)
     base = abs(foreign) + abs(institution) + abs(individual)
     smart_money = foreign + institution
     score = clamp((smart_money - individual * 0.35) / base * 100.0, -100.0, 100.0) if base else 0.0
     return {
-        "foreignNetVolume": foreign,
-        "institutionNetVolume": institution,
-        "individualNetVolume": individual,
+        "foreignNetVolume": foreign_volume,
+        "institutionNetVolume": institution_volume,
+        "individualNetVolume": individual_volume,
+        "foreignNetAmount": number(position.foreign_net_amount),
+        "institutionNetAmount": number(position.institution_net_amount),
+        "individualNetAmount": number(position.individual_net_amount),
         "smartMoneyNetVolume": smart_money,
         "investorFlowBase": base,
         "investorFlowScore": score,

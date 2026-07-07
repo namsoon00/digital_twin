@@ -415,7 +415,14 @@ class PythonServiceTests(unittest.TestCase):
             if path.endswith("/inquire-ccnl"):
                 return {"rt_cd": "0", "output": [{"stck_prpr": "72000", "tday_rltv": "118.5", "total_shnu_qty": "900", "total_seln_qty": "700"}]}
             if path.endswith("/inquire-investor"):
-                return {"rt_cd": "0", "output": {"frgn_ntby_qty": "700", "orgn_ntby_qty": "300", "prsn_ntby_qty": "-400"}}
+                return {"rt_cd": "0", "output": {
+                    "frgn_ntby_qty": "700",
+                    "orgn_ntby_qty": "300",
+                    "prsn_ntby_qty": "-400",
+                    "frgn_ntby_tr_pbmn": "210000000",
+                    "orgn_ntby_tr_pbmn": "90000000",
+                    "prsn_ntby_tr_pbmn": "-120000000",
+                }}
             if path.endswith("/inquire-asking-price-exp-ccn"):
                 return {"rt_cd": "0", "output": {}}
             return {"rt_cd": "0", "output": {}}
@@ -444,6 +451,9 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(700, positions[0].foreign_net_volume)
         self.assertEqual(300, positions[0].institution_net_volume)
         self.assertEqual(-400, positions[0].individual_net_volume)
+        self.assertEqual(210000000, positions[0].foreign_net_amount)
+        self.assertEqual(90000000, positions[0].institution_net_amount)
+        self.assertEqual(-120000000, positions[0].individual_net_amount)
         self.assertEqual(1, provider.diagnostics["partialCached"])
         self.assertEqual(1, provider.diagnostics["live"])
         self.assertIn("/uapi/domestic-stock/v1/quotations/inquire-ccnl", calls)
@@ -4083,6 +4093,24 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("체결강도 70.9", flow_line)
         self.assertIn("호가잔량 매수", flow_line)
         self.assertIn("호가불균형 +73.8%", flow_line)
+
+        position.update({
+            "market": "KR",
+            "currency": "KRW",
+            "foreignBuyVolume": 1300,
+            "foreignSellVolume": 600,
+            "foreignNetAmount": 210000000,
+            "institutionBuyVolume": 900,
+            "institutionSellVolume": 600,
+            "institutionNetAmount": 90000000,
+            "individualBuyVolume": 2000,
+            "individualSellVolume": 2400,
+            "individualNetAmount": -120000000,
+        })
+        investor_line = monitor.investor_context_line(position)
+        self.assertIn("외국인 +700(매수 1,300/매도 600) · 금액 +2억 원", investor_line)
+        self.assertIn("기관 +300(매수 900/매도 600) · 금액 +9,000만 원", investor_line)
+        self.assertIn("개인 -400(매수 2,000/매도 2,400) · 금액 -1억 원", investor_line)
 
     def test_notification_schedules_use_real_monitor_sent_history(self):
         registry = AccountRegistry()

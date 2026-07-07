@@ -52,12 +52,15 @@ class Position:
     foreign_buy_volume: float = 0.0
     foreign_sell_volume: float = 0.0
     foreign_net_volume: float = 0.0
+    foreign_net_amount: float = 0.0
     institution_buy_volume: float = 0.0
     institution_sell_volume: float = 0.0
     institution_net_volume: float = 0.0
+    institution_net_amount: float = 0.0
     individual_buy_volume: float = 0.0
     individual_sell_volume: float = 0.0
     individual_net_volume: float = 0.0
+    individual_net_amount: float = 0.0
     ma5: float = 0.0
     ma20: float = 0.0
     ma60: float = 0.0

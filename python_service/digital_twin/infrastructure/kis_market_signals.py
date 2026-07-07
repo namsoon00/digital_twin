@@ -29,11 +29,14 @@ DETAIL_SIGNAL_KEYS = [
     "institutionSellVolume",
     "individualBuyVolume",
     "individualSellVolume",
-    "institutionNetVolume",
-    "individualNetVolume",
-    "orderbookBidVolume",
-    "orderbookAskVolume",
-    "bidAskImbalance",
+            "institutionNetVolume",
+            "individualNetVolume",
+            "foreignNetAmount",
+            "institutionNetAmount",
+            "individualNetAmount",
+            "orderbookBidVolume",
+            "orderbookAskVolume",
+            "bidAskImbalance",
 ]
 
 JsonFetcher = Callable[[str, str, Dict[str, str], Optional[Dict[str, object]], Optional[Dict[str, str]], int], Dict[str, object]]
@@ -395,6 +398,9 @@ class KISMarketSignalProvider:
             "individualSellVolume",
             "institutionNetVolume",
             "individualNetVolume",
+            "foreignNetAmount",
+            "institutionNetAmount",
+            "individualNetAmount",
         ]):
             included.append("투자자별 수급")
         if signal.get("orderbookBidVolume") is not None or signal.get("orderbookAskVolume") is not None:
@@ -504,12 +510,15 @@ class KISMarketSignalProvider:
         foreign_buy_volume = optional_number(signal, ["foreignBuyVolume"])
         foreign_sell_volume = optional_number(signal, ["foreignSellVolume"])
         foreign_net_volume = optional_number(signal, ["foreignNetVolume", "foreignNet"])
+        foreign_net_amount = optional_number(signal, ["foreignNetAmount"])
         institution_buy_volume = optional_number(signal, ["institutionBuyVolume"])
         institution_sell_volume = optional_number(signal, ["institutionSellVolume"])
         institution_net_volume = optional_number(signal, ["institutionNetVolume", "institutionNet"])
+        institution_net_amount = optional_number(signal, ["institutionNetAmount"])
         individual_buy_volume = optional_number(signal, ["individualBuyVolume"])
         individual_sell_volume = optional_number(signal, ["individualSellVolume"])
         individual_net_volume = optional_number(signal, ["individualNetVolume", "individualNet"])
+        individual_net_amount = optional_number(signal, ["individualNetAmount"])
 
         merged_price = current_price if current_price is not None else position.current_price
         market_value = position.market_value
@@ -548,12 +557,15 @@ class KISMarketSignalProvider:
             foreign_buy_volume=foreign_buy_volume if foreign_buy_volume is not None else position.foreign_buy_volume,
             foreign_sell_volume=foreign_sell_volume if foreign_sell_volume is not None else position.foreign_sell_volume,
             foreign_net_volume=foreign_net_volume if foreign_net_volume is not None else position.foreign_net_volume,
+            foreign_net_amount=foreign_net_amount if foreign_net_amount is not None else position.foreign_net_amount,
             institution_buy_volume=institution_buy_volume if institution_buy_volume is not None else position.institution_buy_volume,
             institution_sell_volume=institution_sell_volume if institution_sell_volume is not None else position.institution_sell_volume,
             institution_net_volume=institution_net_volume if institution_net_volume is not None else position.institution_net_volume,
+            institution_net_amount=institution_net_amount if institution_net_amount is not None else position.institution_net_amount,
             individual_buy_volume=individual_buy_volume if individual_buy_volume is not None else position.individual_buy_volume,
             individual_sell_volume=individual_sell_volume if individual_sell_volume is not None else position.individual_sell_volume,
             individual_net_volume=individual_net_volume if individual_net_volume is not None else position.individual_net_volume,
+            individual_net_amount=individual_net_amount if individual_net_amount is not None else position.individual_net_amount,
             ma20_distance=ma20_distance,
             ma60_distance=ma60_distance,
         )
@@ -638,28 +650,34 @@ def normalize_investor(items: List[Dict[str, object]]) -> Dict[str, object]:
     foreign_buy = optional_number(latest, ["frgn_shnu_vol"])
     foreign_sell = optional_number(latest, ["frgn_seln_vol"])
     foreign_net = optional_number(latest, ["frgn_ntby_qty"])
+    foreign_net_amount = optional_number(latest, ["frgn_ntby_tr_pbmn"])
     institution_buy = optional_number(latest, ["orgn_shnu_vol"])
     institution_sell = optional_number(latest, ["orgn_seln_vol"])
     institution_net = optional_number(latest, ["orgn_ntby_qty"])
+    institution_net_amount = optional_number(latest, ["orgn_ntby_tr_pbmn"])
     individual_buy = optional_number(latest, ["prsn_shnu_vol"])
     individual_sell = optional_number(latest, ["prsn_seln_vol"])
     individual_net = optional_number(latest, ["prsn_ntby_qty"])
+    individual_net_amount = optional_number(latest, ["prsn_ntby_tr_pbmn"])
     return {
         "foreignBuyVolume": foreign_buy,
         "foreignSellVolume": foreign_sell,
         "foreignNetVolume": foreign_net if foreign_net is not None else (
             foreign_buy - foreign_sell if foreign_buy is not None and foreign_sell is not None else None
         ),
+        "foreignNetAmount": foreign_net_amount,
         "institutionBuyVolume": institution_buy,
         "institutionSellVolume": institution_sell,
         "institutionNetVolume": institution_net if institution_net is not None else (
             institution_buy - institution_sell if institution_buy is not None and institution_sell is not None else None
         ),
+        "institutionNetAmount": institution_net_amount,
         "individualBuyVolume": individual_buy,
         "individualSellVolume": individual_sell,
         "individualNetVolume": individual_net if individual_net is not None else (
             individual_buy - individual_sell if individual_buy is not None and individual_sell is not None else None
         ),
+        "individualNetAmount": individual_net_amount,
     }
 
 

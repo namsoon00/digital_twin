@@ -93,6 +93,7 @@ DEFAULT_ALERT_THRESHOLDS = {
     "monitorMaDistance": 8,
     "monitorCashDelta": 10,
     "monitorExitPressureDelta": 15,
+    "monitorDecisionLabelBuffer": 5,
     "externalEquityChangePct": 3,
     "externalCryptoChange24hPct": 4,
     "externalCryptoChange7dPct": 10,

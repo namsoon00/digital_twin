@@ -635,8 +635,8 @@ def decision_from_matches(facts: Dict[str, object], matches: List[OntologyRuleMa
         label = "리밸런싱 권장"
         tone = "caution"
     elif selected.rule_id == "external.crypto.btc_sensitivity.v1":
-        label = "비트코인 민감도 축소 검토"
-        tone = "caution"
+        label = "비트코인 민감도 축소 검토" if selected.strength_score >= 70 else "비트코인 민감도 점검"
+        tone = "caution" if selected.strength_score >= 70 else "watch"
     elif selected.rule_id == "disclosure.material_event.v1":
         label = "공시 리스크 대응 검토"
         tone = "caution"

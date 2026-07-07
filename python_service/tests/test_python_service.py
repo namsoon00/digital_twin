@@ -1119,6 +1119,78 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("holdingTiming", context["promptContext"]["promptId"])
         self.assertEqual("ontologyRelationRules", context["decision"]["basis"])
 
+    def test_bitcoin_sensitive_holding_uses_review_label_below_action_threshold(self):
+        position = Position(
+            symbol="STRC",
+            name="Strategy Preferred",
+            market="US",
+            currency="USD",
+            market_value=1000,
+            profit_loss_rate=-4.0,
+            sellable_quantity=1,
+            current_price=88.74,
+            ma20=88.65,
+            ma60=95.58,
+            ma20_distance=0.1,
+            ma60_distance=-7.2,
+            sector="디지털자산",
+        )
+        context = evaluate_position_relation_rules(
+            position,
+            portfolio_summary([position], fx_rates={"USD": 1400, "KRW": 1}),
+            external_signals={
+                "cryptoMarkets": {
+                    "bitcoin": {
+                        "provider": "CoinGecko",
+                        "symbol": "BTC",
+                        "price": 108000,
+                        "volume24h": 42000000000,
+                        "change24h": 0.1,
+                        "change7d": 5.7,
+                    }
+                }
+            },
+        )
+
+        self.assertEqual("비트코인 민감도 점검", context["decision"]["label"])
+        self.assertLess(context["decision"]["score"], 70)
+
+    def test_bitcoin_sensitive_holding_uses_reduction_label_after_action_threshold(self):
+        position = Position(
+            symbol="STRC",
+            name="Strategy Preferred",
+            market="US",
+            currency="USD",
+            market_value=1000,
+            profit_loss_rate=-4.0,
+            sellable_quantity=1,
+            current_price=88.74,
+            ma20=88.65,
+            ma60=95.58,
+            ma20_distance=0.1,
+            ma60_distance=-7.2,
+            sector="디지털자산",
+        )
+        context = evaluate_position_relation_rules(
+            position,
+            portfolio_summary([position], fx_rates={"USD": 1400, "KRW": 1}),
+            external_signals={
+                "cryptoMarkets": {
+                    "bitcoin": {
+                        "provider": "CoinGecko",
+                        "symbol": "BTC",
+                        "price": 108000,
+                        "volume24h": 42000000000,
+                        "change24h": 0.1,
+                        "change7d": 8.5,
+                    }
+                }
+            },
+        )
+
+        self.assertEqual("비트코인 민감도 축소 검토", context["decision"]["label"])
+        self.assertGreaterEqual(context["decision"]["score"], 70)
+
     def test_ontology_loss_guard_requires_negative_pnl(self):
         position = Position(
             symbol="MSTR",
@@ -2792,6 +2864,58 @@ class PythonServiceTests(unittest.TestCase):
         events = RealtimeMonitor().events_for_snapshot(current_snapshot, previous_snapshot.to_monitor_state())
 
         self.assertTrue(any(event.rule == "monitorPositionChange" for event in events))
+        self.assertFalse(any(event.rule == "monitorDecisionChange" for event in events))
+
+    def test_monitor_decision_change_suppresses_equivalent_crypto_label_noise(self):
+        monitor = RealtimeMonitor()
+        position = normalize_position({
+            "symbol": "STRC",
+            "name": "Strategy Preferred",
+            "market": "US",
+            "currency": "USD",
+            "marketValue": 1000,
+            "quantity": 1,
+            "sellableQuantity": 1,
+            "currentPrice": 88.74,
+            "profitLossRate": -4.0,
+            "ma20": 88.65,
+            "ma60": 95.58,
+            "ma20Distance": 0.1,
+            "ma60Distance": -7.2,
+            "sector": "디지털자산",
+        })
+        portfolio = portfolio_summary([position], fx_rates={"USD": 1400, "KRW": 1})
+        external_signals = {
+            "cryptoMarkets": {
+                "bitcoin": {
+                    "provider": "CoinGecko",
+                    "symbol": "BTC",
+                    "price": 108000,
+                    "volume24h": 42000000000,
+                    "change24h": 0.1,
+                    "change7d": 5.7,
+                }
+            }
+        }
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "ok",
+            utc_now_iso(),
+            portfolio,
+            [position],
+            [],
+            external_signals=external_signals,
+        )
+        scored_snapshot = monitor.snapshot_with_strategy_scores(snapshot)
+        previous = scored_snapshot.to_monitor_state()
+        previous["decisions"]["STRC"]["decision"] = "비트코인 민감도 축소 검토"
+        previous["decisions"]["STRC"]["exit_pressure"] = 64.5
+
+        events = monitor.events_for_snapshot(scored_snapshot, previous)
+
         self.assertFalse(any(event.rule == "monitorDecisionChange" for event in events))
 
     def test_model_review_runner_sends_deferred_review_message(self):

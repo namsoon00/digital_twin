@@ -86,6 +86,34 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
         text = str(label or "-").strip() or "-"
         return text + " (" + compact_number(float(score or 0)) + "점)"
 
+    def decision_action_group(self, label: object) -> str:
+        text = str(label or "").strip()
+        if not text:
+            return ""
+        if "비트코인" in text or "크립토" in text or "민감도" in text:
+            return "cryptoSensitivity"
+        if any(term in text for term in ["손절", "손실", "분할축소"]):
+            return "lossControl"
+        if any(term in text for term in ["분할매도", "익절", "수익"]):
+            return "profitTake"
+        if "리밸런싱" in text:
+            return "rebalance"
+        if "공시" in text:
+            return "disclosure"
+        if any(term in text for term in ["보유", "관망", "관찰", "유지"]):
+            return "holdWatch"
+        return text
+
+    def meaningful_decision_change(self, current_decision: Dict[str, object], previous_decision: Dict[str, object], pressure_delta: float) -> bool:
+        current_label = str(current_decision.get("decision") or "").strip()
+        previous_label = str(previous_decision.get("decision") or "").strip()
+        if not current_label or not previous_label or current_label == previous_label:
+            return False
+        if self.decision_action_group(current_label) != self.decision_action_group(previous_label):
+            return True
+        label_buffer = float(self.thresholds.get("monitorDecisionLabelBuffer", 5) or 0)
+        return abs(float(pressure_delta or 0)) >= label_buffer
+
     def events_for_snapshot(self, snapshot: AccountSnapshot, previous: Dict[str, object]) -> List[AlertEvent]:
         events: List[AlertEvent] = []
         snapshot = self.snapshot_with_strategy_scores(snapshot)
@@ -876,7 +904,7 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
             decision = current_decisions.get(symbol) or {}
             previous_decision = previous_decisions.get(symbol) or {}
             pressure_delta = float(decision.get("exit_pressure") or 0) - float(previous_decision.get("exit_pressure") or 0)
-            changed = decision.get("decision") and previous_decision.get("decision") and decision.get("decision") != previous_decision.get("decision")
+            changed = self.meaningful_decision_change(decision, previous_decision, pressure_delta)
             if changed or abs(pressure_delta) >= float(self.thresholds.get("monitorExitPressureDelta", 0)):
                 previous_phrase = self.decision_score_phrase(previous_decision.get("decision") or "-", previous_decision.get("exit_pressure"))
                 current_phrase = self.decision_score_phrase(decision.get("decision") or "-", decision.get("exit_pressure"))
@@ -892,7 +920,7 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
                 prompt_context = self.prompt_context_from_decision(decision)
                 relation_lines = self.relation_context_lines(decision)
                 ontology_lines = self.ontology_context_lines(decision)
-                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "ALERT" if decision.get("tone") == "danger" else "WATCH", "monitorDecisionChange", snapshot.account_id + ":decision:" + symbol + ":" + str(decision.get("decision")), item["name"], ["보유 종목 판단 변화", "이전 " + previous_phrase, "현재 " + current_phrase, self.holding_action_line(decision.get("decision") or "", float(item.get("profit_loss_rate") or 0)), self.flow_context_line(item), self.investor_context_line(item), self.trend_context_line(item)] + relation_lines + ontology_lines + review_lines, symbol, criteria=self.criteria("보유 종목의 온톨로지 판단 이름이 바뀌거나 관계 신호 강도 변화가 " + self.threshold_text("monitorExitPressureDelta", "점") + " 이상일 때", "이전 " + previous_phrase + ", 현재 " + current_phrase + (", " + " · ".join(relation_lines[:2]) if relation_lines else "")), metadata={
+                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "ALERT" if decision.get("tone") == "danger" else "WATCH", "monitorDecisionChange", snapshot.account_id + ":decision:" + symbol + ":" + str(decision.get("decision")), item["name"], ["보유 종목 판단 변화", "이전 " + previous_phrase, "현재 " + current_phrase, self.holding_action_line(decision.get("decision") or "", float(item.get("profit_loss_rate") or 0)), self.flow_context_line(item), self.investor_context_line(item), self.trend_context_line(item)] + relation_lines + ontology_lines + review_lines, symbol, criteria=self.criteria("보유 종목의 대응 액션 그룹이 바뀌거나 같은 그룹 내 판단 점수 변화가 " + self.threshold_text("monitorDecisionLabelBuffer", "점") + " 이상, 또는 관계 신호 강도 변화가 " + self.threshold_text("monitorExitPressureDelta", "점") + " 이상일 때", "이전 " + previous_phrase + ", 현재 " + current_phrase + (", " + " · ".join(relation_lines[:2]) if relation_lines else "")), metadata={
                     "holdingDecision": decision.get("decision") or "",
                     "holdingDecisionBasis": decision.get("decision_basis") or "",
                     "holdingDecisionScore": round(float(decision.get("exit_pressure") or 0), 1),

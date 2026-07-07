@@ -430,6 +430,17 @@ def percent_text(value: str) -> str:
     return match.group(0) if match else text
 
 
+def compact_action_title(value: str) -> str:
+    text = str(value or "").strip()
+    for separator in [",", "·", "/", ";"]:
+        if separator in text:
+            text = text.split(separator, 1)[0].strip()
+            break
+    if len(text) > 28:
+        text = text[:28].rstrip() + "..."
+    return text
+
+
 def notification_title_icon(rule: str, raw_lines: List[str], event: AlertEvent) -> str:
     key = str(rule or "")
     status = data_value(raw_lines, "상태")
@@ -461,11 +472,13 @@ def notification_title_icon(rule: str, raw_lines: List[str], event: AlertEvent) 
         return "📊"
     if key == "monitorDecisionChange":
         current = data_value(raw_lines, "현재")
-        if any(term in current for term in ["손절", "손실"]):
+        action = data_value(raw_lines, "권장 액션")
+        decision_blob = " ".join([current, action])
+        if any(term in decision_blob for term in ["손절", "손실", "축소"]):
             return "🛡️"
-        if any(term in current for term in ["분할", "익절", "수익"]):
+        if any(term in decision_blob for term in ["분할", "익절", "수익"]):
             return "💰"
-        if "리밸런싱" in current:
+        if "리밸런싱" in decision_blob:
             return "⚖️"
         return "🔁"
     if key == "externalCryptoMove":
@@ -529,6 +542,9 @@ def notification_title_headline(rule: str, raw_lines: List[str], event: AlertEve
         return title_from_change(change, "현금 비중 증가", "현금 비중 감소", "현금 비중 변화")
     if key == "monitorDecisionChange":
         current = data_value(raw_lines, "현재")
+        action = compact_action_title(data_value(raw_lines, "권장 액션"))
+        if action:
+            return "판단 변경: " + action
         if any(term in current for term in ["손절", "손실"]):
             return "판단 변경: 손절·분할축소 권장"
         if any(term in current for term in ["분할", "익절", "수익"]):

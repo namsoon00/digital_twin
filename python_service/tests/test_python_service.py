@@ -4068,6 +4068,30 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("• <b>감지</b>: <code>20일선 상향 돌파</code>", message)
         self.assertNotIn("\n\n\n", message)
 
+    def test_monitor_decision_title_uses_recommended_action(self):
+        db_path = Path(self.temp.name) / "service.db"
+        templates = SQLiteNotificationTemplateStore(db_path)
+        event = AlertEvent(
+            "main",
+            "메인",
+            "WATCH",
+            "monitorDecisionChange",
+            "main:decision:STRC",
+            "Strategy Preferred",
+            [
+                "보유: 종목 판단 변화",
+                "이전: 비트코인 민감도 점검 (64.5점)",
+                "현재: 비트코인 민감도 축소 검토 (64.5점)",
+                "권장 액션: 손실 축소 우선, 회복 조건 확인 전 비중 확대 보류",
+            ],
+            "STRC",
+        )
+
+        message = templates.render(event.rule, alert_context(event))
+
+        self.assertIn("<b>[관찰] 🛡️ 판단 변경: 손실 축소 우선</b>", message)
+        self.assertIn("• <b>권장 액션</b>: <code>손실 축소 우선, 회복 조건 확인 전 비중 확대 보류</code>", message)
+
     def test_external_equity_alert_uses_colon_pairs_without_divider(self):
         db_path = Path(self.temp.name) / "service.db"
         templates = SQLiteNotificationTemplateStore(db_path)

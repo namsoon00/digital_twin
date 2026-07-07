@@ -37,6 +37,12 @@
   --ds-space-7: 16px;
   --ds-space-8: 18px;
   --ds-space-9: 24px;
+  --ds-page-gap: var(--ds-space-7);
+  --ds-section-gap: var(--ds-space-6);
+  --ds-panel-pad-x: var(--ds-space-7);
+  --ds-panel-pad-y: var(--ds-space-6);
+  --ds-row-pad-x: var(--ds-space-6);
+  --ds-row-pad-y: var(--ds-space-5);
   --ds-radius-control: 6px;
   --ds-radius-panel: 6px;
   --ds-control-height-sm: 30px;
@@ -216,8 +222,8 @@ a {
   display: grid;
   grid-template-columns: var(--ds-sidebar-width) minmax(0, 1fr);
   grid-template-rows: auto auto minmax(0, 1fr);
-  column-gap: 24px;
-  row-gap: 16px;
+  column-gap: var(--ds-space-9);
+  row-gap: var(--ds-page-gap);
   width: min(var(--ds-shell-width), calc(100vw - 48px));
   margin: 0 auto;
   padding: 24px 0 36px;
@@ -617,7 +623,7 @@ h3 {
 
 .managed-page {
   display: grid;
-  gap: 14px;
+  gap: var(--ds-page-gap);
   min-width: 0;
 }
 
@@ -654,8 +660,8 @@ h3 {
   align-content: center;
   gap: 3px;
   min-width: 0;
-  min-height: 58px;
-  padding: 10px 12px;
+  min-height: 62px;
+  padding: 11px 14px;
   border-left: 1px solid var(--line);
 }
 
@@ -996,7 +1002,7 @@ h3 {
   align-items: flex-start;
   justify-content: space-between;
   gap: 14px;
-  padding: 14px 16px;
+  padding: var(--ds-panel-pad-y) var(--ds-panel-pad-x);
   border-bottom: 1px solid var(--line);
   background: color-mix(in srgb, var(--panel) 88%, var(--panel-soft) 12%);
   min-width: 0;
@@ -1923,7 +1929,7 @@ h3 {
   display: grid;
   grid-template-columns: repeat(12, minmax(0, 1fr));
   align-items: start;
-  gap: 16px;
+  gap: var(--ds-page-gap);
 }
 
 .home-view {
@@ -3051,10 +3057,10 @@ h3 {
   grid-column: 1 / -1;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 12px;
+  gap: var(--ds-section-gap);
   align-items: center;
   min-width: 0;
-  padding: 4px 0 8px;
+  padding: 6px 0 10px;
 }
 
 .notification-section-actions,
@@ -3087,8 +3093,8 @@ h3 {
   align-content: center;
   gap: 3px;
   min-width: 0;
-  min-height: 56px;
-  padding: 9px 12px 10px;
+  min-height: 62px;
+  padding: 11px 14px 12px;
   border-left: 1px solid var(--line);
   box-shadow: inset 0 2px 0 var(--line);
 }
@@ -3861,9 +3867,9 @@ h3 {
 
 .notification-decision-body {
   display: grid;
-  gap: 12px;
+  gap: var(--ds-section-gap);
   min-width: 0;
-  padding: 14px 16px 16px;
+  padding: var(--ds-panel-pad-y) var(--ds-panel-pad-x) var(--ds-panel-pad-x);
 }
 
 .notification-decision-status {
@@ -3925,6 +3931,7 @@ h3 {
 
 .notification-decision-list {
   display: block;
+  padding-top: var(--ds-space-2);
   border-top: 1px solid var(--line);
 }
 
@@ -3932,7 +3939,7 @@ h3 {
   display: grid;
   gap: 7px;
   min-width: 0;
-  padding: 12px 0;
+  padding: var(--ds-row-pad-y) var(--ds-row-pad-x);
   border-bottom: 1px solid var(--line);
   background: transparent;
 }
@@ -7050,15 +7057,16 @@ h3 {
 
 @media (min-width: 1181px) {
   .workspace-main {
-    padding-right: 8px;
+    padding-right: 10px;
+    padding-bottom: var(--ds-space-3);
   }
 
   .managed-page {
-    gap: 12px;
+    gap: var(--ds-page-gap);
   }
 
   .admin-grid {
-    gap: 14px;
+    gap: var(--ds-page-gap);
   }
 
   .admin-stat-grid,
@@ -7070,8 +7078,7 @@ h3 {
   .model-setting-card-grid,
   .lab-record-grid {
     gap: 0;
-    padding-right: 16px;
-    padding-left: 16px;
+    padding: var(--ds-space-2) var(--ds-panel-pad-x);
     border-top: 1px solid var(--line);
     border-bottom: 1px solid var(--line);
     background: color-mix(in srgb, var(--panel) 76%, transparent);
@@ -7085,8 +7092,8 @@ h3 {
   .monitoring-instrument-summary > div,
   .model-setting-card,
   .lab-record-grid span {
-    min-height: 58px;
-    padding: 10px 12px;
+    min-height: 62px;
+    padding: 12px 14px;
     border: 0;
     border-left: 1px solid var(--line);
     border-radius: 0;
@@ -7106,16 +7113,16 @@ h3 {
 
   .home-command-grid {
     grid-template-columns: minmax(360px, 0.78fr) minmax(0, 1.22fr);
-    gap: 0;
-    padding: 14px 16px 0;
+    gap: var(--ds-section-gap);
+    padding: var(--ds-panel-pad-x) var(--ds-panel-pad-x) 0;
   }
 
   .home-command-main {
     min-height: 0;
-    padding: 12px 14px;
-    border-radius: 0;
-    border-right: 0;
-    background: transparent;
+    padding: 14px 16px;
+    border-radius: var(--ds-radius-panel);
+    border: 1px solid var(--line);
+    background: color-mix(in srgb, var(--panel) 78%, transparent);
   }
 
   .home-action-grid {
@@ -7128,7 +7135,7 @@ h3 {
 
   .home-action {
     min-height: 76px;
-    padding: 11px 12px;
+    padding: 12px 14px;
     border: 0;
     border-left: 1px solid var(--line);
     border-radius: 0;
@@ -7146,7 +7153,7 @@ h3 {
   .home-signal-strip {
     grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 0;
-    margin: 0 16px 16px;
+    margin: var(--ds-section-gap) var(--ds-panel-pad-x) var(--ds-panel-pad-x);
     padding: 0;
     border: 1px solid var(--line);
     border-radius: var(--ds-radius-panel);
@@ -7155,8 +7162,8 @@ h3 {
   }
 
   .home-signal {
-    min-height: 62px;
-    padding: 9px 12px;
+    min-height: 66px;
+    padding: 11px 14px;
     border: 0;
     border-left: 1px solid var(--line);
     border-radius: 0;
@@ -7201,7 +7208,7 @@ h3 {
   .monitoring-instrument-list {
     display: block;
     gap: 0;
-    padding-top: 0;
+    padding: var(--ds-space-2) var(--ds-panel-pad-x) var(--ds-panel-pad-y);
     border-top: 1px solid var(--line);
   }
 
@@ -7211,8 +7218,8 @@ h3 {
   .account-watch-edit-row,
   .monitoring-instrument-row,
   .service-account-row {
-    gap: 12px;
-    padding: 12px 0;
+    gap: var(--ds-section-gap);
+    padding: calc(var(--ds-row-pad-y) + 1px) var(--ds-row-pad-x);
     border: 0;
     border-bottom: 1px solid var(--line);
     border-radius: 0;
@@ -7264,7 +7271,7 @@ h3 {
 
   .account-watchlist-workbench {
     grid-template-columns: minmax(360px, 0.58fr) minmax(0, 1.42fr);
-    gap: 16px;
+    gap: var(--ds-page-gap);
   }
 
   .account-watchlist-editor-head,
@@ -7305,8 +7312,7 @@ h3 {
   .model-guide-grid,
   .model-step-list {
     gap: 0;
-    padding-right: 16px;
-    padding-left: 16px;
+    padding: var(--ds-space-2) var(--ds-panel-pad-x);
     border-top: 1px solid var(--line);
     border-bottom: 1px solid var(--line);
     background: color-mix(in srgb, var(--panel) 76%, transparent);
@@ -7316,8 +7322,8 @@ h3 {
   .flow-lane,
   .model-guide-step,
   .model-step-list div {
-    min-height: 64px;
-    padding: 10px 12px;
+    min-height: 68px;
+    padding: 12px 14px;
     border: 0;
     border-left: 1px solid var(--line);
     border-radius: 0;
@@ -7368,8 +7374,10 @@ h3 {
   .relation-matrix,
   .ontology-class-grid {
     gap: 0;
+    padding: var(--ds-space-2) var(--ds-panel-pad-x);
     border-top: 1px solid var(--line);
     border-bottom: 1px solid var(--line);
+    background: color-mix(in srgb, var(--panel) 76%, transparent);
   }
 
   .relation-matrix {
@@ -7378,6 +7386,7 @@ h3 {
 
   .relation-matrix-row,
   .ontology-class-grid span {
+    padding: 12px 14px;
     border: 0;
     border-left: 1px solid var(--line);
     border-radius: 0;
@@ -7385,7 +7394,8 @@ h3 {
   }
 
   .relation-matrix-row {
-    min-height: 58px;
+    gap: 8px 12px;
+    min-height: 64px;
     border-bottom: 1px solid var(--line);
   }
 
@@ -7426,7 +7436,7 @@ h3 {
 
   .topbar {
     min-height: 0;
-    margin-bottom: 14px;
+    margin-bottom: var(--ds-section-gap);
     padding: 0;
     border-bottom: 0;
   }
@@ -7441,7 +7451,7 @@ h3 {
     align-items: center;
     min-height: 0;
     max-height: none;
-    margin-bottom: 14px;
+    margin-bottom: var(--ds-section-gap);
     padding: 8px;
   }
 
@@ -7521,7 +7531,7 @@ h3 {
     grid-column: auto;
     grid-row: auto;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    margin-bottom: 14px;
+    margin-bottom: var(--ds-section-gap);
   }
 
   .deskbar-cell:nth-child(2n + 1) {
@@ -7530,7 +7540,7 @@ h3 {
 
   .admin-grid {
     grid-template-columns: repeat(8, minmax(0, 1fr));
-    gap: 14px;
+    gap: var(--ds-page-gap);
   }
 
   .page-command-strip {
@@ -7610,8 +7620,8 @@ h3 {
 
   .shell {
     grid-template-columns: 224px minmax(0, 1fr);
-    column-gap: 16px;
-    row-gap: 12px;
+    column-gap: var(--ds-space-8);
+    row-gap: var(--ds-section-gap);
     width: min(1180px, calc(100vw - 32px));
     padding: 18px 0 32px;
   }
@@ -7665,7 +7675,7 @@ h3 {
 
   .admin-grid {
     grid-template-columns: repeat(8, minmax(0, 1fr));
-    gap: 14px;
+    gap: var(--ds-page-gap);
   }
 
   .home-view .admin-overview-panel,
@@ -7808,7 +7818,7 @@ h3 {
     width: 100%;
     max-width: 720px;
     min-height: 100dvh;
-    padding: calc(8px + env(safe-area-inset-top)) 12px calc(18px + var(--bottom-tabs-height) + env(safe-area-inset-bottom));
+    padding: calc(10px + env(safe-area-inset-top)) 14px calc(20px + var(--bottom-tabs-height) + env(safe-area-inset-bottom));
   }
 
   .topbar,
@@ -7839,6 +7849,10 @@ h3 {
   .page-command-strip {
     gap: 0;
     margin-bottom: 0;
+  }
+
+  .managed-page {
+    gap: var(--ds-space-5);
   }
 
   .page-command-flow {
@@ -8054,6 +8068,10 @@ h3 {
     border-bottom: 0;
   }
 
+  .app-brand-copy strong {
+    color: var(--ink);
+  }
+
   .app-brand-subtitle {
     display: none;
   }
@@ -8113,7 +8131,7 @@ h3 {
   .content-grid,
   .grid,
   .home-view {
-    gap: 10px;
+    gap: var(--ds-space-5);
   }
 
   .panel {
@@ -8126,6 +8144,15 @@ h3 {
 
   .panel-head {
     padding: 14px;
+  }
+
+  .notification-decision-body {
+    padding: 14px;
+  }
+
+  .notification-decision-row {
+    padding-right: 10px;
+    padding-left: 10px;
   }
 
   input,

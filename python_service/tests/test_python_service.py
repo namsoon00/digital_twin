@@ -1119,6 +1119,29 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("holdingTiming", context["promptContext"]["promptId"])
         self.assertEqual("ontologyRelationRules", context["decision"]["basis"])
 
+    def test_ontology_loss_guard_requires_negative_pnl(self):
+        position = Position(
+            symbol="MSTR",
+            name="Strategy",
+            market="US",
+            currency="USD",
+            market_value=1000,
+            profit_loss_rate=14.0,
+            sellable_quantity=1,
+            current_price=101.31,
+            ma20=106.9,
+            ma60=144.09,
+            ma20_distance=-5.2,
+            ma60_distance=-29.7,
+            sector="BTC",
+        )
+        context = evaluate_position_relation_rules(position, portfolio_summary([position], fx_rates={"USD": 1400}))
+
+        active_ids = [item.get("rule_id") or item.get("ruleId") for item in context["activeRules"]]
+        self.assertNotIn("holding.loss_guard.breakdown.v1", active_ids)
+        self.assertNotIn("손실", context["decision"]["label"])
+        self.assertNotIn("손절", context["decision"]["label"])
+
     def test_ontology_relation_rules_report_domestic_microstructure_missing_data(self):
         position = Position(
             symbol="000660",

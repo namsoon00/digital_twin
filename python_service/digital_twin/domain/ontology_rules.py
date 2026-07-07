@@ -732,7 +732,7 @@ def evaluate_position_relation_rules(
     weak_evidence_penalty = float(thresholds.get("lossGuardWeakEvidencePenalty", 30.0) or 0.0)
     facts["lossThreshold"] = loss_threshold
     facts["lossRateBufferPct"] = loss_buffer
-    if pnl <= loss_threshold or ma20_distance <= -5:
+    if pnl < 0 and (pnl <= loss_threshold or ma20_distance <= -5):
         volume_ratio = float(facts.get("volumeRatio") or 0)
         loss_depth = max(0.0, loss_threshold - pnl) if pnl <= loss_threshold else 0.0
         near_loss_threshold = pnl <= loss_threshold and loss_depth <= loss_buffer

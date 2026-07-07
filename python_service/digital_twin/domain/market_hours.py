@@ -73,6 +73,7 @@ def normalize_market_key(value: object) -> str:
 
 def default_market_hours_enabled(message_type: str) -> bool:
     return str(message_type or "") in {
+        "investmentInsight",
         "modelBuy",
         "modelSell",
         "watchlistBuyCandidate",

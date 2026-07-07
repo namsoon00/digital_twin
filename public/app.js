@@ -275,6 +275,7 @@
       "priceBuyLimit=1",
       "priceStop=1",
       "priceTrim=1",
+      "investmentInsight=1",
       "modelBuy=1",
       "modelSell=1",
       "watchlistBuyCandidate=1",
@@ -318,6 +319,7 @@
       "priceBuyLimit=10",
       "priceStop=10",
       "priceTrim=10",
+      "investmentInsight=10",
       "modelBuy=10",
       "modelSell=10",
       "watchlistBuyCandidate=10",
@@ -490,6 +492,7 @@
     { key: "priceBuyLimit", group: "가격", label: "매수 상한 접근", description: "현재가가 실험실 매수 상한에 접근하거나 하회할 때" },
     { key: "priceStop", group: "가격", label: "손절 기준 접근", description: "현재가가 손절 기준선에 접근하거나 하회할 때" },
     { key: "priceTrim", group: "가격", label: "분할매도 기준 접근", description: "현재가가 1차 또는 2차 매도 기준에 접근할 때" },
+    { key: "investmentInsight", group: "온톨로지", label: "투자 인사이트", description: "관계 그래프에서 의미 있는 투자 인사이트가 생성될 때" },
     { key: "modelBuy", group: "모델", label: "내 모델 매수", description: "내 모델 매수 점수가 기준을 넘을 때" },
     { key: "modelSell", group: "모델", label: "내 모델 매도", description: "내 모델 매도 점수가 기준을 넘을 때" },
     { key: "watchlistBuyCandidate", group: "관심종목", label: "관심종목 매수 후보", description: "관심 종목의 매수 점수가 기준을 넘을 때" },
@@ -534,6 +537,7 @@
     priceBuyLimit: "🟢",
     priceStop: "🛡️",
     priceTrim: "💰",
+    investmentInsight: "🧭",
     modelBuy: "🟢",
     modelSell: "🔴",
     watchlistBuyCandidate: "👀",
@@ -1691,7 +1695,7 @@
     var type = String(messageType || "");
     var systemTypes = ["default", "modelReview", "workHandoff", "notification"];
     var highSignalTypes = [
-      "modelBuy", "modelSell", "watchlistBuyCandidate", "holdingTiming", "monitorPositionChange", "monitorPnlChange", "monitorValueChange",
+      "investmentInsight", "modelBuy", "modelSell", "watchlistBuyCandidate", "holdingTiming", "monitorPositionChange", "monitorPnlChange", "monitorValueChange",
       "monitorTrendChange", "monitorCashChange", "monitorDecisionChange", "externalEquityMove", "externalCryptoMove",
       "externalMacroShift", "externalDartDisclosure"
     ];
@@ -1709,12 +1713,14 @@
   function defaultNotificationRuleThreshold(messageType) {
     var type = String(messageType || "");
     if (["default", "modelReview", "workHandoff", "notification"].indexOf(type) >= 0) return 20;
+    if (type === "investmentInsight") return 50;
     if (type === "externalEquityMove" || type === "externalCryptoMove") return 60;
     return 45;
   }
 
   function defaultNotificationRuleSimilarityWindow(messageType) {
     var type = String(messageType || "");
+    if (type === "investmentInsight") return 180;
     if (["holdingTiming", "monitorHeartbeat", "externalEquityMove", "externalCryptoMove"].indexOf(type) >= 0) return 360;
     if (["watchlistQuotePending", "externalDataConnection"].indexOf(type) >= 0) return 180;
     if (["monitorPnlChange", "monitorValueChange", "monitorTrendChange", "monitorCashChange"].indexOf(type) >= 0) return 60;
@@ -1723,6 +1729,7 @@
 
   function defaultNotificationRuleSimilarityPenalty(messageType) {
     var type = String(messageType || "");
+    if (type === "investmentInsight") return -35;
     if (["externalEquityMove", "externalCryptoMove"].indexOf(type) >= 0) return -55;
     if (type === "holdingTiming" || type === "monitorHeartbeat") return -40;
     if (["watchlistQuotePending", "externalDataConnection"].indexOf(type) >= 0) return -30;
@@ -1730,7 +1737,7 @@
   }
 
   function defaultNotificationRuleSimilarityBypassDelta(messageType) {
-    return ["modelBuy", "modelSell", "watchlistBuyCandidate", "monitorDecisionChange"].indexOf(String(messageType || "")) >= 0 ? 15 : 20;
+    return ["investmentInsight", "modelBuy", "modelSell", "watchlistBuyCandidate", "monitorDecisionChange"].indexOf(String(messageType || "")) >= 0 ? 15 : 20;
   }
 
   function defaultNotificationRuleSimilarityBypassConditions(messageType) {
@@ -1806,6 +1813,7 @@
   function defaultNotificationRuleMarketHoursEnabled(messageType) {
     return [
       "modelBuy",
+      "investmentInsight",
       "modelSell",
       "watchlistBuyCandidate",
       "watchlistQuote",
@@ -2449,6 +2457,7 @@
       var signal = dataValue(rawItems, "신호");
       var titleText = String(sample && sample.title || "");
       if (type === "modelBuy" || type === "watchlistBuyCandidate") return "🟢";
+      if (type === "investmentInsight") return "🧭";
       if (type === "modelSell") return "🔴";
       if (type === "holdingTiming") {
         var statusBlob = [status, profit, titleText].join(" ");
@@ -2482,6 +2491,10 @@
       var signal = dataValue(rawItems, "신호");
       var titleText = String(sample && sample.title || "");
       var symbol = String(sample && sample.symbol || "").toUpperCase();
+      if (type === "investmentInsight") {
+        var insightType = dataValue(rawItems, "인사이트 유형");
+        return insightType ? "투자 인사이트: " + insightType : "온톨로지 투자 인사이트";
+      }
       if (type === "modelBuy" || type === "watchlistBuyCandidate") return "매수 후보 감지";
       if (type === "modelSell") return "매도 기준 점검";
       if (type === "watchlistQuote") return "관심종목 시세 갱신";
@@ -2624,6 +2637,13 @@
         severity: "WATCH",
         lines: ["현재가 71,000원", "관찰 기준 유지", "다음 장에서 수급 재확인"],
         criteria: ["설정: 알림 조건이 실제 데이터에서 충족될 때", "감지: 현재가 71,000원"]
+      },
+      investmentInsight: {
+        title: "삼성전자",
+        symbol: "005930",
+        severity: "WATCH",
+        lines: ["인사이트 유형: 리스크 관리", "핵심 결론: 보유 판단과 외부 신호가 리스크 관리 쪽으로 기울었습니다.", "근거 신호: 보유 타이밍, 판단 변화, 거시 지표 변화", "다음 확인: 손절/분할축소 기준과 다음 조회 유지 여부를 확인하세요."],
+        criteria: ["설정: 온톨로지 관계 그래프에서 의미 있는 투자 인사이트가 생성될 때", "감지: 보유 타이밍, 판단 변화 · 관계 강도 72점 · 신뢰도 81%"]
       },
       modelBuy: {
         title: "삼성전자 매수 후보",

@@ -7,6 +7,7 @@ WATCHLIST_BUY_CANDIDATE = "watchlistBuyCandidate"
 WATCHLIST_QUOTE = "watchlistQuote"
 WATCHLIST_QUOTE_PENDING = "watchlistQuotePending"
 HOLDING_TIMING = "holdingTiming"
+INVESTMENT_INSIGHT = "investmentInsight"
 MONITOR_HEARTBEAT = "monitorHeartbeat"
 MONITOR_CONNECTION = "monitorConnection"
 MONITOR_POSITION_CHANGE = "monitorPositionChange"
@@ -26,6 +27,7 @@ GENERIC_NOTIFICATION = "notification"
 DEFAULT_MESSAGE = "default"
 
 MONITORING_MESSAGE_TYPES = [
+    INVESTMENT_INSIGHT,
     MODEL_BUY,
     MODEL_SELL,
     WATCHLIST_BUY_CANDIDATE,
@@ -57,6 +59,7 @@ SYSTEM_MESSAGE_TYPES = {
 MIN_CADENCE_MINUTES = 10
 
 DEFAULT_ALERT_RULES = {
+    INVESTMENT_INSIGHT: 1,
     MODEL_BUY: 1,
     MODEL_SELL: 1,
     WATCHLIST_BUY_CANDIDATE: 1,
@@ -103,6 +106,7 @@ DEFAULT_ALERT_THRESHOLDS = {
 }
 
 DEFAULT_CADENCE = {
+    INVESTMENT_INSIGHT: 10,
     MODEL_BUY: 10,
     MODEL_SELL: 10,
     WATCHLIST_BUY_CANDIDATE: 10,
@@ -125,6 +129,7 @@ DEFAULT_CADENCE = {
 }
 
 MESSAGE_TYPE_LABELS = {
+    INVESTMENT_INSIGHT: "투자 인사이트",
     MODEL_BUY: "모델 매수",
     MODEL_SELL: "모델 매도",
     WATCHLIST_BUY_CANDIDATE: "관심종목 매수 후보",
@@ -148,6 +153,7 @@ MESSAGE_TYPE_LABELS = {
 
 MESSAGE_TYPE_EMOJIS = {
     DEFAULT_MESSAGE: "🔔",
+    INVESTMENT_INSIGHT: "🧭",
     MODEL_BUY: "🟢",
     MODEL_SELL: "🔴",
     WATCHLIST_BUY_CANDIDATE: "👀",
@@ -173,6 +179,7 @@ MESSAGE_TYPE_EMOJIS = {
 }
 
 TRIGGER_SUMMARIES = {
+    INVESTMENT_INSIGHT: "온톨로지 관계 그래프에서 의미 있는 투자 인사이트가 생성될 때 보냅니다.",
     MODEL_BUY: "내가 정한 매수 점수가 기준값을 넘을 때 보냅니다.",
     MODEL_SELL: "내가 정한 매도 점수가 기준값을 넘을 때 보냅니다.",
     WATCHLIST_BUY_CANDIDATE: "관심 종목의 매수 점수가 기준값을 넘을 때 보냅니다.",

@@ -7,7 +7,6 @@ from typing import Dict, Iterable, List, Optional
 
 from ..domain.events import (
     DomainEvent,
-    MONITORING_ALERTS_DETECTED,
     alerts_detected_event,
     monitoring_cycle_completed_event,
     snapshot_collected_event,
@@ -19,6 +18,7 @@ from ..domain.notifications import NotificationJob
 from ..domain.portfolio import AccountSnapshot, AlertEvent
 from ..domain.repositories import MonitoringCycleRecordResult
 from ..domain.symbol_universe import ListedSymbol, normalize_market, normalize_symbol, utc_now_iso as symbol_utc_now_iso
+from .model_review_queue import model_review_payloads_from_event
 from .settings import data_dir, read_json, service_db_path, settings_path, utc_now
 
 
@@ -1663,12 +1663,8 @@ class SQLiteModelReviewJobStore(OperationalConnection):
             return self.enqueue_with_connection(connection, job)
 
     def enqueue_from_event_with_connection(self, connection, event: DomainEvent) -> int:
-        if event.name != MONITORING_ALERTS_DETECTED:
-            return 0
         count = 0
-        for item in event.payload.get("events") or []:
-            if not isinstance(item, dict) or item.get("rule") != "monitorDecisionChange":
-                continue
+        for item in model_review_payloads_from_event(event):
             if self.enqueue_with_connection(connection, ModelReviewJob.create(item)):
                 count += 1
         return count

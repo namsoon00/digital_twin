@@ -249,6 +249,25 @@ def opinion_lines_for_type(message_type: str, context: Dict[str, object]) -> Lis
     rules = relation_labels(context)
     target = target_label(context)
 
+    if message_type == "investmentInsight":
+        insight = context.get("ontologyInsight") if isinstance(context, dict) else {}
+        if not isinstance(insight, dict):
+            insight = {}
+        insight_label = str(insight.get("insightLabel") or line_value(lines, "인사이트 유형") or "온톨로지 인사이트").strip()
+        thesis = str(insight.get("thesis") or line_value(lines, "핵심 결론") or "").strip()
+        next_check = str(insight.get("nextCheck") or line_value(lines, "다음 확인") or "").strip()
+        source_types = insight.get("sourceSignalTypes") or context.get("sourceSignalTypes") if isinstance(context, dict) else []
+        if isinstance(source_types, list):
+            source_labels = [MESSAGE_TYPE_LABELS.get(str(item), str(item)) for item in source_types[:5]]
+        else:
+            source_labels = []
+        source_text = ", ".join(source_labels) if source_labels else (line_value(lines, "근거 신호") or "관계 신호")
+        return [
+            "해석: " + target + "의 " + insight_label + "입니다. " + (thesis or "여러 데이터 관계가 하나의 투자 인사이트로 합성됐습니다."),
+            "관계: 직접 알림 타입 대신 " + source_text + "를 근거 신호로 연결했습니다.",
+            "의견: 개별 점수 하나보다 관계 변화, 상충 신호, 데이터 신뢰도, 포트폴리오 노출을 함께 봐야 합니다.",
+            "다음 확인: " + (next_check or "새 관계가 다음 데이터 업데이트에서도 유지되는지 확인하세요."),
+        ]
     if message_type == "holdingTiming":
         evidence = active_rule_evidence(context, 5)
         rule_text = ", ".join(rules[:2]) if rules else (state or "보유 타이밍 조건")

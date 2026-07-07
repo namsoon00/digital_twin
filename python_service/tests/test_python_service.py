@@ -73,6 +73,30 @@ class PythonServiceTests(unittest.TestCase):
         self.env_patch.start()
         self.addCleanup(self.env_patch.stop)
 
+    def insight_event(self, events, symbol: str = ""):
+        for event in events:
+            if event.rule != "investmentInsight":
+                continue
+            if not symbol or str(event.symbol or "").upper() == symbol.upper():
+                return event
+        raise AssertionError("investmentInsight event not found")
+
+    def insight_source_rules(self, event):
+        return [
+            str(item.get("rule") or "")
+            for item in event.metadata.get("sourceAlertEvents", [])
+            if isinstance(item, dict)
+        ]
+
+    def insight_source_message(self, event, rule: str) -> str:
+        lines = []
+        for item in event.metadata.get("sourceAlertEvents", []):
+            if not isinstance(item, dict) or item.get("rule") != rule:
+                continue
+            lines.extend(str(line or "") for line in item.get("lines", []))
+            lines.extend(str(line or "") for line in item.get("criteria", []))
+        return "\n".join(lines)
+
     def test_account_registry_supports_multiple_accounts(self):
         registry = AccountRegistry()
         first = AccountConfig("main", "메인", "toss", "https://example.test", "id1", "secret1", "1", ["AAPL"])
@@ -1787,10 +1811,15 @@ class PythonServiceTests(unittest.TestCase):
         )
 
         events = RealtimeMonitor().events_for_snapshot(current_snapshot, previous_snapshot.to_monitor_state())
-        pnl_message = next(event for event in events if event.rule == "monitorPnlChange").message()
-        value_message = next(event for event in events if event.rule == "monitorValueChange").message()
+        insight = self.insight_event(events, "005930")
+        pnl_message = self.insight_source_message(insight, "monitorPnlChange")
+        value_message = self.insight_source_message(insight, "monitorValueChange")
 
         self.assertTrue(all(event.generated_at == current_generated_at for event in events))
+        self.assertEqual("investmentInsight", insight.rule)
+        self.assertIn("monitorPnlChange", self.insight_source_rules(insight))
+        self.assertIn("monitorValueChange", self.insight_source_rules(insight))
+        self.assertFalse(any(event.rule == "monitorPnlChange" for event in events))
         self.assertIn("수급: 거래량 30,000(1.8x), 거래액 18억 원", pnl_message)
         self.assertIn("투자자: 외국인 +145,000(매수 420,000/매도 275,000), 기관 +82,000(매수 310,000/매도 228,000)", pnl_message)
         self.assertIn("수급: 거래량 30,000(1.8x), 거래액 18억 원", value_message)
@@ -1862,14 +1891,18 @@ class PythonServiceTests(unittest.TestCase):
             "alertThresholds": "modelBuyScore=99\nwatchlistBuyScore=74",
         }).events_for_snapshot(snapshot, {})
 
-        candidate = next(event for event in events if event.rule == "watchlistBuyCandidate")
+        candidate = self.insight_event(events, "AAPL")
         self.assertEqual("AAPL", candidate.symbol)
-        self.assertIn("관심종목 매수 후보", candidate.message())
-        self.assertIn("현재가: $185", candidate.message())
-        self.assertNotIn("평단가", candidate.message())
-        self.assertNotIn("수익률", candidate.message())
-        self.assertTrue(any("관심종목 매수 기준" in item for item in candidate.criteria))
+        source_message = self.insight_source_message(candidate, "watchlistBuyCandidate")
+        self.assertEqual("investmentInsight", candidate.rule)
+        self.assertIn("watchlistBuyCandidate", self.insight_source_rules(candidate))
+        self.assertIn("관심종목 매수 후보", source_message)
+        self.assertIn("현재가: $185", source_message)
+        self.assertNotIn("평단가", source_message)
+        self.assertNotIn("수익률", source_message)
+        self.assertTrue(any("관심종목 매수 기준" in item for item in source_message.splitlines()))
         self.assertFalse(any(event.rule == "modelBuy" for event in events))
+        self.assertFalse(any(event.rule == "watchlistBuyCandidate" for event in events))
 
     def test_realtime_monitor_recomputes_decisions_with_user_formulas(self):
         position = normalize_position({
@@ -2173,14 +2206,15 @@ class PythonServiceTests(unittest.TestCase):
             decisions_for_positions([current_position], current_portfolio),
         )
 
-        event = next(
-            event
-            for event in RealtimeMonitor().events_for_snapshot(current_snapshot, previous_snapshot.to_monitor_state())
-            if event.rule == "monitorTrendChange"
+        event = self.insight_event(
+            RealtimeMonitor().events_for_snapshot(current_snapshot, previous_snapshot.to_monitor_state()),
+            "005930",
         )
-        message = event.message()
+        message = self.insight_source_message(event, "monitorTrendChange")
 
         self.assertEqual("WATCH", event.severity)
+        self.assertIn("monitorTrendChange", self.insight_source_rules(event))
+        self.assertFalse("monitorTrendChange" == event.rule)
         self.assertIn("20일선 상향 돌파", message)
         self.assertIn("60일선 상향 돌파", message)
         self.assertIn("20/60일선 골든크로스", message)
@@ -2190,8 +2224,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("추세: 20일선 104,000원보다 1.9% 높음, 60일선 103,000원보다 2.9% 높음", message)
         self.assertIn("수급: 거래량 40,000(2.1x), 거래액 24억 원", message)
         self.assertIn("투자자: 외국인 +70,000(매수 510,000/매도 440,000), 기관 +35,000(매수 350,000/매도 315,000)", message)
-        self.assertIn("설정: 20일/60일 이동평균 돌파, 크로스, 또는 현재가가 이동평균보다 8% 이상 높거나 낮을 때", event.criteria)
-        self.assertTrue(any("20일선 상향 돌파" in item for item in event.criteria))
+        self.assertIn("설정: 20일/60일 이동평균 돌파, 크로스, 또는 현재가가 이동평균보다 8% 이상 높거나 낮을 때", message)
+        self.assertIn("20일선 상향 돌파", message)
         self.assertNotIn("괴리", message)
 
     def test_monitor_value_change_formats_usd_with_krw_basis(self):
@@ -2246,8 +2280,11 @@ class PythonServiceTests(unittest.TestCase):
             "fxRates": "KRW=1\nUSD=1400",
             "alertThresholds": "monitorValueDelta=5",
         }).events_for_snapshot(current_snapshot, previous_snapshot.to_monitor_state())
-        message = next(event for event in events if event.rule == "monitorValueChange").message()
+        insight = self.insight_event(events, "AAPL")
+        message = self.insight_source_message(insight, "monitorValueChange")
 
+        self.assertIn("monitorValueChange", self.insight_source_rules(insight))
+        self.assertFalse(any(event.rule == "monitorValueChange" for event in events))
         self.assertIn("이전 $1,000 (약 140만 원)", message)
         self.assertIn("현재 $1,100 (약 154만 원)", message)
         self.assertIn("변화 +10.0% (KRW 환산 기준)", message)
@@ -2298,9 +2335,11 @@ class PythonServiceTests(unittest.TestCase):
 
         self.assertIn("TSLA", symbols)
         self.assertIn("AAPL", symbols)
+        self.assertEqual(1, DEFAULT_ALERT_RULES["investmentInsight"])
         self.assertEqual(1, DEFAULT_ALERT_RULES["modelBuy"])
         self.assertEqual(1, DEFAULT_ALERT_RULES["modelSell"])
         self.assertEqual(1, DEFAULT_ALERT_RULES["watchlistBuyCandidate"])
+        self.assertEqual(10, DEFAULT_CADENCE["investmentInsight"])
         self.assertEqual(10, DEFAULT_CADENCE["modelBuy"])
         self.assertEqual(10, DEFAULT_CADENCE["modelSell"])
         self.assertEqual(10, DEFAULT_CADENCE["watchlistBuyCandidate"])
@@ -2500,13 +2539,17 @@ class PythonServiceTests(unittest.TestCase):
     def test_message_catalog_is_shared_across_monitoring_and_notifications(self):
         catalog = public_message_catalog()
 
+        self.assertEqual("투자 인사이트", MESSAGE_TYPE_LABELS["investmentInsight"])
         self.assertEqual("모델 매수", MESSAGE_TYPE_LABELS["modelBuy"])
         self.assertEqual("관심종목 매수 후보", MESSAGE_TYPE_LABELS["watchlistBuyCandidate"])
+        self.assertEqual(10, catalog["investmentInsight"]["cadenceMinutes"])
         self.assertEqual(10, catalog["modelBuy"]["cadenceMinutes"])
         self.assertEqual(10, catalog["watchlistBuyCandidate"]["cadenceMinutes"])
+        self.assertEqual("🧭", catalog["investmentInsight"]["icon"])
         self.assertEqual("🟢", catalog["modelBuy"]["icon"])
         self.assertEqual("🧠", MESSAGE_TYPE_EMOJIS["modelReview"])
         self.assertTrue(all(item.get("icon") for item in catalog.values()))
+        self.assertTrue(catalog["investmentInsight"]["monitoring"])
         self.assertTrue(catalog["modelBuy"]["monitoring"])
         self.assertTrue(catalog["watchlistBuyCandidate"]["monitoring"])
         self.assertTrue(catalog["workHandoff"]["system"])
@@ -2561,6 +2604,7 @@ class PythonServiceTests(unittest.TestCase):
 
         self.assertEqual(
             {
+                "investmentInsight",
                 "modelBuy",
                 "modelSell",
                 "watchlistBuyCandidate",
@@ -3109,11 +3153,14 @@ class PythonServiceTests(unittest.TestCase):
         )
 
         events = RealtimeMonitor().events_for_snapshot(current_snapshot, previous_snapshot.to_monitor_state())
-        decision_event = next(event for event in events if event.rule == "monitorDecisionChange")
-        message = decision_event.message()
+        decision_event = self.insight_event(events, "AAPL")
+        message = self.insight_source_message(decision_event, "monitorDecisionChange")
 
-        self.assertEqual("Apple", message.splitlines()[0])
+        self.assertEqual("Apple", decision_event.message().splitlines()[0])
         self.assertNotIn("메인 Apple", message)
+        self.assertEqual("investmentInsight", decision_event.rule)
+        self.assertIn("monitorDecisionChange", self.insight_source_rules(decision_event))
+        self.assertFalse(any(event.rule == "monitorDecisionChange" for event in events))
         self.assertIn("보유 종목 판단 변화", message)
         self.assertIn("권장 액션:", message)
         self.assertIn("Codex 답변:", message)
@@ -3124,8 +3171,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("손익률 급변", message)
         self.assertRegex(message, r"이전 .+ \([0-9.]+점\)")
         self.assertRegex(message, r"현재 .+ \([0-9.]+점\)")
-        self.assertTrue(any("(" in item and "점)" in item for item in decision_event.criteria))
-        self.assertTrue(any("보유 종목" in item for item in decision_event.criteria))
+        self.assertTrue(any("(" in item and "점)" in item for item in message.splitlines()))
+        self.assertTrue(any("보유 종목" in item for item in message.splitlines()))
 
     def test_decision_change_event_enqueues_async_model_review(self):
         event = alerts_detected_event([
@@ -3199,7 +3246,9 @@ class PythonServiceTests(unittest.TestCase):
 
         events = RealtimeMonitor().events_for_snapshot(current_snapshot, previous_snapshot.to_monitor_state())
 
-        self.assertTrue(any(event.rule == "monitorPositionChange" for event in events))
+        insight = self.insight_event(events, "AAPL")
+        self.assertIn("monitorPositionChange", self.insight_source_rules(insight))
+        self.assertFalse(any(event.rule == "monitorPositionChange" for event in events))
         self.assertFalse(any(event.rule == "monitorDecisionChange" for event in events))
 
     def test_monitor_decision_change_suppresses_equivalent_crypto_label_noise(self):
@@ -3252,7 +3301,9 @@ class PythonServiceTests(unittest.TestCase):
 
         events = monitor.events_for_snapshot(scored_snapshot, previous)
 
+        insight = self.insight_event(events, "BTC")
         self.assertFalse(any(event.rule == "monitorDecisionChange" for event in events))
+        self.assertNotIn("monitorDecisionChange", self.insight_source_rules(insight))
 
     def test_model_review_runner_sends_deferred_review_message(self):
         registry = AccountRegistry()

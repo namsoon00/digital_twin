@@ -9,9 +9,11 @@ from .message_types import (
     DEFAULT_ALERT_RULES,
     DEFAULT_ALERT_THRESHOLDS,
     DEFAULT_CADENCE,
+    INVESTMENT_INSIGHT,
     MIN_CADENCE_MINUTES,
 )
 from .model_review import decision_change_context, decision_change_review_lines
+from .ontology_insights import build_investment_insight_events, split_operational_and_investment_events
 from .ontology_rules import decision_action_group_for_label, relation_rule_context_summary_lines
 from .parsing import parse_assignments
 from .portfolio import AccountSnapshot, AlertEvent, Position, monitor_state_has_live_account_data, status_has_account_data_failure
@@ -48,6 +50,26 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
     def rule_cadence_minutes(self, rule: str) -> int:
         value = int(self.cadence.get(rule, DEFAULT_CADENCE.get(rule, MIN_CADENCE_MINUTES)) or 0)
         return max(MIN_CADENCE_MINUTES, value)
+
+    def dispatch_cadence_minutes(self, event: AlertEvent) -> int:
+        if event.rule == INVESTMENT_INSIGHT:
+            raw = self.settings.get("notificationCooldownMinutes")
+            if str(raw or "").strip():
+                try:
+                    value = int(float(str(raw).strip()))
+                except ValueError:
+                    value = self.rule_cadence_minutes(event.rule)
+                return max(MIN_CADENCE_MINUTES, value)
+        return self.rule_cadence_minutes(event.rule)
+
+    def dispatch_cadence_key(self, event: AlertEvent) -> str:
+        if event.rule == INVESTMENT_INSIGHT:
+            insight = event.metadata.get("ontologyInsight") if isinstance(event.metadata, dict) else {}
+            if isinstance(insight, dict) and str(insight.get("cadenceKey") or "").strip():
+                return str(insight.get("cadenceKey"))
+            if str(event.key or "").strip():
+                return ":".join(["cadence", "python", event.account_id, event.rule, event.key])
+        return event.cadence_key()
 
     def criteria(self, setting: str, detected: str = "") -> List[str]:
         lines = []
@@ -100,21 +122,23 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
         return abs(float(pressure_delta or 0)) >= label_buffer
 
     def events_for_snapshot(self, snapshot: AccountSnapshot, previous: Dict[str, object]) -> List[AlertEvent]:
-        events: List[AlertEvent] = []
+        raw_events: List[AlertEvent] = []
         snapshot = self.snapshot_with_strategy_scores(snapshot)
         has_account_data = snapshot.has_live_account_data()
         previous_has_account_data = monitor_state_has_live_account_data(previous)
-        events.extend(self.connection_events(snapshot, previous))
-        events.extend(self.heartbeat_events(snapshot))
+        raw_events.extend(self.connection_events(snapshot, previous))
+        raw_events.extend(self.heartbeat_events(snapshot))
         if has_account_data:
-            events.extend(self.model_score_events(snapshot))
+            raw_events.extend(self.model_score_events(snapshot))
         if has_account_data and previous_has_account_data:
-            events.extend(self.position_change_events(snapshot, previous))
-            events.extend(self.cash_events(snapshot, previous))
-        events.extend(self.watchlist_quote_events(snapshot, previous or {}))
-        events.extend(self.external_signal_events(snapshot, previous or {}))
+            raw_events.extend(self.position_change_events(snapshot, previous))
+            raw_events.extend(self.cash_events(snapshot, previous))
+        raw_events.extend(self.watchlist_quote_events(snapshot, previous or {}))
+        raw_events.extend(self.external_signal_events(snapshot, previous or {}))
         if has_account_data:
-            events.extend(self.holding_timing_events(snapshot))
+            raw_events.extend(self.holding_timing_events(snapshot))
+        system_events, signal_events = split_operational_and_investment_events(raw_events)
+        events = [*system_events, *build_investment_insight_events(snapshot, signal_events)]
         return [event for event in self.stamp_events(snapshot, events) if self.enabled(event.rule)]
 
     def type_check_events_for_snapshot(self, snapshot: AccountSnapshot) -> List[AlertEvent]:
@@ -177,6 +201,8 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
             ])
             timing_events = self.holding_timing_events(timing_snapshot)
         events.extend(self.only_rule("holdingTiming", timing_events))
+        investment_insights = build_investment_insight_events(snapshot, events)
+        events.extend(self.only_rule(INVESTMENT_INSIGHT, investment_insights))
         return self.unique_rules([event for event in self.stamp_events(snapshot, events) if self.enabled(event.rule)])
 
     def stamp_events(self, snapshot: AccountSnapshot, events: List[AlertEvent]) -> List[AlertEvent]:
@@ -1101,8 +1127,8 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
         filtered: List[AlertEvent] = []
         now = now_ms()
         for event in events:
-            minutes = self.rule_cadence_minutes(event.rule)
-            sent_at = store.sent.get(event.cadence_key())
+            minutes = self.dispatch_cadence_minutes(event)
+            sent_at = store.sent.get(self.dispatch_cadence_key(event))
             if not sent_at:
                 filtered.append(event)
                 continue

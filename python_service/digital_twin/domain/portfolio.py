@@ -215,6 +215,10 @@ class AlertEvent:
         return self.symbol or "all"
 
     def cadence_key(self) -> str:
+        if self.rule == "investmentInsight" and isinstance(self.metadata, dict):
+            insight = self.metadata.get("ontologyInsight")
+            if isinstance(insight, dict) and str(insight.get("cadenceKey") or "").strip():
+                return str(insight.get("cadenceKey"))
         return ":".join(["cadence", "python", self.account_id, self.rule, self.target()])
 
     def message(self) -> str:

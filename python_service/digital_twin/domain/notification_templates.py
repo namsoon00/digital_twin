@@ -167,6 +167,10 @@ DEFAULT_NOTIFICATION_TEMPLATES = {
         "template": DEFAULT_TEMPLATE,
         "description": "기본 알림 템플릿. title, lines, body 변수를 사용할 수 있습니다.",
     },
+    "investmentInsight": {
+        "template": DEFAULT_TEMPLATE,
+        "description": "온톨로지 관계 인사이트 기반 투자 알림",
+    },
     "modelBuy": {
         "template": DEFAULT_TEMPLATE,
         "description": "모델 매수 조건 알림",
@@ -1367,6 +1371,7 @@ def formula_audit_lines(context: Dict[str, object], domain: str = "model") -> Li
 
 
 MODELING_LABELS = {
+    "investmentInsight": "온톨로지 투자 인사이트 모델",
     "modelBuy": "매수 판단 모델",
     "modelSell": "매도 판단 모델",
     "watchlistBuyCandidate": "관심종목 매수 후보 모델",
@@ -1392,6 +1397,7 @@ MODELING_LABELS = {
 }
 
 MODEL_DATA_HINTS = {
+    "investmentInsight": "보유·관심종목·외부 데이터·관계 규칙·기존 모델 신호를 연결한 온톨로지 인사이트",
     "modelBuy": "토스 시세·수급·추세·가치평가 데이터",
     "modelSell": "토스 시세·수급·추세·손절/가치평가 데이터",
     "watchlistBuyCandidate": "관심종목 시세·수급·추세·가치평가 데이터",
@@ -1444,6 +1450,8 @@ def selected_holding_formula_key(context: Dict[str, object]) -> str:
 
 def strategy_formula_line(context: Dict[str, object]) -> str:
     message_type = context_message_type(context)
+    if message_type == "investmentInsight":
+        return "판단 공식: 온톨로지 관계 인사이트(sourceSignalTypes + ontologyInsight)"
     if message_type in {"modelBuy", "watchlistBuyCandidate"}:
         return "판단 공식: 매수 공식(buyScoreFormula)"
     if message_type == "modelSell":
@@ -1528,6 +1536,26 @@ def investment_score_lines(context: Dict[str, object]) -> List[str]:
     previous_value = data_value(raw_lines, "이전")
     current_value = data_value(raw_lines, "현재")
 
+    if message_type == "investmentInsight":
+        insight = context.get("ontologyInsight") if isinstance(context, dict) else {}
+        score = insight.get("score") if isinstance(insight, dict) else context.get("score")
+        confidence = insight.get("confidence") if isinstance(insight, dict) else context.get("confidence")
+        source_types = insight.get("sourceSignalTypes") if isinstance(insight, dict) else context.get("sourceSignalTypes")
+        if isinstance(source_types, list):
+            source_text = ", ".join(str(item) for item in source_types[:5])
+        else:
+            source_text = str(source_types or "").strip()
+        parts = []
+        if score not in (None, ""):
+            parts.append("관계 강도 " + formula_number(score) + "점")
+        if confidence not in (None, ""):
+            parts.append("신뢰도 " + formula_number(confidence) + "%")
+        if source_text:
+            parts.append("근거 신호 " + source_text)
+        lines.append(
+            "온톨로지 인사이트 점수: 개별 알림 타입을 직접 발송하지 않고, 보유·관심종목·외부 신호가 만든 관계 조합을 하나의 투자 인사이트로 합성합니다."
+            + (" " + ", ".join(parts) + "." if parts else "")
+        )
     if message_type in {"modelBuy", "watchlistBuyCandidate"} and has_score_value(buy_value):
         lines.append(
             "매수 모델 점수: 체결 흐름, 방향 있는 거래량, 매수 비중, 호가 균형, 가격 움직임, 이동평균 흐름, 투자자 수급, 적정가 대비를 합쳐 0~100점으로 계산합니다. 점수가 높을수록 매수 후보에 가깝습니다."

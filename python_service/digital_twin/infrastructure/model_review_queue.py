@@ -5,6 +5,42 @@ from ..domain.model_review import ModelReviewJob
 from .settings import data_dir, read_json, utc_now, write_private_json
 
 
+def model_review_payloads_from_event(event: DomainEvent) -> List[Dict[str, object]]:
+    if event.name != MONITORING_ALERTS_DETECTED:
+        return []
+    payloads: List[Dict[str, object]] = []
+    for item in event.payload.get("events") or []:
+        if not isinstance(item, dict):
+            continue
+        if item.get("rule") == "monitorDecisionChange":
+            payloads.append(item)
+            continue
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        for source in metadata.get("sourceAlertEvents") or []:
+            if not isinstance(source, dict) or source.get("rule") != "monitorDecisionChange":
+                continue
+            source_payload = {
+                "accountId": item.get("accountId"),
+                "accountLabel": item.get("accountLabel"),
+                "severity": source.get("severity") or item.get("severity"),
+                "rule": source.get("rule"),
+                "key": source.get("key") or item.get("key"),
+                "title": source.get("title") or item.get("title"),
+                "symbol": source.get("symbol") or item.get("symbol"),
+                "lines": list(source.get("lines") or []),
+                "criteria": list(source.get("criteria") or []),
+                "metadata": dict(source.get("metadata") or {}),
+                "generatedAt": item.get("generatedAt"),
+            }
+            source_payload["metadata"].setdefault("parentInsight", {
+                "key": item.get("key"),
+                "rule": item.get("rule"),
+                "ontologyInsight": metadata.get("ontologyInsight"),
+            })
+            payloads.append(source_payload)
+    return payloads
+
+
 class ModelReviewJobStore:
     def __init__(self, path=None):
         self.path = path or data_dir() / "model-review-queue.json"
@@ -30,12 +66,8 @@ class ModelReviewJobStore:
         return True
 
     def enqueue_from_event(self, event: DomainEvent) -> int:
-        if event.name != MONITORING_ALERTS_DETECTED:
-            return 0
         count = 0
-        for item in event.payload.get("events") or []:
-            if not isinstance(item, dict) or item.get("rule") != "monitorDecisionChange":
-                continue
+        for item in model_review_payloads_from_event(event):
             if self.enqueue(ModelReviewJob.create(item)):
                 count += 1
         return count

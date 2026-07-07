@@ -4,6 +4,7 @@ from typing import Dict, Iterable, List, Tuple
 from .message_types import (
     DEFAULT_ALERT_RULES,
     DEFAULT_CADENCE,
+    INVESTMENT_INSIGHT,
     SYSTEM_MESSAGE_TYPES,
     notification_message_types,
 )
@@ -17,7 +18,7 @@ from .strategy import SafeFormula
 DEFAULT_HONEY_THRESHOLD = 45
 DEFAULT_LOW_SCORE_ACTION = "suppress"
 DEFAULT_SIMILARITY_FIELDS = ["messageType", "accountId", "symbol", "severity", "title"]
-STATE_COOLDOWN_MESSAGE_TYPES = {"holdingTiming", "externalEquityMove", "externalCryptoMove"}
+STATE_COOLDOWN_MESSAGE_TYPES = {INVESTMENT_INSIGHT, "holdingTiming", "externalEquityMove", "externalCryptoMove"}
 DEFAULT_NOTIFICATION_SCORE_FORMULA = "rawScore"
 FORMULA_VARIABLE_BY_CONDITION_ID = {
     "severity_alert": "severityScore",
@@ -41,6 +42,7 @@ CONDITION_TYPE_LABELS = [
 ]
 
 HIGH_SIGNAL_MESSAGE_TYPES = {
+    INVESTMENT_INSIGHT,
     "modelBuy",
     "modelSell",
     "watchlistBuyCandidate",
@@ -101,6 +103,8 @@ def default_threshold(message_type: str) -> int:
     key = str(message_type or "")
     if key in SYSTEM_MESSAGE_TYPES:
         return 20
+    if key == INVESTMENT_INSIGHT:
+        return 50
     if key in {"externalEquityMove", "externalCryptoMove"}:
         return 60
     return DEFAULT_HONEY_THRESHOLD
@@ -112,6 +116,8 @@ def default_similarity_enabled(message_type: str) -> bool:
 
 def default_similarity_window_minutes(message_type: str) -> int:
     key = str(message_type or "")
+    if key == INVESTMENT_INSIGHT:
+        return 180
     if key in {"holdingTiming", "monitorHeartbeat", "externalEquityMove", "externalCryptoMove"}:
         return 360
     if key in LOW_SIGNAL_MESSAGE_TYPES:
@@ -123,6 +129,8 @@ def default_similarity_window_minutes(message_type: str) -> int:
 
 def default_similarity_penalty(message_type: str) -> int:
     key = str(message_type or "")
+    if key == INVESTMENT_INSIGHT:
+        return -35
     if key in {"externalEquityMove", "externalCryptoMove"}:
         return -55
     if key in {"holdingTiming", "monitorHeartbeat"}:
@@ -133,7 +141,7 @@ def default_similarity_penalty(message_type: str) -> int:
 
 
 def default_similarity_bypass_score_delta(message_type: str) -> int:
-    return 15 if str(message_type or "") in {"modelBuy", "modelSell", "watchlistBuyCandidate", "monitorDecisionChange"} else 20
+    return 15 if str(message_type or "") in {INVESTMENT_INSIGHT, "modelBuy", "modelSell", "watchlistBuyCandidate", "monitorDecisionChange"} else 20
 
 
 def default_state_cooldown_enabled(message_type: str) -> bool:

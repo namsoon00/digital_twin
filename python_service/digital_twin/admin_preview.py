@@ -288,7 +288,7 @@ def admin_preview_config() -> Dict[str, object]:
             {
                 "id": "monitoring",
                 "title": "실시간 모니터링",
-                "summary": "계정별 스냅샷을 수집하고 장중 판단 변화, 보유 변화, 현금비중 변화를 알림으로 보냅니다.",
+                "summary": "계정별 스냅샷과 외부 신호를 수집하고 세부 투자 신호를 온톨로지 투자 인사이트로 합성해 발송합니다.",
                 "commands": [
                     "npm run python:monitor:once -- --dry-run --force",
                     "npm run python:monitor:watch",
@@ -342,7 +342,7 @@ def admin_preview_config() -> Dict[str, object]:
             {
                 "id": "model-review",
                 "title": "모델 리뷰 워커",
-                "summary": "monitorDecisionChange 이벤트를 큐에 넣고, 관계 분석의 투자 관점·관계·반대 신호와 다음 실험을 작성합니다.",
+                "summary": "투자 인사이트 안의 판단 변화 원본 신호를 큐에 넣고, 관계 분석의 투자 관점·반대 신호와 다음 실험을 작성합니다.",
                 "commands": [
                     "npm run python:model-review:once -- --dry-run",
                     "npm run python:model-review:watch",

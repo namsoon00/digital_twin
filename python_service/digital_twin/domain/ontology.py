@@ -20,6 +20,13 @@ TBOX_CLASSES = [
     "Currency",
     "Cash",
     "WatchlistCandidate",
+    "DataPipeline",
+    "CollectionSchedule",
+    "CollectionPolicy",
+    "DataFreshness",
+    "MarketSnapshot",
+    "WatchlistSnapshot",
+    "ExternalSignalCollection",
     "DataSource",
     "PriceMetric",
     "TechnicalIndicator",
@@ -35,7 +42,18 @@ TBOX_CLASSES = [
     "PromptTemplate",
     "ExternalSignal",
     "MarketExposure",
+    "AnalysisJob",
+    "ReasoningCycle",
     "ReasoningRule",
+    "Insight",
+    "InsightType",
+    "InsightPolicy",
+    "NotificationDispatch",
+    "CooldownPolicy",
+    "NoveltyPolicy",
+    "SuppressionPolicy",
+    "MarketSession",
+    "OperationalEvent",
     "Risk",
     "Opportunity",
     "Contradiction",
@@ -57,6 +75,7 @@ TBOX_RELATION_TYPES = [
     "MANAGES_PORTFOLIO",
     "HAS_POSITION",
     "HAS_WATCHLIST",
+    "HAS_PIPELINE",
     "REPRESENTS_STOCK",
     "HAS_MARKET_EXPOSURE",
     "BELONGS_TO",
@@ -75,6 +94,25 @@ TBOX_RELATION_TYPES = [
     "HAS_ALERT_RULE",
     "HAS_PROMPT_TEMPLATE",
     "HAS_EXTERNAL_SIGNAL",
+    "COLLECTS_DATA_FROM",
+    "RUNS_ON_SCHEDULE",
+    "RUNS_AFTER_EVENT",
+    "USES_COLLECTION_POLICY",
+    "HAS_DATA_FRESHNESS",
+    "UPDATES_GRAPH",
+    "TRIGGERS_REASONING",
+    "HAS_REASONING_CYCLE",
+    "SCHEDULES_ANALYSIS",
+    "PRODUCES_INSIGHT",
+    "HAS_INSIGHT_TYPE",
+    "CREATED_FROM_RELATION",
+    "USES_INSIGHT_POLICY",
+    "HAS_NOTIFICATION_DISPATCH",
+    "DISPATCHED_BY",
+    "SUPPRESSED_BY_POLICY",
+    "HAS_COOLDOWN_POLICY",
+    "HAS_NOVELTY_POLICY",
+    "OBSERVES_MARKET_SESSION",
     "AFFECTS",
     "IMPACTS_OPINION",
     "DERIVES",
@@ -100,6 +138,9 @@ TBOX_REASONING_RULES = [
     "watchlist candidates create observation assertions, not sell decisions",
     "all runtime concepts become ABox nodes before AI receives an opinion packet",
     "relations with opinionImpact, riskImpact, supportImpact, or polarity change AI opinion pressure",
+    "data collection, analysis, reasoning, and notification dispatch are first-class ontology concepts",
+    "notification dispatch is driven by meaningful ontology insights, not by alert-type polling alone",
+    "collection schedules describe data freshness targets while cooldown and novelty policies control delivery noise",
 ]
 
 SENSITIVE_SETTING_TOKENS = ("secret", "token", "password", "clientid", "client_id", "accountseq", "account_seq", "chatid", "chat_id", "key")
@@ -146,6 +187,13 @@ SETTING_CONCEPT_TYPES = {
     "alertThresholds": ("Threshold", "HAS_THRESHOLD"),
     "modelDecisionThresholds": ("Threshold", "HAS_THRESHOLD"),
     "formulaWeights": ("Threshold", "HAS_THRESHOLD"),
+    "alertCadenceMinutes": ("CooldownPolicy", "HAS_COOLDOWN_POLICY"),
+    "externalApiFetchIntervalMinutes": ("CollectionSchedule", "RUNS_ON_SCHEDULE"),
+    "marketSnapshotIntervalMinutes": ("CollectionSchedule", "RUNS_ON_SCHEDULE"),
+    "watchlistSnapshotIntervalMinutes": ("CollectionSchedule", "RUNS_ON_SCHEDULE"),
+    "externalSignalsIntervalMinutes": ("CollectionSchedule", "RUNS_ON_SCHEDULE"),
+    "notificationNoveltyThreshold": ("NoveltyPolicy", "HAS_NOVELTY_POLICY"),
+    "notificationCooldownMinutes": ("CooldownPolicy", "HAS_COOLDOWN_POLICY"),
     "buyScoreFormula": ("StrategySignal", "CONFIGURES"),
     "sellScoreFormula": ("StrategySignal", "CONFIGURES"),
     "customBuyModelFormula": ("StrategySignal", "CONFIGURES"),
@@ -154,6 +202,52 @@ SETTING_CONCEPT_TYPES = {
     "lossCutScoreFormula": ("StrategySignal", "CONFIGURES"),
     "notificationScoreFormula": ("NotificationPolicy", "HAS_NOTIFICATION_POLICY"),
 }
+
+OPERATIONAL_PIPELINES = [
+    {
+        "key": "marketSnapshot",
+        "label": "marketSnapshot",
+        "tboxClasses": ["DataPipeline", "MarketSnapshot"],
+        "sourceKey": "account-market-data",
+        "sourceLabel": "계좌·보유·시세 데이터",
+        "scheduleKey": "marketSnapshotIntervalMinutes",
+        "defaultMinutes": 3,
+        "dataKinds": ["portfolio", "positions", "quotes", "cash"],
+        "description": "보유 잔고, 현재가, 현금, 포트폴리오 노출을 갱신합니다.",
+    },
+    {
+        "key": "watchlistSnapshot",
+        "label": "watchlistSnapshot",
+        "tboxClasses": ["DataPipeline", "WatchlistSnapshot"],
+        "sourceKey": "watchlist-market-data",
+        "sourceLabel": "관심종목 시세 데이터",
+        "scheduleKey": "watchlistSnapshotIntervalMinutes",
+        "defaultMinutes": 5,
+        "dataKinds": ["watchlist", "quotes", "technicalIndicators"],
+        "description": "관심 종목의 시세, 추세, 진입 관찰 데이터를 갱신합니다.",
+    },
+    {
+        "key": "externalSignals",
+        "label": "externalSignals",
+        "tboxClasses": ["DataPipeline", "ExternalSignalCollection"],
+        "sourceKey": "external-signal-data",
+        "sourceLabel": "뉴스·공시·거시·크립토 외부 신호",
+        "scheduleKey": "externalSignalsIntervalMinutes",
+        "fallbackSettingKey": "externalApiFetchIntervalMinutes",
+        "defaultMinutes": 30,
+        "dataKinds": ["news", "disclosures", "macro", "crypto", "foreignMarket"],
+        "description": "외부 신호를 수집해 종목과 포트폴리오 관계에 연결합니다.",
+    },
+]
+
+INSIGHT_TYPES = [
+    ("riskIncrease", "리스크 증가"),
+    ("opportunityDetected", "기회 포착"),
+    ("contradictionDetected", "관계 충돌"),
+    ("dataQualityWarning", "데이터 품질 경고"),
+    ("portfolioExposureShift", "포트폴리오 노출 변화"),
+    ("watchlistEntrySignal", "관심종목 진입 관찰"),
+]
 
 
 @dataclass
@@ -790,6 +884,124 @@ def add_runtime_metadata_concepts(graph: PortfolioOntology, portfolio_node_id: s
         add_relation(graph, portfolio_node_id, metadata_id, "HAS_RUNTIME_SETTING", weight=1.0, properties={"source": "runtime-metadata", "aiInfluenceLabel": "metadata:" + str(key)})
 
 
+def runtime_settings(runtime_context: Dict[str, object]) -> Dict[str, object]:
+    settings = runtime_context.get("settings") if isinstance(runtime_context, dict) else {}
+    return settings if isinstance(settings, dict) else {}
+
+
+def configured_minutes(settings: Dict[str, object], primary_key: str, fallback: float, secondary_key: str = "") -> float:
+    raw = settings.get(primary_key)
+    if raw in (None, "") and secondary_key:
+        raw = settings.get(secondary_key)
+    value = number(raw)
+    return value if value > 0 else number(fallback)
+
+
+def add_operational_world_concepts(
+    graph: PortfolioOntology,
+    portfolio_node_id: str,
+    runtime_context: Dict[str, object],
+    observed_positions: List[Position],
+) -> None:
+    settings = runtime_settings(runtime_context)
+    collection_policy_id = add_entity(graph, "collection-policy", "adaptive-polling", "적응형 데이터 수집 정책", {
+        "tboxClass": "CollectionPolicy",
+        "mode": "adaptive",
+        "description": "데이터는 성격별 목표 주기로 갱신하고, 알림은 의미 변화가 있을 때만 검토합니다.",
+    })
+    market_session_id = add_entity(graph, "market-session", "runtime-market-session", "현재 시장 세션", {
+        "tboxClass": "MarketSession",
+        "mode": str(runtime_context.get("mode") or ""),
+        "positionCount": len([item for item in observed_positions if is_holding_position(item)]),
+        "watchlistCount": len([item for item in observed_positions if is_watchlist_position(item)]),
+    })
+    reasoning_id = add_entity(graph, "reasoning-cycle", "ontologyReasoning", "ontologyReasoning", {
+        "tboxClass": "ReasoningCycle",
+        "trigger": "every-data-update",
+        "description": "데이터 갱신 직후 관계 영향과 인사이트를 재계산합니다.",
+    })
+    strategy_analysis_id = add_entity(graph, "analysis-job", "strategyAnalysis", "전략 분석", {
+        "tboxClass": "AnalysisJob",
+        "role": "supporting-analysis",
+        "description": "기존 모델 점수와 관계 규칙을 보조 분석으로 유지합니다.",
+    })
+    insight_policy_id = add_entity(graph, "insight-policy", "meaningful-change", "의미 변화 인사이트 정책", {
+        "tboxClass": "InsightPolicy",
+        "mode": "meaningful-change",
+        "minimumNovelty": number(settings.get("notificationNoveltyThreshold")) or 0.65,
+        "minimumConfidence": number(settings.get("notificationConfidenceThreshold")) or 0.55,
+    })
+    novelty_policy_id = add_entity(graph, "novelty-policy", "relation-novelty", "관계 신규성 정책", {
+        "tboxClass": "NoveltyPolicy",
+        "minimumNovelty": number(settings.get("notificationNoveltyThreshold")) or 0.65,
+    })
+    cooldown_policy_id = add_entity(graph, "cooldown-policy", "insight-cooldown", "인사이트 발송 쿨다운", {
+        "tboxClass": "CooldownPolicy",
+        "fallbackMinutes": number(settings.get("notificationCooldownMinutes")) or 10,
+        "legacyAlertCadence": safe_setting_value("alertCadenceMinutes", settings.get("alertCadenceMinutes") or ""),
+    })
+    suppression_policy_id = add_entity(graph, "suppression-policy", "duplicate-insight", "중복 인사이트 억제 정책", {
+        "tboxClass": "SuppressionPolicy",
+        "basis": "same-subject-same-insight-type-without-material-relation-change",
+    })
+    dispatch_id = add_entity(graph, "notification-dispatch", "investmentInsight", "investmentInsight 디스패치", {
+        "tboxClass": "NotificationDispatch",
+        "mode": "insight-driven-only",
+        "legacyAlertTypesRole": "presentation-and-compatibility",
+        "description": "투자 알림은 알림 타입별 폴링이 아니라 온톨로지 인사이트를 전달합니다.",
+    })
+    add_relation(graph, portfolio_node_id, collection_policy_id, "USES_COLLECTION_POLICY", properties={"source": "operational-ontology"})
+    add_relation(graph, portfolio_node_id, market_session_id, "OBSERVES_MARKET_SESSION", properties={"source": "operational-ontology"})
+    add_relation(graph, portfolio_node_id, reasoning_id, "HAS_REASONING_CYCLE", properties={"source": "operational-ontology"})
+    add_relation(graph, portfolio_node_id, dispatch_id, "HAS_NOTIFICATION_DISPATCH", properties={"source": "operational-ontology"})
+    add_relation(graph, dispatch_id, insight_policy_id, "USES_INSIGHT_POLICY", properties={"source": "operational-ontology"})
+    add_relation(graph, dispatch_id, cooldown_policy_id, "HAS_COOLDOWN_POLICY", properties={"source": "operational-ontology"})
+    add_relation(graph, dispatch_id, novelty_policy_id, "HAS_NOVELTY_POLICY", properties={"source": "operational-ontology"})
+    add_relation(graph, dispatch_id, suppression_policy_id, "SUPPRESSED_BY_POLICY", properties={"source": "operational-ontology"})
+    add_relation(graph, reasoning_id, strategy_analysis_id, "SCHEDULES_ANALYSIS", properties={"source": "operational-ontology"})
+    for key, label in INSIGHT_TYPES:
+        add_entity(graph, "insight-type", key, label, {"tboxClass": "InsightType", "key": key})
+    for pipeline in OPERATIONAL_PIPELINES:
+        key = str(pipeline["key"])
+        fallback_key = str(pipeline.get("fallbackSettingKey") or "")
+        target_minutes = number(pipeline.get("defaultMinutes"))
+        minutes = configured_minutes(settings, str(pipeline["scheduleKey"]), target_minutes, fallback_key)
+        pipeline_id = add_entity(graph, "data-pipeline", key, str(pipeline["label"]), {
+            "tboxClass": "DataPipeline",
+            "tboxClasses": list(pipeline.get("tboxClasses") or ["DataPipeline"]),
+            "key": key,
+            "dataKinds": list(pipeline.get("dataKinds") or []),
+            "targetMinutes": target_minutes,
+            "configuredMinutes": minutes,
+            "description": str(pipeline.get("description") or ""),
+        })
+        source_id = add_entity(graph, "data-source", str(pipeline["sourceKey"]), str(pipeline["sourceLabel"]), {
+            "tboxClass": "DataSource",
+            "dataKinds": list(pipeline.get("dataKinds") or []),
+        })
+        schedule_id = add_entity(graph, "collection-schedule", key + ":" + str(int(minutes)), str(pipeline["label"]) + " " + str(int(minutes)) + "분", {
+            "tboxClass": "CollectionSchedule",
+            "pipeline": key,
+            "targetMinutes": target_minutes,
+            "configuredMinutes": minutes,
+            "settingKey": str(pipeline.get("scheduleKey") or ""),
+            "fallbackSettingKey": fallback_key,
+        })
+        freshness_id = add_entity(graph, "data-freshness", key, str(pipeline["label"]) + " freshness", {
+            "tboxClass": "DataFreshness",
+            "targetMinutes": target_minutes,
+            "configuredMinutes": minutes,
+            "freshnessRole": "ai-confidence-input",
+        })
+        add_relation(graph, portfolio_node_id, pipeline_id, "HAS_PIPELINE", properties={"source": "operational-ontology"})
+        add_relation(graph, pipeline_id, source_id, "COLLECTS_DATA_FROM", properties={"source": "operational-ontology"})
+        add_relation(graph, pipeline_id, schedule_id, "RUNS_ON_SCHEDULE", properties={"source": "operational-ontology"})
+        add_relation(graph, pipeline_id, freshness_id, "HAS_DATA_FRESHNESS", properties={"source": "operational-ontology"})
+        add_relation(graph, pipeline_id, collection_policy_id, "USES_COLLECTION_POLICY", properties={"source": "operational-ontology"})
+        add_relation(graph, pipeline_id, portfolio_node_id, "UPDATES_GRAPH", properties={"source": "operational-ontology"})
+        add_relation(graph, pipeline_id, reasoning_id, "TRIGGERS_REASONING", properties={"source": "operational-ontology"})
+
+
 def add_decision_item_concepts(graph: PortfolioOntology, runtime_context: Dict[str, object]) -> None:
     items = runtime_context.get("decisionItems") if isinstance(runtime_context, dict) else []
     if not isinstance(items, list):
@@ -951,6 +1163,7 @@ def build_portfolio_ontology(
     add_market_exposure_concepts(graph, portfolio_node_id, portfolio)
     add_runtime_setting_concepts(graph, portfolio_node_id, runtime_context)
     add_runtime_metadata_concepts(graph, portfolio_node_id, runtime_context)
+    add_operational_world_concepts(graph, portfolio_node_id, runtime_context, observed_positions)
     add_external_signal_concepts(graph, portfolio_node_id, external_signals)
     watchlist_id = ""
     if any(is_watchlist_position(item) for item in observed_positions):
@@ -1091,6 +1304,9 @@ def build_portfolio_ontology(
     graph.relations = dedupe_relations(graph.relations)
     graph.evidence = dedupe_evidence(graph.evidence)
     apply_relation_driven_opinions(graph)
+    add_ontology_insight_concepts(graph)
+    graph.entities = dedupe_entities(graph.entities)
+    graph.relations = dedupe_relations(graph.relations)
     graph.reasoning_cards = build_reasoning_cards(graph)
     graph.worldview = portfolio_worldview(graph, portfolio, external_signals)
     graph.prompt = build_investment_opinion_prompt(graph)
@@ -1230,6 +1446,55 @@ def apply_relation_driven_opinions(graph: PortfolioOntology) -> None:
         opinion.thesis = "; ".join([item for item in [base_thesis] + relation_summary if item])
 
 
+def insight_type_for_opinion(opinion: OntologyOpinion, stock_source: str) -> str:
+    if opinion.contradictions:
+        return "contradictionDetected"
+    if any("데이터" in str(item) or "부족" in str(item) for item in opinion.dominant_risks + opinion.contradictions):
+        return "dataQualityWarning"
+    if stock_source == "watchlist":
+        return "watchlistEntrySignal"
+    if opinion.ontology_pressure >= 55 or opinion.tone in {"danger", "caution"}:
+        return "riskIncrease"
+    if opinion.opportunities or opinion.supporting_beliefs:
+        return "opportunityDetected"
+    return "portfolioExposureShift"
+
+
+def add_ontology_insight_concepts(graph: PortfolioOntology) -> None:
+    stock_entities = {
+        str((item.properties or {}).get("symbol") or "").upper(): item
+        for item in graph.entities
+        if item.kind == "stock"
+    }
+    reasoning_id = entity_id("reasoning-cycle", "ontologyReasoning")
+    dispatch_id = entity_id("notification-dispatch", "investmentInsight")
+    insight_policy_id = entity_id("insight-policy", "meaningful-change")
+    ai_review_id = entity_id("concept", "ai-investment-review")
+    for opinion in graph.opinions:
+        stock = stock_entities.get(str(opinion.symbol or "").upper())
+        if not stock:
+            continue
+        source = str((stock.properties or {}).get("source") or "holding")
+        insight_type = insight_type_for_opinion(opinion, source)
+        insight_id = add_entity(graph, "insight", opinion.symbol + ":" + insight_type, stock.label + " " + opinion.action, {
+            "tboxClass": "Insight",
+            "symbol": opinion.symbol,
+            "insightType": insight_type,
+            "severity": opinion.tone,
+            "score": number(opinion.ontology_pressure),
+            "confidence": number(opinion.conviction),
+            "thesis": opinion.thesis,
+            "relationInfluenceCount": len(opinion.relation_influences or []),
+            "dispatchCandidate": bool(opinion.ontology_pressure >= 55 or opinion.contradictions or source == "watchlist"),
+        })
+        add_relation(graph, reasoning_id, insight_id, "PRODUCES_INSIGHT", weight=round(number(opinion.conviction) / 100, 4), properties={"source": "ontology-reasoning"})
+        add_relation(graph, stock.entity_id, insight_id, "CREATED_FROM_RELATION", weight=round(number(opinion.ontology_pressure) / 100, 4), properties={"source": "ontology-reasoning"})
+        add_relation(graph, insight_id, entity_id("insight-type", insight_type), "HAS_INSIGHT_TYPE", weight=1.0, properties={"source": "ontology-reasoning"})
+        add_relation(graph, insight_id, insight_policy_id, "EVALUATED_BY", weight=1.0, properties={"source": "ontology-reasoning"})
+        add_relation(graph, insight_id, dispatch_id, "DISPATCHED_BY", weight=1.0, properties={"source": "ontology-reasoning", "mode": "insight-driven-only"})
+        add_relation(graph, insight_id, ai_review_id, "REQUESTS_OPINION_FROM", weight=1.0, properties={"source": "ontology-reasoning"})
+
+
 def relation_key(item: OntologyRelation) -> str:
     return "|".join([item.source, item.relation_type, item.target])
 
@@ -1359,12 +1624,15 @@ def build_reasoning_cards(graph: PortfolioOntology) -> List[Dict[str, object]]:
 
 
 def build_ai_inference_packet(graph: PortfolioOntology) -> Dict[str, object]:
+    pipeline_count = len([item for item in graph.entities if item.kind == "data-pipeline"])
+    insight_count = len([item for item in graph.entities if item.kind == "insight"])
     return {
         "contract": "investment-ontology-ai-inference-v1",
         "promptVersion": ONTOLOGY_PROMPT_VERSION,
         "role": "ontology-first-investment-opinion",
         "legacyModelRole": "supporting-evidence",
-        "inputOrder": ["tbox", "abox", "reasoningCards", "relationInfluences", "relations", "evidence", "beliefs", "opinions"],
+        "notificationRole": "insight-driven-dispatch",
+        "inputOrder": ["tbox", "abox", "operationalOntology", "reasoningCards", "relationInfluences", "insights", "relations", "evidence", "beliefs", "opinions"],
         "reasoningCardCount": len(graph.reasoning_cards),
         "reasoningCardIds": [item.get("id") for item in graph.reasoning_cards],
         "graphInputs": {
@@ -1373,17 +1641,21 @@ def build_ai_inference_packet(graph: PortfolioOntology) -> Dict[str, object]:
             "evidenceCount": len(graph.evidence),
             "beliefCount": len(graph.beliefs),
             "opinionCount": len(graph.opinions),
+            "pipelineCount": pipeline_count,
+            "insightCount": insight_count,
         },
         "outputSchema": {
             "portfolioView": "string",
             "relationThesis": "string",
             "companyOpinions": ["symbol", "action", "thesis", "relationInfluences", "contradictions", "nextChecks"],
+            "insightDispatch": ["subject", "insightType", "novelty", "confidence", "dispatchDecision"],
             "missingDataImpact": ["string"],
         },
         "guardrails": [
             "제공된 TBox, ABox, reasoning card, 관계 행만 사용합니다.",
             "보유 종목 HOLDS와 관심 종목 WATCHES를 다른 판단 단계로 설명합니다.",
             "기존 점수 모델은 보조 근거로만 사용합니다.",
+            "알림 타입 이름보다 온톨로지 인사이트, 신규성, 쿨다운, 억제 정책을 우선합니다.",
             "매수/매도 명령을 확정하지 않고 확인 기준과 시나리오를 제시합니다.",
         ],
     }
@@ -1399,6 +1671,9 @@ def portfolio_worldview(
     contradictions = sum(len(item.contradictions) for item in graph.opinions)
     high_pressure = [item.symbol for item in graph.opinions if item.ontology_pressure >= 55]
     relation_influence_count = sum(len(item.relation_influences or []) for item in graph.opinions)
+    pipeline_nodes = [item for item in graph.entities if item.kind == "data-pipeline"]
+    insight_nodes = [item for item in graph.entities if item.kind == "insight"]
+    dispatch_nodes = [item for item in graph.entities if item.kind == "notification-dispatch"]
     top_sector = portfolio.sectors[0] if portfolio.sectors else {}
     return {
         "model": "ontology-first",
@@ -1414,6 +1689,19 @@ def portfolio_worldview(
         "supportBeliefCount": support_count,
         "contradictionCount": contradictions,
         "relationInfluenceCount": relation_influence_count,
+        "operationalOntology": {
+            "collectionPipelineCount": len(pipeline_nodes),
+            "insightCount": len(insight_nodes),
+            "dispatchMode": str((dispatch_nodes[0].properties or {}).get("mode") or "insight-driven-only") if dispatch_nodes else "",
+            "pipelines": [
+                {
+                    "key": str((item.properties or {}).get("key") or item.entity_id),
+                    "targetMinutes": number((item.properties or {}).get("targetMinutes")),
+                    "configuredMinutes": number((item.properties or {}).get("configuredMinutes")),
+                }
+                for item in pipeline_nodes
+            ],
+        },
         "highPressureSymbols": high_pressure,
         "externalSignalKeys": sorted(str(key) for key in external_signals.keys()) if isinstance(external_signals, dict) else [],
     }
@@ -1426,6 +1714,8 @@ def prompt_payload(graph: PortfolioOntology) -> Dict[str, object]:
         "worldview": graph.worldview,
         "aiInferencePacket": build_ai_inference_packet(graph),
         "reasoningCards": list(graph.reasoning_cards),
+        "insights": [item.to_dict() for item in graph.entities if item.kind == "insight"],
+        "operationalOntology": dict((graph.worldview or {}).get("operationalOntology") or {}),
         "opinions": [item.to_dict() for item in graph.opinions],
         "relations": [item.to_dict() for item in graph.relations[:80]],
         "evidence": [item.to_dict() for item in graph.evidence[:80]],
@@ -1437,9 +1727,11 @@ def build_investment_opinion_prompt(graph: PortfolioOntology) -> str:
     payload = json.dumps(prompt_payload(graph), ensure_ascii=False, sort_keys=True)
     return "\n".join([
         "너는 투자전략 관계 분석 데이터를 읽는 AI 투자 의견 리뷰어다.",
-        "규칙 구조는 투자 기준의 분류, 관계 타입, 판단 규칙이고, 현재 데이터는 계좌의 실제 보유, 근거, 판단 근거, 의견 기록이다.",
+        "규칙 구조는 투자 기준, 데이터 수집, 분석, 추론, 인사이트, 알림 디스패치까지 포함한 세계관이다.",
+        "현재 데이터는 계좌의 실제 보유, 근거, 판단 근거, 운영 정책, 의견 기록이다.",
         "매수/매도 명령을 확정하지 말고, 포트폴리오 투자 관점, 관계, 반대 신호, 데이터 공백을 분석해라.",
         "기존 점수 모델은 보조 데이터로만 사용하고, 최종 판단은 관계 규칙과 근거 충돌을 기준으로 설명해라.",
+        "알림은 알림 타입별 주기가 아니라 온톨로지 인사이트의 신규성, 신뢰도, 쿨다운, 억제 정책으로 설명해라.",
         "계좌번호, API 키, 토큰, 개인 식별정보를 추정하거나 요청하지 마라.",
         "응답 섹션은 반드시 투자 관점, 핵심 관계, 보유 이유와 반대 신호, 종목별 의견, 다음 검증 순서로 작성해라.",
         "",

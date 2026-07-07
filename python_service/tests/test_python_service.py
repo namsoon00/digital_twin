@@ -1075,6 +1075,10 @@ class PythonServiceTests(unittest.TestCase):
                 "settings": {
                     "alertThresholds": "lossRateLow=-8",
                     "profitTakeScoreFormula": "baseScore + profitTakePnlScore",
+                    "marketSnapshotIntervalMinutes": "3",
+                    "watchlistSnapshotIntervalMinutes": "5",
+                    "externalSignalsIntervalMinutes": "30",
+                    "notificationNoveltyThreshold": "0.7",
                 },
                 "decisionItems": [
                     {"symbol": "000660", "decision": "손실 관리", "exitPressure": 76, "tone": "danger"},
@@ -1090,10 +1094,19 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("Stock", payload["tbox"]["classes"])
         self.assertIn("PriceMetric", payload["tbox"]["classes"])
         self.assertIn("RuntimeSetting", payload["tbox"]["classes"])
+        self.assertIn("DataPipeline", payload["tbox"]["classes"])
+        self.assertIn("CollectionSchedule", payload["tbox"]["classes"])
+        self.assertIn("ReasoningCycle", payload["tbox"]["classes"])
+        self.assertIn("Insight", payload["tbox"]["classes"])
+        self.assertIn("NotificationDispatch", payload["tbox"]["classes"])
         self.assertIn("HOLDS", payload["tbox"]["relationTypes"])
         self.assertIn("WATCHES", payload["tbox"]["relationTypes"])
         self.assertIn("HAS_PRICE", payload["tbox"]["relationTypes"])
         self.assertIn("HAS_MODEL_SCORE", payload["tbox"]["relationTypes"])
+        self.assertIn("HAS_PIPELINE", payload["tbox"]["relationTypes"])
+        self.assertIn("TRIGGERS_REASONING", payload["tbox"]["relationTypes"])
+        self.assertIn("PRODUCES_INSIGHT", payload["tbox"]["relationTypes"])
+        self.assertIn("DISPATCHED_BY", payload["tbox"]["relationTypes"])
         self.assertGreater(payload["abox"]["entityCount"], 0)
         self.assertTrue(any(item.relation_type == "HOLDS" for item in graph.relations))
         self.assertTrue(any(item.relation_type == "WATCHES" for item in graph.relations))
@@ -1101,8 +1114,17 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(any(item.relation_type == "HAS_PRICE" for item in graph.relations))
         self.assertTrue(any(item.relation_type == "HAS_DATA_QUALITY" for item in graph.relations))
         self.assertTrue(any(item.relation_type == "HAS_MODEL_SCORE" for item in graph.relations))
+        self.assertTrue(any(item.relation_type == "HAS_PIPELINE" for item in graph.relations))
+        self.assertTrue(any(item.relation_type == "TRIGGERS_REASONING" for item in graph.relations))
+        self.assertTrue(any(item.relation_type == "PRODUCES_INSIGHT" for item in graph.relations))
+        self.assertTrue(any(item.relation_type == "DISPATCHED_BY" for item in graph.relations))
         self.assertTrue(any(item.kind == "account" for item in graph.entities))
         self.assertTrue(any(item.kind == "position" for item in graph.entities))
+        self.assertTrue(any(item.kind == "data-pipeline" for item in graph.entities))
+        self.assertTrue(any(item.kind == "collection-schedule" for item in graph.entities))
+        self.assertTrue(any(item.kind == "reasoning-cycle" for item in graph.entities))
+        self.assertTrue(any(item.kind == "insight" for item in graph.entities))
+        self.assertTrue(any(item.kind == "notification-dispatch" for item in graph.entities))
         self.assertTrue(any(item.kind == "price-metric" for item in graph.entities))
         self.assertTrue(any(item.kind == "model-score" for item in graph.entities))
         self.assertTrue(any(item.kind == "runtime-setting" for item in graph.entities))
@@ -1110,7 +1132,13 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(any(item.kind == "tbox-class" for item in graph.entities))
         self.assertTrue(any(item.get("symbol") == "NVDA" for item in payload["reasoningCards"]))
         self.assertEqual("investment-ontology-ai-inference-v1", payload["aiInferencePacket"]["contract"])
+        self.assertEqual("insight-driven-dispatch", payload["aiInferencePacket"]["notificationRole"])
+        self.assertIn("operationalOntology", payload["aiInferencePacket"]["inputOrder"])
+        self.assertIn("insights", payload["aiInferencePacket"]["inputOrder"])
         self.assertIn("relationInfluences", payload["aiInferencePacket"]["inputOrder"])
+        self.assertEqual("insight-driven-only", graph.worldview["operationalOntology"]["dispatchMode"])
+        self.assertEqual(3, graph.worldview["operationalOntology"]["collectionPipelineCount"])
+        self.assertTrue(any(item.get("key") == "externalSignals" and item.get("configuredMinutes") == 30 for item in graph.worldview["operationalOntology"]["pipelines"]))
         self.assertIn("관계 분석 데이터 JSON", graph.prompt)
         self.assertIn("reasoningCards", graph.prompt)
         self.assertIn("TBox", graph.prompt)

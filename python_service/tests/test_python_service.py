@@ -1144,6 +1144,36 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("방향별 매수/매도 체결량", missing_labels)
         self.assertIn("투자자별 수급", missing_labels)
 
+    def test_ontology_relation_rules_use_execution_proxies_for_domestic_missing_data(self):
+        position = Position(
+            symbol="005930",
+            name="삼성전자",
+            market="KR",
+            currency="KRW",
+            market_value=1000000,
+            profit_loss_rate=-8.1,
+            sellable_quantity=10,
+            current_price=290000,
+            ma20=330000,
+            ma60=290000,
+            ma20_distance=-10.4,
+            ma60_distance=2.9,
+            trade_strength=72.8,
+            orderbook_bid_volume=520618,
+            orderbook_ask_volume=102790,
+            bid_ask_imbalance=67,
+            sector="반도체",
+        )
+        portfolio = portfolio_summary([position], fx_rates={"KRW": 1})
+
+        context = evaluate_position_relation_rules(position, portfolio)
+
+        missing_labels = [item["label"] for item in context["missingData"]]
+        effects = {item["label"]: item["effect"] for item in context["missingData"]}
+        self.assertNotIn("방향별 매수/매도 체결량", missing_labels)
+        self.assertIn("투자자별 수급", missing_labels)
+        self.assertIn("중립으로 처리", effects["투자자별 수급"])
+
     def test_ontology_settings_drive_rule_metadata_and_ai_prompt_template(self):
         position = Position(
             symbol="000660",
@@ -2654,6 +2684,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("Apple", message.splitlines()[0])
         self.assertNotIn("메인 Apple", message)
         self.assertIn("Codex 답변:", message)
+        self.assertIn("점수 해석:", message)
+        self.assertIn("대응 필요 강도", message)
         self.assertIn("데이터 검증:", message)
         self.assertIn("모델 보완:", message)
         self.assertIn("손익률 급변", message)
@@ -2909,6 +2941,8 @@ class PythonServiceTests(unittest.TestCase):
 
         self.assertIn("관계 규칙", message)
         self.assertIn("수익 보유 + 추세 약화", message)
+        self.assertIn("점수 해석", message)
+        self.assertIn("가격 방향 예측 점수가 아닙니다", message)
         self.assertIn("AI 분석 기준", message)
         self.assertNotIn("체결강도", message)
         self.assertIn("수익 +18.5%: 분할매도 기준 확인", message)
@@ -3859,6 +3893,57 @@ class PythonServiceTests(unittest.TestCase):
 
         self.assertIn("체결강도 없음", message)
         self.assertIn("매수/매도 체결량 없음", message)
+        self.assertIn("투자자별 수급 없음", message)
+
+    def test_holding_formula_audit_uses_domestic_execution_proxies(self):
+        db_path = Path(self.temp.name) / "service.db"
+        templates = SQLiteNotificationTemplateStore(db_path)
+        position = Position(
+            symbol="005930",
+            name="삼성전자",
+            market="KR",
+            currency="KRW",
+            market_value=1000000,
+            profit_loss_rate=-8.1,
+            sellable_quantity=10,
+            current_price=290000,
+            volume=11223383,
+            volume_ratio=0.5,
+            trading_value=3366700000000,
+            ma20=330000,
+            ma60=290000,
+            ma20_distance=-10.4,
+            ma60_distance=2.9,
+            trade_strength=72.8,
+            orderbook_bid_volume=520618,
+            orderbook_ask_volume=102790,
+            bid_ask_imbalance=67,
+            sector="반도체",
+        )
+        audits = StrategyModel({}).holding_formula_audits(position, 50)
+        event = AlertEvent(
+            "main",
+            "메인",
+            "ALERT",
+            "holdingTiming",
+            "main:timing:005930",
+            "삼성전자",
+            ["상태: 손실 기준 근접 관찰 (50점)", "손익: -8.1%"],
+            "005930",
+        )
+        context = alert_context(event)
+        context.update({
+            "honeyScore": 100,
+            "honeyThreshold": 45,
+            "honeyReasons": ["기본 35점", "주의 등급 +25"],
+            "formulaAudits": audits,
+            "holdingDecisionBasis": "lossCut",
+        })
+
+        message = templates.render(event.rule, context)
+
+        self.assertNotIn("체결강도 없음", message)
+        self.assertNotIn("매수/매도 체결량 없음", message)
         self.assertIn("투자자별 수급 없음", message)
 
     def test_model_review_message_includes_delivery_score_explanation(self):

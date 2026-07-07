@@ -378,6 +378,28 @@ def strength_label(score: float) -> str:
     return "낮음"
 
 
+def relation_score_meaning(score: float) -> str:
+    value = float(score or 0)
+    if value >= 85:
+        return "즉시 재확인이 필요한 매우 강한 관계 압력"
+    if value >= 70:
+        return "대응 기준을 확인할 만큼 강한 관계 압력"
+    if value >= 55:
+        return "관찰을 유지해야 하는 관계 압력"
+    if value >= 35:
+        return "추적은 필요하지만 단독 판단 근거는 약한 관계 압력"
+    return "참고 수준의 약한 관계 압력"
+
+
+def relation_score_direction_meaning(delta: float) -> str:
+    value = float(delta or 0)
+    if abs(value) < 0.05:
+        return "이전과 같은 수준의 대응 필요 강도"
+    if value > 0:
+        return "대응 필요 강도가 커졌다는 뜻이며, 가격 상승 예측 점수가 아닙니다"
+    return "대응 필요 강도가 완화됐다는 뜻이며, 매수 신호는 아닙니다"
+
+
 def _sector_ratio(position: Position, portfolio: PortfolioSummary) -> float:
     for item in portfolio.sectors or []:
         if str(item.get("sector") or item.get("label") or "") == str(position.sector or ""):
@@ -467,6 +489,10 @@ def position_signal_facts(
     total_execution_volume = buy_volume + sell_volume
     buy_share = (buy_volume / total_execution_volume) * 100.0 if total_execution_volume else 0.0
     sell_share = 100.0 - buy_share if total_execution_volume else 0.0
+    orderbook_bid_volume = number(position.orderbook_bid_volume)
+    orderbook_ask_volume = number(position.orderbook_ask_volume)
+    bid_ask_imbalance = number(position.bid_ask_imbalance)
+    execution_direction_proxy = bool(position.trade_strength or bid_ask_imbalance or orderbook_bid_volume or orderbook_ask_volume)
     btc = _btc_market(external_signals)
     disclosures = external_signals.get("dartDisclosures") if isinstance(external_signals, dict) else {}
     symbol = str(position.symbol or "").upper()
@@ -492,6 +518,10 @@ def position_signal_facts(
         "sellVolume": sell_volume,
         "buyShare": buy_share,
         "sellShare": sell_share,
+        "orderbookBidVolume": orderbook_bid_volume,
+        "orderbookAskVolume": orderbook_ask_volume,
+        "bidAskImbalance": bid_ask_imbalance,
+        "executionDirectionProxy": execution_direction_proxy,
         "btcChange24h": number(btc.get("change24h")) if btc else 0.0,
         "btcChange7d": number(btc.get("change7d")) if btc else 0.0,
         "btcPrice": number(btc.get("price")) if btc else 0.0,
@@ -511,11 +541,11 @@ def position_signal_facts(
         missing.append(_missing("ma60", "60일 이동평균", "중기 추세 위치를 확인할 수 없습니다."))
     expects_kr_signals = bool(facts.get("expectsKrMicrostructureSignals"))
     if expects_kr_signals and not facts["tradeStrength"]:
-        missing.append(_missing("tradeStrength", "체결강도", "매수·매도 체결 압력을 직접 반영하지 못합니다."))
-    if expects_kr_signals and not total_execution_volume:
-        missing.append(_missing("executionVolume", "방향별 매수/매도 체결량", "체결강도는 확인해도 매수·매도 방향별 체결 비중은 직접 판단하지 못합니다."))
+        missing.append(_missing("tradeStrength", "체결강도", "체결 압력 확인값이 없어 수급 방향 판단을 가격·거래량 중심으로 봅니다."))
+    if expects_kr_signals and not total_execution_volume and not execution_direction_proxy:
+        missing.append(_missing("executionVolume", "방향별 매수/매도 체결량", "매수·매도 방향별 체결 압력을 확인하지 못해 수급 방향 점수는 중립에 가깝게 처리합니다."))
     if expects_kr_signals and not facts["investorFlowBase"]:
-        missing.append(_missing("investorFlow", "투자자별 수급", "외국인·기관·개인 순매수 방향을 확인하지 못합니다."))
+        missing.append(_missing("investorFlow", "투자자별 수급", "외국인·기관·개인 순매수는 반영하지 못해 주체별 수급은 중립으로 처리합니다. 가격·거래량·체결강도 중심 판단입니다."))
     if facts["isBtcSensitive"] and not btc:
         missing.append(_missing("btcMarket", "비트코인 시장 데이터", "비트코인 민감 종목의 외부 연동 위험을 확인하지 못합니다."))
     data_quality = clamp(100.0 - len(missing) * 12.0, 35.0, 100.0)

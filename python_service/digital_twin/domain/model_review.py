@@ -2,6 +2,7 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from typing import Dict, List
 
+from .ontology_rules import relation_score_direction_meaning
 from .portfolio import utc_now_iso
 
 
@@ -174,6 +175,10 @@ def signed_pct(number: float, suffix: str = "%") -> str:
     return ("+" if rounded > 0 else "") + str(rounded) + suffix
 
 
+def score_change_meaning(delta: float) -> str:
+    return "점수 변화 " + signed_pct(delta, "점") + "은 " + relation_score_direction_meaning(delta) + "."
+
+
 def pct_delta(current: float, previous: float) -> float:
     base = float(previous or 0)
     if not base:
@@ -212,6 +217,7 @@ def decision_change_review_lines(
 
     return [
         "Codex 답변: " + first_sentence(reasons, "판단 기준에 의미 있는 변화가 감지됨") + ". 주요 변화는 " + first_sentence(drivers, "점수 구성값 변화") + "입니다.",
+        "점수 해석: " + score_change_meaning(pressure_delta),
         "데이터 검증: " + validation,
         "모델 보완: " + improvement,
     ]

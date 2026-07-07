@@ -6,6 +6,7 @@ from typing import Dict, List
 
 from .alert_formatting import signed_pct
 from .message_types import MESSAGE_TYPE_EMOJIS, MESSAGE_TYPE_LABELS, TRIGGER_SUMMARIES
+from .ontology_rules import relation_score_meaning
 from .portfolio import AlertEvent
 from .scoring import notification_signal_labels
 
@@ -805,6 +806,7 @@ def ontology_rule_lines(context_or_metadata: Dict[str, object]) -> List[str]:
     if strength not in (None, ""):
         suffix = "신뢰도 " + format_score_value(confidence) if confidence not in (None, "") else ""
         lines.append("관계 신호: " + " ".join(part for part in [label + " (" + format_score_value(strength) + "점)", suffix] if part))
+        lines.append("점수 해석: " + relation_score_meaning(float(strength)) + "입니다. 점수 상승은 대응 필요 강도 강화, 하락은 완화를 뜻하며 가격 방향 예측 점수가 아닙니다.")
     rules = relation_context.get("activeRules") or relation_context.get("matchedRules") or []
     for item in rules:
         if not isinstance(item, dict):

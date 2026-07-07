@@ -300,6 +300,8 @@ class StrategyModel:
         ma20 = number(raw.get("ma20") or raw.get("movingAverage20"))
         ma60 = number(raw.get("ma60") or raw.get("movingAverage60"))
         bid_ask = number(raw.get("bidAskImbalance") or raw.get("bid_ask_imbalance"))
+        orderbook_bid = number(raw.get("orderbookBidVolume") or raw.get("orderbook_bid_volume"))
+        orderbook_ask = number(raw.get("orderbookAskVolume") or raw.get("orderbook_ask_volume"))
         price_change = number(raw.get("priceChangeRate") or raw.get("price_change_rate"))
         foreign_net = number(raw.get("foreignNet") or raw.get("foreignNetVolume") or raw.get("foreign_net_volume"))
         institution_net = number(raw.get("institutionNet") or raw.get("institutionNetVolume") or raw.get("institution_net_volume"))
@@ -316,7 +318,7 @@ class StrategyModel:
             missing["volumeRatio"] = "거래량 배율 없음 -> 1배"
             missing["volumePressure"] = "거래량 배율 없음 -> 0점"
             missing["directionalVolumePressure"] = "거래량 방향 확인값 없음 -> 0점"
-        if expects_kr_signals and not (buy_volume + sell_volume):
+        if expects_kr_signals and not (buy_volume + sell_volume) and not (trade_strength or bid_ask or orderbook_bid or orderbook_ask):
             missing["buyShare"] = "매수/매도 체결량 없음 -> 50%"
             missing["buyShareScore"] = "매수 체결 비중 없음 -> 0점"
             missing["sellShare"] = "매수/매도 체결량 없음 -> 50%"

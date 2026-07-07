@@ -7059,27 +7059,6 @@
     }[name] || name || "-";
   }
 
-  function realtimeLastEventText() {
-    if (!state.realtime.lastEvent) return "-";
-    return realtimeEventLabel(state.realtime.lastEvent) + (state.realtime.lastEventAt ? " · " + formatClock(state.realtime.lastEventAt) : "");
-  }
-
-  function realtimeMonitoringCycleText() {
-    var event = normalizeRealtimeEvent(state.realtime.monitoring && state.realtime.monitoring.cycle);
-    if (!event) return "-";
-    var payload = event.payload || {};
-    return "스냅샷 " + Number(payload.snapshotCount || 0) + " · 알림 " + Number(payload.alertCount || 0)
-      + (event.occurredAt ? " · " + formatClock(event.occurredAt) : "");
-  }
-
-  function realtimeMonitoringAlertText() {
-    var event = normalizeRealtimeEvent(state.realtime.monitoring && state.realtime.monitoring.alerts);
-    if (!event) return "-";
-    var payload = event.payload || {};
-    var symbols = Array.isArray(payload.symbols) && payload.symbols.length ? " · " + payload.symbols.slice(0, 3).join(",") : "";
-    return Number(payload.count || 0) + "건" + symbols + (event.occurredAt ? " · " + formatClock(event.occurredAt) : "");
-  }
-
   function renderAccountDirectoryPanel(options) {
     options = options || {};
     var accounts = state.serviceAccounts || [];
@@ -7403,6 +7382,53 @@
     ].join("");
   }
 
+  function renderMonitorRuntimeRow(label, value, detail, tone) {
+    return [
+      '<div class="monitor-runtime-row ' + escapeHtml(tone || "") + '">',
+      '<span>' + escapeHtml(label || "-") + '</span>',
+      '<strong>' + escapeHtml(value || "-") + '</strong>',
+      detail ? '<em>' + escapeHtml(detail) + '</em>' : '',
+      '</div>'
+    ].join("");
+  }
+
+  function renderMonitorAlertSummary() {
+    var event = normalizeRealtimeEvent(state.realtime.monitoring && state.realtime.monitoring.alerts);
+    var payload = event && event.payload || {};
+    var count = Number(payload.count || 0);
+    var symbols = Array.isArray(payload.symbols) ? payload.symbols.slice(0, 4) : [];
+    var symbolText = symbols.length ? symbols.map(function (symbol) {
+      return stockDisplayName(symbol, clientKnownStockInfo(symbol));
+    }).join(", ") : "최근 감지된 모니터링 알림 없음";
+    return [
+      '<div class="monitor-alert-summary ' + escapeHtml(count ? "active" : "idle") + '">',
+      '<span>최근 모니터링 알림</span>',
+      '<strong>' + escapeHtml(count ? count + "건 감지" : "대기 중") + '</strong>',
+      '<p>' + escapeHtml(symbolText) + '</p>',
+      '<em>' + escapeHtml(event && event.occurredAt ? formatClock(event.occurredAt) : "알림 이벤트 대기") + '</em>',
+      '</div>'
+    ].join("");
+  }
+
+  function renderMonitorRuntimeBoard() {
+    var cycleEvent = normalizeRealtimeEvent(state.realtime.monitoring && state.realtime.monitoring.cycle);
+    var cyclePayload = cycleEvent && cycleEvent.payload || {};
+    var cycleValue = cycleEvent
+      ? "스냅샷 " + Number(cyclePayload.snapshotCount || 0) + " · 알림 " + Number(cyclePayload.alertCount || 0)
+      : "사이클 대기";
+    var cycleDetail = cycleEvent && cycleEvent.occurredAt ? formatClock(cycleEvent.occurredAt) : "모니터링 사이클 이벤트 대기";
+    return [
+      '<div class="monitor-runtime-strip monitor-runtime-board" aria-label="모니터링 런타임 상태">',
+      '<div class="monitor-runtime-timeline">',
+      renderMonitorRuntimeRow("웹소켓 최근 이벤트", state.realtime.lastEvent ? realtimeEventLabel(state.realtime.lastEvent) : "이벤트 대기", state.realtime.lastEventAt ? formatClock(state.realtime.lastEventAt) : "연결 이벤트 대기", state.realtime.connected ? "live" : ""),
+      renderMonitorRuntimeRow("최근 모니터링 사이클", cycleValue, cycleDetail, ""),
+      renderMonitorRuntimeRow("알림 큐", notificationJobSummaryText(state.realtime.notificationJobs), "notification worker queue", "live"),
+      '</div>',
+      renderMonitorAlertSummary(),
+      '</div>'
+    ].join("");
+  }
+
   function renderAdminMonitoringPanel(snapshot) {
     var toss = snapshot.toss || {};
     var portfolio = snapshot.portfolio || {};
@@ -7417,12 +7443,6 @@
       ["평가 금액", formatMoney(portfolio.total || 0), ""],
       ["토스 연결", toss.status || "-", ""],
       ["마지막 갱신", formatClock(snapshot.generatedAt), ""]
-    ];
-    var runtimeRows = [
-      ["웹소켓 최근 이벤트", realtimeLastEventText(), ""],
-      ["최근 모니터링 사이클", realtimeMonitoringCycleText(), ""],
-      ["최근 모니터링 알림", realtimeMonitoringAlertText(), ""],
-      ["알림 큐", notificationJobSummaryText(state.realtime.notificationJobs), "live"]
     ];
     var marketRows = (portfolio.markets || []).map(function (market) {
       return renderMonitorLedgerCell(market.label || market.key || "-", "현금 " + pct(market.cashRatio || 0), "");
@@ -7451,11 +7471,7 @@
       }).join(""),
       '</div>',
       '</div>',
-      '<div class="monitor-runtime-strip">',
-      runtimeRows.map(function (row) {
-        return renderMonitorLedgerCell(row[0], row[1], row[2]);
-      }).join(""),
-      '</div>',
+      renderMonitorRuntimeBoard(),
       marketRows ? '<div class="monitor-market-ledger">' + marketRows + '</div>' : '',
       '<div class="rule-strip"><span>실제 백그라운드 워커 실행/중지는 로컬 명령으로 관리하고, 웹은 저장된 계정과 알림 설정을 같은 로컬 DB/설정 파일에 기록합니다.</span></div>',
       '</article>'

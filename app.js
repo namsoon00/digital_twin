@@ -381,7 +381,7 @@
     { key: "monitorPositionChange", group: "실시간", label: "보유 종목 변화", description: "새 보유, 제외, 수량 변경이 감지될 때" },
     { key: "monitorPnlChange", group: "실시간", label: "손익률 급변", description: "직전 조회 대비 손익률 변화가 커질 때" },
     { key: "monitorValueChange", group: "실시간", label: "평가액 급변", description: "직전 조회 대비 평가액 변화가 커질 때" },
-    { key: "monitorTrendChange", group: "실시간", label: "이동평균 변화", description: "20/60일선 돌파, 크로스, 큰 괴리가 감지될 때" },
+    { key: "monitorTrendChange", group: "실시간", label: "이동평균 변화", description: "20/60일선 돌파, 크로스, 현재가와 이동평균 차이가 커질 때" },
     { key: "monitorCashChange", group: "실시간", label: "현금비중 급변", description: "시장별 현금비중이 빠르게 변할 때" },
     { key: "monitorDecisionChange", group: "실시간", label: "판단 변화", description: "종목 판단이나 위험 점수가 바뀔 때" },
     { key: "externalEquityMove", group: "외부 API", label: "미장 가격/거래량", description: "Alpha Vantage 현재가와 거래량이 임계값을 넘을 때" },
@@ -469,7 +469,7 @@
     { key: "watchlistPriceDelta", label: "관심종목 현재가 변화", unit: "%", step: "0.1" },
     { key: "monitorPnlDelta", label: "실시간 손익률 변화", unit: "%p", step: "0.1" },
     { key: "monitorValueDelta", label: "실시간 평가액 변화", unit: "%", step: "0.1" },
-    { key: "monitorMaDistance", label: "이동평균 괴리", unit: "%", step: "0.1" },
+    { key: "monitorMaDistance", label: "이동평균과 현재가 차이", unit: "%", step: "0.1" },
     { key: "monitorCashDelta", label: "실시간 현금비중 변화", unit: "%p", step: "1" },
     { key: "monitorExitPressureDelta", label: "실시간 판단 점수 변화", unit: "점", step: "1" },
     { key: "externalEquityChangePct", label: "미장 가격 변화", unit: "%", step: "0.1" },
@@ -2414,8 +2414,8 @@
         title: "SK하이닉스",
         symbol: "000660",
         severity: "ALERT",
-        lines: ["이동평균 변화", "신호 20일선 하향 이탈 · 60일선 상향 돌파", "추세: 현재 15만 원, 20일선 14만 원(+4.2%), 60일선 13만 원(+9.1%)", "수급: 거래량 31,000(1.7x), 거래액 48억 원", "투자자: 외국인 +22,000, 기관 -8,000"],
-        criteria: ["설정: 20일/60일 이동평균 돌파, 크로스, 또는 괴리 ±8% 이상", "감지: 신호 20일선 하향 이탈 · 60일선 상향 돌파"]
+        lines: ["이동평균 변화", "현재가: 15만 원", "신호 20일선 하향 이탈 · 60일선 상향 돌파", "추세: 20일선 14만 원보다 4.2% 높음, 60일선 13만 원보다 9.1% 높음", "수급: 거래량 31,000(1.7x), 거래액 48억 원", "투자자: 외국인 +22,000, 기관 -8,000"],
+        criteria: ["설정: 20일/60일 이동평균 돌파, 크로스, 또는 현재가가 이동평균보다 8% 이상 높거나 낮을 때", "감지: 신호 20일선 하향 이탈 · 60일선 상향 돌파"]
       },
       monitorCashChange: {
         title: "현금비중",
@@ -4357,7 +4357,7 @@
     } else if (!currentPrice) {
       reasons.push("현재가가 필요합니다.");
     } else {
-      reasons.push("적정가 " + formatPrice(fairValue, item.currency) + " 대비 " + signedPct(gap) + " 괴리입니다.");
+      reasons.push("적정가 " + formatPrice(fairValue, item.currency) + "와 현재가 차이는 " + signedPct(gap) + "입니다.");
       reasons.push("안전마진 " + margin + "% 기준 매수가 상한은 " + formatPrice(marginPrice, item.currency) + "입니다.");
     }
     return {
@@ -4808,7 +4808,7 @@
         label: "현재가",
         value: diagnosticCoverage(total, missingPrice.length),
         tone: diagnosticTone(missingPrice.length, total),
-        description: "현재가가 있어야 적정가 괴리와 가격 기준을 계산합니다.",
+        description: "현재가가 있어야 적정가와 현재가 차이, 가격 기준을 계산합니다.",
         symbols: missingPrice,
         action: "Toss prices/candles 응답 또는 종목 코드 확인"
       },
@@ -4930,7 +4930,7 @@
       notes.push("매수·매도 압력이 비슷해 가격 기준 도달 여부를 먼저 봅니다.");
     }
     if (valuation.status) {
-      notes.push("가치 분류는 " + valuation.status + "이고 적정가 괴리는 " + (valuation.fairValue ? signedPct(valuation.gap) : "-") + "입니다.");
+      notes.push("가치 분류는 " + valuation.status + "이고 적정가와 현재가 차이는 " + (valuation.fairValue ? signedPct(valuation.gap) : "-") + "입니다.");
     } else {
       notes.push("EPS와 목표 PER을 입력하면 적정가·안전마진 기준이 계산됩니다.");
     }
@@ -8155,7 +8155,7 @@
     var direction = gap >= 0 ? "적정가보다 낮게 거래되어 싸게 보는 쪽" : "적정가보다 높게 거래되어 비싸게 보는 쪽";
     return item.name + " 예시: 현재가 " + formatPrice(item.currentPrice, item.currency)
       + ", 적정가 " + formatPrice(valuation.fairValue, item.currency)
-      + "입니다. 괴리율 " + signedPct(gap) + "라 " + direction + "입니다.";
+      + "입니다. 적정가와 현재가 차이가 " + signedPct(gap) + "라 " + direction + "입니다.";
   }
 
   function tradeStrengthBeginnerText(item, variables) {
@@ -9770,8 +9770,8 @@
       ["profitLossRate", "평단 대비 손익률"],
       ["volumeRatio", "거래량 배율"],
       ["tradeStrength", "체결강도"],
-      ["ma20Distance", "20일선 괴리"],
-      ["ma60Distance", "60일선 괴리"],
+      ["ma20Distance", "20일선과 현재가 차이"],
+      ["ma60Distance", "60일선과 현재가 차이"],
       ["foreignNetVolume", "외국인 순매수"],
       ["institutionNetVolume", "기관 순매수"],
       ["sectorRatio", "업종 비중"],
@@ -10006,8 +10006,8 @@
       ["거래량", formatSignalRatio(variables.volumeRatio)],
       ["방향성 거래량", signedNumber(variables.directionalVolumePressure)],
       ["흐름 방향", signedNumber(variables.flowDirectionScore)],
-      ["20일 괴리", formatSignalNumber(variables.trendDistance20, "%")],
-      ["60일 괴리", formatSignalNumber(variables.trendDistance60, "%")],
+      ["20일선 차이", formatSignalNumber(variables.trendDistance20, "%")],
+      ["60일선 차이", formatSignalNumber(variables.trendDistance60, "%")],
       ["외국인", formatSignalVolume(signal.foreignNet)],
       ["기관", formatSignalVolume(signal.institutionNet)],
       ["개인", formatSignalVolume(signal.individualNet)],
@@ -10307,8 +10307,8 @@
       ["flowDirectionScore", "체결, 비중, 호가, 가격, 추세, 투자자 수급의 합성 방향"],
       ["ma20", "20일 이동평균"],
       ["ma60", "60일 이동평균"],
-      ["trendDistance20", "20일선 대비 괴리"],
-      ["trendDistance60", "60일선 대비 괴리"],
+      ["trendDistance20", "20일선과 현재가 차이"],
+      ["trendDistance60", "60일선과 현재가 차이"],
       ["maSpread", "20일선과 60일선의 간격"],
       ["trendScore", "이동평균 추세 점수"],
       ["foreignNet", "외국인 순매수"],
@@ -10322,7 +10322,7 @@
       ["targetReturn", "목표 수익률"],
       ["stopLoss", "허용 손절률"],
       ["positionSize", "비중 계획"],
-      ["fairValueGap", "적정가 대비 괴리"],
+      ["fairValueGap", "적정가와 현재가 차이"],
       ["undervalueBonus", "저평가 보너스"],
       ["expensivePenalty", "고평가/매도 보너스"],
       ["profitLossRate", "보유 수익률"],
@@ -10447,7 +10447,7 @@
       ["거래량 배율", "평균 대비 거래량이 커질수록 신호 영향은 커지지만 방향은 별도로 확인"],
       ["매수/매도량", "실제 체결 방향의 비중으로 매수·매도 압력 분리"],
       ["거래량 방향성", "거래량 급증이 매수비중, 호가, 가격, 추세와 같은 방향일 때만 강한 신호로 처리"],
-      ["이동평균", "20일·60일선 대비 괴리와 두 이동평균의 간격으로 추세 확인"],
+      ["이동평균", "현재가와 20일·60일선 차이, 두 이동평균의 간격으로 추세 확인"],
       ["투자자별 수급", "외국인·기관·개인의 순매수 균형을 점수화해 수급 반복성을 검증"],
       ["정규화", "서로 단위가 다른 값을 제한된 점수 범위로 바꾼 뒤 합산"],
       ["호가 불균형", "매수잔량 우위는 양수, 매도잔량 우위는 음수로 입력"],
@@ -10462,7 +10462,7 @@
       ["priceChangeRate", "가격 변화율"],
       ["trendScore", "이동평균 추세 점수"],
       ["investorFlowScore", "투자자별 수급 점수"],
-      ["fairValueGap", "적정가 대비 괴리율"],
+      ["fairValueGap", "적정가와 현재가 차이"],
       ["undervalueBonus", "저평가 보너스"],
       ["expensivePenalty", "고평가 감점"],
       ["flowWeight", "수급 가중치"],
@@ -10533,7 +10533,7 @@
       '<span>EPS <strong>' + escapeHtml(item.eps || "-") + '</strong></span>',
       '<span>목표 PER <strong>' + escapeHtml(item.targetPer || "-") + '</strong></span>',
       '<span>적정가 <strong>' + escapeHtml(hasValue ? formatPrice(item.fairValue, item.currency) : "-") + '</strong></span>',
-      '<span>괴리 <strong>' + escapeHtml(hasValue ? signedPct(item.gap) : "-") + '</strong></span>',
+      '<span>차이 <strong>' + escapeHtml(hasValue ? signedPct(item.gap) : "-") + '</strong></span>',
       '</div>',
       '<div class="exit-reasons">',
       item.reasons.map(function (reason) {

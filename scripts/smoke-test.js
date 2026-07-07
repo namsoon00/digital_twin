@@ -177,10 +177,10 @@ function checkFrontendAdminRender() {
   const designSystemDoc = fs.readFileSync(path.join(rootDir, "docs", "design-system.md"), "utf8");
   assertOk(styles.indexOf("--ds-color-bg") >= 0, "전역 디자인 시스템 색상 토큰이 없습니다.");
   assertOk(styles.indexOf("--ds-color-on-action") >= 0, "주요 액션 텍스트 토큰이 없습니다.");
-  assertOk(styles.indexOf("--ds-color-bg: #edf2f7") >= 0, "전통 금융 콘솔 배경 토큰이 적용되지 않았습니다.");
-  assertOk(styles.indexOf("--ds-color-action: #1f5eff") >= 0, "Orbit Alpha 액션 블루 토큰이 적용되지 않았습니다.");
-  assertOk(styles.indexOf("--ds-color-orbit-line: #3f6fd8") >= 0, "Orbit Alpha 궤도 라인 토큰이 적용되지 않았습니다.");
-  assertOk(styles.indexOf("--ds-color-orbit-signal: #008a63") >= 0, "Orbit Alpha 시그널 그린 토큰이 적용되지 않았습니다.");
+  assertOk(styles.indexOf("--ds-color-bg: #f3f5f8") >= 0, "기관형 금융 콘솔 배경 토큰이 적용되지 않았습니다.");
+  assertOk(styles.indexOf("--ds-color-action: #1457a8") >= 0, "기관형 액션 블루 토큰이 적용되지 않았습니다.");
+  assertOk(styles.indexOf("--ds-color-orbit-line: #2f6fbb") >= 0, "기관형 신호 라인 토큰이 적용되지 않았습니다.");
+  assertOk(styles.indexOf("--ds-color-orbit-signal: #137a63") >= 0, "기관형 시그널 그린 토큰이 적용되지 않았습니다.");
   assertOk(styles.indexOf("--surface: var(--ds-color-panel-soft)") >= 0, "보조 표면 alias가 없습니다.");
   assertOk(styles.indexOf("--ds-control-height-md") >= 0, "전역 컨트롤 높이 토큰이 없습니다.");
   assertOk(styles.indexOf("--ds-page-gap") >= 0 && styles.indexOf("--ds-row-pad-x") >= 0, "전역 레이아웃 간격 토큰이 없습니다.");
@@ -219,15 +219,15 @@ function checkFrontendAdminRender() {
   assertOk(code.indexOf("settingsHasPendingChanges") >= 0 && code.indexOf("refreshSettingsSaveControls") >= 0, "설정 저장 버튼의 상태형 갱신 로직이 없습니다.");
   assertOk(/@media \(max-width: 860px\)[\s\S]*\.account-watchlist-workbench[\s\S]*grid-template-columns: 1fr;/.test(styles), "모바일 관심종목 워크벤치가 1열로 접히지 않습니다.");
   assertOk(/@media \(max-width: 860px\)[\s\S]*\.watch-account-row \.chip-row[\s\S]*justify-content: flex-start;/.test(styles), "모바일 관심종목 계정 칩 정렬이 왼쪽 기준이 아닙니다.");
-  assertOk(designSystemDoc.indexOf("Institutional Finance Tone") >= 0, "디자인 시스템 문서에 전통 금융앱 룩앤필 기준이 없습니다.");
+  assertOk(designSystemDoc.indexOf("Institutional Ledger Tone") >= 0, "디자인 시스템 문서에 기관형 금융앱 룩앤필 기준이 없습니다.");
   assertOk(designSystemDoc.indexOf("Spacing Rhythm") >= 0 && designSystemDoc.indexOf("padding: 12px 0") >= 0, "디자인 시스템 문서에 화면 간격 정책이 없습니다.");
   assertOk(designSystemDoc.indexOf("모바일에서 보기 좋은 카드형 반복 UI도 PC에서는 그대로 키우지 않는다") >= 0, "디자인 시스템 문서에 PC 반복 UI 전환 원칙이 없습니다.");
   assertOk(designSystemDoc.indexOf("구획이 정확한 행과 셀") >= 0 && designSystemDoc.indexOf("Desktop list row") >= 0, "디자인 시스템 문서에 PC 카드/리스트 구획 정책이 없습니다.");
   assertOk(code.indexOf('appBrandName = "Orbit Alpha"') >= 0, "Orbit Alpha 브랜드명이 앱에 적용되지 않았습니다.");
   assertOk(indexHtml.indexOf("<title>Orbit Alpha</title>") >= 0 && indexHtml.indexOf("favicon.svg") >= 0, "Orbit Alpha 문서 제목 또는 파비콘 링크가 없습니다.");
-  assertOk(styles.indexOf(".app-brand-mark") >= 0 && styles.indexOf("--ds-color-orbit-line") >= 0, "Orbit Alpha 궤도형 브랜드 마크 규칙이 없습니다.");
+  assertOk(styles.indexOf(".app-brand-mark") >= 0 && styles.indexOf("--ds-color-orbit-line") >= 0, "Orbit Alpha 신호형 브랜드 마크 규칙이 없습니다.");
   assertOk(fs.existsSync(path.join(rootDir, "public", "favicon.svg")), "Orbit Alpha SVG 파비콘이 없습니다.");
-  assertOk(designSystemDoc.indexOf("#EDF2F7") >= 0 && designSystemDoc.indexOf("Relation Matrix") >= 0, "디자인 시스템 문서에 전통 금융 콘솔 팔레트나 관계 UI 기준이 없습니다.");
+  assertOk(designSystemDoc.indexOf("#F3F5F8") >= 0 && designSystemDoc.indexOf("Relation Matrix") >= 0, "디자인 시스템 문서에 기관형 금융 콘솔 팔레트나 관계 UI 기준이 없습니다.");
   assertOk(designSystemDoc.indexOf("Page Contracts") >= 0, "디자인 시스템 문서에 페이지별 UI 계약이 없습니다.");
   assertOk(designSystemDoc.indexOf("12컬럼") >= 0 && designSystemDoc.indexOf("8컬럼") >= 0, "디자인 시스템 문서에 PC/태블릿 컬럼 기준이 없습니다.");
   assertOk(designSystemDoc.indexOf("Button Placement") >= 0, "디자인 시스템 문서에 버튼 위치 정책이 없습니다.");
@@ -1628,7 +1628,7 @@ async function checkNormalMode(port, context) {
   const adminPreview = await request(port, "/admin/");
   assertOk(adminPreview.statusCode === 200, "Python admin preview 응답 코드가 200이 아닙니다: " + adminPreview.statusCode);
   assertOk(adminPreview.body.indexOf("Orbit Alpha Python Admin") >= 0, "Python admin preview 제목이 없습니다.");
-  assertOk(adminPreview.body.indexOf("--ds-color-bg: #edf2f7") >= 0 && adminPreview.body.indexOf("--ds-color-action: #1f5eff") >= 0, "Python admin preview에 Orbit Alpha 팔레트가 적용되지 않았습니다.");
+  assertOk(adminPreview.body.indexOf("--ds-color-bg: #f3f5f8") >= 0 && adminPreview.body.indexOf("--ds-color-action: #1457a8") >= 0, "Python admin preview에 기관형 금융 팔레트가 적용되지 않았습니다.");
 
   const adminConfig = await request(port, "/admin/config.json");
   assertOk(adminConfig.statusCode === 200, "Python admin config 응답 코드가 200이 아닙니다: " + adminConfig.statusCode);

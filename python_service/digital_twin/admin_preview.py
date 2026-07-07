@@ -551,23 +551,23 @@ def render_admin_html(payload: Dict[str, object]) -> str:
     <style>
       :root {{
         color-scheme: light;
-        --ds-color-bg: #edf2f7;
+        --ds-color-bg: #f3f5f8;
         --ds-color-panel: #ffffff;
-        --ds-color-panel-soft: #f7f9fc;
-        --ds-color-ink: #111827;
-        --ds-color-muted: #5f6f84;
-        --ds-color-line: #cbd6e3;
-        --ds-color-positive: #008a63;
-        --ds-color-positive-soft: #e0f5ed;
-        --ds-color-action: #1f5eff;
-        --ds-color-action-soft: #e4ecff;
-        --ds-color-warning: #b86b00;
-        --ds-color-warning-soft: #fff0d5;
-        --ds-color-orbit-line: #3f6fd8;
-        --ds-color-orbit-glow: rgba(31, 94, 255, 0.08);
-        --ds-radius-control: 8px;
-        --ds-radius-panel: 8px;
-        --ds-shadow-panel: 0 8px 28px rgba(25, 31, 40, 0.06);
+        --ds-color-panel-soft: #f8fafc;
+        --ds-color-ink: #101820;
+        --ds-color-muted: #5d6675;
+        --ds-color-line: #d5dbe5;
+        --ds-color-positive: #137a63;
+        --ds-color-positive-soft: #e8f4ef;
+        --ds-color-action: #1457a8;
+        --ds-color-action-soft: #e8f1fb;
+        --ds-color-warning: #946200;
+        --ds-color-warning-soft: #fff4df;
+        --ds-color-orbit-line: #2f6fbb;
+        --ds-color-orbit-glow: rgba(20, 87, 168, 0.12);
+        --ds-radius-control: 6px;
+        --ds-radius-panel: 6px;
+        --ds-shadow-panel: none;
         --bg: var(--ds-color-bg);
         --surface: var(--ds-color-panel);
         --surface-soft: var(--ds-color-panel-soft);
@@ -583,7 +583,7 @@ def render_admin_html(payload: Dict[str, object]) -> str:
         margin: 0;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
         color: var(--text);
-        background: linear-gradient(180deg, #f7f9fc 0, var(--bg) 260px, #e9eef5 100%);
+        background: linear-gradient(180deg, #f7f9fc 0, var(--bg) 240px, #eef2f6 100%);
         line-height: 1.5;
         letter-spacing: 0;
       }}

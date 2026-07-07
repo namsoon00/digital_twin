@@ -357,6 +357,8 @@ def settings_status_payload() -> Dict[str, object]:
         "kisMarketSignalMaxSymbols",
         "kisMarketSignalCacheMinutes",
         "kisMarketSignalGapSeconds",
+        "kisMarketSignalPreferLiveDuringMarketHours",
+        "kisMarketSignalLiveRefreshSeconds",
         "notifyProvider",
         "notifyLinkUrl",
         "notifyIntervalMinutes",

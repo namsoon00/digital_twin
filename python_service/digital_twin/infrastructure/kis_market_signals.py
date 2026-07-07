@@ -13,6 +13,7 @@ from .settings import runtime_settings
 from .sqlite_monitoring import SQLiteMarketQuoteCache
 
 
+KST = timezone(timedelta(hours=9))
 KIS_CACHE_PROVIDER = "kis"
 KIS_CACHE_ACCOUNT_ID = "__market_signals__"
 PRICE_PATH = "/uapi/domestic-stock/v1/quotations/inquire-price"
@@ -171,11 +172,13 @@ class KISMarketSignalProvider:
         quote_cache: SQLiteMarketQuoteCache = None,
         fetch_json: JsonFetcher = None,
         sleep: Callable[[float], None] = None,
+        now_provider: Callable[[], datetime] = None,
     ):
         self.settings = settings or runtime_settings()
         self.quote_cache = quote_cache if quote_cache is not None else SQLiteMarketQuoteCache()
         self.fetch_json = fetch_json or kis_http_json
         self.sleep = sleep or time.sleep
+        self.now_provider = now_provider or (lambda: datetime.now(timezone.utc))
         self.base_url = str(self.settings.get("kisBaseUrl") or "").rstrip("/")
         self.app_key = str(self.settings.get("kisAppKey") or "").strip()
         self.app_secret = str(self.settings.get("kisAppSecret") or "").strip()
@@ -220,6 +223,31 @@ class KISMarketSignalProvider:
 
     def cache_minutes(self) -> int:
         return self.int_setting("kisMarketSignalCacheMinutes", 10, 1, 1440)
+
+    def bool_setting(self, key: str, fallback: bool = False) -> bool:
+        value = self.settings.get(key)
+        if value in (None, ""):
+            return fallback
+        return str(value).strip().lower() not in {"0", "false", "no", "off", "disabled"}
+
+    def prefer_live_during_market_hours(self) -> bool:
+        return self.bool_setting("kisMarketSignalPreferLiveDuringMarketHours", True)
+
+    def live_refresh_seconds(self) -> int:
+        return self.int_setting("kisMarketSignalLiveRefreshSeconds", 60, 0, 3600)
+
+    def now(self) -> datetime:
+        value = self.now_provider()
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value
+
+    def is_kr_regular_market_hours(self) -> bool:
+        now = self.now().astimezone(KST)
+        if now.weekday() >= 5:
+            return False
+        minutes = now.hour * 60 + now.minute
+        return 9 * 60 <= minutes <= 15 * 60 + 30
 
     def max_symbols(self) -> int:
         return self.int_setting("kisMarketSignalMaxSymbols", 20, 1, 200)
@@ -341,7 +369,13 @@ class KISMarketSignalProvider:
         updated_at = parse_iso(payload.get("updatedAt"))
         if not updated_at:
             return False
-        return datetime.now(timezone.utc) - updated_at < timedelta(minutes=self.cache_minutes())
+        return self.now() - updated_at < timedelta(minutes=self.cache_minutes())
+
+    def cache_age_seconds(self, payload: Dict[str, object]) -> Optional[float]:
+        updated_at = parse_iso(payload.get("updatedAt") if payload else "")
+        if not updated_at:
+            return None
+        return max(0.0, (self.now() - updated_at).total_seconds())
 
     def is_signal_complete(self, payload: Dict[str, object]) -> bool:
         if not payload:
@@ -349,6 +383,14 @@ class KISMarketSignalProvider:
         has_detail = any(key in payload and payload.get(key) not in (None, "") for key in DETAIL_SIGNAL_KEYS)
         has_investor = any(key in payload and payload.get(key) not in (None, "") for key in INVESTOR_SIGNAL_KEYS)
         return has_detail and has_investor
+
+    def should_use_cached_signal(self, payload: Dict[str, object]) -> bool:
+        if not self.is_cache_fresh(payload) or not self.is_signal_complete(payload):
+            return False
+        if not (self.configured() and self.prefer_live_during_market_hours() and self.is_kr_regular_market_hours()):
+            return True
+        age_seconds = self.cache_age_seconds(payload)
+        return age_seconds is not None and age_seconds <= self.live_refresh_seconds()
 
     def save_signal(self, symbol: str, payload: Dict[str, object]) -> None:
         try:
@@ -452,13 +494,15 @@ class KISMarketSignalProvider:
         stale_symbols: List[Tuple[str, Dict[str, object]]] = []
         for symbol in symbols:
             cached = self.cached_signal(symbol)
-            if self.is_cache_fresh(cached) and self.is_signal_complete(cached):
+            if self.should_use_cached_signal(cached):
                 cached = dict(cached)
                 cached["dataQuality"] = cached.get("dataQuality") or "cached"
                 signals[symbol] = cached
                 self.diagnostics["cached"] = int(self.diagnostics.get("cached") or 0) + 1
             else:
                 if self.is_cache_fresh(cached) and cached:
+                    if self.is_signal_complete(cached) and self.configured() and self.prefer_live_during_market_hours() and self.is_kr_regular_market_hours():
+                        self.diagnostics["livePreferred"] = int(self.diagnostics.get("livePreferred") or 0) + 1
                     self.diagnostics["partialCached"] = int(self.diagnostics.get("partialCached") or 0) + 1
                 stale_symbols.append((symbol, cached))
 

@@ -482,6 +482,7 @@
     { key: "externalMacroRateDeltaBp", label: "거시 금리 변화", unit: "bp", step: "1" }
   ];
   var settingsMemoryStore = "";
+  var snapshotMemoryStore = "";
   var labDraftsMemoryStore = "";
   var labRecordsMemoryStore = "";
   var modelVersionsMemoryStore = "";
@@ -496,11 +497,13 @@
   var appNavLastScrollY = 0;
   var appNavHidden = false;
   var appNavScrollTicking = false;
+  var cachedSnapshot = loadCachedSnapshot();
   var state = {
-    loading: true,
+    loading: !cachedSnapshot,
     refreshing: false,
     error: "",
-    snapshot: null,
+    snapshot: cachedSnapshot,
+    snapshotFromCache: Boolean(cachedSnapshot),
     feed: null,
     feedLoading: false,
     feedError: "",
@@ -616,6 +619,50 @@
         return payload;
       });
     });
+  }
+
+  function loadCachedSnapshot() {
+    var raw = readSessionPayload("orbitAlphaLastSnapshot", snapshotMemoryStore);
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw);
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function writeCachedSnapshot(snapshot) {
+    if (!snapshot || typeof snapshot !== "object") return false;
+    try {
+      var payload = JSON.stringify(snapshot);
+      snapshotMemoryStore = payload;
+      return writeSessionPayload("orbitAlphaLastSnapshot", payload);
+    } catch (error) {
+      return false;
+    }
+  }
+
+  function readSessionPayload(key, fallback) {
+    try {
+      if (window.sessionStorage) {
+        var value = window.sessionStorage.getItem(key);
+        return value == null ? fallback : value;
+      }
+    } catch (error) {
+      return fallback;
+    }
+    return fallback;
+  }
+
+  function writeSessionPayload(key, payload) {
+    try {
+      if (window.sessionStorage) {
+        window.sessionStorage.setItem(key, payload);
+      }
+      return true;
+    } catch (error) {
+      return false;
+    }
   }
 
   function sendJson(path, method, payload) {
@@ -5975,7 +6022,9 @@
     return loadPromise
       .then(function (snapshot) {
         state.snapshot = snapshot;
+        state.snapshotFromCache = false;
         state.error = "";
+        writeCachedSnapshot(snapshot);
       })
       .catch(function (error) {
         state.error = error.message;
@@ -6095,8 +6144,9 @@
       '<h1>' + escapeHtml(tab.label || "홈") + '</h1>',
       '<p class="subtle">' + escapeHtml(subtitle) + '</p>',
       '</div>',
+      renderTopbarSyncState(),
       '</section>',
-      renderDeskbar(snapshot, modeLabel, modeClass),
+      renderDeskbar(snapshot, modeLabel, modeClass, shouldRenderFullDeskbar()),
       '<section class="workspace-layout">',
       renderTabs(),
       '<div class="workspace-main" data-scroll-key="' + escapeHtml(activeScrollKey()) + '">',
@@ -6108,7 +6158,36 @@
     ].join("");
   }
 
-  function renderDeskbar(snapshot, modeLabel, modeClass) {
+  function renderTopbarSyncState() {
+    if (state.refreshing) {
+      return [
+        '<div class="toolbar topbar-actions">',
+        '<span class="status-pill demo">백그라운드 동기화 중</span>',
+        '</div>'
+      ].join("");
+    }
+    if (state.snapshotFromCache) {
+      return [
+        '<div class="toolbar topbar-actions">',
+        '<span class="status-pill mock">직전 화면 유지</span>',
+        '</div>'
+      ].join("");
+    }
+    if (state.error && state.snapshot) {
+      return [
+        '<div class="toolbar topbar-actions">',
+        '<span class="status-pill demo">갱신 확인 필요</span>',
+        '</div>'
+      ].join("");
+    }
+    return "";
+  }
+
+  function shouldRenderFullDeskbar() {
+    return state.activeTab === "overview" || state.activeTab === "monitoring";
+  }
+
+  function renderDeskbar(snapshot, modeLabel, modeClass, full) {
     var portfolio = snapshot.portfolio || {};
     var toss = snapshot.toss || {};
     var positions = Array.isArray(toss.positions) ? toss.positions.filter(function (item) {
@@ -6124,8 +6203,17 @@
     var abox = strategy.abox || {};
     var tbox = strategy.tbox || {};
     var relationCount = Number(abox.relationCount || strategy.relationCount || 0);
+    if (!full) {
+      return [
+        '<section class="deskbar deskbar-compact" aria-label="운영 상태 요약">',
+        renderDeskbarCell("Data", modeLabel, "Last " + formatClock(snapshot.generatedAt), modeClass),
+        renderDeskbarCell("Portfolio", formatMoney(portfolio.total || 0), positions + " positions", "neutral"),
+        renderDeskbarCell("Alerts", enabledRules + "/" + alertRuleCatalog.length, state.realtime.connected ? "WebSocket live" : "HTTP polling", state.realtime.connected ? "live" : "demo"),
+        '</section>'
+      ].join("");
+    }
     return [
-      '<section class="deskbar" aria-label="운영 상태 요약">',
+      '<section class="deskbar deskbar-full" aria-label="운영 상태 요약">',
       renderDeskbarCell("Data", modeLabel, "Last " + formatClock(snapshot.generatedAt), modeClass),
       renderDeskbarCell("Portfolio", formatMoney(portfolio.total || 0), positions + " positions", "neutral"),
       renderDeskbarCell("Model", settingValue("modelName") || defaultSettings.modelName, "Buy " + Math.round(thresholds.modelBuy || 0) + " · Sell " + Math.round(thresholds.modelSell || 0), "neutral"),
@@ -12778,7 +12866,27 @@
 
   applyAppTheme();
   connectRealtime();
-  Promise.all([loadServerSettings(), loadServiceAccounts(), loadNotificationTemplates(), loadNotificationRules(), loadNotificationJobs(), loadNotificationSchedules(), loadSymbolUniverse()]).finally(function () {
+  render();
+  var snapshotPrerequisites = [loadServerSettings(), loadServiceAccounts()];
+  var supportingBootstrapTasks = [
+    loadNotificationTemplates(),
+    loadNotificationRules(),
+    loadNotificationJobs(),
+    loadNotificationSchedules(),
+    loadSymbolUniverse()
+  ];
+  Promise.all(snapshotPrerequisites.map(function (task) {
+    return task.catch(function () {
+      return null;
+    });
+  })).finally(function () {
     load();
+  });
+  Promise.all(supportingBootstrapTasks.map(function (task) {
+    return task.catch(function () {
+      return null;
+    });
+  })).finally(function () {
+    if (state.snapshot) render();
   });
 }());

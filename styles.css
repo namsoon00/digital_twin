@@ -372,6 +372,35 @@ h3 {
   color: var(--amber);
 }
 
+.deskbar.deskbar-full {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.deskbar.deskbar-compact {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.deskbar-compact .deskbar-cell {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  align-content: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 8px 12px;
+}
+
+.deskbar-compact .deskbar-cell em {
+  min-width: 58px;
+}
+
+.deskbar-compact .deskbar-cell strong {
+  font-size: 13px;
+}
+
+.deskbar-compact .deskbar-cell span {
+  display: none;
+}
+
 .app-nav {
   position: sticky;
   top: 24px;
@@ -7635,6 +7664,10 @@ h3 {
     grid-row: auto;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     margin-bottom: var(--ds-section-gap);
+  }
+
+  .deskbar.deskbar-full {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .deskbar-cell:nth-child(2n + 1) {

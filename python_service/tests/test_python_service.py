@@ -25,6 +25,7 @@ from digital_twin.cli import build_handoff_message
 from digital_twin.cli import preserve_existing_secrets
 from digital_twin.cli import build_parser
 from digital_twin.domain.accounts import AccountConfig
+from digital_twin.domain.external_signal_quality import attach_external_signal_quality
 from digital_twin.domain.market_data import normalize_position, technical_indicators_from_candles
 from digital_twin.domain.message_types import DEFAULT_ALERT_RULES, DEFAULT_CADENCE, MESSAGE_TYPE_EMOJIS, MESSAGE_TYPE_LABELS, public_message_catalog
 from digital_twin.domain.ontology import OntologyEntity, OntologyRelation, abox_properties, apply_relation_driven_opinions, build_portfolio_ontology, entity_id
@@ -36,7 +37,7 @@ from digital_twin.domain.monitoring import RealtimeMonitor
 from digital_twin.domain.model_review import ModelReviewJob, local_model_review
 from digital_twin.domain.disclosure_analysis import DisclosureAnalysisResult, local_disclosure_analysis
 from digital_twin.domain.notification_templates import NotificationTemplate, alert_context, render_notification
-from digital_twin.domain.notification_rules import apply_market_hours_rule, default_notification_rule, evaluate_notification_rule
+from digital_twin.domain.notification_rules import apply_market_hours_rule, apply_state_cooldown_rule, default_notification_rule, evaluate_notification_rule
 from digital_twin.domain.notifications import NotificationJob
 from digital_twin.domain.parsing import parse_assignments
 from digital_twin.domain.portfolio import AccountSnapshot, AlertEvent, Position, utc_now_iso
@@ -51,7 +52,7 @@ from digital_twin.infrastructure.notifications import TelegramNotifier, send_eve
 from digital_twin.infrastructure.service_factory import flow_lens_snapshot
 from digital_twin.infrastructure.settings import runtime_settings, save_runtime_settings
 from digital_twin.infrastructure.sqlite_model_review import SQLiteModelReviewJobStore
-from digital_twin.infrastructure.sqlite_monitoring import SQLiteEventLog, SQLiteExternalSignalCache, SQLiteMarketQuoteCache, SQLiteMonitorStore
+from digital_twin.infrastructure.sqlite_monitoring import SQLiteEventLog, SQLiteExternalSignalCache, SQLiteMarketQuoteCache, SQLiteMonitorStore, SQLiteOntologyQualitySampleStore
 from digital_twin.infrastructure.sqlite_notifications import SQLiteNotificationJobStore, SQLiteNotificationRuleStore, SQLiteNotificationTemplateStore
 from digital_twin.infrastructure.sqlite_runtime import SQLiteAppStore, SQLiteRuntimeSettingsStore
 from digital_twin.infrastructure.sqlite_symbols import SQLiteSymbolUniverseStore
@@ -1094,6 +1095,23 @@ class PythonServiceTests(unittest.TestCase):
             [semis, platform, watch],
             portfolio,
             legacy_by_symbol={"000660": {"exitPressure": 76, "decisionBasis": "lossCut"}},
+            external_signals=attach_external_signal_quality(
+                {
+                    "fetchedAt": "2026-07-07T21:30:00Z",
+                    "secFilings": {
+                        "AAPL": {
+                            "provider": "SEC EDGAR",
+                            "latestFiling": {"form": "10-Q", "filingDate": "2026-07-01"},
+                            "facts": {"revenue": {"value": 1000, "form": "10-Q"}},
+                        },
+                    },
+                    "newsHeadlines": {"AAPL": {"provider": "GDELT", "items": [{"title": "Apple result", "url": "https://example.test"}], "count": 1}},
+                    "macro": {"series": {"DGS10": {"provider": "FRED", "value": 4.1}}},
+                    "statuses": [{"source": "GDELT News", "ok": True, "message": "ok"}],
+                },
+                [semis, platform, watch],
+                {"externalApiFetchIntervalMinutes": "30", "fredApiKey": "configured"},
+            ),
             portfolio_id="main",
             runtime_context={
                 "settings": {
@@ -1167,6 +1185,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(any(item.kind == "strategy" for item in graph.entities))
         self.assertTrue(any(item.kind == "investment-thesis" for item in graph.entities))
         self.assertTrue(any(item.kind == "signal-horizon" for item in graph.entities))
+        self.assertTrue(any(item.kind == "fx-pair" for item in graph.entities))
+        self.assertTrue(any(item.kind == "fundamental-event" for item in graph.entities))
         self.assertTrue(any(item.kind == "data-pipeline" for item in graph.entities))
         self.assertTrue(any(item.kind == "collection-schedule" for item in graph.entities))
         self.assertTrue(any(item.kind == "reasoning-cycle" for item in graph.entities))
@@ -1181,6 +1201,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(any((item.properties or {}).get("boundedContext") == "strategy-thesis" for item in graph.entities if item.kind == "investment-thesis"))
         self.assertTrue(any((item.properties or {}).get("boundedContext") == "observation-data" for item in graph.entities if item.kind == "price-metric"))
         self.assertTrue(any((item.properties or {}).get("boundedContext") == "strategy-thesis" for item in graph.relations if item.relation_type == "BASED_ON_THESIS"))
+        self.assertTrue(any("CurrencyRisk" in (item.properties or {}).get("tboxClasses", []) for item in graph.entities if item.kind == "risk"))
+        self.assertTrue(any("CorrelationRisk" in (item.properties or {}).get("tboxClasses", []) for item in graph.entities if item.kind == "risk"))
         self.assertTrue(any(item.get("symbol") == "NVDA" for item in payload["reasoningCards"]))
         self.assertTrue(any("strategy-thesis" in item.get("graphContext", {}).get("boundedContexts", []) for item in payload["reasoningCards"]))
         self.assertEqual("investment-ontology-ai-inference-v1", payload["aiInferencePacket"]["contract"])
@@ -1198,6 +1220,12 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("ABox", graph.prompt)
         self.assertTrue(graph.opinion_for_symbol("000660").dominant_risks)
         self.assertTrue(graph.opinion_for_symbol("000660").relation_influences)
+        sample_store = SQLiteOntologyQualitySampleStore(Path(self.temp.name) / "service.db")
+        sample = sample_store.record_graph(graph, source="unit-test")
+        latest_samples = sample_store.latest("main")
+        self.assertGreater(sample.overall_score, 0)
+        self.assertEqual(sample.sample_id, latest_samples[0]["sampleId"])
+        self.assertIn("strategy-thesis", latest_samples[0]["payload"]["boundedContexts"])
 
     def test_new_ontology_relation_can_change_ai_opinion_pressure(self):
         position = normalize_position({
@@ -1253,6 +1281,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("TBox", {row["ontologyBox"] for row in entity_rows})
         self.assertIn("ABox", {row["ontologyBox"] for row in relation_rows})
         self.assertTrue(any("OntologyEntity" in item["statement"] for item in statements))
+        self.assertTrue(any("CREATE CONSTRAINT ontology_entity_id" in item["statement"] for item in repository.schema_statements()))
         self.assertTrue(any("OntologyReasoningCard" in item["statement"] for item in statements))
         self.assertGreater(len(repository.rows_for_reasoning_cards(graph)), 0)
         self.assertTrue(any("MERGE (a)-[r:HOLDS]" in item["statement"] for item in statements))
@@ -2503,6 +2532,57 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(10, DEFAULT_CADENCE["modelBuy"])
         self.assertEqual(10, DEFAULT_CADENCE["modelSell"])
         self.assertEqual(10, DEFAULT_CADENCE["watchlistBuyCandidate"])
+
+    def test_investment_insight_rule_uses_ontology_novelty_for_cooldown_bypass(self):
+        rule = default_notification_rule("investmentInsight")
+        condition_ids = {condition.condition_id for condition in rule.conditions}
+        bypass_ids = {condition.condition_id for condition in rule.similarity_bypass_conditions}
+        self.assertIn("ontology_novelty_score", condition_ids)
+        self.assertIn("insight_type_changed", bypass_ids)
+        self.assertEqual(["messageType", "accountId", "ontologyInsight.subject", "ontologyInsight.insightType"], rule.similarity_fields)
+        job = NotificationJob.create(
+            "관계 인사이트",
+            account_id="main",
+            message_type="investmentInsight",
+            context={
+                "severity": "ALERT",
+                "ontologyInsight": {
+                    "subject": "AAPL",
+                    "insightType": "contradictionDetected",
+                    "score": 72,
+                    "noveltyScore": 82,
+                    "confidence": 74,
+                },
+                "sourceSignalTypes": ["modelSell", "externalDartDisclosure"],
+            },
+        )
+        previous_context = {
+            "severity": "WATCH",
+            "ontologyInsight": {
+                "subject": "AAPL",
+                "insightType": "riskIncrease",
+                "score": 60,
+                "noveltyScore": 64,
+                "confidence": 70,
+            },
+            "sourceSignalTypes": ["modelSell"],
+        }
+        decision = evaluate_notification_rule(job, rule)
+
+        decision = apply_state_cooldown_rule(
+            decision,
+            rule,
+            sent_count=1,
+            previous_score=decision.score,
+            previous_context=previous_context,
+            last_sent_at=utc_now_iso(),
+            last_sent_age_minutes=5,
+            job=job,
+        )
+
+        self.assertTrue(decision.should_send)
+        self.assertEqual("material_change", decision.state_decision)
+        self.assertTrue(decision.similarity_bypassed)
 
     def test_symbol_universe_parsers_and_store_support_market_catalog(self):
         nasdaq_text = "\n".join([

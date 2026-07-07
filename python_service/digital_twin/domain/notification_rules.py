@@ -154,6 +154,46 @@ def default_state_cooldown_minutes(message_type: str) -> int:
 
 def default_similarity_bypass_conditions(message_type: str) -> List["SimilarityBypassCondition"]:
     key = str(message_type or "")
+    if key == INVESTMENT_INSIGHT:
+        return [
+            SimilarityBypassCondition(
+                "insight_severity_upgrade",
+                "인사이트 등급 상승",
+                "severity_upgrade",
+                description="온톨로지 인사이트 중요도가 올라가면 반복이어도 보냅니다.",
+            ),
+            SimilarityBypassCondition(
+                "insight_type_changed",
+                "인사이트 유형 변경",
+                "field_changed",
+                field="ontologyInsight.insightType",
+                description="위험, 기회, 데이터 품질처럼 의미 분류가 바뀌면 보냅니다.",
+            ),
+            SimilarityBypassCondition(
+                "relation_score_delta",
+                "관계 강도 변화",
+                "abs_number_delta_gte",
+                field="ontologyInsight.score",
+                value=8,
+                description="이전 유사 인사이트보다 관계 강도가 기준점 이상 달라지면 보냅니다.",
+            ),
+            SimilarityBypassCondition(
+                "novelty_score_delta",
+                "신규성 변화",
+                "abs_number_delta_gte",
+                field="ontologyInsight.noveltyScore",
+                value=12,
+                description="관계 신규성이 기준점 이상 달라지면 보냅니다.",
+            ),
+            SimilarityBypassCondition(
+                "new_source_signal",
+                "새 근거 신호 추가",
+                "list_new_items_gte",
+                field="sourceSignalTypes",
+                value=1,
+                description="이전 유사 인사이트에 없던 근거 신호 타입이 추가되면 보냅니다.",
+            ),
+        ]
     if key == "externalEquityMove":
         return [
             SimilarityBypassCondition(
@@ -560,21 +600,35 @@ def default_conditions() -> List[NotificationRuleCondition]:
     ]
 
 
+def ontology_insight_conditions() -> List[NotificationRuleCondition]:
+    return [
+        NotificationRuleCondition("ontology_relation_score", "관계 강도", "context_number_gte", 15, field="ontologyInsight.score", value=55),
+        NotificationRuleCondition("ontology_novelty_score", "관계 신규성", "context_number_gte", 15, field="ontologyInsight.noveltyScore", value=65),
+        NotificationRuleCondition("ontology_confidence", "인사이트 신뢰도", "context_number_gte", 10, field="ontologyInsight.confidence", value=70),
+        NotificationRuleCondition("ontology_source_signals", "근거 신호 묶음", "context_present", 5, field="sourceSignalTypes"),
+    ]
+
+
 def default_notification_rule(message_type: str) -> NotificationRuleConfig:
     key = str(message_type or "notification").strip() or "notification"
+    conditions = [NotificationRuleCondition.from_dict(condition.to_dict()) for condition in default_conditions()]
+    similarity_fields = list(DEFAULT_SIMILARITY_FIELDS)
+    if key == INVESTMENT_INSIGHT:
+        conditions.extend(NotificationRuleCondition.from_dict(condition.to_dict()) for condition in ontology_insight_conditions())
+        similarity_fields = ["messageType", "accountId", "ontologyInsight.subject", "ontologyInsight.insightType"]
     return NotificationRuleConfig(
         message_type=key,
         enabled=True,
         threshold=default_threshold(key),
         base_score=default_base_score(key),
         low_score_action=DEFAULT_LOW_SCORE_ACTION,
-        conditions=[NotificationRuleCondition.from_dict(condition.to_dict()) for condition in default_conditions()],
+        conditions=conditions,
         similarity_enabled=default_similarity_enabled(key),
         similarity_window_minutes=default_similarity_window_minutes(key),
         similarity_penalty=default_similarity_penalty(key),
         similarity_bypass_score_delta=default_similarity_bypass_score_delta(key),
         similarity_bypass_conditions=[SimilarityBypassCondition.from_dict(condition.to_dict()) for condition in default_similarity_bypass_conditions(key)],
-        similarity_fields=list(DEFAULT_SIMILARITY_FIELDS),
+        similarity_fields=similarity_fields,
         state_cooldown_enabled=default_state_cooldown_enabled(key),
         state_cooldown_minutes=default_state_cooldown_minutes(key),
         market_hours_enabled=default_market_hours_enabled(key),
@@ -755,6 +809,22 @@ def similarity_bypass_match(
         previous_rank = severity_rank(field_value(previous_context, target_field))
         if current_rank > previous_rank >= 0:
             return True, label + " " + str(field_value(previous_context, target_field) or "-") + " -> " + str(field_value(context, target_field) or "-")
+        return False, ""
+    if condition_type == "field_changed":
+        current = normalize_fingerprint_part(field_value(context, field))
+        previous = normalize_fingerprint_part(field_value(previous_context, field))
+        if current and previous and current != previous:
+            return True, label + " " + previous + " -> " + current
+        if current and not previous:
+            return True, label + " 신규 " + current
+        return False, ""
+    if condition_type == "list_new_items_gte":
+        current_items = set(normalize_fingerprint_part(item) for item in flattened_strings(field_value(context, field)) if normalize_fingerprint_part(item))
+        previous_items = set(normalize_fingerprint_part(item) for item in flattened_strings(field_value(previous_context, field)) if normalize_fingerprint_part(item))
+        new_items = sorted(current_items - previous_items)
+        minimum = numeric_value(condition.value)
+        if new_items and len(new_items) >= int(minimum or 1):
+            return True, label + " " + ", ".join(new_items[:4])
         return False, ""
     if condition_type in {"abs_number_delta_gte", "number_delta_gte", "number_delta_lte", "number_multiplier_gte"}:
         current = numeric_value(field_value(context, field))

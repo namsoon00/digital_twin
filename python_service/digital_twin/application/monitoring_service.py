@@ -19,6 +19,7 @@ class MonitorRunner:
         event_publisher=None,
         cycle_recorder: MonitoringCycleRecorder = None,
         ontology_repository=None,
+        ontology_quality_store=None,
     ):
         self.accounts = list(accounts)
         self.account_map = {account.account_id: account for account in self.accounts}
@@ -29,6 +30,7 @@ class MonitorRunner:
         self.event_publisher = event_publisher
         self.cycle_recorder = cycle_recorder
         self.ontology_repository = ontology_repository
+        self.ontology_quality_store = ontology_quality_store
 
     def run_once(self, dry_run: bool = False, force: bool = False) -> List[AlertEvent]:
         all_events: List[AlertEvent] = []
@@ -103,6 +105,7 @@ class MonitorRunner:
                 external_signals=snapshot.external_signals,
                 portfolio_id=snapshot.account_id,
                 runtime_context={
+                    "settings": dict(getattr(self.monitor, "settings", {}) or {}),
                     "account": {
                         "accountId": snapshot.account_id,
                         "accountLabel": snapshot.account_label,
@@ -115,6 +118,10 @@ class MonitorRunner:
                 },
             )
             result = self.ontology_repository.save_graph(graph)
+            if self.ontology_quality_store:
+                sample = self.ontology_quality_store.record_graph(graph, source="monitoring")
+                result["qualitySampleId"] = sample.sample_id
+                result["qualityScore"] = sample.overall_score
         except Exception as error:  # noqa: BLE001 - graph persistence must not block monitoring.
             result = {"saved": False, "status": "error", "reason": str(error)[:180]}
         snapshot.metadata.setdefault("ontology", {})["neo4j"] = result

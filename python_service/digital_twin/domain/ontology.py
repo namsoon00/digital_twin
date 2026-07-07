@@ -803,6 +803,60 @@ def add_market_exposure_concepts(graph: PortfolioOntology, portfolio_node_id: st
         add_relation(graph, exposure_id, market_id, "AFFECTS", weight=1.0, properties={"polarity": "context", "aiInfluenceLabel": label + " 시장 노출"})
 
 
+def add_portfolio_factor_exposure_concepts(
+    graph: PortfolioOntology,
+    portfolio_node_id: str,
+    portfolio: PortfolioSummary,
+    observed_positions: List[Position],
+) -> None:
+    total = number(portfolio.total) or number(portfolio.invested)
+    if not total:
+        return
+    currency_exposure: Dict[str, float] = {}
+    raw_position_total = sum(number(position.market_value) for position in observed_positions if is_holding_position(position))
+    sector_positions: Dict[str, int] = {}
+    for position in observed_positions:
+        if not is_holding_position(position):
+            continue
+        currency = str(position.currency or "").upper().strip()
+        sector = str(position.sector or "기타").strip() or "기타"
+        if currency:
+            currency_exposure[currency] = currency_exposure.get(currency, 0.0) + number(position.market_value)
+        sector_positions[sector] = sector_positions.get(sector, 0) + 1
+    for currency, value in sorted(currency_exposure.items()):
+        ratio = (value / raw_position_total) * 100 if raw_position_total else 0.0
+        if currency in {"KRW", ""} or ratio < 10:
+            continue
+        fx_id = add_entity(graph, "fx-pair", "KRW:" + currency, "KRW/" + currency + " 환율 노출", {
+            "tboxClass": "FXPair",
+            "currency": currency,
+            "exposureValue": round(value, 2),
+            "exposureRatio": round(ratio, 2),
+        })
+        risk_id = add_entity(graph, "risk", currency + "-currency-risk", currency + " 통화 리스크", {
+            "tboxClass": "Risk",
+            "tboxClasses": ["Risk", "CurrencyRisk"],
+            "currency": currency,
+            "exposureRatio": round(ratio, 2),
+        })
+        add_relation(graph, portfolio_node_id, fx_id, "HAS_MARKET_EXPOSURE", weight=round(ratio / 100, 4), properties={"source": "currency-exposure", "aiInfluenceLabel": currency + " 환율 노출"})
+        add_relation(graph, portfolio_node_id, risk_id, "EXPOSED_TO", weight=round(ratio / 100, 4), properties={"source": "currency-exposure", "polarity": "context", "aiInfluenceLabel": currency + " 통화 리스크"})
+        add_relation(graph, fx_id, risk_id, "AMPLIFIES_RISK", weight=round(ratio / 100, 4), properties={"source": "currency-exposure", "polarity": "context", "aiInfluenceLabel": currency + " 환율 민감도"})
+    for sector in portfolio.sectors:
+        label = str(sector.get("sector") or "기타")
+        ratio = number(sector.get("ratio"))
+        if ratio < 35 and sector_positions.get(label, 0) < 2:
+            continue
+        risk_id = add_entity(graph, "risk", label + "-correlation-risk", label + " 상관 리스크", {
+            "tboxClass": "Risk",
+            "tboxClasses": ["Risk", "ConcentrationRisk", "CorrelationRisk"],
+            "sector": label,
+            "sectorRatio": round(ratio, 2),
+            "positionCount": sector_positions.get(label, 0),
+        })
+        add_relation(graph, portfolio_node_id, risk_id, "EXPOSED_TO", weight=round(ratio / 100, 4), properties={"source": "sector-correlation", "polarity": "context", "aiInfluenceLabel": label + " 섹터 상관 리스크"})
+
+
 def add_metric_concepts(graph: PortfolioOntology, stock_id: str, position: Position, source: str) -> None:
     symbol = symbol_key(position)
     for field_name, label, tbox_class, relation_type, kind, public_key in METRIC_CONCEPTS:
@@ -1116,7 +1170,10 @@ def add_decision_item_concepts(graph: PortfolioOntology, runtime_context: Dict[s
 def add_external_signal_concepts(graph: PortfolioOntology, portfolio_node_id: str, external_signals: Dict[str, object]) -> None:
     if not isinstance(external_signals, dict):
         return
+    add_external_signal_quality_concepts(graph, portfolio_node_id, external_signals)
     for key, value in sorted(external_signals.items()):
+        if key in {"quality", "freshness", "provenance"}:
+            continue
         signal_id = add_entity(graph, "external-signal", key, str(key), {
             "tboxClass": "ExternalSignal",
             "tboxClasses": external_signal_classes(str(key)),
@@ -1130,6 +1187,45 @@ def add_external_signal_concepts(graph: PortfolioOntology, portfolio_node_id: st
                 properties.update({"polarity": "risk", "opinionImpact": min(12.0, magnitude)})
         add_relation(graph, portfolio_node_id, signal_id, "HAS_EXTERNAL_SIGNAL", weight=1.0, properties=properties)
         add_relation(graph, portfolio_node_id, signal_id, "HAS_OBSERVATION", weight=1.0, properties=properties)
+
+
+def add_external_signal_quality_concepts(graph: PortfolioOntology, portfolio_node_id: str, external_signals: Dict[str, object]) -> None:
+    quality = external_signals.get("quality") if isinstance(external_signals.get("quality"), dict) else {}
+    freshness = external_signals.get("freshness") if isinstance(external_signals.get("freshness"), dict) else {}
+    provenance = external_signals.get("provenance") if isinstance(external_signals.get("provenance"), dict) else {}
+    if quality:
+        quality_id = add_entity(graph, "data-quality", "externalSignals", "외부 신호 품질", {
+            "tboxClass": "DataQuality",
+            "tboxClasses": ["Observation", "DataQuality", "DataQualitySignal", "Provenance"],
+            "qualityScore": number(quality.get("score")),
+            "coverageScore": number(quality.get("coverageScore")),
+            "sourceHealthScore": number(quality.get("sourceHealthScore")),
+            "errorCount": number(quality.get("errorCount")),
+            "symbolCoverage": quality.get("symbolCoverage") if isinstance(quality.get("symbolCoverage"), dict) else {},
+        })
+        relation_props = {"source": "external-signal-quality", "aiInfluenceLabel": "외부 신호 품질"}
+        if number(quality.get("score")) < 60:
+            relation_props.update({"polarity": "risk", "opinionImpact": round((60 - number(quality.get("score"))) * 0.25, 2)})
+        add_relation(graph, portfolio_node_id, quality_id, "HAS_DATA_QUALITY", weight=round(number(quality.get("score")) / 100, 4), properties=relation_props)
+        add_relation(graph, portfolio_node_id, quality_id, "HAS_OBSERVATION", weight=round(number(quality.get("score")) / 100, 4), properties=relation_props)
+    if freshness:
+        freshness_id = add_entity(graph, "data-freshness", "externalSignals-runtime", "외부 신호 신선도", {
+            "tboxClass": "DataFreshness",
+            "fetchedAt": str(freshness.get("fetchedAt") or ""),
+            "ageMinutes": number(freshness.get("ageMinutes")),
+            "status": str(freshness.get("status") or ""),
+        })
+        relation_props = {"source": "external-signal-freshness", "aiInfluenceLabel": "외부 신호 신선도"}
+        if str(freshness.get("status") or "") == "stale":
+            relation_props.update({"polarity": "risk", "opinionImpact": 8.0})
+        add_relation(graph, portfolio_node_id, freshness_id, "HAS_DATA_FRESHNESS", weight=1.0, properties=relation_props)
+    if provenance:
+        provenance_id = add_entity(graph, "provenance", "externalSignals", "외부 신호 출처", {
+            "tboxClass": "Provenance",
+            "sources": list(provenance.get("sources") or [])[:12],
+            "unavailableSources": list(provenance.get("unavailableSources") or [])[:12],
+        })
+        add_relation(graph, portfolio_node_id, provenance_id, "HAS_PROVENANCE", weight=1.0, properties={"source": "external-signal-provenance", "aiInfluenceLabel": "외부 신호 출처"})
 
 
 def symbol_external_signal_items(external_signals: Dict[str, object], symbol: str) -> List[Dict[str, object]]:
@@ -1191,6 +1287,30 @@ def add_symbol_external_signal_concepts(graph: PortfolioOntology, stock_id: str,
             weight=1.0,
             properties=external_signal_relation_properties(group, row.get("value")),
         )
+        add_symbol_fundamental_event_concepts(graph, stock_id, symbol, group, row.get("value"))
+
+
+def add_symbol_fundamental_event_concepts(graph: PortfolioOntology, stock_id: str, symbol: str, group: str, value: object) -> None:
+    if not isinstance(value, dict) or group not in {"secFilings", "dartDisclosures"}:
+        return
+    latest = value.get("latestFiling") if isinstance(value.get("latestFiling"), dict) else {}
+    facts = value.get("facts") if isinstance(value.get("facts"), dict) else {}
+    label = "펀더멘털 이벤트"
+    if group == "dartDisclosures":
+        label = str(value.get("reportName") or "DART 공시 이벤트")
+    elif latest:
+        label = "SEC " + str(latest.get("form") or "filing") + " 이벤트"
+    event_id = add_entity(graph, "fundamental-event", symbol + ":" + group, label, {
+        "tboxClass": "FundamentalObservation",
+        "tboxClasses": ["Observation", "ExternalObservation", "FundamentalObservation", "ExternalSignal", "DisclosureEvent", "EarningsEvent", "ValuationSignal"],
+        "symbol": symbol,
+        "group": group,
+        "provider": str(value.get("provider") or ""),
+        "latestFiling": latest,
+        "facts": facts,
+    })
+    add_relation(graph, stock_id, event_id, "HAS_OBSERVATION", weight=1.0, properties={"source": group, "aiInfluenceLabel": label})
+    add_relation(graph, stock_id, event_id, "HAS_VALUATION", weight=0.7, properties={"source": group, "polarity": "context", "aiInfluenceLabel": label})
 
 
 def build_portfolio_ontology(
@@ -1257,6 +1377,7 @@ def build_portfolio_ontology(
             properties=abox_properties(),
         ))
     add_market_exposure_concepts(graph, portfolio_node_id, portfolio)
+    add_portfolio_factor_exposure_concepts(graph, portfolio_node_id, portfolio, observed_positions)
     add_runtime_setting_concepts(graph, portfolio_node_id, runtime_context)
     add_runtime_metadata_concepts(graph, portfolio_node_id, runtime_context)
     add_operational_world_concepts(graph, portfolio_node_id, runtime_context, observed_positions)
@@ -1484,6 +1605,8 @@ def dedupe_evidence(items: List[OntologyEvidence]) -> List[OntologyEvidence]:
 def relation_influence_score(relation: OntologyRelation) -> (float, float):
     properties = relation.properties or {}
     polarity = str(properties.get("polarity") or properties.get("signalPolarity") or "").lower()
+    if polarity == "context":
+        return 0.0, 0.0
     risk = number(properties.get("opinionImpact") or properties.get("riskImpact") or properties.get("impactScore"))
     support = number(properties.get("supportImpact"))
     if not risk and polarity == "risk":

@@ -48,6 +48,20 @@ class Neo4jOntologyGraphRepository:
             "reason": "Neo4j URI must start with http://, https://, bolt://, or neo4j://.",
         }
 
+    def schema_statements(self) -> List[Dict[str, object]]:
+        statements = [
+            "CREATE CONSTRAINT ontology_entity_id IF NOT EXISTS FOR (n:OntologyEntity) REQUIRE n.id IS UNIQUE",
+            "CREATE CONSTRAINT ontology_evidence_id IF NOT EXISTS FOR (n:OntologyEvidence) REQUIRE n.id IS UNIQUE",
+            "CREATE CONSTRAINT ontology_belief_id IF NOT EXISTS FOR (n:OntologyBelief) REQUIRE n.id IS UNIQUE",
+            "CREATE CONSTRAINT ontology_opinion_id IF NOT EXISTS FOR (n:OntologyOpinion) REQUIRE n.id IS UNIQUE",
+            "CREATE CONSTRAINT ontology_reasoning_card_id IF NOT EXISTS FOR (n:OntologyReasoningCard) REQUIRE n.id IS UNIQUE",
+            "CREATE INDEX ontology_entity_box_kind IF NOT EXISTS FOR (n:OntologyEntity) ON (n.ontologyBox, n.kind)",
+            "CREATE INDEX ontology_entity_updated IF NOT EXISTS FOR (n:OntologyEntity) ON (n.updatedAt)",
+            "CREATE INDEX ontology_opinion_symbol IF NOT EXISTS FOR (n:OntologyOpinion) ON (n.symbol)",
+            "CREATE INDEX ontology_reasoning_card_symbol IF NOT EXISTS FOR (n:OntologyReasoningCard) ON (n.symbol)",
+        ]
+        return [{"statement": statement, "parameters": {}} for statement in statements]
+
     def rows_for_entities(self, graph: PortfolioOntology) -> List[Dict[str, object]]:
         return [
             {
@@ -209,15 +223,24 @@ class Neo4jOntologyGraphRepository:
 
     def save_graph_via_http(self, graph: PortfolioOntology) -> Dict[str, object]:
         endpoint = neo4j_http_endpoint(self.uri, self.database)
-        body = json.dumps({"statements": self.statements(graph)}, ensure_ascii=False).encode("utf-8")
         headers = {"Content-Type": "application/json", "Accept": "application/json"}
         if self.user or self.password:
             token = base64.b64encode((self.user + ":" + self.password).encode("utf-8")).decode("ascii")
             headers["Authorization"] = "Basic " + token
-        request = urllib.request.Request(endpoint, data=body, method="POST", headers=headers)
+
+        schema_prepared = False
+        schema_reason = ""
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
-                payload = json.loads(response.read().decode("utf-8") or "{}")
+            schema_payload = self.post_http_statements(endpoint, headers, self.schema_statements())
+            schema_errors = schema_payload.get("errors") or []
+            schema_prepared = not bool(schema_errors)
+            if schema_errors:
+                schema_reason = json.dumps(schema_errors[:2], ensure_ascii=False)[:300]
+        except Exception as error:  # noqa: BLE001 - schema prep is best effort.
+            schema_reason = str(error)[:180]
+
+        try:
+            payload = self.post_http_statements(endpoint, headers, self.statements(graph))
         except Exception as error:  # noqa: BLE001 - persistence must not break monitoring.
             return {
                 "saved": False,
@@ -239,11 +262,19 @@ class Neo4jOntologyGraphRepository:
         return {
             "saved": True,
             "status": "ok",
+            "schemaPrepared": schema_prepared,
+            "schemaReason": schema_reason,
             "entityCount": len(graph.entities),
             "relationCount": len(graph.relations),
             "evidenceCount": len(graph.evidence),
             "reasoningCardCount": len(getattr(graph, "reasoning_cards", []) or []),
         }
+
+    def post_http_statements(self, endpoint: str, headers: Dict[str, str], statements: List[Dict[str, object]]) -> Dict[str, object]:
+        body = json.dumps({"statements": statements}, ensure_ascii=False).encode("utf-8")
+        request = urllib.request.Request(endpoint, data=body, method="POST", headers=headers)
+        with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+            return json.loads(response.read().decode("utf-8") or "{}")
 
     def save_graph_via_driver(self, graph: PortfolioOntology) -> Dict[str, object]:
         try:
@@ -260,6 +291,14 @@ class Neo4jOntologyGraphRepository:
         try:
             driver = GraphDatabase.driver(self.uri, auth=(self.user, self.password) if self.user or self.password else None)
             with driver.session(database=self.database) as session:
+                schema_prepared = True
+                schema_reason = ""
+                for statement in self.schema_statements():
+                    try:
+                        session.run(statement["statement"], **statement["parameters"])
+                    except Exception as error:  # noqa: BLE001 - schema prep is best effort.
+                        schema_prepared = False
+                        schema_reason = str(error)[:180]
                 for statement in self.statements(graph):
                     session.run(statement["statement"], **statement["parameters"])
             driver.close()
@@ -275,6 +314,8 @@ class Neo4jOntologyGraphRepository:
         return {
             "saved": True,
             "status": "ok",
+            "schemaPrepared": schema_prepared,
+            "schemaReason": schema_reason,
             "entityCount": len(graph.entities),
             "relationCount": len(graph.relations),
             "evidenceCount": len(graph.evidence),

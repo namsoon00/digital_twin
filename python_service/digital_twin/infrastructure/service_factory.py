@@ -25,6 +25,7 @@ from .settings import currency_rates, runtime_settings
 from .sqlite_model_review import SQLiteModelReviewJobStore
 from .sqlite_monitoring import SQLiteMonitorStore
 from .sqlite_monitoring import SQLiteMarketQuoteCache
+from .sqlite_monitoring import SQLiteOntologyQualitySampleStore
 from .sqlite_notifications import SQLiteNotificationJobStore, SQLiteNotificationTemplateStore
 from .sqlite_symbols import SQLiteSymbolUniverseStore
 from .sqlite_accounts import AccountRegistry
@@ -50,6 +51,7 @@ def build_monitor_runner(accounts: Iterable[AccountConfig], event_publisher=None
         event_publisher=event_publisher or monitor_event_bus(),
         cycle_recorder=store,
         ontology_repository=ontology_repository_from_settings(settings),
+        ontology_quality_store=SQLiteOntologyQualitySampleStore(),
     )
 
 

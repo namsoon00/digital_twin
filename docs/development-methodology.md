@@ -26,6 +26,8 @@ Domain:
 - `python_service/digital_twin/domain/portfolio_calculations.py`: portfolio exposure, FX conversion, and summary calculations
 - `python_service/digital_twin/domain/strategy.py`: scoring formulas, strategy feature variables, and position decision rules
 - `python_service/digital_twin/domain/ontology_tbox.py`: bounded-context TBox vocabulary, relation definitions, and ontology reasoning rule catalog
+- `python_service/digital_twin/domain/external_signal_quality.py`: external signal provenance, freshness, source-health, and symbol-coverage scoring
+- `python_service/digital_twin/domain/ontology_quality.py`: AI opinion readiness and ontology graph quality sample metrics
 - `python_service/digital_twin/domain/ontology_rules.py`: ontology relation-rule definitions, deterministic rule matching, missing-data contracts, and AI prompt context
 - `python_service/digital_twin/domain/scoring.py`: reusable scoring signals and fallback vocabularies used by notification and strategy-adjacent scores
 - `python_service/digital_twin/domain/message_types.py`: shared message-type catalog, labels, default alert rules, thresholds, and cadence

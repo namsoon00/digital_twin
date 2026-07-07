@@ -7,6 +7,7 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Dict, Iterable, List
 
+from ..domain.external_signal_quality import attach_external_signal_quality
 from ..domain.market_data import number
 from ..domain.portfolio import Position, utc_now_iso
 from .settings import runtime_settings
@@ -262,7 +263,7 @@ class ExternalSignalProvider:
         self.add_fred(signals)
         self.add_opendart(signals, positions)
         self.add_gdelt_news(signals, positions)
-        return signals
+        return attach_external_signal_quality(signals, positions=positions, settings=self.settings)
 
     def int_setting(self, key: str, fallback: int, minimum: int = 0) -> int:
         raw = self.settings.get(key)

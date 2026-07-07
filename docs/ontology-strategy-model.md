@@ -59,6 +59,34 @@ AI 프롬프트에는 TBox, `boundedContexts`, ABox, operational ontology, reaso
 
 알림은 투자 이벤트 타입별 폴링으로 직접 발송하지 않는다. 기존 `modelBuy`, `holdingTiming`, `externalDartDisclosure` 같은 이벤트는 `investmentInsight.metadata.sourceAlertEvents`의 근거 신호로 남고, 최종 발송은 `Insight -> DISPATCHED_BY -> NotificationDispatch(investmentInsight)` 관계가 담당한다.
 
+## Data Quality And Coverage
+
+외부 신호는 수집 결과에 `quality`, `freshness`, `provenance` 메타를 붙인다. 이 값은 `domain/external_signal_quality.py`에서 계산한다.
+
+- `quality.score`: 심볼 커버리지, 공급자 상태, 에러 수를 합산한 외부 신호 품질 점수.
+- `quality.symbolCoverage`: 현재 보유/관심 종목 중 외부 신호가 연결된 비율.
+- `quality.sourceCoverage`: Alpha Vantage, CoinGecko, FRED, SEC EDGAR, OpenDART, GDELT News별 설정 여부, 수집 건수, 오류 메시지.
+- `freshness`: 외부 신호의 마지막 수집 시각, 나이, stale 여부.
+- `provenance`: 실제로 사용된 공급자와 현재 사용할 수 없는 공급자 목록.
+
+이 메타는 ABox에서 `DataQuality`, `DataFreshness`, `Provenance` 노드로 들어간다. `secFilings`와 `dartDisclosures`는 종목별 `FundamentalObservation`, `DisclosureEvent`, `EarningsEvent`, `ValuationSignal`로도 연결한다. API 키나 공급자 설정이 없는 경우에는 가짜 데이터를 만들지 않고 품질/출처 메타에서 미커버 영역으로 남긴다.
+
+포트폴리오 노출도 ABox에 확장된다.
+
+- 외화 비중이 큰 경우 `FXPair`와 `CurrencyRisk`를 만든다.
+- 섹터 비중 또는 같은 섹터 포지션이 커지면 `CorrelationRisk`와 `ConcentrationRisk`를 만든다.
+- 이 노출은 AI가 투자 가설을 약화하거나 추가 확인할 수 있는 리스크 관계로 읽는다.
+
+## Quality Samples
+
+모니터링 사이클에서 온톨로지 그래프를 만들면 `ontology_ai_opinion_samples` SQLite 테이블에 품질 샘플을 남긴다.
+
+- 전체 점수: 데이터 커버리지, 바운디드 컨텍스트 커버리지, reasoning card 준비도, 관계 밀도.
+- 데이터 공백: reasoning card가 표시한 부족 데이터.
+- 고압력 종목: `ontology_pressure >= 55`인 종목.
+
+이 샘플은 AI 의견 품질을 나중에 회귀 테스트하거나 운영 튜닝할 때 쓰는 로컬 히스토리다. 개인 계좌 데이터가 포함될 수 있으므로 git에 넣지 않는다.
+
 ## Runtime Settings
 
 관계 규칙과 프롬프트는 런타임 설정으로 관리한다.
@@ -82,6 +110,13 @@ NEO4J_TIMEOUT_SECONDS=8
 
 HTTP URI는 Neo4j transactional endpoint로 전송한다. `bolt://` 또는 `neo4j://` URI를 쓰려면 런타임에 `neo4j` Python driver가 설치되어 있어야 한다. 저장 실패는 모니터링 사이클을 막지 않고 snapshot metadata에 결과만 남긴다.
 
+저장소는 그래프 저장 전에 다음 스키마 준비를 best effort로 실행한다.
+
+- `OntologyEntity`, `OntologyEvidence`, `OntologyBelief`, `OntologyOpinion`, `OntologyReasoningCard`의 id 유니크 제약.
+- `OntologyEntity(ontologyBox, kind)`, `OntologyEntity(updatedAt)`, `OntologyOpinion(symbol)`, `OntologyReasoningCard(symbol)` 인덱스.
+
+Neo4j 버전 차이로 스키마 준비가 실패해도 그래프 저장은 계속 시도하며, 결과에는 `schemaPrepared`와 `schemaReason`을 남긴다.
+
 ## AI Prompt Contract
 
 AI에는 다음 데이터를 함께 전달한다.
@@ -104,5 +139,7 @@ AI에는 다음 데이터를 함께 전달한다.
 - 새 AI 설명은 `aiPromptTemplates`와 `aiPromptPolicy`의 계약을 함께 갱신한다.
 - 외부 뉴스, 공시, 매크로 데이터는 먼저 `ExternalSignal` 또는 구체 클래스(`NewsEvent`, `DisclosureEvent`, `MacroIndicator`)의 ABox 관측값으로 만들고, 필요하면 `Evidence`, `Belief`, `Insight`로 파생한다.
 - 새 관계가 AI 의견을 바꿔야 하면 relation properties에 `polarity`, `opinionImpact`, `riskImpact`, `supportImpact`, `aiInfluenceLabel`을 명시한다.
+- 외부 공급자 연동을 새로 추가하면 `domain/external_signal_quality.py`의 `SOURCE_KEYS`와 품질 계산도 함께 갱신한다.
+- AI 의견 품질 지표를 바꾸면 `domain/ontology_quality.py`와 `ontology_ai_opinion_samples` 소비 화면/문서를 같이 갱신한다.
 - 기존 공식 점수를 다시 최종 판단 주체로 올리지 않는다. 공식은 보조 근거로만 둔다.
 - Neo4j 저장 실패가 실시간 알림, snapshot 저장, notification outbox를 막으면 안 된다.

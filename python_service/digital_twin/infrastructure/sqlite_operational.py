@@ -15,6 +15,7 @@ from ..domain.model_review import ModelReviewJob
 from ..domain.notification_rules import DEFAULT_NOTIFICATION_RULES, NotificationRuleConfig, apply_market_hours_rule, apply_similarity_rule, apply_state_cooldown_rule, default_notification_rule, evaluate_notification_rule, notification_fingerprint
 from ..domain.notification_templates import DEFAULT_NOTIFICATION_TEMPLATES, LEGACY_DEFAULT_TEMPLATE, PREVIOUS_DEFAULT_TEMPLATE, NotificationTemplate, alert_context, render_notification
 from ..domain.notifications import NotificationJob
+from ..domain.ontology_quality import OntologyQualitySample, build_ontology_quality_sample
 from ..domain.portfolio import AccountSnapshot, AlertEvent
 from ..domain.repositories import MonitoringCycleRecordResult
 from ..domain.symbol_universe import ListedSymbol, normalize_market, normalize_symbol, utc_now_iso as symbol_utc_now_iso
@@ -184,6 +185,30 @@ class OperationalConnection:
                 )
             """)
             connection.execute("CREATE INDEX IF NOT EXISTS idx_model_review_jobs_status ON model_review_jobs(status, created_at)")
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS ontology_ai_opinion_samples (
+                    sample_id TEXT PRIMARY KEY,
+                    portfolio_id TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    overall_score REAL NOT NULL DEFAULT 0,
+                    data_coverage_score REAL NOT NULL DEFAULT 0,
+                    context_coverage_score REAL NOT NULL DEFAULT 0,
+                    reasoning_readiness_score REAL NOT NULL DEFAULT 0,
+                    relation_density_score REAL NOT NULL DEFAULT 0,
+                    entity_count INTEGER NOT NULL DEFAULT 0,
+                    relation_count INTEGER NOT NULL DEFAULT 0,
+                    evidence_count INTEGER NOT NULL DEFAULT 0,
+                    belief_count INTEGER NOT NULL DEFAULT 0,
+                    opinion_count INTEGER NOT NULL DEFAULT 0,
+                    reasoning_card_count INTEGER NOT NULL DEFAULT 0,
+                    data_gap_count INTEGER NOT NULL DEFAULT 0,
+                    bounded_context_count INTEGER NOT NULL DEFAULT 0,
+                    high_pressure_count INTEGER NOT NULL DEFAULT 0,
+                    payload_json TEXT NOT NULL
+                )
+            """)
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_ontology_quality_portfolio_time ON ontology_ai_opinion_samples(portfolio_id, created_at)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_ontology_quality_score ON ontology_ai_opinion_samples(overall_score, created_at)")
             connection.execute("""
                 CREATE TABLE IF NOT EXISTS notification_jobs (
                     job_id TEXT PRIMARY KEY,
@@ -539,7 +564,7 @@ class SQLiteNotificationRuleStore(OperationalConnection):
                 row = connection.execute(
                     """
                     SELECT threshold, conditions_json, similarity_bypass_conditions_json,
-                        state_cooldown_enabled, state_cooldown_minutes
+                        similarity_fields_json, state_cooldown_enabled, state_cooldown_minutes
                     FROM notification_rules
                     WHERE message_type = ?
                     """,
@@ -584,12 +609,39 @@ class SQLiteNotificationRuleStore(OperationalConnection):
                     for item in configured_conditions
                     if isinstance(item, dict)
                 }
+                existing_rule_condition_ids = {
+                    str(item.get("id") or "")
+                    for item in configured_rule_conditions
+                    if isinstance(item, dict)
+                }
                 missing_conditions = [
                     condition.to_dict()
                     for condition in rule.similarity_bypass_conditions
                     if condition.condition_id and condition.condition_id not in existing_ids
                 ]
                 configured_conditions.extend(missing_conditions)
+                missing_rule_conditions = [
+                    condition.to_dict()
+                    for condition in rule.conditions
+                    if condition.condition_id and condition.condition_id not in existing_rule_condition_ids
+                ]
+                if missing_rule_conditions:
+                    configured_rule_conditions.extend(missing_rule_conditions)
+                    rule_conditions_changed = True
+                try:
+                    configured_similarity_fields = json.loads(row["similarity_fields_json"] or "[]")
+                except json.JSONDecodeError:
+                    configured_similarity_fields = []
+                if not isinstance(configured_similarity_fields, list):
+                    configured_similarity_fields = []
+                similarity_fields_changed = False
+                if (
+                    message_type == "investmentInsight"
+                    and configured_similarity_fields == ["messageType", "accountId", "symbol", "severity", "title"]
+                    and list(rule.similarity_fields or []) != configured_similarity_fields
+                ):
+                    configured_similarity_fields = list(rule.similarity_fields or configured_similarity_fields)
+                    similarity_fields_changed = True
                 threshold = int(row["threshold"] or 0)
                 if message_type == "externalCryptoMove" and threshold == 45:
                     threshold = int(rule.threshold)
@@ -603,6 +655,7 @@ class SQLiteNotificationRuleStore(OperationalConnection):
                 if (
                     not missing_conditions
                     and not rule_conditions_changed
+                    and not similarity_fields_changed
                     and not state_cooldown_changed
                     and int(row["threshold"] or 0) == threshold
                 ):
@@ -610,7 +663,7 @@ class SQLiteNotificationRuleStore(OperationalConnection):
                 connection.execute(
                     """
                     UPDATE notification_rules
-                    SET threshold = ?, conditions_json = ?, similarity_bypass_conditions_json = ?,
+                    SET threshold = ?, conditions_json = ?, similarity_bypass_conditions_json = ?, similarity_fields_json = ?,
                         state_cooldown_enabled = ?, state_cooldown_minutes = ?, updated_at = ?
                     WHERE message_type = ?
                     """,
@@ -618,6 +671,7 @@ class SQLiteNotificationRuleStore(OperationalConnection):
                         threshold,
                         json_dumps(configured_rule_conditions),
                         json_dumps(configured_conditions),
+                        json_dumps(configured_similarity_fields),
                         state_cooldown_enabled,
                         state_cooldown_minutes,
                         stamp,
@@ -849,6 +903,97 @@ class SQLiteExternalSignalCache(OperationalConnection):
                 """,
                 (self.store_id, json_dumps(payload), stamp),
             )
+
+
+class SQLiteOntologyQualitySampleStore(OperationalConnection):
+    def record(self, sample: OntologyQualitySample) -> None:
+        stamp = sample.created_at or utc_now()
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO ontology_ai_opinion_samples (
+                    sample_id, portfolio_id, created_at, overall_score, data_coverage_score,
+                    context_coverage_score, reasoning_readiness_score, relation_density_score,
+                    entity_count, relation_count, evidence_count, belief_count, opinion_count,
+                    reasoning_card_count, data_gap_count, bounded_context_count, high_pressure_count,
+                    payload_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    sample.sample_id,
+                    sample.portfolio_id,
+                    stamp,
+                    float(sample.overall_score or 0),
+                    float(sample.data_coverage_score or 0),
+                    float(sample.context_coverage_score or 0),
+                    float(sample.reasoning_readiness_score or 0),
+                    float(sample.relation_density_score or 0),
+                    int(sample.entity_count or 0),
+                    int(sample.relation_count or 0),
+                    int(sample.evidence_count or 0),
+                    int(sample.belief_count or 0),
+                    int(sample.opinion_count or 0),
+                    int(sample.reasoning_card_count or 0),
+                    int(sample.data_gap_count or 0),
+                    int(sample.bounded_context_count or 0),
+                    int(sample.high_pressure_count or 0),
+                    json_dumps(sample.payload),
+                ),
+            )
+
+    def record_graph(self, graph, source: str = "monitoring") -> OntologyQualitySample:
+        sample = build_ontology_quality_sample(graph, source=source)
+        self.record(sample)
+        return sample
+
+    def latest(self, portfolio_id: str = "", limit: int = 20) -> List[Dict[str, object]]:
+        clauses = []
+        params: List[object] = []
+        if portfolio_id:
+            clauses.append("portfolio_id = ?")
+            params.append(str(portfolio_id))
+        sql = """
+            SELECT sample_id, portfolio_id, created_at, overall_score, data_coverage_score,
+                   context_coverage_score, reasoning_readiness_score, relation_density_score,
+                   entity_count, relation_count, evidence_count, belief_count, opinion_count,
+                   reasoning_card_count, data_gap_count, bounded_context_count, high_pressure_count,
+                   payload_json
+            FROM ontology_ai_opinion_samples
+        """
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY created_at DESC LIMIT ?"
+        params.append(max(1, min(200, int(limit or 20))))
+        with self.connect() as connection:
+            rows = connection.execute(sql, params).fetchall()
+        result = []
+        for row in rows:
+            try:
+                payload = json.loads(row["payload_json"] or "{}")
+            except json.JSONDecodeError:
+                payload = {}
+            result.append({
+                "sampleId": row["sample_id"],
+                "portfolioId": row["portfolio_id"],
+                "createdAt": row["created_at"],
+                "overallScore": row["overall_score"],
+                "dataCoverageScore": row["data_coverage_score"],
+                "contextCoverageScore": row["context_coverage_score"],
+                "reasoningReadinessScore": row["reasoning_readiness_score"],
+                "relationDensityScore": row["relation_density_score"],
+                "entityCount": row["entity_count"],
+                "relationCount": row["relation_count"],
+                "evidenceCount": row["evidence_count"],
+                "beliefCount": row["belief_count"],
+                "opinionCount": row["opinion_count"],
+                "reasoningCardCount": row["reasoning_card_count"],
+                "dataGapCount": row["data_gap_count"],
+                "boundedContextCount": row["bounded_context_count"],
+                "highPressureCount": row["high_pressure_count"],
+                "payload": payload if isinstance(payload, dict) else {},
+            })
+        return result
 
 
 class SQLiteMarketQuoteCache(OperationalConnection):

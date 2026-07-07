@@ -545,7 +545,56 @@ function checkFrontendAdminRender() {
           { symbol: "NVDA", name: "NVIDIA", market: "US", currency: "USD", sector: "반도체", currentPrice: 180 }
         ]
       },
-      tossDecision: { items: [], rules: [], holdingCount: 0, watchCount: 1, overallPressure: 0 },
+      tossDecision: {
+        items: [
+          {
+            symbol: "005930",
+            name: "삼성전자",
+            market: "KR",
+            currency: "KRW",
+            sector: "반도체",
+            source: "holding",
+            exitPressure: 64,
+            ontologyOpinion: {
+              action: "보유",
+              tone: "watch",
+              thesis: "005930 가격과 반도체 업종 관계를 함께 확인합니다.",
+              conviction: 72,
+              ontologyPressure: 64,
+              dominant_risks: ["005930 단기 변동성"],
+              contradictions: ["005930 차익 실현 신호"],
+              supporting_beliefs: ["005930 업종 수요 회복"]
+            }
+          }
+        ],
+        rules: [],
+        holdingCount: 1,
+        watchCount: 1,
+        overallPressure: 64,
+        ontologyStrategy: {
+          worldview: { contradictionCount: 1 },
+          tbox: {
+            classes: ["Portfolio", "Stock", "Sector", "Evidence", "Belief", "Opinion"],
+            relationTypes: ["HOLDS", "BELONGS_TO", "REQUESTS_OPINION_FROM", "HAS_EVIDENCE", "HAS_BELIEF", "HAS_OPINION"],
+            reasoningRules: ["회사 관계 기반 판단 근거 생성"]
+          },
+          abox: { portfolioId: "flow-lens", entityCount: 4, relationCount: 3, beliefCount: 1 },
+          entities: [
+            { id: "portfolio:flow-lens", label: "테스트 포트폴리오", kind: "portfolio", properties: { ontologyBox: "ABox" } },
+            { id: "stock:005930", label: "삼성전자", kind: "stock", properties: { ontologyBox: "ABox", symbol: "005930", sector: "반도체" } },
+            { id: "sector:반도체", label: "반도체", kind: "sector", properties: { ontologyBox: "ABox" } },
+            { id: "concept:ai-investment-review", label: "AI 투자 의견", kind: "ai-review", properties: { ontologyBox: "ABox" } }
+          ],
+          relations: [
+            { source: "portfolio:flow-lens", target: "stock:005930", type: "HOLDS", properties: { ontologyBox: "ABox" } },
+            { source: "stock:005930", target: "sector:반도체", type: "BELONGS_TO", properties: { ontologyBox: "ABox" } },
+            { source: "stock:005930", target: "concept:ai-investment-review", type: "REQUESTS_OPINION_FROM", properties: { ontologyBox: "ABox" } }
+          ],
+          evidence: [{ id: "evidence:005930:trend", subject: "stock:005930", kind: "trend" }],
+          beliefs: [{ id: "belief:005930:risk", subject: "stock:005930", polarity: "risk" }],
+          opinions: [{ symbol: "005930", action: "보유", thesis: "005930은 관계 그래프에서 회사명으로 보여야 합니다.", conviction: 72 }]
+        }
+      },
       portfolio: {
         total: 1394000,
         invested: 144000,
@@ -943,6 +992,8 @@ function checkFrontendAdminRender() {
     assertOk(ontologyHtml.indexOf("규칙 구조 관계 그래프") < 0 && ontologyHtml.indexOf("Relation Rule Registry") < 0 && ontologyHtml.indexOf("테이블 저장 구조") < 0, "관계 분석 개요 탭에 상세 그래프/레지스트리/추적 패널이 섞여 있습니다.");
     assertOk(ontologyGraphHtml.indexOf("규칙 구조 관계 그래프") >= 0 && ontologyGraphHtml.indexOf("현재 데이터 관계 그래프") >= 0 && ontologyGraphHtml.indexOf("ontology-cytoscape") >= 0, "관계 분석 그래프 섹션이 렌더링되지 않았습니다.");
     assertOk(ontologyGraphHtml.indexOf("규칙 구조") >= 0 && ontologyGraphHtml.indexOf("현재 데이터") >= 0, "관계 분석 그래프 섹션에 규칙/현재 데이터 보조 패널이 없습니다.");
+    assertOk(code.indexOf("ontologyEntityDisplayLabel") >= 0 && code.indexOf('"의견 " + displayName') >= 0, "현재 데이터 관계 그래프 노드가 회사명 표시명을 거치지 않습니다.");
+    assertOk(code.indexOf("properties.symbol || entity.label") < 0 && code.indexOf('"의견 " + symbol') < 0, "현재 데이터 관계 그래프 노드 라벨에 종목코드 우선 경로가 남아 있습니다.");
     assertOk(ontologyRegistryHtml.indexOf("ontology-rule-panel") >= 0 && ontologyRegistryHtml.indexOf("Relation Rule Registry") >= 0, "관계 규칙·프롬프트 섹션에 관계 규칙 레지스트리가 없습니다.");
     assertOk(ontologyRegistryHtml.indexOf('data-model-setting="ontologyRelationRules"') >= 0, "관계 규칙·프롬프트 섹션에 관계 규칙 편집기가 없습니다.");
     assertOk(ontologyRegistryHtml.indexOf("수익 보유 + 추세 약화") >= 0 && ontologyRegistryHtml.indexOf("핵심 데이터 부족") >= 0, "관계 규칙·프롬프트 섹션에 기본 관계 규칙이 렌더링되지 않았습니다.");
@@ -951,6 +1002,9 @@ function checkFrontendAdminRender() {
     assertOk(ontologyRegistryHtml.indexOf("보유 타이밍 AI 분석") >= 0 && ontologyRegistryHtml.indexOf("providedDataOnly=1") >= 0, "관계 규칙·프롬프트 섹션에 기본 프롬프트와 정책이 렌더링되지 않았습니다.");
     assertOk(ontologyTraceHtml.indexOf("테이블 저장 구조") >= 0 && ontologyTraceHtml.indexOf("규칙 추적") >= 0, "관계 추적 섹션에 관계형 규칙 추적이 없습니다.");
     assertOk(ontologyTraceHtml.indexOf("ontology-relation-table") >= 0 && ontologyTraceHtml.indexOf("ontology-rule-list") >= 0, "관계 추적 섹션에 관계/규칙 보조 표가 렌더링되지 않았습니다.");
+    assertOk(ontologyHtml.indexOf("삼성전자 가격과 반도체 업종 관계") >= 0 && ontologyHtml.indexOf("005930 가격과") < 0, "관계 분석 의견 본문에 종목코드가 회사명으로 치환되지 않았습니다.");
+    assertOk(ontologyTraceHtml.indexOf("삼성전자 → 반도체") >= 0 && ontologyTraceHtml.indexOf("005930 →") < 0, "관계 추적 샘플 관계가 회사명 대신 종목코드를 노출합니다.");
+    assertOk(ontologyTraceHtml.indexOf("회사 표시명") >= 0 && ontologyTraceHtml.indexOf("종목코드 -> 종목 데이터") < 0, "관계 추적 저장 구조 설명에 종목코드 기준 문구가 남아 있습니다.");
     assertOk(code.indexOf("writeStrategySectionHistory") >= 0 && code.indexOf("strategySectionUrl") >= 0, "전략 운영 내부 탭 URL 동기화 경로가 없습니다.");
     assertOk(modelingHtml.indexOf("<h1>전략 운영</h1>") >= 0, "전략 운영 탭 제목이 상단에 렌더링되지 않았습니다.");
     assertOk(modelingHtml.indexOf("strategy-process-panel") >= 0 && modelingHtml.indexOf("Strategy Workflow") >= 0 && modelingHtml.indexOf("데이터에서 알림까지의 계산 순서") >= 0, "전략 운영 개요에 계산 순서 UI가 없습니다.");

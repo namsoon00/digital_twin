@@ -943,6 +943,9 @@ function checkFrontendAdminRender() {
     assertOk(styles.indexOf(".monitoring-view") >= 0 && styles.indexOf("grid-template-areas") >= 0, "모니터링 탭 PC 그리드 레이아웃 CSS가 없습니다.");
     assertOk(styles.indexOf(".monitoring-view .admin-monitoring-panel {\n  grid-area: status;\n  grid-column: auto;") < 0, "모니터링 상태 패널의 PC grid-area가 1컬럼으로 압축될 수 있습니다.");
     assertOk(styles.indexOf(".monitoring-view .alert-panel {\n  grid-area: alerts;\n  grid-column: auto;") < 0, "모니터링 알림 패널의 PC grid-area가 1컬럼으로 압축될 수 있습니다.");
+    assertOk(monitoringHtml.indexOf("monitor-status-board") >= 0 && monitoringHtml.indexOf("monitor-runtime-strip") >= 0, "모니터링 실행 상태 패널이 ledger/strip 구조로 렌더링되지 않습니다.");
+    assertOk(styles.indexOf(".monitor-ledger-cell") >= 0, "모니터링 실행 상태 ledger 스타일이 없습니다.");
+    assertOk(monitoringHtml.indexOf("npm run python:monitor:once") < 0 && monitoringHtml.indexOf("npm run python:service:status") < 0, "모니터링 실행 상태 패널에 CLI 명령어 목록이 노출됩니다.");
     assertOk(monitoringHtml.indexOf("monitoring-instrument-panel") >= 0, "모니터링 탭에 보유·관심 통합 패널이 렌더링되지 않았습니다.");
     assertOk(monitoringHtml.indexOf("보유·관심 종목 통합") >= 0, "모니터링 탭 통합 패널 제목이 렌더링되지 않았습니다.");
     assertOk(monitoringHtml.indexOf("웹소켓 최근 이벤트") >= 0, "모니터링 탭에 웹소켓 이벤트 상태가 없습니다.");

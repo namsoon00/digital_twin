@@ -2042,6 +2042,12 @@ h3 {
   grid-column: 1 / -1;
 }
 
+.notifications-view .alert-panel,
+.notifications-view .monitoring-instrument-panel,
+.notifications-view .portfolio-exposure-panel {
+  grid-column: 1 / -1;
+}
+
 .notifications-view .admin-message-panel,
 .notifications-view .notification-template-manager-panel {
   grid-column: 1 / -1;

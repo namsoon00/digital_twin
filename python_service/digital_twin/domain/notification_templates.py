@@ -54,6 +54,7 @@ DATA_LABEL_PREFIXES = [
     "재시도",
     "투자자",
     "기울기",
+    "확인 행동",
     "거래량",
     "거래액",
     "가격",
@@ -80,6 +81,7 @@ DATA_LABEL_ORDER = {
     "매도 판단": 26,
     "수급": 30,
     "추세": 40,
+    "확인 행동": 41,
     "기울기": 45,
     "투자자": 50,
     "신호": 60,
@@ -102,6 +104,7 @@ SEPARATE_DATA_LABELS = {
     "매도 판단",
     "수급",
     "추세",
+    "확인 행동",
     "기울기",
     "투자자",
     "신호",
@@ -417,6 +420,12 @@ def first_data_text(raw_lines: List[str], pattern: str) -> str:
     return ""
 
 
+def percent_text(value: str) -> str:
+    text = str(value or "").strip()
+    match = re.search(r"[-+]?\d+(?:\.\d+)?%", text)
+    return match.group(0) if match else text
+
+
 def notification_title_headline(rule: str, raw_lines: List[str], event: AlertEvent, fallback: str) -> str:
     key = str(rule or "")
     status = data_value(raw_lines, "상태")
@@ -437,12 +446,14 @@ def notification_title_headline(rule: str, raw_lines: List[str], event: AlertEve
     if key == "holdingTiming":
         status_blob = " ".join([status, profit, title_text]).strip()
         if any(term in status_blob for term in ["분할", "익절", "수익"]):
-            return "보유 익절·분할매도 점검"
+            profit_text = percent_text(profit)
+            return ("수익 " + profit_text + ": " if profit_text else "") + "분할매도 기준 확인"
         if any(term in status_blob for term in ["손절", "손실"]) or signed_direction(profit) < 0:
-            return "보유 손실 관리 점검"
+            profit_text = percent_text(profit)
+            return ("손실 " + profit_text + ": " if profit_text else "") + "손절·축소 기준 재확인"
         if "조건부" in status_blob:
-            return "보유 조건 재점검"
-        return "보유 매수·매도 점검"
+            return "조건부 보유: 유지 조건 재점검"
+        return "보유 판단: 매수·매도 기준 확인"
     if key == "monitorHeartbeat":
         return "모니터링 상태 확인"
     if key == "monitorConnection":
@@ -470,7 +481,12 @@ def notification_title_headline(rule: str, raw_lines: List[str], event: AlertEve
     if key == "monitorCashChange":
         return title_from_change(change, "현금 비중 증가", "현금 비중 감소", "현금 비중 변화")
     if key == "monitorDecisionChange":
-        return "보유 모델 판단 변경"
+        current = data_value(raw_lines, "현재")
+        if any(term in current for term in ["손절", "손실"]):
+            return "판단 변경: 손실 관리 기준 재확인"
+        if any(term in current for term in ["분할", "익절", "수익"]):
+            return "판단 변경: 분할매도 기준 확인"
+        return "판단 변경: 보유 조건 재확인"
     if key == "externalEquityMove":
         equity_change = data_value(raw_lines, "미장 가격 변동")
         return title_from_change(equity_change, "미장 가격 급등", "미장 가격 급락", "미장 가격·거래량 급변")
@@ -1498,6 +1514,12 @@ def template_prefers_rich_score(template: str, rendered: str) -> bool:
 
 def append_score_explanation(rendered: str, context: Dict[str, object], rich: bool = False) -> str:
     rendered_text = str(rendered or "")
+    if (
+        context_message_type(context) in {"holdingTiming", "monitorDecisionChange"}
+        and ontology_relation_context(context)
+        and any(marker in rendered_text for marker in ["관계 규칙", "AI 분석 기준", "부족 데이터"])
+    ):
+        return rendered
     if not rendered_text.strip() or "점수 계산" in rendered_text or "모델 판단" in rendered_text or "온톨로지 판단" in rendered_text or "알림 발송" in rendered_text:
         return rendered
     block = score_explanation_block(context, rich)

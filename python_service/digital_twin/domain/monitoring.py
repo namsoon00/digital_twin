@@ -652,6 +652,14 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
             return ""
         return "투자자: " + ", ".join(parts)
 
+    def holding_action_line(self, decision_text: str, pnl_rate: float) -> str:
+        blob = str(decision_text or "")
+        if "손절" in blob or "손실" in blob or pnl_rate < 0:
+            return "확인 행동: 손절 기준, 분할 축소 수량, 20일선 회복 조건을 재확인"
+        if "분할" in blob or "익절" in blob or "수익" in blob or pnl_rate > 0:
+            return "확인 행동: 분할매도 기준, 목표 수익률, 추세 이탈 조건을 재확인"
+        return "확인 행동: 보유 유지 조건, 추가매수 기준, 손실 제한 기준을 재확인"
+
     def ma_distance(self, position: Dict[str, object], period: int) -> float:
         return pct_delta(self.position_current_price(position), self.position_ma(position, period))
 
@@ -983,7 +991,7 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
                 "holdingTiming",
                 snapshot.account_id + ":timing:" + item.symbol + ":" + item.decision,
                 item.name,
-                ["상태 " + decision_phrase, "손익 " + signed_pct(item.profit_loss_rate), self.flow_context_line(position), self.investor_context_line(position), self.trend_context_line(position)] + relation_lines + self.ontology_context_lines(decision_state) + ["매도/매수 기준 재확인"],
+                ["상태 " + decision_phrase, "손익 " + signed_pct(item.profit_loss_rate), self.flow_context_line(position), self.investor_context_line(position), self.trend_context_line(position), self.holding_action_line(item.decision, item.profit_loss_rate)] + relation_lines + self.ontology_context_lines(decision_state),
                 item.symbol,
                 criteria=self.criteria(
                     "온톨로지 관계 규칙이 위험/주의 상태로 성립하거나 손익률이 손실 기준 "

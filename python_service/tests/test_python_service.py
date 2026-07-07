@@ -2867,7 +2867,10 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("AI 분석 기준", message)
         self.assertIn("부족 데이터", message)
         self.assertIn("체결강도", message)
-        self.assertIn("온톨로지 판단", message)
+        self.assertIn("수익 +18.5%: 분할매도 기준 확인", message)
+        self.assertNotIn("온톨로지 판단", message)
+        self.assertNotIn("AI 프롬프트", message)
+        self.assertNotIn("알림 발송", message)
         self.assertNotIn("온톨로지: 온톨로지", message)
         self.assertNotIn("온톨로지: 보유 유지", message)
         self.assertNotIn("thesis:", message)
@@ -3861,7 +3864,7 @@ class PythonServiceTests(unittest.TestCase):
 
         message = templates.render(event.rule, alert_context(event))
 
-        self.assertIn("<b>[주의] 보유 익절·분할매도 점검</b>", message)
+        self.assertIn("<b>[주의] 수익 +18.5%: 분할매도 기준 확인</b>", message)
         self.assertNotIn("<b>[주의] 보유 타이밍</b>", message)
 
     def test_external_crypto_alert_orders_bitcoin_price_and_trading_value(self):
@@ -4181,6 +4184,10 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("외국인 +700(매수 1,300/매도 600) · 금액 +2억 원", investor_line)
         self.assertIn("기관 +300(매수 900/매도 600) · 금액 +9,000만 원", investor_line)
         self.assertIn("개인 -400(매수 2,000/매도 2,400) · 금액 -1억 원", investor_line)
+        self.assertEqual(
+            "확인 행동: 손절 기준, 분할 축소 수량, 20일선 회복 조건을 재확인",
+            monitor.holding_action_line("손절 기준 확인", -13.4),
+        )
 
     def test_notification_schedules_use_real_monitor_sent_history(self):
         registry = AccountRegistry()

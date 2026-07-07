@@ -2000,6 +2000,11 @@
       }
       return "";
     }
+    function percentText(value) {
+      var text = String(value || "").trim();
+      var match = text.match(/[-+]?\d+(?:\.\d+)?%/);
+      return match ? match[0] : text;
+    }
     function notificationTitleHeadline(type, rawItems, sample, fallback) {
       var status = dataValue(rawItems, "상태");
       var profit = dataValue(rawItems, "손익");
@@ -2013,10 +2018,11 @@
       if (type === "watchlistQuotePending") return "관심종목 시세 미수집";
       if (type === "holdingTiming") {
         var statusBlob = [status, profit, titleText].join(" ");
-        if (/분할|익절|수익/.test(statusBlob)) return "보유 익절·분할매도 점검";
-        if (/손절|손실/.test(statusBlob) || signedDirection(profit) < 0) return "보유 손실 관리 점검";
-        if (statusBlob.indexOf("조건부") >= 0) return "보유 조건 재점검";
-        return "보유 매수·매도 점검";
+        var profitText = percentText(profit);
+        if (/분할|익절|수익/.test(statusBlob)) return (profitText ? "수익 " + profitText + ": " : "") + "분할매도 기준 확인";
+        if (/손절|손실/.test(statusBlob) || signedDirection(profit) < 0) return (profitText ? "손실 " + profitText + ": " : "") + "손절·축소 기준 재확인";
+        if (statusBlob.indexOf("조건부") >= 0) return "조건부 보유: 유지 조건 재점검";
+        return "보유 판단: 매수·매도 기준 확인";
       }
       if (type === "monitorHeartbeat") return "모니터링 상태 확인";
       if (type === "monitorConnection") {
@@ -2038,7 +2044,12 @@
         return "이동평균·추세 신호";
       }
       if (type === "monitorCashChange") return titleFromChange(change, "현금 비중 증가", "현금 비중 감소", "현금 비중 변화");
-      if (type === "monitorDecisionChange") return "보유 모델 판단 변경";
+      if (type === "monitorDecisionChange") {
+        var current = dataValue(rawItems, "현재");
+        if (/손절|손실/.test(current)) return "판단 변경: 손실 관리 기준 재확인";
+        if (/분할|익절|수익/.test(current)) return "판단 변경: 분할매도 기준 확인";
+        return "판단 변경: 보유 조건 재확인";
+      }
       if (type === "externalEquityMove") return titleFromChange(dataValue(rawItems, "미장 가격 변동"), "미장 가격 급등", "미장 가격 급락", "미장 가격·거래량 급변");
       if (type === "externalCryptoMove") {
         var cryptoModel = sample && sample.cryptoMoveModel && typeof sample.cryptoMoveModel === "object" ? sample.cryptoMoveModel : {};

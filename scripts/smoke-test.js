@@ -198,6 +198,11 @@ function checkFrontendAdminRender() {
   assertOk(/@media \(min-width: 1181px\)[\s\S]*\.account-card,[\s\S]*padding: calc\(var\(--ds-row-pad-y\) \+ 1px\) var\(--ds-row-pad-x\);/.test(styles), "PC 행 리스트 내부 padding이 공통 row 토큰을 따르지 않습니다.");
   assertOk(/@media \(min-width: 1181px\)[\s\S]*\.account-card-list[\s\S]*display: block;/.test(styles), "PC 계정 카드 목록이 행 리스트로 전환되지 않습니다.");
   assertOk(/@media \(min-width: 1181px\)[\s\S]*\.monitoring-instrument-list[\s\S]*display: block;/.test(styles), "PC 모니터링 종목 목록이 행 리스트로 전환되지 않습니다.");
+  assertOk(/@media \(min-width: 1181px\)[\s\S]*\.source-row[\s\S]*grid-template-columns: minmax\(120px, 0\.34fr\) minmax\(0, 1fr\);/.test(styles), "PC source row가 라벨/값 2열 ledger로 정리되지 않습니다.");
+  assertOk(/@media \(min-width: 1181px\)[\s\S]*\.notification-decision-row[\s\S]*grid-template-columns: minmax\(220px, 0\.38fr\) minmax\(0, 1fr\);/.test(styles), "PC 최근 알림 판단 행이 2열 정보 구조로 정리되지 않습니다.");
+  assertOk(/@media \(min-width: 1181px\)[\s\S]*\.symbol-result-list[\s\S]*grid-template-columns: repeat\(auto-fit, minmax\(440px, 1fr\)\);/.test(styles), "PC 전체종목 결과가 과도하게 넓은 단일 리스트로 남아 있습니다.");
+  assertOk(/@media \(min-width: 1181px\)[\s\S]*\.alert-list[\s\S]*grid-template-columns: repeat\(auto-fit, minmax\(420px, 1fr\)\);/.test(styles), "PC 알림 리스트가 읽기 폭을 제한하지 않습니다.");
+  assertOk(/@media \(min-width: 1181px\)[\s\S]*\.variable-grid,[\s\S]*\.monitoring-detail-signal-grid[\s\S]*grid-template-columns: repeat\(auto-fill, minmax\(160px, 230px\)\);/.test(styles), "PC metric/card cell이 화면 폭 전체로 늘어나는 것을 막지 않습니다.");
   assertOk(code.indexOf("renderManagedPage") >= 0 && styles.indexOf(".managed-page") >= 0, "전체 탭 공통 관리 페이지 템플릿이 없습니다.");
   assertOk(code.indexOf("renderPageCommandStrip") >= 0 && styles.indexOf(".page-command-strip") >= 0, "페이지 작업 상태 strip 템플릿이 없습니다.");
   assertOk(/@media \(min-width: 861px\)[\s\S]*height: calc\(100dvh - 48px\);/.test(styles), "PC shell이 100dvh 관리 콘솔로 고정되지 않습니다.");
@@ -217,6 +222,7 @@ function checkFrontendAdminRender() {
   assertOk(designSystemDoc.indexOf("Institutional Finance Tone") >= 0, "디자인 시스템 문서에 전통 금융앱 룩앤필 기준이 없습니다.");
   assertOk(designSystemDoc.indexOf("Spacing Rhythm") >= 0 && designSystemDoc.indexOf("padding: 12px 0") >= 0, "디자인 시스템 문서에 화면 간격 정책이 없습니다.");
   assertOk(designSystemDoc.indexOf("모바일에서 보기 좋은 카드형 반복 UI도 PC에서는 그대로 키우지 않는다") >= 0, "디자인 시스템 문서에 PC 반복 UI 전환 원칙이 없습니다.");
+  assertOk(designSystemDoc.indexOf("구획이 정확한 행과 셀") >= 0 && designSystemDoc.indexOf("Desktop list row") >= 0, "디자인 시스템 문서에 PC 카드/리스트 구획 정책이 없습니다.");
   assertOk(code.indexOf('appBrandName = "Orbit Alpha"') >= 0, "Orbit Alpha 브랜드명이 앱에 적용되지 않았습니다.");
   assertOk(indexHtml.indexOf("<title>Orbit Alpha</title>") >= 0 && indexHtml.indexOf("favicon.svg") >= 0, "Orbit Alpha 문서 제목 또는 파비콘 링크가 없습니다.");
   assertOk(styles.indexOf(".app-brand-mark") >= 0 && styles.indexOf("--ds-color-orbit-line") >= 0, "Orbit Alpha 궤도형 브랜드 마크 규칙이 없습니다.");

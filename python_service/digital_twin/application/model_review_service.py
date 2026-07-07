@@ -1,7 +1,7 @@
 import time
 from typing import Callable, Dict
 
-from ..domain.model_review import ModelReviewJob
+from ..domain.model_review import ModelReviewJob, normalize_model_review_result
 
 
 class ModelReviewRunner:
@@ -21,7 +21,7 @@ class ModelReviewRunner:
         for job in self.queue.pending(limit):
             self.queue.mark_processing(job)
             try:
-                result = self.reviewer.review(job)
+                result = normalize_model_review_result(job, self.reviewer.review(job))
                 self.deliver(job, result, accounts)
                 self.queue.mark_done(job, result)
                 processed += 1
@@ -66,4 +66,3 @@ class ModelReviewScheduler:
             end_at = time.monotonic() + sleep_seconds
             while self.running and time.monotonic() < end_at:
                 time.sleep(min(1.0, end_at - time.monotonic()))
-

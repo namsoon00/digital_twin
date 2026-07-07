@@ -2948,8 +2948,60 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(1, processed)
         self.assertEqual({"done": 1}, store.summary())
         self.assertIn("모델 리뷰", sent[0])
-        self.assertTrue(sent[0].startswith("AAPL 모델 리뷰"))
+        self.assertTrue(sent[0].startswith("Apple / AAPL 모델 리뷰"))
         self.assertNotIn("메인 AAPL 모델 리뷰", sent[0])
+
+    def test_model_review_normalizes_code_only_subject_and_same_score_label_change(self):
+        job = ModelReviewJob.create({
+            "accountId": "main",
+            "accountLabel": "메인",
+            "symbol": "035420",
+            "title": "035420",
+            "key": "main:decision:035420",
+            "lines": [
+                "보유 종목 판단 변화",
+                "이전 손실 관리 기준 확인 (80점)",
+                "현재 손실 축소 권장 (80점)",
+            ],
+        })
+
+        message = local_model_review(job)
+
+        self.assertTrue(message.startswith("NAVER / 035420 모델 리뷰"))
+        self.assertIn("점수는 80점으로 같고", message)
+        self.assertIn("판단 라벨 체계", message)
+        self.assertIn("라벨만 바뀐 알림", message)
+
+    def test_model_review_runner_rewrites_code_only_llm_title(self):
+        registry = AccountRegistry()
+        registry.upsert(AccountConfig("main", "메인", "toss", "https://example.test", "", "", "", ["035420"]))
+        store = ModelReviewJobStore(Path(self.temp.name) / "model-review-queue.json")
+        store.enqueue(ModelReviewJob.create({
+            "accountId": "main",
+            "accountLabel": "메인",
+            "symbol": "035420",
+            "title": "035420",
+            "key": "main:decision:035420",
+            "lines": ["판단 변화"],
+        }))
+        sent = []
+
+        class FakeReviewer:
+            def review(self, job):
+                return "035420 판단 변화 리뷰\n- 판단 변화 원인: 라벨 변경"
+
+        class FakeNotifier:
+            def send(self, message):
+                sent.append(message)
+                return SimpleNamespace(delivered=True, reason="")
+
+        runner = ModelReviewRunner(store, FakeReviewer(), registry, lambda _account: FakeNotifier())
+
+        processed = runner.run_once(limit=1)
+
+        self.assertEqual(1, processed)
+        self.assertTrue(sent[0].startswith("NAVER / 035420 판단 변화 리뷰"))
+        self.assertFalse(sent[0].splitlines()[0].startswith("035420 "))
 
     def test_send_events_enqueues_notifications_without_direct_delivery(self):
         account = AccountConfig("main", "메인", "toss", "https://example.test", "", "", "", ["AAPL"])

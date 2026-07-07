@@ -11,7 +11,7 @@ from .message_types import (
     DEFAULT_CADENCE,
     MIN_CADENCE_MINUTES,
 )
-from .model_review import decision_change_review_lines
+from .model_review import decision_change_context, decision_change_review_lines
 from .ontology_rules import relation_rule_context_summary_lines
 from .parsing import parse_assignments
 from .portfolio import AccountSnapshot, AlertEvent, Position, monitor_state_has_live_account_data, status_has_account_data_failure
@@ -916,6 +916,11 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
                     previous_decision,
                     float(self.thresholds.get("monitorExitPressureDelta", 0)),
                 )
+                decision_context = decision_change_context(
+                    decision,
+                    previous_decision,
+                    float(self.thresholds.get("monitorExitPressureDelta", 0)),
+                )
                 relation_context = self.relation_context_from_decision(decision)
                 prompt_context = self.prompt_context_from_decision(decision)
                 relation_lines = self.relation_context_lines(decision)
@@ -926,6 +931,7 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
                     "holdingDecisionScore": round(float(decision.get("exit_pressure") or 0), 1),
                     "profitLossRate": round(float(item.get("profit_loss_rate") or 0), 2),
                     "legacyFormulaAudits": legacy_formula_audits,
+                    "decisionChangeContext": decision_context,
                     "ontologyRelationContext": relation_context,
                     "ontologyPromptContext": prompt_context,
                     "ontologyOpinion": self.ontology_opinion_from_decision(decision),

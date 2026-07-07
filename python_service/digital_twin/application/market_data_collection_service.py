@@ -6,6 +6,7 @@ from ..domain.accounts import AccountConfig
 from ..domain.events import market_data_collected_event
 from ..domain.market_data import normalize_position, number, technical_indicators_from_candles
 from ..domain.portfolio import Position, utc_now_iso
+from ..domain.repositories import AccountRepository, MarketDataProvider, MarketDataProviderFactory, MarketQuoteRepository
 from ..domain.symbol_universe import SUPPORTED_MARKETS, normalize_market
 
 
@@ -72,11 +73,11 @@ def position_payload(position: Position, base: Dict[str, object]) -> Dict[str, o
 class MarketDataCollectionRunner:
     def __init__(
         self,
-        account_repository,
+        account_repository: AccountRepository,
         symbol_service,
-        quote_cache,
+        quote_cache: MarketQuoteRepository,
         settings: Dict[str, str],
-        provider_factory,
+        provider_factory: MarketDataProviderFactory,
         event_publisher=None,
         sleep_fn=time.sleep,
     ):
@@ -138,7 +139,7 @@ class MarketDataCollectionRunner:
             "sector": item.get("sector"),
         })
 
-    def collect_candles(self, provider, token: str, symbols: Iterable[str]):
+    def collect_candles(self, provider: MarketDataProvider, token: str, symbols: Iterable[str]):
         result: Dict[str, Dict[str, object]] = {}
         for index, symbol in enumerate(symbols):
             try:

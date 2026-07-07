@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from typing import Dict, Iterable, List
 
 from .market_data import clamp, number
-from .portfolio import Position, utc_now_iso
+from .portfolio import Position
 
 
 SOURCE_KEYS = {
@@ -29,11 +29,21 @@ def parse_iso_datetime(value: str):
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
-def age_minutes(value: str) -> int:
+def utc_iso(value=None) -> str:
+    current = value or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    return current.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def age_minutes(value: str, now=None) -> int:
     parsed = parse_iso_datetime(value)
     if not parsed:
         return 0
-    return max(0, int((datetime.now(timezone.utc) - parsed.astimezone(timezone.utc)).total_seconds() // 60))
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    return max(0, int((current.astimezone(timezone.utc) - parsed.astimezone(timezone.utc)).total_seconds() // 60))
 
 
 def non_cash_symbols(positions: Iterable[Position]) -> List[str]:
@@ -118,10 +128,11 @@ def evaluate_external_signal_quality(
     signals: Dict[str, object],
     positions: Iterable[Position] = None,
     settings: Dict[str, object] = None,
+    now=None,
 ) -> Dict[str, object]:
     signals = signals if isinstance(signals, dict) else {}
     settings = settings or {}
-    fetched_at = str(signals.get("fetchedAt") or utc_now_iso())
+    fetched_at = str(signals.get("fetchedAt") or utc_iso(now))
     symbols = non_cash_symbols(positions or [])
     coverage = symbol_coverage(signals, symbols)
     statuses = status_rows(signals)
@@ -148,9 +159,9 @@ def evaluate_external_signal_quality(
     error_penalty = min(25.0, error_count * 6.0)
     score = clamp(coverage_score * 0.45 + source_score * 0.4 + (100 - error_penalty) * 0.15, 0.0, 100.0)
     return {
-        "generatedAt": utc_now_iso(),
+        "generatedAt": utc_iso(now),
         "fetchedAt": fetched_at,
-        "ageMinutes": age_minutes(fetched_at),
+        "ageMinutes": age_minutes(fetched_at, now=now),
         "score": round(score, 2),
         "coverageScore": round(coverage_score, 2),
         "sourceHealthScore": round(source_score, 2),
@@ -168,9 +179,10 @@ def attach_external_signal_quality(
     signals: Dict[str, object],
     positions: Iterable[Position] = None,
     settings: Dict[str, object] = None,
+    now=None,
 ) -> Dict[str, object]:
     payload = dict(signals or {})
-    quality = evaluate_external_signal_quality(payload, positions=positions, settings=settings)
+    quality = evaluate_external_signal_quality(payload, positions=positions, settings=settings, now=now)
     payload["quality"] = quality
     payload["freshness"] = {
         "fetchedAt": quality["fetchedAt"],

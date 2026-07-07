@@ -10,9 +10,10 @@ class MonitorRunner:
         from .domain.monitoring import RealtimeMonitor
         from .infrastructure.event_bus import default_event_bus
         from .infrastructure.settings import runtime_settings
-        from .infrastructure.sqlite_monitoring import SQLiteMonitorStore
+        from .infrastructure.sqlite_monitoring import SQLiteMonitoringCycleRecorder, SQLiteMonitorStore
 
         store = kwargs.get("store") or SQLiteMonitorStore()
+        cycle_recorder = kwargs.get("cycle_recorder") or SQLiteMonitoringCycleRecorder(monitor_store=store)
         return ApplicationMonitorRunner(
             accounts,
             store=store,
@@ -20,7 +21,7 @@ class MonitorRunner:
             snapshot_builder=kwargs.get("snapshot_builder") or build_snapshot,
             event_sender=kwargs.get("event_sender") or send_events,
             event_publisher=kwargs.get("event_publisher") or default_event_bus(),
-            cycle_recorder=kwargs.get("cycle_recorder") or (store if hasattr(store, "record_cycle") else None),
+            cycle_recorder=cycle_recorder,
         )
 
 

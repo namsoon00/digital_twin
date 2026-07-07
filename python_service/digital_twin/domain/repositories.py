@@ -1,9 +1,9 @@
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Optional, Protocol
+from typing import Callable, Dict, Iterable, List, Optional, Protocol, Tuple
 
 from .accounts import AccountConfig
 from .ontology import PortfolioOntology
-from .portfolio import AccountSnapshot, AlertEvent
+from .portfolio import AccountSnapshot, AlertEvent, Position
 from .symbol_universe import ListedSymbol
 
 
@@ -84,6 +84,11 @@ class OntologyGraphRepository(Protocol):
         ...
 
 
+class OntologyProjectionRecorder(Protocol):
+    def record_snapshot(self, snapshot: AccountSnapshot) -> Dict[str, object]:
+        ...
+
+
 class SymbolUniverseRepository(Protocol):
     def upsert_many(self, symbols: Iterable[ListedSymbol]) -> int:
         ...
@@ -122,8 +127,49 @@ class SymbolSourceGateway(Protocol):
 
 
 class MarketQuoteRepository(Protocol):
+    def load(self, provider: str, account_id: str, symbol: str) -> Dict[str, object]:
+        ...
+
     def load_many(self, provider: str, account_id: str, symbols: Iterable[str]) -> Dict[str, Dict[str, object]]:
+        ...
+
+    def save(self, provider: str, account_id: str, symbol: str, payload: Dict[str, object]) -> None:
         ...
 
     def summary(self, provider: str, account_id: str) -> Dict[str, object]:
         ...
+
+    def stale_universe_symbols(
+        self,
+        provider: str,
+        account_id: str,
+        markets: Iterable[str],
+        limit: int = 200,
+        max_age_minutes: int = 240,
+    ) -> List[Dict[str, object]]:
+        ...
+
+
+class MarketDataProvider(Protocol):
+    def fetch_access_token(self) -> str:
+        ...
+
+    def fetch_prices(self, token: str, symbols: Iterable[str]) -> Tuple[Dict[str, Dict[str, object]], str]:
+        ...
+
+    def fetch_daily_candles(self, token: str, symbol: str) -> Tuple[List[Dict[str, object]], str]:
+        ...
+
+    def merge_market_data(
+        self,
+        position: Position,
+        quote: Dict[str, object],
+        indicators: Dict[str, object],
+        cached: Dict[str, object],
+        quote_live: bool = False,
+        indicators_live: bool = False,
+    ) -> Position:
+        ...
+
+
+MarketDataProviderFactory = Callable[[AccountConfig, MarketQuoteRepository], MarketDataProvider]

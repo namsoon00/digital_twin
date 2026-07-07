@@ -47,7 +47,7 @@ def reasoning_data_gaps(graph: PortfolioOntology) -> List[str]:
     return sorted(set(gaps))
 
 
-def build_ontology_quality_sample(graph: PortfolioOntology, source: str = "runtime") -> OntologyQualitySample:
+def build_ontology_quality_sample(graph: PortfolioOntology, source: str = "runtime", created_at: str = "") -> OntologyQualitySample:
     abox = ontology_abox(graph)
     entity_count = int(abox.get("entityCount") or 0)
     relation_count = int(abox.get("relationCount") or 0)
@@ -95,7 +95,7 @@ def build_ontology_quality_sample(graph: PortfolioOntology, source: str = "runti
         "highPressureSymbols": [opinion.symbol for opinion in graph.opinions or [] if number(opinion.ontology_pressure) >= 55],
         "promptVersion": graph.to_dict().get("promptVersion"),
     }
-    stamp = utc_now_iso()
+    stamp = created_at or utc_now_iso()
     sample_id = "ontology-quality:" + graph.portfolio_id + ":" + sample_hash({"createdAt": stamp, **payload})
     return OntologyQualitySample(
         sample_id=sample_id,

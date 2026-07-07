@@ -3,6 +3,7 @@ from .sqlite_operational import (
     SQLiteExternalSignalCache,
     SQLiteOntologyQualitySampleStore,
     SQLiteMarketQuoteCache,
+    SQLiteMonitoringCycleRecorder,
     SQLiteMonitorStore,
 )
 
@@ -11,5 +12,6 @@ __all__ = [
     "SQLiteExternalSignalCache",
     "SQLiteOntologyQualitySampleStore",
     "SQLiteMarketQuoteCache",
+    "SQLiteMonitoringCycleRecorder",
     "SQLiteMonitorStore",
 ]

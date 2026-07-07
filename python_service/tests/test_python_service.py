@@ -49,10 +49,11 @@ from digital_twin.infrastructure.model_review_queue import ModelReviewEnqueuer, 
 from digital_twin.infrastructure.mock_market import mock_market_payload
 from digital_twin.infrastructure.neo4j_ontology import Neo4jOntologyGraphRepository, NullOntologyGraphRepository, safe_relation_type
 from digital_twin.infrastructure.notifications import TelegramNotifier, send_events
+from digital_twin.infrastructure.ontology_projection import PortfolioOntologyProjectionRecorder
 from digital_twin.infrastructure.service_factory import flow_lens_snapshot
 from digital_twin.infrastructure.settings import runtime_settings, save_runtime_settings
 from digital_twin.infrastructure.sqlite_model_review import SQLiteModelReviewJobStore
-from digital_twin.infrastructure.sqlite_monitoring import SQLiteEventLog, SQLiteExternalSignalCache, SQLiteMarketQuoteCache, SQLiteMonitorStore, SQLiteOntologyQualitySampleStore
+from digital_twin.infrastructure.sqlite_monitoring import SQLiteEventLog, SQLiteExternalSignalCache, SQLiteMarketQuoteCache, SQLiteMonitoringCycleRecorder, SQLiteMonitorStore, SQLiteOntologyQualitySampleStore
 from digital_twin.infrastructure.sqlite_notifications import SQLiteNotificationJobStore, SQLiteNotificationRuleStore, SQLiteNotificationTemplateStore
 from digital_twin.infrastructure.sqlite_runtime import SQLiteAppStore, SQLiteRuntimeSettingsStore
 from digital_twin.infrastructure.sqlite_symbols import SQLiteSymbolUniverseStore
@@ -1286,6 +1287,54 @@ class PythonServiceTests(unittest.TestCase):
         self.assertGreater(len(repository.rows_for_reasoning_cards(graph)), 0)
         self.assertTrue(any("MERGE (a)-[r:HOLDS]" in item["statement"] for item in statements))
         self.assertFalse(NullOntologyGraphRepository().save_graph(graph)["saved"])
+
+    def test_ontology_projection_recorder_persists_graph_and_quality_metadata(self):
+        position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "marketValue": 1000,
+            "profitLossRate": 3,
+            "sector": "반도체",
+        })
+        portfolio = portfolio_summary([position])
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "ok",
+            utc_now_iso(),
+            portfolio,
+            [position],
+            decisions_for_positions([position], portfolio),
+        )
+
+        class FakeRepository:
+            def __init__(self):
+                self.graphs = []
+
+            def save_graph(self, graph):
+                self.graphs.append(graph)
+                return {"saved": True, "entityCount": len(graph.entities)}
+
+        class FakeQualityStore:
+            def record_graph(self, graph, source="monitoring", created_at=""):
+                return SimpleNamespace(sample_id="sample-1", overall_score=91.5)
+
+        repository = FakeRepository()
+        recorder = PortfolioOntologyProjectionRecorder(
+            repository,
+            quality_store=FakeQualityStore(),
+            settings={"externalApiFetchIntervalMinutes": "30"},
+        )
+
+        result = recorder.record_snapshot(snapshot)
+
+        self.assertTrue(result["saved"])
+        self.assertEqual(1, len(repository.graphs))
+        self.assertEqual("main", repository.graphs[0].portfolio_id)
+        self.assertEqual("sample-1", snapshot.metadata["ontology"]["neo4j"]["qualitySampleId"])
+        self.assertEqual(91.5, snapshot.metadata["ontology"]["neo4j"]["qualityScore"])
 
     def test_holding_decision_score_uses_flow_and_trend_context(self):
         other_position = normalize_position({
@@ -5698,6 +5747,7 @@ class PythonServiceTests(unittest.TestCase):
         db_path = Path(self.temp.name) / "service.db"
         legacy_missing = Path(self.temp.name) / "missing.json"
         store = SQLiteMonitorStore(db_path, legacy_path=legacy_missing)
+        cycle_recorder = SQLiteMonitoringCycleRecorder(db_path, monitor_store=store)
         rules = SQLiteNotificationRuleStore(db_path)
         rule = rules.get("monitorDecisionChange")
         rule.market_hours_enabled = False
@@ -5753,7 +5803,7 @@ class PythonServiceTests(unittest.TestCase):
             snapshot_builder=snapshot_builder,
             event_sender=sender,
             event_publisher=event_bus,
-            cycle_recorder=store,
+            cycle_recorder=cycle_recorder,
         ).run_once(dry_run=False, force=True)
 
         self.assertEqual([alert], events)

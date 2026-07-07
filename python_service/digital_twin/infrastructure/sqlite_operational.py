@@ -942,8 +942,8 @@ class SQLiteOntologyQualitySampleStore(OperationalConnection):
                 ),
             )
 
-    def record_graph(self, graph, source: str = "monitoring") -> OntologyQualitySample:
-        sample = build_ontology_quality_sample(graph, source=source)
+    def record_graph(self, graph, source: str = "monitoring", created_at: str = "") -> OntologyQualitySample:
+        sample = build_ontology_quality_sample(graph, source=source, created_at=created_at)
         self.record(sample)
         return sample
 
@@ -1562,6 +1562,31 @@ class SQLiteMonitorStore(OperationalConnection):
         alert_events: List[AlertEvent],
         dry_run: bool = False,
     ) -> MonitoringCycleRecordResult:
+        return SQLiteMonitoringCycleRecorder(self.path, monitor_store=self).record_cycle(
+            account_ids,
+            snapshots,
+            alert_events,
+            dry_run=dry_run,
+        )
+
+    def write(self) -> None:
+        pass
+
+
+class SQLiteMonitoringCycleRecorder(OperationalConnection):
+    def __init__(self, path: Optional[Path] = None, monitor_store: SQLiteMonitorStore = None):
+        self.monitor_store = monitor_store
+        super().__init__(path or (monitor_store.path if monitor_store else None))
+        if self.monitor_store is None:
+            self.monitor_store = SQLiteMonitorStore(self.path)
+
+    def record_cycle(
+        self,
+        account_ids: List[str],
+        snapshots: List[AccountSnapshot],
+        alert_events: List[AlertEvent],
+        dry_run: bool = False,
+    ) -> MonitoringCycleRecordResult:
         if dry_run:
             return MonitoringCycleRecordResult(False, 0, "dry-run")
         SQLiteNotificationTemplateStore(self.path)
@@ -1588,7 +1613,7 @@ class SQLiteMonitorStore(OperationalConnection):
                     alert_source_event,
                 )
                 model_review_store.enqueue_from_event_with_connection(connection, alert_source_event)
-                sent_entries = self.mark_sent_with_connection(connection, alert_events, stamp)
+                sent_entries = self.monitor_store.mark_sent_with_connection(connection, alert_events, stamp)
             insert_domain_event_with_connection(
                 connection,
                 monitoring_cycle_completed_event(
@@ -1600,9 +1625,9 @@ class SQLiteMonitorStore(OperationalConnection):
                 ),
             )
             for account_id, state in snapshot_states.items():
-                self.upsert_snapshot_state_with_connection(connection, account_id, state, stamp)
-        self.previous.update(snapshot_states)
-        self.sent.update(sent_entries)
+                self.monitor_store.upsert_snapshot_state_with_connection(connection, account_id, state, stamp)
+        self.monitor_store.previous.update(snapshot_states)
+        self.monitor_store.sent.update(sent_entries)
         return MonitoringCycleRecordResult(delivered, queued, "queued=" + str(queued))
 
     def notification_template_for_connection(self, connection, message_type: str) -> NotificationTemplate:
@@ -1649,9 +1674,6 @@ class SQLiteMonitorStore(OperationalConnection):
             if notification_store.enqueue_with_connection(connection, job):
                 queued += 1
         return queued
-
-    def write(self) -> None:
-        pass
 
 
 class SQLiteEventLog(OperationalConnection):

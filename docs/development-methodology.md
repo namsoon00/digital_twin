@@ -52,7 +52,7 @@ Infrastructure:
 - `python_service/digital_twin/infrastructure/settings.py`: env fallback and SQLite-backed runtime settings facade
 - `python_service/digital_twin/infrastructure/sqlite_accounts.py`: SQLite account repository
 - `python_service/digital_twin/infrastructure/sqlite_operational.py`: shared SQLite schema and compatibility implementation
-- `python_service/digital_twin/infrastructure/sqlite_monitoring.py`: context entrypoint for snapshots, cadence, quote cache, external signal cache, and domain event log stores
+- `python_service/digital_twin/infrastructure/sqlite_monitoring.py`: context entrypoint for snapshots, cadence, monitoring-cycle recorder, quote cache, external signal cache, and domain event log stores
 - `python_service/digital_twin/infrastructure/sqlite_notifications.py`: context entrypoint for notification jobs, rules, and templates
 - `python_service/digital_twin/infrastructure/sqlite_symbols.py`: context entrypoint for symbol universe storage
 - `python_service/digital_twin/infrastructure/sqlite_model_review.py`: context entrypoint for model-review job storage
@@ -64,6 +64,7 @@ Infrastructure:
 - `python_service/digital_twin/infrastructure/event_bus.py`: synchronous event bus with SQLite event-log default
 - `python_service/digital_twin/infrastructure/model_review_queue.py`: async model-review queue interface fed by decision-change events
 - `python_service/digital_twin/infrastructure/model_reviewer.py`: Codex/LLM command adapter with local fallback
+- `python_service/digital_twin/infrastructure/ontology_projection.py`: snapshot-to-ontology projection recorder that saves Neo4j graphs and quality samples without making monitoring application services own graph persistence details
 - `python_service/digital_twin/infrastructure/service_factory.py`: runtime composition of use cases and adapters
 
 Compatibility modules:
@@ -100,7 +101,7 @@ Use these slices when multiple chat windows work independently:
 - Model review and validation: `domain/model_review.py`, `application/model_review_service.py`, `infrastructure/sqlite_model_review.py`, `infrastructure/model_review_queue.py`, `infrastructure/model_reviewer.py`
 - Runtime/configuration: `infrastructure/settings.py`, `infrastructure/service_factory.py`, `service_manager.py`
 
-When a change touches more than one slice, keep the cross-slice contract in `domain/events.py` or `domain/repositories.py` and keep each implementation inside its own layer.
+When a change touches more than one slice, keep the cross-slice contract in `domain/events.py` or `domain/repositories.py` and keep each implementation inside its own layer. If one use case must update several context stores atomically, use an explicit recorder or unit-of-work implementation in `infrastructure/` instead of putting cross-context writes into a single context repository.
 
 ## Testing Expectations
 

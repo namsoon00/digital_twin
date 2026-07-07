@@ -18,6 +18,7 @@ from .disclosure_analyzer import disclosure_analyzer_from_settings
 from .model_review_queue import ModelReviewEnqueuer
 from .model_reviewer import reviewer_from_settings
 from .neo4j_ontology import ontology_repository_from_settings
+from .ontology_projection import PortfolioOntologyProjectionRecorder
 from .notifications import queued_notifier_for_account
 from .notifications import send_events
 from .notifications import notifier_for_account
@@ -25,6 +26,7 @@ from .settings import currency_rates, runtime_settings
 from .sqlite_model_review import SQLiteModelReviewJobStore
 from .sqlite_monitoring import SQLiteMonitorStore
 from .sqlite_monitoring import SQLiteMarketQuoteCache
+from .sqlite_monitoring import SQLiteMonitoringCycleRecorder
 from .sqlite_monitoring import SQLiteOntologyQualitySampleStore
 from .sqlite_notifications import SQLiteNotificationJobStore, SQLiteNotificationTemplateStore
 from .sqlite_symbols import SQLiteSymbolUniverseStore
@@ -42,6 +44,7 @@ def monitor_event_bus() -> EventBus:
 def build_monitor_runner(accounts: Iterable[AccountConfig], event_publisher=None) -> MonitorRunner:
     settings = runtime_settings()
     store = SQLiteMonitorStore()
+    ontology_quality_store = SQLiteOntologyQualitySampleStore()
     return MonitorRunner(
         accounts,
         store=store,
@@ -49,9 +52,12 @@ def build_monitor_runner(accounts: Iterable[AccountConfig], event_publisher=None
         snapshot_builder=build_snapshot,
         event_sender=send_events,
         event_publisher=event_publisher or monitor_event_bus(),
-        cycle_recorder=store,
-        ontology_repository=ontology_repository_from_settings(settings),
-        ontology_quality_store=SQLiteOntologyQualitySampleStore(),
+        cycle_recorder=SQLiteMonitoringCycleRecorder(monitor_store=store),
+        ontology_projection_recorder=PortfolioOntologyProjectionRecorder(
+            ontology_repository_from_settings(settings),
+            quality_store=ontology_quality_store,
+            settings=settings,
+        ),
     )
 
 

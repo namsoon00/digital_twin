@@ -3365,7 +3365,7 @@
   function addAccountWatchSymbol(accountId, symbol) {
     var next = normalizeSymbols(symbol || "");
     if (!next.length) {
-      state.watchlistError = "추가할 티커나 종목코드를 입력하세요.";
+      state.watchlistError = "추가할 종목을 입력하세요.";
       render();
       return Promise.resolve();
     }
@@ -3390,7 +3390,7 @@
     var originalSymbol = String(original || "").toUpperCase();
     var next = normalizeSymbols(nextValue || "");
     if (!next.length) {
-      state.watchlistError = "수정할 티커나 종목코드를 입력하세요.";
+      state.watchlistError = "수정할 종목을 입력하세요.";
       render();
       return Promise.resolve();
     }
@@ -3801,7 +3801,7 @@
     }
     var items = state.watchSuggestItems || [];
     if (!items.length) {
-      return '<p class="subtle watch-suggest-message">검색 결과가 없습니다. 티커나 종목코드를 직접 입력할 수 있습니다.</p>';
+      return '<p class="subtle watch-suggest-message">검색 결과가 없습니다. 종목명을 다시 확인하세요.</p>';
     }
     return items.map(function (item) {
       var symbol = suggestionKey(item);
@@ -3886,7 +3886,7 @@
   function addWatchSymbol(symbol) {
     var next = normalizeSymbols(symbol || "");
     if (!next.length) {
-      state.watchlistError = "추가할 티커나 종목코드를 입력하세요.";
+      state.watchlistError = "추가할 종목을 입력하세요.";
       render();
       return Promise.resolve();
     }
@@ -7325,7 +7325,7 @@
       '</div>',
       '<div class="watch-editor account-watch-editor">',
       '<form class="watch-add-form" data-watch-add-form data-watch-account-id="' + escapeHtml(accountId) + '">',
-      '<input name="symbol" data-watch-symbol-input placeholder="종목명, 티커, 코드 검색" value="' + escapeHtml(state.watchSuggestQuery || "") + '" autocomplete="off"' + (locked ? " disabled" : "") + ' />',
+      '<input name="symbol" data-watch-symbol-input placeholder="회사명으로 검색" value="' + escapeHtml(state.watchSuggestQuery || "") + '" autocomplete="off"' + (locked ? " disabled" : "") + ' />',
       '<button class="text-button primary"' + (locked ? " disabled" : "") + '>' + escapeHtml(state.watchlistSavingAccountId === accountId ? "저장 중" : "추가") + '</button>',
       '</form>',
       '<div class="watch-suggest-box" data-watch-suggest-list data-watch-account-id="' + escapeHtml(accountId) + '">' + renderWatchSuggestList() + '</div>',
@@ -8974,14 +8974,31 @@
   function ontologyEntityLabelMap(entities) {
     return (entities || []).reduce(function (labels, entity) {
       var id = String(entity && entity.id || "");
-      if (id) labels[id] = entity.label || id;
+      if (id) labels[id] = ontologyEntityDisplayLabel(entity, id);
       return labels;
     }, {});
   }
 
   function ontologyEndpointLabel(id, labels) {
     var key = String(id || "");
-    return labels && labels[key] ? labels[key] : (key || "-");
+    if (labels && labels[key]) return labels[key];
+    var symbol = ontologyAboxSymbolFromId(key);
+    if (symbol) return stockDisplayName(symbol);
+    return key || "-";
+  }
+
+  function ontologyEntityDisplayLabel(entity, fallbackId) {
+    entity = entity || {};
+    var properties = entity.properties || {};
+    var id = String(entity.id || fallbackId || "");
+    var symbol = String(properties.symbol || ontologyAboxSymbolFromId(id) || "").trim().toUpperCase();
+    if (symbol) {
+      var label = String(entity.label || properties.name || properties.displayName || "").trim();
+      var item = Object.assign({}, properties, { symbol: symbol });
+      if (label && label.toUpperCase() !== symbol) item.name = label;
+      return stockDisplayName(symbol, item);
+    }
+    return entity.label || properties.name || id || "-";
   }
 
   function ontologyRelationCounts(relations) {
@@ -9091,7 +9108,7 @@
     if (!opinion || !opinion.action) return "";
     return [
       '<p>관계 판단: ' + escapeHtml(opinion.action) + ' · 관계 신호 ' + escapeHtml(Math.round(ontologyPressureOf(opinion))) + '점 · 확신 ' + escapeHtml(opinion.conviction || 0) + '점</p>',
-      opinion.thesis ? '<p>판단 근거: ' + escapeHtml(beginnerFriendlyText(opinion.thesis)) + '</p>' : ''
+      opinion.thesis ? '<p>판단 근거: ' + escapeHtml(textWithKnownDisplaySymbols(beginnerFriendlyText(opinion.thesis), item.symbol, item)) + '</p>' : ''
     ].join("");
   }
 
@@ -9335,8 +9352,7 @@
   }
 
   function ontologyEntityGraphLabel(entity) {
-    var properties = entity && entity.properties ? entity.properties : {};
-    return properties.symbol || entity.label || entity.id || "-";
+    return ontologyEntityDisplayLabel(entity, entity && entity.id);
   }
 
   function ontologyAddGraphNode(nodesById, id, label, kind, title, symbol) {
@@ -9420,7 +9436,8 @@
     (aboxRelations || []).forEach(function (relation) {
       [relation.source, relation.target].forEach(function (id) {
         var entity = entityById[id] || { id: id, label: ontologyEndpointLabel(id, entityLabels), kind: "entity" };
-        ontologyAddGraphNode(nodesById, id, ontologyEntityGraphLabel(entity), ontologyAboxKind(entity), entity.label || id, ontologyAboxSymbolFromId(id));
+        var label = ontologyEntityGraphLabel(entity);
+        ontologyAddGraphNode(nodesById, id, label, ontologyAboxKind(entity), label, ontologyAboxSymbolFromId(id));
       });
     });
     var edges = (aboxRelations || []).map(function (relation) {
@@ -9431,14 +9448,15 @@
       var symbol = String(opinion && opinion.symbol || "").toUpperCase();
       var stockId = "stock:" + symbol;
       if (!symbol || !nodesById[stockId]) return;
+      var displayName = nodesById[stockId].label || stockDisplayName(symbol);
       var stockEvidence = (evidence || []).filter(function (item) { return String(item && item.subject || "") === stockId; });
       var stockBeliefs = (beliefs || []).filter(function (item) { return String(item && item.subject || "") === stockId; });
       var evidenceId = "evidence-set:" + symbol;
       var beliefId = "belief-set:" + symbol;
       var opinionId = "opinion:" + symbol;
-      ontologyAddGraphNode(nodesById, evidenceId, "근거 " + stockEvidence.length, "evidence", symbol + " 근거 " + stockEvidence.length + "개", symbol);
-      ontologyAddGraphNode(nodesById, beliefId, "판단 근거 " + stockBeliefs.length, "belief", symbol + " 판단 근거 " + stockBeliefs.length + "개", symbol);
-      ontologyAddGraphNode(nodesById, opinionId, "의견 " + symbol, "opinion", beginnerFriendlyText(opinion.thesis || opinion.action || symbol), symbol);
+      ontologyAddGraphNode(nodesById, evidenceId, "근거 " + stockEvidence.length, "evidence", displayName + " 근거 " + stockEvidence.length + "개", symbol);
+      ontologyAddGraphNode(nodesById, beliefId, "판단 근거 " + stockBeliefs.length, "belief", displayName + " 판단 근거 " + stockBeliefs.length + "개", symbol);
+      ontologyAddGraphNode(nodesById, opinionId, "의견 " + displayName, "opinion", textWithKnownDisplaySymbols(beginnerFriendlyText(opinion.thesis || opinion.action || displayName), symbol, { symbol: symbol, name: displayName }), symbol);
       edges.push({ source: stockId, target: evidenceId, type: "HAS_EVIDENCE", kind: "derived" });
       edges.push({ source: evidenceId, target: "runtime-rules", type: "EVALUATED_BY", kind: "rule" });
       edges.push({ source: "runtime-rules", target: beliefId, type: "DERIVES", kind: "rule" });
@@ -9744,7 +9762,7 @@
       { name: "관계 행", count: relations.length, key: "source + type + target", fk: "출발점,도착점 -> 데이터 id" },
       { name: "근거 행", count: evidence.length, key: "id", fk: "대상 -> 데이터 id" },
       { name: "판단 근거 행", count: beliefs.length, key: "id", fk: "대상 -> 데이터 id" },
-      { name: "AI 의견 행", count: opinions.length, key: "symbol", fk: "종목코드 -> 종목 데이터" }
+      { name: "AI 의견 행", count: opinions.length, key: "회사 표시명", fk: "회사명 -> 종목 데이터" }
     ];
     return [
       '<section class="ontology-surface ontology-projection-surface">',
@@ -9885,10 +9903,10 @@
       '<span>모델 역할 <strong>보조 근거</strong></span>',
       '</div>',
       '<div class="exit-reasons">',
-      opinion.thesis ? '<p>' + escapeHtml(beginnerFriendlyText(opinion.thesis)) + '</p>' : '',
-      risks.slice(0, 3).map(function (risk) { return '<p>리스크: ' + escapeHtml(risk) + '</p>'; }).join(""),
-      contradictions.slice(0, 2).map(function (risk) { return '<p>충돌: ' + escapeHtml(risk) + '</p>'; }).join(""),
-      supports.slice(0, 2).map(function (support) { return '<p>지지: ' + escapeHtml(support) + '</p>'; }).join(""),
+      opinion.thesis ? '<p>' + escapeHtml(textWithKnownDisplaySymbols(beginnerFriendlyText(opinion.thesis), item.symbol, item)) + '</p>' : '',
+      risks.slice(0, 3).map(function (risk) { return '<p>리스크: ' + escapeHtml(textWithKnownDisplaySymbols(risk, item.symbol, item)) + '</p>'; }).join(""),
+      contradictions.slice(0, 2).map(function (risk) { return '<p>충돌: ' + escapeHtml(textWithKnownDisplaySymbols(risk, item.symbol, item)) + '</p>'; }).join(""),
+      supports.slice(0, 2).map(function (support) { return '<p>지지: ' + escapeHtml(textWithKnownDisplaySymbols(support, item.symbol, item)) + '</p>'; }).join(""),
       '</div>',
       '</div>'
     ].join("");
@@ -11570,7 +11588,7 @@
       '</div>',
       '<div class="watch-editor">',
       '<form class="watch-add-form" data-watch-add-form>',
-      '<input name="symbol" data-watch-symbol-input placeholder="티커/종목명 검색 후 추가" value="' + escapeHtml(state.watchSuggestQuery || "") + '" autocomplete="off" />',
+      '<input name="symbol" data-watch-symbol-input placeholder="회사명으로 검색 후 추가" value="' + escapeHtml(state.watchSuggestQuery || "") + '" autocomplete="off" />',
       '<button class="text-button primary">추가</button>',
       '</form>',
       '<div class="watch-suggest-box" data-watch-suggest-list>' + renderWatchSuggestList() + '</div>',
@@ -11643,7 +11661,7 @@
       '</label>',
       '<label>',
       '<span>검색어</span>',
-      '<input name="query" data-symbol-query placeholder="종목명 또는 티커 검색" value="' + escapeHtml(state.symbolUniverseQuery || "") + '" autocomplete="off" />',
+      '<input name="query" data-symbol-query placeholder="회사명 검색" value="' + escapeHtml(state.symbolUniverseQuery || "") + '" autocomplete="off" />',
       '</label>',
       full ? '<label><span>표시 수</span><select name="limit" data-symbol-limit>' + [80, 200, 500].map(function (value) {
         return '<option value="' + value + '"' + (Number(state.symbolUniverseLimit || 80) === value ? " selected" : "") + '>' + value + '개</option>';
@@ -13131,7 +13149,7 @@
         var input = form.querySelector('input[name="symbol"]');
         var next = normalizeSymbols(input ? input.value : "");
         if (!next.length) {
-          state.watchlistError = "수정할 티커나 종목코드를 입력하세요.";
+          state.watchlistError = "수정할 종목을 입력하세요.";
           render();
           return;
         }

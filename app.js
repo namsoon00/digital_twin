@@ -1976,6 +1976,8 @@
       "적정가 대비",
       "24h 거래액",
       "현재가",
+      "평단가",
+      "수익률",
       "기준일",
       "발송시각",
       "연속 실패",
@@ -2005,6 +2007,10 @@
       "실패 단계": 12,
       "재시도": 13,
       "손익": 20,
+      "미장 가격 변동": 20,
+      "현재가": 21,
+      "평단가": 22,
+      "수익률": 23,
       "매수 판단": 25,
       "매도 판단": 26,
       "수급": 30,
@@ -2027,6 +2033,10 @@
       "실패 단계": true,
       "재시도": true,
       "손익": true,
+      "미장 가격 변동": true,
+      "현재가": true,
+      "평단가": true,
+      "수익률": true,
       "매수 판단": true,
       "매도 판단": true,
       "수급": true,
@@ -2152,7 +2162,7 @@
     }
     function notificationTitleIcon(type, rawItems, sample) {
       var status = dataValue(rawItems, "상태");
-      var profit = dataValue(rawItems, "손익");
+      var profit = dataValue(rawItems, "손익") || dataValue(rawItems, "수익률");
       var change = dataValue(rawItems, "변화");
       var signal = dataValue(rawItems, "신호");
       var titleText = String(sample && sample.title || "");
@@ -2185,7 +2195,7 @@
     }
     function notificationTitleHeadline(type, rawItems, sample, fallback) {
       var status = dataValue(rawItems, "상태");
-      var profit = dataValue(rawItems, "손익");
+      var profit = dataValue(rawItems, "손익") || dataValue(rawItems, "수익률");
       var change = dataValue(rawItems, "변화");
       var signal = dataValue(rawItems, "신호");
       var titleText = String(sample && sample.title || "");
@@ -2318,7 +2328,7 @@
       } else if (type === "monitorTrendChange") {
         detected = rawItems.filter(function (line) { return /^신호\s/.test(line) || /^추세[:\s]/.test(line); }).join(", ");
       } else if (type === "externalEquityMove") {
-        detected = rawItems.filter(function (line) { return /^미장 가격 변동\s/.test(line) || /^가격\s/.test(line); }).join(", ");
+        detected = rawItems.filter(function (line) { return /^미장 가격 변동\s/.test(line) || /^현재가[:\s]/.test(line) || /^가격\s/.test(line); }).join(", ");
       } else if (rawItems.length) {
         detected = rawItems[0];
       }
@@ -2337,14 +2347,14 @@
         title: "삼성전자 매수 후보",
         symbol: "005930",
         severity: "WATCH",
-        lines: ["매수 판단 매수 후보 (78점)", "적정가 대비 -12.4%", "거래량과 이동평균이 기준 이상"],
+        lines: ["매수 판단 매수 후보 (78점)", "현재가: 7만 1,000원", "평단가: 7만 4,000원", "수익률: -4.1%", "적정가 대비 -12.4%", "거래량과 이동평균이 기준 이상"],
         criteria: ["설정: 모델 매수 기준 매수 후보 이상 (74점)", "감지: 매수 후보 (78점)"]
       },
       modelSell: {
         title: "엔비디아 분할매도 검토",
         symbol: "NVDA",
         severity: "ALERT",
-        lines: ["매도 판단 분할매도 압력 (74점)", "목표 수익률 도달", "20일선 이탈 여부 확인"],
+        lines: ["매도 판단 분할매도 압력 (74점)", "현재가: $180", "평단가: $142", "수익률: +26.8%", "목표 수익률 도달", "20일선 이탈 여부 확인"],
         criteria: ["설정: 모델 매도 기준 분할매도 압력 이상 (72점)", "감지: 분할매도 압력 (74점)"]
       },
       watchlistBuyCandidate: {
@@ -2372,8 +2382,8 @@
         title: "SK하이닉스 매수·매도 타이밍",
         symbol: "000660",
         severity: "WATCH",
-        lines: ["상태 조건부 보유 (52점)", "손익 -3.2%", "추세: 현재 15만 원, 20일선 14만 원(+4.2%)", "수급: 거래량 31,000(1.7x), 거래액 48억 원", "투자자: 외국인 +22,000, 기관 -8,000", "매도/매수 기준 재확인"],
-        criteria: ["설정: 판단 상태가 위험/주의이거나 손익률이 -8% 이하일 때", "감지: 상태 조건부 보유 (52점), 손익 -3.2%"]
+        lines: ["상태 조건부 보유 (52점)", "현재가: 15만 원", "평단가: 15만 5,000원", "수익률: -3.2%", "추세: 현재 15만 원, 20일선 14만 원(+4.2%)", "수급: 거래량 31,000(1.7x), 거래액 48억 원", "투자자: 외국인 +22,000, 기관 -8,000", "권장 액션: 보유 유지, 추가매수는 새 매수 신호가 뜰 때까지 보류"],
+        criteria: ["설정: 판단 상태가 위험/주의이거나 손익률이 -8% 이하일 때", "감지: 상태 조건부 보유 (52점), 수익률 -3.2%"]
       },
       monitorHeartbeat: {
         title: "실시간 모니터링",
@@ -2393,28 +2403,28 @@
         title: "SK하이닉스",
         symbol: "000660",
         severity: "WATCH",
-        lines: ["보유 수량 변경", "이전 4주", "현재 5주", "평가액 1,114만 원"],
+        lines: ["보유 수량 변경", "이전 4주", "현재 5주", "현재가: 22만 3,000원", "평단가: 25만 7,500원", "수익률: -13.4%", "평가액 1,114만 원"],
         criteria: ["설정: 직전 스냅샷 대비 보유 수량이 달라졌을 때", "감지: 이전 4주, 현재 5주"]
       },
       monitorPnlChange: {
         title: "SK하이닉스",
         symbol: "000660",
         severity: "WATCH",
-        lines: ["손익률 급변", "이전 -16.3%", "현재 -13.3%", "변화 +3.0%p"],
+        lines: ["손익률 급변", "이전 -16.3%", "현재 -13.3%", "변화 +3.0%p", "현재가: 22만 3,000원", "평단가: 25만 7,500원", "수익률: -13.3%"],
         criteria: ["설정: 손익률 변화폭 ±2%p 이상", "감지: 변화 +3.0%p, 이전 -16.3%, 현재 -13.3%"]
       },
       monitorValueChange: {
         title: "SK하이닉스",
         symbol: "000660",
         severity: "WATCH",
-        lines: ["평가액 급변", "이전 1,051만 원", "현재 1,114만 원", "변화 +6.0%"],
+        lines: ["평가액 급변", "이전 1,051만 원", "현재 1,114만 원", "변화 +6.0%", "현재가: 22만 3,000원", "평단가: 25만 7,500원", "수익률: -13.3%"],
         criteria: ["설정: 평가액 변화율 ±5% 이상", "감지: 변화 +6.0%, 이전 1,051만 원, 현재 1,114만 원"]
       },
       monitorTrendChange: {
         title: "SK하이닉스",
         symbol: "000660",
         severity: "ALERT",
-        lines: ["이동평균 변화", "현재가: 15만 원", "신호 20일선 하향 이탈 · 60일선 상향 돌파", "추세: 20일선 14만 원보다 4.2% 높음, 60일선 13만 원보다 9.1% 높음", "수급: 거래량 31,000(1.7x), 거래액 48억 원", "투자자: 외국인 +22,000, 기관 -8,000"],
+        lines: ["이동평균 변화", "현재가: 15만 원", "평단가: 15만 5,000원", "수익률: -3.2%", "신호 20일선 하향 이탈 · 60일선 상향 돌파", "추세: 20일선 14만 원보다 4.2% 높음, 60일선 13만 원보다 9.1% 높음", "수급: 거래량 31,000(1.7x), 거래액 48억 원", "투자자: 외국인 +22,000, 기관 -8,000"],
         criteria: ["설정: 20일/60일 이동평균 돌파, 크로스, 또는 현재가가 이동평균보다 8% 이상 높거나 낮을 때", "감지: 신호 20일선 하향 이탈 · 60일선 상향 돌파"]
       },
       monitorCashChange: {
@@ -2428,15 +2438,15 @@
         title: "SK하이닉스",
         symbol: "000660",
         severity: "WATCH",
-        lines: ["판단 변화", "이전 위험 관찰 (36점)", "현재 조건부 보유 (52점)", "Codex 답변: 판단명이 바뀌어 재검토 필요"],
+        lines: ["판단 변화", "이전 위험 관찰 (36점)", "현재 조건부 보유 (52점)", "현재가: 15만 원", "평단가: 15만 5,000원", "수익률: -3.2%", "권장 액션: 보유 유지, 추가매수는 새 매수 신호가 뜰 때까지 보류", "Codex 답변: 판단명이 바뀌어 재검토 필요"],
         criteria: ["설정: 판단 이름 변경 또는 위험 점수 변화 15점 이상", "감지: 이전 위험 관찰 (36점), 현재 조건부 보유 (52점)"]
       },
       externalEquityMove: {
         title: "미국 주식 변동",
         symbol: "AAPL",
         severity: "WATCH",
-        lines: ["미장 가격 변동 +3.1%", "가격 $180", "거래량 58,000,000", "출처 Alpha Vantage"],
-        criteria: ["설정: 미장 가격 변동률 ±3% 이상", "감지: 가격 변동 +3.1%, 가격 $180"]
+        lines: ["미장 가격 변동 +3.1%", "현재가: $180", "평단가: $155", "수익률: +16.1%", "거래량 58,000,000", "출처 Alpha Vantage"],
+        criteria: ["설정: 미장 가격 변동률 ±3% 이상", "감지: 가격 변동 +3.1%, 현재가 $180"]
       },
       externalCryptoMove: {
         title: "크립토 변동",
@@ -2463,7 +2473,7 @@
         title: "국내 공시 감지",
         symbol: "005930",
         severity: "INFO",
-        lines: ["신규 공시 감지", "단일판매·공급계약", "접수일 20260701", "출처 OpenDART"],
+        lines: ["신규 공시 감지", "단일판매·공급계약", "현재가: 7만 1,000원", "평단가: 7만 4,000원", "수익률: -4.1%", "접수일 20260701", "출처 OpenDART"],
         criteria: ["설정: OpenDART 접수번호가 직전 조회와 다를 때", "감지: 단일판매·공급계약, 접수일 20260701"]
       },
       externalDataConnection: {

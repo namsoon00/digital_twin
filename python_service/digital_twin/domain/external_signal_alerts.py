@@ -239,6 +239,7 @@ class ExternalSignalAlertMixin:
         threshold = float(self.thresholds.get("externalEquityChangePct", 0))
         events: List[AlertEvent] = []
         quotes = signals.get("equityQuotes") or {}
+        positions = {item.symbol.upper(): item.to_dict() for item in snapshot.positions if item.symbol and not item.is_cash()}
         for symbol, quote in quotes.items():
             if not isinstance(quote, dict):
                 continue
@@ -250,6 +251,11 @@ class ExternalSignalAlertMixin:
             volume = number(quote.get("volume"))
             provider = str(quote.get("provider") or "Alpha Vantage")
             latest_trading_day = str(quote.get("latestTradingDay") or "")
+            position_context = dict(positions.get(symbol_label) or {})
+            if position_context and price:
+                position_context["current_price"] = price
+                position_context["currency"] = position_context.get("currency") or "USD"
+            price_lines = self.holding_price_lines(position_context) if position_context else ["현재가: " + money(price, "USD")]
             events.append(AlertEvent(
                 snapshot.account_id,
                 snapshot.account_label,
@@ -259,7 +265,7 @@ class ExternalSignalAlertMixin:
                 symbol_label,
                 [
                     "미장 가격 변동 " + signed_pct(change),
-                    "현재가: " + money(price, "USD"),
+                    *price_lines,
                     "거래량 " + compact_number(volume),
                     "기준일 " + (latest_trading_day or "-"),
                     "출처 " + provider,
@@ -414,7 +420,7 @@ class ExternalSignalAlertMixin:
                 continue
             symbol_label = str(symbol or "").upper()
             provider = str(item.get("provider") or "OpenDART")
-            current_price = self.current_price_line(positions.get(symbol_label) or {})
+            holding_price_lines = self.holding_price_lines(positions.get(symbol_label) or {})
             events.append(AlertEvent(
                 snapshot.account_id,
                 snapshot.account_label,
@@ -425,7 +431,7 @@ class ExternalSignalAlertMixin:
                 [
                     "신규 공시 감지",
                     str(item.get("reportName") or "-"),
-                    current_price,
+                    *holding_price_lines,
                     "접수일 " + str(item.get("receiptDate") or "-"),
                     "최근 공시 " + compact_number(number(item.get("count"))) + "건",
                     "출처 " + provider,

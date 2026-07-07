@@ -48,6 +48,8 @@ DATA_LABEL_PREFIXES = [
     "적정가 대비",
     "24h 거래액",
     "현재가",
+    "평단가",
+    "수익률",
     "기준일",
     "발송시각",
     "연속 실패",
@@ -81,6 +83,8 @@ DATA_LABEL_ORDER = {
     "손익": 20,
     "미장 가격 변동": 20,
     "현재가": 21,
+    "평단가": 22,
+    "수익률": 23,
     "매수 판단": 25,
     "매도 판단": 26,
     "수급": 30,
@@ -109,6 +113,8 @@ SEPARATE_DATA_LABELS = {
     "손익",
     "미장 가격 변동",
     "현재가",
+    "평단가",
+    "수익률",
     "매수 판단",
     "매도 판단",
     "수급",
@@ -452,7 +458,7 @@ def compact_action_title(value: str) -> str:
 def notification_title_icon(rule: str, raw_lines: List[str], event: AlertEvent) -> str:
     key = str(rule or "")
     status = data_value(raw_lines, "상태")
-    profit = data_value(raw_lines, "손익")
+    profit = data_value(raw_lines, "손익") or data_value(raw_lines, "수익률")
     change = data_value(raw_lines, "변화")
     signal = data_value(raw_lines, "신호")
     title_text = str(getattr(event, "title", "") or "")
@@ -497,7 +503,7 @@ def notification_title_icon(rule: str, raw_lines: List[str], event: AlertEvent) 
 def notification_title_headline(rule: str, raw_lines: List[str], event: AlertEvent, fallback: str) -> str:
     key = str(rule or "")
     status = data_value(raw_lines, "상태")
-    profit = data_value(raw_lines, "손익")
+    profit = data_value(raw_lines, "손익") or data_value(raw_lines, "수익률")
     change = data_value(raw_lines, "변화")
     signal = data_value(raw_lines, "신호")
     title_text = str(getattr(event, "title", "") or "")
@@ -638,7 +644,7 @@ def inferred_criterion_lines(event: AlertEvent, raw_lines: List[str], trigger_su
     change = data_value(raw_lines, "변화")
     signal = data_value(raw_lines, "신호")
     status = data_value(raw_lines, "상태")
-    profit = data_value(raw_lines, "손익")
+    profit = data_value(raw_lines, "손익") or data_value(raw_lines, "수익률")
 
     if rule in {"modelBuy", "watchlistBuyCandidate"}:
         score = data_value(raw_lines, "매수 판단") or data_value(raw_lines, "모델 매수 점수")
@@ -649,7 +655,7 @@ def inferred_criterion_lines(event: AlertEvent, raw_lines: List[str], trigger_su
         if score:
             details.append("감지: " + score)
     elif rule == "holdingTiming":
-        detected = ", ".join(part for part in ["상태 " + status if status else "", "손익 " + profit if profit else ""] if part)
+        detected = ", ".join(part for part in ["상태 " + status if status else "", "수익률 " + profit if profit else ""] if part)
         if detected:
             details.append("감지: " + detected)
     elif rule in {"monitorPnlChange", "monitorValueChange", "monitorCashChange"}:
@@ -1340,6 +1346,8 @@ def selected_holding_formula_key(context: Dict[str, object]) -> str:
     pnl = context_number(context, "profitLossRate")
     if pnl is None:
         pnl = context_number(context, "손익")
+    if pnl is None:
+        pnl = context_number(context, "수익률")
     if pnl is not None:
         return "lossCutScoreFormula" if pnl < 0 else "profitTakeScoreFormula"
     return ""

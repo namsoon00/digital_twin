@@ -28,7 +28,7 @@ from digital_twin.domain.accounts import AccountConfig
 from digital_twin.domain.market_data import normalize_position, technical_indicators_from_candles
 from digital_twin.domain.message_types import DEFAULT_ALERT_RULES, DEFAULT_CADENCE, MESSAGE_TYPE_EMOJIS, MESSAGE_TYPE_LABELS, public_message_catalog
 from digital_twin.domain.ontology import build_portfolio_ontology
-from digital_twin.domain.ontology_rules import evaluate_position_relation_rules
+from digital_twin.domain.ontology_rules import decision_action_group_for_label, evaluate_position_relation_rules
 from digital_twin.domain.portfolio_calculations import portfolio_summary
 from digital_twin.domain.strategy import SafeFormula, StrategyModel, decisions_for_positions
 from digital_twin.domain.events import ACCOUNT_SAVED, MARKET_DATA_COLLECTED, MONITORING_ALERTS_DETECTED, MONITORING_CYCLE_COMPLETED, MONITORING_SNAPSHOT_COLLECTED, alerts_detected_event, monitoring_cycle_completed_event, snapshot_collected_event
@@ -1154,6 +1154,11 @@ class PythonServiceTests(unittest.TestCase):
 
         self.assertEqual("비트코인 민감도 점검", context["decision"]["label"])
         self.assertLess(context["decision"]["score"], 70)
+        self.assertEqual("BTC_REVIEW", context["decision"]["decisionStage"])
+        self.assertEqual("cryptoSensitivity", context["decision"]["actionGroup"])
+        self.assertEqual("review", context["decision"]["actionLevel"])
+        self.assertEqual("REVIEW", context["decision"]["scoreBand"]["key"])
+        self.assertEqual(70.0, context["decision"]["nextStageAt"])
 
     def test_bitcoin_sensitive_holding_uses_reduction_label_after_action_threshold(self):
         position = Position(
@@ -1190,6 +1195,16 @@ class PythonServiceTests(unittest.TestCase):
 
         self.assertEqual("비트코인 민감도 축소 검토", context["decision"]["label"])
         self.assertGreaterEqual(context["decision"]["score"], 70)
+        self.assertEqual("BTC_REDUCE", context["decision"]["decisionStage"])
+        self.assertEqual("cryptoSensitivity", context["decision"]["actionGroup"])
+        self.assertEqual("action", context["decision"]["actionLevel"])
+        self.assertEqual("ACTION", context["decision"]["scoreBand"]["key"])
+
+    def test_decision_action_group_uses_ontology_stage_aliases(self):
+        self.assertEqual("cryptoSensitivity", decision_action_group_for_label("비트코인 민감도 점검"))
+        self.assertEqual("cryptoSensitivity", decision_action_group_for_label("비트코인 민감도 축소 검토"))
+        self.assertEqual("lossControl", decision_action_group_for_label("손실 관리 기준 확인"))
+        self.assertEqual("profitTake", decision_action_group_for_label("분할 매도 기준 확인"))
 
     def test_ontology_loss_guard_requires_negative_pnl(self):
         position = Position(
@@ -1508,6 +1523,7 @@ class PythonServiceTests(unittest.TestCase):
             "currency": "KRW",
             "marketValue": 1000000,
             "quantity": 10,
+            "averagePrice": 110000,
             "currentPrice": 100000,
             "profitLossRate": -9,
             "sector": "반도체",
@@ -1529,7 +1545,11 @@ class PythonServiceTests(unittest.TestCase):
         message = event.message()
 
         self.assertRegex(message, r"상태 .+ \([0-9.]+점\)")
+        self.assertIn("현재가: 10만 원", message)
+        self.assertIn("평단가: 11만 원", message)
+        self.assertIn("수익률: -9.0%", message)
         self.assertTrue(any("상태 " in item and "점)" in item for item in event.criteria))
+        self.assertTrue(any("수익률 -9.0%" in item for item in event.criteria))
 
     def test_watchlist_buy_candidate_uses_dedicated_message_type(self):
         watch = normalize_position({
@@ -1564,6 +1584,9 @@ class PythonServiceTests(unittest.TestCase):
         candidate = next(event for event in events if event.rule == "watchlistBuyCandidate")
         self.assertEqual("AAPL", candidate.symbol)
         self.assertIn("관심종목 매수 후보", candidate.message())
+        self.assertIn("현재가: $185", candidate.message())
+        self.assertNotIn("평단가", candidate.message())
+        self.assertNotIn("수익률", candidate.message())
         self.assertTrue(any("관심종목 매수 기준" in item for item in candidate.criteria))
         self.assertFalse(any(event.rule == "modelBuy" for event in events))
 
@@ -1812,6 +1835,7 @@ class PythonServiceTests(unittest.TestCase):
             "market": "KR",
             "currency": "KRW",
             "currentPrice": 98000,
+            "averagePrice": 100000,
             "marketValue": 1000000,
             "quantity": 10,
             "profitLossRate": 5,
@@ -1825,6 +1849,7 @@ class PythonServiceTests(unittest.TestCase):
             "market": "KR",
             "currency": "KRW",
             "currentPrice": 106000,
+            "averagePrice": 100000,
             "marketValue": 1000000,
             "quantity": 10,
             "profitLossRate": 5,
@@ -1879,6 +1904,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("60일선 상향 돌파", message)
         self.assertIn("20/60일선 골든크로스", message)
         self.assertIn("현재가: 11만 원", message)
+        self.assertIn("평단가: 10만 원", message)
+        self.assertIn("수익률: +5.0%", message)
         self.assertIn("추세: 20일선 10만 원보다 1.9% 높음, 60일선 10만 원보다 2.9% 높음", message)
         self.assertIn("수급: 거래량 40,000(2.1x), 거래액 24억 원", message)
         self.assertIn("투자자: 외국인 +70,000(매수 510,000/매도 440,000), 기관 +35,000(매수 350,000/매도 315,000)", message)
@@ -2281,6 +2308,7 @@ class PythonServiceTests(unittest.TestCase):
             "currency": "USD",
             "marketValue": 1000,
             "quantity": 2,
+            "averagePrice": 100,
             "currentPrice": 125,
             "profitLossRate": 25,
             "sector": "AI/플랫폼",
@@ -2292,7 +2320,9 @@ class PythonServiceTests(unittest.TestCase):
             "currency": "KRW",
             "marketValue": 1000000,
             "quantity": 10,
+            "averagePrice": 95000,
             "currentPrice": 100000,
+            "profitLossRate": 5.3,
             "sector": "반도체",
         })
         portfolio = portfolio_summary([position, kr_position], 300, "KRW")
@@ -2356,6 +2386,9 @@ class PythonServiceTests(unittest.TestCase):
 
         self.assertIn("externalEquityMove", messages)
         self.assertIn("Alpha Vantage", messages["externalEquityMove"])
+        self.assertIn("현재가: $130", messages["externalEquityMove"])
+        self.assertIn("평단가: $100", messages["externalEquityMove"])
+        self.assertIn("수익률: +25.0%", messages["externalEquityMove"])
         self.assertIn("externalCryptoMove", messages)
         self.assertIn("CoinGecko", messages["externalCryptoMove"])
         self.assertIn("비트코인 변동", messages["externalCryptoMove"])
@@ -2364,6 +2397,9 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("DGS10", messages["externalMacroShift"])
         self.assertIn("externalDartDisclosure", messages)
         self.assertIn("주요사항보고서", messages["externalDartDisclosure"])
+        self.assertIn("현재가: 10만 원", messages["externalDartDisclosure"])
+        self.assertIn("평단가: 10만 원", messages["externalDartDisclosure"])
+        self.assertIn("수익률: +5.3%", messages["externalDartDisclosure"])
         self.assertIn("externalDataConnection", messages)
         criteria_by_rule = {event.rule: event.criteria for event in events}
         self.assertTrue(any("±3% 이상" in item for item in criteria_by_rule["externalEquityMove"]))
@@ -4456,7 +4492,9 @@ class PythonServiceTests(unittest.TestCase):
             "market": "KR",
             "currency": "KRW",
             "marketValue": 1000000,
+            "averagePrice": 74000,
             "currentPrice": 71000,
+            "profitLossRate": -4.1,
             "tradeStrength": 130,
             "volumeRatio": 2.1,
             "buyVolume": 700,
@@ -4484,6 +4522,9 @@ class PythonServiceTests(unittest.TestCase):
         message = templates.render(event.rule, alert_context(event))
 
         self.assertTrue(event.metadata.get("formulaAudits"))
+        self.assertIn("• <b>현재가</b>: <code>7만 원</code>", message)
+        self.assertIn("• <b>평단가</b>: <code>7만 원</code>", message)
+        self.assertIn("• <b>수익률</b>: <code>-4.1%</code>", message)
         self.assertIn("매수 공식(buyScoreFormula)", message)
         self.assertIn("매도 공식(sellScoreFormula)", message)
         self.assertIn("모델 대입값", message)

@@ -1,6 +1,5 @@
 from typing import List
 
-from .alert_formatting import signed_pct
 from .portfolio import AccountSnapshot, AlertEvent
 
 
@@ -19,11 +18,14 @@ class StrategyAlertMixin:
             scores = self.strategy_model.score(position.to_dict())
             formula_audits = self.strategy_model.score_formula_audits(position.to_dict(), scores)
             symbol = position.symbol.upper()
+            position_context = position.to_dict()
+            current_price = self.current_price_line(position_context)
+            price_lines = self.holding_price_lines(position_context) if source == "보유" else [current_price] if current_price else []
             common_lines = [
                 source + " 종목",
-                self.current_price_line(position.to_dict()),
-                self.flow_context_line(position.to_dict()),
-                self.trend_context_line(position.to_dict()),
+                *price_lines,
+                self.flow_context_line(position_context),
+                self.trend_context_line(position_context),
             ]
             buy_score = float(scores.get("buyScore") or 0)
             sell_score = float(scores.get("sellScore") or 0)
@@ -81,7 +83,6 @@ class StrategyAlertMixin:
                     position.name,
                     [
                         "매도 판단 " + sell_phrase,
-                        "손익률 " + signed_pct(position.profit_loss_rate),
                         *common_lines,
                     ],
                     symbol,
@@ -101,7 +102,16 @@ class StrategyAlertMixin:
         candidates = [item for item in snapshot.watchlist + snapshot.positions if not item.is_cash() and item.symbol]
         if not candidates:
             return []
-        position = candidates[0] if rule in {"modelBuy", "watchlistBuyCandidate"} else next((item for item in snapshot.positions if not item.is_cash() and item.symbol), candidates[0])
+        holding_symbols = {item.symbol.upper() for item in snapshot.positions if item.symbol and not item.is_cash()}
+        holding_candidates = [item for item in snapshot.positions if item.symbol and not item.is_cash()]
+        watchlist_candidates = [item for item in snapshot.watchlist if item.symbol and item.symbol.upper() not in holding_symbols]
+        if rule == "watchlistBuyCandidate":
+            position = watchlist_candidates[0] if watchlist_candidates else candidates[0]
+        else:
+            position = holding_candidates[0] if holding_candidates else candidates[0]
+        position_context = position.to_dict()
+        current_price = self.current_price_line(position_context)
+        price_lines = self.holding_price_lines(position_context) if position.symbol.upper() in holding_symbols else [current_price] if current_price else []
         scores = self.strategy_model.score(position.to_dict())
         formula_audits = self.strategy_model.score_formula_audits(position.to_dict(), scores)
         symbol = position.symbol.upper()
@@ -117,10 +127,9 @@ class StrategyAlertMixin:
                 [
                     "매도 판단 " + sell_phrase,
                     "현재 데이터 기준 템플릿 테스트",
-                    "손익률 " + signed_pct(position.profit_loss_rate),
-                    self.current_price_line(position.to_dict()),
-                    self.flow_context_line(position.to_dict()),
-                    self.trend_context_line(position.to_dict()),
+                    *price_lines,
+                    self.flow_context_line(position_context),
+                    self.trend_context_line(position_context),
                 ],
                 symbol,
                 criteria=self.criteria(
@@ -145,9 +154,9 @@ class StrategyAlertMixin:
                 [
                     "관심종목 매수 후보 " + buy_phrase,
                     "현재 데이터 기준 템플릿 테스트",
-                    self.current_price_line(position.to_dict()),
-                    self.flow_context_line(position.to_dict()),
-                    self.trend_context_line(position.to_dict()),
+                    *price_lines,
+                    self.flow_context_line(position_context),
+                    self.trend_context_line(position_context),
                 ],
                 symbol,
                 criteria=self.criteria(
@@ -171,9 +180,9 @@ class StrategyAlertMixin:
             [
                 "매수 판단 " + buy_phrase,
                 "현재 데이터 기준 템플릿 테스트",
-                self.current_price_line(position.to_dict()),
-                self.flow_context_line(position.to_dict()),
-                self.trend_context_line(position.to_dict()),
+                *price_lines,
+                self.flow_context_line(position_context),
+                self.trend_context_line(position_context),
             ],
             symbol,
             criteria=self.criteria(

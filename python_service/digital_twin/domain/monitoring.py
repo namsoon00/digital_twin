@@ -12,7 +12,7 @@ from .message_types import (
     MIN_CADENCE_MINUTES,
 )
 from .model_review import decision_change_context, decision_change_review_lines
-from .ontology_rules import relation_rule_context_summary_lines
+from .ontology_rules import decision_action_group_for_label, relation_rule_context_summary_lines
 from .parsing import parse_assignments
 from .portfolio import AccountSnapshot, AlertEvent, Position, monitor_state_has_live_account_data, status_has_account_data_failure
 from .portfolio_calculations import DEFAULT_FX_RATES, value_in_base
@@ -87,22 +87,7 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
         return text + " (" + compact_number(float(score or 0)) + "점)"
 
     def decision_action_group(self, label: object) -> str:
-        text = str(label or "").strip()
-        if not text:
-            return ""
-        if "비트코인" in text or "크립토" in text or "민감도" in text:
-            return "cryptoSensitivity"
-        if any(term in text for term in ["손절", "손실", "분할축소"]):
-            return "lossControl"
-        if any(term in text for term in ["분할매도", "익절", "수익"]):
-            return "profitTake"
-        if "리밸런싱" in text:
-            return "rebalance"
-        if "공시" in text:
-            return "disclosure"
-        if any(term in text for term in ["보유", "관망", "관찰", "유지"]):
-            return "holdWatch"
-        return text
+        return decision_action_group_for_label(label)
 
     def meaningful_decision_change(self, current_decision: Dict[str, object], previous_decision: Dict[str, object], pressure_delta: float) -> bool:
         current_label = str(current_decision.get("decision") or "").strip()
@@ -571,11 +556,42 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
     def position_current_price(self, position: Dict[str, object]) -> float:
         return number(position.get("current_price") if "current_price" in position else position.get("currentPrice"))
 
+    def position_average_price(self, position: Dict[str, object]) -> float:
+        return number(position.get("average_price") if "average_price" in position else position.get("averagePrice"))
+
+    def position_profit_loss_rate(self, position: Dict[str, object]) -> float:
+        return number(position.get("profit_loss_rate") if "profit_loss_rate" in position else position.get("profitLossRate"))
+
+    def has_position_field(self, position: Dict[str, object], snake_key: str, camel_key: str) -> bool:
+        return snake_key in position or camel_key in position
+
     def current_price_line(self, position: Dict[str, object]) -> str:
         price = self.position_current_price(position)
         if not price:
             return ""
         return "현재가: " + money(price, self.position_currency(position))
+
+    def average_price_line(self, position: Dict[str, object]) -> str:
+        price = self.position_average_price(position)
+        if not price:
+            return ""
+        return "평단가: " + money(price, self.position_currency(position))
+
+    def profit_rate_line(self, position: Dict[str, object]) -> str:
+        if not self.has_position_field(position, "profit_loss_rate", "profitLossRate"):
+            return ""
+        return "수익률: " + signed_pct(self.position_profit_loss_rate(position))
+
+    def holding_price_lines(self, position: Dict[str, object]) -> List[str]:
+        return [
+            line
+            for line in [
+                self.current_price_line(position),
+                self.average_price_line(position),
+                self.profit_rate_line(position),
+            ]
+            if line
+        ]
 
     def position_ma(self, position: Dict[str, object], period: int) -> float:
         return number(position.get("ma" + str(period)) or position.get("movingAverage" + str(period)) or position.get("sma" + str(period)))
@@ -896,25 +912,25 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
             item = current_positions.get(symbol)
             before = previous_positions.get(symbol)
             if item and not before:
-                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "WATCH", "monitorPositionChange", snapshot.account_id + ":new:" + symbol, item["name"], ["새 보유 종목", "수량 " + str(item.get("quantity", 0)), self.current_price_line(item), "평가 " + self.position_value_label(item), self.flow_context_line(item), self.investor_context_line(item)], symbol, criteria=self.criteria("직전 스냅샷에 없던 보유 종목이 현재 스냅샷에 생겼을 때", "신규 보유, 수량 " + str(item.get("quantity", 0)))))
+                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "WATCH", "monitorPositionChange", snapshot.account_id + ":new:" + symbol, item["name"], ["새 보유 종목", "수량 " + str(item.get("quantity", 0)), *self.holding_price_lines(item), "평가 " + self.position_value_label(item), self.flow_context_line(item), self.investor_context_line(item)], symbol, criteria=self.criteria("직전 스냅샷에 없던 보유 종목이 현재 스냅샷에 생겼을 때", "신규 보유, 수량 " + str(item.get("quantity", 0)))))
                 continue
             if before and not item:
-                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "WATCH", "monitorPositionChange", snapshot.account_id + ":removed:" + symbol, before["name"], ["보유 목록에서 사라졌습니다", self.current_price_line(before), "매도/이관/데이터 변경 여부 확인"], symbol, criteria=self.criteria("직전 스냅샷에 있던 보유 종목이 현재 보유 목록에서 사라졌을 때", "보유 제외 감지")))
+                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "WATCH", "monitorPositionChange", snapshot.account_id + ":removed:" + symbol, before["name"], ["보유 목록에서 사라졌습니다", *self.holding_price_lines(before), "매도/이관/데이터 변경 여부 확인"], symbol, criteria=self.criteria("직전 스냅샷에 있던 보유 종목이 현재 보유 목록에서 사라졌을 때", "보유 제외 감지")))
                 continue
             if not item or not before:
                 continue
             quantity_delta = float(item.get("quantity") or 0) - float(before.get("quantity") or 0)
             if quantity_delta:
-                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "WATCH", "monitorPositionChange", snapshot.account_id + ":quantity:" + symbol + ":" + str(item.get("quantity")), item["name"], ["보유 수량 변경", "이전 " + str(before.get("quantity", 0)), "현재 " + str(item.get("quantity", 0)), self.current_price_line(item), self.flow_context_line(item), self.investor_context_line(item)], symbol, criteria=self.criteria("직전 스냅샷 대비 보유 수량이 달라졌을 때", "이전 " + str(before.get("quantity", 0)) + ", 현재 " + str(item.get("quantity", 0)))))
+                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "WATCH", "monitorPositionChange", snapshot.account_id + ":quantity:" + symbol + ":" + str(item.get("quantity")), item["name"], ["보유 수량 변경", "이전 " + str(before.get("quantity", 0)), "현재 " + str(item.get("quantity", 0)), *self.holding_price_lines(item), self.flow_context_line(item), self.investor_context_line(item)], symbol, criteria=self.criteria("직전 스냅샷 대비 보유 수량이 달라졌을 때", "이전 " + str(before.get("quantity", 0)) + ", 현재 " + str(item.get("quantity", 0)))))
             pnl_delta = float(item.get("profit_loss_rate") or 0) - float(before.get("profit_loss_rate") or 0)
             if abs(pnl_delta) >= float(self.thresholds.get("monitorPnlDelta", 0)):
-                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "ALERT" if pnl_delta < 0 else "WATCH", "monitorPnlChange", snapshot.account_id + ":pnl:" + symbol + ":" + signed_pct(pnl_delta), item["name"], ["손익률 급변", "이전 " + signed_pct(float(before.get("profit_loss_rate") or 0)), "현재 " + signed_pct(float(item.get("profit_loss_rate") or 0)), "변화 " + signed_pct(pnl_delta, "%p"), self.current_price_line(item), self.flow_context_line(item), self.investor_context_line(item), self.trend_context_line(item)], symbol, criteria=self.criteria("손익률 변화폭 ±" + self.threshold_text("monitorPnlDelta", "%p") + " 이상", "변화 " + signed_pct(pnl_delta, "%p") + ", 이전 " + signed_pct(float(before.get("profit_loss_rate") or 0)) + ", 현재 " + signed_pct(float(item.get("profit_loss_rate") or 0)))))
+                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "ALERT" if pnl_delta < 0 else "WATCH", "monitorPnlChange", snapshot.account_id + ":pnl:" + symbol + ":" + signed_pct(pnl_delta), item["name"], ["손익률 급변", "이전 " + signed_pct(float(before.get("profit_loss_rate") or 0)), "현재 " + signed_pct(float(item.get("profit_loss_rate") or 0)), "변화 " + signed_pct(pnl_delta, "%p"), *self.holding_price_lines(item), self.flow_context_line(item), self.investor_context_line(item), self.trend_context_line(item)], symbol, criteria=self.criteria("손익률 변화폭 ±" + self.threshold_text("monitorPnlDelta", "%p") + " 이상", "변화 " + signed_pct(pnl_delta, "%p") + ", 이전 " + signed_pct(float(before.get("profit_loss_rate") or 0)) + ", 현재 " + signed_pct(float(item.get("profit_loss_rate") or 0)))))
             value_delta = pct_delta(self.position_value_base(item), self.position_value_base(before))
             if abs(value_delta) >= float(self.thresholds.get("monitorValueDelta", 0)):
-                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "ALERT" if value_delta < 0 else "WATCH", "monitorValueChange", snapshot.account_id + ":value:" + symbol + ":" + signed_pct(value_delta), item["name"], ["평가액 급변", "이전 " + self.position_value_label(before), "현재 " + self.position_value_label(item), "변화 " + signed_pct(value_delta) + self.value_delta_basis_label(before, item), self.current_price_line(item), self.flow_context_line(item), self.investor_context_line(item), self.trend_context_line(item)], symbol, criteria=self.criteria("평가액 변화율 ±" + self.threshold_text("monitorValueDelta", "%") + " 이상", "변화 " + signed_pct(value_delta) + ", 이전 " + self.position_value_label(before) + ", 현재 " + self.position_value_label(item))))
+                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "ALERT" if value_delta < 0 else "WATCH", "monitorValueChange", snapshot.account_id + ":value:" + symbol + ":" + signed_pct(value_delta), item["name"], ["평가액 급변", "이전 " + self.position_value_label(before), "현재 " + self.position_value_label(item), "변화 " + signed_pct(value_delta) + self.value_delta_basis_label(before, item), *self.holding_price_lines(item), self.flow_context_line(item), self.investor_context_line(item), self.trend_context_line(item)], symbol, criteria=self.criteria("평가액 변화율 ±" + self.threshold_text("monitorValueDelta", "%") + " 이상", "변화 " + signed_pct(value_delta) + ", 이전 " + self.position_value_label(before) + ", 현재 " + self.position_value_label(item))))
             trend_signals = self.trend_signals(before, item)
             if trend_signals:
-                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, self.trend_severity(trend_signals), "monitorTrendChange", snapshot.account_id + ":trend:" + symbol + ":" + ",".join(trend_signals[:2]), item["name"], ["이동평균 변화", self.current_price_line(item), "신호 " + " · ".join(trend_signals), self.trend_context_line(item), self.trend_slope_line(item), self.flow_context_line(item), self.investor_context_line(item)], symbol, criteria=self.criteria("20일/60일 이동평균 돌파, 크로스, 또는 현재가가 이동평균보다 " + self.threshold_text("monitorMaDistance", "%") + " 이상 높거나 낮을 때", "신호 " + " · ".join(trend_signals))))
+                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, self.trend_severity(trend_signals), "monitorTrendChange", snapshot.account_id + ":trend:" + symbol + ":" + ",".join(trend_signals[:2]), item["name"], ["이동평균 변화", *self.holding_price_lines(item), "신호 " + " · ".join(trend_signals), self.trend_context_line(item), self.trend_slope_line(item), self.flow_context_line(item), self.investor_context_line(item)], symbol, criteria=self.criteria("20일/60일 이동평균 돌파, 크로스, 또는 현재가가 이동평균보다 " + self.threshold_text("monitorMaDistance", "%") + " 이상 높거나 낮을 때", "신호 " + " · ".join(trend_signals))))
             decision = current_decisions.get(symbol) or {}
             previous_decision = previous_decisions.get(symbol) or {}
             pressure_delta = float(decision.get("exit_pressure") or 0) - float(previous_decision.get("exit_pressure") or 0)
@@ -939,7 +955,7 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
                 prompt_context = self.prompt_context_from_decision(decision)
                 relation_lines = self.relation_context_lines(decision)
                 ontology_lines = self.ontology_context_lines(decision)
-                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "ALERT" if decision.get("tone") == "danger" else "WATCH", "monitorDecisionChange", snapshot.account_id + ":decision:" + symbol + ":" + str(decision.get("decision")), item["name"], ["보유 종목 판단 변화", "이전 " + previous_phrase, "현재 " + current_phrase, self.current_price_line(item), self.holding_action_line(decision.get("decision") or "", float(item.get("profit_loss_rate") or 0)), self.flow_context_line(item), self.investor_context_line(item), self.trend_context_line(item)] + relation_lines + ontology_lines + review_lines, symbol, criteria=self.criteria("보유 종목의 대응 액션 그룹이 바뀌거나 같은 그룹 내 판단 점수 변화가 " + self.threshold_text("monitorDecisionLabelBuffer", "점") + " 이상, 또는 관계 신호 강도 변화가 " + self.threshold_text("monitorExitPressureDelta", "점") + " 이상일 때", "이전 " + previous_phrase + ", 현재 " + current_phrase + (", " + " · ".join(relation_lines[:2]) if relation_lines else "")), metadata={
+                events.append(AlertEvent(snapshot.account_id, snapshot.account_label, "ALERT" if decision.get("tone") == "danger" else "WATCH", "monitorDecisionChange", snapshot.account_id + ":decision:" + symbol + ":" + str(decision.get("decision")), item["name"], ["보유 종목 판단 변화", "이전 " + previous_phrase, "현재 " + current_phrase, *self.holding_price_lines(item), self.holding_action_line(decision.get("decision") or "", float(item.get("profit_loss_rate") or 0)), self.flow_context_line(item), self.investor_context_line(item), self.trend_context_line(item)] + relation_lines + ontology_lines + review_lines, symbol, criteria=self.criteria("보유 종목의 대응 액션 그룹이 바뀌거나 같은 그룹 내 판단 점수 변화가 " + self.threshold_text("monitorDecisionLabelBuffer", "점") + " 이상, 또는 관계 신호 강도 변화가 " + self.threshold_text("monitorExitPressureDelta", "점") + " 이상일 때", "이전 " + previous_phrase + ", 현재 " + current_phrase + (", " + " · ".join(relation_lines[:2]) if relation_lines else "")), metadata={
                     "holdingDecision": decision.get("decision") or "",
                     "holdingDecisionBasis": decision.get("decision_basis") or "",
                     "holdingDecisionScore": round(float(decision.get("exit_pressure") or 0), 1),
@@ -1054,7 +1070,7 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
                 "holdingTiming",
                 snapshot.account_id + ":timing:" + item.symbol + ":" + item.decision,
                 item.name,
-                ["상태 " + decision_phrase, "손익 " + signed_pct(item.profit_loss_rate), self.current_price_line(position), self.flow_context_line(position), self.investor_context_line(position), self.trend_context_line(position), self.holding_action_line(item.decision, item.profit_loss_rate)] + relation_lines + self.ontology_context_lines(decision_state),
+                ["상태 " + decision_phrase, *self.holding_price_lines(position), self.flow_context_line(position), self.investor_context_line(position), self.trend_context_line(position), self.holding_action_line(item.decision, item.profit_loss_rate)] + relation_lines + self.ontology_context_lines(decision_state),
                 item.symbol,
                 criteria=self.criteria(
                     "온톨로지 관계 규칙이 위험/주의 상태로 성립하거나 손익률이 손실 기준 "
@@ -1062,7 +1078,7 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
                     + "%에서 완충 "
                     + compact_number(loss_buffer)
                     + "%p 이상 더 악화될 때",
-                    "상태 " + decision_phrase + ", 손익 " + signed_pct(item.profit_loss_rate) + (", " + " · ".join(relation_lines[:2]) if relation_lines else ""),
+                    "상태 " + decision_phrase + ", 수익률 " + signed_pct(item.profit_loss_rate) + (", " + " · ".join(relation_lines[:2]) if relation_lines else ""),
                 ),
                 metadata={
                     "holdingDecision": item.decision,

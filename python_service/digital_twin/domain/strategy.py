@@ -6,7 +6,7 @@ from .market_data import clamp, number
 from .ontology import ONTOLOGY_PROMPT_VERSION, build_portfolio_ontology, build_position_opinion
 from .ontology_rules import DEFAULT_RELATION_THRESHOLDS, evaluate_position_relation_rules
 from .parsing import parse_assignments
-from .portfolio import DecisionItem, PortfolioSummary, Position
+from .portfolio import DecisionItem, PortfolioSummary, Position, expects_kr_microstructure_signals
 
 
 DERIVED_FORMULA_DEPENDENCIES = {
@@ -304,14 +304,19 @@ class StrategyModel:
         foreign_net = number(raw.get("foreignNet") or raw.get("foreignNetVolume") or raw.get("foreign_net_volume"))
         institution_net = number(raw.get("institutionNet") or raw.get("institutionNetVolume") or raw.get("institution_net_volume"))
         individual_net = number(raw.get("individualNet") or raw.get("individualNetVolume") or raw.get("individual_net_volume"))
-        if not trade_strength:
+        expects_kr_signals = expects_kr_microstructure_signals(
+            raw.get("market") or raw.get("marketCode") or raw.get("exchange"),
+            raw.get("currency"),
+            raw.get("symbol") or raw.get("ticker") or raw.get("code"),
+        )
+        if expects_kr_signals and not trade_strength:
             missing["tradeStrength"] = "체결강도 없음 -> 100 기준값"
             missing["executionScore"] = "체결강도 없음 -> 0점"
         if not volume_ratio:
             missing["volumeRatio"] = "거래량 배율 없음 -> 1배"
             missing["volumePressure"] = "거래량 배율 없음 -> 0점"
             missing["directionalVolumePressure"] = "거래량 방향 확인값 없음 -> 0점"
-        if not (buy_volume + sell_volume):
+        if expects_kr_signals and not (buy_volume + sell_volume):
             missing["buyShare"] = "매수/매도 체결량 없음 -> 50%"
             missing["buyShareScore"] = "매수 체결 비중 없음 -> 0점"
             missing["sellShare"] = "매수/매도 체결량 없음 -> 50%"
@@ -327,7 +332,7 @@ class StrategyModel:
             missing["trendDistance20"] = "20일선 괴리 없음 -> 0%"
             missing["trendDistance60"] = "60일선 괴리 없음 -> 0%"
             missing["maSpread"] = "20/60일선 간격 없음 -> 0%"
-        if not (foreign_net or institution_net or individual_net):
+        if expects_kr_signals and not (foreign_net or institution_net or individual_net):
             missing["investorFlowScore"] = "투자자별 수급 없음 -> 0점"
         if not number(raw.get("undervalueBonus")):
             missing["undervalueBonus"] = "저평가 보너스 없음 -> 0점"

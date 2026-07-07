@@ -4,6 +4,21 @@ from typing import Dict, List, Optional
 
 
 ACCOUNT_DATA_FAILURE_TERMS = ("실패", "오류", "unauthorized", "forbidden", "http 4", "http 5", "error", "timeout")
+KR_MICROSTRUCTURE_MARKETS = {"KR", "KOR", "KOREA", "KOSPI", "KOSDAQ", "KONEX", "KRX", "XKRX"}
+NON_KR_MICROSTRUCTURE_MARKETS = {
+    "US",
+    "USA",
+    "NASDAQ",
+    "NYSE",
+    "AMEX",
+    "ARCA",
+    "BATS",
+    "XNYS",
+    "XNAS",
+    "CRYPTO",
+    "COIN",
+}
+NON_KR_MICROSTRUCTURE_CURRENCIES = {"USD", "USDT", "USDC", "BTC", "ETH"}
 
 
 def utc_now_iso() -> str:
@@ -19,6 +34,21 @@ def monitor_state_has_live_account_data(state: Dict[str, object]) -> bool:
     if not isinstance(state, dict):
         return False
     return str(state.get("mode") or "").strip().lower() == "live" and not status_has_account_data_failure(state.get("status"))
+
+
+def expects_kr_microstructure_signals(market: object = "", currency: object = "", symbol: object = "") -> bool:
+    market_code = str(market or "").strip().upper()
+    currency_code = str(currency or "").strip().upper()
+    compact_symbol = str(symbol or "").strip().upper().replace(".", "").replace("-", "")
+    if market_code in KR_MICROSTRUCTURE_MARKETS or currency_code == "KRW":
+        return True
+    if compact_symbol.isdigit() and 4 <= len(compact_symbol) <= 8:
+        return True
+    if compact_symbol.isalpha() and 1 <= len(compact_symbol) <= 5:
+        return False
+    if market_code in NON_KR_MICROSTRUCTURE_MARKETS or currency_code in NON_KR_MICROSTRUCTURE_CURRENCIES:
+        return False
+    return True
 
 
 @dataclass

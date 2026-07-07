@@ -1113,9 +1113,36 @@ class PythonServiceTests(unittest.TestCase):
         missing_labels = [item["label"] for item in context["missingData"]]
         self.assertIn("holding.profit_take.trend_weakness.v1", active_ids)
         self.assertIn("external.crypto.btc_sensitivity.v1", active_ids)
-        self.assertIn("체결강도", missing_labels)
+        self.assertNotIn("체결강도", missing_labels)
+        self.assertNotIn("방향별 매수/매도 체결량", missing_labels)
+        self.assertNotIn("투자자별 수급", missing_labels)
         self.assertEqual("holdingTiming", context["promptContext"]["promptId"])
         self.assertEqual("ontologyRelationRules", context["decision"]["basis"])
+
+    def test_ontology_relation_rules_report_domestic_microstructure_missing_data(self):
+        position = Position(
+            symbol="000660",
+            name="SK하이닉스",
+            market="KR",
+            currency="KRW",
+            market_value=1000000,
+            profit_loss_rate=-9.5,
+            sellable_quantity=10,
+            current_price=90000,
+            ma20=100000,
+            ma60=110000,
+            ma20_distance=-10,
+            ma60_distance=-18.2,
+            sector="반도체",
+        )
+        portfolio = portfolio_summary([position], fx_rates={"KRW": 1})
+
+        context = evaluate_position_relation_rules(position, portfolio)
+
+        missing_labels = [item["label"] for item in context["missingData"]]
+        self.assertIn("체결강도", missing_labels)
+        self.assertIn("방향별 매수/매도 체결량", missing_labels)
+        self.assertIn("투자자별 수급", missing_labels)
 
     def test_ontology_settings_drive_rule_metadata_and_ai_prompt_template(self):
         position = Position(
@@ -2844,7 +2871,22 @@ class PythonServiceTests(unittest.TestCase):
             ma60_distance=-27.1,
             sector="BTC",
         )
-        relation_context = evaluate_position_relation_rules(position, portfolio_summary([position]))
+        relation_context = evaluate_position_relation_rules(
+            position,
+            portfolio_summary([position]),
+            external_signals={
+                "cryptoMarkets": {
+                    "bitcoin": {
+                        "provider": "CoinGecko",
+                        "symbol": "BTC",
+                        "price": 108000,
+                        "volume24h": 42000000000,
+                        "change24h": 3.8,
+                        "change7d": 9.7,
+                    }
+                }
+            },
+        )
         event = AlertEvent(
             "main",
             "메인",
@@ -2865,8 +2907,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("관계 규칙", message)
         self.assertIn("수익 보유 + 추세 약화", message)
         self.assertIn("AI 분석 기준", message)
-        self.assertIn("부족 데이터", message)
-        self.assertIn("체결강도", message)
+        self.assertNotIn("체결강도", message)
         self.assertIn("수익 +18.5%: 분할매도 기준 확인", message)
         self.assertNotIn("온톨로지 판단", message)
         self.assertNotIn("AI 프롬프트", message)
@@ -3714,7 +3755,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("모델 부족 데이터", message)
         self.assertIn("발송 공식", message)
 
-    def test_holding_formula_audit_reports_missing_signal_inputs(self):
+    def test_holding_formula_audit_skips_domestic_signal_inputs_for_us_positions(self):
         db_path = Path(self.temp.name) / "service.db"
         templates = SQLiteNotificationTemplateStore(db_path)
         position = Position(
@@ -3761,8 +3802,59 @@ class PythonServiceTests(unittest.TestCase):
 
         message = templates.render(event.rule, context)
 
-        self.assertIn("체결강도 없음", message)
         self.assertIn("거래량 배율 없음", message)
+        self.assertNotIn("체결강도 없음", message)
+        self.assertNotIn("매수/매도 체결량 없음", message)
+        self.assertNotIn("투자자별 수급 없음", message)
+
+    def test_holding_formula_audit_reports_domestic_signal_inputs_for_kr_positions(self):
+        db_path = Path(self.temp.name) / "service.db"
+        templates = SQLiteNotificationTemplateStore(db_path)
+        position = Position(
+            symbol="000660",
+            name="SK하이닉스",
+            market="KR",
+            currency="KRW",
+            market_value=1000000,
+            profit_loss_rate=-9.5,
+            sellable_quantity=10,
+            current_price=90000,
+            volume=230091,
+            trading_value=2944270000000,
+            ma20=100000,
+            ma60=110000,
+            ma20_distance=-10,
+            ma60_distance=-18.2,
+            sector="반도체",
+        )
+        audits = StrategyModel({}).holding_formula_audits(position, 50)
+        event = AlertEvent(
+            "main",
+            "메인",
+            "ALERT",
+            "holdingTiming",
+            "main:timing:000660",
+            "SK하이닉스",
+            [
+                "상태: 손실 관리 기준 확인 (80점)",
+                "손익: -9.5%",
+                "수급: 거래량 230,091(0x), 거래액 294427억 원",
+                "추세: 현재 9만 원, 20일선 10만 원(-10.0%), 60일선 11만 원(-18.2%)",
+            ],
+            "000660",
+        )
+        context = alert_context(event)
+        context.update({
+            "honeyScore": 100,
+            "honeyThreshold": 45,
+            "honeyReasons": ["기본 35점", "주의 등급 +25"],
+            "formulaAudits": audits,
+            "holdingDecisionBasis": "lossCut",
+        })
+
+        message = templates.render(event.rule, context)
+
+        self.assertIn("체결강도 없음", message)
         self.assertIn("매수/매도 체결량 없음", message)
         self.assertIn("투자자별 수급 없음", message)
 

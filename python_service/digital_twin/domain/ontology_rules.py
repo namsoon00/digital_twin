@@ -3,7 +3,7 @@ from typing import Dict, Iterable, List, Optional
 
 from .market_data import clamp, number
 from .parsing import parse_assignments
-from .portfolio import PortfolioSummary, Position
+from .portfolio import PortfolioSummary, Position, expects_kr_microstructure_signals
 
 
 ONTOLOGY_RULE_ENGINE_VERSION = "ontology-relation-rules-v1"
@@ -149,7 +149,7 @@ DEFAULT_RELATION_RULES = [
         "v1",
         "DATA_QUALITY_GUARD",
         "data_quality",
-        "현재가, 이동평균, 수급, 체결강도 중 판단에 필요한 데이터가 빠졌을 때",
+        "현재가, 이동평균 또는 해당 시장에 적용 가능한 수급·체결 데이터가 빠졌을 때",
         "없는 데이터는 추정하지 말고 부족 데이터와 판단 영향만 설명합니다.",
         ["currentPrice", "ma20", "ma60", "tradeStrength", "investorFlow"],
     ),
@@ -192,7 +192,7 @@ DEFAULT_PROMPT_TEMPLATES = [
         },
         [
             "반복 알림 여부와 임계값 근처 흔들림을 반드시 점검합니다.",
-            "없는 체결강도, 투자자별 수급, 이동평균 값은 부족 데이터로 표시합니다.",
+            "체결강도와 투자자별 수급은 국내장 등 적용 가능한 시장에서만 부족 데이터로 표시합니다.",
         ],
     ),
     OntologyPromptTemplate(
@@ -498,6 +498,7 @@ def position_signal_facts(
         "btcVolume24h": number(btc.get("volume24h")) if btc else 0.0,
         "isBtcSensitive": symbol in BTC_SENSITIVE_SYMBOLS,
         "dartDisclosure": dict(disclosure or {}) if isinstance(disclosure, dict) else {},
+        "expectsKrMicrostructureSignals": expects_kr_microstructure_signals(position.market, position.currency, symbol),
     }
     facts.update(trend)
     facts.update(flow)
@@ -508,11 +509,12 @@ def position_signal_facts(
         missing.append(_missing("ma20", "20일 이동평균", "단기 추세 이탈 여부를 확인할 수 없습니다."))
     if not facts["ma60"]:
         missing.append(_missing("ma60", "60일 이동평균", "중기 추세 위치를 확인할 수 없습니다."))
-    if not facts["tradeStrength"]:
+    expects_kr_signals = bool(facts.get("expectsKrMicrostructureSignals"))
+    if expects_kr_signals and not facts["tradeStrength"]:
         missing.append(_missing("tradeStrength", "체결강도", "매수·매도 체결 압력을 직접 반영하지 못합니다."))
-    if not total_execution_volume:
+    if expects_kr_signals and not total_execution_volume:
         missing.append(_missing("executionVolume", "방향별 매수/매도 체결량", "체결강도는 확인해도 매수·매도 방향별 체결 비중은 직접 판단하지 못합니다."))
-    if not facts["investorFlowBase"]:
+    if expects_kr_signals and not facts["investorFlowBase"]:
         missing.append(_missing("investorFlow", "투자자별 수급", "외국인·기관·개인 순매수 방향을 확인하지 못합니다."))
     if facts["isBtcSensitive"] and not btc:
         missing.append(_missing("btcMarket", "비트코인 시장 데이터", "비트코인 민감 종목의 외부 연동 위험을 확인하지 못합니다."))

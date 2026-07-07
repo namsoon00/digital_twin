@@ -7562,6 +7562,320 @@ h3 {
     border-radius: 4px;
     background: var(--chip);
   }
+
+  .panel {
+    background:
+      linear-gradient(180deg, color-mix(in srgb, var(--panel) 96%, var(--panel-soft) 4%), var(--panel));
+  }
+
+  .panel-head {
+    min-height: 58px;
+    align-items: center;
+    background: var(--panel);
+  }
+
+  .panel-head h2 {
+    font-size: 16px;
+  }
+
+  .panel-head .subtle {
+    font-size: 12px;
+    line-height: 1.42;
+  }
+
+  .source-stack,
+  .position-list,
+  .alert-list,
+  .signal-list,
+  .valuation-list,
+  .lab-list,
+  .news-list,
+  .social-list,
+  .model-version-list,
+  .notification-template-list,
+  .admin-message-list,
+  .notification-decision-list,
+  .symbol-result-list,
+  .check-list {
+    gap: 0;
+    padding: var(--ds-space-2) var(--ds-panel-pad-x) var(--ds-panel-pad-y);
+    border-top: 1px solid var(--line);
+    background: var(--panel);
+  }
+
+  .symbol-result-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(440px, 1fr));
+    column-gap: var(--ds-page-gap);
+  }
+
+  .alert-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+    column-gap: var(--ds-page-gap);
+  }
+
+  .source-row,
+  .news-item,
+  .social-item,
+  .position-row,
+  .check-row,
+  .theme-row,
+  .symbol-result-row,
+  .notification-template-row,
+  .admin-message-row,
+  .model-version-row,
+  .alert-row,
+  .signal-row,
+  .valuation-row,
+  .lab-row,
+  .flow-row,
+  .exit-row {
+    border: 0;
+    border-bottom: 1px solid var(--line);
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .source-row:last-child,
+  .news-item:last-child,
+  .social-item:last-child,
+  .position-row:last-child,
+  .check-row:last-child,
+  .theme-row:last-child,
+  .symbol-result-row:last-child,
+  .notification-template-row:last-child,
+  .admin-message-row:last-child,
+  .model-version-row:last-child,
+  .alert-row:last-child,
+  .signal-row:last-child,
+  .valuation-row:last-child,
+  .lab-row:last-child,
+  .flow-row:last-child,
+  .exit-row:last-child {
+    border-bottom: 0;
+  }
+
+  .source-row {
+    display: grid;
+    grid-template-columns: minmax(120px, 0.34fr) minmax(0, 1fr);
+    align-items: start;
+    gap: 8px 14px;
+    padding: var(--ds-row-pad-y) var(--ds-row-pad-x);
+  }
+
+  .source-row span {
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 900;
+  }
+
+  .source-row strong,
+  .source-row em {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .source-row strong {
+    justify-self: end;
+    color: var(--ink);
+    font-size: 13px;
+    text-align: right;
+  }
+
+  .source-row em {
+    grid-column: 2;
+    color: var(--muted);
+    font-size: 12px;
+    font-style: normal;
+    line-height: 1.42;
+    text-align: right;
+  }
+
+  .position-row.rich-row,
+  .symbol-result-row,
+  .model-version-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(190px, auto);
+    align-items: center;
+    gap: var(--ds-page-gap);
+    padding: var(--ds-row-pad-y) var(--ds-row-pad-x);
+  }
+
+  .position-row.rich-row .right,
+  .symbol-result-side {
+    justify-items: end;
+    text-align: right;
+  }
+
+  .notification-decision-row {
+    display: grid;
+    grid-template-columns: minmax(220px, 0.38fr) minmax(0, 1fr);
+    gap: 8px var(--ds-page-gap);
+    padding: var(--ds-row-pad-y) var(--ds-row-pad-x);
+    border-bottom: 1px solid var(--line);
+    background: transparent;
+  }
+
+  .notification-decision-top,
+  .notification-decision-target {
+    grid-column: 1;
+  }
+
+  .notification-decision-score,
+  .notification-decision-row > p,
+  .notification-decision-actions,
+  .notification-full-message,
+  .notification-decision-reasons,
+  .notification-fingerprint {
+    grid-column: 2;
+  }
+
+  .notification-decision-target {
+    font-size: 13px;
+    line-height: 1.38;
+  }
+
+  .notification-decision-row > p {
+    color: var(--ink);
+    font-size: 13px;
+  }
+
+  .alert-row {
+    grid-template-columns: 64px minmax(0, 1fr);
+    min-height: 112px;
+    padding: var(--ds-row-pad-y) var(--ds-row-pad-x);
+    box-shadow: inset 3px 0 0 var(--blue);
+  }
+
+  .alert-row.danger {
+    box-shadow: inset 3px 0 0 var(--red);
+  }
+
+  .alert-row.caution {
+    box-shadow: inset 3px 0 0 var(--amber);
+  }
+
+  .alert-row.watch {
+    box-shadow: inset 3px 0 0 var(--green);
+  }
+
+  .alert-severity,
+  .tone-chip,
+  .chip,
+  .source-chip,
+  .decision-chip,
+  .trigger-list span,
+  .evidence-list span,
+  .rule-strip span,
+  .message-schedule-summary > span:not(.tone-chip),
+  .theme-radar span,
+  .engagement span {
+    border-radius: var(--ds-radius-control);
+  }
+
+  .signal-row,
+  .valuation-row,
+  .lab-row,
+  .flow-row,
+  .exit-row {
+    padding: var(--ds-row-pad-y) var(--ds-row-pad-x);
+  }
+
+  .lab-body-grid {
+    grid-template-columns: minmax(320px, 0.72fr) minmax(0, 1.28fr);
+  }
+
+  .alert-stat-grid,
+  .alert-rule-grid,
+  .alert-threshold-grid,
+  .variable-grid,
+  .model-number-grid,
+  .signal-score-grid,
+  .signal-metric-grid,
+  .valuation-grid,
+  .lab-status-grid,
+  .lab-model-grid,
+  .lab-control-grid,
+  .lab-draft-grid,
+  .feature-audit-grid,
+  .feature-delta-grid,
+  .feature-contribution-grid,
+  .settings-api-grid,
+  .account-credential-grid,
+  .monitoring-detail-metric-grid,
+  .monitoring-detail-signal-grid {
+    grid-template-columns: repeat(auto-fill, minmax(160px, 230px));
+    justify-content: start;
+  }
+
+  .variable-grid,
+  .alert-threshold-grid,
+  .model-number-grid {
+    padding: var(--ds-space-2) var(--ds-panel-pad-x) var(--ds-panel-pad-y);
+  }
+
+  .alert-stat,
+  .alert-rule,
+  .variable-grid span,
+  .signal-score-grid span,
+  .signal-metric-grid span,
+  .valuation-grid span,
+  .lab-status-grid span,
+  .lab-model-grid span,
+  .lab-control,
+  .feature-audit-grid span,
+  .feature-delta-grid span,
+  .feature-contribution-grid span,
+  .settings-api-row,
+  .account-credential-grid > div,
+  .monitoring-detail-metric {
+    border-radius: var(--ds-radius-control);
+  }
+
+  .notification-policy-layout,
+  .notification-template-workbench {
+    grid-template-columns: minmax(320px, 0.42fr) minmax(0, 0.58fr);
+  }
+
+  .settings-api-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    justify-content: stretch;
+  }
+
+  .settings-api-row {
+    min-height: 0;
+  }
+
+  .model-beginner-panel .variable-grid,
+  .model-feature-audit .variable-grid {
+    grid-template-columns: repeat(auto-fill, minmax(180px, 230px));
+    justify-content: start;
+  }
+
+  .notification-template-select-list {
+    max-height: min(58vh, 560px);
+  }
+
+  .notification-template-detail,
+  .notification-policy-detail,
+  .model-feature-audit,
+  .monitoring-detail-block,
+  .monitoring-detail-message,
+  .settings-note,
+  .settings-smart-save,
+  .account-watchlist-editor-head {
+    border-radius: var(--ds-radius-panel);
+    background: color-mix(in srgb, var(--panel) 86%, var(--panel-soft) 14%);
+  }
+
+  .rule-strip {
+    gap: 6px;
+    padding: var(--ds-space-5) var(--ds-panel-pad-x) var(--ds-panel-pad-y);
+    border-top: 1px solid var(--line);
+    background: color-mix(in srgb, var(--panel) 86%, var(--panel-soft) 14%);
+  }
 }
 
 @media (max-width: 980px) and (min-width: 861px) {

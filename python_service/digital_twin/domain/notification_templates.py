@@ -6,6 +6,7 @@ from typing import Dict, List
 
 from .alert_formatting import signed_pct
 from .message_types import MESSAGE_TYPE_EMOJIS, MESSAGE_TYPE_LABELS, TRIGGER_SUMMARIES
+from .notification_ai import enrich_notification_ai_context
 from .ontology_rules import relation_score_meaning
 from .portfolio import AlertEvent
 from .scoring import notification_signal_labels
@@ -799,13 +800,37 @@ def ontology_prompt_context(context_or_metadata: Dict[str, object]) -> Dict[str,
     if not isinstance(context_or_metadata, dict):
         return {}
     context = context_or_metadata.get("ontologyPromptContext")
-    if isinstance(context, dict) and context:
-        return dict(context)
+    ontology_context = dict(context) if isinstance(context, dict) and context else {}
+    context = context_or_metadata.get("notificationAiPromptContext")
+    notification_context = dict(context) if isinstance(context, dict) and context else {}
+    opinion = context_or_metadata.get("notificationAiOpinion")
+    if isinstance(opinion, dict):
+        context = opinion.get("promptContext")
+        if isinstance(context, dict) and context and not notification_context:
+            notification_context = dict(context)
+    if notification_context and not ontology_context.get("promptTemplate"):
+        return notification_context
+    if ontology_context:
+        return ontology_context
+    if notification_context:
+        return notification_context
     metadata = context_or_metadata.get("metadata")
     if isinstance(metadata, dict):
         context = metadata.get("ontologyPromptContext")
-        if isinstance(context, dict) and context:
-            return dict(context)
+        ontology_context = dict(context) if isinstance(context, dict) and context else {}
+        context = metadata.get("notificationAiPromptContext")
+        notification_context = dict(context) if isinstance(context, dict) and context else {}
+        opinion = metadata.get("notificationAiOpinion")
+        if isinstance(opinion, dict):
+            context = opinion.get("promptContext")
+            if isinstance(context, dict) and context and not notification_context:
+                notification_context = dict(context)
+        if notification_context and not ontology_context.get("promptTemplate"):
+            return notification_context
+        if ontology_context:
+            return ontology_context
+        if notification_context:
+            return notification_context
     relation_context = ontology_relation_context(context_or_metadata)
     nested = relation_context.get("promptContext") if isinstance(relation_context, dict) else {}
     return dict(nested or {}) if isinstance(nested, dict) else {}
@@ -886,6 +911,26 @@ def ai_prompt_lines(context_or_metadata: Dict[str, object]) -> List[str]:
     return lines
 
 
+def notification_ai_opinion_payload(context_or_metadata: Dict[str, object]) -> Dict[str, object]:
+    if not isinstance(context_or_metadata, dict):
+        return {}
+    opinion = context_or_metadata.get("notificationAiOpinion")
+    if isinstance(opinion, dict) and opinion:
+        return dict(opinion)
+    metadata = context_or_metadata.get("metadata")
+    if isinstance(metadata, dict):
+        opinion = metadata.get("notificationAiOpinion")
+        if isinstance(opinion, dict) and opinion:
+            return dict(opinion)
+    return {}
+
+
+def notification_ai_opinion_lines(context_or_metadata: Dict[str, object]) -> List[str]:
+    opinion = notification_ai_opinion_payload(context_or_metadata)
+    lines = opinion.get("lines") if isinstance(opinion.get("lines"), list) else []
+    return [str(line).strip() for line in lines if str(line or "").strip()]
+
+
 def missing_data_lines(context_or_metadata: Dict[str, object]) -> List[str]:
     rows = ontology_missing_data(context_or_metadata)
     lines = []
@@ -959,8 +1004,10 @@ def alert_context(event: AlertEvent) -> Dict[str, object]:
     data_block = ("데이터\n" + data_rows) if data_rows else ""
     ontology_lines = ontology_rule_lines(metadata)
     ai_lines = ai_prompt_lines(metadata)
+    ai_opinion_lines = notification_ai_opinion_lines(metadata)
     missing_lines = missing_data_lines(metadata)
     ontology_block = block_from_lines("관계 규칙", ontology_lines)
+    ai_opinion_block = block_from_lines("AI 의견", ai_opinion_lines)
     ai_prompt_block = block_from_lines("AI 분석 기준", ai_lines)
     missing_data_block = block_from_lines("부족 데이터", missing_lines)
     readable_parts = [
@@ -969,6 +1016,8 @@ def alert_context(event: AlertEvent) -> Dict[str, object]:
     ]
     if data_rows:
         readable_parts.extend(["", data_block])
+    if ai_opinion_block:
+        readable_parts.extend(["", ai_opinion_block])
     if ontology_block:
         readable_parts.extend(["", ontology_block])
     if ai_prompt_block:
@@ -982,6 +1031,7 @@ def alert_context(event: AlertEvent) -> Dict[str, object]:
     telegram_trigger_rows = criterion_rows(criteria, True)
     telegram_data_lines = telegram_data_rows(display_raw_lines)
     telegram_ontology_block = telegram_block_from_lines("관계 규칙", ontology_lines)
+    telegram_ai_opinion_block = telegram_block_from_lines("AI 의견", ai_opinion_lines)
     telegram_ai_prompt_block = telegram_block_from_lines("AI 분석 기준", ai_lines)
     telegram_missing_data_block = telegram_block_from_lines("부족 데이터", missing_lines)
     telegram_parts = [
@@ -990,6 +1040,8 @@ def alert_context(event: AlertEvent) -> Dict[str, object]:
     ]
     if telegram_data_lines:
         telegram_parts.extend(["", "<b>데이터</b>", telegram_data_lines])
+    if telegram_ai_opinion_block:
+        telegram_parts.extend(["", telegram_ai_opinion_block])
     if telegram_ontology_block:
         telegram_parts.extend(["", telegram_ontology_block])
     if telegram_ai_prompt_block:
@@ -1030,12 +1082,14 @@ def alert_context(event: AlertEvent) -> Dict[str, object]:
         "criterionBlock": trigger_block,
         "criterionLines": "\n".join(criteria),
         "dataBlock": data_block,
+        "aiOpinionBlock": ai_opinion_block,
         "ontologyRelationBlock": ontology_block,
         "aiPromptBlock": ai_prompt_block,
         "missingDataBlock": missing_data_block,
         "divider": "",
         "telegramMessage": telegram_message,
         "telegramDataLines": telegram_data_lines,
+        "telegramAiOpinionBlock": telegram_ai_opinion_block,
         "telegramOntologyRelationBlock": telegram_ontology_block,
         "telegramAiPromptBlock": telegram_ai_prompt_block,
         "telegramMissingDataBlock": telegram_missing_data_block,
@@ -1527,7 +1581,7 @@ def score_explanation_sections(context: Dict[str, object]) -> List[tuple]:
         model_lines.extend(formula_audit_lines(context, "model"))
         model_lines.extend(investment_score_lines(context))
         missing_lines = []
-        prompt_lines = []
+        prompt_lines = ontology_prompt_section_lines(context)
     delivery_lines = delivery_score_lines(context)
     delivery_lines.extend(formula_audit_lines(context, "delivery"))
     sections = []
@@ -1571,8 +1625,24 @@ def score_explanation_block(context: Dict[str, object], rich: bool = False) -> s
     return "\n\n".join(blocks)
 
 
+def ai_opinion_block(context: Dict[str, object], rich: bool = False) -> str:
+    lines = notification_ai_opinion_lines(context)
+    if not lines:
+        return ""
+    if rich:
+        rows = []
+        for line in lines:
+            label, value = split_label_value(line)
+            if label and value:
+                rows.append("• <b>" + html.escape(label, quote=False) + "</b>: " + html.escape(value, quote=False))
+            else:
+                rows.append(html_bullet(line))
+        return "<b>AI 의견</b>\n" + "\n".join(rows)
+    return "AI 의견\n" + "\n".join(plain_bullet(line) for line in lines)
+
+
 def context_with_score_explanation(context: Dict[str, object]) -> Dict[str, object]:
-    values = dict(context or {})
+    values = enrich_notification_ai_context(dict(context or {}))
     raw_symbol = str(values.get("rawSymbol") or values.get("symbol") or "").strip().upper()
     display_symbol = str(
         values.get("symbolDisplayName")
@@ -1588,6 +1658,8 @@ def context_with_score_explanation(context: Dict[str, object]) -> Dict[str, obje
         display_target = symbol_text
     if display_target:
         values["target"] = display_target
+    values["aiOpinionBlock"] = ai_opinion_block(values, False)
+    values["telegramAiOpinionBlock"] = ai_opinion_block(values, True)
     values["scoreExplanation"] = score_explanation_block(values, False)
     values["telegramScoreExplanation"] = score_explanation_block(values, True)
     return values
@@ -1614,13 +1686,40 @@ def append_score_explanation(rendered: str, context: Dict[str, object], rich: bo
     return str(rendered).rstrip() + "\n\n" + block
 
 
+def append_ai_opinion(rendered: str, context: Dict[str, object], rich: bool = False) -> str:
+    rendered_text = str(rendered or "")
+    if not rendered_text.strip() or "AI 의견" in rendered_text:
+        return rendered
+    block = ai_opinion_block(context, rich)
+    if not block:
+        return rendered
+    insertion_markers = [
+        "\n\n<b>관계 규칙</b>",
+        "\n\n관계 규칙",
+        "\n\n<b>발송 기준</b>",
+        "\n\n발송 기준",
+        "\n\n<b>모델 판단</b>",
+        "\n\n모델 판단",
+        "\n\n<b>온톨로지 판단</b>",
+        "\n\n온톨로지 판단",
+    ]
+    for marker in insertion_markers:
+        if marker in rendered_text:
+            return rendered_text.replace(marker, "\n\n" + block + marker, 1)
+    return rendered_text.rstrip() + "\n\n" + block
+
+
 def render_notification(template: NotificationTemplate, context: Dict[str, object]) -> str:
     values = context_with_score_explanation(context)
     if template and template.enabled:
         rendered = render_template(template.template, values)
-        return append_score_explanation(rendered, values, template_prefers_rich_score(template.template, rendered))
+        rich = template_prefers_rich_score(template.template, rendered)
+        rendered = append_ai_opinion(rendered, values, rich)
+        return append_score_explanation(rendered, values, rich)
     rendered = render_template(BODY_TEMPLATE, values)
-    return append_score_explanation(rendered, values, template_prefers_rich_score(BODY_TEMPLATE, rendered))
+    rich = template_prefers_rich_score(BODY_TEMPLATE, rendered)
+    rendered = append_ai_opinion(rendered, values, rich)
+    return append_score_explanation(rendered, values, rich)
 
 
 
@@ -1652,12 +1751,14 @@ def template_variables() -> List[str]:
         "criterionBlock",
         "criterionLines",
         "dataBlock",
+        "aiOpinionBlock",
         "ontologyRelationBlock",
         "aiPromptBlock",
         "missingDataBlock",
         "divider",
         "telegramMessage",
         "telegramDataLines",
+        "telegramAiOpinionBlock",
         "telegramOntologyRelationBlock",
         "telegramAiPromptBlock",
         "telegramMissingDataBlock",
@@ -1692,6 +1793,8 @@ def template_variables() -> List[str]:
         "metadata",
         "formulaAudits",
         "legacyFormulaAudits",
+        "notificationAiOpinion",
+        "notificationAiPromptContext",
         "ontologyRelationContext",
         "ontologyPromptContext",
         "notificationFormulaAudit",

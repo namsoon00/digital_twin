@@ -19,7 +19,7 @@ from digital_twin.application.flow_lens_service import FlowLensService
 from digital_twin.application.market_data_collection_service import MARKET_DATA_ACCOUNT_ID, MarketDataCollectionRunner
 from digital_twin.application.model_review_service import ModelReviewRunner
 from digital_twin.application.monitoring_service import MonitorRunner as ApplicationMonitorRunner
-from digital_twin.application.notification_service import DisclosureAnalysisNotificationEnricher, NotificationQueueRunner
+from digital_twin.application.notification_service import CompositeNotificationContextEnricher, DisclosureAnalysisNotificationEnricher, NotificationAIOpinionEnricher, NotificationQueueRunner
 from digital_twin.application.symbol_universe_service import SymbolUniverseService, seed_symbol
 from digital_twin.cli import build_handoff_message
 from digital_twin.cli import preserve_existing_secrets
@@ -28,7 +28,7 @@ from digital_twin.domain.accounts import AccountConfig
 from digital_twin.domain.market_data import normalize_position, technical_indicators_from_candles
 from digital_twin.domain.message_types import DEFAULT_ALERT_RULES, DEFAULT_CADENCE, MESSAGE_TYPE_EMOJIS, MESSAGE_TYPE_LABELS, public_message_catalog
 from digital_twin.domain.ontology import build_portfolio_ontology
-from digital_twin.domain.ontology_rules import decision_action_group_for_label, evaluate_position_relation_rules
+from digital_twin.domain.ontology_rules import decision_action_group_for_label, evaluate_position_relation_rules, prompt_template_for_message_type
 from digital_twin.domain.portfolio_calculations import portfolio_summary
 from digital_twin.domain.strategy import SafeFormula, StrategyModel, decisions_for_positions
 from digital_twin.domain.events import ACCOUNT_SAVED, MARKET_DATA_COLLECTED, MONITORING_ALERTS_DETECTED, MONITORING_CYCLE_COMPLETED, MONITORING_SNAPSHOT_COLLECTED, alerts_detected_event, monitoring_cycle_completed_event, snapshot_collected_event
@@ -3423,6 +3423,57 @@ class PythonServiceTests(unittest.TestCase):
         self.assertNotIn("온톨로지: 보유 유지", message)
         self.assertNotIn("thesis:", message)
         self.assertNotIn("모델 공식", message)
+
+    def test_all_alert_types_have_managed_ai_prompt_templates(self):
+        settings = {
+            "aiPromptTemplates": "\n".join([
+                "[holdingTiming]",
+                "label=사용자 보유 프롬프트",
+                "version=custom-holding-v1",
+                "purpose=사용자 목적",
+                "system=custom system",
+                "user=custom user",
+            ])
+        }
+
+        for message_type in sorted(DEFAULT_ALERT_RULES.keys()):
+            template = prompt_template_for_message_type(message_type, settings)
+            self.assertEqual(message_type, template.prompt_id)
+            self.assertTrue(template.label)
+
+        holding = prompt_template_for_message_type("holdingTiming", settings)
+        self.assertEqual("사용자 보유 프롬프트", holding.label)
+        self.assertEqual("custom-holding-v1", holding.version)
+
+    def test_notification_render_adds_ai_opinion_and_prompt_for_every_alert(self):
+        db_path = Path(self.temp.name) / "service.db"
+        templates = SQLiteNotificationTemplateStore(db_path)
+        event = AlertEvent(
+            "main",
+            "메인",
+            "WATCH",
+            "holdingTiming",
+            "main:timing:005930",
+            "삼성전자",
+            ["상태 조건부 보유 (52점)", "현재가: 100,000원", "평단가: 110,000원", "수익률: -9.0%"],
+            "005930",
+            criteria=[
+                "설정: 판단 상태가 위험/주의이거나 손익률이 -8% 이하일 때",
+                "감지: 상태 조건부 보유 (52점), 수익률 -9.0%",
+            ],
+        )
+
+        message = templates.render(event.rule, alert_context(event))
+
+        self.assertIn("<b>AI 의견</b>", message)
+        self.assertIn("• <b>해석</b>:", message)
+        self.assertIn("• <b>의견</b>:", message)
+        self.assertIn("• <b>다음 확인</b>:", message)
+        self.assertIn("• <b>분석출처</b>: 알림 AI 의견 / holdingTiming", message)
+        self.assertIn("<b>AI 프롬프트</b>", message)
+        self.assertIn("보유 타이밍 AI 분석", message)
+        self.assertLess(message.index("<b>데이터</b>"), message.index("<b>AI 의견</b>"))
+        self.assertLess(message.index("<b>AI 의견</b>"), message.index("<b>발송 기준</b>"))
 
     def test_notification_delivery_score_uses_user_formula(self):
         event = AlertEvent(

@@ -4,7 +4,17 @@ from typing import Callable, Dict
 from zoneinfo import ZoneInfo
 
 from ..domain.disclosure_analysis import context_with_disclosure_analysis, local_disclosure_analysis
+from ..domain.notification_ai import enrich_notification_ai_context
 from ..domain.notifications import NotificationJob
+
+
+class CompositeNotificationContextEnricher:
+    def __init__(self, *enrichers):
+        self.enrichers = [enricher for enricher in enrichers if enricher]
+
+    def __call__(self, job: NotificationJob) -> None:
+        for enricher in self.enrichers:
+            enricher(job)
 
 
 class DisclosureAnalysisNotificationEnricher:
@@ -25,6 +35,18 @@ class DisclosureAnalysisNotificationEnricher:
         except Exception:  # noqa: BLE001 - disclosure delivery must not fail because AI enrichment failed.
             result = local_disclosure_analysis(context, "로컬 fallback")
         job.context = context_with_disclosure_analysis(context, result)
+
+
+class NotificationAIOpinionEnricher:
+    def __init__(self, settings: Dict[str, object] = None):
+        self.settings = settings or {}
+
+    def __call__(self, job: NotificationJob) -> None:
+        context = dict(job.context or {})
+        context.setdefault("messageType", job.message_type)
+        context.setdefault("accountId", job.account_id)
+        context.setdefault("accountLabel", job.account_label)
+        job.context = enrich_notification_ai_context(context, self.settings)
 
 
 class NotificationQueueRunner:

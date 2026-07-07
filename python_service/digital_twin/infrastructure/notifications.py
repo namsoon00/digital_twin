@@ -7,6 +7,7 @@ from typing import Dict, Iterable
 
 from ..domain.accounts import AccountConfig
 from ..domain.events import DomainEvent
+from ..domain.notification_ai import enrich_notification_ai_context
 from ..domain.notification_templates import alert_context, text_context
 from ..domain.notifications import NotificationJob
 from ..domain.portfolio import AlertEvent
@@ -220,10 +221,12 @@ def send_events(
     events = list(events)
     templates = notification_templates()
     formula_context = formula_settings_context()
+    ai_settings = runtime_settings()
     contexts = []
     for event in events:
         context = alert_context(event)
         context.update({key: value for key, value in formula_context.items() if key not in context})
+        context = enrich_notification_ai_context(context, ai_settings)
         contexts.append(context)
     messages = [templates.render(event.rule, context) for event, context in zip(events, contexts)]
     if dry_run:

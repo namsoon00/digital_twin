@@ -1983,6 +1983,7 @@
       "재시도",
       "투자자",
       "기울기",
+      "권장 액션",
       "거래량",
       "거래액",
       "가격",
@@ -2008,6 +2009,7 @@
       "매도 판단": 26,
       "수급": 30,
       "추세": 40,
+      "권장 액션": 41,
       "기울기": 45,
       "투자자": 50,
       "신호": 60,
@@ -2029,6 +2031,7 @@
       "매도 판단": true,
       "수급": true,
       "추세": true,
+      "권장 액션": true,
       "기울기": true,
       "투자자": true,
       "신호": true,
@@ -2157,8 +2160,8 @@
       if (type === "modelSell") return "🔴";
       if (type === "holdingTiming") {
         var statusBlob = [status, profit, titleText].join(" ");
-        if (/분할|익절|수익/.test(statusBlob)) return "💰";
         if (/손절|손실/.test(statusBlob) || signedDirection(profit) < 0) return "🛡️";
+        if (/분할|익절|수익/.test(statusBlob)) return "💰";
         return "⚖️";
       }
       if (type === "monitorPnlChange") {
@@ -2175,6 +2178,7 @@
         var current = dataValue(rawItems, "현재");
         if (/손절|손실/.test(current)) return "🛡️";
         if (/분할|익절|수익/.test(current)) return "💰";
+        if (current.indexOf("리밸런싱") >= 0) return "⚖️";
         return "🔁";
       }
       return notificationMessageTypeIcon(type);
@@ -2193,10 +2197,10 @@
       if (type === "holdingTiming") {
         var statusBlob = [status, profit, titleText].join(" ");
         var profitText = percentText(profit);
-        if (/분할|익절|수익/.test(statusBlob)) return (profitText ? "수익 " + profitText + ": " : "") + "분할매도 기준 확인";
-        if (/손절|손실/.test(statusBlob) || signedDirection(profit) < 0) return (profitText ? "손실 " + profitText + ": " : "") + "손절·축소 기준 재확인";
-        if (statusBlob.indexOf("조건부") >= 0) return "조건부 보유: 유지 조건 재점검";
-        return "보유 판단: 매수·매도 기준 확인";
+        if (/손절|손실/.test(statusBlob) || signedDirection(profit) < 0) return (profitText ? "손실 " + profitText + ": " : "") + "손절·분할축소 권장";
+        if (/분할|익절|수익/.test(statusBlob)) return (profitText ? "수익 " + profitText + ": " : "") + "분할매도 권장";
+        if (statusBlob.indexOf("조건부") >= 0) return "조건부 보유: 추가매수 보류";
+        return "보유 판단: 유지·대기";
       }
       if (type === "monitorHeartbeat") return "모니터링 상태 확인";
       if (type === "monitorConnection") {
@@ -2220,9 +2224,11 @@
       if (type === "monitorCashChange") return titleFromChange(change, "현금 비중 증가", "현금 비중 감소", "현금 비중 변화");
       if (type === "monitorDecisionChange") {
         var current = dataValue(rawItems, "현재");
-        if (/손절|손실/.test(current)) return "판단 변경: 손실 관리 기준 재확인";
-        if (/분할|익절|수익/.test(current)) return "판단 변경: 분할매도 기준 확인";
-        return "판단 변경: 보유 조건 재확인";
+        if (/손절|손실/.test(current)) return "판단 변경: 손절·분할축소 권장";
+        if (/분할|익절|수익/.test(current)) return "판단 변경: 분할매도 권장";
+        if (current.indexOf("리밸런싱") >= 0) return "판단 변경: 리밸런싱 권장";
+        if (current.indexOf("보유") >= 0) return "판단 변경: 보유 유지";
+        return "판단 변경: 대응 액션 변경";
       }
       if (type === "externalEquityMove") return titleFromChange(dataValue(rawItems, "미장 가격 변동"), "미장 가격 급등", "미장 가격 급락", "미장 가격·거래량 급변");
       if (type === "externalCryptoMove") {

@@ -229,6 +229,18 @@ a {
   padding: 24px 0 36px;
 }
 
+.shell-page {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.shell-page .app-nav {
+  grid-row: 1 / span 2;
+}
+
+.shell-page .workspace-layout {
+  grid-row: 2;
+}
+
 .topbar {
   grid-column: 2;
   grid-row: 1;
@@ -374,31 +386,6 @@ h3 {
 
 .deskbar.deskbar-full {
   grid-template-columns: repeat(5, minmax(0, 1fr));
-}
-
-.deskbar.deskbar-compact {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-.deskbar-compact .deskbar-cell {
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
-  align-content: center;
-  gap: 8px;
-  min-height: 44px;
-  padding: 8px 12px;
-}
-
-.deskbar-compact .deskbar-cell em {
-  min-width: 58px;
-}
-
-.deskbar-compact .deskbar-cell strong {
-  font-size: 13px;
-}
-
-.deskbar-compact .deskbar-cell span {
-  display: none;
 }
 
 .app-nav {

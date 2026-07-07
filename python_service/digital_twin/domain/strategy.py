@@ -4,7 +4,7 @@ from typing import Dict, Iterable, List
 
 from .market_data import clamp, number
 from .ontology import ONTOLOGY_PROMPT_VERSION, build_portfolio_ontology, build_position_opinion
-from .ontology_rules import evaluate_position_relation_rules
+from .ontology_rules import DEFAULT_RELATION_THRESHOLDS, evaluate_position_relation_rules
 from .parsing import parse_assignments
 from .portfolio import DecisionItem, PortfolioSummary, Position
 
@@ -20,6 +20,22 @@ DERIVED_FORMULA_DEPENDENCIES = {
         "trendDistance20",
         "trendDistance60",
         "maSpread",
+    ],
+    "lossGuardConfirmationScore": [
+        "profitLossRate",
+        "volumeRatio",
+        "trendDistance20",
+        "trendDistance60",
+        "ma20Slope",
+        "ma60Slope",
+        "investorFlowScore",
+    ],
+    "lossGuardWeakEvidencePenalty": [
+        "profitLossRate",
+        "volumeRatio",
+        "trendDistance20",
+        "trendDistance60",
+        "investorFlowScore",
     ],
 }
 
@@ -93,13 +109,15 @@ class StrategyModel:
         "baseScore + profitTakePnlScore + sectorConcentrationScore + sellableScore + holdingSignalScore"
     )
     default_loss_cut_formula = (
-        "baseScore + lossCutPnlScore + sectorConcentrationScore + sellableScore + holdingSignalScore"
+        "baseScore + lossCutPnlScore + sectorConcentrationScore + sellableScore + holdingSignalScore "
+        "+ lossGuardConfirmationScore - lossGuardWeakEvidencePenalty"
     )
 
     def __init__(self, settings: Dict[str, str]):
         settings = settings or {}
         self.settings = dict(settings or {})
         self.weights = parse_assignments(settings.get("formulaWeights", ""), {"flowWeight": 1.0, "valuationWeight": 1.0})
+        self.thresholds = parse_assignments(settings.get("alertThresholds", ""), DEFAULT_RELATION_THRESHOLDS)
         self.buy_formula = SafeFormula(settings.get("buyScoreFormula") or self.default_buy_formula)
         self.sell_formula = SafeFormula(settings.get("sellScoreFormula") or self.default_sell_formula)
         self.profit_take_formula = SafeFormula(settings.get("profitTakeScoreFormula") or self.default_profit_take_formula)
@@ -341,6 +359,7 @@ class StrategyModel:
         sector_concentration_score = 12.0 if sector_ratio >= 50 else 6.0 if sector_ratio >= 35 else 0.0
         sellable_score = 4.0 if position.sellable_quantity > 0 else 0.0
         holding_signal_score = holding_signal_adjustment(position, pnl)
+        loss_guard = loss_guard_confirmation_components(position, pnl, self.thresholds)
         variables = self.feature_variables({
             "tradeStrength": position.trade_strength,
             "volumeRatio": position.volume_ratio,
@@ -365,6 +384,7 @@ class StrategyModel:
             "sectorConcentrationScore": sector_concentration_score,
             "sellableScore": sellable_score,
             "holdingSignalScore": holding_signal_score,
+            **loss_guard,
             "commonScore": 24.0 + sector_concentration_score + sellable_score + holding_signal_score,
             "profitLossRate": pnl,
             "pnl": pnl,
@@ -515,6 +535,69 @@ def loss_cut_pnl_component(pnl: float) -> float:
     if pnl <= -3:
         return 10.0
     return 0.0
+
+
+def loss_guard_confirmation_components(position: Position, pnl: float, thresholds: Dict[str, float] = None) -> Dict[str, float]:
+    thresholds = thresholds or DEFAULT_RELATION_THRESHOLDS
+    loss_threshold = float(thresholds.get("lossRateLow", DEFAULT_RELATION_THRESHOLDS["lossRateLow"]) or DEFAULT_RELATION_THRESHOLDS["lossRateLow"])
+    loss_buffer = abs(float(thresholds.get("lossRateBufferPct", DEFAULT_RELATION_THRESHOLDS["lossRateBufferPct"]) or 0.0))
+    volume_confirm_ratio = float(thresholds.get("lossGuardVolumeConfirmRatio", DEFAULT_RELATION_THRESHOLDS["lossGuardVolumeConfirmRatio"]) or 0.0)
+    ma60_support_threshold = float(thresholds.get("lossGuardMa60SupportPct", DEFAULT_RELATION_THRESHOLDS["lossGuardMa60SupportPct"]) or 0.0)
+    weak_penalty_max = float(thresholds.get("lossGuardWeakEvidencePenalty", DEFAULT_RELATION_THRESHOLDS["lossGuardWeakEvidencePenalty"]) or 0.0)
+    ma20_distance = number(position.ma20_distance)
+    ma60_distance = number(position.ma60_distance)
+    ma20_slope = number(position.ma20_slope)
+    ma60_slope = number(position.ma60_slope)
+    volume_ratio = number(position.volume_ratio)
+    buy_volume = number(position.buy_volume)
+    sell_volume = number(position.sell_volume)
+    total_volume = buy_volume + sell_volume
+    sell_share = (sell_volume / total_volume) * 100.0 if total_volume else 0.0
+    foreign_net = number(position.foreign_net_volume) or number(position.foreign_buy_volume) - number(position.foreign_sell_volume)
+    institution_net = number(position.institution_net_volume) or number(position.institution_buy_volume) - number(position.institution_sell_volume)
+    individual_net = number(position.individual_net_volume) or number(position.individual_buy_volume) - number(position.individual_sell_volume)
+    investor_base = abs(foreign_net) + abs(institution_net) + abs(individual_net)
+    investor_flow_score = clamp(((foreign_net + institution_net) - individual_net * 0.35) / investor_base * 100.0, -100.0, 100.0) if investor_base else 0.0
+    pnl_value = float(pnl or 0.0)
+    loss_depth = max(0.0, loss_threshold - pnl_value) if pnl_value <= loss_threshold else 0.0
+    near_threshold = pnl_value <= loss_threshold and loss_depth <= loss_buffer
+    ma20_break = ma20_distance <= -5
+    has_ma60 = bool(number(position.ma60) or ma60_distance)
+    ma60_break = has_ma60 and ma60_distance <= ma60_support_threshold
+    ma60_support = has_ma60 and ma60_distance > ma60_support_threshold
+    volume_confirm = volume_ratio >= volume_confirm_ratio
+    sell_flow_confirm = bool(total_volume) and sell_share >= 56.0
+    investor_flow_confirm = investor_flow_score <= -15.0
+    slope_confirm = ma20_slope <= -1.0 or ma60_slope <= -0.5
+    confirmation_count = sum(
+        1
+        for value in [ma60_break, volume_confirm, sell_flow_confirm, investor_flow_confirm, slope_confirm]
+        if value
+    )
+    confirmation_score = min(18.0, confirmation_count * 4.0)
+    weak_penalty = weak_penalty_max if (
+        near_threshold
+        and ma20_break
+        and ma60_support
+        and not volume_confirm
+        and not investor_flow_confirm
+    ) else 0.0
+    return {
+        "lossThreshold": loss_threshold,
+        "lossRateBufferPct": loss_buffer,
+        "lossRateDepth": round(loss_depth, 4),
+        "lossRateNearThreshold": 1.0 if near_threshold else 0.0,
+        "lossGuardMa20Break": 1.0 if ma20_break else 0.0,
+        "lossGuardMa60Break": 1.0 if ma60_break else 0.0,
+        "lossGuardMa60Support": 1.0 if ma60_support else 0.0,
+        "lossGuardVolumeConfirm": 1.0 if volume_confirm else 0.0,
+        "lossGuardSellFlowConfirm": 1.0 if sell_flow_confirm else 0.0,
+        "lossGuardInvestorFlowConfirm": 1.0 if investor_flow_confirm else 0.0,
+        "lossGuardSlopeConfirm": 1.0 if slope_confirm else 0.0,
+        "lossGuardConfirmationCount": float(confirmation_count),
+        "lossGuardConfirmationScore": confirmation_score,
+        "lossGuardWeakEvidencePenalty": weak_penalty,
+    }
 
 
 def holding_decision_label(pressure: float, pnl: float):

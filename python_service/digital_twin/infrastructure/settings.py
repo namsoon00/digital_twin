@@ -131,8 +131,12 @@ DEFAULT_SELL_SCORE_FORMULA = (
 DEFAULT_PROFIT_TAKE_SCORE_FORMULA = (
     "baseScore + profitTakePnlScore + sectorConcentrationScore + sellableScore + holdingSignalScore"
 )
-DEFAULT_LOSS_CUT_SCORE_FORMULA = (
+LEGACY_LOSS_CUT_SCORE_FORMULA = (
     "baseScore + lossCutPnlScore + sectorConcentrationScore + sellableScore + holdingSignalScore"
+)
+DEFAULT_LOSS_CUT_SCORE_FORMULA = (
+    "baseScore + lossCutPnlScore + sectorConcentrationScore + sellableScore + holdingSignalScore "
+    "+ lossGuardConfirmationScore - lossGuardWeakEvidencePenalty"
 )
 DEFAULT_NOTIFICATION_SCORE_FORMULA = "rawScore"
 DEFAULT_FORMULA_WEIGHTS = [
@@ -173,6 +177,10 @@ DEFAULT_ALERT_THRESHOLDS = [
     ("momentumDown", -3),
     ("profitRateHigh", 20),
     ("lossRateLow", -8),
+    ("lossRateBufferPct", 1),
+    ("lossGuardVolumeConfirmRatio", 0.8),
+    ("lossGuardMa60SupportPct", 0),
+    ("lossGuardWeakEvidencePenalty", 30),
     ("positionWeightHigh", 30),
     ("sectorWeightHigh", 50),
     ("marketCashLow", 10),
@@ -463,6 +471,8 @@ def runtime_settings() -> Dict[str, str]:
         "opendartApiKey": value("opendartApiKey", "OPENDART_API_KEY"),
         "fxRates": value("fxRates", "FX_RATES", "KRW=1\nUSD=1400"),
     }
+    if str(settings.get("lossCutScoreFormula") or "").strip() == LEGACY_LOSS_CUT_SCORE_FORMULA:
+        settings["lossCutScoreFormula"] = DEFAULT_LOSS_CUT_SCORE_FORMULA
     settings["alertThresholds"] = synced_model_alert_thresholds(
         settings.get("alertThresholds", ""),
         settings.get("modelDecisionThresholds", ""),

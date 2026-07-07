@@ -11,6 +11,19 @@ AI_PROMPT_REGISTRY_VERSION = "ai-prompt-registry-v1"
 
 BTC_SENSITIVE_SYMBOLS = {"MSTR", "STRC", "COIN", "MARA", "RIOT", "CLSK", "HUT", "BITF"}
 
+DEFAULT_RELATION_THRESHOLDS = {
+    "lossRateLow": -8.0,
+    "lossRateBufferPct": 1.0,
+    "lossGuardVolumeConfirmRatio": 0.8,
+    "lossGuardMa60SupportPct": 0.0,
+    "lossGuardWeakEvidencePenalty": 30.0,
+    "profitRateHigh": 20.0,
+    "sectorWeightHigh": 50.0,
+    "positionWeightHigh": 30.0,
+    "externalBitcoinChange24hPct": 3.0,
+    "externalBitcoinChange7dPct": 4.0,
+}
+
 
 @dataclass
 class RelationRuleDefinition:
@@ -86,9 +99,9 @@ DEFAULT_RELATION_RULES = [
         "v1",
         "LOSS_GUARD",
         "risk_control",
-        "손익률이 -8% 이하이거나 현재가가 20일선보다 5% 이상 낮을 때",
-        "손절 여부만 묻지 말고 손실 확대 요인, 회복 조건, 분할 대응 기준을 분리합니다.",
-        ["profitLossRate", "currentPrice", "ma20", "sellableQuantity"],
+        "손익률이 손실 기준 이하이거나 20일선보다 5% 이상 낮고, 60일선·거래량·수급 확인 강도로 점수를 조정할 때",
+        "손절 여부만 묻지 말고 손실 확대 요인, 60일선 유지, 거래량 동반 여부, 회복 조건, 분할 대응 기준을 분리합니다.",
+        ["profitLossRate", "currentPrice", "ma20", "ma60", "volumeRatio", "sellableQuantity"],
     ),
     RelationRuleDefinition(
         "holding.concentration.rebalance.v1",
@@ -513,14 +526,7 @@ def _thresholds(settings: Optional[Dict[str, object]]) -> Dict[str, float]:
     settings = settings or {}
     return parse_assignments(
         str(settings.get("alertThresholds") or ""),
-        {
-            "lossRateLow": -8.0,
-            "profitRateHigh": 20.0,
-            "sectorWeightHigh": 50.0,
-            "positionWeightHigh": 30.0,
-            "externalBitcoinChange24hPct": 3.0,
-            "externalBitcoinChange7dPct": 4.0,
-        },
+        DEFAULT_RELATION_THRESHOLDS,
     )
 
 
@@ -581,9 +587,15 @@ def decision_from_matches(facts: Dict[str, object], matches: List[OntologyRuleMa
     }
     selected = max(active, key=lambda item: (priority.get(item.rule_id, 10), item.strength_score, item.confidence))
     pnl = float(facts.get("profitLossRate") or 0)
+    loss_threshold = float(facts.get("lossThreshold") or DEFAULT_RELATION_THRESHOLDS["lossRateLow"])
     if selected.rule_id == "holding.loss_guard.breakdown.v1":
-        label = "손절 기준 확인" if pnl <= -8 else "손실 관리 기준 확인"
-        tone = "danger" if selected.strength_score >= 70 else "caution"
+        if selected.strength_score >= 70 and pnl <= loss_threshold:
+            label = "손절 기준 확인"
+        elif selected.strength_score >= 55:
+            label = "손실 관리 기준 확인"
+        else:
+            label = "손실 기준 근접 관찰"
+        tone = "danger" if selected.strength_score >= 70 else "caution" if selected.strength_score >= 55 else "hold"
     elif selected.rule_id == "holding.profit_take.trend_weakness.v1":
         label = "분할 매도 기준 확인" if selected.strength_score >= 70 else "익절 조건 점검"
         tone = "danger" if selected.strength_score >= 80 else "caution"
@@ -682,8 +694,34 @@ def evaluate_position_relation_rules(
             definitions=relation_definitions,
         ))
     loss_threshold = float(thresholds.get("lossRateLow", -8.0) or -8.0)
+    loss_buffer = abs(float(thresholds.get("lossRateBufferPct", 1.0) or 0.0))
+    volume_confirm_ratio = float(thresholds.get("lossGuardVolumeConfirmRatio", 0.8))
+    ma60_support_threshold = float(thresholds.get("lossGuardMa60SupportPct", 0.0) or 0.0)
+    weak_evidence_penalty = float(thresholds.get("lossGuardWeakEvidencePenalty", 30.0) or 0.0)
+    facts["lossThreshold"] = loss_threshold
+    facts["lossRateBufferPct"] = loss_buffer
     if pnl <= loss_threshold or ma20_distance <= -5:
+        volume_ratio = float(facts.get("volumeRatio") or 0)
+        loss_depth = max(0.0, loss_threshold - pnl) if pnl <= loss_threshold else 0.0
+        near_loss_threshold = pnl <= loss_threshold and loss_depth <= loss_buffer
+        ma60_holds = bool(facts.get("ma60")) and ma60_distance > ma60_support_threshold
+        volume_confirms = volume_ratio >= volume_confirm_ratio
+        sell_flow_confirms = float(facts.get("sellShare") or 0) >= 56
+        flow_confirms = flow_score <= -15
+        slope_confirms = float(facts.get("ma20Slope") or 0) <= -1 or float(facts.get("ma60Slope") or 0) <= -0.5
+        ma60_breaks = bool(facts.get("ma60")) and ma60_distance <= ma60_support_threshold
+        confirmation_count = sum(1 for value in [ma60_breaks, volume_confirms, sell_flow_confirms, flow_confirms, slope_confirms] if value)
+        weak_near_threshold = (
+            near_loss_threshold
+            and ma20_distance <= -5
+            and ma60_holds
+            and not volume_confirms
+            and not sell_flow_confirms
+            and not flow_confirms
+        )
         score = 58 + min(24, abs(min(pnl, loss_threshold)) * 1.5) + (10 if ma20_distance <= -5 else 0)
+        if weak_near_threshold:
+            score -= weak_evidence_penalty
         matches.append(_match(
             "holding.loss_guard.breakdown.v1",
             score,
@@ -691,7 +729,12 @@ def evaluate_position_relation_rules(
             [
                 "손익률 " + ("%.1f" % pnl) + "%",
                 "손실 기준 " + ("%.1f" % loss_threshold) + "%",
+                "손실 완충 " + ("%.1f" % loss_buffer) + "%p",
                 "20일선 괴리 " + ("%.1f" % ma20_distance) + "%",
+                "60일선 괴리 " + ("%.1f" % ma60_distance) + "%",
+                "거래량 배율 " + ("%.1f" % volume_ratio) + "x",
+                "확인 신호 " + str(confirmation_count) + "/5",
+                ("약한 확인 신호 감점 -" + ("%.1f" % weak_evidence_penalty) + "점") if weak_near_threshold else "",
             ],
             missing_labels,
             definitions=relation_definitions,

@@ -1347,7 +1347,7 @@ def investment_score_lines(context: Dict[str, object]) -> List[str]:
         )
     if message_type in {"holdingTiming", "monitorDecisionChange"} and any(has_score_value(item) for item in [status_value, previous_value, current_value]):
         lines.append(
-            "보유 모델 점수: 사용자가 설정한 익절 공식과 손절/손실 관리 공식을 따로 계산한 뒤, 수익 중이면 익절 점수, 손실 중이면 손실 관리 점수를 선택합니다. 공식에는 기본 점수, 손익률 구간, 한 업종에 몰린 정도, 팔 수 있는 수량, 수급·추세 흐름이 들어갑니다."
+            "보유 모델 점수: 사용자가 설정한 익절 공식과 손절/손실 관리 공식을 따로 계산한 뒤, 수익 중이면 익절 점수, 손실 중이면 손실 관리 점수를 선택합니다. 공식에는 기본 점수, 손익률 구간, 한 업종에 몰린 정도, 팔 수 있는 수량, 수급·추세 흐름, 손실 기준 근처의 확인 신호와 약한 근거 감점이 들어갑니다."
         )
     if message_type == "externalCryptoMove" and (context or {}).get("cryptoMoveScore") not in (None, ""):
         lines.append(

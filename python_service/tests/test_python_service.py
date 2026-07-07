@@ -786,6 +786,76 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("온톨로지 그래프 JSON", loss_decision.ai_context["prompt"])
         self.assertIn("legacy_model", loss_decision.ontology_opinion)
 
+    def test_loss_guard_near_threshold_requires_confirmation(self):
+        position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "marketValue": 1000000,
+            "profitLossRate": -8.3,
+            "sellableQuantity": 10,
+            "currentPrice": 91300,
+            "ma20": 100000,
+            "ma60": 87035,
+            "ma20Distance": -8.7,
+            "ma60Distance": 4.9,
+            "volumeRatio": 0.2,
+            "sector": "반도체",
+        })
+        model = StrategyModel({})
+
+        variables = model.holding_variables(position)
+        scores = model.holding_pressure_scores(position)
+        relation_context = evaluate_position_relation_rules(position, portfolio_summary([position]))
+
+        self.assertEqual(1, variables["lossRateNearThreshold"])
+        self.assertEqual(1, variables["lossGuardMa60Support"])
+        self.assertEqual(0, variables["lossGuardVolumeConfirm"])
+        self.assertGreaterEqual(variables["lossGuardWeakEvidencePenalty"], 30)
+        self.assertLess(scores["lossCutPressure"], 55)
+        self.assertEqual("손실 기준 근접 관찰", relation_context["decision"]["label"])
+        self.assertEqual("hold", relation_context["decision"]["tone"])
+        self.assertLess(relation_context["decision"]["score"], 55)
+        self.assertTrue(any(
+            "약한 확인 신호 감점" in " ".join(rule.get("evidence") or [])
+            for rule in relation_context["activeRules"]
+        ))
+
+    def test_holding_timing_skips_weak_loss_guard_inside_buffer(self):
+        position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "marketValue": 1000000,
+            "profitLossRate": -8.3,
+            "sellableQuantity": 10,
+            "currentPrice": 91300,
+            "ma20": 100000,
+            "ma60": 87035,
+            "ma20Distance": -8.7,
+            "ma60Distance": 4.9,
+            "volumeRatio": 0.2,
+            "sector": "반도체",
+        })
+        portfolio = portfolio_summary([position])
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "ok",
+            utc_now_iso(),
+            portfolio,
+            [position],
+            [],
+        )
+
+        events = RealtimeMonitor({}).events_for_snapshot(snapshot, {})
+
+        self.assertFalse(any(event.rule == "holdingTiming" for event in events))
+
     def test_portfolio_ontology_builds_relations_and_ai_prompt(self):
         semis = normalize_position({
             "symbol": "000660",

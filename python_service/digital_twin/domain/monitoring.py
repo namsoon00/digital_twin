@@ -963,8 +963,11 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
     def holding_timing_events(self, snapshot: AccountSnapshot) -> List[AlertEvent]:
         events: List[AlertEvent] = []
         positions = {item.symbol.upper(): item.to_dict() for item in snapshot.positions if not item.is_cash()}
+        loss_threshold = float(self.thresholds.get("lossRateLow", -8.0) or -8.0)
+        loss_buffer = abs(float(self.thresholds.get("lossRateBufferPct", 1.0) or 0.0))
+        forced_loss_threshold = loss_threshold - loss_buffer
         for item in snapshot.decisions:
-            if item.tone not in {"danger", "caution"} and item.profit_loss_rate > -8:
+            if item.tone not in {"danger", "caution"} and item.profit_loss_rate > forced_loss_threshold:
                 continue
             position = positions.get(item.symbol.upper()) or item.to_dict()
             decision_phrase = self.decision_score_phrase(item.decision, item.exit_pressure)
@@ -983,7 +986,11 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
                 ["상태 " + decision_phrase, "손익 " + signed_pct(item.profit_loss_rate), self.flow_context_line(position), self.investor_context_line(position), self.trend_context_line(position)] + relation_lines + self.ontology_context_lines(decision_state) + ["매도/매수 기준 재확인"],
                 item.symbol,
                 criteria=self.criteria(
-                    "온톨로지 관계 규칙이 위험/주의 상태로 성립하거나 손익률이 -8% 이하일 때",
+                    "온톨로지 관계 규칙이 위험/주의 상태로 성립하거나 손익률이 손실 기준 "
+                    + compact_number(loss_threshold)
+                    + "%에서 완충 "
+                    + compact_number(loss_buffer)
+                    + "%p 이상 더 악화될 때",
                     "상태 " + decision_phrase + ", 손익 " + signed_pct(item.profit_loss_rate) + (", " + " · ".join(relation_lines[:2]) if relation_lines else ""),
                 ),
                 metadata={

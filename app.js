@@ -6360,9 +6360,10 @@
     var modeLabel = snapshot.preview ? "Pages preview" : (toss.mode === "live" ? "Toss live" : "Local server");
     var modeClass = toss.mode === "live" ? "live" : "demo";
     var tab = activeTabMeta();
+    var showDeskbar = state.activeTab === "overview";
     var subtitle = (tab.description || "운영") + " · 마지막 데이터 " + formatClock(snapshot.generatedAt);
     return [
-      '<main class="shell">',
+      '<main class="shell' + (showDeskbar ? " shell-home" : " shell-page") + '">',
       renderAppNavigation(tab, modeLabel, modeClass),
       '<section class="topbar">',
       '<div class="topbar-copy">',
@@ -6372,7 +6373,7 @@
       '</div>',
       renderTopbarSyncState(),
       '</section>',
-      renderDeskbar(snapshot, modeLabel, modeClass, shouldRenderFullDeskbar()),
+      showDeskbar ? renderDeskbar(snapshot, modeLabel, modeClass) : '',
       '<section class="workspace-layout">',
       renderTabs(),
       '<div class="workspace-main" data-scroll-key="' + escapeHtml(activeScrollKey()) + '">',
@@ -6409,11 +6410,7 @@
     return "";
   }
 
-  function shouldRenderFullDeskbar() {
-    return state.activeTab === "overview" || state.activeTab === "monitoring";
-  }
-
-  function renderDeskbar(snapshot, modeLabel, modeClass, full) {
+  function renderDeskbar(snapshot, modeLabel, modeClass) {
     var portfolio = snapshot.portfolio || {};
     var toss = snapshot.toss || {};
     var positions = Array.isArray(toss.positions) ? toss.positions.filter(function (item) {
@@ -6429,15 +6426,6 @@
     var abox = strategy.abox || {};
     var tbox = strategy.tbox || {};
     var relationCount = Number(abox.relationCount || strategy.relationCount || 0);
-    if (!full) {
-      return [
-        '<section class="deskbar deskbar-compact" aria-label="운영 상태 요약">',
-        renderDeskbarCell("Data", modeLabel, "Last " + formatClock(snapshot.generatedAt), modeClass),
-        renderDeskbarCell("Portfolio", formatMoney(portfolio.total || 0), positions + " positions", "neutral"),
-        renderDeskbarCell("Alerts", enabledRules + "/" + alertRuleCatalog.length, state.realtime.connected ? "WebSocket live" : "HTTP polling", state.realtime.connected ? "live" : "demo"),
-        '</section>'
-      ].join("");
-    }
     return [
       '<section class="deskbar deskbar-full" aria-label="운영 상태 요약">',
       renderDeskbarCell("Data", modeLabel, "Last " + formatClock(snapshot.generatedAt), modeClass),

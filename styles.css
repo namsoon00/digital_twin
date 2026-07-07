@@ -5573,6 +5573,38 @@ h3 {
   gap: 6px;
 }
 
+.ontology-context-class-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 10px;
+  min-width: 0;
+}
+
+.ontology-context-class-group {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel) 82%, var(--blue-soft));
+}
+
+.ontology-context-class-group > strong {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 950;
+}
+
+.ontology-context-class-group > span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
 .ontology-class-grid span {
   min-height: 30px;
   display: grid;
@@ -5585,6 +5617,23 @@ h3 {
   background: var(--input);
   color: var(--ink);
   font-size: 12px;
+  font-weight: 850;
+  overflow-wrap: anywhere;
+}
+
+.ontology-class-grid em {
+  min-height: 28px;
+  display: grid;
+  place-items: center start;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--blue);
+  border-radius: 8px;
+  background: var(--input);
+  color: var(--ink);
+  font-size: 11px;
+  font-style: normal;
   font-weight: 850;
   overflow-wrap: anywhere;
 }
@@ -8074,7 +8123,8 @@ h3 {
   }
 
   .relation-matrix,
-  .ontology-class-grid {
+  .ontology-class-grid,
+  .ontology-context-class-grid {
     gap: 0;
     padding: var(--ds-space-2) var(--ds-panel-pad-x);
     border-top: 1px solid var(--line);
@@ -8082,12 +8132,24 @@ h3 {
     background: color-mix(in srgb, var(--panel) 76%, transparent);
   }
 
+  .ontology-context-class-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .ontology-context-class-group {
+    border-right: 0;
+    border-left: 0;
+    border-radius: 0;
+    background: transparent;
+  }
+
   .relation-matrix {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
   .relation-matrix-row,
-  .ontology-class-grid span {
+  .ontology-class-grid span,
+  .ontology-class-grid em {
     padding: 12px 14px;
     border: 0;
     border-left: 1px solid var(--line);
@@ -8102,7 +8164,8 @@ h3 {
   }
 
   .relation-matrix-row:nth-child(4n + 1),
-  .ontology-class-grid span:first-child {
+  .ontology-class-grid span:first-child,
+  .ontology-class-grid em:first-child {
     border-left: 0;
   }
 

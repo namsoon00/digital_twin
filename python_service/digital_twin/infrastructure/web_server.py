@@ -495,11 +495,19 @@ def list_notification_rules_payload() -> Dict[str, object]:
 
 
 def compact_notification_text(value: str, limit: int = 260) -> str:
-    text = html.unescape(re.sub(r"<[^>]+>", "", str(value or "")))
-    text = re.sub(r"\s+", " ", text).strip()
+    text = re.sub(r"\s+", " ", full_notification_text(value)).strip()
     if len(text) <= limit:
         return text
     return text[: max(0, limit - 1)].rstrip() + "…"
+
+
+def full_notification_text(value: str) -> str:
+    text = str(value or "")
+    text = re.sub(r"(?i)<br\s*/?>", "\n", text)
+    text = html.unescape(re.sub(r"<[^>]+>", "", text))
+    text = re.sub(r"\r\n?", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
 
 
 def notification_job_public_payload(job: NotificationJob) -> Dict[str, object]:
@@ -522,6 +530,7 @@ def notification_job_public_payload(job: NotificationJob) -> Dict[str, object]:
         "rawSymbol": str(context.get("rawSymbol") or context.get("symbol") or "").strip(),
         "symbolName": str(context.get("symbolDisplayName") or context.get("displaySymbolName") or "").strip(),
         "textPreview": compact_notification_text(job.text),
+        "fullText": full_notification_text(job.text),
         "lastError": job.last_error,
         "honeyScore": context.get("honeyScore"),
         "honeyThreshold": context.get("honeyThreshold"),

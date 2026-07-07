@@ -3277,6 +3277,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("suppressed", item["status"])
         self.assertEqual("suppressed", item["honeyDecision"])
         self.assertIn("발송 우선도", item["lastError"])
+        self.assertIn("모니터링 정상 작동", item["fullText"])
+        self.assertNotIn("<b>", item["fullText"])
         self.assertLess(item["honeyScore"], item["honeyThreshold"])
         self.assertTrue(item["honeyReasons"])
         self.assertEqual(10, payload["limit"])

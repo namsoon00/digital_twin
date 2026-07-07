@@ -767,6 +767,9 @@ function checkFrontendAdminRender() {
     assertOk(code.indexOf('data-action="open-settings"') < 0, "topbar 설정 버튼이 상단 관리 탭과 중복됩니다.");
     assertOk(code.indexOf("pushState") >= 0 && code.indexOf("popstate") >= 0, "탭 이동이 브라우저 뒤로가기와 동기화되지 않았습니다.");
     assertOk(code.indexOf("restoreTabBarPosition") >= 0 && code.indexOf("tabBarScrollLeft") >= 0, "하단 탭 위치 복원 로직이 없습니다.");
+    assertOk(code.indexOf("tabScrollPositions") >= 0 && code.indexOf("restoreRenderedPageScrollPosition") >= 0 && code.indexOf("rememberRenderedPageScrollPosition") >= 0, "탭별 본문 스크롤 복원 로직이 없습니다.");
+    assertOk(overviewHtml.indexOf('data-scroll-key="overview"') >= 0, "탭 본문에 스크롤 관리 키가 렌더링되지 않습니다.");
+    assertOk(designSystemDoc.indexOf("각 탭은 독립된 스크롤 위치") >= 0, "디자인 시스템 문서에 탭별 스크롤 정책이 없습니다.");
     assertOk(code.indexOf('var bottomTabIds = ["overview", "watchlist", "monitoring", "modeling", "ontology"];') >= 0, "하단 핵심 탭에 전략 운영과 온톨로지가 배치되지 않았습니다.");
     assertOk(code.indexOf('var managementTabIds = ["accounts", "symbols", "notifications", "settings"];') >= 0, "상단 운영 메뉴 탭 구성이 역할과 맞지 않습니다.");
     assertOk(styles.indexOf(".app-nav-tab.active") >= 0 && styles.indexOf(".app-nav-menu") >= 0, "앱 네비게이션 활성 탭과 모바일 관리 메뉴 스타일 규칙이 없습니다.");

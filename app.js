@@ -399,13 +399,12 @@
     { id: "watchlist", label: "관심종목", description: "알림 대상" },
     { id: "symbols", label: "전체종목", description: "시장 목록" },
     { id: "notifications", label: "알림", description: "신호·발송" },
-    { id: "modeling", label: "전략 운영", description: "모델·알림 정책" },
-    { id: "ontology", label: "관계 분석", description: "종목 관계" },
+    { id: "modeling", label: "투자 분석", description: "전략·관계·AI" },
     { id: "settings", label: "설정", description: "런타임 환경" }
   ];
   var appBrandName = "Orbit Alpha";
   var appBrandSubtitle = "포트폴리오 신호 궤도 관제";
-  var bottomTabIds = ["overview", "watchlist", "notifications", "modeling", "ontology"];
+  var bottomTabIds = ["overview", "watchlist", "notifications", "modeling"];
   var managementTabIds = ["accounts", "symbols", "settings"];
   var notificationSections = [
     { id: "status", label: "현황", description: "발송 판단" },
@@ -415,10 +414,12 @@
     { id: "advanced", label: "고급", description: "채널·임계값" }
   ];
   var strategySections = [
-    { id: "overview", label: "운영 개요", description: "역할·흐름" },
-    { id: "data", label: "데이터", description: "근거 준비도" },
-    { id: "policy", label: "모델·알림", description: "공식·기준" },
-    { id: "results", label: "판단 결과", description: "종목별 신호" }
+    { id: "overview", label: "개요", description: "분석 흐름" },
+    { id: "evidence", label: "근거 카드", description: "데이터·관계" },
+    { id: "results", label: "종목 판단", description: "의견·점수" },
+    { id: "graphs", label: "관계 그래프", description: "TBox·ABox" },
+    { id: "registry", label: "규칙·프롬프트", description: "운영 기준" },
+    { id: "trace", label: "검증 추적", description: "행·룰" }
   ];
   var ontologySections = [
     { id: "overview", label: "개요", description: "요약·상태" },
@@ -1142,7 +1143,11 @@
 
   function initialStrategySection() {
     var params = new URLSearchParams(window.location.search);
-    return normalizeStrategySection(params.get("strategy"));
+    var requested = params.get("strategy");
+    if (!requested && String(params.get("tab") || "").toLowerCase() === "ontology") {
+      requested = params.get("ontology");
+    }
+    return normalizeStrategySection(requested);
   }
 
   function initialOntologySection() {
@@ -1154,6 +1159,7 @@
     var requested = String(value || "").toLowerCase();
     if (requested === "more") return "overview";
     if (requested === "monitoring") return "notifications";
+    if (requested === "ontology" || requested === "relations") return "modeling";
     return tabs.some(function (tab) { return tab.id === requested; }) ? requested : "overview";
   }
 
@@ -1164,7 +1170,10 @@
 
   function normalizeStrategySection(value) {
     var requested = String(value || "").toLowerCase();
-    if (requested === "rules" || requested === "prompts") return "policy";
+    if (requested === "data" || requested === "cards" || requested === "card") return "evidence";
+    if (requested === "policy" || requested === "rules" || requested === "prompts") return "registry";
+    if (requested === "structure" || requested === "graph" || requested === "ontology") return "graphs";
+    if (requested === "relations" || requested === "rules-trace") return "trace";
     return strategySections.some(function (section) { return section.id === requested; }) ? requested : "overview";
   }
 
@@ -1246,20 +1255,7 @@
   }
 
   function ontologySectionUrl(section) {
-    var normalized = normalizeOntologySection(section);
-    var params = new URLSearchParams(window.location.search);
-    params.set("tab", "ontology");
-    params.delete("notification");
-    params.delete("strategy");
-    if (normalized === "overview") {
-      params.delete("ontology");
-    } else {
-      params.set("ontology", normalized);
-    }
-    var path = window.location.pathname || "/";
-    var query = params.toString();
-    var hash = window.location.hash || "";
-    return path + (query ? "?" + query : "") + hash;
+    return strategySectionUrl(normalizeStrategySection(normalizeOntologySection(section)));
   }
 
   function writeTabHistory(tab, replace) {
@@ -1284,8 +1280,8 @@
 
   function writeOntologySectionHistory(section) {
     if (!window.history || !window.history.replaceState) return;
-    var normalized = normalizeOntologySection(section);
-    window.history.replaceState({ tab: "ontology", ontology: normalized }, "", ontologySectionUrl(normalized));
+    var normalized = normalizeStrategySection(normalizeOntologySection(section));
+    window.history.replaceState({ tab: "modeling", strategy: normalized }, "", strategySectionUrl(normalized));
   }
 
   function scrollKeyForTab(tab, notificationSection, strategySection, ontologySection) {
@@ -5114,7 +5110,7 @@
         tone: diagnosticTone(missingValuation.length, total),
         description: "EPS, 목표 PER, 안전마진이 있어야 싸다/비싸다 판단이 안정됩니다.",
         symbols: missingValuation,
-        action: "전략 운영 탭의 종목별 EPS/PER 입력"
+        action: "투자 분석 탭의 종목별 EPS/PER 입력"
       },
       {
         label: "체결강도",
@@ -6318,7 +6314,7 @@
       renderLoadingSource("계좌 연결", "토스 live 또는 로컬 저장 계정 상태 확인"),
       renderLoadingSource("관심 종목", "계정별 관심 목록과 전체 종목 캐시 준비"),
       renderLoadingSource("알림 판단", "최근 발송 이력과 룰 설정 동기화"),
-      renderLoadingSource("전략 운영", "모델 기준과 현재 종목 판단 계산"),
+      renderLoadingSource("투자 분석", "전략 근거와 관계 그래프 계산"),
       '</div>',
       '</article>',
       '<article class="panel loading-preview-panel">',
@@ -6588,7 +6584,9 @@
     var watchlist = Array.isArray(toss.watchlist) ? toss.watchlist : [];
     var portfolio = snapshot.portfolio || {};
     var strategy = (snapshot.tossDecision || {}).ontologyStrategy || {};
+    var investmentAnalysis = (snapshot.tossDecision || {}).investmentAnalysis || {};
     var abox = strategy.abox || {};
+    var reasoningCards = Array.isArray(investmentAnalysis.reasoningCards) ? investmentAnalysis.reasoningCards : (Array.isArray(strategy.reasoningCards) ? strategy.reasoningCards : []);
     var enabledRules = notificationEnabledRuleCount();
     var profiles = {
       overview: {
@@ -6612,8 +6610,8 @@
         metrics: [["사용 룰", enabledRules + "/" + alertRuleCatalog.length], ["템플릿", notificationTemplateItems().length], ["큐", notificationJobSummaryText(state.realtime.notificationJobs)]]
       },
       modeling: {
-        steps: [["01", "Input", "데이터"], ["02", "Formula", "공식"], ["03", "Result", "판단"]],
-        metrics: [["보유", positions.length], ["관심", watchlist.length], ["공식", modelFormulaRows().length]]
+        steps: [["01", "Evidence", "전략 근거"], ["02", "Relation", "TBox·ABox"], ["03", "AI", "투자 의견"]],
+        metrics: [["보유", positions.length], ["관심", watchlist.length], ["근거 카드", reasoningCards.length || "-"]]
       },
       ontology: {
         steps: [["01", "TBox", "스키마"], ["02", "ABox", "실체"], ["03", "Relation", "관계·근거"]],
@@ -6691,7 +6689,7 @@
 
   function renderStrategyModelingPage(snapshot) {
     return renderManagedPage("modeling", snapshot, [
-      '<section class="admin-grid strategy-view">',
+      '<section class="admin-grid strategy-view investment-analysis-view">',
       renderStrategySectionBar(),
       renderStrategySectionContent(snapshot),
       '</section>'
@@ -6699,12 +6697,8 @@
   }
 
   function renderOntologyPage(snapshot) {
-    return renderManagedPage("ontology", snapshot, [
-      '<section class="admin-grid ontology-view">',
-      renderOntologySectionBar(),
-      renderOntologyStrategyPanel(snapshot),
-      '</section>'
-    ].join(""));
+    state.activeStrategySection = normalizeStrategySection(state.activeStrategySection || state.activeOntologySection);
+    return renderStrategyModelingPage(snapshot);
   }
 
   function renderOntologySectionBar() {
@@ -6730,7 +6724,7 @@
     var section = activeStrategySectionMeta();
     return [
       '<div class="strategy-section-bar">',
-      '<div class="strategy-section-tabs" role="tablist" aria-label="전략 운영 섹션">',
+      '<div class="strategy-section-tabs" role="tablist" aria-label="투자 분석 섹션">',
       strategySections.map(function (item) {
         var active = section.id === item.id;
         return [
@@ -6745,20 +6739,315 @@
     ].join("");
   }
 
+  function ontologyStrategyParts(snapshot) {
+    var decision = (snapshot || {}).tossDecision || {};
+    var strategy = decision.ontologyStrategy || {};
+    var tbox = strategy.tbox || {};
+    var abox = strategy.abox || {};
+    var entities = Array.isArray(strategy.entities) ? strategy.entities : [];
+    var relations = Array.isArray(strategy.relations) ? strategy.relations : [];
+    var evidence = Array.isArray(strategy.evidence) ? strategy.evidence : [];
+    var beliefs = Array.isArray(strategy.beliefs) ? strategy.beliefs : [];
+    var opinions = Array.isArray(strategy.opinions) ? strategy.opinions : [];
+    var aboxEntities = ontologyAboxEntities(entities);
+    var aboxRelations = ontologyAboxRelations(relations);
+    return {
+      decision: decision,
+      investmentAnalysis: decision.investmentAnalysis || {},
+      strategy: strategy,
+      worldview: strategy.worldview || {},
+      tbox: tbox,
+      abox: abox,
+      entities: entities,
+      relations: relations,
+      evidence: evidence,
+      beliefs: beliefs,
+      opinions: opinions,
+      aboxEntities: aboxEntities,
+      aboxRelations: aboxRelations,
+      relationCounts: ontologyRelationCounts(aboxRelations),
+      entityLabels: ontologyEntityLabelMap(entities)
+    };
+  }
+
+  function investmentDecisionItemMap(snapshot) {
+    return ((snapshot || {}).tossDecision || {}).items ? ((snapshot || {}).tossDecision || {}).items.reduce(function (memo, item) {
+      var symbol = String(item && item.symbol || "").toUpperCase();
+      if (symbol) memo[symbol] = item;
+      return memo;
+    }, {}) : {};
+  }
+
+  function investmentReasoningCards(snapshot) {
+    var parts = ontologyStrategyParts(snapshot);
+    var cards = Array.isArray(parts.investmentAnalysis.reasoningCards) ? parts.investmentAnalysis.reasoningCards : [];
+    if (!cards.length && Array.isArray(parts.strategy.reasoningCards)) cards = parts.strategy.reasoningCards;
+    if (cards.length) return cards;
+    var decisionMap = investmentDecisionItemMap(snapshot);
+    return buildTradeSignalItems(snapshot).map(function (item) {
+      var decisionItem = decisionMap[item.symbol] || {};
+      var opinion = ontologyOpinionOf(decisionItem);
+      var pressure = ontologyPressureOf(opinion) || item.relationStrength || 0;
+      return {
+        id: "reasoning-card:" + item.symbol,
+        symbol: item.symbol,
+        companyName: stockDisplayName(item.symbol, item),
+        displayName: stockDisplayName(item.symbol, item),
+        source: item.source || "watchlist",
+        portfolioRelation: item.source === "watchlist" ? "WATCHES" : "HOLDS",
+        status: item.hasData ? "readyForAiReview" : "needsData",
+        finalOpinion: {
+          action: opinion.action || item.action,
+          tone: opinion.tone || item.tone || "hold",
+          ontologyPressure: pressure,
+          conviction: opinion.conviction || 0,
+          thesis: opinion.thesis || (item.reasons || [])[0] || ""
+        },
+        legacyModel: {
+          buyScore: item.buyScore,
+          sellScore: item.sellScore,
+          decision: item.action
+        },
+        strategyEvidence: (item.reasons || []).slice(0, 5).map(function (reason, index) {
+          return { id: "client-evidence:" + item.symbol + ":" + index, kind: "strategy", source: "client-model", summary: reason, value: {}, confidence: item.hasData ? 0.65 : 0.35 };
+        }),
+        relationEvidence: (item.relationRules || []).slice(0, 5).map(function (rule, index) {
+          return { id: "client-relation:" + item.symbol + ":" + index, type: rule.label || "RELATION_RULE", sourceLabel: stockDisplayName(item.symbol, item), targetLabel: rule.label || "관계 규칙", weight: Number(rule.score || 0) / 100 };
+        }),
+        beliefs: [],
+        dataGaps: item.hasData ? [] : ["시장 신호 데이터 부족"],
+        graphContext: {
+          stockEntityId: "stock:" + item.symbol,
+          tboxClasses: ["Stock", "Evidence", "Belief", "Opinion"],
+          aboxEntityIds: ["stock:" + item.symbol],
+          relationIds: [],
+          evidenceIds: [],
+          beliefIds: [],
+          opinionId: "opinion:" + item.symbol
+        },
+        aiInference: {
+          role: "ontology-first-investment-opinion",
+          legacyModelRole: "supporting-evidence",
+          question: "전략 근거와 관계 근거를 함께 읽고 다음 검증 순서를 설명합니다."
+        }
+      };
+    });
+  }
+
+  function investmentAiInferencePacket(snapshot) {
+    var parts = ontologyStrategyParts(snapshot);
+    return parts.investmentAnalysis.aiInferencePacket || parts.strategy.aiInferencePacket || {};
+  }
+
+  function renderInvestmentBridgePanel(snapshot) {
+    var parts = ontologyStrategyParts(snapshot);
+    var cards = investmentReasoningCards(snapshot);
+    var packet = investmentAiInferencePacket(snapshot);
+    var graphInputs = packet.graphInputs || {};
+    var steps = [
+      ["01", "전략 근거", "가격·수급·추세·기존 점수", cards.length + " cards"],
+      ["02", "관계 그래프", "HOLDS/WATCHES와 TBox 규칙", (graphInputs.relationCount || parts.relations.length || 0) + " relations"],
+      ["03", "AI 추론 입력", packet.contract || "investment-ontology-ai-inference-v1", (packet.reasoningCardCount || cards.length || 0) + " refs"],
+      ["04", "투자 의견", "관계·반대 신호·다음 검증", (graphInputs.opinionCount || parts.opinions.length || 0) + " opinions"]
+    ];
+    return [
+      '<article class="panel investment-bridge-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Investment Analysis</p>',
+      '<h2>전략 데이터와 관계 분석을 잇는 추론 구조</h2>',
+      '<p class="subtle">모델 점수는 보조 근거로 유지하고, AI는 TBox/ABox 관계와 reasoning card를 기준으로 의견을 만듭니다.</p>',
+      '</div>',
+      '<span class="tone-chip watch">ontology-first</span>',
+      '</div>',
+      '<div class="investment-bridge-flow">',
+      steps.map(function (step) {
+        return [
+          '<div class="investment-bridge-step">',
+          '<b>' + escapeHtml(step[0]) + '</b>',
+          '<span><strong>' + escapeHtml(step[1]) + '</strong><em>' + escapeHtml(step[2]) + '</em></span>',
+          '<i>' + escapeHtml(step[3]) + '</i>',
+          '</div>'
+        ].join("");
+      }).join(""),
+      '</div>',
+      '<div class="rule-strip">',
+      '<span>보유 종목은 HOLDS, 관심 종목은 WATCHES 관계로 구분합니다.</span>',
+      '<span>AI 추론 입력은 strategyEvidence, relationEvidence, graphContext ID를 함께 전달합니다.</span>',
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderInvestmentAiPacketPanel(snapshot) {
+    var packet = investmentAiInferencePacket(snapshot);
+    var inputOrder = Array.isArray(packet.inputOrder) ? packet.inputOrder : [];
+    var guardrails = Array.isArray(packet.guardrails) ? packet.guardrails : [];
+    return [
+      '<article class="panel investment-ai-packet-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">AI Inference Packet</p>',
+      '<h2>AI 추론 입력 계약</h2>',
+      '</div>',
+      '<span class="metric">' + escapeHtml(packet.reasoningCardCount || investmentReasoningCards(snapshot).length || 0) + '</span>',
+      '</div>',
+      '<div class="investment-packet-grid">',
+      '<section><strong>계약</strong><span>' + escapeHtml(packet.contract || "investment-ontology-ai-inference-v1") + '</span><em>' + escapeHtml(packet.promptVersion || "-") + '</em></section>',
+      '<section><strong>입력 순서</strong><span>' + escapeHtml(inputOrder.join(" → ") || "tbox → abox → reasoningCards") + '</span><em>legacyModelRole=' + escapeHtml(packet.legacyModelRole || "supporting-evidence") + '</em></section>',
+      '<section><strong>가드레일</strong><span>' + escapeHtml(guardrails.slice(0, 2).join(" / ") || "제공된 관계 데이터만 사용") + '</span><em>AI가 없는 값은 추정하지 않음</em></section>',
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderInvestmentReasoningCardPanel(snapshot, options) {
+    options = options || {};
+    var cards = investmentReasoningCards(snapshot);
+    var visible = options.compact ? cards.slice(0, 3) : cards;
+    return [
+      '<article class="panel investment-evidence-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Reasoning Cards</p>',
+      '<h2>투자 근거 카드</h2>',
+      '<p class="subtle">각 카드는 전략 근거, 관계 근거, 그래프 참조, AI 질문을 같은 단위로 묶습니다.</p>',
+      '</div>',
+      '<span class="metric">' + escapeHtml(cards.length) + '</span>',
+      '</div>',
+      '<div class="investment-evidence-list">',
+      visible.length ? visible.map(renderInvestmentReasoningCard).join("") : '<p class="subtle">연결된 투자 근거 카드가 없습니다.</p>',
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderInvestmentReasoningCard(card) {
+    var finalOpinion = card.finalOpinion || {};
+    var relationRows = Array.isArray(card.relationEvidence) ? card.relationEvidence : [];
+    var evidenceRows = Array.isArray(card.strategyEvidence) ? card.strategyEvidence : [];
+    var gaps = Array.isArray(card.dataGaps) ? card.dataGaps : [];
+    var displayName = card.companyName || card.displayName || stockDisplayName(card.symbol);
+    var tone = finalOpinion.tone || (gaps.length ? "hold" : "watch");
+    var thesis = textWithKnownDisplaySymbols(beginnerFriendlyText(finalOpinion.thesis || finalOpinion.action || ""), card.symbol, { symbol: card.symbol, name: displayName });
+    return [
+      '<div class="investment-evidence-card">',
+      '<div class="investment-evidence-head">',
+      '<div>',
+      '<strong>' + escapeHtml(displayName) + '</strong>',
+      '<span>' + escapeHtml([card.portfolioRelation || "-", sourceLabel(card.source || ""), card.status || ""].filter(Boolean).join(" · ")) + '</span>',
+      '</div>',
+      '<span class="tone-chip ' + escapeHtml(tone || "hold") + '">' + escapeHtml(finalOpinion.action || "관계 의견 대기") + '</span>',
+      '</div>',
+      '<div class="investment-evidence-grid">',
+      '<span>관계 신호 <strong>' + escapeHtml(Math.round(Number(finalOpinion.ontologyPressure || finalOpinion.ontology_pressure || 0))) + '</strong></span>',
+      '<span>확신 <strong>' + escapeHtml(finalOpinion.conviction || 0) + '</strong></span>',
+      '<span>전략 근거 <strong>' + escapeHtml(evidenceRows.length) + '</strong></span>',
+      '<span>관계 근거 <strong>' + escapeHtml(relationRows.length) + '</strong></span>',
+      '</div>',
+      '<div class="investment-evidence-narrative">',
+      thesis ? '<p>' + escapeHtml(thesis) + '</p>' : '',
+      gaps.length ? '<p>데이터 공백: ' + escapeHtml(gaps.join(", ")) + '</p>' : '',
+      '</div>',
+      '<div class="investment-evidence-columns">',
+      renderReasoningCardList("전략 근거", evidenceRows.slice(0, 3).map(function (item) { return item.summary || item.kind || item.id; })),
+      renderReasoningCardList("관계 근거", relationRows.slice(0, 3).map(function (item) {
+        return [item.type, item.sourceLabel, item.targetLabel].filter(Boolean).join(" · ");
+      })),
+      '</div>',
+      renderReasoningGraphRefs(card),
+      '</div>'
+    ].join("");
+  }
+
+  function renderReasoningCardList(title, rows) {
+    return [
+      '<div class="reasoning-card-list">',
+      '<strong>' + escapeHtml(title) + '</strong>',
+      rows.length ? rows.map(function (row) { return '<span>' + escapeHtml(row) + '</span>'; }).join("") : '<span>연결된 항목 없음</span>',
+      '</div>'
+    ].join("");
+  }
+
+  function renderReasoningGraphRefs(card) {
+    var context = card.graphContext || {};
+    var tboxClasses = Array.isArray(context.tboxClasses) ? context.tboxClasses : [];
+    return [
+      '<div class="reasoning-graph-refs">',
+      '<span>Graph ref <strong>' + escapeHtml(context.stockEntityId || ("stock:" + (card.symbol || ""))) + '</strong></span>',
+      '<span>TBox <strong>' + escapeHtml(tboxClasses.slice(0, 4).join(", ") || "-") + '</strong></span>',
+      '<span>AI 질문 <strong>' + escapeHtml(((card.aiInference || {}).role) || "ontology-first-investment-opinion") + '</strong></span>',
+      '</div>'
+    ].join("");
+  }
+
   function renderStrategySectionContent(snapshot) {
     var section = normalizeStrategySection(state.activeStrategySection);
-    if (section === "data") return renderStrategyDataPanel(snapshot);
-    if (section === "policy") {
+    var parts = ontologyStrategyParts(snapshot);
+    if (section === "evidence") {
       return [
+        renderInvestmentReasoningCardPanel(snapshot),
+        renderStrategyDataPanel(snapshot)
+      ].join("");
+    }
+    if (section === "results") {
+      return [
+        renderInvestmentReasoningCardPanel(snapshot, { compact: true }),
+        renderModelPreviewPanel(snapshot)
+      ].join("");
+    }
+    if (section === "graphs") {
+      return [
+        '<article class="panel ontology-panel">',
+        '<div class="panel-head">',
+        '<div>',
+        '<p class="label">Ontology Graphs</p>',
+        '<h2>TBox·ABox 관계 그래프</h2>',
+        '<p class="subtle">TBox 규칙 구조와 ABox 현재 데이터가 reasoning card를 거쳐 AI 의견으로 연결됩니다.</p>',
+        '</div>',
+        '<span class="metric">' + escapeHtml(parts.aboxRelations.length) + '</span>',
+        '</div>',
+        '<div class="ontology-dashboard">',
+        renderOntologyRelationshipGraphs(parts.tbox, parts.abox, parts.aboxEntities, parts.aboxRelations, parts.evidence, parts.beliefs, parts.opinions, parts.entityLabels, parts.relationCounts),
+        renderOntologyClassPanel(parts.tbox),
+        renderOntologyAboxPanel(parts.abox, parts.aboxEntities, parts.evidence, parts.beliefs, parts.opinions),
+        '</div>',
+        '</article>'
+      ].join("");
+    }
+    if (section === "registry") {
+      return [
+        renderInvestmentAiPacketPanel(snapshot),
+        renderOntologyRuleEditorPanel(snapshot),
+        renderAiPromptRegistryPanel(snapshot),
         renderAdminModelingPanel(snapshot),
         renderModelVersionPanel(snapshot)
       ].join("");
     }
-    if (section === "results") return renderModelPreviewPanel(snapshot);
+    if (section === "trace") {
+      return [
+        '<article class="panel ontology-panel ontology-trace-panel">',
+        '<div class="panel-head">',
+        '<div>',
+        '<p class="label">Relation Trace</p>',
+        '<h2>관계형 데이터·규칙 추적</h2>',
+        '</div>',
+        '<span class="metric">' + escapeHtml(parts.relations.length) + '</span>',
+        '</div>',
+        '<div class="ontology-dashboard">',
+        renderOntologyRelationalProjectionPanel(parts.entities, parts.relations, parts.evidence, parts.beliefs, parts.opinions),
+        renderOntologyRelationPanel(parts.tbox, parts.relations, parts.aboxRelations, parts.relationCounts, parts.entityLabels),
+        renderOntologyRulePanel(parts.tbox, parts.relationCounts, parts.evidence, parts.beliefs, parts.opinions),
+        '</div>',
+        '</article>'
+      ].join("");
+    }
     return [
+      renderInvestmentBridgePanel(snapshot),
+      renderInvestmentReasoningCardPanel(snapshot, { compact: true }),
+      renderInvestmentAiPacketPanel(snapshot),
       renderStrategyProcessPanel(snapshot),
-      renderModelOperatingGuidePanel(snapshot),
-      renderStrategyBeginnerPanel(snapshot)
+      renderModelOperatingGuidePanel(snapshot)
     ].join("");
   }
 
@@ -6888,8 +7177,7 @@
       '<div class="home-action-grid">',
       renderHomeAction("accounts", "계정", configuredAccounts + "개 API 연결", "토스·텔레그램"),
       renderHomeAction("notifications", "알림", enabledRules + "개 활성", "템플릿 테스트"),
-      renderHomeAction("modeling", "전략 운영", settingValue("modelName") || "모델링 관리", "판단 임계값"),
-      renderHomeAction("ontology", "관계 분석", "규칙/현재 데이터", "종목 관계"),
+      renderHomeAction("modeling", "투자 분석", "전략·관계·AI", "근거 카드"),
       '</div>',
       '</div>',
       '<div class="admin-stat-grid home-stat-grid">',
@@ -9370,7 +9658,7 @@
       '<div class="ontology-structure-link-grid">',
       links.map(function (link) {
         return [
-          '<button class="text-button" type="button" data-ontology-section="' + escapeHtml(link[0]) + '">',
+          '<button class="text-button" type="button" data-strategy-section="' + escapeHtml(link[0]) + '">',
           '<strong>' + escapeHtml(link[1]) + '</strong>',
           '<span>' + escapeHtml(link[2]) + '</span>',
           '</button>'
@@ -10467,7 +10755,7 @@
       '<div class="settings-body">',
       '<div class="settings-note">',
       '<strong>버전 저장</strong>',
-      '<p>현재 전략 운영 이름, 설명, 보조 공식, 기준값, 현재 성과 통계를 하나의 버전으로 저장합니다. 관계 규칙과 AI 프롬프트는 관계 분석 탭에서 관리합니다.</p>',
+      '<p>현재 투자 분석 이름, 설명, 보조 공식, 기준값, 현재 성과 통계를 하나의 버전으로 저장합니다. 관계 규칙과 AI 프롬프트는 규칙·프롬프트 섹션에서 관리합니다.</p>',
       '</div>',
       '<div class="settings-actions">',
       '<button class="text-button primary" data-action="save-model-version">모델 버전 저장</button>',
@@ -12332,7 +12620,7 @@
       '<div class="settings-status-copy">',
       '<p class="settings-section-label">Local first</p>',
       '<strong>앱 표시와 외부 연결 설정</strong>',
-      '<span>계정 연결은 계정 탭에서, 매매 판단 기준은 전략 운영 탭에서 관리합니다.</span>',
+      '<span>계정 연결은 계정 탭에서, 매매 판단 기준은 투자 분석 탭에서 관리합니다.</span>',
       '</div>',
       '<div class="settings-status-stack">',
       '<span class="tone-chip ' + settingsStatusTone() + '" data-settings-status>' + settingsStatusLabel() + '</span>',
@@ -12763,10 +13051,13 @@
 
     Array.prototype.slice.call(app.querySelectorAll("[data-ontology-section]")).forEach(function (button) {
       button.addEventListener("click", function () {
-        var section = normalizeOntologySection(button.getAttribute("data-ontology-section"));
-        if (section === state.activeOntologySection) return;
-        state.activeOntologySection = section;
-        writeOntologySectionHistory(section);
+        var legacySection = normalizeOntologySection(button.getAttribute("data-ontology-section"));
+        var section = normalizeStrategySection(legacySection);
+        if (section === state.activeStrategySection && state.activeTab === "modeling") return;
+        state.activeTab = "modeling";
+        state.activeOntologySection = legacySection;
+        state.activeStrategySection = section;
+        writeStrategySectionHistory(section);
         render();
       });
     });

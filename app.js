@@ -14,6 +14,8 @@
     kisMarketSignalMaxSymbols: "20",
     kisMarketSignalCacheMinutes: "10",
     kisMarketSignalGapSeconds: "0.35",
+    kisMarketSignalPreferLiveDuringMarketHours: "1",
+    kisMarketSignalLiveRefreshSeconds: "60",
     notifyProvider: "",
     telegramBotToken: "",
     telegramChatId: "",
@@ -11824,6 +11826,11 @@
       renderSettingField("kisMarketSignalMaxSymbols", "KIS 수급 종목 수", "number", "20"),
       renderSettingField("kisMarketSignalCacheMinutes", "KIS 수급 캐시(분)", "number", "10"),
       renderSettingField("kisMarketSignalGapSeconds", "KIS 호출 간격(초)", "number", "0.35"),
+      renderSettingSelect("kisMarketSignalPreferLiveDuringMarketHours", "장중 KIS live 우선", [
+        { value: "1", label: "사용" },
+        { value: "0", label: "사용 안 함" }
+      ]),
+      renderSettingField("kisMarketSignalLiveRefreshSeconds", "장중 live 최소 간격(초)", "number", "60"),
       renderSettingSelect("externalAlphaEnabled", "Alpha Vantage 수집", [
         { value: "1", label: "사용" },
         { value: "0", label: "사용 안 함" }

@@ -93,6 +93,89 @@ def missing_data_labels(context: Dict[str, object]) -> List[str]:
     return labels
 
 
+def relation_context_value(context: Dict[str, object]) -> Dict[str, object]:
+    relation_context = context.get("ontologyRelationContext") if isinstance(context.get("ontologyRelationContext"), dict) else {}
+    if relation_context:
+        return relation_context
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    relation_context = metadata.get("ontologyRelationContext") if isinstance(metadata.get("ontologyRelationContext"), dict) else {}
+    return relation_context if isinstance(relation_context, dict) else {}
+
+
+def relation_facts(context: Dict[str, object]) -> Dict[str, object]:
+    facts = relation_context_value(context).get("facts")
+    return facts if isinstance(facts, dict) else {}
+
+
+def active_rule_items(context: Dict[str, object]) -> List[Dict[str, object]]:
+    relation_context = relation_context_value(context)
+    rules = relation_context.get("activeRules") or relation_context.get("matchedRules") or []
+    return [
+        item for item in rules
+        if isinstance(item, dict) and not item.get("referenceOnly") and not item.get("reference_only")
+    ]
+
+
+def active_rule_evidence(context: Dict[str, object], limit: int = 5) -> List[str]:
+    evidence: List[str] = []
+    for item in active_rule_items(context):
+        raw = item.get("evidence") if isinstance(item.get("evidence"), list) else []
+        for value in raw:
+            text = str(value or "").strip()
+            if text and text not in evidence:
+                evidence.append(text)
+            if len(evidence) >= limit:
+                return evidence
+    return evidence
+
+
+def disclosure_context(context: Dict[str, object]) -> Dict[str, object]:
+    facts = relation_facts(context)
+    disclosure = facts.get("dartDisclosure") if isinstance(facts.get("dartDisclosure"), dict) else {}
+    if disclosure:
+        return disclosure
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    for key in ["dartDisclosure", "disclosure"]:
+        value = metadata.get(key) if isinstance(metadata.get(key), dict) else {}
+        if value:
+            return value
+    return {}
+
+
+def news_headline_items(context: Dict[str, object]) -> List[Dict[str, object]]:
+    facts = relation_facts(context)
+    news = facts.get("newsHeadlines") if isinstance(facts.get("newsHeadlines"), dict) else {}
+    if not news:
+        metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+        news = metadata.get("newsHeadlines") if isinstance(metadata.get("newsHeadlines"), dict) else {}
+    raw_items = news.get("items") if isinstance(news, dict) and isinstance(news.get("items"), list) else []
+    return [item for item in raw_items if isinstance(item, dict) and str(item.get("title") or "").strip()]
+
+
+def compact_text(value: object, max_len: int = 96) -> str:
+    text = " ".join(str(value or "").split())
+    if max_len > 3 and len(text) > max_len:
+        return text[: max_len - 3].rstrip() + "..."
+    return text
+
+
+def news_summary_text(context: Dict[str, object]) -> str:
+    disclosure = disclosure_context(context)
+    news_items = news_headline_items(context)
+    parts: List[str] = []
+    if disclosure:
+        report = str(disclosure.get("reportName") or disclosure.get("report_name") or "").strip()
+        receipt_date = str(disclosure.get("receiptDate") or disclosure.get("receipt_date") or "").strip()
+        if report:
+            parts.append("OpenDART " + report + (", 접수일 " + receipt_date if receipt_date else ""))
+    for item in news_items[:2]:
+        domain = str(item.get("domain") or item.get("provider") or "뉴스").strip()
+        seen_date = str(item.get("seenDate") or item.get("seendate") or "").strip()
+        suffix = (" · " + seen_date) if seen_date else ""
+        parts.append(domain + ": " + compact_text(item.get("title"), 84) + suffix)
+    return " / ".join(parts[:3])
+
+
 def target_label(context: Dict[str, object]) -> str:
     return str(
         context.get("displayTarget")
@@ -126,6 +209,15 @@ def notification_ai_prompt_context(
             "criteria": criterion_lines(context),
             "relationRules": relation_labels(context),
             "missingData": missing_data_labels(context),
+            "newsHeadlines": [
+                {
+                    "title": str(item.get("title") or ""),
+                    "domain": str(item.get("domain") or ""),
+                    "seenDate": str(item.get("seenDate") or item.get("seendate") or ""),
+                }
+                for item in news_headline_items(context)[:3]
+            ],
+            "disclosure": disclosure_context(context),
             "referenceDate": str(context.get("referenceDate") or ""),
         },
     }
@@ -158,13 +250,33 @@ def opinion_lines_for_type(message_type: str, context: Dict[str, object]) -> Lis
     target = target_label(context)
 
     if message_type == "holdingTiming":
+        evidence = active_rule_evidence(context, 5)
         rule_text = ", ".join(rules[:2]) if rules else (state or "보유 타이밍 조건")
+        situation_parts = []
+        if state:
+            situation_parts.append(state)
+        if pnl:
+            situation_parts.append("수익률 " + pnl)
+        if evidence:
+            situation_parts.append("근거 " + ", ".join(evidence[:3]))
+        elif trend:
+            situation_parts.append("추세 " + trend)
+        situation = target + "는 " + " · ".join(situation_parts) if situation_parts else target + "에서 " + rule_text + " 조건이 감지됐습니다."
+        news_text = news_summary_text(context)
         next_check = action or "비중 확대 여부보다 손실 기준, 분할 대응 기준, 추세 회복 조건을 먼저 확인하세요."
-        return [
-            "해석: " + target + "에서 " + rule_text + " 신호가 성립했습니다.",
-            "의견: " + (state or "보유 판단") + ("이고 " + pnl if pnl else "") + "라서 새 매수보다 기존 보유 이유와 비중 관리 기준을 먼저 보는 쪽이 맞습니다.",
+        result = ["상황: " + situation]
+        if flow or trend:
+            result.append("수급·추세: " + " / ".join(part for part in [flow, trend] if part))
+        if line_value(lines, "투자자"):
+            result.append("투자자: " + line_value(lines, "투자자"))
+        if news_text:
+            result.append("뉴스·공시: " + news_text)
+        external_phrase = "뉴스/공시" if news_text else "다음 조회 데이터"
+        result.extend([
+            "의견: " + (action or (state or "보유 판단") + " 기준을 우선 확인") + ". 가격·수급·추세와 " + external_phrase + "가 같은 방향인지 확인한 뒤 대응 강도를 정하세요.",
             "다음 확인: " + next_check,
-        ]
+        ])
+        return result
     if message_type == "monitorDecisionChange":
         previous_value = line_value(lines, "이전")
         current_value = line_value(lines, "현재")

@@ -102,6 +102,17 @@ class MonitorRunner:
                 legacy_by_symbol=legacy_by_symbol,
                 external_signals=snapshot.external_signals,
                 portfolio_id=snapshot.account_id,
+                runtime_context={
+                    "account": {
+                        "accountId": snapshot.account_id,
+                        "accountLabel": snapshot.account_label,
+                        "provider": snapshot.provider,
+                        "mode": snapshot.mode,
+                        "status": snapshot.status,
+                    },
+                    "metadata": dict(snapshot.metadata or {}),
+                    "decisionItems": [item.to_dict() for item in snapshot.decisions],
+                },
             )
             result = self.ontology_repository.save_graph(graph)
         except Exception as error:  # noqa: BLE001 - graph persistence must not block monitoring.

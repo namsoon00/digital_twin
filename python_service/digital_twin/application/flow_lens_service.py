@@ -455,7 +455,7 @@ def build_toss_decision(
     ]
     holding_items = [toss_decision_for_holding(item, portfolio, strategy_model) for item in positions]
     watch_items = [toss_decision_for_watch(item) for item in watchlist]
-    ontology = build_toss_ontology(positions, portfolio, holding_items + watch_items, watchlist)
+    ontology = build_toss_ontology(positions, portfolio, holding_items + watch_items, watchlist, toss, strategy_model)
     ontology_payload = ontology.to_dict()
     reasoning_cards = list(ontology_payload.get("reasoningCards") or [])
     reasoning_card_by_symbol = {
@@ -542,6 +542,8 @@ def build_toss_ontology(
     portfolio: Dict[str, object],
     decision_items: List[Dict[str, object]],
     watchlist: List[Dict[str, object]] = None,
+    toss: Dict[str, object] = None,
+    strategy_model: StrategyModel = None,
 ):
     normalized_positions = [normalize_position(item) for item in list(positions or []) + list(watchlist or [])]
     summary = PortfolioSummary(
@@ -566,6 +568,11 @@ def build_toss_ontology(
         summary,
         legacy_by_symbol=legacy_by_symbol,
         portfolio_id="flow-lens",
+        runtime_context={
+            "settings": getattr(strategy_model, "settings", {}) if strategy_model else {},
+            "decisionItems": list(decision_items or []),
+            "account": dict((toss or {}).get("account") or {}),
+        },
     )
 
 

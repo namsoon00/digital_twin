@@ -314,11 +314,12 @@ DEFAULT_PROMPT_TEMPLATES = [
     _prompt(
         "holdingTiming",
         "보유 타이밍 AI 분석",
-        "보유 종목의 매수, 보유, 분할 매도, 손실 관리 타이밍을 관계 규칙 기반으로 설명합니다.",
-        "대상 종목, 성립한 관계 규칙, 근거, 부족 데이터를 보고 왜 알림이 발생했는지 설명하고 다음 확인 질문 3개를 제시한다.",
+        "보유 종목의 현재 가격, 수급, 추세, 공시, 뉴스 헤드라인을 관계 규칙과 함께 종합해 대응 우선순위를 설명합니다.",
+        "대상 종목, 성립한 관계 규칙, 가격·수급·추세, OpenDART 공시, 뉴스 헤드라인, 부족 데이터를 보고 왜 알림이 발생했는지와 다음 확인 질문 3개를 제시한다.",
         guardrails=[
             "제공되지 않은 값은 추정하지 않습니다.",
             "매수/매도 지시 대신 확인 기준과 시나리오를 제시합니다.",
+            "뉴스나 공시가 없으면 있다고 가정하지 않습니다.",
             "공식 점수보다 관계 규칙, 근거, 부족 데이터를 우선합니다.",
         ],
     ),
@@ -772,6 +773,8 @@ def position_signal_facts(
     disclosures = external_signals.get("dartDisclosures") if isinstance(external_signals, dict) else {}
     symbol = str(position.symbol or "").upper()
     disclosure = disclosures.get(symbol) if isinstance(disclosures, dict) else None
+    news_headlines = external_signals.get("newsHeadlines") if isinstance(external_signals, dict) else {}
+    news_context = news_headlines.get(symbol) if isinstance(news_headlines, dict) and isinstance(news_headlines.get(symbol), dict) else {}
     facts: Dict[str, object] = {
         "symbol": symbol,
         "name": position.name,
@@ -803,6 +806,7 @@ def position_signal_facts(
         "btcVolume24h": number(btc.get("volume24h")) if btc else 0.0,
         "isBtcSensitive": symbol in BTC_SENSITIVE_SYMBOLS,
         "dartDisclosure": dict(disclosure or {}) if isinstance(disclosure, dict) else {},
+        "newsHeadlines": dict(news_context or {}) if isinstance(news_context, dict) else {},
         "expectsKrMicrostructureSignals": expects_kr_microstructure_signals(position.market, position.currency, symbol),
     }
     facts.update(trend)

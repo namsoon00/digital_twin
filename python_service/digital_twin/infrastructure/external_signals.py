@@ -208,8 +208,11 @@ class ExternalSignalProvider:
             "fredSeries": symbol_list(self.settings.get("externalFredSeries") or "DGS10,DGS2,DFF") if self.external_api_enabled("externalFredEnabled") else [],
             "secSymbols": self.sec_symbols(positions),
             "dartSymbols": self.dart_symbols(positions),
+            "newsSymbols": self.news_symbols(positions),
             "alphaMax": str(self.settings.get("externalAlphaMaxSymbols") or "3"),
             "secMax": str(self.settings.get("externalSecMaxSymbols") or "3"),
+            "newsMax": str(self.settings.get("externalNewsMaxSymbols") or "3"),
+            "newsLookbackHours": str(self.settings.get("externalNewsLookbackHours") or "48"),
             "secMappings": symbol_assignments(self.settings.get("externalSecCompanyCiks") or ""),
             "dartLookbackDays": str(self.settings.get("externalDartLookbackDays") or "14"),
             "dartMappings": symbol_assignments(self.settings.get("externalDartCorpCodes") or ""),
@@ -220,6 +223,7 @@ class ExternalSignalProvider:
                 "fred": self.external_api_enabled("externalFredEnabled"),
                 "opendart": self.external_api_enabled("externalDartEnabled"),
                 "sec": self.sec_enabled(),
+                "news": self.external_api_enabled("externalNewsEnabled"),
             },
             "configured": {
                 "alpha": self.external_api_enabled("externalAlphaEnabled") and bool(str(self.settings.get("alphaVantageApiKey") or "").strip()),
@@ -227,6 +231,7 @@ class ExternalSignalProvider:
                 "fred": self.external_api_enabled("externalFredEnabled") and bool(str(self.settings.get("fredApiKey") or "").strip()),
                 "opendart": self.external_api_enabled("externalDartEnabled") and bool(str(self.settings.get("opendartApiKey") or "").strip()),
                 "sec": self.sec_enabled(),
+                "news": self.external_api_enabled("externalNewsEnabled"),
             },
         }
         raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -248,6 +253,7 @@ class ExternalSignalProvider:
             "macro": {},
             "secFilings": {},
             "dartDisclosures": {},
+            "newsHeadlines": {},
             "statuses": [],
         }
         self.add_alpha_vantage(signals, positions)
@@ -255,6 +261,7 @@ class ExternalSignalProvider:
         self.add_coingecko(signals)
         self.add_fred(signals)
         self.add_opendart(signals, positions)
+        self.add_gdelt_news(signals, positions)
         return signals
 
     def int_setting(self, key: str, fallback: int, minimum: int = 0) -> int:
@@ -676,3 +683,84 @@ class ExternalSignalProvider:
             seen.add(symbol)
             symbols.append(symbol)
         return symbols
+
+    def add_gdelt_news(self, signals: Dict[str, object], positions: List[Position]) -> None:
+        if not self.external_api_enabled("externalNewsEnabled"):
+            return
+        positions_by_symbol = {str(position.symbol or "").upper(): position for position in positions if not position.is_cash()}
+        for symbol in self.limited_targets(signals, "GDELT News", self.news_symbols(positions), "externalNewsMaxSymbols", 3):
+            position = positions_by_symbol.get(symbol)
+            if not position:
+                continue
+            try:
+                query = self.gdelt_news_query(position)
+                lookback_hours = self.int_setting("externalNewsLookbackHours", 48, 1)
+
+                def fetch_news():
+                    url = "https://api.gdeltproject.org/api/v2/doc/doc?" + urllib.parse.urlencode({
+                        "query": query,
+                        "mode": "ArtList",
+                        "format": "json",
+                        "maxrecords": "5",
+                        "sort": "HybridRel",
+                        "timespan": str(lookback_hours) + "h",
+                    })
+                    payload = self.fetch_json(url, {"Accept": "application/json", "User-Agent": "DigitalTwin/1.0"})
+                    articles = payload.get("articles") if isinstance(payload, dict) and isinstance(payload.get("articles"), list) else []
+                    items = []
+                    for article in articles[:5]:
+                        if not isinstance(article, dict):
+                            continue
+                        title = str(article.get("title") or "").strip()
+                        url_value = str(article.get("url") or "").strip()
+                        if not title or not url_value:
+                            continue
+                        items.append({
+                            "title": title,
+                            "url": url_value,
+                            "domain": str(article.get("domain") or "").strip(),
+                            "sourceCountry": str(article.get("sourceCountry") or "").strip(),
+                            "language": str(article.get("language") or "").strip(),
+                            "seenDate": str(article.get("seendate") or "").strip(),
+                        })
+                    return {
+                        "provider": "GDELT",
+                        "symbol": symbol,
+                        "name": str(position.name or symbol),
+                        "query": query,
+                        "lookbackHours": lookback_hours,
+                        "items": items,
+                        "count": len(items),
+                        "fetchedAt": utc_now_iso(),
+                    }
+
+                news = self.guarded_call("GDELT News", "doc:" + symbol, fetch_news)
+                if news:
+                    signals.setdefault("newsHeadlines", {})[symbol] = news
+            except Exception as error:  # noqa: BLE001
+                self.status_for_error(signals, "GDELT News", symbol + " ", error)
+
+    def news_symbols(self, positions: List[Position]) -> List[str]:
+        if not self.external_api_enabled("externalNewsEnabled"):
+            return []
+        symbols = []
+        seen = set()
+        for position in positions:
+            if position.is_cash():
+                continue
+            symbol = str(position.symbol or "").upper()
+            name = str(position.name or "").strip()
+            if not symbol or symbol in seen or not name:
+                continue
+            seen.add(symbol)
+            symbols.append(symbol)
+        return symbols
+
+    def gdelt_news_query(self, position: Position) -> str:
+        terms = []
+        for raw in [position.name, position.symbol]:
+            text = str(raw or "").replace('"', " ").strip()
+            if text and text not in terms:
+                terms.append(text)
+        quoted = ['"' + term + '"' for term in terms[:2]]
+        return "(" + " OR ".join(quoted) + ")" if quoted else '"' + str(position.symbol or "").upper() + '"'

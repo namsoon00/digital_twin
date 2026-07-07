@@ -27,7 +27,7 @@ from digital_twin.cli import build_parser
 from digital_twin.domain.accounts import AccountConfig
 from digital_twin.domain.market_data import normalize_position, technical_indicators_from_candles
 from digital_twin.domain.message_types import DEFAULT_ALERT_RULES, DEFAULT_CADENCE, MESSAGE_TYPE_EMOJIS, MESSAGE_TYPE_LABELS, public_message_catalog
-from digital_twin.domain.ontology import build_portfolio_ontology
+from digital_twin.domain.ontology import OntologyEntity, OntologyRelation, abox_properties, apply_relation_driven_opinions, build_portfolio_ontology, entity_id
 from digital_twin.domain.ontology_rules import decision_action_group_for_label, evaluate_position_relation_rules, prompt_template_for_message_type
 from digital_twin.domain.portfolio_calculations import portfolio_summary
 from digital_twin.domain.strategy import SafeFormula, StrategyModel, decisions_for_positions
@@ -1071,6 +1071,16 @@ class PythonServiceTests(unittest.TestCase):
             portfolio,
             legacy_by_symbol={"000660": {"exitPressure": 76, "decisionBasis": "lossCut"}},
             portfolio_id="main",
+            runtime_context={
+                "settings": {
+                    "alertThresholds": "lossRateLow=-8",
+                    "profitTakeScoreFormula": "baseScore + profitTakePnlScore",
+                },
+                "decisionItems": [
+                    {"symbol": "000660", "decision": "손실 관리", "exitPressure": 76, "tone": "danger"},
+                ],
+                "account": {"accountId": "main", "accountLabel": "메인 계좌", "provider": "test"},
+            },
         )
         payload = graph.to_dict()
 
@@ -1078,20 +1088,69 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("TBox", payload["tbox"]["box"])
         self.assertEqual("ABox", payload["abox"]["box"])
         self.assertIn("Stock", payload["tbox"]["classes"])
+        self.assertIn("PriceMetric", payload["tbox"]["classes"])
+        self.assertIn("RuntimeSetting", payload["tbox"]["classes"])
         self.assertIn("HOLDS", payload["tbox"]["relationTypes"])
         self.assertIn("WATCHES", payload["tbox"]["relationTypes"])
+        self.assertIn("HAS_PRICE", payload["tbox"]["relationTypes"])
+        self.assertIn("HAS_MODEL_SCORE", payload["tbox"]["relationTypes"])
         self.assertGreater(payload["abox"]["entityCount"], 0)
         self.assertTrue(any(item.relation_type == "HOLDS" for item in graph.relations))
         self.assertTrue(any(item.relation_type == "WATCHES" for item in graph.relations))
         self.assertTrue(any(item.relation_type == "EXPOSED_TO" for item in graph.relations))
+        self.assertTrue(any(item.relation_type == "HAS_PRICE" for item in graph.relations))
+        self.assertTrue(any(item.relation_type == "HAS_DATA_QUALITY" for item in graph.relations))
+        self.assertTrue(any(item.relation_type == "HAS_MODEL_SCORE" for item in graph.relations))
+        self.assertTrue(any(item.kind == "account" for item in graph.entities))
+        self.assertTrue(any(item.kind == "position" for item in graph.entities))
+        self.assertTrue(any(item.kind == "price-metric" for item in graph.entities))
+        self.assertTrue(any(item.kind == "model-score" for item in graph.entities))
+        self.assertTrue(any(item.kind == "runtime-setting" for item in graph.entities))
+        self.assertTrue(any(item.kind == "strategy-signal" for item in graph.entities))
         self.assertTrue(any(item.kind == "tbox-class" for item in graph.entities))
         self.assertTrue(any(item.get("symbol") == "NVDA" for item in payload["reasoningCards"]))
         self.assertEqual("investment-ontology-ai-inference-v1", payload["aiInferencePacket"]["contract"])
+        self.assertIn("relationInfluences", payload["aiInferencePacket"]["inputOrder"])
         self.assertIn("관계 분석 데이터 JSON", graph.prompt)
         self.assertIn("reasoningCards", graph.prompt)
         self.assertIn("TBox", graph.prompt)
         self.assertIn("ABox", graph.prompt)
         self.assertTrue(graph.opinion_for_symbol("000660").dominant_risks)
+        self.assertTrue(graph.opinion_for_symbol("000660").relation_influences)
+
+    def test_new_ontology_relation_can_change_ai_opinion_pressure(self):
+        position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "marketValue": 1000,
+            "profitLossRate": 1,
+            "sector": "반도체",
+        })
+        portfolio = portfolio_summary([position])
+        graph = build_portfolio_ontology([position], portfolio)
+        opinion = graph.opinion_for_symbol("005930")
+        base_pressure = opinion.ontology_pressure
+        signal_id = entity_id("external-signal", "regulatory-risk")
+        graph.entities.append(OntologyEntity(signal_id, "규제 리스크", "external-signal", abox_properties({
+            "tboxClass": "ExternalSignal",
+        })))
+        graph.relations.append(OntologyRelation(
+            entity_id("stock", "005930"),
+            signal_id,
+            "AFFECTS",
+            weight=1.0,
+            properties=abox_properties({
+                "polarity": "risk",
+                "opinionImpact": 35,
+                "aiInfluenceLabel": "규제 리스크",
+            }),
+        ))
+
+        apply_relation_driven_opinions(graph)
+
+        updated = graph.opinion_for_symbol("005930")
+        self.assertGreater(updated.ontology_pressure, base_pressure)
+        self.assertTrue(any(item.get("label") == "규제 리스크" for item in updated.relation_influences))
 
     def test_neo4j_ontology_repository_builds_relation_statements(self):
         position = normalize_position({
@@ -2756,6 +2815,14 @@ class PythonServiceTests(unittest.TestCase):
                     "rcept_no": "20260701000001",
                     "rcept_dt": "20260701",
                 }]}
+            if "api.gdeltproject.org" in url:
+                return {"articles": [{
+                    "title": "Samsung Electronics shares move as investors watch memory demand",
+                    "url": "https://example.test/samsung-memory",
+                    "domain": "example.test",
+                    "seendate": "20260707120000",
+                    "language": "English",
+                }]}
             return {}
 
         settings = {
@@ -2768,6 +2835,7 @@ class PythonServiceTests(unittest.TestCase):
             "externalCryptoIds": "bitcoin",
             "externalAlphaMaxSymbols": "2",
             "externalSecMaxSymbols": "2",
+            "externalNewsMaxSymbols": "2",
             "externalSecCompanyCiks": "AAPL=0000320193",
             "externalDartLookbackDays": "14",
             "externalDartCorpCodes": "005930=00126380",
@@ -2786,7 +2854,7 @@ class PythonServiceTests(unittest.TestCase):
         signals = provider.signals_for_positions(positions)
         cached_signals = provider.signals_for_positions(positions)
 
-        self.assertEqual(6, len(calls))
+        self.assertEqual(8, len(calls))
         self.assertEqual(signals, cached_signals)
         self.assertEqual(4.2, signals["equityQuotes"]["AAPL"]["changePercent"])
         self.assertEqual("10-Q", signals["secFilings"]["AAPL"]["latestFiling"]["form"])
@@ -2794,6 +2862,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(-5.4, signals["cryptoMarkets"]["bitcoin"]["change24h"])
         self.assertEqual(4.35, signals["macro"]["series"]["DGS10"]["value"])
         self.assertEqual("20260701000001", signals["dartDisclosures"]["005930"]["receiptNo"])
+        self.assertEqual("GDELT", signals["newsHeadlines"]["005930"]["provider"])
+        self.assertIn("Samsung Electronics", signals["newsHeadlines"]["005930"]["items"][0]["title"])
 
     def test_external_signal_provider_skips_disabled_sources(self):
         calls = []
@@ -2812,6 +2882,7 @@ class PythonServiceTests(unittest.TestCase):
             "externalFredEnabled": "0",
             "externalDartEnabled": "0",
             "externalSecEnabled": "0",
+            "externalNewsEnabled": "0",
             "externalDartCorpCodes": "005930=00126380",
             "externalSecCompanyCiks": "AAPL=0000320193",
         }
@@ -2833,6 +2904,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual({}, signals["macro"])
         self.assertEqual({}, signals["secFilings"])
         self.assertEqual({}, signals["dartDisclosures"])
+        self.assertEqual({}, signals["newsHeadlines"])
 
     def test_external_signal_provider_rate_limits_repeated_targets(self):
         calls = []
@@ -3489,7 +3561,7 @@ class PythonServiceTests(unittest.TestCase):
         message = templates.render(event.rule, alert_context(event))
 
         self.assertIn("<b>AI 의견</b>", message)
-        self.assertIn("• <b>해석</b>:", message)
+        self.assertIn("• <b>상황</b>:", message)
         self.assertIn("• <b>의견</b>:", message)
         self.assertIn("• <b>다음 확인</b>:", message)
         self.assertIn("• <b>분석출처</b>: 알림 AI 의견 / holdingTiming", message)
@@ -3498,6 +3570,92 @@ class PythonServiceTests(unittest.TestCase):
         self.assertNotIn("thesis", message)
         self.assertLess(message.index("<b>데이터</b>"), message.index("<b>AI 의견</b>"))
         self.assertLess(message.index("<b>AI 의견</b>"), message.index("<b>발송 기준</b>"))
+
+    def test_holding_timing_ai_opinion_uses_news_and_disclosure_context(self):
+        db_path = Path(self.temp.name) / "service.db"
+        templates = SQLiteNotificationTemplateStore(db_path)
+        position = normalize_position({
+            "symbol": "035420",
+            "name": "NAVER",
+            "market": "KR",
+            "currency": "KRW",
+            "marketValue": 1972000,
+            "quantity": 10,
+            "averagePrice": 204000,
+            "currentPrice": 197200,
+            "profitLossRate": -3.4,
+            "volume": 1077802,
+            "volumeRatio": 1.6,
+            "tradingValue": 211200000000,
+            "tradeStrength": 87.3,
+            "orderbookBidVolume": 11629,
+            "orderbookAskVolume": 23639,
+            "bidAskImbalance": -34.1,
+            "ma20": 215135,
+            "ma60": 217132,
+        })
+        relation_context = evaluate_position_relation_rules(
+            position,
+            portfolio_summary([position]),
+            external_signals={
+                "dartDisclosures": {
+                    "035420": {
+                        "provider": "OpenDART",
+                        "corpName": "NAVER",
+                        "reportName": "[기재정정]주식교환ㆍ이전결정",
+                        "receiptNo": "20260706000001",
+                        "receiptDate": "20260706",
+                    }
+                },
+                "newsHeadlines": {
+                    "035420": {
+                        "provider": "GDELT",
+                        "items": [{
+                            "title": "NAVER investors weigh governance update and platform growth",
+                            "url": "https://example.test/naver",
+                            "domain": "example.test",
+                            "seenDate": "20260707120000",
+                        }],
+                    }
+                },
+            },
+        )
+        event = AlertEvent(
+            "main",
+            "메인",
+            "WATCH",
+            "holdingTiming",
+            "main:timing:035420",
+            "NAVER",
+            [
+                "상태 손실 축소 권장 (80점)",
+                "현재가: 197,200원",
+                "평단가: 204,000원",
+                "수익률: -3.4%",
+                "수급: 거래량 1,077,802(1.6x), 거래액 2112억 원, 체결강도 87.3, 호가불균형 -34.1%",
+                "추세: 20일선 215,135원보다 8.3% 낮음, 60일선 217,132원보다 9.2% 낮음",
+                "권장 액션: 손절·분할축소 우선, 20일선 회복 전 추가매수 보류",
+            ],
+            "035420",
+            criteria=[
+                "설정: 관계 규칙이 위험/주의 상태로 성립할 때",
+                "감지: 상태 손실 축소 권장 (80점)",
+            ],
+            metadata={
+                "ontologyRelationContext": relation_context,
+                "ontologyPromptContext": relation_context["promptContext"],
+            },
+        )
+
+        message = templates.render(event.rule, alert_context(event))
+
+        self.assertIn("• <b>상황</b>:", message)
+        self.assertIn("• <b>수급·추세</b>:", message)
+        self.assertIn("• <b>뉴스·공시</b>:", message)
+        self.assertIn("[기재정정]주식교환ㆍ이전결정", message)
+        self.assertIn("NAVER investors weigh governance update", message)
+        self.assertNotIn("신호가 성립했습니다", message)
+        self.assertNotIn("새 매수보다 기존 보유 이유", message)
 
     def test_notification_delivery_score_uses_user_formula(self):
         event = AlertEvent(

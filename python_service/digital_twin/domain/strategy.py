@@ -711,6 +711,13 @@ def decisions_for_positions(
         portfolio,
         legacy_by_symbol=legacy_by_symbol,
         external_signals=external_signals or {},
+        runtime_context={
+            "settings": getattr(strategy_model, "settings", {}) if strategy_model else {},
+            "decisionItems": [
+                {**payload, "symbol": symbol}
+                for symbol, payload in legacy_by_symbol.items()
+            ],
+        },
     )
     decisions = []
     for item in active_positions:

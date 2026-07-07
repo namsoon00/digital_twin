@@ -11,12 +11,31 @@ ONTOLOGY_PROMPT_VERSION = "ontology-investment-v2-tbox-abox"
 
 TBOX_CLASSES = [
     "Portfolio",
+    "Account",
     "Stock",
+    "Position",
+    "Watchlist",
     "Sector",
     "Market",
     "Currency",
     "Cash",
     "WatchlistCandidate",
+    "DataSource",
+    "PriceMetric",
+    "TechnicalIndicator",
+    "TradeFlow",
+    "DataQuality",
+    "ValuationAssumption",
+    "StrategySignal",
+    "ModelScore",
+    "Threshold",
+    "RuntimeSetting",
+    "NotificationPolicy",
+    "AlertRule",
+    "PromptTemplate",
+    "ExternalSignal",
+    "MarketExposure",
+    "ReasoningRule",
     "Risk",
     "Opportunity",
     "Contradiction",
@@ -29,12 +48,38 @@ TBOX_CLASSES = [
 ]
 
 TBOX_RELATION_TYPES = [
+    "DEFINES_CLASS",
+    "DEFINES_RELATION",
+    "CONSTRAINS_ASSERTIONS",
     "HOLDS",
     "WATCHES",
     "HOLDS_CASH",
+    "MANAGES_PORTFOLIO",
+    "HAS_POSITION",
+    "HAS_WATCHLIST",
+    "REPRESENTS_STOCK",
+    "HAS_MARKET_EXPOSURE",
     "BELONGS_TO",
     "TRADED_IN",
     "DENOMINATED_IN",
+    "OBSERVED_FROM",
+    "HAS_PRICE",
+    "HAS_TECHNICAL_INDICATOR",
+    "HAS_TRADE_FLOW",
+    "HAS_DATA_QUALITY",
+    "HAS_VALUATION",
+    "HAS_MODEL_SCORE",
+    "HAS_THRESHOLD",
+    "HAS_RUNTIME_SETTING",
+    "HAS_NOTIFICATION_POLICY",
+    "HAS_ALERT_RULE",
+    "HAS_PROMPT_TEMPLATE",
+    "HAS_EXTERNAL_SIGNAL",
+    "AFFECTS",
+    "IMPACTS_OPINION",
+    "DERIVES",
+    "CONFIGURES",
+    "TRIGGERS_ALERT",
     "EXPOSED_TO",
     "SUPPORTED_BY",
     "CONTRADICTS",
@@ -53,7 +98,62 @@ TBOX_REASONING_RULES = [
     "data quality controls AI opinion confidence",
     "legacy score model remains supporting evidence, not the primary decision model",
     "watchlist candidates create observation assertions, not sell decisions",
+    "all runtime concepts become ABox nodes before AI receives an opinion packet",
+    "relations with opinionImpact, riskImpact, supportImpact, or polarity change AI opinion pressure",
 ]
+
+SENSITIVE_SETTING_TOKENS = ("secret", "token", "password", "clientid", "client_id", "accountseq", "account_seq", "chatid", "chat_id", "key")
+
+METRIC_CONCEPTS = [
+    ("quantity", "수량", "Position", "HAS_POSITION", "position", "quantity"),
+    ("sellable_quantity", "매도 가능 수량", "Position", "HAS_POSITION", "position", "sellableQuantity"),
+    ("average_price", "평단", "PriceMetric", "HAS_PRICE", "price", "averagePrice"),
+    ("current_price", "현재가", "PriceMetric", "HAS_PRICE", "price", "currentPrice"),
+    ("market_value", "평가액", "PriceMetric", "HAS_PRICE", "price", "marketValue"),
+    ("profit_loss", "평가손익", "PriceMetric", "HAS_PRICE", "price", "profitLoss"),
+    ("profit_loss_rate", "손익률", "PriceMetric", "HAS_PRICE", "price", "profitLossRate"),
+    ("change_rate", "가격 변화율", "PriceMetric", "HAS_PRICE", "price", "changeRate"),
+    ("volume", "거래량", "TradeFlow", "HAS_TRADE_FLOW", "flow", "volume"),
+    ("volume_ratio", "거래량 배율", "TradeFlow", "HAS_TRADE_FLOW", "flow", "volumeRatio"),
+    ("trade_strength", "체결강도", "TradeFlow", "HAS_TRADE_FLOW", "flow", "tradeStrength"),
+    ("trading_value", "거래대금", "TradeFlow", "HAS_TRADE_FLOW", "flow", "tradingValue"),
+    ("buy_volume", "매수 체결량", "TradeFlow", "HAS_TRADE_FLOW", "flow", "buyVolume"),
+    ("sell_volume", "매도 체결량", "TradeFlow", "HAS_TRADE_FLOW", "flow", "sellVolume"),
+    ("orderbook_bid_volume", "매수호가 잔량", "TradeFlow", "HAS_TRADE_FLOW", "flow", "orderbookBidVolume"),
+    ("orderbook_ask_volume", "매도호가 잔량", "TradeFlow", "HAS_TRADE_FLOW", "flow", "orderbookAskVolume"),
+    ("bid_ask_imbalance", "호가 불균형", "TradeFlow", "HAS_TRADE_FLOW", "flow", "bidAskImbalance"),
+    ("foreign_net_volume", "외국인 순매수", "TradeFlow", "HAS_TRADE_FLOW", "flow", "foreignNetVolume"),
+    ("foreign_net_amount", "외국인 순매수 금액", "TradeFlow", "HAS_TRADE_FLOW", "flow", "foreignNetAmount"),
+    ("institution_net_volume", "기관 순매수", "TradeFlow", "HAS_TRADE_FLOW", "flow", "institutionNetVolume"),
+    ("institution_net_amount", "기관 순매수 금액", "TradeFlow", "HAS_TRADE_FLOW", "flow", "institutionNetAmount"),
+    ("individual_net_volume", "개인 순매수", "TradeFlow", "HAS_TRADE_FLOW", "flow", "individualNetVolume"),
+    ("individual_net_amount", "개인 순매수 금액", "TradeFlow", "HAS_TRADE_FLOW", "flow", "individualNetAmount"),
+    ("ma5", "5일선", "TechnicalIndicator", "HAS_TECHNICAL_INDICATOR", "technical", "ma5"),
+    ("ma20", "20일선", "TechnicalIndicator", "HAS_TECHNICAL_INDICATOR", "technical", "ma20"),
+    ("ma60", "60일선", "TechnicalIndicator", "HAS_TECHNICAL_INDICATOR", "technical", "ma60"),
+    ("ma120", "120일선", "TechnicalIndicator", "HAS_TECHNICAL_INDICATOR", "technical", "ma120"),
+    ("ma200", "200일선", "TechnicalIndicator", "HAS_TECHNICAL_INDICATOR", "technical", "ma200"),
+    ("ma20_slope", "20일선 기울기", "TechnicalIndicator", "HAS_TECHNICAL_INDICATOR", "technical", "ma20Slope"),
+    ("ma60_slope", "60일선 기울기", "TechnicalIndicator", "HAS_TECHNICAL_INDICATOR", "technical", "ma60Slope"),
+    ("ma20_distance", "20일선 괴리", "TechnicalIndicator", "HAS_TECHNICAL_INDICATOR", "technical", "ma20Distance"),
+    ("ma60_distance", "60일선 괴리", "TechnicalIndicator", "HAS_TECHNICAL_INDICATOR", "technical", "ma60Distance"),
+]
+
+SETTING_CONCEPT_TYPES = {
+    "ontologyRelationRules": ("AlertRule", "HAS_ALERT_RULE"),
+    "aiPromptTemplates": ("PromptTemplate", "HAS_PROMPT_TEMPLATE"),
+    "aiPromptPolicy": ("NotificationPolicy", "HAS_NOTIFICATION_POLICY"),
+    "alertThresholds": ("Threshold", "HAS_THRESHOLD"),
+    "modelDecisionThresholds": ("Threshold", "HAS_THRESHOLD"),
+    "formulaWeights": ("Threshold", "HAS_THRESHOLD"),
+    "buyScoreFormula": ("StrategySignal", "CONFIGURES"),
+    "sellScoreFormula": ("StrategySignal", "CONFIGURES"),
+    "customBuyModelFormula": ("StrategySignal", "CONFIGURES"),
+    "customSellModelFormula": ("StrategySignal", "CONFIGURES"),
+    "profitTakeScoreFormula": ("StrategySignal", "CONFIGURES"),
+    "lossCutScoreFormula": ("StrategySignal", "CONFIGURES"),
+    "notificationScoreFormula": ("NotificationPolicy", "HAS_NOTIFICATION_POLICY"),
+}
 
 
 @dataclass
@@ -129,6 +229,7 @@ class OntologyOpinion:
     opportunities: List[str] = field(default_factory=list)
     legacy_model: Dict[str, object] = field(default_factory=dict)
     evidence_ids: List[str] = field(default_factory=list)
+    relation_influences: List[Dict[str, object]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, object]:
         return asdict(self)
@@ -240,6 +341,78 @@ def abox_properties(properties: Dict[str, object] = None) -> Dict[str, object]:
     payload.setdefault("ontologyBox", "ABox")
     payload.setdefault("box", "ABox")
     return payload
+
+
+def add_entity(graph: PortfolioOntology, kind: str, value: str, label: str, properties: Dict[str, object] = None) -> str:
+    item_id = entity_id(kind, value)
+    graph.entities.append(OntologyEntity(item_id, label or str(value or item_id), kind, abox_properties(properties or {})))
+    return item_id
+
+
+def add_relation(
+    graph: PortfolioOntology,
+    source: str,
+    target: str,
+    relation_type: str,
+    weight: float = 1.0,
+    evidence_ids: List[str] = None,
+    properties: Dict[str, object] = None,
+) -> None:
+    graph.relations.append(OntologyRelation(
+        source,
+        target,
+        relation_type,
+        weight=weight,
+        evidence_ids=list(evidence_ids or []),
+        properties=abox_properties(properties or {}),
+    ))
+
+
+def safe_setting_value(key: str, value: object) -> object:
+    lowered = str(key or "").replace("-", "").replace("_", "").lower()
+    if any(token.replace("_", "") in lowered for token in SENSITIVE_SETTING_TOKENS):
+        return "configured" if value not in (None, "", False) else ""
+    text = str(value or "")
+    return text[:1200] if len(text) > 1200 else value
+
+
+def metric_value(position: Position, field_name: str) -> float:
+    return number(getattr(position, field_name, 0))
+
+
+def metric_relation_properties(field_name: str, value: float, source: str) -> Dict[str, object]:
+    properties: Dict[str, object] = {"field": field_name, "source": source}
+    if field_name == "profit_loss_rate":
+        if value <= -8:
+            properties.update({"polarity": "risk", "opinionImpact": min(18.0, abs(value)), "aiInfluenceLabel": "손실률이 관계 리스크를 높임"})
+        elif value >= 20:
+            properties.update({"polarity": "risk", "opinionImpact": 8.0, "aiInfluenceLabel": "큰 수익 구간이 이익 보호 필요성을 높임"})
+        elif value > 0:
+            properties.update({"polarity": "support", "supportImpact": min(8.0, value / 3), "aiInfluenceLabel": "수익 구간이 보유 근거를 보강"})
+    elif field_name in {"ma20_distance", "ma60_distance", "ma20_slope", "ma60_slope"}:
+        if value <= -5:
+            properties.update({"polarity": "risk", "opinionImpact": min(14.0, abs(value)), "aiInfluenceLabel": "추세 지표 약화"})
+        elif value >= 5:
+            properties.update({"polarity": "support", "supportImpact": min(10.0, value), "aiInfluenceLabel": "추세 지표 우호"})
+    elif field_name in {"foreign_net_volume", "institution_net_volume", "foreign_net_amount", "institution_net_amount"}:
+        if value < 0:
+            properties.update({"polarity": "risk", "opinionImpact": 5.0, "aiInfluenceLabel": "주요 수급 순매도"})
+        elif value > 0:
+            properties.update({"polarity": "support", "supportImpact": 5.0, "aiInfluenceLabel": "주요 수급 순매수"})
+    elif field_name in {"volume_ratio", "trade_strength", "bid_ask_imbalance"}:
+        if value:
+            properties.update({"polarity": "context", "aiInfluenceLabel": "단기 수급 맥락"})
+    return properties
+
+
+def relation_relation_label(relation: OntologyRelation, labels: Dict[str, str]) -> str:
+    properties = relation.properties or {}
+    explicit = str(properties.get("aiInfluenceLabel") or properties.get("label") or "").strip()
+    if explicit:
+        return explicit
+    source = labels.get(relation.source, relation.source)
+    target = labels.get(relation.target, relation.target)
+    return source + " " + relation.relation_type + " " + target
 
 
 def symbol_key(position: Position) -> str:
@@ -496,15 +669,233 @@ def build_watchlist_opinion(position: Position, legacy_model: Dict[str, object])
     )
 
 
+def add_market_exposure_concepts(graph: PortfolioOntology, portfolio_node_id: str, portfolio: PortfolioSummary) -> None:
+    for market in portfolio.markets:
+        key = str(market.get("key") or market.get("market") or market.get("label") or "").strip()
+        if not key:
+            continue
+        label = str(market.get("label") or key)
+        market_id = add_entity(graph, "market", key, label, {"tboxClass": "Market"})
+        exposure_id = add_entity(graph, "market-exposure", graph.portfolio_id + ":" + key, label + " 시장 노출", {
+            "tboxClass": "MarketExposure",
+            "market": key,
+            "invested": number(market.get("invested")),
+            "cash": number(market.get("cash")),
+            "total": number(market.get("total")),
+            "cashRatio": number(market.get("cashRatio")),
+        })
+        add_relation(graph, portfolio_node_id, exposure_id, "HAS_MARKET_EXPOSURE", weight=1.0, properties={"basis": "portfolio-market-summary"})
+        add_relation(graph, exposure_id, market_id, "AFFECTS", weight=1.0, properties={"polarity": "context", "aiInfluenceLabel": label + " 시장 노출"})
+
+
+def add_metric_concepts(graph: PortfolioOntology, stock_id: str, position: Position, source: str) -> None:
+    symbol = symbol_key(position)
+    for field_name, label, tbox_class, relation_type, kind, public_key in METRIC_CONCEPTS:
+        value = metric_value(position, field_name)
+        if value in (None, "", 0):
+            continue
+        metric_id = add_entity(graph, kind + "-metric", symbol + ":" + public_key, label, {
+            "tboxClass": tbox_class,
+            "field": public_key,
+            "value": round(value, 4),
+            "source": source,
+        })
+        properties = metric_relation_properties(field_name, value, source)
+        add_relation(
+            graph,
+            stock_id,
+            metric_id,
+            relation_type,
+            weight=1.0,
+            properties=properties,
+        )
+    quality = data_quality_score(position)
+    quality_id = add_entity(graph, "data-quality", symbol, "데이터 품질", {
+        "tboxClass": "DataQuality",
+        "qualityScore": round(quality, 2),
+        "dataQuality": position.data_quality,
+        "quoteStatus": position.quote_status,
+    })
+    quality_properties = {"field": "dataQuality", "source": source, "aiInfluenceLabel": "데이터 품질"}
+    if quality < 60:
+        quality_properties.update({"polarity": "risk", "opinionImpact": round((60 - quality) * 0.2, 2)})
+    add_relation(graph, stock_id, quality_id, "HAS_DATA_QUALITY", weight=round(quality / 100, 4), properties=quality_properties)
+
+
+def add_data_source_concept(graph: PortfolioOntology, stock_id: str, position: Position, source: str) -> None:
+    label = str(position.quote_source or position.data_quality or source or "runtime-data")
+    source_id = add_entity(graph, "data-source", label, label, {
+        "tboxClass": "DataSource",
+        "quoteStatus": position.quote_status,
+        "quoteMessage": position.quote_message,
+        "dataQuality": position.data_quality,
+    })
+    add_relation(graph, stock_id, source_id, "OBSERVED_FROM", weight=1.0, properties={"source": source, "basis": "quote-source"})
+
+
+def add_legacy_model_score_concepts(graph: PortfolioOntology, stock_id: str, symbol: str, legacy: Dict[str, object]) -> None:
+    score_rows = [
+        ("exitPressure", "기존 매도 압력", number(legacy.get("exitPressure") or legacy.get("exit_pressure")), "risk"),
+        ("profitTakePressure", "익절 압력", number(legacy.get("profitTakePressure") or legacy.get("profit_take_pressure")), "risk"),
+        ("lossCutPressure", "손실 관리 압력", number(legacy.get("lossCutPressure") or legacy.get("loss_cut_pressure")), "risk"),
+        ("buyScore", "매수 점수", number(legacy.get("buyScore") or legacy.get("modelBuyScore")), "support"),
+        ("sellScore", "매도 점수", number(legacy.get("sellScore") or legacy.get("modelSellScore")), "risk"),
+    ]
+    for key, label, value, polarity in score_rows:
+        if not value:
+            continue
+        score_id = add_entity(graph, "model-score", symbol + ":" + key, label, {
+            "tboxClass": "ModelScore",
+            "field": key,
+            "value": round(value, 2),
+            "modelRole": "supporting-evidence",
+        })
+        properties = {"field": key, "polarity": polarity, "aiInfluenceLabel": label, "source": "legacy-model"}
+        if polarity == "risk" and value >= 55:
+            properties["opinionImpact"] = min(18.0, (value - 45) * 0.35)
+        if polarity == "support" and value >= 55:
+            properties["supportImpact"] = min(14.0, (value - 45) * 0.35)
+        add_relation(graph, stock_id, score_id, "HAS_MODEL_SCORE", weight=round(value / 100, 4), properties=properties)
+
+
+def add_runtime_setting_concepts(graph: PortfolioOntology, portfolio_node_id: str, runtime_context: Dict[str, object]) -> None:
+    settings = runtime_context.get("settings") if isinstance(runtime_context, dict) else {}
+    if not isinstance(settings, dict):
+        return
+    for key, value in sorted(settings.items()):
+        if value in (None, "", False):
+            continue
+        concept = SETTING_CONCEPT_TYPES.get(str(key))
+        tbox_class, relation_type = concept if concept else ("RuntimeSetting", "HAS_RUNTIME_SETTING")
+        setting_id = add_entity(graph, "runtime-setting", key, str(key), {
+            "tboxClass": tbox_class,
+            "key": str(key),
+            "value": safe_setting_value(str(key), value),
+        })
+        add_relation(graph, portfolio_node_id, setting_id, relation_type, weight=1.0, properties={"source": "runtime-settings", "aiInfluenceLabel": str(key)})
+
+
+def add_runtime_metadata_concepts(graph: PortfolioOntology, portfolio_node_id: str, runtime_context: Dict[str, object]) -> None:
+    metadata = runtime_context.get("metadata") if isinstance(runtime_context, dict) else {}
+    if not isinstance(metadata, dict):
+        return
+    for key, value in sorted(metadata.items()):
+        if value in (None, "", False):
+            continue
+        metadata_id = add_entity(graph, "runtime-metadata", key, "metadata:" + str(key), {
+            "tboxClass": "RuntimeSetting",
+            "key": str(key),
+            "value": safe_setting_value(str(key), value),
+        })
+        add_relation(graph, portfolio_node_id, metadata_id, "HAS_RUNTIME_SETTING", weight=1.0, properties={"source": "runtime-metadata", "aiInfluenceLabel": "metadata:" + str(key)})
+
+
+def add_decision_item_concepts(graph: PortfolioOntology, runtime_context: Dict[str, object]) -> None:
+    items = runtime_context.get("decisionItems") if isinstance(runtime_context, dict) else []
+    if not isinstance(items, list):
+        return
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        symbol = str(item.get("symbol") or "").upper()
+        if not symbol:
+            continue
+        stock_id = entity_id("stock", symbol)
+        signal_id = add_entity(graph, "strategy-signal", symbol + ":" + str(item.get("decision") or "decision"), str(item.get("decision") or "전략 판단"), {
+            "tboxClass": "StrategySignal",
+            "source": str(item.get("source") or ""),
+            "tone": str(item.get("tone") or ""),
+            "priority": number(item.get("priority")),
+            "exitPressure": number(item.get("exitPressure")),
+            "reasons": list(item.get("reasons") or [])[:5],
+            "triggers": list(item.get("triggers") or [])[:8],
+        })
+        properties = {"source": "decision-item", "aiInfluenceLabel": str(item.get("decision") or "전략 판단")}
+        if number(item.get("exitPressure")) >= 55:
+            properties.update({"polarity": "risk", "opinionImpact": min(16.0, (number(item.get("exitPressure")) - 45) * 0.3)})
+        add_relation(graph, stock_id, signal_id, "DERIVES", weight=round(number(item.get("exitPressure")) / 100, 4), properties=properties)
+
+
+def add_external_signal_concepts(graph: PortfolioOntology, portfolio_node_id: str, external_signals: Dict[str, object]) -> None:
+    if not isinstance(external_signals, dict):
+        return
+    for key, value in sorted(external_signals.items()):
+        signal_id = add_entity(graph, "external-signal", key, str(key), {
+            "tboxClass": "ExternalSignal",
+            "key": str(key),
+            "value": safe_setting_value(str(key), value),
+        })
+        properties = {"source": "external-signals", "aiInfluenceLabel": "외부 신호 " + str(key)}
+        if isinstance(value, dict):
+            magnitude = max([abs(number(item)) for item in value.values()] + [0.0])
+            if magnitude >= 3:
+                properties.update({"polarity": "risk", "opinionImpact": min(12.0, magnitude)})
+        add_relation(graph, portfolio_node_id, signal_id, "HAS_EXTERNAL_SIGNAL", weight=1.0, properties=properties)
+
+
+def symbol_external_signal_items(external_signals: Dict[str, object], symbol: str) -> List[Dict[str, object]]:
+    if not isinstance(external_signals, dict):
+        return []
+    candidates = {str(symbol or "").upper(), str(symbol or "").lower(), str(symbol or "")}
+    rows: List[Dict[str, object]] = []
+    for group_key, group_value in sorted(external_signals.items()):
+        if not isinstance(group_value, dict):
+            continue
+        matched_key = next((key for key in candidates if key in group_value), "")
+        if not matched_key:
+            continue
+        rows.append({
+            "group": str(group_key),
+            "symbolKey": matched_key,
+            "value": group_value.get(matched_key),
+        })
+    return rows
+
+
+def external_signal_relation_properties(group: str, value: object) -> Dict[str, object]:
+    properties = {"source": "external-signals", "signalGroup": group, "aiInfluenceLabel": "외부 신호 " + group}
+    if isinstance(value, dict):
+        count = number(value.get("count"))
+        sentiment = number(value.get("sentiment") or value.get("score") or value.get("riskScore"))
+        if count and group in {"newsHeadlines", "secFilings", "dartDisclosures"}:
+            properties.update({"polarity": "context", "aiInfluenceLabel": group + " " + str(int(count)) + "건"})
+        if sentiment < 0:
+            properties.update({"polarity": "risk", "opinionImpact": min(12.0, abs(sentiment)), "aiInfluenceLabel": group + " 부정 신호"})
+        elif sentiment > 0:
+            properties.update({"polarity": "support", "supportImpact": min(10.0, sentiment), "aiInfluenceLabel": group + " 긍정 신호"})
+    return properties
+
+
+def add_symbol_external_signal_concepts(graph: PortfolioOntology, stock_id: str, symbol: str, external_signals: Dict[str, object]) -> None:
+    for row in symbol_external_signal_items(external_signals, symbol):
+        group = str(row.get("group") or "")
+        signal_id = add_entity(graph, "external-signal", symbol + ":" + group, group + " 외부 신호", {
+            "tboxClass": "ExternalSignal",
+            "symbol": symbol,
+            "group": group,
+            "value": safe_setting_value(group, row.get("value")),
+        })
+        add_relation(
+            graph,
+            stock_id,
+            signal_id,
+            "HAS_EXTERNAL_SIGNAL",
+            weight=1.0,
+            properties=external_signal_relation_properties(group, row.get("value")),
+        )
+
+
 def build_portfolio_ontology(
     positions: Iterable[Position],
     portfolio: PortfolioSummary,
     legacy_by_symbol: Dict[str, Dict[str, object]] = None,
     external_signals: Dict[str, object] = None,
     portfolio_id: str = "portfolio",
+    runtime_context: Dict[str, object] = None,
 ) -> PortfolioOntology:
     legacy_by_symbol = legacy_by_symbol or {}
     external_signals = external_signals or {}
+    runtime_context = runtime_context or {}
     observed_by_symbol: Dict[str, Position] = {}
     for item in positions:
         if not observable_position(item):
@@ -517,12 +908,25 @@ def build_portfolio_ontology(
     graph = PortfolioOntology(portfolio_id=portfolio_id)
     graph.entities.extend(tbox_entities())
     graph.relations.extend(tbox_relations())
-    graph.entities.append(OntologyEntity(entity_id("portfolio", portfolio_id), "투자 포트폴리오", "portfolio", abox_properties({
+    portfolio_node_id = entity_id("portfolio", portfolio_id)
+    account_context = runtime_context.get("account") if isinstance(runtime_context, dict) else {}
+    account_context = account_context if isinstance(account_context, dict) else {}
+    account_value = str(account_context.get("accountId") or account_context.get("id") or portfolio_id or "account")
+    account_label = str(account_context.get("accountLabel") or account_context.get("label") or account_value or "투자 계좌")
+    account_id_value = add_entity(graph, "account", account_value, account_label, {
+        "tboxClass": "Account",
+        "provider": account_context.get("provider") or (runtime_context.get("provider") if isinstance(runtime_context, dict) else ""),
+        "mode": account_context.get("mode") or (runtime_context.get("mode") if isinstance(runtime_context, dict) else ""),
+        "status": account_context.get("status") or "",
+    })
+    graph.entities.append(OntologyEntity(portfolio_node_id, "투자 포트폴리오", "portfolio", abox_properties({
         "total": number(portfolio.total),
         "invested": number(portfolio.invested),
         "cash": number(portfolio.cash),
         "concentration": number(portfolio.concentration),
+        "tboxClass": "Portfolio",
     })))
+    add_relation(graph, account_id_value, portfolio_node_id, "MANAGES_PORTFOLIO", weight=1.0, properties={"source": "account-context"})
     graph.entities.append(OntologyEntity(entity_id("concept", "legacy-score-model"), "기존 점수 모델", "model", abox_properties({
         "role": "supporting-evidence",
         "tboxClass": "LegacyScoreModel",
@@ -538,19 +942,30 @@ def build_portfolio_ontology(
             "tboxClass": "Cash",
         })))
         graph.relations.append(OntologyRelation(
-            entity_id("portfolio", portfolio_id),
+            portfolio_node_id,
             entity_id("asset", "cash"),
             "HOLDS_CASH",
             weight=1.0,
             properties=abox_properties(),
         ))
+    add_market_exposure_concepts(graph, portfolio_node_id, portfolio)
+    add_runtime_setting_concepts(graph, portfolio_node_id, runtime_context)
+    add_runtime_metadata_concepts(graph, portfolio_node_id, runtime_context)
+    add_external_signal_concepts(graph, portfolio_node_id, external_signals)
+    watchlist_id = ""
+    if any(is_watchlist_position(item) for item in observed_positions):
+        watchlist_id = add_entity(graph, "watchlist", portfolio_id, "관심 종목 목록", {
+            "tboxClass": "Watchlist",
+            "candidateCount": len([item for item in observed_positions if is_watchlist_position(item)]),
+        })
+        add_relation(graph, portfolio_node_id, watchlist_id, "HAS_WATCHLIST", weight=1.0, properties={"source": "watchlist"})
     sector_weights: Dict[str, float] = {}
     for sector in portfolio.sectors:
         label = str(sector.get("sector") or "기타")
         sector_weights[label] = number(sector.get("ratio"))
         graph.entities.append(OntologyEntity(entity_id("sector", label), label, "sector", abox_properties({**dict(sector), "tboxClass": "Sector"})))
         graph.relations.append(OntologyRelation(
-            entity_id("portfolio", portfolio_id),
+            portfolio_node_id,
             entity_id("sector", label),
             "EXPOSED_TO",
             weight=round(number(sector.get("ratio")) / 100, 4),
@@ -573,11 +988,26 @@ def build_portfolio_ontology(
             "tboxClass": "Stock",
             "tboxClasses": stock_tbox_classes,
         })))
+        position_id = add_entity(graph, "position", portfolio_id + ":" + symbol, (position.name or symbol) + (" 관심 행" if source == "watchlist" else " 보유 행"), {
+            "tboxClass": "Position",
+            "tboxClasses": ["Position"] + (["WatchlistCandidate"] if source == "watchlist" else []),
+            "symbol": symbol,
+            "source": source,
+            "quantity": number(position.quantity),
+            "marketValue": number(position.market_value),
+            "profitLossRate": number(position.profit_loss_rate),
+            "updatedAt": position.updated_at,
+        })
+        if holding:
+            add_relation(graph, portfolio_node_id, position_id, "HAS_POSITION", weight=round(position_weight(position, portfolio) / 100, 4), properties={"source": source})
+        elif watchlist_id:
+            add_relation(graph, watchlist_id, position_id, "HAS_POSITION", weight=0.15, properties={"source": source})
+        add_relation(graph, position_id, stock_id, "REPRESENTS_STOCK", weight=1.0, properties={"source": source})
         for kind, label in [("market", position.market or "unknown"), ("currency", position.currency or "unknown")]:
             tbox_class = "Market" if kind == "market" else "Currency"
             graph.entities.append(OntologyEntity(entity_id(kind, label), label, kind, abox_properties({"tboxClass": tbox_class})))
         graph.relations.append(OntologyRelation(
-            entity_id("portfolio", portfolio_id),
+            portfolio_node_id,
             stock_id,
             "HOLDS" if holding else "WATCHES",
             weight=round(position_weight(position, portfolio) / 100, 4) if holding else 0.15,
@@ -598,6 +1028,10 @@ def build_portfolio_ontology(
                 properties=abox_properties({"source": source}),
             ))
         legacy = legacy_by_symbol.get(symbol) or legacy_by_symbol.get(position.symbol) or {}
+        add_data_source_concept(graph, stock_id, position, source)
+        add_metric_concepts(graph, stock_id, position, source)
+        add_legacy_model_score_concepts(graph, stock_id, symbol, legacy)
+        add_symbol_external_signal_concepts(graph, stock_id, symbol, external_signals)
         opinion = build_position_opinion(position, portfolio, legacy) if holding else build_watchlist_opinion(position, legacy)
         graph.opinions.append(opinion)
         weight = position_weight(position, portfolio)
@@ -652,9 +1086,11 @@ def build_portfolio_ontology(
             contradiction_id = entity_id("contradiction", opinion.contradictions[0])
             graph.entities.append(OntologyEntity(contradiction_id, opinion.contradictions[0], "contradiction", abox_properties({"tboxClass": "Contradiction"})))
             graph.relations.append(OntologyRelation(stock_id, contradiction_id, "CONTRADICTS", weight=0.8, evidence_ids=opinion.evidence_ids, properties=abox_properties()))
+    add_decision_item_concepts(graph, runtime_context)
     graph.entities = dedupe_entities(graph.entities)
     graph.relations = dedupe_relations(graph.relations)
     graph.evidence = dedupe_evidence(graph.evidence)
+    apply_relation_driven_opinions(graph)
     graph.reasoning_cards = build_reasoning_cards(graph)
     graph.worldview = portfolio_worldview(graph, portfolio, external_signals)
     graph.prompt = build_investment_opinion_prompt(graph)
@@ -689,6 +1125,109 @@ def dedupe_evidence(items: List[OntologyEvidence]) -> List[OntologyEvidence]:
     for item in items:
         merged[item.evidence_id] = item
     return list(merged.values())
+
+
+def relation_influence_score(relation: OntologyRelation) -> (float, float):
+    properties = relation.properties or {}
+    polarity = str(properties.get("polarity") or properties.get("signalPolarity") or "").lower()
+    risk = number(properties.get("opinionImpact") or properties.get("riskImpact") or properties.get("impactScore"))
+    support = number(properties.get("supportImpact"))
+    if not risk and polarity == "risk":
+        risk = number(relation.weight) * 8
+    if not support and polarity == "support":
+        support = number(relation.weight) * 8
+    if relation.relation_type in {"CONTRADICTS", "EXPOSED_TO"} and not support:
+        risk = max(risk, number(relation.weight) * (12 if relation.relation_type == "CONTRADICTS" else 8))
+    if relation.relation_type == "SUPPORTED_BY" and not risk:
+        support = max(support, number(relation.weight) * 8)
+    return max(0.0, risk), max(0.0, support)
+
+
+def relation_influence_rows(graph: PortfolioOntology, stock_id: str) -> List[Dict[str, object]]:
+    labels = entity_label_map(graph)
+    portfolio_id = entity_id("portfolio", graph.portfolio_id)
+    neighbor_ids = {
+        relation.source if relation.target == stock_id else relation.target
+        for relation in graph.relations
+        if relation.source == stock_id or relation.target == stock_id
+    }
+    rows: List[Dict[str, object]] = []
+    for relation in graph.relations:
+        if relation.properties.get("ontologyBox") == "TBox":
+            continue
+        direct = relation.source == stock_id or relation.target == stock_id
+        neighbor = relation.source in neighbor_ids or relation.target in neighbor_ids
+        portfolio_scope = relation.source == portfolio_id or relation.target == portfolio_id
+        if not direct and not neighbor and not portfolio_scope:
+            continue
+        risk, support = relation_influence_score(relation)
+        if not risk and not support:
+            continue
+        rows.append({
+            "relationId": relation_key(relation),
+            "scope": "direct" if direct else "neighbor" if neighbor else "portfolio",
+            "type": relation.relation_type,
+            "source": relation.source,
+            "sourceLabel": labels.get(relation.source, relation.source),
+            "target": relation.target,
+            "targetLabel": labels.get(relation.target, relation.target),
+            "riskImpact": round(risk, 2),
+            "supportImpact": round(support, 2),
+            "label": relation_relation_label(relation, labels),
+            "properties": dict(relation.properties or {}),
+        })
+    return rows
+
+
+def opinion_action_from_relation_pressure(opinion: OntologyOpinion, source: str, pressure: float) -> (str, str):
+    if source == "watchlist":
+        if pressure >= 65:
+            return "관심 종목: 리스크 관계 우선 점검", "caution"
+        if pressure >= 45:
+            return "관심 종목: 진입 조건 재확인", "hold"
+        return "관심 종목: 진입 기준 대기", "hold"
+    return ontology_action_label(pressure, number((opinion.legacy_model or {}).get("profitLossRate")), opinion.contradictions, opinion.dominant_risks)
+
+
+def apply_relation_driven_opinions(graph: PortfolioOntology) -> None:
+    stock_entities = {
+        str((item.properties or {}).get("symbol") or "").upper(): item
+        for item in graph.entities
+        if item.kind == "stock"
+    }
+    for opinion in graph.opinions:
+        stock = stock_entities.get(str(opinion.symbol or "").upper())
+        if not stock:
+            continue
+        properties = stock.properties or {}
+        source = str(properties.get("source") or "holding")
+        influences = relation_influence_rows(graph, stock.entity_id)
+        base_pressure = number((opinion.legacy_model or {}).get("baseOntologyPressure") or opinion.ontology_pressure)
+        base_thesis = str((opinion.legacy_model or {}).get("baseThesis") or opinion.thesis or "")
+        opinion.legacy_model.setdefault("baseOntologyPressure", round(base_pressure, 1))
+        opinion.legacy_model.setdefault("baseThesis", base_thesis)
+        opinion.legacy_model.setdefault("profitLossRate", properties.get("profitLossRate", 0))
+        risk_impact = sum(number(item.get("riskImpact")) for item in influences)
+        support_impact = sum(number(item.get("supportImpact")) for item in influences)
+        opinion.relation_influences = influences
+        opinion.ontology_pressure = round(clamp(base_pressure + risk_impact - min(18.0, support_impact * 0.65), 0.0, 100.0), 1)
+        action, tone = opinion_action_from_relation_pressure(opinion, source, opinion.ontology_pressure)
+        opinion.action = action
+        opinion.tone = tone
+        risk_labels = [item["label"] for item in influences if number(item.get("riskImpact")) > 0]
+        support_labels = [item["label"] for item in influences if number(item.get("supportImpact")) > 0]
+        for label in risk_labels[:4]:
+            if label not in opinion.dominant_risks:
+                opinion.dominant_risks.append(label)
+        for label in support_labels[:4]:
+            if label not in opinion.supporting_beliefs:
+                opinion.supporting_beliefs.append(label)
+        relation_summary = []
+        if risk_labels:
+            relation_summary.append("관계 리스크: " + ", ".join(risk_labels[:2]))
+        if support_labels:
+            relation_summary.append("관계 지지: " + ", ".join(support_labels[:2]))
+        opinion.thesis = "; ".join([item for item in [base_thesis] + relation_summary if item])
 
 
 def relation_key(item: OntologyRelation) -> str:
@@ -795,6 +1334,7 @@ def build_reasoning_cards(graph: PortfolioOntology) -> List[Dict[str, object]]:
                 "thesis": opinion_payload.get("thesis") or "",
             },
             "legacyModel": dict(opinion_payload.get("legacy_model") or opinion_payload.get("legacyModel") or {}),
+            "relationInfluences": list(opinion_payload.get("relation_influences") or opinion_payload.get("relationInfluences") or []),
             "strategyEvidence": [compact_evidence_row(item) for item in evidence_rows],
             "relationEvidence": [compact_relation_row(item, labels) for item in relations],
             "beliefs": [item.to_dict() for item in belief_rows],
@@ -824,7 +1364,7 @@ def build_ai_inference_packet(graph: PortfolioOntology) -> Dict[str, object]:
         "promptVersion": ONTOLOGY_PROMPT_VERSION,
         "role": "ontology-first-investment-opinion",
         "legacyModelRole": "supporting-evidence",
-        "inputOrder": ["tbox", "abox", "reasoningCards", "relations", "evidence", "beliefs", "opinions"],
+        "inputOrder": ["tbox", "abox", "reasoningCards", "relationInfluences", "relations", "evidence", "beliefs", "opinions"],
         "reasoningCardCount": len(graph.reasoning_cards),
         "reasoningCardIds": [item.get("id") for item in graph.reasoning_cards],
         "graphInputs": {
@@ -837,7 +1377,7 @@ def build_ai_inference_packet(graph: PortfolioOntology) -> Dict[str, object]:
         "outputSchema": {
             "portfolioView": "string",
             "relationThesis": "string",
-            "companyOpinions": ["symbol", "action", "thesis", "contradictions", "nextChecks"],
+            "companyOpinions": ["symbol", "action", "thesis", "relationInfluences", "contradictions", "nextChecks"],
             "missingDataImpact": ["string"],
         },
         "guardrails": [
@@ -858,6 +1398,7 @@ def portfolio_worldview(
     support_count = len([item for item in graph.beliefs if item.polarity == "support"])
     contradictions = sum(len(item.contradictions) for item in graph.opinions)
     high_pressure = [item.symbol for item in graph.opinions if item.ontology_pressure >= 55]
+    relation_influence_count = sum(len(item.relation_influences or []) for item in graph.opinions)
     top_sector = portfolio.sectors[0] if portfolio.sectors else {}
     return {
         "model": "ontology-first",
@@ -872,6 +1413,7 @@ def portfolio_worldview(
         "riskBeliefCount": risk_count,
         "supportBeliefCount": support_count,
         "contradictionCount": contradictions,
+        "relationInfluenceCount": relation_influence_count,
         "highPressureSymbols": high_pressure,
         "externalSignalKeys": sorted(str(key) for key in external_signals.keys()) if isinstance(external_signals, dict) else [],
     }

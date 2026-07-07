@@ -1167,6 +1167,7 @@ function checkFrontendAdminRender() {
     assertOk(settingsHtml.indexOf('data-setting="externalFredEnabled"') >= 0, "설정 탭에 FRED 사용 옵션이 없습니다.");
     assertOk(settingsHtml.indexOf('data-setting="externalDartEnabled"') >= 0, "설정 탭에 OpenDART 사용 옵션이 없습니다.");
     assertOk(settingsHtml.indexOf('data-setting="externalSecEnabled"') >= 0, "설정 탭에 SEC EDGAR 사용 옵션이 없습니다.");
+    assertOk(settingsHtml.indexOf('data-setting="externalNewsEnabled"') >= 0, "설정 탭에 뉴스 헤드라인 사용 옵션이 없습니다.");
     assertOk(settingsHtml.indexOf('data-setting="dartDisclosureAiAnalysisEnabled"') >= 0, "설정 탭에 공시 AI 해석 옵션이 없습니다.");
     assertOk(settingsHtml.indexOf('data-setting="dartDisclosureAiTimeoutSeconds"') >= 0, "설정 탭에 공시 AI 타임아웃 옵션이 없습니다.");
     assertOk(settingsHtml.indexOf('data-setting="tossClientId"') < 0, "설정 탭에 계정 Client ID 입력이 남아 있습니다.");
@@ -1387,6 +1388,7 @@ async function checkNormalMode(port, context) {
   assertOk(Object.prototype.hasOwnProperty.call(settingsPayload.settings, "externalFredEnabled"), "설정 API에 FRED 사용 옵션이 없습니다.");
   assertOk(Object.prototype.hasOwnProperty.call(settingsPayload.settings, "externalDartEnabled"), "설정 API에 OpenDART 사용 옵션이 없습니다.");
   assertOk(Object.prototype.hasOwnProperty.call(settingsPayload.settings, "externalSecEnabled"), "설정 API에 SEC EDGAR 사용 옵션이 없습니다.");
+  assertOk(Object.prototype.hasOwnProperty.call(settingsPayload.settings, "externalNewsEnabled"), "설정 API에 뉴스 헤드라인 사용 옵션이 없습니다.");
   assertOk(settingsPayload.settings.dartDisclosureAiTimeoutSeconds === "90", "설정 API의 공시 AI 타임아웃 기본값이 없습니다.");
   assertOk(settingsPayload.settings.watchlistSymbols.indexOf("TSLA") >= 0, "기본 관심 종목에 TSLA가 없습니다.");
   assertOk(settingsPayload.settings.watchlistSymbols.indexOf("AAPL") >= 0, "기본 관심 종목에 AAPL이 없습니다.");
@@ -1432,6 +1434,7 @@ async function checkNormalMode(port, context) {
         externalFredEnabled: "0",
         externalDartEnabled: "0",
         externalSecEnabled: "0",
+        externalNewsEnabled: "0",
         alertRules: "priceStop=1\nmodelSell=1",
         modelDecisionThresholds: "modelBuy=75\nmodelSell=70"
       }
@@ -1455,6 +1458,7 @@ async function checkNormalMode(port, context) {
   assertOk(savedSettingsPayload.settings.externalFredEnabled === "0", "저장된 FRED 사용 설정이 응답에 없습니다.");
   assertOk(savedSettingsPayload.settings.externalDartEnabled === "0", "저장된 OpenDART 사용 설정이 응답에 없습니다.");
   assertOk(savedSettingsPayload.settings.externalSecEnabled === "0", "저장된 SEC EDGAR 사용 설정이 응답에 없습니다.");
+  assertOk(savedSettingsPayload.settings.externalNewsEnabled === "0", "저장된 뉴스 헤드라인 사용 설정이 응답에 없습니다.");
   assertOk(readSqliteSetting(context.serviceDbPath, "appTheme") === "dark", "화면 테마 설정이 SQLite DB에 저장되지 않았습니다.");
   assertOk(readSqliteSetting(context.serviceDbPath, "notifyProvider") === "telegram", "알림 제공자 설정이 SQLite DB에 저장되지 않았습니다.");
   assertOk(readSqliteSetting(context.serviceDbPath, "telegramChatId") === "1234", "Telegram Chat ID 설정이 SQLite DB에 저장되지 않았습니다.");

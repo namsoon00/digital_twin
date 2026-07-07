@@ -396,6 +396,28 @@
       "externalBitcoinChange24hPct=3",
       "externalBitcoinChange7dPct=4",
       "externalMacroRateDeltaBp=15"
+    ].join("\n"),
+    relationRuleThresholds: [
+      "lossRateLow=-8",
+      "lossRateBufferPct=1",
+      "lossGuardVolumeConfirmRatio=0.8",
+      "lossGuardMa60SupportPct=0",
+      "lossGuardWeakEvidencePenalty=30",
+      "profitRateHigh=20",
+      "sectorWeightHigh=50",
+      "positionWeightHigh=30",
+      "externalBitcoinChange24hPct=3",
+      "externalBitcoinChange7dPct=4",
+      "entryPullbackMa20BelowPct=-2",
+      "entryPullbackMa20DeepPct=-8",
+      "entryMa60SupportPct=-1",
+      "entryVolumeMinRatio=0.6",
+      "entryVolumeMaxRatio=1.8",
+      "entrySmartMoneyMin=10",
+      "entryTradeStrengthMin=100",
+      "entryOrderbookImbalanceMin=5",
+      "entryMaxPositionWeight=20",
+      "entryMaxSectorWeight=45"
     ].join("\n")
   };
   var tabs = [
@@ -632,8 +654,40 @@
     { key: "externalCryptoChange7dPct", label: "크립토 7d 변화", unit: "%", step: "0.1" },
     { key: "externalBitcoinChange24hPct", label: "비트코인 24h 변화", unit: "%", step: "0.1" },
     { key: "externalBitcoinChange7dPct", label: "비트코인 7d 변화", unit: "%", step: "0.1" },
-    { key: "externalMacroRateDeltaBp", label: "거시 금리 변화", unit: "bp", step: "1" }
+    { key: "externalMacroRateDeltaBp", label: "거시 금리 변화", unit: "bp", step: "1" },
+    { key: "entryPullbackMa20BelowPct", label: "매수 관찰 20일선 하단", unit: "%", step: "0.1" },
+    { key: "entryPullbackMa20DeepPct", label: "매수 보류 낙폭 하단", unit: "%", step: "0.1" },
+    { key: "entryMa60SupportPct", label: "매수 60일선 지지", unit: "%", step: "0.1" },
+    { key: "entryVolumeMinRatio", label: "매수 최소 거래량", unit: "x", step: "0.1" },
+    { key: "entryVolumeMaxRatio", label: "매수 과열 거래량", unit: "x", step: "0.1" },
+    { key: "entrySmartMoneyMin", label: "매수 수급 회복", unit: "점", step: "1" },
+    { key: "entryTradeStrengthMin", label: "매수 체결강도", unit: "점", step: "1" },
+    { key: "entryOrderbookImbalanceMin", label: "매수 호가 우위", unit: "%", step: "1" },
+    { key: "entryMaxPositionWeight", label: "매수 가능 종목 비중", unit: "%", step: "1" },
+    { key: "entryMaxSectorWeight", label: "매수 가능 섹터 비중", unit: "%", step: "1" }
   ];
+  var relationThresholdKeys = {
+    lossRateLow: 1,
+    lossRateBufferPct: 1,
+    lossGuardVolumeConfirmRatio: 1,
+    lossGuardMa60SupportPct: 1,
+    lossGuardWeakEvidencePenalty: 1,
+    profitRateHigh: 1,
+    sectorWeightHigh: 1,
+    positionWeightHigh: 1,
+    externalBitcoinChange24hPct: 1,
+    externalBitcoinChange7dPct: 1,
+    entryPullbackMa20BelowPct: 1,
+    entryPullbackMa20DeepPct: 1,
+    entryMa60SupportPct: 1,
+    entryVolumeMinRatio: 1,
+    entryVolumeMaxRatio: 1,
+    entrySmartMoneyMin: 1,
+    entryTradeStrengthMin: 1,
+    entryOrderbookImbalanceMin: 1,
+    entryMaxPositionWeight: 1,
+    entryMaxSectorWeight: 1
+  };
   var settingsMemoryStore = "";
   var snapshotMemoryStore = "";
   var labDraftsMemoryStore = "";
@@ -3534,6 +3588,7 @@
       modelDecisionThresholds: settingValue("modelDecisionThresholds"),
       alertRules: settingValue("alertRules"),
       alertThresholds: settingValue("alertThresholds"),
+      relationRuleThresholds: settingValue("relationRuleThresholds"),
       alertCadenceMinutes: settingValue("alertCadenceMinutes")
     };
   }
@@ -4488,6 +4543,7 @@
       "formulaWeights",
       "decisionThresholds",
       "modelDecisionThresholds",
+      "relationRuleThresholds",
       "alertThresholds"
     ];
   }
@@ -5812,6 +5868,10 @@
 
   function alertThresholds() {
     return parseNumberAssignments(settingValue("alertThresholds"), parseNumberAssignments(defaultSettings.alertThresholds));
+  }
+
+  function relationRuleThresholds() {
+    return parseNumberAssignments(settingValue("relationRuleThresholds"), parseNumberAssignments(defaultSettings.relationRuleThresholds));
   }
 
   function alertCadenceMinutes() {
@@ -10675,7 +10735,7 @@
   function renderOntologyRuleEditorPanel(snapshot) {
     var rules = ontologyRuleRows();
     var thresholds = modelDecisionThresholds();
-    var alertThresholdValues = alertThresholds();
+    var relationThresholdValues = relationRuleThresholds();
     return [
       '<article class="panel model-panel ontology-rule-panel">',
       '<div class="panel-head">',
@@ -10689,7 +10749,7 @@
       renderLabStat("관계 규칙", rules.length, "개"),
       renderLabStat("보유 종목", (snapshot.positions || []).filter(function (item) { return item.symbol !== "CASH"; }).length, "개"),
       renderLabStat("판단 기준", Math.round(thresholds.modelSell || 0), "점"),
-      renderLabStat("손실 기준", signedPct(alertThresholdValues.lossRateLow || -8), ""),
+      renderLabStat("손실 기준", signedPct(relationThresholdValues.lossRateLow || -8), ""),
       '</div>',
       '<div class="model-editor">',
       '<div class="settings-note model-settings-note">',
@@ -10715,8 +10775,8 @@
       '</div>',
       '</div>',
       '<div class="model-section">',
-      '<div class="flow-title"><div><strong>관계 성립 기준값</strong><span>손익, 비중, 외부 신호 임계값은 알림 정책과 공유합니다.</span></div></div>',
-      renderNumberSettingGrid("alertThresholds", alertThresholdValues, ["lossRateLow", "lossRateBufferPct", "lossGuardVolumeConfirmRatio", "lossGuardMa60SupportPct", "lossGuardWeakEvidencePenalty", "profitRateHigh", "sectorWeightHigh", "positionWeightHigh", "externalBitcoinChange24hPct", "externalBitcoinChange7dPct"]),
+      '<div class="flow-title"><div><strong>관계 성립 기준값</strong><span>ABox에 들어온 가격·수급·추세·외부 신호가 어떤 관계로 성립할지 정합니다. 알림 발송 기준과 분리됩니다.</span></div></div>',
+      renderNumberSettingGrid("relationRuleThresholds", relationThresholdValues, ["lossRateLow", "lossRateBufferPct", "lossGuardVolumeConfirmRatio", "lossGuardMa60SupportPct", "lossGuardWeakEvidencePenalty", "profitRateHigh", "sectorWeightHigh", "positionWeightHigh", "externalBitcoinChange24hPct", "externalBitcoinChange7dPct", "entryPullbackMa20BelowPct", "entryPullbackMa20DeepPct", "entryMa60SupportPct", "entryVolumeMinRatio", "entryVolumeMaxRatio", "entrySmartMoneyMin", "entryTradeStrengthMin", "entryOrderbookImbalanceMin", "entryMaxPositionWeight", "entryMaxSectorWeight"]),
       '</div>',
       '<div class="rule-strip"><span>공식 점수는 참고 자료입니다. 실제 보유 타이밍 메시지는 관계 규칙, 근거, 부족 데이터, AI 프롬프트 정보를 기준으로 생성됩니다.</span></div>',
       '</div>',
@@ -11132,7 +11192,9 @@
       '<div class="model-section alert-threshold-section">',
       '<div class="flow-title"><div><strong>임계값</strong><span>알림 발생 기준입니다. 값 변경 즉시 다시 계산됩니다.</span></div></div>',
       '<div class="alert-threshold-grid">',
-      alertThresholdCatalog.map(function (item) {
+      alertThresholdCatalog.filter(function (item) {
+        return !relationThresholdKeys[item.key];
+      }).map(function (item) {
         return renderAlertThresholdInput(item, thresholds[item.key]);
       }).join(""),
       '</div>',

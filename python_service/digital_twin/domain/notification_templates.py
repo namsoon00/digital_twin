@@ -1664,7 +1664,10 @@ def ontology_prompt_section_lines(context: Dict[str, object]) -> List[str]:
 def score_explanation_sections(context: Dict[str, object]) -> List[tuple]:
     if context_message_type(context) in SCORE_EXPLANATION_SKIP_TYPES:
         return []
-    if ontology_relation_context(context):
+    message_type = context_message_type(context)
+    formula_first_types = {"modelBuy", "modelSell", "watchlistBuyCandidate"}
+    has_relation_context = bool(ontology_relation_context(context))
+    if has_relation_context and message_type not in formula_first_types:
         model_lines = ontology_modeling_lines(context)
         missing_lines = ontology_missing_lines(context)
         prompt_lines = ontology_prompt_section_lines(context)
@@ -1672,13 +1675,15 @@ def score_explanation_sections(context: Dict[str, object]) -> List[tuple]:
         model_lines = modeling_lines(context)
         model_lines.extend(formula_audit_lines(context, "model"))
         model_lines.extend(investment_score_lines(context))
+        if has_relation_context:
+            model_lines.extend(ontology_rule_lines(context)[:3])
         missing_lines = []
         prompt_lines = ontology_prompt_section_lines(context)
     delivery_lines = delivery_score_lines(context)
     delivery_lines.extend(formula_audit_lines(context, "delivery"))
     sections = []
     if model_lines:
-        sections.append(("관계 판단" if ontology_relation_context(context) else "모델 판단", model_lines))
+        sections.append(("관계 판단" if has_relation_context and message_type not in formula_first_types else "모델 판단", model_lines))
     if missing_lines:
         sections.append(("부족 데이터", missing_lines))
     if prompt_lines:

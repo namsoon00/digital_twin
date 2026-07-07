@@ -14,7 +14,7 @@ from .message_types import (
 )
 from .model_review import decision_change_context, decision_change_review_lines
 from .ontology_insights import build_investment_insight_events, split_operational_and_investment_events
-from .ontology_rules import decision_action_group_for_label, relation_rule_context_summary_lines
+from .ontology_rules import decision_action_group_for_label, relation_rule_context_summary_lines, relation_thresholds_from_settings
 from .parsing import parse_assignments
 from .portfolio import AccountSnapshot, AlertEvent, Position, monitor_state_has_live_account_data, status_has_account_data_failure
 from .portfolio_calculations import DEFAULT_FX_RATES, value_in_base
@@ -37,6 +37,7 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
         self.settings = dict(settings)
         self.rules = parse_assignments(settings.get("alertRules", ""), DEFAULT_ALERT_RULES)
         self.thresholds = parse_assignments(settings.get("alertThresholds", ""), DEFAULT_THRESHOLDS)
+        self.relation_thresholds = relation_thresholds_from_settings(settings)
         self.cadence = parse_assignments(settings.get("alertCadenceMinutes", ""), DEFAULT_CADENCE)
         self.fx_rates = {
             str(key).upper(): float(value or 0)
@@ -1080,8 +1081,8 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
     def holding_timing_events(self, snapshot: AccountSnapshot) -> List[AlertEvent]:
         events: List[AlertEvent] = []
         positions = {item.symbol.upper(): item.to_dict() for item in snapshot.positions if not item.is_cash()}
-        loss_threshold = float(self.thresholds.get("lossRateLow", -8.0) or -8.0)
-        loss_buffer = abs(float(self.thresholds.get("lossRateBufferPct", 1.0) or 0.0))
+        loss_threshold = float(self.relation_thresholds.get("lossRateLow", -8.0) or -8.0)
+        loss_buffer = abs(float(self.relation_thresholds.get("lossRateBufferPct", 1.0) or 0.0))
         forced_loss_threshold = loss_threshold - loss_buffer
         for item in snapshot.decisions:
             if item.tone not in {"danger", "caution"} and item.profit_loss_rate > forced_loss_threshold:

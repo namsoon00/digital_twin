@@ -10,6 +10,7 @@ from .ontology_rules import (
 
 SKIP_AI_OPINION_TYPES = {"workHandoff", "modelReview"}
 AI_OPINION_ENGINE_VERSION = "notification-ai-opinion-v1"
+SENSITIVE_PROMPT_KEY_TERMS = ("secret", "token", "password", "clientid", "client_id", "appsecret", "app_key", "apikey", "api_key", "accountseq", "account_seq", "chatid", "chat_id")
 
 
 def context_raw_lines(context: Dict[str, object]) -> List[str]:
@@ -159,6 +160,32 @@ def compact_text(value: object, max_len: int = 96) -> str:
     return text
 
 
+def sanitized_prompt_data(value: object, depth: int = 0, max_items: int = 40) -> object:
+    if depth > 5:
+        return "[omitted-depth]"
+    if isinstance(value, dict):
+        result: Dict[str, object] = {}
+        for index, (key, item) in enumerate(value.items()):
+            if index >= max_items:
+                result["_truncated"] = True
+                break
+            text_key = str(key or "")
+            normalized = text_key.lower().replace("-", "_")
+            if any(term in normalized for term in SENSITIVE_PROMPT_KEY_TERMS):
+                result[text_key] = "[redacted]"
+                continue
+            result[text_key] = sanitized_prompt_data(item, depth + 1, max_items)
+        return result
+    if isinstance(value, list):
+        rows = [sanitized_prompt_data(item, depth + 1, max_items) for item in value[:max_items]]
+        if len(value) > max_items:
+            rows.append({"_truncated": True, "omitted": len(value) - max_items})
+        return rows
+    if isinstance(value, (int, float, bool)) or value is None:
+        return value
+    return compact_text(value, 300)
+
+
 def news_summary_text(context: Dict[str, object]) -> str:
     disclosure = disclosure_context(context)
     news_items = news_headline_items(context)
@@ -194,6 +221,8 @@ def notification_ai_prompt_context(
     settings = settings or {}
     template = prompt_template_for_message_type(message_type, settings)
     policy = str(settings.get("aiPromptPolicy") or default_ai_prompt_policy_text()).strip()
+    relation_context = relation_context_value(context)
+    all_data = sanitized_prompt_data(context)
     return {
         "promptVersion": template.version,
         "promptRegistryVersion": AI_PROMPT_REGISTRY_VERSION,
@@ -219,6 +248,14 @@ def notification_ai_prompt_context(
             ],
             "disclosure": disclosure_context(context),
             "referenceDate": str(context.get("referenceDate") or ""),
+            "activeRules": active_rule_items(context),
+            "relationFacts": sanitized_prompt_data(relation_context.get("facts") if isinstance(relation_context, dict) else {}),
+            "sourceAlertEvents": sanitized_prompt_data(
+                (context.get("metadata") if isinstance(context.get("metadata"), dict) else {}).get("sourceAlertEvents")
+                or context.get("sourceAlertEvents")
+                or []
+            ),
+            "allAvailableData": all_data,
         },
     }
 
@@ -256,18 +293,50 @@ def opinion_lines_for_type(message_type: str, context: Dict[str, object]) -> Lis
         insight_label = str(insight.get("insightLabel") or line_value(lines, "인사이트 유형") or "온톨로지 인사이트").strip()
         thesis = str(insight.get("thesis") or line_value(lines, "핵심 결론") or "").strip()
         next_check = str(insight.get("nextCheck") or line_value(lines, "다음 확인") or "").strip()
+        current_price = line_value(lines, "현재가")
+        average_price = line_value(lines, "평단가")
+        return_rate = line_value(lines, "수익률") or line_value(lines, "손익")
+        action_line = line_value(lines, "권장 액션")
+        risk_line = line_value(lines, "주요 리스크")
+        trend_line = line_value(lines, "추세")
+        flow_line = line_value(lines, "수급")
+        investor_line = line_value(lines, "투자자")
+        news_text = news_summary_text(context)
         source_types = insight.get("sourceSignalTypes") or context.get("sourceSignalTypes") if isinstance(context, dict) else []
         if isinstance(source_types, list):
             source_labels = [MESSAGE_TYPE_LABELS.get(str(item), str(item)) for item in source_types[:5]]
         else:
             source_labels = []
         source_text = ", ".join(source_labels) if source_labels else (line_value(lines, "근거 신호") or "관계 신호")
-        return [
-            "해석: " + target + "의 " + insight_label + "입니다. " + (thesis or "여러 데이터 관계가 하나의 투자 인사이트로 합성됐습니다."),
-            "관계: 직접 알림 타입 대신 " + source_text + "를 근거 신호로 연결했습니다.",
-            "의견: 개별 점수 하나보다 관계 변화, 상충 신호, 데이터 신뢰도, 포트폴리오 노출을 함께 봐야 합니다.",
-            "다음 확인: " + (next_check or "새 관계가 다음 데이터 업데이트에서도 유지되는지 확인하세요."),
+        stance = "실행보다 관찰 우선"
+        if "기회" in insight_label or "매수" in (action_line + thesis):
+            stance = "소액 분할매수 검토"
+        if any(term in (insight_label + thesis + action_line + risk_line) for term in ["리스크", "손실", "축소", "손절", "보류"]):
+            stance = "추가매수 보류, 손실·비중 관리 우선"
+        if any(term in (insight_label + thesis + action_line) for term in ["분할매도", "익절", "리밸런싱"]):
+            stance = "분할매도·비중 조정 우선"
+        summary_bits = [part for part in [
+            ("현재가 " + current_price) if current_price else "",
+            ("평단가 " + average_price) if average_price else "",
+            ("수익률 " + return_rate) if return_rate else "",
+        ] if part]
+        result = [
+            "판단: " + stance,
+            "해석: " + target + "의 " + insight_label + "입니다. " + (thesis or "가격·수급·추세·외부 신호가 하나의 인사이트로 합성됐습니다."),
         ]
+        if summary_bits:
+            result.append("가격 위치: " + ", ".join(summary_bits))
+        if flow_line or investor_line or trend_line:
+            result.append("근거: " + " / ".join(part for part in [flow_line, investor_line, trend_line] if part))
+        if risk_line:
+            result.append("주의: " + risk_line)
+        if news_text:
+            result.append("뉴스·공시: " + news_text)
+        result.extend([
+            "의견: " + (action_line or stance) + ". " + source_text + "가 같은 방향으로 유지되는지 확인하고, 반대 신호가 있으면 실행 강도를 낮추세요.",
+            "다음 확인: " + (next_check or "다음 조회에서도 같은 관계 규칙이 유지되는지, 뉴스·공시 원문에 반대 근거가 있는지 확인하세요."),
+        ])
+        return result
     if message_type == "holdingTiming":
         evidence = active_rule_evidence(context, 5)
         rule_text = ", ".join(rules[:2]) if rules else (state or "보유 타이밍 조건")
@@ -307,7 +376,7 @@ def opinion_lines_for_type(message_type: str, context: Dict[str, object]) -> Lis
     if message_type in {"modelBuy", "watchlistBuyCandidate"}:
         return [
             "해석: 매수 후보 기준을 통과했습니다.",
-            "의견: 바로 비중을 키우기보다 첫 진입은 작게 두고 손절 기준과 추가매수 조건을 먼저 정하는 쪽이 안전합니다.",
+            "의견: 분할매수 후보로 볼 수 있습니다. 첫 진입은 작게 두고 손절 기준과 추가매수 조건을 먼저 정하세요.",
             "다음 확인: " + (flow or trend or "거래량, 수급, 20일선 위치가 매수 방향과 같이 움직이는지 확인하세요."),
         ]
     if message_type == "modelSell":

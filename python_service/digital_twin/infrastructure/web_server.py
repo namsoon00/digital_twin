@@ -383,6 +383,7 @@ def settings_status_payload() -> Dict[str, object]:
         "modelTimingSymbols",
         "alertRules",
         "alertThresholds",
+        "relationRuleThresholds",
         "alertCadenceMinutes",
         "ontologyNeo4jEnabled",
         "neo4jUri",

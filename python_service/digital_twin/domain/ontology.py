@@ -63,6 +63,7 @@ SETTING_CONCEPT_TYPES = {
     "aiPromptTemplates": ("PromptTemplate", "HAS_PROMPT_TEMPLATE"),
     "aiPromptPolicy": ("NotificationPolicy", "HAS_NOTIFICATION_POLICY"),
     "alertThresholds": ("Threshold", "HAS_THRESHOLD"),
+    "relationRuleThresholds": ("Threshold", "HAS_THRESHOLD"),
     "modelDecisionThresholds": ("Threshold", "HAS_THRESHOLD"),
     "formulaWeights": ("Threshold", "HAS_THRESHOLD"),
     "alertCadenceMinutes": ("CooldownPolicy", "HAS_COOLDOWN_POLICY"),

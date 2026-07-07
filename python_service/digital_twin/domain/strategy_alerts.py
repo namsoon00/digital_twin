@@ -1,5 +1,7 @@
+from dataclasses import replace
 from typing import List
 
+from .ontology_rules import evaluate_position_relation_rules
 from .portfolio import AccountSnapshot, AlertEvent
 
 
@@ -19,6 +21,13 @@ class StrategyAlertMixin:
             formula_audits = self.strategy_model.score_formula_audits(position.to_dict(), scores)
             symbol = position.symbol.upper()
             position_context = position.to_dict()
+            relation_position = replace(position, source="watchlist" if source == "관심" else "holding")
+            relation_context = evaluate_position_relation_rules(
+                relation_position,
+                snapshot.portfolio,
+                external_signals=snapshot.external_signals,
+                settings=getattr(self.strategy_model, "settings", {}) if self.strategy_model else {},
+            )
             current_price = self.current_price_line(position_context)
             price_lines = self.holding_price_lines(position_context) if source == "보유" else [current_price] if current_price else []
             common_lines = [
@@ -49,6 +58,8 @@ class StrategyAlertMixin:
                         "modelSellScore": round(sell_score, 1),
                         "watchlistBuyScore": round(buy_score, 1),
                         "formulaAudits": formula_audits,
+                        "ontologyRelationContext": relation_context,
+                        "ontologyPromptContext": relation_context.get("promptContext") if isinstance(relation_context, dict) else {},
                     },
                 ))
             if source != "관심" and buy_threshold and buy_score >= buy_threshold:
@@ -70,6 +81,8 @@ class StrategyAlertMixin:
                         "modelBuyScore": round(buy_score, 1),
                         "modelSellScore": round(sell_score, 1),
                         "formulaAudits": formula_audits,
+                        "ontologyRelationContext": relation_context,
+                        "ontologyPromptContext": relation_context.get("promptContext") if isinstance(relation_context, dict) else {},
                     },
                 ))
             if source != "관심" and sell_threshold and sell_score >= sell_threshold:
@@ -94,6 +107,8 @@ class StrategyAlertMixin:
                         "modelBuyScore": round(buy_score, 1),
                         "modelSellScore": round(sell_score, 1),
                         "formulaAudits": formula_audits,
+                        "ontologyRelationContext": relation_context,
+                        "ontologyPromptContext": relation_context.get("promptContext") if isinstance(relation_context, dict) else {},
                     },
                 ))
         return events

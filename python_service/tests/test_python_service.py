@@ -38,6 +38,7 @@ from digital_twin.domain.model_review import ModelReviewJob, local_model_review
 from digital_twin.domain.disclosure_analysis import DisclosureAnalysisResult, local_disclosure_analysis
 from digital_twin.domain.notification_templates import NotificationTemplate, alert_context, render_notification
 from digital_twin.domain.notification_rules import apply_market_hours_rule, apply_state_cooldown_rule, default_notification_rule, evaluate_notification_rule
+from digital_twin.domain.notification_ai import build_notification_ai_opinion
 from digital_twin.domain.notifications import NotificationJob
 from digital_twin.domain.parsing import parse_assignments
 from digital_twin.domain.portfolio import AccountSnapshot, AlertEvent, Position, utc_now_iso
@@ -1617,6 +1618,98 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("cryptoSensitivity", decision_action_group_for_label("비트코인 민감도 축소 검토"))
         self.assertEqual("lossControl", decision_action_group_for_label("손실 관리 기준 확인"))
         self.assertEqual("profitTake", decision_action_group_for_label("분할 매도 기준 확인"))
+        self.assertEqual("entry", decision_action_group_for_label("소액 분할매수 검토"))
+        self.assertEqual("entryRisk", decision_action_group_for_label("추가매수 보류"))
+
+    def test_ontology_relation_thresholds_are_separate_from_alert_thresholds(self):
+        position = Position(
+            symbol="005930",
+            name="삼성전자",
+            market="KR",
+            currency="KRW",
+            market_value=1000000,
+            profit_loss_rate=-6.0,
+            sellable_quantity=10,
+            current_price=94000,
+            ma20=97000,
+            ma60=90000,
+            ma20_distance=-3.1,
+            ma60_distance=4.4,
+            sector="반도체",
+        )
+
+        context = evaluate_position_relation_rules(
+            position,
+            portfolio_summary([position], fx_rates={"KRW": 1}),
+            settings={
+                "alertThresholds": "lossRateLow=-20",
+                "relationRuleThresholds": "lossRateLow=-5\nlossRateBufferPct=1",
+            },
+        )
+
+        active_ids = [item.get("rule_id") or item.get("ruleId") for item in context["activeRules"]]
+        self.assertIn("holding.loss_guard.breakdown.v1", active_ids)
+        self.assertEqual(-5.0, context["facts"]["lossThreshold"])
+
+    def test_ontology_entry_pullback_rule_creates_split_buy_candidate(self):
+        watch = Position(
+            symbol="AAPL",
+            name="Apple",
+            market="US",
+            currency="USD",
+            current_price=100,
+            ma20=104,
+            ma60=99,
+            ma20_distance=-3.8,
+            ma60_distance=1.0,
+            volume_ratio=1.1,
+            trade_strength=105,
+            foreign_net_volume=100,
+            institution_net_volume=50,
+            individual_net_volume=-30,
+            source="watchlist",
+            sector="AI/플랫폼",
+        )
+
+        context = evaluate_position_relation_rules(watch, portfolio_summary([]))
+
+        active_ids = [item.get("rule_id") or item.get("ruleId") for item in context["activeRules"]]
+        self.assertIn("entry.pullback.supported.v1", active_ids)
+        self.assertEqual("소액 분할매수 검토", context["decision"]["label"])
+        self.assertEqual("entry", context["decision"]["actionGroup"])
+        self.assertTrue(context["facts"]["entryPullbackZone"])
+        self.assertGreaterEqual(context["facts"]["entrySupportCount"], 2)
+
+    def test_ontology_holding_breakdown_blocks_additional_buy(self):
+        position = Position(
+            symbol="035420",
+            name="NAVER",
+            market="KR",
+            currency="KRW",
+            market_value=1000000,
+            profit_loss_rate=-3.5,
+            current_price=197200,
+            ma20=215000,
+            ma60=217000,
+            ma20_distance=-8.3,
+            ma60_distance=-9.1,
+            source="holding",
+            sector="플랫폼",
+        )
+
+        context = evaluate_position_relation_rules(
+            position,
+            portfolio_summary([position]),
+            external_signals={
+                "dartDisclosures": {"035420": {"reportName": "정정 공시", "receiptDate": "20260706"}},
+                "newsHeadlines": {"035420": {"items": [{"title": "NAVER governance update"}]}},
+            },
+        )
+
+        active_ids = [item.get("rule_id") or item.get("ruleId") for item in context["activeRules"]]
+        self.assertIn("entry.add_buy.blocked.v1", active_ids)
+        blocked = next(item for item in context["activeRules"] if item.get("rule_id") == "entry.add_buy.blocked.v1")
+        self.assertIn("추가매수보다 회복 조건 확인 우선", blocked["evidence"])
 
     def test_ontology_loss_guard_requires_negative_pnl(self):
         position = Position(
@@ -4024,6 +4117,51 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("NAVER investors weigh governance update", message)
         self.assertNotIn("신호가 성립했습니다", message)
         self.assertNotIn("새 매수보다 기존 보유 이유", message)
+
+    def test_investment_insight_ai_opinion_is_action_oriented_and_sanitized(self):
+        context = {
+            "messageType": "investmentInsight",
+            "target": "NAVER / 035420",
+            "rawLines": [
+                "현재가: 197,200원",
+                "평단가: 204,000원",
+                "수익률: -3.4%",
+                "수급: 거래량 1,077,802(1.6x), 체결강도 87.3",
+                "추세: 20일선보다 8.3% 낮음, 60일선보다 9.2% 낮음",
+                "권장 액션: 손절·분할축소 우선, 20일선 회복 전 추가매수 보류",
+                "주요 리스크: 추세 관계가 약화",
+            ],
+            "ontologyInsight": {
+                "insightLabel": "리스크 관리",
+                "thesis": "가격·추세·공시가 리스크 관리 쪽으로 연결됐습니다.",
+                "sourceSignalTypes": ["holdingTiming"],
+                "nextCheck": "20일선 회복과 공시 원문을 확인하세요.",
+            },
+            "metadata": {
+                "telegramBotToken": "secret-token",
+                "ontologyRelationContext": {
+                    "facts": {
+                        "dartDisclosure": {
+                            "reportName": "주식교환ㆍ이전결정",
+                            "receiptDate": "20260706",
+                        },
+                        "newsHeadlines": {
+                            "items": [{"title": "NAVER governance update", "domain": "example.test"}],
+                        },
+                    }
+                },
+            },
+        }
+
+        opinion = build_notification_ai_opinion(context)
+        text = "\n".join(opinion["lines"])
+
+        self.assertIn("판단: 추가매수 보류", text)
+        self.assertIn("가격 위치", text)
+        self.assertIn("뉴스·공시", text)
+        self.assertIn("NAVER governance update", text)
+        self.assertEqual("[redacted]", opinion["promptContext"]["facts"]["allAvailableData"]["metadata"]["telegramBotToken"])
+        self.assertIn("allAvailableData", opinion["promptContext"]["facts"])
 
     def test_notification_delivery_score_uses_user_formula(self):
         event = AlertEvent(

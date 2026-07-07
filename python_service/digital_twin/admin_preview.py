@@ -5,13 +5,14 @@ from pathlib import Path
 from typing import Dict, Iterable, List
 
 from .domain.model_review import MODEL_REVIEW_PROMPT_VERSION
-from .domain.message_types import DEFAULT_ALERT_RULES, DEFAULT_ALERT_THRESHOLDS, DEFAULT_CADENCE, MIN_CADENCE_MINUTES
+from .domain.message_types import DEFAULT_ALERT_RULES, DEFAULT_ALERT_THRESHOLDS, DEFAULT_CADENCE, DEFAULT_RELATION_RULE_THRESHOLDS, MIN_CADENCE_MINUTES
 from .domain.parsing import parse_assignments
 from .infrastructure.settings import ROOT_DIR, runtime_settings, service_db_path, settings_path, utc_now
 from .infrastructure.sqlite_accounts import AccountRegistry
 
 
 DEFAULT_THRESHOLDS = DEFAULT_ALERT_THRESHOLDS
+DEFAULT_RELATION_THRESHOLDS = DEFAULT_RELATION_RULE_THRESHOLDS
 ADMIN_PREVIEW_SCHEMA_VERSION = 1
 
 DISPLAY_KEY_LABELS = {
@@ -76,6 +77,7 @@ PUBLIC_SETTING_KEYS = [
     "modelDecisionThresholds",
     "alertRules",
     "alertThresholds",
+    "relationRuleThresholds",
     "alertCadenceMinutes",
     "modelReviewUseCodex",
     "modelReviewCommand",
@@ -200,6 +202,7 @@ def local_data_snapshot() -> Dict[str, object]:
         "notification": {
             "alertRules": assignment_snapshot(settings.get("alertRules", ""), DEFAULT_ALERT_RULES),
             "alertThresholds": assignment_snapshot(settings.get("alertThresholds", ""), DEFAULT_THRESHOLDS),
+            "relationRuleThresholds": assignment_snapshot(settings.get("relationRuleThresholds", ""), DEFAULT_RELATION_THRESHOLDS),
             "alertCadenceMinutes": assignment_snapshot(settings.get("alertCadenceMinutes", ""), DEFAULT_CADENCE, "minutes"),
             "minimumCadenceMinutes": MIN_CADENCE_MINUTES,
         },
@@ -299,6 +302,7 @@ def admin_preview_config() -> Dict[str, object]:
                 "defaults": {
                     "alertRules": assignment_items(DEFAULT_ALERT_RULES),
                     "alertThresholds": assignment_items(DEFAULT_THRESHOLDS),
+                    "relationRuleThresholds": assignment_items(DEFAULT_RELATION_THRESHOLDS),
                     "alertCadenceMinutes": assignment_items(DEFAULT_CADENCE, "minutes"),
                     "minimumCadenceMinutes": MIN_CADENCE_MINUTES,
                 },

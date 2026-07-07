@@ -86,11 +86,6 @@ DEFAULT_ALERT_THRESHOLDS = {
     "modelSellScore": 72,
     "watchlistBuyScore": 74,
     "watchlistPriceDelta": 3,
-    "lossRateLow": -8,
-    "lossRateBufferPct": 1,
-    "lossGuardVolumeConfirmRatio": 0.8,
-    "lossGuardMa60SupportPct": 0,
-    "lossGuardWeakEvidencePenalty": 30,
     "monitorPnlDelta": 2,
     "monitorValueDelta": 5,
     "monitorMaDistance": 8,
@@ -103,6 +98,29 @@ DEFAULT_ALERT_THRESHOLDS = {
     "externalBitcoinChange24hPct": 3,
     "externalBitcoinChange7dPct": 4,
     "externalMacroRateDeltaBp": 15,
+}
+
+DEFAULT_RELATION_RULE_THRESHOLDS = {
+    "lossRateLow": -8,
+    "lossRateBufferPct": 1,
+    "lossGuardVolumeConfirmRatio": 0.8,
+    "lossGuardMa60SupportPct": 0,
+    "lossGuardWeakEvidencePenalty": 30,
+    "profitRateHigh": 20,
+    "sectorWeightHigh": 50,
+    "positionWeightHigh": 30,
+    "externalBitcoinChange24hPct": 3,
+    "externalBitcoinChange7dPct": 4,
+    "entryPullbackMa20BelowPct": -2,
+    "entryPullbackMa20DeepPct": -8,
+    "entryMa60SupportPct": -1,
+    "entryVolumeMinRatio": 0.6,
+    "entryVolumeMaxRatio": 1.8,
+    "entrySmartMoneyMin": 10,
+    "entryTradeStrengthMin": 100,
+    "entryOrderbookImbalanceMin": 5,
+    "entryMaxPositionWeight": 20,
+    "entryMaxSectorWeight": 45,
 }
 
 DEFAULT_CADENCE = {

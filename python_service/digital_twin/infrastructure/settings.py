@@ -6,6 +6,7 @@ from typing import Dict
 
 from ..domain.accounts import configured
 from ..domain.ontology_rules import (
+    DEFAULT_RELATION_THRESHOLDS,
     default_ai_prompt_policy_text,
     default_ai_prompt_templates_text,
     default_ontology_relation_rules_text,
@@ -56,6 +57,7 @@ TEXT_SETTING_KEYS = [
     "modelTimingSymbols",
     "alertRules",
     "alertThresholds",
+    "relationRuleThresholds",
     "alertCadenceMinutes",
     "modelReviewUseCodex",
     "modelReviewCommand",
@@ -180,14 +182,6 @@ DEFAULT_ALERT_THRESHOLDS = [
     ("orderbookImbalance", 25),
     ("momentumUp", 3),
     ("momentumDown", -3),
-    ("profitRateHigh", 20),
-    ("lossRateLow", -8),
-    ("lossRateBufferPct", 1),
-    ("lossGuardVolumeConfirmRatio", 0.8),
-    ("lossGuardMa60SupportPct", 0),
-    ("lossGuardWeakEvidencePenalty", 30),
-    ("positionWeightHigh", 30),
-    ("sectorWeightHigh", 50),
     ("marketCashLow", 10),
     ("recordGain", 10),
     ("recordLoss", -5),
@@ -206,6 +200,31 @@ DEFAULT_ALERT_THRESHOLDS = [
     ("externalBitcoinChange24hPct", 3),
     ("externalBitcoinChange7dPct", 4),
     ("externalMacroRateDeltaBp", 15),
+]
+DEFAULT_RELATION_RULE_THRESHOLDS = [
+    (key, DEFAULT_RELATION_THRESHOLDS[key])
+    for key in [
+        "lossRateLow",
+        "lossRateBufferPct",
+        "lossGuardVolumeConfirmRatio",
+        "lossGuardMa60SupportPct",
+        "lossGuardWeakEvidencePenalty",
+        "profitRateHigh",
+        "sectorWeightHigh",
+        "positionWeightHigh",
+        "externalBitcoinChange24hPct",
+        "externalBitcoinChange7dPct",
+        "entryPullbackMa20BelowPct",
+        "entryPullbackMa20DeepPct",
+        "entryMa60SupportPct",
+        "entryVolumeMinRatio",
+        "entryVolumeMaxRatio",
+        "entrySmartMoneyMin",
+        "entryTradeStrengthMin",
+        "entryOrderbookImbalanceMin",
+        "entryMaxPositionWeight",
+        "entryMaxSectorWeight",
+    ]
 ]
 
 
@@ -236,6 +255,7 @@ DEFAULT_STRATEGY_SETTINGS = {
     "decisionThresholds": assignment_text(DEFAULT_DECISION_THRESHOLDS),
     "modelDecisionThresholds": assignment_text(DEFAULT_MODEL_DECISION_THRESHOLDS),
     "alertThresholds": assignment_text(DEFAULT_ALERT_THRESHOLDS),
+    "relationRuleThresholds": assignment_text(DEFAULT_RELATION_RULE_THRESHOLDS),
 }
 
 
@@ -407,6 +427,7 @@ def runtime_settings() -> Dict[str, str]:
         "fairValueFormula": value("fairValueFormula", "FAIR_VALUE_FORMULA", DEFAULT_STRATEGY_SETTINGS["fairValueFormula"]),
         "alertRules": value("alertRules", "ALERT_RULES"),
         "alertThresholds": value("alertThresholds", "ALERT_THRESHOLDS", DEFAULT_STRATEGY_SETTINGS["alertThresholds"]),
+        "relationRuleThresholds": value("relationRuleThresholds", "RELATION_RULE_THRESHOLDS", DEFAULT_STRATEGY_SETTINGS["relationRuleThresholds"]),
         "alertCadenceMinutes": value("alertCadenceMinutes", "ALERT_CADENCE_MINUTES"),
         "buyScoreFormula": value("buyScoreFormula", "BUY_SCORE_FORMULA", DEFAULT_STRATEGY_SETTINGS["buyScoreFormula"]),
         "sellScoreFormula": value("sellScoreFormula", "SELL_SCORE_FORMULA", DEFAULT_STRATEGY_SETTINGS["sellScoreFormula"]),

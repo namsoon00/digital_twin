@@ -4,7 +4,7 @@ from typing import Dict, Iterable, List
 
 from .market_data import clamp, number
 from .ontology import ONTOLOGY_PROMPT_VERSION, build_portfolio_ontology, build_position_opinion
-from .ontology_rules import DEFAULT_RELATION_THRESHOLDS, evaluate_position_relation_rules
+from .ontology_rules import DEFAULT_RELATION_THRESHOLDS, evaluate_position_relation_rules, relation_thresholds_from_settings
 from .parsing import parse_assignments
 from .portfolio import DecisionItem, PortfolioSummary, Position, expects_kr_microstructure_signals
 
@@ -117,7 +117,7 @@ class StrategyModel:
         settings = settings or {}
         self.settings = dict(settings or {})
         self.weights = parse_assignments(settings.get("formulaWeights", ""), {"flowWeight": 1.0, "valuationWeight": 1.0})
-        self.thresholds = parse_assignments(settings.get("alertThresholds", ""), DEFAULT_RELATION_THRESHOLDS)
+        self.thresholds = relation_thresholds_from_settings(settings)
         self.buy_formula = SafeFormula(settings.get("buyScoreFormula") or self.default_buy_formula)
         self.sell_formula = SafeFormula(settings.get("sellScoreFormula") or self.default_sell_formula)
         self.profit_take_formula = SafeFormula(settings.get("profitTakeScoreFormula") or self.default_profit_take_formula)

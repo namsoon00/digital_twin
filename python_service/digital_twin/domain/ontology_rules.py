@@ -2,6 +2,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Dict, Iterable, List, Optional
 
 from .market_data import clamp, number
+from .message_types import DEFAULT_RELATION_RULE_THRESHOLDS
 from .parsing import parse_assignments
 from .portfolio import PortfolioSummary, Position, expects_kr_microstructure_signals
 
@@ -12,16 +13,8 @@ AI_PROMPT_REGISTRY_VERSION = "ai-prompt-registry-v1"
 BTC_SENSITIVE_SYMBOLS = {"MSTR", "STRC", "COIN", "MARA", "RIOT", "CLSK", "HUT", "BITF"}
 
 DEFAULT_RELATION_THRESHOLDS = {
-    "lossRateLow": -8.0,
-    "lossRateBufferPct": 1.0,
-    "lossGuardVolumeConfirmRatio": 0.8,
-    "lossGuardMa60SupportPct": 0.0,
-    "lossGuardWeakEvidencePenalty": 30.0,
-    "profitRateHigh": 20.0,
-    "sectorWeightHigh": 50.0,
-    "positionWeightHigh": 30.0,
-    "externalBitcoinChange24hPct": 3.0,
-    "externalBitcoinChange7dPct": 4.0,
+    str(key): float(value)
+    for key, value in DEFAULT_RELATION_RULE_THRESHOLDS.items()
 }
 
 
@@ -151,6 +144,10 @@ DECISION_STAGE_DEFINITIONS = {
     "DISCLOSURE_REVIEW": DecisionStageDefinition("DISCLOSURE_REVIEW", "disclosure", "review", "공시 리스크 대응 검토", "caution", 55.0, 70.0),
     "FLOW_WATCH": DecisionStageDefinition("FLOW_WATCH", "flowTrend", "watch", "수급·추세 관찰", "watch", 35.0, 55.0),
     "FLOW_DEFENSE": DecisionStageDefinition("FLOW_DEFENSE", "flowTrend", "review", "수급·추세 방어 권장", "caution", 55.0, 70.0),
+    "ENTRY_WATCH": DecisionStageDefinition("ENTRY_WATCH", "entry", "watch", "분할매수 관찰", "watch", 35.0, 55.0),
+    "ENTRY_SPLIT_BUY": DecisionStageDefinition("ENTRY_SPLIT_BUY", "entry", "review", "분할매수 후보", "watch", 55.0, 70.0),
+    "ENTRY_READY": DecisionStageDefinition("ENTRY_READY", "entry", "action", "소액 분할매수 검토", "caution", 70.0, 85.0),
+    "ADD_BUY_BLOCKED": DecisionStageDefinition("ADD_BUY_BLOCKED", "entryRisk", "review", "추가매수 보류", "caution", 55.0, 70.0),
 }
 
 
@@ -207,6 +204,26 @@ DEFAULT_RELATION_RULES = [
         ["ma20Distance", "ma60Distance", "foreignNetVolume", "institutionNetVolume"],
     ),
     RelationRuleDefinition(
+        "entry.pullback.supported.v1",
+        "눌림목 + 지지 수급 -> 분할매수 후보",
+        "v1",
+        "ENTRY_OPPORTUNITY",
+        "entry_timing",
+        "20일선보다 낮아졌지만 60일선 지지가 유지되고 거래량·체결·투자자 수급이 회복 쪽일 때",
+        "싸졌다는 이유만으로 매수하지 말고 지지선, 수급 회복, 보유 비중, 뉴스·공시 리스크를 함께 비교합니다.",
+        ["currentPrice", "ma20", "ma60", "volumeRatio", "tradeStrength", "investorFlow"],
+    ),
+    RelationRuleDefinition(
+        "entry.add_buy.blocked.v1",
+        "보유 종목 + 추세 훼손 -> 추가매수 보류",
+        "v1",
+        "ENTRY_RISK",
+        "entry_risk",
+        "보유 중인 종목이 20일선·60일선 아래에 있거나 공시/뉴스 리스크와 손실 상태가 겹칠 때",
+        "추가매수보다 손실 기준, 회복 조건, 비중 한도를 먼저 확인하도록 AI에게 요청합니다.",
+        ["profitLossRate", "currentPrice", "ma20", "ma60", "dartDisclosure", "newsHeadlines"],
+    ),
+    RelationRuleDefinition(
         "external.crypto.btc_sensitivity.v1",
         "비트코인 급변 + 민감 종목 -> 연동 점검",
         "v1",
@@ -248,8 +265,9 @@ PROMPT_OUTPUT_SCHEMA = {
 
 COMMON_PROMPT_GUARDRAILS = [
     "제공되지 않은 값은 추정하지 않습니다.",
-    "매수/매도 지시 대신 확인 기준과 시나리오를 제시합니다.",
+    "매수/매도 단정 대신 분할매수, 추가매수 보류, 분할축소, 보유 유지 같은 행동 후보와 확인 기준을 함께 제시합니다.",
     "알림 발송 우선도와 투자 판단을 섞지 않습니다.",
+    "뉴스·공시 데이터가 있으면 가격·수급·추세 판단과 연결해 적극적으로 해석합니다.",
 ]
 
 
@@ -285,13 +303,14 @@ DEFAULT_PROMPT_TEMPLATES = [
         "investmentInsight",
         "온톨로지 투자 인사이트 AI 의견",
         "보유, 관심종목, 외부 신호, 기존 모델 신호가 만든 관계 조합을 하나의 투자 인사이트로 해석합니다.",
-        "인사이트 유형, 핵심 결론, 근거 신호, 원본 신호, 부족 데이터를 보고 관계 변화의 의미와 다음 확인 기준을 제시한다.",
-        system_prompt="너는 투자 지시자가 아니라 온톨로지 관계 그래프를 해석하는 포트폴리오 관제 분석가다.",
+        "인사이트 유형, 핵심 결론, 근거 신호, 원본 신호, 부족 데이터, 뉴스·공시를 보고 지금 우선할 행동 후보와 보류 조건을 제시한다.",
+        system_prompt="너는 투자 지시자가 아니라 온톨로지 관계 그래프를 해석하는 포트폴리오 관제 분석가다. 소극적 요약보다 현재 우선순위와 행동 후보를 분명히 말한다.",
         guardrails=[
             "개별 점수 하나로 매수/매도 결론을 내리지 않습니다.",
             "sourceSignalTypes와 ontologyInsight를 우선 근거로 사용합니다.",
             "상충 신호, 데이터 신뢰도, 포트폴리오 노출을 분리해 설명합니다.",
             "새 관계가 다음 데이터 업데이트에서도 유지되는지 확인 기준을 제시합니다.",
+            "뉴스·공시가 있으면 핵심 영향, 반대 가능성, 원문 확인 항목을 나눠 말합니다.",
         ],
     ),
     _prompt(
@@ -328,12 +347,13 @@ DEFAULT_PROMPT_TEMPLATES = [
         "holdingTiming",
         "보유 타이밍 AI 분석",
         "보유 종목의 현재 가격, 수급, 추세, 공시, 뉴스 헤드라인을 관계 규칙과 함께 종합해 대응 우선순위를 설명합니다.",
-        "대상 종목, 성립한 관계 규칙, 가격·수급·추세, OpenDART 공시, 뉴스 헤드라인, 부족 데이터를 보고 왜 알림이 발생했는지와 다음 확인 질문 3개를 제시한다.",
+        "대상 종목, 성립한 관계 규칙, 가격·수급·추세, OpenDART 공시, 뉴스 헤드라인, 부족 데이터를 보고 추가매수 보류/분할축소/분할매수 후보/보유 유지 중 현재 우선순위를 제시한다.",
         guardrails=[
             "제공되지 않은 값은 추정하지 않습니다.",
-            "매수/매도 지시 대신 확인 기준과 시나리오를 제시합니다.",
+            "매수/매도 단정 대신 행동 후보와 확인 기준을 함께 제시합니다.",
             "뉴스나 공시가 없으면 있다고 가정하지 않습니다.",
             "공식 점수보다 관계 규칙, 근거, 부족 데이터를 우선합니다.",
+            "공시와 뉴스가 있으면 제목, 접수일, 출처, 가격·수급 반응을 연결해 적극적으로 해석합니다.",
         ],
     ),
     _prompt(
@@ -636,6 +656,8 @@ def decision_action_group_for_label(label: object) -> str:
         return "profitTake"
     if "리밸런싱" in text:
         return "rebalance"
+    if any(term in text for term in ["매수", "진입"]):
+        return "entryRisk" if "보류" in text else "entry"
     if "공시" in text:
         return "disclosure"
     if any(term in text for term in ["보유", "관망", "관찰", "유지"]):
@@ -667,6 +689,14 @@ def resolve_decision_stage(rule_id: str, score: float, facts: Dict[str, object])
         return decision_stage_by_key("DISCLOSURE_REVIEW")
     if rule_id == "holding.trend_flow.confirmation.v1":
         return decision_stage_by_key("FLOW_DEFENSE" if value >= 55 else "FLOW_WATCH")
+    if rule_id == "entry.pullback.supported.v1":
+        if value >= 70:
+            return decision_stage_by_key("ENTRY_READY")
+        if value >= 55:
+            return decision_stage_by_key("ENTRY_SPLIT_BUY")
+        return decision_stage_by_key("ENTRY_WATCH")
+    if rule_id == "entry.add_buy.blocked.v1":
+        return decision_stage_by_key("ADD_BUY_BLOCKED")
     return decision_stage_by_key("HOLD_KEEP")
 
 
@@ -794,6 +824,9 @@ def position_signal_facts(
         "market": position.market,
         "currency": position.currency,
         "sector": position.sector,
+        "source": position.source,
+        "isHolding": str(position.source or "holding") != "watchlist",
+        "isWatchlist": str(position.source or "") == "watchlist",
         "profitLossRate": number(position.profit_loss_rate),
         "profitLoss": number(position.profit_loss),
         "marketValue": number(position.market_value),
@@ -848,10 +881,15 @@ def position_signal_facts(
 
 def _thresholds(settings: Optional[Dict[str, object]]) -> Dict[str, float]:
     settings = settings or {}
-    return parse_assignments(
-        str(settings.get("alertThresholds") or ""),
-        DEFAULT_RELATION_THRESHOLDS,
-    )
+    legacy = parse_assignments(str(settings.get("alertThresholds") or ""), DEFAULT_RELATION_THRESHOLDS)
+    configured = str(settings.get("relationRuleThresholds") or "").strip()
+    if not configured:
+        return legacy
+    return parse_assignments(configured, legacy)
+
+
+def relation_thresholds_from_settings(settings: Optional[Dict[str, object]] = None) -> Dict[str, float]:
+    return _thresholds(settings)
 
 
 def _rule(rule_id: str, definitions: Optional[List[RelationRuleDefinition]] = None) -> RelationRuleDefinition:
@@ -911,10 +949,12 @@ def decision_from_matches(facts: Dict[str, object], matches: List[OntologyRuleMa
         }
     priority = {
         "holding.loss_guard.breakdown.v1": 40,
+        "entry.pullback.supported.v1": 38,
         "holding.profit_take.trend_weakness.v1": 35,
         "disclosure.material_event.v1": 30,
         "external.crypto.btc_sensitivity.v1": 25,
         "holding.concentration.rebalance.v1": 20,
+        "entry.add_buy.blocked.v1": 18,
     }
     selected = max(active, key=lambda item: (priority.get(item.rule_id, 10), item.strength_score, item.confidence))
     stage = resolve_decision_stage(selected.rule_id, selected.strength_score, facts)
@@ -991,6 +1031,15 @@ def evaluate_position_relation_rules(
     flow_score = float(facts.get("investorFlowScore") or 0)
     btc_change24h = float(facts.get("btcChange24h") or 0)
     btc_change7d = float(facts.get("btcChange7d") or 0)
+    source = str(facts.get("source") or "holding").strip()
+    is_holding = bool(facts.get("isHolding"))
+    volume_ratio = float(facts.get("volumeRatio") or 0)
+    trade_strength = float(facts.get("tradeStrength") or 0)
+    bid_ask_imbalance = float(facts.get("bidAskImbalance") or 0)
+    disclosure = facts.get("dartDisclosure")
+    has_disclosure = isinstance(disclosure, dict) and bool(disclosure)
+    news = facts.get("newsHeadlines")
+    has_news = isinstance(news, dict) and bool(news.get("items") or news.get("count"))
 
     if pnl >= 10 and (ma20_distance <= -2 or ma60_distance <= -5 or trend_score < -3):
         score = 55 + min(25, max(0, pnl - 10) * 1.2) + min(20, abs(min(ma20_distance, ma60_distance, trend_score)))
@@ -1006,6 +1055,105 @@ def evaluate_position_relation_rules(
             missing_labels,
             definitions=relation_definitions,
         ))
+
+    entry_ma20_below = float(thresholds.get("entryPullbackMa20BelowPct", -2.0) or -2.0)
+    entry_ma20_deep = float(thresholds.get("entryPullbackMa20DeepPct", -8.0) or -8.0)
+    entry_ma60_support = float(thresholds.get("entryMa60SupportPct", -1.0) or -1.0)
+    entry_volume_min = float(thresholds.get("entryVolumeMinRatio", 0.6) or 0.0)
+    entry_volume_max = float(thresholds.get("entryVolumeMaxRatio", 1.8) or 0.0)
+    entry_smart_money_min = float(thresholds.get("entrySmartMoneyMin", 10.0) or 0.0)
+    entry_trade_strength_min = float(thresholds.get("entryTradeStrengthMin", 100.0) or 0.0)
+    entry_orderbook_min = float(thresholds.get("entryOrderbookImbalanceMin", 5.0) or 0.0)
+    entry_position_max = float(thresholds.get("entryMaxPositionWeight", 20.0) or 0.0)
+    entry_sector_max = float(thresholds.get("entryMaxSectorWeight", 45.0) or 0.0)
+    pullback_zone = entry_ma20_deep <= ma20_distance <= entry_ma20_below
+    ma60_supports_entry = bool(facts.get("ma60")) and ma60_distance >= entry_ma60_support
+    volume_is_usable = bool(volume_ratio) and volume_ratio >= entry_volume_min and (not entry_volume_max or volume_ratio <= entry_volume_max)
+    smart_money_supports = bool(flow_score) and flow_score >= entry_smart_money_min
+    execution_supports = bool(trade_strength) and trade_strength >= entry_trade_strength_min
+    orderbook_supports = bool(bid_ask_imbalance) and bid_ask_imbalance >= entry_orderbook_min
+    allocation_room = (not position_weight or position_weight <= entry_position_max) and (not sector_ratio or sector_ratio <= entry_sector_max)
+    entry_support_count = sum(
+        1
+        for value in [ma60_supports_entry, volume_is_usable, smart_money_supports, execution_supports, orderbook_supports]
+        if value
+    )
+    facts["entryPullbackZone"] = pullback_zone
+    facts["entrySupportCount"] = entry_support_count
+    facts["entryAllocationRoom"] = allocation_room
+    facts["entryExternalRiskBlocked"] = bool(has_disclosure)
+    if (
+        pullback_zone
+        and ma60_supports_entry
+        and allocation_room
+        and entry_support_count >= 2
+        and not has_disclosure
+        and (source == "watchlist" or pnl > -8)
+    ):
+        score = (
+            48
+            + min(14, entry_support_count * 4)
+            + (8 if smart_money_supports else 0)
+            + (6 if execution_supports or orderbook_supports else 0)
+            + (6 if source == "watchlist" else 0)
+        )
+        matches.append(_match(
+            "entry.pullback.supported.v1",
+            score,
+            data_quality,
+            [
+                moving_average_distance_text("20일선", ma20_distance),
+                moving_average_distance_text("60일선", ma60_distance),
+                "거래량 배율 " + ("%.1f" % volume_ratio) + "x" if volume_ratio else "거래량 배율 미확인",
+                "투자자 수급 점수 " + ("%.1f" % flow_score),
+                "체결강도 " + ("%.1f" % trade_strength) if trade_strength else "",
+                "호가 불균형 " + ("%.1f" % bid_ask_imbalance) + "%" if bid_ask_imbalance else "",
+                "보유 비중 " + ("%.1f" % position_weight) + "%",
+                "업종 비중 " + ("%.1f" % sector_ratio) + "%",
+            ],
+            missing_labels,
+            definitions=relation_definitions,
+        ))
+
+    add_buy_risk = (
+        is_holding
+        and (
+            (pnl < 0 and ma20_distance <= entry_ma20_below)
+            or ma60_distance < entry_ma60_support
+            or has_disclosure
+            or has_news and pnl < 0 and ma20_distance < 0
+        )
+    )
+    if add_buy_risk:
+        score = 52
+        if pnl < 0:
+            score += min(12, abs(pnl) * 1.2)
+        if ma20_distance <= entry_ma20_deep:
+            score += 12
+        elif ma20_distance <= entry_ma20_below:
+            score += 7
+        if ma60_distance < entry_ma60_support:
+            score += 8
+        if has_disclosure:
+            score += 10
+        if has_news:
+            score += 4
+        matches.append(_match(
+            "entry.add_buy.blocked.v1",
+            score,
+            data_quality,
+            [
+                "손익률 " + ("%.1f" % pnl) + "%",
+                moving_average_distance_text("20일선", ma20_distance),
+                moving_average_distance_text("60일선", ma60_distance),
+                "신규 공시 있음" if has_disclosure else "",
+                "관련 뉴스 있음" if has_news else "",
+                "추가매수보다 회복 조건 확인 우선",
+            ],
+            missing_labels,
+            definitions=relation_definitions,
+        ))
+
     loss_threshold = float(thresholds.get("lossRateLow", -8.0) or -8.0)
     loss_buffer = abs(float(thresholds.get("lossRateBufferPct", 1.0) or 0.0))
     volume_confirm_ratio = float(thresholds.get("lossGuardVolumeConfirmRatio", 0.8))

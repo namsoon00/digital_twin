@@ -3077,11 +3077,13 @@ h3 {
 }
 
 .notifications-view,
+.ontology-view,
 .strategy-view {
   align-items: start;
 }
 
 .notification-section-bar,
+.ontology-section-bar,
 .strategy-section-bar {
   grid-column: 1 / -1;
   display: grid;
@@ -3093,6 +3095,7 @@ h3 {
 }
 
 .notification-section-actions,
+.ontology-section-actions,
 .strategy-section-actions {
   display: flex;
   flex-wrap: wrap;
@@ -3103,6 +3106,7 @@ h3 {
 }
 
 .notification-section-actions .text-button,
+.ontology-section-actions .text-button,
 .strategy-section-actions .text-button {
   min-height: 38px;
 }
@@ -3165,6 +3169,7 @@ h3 {
 }
 
 .notification-section-tabs,
+.ontology-section-tabs,
 .strategy-section-tabs {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -3174,6 +3179,7 @@ h3 {
 }
 
 .notification-section-tabs button,
+.ontology-section-tabs button,
 .strategy-section-tabs button {
   display: grid;
   gap: 3px;
@@ -3190,6 +3196,7 @@ h3 {
 }
 
 .notification-section-tabs button.active,
+.ontology-section-tabs button.active,
 .strategy-section-tabs button.active {
   border-bottom-color: var(--blue);
   background: transparent;
@@ -3198,6 +3205,8 @@ h3 {
 
 .notification-section-tabs strong,
 .notification-section-tabs span,
+.ontology-section-tabs strong,
+.ontology-section-tabs span,
 .strategy-section-tabs strong,
 .strategy-section-tabs span {
   min-width: 0;
@@ -3207,11 +3216,13 @@ h3 {
 }
 
 .notification-section-tabs strong,
+.ontology-section-tabs strong,
 .strategy-section-tabs strong {
   font-size: 14px;
 }
 
 .notification-section-tabs span,
+.ontology-section-tabs span,
 .strategy-section-tabs span {
   color: var(--muted);
   font-size: 12px;
@@ -3219,6 +3230,7 @@ h3 {
 }
 
 .notification-section-tabs button.active span,
+.ontology-section-tabs button.active span,
 .strategy-section-tabs button.active span {
   color: var(--blue);
 }
@@ -7694,6 +7706,7 @@ h3 {
   .watchlist-view .account-watchlist-panel,
   .symbol-universe-view .symbol-universe-panel,
   .ontology-view .ontology-panel,
+  .ontology-view .ontology-section-bar,
   .notifications-view .notification-section-bar,
   .strategy-view .strategy-section-bar,
   .notifications-view .notification-ops-rail,
@@ -7820,6 +7833,7 @@ h3 {
   .watchlist-view .account-watchlist-panel,
   .symbol-universe-view .symbol-universe-panel,
   .ontology-view .ontology-panel,
+  .ontology-view .ontology-section-bar,
   .notifications-view .notification-section-bar,
   .strategy-view .strategy-section-bar,
   .strategy-view .strategy-process-panel,
@@ -8025,6 +8039,7 @@ h3 {
   .watchlist-view .account-watchlist-panel,
   .symbol-universe-view .symbol-universe-panel,
   .ontology-view .ontology-panel,
+  .ontology-view .ontology-section-bar,
   .notifications-view .notification-section-bar,
   .notifications-view .notification-ops-rail,
   .notifications-view .notification-decision-panel,
@@ -8112,11 +8127,13 @@ h3 {
   }
 
   .notification-section-tabs,
+  .ontology-section-tabs,
   .strategy-section-tabs {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
   .notification-section-tabs button,
+  .ontology-section-tabs button,
   .strategy-section-tabs button {
     min-height: 42px;
     padding: 7px 6px 9px;
@@ -8124,6 +8141,7 @@ h3 {
   }
 
   .notification-section-tabs span,
+  .ontology-section-tabs span,
   .strategy-section-tabs span {
     display: none;
   }
@@ -8464,11 +8482,13 @@ h3 {
   }
 
   .notification-section-tabs,
+  .ontology-section-tabs,
   .strategy-section-tabs {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
   .notification-section-tabs button,
+  .ontology-section-tabs button,
   .strategy-section-tabs button {
     min-height: 42px;
     padding: 7px 6px 9px;
@@ -8476,16 +8496,19 @@ h3 {
   }
 
   .notification-section-tabs span,
+  .ontology-section-tabs span,
   .strategy-section-tabs span {
     display: none;
   }
 
   .notification-section-bar,
+  .ontology-section-bar,
   .strategy-section-bar {
     grid-template-columns: 1fr;
   }
 
   .notification-section-actions,
+  .ontology-section-actions,
   .strategy-section-actions {
     display: grid;
     grid-template-columns: 1fr 1fr;

@@ -42,6 +42,9 @@
     externalSecUserAgent: "DigitalTwin/1.0 local-contact",
     externalDartEnabled: "1",
     externalDartLookbackDays: "14",
+    externalNewsEnabled: "0",
+    externalNewsMaxSymbols: "3",
+    externalNewsLookbackHours: "48",
     externalDartCorpCodes: [
       "005930=00126380",
       "000660=00164779",
@@ -130,9 +133,9 @@
       "[holdingTiming]",
       "label=보유 타이밍 AI 분석",
       "version=ai-prompt-registry-v1",
-      "purpose=보유 종목의 매수, 보유, 분할 매도, 손실 관리 타이밍을 관계 규칙 기반으로 설명",
+      "purpose=보유 종목의 현재 가격, 수급, 추세, 공시, 뉴스 헤드라인을 관계 규칙과 함께 종합해 대응 우선순위를 설명",
       "system=제공된 데이터와 관계 규칙만 사용한다.",
-      "user=성립 규칙, 근거, 부족 데이터를 보고 왜 알림이 발생했는지 설명하고 다음 확인 질문 3개를 제시한다.",
+      "user=성립 규칙, 가격·수급·추세, OpenDART 공시, 뉴스 헤드라인, 부족 데이터를 보고 왜 알림이 발생했는지와 다음 확인 질문 3개를 제시한다.",
       "",
       "[monitorHeartbeat]",
       "label=모니터링 상태 AI 의견",
@@ -3454,6 +3457,9 @@
       externalSecUserAgent: settingValue("externalSecUserAgent"),
       externalDartEnabled: settingValue("externalDartEnabled"),
       externalDartLookbackDays: settingValue("externalDartLookbackDays"),
+      externalNewsEnabled: settingValue("externalNewsEnabled"),
+      externalNewsMaxSymbols: settingValue("externalNewsMaxSymbols"),
+      externalNewsLookbackHours: settingValue("externalNewsLookbackHours"),
       externalDartCorpCodes: settingValue("externalDartCorpCodes"),
       dartDisclosureAiAnalysisEnabled: settingValue("dartDisclosureAiAnalysisEnabled"),
       dartDisclosureAiUseCodex: settingValue("dartDisclosureAiUseCodex"),
@@ -6925,6 +6931,7 @@
   function renderInvestmentReasoningCard(card) {
     var finalOpinion = card.finalOpinion || {};
     var relationRows = Array.isArray(card.relationEvidence) ? card.relationEvidence : [];
+    var influenceRows = Array.isArray(card.relationInfluences) ? card.relationInfluences : [];
     var evidenceRows = Array.isArray(card.strategyEvidence) ? card.strategyEvidence : [];
     var gaps = Array.isArray(card.dataGaps) ? card.dataGaps : [];
     var displayName = card.companyName || card.displayName || stockDisplayName(card.symbol);
@@ -6944,6 +6951,7 @@
       '<span>확신 <strong>' + escapeHtml(finalOpinion.conviction || 0) + '</strong></span>',
       '<span>전략 근거 <strong>' + escapeHtml(evidenceRows.length) + '</strong></span>',
       '<span>관계 근거 <strong>' + escapeHtml(relationRows.length) + '</strong></span>',
+      '<span>관계 영향 <strong>' + escapeHtml(influenceRows.length) + '</strong></span>',
       '</div>',
       '<div class="investment-evidence-narrative">',
       thesis ? '<p>' + escapeHtml(thesis) + '</p>' : '',
@@ -6951,6 +6959,12 @@
       '</div>',
       '<div class="investment-evidence-columns">',
       renderReasoningCardList("전략 근거", evidenceRows.slice(0, 3).map(function (item) { return item.summary || item.kind || item.id; })),
+      renderReasoningCardList("의견 영향", influenceRows.slice(0, 3).map(function (item) {
+        var risk = Number(item.riskImpact || 0);
+        var support = Number(item.supportImpact || 0);
+        var impact = risk ? ("리스크 +" + Math.round(risk)) : support ? ("지지 +" + Math.round(support)) : "";
+        return [item.label || item.type, item.scope, impact].filter(Boolean).join(" · ");
+      })),
       renderReasoningCardList("관계 근거", relationRows.slice(0, 3).map(function (item) {
         return [item.type, item.sourceLabel, item.targetLabel].filter(Boolean).join(" · ");
       })),
@@ -12472,6 +12486,7 @@
         configuredChip("FRED", settingEnabled("externalFredEnabled"), isConfiguredSetting("fredApiKey") ? "키 저장됨" : "키 필요"),
         configuredChip("OpenDART", settingEnabled("externalDartEnabled"), isConfiguredSetting("opendartApiKey") ? "키 저장됨" : "키 필요"),
         configuredChip("SEC", settingEnabled("externalSecEnabled"), "무키"),
+        configuredChip("뉴스", settingEnabled("externalNewsEnabled"), "GDELT"),
         configuredChip("공시 AI", settingValue("dartDisclosureAiAnalysisEnabled") !== "0", settingValue("dartDisclosureAiUseCodex") === "0" ? "로컬" : "AI")
       ]),
       '</div>'
@@ -12484,7 +12499,8 @@
       "externalCoinGeckoEnabled",
       "externalFredEnabled",
       "externalSecEnabled",
-      "externalDartEnabled"
+      "externalDartEnabled",
+      "externalNewsEnabled"
     ].filter(settingEnabled).length;
     return [
       '<div class="settings-api-grid">',
@@ -12497,12 +12513,13 @@
         configuredChip("Chat ID", isConfiguredSetting("telegramChatId"), isConfiguredSetting("telegramChatId") ? "저장됨" : ""),
         configuredChip("알림 링크", Boolean(settingValue("notifyLinkUrl")))
       ]),
-      renderSettingsApiCard("외부 데이터", externalEnabledCount + "/5개 수집 사용", [
+      renderSettingsApiCard("외부 데이터", externalEnabledCount + "/6개 수집 사용", [
         configuredChip("Alpha", settingEnabled("externalAlphaEnabled"), isConfiguredSetting("alphaVantageApiKey") ? "키 저장됨" : "키 필요"),
         configuredChip("CoinGecko", settingEnabled("externalCoinGeckoEnabled"), isConfiguredSetting("coingeckoApiKey") ? "키 저장됨" : "키 없음"),
         configuredChip("FRED", settingEnabled("externalFredEnabled"), isConfiguredSetting("fredApiKey") ? "키 저장됨" : "키 필요"),
         configuredChip("OpenDART", settingEnabled("externalDartEnabled"), isConfiguredSetting("opendartApiKey") ? "키 저장됨" : "키 필요"),
         configuredChip("SEC", settingEnabled("externalSecEnabled"), "무키"),
+        configuredChip("뉴스", settingEnabled("externalNewsEnabled"), "GDELT"),
         configuredChip("공시 AI", settingValue("dartDisclosureAiAnalysisEnabled") !== "0", settingValue("dartDisclosureAiUseCodex") === "0" ? "로컬" : "AI")
       ]),
       '</div>'
@@ -12736,6 +12753,10 @@
         { value: "0", label: "사용 안 함" }
       ]),
       renderSettingField("opendartApiKey", "OpenDART API Key", secretType, "api key", { preserveConfigured: true }),
+      renderSettingSelect("externalNewsEnabled", "뉴스 헤드라인 수집", [
+        { value: "1", label: "사용" },
+        { value: "0", label: "사용 안 함" }
+      ]),
       renderSettingField("externalApiFetchIntervalMinutes", "외부 API 캐시(분)", "number", "60"),
       renderSettingField("externalAlphaMaxSymbols", "미장 조회 종목 수", "number", "3"),
       renderSettingSelect("externalSecEnabled", "SEC EDGAR 수집", [
@@ -12745,6 +12766,8 @@
       renderSettingField("externalSecMaxSymbols", "SEC 조회 종목 수", "number", "3"),
       renderSettingField("externalSecUserAgent", "SEC User-Agent", "text", "DigitalTwin/1.0 local-contact"),
       renderSettingField("externalDartLookbackDays", "공시 조회 기간(일)", "number", "14"),
+      renderSettingField("externalNewsMaxSymbols", "뉴스 조회 종목 수", "number", "3"),
+      renderSettingField("externalNewsLookbackHours", "뉴스 조회 기간(시간)", "number", "48"),
       renderSettingSelect("dartDisclosureAiAnalysisEnabled", "공시 AI 해석", [
         { value: "1", label: "사용" },
         { value: "0", label: "사용 안 함" }

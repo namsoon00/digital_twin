@@ -505,6 +505,7 @@
     activeTab: initialTab(),
     previousTab: "",
     tabBarScrollLeft: 0,
+    tabScrollPositions: {},
     settings: loadSettings(),
     snackbar: null,
     realtime: {
@@ -1016,6 +1017,92 @@
     if (!window.history || !window.history.replaceState) return;
     var normalized = normalizeStrategySection(section);
     window.history.replaceState({ tab: "modeling", strategy: normalized }, "", strategySectionUrl(normalized));
+  }
+
+  function scrollKeyForTab(tab, notificationSection, strategySection) {
+    var normalized = normalizeTabId(tab || state.activeTab);
+    if (normalized === "notifications") {
+      return normalized + ":" + normalizeNotificationSection(notificationSection || state.activeNotificationSection);
+    }
+    if (normalized === "modeling") {
+      return normalized + ":" + normalizeStrategySection(strategySection || state.activeStrategySection);
+    }
+    return normalized;
+  }
+
+  function activeScrollKey() {
+    return scrollKeyForTab(state.activeTab, state.activeNotificationSection, state.activeStrategySection);
+  }
+
+  function currentWorkspaceMain() {
+    return app && app.querySelector ? app.querySelector(".workspace-main") : null;
+  }
+
+  function currentWorkspaceScroller() {
+    var workspace = currentWorkspaceMain();
+    if (!workspace) return null;
+    var style = window.getComputedStyle ? window.getComputedStyle(workspace) : null;
+    var overflowY = style ? String(style.overflowY || style.overflow || "") : "";
+    if (overflowY === "visible" || overflowY === "clip") return null;
+    if (overflowY === "auto" || overflowY === "scroll") return workspace;
+    return workspace.scrollHeight > workspace.clientHeight + 1 ? workspace : null;
+  }
+
+  function scrollTopNumber(value) {
+    var number = Number(value || 0);
+    return isFinite(number) ? Math.max(0, number) : 0;
+  }
+
+  function windowScrollTop() {
+    return scrollTopNumber(window.pageYOffset || document.documentElement.scrollTop || document.body.scrollTop || 0);
+  }
+
+  function maxWindowScrollTop() {
+    var doc = document.documentElement || {};
+    var body = document.body || {};
+    var scrollHeight = Math.max(scrollTopNumber(doc.scrollHeight), scrollTopNumber(body.scrollHeight));
+    return Math.max(0, scrollHeight - scrollTopNumber(window.innerHeight || doc.clientHeight || 0));
+  }
+
+  function clampScrollTop(value, max) {
+    return Math.max(0, Math.min(scrollTopNumber(value), scrollTopNumber(max)));
+  }
+
+  function renderedScrollKey() {
+    var workspace = currentWorkspaceMain();
+    return workspace ? workspace.getAttribute("data-scroll-key") || "" : "";
+  }
+
+  function rememberRenderedPageScrollPosition() {
+    var key = renderedScrollKey();
+    if (!key) return;
+    var scroller = currentWorkspaceScroller();
+    state.tabScrollPositions[key] = {
+      workspaceTop: scroller ? scrollTopNumber(scroller.scrollTop) : 0,
+      windowTop: windowScrollTop()
+    };
+  }
+
+  function restoreRenderedPageScrollPosition() {
+    var key = renderedScrollKey() || activeScrollKey();
+    var saved = state.tabScrollPositions[key] || {};
+    var scroller = currentWorkspaceScroller();
+    if (scroller) {
+      var workspaceTop = scrollTopNumber(saved.workspaceTop) || scrollTopNumber(saved.windowTop);
+      scroller.scrollTop = clampScrollTop(workspaceTop, Math.max(0, scroller.scrollHeight - scroller.clientHeight));
+      if (window.scrollTo) window.scrollTo(0, 0);
+      return;
+    }
+    if (window.scrollTo) {
+      var windowTop = scrollTopNumber(saved.windowTop) || scrollTopNumber(saved.workspaceTop);
+      window.scrollTo(0, clampScrollTop(windowTop, maxWindowScrollTop()));
+    }
+  }
+
+  function bindPageScrollMemory() {
+    var scroller = currentWorkspaceScroller();
+    if (!scroller) return;
+    scroller.addEventListener("scroll", rememberRenderedPageScrollPosition, { passive: true });
   }
 
   function currentAppNav() {
@@ -5876,6 +5963,7 @@
 
   function render() {
     applyAppTheme();
+    rememberRenderedPageScrollPosition();
     destroyOntologyCytoscapeGraphs();
     if (state.loading && !state.snapshot) {
       app.innerHTML = renderLoading();
@@ -5890,6 +5978,8 @@
     bindActions();
     initOntologyCytoscapeGraphs();
     restoreTabBarPosition();
+    restoreRenderedPageScrollPosition();
+    bindPageScrollMemory();
     syncAppNavScrollState();
     if (state.activeTab === "feed" && !state.feed && !state.feedLoading) {
       loadFeed(false);
@@ -5983,7 +6073,7 @@
       renderDeskbar(snapshot, modeLabel, modeClass),
       '<section class="workspace-layout">',
       renderTabs(),
-      '<div class="workspace-main">',
+      '<div class="workspace-main" data-scroll-key="' + escapeHtml(activeScrollKey()) + '">',
       renderActiveTab(snapshot),
       '</div>',
       '</section>',
@@ -12593,8 +12683,15 @@
 
   if (window.addEventListener) {
     window.addEventListener("popstate", syncTabFromLocation);
-    window.addEventListener("scroll", scheduleAppNavScrollState, { passive: true });
-    window.addEventListener("resize", scheduleAppNavScrollState);
+    window.addEventListener("scroll", function () {
+      rememberRenderedPageScrollPosition();
+      scheduleAppNavScrollState();
+    }, { passive: true });
+    window.addEventListener("resize", function () {
+      rememberRenderedPageScrollPosition();
+      restoreRenderedPageScrollPosition();
+      scheduleAppNavScrollState();
+    });
     window.addEventListener("keydown", function (event) {
       if (event.key !== "Escape" || !state.monitoringDetail) return;
       state.monitoringDetail = null;

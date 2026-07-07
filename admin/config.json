@@ -13,7 +13,7 @@
     "공유 미리보기에서는 서버 설정과 계정 DB 쓰기를 차단합니다."
   ],
   "localData": {
-    "generatedAt": "2026-07-07T11:47:20.604581Z",
+    "generatedAt": "2026-07-07T13:58:29.031330Z",
     "sources": {
       "serviceDb": "data/service.db",
       "serviceDbExists": true,
@@ -67,12 +67,12 @@
       "notificationScoreFormula": "rawScore",
       "modelName": "나의 매수/매도 모델",
       "modelHypothesis": "수급, 가치, 내 점수, 리스크를 함께 봐서 매수 후보와 매도 후보를 분리한다.",
-      "customBuyModelFormula": "buyScore * 0.35 + buyReasonScore * buyReasonWeight + confidenceScore * confidenceWeight + max(0, targetReturn) * 0.15 + undervalueBonus * valuationWeight - riskScore * riskControlWeight",
-      "customSellModelFormula": "sellScore * 0.35 + riskScore * riskControlWeight + expensivePenalty * valuationWeight + max(0, -targetReturn) * 0.2 - buyReasonScore * 0.1",
-      "formulaWeights": "growthWeight=1\nqualityWeight=1\nriskWeight=1\nflowWeight=1\nvaluationWeight=1\nbuyReasonWeight=0.25\nconfidenceWeight=0.15\nriskControlWeight=0.35",
+      "customBuyModelFormula": "buyScore * 0.35 + thesisScore * thesisWeight + confidenceScore * confidenceWeight + max(0, targetReturn) * 0.15 + undervalueBonus * valuationWeight - riskScore * riskControlWeight",
+      "customSellModelFormula": "sellScore * 0.35 + riskScore * riskControlWeight + expensivePenalty * valuationWeight + max(0, -targetReturn) * 0.2 - thesisScore * 0.1",
+      "formulaWeights": "growthWeight=1\nqualityWeight=1\nriskWeight=1\nflowWeight=1\nvaluationWeight=1\nthesisWeight=0.25\nconfidenceWeight=0.15\nriskControlWeight=0.35",
       "decisionThresholds": "buyCandidate=78\nchaseCaution=70\nstrongHold=72\nsellTrim=70\nriskReduce=66\nsellWatch=64",
-      "modelDecisionThresholds": "modelBuy=74\nmodelAdd=70\nmodelSell=72\nmodelReduce=64\nmodelHold=55",
-      "alertThresholds": "modelBuyScore=74\nmodelSellScore=72\nwatchlistBuyScore=74\nmodelScoreGap=15\nvolumeRatioHigh=2\nbuyShareHigh=65\nsellShareHigh=65\norderbookImbalance=25\nmomentumUp=3\nmomentumDown=-3\nprofitRateHigh=20\nlossRateLow=-8\nlossRateBufferPct=1\nlossGuardVolumeConfirmRatio=0.8\nlossGuardMa60SupportPct=0\nlossGuardWeakEvidencePenalty=30\npositionWeightHigh=30\nsectorWeightHigh=50\nmarketCashLow=10\nrecordGain=10\nrecordLoss=-5\npriceNearPercent=1\nstaleMinutes=30\npendingOrderMinutes=30\nwatchlistPriceDelta=3\nmonitorPnlDelta=2\nmonitorValueDelta=5\nmonitorMaDistance=8\nmonitorCashDelta=10\nmonitorExitPressureDelta=15\nexternalEquityChangePct=3\nexternalCryptoChange24hPct=4\nexternalCryptoChange7dPct=10\nexternalBitcoinChange24hPct=3\nexternalBitcoinChange7dPct=4\nexternalMacroRateDeltaBp=15",
+      "modelDecisionThresholds": "modelBuy=75\nmodelAdd=70\nmodelSell=72\nmodelReduce=64\nmodelHold=55",
+      "alertThresholds": "modelBuyScore=75\nmodelSellScore=72\nwatchlistBuyScore=75\nmodelScoreGap=15\nvolumeRatioHigh=2\nbuyShareHigh=65\nsellShareHigh=65\norderbookImbalance=25\nmomentumUp=3\nmomentumDown=-3\nprofitRateHigh=20\nlossRateLow=-8\nlossRateBufferPct=1\nlossGuardVolumeConfirmRatio=0.8\nlossGuardMa60SupportPct=0\nlossGuardWeakEvidencePenalty=30\npositionWeightHigh=30\nsectorWeightHigh=50\nmarketCashLow=10\nrecordGain=10\nrecordLoss=-5\npriceNearPercent=1\nstaleMinutes=30\npendingOrderMinutes=30\nwatchlistPriceDelta=3\nmonitorPnlDelta=2\nmonitorValueDelta=5\nmonitorMaDistance=8\nmonitorCashDelta=10\nmonitorExitPressureDelta=15\nexternalEquityChangePct=3\nexternalCryptoChange24hPct=4\nexternalCryptoChange7dPct=10\nexternalBitcoinChange24hPct=3\nexternalBitcoinChange7dPct=4\nexternalMacroRateDeltaBp=15",
       "alertCadenceMinutes": "priceBuyLimit=10\npriceStop=10\npriceTrim=10\nmodelBuy=10\nmodelSell=10\nmodelScoreGap=10\nmodelVersionDrift=10\nflowTradeStrength=10\nflowVolume=10\nflowBuyShare=10\nflowSellShare=10\nflowOrderbook=10\ntrendMomentum=10\ntrendPullback=10\nholdingProfit=10\nholdingLoss=10\nholdingConcentration=10\nsectorConcentration=10\nmarketCashLow=10\nrecordGain=10\nrecordLoss=10\ndataFreshness=10\ntossConnection=10\norderPending=10\norderReject=10\nholdingTiming=10\nmonitorHeartbeat=10\nmonitorConnection=10\nmonitorPositionChange=10\nmonitorPnlChange=10\nmonitorValueChange=10\nmonitorTrendChange=10\nmonitorCashChange=10\nmonitorDecisionChange=10\nexternalEquityMove=10\nexternalCryptoMove=10\nexternalMacroShift=10\nexternalDartDisclosure=10\nexternalDataConnection=10",
       "modelReviewUseCodex": "1",
       "modelReviewTimeoutSeconds": "180",
@@ -96,6 +96,9 @@
       "externalDartEnabled": "1",
       "externalDartLookbackDays": "14",
       "externalDartCorpCodes": "005930=00126380\n000660=00164779\n035420=00266961",
+      "externalNewsEnabled": "1",
+      "externalNewsMaxSymbols": "3",
+      "externalNewsLookbackHours": "48",
       "dartDisclosureAiAnalysisEnabled": "1",
       "dartDisclosureAiUseCodex": "1",
       "dartDisclosureAiTimeoutSeconds": "90"
@@ -113,6 +116,11 @@
     },
     "notification": {
       "alertRules": [
+        {
+          "key": "investmentInsight",
+          "default": 1,
+          "unit": ""
+        },
         {
           "key": "modelBuy",
           "default": 1,
@@ -212,7 +220,7 @@
       "alertThresholds": [
         {
           "key": "modelBuyScore",
-          "default": 74.0,
+          "default": 75.0,
           "unit": ""
         },
         {
@@ -222,7 +230,7 @@
         },
         {
           "key": "watchlistBuyScore",
-          "default": 74.0,
+          "default": 75.0,
           "unit": ""
         },
         {
@@ -397,6 +405,11 @@
         }
       ],
       "alertCadenceMinutes": [
+        {
+          "key": "investmentInsight",
+          "default": 10,
+          "unit": "minutes"
+        },
         {
           "key": "modelBuy",
           "default": 10.0,
@@ -784,6 +797,12 @@
           "default": "1"
         },
         {
+          "key": "externalNewsEnabled",
+          "label": "뉴스 헤드라인 수집 사용",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
           "key": "externalFredSeries",
           "label": "FRED 지표",
           "type": "text"
@@ -797,6 +816,19 @@
           "key": "externalDartCorpCodes",
           "label": "OpenDART 종목 매핑",
           "type": "assignmentText"
+        },
+        {
+          "key": "externalNewsMaxSymbols",
+          "label": "뉴스 조회 종목 수",
+          "type": "number",
+          "default": "3"
+        },
+        {
+          "key": "externalNewsLookbackHours",
+          "label": "뉴스 조회 기간",
+          "type": "number",
+          "default": "48",
+          "unit": "hours"
         },
         {
           "key": "dartDisclosureAiAnalysisEnabled",
@@ -881,7 +913,7 @@
     {
       "id": "monitoring",
       "title": "실시간 모니터링",
-      "summary": "계정별 스냅샷을 수집하고 장중 판단 변화, 보유 변화, 현금비중 변화를 알림으로 보냅니다.",
+      "summary": "계정별 스냅샷과 외부 신호를 수집하고 세부 투자 신호를 온톨로지 투자 인사이트로 합성해 발송합니다.",
       "commands": [
         "npm run python:monitor:once -- --dry-run --force",
         "npm run python:monitor:watch",
@@ -895,6 +927,11 @@
       ],
       "defaults": {
         "alertRules": [
+          {
+            "key": "investmentInsight",
+            "default": 1,
+            "unit": ""
+          },
           {
             "key": "modelBuy",
             "default": 1,
@@ -1100,6 +1137,11 @@
         ],
         "alertCadenceMinutes": [
           {
+            "key": "investmentInsight",
+            "default": 10,
+            "unit": "minutes"
+          },
+          {
             "key": "modelBuy",
             "default": 10,
             "unit": "minutes"
@@ -1286,7 +1328,7 @@
     {
       "id": "model-review",
       "title": "모델 리뷰 워커",
-      "summary": "monitorDecisionChange 이벤트를 큐에 넣고, 관계 분석의 투자 관점·관계·반대 신호와 다음 실험을 작성합니다.",
+      "summary": "투자 인사이트 안의 판단 변화 원본 신호를 큐에 넣고, 관계 분석의 투자 관점·반대 신호와 다음 실험을 작성합니다.",
       "commands": [
         "npm run python:model-review:once -- --dry-run",
         "npm run python:model-review:watch",
@@ -1379,5 +1421,5 @@
       ]
     }
   ],
-  "buildId": "0edda7d31f95"
+  "buildId": "b9fc809f02d6"
 }

@@ -783,6 +783,7 @@ function checkFrontendAdminRender() {
     renderForSearch("?tab=notifications&notification=advanced"),
     renderForSearch("?tab=modeling"),
     renderForSearch("?tab=ontology"),
+    renderForSearch("?tab=ontology&ontology=structure"),
     renderForSearch("?tab=ontology&ontology=graphs"),
     renderForSearch("?tab=ontology&ontology=registry"),
     renderForSearch("?tab=ontology&ontology=trace"),
@@ -804,16 +805,17 @@ function checkFrontendAdminRender() {
     const notificationAdvancedHtml = pages[7];
     const modelingHtml = pages[8];
     const ontologyHtml = pages[9];
-    const ontologyGraphHtml = pages[10];
-    const ontologyRegistryHtml = pages[11];
-    const ontologyTraceHtml = pages[12];
-    const modelingDataHtml = pages[13];
-    const modelingPolicyHtml = pages[14];
-    const modelingResultsHtml = pages[15];
-    const monitoringHtml = pages[16];
-    const settingsHtml = pages[17];
-    const staticAccountHtml = pages[18];
-    const newAccountHtml = pages[19];
+    const ontologyStructureHtml = pages[10];
+    const ontologyGraphHtml = pages[11];
+    const ontologyRegistryHtml = pages[12];
+    const ontologyTraceHtml = pages[13];
+    const modelingDataHtml = pages[14];
+    const modelingPolicyHtml = pages[15];
+    const modelingResultsHtml = pages[16];
+    const monitoringHtml = pages[17];
+    const settingsHtml = pages[18];
+    const staticAccountHtml = pages[19];
+    const newAccountHtml = pages[20];
 
     [
       ["overview", overviewHtml],
@@ -997,12 +999,17 @@ function checkFrontendAdminRender() {
     assertOk(ontologyHtml.indexOf("ontology-view") >= 0 && ontologyHtml.indexOf("Relation Control") >= 0, "관계 분석 상위 탭이 렌더링되지 않았습니다.");
     assertOk(ontologyHtml.indexOf("ontology-section-bar") >= 0 && ontologyHtml.indexOf("ontology-section-tabs") >= 0, "관계 분석 내부 섹션 탭이 렌더링되지 않았습니다.");
     assertOk(styles.indexOf(".ontology-section-tabs") >= 0 && styles.indexOf(".ontology-section-bar") >= 0, "관계 분석 내부 섹션 스타일이 정의되지 않았습니다.");
-    assertOk(ontologyHtml.indexOf('data-ontology-section="graphs"') >= 0 && ontologyHtml.indexOf('data-ontology-section="registry"') >= 0 && ontologyHtml.indexOf('data-ontology-section="trace"') >= 0, "관계 분석 내부 섹션 이동 버튼이 없습니다.");
+    assertOk(ontologyHtml.indexOf('data-ontology-section="structure"') >= 0 && ontologyHtml.indexOf('data-ontology-section="graphs"') >= 0 && ontologyHtml.indexOf('data-ontology-section="registry"') >= 0 && ontologyHtml.indexOf('data-ontology-section="trace"') >= 0, "관계 분석 내부 섹션 이동 버튼이 없습니다.");
     assertOk(ontologyHtml.indexOf("규칙 분류") >= 0 && ontologyHtml.indexOf("현재 데이터") >= 0, "관계 분석 탭에 규칙/현재 데이터 요약이 없습니다.");
     assertOk(ontologyHtml.indexOf("ontology-control-strip") >= 0 && ontologyHtml.indexOf("관계 매트릭스") >= 0 && ontologyHtml.indexOf("relation-matrix") >= 0, "관계 분석 탭에 추론 순서나 관계 매트릭스가 없습니다.");
-    assertOk(ontologyHtml.indexOf("규칙 구조 관계 그래프") < 0 && ontologyHtml.indexOf("Relation Rule Registry") < 0 && ontologyHtml.indexOf("테이블 저장 구조") < 0, "관계 분석 개요 탭에 상세 그래프/레지스트리/추적 패널이 섞여 있습니다.");
+    assertOk(ontologyHtml.indexOf("규칙 구조 관계 그래프") < 0 && ontologyHtml.indexOf("전체 구조 맵") < 0 && ontologyHtml.indexOf("Relation Rule Registry") < 0 && ontologyHtml.indexOf("테이블 저장 구조") < 0, "관계 분석 개요 탭에 상세 그래프/구조/레지스트리/추적 패널이 섞여 있습니다.");
+    assertOk(ontologyStructureHtml.indexOf("관계 분석 전체 구조") >= 0 && ontologyStructureHtml.indexOf("전체 구조 맵") >= 0 && ontologyStructureHtml.indexOf("TBox 규칙 구조") >= 0 && ontologyStructureHtml.indexOf("ABox 현재 데이터") >= 0, "관계 분석 전체 구조 화면이 렌더링되지 않았습니다.");
+    assertOk(ontologyStructureHtml.indexOf("ontology-structure-map") >= 0 && ontologyStructureHtml.indexOf("ontology-structure-health") >= 0 && ontologyStructureHtml.indexOf("ontology-structure-navigation") >= 0, "관계 분석 전체 구조 화면에 구조 지도/상태/바로가기가 없습니다.");
+    assertOk(ontologyStructureHtml.indexOf('data-ontology-section="graphs"') >= 0 && ontologyStructureHtml.indexOf("그래프 보기") >= 0, "전체 구조 화면에서 관계 그래프로 이동할 수 없습니다.");
     assertOk(ontologyGraphHtml.indexOf("규칙 구조 관계 그래프") >= 0 && ontologyGraphHtml.indexOf("현재 데이터 관계 그래프") >= 0 && ontologyGraphHtml.indexOf("ontology-cytoscape") >= 0, "관계 분석 그래프 섹션이 렌더링되지 않았습니다.");
     assertOk(ontologyGraphHtml.indexOf("규칙 구조") >= 0 && ontologyGraphHtml.indexOf("현재 데이터") >= 0, "관계 분석 그래프 섹션에 규칙/현재 데이터 보조 패널이 없습니다.");
+    assertOk(/\.ontology-relationship-graphs\s*\{[\s\S]*grid-template-columns: 1fr;/.test(styles), "관계 분석 그래프가 전폭 1열 구조로 정의되지 않았습니다.");
+    assertOk(styles.indexOf(".ontology-structure-map") >= 0 && styles.indexOf(".ontology-structure-flow") >= 0, "관계 분석 전체 구조 화면 스타일이 정의되지 않았습니다.");
     assertOk(code.indexOf("ontologyEntityDisplayLabel") >= 0 && code.indexOf('"의견 " + displayName') >= 0, "현재 데이터 관계 그래프 노드가 회사명 표시명을 거치지 않습니다.");
     assertOk(code.indexOf("properties.symbol || entity.label") < 0 && code.indexOf('"의견 " + symbol') < 0, "현재 데이터 관계 그래프 노드 라벨에 종목코드 우선 경로가 남아 있습니다.");
     assertOk(ontologyRegistryHtml.indexOf("ontology-rule-panel") >= 0 && ontologyRegistryHtml.indexOf("Relation Rule Registry") >= 0, "관계 규칙·프롬프트 섹션에 관계 규칙 레지스트리가 없습니다.");

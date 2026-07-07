@@ -422,6 +422,7 @@
   ];
   var ontologySections = [
     { id: "overview", label: "개요", description: "요약·상태" },
+    { id: "structure", label: "전체 구조", description: "흐름 지도" },
     { id: "graphs", label: "관계 그래프", description: "규칙·현재 데이터" },
     { id: "registry", label: "규칙·프롬프트", description: "런타임 관리" },
     { id: "trace", label: "관계 추적", description: "행·룰 검증" }
@@ -9121,6 +9122,25 @@
     var entityLabels = ontologyEntityLabelMap(entities);
     var items = (decision.items || []).filter(function (item) { return item.ontologyOpinion; });
     var section = normalizeOntologySection(state.activeOntologySection);
+    if (section === "structure") {
+      return [
+        '<article class="panel ontology-panel ontology-structure-panel">',
+        '<div class="panel-head">',
+        '<div>',
+        '<p class="label">Structure Map</p>',
+        '<h2>관계 분석 전체 구조</h2>',
+        '</div>',
+        '<span class="metric">' + escapeHtml((tbox.classes || []).length + aboxEntities.length + aboxRelations.length) + '</span>',
+        '</div>',
+        '<div class="ontology-dashboard ontology-structure-dashboard">',
+        renderOntologyStructureMap(tbox, abox, aboxRelations, evidence, beliefs, opinions),
+        renderOntologyStructureHealth(tbox, abox, aboxRelations, evidence, beliefs, opinions),
+        renderOntologyRelationMatrixPanel(tbox, relationCounts),
+        renderOntologyStructureNavigation(),
+        '</div>',
+        '</article>'
+      ].join("");
+    }
     if (section === "graphs") {
       return [
         '<article class="panel ontology-panel">',
@@ -9244,6 +9264,120 @@
       '<span>' + escapeHtml(active ? "ABox linked" : "schema only") + '</span>',
       '<em>' + escapeHtml(count) + '</em>',
       '</div>'
+    ].join("");
+  }
+
+  function renderOntologyStructureMap(tbox, abox, relations, evidence, beliefs, opinions) {
+    var nodes = [
+      {
+        tone: "schema",
+        title: "TBox 규칙 구조",
+        meta: (tbox.classes || []).length + " 분류 · " + (tbox.relationTypes || []).length + " 관계 타입",
+        copy: "포트폴리오, 종목, 근거, 판단 근거, AI 의견이 어떤 타입으로 연결될 수 있는지 정의합니다."
+      },
+      {
+        tone: "assertion",
+        title: "ABox 현재 데이터",
+        meta: (abox.entityCount || 0) + " 데이터 · " + (abox.relationCount || relations.length || 0) + " 관계",
+        copy: "실제 보유·관심 종목, 계좌, 업종, 시장 같은 현재 실행 데이터를 행 단위로 담습니다."
+      },
+      {
+        tone: "relation",
+        title: "관계 매트릭스",
+        meta: relations.length + " runtime rows",
+        copy: "규칙 구조에 있는 relation type이 현재 데이터에서 실제로 몇 번 쓰였는지 비교합니다."
+      },
+      {
+        tone: "evidence",
+        title: "근거와 판단 근거",
+        meta: evidence.length + " 근거 · " + beliefs.length + " 판단 근거",
+        copy: "가격, 추세, 수급, 데이터 품질이 규칙을 통과하며 위험·기회 판단 근거로 바뀝니다."
+      },
+      {
+        tone: "opinion",
+        title: "AI 의견",
+        meta: opinions.length + " 의견",
+        copy: "규칙으로 정리된 관계 컨텍스트를 AI 프롬프트에 전달해 종목별 판단 문장으로 만듭니다."
+      }
+    ];
+    return [
+      '<section class="ontology-structure-map" aria-label="관계 분석 전체 구조 맵">',
+      '<div class="ontology-surface-head">',
+      '<strong>전체 구조 맵</strong>',
+      '<span>규칙 구조에서 현재 데이터와 AI 의견까지 이어지는 처리 흐름</span>',
+      '</div>',
+      '<div class="ontology-structure-flow">',
+      nodes.map(renderOntologyStructureNode).join(""),
+      '</div>',
+      '</section>'
+    ].join("");
+  }
+
+  function renderOntologyStructureNode(node, index) {
+    return [
+      '<div class="ontology-structure-node ' + escapeHtml(node.tone || "schema") + '">',
+      '<b>' + escapeHtml(String(index + 1).padStart(2, "0")) + '</b>',
+      '<strong>' + escapeHtml(node.title) + '</strong>',
+      '<em>' + escapeHtml(node.meta) + '</em>',
+      '<span>' + escapeHtml(node.copy) + '</span>',
+      '</div>'
+    ].join("");
+  }
+
+  function renderOntologyStructureHealth(tbox, abox, relations, evidence, beliefs, opinions) {
+    var rows = [
+      ["규칙 분류", (tbox.classes || []).length, "TBox"],
+      ["관계 타입", (tbox.relationTypes || []).length, "TBox"],
+      ["현재 데이터", abox.entityCount || 0, "ABox"],
+      ["현재 관계", abox.relationCount || relations.length || 0, "ABox"],
+      ["근거", evidence.length, "Evidence"],
+      ["판단 근거", beliefs.length, "Belief"],
+      ["AI 의견", opinions.length, "Output"]
+    ];
+    return [
+      '<section class="ontology-surface ontology-structure-health">',
+      '<div class="ontology-surface-head">',
+      '<strong>구조 상태</strong>',
+      '<span>전체 구조를 이루는 핵심 행 수</span>',
+      '</div>',
+      '<div class="ontology-structure-health-grid">',
+      rows.map(function (row) {
+        return [
+          '<div class="ontology-structure-health-row">',
+          '<span>' + escapeHtml(row[2]) + '</span>',
+          '<strong>' + escapeHtml(row[0]) + '</strong>',
+          '<em>' + escapeHtml(row[1]) + '</em>',
+          '</div>'
+        ].join("");
+      }).join(""),
+      '</div>',
+      '</section>'
+    ].join("");
+  }
+
+  function renderOntologyStructureNavigation() {
+    var links = [
+      ["graphs", "그래프 보기", "규칙 구조와 현재 데이터 그래프를 전폭으로 확인"],
+      ["registry", "규칙·프롬프트", "관계 규칙과 AI 프롬프트 원문 관리"],
+      ["trace", "관계 추적", "테이블 저장 구조와 규칙별 산출 행 검증"]
+    ];
+    return [
+      '<section class="ontology-surface ontology-structure-navigation">',
+      '<div class="ontology-surface-head">',
+      '<strong>다음 확인 경로</strong>',
+      '<span>전체 구조에서 필요한 상세 화면으로 바로 이동</span>',
+      '</div>',
+      '<div class="ontology-structure-link-grid">',
+      links.map(function (link) {
+        return [
+          '<button class="text-button" type="button" data-ontology-section="' + escapeHtml(link[0]) + '">',
+          '<strong>' + escapeHtml(link[1]) + '</strong>',
+          '<span>' + escapeHtml(link[2]) + '</span>',
+          '</button>'
+        ].join("");
+      }).join(""),
+      '</div>',
+      '</section>'
     ].join("");
   }
 

@@ -458,6 +458,71 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(1, provider.diagnostics["live"])
         self.assertIn("/uapi/domestic-stock/v1/quotations/inquire-ccnl", calls)
 
+    def test_kis_market_signal_provider_refreshes_fresh_cache_without_investor_flow(self):
+        db_path = Path(self.temp.name) / "service.db"
+        cache = SQLiteMarketQuoteCache(db_path)
+        cache.save(KIS_CACHE_PROVIDER, KIS_CACHE_ACCOUNT_ID, "035420", {
+            "symbol": "035420",
+            "name": "NAVER",
+            "market": "KR",
+            "currency": "KRW",
+            "currentPrice": 200000,
+            "tradeStrength": 87.3,
+            "orderbookBidVolume": 1178,
+            "orderbookAskVolume": 883,
+            "bidAskImbalance": 14.3,
+            "quoteSource": "KIS Open API",
+            "quoteStatus": "KIS 현재가, 체결강도, 호가 잔량 반영",
+            "quoteMessage": "partial",
+            "dataQuality": "actual",
+            "updatedAt": utc_now_iso(),
+        })
+        calls = []
+
+        def fake_fetch_json(method, url, headers=None, body=None, query=None, timeout=12):
+            path = urllib.parse.urlparse(url).path
+            calls.append(path)
+            if path.endswith("/oauth2/tokenP"):
+                return {"access_token": "kis-token"}
+            if path.endswith("/inquire-price"):
+                return {"rt_cd": "0", "output": {"stck_prpr": "201000", "acml_vol": "1026999"}}
+            if path.endswith("/inquire-ccnl"):
+                return {"rt_cd": "0", "output": [{"stck_prpr": "201000", "tday_rltv": "88.3", "cntg_vol": "100"}]}
+            if path.endswith("/inquire-investor"):
+                return {"rt_cd": "0", "output": [{
+                    "frgn_ntby_qty": "243601",
+                    "orgn_ntby_qty": "67401",
+                    "prsn_ntby_qty": "-304684",
+                }]}
+            if path.endswith("/inquire-asking-price-exp-ccn"):
+                return {"rt_cd": "0", "output1": {"total_bidp_rsqn": "1200", "total_askp_rsqn": "900"}}
+            return {"rt_cd": "0", "output": {}}
+
+        provider = KISMarketSignalProvider(
+            settings={
+                "kisBaseUrl": "https://kis.example.test",
+                "kisAppKey": "app-key",
+                "kisAppSecret": "app-secret",
+                "kisMarketSignalsEnabled": "1",
+                "kisMarketSignalCacheMinutes": "10",
+                "kisMarketSignalGapSeconds": "0",
+                "externalApiRetryAttempts": "1",
+            },
+            quote_cache=cache,
+            fetch_json=fake_fetch_json,
+            sleep=lambda _seconds: None,
+        )
+        naver = normalize_position({"symbol": "035420", "name": "NAVER", "market": "KR", "currency": "KRW"})
+
+        positions, _watchlist = provider.enrich_collections([naver], [])
+
+        self.assertEqual(243601, positions[0].foreign_net_volume)
+        self.assertEqual(67401, positions[0].institution_net_volume)
+        self.assertEqual(-304684, positions[0].individual_net_volume)
+        self.assertEqual(1, provider.diagnostics["partialCached"])
+        self.assertEqual(1, provider.diagnostics["live"])
+        self.assertIn("/uapi/domestic-stock/v1/quotations/inquire-investor", calls)
+
     def test_kis_merge_recomputes_moving_average_distance_after_price_update(self):
         provider = KISMarketSignalProvider(settings={"kisMarketSignalsEnabled": "0"})
         position = normalize_position({

@@ -25,18 +25,33 @@ DETAIL_SIGNAL_KEYS = [
     "sellVolume",
     "foreignBuyVolume",
     "foreignSellVolume",
+    "foreignNetVolume",
+    "foreignNetAmount",
     "institutionBuyVolume",
     "institutionSellVolume",
+    "institutionNetVolume",
+    "institutionNetAmount",
     "individualBuyVolume",
     "individualSellVolume",
-            "institutionNetVolume",
-            "individualNetVolume",
-            "foreignNetAmount",
-            "institutionNetAmount",
-            "individualNetAmount",
-            "orderbookBidVolume",
-            "orderbookAskVolume",
-            "bidAskImbalance",
+    "individualNetVolume",
+    "individualNetAmount",
+    "orderbookBidVolume",
+    "orderbookAskVolume",
+    "bidAskImbalance",
+]
+INVESTOR_SIGNAL_KEYS = [
+    "foreignBuyVolume",
+    "foreignSellVolume",
+    "foreignNetVolume",
+    "foreignNetAmount",
+    "institutionBuyVolume",
+    "institutionSellVolume",
+    "institutionNetVolume",
+    "institutionNetAmount",
+    "individualBuyVolume",
+    "individualSellVolume",
+    "individualNetVolume",
+    "individualNetAmount",
 ]
 
 JsonFetcher = Callable[[str, str, Dict[str, str], Optional[Dict[str, object]], Optional[Dict[str, str]], int], Dict[str, object]]
@@ -331,7 +346,9 @@ class KISMarketSignalProvider:
     def is_signal_complete(self, payload: Dict[str, object]) -> bool:
         if not payload:
             return False
-        return any(key in payload and payload.get(key) not in (None, "") for key in DETAIL_SIGNAL_KEYS)
+        has_detail = any(key in payload and payload.get(key) not in (None, "") for key in DETAIL_SIGNAL_KEYS)
+        has_investor = any(key in payload and payload.get(key) not in (None, "") for key in INVESTOR_SIGNAL_KEYS)
+        return has_detail and has_investor
 
     def save_signal(self, symbol: str, payload: Dict[str, object]) -> None:
         try:
@@ -392,13 +409,14 @@ class KISMarketSignalProvider:
         if any(signal.get(key) is not None for key in [
             "foreignBuyVolume",
             "foreignSellVolume",
+            "foreignNetVolume",
+            "foreignNetAmount",
             "institutionBuyVolume",
             "institutionSellVolume",
             "individualBuyVolume",
             "individualSellVolume",
             "institutionNetVolume",
             "individualNetVolume",
-            "foreignNetAmount",
             "institutionNetAmount",
             "individualNetAmount",
         ]):

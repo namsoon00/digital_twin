@@ -390,6 +390,61 @@
     { key: "externalDartDisclosure", group: "외부 API", label: "국내 공시", description: "OpenDART에서 보유 국내 종목의 신규 공시가 감지될 때" },
     { key: "externalDataConnection", group: "외부 API", label: "외부 API 연결", description: "외부 데이터 API 키, 한도, 응답 오류가 감지될 때" }
   ];
+  var notificationTypeEmojis = {
+    default: "🔔",
+    priceBuyLimit: "🟢",
+    priceStop: "🛡️",
+    priceTrim: "💰",
+    modelBuy: "🟢",
+    modelSell: "🔴",
+    watchlistBuyCandidate: "👀",
+    modelScoreGap: "⚖️",
+    modelVersionDrift: "🧪",
+    flowVolume: "📊",
+    flowBuyShare: "🟢",
+    flowSellShare: "🔴",
+    flowOrderbook: "⚖️",
+    trendMomentum: "📈",
+    trendPullback: "📉",
+    holdingProfit: "💰",
+    holdingLoss: "🛡️",
+    holdingConcentration: "📦",
+    sectorConcentration: "🏭",
+    marketCashLow: "💵",
+    recordGain: "📈",
+    recordLoss: "📉",
+    dataFreshness: "🕒",
+    tossConnection: "🔌",
+    orderPending: "⏳",
+    orderReject: "⛔",
+    watchlistQuote: "👀",
+    watchlistQuotePending: "⏳",
+    holdingTiming: "⚖️",
+    monitorHeartbeat: "💓",
+    monitorConnection: "🔌",
+    monitorPositionChange: "📦",
+    monitorPnlChange: "📊",
+    monitorValueChange: "💵",
+    monitorTrendChange: "📈",
+    monitorCashChange: "💵",
+    monitorDecisionChange: "🔁",
+    externalEquityMove: "🇺🇸",
+    externalCryptoMove: "🪙",
+    externalMacroShift: "🏦",
+    externalDartDisclosure: "📄",
+    externalDataConnection: "🛰️",
+    modelReview: "🧠",
+    workHandoff: "✅",
+    notification: "🔔"
+  };
+  function notificationMessageTypeIcon(type) {
+    return notificationTypeEmojis[type] || "🔔";
+  }
+  function labelWithNotificationIcon(type, label) {
+    var icon = notificationMessageTypeIcon(type);
+    var text = String(label || type || "").trim();
+    return [icon, text].filter(Boolean).join(" ");
+  }
   var alertThresholdCatalog = [
     { key: "modelBuyScore", label: "모델 매수 점수", unit: "점", step: "1" },
     { key: "modelSellScore", label: "모델 매도 점수", unit: "점", step: "1" },
@@ -2005,6 +2060,38 @@
       var match = text.match(/[-+]?\d+(?:\.\d+)?%/);
       return match ? match[0] : text;
     }
+    function notificationTitleIcon(type, rawItems, sample) {
+      var status = dataValue(rawItems, "상태");
+      var profit = dataValue(rawItems, "손익");
+      var change = dataValue(rawItems, "변화");
+      var signal = dataValue(rawItems, "신호");
+      var titleText = String(sample && sample.title || "");
+      if (type === "modelBuy" || type === "watchlistBuyCandidate") return "🟢";
+      if (type === "modelSell") return "🔴";
+      if (type === "holdingTiming") {
+        var statusBlob = [status, profit, titleText].join(" ");
+        if (/분할|익절|수익/.test(statusBlob)) return "💰";
+        if (/손절|손실/.test(statusBlob) || signedDirection(profit) < 0) return "🛡️";
+        return "⚖️";
+      }
+      if (type === "monitorPnlChange") {
+        var pnlDirection = dominantSignedDirection(change);
+        return pnlDirection > 0 ? "📈" : pnlDirection < 0 ? "📉" : "📊";
+      }
+      if (type === "monitorValueChange") return dominantSignedDirection(change) < 0 ? "💸" : "💵";
+      if (type === "monitorTrendChange") {
+        if (signal.indexOf("하향") >= 0 || signal.indexOf("이탈") >= 0) return "📉";
+        if (signal.indexOf("상향") >= 0 || signal.indexOf("돌파") >= 0) return "📈";
+        return "📊";
+      }
+      if (type === "monitorDecisionChange") {
+        var current = dataValue(rawItems, "현재");
+        if (/손절|손실/.test(current)) return "🛡️";
+        if (/분할|익절|수익/.test(current)) return "💰";
+        return "🔁";
+      }
+      return notificationMessageTypeIcon(type);
+    }
     function notificationTitleHeadline(type, rawItems, sample, fallback) {
       var status = dataValue(rawItems, "상태");
       var profit = dataValue(rawItems, "손익");
@@ -2336,8 +2423,9 @@
     var criterionLines = criterionLinesForSample(sample, type, triggerSummary, rawItems);
     var dataLines = lines;
     var statusHeadline = severityLabel ? "[" + severityLabel + "]" : "";
+    var titleIcon = notificationTitleIcon(type, rawItems, sample);
     var titleHeadline = notificationTitleHeadline(type, rawItems, sample, messageTypeLabel || sample.title);
-    var headline = [statusHeadline, titleHeadline].filter(Boolean).join(" ");
+    var headline = [statusHeadline, titleIcon, titleHeadline].filter(Boolean).join(" ");
     var targetValue = sample.title || displaySymbol || "";
     if (displaySymbol && sample.symbol && targetValue.toUpperCase() === String(sample.symbol || "").toUpperCase()) {
       targetValue = displaySymbol;
@@ -2399,6 +2487,7 @@
       symbolDisplayName: displaySymbol,
       headline: headline,
       statusHeadline: statusHeadline,
+      titleIcon: titleIcon,
       titleHeadline: titleHeadline,
       targetLine: targetLine,
       triggerBlock: triggerBlock,
@@ -7241,7 +7330,7 @@
       '<div class="admin-message-row ' + (active ? "active" : "collapsed") + '">',
       '<input id="' + escapeHtml(ruleId) + '" type="checkbox" data-alert-rule="' + escapeHtml(rule.key) + '"' + (checked ? " checked" : "") + ' />',
       '<label class="admin-message-main" for="' + escapeHtml(ruleId) + '">',
-      '<strong>' + escapeHtml(rule.label) + '</strong>',
+      '<strong>' + escapeHtml(labelWithNotificationIcon(rule.key, rule.label)) + '</strong>',
       '<em>' + escapeHtml(rule.group + " · " + rule.description) + '</em>',
       '</label>',
       '<span class="admin-cadence-field">',
@@ -7278,7 +7367,7 @@
       '<div class="notification-policy-detail-head">',
       '<div>',
       '<p class="label">Selected Policy</p>',
-      '<h3>' + escapeHtml(rule.label) + '</h3>',
+      '<h3>' + escapeHtml(labelWithNotificationIcon(rule.key, rule.label)) + '</h3>',
       '<span>' + escapeHtml(rule.group + " · " + rule.description) + '</span>',
       '</div>',
       '<span class="tone-chip ' + escapeHtml(scheduleStatusClass(schedule)) + '">' + escapeHtml(scheduleStatusLabel(schedule)) + '</span>',
@@ -7424,7 +7513,7 @@
       '<div class="notification-decision-row">',
       '<div class="notification-decision-top">',
       '<span class="tone-chip ' + escapeHtml(notificationJobToneClass(job.status)) + '">' + escapeHtml(notificationJobStatusLabel(job.status)) + '</span>',
-      '<strong>' + escapeHtml(job.messageTypeLabel || job.messageType || "-") + '</strong>',
+      '<strong>' + escapeHtml(labelWithNotificationIcon(job.messageType, job.messageTypeLabel || job.messageType || "-")) + '</strong>',
       '<span>' + escapeHtml(formatClock(job.createdAt)) + '</span>',
       '</div>',
       '<div class="notification-decision-target">' + escapeHtml(target || job.messageType || "-") + '</div>',
@@ -7777,7 +7866,7 @@
     var kind = isAlertTemplateType(item.messageType) ? "알림" : "시스템";
     return [
       '<button type="button" class="notification-template-select-row' + (editing ? " active" : "") + '" data-template-select="' + escapeHtml(item.messageType || "") + '" aria-pressed="' + escapeHtml(editing ? "true" : "false") + '">',
-      '<span><strong>' + escapeHtml(notificationTemplateLabel(item.messageType)) + '</strong><em>' + escapeHtml(kind + " · " + (item.messageType || "-")) + '</em></span>',
+      '<span><strong>' + escapeHtml(labelWithNotificationIcon(item.messageType, notificationTemplateLabel(item.messageType))) + '</strong><em>' + escapeHtml(kind + " · " + (item.messageType || "-")) + '</em></span>',
       '<b>' + escapeHtml(editing ? "편집 중" : "수정") + '</b>',
       '</button>'
     ].join("");
@@ -7791,7 +7880,7 @@
       '<div class="notification-template-modal-head">',
       '<div>',
       '<p class="label">' + escapeHtml(isAlertTemplateType(selected.messageType) ? "Alert Template" : "System Template") + '</p>',
-      '<h2>' + escapeHtml(notificationTemplateLabel(selected.messageType)) + '</h2>',
+      '<h2>' + escapeHtml(labelWithNotificationIcon(selected.messageType, notificationTemplateLabel(selected.messageType))) + '</h2>',
       '<span>' + escapeHtml(selected.messageType || "-") + (selected.description ? " · " + selected.description : "") + '</span>',
       '</div>',
       '<button class="icon-button" type="button" data-notification-template-editor-close aria-label="템플릿 편집 닫기">&times;</button>',

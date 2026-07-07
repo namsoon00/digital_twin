@@ -41,7 +41,7 @@ from ..domain.events import (
     SYMBOL_UNIVERSE_REFRESHED,
     DomainEvent,
 )
-from ..domain.message_types import DEFAULT_ALERT_RULES, DEFAULT_CADENCE
+from ..domain.message_types import DEFAULT_ALERT_RULES, DEFAULT_CADENCE, MESSAGE_TYPE_EMOJIS
 from ..domain.market_hours import DEFAULT_MARKET_HOUR_SESSIONS
 from ..domain.monitoring import RealtimeMonitor
 from ..domain.notification_rules import CONDITION_TYPE_LABELS, DEFAULT_HONEY_THRESHOLD, NotificationRuleConfig
@@ -508,6 +508,7 @@ def notification_job_public_payload(job: NotificationJob) -> Dict[str, object]:
         "jobId": job.job_id,
         "messageType": job.message_type,
         "messageTypeLabel": MESSAGE_TYPE_LABELS.get(job.message_type, job.message_type),
+        "messageTypeIcon": MESSAGE_TYPE_EMOJIS.get(job.message_type, "🔔"),
         "status": job.status,
         "accountId": job.account_id,
         "accountLabel": job.account_label,
@@ -648,6 +649,7 @@ def notification_schedules_payload() -> Dict[str, object]:
         schedules.append({
             "messageType": message_type,
             "label": MESSAGE_TYPE_LABELS.get(message_type, message_type),
+            "icon": MESSAGE_TYPE_EMOJIS.get(message_type, "🔔"),
             "enabled": enabled,
             "status": status,
             "cadenceMinutes": max(10, minutes) if minutes else 0,

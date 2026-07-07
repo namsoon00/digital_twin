@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, List
 
 from .alert_formatting import signed_pct
-from .message_types import MESSAGE_TYPE_LABELS, TRIGGER_SUMMARIES
+from .message_types import MESSAGE_TYPE_EMOJIS, MESSAGE_TYPE_LABELS, TRIGGER_SUMMARIES
 from .portfolio import AlertEvent
 from .scoring import notification_signal_labels
 
@@ -424,6 +424,47 @@ def percent_text(value: str) -> str:
     text = str(value or "").strip()
     match = re.search(r"[-+]?\d+(?:\.\d+)?%", text)
     return match.group(0) if match else text
+
+
+def notification_title_icon(rule: str, raw_lines: List[str], event: AlertEvent) -> str:
+    key = str(rule or "")
+    status = data_value(raw_lines, "상태")
+    profit = data_value(raw_lines, "손익")
+    change = data_value(raw_lines, "변화")
+    signal = data_value(raw_lines, "신호")
+    title_text = str(getattr(event, "title", "") or "")
+
+    if key in {"modelBuy", "watchlistBuyCandidate"}:
+        return "🟢"
+    if key == "modelSell":
+        return "🔴"
+    if key == "holdingTiming":
+        status_blob = " ".join([status, profit, title_text]).strip()
+        if any(term in status_blob for term in ["분할", "익절", "수익"]):
+            return "💰"
+        if any(term in status_blob for term in ["손절", "손실"]) or signed_direction(profit) < 0:
+            return "🛡️"
+        return "⚖️"
+    if key == "monitorPnlChange":
+        return "📈" if dominant_signed_direction(change) > 0 else "📉" if dominant_signed_direction(change) < 0 else "📊"
+    if key == "monitorValueChange":
+        return "💵" if dominant_signed_direction(change) >= 0 else "💸"
+    if key == "monitorTrendChange":
+        if "하향" in signal or "이탈" in signal:
+            return "📉"
+        if "상향" in signal or "돌파" in signal:
+            return "📈"
+        return "📊"
+    if key == "monitorDecisionChange":
+        current = data_value(raw_lines, "현재")
+        if any(term in current for term in ["손절", "손실"]):
+            return "🛡️"
+        if any(term in current for term in ["분할", "익절", "수익"]):
+            return "💰"
+        return "🔁"
+    if key == "externalCryptoMove":
+        return "🪙"
+    return MESSAGE_TYPE_EMOJIS.get(key, "🔔")
 
 
 def notification_title_headline(rule: str, raw_lines: List[str], event: AlertEvent, fallback: str) -> str:
@@ -863,8 +904,9 @@ def alert_context(event: AlertEvent) -> Dict[str, object]:
     trigger_line = ("발생 조건: " + trigger_summary) if trigger_summary else ""
     data_lines = lines
     status_headline = ("[" + severity_label + "]") if severity_label else ""
+    title_icon = notification_title_icon(event.rule, raw_lines, event)
     title_headline = notification_title_headline(event.rule, raw_lines, event, message_type_label or event.title)
-    headline = " ".join(part for part in [status_headline, title_headline] if part)
+    headline = " ".join(part for part in [status_headline, title_icon, title_headline] if part)
     target_value = target_display_value(event.title, raw_symbol, display_symbol)
     target_line = "대상: " + target_value if target_value else ""
     criteria = event_criterion_lines(event, raw_lines, trigger_summary)
@@ -940,6 +982,7 @@ def alert_context(event: AlertEvent) -> Dict[str, object]:
         "triggerSummary": trigger_summary,
         "headline": headline,
         "statusHeadline": status_headline,
+        "titleIcon": title_icon,
         "titleHeadline": title_headline,
         "targetLine": target_line,
         "triggerBlock": trigger_block,
@@ -1559,6 +1602,7 @@ def template_variables() -> List[str]:
         "triggerSummary",
         "headline",
         "statusHeadline",
+        "titleIcon",
         "titleHeadline",
         "targetLine",
         "triggerBlock",

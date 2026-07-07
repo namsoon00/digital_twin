@@ -26,7 +26,7 @@ from digital_twin.cli import preserve_existing_secrets
 from digital_twin.cli import build_parser
 from digital_twin.domain.accounts import AccountConfig
 from digital_twin.domain.market_data import normalize_position, technical_indicators_from_candles
-from digital_twin.domain.message_types import DEFAULT_ALERT_RULES, DEFAULT_CADENCE, MESSAGE_TYPE_LABELS, public_message_catalog
+from digital_twin.domain.message_types import DEFAULT_ALERT_RULES, DEFAULT_CADENCE, MESSAGE_TYPE_EMOJIS, MESSAGE_TYPE_LABELS, public_message_catalog
 from digital_twin.domain.ontology import build_portfolio_ontology
 from digital_twin.domain.ontology_rules import evaluate_position_relation_rules
 from digital_twin.domain.portfolio_calculations import portfolio_summary
@@ -2069,6 +2069,9 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("관심종목 매수 후보", MESSAGE_TYPE_LABELS["watchlistBuyCandidate"])
         self.assertEqual(10, catalog["modelBuy"]["cadenceMinutes"])
         self.assertEqual(10, catalog["watchlistBuyCandidate"]["cadenceMinutes"])
+        self.assertEqual("🟢", catalog["modelBuy"]["icon"])
+        self.assertEqual("🧠", MESSAGE_TYPE_EMOJIS["modelReview"])
+        self.assertTrue(all(item.get("icon") for item in catalog.values()))
         self.assertTrue(catalog["modelBuy"]["monitoring"])
         self.assertTrue(catalog["watchlistBuyCandidate"]["monitoring"])
         self.assertTrue(catalog["workHandoff"]["system"])
@@ -2332,7 +2335,7 @@ class PythonServiceTests(unittest.TestCase):
         db_path = Path(self.temp.name) / "service.db"
         templates = SQLiteNotificationTemplateStore(db_path)
         message = templates.render(event.rule, alert_context(event))
-        self.assertIn("<b>[관찰] 크립토 가격 급등</b>", message)
+        self.assertIn("<b>[관찰] 🪙 크립토 가격 급등</b>", message)
         self.assertNotIn("크립토 가격 급락", message)
         self.assertIn("관계 규칙", message)
         self.assertIn("크립토 급변", message)
@@ -3893,7 +3896,7 @@ class PythonServiceTests(unittest.TestCase):
 
         self.assertIn("Apple", message)
         self.assertNotIn("━━━━━━━━", message)
-        self.assertIn("<b>[관찰] 이동평균 상향 신호</b>", message)
+        self.assertIn("<b>[관찰] 📈 이동평균 상향 신호</b>", message)
         self.assertIn("<code>Apple / AAPL</code>", message)
         self.assertIn("<b>발송 기준</b>", message)
         self.assertIn("<b>데이터</b>", message)
@@ -3925,7 +3928,7 @@ class PythonServiceTests(unittest.TestCase):
 
         message = templates.render(event.rule, alert_context(event))
 
-        self.assertIn("<b>[주의] 미장 가격 급락</b>\n<code>Tesla / TSLA</code>", message)
+        self.assertIn("<b>[주의] 🇺🇸 미장 가격 급락</b>\n<code>Tesla / TSLA</code>", message)
         self.assertNotIn("<code>TSLA</code>", message)
         self.assertNotIn("━━━━━━━━", message)
         self.assertIn("• <b>미장 가격 변동</b>: <code>-7.5%</code>, <b>가격</b>: <code>$393.45</code>", message)
@@ -3956,7 +3959,7 @@ class PythonServiceTests(unittest.TestCase):
 
         message = templates.render(event.rule, alert_context(event))
 
-        self.assertIn("<b>[주의] 수익 +18.5%: 분할매도 기준 확인</b>", message)
+        self.assertIn("<b>[주의] 💰 수익 +18.5%: 분할매도 기준 확인</b>", message)
         self.assertNotIn("<b>[주의] 보유 타이밍</b>", message)
 
     def test_external_crypto_alert_orders_bitcoin_price_and_trading_value(self):
@@ -4020,7 +4023,7 @@ class PythonServiceTests(unittest.TestCase):
 
         message = templates.render(event.rule, alert_context(event))
 
-        self.assertIn("<b>[주의] 크립토 가격 급등</b>", message)
+        self.assertIn("<b>[주의] 🪙 크립토 가격 급등</b>", message)
         self.assertNotIn("<b>[주의] 크립토 가격 급락</b>", message)
         self.assertIn("• <b>크립토 변동</b>: <code>24h -0.1% · 7d +11.8%</code>", message)
 
@@ -4292,6 +4295,7 @@ class PythonServiceTests(unittest.TestCase):
         schedule = next(item for item in payload["schedules"] if item["messageType"] == "monitorHeartbeat")
 
         self.assertTrue(schedule["enabled"])
+        self.assertEqual("💓", schedule["icon"])
         self.assertEqual(10, schedule["cadenceMinutes"])
         self.assertTrue(schedule["lastSentAt"])
         self.assertTrue(schedule["nextEligibleAt"])

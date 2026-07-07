@@ -145,6 +145,32 @@ MESSAGE_TYPE_LABELS = {
     EXTERNAL_DATA_CONNECTION: "외부 데이터 연결",
 }
 
+MESSAGE_TYPE_EMOJIS = {
+    DEFAULT_MESSAGE: "🔔",
+    MODEL_BUY: "🟢",
+    MODEL_SELL: "🔴",
+    WATCHLIST_BUY_CANDIDATE: "👀",
+    WATCHLIST_QUOTE: "👀",
+    WATCHLIST_QUOTE_PENDING: "⏳",
+    HOLDING_TIMING: "⚖️",
+    MONITOR_HEARTBEAT: "💓",
+    MONITOR_CONNECTION: "🔌",
+    MONITOR_POSITION_CHANGE: "📦",
+    MONITOR_PNL_CHANGE: "📊",
+    MONITOR_VALUE_CHANGE: "💵",
+    MONITOR_TREND_CHANGE: "📈",
+    MONITOR_CASH_CHANGE: "💵",
+    MONITOR_DECISION_CHANGE: "🔁",
+    EXTERNAL_EQUITY_MOVE: "🇺🇸",
+    EXTERNAL_CRYPTO_MOVE: "🪙",
+    EXTERNAL_MACRO_SHIFT: "🏦",
+    EXTERNAL_DART_DISCLOSURE: "📄",
+    EXTERNAL_DATA_CONNECTION: "🛰️",
+    MODEL_REVIEW: "🧠",
+    WORK_HANDOFF: "✅",
+    GENERIC_NOTIFICATION: "🔔",
+}
+
 TRIGGER_SUMMARIES = {
     MODEL_BUY: "내가 정한 매수 점수가 기준값을 넘을 때 보냅니다.",
     MODEL_SELL: "내가 정한 매도 점수가 기준값을 넘을 때 보냅니다.",
@@ -191,6 +217,7 @@ def public_message_catalog() -> Dict[str, Dict[str, object]]:
     return {
         key: {
             "label": MESSAGE_TYPE_LABELS.get(key, key),
+            "icon": MESSAGE_TYPE_EMOJIS.get(key, "🔔"),
             "triggerSummary": TRIGGER_SUMMARIES.get(key, ""),
             "monitoring": key in MONITORING_MESSAGE_TYPES,
             "system": key in SYSTEM_MESSAGE_TYPES,

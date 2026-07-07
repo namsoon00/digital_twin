@@ -107,9 +107,11 @@ def build_market_data_collection_runner(settings=None, event_publisher=None) -> 
 def build_flow_lens_service(settings=None) -> FlowLensService:
     configured_settings = settings or runtime_settings()
     symbol_service = build_symbol_universe_service(configured_settings)
+    flow_lens_external_settings = dict(configured_settings)
+    flow_lens_external_settings["externalNewsEnabled"] = "0"
     return FlowLensService(
         account_repository=AccountRegistry(),
-        snapshot_builder=build_snapshot,
+        snapshot_builder=lambda account: build_snapshot(account, external_settings=flow_lens_external_settings),
         demo_positions_provider=demo_positions,
         settings_provider=lambda: configured_settings,
         fx_rates_provider=currency_rates,

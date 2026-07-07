@@ -717,12 +717,12 @@ class TossProvider:
         return watchlist, token
 
 
-def build_snapshot(account: AccountConfig) -> AccountSnapshot:
+def build_snapshot(account: AccountConfig, external_settings: Optional[Dict[str, str]] = None) -> AccountSnapshot:
     provider = TossProvider(account)
     mode, status, positions, cash, currency, watchlist = provider.fetch_positions()
     kis_provider = KISMarketSignalProvider()
     positions, watchlist = kis_provider.enrich_collections(positions, watchlist)
-    external_signals = ExternalSignalProvider().signals_for_positions(positions + watchlist)
+    external_signals = ExternalSignalProvider(settings=external_settings).signals_for_positions(positions + watchlist)
     portfolio = portfolio_summary(positions, cash, currency, currency_rates())
     decisions = decisions_for_positions(positions, portfolio, external_signals=external_signals)
     metadata = provider.diagnostics_payload()

@@ -263,7 +263,7 @@ def admin_preview_config() -> Dict[str, object]:
                     {"key": "externalFredEnabled", "label": "FRED 수집 사용", "type": "toggle", "default": "1"},
                     {"key": "opendartApiKey", "label": "OpenDART API Key", "type": "secret", "masked": True},
                     {"key": "externalDartEnabled", "label": "OpenDART 수집 사용", "type": "toggle", "default": "1"},
-                    {"key": "externalNewsEnabled", "label": "뉴스 헤드라인 수집 사용", "type": "toggle", "default": "0"},
+                    {"key": "externalNewsEnabled", "label": "뉴스 헤드라인 수집 사용", "type": "toggle", "default": "1"},
                     {"key": "externalFredSeries", "label": "FRED 지표", "type": "text"},
                     {"key": "externalCryptoIds", "label": "CoinGecko 코인 ID", "type": "text"},
                     {"key": "externalDartCorpCodes", "label": "OpenDART 종목 매핑", "type": "assignmentText"},

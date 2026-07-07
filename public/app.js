@@ -42,7 +42,7 @@
     externalSecUserAgent: "DigitalTwin/1.0 local-contact",
     externalDartEnabled: "1",
     externalDartLookbackDays: "14",
-    externalNewsEnabled: "0",
+    externalNewsEnabled: "1",
     externalNewsMaxSymbols: "3",
     externalNewsLookbackHours: "48",
     externalDartCorpCodes: [

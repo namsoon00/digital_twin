@@ -465,7 +465,7 @@ def runtime_settings() -> Dict[str, str]:
         "externalDartEnabled": value("externalDartEnabled", "EXTERNAL_DART_ENABLED", "1"),
         "externalDartLookbackDays": value("externalDartLookbackDays", "EXTERNAL_DART_LOOKBACK_DAYS", "14"),
         "externalDartCorpCodes": value("externalDartCorpCodes", "EXTERNAL_DART_CORP_CODES", "005930=00126380\n000660=00164779\n035420=00266961"),
-        "externalNewsEnabled": value("externalNewsEnabled", "EXTERNAL_NEWS_ENABLED", "0"),
+        "externalNewsEnabled": value("externalNewsEnabled", "EXTERNAL_NEWS_ENABLED", "1"),
         "externalNewsMaxSymbols": value("externalNewsMaxSymbols", "EXTERNAL_NEWS_MAX_SYMBOLS", "3"),
         "externalNewsLookbackHours": value("externalNewsLookbackHours", "EXTERNAL_NEWS_LOOKBACK_HOURS", "48"),
         "externalApiRetryAttempts": value("externalApiRetryAttempts", "EXTERNAL_API_RETRY_ATTEMPTS", "2"),

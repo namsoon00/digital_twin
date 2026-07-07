@@ -4926,7 +4926,7 @@
       "매수 체결 비중은 " + scores.buyShare + "%이고 호가 불균형은 " + formatSignalNumber(signal.bidAskImbalance, "%") + "입니다."
     ];
     if (signal.ma20 || signal.ma60) {
-      reasons.push("이동평균은 20일선 " + formatSignalNumber(signal.ma20, "") + ", 60일선 " + formatSignalNumber(signal.ma60, "") + "을 feature로 반영합니다.");
+      reasons.push("이동평균은 20일선 " + formatSignalNumber(signal.ma20, "") + ", 60일선 " + formatSignalNumber(signal.ma60, "") + "을 판단 항목으로 반영합니다.");
     }
     if (signal.foreignNet || signal.institutionNet || signal.individualNet) {
       reasons.push("투자자별 수급은 외국인 " + formatSignalVolume(signal.foreignNet) + ", 기관 " + formatSignalVolume(signal.institutionNet) + ", 개인 " + formatSignalVolume(signal.individualNet) + " 순매수로 검증합니다.");
@@ -8513,12 +8513,12 @@
       {
         label: "4. 행동",
         value: Math.round(thresholds.modelBuy || 0) + " / " + Math.round(thresholds.modelSell || 0) + "점",
-        description: "기준 근처에서는 feature 기여도와 판단 변화 가능성을 먼저 확인합니다."
+        description: "기준 근처에서는 어떤 항목이 판단을 움직였는지와 판단 변화 가능성을 먼저 확인합니다."
       }
     ];
     var steps = [
       ["기본값으로 보기", "처음에는 수식을 바꾸지 말고 모델이 어떤 종목에 신호를 내는지 확인합니다."],
-      ["기여도 확인", "점수보다 먼저 거래량, 이동평균, 가격 변화 중 무엇이 라벨을 움직였는지 봅니다."],
+      ["영향 항목 확인", "점수보다 먼저 거래량, 이동평균, 가격 변화 중 무엇이 라벨을 움직였는지 봅니다."],
       ["가중치 조정", "가치, 수급, 리스크 중 더 믿는 축만 0.1~0.5씩 천천히 바꿉니다."],
       ["판단 기준 조정", "신호가 너무 많으면 기준 점수를 올리고, 너무 적으면 조금 낮춥니다."]
     ];
@@ -10435,10 +10435,10 @@
       return [
         '<div class="model-feature-audit">',
         '<div class="feature-audit-head">',
-        '<strong>feature 재현성</strong>',
+        '<strong>재계산 확인</strong>',
         '<span class="tone-chip hold">데이터 부족</span>',
         '</div>',
-        '<div class="feature-audit-grid"><span>거래량, 이동평균, 투자자별 수급을 입력하면 같은 입력 재계산과 feature 제거 실험을 실행합니다.</span></div>',
+        '<div class="feature-audit-grid"><span>거래량, 이동평균, 투자자별 수급을 입력하면 같은 입력으로 다시 계산하고, 항목별 제외 실험을 실행합니다.</span></div>',
         '</div>'
       ].join("");
     }
@@ -10462,7 +10462,7 @@
     return [
       '<div class="model-feature-audit">',
       '<div class="feature-audit-head">',
-      '<strong>feature 재현성</strong>',
+      '<strong>재계산 확인</strong>',
       '<span class="tone-chip ' + (audit.stable ? "watch" : "caution") + '">' + (audit.stable ? "같은 입력 재현됨" : "재계산 확인 필요") + '</span>',
       '</div>',
       '<div class="feature-audit-grid">',
@@ -10477,7 +10477,7 @@
       }).join(""),
       '</div>',
       '<div class="feature-contribution-grid">',
-      '<strong>feature 기여도</strong>',
+      '<strong>판단을 움직인 항목</strong>',
       contributionRows.map(function (row) {
         var tone = Math.abs(row.buy) >= Math.abs(row.sell) ? "buy" : "sell";
         return '<span class="' + tone + '"><b>' + escapeHtml(row.label) + '</b><strong>매수 ' + escapeHtml(signedNumber(row.buy)) + ' / 매도 ' + escapeHtml(signedNumber(row.sell)) + '</strong><em>' + escapeHtml(row.description) + '</em></span>';

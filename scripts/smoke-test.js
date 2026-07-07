@@ -970,8 +970,8 @@ function checkFrontendAdminRender() {
     assertOk(modelingResultsHtml.indexOf("model-preview-panel") >= 0, "모델 결과 탭에 현재 종목 판단 결과 패널이 렌더링되지 않았습니다.");
     assertOk(modelingResultsHtml.indexOf("실제 데이터 예시") >= 0, "모델 결과 탭에 실제 데이터 예시 설명이 렌더링되지 않았습니다.");
     assertOk(modelingResultsHtml.indexOf("쉬운 해석") >= 0, "모델 결과 탭에 종목별 쉬운 해석이 렌더링되지 않았습니다.");
-    assertOk(modelingResultsHtml.indexOf("feature 기여도") >= 0, "모델 결과 탭에 feature 기여도 블록이 렌더링되지 않았습니다.");
-    assertOk(modelingResultsHtml.indexOf("feature 재현성") >= 0, "모델 결과 탭에 feature 재현성 검증 블록이 렌더링되지 않았습니다.");
+    assertOk(modelingResultsHtml.indexOf("판단을 움직인 항목") >= 0, "모델 결과 탭에 판단 영향 항목 블록이 렌더링되지 않았습니다.");
+    assertOk(modelingResultsHtml.indexOf("재계산 확인") >= 0, "모델 결과 탭에 재계산 확인 블록이 렌더링되지 않았습니다.");
     assertOk(modelingResultsHtml.indexOf("같은 입력 재현됨") >= 0, "모델 결과 탭에 같은 입력 재계산 검증 결과가 렌더링되지 않았습니다.");
     assertOk(modelingHtml.indexOf("model-timing-panel") < 0 && modelingResultsHtml.indexOf("model-timing-panel") < 0, "Mock 시계열 기반 타이밍 패널이 아직 렌더링됩니다.");
     assertOk(modelingHtml.indexOf("웹에서 운영하는 매수·매도 타이밍 모델") < 0 && modelingResultsHtml.indexOf("웹에서 운영하는 매수·매도 타이밍 모델") < 0, "타이밍 모델 제목이 아직 렌더링됩니다.");

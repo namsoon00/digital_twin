@@ -823,12 +823,12 @@ function checkFrontendAdminRender() {
       ["notifications", notificationHtml],
       ["modeling", modelingHtml],
       ["ontology", ontologyHtml],
-      ["monitoring", monitoringHtml],
       ["settings", settingsHtml]
     ].forEach(function (entry) {
       assertOk(entry[1].indexOf("managed-page managed-page-" + entry[0]) >= 0, "탭이 공통 관리 페이지 템플릿을 거치지 않습니다: " + entry[0]);
       assertOk(entry[1].indexOf("page-command-strip") >= 0, "탭에 페이지 작업 상태 strip이 없습니다: " + entry[0]);
     });
+    assertOk(monitoringHtml.indexOf("managed-page managed-page-notifications") >= 0, "기존 모니터링 URL이 알림 공통 페이지로 열리지 않습니다.");
 
     assertOk(overviewHtml.indexOf("계정·알림·모델 운영 콘솔") < 0, "이전 고정 운영 콘솔 제목이 아직 렌더링됩니다.");
     assertOk(overviewHtml.indexOf("<h1>홈</h1>") >= 0, "홈 탭 제목이 상단에 렌더링되지 않았습니다.");
@@ -860,8 +860,8 @@ function checkFrontendAdminRender() {
     assertOk(code.indexOf("tabScrollPositions") >= 0 && code.indexOf("restoreRenderedPageScrollPosition") >= 0 && code.indexOf("rememberRenderedPageScrollPosition") >= 0, "탭별 본문 스크롤 복원 로직이 없습니다.");
     assertOk(overviewHtml.indexOf('data-scroll-key="overview"') >= 0, "탭 본문에 스크롤 관리 키가 렌더링되지 않습니다.");
     assertOk(designSystemDoc.indexOf("각 탭은 독립된 스크롤 위치") >= 0, "디자인 시스템 문서에 탭별 스크롤 정책이 없습니다.");
-    assertOk(code.indexOf('var bottomTabIds = ["overview", "watchlist", "monitoring", "modeling", "ontology"];') >= 0, "하단 핵심 탭에 전략 운영과 관계 분석이 배치되지 않았습니다.");
-    assertOk(code.indexOf('var managementTabIds = ["accounts", "symbols", "notifications", "settings"];') >= 0, "상단 운영 메뉴 탭 구성이 역할과 맞지 않습니다.");
+    assertOk(code.indexOf('var bottomTabIds = ["overview", "watchlist", "notifications", "modeling", "ontology"];') >= 0, "하단 핵심 탭에 알림, 전략 운영, 관계 분석이 배치되지 않았습니다.");
+    assertOk(code.indexOf('var managementTabIds = ["accounts", "symbols", "settings"];') >= 0, "상단 운영 메뉴 탭 구성이 역할과 맞지 않습니다.");
     assertOk(styles.indexOf(".app-nav-tab.active") >= 0 && styles.indexOf(".app-nav-menu") >= 0, "앱 네비게이션 활성 탭과 모바일 관리 메뉴 스타일 규칙이 없습니다.");
     assertOk(styles.indexOf("@media (min-width: 861px)") >= 0 && styles.indexOf(".tab-bar {\n    display: none;") >= 0, "데스크톱에서 하단 탭을 숨기는 규칙이 없습니다.");
     assertOk(styles.indexOf("position: sticky") >= 0 && styles.indexOf("bottom: 0;") >= 0 && styles.indexOf("backdrop-filter: blur(18px)") >= 0 && styles.indexOf(".app-nav.is-hidden") >= 0, "모바일 앱바 접힘/하단탭 고정 반응형 규칙이 없습니다.");
@@ -870,9 +870,10 @@ function checkFrontendAdminRender() {
     assertOk(code.indexOf("realtime.status") >= 0, "웹소켓 상태 메시지를 처리하지 않습니다.");
     assertOk(code.indexOf("realtimeEventSnackbar") >= 0, "웹소켓 이벤트를 스낵바로 연결하지 않습니다.");
     assertOk(overviewHtml.indexOf("실시간") >= 0, "홈 요약에 실시간 연결 상태가 렌더링되지 않습니다.");
-    ["overview", "accounts", "watchlist", "symbols", "monitoring", "notifications", "modeling", "ontology", "settings"].forEach(function (tab) {
+    ["overview", "accounts", "watchlist", "symbols", "notifications", "modeling", "ontology", "settings"].forEach(function (tab) {
       assertOk(overviewHtml.indexOf('data-tab="' + tab + '"') >= 0, "새 탭이 렌더링되지 않았습니다: " + tab);
     });
+    assertOk(overviewHtml.indexOf('data-tab="monitoring"') < 0, "모니터링 독립 탭이 아직 렌더링됩니다.");
     assertOk(overviewHtml.indexOf('data-tab="more"') < 0, "더보기 탭이 아직 렌더링됩니다.");
     assertOk(overviewHtml.indexOf("data-mode=") < 0, "Mock 데이터 전환 버튼이 아직 렌더링됩니다.");
     assertOk(overviewHtml.indexOf(">Mock<") < 0, "Mock 데이터 버튼 라벨이 아직 렌더링됩니다.");
@@ -933,7 +934,7 @@ function checkFrontendAdminRender() {
     assertOk(notificationHtml.indexOf("notification-section-bar") >= 0, "알림 내부 섹션 상단 탭 바가 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("notification-section-tabs") >= 0, "알림 내부 섹션 탭이 렌더링되지 않았습니다.");
     assertOk(styles.indexOf(".notification-section-tabs") >= 0 && styles.indexOf("border-bottom: 2px solid transparent") >= 0, "알림 내부 섹션이 탭 스트립 스타일로 정의되지 않았습니다.");
-    assertOk(notificationHtml.indexOf('data-notification-section="policy"') >= 0 && notificationHtml.indexOf('data-notification-section="templates"') >= 0 && notificationHtml.indexOf('data-notification-section="advanced"') >= 0, "알림 내부 섹션 이동 버튼이 없습니다.");
+    assertOk(notificationHtml.indexOf('data-notification-section="signals"') >= 0 && notificationHtml.indexOf('data-notification-section="policy"') >= 0 && notificationHtml.indexOf('data-notification-section="templates"') >= 0 && notificationHtml.indexOf('data-notification-section="advanced"') >= 0, "알림 내부 섹션 이동 버튼이 없습니다.");
     assertOk(notificationHtml.indexOf("notification-section-bar") < notificationHtml.indexOf("notification-ops-rail"), "알림 섹션 탭이 상태 레일 위에 배치되지 않았습니다.");
     assertOk(notificationHtml.indexOf("notification-decision-panel") >= 0, "최근 알림 판단 패널이 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("notification-ops-rail") < notificationHtml.indexOf("notification-decision-panel"), "기본 현황에서 상태 레일 다음에 최근 알림 판단이 이어지지 않습니다.");
@@ -1039,8 +1040,11 @@ function checkFrontendAdminRender() {
     assertOk(modelingResultsHtml.indexOf("같은 입력 재현됨") >= 0, "모델 결과 탭에 같은 입력 재계산 검증 결과가 렌더링되지 않았습니다.");
     assertOk(modelingHtml.indexOf("model-timing-panel") < 0 && modelingResultsHtml.indexOf("model-timing-panel") < 0, "Mock 시계열 기반 타이밍 패널이 아직 렌더링됩니다.");
     assertOk(modelingHtml.indexOf("웹에서 운영하는 매수·매도 타이밍 모델") < 0 && modelingResultsHtml.indexOf("웹에서 운영하는 매수·매도 타이밍 모델") < 0, "타이밍 모델 제목이 아직 렌더링됩니다.");
-    assertOk(monitoringHtml.indexOf("monitoring-view") >= 0, "모니터링 탭에 PC 전용 레이아웃 클래스가 없습니다.");
-    assertOk(styles.indexOf(".monitoring-view") >= 0 && styles.indexOf("grid-template-areas") >= 0, "모니터링 탭 PC 그리드 레이아웃 CSS가 없습니다.");
+    assertOk(monitoringHtml.indexOf("managed-page-notifications") >= 0 && monitoringHtml.indexOf("<h1>알림</h1>") >= 0, "기존 모니터링 URL이 알림 탭으로 매핑되지 않습니다.");
+    assertOk(monitoringHtml.indexOf("notifications-view") >= 0, "알림 신호 섹션에 통합 화면 클래스가 없습니다.");
+    assertOk(code.indexOf('if (requested === "monitoring") return "notifications";') >= 0, "기존 모니터링 URL 호환 매핑이 없습니다.");
+    assertOk(code.indexOf('return "signals";') >= 0, "기존 모니터링 URL이 신호 섹션으로 열리지 않습니다.");
+    assertOk(styles.indexOf(".notifications-view .monitoring-instrument-panel") >= 0, "알림 신호 섹션 모니터링 패널 레이아웃 CSS가 없습니다.");
     assertOk(styles.indexOf(".monitoring-view .admin-monitoring-panel {\n  grid-area: status;\n  grid-column: auto;") < 0, "모니터링 상태 패널의 PC grid-area가 1컬럼으로 압축될 수 있습니다.");
     assertOk(styles.indexOf(".monitoring-view .alert-panel {\n  grid-area: alerts;\n  grid-column: auto;") < 0, "모니터링 알림 패널의 PC grid-area가 1컬럼으로 압축될 수 있습니다.");
     assertOk(monitoringHtml.indexOf("monitor-status-board") >= 0 && monitoringHtml.indexOf("monitor-runtime-strip") >= 0, "모니터링 실행 상태 패널이 ledger/strip 구조로 렌더링되지 않습니다.");

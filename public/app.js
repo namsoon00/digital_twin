@@ -398,18 +398,18 @@
     { id: "accounts", label: "계정", description: "DB 계정" },
     { id: "watchlist", label: "관심종목", description: "알림 대상" },
     { id: "symbols", label: "전체종목", description: "시장 목록" },
-    { id: "monitoring", label: "모니터링", description: "보유·타이밍" },
-    { id: "notifications", label: "알림", description: "메시지 타입" },
+    { id: "notifications", label: "알림", description: "신호·발송" },
     { id: "modeling", label: "전략 운영", description: "모델·알림 정책" },
     { id: "ontology", label: "관계 분석", description: "종목 관계" },
     { id: "settings", label: "설정", description: "런타임 환경" }
   ];
   var appBrandName = "Orbit Alpha";
   var appBrandSubtitle = "포트폴리오 신호 궤도 관제";
-  var bottomTabIds = ["overview", "watchlist", "monitoring", "modeling", "ontology"];
-  var managementTabIds = ["accounts", "symbols", "notifications", "settings"];
+  var bottomTabIds = ["overview", "watchlist", "notifications", "modeling", "ontology"];
+  var managementTabIds = ["accounts", "symbols", "settings"];
   var notificationSections = [
     { id: "status", label: "현황", description: "발송 판단" },
+    { id: "signals", label: "신호", description: "감지 내역" },
     { id: "policy", label: "정책", description: "타입별 룰" },
     { id: "templates", label: "템플릿", description: "본문·미리보기" },
     { id: "advanced", label: "고급", description: "채널·임계값" }
@@ -1133,6 +1133,9 @@
 
   function initialNotificationSection() {
     var params = new URLSearchParams(window.location.search);
+    if (String(params.get("tab") || "").toLowerCase() === "monitoring" && !params.get("notification")) {
+      return "signals";
+    }
     return normalizeNotificationSection(params.get("notification"));
   }
 
@@ -1149,6 +1152,7 @@
   function normalizeTabId(value) {
     var requested = String(value || "").toLowerCase();
     if (requested === "more") return "overview";
+    if (requested === "monitoring") return "notifications";
     return tabs.some(function (tab) { return tab.id === requested; }) ? requested : "overview";
   }
 
@@ -1462,7 +1466,7 @@
     rememberTabBarPosition();
     var priorTab = state.activeTab;
     state.activeTab = nextTab;
-    if (nextTab !== "monitoring") state.monitoringDetail = null;
+    if (nextTab !== "notifications") state.monitoringDetail = null;
     if (nextTab !== "notifications") state.notificationPolicyEditorOpen = false;
     if (nextTab !== "notifications") state.notificationTemplateEditorOpen = false;
     if (!options.skipPrevious) state.previousTab = priorTab;
@@ -1493,7 +1497,7 @@
     rememberTabBarPosition();
     state.previousTab = state.activeTab;
     state.activeTab = nextTab;
-    if (nextTab !== "monitoring") state.monitoringDetail = null;
+    if (nextTab !== "notifications") state.monitoringDetail = null;
     render();
   }
 
@@ -6555,17 +6559,6 @@
     if (state.activeTab === "ontology") {
       return renderOntologyPage(snapshot);
     }
-    if (state.activeTab === "monitoring") {
-      return renderManagedPage("monitoring", snapshot, [
-        '<section class="admin-grid monitoring-view">',
-        renderAdminMonitoringPanel(snapshot),
-        renderAlertCenterPanel(snapshot),
-        renderMonitoringInstrumentPanel(snapshot),
-        renderPortfolioPanel(snapshot),
-        '</section>',
-        renderMonitoringDetailOverlay(snapshot)
-      ].join(""));
-    }
     if (state.activeTab === "settings") {
       return renderSettingsPage();
     }
@@ -7621,7 +7614,8 @@
       renderNotificationSectionBar(),
       section === "status" ? renderNotificationOpsRail() : '',
       content,
-      '</section>'
+      '</section>',
+      section === "signals" ? renderMonitoringDetailOverlay(state.snapshot || {}) : ''
     ].join(""));
   }
 
@@ -7692,6 +7686,7 @@
 
   function renderNotificationSectionContent() {
     var section = normalizeNotificationSection(state.activeNotificationSection);
+    if (section === "signals") return renderNotificationSignalPanel(state.snapshot || {});
     if (section === "policy") return renderAdminMessagePanel();
     if (section === "templates") return renderNotificationTemplateManagerPanel();
     if (section === "advanced") {
@@ -7702,6 +7697,15 @@
       ].join("");
     }
     return renderNotificationDecisionPanel();
+  }
+
+  function renderNotificationSignalPanel(snapshot) {
+    return [
+      renderAdminMonitoringPanel(snapshot),
+      renderAlertCenterPanel(snapshot),
+      renderMonitoringInstrumentPanel(snapshot),
+      renderPortfolioPanel(snapshot)
+    ].join("");
   }
 
   function renderAdminMessagePanel() {

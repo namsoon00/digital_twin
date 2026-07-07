@@ -37,6 +37,7 @@ def position_payload(position: Position) -> Dict[str, object]:
         "quoteMessage": position.quote_message,
         "dataQuality": position.data_quality,
         "updatedAt": position.updated_at,
+        "source": position.source,
         "marketValue": position.market_value,
         "profitLoss": position.profit_loss,
         "profitLossRate": position.profit_loss_rate,
@@ -453,23 +454,34 @@ def build_toss_decision(
         if not is_cash_position(item) and number(item.get("marketValue")) > 0
     ]
     holding_items = [toss_decision_for_holding(item, portfolio, strategy_model) for item in positions]
-    ontology = build_toss_ontology(positions, portfolio, holding_items)
-    for item in holding_items:
+    watch_items = [toss_decision_for_watch(item) for item in watchlist]
+    ontology = build_toss_ontology(positions, portfolio, holding_items + watch_items, watchlist)
+    ontology_payload = ontology.to_dict()
+    reasoning_cards = list(ontology_payload.get("reasoningCards") or [])
+    reasoning_card_by_symbol = {
+        str(item.get("symbol") or "").upper(): item
+        for item in reasoning_cards
+        if isinstance(item, dict)
+    }
+    for item in holding_items + watch_items:
         opinion = ontology.opinion_for_symbol(str(item.get("symbol") or ""))
         if not opinion:
             continue
         opinion_payload = opinion.to_dict()
+        reasoning_card = reasoning_card_by_symbol.get(str(item.get("symbol") or "").upper()) or {}
         item["ontologyOpinion"] = opinion_payload
         item["ontologyWorldview"] = dict(ontology.worldview or {})
+        item["reasoningCard"] = reasoning_card
         item["aiContext"] = {
             "promptVersion": ONTOLOGY_PROMPT_VERSION,
             "role": "ontology-first-investment-opinion",
             "legacyModelRole": "supporting-evidence",
             "worldview": dict(ontology.worldview or {}),
             "opinion": opinion_payload,
+            "reasoningCard": reasoning_card,
+            "reasoningCardId": reasoning_card.get("id"),
             "prompt": ontology.prompt,
         }
-    watch_items = [toss_decision_for_watch(item) for item in watchlist]
     items = sorted(holding_items + watch_items, key=lambda item: (item.get("priority", 9), -number(item.get("exitPressure"))))
     urgent_count = len([item for item in holding_items if item.get("tone") in {"danger", "caution"}])
     top_items = items[:3]
@@ -493,8 +505,8 @@ def build_toss_decision(
         ],
         "ontologyStrategy": {
             "promptVersion": ONTOLOGY_PROMPT_VERSION,
-            "tbox": ontology.to_dict().get("tbox", {}),
-            "abox": ontology.to_dict().get("abox", {}),
+            "tbox": ontology_payload.get("tbox", {}),
+            "abox": ontology_payload.get("abox", {}),
             "worldview": dict(ontology.worldview or {}),
             "entityCount": len(ontology.entities),
             "relationCount": len(ontology.relations),
@@ -504,7 +516,23 @@ def build_toss_decision(
             "evidence": [item.to_dict() for item in ontology.evidence[:80]],
             "beliefs": [item.to_dict() for item in ontology.beliefs[:80]],
             "opinions": [item.to_dict() for item in ontology.opinions[:40]],
+            "reasoningCards": reasoning_cards[:40],
+            "aiInferencePacket": ontology_payload.get("aiInferencePacket", {}),
             "prompt": ontology.prompt,
+        },
+        "investmentAnalysis": {
+            "mode": "ontology-first",
+            "contract": "investment-ontology-ai-inference-v1",
+            "legacyModelRole": "supporting-evidence",
+            "reasoningCards": reasoning_cards[:40],
+            "aiInferencePacket": ontology_payload.get("aiInferencePacket", {}),
+            "graphSummary": {
+                "entityCount": len(ontology.entities),
+                "relationCount": len(ontology.relations),
+                "evidenceCount": len(ontology.evidence),
+                "beliefCount": len(ontology.beliefs),
+                "opinionCount": len(ontology.opinions),
+            },
         },
     }
 
@@ -512,9 +540,10 @@ def build_toss_decision(
 def build_toss_ontology(
     positions: List[Dict[str, object]],
     portfolio: Dict[str, object],
-    holding_items: List[Dict[str, object]],
+    decision_items: List[Dict[str, object]],
+    watchlist: List[Dict[str, object]] = None,
 ):
-    normalized_positions = [normalize_position(item) for item in positions]
+    normalized_positions = [normalize_position(item) for item in list(positions or []) + list(watchlist or [])]
     summary = PortfolioSummary(
         total=number(portfolio.get("total")),
         invested=number(portfolio.get("invested")),
@@ -530,7 +559,7 @@ def build_toss_ontology(
             "lossCutPressure": number(item.get("lossCutPressure")),
             "decisionBasis": str(item.get("decisionBasis") or ""),
         }
-        for item in holding_items
+        for item in decision_items
     }
     return build_portfolio_ontology(
         normalized_positions,

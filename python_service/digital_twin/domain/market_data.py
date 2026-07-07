@@ -434,4 +434,5 @@ def normalize_position(item: Dict[str, object]) -> Position:
         ma20_distance=first_number(item, ["ma20Distance", "ma20_distance"]),
         ma60_distance=first_number(item, ["ma60Distance", "ma60_distance"]),
         sector=str(item.get("sector") or info["sector"]),
+        source=str(item.get("source") or item.get("positionSource") or "holding"),
     )

@@ -1054,10 +1054,20 @@ class PythonServiceTests(unittest.TestCase):
             "ma20Distance": 5,
             "sector": "AI/플랫폼",
         })
+        watch = normalize_position({
+            "symbol": "NVDA",
+            "name": "NVIDIA",
+            "market": "US",
+            "currency": "USD",
+            "currentPrice": 180,
+            "ma20Distance": 7,
+            "sector": "반도체",
+            "source": "watchlist",
+        })
         portfolio = portfolio_summary([semis, platform], 500, "KRW")
 
         graph = build_portfolio_ontology(
-            [semis, platform],
+            [semis, platform, watch],
             portfolio,
             legacy_by_symbol={"000660": {"exitPressure": 76, "decisionBasis": "lossCut"}},
             portfolio_id="main",
@@ -1069,11 +1079,16 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("ABox", payload["abox"]["box"])
         self.assertIn("Stock", payload["tbox"]["classes"])
         self.assertIn("HOLDS", payload["tbox"]["relationTypes"])
+        self.assertIn("WATCHES", payload["tbox"]["relationTypes"])
         self.assertGreater(payload["abox"]["entityCount"], 0)
         self.assertTrue(any(item.relation_type == "HOLDS" for item in graph.relations))
+        self.assertTrue(any(item.relation_type == "WATCHES" for item in graph.relations))
         self.assertTrue(any(item.relation_type == "EXPOSED_TO" for item in graph.relations))
         self.assertTrue(any(item.kind == "tbox-class" for item in graph.entities))
+        self.assertTrue(any(item.get("symbol") == "NVDA" for item in payload["reasoningCards"]))
+        self.assertEqual("investment-ontology-ai-inference-v1", payload["aiInferencePacket"]["contract"])
         self.assertIn("관계 분석 데이터 JSON", graph.prompt)
+        self.assertIn("reasoningCards", graph.prompt)
         self.assertIn("TBox", graph.prompt)
         self.assertIn("ABox", graph.prompt)
         self.assertTrue(graph.opinion_for_symbol("000660").dominant_risks)
@@ -1098,6 +1113,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("TBox", {row["ontologyBox"] for row in entity_rows})
         self.assertIn("ABox", {row["ontologyBox"] for row in relation_rows})
         self.assertTrue(any("OntologyEntity" in item["statement"] for item in statements))
+        self.assertTrue(any("OntologyReasoningCard" in item["statement"] for item in statements))
+        self.assertGreater(len(repository.rows_for_reasoning_cards(graph)), 0)
         self.assertTrue(any("MERGE (a)-[r:HOLDS]" in item["statement"] for item in statements))
         self.assertFalse(NullOntologyGraphRepository().save_graph(graph)["saved"])
 
@@ -2414,6 +2431,10 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("tossDecision", payload)
         self.assertTrue(any(item["symbol"] == "AAPL" for item in payload["tossDecision"]["items"]))
         self.assertTrue(any(item["symbol"] == "TSLA" for item in payload["tossDecision"]["items"]))
+        self.assertIn("investmentAnalysis", payload["tossDecision"])
+        self.assertTrue(payload["tossDecision"]["investmentAnalysis"]["reasoningCards"])
+        self.assertEqual("investment-ontology-ai-inference-v1", payload["tossDecision"]["investmentAnalysis"]["aiInferencePacket"]["contract"])
+        self.assertTrue(any(item.get("reasoningCard") for item in payload["tossDecision"]["items"]))
         self.assertFalse("news" in payload)
 
     def test_mock_market_contract_is_python_native(self):

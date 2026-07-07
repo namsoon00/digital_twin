@@ -565,6 +565,25 @@ function checkFrontendAdminRender() {
               contradictions: ["005930 차익 실현 신호"],
               supporting_beliefs: ["005930 업종 수요 회복"]
             }
+          },
+          {
+            symbol: "NVDA",
+            name: "NVIDIA",
+            market: "US",
+            currency: "USD",
+            sector: "반도체",
+            source: "watchlist",
+            exitPressure: 32,
+            ontologyOpinion: {
+              action: "관심 종목: 진입 기준 대기",
+              tone: "hold",
+              thesis: "NVIDIA는 WATCHES 관계로 보유 판단과 분리해 관찰합니다.",
+              conviction: 58,
+              ontologyPressure: 28,
+              dominant_risks: [],
+              contradictions: ["가격 기준 추가 확인"],
+              supporting_beliefs: ["반도체 업종 관찰 대상"]
+            }
           }
         ],
         rules: [],
@@ -574,25 +593,87 @@ function checkFrontendAdminRender() {
         ontologyStrategy: {
           worldview: { contradictionCount: 1 },
           tbox: {
-            classes: ["Portfolio", "Stock", "Sector", "Evidence", "Belief", "Opinion"],
-            relationTypes: ["HOLDS", "BELONGS_TO", "REQUESTS_OPINION_FROM", "HAS_EVIDENCE", "HAS_BELIEF", "HAS_OPINION"],
+            classes: ["Portfolio", "Stock", "WatchlistCandidate", "Sector", "Evidence", "Belief", "Opinion"],
+            relationTypes: ["HOLDS", "WATCHES", "BELONGS_TO", "REQUESTS_OPINION_FROM", "HAS_EVIDENCE", "HAS_BELIEF", "HAS_OPINION"],
             reasoningRules: ["회사 관계 기반 판단 근거 생성"]
           },
-          abox: { portfolioId: "flow-lens", entityCount: 4, relationCount: 3, beliefCount: 1 },
+          abox: { portfolioId: "flow-lens", entityCount: 5, relationCount: 5, beliefCount: 1 },
           entities: [
             { id: "portfolio:flow-lens", label: "테스트 포트폴리오", kind: "portfolio", properties: { ontologyBox: "ABox" } },
             { id: "stock:005930", label: "삼성전자", kind: "stock", properties: { ontologyBox: "ABox", symbol: "005930", sector: "반도체" } },
+            { id: "stock:NVDA", label: "NVIDIA", kind: "stock", properties: { ontologyBox: "ABox", symbol: "NVDA", sector: "반도체", source: "watchlist", tboxClasses: ["Stock", "WatchlistCandidate"] } },
             { id: "sector:반도체", label: "반도체", kind: "sector", properties: { ontologyBox: "ABox" } },
             { id: "concept:ai-investment-review", label: "AI 투자 의견", kind: "ai-review", properties: { ontologyBox: "ABox" } }
           ],
           relations: [
             { source: "portfolio:flow-lens", target: "stock:005930", type: "HOLDS", properties: { ontologyBox: "ABox" } },
+            { source: "portfolio:flow-lens", target: "stock:NVDA", type: "WATCHES", properties: { ontologyBox: "ABox", source: "watchlist" } },
             { source: "stock:005930", target: "sector:반도체", type: "BELONGS_TO", properties: { ontologyBox: "ABox" } },
+            { source: "stock:NVDA", target: "sector:반도체", type: "BELONGS_TO", properties: { ontologyBox: "ABox" } },
             { source: "stock:005930", target: "concept:ai-investment-review", type: "REQUESTS_OPINION_FROM", properties: { ontologyBox: "ABox" } }
           ],
-          evidence: [{ id: "evidence:005930:trend", subject: "stock:005930", kind: "trend" }],
+          evidence: [
+            { id: "evidence:005930:trend", subject: "stock:005930", kind: "trend", summary: "이동평균과 가격 추세 관계" },
+            { id: "evidence:NVDA:market-observation", subject: "stock:NVDA", kind: "market-observation", summary: "관심 종목 현재가와 관찰 상태" }
+          ],
           beliefs: [{ id: "belief:005930:risk", subject: "stock:005930", polarity: "risk" }],
-          opinions: [{ symbol: "005930", action: "보유", thesis: "005930은 관계 그래프에서 회사명으로 보여야 합니다.", conviction: 72 }]
+          opinions: [
+            { symbol: "005930", action: "보유", thesis: "005930은 관계 그래프에서 회사명으로 보여야 합니다.", conviction: 72 },
+            { symbol: "NVDA", action: "관심 종목: 진입 기준 대기", thesis: "NVIDIA는 WATCHES 관계로 관찰합니다.", conviction: 58 }
+          ],
+          reasoningCards: [
+            {
+              id: "reasoning-card:005930",
+              symbol: "005930",
+              companyName: "삼성전자",
+              source: "holding",
+              portfolioRelation: "HOLDS",
+              status: "readyForAiReview",
+              finalOpinion: { action: "보유", tone: "watch", ontologyPressure: 64, conviction: 72, thesis: "005930 가격과 반도체 업종 관계를 함께 확인합니다." },
+              legacyModel: { exitPressure: 64, decisionBasis: "ontologyRelationRules" },
+              strategyEvidence: [{ id: "evidence:005930:trend", kind: "trend", summary: "이동평균과 가격 추세 관계" }],
+              relationEvidence: [{ id: "portfolio:flow-lens|HOLDS|stock:005930", type: "HOLDS", sourceLabel: "테스트 포트폴리오", targetLabel: "삼성전자" }],
+              graphContext: { stockEntityId: "stock:005930", tboxClasses: ["Stock", "Evidence", "Belief", "Opinion"], aboxEntityIds: ["stock:005930"], relationIds: ["portfolio:flow-lens|HOLDS|stock:005930"], evidenceIds: ["evidence:005930:trend"], beliefIds: ["belief:005930:risk"], opinionId: "opinion:005930" },
+              aiInference: { role: "ontology-first-investment-opinion", legacyModelRole: "supporting-evidence" }
+            },
+            {
+              id: "reasoning-card:NVDA",
+              symbol: "NVDA",
+              companyName: "NVIDIA",
+              source: "watchlist",
+              portfolioRelation: "WATCHES",
+              status: "readyForAiReview",
+              finalOpinion: { action: "관심 종목: 진입 기준 대기", tone: "hold", ontologyPressure: 28, conviction: 58, thesis: "NVIDIA는 WATCHES 관계로 보유 판단과 분리해 관찰합니다." },
+              legacyModel: { decisionBasis: "watchlist-observation" },
+              strategyEvidence: [{ id: "evidence:NVDA:market-observation", kind: "market-observation", summary: "관심 종목 현재가와 관찰 상태" }],
+              relationEvidence: [{ id: "portfolio:flow-lens|WATCHES|stock:NVDA", type: "WATCHES", sourceLabel: "테스트 포트폴리오", targetLabel: "NVIDIA" }],
+              graphContext: { stockEntityId: "stock:NVDA", tboxClasses: ["Stock", "WatchlistCandidate", "Evidence", "Opinion"], aboxEntityIds: ["stock:NVDA"], relationIds: ["portfolio:flow-lens|WATCHES|stock:NVDA"], evidenceIds: ["evidence:NVDA:market-observation"], beliefIds: [], opinionId: "opinion:NVDA" },
+              aiInference: { role: "ontology-first-investment-opinion", legacyModelRole: "supporting-evidence" }
+            }
+          ],
+          aiInferencePacket: {
+            contract: "investment-ontology-ai-inference-v1",
+            promptVersion: "ontology-investment-v2-tbox-abox",
+            role: "ontology-first-investment-opinion",
+            legacyModelRole: "supporting-evidence",
+            inputOrder: ["tbox", "abox", "reasoningCards", "relations", "evidence", "beliefs", "opinions"],
+            reasoningCardCount: 2,
+            graphInputs: { entityCount: 5, relationCount: 5, evidenceCount: 2, beliefCount: 1, opinionCount: 2 },
+            guardrails: ["제공된 관계 데이터만 사용합니다.", "HOLDS와 WATCHES를 구분합니다."]
+          }
+        },
+        investmentAnalysis: {
+          mode: "ontology-first",
+          contract: "investment-ontology-ai-inference-v1",
+          legacyModelRole: "supporting-evidence",
+          reasoningCards: [],
+          aiInferencePacket: {
+            contract: "investment-ontology-ai-inference-v1",
+            promptVersion: "ontology-investment-v2-tbox-abox",
+            inputOrder: ["tbox", "abox", "reasoningCards", "relations", "evidence", "beliefs", "opinions"],
+            reasoningCardCount: 2,
+            guardrails: ["제공된 관계 데이터만 사용합니다.", "HOLDS와 WATCHES를 구분합니다."]
+          }
         }
       },
       portfolio: {
@@ -783,13 +864,12 @@ function checkFrontendAdminRender() {
     renderForSearch("?tab=notifications&notification=advanced"),
     renderForSearch("?tab=modeling"),
     renderForSearch("?tab=ontology"),
-    renderForSearch("?tab=ontology&ontology=structure"),
-    renderForSearch("?tab=ontology&ontology=graphs"),
-    renderForSearch("?tab=ontology&ontology=registry"),
-    renderForSearch("?tab=ontology&ontology=trace"),
-    renderForSearch("?tab=modeling&strategy=data"),
-    renderForSearch("?tab=modeling&strategy=policy"),
+    renderForSearch("?tab=modeling&strategy=evidence"),
     renderForSearch("?tab=modeling&strategy=results"),
+    renderForSearch("?tab=modeling&strategy=graphs"),
+    renderForSearch("?tab=modeling&strategy=registry"),
+    renderForSearch("?tab=modeling&strategy=trace"),
+    renderForSearch("?tab=ontology&ontology=graphs"),
     renderForSearch("?tab=monitoring"),
     renderForSearch("?tab=settings"),
     renderForSearch("?tab=accounts", "namsoon00.github.io"),
@@ -804,18 +884,17 @@ function checkFrontendAdminRender() {
     const notificationTemplateHtml = pages[6];
     const notificationAdvancedHtml = pages[7];
     const modelingHtml = pages[8];
-    const ontologyHtml = pages[9];
-    const ontologyStructureHtml = pages[10];
-    const ontologyGraphHtml = pages[11];
-    const ontologyRegistryHtml = pages[12];
-    const ontologyTraceHtml = pages[13];
-    const modelingDataHtml = pages[14];
-    const modelingPolicyHtml = pages[15];
-    const modelingResultsHtml = pages[16];
-    const monitoringHtml = pages[17];
-    const settingsHtml = pages[18];
-    const staticAccountHtml = pages[19];
-    const newAccountHtml = pages[20];
+    const legacyOntologyHtml = pages[9];
+    const modelingEvidenceHtml = pages[10];
+    const modelingResultsHtml = pages[11];
+    const modelingGraphHtml = pages[12];
+    const modelingRegistryHtml = pages[13];
+    const modelingTraceHtml = pages[14];
+    const legacyOntologyGraphHtml = pages[15];
+    const monitoringHtml = pages[16];
+    const settingsHtml = pages[17];
+    const staticAccountHtml = pages[18];
+    const newAccountHtml = pages[19];
 
     [
       ["overview", overviewHtml],
@@ -824,12 +903,12 @@ function checkFrontendAdminRender() {
       ["symbols", symbolUniverseHtml],
       ["notifications", notificationHtml],
       ["modeling", modelingHtml],
-      ["ontology", ontologyHtml],
       ["settings", settingsHtml]
     ].forEach(function (entry) {
       assertOk(entry[1].indexOf("managed-page managed-page-" + entry[0]) >= 0, "탭이 공통 관리 페이지 템플릿을 거치지 않습니다: " + entry[0]);
       assertOk(entry[1].indexOf("page-command-strip") >= 0, "탭에 페이지 작업 상태 strip이 없습니다: " + entry[0]);
     });
+    assertOk(legacyOntologyHtml.indexOf("managed-page managed-page-modeling") >= 0, "기존 관계 분석 URL이 투자 분석 탭으로 호환 렌더링되지 않습니다.");
     assertOk(monitoringHtml.indexOf("managed-page managed-page-notifications") >= 0, "기존 모니터링 URL이 알림 공통 페이지로 열리지 않습니다.");
 
     assertOk(overviewHtml.indexOf("계정·알림·모델 운영 콘솔") < 0, "이전 고정 운영 콘솔 제목이 아직 렌더링됩니다.");
@@ -848,8 +927,7 @@ function checkFrontendAdminRender() {
       ["관심종목", watchlistHtml],
       ["전체종목", symbolUniverseHtml],
       ["알림", notificationHtml],
-      ["전략 운영", modelingHtml],
-      ["관계 분석", ontologyHtml],
+      ["투자 분석", modelingHtml],
       ["모니터링", monitoringHtml],
       ["설정", settingsHtml]
     ].forEach(function (entry) {
@@ -862,7 +940,7 @@ function checkFrontendAdminRender() {
     assertOk(code.indexOf("tabScrollPositions") >= 0 && code.indexOf("restoreRenderedPageScrollPosition") >= 0 && code.indexOf("rememberRenderedPageScrollPosition") >= 0, "탭별 본문 스크롤 복원 로직이 없습니다.");
     assertOk(overviewHtml.indexOf('data-scroll-key="overview"') >= 0, "탭 본문에 스크롤 관리 키가 렌더링되지 않습니다.");
     assertOk(designSystemDoc.indexOf("각 탭은 독립된 스크롤 위치") >= 0, "디자인 시스템 문서에 탭별 스크롤 정책이 없습니다.");
-    assertOk(code.indexOf('var bottomTabIds = ["overview", "watchlist", "notifications", "modeling", "ontology"];') >= 0, "하단 핵심 탭에 알림, 전략 운영, 관계 분석이 배치되지 않았습니다.");
+    assertOk(code.indexOf('var bottomTabIds = ["overview", "watchlist", "notifications", "modeling"];') >= 0, "하단 핵심 탭에 알림과 투자 분석이 배치되지 않았습니다.");
     assertOk(code.indexOf('var managementTabIds = ["accounts", "symbols", "settings"];') >= 0, "상단 운영 메뉴 탭 구성이 역할과 맞지 않습니다.");
     assertOk(styles.indexOf(".app-nav-tab.active") >= 0 && styles.indexOf(".app-nav-menu") >= 0, "앱 네비게이션 활성 탭과 모바일 관리 메뉴 스타일 규칙이 없습니다.");
     assertOk(styles.indexOf("@media (min-width: 861px)") >= 0 && styles.indexOf(".tab-bar {\n    display: none;") >= 0, "데스크톱에서 하단 탭을 숨기는 규칙이 없습니다.");
@@ -872,9 +950,10 @@ function checkFrontendAdminRender() {
     assertOk(code.indexOf("realtime.status") >= 0, "웹소켓 상태 메시지를 처리하지 않습니다.");
     assertOk(code.indexOf("realtimeEventSnackbar") >= 0, "웹소켓 이벤트를 스낵바로 연결하지 않습니다.");
     assertOk(overviewHtml.indexOf("실시간") >= 0, "홈 요약에 실시간 연결 상태가 렌더링되지 않습니다.");
-    ["overview", "accounts", "watchlist", "symbols", "notifications", "modeling", "ontology", "settings"].forEach(function (tab) {
+    ["overview", "accounts", "watchlist", "symbols", "notifications", "modeling", "settings"].forEach(function (tab) {
       assertOk(overviewHtml.indexOf('data-tab="' + tab + '"') >= 0, "새 탭이 렌더링되지 않았습니다: " + tab);
     });
+    assertOk(overviewHtml.indexOf('data-tab="ontology"') < 0, "관계 분석 독립 탭이 아직 렌더링됩니다.");
     assertOk(overviewHtml.indexOf('data-tab="monitoring"') < 0, "모니터링 독립 탭이 아직 렌더링됩니다.");
     assertOk(overviewHtml.indexOf('data-tab="more"') < 0, "더보기 탭이 아직 렌더링됩니다.");
     assertOk(overviewHtml.indexOf("data-mode=") < 0, "Mock 데이터 전환 버튼이 아직 렌더링됩니다.");
@@ -990,55 +1069,46 @@ function checkFrontendAdminRender() {
     assertOk(code.indexOf("data-notification-template") >= 0 && code.indexOf("monitorHeartbeat") >= 0, "상태 확인 템플릿 textarea 경로가 없습니다.");
     assertOk(notificationTemplateHtml.indexOf("{rawLines}") >= 0, "알림 템플릿 변수가 렌더링되지 않았습니다.");
     assertOk(notificationAdvancedHtml.indexOf("tab=notifications") >= 0, "알림 링크 기본값이 새 알림 탭을 가리키지 않습니다.");
-    assertOk(modelingHtml.indexOf("strategy-section-bar") >= 0, "전략 운영 내부 섹션 탭 바가 렌더링되지 않았습니다.");
-    assertOk(modelingHtml.indexOf("strategy-section-tabs") >= 0, "전략 운영 내부 섹션 탭이 렌더링되지 않았습니다.");
-    assertOk(styles.indexOf(".strategy-section-tabs") >= 0 && styles.indexOf(".strategy-section-bar") >= 0, "전략 운영 내부 섹션 스타일이 정의되지 않았습니다.");
-    assertOk(modelingHtml.indexOf('data-strategy-section="data"') >= 0 && modelingHtml.indexOf('data-strategy-section="policy"') >= 0 && modelingHtml.indexOf('data-strategy-section="results"') >= 0, "전략 운영 내부 섹션 이동 버튼이 없습니다.");
-    assertOk(modelingHtml.indexOf('data-strategy-section="rules"') < 0 && modelingHtml.indexOf('data-strategy-section="prompts"') < 0, "관계 규칙/프롬프트가 전략 운영 내부 섹션에 남아 있습니다.");
-    assertOk(modelingHtml.indexOf('data-strategy-section="ontology"') < 0, "관계 분석이 전략 운영 내부 섹션에 남아 있습니다.");
-    assertOk(ontologyHtml.indexOf("ontology-view") >= 0 && ontologyHtml.indexOf("Relation Control") >= 0, "관계 분석 상위 탭이 렌더링되지 않았습니다.");
-    assertOk(ontologyHtml.indexOf("ontology-section-bar") >= 0 && ontologyHtml.indexOf("ontology-section-tabs") >= 0, "관계 분석 내부 섹션 탭이 렌더링되지 않았습니다.");
-    assertOk(styles.indexOf(".ontology-section-tabs") >= 0 && styles.indexOf(".ontology-section-bar") >= 0, "관계 분석 내부 섹션 스타일이 정의되지 않았습니다.");
-    assertOk(ontologyHtml.indexOf('data-ontology-section="structure"') >= 0 && ontologyHtml.indexOf('data-ontology-section="graphs"') >= 0 && ontologyHtml.indexOf('data-ontology-section="registry"') >= 0 && ontologyHtml.indexOf('data-ontology-section="trace"') >= 0, "관계 분석 내부 섹션 이동 버튼이 없습니다.");
-    assertOk(ontologyHtml.indexOf("규칙 분류") >= 0 && ontologyHtml.indexOf("현재 데이터") >= 0, "관계 분석 탭에 규칙/현재 데이터 요약이 없습니다.");
-    assertOk(ontologyHtml.indexOf("ontology-control-strip") >= 0 && ontologyHtml.indexOf("관계 매트릭스") >= 0 && ontologyHtml.indexOf("relation-matrix") >= 0, "관계 분석 탭에 추론 순서나 관계 매트릭스가 없습니다.");
-    assertOk(ontologyHtml.indexOf("규칙 구조 관계 그래프") < 0 && ontologyHtml.indexOf("전체 구조 맵") < 0 && ontologyHtml.indexOf("Relation Rule Registry") < 0 && ontologyHtml.indexOf("테이블 저장 구조") < 0, "관계 분석 개요 탭에 상세 그래프/구조/레지스트리/추적 패널이 섞여 있습니다.");
-    assertOk(ontologyStructureHtml.indexOf("관계 분석 전체 구조") >= 0 && ontologyStructureHtml.indexOf("전체 구조 맵") >= 0 && ontologyStructureHtml.indexOf("TBox 규칙 구조") >= 0 && ontologyStructureHtml.indexOf("ABox 현재 데이터") >= 0, "관계 분석 전체 구조 화면이 렌더링되지 않았습니다.");
-    assertOk(ontologyStructureHtml.indexOf("ontology-structure-map") >= 0 && ontologyStructureHtml.indexOf("ontology-structure-health") >= 0 && ontologyStructureHtml.indexOf("ontology-structure-navigation") >= 0, "관계 분석 전체 구조 화면에 구조 지도/상태/바로가기가 없습니다.");
-    assertOk(ontologyStructureHtml.indexOf('data-ontology-section="graphs"') >= 0 && ontologyStructureHtml.indexOf("그래프 보기") >= 0, "전체 구조 화면에서 관계 그래프로 이동할 수 없습니다.");
-    assertOk(ontologyGraphHtml.indexOf("규칙 구조 관계 그래프") >= 0 && ontologyGraphHtml.indexOf("현재 데이터 관계 그래프") >= 0 && ontologyGraphHtml.indexOf("ontology-cytoscape") >= 0, "관계 분석 그래프 섹션이 렌더링되지 않았습니다.");
-    assertOk(ontologyGraphHtml.indexOf("규칙 구조") >= 0 && ontologyGraphHtml.indexOf("현재 데이터") >= 0, "관계 분석 그래프 섹션에 규칙/현재 데이터 보조 패널이 없습니다.");
-    assertOk(/\.ontology-relationship-graphs\s*\{[\s\S]*grid-template-columns: 1fr;/.test(styles), "관계 분석 그래프가 전폭 1열 구조로 정의되지 않았습니다.");
-    assertOk(styles.indexOf(".ontology-structure-map") >= 0 && styles.indexOf(".ontology-structure-flow") >= 0, "관계 분석 전체 구조 화면 스타일이 정의되지 않았습니다.");
+    assertOk(modelingHtml.indexOf("strategy-section-bar") >= 0, "투자 분석 내부 섹션 탭 바가 렌더링되지 않았습니다.");
+    assertOk(modelingHtml.indexOf("strategy-section-tabs") >= 0, "투자 분석 내부 섹션 탭이 렌더링되지 않았습니다.");
+    assertOk(styles.indexOf(".strategy-section-tabs") >= 0 && styles.indexOf(".strategy-section-bar") >= 0, "투자 분석 내부 섹션 스타일이 정의되지 않았습니다.");
+    assertOk(modelingHtml.indexOf('data-strategy-section="evidence"') >= 0 && modelingHtml.indexOf('data-strategy-section="results"') >= 0 && modelingHtml.indexOf('data-strategy-section="graphs"') >= 0 && modelingHtml.indexOf('data-strategy-section="registry"') >= 0 && modelingHtml.indexOf('data-strategy-section="trace"') >= 0, "투자 분석 내부 섹션 이동 버튼이 없습니다.");
+    assertOk(modelingHtml.indexOf('data-strategy-section="data"') < 0 && modelingHtml.indexOf('data-strategy-section="policy"') < 0 && modelingHtml.indexOf('data-strategy-section="ontology"') < 0, "이전 전략/관계 섹션 ID가 통합 탭에 남아 있습니다.");
+    assertOk(code.indexOf('if (requested === "ontology" || requested === "relations") return "modeling";') >= 0, "기존 관계 분석 URL을 투자 분석 탭으로 매핑하지 않습니다.");
+    assertOk(code.indexOf("writeStrategySectionHistory") >= 0 && code.indexOf("strategySectionUrl") >= 0, "투자 분석 내부 탭 URL 동기화 경로가 없습니다.");
+    assertOk(modelingHtml.indexOf("<h1>투자 분석</h1>") >= 0, "투자 분석 탭 제목이 상단에 렌더링되지 않았습니다.");
+    assertOk(legacyOntologyHtml.indexOf("<h1>투자 분석</h1>") >= 0 && legacyOntologyHtml.indexOf("investment-bridge-panel") >= 0, "기존 관계 분석 URL이 통합 투자 분석 개요로 열리지 않습니다.");
+    assertOk(modelingHtml.indexOf("investment-bridge-panel") >= 0 && modelingHtml.indexOf("전략 데이터와 관계 분석을 잇는 추론 구조") >= 0, "투자 분석 개요에 전략-관계-AI 파이프라인이 없습니다.");
+    assertOk(modelingHtml.indexOf("AI 추론 입력") >= 0 && modelingHtml.indexOf("investment-ontology-ai-inference-v1") >= 0, "투자 분석 개요에 AI inference packet 계약이 보이지 않습니다.");
+    assertOk(modelingHtml.indexOf("investment-evidence-panel") >= 0 && modelingHtml.indexOf("투자 근거 카드") >= 0, "투자 분석 개요에 reasoning card가 렌더링되지 않았습니다.");
+    assertOk(modelingHtml.indexOf("HOLDS") >= 0 && modelingHtml.indexOf("WATCHES") >= 0, "보유/관심 관계 구분이 투자 분석 개요에 표시되지 않습니다.");
+    assertOk(modelingHtml.indexOf("strategy-process-panel") >= 0 && modelingHtml.indexOf("Strategy Workflow") >= 0, "투자 분석 개요에 처리 순서 UI가 없습니다.");
+    assertOk(modelingHtml.indexOf("model-guide-panel") >= 0 && modelingHtml.indexOf("전략 운영 기준 관리") >= 0, "개요 탭에 모델 운영 가이드가 렌더링되지 않았습니다.");
+    assertOk(modelingHtml.indexOf("strategy-data-panel") < 0 && modelingHtml.indexOf("admin-modeling-panel") < 0 && modelingHtml.indexOf("model-preview-panel") < 0, "개요 탭에 상세 운영 섹션 패널이 섞여 있습니다.");
+    assertOk(modelingEvidenceHtml.indexOf("investment-evidence-panel") >= 0 && modelingEvidenceHtml.indexOf("strategy-data-panel") >= 0, "근거 카드 섹션에 카드와 데이터 점검이 함께 렌더링되지 않았습니다.");
+    assertOk(modelingEvidenceHtml.indexOf("전략 근거") >= 0 && modelingEvidenceHtml.indexOf("관계 근거") >= 0, "근거 카드가 전략 근거와 관계 근거를 분리해서 보여주지 않습니다.");
+    assertOk(modelingEvidenceHtml.indexOf("삼성전자") >= 0 && modelingEvidenceHtml.indexOf("005930 가격과") < 0, "근거 카드 본문에 종목코드가 회사명으로 치환되지 않았습니다.");
+    assertOk(modelingEvidenceHtml.indexOf("체결강도") >= 0 && modelingEvidenceHtml.indexOf("모델-알림 기준") >= 0, "근거 카드 섹션에 전략 데이터 점검 항목이 없습니다.");
+    assertOk(modelingResultsHtml.indexOf("investment-evidence-panel") >= 0 && modelingResultsHtml.indexOf("model-preview-panel") >= 0, "종목 판단 섹션이 근거 카드와 모델 판단을 함께 보여주지 않습니다.");
+    assertOk(modelingResultsHtml.indexOf("실제 데이터 예시") >= 0 && modelingResultsHtml.indexOf("쉬운 해석") >= 0, "종목 판단 섹션에 기존 모델 해석이 보조 근거로 유지되지 않았습니다.");
+    assertOk(modelingGraphHtml.indexOf("TBox·ABox 관계 그래프") >= 0 && modelingGraphHtml.indexOf("규칙 구조 관계 그래프") >= 0 && modelingGraphHtml.indexOf("현재 데이터 관계 그래프") >= 0, "관계 그래프 섹션이 통합 탭 내부에서 렌더링되지 않았습니다.");
+    assertOk(modelingGraphHtml.indexOf("ontology-cytoscape") >= 0 && modelingGraphHtml.indexOf("규칙 구조") >= 0 && modelingGraphHtml.indexOf("현재 데이터") >= 0, "관계 그래프 섹션에 Cytoscape 그래프와 보조 패널이 없습니다.");
+    assertOk(legacyOntologyGraphHtml.indexOf("managed-page managed-page-modeling") >= 0 && legacyOntologyGraphHtml.indexOf("TBox·ABox 관계 그래프") >= 0, "기존 관계 그래프 URL이 통합 탭 그래프 섹션으로 열리지 않습니다.");
+    assertOk(/\.ontology-relationship-graphs\s*\{[\s\S]*grid-template-columns: 1fr;/.test(styles), "관계 그래프가 전폭 1열 구조로 정의되지 않았습니다.");
     assertOk(code.indexOf("ontologyEntityDisplayLabel") >= 0 && code.indexOf('"의견 " + displayName') >= 0, "현재 데이터 관계 그래프 노드가 회사명 표시명을 거치지 않습니다.");
     assertOk(code.indexOf("properties.symbol || entity.label") < 0 && code.indexOf('"의견 " + symbol') < 0, "현재 데이터 관계 그래프 노드 라벨에 종목코드 우선 경로가 남아 있습니다.");
-    assertOk(ontologyRegistryHtml.indexOf("ontology-rule-panel") >= 0 && ontologyRegistryHtml.indexOf("Relation Rule Registry") >= 0, "관계 규칙·프롬프트 섹션에 관계 규칙 레지스트리가 없습니다.");
-    assertOk(ontologyRegistryHtml.indexOf('data-model-setting="ontologyRelationRules"') >= 0, "관계 규칙·프롬프트 섹션에 관계 규칙 편집기가 없습니다.");
-    assertOk(ontologyRegistryHtml.indexOf("수익 보유 + 추세 약화") >= 0 && ontologyRegistryHtml.indexOf("핵심 데이터 부족") >= 0, "관계 규칙·프롬프트 섹션에 기본 관계 규칙이 렌더링되지 않았습니다.");
-    assertOk(ontologyRegistryHtml.indexOf("prompt-registry-panel") >= 0 && ontologyRegistryHtml.indexOf("Prompt Registry") >= 0, "관계 규칙·프롬프트 섹션에 프롬프트 레지스트리가 없습니다.");
-    assertOk(ontologyRegistryHtml.indexOf('data-model-setting="aiPromptTemplates"') >= 0 && ontologyRegistryHtml.indexOf('data-model-setting="aiPromptPolicy"') >= 0, "관계 규칙·프롬프트 섹션에 템플릿/정책 편집기가 없습니다.");
-    assertOk(ontologyRegistryHtml.indexOf("보유 타이밍 AI 분석") >= 0 && ontologyRegistryHtml.indexOf("providedDataOnly=1") >= 0, "관계 규칙·프롬프트 섹션에 기본 프롬프트와 정책이 렌더링되지 않았습니다.");
-    assertOk(ontologyTraceHtml.indexOf("테이블 저장 구조") >= 0 && ontologyTraceHtml.indexOf("규칙 추적") >= 0, "관계 추적 섹션에 관계형 규칙 추적이 없습니다.");
-    assertOk(ontologyTraceHtml.indexOf("ontology-relation-table") >= 0 && ontologyTraceHtml.indexOf("ontology-rule-list") >= 0, "관계 추적 섹션에 관계/규칙 보조 표가 렌더링되지 않았습니다.");
-    assertOk(ontologyHtml.indexOf("삼성전자 가격과 반도체 업종 관계") >= 0 && ontologyHtml.indexOf("005930 가격과") < 0, "관계 분석 의견 본문에 종목코드가 회사명으로 치환되지 않았습니다.");
-    assertOk(ontologyTraceHtml.indexOf("삼성전자 → 반도체") >= 0 && ontologyTraceHtml.indexOf("005930 →") < 0, "관계 추적 샘플 관계가 회사명 대신 종목코드를 노출합니다.");
-    assertOk(ontologyTraceHtml.indexOf("회사 표시명") >= 0 && ontologyTraceHtml.indexOf("종목코드 -> 종목 데이터") < 0, "관계 추적 저장 구조 설명에 종목코드 기준 문구가 남아 있습니다.");
-    assertOk(code.indexOf("writeStrategySectionHistory") >= 0 && code.indexOf("strategySectionUrl") >= 0, "전략 운영 내부 탭 URL 동기화 경로가 없습니다.");
-    assertOk(modelingHtml.indexOf("<h1>전략 운영</h1>") >= 0, "전략 운영 탭 제목이 상단에 렌더링되지 않았습니다.");
-    assertOk(modelingHtml.indexOf("strategy-process-panel") >= 0 && modelingHtml.indexOf("Strategy Workflow") >= 0 && modelingHtml.indexOf("데이터에서 알림까지의 계산 순서") >= 0, "전략 운영 개요에 계산 순서 UI가 없습니다.");
-    assertOk(modelingHtml.indexOf("model-guide-panel") >= 0, "개요 탭에 모델 운영 가이드가 렌더링되지 않았습니다.");
-    assertOk(modelingHtml.indexOf("전략 운영 기준 관리") >= 0, "개요 탭에 전략 운영 기준 관리 제목이 렌더링되지 않았습니다.");
-    assertOk(modelingHtml.indexOf("처음 보는 사람용 쉬운 설명") >= 0, "개요 탭에 초보자용 쉬운 설명 패널이 렌더링되지 않았습니다.");
-    assertOk(modelingHtml.indexOf("읽는 순서") >= 0, "개요 탭에 초보자용 읽는 순서 설명이 렌더링되지 않았습니다.");
-    assertOk(modelingHtml.indexOf("strategy-data-panel") < 0 && modelingHtml.indexOf("admin-modeling-panel") < 0 && modelingHtml.indexOf("model-preview-panel") < 0, "개요 탭에 다른 전략 운영 섹션 패널이 섞여 있습니다.");
-    assertOk(modelingDataHtml.indexOf("strategy-data-panel") >= 0, "데이터 탭에 전략 데이터 점검 패널이 렌더링되지 않았습니다.");
-    assertOk(modelingDataHtml.indexOf("전략 데이터 점검") >= 0, "데이터 탭에 전략 데이터 점검 제목이 렌더링되지 않았습니다.");
-    assertOk(modelingDataHtml.indexOf("체결강도") >= 0, "데이터 탭에 체결강도 항목이 없습니다.");
-    assertOk(modelingDataHtml.indexOf("모델-알림 기준") >= 0, "데이터 탭에 모델-알림 기준 항목이 없습니다.");
-    assertOk(modelingPolicyHtml.indexOf("admin-modeling-panel") >= 0 && modelingPolicyHtml.indexOf("모델·알림 정책 관리") >= 0, "모델·알림 섹션에 운영 정책 패널이 없습니다.");
-    assertOk(modelingPolicyHtml.indexOf("model-version-panel") >= 0, "모델·알림 섹션에 모델 버전 패널이 렌더링되지 않았습니다.");
-    assertOk(modelingPolicyHtml.indexOf('data-model-setting="notificationScoreFormula"') >= 0, "모델·알림 섹션에 알림 발송 공식 편집기가 없습니다.");
-    assertOk(modelingPolicyHtml.indexOf("ontology-rule-panel") < 0 && modelingPolicyHtml.indexOf("prompt-registry-panel") < 0, "모델·알림 섹션에 관계 규칙/프롬프트 편집기가 섞여 있습니다.");
+    assertOk(modelingRegistryHtml.indexOf("investment-ai-packet-panel") >= 0 && modelingRegistryHtml.indexOf("AI 추론 입력 계약") >= 0, "규칙·프롬프트 섹션에 AI 추론 입력 계약이 없습니다.");
+    assertOk(modelingRegistryHtml.indexOf("ontology-rule-panel") >= 0 && modelingRegistryHtml.indexOf("Relation Rule Registry") >= 0, "규칙·프롬프트 섹션에 관계 규칙 레지스트리가 없습니다.");
+    assertOk(modelingRegistryHtml.indexOf('data-model-setting="ontologyRelationRules"') >= 0, "규칙·프롬프트 섹션에 관계 규칙 편집기가 없습니다.");
+    assertOk(modelingRegistryHtml.indexOf("prompt-registry-panel") >= 0 && modelingRegistryHtml.indexOf("Prompt Registry") >= 0, "규칙·프롬프트 섹션에 프롬프트 레지스트리가 없습니다.");
+    assertOk(modelingRegistryHtml.indexOf("admin-modeling-panel") >= 0 && modelingRegistryHtml.indexOf("model-version-panel") >= 0, "규칙·프롬프트 섹션에 보조 모델 정책과 버전 관리가 유지되지 않았습니다.");
+    assertOk(modelingRegistryHtml.indexOf('data-model-setting="notificationScoreFormula"') >= 0, "규칙·프롬프트 섹션에 알림 발송 공식 편집기가 없습니다.");
+    assertOk(modelingTraceHtml.indexOf("테이블 저장 구조") >= 0 && modelingTraceHtml.indexOf("규칙 추적") >= 0, "검증 추적 섹션에 관계형 규칙 추적이 없습니다.");
+    assertOk(modelingTraceHtml.indexOf("ontology-relation-table") >= 0 && modelingTraceHtml.indexOf("ontology-rule-list") >= 0, "검증 추적 섹션에 관계/규칙 보조 표가 렌더링되지 않았습니다.");
+    assertOk(modelingTraceHtml.indexOf("삼성전자 → 반도체") >= 0 && modelingTraceHtml.indexOf("005930 →") < 0, "검증 추적 샘플 관계가 회사명 대신 종목코드를 노출합니다.");
+    assertOk(modelingTraceHtml.indexOf("회사 표시명") >= 0 && modelingTraceHtml.indexOf("종목코드 -> 종목 데이터") < 0, "검증 추적 저장 구조 설명에 종목코드 기준 문구가 남아 있습니다.");
+    assertOk(code.indexOf("reasoningCards") >= 0 && code.indexOf("investmentAnalysis") >= 0 && code.indexOf("aiInferencePacket") >= 0, "프론트가 백엔드 reasoning card와 AI inference packet 계약을 소비하지 않습니다.");
+    assertOk(modelingHtml.indexOf("model-timing-panel") < 0 && modelingResultsHtml.indexOf("model-timing-panel") < 0, "Mock 시계열 기반 타이밍 패널이 아직 렌더링됩니다.");
     assertOk(modelingResultsHtml.indexOf("model-preview-panel") >= 0, "모델 결과 탭에 현재 종목 판단 결과 패널이 렌더링되지 않았습니다.");
     assertOk(modelingResultsHtml.indexOf("실제 데이터 예시") >= 0, "모델 결과 탭에 실제 데이터 예시 설명이 렌더링되지 않았습니다.");
     assertOk(modelingResultsHtml.indexOf("쉬운 해석") >= 0, "모델 결과 탭에 종목별 쉬운 해석이 렌더링되지 않았습니다.");
@@ -1517,6 +1587,10 @@ async function checkNormalMode(port, context) {
   assertOk(tossPayload.tossDecision && Array.isArray(tossPayload.tossDecision.items), "토스 판단 API에 판단 항목이 없습니다.");
   assertOk(tossPayload.tossDecision.items.some(function (item) { return item.symbol === "AAPL"; }), "토스 판단 항목에 AAPL이 없습니다.");
   assertOk(tossPayload.tossDecision.items.some(function (item) { return item.symbol === "TSLA"; }), "토스 판단 항목에 TSLA 관심 종목이 없습니다.");
+  assertOk(tossPayload.tossDecision.investmentAnalysis && tossPayload.tossDecision.investmentAnalysis.contract === "investment-ontology-ai-inference-v1", "토스 판단 API에 투자 분석 AI 추론 계약이 없습니다.");
+  assertOk(Array.isArray(tossPayload.tossDecision.investmentAnalysis.reasoningCards) && tossPayload.tossDecision.investmentAnalysis.reasoningCards.length > 0, "토스 판단 API에 reasoning card가 없습니다.");
+  assertOk(tossPayload.tossDecision.ontologyStrategy && tossPayload.tossDecision.ontologyStrategy.aiInferencePacket && tossPayload.tossDecision.ontologyStrategy.aiInferencePacket.contract === "investment-ontology-ai-inference-v1", "온톨로지 전략에 AI inference packet이 없습니다.");
+  assertOk(tossPayload.tossDecision.items.some(function (item) { return item.reasoningCard && item.reasoningCard.id; }), "판단 항목이 reasoning card와 연결되지 않았습니다.");
   assertOk(tossPayload.portfolio && Array.isArray(tossPayload.portfolio.markets), "토스 판단 API에 시장별 현금비중 배열이 없습니다.");
   assertOk(tossPayload.portfolio.markets.some(function (market) { return market.key === "KR"; }), "시장별 현금비중에 한국장 항목이 없습니다.");
   assertOk(tossPayload.portfolio.markets.some(function (market) { return market.key === "US"; }), "시장별 현금비중에 미국장 항목이 없습니다.");

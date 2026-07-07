@@ -101,6 +101,7 @@ class Position:
     ma20_distance: float = 0.0
     ma60_distance: float = 0.0
     sector: str = "기타"
+    source: str = "holding"
 
     def key(self) -> str:
         return self.symbol.upper()

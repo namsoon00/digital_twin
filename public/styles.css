@@ -3179,6 +3179,10 @@ h3 {
   grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 
+.strategy-section-tabs {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
 .notification-section-tabs button,
 .ontology-section-tabs button,
 .strategy-section-tabs button {
@@ -4636,6 +4640,189 @@ h3 {
 .lab-stats-grid strong {
   color: var(--ink);
   font-size: 17px;
+  overflow-wrap: anywhere;
+}
+
+.investment-bridge-panel,
+.investment-evidence-panel,
+.investment-ai-packet-panel {
+  grid-column: 1 / -1;
+}
+
+.investment-bridge-flow {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+  min-width: 0;
+  padding: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.investment-bridge-step {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px 10px;
+  min-width: 0;
+  padding: 12px 14px;
+  border-left: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel-soft) 82%, transparent);
+}
+
+.investment-bridge-step:first-child {
+  border-left: 0;
+}
+
+.investment-bridge-step b {
+  color: var(--blue);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.investment-bridge-step span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.investment-bridge-step strong,
+.investment-bridge-step em,
+.investment-bridge-step i {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.investment-bridge-step strong {
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.investment-bridge-step em,
+.investment-bridge-step i {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.investment-bridge-step i {
+  grid-column: 1 / -1;
+}
+
+.investment-evidence-list {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+}
+
+.investment-evidence-card {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+}
+
+.investment-evidence-head {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.investment-evidence-head > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.investment-evidence-head strong {
+  color: var(--ink);
+  font-size: 16px;
+  overflow-wrap: anywhere;
+}
+
+.investment-evidence-head span,
+.investment-evidence-narrative,
+.reasoning-card-list span,
+.reasoning-graph-refs span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.investment-evidence-grid,
+.reasoning-graph-refs,
+.investment-packet-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
+.investment-evidence-grid span,
+.reasoning-graph-refs span,
+.investment-packet-grid section {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--input);
+}
+
+.investment-evidence-grid strong,
+.reasoning-graph-refs strong,
+.investment-packet-grid strong {
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.investment-evidence-narrative {
+  display: grid;
+  gap: 5px;
+  padding: 10px;
+  border-left: 3px solid var(--blue);
+  background: color-mix(in srgb, var(--panel) 72%, transparent);
+}
+
+.investment-evidence-narrative p {
+  margin: 0;
+}
+
+.investment-evidence-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.reasoning-card-list {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.reasoning-card-list strong {
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.investment-packet-grid {
+  padding: 16px;
+}
+
+.investment-packet-grid section span,
+.investment-packet-grid section em {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 760;
+  line-height: 1.35;
   overflow-wrap: anywhere;
 }
 

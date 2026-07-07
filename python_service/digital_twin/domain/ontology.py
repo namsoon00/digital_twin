@@ -16,18 +16,21 @@ TBOX_CLASSES = [
     "Market",
     "Currency",
     "Cash",
+    "WatchlistCandidate",
     "Risk",
     "Opportunity",
     "Contradiction",
     "Evidence",
     "Belief",
     "Opinion",
+    "ReasoningCard",
     "AIReview",
     "LegacyScoreModel",
 ]
 
 TBOX_RELATION_TYPES = [
     "HOLDS",
+    "WATCHES",
     "HOLDS_CASH",
     "BELONGS_TO",
     "TRADED_IN",
@@ -40,6 +43,7 @@ TBOX_RELATION_TYPES = [
     "HAS_EVIDENCE",
     "HAS_BELIEF",
     "HAS_OPINION",
+    "HAS_REASONING_CARD",
 ]
 
 TBOX_REASONING_RULES = [
@@ -48,6 +52,7 @@ TBOX_REASONING_RULES = [
     "legacy score disagreement with trend or flow creates contradiction beliefs",
     "data quality controls AI opinion confidence",
     "legacy score model remains supporting evidence, not the primary decision model",
+    "watchlist candidates create observation assertions, not sell decisions",
 ]
 
 
@@ -137,6 +142,7 @@ class PortfolioOntology:
     evidence: List[OntologyEvidence] = field(default_factory=list)
     beliefs: List[OntologyBelief] = field(default_factory=list)
     opinions: List[OntologyOpinion] = field(default_factory=list)
+    reasoning_cards: List[Dict[str, object]] = field(default_factory=list)
     worldview: Dict[str, object] = field(default_factory=dict)
     prompt: str = ""
 
@@ -150,6 +156,8 @@ class PortfolioOntology:
             "evidence": [item.to_dict() for item in self.evidence],
             "beliefs": [item.to_dict() for item in self.beliefs],
             "opinions": [item.to_dict() for item in self.opinions],
+            "reasoningCards": list(self.reasoning_cards),
+            "aiInferencePacket": build_ai_inference_packet(self),
             "worldview": dict(self.worldview or {}),
             "prompt": self.prompt,
             "promptVersion": ONTOLOGY_PROMPT_VERSION,
@@ -236,6 +244,22 @@ def abox_properties(properties: Dict[str, object] = None) -> Dict[str, object]:
 
 def symbol_key(position: Position) -> str:
     return str(position.symbol or position.name or "").upper().strip()
+
+
+def position_source(position: Position) -> str:
+    return str(getattr(position, "source", "") or "holding").strip().lower() or "holding"
+
+
+def is_watchlist_position(position: Position) -> bool:
+    return position_source(position) == "watchlist"
+
+
+def is_holding_position(position: Position) -> bool:
+    return not is_watchlist_position(position) and (number(position.market_value) > 0 or number(position.quantity) > 0)
+
+
+def observable_position(position: Position) -> bool:
+    return not position.is_cash() and bool(symbol_key(position))
 
 
 def sector_ratio(portfolio: PortfolioSummary, sector: str) -> float:
@@ -399,6 +423,79 @@ def build_position_opinion(
     )
 
 
+def build_watchlist_opinion(position: Position, legacy_model: Dict[str, object]) -> OntologyOpinion:
+    symbol = symbol_key(position)
+    trend = trend_score(position)
+    flow = smart_money_score(position)
+    quality = data_quality_score(position)
+    risks: List[str] = []
+    supporting: List[str] = []
+    opportunities: List[str] = []
+    contradictions: List[str] = []
+
+    if quality < 60:
+        contradictions.append("관심 종목 판단에 필요한 가격·추세 데이터가 부족함")
+    if trend <= -8:
+        risks.append("진입 후보로 보기에는 추세 관계가 약함")
+    elif trend >= 8:
+        supporting.append("추세가 진입 관찰 근거를 뒷받침")
+        opportunities.append("가격 추세가 우호적")
+    if flow <= -25:
+        risks.append("외국인·기관 수급 관계가 부정적")
+    elif flow >= 25:
+        supporting.append("외국인·기관 수급 관계가 우호적")
+        opportunities.append("수급이 진입 관찰 근거를 보강")
+    if not number(position.current_price):
+        contradictions.append("현재가가 없어 가격 기준을 확정할 수 없음")
+
+    observation_pressure = 26.0
+    observation_pressure += clamp(trend * 0.35, -10.0, 18.0)
+    observation_pressure += clamp(flow * 0.08, -8.0, 12.0)
+    observation_pressure += clamp((quality - 55) * 0.18, -8.0, 10.0)
+    observation_pressure = clamp(observation_pressure, 0.0, 100.0)
+    if observation_pressure >= 55 and not contradictions:
+        action = "관심 종목: 관계 우호 관찰"
+        tone = "watch"
+    elif risks or contradictions:
+        action = "관심 종목: 진입 조건 재확인"
+        tone = "hold"
+    else:
+        action = "관심 종목: 진입 기준 대기"
+        tone = "hold"
+    evidence_ids = [
+        evidence_id(symbol, "market-observation"),
+        evidence_id(symbol, "trend"),
+        evidence_id(symbol, "flow"),
+        evidence_id(symbol, "data-quality"),
+    ]
+    thesis_parts = []
+    if supporting:
+        thesis_parts.append("지지: " + ", ".join(supporting[:2]))
+    if risks:
+        thesis_parts.append("리스크: " + ", ".join(risks[:2]))
+    if contradictions:
+        thesis_parts.append("공백: " + ", ".join(contradictions[:1]))
+    thesis = "; ".join(thesis_parts) or "보유가 아닌 관심 종목이므로 현재가, 추세, 수급이 채워질 때 진입 기준을 확인합니다."
+    confidence = clamp(quality * 0.006 + len(evidence_ids) * 0.05 - len(contradictions) * 0.08, 0.2, 0.88)
+    return OntologyOpinion(
+        symbol=symbol,
+        action=action,
+        tone=tone,
+        conviction=round(confidence * 100, 1),
+        ontology_pressure=round(observation_pressure, 1),
+        thesis=thesis,
+        supporting_beliefs=supporting[:4],
+        contradictions=contradictions[:4],
+        dominant_risks=risks[:5],
+        opportunities=opportunities[:4],
+        legacy_model={
+            "exitPressure": round(number(legacy_model.get("exitPressure")), 1),
+            "decisionBasis": legacy_model.get("decisionBasis") or "watchlist-observation",
+        },
+        evidence_ids=evidence_ids,
+    )
+
+
 def build_portfolio_ontology(
     positions: Iterable[Position],
     portfolio: PortfolioSummary,
@@ -408,7 +505,15 @@ def build_portfolio_ontology(
 ) -> PortfolioOntology:
     legacy_by_symbol = legacy_by_symbol or {}
     external_signals = external_signals or {}
-    clean_positions = [item for item in positions if not item.is_cash() and number(item.market_value) > 0]
+    observed_by_symbol: Dict[str, Position] = {}
+    for item in positions:
+        if not observable_position(item):
+            continue
+        key = symbol_key(item)
+        previous = observed_by_symbol.get(key)
+        if previous is None or (is_watchlist_position(previous) and is_holding_position(item)):
+            observed_by_symbol[key] = item
+    observed_positions = list(observed_by_symbol.values())
     graph = PortfolioOntology(portfolio_id=portfolio_id)
     graph.entities.extend(tbox_entities())
     graph.relations.extend(tbox_relations())
@@ -451,46 +556,76 @@ def build_portfolio_ontology(
             weight=round(number(sector.get("ratio")) / 100, 4),
             properties=abox_properties({"basis": "sector-weight"}),
         ))
-    for position in clean_positions:
+    for position in observed_positions:
         symbol = symbol_key(position)
         stock_id = entity_id("stock", symbol)
+        source = "watchlist" if is_watchlist_position(position) else "holding"
+        holding = is_holding_position(position)
+        stock_tbox_classes = ["Stock"] + (["WatchlistCandidate"] if source == "watchlist" else [])
         graph.entities.append(OntologyEntity(stock_id, position.name or symbol, "stock", abox_properties({
             "symbol": symbol,
             "market": position.market,
             "currency": position.currency,
             "sector": position.sector,
+            "source": source,
             "marketValue": number(position.market_value),
             "profitLossRate": number(position.profit_loss_rate),
             "tboxClass": "Stock",
+            "tboxClasses": stock_tbox_classes,
         })))
         for kind, label in [("market", position.market or "unknown"), ("currency", position.currency or "unknown")]:
             tbox_class = "Market" if kind == "market" else "Currency"
             graph.entities.append(OntologyEntity(entity_id(kind, label), label, kind, abox_properties({"tboxClass": tbox_class})))
+        graph.relations.append(OntologyRelation(
+            entity_id("portfolio", portfolio_id),
+            stock_id,
+            "HOLDS" if holding else "WATCHES",
+            weight=round(position_weight(position, portfolio) / 100, 4) if holding else 0.15,
+            properties=abox_properties({"source": source, "basis": "portfolio-position" if holding else "watchlist"}),
+        ))
         graph.relations.extend([
-            OntologyRelation(entity_id("portfolio", portfolio_id), stock_id, "HOLDS", weight=round(position_weight(position, portfolio) / 100, 4), properties=abox_properties()),
-            OntologyRelation(stock_id, entity_id("sector", position.sector or "기타"), "BELONGS_TO", weight=1.0, properties=abox_properties()),
-            OntologyRelation(stock_id, entity_id("market", position.market or "unknown"), "TRADED_IN", weight=1.0, properties=abox_properties()),
-            OntologyRelation(stock_id, entity_id("currency", position.currency or "unknown"), "DENOMINATED_IN", weight=1.0, properties=abox_properties()),
-            OntologyRelation(stock_id, entity_id("concept", "legacy-score-model"), "USES_EVIDENCE_FROM", weight=0.55, properties=abox_properties()),
-            OntologyRelation(stock_id, entity_id("concept", "ai-investment-review"), "REQUESTS_OPINION_FROM", weight=1.0, properties=abox_properties()),
+            OntologyRelation(stock_id, entity_id("sector", position.sector or "기타"), "BELONGS_TO", weight=1.0, properties=abox_properties({"source": source})),
+            OntologyRelation(stock_id, entity_id("market", position.market or "unknown"), "TRADED_IN", weight=1.0, properties=abox_properties({"source": source})),
+            OntologyRelation(stock_id, entity_id("currency", position.currency or "unknown"), "DENOMINATED_IN", weight=1.0, properties=abox_properties({"source": source})),
+            OntologyRelation(stock_id, entity_id("concept", "ai-investment-review"), "REQUESTS_OPINION_FROM", weight=1.0, properties=abox_properties({"source": source})),
         ])
+        if holding:
+            graph.relations.append(OntologyRelation(
+                stock_id,
+                entity_id("concept", "legacy-score-model"),
+                "USES_EVIDENCE_FROM",
+                weight=0.55,
+                properties=abox_properties({"source": source}),
+            ))
         legacy = legacy_by_symbol.get(symbol) or legacy_by_symbol.get(position.symbol) or {}
-        opinion = build_position_opinion(position, portfolio, legacy)
+        opinion = build_position_opinion(position, portfolio, legacy) if holding else build_watchlist_opinion(position, legacy)
         graph.opinions.append(opinion)
         weight = position_weight(position, portfolio)
         trend = trend_score(position)
         flow = smart_money_score(position)
         quality = data_quality_score(position)
-        evidence_rows = [
-            ("legacy-model", "legacyModel", "기존 점수 모델을 보조 근거로 사용", opinion.legacy_model, 0.75),
-            ("portfolio-exposure", "portfolio", "포트폴리오/섹터 노출 관계", {
-                "positionWeight": round(weight, 2),
-                "sectorWeight": round(sector_weights.get(position.sector, 0.0), 2),
-            }, 0.85),
-            ("trend", "market-data", "이동평균과 가격 추세 관계", {"trendScore": round(trend, 2)}, 0.65),
-            ("flow", "market-data", "외국인·기관 수급 관계", {"smartMoneyScore": round(flow, 2)}, 0.6),
-            ("data-quality", "data-quality", "AI 판단에 투입할 데이터 완성도", {"qualityScore": round(quality, 2)}, 0.7),
-        ]
+        if holding:
+            evidence_rows = [
+                ("legacy-model", "legacyModel", "기존 점수 모델을 보조 근거로 사용", opinion.legacy_model, 0.75),
+                ("portfolio-exposure", "portfolio", "포트폴리오/섹터 노출 관계", {
+                    "positionWeight": round(weight, 2),
+                    "sectorWeight": round(sector_weights.get(position.sector, 0.0), 2),
+                }, 0.85),
+                ("trend", "market-data", "이동평균과 가격 추세 관계", {"trendScore": round(trend, 2)}, 0.65),
+                ("flow", "market-data", "외국인·기관 수급 관계", {"smartMoneyScore": round(flow, 2)}, 0.6),
+                ("data-quality", "data-quality", "AI 판단에 투입할 데이터 완성도", {"qualityScore": round(quality, 2)}, 0.7),
+            ]
+        else:
+            evidence_rows = [
+                ("market-observation", "watchlist", "관심 종목 현재가와 관찰 상태", {
+                    "currentPrice": round(number(position.current_price), 4),
+                    "market": position.market,
+                    "currency": position.currency,
+                }, 0.62),
+                ("trend", "market-data", "관심 종목 이동평균과 가격 추세 관계", {"trendScore": round(trend, 2)}, 0.55),
+                ("flow", "market-data", "관심 종목 외국인·기관 수급 관계", {"smartMoneyScore": round(flow, 2)}, 0.5),
+                ("data-quality", "data-quality", "진입 관찰에 투입할 데이터 완성도", {"qualityScore": round(quality, 2)}, 0.65),
+            ]
         for kind, source, summary, value, confidence in evidence_rows:
             graph.evidence.append(OntologyEvidence(
                 evidence_id(symbol, kind),
@@ -520,6 +655,7 @@ def build_portfolio_ontology(
     graph.entities = dedupe_entities(graph.entities)
     graph.relations = dedupe_relations(graph.relations)
     graph.evidence = dedupe_evidence(graph.evidence)
+    graph.reasoning_cards = build_reasoning_cards(graph)
     graph.worldview = portfolio_worldview(graph, portfolio, external_signals)
     graph.prompt = build_investment_opinion_prompt(graph)
     return graph
@@ -555,6 +691,164 @@ def dedupe_evidence(items: List[OntologyEvidence]) -> List[OntologyEvidence]:
     return list(merged.values())
 
 
+def relation_key(item: OntologyRelation) -> str:
+    return "|".join([item.source, item.relation_type, item.target])
+
+
+def entity_label_map(graph: PortfolioOntology) -> Dict[str, str]:
+    return {item.entity_id: item.label for item in graph.entities}
+
+
+def reasoning_card_data_gaps(evidence_rows: List[OntologyEvidence]) -> List[str]:
+    gaps: List[str] = []
+    for item in evidence_rows:
+        value = item.value or {}
+        if item.kind == "data-quality" and number(value.get("qualityScore")) < 60:
+            gaps.append("가격·이동평균·수급 데이터 일부 부족")
+        if item.kind == "market-observation" and not number(value.get("currentPrice")):
+            gaps.append("현재가 미확인")
+    return sorted(set(gaps))
+
+
+def compact_evidence_row(item: OntologyEvidence) -> Dict[str, object]:
+    payload = item.to_dict()
+    payload["confidence"] = round(number(payload.get("confidence")), 2)
+    return payload
+
+
+def compact_relation_row(item: OntologyRelation, labels: Dict[str, str]) -> Dict[str, object]:
+    return {
+        "id": relation_key(item),
+        "source": item.source,
+        "sourceLabel": labels.get(item.source, item.source),
+        "target": item.target,
+        "targetLabel": labels.get(item.target, item.target),
+        "type": item.relation_type,
+        "weight": round(number(item.weight), 4),
+        "evidenceIds": list(item.evidence_ids or []),
+        "properties": dict(item.properties or {}),
+    }
+
+
+def build_reasoning_cards(graph: PortfolioOntology) -> List[Dict[str, object]]:
+    labels = entity_label_map(graph)
+    entities = {item.entity_id: item for item in graph.entities}
+    stocks = [
+        item
+        for item in graph.entities
+        if item.kind == "stock" and (item.properties or {}).get("ontologyBox") != "TBox"
+    ]
+    cards: List[Dict[str, object]] = []
+    for stock in sorted(stocks, key=lambda item: item.label):
+        properties = dict(stock.properties or {})
+        symbol = str(properties.get("symbol") or stock.label or "").upper()
+        if not symbol:
+            continue
+        relations = [
+            item
+            for item in graph.relations
+            if item.source == stock.entity_id or item.target == stock.entity_id
+        ]
+        evidence_rows = [item for item in graph.evidence if item.subject == stock.entity_id]
+        belief_rows = [item for item in graph.beliefs if item.subject == stock.entity_id]
+        opinion = graph.opinion_for_symbol(symbol)
+        opinion_payload = opinion.to_dict() if opinion else {}
+        neighbor_ids = sorted(set(
+            [stock.entity_id]
+            + [item.source for item in relations]
+            + [item.target for item in relations]
+        ))
+        tbox_classes = sorted(set(
+            [
+                str(value)
+                for entity_id_value in neighbor_ids
+                for value in (
+                    (entities.get(entity_id_value).properties or {}).get("tboxClasses")
+                    or [(entities.get(entity_id_value).properties or {}).get("tboxClass")]
+                    if entities.get(entity_id_value)
+                    else []
+                )
+                if value
+            ]
+            + ["Evidence", "Belief", "Opinion", "AIReview"]
+        ))
+        gaps = reasoning_card_data_gaps(evidence_rows)
+        source = str(properties.get("source") or "holding")
+        portfolio_relation = next((
+            item.relation_type
+            for item in relations
+            if item.target == stock.entity_id and item.relation_type in {"HOLDS", "WATCHES"}
+        ), "HOLDS" if source != "watchlist" else "WATCHES")
+        cards.append({
+            "id": "reasoning-card:" + symbol,
+            "symbol": symbol,
+            "companyName": stock.label,
+            "displayName": stock.label,
+            "source": source,
+            "portfolioRelation": portfolio_relation,
+            "status": "needsData" if gaps else "readyForAiReview",
+            "finalOpinion": {
+                "action": opinion_payload.get("action") or "",
+                "tone": opinion_payload.get("tone") or "",
+                "ontologyPressure": opinion_payload.get("ontology_pressure") or opinion_payload.get("ontologyPressure") or 0,
+                "conviction": opinion_payload.get("conviction") or 0,
+                "thesis": opinion_payload.get("thesis") or "",
+            },
+            "legacyModel": dict(opinion_payload.get("legacy_model") or opinion_payload.get("legacyModel") or {}),
+            "strategyEvidence": [compact_evidence_row(item) for item in evidence_rows],
+            "relationEvidence": [compact_relation_row(item, labels) for item in relations],
+            "beliefs": [item.to_dict() for item in belief_rows],
+            "dataGaps": gaps,
+            "graphContext": {
+                "stockEntityId": stock.entity_id,
+                "tboxClasses": tbox_classes,
+                "aboxEntityIds": neighbor_ids,
+                "relationIds": [relation_key(item) for item in relations],
+                "evidenceIds": [item.evidence_id for item in evidence_rows],
+                "beliefIds": [item.belief_id for item in belief_rows],
+                "opinionId": "opinion:" + symbol,
+            },
+            "aiInference": {
+                "role": "ontology-first-investment-opinion",
+                "promptVersion": ONTOLOGY_PROMPT_VERSION,
+                "legacyModelRole": "supporting-evidence",
+                "question": "전략 근거와 관계 근거를 함께 읽고 보유/관심 상태에 맞는 투자 의견, 반대 신호, 다음 검증 순서를 설명합니다.",
+            },
+        })
+    return cards
+
+
+def build_ai_inference_packet(graph: PortfolioOntology) -> Dict[str, object]:
+    return {
+        "contract": "investment-ontology-ai-inference-v1",
+        "promptVersion": ONTOLOGY_PROMPT_VERSION,
+        "role": "ontology-first-investment-opinion",
+        "legacyModelRole": "supporting-evidence",
+        "inputOrder": ["tbox", "abox", "reasoningCards", "relations", "evidence", "beliefs", "opinions"],
+        "reasoningCardCount": len(graph.reasoning_cards),
+        "reasoningCardIds": [item.get("id") for item in graph.reasoning_cards],
+        "graphInputs": {
+            "entityCount": len(graph.entities),
+            "relationCount": len(graph.relations),
+            "evidenceCount": len(graph.evidence),
+            "beliefCount": len(graph.beliefs),
+            "opinionCount": len(graph.opinions),
+        },
+        "outputSchema": {
+            "portfolioView": "string",
+            "relationThesis": "string",
+            "companyOpinions": ["symbol", "action", "thesis", "contradictions", "nextChecks"],
+            "missingDataImpact": ["string"],
+        },
+        "guardrails": [
+            "제공된 TBox, ABox, reasoning card, 관계 행만 사용합니다.",
+            "보유 종목 HOLDS와 관심 종목 WATCHES를 다른 판단 단계로 설명합니다.",
+            "기존 점수 모델은 보조 근거로만 사용합니다.",
+            "매수/매도 명령을 확정하지 않고 확인 기준과 시나리오를 제시합니다.",
+        ],
+    }
+
+
 def portfolio_worldview(
     graph: PortfolioOntology,
     portfolio: PortfolioSummary,
@@ -588,6 +882,8 @@ def prompt_payload(graph: PortfolioOntology) -> Dict[str, object]:
         "tbox": ontology_tbox(),
         "abox": ontology_abox(graph),
         "worldview": graph.worldview,
+        "aiInferencePacket": build_ai_inference_packet(graph),
+        "reasoningCards": list(graph.reasoning_cards),
         "opinions": [item.to_dict() for item in graph.opinions],
         "relations": [item.to_dict() for item in graph.relations[:80]],
         "evidence": [item.to_dict() for item in graph.evidence[:80]],

@@ -16,6 +16,7 @@ class NullOntologyGraphRepository:
             "reason": "Neo4j ontology storage is not configured.",
             "entityCount": len(graph.entities),
             "relationCount": len(graph.relations),
+            "reasoningCardCount": len(getattr(graph, "reasoning_cards", []) or []),
         }
 
 
@@ -117,6 +118,22 @@ class Neo4jOntologyGraphRepository:
             for item in graph.opinions
         ]
 
+    def rows_for_reasoning_cards(self, graph: PortfolioOntology) -> List[Dict[str, object]]:
+        return [
+            {
+                "id": str(item.get("id") or ""),
+                "symbol": str(item.get("symbol") or "").upper(),
+                "companyName": str(item.get("companyName") or item.get("displayName") or item.get("symbol") or ""),
+                "source": str(item.get("source") or ""),
+                "portfolioRelation": str(item.get("portfolioRelation") or ""),
+                "status": str(item.get("status") or ""),
+                "ontologyBox": "ABox",
+                "payloadJson": json.dumps(item, ensure_ascii=False, sort_keys=True),
+            }
+            for item in (getattr(graph, "reasoning_cards", []) or [])
+            if isinstance(item, dict) and item.get("id") and item.get("symbol")
+        ]
+
     def statements(self, graph: PortfolioOntology) -> List[Dict[str, object]]:
         updated_at = utc_now()
         statements = [
@@ -163,6 +180,18 @@ class Neo4jOntologyGraphRepository:
                 ),
                 "parameters": {"rows": self.rows_for_opinions(graph), "updatedAt": updated_at},
             },
+            {
+                "statement": (
+                    "UNWIND $rows AS row "
+                    "MERGE (n:OntologyReasoningCard {id: row.id}) "
+                    "SET n.symbol = row.symbol, n.companyName = row.companyName, n.source = row.source, "
+                    "n.portfolioRelation = row.portfolioRelation, n.status = row.status, "
+                    "n.ontologyBox = row.ontologyBox, n.payloadJson = row.payloadJson, n.updatedAt = $updatedAt "
+                    "WITH row, n, 'stock:' + row.symbol AS stockId MATCH (s:OntologyEntity {id: stockId}) "
+                    "MERGE (s)-[:HAS_REASONING_CARD]->(n)"
+                ),
+                "parameters": {"rows": self.rows_for_reasoning_cards(graph), "updatedAt": updated_at},
+            },
         ]
         for relation_type, rows in group_relation_rows(self.rows_for_relations(graph)).items():
             statements.append({
@@ -196,6 +225,7 @@ class Neo4jOntologyGraphRepository:
                 "reason": str(error)[:180],
                 "entityCount": len(graph.entities),
                 "relationCount": len(graph.relations),
+                "reasoningCardCount": len(getattr(graph, "reasoning_cards", []) or []),
             }
         errors = payload.get("errors") or []
         if errors:
@@ -212,6 +242,7 @@ class Neo4jOntologyGraphRepository:
             "entityCount": len(graph.entities),
             "relationCount": len(graph.relations),
             "evidenceCount": len(graph.evidence),
+            "reasoningCardCount": len(getattr(graph, "reasoning_cards", []) or []),
         }
 
     def save_graph_via_driver(self, graph: PortfolioOntology) -> Dict[str, object]:
@@ -224,6 +255,7 @@ class Neo4jOntologyGraphRepository:
                 "reason": "neo4j Python driver is not installed: " + str(error)[:120],
                 "entityCount": len(graph.entities),
                 "relationCount": len(graph.relations),
+                "reasoningCardCount": len(getattr(graph, "reasoning_cards", []) or []),
             }
         try:
             driver = GraphDatabase.driver(self.uri, auth=(self.user, self.password) if self.user or self.password else None)
@@ -238,6 +270,7 @@ class Neo4jOntologyGraphRepository:
                 "reason": str(error)[:180],
                 "entityCount": len(graph.entities),
                 "relationCount": len(graph.relations),
+                "reasoningCardCount": len(getattr(graph, "reasoning_cards", []) or []),
             }
         return {
             "saved": True,
@@ -245,6 +278,7 @@ class Neo4jOntologyGraphRepository:
             "entityCount": len(graph.entities),
             "relationCount": len(graph.relations),
             "evidenceCount": len(graph.evidence),
+            "reasoningCardCount": len(getattr(graph, "reasoning_cards", []) or []),
         }
 
 

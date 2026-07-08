@@ -512,7 +512,43 @@ def _html_row(label: str, value: object) -> str:
 
 
 def _plain_value(context: Dict[str, object], label: str) -> str:
+    if label == "투자자":
+        return _investor_text_from_lines(_raw_lines(context))
     return _line_after_colon(_raw_lines(context), label)
+
+
+def _split_legacy_investor_rows(text: str) -> List[str]:
+    rows = []
+    for part in re.split(r",\s*(?=(?:기관|개인)(?:\s|:))", str(text or "")):
+        cleaned = part.strip()
+        if cleaned:
+            rows.append(cleaned)
+    return rows
+
+
+def _investor_text_from_lines(lines: List[str]) -> str:
+    for index, line in enumerate(lines):
+        if not str(line or "").startswith("투자자"):
+            continue
+        first = _line_after_colon([line], "투자자")
+        rows = _split_legacy_investor_rows(first)
+        for next_line in lines[index + 1 :]:
+            stripped = str(next_line or "").strip()
+            if stripped.startswith(("외국인:", "기관:", "개인:")):
+                rows.append(stripped)
+                continue
+            break
+        return "\n".join(rows)
+    return ""
+
+
+def _html_multiline_rows(title: str, value: object) -> List[str]:
+    rows = [line.strip() for line in str(value or "").splitlines() if line.strip()]
+    if not rows:
+        return []
+    result = ["<b>" + html.escape(title, quote=False) + "</b>"]
+    result.extend("• " + html.escape(row, quote=False) for row in rows)
+    return result
 
 
 def _criteria_summary(context: Dict[str, object]) -> str:
@@ -549,10 +585,9 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
         _html_row("수익률", pnl),
         _html_row("추세", trend),
         _html_row("수급", flow),
-        _html_row("투자자", investor),
-        "",
-        "<b>핵심 근거</b>",
     ]
+    parts.extend(_html_multiline_rows("투자자", investor))
+    parts.extend(["", "<b>핵심 근거</b>"])
     parts.extend("• " + html.escape(item, quote=False) for item in response.evidence[:4])
     if response.counter_evidence:
         parts.extend(["", "<b>반대 신호</b>"])

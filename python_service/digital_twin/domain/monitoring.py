@@ -741,15 +741,30 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
             return ""
         return ("+" if amount > 0 else "-") + money(abs(amount), currency)
 
+    def normalized_investor_net_amount(self, position: Dict[str, object], net: float, net_amount: float) -> float:
+        amount = number(net_amount)
+        if not amount:
+            return 0.0
+        currency = self.position_currency(position)
+        expected = abs(number(net) * self.position_current_price(position))
+        if currency == "KRW" and expected:
+            ratio = expected / max(1.0, abs(amount))
+            if 500000 <= ratio <= 1500000:
+                return amount * 1000000
+        return amount
+
     def investor_summary(self, label: str, buy: float, sell: float, net: float, net_amount: float, currency: str) -> str:
-        amount_text = (" · 금액 " + self.investor_amount_text(net_amount, currency)) if net_amount else ""
+        amount_text = (", 금액 " + self.investor_amount_text(net_amount, currency)) if net_amount else ""
         if buy or sell:
             effective_net = net if net else buy - sell
-            return label + " " + signed_number(effective_net) + "(매수 " + compact_number(buy) + "/매도 " + compact_number(sell) + ")" + amount_text
+            direction = "순매수" if effective_net > 0 else "순매도" if effective_net < 0 else "순매수/순매도 0"
+            net_text = direction + " " + compact_number(abs(effective_net)) + "주" if effective_net else direction
+            return label + ": " + net_text + ", 매수 " + compact_number(buy) + "주, 매도 " + compact_number(sell) + "주" + amount_text
         if net:
-            return label + " " + signed_number(net) + amount_text
+            direction = "순매수" if net > 0 else "순매도"
+            return label + ": " + direction + " " + compact_number(abs(net)) + "주" + amount_text
         if net_amount:
-            return label + " 금액 " + self.investor_amount_text(net_amount, currency)
+            return label + ": 금액 " + self.investor_amount_text(net_amount, currency)
         return ""
 
     def investor_context_line(self, position: Dict[str, object]) -> str:
@@ -757,15 +772,15 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
         foreign_buy = self.investor_value(position, "foreign_buy_volume", "foreignBuyVolume")
         foreign_sell = self.investor_value(position, "foreign_sell_volume", "foreignSellVolume")
         foreign_net = self.investor_value(position, "foreign_net_volume", "foreignNetVolume")
-        foreign_net_amount = self.investor_value(position, "foreign_net_amount", "foreignNetAmount")
+        foreign_net_amount = self.normalized_investor_net_amount(position, foreign_net, self.investor_value(position, "foreign_net_amount", "foreignNetAmount"))
         institution_buy = self.investor_value(position, "institution_buy_volume", "institutionBuyVolume")
         institution_sell = self.investor_value(position, "institution_sell_volume", "institutionSellVolume")
         institution_net = self.investor_value(position, "institution_net_volume", "institutionNetVolume")
-        institution_net_amount = self.investor_value(position, "institution_net_amount", "institutionNetAmount")
+        institution_net_amount = self.normalized_investor_net_amount(position, institution_net, self.investor_value(position, "institution_net_amount", "institutionNetAmount"))
         individual_buy = self.investor_value(position, "individual_buy_volume", "individualBuyVolume")
         individual_sell = self.investor_value(position, "individual_sell_volume", "individualSellVolume")
         individual_net = self.investor_value(position, "individual_net_volume", "individualNetVolume")
-        individual_net_amount = self.investor_value(position, "individual_net_amount", "individualNetAmount")
+        individual_net_amount = self.normalized_investor_net_amount(position, individual_net, self.investor_value(position, "individual_net_amount", "individualNetAmount"))
         summaries = [
             self.investor_summary("외국인", foreign_buy, foreign_sell, foreign_net, foreign_net_amount, currency),
             self.investor_summary("기관", institution_buy, institution_sell, institution_net, institution_net_amount, currency),
@@ -774,7 +789,7 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
         parts = [summary for summary in summaries if summary]
         if not parts:
             return ""
-        return "투자자: " + ", ".join(parts)
+        return "투자자:\n" + "\n".join(parts)
 
     def holding_action_text(self, decision_text: str, pnl_rate: float) -> str:
         blob = str(decision_text or "")

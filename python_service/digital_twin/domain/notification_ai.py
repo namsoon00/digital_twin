@@ -41,10 +41,20 @@ def line_value(lines: List[str], label: str) -> str:
     prefix = str(label or "").strip()
     if not prefix:
         return ""
-    for raw in lines:
+    for index, raw in enumerate(lines):
         line = str(raw or "").strip()
         if line.startswith(prefix + ":"):
-            return line.split(":", 1)[1].strip()
+            value = line.split(":", 1)[1].strip()
+            if prefix == "투자자":
+                rows = [value] if value else []
+                for next_line in lines[index + 1 :]:
+                    stripped = str(next_line or "").strip()
+                    if stripped.startswith(("외국인:", "기관:", "개인:")):
+                        rows.append(stripped)
+                        continue
+                    break
+                return " / ".join(row for row in rows if row)
+            return value
         if line.startswith(prefix + " "):
             return line[len(prefix):].strip()
     return ""

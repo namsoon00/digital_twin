@@ -2378,9 +2378,13 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("monitorValueChange", self.insight_source_rules(insight))
         self.assertFalse(any(event.rule == "monitorPnlChange" for event in events))
         self.assertIn("수급: 거래량 30,000(1.8x), 거래액 18억 원", pnl_message)
-        self.assertIn("투자자: 외국인 +145,000(매수 420,000/매도 275,000), 기관 +82,000(매수 310,000/매도 228,000)", pnl_message)
+        self.assertIn("투자자:", pnl_message)
+        self.assertIn("외국인: 순매수 145,000주, 매수 420,000주, 매도 275,000주", pnl_message)
+        self.assertIn("기관: 순매수 82,000주, 매수 310,000주, 매도 228,000주", pnl_message)
         self.assertIn("수급: 거래량 30,000(1.8x), 거래액 18억 원", value_message)
-        self.assertIn("투자자: 외국인 +145,000(매수 420,000/매도 275,000), 기관 +82,000(매수 310,000/매도 228,000)", value_message)
+        self.assertIn("투자자:", value_message)
+        self.assertIn("외국인: 순매수 145,000주, 매수 420,000주, 매도 275,000주", value_message)
+        self.assertIn("기관: 순매수 82,000주, 매수 310,000주, 매도 228,000주", value_message)
 
     def test_investment_insight_promotes_reference_data_and_action_title(self):
         position = normalize_position({
@@ -3001,7 +3005,9 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("수익률: +5.0%", message)
         self.assertIn("추세: 20일선 104,000원보다 1.9% 높음, 60일선 103,000원보다 2.9% 높음", message)
         self.assertIn("수급: 거래량 40,000(2.1x), 거래액 24억 원", message)
-        self.assertIn("투자자: 외국인 +70,000(매수 510,000/매도 440,000), 기관 +35,000(매수 350,000/매도 315,000)", message)
+        self.assertIn("투자자:", message)
+        self.assertIn("외국인: 순매수 70,000주, 매수 510,000주, 매도 440,000주", message)
+        self.assertIn("기관: 순매수 35,000주, 매수 350,000주, 매도 315,000주", message)
         self.assertIn("설정: 20일/60일 이동평균 돌파, 크로스, 또는 현재가가 이동평균보다 8% 이상 높거나 낮을 때", message)
         self.assertIn("20일선 상향 돌파", message)
         self.assertNotIn("괴리", message)
@@ -6466,9 +6472,33 @@ class PythonServiceTests(unittest.TestCase):
             "individualNetAmount": -120000000,
         })
         investor_line = monitor.investor_context_line(position)
-        self.assertIn("외국인 +700(매수 1,300/매도 600) · 금액 +2억 원", investor_line)
-        self.assertIn("기관 +300(매수 900/매도 600) · 금액 +9,000만 원", investor_line)
-        self.assertIn("개인 -400(매수 2,000/매도 2,400) · 금액 -1억 원", investor_line)
+        self.assertIn("투자자:", investor_line)
+        self.assertIn("외국인: 순매수 700주, 매수 1,300주, 매도 600주, 금액 +2억 원", investor_line)
+        self.assertIn("기관: 순매수 300주, 매수 900주, 매도 600주, 금액 +9,000만 원", investor_line)
+        self.assertIn("개인: 순매도 400주, 매수 2,000주, 매도 2,400주, 금액 -1억 원", investor_line)
+        position.update({
+            "current_price": 277500,
+            "currentPrice": 277500,
+            "foreignBuyVolume": 8922904,
+            "foreignSellVolume": 11937997,
+            "foreignNetVolume": -3015093,
+            "foreignNetAmount": -870963,
+            "institutionBuyVolume": 12816837,
+            "institutionSellVolume": 11845806,
+            "institutionNetVolume": 971031,
+            "institutionNetAmount": 283642,
+            "individualBuyVolume": 11457143,
+            "individualSellVolume": 9425438,
+            "individualNetVolume": 2031705,
+            "individualNetAmount": 583729,
+        })
+        corrected_investor_line = monitor.investor_context_line(position)
+        self.assertIn("외국인: 순매도 3,015,093주", corrected_investor_line)
+        self.assertIn("금액 -8,710억 원", corrected_investor_line)
+        self.assertIn("기관: 순매수 971,031주", corrected_investor_line)
+        self.assertIn("금액 +2,836억 원", corrected_investor_line)
+        self.assertIn("개인: 순매수 2,031,705주", corrected_investor_line)
+        self.assertIn("금액 +5,837억 원", corrected_investor_line)
         self.assertEqual(
             "권장 액션: 손절·분할축소 우선, 20일선 회복 전 추가매수 보류",
             monitor.holding_action_line("손절·분할축소 권장", -13.4),

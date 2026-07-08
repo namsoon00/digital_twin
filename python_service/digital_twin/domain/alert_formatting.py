@@ -15,7 +15,7 @@ def money(value: float, currency: str = "KRW") -> str:
             return format(round(amount), ",") + " " + code
         return format(round(amount, 2), ",").rstrip("0").rstrip(".") + " " + code
     if amount >= 100000000:
-        return str(round(amount / 100000000)) + "억 원"
+        return format(round(amount / 100000000), ",") + "억 원"
     if amount >= 10000:
         return format(round(amount / 10000), ",") + "만 원"
     return format(round(amount), ",") + "원"

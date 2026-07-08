@@ -1196,6 +1196,11 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("ReasoningCycle", payload["tbox"]["classes"])
         self.assertIn("Insight", payload["tbox"]["classes"])
         self.assertIn("NotificationDispatch", payload["tbox"]["classes"])
+        self.assertIn("ActiveInvestmentOpinion", payload["tbox"]["classes"])
+        self.assertIn("ExecutionPlan", payload["tbox"]["classes"])
+        self.assertIn("ActionCandidate", payload["tbox"]["classes"])
+        self.assertIn("BlockedAction", payload["tbox"]["classes"])
+        self.assertIn("AIValidation", payload["tbox"]["classes"])
         self.assertIn("HOLDS", payload["tbox"]["relationTypes"])
         self.assertIn("WATCHES", payload["tbox"]["relationTypes"])
         self.assertIn("IS_A", payload["tbox"]["relationTypes"])
@@ -1210,6 +1215,10 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("TRIGGERS_REASONING", payload["tbox"]["relationTypes"])
         self.assertIn("PRODUCES_INSIGHT", payload["tbox"]["relationTypes"])
         self.assertIn("DISPATCHED_BY", payload["tbox"]["relationTypes"])
+        self.assertIn("HAS_EXECUTION_PLAN", payload["tbox"]["relationTypes"])
+        self.assertIn("HAS_PRIMARY_ACTION", payload["tbox"]["relationTypes"])
+        self.assertIn("BLOCKS_ACTION", payload["tbox"]["relationTypes"])
+        self.assertIn("REQUIRES_NEXT_CHECK", payload["tbox"]["relationTypes"])
         self.assertGreater(payload["abox"]["entityCount"], 0)
         self.assertTrue(any(item.relation_type == "HOLDS" for item in graph.relations))
         self.assertTrue(any(item.relation_type == "WATCHES" for item in graph.relations))
@@ -1227,6 +1236,10 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(any(item.relation_type == "TRIGGERS_REASONING" for item in graph.relations))
         self.assertTrue(any(item.relation_type == "PRODUCES_INSIGHT" for item in graph.relations))
         self.assertTrue(any(item.relation_type == "DISPATCHED_BY" for item in graph.relations))
+        self.assertTrue(any(item.relation_type == "HAS_EXECUTION_PLAN" for item in graph.relations))
+        self.assertTrue(any(item.relation_type == "HAS_PRIMARY_ACTION" for item in graph.relations))
+        self.assertTrue(any(item.relation_type == "BLOCKS_ACTION" for item in graph.relations))
+        self.assertTrue(any(item.relation_type == "REQUIRES_NEXT_CHECK" for item in graph.relations))
         self.assertTrue(any(item.kind == "account" for item in graph.entities))
         self.assertTrue(any(item.kind == "position" for item in graph.entities))
         self.assertTrue(any(item.kind == "strategy" for item in graph.entities))
@@ -1240,6 +1253,10 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(any(item.kind == "reasoning-cycle" for item in graph.entities))
         self.assertTrue(any(item.kind == "insight" for item in graph.entities))
         self.assertTrue(any(item.kind == "notification-dispatch" for item in graph.entities))
+        self.assertTrue(any(item.kind == "execution-plan" for item in graph.entities))
+        self.assertTrue(any(item.kind == "action-candidate" for item in graph.entities))
+        self.assertTrue(any(item.kind == "blocked-action" for item in graph.entities))
+        self.assertTrue(any(item.kind == "next-check" for item in graph.entities))
         self.assertTrue(any(item.kind == "trend-scenario" for item in graph.entities))
         self.assertTrue(any(item.kind == "price-metric" for item in graph.entities))
         self.assertTrue(any(item.kind == "model-score" for item in graph.entities))
@@ -1260,10 +1277,14 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("operationalOntology", payload["aiInferencePacket"]["inputOrder"])
         self.assertIn("insights", payload["aiInferencePacket"]["inputOrder"])
         self.assertIn("activeInvestmentOpinions", payload["aiInferencePacket"]["inputOrder"])
+        self.assertIn("executionPlans", payload["aiInferencePacket"]["inputOrder"])
         self.assertIn("relationInfluences", payload["aiInferencePacket"]["inputOrder"])
         self.assertGreater(payload["aiInferencePacket"]["graphInputs"]["activeOpinionCount"], 0)
+        self.assertGreater(payload["aiInferencePacket"]["graphInputs"]["executionPlanCount"], 0)
         self.assertTrue(payload["activeInvestmentOpinions"])
+        self.assertTrue(payload["executionPlans"])
         self.assertTrue(any(item.get("symbol") == "AAPL" for item in payload["activeInvestmentOpinions"]))
+        self.assertTrue(any(item.get("subject", {}).get("symbol") == "000660" for item in payload["executionPlans"]))
         self.assertEqual("insight-driven-only", graph.worldview["operationalOntology"]["dispatchMode"])
         self.assertEqual(3, graph.worldview["operationalOntology"]["collectionPipelineCount"])
         self.assertTrue(any(item.get("key") == "externalSignals" and item.get("configuredMinutes") == 30 for item in graph.worldview["operationalOntology"]["pipelines"]))
@@ -1272,6 +1293,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("TBox", graph.prompt)
         self.assertIn("ABox", graph.prompt)
         self.assertIn("activeInvestmentOpinions", graph.prompt)
+        self.assertIn("executionPlans", graph.prompt)
         trend_evidence = next(item for item in graph.evidence if item.evidence_id == "evidence:000660:trend")
         self.assertIn("trendDynamics", trend_evidence.value)
         self.assertTrue(graph.opinion_for_symbol("000660").dominant_risks)
@@ -1866,6 +1888,63 @@ class PythonServiceTests(unittest.TestCase):
             "BUY|ADD|HOLD|TRIM|SELL|AVOID",
             decision.ai_prompt_context["outputSchema"]["activeInvestmentOpinion"]["action"],
         )
+        self.assertEqual("ExecutionPlan", decision.ai_prompt_context["outputSchema"]["activeInvestmentOpinion"]["executionPlan"])
+        self.assertTrue(decision.ai_prompt_context["executionPlan"])
+
+    def test_execution_plan_is_abox_from_relation_rules(self):
+        position = Position(
+            symbol="000660",
+            name="SK하이닉스",
+            market="KR",
+            currency="KRW",
+            market_value=1000000,
+            profit_loss_rate=-18.1,
+            current_price=2115000,
+            average_price=2571000,
+            ma20=2494950,
+            ma60=1951967,
+            ma20_distance=-15.2,
+            ma60_distance=8.4,
+            ma20_slope=0.2,
+            ma60_slope=1.0,
+            change_rate=-3.91,
+            volume=5215050,
+            volume_ratio=0.8,
+            trade_strength=95.2,
+            orderbook_bid_volume=3371,
+            orderbook_ask_volume=1215,
+            bid_ask_imbalance=47.0,
+            sellable_quantity=4,
+            sector="반도체",
+        )
+        portfolio = portfolio_summary([position], fx_rates={"KRW": 1})
+
+        context = evaluate_position_relation_rules(position, portfolio)
+        plan = context["executionPlan"]
+
+        self.assertEqual("ExecutionPlan", plan["tboxClass"])
+        self.assertEqual("TRIM_OR_SELL_REVIEW", plan["primaryAction"])
+        self.assertIn("20일선 회복 전 추가매수", plan["blockedActions"])
+        self.assertTrue(any("60일선" in item for item in plan["counterSignals"]))
+        self.assertEqual(2571000, plan["sourceFacts"]["averagePrice"])
+        active = build_active_investment_opinion(position, relation_context=context).to_dict()
+        self.assertEqual(plan["primaryAction"], active["executionPlan"]["primaryAction"])
+
+        graph = build_portfolio_ontology([position], portfolio)
+        payload = graph.to_dict()
+        plan_entities = [item for item in graph.entities if item.kind == "execution-plan"]
+        plan_relations = [item.relation_type for item in graph.relations if "execution-plan" in str((item.properties or {}).get("source") or "")]
+        card = next(item for item in payload["reasoningCards"] if item["symbol"] == "000660")
+
+        self.assertTrue(plan_entities)
+        self.assertEqual("ExecutionPlan", (plan_entities[0].properties or {}).get("tboxClass"))
+        self.assertIn("HAS_EXECUTION_PLAN", plan_relations)
+        self.assertIn("HAS_PRIMARY_ACTION", plan_relations)
+        self.assertIn("BLOCKS_ACTION", plan_relations)
+        self.assertIn("WEAKENS_ACTION_IF", plan_relations)
+        self.assertIn("REQUIRES_NEXT_CHECK", plan_relations)
+        self.assertEqual("TRIM_OR_SELL_REVIEW", payload["executionPlans"][0]["primaryAction"])
+        self.assertEqual("TRIM_OR_SELL_REVIEW", card["executionPlans"][0]["primaryAction"])
 
     def test_ontology_trend_dynamics_classifies_support_retest(self):
         position = Position(
@@ -3558,6 +3637,12 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("크립토 가격 급등", event.metadata.get("cryptoMoveTitle"))
         self.assertEqual(70.8, event.metadata.get("cryptoMoveScore"))
         self.assertEqual("external.crypto.market_move.v1", event.metadata.get("ontologyRelationContext", {}).get("activeRules", [{}])[0].get("ruleId"))
+        active_opinion = event.metadata.get("activeInvestmentOpinion")
+        self.assertEqual("HOLD", active_opinion.get("action"))
+        self.assertEqual("HOLD", active_opinion.get("executionPlan", {}).get("primaryAction"))
+        self.assertTrue(any("변동만 보고 주식 신규 매수·매도" in item for item in active_opinion.get("executionPlan", {}).get("blockedActions", [])))
+        self.assertEqual("HOLD", event.metadata.get("ontologyRelationContext", {}).get("activeInvestmentOpinion", {}).get("action"))
+        self.assertEqual("HOLD", event.metadata.get("ontologyRelationContext", {}).get("executionPlan", {}).get("primaryAction"))
         self.assertEqual("cryptoMoveScoreFormula", event.metadata.get("legacyFormulaAudits")[0].get("key"))
 
         db_path = Path(self.temp.name) / "service.db"
@@ -3572,6 +3657,47 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("7일 +11.8%", message)
         self.assertIn("AI 프롬프트", message)
         self.assertNotIn("크립토 변동 공식(cryptoMoveScoreFormula)", message)
+
+    def test_crypto_investment_insight_uses_active_opinion_beginner_summary(self):
+        portfolio = portfolio_summary([])
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "ok",
+            utc_now_iso(),
+            portfolio,
+            [],
+            [],
+            external_signals={
+                "cryptoMarkets": {
+                    "ethereum": {
+                        "provider": "CoinGecko",
+                        "symbol": "ETH",
+                        "name": "Ethereum",
+                        "price": 1765,
+                        "volume24h": 9319846169,
+                        "change24h": -0.8,
+                        "change7d": 11.3,
+                    },
+                }
+            },
+        )
+
+        events = RealtimeMonitor().events_for_snapshot(snapshot, {})
+        insight = self.insight_event(events, "ETH")
+        message = SQLiteNotificationTemplateStore(Path(self.temp.name) / "service.db").render(insight.rule, alert_context(insight))
+        active = insight.metadata.get("activeInvestmentOpinion", {})
+
+        self.assertEqual("HOLD", active.get("action"))
+        self.assertIn("보유 영향만 점검", active.get("executionPlan", {}).get("primaryActionLabel"))
+        self.assertIn("쉽게 말하면", message)
+        self.assertIn("보유 영향만 점검", message)
+        self.assertIn("지금 피할 일", message)
+        self.assertIn("직접 민감 보유 종목이 없어 단독 매매 근거는 약함", message)
+        self.assertNotIn("실행보다 관찰 우선", message)
+        self.assertNotIn("크립토 변동가", message)
 
     def test_external_signal_provider_normalizes_api_responses_and_caches(self):
         calls = []
@@ -4702,6 +4828,13 @@ class PythonServiceTests(unittest.TestCase):
             "criterionLines": "설정: 관계 그래프에서 의미 있는 투자 인사이트가 생성될 때",
             "ontologyRelationContext": {
                 "missingData": [{"label": "투자자별 수급", "effect": "응답 비어 있음"}],
+                "executionPlan": {
+                    "tboxClass": "ExecutionPlan",
+                    "primaryAction": "TRIM_OR_SELL_REVIEW",
+                    "primaryActionLabel": "추가매수 보류, 분할축소/매도 기준 검토",
+                    "blockedActions": ["20일선 회복 전 추가매수"],
+                    "nextChecks": ["매도 가능 수량 확인"],
+                },
             },
         }
 
@@ -4729,6 +4862,15 @@ class PythonServiceTests(unittest.TestCase):
         self.assertNotIn("관계 규칙", message)
         self.assertNotIn("AI 분석 기준", message)
         self.assertEqual("SELL", enriched["notificationAiValidatedResponse"]["action"])
+        assertions = enriched["ontologyAssertions"]
+        self.assertEqual("ABox", assertions["box"])
+        self.assertIn("AIValidation", {item["tboxClass"] for item in assertions["entities"]})
+        self.assertIn("ValidatedOpinion", {item["tboxClass"] for item in assertions["entities"]})
+        self.assertIn("ExecutionPlan", {item["tboxClass"] for item in assertions["entities"]})
+        self.assertIn("VALIDATES_OPINION", {item["relationType"] for item in assertions["relations"]})
+        self.assertIn("HAS_EXECUTION_PLAN", {item["relationType"] for item in assertions["relations"]})
+        self.assertIn("PRODUCES_VALIDATED_MESSAGE", {item["relationType"] for item in assertions["relations"]})
+        self.assertTrue(enriched["ontologyAiValidation"]["assertionIds"])
 
     def test_notification_worker_waits_for_validated_ai_before_rendering(self):
         class FakeReviewer:

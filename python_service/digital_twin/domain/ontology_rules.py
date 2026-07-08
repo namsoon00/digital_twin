@@ -1081,6 +1081,7 @@ def position_signal_facts(
         "marketValue": number(position.market_value),
         "quantity": number(position.quantity),
         "sellableQuantity": number(position.sellable_quantity),
+        "averagePrice": number(position.average_price),
         "sectorRatio": _sector_ratio(position, portfolio),
         "positionWeight": _position_weight(position, portfolio),
         "tradeStrength": number(position.trade_strength),
@@ -1294,11 +1295,167 @@ def decision_from_matches(facts: Dict[str, object], matches: List[OntologyRuleMa
     }
 
 
+def _append_unique(rows: List[str], value: object) -> None:
+    text = str(value or "").strip()
+    if text and text not in rows:
+        rows.append(text)
+
+
+def _active_rule_labels(matches: List[OntologyRuleMatch]) -> List[str]:
+    return [
+        item.label
+        for item in matches or []
+        if item.matched and not item.reference_only and str(item.label or "").strip()
+    ]
+
+
+def execution_plan_from_relation_context(
+    facts: Dict[str, object],
+    decision: Dict[str, object],
+    matches: List[OntologyRuleMatch],
+) -> Dict[str, object]:
+    facts = facts or {}
+    decision = decision or {}
+    action_group = str(decision.get("actionGroup") or "")
+    action_level = str(decision.get("actionLevel") or "")
+    label = str(decision.get("label") or "")
+    pnl = float(facts.get("profitLossRate") or 0)
+    ma20_distance = float(facts.get("ma20Distance") or 0)
+    ma60_distance = float(facts.get("ma60Distance") or 0)
+    volume_ratio = float(facts.get("volumeRatio") or 0)
+    trade_strength = float(facts.get("tradeStrength") or 0)
+    bid_ask_imbalance = float(facts.get("bidAskImbalance") or 0)
+    primary_action = "HOLD"
+    primary_label = "보유 유지, 다음 데이터 확인"
+    blocked_actions: List[str] = []
+    risk_signals: List[str] = []
+    support_signals: List[str] = []
+    counter_signals: List[str] = []
+    strengthen_conditions: List[str] = []
+    weaken_conditions: List[str] = []
+    next_checks: List[str] = []
+
+    if action_group == "lossControl":
+        primary_action = "TRIM_OR_SELL_REVIEW" if action_level in {"action", "urgent"} else "LOSS_CONTROL_REVIEW"
+        primary_label = "추가매수 보류, 분할축소/매도 기준 검토"
+        blocked_actions.append("20일선 회복 전 추가매수")
+        _append_unique(risk_signals, "수익률 " + ("%.1f" % pnl) + "%")
+        if ma20_distance < 0:
+            _append_unique(risk_signals, "20일선보다 " + ("%.1f" % abs(ma20_distance)) + "% 낮음")
+        if ma60_distance < 0:
+            _append_unique(risk_signals, "60일선보다 " + ("%.1f" % abs(ma60_distance)) + "% 낮음")
+            _append_unique(strengthen_conditions, "60일선 아래 상태가 유지되면 손절·축소 강도를 높임")
+        else:
+            _append_unique(counter_signals, "60일선보다 " + ("%.1f" % abs(ma60_distance)) + "% 높아 중기 지지는 남아 있음")
+            _append_unique(strengthen_conditions, "60일선 아래로 내려가면 손절·축소 강도 상향")
+        if volume_ratio and volume_ratio < 1:
+            _append_unique(counter_signals, "거래량 " + ("%.1f" % volume_ratio) + "x로 평균 이하라 투매 확정은 아님")
+        elif volume_ratio >= 1:
+            _append_unique(risk_signals, "거래량 " + ("%.1f" % volume_ratio) + "x로 하락 확인 강도 상승")
+        if trade_strength and trade_strength < 100:
+            _append_unique(risk_signals, "체결강도 " + ("%.1f" % trade_strength) + "로 매수 체결 우위 부족")
+        elif trade_strength >= 100:
+            _append_unique(counter_signals, "체결강도 " + ("%.1f" % trade_strength) + "로 단기 매수 체결은 확인됨")
+        if bid_ask_imbalance > 0:
+            _append_unique(counter_signals, "호가잔량 매수 우위 " + ("%.1f" % bid_ask_imbalance) + "%")
+        elif bid_ask_imbalance < 0:
+            _append_unique(risk_signals, "호가잔량 매도 우위 " + ("%.1f" % abs(bid_ask_imbalance)) + "%")
+        _append_unique(weaken_conditions, "20일선 회복과 거래량 동반 반등이 확인되면 축소 강도 완화")
+        _append_unique(next_checks, "매도 가능 수량과 손절/분할축소 기준 확인")
+        _append_unique(next_checks, "다음 조회에서도 손실 관리 규칙이 유지되는지 확인")
+    elif action_group == "profitTake":
+        primary_action = "TRIM_REVIEW"
+        primary_label = "분할매도/수익 보호 기준 검토"
+        _append_unique(risk_signals, "수익 구간에서 추세 약화")
+        _append_unique(blocked_actions, "목표·추세 확인 없는 일괄 매도")
+        _append_unique(strengthen_conditions, "20일선 회복 실패와 거래량 증가가 이어지면 분할매도 강도 상향")
+        _append_unique(weaken_conditions, "20일선 회복과 수급 개선이 확인되면 보유 유지로 완화")
+        _append_unique(next_checks, "목표 수익률, 분할매도 수량, 재진입 조건 확인")
+    elif action_group == "rebalance":
+        primary_action = "REBALANCE_REVIEW"
+        primary_label = "초과 비중 축소와 리밸런싱 검토"
+        _append_unique(blocked_actions, "같은 섹터 추가매수")
+        _append_unique(risk_signals, "포트폴리오 집중도 확대")
+        _append_unique(next_checks, "섹터 비중과 단일 종목 비중 한도 확인")
+    elif action_group == "entry":
+        primary_action = "SPLIT_BUY_REVIEW"
+        primary_label = "소액 분할매수 조건 검토"
+        _append_unique(blocked_actions, "확인 없는 일괄 매수")
+        _append_unique(support_signals, "눌림목과 지지 신호가 함께 성립")
+        _append_unique(strengthen_conditions, "20일선 회복, 거래량 증가, 수급 개선이 함께 나오면 진입 강도 상향")
+        _append_unique(weaken_conditions, "60일선 이탈 또는 부정 공시가 나오면 매수 후보 해제")
+        _append_unique(next_checks, "첫 진입 가격, 손절 기준, 추가매수 조건 확인")
+    elif action_group == "entryRisk":
+        primary_action = "AVOID_OR_WAIT"
+        primary_label = "추가매수 보류, 회복 조건 대기"
+        _append_unique(blocked_actions, "추세 회복 전 추가매수")
+        _append_unique(risk_signals, "보유 종목의 추세 훼손 또는 이벤트 리스크")
+        _append_unique(weaken_conditions, "20일선 회복과 부정 이벤트 해소 시 보류 강도 완화")
+        _append_unique(next_checks, "회복 조건과 비중 한도 확인")
+    elif action_group == "cryptoSensitivity":
+        primary_action = "EXPOSURE_REVIEW"
+        primary_label = "비트코인 민감 비중 점검"
+        _append_unique(blocked_actions, "크립토 변동 안정 전 민감 종목 비중 확대")
+        _append_unique(next_checks, "BTC 변화와 보유 종목 가격 반응의 시차 확인")
+
+    for item in _active_rule_labels(matches):
+        if any(token in item for token in ["손실", "리스크", "하락", "공시", "집중"]):
+            _append_unique(risk_signals, item)
+        elif any(token in item for token in ["지지", "회복", "수급", "매수"]):
+            _append_unique(support_signals, item)
+
+    missing_impact = []
+    for item in facts.get("missingData") or []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("label") or item.get("key") or "").strip()
+        effect = str(item.get("effect") or "").strip()
+        if name:
+            missing_impact.append(name + (": " + effect if effect else "는 판단 강도를 낮춥니다."))
+
+    return {
+        "engineVersion": "ontology-execution-plan-v1",
+        "tboxClass": "ExecutionPlan",
+        "subject": {
+            "symbol": facts.get("symbol"),
+            "name": facts.get("name"),
+            "market": facts.get("market"),
+            "source": facts.get("source"),
+        },
+        "decisionStage": decision.get("decisionStage"),
+        "actionGroup": action_group,
+        "actionLevel": action_level,
+        "decisionLabel": label,
+        "primaryAction": primary_action,
+        "primaryActionLabel": primary_label,
+        "blockedActions": blocked_actions[:5],
+        "riskSignals": risk_signals[:7],
+        "supportSignals": support_signals[:5],
+        "counterSignals": counter_signals[:5],
+        "strengthenConditions": strengthen_conditions[:5],
+        "weakenConditions": weaken_conditions[:5],
+        "nextChecks": next_checks[:5],
+        "missingDataImpact": missing_impact[:5],
+        "sourceFacts": {
+            "currentPrice": facts.get("currentPrice"),
+            "averagePrice": facts.get("averagePrice"),
+            "profitLossRate": facts.get("profitLossRate"),
+            "ma20Distance": round(float(facts.get("ma20Distance") or 0), 2),
+            "ma60Distance": round(float(facts.get("ma60Distance") or 0), 2),
+            "volumeRatio": facts.get("volumeRatio"),
+            "tradeStrength": facts.get("tradeStrength"),
+            "bidAskImbalance": facts.get("bidAskImbalance"),
+            "sellableQuantity": facts.get("sellableQuantity"),
+        },
+    }
+
+
 def build_ai_prompt_context(
     prompt_id: str,
     facts: Dict[str, object],
     matches: List[OntologyRuleMatch],
     settings: Optional[Dict[str, object]] = None,
+    execution_plan: Optional[Dict[str, object]] = None,
 ) -> Dict[str, object]:
     settings = settings or {}
     template = prompt_template(prompt_id, settings)
@@ -1328,10 +1485,12 @@ def build_ai_prompt_context(
                 "counterEvidence": ["ResearchEvidence"],
                 "invalidationCondition": "string",
                 "sourceUrls": ["string"],
+                "executionPlan": "ExecutionPlan",
             }
         },
         "facts": dict(facts or {}),
         "trendDynamics": dict(facts.get("trendDynamics") or {}),
+        "executionPlan": dict(execution_plan or {}),
         "matchedRules": [item.to_dict() for item in matches if item.matched],
         "missingData": list(facts.get("missingData") or []),
         "guardrails": list(template.guardrails),
@@ -1677,7 +1836,8 @@ def evaluate_position_relation_rules(
         ))
 
     decision = decision_from_matches(facts, matches)
-    prompt_context = build_ai_prompt_context(prompt_id, facts, matches, settings)
+    execution_plan = execution_plan_from_relation_context(facts, decision, matches)
+    prompt_context = build_ai_prompt_context(prompt_id, facts, matches, settings, execution_plan)
     active_matches = [item for item in matches if item.matched and not item.reference_only]
     max_strength = max([item.strength_score for item in active_matches], default=decision["score"])
     return {
@@ -1698,6 +1858,7 @@ def evaluate_position_relation_rules(
         "signalStrengthLabel": strength_label(max_strength),
         "confidence": round(data_quality, 1),
         "decision": decision,
+        "executionPlan": execution_plan,
         "promptContext": prompt_context,
         "legacyModel": dict(legacy_model or {}),
     }

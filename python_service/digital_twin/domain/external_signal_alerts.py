@@ -2,6 +2,7 @@ from typing import Dict, List
 
 from .alert_formatting import compact_number, money, price_money, signed_number, signed_pct
 from .market_data import number
+from .investment_research import ACTIVE_INVESTMENT_OPINION_VERSION, ACTION_LABELS
 from .ontology_rules import AI_PROMPT_REGISTRY_VERSION, strength_label
 from .portfolio import AccountSnapshot, AlertEvent
 
@@ -25,6 +26,228 @@ def _threshold_pct_text(value: float) -> str:
     if rounded == round(rounded):
         return str(int(round(rounded))) + "%"
     return str(rounded).rstrip("0").rstrip(".") + "%"
+
+
+def _compact_text(value: object, limit: int = 120) -> str:
+    text = " ".join(str(value or "").split())
+    if limit > 3 and len(text) > limit:
+        return text[: limit - 3].rstrip() + "..."
+    return text
+
+
+def _crypto_asset_label(symbol: str, name: str, is_bitcoin: bool) -> str:
+    if is_bitcoin:
+        return "비트코인"
+    if str(symbol or "").upper() == "ETH" or "ethereum" in str(name or "").lower():
+        return "이더리움"
+    return "크립토"
+
+
+def _crypto_sensitive_position_labels(snapshot: AccountSnapshot, crypto_symbol: str, is_bitcoin: bool) -> List[str]:
+    symbol = str(crypto_symbol or "").upper()
+    direct_symbols = {"COIN", "MARA", "RIOT", "BITF", "HUT", "CLSK"}
+    if is_bitcoin:
+        direct_symbols.update({"BTC", "IBIT", "FBTC", "BITB", "MSTR", "STRC"})
+    if symbol == "ETH":
+        direct_symbols.update({"ETH", "ETHA", "ETHE"})
+    text_terms = ["crypto", "크립토", "디지털자산", "blockchain", "블록체인"]
+    text_terms.extend(["btc", "bitcoin", "비트코인"] if is_bitcoin else ["eth", "ethereum", "이더리움"])
+    labels: List[str] = []
+    for position in list(snapshot.positions or []) + list(snapshot.watchlist or []):
+        if position.is_cash():
+            continue
+        position_symbol = str(position.symbol or "").upper()
+        blob = " ".join([position_symbol, str(position.name or ""), str(position.sector or "")]).lower()
+        if position_symbol not in direct_symbols and not any(term.lower() in blob for term in text_terms):
+            continue
+        label = str(position.name or position_symbol).strip()
+        if position_symbol and position_symbol not in label:
+            label += " / " + position_symbol
+        if label and label not in labels:
+            labels.append(label)
+    return labels[:5]
+
+
+def _evidence_dict(evidence_id: str, symbol: str, kind: str, source: str, title: str, summary: str, polarity: str, impact: float, confidence: float = 0.65) -> Dict[str, object]:
+    return {
+        "evidenceId": evidence_id,
+        "symbol": symbol,
+        "kind": kind,
+        "source": source,
+        "title": title,
+        "summary": summary,
+        "url": "",
+        "observedAt": "",
+        "polarity": polarity,
+        "impactScore": round(number(impact), 1),
+        "confidence": round(number(confidence), 2),
+    }
+
+
+def crypto_active_investment_opinion(
+    model: Dict[str, object],
+    item: Dict[str, object],
+    is_bitcoin: bool,
+    sensitive_positions: List[str],
+) -> Dict[str, object]:
+    symbol = str(model.get("symbol") or item.get("symbol") or "").upper()
+    coin_id = str(item.get("id") or item.get("coinId") or symbol.lower()).strip().lower()
+    name = str(item.get("name") or symbol or "크립토").strip()
+    asset_label = _crypto_asset_label(symbol, name, is_bitcoin)
+    score = number(model.get("score"))
+    direction = str(model.get("direction") or "")
+    dominant_period = str(model.get("dominantPeriodLabel") or model.get("dominantPeriod") or "대표")
+    dominant_change = number(model.get("dominantChange"))
+    change24h = number(item.get("change24h"))
+    change7d = number(item.get("change7d"))
+    direct_exposure = bool(sensitive_positions)
+    if direct_exposure and direction == "down" and score >= 75:
+        action = "TRIM"
+    else:
+        action = "HOLD"
+    action_label = ACTION_LABELS.get(action, action)
+    if action == "TRIM":
+        primary_label = "민감 종목 분할축소 검토"
+    elif direct_exposure:
+        primary_label = "보유 유지, 민감 종목 추가매수 보류"
+    else:
+        primary_label = "보유 영향만 점검"
+    exposure_text = "직접 민감 보유: " + ", ".join(sensitive_positions) if sensitive_positions else "직접 민감 보유 없음"
+    direction_text = "상승" if direction == "up" else "하락" if direction == "down" else "변동"
+    beginner_summary = (
+        asset_label
+        + " "
+        + dominant_period
+        + " 변동 "
+        + signed_pct(dominant_change)
+        + "가 기준을 넘었습니다. "
+        + ("연결 보유 종목이 있어 비중 확대보다 리스크 확인이 먼저입니다." if direct_exposure else "직접 연결된 보유 종목이 없으면 매수·매도보다 참고 신호입니다.")
+    )
+    support_signals = [
+        asset_label + " " + dominant_period + " " + signed_pct(dominant_change) + " 기준 초과",
+    ]
+    risk_signals = [
+        "크립토 급변은 보유 종목의 위험 선호와 같이 흔들릴 수 있음",
+    ]
+    if direct_exposure:
+        risk_signals.append(exposure_text)
+    counter_signals = []
+    if change24h and change7d and change24h * change7d < 0:
+        counter_signals.append("24시간 " + signed_pct(change24h) + ", 7일 " + signed_pct(change7d) + "로 단기와 주간 방향이 다름")
+    if not direct_exposure:
+        counter_signals.append("직접 민감 보유 종목이 없어 단독 매매 근거는 약함")
+    execution_plan = {
+        "primaryAction": action,
+        "primaryActionLabel": primary_label,
+        "decisionStage": "external-signal-review",
+        "actionGroup": "riskControl" if action == "TRIM" else "marketReference",
+        "actionLevel": "review" if direct_exposure else "watch",
+        "beginnerSummary": beginner_summary,
+        "blockedActions": [
+            asset_label + " 변동만 보고 주식 신규 매수·매도",
+            "민감 보유 종목 확인 전 추가매수",
+        ],
+        "riskSignals": risk_signals,
+        "supportSignals": support_signals,
+        "counterSignals": counter_signals,
+        "strengthenConditions": [
+            "민감 보유 종목 가격·거래량이 " + asset_label + " 방향과 같이 움직임",
+            dominant_period + " 변동이 다음 조회에서도 기준 이상 유지",
+        ],
+        "weakenConditions": [
+            "민감 보유 종목 반응이 없거나 " + asset_label + " 변동이 기준 아래로 둔화",
+            "24시간과 7일 방향 충돌이 커짐",
+        ],
+        "nextChecks": [
+            "보유 종목 중 " + asset_label + " 민감 종목이 있는지 확인",
+            "민감 종목의 현재가·거래량·수익률이 같은 방향인지 확인",
+        ],
+        "missingDataImpact": [
+            "종목별 " + asset_label + " 민감도 데이터가 없으면 결론 강도를 낮춥니다.",
+        ],
+    }
+    evidence = [
+        _evidence_dict(
+            "research:" + symbol + ":crypto-move",
+            symbol,
+            "crypto-market",
+            str(item.get("provider") or "CoinGecko"),
+            asset_label + " " + dominant_period + " 변동 " + signed_pct(dominant_change),
+            "24h " + signed_pct(change24h) + ", 7d " + signed_pct(change7d),
+            "support" if direction == "up" else "risk" if direction == "down" else "context",
+            min(18.0, max(4.0, score * 0.2)),
+            0.72,
+        )
+    ]
+    if direct_exposure:
+        evidence.append(_evidence_dict(
+            "research:" + symbol + ":crypto-exposure",
+            symbol,
+            "portfolio-exposure",
+            "portfolio",
+            exposure_text,
+            "크립토 민감 보유 종목은 외부 변동에 가격 반응이 커질 수 있습니다.",
+            "risk" if direction == "down" else "context",
+            8.0,
+            0.7,
+        ))
+    counter_evidence = [
+        _evidence_dict(
+            "research:" + symbol + ":crypto-counter:" + str(index),
+            symbol,
+            "counter-signal",
+            "relation-rules",
+            text,
+            text,
+            "context",
+            2.0,
+            0.62,
+        )
+        for index, text in enumerate(counter_signals)
+    ]
+    conviction = min(88.0, max(45.0, 50.0 + score * (0.34 if direct_exposure else 0.25) + (8.0 if action == "TRIM" else 0.0)))
+    thesis = (
+        asset_label
+        + " "
+        + direction_text
+        + " 변동은 기준을 넘었지만 "
+        + ("민감 보유 종목이 있어 " + primary_label + " 의견입니다." if direct_exposure else "직접 민감 보유가 없어 " + primary_label + " 의견입니다.")
+    )
+    source_url = "https://www.coingecko.com/en/coins/" + coin_id if coin_id and not coin_id.isupper() else ""
+    return {
+        "engineVersion": ACTIVE_INVESTMENT_OPINION_VERSION,
+        "symbol": symbol,
+        "action": action,
+        "actionLabel": action_label,
+        "conviction": round(conviction, 1),
+        "timeHorizon": "days",
+        "thesis": thesis,
+        "evidence": evidence,
+        "counterEvidence": counter_evidence,
+        "missingData": [],
+        "invalidationCondition": " / ".join(execution_plan["weakenConditions"][:2]),
+        "nextCheck": " / ".join(execution_plan["nextChecks"][:2]),
+        "executionPlan": execution_plan,
+        "sourceUrls": [source_url] if source_url else [],
+        "scoreBreakdown": {
+            "supportScore": round(sum(number(item.get("impactScore")) for item in evidence if item.get("polarity") == "support"), 1),
+            "riskScore": round(sum(number(item.get("impactScore")) for item in evidence if item.get("polarity") == "risk"), 1),
+            "relationScore": round(score, 1),
+            "directExposureCount": len(sensitive_positions),
+            "change24h": round(change24h, 1),
+            "change7d": round(change7d, 1),
+        },
+        "promptContract": {
+            "requiredDecision": "BUY|ADD|HOLD|TRIM|SELL|AVOID",
+            "decisionRole": "investment_opinion_not_order",
+            "mustInclude": ["conviction", "evidence", "counterEvidence", "executionPlan", "invalidationCondition"],
+            "guardrails": [
+                "크립토 가격 하나만으로 주식 자동 주문 지시를 만들지 않습니다.",
+                "민감 보유 종목이 없으면 시장 참고 신호로 표현합니다.",
+                "초보자가 실행 기준을 이해하도록 보류 행동과 다음 확인을 함께 표시합니다.",
+            ],
+        },
+    }
 
 
 def crypto_move_model(symbol: str, asset_label: str, change24h: float, change7d: float, day_threshold: float, week_threshold: float) -> Dict[str, object]:
@@ -128,7 +351,7 @@ def crypto_move_model(symbol: str, asset_label: str, change24h: float, change7d:
     }
 
 
-def crypto_relation_context(model: Dict[str, object], item: Dict[str, object], is_bitcoin: bool) -> Dict[str, object]:
+def crypto_relation_context(model: Dict[str, object], item: Dict[str, object], is_bitcoin: bool, active_opinion: Dict[str, object] = None) -> Dict[str, object]:
     symbol = str(model.get("symbol") or item.get("symbol") or "").upper()
     score = float(model.get("score") or 0)
     rule_id = "external.crypto.btc_sensitivity.v1" if is_bitcoin else "external.crypto.market_move.v1"
@@ -195,6 +418,8 @@ def crypto_relation_context(model: Dict[str, object], item: Dict[str, object], i
             "basis": "ontologyRelationRules",
             "selectedRuleId": rule_id,
         },
+        "executionPlan": dict((active_opinion or {}).get("executionPlan") or {}),
+        "activeInvestmentOpinion": dict(active_opinion or {}),
         "promptContext": prompt_context,
     }
 
@@ -307,13 +532,21 @@ class ExternalSignalAlertMixin:
             model = crypto_move_model(symbol, asset_label, change24h, change7d, day_threshold, week_threshold)
             if not model.get("triggered"):
                 continue
-            relation_context = crypto_relation_context(model, item, is_bitcoin)
+            item_context = dict(item)
+            item_context.setdefault("id", str(coin_id or ""))
+            sensitive_positions = _crypto_sensitive_position_labels(snapshot, symbol, is_bitcoin)
+            active_opinion = crypto_active_investment_opinion(model, item_context, is_bitcoin, sensitive_positions)
+            relation_context = crypto_relation_context(model, item_context, is_bitcoin, active_opinion)
             prompt_context = relation_context.get("promptContext") if isinstance(relation_context.get("promptContext"), dict) else {}
             price = number(item.get("price"))
             volume24h = number(item.get("volume24h"))
             provider = str(item.get("provider") or "CoinGecko")
             change_label = "비트코인 변동" if is_bitcoin else "크립토 변동"
             change_value = "24h " + signed_pct(change24h) + " · 7d " + signed_pct(change7d)
+            execution_plan = active_opinion.get("executionPlan") if isinstance(active_opinion.get("executionPlan"), dict) else {}
+            beginner_summary = str(execution_plan.get("beginnerSummary") or "").strip()
+            exposure_line = "연결 보유 " + (", ".join(sensitive_positions) if sensitive_positions else "없음")
+            action_line = str(execution_plan.get("primaryActionLabel") or active_opinion.get("actionLabel") or "").strip()
             severity = str(model.get("severity") or "WATCH")
             threshold_label = (
                 "비트코인 24h ±" + self.threshold_text("externalBitcoinChange24hPct", "%") + " 또는 7d ±" + self.threshold_text("externalBitcoinChange7dPct", "%") + " 이상"
@@ -331,8 +564,11 @@ class ExternalSignalAlertMixin:
                     change_label + " " + change_value,
                     "크립토 가격 " + price_money(price, "USD"),
                     "크립토 거래액 " + money(volume24h, "USD"),
+                    "권장 액션: " + action_line if action_line else "",
+                    "초보자 요약: " + beginner_summary if beginner_summary else "",
+                    exposure_line,
                     "출처 " + provider,
-                    "MSTR/STRC 등 비트코인 민감 종목 점검",
+                    ("MSTR/STRC 등 비트코인 민감 종목 점검" if is_bitcoin else "ETH/COIN 등 크립토 민감 종목 점검"),
                 ],
                 symbol,
                 criteria=self.criteria(
@@ -354,6 +590,7 @@ class ExternalSignalAlertMixin:
                     "cryptoMoveDominantChange": model.get("dominantChange"),
                     "cryptoMoveTitle": model.get("titleLabel"),
                     "cryptoMoveReason": model.get("reason"),
+                    "activeInvestmentOpinion": active_opinion,
                     "ontologyRelationContext": relation_context,
                     "ontologyPromptContext": prompt_context,
                     "legacyFormulaAudits": [model.get("formulaAudit")],

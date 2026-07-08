@@ -17,6 +17,7 @@ from .ontology_tbox import (
     tbox_class_def,
     tbox_relation_def,
 )
+from .ontology_rules import evaluate_position_relation_rules
 from .portfolio import PortfolioSummary, Position
 
 
@@ -311,6 +312,11 @@ class PortfolioOntology:
                 for item in self.entities
                 if item.kind == "active-opinion"
             ],
+            "executionPlans": [
+                dict((item.properties or {}).get("executionPlan") or {})
+                for item in self.entities
+                if item.kind == "execution-plan"
+            ],
             "aiInferencePacket": build_ai_inference_packet(self),
             "worldview": dict(self.worldview or {}),
             "prompt": self.prompt,
@@ -488,6 +494,85 @@ def add_relation(
         evidence_ids=list(evidence_ids or []),
         properties=abox_relation_properties(relation_type, properties or {}),
     ))
+
+
+def compact_string_rows(values: object, limit: int = 5) -> List[str]:
+    if not isinstance(values, list):
+        return []
+    rows: List[str] = []
+    for value in values:
+        text = " ".join(str(value or "").split())
+        if text and text not in rows:
+            rows.append(text[:180])
+        if len(rows) >= limit:
+            break
+    return rows
+
+
+def add_execution_plan_concepts(
+    graph: PortfolioOntology,
+    stock_id: str,
+    active_opinion_id: str,
+    symbol: str,
+    source: str,
+    execution_plan: Dict[str, object],
+) -> str:
+    if not isinstance(execution_plan, dict) or not execution_plan:
+        return ""
+    plan_id = add_entity(graph, "execution-plan", symbol + ":" + source, "실행 계획 " + symbol, {
+        "tboxClass": "ExecutionPlan",
+        "tboxClasses": ["ExecutionPlan", "ReasoningCard"],
+        "symbol": symbol,
+        "source": source,
+        "primaryAction": execution_plan.get("primaryAction"),
+        "primaryActionLabel": execution_plan.get("primaryActionLabel"),
+        "decisionStage": execution_plan.get("decisionStage"),
+        "actionGroup": execution_plan.get("actionGroup"),
+        "actionLevel": execution_plan.get("actionLevel"),
+        "executionPlan": dict(execution_plan),
+    })
+    add_relation(graph, stock_id, plan_id, "HAS_EXECUTION_PLAN", weight=0.92, properties={"source": "ontology-execution-plan"})
+    add_relation(graph, active_opinion_id, plan_id, "HAS_EXECUTION_PLAN", weight=0.95, properties={"source": "active-investment-opinion"})
+    primary_label = str(execution_plan.get("primaryActionLabel") or execution_plan.get("primaryAction") or "").strip()
+    if primary_label:
+        action_id = add_entity(graph, "action-candidate", symbol + ":" + str(execution_plan.get("primaryAction") or primary_label), primary_label, {
+            "tboxClass": "ActionCandidate",
+            "symbol": symbol,
+            "action": execution_plan.get("primaryAction"),
+            "label": primary_label,
+        })
+        add_relation(graph, plan_id, action_id, "HAS_PRIMARY_ACTION", weight=0.95, properties={"source": "ontology-execution-plan"})
+    for index, item in enumerate(compact_string_rows(execution_plan.get("blockedActions"), 5)):
+        blocked_id = add_entity(graph, "blocked-action", symbol + ":" + str(index) + ":" + item, item, {
+            "tboxClass": "BlockedAction",
+            "symbol": symbol,
+            "label": item,
+        })
+        add_relation(graph, plan_id, blocked_id, "BLOCKS_ACTION", weight=0.9, properties={"source": "ontology-execution-plan"})
+    for index, item in enumerate(compact_string_rows(execution_plan.get("strengthenConditions"), 5)):
+        condition_id = add_entity(graph, "execution-condition", symbol + ":strengthen:" + str(index) + ":" + item, item, {
+            "tboxClass": "InvalidationCondition",
+            "symbol": symbol,
+            "conditionType": "strengthen",
+            "label": item,
+        })
+        add_relation(graph, plan_id, condition_id, "STRENGTHENS_ACTION_IF", weight=0.82, properties={"source": "ontology-execution-plan"})
+    for index, item in enumerate(compact_string_rows(execution_plan.get("weakenConditions"), 5)):
+        condition_id = add_entity(graph, "execution-condition", symbol + ":weaken:" + str(index) + ":" + item, item, {
+            "tboxClass": "InvalidationCondition",
+            "symbol": symbol,
+            "conditionType": "weaken",
+            "label": item,
+        })
+        add_relation(graph, plan_id, condition_id, "WEAKENS_ACTION_IF", weight=0.82, properties={"source": "ontology-execution-plan"})
+    for index, item in enumerate(compact_string_rows(execution_plan.get("nextChecks"), 5)):
+        check_id = add_entity(graph, "next-check", symbol + ":" + str(index) + ":" + item, item, {
+            "tboxClass": "NextCheck",
+            "symbol": symbol,
+            "label": item,
+        })
+        add_relation(graph, plan_id, check_id, "REQUIRES_NEXT_CHECK", weight=0.85, properties={"source": "ontology-execution-plan"})
+    return plan_id
 
 
 def safe_setting_value(key: str, value: object) -> object:
@@ -1577,17 +1662,13 @@ def build_portfolio_ontology(
             "confidence": number(opinion.conviction),
             "ontologyPressure": number(opinion.ontology_pressure),
         })
-        active_relation_context = {
-            "decision": {
-                "score": number(opinion.ontology_pressure),
-                "label": opinion.action,
-                "tone": opinion.tone,
-                "actionGroup": "lossControl" if opinion.tone in {"danger", "caution"} else "holdWatch",
-                "actionLevel": "action" if number(opinion.ontology_pressure) >= 70 else "review" if number(opinion.ontology_pressure) >= 55 else "watch",
-            },
-            "activeRules": [],
-            "missingData": [],
-        }
+        active_relation_context = evaluate_position_relation_rules(
+            position,
+            portfolio,
+            external_signals=external_signals,
+            settings=runtime_context.get("settings") if isinstance(runtime_context.get("settings"), dict) else {},
+            legacy_model=legacy,
+        )
         active_opinion_payload = build_active_investment_opinion(
             position,
             relation_context=active_relation_context,
@@ -1597,7 +1678,7 @@ def build_portfolio_ontology(
         ).to_dict()
         active_opinion_id = add_entity(graph, "active-opinion", symbol, (position.name or symbol) + " 적극 투자 의견", {
             "tboxClass": "Opinion",
-            "tboxClasses": ["Opinion", "AIReview", "Insight"],
+            "tboxClasses": ["Opinion", "ActiveInvestmentOpinion", "AIReview", "Insight"],
             "symbol": symbol,
             "source": source,
             "action": active_opinion_payload.get("action"),
@@ -1605,6 +1686,15 @@ def build_portfolio_ontology(
             "conviction": active_opinion_payload.get("conviction"),
             "activeInvestmentOpinion": active_opinion_payload,
         })
+        execution_plan_payload = active_opinion_payload.get("executionPlan") if isinstance(active_opinion_payload.get("executionPlan"), dict) else {}
+        execution_plan_id = add_execution_plan_concepts(
+            graph,
+            stock_id,
+            active_opinion_id,
+            symbol,
+            source,
+            execution_plan_payload,
+        )
         horizon_id = add_entity(graph, "signal-horizon", symbol + ":" + source, "보유 점검 기간" if holding else "관심 관찰 기간", {
             "tboxClass": "SignalHorizon",
             "symbol": symbol,
@@ -1624,6 +1714,12 @@ def build_portfolio_ontology(
             "opinionImpact": number(active_opinion_payload.get("conviction")) / 10,
             "aiInfluenceLabel": str(active_opinion_payload.get("thesis") or "적극 투자 의견"),
         })
+        if execution_plan_id:
+            add_relation(graph, execution_plan_id, thesis_id, "IMPACTS_OPINION", weight=0.86, properties={
+                "source": "ontology-execution-plan",
+                "opinionImpact": number(active_opinion_payload.get("conviction")) / 12,
+                "aiInfluenceLabel": str(execution_plan_payload.get("primaryActionLabel") or "실행 계획"),
+            })
         add_relation(graph, stock_id, horizon_id, "HAS_TIME_HORIZON", weight=1.0, properties={"source": "ontology-opinion"})
         add_relation(graph, thesis_id, horizon_id, "APPLIES_TO_HORIZON", weight=1.0, properties={"source": "ontology-opinion"})
         weight = position_weight(position, portfolio)
@@ -1998,6 +2094,13 @@ def build_reasoning_cards(graph: PortfolioOntology) -> List[Dict[str, object]]:
             for item in relations
             if item.target == stock.entity_id and item.relation_type in {"HOLDS", "WATCHES"}
         ), "HOLDS" if source != "watchlist" else "WATCHES")
+        execution_plans = [
+            dict((entities.get(item.target).properties or {}).get("executionPlan") or {})
+            for item in relations
+            if item.relation_type == "HAS_EXECUTION_PLAN"
+            and entities.get(item.target)
+            and entities.get(item.target).kind == "execution-plan"
+        ]
         cards.append({
             "id": "reasoning-card:" + symbol,
             "symbol": symbol,
@@ -2015,6 +2118,7 @@ def build_reasoning_cards(graph: PortfolioOntology) -> List[Dict[str, object]]:
             },
             "legacyModel": dict(opinion_payload.get("legacy_model") or opinion_payload.get("legacyModel") or {}),
             "relationInfluences": list(opinion_payload.get("relation_influences") or opinion_payload.get("relationInfluences") or []),
+            "executionPlans": execution_plans,
             "strategyEvidence": [compact_evidence_row(item) for item in evidence_rows],
             "relationEvidence": [compact_relation_row(item, labels) for item in relations],
             "beliefs": [item.to_dict() for item in belief_rows],
@@ -2043,13 +2147,14 @@ def build_ai_inference_packet(graph: PortfolioOntology) -> Dict[str, object]:
     pipeline_count = len([item for item in graph.entities if item.kind == "data-pipeline"])
     insight_count = len([item for item in graph.entities if item.kind == "insight"])
     active_opinion_count = len([item for item in graph.entities if item.kind == "active-opinion"])
+    execution_plan_count = len([item for item in graph.entities if item.kind == "execution-plan"])
     return {
         "contract": "investment-ontology-ai-inference-v1",
         "promptVersion": ONTOLOGY_PROMPT_VERSION,
         "role": "ontology-first-investment-opinion",
         "legacyModelRole": "supporting-evidence",
         "notificationRole": "insight-driven-dispatch",
-        "inputOrder": ["tbox", "boundedContexts", "abox", "operationalOntology", "reasoningCards", "relationInfluences", "insights", "activeInvestmentOpinions", "relations", "evidence", "beliefs", "opinions"],
+        "inputOrder": ["tbox", "boundedContexts", "abox", "operationalOntology", "reasoningCards", "relationInfluences", "insights", "activeInvestmentOpinions", "executionPlans", "relations", "evidence", "beliefs", "opinions"],
         "reasoningCardCount": len(graph.reasoning_cards),
         "reasoningCardIds": [item.get("id") for item in graph.reasoning_cards],
         "graphInputs": {
@@ -2062,12 +2167,14 @@ def build_ai_inference_packet(graph: PortfolioOntology) -> Dict[str, object]:
             "pipelineCount": pipeline_count,
             "insightCount": insight_count,
             "activeOpinionCount": active_opinion_count,
+            "executionPlanCount": execution_plan_count,
         },
         "outputSchema": {
             "portfolioView": "string",
             "relationThesis": "string",
-            "companyOpinions": ["symbol", "action", "thesis", "relationInfluences", "contradictions", "nextChecks"],
-            "activeInvestmentOpinions": ["symbol", "action", "conviction", "evidence", "counterEvidence", "invalidationCondition"],
+            "companyOpinions": ["symbol", "action", "thesis", "relationInfluences", "executionPlan", "contradictions", "nextChecks"],
+            "activeInvestmentOpinions": ["symbol", "action", "conviction", "evidence", "counterEvidence", "executionPlan", "invalidationCondition"],
+            "executionPlans": ["symbol", "primaryAction", "blockedActions", "riskSignals", "supportSignals", "counterSignals", "strengthenConditions", "weakenConditions", "nextChecks"],
             "insightDispatch": ["subject", "insightType", "novelty", "confidence", "dispatchDecision"],
             "missingDataImpact": ["string"],
         },
@@ -2148,6 +2255,11 @@ def prompt_payload(graph: PortfolioOntology) -> Dict[str, object]:
             dict((item.properties or {}).get("activeInvestmentOpinion") or {})
             for item in graph.entities
             if item.kind == "active-opinion"
+        ],
+        "executionPlans": [
+            dict((item.properties or {}).get("executionPlan") or {})
+            for item in graph.entities
+            if item.kind == "execution-plan"
         ],
         "operationalOntology": dict((graph.worldview or {}).get("operationalOntology") or {}),
         "opinions": [item.to_dict() for item in graph.opinions],

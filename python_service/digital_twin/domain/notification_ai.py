@@ -144,6 +144,31 @@ def active_investment_opinion_value(context: Dict[str, object]) -> Dict[str, obj
     return {}
 
 
+def execution_plan_value(context: Dict[str, object]) -> Dict[str, object]:
+    opinion = active_investment_opinion_value(context)
+    if isinstance(opinion.get("executionPlan"), dict) and opinion.get("executionPlan"):
+        return dict(opinion.get("executionPlan") or {})
+    relation_context = relation_context_value(context)
+    plan = relation_context.get("executionPlan") if isinstance(relation_context, dict) else {}
+    if isinstance(plan, dict) and plan:
+        return dict(plan)
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    plan = metadata.get("executionPlan") if isinstance(metadata.get("executionPlan"), dict) else {}
+    if plan:
+        return dict(plan)
+    for event in source_alert_event_items(context):
+        event_metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
+        for container in (event, event_metadata):
+            plan = container.get("executionPlan") if isinstance(container, dict) and isinstance(container.get("executionPlan"), dict) else {}
+            if plan:
+                return dict(plan)
+            nested_opinion = container.get("activeInvestmentOpinion") if isinstance(container, dict) and isinstance(container.get("activeInvestmentOpinion"), dict) else {}
+            plan = nested_opinion.get("executionPlan") if isinstance(nested_opinion.get("executionPlan"), dict) else {}
+            if plan:
+                return dict(plan)
+    return {}
+
+
 def relation_facts(context: Dict[str, object]) -> Dict[str, object]:
     facts = relation_context_value(context).get("facts")
     return facts if isinstance(facts, dict) else {}
@@ -219,6 +244,18 @@ def active_opinion_evidence_text(opinion: Dict[str, object], key: str, limit: in
         if len(titles) >= limit:
             break
     return " / ".join(titles)
+
+
+def execution_plan_text(plan: Dict[str, object], key: str, limit: int = 2) -> str:
+    rows = plan.get(key) if isinstance(plan.get(key), list) else []
+    values: List[str] = []
+    for item in rows:
+        text = compact_text(item, 90)
+        if text and text not in values:
+            values.append(text)
+        if len(values) >= limit:
+            break
+    return " / ".join(values)
 
 
 def trend_dynamics_summary(context: Dict[str, object]) -> str:
@@ -345,6 +382,7 @@ def notification_ai_prompt_context(
     relation_context = relation_context_value(context)
     all_data = sanitized_prompt_data(context)
     active_opinion = active_investment_opinion_value(context)
+    execution_plan = execution_plan_value(context)
     return {
         "promptVersion": template.version,
         "promptRegistryVersion": AI_PROMPT_REGISTRY_VERSION,
@@ -374,6 +412,7 @@ def notification_ai_prompt_context(
             "relationFacts": sanitized_prompt_data(relation_context.get("facts") if isinstance(relation_context, dict) else {}),
             "trendDynamics": sanitized_prompt_data(relation_trend_dynamics(context)),
             "activeInvestmentOpinion": sanitized_prompt_data(active_opinion),
+            "executionPlan": sanitized_prompt_data(execution_plan),
             "sourceAlertEvents": sanitized_prompt_data(source_alert_event_items(context)),
             "allAvailableData": all_data,
         },
@@ -413,6 +452,12 @@ def opinion_lines_for_type(message_type: str, context: Dict[str, object]) -> Lis
     active_invalidation = str(active_opinion.get("invalidationCondition") or "").strip()
     active_evidence = active_opinion_evidence_text(active_opinion, "evidence") if active_opinion else ""
     active_counter = active_opinion_evidence_text(active_opinion, "counterEvidence") if active_opinion else ""
+    execution_plan = execution_plan_value(context)
+    beginner_summary = str(execution_plan.get("beginnerSummary") or "").strip()
+    primary_action = str(execution_plan.get("primaryActionLabel") or "").strip()
+    plan_next = execution_plan_text(execution_plan, "nextChecks", 2)
+    plan_blocked = execution_plan_text(execution_plan, "blockedActions", 2)
+    plan_counter = execution_plan_text(execution_plan, "counterSignals", 2)
 
     if message_type == "investmentInsight":
         insight = context.get("ontologyInsight") if isinstance(context, dict) else {}
@@ -447,6 +492,8 @@ def opinion_lines_for_type(message_type: str, context: Dict[str, object]) -> Lis
             stance = "분할매도·비중 조정 우선"
         if active_label:
             stance = active_label + (" · 확신 " + str(active_conviction) + "%" if active_conviction not in (None, "") else "")
+            if primary_action and primary_action not in stance:
+                stance += " · " + primary_action
         summary_bits = [part for part in [
             ("현재가 " + current_price) if current_price else "",
             ("평단가 " + average_price) if average_price else "",
@@ -456,6 +503,8 @@ def opinion_lines_for_type(message_type: str, context: Dict[str, object]) -> Lis
             "판단: " + stance,
             "해석: " + target + "의 " + insight_label + "입니다. " + (thesis or "가격·수급·추세·외부 신호가 하나의 인사이트로 합성됐습니다."),
         ]
+        if beginner_summary:
+            result.append("쉽게 말하면: " + beginner_summary)
         if active_thesis:
             result.append("투자 의견 근거: " + active_thesis)
         if summary_bits:
@@ -464,8 +513,8 @@ def opinion_lines_for_type(message_type: str, context: Dict[str, object]) -> Lis
             result.append("근거: " + active_evidence)
         elif flow_line or investor_line or trend_line:
             result.append("근거: " + " / ".join(part for part in [flow_line, investor_line, trend_line] if part))
-        if active_counter:
-            result.append("반대 근거: " + active_counter)
+        if active_counter or plan_counter:
+            result.append("반대 근거: " + " / ".join(part for part in [active_counter, plan_counter] if part))
         if trend_dynamics_text:
             result.append("추세 동역학: " + trend_dynamics_text)
         if risk_line:
@@ -474,11 +523,16 @@ def opinion_lines_for_type(message_type: str, context: Dict[str, object]) -> Lis
             result.append("뉴스·공시: " + news_text)
         result.extend(disclosure_lines)
         opinion_text = active_label or action_line or stance
+        if primary_action and primary_action not in opinion_text:
+            opinion_text += " · " + primary_action
         if active_invalidation:
             opinion_text += ". 무효화 조건: " + active_invalidation
+        source_phrase = "근거 신호(" + source_text + ")가" if source_text else "근거 신호가"
+        if plan_blocked:
+            result.append("지금 피할 일: " + plan_blocked)
         result.extend([
-            "의견: " + opinion_text + ". " + source_text + "가 같은 방향으로 유지되는지 확인하고, 반대 신호가 있으면 실행 강도를 낮추세요.",
-            "다음 확인: " + (active_next_check or next_check or "다음 조회에서도 같은 관계 규칙이 유지되는지, 뉴스·공시 원문에 반대 근거가 있는지 확인하세요."),
+            "의견: " + opinion_text + ". " + source_phrase + " 같은 방향으로 유지되는지 확인하고, 반대 신호가 있으면 실행 강도를 낮추세요.",
+            "다음 확인: " + (plan_next or active_next_check or next_check or "다음 조회에서도 같은 관계 규칙이 유지되는지, 뉴스·공시 원문에 반대 근거가 있는지 확인하세요."),
         ])
         return result
     if message_type == "holdingTiming":

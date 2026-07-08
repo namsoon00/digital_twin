@@ -205,7 +205,11 @@ def fallback_action_from_label(value: object) -> str:
 
 def local_validated_ai_response(context: Dict[str, object], source: str = "local") -> NotificationAIValidatedResponse:
     context = dict(context or {})
+    relation_context = relation_context_value(context)
+    execution_plan = relation_context.get("executionPlan") if isinstance(relation_context.get("executionPlan"), dict) else {}
     opinion = active_investment_opinion_value(context)
+    if not execution_plan and isinstance(opinion, dict):
+        execution_plan = opinion.get("executionPlan") if isinstance(opinion.get("executionPlan"), dict) else {}
     lines = build_notification_ai_opinion(context).get("lines") or []
     raw_lines = _raw_lines(context)
     action = str(opinion.get("action") or "").strip().upper() if isinstance(opinion, dict) else ""
@@ -219,11 +223,17 @@ def local_validated_ai_response(context: Dict[str, object], source: str = "local
     if not confidence:
         confidence = 60.0
     evidence = []
+    for item in execution_plan.get("riskSignals") or []:
+        evidence.append(_text(item))
+    for item in execution_plan.get("supportSignals") or []:
+        evidence.append(_text(item))
     for label in ["투자 의견 근거", "근거", "가격 위치", "뉴스·공시", "공시 의미", "공시 영향"]:
         value = _line_after_colon(lines, label)
         if value:
             evidence.append(value)
     counter = []
+    for item in execution_plan.get("counterSignals") or []:
+        counter.append(_text(item))
     if isinstance(opinion, dict):
         for item in opinion.get("counterEvidence") or []:
             if isinstance(item, dict):
@@ -235,25 +245,32 @@ def local_validated_ai_response(context: Dict[str, object], source: str = "local
         counter.append(counter_value)
     next_check = (opinion or {}).get("nextCheck") if isinstance(opinion, dict) else ""
     if not next_check:
-        next_check = _line_after_colon(lines, "다음 확인") or _line_after_colon(raw_lines, "다음 확인")
+        next_checks = execution_plan.get("nextChecks") if isinstance(execution_plan.get("nextChecks"), list) else []
+        next_check = " / ".join(str(item) for item in next_checks[:2]) or _line_after_colon(lines, "다음 확인") or _line_after_colon(raw_lines, "다음 확인")
     invalidation = (opinion or {}).get("invalidationCondition") if isinstance(opinion, dict) else ""
+    if not invalidation:
+        weaken = execution_plan.get("weakenConditions") if isinstance(execution_plan.get("weakenConditions"), list) else []
+        invalidation = " / ".join(str(item) for item in weaken[:2])
     if not invalidation:
         opinion_line = _line_after_colon(lines, "의견")
         marker = "무효화 조건:"
         if marker in opinion_line:
             invalidation = opinion_line.split(marker, 1)[1].strip()
     missing = missing_data_labels(context)
+    missing_impact = list(execution_plan.get("missingDataImpact") or []) if isinstance(execution_plan.get("missingDataImpact"), list) else []
+    if not missing_impact:
+        missing_impact = [item + "는 결론 강도를 낮추는 요소입니다." for item in missing[:4]]
     return NotificationAIValidatedResponse(
         action=action,
         action_label=ACTION_LABELS.get(action, action),
         confidence=confidence,
-        summary=_line_after_colon(lines, "해석") or _line_after_colon(raw_lines, "핵심 결론") or "관계 규칙과 실제 데이터가 실행 판단 기준에 걸렸습니다.",
-        opinion=_line_after_colon(lines, "의견") or _line_after_colon(raw_lines, "권장 액션") or "다음 데이터에서도 같은 신호가 유지되는지 확인하세요.",
+        summary=_line_after_colon(lines, "해석") or _line_after_colon(raw_lines, "핵심 결론") or "온톨로지 실행 계획이 생성됐습니다.",
+        opinion=str(execution_plan.get("primaryActionLabel") or "").strip() or _line_after_colon(lines, "의견") or _line_after_colon(raw_lines, "권장 액션") or "다음 데이터에서도 같은 신호가 유지되는지 확인하세요.",
         evidence=_list(evidence, 5),
         counter_evidence=_list(counter, 4),
         invalidation_condition=_text(invalidation, 220),
         next_checks=_list([next_check], 3),
-        missing_data_impact=[item + "는 결론 강도를 낮추는 요소입니다." for item in missing[:4]],
+        missing_data_impact=_list(missing_impact, 4),
         reference_date=reference_date(context),
         source=source,
     )
@@ -270,6 +287,7 @@ def build_notification_ai_gate_prompt(context: Dict[str, object]) -> str:
         "rawLines": _raw_lines(context),
         "criteria": criterion_lines(context),
         "ontologyRelationContext": relation_context_value(context),
+        "executionPlan": relation_context_value(context).get("executionPlan") if isinstance(relation_context_value(context), dict) else {},
         "activeInvestmentOpinion": active_investment_opinion_value(context),
         "promptContext": prompt_context,
     }
@@ -442,12 +460,97 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
     return "\n".join(part for part in parts if str(part).strip() or part == "").strip()
 
 
+def _ontology_id(kind: str, value: object) -> str:
+    normalized = re.sub(r"[^A-Za-z0-9가-힣_.:-]+", "-", str(value or "").strip())
+    return kind + ":" + (normalized or "notification")
+
+
+def notification_ai_validation_assertions(
+    context: Dict[str, object],
+    response: NotificationAIValidatedResponse,
+    payload: Dict[str, object],
+) -> Dict[str, object]:
+    message_type = str(context.get("messageType") or context.get("rule") or "notification")
+    target = str(context.get("displayTarget") or context.get("target") or context.get("title") or message_type)
+    reference = response.reference_date or reference_date(context)
+    assertion_key = message_type + ":" + target + ":" + reference
+    validation_id = _ontology_id("ai-validation", assertion_key)
+    opinion_id = _ontology_id("validated-opinion", assertion_key + ":" + response.action)
+    dispatch_id = _ontology_id("notification-dispatch", assertion_key)
+    relation_context = relation_context_value(context)
+    active_opinion = active_investment_opinion_value(context)
+    execution_plan = relation_context.get("executionPlan") if isinstance(relation_context.get("executionPlan"), dict) else {}
+    if not execution_plan and isinstance(active_opinion.get("executionPlan"), dict):
+        execution_plan = active_opinion.get("executionPlan")
+    entities = [
+        {
+            "id": validation_id,
+            "ontologyBox": "ABox",
+            "tboxClass": "AIValidation",
+            "engineVersion": NOTIFICATION_AI_GATE_VERSION,
+            "messageType": message_type,
+            "target": target,
+            "referenceDate": reference,
+            "validationWarnings": list(response.validation_warnings or []),
+        },
+        {
+            "id": opinion_id,
+            "ontologyBox": "ABox",
+            "tboxClass": "ValidatedOpinion",
+            "action": response.action,
+            "actionLabel": response.action_label,
+            "confidence": round(_number(response.confidence), 1),
+            "validatedOpinion": dict(payload or {}),
+        },
+        {
+            "id": dispatch_id,
+            "ontologyBox": "ABox",
+            "tboxClass": "NotificationDispatch",
+            "messageType": message_type,
+            "producesValidatedMessage": True,
+        },
+    ]
+    relations = [
+        {"source": validation_id, "target": opinion_id, "relationType": "VALIDATES_OPINION"},
+        {"source": validation_id, "target": dispatch_id, "relationType": "PRODUCES_VALIDATED_MESSAGE"},
+    ]
+    if active_opinion:
+        active_id = _ontology_id("active-opinion", target)
+        entities.append({
+            "id": active_id,
+            "ontologyBox": "ABox",
+            "tboxClass": "ActiveInvestmentOpinion",
+            "action": active_opinion.get("action"),
+            "source": "notification-context",
+        })
+        relations.append({"source": validation_id, "target": active_id, "relationType": "VALIDATES_OPINION"})
+    if execution_plan:
+        plan_id = _ontology_id("execution-plan", target)
+        entities.append({
+            "id": plan_id,
+            "ontologyBox": "ABox",
+            "tboxClass": "ExecutionPlan",
+            "primaryAction": execution_plan.get("primaryAction"),
+            "primaryActionLabel": execution_plan.get("primaryActionLabel"),
+            "executionPlan": dict(execution_plan),
+        })
+        relations.append({"source": active_id if active_opinion else opinion_id, "target": plan_id, "relationType": "HAS_EXECUTION_PLAN"})
+        relations.append({"source": validation_id, "target": plan_id, "relationType": "VALIDATES_DATA"})
+    return {
+        "box": "ABox",
+        "engineVersion": NOTIFICATION_AI_GATE_VERSION,
+        "entities": entities,
+        "relations": relations,
+    }
+
+
 def context_with_validated_ai_response(
     context: Dict[str, object],
     response: NotificationAIValidatedResponse,
 ) -> Dict[str, object]:
     enriched = dict(context or {})
     payload = response.to_dict()
+    assertions = notification_ai_validation_assertions(enriched, response, payload)
     enriched["notificationAiValidatedResponse"] = payload
     enriched["notificationAiGate"] = {
         "enabled": True,
@@ -455,6 +558,17 @@ def context_with_validated_ai_response(
         "source": response.source,
         "validationWarnings": list(response.validation_warnings or []),
     }
+    enriched["ontologyAiValidation"] = {
+        "ontologyBox": "ABox",
+        "tboxClass": "AIValidation",
+        "engineVersion": NOTIFICATION_AI_GATE_VERSION,
+        "validates": ["activeInvestmentOpinion", "executionPlan", "missingData"],
+        "validatedOpinion": payload,
+        "validationWarnings": list(response.validation_warnings or []),
+        "producesValidatedMessage": True,
+        "assertionIds": [item.get("id") for item in assertions.get("entities", [])],
+    }
+    enriched["ontologyAssertions"] = assertions
     lines = [
         "판단: " + response.action_label + " · 확신 " + str(round(response.confidence, 1)) + "%",
         "해석: " + response.summary,

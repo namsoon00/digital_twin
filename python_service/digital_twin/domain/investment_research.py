@@ -118,6 +118,7 @@ class ActiveInvestmentOpinion:
     invalidation_condition: str = ""
     next_check: str = ""
     score_breakdown: Dict[str, object] = field(default_factory=dict)
+    execution_plan: Dict[str, object] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, object]:
         return {
@@ -133,6 +134,7 @@ class ActiveInvestmentOpinion:
             "missingData": list(self.missing_data or []),
             "invalidationCondition": self.invalidation_condition,
             "nextCheck": self.next_check,
+            "executionPlan": dict(self.execution_plan or {}),
             "sourceUrls": source_urls([*self.evidence, *self.counter_evidence]),
             "scoreBreakdown": dict(self.score_breakdown or {}),
             "promptContract": {
@@ -396,6 +398,7 @@ def build_active_investment_opinion(
     for item in research_evidence_from_facts(symbol, facts) + research_evidence_from_external_signals(symbol, external_signals):
         evidence_by_key[item.evidence_id] = item
     evidence = list(evidence_by_key.values())
+    execution_plan = relation_context.get("executionPlan") if isinstance(relation_context.get("executionPlan"), dict) else {}
     support_score, risk_score = support_risk_scores(evidence, relation_context)
     action = choose_action(position, relation_context, support_score, risk_score)
     support_evidence = [item for item in evidence if item.polarity == "support"]
@@ -406,6 +409,12 @@ def build_active_investment_opinion(
     relation_score = number((relation_context.get("decision") or {}).get("score") if isinstance(relation_context.get("decision"), dict) else relation_context.get("signalStrength"))
     conviction = clamp(48.0 + max(support_score, risk_score) * 0.45 + relation_score * 0.28 - len(missing_data_rows(relation_context)) * 4.0, 35.0, 94.0)
     labels = active_rule_labels(relation_context)
+    invalidation = invalidation_for_action(action)
+    if execution_plan.get("weakenConditions"):
+        invalidation = " / ".join(str(item) for item in list(execution_plan.get("weakenConditions") or [])[:2])
+    next_check = next_check_for_action(action, evidence)
+    if execution_plan.get("nextChecks"):
+        next_check = " / ".join(str(item) for item in list(execution_plan.get("nextChecks") or [])[:2])
     return ActiveInvestmentOpinion(
         symbol=symbol,
         action=action,
@@ -414,8 +423,8 @@ def build_active_investment_opinion(
         evidence=primary[:5],
         counter_evidence=counter[:5],
         missing_data=missing_data_rows(relation_context)[:8],
-        invalidation_condition=invalidation_for_action(action),
-        next_check=next_check_for_action(action, evidence),
+        invalidation_condition=invalidation,
+        next_check=next_check,
         score_breakdown={
             "supportScore": round(support_score, 1),
             "riskScore": round(risk_score, 1),
@@ -424,4 +433,5 @@ def build_active_investment_opinion(
             "ontologyPressure": round(number(ontology_opinion.get("ontology_pressure") or ontology_opinion.get("ontologyPressure")), 1),
             "evidenceCount": len(evidence),
         },
+        execution_plan=dict(execution_plan or {}),
     )

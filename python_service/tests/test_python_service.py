@@ -2508,6 +2508,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("현재가: $101.3", "\n".join(insight.lines))
         self.assertIn("평단가: $90.2", "\n".join(insight.lines))
         self.assertIn("수익률: +12.2%", "\n".join(insight.lines))
+        self.assertIn("보유: 수량 100주, 매도가능 100주, 평가금액 $10,130", "\n".join(insight.lines))
         self.assertIn("수급: 거래량 90,863(1.4x), 거래액 $3,543,834,187", "\n".join(insight.lines))
         self.assertIn("추세: 20일선 $108.07보다 6.3% 낮음", "\n".join(insight.lines))
         self.assertIn("권장 액션: 분할매도", "\n".join(insight.lines))
@@ -2515,6 +2516,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("현재가", message)
         self.assertIn("평단가", message)
         self.assertIn("수익률", message)
+        self.assertIn("보유", message)
 
     def test_investment_insight_loss_title_wins_over_rebalance_signal(self):
         event = AlertEvent(

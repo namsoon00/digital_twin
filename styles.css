@@ -25,6 +25,12 @@
   --ds-color-orbit-signal: #137a63;
   --ds-color-star-line: rgba(16, 24, 32, 0.06);
   --ds-color-orbit-glow: rgba(20, 87, 168, 0.12);
+  --ds-card-bg: #ffffff;
+  --ds-card-row-bg: #fbfcfe;
+  --ds-card-head-bg: #f8fafc;
+  --ds-card-border: #c8d0dc;
+  --ds-card-rule: #e1e6ee;
+  --ds-card-status-neutral: #758092;
   --ds-shadow-panel: none;
   --ds-shadow-floating: 0 18px 42px rgba(16, 24, 32, 0.22);
   --ds-focus: #1457a8;
@@ -104,6 +110,12 @@ html[data-theme="dark"] {
   --ds-color-orbit-signal: #4bc7a1;
   --ds-color-star-line: rgba(114, 167, 232, 0.1);
   --ds-color-orbit-glow: rgba(114, 167, 232, 0.16);
+  --ds-card-bg: #111923;
+  --ds-card-row-bg: #151f2a;
+  --ds-card-head-bg: #17212c;
+  --ds-card-border: #334052;
+  --ds-card-rule: #253242;
+  --ds-card-status-neutral: #8290a3;
   --ds-shadow-panel: none;
   --ds-shadow-floating: 0 14px 38px rgba(0, 0, 0, 0.38);
   --ds-focus: #7db2ff;
@@ -9645,5 +9657,339 @@ h3 {
 
   .ontology-structure-node::after {
     display: none;
+  }
+}
+
+/* Institutional finance card layer */
+.panel {
+  border-color: var(--ds-card-border);
+  background: var(--ds-card-bg);
+}
+
+.panel-head {
+  position: relative;
+  border-bottom-color: var(--ds-card-border);
+  background: linear-gradient(180deg, var(--ds-card-head-bg), var(--ds-card-bg));
+}
+
+.panel-head::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: var(--blue);
+  opacity: 0.72;
+}
+
+.panel-head h2,
+.panel-head .metric,
+.metric {
+  font-variant-numeric: tabular-nums;
+}
+
+.admin-stat-grid span,
+.account-manager-summary span,
+.account-directory-summary span,
+.symbol-summary-metric,
+.symbol-source-status,
+.monitoring-instrument-summary > div,
+.model-setting-card,
+.lab-record-grid span,
+.gauge-card,
+.flow-lane,
+.alert-stat,
+.feed-stat,
+.investment-evidence-grid span,
+.reasoning-graph-refs span,
+.investment-packet-grid section,
+.signal-score-grid span,
+.signal-metric-grid span,
+.valuation-grid span,
+.variable-grid span,
+.settings-api-row,
+.account-credential-grid > div,
+.monitoring-detail-metric,
+.lab-stats-grid span,
+.lab-status-grid span,
+.lab-model-grid span,
+.lab-control,
+.feature-audit-grid span,
+.feature-delta-grid span,
+.feature-contribution-grid span {
+  border: 1px solid var(--ds-card-border);
+  border-left: 3px solid var(--ds-card-status-neutral);
+  border-radius: var(--ds-radius-control);
+  background: linear-gradient(180deg, var(--ds-card-row-bg), var(--ds-card-bg));
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--panel) 72%, transparent);
+}
+
+.alert-stat.danger,
+.gauge-card.danger {
+  border-left-color: var(--red);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--red-soft) 42%, var(--ds-card-row-bg)), var(--ds-card-bg));
+}
+
+.alert-stat.caution,
+.gauge-card.caution {
+  border-left-color: var(--amber);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--amber-soft) 48%, var(--ds-card-row-bg)), var(--ds-card-bg));
+}
+
+.alert-stat.watch,
+.gauge-card.watch,
+.flow-lane.watch {
+  border-left-color: var(--green);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--green-soft) 42%, var(--ds-card-row-bg)), var(--ds-card-bg));
+}
+
+.alert-stat.info,
+.gauge-card.hold,
+.flow-lane.hold {
+  border-left-color: var(--blue);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--blue-soft) 44%, var(--ds-card-row-bg)), var(--ds-card-bg));
+}
+
+.flow-lane.danger {
+  border-left-color: var(--red);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--red-soft) 38%, var(--ds-card-row-bg)), var(--ds-card-bg));
+}
+
+.account-card,
+.watch-account-row,
+.account-watch-symbol-row,
+.account-watch-edit-row,
+.service-account-row,
+.monitoring-instrument-row,
+.investment-evidence-card,
+.alert-row,
+.alert-rule,
+.signal-row,
+.valuation-row,
+.lab-row,
+.flow-row,
+.exit-row,
+.news-item,
+.symbol-result-row,
+.notification-decision-row,
+.notification-template-row,
+.admin-message-row,
+.model-version-row,
+.message-schedule-summary > span:not(.tone-chip),
+.source-panel .source-row {
+  border: 1px solid var(--ds-card-border);
+  border-left: 3px solid var(--ds-card-status-neutral);
+  border-radius: var(--ds-radius-control);
+  background: var(--ds-card-bg);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--panel) 72%, transparent);
+}
+
+.source-panel .source-row {
+  padding-inline: var(--ds-row-pad-x);
+}
+
+.account-card,
+.watch-account-row,
+.account-watch-symbol-row,
+.service-account-row,
+.monitoring-instrument-row,
+.investment-evidence-card,
+.alert-row,
+.signal-row,
+.valuation-row,
+.lab-row,
+.flow-row,
+.exit-row,
+.symbol-result-row,
+.notification-decision-row,
+.notification-template-row,
+.admin-message-row,
+.model-version-row {
+  padding: var(--ds-row-pad-y) var(--ds-row-pad-x);
+}
+
+.alert-row {
+  border-left-color: var(--blue);
+}
+
+.alert-row.danger,
+.notification-decision-row.danger,
+.admin-message-row.danger {
+  border-left-color: var(--red);
+}
+
+.alert-row.caution,
+.notification-decision-row.caution,
+.admin-message-row.caution {
+  border-left-color: var(--amber);
+}
+
+.alert-row.watch,
+.notification-decision-row.watch,
+.admin-message-row.watch {
+  border-left-color: var(--green);
+}
+
+.watch-account-row.active,
+.monitoring-instrument-row:hover,
+.monitoring-instrument-row:focus-visible,
+.watch-account-row.selectable:hover,
+.watch-account-row.selectable:focus,
+.symbol-result-row:hover {
+  border-color: var(--blue);
+  background: color-mix(in srgb, var(--blue-soft) 38%, var(--ds-card-bg));
+}
+
+.watch-account-row.active {
+  border-left-color: var(--blue);
+  box-shadow: inset 3px 0 0 var(--blue);
+}
+
+.account-card-list,
+.watch-account-list,
+.account-watch-symbol-list,
+.monitoring-instrument-list,
+.alert-list,
+.notification-decision-list,
+.symbol-result-list,
+.investment-evidence-list,
+.signal-list,
+.valuation-list,
+.lab-list,
+.news-list,
+.model-version-list,
+.notification-template-list,
+.admin-message-list {
+  gap: var(--ds-section-gap);
+}
+
+@media (min-width: 1181px) {
+  .admin-stat-grid,
+  .account-manager-summary,
+  .account-directory-summary,
+  .symbol-summary-grid,
+  .symbol-source-grid,
+  .monitoring-instrument-summary,
+  .model-setting-card-grid,
+  .lab-record-grid,
+  .alert-stat-grid,
+  .gauge-grid,
+  .flow-lanes,
+  .feed-stat-grid,
+  .investment-evidence-grid,
+  .reasoning-graph-refs,
+  .investment-packet-grid,
+  .signal-score-grid,
+  .signal-metric-grid,
+  .valuation-grid,
+  .variable-grid,
+  .settings-api-grid,
+  .account-credential-grid,
+  .monitoring-detail-metric-grid,
+  .monitoring-detail-signal-grid {
+    gap: 10px;
+    border: 0;
+    background: transparent;
+  }
+
+  .account-card-list,
+  .watch-account-list,
+  .account-watch-symbol-list,
+  .monitoring-instrument-list,
+  .alert-list,
+  .notification-decision-list,
+  .symbol-result-list,
+  .investment-evidence-list,
+  .signal-list,
+  .valuation-list,
+  .lab-list,
+  .news-list,
+  .model-version-list,
+  .notification-template-list,
+  .admin-message-list {
+    display: grid;
+    gap: var(--ds-section-gap);
+    padding: var(--ds-space-3) var(--ds-panel-pad-x) var(--ds-panel-pad-y);
+    border-top: 1px solid var(--ds-card-border);
+    background: color-mix(in srgb, var(--panel) 88%, transparent);
+  }
+
+  .account-card-list,
+  .watch-account-list,
+  .monitoring-instrument-list,
+  .symbol-result-list {
+    grid-template-columns: repeat(auto-fill, minmax(430px, 1fr));
+  }
+
+  .account-watch-symbol-list,
+  .alert-list,
+  .notification-decision-list,
+  .investment-evidence-list,
+  .signal-list,
+  .valuation-list,
+  .lab-list,
+  .news-list,
+  .model-version-list,
+  .notification-template-list,
+  .admin-message-list {
+    grid-template-columns: repeat(auto-fill, minmax(390px, 1fr));
+  }
+
+  .account-card,
+  .watch-account-row,
+  .account-watch-symbol-row,
+  .account-watch-edit-row,
+  .monitoring-instrument-row,
+  .service-account-row,
+  .alert-row,
+  .signal-row,
+  .valuation-row,
+  .lab-row,
+  .flow-row,
+  .exit-row,
+  .news-item,
+  .symbol-result-row,
+  .notification-decision-row,
+  .notification-template-row,
+  .admin-message-row,
+  .model-version-row {
+    border: 1px solid var(--ds-card-border);
+    border-left: 3px solid var(--ds-card-status-neutral);
+    border-radius: var(--ds-radius-control);
+    background: var(--ds-card-bg);
+  }
+
+  .account-card {
+    grid-template-columns: minmax(240px, 0.94fr) minmax(220px, 1fr) auto;
+  }
+
+  .watch-account-row {
+    grid-template-columns: minmax(190px, 0.7fr) minmax(0, 1fr) auto;
+  }
+
+  .monitoring-instrument-row {
+    grid-template-columns: minmax(0, 1fr) minmax(190px, 0.36fr);
+  }
+
+  .notification-decision-row {
+    grid-template-columns: minmax(210px, 0.42fr) minmax(0, 1fr);
+  }
+
+  .source-row:last-child,
+  .news-item:last-child,
+  .social-item:last-child,
+  .position-row:last-child,
+  .check-row:last-child,
+  .theme-row:last-child,
+  .symbol-result-row:last-child,
+  .notification-template-row:last-child,
+  .admin-message-row:last-child,
+  .model-version-row:last-child,
+  .alert-row:last-child,
+  .signal-row:last-child,
+  .valuation-row:last-child,
+  .lab-row:last-child,
+  .flow-row:last-child,
+  .exit-row:last-child {
+    border-bottom: 1px solid var(--ds-card-border);
   }
 }

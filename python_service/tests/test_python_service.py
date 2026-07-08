@@ -19,7 +19,7 @@ from digital_twin.application.flow_lens_service import FlowLensService
 from digital_twin.application.market_data_collection_service import MARKET_DATA_ACCOUNT_ID, MarketDataCollectionRunner
 from digital_twin.application.model_review_service import ModelReviewRunner
 from digital_twin.application.monitoring_service import MonitorRunner as ApplicationMonitorRunner
-from digital_twin.application.notification_service import CompositeNotificationContextEnricher, DisclosureAnalysisNotificationEnricher, NotificationAIOpinionEnricher, NotificationQueueRunner
+from digital_twin.application.notification_service import CompositeNotificationContextEnricher, DisclosureAnalysisNotificationEnricher, NotificationAIValidatedGateEnricher, NotificationAIOpinionEnricher, NotificationQueueRunner
 from digital_twin.application.symbol_universe_service import SymbolUniverseService, seed_symbol
 from digital_twin.cli import build_handoff_message
 from digital_twin.cli import preserve_existing_secrets
@@ -40,6 +40,7 @@ from digital_twin.domain.disclosure_analysis import DisclosureAnalysisResult, lo
 from digital_twin.domain.notification_templates import NotificationTemplate, alert_context, render_notification
 from digital_twin.domain.notification_rules import apply_market_hours_rule, apply_state_cooldown_rule, default_notification_rule, evaluate_notification_rule
 from digital_twin.domain.notification_ai import build_notification_ai_opinion
+from digital_twin.domain.notification_ai_gate import context_with_validated_ai_response, validated_response_from_payload
 from digital_twin.domain.notifications import NotificationJob
 from digital_twin.domain.parsing import parse_assignments
 from digital_twin.domain.portfolio import AccountSnapshot, AlertEvent, Position, utc_now_iso
@@ -4682,6 +4683,97 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("반대 근거", text)
         self.assertIn("무효화 조건", text)
         self.assertEqual("SELL", opinion["promptContext"]["facts"]["activeInvestmentOpinion"]["action"])
+
+    def test_validated_ai_response_rebuilds_execution_message(self):
+        context = {
+            "messageType": "investmentInsight",
+            "headline": "[주의] 🛡️ 손실 -18.1%: 손절·분할축소 점검",
+            "displayTarget": "SK하이닉스 / 000660",
+            "referenceDate": "2026-07-08 14:26 KST",
+            "sentTime": "2026-07-08 14:27 KST",
+            "rawLines": "\n".join([
+                "현재가: 2,115,000원",
+                "평단가: 2,571,000원",
+                "수익률: -18.1%",
+                "수급: 거래량 5,215,050(0.8x), 체결강도 95.2",
+                "추세: 20일선보다 15.2% 낮음, 60일선보다 8.4% 높음",
+                "기준일: 2026-07-08 14:26 KST",
+            ]),
+            "criterionLines": "설정: 관계 그래프에서 의미 있는 투자 인사이트가 생성될 때",
+            "ontologyRelationContext": {
+                "missingData": [{"label": "투자자별 수급", "effect": "응답 비어 있음"}],
+            },
+        }
+
+        response = validated_response_from_payload(context, {
+            "action": "SELL",
+            "confidence": 94,
+            "summary": "손실과 20일선 이탈이 함께 강합니다.",
+            "opinion": "분할축소를 우선 검토하고 추가매수는 보류하세요.",
+            "evidence": ["손실 -18.1%", "20일선보다 15.2% 낮음"],
+            "counterEvidence": ["60일선은 아직 위에 있음"],
+            "invalidationCondition": "20일선 회복과 거래량 동반 반등이 확인되면 매도 강도를 낮춥니다.",
+            "nextChecks": ["매도 가능 수량과 공시 원문을 확인"],
+            "missingDataImpact": [],
+            "referenceDate": "2026-07-08 14:26 KST",
+        }, source="test AI")
+        enriched = context_with_validated_ai_response(context, response)
+        message = enriched["telegramMessage"]
+
+        self.assertIn("<b>판단</b>", message)
+        self.assertIn("매도", message)
+        self.assertIn("반대 신호", message)
+        self.assertIn("60일선은 아직 위", message)
+        self.assertIn("투자자별 수급", message)
+        self.assertIn("2026-07-08 14:26 KST", message)
+        self.assertNotIn("관계 규칙", message)
+        self.assertNotIn("AI 분석 기준", message)
+        self.assertEqual("SELL", enriched["notificationAiValidatedResponse"]["action"])
+
+    def test_notification_worker_waits_for_validated_ai_before_rendering(self):
+        class FakeReviewer:
+            def review(self, context):
+                return validated_response_from_payload(context, {
+                    "action": "TRIM",
+                    "confidence": 88,
+                    "summary": "하락 신호가 커져 분할축소 검토가 우선입니다.",
+                    "opinion": "추가매수는 보류하고 분할축소 기준을 확인하세요.",
+                    "evidence": ["수익률 -12%", "20일선 아래"],
+                    "counterEvidence": ["거래량은 평균 이하라 투매 확정은 아님"],
+                    "invalidationCondition": "20일선 회복 시 축소 강도를 낮춥니다.",
+                    "nextChecks": ["다음 조회에서도 같은 규칙이 유지되는지 확인"],
+                    "referenceDate": "2026-07-08 14:30 KST",
+                }, source="fake AI")
+
+        job = NotificationJob.create(
+            "old rendered message",
+            account_id="main",
+            account_label="메인",
+            message_type="investmentInsight",
+            context={
+                "messageType": "investmentInsight",
+                "headline": "[주의] 🛡️ 손실 -12%: 손절·분할축소 점검",
+                "displayTarget": "삼성전자 / 005930",
+                "referenceDate": "2026-07-08 14:30 KST",
+                "sentTime": "2026-07-08 14:31 KST",
+                "rawLines": "\n".join([
+                    "현재가: 286,500원",
+                    "평단가: 327,000원",
+                    "수익률: -12.4%",
+                    "추세: 20일선보다 12.6% 낮음",
+                ]),
+            },
+        )
+        enricher = NotificationAIValidatedGateEnricher(FakeReviewer(), {
+            "notificationAiGateEnabled": "1",
+            "notificationAiGateMessageTypes": "investmentInsight",
+        })
+        enricher(job)
+
+        self.assertEqual("TRIM", job.context["notificationAiValidatedResponse"]["action"])
+        self.assertIn("AI 검증 알림", job.context["telegramMessage"])
+        self.assertIn("분할축소", job.context["telegramMessage"])
+        self.assertNotIn("old rendered message", job.context["telegramMessage"])
 
     def test_notification_delivery_score_uses_user_formula(self):
         event = AlertEvent(

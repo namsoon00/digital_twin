@@ -5,6 +5,7 @@ from zoneinfo import ZoneInfo
 
 from ..domain.disclosure_analysis import context_with_disclosure_analysis, local_disclosure_analysis
 from ..domain.notification_ai import enrich_notification_ai_context
+from ..domain.notification_ai_gate import ai_gate_enabled_for_message_type, context_with_validated_ai_response, local_validated_ai_response
 from ..domain.notifications import NotificationJob
 
 
@@ -49,6 +50,28 @@ class NotificationAIOpinionEnricher:
         job.context = enrich_notification_ai_context(context, self.settings)
 
 
+class NotificationAIValidatedGateEnricher:
+    def __init__(self, reviewer=None, settings: Dict[str, object] = None):
+        self.reviewer = reviewer
+        self.settings = settings or {}
+
+    def __call__(self, job: NotificationJob) -> None:
+        if not ai_gate_enabled_for_message_type(job.message_type, self.settings):
+            return
+        context = dict(job.context or {})
+        context.setdefault("messageType", job.message_type)
+        context.setdefault("accountId", job.account_id)
+        context.setdefault("accountLabel", job.account_label)
+        if context.get("notificationAiValidatedResponse"):
+            return
+        try:
+            response = self.reviewer.review(context) if self.reviewer else local_validated_ai_response(context)
+        except Exception as error:  # noqa: BLE001 - notification delivery should degrade to local validation.
+            response = local_validated_ai_response(context, source="local fallback")
+            response.validation_warnings.append("AI 검증 실패로 로컬 의견을 사용했습니다: " + str(error)[:140])
+        job.context = context_with_validated_ai_response(context, response)
+
+
 class NotificationQueueRunner:
     def __init__(
         self,
@@ -84,6 +107,13 @@ class NotificationQueueRunner:
             if not job.text.strip():
                 self.queue.mark_failed(job, "empty notification text")
                 continue
+            account = accounts.get(job.account_id)
+            if not self.dry_run and account and account.quiet_hours_active(self.now_provider(), job.message_type):
+                self.mark_quiet_hours_suppressed(job, account)
+                processed += 1
+                continue
+            if not self.dry_run:
+                self.queue.mark_processing(job)
             message = self.render(job)
             if not message:
                 self.queue.mark_failed(job, "empty rendered notification text")
@@ -92,12 +122,6 @@ class NotificationQueueRunner:
                 print(message)
                 processed += 1
                 continue
-            account = accounts.get(job.account_id)
-            if account and account.quiet_hours_active(self.now_provider(), job.message_type):
-                self.mark_quiet_hours_suppressed(job, account)
-                processed += 1
-                continue
-            self.queue.mark_processing(job)
             try:
                 self.deliver(job, accounts, message)
                 self.queue.mark_done(job)

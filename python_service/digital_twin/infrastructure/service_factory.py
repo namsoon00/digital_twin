@@ -7,6 +7,7 @@ from ..application.monitoring_service import MonitorRunner
 from ..application.notification_service import (
     CompositeNotificationContextEnricher,
     DisclosureAnalysisNotificationEnricher,
+    NotificationAIValidatedGateEnricher,
     NotificationAIOpinionEnricher,
     NotificationQueueRunner,
 )
@@ -18,6 +19,7 @@ from .event_bus import EventBus, default_event_bus
 from .disclosure_analyzer import disclosure_analyzer_from_settings
 from .model_review_queue import ModelReviewEnqueuer
 from .model_reviewer import reviewer_from_settings
+from .notification_ai_reviewer import notification_ai_reviewer_from_settings
 from .neo4j_ontology import ontology_repository_from_settings
 from .ontology_projection import PortfolioOntologyProjectionRecorder
 from .notifications import queued_notifier_for_account
@@ -85,6 +87,10 @@ def build_notification_queue_runner(dry_run: bool = False) -> NotificationQueueR
         context_enricher=CompositeNotificationContextEnricher(
             DisclosureAnalysisNotificationEnricher(
                 disclosure_analyzer_from_settings(settings),
+                settings,
+            ),
+            NotificationAIValidatedGateEnricher(
+                notification_ai_reviewer_from_settings(settings),
                 settings,
             ),
             NotificationAIOpinionEnricher(settings),

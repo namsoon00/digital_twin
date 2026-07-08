@@ -209,6 +209,16 @@ function checkFrontendAdminRender() {
   assertOk(/@media \(min-width: 1181px\)[\s\S]*\.symbol-result-list[\s\S]*grid-template-columns: repeat\(auto-fit, minmax\(440px, 1fr\)\);/.test(styles), "PC 전체종목 결과가 과도하게 넓은 단일 리스트로 남아 있습니다.");
   assertOk(/@media \(min-width: 1181px\)[\s\S]*\.alert-list[\s\S]*grid-template-columns: repeat\(auto-fit, minmax\(420px, 1fr\)\);/.test(styles), "PC 알림 리스트가 읽기 폭을 제한하지 않습니다.");
   assertOk(/@media \(min-width: 1181px\)[\s\S]*\.variable-grid,[\s\S]*\.monitoring-detail-signal-grid[\s\S]*grid-template-columns: repeat\(auto-fill, minmax\(160px, 230px\)\);/.test(styles), "PC metric/card cell이 화면 폭 전체로 늘어나는 것을 막지 않습니다.");
+  const desktopLayoutAuditLayerStart = styles.indexOf("/* Desktop layout audit layer */");
+  const desktopLayoutAuditLayer = desktopLayoutAuditLayerStart >= 0 ? styles.slice(desktopLayoutAuditLayerStart) : "";
+  assertOk(desktopLayoutAuditLayerStart >= 0, "PC 최종 레이아웃 감사 레이어가 없습니다.");
+  assertOk(/\.home-view \.admin-overview-panel\s*\{\s*grid-column: span 7;/.test(desktopLayoutAuditLayer), "홈 운영 요약이 PC 7컬럼 배치로 최종 고정되지 않습니다.");
+  assertOk(/\.home-view \.account-watchlist-panel,[\s\S]*\.home-view \.admin-monitoring-panel\s*\{\s*grid-column: span 6;/.test(desktopLayoutAuditLayer), "홈 하단 패널이 PC 6:6 배치로 최종 고정되지 않습니다.");
+  assertOk(/\.notifications-view \.monitoring-instrument-panel\s*\{\s*grid-column: span 8;/.test(desktopLayoutAuditLayer), "알림 신호 섹션의 통합 종목 패널이 PC 8컬럼으로 고정되지 않습니다.");
+  assertOk(/\.notification-decision-list\s*\{\s*grid-template-columns: minmax\(0, 1fr\);/.test(desktopLayoutAuditLayer), "최근 알림 판단 목록이 PC 전폭 원장 행으로 유지되지 않습니다.");
+  assertOk(/\.notification-decision-row\s*\{\s*grid-template-columns: minmax\(240px, 0\.34fr\) minmax\(0, 1fr\);/.test(desktopLayoutAuditLayer), "최근 알림 판단 행의 PC 최종 2열 구조가 없습니다.");
+  assertOk(/\.strategy-data-grid\s*\{\s*grid-template-columns: repeat\(auto-fit, minmax\(min\(100%, 360px\), 1fr\)\);/.test(desktopLayoutAuditLayer), "전략 데이터 점검 카드가 PC 읽기 폭 제한 그리드로 정리되지 않습니다.");
+  assertOk(/@media \(min-width: 1440px\)[\s\S]*\.notifications-view \.alert-delivery-panel\s*\{[\s\S]*grid-column: span 4;/.test(desktopLayoutAuditLayer), "넓은 PC에서 알림 고급 패널 4:4:4 배치가 없습니다.");
   assertOk(code.indexOf("renderManagedPage") >= 0 && styles.indexOf(".managed-page") >= 0, "전체 탭 공통 관리 페이지 템플릿이 없습니다.");
   assertOk(code.indexOf("renderPageCommandStrip") >= 0 && styles.indexOf(".page-command-strip") >= 0, "페이지 작업 상태 strip 템플릿이 없습니다.");
   assertOk(/@media \(min-width: 861px\)[\s\S]*height: calc\(100dvh - 48px\);/.test(styles), "PC shell이 100dvh 관리 콘솔로 고정되지 않습니다.");

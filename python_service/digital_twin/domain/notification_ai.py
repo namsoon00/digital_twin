@@ -1,6 +1,7 @@
 from typing import Dict, List, Optional
 
 from .message_types import MESSAGE_TYPE_LABELS
+from .disclosure_analysis import local_disclosure_analysis
 from .ontology_rules import (
     AI_PROMPT_REGISTRY_VERSION,
     default_ai_prompt_policy_text,
@@ -203,6 +204,35 @@ def news_summary_text(context: Dict[str, object]) -> str:
     return " / ".join(parts[:3])
 
 
+def disclosure_analysis_opinion_lines(context: Dict[str, object]) -> List[str]:
+    disclosure = disclosure_context(context)
+    if not disclosure:
+        return []
+    report = str(disclosure.get("reportName") or disclosure.get("report_name") or "").strip()
+    receipt_date = str(disclosure.get("receiptDate") or disclosure.get("receipt_date") or "").strip()
+    provider = str(disclosure.get("provider") or "OpenDART").strip()
+    analysis_context = {
+        "title": target_label(context),
+        "symbol": str(context.get("symbol") or "").strip(),
+        "metadata": disclosure,
+        "rawLines": "\n".join(line for line in [
+            "신규 공시 감지",
+            report,
+            "접수일 " + receipt_date if receipt_date else "",
+            "출처 " + provider if provider else "",
+        ] if line),
+    }
+    result = local_disclosure_analysis(analysis_context)
+    lines: List[str] = []
+    for line in result.lines[:4]:
+        label, _, value = str(line or "").partition(": ")
+        if label and value:
+            lines.append("공시 " + label + ": " + value)
+        elif str(line or "").strip():
+            lines.append("공시 해석: " + str(line).strip())
+    return lines
+
+
 def target_label(context: Dict[str, object]) -> str:
     return str(
         context.get("displayTarget")
@@ -302,6 +332,7 @@ def opinion_lines_for_type(message_type: str, context: Dict[str, object]) -> Lis
         flow_line = line_value(lines, "수급")
         investor_line = line_value(lines, "투자자")
         news_text = news_summary_text(context)
+        disclosure_lines = disclosure_analysis_opinion_lines(context)
         source_types = insight.get("sourceSignalTypes") or context.get("sourceSignalTypes") if isinstance(context, dict) else []
         if isinstance(source_types, list):
             source_labels = [MESSAGE_TYPE_LABELS.get(str(item), str(item)) for item in source_types[:5]]
@@ -332,6 +363,7 @@ def opinion_lines_for_type(message_type: str, context: Dict[str, object]) -> Lis
             result.append("주의: " + risk_line)
         if news_text:
             result.append("뉴스·공시: " + news_text)
+        result.extend(disclosure_lines)
         result.extend([
             "의견: " + (action_line or stance) + ". " + source_text + "가 같은 방향으로 유지되는지 확인하고, 반대 신호가 있으면 실행 강도를 낮추세요.",
             "다음 확인: " + (next_check or "다음 조회에서도 같은 관계 규칙이 유지되는지, 뉴스·공시 원문에 반대 근거가 있는지 확인하세요."),
@@ -359,6 +391,7 @@ def opinion_lines_for_type(message_type: str, context: Dict[str, object]) -> Lis
             result.append("투자자: " + line_value(lines, "투자자"))
         if news_text:
             result.append("뉴스·공시: " + news_text)
+        result.extend(disclosure_analysis_opinion_lines(context))
         external_phrase = "뉴스/공시" if news_text else "다음 조회 데이터"
         result.extend([
             "의견: " + (action or (state or "보유 판단") + " 기준을 우선 확인") + ". 가격·수급·추세와 " + external_phrase + "가 같은 방향인지 확인한 뒤 대응 강도를 정하세요.",

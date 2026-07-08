@@ -4375,8 +4375,49 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("가격 위치", text)
         self.assertIn("뉴스·공시", text)
         self.assertIn("NAVER governance update", text)
+        self.assertIn("공시 의미", text)
         self.assertEqual("[redacted]", opinion["promptContext"]["facts"]["allAvailableData"]["metadata"]["telegramBotToken"])
         self.assertIn("allAvailableData", opinion["promptContext"]["facts"])
+
+    def test_investment_insight_ai_opinion_interprets_self_stock_disposal_disclosure(self):
+        context = {
+            "messageType": "investmentInsight",
+            "target": "삼성전자 / 005930",
+            "symbol": "005930",
+            "rawLines": [
+                "현재가: 291,000원",
+                "평단가: 327,000원",
+                "수익률: -11.3%",
+                "권장 액션: 손절·분할축소 우선, 20일선 회복 전 추가매수 보류",
+                "인사이트 유형: 리스크 증가",
+            ],
+            "ontologyInsight": {
+                "insightLabel": "리스크 증가",
+                "thesis": "손익률 변화, 이동평균 변화, 보유 타이밍이 함께 강해졌습니다.",
+                "sourceSignalTypes": ["holdingTiming"],
+            },
+            "metadata": {
+                "ontologyRelationContext": {
+                    "facts": {
+                        "dartDisclosure": {
+                            "provider": "OpenDART",
+                            "corpName": "삼성전자",
+                            "reportName": "주요사항보고서(자기주식처분결정)",
+                            "receiptNo": "20260707000403",
+                            "receiptDate": "20260707",
+                        }
+                    }
+                }
+            },
+        }
+
+        opinion = build_notification_ai_opinion(context)
+        text = "\n".join(opinion["lines"])
+
+        self.assertIn("공시 의미", text)
+        self.assertIn("보유 자기주식을 처분", text)
+        self.assertIn("물량 부담", text)
+        self.assertIn("추가매수는 보류", text)
 
     def test_notification_delivery_score_uses_user_formula(self):
         event = AlertEvent(
@@ -5066,6 +5107,23 @@ class PythonServiceTests(unittest.TestCase):
 
         self.assertTrue(any("희석" in line for line in result.lines))
         self.assertTrue(any("발행 규모" in line for line in result.lines))
+
+    def test_local_disclosure_analysis_classifies_self_stock_disposal(self):
+        result = local_disclosure_analysis({
+            "metadata": {
+                "corpName": "삼성전자",
+                "symbol": "005930",
+                "reportName": "주요사항보고서(자기주식처분결정)",
+                "receiptNo": "20260707000403",
+            },
+            "rawLines": "신규 공시 감지\n주요사항보고서(자기주식처분결정)\n출처 OpenDART",
+        })
+        text = "\n".join(result.lines)
+
+        self.assertIn("보유 자기주식을 처분", text)
+        self.assertIn("물량 부담", text)
+        self.assertIn("처분 수량", text)
+        self.assertIn("추가매수는 보류", text)
 
     def test_holding_timing_delivery_adds_sent_time(self):
         registry = AccountRegistry()

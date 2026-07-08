@@ -564,6 +564,7 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
     current = _plain_value(context, "현재가")
     average = _plain_value(context, "평단가")
     pnl = _plain_value(context, "수익률") or _plain_value(context, "손익")
+    balance = _plain_value(context, "보유")
     trend = _plain_value(context, "추세")
     flow = _plain_value(context, "수급")
     investor = _plain_value(context, "투자자")
@@ -583,6 +584,7 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
         _html_row("현재가", current),
         _html_row("평단가", average),
         _html_row("수익률", pnl),
+        _html_row("보유", balance),
         _html_row("추세", trend),
         _html_row("수급", flow),
     ]

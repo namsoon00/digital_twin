@@ -627,6 +627,12 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
     def position_market_value(self, position: Dict[str, object]) -> float:
         return number(position.get("market_value") if "market_value" in position else position.get("marketValue"))
 
+    def position_quantity(self, position: Dict[str, object]) -> float:
+        return number(position.get("quantity"))
+
+    def position_sellable_quantity(self, position: Dict[str, object]) -> float:
+        return number(position.get("sellable_quantity") if "sellable_quantity" in position else position.get("sellableQuantity"))
+
     def position_current_price(self, position: Dict[str, object]) -> float:
         return number(position.get("current_price") if "current_price" in position else position.get("currentPrice"))
 
@@ -656,6 +662,22 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
             return ""
         return "수익률: " + signed_pct(self.position_profit_loss_rate(position))
 
+    def holding_balance_line(self, position: Dict[str, object]) -> str:
+        parts: List[str] = []
+        quantity = self.position_quantity(position)
+        sellable = self.position_sellable_quantity(position)
+        market_value = self.position_market_value(position)
+        currency = self.position_currency(position)
+        if quantity:
+            parts.append("수량 " + compact_number(quantity) + "주")
+        if sellable:
+            parts.append("매도가능 " + compact_number(sellable) + "주")
+        if market_value:
+            parts.append("평가금액 " + money(market_value, currency))
+        if not parts:
+            return ""
+        return "보유: " + ", ".join(parts)
+
     def holding_price_lines(self, position: Dict[str, object]) -> List[str]:
         return [
             line
@@ -663,6 +685,7 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
                 self.current_price_line(position),
                 self.average_price_line(position),
                 self.profit_rate_line(position),
+                self.holding_balance_line(position),
             ]
             if line
         ]

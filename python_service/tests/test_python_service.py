@@ -4921,6 +4921,7 @@ class PythonServiceTests(unittest.TestCase):
                 "현재가: 2,115,000원",
                 "평단가: 2,571,000원",
                 "수익률: -18.1%",
+                "보유: 수량 10주, 매도가능 10주, 평가금액 2,115만 원",
                 "수급: 거래량 5,215,050(0.8x), 체결강도 95.2",
                 "투자자: 외국인 -3,015,093(매수 8,922,904/매도 11,937,997), 기관 +971,031(매수 12,816,837/매도 11,845,806), 개인 +2,031,705(매수 11,457,143/매도 9,425,438)",
                 "추세: 20일선보다 15.2% 낮음, 60일선보다 8.4% 높음",
@@ -4956,6 +4957,7 @@ class PythonServiceTests(unittest.TestCase):
 
         self.assertIn("<b>판단</b>", message)
         self.assertIn("매도", message)
+        self.assertIn("<b>보유</b>: <code>수량 10주, 매도가능 10주, 평가금액 2,115만 원</code>", message)
         self.assertIn("반대 신호", message)
         self.assertIn("60일선은 아직 위", message)
         self.assertIn("투자자별 수급", message)
@@ -6578,6 +6580,18 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("금액 +2,836억 원", corrected_investor_line)
         self.assertIn("개인: 순매수 2,031,705주", corrected_investor_line)
         self.assertIn("금액 +5,837억 원", corrected_investor_line)
+        position.update({
+            "quantity": 12,
+            "sellable_quantity": 9,
+            "sellableQuantity": 9,
+            "market_value": 3330000,
+            "marketValue": 3330000,
+            "currency": "KRW",
+        })
+        self.assertEqual(
+            "보유: 수량 12주, 매도가능 9주, 평가금액 333만 원",
+            monitor.holding_balance_line(position),
+        )
         self.assertEqual(
             "권장 액션: 손절·분할축소 우선, 20일선 회복 전 추가매수 보류",
             monitor.holding_action_line("손절·분할축소 권장", -13.4),

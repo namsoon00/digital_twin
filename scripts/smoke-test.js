@@ -193,6 +193,9 @@ function checkFrontendAdminRender() {
   assertOk(styles.indexOf(".app-shell") >= 0 && styles.indexOf("100dvh") >= 0, "앱형 100dvh 셸 규칙이 없습니다.");
   assertOk(styles.indexOf("touch-action: manipulation") >= 0 && styles.indexOf("@media (hover: none)") >= 0, "모바일 터치 반응성 규칙이 없습니다.");
   assertOk(code.indexOf("syncAppNavScrollState") >= 0 && styles.indexOf(".app-nav.is-hidden") >= 0, "모바일 상단 앱바 자동 접힘 규칙이 없습니다.");
+  assertOk(code.indexOf("bindTabNavigation") >= 0 && code.indexOf('button.addEventListener("pointerup"') >= 0 && code.indexOf('button.addEventListener("touchend"') >= 0, "스크롤 중 모바일 탭 전환을 위한 pointer/touch 입력 경로가 없습니다.");
+  assertOk(code.indexOf("stopActiveScrollMomentum") >= 0 && code.indexOf("activateTabButton") >= 0, "탭 전환 시 스크롤 관성을 멈추는 경로가 없습니다.");
+  assertOk(/\.tab-bar\s*\{[\s\S]*touch-action: manipulation;/.test(styles) && /\.tab-bar button\s*\{[\s\S]*touch-action: manipulation;/.test(styles), "하단 탭 터치 조작 최적화 CSS가 없습니다.");
   assertOk(code.indexOf("scrollY > 120 && delta >= 0") >= 0 && code.indexOf("scrollY > 72 && delta > 6") >= 0, "모바일 스크롤 복원 상태에서 상단 앱바가 충분히 빨리 접히지 않습니다.");
   assertOk(/@media \(max-width: 860px\)[\s\S]*\.app-brand-copy strong[\s\S]*color: var\(--ink\);/.test(styles), "모바일 상단 앱바 브랜드명이 명확하게 보이지 않습니다.");
   const mobileSpacingAuditLayerStart = styles.indexOf("/* Mobile spacing audit layer */");

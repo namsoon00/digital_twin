@@ -4394,14 +4394,26 @@ h3 {
 
 .monitor-primary-state {
   display: grid;
-  align-items: center;
+  align-content: start;
+  gap: 12px;
   min-width: 0;
 }
 
-.monitor-primary-state > div {
+.monitor-primary-head,
+.monitor-primary-copy {
   display: grid;
-  gap: 7px;
   min-width: 0;
+}
+
+.monitor-primary-head {
+  align-items: start;
+  gap: 8px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.monitor-primary-copy {
+  gap: 8px;
 }
 
 .monitor-primary-state .tone-chip {
@@ -4410,8 +4422,8 @@ h3 {
 
 .monitor-primary-state strong {
   color: var(--ink);
-  font-size: 18px;
-  line-height: 1.25;
+  font-size: 20px;
+  line-height: 1.32;
   overflow-wrap: anywhere;
 }
 
@@ -4420,7 +4432,7 @@ h3 {
   font-size: 12px;
   font-style: normal;
   font-weight: 800;
-  line-height: 1.45;
+  line-height: 1.55;
   overflow-wrap: anywhere;
 }
 
@@ -10787,13 +10799,25 @@ h3 {
 
   .settings-api-row .chip-row,
   .settings-status-stack,
-  .monitor-primary-state > div,
+  .monitor-primary-copy,
   .account-credential-grid .chip-row {
     gap: var(--ds-space-3);
   }
 
+  .admin-monitoring-panel .monitor-primary-state {
+    gap: var(--ds-space-5);
+    min-height: 132px;
+    padding: var(--ds-panel-pad-y) var(--ds-panel-pad-x);
+  }
+
+  .admin-monitoring-panel .monitor-primary-head {
+    gap: var(--ds-space-3);
+    padding-bottom: var(--ds-space-4);
+    border-bottom: 1px solid var(--ds-card-border);
+  }
+
   .monitor-primary-state .tone-chip {
-    margin-bottom: var(--ds-space-1);
+    margin-bottom: 0;
   }
 
   .monitor-primary-state strong,

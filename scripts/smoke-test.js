@@ -210,6 +210,7 @@ function checkFrontendAdminRender() {
   assertOk(/\.monitor-board\s*\{[\s\S]*gap: var\(--ds-space-5\);[\s\S]*padding: var\(--ds-section-gap\) var\(--ds-panel-pad-x\) var\(--ds-panel-pad-y\);/.test(mobileSpacingAuditLayer), "모바일 모니터링 보드 외곽 padding/gap 보정이 없습니다.");
   assertOk(/\.monitor-board-section\s*\{[\s\S]*gap: var\(--ds-space-5\);[\s\S]*padding: var\(--ds-panel-pad-y\) var\(--ds-panel-pad-x\);/.test(mobileSpacingAuditLayer), "모바일 모니터링 보드 섹션 padding/gap 보정이 없습니다.");
   assertOk(/\.monitor-primary-state,[\s\S]*\.monitor-runtime-row,[\s\S]*\.monitor-alert-summary,[\s\S]*\.monitor-ledger-cell,[\s\S]*\.monitoring-detail-metric,[\s\S]*\{[\s\S]*padding: var\(--ds-row-pad-y\) var\(--ds-row-pad-x\);/.test(mobileSpacingAuditLayer), "모바일 모니터링 내부 카드 padding 보정이 없습니다.");
+  assertOk(/\.admin-monitoring-panel \.monitor-primary-state\s*\{[\s\S]*min-height: 132px;[\s\S]*padding: var\(--ds-panel-pad-y\) var\(--ds-panel-pad-x\);/.test(mobileSpacingAuditLayer), "모바일 대표 모니터링 상태 카드의 구조적 여백 보정이 없습니다.");
   assertOk(styles.indexOf("@media (max-width: 1180px) and (min-width: 981px)") >= 0 && styles.indexOf("@media (max-width: 980px) and (min-width: 861px)") >= 0, "PC/태블릿 레이아웃 분기 규칙이 없습니다.");
   assertOk(styles.indexOf("--ds-shell-width: 1720px") >= 0 && styles.indexOf("--ds-sidebar-width: 256px") >= 0, "PC 중심 shell/sidebar 레이아웃 토큰이 없습니다.");
   assertOk(styles.indexOf("grid-template-columns: var(--ds-sidebar-width) minmax(0, 1fr)") >= 0, "PC shell이 좌측 네비게이션과 작업 영역으로 분리되지 않습니다.");
@@ -1158,6 +1159,7 @@ function checkFrontendAdminRender() {
     assertOk(styles.indexOf(".monitoring-view .admin-monitoring-panel {\n  grid-area: status;\n  grid-column: auto;") < 0, "모니터링 상태 패널의 PC grid-area가 1컬럼으로 압축될 수 있습니다.");
     assertOk(styles.indexOf(".monitoring-view .alert-panel {\n  grid-area: alerts;\n  grid-column: auto;") < 0, "모니터링 알림 패널의 PC grid-area가 1컬럼으로 압축될 수 있습니다.");
     assertOk(monitoringHtml.indexOf("monitor-status-board") >= 0 && monitoringHtml.indexOf("monitor-runtime-strip") >= 0, "모니터링 실행 상태 패널이 ledger/strip 구조로 렌더링되지 않습니다.");
+    assertOk(monitoringHtml.indexOf("monitor-primary-head") >= 0 && monitoringHtml.indexOf("monitor-primary-copy") >= 0, "모니터링 대표 상태 카드가 칩/본문 구조로 분리되지 않았습니다.");
     assertOk(monitoringHtml.indexOf("monitor-runtime-board") >= 0 && monitoringHtml.indexOf("monitor-runtime-timeline") >= 0, "모니터링 런타임 상태가 타임라인 구조로 분리되지 않았습니다.");
     assertOk(monitoringHtml.indexOf("monitor-board") >= 0 && monitoringHtml.indexOf("monitor-board-section") >= 0, "모니터링 실행 상태 패널이 공통 보드 섹션 구조로 렌더링되지 않습니다.");
     assertOk(monitoringHtml.indexOf("현재 실행 상태") >= 0 && monitoringHtml.indexOf("런타임 신호") >= 0, "모니터링 실행 상태 패널의 섹션 헤더가 없습니다.");

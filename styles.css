@@ -10660,6 +10660,40 @@ h3 {
     background: var(--ds-card-bg);
   }
 
+  .monitor-board {
+    gap: var(--ds-space-5);
+    padding: var(--ds-section-gap) var(--ds-panel-pad-x) var(--ds-panel-pad-y);
+    border-top: 1px solid var(--ds-card-border);
+    border-bottom: 1px solid var(--ds-card-border);
+    background: color-mix(in srgb, var(--panel) 88%, transparent);
+  }
+
+  .monitor-board-section {
+    gap: var(--ds-space-5);
+    padding: var(--ds-panel-pad-y) var(--ds-panel-pad-x);
+    border: 1px solid var(--ds-card-border);
+    border-left: 3px solid var(--ds-card-status-neutral);
+    border-radius: var(--ds-radius-panel);
+    background: var(--ds-card-bg);
+  }
+
+  .monitor-section-head {
+    gap: var(--ds-space-2);
+    padding-bottom: var(--ds-space-1);
+  }
+
+  .monitor-health-ledger,
+  .monitor-market-ledger {
+    gap: var(--ds-space-4);
+  }
+
+  .monitor-runtime-timeline {
+    gap: var(--ds-space-4);
+    overflow: visible;
+    border: 0;
+    background: transparent;
+  }
+
   .process-step:last-child,
   .ontology-control-step:last-child {
     border-bottom: 1px solid var(--ds-card-border);
@@ -10669,8 +10703,10 @@ h3 {
   .model-step-list div,
   .strategy-data-row,
   .notification-decision-row,
+  .monitor-primary-state,
   .monitor-runtime-row,
   .monitor-alert-summary,
+  .monitor-ledger-cell,
   .account-card,
   .watch-account-row,
   .account-watch-symbol-row,
@@ -10684,17 +10720,29 @@ h3 {
   .settings-status-band,
   .settings-smart-save,
   .settings-api-row,
+  .deskbar-cell,
+  .page-command-metric,
+  .loading-source-row,
   .admin-stat-grid span,
   .account-manager-summary span,
   .account-directory-summary span,
   .symbol-summary-metric,
   .symbol-source-status,
+  .notification-ops-cell,
+  .notification-decision-status,
+  .notification-state-message,
+  .notification-rule-state,
   .monitoring-instrument-summary > div,
   .account-credential-grid > div,
+  .monitor-primary-state,
+  .monitor-runtime-row,
+  .monitor-alert-summary,
+  .monitor-ledger-cell,
   .monitoring-detail-metric,
   .gauge-card,
   .alert-stat,
   .feed-stat,
+  .flow-lane,
   .lab-stats-grid span,
   .lab-record-grid span,
   .lab-status-grid span,
@@ -10709,6 +10757,8 @@ h3 {
   .signal-metric-grid span,
   .investment-evidence-grid span,
   .reasoning-graph-refs span,
+  .ontology-abox-metrics span,
+  .ontology-ledger-item,
   .investment-packet-grid section,
   .message-schedule-summary > span:not(.tone-chip) {
     padding: var(--ds-row-pad-y) var(--ds-row-pad-x);
@@ -10716,18 +10766,39 @@ h3 {
 
   .settings-status-band,
   .settings-api-row,
+  .notification-ops-cell,
+  .notification-decision-status,
+  .notification-state-message,
+  .notification-rule-state,
   .account-credential-grid > div,
+  .monitor-primary-state,
+  .monitor-runtime-row,
+  .monitor-alert-summary,
+  .monitor-ledger-cell,
   .monitoring-detail-metric,
   .gauge-card,
   .alert-stat,
   .feed-stat,
-  .model-setting-card {
+  .flow-lane,
+  .model-setting-card,
+  .ontology-ledger-item {
     gap: var(--ds-space-4);
   }
 
   .settings-api-row .chip-row,
   .settings-status-stack,
+  .monitor-primary-state > div,
   .account-credential-grid .chip-row {
     gap: var(--ds-space-3);
+  }
+
+  .monitor-primary-state .tone-chip {
+    margin-bottom: var(--ds-space-1);
+  }
+
+  .monitor-primary-state strong,
+  .monitor-alert-summary strong,
+  .monitor-ledger-cell strong {
+    line-height: 1.32;
   }
 }

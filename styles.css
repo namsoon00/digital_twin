@@ -8517,6 +8517,378 @@ h3 {
   }
 }
 
+/* Full financial card replacement system */
+:where(
+  .panel,
+  .loading-status-panel,
+  .loading-preview-panel,
+  .score-panel,
+  .source-panel,
+  .more-panel,
+  .ontology-surface,
+  .ontology-map,
+  .ontology-ledger,
+  .ontology-structure-map,
+  .ontology-graph-panel,
+  .notification-policy-detail,
+  .notification-template-detail,
+  .admin-message-details,
+  .settings-status-band,
+  .settings-smart-save
+) {
+  border: 1px solid var(--ds-card-border);
+  border-radius: var(--ds-radius-panel);
+  background: var(--ds-card-bg);
+  box-shadow: none;
+}
+
+:where(.panel, .ontology-surface, .ontology-map, .ontology-ledger, .ontology-structure-map, .ontology-graph-panel) {
+  overflow: hidden;
+}
+
+:where(.panel-head, .ontology-surface-head) {
+  border-bottom: 1px solid var(--ds-card-border);
+  background: linear-gradient(180deg, var(--ds-card-head-bg), var(--ds-card-bg));
+}
+
+:where(
+  .deskbar-cell,
+  .page-command-metric,
+  .loading-source-row,
+  .admin-stat-grid span,
+  .account-manager-summary span,
+  .account-directory-summary span,
+  .symbol-summary-metric,
+  .symbol-source-status,
+  .monitoring-instrument-summary > div,
+  .notification-ops-cell,
+  .notification-decision-status,
+  .notification-state-message,
+  .notification-rule-state,
+  .monitor-ledger-cell,
+  .monitor-alert-summary,
+  .alert-stat,
+  .feed-stat,
+  .gauge-card,
+  .flow-lane,
+  .lab-stats-grid span,
+  .lab-record-grid span,
+  .lab-status-grid span,
+  .lab-model-grid span,
+  .feature-audit-grid span,
+  .feature-delta-grid span,
+  .feature-contribution-grid span,
+  .settings-api-row,
+  .account-credential-grid > div,
+  .monitoring-detail-metric,
+  .signal-score-grid span,
+  .signal-metric-grid span,
+  .valuation-grid span,
+  .variable-grid span,
+  .model-setting-card,
+  .ontology-abox-metrics span,
+  .ontology-ledger-item,
+  .investment-evidence-grid span,
+  .reasoning-graph-refs span,
+  .investment-packet-grid section
+) {
+  border: 1px solid var(--ds-card-border);
+  border-left: 3px solid var(--ds-card-status-neutral);
+  border-radius: var(--ds-radius-control);
+  background: linear-gradient(180deg, var(--ds-card-row-bg), var(--ds-card-bg));
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--panel) 72%, transparent);
+}
+
+:where(
+  .home-command-main,
+  .home-action,
+  .home-signal,
+  .more-action-row,
+  .account-card,
+  .watch-account-row,
+  .service-account-row,
+  .account-exposure-item,
+  .account-watch-symbol-row,
+  .account-watch-edit-row,
+  .watch-edit-row,
+  .monitoring-instrument-row,
+  .monitor-runtime-row,
+  .monitor-board-section,
+  .monitor-primary-state,
+  .admin-message-group-head,
+  .admin-message-row,
+  .message-schedule-summary > span:not(.tone-chip),
+  .message-schedule-detail,
+  .notification-template-select-row,
+  .notification-template-row,
+  .template-variable-row,
+  .investment-bridge-step,
+  .investment-evidence-card,
+  .relation-matrix-row,
+  .ontology-control-step,
+  .ontology-structure-node,
+  .ontology-structure-health-row,
+  .ontology-context-class-group,
+  .ontology-projection-row,
+  .ontology-distribution-row,
+  .ontology-relation-row,
+  .ontology-rule-row,
+  .ontology-rule-trace-row,
+  .lab-row,
+  .lab-price-line,
+  .lab-control,
+  .lab-version-bar,
+  .model-guide-step,
+  .model-step-list div,
+  .process-step,
+  .formula-ledger-row,
+  .formula-block,
+  .strategy-data-row,
+  .alert-row,
+  .alert-rule,
+  .signal-row,
+  .valuation-row,
+  .position-row.rich-row,
+  .bar-row,
+  .theme-row,
+  .news-item,
+  .social-item,
+  .check-row,
+  .symbol-result-row,
+  .model-version-row,
+  .model-preview-row,
+  .exit-row
+) {
+  border: 1px solid var(--ds-card-border);
+  border-left: 3px solid var(--ds-card-status-neutral);
+  border-radius: var(--ds-radius-control);
+  background: var(--ds-card-bg);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--panel) 72%, transparent);
+}
+
+:where(
+  .home-command-main,
+  .home-action,
+  .home-signal,
+  .more-action-row,
+  .account-card,
+  .watch-account-row,
+  .service-account-row,
+  .account-watch-symbol-row,
+  .account-watch-edit-row,
+  .watch-edit-row,
+  .monitoring-instrument-row,
+  .monitor-runtime-row,
+  .monitor-alert-summary,
+  .admin-message-group-head,
+  .admin-message-row,
+  .notification-template-select-row,
+  .notification-template-row,
+  .investment-evidence-card,
+  .relation-matrix-row,
+  .ontology-control-step,
+  .ontology-structure-node,
+  .ontology-structure-health-row,
+  .ontology-projection-row,
+  .ontology-relation-row,
+  .ontology-rule-row,
+  .lab-row,
+  .lab-price-line,
+  .model-guide-step,
+  .model-step-list div,
+  .process-step,
+  .formula-ledger-row,
+  .formula-block,
+  .strategy-data-row,
+  .alert-row,
+  .signal-row,
+  .valuation-row,
+  .position-row.rich-row,
+  .theme-row,
+  .news-item,
+  .social-item,
+  .check-row,
+  .symbol-result-row,
+  .model-version-row,
+  .exit-row
+) {
+  padding: var(--ds-row-pad-y) var(--ds-row-pad-x);
+}
+
+:where(.watch-account-row.active, .notification-template-select-row.active, .admin-message-row.active, .admin-message-row.expanded) {
+  border-color: var(--blue);
+  border-left-color: var(--blue);
+  background: color-mix(in srgb, var(--blue-soft) 38%, var(--ds-card-bg));
+}
+
+:where(.watch, .ok, .live, .active, .assertion, .support, .opportunity) {
+  --record-status-color: var(--green);
+}
+
+:where(.info, .policy, .schema, .portfolio, .stock, .hold) {
+  --record-status-color: var(--blue);
+}
+
+:where(.caution, .warn, .rule, .risk, .evidence) {
+  --record-status-color: var(--amber);
+}
+
+:where(.danger, .sell, .error) {
+  --record-status-color: var(--red);
+}
+
+:where(
+  .alert-stat,
+  .gauge-card,
+  .flow-lane,
+  .home-signal,
+  .deskbar-cell,
+  .notification-ops-cell,
+  .monitor-ledger-cell,
+  .monitor-alert-summary,
+  .alert-row,
+  .notification-decision-row,
+  .admin-message-row,
+  .ontology-ledger-item,
+  .relation-matrix-row,
+  .ontology-relation-row,
+  .ontology-rule-row,
+  .lab-price-line,
+  .signal-row,
+  .valuation-row,
+  .exit-row
+) {
+  border-left-color: var(--record-status-color, var(--ds-card-status-neutral));
+}
+
+:where(
+  .home-action,
+  .more-action-row,
+  .watch-account-row.selectable,
+  .monitoring-instrument-row,
+  .symbol-result-row,
+  .notification-template-select-row,
+  .admin-message-group-head,
+  .alert-row
+) {
+  transition: border-color 120ms ease, background-color 120ms ease, transform 120ms ease;
+}
+
+:where(
+  .home-action,
+  .more-action-row,
+  .watch-account-row.selectable,
+  .monitoring-instrument-row,
+  .symbol-result-row,
+  .notification-template-select-row,
+  .admin-message-group-head,
+  .alert-row
+):hover,
+:where(
+  .home-action,
+  .more-action-row,
+  .watch-account-row.selectable,
+  .monitoring-instrument-row,
+  .symbol-result-row,
+  .notification-template-select-row,
+  .admin-message-group-head,
+  .alert-row
+):focus-visible {
+  border-color: var(--blue);
+  background: color-mix(in srgb, var(--blue-soft) 34%, var(--ds-card-bg));
+  outline: none;
+}
+
+@media (min-width: 1181px) {
+  :where(
+    .deskbar,
+    .page-command-metrics,
+    .notification-ops-rail,
+    .process-rail,
+    .ontology-control-strip,
+    .formula-ledger,
+    .more-action-list
+  ) {
+    gap: 10px;
+    padding: var(--ds-space-3) var(--ds-panel-pad-x);
+    border: 0;
+    background: transparent;
+    overflow: visible;
+  }
+
+  :where(.notification-ops-rail, .process-rail, .ontology-control-strip) {
+    grid-template-columns: repeat(auto-fit, minmax(156px, 1fr));
+  }
+
+  :where(.formula-ledger, .more-action-list) {
+    display: grid;
+  }
+
+  :where(
+    .account-card-list,
+    .watch-account-list,
+    .account-watch-symbol-list,
+    .monitoring-instrument-list,
+    .alert-list,
+    .notification-decision-list,
+    .symbol-result-list,
+    .investment-evidence-list,
+    .signal-list,
+    .valuation-list,
+    .lab-list,
+    .news-list,
+    .model-version-list,
+    .notification-template-list,
+    .admin-message-list,
+    .position-list,
+    .theme-list,
+    .check-list
+  ) {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(390px, 1fr));
+    gap: var(--ds-section-gap);
+    padding: var(--ds-space-3) var(--ds-panel-pad-x) var(--ds-panel-pad-y);
+    border-top: 1px solid var(--ds-card-border);
+    background: color-mix(in srgb, var(--panel) 88%, transparent);
+  }
+
+  :where(.account-card-list, .watch-account-list, .monitoring-instrument-list, .symbol-result-list) {
+    grid-template-columns: repeat(auto-fill, minmax(430px, 1fr));
+  }
+
+  :where(.source-stack) {
+    gap: 10px;
+    padding: var(--ds-space-3) var(--ds-panel-pad-x) var(--ds-panel-pad-y);
+  }
+
+  :where(.source-row) {
+    border: 1px solid var(--ds-card-border);
+    border-left: 3px solid var(--ds-card-status-neutral);
+    border-radius: var(--ds-radius-control);
+    background: var(--ds-card-bg);
+  }
+
+  :where(.process-step, .ontology-control-step, .formula-ledger-row, .more-action-row) {
+    border: 1px solid var(--ds-card-border);
+    border-left: 3px solid var(--ds-card-status-neutral);
+    border-radius: var(--ds-radius-control);
+    background: var(--ds-card-bg);
+  }
+
+  :where(.process-step, .ontology-control-step) {
+    min-height: 112px;
+  }
+
+  :where(.process-step)::after,
+  :where(.ontology-structure-node)::after {
+    display: none;
+  }
+
+  :where(.formula-ledger-row) {
+    grid-template-columns: minmax(110px, 0.26fr) minmax(160px, 0.34fr) minmax(0, 1fr);
+  }
+}
+
 @media (max-width: 980px) and (min-width: 861px) {
   .ontology-relationship-graphs {
     grid-template-columns: 1fr;

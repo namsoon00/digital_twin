@@ -206,6 +206,10 @@ DEFAULT_NOTIFICATION_TEMPLATES = {
         "template": DEFAULT_TEMPLATE,
         "description": "관심종목 시세 대기 알림",
     },
+    "watchlistOntologySignal": {
+        "template": DEFAULT_TEMPLATE,
+        "description": "관심종목 온톨로지 관계 신호 알림",
+    },
     "holdingTiming": {
         "template": DEFAULT_TEMPLATE,
         "description": "보유 종목 타이밍 점검 알림",
@@ -570,7 +574,7 @@ def compact_action_title(value: str) -> str:
 
 
 def has_investment_loss_signal(value: str) -> bool:
-    return any(term in str(value or "") for term in ["손절", "손실", "분할축소", "추가매수 보류", "loss_guard", "LOSS", "entry.add_buy.blocked"])
+    return any(term in str(value or "") for term in ["손절", "손실", "분할축소", "추가매수 보류", "신규 진입 보류", "하락 가속", "riskWatch", "loss_guard", "LOSS", "entry.add_buy.blocked", "trend.breakdown_acceleration"])
 
 
 def has_investment_profit_signal(value: str) -> bool:
@@ -587,6 +591,8 @@ def notification_title_icon(rule: str, raw_lines: List[str], event: AlertEvent) 
 
     if key in {"modelBuy", "watchlistBuyCandidate"}:
         return "🟢"
+    if key == "watchlistOntologySignal":
+        return "🧭"
     if key == "investmentInsight":
         blob = investment_insight_signal_blob(raw_lines, event)
         decision_blob = investment_insight_decision_blob(raw_lines, event)
@@ -1511,6 +1517,7 @@ MODELING_LABELS = {
     "watchlistBuyCandidate": "관심종목 매수 후보 모델",
     "watchlistQuote": "관심종목 시세 변화 감지 모델",
     "watchlistQuotePending": "관심종목 시세 수집 대기 모델",
+    "watchlistOntologySignal": "관심종목 온톨로지 관계 신호 모델",
     "holdingTiming": "보유 타이밍 모델",
     "monitorHeartbeat": "실시간 모니터링 상태 모델",
     "monitorConnection": "토스 연결 상태 모델",
@@ -1535,6 +1542,7 @@ MODEL_DATA_HINTS = {
     "modelBuy": "토스 시세·수급·추세·가치평가 데이터",
     "modelSell": "토스 시세·수급·추세·손절/가치평가 데이터",
     "watchlistBuyCandidate": "관심종목 시세·수급·추세·가치평가 데이터",
+    "watchlistOntologySignal": "관심종목 ABox 관측값, 관계 규칙, 추세 동역학, 데이터 품질",
     "holdingTiming": "보유 스냅샷, 손익률, 수급, 추세, 매도 가능 수량",
     "monitorDecisionChange": "이전/현재 보유 모델 점수와 보유 스냅샷",
     "monitorTrendChange": "현재가와 20일/60일 이동평균 비교",

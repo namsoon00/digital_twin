@@ -23,6 +23,7 @@ from .message_types import (
     MONITOR_TREND_CHANGE,
     MONITOR_VALUE_CHANGE,
     WATCHLIST_BUY_CANDIDATE,
+    WATCHLIST_ONTOLOGY_SIGNAL,
     WATCHLIST_QUOTE,
     WATCHLIST_QUOTE_PENDING,
     WORK_HANDOFF,
@@ -44,6 +45,7 @@ INVESTMENT_SIGNAL_TYPES = {
     MODEL_BUY,
     MODEL_SELL,
     WATCHLIST_BUY_CANDIDATE,
+    WATCHLIST_ONTOLOGY_SIGNAL,
     WATCHLIST_QUOTE,
     WATCHLIST_QUOTE_PENDING,
     HOLDING_TIMING,
@@ -78,6 +80,7 @@ SCORE_KEYS = (
     "modelSellScore",
     "modelBuyScore",
     "watchlistBuyScore",
+    "watchlistSignalScore",
     "cryptoMoveScore",
     "changePercent",
     "change24h",
@@ -92,6 +95,9 @@ SOURCE_METADATA_KEYS = {
     "modelBuyScore",
     "modelSellScore",
     "watchlistBuyScore",
+    "watchlistSignalScore",
+    "watchlistOntologySignalType",
+    "watchlistActiveRelationRules",
     "holdingDecisionScore",
     "profitLossRate",
     "changePercent",
@@ -228,6 +234,21 @@ def infer_insight_type(events: List[AlertEvent]) -> str:
         return "contradictionDetected"
     if WATCHLIST_QUOTE_PENDING in source_types:
         return "dataQualityWarning"
+    if WATCHLIST_ONTOLOGY_SIGNAL in source_types:
+        signal_types = {
+            str((event.metadata or {}).get("watchlistOntologySignalType") or "")
+            for event in events
+            if event.rule == WATCHLIST_ONTOLOGY_SIGNAL
+        }
+        if "dataQuality" in signal_types:
+            return "dataQualityWarning"
+        if "entryCandidate" in signal_types:
+            return "opportunityDetected"
+        if "riskWatch" in signal_types:
+            return "riskIncrease" if "ALERT" in severities else "riskManagement"
+        if "trendReview" in signal_types:
+            return "opportunityDetected"
+        return "relationshipChange"
     if MONITOR_CASH_CHANGE in source_types:
         return "liquidityShift"
     if source_types & {MODEL_SELL, HOLDING_TIMING, MONITOR_DECISION_CHANGE}:

@@ -102,6 +102,20 @@ class PythonServiceTests(unittest.TestCase):
             lines.extend(str(line or "") for line in item.get("criteria", []))
         return "\n".join(lines)
 
+    def insight_active_rule_ids(self, event):
+        contexts = event.metadata.get("ontologyRelationContext")
+        if isinstance(contexts, dict):
+            contexts = [contexts]
+        ids = []
+        for context in contexts or []:
+            if not isinstance(context, dict):
+                continue
+            for item in context.get("activeRules") or []:
+                if not isinstance(item, dict):
+                    continue
+                ids.append(item.get("ruleId") or item.get("rule_id"))
+        return ids
+
     def test_account_registry_supports_multiple_accounts(self):
         registry = AccountRegistry()
         first = AccountConfig("main", "메인", "toss", "https://example.test", "id1", "secret1", "1", ["AAPL"])
@@ -229,6 +243,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("토스 계좌 동기화", status)
         self.assertEqual(101, aapl.current_price)
         self.assertEqual(202, tsla.current_price)
+        self.assertEqual("watchlist", tsla.source)
         self.assertEqual("Toss /api/v1/prices", tsla.quote_source)
         self.assertEqual("actual", tsla.data_quality)
         self.assertGreater(tsla.ma20, 0)
@@ -276,6 +291,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("live", mode)
         self.assertEqual(250, tsla.current_price)
         self.assertEqual(240, tsla.ma20)
+        self.assertEqual("watchlist", tsla.source)
         self.assertEqual("cached", tsla.data_quality)
         self.assertEqual("마지막 저장 시세", tsla.quote_status)
 
@@ -2681,14 +2697,73 @@ class PythonServiceTests(unittest.TestCase):
         candidate = self.insight_event(events, "AAPL")
         source_message = self.insight_source_message(candidate, "watchlistBuyCandidate")
         message = SQLiteNotificationTemplateStore(Path(self.temp.name) / "service.db").render(candidate.rule, alert_context(candidate))
-        relation_context = candidate.metadata.get("ontologyRelationContext")
-        active_rules = relation_context.get("activeRules") if isinstance(relation_context, dict) else []
-        active_ids = [item.get("ruleId") or item.get("rule_id") for item in active_rules]
+        active_ids = self.insight_active_rule_ids(candidate)
 
         self.assertIn("watchlistBuyCandidate", self.insight_source_rules(candidate))
+        self.assertIn("watchlistOntologySignal", self.insight_source_rules(candidate))
         self.assertIn("온톨로지 소액 분할매수 검토", source_message)
+        self.assertIn(
+            "관심종목 온톨로지 관계 신호",
+            self.insight_source_message(candidate, "watchlistOntologySignal"),
+        )
         self.assertIn("entry.pullback.supported.v1", active_ids)
         self.assertIn("<b>[관찰] 🟢 분할매수 후보: 진입 조건 점검</b>", message)
+
+    def test_watchlist_ontology_signal_promotes_risk_insight_without_buy_score(self):
+        watch = normalize_position({
+            "symbol": "005380",
+            "name": "현대차",
+            "market": "KR",
+            "currency": "KRW",
+            "currentPrice": 291000,
+            "changeRate": -3.4,
+            "ma20": 327850,
+            "ma60": 287367,
+            "ma20Distance": -11.2,
+            "ma60Distance": 1.3,
+            "ma20Slope": -1.4,
+            "ma60Slope": -0.2,
+            "volume": 2489768,
+            "volumeRatio": 1.6,
+            "tradeStrength": 116.4,
+            "bidAskImbalance": -54.6,
+            "foreignNetVolume": -190000,
+            "institutionNetVolume": -65000,
+            "individualNetVolume": 240000,
+            "marketSignalCoverage": {"price": "available", "ccnl": "available", "investor": "available"},
+            "sector": "자동차",
+            "source": "watchlist",
+        })
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "ok",
+            utc_now_iso(),
+            portfolio_summary([]),
+            [],
+            [],
+            watchlist=[watch],
+        )
+
+        events = RealtimeMonitor({
+            "buyScoreFormula": "10",
+            "alertThresholds": "modelBuyScore=99\nwatchlistBuyScore=99",
+        }).events_for_snapshot(snapshot, {})
+
+        insight = self.insight_event(events, "005380")
+        source_message = self.insight_source_message(insight, "watchlistOntologySignal")
+        active_ids = self.insight_active_rule_ids(insight)
+        ontology = insight.metadata.get("ontologyInsight") or {}
+
+        self.assertIn("watchlistOntologySignal", self.insight_source_rules(insight))
+        self.assertNotIn("watchlistBuyCandidate", self.insight_source_rules(insight))
+        self.assertIn("관심종목 온톨로지 관계 신호", source_message)
+        self.assertIn("신규 진입 보류", source_message)
+        self.assertIn("trend.breakdown_acceleration.v1", active_ids)
+        self.assertEqual("riskIncrease", ontology.get("insightType"))
+        self.assertFalse(any(event.rule == "watchlistOntologySignal" for event in events))
 
     def test_legacy_signal_rule_controls_ontology_insight_sources(self):
         watch = normalize_position({
@@ -3195,10 +3270,12 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(1, DEFAULT_ALERT_RULES["modelBuy"])
         self.assertEqual(1, DEFAULT_ALERT_RULES["modelSell"])
         self.assertEqual(1, DEFAULT_ALERT_RULES["watchlistBuyCandidate"])
+        self.assertEqual(1, DEFAULT_ALERT_RULES["watchlistOntologySignal"])
         self.assertEqual(10, DEFAULT_CADENCE["investmentInsight"])
         self.assertEqual(10, DEFAULT_CADENCE["modelBuy"])
         self.assertEqual(10, DEFAULT_CADENCE["modelSell"])
         self.assertEqual(10, DEFAULT_CADENCE["watchlistBuyCandidate"])
+        self.assertEqual(10, DEFAULT_CADENCE["watchlistOntologySignal"])
 
     def test_investment_insight_rule_uses_ontology_novelty_for_cooldown_bypass(self):
         rule = default_notification_rule("investmentInsight")
@@ -3206,6 +3283,7 @@ class PythonServiceTests(unittest.TestCase):
         bypass_ids = {condition.condition_id for condition in rule.similarity_bypass_conditions}
         self.assertIn("ontology_novelty_score", condition_ids)
         self.assertIn("insight_type_changed", bypass_ids)
+        self.assertIn("new_relation_event", bypass_ids)
         self.assertEqual(["messageType", "accountId", "ontologyInsight.subject", "ontologyInsight.insightType"], rule.similarity_fields)
         job = NotificationJob.create(
             "관계 인사이트",
@@ -3449,9 +3527,11 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("투자 인사이트", MESSAGE_TYPE_LABELS["investmentInsight"])
         self.assertEqual("모델 매수", MESSAGE_TYPE_LABELS["modelBuy"])
         self.assertEqual("관심종목 매수 후보", MESSAGE_TYPE_LABELS["watchlistBuyCandidate"])
+        self.assertEqual("관심종목 관계 신호", MESSAGE_TYPE_LABELS["watchlistOntologySignal"])
         self.assertEqual(10, catalog["investmentInsight"]["cadenceMinutes"])
         self.assertEqual(10, catalog["modelBuy"]["cadenceMinutes"])
         self.assertEqual(10, catalog["watchlistBuyCandidate"]["cadenceMinutes"])
+        self.assertEqual(10, catalog["watchlistOntologySignal"]["cadenceMinutes"])
         self.assertEqual("🧭", catalog["investmentInsight"]["icon"])
         self.assertEqual("🟢", catalog["modelBuy"]["icon"])
         self.assertEqual("🧠", MESSAGE_TYPE_EMOJIS["modelReview"])
@@ -3459,6 +3539,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(catalog["investmentInsight"]["monitoring"])
         self.assertTrue(catalog["modelBuy"]["monitoring"])
         self.assertTrue(catalog["watchlistBuyCandidate"]["monitoring"])
+        self.assertTrue(catalog["watchlistOntologySignal"]["monitoring"])
         self.assertTrue(catalog["workHandoff"]["system"])
 
     def test_flow_lens_mock_contract_is_python_native(self):
@@ -3515,6 +3596,7 @@ class PythonServiceTests(unittest.TestCase):
                 "modelBuy",
                 "modelSell",
                 "watchlistBuyCandidate",
+                "watchlistOntologySignal",
                 "watchlistQuote",
                 "watchlistQuotePending",
                 "holdingTiming",

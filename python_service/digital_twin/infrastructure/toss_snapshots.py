@@ -712,6 +712,7 @@ class TossProvider:
                 quote_live=bool(quote),
                 indicators_live=indicators_live,
             )
+            merged = replace(merged, source="watchlist")
             if quote or indicators_live:
                 self.save_quote_cache(merged)
             watchlist.append(merged)

@@ -11,6 +11,7 @@ from .message_types import (
     DEFAULT_CADENCE,
     INVESTMENT_INSIGHT,
     MIN_CADENCE_MINUTES,
+    WATCHLIST_ONTOLOGY_SIGNAL,
 )
 from .model_review import decision_change_context, decision_change_review_lines
 from .ontology_insights import build_investment_insight_events, split_operational_and_investment_events
@@ -156,6 +157,8 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
         events.extend(self.only_rule("modelSell", model_events) or self.model_sample_events(snapshot, "modelSell"))
         watchlist_snapshot = self.snapshot_with_sample_watchlist(snapshot)
         events.extend(self.only_rule("watchlistBuyCandidate", model_events) or self.model_sample_events(watchlist_snapshot, "watchlistBuyCandidate"))
+        ontology_watchlist_snapshot = self.snapshot_with_sample_watchlist_ontology_signal(watchlist_snapshot)
+        events.extend(self.only_rule(WATCHLIST_ONTOLOGY_SIGNAL, self.model_score_events(ontology_watchlist_snapshot)))
 
         state = snapshot.to_monitor_state()
         symbols = sorted(state.get("positions", {}).keys())
@@ -570,6 +573,35 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
         if sample:
             return replace(snapshot, watchlist=[sample])
         return snapshot
+
+    def snapshot_with_sample_watchlist_ontology_signal(self, snapshot: AccountSnapshot) -> AccountSnapshot:
+        candidates = list(snapshot.watchlist or snapshot.positions or [])
+        if not candidates:
+            return snapshot
+        base = candidates[0]
+        current = number(base.current_price) or number(base.average_price) or 100.0
+        sample = replace(
+            base,
+            source="watchlist",
+            quantity=0,
+            sellable_quantity=0,
+            average_price=0,
+            market_value=0,
+            profit_loss=0,
+            profit_loss_rate=0,
+            current_price=current,
+            ma20=current / 0.962,
+            ma60=current / 1.01,
+            ma20_distance=-3.8,
+            ma60_distance=1.0,
+            volume_ratio=1.1,
+            trade_strength=118,
+            bid_ask_imbalance=12,
+            foreign_net_volume=180000,
+            institution_net_volume=90000,
+            individual_net_volume=-210000,
+        )
+        return replace(snapshot, positions=[], decisions=[], watchlist=[sample])
 
     def snapshot_with_pending_watchlist(self, snapshot: AccountSnapshot) -> AccountSnapshot:
         if snapshot.watchlist:

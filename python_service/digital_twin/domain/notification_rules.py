@@ -46,6 +46,7 @@ HIGH_SIGNAL_MESSAGE_TYPES = {
     "modelBuy",
     "modelSell",
     "watchlistBuyCandidate",
+    "watchlistOntologySignal",
     "holdingTiming",
     "monitorPositionChange",
     "monitorPnlChange",
@@ -192,6 +193,14 @@ def default_similarity_bypass_conditions(message_type: str) -> List["SimilarityB
                 field="sourceSignalTypes",
                 value=1,
                 description="이전 유사 인사이트에 없던 근거 신호 타입이 추가되면 보냅니다.",
+            ),
+            SimilarityBypassCondition(
+                "new_relation_event",
+                "새 관계 이벤트 추가",
+                "list_new_items_gte",
+                field="ontologyInsight.sourceEventKeys",
+                value=1,
+                description="같은 신호 타입이어도 활성 관계 규칙 또는 관계 점수가 달라지면 보냅니다.",
             ),
         ]
     if key == "externalEquityMove":

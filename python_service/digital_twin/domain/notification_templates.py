@@ -1875,6 +1875,8 @@ def append_score_explanation(rendered: str, context: Dict[str, object], rich: bo
 
 def append_ai_opinion(rendered: str, context: Dict[str, object], rich: bool = False) -> str:
     rendered_text = str(rendered or "")
+    if isinstance(context, dict) and context.get("notificationAiValidatedResponse"):
+        return rendered
     if not rendered_text.strip() or "AI 의견" in rendered_text:
         return rendered
     block = ai_opinion_block(context, rich)

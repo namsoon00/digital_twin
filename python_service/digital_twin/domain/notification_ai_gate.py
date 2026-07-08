@@ -346,6 +346,12 @@ def validated_response_from_payload(
         warnings.append("AI 기준일이 알림 기준일과 달라 알림 기준일로 보정했습니다.")
         response_reference = expected_reference
     missing_labels = missing_data_labels(context)
+    if not missing_labels:
+        missing_impact = [
+            item
+            for item in missing_impact
+            if not any(token in item for token in ["missingData", "빈 배열", "빈 객체", "명시적 부족 데이터", "없음"])
+        ]
     for item in missing_labels:
         if not any(item in row for row in missing_impact):
             missing_impact.append(item + "는 결론 강도를 낮추는 요소입니다.")
@@ -415,6 +421,7 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
     pnl = _plain_value(context, "수익률") or _plain_value(context, "손익")
     trend = _plain_value(context, "추세")
     flow = _plain_value(context, "수급")
+    investor = _plain_value(context, "투자자")
     sent = str(context.get("sentTime") or "").strip()
     reference = response.reference_date or reference_date(context)
     parts = [
@@ -433,6 +440,7 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
         _html_row("수익률", pnl),
         _html_row("추세", trend),
         _html_row("수급", flow),
+        _html_row("투자자", investor),
         "",
         "<b>핵심 근거</b>",
     ]

@@ -1052,6 +1052,12 @@ def position_signal_facts(
     orderbook_bid_volume = number(position.orderbook_bid_volume)
     orderbook_ask_volume = number(position.orderbook_ask_volume)
     bid_ask_imbalance = number(position.bid_ask_imbalance)
+    foreign_buy_volume = number(position.foreign_buy_volume)
+    foreign_sell_volume = number(position.foreign_sell_volume)
+    institution_buy_volume = number(position.institution_buy_volume)
+    institution_sell_volume = number(position.institution_sell_volume)
+    individual_buy_volume = number(position.individual_buy_volume)
+    individual_sell_volume = number(position.individual_sell_volume)
     execution_direction_proxy = bool(position.trade_strength or bid_ask_imbalance or orderbook_bid_volume or orderbook_ask_volume)
     market_signal_coverage = dict(position.market_signal_coverage or {}) if isinstance(position.market_signal_coverage, dict) else {}
     quote_status = str(position.quote_status or "")
@@ -1095,6 +1101,12 @@ def position_signal_facts(
         "orderbookBidVolume": orderbook_bid_volume,
         "orderbookAskVolume": orderbook_ask_volume,
         "bidAskImbalance": bid_ask_imbalance,
+        "foreignBuyVolume": foreign_buy_volume,
+        "foreignSellVolume": foreign_sell_volume,
+        "institutionBuyVolume": institution_buy_volume,
+        "institutionSellVolume": institution_sell_volume,
+        "individualBuyVolume": individual_buy_volume,
+        "individualSellVolume": individual_sell_volume,
         "executionDirectionProxy": execution_direction_proxy,
         "btcChange24h": number(btc.get("change24h")) if btc else 0.0,
         "btcChange7d": number(btc.get("change7d")) if btc else 0.0,
@@ -1446,6 +1458,15 @@ def execution_plan_from_relation_context(
             "tradeStrength": facts.get("tradeStrength"),
             "bidAskImbalance": facts.get("bidAskImbalance"),
             "sellableQuantity": facts.get("sellableQuantity"),
+            "foreignBuyVolume": facts.get("foreignBuyVolume"),
+            "foreignSellVolume": facts.get("foreignSellVolume"),
+            "foreignNetVolume": facts.get("foreignNetVolume"),
+            "institutionBuyVolume": facts.get("institutionBuyVolume"),
+            "institutionSellVolume": facts.get("institutionSellVolume"),
+            "institutionNetVolume": facts.get("institutionNetVolume"),
+            "individualBuyVolume": facts.get("individualBuyVolume"),
+            "individualSellVolume": facts.get("individualSellVolume"),
+            "individualNetVolume": facts.get("individualNetVolume"),
         },
     }
 

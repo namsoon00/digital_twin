@@ -1914,6 +1914,15 @@ class PythonServiceTests(unittest.TestCase):
             orderbook_bid_volume=3371,
             orderbook_ask_volume=1215,
             bid_ask_imbalance=47.0,
+            foreign_buy_volume=8922904,
+            foreign_sell_volume=11937997,
+            foreign_net_volume=-3015093,
+            institution_buy_volume=12816837,
+            institution_sell_volume=11845806,
+            institution_net_volume=971031,
+            individual_buy_volume=11457143,
+            individual_sell_volume=9425438,
+            individual_net_volume=2031705,
             sellable_quantity=4,
             sector="반도체",
         )
@@ -1927,6 +1936,11 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("20일선 회복 전 추가매수", plan["blockedActions"])
         self.assertTrue(any("60일선" in item for item in plan["counterSignals"]))
         self.assertEqual(2571000, plan["sourceFacts"]["averagePrice"])
+        self.assertEqual(8922904, context["facts"]["foreignBuyVolume"])
+        self.assertEqual(11937997, context["facts"]["foreignSellVolume"])
+        self.assertEqual(-3015093, plan["sourceFacts"]["foreignNetVolume"])
+        self.assertEqual(12816837, plan["sourceFacts"]["institutionBuyVolume"])
+        self.assertEqual(9425438, plan["sourceFacts"]["individualSellVolume"])
         active = build_active_investment_opinion(position, relation_context=context).to_dict()
         self.assertEqual(plan["primaryAction"], active["executionPlan"]["primaryAction"])
 
@@ -4823,6 +4837,7 @@ class PythonServiceTests(unittest.TestCase):
                 "평단가: 2,571,000원",
                 "수익률: -18.1%",
                 "수급: 거래량 5,215,050(0.8x), 체결강도 95.2",
+                "투자자: 외국인 -3,015,093(매수 8,922,904/매도 11,937,997), 기관 +971,031(매수 12,816,837/매도 11,845,806), 개인 +2,031,705(매수 11,457,143/매도 9,425,438)",
                 "추세: 20일선보다 15.2% 낮음, 60일선보다 8.4% 높음",
                 "기준일: 2026-07-08 14:26 KST",
             ]),
@@ -4859,6 +4874,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("반대 신호", message)
         self.assertIn("60일선은 아직 위", message)
         self.assertIn("투자자별 수급", message)
+        self.assertIn("외국인 -3,015,093", message)
         self.assertIn("2026-07-08 14:26 KST", message)
         self.assertNotIn("관계 규칙", message)
         self.assertNotIn("AI 분석 기준", message)
@@ -4872,6 +4888,9 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("HAS_EXECUTION_PLAN", {item["relationType"] for item in assertions["relations"]})
         self.assertIn("PRODUCES_VALIDATED_MESSAGE", {item["relationType"] for item in assertions["relations"]})
         self.assertTrue(enriched["ontologyAiValidation"]["assertionIds"])
+        rendered = render_notification(NotificationTemplate("investmentInsight", "{telegramMessage}"), enriched)
+        self.assertNotIn("AI 의견", rendered)
+        self.assertEqual(1, rendered.count("분석출처: AI 검증 알림"))
 
     def test_notification_worker_waits_for_validated_ai_before_rendering(self):
         class FakeReviewer:

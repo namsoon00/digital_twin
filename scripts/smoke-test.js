@@ -205,6 +205,7 @@ function checkFrontendAdminRender() {
   assertOk(/\.managed-page,[\s\S]*\.settings-view\s*\{[\s\S]*gap: var\(--ds-space-7\);/.test(mobileSpacingAuditLayer), "모바일 페이지/탭 카드 간격이 최종 레이어에서 통일되지 않습니다.");
   assertOk(/\.model-guide-grid,[\s\S]*\.source-stack\s*\{[\s\S]*padding: var\(--ds-section-gap\) var\(--ds-panel-pad-x\) var\(--ds-panel-pad-y\);/.test(mobileSpacingAuditLayer), "모바일 패널 헤더와 카드 본문 사이 padding 보정이 없습니다.");
   assertOk(/\.process-rail,[\s\S]*\.more-action-list\s*\{[\s\S]*gap: var\(--ds-space-5\);/.test(mobileSpacingAuditLayer), "모바일 process/ledger 카드가 붙어 보이지 않도록 gap이 보정되지 않습니다.");
+  assertOk(/\.settings-status-band,[\s\S]*\.settings-api-row,[\s\S]*\.message-schedule-summary > span:not\(\.tone-chip\)\s*\{[\s\S]*padding: var\(--ds-row-pad-y\) var\(--ds-row-pad-x\);/.test(mobileSpacingAuditLayer), "모바일 패널 내부 요약 카드 padding 보정이 없습니다.");
   assertOk(styles.indexOf("@media (max-width: 1180px) and (min-width: 981px)") >= 0 && styles.indexOf("@media (max-width: 980px) and (min-width: 861px)") >= 0, "PC/태블릿 레이아웃 분기 규칙이 없습니다.");
   assertOk(styles.indexOf("--ds-shell-width: 1720px") >= 0 && styles.indexOf("--ds-sidebar-width: 256px") >= 0, "PC 중심 shell/sidebar 레이아웃 토큰이 없습니다.");
   assertOk(styles.indexOf("grid-template-columns: var(--ds-sidebar-width) minmax(0, 1fr)") >= 0, "PC shell이 좌측 네비게이션과 작업 영역으로 분리되지 않습니다.");

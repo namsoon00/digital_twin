@@ -204,7 +204,8 @@ function checkFrontendAdminRender() {
   assertOk(/\.app-nav\s*\{[\s\S]*margin: 0 0 var\(--ds-space-8\);/.test(mobileSpacingAuditLayer), "모바일 앱바 아래 간격이 최종 레이어에서 보정되지 않습니다.");
   assertOk(/\.managed-page,[\s\S]*\.settings-view\s*\{[\s\S]*gap: var\(--ds-space-7\);/.test(mobileSpacingAuditLayer), "모바일 페이지/탭 카드 간격이 최종 레이어에서 통일되지 않습니다.");
   assertOk(/\.model-guide-grid,[\s\S]*\.source-stack\s*\{[\s\S]*padding: var\(--ds-section-gap\) var\(--ds-panel-pad-x\) var\(--ds-panel-pad-y\);/.test(mobileSpacingAuditLayer), "모바일 패널 헤더와 카드 본문 사이 padding 보정이 없습니다.");
-  assertOk(/\.process-rail,[\s\S]*\.more-action-list\s*\{[\s\S]*gap: var\(--ds-space-5\);/.test(mobileSpacingAuditLayer), "모바일 process/ledger 카드가 붙어 보이지 않도록 gap이 보정되지 않습니다.");
+  assertOk(/\.process-rail,[\s\S]*\.investment-bridge-flow,[\s\S]*\.more-action-list\s*\{[\s\S]*grid-template-columns: 1fr;[\s\S]*gap: var\(--ds-space-5\);/.test(mobileSpacingAuditLayer), "모바일 process/bridge/ledger 플로우가 1열 간격 구조로 보정되지 않습니다.");
+  assertOk(/\.investment-bridge-step strong,[\s\S]*\.investment-bridge-step i\s*\{[\s\S]*word-break: keep-all;/.test(mobileSpacingAuditLayer), "모바일 투자 분석 브리지 카드의 한글 줄바꿈 보정이 없습니다.");
   assertOk(/\.settings-status-band,[\s\S]*\.settings-api-row,[\s\S]*\.message-schedule-summary > span:not\(\.tone-chip\)\s*\{[\s\S]*padding: var\(--ds-row-pad-y\) var\(--ds-row-pad-x\);/.test(mobileSpacingAuditLayer), "모바일 패널 내부 요약 카드 padding 보정이 없습니다.");
   assertOk(/\.deskbar-cell,[\s\S]*\.notification-ops-cell,[\s\S]*\.notification-rule-state,[\s\S]*\.flow-lane,[\s\S]*\.ontology-ledger-item,[\s\S]*\{[\s\S]*padding: var\(--ds-row-pad-y\) var\(--ds-row-pad-x\);/.test(mobileSpacingAuditLayer), "모바일 전면 카드 시스템의 작은 상태 카드 padding 보정이 없습니다.");
   assertOk(/\.monitor-board\s*\{[\s\S]*gap: var\(--ds-space-5\);[\s\S]*padding: var\(--ds-section-gap\) var\(--ds-panel-pad-x\) var\(--ds-panel-pad-y\);/.test(mobileSpacingAuditLayer), "모바일 모니터링 보드 외곽 padding/gap 보정이 없습니다.");

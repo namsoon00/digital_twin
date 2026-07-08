@@ -1067,6 +1067,8 @@ def position_signal_facts(
     disclosure = disclosures.get(symbol) if isinstance(disclosures, dict) else None
     news_headlines = external_signals.get("newsHeadlines") if isinstance(external_signals, dict) else {}
     news_context = news_headlines.get(symbol) if isinstance(news_headlines, dict) and isinstance(news_headlines.get(symbol), dict) else {}
+    sec_filings = external_signals.get("secFilings") if isinstance(external_signals, dict) else {}
+    sec_context = sec_filings.get(symbol) if isinstance(sec_filings, dict) and isinstance(sec_filings.get(symbol), dict) else {}
     facts: Dict[str, object] = {
         "symbol": symbol,
         "name": position.name,
@@ -1115,6 +1117,7 @@ def position_signal_facts(
         "isBtcSensitive": symbol in BTC_SENSITIVE_SYMBOLS,
         "dartDisclosure": dict(disclosure or {}) if isinstance(disclosure, dict) else {},
         "newsHeadlines": dict(news_context or {}) if isinstance(news_context, dict) else {},
+        "secFiling": dict(sec_context or {}) if isinstance(sec_context, dict) else {},
         "expectsKrMicrostructureSignals": expects_kr_microstructure_signals(position.market, position.currency, symbol),
     }
     facts["researchEvidence"] = [

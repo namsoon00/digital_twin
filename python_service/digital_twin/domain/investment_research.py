@@ -179,6 +179,94 @@ def source_urls(items: Iterable[ResearchEvidence]) -> List[str]:
     return urls[:8]
 
 
+def compact_amount(value: object, currency: str = "USD") -> str:
+    amount = number(value)
+    if not amount:
+        return "-"
+    abs_amount = abs(amount)
+    prefix = "$" if str(currency or "").upper() == "USD" else ""
+    if abs_amount >= 1_000_000_000:
+        return prefix + str(round(amount / 1_000_000_000, 1)).rstrip("0").rstrip(".") + "B"
+    if abs_amount >= 1_000_000:
+        return prefix + str(round(amount / 1_000_000, 1)).rstrip("0").rstrip(".") + "M"
+    return prefix + str(round(amount, 1)).rstrip("0").rstrip(".")
+
+
+def sec_filing_url(cik: object, accession: object, primary_document: object) -> str:
+    cik_text = "".join(ch for ch in str(cik or "") if ch.isdigit()).lstrip("0")
+    accession_text = str(accession or "").replace("-", "").strip()
+    document = str(primary_document or "").strip()
+    if not cik_text or not accession_text or not document:
+        return ""
+    return "https://www.sec.gov/Archives/edgar/data/" + cik_text + "/" + accession_text + "/" + document
+
+
+def sec_research_evidence(symbol: str, sec: Dict[str, object]) -> List[ResearchEvidence]:
+    if not isinstance(sec, dict) or not sec:
+        return []
+    normalized_symbol = str(symbol or sec.get("symbol") or "").upper()
+    company_name = str(sec.get("companyName") or sec.get("entityName") or normalized_symbol).strip()
+    latest = sec.get("latestFiling") if isinstance(sec.get("latestFiling"), dict) else {}
+    evidence: List[ResearchEvidence] = []
+    if latest:
+        form = str(latest.get("form") or "SEC filing").strip()
+        filing_date = str(latest.get("filingDate") or latest.get("filed") or "").strip()
+        url = str(latest.get("url") or "").strip() or sec_filing_url(sec.get("cik"), latest.get("accessionNumber"), latest.get("primaryDocument"))
+        polarity, impact = keyword_polarity(form + " " + company_name)
+        evidence.append(ResearchEvidence(
+            "research:" + normalized_symbol + ":sec:" + (str(latest.get("accessionNumber") or form)),
+            normalized_symbol,
+            "filing",
+            str(sec.get("provider") or "SEC EDGAR"),
+            form,
+            (company_name + ", 제출일 " + (filing_date or "-")).strip(", "),
+            url,
+            filing_date,
+            polarity,
+            impact,
+            0.72,
+        ))
+    facts = sec.get("facts") if isinstance(sec.get("facts"), dict) else {}
+    financial_rows = []
+    for key, label in [
+        ("revenue", "매출"),
+        ("netIncome", "순이익"),
+        ("assets", "자산"),
+        ("liabilities", "부채"),
+        ("equity", "자본"),
+    ]:
+        item = facts.get(key) if isinstance(facts.get(key), dict) else {}
+        if item.get("value") in (None, ""):
+            continue
+        financial_rows.append(label + " " + compact_amount(item.get("value")))
+    if financial_rows:
+        net_income = facts.get("netIncome") if isinstance(facts.get("netIncome"), dict) else {}
+        polarity = "risk" if number(net_income.get("value")) < 0 else "context"
+        impact = 7.0 if polarity == "risk" else 4.0
+        latest_end = next(
+            (
+                str(item.get("end") or "").strip()
+                for item in facts.values()
+                if isinstance(item, dict) and str(item.get("end") or "").strip()
+            ),
+            "",
+        )
+        evidence.append(ResearchEvidence(
+            "research:" + normalized_symbol + ":financial-facts",
+            normalized_symbol,
+            "financial-fact",
+            str(sec.get("provider") or "SEC EDGAR"),
+            "회사 재무 요약",
+            company_name + ": " + ", ".join(financial_rows[:5]),
+            "",
+            latest_end,
+            polarity,
+            impact,
+            0.7,
+        ))
+    return evidence
+
+
 def research_evidence_from_facts(symbol: str, facts: Dict[str, object]) -> List[ResearchEvidence]:
     facts = facts or {}
     normalized_symbol = str(symbol or facts.get("symbol") or "").upper()
@@ -222,6 +310,8 @@ def research_evidence_from_facts(symbol: str, facts: Dict[str, object]) -> List[
             impact,
             0.62,
         ))
+    sec = facts.get("secFiling") if isinstance(facts.get("secFiling"), dict) else {}
+    evidence.extend(sec_research_evidence(normalized_symbol, sec))
     return evidence
 
 
@@ -235,24 +325,7 @@ def research_evidence_from_external_signals(symbol: str, external_signals: Dict[
     }
     evidence = research_evidence_from_facts(normalized_symbol, facts)
     sec = (external_signals.get("secFilings") or {}).get(normalized_symbol) if isinstance(external_signals.get("secFilings"), dict) else {}
-    if isinstance(sec, dict) and sec:
-        latest = sec.get("latestFiling") if isinstance(sec.get("latestFiling"), dict) else {}
-        form = str(latest.get("form") or "SEC filing").strip()
-        filing_date = str(latest.get("filingDate") or latest.get("filed") or "")
-        polarity, impact = keyword_polarity(form + " " + str(sec.get("companyName") or ""))
-        evidence.append(ResearchEvidence(
-            "research:" + normalized_symbol + ":sec:" + (str(latest.get("accessionNumber") or form)),
-            normalized_symbol,
-            "filing",
-            str(sec.get("provider") or "SEC EDGAR"),
-            form,
-            "제출일 " + (filing_date or "-"),
-            str(latest.get("url") or ""),
-            filing_date,
-            polarity,
-            impact,
-            0.72,
-        ))
+    evidence.extend(sec_research_evidence(normalized_symbol, sec if isinstance(sec, dict) else {}))
     quote = (external_signals.get("equityQuotes") or {}).get(normalized_symbol) if isinstance(external_signals.get("equityQuotes"), dict) else {}
     if isinstance(quote, dict) and quote:
         change = number(quote.get("changePercent"))

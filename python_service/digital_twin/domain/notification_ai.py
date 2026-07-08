@@ -235,6 +235,43 @@ def news_headline_items(context: Dict[str, object]) -> List[Dict[str, object]]:
     return [item for item in raw_items if isinstance(item, dict) and str(item.get("title") or "").strip()]
 
 
+def research_evidence_items(context: Dict[str, object]) -> List[Dict[str, object]]:
+    rows: List[Dict[str, object]] = []
+
+    def add_items(raw_items) -> None:
+        if not isinstance(raw_items, list):
+            return
+        for item in raw_items:
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title") or item.get("summary") or "").strip()
+            if title:
+                rows.append(item)
+
+    facts = relation_facts(context)
+    add_items(facts.get("researchEvidence"))
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    add_items(metadata.get("researchEvidence"))
+    active_opinion = active_investment_opinion_value(context)
+    if active_opinion:
+        add_items(active_opinion.get("evidence"))
+        add_items(active_opinion.get("counterEvidence"))
+    seen = set()
+    unique: List[Dict[str, object]] = []
+    for item in rows:
+        key = "|".join([
+            str(item.get("kind") or ""),
+            str(item.get("source") or ""),
+            str(item.get("title") or item.get("summary") or ""),
+            str(item.get("url") or ""),
+        ])
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(item)
+    return unique
+
+
 def compact_text(value: object, max_len: int = 96) -> str:
     text = " ".join(str(value or "").split())
     if max_len > 3 and len(text) > max_len:
@@ -338,6 +375,7 @@ def sanitized_prompt_data(value: object, depth: int = 0, max_items: int = 40) ->
 def news_summary_text(context: Dict[str, object]) -> str:
     disclosure = disclosure_context(context)
     news_items = news_headline_items(context)
+    evidence_items = research_evidence_items(context)
     parts: List[str] = []
     if disclosure:
         report = str(disclosure.get("reportName") or disclosure.get("report_name") or "").strip()
@@ -349,7 +387,21 @@ def news_summary_text(context: Dict[str, object]) -> str:
         seen_date = str(item.get("seenDate") or item.get("seendate") or "").strip()
         suffix = (" · " + seen_date) if seen_date else ""
         parts.append(domain + ": " + compact_text(item.get("title"), 84) + suffix)
-    return " / ".join(parts[:3])
+    for item in evidence_items:
+        kind = str(item.get("kind") or "").strip()
+        if kind in {"news", "disclosure"}:
+            continue
+        source = str(item.get("source") or "리서치").strip()
+        title = compact_text(item.get("title") or item.get("summary"), 84)
+        observed = str(item.get("observedAt") or "").strip()
+        suffix = (" · " + observed) if observed else ""
+        if title:
+            parts.append(source + ": " + title + suffix)
+    unique: List[str] = []
+    for item in parts:
+        if item and item not in unique:
+            unique.append(item)
+    return " / ".join(unique[:4])
 
 
 def disclosure_analysis_opinion_lines(context: Dict[str, object]) -> List[str]:
@@ -427,6 +479,7 @@ def notification_ai_prompt_context(
                 for item in news_headline_items(context)[:3]
             ],
             "disclosure": disclosure_context(context),
+            "researchEvidence": sanitized_prompt_data(research_evidence_items(context)[:8]),
             "referenceDate": str(context.get("referenceDate") or ""),
             "activeRules": active_rule_items(context),
             "relationFacts": sanitized_prompt_data(relation_context.get("facts") if isinstance(relation_context, dict) else {}),

@@ -1844,6 +1844,72 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(opinion["evidence"] or opinion["counterEvidence"])
         self.assertEqual("BUY|ADD|HOLD|TRIM|SELL|AVOID", opinion["promptContract"]["requiredDecision"])
 
+    def test_research_evidence_includes_news_disclosure_and_company_facts(self):
+        position = Position(
+            symbol="AAPL",
+            name="Apple",
+            market="US",
+            currency="USD",
+            market_value=1000,
+            profit_loss_rate=4.2,
+            current_price=215,
+            ma20=220,
+            ma60=198,
+            ma20_distance=-2.3,
+            ma60_distance=8.6,
+            source="holding",
+            sector="AI/플랫폼",
+        )
+        external_signals = {
+            "newsHeadlines": {
+                "AAPL": {
+                    "provider": "GDELT",
+                    "items": [{
+                        "title": "Apple reports record revenue and strong demand",
+                        "url": "https://example.test/aapl-news",
+                        "domain": "example.test",
+                        "seenDate": "20260708100000",
+                    }],
+                }
+            },
+            "secFilings": {
+                "AAPL": {
+                    "provider": "SEC EDGAR",
+                    "symbol": "AAPL",
+                    "cik": "0000320193",
+                    "companyName": "Apple Inc.",
+                    "latestFiling": {
+                        "form": "10-Q",
+                        "filingDate": "2026-05-01",
+                        "accessionNumber": "0000320193-26-000002",
+                        "primaryDocument": "aapl-20260328.htm",
+                    },
+                    "facts": {
+                        "revenue": {"value": 95359000000, "end": "2026-03-28", "form": "10-Q"},
+                        "netIncome": {"value": 24780000000, "end": "2026-03-28", "form": "10-Q"},
+                    },
+                }
+            },
+        }
+
+        context = evaluate_position_relation_rules(
+            position,
+            portfolio_summary([position], fx_rates={"USD": 1400}),
+            external_signals=external_signals,
+        )
+
+        evidence = context["facts"]["researchEvidence"]
+        kinds = {item["kind"] for item in evidence}
+        self.assertIn("news", kinds)
+        self.assertIn("filing", kinds)
+        self.assertIn("financial-fact", kinds)
+        self.assertIn("secFiling", context["facts"])
+        financial = next(item for item in evidence if item["kind"] == "financial-fact")
+        self.assertIn("매출 $95.4B", financial["summary"])
+        self.assertIn("순이익 $24.8B", financial["summary"])
+        self.assertTrue(any("sec.gov" in item["url"] for item in evidence if item["kind"] == "filing"))
+        self.assertEqual(evidence, context["promptContext"]["facts"]["researchEvidence"])
+
     def test_decisions_include_active_opinion_and_research_prompt_context(self):
         position = Position(
             symbol="035420",
@@ -4728,6 +4794,17 @@ class PythonServiceTests(unittest.TestCase):
                         "newsHeadlines": {
                             "items": [{"title": "NAVER governance update", "domain": "example.test"}],
                         },
+                        "researchEvidence": [{
+                            "evidenceId": "research:035420:financial-facts",
+                            "symbol": "035420",
+                            "kind": "financial-fact",
+                            "source": "SEC EDGAR",
+                            "title": "회사 재무 요약",
+                            "summary": "NAVER: 매출 $2.1B, 순이익 $0.3B",
+                            "polarity": "context",
+                            "impactScore": 4,
+                            "confidence": 0.7,
+                        }],
                     }
                 },
             },
@@ -4740,8 +4817,10 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("가격 위치", text)
         self.assertIn("뉴스·공시", text)
         self.assertIn("NAVER governance update", text)
+        self.assertIn("회사 재무 요약", text)
         self.assertIn("공시 의미", text)
         self.assertIn("추세 동역학", text)
+        self.assertEqual("회사 재무 요약", opinion["promptContext"]["facts"]["researchEvidence"][0]["title"])
         self.assertTrue(opinion["promptContext"]["facts"]["trendDynamics"]["supportRetest"])
         self.assertEqual("[redacted]", opinion["promptContext"]["facts"]["allAvailableData"]["metadata"]["telegramBotToken"])
         self.assertIn("allAvailableData", opinion["promptContext"]["facts"])

@@ -607,6 +607,24 @@ def research_evidence_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
     }
 
 
+def delete_research_evidence_payload(evidence_id: str, query: Dict[str, List[str]]) -> Dict[str, object]:
+    normalized_id = configured(evidence_id)
+    if not normalized_id:
+        raise ValueError("삭제할 근거 ID가 필요합니다.")
+    store = SQLiteResearchEvidenceStore()
+    removed = store.delete(normalized_id)
+    if removed:
+        new_domain_event(
+            APP_ITEM_REMOVED,
+            normalized_id,
+            {"itemId": normalized_id, "type": "researchEvidence"},
+        )
+    payload = research_evidence_payload(query)
+    payload["deleted"] = removed
+    payload["deletedId"] = normalized_id
+    return payload
+
+
 def parse_utc(value: str):
     try:
         parsed = datetime.fromisoformat(str(value or "").replace("Z", "+00:00"))
@@ -1603,6 +1621,13 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
 
         if path == "/api/research-evidence" and self.command == "GET":
             return self.send_payload(200, research_evidence_payload(query))
+
+        evidence_match = re.match(r"^/api/research-evidence/([^/]+)$", path)
+        if evidence_match and self.command == "DELETE":
+            if not self.ensure_writable("공유 모드에서는 저장된 리서치 근거를 변경할 수 없습니다."):
+                return
+            evidence_id = urllib.parse.unquote(evidence_match.group(1))
+            return self.send_payload(200, delete_research_evidence_payload(evidence_id, query))
 
         if path == "/api/notification-schedules" and self.command == "GET":
             return self.send_payload(200, notification_schedules_payload())

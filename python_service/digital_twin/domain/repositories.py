@@ -158,6 +158,9 @@ class ResearchEvidenceRepository(Protocol):
     def latest(self, symbol: str = "", kind: str = "", limit: int = 50) -> List[ResearchEvidence]:
         ...
 
+    def delete(self, evidence_id: str) -> bool:
+        ...
+
     def summary(self) -> Dict[str, object]:
         ...
 

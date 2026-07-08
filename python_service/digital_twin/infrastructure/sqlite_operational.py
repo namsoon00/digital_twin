@@ -1041,6 +1041,17 @@ class SQLiteResearchEvidenceStore(OperationalConnection):
             ).fetchall()
         return [research_evidence_from_row(row) for row in rows]
 
+    def delete(self, evidence_id: str) -> bool:
+        normalized_id = str(evidence_id or "").strip()
+        if not normalized_id:
+            return False
+        with self.connect() as connection:
+            cursor = connection.execute(
+                "DELETE FROM research_evidence WHERE evidence_id = ?",
+                (normalized_id,),
+            )
+        return int(cursor.rowcount or 0) > 0
+
     def summary_counts(self, column: str, limit: int = 20) -> List[Dict[str, object]]:
         if column not in {"symbol", "kind", "source", "polarity"}:
             return []

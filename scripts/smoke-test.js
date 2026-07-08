@@ -289,6 +289,36 @@ function checkFrontendAdminRender() {
       },
       locked: false
     },
+    "/api/research-evidence": {
+      items: [
+        {
+          evidenceId: "research:005930:news:smoke",
+          symbol: "005930",
+          kind: "news",
+          source: "Smoke News",
+          title: "삼성전자 반도체 업황 개선 기대",
+          summary: "테스트용 저장 근거",
+          url: "https://example.test/news",
+          observedAt: "2026-07-08T00:00:00Z",
+          publishedAt: "2026-07-08T00:00:00Z",
+          polarity: "support",
+          impactScore: 6,
+          confidence: 0.62,
+          payload: { name: "삼성전자" }
+        }
+      ],
+      summary: {
+        total: 1,
+        latestSeenAt: "2026-07-08T00:00:00Z",
+        bySymbol: [{ name: "005930", count: 1, latestSeenAt: "2026-07-08T00:00:00Z" }],
+        byKind: [{ name: "news", count: 1, latestSeenAt: "2026-07-08T00:00:00Z" }],
+        bySource: [{ name: "Smoke News", count: 1, latestSeenAt: "2026-07-08T00:00:00Z" }],
+        byPolarity: [{ name: "support", count: 1, latestSeenAt: "2026-07-08T00:00:00Z" }]
+      },
+      symbol: "",
+      kind: "",
+      limit: 80
+    },
     "/api/service-accounts": {
       accounts: [
         {
@@ -820,6 +850,7 @@ function checkFrontendAdminRender() {
       console: console,
       setTimeout: setTimeout,
       clearTimeout: clearTimeout,
+      URL: URL,
       URLSearchParams: URLSearchParams,
       document: {
         documentElement: documentElement,
@@ -861,6 +892,28 @@ function checkFrontendAdminRender() {
       },
       fetch: function (requestedPath) {
         const key = String(requestedPath).split("?")[0];
+        if (key === "/api/economic-feed/rss") {
+          return Promise.resolve({
+            ok: true,
+            json: function () {
+              return Promise.resolve({});
+            },
+            text: function () {
+              return Promise.resolve("<rss><channel><item><title>시장 피드 테스트</title><link>https://example.test/feed</link><pubDate>Wed, 08 Jul 2026 00:00:00 GMT</pubDate><description>테스트용 RSS 피드</description></item></channel></rss>");
+            }
+          });
+        }
+        if (key === "/api/economic-feed/gdelt") {
+          return Promise.resolve({
+            ok: true,
+            json: function () {
+              return Promise.resolve({ articles: [{ title: "글로벌 시장 테스트", url: "https://example.test/gdelt", seendate: "20260708T000000Z", domain: "example.test" }] });
+            },
+            text: function () {
+              return Promise.resolve(JSON.stringify({ articles: [] }));
+            }
+          });
+        }
         if (!payloads[key]) throw new Error("unexpected frontend fetch: " + requestedPath);
         return Promise.resolve({
           ok: true,
@@ -902,6 +955,7 @@ function checkFrontendAdminRender() {
     renderForSearch("?tab=notifications&notification=advanced"),
     renderForSearch("?tab=modeling"),
     renderForSearch("?tab=ontology"),
+    renderForSearch("?tab=feed"),
     renderForSearch("?tab=modeling&strategy=evidence"),
     renderForSearch("?tab=modeling&strategy=results"),
     renderForSearch("?tab=modeling&strategy=graphs"),
@@ -923,16 +977,17 @@ function checkFrontendAdminRender() {
     const notificationAdvancedHtml = pages[7];
     const modelingHtml = pages[8];
     const legacyOntologyHtml = pages[9];
-    const modelingEvidenceHtml = pages[10];
-    const modelingResultsHtml = pages[11];
-    const modelingGraphHtml = pages[12];
-    const modelingRegistryHtml = pages[13];
-    const modelingTraceHtml = pages[14];
-    const legacyOntologyGraphHtml = pages[15];
-    const monitoringHtml = pages[16];
-    const settingsHtml = pages[17];
-    const staticAccountHtml = pages[18];
-    const newAccountHtml = pages[19];
+    const feedHtml = pages[10];
+    const modelingEvidenceHtml = pages[11];
+    const modelingResultsHtml = pages[12];
+    const modelingGraphHtml = pages[13];
+    const modelingRegistryHtml = pages[14];
+    const modelingTraceHtml = pages[15];
+    const legacyOntologyGraphHtml = pages[16];
+    const monitoringHtml = pages[17];
+    const settingsHtml = pages[18];
+    const staticAccountHtml = pages[19];
+    const newAccountHtml = pages[20];
 
     [
       ["overview", overviewHtml],
@@ -941,6 +996,7 @@ function checkFrontendAdminRender() {
       ["symbols", symbolUniverseHtml],
       ["notifications", notificationHtml],
       ["modeling", modelingHtml],
+      ["feed", feedHtml],
       ["settings", settingsHtml]
     ].forEach(function (entry) {
       assertOk(entry[1].indexOf("managed-page managed-page-" + entry[0]) >= 0, "탭이 공통 관리 페이지 템플릿을 거치지 않습니다: " + entry[0]);
@@ -966,6 +1022,7 @@ function checkFrontendAdminRender() {
       ["전체종목", symbolUniverseHtml],
       ["알림", notificationHtml],
       ["투자 분석", modelingHtml],
+      ["피드", feedHtml],
       ["모니터링", monitoringHtml],
       ["설정", settingsHtml]
     ].forEach(function (entry) {
@@ -979,7 +1036,7 @@ function checkFrontendAdminRender() {
     assertOk(overviewHtml.indexOf('data-scroll-key="overview"') >= 0, "탭 본문에 스크롤 관리 키가 렌더링되지 않습니다.");
     assertOk(designSystemDoc.indexOf("각 탭은 독립된 스크롤 위치") >= 0, "디자인 시스템 문서에 탭별 스크롤 정책이 없습니다.");
     assertOk(code.indexOf('var bottomTabIds = ["overview", "watchlist", "notifications", "modeling"];') >= 0, "하단 핵심 탭에 알림과 투자 분석이 배치되지 않았습니다.");
-    assertOk(code.indexOf('var managementTabIds = ["accounts", "symbols", "settings"];') >= 0, "상단 운영 메뉴 탭 구성이 역할과 맞지 않습니다.");
+    assertOk(code.indexOf('var managementTabIds = ["accounts", "symbols", "feed", "settings"];') >= 0, "상단 운영 메뉴 탭 구성이 역할과 맞지 않습니다.");
     assertOk(styles.indexOf(".app-nav-tab.active") >= 0 && styles.indexOf(".app-nav-menu") >= 0, "앱 네비게이션 활성 탭과 모바일 관리 메뉴 스타일 규칙이 없습니다.");
     assertOk(styles.indexOf("@media (min-width: 861px)") >= 0 && styles.indexOf(".tab-bar {\n    display: none;") >= 0, "데스크톱에서 하단 탭을 숨기는 규칙이 없습니다.");
     assertOk(styles.indexOf("position: sticky") >= 0 && styles.indexOf("bottom: 0;") >= 0 && styles.indexOf("backdrop-filter: blur(18px)") >= 0 && styles.indexOf(".app-nav.is-hidden") >= 0, "모바일 앱바 접힘/하단탭 고정 반응형 규칙이 없습니다.");
@@ -988,7 +1045,7 @@ function checkFrontendAdminRender() {
     assertOk(code.indexOf("realtime.status") >= 0, "웹소켓 상태 메시지를 처리하지 않습니다.");
     assertOk(code.indexOf("realtimeEventSnackbar") >= 0, "웹소켓 이벤트를 스낵바로 연결하지 않습니다.");
     assertOk(overviewHtml.indexOf("실시간") >= 0, "홈 요약에 실시간 연결 상태가 렌더링되지 않습니다.");
-    ["overview", "accounts", "watchlist", "symbols", "notifications", "modeling", "settings"].forEach(function (tab) {
+    ["overview", "accounts", "watchlist", "symbols", "notifications", "modeling", "feed", "settings"].forEach(function (tab) {
       assertOk(overviewHtml.indexOf('data-tab="' + tab + '"') >= 0, "새 탭이 렌더링되지 않았습니다: " + tab);
     });
     assertOk(overviewHtml.indexOf('data-tab="ontology"') < 0, "관계 분석 독립 탭이 아직 렌더링됩니다.");
@@ -997,9 +1054,12 @@ function checkFrontendAdminRender() {
     assertOk(overviewHtml.indexOf("data-mode=") < 0, "Mock 데이터 전환 버튼이 아직 렌더링됩니다.");
     assertOk(overviewHtml.indexOf(">Mock<") < 0, "Mock 데이터 버튼 라벨이 아직 렌더링됩니다.");
     assertOk(overviewHtml.indexOf("Mock 데이터") < 0, "Mock 데이터 표시 문구가 아직 렌더링됩니다.");
-    ["decision", "lab", "alerts", "holdings", "feed"].forEach(function (tab) {
+    ["decision", "lab", "alerts", "holdings"].forEach(function (tab) {
       assertOk(overviewHtml.indexOf('data-tab="' + tab + '"') < 0, "기존 탭이 남아 있습니다: " + tab);
     });
+    assertOk(feedHtml.indexOf("feed-view") >= 0, "피드 탭이 데이터 관리 화면으로 렌더링되지 않습니다.");
+    assertOk(feedHtml.indexOf("피드 수집 설정") >= 0 && feedHtml.indexOf("데이터 품질 상태") >= 0, "피드 설정과 데이터 품질 패널이 없습니다.");
+    assertOk(feedHtml.indexOf("저장 근거 조회·관리") >= 0 && feedHtml.indexOf('data-research-evidence-form') >= 0, "저장 근거 조회/관리 폼이 없습니다.");
     assertOk(overviewHtml.indexOf("admin-monitoring-panel") >= 0, "모니터링 상태 패널이 렌더링되지 않았습니다.");
     assertOk(overviewHtml.indexOf("account-directory-panel") >= 0, "홈에 DB 계정 패널이 렌더링되지 않았습니다.");
     assertOk(overviewHtml.indexOf("account-watchlist-panel") >= 0, "홈에 계정별 관심 종목 패널이 렌더링되지 않았습니다.");

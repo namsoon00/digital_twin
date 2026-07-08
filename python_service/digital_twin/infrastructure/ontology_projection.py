@@ -18,7 +18,7 @@ class PortfolioOntologyProjectionRecorder:
         self.source = source or "monitoring"
 
     def record_snapshot(self, snapshot: AccountSnapshot) -> Dict[str, object]:
-        if not self.repository or not snapshot.has_live_account_data():
+        if not self.repository or not self.has_projectable_data(snapshot):
             return {}
         try:
             graph = build_portfolio_ontology(
@@ -43,6 +43,19 @@ class PortfolioOntologyProjectionRecorder:
             result = {"saved": False, "status": "error", "reason": str(error)[:180]}
         snapshot.metadata.setdefault("ontology", {})["neo4j"] = result
         return result
+
+    def has_projectable_data(self, snapshot: AccountSnapshot) -> bool:
+        if snapshot.has_live_account_data():
+            return True
+        if any(item for item in snapshot.watchlist or [] if not item.is_cash()):
+            return True
+        if isinstance(snapshot.external_signals, dict) and any(
+            value not in ({}, [], "", None, False)
+            for key, value in snapshot.external_signals.items()
+            if key not in {"quality", "freshness", "provenance", "statuses"}
+        ):
+            return True
+        return False
 
     def runtime_context(self, snapshot: AccountSnapshot) -> Dict[str, object]:
         return {

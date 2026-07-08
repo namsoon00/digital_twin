@@ -38,12 +38,16 @@ class MonitorRunner:
             if not self.use_cycle_recorder(dry_run):
                 self.publish(snapshot_collected_event(snapshot))
             previous = self.store.previous.get(snapshot.account_id) or {}
+            snapshot.metadata["previousMonitorState"] = self.compact_previous_state(previous)
+            snapshot.metadata.setdefault("ontology", {})["previousStateAvailable"] = bool(previous)
             events = self.monitor.events_for_snapshot(snapshot, previous)
             if not dry_run:
                 self.record_ontology_projection(snapshot)
             events = self.monitor.apply_cadence(events, self.store, force=force)
             all_events.extend(events)
         if self.use_cycle_recorder(dry_run):
+            for snapshot in snapshots:
+                snapshot.metadata.pop("previousMonitorState", None)
             self.cycle_recorder.record_cycle(
                 [account.account_id for account in self.accounts],
                 snapshots,
@@ -67,6 +71,7 @@ class MonitorRunner:
             self.publish_cycle_completed(snapshots, all_events, dry_run, False)
         if not dry_run:
             for snapshot in snapshots:
+                snapshot.metadata.pop("previousMonitorState", None)
                 self.store.save_snapshot(snapshot)
             self.store.write()
         return all_events
@@ -88,7 +93,7 @@ class MonitorRunner:
             self.event_publisher.publish(event)
 
     def record_ontology_projection(self, snapshot: AccountSnapshot) -> None:
-        if not self.ontology_projection_recorder or not snapshot.has_live_account_data():
+        if not self.ontology_projection_recorder or not self.has_ontology_projection_data(snapshot):
             return
         try:
             self.ontology_projection_recorder.record_snapshot(snapshot)
@@ -98,6 +103,31 @@ class MonitorRunner:
 
     def persist_ontology(self, snapshot: AccountSnapshot) -> None:
         self.record_ontology_projection(snapshot)
+
+    def has_ontology_projection_data(self, snapshot: AccountSnapshot) -> bool:
+        if snapshot.has_live_account_data():
+            return True
+        if any(item for item in snapshot.watchlist or [] if not item.is_cash()):
+            return True
+        if isinstance(snapshot.external_signals, dict) and any(
+            value not in ({}, [], "", None, False)
+            for key, value in snapshot.external_signals.items()
+            if key not in {"quality", "freshness", "provenance", "statuses"}
+        ):
+            return True
+        return False
+
+    def compact_previous_state(self, previous: dict) -> dict:
+        if not isinstance(previous, dict) or not previous:
+            return {}
+        return {
+            "generatedAt": previous.get("generatedAt"),
+            "portfolio": previous.get("portfolio") if isinstance(previous.get("portfolio"), dict) else {},
+            "positions": previous.get("positions") if isinstance(previous.get("positions"), dict) else {},
+            "watchlist": previous.get("watchlist") if isinstance(previous.get("watchlist"), dict) else {},
+            "decisions": previous.get("decisions") if isinstance(previous.get("decisions"), dict) else {},
+            "externalSignals": previous.get("externalSignals") if isinstance(previous.get("externalSignals"), dict) else {},
+        }
 
     def send_alert_events(self, events, dry_run: bool, source_event):
         parameters = inspect.signature(self.event_sender).parameters

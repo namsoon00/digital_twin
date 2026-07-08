@@ -3,7 +3,7 @@ import re
 from dataclasses import asdict, dataclass, field
 from typing import Dict, Iterable, List, Optional
 
-from .investment_research import build_active_investment_opinion
+from .investment_research import build_active_investment_opinion, research_evidence_from_external_signals, research_evidence_from_facts
 from .market_data import clamp, number
 from .ontology_tbox import (
     BOUNDED_CONTEXTS,
@@ -130,6 +130,24 @@ INSIGHT_TYPES = [
     ("watchlistEntrySignal", "관심종목 진입 관찰"),
 ]
 
+FACTOR_BENCHMARKS = {
+    "KR": ("benchmark:KOSPI", "KOSPI"),
+    "KOSPI": ("benchmark:KOSPI", "KOSPI"),
+    "KOSDAQ": ("benchmark:KOSDAQ", "KOSDAQ"),
+    "US": ("benchmark:NASDAQ", "NASDAQ/US Growth"),
+    "USA": ("benchmark:NASDAQ", "NASDAQ/US Growth"),
+    "NASDAQ": ("benchmark:NASDAQ", "NASDAQ/US Growth"),
+    "NYSE": ("benchmark:SP500", "S&P 500"),
+    "CRYPTO": ("benchmark:BTC", "Bitcoin/Crypto Liquidity"),
+}
+
+SECTOR_FACTORS = {
+    "반도체": ["AI 인프라", "반도체 사이클", "수출 민감"],
+    "AI/플랫폼": ["AI/플랫폼 성장", "금리 민감 성장주", "광고·클라우드 수요"],
+    "모빌리티": ["전기차 수요", "경기 민감 소비재"],
+    "디지털자산": ["크립토 유동성", "위험자산 심리"],
+}
+
 
 def unique_list(values: Iterable[str]) -> List[str]:
     seen = set()
@@ -141,6 +159,88 @@ def unique_list(values: Iterable[str]) -> List[str]:
         seen.add(text)
         rows.append(text)
     return rows
+
+
+def bounded_number(value: object, lower: float = 0.0, upper: float = 100.0) -> float:
+    return clamp(number(value), lower, upper)
+
+
+def prior_monitor_state(runtime_context: Dict[str, object]) -> Dict[str, object]:
+    metadata = runtime_context.get("metadata") if isinstance(runtime_context, dict) else {}
+    metadata = metadata if isinstance(metadata, dict) else {}
+    previous = {}
+    if isinstance(runtime_context, dict):
+        previous = metadata.get("previousMonitorState") or metadata.get("previousState") or runtime_context.get("previousMonitorState") or {}
+    return previous if isinstance(previous, dict) else {}
+
+
+def previous_position_state(runtime_context: Dict[str, object], symbol: str, source: str = "holding") -> Dict[str, object]:
+    previous = prior_monitor_state(runtime_context)
+    container_key = "watchlist" if source == "watchlist" else "positions"
+    rows = previous.get(container_key) if isinstance(previous.get(container_key), dict) else {}
+    item = rows.get(str(symbol or "").upper()) if isinstance(rows, dict) else {}
+    return item if isinstance(item, dict) else {}
+
+
+def previous_decision_state(runtime_context: Dict[str, object], symbol: str) -> Dict[str, object]:
+    previous = prior_monitor_state(runtime_context)
+    rows = previous.get("decisions") if isinstance(previous.get("decisions"), dict) else {}
+    item = rows.get(str(symbol or "").upper()) if isinstance(rows, dict) else {}
+    return item if isinstance(item, dict) else {}
+
+
+def factor_labels_for_position(position: Position) -> List[str]:
+    labels = []
+    sector = str(position.sector or "").strip()
+    labels.extend(SECTOR_FACTORS.get(sector, []))
+    currency = str(position.currency or "").upper().strip()
+    market = str(position.market or "").upper().strip()
+    symbol = str(position.symbol or "").upper().strip()
+    if currency and currency != "KRW":
+        labels.append(currency + " 환율")
+    if market in {"US", "USA", "NASDAQ", "NYSE"}:
+        labels.append("미국 주식 베타")
+    if market in {"KR", "KOSPI", "KOSDAQ"} or currency == "KRW":
+        labels.append("한국 시장 베타")
+    if symbol in {"MSTR", "STRC", "COIN", "MARA", "RIOT", "CLSK", "HUT", "BITF"}:
+        labels.append("비트코인 민감도")
+    return unique_list(labels)
+
+
+def benchmark_for_position(position: Position) -> (str, str):
+    market = str(position.market or "").upper().strip()
+    return FACTOR_BENCHMARKS.get(market, ("benchmark:MARKET", "시장 벤치마크"))
+
+
+def event_tbox_classes(item: object) -> List[str]:
+    kind = str(getattr(item, "kind", "") or "").lower()
+    classes = ["Observation", "ExternalObservation", "ResearchEvidence", "ExternalSignal", "Evidence"]
+    if "news" in kind:
+        classes.extend(["NewsEvent", "NewsArticle", "EventRisk"])
+    elif "disclosure" in kind or "filing" in kind:
+        classes.extend(["DisclosureEvent", "DisclosureFiling", "EventRisk"])
+    elif "financial" in kind or "earning" in kind:
+        classes.extend(["FundamentalObservation", "EarningsEvent", "ValuationSignal"])
+    elif "market" in kind:
+        classes.extend(["PriceObservation", "PriceSignal"])
+    return unique_list(classes)
+
+
+def event_relation_properties(item: object) -> Dict[str, object]:
+    polarity = str(getattr(item, "polarity", "") or "context")
+    impact = number(getattr(item, "impact_score", 0))
+    props = {
+        "source": "research-evidence",
+        "polarity": polarity,
+        "impactScore": round(impact, 2),
+        "confidence": round(number(getattr(item, "confidence", 0)), 2),
+        "aiInfluenceLabel": str(getattr(item, "title", "") or getattr(item, "kind", "") or "리서치 근거"),
+    }
+    if polarity == "risk":
+        props["opinionImpact"] = min(18.0, max(4.0, impact))
+    elif polarity == "support":
+        props["supportImpact"] = min(14.0, max(3.0, impact))
+    return props
 
 
 def metric_tbox_classes(tbox_class: str, field_name: str) -> List[str]:
@@ -1092,6 +1192,7 @@ def add_metric_concepts(graph: PortfolioOntology, stock_id: str, position: Posit
 
 def add_data_source_concept(graph: PortfolioOntology, stock_id: str, position: Position, source: str) -> None:
     label = str(position.quote_source or position.data_quality or source or "runtime-data")
+    quality = data_quality_score(position)
     source_id = add_entity(graph, "data-source", label, label, {
         "tboxClass": "DataSource",
         "tboxClasses": ["DataSource", "Provenance"],
@@ -1101,6 +1202,18 @@ def add_data_source_concept(graph: PortfolioOntology, stock_id: str, position: P
     })
     add_relation(graph, stock_id, source_id, "OBSERVED_FROM", weight=1.0, properties={"source": source, "basis": "quote-source"})
     add_relation(graph, stock_id, source_id, "HAS_PROVENANCE", weight=1.0, properties={"source": source, "basis": "quote-source"})
+    reliability_id = add_entity(graph, "source-reliability", label, label + " 신뢰도", {
+        "tboxClass": "SourceReliability",
+        "tboxClasses": ["Provenance", "SourceReliability", "DataQuality"],
+        "qualityScore": round(quality, 2),
+        "quoteStatus": position.quote_status,
+        "quoteMessage": position.quote_message,
+    })
+    props = {"source": source, "aiInfluenceLabel": label + " 신뢰도", "confidence": round(quality / 100, 3)}
+    if quality < 60:
+        props.update({"polarity": "risk", "opinionImpact": round((60 - quality) * 0.18, 2)})
+    add_relation(graph, source_id, reliability_id, "HAS_SOURCE_RELIABILITY", weight=round(quality / 100, 4), properties=props)
+    add_relation(graph, stock_id, reliability_id, "WEIGHTED_BY_CONFIDENCE", weight=round(quality / 100, 4), properties=props)
 
 
 def add_legacy_model_score_concepts(graph: PortfolioOntology, stock_id: str, symbol: str, legacy: Dict[str, object]) -> None:
@@ -1128,6 +1241,279 @@ def add_legacy_model_score_concepts(graph: PortfolioOntology, stock_id: str, sym
             properties["supportImpact"] = min(14.0, (value - 45) * 0.35)
         add_relation(graph, stock_id, score_id, "HAS_MODEL_SCORE", weight=round(value / 100, 4), properties=properties)
         add_relation(graph, score_id, stock_id, "USED_AS_EVIDENCE", weight=round(value / 100, 4), properties={**properties, "source": "legacy-model"})
+
+
+def add_price_level_and_liquidity_concepts(graph: PortfolioOntology, stock_id: str, position: Position, source: str) -> None:
+    symbol = symbol_key(position)
+    current_price = number(position.current_price)
+    if current_price:
+        bar_id = add_entity(graph, "price-bar", symbol + ":latest", (position.name or symbol) + " 현재 가격 봉", {
+            "tboxClass": "PriceBar",
+            "tboxClasses": ["Observation", "PriceObservation", "PriceBar"],
+            "symbol": symbol,
+            "close": round(current_price, 4),
+            "changeRate": round(number(position.change_rate), 2),
+            "volume": round(number(position.volume), 2),
+            "volumeRatio": round(number(position.volume_ratio), 3),
+            "observedAt": position.updated_at,
+        })
+        add_relation(graph, stock_id, bar_id, "HAS_PRICE", weight=1.0, properties={"source": source, "aiInfluenceLabel": "현재 가격 봉"})
+        add_relation(graph, stock_id, bar_id, "HAS_OBSERVATION", weight=1.0, properties={"source": source, "aiInfluenceLabel": "현재 가격 봉"})
+    level_rows = [
+        ("ma20", "20일선", number(position.ma20), number(position.ma20_distance), "SupportLevel" if number(position.ma20_distance) >= -1 else "ResistanceLevel"),
+        ("ma60", "60일선", number(position.ma60), number(position.ma60_distance), "SupportLevel" if number(position.ma60_distance) >= -1 else "ResistanceLevel"),
+        ("average", "평단가", number(position.average_price), pct_distance_safe(current_price, number(position.average_price)), "KeyLevel"),
+    ]
+    for key, label, level, distance, tbox_class in level_rows:
+        if not level:
+            continue
+        level_id = add_entity(graph, "key-level", symbol + ":" + key, label + " " + compact_price(level), {
+            "tboxClass": tbox_class,
+            "tboxClasses": ["Observation", "TechnicalObservation", "KeyLevel", tbox_class],
+            "symbol": symbol,
+            "levelType": key,
+            "price": round(level, 4),
+            "distancePct": round(distance, 2),
+        })
+        add_relation(graph, stock_id, level_id, "HAS_TECHNICAL_INDICATOR", weight=1.0, properties={"source": source, "aiInfluenceLabel": label + " 위치"})
+        if -1.0 <= distance <= 1.5:
+            add_relation(graph, stock_id, level_id, "RETESTS_LEVEL", weight=0.82, properties={"source": source, "polarity": "context", "aiInfluenceLabel": label + " 재시험"})
+        elif distance <= -5.0:
+            add_relation(graph, stock_id, level_id, "BREAKS_LEVEL", weight=0.88, properties={"source": source, "polarity": "risk", "opinionImpact": min(14.0, abs(distance)), "aiInfluenceLabel": label + " 이탈"})
+        elif distance >= 0 and number(position.change_rate) > 0:
+            add_relation(graph, stock_id, level_id, "RECLAIMS_LEVEL", weight=0.74, properties={"source": source, "polarity": "support", "supportImpact": min(8.0, distance + 2), "aiInfluenceLabel": label + " 회복"})
+    liquidity = liquidity_profile(position)
+    liquidity_id = add_entity(graph, "liquidity-profile", symbol, (position.name or symbol) + " 유동성 프로파일", {
+        "tboxClass": "LiquidityProfile",
+        "tboxClasses": ["Risk", "LiquidityRisk", "LiquidityProfile"],
+        **liquidity,
+    })
+    risk_props = {"source": source, "aiInfluenceLabel": "유동성/실행 가능성"}
+    if number(liquidity.get("liquidityRiskScore")) >= 55:
+        risk_props.update({"polarity": "risk", "opinionImpact": min(16.0, number(liquidity.get("liquidityRiskScore")) * 0.18)})
+    add_relation(graph, stock_id, liquidity_id, "LIMITED_BY_LIQUIDITY", weight=round(number(liquidity.get("liquidityRiskScore")) / 100, 4), properties=risk_props)
+    capacity_id = add_entity(graph, "exit-capacity", symbol, (position.name or symbol) + " 청산 가능 용량", {
+        "tboxClass": "ExitCapacity",
+        "tboxClasses": ["Risk", "LiquidityRisk", "ExitCapacity"],
+        "sellableQuantity": round(number(position.sellable_quantity), 4),
+        "positionValue": round(number(position.market_value), 2),
+        "tradingValue": round(number(position.trading_value), 2),
+        "exitDaysAtTenPctADV": liquidity.get("exitDaysAtTenPctADV"),
+    })
+    add_relation(graph, stock_id, capacity_id, "HAS_EXIT_CAPACITY", weight=1.0, properties={"source": source, "aiInfluenceLabel": "청산 가능 용량"})
+    slippage_id = add_entity(graph, "slippage-estimate", symbol, (position.name or symbol) + " 슬리피지 추정", {
+        "tboxClass": "SlippageEstimate",
+        "tboxClasses": ["Risk", "ExecutionRisk", "SlippageEstimate"],
+        "slippageRiskScore": liquidity.get("slippageRiskScore"),
+        "bidAskImbalance": round(number(position.bid_ask_imbalance), 2),
+        "volumeRatio": round(number(position.volume_ratio), 3),
+    })
+    add_relation(graph, stock_id, slippage_id, "HAS_SLIPPAGE_RISK", weight=round(number(liquidity.get("slippageRiskScore")) / 100, 4), properties=risk_props)
+
+
+def pct_distance_safe(value: float, reference: float) -> float:
+    return ((number(value) / number(reference)) - 1) * 100 if number(value) and number(reference) else 0.0
+
+
+def compact_price(value: object) -> str:
+    numeric = number(value)
+    if numeric >= 1000:
+        return str(int(round(numeric)))
+    return str(round(numeric, 4)).rstrip("0").rstrip(".")
+
+
+def liquidity_profile(position: Position) -> Dict[str, object]:
+    market_value = number(position.market_value)
+    trading_value = number(position.trading_value)
+    volume_ratio = number(position.volume_ratio)
+    ask_pressure = max(0.0, -number(position.bid_ask_imbalance))
+    sellable_quantity = number(position.sellable_quantity)
+    quantity = number(position.quantity)
+    exit_days = market_value / max(1.0, trading_value * 0.1) if market_value and trading_value else 0.0
+    position_to_value = (market_value / trading_value) * 100 if market_value and trading_value else 0.0
+    sellable_gap = 100.0 if quantity and sellable_quantity <= 0 else 0.0
+    liquidity_risk = clamp(position_to_value * 2.0 + max(0.0, 1.0 - volume_ratio) * 18.0 + ask_pressure * 0.25 + sellable_gap * 0.25, 0.0, 100.0)
+    slippage_risk = clamp(position_to_value * 1.4 + ask_pressure * 0.35 + max(0.0, 0.8 - volume_ratio) * 20.0, 0.0, 100.0)
+    return {
+        "positionToTradingValuePct": round(position_to_value, 2),
+        "exitDaysAtTenPctADV": round(exit_days, 2),
+        "liquidityRiskScore": round(liquidity_risk, 1),
+        "slippageRiskScore": round(slippage_risk, 1),
+        "volumeRatio": round(volume_ratio, 3),
+        "bidAskImbalance": round(number(position.bid_ask_imbalance), 2),
+    }
+
+
+def add_position_factor_concepts(graph: PortfolioOntology, stock_id: str, portfolio_node_id: str, position: Position, portfolio: PortfolioSummary) -> None:
+    symbol = symbol_key(position)
+    benchmark_id, benchmark_label = benchmark_for_position(position)
+    benchmark_entity_id = add_entity(graph, "benchmark-index", benchmark_id, benchmark_label, {
+        "tboxClass": "BenchmarkIndex",
+        "tboxClasses": ["BenchmarkIndex", "Factor"],
+        "market": position.market,
+    })
+    add_relation(graph, stock_id, benchmark_entity_id, "HAS_BETA_TO", weight=0.6, properties={"source": "factor-map", "polarity": "context", "aiInfluenceLabel": benchmark_label + " 베타"})
+    for label in factor_labels_for_position(position):
+        factor_id = add_entity(graph, "factor", label, label, {
+            "tboxClass": "Factor",
+            "tboxClasses": ["Factor", "FactorExposure"],
+            "label": label,
+        })
+        weight = round(position_weight(position, portfolio) / 100, 4) if is_holding_position(position) else 0.18
+        props = {"source": "factor-map", "polarity": "context", "aiInfluenceLabel": label + " 팩터 노출"}
+        add_relation(graph, stock_id, factor_id, "HAS_FACTOR_EXPOSURE", weight=weight or 0.18, properties=props)
+        add_relation(graph, portfolio_node_id, factor_id, "HAS_FACTOR_EXPOSURE", weight=weight or 0.18, properties=props)
+
+
+def add_research_evidence_concepts(
+    graph: PortfolioOntology,
+    stock_id: str,
+    thesis_id: str,
+    active_opinion_id: str,
+    symbol: str,
+    facts: Dict[str, object],
+    external_signals: Dict[str, object],
+) -> None:
+    evidence_by_id = {}
+    for item in research_evidence_from_facts(symbol, facts or {}) + research_evidence_from_external_signals(symbol, external_signals or {}):
+        evidence_by_id[item.evidence_id] = item
+    for item in evidence_by_id.values():
+        event_id = add_entity(graph, "research-evidence", item.evidence_id, item.title, {
+            "tboxClass": "ResearchEvidence",
+            "tboxClasses": event_tbox_classes(item),
+            "symbol": item.symbol,
+            "kind": item.kind,
+            "source": item.source,
+            "title": item.title,
+            "summary": item.summary,
+            "url": item.url,
+            "publishedAt": item.published_at,
+            "observedAt": item.observed_at,
+            "polarity": item.polarity,
+            "impactScore": round(number(item.impact_score), 1),
+            "confidence": round(number(item.confidence), 2),
+        })
+        graph.evidence.append(OntologyEvidence(
+            item.evidence_id,
+            stock_id,
+            item.kind,
+            item.source,
+            item.title,
+            item.to_dict(),
+            item.confidence,
+        ))
+        props = event_relation_properties(item)
+        add_relation(graph, stock_id, event_id, "HAS_OBSERVATION", weight=round(number(item.confidence), 4), evidence_ids=[item.evidence_id], properties=props)
+        add_relation(graph, stock_id, event_id, "HAS_EXTERNAL_SIGNAL", weight=round(number(item.confidence), 4), evidence_ids=[item.evidence_id], properties=props)
+        add_relation(graph, event_id, stock_id, "MENTIONS_INSTRUMENT", weight=round(number(item.confidence), 4), evidence_ids=[item.evidence_id], properties=props)
+        add_relation(graph, event_id, thesis_id, "MATERIAL_TO", weight=round((number(item.impact_score) or 2) / 20, 4), evidence_ids=[item.evidence_id], properties=props)
+        add_relation(graph, event_id, active_opinion_id, "IMPACTS_OPINION", weight=round((number(item.impact_score) or 2) / 20, 4), evidence_ids=[item.evidence_id], properties=props)
+        add_relation(graph, event_id, event_id, "DECAYS_AFTER", weight=1.0, evidence_ids=[item.evidence_id], properties={
+            "source": "research-evidence",
+            "decayPolicy": "materiality-decay",
+            "defaultDays": 3 if item.kind in {"news", "market-move"} else 14,
+            "aiInfluenceLabel": "이벤트 영향 시간 감쇠",
+        })
+
+
+def add_relation_state_concepts(
+    graph: PortfolioOntology,
+    stock_id: str,
+    symbol: str,
+    position: Position,
+    source: str,
+    runtime_context: Dict[str, object],
+    relation_context: Dict[str, object],
+) -> None:
+    previous_position = previous_position_state(runtime_context, symbol, source)
+    previous_decision = previous_decision_state(runtime_context, symbol)
+    current_decision = relation_context.get("decision") if isinstance(relation_context.get("decision"), dict) else {}
+    facts = relation_context.get("facts") if isinstance(relation_context.get("facts"), dict) else {}
+    current_score = number(current_decision.get("score") or relation_context.get("signalStrength"))
+    previous_pressure = number(previous_decision.get("exit_pressure") or previous_decision.get("exitPressure"))
+    current_price = number(position.current_price)
+    previous_price = number(previous_position.get("current_price") or previous_position.get("currentPrice"))
+    previous_pnl = number(previous_position.get("profit_loss_rate") or previous_position.get("profitLossRate"))
+    current_pnl = number(position.profit_loss_rate)
+    previous_ma20_distance = number(previous_position.get("ma20_distance") or previous_position.get("ma20Distance"))
+    current_ma20_distance = number(position.ma20_distance)
+    state_id = add_entity(graph, "relation-state", symbol + ":current", (position.name or symbol) + " 현재 관계 상태", {
+        "tboxClass": "RelationStateSnapshot",
+        "tboxClasses": ["RelationStateSnapshot", "ReasoningCard"],
+        "symbol": symbol,
+        "source": source,
+        "decisionLabel": current_decision.get("label"),
+        "relationScore": round(current_score, 1),
+        "price": round(current_price, 4),
+        "profitLossRate": round(current_pnl, 2),
+        "ma20Distance": round(current_ma20_distance, 2),
+        "activeRuleIds": [
+            str(item.get("ruleId") or item.get("rule_id") or "")
+            for item in relation_context.get("activeRules") or []
+            if isinstance(item, dict)
+        ][:8],
+    })
+    add_relation(graph, stock_id, state_id, "HAS_REASONING_CARD", weight=round(current_score / 100, 4), properties={"source": "relation-state", "aiInfluenceLabel": "현재 관계 상태"})
+    if not previous_position and not previous_decision:
+        return
+    previous_state_id = add_entity(graph, "relation-state", symbol + ":previous", (position.name or symbol) + " 이전 관계 상태", {
+        "tboxClass": "PreviousInsight",
+        "tboxClasses": ["PreviousInsight", "RelationStateSnapshot"],
+        "symbol": symbol,
+        "source": source,
+        "decisionLabel": previous_decision.get("decision"),
+        "relationScore": round(previous_pressure, 1),
+        "price": round(previous_price, 4),
+        "profitLossRate": round(previous_pnl, 2),
+        "ma20Distance": round(previous_ma20_distance, 2),
+    })
+    add_relation(graph, state_id, previous_state_id, "CHANGED_FROM", weight=1.0, properties={"source": "previous-monitor-state", "aiInfluenceLabel": "이전 상태 대비 변화"})
+    transition_score = 0.0
+    transition_labels: List[str] = []
+    price_delta = pct_distance_safe(current_price, previous_price)
+    pnl_delta = current_pnl - previous_pnl if previous_position else 0.0
+    ma20_delta = current_ma20_distance - previous_ma20_distance if previous_position else 0.0
+    if abs(price_delta) >= 1.5:
+        transition_score += min(20.0, abs(price_delta) * 4.0)
+        transition_labels.append("가격 " + signed_pct_text(price_delta))
+    if abs(pnl_delta) >= 1.0:
+        transition_score += min(18.0, abs(pnl_delta) * 5.0)
+        transition_labels.append("손익률 " + signed_pct_text(pnl_delta, suffix="%p"))
+    if abs(ma20_delta) >= 2.0:
+        transition_score += min(16.0, abs(ma20_delta) * 3.0)
+        transition_labels.append("20일선 괴리 " + signed_pct_text(ma20_delta, suffix="%p"))
+    selected_rule = str(current_decision.get("selectedRuleId") or "")
+    if selected_rule and selected_rule != str(previous_decision.get("selectedRuleId") or ""):
+        transition_score += 18.0
+        transition_labels.append("선택 규칙 변화 " + selected_rule)
+    if facts.get("breakdownAcceleration"):
+        transition_score += 14.0
+    transition_score = clamp(transition_score, 0.0, 100.0)
+    if transition_score <= 0:
+        return
+    transition_id = add_entity(graph, "signal-transition", symbol + ":state-change", "관계 상태 변화", {
+        "tboxClass": "SignalTransition",
+        "symbol": symbol,
+        "changeScore": round(transition_score, 1),
+        "priceDeltaPct": round(price_delta, 2),
+        "profitLossRateDeltaPct": round(pnl_delta, 2),
+        "ma20DistanceDeltaPct": round(ma20_delta, 2),
+        "labels": transition_labels[:6],
+    })
+    props = {"source": "previous-monitor-state", "aiInfluenceLabel": "관계 상태 변화", "polarity": "context"}
+    if current_score >= 55 and (pnl_delta < 0 or ma20_delta < 0 or facts.get("breakdownAcceleration")):
+        props.update({"polarity": "risk", "opinionImpact": min(16.0, transition_score * 0.22)})
+    elif current_score < 55 and (price_delta > 0 or ma20_delta > 0):
+        props.update({"polarity": "support", "supportImpact": min(10.0, transition_score * 0.16)})
+    add_relation(graph, stock_id, transition_id, "HAS_OBSERVATION", weight=round(transition_score / 100, 4), properties=props)
+    add_relation(graph, transition_id, state_id, "CONFIRMED_OVER", weight=round(transition_score / 100, 4), properties=props)
+    if selected_rule and any(token in selected_rule for token in ["breakdown", "blocked", "loss"]):
+        add_relation(graph, transition_id, previous_state_id, "FAILED_AFTER", weight=round(transition_score / 100, 4), properties=props)
+
+
+def signed_pct_text(value: object, suffix: str = "%") -> str:
+    numeric = round(number(value), 2)
+    return ("+" if numeric > 0 else "") + str(numeric).rstrip("0").rstrip(".") + suffix
 
 
 def add_runtime_setting_concepts(graph: PortfolioOntology, portfolio_node_id: str, runtime_context: Dict[str, object]) -> None:
@@ -1359,6 +1745,7 @@ def add_external_signal_concepts(graph: PortfolioOntology, portfolio_node_id: st
     if not isinstance(external_signals, dict):
         return
     add_external_signal_quality_concepts(graph, portfolio_node_id, external_signals)
+    add_portfolio_macro_and_cross_asset_concepts(graph, portfolio_node_id, external_signals)
     for key, value in sorted(external_signals.items()):
         if key in {"quality", "freshness", "provenance"}:
             continue
@@ -1375,6 +1762,58 @@ def add_external_signal_concepts(graph: PortfolioOntology, portfolio_node_id: st
                 properties.update({"polarity": "risk", "opinionImpact": min(12.0, magnitude)})
         add_relation(graph, portfolio_node_id, signal_id, "HAS_EXTERNAL_SIGNAL", weight=1.0, properties=properties)
         add_relation(graph, portfolio_node_id, signal_id, "HAS_OBSERVATION", weight=1.0, properties=properties)
+
+
+def add_portfolio_macro_and_cross_asset_concepts(graph: PortfolioOntology, portfolio_node_id: str, external_signals: Dict[str, object]) -> None:
+    macro = external_signals.get("macro") if isinstance(external_signals.get("macro"), dict) else {}
+    series = macro.get("series") if isinstance(macro.get("series"), dict) else {}
+    for series_id, item in sorted(series.items()):
+        if not isinstance(item, dict):
+            continue
+        value = number(item.get("value"))
+        macro_id = add_entity(graph, "macro-print", str(series_id), "FRED " + str(series_id), {
+            "tboxClass": "MacroPrint",
+            "tboxClasses": ["Observation", "ExternalObservation", "ExternalSignal", "MacroIndicator", "MacroPrint", "MacroSignal", "RegimeRisk"],
+            "seriesId": str(series_id),
+            "provider": str(item.get("provider") or "FRED"),
+            "date": str(item.get("date") or ""),
+            "value": round(value, 4),
+        })
+        props = {"source": "macro", "polarity": "context", "aiInfluenceLabel": "거시 지표 " + str(series_id)}
+        if str(series_id).upper() in {"DGS10", "DGS2", "DFF"}:
+            props.update({"polarity": "risk" if value >= 4.5 else "context", "opinionImpact": 5.0 if value >= 4.5 else 0.0})
+        add_relation(graph, portfolio_node_id, macro_id, "HAS_EXTERNAL_SIGNAL", weight=1.0, properties=props)
+        add_relation(graph, macro_id, portfolio_node_id, "AFFECTS", weight=0.65, properties=props)
+    if "yieldSpread10y2y" in macro:
+        spread = number(macro.get("yieldSpread10y2y"))
+        spread_id = add_entity(graph, "macro-print", "yieldSpread10y2y", "10Y-2Y 금리 스프레드", {
+            "tboxClass": "MacroPrint",
+            "tboxClasses": ["Observation", "ExternalObservation", "MacroIndicator", "MacroPrint", "CreditSpreadSignal", "RegimeRisk"],
+            "value": round(spread, 4),
+        })
+        props = {"source": "macro", "polarity": "risk" if spread < 0 else "context", "opinionImpact": 6.0 if spread < 0 else 0.0, "aiInfluenceLabel": "금리 스프레드 레짐"}
+        add_relation(graph, portfolio_node_id, spread_id, "HAS_EXTERNAL_SIGNAL", weight=1.0, properties=props)
+        add_relation(graph, spread_id, portfolio_node_id, "AFFECTS", weight=0.72, properties=props)
+    crypto = external_signals.get("cryptoMarkets") if isinstance(external_signals.get("cryptoMarkets"), dict) else {}
+    for coin_id, item in sorted(crypto.items()):
+        if not isinstance(item, dict):
+            continue
+        change24h = number(item.get("change24h"))
+        change7d = number(item.get("change7d"))
+        crypto_id = add_entity(graph, "crypto-market-signal", str(coin_id), str(item.get("name") or coin_id), {
+            "tboxClass": "CryptoMarketSignal",
+            "tboxClasses": ["Observation", "ExternalObservation", "ExternalSignal", "CryptoMarketSignal", "CryptoSignal"],
+            "provider": str(item.get("provider") or "CoinGecko"),
+            "symbol": str(item.get("symbol") or "").upper(),
+            "price": round(number(item.get("price")), 4),
+            "change24h": round(change24h, 2),
+            "change7d": round(change7d, 2),
+            "volume24h": round(number(item.get("volume24h")), 2),
+        })
+        magnitude = max(abs(change24h), abs(change7d))
+        props = {"source": "cryptoMarkets", "polarity": "risk" if magnitude >= 4 else "context", "opinionImpact": min(12.0, magnitude) if magnitude >= 4 else 0.0, "aiInfluenceLabel": str(item.get("name") or coin_id) + " 변동성"}
+        add_relation(graph, portfolio_node_id, crypto_id, "HAS_EXTERNAL_SIGNAL", weight=1.0, properties=props)
+        add_relation(graph, crypto_id, portfolio_node_id, "AFFECTS", weight=min(1.0, magnitude / 10), properties=props)
 
 
 def add_external_signal_quality_concepts(graph: PortfolioOntology, portfolio_node_id: str, external_signals: Dict[str, object]) -> None:
@@ -1649,8 +2088,10 @@ def build_portfolio_ontology(
         legacy = legacy_by_symbol.get(symbol) or legacy_by_symbol.get(position.symbol) or {}
         add_data_source_concept(graph, stock_id, position, source)
         add_metric_concepts(graph, stock_id, position, source)
+        add_price_level_and_liquidity_concepts(graph, stock_id, position, source)
         add_legacy_model_score_concepts(graph, stock_id, symbol, legacy)
         add_symbol_external_signal_concepts(graph, stock_id, symbol, external_signals)
+        add_position_factor_concepts(graph, stock_id, portfolio_node_id, position, portfolio)
         opinion = build_position_opinion(position, portfolio, legacy) if holding else build_watchlist_opinion(position, legacy)
         graph.opinions.append(opinion)
         thesis_id = add_entity(graph, "investment-thesis", symbol, (position.name or symbol) + " 투자 가설", {
@@ -1668,6 +2109,8 @@ def build_portfolio_ontology(
             external_signals=external_signals,
             settings=runtime_context.get("settings") if isinstance(runtime_context.get("settings"), dict) else {},
             legacy_model=legacy,
+            previous_state=previous_position_state(runtime_context, symbol, source),
+            previous_decision=previous_decision_state(runtime_context, symbol),
         )
         active_opinion_payload = build_active_investment_opinion(
             position,
@@ -1694,6 +2137,24 @@ def build_portfolio_ontology(
             symbol,
             source,
             execution_plan_payload,
+        )
+        add_research_evidence_concepts(
+            graph,
+            stock_id,
+            thesis_id,
+            active_opinion_id,
+            symbol,
+            active_relation_context.get("facts") if isinstance(active_relation_context.get("facts"), dict) else {},
+            external_signals,
+        )
+        add_relation_state_concepts(
+            graph,
+            stock_id,
+            symbol,
+            position,
+            source,
+            runtime_context,
+            active_relation_context,
         )
         horizon_id = add_entity(graph, "signal-horizon", symbol + ":" + source, "보유 점검 기간" if holding else "관심 관찰 기간", {
             "tboxClass": "SignalHorizon",
@@ -2154,7 +2615,7 @@ def build_ai_inference_packet(graph: PortfolioOntology) -> Dict[str, object]:
         "role": "ontology-first-investment-opinion",
         "legacyModelRole": "supporting-evidence",
         "notificationRole": "insight-driven-dispatch",
-        "inputOrder": ["tbox", "boundedContexts", "abox", "operationalOntology", "reasoningCards", "relationInfluences", "insights", "activeInvestmentOpinions", "executionPlans", "relations", "evidence", "beliefs", "opinions"],
+        "inputOrder": ["tbox", "boundedContexts", "abox", "operationalOntology", "reasoningCards", "relationInfluences", "researchEvidence", "signalTransitions", "factorExposure", "liquidityConstraints", "insights", "activeInvestmentOpinions", "executionPlans", "relations", "evidence", "beliefs", "opinions"],
         "reasoningCardCount": len(graph.reasoning_cards),
         "reasoningCardIds": [item.get("id") for item in graph.reasoning_cards],
         "graphInputs": {
@@ -2185,6 +2646,8 @@ def build_ai_inference_packet(graph: PortfolioOntology) -> Dict[str, object]:
             "알림 타입 이름보다 온톨로지 인사이트, 신규성, 쿨다운, 억제 정책을 우선합니다.",
             "BUY, ADD, HOLD, TRIM, SELL, AVOID 중 하나의 투자 의견을 고르되 자동 주문 지시로 표현하지 않습니다.",
             "뉴스·공시·SEC/OpenDART 출처와 반대 근거, 무효화 조건을 함께 제시합니다.",
+            "이전 상태와 현재 상태의 SignalTransition을 읽고 새 변화인지 반복 상태인지 구분합니다.",
+            "팩터/상관/유동성/슬리피지 제약이 있으면 투자 의견과 실행 계획을 분리해 설명합니다.",
         ],
     }
 
@@ -2242,7 +2705,55 @@ def portfolio_worldview(
     }
 
 
+def prompt_relation_priority(item: OntologyRelation) -> float:
+    if (item.properties or {}).get("ontologyBox") == "TBox":
+        return -100.0
+    risk, support = relation_influence_score(item)
+    properties = item.properties or {}
+    priority = max(risk, support) + number(item.weight) * 10
+    if item.relation_type in {
+        "CHANGED_FROM",
+        "CONFIRMED_OVER",
+        "FAILED_AFTER",
+        "MATERIAL_TO",
+        "LIMITED_BY_LIQUIDITY",
+        "HAS_EXIT_CAPACITY",
+        "HAS_SLIPPAGE_RISK",
+        "BREAKS_LEVEL",
+        "RECLAIMS_LEVEL",
+        "RETESTS_LEVEL",
+    }:
+        priority += 18
+    if properties.get("polarity") in {"risk", "support"}:
+        priority += 8
+    return priority
+
+
+def prompt_evidence_priority(item: OntologyEvidence) -> float:
+    payload = item.value or {}
+    impact = number(payload.get("impactScore") or payload.get("impact_score"))
+    polarity = str(payload.get("polarity") or "")
+    priority = number(item.confidence) * 20 + impact
+    if polarity in {"risk", "support"}:
+        priority += 10
+    if item.kind in {"disclosure", "filing", "news", "market-move", "financial-fact"}:
+        priority += 8
+    return priority
+
+
+def prompt_belief_priority(item: OntologyBelief) -> float:
+    priority = number(item.confidence) * 20
+    if item.polarity == "risk":
+        priority += 8
+    if item.polarity == "support":
+        priority += 4
+    return priority
+
+
 def prompt_payload(graph: PortfolioOntology) -> Dict[str, object]:
+    relations = sorted(graph.relations, key=prompt_relation_priority, reverse=True)
+    evidence = sorted(graph.evidence, key=prompt_evidence_priority, reverse=True)
+    beliefs = sorted(graph.beliefs, key=prompt_belief_priority, reverse=True)
     return {
         "tbox": ontology_tbox(),
         "boundedContexts": bounded_contexts_payload(),
@@ -2263,9 +2774,9 @@ def prompt_payload(graph: PortfolioOntology) -> Dict[str, object]:
         ],
         "operationalOntology": dict((graph.worldview or {}).get("operationalOntology") or {}),
         "opinions": [item.to_dict() for item in graph.opinions],
-        "relations": [item.to_dict() for item in graph.relations[:80]],
-        "evidence": [item.to_dict() for item in graph.evidence[:80]],
-        "beliefs": [item.to_dict() for item in graph.beliefs[:80]],
+        "relations": [item.to_dict() for item in relations[:120]],
+        "evidence": [item.to_dict() for item in evidence[:120]],
+        "beliefs": [item.to_dict() for item in beliefs[:100]],
     }
 
 

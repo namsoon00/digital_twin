@@ -148,6 +148,15 @@ DECISION_STAGE_DEFINITIONS = {
     "SUPPORT_RETEST": DecisionStageDefinition("SUPPORT_RETEST", "trendReview", "review", "60일선 지지 재확인", "hold", 55.0, 70.0),
     "RECOVERY_CONFIRM": DecisionStageDefinition("RECOVERY_CONFIRM", "recovery", "review", "회복 시도 확인", "watch", 55.0, 70.0),
     "BREAKDOWN_ACCELERATION": DecisionStageDefinition("BREAKDOWN_ACCELERATION", "lossControl", "action", "하락 가속 대응 점검", "danger", 70.0, 85.0),
+    "BREAKOUT_FAILURE": DecisionStageDefinition("BREAKOUT_FAILURE", "lossControl", "action", "돌파 실패 리스크 점검", "danger", 70.0, 85.0),
+    "SUPPORT_RETEST_FAILED": DecisionStageDefinition("SUPPORT_RETEST_FAILED", "lossControl", "review", "지지선 실패 점검", "caution", 55.0, 70.0),
+    "DISTRIBUTION_REVIEW": DecisionStageDefinition("DISTRIBUTION_REVIEW", "distributionRisk", "review", "분산매도 의심 점검", "caution", 55.0, 70.0),
+    "LIQUIDITY_REVIEW": DecisionStageDefinition("LIQUIDITY_REVIEW", "executionRisk", "review", "유동성 실행 점검", "caution", 55.0, 70.0),
+    "LIQUIDITY_ACTION": DecisionStageDefinition("LIQUIDITY_ACTION", "executionRisk", "action", "분할 실행 우선", "caution", 70.0, 85.0),
+    "FACTOR_CROWDING": DecisionStageDefinition("FACTOR_CROWDING", "factorRisk", "review", "팩터 과밀 점검", "caution", 55.0, 70.0),
+    "DATA_CONFLICT": DecisionStageDefinition("DATA_CONFLICT", "dataQuality", "review", "데이터 충돌 점검", "caution", 55.0, 70.0),
+    "PROFIT_PROTECT": DecisionStageDefinition("PROFIT_PROTECT", "profitTake", "review", "수익 보호 점검", "caution", 55.0, 70.0),
+    "MACRO_REGIME": DecisionStageDefinition("MACRO_REGIME", "macroRegime", "review", "거시 레짐 점검", "watch", 55.0, 70.0),
     "ENTRY_WATCH": DecisionStageDefinition("ENTRY_WATCH", "entry", "watch", "분할매수 관찰", "watch", 35.0, 55.0),
     "ENTRY_SPLIT_BUY": DecisionStageDefinition("ENTRY_SPLIT_BUY", "entry", "review", "분할매수 후보", "watch", 55.0, 70.0),
     "ENTRY_READY": DecisionStageDefinition("ENTRY_READY", "entry", "action", "소액 분할매수 검토", "caution", 70.0, 85.0),
@@ -241,6 +250,36 @@ DEFAULT_RELATION_RULES = [
         ["currentPrice", "ma20", "ma60", "priceChangeRate", "ma20Slope", "ma60Slope", "trendCurve"],
     ),
     RelationRuleDefinition(
+        "breakout.failure.v1",
+        "회복/돌파 후 재이탈 -> 실패 리스크",
+        "v1",
+        "FAILED_BREAKOUT",
+        "trend_failure",
+        "이전에는 20일선 위 또는 회복 상태였으나 현재 20일선을 재이탈하고 하락/거래량/매도 압력이 붙을 때",
+        "단순 하락보다 회복 실패를 더 강한 경고로 보고, 재진입/추가매수보다 무효화 조건을 먼저 검토합니다.",
+        ["previousMa20Distance", "ma20Distance", "priceChangeRate", "volumeRatio", "sellShare"],
+    ),
+    RelationRuleDefinition(
+        "support.retest.failed.v1",
+        "60일선 재시험 실패 -> 지지 실패",
+        "v1",
+        "SUPPORT_FAILURE",
+        "trend_failure",
+        "60일선 부근 재시험 후 현재 60일선 아래로 밀리거나 하락 커브가 확대될 때",
+        "60일선 방어가 깨진 상태인지, 일시 이탈인지, 다음 확인 가격대를 분리해서 판단합니다.",
+        ["previousMa60Distance", "ma60Distance", "trendCurve", "volumeRatio"],
+    ),
+    RelationRuleDefinition(
+        "support.retest.confirmed.v1",
+        "지지 재확인 + 매수 압력 -> 방어 확인",
+        "v1",
+        "SUPPORT_CONFIRMED",
+        "confirmation",
+        "60일선 부근에서 버티고 가격/체결/호가/수급 중 2개 이상이 회복 쪽일 때",
+        "방어 확인은 매수 지시가 아니라 보유/관심 유지 근거이며, 다음 재확인 조건을 함께 제시합니다.",
+        ["ma60Distance", "priceChangeRate", "tradeStrength", "bidAskImbalance", "investorFlow"],
+    ),
+    RelationRuleDefinition(
         "entry.pullback.supported.v1",
         "눌림목 + 지지 수급 -> 분할매수 후보",
         "v1",
@@ -259,6 +298,76 @@ DEFAULT_RELATION_RULES = [
         "보유 중인 종목이 20일선·60일선 아래에 있거나 공시/뉴스 리스크와 손실 상태가 겹칠 때",
         "추가매수보다 손실 기준, 회복 조건, 비중 한도를 먼저 확인하도록 AI에게 요청합니다.",
         ["profitLossRate", "currentPrice", "ma20", "ma60", "dartDisclosure", "newsHeadlines"],
+    ),
+    RelationRuleDefinition(
+        "averaging_down.block.v1",
+        "손실 + 20일선 하회 + 확인 부족 -> 물타기 차단",
+        "v1",
+        "AVERAGING_DOWN_BLOCK",
+        "entry_risk",
+        "손실 상태에서 단기 추세 아래이고 수급/거래량/체결 확인이 부족할 때",
+        "평균단가 낮추기보다 보유 이유와 손절 기준을 먼저 확인하도록 AI에게 요청합니다.",
+        ["profitLossRate", "ma20Distance", "volumeRatio", "tradeStrength", "investorFlow"],
+    ),
+    RelationRuleDefinition(
+        "distribution.detected.v1",
+        "가격 버팀 + 매도 수급/거래량 -> 분산매도 의심",
+        "v1",
+        "DISTRIBUTION_RISK",
+        "flow_risk",
+        "가격은 크게 무너지지 않았지만 거래량 증가, 외국인·기관 순매도, 매도 호가/체결 우위가 겹칠 때",
+        "가격만 보고 안심하지 말고 공급 우위와 다음 이탈 조건을 분리합니다.",
+        ["priceChangeRate", "volumeRatio", "investorFlow", "sellShare", "bidAskImbalance"],
+    ),
+    RelationRuleDefinition(
+        "profit.protection.volatility.v1",
+        "수익 + 변동성 확대 + 둔화 -> 수익 보호",
+        "v1",
+        "PROFIT_PROTECTION",
+        "exit_timing",
+        "수익 구간에서 거래량/변동성이 커지고 단기 기울기 또는 커브가 둔화될 때",
+        "전량 매도보다 분할 익절, 추세 회복 유지 조건, 재진입 조건을 함께 제시합니다.",
+        ["profitLossRate", "volumeRatio", "ma20Slope", "trendCurve"],
+    ),
+    RelationRuleDefinition(
+        "liquidity.exit_capacity.v1",
+        "포지션 규모 + 거래대금 제약 -> 분할 실행",
+        "v1",
+        "LIQUIDITY_CONSTRAINT",
+        "execution_risk",
+        "포지션 평가액이 거래대금 대비 크거나 매도 가능 수량/호가가 실행을 제한할 때",
+        "투자 판단과 실제 실행 가능성을 분리하고, 분할 실행·시장가 회피 기준을 제시합니다.",
+        ["marketValue", "tradingValue", "sellableQuantity", "bidAskImbalance"],
+    ),
+    RelationRuleDefinition(
+        "factor.crowding.v1",
+        "섹터/팩터 집중 + 동방향 리스크 -> 포트폴리오 과밀",
+        "v1",
+        "FACTOR_CROWDING",
+        "portfolio_risk",
+        "섹터 비중이 높고 해당 종목도 같은 팩터에 노출되어 개별 리스크가 포트폴리오 리스크로 전파될 때",
+        "개별 종목 신호와 포트폴리오 팩터 리스크를 분리해 설명합니다.",
+        ["sectorRatio", "positionWeight", "market", "currency"],
+    ),
+    RelationRuleDefinition(
+        "data.conflict.v1",
+        "데이터 출처 충돌/신선도 저하 -> 확신도 상한",
+        "v1",
+        "DATA_CONFLICT",
+        "data_quality",
+        "핵심 가격/수급 출처가 비었거나 외부 신호 품질이 낮아 관계 결론의 확신도를 제한해야 할 때",
+        "없는 데이터를 추정하지 말고 판단 강도 상한과 복구해야 할 데이터만 말합니다.",
+        ["dataQualityScore", "externalSignalQuality", "missingData"],
+    ),
+    RelationRuleDefinition(
+        "macro.regime.shift.v1",
+        "금리/크립토/환율 레짐 변화 -> 팩터 민감도 점검",
+        "v1",
+        "MACRO_REGIME_SHIFT",
+        "macro_risk",
+        "금리, 스프레드, 크립토 유동성 또는 환율 변화가 성장주/반도체/디지털자산 민감 종목에 영향을 줄 때",
+        "개별 가격 신호와 레짐 신호를 섞지 말고 민감도와 후속 확인 지표를 분리합니다.",
+        ["macro", "btcChange24h", "btcChange7d", "currency"],
     ),
     RelationRuleDefinition(
         "external.crypto.btc_sensitivity.v1",
@@ -718,6 +827,12 @@ def resolve_decision_stage(rule_id: str, score: float, facts: Dict[str, object])
     loss_threshold = float(facts.get("lossThreshold") or DEFAULT_RELATION_THRESHOLDS["lossRateLow"])
     if rule_id == "trend.breakdown_acceleration.v1":
         return decision_stage_by_key("BREAKDOWN_ACCELERATION" if value >= 70 else "LOSS_REDUCE")
+    if rule_id == "breakout.failure.v1":
+        return decision_stage_by_key("BREAKOUT_FAILURE" if value >= 70 else "LOSS_REDUCE")
+    if rule_id == "support.retest.failed.v1":
+        return decision_stage_by_key("SUPPORT_RETEST_FAILED")
+    if rule_id == "support.retest.confirmed.v1":
+        return decision_stage_by_key("SUPPORT_RETEST")
     if rule_id == "trend.support_retest.v1":
         return decision_stage_by_key("SUPPORT_RETEST")
     if rule_id == "trend.recovery_attempt.v1":
@@ -732,6 +847,18 @@ def resolve_decision_stage(rule_id: str, score: float, facts: Dict[str, object])
         return _stage_for_score("PROFIT_PARTIAL", "PROFIT_SPLIT", value)
     if rule_id == "holding.concentration.rebalance.v1":
         return _stage_for_score("REBALANCE_REVIEW", "REBALANCE_ACTION", value)
+    if rule_id == "factor.crowding.v1":
+        return decision_stage_by_key("FACTOR_CROWDING")
+    if rule_id == "liquidity.exit_capacity.v1":
+        return _stage_for_score("LIQUIDITY_REVIEW", "LIQUIDITY_ACTION", value)
+    if rule_id == "distribution.detected.v1":
+        return decision_stage_by_key("DISTRIBUTION_REVIEW")
+    if rule_id == "profit.protection.volatility.v1":
+        return decision_stage_by_key("PROFIT_PROTECT")
+    if rule_id == "data.conflict.v1":
+        return decision_stage_by_key("DATA_CONFLICT")
+    if rule_id == "macro.regime.shift.v1":
+        return decision_stage_by_key("MACRO_REGIME")
     if rule_id == "external.crypto.btc_sensitivity.v1":
         return _stage_for_score("BTC_REVIEW", "BTC_REDUCE", value)
     if rule_id == "disclosure.material_event.v1":
@@ -745,6 +872,8 @@ def resolve_decision_stage(rule_id: str, score: float, facts: Dict[str, object])
             return decision_stage_by_key("ENTRY_SPLIT_BUY")
         return decision_stage_by_key("ENTRY_WATCH")
     if rule_id == "entry.add_buy.blocked.v1":
+        return decision_stage_by_key("ADD_BUY_BLOCKED")
+    if rule_id == "averaging_down.block.v1":
         return decision_stage_by_key("ADD_BUY_BLOCKED")
     return decision_stage_by_key("HOLD_KEEP")
 
@@ -885,6 +1014,103 @@ def _trend_facts(position: Position) -> Dict[str, object]:
             "dynamicRiskScore": round(dynamic_risk, 1),
         },
         "trendScore": score,
+    }
+
+
+def state_number(state: Dict[str, object], *keys: str) -> float:
+    if not isinstance(state, dict):
+        return 0.0
+    for key in keys:
+        if key in state and state.get(key) not in (None, ""):
+            return number(state.get(key))
+    return 0.0
+
+
+def _temporal_facts(position: Position, previous_state: Dict[str, object] = None, previous_decision: Dict[str, object] = None) -> Dict[str, object]:
+    previous_state = previous_state if isinstance(previous_state, dict) else {}
+    previous_decision = previous_decision if isinstance(previous_decision, dict) else {}
+    current_price = number(position.current_price)
+    previous_price = state_number(previous_state, "currentPrice", "current_price", "price")
+    current_pnl = number(position.profit_loss_rate)
+    previous_pnl = state_number(previous_state, "profitLossRate", "profit_loss_rate")
+    previous_ma20_distance = state_number(previous_state, "ma20Distance", "ma20_distance")
+    previous_ma60_distance = state_number(previous_state, "ma60Distance", "ma60_distance")
+    current_ma20_distance = number(position.ma20_distance)
+    current_ma60_distance = number(position.ma60_distance)
+    price_delta = ((current_price / previous_price) - 1) * 100 if current_price and previous_price else 0.0
+    pnl_delta = current_pnl - previous_pnl if previous_state else 0.0
+    ma20_distance_delta = current_ma20_distance - previous_ma20_distance if previous_state else 0.0
+    ma60_distance_delta = current_ma60_distance - previous_ma60_distance if previous_state else 0.0
+    previous_rule = str(previous_decision.get("selectedRuleId") or previous_decision.get("selected_rule_id") or "")
+    previous_label = str(previous_decision.get("decision") or previous_decision.get("label") or "")
+    return {
+        "hasPreviousState": bool(previous_state or previous_decision),
+        "previousPrice": previous_price,
+        "previousProfitLossRate": previous_pnl,
+        "previousMa20Distance": previous_ma20_distance,
+        "previousMa60Distance": previous_ma60_distance,
+        "previousRelationScore": state_number(previous_decision, "exitPressure", "exit_pressure", "score"),
+        "previousSelectedRuleId": previous_rule,
+        "previousDecisionLabel": previous_label,
+        "priceDeltaFromPreviousPct": price_delta,
+        "profitLossRateDeltaPct": pnl_delta,
+        "ma20DistanceDeltaPct": ma20_distance_delta,
+        "ma60DistanceDeltaPct": ma60_distance_delta,
+        "reclaimedMa20Previously": previous_ma20_distance >= 0 and current_ma20_distance < 0,
+        "lostMa60SincePrevious": previous_ma60_distance >= -1.0 and current_ma60_distance < -1.0,
+    }
+
+
+def _liquidity_facts(position: Position) -> Dict[str, object]:
+    market_value = number(position.market_value)
+    trading_value = number(position.trading_value)
+    volume_ratio = number(position.volume_ratio)
+    bid_ask_imbalance = number(position.bid_ask_imbalance)
+    quantity = number(position.quantity)
+    sellable_quantity = number(position.sellable_quantity)
+    position_to_trading_value = (market_value / trading_value) * 100 if market_value and trading_value else 0.0
+    exit_days = market_value / max(1.0, trading_value * 0.1) if market_value and trading_value else 0.0
+    sellable_blocked = bool(quantity and sellable_quantity <= 0)
+    liquidity_risk = clamp(
+        position_to_trading_value * 2.0
+        + max(0.0, 1.0 - volume_ratio) * 18.0
+        + max(0.0, -bid_ask_imbalance) * 0.25
+        + (25.0 if sellable_blocked else 0.0),
+        0.0,
+        100.0,
+    )
+    return {
+        "positionToTradingValuePct": position_to_trading_value,
+        "exitDaysAtTenPctADV": exit_days,
+        "sellableBlocked": sellable_blocked,
+        "liquidityRiskScore": liquidity_risk,
+    }
+
+
+def _external_quality_facts(external_signals: Dict[str, object]) -> Dict[str, object]:
+    quality = external_signals.get("quality") if isinstance(external_signals.get("quality"), dict) else {}
+    freshness = external_signals.get("freshness") if isinstance(external_signals.get("freshness"), dict) else {}
+    statuses = external_signals.get("statuses") if isinstance(external_signals.get("statuses"), list) else []
+    error_count = len([item for item in statuses if isinstance(item, dict) and not item.get("ok")])
+    return {
+        "externalSignalQualityScore": number(quality.get("score")) if quality else 0.0,
+        "externalSignalCoverageScore": number(quality.get("coverageScore")) if quality else 0.0,
+        "externalSignalSourceHealthScore": number(quality.get("sourceHealthScore")) if quality else 0.0,
+        "externalSignalAgeMinutes": number(freshness.get("ageMinutes")) if freshness else 0.0,
+        "externalSignalFreshnessStatus": str(freshness.get("status") or ""),
+        "externalSignalErrorCount": error_count,
+    }
+
+
+def _macro_regime_facts(external_signals: Dict[str, object]) -> Dict[str, object]:
+    macro = external_signals.get("macro") if isinstance(external_signals, dict) and isinstance(external_signals.get("macro"), dict) else {}
+    series = macro.get("series") if isinstance(macro.get("series"), dict) else {}
+    return {
+        "macroYieldSpread10y2y": number(macro.get("yieldSpread10y2y")),
+        "macroDgs10": number((series.get("DGS10") or {}).get("value")) if isinstance(series.get("DGS10"), dict) else 0.0,
+        "macroDgs2": number((series.get("DGS2") or {}).get("value")) if isinstance(series.get("DGS2"), dict) else 0.0,
+        "macroDff": number((series.get("DFF") or {}).get("value")) if isinstance(series.get("DFF"), dict) else 0.0,
+        "hasMacroSignals": bool(series or macro.get("yieldSpread10y2y") not in (None, "")),
     }
 
 
@@ -1046,6 +1272,8 @@ def position_signal_facts(
     position: Position,
     portfolio: PortfolioSummary,
     external_signals: Optional[Dict[str, object]] = None,
+    previous_state: Optional[Dict[str, object]] = None,
+    previous_decision: Optional[Dict[str, object]] = None,
 ) -> Dict[str, object]:
     external_signals = external_signals or {}
     trend = _trend_facts(position)
@@ -1132,6 +1360,10 @@ def position_signal_facts(
     ]
     facts.update(trend)
     facts.update(flow)
+    facts.update(_temporal_facts(position, previous_state, previous_decision))
+    facts.update(_liquidity_facts(position))
+    facts.update(_external_quality_facts(external_signals))
+    facts.update(_macro_regime_facts(external_signals))
     missing: List[Dict[str, str]] = []
     if not facts["currentPrice"]:
         missing.append(_missing("currentPrice", "현재가", "가격·이동평균 관계 판단 신뢰도가 낮아집니다."))
@@ -1285,14 +1517,24 @@ def decision_from_matches(facts: Dict[str, object], matches: List[OntologyRuleMa
             "nextStageAt": stage.next_stage_at,
         }
     priority = {
+        "breakout.failure.v1": 48,
         "trend.breakdown_acceleration.v1": 45,
+        "support.retest.failed.v1": 43,
         "holding.loss_guard.breakdown.v1": 40,
         "entry.pullback.supported.v1": 38,
+        "averaging_down.block.v1": 37,
+        "distribution.detected.v1": 36,
+        "profit.protection.volatility.v1": 36,
         "holding.profit_take.trend_weakness.v1": 35,
+        "liquidity.exit_capacity.v1": 34,
         "disclosure.material_event.v1": 30,
+        "factor.crowding.v1": 19,
+        "macro.regime.shift.v1": 27,
         "external.crypto.btc_sensitivity.v1": 25,
+        "data.conflict.v1": 23,
         "holding.concentration.rebalance.v1": 20,
         "entry.add_buy.blocked.v1": 18,
+        "support.retest.confirmed.v1": 17,
         "trend.support_retest.v1": 16,
         "trend.recovery_attempt.v1": 14,
     }
@@ -1418,6 +1660,38 @@ def execution_plan_from_relation_context(
         primary_label = "비트코인 민감 비중 점검"
         _append_unique(blocked_actions, "크립토 변동 안정 전 민감 종목 비중 확대")
         _append_unique(next_checks, "BTC 변화와 보유 종목 가격 반응의 시차 확인")
+    elif action_group == "distributionRisk":
+        primary_action = "TRIM_REVIEW"
+        primary_label = "분산매도 가능성 점검"
+        _append_unique(blocked_actions, "수급 확인 없는 추가매수")
+        _append_unique(risk_signals, "가격 버팀과 매도 수급이 충돌")
+        _append_unique(strengthen_conditions, "거래량 증가와 20일선 이탈이 겹치면 축소 강도 상향")
+        _append_unique(weaken_conditions, "외국인·기관 순매수와 20일선 회복이 확인되면 방어 강도 완화")
+        _append_unique(next_checks, "거래량 증가가 매집인지 분산인지 다음 체결/호가에서 확인")
+    elif action_group == "executionRisk":
+        primary_action = "SPLIT_EXECUTION_REVIEW"
+        primary_label = "시장가보다 분할 실행 기준 검토"
+        _append_unique(blocked_actions, "유동성 확인 없는 일괄 매도/매수")
+        _append_unique(risk_signals, "거래대금 대비 포지션 또는 매도 가능 수량 제약")
+        _append_unique(next_checks, "거래대금, 호가잔량, 매도 가능 수량으로 분할 수량을 계산")
+    elif action_group == "factorRisk":
+        primary_action = "EXPOSURE_REVIEW"
+        primary_label = "섹터·팩터 과밀 노출 점검"
+        _append_unique(blocked_actions, "같은 팩터 종목 동시 추가매수")
+        _append_unique(risk_signals, "개별 종목 리스크가 포트폴리오 팩터 리스크로 전파")
+        _append_unique(next_checks, "동일 섹터/팩터 보유 종목의 동방향 신호를 함께 확인")
+    elif action_group == "dataQuality":
+        primary_action = "DATA_REPAIR_REVIEW"
+        primary_label = "데이터 충돌 해소 전 판단 강도 제한"
+        _append_unique(blocked_actions, "누락 데이터 추정 기반 매매 판단")
+        _append_unique(risk_signals, "출처 품질 또는 신선도 부족")
+        _append_unique(next_checks, "가격·수급·외부 피드의 출처와 최신성을 먼저 복구")
+    elif action_group == "macroRegime":
+        primary_action = "REGIME_EXPOSURE_REVIEW"
+        primary_label = "거시 레짐 민감도 점검"
+        _append_unique(blocked_actions, "레짐 악화 중 민감 팩터 비중 확대")
+        _append_unique(risk_signals, "금리·크립토·통화 레짐이 민감 종목에 전파")
+        _append_unique(next_checks, "금리, 환율, BTC, 지수 반응을 다음 데이터에서 함께 확인")
 
     for item in _active_rule_labels(matches):
         if any(token in item for token in ["손실", "리스크", "하락", "공시", "집중"]):
@@ -1476,6 +1750,11 @@ def execution_plan_from_relation_context(
             "individualBuyVolume": facts.get("individualBuyVolume"),
             "individualSellVolume": facts.get("individualSellVolume"),
             "individualNetVolume": facts.get("individualNetVolume"),
+            "positionToTradingValuePct": round(float(facts.get("positionToTradingValuePct") or 0), 2),
+            "exitDaysAtTenPctADV": round(float(facts.get("exitDaysAtTenPctADV") or 0), 2),
+            "liquidityRiskScore": round(float(facts.get("liquidityRiskScore") or 0), 1),
+            "priceDeltaFromPreviousPct": round(float(facts.get("priceDeltaFromPreviousPct") or 0), 2),
+            "profitLossRateDeltaPct": round(float(facts.get("profitLossRateDeltaPct") or 0), 2),
         },
     }
 
@@ -1534,11 +1813,13 @@ def evaluate_position_relation_rules(
     settings: Optional[Dict[str, object]] = None,
     legacy_model: Optional[Dict[str, object]] = None,
     prompt_id: str = "holdingTiming",
+    previous_state: Optional[Dict[str, object]] = None,
+    previous_decision: Optional[Dict[str, object]] = None,
 ) -> Dict[str, object]:
     settings = settings or {}
     relation_definitions = relation_rule_definitions_from_settings(settings)
     thresholds = _thresholds(settings)
-    facts = position_signal_facts(position, portfolio, external_signals)
+    facts = position_signal_facts(position, portfolio, external_signals, previous_state, previous_decision)
     missing_labels = [str(item.get("label") or item.get("key") or "") for item in facts.get("missingData") or []]
     matches: List[OntologyRuleMatch] = []
     data_quality = float(facts.get("dataQualityScore") or 0)
@@ -1568,6 +1849,18 @@ def evaluate_position_relation_rules(
     has_disclosure = isinstance(disclosure, dict) and bool(disclosure)
     news = facts.get("newsHeadlines")
     has_news = isinstance(news, dict) and bool(news.get("items") or news.get("count"))
+    previous_ma20_distance = float(facts.get("previousMa20Distance") or 0)
+    previous_ma60_distance = float(facts.get("previousMa60Distance") or 0)
+    has_previous_state = bool(facts.get("hasPreviousState"))
+    price_delta_previous = float(facts.get("priceDeltaFromPreviousPct") or 0)
+    ma20_delta_previous = float(facts.get("ma20DistanceDeltaPct") or 0)
+    ma60_delta_previous = float(facts.get("ma60DistanceDeltaPct") or 0)
+    position_to_trading_value = float(facts.get("positionToTradingValuePct") or 0)
+    liquidity_risk = float(facts.get("liquidityRiskScore") or 0)
+    external_quality = float(facts.get("externalSignalQualityScore") or 0)
+    external_errors = float(facts.get("externalSignalErrorCount") or 0)
+    macro_spread = float(facts.get("macroYieldSpread10y2y") or 0)
+    macro_dgs10 = float(facts.get("macroDgs10") or 0)
 
     if pnl >= 10 and (ma20_distance <= -2 or ma60_distance <= -5 or trend_score < -3):
         score = 55 + min(25, max(0, pnl - 10) * 1.2) + min(20, abs(min(ma20_distance, ma60_distance, trend_score)))
@@ -1679,6 +1972,42 @@ def evaluate_position_relation_rules(
                 "추가매수보다 회복 조건 확인 우선",
             ],
             missing_labels,
+                definitions=relation_definitions,
+        ))
+
+    averaging_support_count = sum(
+        1
+        for value in [
+            volume_ratio >= 1.0,
+            trade_strength >= 100,
+            bid_ask_imbalance >= 5,
+            flow_score >= 10,
+            recovery_attempt,
+        ]
+        if value
+    )
+    avg_loss_threshold = float(thresholds.get("lossRateLow", -8.0) or -8.0)
+    avg_loss_buffer = abs(float(thresholds.get("lossRateBufferPct", 1.0) or 0.0))
+    weak_near_loss_for_averaging = (
+        pnl <= avg_loss_threshold
+        and avg_loss_threshold - pnl <= avg_loss_buffer
+        and ma60_distance > 0
+        and volume_ratio < float(thresholds.get("lossGuardVolumeConfirmRatio", 0.8) or 0.8)
+        and flow_score > -15
+    )
+    if is_holding and pnl < 0 and ma20_distance < 0 and averaging_support_count < 2 and not weak_near_loss_for_averaging:
+        score = 55 + min(18, abs(pnl) * 1.2) + min(12, abs(ma20_distance) * 1.1) + (8 if ma60_distance < 0 else 0)
+        matches.append(_match(
+            "averaging_down.block.v1",
+            score,
+            data_quality,
+            [
+                "손익률 " + ("%.1f" % pnl) + "%",
+                moving_average_distance_text("20일선", ma20_distance),
+                "확인 신호 " + str(averaging_support_count) + "/5",
+                "추가매수보다 보유 이유 재확인 우선",
+            ],
+            missing_labels,
             definitions=relation_definitions,
         ))
 
@@ -1750,6 +2079,33 @@ def evaluate_position_relation_rules(
             missing_labels,
             definitions=relation_definitions,
         ))
+    support_confirmation_count = sum(
+        1
+        for value in [
+            support_retest,
+            price_change >= 0,
+            trade_strength >= 100,
+            bid_ask_imbalance >= 5,
+            flow_score >= 10,
+        ]
+        if value
+    )
+    if support_retest and support_confirmation_count >= 3 and not breakdown_acceleration:
+        score = 50 + min(20, support_confirmation_count * 5) + (5 if ma60_distance >= 0 else 0)
+        matches.append(_match(
+            "support.retest.confirmed.v1",
+            score,
+            data_quality,
+            [
+                moving_average_distance_text("60일선", ma60_distance),
+                "확인 신호 " + str(support_confirmation_count) + "/5",
+                "체결강도 " + ("%.1f" % trade_strength) if trade_strength else "",
+                "호가 불균형 " + ("%.1f" % bid_ask_imbalance) + "%" if bid_ask_imbalance else "",
+            ],
+            missing_labels,
+            reference_only=True,
+            definitions=relation_definitions,
+        ))
     if recovery_attempt:
         score = (
             48
@@ -1768,6 +2124,41 @@ def evaluate_position_relation_rules(
                 "60일선 기울기 " + ("%.1f" % ma60_slope) + "%",
                 "추세 커브 " + ("%.1f" % trend_curve),
                 moving_average_distance_text("60일선", ma60_distance),
+            ],
+            missing_labels,
+            definitions=relation_definitions,
+        ))
+    if has_previous_state and previous_ma20_distance >= 0 and ma20_distance < 0 and (price_change <= -1.0 or volume_ratio >= 1.2 or float(facts.get("sellShare") or 0) >= 56):
+        score = (
+            60
+            + min(16, abs(ma20_distance) * 1.5)
+            + min(12, abs(min(0.0, price_change)) * 3.0)
+            + (8 if volume_ratio >= 1.2 else 0)
+            + (6 if float(facts.get("sellShare") or 0) >= 56 else 0)
+        )
+        matches.append(_match(
+            "breakout.failure.v1",
+            score,
+            data_quality,
+            [
+                "이전 20일선 괴리 " + ("%.1f" % previous_ma20_distance) + "% -> 현재 " + ("%.1f" % ma20_distance) + "%",
+                "가격 변화 " + ("%.1f" % price_delta_previous) + "%",
+                "거래량 배율 " + ("%.1f" % volume_ratio) + "x",
+                "매도 체결 비중 " + ("%.1f" % float(facts.get("sellShare") or 0)) + "%",
+            ],
+            missing_labels,
+            definitions=relation_definitions,
+        ))
+    if has_previous_state and previous_ma60_distance >= -1.0 and ma60_distance < -1.0 and (price_change < 0 or trend_curve < 0 or ma60_delta_previous < -1.5):
+        score = 56 + min(18, abs(ma60_distance) * 2.2) + min(12, abs(min(0.0, trend_curve)) * 4.0) + min(8, abs(min(0.0, ma60_delta_previous)) * 2.0)
+        matches.append(_match(
+            "support.retest.failed.v1",
+            score,
+            data_quality,
+            [
+                "이전 60일선 괴리 " + ("%.1f" % previous_ma60_distance) + "% -> 현재 " + ("%.1f" % ma60_distance) + "%",
+                "60일선 괴리 변화 " + ("%.1f" % ma60_delta_previous) + "%p",
+                "추세 커브 " + ("%.1f" % trend_curve),
             ],
             missing_labels,
             definitions=relation_definitions,
@@ -1796,6 +2187,38 @@ def evaluate_position_relation_rules(
             missing_labels,
             definitions=relation_definitions,
         ))
+    if volume_ratio >= 1.2 and price_change > -1.5 and (flow_score <= -15 or float(facts.get("sellShare") or 0) >= 56 or bid_ask_imbalance <= -10):
+        score = 52 + min(14, max(0.0, volume_ratio - 1.0) * 10) + min(16, abs(min(0.0, flow_score)) * 0.35) + min(10, abs(min(0.0, bid_ask_imbalance)) * 0.35)
+        matches.append(_match(
+            "distribution.detected.v1",
+            score,
+            data_quality,
+            [
+                "가격 변화율 " + ("%.1f" % price_change) + "%",
+                "거래량 배율 " + ("%.1f" % volume_ratio) + "x",
+                "투자자 수급 점수 " + ("%.1f" % flow_score),
+                "매도 체결 비중 " + ("%.1f" % float(facts.get("sellShare") or 0)) + "%",
+                "호가 불균형 " + ("%.1f" % bid_ask_imbalance) + "%",
+            ],
+            missing_labels,
+            definitions=relation_definitions,
+        ))
+    if pnl >= 10 and (volume_ratio >= 1.5 or abs(price_change) >= 2.0) and (ma20_slope <= 0.2 or trend_curve <= -0.4 or ma20_delta_previous <= -2.0):
+        score = 54 + min(18, max(0.0, pnl - 10) * 1.0) + min(12, max(0.0, volume_ratio - 1.0) * 8.0) + min(12, abs(min(0.0, trend_curve)) * 5.0)
+        matches.append(_match(
+            "profit.protection.volatility.v1",
+            score,
+            data_quality,
+            [
+                "손익률 " + ("%.1f" % pnl) + "%",
+                "거래량 배율 " + ("%.1f" % volume_ratio) + "x",
+                "가격 변화율 " + ("%.1f" % price_change) + "%",
+                "20일선 기울기 " + ("%.1f" % ma20_slope) + "%",
+                "추세 커브 " + ("%.1f" % trend_curve),
+            ],
+            missing_labels,
+            definitions=relation_definitions,
+        ))
     if sector_ratio >= float(thresholds.get("sectorWeightHigh", 50.0) or 50.0) or position_weight >= float(thresholds.get("positionWeightHigh", 30.0) or 30.0):
         score = 50 + min(25, max(0, sector_ratio - 35) * 0.9) + min(25, max(0, position_weight - 20) * 1.1)
         matches.append(_match(
@@ -1805,6 +2228,36 @@ def evaluate_position_relation_rules(
             [
                 "업종 비중 " + ("%.1f" % sector_ratio) + "%",
                 "종목 비중 " + ("%.1f" % position_weight) + "%",
+            ],
+            missing_labels,
+            definitions=relation_definitions,
+        ))
+    if is_holding and (liquidity_risk >= 45 or position_to_trading_value >= 5 or facts.get("sellableBlocked")):
+        score = 48 + min(25, liquidity_risk * 0.35) + min(18, position_to_trading_value * 1.2) + (8 if facts.get("sellableBlocked") else 0)
+        matches.append(_match(
+            "liquidity.exit_capacity.v1",
+            score,
+            data_quality,
+            [
+                "포지션/거래대금 " + ("%.1f" % position_to_trading_value) + "%",
+                "10% 거래대금 기준 청산 일수 " + ("%.1f" % float(facts.get("exitDaysAtTenPctADV") or 0)),
+                "유동성 리스크 " + ("%.1f" % liquidity_risk) + "점",
+                "매도 가능 수량 제한" if facts.get("sellableBlocked") else "",
+            ],
+            missing_labels,
+            definitions=relation_definitions,
+        ))
+    if sector_ratio >= 45 and (position_weight >= 10 or trend_score < -4 or pnl < 0):
+        score = 48 + min(26, max(0.0, sector_ratio - 35) * 0.8) + min(16, max(0.0, position_weight - 8) * 0.9) + (8 if trend_score < -4 else 0)
+        matches.append(_match(
+            "factor.crowding.v1",
+            score,
+            data_quality,
+            [
+                "업종 비중 " + ("%.1f" % sector_ratio) + "%",
+                "종목 비중 " + ("%.1f" % position_weight) + "%",
+                "시장/통화 " + str(facts.get("market") or "-") + "/" + str(facts.get("currency") or "-"),
+                "추세 점수 " + ("%.1f" % trend_score),
             ],
             missing_labels,
             definitions=relation_definitions,
@@ -1823,6 +2276,47 @@ def evaluate_position_relation_rules(
             ],
             missing_labels,
             reference_only=trend_score > 0 and flow_score > 0,
+            definitions=relation_definitions,
+        ))
+    data_conflict_active = (
+        (external_quality and external_quality < 60)
+        or external_errors >= 2
+        or str(facts.get("externalSignalFreshnessStatus") or "") == "stale"
+    )
+    if data_conflict_active:
+        score = 45 + min(22, max(0.0, 60 - external_quality) * 0.5 if external_quality else 8) + min(12, external_errors * 4) + min(12, len(missing_labels) * 3)
+        matches.append(_match(
+            "data.conflict.v1",
+            score,
+            data_quality,
+            [
+                "외부 신호 품질 " + ("%.1f" % external_quality) if external_quality else "외부 신호 품질 미확인",
+                "외부 신호 오류 " + str(int(external_errors)) + "건",
+                "신선도 " + str(facts.get("externalSignalFreshnessStatus") or "-"),
+                "부족 데이터 " + ", ".join(missing_labels[:4]) if missing_labels else "",
+            ],
+            missing_labels,
+            definitions=relation_definitions,
+        ))
+    macro_sensitive = any(token in str(facts.get("sector") or "") for token in ["반도체", "AI", "플랫폼", "디지털자산"]) or str(facts.get("currency") or "").upper() == "USD" or facts.get("isBtcSensitive")
+    macro_risk_active = macro_sensitive and (
+        (macro_dgs10 and macro_dgs10 >= 4.5)
+        or macro_spread < 0
+        or abs(btc_change24h) >= float(thresholds.get("externalBitcoinChange24hPct", 3.0) or 3.0)
+    )
+    if macro_risk_active:
+        score = 50 + (8 if macro_dgs10 >= 4.5 else 0) + (8 if macro_spread < 0 else 0) + min(18, abs(btc_change24h) * 2.0)
+        matches.append(_match(
+            "macro.regime.shift.v1",
+            score,
+            data_quality,
+            [
+                "10년 금리 " + ("%.2f" % macro_dgs10) if macro_dgs10 else "",
+                "10Y-2Y 스프레드 " + ("%.2f" % macro_spread) if macro_spread else "",
+                "BTC 24h " + ("%.1f" % btc_change24h) + "%" if btc_change24h else "",
+                "민감 섹터/통화 " + str(facts.get("sector") or "-") + "/" + str(facts.get("currency") or "-"),
+            ],
+            missing_labels,
             definitions=relation_definitions,
         ))
     btc_threshold24h = float(thresholds.get("externalBitcoinChange24hPct", 3.0) or 3.0)

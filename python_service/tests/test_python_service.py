@@ -1128,6 +1128,9 @@ class PythonServiceTests(unittest.TestCase):
             "currency": "KRW",
             "marketValue": 7000,
             "profitLossRate": -9,
+            "currentPrice": 94000,
+            "ma20": 100000,
+            "ma60": 90000,
             "ma20Distance": -6,
             "sector": "반도체",
         })
@@ -1138,6 +1141,9 @@ class PythonServiceTests(unittest.TestCase):
             "currency": "USD",
             "marketValue": 3000,
             "profitLossRate": 14,
+            "currentPrice": 210,
+            "ma20": 200,
+            "ma60": 180,
             "ma20Distance": 5,
             "sector": "AI/플랫폼",
         })
@@ -1147,6 +1153,8 @@ class PythonServiceTests(unittest.TestCase):
             "market": "US",
             "currency": "USD",
             "currentPrice": 180,
+            "ma20": 168,
+            "ma60": 150,
             "ma20Distance": 7,
             "sector": "반도체",
             "source": "watchlist",
@@ -1217,6 +1225,12 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("ActionCandidate", payload["tbox"]["classes"])
         self.assertIn("BlockedAction", payload["tbox"]["classes"])
         self.assertIn("AIValidation", payload["tbox"]["classes"])
+        self.assertIn("PriceBar", payload["tbox"]["classes"])
+        self.assertIn("KeyLevel", payload["tbox"]["classes"])
+        self.assertIn("ResearchEvidence", payload["tbox"]["classes"])
+        self.assertIn("Factor", payload["tbox"]["classes"])
+        self.assertIn("LiquidityProfile", payload["tbox"]["classes"])
+        self.assertIn("RelationStateSnapshot", payload["tbox"]["classes"])
         self.assertIn("HOLDS", payload["tbox"]["relationTypes"])
         self.assertIn("WATCHES", payload["tbox"]["relationTypes"])
         self.assertIn("IS_A", payload["tbox"]["relationTypes"])
@@ -1235,6 +1249,10 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("HAS_PRIMARY_ACTION", payload["tbox"]["relationTypes"])
         self.assertIn("BLOCKS_ACTION", payload["tbox"]["relationTypes"])
         self.assertIn("REQUIRES_NEXT_CHECK", payload["tbox"]["relationTypes"])
+        self.assertIn("HAS_FACTOR_EXPOSURE", payload["tbox"]["relationTypes"])
+        self.assertIn("LIMITED_BY_LIQUIDITY", payload["tbox"]["relationTypes"])
+        self.assertIn("MENTIONS_INSTRUMENT", payload["tbox"]["relationTypes"])
+        self.assertIn("MATERIAL_TO", payload["tbox"]["relationTypes"])
         self.assertGreater(payload["abox"]["entityCount"], 0)
         self.assertTrue(any(item.relation_type == "HOLDS" for item in graph.relations))
         self.assertTrue(any(item.relation_type == "WATCHES" for item in graph.relations))
@@ -1256,6 +1274,10 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(any(item.relation_type == "HAS_PRIMARY_ACTION" for item in graph.relations))
         self.assertTrue(any(item.relation_type == "BLOCKS_ACTION" for item in graph.relations))
         self.assertTrue(any(item.relation_type == "REQUIRES_NEXT_CHECK" for item in graph.relations))
+        self.assertTrue(any(item.relation_type == "HAS_FACTOR_EXPOSURE" for item in graph.relations))
+        self.assertTrue(any(item.relation_type == "LIMITED_BY_LIQUIDITY" for item in graph.relations))
+        self.assertTrue(any(item.relation_type == "MENTIONS_INSTRUMENT" for item in graph.relations))
+        self.assertTrue(any(item.relation_type == "MATERIAL_TO" for item in graph.relations))
         self.assertTrue(any(item.kind == "account" for item in graph.entities))
         self.assertTrue(any(item.kind == "position" for item in graph.entities))
         self.assertTrue(any(item.kind == "strategy" for item in graph.entities))
@@ -1274,6 +1296,11 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(any(item.kind == "blocked-action" for item in graph.entities))
         self.assertTrue(any(item.kind == "next-check" for item in graph.entities))
         self.assertTrue(any(item.kind == "trend-scenario" for item in graph.entities))
+        self.assertTrue(any(item.kind == "price-bar" for item in graph.entities))
+        self.assertTrue(any(item.kind == "key-level" for item in graph.entities))
+        self.assertTrue(any(item.kind == "liquidity-profile" for item in graph.entities))
+        self.assertTrue(any(item.kind == "factor" for item in graph.entities))
+        self.assertTrue(any(item.kind == "research-evidence" for item in graph.entities))
         self.assertTrue(any(item.kind == "price-metric" for item in graph.entities))
         self.assertTrue(any(item.kind == "model-score" for item in graph.entities))
         self.assertTrue(any(item.kind == "runtime-setting" for item in graph.entities))
@@ -1295,6 +1322,10 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("activeInvestmentOpinions", payload["aiInferencePacket"]["inputOrder"])
         self.assertIn("executionPlans", payload["aiInferencePacket"]["inputOrder"])
         self.assertIn("relationInfluences", payload["aiInferencePacket"]["inputOrder"])
+        self.assertIn("researchEvidence", payload["aiInferencePacket"]["inputOrder"])
+        self.assertIn("signalTransitions", payload["aiInferencePacket"]["inputOrder"])
+        self.assertIn("factorExposure", payload["aiInferencePacket"]["inputOrder"])
+        self.assertIn("liquidityConstraints", payload["aiInferencePacket"]["inputOrder"])
         self.assertGreater(payload["aiInferencePacket"]["graphInputs"]["activeOpinionCount"], 0)
         self.assertGreater(payload["aiInferencePacket"]["graphInputs"]["executionPlanCount"], 0)
         self.assertTrue(payload["activeInvestmentOpinions"])
@@ -1325,12 +1356,19 @@ class PythonServiceTests(unittest.TestCase):
         position = normalize_position({
             "symbol": "005930",
             "name": "삼성전자",
-            "marketValue": 1000,
+            "marketValue": 100,
             "profitLossRate": 1,
             "sector": "반도체",
         })
-        portfolio = portfolio_summary([position])
-        graph = build_portfolio_ontology([position], portfolio)
+        other = normalize_position({
+            "symbol": "AAPL",
+            "name": "Apple",
+            "marketValue": 900,
+            "profitLossRate": 2,
+            "sector": "AI/플랫폼",
+        })
+        portfolio = portfolio_summary([position, other])
+        graph = build_portfolio_ontology([position, other], portfolio)
         opinion = graph.opinion_for_symbol("005930")
         base_pressure = opinion.ontology_pressure
         signal_id = entity_id("external-signal", "regulatory-risk")
@@ -1354,6 +1392,52 @@ class PythonServiceTests(unittest.TestCase):
         updated = graph.opinion_for_symbol("005930")
         self.assertGreater(updated.ontology_pressure, base_pressure)
         self.assertTrue(any(item.get("label") == "규제 리스크" for item in updated.relation_influences))
+
+    def test_portfolio_ontology_adds_relation_state_transition_from_previous_snapshot(self):
+        position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "marketValue": 1000000,
+            "currentPrice": 290000,
+            "profitLossRate": -4.0,
+            "ma20": 300000,
+            "ma60": 295000,
+            "ma20Distance": -3.3,
+            "ma60Distance": -1.7,
+            "changeRate": -1.8,
+            "volumeRatio": 1.4,
+            "sector": "반도체",
+        })
+        portfolio = portfolio_summary([position], fx_rates={"KRW": 1})
+
+        graph = build_portfolio_ontology(
+            [position],
+            portfolio,
+            runtime_context={
+                "metadata": {
+                    "previousMonitorState": {
+                        "positions": {
+                            "005930": {
+                                "currentPrice": 304000,
+                                "profitLossRate": -1.0,
+                                "ma20Distance": 1.2,
+                                "ma60Distance": 0.8,
+                            }
+                        },
+                        "decisions": {
+                            "005930": {"selectedRuleId": "trend.recovery_attempt.v1", "exitPressure": 44}
+                        },
+                    }
+                }
+            },
+        )
+
+        self.assertTrue(any(item.kind == "relation-state" for item in graph.entities))
+        self.assertTrue(any(item.kind == "signal-transition" for item in graph.entities))
+        self.assertTrue(any(item.relation_type == "CHANGED_FROM" for item in graph.relations))
+        self.assertTrue(any(item.relation_type == "CONFIRMED_OVER" for item in graph.relations))
 
     def test_neo4j_ontology_repository_builds_relation_statements(self):
         position = normalize_position({
@@ -1489,6 +1573,49 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("WatchlistCandidate", stock.properties.get("tboxClasses"))
         self.assertIn("WATCHES", relation_types)
         self.assertEqual(2, len(graph.reasoning_cards))
+
+    def test_ontology_projection_recorder_persists_watchlist_only_snapshot(self):
+        watch = normalize_position({
+            "symbol": "NVDA",
+            "name": "NVIDIA",
+            "market": "US",
+            "currency": "USD",
+            "currentPrice": 180,
+            "ma20": 170,
+            "ma60": 150,
+            "ma20Distance": 5.8,
+            "ma60Distance": 20.0,
+            "sector": "반도체",
+            "source": "watchlist",
+        })
+        snapshot = AccountSnapshot(
+            "watch",
+            "관심",
+            "toss",
+            "mock",
+            "watchlist only",
+            utc_now_iso(),
+            portfolio_summary([]),
+            [],
+            [],
+            watchlist=[watch],
+        )
+
+        class FakeRepository:
+            def __init__(self):
+                self.graphs = []
+
+            def save_graph(self, graph):
+                self.graphs.append(graph)
+                return {"saved": True}
+
+        repository = FakeRepository()
+
+        result = PortfolioOntologyProjectionRecorder(repository).record_snapshot(snapshot)
+
+        self.assertTrue(result["saved"])
+        self.assertEqual(1, len(repository.graphs))
+        self.assertTrue(any(item.kind == "stock" and item.properties.get("source") == "watchlist" for item in repository.graphs[0].entities))
 
     def test_holding_decision_score_uses_flow_and_trend_context(self):
         other_position = normalize_position({
@@ -2169,6 +2296,53 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("하락 가속 대응 점검", context["decision"]["label"])
         self.assertEqual("trend.breakdown_acceleration.v1", context["decision"]["selectedRuleId"])
         self.assertTrue(context["promptContext"]["trendDynamics"]["breakdownAcceleration"])
+
+    def test_ontology_relation_rules_detect_temporal_failure_and_liquidity(self):
+        position = Position(
+            symbol="005930",
+            name="삼성전자",
+            market="KR",
+            currency="KRW",
+            quantity=20,
+            sellable_quantity=20,
+            market_value=5800000,
+            trading_value=50000000,
+            profit_loss_rate=-4.0,
+            current_price=290000,
+            ma20=300000,
+            ma60=295000,
+            ma20_distance=-3.3,
+            ma60_distance=-1.7,
+            ma20_slope=-0.8,
+            ma60_slope=-0.2,
+            change_rate=-1.8,
+            volume_ratio=1.5,
+            buy_volume=90,
+            sell_volume=150,
+            bid_ask_imbalance=-18,
+            sector="반도체",
+        )
+        previous = {
+            "currentPrice": 304000,
+            "profitLossRate": -1.0,
+            "ma20Distance": 1.2,
+            "ma60Distance": 0.8,
+        }
+
+        context = evaluate_position_relation_rules(
+            position,
+            portfolio_summary([position], fx_rates={"KRW": 1}),
+            previous_state=previous,
+            previous_decision={"selectedRuleId": "trend.recovery_attempt.v1", "exitPressure": 44},
+        )
+        active_ids = [item.get("rule_id") or item.get("ruleId") for item in context["activeRules"]]
+
+        self.assertIn("breakout.failure.v1", active_ids)
+        self.assertIn("support.retest.failed.v1", active_ids)
+        self.assertIn("liquidity.exit_capacity.v1", active_ids)
+        self.assertTrue(context["facts"]["hasPreviousState"])
+        self.assertLess(context["facts"]["ma20DistanceDeltaPct"], 0)
+        self.assertGreater(context["facts"]["liquidityRiskScore"], 0)
 
     def test_ontology_loss_guard_requires_negative_pnl(self):
         position = Position(

@@ -145,6 +145,7 @@ class DecisionItem:
     ontology_worldview: Dict[str, object] = field(default_factory=dict)
     relation_rule_context: Dict[str, object] = field(default_factory=dict)
     ai_prompt_context: Dict[str, object] = field(default_factory=dict)
+    active_investment_opinion: Dict[str, object] = field(default_factory=dict)
     ai_context: Dict[str, object] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, object]:

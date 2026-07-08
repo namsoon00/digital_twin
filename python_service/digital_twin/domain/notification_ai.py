@@ -104,6 +104,46 @@ def relation_context_value(context: Dict[str, object]) -> Dict[str, object]:
     return relation_context if isinstance(relation_context, dict) else {}
 
 
+def source_alert_event_items(context: Dict[str, object]) -> List[Dict[str, object]]:
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    raw_items = metadata.get("sourceAlertEvents") or context.get("sourceAlertEvents") or []
+    if not isinstance(raw_items, list):
+        return []
+    return [item for item in raw_items if isinstance(item, dict)]
+
+
+def active_investment_opinion_value(context: Dict[str, object]) -> Dict[str, object]:
+    if not isinstance(context, dict):
+        return {}
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    containers = [
+        context,
+        metadata,
+        context.get("ontologyReviewContext") if isinstance(context.get("ontologyReviewContext"), dict) else {},
+        metadata.get("ontologyReviewContext") if isinstance(metadata.get("ontologyReviewContext"), dict) else {},
+        context.get("aiContext") if isinstance(context.get("aiContext"), dict) else {},
+        metadata.get("aiContext") if isinstance(metadata.get("aiContext"), dict) else {},
+    ]
+    for container in containers:
+        if not isinstance(container, dict):
+            continue
+        for key in ("activeInvestmentOpinion", "active_investment_opinion"):
+            value = container.get(key)
+            if isinstance(value, dict) and value:
+                return value
+            if isinstance(value, list):
+                for item in value:
+                    if isinstance(item, dict) and item:
+                        return item
+    for event in source_alert_event_items(context):
+        event_metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
+        for container in (event, event_metadata):
+            value = container.get("activeInvestmentOpinion") if isinstance(container, dict) else {}
+            if isinstance(value, dict) and value:
+                return value
+    return {}
+
+
 def relation_facts(context: Dict[str, object]) -> Dict[str, object]:
     facts = relation_context_value(context).get("facts")
     return facts if isinstance(facts, dict) else {}
@@ -165,6 +205,20 @@ def compact_text(value: object, max_len: int = 96) -> str:
     if max_len > 3 and len(text) > max_len:
         return text[: max_len - 3].rstrip() + "..."
     return text
+
+
+def active_opinion_evidence_text(opinion: Dict[str, object], key: str, limit: int = 3) -> str:
+    rows = opinion.get(key) if isinstance(opinion.get(key), list) else []
+    titles: List[str] = []
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or item.get("summary") or item.get("source") or "").strip()
+        if title and title not in titles:
+            titles.append(compact_text(title, 72))
+        if len(titles) >= limit:
+            break
+    return " / ".join(titles)
 
 
 def trend_dynamics_summary(context: Dict[str, object]) -> str:
@@ -290,6 +344,7 @@ def notification_ai_prompt_context(
     policy = str(settings.get("aiPromptPolicy") or default_ai_prompt_policy_text()).strip()
     relation_context = relation_context_value(context)
     all_data = sanitized_prompt_data(context)
+    active_opinion = active_investment_opinion_value(context)
     return {
         "promptVersion": template.version,
         "promptRegistryVersion": AI_PROMPT_REGISTRY_VERSION,
@@ -318,11 +373,8 @@ def notification_ai_prompt_context(
             "activeRules": active_rule_items(context),
             "relationFacts": sanitized_prompt_data(relation_context.get("facts") if isinstance(relation_context, dict) else {}),
             "trendDynamics": sanitized_prompt_data(relation_trend_dynamics(context)),
-            "sourceAlertEvents": sanitized_prompt_data(
-                (context.get("metadata") if isinstance(context.get("metadata"), dict) else {}).get("sourceAlertEvents")
-                or context.get("sourceAlertEvents")
-                or []
-            ),
+            "activeInvestmentOpinion": sanitized_prompt_data(active_opinion),
+            "sourceAlertEvents": sanitized_prompt_data(source_alert_event_items(context)),
             "allAvailableData": all_data,
         },
     }
@@ -353,6 +405,14 @@ def opinion_lines_for_type(message_type: str, context: Dict[str, object]) -> Lis
     missing = missing_data_labels(context)
     rules = relation_labels(context)
     target = target_label(context)
+    active_opinion = active_investment_opinion_value(context)
+    active_label = str(active_opinion.get("actionLabel") or active_opinion.get("action") or "").strip()
+    active_conviction = active_opinion.get("conviction")
+    active_thesis = str(active_opinion.get("thesis") or "").strip()
+    active_next_check = str(active_opinion.get("nextCheck") or "").strip()
+    active_invalidation = str(active_opinion.get("invalidationCondition") or "").strip()
+    active_evidence = active_opinion_evidence_text(active_opinion, "evidence") if active_opinion else ""
+    active_counter = active_opinion_evidence_text(active_opinion, "counterEvidence") if active_opinion else ""
 
     if message_type == "investmentInsight":
         insight = context.get("ontologyInsight") if isinstance(context, dict) else {}
@@ -378,13 +438,15 @@ def opinion_lines_for_type(message_type: str, context: Dict[str, object]) -> Lis
         else:
             source_labels = []
         source_text = ", ".join(source_labels) if source_labels else (line_value(lines, "근거 신호") or "관계 신호")
-        stance = "실행보다 관찰 우선"
+        stance = active_label or "실행보다 관찰 우선"
         if "기회" in insight_label or "매수" in (action_line + thesis):
             stance = "소액 분할매수 검토"
         if any(term in (insight_label + thesis + action_line + risk_line) for term in ["리스크", "손실", "축소", "손절", "보류"]):
             stance = "추가매수 보류, 손실·비중 관리 우선"
         if any(term in (insight_label + thesis + action_line) for term in ["분할매도", "익절", "리밸런싱"]):
             stance = "분할매도·비중 조정 우선"
+        if active_label:
+            stance = active_label + (" · 확신 " + str(active_conviction) + "%" if active_conviction not in (None, "") else "")
         summary_bits = [part for part in [
             ("현재가 " + current_price) if current_price else "",
             ("평단가 " + average_price) if average_price else "",
@@ -394,10 +456,16 @@ def opinion_lines_for_type(message_type: str, context: Dict[str, object]) -> Lis
             "판단: " + stance,
             "해석: " + target + "의 " + insight_label + "입니다. " + (thesis or "가격·수급·추세·외부 신호가 하나의 인사이트로 합성됐습니다."),
         ]
+        if active_thesis:
+            result.append("투자 의견 근거: " + active_thesis)
         if summary_bits:
             result.append("가격 위치: " + ", ".join(summary_bits))
-        if flow_line or investor_line or trend_line:
+        if active_evidence:
+            result.append("근거: " + active_evidence)
+        elif flow_line or investor_line or trend_line:
             result.append("근거: " + " / ".join(part for part in [flow_line, investor_line, trend_line] if part))
+        if active_counter:
+            result.append("반대 근거: " + active_counter)
         if trend_dynamics_text:
             result.append("추세 동역학: " + trend_dynamics_text)
         if risk_line:
@@ -405,9 +473,12 @@ def opinion_lines_for_type(message_type: str, context: Dict[str, object]) -> Lis
         if news_text:
             result.append("뉴스·공시: " + news_text)
         result.extend(disclosure_lines)
+        opinion_text = active_label or action_line or stance
+        if active_invalidation:
+            opinion_text += ". 무효화 조건: " + active_invalidation
         result.extend([
-            "의견: " + (action_line or stance) + ". " + source_text + "가 같은 방향으로 유지되는지 확인하고, 반대 신호가 있으면 실행 강도를 낮추세요.",
-            "다음 확인: " + (next_check or "다음 조회에서도 같은 관계 규칙이 유지되는지, 뉴스·공시 원문에 반대 근거가 있는지 확인하세요."),
+            "의견: " + opinion_text + ". " + source_text + "가 같은 방향으로 유지되는지 확인하고, 반대 신호가 있으면 실행 강도를 낮추세요.",
+            "다음 확인: " + (active_next_check or next_check or "다음 조회에서도 같은 관계 규칙이 유지되는지, 뉴스·공시 원문에 반대 근거가 있는지 확인하세요."),
         ])
         return result
     if message_type == "holdingTiming":
@@ -425,8 +496,17 @@ def opinion_lines_for_type(message_type: str, context: Dict[str, object]) -> Lis
             situation_parts.append("추세 " + trend)
         situation = target + "는 " + " · ".join(situation_parts) if situation_parts else target + "에서 " + rule_text + " 조건이 감지됐습니다."
         news_text = news_summary_text(context)
-        next_check = action or "비중 확대 여부보다 손실 기준, 분할 대응 기준, 추세 회복 조건을 먼저 확인하세요."
-        result = ["상황: " + situation]
+        next_check = active_next_check or action or "비중 확대 여부보다 손실 기준, 분할 대응 기준, 추세 회복 조건을 먼저 확인하세요."
+        result = []
+        if active_label:
+            result.append("판단: " + active_label + (" · 확신 " + str(active_conviction) + "%" if active_conviction not in (None, "") else ""))
+        result.append("상황: " + situation)
+        if active_thesis:
+            result.append("투자 의견 근거: " + active_thesis)
+        if active_evidence:
+            result.append("근거: " + active_evidence)
+        if active_counter:
+            result.append("반대 근거: " + active_counter)
         if flow or trend:
             result.append("수급·추세: " + " / ".join(part for part in [flow, trend] if part))
         if trend_dynamics_text:
@@ -437,19 +517,32 @@ def opinion_lines_for_type(message_type: str, context: Dict[str, object]) -> Lis
             result.append("뉴스·공시: " + news_text)
         result.extend(disclosure_analysis_opinion_lines(context))
         external_phrase = "뉴스/공시" if news_text else "다음 조회 데이터"
+        opinion_text = active_label or action or (state or "보유 판단") + " 기준을 우선 확인"
+        if active_invalidation:
+            opinion_text += ". 무효화 조건: " + active_invalidation
         result.extend([
-            "의견: " + (action or (state or "보유 판단") + " 기준을 우선 확인") + ". 가격·수급·추세와 " + external_phrase + "가 같은 방향인지 확인한 뒤 대응 강도를 정하세요.",
+            "의견: " + opinion_text + ". 가격·수급·추세와 " + external_phrase + "가 같은 방향인지 확인한 뒤 대응 강도를 정하세요.",
             "다음 확인: " + next_check,
         ])
         return result
     if message_type == "monitorDecisionChange":
         previous_value = line_value(lines, "이전")
         current_value = line_value(lines, "현재")
-        return [
+        result = []
+        if active_label:
+            result.append("판단: " + active_label + (" · 확신 " + str(active_conviction) + "%" if active_conviction not in (None, "") else ""))
+        result.extend([
             "해석: 판단명이 바뀐 알림입니다. " + " -> ".join(part for part in [previous_value, current_value] if part),
-            "의견: 점수 변화만 보지 말고 선택 규칙과 성립 규칙 조합이 바뀌었는지 먼저 확인해야 합니다.",
-            "다음 확인: 같은 판단이 다음 조회에서도 유지되는지, 임계값 근처 흔들림인지 구분하세요.",
-        ]
+        ])
+        if active_thesis:
+            result.append("투자 의견 근거: " + active_thesis)
+        if active_counter:
+            result.append("반대 근거: " + active_counter)
+        result.extend([
+            "의견: " + (active_label or "점수 변화만 보지 말고 선택 규칙과 성립 규칙 조합이 바뀌었는지 먼저 확인해야 합니다.") + (". 무효화 조건: " + active_invalidation if active_invalidation else ""),
+            "다음 확인: " + (active_next_check or "같은 판단이 다음 조회에서도 유지되는지, 임계값 근처 흔들림인지 구분하세요."),
+        ])
+        return result
     if message_type in {"modelBuy", "watchlistBuyCandidate"}:
         return [
             "해석: 매수 후보 기준을 통과했습니다.",

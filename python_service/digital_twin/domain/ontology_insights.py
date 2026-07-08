@@ -106,6 +106,7 @@ ONTOLOGY_CONTEXT_KEYS = (
     "ontologyPromptContext",
     "ontologyOpinion",
     "ontologyWorldview",
+    "activeInvestmentOpinion",
     "ontologyReviewContext",
 )
 PROMOTED_REFERENCE_LABELS = (
@@ -343,6 +344,17 @@ def promoted_ontology_context(events: List[AlertEvent]) -> Dict[str, object]:
     return promoted
 
 
+def promoted_active_opinion(promoted: Dict[str, object]) -> Dict[str, object]:
+    value = promoted.get("activeInvestmentOpinion") if isinstance(promoted, dict) else {}
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, list):
+        for item in value:
+            if isinstance(item, dict) and item:
+                return item
+    return {}
+
+
 def grouped_signal_events(events: Iterable[AlertEvent]) -> Dict[str, List[AlertEvent]]:
     groups: Dict[str, List[AlertEvent]] = {}
     for event in investment_signal_events(events):
@@ -368,6 +380,20 @@ def build_investment_insight_events(snapshot: AccountSnapshot, signal_events: It
         next_check = next_check_for_insight(insight_type, source_types)
         reference_lines = promoted_reference_lines(events)
         source_lines = unique_preserve(compact_source_line(event) for event in events)[:7]
+        promoted_context = promoted_ontology_context(events)
+        active_opinion = promoted_active_opinion(promoted_context)
+        active_label = str(active_opinion.get("actionLabel") or active_opinion.get("action") or "").strip()
+        active_conviction = active_opinion.get("conviction")
+        active_thesis = str(active_opinion.get("thesis") or "").strip()
+        active_lines = []
+        if active_label:
+            active_lines.append(
+                "적극 의견: "
+                + active_label
+                + (" · 확신 " + compact_number(float(active_conviction or 0)) + "%" if active_conviction not in (None, "") else "")
+            )
+        if active_thesis:
+            active_lines.append("의견 근거: " + active_thesis)
         source_key = "|".join(sorted(source_types))
         score_bucket = str(int(round(score / 5.0) * 5))
         insight_id = ":".join([snapshot.account_id, "ontology-insight", subject, insight_type, source_key, score_bucket])
@@ -418,7 +444,7 @@ def build_investment_insight_events(snapshot: AccountSnapshot, signal_events: It
             },
             "legacyAlertTypesRole": "evidence-only",
         }
-        metadata.update(promoted_ontology_context(events))
+        metadata.update(promoted_context)
         insights.append(AlertEvent(
             snapshot.account_id,
             snapshot.account_label,
@@ -430,6 +456,7 @@ def build_investment_insight_events(snapshot: AccountSnapshot, signal_events: It
                 "인사이트 유형: " + insight_label,
                 *reference_lines,
                 "핵심 결론: " + thesis,
+                *active_lines,
                 "근거 신호: " + ", ".join(source_labels),
                 *["근거: " + line for line in source_lines],
                 "다음 확인: " + next_check,

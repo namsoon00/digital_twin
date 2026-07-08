@@ -3,6 +3,7 @@ import re
 from dataclasses import asdict, dataclass, field
 from typing import Dict, Iterable, List, Optional
 
+from .investment_research import build_active_investment_opinion
 from .market_data import clamp, number
 from .ontology_tbox import (
     BOUNDED_CONTEXTS,
@@ -305,6 +306,11 @@ class PortfolioOntology:
             "beliefs": [item.to_dict() for item in self.beliefs],
             "opinions": [item.to_dict() for item in self.opinions],
             "reasoningCards": list(self.reasoning_cards),
+            "activeInvestmentOpinions": [
+                dict((item.properties or {}).get("activeInvestmentOpinion") or {})
+                for item in self.entities
+                if item.kind == "active-opinion"
+            ],
             "aiInferencePacket": build_ai_inference_packet(self),
             "worldview": dict(self.worldview or {}),
             "prompt": self.prompt,
@@ -1571,6 +1577,34 @@ def build_portfolio_ontology(
             "confidence": number(opinion.conviction),
             "ontologyPressure": number(opinion.ontology_pressure),
         })
+        active_relation_context = {
+            "decision": {
+                "score": number(opinion.ontology_pressure),
+                "label": opinion.action,
+                "tone": opinion.tone,
+                "actionGroup": "lossControl" if opinion.tone in {"danger", "caution"} else "holdWatch",
+                "actionLevel": "action" if number(opinion.ontology_pressure) >= 70 else "review" if number(opinion.ontology_pressure) >= 55 else "watch",
+            },
+            "activeRules": [],
+            "missingData": [],
+        }
+        active_opinion_payload = build_active_investment_opinion(
+            position,
+            relation_context=active_relation_context,
+            ontology_opinion=opinion.to_dict(),
+            legacy_model=legacy,
+            external_signals=external_signals,
+        ).to_dict()
+        active_opinion_id = add_entity(graph, "active-opinion", symbol, (position.name or symbol) + " 적극 투자 의견", {
+            "tboxClass": "Opinion",
+            "tboxClasses": ["Opinion", "AIReview", "Insight"],
+            "symbol": symbol,
+            "source": source,
+            "action": active_opinion_payload.get("action"),
+            "actionLabel": active_opinion_payload.get("actionLabel"),
+            "conviction": active_opinion_payload.get("conviction"),
+            "activeInvestmentOpinion": active_opinion_payload,
+        })
         horizon_id = add_entity(graph, "signal-horizon", symbol + ":" + source, "보유 점검 기간" if holding else "관심 관찰 기간", {
             "tboxClass": "SignalHorizon",
             "symbol": symbol,
@@ -1580,6 +1614,16 @@ def build_portfolio_ontology(
         })
         add_relation(graph, stock_id, thesis_id, "BASED_ON_THESIS", weight=round(number(opinion.conviction) / 100, 4), properties={"source": "ontology-opinion"})
         add_relation(graph, strategy_id, thesis_id, "BASED_ON_THESIS", weight=round(number(opinion.conviction) / 100, 4), properties={"source": "ontology-opinion"})
+        add_relation(graph, stock_id, active_opinion_id, "HAS_OPINION", weight=round(number(active_opinion_payload.get("conviction")) / 100, 4), properties={
+            "source": "active-investment-opinion",
+            "polarity": "context",
+            "aiInfluenceLabel": str(active_opinion_payload.get("actionLabel") or active_opinion_payload.get("action") or "적극 투자 의견"),
+        })
+        add_relation(graph, active_opinion_id, thesis_id, "IMPACTS_OPINION", weight=round(number(active_opinion_payload.get("conviction")) / 100, 4), properties={
+            "source": "active-investment-opinion",
+            "opinionImpact": number(active_opinion_payload.get("conviction")) / 10,
+            "aiInfluenceLabel": str(active_opinion_payload.get("thesis") or "적극 투자 의견"),
+        })
         add_relation(graph, stock_id, horizon_id, "HAS_TIME_HORIZON", weight=1.0, properties={"source": "ontology-opinion"})
         add_relation(graph, thesis_id, horizon_id, "APPLIES_TO_HORIZON", weight=1.0, properties={"source": "ontology-opinion"})
         weight = position_weight(position, portfolio)
@@ -1998,13 +2042,14 @@ def build_reasoning_cards(graph: PortfolioOntology) -> List[Dict[str, object]]:
 def build_ai_inference_packet(graph: PortfolioOntology) -> Dict[str, object]:
     pipeline_count = len([item for item in graph.entities if item.kind == "data-pipeline"])
     insight_count = len([item for item in graph.entities if item.kind == "insight"])
+    active_opinion_count = len([item for item in graph.entities if item.kind == "active-opinion"])
     return {
         "contract": "investment-ontology-ai-inference-v1",
         "promptVersion": ONTOLOGY_PROMPT_VERSION,
         "role": "ontology-first-investment-opinion",
         "legacyModelRole": "supporting-evidence",
         "notificationRole": "insight-driven-dispatch",
-        "inputOrder": ["tbox", "boundedContexts", "abox", "operationalOntology", "reasoningCards", "relationInfluences", "insights", "relations", "evidence", "beliefs", "opinions"],
+        "inputOrder": ["tbox", "boundedContexts", "abox", "operationalOntology", "reasoningCards", "relationInfluences", "insights", "activeInvestmentOpinions", "relations", "evidence", "beliefs", "opinions"],
         "reasoningCardCount": len(graph.reasoning_cards),
         "reasoningCardIds": [item.get("id") for item in graph.reasoning_cards],
         "graphInputs": {
@@ -2016,11 +2061,13 @@ def build_ai_inference_packet(graph: PortfolioOntology) -> Dict[str, object]:
             "opinionCount": len(graph.opinions),
             "pipelineCount": pipeline_count,
             "insightCount": insight_count,
+            "activeOpinionCount": active_opinion_count,
         },
         "outputSchema": {
             "portfolioView": "string",
             "relationThesis": "string",
             "companyOpinions": ["symbol", "action", "thesis", "relationInfluences", "contradictions", "nextChecks"],
+            "activeInvestmentOpinions": ["symbol", "action", "conviction", "evidence", "counterEvidence", "invalidationCondition"],
             "insightDispatch": ["subject", "insightType", "novelty", "confidence", "dispatchDecision"],
             "missingDataImpact": ["string"],
         },
@@ -2029,7 +2076,8 @@ def build_ai_inference_packet(graph: PortfolioOntology) -> Dict[str, object]:
             "보유 종목 HOLDS와 관심 종목 WATCHES를 다른 판단 단계로 설명합니다.",
             "기존 점수 모델은 보조 근거로만 사용합니다.",
             "알림 타입 이름보다 온톨로지 인사이트, 신규성, 쿨다운, 억제 정책을 우선합니다.",
-            "매수/매도 명령을 확정하지 않고 확인 기준과 시나리오를 제시합니다.",
+            "BUY, ADD, HOLD, TRIM, SELL, AVOID 중 하나의 투자 의견을 고르되 자동 주문 지시로 표현하지 않습니다.",
+            "뉴스·공시·SEC/OpenDART 출처와 반대 근거, 무효화 조건을 함께 제시합니다.",
         ],
     }
 
@@ -2096,6 +2144,11 @@ def prompt_payload(graph: PortfolioOntology) -> Dict[str, object]:
         "aiInferencePacket": build_ai_inference_packet(graph),
         "reasoningCards": list(graph.reasoning_cards),
         "insights": [item.to_dict() for item in graph.entities if item.kind == "insight"],
+        "activeInvestmentOpinions": [
+            dict((item.properties or {}).get("activeInvestmentOpinion") or {})
+            for item in graph.entities
+            if item.kind == "active-opinion"
+        ],
         "operationalOntology": dict((graph.worldview or {}).get("operationalOntology") or {}),
         "opinions": [item.to_dict() for item in graph.opinions],
         "relations": [item.to_dict() for item in graph.relations[:80]],
@@ -2110,8 +2163,9 @@ def build_investment_opinion_prompt(graph: PortfolioOntology) -> str:
         "너는 투자전략 관계 분석 데이터를 읽는 AI 투자 의견 리뷰어다.",
         "규칙 구조는 투자 핵심, 관측 데이터, 전략 가설, 리스크, 추론 인사이트, 운영/알림 바운디드 컨텍스트로 나뉜 세계관이다.",
         "현재 데이터는 계좌의 실제 보유, 근거, 판단 근거, 운영 정책, 의견 기록이다.",
-        "매수/매도 명령을 확정하지 말고, 포트폴리오 투자 관점, 관계, 반대 신호, 데이터 공백을 분석해라.",
+        "제공된 근거 안에서 BUY, ADD, HOLD, TRIM, SELL, AVOID 중 하나의 투자 의견을 반드시 고르되 자동 주문 지시로 표현하지 마라.",
         "기존 점수 모델은 보조 데이터로만 사용하고, 최종 판단은 관계 규칙과 근거 충돌을 기준으로 설명해라.",
+        "뉴스, 공시, SEC/OpenDART 근거와 출처 URL을 적극적으로 반영하고, 반대 근거와 무효화 조건을 함께 제시해라.",
         "새 관측값이나 관계가 추가되면 어떤 투자 가설, 리스크, 인사이트, 알림 정책에 영향을 주는지 먼저 추론해라.",
         "알림은 알림 타입별 주기가 아니라 온톨로지 인사이트의 신규성, 신뢰도, 쿨다운, 억제 정책으로 설명해라.",
         "계좌번호, API 키, 토큰, 개인 식별정보를 추정하거나 요청하지 마라.",

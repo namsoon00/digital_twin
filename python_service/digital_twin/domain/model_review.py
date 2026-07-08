@@ -53,6 +53,9 @@ class ModelReviewJob:
         decision_change = metadata.get("decisionChangeContext") or metadata.get("decisionChange")
         if isinstance(decision_change, dict) and decision_change:
             review_context["decisionChange"] = dict(decision_change)
+        active_opinion = metadata.get("activeInvestmentOpinion")
+        if isinstance(active_opinion, dict) and active_opinion:
+            review_context["activeInvestmentOpinion"] = dict(active_opinion)
         return cls(
             job_id=uuid.uuid5(uuid.NAMESPACE_URL, "digital-twin:model-review:" + seed).hex,
             account_id=str(payload.get("accountId") or ""),
@@ -153,7 +156,8 @@ def build_model_review_prompt(job: ModelReviewJob) -> str:
     return "\n".join([
         "너는 투자 판단 기준을 지속적으로 개선하는 금융 데이터 리뷰어다.",
         "이번 모델은 단순 점수 계산이 아니라 관계 규칙, 근거, 부족 데이터, 근거끼리의 충돌을 우선한다.",
-        "매수/매도 지시가 아니라 판단 변화의 원인, 데이터 검증, 다음 실험을 분석한다.",
+        "적극 투자 의견이 있으면 BUY/ADD/HOLD/TRIM/SELL/AVOID 선택 근거, 반대 근거, 무효화 조건을 검토한다.",
+        "자동 주문 지시가 아니라 판단 변화의 원인, 데이터 검증, 다음 실험을 분석한다.",
         "한국어로 텔레그램 메시지에 맞게 간결하지만 충분히 분석해라. 영어 또는 어려운 용어는 쉬운 한국어로 풀어 써라.",
         "메시지 제목에는 계정명이나 계정 ID를 넣지 마라. 계정 정보는 전송 라우팅에만 사용한다.",
         "메시지 첫 줄에는 종목코드만 쓰지 말고 반드시 종목명 / 종목코드 형태의 대상을 먼저 써라.",

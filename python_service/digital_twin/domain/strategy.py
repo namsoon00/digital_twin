@@ -3,6 +3,7 @@ import math
 from typing import Dict, Iterable, List
 
 from .market_data import clamp, number
+from .investment_research import build_active_investment_opinion
 from .ontology import ONTOLOGY_PROMPT_VERSION, build_portfolio_ontology, build_position_opinion
 from .ontology_rules import DEFAULT_RELATION_THRESHOLDS, evaluate_position_relation_rules, relation_thresholds_from_settings
 from .parsing import parse_assignments
@@ -465,11 +466,13 @@ def decision_for_position(
     ontology_worldview: Dict[str, object] = None,
     ontology_prompt: str = "",
     relation_context: Dict[str, object] = None,
+    external_signals: Dict[str, object] = None,
 ) -> DecisionItem:
     payload = legacy_payload or legacy_decision_payload(position, portfolio, strategy_model)
     relation_context = relation_context or evaluate_position_relation_rules(
         position,
         portfolio,
+        external_signals=external_signals or {},
         settings=getattr(strategy_model, "settings", {}) if strategy_model else {},
         legacy_model=payload,
     )
@@ -486,6 +489,13 @@ def decision_for_position(
     opinion = ontology_opinion or build_position_opinion(position, portfolio, payload)
     opinion_payload = opinion.to_dict()
     worldview = dict(ontology_worldview or {})
+    active_opinion = build_active_investment_opinion(
+        position,
+        relation_context=relation_context,
+        ontology_opinion=opinion_payload,
+        legacy_model=payload,
+        external_signals=external_signals or {},
+    ).to_dict()
     return DecisionItem(
         symbol=position.symbol,
         name=position.name,
@@ -505,12 +515,14 @@ def decision_for_position(
         ontology_worldview=worldview,
         relation_rule_context=relation_context,
         ai_prompt_context=prompt_context,
+        active_investment_opinion=active_opinion,
         ai_context={
             "promptVersion": prompt_context.get("promptVersion") or ONTOLOGY_PROMPT_VERSION,
             "role": "ontology-relation-rule-ai-review",
             "legacyModelRole": "supporting-evidence",
             "worldview": worldview,
             "opinion": opinion_payload,
+            "activeInvestmentOpinion": active_opinion,
             "prompt": ontology_prompt,
             "relationRuleContext": relation_context,
             "promptContext": prompt_context,
@@ -738,5 +750,6 @@ def decisions_for_positions(
             ontology_worldview=ontology.worldview,
             ontology_prompt=ontology.prompt,
             relation_context=relation_context,
+            external_signals=external_signals or {},
         ))
     return sorted(decisions, key=lambda item: (-item.exit_pressure, item.symbol))

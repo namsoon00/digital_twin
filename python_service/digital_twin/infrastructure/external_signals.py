@@ -18,9 +18,9 @@ JsonFetcher = Callable[[str, Dict[str, str]], object]
 DISABLED_SETTING_VALUES = {"0", "false", "no", "off", "disabled"}
 
 
-def default_json_fetcher(url: str, headers: Dict[str, str] = None) -> Dict[str, object]:
+def default_json_fetcher(url: str, headers: Dict[str, str] = None, timeout: float = 12.0) -> Dict[str, object]:
     request = urllib.request.Request(url, headers=headers or {})
-    with urllib.request.urlopen(request, timeout=12) as response:
+    with urllib.request.urlopen(request, timeout=max(0.5, float(timeout or 12.0))) as response:
         raw = response.read().decode("utf-8")
         return json.loads(raw) if raw else {}
 
@@ -156,9 +156,13 @@ class ExternalSignalProvider:
     ):
         self.settings = settings or runtime_settings()
         self.cache = cache or SQLiteExternalSignalCache()
-        self.fetch_json = fetch_json or default_json_fetcher
+        self.fetch_json = fetch_json or self.default_fetch_json
         self.sleep = sleep or time.sleep
         self.provider_state: Dict[str, object] = {}
+
+    def default_fetch_json(self, url: str, headers: Dict[str, str] = None) -> Dict[str, object]:
+        timeout = number(self.settings.get("externalApiTimeoutSeconds")) or 3.0
+        return default_json_fetcher(url, headers, timeout=timeout)
 
     def signals_for_positions(self, positions: Iterable[Position]) -> Dict[str, object]:
         position_list = list(positions)

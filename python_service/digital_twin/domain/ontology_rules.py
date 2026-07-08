@@ -2,6 +2,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Dict, Iterable, List, Optional
 
 from .market_data import clamp, number
+from .investment_research import research_evidence_from_facts
 from .message_types import DEFAULT_RELATION_RULE_THRESHOLDS
 from .parsing import parse_assignments
 from .portfolio import PortfolioSummary, Position, expects_kr_microstructure_signals
@@ -301,9 +302,9 @@ PROMPT_OUTPUT_SCHEMA = {
 
 COMMON_PROMPT_GUARDRAILS = [
     "제공되지 않은 값은 추정하지 않습니다.",
-    "매수/매도 단정 대신 분할매수, 추가매수 보류, 분할축소, 보유 유지 같은 행동 후보와 확인 기준을 함께 제시합니다.",
+    "BUY, ADD, HOLD, TRIM, SELL, AVOID 중 하나의 투자 의견을 분명히 고르되 자동 주문 지시로 쓰지 않습니다.",
     "알림 발송 우선도와 투자 판단을 섞지 않습니다.",
-    "뉴스·공시 데이터가 있으면 가격·수급·추세 판단과 연결해 적극적으로 해석합니다.",
+    "뉴스·공시 데이터가 있으면 가격·수급·추세 판단과 연결해 적극적으로 해석하고 반대 근거와 무효화 조건을 함께 제시합니다.",
 ]
 
 
@@ -339,14 +340,14 @@ DEFAULT_PROMPT_TEMPLATES = [
         "investmentInsight",
         "온톨로지 투자 인사이트 AI 의견",
         "보유, 관심종목, 외부 신호, 기존 모델 신호가 만든 관계 조합을 하나의 투자 인사이트로 해석합니다.",
-        "인사이트 유형, 핵심 결론, 근거 신호, 원본 신호, 부족 데이터, 뉴스·공시를 보고 지금 우선할 행동 후보와 보류 조건을 제시한다.",
-        system_prompt="너는 투자 지시자가 아니라 온톨로지 관계 그래프를 해석하는 포트폴리오 관제 분석가다. 소극적 요약보다 현재 우선순위와 행동 후보를 분명히 말한다.",
+        "인사이트 유형, 핵심 결론, 근거 신호, 원본 신호, 부족 데이터, 뉴스·공시를 보고 BUY, ADD, HOLD, TRIM, SELL, AVOID 중 하나의 투자 의견과 보류/무효화 조건을 제시한다.",
+        system_prompt="너는 자동 주문 지시자가 아니라 온톨로지 관계 그래프를 해석하는 포트폴리오 관제 분석가다. 소극적 요약보다 현재 투자 의견과 우선순위를 분명히 말한다.",
         guardrails=[
-            "개별 점수 하나로 매수/매도 결론을 내리지 않습니다.",
+            "개별 점수 하나가 아니라 관계 규칙, 뉴스·공시, 포트폴리오 노출을 종합해 하나의 투자 의견을 고릅니다.",
             "sourceSignalTypes와 ontologyInsight를 우선 근거로 사용합니다.",
             "상충 신호, 데이터 신뢰도, 포트폴리오 노출을 분리해 설명합니다.",
             "새 관계가 다음 데이터 업데이트에서도 유지되는지 확인 기준을 제시합니다.",
-            "뉴스·공시가 있으면 핵심 영향, 반대 가능성, 원문 확인 항목을 나눠 말합니다.",
+            "뉴스·공시가 있으면 핵심 영향, 반대 가능성, 원문 확인 항목, 무효화 조건을 나눠 말합니다.",
         ],
     ),
     _prompt(
@@ -383,13 +384,13 @@ DEFAULT_PROMPT_TEMPLATES = [
         "holdingTiming",
         "보유 타이밍 AI 분석",
         "보유 종목의 현재 가격, 수급, 추세, 공시, 뉴스 헤드라인을 관계 규칙과 함께 종합해 대응 우선순위를 설명합니다.",
-        "대상 종목, 성립한 관계 규칙, 가격·수급·추세, OpenDART 공시, 뉴스 헤드라인, 부족 데이터를 보고 추가매수 보류/분할축소/분할매수 후보/보유 유지 중 현재 우선순위를 제시한다.",
+        "대상 종목, 성립한 관계 규칙, 가격·수급·추세, OpenDART 공시, 뉴스 헤드라인, 부족 데이터를 보고 BUY, ADD, HOLD, TRIM, SELL, AVOID 중 하나의 투자 의견과 현재 우선순위를 제시한다.",
         guardrails=[
             "제공되지 않은 값은 추정하지 않습니다.",
-            "매수/매도 단정 대신 행동 후보와 확인 기준을 함께 제시합니다.",
+            "투자 의견은 분명히 말하되 자동 주문 지시로 표현하지 않습니다.",
             "뉴스나 공시가 없으면 있다고 가정하지 않습니다.",
             "공식 점수보다 관계 규칙, 근거, 부족 데이터를 우선합니다.",
-            "공시와 뉴스가 있으면 제목, 접수일, 출처, 가격·수급 반응을 연결해 적극적으로 해석합니다.",
+            "공시와 뉴스가 있으면 제목, 접수일, 출처, 가격·수급 반응, 반대 근거를 연결해 적극적으로 해석합니다.",
         ],
     ),
     _prompt(
@@ -1103,6 +1104,10 @@ def position_signal_facts(
         "newsHeadlines": dict(news_context or {}) if isinstance(news_context, dict) else {},
         "expectsKrMicrostructureSignals": expects_kr_microstructure_signals(position.market, position.currency, symbol),
     }
+    facts["researchEvidence"] = [
+        item.to_dict()
+        for item in research_evidence_from_facts(symbol, facts)
+    ]
     facts.update(trend)
     facts.update(flow)
     missing: List[Dict[str, str]] = []
@@ -1311,8 +1316,19 @@ def build_ai_prompt_context(
                 "market": facts.get("market"),
                 "sector": facts.get("sector"),
             },
-            "requiredBlocks": ["facts", "trendDynamics", "matchedRules", "missingData", "deliveryContext"],
+            "requiredBlocks": ["facts", "trendDynamics", "researchEvidence", "matchedRules", "missingData", "deliveryContext"],
             "forbidden": ["inventing_missing_market_data", "mixing_delivery_priority_with_investment_judgment"],
+        },
+        "outputSchema": {
+            "activeInvestmentOpinion": {
+                "action": "BUY|ADD|HOLD|TRIM|SELL|AVOID",
+                "conviction": "number 0-100",
+                "thesis": "string",
+                "evidence": ["ResearchEvidence"],
+                "counterEvidence": ["ResearchEvidence"],
+                "invalidationCondition": "string",
+                "sourceUrls": ["string"],
+            }
         },
         "facts": dict(facts or {}),
         "trendDynamics": dict(facts.get("trendDynamics") or {}),

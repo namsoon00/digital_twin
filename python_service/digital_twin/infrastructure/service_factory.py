@@ -12,6 +12,7 @@ from ..application.notification_service import (
 )
 from ..application.symbol_universe_service import SymbolUniverseService
 from ..domain.accounts import AccountConfig
+from ..domain.market_data import number
 from ..domain.monitoring import RealtimeMonitor
 from .event_bus import EventBus, default_event_bus
 from .disclosure_analyzer import disclosure_analyzer_from_settings
@@ -114,9 +115,19 @@ def build_market_data_collection_runner(settings=None, event_publisher=None) -> 
 
 def build_flow_lens_service(settings=None) -> FlowLensService:
     configured_settings = settings or runtime_settings()
-    symbol_service = build_symbol_universe_service(configured_settings)
     flow_lens_external_settings = dict(configured_settings)
-    flow_lens_external_settings["externalNewsEnabled"] = "0"
+    def capped_int(key: str, fallback: int, cap: int) -> str:
+        return str(min(cap, int(number(flow_lens_external_settings.get(key)) or fallback)))
+
+    flow_lens_external_settings["externalApiRetryAttempts"] = "1"
+    flow_lens_external_settings["externalApiTimeoutSeconds"] = str(min(2.0, number(flow_lens_external_settings.get("externalApiTimeoutSeconds")) or 2.0))
+    flow_lens_external_settings["externalAlphaMaxSymbols"] = capped_int("externalAlphaMaxSymbols", 1, 1)
+    flow_lens_external_settings["externalSecMaxSymbols"] = capped_int("externalSecMaxSymbols", 1, 1)
+    flow_lens_external_settings["externalDartMaxSymbols"] = capped_int("externalDartMaxSymbols", 1, 1)
+    flow_lens_external_settings["externalNewsMaxSymbols"] = capped_int("externalNewsMaxSymbols", 1, 1)
+    flow_lens_external_settings["externalCryptoMaxIds"] = capped_int("externalCryptoMaxIds", 2, 2)
+    flow_lens_external_settings["externalFredMaxSeries"] = capped_int("externalFredMaxSeries", 2, 2)
+    symbol_service = build_symbol_universe_service(configured_settings)
     return FlowLensService(
         account_repository=AccountRegistry(),
         snapshot_builder=lambda account: build_snapshot(account, external_settings=flow_lens_external_settings),

@@ -26,6 +26,7 @@ from digital_twin.cli import preserve_existing_secrets
 from digital_twin.cli import build_parser
 from digital_twin.domain.accounts import AccountConfig
 from digital_twin.domain.external_signal_quality import attach_external_signal_quality
+from digital_twin.domain.investment_research import build_active_investment_opinion
 from digital_twin.domain.market_data import normalize_position, technical_indicators_from_candles
 from digital_twin.domain.message_types import DEFAULT_ALERT_RULES, DEFAULT_CADENCE, MESSAGE_TYPE_EMOJIS, MESSAGE_TYPE_LABELS, public_message_catalog
 from digital_twin.domain.ontology import OntologyEntity, OntologyRelation, abox_properties, apply_relation_driven_opinions, build_portfolio_ontology, entity_id
@@ -34,7 +35,7 @@ from digital_twin.domain.portfolio_calculations import portfolio_summary
 from digital_twin.domain.strategy import SafeFormula, StrategyModel, decisions_for_positions
 from digital_twin.domain.events import ACCOUNT_SAVED, MARKET_DATA_COLLECTED, MONITORING_ALERTS_DETECTED, MONITORING_CYCLE_COMPLETED, MONITORING_SNAPSHOT_COLLECTED, alerts_detected_event, monitoring_cycle_completed_event, snapshot_collected_event
 from digital_twin.domain.monitoring import RealtimeMonitor
-from digital_twin.domain.model_review import ModelReviewJob, local_model_review
+from digital_twin.domain.model_review import ModelReviewJob, build_model_review_prompt, local_model_review
 from digital_twin.domain.disclosure_analysis import DisclosureAnalysisResult, local_disclosure_analysis
 from digital_twin.domain.notification_templates import NotificationTemplate, alert_context, render_notification
 from digital_twin.domain.notification_rules import apply_market_hours_rule, apply_state_cooldown_rule, default_notification_rule, evaluate_notification_rule
@@ -1219,6 +1220,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(any(item.relation_type == "HAS_OBSERVATION" for item in graph.relations))
         self.assertTrue(any(item.relation_type == "USES_STRATEGY" for item in graph.relations))
         self.assertTrue(any(item.relation_type == "BASED_ON_THESIS" for item in graph.relations))
+        self.assertTrue(any(item.relation_type == "HAS_OPINION" for item in graph.relations))
         self.assertTrue(any(item.relation_type == "WEAKENS_THESIS" for item in graph.relations))
         self.assertTrue(any(item.relation_type == "HAS_TIME_HORIZON" for item in graph.relations))
         self.assertTrue(any(item.relation_type == "TRIGGERS_REASONING" for item in graph.relations))
@@ -1228,6 +1230,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(any(item.kind == "position" for item in graph.entities))
         self.assertTrue(any(item.kind == "strategy" for item in graph.entities))
         self.assertTrue(any(item.kind == "investment-thesis" for item in graph.entities))
+        self.assertTrue(any(item.kind == "active-opinion" for item in graph.entities))
         self.assertTrue(any(item.kind == "signal-horizon" for item in graph.entities))
         self.assertTrue(any(item.kind == "fx-pair" for item in graph.entities))
         self.assertTrue(any(item.kind == "fundamental-event" for item in graph.entities))
@@ -1255,7 +1258,11 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("boundedContexts", payload["aiInferencePacket"]["inputOrder"])
         self.assertIn("operationalOntology", payload["aiInferencePacket"]["inputOrder"])
         self.assertIn("insights", payload["aiInferencePacket"]["inputOrder"])
+        self.assertIn("activeInvestmentOpinions", payload["aiInferencePacket"]["inputOrder"])
         self.assertIn("relationInfluences", payload["aiInferencePacket"]["inputOrder"])
+        self.assertGreater(payload["aiInferencePacket"]["graphInputs"]["activeOpinionCount"], 0)
+        self.assertTrue(payload["activeInvestmentOpinions"])
+        self.assertTrue(any(item.get("symbol") == "AAPL" for item in payload["activeInvestmentOpinions"]))
         self.assertEqual("insight-driven-only", graph.worldview["operationalOntology"]["dispatchMode"])
         self.assertEqual(3, graph.worldview["operationalOntology"]["collectionPipelineCount"])
         self.assertTrue(any(item.get("key") == "externalSignals" and item.get("configuredMinutes") == 30 for item in graph.worldview["operationalOntology"]["pipelines"]))
@@ -1263,6 +1270,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("reasoningCards", graph.prompt)
         self.assertIn("TBox", graph.prompt)
         self.assertIn("ABox", graph.prompt)
+        self.assertIn("activeInvestmentOpinions", graph.prompt)
         trend_evidence = next(item for item in graph.evidence if item.evidence_id == "evidence:000660:trend")
         self.assertIn("trendDynamics", trend_evidence.value)
         self.assertTrue(graph.opinion_for_symbol("000660").dominant_risks)
@@ -1755,6 +1763,108 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("entry.add_buy.blocked.v1", active_ids)
         blocked = next(item for item in context["activeRules"] if item.get("rule_id") == "entry.add_buy.blocked.v1")
         self.assertIn("추가매수보다 회복 조건 확인 우선", blocked["evidence"])
+
+    def test_active_investment_opinion_uses_news_and_disclosures(self):
+        position = Position(
+            symbol="035420",
+            name="NAVER",
+            market="KR",
+            currency="KRW",
+            market_value=1000000,
+            profit_loss_rate=-12.0,
+            current_price=188000,
+            ma20=215000,
+            ma60=217000,
+            ma20_distance=-12.6,
+            ma60_distance=-13.4,
+            source="holding",
+            sector="플랫폼",
+        )
+        external_signals = {
+            "dartDisclosures": {
+                "035420": {
+                    "provider": "OpenDART",
+                    "reportName": "주요사항보고서(유상증자결정)",
+                    "receiptNo": "20260706000123",
+                    "receiptDate": "20260706",
+                }
+            },
+            "newsHeadlines": {
+                "035420": {
+                    "provider": "GDELT",
+                    "items": [
+                        {
+                            "title": "NAVER faces lawsuit and weak demand risk",
+                            "domain": "example.test",
+                            "url": "https://example.test/naver-risk",
+                        }
+                    ],
+                }
+            },
+        }
+        relation_context = evaluate_position_relation_rules(
+            position,
+            portfolio_summary([position]),
+            external_signals=external_signals,
+        )
+
+        opinion = build_active_investment_opinion(
+            position,
+            relation_context=relation_context,
+            external_signals=external_signals,
+        ).to_dict()
+
+        self.assertIn(opinion["action"], {"HOLD", "TRIM", "SELL"})
+        self.assertGreater(opinion["scoreBreakdown"]["riskScore"], opinion["scoreBreakdown"]["supportScore"])
+        self.assertTrue(opinion["sourceUrls"])
+        self.assertTrue(any("dart.fss.or.kr" in url for url in opinion["sourceUrls"]))
+        self.assertTrue(opinion["evidence"] or opinion["counterEvidence"])
+        self.assertEqual("BUY|ADD|HOLD|TRIM|SELL|AVOID", opinion["promptContract"]["requiredDecision"])
+
+    def test_decisions_include_active_opinion_and_research_prompt_context(self):
+        position = Position(
+            symbol="035420",
+            name="NAVER",
+            market="KR",
+            currency="KRW",
+            market_value=1000000,
+            profit_loss_rate=-12.0,
+            current_price=188000,
+            ma20=215000,
+            ma60=217000,
+            ma20_distance=-12.6,
+            ma60_distance=-13.4,
+            source="holding",
+            sector="플랫폼",
+        )
+        external_signals = {
+            "dartDisclosures": {
+                "035420": {
+                    "provider": "OpenDART",
+                    "reportName": "주요사항보고서(유상증자결정)",
+                    "receiptNo": "20260706000123",
+                    "receiptDate": "20260706",
+                }
+            },
+            "newsHeadlines": {
+                "035420": {
+                    "provider": "GDELT",
+                    "items": [{"title": "NAVER faces lawsuit and weak demand risk", "url": "https://example.test/naver-risk"}],
+                }
+            },
+        }
+
+        decision = decisions_for_positions([position], portfolio_summary([position]), external_signals=external_signals)[0]
+
+        active = decision.active_investment_opinion
+        self.assertIn(active["action"], {"HOLD", "TRIM", "SELL"})
+        self.assertEqual(active["action"], decision.ai_context["activeInvestmentOpinion"]["action"])
+        self.assertTrue(active["sourceUrls"])
+        self.assertTrue(decision.ai_prompt_context["facts"]["researchEvidence"])
+        self.assertEqual(
+            "BUY|ADD|HOLD|TRIM|SELL|AVOID",
+            decision.ai_prompt_context["outputSchema"]["activeInvestmentOpinion"]["action"],
+        )
 
     def test_ontology_trend_dynamics_classifies_support_retest(self):
         position = Position(
@@ -3823,6 +3933,31 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("AAPL", jobs[0].symbol)
         self.assertIn("Codex 답변", "\n".join(jobs[0].alert_lines))
 
+    def test_model_review_job_keeps_active_investment_opinion_context(self):
+        job = ModelReviewJob.create({
+            "key": "main:decision:035420",
+            "accountId": "main",
+            "accountLabel": "메인",
+            "symbol": "035420",
+            "title": "NAVER",
+            "lines": ["판단 변화", "AI 적극 의견: 매도 · 확신 83.5%"],
+            "metadata": {
+                "ontologyRelationContext": {"decision": {"label": "손절·분할축소 권장"}},
+                "activeInvestmentOpinion": {
+                    "action": "SELL",
+                    "actionLabel": "매도",
+                    "thesis": "유상증자 공시와 하락 추세가 겹쳤습니다.",
+                    "invalidationCondition": "20일선 회복 시 재검토",
+                },
+            },
+        })
+
+        prompt = build_model_review_prompt(job)
+
+        self.assertEqual("SELL", job.review_context["activeInvestmentOpinion"]["action"])
+        self.assertIn("BUY/ADD/HOLD/TRIM/SELL/AVOID", prompt)
+        self.assertIn("activeInvestmentOpinion", prompt)
+
     def test_monitor_decision_change_is_only_for_current_holdings(self):
         previous_position = normalize_position({
             "symbol": "AAPL",
@@ -4502,6 +4637,51 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("보유 자기주식을 처분", text)
         self.assertIn("물량 부담", text)
         self.assertIn("추가매수는 보류", text)
+
+    def test_investment_insight_ai_opinion_prefers_active_investment_opinion(self):
+        context = {
+            "messageType": "investmentInsight",
+            "target": "NAVER / 035420",
+            "rawLines": [
+                "인사이트 유형: 리스크 관리",
+                "핵심 결론: 가격·추세·공시가 리스크 관리 쪽으로 연결됐습니다.",
+                "현재가: 188,000원",
+                "수익률: -12.0%",
+            ],
+            "ontologyInsight": {
+                "insightLabel": "리스크 관리",
+                "thesis": "가격·추세·공시가 리스크 관리 쪽으로 연결됐습니다.",
+                "sourceSignalTypes": ["holdingTiming"],
+            },
+            "metadata": {
+                "activeInvestmentOpinion": {
+                    "action": "SELL",
+                    "actionLabel": "매도",
+                    "conviction": 83.5,
+                    "thesis": "유상증자 공시와 하락 추세가 겹쳐 리스크 축소가 우선입니다.",
+                    "evidence": [
+                        {
+                            "title": "주요사항보고서(유상증자결정)",
+                            "source": "OpenDART",
+                            "url": "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260706000123",
+                        }
+                    ],
+                    "counterEvidence": [{"title": "20일선 회복 시 매도 강도 완화"}],
+                    "invalidationCondition": "20일선 회복과 공시 리스크 해소가 확인되면 매도 강도를 낮춥니다.",
+                    "nextCheck": "공시 원문, 발행 규모, 장중 거래량 반응을 확인하세요.",
+                }
+            },
+        }
+
+        opinion = build_notification_ai_opinion(context)
+        text = "\n".join(opinion["lines"])
+
+        self.assertIn("판단: 매도", text)
+        self.assertIn("투자 의견 근거", text)
+        self.assertIn("주요사항보고서(유상증자결정)", text)
+        self.assertIn("반대 근거", text)
+        self.assertIn("무효화 조건", text)
+        self.assertEqual("SELL", opinion["promptContext"]["facts"]["activeInvestmentOpinion"]["action"])
 
     def test_notification_delivery_score_uses_user_formula(self):
         event = AlertEvent(

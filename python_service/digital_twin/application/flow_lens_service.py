@@ -128,6 +128,7 @@ def toss_portfolio_for_account(
         if snapshot.watchlist:
             payload["watchlistQuotes"] = [position_payload(item) for item in snapshot.watchlist]
         payload["portfolio"] = portfolio_payload(snapshot.portfolio)
+        payload["externalSignals"] = dict(snapshot.external_signals or {})
         return payload
     return {
         "mode": snapshot.mode,
@@ -142,6 +143,7 @@ def toss_portfolio_for_account(
         "portfolio": portfolio_payload(snapshot.portfolio),
         "positions": [position_payload(item) for item in snapshot.positions],
         "watchlistQuotes": [position_payload(item) for item in snapshot.watchlist],
+        "externalSignals": dict(snapshot.external_signals or {}),
     }
 
 
@@ -457,7 +459,8 @@ def build_toss_decision(
     ]
     holding_items = [toss_decision_for_holding(item, portfolio, strategy_model) for item in positions]
     watch_items = [toss_decision_for_watch(item) for item in watchlist]
-    ontology = build_toss_ontology(positions, portfolio, holding_items + watch_items, watchlist, toss, strategy_model)
+    external_signals = dict(toss.get("externalSignals") or {}) if isinstance(toss.get("externalSignals"), dict) else {}
+    ontology = build_toss_ontology(positions, portfolio, holding_items + watch_items, watchlist, toss, strategy_model, external_signals)
     ontology_payload = ontology.to_dict()
     reasoning_cards = list(ontology_payload.get("reasoningCards") or [])
     reasoning_card_by_symbol = {
@@ -501,7 +504,7 @@ def build_toss_decision(
         "items": items,
         "rules": [
             "투자전략은 관계 분석을 우선하고 기존 공식 점수는 보조 근거로 유지합니다.",
-            "수익률, 평가손익, 수급, 추세, 섹터 집중도를 AI 의견 정보에 함께 넣습니다.",
+            "수익률, 평가손익, 수급, 추세, 섹터 집중도, 뉴스·공시 리서치를 AI 의견 정보에 함께 넣습니다.",
             "관심 종목은 보유가 아니므로 매도 판단 대신 시세 기준 대기 상태로 둡니다.",
             "Neo4j 설정이 있으면 같은 관계 그래프를 저장합니다.",
         ],
@@ -546,6 +549,7 @@ def build_toss_ontology(
     watchlist: List[Dict[str, object]] = None,
     toss: Dict[str, object] = None,
     strategy_model: StrategyModel = None,
+    external_signals: Dict[str, object] = None,
 ):
     normalized_positions = [normalize_position(item) for item in list(positions or []) + list(watchlist or [])]
     summary = PortfolioSummary(
@@ -569,6 +573,7 @@ def build_toss_ontology(
         normalized_positions,
         summary,
         legacy_by_symbol=legacy_by_symbol,
+        external_signals=external_signals or {},
         portfolio_id="flow-lens",
         runtime_context={
             "settings": getattr(strategy_model, "settings", {}) if strategy_model else {},
@@ -604,7 +609,7 @@ def build_toss_lens_snapshot(
         "regime": "토스 조회 전용",
         "summary": [
             "보유 종목 " + str(toss_decision["holdingCount"]) + "개와 관심 종목 " + str(toss_decision["watchCount"]) + "개를 분리했습니다.",
-            "외부 텍스트 신호는 판단에서 제외했습니다.",
+            "외부 뉴스·공시는 리서치 근거로 정규화해 적극 투자 의견에 반영합니다.",
             (
                 "가장 큰 계좌 노출은 "
                 + str(portfolio["sectors"][0]["sector"])

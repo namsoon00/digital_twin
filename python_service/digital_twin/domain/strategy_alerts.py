@@ -38,8 +38,21 @@ class StrategyAlertMixin:
             ]
             buy_score = float(scores.get("buyScore") or 0)
             sell_score = float(scores.get("sellScore") or 0)
-            if source == "관심" and watchlist_buy_threshold and buy_score >= watchlist_buy_threshold:
-                buy_phrase = self.model_score_phrase("buy", buy_score)
+            relation_decision = relation_context.get("decision") if isinstance(relation_context, dict) else {}
+            relation_score = float(relation_decision.get("score") or 0) if isinstance(relation_decision, dict) else 0.0
+            relation_action_group = str(relation_decision.get("actionGroup") or "") if isinstance(relation_decision, dict) else ""
+            relation_entry_candidate = (
+                source == "관심"
+                and watchlist_buy_threshold
+                and relation_action_group == "entry"
+                and relation_score >= watchlist_buy_threshold
+            )
+            if source == "관심" and watchlist_buy_threshold and (buy_score >= watchlist_buy_threshold or relation_entry_candidate):
+                effective_buy_score = max(buy_score, relation_score if relation_entry_candidate else 0.0)
+                buy_phrase = self.model_score_phrase("buy", effective_buy_score)
+                detected = buy_phrase
+                if relation_entry_candidate:
+                    detected += " · 온톨로지 " + str(relation_decision.get("label") or "분할매수 후보")
                 events.append(AlertEvent(
                     snapshot.account_id,
                     snapshot.account_label,
@@ -50,13 +63,13 @@ class StrategyAlertMixin:
                     ["관심종목 매수 후보 " + buy_phrase, *common_lines],
                     symbol,
                     criteria=self.criteria(
-                        "관심종목 매수 기준 이상 (" + self.threshold_text("watchlistBuyScore", "점") + ")",
-                        buy_phrase,
+                        "관심종목 매수 기준 이상 (" + self.threshold_text("watchlistBuyScore", "점") + ") 또는 온톨로지 분할매수 관계 규칙 성립",
+                        detected,
                     ),
                     metadata={
                         "modelBuyScore": round(buy_score, 1),
                         "modelSellScore": round(sell_score, 1),
-                        "watchlistBuyScore": round(buy_score, 1),
+                        "watchlistBuyScore": round(effective_buy_score, 1),
                         "formulaAudits": formula_audits,
                         "ontologyRelationContext": relation_context,
                         "ontologyPromptContext": relation_context.get("promptContext") if isinstance(relation_context, dict) else {},

@@ -2172,6 +2172,40 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("평단가", message)
         self.assertIn("수익률", message)
 
+    def test_investment_insight_loss_title_wins_over_rebalance_signal(self):
+        event = AlertEvent(
+            "main",
+            "메인",
+            "ALERT",
+            "investmentInsight",
+            "main:insight:DNT",
+            "하락 테스트",
+            [
+                "상태 손절·분할축소 권장 (92점)",
+                "현재가: $87.19",
+                "평단가: $118",
+                "수익률: -26.1%",
+                "권장 액션: 손절·분할축소 우선, 20일선 회복 전 추가매수 보류",
+                "인사이트 유형: 리스크 관리",
+                "핵심 결론: 하락 테스트의 손실 관리와 리밸런싱 규칙이 함께 성립했습니다.",
+            ],
+            "DNT",
+            metadata={
+                "ontologyRelationContext": {
+                    "decision": {"label": "손절·분할축소 권장", "score": 92},
+                    "activeRules": [
+                        {"ruleId": "entry.add_buy.blocked.v1", "label": "보유 종목 + 추세 훼손 -> 추가매수 보류"},
+                        {"ruleId": "holding.concentration.rebalance.v1", "label": "업종 집중 + 보유 비중 과대 -> 리밸런싱 점검"},
+                    ],
+                }
+            },
+        )
+
+        message = render_notification(NotificationTemplate("investmentInsight", "{telegramMessage}"), alert_context(event))
+
+        self.assertIn("<b>[주의] 🛡️ 손실 -26.1%: 손절·분할축소 점검</b>", message)
+        self.assertNotIn("💰 분할매도·리밸런싱 점검", message)
+
     def test_holding_timing_status_includes_model_score_parentheses(self):
         position = normalize_position({
             "symbol": "005930",
@@ -2254,6 +2288,58 @@ class PythonServiceTests(unittest.TestCase):
         self.assertNotIn("투자 인사이트: 대응 기준 점검", message)
         self.assertFalse(any(event.rule == "modelBuy" for event in events))
         self.assertFalse(any(event.rule == "watchlistBuyCandidate" for event in events))
+
+    def test_watchlist_buy_candidate_can_be_promoted_by_ontology_entry_rule(self):
+        watch = normalize_position({
+            "symbol": "AAPL",
+            "name": "Apple",
+            "market": "US",
+            "currency": "USD",
+            "currentPrice": 100,
+            "ma20": 104,
+            "ma60": 99,
+            "ma20Distance": -3.8,
+            "ma60Distance": 1.0,
+            "volume": 1200000,
+            "volumeRatio": 1.1,
+            "tradeStrength": 118,
+            "bidAskImbalance": 12,
+            "foreignNetVolume": 180000,
+            "institutionNetVolume": 90000,
+            "individualNetVolume": -210000,
+            "sector": "AI/플랫폼",
+            "source": "watchlist",
+        })
+        portfolio = portfolio_summary([])
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "ok",
+            utc_now_iso(),
+            portfolio,
+            [],
+            [],
+            watchlist=[watch],
+        )
+
+        events = RealtimeMonitor({
+            "buyScoreFormula": "10",
+            "alertThresholds": "modelBuyScore=99\nwatchlistBuyScore=74",
+        }).events_for_snapshot(snapshot, {})
+
+        candidate = self.insight_event(events, "AAPL")
+        source_message = self.insight_source_message(candidate, "watchlistBuyCandidate")
+        message = SQLiteNotificationTemplateStore(Path(self.temp.name) / "service.db").render(candidate.rule, alert_context(candidate))
+        relation_context = candidate.metadata.get("ontologyRelationContext")
+        active_rules = relation_context.get("activeRules") if isinstance(relation_context, dict) else []
+        active_ids = [item.get("ruleId") or item.get("rule_id") for item in active_rules]
+
+        self.assertIn("watchlistBuyCandidate", self.insight_source_rules(candidate))
+        self.assertIn("온톨로지 소액 분할매수 검토", source_message)
+        self.assertIn("entry.pullback.supported.v1", active_ids)
+        self.assertIn("<b>[관찰] 🟢 분할매수 후보: 진입 조건 점검</b>", message)
 
     def test_legacy_signal_rule_controls_ontology_insight_sources(self):
         watch = normalize_position({

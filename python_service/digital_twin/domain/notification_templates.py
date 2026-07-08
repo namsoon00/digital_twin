@@ -554,6 +554,14 @@ def compact_action_title(value: str) -> str:
     return text
 
 
+def has_investment_loss_signal(value: str) -> bool:
+    return any(term in str(value or "") for term in ["손절", "손실", "분할축소", "추가매수 보류", "loss_guard", "LOSS", "entry.add_buy.blocked"])
+
+
+def has_investment_profit_signal(value: str) -> bool:
+    return any(term in str(value or "") for term in ["분할매도", "익절", "수익", "리밸런싱", "profit_take", "PROFIT"])
+
+
 def notification_title_icon(rule: str, raw_lines: List[str], event: AlertEvent) -> str:
     key = str(rule or "")
     status = data_value(raw_lines, "상태")
@@ -569,9 +577,11 @@ def notification_title_icon(rule: str, raw_lines: List[str], event: AlertEvent) 
         decision_blob = investment_insight_decision_blob(raw_lines, event)
         if any(term in blob for term in ["분할매수", "매수 후보", "기회 후보", "opportunityDetected", "watchlistBuyCandidate", "entry.pullback.supported"]):
             return "🟢"
-        if any(term in decision_blob for term in ["분할매도", "익절", "수익", "리밸런싱", "profit_take", "PROFIT"]):
+        if signed_direction(profit) < 0 and has_investment_loss_signal(decision_blob):
+            return "🛡️"
+        if has_investment_profit_signal(decision_blob):
             return "💰"
-        if any(term in decision_blob for term in ["손절", "손실", "축소"]):
+        if has_investment_loss_signal(decision_blob):
             return "🛡️"
         if "외부" in blob:
             return "🌐"
@@ -629,9 +639,11 @@ def notification_title_headline(rule: str, raw_lines: List[str], event: AlertEve
         profit_text = percent_text(profit)
         if any(term in blob for term in ["분할매수", "매수 후보", "기회 후보", "opportunityDetected", "watchlistBuyCandidate", "entry.pullback.supported"]):
             return "분할매수 후보: 진입 조건 점검"
-        if any(term in decision_blob for term in ["분할매도", "익절", "수익", "리밸런싱", "profit_take", "PROFIT"]):
+        if signed_direction(profit) < 0 and has_investment_loss_signal(decision_blob):
+            return ("손실 " + profit_text + ": " if profit_text and signed_direction(profit) < 0 else "") + "손절·분할축소 점검"
+        if has_investment_profit_signal(decision_blob):
             return ("수익 " + profit_text + ": " if profit_text and signed_direction(profit) > 0 else "") + "분할매도·리밸런싱 점검"
-        if any(term in decision_blob for term in ["손절", "손실", "축소"]):
+        if has_investment_loss_signal(decision_blob):
             return ("손실 " + profit_text + ": " if profit_text and signed_direction(profit) < 0 else "") + "손절·분할축소 점검"
         if any(term in blob for term in ["매수", "기회"]):
             return "매수 후보: 진입 조건 점검"

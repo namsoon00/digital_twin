@@ -1531,6 +1531,78 @@
     state.tabBarScrollLeft = Number(tabBar.scrollLeft || 0);
   }
 
+  function activePointerPoint(event) {
+    var touch = event && event.changedTouches && event.changedTouches[0];
+    var source = touch || event || {};
+    return {
+      x: Number(source.clientX || 0),
+      y: Number(source.clientY || 0)
+    };
+  }
+
+  function isTapMovement(start, event) {
+    if (!start) return true;
+    var point = activePointerPoint(event);
+    return Math.abs(point.x - start.x) <= 12 && Math.abs(point.y - start.y) <= 12;
+  }
+
+  function stopActiveScrollMomentum() {
+    var scroller = currentWorkspaceScroller();
+    if (scroller) scroller.scrollTop = scrollTopNumber(scroller.scrollTop);
+    if (window.scrollTo) window.scrollTo(0, windowScrollTop());
+  }
+
+  function activateTabButton(button, event) {
+    var nextTab = button.getAttribute("data-tab") || "overview";
+    if (nextTab === state.activeTab) return false;
+    if (event && event.preventDefault) event.preventDefault();
+    if (event && event.stopPropagation) event.stopPropagation();
+    stopActiveScrollMomentum();
+    closeAppNavMenu();
+    navigateToTab(nextTab);
+    return true;
+  }
+
+  function bindTabNavigation(button) {
+    var pointerStart = null;
+    var touchStart = null;
+    var handledAt = 0;
+    var markHandled = function () {
+      handledAt = Date.now();
+    };
+
+    button.addEventListener("pointerdown", function (event) {
+      pointerStart = activePointerPoint(event);
+    }, { passive: true });
+    button.addEventListener("pointercancel", function () {
+      pointerStart = null;
+    });
+    button.addEventListener("pointerup", function (event) {
+      if (!isTapMovement(pointerStart, event)) return;
+      markHandled();
+      activateTabButton(button, event);
+    });
+    button.addEventListener("touchstart", function (event) {
+      touchStart = activePointerPoint(event);
+    }, { passive: true });
+    button.addEventListener("touchcancel", function () {
+      touchStart = null;
+    });
+    button.addEventListener("touchend", function (event) {
+      if (Date.now() - handledAt < 500) return;
+      if (!isTapMovement(touchStart, event)) return;
+      markHandled();
+      activateTabButton(button, event);
+    }, { passive: false });
+    button.addEventListener("click", function (event) {
+      if (Date.now() - handledAt < 700) {
+        event.preventDefault();
+        return;
+      }
+      activateTabButton(button, event);
+    });
+  }
+
   function navigateToTab(tab, options) {
     options = options || {};
     var nextTab = normalizeTabId(tab);
@@ -13052,13 +13124,7 @@
       });
     });
 
-    Array.prototype.slice.call(app.querySelectorAll("[data-tab]")).forEach(function (button) {
-      button.addEventListener("click", function () {
-        var nextTab = button.getAttribute("data-tab") || "overview";
-        if (nextTab === state.activeTab) return;
-        navigateToTab(nextTab);
-      });
-    });
+    Array.prototype.slice.call(app.querySelectorAll("[data-tab]")).forEach(bindTabNavigation);
 
     Array.prototype.slice.call(app.querySelectorAll("[data-monitor-instrument-detail]")).forEach(function (row) {
       var openInstrumentDetail = function () {

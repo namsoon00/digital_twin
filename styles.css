@@ -530,6 +530,9 @@ h3 {
   white-space: nowrap;
   text-align: left;
   cursor: pointer;
+  touch-action: manipulation;
+  -webkit-user-select: none;
+  user-select: none;
   transition: background-color 120ms ease, color 120ms ease, transform 120ms ease;
 }
 
@@ -911,6 +914,8 @@ h3 {
   border-radius: var(--ds-radius-panel);
   background: var(--panel);
   box-shadow: var(--shadow);
+  overscroll-behavior: contain;
+  touch-action: manipulation;
   transform: translateX(-50%);
 }
 
@@ -928,6 +933,9 @@ h3 {
   overflow: hidden;
   text-overflow: ellipsis;
   cursor: pointer;
+  touch-action: manipulation;
+  -webkit-user-select: none;
+  user-select: none;
   transition: background-color 120ms ease, color 120ms ease, transform 120ms ease;
 }
 

@@ -19,7 +19,7 @@ from digital_twin.application.flow_lens_service import FlowLensService
 from digital_twin.application.market_data_collection_service import MARKET_DATA_ACCOUNT_ID, MarketDataCollectionRunner
 from digital_twin.application.model_review_service import ModelReviewRunner
 from digital_twin.application.monitoring_service import MonitorRunner as ApplicationMonitorRunner
-from digital_twin.application.notification_service import CompositeNotificationContextEnricher, DisclosureAnalysisNotificationEnricher, NotificationAIValidatedGateEnricher, NotificationAIOpinionEnricher, NotificationQueueRunner
+from digital_twin.application.notification_service import CompositeNotificationContextEnricher, DisclosureAnalysisNotificationEnricher, NotificationAIValidatedGateEnricher, NotificationAIOpinionEnricher, NotificationHoldingSnapshotEnricher, NotificationQueueRunner
 from digital_twin.application.symbol_universe_service import SymbolUniverseService, seed_symbol
 from digital_twin.cli import build_handoff_message
 from digital_twin.cli import preserve_existing_secrets
@@ -4980,6 +4980,54 @@ class PythonServiceTests(unittest.TestCase):
         rendered = render_notification(NotificationTemplate("investmentInsight", "{telegramMessage}"), enriched)
         self.assertNotIn("AI 의견", rendered)
         self.assertEqual(1, rendered.count("분석출처: AI 검증 알림"))
+
+    def test_holding_snapshot_enricher_adds_missing_price_rows(self):
+        position = normalize_position({
+            "symbol": "MSTR",
+            "name": "Strategy",
+            "market": "US",
+            "currency": "USD",
+            "marketValue": 22535.4,
+            "quantity": 230,
+            "sellableQuantity": 230,
+            "averagePrice": 88.9,
+            "currentPrice": 97.98,
+            "profitLossRate": 10.2,
+            "sector": "디지털자산",
+        })
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "ok",
+            utc_now_iso(),
+            portfolio_summary([position]),
+            [position],
+            decisions_for_positions([position], portfolio_summary([position])),
+        )
+        job = NotificationJob.create(
+            "Strategy",
+            account_id="main",
+            account_label="메인",
+            message_type="holdingTiming",
+            context={
+                "target": "MSTR",
+                "displayTarget": "Strategy / MSTR",
+                "rawLines": "\n".join([
+                    "상태: 뉴스 근거 포함 보유 점검 (72점)",
+                    "손익: +10.2%",
+                    "추세: 현재 $97.98, 20일선 $106.72(-8.2%), 60일선 $144.03(-32.0%)",
+                ]),
+            },
+        )
+
+        NotificationHoldingSnapshotEnricher(lambda: {"main": snapshot.to_monitor_state()})(job)
+        raw_lines = job.context["rawLines"]
+
+        self.assertIn("현재가: $97.98", raw_lines)
+        self.assertIn("평단가: $88.9", raw_lines)
+        self.assertIn("보유: 수량 230주, 매도가능 230주, 평가금액 $22,535", raw_lines)
 
     def test_validated_ai_response_hides_internal_variables_and_jargon(self):
         context = {

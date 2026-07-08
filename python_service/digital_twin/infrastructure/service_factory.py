@@ -9,6 +9,7 @@ from ..application.notification_service import (
     DisclosureAnalysisNotificationEnricher,
     NotificationAIValidatedGateEnricher,
     NotificationAIOpinionEnricher,
+    NotificationHoldingSnapshotEnricher,
     NotificationQueueRunner,
 )
 from ..application.symbol_universe_service import SymbolUniverseService
@@ -77,6 +78,7 @@ def build_model_review_runner(dry_run: bool = False) -> ModelReviewRunner:
 
 def build_notification_queue_runner(dry_run: bool = False) -> NotificationQueueRunner:
     settings = runtime_settings()
+    monitor_store = SQLiteMonitorStore()
     return NotificationQueueRunner(
         queue=SQLiteNotificationJobStore(),
         account_repository=AccountRegistry(),
@@ -85,6 +87,10 @@ def build_notification_queue_runner(dry_run: bool = False) -> NotificationQueueR
         send_gap_seconds=float(settings.get("notificationSendGapSeconds") or 0),
         template_renderer=SQLiteNotificationTemplateStore().render_job,
         context_enricher=CompositeNotificationContextEnricher(
+            NotificationHoldingSnapshotEnricher(
+                monitor_store.load_previous,
+                RealtimeMonitor(settings),
+            ),
             DisclosureAnalysisNotificationEnricher(
                 disclosure_analyzer_from_settings(settings),
                 settings,

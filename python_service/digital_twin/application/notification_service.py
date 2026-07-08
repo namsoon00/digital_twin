@@ -1,9 +1,10 @@
 import time
 from datetime import datetime, timezone
-from typing import Callable, Dict
+from typing import Callable, Dict, List
 from zoneinfo import ZoneInfo
 
 from ..domain.disclosure_analysis import context_with_disclosure_analysis, local_disclosure_analysis
+from ..domain.monitoring import RealtimeMonitor
 from ..domain.notification_ai import enrich_notification_ai_context
 from ..domain.notification_ai_gate import ai_gate_enabled_for_message_type, context_with_validated_ai_response, local_validated_ai_response
 from ..domain.notifications import NotificationJob
@@ -48,6 +49,83 @@ class NotificationAIOpinionEnricher:
         context.setdefault("accountId", job.account_id)
         context.setdefault("accountLabel", job.account_label)
         job.context = enrich_notification_ai_context(context, self.settings)
+
+
+class NotificationHoldingSnapshotEnricher:
+    def __init__(self, snapshot_provider: Callable = None, monitor: RealtimeMonitor = None):
+        self.snapshot_provider = snapshot_provider
+        self.monitor = monitor or RealtimeMonitor()
+
+    def __call__(self, job: NotificationJob) -> None:
+        context = dict(job.context or {})
+        symbol = self.symbol_from_context(context)
+        if not symbol:
+            return
+        position = self.position_for_symbol(job.account_id, symbol)
+        if not position:
+            return
+        raw_lines = self.raw_lines(context)
+        next_lines = list(raw_lines)
+        for label, line in [
+            ("현재가", self.monitor.current_price_line(position)),
+            ("평단가", self.monitor.average_price_line(position)),
+            ("보유", self.monitor.holding_balance_line(position)),
+        ]:
+            if line and not self.has_labeled_line(next_lines, label):
+                next_lines.append(line)
+        if next_lines != raw_lines:
+            context["rawLines"] = "\n".join(next_lines)
+            job.context = context
+
+    def snapshot_states(self) -> Dict[str, object]:
+        if not self.snapshot_provider:
+            return {}
+        try:
+            value = self.snapshot_provider()
+        except Exception:  # noqa: BLE001 - notification delivery must continue if snapshot lookup fails.
+            return {}
+        return value if isinstance(value, dict) else {}
+
+    def position_for_symbol(self, account_id: str, symbol: str) -> Dict[str, object]:
+        states = self.snapshot_states()
+        candidates = []
+        if account_id and isinstance(states.get(account_id), dict):
+            candidates.append(states.get(account_id))
+        candidates.extend(state for key, state in states.items() if key != account_id and isinstance(state, dict))
+        for state in candidates:
+            positions = state.get("positions") if isinstance(state, dict) else {}
+            if isinstance(positions, dict):
+                item = positions.get(symbol.upper())
+                if isinstance(item, dict):
+                    return item
+        return {}
+
+    def raw_lines(self, context: Dict[str, object]) -> List[str]:
+        raw = context.get("rawLines")
+        if isinstance(raw, list):
+            return [str(line or "").strip() for line in raw if str(line or "").strip()]
+        return [line.strip() for line in str(raw or "").splitlines() if line.strip()]
+
+    def has_labeled_line(self, lines: List[str], label: str) -> bool:
+        prefix = str(label or "").strip() + ":"
+        return any(str(line or "").strip().startswith(prefix) for line in lines)
+
+    def symbol_from_context(self, context: Dict[str, object]) -> str:
+        for key in ["rawSymbol", "symbol", "target", "rawTarget"]:
+            value = str(context.get(key) or "").strip().upper()
+            if self.is_symbol_like(value):
+                return value
+        for key in ["displayTarget", "target", "title"]:
+            value = str(context.get(key) or "").strip()
+            for token in reversed(value.replace("/", " ").replace("|", " ").split()):
+                token = token.strip().upper()
+                if self.is_symbol_like(token):
+                    return token
+        return ""
+
+    def is_symbol_like(self, value: str) -> bool:
+        text = str(value or "").strip().upper()
+        return bool(text and len(text) <= 12 and all(ch.isalnum() or ch in {".", "-"} for ch in text))
 
 
 class NotificationAIValidatedGateEnricher:

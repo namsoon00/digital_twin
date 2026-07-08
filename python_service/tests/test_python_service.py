@@ -1236,6 +1236,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(any(item.kind == "reasoning-cycle" for item in graph.entities))
         self.assertTrue(any(item.kind == "insight" for item in graph.entities))
         self.assertTrue(any(item.kind == "notification-dispatch" for item in graph.entities))
+        self.assertTrue(any(item.kind == "trend-scenario" for item in graph.entities))
         self.assertTrue(any(item.kind == "price-metric" for item in graph.entities))
         self.assertTrue(any(item.kind == "model-score" for item in graph.entities))
         self.assertTrue(any(item.kind == "runtime-setting" for item in graph.entities))
@@ -1262,6 +1263,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("reasoningCards", graph.prompt)
         self.assertIn("TBox", graph.prompt)
         self.assertIn("ABox", graph.prompt)
+        trend_evidence = next(item for item in graph.evidence if item.evidence_id == "evidence:000660:trend")
+        self.assertIn("trendDynamics", trend_evidence.value)
         self.assertTrue(graph.opinion_for_symbol("000660").dominant_risks)
         self.assertTrue(graph.opinion_for_symbol("000660").relation_influences)
         sample_store = SQLiteOntologyQualitySampleStore(Path(self.temp.name) / "service.db")
@@ -1752,6 +1755,73 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("entry.add_buy.blocked.v1", active_ids)
         blocked = next(item for item in context["activeRules"] if item.get("rule_id") == "entry.add_buy.blocked.v1")
         self.assertIn("추가매수보다 회복 조건 확인 우선", blocked["evidence"])
+
+    def test_ontology_trend_dynamics_classifies_support_retest(self):
+        position = Position(
+            symbol="005930",
+            name="삼성전자",
+            market="KR",
+            currency="KRW",
+            market_value=1000000,
+            profit_loss_rate=-11.3,
+            current_price=291000,
+            average_price=327000,
+            ma20=327850,
+            ma60=287367,
+            ma20_distance=-11.2,
+            ma60_distance=1.3,
+            ma20_slope=-0.1,
+            ma60_slope=0.5,
+            change_rate=0.4,
+            trade_strength=116.4,
+            orderbook_bid_volume=44544,
+            orderbook_ask_volume=151603,
+            bid_ask_imbalance=-54.6,
+            sector="반도체",
+        )
+
+        context = evaluate_position_relation_rules(position, portfolio_summary([position], fx_rates={"KRW": 1}))
+        active_ids = [item.get("rule_id") or item.get("ruleId") for item in context["activeRules"]]
+
+        self.assertTrue(context["facts"]["supportRetest"])
+        self.assertTrue(context["facts"]["mediumTermSupport"])
+        self.assertFalse(context["facts"]["breakdownAcceleration"])
+        self.assertEqual("60일선 지지 재확인", context["facts"]["trendDynamics"]["state"])
+        self.assertIn("trend.support_retest.v1", active_ids)
+        self.assertIn("trendDynamics", context["promptContext"]["inputContract"]["requiredBlocks"])
+
+    def test_ontology_trend_dynamics_detects_breakdown_acceleration(self):
+        position = Position(
+            symbol="005930",
+            name="삼성전자",
+            market="KR",
+            currency="KRW",
+            market_value=1000000,
+            profit_loss_rate=-11.3,
+            current_price=282000,
+            average_price=327000,
+            ma20=310000,
+            ma60=289000,
+            ma20_distance=-9.0,
+            ma60_distance=-2.5,
+            ma20_slope=-1.4,
+            ma60_slope=-0.7,
+            change_rate=-3.2,
+            trade_strength=88.0,
+            buy_volume=100,
+            sell_volume=180,
+            sector="반도체",
+        )
+
+        context = evaluate_position_relation_rules(position, portfolio_summary([position], fx_rates={"KRW": 1}))
+        active_ids = [item.get("rule_id") or item.get("ruleId") for item in context["activeRules"]]
+
+        self.assertTrue(context["facts"]["breakdownAcceleration"])
+        self.assertEqual("하락 가속", context["facts"]["trendDynamics"]["state"])
+        self.assertIn("trend.breakdown_acceleration.v1", active_ids)
+        self.assertEqual("하락 가속 대응 점검", context["decision"]["label"])
+        self.assertEqual("trend.breakdown_acceleration.v1", context["decision"]["selectedRuleId"])
+        self.assertTrue(context["promptContext"]["trendDynamics"]["breakdownAcceleration"])
 
     def test_ontology_loss_guard_requires_negative_pnl(self):
         position = Position(
@@ -4356,6 +4426,18 @@ class PythonServiceTests(unittest.TestCase):
                 "telegramBotToken": "secret-token",
                 "ontologyRelationContext": {
                     "facts": {
+                        "trendDynamics": {
+                            "state": "60일선 지지 재확인",
+                            "priceMomentum": "보합",
+                            "priceChangeRate": 0.2,
+                            "slope": "단기 둔화·중기 지지",
+                            "curve": "단기 둔화 커브",
+                            "trendCurve": -0.6,
+                            "supportRetest": True,
+                            "recoveryAttempt": False,
+                            "breakdownAcceleration": False,
+                            "dynamicRiskScore": 42.5,
+                        },
                         "dartDisclosure": {
                             "reportName": "주식교환ㆍ이전결정",
                             "receiptDate": "20260706",
@@ -4376,6 +4458,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("뉴스·공시", text)
         self.assertIn("NAVER governance update", text)
         self.assertIn("공시 의미", text)
+        self.assertIn("추세 동역학", text)
+        self.assertTrue(opinion["promptContext"]["facts"]["trendDynamics"]["supportRetest"])
         self.assertEqual("[redacted]", opinion["promptContext"]["facts"]["allAvailableData"]["metadata"]["telegramBotToken"])
         self.assertIn("allAvailableData", opinion["promptContext"]["facts"])
 

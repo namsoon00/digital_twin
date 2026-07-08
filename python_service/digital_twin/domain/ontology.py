@@ -575,10 +575,91 @@ def trend_score(position: Position) -> float:
         number(position.ma20_distance) * 0.45
         + number(position.ma60_distance) * 0.25
         + number(position.ma20_slope) * 4
-        + number(position.ma60_slope) * 3,
+        + number(position.ma60_slope) * 3
+        + number(position.change_rate) * 0.4,
         -35.0,
         35.0,
     )
+
+
+def trend_dynamic_facts(position: Position) -> Dict[str, object]:
+    ma20_distance = number(position.ma20_distance)
+    ma60_distance = number(position.ma60_distance)
+    ma20_slope = number(position.ma20_slope)
+    ma60_slope = number(position.ma60_slope)
+    price_change = number(position.change_rate)
+    trend_curve = ma20_slope - ma60_slope
+    has_ma20_context = bool(number(position.ma20) or ma20_distance)
+    has_ma60_context = bool(number(position.ma60) or ma60_distance)
+    short_term_breakdown = has_ma20_context and ma20_distance <= -5.0
+    medium_term_support = has_ma60_context and ma60_distance >= 0.0
+    support_retest = short_term_breakdown and has_ma60_context and ma60_distance >= -1.0
+    recovery_attempt = (
+        (ma20_distance < 0 or number(position.profit_loss_rate) < 0)
+        and has_ma60_context
+        and ma60_distance >= -1.0
+        and (price_change >= 1.0 or ma20_slope >= 0.3 or trend_curve >= 0.5)
+    )
+    breakdown_acceleration = (
+        short_term_breakdown
+        and (
+            price_change <= -2.0
+            or ma20_slope <= -1.0
+            or trend_curve <= -1.0
+            or (ma60_distance <= -5.0 and ma20_slope < 0 and ma60_slope < 0)
+        )
+    )
+    if breakdown_acceleration:
+        state = "하락 가속"
+        polarity = "risk"
+        impact = 16.0
+    elif support_retest:
+        state = "60일선 지지 재확인"
+        polarity = "context"
+        impact = 7.0
+    elif recovery_attempt:
+        state = "회복 시도"
+        polarity = "support"
+        impact = 7.0
+    elif has_ma20_context and has_ma60_context and ma20_distance >= 0 and ma60_distance >= 0:
+        state = "상승 추세 유지"
+        polarity = "support"
+        impact = 6.0
+    elif short_term_breakdown:
+        state = "단기 추세 훼손"
+        polarity = "risk"
+        impact = 10.0
+    else:
+        state = "중립 추세"
+        polarity = "context"
+        impact = 0.0
+    risk_score = clamp(
+        abs(min(0.0, ma20_distance)) * 2.0
+        + abs(min(0.0, ma60_distance)) * 1.4
+        + abs(min(0.0, price_change)) * 3.0
+        + abs(min(0.0, ma20_slope)) * 6.0
+        + abs(min(0.0, trend_curve)) * 4.0
+        - (10.0 if support_retest or recovery_attempt else 0.0),
+        0.0,
+        100.0,
+    )
+    return {
+        "state": state,
+        "priceChangeRate": round(price_change, 2),
+        "ma20Distance": round(ma20_distance, 2),
+        "ma60Distance": round(ma60_distance, 2),
+        "ma20Slope": round(ma20_slope, 2),
+        "ma60Slope": round(ma60_slope, 2),
+        "trendCurve": round(trend_curve, 2),
+        "shortTermBreakdown": short_term_breakdown,
+        "mediumTermSupport": medium_term_support,
+        "supportRetest": support_retest,
+        "recoveryAttempt": recovery_attempt,
+        "breakdownAcceleration": breakdown_acceleration,
+        "dynamicRiskScore": round(risk_score, 1),
+        "polarity": polarity,
+        "opinionImpact": impact,
+    }
 
 
 def data_quality_score(position: Position) -> float:
@@ -888,6 +969,21 @@ def add_metric_concepts(graph: PortfolioOntology, stock_id: str, position: Posit
             weight=1.0,
             properties=properties,
         )
+    trend_dynamic = trend_dynamic_facts(position)
+    scenario_id = add_entity(graph, "trend-scenario", symbol, str(trend_dynamic.get("state") or "추세 시나리오"), {
+        "tboxClass": "TrendSignal",
+        "tboxClasses": ["Observation", "TechnicalObservation", "TrendSignal", "Scenario"],
+        "source": source,
+        **trend_dynamic,
+    })
+    trend_properties = {
+        "source": source,
+        "polarity": str(trend_dynamic.get("polarity") or "context"),
+        "opinionImpact": number(trend_dynamic.get("opinionImpact")),
+        "aiInfluenceLabel": "추세 동역학: " + str(trend_dynamic.get("state") or "중립 추세"),
+    }
+    add_relation(graph, stock_id, scenario_id, "HAS_OBSERVATION", weight=1.0, properties=trend_properties)
+    add_relation(graph, stock_id, scenario_id, "HAS_TECHNICAL_INDICATOR", weight=1.0, properties=trend_properties)
     quality = data_quality_score(position)
     quality_id = add_entity(graph, "data-quality", symbol, "데이터 품질", {
         "tboxClass": "DataQuality",
@@ -1488,6 +1584,7 @@ def build_portfolio_ontology(
         add_relation(graph, thesis_id, horizon_id, "APPLIES_TO_HORIZON", weight=1.0, properties={"source": "ontology-opinion"})
         weight = position_weight(position, portfolio)
         trend = trend_score(position)
+        trend_dynamic = trend_dynamic_facts(position)
         flow = smart_money_score(position)
         quality = data_quality_score(position)
         if holding:
@@ -1497,7 +1594,7 @@ def build_portfolio_ontology(
                     "positionWeight": round(weight, 2),
                     "sectorWeight": round(sector_weights.get(position.sector, 0.0), 2),
                 }, 0.85),
-                ("trend", "market-data", "이동평균과 가격 추세 관계", {"trendScore": round(trend, 2)}, 0.65),
+                ("trend", "market-data", "이동평균과 가격 추세 관계", {"trendScore": round(trend, 2), "trendDynamics": trend_dynamic}, 0.65),
                 ("flow", "market-data", "외국인·기관 수급 관계", {"smartMoneyScore": round(flow, 2)}, 0.6),
                 ("data-quality", "data-quality", "AI 판단에 투입할 데이터 완성도", {"qualityScore": round(quality, 2)}, 0.7),
             ]
@@ -1508,7 +1605,7 @@ def build_portfolio_ontology(
                     "market": position.market,
                     "currency": position.currency,
                 }, 0.62),
-                ("trend", "market-data", "관심 종목 이동평균과 가격 추세 관계", {"trendScore": round(trend, 2)}, 0.55),
+                ("trend", "market-data", "관심 종목 이동평균과 가격 추세 관계", {"trendScore": round(trend, 2), "trendDynamics": trend_dynamic}, 0.55),
                 ("flow", "market-data", "관심 종목 외국인·기관 수급 관계", {"smartMoneyScore": round(flow, 2)}, 0.5),
                 ("data-quality", "data-quality", "진입 관찰에 투입할 데이터 완성도", {"qualityScore": round(quality, 2)}, 0.65),
             ]

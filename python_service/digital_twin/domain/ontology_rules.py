@@ -144,6 +144,9 @@ DECISION_STAGE_DEFINITIONS = {
     "DISCLOSURE_REVIEW": DecisionStageDefinition("DISCLOSURE_REVIEW", "disclosure", "review", "공시 리스크 대응 검토", "caution", 55.0, 70.0),
     "FLOW_WATCH": DecisionStageDefinition("FLOW_WATCH", "flowTrend", "watch", "수급·추세 관찰", "watch", 35.0, 55.0),
     "FLOW_DEFENSE": DecisionStageDefinition("FLOW_DEFENSE", "flowTrend", "review", "수급·추세 방어 권장", "caution", 55.0, 70.0),
+    "SUPPORT_RETEST": DecisionStageDefinition("SUPPORT_RETEST", "trendReview", "review", "60일선 지지 재확인", "hold", 55.0, 70.0),
+    "RECOVERY_CONFIRM": DecisionStageDefinition("RECOVERY_CONFIRM", "recovery", "review", "회복 시도 확인", "watch", 55.0, 70.0),
+    "BREAKDOWN_ACCELERATION": DecisionStageDefinition("BREAKDOWN_ACCELERATION", "lossControl", "action", "하락 가속 대응 점검", "danger", 70.0, 85.0),
     "ENTRY_WATCH": DecisionStageDefinition("ENTRY_WATCH", "entry", "watch", "분할매수 관찰", "watch", 35.0, 55.0),
     "ENTRY_SPLIT_BUY": DecisionStageDefinition("ENTRY_SPLIT_BUY", "entry", "review", "분할매수 후보", "watch", 55.0, 70.0),
     "ENTRY_READY": DecisionStageDefinition("ENTRY_READY", "entry", "action", "소액 분할매수 검토", "caution", 70.0, 85.0),
@@ -159,6 +162,9 @@ DECISION_LABEL_ALIASES = {
     "분할 매도 기준 확인": "PROFIT_SPLIT",
     "익절 점검": "PROFIT_PARTIAL",
     "리밸런싱 점검": "REBALANCE_REVIEW",
+    "60일선 지지 재확인": "SUPPORT_RETEST",
+    "회복 시도 확인": "RECOVERY_CONFIRM",
+    "하락 가속 대응 점검": "BREAKDOWN_ACCELERATION",
 }
 
 
@@ -202,6 +208,36 @@ DEFAULT_RELATION_RULES = [
         "20일/60일 추세와 외국인·기관 순매수 방향이 같은 쪽으로 움직일 때",
         "같은 방향 근거와 반대 근거를 나눠 AI에게 검토시킵니다.",
         ["ma20Distance", "ma60Distance", "foreignNetVolume", "institutionNetVolume"],
+    ),
+    RelationRuleDefinition(
+        "trend.support_retest.v1",
+        "단기선 이탈 + 60일선 지지 -> 지지선 재확인",
+        "v1",
+        "SUPPORT_RETEST",
+        "trend_context",
+        "현재가가 20일선 아래로 크게 밀렸지만 60일선 부근 또는 위에서 버틸 때",
+        "손절 결론을 바로 내리지 말고 60일선 지지 유지, 반등 시도, 거래량 동반 여부를 함께 검토합니다.",
+        ["currentPrice", "ma20", "ma60", "ma20Distance", "ma60Distance", "priceChangeRate"],
+    ),
+    RelationRuleDefinition(
+        "trend.recovery_attempt.v1",
+        "손실/눌림 + 반등 커브 -> 회복 확인",
+        "v1",
+        "RECOVERY_ATTEMPT",
+        "trend_recovery",
+        "20일선 아래 또는 손실 구간에서 가격 모멘텀·단기 기울기·커브가 회복 쪽으로 돌아설 때",
+        "회복 시도와 단순 낙폭 과대를 분리하고, 추가매수보다 확인 조건을 먼저 제시합니다.",
+        ["profitLossRate", "priceChangeRate", "ma20Slope", "ma60Slope", "trendCurve"],
+    ),
+    RelationRuleDefinition(
+        "trend.breakdown_acceleration.v1",
+        "추세 훼손 + 하락 가속 -> 리스크 강화",
+        "v1",
+        "BREAKDOWN_ACCELERATION",
+        "trend_acceleration",
+        "20일선 이탈 상태에서 가격 하락, 단기 기울기 하락, 하락 커브 확대 또는 중기선 동반 약화가 겹칠 때",
+        "현재 위치만 보지 말고 하락 속도와 커브 확대를 AI가 별도 위험 요인으로 검토합니다.",
+        ["currentPrice", "ma20", "ma60", "priceChangeRate", "ma20Slope", "ma60Slope", "trendCurve"],
     ),
     RelationRuleDefinition(
         "entry.pullback.supported.v1",
@@ -673,6 +709,12 @@ def resolve_decision_stage(rule_id: str, score: float, facts: Dict[str, object])
     value = float(score or 0)
     pnl = float(facts.get("profitLossRate") or 0)
     loss_threshold = float(facts.get("lossThreshold") or DEFAULT_RELATION_THRESHOLDS["lossRateLow"])
+    if rule_id == "trend.breakdown_acceleration.v1":
+        return decision_stage_by_key("BREAKDOWN_ACCELERATION" if value >= 70 else "LOSS_REDUCE")
+    if rule_id == "trend.support_retest.v1":
+        return decision_stage_by_key("SUPPORT_RETEST")
+    if rule_id == "trend.recovery_attempt.v1":
+        return decision_stage_by_key("RECOVERY_CONFIRM")
     if rule_id == "holding.loss_guard.breakdown.v1":
         if value >= 70 and pnl <= loss_threshold:
             return decision_stage_by_key("LOSS_CUT")
@@ -746,7 +788,7 @@ def _investor_flow(position: Position) -> Dict[str, float]:
     }
 
 
-def _trend_facts(position: Position) -> Dict[str, float]:
+def _trend_facts(position: Position) -> Dict[str, object]:
     current = number(position.current_price)
     ma20 = number(position.ma20)
     ma60 = number(position.ma60)
@@ -754,7 +796,49 @@ def _trend_facts(position: Position) -> Dict[str, float]:
     ma60_distance = number(position.ma60_distance) or (((current / ma60) - 1) * 100.0 if current and ma60 else 0.0)
     ma20_slope = number(position.ma20_slope)
     ma60_slope = number(position.ma60_slope)
-    score = clamp(ma20_distance * 0.45 + ma60_distance * 0.25 + ma20_slope * 3.0 + ma60_slope * 2.0, -35.0, 35.0)
+    price_change = number(position.change_rate)
+    trend_curve = ma20_slope - ma60_slope
+    short_term_breakdown = bool(ma20) and ma20_distance <= -5.0
+    medium_term_support = bool(ma60) and ma60_distance >= 0.0
+    support_retest = short_term_breakdown and bool(ma60) and ma60_distance >= -1.0
+    recovery_attempt = (
+        bool(current)
+        and (ma20_distance < 0 or number(position.profit_loss_rate) < 0)
+        and bool(ma60)
+        and ma60_distance >= -1.0
+        and (price_change >= 1.0 or ma20_slope >= 0.3 or trend_curve >= 0.5)
+    )
+    breakdown_acceleration = (
+        short_term_breakdown
+        and (
+            price_change <= -2.0
+            or ma20_slope <= -1.0
+            or trend_curve <= -1.0
+            or (ma60_distance <= -5.0 and ma20_slope < 0 and ma60_slope < 0)
+        )
+    )
+    dynamic_risk = trend_dynamic_risk_score(
+        ma20_distance,
+        ma60_distance,
+        price_change,
+        ma20_slope,
+        trend_curve,
+        support_retest,
+        recovery_attempt,
+    )
+    state = trend_state_label(ma20_distance, ma60_distance, support_retest, recovery_attempt, breakdown_acceleration)
+    curve_label = trend_curve_label(trend_curve)
+    slope_label = trend_slope_label(ma20_slope, ma60_slope)
+    price_momentum_label = direction_label(price_change, "상승", "하락")
+    score = clamp(
+        ma20_distance * 0.45
+        + ma60_distance * 0.25
+        + ma20_slope * 3.0
+        + ma60_slope * 2.0
+        + price_change * 0.4,
+        -35.0,
+        35.0,
+    )
     return {
         "currentPrice": current,
         "ma20": ma20,
@@ -763,6 +847,36 @@ def _trend_facts(position: Position) -> Dict[str, float]:
         "ma60Distance": ma60_distance,
         "ma20Slope": ma20_slope,
         "ma60Slope": ma60_slope,
+        "priceChangeRate": price_change,
+        "priceMomentumLabel": price_momentum_label,
+        "trendSlopeLabel": slope_label,
+        "trendCurve": trend_curve,
+        "trendCurveLabel": curve_label,
+        "trendState": state,
+        "shortTermBreakdown": short_term_breakdown,
+        "mediumTermSupport": medium_term_support,
+        "supportRetest": support_retest,
+        "recoveryAttempt": recovery_attempt,
+        "breakdownAcceleration": breakdown_acceleration,
+        "trendDynamicRiskScore": dynamic_risk,
+        "trendDynamics": {
+            "state": state,
+            "priceMomentum": price_momentum_label,
+            "priceChangeRate": round(price_change, 2),
+            "slope": slope_label,
+            "ma20Slope": round(ma20_slope, 2),
+            "ma60Slope": round(ma60_slope, 2),
+            "curve": curve_label,
+            "trendCurve": round(trend_curve, 2),
+            "ma20Distance": round(ma20_distance, 2),
+            "ma60Distance": round(ma60_distance, 2),
+            "shortTermBreakdown": short_term_breakdown,
+            "mediumTermSupport": medium_term_support,
+            "supportRetest": support_retest,
+            "recoveryAttempt": recovery_attempt,
+            "breakdownAcceleration": breakdown_acceleration,
+            "dynamicRiskScore": round(dynamic_risk, 1),
+        },
         "trendScore": score,
     }
 
@@ -834,6 +948,91 @@ def moving_average_distance_text(label: str, distance: float) -> str:
     if distance < 0:
         return label + "보다 " + value_text + "% 낮음"
     return label + "과 같음"
+
+
+def direction_label(value: float, positive: str, negative: str, flat: str = "보합", threshold: float = 0.2) -> str:
+    parsed = float(value or 0)
+    if parsed >= threshold:
+        return positive
+    if parsed <= -threshold:
+        return negative
+    return flat
+
+
+def trend_slope_label(ma20_slope: float, ma60_slope: float) -> str:
+    short = float(ma20_slope or 0)
+    medium = float(ma60_slope or 0)
+    if short <= -0.3 and medium <= -0.2:
+        return "단기·중기 하락"
+    if short >= 0.3 and medium >= 0.2:
+        return "단기·중기 상승"
+    if short <= -0.3 and medium > 0:
+        return "단기 둔화·중기 지지"
+    if short >= 0.3 and medium <= 0:
+        return "단기 회복·중기 둔화"
+    return "혼조·완만"
+
+
+def trend_curve_label(curve: float) -> str:
+    value = float(curve or 0)
+    if value <= -1.0:
+        return "하락 커브 확대"
+    if value <= -0.4:
+        return "단기 둔화 커브"
+    if value >= 1.0:
+        return "회복 커브 확대"
+    if value >= 0.4:
+        return "단기 회복 커브"
+    return "커브 완만"
+
+
+def trend_state_label(
+    ma20_distance: float,
+    ma60_distance: float,
+    support_retest: bool,
+    recovery_attempt: bool,
+    breakdown_acceleration: bool,
+) -> str:
+    if breakdown_acceleration:
+        return "하락 가속"
+    if support_retest and recovery_attempt:
+        return "60일선 지지 반등 시도"
+    if support_retest:
+        return "60일선 지지 재확인"
+    if recovery_attempt:
+        return "회복 시도"
+    if ma20_distance < 0 and ma60_distance < 0:
+        return "추세 하방"
+    if ma20_distance > 0 and ma60_distance > 0:
+        return "추세 상방"
+    return "추세 혼조"
+
+
+def trend_dynamic_risk_score(
+    ma20_distance: float,
+    ma60_distance: float,
+    price_change: float,
+    ma20_slope: float,
+    trend_curve: float,
+    support_retest: bool,
+    recovery_attempt: bool,
+) -> float:
+    risk = 0.0
+    if ma20_distance <= -5:
+        risk += min(30.0, abs(ma20_distance) * 2.0)
+    if ma60_distance < 0:
+        risk += min(20.0, abs(ma60_distance) * 3.0)
+    if price_change < 0:
+        risk += min(15.0, abs(price_change) * 4.0)
+    if ma20_slope < 0:
+        risk += min(15.0, abs(ma20_slope) * 8.0)
+    if trend_curve < 0:
+        risk += min(10.0, abs(trend_curve) * 6.0)
+    if support_retest and ma60_distance >= 0:
+        risk -= 5.0
+    if recovery_attempt:
+        risk -= 10.0
+    return clamp(risk, 0.0, 100.0)
 
 
 def position_signal_facts(
@@ -1059,6 +1258,7 @@ def decision_from_matches(facts: Dict[str, object], matches: List[OntologyRuleMa
             "nextStageAt": stage.next_stage_at,
         }
     priority = {
+        "trend.breakdown_acceleration.v1": 45,
         "holding.loss_guard.breakdown.v1": 40,
         "entry.pullback.supported.v1": 38,
         "holding.profit_take.trend_weakness.v1": 35,
@@ -1066,6 +1266,8 @@ def decision_from_matches(facts: Dict[str, object], matches: List[OntologyRuleMa
         "external.crypto.btc_sensitivity.v1": 25,
         "holding.concentration.rebalance.v1": 20,
         "entry.add_buy.blocked.v1": 18,
+        "trend.support_retest.v1": 16,
+        "trend.recovery_attempt.v1": 14,
     }
     selected = max(active, key=lambda item: (priority.get(item.rule_id, 10), item.strength_score, item.confidence))
     stage = resolve_decision_stage(selected.rule_id, selected.strength_score, facts)
@@ -1109,9 +1311,11 @@ def build_ai_prompt_context(
                 "market": facts.get("market"),
                 "sector": facts.get("sector"),
             },
-            "requiredBlocks": ["facts", "matchedRules", "missingData", "deliveryContext"],
+            "requiredBlocks": ["facts", "trendDynamics", "matchedRules", "missingData", "deliveryContext"],
             "forbidden": ["inventing_missing_market_data", "mixing_delivery_priority_with_investment_judgment"],
         },
+        "facts": dict(facts or {}),
+        "trendDynamics": dict(facts.get("trendDynamics") or {}),
         "matchedRules": [item.to_dict() for item in matches if item.matched],
         "missingData": list(facts.get("missingData") or []),
         "guardrails": list(template.guardrails),
@@ -1147,6 +1351,14 @@ def evaluate_position_relation_rules(
     volume_ratio = float(facts.get("volumeRatio") or 0)
     trade_strength = float(facts.get("tradeStrength") or 0)
     bid_ask_imbalance = float(facts.get("bidAskImbalance") or 0)
+    ma20_slope = float(facts.get("ma20Slope") or 0)
+    ma60_slope = float(facts.get("ma60Slope") or 0)
+    price_change = float(facts.get("priceChangeRate") or 0)
+    trend_curve = float(facts.get("trendCurve") or 0)
+    trend_dynamic_risk = float(facts.get("trendDynamicRiskScore") or 0)
+    support_retest = bool(facts.get("supportRetest"))
+    recovery_attempt = bool(facts.get("recoveryAttempt"))
+    breakdown_acceleration = bool(facts.get("breakdownAcceleration"))
     disclosure = facts.get("dartDisclosure")
     has_disclosure = isinstance(disclosure, dict) and bool(disclosure)
     news = facts.get("newsHeadlines")
@@ -1307,6 +1519,74 @@ def evaluate_position_relation_rules(
                 "거래량 배율 " + ("%.1f" % volume_ratio) + "x",
                 "확인 신호 " + str(confirmation_count) + "/5",
                 ("약한 확인 신호 감점 -" + ("%.1f" % weak_evidence_penalty) + "점") if weak_near_threshold else "",
+            ],
+            missing_labels,
+            definitions=relation_definitions,
+        ))
+    if support_retest:
+        score = (
+            50
+            + min(16, abs(ma20_distance) * 1.1)
+            + (7 if ma60_distance >= 0 else 3)
+            + (4 if price_change >= 0 else 0)
+            - (8 if breakdown_acceleration else 0)
+        )
+        matches.append(_match(
+            "trend.support_retest.v1",
+            score,
+            data_quality,
+            [
+                moving_average_distance_text("20일선", ma20_distance),
+                moving_average_distance_text("60일선", ma60_distance),
+                "가격 모멘텀 " + str(facts.get("priceMomentumLabel") or "-") + " (" + ("%.1f" % price_change) + "%)",
+                "기울기 " + str(facts.get("trendSlopeLabel") or "-"),
+                "추세 커브 " + str(facts.get("trendCurveLabel") or "-") + " (" + ("%.1f" % trend_curve) + ")",
+            ],
+            missing_labels,
+            definitions=relation_definitions,
+        ))
+    if recovery_attempt:
+        score = (
+            48
+            + (8 if price_change >= 1.0 else 0)
+            + min(8, max(0.0, ma20_slope) * 8.0)
+            + min(8, max(0.0, trend_curve) * 5.0)
+            + (5 if ma60_distance >= 0 else 0)
+        )
+        matches.append(_match(
+            "trend.recovery_attempt.v1",
+            score,
+            data_quality,
+            [
+                "가격 변화율 " + ("%.1f" % price_change) + "%",
+                "20일선 기울기 " + ("%.1f" % ma20_slope) + "%",
+                "60일선 기울기 " + ("%.1f" % ma60_slope) + "%",
+                "추세 커브 " + ("%.1f" % trend_curve),
+                moving_average_distance_text("60일선", ma60_distance),
+            ],
+            missing_labels,
+            definitions=relation_definitions,
+        ))
+    if breakdown_acceleration:
+        score = (
+            60
+            + min(20, trend_dynamic_risk * 0.35)
+            + min(10, abs(min(0.0, price_change)) * 2.0)
+            + min(10, abs(min(0.0, ma20_slope)) * 5.0)
+            + (6 if ma60_distance < 0 else 0)
+        )
+        matches.append(_match(
+            "trend.breakdown_acceleration.v1",
+            score,
+            data_quality,
+            [
+                moving_average_distance_text("20일선", ma20_distance),
+                moving_average_distance_text("60일선", ma60_distance),
+                "가격 변화율 " + ("%.1f" % price_change) + "%",
+                "20일선 기울기 " + ("%.1f" % ma20_slope) + "%",
+                "60일선 기울기 " + ("%.1f" % ma60_slope) + "%",
+                "추세 커브 " + ("%.1f" % trend_curve),
+                "추세 동역학 리스크 " + ("%.1f" % trend_dynamic_risk) + "점",
             ],
             missing_labels,
             definitions=relation_definitions,

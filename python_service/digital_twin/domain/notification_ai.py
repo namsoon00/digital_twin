@@ -109,6 +109,12 @@ def relation_facts(context: Dict[str, object]) -> Dict[str, object]:
     return facts if isinstance(facts, dict) else {}
 
 
+def relation_trend_dynamics(context: Dict[str, object]) -> Dict[str, object]:
+    facts = relation_facts(context)
+    dynamics = facts.get("trendDynamics") if isinstance(facts.get("trendDynamics"), dict) else {}
+    return dynamics if isinstance(dynamics, dict) else {}
+
+
 def active_rule_items(context: Dict[str, object]) -> List[Dict[str, object]]:
     relation_context = relation_context_value(context)
     rules = relation_context.get("activeRules") or relation_context.get("matchedRules") or []
@@ -159,6 +165,37 @@ def compact_text(value: object, max_len: int = 96) -> str:
     if max_len > 3 and len(text) > max_len:
         return text[: max_len - 3].rstrip() + "..."
     return text
+
+
+def trend_dynamics_summary(context: Dict[str, object]) -> str:
+    dynamics = relation_trend_dynamics(context)
+    if not dynamics:
+        return ""
+    parts: List[str] = []
+    state = str(dynamics.get("state") or "").strip()
+    momentum = str(dynamics.get("priceMomentum") or "").strip()
+    slope = str(dynamics.get("slope") or "").strip()
+    curve = str(dynamics.get("curve") or "").strip()
+    if state:
+        parts.append("상태 " + state)
+    if momentum:
+        parts.append("가격 " + momentum + " " + str(dynamics.get("priceChangeRate") or 0) + "%")
+    if slope:
+        parts.append("기울기 " + slope)
+    if curve:
+        parts.append("커브 " + curve + " " + str(dynamics.get("trendCurve") or 0))
+    scenario_parts = []
+    if dynamics.get("supportRetest"):
+        scenario_parts.append("60일선 지지 재확인")
+    if dynamics.get("recoveryAttempt"):
+        scenario_parts.append("회복 시도")
+    if dynamics.get("breakdownAcceleration"):
+        scenario_parts.append("하락 가속")
+    if scenario_parts:
+        parts.append("시나리오 " + ", ".join(scenario_parts))
+    if dynamics.get("dynamicRiskScore") not in (None, ""):
+        parts.append("동역학 리스크 " + str(dynamics.get("dynamicRiskScore")) + "점")
+    return " / ".join(parts[:6])
 
 
 def sanitized_prompt_data(value: object, depth: int = 0, max_items: int = 40) -> object:
@@ -280,6 +317,7 @@ def notification_ai_prompt_context(
             "referenceDate": str(context.get("referenceDate") or ""),
             "activeRules": active_rule_items(context),
             "relationFacts": sanitized_prompt_data(relation_context.get("facts") if isinstance(relation_context, dict) else {}),
+            "trendDynamics": sanitized_prompt_data(relation_trend_dynamics(context)),
             "sourceAlertEvents": sanitized_prompt_data(
                 (context.get("metadata") if isinstance(context.get("metadata"), dict) else {}).get("sourceAlertEvents")
                 or context.get("sourceAlertEvents")
@@ -331,6 +369,7 @@ def opinion_lines_for_type(message_type: str, context: Dict[str, object]) -> Lis
         trend_line = line_value(lines, "추세")
         flow_line = line_value(lines, "수급")
         investor_line = line_value(lines, "투자자")
+        trend_dynamics_text = trend_dynamics_summary(context)
         news_text = news_summary_text(context)
         disclosure_lines = disclosure_analysis_opinion_lines(context)
         source_types = insight.get("sourceSignalTypes") or context.get("sourceSignalTypes") if isinstance(context, dict) else []
@@ -359,6 +398,8 @@ def opinion_lines_for_type(message_type: str, context: Dict[str, object]) -> Lis
             result.append("가격 위치: " + ", ".join(summary_bits))
         if flow_line or investor_line or trend_line:
             result.append("근거: " + " / ".join(part for part in [flow_line, investor_line, trend_line] if part))
+        if trend_dynamics_text:
+            result.append("추세 동역학: " + trend_dynamics_text)
         if risk_line:
             result.append("주의: " + risk_line)
         if news_text:
@@ -371,6 +412,7 @@ def opinion_lines_for_type(message_type: str, context: Dict[str, object]) -> Lis
         return result
     if message_type == "holdingTiming":
         evidence = active_rule_evidence(context, 5)
+        trend_dynamics_text = trend_dynamics_summary(context)
         rule_text = ", ".join(rules[:2]) if rules else (state or "보유 타이밍 조건")
         situation_parts = []
         if state:
@@ -387,6 +429,8 @@ def opinion_lines_for_type(message_type: str, context: Dict[str, object]) -> Lis
         result = ["상황: " + situation]
         if flow or trend:
             result.append("수급·추세: " + " / ".join(part for part in [flow, trend] if part))
+        if trend_dynamics_text:
+            result.append("추세 동역학: " + trend_dynamics_text)
         if line_value(lines, "투자자"):
             result.append("투자자: " + line_value(lines, "투자자"))
         if news_text:

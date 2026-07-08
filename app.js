@@ -432,12 +432,13 @@
     { id: "symbols", label: "전체종목", description: "시장 목록" },
     { id: "notifications", label: "알림", description: "신호·발송" },
     { id: "modeling", label: "투자 분석", description: "전략·관계·AI" },
+    { id: "feed", label: "피드", description: "데이터 품질" },
     { id: "settings", label: "설정", description: "런타임 환경" }
   ];
   var appBrandName = "Orbit Alpha";
   var appBrandSubtitle = "포트폴리오 신호 궤도 관제";
   var bottomTabIds = ["overview", "watchlist", "notifications", "modeling"];
-  var managementTabIds = ["accounts", "symbols", "settings"];
+  var managementTabIds = ["accounts", "symbols", "feed", "settings"];
   var notificationSections = [
     { id: "status", label: "현황", description: "발송 판단" },
     { id: "signals", label: "신호", description: "감지 내역" },
@@ -719,6 +720,11 @@
     feed: null,
     feedLoading: false,
     feedError: "",
+    researchEvidence: null,
+    researchEvidenceLoading: false,
+    researchEvidenceError: "",
+    researchEvidenceFilters: { symbol: "", kind: "", limit: "80" },
+    researchEvidenceDeleting: "",
     activeTab: initialTab(),
     previousTab: "",
     tabBarScrollLeft: 0,
@@ -4317,6 +4323,137 @@
       });
   }
 
+  function currentResearchEvidence() {
+    return state.researchEvidence || {
+      items: [],
+      summary: { total: 0, latestSeenAt: "", bySymbol: [], byKind: [], bySource: [], byPolarity: [] },
+      symbol: "",
+      kind: "",
+      limit: Number(state.researchEvidenceFilters.limit || 80)
+    };
+  }
+
+  function resolveResearchEvidenceSymbol(value) {
+    var raw = String(value || "").trim();
+    if (!raw) return "";
+    var normalized = raw.toUpperCase();
+    if (/^[A-Z0-9.\-]+$/.test(normalized)) return normalized;
+    var candidates = [];
+    var toss = (state.snapshot || {}).toss || {};
+    (Array.isArray(toss.positions) ? toss.positions : []).forEach(function (item) {
+      candidates.push(item);
+    });
+    (Array.isArray(toss.watchlist) ? toss.watchlist : []).forEach(function (item) {
+      candidates.push(item);
+    });
+    (Array.isArray((state.symbolUniverse || {}).items) ? state.symbolUniverse.items : []).forEach(function (item) {
+      candidates.push(item);
+    });
+    var exact = candidates.filter(function (item) {
+      return String(item && (item.name || item.symbolName || item.displayName) || "").trim() === raw;
+    })[0];
+    if (exact && exact.symbol) return String(exact.symbol).toUpperCase();
+    var partial = candidates.filter(function (item) {
+      return String(item && (item.name || item.symbolName || item.displayName) || "").indexOf(raw) >= 0;
+    })[0];
+    return partial && partial.symbol ? String(partial.symbol).toUpperCase() : normalized;
+  }
+
+  function researchEvidenceQueryString() {
+    var filters = state.researchEvidenceFilters || {};
+    var params = new URLSearchParams();
+    var symbol = resolveResearchEvidenceSymbol(filters.symbol);
+    var kind = String(filters.kind || "").trim();
+    var limit = String(filters.limit || "80").trim();
+    if (symbol) params.set("symbol", symbol);
+    if (kind) params.set("kind", kind);
+    if (limit) params.set("limit", limit);
+    var text = params.toString();
+    return text ? "?" + text : "";
+  }
+
+  function staticResearchEvidencePayload(reason) {
+    var stamped = new Date().toISOString();
+    return {
+      items: [
+        {
+          evidenceId: "preview:005930:news",
+          symbol: "005930",
+          kind: "news",
+          source: "Static Preview",
+          title: "반도체 업황 개선 기대",
+          summary: reason || "정적 미리보기에서는 저장된 리서치 근거 예시를 보여줍니다.",
+          url: "",
+          observedAt: stamped,
+          publishedAt: stamped,
+          polarity: "support",
+          impactScore: 6.5,
+          confidence: 0.62,
+          payload: { name: "삼성전자" }
+        }
+      ],
+      summary: {
+        total: 1,
+        latestSeenAt: stamped,
+        bySymbol: [{ name: "005930", count: 1, latestSeenAt: stamped }],
+        byKind: [{ name: "news", count: 1, latestSeenAt: stamped }],
+        bySource: [{ name: "Static Preview", count: 1, latestSeenAt: stamped }],
+        byPolarity: [{ name: "support", count: 1, latestSeenAt: stamped }]
+      },
+      symbol: "005930",
+      kind: "",
+      limit: 80,
+      preview: true
+    };
+  }
+
+  function loadResearchEvidence(force) {
+    if (state.researchEvidenceLoading) return Promise.resolve();
+    if (state.researchEvidence && !force) return Promise.resolve(state.researchEvidence);
+    state.researchEvidenceLoading = true;
+    state.researchEvidenceError = "";
+    render();
+
+    var promise = isStaticPreviewHost()
+      ? Promise.resolve(staticResearchEvidencePayload("정적 미리보기"))
+      : requestJson("/api/research-evidence" + researchEvidenceQueryString());
+
+    return promise
+      .then(function (payload) {
+        state.researchEvidence = payload;
+        state.researchEvidenceError = "";
+      })
+      .catch(function (error) {
+        state.researchEvidenceError = error.message || "저장된 근거를 불러오지 못했습니다.";
+      })
+      .finally(function () {
+        state.researchEvidenceLoading = false;
+        render();
+      });
+  }
+
+  function deleteResearchEvidence(evidenceId) {
+    var id = String(evidenceId || "").trim();
+    if (!id || state.researchEvidenceDeleting) return Promise.resolve();
+    if (window.confirm && !window.confirm("선택한 리서치 근거를 삭제할까요?")) return Promise.resolve();
+    state.researchEvidenceDeleting = id;
+    state.researchEvidenceError = "";
+    render();
+    return sendJson("/api/research-evidence/" + encodeURIComponent(id) + researchEvidenceQueryString(), "DELETE", {})
+      .then(function (payload) {
+        state.researchEvidence = payload;
+        showSnackbar(payload.deleted ? "리서치 근거를 삭제했습니다." : "삭제할 근거를 찾지 못했습니다.", payload.deleted ? "success" : "danger");
+      })
+      .catch(function (error) {
+        state.researchEvidenceError = error.message || "리서치 근거를 삭제하지 못했습니다.";
+        showSnackbar(state.researchEvidenceError, "danger");
+      })
+      .finally(function () {
+        state.researchEvidenceDeleting = "";
+        render();
+      });
+  }
+
   function staticPreviewSnapshot() {
     var localData = staticLocalData(state.staticBuildConfig);
     var stamped = localData.generatedAt || new Date().toISOString();
@@ -6495,6 +6632,9 @@
     if (state.activeTab === "feed" && !state.feed && !state.feedLoading) {
       loadFeed(false);
     }
+    if (state.activeTab === "feed" && !state.researchEvidence && !state.researchEvidenceLoading) {
+      loadResearchEvidence(false);
+    }
   }
 
   function renderLoading() {
@@ -6756,6 +6896,9 @@
         '</section>'
       ].join(""));
     }
+    if (state.activeTab === "feed") {
+      return renderFeedPage(snapshot);
+    }
     if (state.activeTab === "notifications") {
       return renderNotificationsPage();
     }
@@ -6813,6 +6956,10 @@
       symbols: {
         steps: [["01", "Catalog", "시장 목록"], ["02", "Filter", "검색·필터"], ["03", "Add", "계정 편입"]],
         metrics: [["기본", watchlistSymbols().length], ["계정", allAccountWatchlistSymbols().length], ["시장", symbolMarketCount()]]
+      },
+      feed: {
+        steps: [["01", "Source", "피드 설정"], ["02", "Quality", "수집 품질"], ["03", "Evidence", "저장 근거"]],
+        metrics: [["피드", (state.feed && state.feed.items ? state.feed.items.length : 0)], ["근거", ((currentResearchEvidence().summary || {}).total || 0)], ["오류", (state.feed && state.feed.errors ? state.feed.errors.length : 0)]]
       },
       notifications: {
         steps: [["01", "Decision", "최근 판단"], ["02", "Policy", "타입 룰"], ["03", "Template", "본문·발송"]],
@@ -12602,6 +12749,19 @@
     return state.feed || { items: [], channels: [], errors: [] };
   }
 
+  function renderFeedPage(snapshot) {
+    return renderManagedPage("feed", snapshot, [
+      '<section class="admin-grid feed-view">',
+      renderFeedOverviewPanel(),
+      renderFeedSettingsPanel(),
+      renderFeedQualityPanel(),
+      renderResearchEvidencePanel(),
+      renderFeedChannelPanel(),
+      renderFeedListPanel(),
+      '</section>'
+    ].join(""));
+  }
+
   function uniqueCount(items, key) {
     var seen = {};
     (items || []).forEach(function (item) {
@@ -12692,6 +12852,303 @@
       '</div>',
       '</div>',
       item.url ? '<a class="open-link" href="' + escapeHtml(item.url) + '" target="_blank" rel="noreferrer" title="원문 열기">↗</a>' : '<span class="open-link muted">-</span>',
+      '</div>'
+    ].join("");
+  }
+
+  function renderFeedSettingsPanel() {
+    return [
+      '<article class="panel feed-settings-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Feed Operations</p>',
+      '<h2>피드 수집 설정</h2>',
+      '</div>',
+      '<span class="tone-chip ' + settingsStatusTone() + '" data-settings-status>' + settingsStatusLabel() + '</span>',
+      '</div>',
+      '<div class="settings-body">',
+      renderSettingsApiCard("원천 준비도", "뉴스·공시·SEC", [
+        configuredChip("KIS 수급", settingEnabled("kisMarketSignalsEnabled"), configuredCount(["kisAppKey", "kisAppSecret"]) + "/2"),
+        configuredChip("뉴스", settingEnabled("externalNewsEnabled"), newsProviderLabel(settingValue("externalNewsProvider") || defaultSettings.externalNewsProvider)),
+        configuredChip("OpenDART", settingEnabled("externalDartEnabled"), isConfiguredSetting("opendartApiKey") ? "키 저장됨" : "키 필요"),
+        configuredChip("SEC", settingEnabled("externalSecEnabled"), "무키"),
+        configuredChip("Alpha", settingEnabled("externalAlphaEnabled"), isConfiguredSetting("alphaVantageApiKey") ? "키 저장됨" : "키 필요"),
+        configuredChip("FRED", settingEnabled("externalFredEnabled"), isConfiguredSetting("fredApiKey") ? "키 저장됨" : "키 필요"),
+        configuredChip("CoinGecko", settingEnabled("externalCoinGeckoEnabled"), isConfiguredSetting("coingeckoApiKey") ? "키 저장됨" : "키 없음")
+      ]),
+      '<div class="settings-grid feed-settings-grid">',
+      renderSettingSelect("kisMarketSignalsEnabled", "KIS 수급 수집", [
+        { value: "1", label: "사용" },
+        { value: "0", label: "사용 안 함" }
+      ]),
+      renderSettingField("kisMarketSignalMaxSymbols", "KIS 수급 종목 수", "number", "20"),
+      renderSettingSelect("externalNewsEnabled", "뉴스 헤드라인 수집", [
+        { value: "1", label: "사용" },
+        { value: "0", label: "사용 안 함" }
+      ]),
+      renderSettingSelect("externalNewsProvider", "뉴스 공급자", [
+        { value: "auto", label: "자동" },
+        { value: "gdelt", label: "GDELT" },
+        { value: "alpha_vantage", label: "Alpha Vantage" }
+      ]),
+      renderSettingField("externalNewsMaxSymbols", "뉴스 조회 종목 수", "number", "3"),
+      renderSettingField("externalNewsLookbackHours", "뉴스 조회 기간(시간)", "number", "48"),
+      renderSettingSelect("externalDartEnabled", "OpenDART 공시 수집", [
+        { value: "1", label: "사용" },
+        { value: "0", label: "사용 안 함" }
+      ]),
+      renderSettingField("externalDartLookbackDays", "공시 조회 기간(일)", "number", "14"),
+      renderSettingSelect("externalSecEnabled", "SEC EDGAR 수집", [
+        { value: "1", label: "사용" },
+        { value: "0", label: "사용 안 함" }
+      ]),
+      renderSettingField("externalSecMaxSymbols", "SEC 조회 종목 수", "number", "3"),
+      renderSettingSelect("externalAlphaEnabled", "Alpha Vantage 수집", [
+        { value: "1", label: "사용" },
+        { value: "0", label: "사용 안 함" }
+      ]),
+      renderSettingSelect("externalFredEnabled", "FRED 거시 수집", [
+        { value: "1", label: "사용" },
+        { value: "0", label: "사용 안 함" }
+      ]),
+      renderSettingSelect("externalCoinGeckoEnabled", "CoinGecko 크립토 수집", [
+        { value: "1", label: "사용" },
+        { value: "0", label: "사용 안 함" }
+      ]),
+      renderSettingField("externalApiFetchIntervalMinutes", "외부 API 캐시(분)", "number", "30"),
+      '<label class="setting-field wide">',
+      '<span>OpenDART 종목 매핑</span>',
+      '<textarea data-setting="externalDartCorpCodes" rows="3" autocomplete="off" placeholder="005930=00126380">' + escapeHtml(settingValue("externalDartCorpCodes") || defaultSettings.externalDartCorpCodes) + '</textarea>',
+      '</label>',
+      '</div>',
+      renderSettingsSmartSavePanel(),
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function feedFreshness(value) {
+    var time = feedTimeValue(value);
+    if (!time) return { label: "미수집", tone: "caution" };
+    var hours = Math.max(0, (Date.now() - time) / 3600000);
+    if (hours < 1) return { label: "1시간 이내", tone: "watch" };
+    if (hours < 24) return { label: Math.round(hours) + "시간 전", tone: "watch" };
+    if (hours < 72) return { label: Math.round(hours / 24) + "일 전", tone: "caution" };
+    return { label: Math.round(hours / 24) + "일 전", tone: "danger" };
+  }
+
+  function feedQualitySignals() {
+    var feed = currentFeed();
+    var evidence = currentResearchEvidence();
+    var summary = evidence.summary || {};
+    var channelErrors = Array.isArray(feed.errors) ? feed.errors.length : 0;
+    var activeChannels = (feed.channels || []).filter(function (channel) {
+      return Number(channel.count || 0) > 0 && !channel.error;
+    }).length;
+    var latest = feedFreshness(summary.latestSeenAt);
+    var kisEnabled = settingEnabled("kisMarketSignalsEnabled");
+    var newsEnabled = settingEnabled("externalNewsEnabled");
+    var dartEnabled = settingEnabled("externalDartEnabled");
+    var secEnabled = settingEnabled("externalSecEnabled");
+    var alphaEnabled = settingEnabled("externalAlphaEnabled");
+    var fredEnabled = settingEnabled("externalFredEnabled");
+    var cryptoEnabled = settingEnabled("externalCoinGeckoEnabled");
+    return [
+      {
+        label: "실시간 피드 채널",
+        value: activeChannels + "/" + feedChannels.length,
+        tone: channelErrors ? "caution" : (activeChannels ? "watch" : "hold"),
+        description: channelErrors ? "일부 웹 피드 조회가 실패했습니다." : "RSS/GDELT 채널에서 화면용 시장 피드를 가져옵니다."
+      },
+      {
+        label: "저장된 리서치 근거",
+        value: Number(summary.total || 0) + "건",
+        tone: Number(summary.total || 0) ? latest.tone : "caution",
+        description: "온톨로지와 AI 의견에 들어갈 수 있는 DB 저장 근거입니다. 최근 저장 " + latest.label + "."
+      },
+      {
+        label: "시장·수급 데이터",
+        value: kisEnabled ? (configuredCount(["kisAppKey", "kisAppSecret"]) + "/2") : "중지",
+        tone: kisEnabled && configuredCount(["kisAppKey", "kisAppSecret"]) >= 2 ? "watch" : (kisEnabled ? "caution" : "hold"),
+        description: "체결강도, 호가, 투자자 수급 같은 장중 신호를 관계 판단의 ABox 근거로 사용합니다."
+      },
+      {
+        label: "뉴스 수집",
+        value: newsEnabled ? newsProviderLabel(settingValue("externalNewsProvider") || defaultSettings.externalNewsProvider) : "중지",
+        tone: newsEnabled ? "watch" : "hold",
+        description: "관심·보유 종목별 외부 헤드라인을 수집해 research_evidence에 저장합니다."
+      },
+      {
+        label: "공시 수집",
+        value: dartEnabled ? (isConfiguredSetting("opendartApiKey") ? "준비됨" : "키 필요") : "중지",
+        tone: dartEnabled && isConfiguredSetting("opendartApiKey") ? "watch" : (dartEnabled ? "caution" : "hold"),
+        description: "OpenDART 주요 공시를 종목별 이벤트 근거로 저장합니다."
+      },
+      {
+        label: "SEC 수집",
+        value: secEnabled ? "사용" : "중지",
+        tone: secEnabled ? "watch" : "hold",
+        description: "미국 종목의 EDGAR filings를 보조 근거로 저장합니다."
+      },
+      {
+        label: "거시·크립토 보조 신호",
+        value: [fredEnabled ? "FRED" : "", cryptoEnabled ? "CoinGecko" : "", alphaEnabled ? "Alpha" : ""].filter(Boolean).join(" · ") || "중지",
+        tone: (fredEnabled || cryptoEnabled || alphaEnabled) ? "watch" : "hold",
+        description: "금리, 유동성, 크립토, 해외 가격 변화를 포트폴리오 관계 신호에 보조 입력으로 연결합니다."
+      },
+      {
+        label: "외부 API 캐시",
+        value: (settingValue("externalApiFetchIntervalMinutes") || defaultSettings.externalApiFetchIntervalMinutes || "30") + "분",
+        tone: "watch",
+        description: "워커가 같은 외부 신호 묶음을 다시 사용할 수 있는 최소 갱신 간격입니다."
+      }
+    ];
+  }
+
+  function renderFeedQualityPanel() {
+    var evidence = currentResearchEvidence();
+    var summary = evidence.summary || {};
+    var kinds = Array.isArray(summary.byKind) ? summary.byKind : [];
+    return [
+      '<article class="panel feed-quality-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Data Quality</p>',
+      '<h2>데이터 품질 상태</h2>',
+      '</div>',
+      '<div class="settings-actions">',
+      '<button class="text-button" data-action="refresh-research-evidence">' + (state.researchEvidenceLoading ? "조회 중" : "저장 근거 조회") + '</button>',
+      '<button class="text-button primary" data-action="refresh-feed">' + (state.feedLoading ? "갱신 중" : "웹 피드 갱신") + '</button>',
+      '</div>',
+      '</div>',
+      '<div class="feed-quality-grid">',
+      feedQualitySignals().map(renderFeedQualitySignal).join(""),
+      '</div>',
+      '<div class="theme-radar feed-quality-tags">',
+      kinds.length ? kinds.slice(0, 8).map(function (entry) {
+        return '<span>' + escapeHtml(researchEvidenceKindLabel(entry.name)) + ' <strong>' + escapeHtml(entry.count) + '</strong></span>';
+      }).join("") : '<span>저장 근거 대기</span>',
+      '</div>',
+      state.researchEvidenceError ? '<p class="form-error">' + escapeHtml(state.researchEvidenceError) + '</p>' : '',
+      '</article>'
+    ].join("");
+  }
+
+  function renderFeedQualitySignal(item) {
+    return [
+      '<div class="feed-quality-card">',
+      '<span class="tone-chip ' + escapeHtml(item.tone || "hold") + '">' + escapeHtml(item.value || "-") + '</span>',
+      '<strong>' + escapeHtml(item.label || "-") + '</strong>',
+      '<p>' + escapeHtml(item.description || "") + '</p>',
+      '</div>'
+    ].join("");
+  }
+
+  function researchEvidenceKindLabel(kind) {
+    return {
+      "news": "뉴스",
+      "disclosure": "공시",
+      "sec-filing": "SEC",
+      "market-move": "가격 변동",
+      "fundamental": "펀더멘털"
+    }[String(kind || "").toLowerCase()] || kind || "근거";
+  }
+
+  function researchEvidencePolarityLabel(polarity) {
+    return {
+      "support": "우호",
+      "risk": "위험",
+      "context": "맥락"
+    }[String(polarity || "").toLowerCase()] || polarity || "맥락";
+  }
+
+  function renderResearchEvidencePanel() {
+    var evidence = currentResearchEvidence();
+    var items = Array.isArray(evidence.items) ? evidence.items : [];
+    var summary = evidence.summary || {};
+    return [
+      '<article class="panel research-evidence-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Evidence DB</p>',
+      '<h2>저장 근거 조회·관리</h2>',
+      '</div>',
+      '<span class="metric">' + escapeHtml(Number(summary.total || 0)) + '</span>',
+      '</div>',
+      renderResearchEvidenceFilters(),
+      '<div class="research-evidence-list">',
+      state.researchEvidenceLoading ? '<div class="panel skeleton"></div>' : '',
+      state.researchEvidenceError ? '<p class="form-error">' + escapeHtml(state.researchEvidenceError) + '</p>' : '',
+      (!state.researchEvidenceLoading && !state.researchEvidenceError && !items.length) ? '<p class="subtle">저장된 뉴스·공시·SEC 근거가 아직 없습니다. 외부 데이터 워커가 수집하면 이곳에 표시됩니다.</p>' : '',
+      (!state.researchEvidenceLoading && items.length) ? items.map(renderResearchEvidenceItem).join("") : '',
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderResearchEvidenceFilters() {
+    var filters = state.researchEvidenceFilters || {};
+    return [
+      '<form class="research-evidence-filters" data-research-evidence-form>',
+      '<label class="setting-field">',
+      '<span>회사명 또는 코드</span>',
+      '<input data-research-filter="symbol" type="text" value="' + escapeHtml(filters.symbol || "") + '" placeholder="삼성전자 또는 005930" autocomplete="off" />',
+      '</label>',
+      '<label class="setting-field">',
+      '<span>근거 종류</span>',
+      '<select data-research-filter="kind">',
+      [
+        { value: "", label: "전체" },
+        { value: "news", label: "뉴스" },
+        { value: "disclosure", label: "공시" },
+        { value: "sec-filing", label: "SEC" },
+        { value: "market-move", label: "가격 변동" }
+      ].map(function (option) {
+        return '<option value="' + escapeHtml(option.value) + '"' + (String(filters.kind || "") === option.value ? " selected" : "") + '>' + escapeHtml(option.label) + '</option>';
+      }).join(""),
+      '</select>',
+      '</label>',
+      '<label class="setting-field">',
+      '<span>조회 수</span>',
+      '<select data-research-filter="limit">',
+      ["30", "80", "150", "300"].map(function (value) {
+        return '<option value="' + escapeHtml(value) + '"' + (String(filters.limit || "80") === value ? " selected" : "") + '>' + escapeHtml(value) + '건</option>';
+      }).join(""),
+      '</select>',
+      '</label>',
+      '<div class="settings-actions feed-filter-actions">',
+      '<button class="text-button primary" type="submit">' + (state.researchEvidenceLoading ? "조회 중" : "조회") + '</button>',
+      '</div>',
+      '</form>'
+    ].join("");
+  }
+
+  function renderResearchEvidenceItem(item) {
+    var symbol = String(item.symbol || "").toUpperCase();
+    var displayName = stockDisplayName(symbol, item.payload || item);
+    var time = item.publishedAt || item.observedAt || "";
+    var deleting = state.researchEvidenceDeleting === item.evidenceId;
+    return [
+      '<div class="research-evidence-item">',
+      '<div class="research-evidence-main">',
+      '<div class="research-evidence-meta">',
+      '<span>' + escapeHtml(displayName) + (symbol && displayName !== symbol ? ' <em>' + escapeHtml(symbol) + '</em>' : '') + '</span>',
+      '<span>' + escapeHtml(researchEvidenceKindLabel(item.kind)) + '</span>',
+      '<span>' + escapeHtml(item.source || "-") + '</span>',
+      '<span>' + escapeHtml(formatFeedTime(time) || "-") + '</span>',
+      '</div>',
+      '<h3>' + escapeHtml(item.title || "제목 없음") + '</h3>',
+      '<p>' + escapeHtml(item.summary || "요약 없음") + '</p>',
+      '<div class="research-evidence-metrics">',
+      '<span>방향 <strong>' + escapeHtml(researchEvidencePolarityLabel(item.polarity)) + '</strong></span>',
+      '<span>영향 <strong>' + escapeHtml(item.impactScore == null ? "-" : item.impactScore) + '</strong></span>',
+      '<span>신뢰 <strong>' + escapeHtml(Math.round(Number(item.confidence || 0) * 100)) + '%</strong></span>',
+      '</div>',
+      '</div>',
+      '<div class="research-evidence-actions">',
+      item.url ? '<a class="open-link" href="' + escapeHtml(item.url) + '" target="_blank" rel="noreferrer" title="원문 열기">↗</a>' : '<span class="open-link muted">-</span>',
+      '<button class="mini-button danger" type="button" data-research-delete="' + escapeHtml(item.evidenceId || "") + '"' + (deleting || item.evidenceId === "preview:005930:news" ? " disabled" : "") + '>' + (deleting ? "삭제 중" : "삭제") + '</button>',
+      '</div>',
       '</div>'
     ].join("");
   }
@@ -13187,12 +13644,41 @@
       });
     }
 
-    var refreshFeed = app.querySelector('[data-action="refresh-feed"]');
-    if (refreshFeed) {
+    Array.prototype.slice.call(app.querySelectorAll('[data-action="refresh-feed"]')).forEach(function (refreshFeed) {
       refreshFeed.addEventListener("click", function () {
         loadFeed(true);
       });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll('[data-action="refresh-research-evidence"]')).forEach(function (refreshEvidence) {
+      refreshEvidence.addEventListener("click", function () {
+        loadResearchEvidence(true);
+      });
+    });
+
+    var researchEvidenceForm = app.querySelector("[data-research-evidence-form]");
+    if (researchEvidenceForm) {
+      researchEvidenceForm.addEventListener("submit", function (event) {
+        event.preventDefault();
+        loadResearchEvidence(true);
+      });
     }
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-research-filter]")).forEach(function (field) {
+      var updateResearchFilter = function () {
+        var name = field.getAttribute("data-research-filter");
+        if (!name) return;
+        state.researchEvidenceFilters[name] = field.value;
+      };
+      field.addEventListener("input", updateResearchFilter);
+      field.addEventListener("change", updateResearchFilter);
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-research-delete]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        deleteResearchEvidence(button.getAttribute("data-research-delete"));
+      });
+    });
 
     var newServiceAccount = app.querySelector('[data-action="new-service-account"]');
     if (newServiceAccount) {

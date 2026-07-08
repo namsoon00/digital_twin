@@ -5153,6 +5153,40 @@ class PythonServiceTests(unittest.TestCase):
         self.assertNotIn("AI 의견", rendered)
         self.assertEqual(1, rendered.count("분석출처: AI 검증 알림"))
 
+    def test_validated_ai_response_omits_empty_current_state_section(self):
+        context = {
+            "messageType": "investmentInsight",
+            "headline": "[관찰] 🛡️ 손절·분할축소 점검",
+            "displayTarget": "크립토 변동 / 이더리움 / ETH",
+            "referenceDate": "2026-07-08 22:26 KST",
+            "sentTime": "2026-07-08 22:26 KST",
+            "rawLines": "\n".join([
+                "인사이트 유형: 외부 환경 변화",
+                "핵심 결론: 크립토 변동에 연결된 외부 시장 관계가 바뀌었습니다.",
+                "기준일: 2026-07-08 22:26 KST",
+            ]),
+            "criterionLines": "설정: 관계 분석 관계 그래프에서 의미 있는 투자 인사이트가 생성될 때",
+        }
+
+        response = validated_response_from_payload(context, {
+            "action": "HOLD",
+            "confidence": 72.1,
+            "summary": "이더리움 변동이 기준을 넘었습니다.",
+            "opinion": "보유를 유지하되 민감 보유 종목 반응을 확인하세요.",
+            "evidence": ["이더리움 7일 변동은 +10.8%로 설정 기준을 넘었습니다."],
+            "counterEvidence": ["민감 보유 종목의 현재가, 거래량, 수익률 방향이 제공되지 않았습니다."],
+            "nextChecks": ["민감 보유 종목이 실제로 가격 반응을 보이는지 확인합니다."],
+            "missingDataImpact": ["민감 보유 종목의 현재 상태 자료가 없어 판단 강도를 낮춥니다."],
+            "referenceDate": "2026-07-08 22:26 KST",
+        }, source="test AI")
+
+        enriched = context_with_validated_ai_response(context, response)
+        message = enriched["telegramMessage"]
+
+        self.assertIn("<b>판단</b>", message)
+        self.assertNotIn("<b>현재 상태</b>", message)
+        self.assertIn("<b>핵심 근거</b>", message)
+
     def test_holding_snapshot_enricher_adds_missing_price_rows(self):
         position = normalize_position({
             "symbol": "MSTR",

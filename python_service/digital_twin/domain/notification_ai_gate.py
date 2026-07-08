@@ -574,17 +574,7 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
     investor = _plain_value(context, "투자자")
     sent = str(context.get("sentTime") or "").strip()
     reference = response.reference_date or reference_date(context)
-    parts = [
-        "<b>" + html.escape(headline, quote=False) + "</b>",
-        ("<code>" + html.escape(target, quote=False) + "</code>") if target else "",
-        "",
-        "<b>판단</b>",
-        _html_row("우선 행동", response.action_label),
-        _html_row("확신", str(round(response.confidence, 1)) + "%"),
-        _html_row("기준시각", reference),
-        _html_row("발송시각", sent),
-        "",
-        "<b>현재 상태</b>",
+    current_state_rows = [
         _html_row("현재가", current),
         _html_row("평균매입가", average),
         _html_row("수익률", pnl),
@@ -595,8 +585,21 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
         _html_row("보유", legacy_balance),
         _html_row("추세", trend),
         _html_row("수급", flow),
+        *_html_multiline_rows("투자자", investor),
     ]
-    parts.extend(_html_multiline_rows("투자자", investor))
+    current_state_rows = [row for row in current_state_rows if str(row or "").strip()]
+    parts = [
+        "<b>" + html.escape(headline, quote=False) + "</b>",
+        ("<code>" + html.escape(target, quote=False) + "</code>") if target else "",
+        "",
+        "<b>판단</b>",
+        _html_row("우선 행동", response.action_label),
+        _html_row("확신", str(round(response.confidence, 1)) + "%"),
+        _html_row("기준시각", reference),
+        _html_row("발송시각", sent),
+    ]
+    if current_state_rows:
+        parts.extend(["", "<b>현재 상태</b>", *current_state_rows])
     parts.extend(["", "<b>핵심 근거</b>"])
     parts.extend("• " + html.escape(item, quote=False) for item in response.evidence[:4])
     if response.counter_evidence:

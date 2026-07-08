@@ -478,6 +478,65 @@ def first_data_text(raw_lines: List[str], pattern: str) -> str:
     return ""
 
 
+def text_parts_from_value(value: object) -> List[str]:
+    if isinstance(value, dict):
+        parts: List[str] = []
+        for nested in value.values():
+            parts.extend(text_parts_from_value(nested))
+        return parts
+    if isinstance(value, list):
+        parts = []
+        for nested in value:
+            parts.extend(text_parts_from_value(nested))
+        return parts
+    text = str(value or "").strip()
+    return [text] if text else []
+
+
+def investment_insight_signal_blob(raw_lines: List[str], event: AlertEvent) -> str:
+    metadata = dict(getattr(event, "metadata", {}) or {})
+    parts: List[str] = list(raw_lines) + [str(getattr(event, "title", "") or "")]
+    for key in ["ontologyInsight", "insight", "notificationAiOpinion"]:
+        value = metadata.get(key)
+        if isinstance(value, dict):
+            parts.extend(text_parts_from_value(value))
+    for source_event in metadata.get("sourceAlertEvents") or []:
+        if isinstance(source_event, dict):
+            parts.extend(text_parts_from_value({
+                "rule": source_event.get("rule"),
+                "title": source_event.get("title"),
+                "message": source_event.get("message"),
+                "lines": source_event.get("lines"),
+                "criteria": source_event.get("criteria"),
+            }))
+    relation_context = ontology_relation_context(metadata)
+    if relation_context:
+        parts.extend(text_parts_from_value({
+            "decision": relation_context.get("decision"),
+            "activeRules": relation_context.get("activeRules"),
+        }))
+    return " ".join(part for part in parts if part)
+
+
+def investment_insight_decision_blob(raw_lines: List[str], event: AlertEvent) -> str:
+    metadata = dict(getattr(event, "metadata", {}) or {})
+    parts: List[str] = [
+        data_value(raw_lines, "상태"),
+        data_value(raw_lines, "손익") or data_value(raw_lines, "수익률"),
+        data_value(raw_lines, "권장 액션"),
+        data_value(raw_lines, "인사이트 유형"),
+        data_value(raw_lines, "핵심 결론"),
+        str(getattr(event, "title", "") or ""),
+    ]
+    relation_context = ontology_relation_context(metadata)
+    if relation_context:
+        parts.extend(text_parts_from_value({
+            "decision": relation_context.get("decision"),
+            "activeRules": relation_context.get("activeRules"),
+        }))
+    return " ".join(part for part in parts if part)
+
+
 def percent_text(value: str) -> str:
     text = str(value or "").strip()
     match = re.search(r"[-+]?\d+(?:\.\d+)?%", text)
@@ -506,15 +565,14 @@ def notification_title_icon(rule: str, raw_lines: List[str], event: AlertEvent) 
     if key in {"modelBuy", "watchlistBuyCandidate"}:
         return "🟢"
     if key == "investmentInsight":
-        insight_type = data_value(raw_lines, "인사이트 유형")
-        action = data_value(raw_lines, "권장 액션")
-        blob = " ".join([status, profit, action, insight_type, title_text])
-        if any(term in blob for term in ["손절", "손실", "축소"]):
-            return "🛡️"
-        if any(term in blob for term in ["분할", "익절", "수익", "리밸런싱"]):
-            return "💰"
-        if any(term in blob for term in ["매수", "기회"]):
+        blob = investment_insight_signal_blob(raw_lines, event)
+        decision_blob = investment_insight_decision_blob(raw_lines, event)
+        if any(term in blob for term in ["분할매수", "매수 후보", "기회 후보", "opportunityDetected", "watchlistBuyCandidate", "entry.pullback.supported"]):
             return "🟢"
+        if any(term in decision_blob for term in ["분할매도", "익절", "수익", "리밸런싱", "profit_take", "PROFIT"]):
+            return "💰"
+        if any(term in decision_blob for term in ["손절", "손실", "축소"]):
+            return "🛡️"
         if "외부" in blob:
             return "🌐"
         return "🧭"
@@ -566,13 +624,15 @@ def notification_title_headline(rule: str, raw_lines: List[str], event: AlertEve
         return "매수 후보 감지"
     if key == "investmentInsight":
         insight_type = data_value(raw_lines, "인사이트 유형")
-        action = data_value(raw_lines, "권장 액션")
-        blob = " ".join([status, profit, action, insight_type, data_value(raw_lines, "핵심 결론"), title_text])
+        blob = investment_insight_signal_blob(raw_lines, event)
+        decision_blob = investment_insight_decision_blob(raw_lines, event)
         profit_text = percent_text(profit)
-        if any(term in blob for term in ["손절", "손실", "축소"]):
-            return ("손실 " + profit_text + ": " if profit_text and signed_direction(profit) < 0 else "") + "손절·분할축소 점검"
-        if any(term in blob for term in ["분할", "익절", "수익", "리밸런싱"]):
+        if any(term in blob for term in ["분할매수", "매수 후보", "기회 후보", "opportunityDetected", "watchlistBuyCandidate", "entry.pullback.supported"]):
+            return "분할매수 후보: 진입 조건 점검"
+        if any(term in decision_blob for term in ["분할매도", "익절", "수익", "리밸런싱", "profit_take", "PROFIT"]):
             return ("수익 " + profit_text + ": " if profit_text and signed_direction(profit) > 0 else "") + "분할매도·리밸런싱 점검"
+        if any(term in decision_blob for term in ["손절", "손실", "축소"]):
+            return ("손실 " + profit_text + ": " if profit_text and signed_direction(profit) < 0 else "") + "손절·분할축소 점검"
         if any(term in blob for term in ["매수", "기회"]):
             return "매수 후보: 진입 조건 점검"
         if "외부" in blob:

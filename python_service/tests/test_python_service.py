@@ -2248,6 +2248,10 @@ class PythonServiceTests(unittest.TestCase):
         self.assertNotIn("평단가", source_message)
         self.assertNotIn("수익률", source_message)
         self.assertTrue(any("관심종목 매수 기준" in item for item in source_message.splitlines()))
+        db_path = Path(self.temp.name) / "service.db"
+        message = SQLiteNotificationTemplateStore(db_path).render(candidate.rule, alert_context(candidate))
+        self.assertIn("<b>[관찰] 🟢 분할매수 후보: 진입 조건 점검</b>", message)
+        self.assertNotIn("투자 인사이트: 대응 기준 점검", message)
         self.assertFalse(any(event.rule == "modelBuy" for event in events))
         self.assertFalse(any(event.rule == "watchlistBuyCandidate" for event in events))
 

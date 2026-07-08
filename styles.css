@@ -4725,12 +4725,14 @@ h3 {
 .investment-bridge-step em,
 .investment-bridge-step i {
   min-width: 0;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
+  word-break: keep-all;
 }
 
 .investment-bridge-step strong {
   color: var(--ink);
   font-size: 14px;
+  line-height: 1.35;
 }
 
 .investment-bridge-step em,
@@ -4739,6 +4741,7 @@ h3 {
   font-size: 11px;
   font-style: normal;
   font-weight: 800;
+  line-height: 1.45;
 }
 
 .investment-bridge-step i {
@@ -9446,11 +9449,13 @@ h3 {
 
   .process-rail,
   .ontology-control-strip,
+  .investment-bridge-flow,
   .relation-matrix {
     grid-template-columns: 1fr;
   }
 
   .process-step,
+  .investment-bridge-step,
   .ontology-control-step {
     min-height: 0;
     border-right: 0;
@@ -10655,6 +10660,7 @@ h3 {
   .investment-bridge-flow,
   .formula-ledger,
   .more-action-list {
+    grid-template-columns: 1fr;
     gap: var(--ds-space-5);
     padding: var(--ds-section-gap) var(--ds-panel-pad-x) var(--ds-panel-pad-y);
     border-top: 1px solid var(--ds-card-border);
@@ -10666,10 +10672,28 @@ h3 {
   .investment-bridge-step,
   .formula-ledger-row,
   .more-action-row {
+    min-height: 0;
     border: 1px solid var(--ds-card-border);
     border-left: 3px solid var(--ds-card-status-neutral);
     border-radius: var(--ds-radius-control);
     background: var(--ds-card-bg);
+  }
+
+  .investment-bridge-step {
+    grid-template-columns: 42px minmax(0, 1fr);
+    align-items: start;
+    gap: var(--ds-space-3) var(--ds-space-4);
+  }
+
+  .investment-bridge-step i {
+    grid-column: 2;
+  }
+
+  .investment-bridge-step strong,
+  .investment-bridge-step em,
+  .investment-bridge-step i {
+    overflow-wrap: break-word;
+    word-break: keep-all;
   }
 
   .monitor-board {

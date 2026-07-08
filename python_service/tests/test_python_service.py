@@ -1429,6 +1429,67 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("sample-1", snapshot.metadata["ontology"]["neo4j"]["qualitySampleId"])
         self.assertEqual(91.5, snapshot.metadata["ontology"]["neo4j"]["qualityScore"])
 
+    def test_ontology_projection_recorder_includes_watchlist_candidates(self):
+        holding = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "marketValue": 1000,
+            "quantity": 1,
+            "currentPrice": 1000,
+            "sector": "반도체",
+        })
+        watch = normalize_position({
+            "symbol": "005380",
+            "name": "현대차",
+            "market": "KR",
+            "currency": "KRW",
+            "currentPrice": 200000,
+            "ma20": 210000,
+            "ma60": 190000,
+            "sector": "자동차",
+            "source": "watchlist",
+        })
+        portfolio = portfolio_summary([holding])
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "ok",
+            utc_now_iso(),
+            portfolio,
+            [holding],
+            decisions_for_positions([holding], portfolio),
+            watchlist=[watch],
+        )
+
+        class FakeRepository:
+            def __init__(self):
+                self.graphs = []
+
+            def save_graph(self, graph):
+                self.graphs.append(graph)
+                return {"saved": True, "entityCount": len(graph.entities)}
+
+        repository = FakeRepository()
+        recorder = PortfolioOntologyProjectionRecorder(repository)
+
+        recorder.record_snapshot(snapshot)
+
+        graph = repository.graphs[0]
+        stock = next(item for item in graph.entities if item.kind == "stock" and item.properties.get("symbol") == "005380")
+        relation_types = {
+            item.relation_type
+            for item in graph.relations
+            if item.source == "stock:005380" or item.target == "stock:005380"
+        }
+        self.assertEqual("watchlist", stock.properties.get("source"))
+        self.assertIn("WatchlistCandidate", stock.properties.get("tboxClasses"))
+        self.assertIn("WATCHES", relation_types)
+        self.assertEqual(2, len(graph.reasoning_cards))
+
     def test_holding_decision_score_uses_flow_and_trend_context(self):
         other_position = normalize_position({
             "symbol": "AAPL",

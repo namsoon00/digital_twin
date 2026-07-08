@@ -22,7 +22,7 @@ class PortfolioOntologyProjectionRecorder:
             return {}
         try:
             graph = build_portfolio_ontology(
-                snapshot.positions,
+                list(snapshot.positions or []) + list(snapshot.watchlist or []),
                 snapshot.portfolio,
                 legacy_by_symbol={
                     item.symbol.upper(): item.to_dict()

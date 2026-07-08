@@ -342,7 +342,7 @@ def local_model_review(job: ModelReviewJob) -> str:
     if "손익률 급변" in joined:
         validation = "손익률 급변이 가격 원천 변경, 환율, 분할/배당, 장중 급등락 중 무엇에서 왔는지 먼저 분리하세요."
         improvement = "손익률 단독 변화와 거래량/이동평균 동반 변화를 분리해 급변 이벤트의 신뢰도를 점수화하세요."
-    if "현재가/평단 없음" in joined or "평가액 없음" in joined:
+    if "현재가/평균매입가 없음" in joined or "현재가/평단 없음" in joined or "평가액 없음" in joined:
         validation = "가격 또는 평가액 필드가 부족하므로 판단 변화의 근거가 약합니다. 원천 API 매핑부터 보완하세요."
         improvement = "필수 판단 요소가 빠졌을 때는 점수 산출을 보류하거나 신뢰도를 낮추는 게 좋습니다."
     ontology_line = "관계 분석 정보가 없어서 알림 라인과 기존 점수 근거만 사용했습니다."

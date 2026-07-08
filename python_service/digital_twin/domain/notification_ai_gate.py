@@ -562,9 +562,13 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
     headline = str(context.get("headline") or context.get("title") or "알림").strip()
     target = str(context.get("displayTarget") or context.get("target") or "").strip()
     current = _plain_value(context, "현재가")
-    average = _plain_value(context, "평단가")
+    average = _plain_value(context, "평균매입가") or _plain_value(context, "평단가")
     pnl = _plain_value(context, "수익률") or _plain_value(context, "손익")
-    balance = _plain_value(context, "보유")
+    quantity = _plain_value(context, "보유 수량")
+    sellable = _plain_value(context, "매도가능 수량")
+    position_value = _plain_value(context, "종목 평가금액") or _plain_value(context, "평가금액")
+    account_value = _plain_value(context, "계좌 평가금액")
+    legacy_balance = _plain_value(context, "보유") if not any([quantity, sellable, position_value]) else ""
     trend = _plain_value(context, "추세")
     flow = _plain_value(context, "수급")
     investor = _plain_value(context, "투자자")
@@ -582,9 +586,13 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
         "",
         "<b>현재 상태</b>",
         _html_row("현재가", current),
-        _html_row("평단가", average),
+        _html_row("평균매입가", average),
         _html_row("수익률", pnl),
-        _html_row("보유", balance),
+        _html_row("보유 수량", quantity),
+        _html_row("매도가능 수량", sellable),
+        _html_row("종목 평가금액", position_value),
+        _html_row("계좌 평가금액", account_value),
+        _html_row("보유", legacy_balance),
         _html_row("추세", trend),
         _html_row("수급", flow),
     ]

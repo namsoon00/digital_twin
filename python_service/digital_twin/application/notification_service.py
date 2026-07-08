@@ -61,16 +61,13 @@ class NotificationHoldingSnapshotEnricher:
         symbol = self.symbol_from_context(context)
         if not symbol:
             return
-        position = self.position_for_symbol(job.account_id, symbol)
+        state, position = self.state_and_position_for_symbol(job.account_id, symbol)
         if not position:
             return
         raw_lines = self.raw_lines(context)
         next_lines = list(raw_lines)
-        for label, line in [
-            ("현재가", self.monitor.current_price_line(position)),
-            ("평단가", self.monitor.average_price_line(position)),
-            ("보유", self.monitor.holding_balance_line(position)),
-        ]:
+        for line in self.monitor.holding_price_lines(position, state.get("portfolio") if isinstance(state, dict) else None):
+            label = str(line or "").split(":", 1)[0].strip()
             if line and not self.has_labeled_line(next_lines, label):
                 next_lines.append(line)
         if next_lines != raw_lines:
@@ -86,7 +83,7 @@ class NotificationHoldingSnapshotEnricher:
             return {}
         return value if isinstance(value, dict) else {}
 
-    def position_for_symbol(self, account_id: str, symbol: str) -> Dict[str, object]:
+    def state_and_position_for_symbol(self, account_id: str, symbol: str):
         states = self.snapshot_states()
         candidates = []
         if account_id and isinstance(states.get(account_id), dict):
@@ -97,8 +94,8 @@ class NotificationHoldingSnapshotEnricher:
             if isinstance(positions, dict):
                 item = positions.get(symbol.upper())
                 if isinstance(item, dict):
-                    return item
-        return {}
+                    return state, item
+        return {}, {}
 
     def raw_lines(self, context: Dict[str, object]) -> List[str]:
         raw = context.get("rawLines")

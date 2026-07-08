@@ -540,8 +540,11 @@ def opinion_lines_for_type(message_type: str, context: Dict[str, object]) -> Lis
         thesis = str(insight.get("thesis") or line_value(lines, "핵심 결론") or "").strip()
         next_check = str(insight.get("nextCheck") or line_value(lines, "다음 확인") or "").strip()
         current_price = line_value(lines, "현재가")
-        average_price = line_value(lines, "평단가")
+        average_price = line_value(lines, "평균매입가") or line_value(lines, "평단가")
         return_rate = line_value(lines, "수익률") or line_value(lines, "손익")
+        quantity = line_value(lines, "보유 수량")
+        position_value = line_value(lines, "종목 평가금액")
+        account_value = line_value(lines, "계좌 평가금액")
         action_line = line_value(lines, "권장 액션")
         risk_line = line_value(lines, "주요 리스크")
         trend_line = line_value(lines, "추세")
@@ -569,8 +572,11 @@ def opinion_lines_for_type(message_type: str, context: Dict[str, object]) -> Lis
                 stance += " · " + primary_action
         summary_bits = [part for part in [
             ("현재가 " + current_price) if current_price else "",
-            ("평단가 " + average_price) if average_price else "",
+            ("평균매입가 " + average_price) if average_price else "",
             ("수익률 " + return_rate) if return_rate else "",
+            ("보유 수량 " + quantity) if quantity else "",
+            ("종목 평가금액 " + position_value) if position_value else "",
+            ("계좌 평가금액 " + account_value) if account_value else "",
         ] if part]
         result = [
             "판단: " + stance,
@@ -693,7 +699,7 @@ def opinion_lines_for_type(message_type: str, context: Dict[str, object]) -> Lis
         return [
             "해석: 손익률 변화폭이 기준을 넘었습니다.",
             "의견: 손익률이 좋아졌다면 수익 보호 기준을, 나빠졌다면 손실 확대 방어 기준을 먼저 점검해야 합니다.",
-            "다음 확인: 현재가와 평단가 차이, 변화가 가격 때문인지 환율/수량 변화 때문인지 확인하세요.",
+            "다음 확인: 현재가와 평균매입가 차이, 변화가 가격 때문인지 환율/수량 변화 때문인지 확인하세요.",
         ]
     if message_type == "monitorValueChange":
         return [
@@ -704,8 +710,8 @@ def opinion_lines_for_type(message_type: str, context: Dict[str, object]) -> Lis
     if message_type == "monitorPositionChange":
         return [
             "해석: 보유 수량이 직전 스냅샷과 달라졌습니다.",
-            "의견: 의도한 매매가 계좌에 반영됐는지, 평단가와 비중이 계획과 맞는지 확인하는 알림입니다.",
-            "다음 확인: 주문 체결 내역, 매도 가능 수량, 새 평단가를 함께 확인하세요.",
+            "의견: 의도한 매매가 계좌에 반영됐는지, 평균매입가와 비중이 계획과 맞는지 확인하는 알림입니다.",
+            "다음 확인: 주문 체결 내역, 매도 가능 수량, 새 평균매입가를 함께 확인하세요.",
         ]
     if message_type == "monitorCashChange":
         return [
@@ -741,7 +747,7 @@ def opinion_lines_for_type(message_type: str, context: Dict[str, object]) -> Lis
         return [
             "해석: 미국 주식 가격 또는 거래량 변화가 기준을 넘었습니다.",
             "의견: 단기 급변은 추격보다 보유 수익률, 거래량, 프리/정규장 구간을 나눠 보는 게 좋습니다.",
-            "다음 확인: Alpha Vantage 기준일과 실제 장 시간, 보유 종목이면 평단가 대비 위치를 확인하세요.",
+            "다음 확인: Alpha Vantage 기준일과 실제 장 시간, 보유 종목이면 평균매입가 대비 위치를 확인하세요.",
         ]
     if message_type == "externalCryptoMove":
         return [

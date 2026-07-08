@@ -2506,15 +2506,18 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("holdingTiming", self.insight_source_rules(insight))
         self.assertIn("상태: 분할매도 권장", "\n".join(insight.lines))
         self.assertIn("현재가: $101.3", "\n".join(insight.lines))
-        self.assertIn("평단가: $90.2", "\n".join(insight.lines))
+        self.assertIn("평균매입가: $90.2", "\n".join(insight.lines))
         self.assertIn("수익률: +12.2%", "\n".join(insight.lines))
-        self.assertIn("보유: 수량 100주, 매도가능 100주, 평가금액 $10,130", "\n".join(insight.lines))
+        self.assertIn("보유 수량: 100주", "\n".join(insight.lines))
+        self.assertIn("매도가능 수량: 100주", "\n".join(insight.lines))
+        self.assertIn("종목 평가금액: $10,130", "\n".join(insight.lines))
+        self.assertIn("계좌 평가금액: 1,418만 원", "\n".join(insight.lines))
         self.assertIn("수급: 거래량 90,863(1.4x), 거래액 $3,543,834,187", "\n".join(insight.lines))
         self.assertIn("추세: 20일선 $108.07보다 6.3% 낮음", "\n".join(insight.lines))
         self.assertIn("권장 액션: 분할매도", "\n".join(insight.lines))
         self.assertIn("<b>[관찰] 💰 수익 +12.2%: 분할매도·리밸런싱 점검</b>", message)
         self.assertIn("현재가", message)
-        self.assertIn("평단가", message)
+        self.assertIn("평균매입가", message)
         self.assertIn("수익률", message)
         self.assertIn("보유", message)
 
@@ -2583,7 +2586,7 @@ class PythonServiceTests(unittest.TestCase):
 
         self.assertRegex(message, r"상태 .+ \([0-9.]+점\)")
         self.assertIn("현재가: 100,000원", message)
-        self.assertIn("평단가: 110,000원", message)
+        self.assertIn("평균매입가: 110,000원", message)
         self.assertIn("수익률: -9.0%", message)
         self.assertTrue(any("상태 " in item and "점)" in item for item in event.criteria))
         self.assertTrue(any("수익률 -9.0%" in item for item in event.criteria))
@@ -3069,7 +3072,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("60일선 상향 돌파", message)
         self.assertIn("20/60일선 골든크로스", message)
         self.assertIn("현재가: 106,000원", message)
-        self.assertIn("평단가: 100,000원", message)
+        self.assertIn("평균매입가: 100,000원", message)
+        self.assertIn("계좌 평가금액: 100만 원", message)
         self.assertIn("수익률: +5.0%", message)
         self.assertIn("추세: 20일선 104,000원보다 1.9% 높음, 60일선 103,000원보다 2.9% 높음", message)
         self.assertIn("수급: 거래량 40,000(2.1x), 거래액 24억 원", message)
@@ -3619,7 +3623,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("externalEquityMove", messages)
         self.assertIn("Alpha Vantage", messages["externalEquityMove"])
         self.assertIn("현재가: $130", messages["externalEquityMove"])
-        self.assertIn("평단가: $100", messages["externalEquityMove"])
+        self.assertIn("평균매입가: $100", messages["externalEquityMove"])
         self.assertIn("수익률: +25.0%", messages["externalEquityMove"])
         self.assertIn("externalCryptoMove", messages)
         self.assertIn("CoinGecko", messages["externalCryptoMove"])
@@ -3630,7 +3634,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("externalDartDisclosure", messages)
         self.assertIn("주요사항보고서", messages["externalDartDisclosure"])
         self.assertIn("현재가: 100,000원", messages["externalDartDisclosure"])
-        self.assertIn("평단가: 95,000원", messages["externalDartDisclosure"])
+        self.assertIn("평균매입가: 95,000원", messages["externalDartDisclosure"])
         self.assertIn("수익률: +5.3%", messages["externalDartDisclosure"])
         self.assertIn("externalDataConnection", messages)
         criteria_by_rule = {event.rule: event.criteria for event in events}
@@ -4921,9 +4925,12 @@ class PythonServiceTests(unittest.TestCase):
             "sentTime": "2026-07-08 14:27 KST",
             "rawLines": "\n".join([
                 "현재가: 2,115,000원",
-                "평단가: 2,571,000원",
+                "평균매입가: 2,571,000원",
                 "수익률: -18.1%",
-                "보유: 수량 10주, 매도가능 10주, 평가금액 2,115만 원",
+                "보유 수량: 10주",
+                "매도가능 수량: 10주",
+                "종목 평가금액: 2,115만 원",
+                "계좌 평가금액: 4,000만 원",
                 "수급: 거래량 5,215,050(0.8x), 체결강도 95.2",
                 "투자자: 외국인 -3,015,093(매수 8,922,904/매도 11,937,997), 기관 +971,031(매수 12,816,837/매도 11,845,806), 개인 +2,031,705(매수 11,457,143/매도 9,425,438)",
                 "추세: 20일선보다 15.2% 낮음, 60일선보다 8.4% 높음",
@@ -4959,7 +4966,11 @@ class PythonServiceTests(unittest.TestCase):
 
         self.assertIn("<b>판단</b>", message)
         self.assertIn("매도", message)
-        self.assertIn("<b>보유</b>: <code>수량 10주, 매도가능 10주, 평가금액 2,115만 원</code>", message)
+        self.assertIn("<b>평균매입가</b>: <code>2,571,000원</code>", message)
+        self.assertIn("<b>보유 수량</b>: <code>10주</code>", message)
+        self.assertIn("<b>매도가능 수량</b>: <code>10주</code>", message)
+        self.assertIn("<b>종목 평가금액</b>: <code>2,115만 원</code>", message)
+        self.assertIn("<b>계좌 평가금액</b>: <code>4,000만 원</code>", message)
         self.assertIn("반대 신호", message)
         self.assertIn("60일선은 아직 위", message)
         self.assertIn("투자자별 수급", message)
@@ -5026,8 +5037,11 @@ class PythonServiceTests(unittest.TestCase):
         raw_lines = job.context["rawLines"]
 
         self.assertIn("현재가: $97.98", raw_lines)
-        self.assertIn("평단가: $88.9", raw_lines)
-        self.assertIn("보유: 수량 230주, 매도가능 230주, 평가금액 $22,535", raw_lines)
+        self.assertIn("평균매입가: $88.9", raw_lines)
+        self.assertIn("보유 수량: 230주", raw_lines)
+        self.assertIn("매도가능 수량: 230주", raw_lines)
+        self.assertIn("종목 평가금액: $22,535", raw_lines)
+        self.assertIn("계좌 평가금액: 3,155만 원", raw_lines)
 
     def test_validated_ai_response_hides_internal_variables_and_jargon(self):
         context = {
@@ -6430,7 +6444,7 @@ class PythonServiceTests(unittest.TestCase):
 
         self.assertTrue(event.metadata.get("formulaAudits"))
         self.assertIn("• <b>현재가</b>: <code>71,000원</code>", message)
-        self.assertIn("• <b>평단가</b>: <code>74,000원</code>", message)
+        self.assertIn("• <b>평균매입가</b>: <code>74,000원</code>", message)
         self.assertIn("• <b>수익률</b>: <code>-4.1%</code>", message)
         self.assertIn("매수 공식(buyScoreFormula)", message)
         self.assertIn("매도 공식(sellScoreFormula)", message)

@@ -184,6 +184,8 @@ function checkFrontendAdminRender() {
   assertOk(styles.indexOf("--surface: var(--ds-color-panel-soft)") >= 0, "보조 표면 alias가 없습니다.");
   assertOk(styles.indexOf("--ds-control-height-md") >= 0, "전역 컨트롤 높이 토큰이 없습니다.");
   assertOk(styles.indexOf("--ds-page-gap") >= 0 && styles.indexOf("--ds-row-pad-x") >= 0, "전역 레이아웃 간격 토큰이 없습니다.");
+  assertOk(styles.indexOf("--ds-card-bg") >= 0 && styles.indexOf("--ds-card-border") >= 0, "금융 카드 토큰이 없습니다.");
+  assertOk(styles.indexOf("Institutional finance card layer") >= 0, "금융 카드 레이어 규칙이 없습니다.");
   assertOk(styles.indexOf("font-variant-numeric: tabular-nums") >= 0, "금융 숫자 표시 규칙이 없습니다.");
   assertOk(styles.indexOf(".app-shell") >= 0 && styles.indexOf("100dvh") >= 0, "앱형 100dvh 셸 규칙이 없습니다.");
   assertOk(styles.indexOf("touch-action: manipulation") >= 0 && styles.indexOf("@media (hover: none)") >= 0, "모바일 터치 반응성 규칙이 없습니다.");
@@ -196,8 +198,9 @@ function checkFrontendAdminRender() {
   assertOk(styles.indexOf("@media (min-width: 1181px)") >= 0, "PC 전용 데스크톱 최적화 분기 규칙이 없습니다.");
   assertOk(/@media \(min-width: 1181px\)[\s\S]*\.managed-page[\s\S]*gap: var\(--ds-page-gap\);/.test(styles), "PC 본문 간격이 공통 page gap을 따르지 않습니다.");
   assertOk(/@media \(min-width: 1181px\)[\s\S]*\.account-card,[\s\S]*padding: calc\(var\(--ds-row-pad-y\) \+ 1px\) var\(--ds-row-pad-x\);/.test(styles), "PC 행 리스트 내부 padding이 공통 row 토큰을 따르지 않습니다.");
-  assertOk(/@media \(min-width: 1181px\)[\s\S]*\.account-card-list[\s\S]*display: block;/.test(styles), "PC 계정 카드 목록이 행 리스트로 전환되지 않습니다.");
-  assertOk(/@media \(min-width: 1181px\)[\s\S]*\.monitoring-instrument-list[\s\S]*display: block;/.test(styles), "PC 모니터링 종목 목록이 행 리스트로 전환되지 않습니다.");
+  assertOk(/@media \(min-width: 1181px\)[\s\S]*\.account-card-list[\s\S]*display: grid;/.test(styles), "PC 계정 카드 목록이 금융 카드 그리드로 전환되지 않습니다.");
+  assertOk(/@media \(min-width: 1181px\)[\s\S]*\.monitoring-instrument-list[\s\S]*display: grid;/.test(styles), "PC 모니터링 종목 목록이 금융 카드 그리드로 전환되지 않습니다.");
+  assertOk(/@media \(min-width: 1181px\)[\s\S]*\.account-card-list,[\s\S]*\.symbol-result-list[\s\S]*grid-template-columns: repeat\(auto-fill, minmax\(430px, 1fr\)\);/.test(styles), "PC 반복 카드의 읽기 폭 제한 그리드가 없습니다.");
   assertOk(/@media \(min-width: 1181px\)[\s\S]*\.source-row[\s\S]*grid-template-columns: minmax\(120px, 0\.34fr\) minmax\(0, 1fr\);/.test(styles), "PC source row가 라벨/값 2열 ledger로 정리되지 않습니다.");
   assertOk(/@media \(min-width: 1181px\)[\s\S]*\.notification-decision-row[\s\S]*grid-template-columns: minmax\(220px, 0\.38fr\) minmax\(0, 1fr\);/.test(styles), "PC 최근 알림 판단 행이 2열 정보 구조로 정리되지 않습니다.");
   assertOk(/@media \(min-width: 1181px\)[\s\S]*\.symbol-result-list[\s\S]*grid-template-columns: repeat\(auto-fit, minmax\(440px, 1fr\)\);/.test(styles), "PC 전체종목 결과가 과도하게 넓은 단일 리스트로 남아 있습니다.");
@@ -221,8 +224,8 @@ function checkFrontendAdminRender() {
   assertOk(/@media \(max-width: 860px\)[\s\S]*\.watch-account-row \.chip-row[\s\S]*justify-content: flex-start;/.test(styles), "모바일 관심종목 계정 칩 정렬이 왼쪽 기준이 아닙니다.");
   assertOk(designSystemDoc.indexOf("Institutional Ledger Tone") >= 0, "디자인 시스템 문서에 기관형 금융앱 룩앤필 기준이 없습니다.");
   assertOk(designSystemDoc.indexOf("Spacing Rhythm") >= 0 && designSystemDoc.indexOf("padding: 12px 0") >= 0, "디자인 시스템 문서에 화면 간격 정책이 없습니다.");
-  assertOk(designSystemDoc.indexOf("모바일에서 보기 좋은 카드형 반복 UI도 PC에서는 그대로 키우지 않는다") >= 0, "디자인 시스템 문서에 PC 반복 UI 전환 원칙이 없습니다.");
-  assertOk(designSystemDoc.indexOf("구획이 정확한 행과 셀") >= 0 && designSystemDoc.indexOf("Desktop list row") >= 0, "디자인 시스템 문서에 PC 카드/리스트 구획 정책이 없습니다.");
+  assertOk(designSystemDoc.indexOf("금융 원장형 카드 그리드") >= 0, "디자인 시스템 문서에 PC 금융 카드 그리드 원칙이 없습니다.");
+  assertOk(designSystemDoc.indexOf("구획이 정확한 금융 카드와 셀") >= 0 && designSystemDoc.indexOf("Desktop record card") >= 0, "디자인 시스템 문서에 PC 금융 카드 구획 정책이 없습니다.");
   assertOk(code.indexOf('appBrandName = "Orbit Alpha"') >= 0, "Orbit Alpha 브랜드명이 앱에 적용되지 않았습니다.");
   assertOk(indexHtml.indexOf("<title>Orbit Alpha</title>") >= 0 && indexHtml.indexOf("favicon.svg") >= 0, "Orbit Alpha 문서 제목 또는 파비콘 링크가 없습니다.");
   assertOk(styles.indexOf(".app-brand-mark") >= 0 && styles.indexOf("--ds-color-orbit-line") >= 0, "Orbit Alpha 신호형 브랜드 마크 규칙이 없습니다.");

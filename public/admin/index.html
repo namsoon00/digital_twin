@@ -23,6 +23,11 @@
         --ds-color-warning-soft: #fff4df;
         --ds-color-orbit-line: #2f6fbb;
         --ds-color-orbit-glow: rgba(20, 87, 168, 0.12);
+        --ds-card-bg: #ffffff;
+        --ds-card-row-bg: #fbfcfe;
+        --ds-card-head-bg: #f8fafc;
+        --ds-card-border: #c8d0dc;
+        --ds-card-status-neutral: #758092;
         --ds-radius-control: 6px;
         --ds-radius-panel: 6px;
         --ds-shadow-panel: none;
@@ -142,12 +147,18 @@
         gap: 12px;
       }
       .panel {
+        position: relative;
         background: var(--surface);
-        border: 1px solid var(--line);
+        border: 1px solid var(--ds-card-border);
+        border-left: 3px solid var(--info);
         border-radius: var(--ds-radius-panel);
         padding: 14px;
         min-width: 0;
         box-shadow: var(--ds-shadow-panel);
+      }
+      .panel h3 {
+        padding-bottom: 8px;
+        border-bottom: 1px solid var(--ds-card-border);
       }
       .panel.wide {
         grid-column: span 1;
@@ -191,8 +202,9 @@
         grid-template-columns: 1.2fr 1fr 1.2fr;
         gap: 12px;
         align-items: start;
-        background: var(--surface);
-        border: 1px solid var(--line);
+        background: linear-gradient(180deg, var(--ds-card-row-bg), var(--ds-card-bg));
+        border: 1px solid var(--ds-card-border);
+        border-left: 3px solid var(--ds-card-status-neutral);
         border-radius: var(--ds-radius-panel);
         padding: 14px;
         box-shadow: var(--ds-shadow-panel);

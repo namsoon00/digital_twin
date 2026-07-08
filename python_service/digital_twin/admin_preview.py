@@ -337,7 +337,7 @@ def admin_preview_config() -> Dict[str, object]:
                 ],
                 "storage": ["data/service.db: market_quote_cache"],
                 "fields": [
-                    {"key": "marketDataCollectionIntervalSeconds", "label": "수집 주기(초)", "type": "number", "default": "3600"},
+                    {"key": "marketDataCollectionIntervalSeconds", "label": "수집 주기(초)", "type": "number", "default": "180"},
                     {"key": "marketDataPriceBatchSize", "label": "현재가 배치", "type": "number", "default": "200"},
                     {"key": "marketDataCandleBatchSize", "label": "캔들 배치", "type": "number", "default": "25"},
                     {"key": "marketDataMaxAgeMinutes", "label": "신선도 기준(분)", "type": "number", "default": "240"},
@@ -569,6 +569,11 @@ def render_admin_html(payload: Dict[str, object]) -> str:
         --ds-color-warning-soft: #fff4df;
         --ds-color-orbit-line: #2f6fbb;
         --ds-color-orbit-glow: rgba(20, 87, 168, 0.12);
+        --ds-card-bg: #ffffff;
+        --ds-card-row-bg: #fbfcfe;
+        --ds-card-head-bg: #f8fafc;
+        --ds-card-border: #c8d0dc;
+        --ds-card-status-neutral: #758092;
         --ds-radius-control: 6px;
         --ds-radius-panel: 6px;
         --ds-shadow-panel: none;
@@ -688,12 +693,18 @@ def render_admin_html(payload: Dict[str, object]) -> str:
         gap: 12px;
       }}
       .panel {{
+        position: relative;
         background: var(--surface);
-        border: 1px solid var(--line);
+        border: 1px solid var(--ds-card-border);
+        border-left: 3px solid var(--info);
         border-radius: var(--ds-radius-panel);
         padding: 14px;
         min-width: 0;
         box-shadow: var(--ds-shadow-panel);
+      }}
+      .panel h3 {{
+        padding-bottom: 8px;
+        border-bottom: 1px solid var(--ds-card-border);
       }}
       .panel.wide {{
         grid-column: span 1;
@@ -737,8 +748,9 @@ def render_admin_html(payload: Dict[str, object]) -> str:
         grid-template-columns: 1.2fr 1fr 1.2fr;
         gap: 12px;
         align-items: start;
-        background: var(--surface);
-        border: 1px solid var(--line);
+        background: linear-gradient(180deg, var(--ds-card-row-bg), var(--ds-card-bg));
+        border: 1px solid var(--ds-card-border);
+        border-left: 3px solid var(--ds-card-status-neutral);
         border-radius: var(--ds-radius-panel);
         padding: 14px;
         box-shadow: var(--ds-shadow-panel);

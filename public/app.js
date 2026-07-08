@@ -43,6 +43,7 @@
     externalDartEnabled: "1",
     externalDartLookbackDays: "14",
     externalNewsEnabled: "1",
+    externalNewsProvider: "auto",
     externalNewsMaxSymbols: "3",
     externalNewsLookbackHours: "48",
     externalDartCorpCodes: [
@@ -3634,6 +3635,7 @@
       externalDartEnabled: settingValue("externalDartEnabled"),
       externalDartLookbackDays: settingValue("externalDartLookbackDays"),
       externalNewsEnabled: settingValue("externalNewsEnabled"),
+      externalNewsProvider: settingValue("externalNewsProvider"),
       externalNewsMaxSymbols: settingValue("externalNewsMaxSymbols"),
       externalNewsLookbackHours: settingValue("externalNewsLookbackHours"),
       externalDartCorpCodes: settingValue("externalDartCorpCodes"),
@@ -5243,6 +5245,13 @@
   function settingEnabled(name) {
     var value = String(settingValue(name) || defaultSettings[name] || "1").trim().toLowerCase();
     return ["0", "false", "no", "off", "disabled"].indexOf(value) < 0;
+  }
+
+  function newsProviderLabel(value) {
+    var key = String(value || "auto").toLowerCase().replace(/[-\s]/g, "_");
+    if (key === "alpha" || key === "alphavantage" || key === "alpha_vantage") return "Alpha Vantage";
+    if (key === "gdelt") return "GDELT";
+    return "Auto";
   }
 
   function strategyDataDiagnostics(snapshot) {
@@ -12756,7 +12765,7 @@
         configuredChip("FRED", settingEnabled("externalFredEnabled"), isConfiguredSetting("fredApiKey") ? "키 저장됨" : "키 필요"),
         configuredChip("OpenDART", settingEnabled("externalDartEnabled"), isConfiguredSetting("opendartApiKey") ? "키 저장됨" : "키 필요"),
         configuredChip("SEC", settingEnabled("externalSecEnabled"), "무키"),
-        configuredChip("뉴스", settingEnabled("externalNewsEnabled"), "GDELT"),
+        configuredChip("뉴스", settingEnabled("externalNewsEnabled"), newsProviderLabel(settingValue("externalNewsProvider") || defaultSettings.externalNewsProvider)),
         configuredChip("공시 AI", settingValue("dartDisclosureAiAnalysisEnabled") !== "0", settingValue("dartDisclosureAiUseCodex") === "0" ? "로컬" : "AI")
       ]),
       '</div>'
@@ -12789,7 +12798,7 @@
         configuredChip("FRED", settingEnabled("externalFredEnabled"), isConfiguredSetting("fredApiKey") ? "키 저장됨" : "키 필요"),
         configuredChip("OpenDART", settingEnabled("externalDartEnabled"), isConfiguredSetting("opendartApiKey") ? "키 저장됨" : "키 필요"),
         configuredChip("SEC", settingEnabled("externalSecEnabled"), "무키"),
-        configuredChip("뉴스", settingEnabled("externalNewsEnabled"), "GDELT"),
+        configuredChip("뉴스", settingEnabled("externalNewsEnabled"), newsProviderLabel(settingValue("externalNewsProvider") || defaultSettings.externalNewsProvider)),
         configuredChip("공시 AI", settingValue("dartDisclosureAiAnalysisEnabled") !== "0", settingValue("dartDisclosureAiUseCodex") === "0" ? "로컬" : "AI")
       ]),
       '</div>'
@@ -13026,6 +13035,11 @@
       renderSettingSelect("externalNewsEnabled", "뉴스 헤드라인 수집", [
         { value: "1", label: "사용" },
         { value: "0", label: "사용 안 함" }
+      ]),
+      renderSettingSelect("externalNewsProvider", "뉴스 공급자", [
+        { value: "auto", label: "자동" },
+        { value: "gdelt", label: "GDELT" },
+        { value: "alpha_vantage", label: "Alpha Vantage" }
       ]),
       renderSettingField("externalApiFetchIntervalMinutes", "외부 API 캐시(분)", "number", "30"),
       renderSettingField("externalAlphaMaxSymbols", "미장 조회 종목 수", "number", "3"),

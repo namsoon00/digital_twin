@@ -410,6 +410,7 @@ def settings_status_payload() -> Dict[str, object]:
         "externalDartLookbackDays",
         "externalDartCorpCodes",
         "externalNewsEnabled",
+        "externalNewsProvider",
         "externalNewsMaxSymbols",
         "externalNewsLookbackHours",
         "dartDisclosureAiAnalysisEnabled",

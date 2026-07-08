@@ -3940,6 +3940,22 @@ class PythonServiceTests(unittest.TestCase):
 
         def fake_fetch(url, headers=None):
             calls.append(url)
+            if "alphavantage" in url and "NEWS_SENTIMENT" in url:
+                return {"feed": [{
+                    "title": "Apple unveils AI chips roadmap",
+                    "url": "https://example.test/apple-ai",
+                    "source": "Example Markets",
+                    "time_published": "20260707T120000",
+                    "summary": "Apple supplier plans and AI chip roadmap update.",
+                    "overall_sentiment_score": "0.35",
+                    "overall_sentiment_label": "Somewhat-Bullish",
+                    "ticker_sentiment": [{
+                        "ticker": "AAPL",
+                        "relevance_score": "0.92",
+                        "ticker_sentiment_score": "0.41",
+                        "ticker_sentiment_label": "Bullish",
+                    }],
+                }]}
             if "alphavantage" in url:
                 return {"Global Quote": {
                     "05. price": "130.25",
@@ -4032,6 +4048,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(-5.4, signals["cryptoMarkets"]["bitcoin"]["change24h"])
         self.assertEqual(4.35, signals["macro"]["series"]["DGS10"]["value"])
         self.assertEqual("20260701000001", signals["dartDisclosures"]["005930"]["receiptNo"])
+        self.assertEqual("Alpha Vantage", signals["newsHeadlines"]["AAPL"]["provider"])
+        self.assertEqual("Bullish", signals["newsHeadlines"]["AAPL"]["items"][0]["tickerSentimentLabel"])
         self.assertEqual("GDELT", signals["newsHeadlines"]["005930"]["provider"])
         self.assertIn("Samsung Electronics", signals["newsHeadlines"]["005930"]["items"][0]["title"])
 

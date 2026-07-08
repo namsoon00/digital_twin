@@ -258,6 +258,16 @@ def execution_plan_text(plan: Dict[str, object], key: str, limit: int = 2) -> st
     return " / ".join(values)
 
 
+def join_unique_segments(*values: str) -> str:
+    rows: List[str] = []
+    for value in values:
+        for item in str(value or "").split(" / "):
+            text = compact_text(item, 90)
+            if text and text not in rows:
+                rows.append(text)
+    return " / ".join(rows)
+
+
 def trend_dynamics_summary(context: Dict[str, object]) -> str:
     dynamics = relation_trend_dynamics(context)
     if not dynamics:
@@ -513,8 +523,9 @@ def opinion_lines_for_type(message_type: str, context: Dict[str, object]) -> Lis
             result.append("근거: " + active_evidence)
         elif flow_line or investor_line or trend_line:
             result.append("근거: " + " / ".join(part for part in [flow_line, investor_line, trend_line] if part))
-        if active_counter or plan_counter:
-            result.append("반대 근거: " + " / ".join(part for part in [active_counter, plan_counter] if part))
+        counter_text = join_unique_segments(active_counter, plan_counter)
+        if counter_text:
+            result.append("반대 근거: " + counter_text)
         if trend_dynamics_text:
             result.append("추세 동역학: " + trend_dynamics_text)
         if risk_line:

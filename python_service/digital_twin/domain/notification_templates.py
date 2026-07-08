@@ -645,10 +645,10 @@ def notification_title_headline(rule: str, raw_lines: List[str], event: AlertEve
             return ("수익 " + profit_text + ": " if profit_text and signed_direction(profit) > 0 else "") + "분할매도·리밸런싱 점검"
         if has_investment_loss_signal(decision_blob):
             return ("손실 " + profit_text + ": " if profit_text and signed_direction(profit) < 0 else "") + "손절·분할축소 점검"
+        if "외부" in blob or "외부" in insight_type:
+            return "외부 신호: 보유 영향 점검"
         if any(term in blob for term in ["매수", "기회"]):
             return "매수 후보: 진입 조건 점검"
-        if "외부" in blob:
-            return "외부 신호: 보유 영향 점검"
         if insight_type:
             return insight_type + ": 대응 기준 점검"
         return "투자 인사이트: 대응 기준 점검"

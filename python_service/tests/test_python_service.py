@@ -3692,6 +3692,7 @@ class PythonServiceTests(unittest.TestCase):
 
         self.assertEqual("HOLD", active.get("action"))
         self.assertIn("보유 영향만 점검", active.get("executionPlan", {}).get("primaryActionLabel"))
+        self.assertIn("외부 신호: 보유 영향 점검", message)
         self.assertIn("쉽게 말하면", message)
         self.assertIn("보유 영향만 점검", message)
         self.assertIn("지금 피할 일", message)

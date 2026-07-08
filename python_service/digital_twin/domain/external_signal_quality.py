@@ -187,7 +187,7 @@ def attach_external_signal_quality(
     payload["freshness"] = {
         "fetchedAt": quality["fetchedAt"],
         "ageMinutes": quality["ageMinutes"],
-        "status": "fresh" if int(quality["ageMinutes"] or 0) <= int(number((settings or {}).get("externalApiFetchIntervalMinutes")) or 60) else "stale",
+        "status": "fresh" if int(quality["ageMinutes"] or 0) <= int(number((settings or {}).get("externalApiFetchIntervalMinutes")) or 30) else "stale",
     }
     payload["provenance"] = {
         "sources": [row["source"] for row in quality.get("sourceCoverage", []) if row.get("configured")],

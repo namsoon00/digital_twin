@@ -156,6 +156,33 @@ def append_message(existing: str, addition: str) -> str:
     return base + " " + extra
 
 
+def stage_coverage(stage: str, raw_payload, normalized: Dict[str, object], keys: Iterable[str]) -> Dict[str, object]:
+    fields = sorted([
+        key
+        for key in keys
+        if key in normalized and normalized.get(key) not in (None, "")
+    ])
+    non_zero_fields = sorted([key for key in fields if number(normalized.get(key))])
+    if fields:
+        status = "available"
+    elif raw_payload is None:
+        status = "missing"
+    else:
+        status = "empty"
+    return {
+        "stage": stage,
+        "status": status,
+        "fields": fields,
+        "nonZeroFields": non_zero_fields,
+    }
+
+
+def coverage_has_fields(coverage: Dict[str, object], stage: str, keys: Iterable[str]) -> bool:
+    item = coverage.get(stage) if isinstance(coverage, dict) else {}
+    fields = item.get("fields") if isinstance(item, dict) else []
+    return any(key in set(str(field) for field in fields or []) for key in keys)
+
+
 class KISAPIError(RuntimeError):
     def __init__(self, stage: str, error: Exception):
         self.stage = str(stage or "")
@@ -222,7 +249,7 @@ class KISMarketSignalProvider:
         return max(minimum, min(maximum, parsed))
 
     def cache_minutes(self) -> int:
-        return self.int_setting("kisMarketSignalCacheMinutes", 10, 1, 1440)
+        return self.int_setting("kisMarketSignalCacheMinutes", 3, 1, 1440)
 
     def bool_setting(self, key: str, fallback: bool = False) -> bool:
         value = self.settings.get(key)
@@ -380,6 +407,14 @@ class KISMarketSignalProvider:
     def is_signal_complete(self, payload: Dict[str, object]) -> bool:
         if not payload:
             return False
+        coverage = payload.get("marketSignalCoverage")
+        if isinstance(coverage, dict):
+            has_detail = (
+                coverage_has_fields(coverage, "ccnl", ["tradeStrength", "buyVolume", "sellVolume"])
+                or coverage_has_fields(coverage, "orderbook", ["orderbookBidVolume", "orderbookAskVolume", "bidAskImbalance"])
+            )
+            has_investor = coverage_has_fields(coverage, "investor", INVESTOR_SIGNAL_KEYS)
+            return has_detail and has_investor
         has_detail = any(key in payload and payload.get(key) not in (None, "") for key in DETAIL_SIGNAL_KEYS)
         has_investor = any(key in payload and payload.get(key) not in (None, "") for key in INVESTOR_SIGNAL_KEYS)
         return has_detail and has_investor
@@ -409,7 +444,10 @@ class KISMarketSignalProvider:
             return None
         try:
             payload = self.request(stage, "GET", path, self.auth_headers(tr_id), query=self.query(symbol))
-            return payload.get("output") or payload.get("output1") or payload.get("output2")
+            for key in ["output", "output1", "output2"]:
+                if key in payload:
+                    return payload.get(key)
+            return None
         except KISAPIError as error:
             self.record_failure(stage, symbol, error)
             return None
@@ -422,16 +460,45 @@ class KISMarketSignalProvider:
         orderbook = self.fetch_stage(symbol, "orderbook", ORDERBOOK_PATH, "FHKST01010200")
 
         signal: Dict[str, object] = {}
+        coverage: Dict[str, object] = {}
         if isinstance(price, dict):
-            merge_if_present(signal, normalize_price(symbol, price))
+            normalized_price = normalize_price(symbol, price)
+            merge_if_present(signal, normalized_price)
+            coverage["price"] = stage_coverage(
+                "price",
+                price,
+                normalized_price,
+                ["currentPrice", "changeRate", "volume", "volumeRatio", "tradingValue", "foreignNetVolume"],
+            )
+        else:
+            coverage["price"] = stage_coverage("price", price, {}, ["currentPrice"])
         if isinstance(ccnl, list):
-            merge_if_present(signal, normalize_ccnl(ccnl))
+            normalized_ccnl = normalize_ccnl(ccnl)
+            merge_if_present(signal, normalized_ccnl)
+            coverage["ccnl"] = stage_coverage("ccnl", ccnl, normalized_ccnl, ["tradeStrength", "buyVolume", "sellVolume"])
+        else:
+            coverage["ccnl"] = stage_coverage("ccnl", ccnl, {}, ["tradeStrength", "buyVolume", "sellVolume"])
         if isinstance(investor, list):
-            merge_if_present(signal, normalize_investor(investor))
+            normalized_investor = normalize_investor(investor)
+            merge_if_present(signal, normalized_investor)
+            coverage["investor"] = stage_coverage("investor", investor, normalized_investor, INVESTOR_SIGNAL_KEYS)
         elif isinstance(investor, dict):
-            merge_if_present(signal, normalize_investor([investor]))
+            normalized_investor = normalize_investor([investor])
+            merge_if_present(signal, normalized_investor)
+            coverage["investor"] = stage_coverage("investor", investor, normalized_investor, INVESTOR_SIGNAL_KEYS)
+        else:
+            coverage["investor"] = stage_coverage("investor", investor, {}, INVESTOR_SIGNAL_KEYS)
         if isinstance(orderbook, dict):
-            merge_if_present(signal, normalize_orderbook(orderbook))
+            normalized_orderbook = normalize_orderbook(orderbook)
+            merge_if_present(signal, normalized_orderbook)
+            coverage["orderbook"] = stage_coverage(
+                "orderbook",
+                orderbook,
+                normalized_orderbook,
+                ["orderbookBidVolume", "orderbookAskVolume", "bidAskImbalance"],
+            )
+        else:
+            coverage["orderbook"] = stage_coverage("orderbook", orderbook, {}, ["orderbookBidVolume", "orderbookAskVolume", "bidAskImbalance"])
         if not signal:
             raise RuntimeError("KIS 수급 응답 없음")
 
@@ -441,29 +508,17 @@ class KISMarketSignalProvider:
         signal.setdefault("market", "KR")
         signal.setdefault("currency", "KRW")
         signal["quoteSource"] = "KIS Open API"
+        signal["marketSignalCoverage"] = coverage
         included = []
-        if signal.get("currentPrice"):
+        if coverage_has_fields(coverage, "price", ["currentPrice"]):
             included.append("현재가")
-        if signal.get("tradeStrength"):
+        if coverage_has_fields(coverage, "ccnl", ["tradeStrength"]):
             included.append("체결강도")
-        if signal.get("buyVolume") is not None or signal.get("sellVolume") is not None:
+        if coverage_has_fields(coverage, "ccnl", ["buyVolume", "sellVolume"]):
             included.append("방향별 체결량")
-        if any(signal.get(key) is not None for key in [
-            "foreignBuyVolume",
-            "foreignSellVolume",
-            "foreignNetVolume",
-            "foreignNetAmount",
-            "institutionBuyVolume",
-            "institutionSellVolume",
-            "individualBuyVolume",
-            "individualSellVolume",
-            "institutionNetVolume",
-            "individualNetVolume",
-            "institutionNetAmount",
-            "individualNetAmount",
-        ]):
+        if coverage_has_fields(coverage, "investor", INVESTOR_SIGNAL_KEYS):
             included.append("투자자별 수급")
-        if signal.get("orderbookBidVolume") is not None or signal.get("orderbookAskVolume") is not None:
+        if coverage_has_fields(coverage, "orderbook", ["orderbookBidVolume", "orderbookAskVolume"]):
             included.append("호가 잔량")
         included_text = ", ".join(included) if included else "응답 데이터"
         signal["quoteStatus"] = "KIS " + included_text + " 반영"
@@ -581,6 +636,7 @@ class KISMarketSignalProvider:
         individual_sell_volume = optional_number(signal, ["individualSellVolume"])
         individual_net_volume = optional_number(signal, ["individualNetVolume", "individualNet"])
         individual_net_amount = optional_number(signal, ["individualNetAmount"])
+        market_signal_coverage = signal.get("marketSignalCoverage") if isinstance(signal.get("marketSignalCoverage"), dict) else position.market_signal_coverage
 
         merged_price = current_price if current_price is not None else position.current_price
         market_value = position.market_value
@@ -605,6 +661,7 @@ class KISMarketSignalProvider:
             quote_status=str(signal.get("quoteStatus") or position.quote_status),
             quote_message=append_message(position.quote_message, str(signal.get("quoteMessage") or "")),
             data_quality=data_quality or position.data_quality,
+            market_signal_coverage=dict(market_signal_coverage or {}) if isinstance(market_signal_coverage, dict) else {},
             updated_at=str(signal.get("updatedAt") or position.updated_at),
             market_value=market_value,
             trade_strength=trade_strength if trade_strength is not None else position.trade_strength,

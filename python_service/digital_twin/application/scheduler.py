@@ -2,7 +2,7 @@ import signal
 import time
 
 
-MIN_REALTIME_INTERVAL_SECONDS = 10 * 60
+MIN_REALTIME_INTERVAL_SECONDS = 3 * 60
 
 
 class RealtimeScheduler:
@@ -29,4 +29,3 @@ class RealtimeScheduler:
             end_at = time.monotonic() + sleep_seconds
             while self.running and time.monotonic() < end_at:
                 time.sleep(min(1.0, end_at - time.monotonic()))
-

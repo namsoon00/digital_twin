@@ -12,7 +12,7 @@
     kisBaseUrl: "https://openapi.koreainvestment.com:9443",
     kisMarketSignalsEnabled: "1",
     kisMarketSignalMaxSymbols: "20",
-    kisMarketSignalCacheMinutes: "10",
+    kisMarketSignalCacheMinutes: "3",
     kisMarketSignalGapSeconds: "0.35",
     kisMarketSignalPreferLiveDuringMarketHours: "1",
     kisMarketSignalLiveRefreshSeconds: "60",
@@ -22,7 +22,7 @@
     notifyLinkUrl: "http://127.0.0.1:3000?tab=notifications",
     notifyIntervalMinutes: "10",
     symbolUniverseMaxAgeHours: "24",
-    externalApiFetchIntervalMinutes: "60",
+    externalApiFetchIntervalMinutes: "30",
     externalAlphaEnabled: "1",
     externalCoinGeckoEnabled: "1",
     externalFredEnabled: "1",
@@ -12895,7 +12895,7 @@
         { value: "0", label: "사용 안 함" }
       ]),
       renderSettingField("kisMarketSignalMaxSymbols", "KIS 수급 종목 수", "number", "20"),
-      renderSettingField("kisMarketSignalCacheMinutes", "KIS 수급 캐시(분)", "number", "10"),
+      renderSettingField("kisMarketSignalCacheMinutes", "KIS 수급 캐시(분)", "number", "3"),
       renderSettingField("kisMarketSignalGapSeconds", "KIS 호출 간격(초)", "number", "0.35"),
       renderSettingSelect("kisMarketSignalPreferLiveDuringMarketHours", "장중 KIS live 우선", [
         { value: "1", label: "사용" },
@@ -12926,7 +12926,7 @@
         { value: "1", label: "사용" },
         { value: "0", label: "사용 안 함" }
       ]),
-      renderSettingField("externalApiFetchIntervalMinutes", "외부 API 캐시(분)", "number", "60"),
+      renderSettingField("externalApiFetchIntervalMinutes", "외부 API 캐시(분)", "number", "30"),
       renderSettingField("externalAlphaMaxSymbols", "미장 조회 종목 수", "number", "3"),
       renderSettingSelect("externalSecEnabled", "SEC EDGAR 수집", [
         { value: "1", label: "사용" },

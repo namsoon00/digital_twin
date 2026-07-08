@@ -123,6 +123,7 @@ def known_stock(symbol: str) -> Dict[str, str]:
     known = {
         "005930": {"name": "삼성전자", "market": "KR", "currency": "KRW", "sector": "반도체"},
         "000660": {"name": "SK하이닉스", "market": "KR", "currency": "KRW", "sector": "반도체"},
+        "035420": {"name": "NAVER", "market": "KR", "currency": "KRW", "sector": "AI/플랫폼"},
         "AAPL": {"name": "Apple", "market": "US", "currency": "USD", "sector": "AI/플랫폼"},
         "MSFT": {"name": "Microsoft", "market": "US", "currency": "USD", "sector": "AI/플랫폼"},
         "NVDA": {"name": "NVIDIA", "market": "US", "currency": "USD", "sector": "반도체"},
@@ -385,6 +386,9 @@ def normalize_position(item: Dict[str, object]) -> Position:
             currency = "USD"
         elif market_code in {"KR", "KOSPI", "KOSDAQ"} or symbol.isdigit():
             currency = "KRW"
+    market_signal_coverage = item.get("marketSignalCoverage")
+    if not isinstance(market_signal_coverage, dict):
+        market_signal_coverage = item.get("market_signal_coverage")
     return Position(
         symbol=symbol or info["symbol"],
         name=str(item.get("name") or item.get("stockName") or info["name"]),
@@ -399,6 +403,7 @@ def normalize_position(item: Dict[str, object]) -> Position:
         quote_status=str(item.get("quoteStatus") or item.get("quote_status") or ""),
         quote_message=str(item.get("quoteMessage") or item.get("quote_message") or ""),
         data_quality=str(item.get("dataQuality") or item.get("data_quality") or ""),
+        market_signal_coverage=dict(market_signal_coverage or {}) if isinstance(market_signal_coverage, dict) else {},
         updated_at=str(item.get("updatedAt") or item.get("updated_at") or item.get("timestamp") or ""),
         market_value=market_value,
         profit_loss=profit_loss,

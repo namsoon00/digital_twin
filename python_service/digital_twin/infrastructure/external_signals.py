@@ -242,7 +242,7 @@ class ExternalSignalProvider:
         fetched_at = parse_iso(str(payload.get("fetchedAt") or ""))
         if not fetched_at:
             return False
-        minutes = int(number(self.settings.get("externalApiFetchIntervalMinutes")) or 60)
+        minutes = int(number(self.settings.get("externalApiFetchIntervalMinutes")) or 30)
         minutes = max(10, minutes)
         return datetime.now(timezone.utc) - fetched_at < timedelta(minutes=minutes)
 

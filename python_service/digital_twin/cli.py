@@ -368,7 +368,7 @@ def market_data_command(args) -> int:
         print(json.dumps(runner.run_once(force=args.force), ensure_ascii=False))
         return 0
     if args.market_data_action == "watch":
-        interval = int(os.environ.get("MARKET_DATA_COLLECTION_INTERVAL_SECONDS") or settings.get("marketDataCollectionIntervalSeconds") or 3600)
+        interval = int(os.environ.get("MARKET_DATA_COLLECTION_INTERVAL_SECONDS") or settings.get("marketDataCollectionIntervalSeconds") or 180)
         MarketDataCollectionScheduler(runner, interval).run_forever()
         return 0
     return 1

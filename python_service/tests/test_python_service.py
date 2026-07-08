@@ -366,7 +366,49 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(0, untouched.current_price)
         self.assertEqual(700, cached["foreignNetVolume"])
         self.assertEqual(50, cached["bidAskImbalance"])
+        self.assertEqual("available", enriched.market_signal_coverage["investor"]["status"])
+        self.assertEqual("available", cached["marketSignalCoverage"]["investor"]["status"])
         self.assertEqual(["/oauth2/tokenP", "/uapi/domestic-stock/v1/quotations/inquire-price", "/uapi/domestic-stock/v1/quotations/inquire-ccnl", "/uapi/domestic-stock/v1/quotations/inquire-investor", "/uapi/domestic-stock/v1/quotations/inquire-asking-price-exp-ccn"], [item[1] for item in calls])
+
+    def test_kis_market_signal_provider_does_not_treat_price_foreign_zero_as_investor_flow(self):
+        calls = []
+
+        def fake_fetch_json(method, url, headers=None, body=None, query=None, timeout=12):
+            path = urllib.parse.urlparse(url).path
+            calls.append(path)
+            if path.endswith("/oauth2/tokenP"):
+                return {"access_token": "kis-token"}
+            if path.endswith("/inquire-price"):
+                return {"rt_cd": "0", "output": {"stck_prpr": "197200", "acml_vol": "0", "frgn_ntby_qty": "0"}}
+            if path.endswith("/inquire-ccnl"):
+                return {"rt_cd": "0", "output": []}
+            if path.endswith("/inquire-investor"):
+                return {"rt_cd": "0", "output": []}
+            if path.endswith("/inquire-asking-price-exp-ccn"):
+                return {"rt_cd": "0", "output1": {}}
+            return {"rt_cd": "0", "output": {}}
+
+        provider = KISMarketSignalProvider(
+            settings={
+                "kisBaseUrl": "https://kis.example.test",
+                "kisAppKey": "app-key",
+                "kisAppSecret": "app-secret",
+                "kisMarketSignalsEnabled": "1",
+                "kisMarketSignalGapSeconds": "0",
+                "externalApiRetryAttempts": "1",
+            },
+            quote_cache=SQLiteMarketQuoteCache(Path(self.temp.name) / "service.db"),
+            fetch_json=fake_fetch_json,
+            sleep=lambda _seconds: None,
+        )
+
+        signal = provider.fetch_symbol_signal("035420")
+
+        self.assertIn("현재가", signal["quoteStatus"])
+        self.assertNotIn("투자자별 수급", signal["quoteStatus"])
+        self.assertEqual("empty", signal["marketSignalCoverage"]["investor"]["status"])
+        self.assertFalse(provider.is_signal_complete(signal))
+        self.assertIn("/uapi/domestic-stock/v1/quotations/inquire-investor", calls)
 
     def test_kis_market_signal_provider_uses_fresh_cache_without_token(self):
         db_path = Path(self.temp.name) / "service.db"
@@ -1788,6 +1830,47 @@ class PythonServiceTests(unittest.TestCase):
         self.assertNotIn("방향별 매수/매도 체결량", missing_labels)
         self.assertIn("투자자별 수급", missing_labels)
         self.assertIn("중립으로 처리", effects["투자자별 수급"])
+
+    def test_ontology_relation_rules_distinguish_zero_investor_flow_from_missing_collection(self):
+        position = Position(
+            symbol="035420",
+            name="NAVER",
+            market="KR",
+            currency="KRW",
+            market_value=1000000,
+            profit_loss_rate=-3.6,
+            sellable_quantity=5,
+            current_price=197200,
+            ma20=213940,
+            ma60=217075,
+            ma20_distance=-7.8,
+            ma60_distance=-9.2,
+            trade_strength=90,
+            buy_volume=100,
+            sell_volume=120,
+            quote_status="KIS 현재가, 체결강도, 방향별 체결량, 투자자별 수급 반영",
+            market_signal_coverage={
+                "ccnl": {
+                    "stage": "ccnl",
+                    "status": "available",
+                    "fields": ["tradeStrength", "buyVolume", "sellVolume"],
+                    "nonZeroFields": ["tradeStrength", "buyVolume", "sellVolume"],
+                },
+                "investor": {
+                    "stage": "investor",
+                    "status": "available",
+                    "fields": ["foreignNetVolume", "institutionNetVolume", "individualNetVolume"],
+                    "nonZeroFields": [],
+                },
+            },
+        )
+        context = evaluate_position_relation_rules(position, portfolio_summary([position], fx_rates={"KRW": 1}))
+
+        investor_item = next(item for item in context["missingData"] if item["label"] == "투자자별 수급")
+
+        self.assertEqual("zero", investor_item["status"])
+        self.assertIn("응답은 있었지만", investor_item["effect"])
+        self.assertEqual("zero", context["facts"]["dataAvailability"]["investorFlow"]["status"])
 
     def test_ontology_settings_drive_rule_metadata_and_ai_prompt_template(self):
         position = Position(
@@ -3979,6 +4062,48 @@ class PythonServiceTests(unittest.TestCase):
         self.assertNotIn("thesis", message)
         self.assertNotIn("관계 압력", message)
         self.assertNotIn("모델 공식", message)
+
+    def test_investment_insight_telegram_message_does_not_duplicate_ontology_sections(self):
+        position = Position(
+            symbol="035420",
+            name="NAVER",
+            market="KR",
+            currency="KRW",
+            market_value=1000000,
+            profit_loss_rate=-3.6,
+            sellable_quantity=5,
+            current_price=197200,
+            ma20=213940,
+            ma60=217075,
+            ma20_distance=-7.8,
+            ma60_distance=-9.2,
+            trade_strength=90,
+            buy_volume=100,
+            sell_volume=120,
+        )
+        relation_context = evaluate_position_relation_rules(position, portfolio_summary([position], fx_rates={"KRW": 1}))
+        event = AlertEvent(
+            "main",
+            "메인",
+            "WATCH",
+            "investmentInsight",
+            "main:insight:035420",
+            "NAVER",
+            ["상태 손실 축소 권장 (80점)", "핵심 결론: NAVER의 보유 판단과 관계 신호가 리스크 관리 쪽으로 기울었습니다."],
+            "035420",
+            metadata={
+                "ontologyRelationContext": relation_context,
+                "ontologyPromptContext": relation_context["promptContext"],
+            },
+        )
+
+        message = render_notification(NotificationTemplate("investmentInsight", "{telegramMessage}"), alert_context(event))
+
+        self.assertEqual(1, message.count("<b>관계 규칙</b>"))
+        self.assertEqual(1, message.count("<b>AI 분석 기준</b>"))
+        self.assertEqual(1, message.count("\n<b>부족 데이터</b>\n"))
+        self.assertNotIn("관계 판단", message)
+        self.assertNotIn("알림 발송", message)
 
     def test_all_alert_types_have_managed_ai_prompt_templates(self):
         settings = {

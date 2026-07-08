@@ -781,8 +781,49 @@ def _btc_market(external_signals: Dict[str, object]) -> Dict[str, object]:
     return {}
 
 
-def _missing(key: str, label: str, effect: str) -> Dict[str, str]:
-    return {"key": key, "label": label, "effect": effect}
+def _missing(key: str, label: str, effect: str, status: str = "missing", source: str = "") -> Dict[str, str]:
+    item = {"key": key, "label": label, "effect": effect, "status": status}
+    if source:
+        item["source"] = source
+    return item
+
+
+def _coverage_status(
+    coverage: Dict[str, object],
+    stage: str,
+    keys: Iterable[str],
+    value: float = 0.0,
+    quote_status: str = "",
+    quote_hint: str = "",
+) -> str:
+    if isinstance(coverage, dict) and coverage:
+        item = coverage.get(stage) if isinstance(coverage.get(stage), dict) else {}
+        fields = set(str(field) for field in (item.get("fields") or []))
+        non_zero_fields = set(str(field) for field in (item.get("nonZeroFields") or []))
+        if any(key in fields for key in keys):
+            return "available" if any(key in non_zero_fields for key in keys) or value else "zero"
+        status = str(item.get("status") or "").strip()
+        if status in {"empty", "missing"}:
+            return status
+    if value:
+        return "available"
+    if quote_hint and quote_hint in str(quote_status or ""):
+        return "zero"
+    return "missing"
+
+
+def _availability(status: str, source: str = "") -> Dict[str, str]:
+    item = {"status": str(status or "missing")}
+    if source:
+        item["source"] = source
+    return item
+
+
+def _missing_penalty(item: Dict[str, object]) -> float:
+    status = str(item.get("status") or "missing")
+    if status in {"zero", "proxy", "empty"}:
+        return 6.0
+    return 12.0
 
 
 def moving_average_distance_text(label: str, distance: float) -> str:
@@ -812,6 +853,8 @@ def position_signal_facts(
     orderbook_ask_volume = number(position.orderbook_ask_volume)
     bid_ask_imbalance = number(position.bid_ask_imbalance)
     execution_direction_proxy = bool(position.trade_strength or bid_ask_imbalance or orderbook_bid_volume or orderbook_ask_volume)
+    market_signal_coverage = dict(position.market_signal_coverage or {}) if isinstance(position.market_signal_coverage, dict) else {}
+    quote_status = str(position.quote_status or "")
     btc = _btc_market(external_signals)
     disclosures = external_signals.get("dartDisclosures") if isinstance(external_signals, dict) else {}
     symbol = str(position.symbol or "").upper()
@@ -825,6 +868,12 @@ def position_signal_facts(
         "currency": position.currency,
         "sector": position.sector,
         "source": position.source,
+        "quoteSource": position.quote_source,
+        "quoteStatus": quote_status,
+        "quoteMessage": position.quote_message,
+        "dataQuality": position.data_quality,
+        "updatedAt": position.updated_at,
+        "marketSignalCoverage": market_signal_coverage,
         "isHolding": str(position.source or "holding") != "watchlist",
         "isWatchlist": str(position.source or "") == "watchlist",
         "profitLossRate": number(position.profit_loss_rate),
@@ -865,15 +914,77 @@ def position_signal_facts(
     if not facts["ma60"]:
         missing.append(_missing("ma60", "60일 이동평균", "중기 추세 위치를 확인할 수 없습니다."))
     expects_kr_signals = bool(facts.get("expectsKrMicrostructureSignals"))
-    if expects_kr_signals and not facts["tradeStrength"]:
-        missing.append(_missing("tradeStrength", "체결강도", "체결 압력 확인값이 없어 수급 방향 판단을 가격·거래량 중심으로 봅니다."))
+    trade_strength_status = _coverage_status(
+        market_signal_coverage,
+        "ccnl",
+        ["tradeStrength"],
+        float(facts["tradeStrength"] or 0),
+        quote_status,
+        "체결강도",
+    )
+    execution_volume_status = _coverage_status(
+        market_signal_coverage,
+        "ccnl",
+        ["buyVolume", "sellVolume"],
+        float(total_execution_volume or 0),
+        quote_status,
+        "방향별 체결량",
+    )
+    investor_flow_status = _coverage_status(
+        market_signal_coverage,
+        "investor",
+        [
+            "foreignBuyVolume",
+            "foreignSellVolume",
+            "foreignNetVolume",
+            "foreignNetAmount",
+            "institutionBuyVolume",
+            "institutionSellVolume",
+            "institutionNetVolume",
+            "institutionNetAmount",
+            "individualBuyVolume",
+            "individualSellVolume",
+            "individualNetVolume",
+            "individualNetAmount",
+        ],
+        float(facts["investorFlowBase"] or 0),
+        quote_status,
+        "투자자별 수급",
+    )
+    if execution_volume_status != "available" and execution_direction_proxy:
+        execution_volume_status = "proxy"
+    facts["dataAvailability"] = {
+        "tradeStrength": _availability(trade_strength_status, "KIS ccnl"),
+        "executionVolume": _availability(execution_volume_status, "KIS ccnl/orderbook"),
+        "investorFlow": _availability(investor_flow_status, "KIS investor"),
+    }
+    if expects_kr_signals and trade_strength_status != "available":
+        if trade_strength_status == "zero":
+            effect = "체결강도 응답은 있었지만 0으로 들어와 체결 압력 근거로 쓰지 않습니다."
+        elif trade_strength_status == "empty":
+            effect = "KIS 체결 단계 응답이 비어 있어 수급 방향 판단을 가격·거래량 중심으로 봅니다."
+        else:
+            effect = "체결 압력 확인값이 없어 수급 방향 판단을 가격·거래량 중심으로 봅니다."
+        missing.append(_missing("tradeStrength", "체결강도", effect, trade_strength_status, "KIS ccnl"))
     if expects_kr_signals and not total_execution_volume and not execution_direction_proxy:
-        missing.append(_missing("executionVolume", "방향별 매수/매도 체결량", "매수·매도 방향별 체결 압력을 확인하지 못해 수급 방향 점수는 중립에 가깝게 처리합니다."))
+        if execution_volume_status == "zero":
+            effect = "방향별 체결량 응답은 있었지만 매수·매도 합계가 0으로 들어와 수급 방향 점수는 중립에 가깝게 처리합니다."
+        elif execution_volume_status == "empty":
+            effect = "KIS 체결 단계 응답이 비어 있어 매수·매도 방향별 체결 압력을 확인하지 못합니다."
+        else:
+            effect = "매수·매도 방향별 체결 압력을 확인하지 못해 수급 방향 점수는 중립에 가깝게 처리합니다."
+        missing.append(_missing("executionVolume", "방향별 매수/매도 체결량", effect, execution_volume_status, "KIS ccnl"))
     if expects_kr_signals and not facts["investorFlowBase"]:
-        missing.append(_missing("investorFlow", "투자자별 수급", "외국인·기관·개인 순매수는 반영하지 못해 주체별 수급은 중립으로 처리합니다. 가격·거래량·체결강도 중심 판단입니다."))
+        if investor_flow_status == "zero":
+            effect = "투자자별 수급 응답은 있었지만 외국인·기관·개인 순매수 합계가 0으로 들어와 방향성 근거로 쓰지 않습니다."
+        elif investor_flow_status == "empty":
+            effect = "KIS 투자자 단계 응답이 비어 있어 주체별 수급은 중립으로 처리합니다."
+        else:
+            effect = "외국인·기관·개인 순매수는 수집되지 않아 주체별 수급은 중립으로 처리합니다. 가격·거래량·체결강도 중심 판단입니다."
+        missing.append(_missing("investorFlow", "투자자별 수급", effect, investor_flow_status, "KIS investor"))
     if facts["isBtcSensitive"] and not btc:
         missing.append(_missing("btcMarket", "비트코인 시장 데이터", "비트코인 민감 종목의 외부 연동 위험을 확인하지 못합니다."))
-    data_quality = clamp(100.0 - len(missing) * 12.0, 35.0, 100.0)
+    data_quality = clamp(100.0 - sum(_missing_penalty(item) for item in missing), 35.0, 100.0)
     facts["missingData"] = missing
     facts["dataQualityScore"] = data_quality
     return facts

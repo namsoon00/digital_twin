@@ -66,6 +66,7 @@ class Position:
     quote_status: str = ""
     quote_message: str = ""
     data_quality: str = ""
+    market_signal_coverage: Dict[str, object] = field(default_factory=dict)
     updated_at: str = ""
     market_value: float = 0.0
     profit_loss: float = 0.0

@@ -914,7 +914,14 @@ def ontology_missing_data(context_or_metadata: Dict[str, object]) -> List[Dict[s
         if isinstance(item, dict):
             label = str(item.get("label") or item.get("key") or "").strip()
             effect = str(item.get("effect") or "").strip()
-            rows.append({"label": label, "effect": effect})
+            row = {"label": label, "effect": effect}
+            status = str(item.get("status") or "").strip()
+            source = str(item.get("source") or "").strip()
+            if status:
+                row["status"] = status
+            if source:
+                row["source"] = source
+            rows.append(row)
         elif str(item or "").strip():
             rows.append({"label": str(item).strip(), "effect": ""})
     return [item for item in rows if item.get("label")]
@@ -1001,9 +1008,20 @@ def notification_ai_opinion_lines(context_or_metadata: Dict[str, object]) -> Lis
 
 def missing_data_lines(context_or_metadata: Dict[str, object]) -> List[str]:
     rows = ontology_missing_data(context_or_metadata)
+    status_labels = {
+        "missing": "수집 안 됨",
+        "empty": "응답 비어 있음",
+        "zero": "0값 수신",
+        "proxy": "대체 근거 사용",
+        "stale": "오래된 값",
+    }
     lines = []
     for item in rows:
         text = str(item.get("label") or "").strip()
+        status = str(item.get("status") or "").strip()
+        status_label = status_labels.get(status, "")
+        if status_label:
+            text += " (" + status_label + ")"
         effect = str(item.get("effect") or "").strip()
         if effect:
             text += ": " + effect
@@ -1770,9 +1788,9 @@ def template_prefers_rich_score(template: str, rendered: str) -> bool:
 def append_score_explanation(rendered: str, context: Dict[str, object], rich: bool = False) -> str:
     rendered_text = str(rendered or "")
     if (
-        context_message_type(context) in {"holdingTiming", "monitorDecisionChange"}
+        context_message_type(context) in {"holdingTiming", "monitorDecisionChange", "investmentInsight"}
         and ontology_relation_context(context)
-        and any(marker in rendered_text for marker in ["관계 규칙", "AI 분석 기준", "부족 데이터"])
+        and any(marker in rendered_text for marker in ["관계 규칙", "AI 분석 기준", "부족 데이터", "발송 기준"])
     ):
         return rendered
     if not rendered_text.strip() or "점수 계산" in rendered_text or "모델 판단" in rendered_text or "관계 판단" in rendered_text or "온톨로지 판단" in rendered_text or "알림 발송" in rendered_text:

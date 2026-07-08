@@ -514,6 +514,7 @@ class TossProvider:
             "quoteStatus": position.quote_status,
             "quoteMessage": position.quote_message,
             "dataQuality": position.data_quality or "actual",
+            "marketSignalCoverage": dict(position.market_signal_coverage or {}),
             "updatedAt": position.updated_at or utc_now_iso(),
             "tradingValue": position.trading_value,
             "volume": position.volume,

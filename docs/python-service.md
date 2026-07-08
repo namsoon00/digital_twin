@@ -164,7 +164,7 @@ The market data collector runs as a managed worker through `python_service/monit
 Configuration:
 
 - `MARKET_DATA_COLLECTION_ENABLED`: `1` by default.
-- `MARKET_DATA_COLLECTION_INTERVAL_SECONDS`: worker interval, default 3600 seconds.
+- `MARKET_DATA_COLLECTION_INTERVAL_SECONDS`: worker interval, default 180 seconds.
 - `MARKET_DATA_COLLECTION_MARKETS`: comma-separated markets, default `KOSPI,KOSDAQ,NASDAQ`.
 - `MARKET_DATA_MAX_AGE_MINUTES`: quote freshness target before a symbol is picked again, default 240.
 - `MARKET_DATA_PRICE_BATCH_SIZE`: Toss prices symbols per cycle, capped at 200 by the app.
@@ -185,7 +185,7 @@ Configuration:
 - `COINGECKO_API_KEY`: CoinGecko demo/pro key, optional for higher quota.
 - `FRED_API_KEY`: FRED key, used for macro series alerts.
 - `OPENDART_API_KEY`: OpenDART certificate key, used for Korean disclosure alerts.
-- `EXTERNAL_API_FETCH_INTERVAL_MINUTES`: cache duration, minimum 10 minutes, default 60.
+- `EXTERNAL_API_FETCH_INTERVAL_MINUTES`: cache duration, minimum 10 minutes, default 30.
 - `EXTERNAL_FRED_SERIES`: comma-separated FRED series ids, default `DGS10,DGS2,DFF`.
 - `EXTERNAL_CRYPTO_IDS`: comma-separated CoinGecko ids, default `bitcoin,ethereum`.
 - `EXTERNAL_ALPHA_MAX_SYMBOLS`: max US holdings queried per refresh, default 3.

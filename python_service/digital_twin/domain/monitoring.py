@@ -246,6 +246,13 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
         }
 
     def position_from_state(self, item: Dict[str, object]) -> Position:
+        market_signal_coverage = item.get("market_signal_coverage") if "market_signal_coverage" in item else item.get("marketSignalCoverage")
+        change_rate_value = item.get("change_rate") if "change_rate" in item else item.get("changeRate")
+        quote_source_value = item.get("quote_source") if "quote_source" in item else item.get("quoteSource")
+        quote_status_value = item.get("quote_status") if "quote_status" in item else item.get("quoteStatus")
+        quote_message_value = item.get("quote_message") if "quote_message" in item else item.get("quoteMessage")
+        data_quality_value = item.get("data_quality") if "data_quality" in item else item.get("dataQuality")
+        updated_at_value = item.get("updated_at") if "updated_at" in item else item.get("updatedAt")
         return Position(
             symbol=str(item.get("symbol") or ""),
             name=str(item.get("name") or ""),
@@ -255,6 +262,13 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
             sellable_quantity=number(item.get("sellable_quantity") if "sellable_quantity" in item else item.get("sellableQuantity")),
             average_price=number(item.get("average_price") if "average_price" in item else item.get("averagePrice")),
             current_price=number(item.get("current_price") if "current_price" in item else item.get("currentPrice")),
+            change_rate=number(change_rate_value) if change_rate_value is not None else None,
+            quote_source=str(quote_source_value or ""),
+            quote_status=str(quote_status_value or ""),
+            quote_message=str(quote_message_value or ""),
+            data_quality=str(data_quality_value or ""),
+            market_signal_coverage=dict(market_signal_coverage or {}) if isinstance(market_signal_coverage, dict) else {},
+            updated_at=str(updated_at_value or ""),
             market_value=number(item.get("market_value") if "market_value" in item else item.get("marketValue")),
             profit_loss=number(item.get("profit_loss") if "profit_loss" in item else item.get("profitLoss")),
             profit_loss_rate=number(item.get("profit_loss_rate") if "profit_loss_rate" in item else item.get("profitLossRate")),
@@ -286,6 +300,7 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
             ma20_distance=number(item.get("ma20_distance") if "ma20_distance" in item else item.get("ma20Distance")),
             ma60_distance=number(item.get("ma60_distance") if "ma60_distance" in item else item.get("ma60Distance")),
             sector=str(item.get("sector") or "기타"),
+            source=str(item.get("source") or item.get("positionSource") or "holding"),
         )
 
     def sector_ratio_for_position(self, snapshot: AccountSnapshot, sector: str) -> float:

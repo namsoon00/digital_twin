@@ -244,7 +244,7 @@ class MarketDataCollectionRunner:
 class MarketDataCollectionScheduler:
     def __init__(self, runner: MarketDataCollectionRunner, interval_seconds: int):
         self.runner = runner
-        self.interval_seconds = max(10 * 60, int(interval_seconds or 3600))
+        self.interval_seconds = max(3 * 60, int(interval_seconds or 180))
         self.running = True
 
     def stop(self, *_args) -> None:

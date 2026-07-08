@@ -40,6 +40,82 @@ ACTION_LABELS = {
     "SELL": "매도",
     "AVOID": "회피",
 }
+ACTION_TEXT_REPLACEMENTS = {
+    "BUY": "매수",
+    "ADD": "추가매수",
+    "HOLD": "보유",
+    "TRIM": "분할축소",
+    "SELL": "매도",
+    "AVOID": "회피",
+}
+INTERNAL_VARIABLE_REPLACEMENTS = [
+    (
+        re.compile(r"entryAllocationRoom.*entrySupportCount.*entryExternalRiskBlocked.*?(?:다|\.|$)"),
+        "추가매수 여력과 일부 지지 신호는 있지만, 공시·뉴스 같은 외부 위험 때문에 추가매수 근거로 보기는 어렵다.",
+    ),
+    (re.compile(r"\bentryAllocationRoom\b\s*(?:=|:|이|가)?\s*true", re.IGNORECASE), "추가매수 여력 있음"),
+    (re.compile(r"\bentryAllocationRoom\b\s*(?:=|:|이|가)?\s*false", re.IGNORECASE), "추가매수 여력 부족"),
+    (re.compile(r"\bentrySupportCount\b\s*(?:=|:|이|가)?\s*(\d+)", re.IGNORECASE), r"추가매수 지지 신호 \1개"),
+    (re.compile(r"\bentryExternalRiskBlocked\b\s*(?:=|:|이|가)?\s*true", re.IGNORECASE), "공시·뉴스 같은 외부 위험으로 추가매수 보류"),
+    (re.compile(r"\bentryExternalRiskBlocked\b\s*(?:=|:|이|가)?\s*false", re.IGNORECASE), "외부 위험 차단 조건 없음"),
+    (re.compile(r"\bentryAllocationRoom\b", re.IGNORECASE), "추가매수 여력"),
+    (re.compile(r"\bentrySupportCount\b", re.IGNORECASE), "추가매수 지지 신호 수"),
+    (re.compile(r"\bentryExternalRiskBlocked\b", re.IGNORECASE), "외부 위험 차단 조건"),
+    (re.compile(r"\bmissingData\b", re.IGNORECASE), "부족 데이터"),
+    (re.compile(r"\brawLines\b", re.IGNORECASE), "알림 원문 데이터"),
+    (re.compile(r"\bsourceFacts\b", re.IGNORECASE), "판단에 사용한 데이터"),
+    (re.compile(r"\bontologyRelationContext\b", re.IGNORECASE), "관계 분석 데이터"),
+    (re.compile(r"\bactiveInvestmentOpinion\b", re.IGNORECASE), "현재 투자 의견"),
+    (re.compile(r"\bexecutionPlan\b", re.IGNORECASE), "실행 점검 계획"),
+    (re.compile(r"\bcounterEvidence\b", re.IGNORECASE), "반대 근거"),
+    (re.compile(r"\bnextChecks\b", re.IGNORECASE), "다음 확인"),
+    (re.compile(r"\breferenceDate\b", re.IGNORECASE), "기준시각"),
+    (re.compile(r"\bprimaryActionLabel\b", re.IGNORECASE), "우선 행동"),
+    (re.compile(r"\bprimaryAction\b", re.IGNORECASE), "우선 행동"),
+    (re.compile(r"\briskSignals\b", re.IGNORECASE), "위험 신호"),
+    (re.compile(r"\bsupportSignals\b", re.IGNORECASE), "지지 신호"),
+    (re.compile(r"\bweakenConditions\b", re.IGNORECASE), "의견이 약해지는 조건"),
+]
+INTERNAL_VARIABLE_TEXT_REPLACEMENTS = [
+    ("entryAllocationRoom", "추가매수 여력"),
+    ("entrySupportCount", "추가매수 지지 신호 수"),
+    ("entryExternalRiskBlocked", "외부 위험 차단 조건"),
+    ("missingData", "부족 데이터"),
+    ("rawLines", "알림 원문 데이터"),
+    ("sourceFacts", "판단에 사용한 데이터"),
+    ("ontologyRelationContext", "관계 분석 데이터"),
+    ("activeInvestmentOpinion", "현재 투자 의견"),
+    ("executionPlan", "실행 점검 계획"),
+    ("counterEvidence", "반대 근거"),
+    ("nextChecks", "다음 확인"),
+    ("referenceDate", "기준시각"),
+    ("primaryActionLabel", "우선 행동"),
+    ("primaryAction", "우선 행동"),
+    ("riskSignals", "위험 신호"),
+    ("supportSignals", "지지 신호"),
+    ("weakenConditions", "의견이 약해지는 조건"),
+]
+USER_FRIENDLY_REPLACEMENTS = [
+    ("손실 보유 + 기준선 이탈 -> 손실 관리", "손실이 커지고 주요 평균선 아래에 있어 손실 관리"),
+    ("추세 훼손 + 하락 가속 -> 리스크 강화", "주요 평균선 아래에서 하락 속도가 빨라져 위험 증가"),
+    ("보유 종목 + 추세 훼손 -> 추가매수 보류", "보유 종목의 가격 흐름이 약해져 추가매수 보류"),
+    ("단기선 이탈 + 60일선 지지 -> 지지선 재확인", "20일선 아래지만 60일선 근처라 지지 여부 재확인"),
+    ("수익 보유 + 추세 약화 -> 익절 점검", "수익 중이지만 가격 흐름이 약해져 분할매도 점검"),
+    ("업종 집중 + 보유 비중 과대 -> 리밸런싱 점검", "한 업종이나 종목 비중이 커서 비중 조정 점검"),
+    ("비트코인 급변 + 민감 종목 -> 연동 점검", "비트코인 변동에 민감한 종목이라 함께 점검"),
+    ("기준선 이탈이 해소", "주요 평균선 아래 상태가 해소"),
+    ("하락 가속이 멈추", "하락 속도가 더 빨라지는 흐름이 멈추"),
+    ("기준선 이탈", "주요 평균선 아래로 내려감"),
+    ("추세 훼손", "가격 흐름 약화"),
+    ("하락 가속", "하락 속도 증가"),
+    ("리스크 강화", "위험 증가"),
+    ("리스크", "위험"),
+    ("괴리", "차이"),
+    ("feature 기여도", "판단에 영향을 준 항목"),
+    ("feature", "판단 항목"),
+    ("thesis", "보유 이유"),
+    ("무효화 조건", "의견이 약해지는 조건"),
+]
 DEFAULT_AI_GATE_MESSAGE_TYPES = {
     INVESTMENT_INSIGHT,
     HOLDING_TIMING,
@@ -203,6 +279,36 @@ def fallback_action_from_label(value: object) -> str:
     return "HOLD"
 
 
+def user_friendly_ai_text(value: object, limit: int = 220) -> str:
+    result = _text(value, limit)
+    if not result:
+        return ""
+    for pattern, replacement in INTERNAL_VARIABLE_REPLACEMENTS:
+        result = pattern.sub(replacement, result)
+    for before, after in INTERNAL_VARIABLE_TEXT_REPLACEMENTS:
+        result = result.replace(before, after)
+    for before, after in USER_FRIENDLY_REPLACEMENTS:
+        result = result.replace(before, after)
+    for action, label in ACTION_TEXT_REPLACEMENTS.items():
+        result = re.sub(r"\b" + action + r"\s*의견", label + " 의견", result)
+        result = re.sub(r"\b" + action + r"\s*을\s*선택", label + " 의견을 선택", result)
+        result = re.sub(r"\b" + action + r"\s*를\s*선택", label + " 의견을 선택", result)
+        result = re.sub(r"\b" + action + r"\b", label, result)
+    result = result.replace("->", "→")
+    result = re.sub(r"\btrue\b", "예", result, flags=re.IGNORECASE)
+    result = re.sub(r"\bfalse\b", "아니오", result, flags=re.IGNORECASE)
+    result = result.replace("주요 평균선 아래로 내려감이", "주요 평균선 아래 상태가")
+    result = result.replace("하락 속도 증가이", "하락 속도 증가가")
+    result = result.replace("조건를", "조건을")
+    result = result.replace("..", ".")
+    result = re.sub(r"\s+", " ", result).strip()
+    return result
+
+
+def user_friendly_ai_list(value: object, limit: int = 5) -> List[str]:
+    return _list([user_friendly_ai_text(item, 180) for item in _list(value, limit * 2)], limit)
+
+
 def local_validated_ai_response(context: Dict[str, object], source: str = "local") -> NotificationAIValidatedResponse:
     context = dict(context or {})
     relation_context = relation_context_value(context)
@@ -264,13 +370,13 @@ def local_validated_ai_response(context: Dict[str, object], source: str = "local
         action=action,
         action_label=ACTION_LABELS.get(action, action),
         confidence=confidence,
-        summary=_line_after_colon(lines, "해석") or _line_after_colon(raw_lines, "핵심 결론") or "온톨로지 실행 계획이 생성됐습니다.",
-        opinion=str(execution_plan.get("primaryActionLabel") or "").strip() or _line_after_colon(lines, "의견") or _line_after_colon(raw_lines, "권장 액션") or "다음 데이터에서도 같은 신호가 유지되는지 확인하세요.",
-        evidence=_list(evidence, 5),
-        counter_evidence=_list(counter, 4),
-        invalidation_condition=_text(invalidation, 220),
-        next_checks=_list([next_check], 3),
-        missing_data_impact=_list(missing_impact, 4),
+        summary=user_friendly_ai_text(_line_after_colon(lines, "해석") or _line_after_colon(raw_lines, "핵심 결론") or "관계 분석 실행 계획이 생성됐습니다."),
+        opinion=user_friendly_ai_text(str(execution_plan.get("primaryActionLabel") or "").strip() or _line_after_colon(lines, "의견") or _line_after_colon(raw_lines, "권장 액션") or "다음 데이터에서도 같은 신호가 유지되는지 확인하세요."),
+        evidence=user_friendly_ai_list(evidence, 5),
+        counter_evidence=user_friendly_ai_list(counter, 4),
+        invalidation_condition=user_friendly_ai_text(invalidation, 220),
+        next_checks=user_friendly_ai_list([next_check], 3),
+        missing_data_impact=user_friendly_ai_list(missing_impact, 4),
         reference_date=reference_date(context),
         source=source,
     )
@@ -295,6 +401,9 @@ def build_notification_ai_gate_prompt(context: Dict[str, object]) -> str:
         "너는 자동 주문자가 아니라 투자 실행 알림을 검증하는 분석가다.",
         "제공된 데이터와 온톨로지 관계 규칙만 사용한다. 없는 데이터는 절대 추정하지 않는다.",
         "BUY, ADD, HOLD, TRIM, SELL, AVOID 중 하나를 고르되 자동 주문 지시처럼 쓰지 않는다.",
+        "action 필드에만 BUY/ADD/HOLD/TRIM/SELL/AVOID 코드를 쓰고, summary/opinion/evidence/counterEvidence/nextChecks에는 매수/추가매수/보유/분할축소/매도/회피처럼 한국어 행동명만 쓴다.",
+        "사용자에게 보이는 문장에는 snake_case, camelCase, true/false, entryAllocationRoom, entrySupportCount, entryExternalRiskBlocked 같은 내부 변수명을 쓰지 않는다. 반드시 쉬운 한국어 문장으로 풀어쓴다.",
+        "어려운 표현은 피한다. '기준선 이탈'은 '주요 평균선 아래로 내려감', '추세 훼손'은 '가격 흐름 약화', '하락 가속'은 '하락 속도 증가', '괴리'는 '차이'처럼 바꿔 쓴다.",
         "반대 근거, 부족 데이터 영향, 무효화 조건, 다음 확인 조건을 반드시 포함한다.",
         "응답은 설명 문장 없이 JSON 객체 하나만 출력한다.",
         "스키마:",
@@ -333,13 +442,13 @@ def validated_response_from_payload(
         warnings.append("지원하지 않는 action 값이라 로컬 판단으로 대체했습니다.")
         action = fallback.action
     confidence = _clamp(_number(payload.get("confidence"), fallback.confidence), 0, 100)
-    summary = _text(payload.get("summary") or fallback.summary)
-    opinion = soften_order_language(_text(payload.get("opinion") or fallback.opinion))
-    evidence = _list(payload.get("evidence") or fallback.evidence, 5)
-    counter = _list(payload.get("counterEvidence") or payload.get("counter_evidence") or fallback.counter_evidence, 4)
-    invalidation = soften_order_language(_text(payload.get("invalidationCondition") or payload.get("invalidation_condition") or fallback.invalidation_condition))
-    next_checks = _list(payload.get("nextChecks") or payload.get("next_checks") or fallback.next_checks, 4)
-    missing_impact = _list(payload.get("missingDataImpact") or payload.get("missing_data_impact") or fallback.missing_data_impact, 5)
+    summary = user_friendly_ai_text(payload.get("summary") or fallback.summary)
+    opinion = soften_order_language(user_friendly_ai_text(payload.get("opinion") or fallback.opinion))
+    evidence = user_friendly_ai_list(payload.get("evidence") or fallback.evidence, 5)
+    counter = user_friendly_ai_list(payload.get("counterEvidence") or payload.get("counter_evidence") or fallback.counter_evidence, 4)
+    invalidation = soften_order_language(user_friendly_ai_text(payload.get("invalidationCondition") or payload.get("invalidation_condition") or fallback.invalidation_condition))
+    next_checks = user_friendly_ai_list(payload.get("nextChecks") or payload.get("next_checks") or fallback.next_checks, 4)
+    missing_impact = user_friendly_ai_list(payload.get("missingDataImpact") or payload.get("missing_data_impact") or fallback.missing_data_impact, 5)
     expected_reference = reference_date(context)
     response_reference = _text(payload.get("referenceDate") or payload.get("reference_date") or expected_reference, 80)
     if expected_reference and response_reference and expected_reference not in response_reference and response_reference not in expected_reference:
@@ -354,7 +463,7 @@ def validated_response_from_payload(
         ]
     for item in missing_labels:
         if not any(item in row for row in missing_impact):
-            missing_impact.append(item + "는 결론 강도를 낮추는 요소입니다.")
+            missing_impact.append(user_friendly_ai_text(item + "는 결론 강도를 낮추는 요소입니다."))
     if not counter:
         warnings.append("반대 근거가 비어 있어 반대 신호는 웹 상세에서 추가 확인이 필요합니다.")
     return NotificationAIValidatedResponse(
@@ -452,7 +561,7 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
     if response.opinion:
         parts.append("• " + html.escape(response.opinion, quote=False))
     if response.invalidation_condition:
-        parts.append("• 무효화 조건: " + html.escape(response.invalidation_condition, quote=False))
+        parts.append("• 의견이 약해지는 조건: " + html.escape(response.invalidation_condition, quote=False))
     for item in response.next_checks[:3]:
         parts.append("• 다음 확인: " + html.escape(item, quote=False))
     if response.missing_data_impact:
@@ -586,7 +695,7 @@ def context_with_validated_ai_response(
     if response.counter_evidence:
         lines.append("반대 근거: " + " / ".join(response.counter_evidence[:3]))
     if response.invalidation_condition:
-        lines.append("무효화 조건: " + response.invalidation_condition)
+        lines.append("의견이 약해지는 조건: " + response.invalidation_condition)
     if response.next_checks:
         lines.append("다음 확인: " + " / ".join(response.next_checks[:3]))
     if response.missing_data_impact:

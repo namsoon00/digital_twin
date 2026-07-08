@@ -40,7 +40,7 @@ from digital_twin.domain.disclosure_analysis import DisclosureAnalysisResult, lo
 from digital_twin.domain.notification_templates import NotificationTemplate, alert_context, render_notification
 from digital_twin.domain.notification_rules import apply_market_hours_rule, apply_state_cooldown_rule, default_notification_rule, evaluate_notification_rule
 from digital_twin.domain.notification_ai import build_notification_ai_opinion
-from digital_twin.domain.notification_ai_gate import context_with_validated_ai_response, validated_response_from_payload
+from digital_twin.domain.notification_ai_gate import build_notification_ai_gate_prompt, context_with_validated_ai_response, validated_response_from_payload
 from digital_twin.domain.notifications import NotificationJob
 from digital_twin.domain.parsing import parse_assignments
 from digital_twin.domain.portfolio import AccountSnapshot, AlertEvent, Position, utc_now_iso
@@ -4891,6 +4891,67 @@ class PythonServiceTests(unittest.TestCase):
         rendered = render_notification(NotificationTemplate("investmentInsight", "{telegramMessage}"), enriched)
         self.assertNotIn("AI 의견", rendered)
         self.assertEqual(1, rendered.count("분석출처: AI 검증 알림"))
+
+    def test_validated_ai_response_hides_internal_variables_and_jargon(self):
+        context = {
+            "messageType": "investmentInsight",
+            "headline": "[주의] 🛡️ 손실 -18.7%: 손절·분할축소 점검",
+            "displayTarget": "삼성전자 / 005930",
+            "referenceDate": "2026-07-08 18:54 KST",
+            "sentTime": "2026-07-08 19:17 KST",
+            "rawLines": "\n".join([
+                "현재가: 277,500원",
+                "평단가: 327,000원",
+                "수익률: -18.7%",
+                "수급: 거래량 33,525,758(1x), 체결강도 89, 호가불균형 +9.9%",
+                "투자자: 외국인 -3,015,093(매수 8,922,904/매도 11,937,997), 기관 +971,031(매수 12,816,837/매도 11,845,806), 개인 +2,031,705(매수 11,457,143/매도 9,425,438)",
+                "추세: 20일선 326,650원보다 15% 낮음, 60일선 286,967원보다 3.3% 낮음",
+                "기준일: 2026-07-08 18:54 KST",
+            ]),
+            "criterionLines": "설정: 관계 그래프에서 의미 있는 투자 인사이트가 생성될 때",
+        }
+
+        response = validated_response_from_payload(context, {
+            "action": "SELL",
+            "confidence": 94,
+            "summary": "추세 훼손과 하락 가속이 커져 SELL 의견이다.",
+            "opinion": "자동 주문 지시가 아니라 투자 실행 알림 검증 의견으로 SELL을 선택한다.",
+            "evidence": [
+                "손실 보유 + 기준선 이탈 -> 손실 관리 규칙이 성립했다.",
+                "추세 훼손 + 하락 가속 -> 리스크 강화 규칙의 강도는 98.4점이다.",
+            ],
+            "counterEvidence": [
+                "entryAllocationRoom이 true이고 entrySupportCount가 2로 제공됐지만 entryExternalRiskBlocked도 true다.",
+            ],
+            "invalidationCondition": "기준선 이탈이 해소되고 하락 가속이 멈추면 SELL 의견을 낮춘다.",
+            "nextChecks": ["entrySupportCount와 entryExternalRiskBlocked를 다시 확인"],
+            "missingDataImpact": ["missingData는 빈 배열이다."],
+            "referenceDate": "2026-07-08 18:54 KST",
+        }, source="Codex AI")
+        enriched = context_with_validated_ai_response(context, response)
+        message = enriched["telegramMessage"]
+
+        for hidden in ["entryAllocationRoom", "entrySupportCount", "entryExternalRiskBlocked", "SELL", "true", "false"]:
+            self.assertNotIn(hidden, message)
+        for jargon in ["기준선 이탈", "추세 훼손", "하락 가속", "무효화 조건"]:
+            self.assertNotIn(jargon, message)
+        self.assertIn("매도 의견을 선택", message)
+        self.assertIn("주요 평균선 아래", message)
+        self.assertIn("하락 속도가", message)
+        self.assertIn("추가매수 여력과 일부 지지 신호", message)
+        self.assertIn("의견이 약해지는 조건", message)
+
+    def test_notification_ai_gate_prompt_requires_user_friendly_language(self):
+        prompt = build_notification_ai_gate_prompt({
+            "messageType": "investmentInsight",
+            "displayTarget": "삼성전자 / 005930",
+            "referenceDate": "2026-07-08 18:54 KST",
+            "rawLines": "현재가: 277,500원",
+        })
+
+        self.assertIn("내부 변수명을 쓰지 않는다", prompt)
+        self.assertIn("한국어 행동명만 쓴다", prompt)
+        self.assertIn("주요 평균선 아래로 내려감", prompt)
 
     def test_notification_worker_waits_for_validated_ai_before_rendering(self):
         class FakeReviewer:

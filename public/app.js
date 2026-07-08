@@ -1473,7 +1473,9 @@
     }
     var delta = scrollY - appNavLastScrollY;
     if (Math.abs(delta) > 3) closeAppNavMenu();
-    if (scrollY > 96 && delta > 8) {
+    if (scrollY > 120 && delta >= 0) {
+      setAppNavHidden(true);
+    } else if (scrollY > 72 && delta > 6) {
       setAppNavHidden(true);
     } else if (scrollY < 48 || delta < -8) {
       setAppNavHidden(false);

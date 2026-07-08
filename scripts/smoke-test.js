@@ -193,7 +193,15 @@ function checkFrontendAdminRender() {
   assertOk(styles.indexOf(".app-shell") >= 0 && styles.indexOf("100dvh") >= 0, "앱형 100dvh 셸 규칙이 없습니다.");
   assertOk(styles.indexOf("touch-action: manipulation") >= 0 && styles.indexOf("@media (hover: none)") >= 0, "모바일 터치 반응성 규칙이 없습니다.");
   assertOk(code.indexOf("syncAppNavScrollState") >= 0 && styles.indexOf(".app-nav.is-hidden") >= 0, "모바일 상단 앱바 자동 접힘 규칙이 없습니다.");
+  assertOk(code.indexOf("scrollY > 120 && delta >= 0") >= 0 && code.indexOf("scrollY > 72 && delta > 6") >= 0, "모바일 스크롤 복원 상태에서 상단 앱바가 충분히 빨리 접히지 않습니다.");
   assertOk(/@media \(max-width: 860px\)[\s\S]*\.app-brand-copy strong[\s\S]*color: var\(--ink\);/.test(styles), "모바일 상단 앱바 브랜드명이 명확하게 보이지 않습니다.");
+  const mobileSpacingAuditLayerStart = styles.indexOf("/* Mobile spacing audit layer */");
+  const mobileSpacingAuditLayer = mobileSpacingAuditLayerStart >= 0 ? styles.slice(mobileSpacingAuditLayerStart) : "";
+  assertOk(mobileSpacingAuditLayerStart >= 0, "모바일 최종 spacing 감사 레이어가 없습니다.");
+  assertOk(/\.app-nav\s*\{[\s\S]*margin: 0 0 var\(--ds-space-8\);/.test(mobileSpacingAuditLayer), "모바일 앱바 아래 간격이 최종 레이어에서 보정되지 않습니다.");
+  assertOk(/\.managed-page,[\s\S]*\.settings-view\s*\{[\s\S]*gap: var\(--ds-space-7\);/.test(mobileSpacingAuditLayer), "모바일 페이지/탭 카드 간격이 최종 레이어에서 통일되지 않습니다.");
+  assertOk(/\.model-guide-grid,[\s\S]*\.source-stack\s*\{[\s\S]*padding: var\(--ds-section-gap\) var\(--ds-panel-pad-x\) var\(--ds-panel-pad-y\);/.test(mobileSpacingAuditLayer), "모바일 패널 헤더와 카드 본문 사이 padding 보정이 없습니다.");
+  assertOk(/\.process-rail,[\s\S]*\.more-action-list\s*\{[\s\S]*gap: var\(--ds-space-5\);/.test(mobileSpacingAuditLayer), "모바일 process/ledger 카드가 붙어 보이지 않도록 gap이 보정되지 않습니다.");
   assertOk(styles.indexOf("@media (max-width: 1180px) and (min-width: 981px)") >= 0 && styles.indexOf("@media (max-width: 980px) and (min-width: 861px)") >= 0, "PC/태블릿 레이아웃 분기 규칙이 없습니다.");
   assertOk(styles.indexOf("--ds-shell-width: 1720px") >= 0 && styles.indexOf("--ds-sidebar-width: 256px") >= 0, "PC 중심 shell/sidebar 레이아웃 토큰이 없습니다.");
   assertOk(styles.indexOf("grid-template-columns: var(--ds-sidebar-width) minmax(0, 1fr)") >= 0, "PC shell이 좌측 네비게이션과 작업 영역으로 분리되지 않습니다.");

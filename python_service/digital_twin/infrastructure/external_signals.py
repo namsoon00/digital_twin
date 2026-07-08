@@ -8,10 +8,11 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable, Dict, Iterable, List
 
 from ..domain.external_signal_quality import attach_external_signal_quality
+from ..domain.investment_research import research_evidence_from_external_signals
 from ..domain.market_data import number
 from ..domain.portfolio import Position, utc_now_iso
 from .settings import runtime_settings
-from .sqlite_monitoring import SQLiteExternalSignalCache
+from .sqlite_monitoring import SQLiteExternalSignalCache, SQLiteResearchEvidenceStore
 
 
 JsonFetcher = Callable[[str, Dict[str, str]], object]
@@ -151,11 +152,13 @@ class ExternalSignalProvider:
         self,
         settings: Dict[str, str] = None,
         cache: SQLiteExternalSignalCache = None,
+        evidence_store: SQLiteResearchEvidenceStore = None,
         fetch_json: JsonFetcher = None,
         sleep: Callable[[float], None] = None,
     ):
         self.settings = settings or runtime_settings()
         self.cache = cache or SQLiteExternalSignalCache()
+        self.evidence_store = evidence_store or SQLiteResearchEvidenceStore()
         self.fetch_json = fetch_json or self.default_fetch_json
         self.sleep = sleep or time.sleep
         self.provider_state: Dict[str, object] = {}
@@ -173,11 +176,34 @@ class ExternalSignalProvider:
         if self.is_cache_fresh(entry):
             signals = entry.get("signals")
             if isinstance(signals, dict):
+                self.record_research_evidence(position_list, signals)
                 return signals
 
         signals = self.fetch_signals(position_list)
         self.cache.replace(self.next_cache_payload(cached, cache_key, signals))
+        self.record_research_evidence(position_list, signals)
         return signals
+
+    def record_research_evidence(self, positions: Iterable[Position], signals: Dict[str, object]) -> None:
+        if not self.evidence_store or not isinstance(signals, dict):
+            return
+        evidence_by_id = {}
+        for position in positions or []:
+            symbol = str(getattr(position, "symbol", "") or "").upper().strip()
+            if not symbol:
+                continue
+            for item in research_evidence_from_external_signals(symbol, signals):
+                evidence_by_id[item.evidence_id] = item
+        if not evidence_by_id:
+            return
+        try:
+            self.evidence_store.upsert_many(evidence_by_id.values())
+        except Exception as error:  # noqa: BLE001 - evidence history must not break market monitoring.
+            signals.setdefault("statuses", []).append({
+                "source": "ResearchEvidence",
+                "ok": False,
+                "message": "research_evidence 저장 실패 · " + str(error)[:120],
+            })
 
     def cache_entry(self, payload: Dict[str, object], cache_key: str) -> Dict[str, object]:
         entries = payload.get("entries") if isinstance(payload.get("entries"), dict) else {}

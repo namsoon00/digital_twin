@@ -88,6 +88,8 @@ class ResearchEvidence:
     polarity: str = "context"
     impact_score: float = 0.0
     confidence: float = 0.55
+    published_at: str = ""
+    raw_payload: Dict[str, object] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, object]:
         return {
@@ -99,9 +101,11 @@ class ResearchEvidence:
             "summary": self.summary,
             "url": self.url,
             "observedAt": self.observed_at,
+            "publishedAt": self.published_at,
             "polarity": self.polarity,
             "impactScore": round(number(self.impact_score), 1),
             "confidence": round(number(self.confidence), 2),
+            "payload": dict(self.raw_payload or {}),
         }
 
 

@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import Callable, Dict, Iterable, List, Optional, Protocol, Tuple
 
 from .accounts import AccountConfig
+from .investment_research import ResearchEvidence
 from .ontology import PortfolioOntology
 from .portfolio import AccountSnapshot, AlertEvent, Position
 from .symbol_universe import ListedSymbol
@@ -147,6 +148,17 @@ class MarketQuoteRepository(Protocol):
         limit: int = 200,
         max_age_minutes: int = 240,
     ) -> List[Dict[str, object]]:
+        ...
+
+
+class ResearchEvidenceRepository(Protocol):
+    def upsert_many(self, items: Iterable[ResearchEvidence]) -> int:
+        ...
+
+    def latest(self, symbol: str = "", kind: str = "", limit: int = 50) -> List[ResearchEvidence]:
+        ...
+
+    def summary(self) -> Dict[str, object]:
         ...
 
 

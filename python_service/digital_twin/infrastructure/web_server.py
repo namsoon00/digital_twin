@@ -54,7 +54,7 @@ from ..infrastructure.mock_market import mock_market_payload, mock_market_scenar
 from ..infrastructure.service_factory import build_symbol_universe_service, flow_lens_snapshot
 from ..infrastructure.settings import ROOT_DIR, runtime_settings, save_runtime_settings
 from ..infrastructure.sqlite_accounts import AccountRegistry
-from ..infrastructure.sqlite_monitoring import SQLiteEventLog, SQLiteMonitorStore
+from ..infrastructure.sqlite_monitoring import SQLiteEventLog, SQLiteMonitorStore, SQLiteResearchEvidenceStore
 from ..infrastructure.sqlite_notifications import SQLiteNotificationJobStore, SQLiteNotificationRuleStore, SQLiteNotificationTemplateStore
 from ..infrastructure.sqlite_runtime import SQLiteAppStore
 from ..infrastructure.toss_snapshots import build_snapshot
@@ -588,6 +588,20 @@ def notification_jobs_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
     return {
         "jobs": [notification_job_public_payload(job) for job in jobs],
         "summary": notification_queue_store().summary(),
+        "limit": limit,
+    }
+
+
+def research_evidence_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
+    limit = max(1, min(500, int(first_query(query, "limit") or 80)))
+    symbol = configured(first_query(query, "symbol")).upper()
+    kind = configured(first_query(query, "kind"))
+    store = SQLiteResearchEvidenceStore()
+    return {
+        "items": [item.to_dict() for item in store.latest(symbol=symbol, kind=kind, limit=limit)],
+        "summary": store.summary(),
+        "symbol": symbol,
+        "kind": kind,
         "limit": limit,
     }
 
@@ -1585,6 +1599,9 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
 
         if path == "/api/notification-jobs" and self.command == "GET":
             return self.send_payload(200, notification_jobs_payload(query))
+
+        if path == "/api/research-evidence" and self.command == "GET":
+            return self.send_payload(200, research_evidence_payload(query))
 
         if path == "/api/notification-schedules" and self.command == "GET":
             return self.send_payload(200, notification_schedules_payload())

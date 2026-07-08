@@ -11,6 +11,7 @@ from ..domain.events import (
     monitoring_cycle_completed_event,
     snapshot_collected_event,
 )
+from ..domain.investment_research import ResearchEvidence
 from ..domain.model_review import ModelReviewJob
 from ..domain.notification_rules import DEFAULT_NOTIFICATION_RULES, NotificationRuleConfig, apply_market_hours_rule, apply_similarity_rule, apply_state_cooldown_rule, default_notification_rule, evaluate_notification_rule, notification_fingerprint
 from ..domain.notification_templates import DEFAULT_NOTIFICATION_TEMPLATES, LEGACY_DEFAULT_TEMPLATE, PREVIOUS_DEFAULT_TEMPLATE, NotificationTemplate, alert_context, render_notification
@@ -116,6 +117,28 @@ def template_from_row(row) -> NotificationTemplate:
         description=row["description"],
         enabled=bool(row["enabled"]),
         updated_at=row["updated_at"],
+    )
+
+
+def research_evidence_from_row(row) -> ResearchEvidence:
+    try:
+        payload = json.loads(row["payload_json"] or "{}")
+    except json.JSONDecodeError:
+        payload = {}
+    return ResearchEvidence(
+        evidence_id=row["evidence_id"],
+        symbol=row["symbol"],
+        kind=row["kind"],
+        source=row["source"],
+        title=row["title"],
+        summary=row["summary"],
+        url=row["url"],
+        observed_at=row["observed_at"],
+        polarity=row["polarity"],
+        impact_score=row["impact_score"],
+        confidence=row["confidence"],
+        published_at=row["published_at"],
+        raw_payload=payload if isinstance(payload, dict) else {},
     )
 
 
@@ -252,6 +275,29 @@ class OperationalConnection:
                     updated_at TEXT NOT NULL
                 )
             """)
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS research_evidence (
+                    evidence_id TEXT PRIMARY KEY,
+                    symbol TEXT NOT NULL DEFAULT '',
+                    kind TEXT NOT NULL DEFAULT '',
+                    source TEXT NOT NULL DEFAULT '',
+                    title TEXT NOT NULL DEFAULT '',
+                    summary TEXT NOT NULL DEFAULT '',
+                    url TEXT NOT NULL DEFAULT '',
+                    published_at TEXT NOT NULL DEFAULT '',
+                    observed_at TEXT NOT NULL DEFAULT '',
+                    first_seen_at TEXT NOT NULL,
+                    last_seen_at TEXT NOT NULL,
+                    polarity TEXT NOT NULL DEFAULT 'context',
+                    impact_score REAL NOT NULL DEFAULT 0,
+                    confidence REAL NOT NULL DEFAULT 0,
+                    dedupe_key TEXT NOT NULL DEFAULT '',
+                    payload_json TEXT NOT NULL DEFAULT '{}'
+                )
+            """)
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_research_evidence_symbol_time ON research_evidence(symbol, last_seen_at)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_research_evidence_kind_time ON research_evidence(kind, last_seen_at)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_research_evidence_source_time ON research_evidence(source, last_seen_at)")
             connection.execute("""
                 CREATE TABLE IF NOT EXISTS market_quote_cache (
                     provider TEXT NOT NULL,
@@ -903,6 +949,135 @@ class SQLiteExternalSignalCache(OperationalConnection):
                 """,
                 (self.store_id, json_dumps(payload), stamp),
             )
+
+
+class SQLiteResearchEvidenceStore(OperationalConnection):
+    def upsert_many(self, items: Iterable[ResearchEvidence]) -> int:
+        stamp = utc_now()
+        written = 0
+        with self.connect() as connection:
+            for item in items or []:
+                evidence_id = str(item.evidence_id or "").strip()
+                if not evidence_id:
+                    continue
+                symbol = str(item.symbol or "").upper().strip()
+                kind = str(item.kind or "").strip()
+                source = str(item.source or "").strip()
+                title = str(item.title or "").strip()
+                observed_at = str(item.observed_at or item.published_at or stamp).strip()
+                published_at = str(item.published_at or item.observed_at or "").strip()
+                dedupe_key = "|".join([symbol, kind, source, title, str(item.url or "").strip()])[:500]
+                payload = dict(item.raw_payload or {})
+                connection.execute(
+                    """
+                    INSERT INTO research_evidence (
+                        evidence_id, symbol, kind, source, title, summary, url, published_at,
+                        observed_at, first_seen_at, last_seen_at, polarity, impact_score,
+                        confidence, dedupe_key, payload_json
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(evidence_id) DO UPDATE SET
+                        symbol = excluded.symbol,
+                        kind = excluded.kind,
+                        source = excluded.source,
+                        title = excluded.title,
+                        summary = excluded.summary,
+                        url = excluded.url,
+                        published_at = excluded.published_at,
+                        observed_at = excluded.observed_at,
+                        last_seen_at = excluded.last_seen_at,
+                        polarity = excluded.polarity,
+                        impact_score = excluded.impact_score,
+                        confidence = excluded.confidence,
+                        dedupe_key = excluded.dedupe_key,
+                        payload_json = excluded.payload_json
+                    """,
+                    (
+                        evidence_id,
+                        symbol,
+                        kind,
+                        source,
+                        title,
+                        str(item.summary or ""),
+                        str(item.url or ""),
+                        published_at,
+                        observed_at,
+                        stamp,
+                        stamp,
+                        str(item.polarity or "context"),
+                        float(item.impact_score or 0),
+                        float(item.confidence or 0),
+                        dedupe_key,
+                        json_dumps(payload),
+                    ),
+                )
+                written += 1
+        return written
+
+    def latest(self, symbol: str = "", kind: str = "", limit: int = 50) -> List[ResearchEvidence]:
+        conditions = []
+        params: List[object] = []
+        normalized_symbol = str(symbol or "").upper().strip()
+        normalized_kind = str(kind or "").strip()
+        if normalized_symbol:
+            conditions.append("symbol = ?")
+            params.append(normalized_symbol)
+        if normalized_kind:
+            conditions.append("kind = ?")
+            params.append(normalized_kind)
+        where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
+        params.append(max(1, min(500, int(limit or 50))))
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM research_evidence
+                """ + where + """
+                ORDER BY
+                    COALESCE(NULLIF(published_at, ''), NULLIF(observed_at, ''), last_seen_at) DESC,
+                    last_seen_at DESC
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+        return [research_evidence_from_row(row) for row in rows]
+
+    def summary_counts(self, column: str, limit: int = 20) -> List[Dict[str, object]]:
+        if column not in {"symbol", "kind", "source", "polarity"}:
+            return []
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT """ + column + """ AS name, COUNT(*) AS count, MAX(last_seen_at) AS latest_seen_at
+                FROM research_evidence
+                WHERE """ + column + """ != ''
+                GROUP BY """ + column + """
+                ORDER BY count DESC, latest_seen_at DESC
+                LIMIT ?
+                """,
+                (max(1, min(100, int(limit or 20))),),
+            ).fetchall()
+        return [
+            {
+                "name": row["name"],
+                "count": int(row["count"] or 0),
+                "latestSeenAt": row["latest_seen_at"],
+            }
+            for row in rows
+        ]
+
+    def summary(self) -> Dict[str, object]:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT COUNT(*) AS count, MAX(last_seen_at) AS latest_seen_at FROM research_evidence"
+            ).fetchone()
+        return {
+            "total": int(row["count"] or 0) if row else 0,
+            "latestSeenAt": row["latest_seen_at"] if row else "",
+            "bySymbol": self.summary_counts("symbol"),
+            "byKind": self.summary_counts("kind"),
+            "bySource": self.summary_counts("source"),
+            "byPolarity": self.summary_counts("polarity"),
+        }
 
 
 class SQLiteOntologyQualitySampleStore(OperationalConnection):

@@ -5,6 +5,7 @@ from .sqlite_operational import (
     SQLiteMarketQuoteCache,
     SQLiteMonitoringCycleRecorder,
     SQLiteMonitorStore,
+    SQLiteResearchEvidenceStore,
 )
 
 __all__ = [
@@ -14,4 +15,5 @@ __all__ = [
     "SQLiteMarketQuoteCache",
     "SQLiteMonitoringCycleRecorder",
     "SQLiteMonitorStore",
+    "SQLiteResearchEvidenceStore",
 ]

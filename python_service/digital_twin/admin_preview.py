@@ -706,6 +706,21 @@ def render_admin_html(payload: Dict[str, object]) -> str:
         padding-bottom: 8px;
         border-bottom: 1px solid var(--ds-card-border);
       }}
+      /* Full financial card replacement system */
+      .default-row,
+      .chip,
+      .account-card {{
+        border-color: var(--ds-card-border);
+      }}
+      .default-row {{
+        display: grid;
+        gap: 6px;
+        padding: 10px;
+        border: 1px solid var(--ds-card-border);
+        border-left: 3px solid var(--ds-card-status-neutral);
+        border-radius: var(--ds-radius-control);
+        background: linear-gradient(180deg, var(--ds-card-row-bg), var(--ds-card-bg));
+      }}
       .panel.wide {{
         grid-column: span 1;
       }}
@@ -735,7 +750,7 @@ def render_admin_html(payload: Dict[str, object]) -> str:
       .default-row + .default-row {{ margin-top: 10px; }}
       .default-row strong {{
         display: block;
-        margin-bottom: 6px;
+        margin-bottom: 0;
         font-size: 13px;
       }}
       .account-list {{

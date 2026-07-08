@@ -186,6 +186,9 @@ function checkFrontendAdminRender() {
   assertOk(styles.indexOf("--ds-page-gap") >= 0 && styles.indexOf("--ds-row-pad-x") >= 0, "전역 레이아웃 간격 토큰이 없습니다.");
   assertOk(styles.indexOf("--ds-card-bg") >= 0 && styles.indexOf("--ds-card-border") >= 0, "금융 카드 토큰이 없습니다.");
   assertOk(styles.indexOf("Institutional finance card layer") >= 0, "금융 카드 레이어 규칙이 없습니다.");
+  assertOk(styles.indexOf("Full financial card replacement system") >= 0, "전면 금융 카드 교체 레이어가 없습니다.");
+  assertOk(styles.indexOf(".notification-ops-cell") >= 0 && styles.indexOf(".ontology-control-step") >= 0 && styles.indexOf(".formula-ledger-row") >= 0, "도메인별 카드형 UI가 전면 카드 시스템에 포함되지 않았습니다.");
+  assertOk(styles.indexOf(".settings-status-band") >= 0 && styles.indexOf(".deskbar-cell") >= 0 && styles.indexOf(".page-command-metric") >= 0, "상태/네비게이션 카드형 UI가 전면 카드 시스템에 포함되지 않았습니다.");
   assertOk(styles.indexOf("font-variant-numeric: tabular-nums") >= 0, "금융 숫자 표시 규칙이 없습니다.");
   assertOk(styles.indexOf(".app-shell") >= 0 && styles.indexOf("100dvh") >= 0, "앱형 100dvh 셸 규칙이 없습니다.");
   assertOk(styles.indexOf("touch-action: manipulation") >= 0 && styles.indexOf("@media (hover: none)") >= 0, "모바일 터치 반응성 규칙이 없습니다.");
@@ -226,6 +229,7 @@ function checkFrontendAdminRender() {
   assertOk(designSystemDoc.indexOf("Spacing Rhythm") >= 0 && designSystemDoc.indexOf("padding: 12px 0") >= 0, "디자인 시스템 문서에 화면 간격 정책이 없습니다.");
   assertOk(designSystemDoc.indexOf("금융 원장형 카드 그리드") >= 0, "디자인 시스템 문서에 PC 금융 카드 그리드 원칙이 없습니다.");
   assertOk(designSystemDoc.indexOf("구획이 정확한 금융 카드와 셀") >= 0 && designSystemDoc.indexOf("Desktop record card") >= 0, "디자인 시스템 문서에 PC 금융 카드 구획 정책이 없습니다.");
+  assertOk(designSystemDoc.indexOf("카드형 표면은 전면 교체 대상") >= 0 && designSystemDoc.indexOf("Full card replacement") >= 0, "디자인 시스템 문서에 전면 카드 교체 기준이 없습니다.");
   assertOk(code.indexOf('appBrandName = "Orbit Alpha"') >= 0, "Orbit Alpha 브랜드명이 앱에 적용되지 않았습니다.");
   assertOk(indexHtml.indexOf("<title>Orbit Alpha</title>") >= 0 && indexHtml.indexOf("favicon.svg") >= 0, "Orbit Alpha 문서 제목 또는 파비콘 링크가 없습니다.");
   assertOk(styles.indexOf(".app-brand-mark") >= 0 && styles.indexOf("--ds-color-orbit-line") >= 0, "Orbit Alpha 신호형 브랜드 마크 규칙이 없습니다.");

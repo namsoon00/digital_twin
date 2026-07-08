@@ -80,9 +80,9 @@
       "modelReviewBatchSize": "1",
       "kisMarketSignalsEnabled": "1",
       "kisMarketSignalMaxSymbols": "20",
-      "kisMarketSignalCacheMinutes": "10",
+      "kisMarketSignalCacheMinutes": "3",
       "kisMarketSignalGapSeconds": "0.35",
-      "externalApiFetchIntervalMinutes": "60",
+      "externalApiFetchIntervalMinutes": "30",
       "externalAlphaEnabled": "1",
       "externalCoinGeckoEnabled": "1",
       "externalFredEnabled": "1",
@@ -1303,7 +1303,7 @@
           "key": "marketDataCollectionIntervalSeconds",
           "label": "수집 주기(초)",
           "type": "number",
-          "default": "3600"
+          "default": "180"
         },
         {
           "key": "marketDataPriceBatchSize",

@@ -10680,4 +10680,54 @@ h3 {
   .investment-evidence-card {
     margin: 0;
   }
+
+  .settings-status-band,
+  .settings-smart-save,
+  .settings-api-row,
+  .admin-stat-grid span,
+  .account-manager-summary span,
+  .account-directory-summary span,
+  .symbol-summary-metric,
+  .symbol-source-status,
+  .monitoring-instrument-summary > div,
+  .account-credential-grid > div,
+  .monitoring-detail-metric,
+  .gauge-card,
+  .alert-stat,
+  .feed-stat,
+  .lab-stats-grid span,
+  .lab-record-grid span,
+  .lab-status-grid span,
+  .lab-model-grid span,
+  .model-setting-card,
+  .feature-audit-grid span,
+  .feature-delta-grid span,
+  .feature-contribution-grid span,
+  .variable-grid span,
+  .valuation-grid span,
+  .signal-score-grid span,
+  .signal-metric-grid span,
+  .investment-evidence-grid span,
+  .reasoning-graph-refs span,
+  .investment-packet-grid section,
+  .message-schedule-summary > span:not(.tone-chip) {
+    padding: var(--ds-row-pad-y) var(--ds-row-pad-x);
+  }
+
+  .settings-status-band,
+  .settings-api-row,
+  .account-credential-grid > div,
+  .monitoring-detail-metric,
+  .gauge-card,
+  .alert-stat,
+  .feed-stat,
+  .model-setting-card {
+    gap: var(--ds-space-4);
+  }
+
+  .settings-api-row .chip-row,
+  .settings-status-stack,
+  .account-credential-grid .chip-row {
+    gap: var(--ds-space-3);
+  }
 }

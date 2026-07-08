@@ -10365,3 +10365,159 @@ h3 {
     border-bottom: 1px solid var(--ds-card-border);
   }
 }
+
+/* Desktop layout audit layer */
+@media (min-width: 1181px) {
+  .admin-grid {
+    grid-auto-flow: row dense;
+    align-items: start;
+  }
+
+  .admin-grid > *,
+  .panel,
+  .notification-section-bar,
+  .strategy-section-bar,
+  .ontology-section-bar {
+    min-width: 0;
+  }
+
+  .home-view {
+    grid-template-columns: repeat(12, minmax(0, 1fr));
+  }
+
+  .home-view .admin-overview-panel {
+    grid-column: span 7;
+  }
+
+  .home-view .account-directory-panel {
+    grid-column: span 5;
+  }
+
+  .home-view .account-watchlist-panel,
+  .home-view .admin-monitoring-panel {
+    grid-column: span 6;
+  }
+
+  .home-view .account-directory-panel:not(.account-directory-wide) .account-card-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .home-view .account-directory-panel:not(.account-directory-wide) .account-card {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .monitoring-view {
+    grid-template-columns: repeat(12, minmax(0, 1fr));
+    grid-template-areas:
+      "status status status status status status alerts alerts alerts alerts alerts alerts"
+      "universe universe universe universe universe universe universe universe portfolio portfolio portfolio portfolio";
+  }
+
+  .notifications-view .notification-section-bar,
+  .notifications-view .notification-ops-rail,
+  .notifications-view .notification-decision-panel,
+  .strategy-view .strategy-section-bar,
+  .strategy-view .investment-bridge-panel,
+  .strategy-view .investment-evidence-panel,
+  .strategy-view .investment-ai-packet-panel,
+  .strategy-view .strategy-process-panel,
+  .strategy-view .formula-ledger-panel,
+  .strategy-view .model-guide-panel,
+  .strategy-view .model-beginner-panel,
+  .strategy-view .strategy-data-panel,
+  .strategy-view .ontology-panel,
+  .strategy-view .ontology-rule-panel,
+  .strategy-view .prompt-registry-panel,
+  .strategy-view .admin-modeling-panel,
+  .strategy-view .model-panel,
+  .strategy-view .model-version-panel,
+  .strategy-view .model-preview-panel,
+  .settings-view .settings-overview-panel,
+  .settings-view .settings-external-data-panel {
+    grid-column: 1 / -1;
+  }
+
+  .notifications-view .admin-monitoring-panel,
+  .notifications-view .alert-panel,
+  .settings-view .settings-environment-panel,
+  .settings-view .settings-delivery-panel,
+  .notifications-view .notification-advanced-rule-panel,
+  .notifications-view .notification-threshold-panel,
+  .notifications-view .alert-delivery-panel {
+    grid-column: span 6;
+  }
+
+  .notifications-view .monitoring-instrument-panel {
+    grid-column: span 8;
+  }
+
+  .notifications-view .portfolio-exposure-panel {
+    grid-column: span 4;
+  }
+
+  .notification-ops-rail {
+    grid-template-columns: repeat(8, minmax(0, 1fr));
+  }
+
+  .account-card-list {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));
+  }
+
+  .watch-account-list,
+  .account-watch-symbol-list,
+  .monitoring-instrument-list,
+  .symbol-result-list,
+  .investment-evidence-list,
+  .signal-list,
+  .valuation-list,
+  .lab-list,
+  .news-list,
+  .model-version-list,
+  .notification-template-list,
+  .admin-message-list {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
+  }
+
+  .alert-list {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr));
+  }
+
+  .notification-decision-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .notification-decision-row {
+    grid-template-columns: minmax(240px, 0.34fr) minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .account-card {
+    grid-template-columns: minmax(220px, 0.9fr) minmax(180px, 1fr) auto;
+  }
+
+  .watch-account-row {
+    grid-template-columns: minmax(180px, 0.56fr) minmax(0, 1fr) auto;
+  }
+
+  .monitoring-instrument-row {
+    grid-template-columns: minmax(0, 1fr) minmax(176px, 0.34fr);
+  }
+
+  .strategy-data-grid {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
+    align-items: stretch;
+  }
+
+  .strategy-data-row {
+    min-height: 118px;
+    align-items: start;
+  }
+}
+
+@media (min-width: 1440px) {
+  .notifications-view .notification-advanced-rule-panel,
+  .notifications-view .notification-threshold-panel,
+  .notifications-view .alert-delivery-panel {
+    grid-column: span 4;
+  }
+}

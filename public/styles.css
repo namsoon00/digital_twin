@@ -10704,6 +10704,88 @@ h3 {
     min-height: 118px;
     align-items: start;
   }
+
+  :where(
+    .notification-section-bar,
+    .strategy-section-bar,
+    .ontology-section-bar,
+    .symbol-filter-form,
+    .settings-body,
+    .source-stack,
+    .notification-ops-rail,
+    .process-rail,
+    .ontology-control-strip,
+    .investment-bridge-flow,
+    .formula-ledger,
+    .more-action-list,
+    .relation-matrix,
+    .model-guide-grid,
+    .model-step-list,
+    .strategy-data-grid,
+    .investment-evidence-list,
+    .investment-packet-grid,
+    .settings-api-grid,
+    .symbol-source-grid,
+    .account-credential-grid,
+    .notification-policy-layout,
+    .notification-template-workbench,
+    .notification-rule-score-grid,
+    .notification-rule-condition,
+    .notification-rule-bypass-condition,
+    .account-watchlist-workbench,
+    .admin-account-layout,
+    .admin-form-grid
+  ) {
+    gap: var(--ds-section-gap);
+  }
+
+  :where(
+    .symbol-filter-form,
+    .settings-body,
+    .source-stack,
+    .notification-ops-rail,
+    .process-rail,
+    .ontology-control-strip,
+    .investment-bridge-flow,
+    .formula-ledger,
+    .more-action-list,
+    .relation-matrix,
+    .model-guide-grid,
+    .model-step-list,
+    .strategy-data-grid,
+    .investment-evidence-list,
+    .investment-packet-grid,
+    .settings-api-grid,
+    .symbol-source-grid,
+    .account-credential-grid
+  ) {
+    padding: var(--ds-space-4) var(--ds-panel-pad-x) var(--ds-panel-pad-y);
+  }
+
+  :where(
+    .notification-section-tabs,
+    .strategy-section-tabs,
+    .ontology-section-tabs
+  ) {
+    gap: var(--ds-space-2);
+    padding: var(--ds-space-2);
+  }
+
+  :where(
+    .process-step,
+    .ontology-control-step,
+    .investment-bridge-step,
+    .formula-ledger-row,
+    .more-action-row,
+    .model-guide-step,
+    .model-step-list div,
+    .strategy-data-row,
+    .settings-api-row,
+    .source-row,
+    .relation-matrix-row
+  ) {
+    padding: calc(var(--ds-row-pad-y) + 1px) var(--ds-row-pad-x);
+  }
 }
 
 @media (min-width: 1440px) {

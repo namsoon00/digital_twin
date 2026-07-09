@@ -239,6 +239,9 @@ function checkFrontendAdminRender() {
   assertOk(/\.notification-decision-list\s*\{\s*grid-template-columns: minmax\(0, 1fr\);/.test(desktopLayoutAuditLayer), "최근 알림 판단 목록이 PC 전폭 원장 행으로 유지되지 않습니다.");
   assertOk(/\.notification-decision-row\s*\{\s*grid-template-columns: minmax\(240px, 0\.34fr\) minmax\(0, 1fr\);/.test(desktopLayoutAuditLayer), "최근 알림 판단 행의 PC 최종 2열 구조가 없습니다.");
   assertOk(/\.strategy-data-grid\s*\{\s*grid-template-columns: repeat\(auto-fit, minmax\(min\(100%, 360px\), 1fr\)\);/.test(desktopLayoutAuditLayer), "전략 데이터 점검 카드가 PC 읽기 폭 제한 그리드로 정리되지 않습니다.");
+  assertOk(/:where\([\s\S]*\.symbol-filter-form,[\s\S]*\.settings-body,[\s\S]*\.investment-bridge-flow,[\s\S]*\.formula-ledger,[\s\S]*\.relation-matrix,[\s\S]*\.admin-form-grid[\s\S]*\)\s*\{[\s\S]*gap: var\(--ds-section-gap\);/.test(desktopLayoutAuditLayer), "PC 탭별 내부 작업 영역 gap 감사 규칙이 없습니다.");
+  assertOk(/:where\([\s\S]*\.symbol-filter-form,[\s\S]*\.settings-body,[\s\S]*\.investment-bridge-flow,[\s\S]*\.account-credential-grid[\s\S]*\)\s*\{[\s\S]*padding: var\(--ds-space-4\) var\(--ds-panel-pad-x\) var\(--ds-panel-pad-y\);/.test(desktopLayoutAuditLayer), "PC 탭별 내부 작업 영역 padding 감사 규칙이 없습니다.");
+  assertOk(/\.notification-section-tabs,[\s\S]*\.ontology-section-tabs[\s\S]*\{[\s\S]*gap: var\(--ds-space-2\);[\s\S]*padding: var\(--ds-space-2\);/.test(desktopLayoutAuditLayer), "PC 섹션 탭 바 간격 감사 규칙이 없습니다.");
   assertOk(/@media \(min-width: 1440px\)[\s\S]*\.notifications-view \.alert-delivery-panel\s*\{[\s\S]*grid-column: span 4;/.test(desktopLayoutAuditLayer), "넓은 PC에서 알림 고급 패널 4:4:4 배치가 없습니다.");
   assertOk(code.indexOf("renderManagedPage") >= 0 && styles.indexOf(".managed-page") >= 0, "전체 탭 공통 관리 페이지 템플릿이 없습니다.");
   assertOk(code.indexOf("renderPageCommandStrip") >= 0 && styles.indexOf(".page-command-strip") >= 0, "페이지 작업 상태 strip 템플릿이 없습니다.");

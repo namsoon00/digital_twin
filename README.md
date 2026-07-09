@@ -1,4 +1,4 @@
-# Exit Lens
+# Orbit Alpha
 
 토스증권 Open API로 확인 가능한 계좌, 잔고, 보유 종목, 관심 종목, 주문 가능 금액을 기준으로 매매 점검 우선순위를 정리하는 로컬 우선 대시보드입니다. 핵심 화면은 체결강도, 거래량, 매수/매도 체결량, 외국인/기관 매수·매도량, 호가 불균형, 밸류에이션을 조합해 보유/관심 종목을 점검하는 수급 판단판입니다.
 
@@ -14,13 +14,13 @@ npm start
 GitHub Pages 정적 미리보기는 아래 URL에서 확인합니다. 빌드 시점의 로컬 DB 계정/설정 요약은 마스킹된 값으로 채우고, 실제 SQLite DB 파일과 secret 원문은 포함하지 않습니다. 로컬 서버가 필요한 저장/조회 기능은 비활성화됩니다.
 
 ```text
-https://namsoon00.github.io/digital_twin/
+https://namsoon00.github.io/orbit-alpha/
 ```
 
 Python 서비스 어드민 구성 미리보기는 아래 URL에서 확인합니다. 계정, 알림 주기, 모델링 설정의 빌드 스냅샷을 secret 없이 보여주는 읽기 전용 정적 페이지입니다.
 
 ```text
-https://namsoon00.github.io/digital_twin/admin/
+https://namsoon00.github.io/orbit-alpha/admin/
 ```
 
 토스 실계좌 조회를 켜려면 `.env.local`에 아래 값을 넣습니다. 값이 없으면 로컬 서버는 연결 상태와 빈 포트폴리오를 기준으로 화면을 구성합니다.

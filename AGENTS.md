@@ -1,4 +1,4 @@
-# Digiter Twin Development Notes
+# Orbit Alpha Development Notes
 
 ## Run Locally
 

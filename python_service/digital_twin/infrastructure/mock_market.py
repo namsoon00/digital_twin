@@ -289,7 +289,7 @@ def mock_market_payload(query: Dict[str, object]) -> Dict[str, object]:
     return {
         "schemaVersion": 1,
         "dataQuality": "mock-synthetic",
-        "provider": "Digiter Twin mock market API",
+        "provider": "Orbit Alpha mock market API",
         "generatedAt": utc_now_iso(),
         "scenario": {
             "id": selected_id,

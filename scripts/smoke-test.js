@@ -565,7 +565,7 @@ function checkFrontendAdminRender() {
             enabled: true,
             watchlistSymbols: ["MSFT", "035720"],
             notifyProvider: "telegram",
-            notifyLinkUrl: "https://namsoon00.github.io/digital_twin/?tab=notifications",
+            notifyLinkUrl: "https://namsoon00.github.io/orbit-alpha/?tab=notifications",
             clientId: true,
             clientSecret: true,
             telegramBotToken: true,
@@ -575,7 +575,7 @@ function checkFrontendAdminRender() {
         settings: {
           watchlistSymbols: "MSFT,035720",
           notifyProvider: "telegram",
-          notifyLinkUrl: "https://namsoon00.github.io/digital_twin/?tab=notifications",
+          notifyLinkUrl: "https://namsoon00.github.io/orbit-alpha/?tab=notifications",
           alertCadenceMinutes: "monitorDecisionChange=10"
         },
         configured: {

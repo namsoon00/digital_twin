@@ -1008,7 +1008,7 @@ def share_denied_page() -> str:
         "<!doctype html>",
         '<html lang="ko"><head><meta charset="utf-8" />',
         '<meta name="viewport" content="width=device-width, initial-scale=1" />',
-        "<title>Digiter Twin 접근 제한</title>",
+        "<title>Orbit Alpha 접근 제한</title>",
         "<style>body{margin:0;min-height:100vh;display:grid;place-items:center;font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f6f4ee;color:#171717}main{max-width:520px;padding:32px;line-height:1.6}h1{font-size:22px;margin:0 0 10px}p{margin:0;color:#5f5a53}</style>",
         "</head><body><main><h1>공유 접근 토큰이 필요합니다.</h1>",
         "<p>서버를 공유한 사람이 제공한 전체 URL로 다시 접속하세요.</p>",
@@ -1028,7 +1028,7 @@ def parse_number(value):
 def fetch_text(target_url: str, timeout: int = 8, headers: Dict[str, str] = None) -> str:
     request = urllib.request.Request(
         target_url,
-        headers={"User-Agent": "DigiterTwin/0.1", **(headers or {})},
+        headers={"User-Agent": "OrbitAlpha/0.1", **(headers or {})},
         method="GET",
     )
     with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -1272,7 +1272,7 @@ def run_local_codex(message: str) -> str:
         return ""
     codex = os.environ.get("CODEX_BIN") or "codex"
     prompt = "\n".join([
-        "너는 Digiter Twin 웹앱의 로컬 Python 비서 백엔드다.",
+        "너는 Orbit Alpha 웹앱의 로컬 Python 비서 백엔드다.",
         "한국어로 답하고, 투자 관련 답변은 확인할 데이터와 리스크 중심으로만 말한다.",
         "파일을 수정하지 말고 설명만 한다.",
         "",
@@ -1883,7 +1883,7 @@ def serve(host: str = "", port: int = 3000):
         except OSError:
             selected_port += 1
     display_host = "127.0.0.1" if selected_host in {"", "0.0.0.0"} else selected_host
-    print("Digiter Twin Python server running at http://" + display_host + ":" + str(selected_port), flush=True)
+    print("Orbit Alpha Python server running at http://" + display_host + ":" + str(selected_port), flush=True)
     try:
         server.serve_forever()
     finally:

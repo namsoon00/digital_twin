@@ -239,7 +239,7 @@ def admin_preview_config() -> Dict[str, object]:
         "route": "/admin/",
         "mode": "github-pages-readonly-preview",
         "description": "Python 서비스의 계정, 알림, 모니터링, 모델 리뷰 구성을 GitHub Pages에서 확인하기 위한 정적 미리보기입니다.",
-        "previewUrl": "https://namsoon00.github.io/digital_twin/admin/",
+        "previewUrl": "https://namsoon00.github.io/orbit-alpha/admin/",
         "localUrl": "http://127.0.0.1:3000/admin/",
         "security": [
             "GitHub Pages 미리보기에는 SQLite DB 파일, Toss secret, Telegram bot token, 계좌 순번, 채팅 ID 원문을 포함하지 않습니다.",

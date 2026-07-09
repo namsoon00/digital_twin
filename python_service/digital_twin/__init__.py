@@ -1,4 +1,4 @@
-"""Python service layer for Digiter Twin."""
+"""Python service layer for Orbit Alpha."""
 
 __all__ = ["__version__"]
 

@@ -42,7 +42,7 @@ flutter test
 ## GitHub Pages 빌드
 
 ```bash
-flutter build web --release --base-href /digital_twin/ --dart-define=ALPHA_VANTAGE_API_KEY=<your-key>
+flutter build web --release --base-href /orbit-alpha/ --dart-define=ALPHA_VANTAGE_API_KEY=<your-key>
 ```
 
 `main`에 푸시하면 `.github/workflows/pages.yml`이 같은 빌드를 실행하고 `gh-pages` 브랜치에 정적 파일을 배포합니다.

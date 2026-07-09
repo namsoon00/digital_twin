@@ -435,7 +435,7 @@ def web_command(args) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Digiter Twin Python service")
+    parser = argparse.ArgumentParser(description="Orbit Alpha Python service")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     accounts = subparsers.add_parser("accounts", help="Manage service accounts")

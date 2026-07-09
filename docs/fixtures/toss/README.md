@@ -1,6 +1,6 @@
 # Toss Fixture Notes
 
-These files are Digiter Twin BFF mock responses for Toss Securities integration planning.
+These files are Orbit Alpha BFF mock responses for Toss Securities integration planning.
 
 They are not Toss raw API captures. Values are fictional, account numbers are masked, and decimals are strings to preserve precision.
 

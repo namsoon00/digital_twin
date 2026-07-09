@@ -2,7 +2,7 @@
 
 Last reviewed: 2026-06-25 KST
 
-This document defines the first implementation contract for integrating Toss Securities Open API into Digiter Twin.
+This document defines the first implementation contract for integrating Toss Securities Open API into Orbit Alpha.
 
 Current product direction: personal native app first. The user enters their own Toss Open API credentials, and the native app stores sensitive values in the device secure storage layer. Flutter Web still must not call Toss directly.
 
@@ -29,8 +29,8 @@ The official OpenAPI document was available as OpenAPI `3.1.0`, API title `토�
   - Market info: KRW/USD exchange rate, KR/US market calendars
   - Account and asset: accounts, holdings
   - Order: create, modify, cancel, list, detail, buying power, sellable quantity, commissions
-- No public endpoint for reading the user's Toss app watchlist was present in the official OpenAPI document reviewed here. Digiter Twin manages watchlist symbols as app-local user settings and can pass those symbols to its own BFF query, but it does not claim to sync Toss app watchlists.
-- The `수급` screen is designed around the market data group: current price and price change from current-price/candle style responses, trade strength and buy/sell prints from trades, bid/ask imbalance from orderbook, and moving-average indicators calculated locally from Toss daily candles. Toss OpenAPI returns OHLCV candles, not `ma20`/`ma60` fields, so Digiter Twin owns moving-average calculation. Until live mappings are connected, Web mock mode uses app-local manual signal input with the same normalized field names.
+- No public endpoint for reading the user's Toss app watchlist was present in the official OpenAPI document reviewed here. Orbit Alpha manages watchlist symbols as app-local user settings and can pass those symbols to its own BFF query, but it does not claim to sync Toss app watchlists.
+- The `수급` screen is designed around the market data group: current price and price change from current-price/candle style responses, trade strength and buy/sell prints from trades, bid/ask imbalance from orderbook, and moving-average indicators calculated locally from Toss daily candles. Toss OpenAPI returns OHLCV candles, not `ma20`/`ma60` fields, so Orbit Alpha owns moving-average calculation. Until live mappings are connected, Web mock mode uses app-local manual signal input with the same normalized field names.
 - Fair value, buy score, and sell score are user-configurable formulas in the client. The app ships a recommended default formula set, but user-defined weights and threshold values are treated as local strategy settings, not Toss raw data.
 
 ## Product Decisions
@@ -60,7 +60,7 @@ Personal native mode reduces shared-service risk but does not make secrets impos
 
 ## BFF Endpoint Contract
 
-The BFF contract remains the target for Flutter Web, public previews, or any future multi-user service. All endpoints below are served by Digiter Twin, not Toss. Paths are intentionally app-oriented so the frontend does not depend on Toss raw schema names.
+The BFF contract remains the target for Flutter Web, public previews, or any future multi-user service. All endpoints below are served by Orbit Alpha, not Toss. Paths are intentionally app-oriented so the frontend does not depend on Toss raw schema names.
 
 | Method | Path | Purpose | Toss mapping | Phase |
 | --- | --- | --- | --- | --- |
@@ -82,7 +82,7 @@ The BFF contract remains the target for Flutter Web, public previews, or any fut
 
 ## Internal Normalized Models
 
-These are Digiter Twin BFF models. They are not claimed to be Toss raw response schemas.
+These are Orbit Alpha BFF models. They are not claimed to be Toss raw response schemas.
 
 ### `TossConnectionStatus`
 

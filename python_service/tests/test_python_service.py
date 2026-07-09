@@ -6375,6 +6375,55 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("<b>출처</b>", enriched["telegramMessage"])
         self.assertIn("https://example.com/news/samsung-risk", enriched["telegramMessage"])
 
+    def test_notification_ai_gate_preserves_and_renders_all_news_urls(self):
+        urls = [
+            "https://news.google.com/rss/articles/" + ("A" * 280) + "?oc=5",
+            "https://news.google.com/rss/articles/" + ("B" * 280) + "?oc=5",
+            "https://news.google.com/rss/articles/" + ("C" * 280) + "?oc=5",
+        ]
+        context = {
+            "messageType": "investmentInsight",
+            "messageDeliveryLevel": "absoluteBeginner",
+            "headline": "[관찰] 🌐 NVIDIA: 보유 유지·다음 조건 확인",
+            "displayTarget": "NVIDIA / NVDA",
+            "referenceDate": "2026-07-09 17:00 KST",
+            "sentTime": "2026-07-09 17:02 KST",
+            "rawLines": [
+                "현재가: $205.45",
+                "추세: 20일선 $201.56보다 1.9% 높음, 60일선 $208.15보다 1.3% 낮음",
+            ],
+            "newsHeadlines": {
+                "items": [
+                    {"title": "NVIDIA news 1", "url": urls[0], "domain": "news.google.com"},
+                    {"title": "NVIDIA news 2", "url": urls[1], "domain": "news.google.com"},
+                    {"title": "NVIDIA news 3", "url": urls[2], "domain": "news.google.com"},
+                ]
+            },
+        }
+        truncated_payload_url = urls[0][:180] + "..."
+
+        response = validated_response_from_payload(context, {
+            "action": "HOLD",
+            "confidence": 72,
+            "summary": "보유가 맞지만 뉴스 원문 확인이 필요합니다.",
+            "opinion": "뉴스와 60일 평균선 회복 여부를 확인하세요.",
+            "evidence": ["우호 뉴스가 있습니다."],
+            "counterEvidence": ["60일 평균선 아래입니다."],
+            "sourceUrls": [truncated_payload_url],
+            "referenceDate": "2026-07-09 17:00 KST",
+        }, source="test AI")
+        enriched = context_with_validated_ai_response(context, response)
+
+        self.assertEqual(urls, response.source_urls)
+        self.assertNotIn(truncated_payload_url, response.source_urls)
+        for url in urls:
+            self.assertIn(url, enriched["telegramMessage"])
+        self.assertIn(">뉴스 원문 1</a>", enriched["telegramMessage"])
+        self.assertIn(">뉴스 원문 2</a>", enriched["telegramMessage"])
+        self.assertIn(">뉴스 원문 3</a>", enriched["telegramMessage"])
+        self.assertNotIn(truncated_payload_url, enriched["telegramMessage"])
+        self.assertEqual(3, enriched["telegramMessage"].count("https://news.google.com/rss/articles/"))
+
     def test_notification_worker_waits_for_validated_ai_before_rendering(self):
         class FakeReviewer:
             def review(self, context):

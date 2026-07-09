@@ -361,13 +361,72 @@ def recursive_values(value: object, keys: set, limit: int = 16) -> List[str]:
     return rows[:limit]
 
 
+SOURCE_URL_KEYS = {"url", "sourceUrl", "sourceURL", "source_url", "link", "sourceUrls"}
+
+
+def source_url_candidates(value: object) -> List[str]:
+    if isinstance(value, list):
+        rows: List[str] = []
+        for item in value:
+            rows.extend(source_url_candidates(item))
+        return rows
+    text = html.unescape(str(value or "").strip())
+    return [text] if text.startswith(("http://", "https://")) else []
+
+
+def source_url_is_truncated(value: str) -> bool:
+    text = str(value or "").strip()
+    return text.endswith("...") or text.endswith("…")
+
+
+def append_unique_source_url(rows: List[str], value: object) -> None:
+    for url in source_url_candidates(value):
+        if not url:
+            continue
+        url_prefix = url.rstrip(".…")
+        replaced = False
+        skip = False
+        for index, existing in enumerate(list(rows)):
+            existing_prefix = existing.rstrip(".…")
+            if existing == url:
+                skip = True
+                break
+            if source_url_is_truncated(existing) and url.startswith(existing_prefix):
+                rows[index] = url
+                replaced = True
+                break
+            if source_url_is_truncated(url) and existing.startswith(url_prefix):
+                skip = True
+                break
+        if not skip and not replaced:
+            rows.append(url)
+
+
+def collect_source_urls(value: object, limit: int = 16) -> List[str]:
+    rows: List[str] = []
+
+    def visit(item: object) -> None:
+        if len(rows) >= limit:
+            return
+        if isinstance(item, dict):
+            for key, raw in item.items():
+                normalized = str(key or "").strip()
+                if normalized in SOURCE_URL_KEYS:
+                    append_unique_source_url(rows, raw)
+                elif isinstance(raw, (dict, list)):
+                    visit(raw)
+        elif isinstance(item, list):
+            for part in item:
+                visit(part)
+
+    visit(value)
+    return rows[:limit]
+
+
 def source_urls_from_context(context: Dict[str, object], payload: Dict[str, object] = None) -> List[str]:
-    urls = recursive_values(
-        [payload or {}, context or {}],
-        {"url", "sourceUrl", "sourceURL", "source_url", "link", "sourceUrls"},
-        12,
-    )
-    return [item for item in urls if item.startswith(("http://", "https://"))][:8]
+    message_type = str((context or {}).get("messageType") or (context or {}).get("rule") or "notification")
+    prompt_context = notification_ai_prompt_context(message_type, context or {})
+    return collect_source_urls([context or {}, prompt_context or {}, payload or {}], 12)[:8]
 
 
 def source_labels_from_context(context: Dict[str, object], payload: Dict[str, object] = None) -> List[str]:
@@ -741,16 +800,12 @@ def validated_response_from_payload(
             missing_impact.append(user_friendly_ai_text(item + "는 결론 강도를 낮추는 요소입니다."))
     source_urls = source_urls_from_context(context, payload)
     for item in payload.get("sourceUrls") or payload.get("source_urls") or []:
-        if isinstance(item, str) and item.startswith(("http://", "https://")) and item not in source_urls:
-            source_urls.append(item)
+        append_unique_source_url(source_urls, item)
     source_urls = source_urls[:8]
     source_labels = source_labels_from_context(context, payload)
-    if source_urls:
-        for url in source_urls[:2]:
-            append_unique_text(evidence, "출처 URL: " + url, 180)
-    elif source_labels:
+    if not source_urls and source_labels:
         append_unique_text(evidence, "데이터 출처: " + ", ".join(source_labels[:3]), 180)
-    else:
+    elif not source_urls:
         warnings.append("출처 URL 또는 데이터 출처가 부족해 원문 확인이 필요합니다.")
         missing_impact.append("출처 URL 또는 데이터 출처가 부족해 원문 확인이 필요합니다.")
     precomputed_action = precomputed_action_value(context)
@@ -820,6 +875,30 @@ def _html_row(label: str, value: object) -> str:
     if not text:
         return ""
     return "• <b>" + html.escape(label, quote=False) + "</b>: <code>" + html.escape(text, quote=False) + "</code>"
+
+
+def source_url_label(url: str, index: int) -> str:
+    text = str(url or "").lower()
+    if "dart.fss.or.kr" in text or "opendart" in text:
+        prefix = "공시 원문"
+    elif "sec.gov" in text:
+        prefix = "SEC 원문"
+    elif "news" in text or "rss" in text:
+        prefix = "뉴스 원문"
+    else:
+        prefix = "원문"
+    return prefix + " " + str(index)
+
+
+def source_url_rows(urls: List[str]) -> List[str]:
+    rows: List[str] = []
+    for index, url in enumerate(urls, start=1):
+        text = str(url or "").strip()
+        if not text:
+            continue
+        label = source_url_label(text, index)
+        rows.append("• <a href=\"" + html.escape(text, quote=True) + "\">" + html.escape(label, quote=False) + "</a>")
+    return rows
 
 
 def delivery_profile_from_context(context: Dict[str, object]) -> Dict[str, object]:
@@ -1043,7 +1122,7 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
     parts.extend("• " + html.escape(item, quote=False) for item in response.evidence[:evidence_limit])
     if response.source_urls:
         parts.extend(["", "<b>출처</b>"])
-        parts.extend("• " + html.escape(item, quote=False) for item in response.source_urls[:2 if level == "beginner" else 4])
+        parts.extend(source_url_rows(response.source_urls))
     if response.counter_evidence:
         parts.extend(["", "<b>" + ("다르게 볼 점" if level == "beginner" else "확인할 반대 신호") + "</b>"])
         parts.extend("• " + html.escape(item, quote=False) for item in response.counter_evidence[:3 if level == "beginner" else 4])
@@ -1096,7 +1175,7 @@ def execution_telegram_message_absolute_beginner(context: Dict[str, object], res
         parts.extend("• " + html.escape(item, quote=False) for item in response.evidence[:3])
     if response.source_urls:
         parts.extend(["", "<b>원문/출처</b>"])
-        parts.extend("• " + html.escape(item, quote=False) for item in response.source_urls[:2])
+        parts.extend(source_url_rows(response.source_urls))
     if response.counter_evidence:
         parts.extend(["", "<b>다르게 볼 점</b>"])
         parts.extend("• " + html.escape(item, quote=False) for item in response.counter_evidence[:2])

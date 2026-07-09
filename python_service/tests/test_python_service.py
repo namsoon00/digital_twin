@@ -6725,6 +6725,24 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(refreshed.market_hours_enabled)
         self.assertEqual(["US"], refreshed.market_hours_markets)
 
+    def test_notification_job_store_skips_rule_seed_when_defaults_exist(self):
+        db_path = Path(self.temp.name) / "service.db"
+        SQLiteNotificationRuleStore(db_path)
+        original_seed_defaults = SQLiteNotificationRuleStore.seed_defaults
+        seed_calls = []
+
+        def fail_if_called(self):
+            seed_calls.append(self.path)
+            raise AssertionError("notification job queue should not reseed existing rules")
+
+        try:
+            SQLiteNotificationRuleStore.seed_defaults = fail_if_called
+            queue = SQLiteNotificationJobStore(db_path)
+            self.assertTrue(queue.notification_rule_defaults_exist())
+            self.assertEqual([], seed_calls)
+        finally:
+            SQLiteNotificationRuleStore.seed_defaults = original_seed_defaults
+
     def test_notification_queue_suppresses_stale_data_freshness(self):
         queue = SQLiteNotificationJobStore(Path(self.temp.name) / "service.db")
         stale_time = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat().replace("+00:00", "Z")

@@ -591,9 +591,10 @@ class SQLiteNotificationTemplateStore(OperationalConnection):
 
 
 class SQLiteNotificationRuleStore(OperationalConnection):
-    def __init__(self, path: Optional[Path] = None):
+    def __init__(self, path: Optional[Path] = None, seed_defaults: bool = True):
         super().__init__(path)
-        self.seed_defaults()
+        if seed_defaults:
+            self.seed_defaults()
 
     def seed_defaults(self) -> None:
         stamp = utc_now()
@@ -2215,7 +2216,20 @@ class SQLiteModelReviewJobStore(OperationalConnection):
 class SQLiteNotificationJobStore(OperationalConnection):
     def __init__(self, path: Optional[Path] = None):
         super().__init__(path)
-        SQLiteNotificationRuleStore(self.path)
+        if not self.notification_rule_defaults_exist():
+            SQLiteNotificationRuleStore(self.path)
+
+    def notification_rule_defaults_exist(self) -> bool:
+        message_types = list(DEFAULT_NOTIFICATION_RULES.keys())
+        if not message_types:
+            return True
+        placeholders = ",".join(["?"] * len(message_types))
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT COUNT(*) AS count FROM notification_rules WHERE message_type IN (" + placeholders + ")",
+                message_types,
+            ).fetchone()
+        return int(row["count"] if row else 0) >= len(message_types)
 
     def jobs(self) -> List[NotificationJob]:
         with self.connect() as connection:

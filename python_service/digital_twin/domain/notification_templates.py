@@ -37,6 +37,8 @@ SYMBOL_DISPLAY_NAMES = {
     "ETH": "이더리움",
 }
 DATA_LABEL_PREFIXES = [
+    "환율",
+    "금리",
     "미장 가격 변동",
     "비트코인 변동",
     "크립토 변동",
@@ -86,6 +88,8 @@ DATA_LABEL_ORDER = {
     "연속 실패": 11,
     "실패 단계": 12,
     "재시도": 13,
+    "환율": 18,
+    "금리": 19,
     "손익": 20,
     "미장 가격 변동": 20,
     "현재가": 21,
@@ -121,6 +125,8 @@ SEPARATE_DATA_LABELS = {
     "연속 실패",
     "실패 단계",
     "재시도",
+    "환율",
+    "금리",
     "손익",
     "미장 가격 변동",
     "현재가",
@@ -938,23 +944,167 @@ def symbol_with_code(display_symbol: object, raw_symbol: object) -> str:
     return display_text or raw_text
 
 
-def ontology_relation_context(context_or_metadata: Dict[str, object]) -> Dict[str, object]:
+def _relation_context_candidates(value: object) -> List[Dict[str, object]]:
+    if isinstance(value, dict) and value:
+        return [dict(value)]
+    if isinstance(value, list):
+        return [dict(item) for item in value if isinstance(item, dict) and item]
+    return []
+
+
+def ontology_relation_contexts(context_or_metadata: Dict[str, object]) -> List[Dict[str, object]]:
     if not isinstance(context_or_metadata, dict):
-        return {}
-    context = context_or_metadata.get("ontologyRelationContext")
-    if isinstance(context, dict) and context:
-        return dict(context)
+        return []
+    contexts: List[Dict[str, object]] = []
+    contexts.extend(_relation_context_candidates(context_or_metadata.get("ontologyRelationContext")))
     metadata = context_or_metadata.get("metadata")
     if isinstance(metadata, dict):
-        context = metadata.get("ontologyRelationContext")
-        if isinstance(context, dict) and context:
-            return dict(context)
+        contexts.extend(_relation_context_candidates(metadata.get("ontologyRelationContext")))
     review = context_or_metadata.get("ontologyReviewContext")
     if isinstance(review, dict):
         nested = review.get("relationRuleContext")
-        if isinstance(nested, dict) and nested:
-            return dict(nested)
-    return {}
+        contexts.extend(_relation_context_candidates(nested))
+    return contexts
+
+
+def ontology_relation_context(context_or_metadata: Dict[str, object]) -> Dict[str, object]:
+    contexts = ontology_relation_contexts(context_or_metadata)
+    return contexts[0] if contexts else {}
+
+
+def fact_number(value: object) -> float:
+    try:
+        return float(str(value).replace(",", "").strip())
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def has_fact_value(value: object) -> bool:
+    if value in (None, ""):
+        return False
+    try:
+        float(str(value).replace(",", "").strip())
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
+def fact_number_text(value: object, decimals: int = 2, signed: bool = False) -> str:
+    amount = fact_number(value)
+    text = (("%." + str(decimals) + "f") % amount).rstrip("0").rstrip(".")
+    if "." not in text and abs(amount) >= 1000:
+        text = format(int(round(amount)), ",")
+    if signed and amount > 0:
+        return "+" + text
+    return text
+
+
+FX_REGIME_LABELS = {
+    "krw_weakening": "원화 약세",
+    "krw_strengthening": "원화 강세",
+    "fx_observed": "환율 관찰",
+    "base_currency_or_unknown": "기준통화/미확인",
+}
+
+RATE_REGIME_LABELS = {
+    "high_rate": "고금리",
+    "low_rate": "저금리",
+    "neutral_rate": "중립 금리",
+}
+
+CURVE_REGIME_LABELS = {
+    "inverted_curve": "역전",
+    "positive_curve": "정상",
+    "flat_or_unknown_curve": "평탄/미확인",
+}
+
+
+def source_fact_rows(context_or_metadata: Dict[str, object]) -> List[Dict[str, object]]:
+    rows: List[Dict[str, object]] = []
+    for context in ontology_relation_contexts(context_or_metadata):
+        candidates = []
+        if isinstance(context, dict):
+            candidates.append(context.get("sourceFacts"))
+            execution_plan = context.get("executionPlan")
+            if isinstance(execution_plan, dict):
+                candidates.append(execution_plan.get("sourceFacts"))
+            prompt_context = context.get("promptContext")
+            if isinstance(prompt_context, dict):
+                candidates.append(prompt_context.get("facts"))
+                prompt_execution_plan = prompt_context.get("executionPlan")
+                if isinstance(prompt_execution_plan, dict):
+                    candidates.append(prompt_execution_plan.get("sourceFacts"))
+        for facts in candidates:
+            if isinstance(facts, dict) and facts:
+                rows.append(dict(facts))
+    return rows
+
+
+def fx_fact_line(facts: Dict[str, object]) -> str:
+    pair = str(facts.get("fxRatePair") or "").upper().replace("/", "").strip()
+    rate_value = facts.get("fxRateToKrw")
+    if not has_fact_value(rate_value):
+        rate_value = facts.get("usdKrwRate")
+    if not pair and not has_fact_value(rate_value):
+        return ""
+    base = pair[:3] if len(pair) >= 6 else str(facts.get("fxBaseCurrency") or "USD").upper()
+    quote = pair[3:6] if len(pair) >= 6 else str(facts.get("fxQuoteCurrency") or "KRW").upper()
+    parts = []
+    if base and quote:
+        parts.append(base + "/" + quote)
+    if has_fact_value(rate_value):
+        parts.append("1 " + base + " = " + fact_number_text(rate_value, 2) + " " + quote)
+    exposure = facts.get("fxExposureRatio")
+    if has_fact_value(exposure) and fact_number(exposure):
+        parts.append("노출 " + fact_number_text(exposure, 1) + "%")
+    regime = FX_REGIME_LABELS.get(str(facts.get("fxRegime") or ""), "")
+    if regime:
+        parts.append(regime)
+    return "환율: " + " · ".join(parts) if parts else ""
+
+
+def rate_fact_line(facts: Dict[str, object]) -> str:
+    parts = []
+    if has_fact_value(facts.get("macroDgs10")):
+        parts.append("미국10년 " + fact_number_text(facts.get("macroDgs10"), 2) + "%")
+    if has_fact_value(facts.get("macroDgs2")):
+        parts.append("미국2년 " + fact_number_text(facts.get("macroDgs2"), 2) + "%")
+    if has_fact_value(facts.get("macroDff")) and fact_number(facts.get("macroDff")):
+        parts.append("연방기금 " + fact_number_text(facts.get("macroDff"), 2) + "%")
+    if has_fact_value(facts.get("macroYieldSpread10y2y")):
+        parts.append("10Y-2Y " + fact_number_text(facts.get("macroYieldSpread10y2y"), 2, signed=True) + "%p")
+    if not parts:
+        return ""
+    regimes = []
+    rate_regime = RATE_REGIME_LABELS.get(str(facts.get("rateRegime") or ""), "")
+    curve_regime = CURVE_REGIME_LABELS.get(str(facts.get("yieldCurveRegime") or ""), "")
+    if rate_regime:
+        regimes.append(rate_regime)
+    if curve_regime:
+        regimes.append("수익률곡선 " + curve_regime)
+    if regimes:
+        parts.append("레짐 " + " / ".join(regimes))
+    return "금리: " + " · ".join(parts)
+
+
+def macro_context_lines(context_or_metadata: Dict[str, object]) -> List[str]:
+    lines: List[str] = []
+    for facts in source_fact_rows(context_or_metadata):
+        for line in [fx_fact_line(facts), rate_fact_line(facts)]:
+            if line and line not in lines:
+                lines.append(line)
+    return lines
+
+
+def append_unique_lines(lines: List[str], additions: List[str]) -> List[str]:
+    result = list(lines or [])
+    existing = {str(line or "").strip() for line in result}
+    for line in additions or []:
+        text = str(line or "").strip()
+        if text and text not in existing:
+            result.append(text)
+            existing.add(text)
+    return result
 
 
 def ontology_prompt_context(context_or_metadata: Dict[str, object]) -> Dict[str, object]:
@@ -1155,6 +1305,7 @@ def target_display_value(title: object, raw_symbol: object, display_symbol: obje
 def alert_context(event: AlertEvent) -> Dict[str, object]:
     raw_lines = raw_lines_with_reference_date(event, [str(line).strip() for line in event.lines if str(line).strip()])
     metadata = dict(event.metadata or {})
+    raw_lines = append_unique_lines(raw_lines, macro_context_lines(metadata))
     lines = "\n".join(["- " + line for line in raw_lines])
     bullet_lines = "\n".join([plain_bullet(line) for line in raw_lines])
     message_type_label = MESSAGE_TYPE_LABELS.get(event.rule, event.rule)

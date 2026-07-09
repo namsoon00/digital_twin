@@ -5291,6 +5291,69 @@ class PythonServiceTests(unittest.TestCase):
         self.assertNotIn("관계 압력", message)
         self.assertNotIn("모델 공식", message)
 
+    def test_notification_render_shows_fx_and_rate_context(self):
+        position = Position(
+            symbol="NVDA",
+            name="NVIDIA",
+            market="US",
+            currency="USD",
+            market_value=1000,
+            profit_loss_rate=4.2,
+            sellable_quantity=1,
+            current_price=180.25,
+            ma20=175.0,
+            ma60=160.0,
+            sector="반도체",
+        )
+        external_signals = {
+            "fxRates": {
+                "USDKRW": {
+                    "base": "USD",
+                    "quote": "KRW",
+                    "rate": 1400,
+                    "provider": "RuntimeSettings",
+                }
+            },
+            "macro": {
+                "series": {
+                    "DGS10": {"value": 4.35, "provider": "FRED"},
+                    "DGS2": {"value": 4.1, "provider": "FRED"},
+                    "DFF": {"value": 5.33, "provider": "FRED"},
+                },
+                "yieldSpread10y2y": 0.25,
+            },
+        }
+        relation_context = evaluate_position_relation_rules(
+            position,
+            portfolio_summary([position]),
+            external_signals=external_signals,
+        )
+        event = AlertEvent(
+            "main",
+            "메인",
+            "WATCH",
+            "investmentInsight",
+            "main:insight:NVDA",
+            "NVIDIA",
+            ["상태 조건부 보유 (62점)", "핵심 결론: 환율과 금리 민감도를 함께 점검합니다."],
+            "NVDA",
+            metadata={
+                "ontologyRelationContext": relation_context,
+                "ontologyPromptContext": relation_context["promptContext"],
+            },
+        )
+
+        context = alert_context(event)
+        message = render_notification(NotificationTemplate("investmentInsight", "{telegramMessage}"), context)
+
+        self.assertIn("환율: USD/KRW", context["rawLines"])
+        self.assertIn("금리: 미국10년 4.35%", context["rawLines"])
+        self.assertIn("1 USD = 1,400 KRW", message)
+        self.assertIn("<b>환율</b>", message)
+        self.assertIn("<b>금리</b>", message)
+        self.assertIn("미국2년 4.1%", message)
+        self.assertIn("10Y-2Y +0.25%p", message)
+
     def test_investment_insight_telegram_message_does_not_duplicate_ontology_sections(self):
         position = Position(
             symbol="035420",

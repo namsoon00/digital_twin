@@ -54,6 +54,20 @@ INVESTOR_SIGNAL_KEYS = [
     "individualNetVolume",
     "individualNetAmount",
 ]
+INVESTOR_RAW_KEYS = [
+    "frgn_shnu_vol",
+    "frgn_seln_vol",
+    "frgn_ntby_qty",
+    "frgn_ntby_tr_pbmn",
+    "orgn_shnu_vol",
+    "orgn_seln_vol",
+    "orgn_ntby_qty",
+    "orgn_ntby_tr_pbmn",
+    "prsn_shnu_vol",
+    "prsn_seln_vol",
+    "prsn_ntby_qty",
+    "prsn_ntby_tr_pbmn",
+]
 
 JsonFetcher = Callable[[str, str, Dict[str, str], Optional[Dict[str, object]], Optional[Dict[str, str]], int], Dict[str, object]]
 
@@ -123,6 +137,14 @@ def optional_number(payload: Dict[str, object], keys: Iterable[str]):
         if key in payload and payload.get(key) not in (None, ""):
             return number(payload.get(key))
     return None
+
+
+def has_raw_value(payload: Dict[str, object], keys: Iterable[str]) -> bool:
+    for key in keys:
+        value = payload.get(key)
+        if value is not None and str(value).strip() != "":
+            return True
+    return False
 
 
 def merge_if_present(target: Dict[str, object], source: Dict[str, object]) -> Dict[str, object]:
@@ -765,7 +787,13 @@ def normalize_ccnl(items: List[Dict[str, object]]) -> Dict[str, object]:
 def normalize_investor(items: List[Dict[str, object]]) -> Dict[str, object]:
     if not items:
         return {}
-    latest = items[0] if isinstance(items[0], dict) else {}
+    latest = {}
+    for item in items:
+        if isinstance(item, dict) and has_raw_value(item, INVESTOR_RAW_KEYS):
+            latest = item
+            break
+    if not latest:
+        latest = items[0] if isinstance(items[0], dict) else {}
     foreign_buy = optional_number(latest, ["frgn_shnu_vol"])
     foreign_sell = optional_number(latest, ["frgn_seln_vol"])
     foreign_net = optional_number(latest, ["frgn_ntby_qty"])

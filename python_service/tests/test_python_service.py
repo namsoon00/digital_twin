@@ -324,17 +324,30 @@ class PythonServiceTests(unittest.TestCase):
                     {"stck_prpr": "71900", "tday_rltv": "117.0", "cntg_vol": "-80", "prdy_ctrt": "1.11"},
                 ]}
             if path.endswith("/inquire-investor"):
-                return {"rt_cd": "0", "output": [{
-                    "prsn_ntby_qty": "-400",
-                    "frgn_ntby_qty": "700",
-                    "orgn_ntby_qty": "300",
-                    "prsn_shnu_vol": "2000",
-                    "frgn_shnu_vol": "1300",
-                    "orgn_shnu_vol": "900",
-                    "prsn_seln_vol": "2400",
-                    "frgn_seln_vol": "600",
-                    "orgn_seln_vol": "600",
-                }]}
+                return {"rt_cd": "0", "output": [
+                    {
+                        "prsn_ntby_qty": "",
+                        "frgn_ntby_qty": "",
+                        "orgn_ntby_qty": "",
+                        "prsn_shnu_vol": "",
+                        "frgn_shnu_vol": "",
+                        "orgn_shnu_vol": "",
+                        "prsn_seln_vol": "",
+                        "frgn_seln_vol": "",
+                        "orgn_seln_vol": "",
+                    },
+                    {
+                        "prsn_ntby_qty": "-400",
+                        "frgn_ntby_qty": "700",
+                        "orgn_ntby_qty": "300",
+                        "prsn_shnu_vol": "2000",
+                        "frgn_shnu_vol": "1300",
+                        "orgn_shnu_vol": "900",
+                        "prsn_seln_vol": "2400",
+                        "frgn_seln_vol": "600",
+                        "orgn_seln_vol": "600",
+                    },
+                ]}
             if path.endswith("/inquire-asking-price-exp-ccn"):
                 return {"rt_cd": "0", "output1": {
                     "total_bidp_rsqn": "9000",
@@ -5544,6 +5557,7 @@ class PythonServiceTests(unittest.TestCase):
                 "수익률: -18.7%",
                 "보유 수량: 10주",
                 "추세: 20일 평균보다 15% 낮음",
+                "투자자: 외국인: 순매도 3,015,093주, 매수 8,922,904주, 매도 11,937,997주, 기관: 순매수 971,031주, 매수 12,816,837주, 매도 11,845,806주, 개인: 순매수 2,031,705주, 매수 11,457,143주, 매도 9,425,438주",
                 "기준일: 2026-07-08 22:26 KST",
             ]),
             "criterionLines": "설정: 관계 그래프에서 의미 있는 투자 인사이트가 생성될 때",
@@ -5563,6 +5577,10 @@ class PythonServiceTests(unittest.TestCase):
 
         self.assertIn("<b>한줄 판단</b>", message)
         self.assertIn("<b>현재 상황</b>", message)
+        self.assertIn("<b>투자자</b>", message)
+        self.assertIn("외국인: 순매도 3,015,093주", message)
+        self.assertIn("기관: 순매수 971,031주", message)
+        self.assertIn("개인: 순매수 2,031,705주", message)
         self.assertIn("<b>왜 이렇게 봤나</b>", message)
         self.assertIn("<b>다르게 볼 점</b>", message)
         self.assertIn("<b>왜 온 알림</b>", message)

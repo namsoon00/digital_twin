@@ -718,7 +718,9 @@ def beginner_current_state_rows(context: Dict[str, object]) -> List[str]:
         ("가격 흐름", _plain_value(context, "추세")),
         ("거래 흐름", _plain_value(context, "수급")),
     ]
-    return [row for row in [_html_row(label, value) for label, value in values] if row]
+    rows = [row for row in [_html_row(label, value) for label, value in values] if row]
+    rows.extend(_html_multiline_rows("투자자", _plain_value(context, "투자자")))
+    return rows
 
 
 def relation_rule_summary(context: Dict[str, object], limit: int = 4) -> List[str]:

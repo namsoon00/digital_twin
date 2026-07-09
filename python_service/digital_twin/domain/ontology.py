@@ -119,7 +119,7 @@ OPERATIONAL_PIPELINES = [
         "scheduleKey": "externalSignalsIntervalMinutes",
         "fallbackSettingKey": "externalApiFetchIntervalMinutes",
         "defaultMinutes": 30,
-        "dataKinds": ["news", "disclosures", "macro", "crypto", "foreignMarket"],
+        "dataKinds": ["news", "disclosures", "macro", "fx", "crypto", "foreignMarket"],
         "description": "외부 신호를 수집해 종목과 포트폴리오 관계에 연결합니다.",
     },
 ]
@@ -1370,6 +1370,46 @@ def add_position_factor_concepts(graph: PortfolioOntology, stock_id: str, portfo
         add_relation(graph, portfolio_node_id, factor_id, "HAS_FACTOR_EXPOSURE", weight=weight or 0.18, properties=props)
 
 
+def add_position_macro_context_concepts(
+    graph: PortfolioOntology,
+    stock_id: str,
+    position: Position,
+    portfolio: PortfolioSummary,
+    external_signals: Dict[str, object],
+    runtime_context: Dict[str, object],
+) -> None:
+    weight = round(position_weight(position, portfolio) / 100, 4) if is_holding_position(position) else 0.15
+    currency = str(position.currency or "").upper().strip()
+    for pair, item in sorted(fx_rate_entries(external_signals, runtime_context).items()):
+        base = str(item.get("base") or "").upper()
+        quote = str(item.get("quote") or "").upper()
+        if not currency or currency != base:
+            continue
+        rate_id = entity_id("fx-rate", pair)
+        pair_label = base + "/" + quote
+        props = {
+            "source": "fxRates",
+            "polarity": "context",
+            "aiInfluenceLabel": pair_label + " 환율 민감도",
+            "rate": round(number(item.get("rate")), 6),
+        }
+        add_relation(graph, stock_id, rate_id, "HAS_FX_EXPOSURE", weight=weight or 0.15, properties=props)
+        add_relation(graph, rate_id, stock_id, "AFFECTS", weight=0.62, properties=props)
+    if not rate_sensitive_position(position):
+        return
+    for series_id, rate_id in sorted(interest_rate_signal_ids(external_signals).items()):
+        is_curve = series_id == "YIELDSPREAD10Y2Y"
+        props = {
+            "source": "macro",
+            "polarity": "context",
+            "aiInfluenceLabel": "금리 스프레드 민감도" if is_curve else rate_series_label(series_id) + " 민감도",
+        }
+        if series_id in {"DGS10", "DGS2", "DFF"}:
+            props["rateSeriesId"] = series_id
+        add_relation(graph, stock_id, rate_id, "HAS_RATE_SENSITIVITY", weight=weight or 0.15, properties=props)
+        add_relation(graph, rate_id, stock_id, "AFFECTS", weight=0.58 if is_curve else 0.62, properties=props)
+
+
 def add_research_evidence_concepts(
     graph: PortfolioOntology,
     stock_id: str,
@@ -1769,11 +1809,115 @@ def add_decision_item_concepts(graph: PortfolioOntology, runtime_context: Dict[s
         add_relation(graph, signal_id, stock_id, "USED_AS_EVIDENCE", weight=0.55, properties={"source": "decision-item"})
 
 
-def add_external_signal_concepts(graph: PortfolioOntology, portfolio_node_id: str, external_signals: Dict[str, object]) -> None:
+RATE_SERIES_LABELS = {
+    "DGS10": "미국 10년 국채금리",
+    "DGS2": "미국 2년 국채금리",
+    "DFF": "미국 실효 연방기금금리",
+}
+
+
+def rate_series_label(series_id: str) -> str:
+    normalized = str(series_id or "").upper().strip()
+    return RATE_SERIES_LABELS.get(normalized, "FRED " + normalized)
+
+
+def rate_series_kind(series_id: str) -> str:
+    normalized = str(series_id or "").upper().strip()
+    return "interest-rate" if normalized in RATE_SERIES_LABELS or normalized.startswith("DGS") else "macro-print"
+
+
+def rate_series_classes(series_id: str) -> List[str]:
+    normalized = str(series_id or "").upper().strip()
+    classes = ["Observation", "ExternalObservation", "ExternalSignal", "MacroIndicator", "MacroSignal"]
+    if rate_series_kind(normalized) == "interest-rate":
+        classes.extend(["RateSignal", "InterestRate", "RegimeRisk"])
+    else:
+        classes.append("MacroPrint")
+    return unique_list(classes)
+
+
+def fx_rate_entries(external_signals: Dict[str, object], runtime_context: Dict[str, object] = None) -> Dict[str, Dict[str, object]]:
+    entries: Dict[str, Dict[str, object]] = {}
+    rates = external_signals.get("fxRates") if isinstance(external_signals, dict) else {}
+    rates = rates if isinstance(rates, dict) else {}
+
+    def add_entry(key: str, value: object, source: str = "externalSignals") -> None:
+        if isinstance(value, dict):
+            base = str(value.get("base") or value.get("baseCurrency") or "").upper().strip()
+            quote = str(value.get("quote") or value.get("quoteCurrency") or "").upper().strip()
+            rate = number(value.get("rate") if value.get("rate") not in (None, "") else value.get("value"))
+            provider = str(value.get("provider") or source)
+            fetched_at = str(value.get("fetchedAt") or value.get("observedAt") or "")
+        else:
+            base = str(key or "").upper().strip()
+            quote = "KRW"
+            rate = number(value)
+            provider = source
+            fetched_at = ""
+        normalized_key = str(key or "").upper().replace("/", "").replace("-", "").replace("_", "").strip()
+        if not base and len(normalized_key) >= 6:
+            base = normalized_key[:3]
+        if not quote and len(normalized_key) >= 6:
+            quote = normalized_key[3:6]
+        if not quote:
+            quote = "KRW"
+        if not base or base == quote or rate <= 0:
+            return
+        pair = base + quote
+        entries[pair] = {
+            "pair": pair,
+            "base": base,
+            "quote": quote,
+            "rate": rate,
+            "provider": provider,
+            "fetchedAt": fetched_at,
+        }
+
+    for key, value in sorted(rates.items()):
+        add_entry(str(key), value, "externalSignals")
+    settings = runtime_context.get("settings") if isinstance(runtime_context, dict) else {}
+    settings = settings if isinstance(settings, dict) else {}
+    for currency, rate in parse_assignments(str(settings.get("fxRates") or ""), {}).items():
+        base = str(currency or "").upper().strip()
+        if base and base != "KRW" and base + "KRW" not in entries:
+            add_entry(base, rate, "runtimeSettings")
+    return entries
+
+
+def interest_rate_signal_ids(external_signals: Dict[str, object]) -> Dict[str, str]:
+    macro = external_signals.get("macro") if isinstance(external_signals, dict) and isinstance(external_signals.get("macro"), dict) else {}
+    series = macro.get("series") if isinstance(macro.get("series"), dict) else {}
+    ids = {}
+    for series_id in series.keys():
+        ids[str(series_id).upper()] = entity_id(rate_series_kind(str(series_id)), str(series_id))
+    if "yieldSpread10y2y" in macro:
+        ids["YIELDSPREAD10Y2Y"] = entity_id("yield-curve", "yieldSpread10y2y")
+    return ids
+
+
+def rate_sensitive_position(position: Position) -> bool:
+    market = str(position.market or "").upper().strip()
+    currency = str(position.currency or "").upper().strip()
+    sector = str(position.sector or "").strip()
+    symbol = str(position.symbol or "").upper().strip()
+    return (
+        market in {"US", "USA", "NASDAQ", "NYSE"}
+        or currency == "USD"
+        or any(token in sector for token in ["반도체", "AI", "플랫폼", "모빌리티", "디지털자산"])
+        or symbol in {"MSTR", "STRC", "COIN", "MARA", "RIOT", "CLSK", "HUT", "BITF"}
+    )
+
+
+def add_external_signal_concepts(
+    graph: PortfolioOntology,
+    portfolio_node_id: str,
+    external_signals: Dict[str, object],
+    runtime_context: Dict[str, object] = None,
+) -> None:
     if not isinstance(external_signals, dict):
         return
     add_external_signal_quality_concepts(graph, portfolio_node_id, external_signals)
-    add_portfolio_macro_and_cross_asset_concepts(graph, portfolio_node_id, external_signals)
+    add_portfolio_macro_and_cross_asset_concepts(graph, portfolio_node_id, external_signals, runtime_context)
     for key, value in sorted(external_signals.items()):
         if key in {"quality", "freshness", "provenance"}:
             continue
@@ -1792,36 +1936,71 @@ def add_external_signal_concepts(graph: PortfolioOntology, portfolio_node_id: st
         add_relation(graph, portfolio_node_id, signal_id, "HAS_OBSERVATION", weight=1.0, properties=properties)
 
 
-def add_portfolio_macro_and_cross_asset_concepts(graph: PortfolioOntology, portfolio_node_id: str, external_signals: Dict[str, object]) -> None:
+def add_portfolio_macro_and_cross_asset_concepts(
+    graph: PortfolioOntology,
+    portfolio_node_id: str,
+    external_signals: Dict[str, object],
+    runtime_context: Dict[str, object] = None,
+) -> None:
     macro = external_signals.get("macro") if isinstance(external_signals.get("macro"), dict) else {}
     series = macro.get("series") if isinstance(macro.get("series"), dict) else {}
     for series_id, item in sorted(series.items()):
         if not isinstance(item, dict):
             continue
         value = number(item.get("value"))
-        macro_id = add_entity(graph, "macro-print", str(series_id), "FRED " + str(series_id), {
-            "tboxClass": "MacroPrint",
-            "tboxClasses": ["Observation", "ExternalObservation", "ExternalSignal", "MacroIndicator", "MacroPrint", "MacroSignal", "RegimeRisk"],
+        macro_id = add_entity(graph, rate_series_kind(str(series_id)), str(series_id), rate_series_label(str(series_id)), {
+            "tboxClass": "InterestRate" if rate_series_kind(str(series_id)) == "interest-rate" else "MacroPrint",
+            "tboxClasses": rate_series_classes(str(series_id)),
             "seriesId": str(series_id),
             "provider": str(item.get("provider") or "FRED"),
             "date": str(item.get("date") or ""),
             "value": round(value, 4),
         })
-        props = {"source": "macro", "polarity": "context", "aiInfluenceLabel": "거시 지표 " + str(series_id)}
+        props = {"source": "macro", "polarity": "context", "aiInfluenceLabel": rate_series_label(str(series_id))}
         if str(series_id).upper() in {"DGS10", "DGS2", "DFF"}:
             props.update({"polarity": "risk" if value >= 4.5 else "context", "opinionImpact": 5.0 if value >= 4.5 else 0.0})
         add_relation(graph, portfolio_node_id, macro_id, "HAS_EXTERNAL_SIGNAL", weight=1.0, properties=props)
+        if rate_series_kind(str(series_id)) == "interest-rate":
+            add_relation(graph, portfolio_node_id, macro_id, "HAS_RATE_SENSITIVITY", weight=0.72, properties=props)
         add_relation(graph, macro_id, portfolio_node_id, "AFFECTS", weight=0.65, properties=props)
     if "yieldSpread10y2y" in macro:
         spread = number(macro.get("yieldSpread10y2y"))
-        spread_id = add_entity(graph, "macro-print", "yieldSpread10y2y", "10Y-2Y 금리 스프레드", {
-            "tboxClass": "MacroPrint",
-            "tboxClasses": ["Observation", "ExternalObservation", "MacroIndicator", "MacroPrint", "CreditSpreadSignal", "RegimeRisk"],
+        spread_id = add_entity(graph, "yield-curve", "yieldSpread10y2y", "10Y-2Y 금리 스프레드", {
+            "tboxClass": "YieldCurve",
+            "tboxClasses": ["Observation", "ExternalObservation", "ExternalSignal", "MacroIndicator", "RateSignal", "YieldCurve", "CreditSpreadSignal", "RegimeRisk"],
             "value": round(spread, 4),
         })
         props = {"source": "macro", "polarity": "risk" if spread < 0 else "context", "opinionImpact": 6.0 if spread < 0 else 0.0, "aiInfluenceLabel": "금리 스프레드 레짐"}
         add_relation(graph, portfolio_node_id, spread_id, "HAS_EXTERNAL_SIGNAL", weight=1.0, properties=props)
+        add_relation(graph, portfolio_node_id, spread_id, "HAS_RATE_SENSITIVITY", weight=0.74, properties=props)
         add_relation(graph, spread_id, portfolio_node_id, "AFFECTS", weight=0.72, properties=props)
+    for pair, item in sorted(fx_rate_entries(external_signals, runtime_context).items()):
+        base = str(item.get("base") or "").upper()
+        quote = str(item.get("quote") or "").upper()
+        rate = number(item.get("rate"))
+        pair_label = base + "/" + quote
+        pair_id = add_entity(graph, "fx-pair", base + ":" + quote, pair_label + " 환율쌍", {
+            "tboxClass": "FXPair",
+            "baseCurrency": base,
+            "quoteCurrency": quote,
+        })
+        rate_id = add_entity(graph, "fx-rate", pair, pair_label + " 환율", {
+            "tboxClass": "FXRateSignal",
+            "tboxClasses": ["Observation", "ExternalObservation", "ExternalSignal", "FXRateSignal", "MacroSignal", "CurrencyRisk"],
+            "pair": pair,
+            "baseCurrency": base,
+            "quoteCurrency": quote,
+            "rate": round(rate, 6),
+            "provider": str(item.get("provider") or ""),
+            "fetchedAt": str(item.get("fetchedAt") or ""),
+        })
+        props = {"source": "fxRates", "polarity": "context", "aiInfluenceLabel": pair_label + " 환율"}
+        if base == "USD" and quote == "KRW" and (rate >= 1450 or (rate and rate <= 1300)):
+            props.update({"polarity": "risk", "opinionImpact": 4.0})
+        add_relation(graph, pair_id, rate_id, "HAS_OBSERVATION", weight=1.0, properties=props)
+        add_relation(graph, portfolio_node_id, rate_id, "HAS_EXTERNAL_SIGNAL", weight=1.0, properties=props)
+        add_relation(graph, portfolio_node_id, rate_id, "HAS_FX_EXPOSURE", weight=0.7, properties=props)
+        add_relation(graph, rate_id, portfolio_node_id, "AFFECTS", weight=0.64, properties=props)
     crypto = external_signals.get("cryptoMarkets") if isinstance(external_signals.get("cryptoMarkets"), dict) else {}
     for coin_id, item in sorted(crypto.items()):
         if not isinstance(item, dict):
@@ -2038,7 +2217,7 @@ def build_portfolio_ontology(
     add_runtime_metadata_concepts(graph, portfolio_node_id, runtime_context)
     add_operational_world_concepts(graph, portfolio_node_id, runtime_context, observed_positions)
     strategy_id = add_strategy_world_concepts(graph, portfolio_node_id, runtime_context)
-    add_external_signal_concepts(graph, portfolio_node_id, external_signals)
+    add_external_signal_concepts(graph, portfolio_node_id, external_signals, runtime_context)
     watchlist_id = ""
     if any(is_watchlist_position(item) for item in observed_positions):
         watchlist_id = add_entity(graph, "watchlist", portfolio_id, "관심 종목 목록", {
@@ -2121,6 +2300,7 @@ def build_portfolio_ontology(
         add_legacy_model_score_concepts(graph, stock_id, symbol, legacy)
         add_symbol_external_signal_concepts(graph, stock_id, symbol, external_signals)
         add_position_factor_concepts(graph, stock_id, portfolio_node_id, position, portfolio)
+        add_position_macro_context_concepts(graph, stock_id, position, portfolio, external_signals, runtime_context)
         opinion = build_position_opinion(position, portfolio, legacy) if holding else build_watchlist_opinion(position, legacy)
         graph.opinions.append(opinion)
         thesis_id = add_entity(graph, "investment-thesis", symbol, (position.name or symbol) + " 투자 가설", {

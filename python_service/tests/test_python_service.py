@@ -1204,7 +1204,16 @@ class PythonServiceTests(unittest.TestCase):
                         },
                     },
                     "newsHeadlines": {"AAPL": {"provider": "GDELT", "items": [{"title": "Apple result", "url": "https://example.test"}], "count": 1}},
-                    "macro": {"series": {"DGS10": {"provider": "FRED", "value": 4.1}}},
+                    "macro": {
+                        "series": {
+                            "DGS10": {"provider": "FRED", "value": 4.1},
+                            "DGS2": {"provider": "FRED", "value": 3.8},
+                        },
+                        "yieldSpread10y2y": 0.3,
+                    },
+                    "fxRates": {
+                        "USDKRW": {"provider": "RuntimeSettings", "base": "USD", "quote": "KRW", "rate": 1400},
+                    },
                     "statuses": [{"source": "GDELT News", "ok": True, "message": "ok"}],
                 },
                 [semis, platform, watch],
@@ -1259,6 +1268,9 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("Factor", payload["tbox"]["classes"])
         self.assertIn("LiquidityProfile", payload["tbox"]["classes"])
         self.assertIn("RelationStateSnapshot", payload["tbox"]["classes"])
+        self.assertIn("InterestRate", payload["tbox"]["classes"])
+        self.assertIn("YieldCurve", payload["tbox"]["classes"])
+        self.assertIn("FXRateSignal", payload["tbox"]["classes"])
         self.assertIn("HOLDS", payload["tbox"]["relationTypes"])
         self.assertIn("WATCHES", payload["tbox"]["relationTypes"])
         self.assertIn("IS_A", payload["tbox"]["relationTypes"])
@@ -1278,6 +1290,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("BLOCKS_ACTION", payload["tbox"]["relationTypes"])
         self.assertIn("REQUIRES_NEXT_CHECK", payload["tbox"]["relationTypes"])
         self.assertIn("HAS_FACTOR_EXPOSURE", payload["tbox"]["relationTypes"])
+        self.assertIn("HAS_FX_EXPOSURE", payload["tbox"]["relationTypes"])
+        self.assertIn("HAS_RATE_SENSITIVITY", payload["tbox"]["relationTypes"])
         self.assertIn("LIMITED_BY_LIQUIDITY", payload["tbox"]["relationTypes"])
         self.assertIn("MENTIONS_INSTRUMENT", payload["tbox"]["relationTypes"])
         self.assertIn("MATERIAL_TO", payload["tbox"]["relationTypes"])
@@ -1303,6 +1317,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(any(item.relation_type == "BLOCKS_ACTION" for item in graph.relations))
         self.assertTrue(any(item.relation_type == "REQUIRES_NEXT_CHECK" for item in graph.relations))
         self.assertTrue(any(item.relation_type == "HAS_FACTOR_EXPOSURE" for item in graph.relations))
+        self.assertTrue(any(item.relation_type == "HAS_FX_EXPOSURE" for item in graph.relations))
+        self.assertTrue(any(item.relation_type == "HAS_RATE_SENSITIVITY" for item in graph.relations))
         self.assertTrue(any(item.relation_type == "LIMITED_BY_LIQUIDITY" for item in graph.relations))
         self.assertTrue(any(item.relation_type == "MENTIONS_INSTRUMENT" for item in graph.relations))
         self.assertTrue(any(item.relation_type == "MATERIAL_TO" for item in graph.relations))
@@ -1330,6 +1346,9 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(any(item.kind == "factor" for item in graph.entities))
         self.assertTrue(any(item.kind == "research-evidence" for item in graph.entities))
         self.assertTrue(any(item.kind == "price-metric" for item in graph.entities))
+        self.assertTrue(any(item.kind == "fx-rate" for item in graph.entities))
+        self.assertTrue(any(item.kind == "interest-rate" for item in graph.entities))
+        self.assertTrue(any(item.kind == "yield-curve" for item in graph.entities))
         self.assertTrue(any(item.kind == "model-score" for item in graph.entities))
         self.assertTrue(any(item.kind == "runtime-setting" for item in graph.entities))
         self.assertTrue(any(item.kind == "strategy-signal" for item in graph.entities))
@@ -1339,6 +1358,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(any((item.properties or {}).get("boundedContext") == "observation-data" for item in graph.entities if item.kind == "price-metric"))
         self.assertTrue(any((item.properties or {}).get("boundedContext") == "strategy-thesis" for item in graph.relations if item.relation_type == "BASED_ON_THESIS"))
         self.assertTrue(any("CurrencyRisk" in (item.properties or {}).get("tboxClasses", []) for item in graph.entities if item.kind == "risk"))
+        self.assertTrue(any("FXRateSignal" in (item.properties or {}).get("tboxClasses", []) for item in graph.entities if item.kind == "fx-rate"))
+        self.assertTrue(any("InterestRate" in (item.properties or {}).get("tboxClasses", []) for item in graph.entities if item.kind == "interest-rate"))
         self.assertTrue(any("CorrelationRisk" in (item.properties or {}).get("tboxClasses", []) for item in graph.entities if item.kind == "risk"))
         self.assertTrue(any(item.get("symbol") == "NVDA" for item in payload["reasoningCards"]))
         self.assertTrue(any("strategy-thesis" in item.get("graphContext", {}).get("boundedContexts", []) for item in payload["reasoningCards"]))
@@ -4227,6 +4248,7 @@ class PythonServiceTests(unittest.TestCase):
             "externalSecCompanyCiks": "AAPL=0000320193",
             "externalDartLookbackDays": "14",
             "externalDartCorpCodes": "005930=00126380",
+            "fxRates": "KRW=1\nUSD=1400",
         }
         provider = ExternalSignalProvider(
             settings=settings,
@@ -4254,6 +4276,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("Bullish", signals["newsHeadlines"]["AAPL"]["items"][0]["tickerSentimentLabel"])
         self.assertEqual("GDELT", signals["newsHeadlines"]["005930"]["provider"])
         self.assertIn("Samsung Electronics", signals["newsHeadlines"]["005930"]["items"][0]["title"])
+        self.assertEqual(1400, signals["fxRates"]["USDKRW"]["rate"])
+        self.assertEqual("RuntimeSettings", signals["fxRates"]["USDKRW"]["provider"])
 
     def test_external_signal_provider_skips_disabled_sources(self):
         calls = []

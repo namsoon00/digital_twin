@@ -237,6 +237,7 @@ class ExternalSignalProvider:
             "alphaSymbols": self.alpha_symbols(positions),
             "cryptoIds": symbol_list(self.settings.get("externalCryptoIds") or "bitcoin,ethereum") if self.external_api_enabled("externalCoinGeckoEnabled") else [],
             "fredSeries": symbol_list(self.settings.get("externalFredSeries") or "DGS10,DGS2,DFF") if self.external_api_enabled("externalFredEnabled") else [],
+            "fxRates": str(self.settings.get("fxRates") or ""),
             "secSymbols": self.sec_symbols(positions),
             "dartSymbols": self.dart_symbols(positions),
             "newsSymbols": self.news_symbols(positions),
@@ -283,6 +284,7 @@ class ExternalSignalProvider:
             "equityQuotes": {},
             "cryptoMarkets": {},
             "macro": {},
+            "fxRates": {},
             "secFilings": {},
             "dartDisclosures": {},
             "newsHeadlines": {},
@@ -292,6 +294,7 @@ class ExternalSignalProvider:
         self.add_sec_edgar(signals, positions)
         self.add_coingecko(signals)
         self.add_fred(signals)
+        self.add_fx_rates(signals)
         self.add_opendart(signals, positions)
         self.add_news_headlines(signals, positions)
         return attach_external_signal_quality(signals, positions=positions, settings=self.settings)
@@ -648,6 +651,29 @@ class ExternalSignalProvider:
         series = macro.get("series") or {}
         if "DGS10" in series and "DGS2" in series:
             macro["yieldSpread10y2y"] = number(series["DGS10"].get("value")) - number(series["DGS2"].get("value"))
+
+    def add_fx_rates(self, signals: Dict[str, object]) -> None:
+        assignments = symbol_assignments(self.settings.get("fxRates") or "")
+        rates: Dict[str, object] = {}
+        fetched_at = str(signals.get("fetchedAt") or utc_now_iso())
+        for currency, raw_rate in sorted(assignments.items()):
+            base = str(currency or "").upper().strip()
+            if not base or base == "KRW":
+                continue
+            rate = number(raw_rate)
+            if rate <= 0:
+                continue
+            pair = base + "KRW"
+            rates[pair] = {
+                "provider": "RuntimeSettings",
+                "base": base,
+                "quote": "KRW",
+                "rate": rate,
+                "value": rate,
+                "fetchedAt": fetched_at,
+            }
+        if rates:
+            signals["fxRates"] = rates
 
     def add_opendart(self, signals: Dict[str, object], positions: List[Position]) -> None:
         if not self.external_api_enabled("externalDartEnabled"):

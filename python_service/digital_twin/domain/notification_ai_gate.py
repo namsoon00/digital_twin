@@ -1148,16 +1148,7 @@ def notification_key(context: Dict[str, object]) -> str:
 
 
 def execution_footer(context: Dict[str, object], response: NotificationAIValidatedResponse, reference: str, sent: str) -> List[str]:
-    rows = [
-        _html_row("기준", reference),
-        _html_row("발송", sent),
-        _html_row("알림ID", notification_key(context)),
-        _html_row("분석", AI_DECISION_SOURCE_LABEL + " / " + response.source),
-    ]
-    rows = [row for row in rows if row]
-    if not rows:
-        return []
-    return ["", "<b>알림 정보</b>", *rows]
+    return []
 
 
 def _split_legacy_investor_rows(text: str) -> List[str]:

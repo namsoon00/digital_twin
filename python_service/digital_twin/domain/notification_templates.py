@@ -1380,7 +1380,7 @@ def alert_context(event: AlertEvent) -> Dict[str, object]:
     missing_lines = missing_data_lines(metadata)
     ontology_block = block_from_lines("관계 규칙", ontology_lines)
     ai_opinion_block = block_from_lines("AI 의견", ai_opinion_lines)
-    ai_prompt_block = block_from_lines("AI 분석 기준", ai_lines)
+    ai_prompt_block = ""
     missing_data_block = block_from_lines("부족 데이터", missing_lines)
     readable_parts = [
         headline,
@@ -1404,7 +1404,7 @@ def alert_context(event: AlertEvent) -> Dict[str, object]:
     telegram_data_lines = telegram_data_rows(display_raw_lines)
     telegram_ontology_block = telegram_block_from_lines("관계 규칙", ontology_lines)
     telegram_ai_opinion_block = telegram_block_from_lines("AI 의견", ai_opinion_lines)
-    telegram_ai_prompt_block = telegram_block_from_lines("AI 분석 기준", ai_lines)
+    telegram_ai_prompt_block = ""
     telegram_missing_data_block = telegram_block_from_lines("부족 데이터", missing_lines)
     telegram_parts = [
         "<b>" + html.escape(headline, quote=False) + "</b>",
@@ -1976,7 +1976,7 @@ def score_explanation_sections(context: Dict[str, object]) -> List[tuple]:
     if has_relation_context and message_type not in formula_first_types:
         model_lines = ontology_modeling_lines(context)
         missing_lines = ontology_missing_lines(context)
-        prompt_lines = ontology_prompt_section_lines(context)
+        prompt_lines = []
     else:
         model_lines = modeling_lines(context)
         model_lines.extend(formula_audit_lines(context, "model"))
@@ -1984,14 +1984,12 @@ def score_explanation_sections(context: Dict[str, object]) -> List[tuple]:
         if has_relation_context:
             model_lines.extend(ontology_rule_lines(context)[:3])
         missing_lines = []
-        prompt_lines = ontology_prompt_section_lines(context)
+        prompt_lines = []
     sections = []
     if model_lines:
         sections.append(("관계 판단" if has_relation_context and message_type not in formula_first_types else "모델 판단", model_lines))
     if missing_lines:
         sections.append(("부족 데이터", missing_lines))
-    if prompt_lines:
-        sections.append(("AI 프롬프트", prompt_lines))
     return sections
 
 
@@ -2120,13 +2118,7 @@ def message_footer(context: Dict[str, object], rich: bool = False) -> str:
 
 
 def append_message_footer(rendered: str, context: Dict[str, object], rich: bool = False) -> str:
-    text = str(rendered or "").rstrip()
-    if not text or "알림 정보" in text:
-        return text
-    footer = message_footer(context, rich)
-    if not footer:
-        return text
-    return text + "\n\n" + footer
+    return str(rendered or "").rstrip()
 
 
 def append_score_explanation(rendered: str, context: Dict[str, object], rich: bool = False) -> str:

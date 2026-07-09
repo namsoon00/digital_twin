@@ -1299,11 +1299,134 @@ def _html_multiline_rows(title: str, value: object) -> List[str]:
     return result
 
 
-def _criteria_summary(context: Dict[str, object]) -> str:
+def _point_text(value: object) -> str:
+    number = _number(value)
+    if not number:
+        return ""
+    if float(number).is_integer():
+        return str(int(number))
+    return ("%.1f" % number).rstrip("0").rstrip(".")
+
+
+def _criterion_value(lines: List[str], label: str) -> str:
+    prefix = str(label or "").strip()
+    for line in lines:
+        text = str(line or "").strip()
+        if text.startswith(prefix + ":"):
+            return text.split(":", 1)[1].strip()
+    return ""
+
+
+def _clean_reason_text(value: object, limit: int = 100) -> str:
+    text = str(value or "").strip()
+    text = re.sub(r"^(설정|감지|확인 데이터):\s*", "", text)
+    text = text.replace(" -> ", " → ")
+    return _text(text, limit)
+
+
+def _rule_score(item: Dict[str, object]) -> float:
+    if not isinstance(item, dict):
+        return 0.0
+    return _number(item.get("strengthScore") or item.get("strength_score") or item.get("score") or item.get("relationScore"))
+
+
+def _top_relation_rule_reasons(relation_context: Dict[str, object], limit: int = 2) -> List[str]:
+    rules = relation_context.get("activeRules") or relation_context.get("matchedRules") or []
+    rows: List[str] = []
+    ranked = sorted(
+        [item for item in rules if isinstance(item, dict) and not item.get("referenceOnly") and not item.get("reference_only")],
+        key=_rule_score,
+        reverse=True,
+    )
+    for item in ranked:
+        label = _clean_reason_text(item.get("label") or item.get("ruleId") or item.get("rule_id"), 70)
+        score = _point_text(_rule_score(item))
+        if label:
+            rows.append(label + ((" " + score + "점") if score else ""))
+        if len(rows) >= limit:
+            break
+    return rows
+
+
+def _relation_score_reason(context: Dict[str, object]) -> str:
+    relation_context = relation_context_value(context)
+    if not relation_context:
+        return ""
+    decision = relation_context.get("decision") if isinstance(relation_context.get("decision"), dict) else {}
+    score = _number(
+        decision.get("score")
+        or relation_context.get("signalStrength")
+        or relation_context.get("score")
+    )
+    if not score:
+        rules = relation_context.get("activeRules") or relation_context.get("matchedRules") or []
+        score = max([_rule_score(item) for item in rules if isinstance(item, dict)], default=0.0)
+    if not score:
+        return ""
+    previous = _number(
+        decision.get("previousScore")
+        or decision.get("previousRelationScore")
+        or relation_context.get("previousScore")
+        or relation_context.get("previousRelationScore")
+    )
+    label = _clean_reason_text(
+        decision.get("label")
+        or decision.get("actionLabel")
+        or decision.get("action")
+        or relation_context.get("decisionLabel"),
+        64,
+    )
+    if previous and score > previous:
+        score_text = "관계 점수 " + _point_text(previous) + "점→" + _point_text(score) + "점"
+    else:
+        score_text = "관계 점수 " + _point_text(score) + "점까지 상승"
+    stage = "주의 기준" if score >= 85 else "실행 기준" if score >= 70 else "관찰 기준"
+    parts = [score_text + "해 " + stage + "을 넘었습니다"]
+    if label:
+        parts.append(label)
+    reasons = _top_relation_rule_reasons(relation_context)
+    if reasons:
+        parts.append("주요 요인: " + ", ".join(reasons))
+    return " · ".join(parts)
+
+
+def _score_text_reason(context: Dict[str, object]) -> str:
+    lines = [*criterion_lines(context), *_raw_lines(context)]
+    for line in lines:
+        text = _clean_reason_text(line, 130)
+        if "점" not in text:
+            continue
+        if "설정" in str(line or "") and "감지" not in str(line or ""):
+            continue
+        score_match = re.search(r"(\d+(?:\.\d+)?)점", text)
+        if not score_match:
+            continue
+        if any(token in text for token in ["상태", "판단", "점수", "관계", "강도", "감지"]):
+            return text + "까지 올라 알림 기준을 넘었습니다."
+    return ""
+
+
+def _threshold_reason(context: Dict[str, object]) -> str:
     criteria = criterion_lines(context)
     if not criteria:
         return ""
-    return " / ".join(_text(item, 120) for item in criteria[:2])
+    detected = _criterion_value(criteria, "감지")
+    setting = _criterion_value(criteria, "설정")
+    if detected and setting:
+        return "감지값 " + _clean_reason_text(detected, 90) + "이 기준(" + _clean_reason_text(setting, 70) + ")을 넘었습니다."
+    if detected:
+        return "감지값 " + _clean_reason_text(detected, 120) + " 때문에 알림이 발생했습니다."
+    if setting:
+        return _clean_reason_text(setting, 120)
+    return _clean_reason_text(criteria[0], 120) if criteria else ""
+
+
+def notification_reason_summary(context: Dict[str, object]) -> str:
+    return (
+        _relation_score_reason(context)
+        or _score_text_reason(context)
+        or _threshold_reason(context)
+    )
 
 
 def execution_telegram_message(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
@@ -1370,9 +1493,9 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
     if response.validation_warnings and level != "beginner":
         parts.extend(["", "<b>검증 메모</b>"])
         parts.extend("• " + html.escape(item, quote=False) for item in response.validation_warnings[:3])
-    criteria = _criteria_summary(context)
-    if criteria:
-        parts.extend(["", "<b>" + ("왜 온 알림" if level == "beginner" else "발송 기준") + "</b>", "• " + html.escape(criteria, quote=False)])
+    reason = notification_reason_summary(context)
+    if reason:
+        parts.extend(["", "<b>알림이 온 이유</b>", "• " + html.escape(reason, quote=False)])
     if level == "advanced":
         relation_labels = relation_rule_summary(context, 4)
         if relation_labels:
@@ -1420,9 +1543,9 @@ def execution_telegram_message_absolute_beginner(context: Dict[str, object], res
     if response.missing_data_impact:
         parts.extend(["", "<b>데이터 빈 곳</b>"])
         parts.extend("• " + html.escape(item, quote=False) for item in response.missing_data_impact[:2])
-    criteria = _criteria_summary(context)
-    if criteria:
-        parts.extend(["", "<b>왜 온 알림</b>", "• " + html.escape(criteria, quote=False)])
+    reason = notification_reason_summary(context)
+    if reason:
+        parts.extend(["", "<b>알림이 온 이유</b>", "• " + html.escape(reason, quote=False)])
     if response.source_urls:
         parts.extend(["", "<b>원문/출처</b>"])
         parts.extend(source_url_rows(response.source_urls, context))

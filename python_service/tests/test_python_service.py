@@ -6229,7 +6229,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("개인: 순매수 2,031,705주", message)
         self.assertIn("<b>AI가 중요하게 본 근거</b>", message)
         self.assertIn("<b>다르게 볼 점</b>", message)
-        self.assertIn("<b>왜 온 알림</b>", message)
+        self.assertIn("<b>알림이 온 이유</b>", message)
+        self.assertNotIn("<b>왜 온 알림</b>", message)
         self.assertNotIn("<b>핵심 근거</b>", message)
 
     def test_holding_snapshot_enricher_adds_missing_price_rows(self):
@@ -6410,6 +6411,9 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("AI 최종", enriched["telegramMessage"])
         self.assertIn("매도", enriched["telegramMessage"])
         self.assertIn("사전 계산 후보는 보유", enriched["telegramMessage"])
+        self.assertIn("<b>알림이 온 이유</b>", enriched["telegramMessage"])
+        self.assertIn("관계 점수 82점까지 상승", enriched["telegramMessage"])
+        self.assertIn("손실 보유 + 기준선 이탈", enriched["telegramMessage"])
 
     def test_notification_ai_gate_records_audit_and_caps_weak_ai_response(self):
         context = {

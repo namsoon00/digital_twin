@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "dataQuality": "mock-synthetic",
-  "provider": "Digiter Twin mock market API",
+  "provider": "Orbit Alpha mock market API",
   "generatedAt": "2026-07-01T00:00:00.000Z",
   "scenario": {
     "id": "semiconductor-boom",

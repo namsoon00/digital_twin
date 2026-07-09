@@ -6332,8 +6332,167 @@ h3 {
 }
 
 .strategy-process-panel,
-.formula-ledger-panel {
+.formula-ledger-panel,
+.macro-signal-panel {
   grid-column: 1 / -1;
+}
+
+.macro-signal-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
+  min-width: 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.macro-signal-group {
+  min-width: 0;
+  border-right: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.macro-signal-group:last-child {
+  border-right: 0;
+}
+
+.macro-signal-group.fx {
+  box-shadow: inset 3px 0 0 var(--green);
+}
+
+.macro-signal-group.rate {
+  box-shadow: inset 3px 0 0 var(--amber);
+}
+
+.macro-signal-group-head {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.macro-signal-group-head strong {
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.macro-signal-group-head span {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.macro-signal-list,
+.macro-relation-list {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px 16px 16px;
+}
+
+.macro-signal-row,
+.macro-relation-row {
+  display: grid;
+  align-items: center;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--input);
+}
+
+.macro-signal-row {
+  grid-template-columns: minmax(0, 1fr) minmax(126px, auto) 60px;
+  gap: 12px;
+  padding: 12px;
+}
+
+.macro-relation-row {
+  grid-template-columns: minmax(160px, 0.28fr) minmax(0, 1fr) minmax(150px, 0.26fr);
+  gap: 12px;
+  padding: 11px 12px;
+}
+
+.macro-signal-row.watch,
+.macro-relation-row.fx {
+  border-left: 3px solid var(--green);
+}
+
+.macro-signal-row.hold,
+.macro-relation-row.rate {
+  border-left: 3px solid var(--amber);
+}
+
+.macro-signal-row.danger {
+  border-left: 3px solid var(--red);
+}
+
+.macro-signal-row div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.macro-signal-row strong,
+.macro-signal-row span,
+.macro-signal-row em,
+.macro-signal-row b,
+.macro-relation-row strong,
+.macro-relation-row span,
+.macro-relation-row em {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.macro-signal-row strong,
+.macro-relation-row strong {
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.macro-signal-row span,
+.macro-relation-row span,
+.macro-relation-row em {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 780;
+  line-height: 1.4;
+}
+
+.macro-signal-row em {
+  color: var(--ink);
+  font-size: 13px;
+  font-style: normal;
+  font-weight: 900;
+  text-align: right;
+}
+
+.macro-signal-row b {
+  justify-self: end;
+  border-radius: 8px;
+  background: var(--chip);
+  color: var(--muted);
+  padding: 5px 7px;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+@media (max-width: 760px) {
+  .macro-signal-row,
+  .macro-relation-row {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+
+  .macro-signal-row em {
+    text-align: left;
+  }
+
+  .macro-signal-row b {
+    justify-self: start;
+  }
 }
 
 .process-rail {

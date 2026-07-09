@@ -664,24 +664,32 @@ function checkFrontendAdminRender() {
         ontologyStrategy: {
           worldview: { contradictionCount: 1 },
           tbox: {
-            classes: ["Portfolio", "Stock", "WatchlistCandidate", "Sector", "Evidence", "Belief", "Opinion"],
-            relationTypes: ["HOLDS", "WATCHES", "BELONGS_TO", "REQUESTS_OPINION_FROM", "HAS_EVIDENCE", "HAS_BELIEF", "HAS_OPINION"],
+            classes: ["Portfolio", "Stock", "WatchlistCandidate", "Sector", "Evidence", "Belief", "Opinion", "InterestRate", "YieldCurve", "FXRateSignal"],
+            relationTypes: ["HOLDS", "WATCHES", "BELONGS_TO", "REQUESTS_OPINION_FROM", "HAS_EVIDENCE", "HAS_BELIEF", "HAS_OPINION", "HAS_FX_EXPOSURE", "HAS_RATE_SENSITIVITY"],
             reasoningRules: ["회사 관계 기반 판단 근거 생성"]
           },
-          abox: { portfolioId: "flow-lens", entityCount: 5, relationCount: 5, beliefCount: 1 },
+          abox: { portfolioId: "flow-lens", entityCount: 8, relationCount: 10, beliefCount: 1 },
           entities: [
             { id: "portfolio:flow-lens", label: "테스트 포트폴리오", kind: "portfolio", properties: { ontologyBox: "ABox" } },
             { id: "stock:005930", label: "삼성전자", kind: "stock", properties: { ontologyBox: "ABox", symbol: "005930", sector: "반도체" } },
             { id: "stock:NVDA", label: "NVIDIA", kind: "stock", properties: { ontologyBox: "ABox", symbol: "NVDA", sector: "반도체", source: "watchlist", tboxClasses: ["Stock", "WatchlistCandidate"] } },
             { id: "sector:반도체", label: "반도체", kind: "sector", properties: { ontologyBox: "ABox" } },
-            { id: "concept:ai-investment-review", label: "AI 투자 의견", kind: "ai-review", properties: { ontologyBox: "ABox" } }
+            { id: "concept:ai-investment-review", label: "AI 투자 의견", kind: "ai-review", properties: { ontologyBox: "ABox" } },
+            { id: "fx-rate:USDKRW", label: "USD/KRW 환율", kind: "fx-rate", properties: { ontologyBox: "ABox", pair: "USDKRW", baseCurrency: "USD", quoteCurrency: "KRW", rate: 1400, provider: "RuntimeSettings", tboxClasses: ["FXRateSignal"] } },
+            { id: "interest-rate:DGS10", label: "미국 10년 국채금리", kind: "interest-rate", properties: { ontologyBox: "ABox", seriesId: "DGS10", provider: "FRED", date: "2026-07-01", value: 4.35, tboxClasses: ["InterestRate"] } },
+            { id: "yield-curve:yieldSpread10y2y", label: "10Y-2Y 금리 스프레드", kind: "yield-curve", properties: { ontologyBox: "ABox", value: 0.4, tboxClasses: ["YieldCurve"] } }
           ],
           relations: [
             { source: "portfolio:flow-lens", target: "stock:005930", type: "HOLDS", properties: { ontologyBox: "ABox" } },
             { source: "portfolio:flow-lens", target: "stock:NVDA", type: "WATCHES", properties: { ontologyBox: "ABox", source: "watchlist" } },
             { source: "stock:005930", target: "sector:반도체", type: "BELONGS_TO", properties: { ontologyBox: "ABox" } },
             { source: "stock:NVDA", target: "sector:반도체", type: "BELONGS_TO", properties: { ontologyBox: "ABox" } },
-            { source: "stock:005930", target: "concept:ai-investment-review", type: "REQUESTS_OPINION_FROM", properties: { ontologyBox: "ABox" } }
+            { source: "stock:005930", target: "concept:ai-investment-review", type: "REQUESTS_OPINION_FROM", properties: { ontologyBox: "ABox" } },
+            { source: "portfolio:flow-lens", target: "fx-rate:USDKRW", type: "HAS_FX_EXPOSURE", properties: { ontologyBox: "ABox", aiInfluenceLabel: "USD/KRW 환율", source: "fxRates" }, weight: 0.7 },
+            { source: "stock:NVDA", target: "fx-rate:USDKRW", type: "HAS_FX_EXPOSURE", properties: { ontologyBox: "ABox", aiInfluenceLabel: "USD/KRW 환율 민감도", source: "fxRates", rate: 1400 }, weight: 0.15 },
+            { source: "portfolio:flow-lens", target: "interest-rate:DGS10", type: "HAS_RATE_SENSITIVITY", properties: { ontologyBox: "ABox", aiInfluenceLabel: "미국 10년 국채금리", source: "macro", rateSeriesId: "DGS10" }, weight: 0.72 },
+            { source: "stock:NVDA", target: "interest-rate:DGS10", type: "HAS_RATE_SENSITIVITY", properties: { ontologyBox: "ABox", aiInfluenceLabel: "미국 10년 국채금리 민감도", source: "macro", rateSeriesId: "DGS10" }, weight: 0.15 },
+            { source: "portfolio:flow-lens", target: "yield-curve:yieldSpread10y2y", type: "HAS_RATE_SENSITIVITY", properties: { ontologyBox: "ABox", aiInfluenceLabel: "금리 스프레드 레짐", source: "macro" }, weight: 0.74 }
           ],
           evidence: [
             { id: "evidence:005930:trend", subject: "stock:005930", kind: "trend", summary: "이동평균과 가격 추세 관계" },
@@ -729,7 +737,7 @@ function checkFrontendAdminRender() {
             legacyModelRole: "supporting-evidence",
             inputOrder: ["tbox", "abox", "reasoningCards", "relations", "evidence", "beliefs", "opinions"],
             reasoningCardCount: 2,
-            graphInputs: { entityCount: 5, relationCount: 5, evidenceCount: 2, beliefCount: 1, opinionCount: 2 },
+            graphInputs: { entityCount: 8, relationCount: 10, evidenceCount: 2, beliefCount: 1, opinionCount: 2 },
             guardrails: ["제공된 관계 데이터만 사용합니다.", "HOLDS와 WATCHES를 구분합니다."]
           }
         },
@@ -1183,6 +1191,9 @@ function checkFrontendAdminRender() {
     assertOk(modelingHtml.indexOf("AI 추론 입력") >= 0 && modelingHtml.indexOf("investment-ontology-ai-inference-v1") >= 0, "투자 분석 개요에 AI inference packet 계약이 보이지 않습니다.");
     assertOk(modelingHtml.indexOf("investment-evidence-panel") >= 0 && modelingHtml.indexOf("투자 근거 카드") >= 0, "투자 분석 개요에 reasoning card가 렌더링되지 않았습니다.");
     assertOk(modelingHtml.indexOf("HOLDS") >= 0 && modelingHtml.indexOf("WATCHES") >= 0, "보유/관심 관계 구분이 투자 분석 개요에 표시되지 않습니다.");
+    assertOk(modelingHtml.indexOf("macro-signal-panel") >= 0 && modelingHtml.indexOf("환율·금리 관계 신호") >= 0, "투자 분석 개요에 환율·금리 온톨로지 신호 패널이 없습니다.");
+    assertOk(modelingHtml.indexOf("USD/KRW 환율") >= 0 && modelingHtml.indexOf("미국 10년 국채금리") >= 0 && modelingHtml.indexOf("10Y-2Y 금리 스프레드") >= 0, "환율·금리 신호 값이 투자 분석 개요에 표시되지 않습니다.");
+    assertOk(styles.indexOf(".macro-signal-grid") >= 0 && styles.indexOf(".macro-relation-row") >= 0, "환율·금리 온톨로지 신호 UI 스타일이 없습니다.");
     assertOk(modelingHtml.indexOf("strategy-process-panel") >= 0 && modelingHtml.indexOf("Strategy Workflow") >= 0, "투자 분석 개요에 처리 순서 UI가 없습니다.");
     assertOk(modelingHtml.indexOf("model-guide-panel") >= 0 && modelingHtml.indexOf("전략 운영 기준 관리") >= 0, "개요 탭에 모델 운영 가이드가 렌더링되지 않았습니다.");
     assertOk(modelingHtml.indexOf("strategy-data-panel") < 0 && modelingHtml.indexOf("admin-modeling-panel") < 0 && modelingHtml.indexOf("model-preview-panel") < 0, "개요 탭에 상세 운영 섹션 패널이 섞여 있습니다.");
@@ -1206,6 +1217,7 @@ function checkFrontendAdminRender() {
     assertOk(modelingRegistryHtml.indexOf('data-model-setting="notificationScoreFormula"') >= 0, "규칙·프롬프트 섹션에 알림 발송 공식 편집기가 없습니다.");
     assertOk(modelingTraceHtml.indexOf("테이블 저장 구조") >= 0 && modelingTraceHtml.indexOf("규칙 추적") >= 0, "검증 추적 섹션에 관계형 규칙 추적이 없습니다.");
     assertOk(modelingTraceHtml.indexOf("ontology-relation-table") >= 0 && modelingTraceHtml.indexOf("ontology-rule-list") >= 0, "검증 추적 섹션에 관계/규칙 보조 표가 렌더링되지 않았습니다.");
+    assertOk(modelingTraceHtml.indexOf("macro-relation-panel") >= 0 && modelingTraceHtml.indexOf("HAS_FX_EXPOSURE") >= 0 && modelingTraceHtml.indexOf("HAS_RATE_SENSITIVITY") >= 0, "검증 추적 섹션에 환율·금리 관계 행이 표시되지 않습니다.");
     assertOk(modelingTraceHtml.indexOf("삼성전자 → 반도체") >= 0 && modelingTraceHtml.indexOf("005930 →") < 0, "검증 추적 샘플 관계가 회사명 대신 종목코드를 노출합니다.");
     assertOk(modelingTraceHtml.indexOf("회사 표시명") >= 0 && modelingTraceHtml.indexOf("종목코드 -> 종목 데이터") < 0, "검증 추적 저장 구조 설명에 종목코드 기준 문구가 남아 있습니다.");
     assertOk(code.indexOf("reasoningCards") >= 0 && code.indexOf("investmentAnalysis") >= 0 && code.indexOf("aiInferencePacket") >= 0, "프론트가 백엔드 reasoning card와 AI inference packet 계약을 소비하지 않습니다.");

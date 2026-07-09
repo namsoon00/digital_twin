@@ -2,6 +2,8 @@ import html
 import json
 import re
 from dataclasses import asdict, dataclass, field
+from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from typing import Dict, List, Optional, Tuple
 
 from .accounts import message_delivery_profile, normalize_message_delivery_level
@@ -37,6 +39,7 @@ NOTIFICATION_AI_GATE_VERSION = "notification-ai-gate-v1"
 AI_DECISION_MODE = "ai-first"
 AI_DECISION_SOURCE_LABEL = "AI 투자 판단"
 MESSAGE_START_BADGE = "🔔 새 알림"
+KST = timezone(timedelta(hours=9))
 VALID_ACTIONS = {"BUY", "ADD", "HOLD", "TRIM", "SELL", "AVOID"}
 ACTION_LABELS = {
     "BUY": "매수",
@@ -1017,6 +1020,84 @@ def source_detail_text(item: Dict[str, object], *keys: str) -> str:
     return ""
 
 
+def source_detail_raw_text(item: Dict[str, object], *keys: str) -> str:
+    if not isinstance(item, dict):
+        return ""
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    raw_payload = item.get("rawPayload") if isinstance(item.get("rawPayload"), dict) else {}
+    for key in keys:
+        for source in [item, payload, raw_payload]:
+            value = str(source.get(key) or "").strip() if isinstance(source, dict) else ""
+            if value:
+                return value
+    return ""
+
+
+def source_date_label(url: str, item: Dict[str, object]) -> str:
+    kind = str((item or {}).get("kind") or "").strip().lower() if isinstance(item, dict) else ""
+    text = str(url or "").lower()
+    if kind == "news" or "news" in text or "rss" in text:
+        return "기사일"
+    if "dart.fss.or.kr" in text or "opendart" in text:
+        return "공시일"
+    return "게시일"
+
+
+def format_source_published_at(value: object) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if re.fullmatch(r"\d{8}", raw):
+        try:
+            return datetime.strptime(raw, "%Y%m%d").strftime("%Y-%m-%d")
+        except ValueError:
+            return raw
+    candidates = [
+        raw,
+        raw.replace("Z", "+00:00"),
+        raw.replace(" KST", "+09:00"),
+        raw.replace(" GMT", "+00:00"),
+    ]
+    for candidate in candidates:
+        try:
+            parsed = datetime.fromisoformat(candidate)
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone(KST).strftime("%Y-%m-%d %H:%M KST")
+        except ValueError:
+            pass
+    for fmt in ["%Y%m%dT%H%M%SZ", "%Y%m%dT%H%M%S", "%Y%m%d%H%M%S"]:
+        try:
+            parsed = datetime.strptime(raw, fmt).replace(tzinfo=timezone.utc)
+            return parsed.astimezone(KST).strftime("%Y-%m-%d %H:%M KST")
+        except ValueError:
+            pass
+    try:
+        parsed = parsedate_to_datetime(raw)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(KST).strftime("%Y-%m-%d %H:%M KST")
+    except (TypeError, ValueError):
+        return _text(raw, 40)
+
+
+def source_published_at_text(item: Dict[str, object]) -> str:
+    raw = source_detail_raw_text(
+        item,
+        "publishedAt",
+        "published_at",
+        "observedAt",
+        "observed_at",
+        "seenDate",
+        "seendate",
+        "pubDate",
+        "published",
+        "time_published",
+        "timePublished",
+    )
+    return format_source_published_at(raw)
+
+
 def source_url_rows(urls: List[str], context: Dict[str, object]) -> List[str]:
     details = source_detail_map(context)
     rows: List[str] = []
@@ -1033,10 +1114,12 @@ def source_url_rows(urls: List[str], context: Dict[str, object]) -> List[str]:
         materiality = source_score_piece("중요도", source_detail_number(detail, "materialityScore"))
         impact_label = source_detail_text(detail, "stockImpactLabel")
         impact_reason = source_detail_text(detail, "stockImpactReasonKo")
+        published_at = source_published_at_text(detail)
         summary = source_detail_summary(detail)
         link_text = "• <a href=\"" + html.escape(text, quote=True) + "\">" + html.escape(label, quote=False) + "</a>"
         rows.append(link_text + (": " + html.escape(title, quote=False) if title else ""))
         meta = ", ".join(item for item in [
+            (source_date_label(text, detail) + " " + published_at) if published_at else "",
             ("신뢰도 " + reliability) if reliability else "",
             relevance,
             materiality,

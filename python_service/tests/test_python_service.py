@@ -6507,6 +6507,7 @@ class PythonServiceTests(unittest.TestCase):
                         "summary": "Data center demand remains strong.",
                         "url": urls[0],
                         "domain": "news.google.com",
+                        "publishedAt": "2026-07-09T08:30:00Z",
                         "payload": {"sourceReliability": 0.82, "relevanceScore": 91, "materialityScore": 74},
                     },
                     {
@@ -6514,6 +6515,7 @@ class PythonServiceTests(unittest.TestCase):
                         "summary": "Analysts watch chip supply updates.",
                         "url": urls[1],
                         "domain": "news.google.com",
+                        "publishedAt": "20260709T100000",
                         "payload": {"sourceReliability": 0.61, "relevanceScore": 84, "materialityScore": 52},
                     },
                     {
@@ -6550,6 +6552,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn(">뉴스 원문 2</a>", enriched["telegramMessage"])
         self.assertIn(">뉴스 원문 3</a>", enriched["telegramMessage"])
         self.assertIn("NVIDIA news 1", enriched["telegramMessage"])
+        self.assertIn("기사일 2026-07-09 17:30 KST", enriched["telegramMessage"])
+        self.assertIn("기사일 2026-07-09 19:00 KST", enriched["telegramMessage"])
         self.assertIn("신뢰도 높음(82%)", enriched["telegramMessage"])
         self.assertIn("관련성 91점", enriched["telegramMessage"])
         self.assertIn("중요도 74점", enriched["telegramMessage"])
@@ -6572,6 +6576,7 @@ class PythonServiceTests(unittest.TestCase):
                     "summary": "제목 요약",
                     "articleSummaryKo": "본문 요약: HBM 수요 회복과 메모리 가격 개선이 실적 기대를 키웠습니다.",
                     "url": url,
+                    "publishedAt": "20260709",
                     "source": "연합뉴스",
                     "payload": {
                         "sourceReliability": 0.82,
@@ -6597,6 +6602,7 @@ class PythonServiceTests(unittest.TestCase):
 
         self.assertIn("<b>출처</b>", message)
         self.assertIn("주가 영향 호재", message)
+        self.assertIn("기사일 2026-07-09", message)
         self.assertIn("요약: 본문 요약: HBM 수요 회복", message)
         self.assertIn("영향 분석: 주가 영향은 긍정적으로 봅니다.", message)
         self.assertGreater(message.rfind("<b>출처</b>"), message.rfind("<b>실행 전 확인</b>"))

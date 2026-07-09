@@ -32,6 +32,8 @@ from .notification_ai import (
 
 
 NOTIFICATION_AI_GATE_VERSION = "notification-ai-gate-v1"
+AI_DECISION_MODE = "ai-first"
+AI_DECISION_SOURCE_LABEL = "AI 투자 판단"
 VALID_ACTIONS = {"BUY", "ADD", "HOLD", "TRIM", "SELL", "AVOID"}
 ACTION_LABELS = {
     "BUY": "매수",
@@ -383,11 +385,54 @@ def local_validated_ai_response(context: Dict[str, object], source: str = "local
     )
 
 
+def ai_decision_input_packet(
+    context: Dict[str, object],
+    prompt_context: Dict[str, object],
+    delivery_profile: Dict[str, object],
+) -> Dict[str, object]:
+    facts = prompt_context.get("facts") if isinstance(prompt_context.get("facts"), dict) else {}
+    relation_context = relation_context_value(context)
+    active_opinion = active_investment_opinion_value(context)
+    relation_execution_plan = relation_context.get("executionPlan") if isinstance(relation_context.get("executionPlan"), dict) else {}
+    opinion_execution_plan = active_opinion.get("executionPlan") if isinstance(active_opinion.get("executionPlan"), dict) else {}
+    return {
+        "decisionMode": AI_DECISION_MODE,
+        "finalDecisionOwner": "aiResponse",
+        "precomputedOpinionRole": "candidateEvidenceOnly",
+        "messageFormatRole": "telegramExecutionMessage",
+        "rawAlert": {
+            "messageType": str(context.get("messageType") or context.get("rule") or ""),
+            "target": context.get("displayTarget") or context.get("target") or context.get("title") or "",
+            "referenceDate": reference_date(context),
+            "rawLines": _raw_lines(context),
+            "criteria": criterion_lines(context),
+        },
+        "relationshipDatabaseInference": {
+            "decision": relation_context.get("decision") if isinstance(relation_context.get("decision"), dict) else {},
+            "signalStrength": relation_context.get("signalStrength"),
+            "signalStrengthLabel": relation_context.get("signalStrengthLabel"),
+            "activeRules": relation_context.get("activeRules") or relation_context.get("matchedRules") or [],
+            "executionPlan": relation_execution_plan or opinion_execution_plan,
+            "missingData": relation_context.get("missingData") or facts.get("missingData") or [],
+            "relationFacts": facts.get("relationFacts") or relation_context.get("facts") or {},
+            "trendDynamics": facts.get("trendDynamics") or {},
+        },
+        "researchEvidence": facts.get("researchEvidence") or [],
+        "newsHeadlines": facts.get("newsHeadlines") or [],
+        "disclosure": facts.get("disclosure") or {},
+        "sourceAlertEvents": facts.get("sourceAlertEvents") or [],
+        "precomputedOpinionCandidate": active_opinion,
+        "precomputedExecutionPlanCandidate": relation_execution_plan or opinion_execution_plan,
+        "messageDeliveryProfile": delivery_profile,
+    }
+
+
 def build_notification_ai_gate_prompt(context: Dict[str, object]) -> str:
     context = dict(context or {})
     message_type = str(context.get("messageType") or context.get("rule") or "notification")
     prompt_context = notification_ai_prompt_context(message_type, context)
     delivery_profile = delivery_profile_from_context(context)
+    decision_input = ai_decision_input_packet(context, prompt_context, delivery_profile)
     payload = {
         "messageType": message_type,
         "target": context.get("displayTarget") or context.get("target") or context.get("title") or "",
@@ -398,18 +443,22 @@ def build_notification_ai_gate_prompt(context: Dict[str, object]) -> str:
         "executionPlan": relation_context_value(context).get("executionPlan") if isinstance(relation_context_value(context), dict) else {},
         "activeInvestmentOpinion": active_investment_opinion_value(context),
         "promptContext": prompt_context,
+        "aiDecisionInput": decision_input,
         "messageDeliveryProfile": delivery_profile,
     }
     return "\n".join([
-        "너는 자동 주문자가 아니라 투자 실행 알림을 검증하는 분석가다.",
-        "제공된 데이터와 온톨로지 관계 규칙만 사용한다. 없는 데이터는 절대 추정하지 않는다.",
-        "BUY, ADD, HOLD, TRIM, SELL, AVOID 중 하나를 고르되 자동 주문 지시처럼 쓰지 않는다.",
+        "너는 자동 주문자가 아니라 최종 투자 의견을 판단하는 AI 분석가다.",
+        "도메인 계산 결과를 검증만 하지 말고, 제공된 모든 증거와 관계형/온톨로지 데이터베이스 추론을 종합해 직접 최종 의견을 고른다.",
+        "제공된 데이터, 뉴스·공시, 리서치 근거, 온톨로지 관계 규칙, 실행 계획 후보만 사용한다. 없는 데이터는 절대 추정하지 않는다.",
+        "activeInvestmentOpinion과 executionPlan은 사전 계산 후보일 뿐 최종 답변이 아니다. 근거가 부족하거나 반대 근거가 더 강하면 다른 action을 선택할 수 있다.",
+        "BUY, ADD, HOLD, TRIM, SELL, AVOID 중 하나를 반드시 고르되 자동 주문 지시처럼 쓰지 않는다.",
+        "사전 계산 후보와 다른 action을 고르면 evidence 또는 counterEvidence에 왜 달라졌는지 짧게 포함한다.",
         "action 필드에만 BUY/ADD/HOLD/TRIM/SELL/AVOID 코드를 쓰고, summary/opinion/evidence/counterEvidence/nextChecks에는 매수/추가매수/보유/분할축소/매도/회피처럼 한국어 행동명만 쓴다.",
         "사용자에게 보이는 문장에는 snake_case, camelCase, true/false, entryAllocationRoom, entrySupportCount, entryExternalRiskBlocked 같은 내부 변수명을 쓰지 않는다. 반드시 쉬운 한국어 문장으로 풀어쓴다.",
         "어려운 표현은 피한다. '기준선 이탈'은 '주요 평균선 아래로 내려감', '추세 훼손'은 '가격 흐름 약화', '하락 가속'은 '하락 속도 증가', '괴리'는 '차이'처럼 바꿔 쓴다.",
         "계정의 메시지 전달 수준은 " + str(delivery_profile.get("label") or "") + "이다. " + str(delivery_profile.get("promptInstruction") or ""),
         "반대 근거, 부족 데이터 영향, 무효화 조건, 다음 확인 조건을 반드시 포함한다.",
-        "응답은 설명 문장 없이 JSON 객체 하나만 출력한다.",
+        "응답 JSON이 최종 메시지의 원천이다. 설명 문장 없이 JSON 객체 하나만 출력한다.",
         "스키마:",
         json.dumps({
             "action": "BUY|ADD|HOLD|TRIM|SELL|AVOID",
@@ -539,10 +588,75 @@ def confidence_text(value: object) -> str:
     return label + " (" + str(round(score, 1)) + "%)"
 
 
+def target_name_for_headline(target: object) -> str:
+    text = str(target or "").strip()
+    if not text:
+        return ""
+    for separator in ["/", "|"]:
+        if separator in text:
+            text = text.split(separator, 1)[0].strip()
+            break
+    return text[:24].rstrip()
+
+
+def title_prefix_from_headline(headline: str) -> str:
+    text = str(headline or "").strip()
+    match = re.match(r"^(\[[^\]]+\]\s+(?:\S+\s+)?)", text)
+    return match.group(1).strip() if match else ""
+
+
+def action_headline(response: NotificationAIValidatedResponse) -> str:
+    action = response.action
+    if action == "BUY":
+        return "매수 조건 점검"
+    if action == "ADD":
+        return "추가매수 조건 점검"
+    if action == "HOLD":
+        return "보유 유지·다음 조건 확인"
+    if action == "TRIM":
+        return "분할축소 우선 점검"
+    if action == "SELL":
+        return "매도 우선 점검"
+    if action == "AVOID":
+        return "신규 진입 회피"
+    return response.action_label or "대응 기준 점검"
+
+
+def execution_headline(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
+    headline = str(context.get("headline") or context.get("title") or "알림").strip()
+    prefix = title_prefix_from_headline(headline)
+    target = target_name_for_headline(context.get("displayTarget") or context.get("target") or context.get("title") or "")
+    action = action_headline(response)
+    if target:
+        return " ".join(part for part in [prefix, target + ": " + action] if part)
+    return " ".join(part for part in [prefix, action] if part) or headline
+
+
 def _plain_value(context: Dict[str, object], label: str) -> str:
     if label == "투자자":
         return _investor_text_from_lines(_raw_lines(context))
     return _line_after_colon(_raw_lines(context), label)
+
+
+def notification_key(context: Dict[str, object]) -> str:
+    for key in ["key", "dedupeKey", "jobId"]:
+        value = str((context or {}).get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def execution_footer(context: Dict[str, object], response: NotificationAIValidatedResponse, reference: str, sent: str) -> List[str]:
+    rows = [
+        _html_row("기준", reference),
+        _html_row("발송", sent),
+        _html_row("알림ID", notification_key(context)),
+        _html_row("분석", AI_DECISION_SOURCE_LABEL + " / " + response.source),
+    ]
+    rows = [row for row in rows if row]
+    if not rows:
+        return []
+    return ["", "<b>알림 정보</b>", *rows]
 
 
 def _split_legacy_investor_rows(text: str) -> List[str]:
@@ -590,7 +704,7 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
     level = delivery_level_from_context(context)
     if level == "absoluteBeginner":
         return execution_telegram_message_absolute_beginner(context, response)
-    headline = str(context.get("headline") or context.get("title") or "알림").strip()
+    headline = execution_headline(context, response)
     target = str(context.get("displayTarget") or context.get("target") or "").strip()
     current = _plain_value(context, "현재가")
     average = _plain_value(context, "평균매입가") or _plain_value(context, "평단가")
@@ -629,8 +743,6 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
         "<b>판단</b>",
         _html_row("우선 행동", response.action_label),
         _html_row("판단 강도" if level == "beginner" else "확신", confidence_value),
-        _html_row("기준시각", reference),
-        _html_row("발송시각", sent),
     ]
     if current_state_rows:
         parts.extend(["", "<b>현재 상태</b>", *current_state_rows])
@@ -661,12 +773,12 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
         if relation_labels:
             parts.extend(["", "<b>관계 규칙 요약</b>"])
             parts.extend("• " + html.escape(item, quote=False) for item in relation_labels)
-    parts.append("• 분석출처: AI 검증 알림 / " + html.escape(response.source, quote=False))
+    parts.extend(execution_footer(context, response, reference, sent))
     return "\n".join(part for part in parts if str(part).strip() or part == "").strip()
 
 
 def execution_telegram_message_absolute_beginner(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
-    headline = str(context.get("headline") or context.get("title") or "알림").strip()
+    headline = execution_headline(context, response)
     target = str(context.get("displayTarget") or context.get("target") or "").strip()
     sent = str(context.get("sentTime") or "").strip()
     reference = response.reference_date or reference_date(context)
@@ -678,8 +790,6 @@ def execution_telegram_message_absolute_beginner(context: Dict[str, object], res
         "<b>한줄 판단</b>",
         _html_row("먼저 할 일", response.action_label),
         _html_row("판단 강도", confidence_text(response.confidence)),
-        _html_row("기준시각", reference),
-        _html_row("발송시각", sent),
         "• 자동 주문이 아니라 실행 전 점검 알림입니다.",
     ]
     if current_state_rows:
@@ -703,7 +813,7 @@ def execution_telegram_message_absolute_beginner(context: Dict[str, object], res
     criteria = _criteria_summary(context)
     if criteria:
         parts.extend(["", "<b>왜 온 알림</b>", "• " + html.escape(criteria, quote=False)])
-    parts.append("• 분석출처: AI 검증 알림 / " + html.escape(response.source, quote=False))
+    parts.extend(execution_footer(context, response, reference, sent))
     return "\n".join(part for part in parts if str(part).strip() or part == "").strip()
 
 
@@ -773,6 +883,7 @@ def notification_ai_validation_assertions(
             "ontologyBox": "ABox",
             "tboxClass": "AIValidation",
             "engineVersion": NOTIFICATION_AI_GATE_VERSION,
+            "decisionMode": AI_DECISION_MODE,
             "messageType": message_type,
             "target": target,
             "referenceDate": reference,
@@ -785,6 +896,7 @@ def notification_ai_validation_assertions(
             "action": response.action,
             "actionLabel": response.action_label,
             "confidence": round(_number(response.confidence), 1),
+            "decisionMode": AI_DECISION_MODE,
             "validatedOpinion": dict(payload or {}),
         },
         {
@@ -808,6 +920,7 @@ def notification_ai_validation_assertions(
     ]
     relations = [
         {"source": validation_id, "target": opinion_id, "relationType": "VALIDATES_OPINION"},
+        {"source": validation_id, "target": opinion_id, "relationType": "PRODUCES_AI_DECISION"},
         {"source": validation_id, "target": dispatch_id, "relationType": "PRODUCES_VALIDATED_MESSAGE"},
         {"source": dispatch_id, "target": delivery_id, "relationType": "USES_MESSAGE_DELIVERY_PROFILE"},
     ]
@@ -852,6 +965,7 @@ def context_with_validated_ai_response(
     enriched["notificationAiGate"] = {
         "enabled": True,
         "engineVersion": NOTIFICATION_AI_GATE_VERSION,
+        "decisionMode": AI_DECISION_MODE,
         "source": response.source,
         "validationWarnings": list(response.validation_warnings or []),
         "messageDeliveryProfile": delivery_profile_from_context(enriched),
@@ -860,7 +974,9 @@ def context_with_validated_ai_response(
         "ontologyBox": "ABox",
         "tboxClass": "AIValidation",
         "engineVersion": NOTIFICATION_AI_GATE_VERSION,
+        "decisionMode": AI_DECISION_MODE,
         "validates": ["activeInvestmentOpinion", "executionPlan", "missingData"],
+        "finalDecisionOwner": "aiResponse",
         "validatedOpinion": payload,
         "validationWarnings": list(response.validation_warnings or []),
         "producesValidatedMessage": True,
@@ -881,10 +997,10 @@ def context_with_validated_ai_response(
         lines.append("다음 확인: " + " / ".join(response.next_checks[:3]))
     if response.missing_data_impact:
         lines.append("부족 데이터: " + " / ".join(response.missing_data_impact[:3]))
-    lines.append("분석출처: AI 검증 알림 / " + response.source)
+    lines.append("분석출처: " + AI_DECISION_SOURCE_LABEL + " / " + response.source)
     enriched["notificationAiOpinion"] = {
         "engineVersion": NOTIFICATION_AI_GATE_VERSION,
-        "source": "AI 검증 알림",
+        "source": AI_DECISION_SOURCE_LABEL,
         "messageType": enriched.get("messageType") or enriched.get("rule") or "",
         "lines": lines,
         "validatedResponse": payload,

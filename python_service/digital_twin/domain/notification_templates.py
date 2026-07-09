@@ -158,6 +158,11 @@ SEPARATE_DATA_LABELS = {
     "평가",
     "보유",
 }
+FOOTER_DATA_LABELS = {
+    "기준일",
+    "기준시각",
+    "발송시각",
+}
 ONTOLOGY_INTERNAL_DATA_PREFIXES = (
     "관계 신호",
     "성립 규칙",
@@ -399,9 +404,15 @@ def is_ontology_internal_data_line(line: str) -> bool:
 
 
 def notification_data_lines(raw_lines: List[str], metadata: Dict[str, object]) -> List[str]:
-    if not ontology_relation_context(metadata):
-        return list(raw_lines)
-    return [line for line in raw_lines if not is_ontology_internal_data_line(line)]
+    lines = []
+    for line in raw_lines:
+        label, _value = split_data_line(line)
+        if label in FOOTER_DATA_LABELS:
+            continue
+        if ontology_relation_context(metadata) and is_ontology_internal_data_line(line):
+            continue
+        lines.append(line)
+    return lines
 
 
 def data_pair_text(label: str, value: str, rich: bool = False) -> str:
@@ -1308,6 +1319,31 @@ def target_display_value(title: object, raw_symbol: object, display_symbol: obje
     return title_text or symbol_text
 
 
+def headline_target_name(target_value: object) -> str:
+    text = str(target_value or "").strip()
+    if not text:
+        return ""
+    parts = [part.strip() for part in re.split(r"[/|]", text) if part.strip()]
+    if parts:
+        if parts[0] in {"크립토 변동"} and len(parts) > 1:
+            text = parts[1]
+        else:
+            text = parts[0]
+    return text[:24].rstrip()
+
+
+def targeted_headline(status_headline: str, title_icon: str, target_value: str, title_headline: str) -> str:
+    target = headline_target_name(target_value)
+    action = str(title_headline or "").strip()
+    if target and action.startswith(target + " "):
+        action = action[len(target):].strip()
+    if target and action:
+        body = target + ": " + action
+    else:
+        body = action or target
+    return " ".join(part for part in [status_headline, title_icon, body] if str(part or "").strip())
+
+
 def alert_context(event: AlertEvent) -> Dict[str, object]:
     raw_lines = raw_lines_with_reference_date(event, [str(line).strip() for line in event.lines if str(line).strip()])
     metadata = dict(event.metadata or {})
@@ -1328,8 +1364,8 @@ def alert_context(event: AlertEvent) -> Dict[str, object]:
     status_headline = ("[" + severity_label + "]") if severity_label else ""
     title_icon = notification_title_icon(event.rule, raw_lines, event)
     title_headline = notification_title_headline(event.rule, raw_lines, event, message_type_label or event.title)
-    headline = " ".join(part for part in [status_headline, title_icon, title_headline] if part)
     target_value = target_display_value(event.title, raw_symbol, display_symbol)
+    headline = targeted_headline(status_headline, title_icon, target_value, title_headline)
     target_line = "대상: " + target_value if target_value else ""
     criteria = event_criterion_lines(event, raw_lines, trigger_summary)
     signals = notification_signal_labels(event.rule, raw_lines)
@@ -2037,6 +2073,66 @@ def template_prefers_rich_score(template: str, rendered: str) -> bool:
     return "{telegramMessage}" in text or "<b>" in rendered or "<code>" in rendered
 
 
+def footer_value_from_context(context: Dict[str, object], *keys: str) -> str:
+    if not isinstance(context, dict):
+        return ""
+    for key in keys:
+        value = str(context.get(key) or "").strip()
+        if value:
+            return value
+    raw_lines = context_raw_lines(context)
+    for key in keys:
+        value = data_value(raw_lines, key)
+        if value:
+            return value
+    return ""
+
+
+def footer_analysis_source(context: Dict[str, object]) -> str:
+    response = context.get("notificationAiValidatedResponse") if isinstance(context, dict) else {}
+    if isinstance(response, dict):
+        source = str(response.get("source") or "").strip()
+        if source:
+            return "AI 투자 판단 / " + source
+    return str((context or {}).get("analysisSource") or "").strip()
+
+
+def footer_row(label: str, value: str, rich: bool = False) -> str:
+    if not str(value or "").strip():
+        return ""
+    if rich:
+        return "• <b>" + html.escape(label, quote=False) + "</b>: <code>" + html.escape(str(value), quote=False) + "</code>"
+    return "• " + label + ": " + str(value)
+
+
+def message_footer(context: Dict[str, object], rich: bool = False) -> str:
+    reference = footer_value_from_context(context, "referenceDate", "기준일", "기준시각")
+    sent = footer_value_from_context(context, "sentTime", "발송시각")
+    key = footer_value_from_context(context, "key", "dedupeKey", "jobId")
+    source = footer_analysis_source(context)
+    rows = [
+        footer_row("기준", reference, rich),
+        footer_row("발송", sent, rich),
+        footer_row("알림ID", key, rich),
+        footer_row("분석", source, rich),
+    ]
+    rows = [row for row in rows if row]
+    if not rows:
+        return ""
+    title = "<b>알림 정보</b>" if rich else "알림 정보"
+    return "\n".join([title, *rows])
+
+
+def append_message_footer(rendered: str, context: Dict[str, object], rich: bool = False) -> str:
+    text = str(rendered or "").rstrip()
+    if not text or "알림 정보" in text:
+        return text
+    footer = message_footer(context, rich)
+    if not footer:
+        return text
+    return text + "\n\n" + footer
+
+
 def append_score_explanation(rendered: str, context: Dict[str, object], rich: bool = False) -> str:
     rendered_text = str(rendered or "")
     if context_message_type(context) == "modelReview":
@@ -2088,11 +2184,13 @@ def render_notification(template: NotificationTemplate, context: Dict[str, objec
         rendered = render_template(template.template, values)
         rich = template_prefers_rich_score(template.template, rendered)
         rendered = append_ai_opinion(rendered, values, rich)
-        return beginner_friendly_text(append_score_explanation(rendered, values, rich))
+        rendered = beginner_friendly_text(append_score_explanation(rendered, values, rich))
+        return append_message_footer(rendered, values, rich)
     rendered = render_template(BODY_TEMPLATE, values)
     rich = template_prefers_rich_score(BODY_TEMPLATE, rendered)
     rendered = append_ai_opinion(rendered, values, rich)
-    return beginner_friendly_text(append_score_explanation(rendered, values, rich))
+    rendered = beginner_friendly_text(append_score_explanation(rendered, values, rich))
+    return append_message_footer(rendered, values, rich)
 
 
 

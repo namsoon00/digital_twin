@@ -3035,7 +3035,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("수급: 거래량 90,863(1.4x), 거래액 $3,543,834,187", "\n".join(insight.lines))
         self.assertIn("추세: 20일선 $108.07보다 6.3% 낮음", "\n".join(insight.lines))
         self.assertIn("권장 액션: 분할매도", "\n".join(insight.lines))
-        self.assertIn("<b>[관찰] 💰 수익 +12.2%: 분할매도·리밸런싱 점검</b>", message)
+        self.assertIn("<b>[관찰] 💰 Strategy: 수익 +12.2%: 분할매도·리밸런싱 점검</b>", message)
         self.assertIn("현재가", message)
         self.assertIn("평균매입가", message)
         self.assertIn("수익률", message)
@@ -3112,7 +3112,7 @@ class PythonServiceTests(unittest.TestCase):
 
         message = render_notification(NotificationTemplate("investmentInsight", "{telegramMessage}"), alert_context(event))
 
-        self.assertIn("<b>[주의] 🛡️ 손실 -26.1%: 손절·분할축소 점검</b>", message)
+        self.assertIn("<b>[주의] 🛡️ 하락 테스트: 손실 -26.1%: 손절·분할축소 점검</b>", message)
         self.assertNotIn("💰 분할매도·리밸런싱 점검", message)
 
     def test_holding_timing_status_includes_model_score_parentheses(self):
@@ -3193,7 +3193,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(any("관심종목 매수 기준" in item for item in source_message.splitlines()))
         db_path = Path(self.temp.name) / "service.db"
         message = SQLiteNotificationTemplateStore(db_path).render(candidate.rule, alert_context(candidate))
-        self.assertIn("<b>[관찰] 🟢 분할매수 후보: 진입 조건 점검</b>", message)
+        self.assertIn("<b>[관찰] 🟢 Apple: 분할매수 후보: 진입 조건 점검</b>", message)
         self.assertNotIn("투자 인사이트: 대응 기준 점검", message)
         self.assertFalse(any(event.rule == "modelBuy" for event in events))
         self.assertFalse(any(event.rule == "watchlistBuyCandidate" for event in events))
@@ -3251,7 +3251,7 @@ class PythonServiceTests(unittest.TestCase):
             self.insight_source_message(candidate, "watchlistOntologySignal"),
         )
         self.assertIn("entry.pullback.supported.v1", active_ids)
-        self.assertIn("<b>[관찰] 🟢 분할매수 후보: 진입 조건 점검</b>", message)
+        self.assertIn("<b>[관찰] 🟢 Apple: 분할매수 후보: 진입 조건 점검</b>", message)
 
     def test_watchlist_ontology_signal_promotes_risk_insight_without_buy_score(self):
         watch = normalize_position({
@@ -4419,7 +4419,7 @@ class PythonServiceTests(unittest.TestCase):
         db_path = Path(self.temp.name) / "service.db"
         templates = SQLiteNotificationTemplateStore(db_path)
         message = templates.render(event.rule, alert_context(event))
-        self.assertIn("<b>[관찰] 🪙 크립토 가격 급등</b>", message)
+        self.assertIn("<b>[관찰] 🪙 이더리움: 크립토 가격 급등</b>", message)
         self.assertNotIn("크립토 가격 급락", message)
         self.assertIn("관계 규칙", message)
         self.assertIn("크립토 급변", message)
@@ -6031,10 +6031,14 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("VALIDATES_OPINION", {item["relationType"] for item in assertions["relations"]})
         self.assertIn("HAS_EXECUTION_PLAN", {item["relationType"] for item in assertions["relations"]})
         self.assertIn("PRODUCES_VALIDATED_MESSAGE", {item["relationType"] for item in assertions["relations"]})
+        self.assertIn("PRODUCES_AI_DECISION", {item["relationType"] for item in assertions["relations"]})
         self.assertTrue(enriched["ontologyAiValidation"]["assertionIds"])
+        self.assertEqual("ai-first", enriched["notificationAiGate"]["decisionMode"])
+        self.assertEqual("aiResponse", enriched["ontologyAiValidation"]["finalDecisionOwner"])
         rendered = render_notification(NotificationTemplate("investmentInsight", "{telegramMessage}"), enriched)
         self.assertNotIn("AI 의견", rendered)
-        self.assertEqual(1, rendered.count("분석출처: AI 검증 알림"))
+        self.assertEqual(1, rendered.count("<b>알림 정보</b>"))
+        self.assertIn("• <b>분석</b>: <code>AI 투자 판단 / test AI</code>", rendered)
 
     def test_validated_ai_response_omits_empty_current_state_section(self):
         context = {
@@ -6224,6 +6228,62 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("내부 변수명을 쓰지 않는다", prompt)
         self.assertIn("한국어 행동명만 쓴다", prompt)
         self.assertIn("주요 평균선 아래로 내려감", prompt)
+        self.assertIn("최종 투자 의견을 판단하는 AI 분석가", prompt)
+        self.assertIn("사전 계산 후보일 뿐 최종 답변이 아니다", prompt)
+        self.assertIn("관계형/온톨로지 데이터베이스 추론", prompt)
+        self.assertIn('"aiDecisionInput"', prompt)
+        payload = json.loads(prompt.split("입력:", 1)[1].strip())
+        self.assertEqual("ai-first", payload["aiDecisionInput"]["decisionMode"])
+        self.assertEqual("aiResponse", payload["aiDecisionInput"]["finalDecisionOwner"])
+        self.assertEqual("candidateEvidenceOnly", payload["aiDecisionInput"]["precomputedOpinionRole"])
+
+    def test_notification_ai_gate_allows_ai_to_override_precomputed_opinion(self):
+        context = {
+            "messageType": "investmentInsight",
+            "headline": "[주의] 🛡️ 손실 방어 점검",
+            "displayTarget": "삼성전자 / 005930",
+            "referenceDate": "2026-07-08 18:54 KST",
+            "rawLines": "\n".join([
+                "현재가: 277,500원",
+                "수익률: -18.0%",
+                "추세: 20일선보다 14.0% 낮음",
+            ]),
+            "activeInvestmentOpinion": {
+                "action": "HOLD",
+                "actionLabel": "보유",
+                "conviction": 62,
+                "thesis": "사전 계산은 보유 유지 후보입니다.",
+            },
+            "ontologyRelationContext": {
+                "decision": {
+                    "actionGroup": "lossControl",
+                    "actionLevel": "action",
+                    "score": 82,
+                },
+                "activeRules": [
+                    {"ruleId": "holding.loss_guard.breakdown.v1", "label": "손실 보유 + 기준선 이탈 -> 손실 관리", "strengthScore": 82}
+                ],
+            },
+        }
+        response = validated_response_from_payload(context, {
+            "action": "SELL",
+            "confidence": 89,
+            "summary": "손실과 주요 평균선 아래 상태가 겹쳐 AI가 사전 보유 후보보다 방어를 우선했습니다.",
+            "opinion": "사전 계산 후보는 보유였지만, 관계 분석 위험이 더 강해 매도 기준을 먼저 확인합니다.",
+            "evidence": ["손실 -18.0%", "손실 관리 관계 규칙 82점"],
+            "counterEvidence": ["사전 계산 후보는 보유였음"],
+            "invalidationCondition": "20일선 회복과 거래량 동반 반등이 확인되면 매도 강도를 낮춥니다.",
+            "nextChecks": ["매도 가능 수량과 공시 원문 확인"],
+            "missingDataImpact": [],
+            "referenceDate": "2026-07-08 18:54 KST",
+        }, source="test AI")
+        enriched = context_with_validated_ai_response(context, response)
+
+        self.assertEqual("SELL", enriched["notificationAiValidatedResponse"]["action"])
+        self.assertEqual("HOLD", context["activeInvestmentOpinion"]["action"])
+        self.assertIn("AI 투자 판단", enriched["telegramMessage"])
+        self.assertIn("매도", enriched["telegramMessage"])
+        self.assertIn("사전 계산 후보는 보유", enriched["telegramMessage"])
 
     def test_notification_worker_waits_for_validated_ai_before_rendering(self):
         class FakeReviewer:
@@ -6266,7 +6326,7 @@ class PythonServiceTests(unittest.TestCase):
         enricher(job)
 
         self.assertEqual("TRIM", job.context["notificationAiValidatedResponse"]["action"])
-        self.assertIn("AI 검증 알림", job.context["telegramMessage"])
+        self.assertIn("AI 투자 판단", job.context["telegramMessage"])
         self.assertIn("분할축소", job.context["telegramMessage"])
         self.assertNotIn("old rendered message", job.context["telegramMessage"])
 
@@ -7159,9 +7219,9 @@ class PythonServiceTests(unittest.TestCase):
         )
 
         self.assertEqual(1, runner.run_once(limit=10))
-        self.assertIn("• <b>발송시각</b>: <code>2026-07-05 09:06 KST</code>", sent[0])
-        self.assertLess(sent[0].index("<b>데이터</b>"), sent[0].index("<b>발송시각</b>"))
-        self.assertLess(sent[0].index("<b>발송시각</b>"), sent[0].index("<b>발송 기준</b>"))
+        self.assertIn("<b>알림 정보</b>", sent[0])
+        self.assertIn("• <b>발송</b>: <code>2026-07-05 09:06 KST</code>", sent[0])
+        self.assertLess(sent[0].index("<b>발송 기준</b>"), sent[0].index("<b>알림 정보</b>"))
         self.assertEqual("2026-07-05 09:06 KST", queue.jobs()[0].context["sentTime"])
 
     def test_notification_score_explanation_uses_friendly_korean(self):
@@ -7452,7 +7512,7 @@ class PythonServiceTests(unittest.TestCase):
 
         self.assertIn("Apple", message)
         self.assertNotIn("━━━━━━━━", message)
-        self.assertIn("<b>[관찰] 📈 이동평균 상향 신호</b>", message)
+        self.assertIn("<b>[관찰] 📈 Apple: 이동평균 상향 신호</b>", message)
         self.assertIn("<code>Apple / AAPL</code>", message)
         self.assertIn("<b>발송 기준</b>", message)
         self.assertIn("<b>데이터</b>", message)
@@ -7483,7 +7543,7 @@ class PythonServiceTests(unittest.TestCase):
 
         message = templates.render(event.rule, alert_context(event))
 
-        self.assertIn("<b>[관찰] 🛡️ 판단 변경: 손실 축소 우선</b>", message)
+        self.assertIn("<b>[관찰] 🛡️ Strategy Preferred: 판단 변경: 손실 축소 우선</b>", message)
         self.assertIn("• <b>권장 액션</b>: <code>손실 축소 우선, 회복 조건 확인 전 비중 확대 보류</code>", message)
 
     def test_external_equity_alert_uses_colon_pairs_without_divider(self):
@@ -7508,15 +7568,16 @@ class PythonServiceTests(unittest.TestCase):
 
         message = templates.render(event.rule, alert_context(event))
 
-        self.assertIn("<b>[주의] 🇺🇸 미장 가격 급락</b>\n<code>Tesla / TSLA</code>", message)
+        self.assertIn("<b>[주의] 🇺🇸 Tesla: 미장 가격 급락</b>\n<code>Tesla / TSLA</code>", message)
         self.assertNotIn("<code>TSLA</code>", message)
         self.assertNotIn("━━━━━━━━", message)
         self.assertIn("• <b>현재가</b>: <code>$393.45</code>", message)
         self.assertIn("• <b>미장 가격 변동</b>: <code>-7.5%</code>", message)
         self.assertIn("• <b>거래량</b>: <code>71,917,610</code>", message)
-        self.assertIn("• <b>기준일</b>: <code>2026-07-02</code>", message)
+        self.assertIn("<b>알림 정보</b>", message)
+        self.assertIn("• <b>기준</b>: <code>2026-07-02</code>", message)
         self.assertIn("• <b>출처</b>: <code>Alpha Vantage</code>", message)
-        self.assertEqual(1, message.count("<b>기준일</b>"))
+        self.assertNotIn("<b>기준일</b>", message)
         self.assertLess(message.index("<b>데이터</b>"), message.index("<b>발송 기준</b>"))
         self.assertIn("• <b>감지</b>: <code>가격 변동 -7.5%, 현재가 $393.45</code>", message)
 
@@ -7540,7 +7601,7 @@ class PythonServiceTests(unittest.TestCase):
 
         message = templates.render(event.rule, alert_context(event))
 
-        self.assertIn("<b>[주의] 💰 수익 +18.5%: 분할매도 권장</b>", message)
+        self.assertIn("<b>[주의] 💰 스트래티지: 수익 +18.5%: 분할매도 권장</b>", message)
         self.assertNotIn("<b>[주의] 보유 타이밍</b>", message)
 
         loss_event = AlertEvent(
@@ -7554,7 +7615,7 @@ class PythonServiceTests(unittest.TestCase):
             "000660",
         )
         loss_message = templates.render(loss_event.rule, alert_context(loss_event))
-        self.assertIn("<b>[주의] 🛡️ 손실 -13.4%: 손절·분할축소 권장</b>", loss_message)
+        self.assertIn("<b>[주의] 🛡️ SK하이닉스: 손실 -13.4%: 손절·분할축소 권장</b>", loss_message)
         self.assertNotIn("분할매도 권장</b>", loss_message)
 
     def test_external_crypto_alert_orders_bitcoin_price_and_trading_value(self):
@@ -7588,7 +7649,8 @@ class PythonServiceTests(unittest.TestCase):
         value_line = "• <b>크립토 거래액</b>: <code>$42,000,000,000</code>"
         self.assertIn(change_line + "\n" + price_line + "\n" + value_line, message)
         self.assertLess(message.index(price_line), message.index(value_line))
-        self.assertIn("• <b>기준일</b>: <code>2026-07-03 15:58 KST</code>", message)
+        self.assertIn("<b>알림 정보</b>", message)
+        self.assertIn("• <b>기준</b>: <code>2026-07-03 15:58 KST</code>", message)
         self.assertIn("• <b>감지</b>: <code>비트코인 24h -5.2%, 7d -12.1%</code>", message)
 
     def test_external_crypto_alert_title_uses_dominant_change_direction(self):
@@ -7618,7 +7680,7 @@ class PythonServiceTests(unittest.TestCase):
 
         message = templates.render(event.rule, alert_context(event))
 
-        self.assertIn("<b>[주의] 🪙 크립토 가격 급등</b>", message)
+        self.assertIn("<b>[주의] 🪙 이더리움: 크립토 가격 급등</b>", message)
         self.assertNotIn("<b>[주의] 크립토 가격 급락</b>", message)
         self.assertIn("• <b>크립토 변동</b>: <code>24h -0.1% · 7d +11.8%</code>", message)
 
@@ -7639,7 +7701,7 @@ class PythonServiceTests(unittest.TestCase):
 
         self.assertIn("기준일 2026-07-03 15:58 KST", context["rawLines"])
         self.assertEqual("2026-07-03 15:58 KST", context["referenceDate"])
-        self.assertIn("• <b>기준일</b>: <code>2026-07-03 15:58 KST</code>", context["telegramDataLines"])
+        self.assertNotIn("<b>기준일</b>", context["telegramDataLines"])
 
     def test_model_score_alert_uses_phrase_with_score_in_parentheses(self):
         db_path = Path(self.temp.name) / "service.db"

@@ -237,8 +237,6 @@ class NotificationQueueRunner:
             "sentTime": sent_time,
             "sentLine": "발송시각 " + sent_time,
         })
-        if job.message_type == "holdingTiming":
-            self.append_holding_timing_sent_time(context, sent_time)
         job.context = context
 
     def append_holding_timing_sent_time(self, context: Dict[str, object], sent_time: str) -> None:

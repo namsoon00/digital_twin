@@ -40,6 +40,7 @@ from digital_twin.domain.model_review import ModelReviewJob, build_model_review_
 from digital_twin.domain.disclosure_analysis import DisclosureAnalysisResult, local_disclosure_analysis
 from digital_twin.domain.notification_templates import NotificationTemplate, alert_context, render_notification
 from digital_twin.domain.notification_rules import apply_market_hours_rule, apply_state_cooldown_rule, default_notification_rule, evaluate_notification_rule
+from digital_twin.domain.ontology_insights import build_investment_insight_events
 from digital_twin.domain.notification_ai import build_notification_ai_opinion
 from digital_twin.domain.notification_ai_gate import build_notification_ai_gate_prompt, context_with_validated_ai_response, validated_response_from_payload
 from digital_twin.domain.notifications import NotificationJob
@@ -2898,6 +2899,46 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("평균매입가", message)
         self.assertIn("수익률", message)
         self.assertIn("보유", message)
+
+    def test_investment_insight_uses_stable_keys_for_score_only_relation_changes(self):
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "ok",
+            utc_now_iso(),
+            portfolio_summary([]),
+        )
+
+        def insight_for_score(score):
+            event = AlertEvent(
+                "main",
+                "메인",
+                "ALERT",
+                "watchlistOntologySignal",
+                "main:watchlist-ontology:005380:riskWatch:data.conflict.v1+trend.breakdown_acceleration.v1:" + str(score),
+                "현대차",
+                ["상태: 하락 가속 대응 점검 (" + str(score) + "점)"],
+                "005380",
+                metadata={
+                    "watchlistOntologySignalType": "riskWatch",
+                    "watchlistSignalScore": score,
+                    "dataFreshness": self.fresh_data_freshness("unit-test-position"),
+                },
+            )
+            return build_investment_insight_events(snapshot, [event])[0]
+
+        first = insight_for_score(97.3)
+        second = insight_for_score(100.0)
+        first_insight = first.metadata["ontologyInsight"]
+        second_insight = second.metadata["ontologyInsight"]
+
+        self.assertEqual(first_insight["cadenceKey"], second_insight["cadenceKey"])
+        self.assertEqual(first_insight["sourceEventKeys"], second_insight["sourceEventKeys"])
+        self.assertEqual(["main:watchlist-ontology:005380:riskWatch:data.conflict.v1+trend.breakdown_acceleration.v1"], first_insight["sourceEventKeys"])
+        self.assertEqual("95", first_insight["scoreBucket"])
+        self.assertEqual("100", second_insight["scoreBucket"])
 
     def test_investment_insight_loss_title_wins_over_rebalance_signal(self):
         event = AlertEvent(
@@ -6074,6 +6115,56 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("missing", saved.context["dataFreshnessStatus"])
         self.assertEqual(["unknown"], saved.context["dataFreshnessStaleSources"])
         self.assertIn("신선도 메타데이터 없음", saved.last_error)
+
+    def test_investment_insight_state_cooldown_suppresses_score_only_relation_noise(self):
+        db_path = Path(self.temp.name) / "service.db"
+        queue = SQLiteNotificationJobStore(db_path)
+        rules = SQLiteNotificationRuleStore(db_path)
+        rule = rules.get("investmentInsight")
+        rule.market_hours_enabled = False
+        rules.upsert(rule)
+
+        def event_for_score(score, source_event_key):
+            return AlertEvent(
+                "main",
+                "메인",
+                "ALERT",
+                "investmentInsight",
+                "main:ontology-insight:005380:riskIncrease:watchlistOntologySignal",
+                "현대차",
+                ["인사이트 유형: 리스크 증가", "핵심 결론: 현대차 하락 가속 대응 점검"],
+                "005380",
+                metadata={
+                    "ontologyInsight": {
+                        "subject": "005380",
+                        "insightType": "riskIncrease",
+                        "score": score,
+                        "noveltyScore": 25,
+                        "sourceSignalTypes": ["watchlistOntologySignal"],
+                        "sourceEventKeys": [source_event_key],
+                        "cadenceKey": "cadence:python:main:investmentInsight:005380:riskIncrease:watchlistOntologySignal",
+                    },
+                    "sourceSignalTypes": ["watchlistOntologySignal"],
+                    "dataFreshness": self.fresh_data_freshness("unit-test-position"),
+                },
+            )
+
+        first_result = send_events([event_for_score(
+            97.3,
+            "main:watchlist-ontology:005380:riskWatch:data.conflict.v1+trend.breakdown_acceleration.v1:97.3",
+        )], queue=queue)
+        second_result = send_events([event_for_score(
+            100.0,
+            "main:watchlist-ontology:005380:riskWatch:data.conflict.v1+trend.breakdown_acceleration.v1",
+        )], queue=queue)
+
+        self.assertEqual(1, first_result.queued)
+        self.assertEqual(0, second_result.queued)
+        jobs = queue.jobs()
+        self.assertEqual(["pending", "suppressed"], [job.status for job in jobs])
+        self.assertEqual("cooldown", jobs[1].context["honeyStateDecision"])
+        self.assertFalse(jobs[1].context["honeySimilarityBypassed"])
+        self.assertIn("같은 임계값 상태 지속", jobs[1].last_error)
 
     def test_notification_rule_penalizes_similar_recent_messages(self):
         db_path = Path(self.temp.name) / "service.db"

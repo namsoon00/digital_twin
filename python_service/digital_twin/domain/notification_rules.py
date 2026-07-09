@@ -1,3 +1,4 @@
+import re
 from dataclasses import dataclass, field as dataclass_field
 from typing import Dict, Iterable, List, Tuple
 
@@ -20,6 +21,7 @@ DEFAULT_LOW_SCORE_ACTION = "suppress"
 DEFAULT_SIMILARITY_FIELDS = ["messageType", "accountId", "symbol", "severity", "title"]
 STATE_COOLDOWN_MESSAGE_TYPES = {INVESTMENT_INSIGHT, "holdingTiming", "externalEquityMove", "externalCryptoMove"}
 DEFAULT_NOTIFICATION_SCORE_FORMULA = "rawScore"
+VOLATILE_SCORE_SUFFIX = re.compile(r":-?\d+(?:\.\d+)?$")
 FORMULA_VARIABLE_BY_CONDITION_ID = {
     "severity_alert": "severityScore",
     "severity_watch": "severityScore",
@@ -200,7 +202,7 @@ def default_similarity_bypass_conditions(message_type: str) -> List["SimilarityB
                 "list_new_items_gte",
                 field="ontologyInsight.sourceEventKeys",
                 value=1,
-                description="같은 신호 타입이어도 활성 관계 규칙 또는 관계 점수가 달라지면 보냅니다.",
+                description="같은 신호 타입이어도 활성 관계 규칙 조합이 달라지면 보냅니다.",
             ),
         ]
     if key == "externalEquityMove":
@@ -794,6 +796,13 @@ def format_rule_number(value: float) -> str:
     return text or "0"
 
 
+def normalize_similarity_list_item(field: str, value: object) -> str:
+    normalized = normalize_fingerprint_part(value)
+    if str(field or "").endswith("sourceEventKeys"):
+        return VOLATILE_SCORE_SUFFIX.sub("", normalized)
+    return normalized
+
+
 def similarity_bypass_match(
     condition: SimilarityBypassCondition,
     job: NotificationJob,
@@ -828,8 +837,8 @@ def similarity_bypass_match(
             return True, label + " 신규 " + current
         return False, ""
     if condition_type == "list_new_items_gte":
-        current_items = set(normalize_fingerprint_part(item) for item in flattened_strings(field_value(context, field)) if normalize_fingerprint_part(item))
-        previous_items = set(normalize_fingerprint_part(item) for item in flattened_strings(field_value(previous_context, field)) if normalize_fingerprint_part(item))
+        current_items = set(normalize_similarity_list_item(field, item) for item in flattened_strings(field_value(context, field)) if normalize_similarity_list_item(field, item))
+        previous_items = set(normalize_similarity_list_item(field, item) for item in flattened_strings(field_value(previous_context, field)) if normalize_similarity_list_item(field, item))
         new_items = sorted(current_items - previous_items)
         minimum = numeric_value(condition.value)
         if new_items and len(new_items) >= int(minimum or 1):

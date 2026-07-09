@@ -1,3 +1,4 @@
+import re
 from typing import Dict, Iterable, List, Tuple
 
 from .alert_formatting import compact_number
@@ -33,6 +34,7 @@ from .portfolio import AccountSnapshot, AlertEvent
 
 
 INSIGHT_RULE = INVESTMENT_INSIGHT
+VOLATILE_SCORE_SUFFIX = re.compile(r":-?\d+(?:\.\d+)?$")
 
 SYSTEM_ALERT_TYPES = {
     MONITOR_CONNECTION,
@@ -274,6 +276,10 @@ def highest_severity(events: List[AlertEvent]) -> str:
     return "INFO"
 
 
+def stable_source_event_key(value: object) -> str:
+    return VOLATILE_SCORE_SUFFIX.sub("", str(value or "").strip())
+
+
 def compact_source_line(event: AlertEvent) -> str:
     label = signal_type_label(event.rule)
     first_line = next((str(line or "").strip() for line in event.lines or [] if str(line or "").strip()), "")
@@ -437,7 +443,7 @@ def build_investment_insight_events(snapshot: AccountSnapshot, signal_events: It
             active_lines.append("의견 근거: " + active_thesis)
         source_key = "|".join(sorted(source_types))
         score_bucket = str(int(round(score / 5.0) * 5))
-        insight_id = ":".join([snapshot.account_id, "ontology-insight", subject, insight_type, source_key, score_bucket])
+        insight_id = ":".join([snapshot.account_id, "ontology-insight", subject, insight_type, source_key])
         criteria = [
             "설정: 온톨로지 관계 그래프에서 의미 있는 투자 인사이트가 생성될 때",
             "감지: " + ", ".join(source_labels) + " · 관계 강도 " + compact_number(round(score, 1)) + "점 · 신뢰도 " + compact_number(round(confidence, 1)) + "%",
@@ -445,7 +451,7 @@ def build_investment_insight_events(snapshot: AccountSnapshot, signal_events: It
         metadata = {
             "ontologyInsight": {
                 "id": insight_id,
-                "cadenceKey": ":".join(["cadence", "python", snapshot.account_id, INSIGHT_RULE, subject, insight_type, source_key, score_bucket]),
+                "cadenceKey": ":".join(["cadence", "python", snapshot.account_id, INSIGHT_RULE, subject, insight_type, source_key]),
                 "insightType": insight_type,
                 "insightLabel": insight_label,
                 "subject": subject,
@@ -455,7 +461,8 @@ def build_investment_insight_events(snapshot: AccountSnapshot, signal_events: It
                 "noveltyScore": round(novelty_score, 1),
                 "severity": highest_severity(events),
                 "sourceSignalTypes": source_types,
-                "sourceEventKeys": [event.key for event in events],
+                "scoreBucket": score_bucket,
+                "sourceEventKeys": [stable_source_event_key(event.key) for event in events],
                 "thesis": thesis,
                 "nextCheck": next_check,
                 "dispatchMode": "insight-driven-only",

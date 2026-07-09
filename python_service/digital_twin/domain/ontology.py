@@ -100,6 +100,7 @@ SETTING_CONCEPT_TYPES = {
     "lossCutScoreFormula": ("StrategySignal", "CONFIGURES"),
     "notificationScoreFormula": ("NotificationPolicy", "HAS_NOTIFICATION_POLICY"),
     "messageDeliveryLevel": ("MessageDeliveryProfile", "HAS_MESSAGE_DELIVERY_PROFILE"),
+    "newsCollectionMinRelevanceScore": ("Threshold", "HAS_THRESHOLD"),
 }
 
 OPERATIONAL_PIPELINES = [
@@ -247,6 +248,7 @@ def event_tbox_classes(item: object) -> List[str]:
 def event_relation_properties(item: object) -> Dict[str, object]:
     polarity = str(getattr(item, "polarity", "") or "context")
     impact = number(getattr(item, "impact_score", 0))
+    raw_payload = getattr(item, "raw_payload", {}) if isinstance(getattr(item, "raw_payload", {}), dict) else {}
     props = {
         "source": "research-evidence",
         "polarity": polarity,
@@ -254,6 +256,18 @@ def event_relation_properties(item: object) -> Dict[str, object]:
         "confidence": round(number(getattr(item, "confidence", 0)), 2),
         "aiInfluenceLabel": str(getattr(item, "title", "") or getattr(item, "kind", "") or "리서치 근거"),
     }
+    for key in [
+        "relationScope",
+        "relevanceScore",
+        "sourceReliability",
+        "directMention",
+        "matchedAliases",
+        "mentionedPeers",
+        "topicTags",
+        "marketTopics",
+    ]:
+        if key in raw_payload:
+            props[key] = raw_payload.get(key)
     if polarity == "risk":
         props["opinionImpact"] = min(18.0, max(4.0, impact))
     elif polarity == "support":
@@ -1147,6 +1161,16 @@ def add_research_evidence_concepts(
     for item in research_evidence_from_facts(symbol, facts or {}) + research_evidence_from_external_signals(symbol, external_signals or {}):
         evidence_by_id[item.evidence_id] = item
     for item in evidence_by_id.values():
+        raw_payload = item.raw_payload if isinstance(item.raw_payload, dict) else {}
+        relation_scope = str(raw_payload.get("relationScope") or "").lower().strip()
+        scope_weight = {
+            "direct": 1.0,
+            "peer": 0.62,
+            "sector": 0.48,
+            "market": 0.28,
+            "noise": 0.0,
+        }.get(relation_scope, 0.72)
+        relation_weight = round(max(0.12, number(item.confidence) * scope_weight), 4)
         event_id = add_entity(graph, "research-evidence", item.evidence_id, item.title, {
             "tboxClass": "ResearchEvidence",
             "tboxClasses": event_tbox_classes(item),
@@ -1161,6 +1185,13 @@ def add_research_evidence_concepts(
             "polarity": item.polarity,
             "impactScore": round(number(item.impact_score), 1),
             "confidence": round(number(item.confidence), 2),
+            "relationScope": raw_payload.get("relationScope"),
+            "relevanceScore": raw_payload.get("relevanceScore"),
+            "sourceReliability": raw_payload.get("sourceReliability"),
+            "matchedAliases": raw_payload.get("matchedAliases"),
+            "mentionedPeers": raw_payload.get("mentionedPeers"),
+            "topicTags": raw_payload.get("topicTags"),
+            "marketTopics": raw_payload.get("marketTopics"),
         })
         graph.evidence.append(OntologyEvidence(
             item.evidence_id,
@@ -1174,7 +1205,29 @@ def add_research_evidence_concepts(
         props = event_relation_properties(item)
         add_relation(graph, stock_id, event_id, "HAS_OBSERVATION", weight=round(number(item.confidence), 4), evidence_ids=[item.evidence_id], properties=props)
         add_relation(graph, stock_id, event_id, "HAS_EXTERNAL_SIGNAL", weight=round(number(item.confidence), 4), evidence_ids=[item.evidence_id], properties=props)
-        add_relation(graph, event_id, stock_id, "MENTIONS_INSTRUMENT", weight=round(number(item.confidence), 4), evidence_ids=[item.evidence_id], properties=props)
+        add_relation(graph, event_id, stock_id, "MENTIONS_INSTRUMENT", weight=relation_weight, evidence_ids=[item.evidence_id], properties=props)
+        if relation_scope in {"peer", "sector", "market"}:
+            add_relation(graph, event_id, stock_id, "AFFECTS", weight=relation_weight, evidence_ids=[item.evidence_id], properties=props)
+        topic_tags = raw_payload.get("topicTags") if isinstance(raw_payload.get("topicTags"), list) else []
+        market_topics = raw_payload.get("marketTopics") if isinstance(raw_payload.get("marketTopics"), list) else []
+        for topic in unique_list(list(topic_tags or []) + list(market_topics or []))[:8]:
+            topic_id = add_entity(graph, "news-topic", str(topic), str(topic), {
+                "tboxClass": "NewsTopic",
+                "topic": str(topic),
+                "symbol": symbol,
+                "relationScope": relation_scope,
+            })
+            add_relation(graph, event_id, topic_id, "HAS_TOPIC", weight=relation_weight, evidence_ids=[item.evidence_id], properties=props)
+            add_relation(graph, topic_id, stock_id, "AFFECTS", weight=round(relation_weight * 0.8, 4), evidence_ids=[item.evidence_id], properties=props)
+        mentioned_peers = raw_payload.get("mentionedPeers") if isinstance(raw_payload.get("mentionedPeers"), list) else []
+        for peer in unique_list(mentioned_peers or [])[:6]:
+            peer_id = add_entity(graph, "peer-company", str(peer), str(peer), {
+                "tboxClass": "PeerCompanyMention",
+                "peerName": str(peer),
+                "symbol": symbol,
+            })
+            add_relation(graph, event_id, peer_id, "MENTIONS_PEER", weight=relation_weight, evidence_ids=[item.evidence_id], properties=props)
+            add_relation(graph, peer_id, stock_id, "AFFECTS", weight=round(relation_weight * 0.75, 4), evidence_ids=[item.evidence_id], properties=props)
         add_relation(graph, event_id, thesis_id, "MATERIAL_TO", weight=round((number(item.impact_score) or 2) / 20, 4), evidence_ids=[item.evidence_id], properties=props)
         add_relation(graph, event_id, active_opinion_id, "IMPACTS_OPINION", weight=round((number(item.impact_score) or 2) / 20, 4), evidence_ids=[item.evidence_id], properties=props)
         add_relation(graph, event_id, event_id, "DECAYS_AFTER", weight=1.0, evidence_ids=[item.evidence_id], properties={

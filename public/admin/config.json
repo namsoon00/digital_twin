@@ -13,7 +13,7 @@
     "공유 미리보기에서는 서버 설정과 계정 DB 쓰기를 차단합니다."
   ],
   "localData": {
-    "generatedAt": "2026-07-09T03:58:19.181937Z",
+    "generatedAt": "2026-07-09T04:32:34.018658Z",
     "sources": {
       "serviceDb": "data/service.db",
       "serviceDbExists": true,
@@ -107,6 +107,7 @@
       "modelReviewTimeoutSeconds": "180",
       "modelReviewIntervalSeconds": "300",
       "modelReviewBatchSize": "1",
+      "modelReviewTelegramMode": "actionableOnly",
       "kisMarketSignalsEnabled": "1",
       "kisMarketSignalMaxSymbols": "20",
       "kisMarketSignalCacheMinutes": "3",
@@ -146,6 +147,7 @@
       "newsCollectionLookbackMinutes": "180",
       "newsCollectionPerSymbolLimit": "8",
       "newsCollectionProviders": "google_rss_kr,google_rss_us,gdelt",
+      "newsCollectionMinRelevanceScore": "35",
       "newsCollectionIncludeWatchlist": "1",
       "newsCollectionIncludeHoldings": "1",
       "newsCollectionRateLimitSeconds": "0.25",
@@ -1124,6 +1126,12 @@
           "default": "google_rss_kr,google_rss_us,gdelt"
         },
         {
+          "key": "newsCollectionMinRelevanceScore",
+          "label": "뉴스 관련성 최소 점수",
+          "type": "number",
+          "default": "35"
+        },
+        {
           "key": "newsCollectionIncludeWatchlist",
           "label": "관심종목 뉴스 포함",
           "type": "toggle",
@@ -1757,6 +1765,16 @@
           "key": "modelReviewBatchSize",
           "label": "회차별 처리 건수",
           "default": "1"
+        },
+        {
+          "key": "modelReviewTelegramMode",
+          "label": "텔레그램 발송 범위",
+          "default": "actionableOnly",
+          "options": [
+            "actionableOnly",
+            "all",
+            "off"
+          ]
         }
       ],
       "promptVersion": "model-review-v2-ontology"
@@ -1813,5 +1831,5 @@
       ]
     }
   ],
-  "buildId": "158484962454"
+  "buildId": "bbfd881f5e11"
 }

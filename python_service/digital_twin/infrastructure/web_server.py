@@ -420,6 +420,7 @@ def settings_status_payload() -> Dict[str, object]:
         "newsCollectionLookbackMinutes",
         "newsCollectionPerSymbolLimit",
         "newsCollectionProviders",
+        "newsCollectionMinRelevanceScore",
         "newsCollectionIncludeWatchlist",
         "newsCollectionIncludeHoldings",
         "newsCollectionRateLimitSeconds",

@@ -1,8 +1,9 @@
 from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Optional
 
 from .market_data import clamp, number
-from .investment_research import research_evidence_from_facts
+from .investment_research import research_evidence_from_external_signals, research_evidence_from_facts
 from .message_types import DEFAULT_RELATION_RULE_THRESHOLDS
 from .parsing import parse_assignments
 from .portfolio import PortfolioSummary, Position, expects_kr_microstructure_signals
@@ -143,6 +144,9 @@ DECISION_STAGE_DEFINITIONS = {
     "BTC_REVIEW": DecisionStageDefinition("BTC_REVIEW", "cryptoSensitivity", "review", "비트코인 민감도 점검", "watch", 55.0, 70.0),
     "BTC_REDUCE": DecisionStageDefinition("BTC_REDUCE", "cryptoSensitivity", "action", "비트코인 민감도 축소 검토", "caution", 70.0, 85.0),
     "DISCLOSURE_REVIEW": DecisionStageDefinition("DISCLOSURE_REVIEW", "disclosure", "review", "공시 리스크 대응 검토", "caution", 55.0, 70.0),
+    "NEWS_RISK": DecisionStageDefinition("NEWS_RISK", "eventRisk", "review", "뉴스 리스크 대응 검토", "caution", 55.0, 70.0),
+    "NEWS_CONFIRMATION": DecisionStageDefinition("NEWS_CONFIRMATION", "eventConfirmation", "review", "뉴스·가격 동조 확인", "watch", 55.0, 70.0),
+    "SECTOR_NEWS": DecisionStageDefinition("SECTOR_NEWS", "sectorContext", "watch", "섹터·피어 뉴스 영향 점검", "watch", 35.0, 55.0),
     "FLOW_WATCH": DecisionStageDefinition("FLOW_WATCH", "flowTrend", "watch", "수급·추세 관찰", "watch", 35.0, 55.0),
     "FLOW_DEFENSE": DecisionStageDefinition("FLOW_DEFENSE", "flowTrend", "review", "수급·추세 방어 권장", "caution", 55.0, 70.0),
     "SUPPORT_RETEST": DecisionStageDefinition("SUPPORT_RETEST", "trendReview", "review", "60일선 지지 재확인", "hold", 55.0, 70.0),
@@ -388,6 +392,36 @@ DEFAULT_RELATION_RULES = [
         "OpenDART 신규 공시가 보유 종목에 연결될 때",
         "공시 제목만으로 결론 내리지 말고 공시 성격, 반복 여부, 가격 반응 확인점을 묻습니다.",
         ["dartDisclosure"],
+    ),
+    RelationRuleDefinition(
+        "news.direct_risk.price_confirmed.v1",
+        "직접 부정 뉴스 + 가격·수급 확인 -> 이벤트 리스크 점검",
+        "v1",
+        "NEWS_RISK_EVENT",
+        "event_risk",
+        "대상 종목 직접 뉴스가 부정 성격이고 가격 하락, 거래량 증가, 추세 훼손 중 하나 이상으로 확인될 때",
+        "뉴스 제목만으로 결론 내리지 말고 직접 관련성, 출처 신뢰도, 가격·수급 동조 여부, 반대 신호를 함께 검토합니다.",
+        ["researchEvidence", "directRiskNewsCount", "priceChangeRate", "volumeRatio", "ma20Distance"],
+    ),
+    RelationRuleDefinition(
+        "news.direct_support.price_confirmed.v1",
+        "직접 우호 뉴스 + 가격·수급 확인 -> 우호 이벤트 확인",
+        "v1",
+        "NEWS_SUPPORT_EVENT",
+        "event_confirmation",
+        "대상 종목 직접 뉴스가 우호 성격이고 가격 상승, 거래량 증가, 체결강도 개선 중 하나 이상으로 확인될 때",
+        "우호 뉴스도 매수 지시가 아니라 가격·수급 확인과 무효화 조건을 분리해 검토합니다.",
+        ["researchEvidence", "directSupportNewsCount", "priceChangeRate", "volumeRatio", "tradeStrength"],
+    ),
+    RelationRuleDefinition(
+        "news.sector_peer_context.v1",
+        "섹터·피어 뉴스 + 대상 종목 노출 -> 맥락 영향 점검",
+        "v1",
+        "SECTOR_NEWS_CONTEXT",
+        "sector_context",
+        "직접 뉴스는 아니지만 피어, 섹터, 시장 뉴스가 대상 종목의 팩터·섹터 노출과 연결될 때",
+        "직접 기사와 섹터 맥락을 구분하고, 대상 가격·수급이 동조하는 경우에만 판단 강도를 높입니다.",
+        ["researchEvidence", "sectorNewsCount", "peerNewsCount", "marketNewsCount"],
     ),
     RelationRuleDefinition(
         "data.quality.guard.v1",
@@ -812,6 +846,12 @@ def decision_action_group_for_label(label: object) -> str:
         return "entryRisk" if "보류" in text else "entry"
     if "공시" in text:
         return "disclosure"
+    if "뉴스" in text and any(term in text for term in ["리스크", "대응", "부정"]):
+        return "eventRisk"
+    if "뉴스" in text and any(term in text for term in ["동조", "확인", "우호"]):
+        return "eventConfirmation"
+    if any(term in text for term in ["섹터", "피어"]):
+        return "sectorContext"
     if any(term in text for term in ["보유", "관망", "관찰", "유지"]):
         return "holdWatch"
     return text
@@ -863,6 +903,12 @@ def resolve_decision_stage(rule_id: str, score: float, facts: Dict[str, object])
         return _stage_for_score("BTC_REVIEW", "BTC_REDUCE", value)
     if rule_id == "disclosure.material_event.v1":
         return decision_stage_by_key("DISCLOSURE_REVIEW")
+    if rule_id == "news.direct_risk.price_confirmed.v1":
+        return decision_stage_by_key("NEWS_RISK")
+    if rule_id == "news.direct_support.price_confirmed.v1":
+        return decision_stage_by_key("NEWS_CONFIRMATION")
+    if rule_id == "news.sector_peer_context.v1":
+        return decision_stage_by_key("SECTOR_NEWS")
     if rule_id == "holding.trend_flow.confirmation.v1":
         return decision_stage_by_key("FLOW_DEFENSE" if value >= 55 else "FLOW_WATCH")
     if rule_id == "entry.pullback.supported.v1":
@@ -1416,10 +1462,11 @@ def position_signal_facts(
         "secFiling": dict(sec_context or {}) if isinstance(sec_context, dict) else {},
         "expectsKrMicrostructureSignals": expects_kr_microstructure_signals(position.market, position.currency, symbol),
     }
-    facts["researchEvidence"] = [
-        item.to_dict()
-        for item in research_evidence_from_facts(symbol, facts)
-    ]
+    research_by_id = {}
+    for item in research_evidence_from_facts(symbol, facts) + research_evidence_from_external_signals(symbol, external_signals):
+        research_by_id[item.evidence_id] = item.to_dict()
+    facts["researchEvidence"] = list(research_by_id.values())
+    facts.update(research_evidence_facts(facts["researchEvidence"]))
     facts.update(trend)
     facts.update(flow)
     facts.update(_temporal_facts(position, previous_state, previous_decision))
@@ -1524,6 +1571,105 @@ def relation_thresholds_from_settings(settings: Optional[Dict[str, object]] = No
     return _thresholds(settings)
 
 
+def _evidence_payload(item: Dict[str, object]) -> Dict[str, object]:
+    payload = item.get("payload") if isinstance(item, dict) else {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _evidence_scope(item: Dict[str, object]) -> str:
+    payload = _evidence_payload(item)
+    return str(item.get("relationScope") or payload.get("relationScope") or "").strip().lower()
+
+
+def _evidence_relevance(item: Dict[str, object]) -> float:
+    payload = _evidence_payload(item)
+    return number(item.get("relevanceScore") or payload.get("relevanceScore"))
+
+
+def _evidence_source_reliability(item: Dict[str, object]) -> float:
+    payload = _evidence_payload(item)
+    return number(item.get("sourceReliability") or payload.get("sourceReliability") or item.get("confidence"))
+
+
+def _evidence_title(item: Dict[str, object]) -> str:
+    return " ".join(str(item.get("title") or item.get("summary") or "").split())[:180]
+
+
+def _evidence_minutes_since(item: Dict[str, object]) -> float:
+    raw = str(item.get("publishedAt") or item.get("observedAt") or "").strip()
+    if not raw:
+        return 0.0
+    for candidate in [raw, raw.replace("Z", "+00:00")]:
+        try:
+            parsed = datetime.fromisoformat(candidate)
+            parsed = parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+            return max(0.0, (datetime.now(timezone.utc) - parsed.astimezone(timezone.utc)).total_seconds() / 60)
+        except ValueError:
+            pass
+    for fmt in ["%Y%m%dT%H%M%SZ", "%Y%m%d%H%M%S", "%Y%m%d"]:
+        try:
+            parsed = datetime.strptime(raw, fmt).replace(tzinfo=timezone.utc)
+            return max(0.0, (datetime.now(timezone.utc) - parsed).total_seconds() / 60)
+        except ValueError:
+            pass
+    return 0.0
+
+
+def research_evidence_facts(evidence_items: Iterable[Dict[str, object]]) -> Dict[str, object]:
+    news_items = [
+        item
+        for item in evidence_items or []
+        if isinstance(item, dict) and str(item.get("kind") or "").lower() == "news"
+    ]
+    direct = [item for item in news_items if _evidence_scope(item) == "direct"]
+    peer = [item for item in news_items if _evidence_scope(item) == "peer"]
+    sector = [item for item in news_items if _evidence_scope(item) == "sector"]
+    market = [item for item in news_items if _evidence_scope(item) == "market"]
+    risk = [item for item in direct if str(item.get("polarity") or "").lower() in {"risk", "contradiction"}]
+    support = [item for item in direct if str(item.get("polarity") or "").lower() == "support"]
+    material = [
+        item
+        for item in news_items
+        if _evidence_scope(item) == "direct" or _evidence_relevance(item) >= 55
+    ]
+
+    def titles(rows: List[Dict[str, object]], limit: int = 4) -> List[str]:
+        result: List[str] = []
+        for row in sorted(rows, key=lambda item: (_evidence_relevance(item), number(item.get("impactScore"))), reverse=True):
+            title = _evidence_title(row)
+            if title and title not in result:
+                result.append(title)
+            if len(result) >= limit:
+                break
+        return result
+
+    relevance_values = [_evidence_relevance(item) for item in news_items if _evidence_relevance(item)]
+    reliability_values = [_evidence_source_reliability(item) for item in news_items if _evidence_source_reliability(item)]
+    risk_score = sum((number(item.get("impactScore")) or 2.0) * max(0.35, _evidence_relevance(item) / 100) for item in risk)
+    support_score = sum((number(item.get("impactScore")) or 2.0) * max(0.35, _evidence_relevance(item) / 100) for item in support)
+    latest_direct_age = min([_evidence_minutes_since(item) for item in direct if _evidence_minutes_since(item)], default=0.0)
+    return {
+        "researchEvidenceCount": len([item for item in evidence_items or [] if isinstance(item, dict)]),
+        "newsEvidenceCount": len(news_items),
+        "directNewsCount": len(direct),
+        "directRiskNewsCount": len(risk),
+        "directSupportNewsCount": len(support),
+        "peerNewsCount": len(peer),
+        "sectorNewsCount": len(sector),
+        "marketNewsCount": len(market),
+        "materialNewsCount": len(material),
+        "averageNewsRelevanceScore": round(sum(relevance_values) / len(relevance_values), 1) if relevance_values else 0.0,
+        "averageNewsSourceReliability": round(sum(reliability_values) / len(reliability_values), 2) if reliability_values else 0.0,
+        "latestDirectNewsAgeMinutes": round(latest_direct_age, 1),
+        "newsMomentumScore": round(support_score - risk_score, 1),
+        "newsConflictScore": round(min(support_score, risk_score), 1) if risk_score and support_score else 0.0,
+        "topNewsTitles": titles(material or news_items, 5),
+        "directRiskNewsTitles": titles(risk, 4),
+        "directSupportNewsTitles": titles(support, 4),
+        "sectorNewsTitles": titles(peer + sector + market, 4),
+    }
+
+
 def _rule(rule_id: str, definitions: Optional[List[RelationRuleDefinition]] = None) -> RelationRuleDefinition:
     for item in definitions or DEFAULT_RELATION_RULES:
         if item.rule_id == rule_id:
@@ -1590,10 +1736,13 @@ def decision_from_matches(facts: Dict[str, object], matches: List[OntologyRuleMa
         "profit.protection.volatility.v1": 36,
         "holding.profit_take.trend_weakness.v1": 35,
         "liquidity.exit_capacity.v1": 34,
+        "news.direct_risk.price_confirmed.v1": 32,
         "disclosure.material_event.v1": 30,
+        "news.direct_support.price_confirmed.v1": 28,
         "factor.crowding.v1": 19,
         "macro.regime.shift.v1": 27,
         "external.crypto.btc_sensitivity.v1": 25,
+        "news.sector_peer_context.v1": 24,
         "data.conflict.v1": 23,
         "holding.concentration.rebalance.v1": 20,
         "entry.add_buy.blocked.v1": 18,
@@ -1718,6 +1867,37 @@ def execution_plan_from_relation_context(
         _append_unique(risk_signals, "보유 종목의 추세 훼손 또는 이벤트 리스크")
         _append_unique(weaken_conditions, "20일선 회복과 부정 이벤트 해소 시 보류 강도 완화")
         _append_unique(next_checks, "회복 조건과 비중 한도 확인")
+    elif action_group == "disclosure":
+        primary_action = "EVENT_RISK_REVIEW"
+        primary_label = "공시 원문과 가격 반응 확인"
+        _append_unique(blocked_actions, "공시 성격 확인 전 비중 확대")
+        _append_unique(risk_signals, "신규 공시가 보유 판단에 연결됨")
+        _append_unique(strengthen_conditions, "공시 이후 거래량 증가와 20일선 이탈이 겹치면 방어 강도 상향")
+        _append_unique(weaken_conditions, "공시 영향이 제한적이고 가격·수급이 회복되면 경계 강도 완화")
+        _append_unique(next_checks, "공시 원문, 접수번호, 후속 정정 여부 확인")
+    elif action_group == "eventRisk":
+        primary_action = "EVENT_RISK_REVIEW"
+        primary_label = "뉴스 리스크와 가격·수급 동조 확인"
+        _append_unique(blocked_actions, "뉴스 영향 확인 전 추가매수")
+        _append_unique(risk_signals, "직접 부정 뉴스가 가격·수급 반응과 연결됨")
+        _append_unique(strengthen_conditions, "후속 보도와 거래량 증가, 20일선 이탈이 이어지면 방어 강도 상향")
+        _append_unique(weaken_conditions, "뉴스 반박 또는 가격·수급 회복이 확인되면 경계 강도 완화")
+        _append_unique(next_checks, "기사 원문, 출처 신뢰도, 후속 보도, 가격·거래량 동조 여부 확인")
+    elif action_group == "eventConfirmation":
+        primary_action = "CONFIRMATION_REVIEW"
+        primary_label = "우호 뉴스의 가격·수급 확인"
+        _append_unique(blocked_actions, "확인 없는 추격 매수")
+        _append_unique(support_signals, "직접 우호 뉴스와 가격·수급 확인 신호가 연결됨")
+        _append_unique(counter_signals, "우호 뉴스도 추세 재이탈 시 무효화될 수 있음")
+        _append_unique(strengthen_conditions, "거래량 증가와 20일선 회복이 유지되면 우호 강도 상향")
+        _append_unique(weaken_conditions, "가격 반응이 사라지거나 부정 뉴스가 추가되면 우호 강도 완화")
+        _append_unique(next_checks, "뉴스 원문, 거래량 지속성, 체결강도, 다음 지지선 유지 확인")
+    elif action_group == "sectorContext":
+        primary_action = "SECTOR_CONTEXT_REVIEW"
+        primary_label = "섹터·피어 뉴스의 전파 가능성 확인"
+        _append_unique(blocked_actions, "직접 뉴스처럼 과대 해석")
+        _append_unique(counter_signals, "직접 종목 뉴스가 아니라 섹터·피어 맥락")
+        _append_unique(next_checks, "피어/섹터 뉴스가 대상 종목 가격·수급에 전파되는지 확인")
     elif action_group == "cryptoSensitivity":
         primary_action = "EXPOSURE_REVIEW"
         primary_label = "비트코인 민감 비중 점검"
@@ -1757,9 +1937,9 @@ def execution_plan_from_relation_context(
         _append_unique(next_checks, "금리, 환율, BTC, 지수 반응을 다음 데이터에서 함께 확인")
 
     for item in _active_rule_labels(matches):
-        if any(token in item for token in ["손실", "리스크", "하락", "공시", "집중"]):
+        if any(token in item for token in ["손실", "리스크", "하락", "공시", "집중", "부정"]):
             _append_unique(risk_signals, item)
-        elif any(token in item for token in ["지지", "회복", "수급", "매수"]):
+        elif any(token in item for token in ["지지", "회복", "수급", "매수", "우호", "동조"]):
             _append_unique(support_signals, item)
 
     missing_impact = []
@@ -1818,6 +1998,16 @@ def execution_plan_from_relation_context(
             "liquidityRiskScore": round(float(facts.get("liquidityRiskScore") or 0), 1),
             "priceDeltaFromPreviousPct": round(float(facts.get("priceDeltaFromPreviousPct") or 0), 2),
             "profitLossRateDeltaPct": round(float(facts.get("profitLossRateDeltaPct") or 0), 2),
+            "researchEvidenceCount": facts.get("researchEvidenceCount"),
+            "directNewsCount": facts.get("directNewsCount"),
+            "directRiskNewsCount": facts.get("directRiskNewsCount"),
+            "directSupportNewsCount": facts.get("directSupportNewsCount"),
+            "peerNewsCount": facts.get("peerNewsCount"),
+            "sectorNewsCount": facts.get("sectorNewsCount"),
+            "marketNewsCount": facts.get("marketNewsCount"),
+            "averageNewsRelevanceScore": facts.get("averageNewsRelevanceScore"),
+            "averageNewsSourceReliability": facts.get("averageNewsSourceReliability"),
+            "topNewsTitles": list(facts.get("topNewsTitles") or [])[:5],
             "macroDgs10": facts.get("macroDgs10"),
             "macroDgs2": facts.get("macroDgs2"),
             "macroDff": facts.get("macroDff"),
@@ -1922,7 +2112,18 @@ def evaluate_position_relation_rules(
     disclosure = facts.get("dartDisclosure")
     has_disclosure = isinstance(disclosure, dict) and bool(disclosure)
     news = facts.get("newsHeadlines")
-    has_news = isinstance(news, dict) and bool(news.get("items") or news.get("count"))
+    direct_news_count = int(number(facts.get("directNewsCount")))
+    direct_risk_news_count = int(number(facts.get("directRiskNewsCount")))
+    direct_support_news_count = int(number(facts.get("directSupportNewsCount")))
+    peer_news_count = int(number(facts.get("peerNewsCount")))
+    sector_news_count = int(number(facts.get("sectorNewsCount")))
+    market_news_count = int(number(facts.get("marketNewsCount")))
+    material_news_count = int(number(facts.get("materialNewsCount")))
+    has_news = bool(
+        (isinstance(news, dict) and bool(news.get("items") or news.get("count")))
+        or material_news_count
+        or direct_news_count
+    )
     previous_ma20_distance = float(facts.get("previousMa20Distance") or 0)
     previous_ma60_distance = float(facts.get("previousMa60Distance") or 0)
     has_previous_state = bool(facts.get("hasPreviousState"))
@@ -1951,6 +2152,108 @@ def evaluate_position_relation_rules(
             definitions=relation_definitions,
         ))
 
+    news_relevance = float(facts.get("averageNewsRelevanceScore") or 0)
+    news_reliability = float(facts.get("averageNewsSourceReliability") or 0)
+    news_confidence = min(data_quality, 55 + min(40, news_reliability * 45)) if news_reliability else data_quality
+    risk_news_confirmation_count = sum(
+        1
+        for value in [
+            price_change <= -1.0,
+            ma20_distance < 0,
+            volume_ratio >= 1.2,
+            trend_score < -4,
+            flow_score <= -10 or bid_ask_imbalance <= -10,
+        ]
+        if value
+    )
+    if direct_risk_news_count and risk_news_confirmation_count >= 1:
+        score = (
+            54
+            + min(14, direct_risk_news_count * 4)
+            + min(12, news_relevance * 0.12)
+            + min(12, risk_news_confirmation_count * 4)
+            + (6 if price_change <= -2 else 0)
+            + (5 if ma20_distance <= -5 else 0)
+        )
+        matches.append(_match(
+            "news.direct_risk.price_confirmed.v1",
+            score,
+            news_confidence,
+            [
+                "직접 부정 뉴스 " + str(direct_risk_news_count) + "건",
+                "평균 관련성 " + ("%.1f" % news_relevance) + "점",
+                "최신 직접 뉴스 " + ("%.1f" % float(facts.get("latestDirectNewsAgeMinutes") or 0)) + "분 전" if facts.get("latestDirectNewsAgeMinutes") else "",
+                "가격 변화율 " + ("%.1f" % price_change) + "%",
+                "거래량 배율 " + ("%.1f" % volume_ratio) + "x" if volume_ratio else "",
+                moving_average_distance_text("20일선", ma20_distance),
+                "뉴스 제목 " + " / ".join(str(item) for item in list(facts.get("directRiskNewsTitles") or [])[:2]),
+            ],
+            missing_labels,
+            definitions=relation_definitions,
+        ))
+
+    support_news_confirmation_count = sum(
+        1
+        for value in [
+            price_change >= 1.0,
+            volume_ratio >= 1.2,
+            trade_strength >= 100,
+            ma20_distance >= -2,
+            flow_score >= 10 or bid_ask_imbalance >= 5,
+        ]
+        if value
+    )
+    if direct_support_news_count and support_news_confirmation_count >= 1:
+        score = (
+            50
+            + min(14, direct_support_news_count * 4)
+            + min(12, news_relevance * 0.12)
+            + min(12, support_news_confirmation_count * 4)
+            + (6 if price_change >= 2 else 0)
+        )
+        matches.append(_match(
+            "news.direct_support.price_confirmed.v1",
+            score,
+            news_confidence,
+            [
+                "직접 우호 뉴스 " + str(direct_support_news_count) + "건",
+                "평균 관련성 " + ("%.1f" % news_relevance) + "점",
+                "가격 변화율 " + ("%.1f" % price_change) + "%",
+                "거래량 배율 " + ("%.1f" % volume_ratio) + "x" if volume_ratio else "",
+                "체결강도 " + ("%.1f" % trade_strength) if trade_strength else "",
+                "뉴스 제목 " + " / ".join(str(item) for item in list(facts.get("directSupportNewsTitles") or [])[:2]),
+            ],
+            missing_labels,
+            definitions=relation_definitions,
+        ))
+
+    sector_context_news_count = peer_news_count + sector_news_count + market_news_count
+    sector_context_confirmed = sector_context_news_count > 0 and (
+        abs(price_change) >= 1.5 or volume_ratio >= 1.2 or abs(trend_score) >= 4
+    )
+    if sector_context_news_count:
+        score = (
+            36
+            + min(10, sector_context_news_count * 2.5)
+            + min(10, news_relevance * 0.1)
+            + (8 if sector_context_confirmed else 0)
+        )
+        matches.append(_match(
+            "news.sector_peer_context.v1",
+            score,
+            news_confidence,
+            [
+                "피어 뉴스 " + str(peer_news_count) + "건",
+                "섹터 뉴스 " + str(sector_news_count) + "건",
+                "시장 뉴스 " + str(market_news_count) + "건",
+                "가격 변화율 " + ("%.1f" % price_change) + "%",
+                "뉴스 제목 " + " / ".join(str(item) for item in list(facts.get("sectorNewsTitles") or [])[:2]),
+            ],
+            missing_labels,
+            reference_only=not sector_context_confirmed,
+            definitions=relation_definitions,
+        ))
+
     entry_ma20_below = float(thresholds.get("entryPullbackMa20BelowPct", -2.0) or -2.0)
     entry_ma20_deep = float(thresholds.get("entryPullbackMa20DeepPct", -8.0) or -8.0)
     entry_ma60_support = float(thresholds.get("entryMa60SupportPct", -1.0) or -1.0)
@@ -1976,13 +2279,14 @@ def evaluate_position_relation_rules(
     facts["entryPullbackZone"] = pullback_zone
     facts["entrySupportCount"] = entry_support_count
     facts["entryAllocationRoom"] = allocation_room
-    facts["entryExternalRiskBlocked"] = bool(has_disclosure)
+    facts["entryExternalRiskBlocked"] = bool(has_disclosure or direct_risk_news_count)
     if (
         pullback_zone
         and ma60_supports_entry
         and allocation_room
         and entry_support_count >= 2
         and not has_disclosure
+        and not direct_risk_news_count
         and (source == "watchlist" or pnl > -8)
     ):
         score = (

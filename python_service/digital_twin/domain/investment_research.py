@@ -76,6 +76,55 @@ RISK_KEYWORDS = (
     "리스크",
 )
 
+KNOWN_COMPANY_ALIASES = {
+    "005930": ["삼성전자", "Samsung Electronics", "Samsung"],
+    "000660": ["SK하이닉스", "SK Hynix", "Hynix"],
+    "035420": ["NAVER", "네이버"],
+    "005380": ["현대차", "현대자동차", "Hyundai Motor"],
+    "000020": ["동화약품"],
+    "AAPL": ["Apple", "Apple Inc."],
+    "NVDA": ["NVIDIA", "Nvidia"],
+    "TSLA": ["Tesla"],
+    "PLTR": ["Palantir"],
+    "MSTR": ["MicroStrategy", "Strategy"],
+    "STRC": ["Strategy"],
+}
+
+PEER_ALIASES = {
+    "005930": ["SK하이닉스", "SK Hynix", "Micron", "TSMC"],
+    "000660": ["삼성전자", "Samsung Electronics", "Micron", "TSMC"],
+    "AAPL": ["Samsung Electronics", "Microsoft", "Google", "Alphabet"],
+    "NVDA": ["AMD", "Broadcom", "Intel", "TSMC"],
+    "TSLA": ["BYD", "Rivian", "Lucid", "Hyundai Motor"],
+}
+
+SECTOR_TOPIC_KEYWORDS = {
+    "semiconductor": ["반도체", "메모리", "memory", "HBM", "DRAM", "D램", "NAND", "AI chip", "chip", "foundry"],
+    "platform": ["플랫폼", "검색", "커머스", "cloud", "AI", "광고", "핀테크"],
+    "auto": ["자동차", "전기차", "EV", "battery", "배터리", "mobility"],
+    "crypto": ["bitcoin", "비트코인", "crypto", "digital asset"],
+    "ai": ["AI", "artificial intelligence", "GPU", "accelerator"],
+}
+
+MARKET_TOPIC_KEYWORDS = [
+    "코스피",
+    "코스닥",
+    "KOSPI",
+    "KOSDAQ",
+    "NASDAQ",
+    "S&P",
+    "Dow",
+    "환율",
+    "금리",
+    "yield",
+    "FOMC",
+    "inflation",
+    "시장",
+]
+
+LOW_RELIABILITY_SOURCE_TERMS = ["blog", "블로그", "cafe", "reddit", "rumor"]
+HIGH_RELIABILITY_SOURCE_TERMS = ["dart", "sec", "edgar", "reuters", "bloomberg", "연합", "yonhap", "cnbc", "wsj", "marketwatch"]
+
 
 @dataclass
 class ResearchEvidence:
@@ -107,6 +156,9 @@ class ResearchEvidence:
             "polarity": self.polarity,
             "impactScore": round(number(self.impact_score), 1),
             "confidence": round(number(self.confidence), 2),
+            "relevanceScore": round(number((self.raw_payload or {}).get("relevanceScore")), 1),
+            "relationScope": str((self.raw_payload or {}).get("relationScope") or ""),
+            "sourceReliability": round(number((self.raw_payload or {}).get("sourceReliability")), 2),
             "payload": dict(self.raw_payload or {}),
         }
 
@@ -140,6 +192,123 @@ class NewsCollectionTarget:
         if len(terms) == 1:
             return terms[0]
         return "(" + " OR ".join('"' + term + '"' for term in terms[:2]) + ")"
+
+
+def _lower_text(value: object) -> str:
+    return str(value or "").casefold()
+
+
+def _unique_texts(values: Iterable[object]) -> List[str]:
+    result: List[str] = []
+    seen = set()
+    for value in values or []:
+        text = str(value or "").strip()
+        key = text.casefold()
+        if text and key not in seen:
+            seen.add(key)
+            result.append(text)
+    return result
+
+
+def target_aliases(target: NewsCollectionTarget) -> List[str]:
+    symbol = target.normalized_symbol()
+    aliases = [target.name, symbol]
+    aliases.extend(KNOWN_COMPANY_ALIASES.get(symbol, []))
+    return _unique_texts(aliases)
+
+
+def peer_aliases(target: NewsCollectionTarget) -> List[str]:
+    return _unique_texts(PEER_ALIASES.get(target.normalized_symbol(), []))
+
+
+def sector_topic_keywords(target: NewsCollectionTarget) -> List[str]:
+    text = _lower_text(" ".join([target.sector, target.market, target.currency, target.symbol, target.name]))
+    topics: List[str] = []
+    if any(token in text for token in ["반도체", "semiconductor", "005930", "000660", "nvda"]):
+        topics.extend(SECTOR_TOPIC_KEYWORDS["semiconductor"])
+    if any(token in text for token in ["플랫폼", "platform", "naver", "aapl", "pltr"]):
+        topics.extend(SECTOR_TOPIC_KEYWORDS["platform"])
+    if any(token in text for token in ["자동차", "auto", "005380", "tesla", "tsla"]):
+        topics.extend(SECTOR_TOPIC_KEYWORDS["auto"])
+    if any(token in text for token in ["mstr", "strc", "bitcoin", "crypto", "디지털자산"]):
+        topics.extend(SECTOR_TOPIC_KEYWORDS["crypto"])
+    if any(token in text for token in ["ai", "nvda", "aapl", "pltr"]):
+        topics.extend(SECTOR_TOPIC_KEYWORDS["ai"])
+    return _unique_texts(topics)
+
+
+def matched_terms(text: str, terms: Iterable[str]) -> List[str]:
+    lowered = _lower_text(text)
+    return [term for term in _unique_texts(terms) if _lower_text(term) and _lower_text(term) in lowered]
+
+
+def source_reliability_score(source: object, provider: object = "") -> float:
+    text = _lower_text(str(source or "") + " " + str(provider or ""))
+    if any(token in text for token in LOW_RELIABILITY_SOURCE_TERMS):
+        return 0.45
+    if any(token in text for token in HIGH_RELIABILITY_SOURCE_TERMS):
+        return 0.78
+    if any(token in text for token in ["google news", "gdelt", "yahoo finance", "investing", "매일경제", "한국경제", "이데일리", "머니투데이", "조선비즈", "서울경제"]):
+        return 0.68
+    return 0.58
+
+
+def classify_news_relevance(
+    target: NewsCollectionTarget,
+    title: object,
+    summary: object = "",
+    source: object = "",
+    provider: object = "",
+) -> Dict[str, object]:
+    title_text = str(title or "")
+    summary_text = str(summary or "")
+    combined = title_text + " " + summary_text
+    aliases = target_aliases(target)
+    peers = peer_aliases(target)
+    topics = sector_topic_keywords(target)
+    direct_title = matched_terms(title_text, aliases)
+    direct_body = matched_terms(summary_text, aliases)
+    peer_hits = matched_terms(combined, peers)
+    topic_hits = matched_terms(combined, topics)
+    market_hits = matched_terms(combined, MARKET_TOPIC_KEYWORDS)
+    reliability = source_reliability_score(source, provider)
+
+    score = 0.0
+    scope = "noise"
+    if direct_title:
+        score = 95.0
+        scope = "direct"
+    elif direct_body:
+        score = 82.0
+        scope = "direct"
+    elif peer_hits and topic_hits:
+        score = 64.0
+        scope = "peer"
+    elif peer_hits:
+        score = 58.0
+        scope = "peer"
+    elif topic_hits:
+        score = 52.0
+        scope = "sector"
+    elif market_hits:
+        score = 40.0
+        scope = "market"
+    else:
+        score = 24.0
+
+    if scope != "noise":
+        score += max(-8.0, min(8.0, (reliability - 0.6) * 25.0))
+    score = clamp(score, 0.0, 100.0)
+    return {
+        "relevanceScore": round(score, 1),
+        "relationScope": scope,
+        "matchedAliases": _unique_texts([*direct_title, *direct_body]),
+        "mentionedPeers": peer_hits,
+        "topicTags": topic_hits[:8],
+        "marketTopics": market_hits[:8],
+        "sourceReliability": round(reliability, 2),
+        "directMention": bool(direct_title or direct_body),
+    }
 
 
 @dataclass
@@ -211,6 +380,19 @@ def research_evidence_from_payload(payload: Dict[str, object], fallback_symbol: 
     evidence_id = str(source_payload.get("evidenceId") or source_payload.get("evidence_id") or "").strip()
     if not evidence_id:
         evidence_id = "research:" + symbol + ":" + kind + ":" + stable_evidence_token(source, title, url)
+    raw_payload = dict(source_payload.get("payload") or source_payload.get("rawPayload") or source_payload.get("raw_payload") or {})
+    for key in [
+        "relevanceScore",
+        "relationScope",
+        "matchedAliases",
+        "mentionedPeers",
+        "topicTags",
+        "marketTopics",
+        "sourceReliability",
+        "directMention",
+    ]:
+        if key in source_payload and key not in raw_payload:
+            raw_payload[key] = source_payload.get(key)
     return ResearchEvidence(
         evidence_id,
         symbol,
@@ -224,7 +406,7 @@ def research_evidence_from_payload(payload: Dict[str, object], fallback_symbol: 
         number(source_payload.get("impactScore") or source_payload.get("impact_score")),
         number(source_payload.get("confidence")) or 0.55,
         str(source_payload.get("publishedAt") or source_payload.get("published_at") or source_payload.get("seenDate") or ""),
-        dict(source_payload.get("payload") or source_payload.get("rawPayload") or source_payload.get("raw_payload") or {}),
+        raw_payload,
     )
 
 
@@ -248,6 +430,18 @@ def source_urls(items: Iterable[ResearchEvidence]) -> List[str]:
             seen.add(url)
             urls.append(url)
     return urls[:8]
+
+
+def news_target_from_facts(symbol: str, facts: Dict[str, object]) -> NewsCollectionTarget:
+    facts = facts if isinstance(facts, dict) else {}
+    normalized_symbol = str(symbol or facts.get("symbol") or "").upper().strip()
+    return NewsCollectionTarget(
+        normalized_symbol,
+        str(facts.get("name") or normalized_symbol).strip(),
+        str(facts.get("market") or "").strip(),
+        str(facts.get("currency") or "").strip(),
+        str(facts.get("sector") or "").strip(),
+    )
 
 
 def compact_amount(value: object, currency: str = "USD") -> str:
@@ -341,6 +535,7 @@ def sec_research_evidence(symbol: str, sec: Dict[str, object]) -> List[ResearchE
 def research_evidence_from_facts(symbol: str, facts: Dict[str, object]) -> List[ResearchEvidence]:
     facts = facts or {}
     normalized_symbol = str(symbol or facts.get("symbol") or "").upper()
+    target = news_target_from_facts(normalized_symbol, facts)
     evidence: List[ResearchEvidence] = []
     disclosure = facts.get("dartDisclosure") if isinstance(facts.get("dartDisclosure"), dict) else {}
     if disclosure:
@@ -370,18 +565,36 @@ def research_evidence_from_facts(symbol: str, facts: Dict[str, object]) -> List[
         polarity, impact = keyword_polarity(title)
         url = str(item.get("url") or "").strip()
         source = str(item.get("domain") or item.get("source") or news.get("provider") or "GDELT").strip()
+        summary = compact_text(item.get("summary") or title)
+        raw_payload = dict(item.get("payload") or item.get("rawPayload") or {})
+        if not raw_payload.get("relationScope"):
+            raw_payload.update(classify_news_relevance(
+                target,
+                title,
+                summary,
+                source,
+                item.get("provider") or news.get("provider") or "",
+            ))
+        if raw_payload.get("relationScope") == "noise":
+            continue
+        confidence = min(0.9, max(
+            0.35,
+            number(raw_payload.get("sourceReliability")) * 0.45 + number(raw_payload.get("relevanceScore")) / 100 * 0.45,
+        ))
         evidence.append(ResearchEvidence(
             "research:" + normalized_symbol + ":news:" + stable_evidence_token(source, title, url, item.get("seenDate") or item.get("seendate")),
             normalized_symbol,
             "news",
             source,
             title,
-            compact_text(item.get("summary") or title),
+            summary,
             url,
             str(item.get("seenDate") or item.get("seendate") or ""),
             polarity,
-            impact,
-            0.62,
+            round(impact * max(0.6, number(raw_payload.get("relevanceScore")) / 80), 1),
+            confidence,
+            str(item.get("publishedAt") or item.get("seenDate") or item.get("seendate") or ""),
+            raw_payload,
         ))
     sec = facts.get("secFiling") if isinstance(facts.get("secFiling"), dict) else {}
     evidence.extend(sec_research_evidence(normalized_symbol, sec))
@@ -449,8 +662,23 @@ def active_rule_labels(relation_context: Dict[str, object]) -> List[str]:
 
 
 def support_risk_scores(evidence: List[ResearchEvidence], relation_context: Dict[str, object]) -> Tuple[float, float]:
-    support = sum(number(item.impact_score) for item in evidence if item.polarity == "support")
-    risk = sum(number(item.impact_score) for item in evidence if item.polarity in {"risk", "contradiction"})
+    def evidence_weight(item: ResearchEvidence) -> float:
+        payload = item.raw_payload if isinstance(item.raw_payload, dict) else {}
+        scope = str(payload.get("relationScope") or ("direct" if item.kind in {"disclosure", "filing", "market-move"} else "context")).lower()
+        scope_weight = {
+            "direct": 1.0,
+            "peer": 0.62,
+            "sector": 0.48,
+            "market": 0.28,
+            "context": 0.5,
+            "noise": 0.0,
+        }.get(scope, 0.5)
+        relevance = clamp(number(payload.get("relevanceScore")) / 100, 0.25, 1.0) if payload.get("relevanceScore") not in (None, "") else 0.75
+        reliability = clamp(number(payload.get("sourceReliability")) or number(item.confidence) or 0.55, 0.35, 0.95)
+        return round(scope_weight * (0.5 + relevance * 0.5) * (0.7 + reliability * 0.3), 4)
+
+    support = sum(number(item.impact_score) * evidence_weight(item) for item in evidence if item.polarity == "support")
+    risk = sum(number(item.impact_score) * evidence_weight(item) for item in evidence if item.polarity in {"risk", "contradiction"})
     for item in relation_context.get("activeRules") or []:
         if not isinstance(item, dict):
             continue

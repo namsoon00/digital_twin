@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from typing import Callable, Dict, Iterable, List, Tuple
 
-from ..domain.investment_research import NewsCollectionTarget, ResearchEvidence, compact_text, keyword_polarity, stable_evidence_token
+from ..domain.investment_research import NewsCollectionTarget, ResearchEvidence, classify_news_relevance, compact_text, keyword_polarity, stable_evidence_token
 from ..domain.market_data import number
 from ..domain.portfolio import utc_now_iso
 
@@ -105,6 +105,9 @@ class NewsSourceGateway:
     def lookback_minutes(self) -> int:
         return int_setting(self.settings, "newsCollectionLookbackMinutes", 180, 5, 1440 * 7)
 
+    def min_relevance_score(self) -> float:
+        return float(int_setting(self.settings, "newsCollectionMinRelevanceScore", 35, 0, 100))
+
     def collect_for_target(self, target: NewsCollectionTarget) -> Tuple[List[ResearchEvidence], List[Dict[str, object]]]:
         items: List[ResearchEvidence] = []
         statuses: List[Dict[str, object]] = []
@@ -162,7 +165,11 @@ class NewsSourceGateway:
             source = item.find("source")
             source_text = strip_html(source.text if source is not None else "") or source_name
             summary = strip_html(item.findtext("description"))
+            relevance = classify_news_relevance(target, title, summary, source_text, source_name)
+            if number(relevance.get("relevanceScore")) < self.min_relevance_score() or relevance.get("relationScope") == "noise":
+                continue
             polarity, impact = keyword_polarity(title + " " + summary)
+            confidence = min(0.9, max(0.35, number(relevance.get("sourceReliability")) * 0.45 + number(relevance.get("relevanceScore")) / 100 * 0.45))
             evidence.append(ResearchEvidence(
                 "research:" + symbol + ":news:" + stable_evidence_token(source_name, title, link),
                 symbol,
@@ -173,14 +180,15 @@ class NewsSourceGateway:
                 link,
                 utc_now_iso(),
                 polarity,
-                impact,
-                0.6,
+                round(impact * max(0.6, number(relevance.get("relevanceScore")) / 80), 1),
+                confidence,
                 iso_or_empty(published),
                 {
                     "provider": source_name,
                     "locale": locale,
                     "query": query,
                     "feedUrl": url,
+                    **relevance,
                 },
             ))
             if len(evidence) >= self.per_symbol_limit():
@@ -211,7 +219,11 @@ class NewsSourceGateway:
             if not title or not link or not within_lookback(published, self.lookback_minutes()):
                 continue
             source = str(article.get("domain") or "GDELT News").strip()
+            relevance = classify_news_relevance(target, title, title, source, "GDELT")
+            if number(relevance.get("relevanceScore")) < self.min_relevance_score() or relevance.get("relationScope") == "noise":
+                continue
             polarity, impact = keyword_polarity(title)
+            confidence = min(0.9, max(0.35, number(relevance.get("sourceReliability")) * 0.45 + number(relevance.get("relevanceScore")) / 100 * 0.45))
             evidence.append(ResearchEvidence(
                 "research:" + symbol + ":news:" + stable_evidence_token("GDELT", title, link),
                 symbol,
@@ -222,14 +234,15 @@ class NewsSourceGateway:
                 link,
                 utc_now_iso(),
                 polarity,
-                impact,
-                0.62,
+                round(impact * max(0.6, number(relevance.get("relevanceScore")) / 80), 1),
+                confidence,
                 iso_or_empty(published),
                 {
                     "provider": "GDELT",
                     "sourceCountry": str(article.get("sourceCountry") or "").strip(),
                     "language": str(article.get("language") or "").strip(),
                     "query": query,
+                    **relevance,
                 },
             ))
             if len(evidence) >= self.per_symbol_limit():

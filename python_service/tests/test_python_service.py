@@ -27,7 +27,7 @@ from digital_twin.cli import preserve_existing_secrets
 from digital_twin.cli import build_parser
 from digital_twin.domain.accounts import AccountConfig
 from digital_twin.domain.external_signal_quality import attach_external_signal_quality
-from digital_twin.domain.investment_research import build_active_investment_opinion, research_evidence_from_facts
+from digital_twin.domain.investment_research import NewsCollectionTarget, build_active_investment_opinion, research_evidence_from_facts
 from digital_twin.domain.market_data import normalize_position, technical_indicators_from_candles
 from digital_twin.domain.message_types import DEFAULT_ALERT_RULES, DEFAULT_CADENCE, MESSAGE_TYPE_EMOJIS, MESSAGE_TYPE_LABELS, public_message_catalog
 from digital_twin.domain.ontology import OntologyEntity, OntologyRelation, abox_properties, apply_relation_driven_opinions, build_portfolio_ontology, entity_id
@@ -1344,6 +1344,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("PriceBar", payload["tbox"]["classes"])
         self.assertIn("KeyLevel", payload["tbox"]["classes"])
         self.assertIn("ResearchEvidence", payload["tbox"]["classes"])
+        self.assertIn("NewsTopic", payload["tbox"]["classes"])
+        self.assertIn("PeerCompanyMention", payload["tbox"]["classes"])
         self.assertIn("Factor", payload["tbox"]["classes"])
         self.assertIn("LiquidityProfile", payload["tbox"]["classes"])
         self.assertIn("RelationStateSnapshot", payload["tbox"]["classes"])
@@ -1373,6 +1375,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("HAS_RATE_SENSITIVITY", payload["tbox"]["relationTypes"])
         self.assertIn("LIMITED_BY_LIQUIDITY", payload["tbox"]["relationTypes"])
         self.assertIn("MENTIONS_INSTRUMENT", payload["tbox"]["relationTypes"])
+        self.assertIn("MENTIONS_PEER", payload["tbox"]["relationTypes"])
+        self.assertIn("HAS_TOPIC", payload["tbox"]["relationTypes"])
         self.assertIn("MATERIAL_TO", payload["tbox"]["relationTypes"])
         self.assertGreater(payload["abox"]["entityCount"], 0)
         self.assertTrue(any(item.relation_type == "HOLDS" for item in graph.relations))
@@ -1479,6 +1483,88 @@ class PythonServiceTests(unittest.TestCase):
         self.assertGreater(sample.overall_score, 0)
         self.assertEqual(sample.sample_id, latest_samples[0]["sampleId"])
         self.assertIn("strategy-thesis", latest_samples[0]["payload"]["boundedContexts"])
+
+    def test_portfolio_ontology_adds_news_scope_topics_and_peers(self):
+        position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "marketValue": 1000000,
+            "currentPrice": 90000,
+            "ma20": 93000,
+            "ma60": 88000,
+            "ma20Distance": -3.2,
+            "ma60Distance": 2.3,
+            "changeRate": -1.8,
+            "volumeRatio": 1.4,
+            "sector": "반도체",
+        })
+        graph = build_portfolio_ontology(
+            [position],
+            portfolio_summary([position], fx_rates={"KRW": 1}),
+            external_signals={
+                "researchEvidence": {
+                    "005930": [
+                        {
+                            "evidenceId": "research:005930:news:direct-risk",
+                            "symbol": "005930",
+                            "kind": "news",
+                            "source": "Reuters",
+                            "title": "Samsung Electronics faces weak memory demand risk",
+                            "summary": "Memory demand pressure",
+                            "url": "https://example.test/direct",
+                            "polarity": "risk",
+                            "impactScore": 10,
+                            "confidence": 0.82,
+                            "payload": {
+                                "relationScope": "direct",
+                                "relevanceScore": 94,
+                                "sourceReliability": 0.78,
+                                "matchedAliases": ["Samsung Electronics"],
+                                "topicTags": ["memory", "반도체"],
+                                "directMention": True,
+                            },
+                        },
+                        {
+                            "evidenceId": "research:005930:news:peer-context",
+                            "symbol": "005930",
+                            "kind": "news",
+                            "source": "GDELT",
+                            "title": "SK Hynix HBM demand growth lifts memory peers",
+                            "summary": "Peer memory context",
+                            "url": "https://example.test/peer",
+                            "polarity": "support",
+                            "impactScore": 6,
+                            "confidence": 0.68,
+                            "payload": {
+                                "relationScope": "peer",
+                                "relevanceScore": 64,
+                                "sourceReliability": 0.68,
+                                "mentionedPeers": ["SK Hynix"],
+                                "topicTags": ["HBM", "memory"],
+                            },
+                        },
+                    ]
+                }
+            },
+            portfolio_id="main",
+        )
+
+        relation_types = {item.relation_type for item in graph.relations}
+        self.assertIn("HAS_TOPIC", relation_types)
+        self.assertIn("MENTIONS_PEER", relation_types)
+        self.assertIn("AFFECTS", relation_types)
+        self.assertTrue(any(item.kind == "news-topic" and item.label == "memory" for item in graph.entities))
+        self.assertTrue(any(item.kind == "peer-company" and item.label == "SK Hynix" for item in graph.entities))
+        scoped_relations = [
+            item
+            for item in graph.relations
+            if item.relation_type == "MENTIONS_INSTRUMENT"
+            and (item.properties or {}).get("relationScope") == "direct"
+        ]
+        self.assertTrue(scoped_relations)
+        self.assertEqual(94, scoped_relations[0].properties["relevanceScore"])
 
     def test_new_ontology_relation_can_change_ai_opinion_pressure(self):
         position = normalize_position({
@@ -2241,6 +2327,61 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("순이익 $24.8B", financial["summary"])
         self.assertTrue(any("sec.gov" in item["url"] for item in evidence if item["kind"] == "filing"))
         self.assertEqual(evidence, context["promptContext"]["facts"]["researchEvidence"])
+
+    def test_ontology_relation_rules_use_stored_direct_news_context(self):
+        position = Position(
+            symbol="005930",
+            name="삼성전자",
+            market="KR",
+            currency="KRW",
+            market_value=1000000,
+            profit_loss_rate=0.0,
+            current_price=90000,
+            ma20=93000,
+            ma60=88000,
+            ma20_distance=-3.2,
+            ma60_distance=2.3,
+            change_rate=-1.8,
+            volume_ratio=1.4,
+            source="holding",
+            sector="반도체",
+        )
+        context = evaluate_position_relation_rules(
+            position,
+            portfolio_summary([position], fx_rates={"KRW": 1}),
+            external_signals={
+                "researchEvidence": {
+                    "005930": [{
+                        "evidenceId": "research:005930:news:risk-direct",
+                        "symbol": "005930",
+                        "kind": "news",
+                        "source": "Reuters",
+                        "title": "Samsung Electronics faces weak memory demand risk",
+                        "summary": "Analysts warn memory demand may slow.",
+                        "url": "https://example.test/samsung-risk",
+                        "publishedAt": "2026-07-09T00:00:00Z",
+                        "polarity": "risk",
+                        "impactScore": 10,
+                        "confidence": 0.82,
+                        "payload": {
+                            "relationScope": "direct",
+                            "relevanceScore": 94,
+                            "sourceReliability": 0.78,
+                            "matchedAliases": ["Samsung Electronics"],
+                            "topicTags": ["memory"],
+                            "directMention": True,
+                        },
+                    }]
+                }
+            },
+        )
+
+        active_ids = [item.get("rule_id") or item.get("ruleId") for item in context["activeRules"]]
+        self.assertIn("news.direct_risk.price_confirmed.v1", active_ids)
+        self.assertEqual(1, context["facts"]["directRiskNewsCount"])
+        self.assertEqual("eventRisk", context["decision"]["actionGroup"])
+        self.assertEqual("EVENT_RISK_REVIEW", context["executionPlan"]["primaryAction"])
+        self.assertEqual(context["facts"]["researchEvidence"], context["promptContext"]["facts"]["researchEvidence"])
 
     def test_decisions_include_active_opinion_and_research_prompt_context(self):
         position = Position(
@@ -4509,10 +4650,50 @@ class PythonServiceTests(unittest.TestCase):
         }
 
         first = research_evidence_from_facts("005930", {"newsHeadlines": {"items": [item]}})
-        second = research_evidence_from_facts("005930", {"newsHeadlines": {"items": [{"title": "다른 뉴스", "url": "https://example.test/other"}, item]}})
+        second = research_evidence_from_facts("005930", {"newsHeadlines": {"items": [{"title": "삼성전자 공급망 점검", "url": "https://example.test/other"}, item]}})
 
         self.assertEqual(first[0].evidence_id, second[1].evidence_id)
         self.assertNotIn(":news:0", first[0].evidence_id)
+
+    def test_news_source_gateway_scores_and_filters_unrelated_news(self):
+        published = datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S GMT")
+
+        def fake_text(_url, headers=None):
+            return (
+                "<rss><channel>"
+                "<item>"
+                "<title>삼성전자 반도체 실적 기대</title>"
+                "<link>https://news.example.kr/samsung</link>"
+                "<pubDate>" + published + "</pubDate>"
+                "<description>메모리 수요 회복과 실적 개선 전망</description>"
+                "<source>연합뉴스</source>"
+                "</item>"
+                "<item>"
+                "<title>Apple launches a new consumer device</title>"
+                "<link>https://news.example.us/apple-device</link>"
+                "<pubDate>" + published + "</pubDate>"
+                "<description>Consumer gadget release</description>"
+                "<source>Global Tech</source>"
+                "</item>"
+                "</channel></rss>"
+            )
+
+        gateway = NewsSourceGateway({
+            "newsCollectionProviders": "google_rss_kr",
+            "newsCollectionPerSymbolLimit": "5",
+            "newsCollectionLookbackMinutes": "1440",
+            "newsCollectionMinRelevanceScore": "35",
+        }, fetch_text=fake_text)
+
+        evidence = gateway.fetch_google_news_rss(
+            NewsCollectionTarget("005930", "삼성전자", "KOSPI", "KRW", "반도체"),
+            locale="KR",
+        )
+
+        self.assertEqual(1, len(evidence))
+        self.assertEqual("direct", evidence[0].raw_payload["relationScope"])
+        self.assertGreaterEqual(evidence[0].raw_payload["relevanceScore"], 80)
+        self.assertIn("삼성전자", evidence[0].raw_payload["matchedAliases"])
 
     def test_news_collection_runner_stores_domestic_and_overseas_news(self):
         path = Path(self.temp.name) / "service.db"

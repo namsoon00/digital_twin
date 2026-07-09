@@ -190,6 +190,9 @@ function checkFrontendAdminRender() {
   assertOk(styles.indexOf("Professional form control replacement system") >= 0, "전문 form control 교체 레이어가 없습니다.");
   assertOk(/select\s*\{[\s\S]*appearance: none;[\s\S]*background-image:[\s\S]*data:image\/svg\+xml/.test(styles), "select 박스가 커스텀 chevron 스타일을 쓰지 않습니다.");
   assertOk(/input:not\(\[type="checkbox"\]\):not\(\[type="radio"\]\):focus,[\s\S]*select:focus,[\s\S]*textarea:focus\s*\{[\s\S]*box-shadow: 0 0 0 3px var\(--blue-soft\)/.test(styles), "입력 요소 focus ring이 금융 콘솔 스타일로 통일되지 않았습니다.");
+  assertOk(/input\[type="checkbox"\],[\s\S]*input\[type="radio"\]\s*\{[\s\S]*appearance: none;/.test(styles), "checkbox/radio가 native accent 컨트롤로 남아 있습니다.");
+  assertOk(/input\[type="checkbox"\]:checked::before\s*\{[\s\S]*rotate\(-45deg\) scale\(1\);/.test(styles), "커스텀 checkbox 체크 마크가 없습니다.");
+  assertOk(/:where\(\.notification-rule-toggle, \.admin-check-field, \.notification-rule-market-option\):has\(input:checked\)/.test(styles), "선택된 checkbox label surface 스타일이 없습니다.");
   assertOk(styles.indexOf(".notification-ops-cell") >= 0 && styles.indexOf(".ontology-control-step") >= 0 && styles.indexOf(".formula-ledger-row") >= 0, "도메인별 카드형 UI가 전면 카드 시스템에 포함되지 않았습니다.");
   assertOk(styles.indexOf(".settings-status-band") >= 0 && styles.indexOf(".deskbar-cell") >= 0 && styles.indexOf(".page-command-metric") >= 0, "상태/네비게이션 카드형 UI가 전면 카드 시스템에 포함되지 않았습니다.");
   assertOk(styles.indexOf("font-variant-numeric: tabular-nums") >= 0, "금융 숫자 표시 규칙이 없습니다.");

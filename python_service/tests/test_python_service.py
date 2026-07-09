@@ -958,6 +958,34 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual([ACCOUNT_SAVED, ACCOUNT_SAVED], [event.name for event in event_bus.published])
         self.assertFalse(event_bus.published[-1].payload["account"]["clientSecret"] == "secret1")
 
+    def test_account_message_delivery_level_is_persisted_and_preserved(self):
+        registry = AccountRegistry(Path(self.temp.name) / "delivery-level.db", legacy_path=Path(self.temp.name) / "missing-accounts.json")
+        service = AccountApplicationService(registry, registry.settings)
+
+        saved = service.save_payload({
+            "account": {
+                "id": "main",
+                "label": "메인",
+                "provider": "toss",
+                "messageDeliveryLevel": "advanced",
+            }
+        })
+        masked = service.list_masked()[0]
+
+        self.assertEqual("advanced", saved.message_delivery_level)
+        self.assertEqual("advanced", masked["messageDeliveryLevel"])
+        self.assertEqual("고수", masked["messageDeliveryLevelLabel"])
+
+        preserved = service.save_payload({
+            "account": {
+                "id": "main",
+                "label": "메인 수정",
+                "provider": "toss",
+            }
+        })
+
+        self.assertEqual("advanced", preserved.message_delivery_level)
+
     def test_account_config_allows_empty_watchlist_override(self):
         account = AccountConfig.from_dict(
             {"id": "main", "label": "메인", "watchlistSymbols": ""},
@@ -4706,7 +4734,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertFalse(sent[0].splitlines()[0].startswith("035420 "))
 
     def test_send_events_enqueues_notifications_without_direct_delivery(self):
-        account = AccountConfig("main", "메인", "toss", "https://example.test", "", "", "", ["AAPL"])
+        account = AccountConfig("main", "메인", "toss", "https://example.test", "", "", "", ["AAPL"], message_delivery_level="absoluteBeginner")
         db_path = Path(self.temp.name) / "service.db"
         queue = SQLiteNotificationJobStore(db_path)
         rules = SQLiteNotificationRuleStore(db_path)
@@ -4731,6 +4759,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(jobs[0].dedupe_key)
         self.assertEqual("main:trend", jobs[0].context["key"])
         self.assertEqual("monitorTrendChange", jobs[0].context["rule"])
+        self.assertEqual("absoluteBeginner", jobs[0].context["messageDeliveryLevel"])
+        self.assertEqual("왕초보", jobs[0].context["messageDeliveryProfile"]["label"])
         self.assertEqual("SK하이닉스", jobs[0].context["title"])
         self.assertIn("이동평균", jobs[0].context["lines"])
         self.assertGreaterEqual(jobs[0].context["honeyScore"], jobs[0].context["honeyThreshold"])
@@ -5360,6 +5390,44 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("<b>판단</b>", message)
         self.assertNotIn("<b>현재 상태</b>", message)
         self.assertIn("<b>핵심 근거</b>", message)
+
+    def test_validated_ai_response_uses_absolute_beginner_delivery_level(self):
+        context = {
+            "messageType": "investmentInsight",
+            "messageDeliveryLevel": "absoluteBeginner",
+            "headline": "[주의] 🛡️ 손실 -18%: 손절·분할축소 점검",
+            "displayTarget": "삼성전자 / 005930",
+            "referenceDate": "2026-07-08 22:26 KST",
+            "sentTime": "2026-07-08 22:27 KST",
+            "rawLines": "\n".join([
+                "현재가: 277,500원",
+                "평균매입가: 327,000원",
+                "수익률: -18.7%",
+                "보유 수량: 10주",
+                "추세: 20일 평균보다 15% 낮음",
+                "기준일: 2026-07-08 22:26 KST",
+            ]),
+            "criterionLines": "설정: 관계 그래프에서 의미 있는 투자 인사이트가 생성될 때",
+        }
+        response = validated_response_from_payload(context, {
+            "action": "SELL",
+            "confidence": 94,
+            "summary": "손실이 커졌습니다.",
+            "opinion": "매도 가능 수량과 손실 관리 기준을 먼저 확인하세요.",
+            "evidence": ["수익률이 -18.7%입니다.", "현재가가 20일 평균보다 낮습니다."],
+            "counterEvidence": ["단기 반등 가능성은 남아 있습니다."],
+            "nextChecks": ["매도 가능 수량 확인", "다음 조회에서도 약한 흐름이 유지되는지 확인"],
+            "referenceDate": "2026-07-08 22:26 KST",
+        }, source="test AI")
+
+        message = context_with_validated_ai_response(context, response)["telegramMessage"]
+
+        self.assertIn("<b>한줄 판단</b>", message)
+        self.assertIn("<b>현재 상황</b>", message)
+        self.assertIn("<b>왜 이렇게 봤나</b>", message)
+        self.assertIn("<b>다르게 볼 점</b>", message)
+        self.assertIn("<b>왜 온 알림</b>", message)
+        self.assertNotIn("<b>핵심 근거</b>", message)
 
     def test_holding_snapshot_enricher_adds_missing_price_rows(self):
         position = normalize_position({

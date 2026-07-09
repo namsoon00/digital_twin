@@ -4,6 +4,7 @@ import re
 from dataclasses import asdict, dataclass, field
 from typing import Dict, List, Optional
 
+from .accounts import message_delivery_profile, normalize_message_delivery_level
 from .message_types import (
     EXTERNAL_CRYPTO_MOVE,
     EXTERNAL_DART_DISCLOSURE,
@@ -386,6 +387,7 @@ def build_notification_ai_gate_prompt(context: Dict[str, object]) -> str:
     context = dict(context or {})
     message_type = str(context.get("messageType") or context.get("rule") or "notification")
     prompt_context = notification_ai_prompt_context(message_type, context)
+    delivery_profile = delivery_profile_from_context(context)
     payload = {
         "messageType": message_type,
         "target": context.get("displayTarget") or context.get("target") or context.get("title") or "",
@@ -396,6 +398,7 @@ def build_notification_ai_gate_prompt(context: Dict[str, object]) -> str:
         "executionPlan": relation_context_value(context).get("executionPlan") if isinstance(relation_context_value(context), dict) else {},
         "activeInvestmentOpinion": active_investment_opinion_value(context),
         "promptContext": prompt_context,
+        "messageDeliveryProfile": delivery_profile,
     }
     return "\n".join([
         "너는 자동 주문자가 아니라 투자 실행 알림을 검증하는 분석가다.",
@@ -404,6 +407,7 @@ def build_notification_ai_gate_prompt(context: Dict[str, object]) -> str:
         "action 필드에만 BUY/ADD/HOLD/TRIM/SELL/AVOID 코드를 쓰고, summary/opinion/evidence/counterEvidence/nextChecks에는 매수/추가매수/보유/분할축소/매도/회피처럼 한국어 행동명만 쓴다.",
         "사용자에게 보이는 문장에는 snake_case, camelCase, true/false, entryAllocationRoom, entrySupportCount, entryExternalRiskBlocked 같은 내부 변수명을 쓰지 않는다. 반드시 쉬운 한국어 문장으로 풀어쓴다.",
         "어려운 표현은 피한다. '기준선 이탈'은 '주요 평균선 아래로 내려감', '추세 훼손'은 '가격 흐름 약화', '하락 가속'은 '하락 속도 증가', '괴리'는 '차이'처럼 바꿔 쓴다.",
+        "계정의 메시지 전달 수준은 " + str(delivery_profile.get("label") or "") + "이다. " + str(delivery_profile.get("promptInstruction") or ""),
         "반대 근거, 부족 데이터 영향, 무효화 조건, 다음 확인 조건을 반드시 포함한다.",
         "응답은 설명 문장 없이 JSON 객체 하나만 출력한다.",
         "스키마:",
@@ -511,6 +515,30 @@ def _html_row(label: str, value: object) -> str:
     return "• <b>" + html.escape(label, quote=False) + "</b>: <code>" + html.escape(text, quote=False) + "</code>"
 
 
+def delivery_profile_from_context(context: Dict[str, object]) -> Dict[str, object]:
+    profile = context.get("messageDeliveryProfile") if isinstance(context, dict) else {}
+    if isinstance(profile, dict) and profile.get("level"):
+        return message_delivery_profile(profile.get("level"))
+    if "messageDeliveryLevel" not in (context or {}):
+        return message_delivery_profile("intermediate")
+    return message_delivery_profile((context or {}).get("messageDeliveryLevel"))
+
+
+def delivery_level_from_context(context: Dict[str, object]) -> str:
+    return normalize_message_delivery_level(delivery_profile_from_context(context).get("level"))
+
+
+def confidence_text(value: object) -> str:
+    score = _clamp(_number(value), 0, 100)
+    if score >= 85:
+        label = "높음"
+    elif score >= 65:
+        label = "보통"
+    else:
+        label = "낮음"
+    return label + " (" + str(round(score, 1)) + "%)"
+
+
 def _plain_value(context: Dict[str, object], label: str) -> str:
     if label == "투자자":
         return _investor_text_from_lines(_raw_lines(context))
@@ -559,6 +587,9 @@ def _criteria_summary(context: Dict[str, object]) -> str:
 
 
 def execution_telegram_message(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
+    level = delivery_level_from_context(context)
+    if level == "absoluteBeginner":
+        return execution_telegram_message_absolute_beginner(context, response)
     headline = str(context.get("headline") or context.get("title") or "알림").strip()
     target = str(context.get("displayTarget") or context.get("target") or "").strip()
     current = _plain_value(context, "현재가")
@@ -588,41 +619,126 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
         *_html_multiline_rows("투자자", investor),
     ]
     current_state_rows = [row for row in current_state_rows if str(row or "").strip()]
+    confidence_value = str(round(response.confidence, 1)) + "%"
+    if level == "beginner":
+        confidence_value = confidence_text(response.confidence)
     parts = [
         "<b>" + html.escape(headline, quote=False) + "</b>",
         ("<code>" + html.escape(target, quote=False) + "</code>") if target else "",
         "",
         "<b>판단</b>",
         _html_row("우선 행동", response.action_label),
-        _html_row("확신", str(round(response.confidence, 1)) + "%"),
+        _html_row("판단 강도" if level == "beginner" else "확신", confidence_value),
         _html_row("기준시각", reference),
         _html_row("발송시각", sent),
     ]
     if current_state_rows:
         parts.extend(["", "<b>현재 상태</b>", *current_state_rows])
     parts.extend(["", "<b>핵심 근거</b>"])
-    parts.extend("• " + html.escape(item, quote=False) for item in response.evidence[:4])
+    evidence_limit = 3 if level == "beginner" else 4
+    parts.extend("• " + html.escape(item, quote=False) for item in response.evidence[:evidence_limit])
     if response.counter_evidence:
-        parts.extend(["", "<b>반대 신호</b>"])
-        parts.extend("• " + html.escape(item, quote=False) for item in response.counter_evidence[:4])
+        parts.extend(["", "<b>" + ("다르게 볼 점" if level == "beginner" else "반대 신호") + "</b>"])
+        parts.extend("• " + html.escape(item, quote=False) for item in response.counter_evidence[:3 if level == "beginner" else 4])
     parts.extend(["", "<b>다음 행동 기준</b>"])
     if response.opinion:
         parts.append("• " + html.escape(response.opinion, quote=False))
     if response.invalidation_condition:
         parts.append("• 의견이 약해지는 조건: " + html.escape(response.invalidation_condition, quote=False))
-    for item in response.next_checks[:3]:
+    for item in response.next_checks[:2 if level == "beginner" else 3]:
         parts.append("• 다음 확인: " + html.escape(item, quote=False))
     if response.missing_data_impact:
         parts.extend(["", "<b>부족 데이터</b>"])
         parts.extend("• " + html.escape(item, quote=False) for item in response.missing_data_impact[:4])
-    if response.validation_warnings:
+    if response.validation_warnings and level != "beginner":
         parts.extend(["", "<b>검증 메모</b>"])
         parts.extend("• " + html.escape(item, quote=False) for item in response.validation_warnings[:3])
     criteria = _criteria_summary(context)
     if criteria:
-        parts.extend(["", "<b>발송 기준</b>", "• " + html.escape(criteria, quote=False)])
+        parts.extend(["", "<b>" + ("왜 온 알림" if level == "beginner" else "발송 기준") + "</b>", "• " + html.escape(criteria, quote=False)])
+    if level == "advanced":
+        relation_labels = relation_rule_summary(context, 4)
+        if relation_labels:
+            parts.extend(["", "<b>관계 규칙 요약</b>"])
+            parts.extend("• " + html.escape(item, quote=False) for item in relation_labels)
     parts.append("• 분석출처: AI 검증 알림 / " + html.escape(response.source, quote=False))
     return "\n".join(part for part in parts if str(part).strip() or part == "").strip()
+
+
+def execution_telegram_message_absolute_beginner(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
+    headline = str(context.get("headline") or context.get("title") or "알림").strip()
+    target = str(context.get("displayTarget") or context.get("target") or "").strip()
+    sent = str(context.get("sentTime") or "").strip()
+    reference = response.reference_date or reference_date(context)
+    current_state_rows = beginner_current_state_rows(context)
+    parts = [
+        "<b>" + html.escape(headline, quote=False) + "</b>",
+        ("<code>" + html.escape(target, quote=False) + "</code>") if target else "",
+        "",
+        "<b>한줄 판단</b>",
+        _html_row("먼저 할 일", response.action_label),
+        _html_row("판단 강도", confidence_text(response.confidence)),
+        _html_row("기준시각", reference),
+        _html_row("발송시각", sent),
+        "• 자동 주문이 아니라 실행 전 점검 알림입니다.",
+    ]
+    if current_state_rows:
+        parts.extend(["", "<b>현재 상황</b>", *current_state_rows])
+    if response.evidence:
+        parts.extend(["", "<b>왜 이렇게 봤나</b>"])
+        parts.extend("• " + html.escape(item, quote=False) for item in response.evidence[:3])
+    if response.counter_evidence:
+        parts.extend(["", "<b>다르게 볼 점</b>"])
+        parts.extend("• " + html.escape(item, quote=False) for item in response.counter_evidence[:2])
+    parts.extend(["", "<b>다음에 볼 것</b>"])
+    if response.opinion:
+        parts.append("• " + html.escape(response.opinion, quote=False))
+    if response.invalidation_condition:
+        parts.append("• 의견이 약해지는 조건: " + html.escape(response.invalidation_condition, quote=False))
+    for item in response.next_checks[:2]:
+        parts.append("• " + html.escape(item, quote=False))
+    if response.missing_data_impact:
+        parts.extend(["", "<b>데이터 빈 곳</b>"])
+        parts.extend("• " + html.escape(item, quote=False) for item in response.missing_data_impact[:2])
+    criteria = _criteria_summary(context)
+    if criteria:
+        parts.extend(["", "<b>왜 온 알림</b>", "• " + html.escape(criteria, quote=False)])
+    parts.append("• 분석출처: AI 검증 알림 / " + html.escape(response.source, quote=False))
+    return "\n".join(part for part in parts if str(part).strip() or part == "").strip()
+
+
+def beginner_current_state_rows(context: Dict[str, object]) -> List[str]:
+    values = [
+        ("현재가", _plain_value(context, "현재가")),
+        ("평균매입가", _plain_value(context, "평균매입가") or _plain_value(context, "평단가")),
+        ("수익률", _plain_value(context, "수익률") or _plain_value(context, "손익")),
+        ("보유 수량", _plain_value(context, "보유 수량")),
+        ("종목 평가금액", _plain_value(context, "종목 평가금액") or _plain_value(context, "평가금액")),
+        ("계좌 평가금액", _plain_value(context, "계좌 평가금액")),
+        ("가격 흐름", _plain_value(context, "추세")),
+        ("거래 흐름", _plain_value(context, "수급")),
+    ]
+    return [row for row in [_html_row(label, value) for label, value in values] if row]
+
+
+def relation_rule_summary(context: Dict[str, object], limit: int = 4) -> List[str]:
+    relation_context = relation_context_value(context)
+    if not isinstance(relation_context, dict):
+        return []
+    matches = relation_context.get("matchedRules") or relation_context.get("activeRules") or relation_context.get("rules") or []
+    rows = []
+    if isinstance(matches, list):
+        for item in matches:
+            if isinstance(item, dict):
+                label = str(item.get("label") or item.get("name") or item.get("rule") or item.get("ruleId") or "").strip()
+                score = item.get("score") or item.get("strength") or item.get("relationScore")
+                if label:
+                    rows.append(label + ((" (" + str(score) + "점)") if score not in (None, "") else ""))
+            elif str(item or "").strip():
+                rows.append(str(item).strip())
+            if len(rows) >= limit:
+                break
+    return rows
 
 
 def _ontology_id(kind: str, value: object) -> str:
@@ -642,6 +758,8 @@ def notification_ai_validation_assertions(
     validation_id = _ontology_id("ai-validation", assertion_key)
     opinion_id = _ontology_id("validated-opinion", assertion_key + ":" + response.action)
     dispatch_id = _ontology_id("notification-dispatch", assertion_key)
+    delivery_profile = delivery_profile_from_context(context)
+    delivery_id = _ontology_id("message-delivery-profile", delivery_profile.get("level") or "absoluteBeginner")
     relation_context = relation_context_value(context)
     active_opinion = active_investment_opinion_value(context)
     execution_plan = relation_context.get("executionPlan") if isinstance(relation_context.get("executionPlan"), dict) else {}
@@ -674,10 +792,22 @@ def notification_ai_validation_assertions(
             "messageType": message_type,
             "producesValidatedMessage": True,
         },
+        {
+            "id": delivery_id,
+            "ontologyBox": "ABox",
+            "tboxClass": "MessageDeliveryProfile",
+            "level": delivery_profile.get("level"),
+            "label": delivery_profile.get("label"),
+            "detailLevel": delivery_profile.get("detailLevel"),
+            "terminology": delivery_profile.get("terminology"),
+            "scoreVisibility": delivery_profile.get("scoreVisibility"),
+            "ruleVisibility": delivery_profile.get("ruleVisibility"),
+        },
     ]
     relations = [
         {"source": validation_id, "target": opinion_id, "relationType": "VALIDATES_OPINION"},
         {"source": validation_id, "target": dispatch_id, "relationType": "PRODUCES_VALIDATED_MESSAGE"},
+        {"source": dispatch_id, "target": delivery_id, "relationType": "USES_MESSAGE_DELIVERY_PROFILE"},
     ]
     if active_opinion:
         active_id = _ontology_id("active-opinion", target)
@@ -722,6 +852,7 @@ def context_with_validated_ai_response(
         "engineVersion": NOTIFICATION_AI_GATE_VERSION,
         "source": response.source,
         "validationWarnings": list(response.validation_warnings or []),
+        "messageDeliveryProfile": delivery_profile_from_context(enriched),
     }
     enriched["ontologyAiValidation"] = {
         "ontologyBox": "ABox",

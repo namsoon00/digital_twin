@@ -3277,6 +3277,35 @@
     return typeof value === "boolean" ? "" : String(value || "");
   }
 
+  function messageDeliveryLevelOptions() {
+    return [
+      { value: "absoluteBeginner", label: "왕초보", description: "전문 용어 없이 지금 확인할 행동만 짧게" },
+      { value: "beginner", label: "초보", description: "핵심 수치와 쉬운 이유 중심" },
+      { value: "intermediate", label: "중수", description: "가격·수급·추세·부족 데이터를 균형 있게" },
+      { value: "advanced", label: "고수", description: "관계 규칙과 검증 근거까지 자세히" }
+    ];
+  }
+
+  function normalizeMessageDeliveryLevel(value) {
+    var text = String(value || "").trim();
+    var aliases = {
+      "왕초보": "absoluteBeginner",
+      "absolute_beginner": "absoluteBeginner",
+      "absolute-beginner": "absoluteBeginner",
+      "초보": "beginner",
+      "중수": "intermediate",
+      "고수": "advanced"
+    };
+    var normalized = aliases[text] || text;
+    return messageDeliveryLevelOptions().some(function (item) { return item.value === normalized; }) ? normalized : "absoluteBeginner";
+  }
+
+  function messageDeliveryLevelLabel(value) {
+    var level = normalizeMessageDeliveryLevel(value);
+    var matched = messageDeliveryLevelOptions().filter(function (item) { return item.value === level; })[0];
+    return matched ? matched.label : "왕초보";
+  }
+
   function syncAccountDraftFromLoadedAccounts(force, preferredAccountId) {
     var accounts = state.serviceAccounts || [];
     if (!accounts.length) {
@@ -3320,6 +3349,7 @@
       quietHoursStart: "22:00",
       quietHoursEnd: "05:00",
       quietHoursTimezone: "Asia/Seoul",
+      messageDeliveryLevel: "absoluteBeginner",
       enabled: true
     };
   }
@@ -3397,6 +3427,7 @@
       quietHoursStart: account.quietHoursStart || "22:00",
       quietHoursEnd: account.quietHoursEnd || "05:00",
       quietHoursTimezone: account.quietHoursTimezone || "Asia/Seoul",
+      messageDeliveryLevel: normalizeMessageDeliveryLevel(account.messageDeliveryLevel),
       enabled: account.enabled !== false
     };
   }
@@ -3417,6 +3448,7 @@
       quietHoursStart: String(draft.quietHoursStart || "22:00").trim(),
       quietHoursEnd: String(draft.quietHoursEnd || "05:00").trim(),
       quietHoursTimezone: String(draft.quietHoursTimezone || "Asia/Seoul").trim(),
+      messageDeliveryLevel: normalizeMessageDeliveryLevel(draft.messageDeliveryLevel),
       enabled: draft.enabled !== false
     };
     if (String(draft.clientId || "").trim()) payload.clientId = String(draft.clientId || "").trim();
@@ -7817,6 +7849,7 @@
       '<span>' + escapeHtml(accountQuietHoursText(account)) + '</span>',
       '<div class="chip-row">',
       configuredChip("금지 시간", account.quietHoursEnabled !== false, accountQuietHoursText(account)),
+      configuredChip("전달 수준", true, messageDeliveryLevelLabel(account.messageDeliveryLevel)),
       '</div>',
       '</div>',
       '</div>'
@@ -7840,6 +7873,7 @@
       '<strong>알림 금지 시간</strong>',
       '<span>기본값은 22:00-05:00 Asia/Seoul입니다.</span>',
       '<div class="chip-row">' + configuredChip("금지 시간", true, "22:00-05:00 Asia/Seoul") + '</div>',
+      '<div class="chip-row">' + configuredChip("전달 수준", true, "왕초보") + '</div>',
       '</div>',
       '</div>'
     ].join("");
@@ -8188,6 +8222,7 @@
       renderAccountField("quietHoursStart", "알림 금지 시작", "time", "22:00"),
       renderAccountField("quietHoursEnd", "알림 금지 종료", "time", "05:00"),
       renderAccountField("quietHoursTimezone", "알림 금지 타임존", "text", "Asia/Seoul"),
+      renderAccountSelectField("messageDeliveryLevel", "메시지 전달 수준", messageDeliveryLevelOptions(), { wide: true }),
       '<label class="admin-check-field">',
       '<input data-account-field="enabled" type="checkbox"' + (draft.enabled !== false ? " checked" : "") + ' />',
       '<span>이 계정을 모니터링에 사용</span>',
@@ -8214,6 +8249,24 @@
       '<span>' + escapeHtml(label) + '</span>',
       '<input data-account-field="' + escapeHtml(name) + '" name="' + escapeHtml(name) + '" type="' + escapeHtml(type || "text") + '" value="' + escapeHtml(value) + '" placeholder="' + escapeHtml(fieldPlaceholder) + '" autocomplete="off"' + (options.required ? " required" : "") + (options.disabled ? " disabled" : "") + ' />',
       options.configured ? '<em class="setting-field-note">저장됨</em>' : '',
+      '</label>'
+    ].join("");
+  }
+
+  function renderAccountSelectField(name, label, optionsList, options) {
+    options = options || {};
+    var draft = state.accountDraft || defaultAccountDraft();
+    var value = normalizeMessageDeliveryLevel(draft[name]);
+    return [
+      '<label class="setting-field' + (options.wide ? " wide" : "") + '">',
+      '<span>' + escapeHtml(label) + '</span>',
+      '<select data-account-field="' + escapeHtml(name) + '" name="' + escapeHtml(name) + '">',
+      (optionsList || []).map(function (item) {
+        var selected = normalizeMessageDeliveryLevel(item.value) === value ? " selected" : "";
+        return '<option value="' + escapeHtml(item.value) + '"' + selected + '>' + escapeHtml(item.label + " · " + item.description) + '</option>';
+      }).join(""),
+      '</select>',
+      '<em class="setting-field-note">알림 판단은 그대로 두고 설명 방식만 바꿉니다.</em>',
       '</label>'
     ].join("");
   }
@@ -8250,6 +8303,7 @@
       renderAccountExposureItem("계좌 seq", account.accountSeq ? String(account.accountSeq) : "선택 안함", account.accountSeq ? "ok" : "warn"),
       renderAccountExposureItem("텔레그램", account.telegramBotToken && account.telegramChatId ? "연결" : "미설정", account.telegramBotToken && account.telegramChatId ? "ok" : "warn"),
       renderAccountExposureItem("관심종목", symbols.length + "개", symbols.length ? "ok" : "neutral"),
+      renderAccountExposureItem("전달수준", messageDeliveryLevelLabel(account.messageDeliveryLevel), "neutral"),
       '</div>'
     ].join("");
   }

@@ -50,6 +50,7 @@ def account_from_args(args) -> AccountConfig:
         telegram_chat_id=args.telegram_chat_id or os.environ.get("TELEGRAM_CHAT_ID", "") or settings.get("telegramChatId", ""),
         notify_link_url=args.notify_link_url or settings.get("notifyLinkUrl", ""),
         enabled=not args.disabled,
+        message_delivery_level=args.message_delivery_level or settings.get("messageDeliveryLevel", "absoluteBeginner"),
     )
 
 
@@ -437,6 +438,7 @@ def build_parser() -> argparse.ArgumentParser:
     add.add_argument("--telegram-bot-token", default="")
     add.add_argument("--telegram-chat-id", default="")
     add.add_argument("--notify-link-url", default="")
+    add.add_argument("--message-delivery-level", default="absoluteBeginner", choices=["absoluteBeginner", "beginner", "intermediate", "advanced"])
     add.add_argument("--disabled", action="store_true")
     add.add_argument("--json", action="store_true")
     account_actions.add_parser("save-json")

@@ -132,6 +132,12 @@ def formula_settings_context() -> Dict[str, object]:
     }
 
 
+def account_delivery_context(account: AccountConfig = None) -> Dict[str, object]:
+    if account and hasattr(account, "message_delivery_context"):
+        return account.message_delivery_context()
+    return {}
+
+
 class QueueingNotifier:
     label = "Notification Queue"
 
@@ -156,6 +162,7 @@ class QueueingNotifier:
             self.account.account_id if self.account else "",
             self.account.label if self.account else "",
         )
+        context.update(account_delivery_context(self.account))
         context.update({key: value for key, value in formula_settings_context().items() if key not in context})
         job = NotificationJob.create(
             text,
@@ -225,6 +232,8 @@ def send_events(
     contexts = []
     for event in events:
         context = alert_context(event)
+        account = accounts.get(event.account_id) if accounts else None
+        context.update(account_delivery_context(account))
         context.update({key: value for key, value in formula_context.items() if key not in context})
         context = enrich_notification_ai_context(context, ai_settings)
         contexts.append(context)

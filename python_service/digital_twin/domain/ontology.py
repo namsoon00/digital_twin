@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Dict, Iterable, List, Optional
 
 from .investment_research import build_active_investment_opinion, research_evidence_from_external_signals, research_evidence_from_facts
+from .accounts import message_delivery_profile
 from .market_data import clamp, number
 from .ontology_tbox import (
     BOUNDED_CONTEXTS,
@@ -18,6 +19,7 @@ from .ontology_tbox import (
     tbox_relation_def,
 )
 from .ontology_rules import evaluate_position_relation_rules
+from .parsing import parse_assignments
 from .portfolio import PortfolioSummary, Position
 
 
@@ -82,6 +84,7 @@ SETTING_CONCEPT_TYPES = {
     "profitTakeScoreFormula": ("StrategySignal", "CONFIGURES"),
     "lossCutScoreFormula": ("StrategySignal", "CONFIGURES"),
     "notificationScoreFormula": ("NotificationPolicy", "HAS_NOTIFICATION_POLICY"),
+    "messageDeliveryLevel": ("MessageDeliveryProfile", "HAS_MESSAGE_DELIVERY_PROFILE"),
 }
 
 OPERATIONAL_PIPELINES = [
@@ -276,6 +279,8 @@ def external_signal_classes(group: str) -> List[str]:
         classes.extend(["NewsEvent", "EventRisk"])
     if "macro" in text or "rate" in text or "yield" in text:
         classes.extend(["MacroIndicator", "MacroSignal", "RateSignal", "RegimeRisk"])
+    if "fx" in text or "currency" in text or "exchange" in text:
+        classes.extend(["FXRateSignal", "CurrencyRisk", "MacroSignal"])
     if "credit" in text or "spread" in text:
         classes.extend(["CreditSpreadSignal", "MacroSignal", "RegimeRisk"])
     if "crypto" in text or "coin" in text or "btc" in text:
@@ -1548,6 +1553,29 @@ def add_runtime_metadata_concepts(graph: PortfolioOntology, portfolio_node_id: s
         add_relation(graph, portfolio_node_id, metadata_id, "HAS_RUNTIME_SETTING", weight=1.0, properties={"source": "runtime-metadata", "aiInfluenceLabel": "metadata:" + str(key)})
 
 
+def add_account_delivery_profile_concepts(
+    graph: PortfolioOntology,
+    account_node_id: str,
+    portfolio_node_id: str,
+    account_context: Dict[str, object],
+) -> None:
+    profile_payload = account_context.get("messageDeliveryProfile") if isinstance(account_context.get("messageDeliveryProfile"), dict) else {}
+    level = profile_payload.get("level") if isinstance(profile_payload, dict) else account_context.get("messageDeliveryLevel")
+    profile = message_delivery_profile(level)
+    profile_id = add_entity(graph, "message-delivery-profile", str(profile.get("level") or "absoluteBeginner"), str(profile.get("label") or "메시지 전달 수준"), {
+        "tboxClass": "MessageDeliveryProfile",
+        "level": profile.get("level"),
+        "label": profile.get("label"),
+        "detailLevel": profile.get("detailLevel"),
+        "terminology": profile.get("terminology"),
+        "scoreVisibility": profile.get("scoreVisibility"),
+        "ruleVisibility": profile.get("ruleVisibility"),
+        "description": profile.get("description"),
+    })
+    add_relation(graph, account_node_id, profile_id, "HAS_MESSAGE_DELIVERY_PROFILE", weight=1.0, properties={"source": "account-context"})
+    add_relation(graph, portfolio_node_id, profile_id, "USES_MESSAGE_DELIVERY_PROFILE", weight=1.0, properties={"source": "account-context"})
+
+
 def runtime_settings(runtime_context: Dict[str, object]) -> Dict[str, object]:
     settings = runtime_context.get("settings") if isinstance(runtime_context, dict) else {}
     return settings if isinstance(settings, dict) else {}
@@ -1982,6 +2010,7 @@ def build_portfolio_ontology(
         "tboxClass": "Portfolio",
     })))
     add_relation(graph, account_id_value, portfolio_node_id, "MANAGES_PORTFOLIO", weight=1.0, properties={"source": "account-context"})
+    add_account_delivery_profile_concepts(graph, account_id_value, portfolio_node_id, account_context)
     graph.entities.append(OntologyEntity(entity_id("concept", "legacy-score-model"), "기존 점수 모델", "model", abox_properties({
         "role": "supporting-evidence",
         "tboxClass": "LegacyScoreModel",

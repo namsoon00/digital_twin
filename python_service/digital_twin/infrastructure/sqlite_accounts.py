@@ -45,6 +45,7 @@ class AccountRegistry:
                     quiet_hours_start TEXT NOT NULL DEFAULT '22:00',
                     quiet_hours_end TEXT NOT NULL DEFAULT '05:00',
                     quiet_hours_timezone TEXT NOT NULL DEFAULT 'Asia/Seoul',
+                    message_delivery_level TEXT NOT NULL DEFAULT 'absoluteBeginner',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 )
@@ -57,8 +58,14 @@ class AccountRegistry:
                     "quiet_hours_start": "TEXT NOT NULL DEFAULT '22:00'",
                     "quiet_hours_end": "TEXT NOT NULL DEFAULT '05:00'",
                     "quiet_hours_timezone": "TEXT NOT NULL DEFAULT 'Asia/Seoul'",
+                    "message_delivery_level": "TEXT NOT NULL DEFAULT 'absoluteBeginner'",
                 },
             )
+            connection.execute("""
+                UPDATE service_accounts
+                SET message_delivery_level = 'absoluteBeginner'
+                WHERE message_delivery_level IS NULL OR message_delivery_level = ''
+            """)
             connection.execute("""
                 CREATE TABLE IF NOT EXISTS toss_credentials (
                     account_id TEXT PRIMARY KEY,
@@ -140,6 +147,7 @@ class AccountRegistry:
             quiet_hours_start=row["quiet_hours_start"] or "22:00",
             quiet_hours_end=row["quiet_hours_end"] or "05:00",
             quiet_hours_timezone=row["quiet_hours_timezone"] or "Asia/Seoul",
+            message_delivery_level=row["message_delivery_level"] or "absoluteBeginner",
         )
 
     def select_accounts(self, enabled_only: bool) -> List[AccountConfig]:
@@ -154,6 +162,7 @@ class AccountRegistry:
                 a.quiet_hours_start,
                 a.quiet_hours_end,
                 a.quiet_hours_timezone,
+                a.message_delivery_level,
                 COALESCE(t.base_url, '') AS base_url,
                 COALESCE(t.client_id, '') AS client_id,
                 COALESCE(t.client_secret, '') AS client_secret,
@@ -205,6 +214,7 @@ class AccountRegistry:
             telegram_chat_id=self.settings.get("telegramChatId", ""),
             notify_link_url=self.settings.get("notifyLinkUrl", ""),
             enabled=True,
+            message_delivery_level=self.settings.get("messageDeliveryLevel", "absoluteBeginner"),
         )
 
     def save_all(self, accounts: List[AccountConfig]) -> None:
@@ -224,9 +234,10 @@ class AccountRegistry:
             INSERT INTO service_accounts (
                 id, label, provider, enabled, watchlist_symbols,
                 quiet_hours_enabled, quiet_hours_start, quiet_hours_end, quiet_hours_timezone,
+                message_delivery_level,
                 created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 label = excluded.label,
                 provider = excluded.provider,
@@ -236,6 +247,7 @@ class AccountRegistry:
                 quiet_hours_start = excluded.quiet_hours_start,
                 quiet_hours_end = excluded.quiet_hours_end,
                 quiet_hours_timezone = excluded.quiet_hours_timezone,
+                message_delivery_level = excluded.message_delivery_level,
                 updated_at = excluded.updated_at
             """,
             (
@@ -248,6 +260,7 @@ class AccountRegistry:
                 account.quiet_hours_start,
                 account.quiet_hours_end,
                 account.quiet_hours_timezone,
+                account.message_delivery_level,
                 existing["created_at"] if existing else stamp,
                 stamp,
             ),

@@ -1,6 +1,7 @@
 from typing import Dict, List, Optional
 
 from .message_types import MESSAGE_TYPE_LABELS
+from .accounts import message_delivery_profile
 from .disclosure_analysis import local_disclosure_analysis
 from .ontology_rules import (
     AI_PROMPT_REGISTRY_VERSION,
@@ -455,6 +456,9 @@ def notification_ai_prompt_context(
     all_data = sanitized_prompt_data(context)
     active_opinion = active_investment_opinion_value(context)
     execution_plan = execution_plan_value(context)
+    delivery_profile = context.get("messageDeliveryProfile") if isinstance(context.get("messageDeliveryProfile"), dict) else {}
+    if not delivery_profile:
+        delivery_profile = message_delivery_profile(context.get("messageDeliveryLevel") if "messageDeliveryLevel" in context else "intermediate")
     return {
         "promptVersion": template.version,
         "promptRegistryVersion": AI_PROMPT_REGISTRY_VERSION,
@@ -486,6 +490,7 @@ def notification_ai_prompt_context(
             "trendDynamics": sanitized_prompt_data(relation_trend_dynamics(context)),
             "activeInvestmentOpinion": sanitized_prompt_data(active_opinion),
             "executionPlan": sanitized_prompt_data(execution_plan),
+            "messageDeliveryProfile": sanitized_prompt_data(delivery_profile),
             "sourceAlertEvents": sanitized_prompt_data(source_alert_event_items(context)),
             "allAvailableData": all_data,
         },

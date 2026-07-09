@@ -150,6 +150,8 @@ def sanitized_account(account) -> Dict[str, object]:
         "telegramChatId": configured(account.telegram_chat_id),
         "notifyLinkUrl": account.notify_link_url,
         "enabled": account.enabled,
+        "messageDeliveryLevel": account.message_delivery_profile().get("level"),
+        "messageDeliveryLevelLabel": account.message_delivery_profile().get("label"),
     }
 
 

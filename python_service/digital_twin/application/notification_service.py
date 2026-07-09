@@ -183,6 +183,7 @@ class NotificationQueueRunner:
                 self.queue.mark_failed(job, "empty notification text")
                 continue
             account = accounts.get(job.account_id)
+            self.apply_account_delivery_context(job, account)
             if not self.dry_run and account and account.quiet_hours_active(self.now_provider(), job.message_type):
                 self.mark_quiet_hours_suppressed(job, account)
                 processed += 1
@@ -206,6 +207,13 @@ class NotificationQueueRunner:
             if self.send_gap_seconds and processed < len(jobs):
                 time.sleep(self.send_gap_seconds)
         return processed
+
+    def apply_account_delivery_context(self, job: NotificationJob, account) -> None:
+        if not account or not hasattr(account, "message_delivery_context"):
+            return
+        context = dict(job.context or {})
+        context.update(account.message_delivery_context())
+        job.context = context
 
     def render(self, job: NotificationJob) -> str:
         self.apply_send_time_context(job)

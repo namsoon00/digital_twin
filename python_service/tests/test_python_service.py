@@ -7130,9 +7130,9 @@ class PythonServiceTests(unittest.TestCase):
 
         self.assertEqual(1, runner.run_once(limit=10))
         self.assertTrue(sent[0].startswith("[monitorHeartbeat] 상태 확인\n정상\n기준일 2026-07-03 15:58 KST"))
-        self.assertIn("알림 발송", sent[0])
-        self.assertIn("발송 우선도", sent[0])
-        self.assertIn("기본 우선도", sent[0])
+        self.assertNotIn("알림 발송", sent[0])
+        self.assertNotIn("발송 우선도", sent[0])
+        self.assertNotIn("기본 우선도", sent[0])
 
     def test_dart_disclosure_notification_includes_ai_analysis_at_delivery_time(self):
         registry = AccountRegistry()
@@ -7333,21 +7333,20 @@ class PythonServiceTests(unittest.TestCase):
         message = templates.render(event.rule, context)
 
         self.assertIn("<b>모델 판단</b>", message)
-        self.assertIn("<b>알림 발송</b>", message)
+        self.assertNotIn("<b>알림 발송</b>", message)
         self.assertIn("모델", message)
         self.assertIn("보유 타이밍 모델", message)
         self.assertIn("손실 관리 공식(lossCutScoreFormula)", message)
-        self.assertIn("알림 발송 공식(notificationScoreFormula)", message)
-        self.assertIn("발송 우선도", message)
-        self.assertIn("기본 우선도 35점", message)
-        self.assertIn("수급·추세 같은 확인 데이터 포함 +10점", message)
+        self.assertNotIn("알림 발송 공식(notificationScoreFormula)", message)
+        self.assertNotIn("발송 우선도", message)
+        self.assertNotIn("기본 우선도 35점", message)
+        self.assertNotIn("수급·추세 같은 확인 데이터 포함 +10점", message)
         self.assertIn("보유 모델 점수", message)
         self.assertIn("사용자가 설정한 익절 공식과 손절/손실 관리 공식", message)
-        self.assertIn("발송 공식", message)
-        self.assertIn("알림 발송 공식(notificationScoreFormula)", message)
-        self.assertIn("발송 대입값", message)
-        self.assertIn("rawScore=70", message)
-        self.assertIn("발송 부족 데이터", message)
+        self.assertNotIn("발송 공식", message)
+        self.assertNotIn("발송 대입값", message)
+        self.assertNotIn("rawScore=70", message)
+        self.assertNotIn("발송 부족 데이터", message)
         self.assertNotIn("점수 계산", message)
         self.assertNotIn("발송 점수", message)
         self.assertNotIn("보유 판단 점수", message)
@@ -7402,7 +7401,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("모델 공식", message)
         self.assertIn("모델 대입값", message)
         self.assertIn("모델 부족 데이터", message)
-        self.assertIn("발송 공식", message)
+        self.assertNotIn("발송 공식", message)
 
     def test_holding_formula_audit_skips_domestic_signal_inputs_for_us_positions(self):
         db_path = Path(self.temp.name) / "service.db"

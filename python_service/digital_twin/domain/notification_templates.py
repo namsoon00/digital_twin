@@ -1726,8 +1726,8 @@ MODELING_LABELS = {
     "externalDartDisclosure": "공시 변화 감지 모델",
     "externalDataConnection": "외부 API 연결 상태 모델",
     "modelReview": "비동기 모델 리뷰 모델",
-    "notification": "일반 알림 발송 모델",
-    "default": "기본 알림 발송 모델",
+    "notification": "일반 알림 모델",
+    "default": "기본 알림 모델",
 }
 
 MODEL_DATA_HINTS = {
@@ -1831,7 +1831,7 @@ def modeling_lines(context: Dict[str, object]) -> List[str]:
     message_type = context_message_type(context)
     if message_type in SCORE_EXPLANATION_SKIP_TYPES:
         return []
-    label = MODELING_LABELS.get(message_type, "알림 발송 모델")
+    label = MODELING_LABELS.get(message_type, "기본 알림 모델")
     lines = ["모델: " + label]
     formula_line = strategy_formula_line(context)
     if formula_line:
@@ -1985,8 +1985,6 @@ def score_explanation_sections(context: Dict[str, object]) -> List[tuple]:
             model_lines.extend(ontology_rule_lines(context)[:3])
         missing_lines = []
         prompt_lines = ontology_prompt_section_lines(context)
-    delivery_lines = delivery_score_lines(context)
-    delivery_lines.extend(formula_audit_lines(context, "delivery"))
     sections = []
     if model_lines:
         sections.append(("관계 판단" if has_relation_context and message_type not in formula_first_types else "모델 판단", model_lines))
@@ -1994,8 +1992,6 @@ def score_explanation_sections(context: Dict[str, object]) -> List[tuple]:
         sections.append(("부족 데이터", missing_lines))
     if prompt_lines:
         sections.append(("AI 프롬프트", prompt_lines))
-    if delivery_lines:
-        sections.append(("알림 발송", delivery_lines))
     return sections
 
 

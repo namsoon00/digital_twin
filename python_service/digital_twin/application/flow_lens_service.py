@@ -1,3 +1,4 @@
+from collections import Counter
 from dataclasses import asdict
 from typing import Callable, Dict, List
 
@@ -446,6 +447,186 @@ def toss_decision_for_watch(item: Dict[str, object]) -> Dict[str, object]:
     }
 
 
+def ontology_box(payload: Dict[str, object]) -> str:
+    properties = payload.get("properties") if isinstance(payload.get("properties"), dict) else {}
+    return str(payload.get("ontologyBox") or payload.get("box") or properties.get("ontologyBox") or properties.get("box") or "").upper()
+
+
+def is_tbox_payload(payload: Dict[str, object]) -> bool:
+    kind = str(payload.get("kind") or "")
+    return ontology_box(payload) == "TBOX" or kind.startswith("tbox-")
+
+
+def counter_rows(values: List[str], limit: int = 40) -> List[Dict[str, object]]:
+    return [
+        {"key": key, "count": count}
+        for key, count in Counter(str(value or "unknown") for value in values).most_common(limit)
+    ]
+
+
+def ontology_relation_type(payload: Dict[str, object]) -> str:
+    return str(payload.get("type") or payload.get("relation_type") or payload.get("relationType") or "").upper()
+
+
+def ontology_relation_priority(payload: Dict[str, object]) -> float:
+    relation_type = ontology_relation_type(payload)
+    properties = payload.get("properties") if isinstance(payload.get("properties"), dict) else {}
+    priority_map = {
+        "HOLDS": 100,
+        "WATCHES": 100,
+        "HAS_POSITION": 96,
+        "REPRESENTS_STOCK": 96,
+        "HAS_OPINION": 94,
+        "HAS_EXECUTION_PLAN": 93,
+        "HAS_PRIMARY_ACTION": 92,
+        "REQUIRES_NEXT_CHECK": 91,
+        "BLOCKS_ACTION": 90,
+        "STRENGTHENS_ACTION_IF": 89,
+        "WEAKENS_ACTION_IF": 89,
+        "PRODUCES_INSIGHT": 88,
+        "CREATED_FROM_RELATION": 88,
+        "DISPATCHED_BY": 87,
+        "EVALUATED_BY": 86,
+        "EXPOSED_TO": 84,
+        "CONTRADICTS": 83,
+        "WEAKENS_THESIS": 82,
+        "SUPPORTS_THESIS": 82,
+        "INVALIDATES_THESIS": 82,
+        "IMPACTS_OPINION": 82,
+        "HAS_DATA_QUALITY": 80,
+        "HAS_DATA_FRESHNESS": 80,
+        "HAS_PROVENANCE": 80,
+        "HAS_EXTERNAL_SIGNAL": 78,
+        "HAS_FACTOR_EXPOSURE": 76,
+        "LIMITED_BY_LIQUIDITY": 75,
+        "HAS_EXIT_CAPACITY": 75,
+        "HAS_SLIPPAGE_RISK": 75,
+        "HAS_PRICE": 68,
+        "HAS_TECHNICAL_INDICATOR": 66,
+        "HAS_TRADE_FLOW": 66,
+        "HAS_OBSERVATION": 62,
+    }
+    score = float(priority_map.get(relation_type, 40))
+    if properties.get("polarity") in {"risk", "support"}:
+        score += 8
+    if properties.get("opinionImpact") or properties.get("supportImpact") or properties.get("riskImpact"):
+        score += 10
+    return score
+
+
+def ontology_entity_priority(payload: Dict[str, object]) -> float:
+    kind = str(payload.get("kind") or "")
+    priority_map = {
+        "account": 100,
+        "portfolio": 100,
+        "cash": 98,
+        "watchlist": 98,
+        "stock": 96,
+        "position": 95,
+        "active-opinion": 94,
+        "execution-plan": 93,
+        "action-candidate": 92,
+        "blocked-action": 91,
+        "execution-condition": 90,
+        "next-check": 90,
+        "insight": 89,
+        "notification-dispatch": 88,
+        "data-pipeline": 86,
+        "collection-schedule": 85,
+        "data-freshness": 85,
+        "collection-policy": 84,
+        "insight-policy": 84,
+        "cooldown-policy": 84,
+        "novelty-policy": 84,
+        "suppression-policy": 84,
+        "data-quality": 83,
+        "provenance": 82,
+        "source-reliability": 82,
+        "relation-state": 81,
+        "signal-transition": 80,
+        "risk": 79,
+        "contradiction": 78,
+        "opportunity": 78,
+        "investment-thesis": 77,
+        "strategy-signal": 76,
+        "model-score": 75,
+        "market-exposure": 74,
+        "factor": 73,
+        "benchmark-index": 72,
+        "liquidity-profile": 71,
+        "exit-capacity": 71,
+        "slippage-estimate": 71,
+        "sector": 70,
+        "market": 70,
+        "currency": 70,
+        "data-source": 69,
+        "price-metric": 60,
+        "technical-metric": 58,
+        "flow-metric": 58,
+        "key-level": 57,
+        "price-bar": 56,
+    }
+    return float(priority_map.get(kind, 40))
+
+
+def prioritized_payload_rows(rows: List[Dict[str, object]], priority_func, limit: int) -> List[Dict[str, object]]:
+    indexed = list(enumerate(rows))
+    indexed.sort(key=lambda item: (-priority_func(item[1]), item[0]))
+    return [row for _, row in indexed[:limit]]
+
+
+def ontology_strategy_payload(ontology, ontology_payload: Dict[str, object], reasoning_cards: List[Dict[str, object]]) -> Dict[str, object]:
+    entities = [item.to_dict() for item in ontology.entities]
+    relations = [item.to_dict() for item in ontology.relations]
+    tbox_entities = [item for item in entities if is_tbox_payload(item)]
+    abox_entities = [item for item in entities if not is_tbox_payload(item)]
+    tbox_relations = [item for item in relations if is_tbox_payload(item)]
+    abox_relations = [item for item in relations if not is_tbox_payload(item)]
+    entity_kind_counts = counter_rows([str(item.get("kind") or "") for item in abox_entities])
+    relation_type_counts = counter_rows([ontology_relation_type(item) for item in abox_relations])
+    active_investment_opinions = list(ontology_payload.get("activeInvestmentOpinions") or [])
+    execution_plans = list(ontology_payload.get("executionPlans") or [])
+    insights = [item for item in abox_entities if str(item.get("kind") or "") == "insight"]
+    data_quality_nodes = [
+        item for item in abox_entities
+        if str(item.get("kind") or "") in {"data-quality", "data-freshness", "provenance", "source-reliability", "missing-data"}
+    ]
+    return {
+        "promptVersion": ONTOLOGY_PROMPT_VERSION,
+        "tbox": ontology_payload.get("tbox", {}),
+        "abox": ontology_payload.get("abox", {}),
+        "worldview": dict(ontology.worldview or {}),
+        "operationalOntology": dict((ontology.worldview or {}).get("operationalOntology") or {}),
+        "entityCount": len(ontology.entities),
+        "relationCount": len(ontology.relations),
+        "evidenceCount": len(ontology.evidence),
+        "entities": tbox_entities[:80] + prioritized_payload_rows(abox_entities, ontology_entity_priority, 260),
+        "relations": tbox_relations[:120] + prioritized_payload_rows(abox_relations, ontology_relation_priority, 420),
+        "tboxEntities": tbox_entities[:160],
+        "tboxRelations": tbox_relations[:220],
+        "aboxEntities": prioritized_payload_rows(abox_entities, ontology_entity_priority, 360),
+        "aboxRelations": prioritized_payload_rows(abox_relations, ontology_relation_priority, 620),
+        "entityKindCounts": entity_kind_counts,
+        "relationTypeCounts": relation_type_counts,
+        "evidence": [item.to_dict() for item in ontology.evidence[:120]],
+        "beliefs": [item.to_dict() for item in ontology.beliefs[:120]],
+        "opinions": [item.to_dict() for item in ontology.opinions[:60]],
+        "reasoningCards": reasoning_cards[:60],
+        "activeInvestmentOpinions": active_investment_opinions[:60],
+        "executionPlans": execution_plans[:60],
+        "insights": insights[:80],
+        "dataQuality": data_quality_nodes[:80],
+        "aiInferencePacket": ontology_payload.get("aiInferencePacket", {}),
+        "prompt": ontology.prompt,
+        "truncation": {
+            "entities": len(ontology.entities) > 80 + 260,
+            "relations": len(ontology.relations) > 120 + 420,
+            "aboxEntities": len(abox_entities) > 360,
+            "aboxRelations": len(abox_relations) > 620,
+        },
+    }
+
+
 def build_toss_decision(
     toss: Dict[str, object],
     portfolio: Dict[str, object],
@@ -463,6 +644,7 @@ def build_toss_decision(
     ontology = build_toss_ontology(positions, portfolio, holding_items + watch_items, watchlist, toss, strategy_model, external_signals)
     ontology_payload = ontology.to_dict()
     reasoning_cards = list(ontology_payload.get("reasoningCards") or [])
+    ontology_strategy = ontology_strategy_payload(ontology, ontology_payload, reasoning_cards)
     reasoning_card_by_symbol = {
         str(item.get("symbol") or "").upper(): item
         for item in reasoning_cards
@@ -508,23 +690,7 @@ def build_toss_decision(
             "관심 종목은 보유가 아니므로 매도 판단 대신 시세 기준 대기 상태로 둡니다.",
             "Neo4j 설정이 있으면 같은 관계 그래프를 저장합니다.",
         ],
-        "ontologyStrategy": {
-            "promptVersion": ONTOLOGY_PROMPT_VERSION,
-            "tbox": ontology_payload.get("tbox", {}),
-            "abox": ontology_payload.get("abox", {}),
-            "worldview": dict(ontology.worldview or {}),
-            "entityCount": len(ontology.entities),
-            "relationCount": len(ontology.relations),
-            "evidenceCount": len(ontology.evidence),
-            "entities": [item.to_dict() for item in ontology.entities[:80]],
-            "relations": [item.to_dict() for item in ontology.relations[:120]],
-            "evidence": [item.to_dict() for item in ontology.evidence[:80]],
-            "beliefs": [item.to_dict() for item in ontology.beliefs[:80]],
-            "opinions": [item.to_dict() for item in ontology.opinions[:40]],
-            "reasoningCards": reasoning_cards[:40],
-            "aiInferencePacket": ontology_payload.get("aiInferencePacket", {}),
-            "prompt": ontology.prompt,
-        },
+        "ontologyStrategy": ontology_strategy,
         "investmentAnalysis": {
             "mode": "ontology-first",
             "contract": "investment-ontology-ai-inference-v1",

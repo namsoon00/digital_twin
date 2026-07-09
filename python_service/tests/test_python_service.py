@@ -3982,6 +3982,23 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(payload["tossDecision"]["investmentAnalysis"]["reasoningCards"])
         self.assertEqual("investment-ontology-ai-inference-v1", payload["tossDecision"]["investmentAnalysis"]["aiInferencePacket"]["contract"])
         self.assertTrue(any(item.get("reasoningCard") for item in payload["tossDecision"]["items"]))
+        ontology_strategy = payload["tossDecision"]["ontologyStrategy"]
+        abox_kinds = {item.get("kind") for item in ontology_strategy["aboxEntities"]}
+        abox_relation_types = {item.get("type") for item in ontology_strategy["aboxRelations"]}
+        self.assertTrue(ontology_strategy["tboxEntities"])
+        self.assertTrue(ontology_strategy["tboxRelations"])
+        self.assertTrue(ontology_strategy["aboxEntities"])
+        self.assertTrue(ontology_strategy["aboxRelations"])
+        self.assertTrue(ontology_strategy["activeInvestmentOpinions"])
+        self.assertTrue(ontology_strategy["executionPlans"])
+        self.assertTrue(ontology_strategy["insights"])
+        self.assertTrue(ontology_strategy["dataQuality"])
+        self.assertEqual("insight-driven-only", ontology_strategy["operationalOntology"]["dispatchMode"])
+        self.assertIn("stock", abox_kinds)
+        self.assertIn("execution-plan", abox_kinds)
+        self.assertIn("insight", abox_kinds)
+        self.assertIn("HAS_EXECUTION_PLAN", abox_relation_types)
+        self.assertIn("PRODUCES_INSIGHT", abox_relation_types)
         self.assertFalse("news" in payload)
 
     def test_mock_market_contract_is_python_native(self):

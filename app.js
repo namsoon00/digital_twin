@@ -63,6 +63,7 @@
     newsCollectionLookbackMinutes: "180",
     newsCollectionPerSymbolLimit: "8",
     newsCollectionProviders: "google_rss_kr,google_rss_us,gdelt",
+    newsCollectionMinRelevanceScore: "35",
     newsCollectionIncludeWatchlist: "1",
     newsCollectionIncludeHoldings: "1",
     newsCollectionRateLimitSeconds: "0.25",
@@ -3713,6 +3714,7 @@
       newsCollectionLookbackMinutes: settingValue("newsCollectionLookbackMinutes"),
       newsCollectionPerSymbolLimit: settingValue("newsCollectionPerSymbolLimit"),
       newsCollectionProviders: settingValue("newsCollectionProviders"),
+      newsCollectionMinRelevanceScore: settingValue("newsCollectionMinRelevanceScore"),
       newsCollectionIncludeWatchlist: settingValue("newsCollectionIncludeWatchlist"),
       newsCollectionIncludeHoldings: settingValue("newsCollectionIncludeHoldings"),
       newsCollectionRateLimitSeconds: settingValue("newsCollectionRateLimitSeconds"),
@@ -13457,6 +13459,7 @@
       renderSettingField("newsCollectionLookbackMinutes", "뉴스 조회 기간(분)", "number", "180"),
       renderSettingField("newsCollectionPerSymbolLimit", "종목별 저장 기사 수", "number", "8"),
       renderSettingField("newsCollectionProviders", "뉴스 수집 채널", "text", "google_rss_kr,google_rss_us,gdelt"),
+      renderSettingField("newsCollectionMinRelevanceScore", "뉴스 관련성 최소 점수", "number", "35"),
       renderSettingSelect("externalDartEnabled", "OpenDART 공시 수집", [
         { value: "1", label: "사용" },
         { value: "0", label: "사용 안 함" }
@@ -14090,6 +14093,7 @@
       renderSettingField("newsCollectionIntervalSeconds", "뉴스 수집 주기(초)", "number", "60"),
       renderSettingField("newsCollectionMaxSymbols", "뉴스 수집 종목 수", "number", "40"),
       renderSettingField("newsCollectionLookbackMinutes", "뉴스 조회 기간(분)", "number", "180"),
+      renderSettingField("newsCollectionMinRelevanceScore", "뉴스 관련성 최소 점수", "number", "35"),
       renderSettingSelect("dartDisclosureAiAnalysisEnabled", "공시 AI 해석", [
         { value: "1", label: "사용" },
         { value: "0", label: "사용 안 함" }

@@ -7172,13 +7172,31 @@
     var strategy = decision.ontologyStrategy || {};
     var tbox = strategy.tbox || {};
     var abox = strategy.abox || {};
-    var entities = Array.isArray(strategy.entities) ? strategy.entities : [];
-    var relations = Array.isArray(strategy.relations) ? strategy.relations : [];
+    var rawEntities = Array.isArray(strategy.entities) ? strategy.entities : [];
+    var rawRelations = Array.isArray(strategy.relations) ? strategy.relations : [];
+    var tboxEntities = Array.isArray(strategy.tboxEntities) ? strategy.tboxEntities : rawEntities.filter(ontologyIsTboxItem);
+    var tboxRelations = Array.isArray(strategy.tboxRelations) ? strategy.tboxRelations : rawRelations.filter(ontologyIsTboxItem);
+    var aboxEntities = Array.isArray(strategy.aboxEntities) ? strategy.aboxEntities : ontologyAboxEntities(rawEntities);
+    var aboxRelations = Array.isArray(strategy.aboxRelations) ? strategy.aboxRelations : ontologyAboxRelations(rawRelations);
+    function mergeRows(rows, extras, keyFn) {
+      var merged = [];
+      var seen = {};
+      (rows || []).concat(extras || []).forEach(function (row) {
+        var key = keyFn(row);
+        if (!key || seen[key]) return;
+        seen[key] = true;
+        merged.push(row);
+      });
+      return merged;
+    }
+    var entities = mergeRows(rawEntities, tboxEntities.concat(aboxEntities), function (item) { return item && item.id; });
+    var relations = mergeRows(rawRelations, tboxRelations.concat(aboxRelations), function (item) {
+      return item ? [item.source, ontologyTypeOf(item), item.target].join("|") : "";
+    });
     var evidence = Array.isArray(strategy.evidence) ? strategy.evidence : [];
     var beliefs = Array.isArray(strategy.beliefs) ? strategy.beliefs : [];
     var opinions = Array.isArray(strategy.opinions) ? strategy.opinions : [];
-    var aboxEntities = ontologyAboxEntities(entities);
-    var aboxRelations = ontologyAboxRelations(relations);
+    var entityLabels = ontologyEntityLabelMap(entities.concat(aboxEntities));
     return {
       decision: decision,
       investmentAnalysis: decision.investmentAnalysis || {},
@@ -7188,13 +7206,20 @@
       abox: abox,
       entities: entities,
       relations: relations,
+      tboxEntities: tboxEntities,
+      tboxRelations: tboxRelations,
       evidence: evidence,
       beliefs: beliefs,
       opinions: opinions,
       aboxEntities: aboxEntities,
       aboxRelations: aboxRelations,
+      activeInvestmentOpinions: Array.isArray(strategy.activeInvestmentOpinions) ? strategy.activeInvestmentOpinions : [],
+      executionPlans: Array.isArray(strategy.executionPlans) ? strategy.executionPlans : [],
+      insights: Array.isArray(strategy.insights) ? strategy.insights : [],
+      operationalOntology: strategy.operationalOntology || (strategy.worldview || {}).operationalOntology || {},
+      dataQuality: Array.isArray(strategy.dataQuality) ? strategy.dataQuality : [],
       relationCounts: ontologyRelationCounts(aboxRelations),
-      entityLabels: ontologyEntityLabelMap(entities)
+      entityLabels: entityLabels
     };
   }
 
@@ -7533,6 +7558,7 @@
     var relationRows = Array.isArray(card.relationEvidence) ? card.relationEvidence : [];
     var influenceRows = Array.isArray(card.relationInfluences) ? card.relationInfluences : [];
     var evidenceRows = Array.isArray(card.strategyEvidence) ? card.strategyEvidence : [];
+    var planRows = Array.isArray(card.executionPlans) ? card.executionPlans : [];
     var gaps = Array.isArray(card.dataGaps) ? card.dataGaps : [];
     var displayName = card.companyName || card.displayName || stockDisplayName(card.symbol);
     var tone = finalOpinion.tone || (gaps.length ? "hold" : "watch");
@@ -7552,6 +7578,7 @@
       '<span>전략 근거 <strong>' + escapeHtml(evidenceRows.length) + '</strong></span>',
       '<span>관계 근거 <strong>' + escapeHtml(relationRows.length) + '</strong></span>',
       '<span>관계 영향 <strong>' + escapeHtml(influenceRows.length) + '</strong></span>',
+      '<span>실행 계획 <strong>' + escapeHtml(planRows.length) + '</strong></span>',
       '</div>',
       '<div class="investment-evidence-narrative">',
       thesis ? '<p>' + escapeHtml(thesis) + '</p>' : '',
@@ -7569,7 +7596,37 @@
         return [item.type, item.sourceLabel, item.targetLabel].filter(Boolean).join(" · ");
       })),
       '</div>',
+      renderReasoningExecutionPlan(planRows[0]),
       renderReasoningGraphRefs(card),
+      '</div>'
+    ].join("");
+  }
+
+  function compactPlanList(value, limit) {
+    if (!Array.isArray(value)) return [];
+    return value.map(function (item) { return String(item || "").trim(); }).filter(Boolean).slice(0, limit || 4);
+  }
+
+  function renderReasoningExecutionPlan(plan) {
+    if (!plan || typeof plan !== "object") return "";
+    var blocked = compactPlanList(plan.blockedActions, 3);
+    var strengthen = compactPlanList(plan.strengthenConditions, 3);
+    var weaken = compactPlanList(plan.weakenConditions, 3);
+    var nextChecks = compactPlanList(plan.nextChecks, 4);
+    var primary = plan.primaryActionLabel || plan.primaryAction || "실행 판단 대기";
+    var meta = [plan.decisionStage, plan.actionGroup, plan.actionLevel].filter(Boolean).join(" · ");
+    return [
+      '<div class="reasoning-execution-plan">',
+      '<div class="reasoning-execution-head">',
+      '<strong>' + escapeHtml(primary) + '</strong>',
+      '<span>' + escapeHtml(meta || "실행 조건 확인") + '</span>',
+      '</div>',
+      '<div class="reasoning-execution-grid">',
+      renderReasoningCardList("다음 확인", nextChecks),
+      renderReasoningCardList("보류 조건", blocked),
+      renderReasoningCardList("강화 조건", strengthen),
+      renderReasoningCardList("약화 조건", weaken),
+      '</div>',
       '</div>'
     ].join("");
   }
@@ -7595,18 +7652,225 @@
     ].join("");
   }
 
+  function ontologyExecutionRows(cards, parts) {
+    var rows = [];
+    var seen = {};
+    (cards || []).forEach(function (card) {
+      var plans = Array.isArray(card.executionPlans) ? card.executionPlans : [];
+      plans.forEach(function (plan) {
+        if (!plan || typeof plan !== "object") return;
+        var symbol = String(plan.symbol || card.symbol || "").toUpperCase();
+        var primary = String(plan.primaryActionLabel || plan.primaryAction || "").trim();
+        var key = [symbol, primary, plan.decisionStage || ""].join("|");
+        if (seen[key]) return;
+        seen[key] = true;
+        rows.push({
+          symbol: symbol,
+          displayName: card.companyName || card.displayName || stockDisplayName(symbol),
+          relation: card.portfolioRelation || "",
+          opinion: card.finalOpinion || {},
+          plan: plan
+        });
+      });
+    });
+    if (!rows.length && parts && Array.isArray(parts.activeInvestmentOpinions)) {
+      parts.activeInvestmentOpinions.forEach(function (opinion) {
+        var plan = opinion && typeof opinion.executionPlan === "object" ? opinion.executionPlan : null;
+        if (!plan) return;
+        var symbol = String(opinion.symbol || plan.symbol || "").toUpperCase();
+        var key = [symbol, plan.primaryActionLabel || plan.primaryAction || ""].join("|");
+        if (seen[key]) return;
+        seen[key] = true;
+        rows.push({
+          symbol: symbol,
+          displayName: stockDisplayName(symbol),
+          relation: "",
+          opinion: opinion,
+          plan: plan
+        });
+      });
+    }
+    return rows;
+  }
+
+  function renderOntologyExecutionPlanPanel(cards, parts) {
+    var rows = ontologyExecutionRows(cards || [], parts || {});
+    return [
+      '<section class="ontology-surface ontology-execution-surface">',
+      '<div class="ontology-surface-head">',
+      '<strong>실행 계획과 다음 확인</strong>',
+      '<span>' + escapeHtml(rows.length) + ' plans · 보유/관심 판단 이후 확인할 조건</span>',
+      '</div>',
+      '<div class="ontology-execution-list">',
+      rows.length ? rows.slice(0, 8).map(renderOntologyExecutionPlanRow).join("") : '<div class="ontology-empty">실행 계획 데이터가 아직 없습니다.</div>',
+      '</div>',
+      '</section>'
+    ].join("");
+  }
+
+  function renderOntologyExecutionPlanRow(row) {
+    var plan = row.plan || {};
+    var nextChecks = compactPlanList(plan.nextChecks, 3);
+    var blocked = compactPlanList(plan.blockedActions, 2);
+    var strengthen = compactPlanList(plan.strengthenConditions, 2);
+    var weaken = compactPlanList(plan.weakenConditions, 2);
+    var primary = plan.primaryActionLabel || plan.primaryAction || "실행 판단 대기";
+    var tone = (row.opinion || {}).tone || (plan.actionLevel === "action" ? "caution" : "hold");
+    return [
+      '<div class="ontology-execution-row">',
+      '<div class="ontology-execution-title">',
+      '<strong>' + escapeHtml(row.displayName || row.symbol || "-") + '</strong>',
+      '<span>' + escapeHtml([row.relation, plan.decisionStage, plan.actionGroup, plan.actionLevel].filter(Boolean).join(" · ") || "관계 조건 확인") + '</span>',
+      '</div>',
+      '<span class="tone-chip ' + escapeHtml(tone || "hold") + '">' + escapeHtml(primary) + '</span>',
+      '<div class="ontology-execution-detail">',
+      renderOntologyPlanMiniList("다음 확인", nextChecks),
+      renderOntologyPlanMiniList("보류", blocked),
+      renderOntologyPlanMiniList("강화", strengthen),
+      renderOntologyPlanMiniList("약화", weaken),
+      '</div>',
+      '</div>'
+    ].join("");
+  }
+
+  function renderOntologyPlanMiniList(label, rows) {
+    return [
+      '<div class="ontology-plan-mini-list">',
+      '<strong>' + escapeHtml(label) + '</strong>',
+      rows.length ? rows.map(function (item) { return '<span>' + escapeHtml(item) + '</span>'; }).join("") : '<span>-</span>',
+      '</div>'
+    ].join("");
+  }
+
+  function renderOntologyOperationalPanel(parts) {
+    var operational = (parts || {}).operationalOntology || {};
+    var pipelines = Array.isArray(operational.pipelines) ? operational.pipelines : [];
+    return [
+      '<section class="ontology-surface ontology-operational-surface">',
+      '<div class="ontology-surface-head">',
+      '<strong>운영 온톨로지</strong>',
+      '<span>' + escapeHtml(operational.dispatchMode || "insight-driven-only") + '</span>',
+      '</div>',
+      '<div class="ontology-operational-grid">',
+      renderOntologyOperationalMetric("수집 파이프라인", operational.collectionPipelineCount || pipelines.length || 0, "DataPipeline"),
+      renderOntologyOperationalMetric("인사이트", operational.insightCount || ((parts || {}).insights || []).length || 0, "Insight"),
+      renderOntologyOperationalMetric("디스패치", operational.dispatchMode || "-", "NotificationDispatch"),
+      '</div>',
+      '<div class="ontology-operational-list">',
+      pipelines.length ? pipelines.map(function (pipeline) {
+        return [
+          '<div class="ontology-operational-row">',
+          '<strong>' + escapeHtml(pipeline.key || "-") + '</strong>',
+          '<span>target ' + escapeHtml(pipeline.targetMinutes || "-") + '분</span>',
+          '<em>configured ' + escapeHtml(pipeline.configuredMinutes || "-") + '분</em>',
+          '</div>'
+        ].join("");
+      }).join("") : '<div class="ontology-empty">수집 파이프라인 정보가 없습니다.</div>',
+      '</div>',
+      '</section>'
+    ].join("");
+  }
+
+  function renderOntologyOperationalMetric(label, value, caption) {
+    return [
+      '<div class="ontology-operational-metric">',
+      '<span>' + escapeHtml(caption || "") + '</span>',
+      '<strong>' + escapeHtml(value) + '</strong>',
+      '<em>' + escapeHtml(label) + '</em>',
+      '</div>'
+    ].join("");
+  }
+
+  function renderOntologyInsightPanel(parts) {
+    parts = parts || {};
+    var insights = Array.isArray(parts.insights) && parts.insights.length
+      ? parts.insights
+      : (parts.aboxEntities || []).filter(function (item) { return String(item && item.kind || "") === "insight"; });
+    return [
+      '<section class="ontology-surface ontology-insight-surface">',
+      '<div class="ontology-surface-head">',
+      '<strong>인사이트·알림 디스패치</strong>',
+      '<span>' + escapeHtml(insights.length) + ' insights · ' + escapeHtml(((parts.operationalOntology || {}).dispatchMode) || "insight-driven-only") + '</span>',
+      '</div>',
+      '<div class="ontology-insight-list">',
+      insights.length ? insights.slice(0, 8).map(renderOntologyInsightRow).join("") : '<div class="ontology-empty">생성된 인사이트가 없습니다.</div>',
+      '</div>',
+      '</section>'
+    ].join("");
+  }
+
+  function renderOntologyInsightRow(item) {
+    var properties = (item && item.properties) || {};
+    var tone = properties.severity || "hold";
+    var score = properties.score == null ? "-" : Math.round(Number(properties.score || 0));
+    var confidence = properties.confidence == null ? "-" : Math.round(Number(properties.confidence || 0));
+    return [
+      '<div class="ontology-insight-row">',
+      '<div>',
+      '<strong>' + escapeHtml(ontologyEntityDisplayLabel(item, item && item.id)) + '</strong>',
+      '<span>' + escapeHtml([properties.symbol, properties.insightType, properties.dispatchCandidate ? "dispatch candidate" : "reference"].filter(Boolean).join(" · ")) + '</span>',
+      '</div>',
+      '<span class="tone-chip ' + escapeHtml(tone || "hold") + '">' + escapeHtml(score) + '</span>',
+      '<em>confidence ' + escapeHtml(confidence) + '</em>',
+      properties.thesis ? '<p>' + escapeHtml(textWithKnownDisplaySymbols(beginnerFriendlyText(properties.thesis), properties.symbol, { symbol: properties.symbol })) + '</p>' : '',
+      '</div>'
+    ].join("");
+  }
+
+  function renderOntologyDataQualityPanel(parts) {
+    parts = parts || {};
+    var nodes = Array.isArray(parts.dataQuality) && parts.dataQuality.length
+      ? parts.dataQuality
+      : (parts.aboxEntities || []).filter(function (item) {
+        return ["data-quality", "data-freshness", "provenance", "source-reliability", "missing-data"].indexOf(String(item && item.kind || "")) >= 0;
+      });
+    return [
+      '<section class="ontology-surface ontology-data-quality-surface">',
+      '<div class="ontology-surface-head">',
+      '<strong>데이터 품질·출처</strong>',
+      '<span>' + escapeHtml(nodes.length) + ' nodes · freshness/provenance</span>',
+      '</div>',
+      '<div class="ontology-data-quality-list">',
+      nodes.length ? nodes.slice(0, 10).map(renderOntologyDataQualityRow).join("") : '<div class="ontology-empty">데이터 품질 노드가 없습니다.</div>',
+      '</div>',
+      '</section>'
+    ].join("");
+  }
+
+  function renderOntologyDataQualityRow(item) {
+    var properties = (item && item.properties) || {};
+    var value = properties.qualityScore != null ? Math.round(Number(properties.qualityScore || 0)) : (properties.status || properties.provider || properties.kind || "-");
+    var meta = [
+      item && item.kind,
+      properties.fetchedAt ? formatClock(properties.fetchedAt) : "",
+      properties.ageMinutes != null ? Math.round(Number(properties.ageMinutes || 0)) + "분" : "",
+      Array.isArray(properties.sources) ? properties.sources.slice(0, 3).join(", ") : ""
+    ].filter(Boolean).join(" · ");
+    return [
+      '<div class="ontology-data-quality-row">',
+      '<div>',
+      '<strong>' + escapeHtml(ontologyEntityDisplayLabel(item, item && item.id)) + '</strong>',
+      '<span>' + escapeHtml(meta || "품질 정보") + '</span>',
+      '</div>',
+      '<em>' + escapeHtml(value) + '</em>',
+      '</div>'
+    ].join("");
+  }
+
   function renderStrategySectionContent(snapshot) {
     var section = normalizeStrategySection(state.activeStrategySection);
     var parts = ontologyStrategyParts(snapshot);
     if (section === "evidence") {
       return [
         renderInvestmentReasoningCardPanel(snapshot),
+        renderOntologyExecutionPlanPanel(investmentReasoningCards(snapshot), parts),
         renderStrategyDataPanel(snapshot)
       ].join("");
     }
     if (section === "results") {
       return [
         renderInvestmentReasoningCardPanel(snapshot, { compact: true }),
+        renderOntologyExecutionPlanPanel(investmentReasoningCards(snapshot), parts),
         renderModelPreviewPanel(snapshot)
       ].join("");
     }
@@ -7649,7 +7913,9 @@
         '<span class="metric">' + escapeHtml(parts.relations.length) + '</span>',
         '</div>',
         '<div class="ontology-dashboard">',
-        renderOntologyRelationalProjectionPanel(parts.entities, parts.relations, parts.evidence, parts.beliefs, parts.opinions),
+        renderOntologyRelationalProjectionPanel(parts.entities, parts.relations, parts.evidence, parts.beliefs, parts.opinions, parts),
+        renderOntologyInsightPanel(parts),
+        renderOntologyDataQualityPanel(parts),
         renderOntologyMacroRelationPanel(parts),
         renderOntologyRelationPanel(parts.tbox, parts.relations, parts.aboxRelations, parts.relationCounts, parts.entityLabels),
         renderOntologyRulePanel(parts.tbox, parts.relationCounts, parts.evidence, parts.beliefs, parts.opinions),
@@ -7661,7 +7927,9 @@
       renderInvestmentBridgePanel(snapshot),
       renderOntologyMacroSignalPanel(parts),
       renderInvestmentReasoningCardPanel(snapshot, { compact: true }),
+      renderOntologyExecutionPlanPanel(investmentReasoningCards(snapshot), parts),
       renderInvestmentAiPacketPanel(snapshot),
+      renderOntologyOperationalPanel(parts),
       renderStrategyProcessPanel(snapshot),
       renderModelOperatingGuidePanel(snapshot)
     ].join("");
@@ -10036,20 +10304,21 @@
   }
 
   function renderOntologyStrategyPanel(snapshot) {
-    var decision = snapshot.tossDecision || {};
-    var strategy = decision.ontologyStrategy || {};
-    var worldview = strategy.worldview || {};
-    var tbox = strategy.tbox || {};
-    var abox = strategy.abox || {};
-    var entities = Array.isArray(strategy.entities) ? strategy.entities : [];
-    var relations = Array.isArray(strategy.relations) ? strategy.relations : [];
-    var evidence = Array.isArray(strategy.evidence) ? strategy.evidence : [];
-    var beliefs = Array.isArray(strategy.beliefs) ? strategy.beliefs : [];
-    var opinions = Array.isArray(strategy.opinions) ? strategy.opinions : [];
-    var aboxEntities = ontologyAboxEntities(entities);
-    var aboxRelations = ontologyAboxRelations(relations);
-    var relationCounts = ontologyRelationCounts(aboxRelations);
-    var entityLabels = ontologyEntityLabelMap(entities);
+    var parts = ontologyStrategyParts(snapshot);
+    var decision = parts.decision;
+    var strategy = parts.strategy;
+    var worldview = parts.worldview;
+    var tbox = parts.tbox;
+    var abox = parts.abox;
+    var entities = parts.entities;
+    var relations = parts.relations;
+    var evidence = parts.evidence;
+    var beliefs = parts.beliefs;
+    var opinions = parts.opinions;
+    var aboxEntities = parts.aboxEntities;
+    var aboxRelations = parts.aboxRelations;
+    var relationCounts = parts.relationCounts;
+    var entityLabels = parts.entityLabels;
     var items = (decision.items || []).filter(function (item) { return item.ontologyOpinion; });
     var section = normalizeOntologySection(state.activeOntologySection);
     if (section === "structure") {
@@ -10065,6 +10334,8 @@
         '<div class="ontology-dashboard ontology-structure-dashboard">',
         renderOntologyStructureMap(tbox, abox, aboxRelations, evidence, beliefs, opinions),
         renderOntologyStructureHealth(tbox, abox, aboxRelations, evidence, beliefs, opinions),
+        renderOntologyOperationalPanel(parts),
+        renderOntologyInsightPanel(parts),
         renderOntologyRelationMatrixPanel(tbox, relationCounts),
         renderOntologyStructureNavigation(),
         '</div>',
@@ -10110,7 +10381,9 @@
         '<span class="metric">' + escapeHtml(relations.length) + '</span>',
         '</div>',
         '<div class="ontology-dashboard">',
-        renderOntologyRelationalProjectionPanel(entities, relations, evidence, beliefs, opinions),
+        renderOntologyRelationalProjectionPanel(entities, relations, evidence, beliefs, opinions, parts),
+        renderOntologyInsightPanel(parts),
+        renderOntologyDataQualityPanel(parts),
         renderOntologyMacroRelationPanel({ entities: entities, relations: relations, aboxRelations: aboxRelations, entityLabels: entityLabels }),
         renderOntologyRelationPanel(tbox, relations, aboxRelations, relationCounts, entityLabels),
         renderOntologyRulePanel(tbox, relationCounts, evidence, beliefs, opinions),
@@ -10130,6 +10403,10 @@
       '<div class="ontology-dashboard">',
       renderOntologyControlStrip(tbox, abox, aboxRelations, evidence, beliefs, opinions),
       renderOntologyBoxSummary(tbox, abox, worldview, strategy),
+      renderOntologyExecutionPlanPanel(investmentReasoningCards(snapshot), parts),
+      renderOntologyOperationalPanel(parts),
+      renderOntologyInsightPanel(parts),
+      renderOntologyDataQualityPanel(parts),
       renderOntologyRelationMatrixPanel(tbox, relationCounts),
       '</div>',
       '<div class="lab-list">',
@@ -10171,7 +10448,10 @@
   }
 
   function renderOntologyRelationMatrixPanel(tbox, relationCounts) {
-    var relationTypes = (tbox.relationTypes || []).slice(0, 12);
+    var relationTypes = (tbox.relationTypes || []).slice(0, 8);
+    ontologyTopEntries(relationCounts || {}, 10).forEach(function (item) {
+      if (relationTypes.indexOf(item.key) < 0) relationTypes.push(item.key);
+    });
     return [
       '<section class="ontology-surface ontology-matrix-surface">',
       '<div class="ontology-surface-head">',
@@ -10179,7 +10459,7 @@
       '<span>규칙 구조의 허용 타입과 현재 데이터 사용량</span>',
       '</div>',
       '<div class="relation-matrix">',
-      relationTypes.length ? relationTypes.map(function (type) {
+      relationTypes.length ? relationTypes.slice(0, 16).map(function (type) {
         return renderRelationMatrixRow(type, relationCounts[type] || 0);
       }).join("") : '<div class="ontology-empty">relation type 없음</div>',
       '</div>',
@@ -10649,21 +10929,10 @@
   }
 
   function ontologyCurrentGraphData() {
-    var snapshot = state.snapshot || {};
-    var decision = snapshot.tossDecision || {};
-    var strategy = decision.ontologyStrategy || {};
-    var tbox = strategy.tbox || {};
-    var entities = Array.isArray(strategy.entities) ? strategy.entities : [];
-    var relations = Array.isArray(strategy.relations) ? strategy.relations : [];
-    var evidence = Array.isArray(strategy.evidence) ? strategy.evidence : [];
-    var beliefs = Array.isArray(strategy.beliefs) ? strategy.beliefs : [];
-    var opinions = Array.isArray(strategy.opinions) ? strategy.opinions : [];
-    var aboxEntities = ontologyAboxEntities(entities);
-    var aboxRelations = ontologyAboxRelations(relations);
-    var entityLabels = ontologyEntityLabelMap(entities);
-    var tboxNodes = ontologyTboxGraphNodes(tbox);
-    var tboxEdges = ontologyTboxGraphEdges(tbox);
-    var aboxGraph = ontologyBuildAboxGraph(aboxEntities, aboxRelations, evidence, beliefs, opinions, entityLabels);
+    var parts = ontologyStrategyParts(state.snapshot || {});
+    var tboxNodes = ontologyTboxGraphNodes(parts.tbox);
+    var tboxEdges = ontologyTboxGraphEdges(parts.tbox);
+    var aboxGraph = ontologyBuildAboxGraph(parts.aboxEntities, parts.aboxRelations, parts.evidence, parts.beliefs, parts.opinions, parts.entityLabels);
     return {
       tbox: { elements: ontologyCyElements(tboxNodes, tboxEdges) },
       abox: { elements: ontologyCyElements(aboxGraph.nodesById, aboxGraph.edges) }
@@ -10878,13 +11147,18 @@
     ].join("");
   }
 
-  function renderOntologyRelationalProjectionPanel(entities, relations, evidence, beliefs, opinions) {
+  function renderOntologyRelationalProjectionPanel(entities, relations, evidence, beliefs, opinions, parts) {
+    parts = parts || {};
     var rows = [
       { name: "데이터 행", count: entities.length, key: "id", fk: "규칙 구조/현재 데이터 구분" },
+      { name: "현재 데이터 행", count: (parts.aboxEntities || []).length || ontologyAboxEntities(entities).length, key: "ABox id", fk: "실제 계정·종목·관측값" },
       { name: "관계 행", count: relations.length, key: "source + type + target", fk: "출발점,도착점 -> 데이터 id" },
+      { name: "현재 관계 행", count: (parts.aboxRelations || []).length || ontologyAboxRelations(relations).length, key: "ABox relation", fk: "현재 데이터 그래프 edge" },
       { name: "근거 행", count: evidence.length, key: "id", fk: "대상 -> 데이터 id" },
       { name: "판단 근거 행", count: beliefs.length, key: "id", fk: "대상 -> 데이터 id" },
-      { name: "AI 의견 행", count: opinions.length, key: "회사 표시명", fk: "회사명 -> 종목 데이터" }
+      { name: "AI 의견 행", count: opinions.length, key: "회사 표시명", fk: "회사명 -> 종목 데이터" },
+      { name: "실행 계획 행", count: (parts.executionPlans || []).length, key: "symbol + action", fk: "AI 의견 -> 실행 계획" },
+      { name: "인사이트 행", count: (parts.insights || []).length, key: "subject + type", fk: "관계 변화 -> 알림 후보" }
     ];
     return [
       '<section class="ontology-surface ontology-projection-surface">',

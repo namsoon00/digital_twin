@@ -4852,6 +4852,51 @@ h3 {
   font-size: 12px;
 }
 
+.reasoning-execution-plan {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--blue);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel) 84%, var(--blue-soft));
+}
+
+.reasoning-execution-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.reasoning-execution-head strong,
+.reasoning-execution-head span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.reasoning-execution-head strong {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 950;
+}
+
+.reasoning-execution-head span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  text-align: right;
+}
+
+.reasoning-execution-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
 .investment-packet-grid {
   padding: 16px;
 }
@@ -5576,7 +5621,11 @@ h3 {
 
 .ontology-projection-surface,
 .ontology-relation-surface,
-.ontology-rule-trace-surface {
+.ontology-rule-trace-surface,
+.ontology-execution-surface,
+.ontology-operational-surface,
+.ontology-insight-surface,
+.ontology-data-quality-surface {
   grid-column: 1 / -1;
 }
 
@@ -5756,6 +5805,203 @@ h3 {
 .ontology-abox-metrics strong {
   color: var(--ink);
   font-size: 15px;
+}
+
+.ontology-execution-list,
+.ontology-operational-list,
+.ontology-insight-list,
+.ontology-data-quality-list {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ontology-execution-row,
+.ontology-operational-row,
+.ontology-insight-row,
+.ontology-data-quality-row {
+  display: grid;
+  gap: 8px 12px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--blue);
+  border-radius: 8px;
+  background: var(--input);
+}
+
+.ontology-execution-row {
+  grid-template-columns: minmax(0, 1fr) minmax(150px, auto);
+  align-items: start;
+}
+
+.ontology-execution-title,
+.ontology-insight-row > div,
+.ontology-data-quality-row > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.ontology-execution-title strong,
+.ontology-execution-title span,
+.ontology-plan-mini-list strong,
+.ontology-plan-mini-list span,
+.ontology-operational-metric span,
+.ontology-operational-metric strong,
+.ontology-operational-metric em,
+.ontology-operational-row strong,
+.ontology-operational-row span,
+.ontology-operational-row em,
+.ontology-insight-row strong,
+.ontology-insight-row span,
+.ontology-insight-row em,
+.ontology-insight-row p,
+.ontology-data-quality-row strong,
+.ontology-data-quality-row span,
+.ontology-data-quality-row em {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.ontology-execution-title strong,
+.ontology-insight-row strong,
+.ontology-data-quality-row strong {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 950;
+}
+
+.ontology-execution-title span,
+.ontology-plan-mini-list span,
+.ontology-operational-row span,
+.ontology-operational-row em,
+.ontology-insight-row span,
+.ontology-insight-row em,
+.ontology-insight-row p,
+.ontology-data-quality-row span {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.ontology-execution-row .tone-chip {
+  justify-self: end;
+  max-width: 240px;
+  white-space: normal;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.ontology-execution-detail {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
+.ontology-plan-mini-list {
+  display: grid;
+  align-content: start;
+  gap: 4px;
+  min-width: 0;
+  min-height: 76px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel) 76%, transparent);
+}
+
+.ontology-plan-mini-list strong {
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 950;
+}
+
+.ontology-operational-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
+.ontology-operational-metric {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--input);
+}
+
+.ontology-operational-metric span,
+.ontology-operational-metric em {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 850;
+}
+
+.ontology-operational-metric strong {
+  color: var(--ink);
+  font-size: 18px;
+  font-weight: 950;
+}
+
+.ontology-operational-row {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  border-left-color: var(--green);
+}
+
+.ontology-operational-row strong {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 950;
+}
+
+.ontology-insight-row {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: start;
+  border-left-color: var(--violet);
+}
+
+.ontology-insight-row p {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 8px 9px;
+  border-left: 3px solid var(--violet);
+  background: color-mix(in srgb, var(--panel) 78%, transparent);
+}
+
+.ontology-insight-row .tone-chip {
+  justify-self: end;
+  min-width: 42px;
+}
+
+.ontology-data-quality-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  border-left-color: var(--amber);
+}
+
+.ontology-data-quality-row em {
+  justify-self: end;
+  min-width: 42px;
+  min-height: 28px;
+  display: grid;
+  place-items: center;
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: var(--amber-soft);
+  color: var(--amber);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 950;
 }
 
 .ontology-projection-grid {
@@ -8937,6 +9183,9 @@ h3 {
   .model-setting-card,
   .ontology-abox-metrics span,
   .ontology-ledger-item,
+  .reasoning-execution-plan,
+  .ontology-plan-mini-list,
+  .ontology-operational-metric,
   .investment-evidence-grid span,
   .reasoning-graph-refs span,
   .investment-packet-grid section
@@ -8973,11 +9222,18 @@ h3 {
   .template-variable-row,
   .investment-bridge-step,
   .investment-evidence-card,
+  .reasoning-execution-plan,
   .relation-matrix-row,
   .ontology-control-step,
   .ontology-structure-node,
   .ontology-structure-health-row,
   .ontology-context-class-group,
+  .ontology-execution-row,
+  .ontology-plan-mini-list,
+  .ontology-operational-metric,
+  .ontology-operational-row,
+  .ontology-insight-row,
+  .ontology-data-quality-row,
   .ontology-projection-row,
   .ontology-distribution-row,
   .ontology-relation-row,
@@ -9034,10 +9290,17 @@ h3 {
   .notification-template-select-row,
   .notification-template-row,
   .investment-evidence-card,
+  .reasoning-execution-plan,
   .relation-matrix-row,
   .ontology-control-step,
   .ontology-structure-node,
   .ontology-structure-health-row,
+  .ontology-execution-row,
+  .ontology-plan-mini-list,
+  .ontology-operational-metric,
+  .ontology-operational-row,
+  .ontology-insight-row,
+  .ontology-data-quality-row,
   .ontology-projection-row,
   .ontology-relation-row,
   .ontology-rule-row,
@@ -10174,16 +10437,40 @@ h3 {
   .symbol-filter-form,
   .symbol-filter-form.compact,
   .symbol-result-row,
+  .reasoning-execution-head,
+  .reasoning-execution-grid,
+  .ontology-execution-row,
+  .ontology-execution-detail,
+  .ontology-operational-grid,
+  .ontology-operational-row,
+  .ontology-insight-row,
+  .ontology-data-quality-row,
   .ontology-projection-row,
   .ontology-relation-row,
   .ontology-rule-trace-row {
     grid-template-columns: 1fr;
   }
 
+  .ontology-execution-row .tone-chip,
+  .ontology-insight-row .tone-chip,
+  .ontology-data-quality-row em,
   .ontology-projection-row em,
   .ontology-relation-row em,
   .ontology-rule-trace-row > i {
     justify-self: start;
+  }
+
+  .ontology-execution-row .tone-chip {
+    max-width: 100%;
+    text-align: left;
+  }
+
+  .reasoning-execution-head {
+    flex-direction: column;
+  }
+
+  .reasoning-execution-head span {
+    text-align: left;
   }
 
   .notification-policy-detail {
@@ -11286,9 +11573,12 @@ input[type="radio"] {
   .signal-score-grid span,
   .signal-metric-grid span,
   .investment-evidence-grid span,
+  .reasoning-execution-plan,
   .reasoning-graph-refs span,
   .ontology-abox-metrics span,
   .ontology-ledger-item,
+  .ontology-plan-mini-list,
+  .ontology-operational-metric,
   .investment-packet-grid section,
   .message-schedule-summary > span:not(.tone-chip) {
     padding: var(--ds-row-pad-y) var(--ds-row-pad-x);

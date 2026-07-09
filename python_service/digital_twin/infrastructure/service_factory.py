@@ -76,6 +76,7 @@ def build_model_review_runner(dry_run: bool = False) -> ModelReviewRunner:
         account_repository=AccountRegistry(),
         notifier_factory=lambda account: queued_notifier_for_account(account, message_type="modelReview"),
         dry_run=dry_run,
+        settings=settings,
     )
 
 

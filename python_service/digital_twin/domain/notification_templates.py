@@ -2033,6 +2033,8 @@ def template_prefers_rich_score(template: str, rendered: str) -> bool:
 
 def append_score_explanation(rendered: str, context: Dict[str, object], rich: bool = False) -> str:
     rendered_text = str(rendered or "")
+    if context_message_type(context) == "modelReview":
+        return rendered
     if (
         context_message_type(context) in {"holdingTiming", "monitorDecisionChange", "investmentInsight"}
         and ontology_relation_context(context)

@@ -5017,6 +5017,7 @@ class PythonServiceTests(unittest.TestCase):
             "title": "Apple",
             "key": "main:decision:AAPL",
             "lines": ["판단 변화", "데이터 검증: 평가액, 수량, 손익률, 판단 라벨이 모두 비교 가능"],
+            "metadata": {"activeInvestmentOpinion": {"action": "SELL"}},
         }))
         sent = []
 
@@ -5035,9 +5036,44 @@ class PythonServiceTests(unittest.TestCase):
 
         self.assertEqual(1, processed)
         self.assertEqual({"done": 1}, store.summary())
-        self.assertIn("모델 리뷰", sent[0])
-        self.assertTrue(sent[0].startswith("Apple / AAPL 모델 리뷰"))
+        self.assertIn("이 메시지는 실시간 알림 이후 생성된 후속 분석입니다.", sent[0])
+        self.assertTrue(sent[0].startswith("🧠 판단 변화 후속 리뷰: Apple / AAPL"))
         self.assertNotIn("메인 AAPL 모델 리뷰", sent[0])
+
+    def test_model_review_runner_stores_non_actionable_review_without_telegram(self):
+        registry = AccountRegistry()
+        registry.upsert(AccountConfig("main", "메인", "toss", "https://example.test", "", "", "", ["STRC"]))
+        store = ModelReviewJobStore(Path(self.temp.name) / "model-review-queue.json")
+        store.enqueue(ModelReviewJob.create({
+            "accountId": "main",
+            "accountLabel": "메인",
+            "symbol": "STRC",
+            "title": "Strategy Preferred",
+            "key": "main:decision:STRC",
+            "lines": ["판단 변화", "현재 보유 유지 (68점)"],
+            "metadata": {"activeInvestmentOpinion": {"action": "HOLD"}},
+        }))
+        sent = []
+
+        class FakeReviewer:
+            def review(self, job):
+                return local_model_review(job)
+
+        class FakeNotifier:
+            def send(self, message):
+                sent.append(message)
+                return SimpleNamespace(delivered=True, reason="")
+
+        runner = ModelReviewRunner(store, FakeReviewer(), registry, lambda _account: FakeNotifier())
+
+        processed = runner.run_once(limit=1)
+        jobs = store.jobs()
+
+        self.assertEqual(1, processed)
+        self.assertEqual([], sent)
+        self.assertEqual({"done": 1}, store.summary())
+        self.assertTrue(jobs[0].result.startswith("🧠 판단 변화 후속 리뷰: Strategy Preferred / STRC"))
+        self.assertIn("이 메시지는 실시간 알림 이후 생성된 후속 분석입니다.", jobs[0].result)
 
     def test_model_review_normalizes_code_only_subject_and_same_score_label_change(self):
         job = ModelReviewJob.create({
@@ -5071,6 +5107,7 @@ class PythonServiceTests(unittest.TestCase):
             "title": "035420",
             "key": "main:decision:035420",
             "lines": ["판단 변화"],
+            "metadata": {"activeInvestmentOpinion": {"action": "SELL"}},
         }))
         sent = []
 
@@ -5088,7 +5125,8 @@ class PythonServiceTests(unittest.TestCase):
         processed = runner.run_once(limit=1)
 
         self.assertEqual(1, processed)
-        self.assertTrue(sent[0].startswith("NAVER / 035420 판단 변화 리뷰"))
+        self.assertTrue(sent[0].startswith("🧠 판단 변화 후속 리뷰: NAVER / 035420"))
+        self.assertIn("이 메시지는 실시간 알림 이후 생성된 후속 분석입니다.", sent[0])
         self.assertFalse(sent[0].splitlines()[0].startswith("035420 "))
 
     def test_send_events_enqueues_notifications_without_direct_delivery(self):
@@ -7158,22 +7196,23 @@ class PythonServiceTests(unittest.TestCase):
         self.assertNotIn("매수/매도 체결량 없음", message)
         self.assertIn("투자자별 수급 없음", message)
 
-    def test_model_review_message_includes_delivery_score_explanation(self):
+    def test_model_review_message_skips_delivery_score_explanation(self):
         db_path = Path(self.temp.name) / "service.db"
         templates = SQLiteNotificationTemplateStore(db_path)
 
         message = templates.render("modelReview", {
             "messageType": "modelReview",
-            "body": "AAPL 모델 리뷰\n- 판단 변화 원인: 판단 이름이 바뀜",
+            "body": "🧠 판단 변화 후속 리뷰: AAPL\n\n이 메시지는 실시간 알림 이후 생성된 후속 분석입니다.\n\n- 판단 변화 원인: 판단 이름이 바뀜",
             "honeyScore": 85,
             "honeyThreshold": 20,
             "honeyReasons": ["기본 85점", "본문 있음 +5"],
         })
 
-        self.assertIn("AAPL 모델 리뷰", message)
-        self.assertIn("알림 발송", message)
-        self.assertIn("발송 우선도", message)
-        self.assertIn("기본 우선도 85점", message)
+        self.assertIn("🧠 판단 변화 후속 리뷰: AAPL", message)
+        self.assertIn("실시간 알림 이후 생성된 후속 분석", message)
+        self.assertNotIn("알림 발송", message)
+        self.assertNotIn("발송 우선도", message)
+        self.assertNotIn("기본 우선도 85점", message)
 
     def test_default_notification_template_is_readable_and_skips_empty_fields(self):
         db_path = Path(self.temp.name) / "service.db"

@@ -9,6 +9,8 @@ from .portfolio import utc_now_iso
 
 
 MODEL_REVIEW_PROMPT_VERSION = "model-review-v2-ontology"
+MODEL_REVIEW_FOLLOWUP_NOTICE = "이 메시지는 실시간 알림 이후 생성된 후속 분석입니다. 실시간 판단과 겹치는 내용은 줄이고, 나중에 모델을 고칠 때 볼 기록으로 저장됩니다."
+ACTIONABLE_REVIEW_ACTIONS = {"SELL", "TRIM", "AVOID"}
 SCORED_DECISION_LINE = re.compile(r"^(이전|현재)[:\s]+(.+?)\s+\(([-+]?\d+(?:\.\d+)?)점\)")
 LEGACY_ACTION_LABELS = {
     "손절 기준 확인": "손절·분할축소 권장",
@@ -125,7 +127,7 @@ def normalize_model_review_result(job: ModelReviewJob, result: str) -> str:
     if not lines:
         return text_result
     first = lines[0].strip()
-    if subject in first:
+    if first.startswith("🧠 판단 변화 후속 리뷰:"):
         return text_result
     candidates = [
         str(job.symbol or "").strip().upper(),
@@ -135,13 +137,48 @@ def normalize_model_review_result(job: ModelReviewJob, result: str) -> str:
     for candidate in [item for item in candidates if item]:
         if first == candidate:
             lines[0] = subject
-            return "\n".join(lines)
+            break
         if first.startswith(candidate + " "):
             lines[0] = subject + first[len(candidate):]
-            return "\n".join(lines)
+            break
     if first in {"모델 리뷰", "판단 변화 리뷰"}:
         lines[0] = subject + " " + first
-    return "\n".join(lines)
+    return followup_model_review_message(subject, lines)
+
+
+def followup_model_review_message(subject: str, lines: List[str]) -> str:
+    body = [line for line in lines[1:] if str(line or "").strip()]
+    if body and body[0].strip() == MODEL_REVIEW_FOLLOWUP_NOTICE:
+        body = body[1:]
+    title = "🧠 판단 변화 후속 리뷰: " + str(subject or "판단 변화").strip()
+    return "\n".join([title, "", MODEL_REVIEW_FOLLOWUP_NOTICE, "", *body]).strip()
+
+
+def model_review_telegram_mode(settings: Dict[str, object] = None) -> str:
+    value = str((settings or {}).get("modelReviewTelegramMode") or "actionableOnly").strip()
+    normalized = value.lower().replace("-", "").replace("_", "")
+    if normalized in {"all", "always", "1", "true", "on"}:
+        return "all"
+    if normalized in {"off", "none", "never", "0", "false"}:
+        return "off"
+    return "actionableOnly"
+
+
+def model_review_action(job: ModelReviewJob) -> str:
+    context = job.review_context if isinstance(job.review_context, dict) else {}
+    opinion = context.get("activeInvestmentOpinion") if isinstance(context.get("activeInvestmentOpinion"), dict) else {}
+    return str(opinion.get("action") or opinion.get("primaryAction") or "").strip().upper()
+
+
+def should_deliver_model_review(job: ModelReviewJob, result: str, settings: Dict[str, object] = None) -> bool:
+    if not str(result or "").strip():
+        return False
+    mode = model_review_telegram_mode(settings)
+    if mode == "all":
+        return True
+    if mode == "off":
+        return False
+    return model_review_action(job) in ACTIONABLE_REVIEW_ACTIONS
 
 
 def build_model_review_prompt(job: ModelReviewJob) -> str:

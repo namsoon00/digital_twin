@@ -232,6 +232,7 @@ Configuration:
 - `MODEL_REVIEW_TIMEOUT_SECONDS`: defaults to `180`.
 - `MODEL_REVIEW_INTERVAL_SECONDS`: defaults to `300`.
 - `MODEL_REVIEW_BATCH_SIZE`: defaults to `1`.
+- `MODEL_REVIEW_TELEGRAM_MODE`: defaults to `actionableOnly`. `actionableOnly` stores every review but sends Telegram only for SELL/TRIM/AVOID follow-up reviews. Use `all` to send every review or `off` to store reviews without Telegram delivery.
 
 If the configured LLM command fails or is unavailable, the worker enqueues a local deterministic model review instead of blocking the queue.
 

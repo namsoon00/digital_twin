@@ -1,8 +1,10 @@
+import hashlib
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Tuple
 
 from .market_data import clamp, number
 from .portfolio import Position
+from .symbol_universe import normalize_market
 
 
 ACTIVE_INVESTMENT_OPINION_VERSION = "active-investment-opinion-v1"
@@ -109,6 +111,37 @@ class ResearchEvidence:
         }
 
 
+@dataclass(frozen=True)
+class NewsCollectionTarget:
+    symbol: str
+    name: str
+    market: str = ""
+    currency: str = ""
+    sector: str = ""
+
+    def normalized_symbol(self) -> str:
+        return str(self.symbol or "").upper().strip()
+
+    def normalized_market(self) -> str:
+        return normalize_market(self.market)
+
+    def is_korean_market(self) -> bool:
+        market = self.normalized_market()
+        return market in {"KOSPI", "KOSDAQ"} or self.normalized_symbol().isdigit()
+
+    def search_query(self) -> str:
+        terms = []
+        for raw in [self.name, self.symbol]:
+            text = str(raw or "").replace('"', " ").strip()
+            if text and text not in terms:
+                terms.append(text)
+        if not terms:
+            return self.normalized_symbol()
+        if len(terms) == 1:
+            return terms[0]
+        return "(" + " OR ".join('"' + term + '"' for term in terms[:2]) + ")"
+
+
 @dataclass
 class ActiveInvestmentOpinion:
     symbol: str
@@ -159,6 +192,40 @@ def compact_text(value: object, limit: int = 160) -> str:
     if limit > 3 and len(text) > limit:
         return text[: limit - 3].rstrip() + "..."
     return text
+
+
+def stable_evidence_token(*values: object, length: int = 16) -> str:
+    raw = "|".join(str(value or "").strip() for value in values if str(value or "").strip())
+    if not raw:
+        raw = "empty"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:max(8, min(40, int(length or 16)))]
+
+
+def research_evidence_from_payload(payload: Dict[str, object], fallback_symbol: str = "") -> ResearchEvidence:
+    source_payload = payload if isinstance(payload, dict) else {}
+    symbol = str(source_payload.get("symbol") or fallback_symbol or "").upper().strip()
+    kind = str(source_payload.get("kind") or "news").strip() or "news"
+    source = str(source_payload.get("source") or source_payload.get("domain") or source_payload.get("provider") or "Research").strip()
+    title = str(source_payload.get("title") or "").strip()
+    url = str(source_payload.get("url") or "").strip()
+    evidence_id = str(source_payload.get("evidenceId") or source_payload.get("evidence_id") or "").strip()
+    if not evidence_id:
+        evidence_id = "research:" + symbol + ":" + kind + ":" + stable_evidence_token(source, title, url)
+    return ResearchEvidence(
+        evidence_id,
+        symbol,
+        kind,
+        source or "Research",
+        title,
+        compact_text(source_payload.get("summary") or title),
+        url,
+        str(source_payload.get("observedAt") or source_payload.get("observed_at") or source_payload.get("seenDate") or ""),
+        str(source_payload.get("polarity") or "context"),
+        number(source_payload.get("impactScore") or source_payload.get("impact_score")),
+        number(source_payload.get("confidence")) or 0.55,
+        str(source_payload.get("publishedAt") or source_payload.get("published_at") or source_payload.get("seenDate") or ""),
+        dict(source_payload.get("payload") or source_payload.get("rawPayload") or source_payload.get("raw_payload") or {}),
+    )
 
 
 def keyword_polarity(text: object) -> Tuple[str, float]:
@@ -294,21 +361,23 @@ def research_evidence_from_facts(symbol: str, facts: Dict[str, object]) -> List[
             0.78,
         ))
     news = facts.get("newsHeadlines") if isinstance(facts.get("newsHeadlines"), dict) else {}
-    for index, item in enumerate(news.get("items") if isinstance(news.get("items"), list) else []):
+    for item in (news.get("items") if isinstance(news.get("items"), list) else []):
         if not isinstance(item, dict):
             continue
         title = str(item.get("title") or "").strip()
         if not title:
             continue
         polarity, impact = keyword_polarity(title)
+        url = str(item.get("url") or "").strip()
+        source = str(item.get("domain") or item.get("source") or news.get("provider") or "GDELT").strip()
         evidence.append(ResearchEvidence(
-            "research:" + normalized_symbol + ":news:" + str(index),
+            "research:" + normalized_symbol + ":news:" + stable_evidence_token(source, title, url, item.get("seenDate") or item.get("seendate")),
             normalized_symbol,
             "news",
-            str(item.get("domain") or news.get("provider") or "GDELT"),
+            source,
             title,
             compact_text(item.get("summary") or title),
-            str(item.get("url") or ""),
+            url,
             str(item.get("seenDate") or item.get("seendate") or ""),
             polarity,
             impact,
@@ -330,6 +399,11 @@ def research_evidence_from_external_signals(symbol: str, external_signals: Dict[
     evidence = research_evidence_from_facts(normalized_symbol, facts)
     sec = (external_signals.get("secFilings") or {}).get(normalized_symbol) if isinstance(external_signals.get("secFilings"), dict) else {}
     evidence.extend(sec_research_evidence(normalized_symbol, sec if isinstance(sec, dict) else {}))
+    stored_group = external_signals.get("researchEvidence") if isinstance(external_signals.get("researchEvidence"), dict) else {}
+    stored_items = stored_group.get(normalized_symbol) if isinstance(stored_group.get(normalized_symbol), list) else []
+    for item in stored_items:
+        if isinstance(item, dict) and item.get("title"):
+            evidence.append(research_evidence_from_payload(item, normalized_symbol))
     quote = (external_signals.get("equityQuotes") or {}).get(normalized_symbol) if isinstance(external_signals.get("equityQuotes"), dict) else {}
     if isinstance(quote, dict) and quote:
         change = number(quote.get("changePercent"))

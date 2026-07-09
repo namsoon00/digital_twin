@@ -18,6 +18,7 @@ from digital_twin.application.account_service import AccountApplicationService
 from digital_twin.application.flow_lens_service import FlowLensService
 from digital_twin.application.market_data_collection_service import MARKET_DATA_ACCOUNT_ID, MarketDataCollectionRunner
 from digital_twin.application.model_review_service import ModelReviewRunner
+from digital_twin.application.news_collection_service import NewsCollectionRunner
 from digital_twin.application.monitoring_service import MonitorRunner as ApplicationMonitorRunner
 from digital_twin.application.notification_service import CompositeNotificationContextEnricher, DisclosureAnalysisNotificationEnricher, NotificationAIValidatedGateEnricher, NotificationAIOpinionEnricher, NotificationHoldingSnapshotEnricher, NotificationQueueRunner
 from digital_twin.application.symbol_universe_service import SymbolUniverseService, seed_symbol
@@ -26,7 +27,7 @@ from digital_twin.cli import preserve_existing_secrets
 from digital_twin.cli import build_parser
 from digital_twin.domain.accounts import AccountConfig
 from digital_twin.domain.external_signal_quality import attach_external_signal_quality
-from digital_twin.domain.investment_research import build_active_investment_opinion
+from digital_twin.domain.investment_research import build_active_investment_opinion, research_evidence_from_facts
 from digital_twin.domain.market_data import normalize_position, technical_indicators_from_candles
 from digital_twin.domain.message_types import DEFAULT_ALERT_RULES, DEFAULT_CADENCE, MESSAGE_TYPE_EMOJIS, MESSAGE_TYPE_LABELS, public_message_catalog
 from digital_twin.domain.ontology import OntologyEntity, OntologyRelation, abox_properties, apply_relation_driven_opinions, build_portfolio_ontology, entity_id
@@ -51,12 +52,13 @@ from digital_twin.infrastructure.kis_market_signals import KIS_CACHE_ACCOUNT_ID,
 from digital_twin.infrastructure.model_review_queue import ModelReviewEnqueuer, ModelReviewJobStore
 from digital_twin.infrastructure.mock_market import mock_market_payload
 from digital_twin.infrastructure.neo4j_ontology import Neo4jOntologyGraphRepository, NullOntologyGraphRepository, safe_relation_type
+from digital_twin.infrastructure.news_sources import NewsSourceGateway
 from digital_twin.infrastructure.notifications import TelegramNotifier, send_events
 from digital_twin.infrastructure.ontology_projection import PortfolioOntologyProjectionRecorder
 from digital_twin.infrastructure.service_factory import flow_lens_snapshot
 from digital_twin.infrastructure.settings import runtime_settings, save_runtime_settings
 from digital_twin.infrastructure.sqlite_model_review import SQLiteModelReviewJobStore
-from digital_twin.infrastructure.sqlite_monitoring import SQLiteEventLog, SQLiteExternalSignalCache, SQLiteMarketQuoteCache, SQLiteMonitoringCycleRecorder, SQLiteMonitorStore, SQLiteOntologyQualitySampleStore
+from digital_twin.infrastructure.sqlite_monitoring import SQLiteEventLog, SQLiteExternalSignalCache, SQLiteMarketQuoteCache, SQLiteMonitoringCycleRecorder, SQLiteMonitorStore, SQLiteOntologyQualitySampleStore, SQLiteResearchEvidenceStore
 from digital_twin.infrastructure.sqlite_notifications import SQLiteNotificationJobStore, SQLiteNotificationRuleStore, SQLiteNotificationTemplateStore
 from digital_twin.infrastructure.sqlite_runtime import SQLiteAppStore, SQLiteRuntimeSettingsStore
 from digital_twin.infrastructure.sqlite_symbols import SQLiteSymbolUniverseStore
@@ -4278,6 +4280,119 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("Samsung Electronics", signals["newsHeadlines"]["005930"]["items"][0]["title"])
         self.assertEqual(1400, signals["fxRates"]["USDKRW"]["rate"])
         self.assertEqual("RuntimeSettings", signals["fxRates"]["USDKRW"]["provider"])
+
+    def test_news_research_evidence_uses_stable_article_identity(self):
+        item = {
+            "title": "Samsung Electronics shares move as investors watch memory demand",
+            "url": "https://example.test/samsung-memory",
+            "domain": "example.test",
+            "seenDate": "20260707120000",
+        }
+
+        first = research_evidence_from_facts("005930", {"newsHeadlines": {"items": [item]}})
+        second = research_evidence_from_facts("005930", {"newsHeadlines": {"items": [{"title": "다른 뉴스", "url": "https://example.test/other"}, item]}})
+
+        self.assertEqual(first[0].evidence_id, second[1].evidence_id)
+        self.assertNotIn(":news:0", first[0].evidence_id)
+
+    def test_news_collection_runner_stores_domestic_and_overseas_news(self):
+        path = Path(self.temp.name) / "service.db"
+        monitor_store = SQLiteMonitorStore(path)
+        monitor_store.previous["main"] = {
+            "positions": {
+                "005930": {"symbol": "005930", "name": "삼성전자", "market": "KOSPI", "currency": "KRW"},
+            },
+            "watchlist": {
+                "AAPL": {"symbol": "AAPL", "name": "Apple", "market": "NASDAQ", "currency": "USD"},
+            },
+        }
+        account_repository = SimpleNamespace(load=lambda: [AccountConfig("main", "메인", "toss", "https://example.test", "", "", "", ["AAPL"])])
+        published = datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S GMT")
+
+        def fake_text(url, headers=None):
+            query = urllib.parse.parse_qs(urllib.parse.urlparse(url).query).get("q", [""])[0]
+            if "005930" in query or "삼성전자" in query:
+                title = "삼성전자 반도체 실적 기대"
+                link = "https://news.example.kr/samsung"
+                source = "국내경제"
+            else:
+                title = "Apple shares rise after services update"
+                link = "https://news.example.us/apple"
+                source = "Global Markets"
+            return (
+                "<rss><channel><item>"
+                "<title>" + title + "</title>"
+                "<link>" + link + "</link>"
+                "<pubDate>" + published + "</pubDate>"
+                "<description>시장 영향 점검</description>"
+                "<source>" + source + "</source>"
+                "</item></channel></rss>"
+            )
+
+        runner = NewsCollectionRunner(
+            account_repository=account_repository,
+            monitor_store=monitor_store,
+            symbol_store=SQLiteSymbolUniverseStore(path),
+            evidence_store=SQLiteResearchEvidenceStore(path),
+            gateway=NewsSourceGateway({
+                "newsCollectionProviders": "google_rss_kr,google_rss_us",
+                "newsCollectionPerSymbolLimit": "4",
+                "newsCollectionLookbackMinutes": "1440",
+            }, fetch_text=fake_text),
+            settings={
+                "newsCollectionMaxSymbols": "10",
+                "newsCollectionProviders": "google_rss_kr,google_rss_us",
+                "newsCollectionRateLimitSeconds": "0",
+            },
+            sleep_fn=lambda _: None,
+        )
+
+        result = runner.run_once()
+        store = SQLiteResearchEvidenceStore(path)
+        latest = store.latest(kind="news", limit=10)
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual(2, result["targetCount"])
+        self.assertGreaterEqual(result["savedCount"], 2)
+        self.assertTrue(any(item.symbol == "005930" and "삼성전자" in item.title for item in latest))
+        self.assertTrue(any(item.symbol == "AAPL" and "Apple" in item.title for item in latest))
+        self.assertEqual(store.summary()["byKind"][0]["name"], "news")
+
+    def test_external_signal_provider_attaches_stored_news_evidence(self):
+        path = Path(self.temp.name) / "service.db"
+        store = SQLiteResearchEvidenceStore(path)
+        facts = {
+            "newsHeadlines": {
+                "items": [{
+                    "title": "Apple shares rise after services update",
+                    "url": "https://news.example.us/apple",
+                    "domain": "Global Markets",
+                    "seenDate": "20260707120000",
+                }]
+            }
+        }
+        store.upsert_many(research_evidence_from_facts("AAPL", facts))
+        provider = ExternalSignalProvider(
+            settings={
+                "externalAlphaEnabled": "0",
+                "externalCoinGeckoEnabled": "0",
+                "externalFredEnabled": "0",
+                "externalDartEnabled": "0",
+                "externalSecEnabled": "0",
+                "externalNewsEnabled": "0",
+                "externalResearchEvidenceMaxItems": "4",
+            },
+            cache=SQLiteExternalSignalCache(path),
+            evidence_store=store,
+            fetch_json=lambda _url, headers=None: {},
+        )
+
+        signals = provider.signals_for_positions([
+            normalize_position({"symbol": "AAPL", "name": "Apple", "market": "NASDAQ", "currency": "USD"}),
+        ])
+
+        self.assertIn("researchEvidence", signals)
+        self.assertEqual("Apple shares rise after services update", signals["researchEvidence"]["AAPL"][0]["title"])
 
     def test_external_signal_provider_skips_disabled_sources(self):
         calls = []

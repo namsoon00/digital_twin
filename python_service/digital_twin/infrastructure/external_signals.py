@@ -176,13 +176,44 @@ class ExternalSignalProvider:
         if self.is_cache_fresh(entry):
             signals = entry.get("signals")
             if isinstance(signals, dict):
+                self.attach_stored_research_evidence(position_list, signals)
                 self.record_research_evidence(position_list, signals)
                 return signals
 
         signals = self.fetch_signals(position_list)
-        self.cache.replace(self.next_cache_payload(cached, cache_key, signals))
         self.record_research_evidence(position_list, signals)
+        self.attach_stored_research_evidence(position_list, signals)
+        self.cache.replace(self.next_cache_payload(cached, cache_key, signals))
         return signals
+
+    def attach_stored_research_evidence(self, positions: Iterable[Position], signals: Dict[str, object]) -> None:
+        if not self.evidence_store or not isinstance(signals, dict):
+            return
+        per_symbol: Dict[str, object] = {}
+        seen = set()
+        limit = self.int_setting("externalResearchEvidenceMaxItems", 8, 1)
+        for position in positions or []:
+            symbol = str(getattr(position, "symbol", "") or "").upper().strip()
+            if not symbol or symbol in seen:
+                continue
+            seen.add(symbol)
+            try:
+                items = [
+                    item.to_dict()
+                    for item in self.evidence_store.latest(symbol=symbol, limit=limit)
+                    if item.kind in {"news", "disclosure", "filing", "financial-fact", "market-move"}
+                ]
+            except Exception as error:  # noqa: BLE001 - stored evidence must not block realtime monitoring.
+                signals.setdefault("statuses", []).append({
+                    "source": "ResearchEvidence",
+                    "ok": False,
+                    "message": "research_evidence 조회 실패 · " + str(error)[:120],
+                })
+                continue
+            if items:
+                per_symbol[symbol] = items
+        if per_symbol:
+            signals["researchEvidence"] = per_symbol
 
     def record_research_evidence(self, positions: Iterable[Position], signals: Dict[str, object]) -> None:
         if not self.evidence_store or not isinstance(signals, dict):
@@ -288,6 +319,7 @@ class ExternalSignalProvider:
             "secFilings": {},
             "dartDisclosures": {},
             "newsHeadlines": {},
+            "researchEvidence": {},
             "statuses": [],
         }
         self.add_alpha_vantage(signals, positions)

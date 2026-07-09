@@ -9,6 +9,7 @@ from .admin_preview import write_admin_preview
 from .application.account_service import AccountApplicationService
 from .application.market_data_collection_service import MarketDataCollectionScheduler
 from .application.model_review_service import ModelReviewScheduler
+from .application.news_collection_service import NewsCollectionScheduler
 from .application.notification_service import NotificationQueueScheduler
 from .application.scheduler import MIN_REALTIME_INTERVAL_SECONDS, RealtimeScheduler
 from .domain.accounts import AccountConfig, split_symbols
@@ -21,7 +22,7 @@ from .infrastructure.sqlite_monitoring import SQLiteMonitorStore
 from .infrastructure.sqlite_notifications import SQLiteNotificationJobStore, SQLiteNotificationTemplateStore
 from .infrastructure.sqlite_runtime import SQLiteAppStore
 from .infrastructure.notifications import queued_notifier_for_account, send_events
-from .infrastructure.service_factory import build_market_data_collection_runner, build_model_review_runner, build_monitor_runner, build_notification_queue_runner, build_symbol_universe_service
+from .infrastructure.service_factory import build_market_data_collection_runner, build_model_review_runner, build_monitor_runner, build_news_collection_runner, build_notification_queue_runner, build_symbol_universe_service
 from .infrastructure.settings import (
     SECRET_SETTING_KEYS,
     read_settings_store,
@@ -375,6 +376,22 @@ def market_data_command(args) -> int:
     return 1
 
 
+def news_command(args) -> int:
+    settings = runtime_settings()
+    runner = build_news_collection_runner(settings)
+    if args.news_action == "status":
+        print(json.dumps(runner.status(), ensure_ascii=False))
+        return 0
+    if args.news_action == "once":
+        print(json.dumps(runner.run_once(force=args.force), ensure_ascii=False))
+        return 0
+    if args.news_action == "watch":
+        interval = int(os.environ.get("NEWS_COLLECTION_INTERVAL_SECONDS") or settings.get("newsCollectionIntervalSeconds") or 60)
+        NewsCollectionScheduler(runner, interval).run_forever()
+        return 0
+    return 1
+
+
 def handoff_command(args) -> int:
     if args.handoff_action != "notify":
         return 1
@@ -527,6 +544,14 @@ def build_parser() -> argparse.ArgumentParser:
     market_data_actions.add_parser("watch")
     market_data_actions.add_parser("status")
     market_data.set_defaults(func=market_data_command)
+
+    news = subparsers.add_parser("news", help="Collect domestic and overseas news evidence")
+    news_actions = news.add_subparsers(dest="news_action", required=True)
+    news_once = news_actions.add_parser("once")
+    news_once.add_argument("--force", action="store_true")
+    news_actions.add_parser("watch")
+    news_actions.add_parser("status")
+    news.set_defaults(func=news_command)
 
     handoff = subparsers.add_parser("handoff", help="Send development handoff notifications")
     handoff_actions = handoff.add_subparsers(dest="handoff_action", required=True)

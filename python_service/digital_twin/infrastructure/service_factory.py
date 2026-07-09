@@ -3,6 +3,7 @@ from typing import Iterable
 from ..application.flow_lens_service import FlowLensService
 from ..application.market_data_collection_service import MarketDataCollectionRunner
 from ..application.model_review_service import ModelReviewRunner
+from ..application.news_collection_service import NewsCollectionRunner
 from ..application.monitoring_service import MonitorRunner
 from ..application.notification_service import (
     CompositeNotificationContextEnricher,
@@ -26,12 +27,14 @@ from .ontology_projection import PortfolioOntologyProjectionRecorder
 from .notifications import queued_notifier_for_account
 from .notifications import send_events
 from .notifications import notifier_for_account
+from .news_sources import NewsSourceGateway
 from .settings import currency_rates, runtime_settings
 from .sqlite_model_review import SQLiteModelReviewJobStore
 from .sqlite_monitoring import SQLiteMonitorStore
 from .sqlite_monitoring import SQLiteMarketQuoteCache
 from .sqlite_monitoring import SQLiteMonitoringCycleRecorder
 from .sqlite_monitoring import SQLiteOntologyQualitySampleStore
+from .sqlite_monitoring import SQLiteResearchEvidenceStore
 from .sqlite_notifications import SQLiteNotificationJobStore, SQLiteNotificationTemplateStore
 from .sqlite_symbols import SQLiteSymbolUniverseStore
 from .sqlite_accounts import AccountRegistry
@@ -121,6 +124,19 @@ def build_market_data_collection_runner(settings=None, event_publisher=None) -> 
         quote_cache=SQLiteMarketQuoteCache(),
         settings=configured_settings,
         provider_factory=lambda account, quote_cache: TossProvider(account, quote_cache=quote_cache),
+        event_publisher=event_publisher or default_event_bus(),
+    )
+
+
+def build_news_collection_runner(settings=None, event_publisher=None) -> NewsCollectionRunner:
+    configured_settings = settings or runtime_settings()
+    return NewsCollectionRunner(
+        account_repository=AccountRegistry(),
+        monitor_store=SQLiteMonitorStore(),
+        symbol_store=SQLiteSymbolUniverseStore(),
+        evidence_store=SQLiteResearchEvidenceStore(),
+        gateway=NewsSourceGateway(configured_settings),
+        settings=configured_settings,
         event_publisher=event_publisher or default_event_bus(),
     )
 

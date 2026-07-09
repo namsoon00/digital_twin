@@ -13,7 +13,7 @@
     "공유 미리보기에서는 서버 설정과 계정 DB 쓰기를 차단합니다."
   ],
   "localData": {
-    "generatedAt": "2026-07-07T22:21:40.059380Z",
+    "generatedAt": "2026-07-09T00:11:22.545135Z",
     "sources": {
       "serviceDb": "data/service.db",
       "serviceDbExists": true,
@@ -21,8 +21,8 @@
       "settingsExists": false
     },
     "accountSource": "sqlite",
-    "savedAccountCount": 1,
-    "accountCount": 1,
+    "savedAccountCount": 2,
+    "accountCount": 2,
     "enabledAccountCount": 1,
     "accounts": [
       {
@@ -47,7 +47,35 @@
         "telegramBotToken": true,
         "telegramChatId": true,
         "notifyLinkUrl": "http://127.0.0.1:3000",
-        "enabled": true
+        "enabled": false,
+        "messageDeliveryLevel": "absoluteBeginner",
+        "messageDeliveryLevelLabel": "왕초보"
+      },
+      {
+        "id": "namsoon00",
+        "label": "namsoon00",
+        "provider": "toss",
+        "baseUrl": "https://openapi.tossinvest.com",
+        "clientId": true,
+        "clientSecret": true,
+        "accountSeq": false,
+        "watchlistSymbols": [
+          "TSLA",
+          "AAPL",
+          "NVDA",
+          "000660",
+          "005930",
+          "PLTR",
+          "005380",
+          "000020"
+        ],
+        "notifyProvider": "telegram",
+        "telegramBotToken": true,
+        "telegramChatId": true,
+        "notifyLinkUrl": "http://127.0.0.1:3000",
+        "enabled": true,
+        "messageDeliveryLevel": "absoluteBeginner",
+        "messageDeliveryLevelLabel": "왕초보"
       }
     ],
     "settings": {
@@ -72,7 +100,8 @@
       "formulaWeights": "growthWeight=1\nqualityWeight=1\nriskWeight=1\nflowWeight=1\nvaluationWeight=1\nthesisWeight=0.25\nconfidenceWeight=0.15\nriskControlWeight=0.35",
       "decisionThresholds": "buyCandidate=78\nchaseCaution=70\nstrongHold=72\nsellTrim=70\nriskReduce=66\nsellWatch=64",
       "modelDecisionThresholds": "modelBuy=75\nmodelAdd=70\nmodelSell=72\nmodelReduce=64\nmodelHold=55",
-      "alertThresholds": "modelBuyScore=75\nmodelSellScore=72\nwatchlistBuyScore=75\nmodelScoreGap=15\nvolumeRatioHigh=2\nbuyShareHigh=65\nsellShareHigh=65\norderbookImbalance=25\nmomentumUp=3\nmomentumDown=-3\nprofitRateHigh=20\nlossRateLow=-8\nlossRateBufferPct=1\nlossGuardVolumeConfirmRatio=0.8\nlossGuardMa60SupportPct=0\nlossGuardWeakEvidencePenalty=30\npositionWeightHigh=30\nsectorWeightHigh=50\nmarketCashLow=10\nrecordGain=10\nrecordLoss=-5\npriceNearPercent=1\nstaleMinutes=30\npendingOrderMinutes=30\nwatchlistPriceDelta=3\nmonitorPnlDelta=2\nmonitorValueDelta=5\nmonitorMaDistance=8\nmonitorCashDelta=10\nmonitorExitPressureDelta=15\nexternalEquityChangePct=3\nexternalCryptoChange24hPct=4\nexternalCryptoChange7dPct=10\nexternalBitcoinChange24hPct=3\nexternalBitcoinChange7dPct=4\nexternalMacroRateDeltaBp=15",
+      "alertThresholds": "modelBuyScore=75\nmodelSellScore=72\nwatchlistBuyScore=75\nmodelScoreGap=15\nvolumeRatioHigh=2\nbuyShareHigh=65\nsellShareHigh=65\norderbookImbalance=25\nmomentumUp=3\nmomentumDown=-3\nmarketCashLow=10\nrecordGain=10\nrecordLoss=-5\npriceNearPercent=1\nstaleMinutes=30\npendingOrderMinutes=30\nwatchlistPriceDelta=3\nmonitorPnlDelta=2\nmonitorValueDelta=5\nmonitorMaDistance=8\nmonitorCashDelta=10\nmonitorExitPressureDelta=15\nexternalEquityChangePct=3\nexternalCryptoChange24hPct=4\nexternalCryptoChange7dPct=10\nexternalBitcoinChange24hPct=3\nexternalBitcoinChange7dPct=4\nexternalMacroRateDeltaBp=15\nlossGuardMa60SupportPct=0\nlossGuardVolumeConfirmRatio=0.8\nlossGuardWeakEvidencePenalty=30\nlossRateBufferPct=1\nlossRateLow=-8\npositionWeightHigh=30\nprofitRateHigh=20\nsectorWeightHigh=50",
+      "relationRuleThresholds": "lossRateLow=-8\nlossRateBufferPct=1\nlossGuardVolumeConfirmRatio=0.8\nlossGuardMa60SupportPct=0\nlossGuardWeakEvidencePenalty=30\nprofitRateHigh=20\nsectorWeightHigh=50\npositionWeightHigh=30\nexternalBitcoinChange24hPct=3\nexternalBitcoinChange7dPct=4\nentryPullbackMa20BelowPct=-2\nentryPullbackMa20DeepPct=-8\nentryMa60SupportPct=-1\nentryVolumeMinRatio=0.6\nentryVolumeMaxRatio=1.8\nentrySmartMoneyMin=10\nentryTradeStrengthMin=100\nentryOrderbookImbalanceMin=5\nentryMaxPositionWeight=20\nentryMaxSectorWeight=45",
       "alertCadenceMinutes": "priceBuyLimit=10\npriceStop=10\npriceTrim=10\nmodelBuy=10\nmodelSell=10\nmodelScoreGap=10\nmodelVersionDrift=10\nflowTradeStrength=10\nflowVolume=10\nflowBuyShare=10\nflowSellShare=10\nflowOrderbook=10\ntrendMomentum=10\ntrendPullback=10\nholdingProfit=10\nholdingLoss=10\nholdingConcentration=10\nsectorConcentration=10\nmarketCashLow=10\nrecordGain=10\nrecordLoss=10\ndataFreshness=10\ntossConnection=10\norderPending=10\norderReject=10\nholdingTiming=10\nmonitorHeartbeat=10\nmonitorConnection=10\nmonitorPositionChange=10\nmonitorPnlChange=10\nmonitorValueChange=10\nmonitorTrendChange=10\nmonitorCashChange=10\nmonitorDecisionChange=10\nexternalEquityMove=10\nexternalCryptoMove=10\nexternalMacroShift=10\nexternalDartDisclosure=10\nexternalDataConnection=10",
       "modelReviewUseCodex": "1",
       "modelReviewTimeoutSeconds": "180",
@@ -97,8 +126,19 @@
       "externalDartLookbackDays": "14",
       "externalDartCorpCodes": "005930=00126380\n000660=00164779\n035420=00266961",
       "externalNewsEnabled": "1",
+      "externalNewsProvider": "auto",
       "externalNewsMaxSymbols": "3",
       "externalNewsLookbackHours": "48",
+      "externalResearchEvidenceMaxItems": "8",
+      "newsCollectionEnabled": "1",
+      "newsCollectionIntervalSeconds": "60",
+      "newsCollectionMaxSymbols": "40",
+      "newsCollectionLookbackMinutes": "180",
+      "newsCollectionPerSymbolLimit": "8",
+      "newsCollectionProviders": "google_rss_kr,google_rss_us,gdelt",
+      "newsCollectionIncludeWatchlist": "1",
+      "newsCollectionIncludeHoldings": "1",
+      "newsCollectionRateLimitSeconds": "0.25",
       "dartDisclosureAiAnalysisEnabled": "1",
       "dartDisclosureAiUseCodex": "1",
       "dartDisclosureAiTimeoutSeconds": "90"
@@ -143,6 +183,11 @@
         },
         {
           "key": "watchlistQuotePending",
+          "default": 1,
+          "unit": ""
+        },
+        {
+          "key": "watchlistOntologySignal",
           "default": 1,
           "unit": ""
         },
@@ -236,31 +281,6 @@
         {
           "key": "watchlistPriceDelta",
           "default": 3.0,
-          "unit": ""
-        },
-        {
-          "key": "lossRateLow",
-          "default": -8.0,
-          "unit": ""
-        },
-        {
-          "key": "lossRateBufferPct",
-          "default": 1.0,
-          "unit": ""
-        },
-        {
-          "key": "lossGuardVolumeConfirmRatio",
-          "default": 0.8,
-          "unit": ""
-        },
-        {
-          "key": "lossGuardMa60SupportPct",
-          "default": 0.0,
-          "unit": ""
-        },
-        {
-          "key": "lossGuardWeakEvidencePenalty",
-          "default": 30.0,
           "unit": ""
         },
         {
@@ -359,21 +379,6 @@
           "unit": ""
         },
         {
-          "key": "profitRateHigh",
-          "default": 20.0,
-          "unit": ""
-        },
-        {
-          "key": "positionWeightHigh",
-          "default": 30.0,
-          "unit": ""
-        },
-        {
-          "key": "sectorWeightHigh",
-          "default": 50.0,
-          "unit": ""
-        },
-        {
           "key": "marketCashLow",
           "default": 10.0,
           "unit": ""
@@ -401,6 +406,148 @@
         {
           "key": "pendingOrderMinutes",
           "default": 30.0,
+          "unit": ""
+        },
+        {
+          "key": "lossGuardMa60SupportPct",
+          "default": 0.0,
+          "unit": ""
+        },
+        {
+          "key": "lossGuardVolumeConfirmRatio",
+          "default": 0.8,
+          "unit": ""
+        },
+        {
+          "key": "lossGuardWeakEvidencePenalty",
+          "default": 30.0,
+          "unit": ""
+        },
+        {
+          "key": "lossRateBufferPct",
+          "default": 1.0,
+          "unit": ""
+        },
+        {
+          "key": "lossRateLow",
+          "default": -8.0,
+          "unit": ""
+        },
+        {
+          "key": "positionWeightHigh",
+          "default": 30.0,
+          "unit": ""
+        },
+        {
+          "key": "profitRateHigh",
+          "default": 20.0,
+          "unit": ""
+        },
+        {
+          "key": "sectorWeightHigh",
+          "default": 50.0,
+          "unit": ""
+        }
+      ],
+      "relationRuleThresholds": [
+        {
+          "key": "lossRateLow",
+          "default": -8.0,
+          "unit": ""
+        },
+        {
+          "key": "lossRateBufferPct",
+          "default": 1.0,
+          "unit": ""
+        },
+        {
+          "key": "lossGuardVolumeConfirmRatio",
+          "default": 0.8,
+          "unit": ""
+        },
+        {
+          "key": "lossGuardMa60SupportPct",
+          "default": 0.0,
+          "unit": ""
+        },
+        {
+          "key": "lossGuardWeakEvidencePenalty",
+          "default": 30.0,
+          "unit": ""
+        },
+        {
+          "key": "profitRateHigh",
+          "default": 20.0,
+          "unit": ""
+        },
+        {
+          "key": "sectorWeightHigh",
+          "default": 50.0,
+          "unit": ""
+        },
+        {
+          "key": "positionWeightHigh",
+          "default": 30.0,
+          "unit": ""
+        },
+        {
+          "key": "externalBitcoinChange24hPct",
+          "default": 3.0,
+          "unit": ""
+        },
+        {
+          "key": "externalBitcoinChange7dPct",
+          "default": 4.0,
+          "unit": ""
+        },
+        {
+          "key": "entryPullbackMa20BelowPct",
+          "default": -2.0,
+          "unit": ""
+        },
+        {
+          "key": "entryPullbackMa20DeepPct",
+          "default": -8.0,
+          "unit": ""
+        },
+        {
+          "key": "entryMa60SupportPct",
+          "default": -1.0,
+          "unit": ""
+        },
+        {
+          "key": "entryVolumeMinRatio",
+          "default": 0.6,
+          "unit": ""
+        },
+        {
+          "key": "entryVolumeMaxRatio",
+          "default": 1.8,
+          "unit": ""
+        },
+        {
+          "key": "entrySmartMoneyMin",
+          "default": 10.0,
+          "unit": ""
+        },
+        {
+          "key": "entryTradeStrengthMin",
+          "default": 100.0,
+          "unit": ""
+        },
+        {
+          "key": "entryOrderbookImbalanceMin",
+          "default": 5.0,
+          "unit": ""
+        },
+        {
+          "key": "entryMaxPositionWeight",
+          "default": 20.0,
+          "unit": ""
+        },
+        {
+          "key": "entryMaxSectorWeight",
+          "default": 45.0,
           "unit": ""
         }
       ],
@@ -433,6 +580,11 @@
         {
           "key": "watchlistQuotePending",
           "default": 60,
+          "unit": "minutes"
+        },
+        {
+          "key": "watchlistOntologySignal",
+          "default": 10,
           "unit": "minutes"
         },
         {
@@ -803,6 +955,17 @@
           "default": "1"
         },
         {
+          "key": "externalNewsProvider",
+          "label": "뉴스 공급자",
+          "type": "select",
+          "options": [
+            "auto",
+            "gdelt",
+            "alpha_vantage"
+          ],
+          "default": "auto"
+        },
+        {
           "key": "externalFredSeries",
           "label": "FRED 지표",
           "type": "text"
@@ -829,6 +992,62 @@
           "type": "number",
           "default": "48",
           "unit": "hours"
+        },
+        {
+          "key": "externalResearchEvidenceMaxItems",
+          "label": "AI 전달 최신 근거 수",
+          "type": "number",
+          "default": "8"
+        },
+        {
+          "key": "newsCollectionEnabled",
+          "label": "뉴스 아카이브 실시간 수집",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
+          "key": "newsCollectionIntervalSeconds",
+          "label": "뉴스 수집 주기",
+          "type": "number",
+          "default": "60",
+          "unit": "seconds"
+        },
+        {
+          "key": "newsCollectionMaxSymbols",
+          "label": "뉴스 수집 종목 수",
+          "type": "number",
+          "default": "40"
+        },
+        {
+          "key": "newsCollectionLookbackMinutes",
+          "label": "뉴스 조회 기간",
+          "type": "number",
+          "default": "180",
+          "unit": "minutes"
+        },
+        {
+          "key": "newsCollectionPerSymbolLimit",
+          "label": "종목별 저장 기사 수",
+          "type": "number",
+          "default": "8"
+        },
+        {
+          "key": "newsCollectionProviders",
+          "label": "뉴스 수집 채널",
+          "type": "text",
+          "default": "google_rss_kr,google_rss_us,gdelt"
+        },
+        {
+          "key": "newsCollectionIncludeWatchlist",
+          "label": "관심종목 뉴스 포함",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
+          "key": "newsCollectionIncludeHoldings",
+          "label": "보유종목 뉴스 포함",
+          "type": "toggle",
+          "default": "1"
         },
         {
           "key": "dartDisclosureAiAnalysisEnabled",
@@ -958,6 +1177,11 @@
             "unit": ""
           },
           {
+            "key": "watchlistOntologySignal",
+            "default": 1,
+            "unit": ""
+          },
+          {
             "key": "holdingTiming",
             "default": 1,
             "unit": ""
@@ -1050,31 +1274,6 @@
             "unit": ""
           },
           {
-            "key": "lossRateLow",
-            "default": -8,
-            "unit": ""
-          },
-          {
-            "key": "lossRateBufferPct",
-            "default": 1,
-            "unit": ""
-          },
-          {
-            "key": "lossGuardVolumeConfirmRatio",
-            "default": 0.8,
-            "unit": ""
-          },
-          {
-            "key": "lossGuardMa60SupportPct",
-            "default": 0,
-            "unit": ""
-          },
-          {
-            "key": "lossGuardWeakEvidencePenalty",
-            "default": 30,
-            "unit": ""
-          },
-          {
             "key": "monitorPnlDelta",
             "default": 2,
             "unit": ""
@@ -1135,6 +1334,108 @@
             "unit": ""
           }
         ],
+        "relationRuleThresholds": [
+          {
+            "key": "lossRateLow",
+            "default": -8,
+            "unit": ""
+          },
+          {
+            "key": "lossRateBufferPct",
+            "default": 1,
+            "unit": ""
+          },
+          {
+            "key": "lossGuardVolumeConfirmRatio",
+            "default": 0.8,
+            "unit": ""
+          },
+          {
+            "key": "lossGuardMa60SupportPct",
+            "default": 0,
+            "unit": ""
+          },
+          {
+            "key": "lossGuardWeakEvidencePenalty",
+            "default": 30,
+            "unit": ""
+          },
+          {
+            "key": "profitRateHigh",
+            "default": 20,
+            "unit": ""
+          },
+          {
+            "key": "sectorWeightHigh",
+            "default": 50,
+            "unit": ""
+          },
+          {
+            "key": "positionWeightHigh",
+            "default": 30,
+            "unit": ""
+          },
+          {
+            "key": "externalBitcoinChange24hPct",
+            "default": 3,
+            "unit": ""
+          },
+          {
+            "key": "externalBitcoinChange7dPct",
+            "default": 4,
+            "unit": ""
+          },
+          {
+            "key": "entryPullbackMa20BelowPct",
+            "default": -2,
+            "unit": ""
+          },
+          {
+            "key": "entryPullbackMa20DeepPct",
+            "default": -8,
+            "unit": ""
+          },
+          {
+            "key": "entryMa60SupportPct",
+            "default": -1,
+            "unit": ""
+          },
+          {
+            "key": "entryVolumeMinRatio",
+            "default": 0.6,
+            "unit": ""
+          },
+          {
+            "key": "entryVolumeMaxRatio",
+            "default": 1.8,
+            "unit": ""
+          },
+          {
+            "key": "entrySmartMoneyMin",
+            "default": 10,
+            "unit": ""
+          },
+          {
+            "key": "entryTradeStrengthMin",
+            "default": 100,
+            "unit": ""
+          },
+          {
+            "key": "entryOrderbookImbalanceMin",
+            "default": 5,
+            "unit": ""
+          },
+          {
+            "key": "entryMaxPositionWeight",
+            "default": 20,
+            "unit": ""
+          },
+          {
+            "key": "entryMaxSectorWeight",
+            "default": 45,
+            "unit": ""
+          }
+        ],
         "alertCadenceMinutes": [
           {
             "key": "investmentInsight",
@@ -1164,6 +1465,11 @@
           {
             "key": "watchlistQuotePending",
             "default": 60,
+            "unit": "minutes"
+          },
+          {
+            "key": "watchlistOntologySignal",
+            "default": 10,
             "unit": "minutes"
           },
           {
@@ -1421,5 +1727,5 @@
       ]
     }
   ],
-  "buildId": "c412a2e240ae"
+  "buildId": "fa3ee3bad7dd"
 }

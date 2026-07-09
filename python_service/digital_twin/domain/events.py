@@ -25,6 +25,7 @@ APP_ITEM_REMOVED = "app.item_removed"
 CHAT_MESSAGE_APPENDED = "chat.message_appended"
 SYMBOL_UNIVERSE_REFRESHED = "symbol_universe.refreshed"
 MARKET_DATA_COLLECTED = "market_data.collected"
+RESEARCH_EVIDENCE_COLLECTED = "research_evidence.collected"
 
 
 @dataclass(frozen=True)
@@ -156,5 +157,22 @@ def market_data_collected_event(payload: Dict[str, object]) -> DomainEvent:
             "savedCount": int(payload.get("savedCount") or 0),
             "status": str(payload.get("status") or ""),
             "dataQuality": str(payload.get("dataQuality") or "actual"),
+        },
+    )
+
+
+def research_evidence_collected_event(payload: Dict[str, object]) -> DomainEvent:
+    symbols = list(payload.get("symbols") or [])
+    return DomainEvent(
+        name=RESEARCH_EVIDENCE_COLLECTED,
+        aggregate_id="news:" + (",".join(str(symbol) for symbol in symbols) or "all")[:180],
+        payload={
+            "source": "news-collection",
+            "status": str(payload.get("status") or ""),
+            "targetCount": int(payload.get("targetCount") or 0),
+            "fetchedCount": int(payload.get("fetchedCount") or 0),
+            "savedCount": int(payload.get("savedCount") or 0),
+            "symbols": symbols[:100],
+            "providers": list(payload.get("providers") or [])[:20],
         },
     )

@@ -67,6 +67,9 @@
     newsCollectionIncludeWatchlist: "1",
     newsCollectionIncludeHoldings: "1",
     newsCollectionRateLimitSeconds: "0.25",
+    ontologyReasoningEnabled: "1",
+    ontologyReasoningIntervalSeconds: "10",
+    ontologyReasoningBatchSize: "20",
     externalDartCorpCodes: [
       "005930=00126380",
       "000660=00164779",
@@ -3718,6 +3721,9 @@
       newsCollectionIncludeWatchlist: settingValue("newsCollectionIncludeWatchlist"),
       newsCollectionIncludeHoldings: settingValue("newsCollectionIncludeHoldings"),
       newsCollectionRateLimitSeconds: settingValue("newsCollectionRateLimitSeconds"),
+      ontologyReasoningEnabled: settingValue("ontologyReasoningEnabled"),
+      ontologyReasoningIntervalSeconds: settingValue("ontologyReasoningIntervalSeconds"),
+      ontologyReasoningBatchSize: settingValue("ontologyReasoningBatchSize"),
       externalDartCorpCodes: settingValue("externalDartCorpCodes"),
       dartDisclosureAiAnalysisEnabled: settingValue("dartDisclosureAiAnalysisEnabled"),
       dartDisclosureAiUseCodex: settingValue("dartDisclosureAiUseCodex"),
@@ -13460,6 +13466,12 @@
       renderSettingField("newsCollectionPerSymbolLimit", "종목별 저장 기사 수", "number", "8"),
       renderSettingField("newsCollectionProviders", "뉴스 수집 채널", "text", "google_rss_kr,google_rss_us,gdelt"),
       renderSettingField("newsCollectionMinRelevanceScore", "뉴스 관련성 최소 점수", "number", "35"),
+      renderSettingSelect("ontologyReasoningEnabled", "데이터 변경 추론", [
+        { value: "1", label: "사용" },
+        { value: "0", label: "사용 안 함" }
+      ]),
+      renderSettingField("ontologyReasoningIntervalSeconds", "추론 요청 확인 주기(초)", "number", "10"),
+      renderSettingField("ontologyReasoningBatchSize", "추론 요청 배치", "number", "20"),
       renderSettingSelect("externalDartEnabled", "OpenDART 공시 수집", [
         { value: "1", label: "사용" },
         { value: "0", label: "사용 안 함" }
@@ -14094,6 +14106,8 @@
       renderSettingField("newsCollectionMaxSymbols", "뉴스 수집 종목 수", "number", "40"),
       renderSettingField("newsCollectionLookbackMinutes", "뉴스 조회 기간(분)", "number", "180"),
       renderSettingField("newsCollectionMinRelevanceScore", "뉴스 관련성 최소 점수", "number", "35"),
+      renderSettingField("ontologyReasoningIntervalSeconds", "추론 요청 확인 주기(초)", "number", "10"),
+      renderSettingField("ontologyReasoningBatchSize", "추론 요청 배치", "number", "20"),
       renderSettingSelect("dartDisclosureAiAnalysisEnabled", "공시 AI 해석", [
         { value: "1", label: "사용" },
         { value: "0", label: "사용 안 함" }

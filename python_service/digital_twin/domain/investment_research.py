@@ -144,6 +144,7 @@ class ResearchEvidence:
     raw_payload: Dict[str, object] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, object]:
+        payload = dict(self.raw_payload or {})
         return {
             "evidenceId": self.evidence_id,
             "symbol": self.symbol,
@@ -157,15 +158,22 @@ class ResearchEvidence:
             "polarity": self.polarity,
             "impactScore": round(number(self.impact_score), 1),
             "confidence": round(number(self.confidence), 2),
-            "relevanceScore": round(number((self.raw_payload or {}).get("relevanceScore")), 1),
-            "relationScope": str((self.raw_payload or {}).get("relationScope") or ""),
-            "sourceReliability": round(number((self.raw_payload or {}).get("sourceReliability")), 2),
-            "eventType": str((self.raw_payload or {}).get("eventType") or ""),
-            "materialityScore": round(number((self.raw_payload or {}).get("materialityScore")), 1),
-            "ontologyRelations": list((self.raw_payload or {}).get("ontologyRelations") or []),
-            "excludedReason": str((self.raw_payload or {}).get("excludedReason") or ""),
-            "analysisSummary": str((self.raw_payload or {}).get("analysisSummary") or ""),
-            "payload": dict(self.raw_payload or {}),
+            "relevanceScore": round(number(payload.get("relevanceScore")), 1),
+            "relationScope": str(payload.get("relationScope") or ""),
+            "sourceReliability": round(number(payload.get("sourceReliability")), 2),
+            "eventType": str(payload.get("eventType") or ""),
+            "materialityScore": round(number(payload.get("materialityScore")), 1),
+            "ontologyRelations": list(payload.get("ontologyRelations") or []),
+            "excludedReason": str(payload.get("excludedReason") or ""),
+            "analysisSummary": str(payload.get("analysisSummary") or ""),
+            "articleSummaryKo": str(payload.get("articleSummaryKo") or ""),
+            "articleReadStatus": str(payload.get("articleReadStatus") or ""),
+            "stockImpact": str(payload.get("stockImpact") or ""),
+            "stockImpactLabel": str(payload.get("stockImpactLabel") or ""),
+            "stockImpactPolarity": str(payload.get("stockImpactPolarity") or ""),
+            "stockImpactScore": round(number(payload.get("stockImpactScore")), 1),
+            "stockImpactReasonKo": str(payload.get("stockImpactReasonKo") or ""),
+            "payload": payload,
         }
 
 
@@ -347,6 +355,15 @@ def research_evidence_from_payload(payload: Dict[str, object], fallback_symbol: 
         "excludedReason",
         "analysisSummary",
         "analysisVersion",
+        "articleSummaryKo",
+        "articleReadStatus",
+        "articleTextPreview",
+        "articleDigestVersion",
+        "stockImpact",
+        "stockImpactLabel",
+        "stockImpactPolarity",
+        "stockImpactScore",
+        "stockImpactReasonKo",
     ]:
         if key in source_payload and key not in raw_payload:
             raw_payload[key] = source_payload.get(key)
@@ -369,13 +386,19 @@ def research_evidence_from_payload(payload: Dict[str, object], fallback_symbol: 
     if kind == "news" and not impact_score:
         _polarity, base_impact = keyword_polarity(title + " " + str(source_payload.get("summary") or ""))
         impact_score = news_domain.impact_from_analysis_payload(base_impact, raw_payload)
+    summary_value = (
+        source_payload.get("articleSummaryKo")
+        or raw_payload.get("articleSummaryKo")
+        or source_payload.get("summary")
+        or title
+    )
     return ResearchEvidence(
         evidence_id,
         symbol,
         kind,
         source or "Research",
         title,
-        compact_text(source_payload.get("summary") or title),
+        compact_text(summary_value, 520),
         url,
         str(source_payload.get("observedAt") or source_payload.get("observed_at") or source_payload.get("seenDate") or ""),
         polarity or "context",
@@ -534,8 +557,21 @@ def research_evidence_from_facts(symbol: str, facts: Dict[str, object]) -> List[
         polarity, impact = keyword_polarity(title)
         url = str(item.get("url") or "").strip()
         source = str(item.get("domain") or item.get("source") or news.get("provider") or "GDELT").strip()
-        summary = compact_text(item.get("summary") or title)
+        summary = compact_text(item.get("articleSummaryKo") or item.get("summary") or title, 520)
         raw_payload = dict(item.get("payload") or item.get("rawPayload") or {})
+        for key in [
+            "articleSummaryKo",
+            "articleReadStatus",
+            "articleTextPreview",
+            "articleDigestVersion",
+            "stockImpact",
+            "stockImpactLabel",
+            "stockImpactPolarity",
+            "stockImpactScore",
+            "stockImpactReasonKo",
+        ]:
+            if key in item and key not in raw_payload:
+                raw_payload[key] = item.get(key)
         if not raw_payload.get("relationScope"):
             raw_payload.update(classify_news_relevance(
                 target,

@@ -991,13 +991,29 @@ def source_detail_summary(item: Dict[str, object]) -> str:
     payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
     raw_payload = item.get("rawPayload") if isinstance(item.get("rawPayload"), dict) else {}
     return _text(
-        item.get("summary")
+        item.get("articleSummaryKo")
+        or payload.get("articleSummaryKo")
+        or raw_payload.get("articleSummaryKo")
+        or item.get("summary")
         or item.get("analysisSummary")
         or payload.get("analysisSummary")
         or raw_payload.get("analysisSummary")
         or item.get("title"),
         140,
     )
+
+
+def source_detail_text(item: Dict[str, object], *keys: str) -> str:
+    if not isinstance(item, dict):
+        return ""
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    raw_payload = item.get("rawPayload") if isinstance(item.get("rawPayload"), dict) else {}
+    for key in keys:
+        for source in [item, payload, raw_payload]:
+            value = str(source.get(key) or "").strip() if isinstance(source, dict) else ""
+            if value:
+                return _text(value, 220)
+    return ""
 
 
 def source_url_rows(urls: List[str], context: Dict[str, object]) -> List[str]:
@@ -1014,6 +1030,8 @@ def source_url_rows(urls: List[str], context: Dict[str, object]) -> List[str]:
         reliability = source_reliability_text(detail)
         relevance = source_score_piece("관련성", source_detail_number(detail, "relevanceScore"))
         materiality = source_score_piece("중요도", source_detail_number(detail, "materialityScore"))
+        impact_label = source_detail_text(detail, "stockImpactLabel")
+        impact_reason = source_detail_text(detail, "stockImpactReasonKo")
         summary = source_detail_summary(detail)
         link_text = "• <a href=\"" + html.escape(text, quote=True) + "\">" + html.escape(label, quote=False) + "</a>"
         rows.append(link_text + (": " + html.escape(title, quote=False) if title else ""))
@@ -1021,12 +1039,15 @@ def source_url_rows(urls: List[str], context: Dict[str, object]) -> List[str]:
             ("신뢰도 " + reliability) if reliability else "",
             relevance,
             materiality,
+            ("주가 영향 " + impact_label) if impact_label else "",
             ("출처 " + source) if source else "",
         ] if item)
         if meta:
             rows.append("  " + html.escape(meta, quote=False))
         if summary and summary != title:
             rows.append("  " + html.escape("요약: " + summary, quote=False))
+        if impact_reason:
+            rows.append("  " + html.escape("영향 분석: " + impact_reason, quote=False))
     return rows
 
 
@@ -1240,9 +1261,6 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
     parts.extend(["", "<b>AI가 중요하게 본 근거</b>"])
     evidence_limit = 3 if level == "beginner" else 4
     parts.extend("• " + html.escape(item, quote=False) for item in response.evidence[:evidence_limit])
-    if response.source_urls:
-        parts.extend(["", "<b>출처</b>"])
-        parts.extend(source_url_rows(response.source_urls, context))
     if response.counter_evidence:
         parts.extend(["", "<b>" + ("다르게 볼 점" if level == "beginner" else "확인할 반대 신호") + "</b>"])
         parts.extend("• " + html.escape(item, quote=False) for item in response.counter_evidence[:3 if level == "beginner" else 4])
@@ -1267,6 +1285,9 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
         if relation_labels:
             parts.extend(["", "<b>관계 규칙 요약</b>"])
             parts.extend("• " + html.escape(item, quote=False) for item in relation_labels)
+    if response.source_urls:
+        parts.extend(["", "<b>출처</b>"])
+        parts.extend(source_url_rows(response.source_urls, context))
     parts.extend(execution_footer(context, response, reference, sent))
     return "\n".join(part for part in parts if str(part).strip() or part == "").strip()
 
@@ -1293,9 +1314,6 @@ def execution_telegram_message_absolute_beginner(context: Dict[str, object], res
     if response.evidence:
         parts.extend(["", "<b>AI가 중요하게 본 근거</b>"])
         parts.extend("• " + html.escape(item, quote=False) for item in response.evidence[:3])
-    if response.source_urls:
-        parts.extend(["", "<b>원문/출처</b>"])
-        parts.extend(source_url_rows(response.source_urls, context))
     if response.counter_evidence:
         parts.extend(["", "<b>다르게 볼 점</b>"])
         parts.extend("• " + html.escape(item, quote=False) for item in response.counter_evidence[:2])
@@ -1312,6 +1330,9 @@ def execution_telegram_message_absolute_beginner(context: Dict[str, object], res
     criteria = _criteria_summary(context)
     if criteria:
         parts.extend(["", "<b>왜 온 알림</b>", "• " + html.escape(criteria, quote=False)])
+    if response.source_urls:
+        parts.extend(["", "<b>원문/출처</b>"])
+        parts.extend(source_url_rows(response.source_urls, context))
     parts.extend(execution_footer(context, response, reference, sent))
     return "\n".join(part for part in parts if str(part).strip() or part == "").strip()
 

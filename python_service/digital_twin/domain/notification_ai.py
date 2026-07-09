@@ -286,7 +286,18 @@ def active_opinion_evidence_text(opinion: Dict[str, object], key: str, limit: in
     for item in rows:
         if not isinstance(item, dict):
             continue
-        title = str(item.get("title") or item.get("summary") or item.get("source") or "").strip()
+        payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+        title = str(
+            item.get("articleSummaryKo")
+            or payload.get("articleSummaryKo")
+            or item.get("summary")
+            or item.get("title")
+            or item.get("source")
+            or ""
+        ).strip()
+        impact = str(item.get("stockImpactLabel") or payload.get("stockImpactLabel") or "").strip()
+        if impact and str(item.get("kind") or "").strip() == "news" and not title.startswith(impact):
+            title = impact + ": " + title
         if title and title not in titles:
             titles.append(compact_text(title, 72))
         if len(titles) >= limit:
@@ -387,10 +398,24 @@ def news_summary_text(context: Dict[str, object]) -> str:
         domain = str(item.get("domain") or item.get("provider") or "뉴스").strip()
         seen_date = str(item.get("seenDate") or item.get("seendate") or "").strip()
         suffix = (" · " + seen_date) if seen_date else ""
-        parts.append(domain + ": " + compact_text(item.get("title"), 84) + suffix)
+        payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+        summary = item.get("articleSummaryKo") or payload.get("articleSummaryKo") or item.get("summary") or item.get("title")
+        impact = str(item.get("stockImpactLabel") or payload.get("stockImpactLabel") or "").strip()
+        prefix = (impact + " · ") if impact else ""
+        parts.append(domain + ": " + prefix + compact_text(summary, 110) + suffix)
     for item in evidence_items:
         kind = str(item.get("kind") or "").strip()
-        if kind in {"news", "disclosure"}:
+        if kind == "news":
+            payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+            source = str(item.get("source") or "뉴스").strip()
+            summary = item.get("articleSummaryKo") or payload.get("articleSummaryKo") or item.get("summary") or item.get("title")
+            impact = str(item.get("stockImpactLabel") or payload.get("stockImpactLabel") or "").strip()
+            observed = str(item.get("publishedAt") or item.get("observedAt") or "").strip()
+            suffix = (" · " + observed) if observed else ""
+            if summary:
+                parts.append(source + ": " + ((impact + " · ") if impact else "") + compact_text(summary, 110) + suffix)
+            continue
+        if kind == "disclosure":
             continue
         source = str(item.get("source") or "리서치").strip()
         title = compact_text(item.get("title") or item.get("summary"), 84)
@@ -478,6 +503,9 @@ def notification_ai_prompt_context(
                 {
                     "title": str(item.get("title") or ""),
                     "domain": str(item.get("domain") or ""),
+                    "summary": str(item.get("articleSummaryKo") or item.get("summary") or ""),
+                    "stockImpactLabel": str(item.get("stockImpactLabel") or ""),
+                    "stockImpactReasonKo": str(item.get("stockImpactReasonKo") or ""),
                     "seenDate": str(item.get("seenDate") or item.get("seendate") or ""),
                 }
                 for item in news_headline_items(context)[:3]

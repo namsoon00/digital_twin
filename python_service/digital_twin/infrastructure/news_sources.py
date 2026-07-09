@@ -6,7 +6,8 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
-from typing import Callable, Dict, Iterable, List, Tuple
+from html.parser import HTMLParser
+from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
 from ..domain import news_analysis as news_domain
 from ..domain.investment_research import NewsCollectionTarget, ResearchEvidence, classify_news_relevance, compact_text, keyword_polarity, stable_evidence_token
@@ -17,6 +18,8 @@ from ..domain.portfolio import utc_now_iso
 JsonFetcher = Callable[[str, Dict[str, str]], object]
 TextFetcher = Callable[[str, Dict[str, str]], str]
 TAG_RE = re.compile(r"<[^>]+>")
+DISABLED_VALUES = {"0", "false", "no", "off", "disabled"}
+ARTICLE_TEXT_LIMIT = 5000
 
 
 def default_json_fetcher(url: str, headers: Dict[str, str] = None, timeout: float = 8.0) -> object:
@@ -46,8 +49,107 @@ def int_setting(settings: Dict[str, str], key: str, fallback: int, lower: int = 
     return max(lower, min(upper, parsed))
 
 
+def truthy(value: object, default: bool = True) -> bool:
+    text = str(value if value is not None else "").strip().lower()
+    if not text:
+        return default
+    return text not in DISABLED_VALUES
+
+
 def strip_html(value: object) -> str:
     return compact_text(html.unescape(TAG_RE.sub(" ", str(value or ""))), 240)
+
+
+def article_block_is_useful(text: object) -> bool:
+    value = compact_text(text, 500)
+    if len(value) < 28:
+        return False
+    lowered = value.lower()
+    if any(term in lowered for term in [
+        "cookie",
+        "advertisement",
+        "subscribe",
+        "sign up",
+        "all rights reserved",
+        "개인정보",
+        "구독",
+        "광고",
+        "저작권",
+        "무단전재",
+        "기자",
+    ]):
+        return False
+    return True
+
+
+class ArticleTextParser(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.skip_depth = 0
+        self.capture_stack: List[str] = []
+        self.buffer: List[str] = []
+        self.blocks: List[str] = []
+        self.meta_description = ""
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        normalized = str(tag or "").lower()
+        if normalized in {"script", "style", "noscript", "svg", "iframe", "nav", "footer", "form"}:
+            self.skip_depth += 1
+            return
+        attr_map = {str(key or "").lower(): str(value or "") for key, value in attrs or []}
+        if normalized == "meta":
+            name = (attr_map.get("name") or attr_map.get("property") or "").lower()
+            if name in {"description", "og:description", "twitter:description"} and attr_map.get("content"):
+                self.meta_description = self.meta_description or attr_map["content"]
+        if normalized in {"p", "h1", "h2", "h3", "li"}:
+            self.capture_stack.append(normalized)
+            self.buffer = []
+
+    def handle_endtag(self, tag: str) -> None:
+        normalized = str(tag or "").lower()
+        if normalized in {"script", "style", "noscript", "svg", "iframe", "nav", "footer", "form"}:
+            self.skip_depth = max(0, self.skip_depth - 1)
+            return
+        if self.capture_stack and normalized == self.capture_stack[-1]:
+            text = compact_text(" ".join(self.buffer), 420)
+            if article_block_is_useful(text):
+                self.blocks.append(text)
+            self.capture_stack.pop()
+            self.buffer = []
+
+    def handle_data(self, data: str) -> None:
+        if self.skip_depth or not self.capture_stack:
+            return
+        text = str(data or "").strip()
+        if text:
+            self.buffer.append(text)
+
+
+def extract_article_text(raw_html: object) -> str:
+    text = str(raw_html or "")
+    if not text.strip():
+        return ""
+    head = text[:600].lower()
+    if "<rss" in head or "<feed" in head or "<channel" in head:
+        return ""
+    parser = ArticleTextParser()
+    try:
+        parser.feed(text)
+    except Exception:  # noqa: BLE001 - malformed news HTML should fall back to feed summaries.
+        return ""
+    blocks: List[str] = []
+    if article_block_is_useful(parser.meta_description):
+        blocks.append(compact_text(parser.meta_description, 420))
+    seen = {item.casefold() for item in blocks}
+    for block in parser.blocks:
+        key = block.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        blocks.append(block)
+        if len(" ".join(blocks)) >= ARTICLE_TEXT_LIMIT:
+            break
+    return compact_text(" ".join(blocks), ARTICLE_TEXT_LIMIT)
 
 
 def parse_news_datetime(value: object):
@@ -109,6 +211,87 @@ class NewsSourceGateway:
     def min_relevance_score(self) -> float:
         return float(int_setting(self.settings, "newsCollectionMinRelevanceScore", 35, 0, 100))
 
+    def article_body_enabled(self) -> bool:
+        return truthy(self.settings.get("newsCollectionArticleBodyEnabled"), True)
+
+    def article_text_for_url(self, url: str) -> str:
+        if not self.article_body_enabled():
+            return ""
+        normalized = str(url or "").strip()
+        if not normalized.startswith(("http://", "https://")):
+            return ""
+        try:
+            raw_html = self.fetch_text(normalized, {
+                "Accept": "text/html,application/xhtml+xml",
+                "User-Agent": "DigitalTwin/1.0",
+            })
+        except Exception:  # noqa: BLE001 - article-body fetch must not block headline collection.
+            return ""
+        return extract_article_text(raw_html)
+
+    def news_evidence_from_article(
+        self,
+        target: NewsCollectionTarget,
+        provider: str,
+        source: str,
+        title: str,
+        feed_summary: str,
+        link: str,
+        published: object,
+        metadata: Dict[str, object] = None,
+    ) -> Optional[ResearchEvidence]:
+        preliminary = classify_news_relevance(target, title, feed_summary or title, source, provider)
+        if number(preliminary.get("relevanceScore")) < self.min_relevance_score() or preliminary.get("relationScope") == "noise":
+            return None
+        article_text = self.article_text_for_url(link)
+        analysis_text = article_text or feed_summary or title
+        relevance = classify_news_relevance(target, title, analysis_text, source, provider)
+        if number(relevance.get("relevanceScore")) < self.min_relevance_score() or relevance.get("relationScope") == "noise":
+            return None
+        polarity, impact = keyword_polarity(title + " " + analysis_text)
+        confidence = news_domain.confidence_from_analysis_payload(relevance)
+        impact_score = news_domain.impact_from_analysis_payload(impact, relevance)
+        summary_ko = news_domain.korean_article_summary(
+            target,
+            title,
+            article_text,
+            feed_summary,
+            relevance,
+        )
+        stock_impact = news_domain.stock_impact_analysis(
+            target,
+            title,
+            article_text,
+            feed_summary,
+            relevance,
+            polarity,
+            impact_score,
+        )
+        symbol = target.normalized_symbol()
+        payload = {
+            **(metadata or {}),
+            **relevance,
+            **stock_impact,
+            "articleSummaryKo": summary_ko,
+            "articleReadStatus": "body" if article_text else "feed-summary",
+            "articleTextPreview": compact_text(article_text, 700) if article_text else "",
+        }
+        return ResearchEvidence(
+            "research:" + symbol + ":news:" + stable_evidence_token(provider, title, link),
+            symbol,
+            "news",
+            source,
+            title,
+            summary_ko or compact_text(feed_summary or title, 360),
+            link,
+            utc_now_iso(),
+            polarity,
+            impact_score,
+            confidence,
+            iso_or_empty(published),
+            payload,
+        )
+
     def collect_for_target(self, target: NewsCollectionTarget) -> Tuple[List[ResearchEvidence], List[Dict[str, object]]]:
         items: List[ResearchEvidence] = []
         statuses: List[Dict[str, object]] = []
@@ -166,32 +349,24 @@ class NewsSourceGateway:
             source = item.find("source")
             source_text = strip_html(source.text if source is not None else "") or source_name
             summary = strip_html(item.findtext("description"))
-            relevance = classify_news_relevance(target, title, summary, source_text, source_name)
-            if number(relevance.get("relevanceScore")) < self.min_relevance_score() or relevance.get("relationScope") == "noise":
-                continue
-            polarity, impact = keyword_polarity(title + " " + summary)
-            confidence = news_domain.confidence_from_analysis_payload(relevance)
-            evidence.append(ResearchEvidence(
-                "research:" + symbol + ":news:" + stable_evidence_token(source_name, title, link),
-                symbol,
-                "news",
+            item_evidence = self.news_evidence_from_article(
+                target,
+                source_name,
                 source_text,
                 title,
-                summary or title,
+                summary,
                 link,
-                utc_now_iso(),
-                polarity,
-                news_domain.impact_from_analysis_payload(impact, relevance),
-                confidence,
-                iso_or_empty(published),
+                published,
                 {
                     "provider": source_name,
                     "locale": locale,
                     "query": query,
                     "feedUrl": url,
-                    **relevance,
                 },
-            ))
+            )
+            if not item_evidence:
+                continue
+            evidence.append(item_evidence)
             if len(evidence) >= self.per_symbol_limit():
                 break
         return evidence
@@ -220,32 +395,24 @@ class NewsSourceGateway:
             if not title or not link or not within_lookback(published, self.lookback_minutes()):
                 continue
             source = str(article.get("domain") or "GDELT News").strip()
-            relevance = classify_news_relevance(target, title, title, source, "GDELT")
-            if number(relevance.get("relevanceScore")) < self.min_relevance_score() or relevance.get("relationScope") == "noise":
-                continue
-            polarity, impact = keyword_polarity(title)
-            confidence = news_domain.confidence_from_analysis_payload(relevance)
-            evidence.append(ResearchEvidence(
-                "research:" + symbol + ":news:" + stable_evidence_token("GDELT", title, link),
-                symbol,
-                "news",
+            item_evidence = self.news_evidence_from_article(
+                target,
+                "GDELT",
                 source,
                 title,
                 title,
                 link,
-                utc_now_iso(),
-                polarity,
-                news_domain.impact_from_analysis_payload(impact, relevance),
-                confidence,
-                iso_or_empty(published),
+                published,
                 {
                     "provider": "GDELT",
                     "sourceCountry": str(article.get("sourceCountry") or "").strip(),
                     "language": str(article.get("language") or "").strip(),
                     "query": query,
-                    **relevance,
                 },
-            ))
+            )
+            if not item_evidence:
+                continue
+            evidence.append(item_evidence)
             if len(evidence) >= self.per_symbol_limit():
                 break
         return evidence

@@ -4745,7 +4745,14 @@ class PythonServiceTests(unittest.TestCase):
     def test_news_source_gateway_scores_and_filters_unrelated_news(self):
         published = datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S GMT")
 
-        def fake_text(_url, headers=None):
+        def fake_text(url, headers=None):
+            if str(url).endswith("/samsung"):
+                return (
+                    "<html><body><article>"
+                    "<p>삼성전자는 HBM 수요 회복과 메모리 가격 개선으로 다음 분기 실적 개선 기대가 커졌습니다.</p>"
+                    "<p>증권가는 데이터센터 투자 확대가 반도체 매출 성장으로 이어질 수 있다고 봤습니다.</p>"
+                    "</article></body></html>"
+                )
             return (
                 "<rss><channel>"
                 "<item>"
@@ -4781,6 +4788,11 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("direct", evidence[0].raw_payload["relationScope"])
         self.assertGreaterEqual(evidence[0].raw_payload["relevanceScore"], 80)
         self.assertIn("삼성전자", evidence[0].raw_payload["matchedAliases"])
+        self.assertEqual("body", evidence[0].raw_payload["articleReadStatus"])
+        self.assertIn("본문 요약", evidence[0].summary)
+        self.assertIn("HBM 수요 회복", evidence[0].summary)
+        self.assertEqual("호재", evidence[0].raw_payload["stockImpactLabel"])
+        self.assertIn("주가 영향", evidence[0].raw_payload["stockImpactReasonKo"])
 
     def test_news_collection_runner_stores_domestic_and_overseas_news(self):
         path = Path(self.temp.name) / "service.db"
@@ -6542,6 +6554,50 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("요약: Data center demand remains strong.", enriched["telegramMessage"])
         self.assertNotIn(truncated_payload_url, enriched["telegramMessage"])
         self.assertEqual(3, enriched["telegramMessage"].count("https://news.google.com/rss/articles/"))
+
+    def test_notification_ai_gate_renders_article_summary_and_stock_impact_at_bottom(self):
+        url = "https://news.example.com/samsung-hbm"
+        context = {
+            "messageType": "investmentInsight",
+            "headline": "[관찰] 삼성전자: 보유 유지·뉴스 확인",
+            "displayTarget": "삼성전자 / 005930",
+            "referenceDate": "2026-07-09 17:00 KST",
+            "rawLines": ["현재가: 81,000원"],
+            "researchEvidence": [
+                {
+                    "kind": "news",
+                    "title": "삼성전자 HBM 수요 회복",
+                    "summary": "제목 요약",
+                    "articleSummaryKo": "본문 요약: HBM 수요 회복과 메모리 가격 개선이 실적 기대를 키웠습니다.",
+                    "url": url,
+                    "source": "연합뉴스",
+                    "payload": {
+                        "sourceReliability": 0.82,
+                        "relevanceScore": 94,
+                        "materialityScore": 78,
+                        "stockImpactLabel": "호재",
+                        "stockImpactReasonKo": "주가 영향은 긍정적으로 봅니다. 종목 직접 뉴스이고 실적 성격입니다.",
+                    },
+                }
+            ],
+        }
+        response = validated_response_from_payload(context, {
+            "action": "HOLD",
+            "confidence": 70,
+            "summary": "뉴스 본문 확인 후 보유를 유지합니다.",
+            "opinion": "원문 확인 뒤 추세를 보세요.",
+            "evidence": ["뉴스 본문이 실적 기대를 뒷받침합니다."],
+            "sourceUrls": [url],
+            "referenceDate": "2026-07-09 17:00 KST",
+        }, source="test AI")
+
+        message = context_with_validated_ai_response(context, response)["telegramMessage"]
+
+        self.assertIn("<b>출처</b>", message)
+        self.assertIn("주가 영향 호재", message)
+        self.assertIn("요약: 본문 요약: HBM 수요 회복", message)
+        self.assertIn("영향 분석: 주가 영향은 긍정적으로 봅니다.", message)
+        self.assertGreater(message.rfind("<b>출처</b>"), message.rfind("<b>실행 전 확인</b>"))
 
     def test_notification_worker_waits_for_validated_ai_before_rendering(self):
         class FakeReviewer:

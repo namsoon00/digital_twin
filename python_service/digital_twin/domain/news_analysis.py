@@ -1,10 +1,12 @@
 from dataclasses import dataclass, field
+import re
 from typing import Dict, Iterable, List, Tuple
 
 from .market_data import clamp, number
 
 
 NEWS_ANALYSIS_VERSION = "news-analysis-v2-domain-ontology"
+ARTICLE_DIGEST_VERSION = "article-digest-ko-v1"
 
 SUPPORT_KEYWORDS = (
     "beat",
@@ -126,6 +128,64 @@ EVENT_TYPE_KEYWORDS = {
 LOW_RELIABILITY_SOURCE_TERMS = ["blog", "블로그", "cafe", "reddit", "rumor"]
 HIGH_RELIABILITY_SOURCE_TERMS = ["dart", "sec", "edgar", "reuters", "bloomberg", "연합", "yonhap", "cnbc", "wsj", "marketwatch"]
 
+EVENT_TYPE_LABELS = {
+    "earnings": "실적",
+    "guidance": "전망",
+    "supply_chain": "공급망/생산",
+    "product": "제품/서비스",
+    "regulation": "규제/소송",
+    "capital_policy": "자본정책",
+    "listing": "상장/거래시장",
+    "macro_sector": "거시/업황",
+    "crypto_linked": "가상자산 연동",
+    "price_commentary": "주가 해설",
+    "general": "일반 이슈",
+}
+
+RELATION_SCOPE_LABELS = {
+    "direct": "종목 직접 뉴스",
+    "peer": "비교 기업 뉴스",
+    "sector": "업종 뉴스",
+    "market": "시장 환경 뉴스",
+    "noise": "투자 관련 낮음",
+}
+
+TOPIC_LABELS = [
+    ("hbm", "HBM"),
+    ("dram", "D램"),
+    ("d램", "D램"),
+    ("nand", "낸드"),
+    ("memory", "메모리"),
+    ("메모리", "메모리"),
+    ("semiconductor", "반도체"),
+    ("반도체", "반도체"),
+    ("ai", "AI"),
+    ("artificial intelligence", "AI"),
+    ("gpu", "GPU"),
+    ("data center", "데이터센터"),
+    ("데이터센터", "데이터센터"),
+    ("cloud", "클라우드"),
+    ("electric vehicle", "전기차"),
+    ("ev", "전기차"),
+    ("전기차", "전기차"),
+    ("battery", "배터리"),
+    ("배터리", "배터리"),
+    ("bitcoin", "비트코인"),
+    ("비트코인", "비트코인"),
+    ("금리", "금리"),
+    ("yield", "금리"),
+    ("inflation", "인플레이션"),
+    ("환율", "환율"),
+    ("buyback", "자사주"),
+    ("dividend", "배당"),
+    ("guidance", "가이던스"),
+]
+
+NUMERIC_TOKEN_RE = re.compile(
+    r"(?:[$₩]?\d[\d,.]*(?:\.\d+)?\s?(?:%|달러|원|조|억|만|million|billion|trillion|mn|bn|M|B)?)",
+    re.IGNORECASE,
+)
+
 
 @dataclass(frozen=True)
 class NewsAnalysis:
@@ -213,6 +273,25 @@ def _unique_texts(values: Iterable[object]) -> List[str]:
     return result
 
 
+def compact_text(value: object, limit: int = 220) -> str:
+    text = " ".join(str(value or "").split())
+    if limit > 3 and len(text) > limit:
+        return text[: limit - 3].rstrip() + "..."
+    return text
+
+
+def contains_hangul(value: object) -> bool:
+    return bool(re.search(r"[가-힣]", str(value or "")))
+
+
+def event_type_label(event_type: object) -> str:
+    return EVENT_TYPE_LABELS.get(str(event_type or "general"), str(event_type or "일반 이슈"))
+
+
+def relation_scope_label(scope: object) -> str:
+    return RELATION_SCOPE_LABELS.get(str(scope or ""), str(scope or "뉴스"))
+
+
 def target_symbol(target: object) -> str:
     if hasattr(target, "normalized_symbol"):
         return str(target.normalized_symbol() or "").upper().strip()
@@ -255,6 +334,177 @@ def sector_topic_keywords(target: object) -> List[str]:
 def matched_terms(text: str, terms: Iterable[str]) -> List[str]:
     lowered = _lower_text(text)
     return [term for term in _unique_texts(terms) if _lower_text(term) and _lower_text(term) in lowered]
+
+
+def detected_topic_labels(text: object, limit: int = 5) -> List[str]:
+    lowered = _lower_text(text)
+    labels: List[str] = []
+    for keyword, label in TOPIC_LABELS:
+        if keyword in lowered and label not in labels:
+            labels.append(label)
+        if len(labels) >= limit:
+            break
+    return labels
+
+
+def keyword_hits(text: object, terms: Iterable[str], limit: int = 4) -> List[str]:
+    lowered = _lower_text(text)
+    rows: List[str] = []
+    for term in terms:
+        if _lower_text(term) in lowered and str(term) not in rows:
+            rows.append(str(term))
+        if len(rows) >= limit:
+            break
+    return rows
+
+
+def numeric_highlights(text: object, limit: int = 4) -> List[str]:
+    rows: List[str] = []
+    for match in NUMERIC_TOKEN_RE.findall(str(text or "")):
+        value = str(match or "").strip()
+        if value and value not in rows:
+            rows.append(value)
+        if len(rows) >= limit:
+            break
+    return rows
+
+
+def article_sentence_candidates(text: object, target: object, analysis: Dict[str, object] = None, limit: int = 3) -> List[str]:
+    analysis = analysis if isinstance(analysis, dict) else {}
+    source_text = str(text or "")
+    if not source_text.strip():
+        return []
+    raw_parts = re.split(r"(?<=[.!?。！？])\s+|\n+", source_text)
+    terms = [
+        *target_aliases(target),
+        *sector_topic_keywords(target),
+        *SUPPORT_KEYWORDS,
+        *RISK_KEYWORDS,
+        *EVENT_TYPE_KEYWORDS.get(str(analysis.get("eventType") or ""), []),
+    ]
+    scored: List[Tuple[float, int, str]] = []
+    for index, raw in enumerate(raw_parts[:80]):
+        sentence = compact_text(raw, 180)
+        if len(sentence) < 24:
+            continue
+        lowered = _lower_text(sentence)
+        score = max(0.0, 12.0 - index * 0.25)
+        score += sum(4.0 for term in terms if _lower_text(term) and _lower_text(term) in lowered)
+        score += min(8.0, len(numeric_highlights(sentence, 4)) * 2.0)
+        scored.append((score, index, sentence))
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    result: List[str] = []
+    for _score, _index, sentence in scored:
+        if sentence not in result:
+            result.append(sentence)
+        if len(result) >= limit:
+            break
+    if result:
+        return result
+    fallback = compact_text(source_text, 180)
+    return [fallback] if fallback else []
+
+
+def korean_article_summary(
+    target: object,
+    title: object,
+    article_text: object = "",
+    feed_summary: object = "",
+    analysis: Dict[str, object] = None,
+) -> str:
+    analysis = analysis if isinstance(analysis, dict) else {}
+    body = compact_text(article_text, 2500)
+    fallback = compact_text(feed_summary or title, 900)
+    source_text = body or fallback
+    if not source_text:
+        return ""
+    subject = str(getattr(target, "name", "") or target_symbol(target) or "해당 종목").strip()
+    event_label = event_type_label(analysis.get("eventType") or classify_news_event_type(title, source_text))
+    scope_label = relation_scope_label(analysis.get("relationScope"))
+    topics = detected_topic_labels(str(title or "") + " " + source_text)
+    numbers = numeric_highlights(source_text)
+    body_status = "본문" if body else "RSS/제공 요약"
+    if contains_hangul(source_text):
+        sentences = article_sentence_candidates(source_text, target, analysis, 2)
+        sentence_text = " ".join(sentences)
+        details = []
+        if topics:
+            details.append("핵심 키워드: " + ", ".join(topics))
+        if numbers:
+            details.append("확인된 수치: " + ", ".join(numbers))
+        suffix = (" " + " / ".join(details) + ".") if details else ""
+        return compact_text(body_status + " 요약: " + sentence_text + suffix, 520)
+    detail_parts = []
+    if topics:
+        detail_parts.append("핵심 키워드는 " + ", ".join(topics) + "입니다")
+    if numbers:
+        detail_parts.append("원문에서 확인되는 주요 수치는 " + ", ".join(numbers) + "입니다")
+    if not detail_parts:
+        detail_parts.append("제목과 본문 흐름상 투자 판단에 필요한 사실을 추가 확인해야 합니다")
+    return compact_text(
+        body_status
+        + "을 한국어로 정리하면, "
+        + subject
+        + "와 관련한 "
+        + event_label
+        + " 이슈입니다. "
+        + scope_label
+        + "로 분류되며, "
+        + ". ".join(detail_parts)
+        + ".",
+        520,
+    )
+
+
+def stock_impact_analysis(
+    target: object,
+    title: object,
+    article_text: object = "",
+    feed_summary: object = "",
+    analysis: Dict[str, object] = None,
+    polarity: str = "",
+    impact_score: object = 0,
+) -> Dict[str, object]:
+    analysis = analysis if isinstance(analysis, dict) else {}
+    text = str(title or "") + " " + str(article_text or feed_summary or "")
+    detected_polarity = str(polarity or "").strip() or keyword_polarity(text)[0]
+    if detected_polarity == "support":
+        impact = "positive"
+        label = "호재"
+        impact_word = "긍정적"
+        hits = keyword_hits(text, SUPPORT_KEYWORDS)
+    elif detected_polarity in {"risk", "contradiction"}:
+        impact = "negative"
+        label = "악재"
+        impact_word = "부정적"
+        hits = keyword_hits(text, RISK_KEYWORDS)
+    else:
+        impact = "neutral"
+        label = "중립"
+        impact_word = "중립적"
+        hits = []
+    scope_label = relation_scope_label(analysis.get("relationScope"))
+    event_label = event_type_label(analysis.get("eventType") or classify_news_event_type(title, text))
+    materiality = number(analysis.get("materialityScore"))
+    relevance = number(analysis.get("relevanceScore"))
+    reason_parts = [
+        scope_label + "이고 " + event_label + " 성격입니다",
+        "관련성 " + ("%.1f" % relevance).rstrip("0").rstrip(".") + "점" if relevance else "",
+        "중요도 " + ("%.1f" % materiality).rstrip("0").rstrip(".") + "점" if materiality else "",
+    ]
+    if hits:
+        reason_parts.append(("긍정 표현 " if impact == "positive" else "부정 표현 ") + ", ".join(hits[:3]))
+    if impact == "neutral" and materiality >= 65:
+        reason_parts.append("중요도는 높지만 방향성 표현이 뚜렷하지 않습니다")
+    reason = "주가 영향은 " + impact_word + "으로 봅니다. " + ", ".join(part for part in reason_parts if part) + "."
+    return {
+        "articleDigestVersion": ARTICLE_DIGEST_VERSION,
+        "stockImpact": impact,
+        "stockImpactLabel": label,
+        "stockImpactPolarity": detected_polarity or "context",
+        "stockImpactScore": round(number(impact_score), 1),
+        "stockImpactReasonKo": compact_text(reason, 360),
+    }
 
 
 def source_reliability_score(source: object, provider: object = "") -> float:

@@ -200,7 +200,7 @@ def build_model_review_prompt(job: ModelReviewJob) -> str:
         "메시지 첫 줄에는 종목코드만 쓰지 말고 반드시 종목명 / 종목코드 형태의 대상을 먼저 써라.",
         "섹션은 반드시 다음 순서로 작성한다: 성립 규칙, 관계/반대 신호, 부족 데이터, 모델 보완, 다음 실험.",
         "판단 점수가 같은데 판단명이 바뀐 경우에는 점수 악화가 아니라 선택 규칙, 성립 규칙 조합, 라벨 체계 변경 중 무엇 때문인지 분리해서 설명해라.",
-        "기존 점수 모델은 보조 데이터로만 다뤄라.",
+        "최종 점수는 온톨로지 관계 규칙과 관계 근거로만 다뤄라.",
         "API 키, 토큰, 계좌 식별정보를 추정하거나 요청하지 마라.",
         "",
         "리뷰 버전: " + MODEL_REVIEW_PROMPT_VERSION,
@@ -382,7 +382,7 @@ def local_model_review(job: ModelReviewJob) -> str:
     if "현재가/평균매입가 없음" in joined or "현재가/평단 없음" in joined or "평가액 없음" in joined:
         validation = "가격 또는 평가액 필드가 부족하므로 판단 변화의 근거가 약합니다. 원천 API 매핑부터 보완하세요."
         improvement = "필수 판단 요소가 빠졌을 때는 점수 산출을 보류하거나 신뢰도를 낮추는 게 좋습니다."
-    ontology_line = "관계 분석 정보가 없어서 알림 라인과 기존 점수 근거만 사용했습니다."
+    ontology_line = "관계 분석 정보가 없어서 알림 라인과 관측 데이터 근거만 사용했습니다."
     if job.review_context:
         opinion = job.review_context.get("opinion") if isinstance(job.review_context, dict) else {}
         worldview = job.review_context.get("worldview") if isinstance(job.review_context, dict) else {}

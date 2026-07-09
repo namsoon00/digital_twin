@@ -486,14 +486,23 @@ def decision_for_position(
     decision_label = str(relation_decision.get("label") or payload.get("decision") or "")
     decision_tone = str(relation_decision.get("tone") or payload.get("tone") or "")
     decision_basis = str(relation_decision.get("basis") or "ontologyRelationRules")
-    opinion = ontology_opinion or build_position_opinion(position, portfolio, payload)
+    action_group = str(relation_decision.get("actionGroup") or "")
+    relation_profit_take_pressure = exit_pressure if action_group == "profitTake" else 0.0
+    relation_loss_cut_pressure = exit_pressure if action_group in {
+        "lossControl",
+        "distributionRisk",
+        "executionRisk",
+        "eventRisk",
+        "entryRisk",
+    } else 0.0
+    opinion = ontology_opinion or build_position_opinion(position, portfolio, {})
     opinion_payload = opinion.to_dict()
     worldview = dict(ontology_worldview or {})
     active_opinion = build_active_investment_opinion(
         position,
         relation_context=relation_context,
         ontology_opinion=opinion_payload,
-        legacy_model=payload,
+        legacy_model={},
         external_signals=external_signals or {},
     ).to_dict()
     return DecisionItem(
@@ -508,8 +517,8 @@ def decision_for_position(
         exit_pressure=exit_pressure,
         decision=decision_label,
         tone=decision_tone,
-        profit_take_pressure=float(payload.get("profitTakePressure") or 0),
-        loss_cut_pressure=float(payload.get("lossCutPressure") or 0),
+        profit_take_pressure=relation_profit_take_pressure,
+        loss_cut_pressure=relation_loss_cut_pressure,
         decision_basis=decision_basis,
         ontology_opinion=opinion_payload,
         ontology_worldview=worldview,
@@ -519,7 +528,7 @@ def decision_for_position(
         ai_context={
             "promptVersion": prompt_context.get("promptVersion") or ONTOLOGY_PROMPT_VERSION,
             "role": "ontology-relation-rule-ai-review",
-            "legacyModelRole": "supporting-evidence",
+            "legacyModelRole": "not-used-for-scoring",
             "worldview": worldview,
             "opinion": opinion_payload,
             "activeInvestmentOpinion": active_opinion,

@@ -161,7 +161,7 @@ CLASS_DEFS: List[TBoxClassDef] = [
     TBoxClassDef("AlertRule", "strategy-thesis", "알림 규칙", parent="RuntimeSetting"),
     TBoxClassDef("PromptTemplate", "strategy-thesis", "프롬프트 템플릿", parent="RuntimeSetting"),
     TBoxClassDef("ValuationAssumption", "strategy-thesis", "밸류에이션 가정"),
-    TBoxClassDef("LegacyScoreModel", "strategy-thesis", "기존 점수 모델"),
+    TBoxClassDef("LegacyScoreModel", "strategy-thesis", "관계 규칙 점수 모델"),
     TBoxClassDef("Risk", "risk-exposure", "리스크"),
     TBoxClassDef("MarketRisk", "risk-exposure", "시장 리스크", parent="Risk"),
     TBoxClassDef("LiquidityRisk", "risk-exposure", "유동성 리스크", parent="Risk"),

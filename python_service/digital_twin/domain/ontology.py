@@ -648,10 +648,6 @@ def build_position_opinion(
     trend = trend_score(position)
     flow = smart_money_score(position)
     quality = data_quality_score(position)
-    legacy_pressure = number(legacy_model.get("exitPressure") or legacy_model.get("exit_pressure"))
-    profit_take = number(legacy_model.get("profitTakePressure") or legacy_model.get("profit_take_pressure"))
-    loss_cut = number(legacy_model.get("lossCutPressure") or legacy_model.get("loss_cut_pressure"))
-
     supporting: List[str] = []
     contradictions: List[str] = []
     risks: List[str] = []
@@ -679,13 +675,8 @@ def build_position_opinion(
         opportunities.append("외국인·기관 수급이 보유 이유를 뒷받침")
     if quality < 60:
         contradictions.append("핵심 데이터가 부족해 AI 판단 신뢰도가 낮음")
-    if legacy_pressure >= 70 and (trend >= 8 or flow >= 25):
-        contradictions.append("기존 매도 압력은 높지만 추세와 수급은 우호적")
-    if legacy_pressure < 45 and (sector_weight >= 50 or pnl <= -8):
-        contradictions.append("기존 압력은 낮지만 포트폴리오 관계 리스크가 큼")
 
     risk_score = 18.0
-    risk_score += clamp((legacy_pressure - 40) * 0.35, -10.0, 22.0)
     risk_score += 15.0 if sector_weight >= 50 else 8.0 if sector_weight >= 35 else 0.0
     risk_score += 12.0 if weight >= 30 else 6.0 if weight >= 20 else 0.0
     risk_score += 18.0 if pnl <= -15 else 11.0 if pnl <= -8 else 8.0 if pnl >= 20 else 0.0
@@ -696,7 +687,6 @@ def build_position_opinion(
     ontology_pressure = clamp(risk_score, 0.0, 100.0)
     action, tone = ontology_action_label(ontology_pressure, pnl, contradictions, risks)
     evidence_ids = [
-        evidence_id(symbol, "legacy-model"),
         evidence_id(symbol, "portfolio-exposure"),
         evidence_id(symbol, "trend"),
         evidence_id(symbol, "flow"),
@@ -723,10 +713,8 @@ def build_position_opinion(
         dominant_risks=risks[:5],
         opportunities=opportunities[:4],
         legacy_model={
-            "exitPressure": round(legacy_pressure, 1),
-            "profitTakePressure": round(profit_take, 1),
-            "lossCutPressure": round(loss_cut, 1),
-            "decisionBasis": legacy_model.get("decisionBasis") or legacy_model.get("decision_basis") or "",
+            "role": "not-used-for-scoring",
+            "reason": "최종 점수는 온톨로지 관계 규칙과 관계 사실만 사용합니다.",
         },
         evidence_ids=evidence_ids,
     )
@@ -966,11 +954,11 @@ def add_data_source_concept(graph: PortfolioOntology, stock_id: str, position: P
 
 def add_legacy_model_score_concepts(graph: PortfolioOntology, stock_id: str, symbol: str, legacy: Dict[str, object]) -> None:
     score_rows = [
-        ("exitPressure", "기존 매도 압력", number(legacy.get("exitPressure") or legacy.get("exit_pressure")), "risk"),
-        ("profitTakePressure", "익절 압력", number(legacy.get("profitTakePressure") or legacy.get("profit_take_pressure")), "risk"),
-        ("lossCutPressure", "손실 관리 압력", number(legacy.get("lossCutPressure") or legacy.get("loss_cut_pressure")), "risk"),
-        ("buyScore", "매수 점수", number(legacy.get("buyScore") or legacy.get("modelBuyScore")), "support"),
-        ("sellScore", "매도 점수", number(legacy.get("sellScore") or legacy.get("modelSellScore")), "risk"),
+        ("exitPressure", "관계 규칙 강도", number(legacy.get("exitPressure") or legacy.get("exit_pressure")), "risk"),
+        ("profitTakePressure", "익절 관계 강도", number(legacy.get("profitTakePressure") or legacy.get("profit_take_pressure")), "risk"),
+        ("lossCutPressure", "손실 관리 관계 강도", number(legacy.get("lossCutPressure") or legacy.get("loss_cut_pressure")), "risk"),
+        ("buyScore", "매수 관계 점수", number(legacy.get("buyScore") or legacy.get("modelBuyScore")), "support"),
+        ("sellScore", "매도 관계 점수", number(legacy.get("sellScore") or legacy.get("modelSellScore")), "risk"),
     ]
     for key, label, value, polarity in score_rows:
         if not value:
@@ -980,15 +968,15 @@ def add_legacy_model_score_concepts(graph: PortfolioOntology, stock_id: str, sym
             "tboxClasses": ["Signal", "StrategySignal", "ModelScore"],
             "field": key,
             "value": round(value, 2),
-            "modelRole": "supporting-evidence",
+            "modelRole": "relation-rule-score",
         })
-        properties = {"field": key, "polarity": polarity, "aiInfluenceLabel": label, "source": "legacy-model"}
+        properties = {"field": key, "polarity": polarity, "aiInfluenceLabel": label, "source": "relation-rule"}
         if polarity == "risk" and value >= 55:
             properties["opinionImpact"] = min(18.0, (value - 45) * 0.35)
         if polarity == "support" and value >= 55:
             properties["supportImpact"] = min(14.0, (value - 45) * 0.35)
         add_relation(graph, stock_id, score_id, "HAS_MODEL_SCORE", weight=round(value / 100, 4), properties=properties)
-        add_relation(graph, score_id, stock_id, "USED_AS_EVIDENCE", weight=round(value / 100, 4), properties={**properties, "source": "legacy-model"})
+        add_relation(graph, score_id, stock_id, "USED_AS_EVIDENCE", weight=round(value / 100, 4), properties={**properties, "source": "relation-rule"})
 
 
 def add_price_level_and_liquidity_concepts(graph: PortfolioOntology, stock_id: str, position: Position, source: str) -> None:
@@ -1555,12 +1543,12 @@ def add_strategy_world_concepts(
     strategy_id = add_entity(graph, "strategy", "ontology-first-investment-strategy", "온톨로지 투자전략", {
         "tboxClass": "Strategy",
         "mode": "ontology-first",
-        "description": "계산 점수보다 TBox/ABox 관계, 근거 충돌, 데이터 품질, 운영 정책을 먼저 읽습니다.",
+        "description": "최종 점수는 TBox/ABox 관계 규칙, 근거 충돌, 데이터 품질, 운영 정책으로만 계산합니다.",
     })
     thesis_id = add_entity(graph, "investment-thesis", "portfolio-relation-thesis", "포트폴리오 관계 투자 가설", {
         "tboxClass": "InvestmentThesis",
         "scope": "portfolio",
-        "thesis": "실세계 관측값과 포트폴리오 노출이 투자 의견의 주 근거이며 기존 점수는 보조 근거입니다.",
+        "thesis": "실세계 관측값과 포트폴리오 노출이 투자 의견과 점수의 근거이며 개별 공식 점수는 최종 판단에 쓰지 않습니다.",
     })
     entry_id = add_entity(graph, "entry-condition", "evidence-confirmed-entry", "근거 확인 진입 조건", {
         "tboxClass": "EntryCondition",
@@ -2002,8 +1990,8 @@ def build_portfolio_ontology(
     })))
     add_relation(graph, account_id_value, portfolio_node_id, "MANAGES_PORTFOLIO", weight=1.0, properties={"source": "account-context"})
     add_account_delivery_profile_concepts(graph, account_id_value, portfolio_node_id, account_context)
-    graph.entities.append(OntologyEntity(entity_id("concept", "legacy-score-model"), "기존 점수 모델", "model", abox_properties({
-        "role": "supporting-evidence",
+    graph.entities.append(OntologyEntity(entity_id("concept", "relation-rule-score-model"), "관계 규칙 점수 모델", "model", abox_properties({
+        "role": "final-scoring",
         "tboxClass": "LegacyScoreModel",
     })))
     graph.entities.append(OntologyEntity(entity_id("concept", "ai-investment-review"), "AI 투자 의견", "ai-review", abox_properties({
@@ -2211,7 +2199,7 @@ def build_portfolio_ontology(
         quality = data_quality_score(position)
         if holding:
             evidence_rows = [
-                ("legacy-model", "legacyModel", "기존 점수 모델을 보조 근거로 사용", opinion.legacy_model, 0.75),
+                ("relation-rule", "relationRule", "관계 규칙과 관계 사실을 최종 점수 근거로 사용", opinion.legacy_model, 0.75),
                 ("portfolio-exposure", "portfolio", "포트폴리오/섹터 노출 관계", {
                     "positionWeight": round(weight, 2),
                     "sectorWeight": round(sector_weights.get(position.sector, 0.0), 2),

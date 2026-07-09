@@ -1145,7 +1145,6 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
             if changed or abs(pressure_delta) >= float(self.thresholds.get("monitorExitPressureDelta", 0)):
                 previous_phrase = self.decision_score_phrase(previous_decision.get("decision") or "-", previous_decision.get("exit_pressure"))
                 current_phrase = self.decision_score_phrase(decision.get("decision") or "-", decision.get("exit_pressure"))
-                legacy_formula_audits = self.holding_formula_audits(snapshot, item, decision)
                 review_lines = decision_change_review_lines(
                     item,
                     before,
@@ -1168,7 +1167,6 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
                     "holdingDecisionBasis": decision.get("decision_basis") or "",
                     "holdingDecisionScore": round(float(decision.get("exit_pressure") or 0), 1),
                     "profitLossRate": round(float(item.get("profit_loss_rate") or 0), 2),
-                    "legacyFormulaAudits": legacy_formula_audits,
                     "decisionChangeContext": decision_context,
                     "ontologyRelationContext": relation_context,
                     "ontologyPromptContext": prompt_context,
@@ -1268,7 +1266,6 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
             position = positions.get(item.symbol.upper()) or item.to_dict()
             decision_phrase = self.decision_score_phrase(item.decision, item.exit_pressure)
             decision_state = item.to_dict()
-            legacy_formula_audits = self.holding_formula_audits(snapshot, position, decision_state)
             relation_context = self.relation_context_from_decision(decision_state)
             prompt_context = self.prompt_context_from_decision(decision_state)
             relation_lines = self.relation_context_lines(decision_state)
@@ -1296,7 +1293,6 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
                     "holdingDecisionBasis": item.decision_basis,
                     "holdingDecisionScore": round(float(item.exit_pressure or 0), 1),
                     "profitLossRate": round(float(item.profit_loss_rate or 0), 2),
-                    "legacyFormulaAudits": legacy_formula_audits,
                     "ontologyRelationContext": relation_context,
                     "ontologyPromptContext": prompt_context,
                     "ontologyOpinion": dict(item.ontology_opinion or {}),

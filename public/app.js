@@ -5284,8 +5284,8 @@
     var buyResult = evaluateConfiguredFormula(formulaSetting("buyScoreFormula"), variables, fallbackBuyScore);
     var sellResult = evaluateConfiguredFormula(formulaSetting("sellScoreFormula"), variables, fallbackSellScore);
     var errors = [];
-    if (buyResult.error) errors.push("매수 공식 오류: " + buyResult.error);
-    if (sellResult.error) errors.push("매도 공식 오류: " + sellResult.error);
+    if (buyResult.error) errors.push("참고 매수 계산식 오류: " + buyResult.error);
+    if (sellResult.error) errors.push("참고 매도 계산식 오류: " + sellResult.error);
     return {
       buyScore: Math.round(clamp(buyResult.value, 0, 100)),
       sellScore: Math.round(clamp(sellResult.value, 0, 100)),
@@ -5329,12 +5329,14 @@
     return { label: "관망", tone: "hold", priority: 6 };
   }
 
-  function tradeSignalReasons(signal, scores, valuation, hasData) {
+  function tradeSignalReasons(signal, scores, valuation, hasData, relationRules) {
     if (!hasData) {
-      return ["설정에서 거래량 배율, 매수/매도 체결량, 이동평균을 입력하면 신호를 계산합니다."];
+      return ["설정에서 거래량 배율, 매수/매도 체결량, 이동평균을 입력하면 관계 규칙을 평가합니다."];
     }
+    var topRule = (relationRules || [])[0] || null;
     var reasons = [
-      "거래량: " + formatSignalRatio(signal.volumeRatio) + "을 먼저 보고 이동평균과 가격 변화를 함께 확인합니다.",
+      topRule ? "가장 강한 관계 규칙은 " + topRule.label + "이며 강도는 " + topRule.score + "점입니다." : "아직 강하게 성립한 관계 규칙은 없습니다.",
+      "거래량: " + formatSignalRatio(signal.volumeRatio) + "을 보고 이동평균, 가격 변화, 수급 방향과의 관계를 확인합니다.",
       "매수 체결 비중은 " + scores.buyShare + "%이고 호가 불균형은 " + formatSignalNumber(signal.bidAskImbalance, "%") + "입니다."
     ];
     if (signal.ma20 || signal.ma60) {
@@ -5344,9 +5346,9 @@
       reasons.push("투자자별 수급은 외국인 " + formatSignalVolume(signal.foreignNet) + ", 기관 " + formatSignalVolume(signal.institutionNet) + ", 개인 " + formatSignalVolume(signal.individualNet) + " 순매수로 검증합니다.");
     }
     if (valuation && valuation.status) {
-      reasons.push("밸류에이션 분류는 " + valuation.status + "이며 수급 판단에 함께 반영됩니다.");
+      reasons.push("밸류에이션 분류는 " + valuation.status + "이며 관계 판단의 참고 정보로만 표시합니다.");
     } else {
-      reasons.push("밸류에이션 가정이 없으면 수급 신호만으로 관찰 라벨을 만듭니다.");
+      reasons.push("밸류에이션 가정이 없으면 가격·수급·추세 관계만으로 관찰 라벨을 만듭니다.");
     }
     (scores.errors || []).forEach(function (error) {
       reasons.push(error + " 기본 추천 공식을 대신 사용했습니다.");
@@ -5374,6 +5376,9 @@
         matches.push({ label: "추세와 수급 방향 일치", score: 55 + Math.min(25, Math.abs(ma20Distance)), tone: "watch" });
       }
     }
+    if (String(item.source || "") === "watchlist" && ma20Distance <= -2 && ma20Distance >= -8 && ma60Distance >= -1 && numeric(signal && signal.tradeStrength) >= 100) {
+      matches.push({ label: "눌림목 + 지지 수급", score: 64 + Math.min(16, numeric(signal.tradeStrength) - 100), tone: "watch" });
+    }
     if (["MSTR", "STRC", "COIN", "MARA", "RIOT"].indexOf(symbol) >= 0) {
       matches.push({ label: "비트코인 민감 종목", score: 55, tone: "watch" });
     }
@@ -5381,6 +5386,23 @@
       matches.push({ label: "핵심 데이터 부족", score: 45, tone: "hold" });
     }
     return matches.sort(function (a, b) { return b.score - a.score; });
+  }
+
+  function relationDecisionFromClientRules(item, relationRules, hasData) {
+    if (!hasData) return { label: "관계 데이터 필요", tone: "hold", priority: 9 };
+    var top = (relationRules || [])[0] || { label: "관계 관망", score: 35, tone: "hold" };
+    var label = top.label || "관계 관망";
+    var holding = item.source !== "watchlist";
+    var priority = 6;
+    if (/손실|이탈|매도|리스크/.test(label)) priority = holding ? 1 : 4;
+    else if (/수익|익절|추세 약화/.test(label)) priority = 2;
+    else if (/눌림목|매수/.test(label)) priority = holding ? 4 : 2;
+    else if (/방향 일치|민감/.test(label)) priority = 3;
+    return {
+      label: label,
+      tone: top.tone || "watch",
+      priority: priority
+    };
   }
 
   function buildTradeSignalItems(snapshot) {
@@ -5395,8 +5417,8 @@
       var hasData = hasMarketSignal(signal);
       var valuation = valuationMap[symbol] || null;
       var scores = hasData ? marketSignalScores(signal, { item: item, valuation: valuation }) : { buyScore: 0, sellScore: 0, buyShare: 0, errors: [] };
-      var decision = tradeSignalDecision(item, scores, valuation, hasData);
       var relationRules = clientOntologyRuleMatches(item, signal, hasData);
+      var decision = relationDecisionFromClientRules(item, relationRules, hasData);
       return {
         symbol: symbol,
         name: item.name || symbol,
@@ -5422,12 +5444,12 @@
         priority: decision.priority,
         relationRules: relationRules,
         relationStrength: relationRules.length ? relationRules[0].score : 0,
-        reasons: tradeSignalReasons(signal, scores, valuation, hasData),
-        triggers: ["거래량", "이동평균", "투자자 수급", "호가", "가격변화"]
+        reasons: tradeSignalReasons(signal, scores, valuation, hasData, relationRules),
+        triggers: ["관계 규칙", "거래량", "이동평균", "투자자 수급"]
       };
     }).sort(function (a, b) {
       if (a.priority !== b.priority) return a.priority - b.priority;
-      return Math.max(b.buyScore, b.sellScore) - Math.max(a.buyScore, a.sellScore);
+      return b.relationStrength - a.relationStrength;
     });
   }
 
@@ -5904,8 +5926,8 @@
     var sell = Math.round(clamp(sellResult.value, 0, 100));
     var decision = customModelDecision(item, buy, sell);
     var errors = [];
-    if (buyResult.error) errors.push("내 모델 매수 공식 오류: " + buyResult.error);
-    if (sellResult.error) errors.push("내 모델 매도 공식 오류: " + sellResult.error);
+    if (buyResult.error) errors.push("참고 매수 계산식 오류: " + buyResult.error);
+    if (sellResult.error) errors.push("참고 매도 계산식 오류: " + sellResult.error);
     return {
       buyScore: buy,
       sellScore: sell,
@@ -6060,17 +6082,24 @@
 
   function modelStatsForItems(items) {
     var scored = items.map(function (item) {
-      return customModelScores(item);
+      return {
+        relationStrength: Number(item.relationStrength || 0),
+        tone: item.tone || "hold"
+      };
     });
-    var buyAverage = scored.length ? scored.reduce(function (sum, score) { return sum + score.buyScore; }, 0) / scored.length : 0;
-    var sellAverage = scored.length ? scored.reduce(function (sum, score) { return sum + score.sellScore; }, 0) / scored.length : 0;
+    var relationAverage = scored.length ? scored.reduce(function (sum, score) { return sum + score.relationStrength; }, 0) / scored.length : 0;
+    var riskAverage = scored.length ? scored.reduce(function (sum, score) {
+      return sum + (score.tone === "danger" || score.tone === "caution" ? score.relationStrength : 0);
+    }, 0) / scored.length : 0;
     var actionCount = scored.filter(function (score) {
-      return score.tone === "danger" || score.tone === "caution" || score.tone === "watch";
+      return score.relationStrength >= 55 || score.tone === "danger" || score.tone === "caution";
     }).length;
     var stats = labStatsForItems(items);
     return {
-      buyAverage: buyAverage,
-      sellAverage: sellAverage,
+      buyAverage: relationAverage,
+      sellAverage: riskAverage,
+      relationAverage: relationAverage,
+      riskAverage: riskAverage,
       actionCount: actionCount,
       recordCount: stats.recordCount,
       symbolCount: stats.symbolCount,
@@ -7466,7 +7495,7 @@
         },
         aiInference: {
           role: "ontology-first-investment-opinion",
-          legacyModelRole: "supporting-evidence",
+          legacyModelRole: "not-used-for-scoring",
           question: "전략 근거와 관계 근거를 함께 읽고 다음 검증 순서를 설명합니다."
         }
       };
@@ -7484,7 +7513,7 @@
     var packet = investmentAiInferencePacket(snapshot);
     var graphInputs = packet.graphInputs || {};
     var steps = [
-      ["01", "전략 근거", "가격·수급·추세·기존 점수", cards.length + " cards"],
+      ["01", "전략 근거", "가격·수급·추세·관계 점수", cards.length + " cards"],
       ["02", "관계 그래프", "HOLDS/WATCHES와 TBox 규칙", (graphInputs.relationCount || parts.relations.length || 0) + " relations"],
       ["03", "AI 추론 입력", packet.contract || "investment-ontology-ai-inference-v1", (packet.reasoningCardCount || cards.length || 0) + " refs"],
       ["04", "투자 의견", "관계·반대 신호·다음 검증", (graphInputs.opinionCount || parts.opinions.length || 0) + " opinions"]
@@ -7495,7 +7524,7 @@
       '<div>',
       '<p class="label">Investment Analysis</p>',
       '<h2>전략 데이터와 관계 분석을 잇는 추론 구조</h2>',
-      '<p class="subtle">모델 점수는 보조 근거로 유지하고, AI는 TBox/ABox 관계와 reasoning card를 기준으로 의견을 만듭니다.</p>',
+      '<p class="subtle">최종 점수는 관계 규칙으로 계산하고, AI는 TBox/ABox 관계와 reasoning card를 기준으로 의견을 만듭니다.</p>',
       '</div>',
       '<span class="tone-chip watch">ontology-first</span>',
       '</div>',
@@ -7533,7 +7562,7 @@
       '</div>',
       '<div class="investment-packet-grid">',
       '<section><strong>계약</strong><span>' + escapeHtml(packet.contract || "investment-ontology-ai-inference-v1") + '</span><em>' + escapeHtml(packet.promptVersion || "-") + '</em></section>',
-      '<section><strong>입력 순서</strong><span>' + escapeHtml(inputOrder.join(" → ") || "tbox → abox → reasoningCards") + '</span><em>legacyModelRole=' + escapeHtml(packet.legacyModelRole || "supporting-evidence") + '</em></section>',
+      '<section><strong>입력 순서</strong><span>' + escapeHtml(inputOrder.join(" → ") || "tbox → abox → reasoningCards") + '</span><em>legacyModelRole=' + escapeHtml(packet.legacyModelRole || "not-used-for-scoring") + '</em></section>',
       '<section><strong>가드레일</strong><span>' + escapeHtml(guardrails.slice(0, 2).join(" / ") || "제공된 관계 데이터만 사용") + '</span><em>AI가 없는 값은 추정하지 않음</em></section>',
       '</div>',
       '</article>'
@@ -7993,8 +8022,8 @@
       ["Valuation", "적정가 공식", formulaSetting("fairValueFormula")],
       ["Signal", "매수 점수 공식", formulaSetting("buyScoreFormula")],
       ["Signal", "매도 점수 공식", formulaSetting("sellScoreFormula")],
-      ["Custom", "내 모델 매수 공식", formulaSetting("customBuyModelFormula")],
-      ["Custom", "내 모델 매도 공식", formulaSetting("customSellModelFormula")],
+      ["Custom", "참고 매수 계산식", formulaSetting("customBuyModelFormula")],
+      ["Custom", "참고 매도 계산식", formulaSetting("customSellModelFormula")],
       ["Holding", "익절 점검 공식", formulaSetting("profitTakeScoreFormula")],
       ["Holding", "손실 관리 공식", formulaSetting("lossCutScoreFormula")],
       ["Delivery", "알림 발송 공식", formulaSetting("notificationScoreFormula")]
@@ -9976,8 +10005,8 @@
       '</div>',
       '</div>',
       '<div class="lab-stats-grid model-stats-grid">',
-      renderLabStat("평균 매수 점수", Math.round(stats.buyAverage), "점"),
-      renderLabStat("평균 매도 점수", Math.round(stats.sellAverage), "점"),
+      renderLabStat("평균 관계 강도", Math.round(stats.relationAverage || stats.buyAverage), "점"),
+      renderLabStat("위험 관계 강도", Math.round(stats.riskAverage || stats.sellAverage), "점"),
       renderLabStat("판단 발생", stats.actionCount, "개"),
       renderLabStat("저장 실험", stats.recordCount, "개"),
       renderLabStat("실험 평균 성과", signedPct(stats.averageReturn), ""),
@@ -9988,27 +10017,27 @@
       '<div class="model-editor">',
       '<div class="settings-note model-settings-note">',
       '<strong>처음 운영할 때</strong>',
-      '<p>관계 판단을 보완하는 공식 점수와 알림 발송 기준입니다. 기본값으로 운영하고, 반복 알림이나 과소 알림이 보일 때만 기준값을 조정합니다.</p>',
+      '<p>최종 판단 점수는 관계 규칙으로만 계산합니다. 기본값으로 운영하고, 반복 알림이나 과소 알림이 보일 때 관계 기준값을 조정합니다.</p>',
       '</div>',
       '<div class="settings-grid">',
       renderModelSettingField("modelName", "운영 정책 이름", "text", "나의 모델"),
       renderModelFormulaField("modelHypothesis", "보조 모델 설명", "예: 수급이 살아 있고 적정가보다 싸며 리스크가 낮을 때만 산다."),
       '</div>',
       '<div class="model-section">',
-      '<div class="flow-title"><div><strong>판단 기준</strong><span>점수가 기준 이상이면 종목 카드와 알림 라벨이 바뀝니다.</span></div></div>',
+      '<div class="flow-title"><div><strong>관계 점수 기준</strong><span>성립한 관계 규칙의 점수가 기준 이상이면 종목 카드와 알림 라벨이 바뀝니다.</span></div></div>',
       renderModelThresholdGrid(thresholds),
       '</div>',
       '<div class="model-section">',
-      '<div class="flow-title"><div><strong>가중치</strong><span>어떤 근거를 더 믿을지 정하는 레버입니다. 1은 기본, 1보다 크면 더 크게 반영합니다.</span></div></div>',
+      '<div class="flow-title"><div><strong>참고 가중치</strong><span>적정가와 보조 계산에 쓰는 값입니다. 최종 판단 점수는 관계 규칙이 정합니다.</span></div></div>',
       renderModelWeightGrid(weights),
       '</div>',
       '<div class="model-section advanced-model-section">',
-      '<div class="flow-title"><div><strong>고급 공식</strong><span>기본값으로 시작하고, 직접 모델 판단이나 알림 발송 계산식을 바꾸고 싶을 때만 수정합니다.</span></div></div>',
+      '<div class="flow-title"><div><strong>고급 참고 공식</strong><span>관계 규칙을 보조하는 참고 계산입니다. 최종 매수·매도 점수로 쓰지 않습니다.</span></div></div>',
       '<div class="settings-grid">',
-      renderModelFormulaField("customBuyModelFormula", "매수 판단 공식", "buyScore * 0.35 + buyReasonScore * buyReasonWeight"),
-      renderModelFormulaField("customSellModelFormula", "매도 판단 공식", "sellScore * 0.35 + riskScore * riskControlWeight"),
-      renderModelFormulaField("profitTakeScoreFormula", "익절 점검 공식", "baseScore + profitTakePnlScore + holdingSignalScore"),
-      renderModelFormulaField("lossCutScoreFormula", "손실 관리 공식", "baseScore + lossCutPnlScore + holdingSignalScore + lossGuardConfirmationScore - lossGuardWeakEvidencePenalty"),
+      renderModelFormulaField("customBuyModelFormula", "참고 매수 계산식", "buyScore * 0.35 + buyReasonScore * buyReasonWeight"),
+      renderModelFormulaField("customSellModelFormula", "참고 매도 계산식", "sellScore * 0.35 + riskScore * riskControlWeight"),
+      renderModelFormulaField("profitTakeScoreFormula", "참고 익절 계산식", "baseScore + profitTakePnlScore + holdingSignalScore"),
+      renderModelFormulaField("lossCutScoreFormula", "참고 손실 관리 계산식", "baseScore + lossCutPnlScore + holdingSignalScore + lossGuardConfirmationScore - lossGuardWeakEvidencePenalty"),
       renderModelFormulaField("notificationScoreFormula", "알림 발송 공식", "rawScore"),
       '</div>',
       '<div class="settings-note model-settings-note">',
@@ -10276,10 +10305,10 @@
     }
     if (index === 2) {
       return {
-        input: "기존 점수 + 시장 근거",
+        input: "관계 점수 + 시장 근거",
         relation: "USES_EVIDENCE_FROM",
         output: "반대 신호 " + ontologyContradictionCount(opinions) + "개",
-        rows: Number(relationCounts.USES_EVIDENCE_FROM || 0) + ontologyEvidenceCount(evidence, "legacy-model")
+        rows: Number(relationCounts.USES_EVIDENCE_FROM || 0) + ontologyEvidenceCount(evidence, "relation-rule")
       };
     }
     if (index === 3) {
@@ -10292,8 +10321,8 @@
     }
     if (index === 4) {
       return {
-        input: "기존 점수 근거",
-        relation: "보조 근거로만 사용",
+        input: "관계 규칙 근거",
+        relation: "최종 점수로 사용",
         output: "AI 의견 " + (opinions || []).length + "개",
         rows: Number(relationCounts.USES_EVIDENCE_FROM || 0)
       };
@@ -11589,7 +11618,7 @@
       '<div class="flow-title"><div><strong>관계 성립 기준값</strong><span>ABox에 들어온 가격·수급·추세·외부 신호가 어떤 관계로 성립할지 정합니다. 알림 발송 기준과 분리됩니다.</span></div></div>',
       renderNumberSettingGrid("relationRuleThresholds", relationThresholdValues, ["lossRateLow", "lossRateBufferPct", "lossGuardVolumeConfirmRatio", "lossGuardMa60SupportPct", "lossGuardWeakEvidencePenalty", "profitRateHigh", "sectorWeightHigh", "positionWeightHigh", "externalBitcoinChange24hPct", "externalBitcoinChange7dPct", "entryPullbackMa20BelowPct", "entryPullbackMa20DeepPct", "entryMa60SupportPct", "entryVolumeMinRatio", "entryVolumeMaxRatio", "entrySmartMoneyMin", "entryTradeStrengthMin", "entryOrderbookImbalanceMin", "entryMaxPositionWeight", "entryMaxSectorWeight"]),
       '</div>',
-      '<div class="rule-strip"><span>공식 점수는 참고 자료입니다. 실제 보유 타이밍 메시지는 관계 규칙, 근거, 부족 데이터, AI 프롬프트 정보를 기준으로 생성됩니다.</span></div>',
+      '<div class="rule-strip"><span>실제 점수는 관계 규칙의 성립 강도입니다. 공식 입력값은 참고 계산과 발송 정책에만 사용합니다.</span></div>',
       '</div>',
       '</article>'
     ].join("");
@@ -11650,7 +11679,7 @@
       ["관계 규칙", "보유, 추세, 수급, 외부 신호, 공시, 부족 데이터를 관계 타입으로 연결"],
       ["근거 분리", "성립한 근거, 반대 근거, 부족 데이터를 같은 메시지 안에서 분리"],
       ["AI 해석", "정해진 규칙이 만든 정보를 비동기 프롬프트가 설명"],
-      ["입력 기록", "내 점수와 판단 메모는 버전으로 저장해 성과 분석에 사용"],
+      ["입력 기록", "관계 규칙과 판단 메모는 버전으로 저장해 성과 분석에 사용"],
       ["성과 분석", "규칙 버전과 프롬프트 버전별 알림 결과와 실제 성과를 비교"]
     ];
     var variables = [
@@ -11684,7 +11713,7 @@
       }).join(""),
       '</div>',
       renderVariableGuide(variables),
-      '<div class="rule-strip"><span>가격 기준선과 공식 점수는 참고용입니다. 실제 판단 메시지는 관계 규칙, 근거, 부족 데이터, AI 프롬프트 정보를 기준으로 만듭니다.</span></div>',
+      '<div class="rule-strip"><span>가격 기준선은 관계 규칙의 입력값입니다. 실제 판단 메시지는 관계 규칙, 근거, 부족 데이터, AI 프롬프트 정보를 기준으로 만듭니다.</span></div>',
       '</article>'
     ].join("");
   }
@@ -11699,14 +11728,14 @@
       '<div class="panel-head">',
       '<div>',
       '<p class="label">Model Studio</p>',
-      '<h2>나만의 매수·매도 모델</h2>',
+      '<h2>나만의 관계 규칙 모델</h2>',
       '</div>',
       '<span class="metric">' + escapeHtml(Math.round(stats.buyAverage)) + '</span>',
       '</div>',
       '<div class="lab-stats-grid model-stats-grid">',
-      renderLabStat("모델 매수 평균", Math.round(stats.buyAverage), "점"),
-      renderLabStat("모델 매도 평균", Math.round(stats.sellAverage), "점"),
-      renderLabStat("모델 신호", stats.actionCount, "개"),
+      renderLabStat("평균 관계 강도", Math.round(stats.relationAverage || stats.buyAverage), "점"),
+      renderLabStat("위험 관계 강도", Math.round(stats.riskAverage || stats.sellAverage), "점"),
+      renderLabStat("관계 신호", stats.actionCount, "개"),
       renderLabStat("실험 기록", stats.recordCount, "개"),
       renderLabStat("평균 성과", signedPct(stats.averageReturn), ""),
       renderLabStat("승률", pct(stats.winRate), ""),
@@ -11716,19 +11745,19 @@
       '<div class="model-editor">',
       '<div class="settings-grid">',
       renderModelSettingField("modelName", "모델 이름", "text", "나의 모델"),
-      renderModelFormulaField("modelHypothesis", "모델 설명", "어떤 조건에서 매수/매도할지"),
-      renderModelFormulaField("customBuyModelFormula", "내 모델 매수 공식", "buyScore * 0.35 + buyReasonScore * buyReasonWeight"),
-      renderModelFormulaField("customSellModelFormula", "내 모델 매도 공식", "sellScore * 0.35 + riskScore * riskControlWeight"),
-      renderModelFormulaField("profitTakeScoreFormula", "익절 점검 공식", "baseScore + profitTakePnlScore + holdingSignalScore"),
-      renderModelFormulaField("lossCutScoreFormula", "손실 관리 공식", "baseScore + lossCutPnlScore + holdingSignalScore + lossGuardConfirmationScore - lossGuardWeakEvidencePenalty"),
+      renderModelFormulaField("modelHypothesis", "관계 모델 설명", "어떤 관계가 성립하면 매수/보유/분할매도/손실관리를 볼지"),
+      renderModelFormulaField("customBuyModelFormula", "참고 매수 계산식", "buyScore * 0.35 + buyReasonScore * buyReasonWeight"),
+      renderModelFormulaField("customSellModelFormula", "참고 매도 계산식", "sellScore * 0.35 + riskScore * riskControlWeight"),
+      renderModelFormulaField("profitTakeScoreFormula", "참고 익절 계산식", "baseScore + profitTakePnlScore + holdingSignalScore"),
+      renderModelFormulaField("lossCutScoreFormula", "참고 손실 관리 계산식", "baseScore + lossCutPnlScore + holdingSignalScore + lossGuardConfirmationScore - lossGuardWeakEvidencePenalty"),
       renderModelFormulaField("notificationScoreFormula", "알림 발송 공식", "rawScore"),
       '</div>',
       '<div class="model-section">',
-      '<div class="flow-title"><div><strong>가중치</strong><span>공식에서 바로 사용할 수 있는 변수입니다.</span></div></div>',
+      '<div class="flow-title"><div><strong>참고 가중치</strong><span>보조 계산식에서만 사용하는 변수입니다.</span></div></div>',
       renderNumberSettingGrid("formulaWeights", weights, ["growthWeight", "qualityWeight", "riskWeight", "flowWeight", "valuationWeight", "buyReasonWeight", "confidenceWeight", "riskControlWeight"]),
       '</div>',
       '<div class="model-section">',
-      '<div class="flow-title"><div><strong>모델 판단 기준</strong><span>내 모델 점수가 이 기준을 넘으면 라벨이 바뀝니다.</span></div></div>',
+      '<div class="flow-title"><div><strong>관계 판단 기준</strong><span>관계 규칙 점수가 이 기준을 넘으면 라벨이 바뀝니다.</span></div></div>',
       renderNumberSettingGrid("modelDecisionThresholds", thresholds, ["modelBuy", "modelAdd", "modelSell", "modelReduce", "modelHold"]),
       '</div>',
       renderVariableGuide(modelVariableGuide()),
@@ -12073,14 +12102,14 @@
       '<div class="panel-head">',
       '<div>',
       '<p class="label">Model Settings</p>',
-      '<h2>모델 설정</h2>',
+      '<h2>관계 모델 설정</h2>',
       '</div>',
       '<span class="metric">' + escapeHtml(Math.round(stats.buyAverage)) + '</span>',
       '</div>',
       '<div class="lab-stats-grid model-stats-grid">',
-      renderLabStat("모델 매수 평균", Math.round(stats.buyAverage), "점"),
-      renderLabStat("모델 매도 평균", Math.round(stats.sellAverage), "점"),
-      renderLabStat("모델 신호", stats.actionCount, "개"),
+      renderLabStat("평균 관계 강도", Math.round(stats.relationAverage || stats.buyAverage), "점"),
+      renderLabStat("위험 관계 강도", Math.round(stats.riskAverage || stats.sellAverage), "점"),
+      renderLabStat("관계 신호", stats.actionCount, "개"),
       renderLabStat("실험 기록", stats.recordCount, "개"),
       renderLabStat("평균 성과", signedPct(stats.averageReturn), ""),
       renderLabStat("승률", pct(stats.winRate), ""),
@@ -12088,19 +12117,19 @@
       '<div class="model-editor">',
       '<div class="settings-grid">',
       renderModelSettingField("modelName", "모델 이름", "text", "나의 모델"),
-      renderModelFormulaField("modelHypothesis", "모델 설명", "어떤 조건에서 매수/매도할지"),
-      renderModelFormulaField("customBuyModelFormula", "내 모델 매수 공식", "buyScore * 0.35 + buyReasonScore * buyReasonWeight"),
-      renderModelFormulaField("customSellModelFormula", "내 모델 매도 공식", "sellScore * 0.35 + riskScore * riskControlWeight"),
-      renderModelFormulaField("profitTakeScoreFormula", "익절 점검 공식", "baseScore + profitTakePnlScore + holdingSignalScore"),
-      renderModelFormulaField("lossCutScoreFormula", "손실 관리 공식", "baseScore + lossCutPnlScore + holdingSignalScore + lossGuardConfirmationScore - lossGuardWeakEvidencePenalty"),
+      renderModelFormulaField("modelHypothesis", "관계 모델 설명", "어떤 관계가 성립하면 매수/보유/분할매도/손실관리를 볼지"),
+      renderModelFormulaField("customBuyModelFormula", "참고 매수 계산식", "buyScore * 0.35 + buyReasonScore * buyReasonWeight"),
+      renderModelFormulaField("customSellModelFormula", "참고 매도 계산식", "sellScore * 0.35 + riskScore * riskControlWeight"),
+      renderModelFormulaField("profitTakeScoreFormula", "참고 익절 계산식", "baseScore + profitTakePnlScore + holdingSignalScore"),
+      renderModelFormulaField("lossCutScoreFormula", "참고 손실 관리 계산식", "baseScore + lossCutPnlScore + holdingSignalScore + lossGuardConfirmationScore - lossGuardWeakEvidencePenalty"),
       renderModelFormulaField("notificationScoreFormula", "알림 발송 공식", "rawScore"),
       '</div>',
       '<div class="model-section">',
-      '<div class="flow-title"><div><strong>가중치</strong><span>모델과 알림이 함께 사용하는 공식 변수입니다.</span></div></div>',
+      '<div class="flow-title"><div><strong>참고 가중치</strong><span>보조 계산식에서만 사용하는 변수입니다.</span></div></div>',
       renderNumberSettingGrid("formulaWeights", weights, ["growthWeight", "qualityWeight", "riskWeight", "flowWeight", "valuationWeight", "buyReasonWeight", "confidenceWeight", "riskControlWeight"]),
       '</div>',
       '<div class="model-section">',
-      '<div class="flow-title"><div><strong>모델 판단 기준</strong><span>내 모델 점수가 이 기준을 넘으면 판단 라벨과 알림이 바뀝니다.</span></div></div>',
+      '<div class="flow-title"><div><strong>관계 판단 기준</strong><span>관계 규칙 점수가 이 기준을 넘으면 판단 라벨과 알림이 바뀝니다.</span></div></div>',
       renderNumberSettingGrid("modelDecisionThresholds", thresholds, ["modelBuy", "modelAdd", "modelSell", "modelReduce", "modelHold"]),
       '</div>',
       '</div>',
@@ -12382,10 +12411,10 @@
       }).join(""),
       '</div>',
       '<div class="formula-stack">',
-      renderFormulaBlock("매수 점수 공식", formulaSetting("buyScoreFormula")),
-      renderFormulaBlock("매도 점수 공식", formulaSetting("sellScoreFormula")),
-      renderFormulaBlock("익절 점검 공식", formulaSetting("profitTakeScoreFormula")),
-      renderFormulaBlock("손실 관리 공식", formulaSetting("lossCutScoreFormula")),
+      renderFormulaBlock("참고 매수 계산식", formulaSetting("buyScoreFormula")),
+      renderFormulaBlock("참고 매도 계산식", formulaSetting("sellScoreFormula")),
+      renderFormulaBlock("참고 익절 계산식", formulaSetting("profitTakeScoreFormula")),
+      renderFormulaBlock("참고 손실 관리 계산식", formulaSetting("lossCutScoreFormula")),
       renderFormulaBlock("알림 발송 공식", formulaSetting("notificationScoreFormula")),
       '</div>',
       renderVariableGuide(variables),

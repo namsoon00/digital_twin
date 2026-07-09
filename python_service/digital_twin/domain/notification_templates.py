@@ -1785,18 +1785,16 @@ def selected_holding_formula_key(context: Dict[str, object]) -> str:
 
 def strategy_formula_line(context: Dict[str, object]) -> str:
     message_type = context_message_type(context)
+    if ontology_relation_context(context) and message_type in {"modelBuy", "modelSell", "watchlistBuyCandidate", "holdingTiming", "monitorDecisionChange"}:
+        return "판단 기준: 관계 규칙(ontologyRelationRules)"
     if message_type == "investmentInsight":
-        return "판단 공식: 온톨로지 관계 인사이트(sourceSignalTypes + ontologyInsight)"
+        return "판단 기준: 온톨로지 관계 인사이트(sourceSignalTypes + ontologyInsight)"
     if message_type in {"modelBuy", "watchlistBuyCandidate"}:
-        return "판단 공식: 매수 공식(buyScoreFormula)"
+        return "판단 기준: 관계 규칙 점수"
     if message_type == "modelSell":
-        return "판단 공식: 매도 공식(sellScoreFormula)"
+        return "판단 기준: 관계 규칙 점수"
     if message_type in {"holdingTiming", "monitorDecisionChange"}:
-        formula_key = selected_holding_formula_key(context)
-        if formula_key:
-            label = "익절 점검 공식" if formula_key == "profitTakeScoreFormula" else "손실 관리 공식"
-            return "판단 공식: " + label + "(" + formula_key + ")"
-        return "판단 공식: 익절 점검 공식(profitTakeScoreFormula) / 손실 관리 공식(lossCutScoreFormula)"
+        return "판단 기준: 관계 규칙"
     if message_type == "externalCryptoMove":
         return "판단 공식: 크립토 변동 공식(cryptoMoveScoreFormula)"
     return ""
@@ -1893,15 +1891,15 @@ def investment_score_lines(context: Dict[str, object]) -> List[str]:
         )
     if message_type in {"modelBuy", "watchlistBuyCandidate"} and has_score_value(buy_value):
         lines.append(
-            "매수 모델 점수: 체결 흐름, 방향 있는 거래량, 매수 비중, 호가 균형, 가격 움직임, 이동평균 흐름, 투자자 수급, 적정가 대비를 합쳐 0~100점으로 계산합니다. 점수가 높을수록 매수 후보에 가깝습니다."
+            "매수 관계 점수: 직접 공식 하나가 아니라 성립한 관계 규칙의 강도를 0~100점으로 표시합니다. 눌림목, 지지선, 거래량, 체결강도, 투자자 수급, 뉴스·공시 리스크가 관계 규칙 안에서 함께 확인될 때 매수 후보에 가까워집니다."
         )
     if message_type == "modelSell" and has_score_value(sell_value):
         lines.append(
-            "매도 모델 점수: 매도 압력, 거래량 변화, 가격 움직임, 이동평균 흐름, 투자자 수급, 적정가 대비, 손절 기준을 합쳐 0~100점으로 계산합니다. 점수가 높을수록 분할매도나 손절 기준을 다시 봐야 합니다."
+            "매도 관계 점수: 성립한 관계 규칙의 강도를 0~100점으로 표시합니다. 손실 관리, 수익 보호, 추세 훼손, 매도 수급, 포트폴리오 집중, 뉴스·공시 리스크가 강하게 연결될수록 분할매도나 손실 관리 점검에 가까워집니다."
         )
     if message_type in {"holdingTiming", "monitorDecisionChange"} and any(has_score_value(item) for item in [status_value, previous_value, current_value]):
         lines.append(
-            "보유 모델 점수: 사용자가 설정한 익절 공식과 손절/손실 관리 공식을 따로 계산한 뒤, 수익 중이면 익절 점수, 손실 중이면 손실 관리 점수를 선택합니다. 공식에는 기본 점수, 손익률 구간, 한 업종에 몰린 정도, 팔 수 있는 수량, 수급·추세 흐름, 손실 기준 근처의 확인 신호와 약한 근거 감점이 들어갑니다."
+            "보유 관계 점수: 사용자가 설정한 개별 공식이 아니라 성립한 관계 규칙의 강도입니다. 손익률, 20일선·60일선, 거래량, 체결강도, 투자자 수급, 포트폴리오 비중, 뉴스·공시가 어떤 관계로 연결됐는지를 보고 점수와 판단 이름을 정합니다."
         )
     if message_type == "externalCryptoMove" and (context or {}).get("cryptoMoveScore") not in (None, ""):
         lines.append(
@@ -1971,9 +1969,8 @@ def score_explanation_sections(context: Dict[str, object]) -> List[tuple]:
     if context_message_type(context) in SCORE_EXPLANATION_SKIP_TYPES:
         return []
     message_type = context_message_type(context)
-    formula_first_types = {"modelBuy", "modelSell", "watchlistBuyCandidate"}
     has_relation_context = bool(ontology_relation_context(context))
-    if has_relation_context and message_type not in formula_first_types:
+    if has_relation_context:
         model_lines = ontology_modeling_lines(context)
         missing_lines = ontology_missing_lines(context)
         prompt_lines = []
@@ -1987,7 +1984,7 @@ def score_explanation_sections(context: Dict[str, object]) -> List[tuple]:
         prompt_lines = []
     sections = []
     if model_lines:
-        sections.append(("관계 판단" if has_relation_context and message_type not in formula_first_types else "모델 판단", model_lines))
+        sections.append(("관계 판단" if has_relation_context else "모델 판단", model_lines))
     if missing_lines:
         sections.append(("부족 데이터", missing_lines))
     return sections

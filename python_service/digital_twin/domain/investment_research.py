@@ -774,9 +774,9 @@ def build_active_investment_opinion(
             "supportScore": round(support_score, 1),
             "riskScore": round(risk_score, 1),
             "relationScore": round(relation_score, 1),
-            "legacyExitPressure": round(number(legacy_model.get("exitPressure")), 1),
             "ontologyPressure": round(number(ontology_opinion.get("ontology_pressure") or ontology_opinion.get("ontologyPressure")), 1),
             "evidenceCount": len(evidence),
+            "scoringBasis": "ontologyRelationRules",
         },
         execution_plan=dict(execution_plan or {}),
     )

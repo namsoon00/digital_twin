@@ -10,12 +10,13 @@ from ..domain.market_data import (
     sector_from_symbol,
 )
 from ..domain.ontology import ONTOLOGY_PROMPT_VERSION, build_portfolio_ontology
+from ..domain.ontology_rules import evaluate_position_relation_rules
 from ..domain.portfolio import PortfolioSummary, Position, utc_now_iso
 from ..domain.portfolio_calculations import (
     normalized_fx_rates,
     value_in_base,
 )
-from ..domain.strategy import StrategyModel, holding_decision_label, holding_pressure_scores
+from ..domain.strategy import StrategyModel
 
 
 def clamp_score(value: float) -> int:
@@ -340,6 +341,17 @@ def profit_loss_rate(item: Dict[str, object]) -> float:
     return round((profit_loss / cost_basis) * 1000) / 10
 
 
+def portfolio_summary_from_payload(portfolio: Dict[str, object]) -> PortfolioSummary:
+    return PortfolioSummary(
+        total=number(portfolio.get("total")),
+        invested=number(portfolio.get("invested")),
+        cash=number(portfolio.get("cash")),
+        markets=list(portfolio.get("markets") or []),
+        sectors=list(portfolio.get("sectors") or []),
+        concentration=number(portfolio.get("concentration")),
+    )
+
+
 def toss_decision_for_holding(item: Dict[str, object], portfolio: Dict[str, object], strategy_model: StrategyModel = None) -> Dict[str, object]:
     pnl_rate = number(item.get("profitLossRate")) if item.get("profitLossRate") is not None else profit_loss_rate(item)
     sector = str(item.get("sector") or sector_from_symbol(str(item.get("symbol") or item.get("name") or "")))
@@ -386,9 +398,20 @@ def toss_decision_for_holding(item: Dict[str, object], portfolio: Dict[str, obje
         ma60_distance=number(item.get("ma60Distance")),
         sector=sector,
     )
-    pressure_scores = holding_pressure_scores(decision_position, number(sector_entry.get("ratio")), strategy_model)
-    exit_pressure = clamp_score(pressure_scores.get("exitPressure"))
-    label, tone = holding_decision_label(exit_pressure, pnl_rate)
+    relation_context = evaluate_position_relation_rules(
+        decision_position,
+        portfolio_summary_from_payload(portfolio),
+        settings=getattr(strategy_model, "settings", {}) if strategy_model else {},
+    )
+    relation_decision = relation_context.get("decision") if isinstance(relation_context, dict) else {}
+    if not isinstance(relation_decision, dict):
+        relation_decision = {}
+    action_group = str(relation_decision.get("actionGroup") or "")
+    exit_pressure = clamp_score(relation_decision.get("score") or relation_context.get("signalStrength") or 0)
+    label = str(relation_decision.get("label") or "관계 규칙 관찰")
+    tone = str(relation_decision.get("tone") or "watch")
+    profit_take_pressure = exit_pressure if action_group == "profitTake" else 0
+    loss_cut_pressure = exit_pressure if action_group in {"lossControl", "distributionRisk", "executionRisk", "eventRisk", "entryRisk"} else 0
     if exit_pressure >= 72:
         priority = 1
     elif exit_pressure >= 55:
@@ -416,14 +439,15 @@ def toss_decision_for_holding(item: Dict[str, object], portfolio: Dict[str, obje
         "profitLoss": number(item.get("profitLoss")),
         "profitLossRate": pnl_rate,
         "exitPressure": exit_pressure,
-        "profitTakePressure": clamp_score(pressure_scores.get("profitTakePressure")),
-        "lossCutPressure": clamp_score(pressure_scores.get("lossCutPressure")),
-        "decisionBasis": pressure_scores.get("decisionBasis"),
+        "profitTakePressure": profit_take_pressure,
+        "lossCutPressure": loss_cut_pressure,
+        "decisionBasis": relation_decision.get("basis") or "ontologyRelationRules",
         "decision": label,
         "tone": tone,
         "priority": priority,
         "reasons": reasons[:3],
-        "triggers": ["수익률", "평가손익", "매도 가능 수량"],
+        "triggers": ["관계 규칙", "수급", "추세"],
+        "ontologyRelationContext": relation_context,
     }
 
 
@@ -662,7 +686,7 @@ def build_toss_decision(
         item["aiContext"] = {
             "promptVersion": ONTOLOGY_PROMPT_VERSION,
             "role": "ontology-first-investment-opinion",
-            "legacyModelRole": "supporting-evidence",
+            "legacyModelRole": "not-used-for-scoring",
             "worldview": dict(ontology.worldview or {}),
             "opinion": opinion_payload,
             "reasoningCard": reasoning_card,
@@ -685,7 +709,7 @@ def build_toss_decision(
         "watchCount": len(watch_items),
         "items": items,
         "rules": [
-            "투자전략은 관계 분석을 우선하고 기존 공식 점수는 보조 근거로 유지합니다.",
+            "투자전략 점수는 온톨로지 관계 규칙과 성립한 관계 강도만 사용합니다.",
             "수익률, 평가손익, 수급, 추세, 섹터 집중도, 뉴스·공시 리서치를 AI 의견 정보에 함께 넣습니다.",
             "관심 종목은 보유가 아니므로 매도 판단 대신 시세 기준 대기 상태로 둡니다.",
             "Neo4j 설정이 있으면 같은 관계 그래프를 저장합니다.",
@@ -694,7 +718,7 @@ def build_toss_decision(
         "investmentAnalysis": {
             "mode": "ontology-first",
             "contract": "investment-ontology-ai-inference-v1",
-            "legacyModelRole": "supporting-evidence",
+            "legacyModelRole": "not-used-for-scoring",
             "reasoningCards": reasoning_cards[:40],
             "aiInferencePacket": ontology_payload.get("aiInferencePacket", {}),
             "graphSummary": {
@@ -718,14 +742,7 @@ def build_toss_ontology(
     external_signals: Dict[str, object] = None,
 ):
     normalized_positions = [normalize_position(item) for item in list(positions or []) + list(watchlist or [])]
-    summary = PortfolioSummary(
-        total=number(portfolio.get("total")),
-        invested=number(portfolio.get("invested")),
-        cash=number(portfolio.get("cash")),
-        markets=list(portfolio.get("markets") or []),
-        sectors=list(portfolio.get("sectors") or []),
-        concentration=number(portfolio.get("concentration")),
-    )
+    summary = portfolio_summary_from_payload(portfolio)
     legacy_by_symbol = {
         str(item.get("symbol") or "").upper(): {
             "exitPressure": number(item.get("exitPressure")),

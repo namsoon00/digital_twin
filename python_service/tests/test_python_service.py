@@ -1112,7 +1112,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertGreater(buy_side["buyScore"], buy_side["sellScore"])
         self.assertGreater(sell_side["sellScore"], sell_side["buyScore"])
 
-    def test_holding_decision_keeps_user_score_formulas_as_supporting_evidence(self):
+    def test_holding_decision_uses_ontology_rules_not_user_score_formulas(self):
         loss_position = normalize_position({
             "symbol": "000660",
             "name": "SK하이닉스",
@@ -1146,17 +1146,19 @@ class PythonServiceTests(unittest.TestCase):
         loss_decision = next(item for item in decisions if item.symbol == "000660")
         profit_decision = next(item for item in decisions if item.symbol == "005930")
 
-        self.assertEqual(88, loss_decision.loss_cut_pressure)
+        self.assertNotEqual(88, loss_decision.loss_cut_pressure)
+        self.assertGreaterEqual(loss_decision.loss_cut_pressure, 70)
         self.assertEqual("ontologyRelationRules", loss_decision.decision_basis)
         self.assertEqual("손절·분할축소 권장", loss_decision.decision)
-        self.assertEqual(77, profit_decision.profit_take_pressure)
+        self.assertEqual(0, profit_decision.profit_take_pressure)
         self.assertEqual("ontologyRelationRules", profit_decision.decision_basis)
         self.assertEqual("리밸런싱 권장", profit_decision.decision)
-        self.assertEqual("supporting-evidence", loss_decision.ai_context["legacyModelRole"])
+        self.assertEqual("not-used-for-scoring", loss_decision.ai_context["legacyModelRole"])
         self.assertEqual("ontology-relation-rule-ai-review", loss_decision.ai_context["role"])
         self.assertIn("relationRuleContext", loss_decision.ai_context)
         self.assertIn("관계 분석 데이터 JSON", loss_decision.ai_context["prompt"])
         self.assertIn("legacy_model", loss_decision.ontology_opinion)
+        self.assertEqual("not-used-for-scoring", loss_decision.ontology_opinion["legacy_model"]["role"])
 
     def test_loss_guard_near_threshold_requires_confirmation(self):
         position = normalize_position({
@@ -3038,7 +3040,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("수급: 거래량 90,863(1.4x), 거래액 $3,543,834,187", "\n".join(insight.lines))
         self.assertIn("추세: 20일선 $108.07보다 6.3% 낮음", "\n".join(insight.lines))
         self.assertIn("권장 액션: 분할매도", "\n".join(insight.lines))
-        self.assertIn("<b>[관찰] 💰 Strategy: 수익 +12.2%: 분할매도·리밸런싱 점검</b>", message)
+        self.assertIn("<b>[주의] 💰 Strategy: 수익 +12.2%: 분할매도·리밸런싱 점검</b>", message)
         self.assertIn("현재가", message)
         self.assertIn("평균매입가", message)
         self.assertIn("수익률", message)
@@ -3154,7 +3156,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(any("상태 " in item and "점)" in item for item in event.criteria))
         self.assertTrue(any("수익률 -9.0%" in item for item in event.criteria))
 
-    def test_watchlist_buy_candidate_uses_dedicated_message_type(self):
+    def test_watchlist_buy_candidate_requires_relation_entry_rule(self):
         watch = normalize_position({
             "symbol": "AAPL",
             "name": "Apple",
@@ -3186,18 +3188,9 @@ class PythonServiceTests(unittest.TestCase):
 
         candidate = self.insight_event(events, "AAPL")
         self.assertEqual("AAPL", candidate.symbol)
-        source_message = self.insight_source_message(candidate, "watchlistBuyCandidate")
         self.assertEqual("investmentInsight", candidate.rule)
-        self.assertIn("watchlistBuyCandidate", self.insight_source_rules(candidate))
-        self.assertIn("관심종목 매수 후보", source_message)
-        self.assertIn("현재가: $185", source_message)
-        self.assertNotIn("평단가", source_message)
-        self.assertNotIn("수익률", source_message)
-        self.assertTrue(any("관심종목 매수 기준" in item for item in source_message.splitlines()))
-        db_path = Path(self.temp.name) / "service.db"
-        message = SQLiteNotificationTemplateStore(db_path).render(candidate.rule, alert_context(candidate))
-        self.assertIn("<b>[관찰] 🟢 Apple: 분할매수 후보: 진입 조건 점검</b>", message)
-        self.assertNotIn("투자 인사이트: 대응 기준 점검", message)
+        self.assertNotIn("watchlistBuyCandidate", self.insight_source_rules(candidate))
+        self.assertIn("watchlistQuote", self.insight_source_rules(candidate))
         self.assertFalse(any(event.rule == "modelBuy" for event in events))
         self.assertFalse(any(event.rule == "watchlistBuyCandidate" for event in events))
 
@@ -3248,7 +3241,7 @@ class PythonServiceTests(unittest.TestCase):
 
         self.assertIn("watchlistBuyCandidate", self.insight_source_rules(candidate))
         self.assertIn("watchlistOntologySignal", self.insight_source_rules(candidate))
-        self.assertIn("온톨로지 소액 분할매수 검토", source_message)
+        self.assertIn("소액 분할매수 검토", source_message)
         self.assertIn(
             "관심종목 온톨로지 관계 신호",
             self.insight_source_message(candidate, "watchlistOntologySignal"),
@@ -3379,7 +3372,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertFalse(any(event.rule == "investmentInsight" for event in events))
         self.assertFalse(any(event.rule == "watchlistBuyCandidate" for event in events))
 
-    def test_realtime_monitor_recomputes_decisions_with_user_formulas(self):
+    def test_realtime_monitor_keeps_decision_scores_on_relation_rules(self):
         position = normalize_position({
             "symbol": "005930",
             "name": "삼성전자",
@@ -3413,7 +3406,8 @@ class PythonServiceTests(unittest.TestCase):
             AlertEvent("main", "메인", "WATCH", "holdingTiming", "main:timing:005930", "삼성전자", ["상태 손절 기준 확인 (91점)"], "005930")
         ])
 
-        self.assertEqual(91, rescored.decisions[0].loss_cut_pressure)
+        self.assertNotEqual(91, rescored.decisions[0].loss_cut_pressure)
+        self.assertGreaterEqual(rescored.decisions[0].loss_cut_pressure, 70)
         self.assertEqual("ontologyRelationRules", rescored.decisions[0].decision_basis)
         self.assertNotEqual(91, rescored.decisions[0].exit_pressure)
         self.assertEqual("baseScore + symbolScore", stamped[0].metadata["notificationScoreFormula"])
@@ -3687,7 +3681,7 @@ class PythonServiceTests(unittest.TestCase):
         )
         message = self.insight_source_message(event, "monitorTrendChange")
 
-        self.assertEqual("WATCH", event.severity)
+        self.assertEqual("ALERT", event.severity)
         self.assertIn("monitorTrendChange", self.insight_source_rules(event))
         self.assertFalse("monitorTrendChange" == event.rule)
         self.assertIn("20일선 상향 돌파", message)
@@ -7496,13 +7490,15 @@ class PythonServiceTests(unittest.TestCase):
         self.assertNotIn("<b>알림 발송</b>", message)
         self.assertIn("모델", message)
         self.assertIn("보유 타이밍 모델", message)
-        self.assertIn("손실 관리 공식(lossCutScoreFormula)", message)
+        self.assertIn("판단 기준", message)
+        self.assertIn("관계 규칙", message)
+        self.assertNotIn("손실 관리 공식(lossCutScoreFormula)", message)
         self.assertNotIn("알림 발송 공식(notificationScoreFormula)", message)
         self.assertNotIn("발송 우선도", message)
         self.assertNotIn("기본 우선도 35점", message)
         self.assertNotIn("수급·추세 같은 확인 데이터 포함 +10점", message)
-        self.assertIn("보유 모델 점수", message)
-        self.assertIn("사용자가 설정한 익절 공식과 손절/손실 관리 공식", message)
+        self.assertIn("보유 관계 점수", message)
+        self.assertIn("관계 규칙", message)
         self.assertNotIn("발송 공식", message)
         self.assertNotIn("발송 대입값", message)
         self.assertNotIn("rawScore=70", message)
@@ -7963,10 +7959,10 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("• <b>매수 판단</b>: <code>매수 후보 (78점)</code>", message)
         self.assertNotIn("모델 매수 점수 78점", message)
         self.assertIn("• <b>감지</b>: <code>매수 후보 (78점)</code>", message)
-        self.assertIn("매수 모델 점수", message)
-        self.assertIn("체결 흐름", message)
+        self.assertIn("매수 관계 점수", message)
+        self.assertIn("관계 규칙", message)
 
-    def test_model_score_event_renders_formula_audit_details(self):
+    def test_model_score_event_renders_relation_rule_details(self):
         db_path = Path(self.temp.name) / "service.db"
         templates = SQLiteNotificationTemplateStore(db_path)
         position = normalize_position({
@@ -7999,20 +7995,24 @@ class PythonServiceTests(unittest.TestCase):
             [position],
             decisions_for_positions([position], portfolio),
         )
-        monitor = RealtimeMonitor({"alertThresholds": "modelBuyScore=1\nmodelSellScore=99\nwatchlistBuyScore=99"})
-        event = next(item for item in monitor.model_score_events(snapshot) if item.rule == "modelBuy")
+        monitor = RealtimeMonitor({"alertThresholds": "modelBuyScore=99\nmodelSellScore=1\nwatchlistBuyScore=99"})
+        event = next(item for item in monitor.model_score_events(snapshot) if item.rule == "modelSell")
 
         message = templates.render(event.rule, alert_context(event))
 
-        self.assertTrue(event.metadata.get("formulaAudits"))
+        self.assertFalse(event.metadata.get("formulaAudits"))
+        self.assertEqual("ontology-relation-rules-v1", event.metadata["ontologyRelationContext"]["engineVersion"])
+        self.assertEqual(100.0, event.metadata["relationRuleScore"])
         self.assertIn("• <b>현재가</b>: <code>71,000원</code>", message)
         self.assertIn("• <b>평균매입가</b>: <code>74,000원</code>", message)
         self.assertIn("• <b>수익률</b>: <code>-4.1%</code>", message)
-        self.assertIn("매수 공식(buyScoreFormula)", message)
-        self.assertIn("매도 공식(sellScoreFormula)", message)
-        self.assertIn("모델 대입값", message)
-        self.assertIn("executionScore", message)
-        self.assertIn("모델 부족 데이터", message)
+        self.assertIn("관계 규칙 모델", message)
+        self.assertIn("선택 규칙 holding.concentration.rebalance.v1", message)
+        self.assertIn("성립 규칙", message)
+        self.assertIn("부족 데이터", message)
+        self.assertNotIn("매수 공식(buyScoreFormula)", message)
+        self.assertNotIn("매도 공식(sellScoreFormula)", message)
+        self.assertNotIn("모델 대입값", message)
 
     def test_model_sell_alert_explains_sell_score_inputs(self):
         db_path = Path(self.temp.name) / "service.db"
@@ -8031,8 +8031,8 @@ class PythonServiceTests(unittest.TestCase):
         message = templates.render(event.rule, alert_context(event))
 
         self.assertIn("• <b>매도 판단</b>: <code>분할매도 점검 (82점)</code>", message)
-        self.assertIn("매도 모델 점수", message)
-        self.assertIn("손절 기준", message)
+        self.assertIn("매도 관계 점수", message)
+        self.assertIn("관계 규칙", message)
 
     def test_flow_and_trend_lines_use_colon_pair_template_format(self):
         db_path = Path(self.temp.name) / "service.db"

@@ -4,7 +4,7 @@ import re
 import urllib.request
 from typing import Dict, Iterable, List
 
-from ..domain.ontology import PortfolioOntology
+from ..domain.ontology_contracts import PortfolioOntology
 from .settings import runtime_settings, utc_now
 
 

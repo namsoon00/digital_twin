@@ -26,6 +26,9 @@ Domain:
 - `python_service/digital_twin/domain/portfolio_calculations.py`: portfolio exposure, FX conversion, and summary calculations
 - `python_service/digital_twin/domain/strategy.py`: scoring formulas, strategy feature variables, and position decision rules
 - `python_service/digital_twin/domain/ontology_tbox.py`: bounded-context TBox vocabulary, relation definitions, and ontology reasoning rule catalog
+- `python_service/digital_twin/domain/ontology_contracts.py`: ontology graph data contracts such as entities, relations, evidence, beliefs, opinions, and portfolio ontology snapshots
+- `python_service/digital_twin/domain/ontology_schema.py`: TBox/ABox payloads, bounded-context property assignment, and basic ontology graph mutation helpers
+- `python_service/digital_twin/domain/ontology_prompting.py`: ontology read models for reasoning cards, AI inference packets, worldview summaries, and prompt payloads
 - `python_service/digital_twin/domain/external_signal_quality.py`: external signal provenance, freshness, source-health, and symbol-coverage scoring
 - `python_service/digital_twin/domain/ontology_quality.py`: AI opinion readiness and ontology graph quality sample metrics
 - `python_service/digital_twin/domain/ontology_rules.py`: ontology relation-rule definitions, deterministic rule matching, missing-data contracts, and AI prompt context
@@ -87,6 +90,8 @@ Current events:
 Events are persisted locally to the append-only `domain_events` table in `data/service.db` through `SQLiteEventLog`. Rebuild projections by replaying that event stream where practical instead of coupling features to mutable state tables. Event handlers must not break publishers by default. If one feature needs another feature's result, publish or subscribe to an event instead of importing the other feature's application service.
 
 `monitoring.alerts_detected` now carries investment notifications as `investmentInsight` events. Legacy investment alert types such as `monitorDecisionChange`, `modelBuy`, and `externalCryptoMove` are evidence signals inside `metadata.sourceAlertEvents`, not direct investment dispatches. The model-review queue must read decision-change evidence from `investmentInsight.sourceAlertEvents` as well as the legacy direct shape for compatibility. Realtime alerts must never wait for LLM/Codex output; deep analysis belongs in the model-review queue and worker. Notification producers should enqueue jobs in the notification outbox and leave external delivery to the notification worker. Jobs derived from a domain event should carry `source_event_id` and a stable `dedupe_key`.
+
+Ontology projection is a read-model boundary, not the source of truth. Aggregates and use cases own transactional state inside their bounded contexts; projection code can translate snapshots and domain events into TBox/ABox graph assertions for Neo4j, AI prompts, quality samples, and console views. Do not make domain aggregates depend on Neo4j, graph storage, or prompt rendering. If ontology needs more facts, publish or persist those facts in the owning context first, then extend the projection/read model.
 
 ## Parallel Development Slices
 

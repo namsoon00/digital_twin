@@ -4,7 +4,7 @@
 
 ## Domain Vocabulary
 
-TBox 정의는 `python_service/digital_twin/domain/ontology_tbox.py`에 둔다. `domain/ontology.py`는 이 TBox를 사용해 현재 계좌 스냅샷을 ABox로 만든다.
+TBox 정의는 `python_service/digital_twin/domain/ontology_tbox.py`에 둔다. 그래프 데이터 계약은 `domain/ontology_contracts.py`, TBox/ABox payload와 bounded-context 속성 부여는 `domain/ontology_schema.py`, reasoning card와 AI 입력 read model은 `domain/ontology_prompting.py`가 맡는다. `domain/ontology.py`는 이 조각들을 사용해 현재 계좌 스냅샷을 ABox 그래프로 조립한다.
 
 바운디드 컨텍스트는 6개다.
 
@@ -55,9 +55,22 @@ AI 프롬프트에는 TBox, `boundedContexts`, ABox, operational ontology, reaso
 6. `DecisionItem.relation_rule_context`, `ai_prompt_context`, `ai_context`에 관계 규칙 결과와 프롬프트 입력 계약을 함께 붙인다.
 7. 실시간 모니터링은 알림 metadata에 `ontologyRelationContext`, `ontologyPromptContext`, `ontologyReviewContext`를 포함한다.
 8. 모델 리뷰 워커는 이 정보를 비동기 AI 프롬프트에 넣어 판단 변화 원인, 노이즈 가능성, 부족 데이터, 다음 규칙 개선안을 분석한다.
-9. `NEO4J_URI`가 설정되어 있으면 `infrastructure/neo4j_ontology.py`가 동일 그래프를 Neo4j에 저장한다.
+9. `infrastructure/ontology_projection.py`가 스냅샷을 온톨로지 read model로 투영한다. `NEO4J_URI`가 설정되어 있으면 `infrastructure/neo4j_ontology.py`가 동일 그래프를 Neo4j에 저장한다.
 
 알림은 투자 이벤트 타입별 폴링으로 직접 발송하지 않는다. 기존 `modelBuy`, `holdingTiming`, `externalDartDisclosure` 같은 이벤트는 `investmentInsight.metadata.sourceAlertEvents`의 근거 신호로 남고, 최종 발송은 `Insight -> DISPATCHED_BY -> NotificationDispatch(investmentInsight)` 관계가 담당한다.
+
+## Projection Boundary
+
+온톨로지는 DDD aggregate의 저장소가 아니라 projection/read model이다. `Account`, `Monitoring`, `Research`, `Strategy`, `Notification` 같은 소유 컨텍스트가 사실과 이벤트를 만든 뒤, projection이 그 사실을 `TBox` 규칙에 맞는 `ABox` 노드와 관계로 변환한다. 이 경계 덕분에 계좌 저장, 알림 outbox, 모델 리뷰 큐의 트랜잭션은 각 context와 unit-of-work가 책임지고, Neo4j 저장이나 AI 프롬프트 생성 실패는 원본 업무 트랜잭션을 깨지 않는다.
+
+Projection은 다음 용도로만 사용한다.
+
+- Neo4j 그래프 조회와 시각화.
+- reasoning card, AI inference packet, prompt payload 같은 읽기 모델 생성.
+- 품질 샘플과 운영 콘솔용 진단 지표 생성.
+- bounded context 사이의 의미 관계를 설명하는 audit trail.
+
+새 투자 사실이 필요하면 projection에 직접 상태를 추가하지 말고, 먼저 소유 context의 aggregate/event/repository에 사실을 남긴 뒤 projection 변환을 확장한다.
 
 ## Data Quality And Coverage
 

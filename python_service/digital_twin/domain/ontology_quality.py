@@ -4,7 +4,8 @@ from dataclasses import asdict, dataclass
 from typing import Dict, List
 
 from .market_data import clamp, number
-from .ontology import PortfolioOntology, ontology_abox
+from .ontology_contracts import PortfolioOntology
+from .ontology_schema import ontology_abox
 from .portfolio import utc_now_iso
 
 

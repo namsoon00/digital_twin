@@ -2,8 +2,8 @@ from dataclasses import dataclass
 from typing import Callable, Dict, Iterable, List, Optional, Protocol, Tuple
 
 from .accounts import AccountConfig
-from .investment_research import ResearchEvidence
-from .ontology import PortfolioOntology
+from .investment_research import NewsCollectionTarget, ResearchEvidence
+from .ontology_contracts import PortfolioOntology
 from .portfolio import AccountSnapshot, AlertEvent, Position
 from .symbol_universe import ListedSymbol
 
@@ -46,6 +46,12 @@ class MonitorStateRepository(Protocol):
         ...
 
     def write(self) -> None:
+        ...
+
+
+class MonitorSnapshotReader(Protocol):
+    @property
+    def previous(self) -> Dict[str, object]:
         ...
 
 
@@ -162,6 +168,14 @@ class ResearchEvidenceRepository(Protocol):
         ...
 
     def summary(self) -> Dict[str, object]:
+        ...
+
+
+class ResearchEvidenceGateway(Protocol):
+    def collect_for_target(self, target: NewsCollectionTarget) -> Tuple[List[ResearchEvidence], List[Dict[str, object]]]:
+        ...
+
+    def providers(self) -> List[str]:
         ...
 
 

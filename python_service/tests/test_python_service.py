@@ -3950,6 +3950,16 @@ class PythonServiceTests(unittest.TestCase):
 
         self.assertEqual([], offenders)
 
+    def test_domain_layer_does_not_import_application_or_infrastructure(self):
+        domain_dir = Path(__file__).resolve().parents[1] / "digital_twin" / "domain"
+        offenders = []
+        for path in domain_dir.glob("*.py"):
+            text = path.read_text(encoding="utf-8")
+            if "application" in text or "infrastructure" in text:
+                offenders.append(path.name)
+
+        self.assertEqual([], offenders)
+
     def test_message_catalog_is_shared_across_monitoring_and_notifications(self):
         catalog = public_message_catalog()
 

@@ -6,7 +6,7 @@ from ..domain.accounts import AccountConfig
 from ..domain.events import research_evidence_collected_event
 from ..domain.investment_research import NewsCollectionTarget, ResearchEvidence
 from ..domain.market_data import number
-from ..domain.repositories import AccountRepository, ResearchEvidenceRepository
+from ..domain.repositories import AccountRepository, MonitorSnapshotReader, ResearchEvidenceGateway, ResearchEvidenceRepository, SymbolUniverseRepository
 from ..domain.symbol_universe import ListedSymbol, normalize_market
 
 
@@ -48,10 +48,10 @@ class NewsCollectionRunner:
     def __init__(
         self,
         account_repository: AccountRepository,
-        monitor_store,
-        symbol_store,
+        monitor_store: MonitorSnapshotReader,
+        symbol_store: SymbolUniverseRepository,
         evidence_store: ResearchEvidenceRepository,
-        gateway,
+        gateway: ResearchEvidenceGateway,
         settings: Dict[str, str],
         event_publisher=None,
         sleep_fn=time.sleep,

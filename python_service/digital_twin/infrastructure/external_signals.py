@@ -176,6 +176,7 @@ class ExternalSignalProvider:
         if self.is_cache_fresh(entry):
             signals = entry.get("signals")
             if isinstance(signals, dict):
+                signals = attach_external_signal_quality(signals, positions=position_list, settings=self.settings)
                 self.attach_stored_research_evidence(position_list, signals)
                 self.record_research_evidence(position_list, signals)
                 return signals
@@ -305,9 +306,15 @@ class ExternalSignalProvider:
         fetched_at = parse_iso(str(payload.get("fetchedAt") or ""))
         if not fetched_at:
             return False
-        minutes = int(number(self.settings.get("externalApiFetchIntervalMinutes")) or 30)
-        minutes = max(10, minutes)
+        minutes = self.cache_ttl_minutes()
         return datetime.now(timezone.utc) - fetched_at < timedelta(minutes=minutes)
+
+    def cache_ttl_minutes(self) -> int:
+        interval = int(number(self.settings.get("externalApiFetchIntervalMinutes")) or 30)
+        interval = max(10, interval)
+        freshness = int(number(self.settings.get("externalSignalCacheMaxAgeMinutes")) or number(self.settings.get("dataFreshnessExternalMaxAgeMinutes")) or interval)
+        freshness = max(1, freshness)
+        return min(interval, freshness)
 
     def fetch_signals(self, positions: List[Position]) -> Dict[str, object]:
         signals = {
@@ -637,6 +644,7 @@ class ExternalSignalProvider:
                     "change1h": number(item.get("price_change_percentage_1h_in_currency")),
                     "change24h": number(item.get("price_change_percentage_24h_in_currency") or item.get("price_change_percentage_24h")),
                     "change7d": number(item.get("price_change_percentage_7d_in_currency")),
+                    "lastUpdated": str(item.get("last_updated") or ""),
                 }
         except Exception as error:  # noqa: BLE001
             self.status_for_error(signals, "CoinGecko", "", error)

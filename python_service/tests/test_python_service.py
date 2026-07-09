@@ -80,6 +80,22 @@ class PythonServiceTests(unittest.TestCase):
         self.env_patch.start()
         self.addCleanup(self.env_patch.stop)
 
+    def fresh_data_freshness(self, source: str = "unit-test", max_age_minutes: int = 10):
+        return {
+            "source": source,
+            "status": "fresh",
+            "reason": "신선도 기준 통과",
+            "ageMinutes": 0,
+            "maxAgeMinutes": max_age_minutes,
+            "sourceFetchedAt": utc_now_iso(),
+            "checkedAt": utc_now_iso(),
+        }
+
+    def mark_event_fresh(self, event: AlertEvent, source: str = "unit-test") -> AlertEvent:
+        event.metadata = dict(event.metadata or {})
+        event.metadata.setdefault("dataFreshness", self.fresh_data_freshness(source))
+        return event
+
     def insight_event(self, events, symbol: str = ""):
         for event in events:
             if event.rule != "investmentInsight":
@@ -490,6 +506,53 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(-380, enriched.individual_net_volume)
         self.assertEqual(1, provider.diagnostics["cached"])
         self.assertEqual(0, provider.diagnostics["live"])
+
+    def test_kis_cached_fallback_marks_position_mixed_quality(self):
+        db_path = Path(self.temp.name) / "service.db"
+        cache = SQLiteMarketQuoteCache(db_path)
+        cache.save(KIS_CACHE_PROVIDER, KIS_CACHE_ACCOUNT_ID, "005930", {
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "currentPrice": 71000,
+            "tradeStrength": 109,
+            "quoteSource": "KIS Open API",
+            "quoteStatus": "KIS 현재가 반영",
+            "quoteMessage": "cached",
+            "dataQuality": "actual",
+            "updatedAt": utc_now_iso(),
+        })
+
+        def fail_fetch_json(*_args, **_kwargs):
+            raise RuntimeError("KIS unavailable")
+
+        provider = KISMarketSignalProvider(
+            settings={
+                "kisBaseUrl": "https://kis.example.test",
+                "kisAppKey": "app-key",
+                "kisAppSecret": "app-secret",
+                "kisMarketSignalsEnabled": "1",
+                "kisMarketSignalCacheMinutes": "10",
+                "externalApiRetryAttempts": "1",
+            },
+            quote_cache=cache,
+            fetch_json=fail_fetch_json,
+            sleep=lambda _seconds: None,
+        )
+        samsung = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "dataQuality": "actual",
+        })
+
+        positions, _watchlist = provider.enrich_collections([samsung], [])
+
+        self.assertEqual(71000, positions[0].current_price)
+        self.assertEqual("mixed", positions[0].data_quality)
+        self.assertEqual(1, provider.diagnostics["cached"])
 
     def test_kis_market_signal_provider_refreshes_partial_fresh_cache(self):
         db_path = Path(self.temp.name) / "service.db"
@@ -3696,7 +3759,7 @@ class PythonServiceTests(unittest.TestCase):
             "currentPrice": 185.7,
             "quoteSource": "Toss /api/v1/prices",
             "dataQuality": "actual",
-            "updatedAt": "2026-07-04T00:00:00Z",
+            "updatedAt": utc_now_iso(),
             "ma20": 180,
         })
         service = SymbolUniverseService(symbol_store, RemoteSymbolSourceGateway(), runtime_settings(), quote_cache=quote_cache)
@@ -3809,6 +3872,32 @@ class PythonServiceTests(unittest.TestCase):
         selected = quote_cache.stale_universe_symbols("toss", MARKET_DATA_ACCOUNT_ID, ["NASDAQ"], limit=2, max_age_minutes=240)
 
         self.assertEqual("TSLA", selected[0]["symbol"])
+
+    def test_symbol_universe_search_marks_stale_market_data_without_attaching_price(self):
+        db_path = Path(self.temp.name) / "service.db"
+        symbol_store = SQLiteSymbolUniverseStore(db_path)
+        quote_cache = SQLiteMarketQuoteCache(db_path)
+        symbol_store.upsert_many([seed_symbol("AAPL")])
+        quote_cache.save("toss", MARKET_DATA_ACCOUNT_ID, "AAPL", {
+            "symbol": "AAPL",
+            "market": "NASDAQ",
+            "currentPrice": 100,
+            "dataQuality": "actual",
+            "updatedAt": "2026-07-04T00:00:00Z",
+        })
+        service = SymbolUniverseService(
+            symbol_store,
+            RemoteSymbolSourceGateway(),
+            {"marketDataMaxAgeMinutes": "240"},
+            quote_cache=quote_cache,
+        )
+
+        result = service.search(query="AAPL", market="NASDAQ")
+        item = result["items"][0]
+
+        self.assertTrue(item["marketDataStale"])
+        self.assertEqual("2026-07-04T00:00:00Z", item["marketDataUpdatedAt"])
+        self.assertNotIn("currentPrice", item)
 
     def test_application_layer_does_not_import_infrastructure(self):
         application_dir = Path(__file__).resolve().parents[1] / "digital_twin" / "application"
@@ -4280,7 +4369,9 @@ class PythonServiceTests(unittest.TestCase):
         cached_signals = provider.signals_for_positions(positions)
 
         self.assertEqual(8, len(calls))
-        self.assertEqual(signals, cached_signals)
+        self.assertEqual(signals["fetchedAt"], cached_signals["fetchedAt"])
+        self.assertEqual(signals["equityQuotes"], cached_signals["equityQuotes"])
+        self.assertEqual(signals["cryptoMarkets"], cached_signals["cryptoMarkets"])
         self.assertEqual(4.2, signals["equityQuotes"]["AAPL"]["changePercent"])
         self.assertEqual("10-Q", signals["secFilings"]["AAPL"]["latestFiling"]["form"])
         self.assertEqual(95359000000, signals["secFilings"]["AAPL"]["facts"]["revenue"]["value"])
@@ -4293,6 +4384,53 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("Samsung Electronics", signals["newsHeadlines"]["005930"]["items"][0]["title"])
         self.assertEqual(1400, signals["fxRates"]["USDKRW"]["rate"])
         self.assertEqual("RuntimeSettings", signals["fxRates"]["USDKRW"]["provider"])
+
+    def test_external_signal_cache_recomputes_freshness_age_on_read(self):
+        db_path = Path(self.temp.name) / "service.db"
+        cache = SQLiteExternalSignalCache(db_path)
+        settings = {
+            "externalApiFetchIntervalMinutes": "60",
+            "externalSignalCacheMaxAgeMinutes": "60",
+            "externalAlphaEnabled": "0",
+            "externalCoinGeckoEnabled": "1",
+            "externalFredEnabled": "0",
+            "externalDartEnabled": "0",
+            "externalSecEnabled": "0",
+            "externalNewsEnabled": "0",
+        }
+        fetched_at = datetime.now(timezone.utc) - timedelta(minutes=7)
+        signals = attach_external_signal_quality({
+            "fetchedAt": fetched_at.isoformat().replace("+00:00", "Z"),
+            "equityQuotes": {},
+            "cryptoMarkets": {
+                "bitcoin": {
+                    "provider": "CoinGecko",
+                    "symbol": "BTC",
+                    "price": 100,
+                    "change24h": 1,
+                    "change7d": 2,
+                }
+            },
+            "macro": {},
+            "fxRates": {},
+            "secFilings": {},
+            "dartDisclosures": {},
+            "newsHeadlines": {},
+            "statuses": [],
+        }, settings=settings, now=fetched_at)
+        provider = ExternalSignalProvider(
+            settings=settings,
+            cache=cache,
+            fetch_json=lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("cache hit should not fetch")),
+        )
+        cache_key = provider.cache_key_for_positions([])
+        cache.replace(provider.next_cache_payload({}, cache_key, signals))
+
+        cached = provider.signals_for_positions([])
+
+        self.assertGreaterEqual(cached["freshness"]["ageMinutes"], 6)
+        self.assertEqual(cached["freshness"]["ageMinutes"], cached["quality"]["ageMinutes"])
+        self.assertEqual("fresh", cached["freshness"]["status"])
 
     def test_news_research_evidence_uses_stable_article_identity(self):
         item = {
@@ -4893,7 +5031,7 @@ class PythonServiceTests(unittest.TestCase):
         rule = rules.get("monitorTrendChange")
         rule.market_hours_enabled = False
         rules.upsert(rule)
-        event = AlertEvent("main", "메인", "ALERT", "monitorTrendChange", "main:trend", "SK하이닉스", ["이동평균 변화", "20일선 하향 이탈"], "000660")
+        event = self.mark_event_fresh(AlertEvent("main", "메인", "ALERT", "monitorTrendChange", "main:trend", "SK하이닉스", ["이동평균 변화", "20일선 하향 이탈"], "000660"))
         source_event = alerts_detected_event([event])
 
         result = send_events([event], accounts={"main": account}, queue=queue, source_event=source_event)
@@ -5866,6 +6004,77 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("open", us_decision.market_hours_status)
         self.assertIn("애프터마켓", us_decision.market_hours_reason)
 
+    def test_notification_rule_seed_restores_default_market_hours_enabled(self):
+        db_path = Path(self.temp.name) / "service.db"
+        SQLiteNotificationRuleStore(db_path)
+        with sqlite3.connect(db_path) as connection:
+            connection.execute(
+                "UPDATE notification_rules SET market_hours_enabled = 0, market_hours_markets_json = ?, updated_at = ? WHERE message_type = ?",
+                (json.dumps(["US"]), "2026-07-01T00:00:00Z", "externalEquityMove"),
+            )
+
+        refreshed = SQLiteNotificationRuleStore(db_path).get("externalEquityMove")
+
+        self.assertTrue(refreshed.market_hours_enabled)
+        self.assertEqual(["US"], refreshed.market_hours_markets)
+
+    def test_notification_queue_suppresses_stale_data_freshness(self):
+        queue = SQLiteNotificationJobStore(Path(self.temp.name) / "service.db")
+        stale_time = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat().replace("+00:00", "Z")
+        job = NotificationJob.create(
+            "크립토 변동",
+            account_id="main",
+            account_label="메인",
+            message_type="externalCryptoMove",
+            context={
+                "messageType": "externalCryptoMove",
+                "severity": "ALERT",
+                "symbol": "BTC",
+                "body": "크립토 변동",
+                "notificationSignals": ["important", "confirmingData", "actionable"],
+                "dataFreshness": {
+                    "source": "CoinGecko",
+                    "status": "stale",
+                    "reason": "기준 10분 초과",
+                    "ageMinutes": 30,
+                    "maxAgeMinutes": 10,
+                    "sourceFetchedAt": stale_time,
+                },
+            },
+        )
+
+        self.assertFalse(queue.enqueue(job))
+        saved = queue.jobs()[0]
+
+        self.assertEqual("suppressed", saved.status)
+        self.assertIn("데이터 신선도 기준 미통과", saved.last_error)
+        self.assertEqual("stale_data", saved.context["honeySuppressionReason"])
+        self.assertEqual("suppressed", saved.context["dataFreshnessDecision"])
+
+    def test_notification_queue_suppresses_missing_required_data_freshness(self):
+        queue = SQLiteNotificationJobStore(Path(self.temp.name) / "service.db")
+        job = NotificationJob.create(
+            "크립토 변동",
+            account_id="main",
+            account_label="메인",
+            message_type="externalCryptoMove",
+            context={
+                "messageType": "externalCryptoMove",
+                "severity": "ALERT",
+                "symbol": "BTC",
+                "body": "크립토 변동 7d +13.4%",
+                "notificationSignals": ["important", "confirmingData", "actionable"],
+            },
+        )
+
+        self.assertFalse(queue.enqueue(job))
+        saved = queue.jobs()[0]
+
+        self.assertEqual("suppressed", saved.status)
+        self.assertEqual("missing", saved.context["dataFreshnessStatus"])
+        self.assertEqual(["unknown"], saved.context["dataFreshnessStaleSources"])
+        self.assertIn("신선도 메타데이터 없음", saved.last_error)
+
     def test_notification_rule_penalizes_similar_recent_messages(self):
         db_path = Path(self.temp.name) / "service.db"
         queue = SQLiteNotificationJobStore(db_path)
@@ -5879,8 +6088,8 @@ class PythonServiceTests(unittest.TestCase):
         rule.similarity_fields = ["messageType", "accountId", "symbol", "severity", "title"]
         rule.market_hours_enabled = False
         rules.upsert(rule)
-        first = AlertEvent("main", "메인", "ALERT", "monitorTrendChange", "main:trend:1", "SK하이닉스", ["이동평균 변화", "20일선 하향 이탈"], "000660")
-        second = AlertEvent("main", "메인", "ALERT", "monitorTrendChange", "main:trend:2", "SK하이닉스", ["이동평균 변화", "20일선 하향 이탈", "변화 -0.1%"], "000660")
+        first = self.mark_event_fresh(AlertEvent("main", "메인", "ALERT", "monitorTrendChange", "main:trend:1", "SK하이닉스", ["이동평균 변화", "20일선 하향 이탈"], "000660"))
+        second = self.mark_event_fresh(AlertEvent("main", "메인", "ALERT", "monitorTrendChange", "main:trend:2", "SK하이닉스", ["이동평균 변화", "20일선 하향 이탈", "변화 -0.1%"], "000660"))
 
         first_result = send_events([first], queue=queue)
         second_result = send_events([second], queue=queue)
@@ -5923,6 +6132,8 @@ class PythonServiceTests(unittest.TestCase):
             ["미장 가격 변동 +7.9%", "가격 $100.77", "거래량 34,757,614", "출처 Alpha Vantage"],
             "MSTR",
         )
+        first = self.mark_event_fresh(first, "Alpha Vantage")
+        second = self.mark_event_fresh(second, "Alpha Vantage")
 
         self.assertEqual(1, send_events([first], queue=queue).queued)
         self.assertEqual(0, send_events([second], queue=queue).queued)
@@ -5963,6 +6174,8 @@ class PythonServiceTests(unittest.TestCase):
             "TSLA",
             metadata={"market": "US", "changePercent": -10.2, "price": 382.10, "volume": 74500000},
         )
+        first = self.mark_event_fresh(first, "Alpha Vantage")
+        second = self.mark_event_fresh(second, "Alpha Vantage")
 
         self.assertEqual(1, send_events([first], queue=queue).queued)
         self.assertEqual(1, send_events([second], queue=queue).queued)
@@ -6006,6 +6219,8 @@ class PythonServiceTests(unittest.TestCase):
             "ETH",
             metadata={"market": "CRYPTO", "change24h": -0.7, "change7d": 13.4, "volume24h": 9941259360},
         )
+        first = self.mark_event_fresh(first, "CoinGecko")
+        second = self.mark_event_fresh(second, "CoinGecko")
 
         self.assertEqual(1, send_events([first], queue=queue).queued)
         self.assertEqual(0, send_events([second], queue=queue).queued)
@@ -6049,6 +6264,8 @@ class PythonServiceTests(unittest.TestCase):
             "000660",
             metadata={"holdingDecision": "손절 기준 확인", "holdingDecisionBasis": "lossCut", "holdingDecisionScore": 63, "profitLossRate": -8.4},
         )
+        first = self.mark_event_fresh(first, "unit-test-position")
+        second = self.mark_event_fresh(second, "unit-test-position")
 
         self.assertEqual(1, send_events([first], queue=queue).queued)
         self.assertEqual(0, send_events([second], queue=queue).queued)
@@ -6089,6 +6306,8 @@ class PythonServiceTests(unittest.TestCase):
             "000660",
             metadata={"holdingDecision": "손절 기준 확인", "holdingDecisionBasis": "lossCut", "holdingDecisionScore": 64, "profitLossRate": -10.7},
         )
+        first = self.mark_event_fresh(first, "unit-test-position")
+        worsened = self.mark_event_fresh(worsened, "unit-test-position")
 
         self.assertEqual(1, send_events([first], queue=queue).queued)
         self.assertEqual(1, send_events([worsened], queue=queue).queued)
@@ -6124,6 +6343,8 @@ class PythonServiceTests(unittest.TestCase):
             "ETH",
             metadata={"market": "CRYPTO", "change24h": -0.8, "change7d": 16.8, "volume24h": 10000000000},
         )
+        first = self.mark_event_fresh(first, "CoinGecko")
+        expanded = self.mark_event_fresh(expanded, "CoinGecko")
 
         self.assertEqual(1, send_events([first], queue=queue).queued)
         self.assertEqual(1, send_events([expanded], queue=queue).queued)
@@ -6157,6 +6378,7 @@ class PythonServiceTests(unittest.TestCase):
                 "change24h": -0.7,
                 "change7d": 13.4,
                 "volume24h": 9941259360,
+                "dataFreshness": self.fresh_data_freshness("CoinGecko"),
             },
         )
         old_job.created_at = (datetime.now(timezone.utc) - timedelta(minutes=15)).isoformat().replace("+00:00", "Z")
@@ -6176,6 +6398,7 @@ class PythonServiceTests(unittest.TestCase):
                 "change24h": -0.7,
                 "change7d": 13.4,
                 "volume24h": 9941259360,
+                "dataFreshness": self.fresh_data_freshness("CoinGecko"),
             },
         )
 
@@ -6367,6 +6590,7 @@ class PythonServiceTests(unittest.TestCase):
                 "reportName": "단일판매·공급계약체결",
                 "receiptNo": "20260701000001",
                 "receiptDate": "20260701",
+                "dataFreshness": self.fresh_data_freshness("OpenDART", 120),
             },
             generated_at="2026-07-03T06:58:00Z",
         )
@@ -6469,6 +6693,7 @@ class PythonServiceTests(unittest.TestCase):
             "삼성전자",
             ["상태 조건부 보유 (52점)", "손익 -3.2%"],
             "005930",
+            metadata={"dataFreshness": self.fresh_data_freshness("unit-test-position")},
             generated_at="2026-07-05T00:00:00Z",
         )
         context = alert_context(event)
@@ -7533,6 +7758,7 @@ class PythonServiceTests(unittest.TestCase):
             "Apple",
             ["판단 변화", "Codex 답변: 판단 변경"],
             "AAPL",
+            metadata={"dataFreshness": self.fresh_data_freshness("unit-test-position")},
         )
 
         def snapshot_builder(_account):

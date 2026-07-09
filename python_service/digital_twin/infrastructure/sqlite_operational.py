@@ -11,6 +11,7 @@ from ..domain.events import (
     monitoring_cycle_completed_event,
     snapshot_collected_event,
 )
+from ..domain.data_freshness import evaluate_notification_data_freshness
 from ..domain.investment_research import ResearchEvidence
 from ..domain.model_review import ModelReviewJob
 from ..domain.notification_rules import DEFAULT_NOTIFICATION_RULES, NotificationRuleConfig, apply_market_hours_rule, apply_similarity_rule, apply_state_cooldown_rule, default_notification_rule, evaluate_notification_rule, notification_fingerprint
@@ -21,7 +22,7 @@ from ..domain.portfolio import AccountSnapshot, AlertEvent
 from ..domain.repositories import MonitoringCycleRecordResult
 from ..domain.symbol_universe import ListedSymbol, normalize_market, normalize_symbol, utc_now_iso as symbol_utc_now_iso
 from .model_review_queue import model_review_payloads_from_event
-from .settings import data_dir, read_json, service_db_path, settings_path, utc_now
+from .settings import data_dir, read_json, runtime_settings, service_db_path, settings_path, utc_now
 
 
 def json_dumps(payload) -> str:
@@ -149,8 +150,9 @@ class OperationalConnection:
 
     def connect(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        connection = sqlite3.connect(str(self.path))
+        connection = sqlite3.connect(str(self.path), timeout=30)
         connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA busy_timeout = 30000")
         try:
             os.chmod(self.path, 0o600)
         except OSError:
@@ -610,7 +612,8 @@ class SQLiteNotificationRuleStore(OperationalConnection):
                 row = connection.execute(
                     """
                     SELECT threshold, conditions_json, similarity_bypass_conditions_json,
-                        similarity_fields_json, state_cooldown_enabled, state_cooldown_minutes
+                        similarity_fields_json, state_cooldown_enabled, state_cooldown_minutes,
+                        market_hours_enabled, market_hours_markets_json, updated_at
                     FROM notification_rules
                     WHERE message_type = ?
                     """,
@@ -698,11 +701,28 @@ class SQLiteNotificationRuleStore(OperationalConnection):
                     state_cooldown_enabled = 1
                     state_cooldown_minutes = int(rule.state_cooldown_minutes)
                     state_cooldown_changed = True
+                market_hours_enabled = int(row["market_hours_enabled"] or 0)
+                try:
+                    configured_market_hours_markets = json.loads(row["market_hours_markets_json"] or "[]")
+                except json.JSONDecodeError:
+                    configured_market_hours_markets = []
+                if not isinstance(configured_market_hours_markets, list):
+                    configured_market_hours_markets = []
+                market_hours_changed = False
+                if (
+                    rule.market_hours_enabled
+                    and not market_hours_enabled
+                    and list(configured_market_hours_markets or []) == list(rule.market_hours_markets or [])
+                    and age_minutes_since(row["updated_at"]) > 5
+                ):
+                    market_hours_enabled = 1
+                    market_hours_changed = True
                 if (
                     not missing_conditions
                     and not rule_conditions_changed
                     and not similarity_fields_changed
                     and not state_cooldown_changed
+                    and not market_hours_changed
                     and int(row["threshold"] or 0) == threshold
                 ):
                     continue
@@ -710,7 +730,7 @@ class SQLiteNotificationRuleStore(OperationalConnection):
                     """
                     UPDATE notification_rules
                     SET threshold = ?, conditions_json = ?, similarity_bypass_conditions_json = ?, similarity_fields_json = ?,
-                        state_cooldown_enabled = ?, state_cooldown_minutes = ?, updated_at = ?
+                        state_cooldown_enabled = ?, state_cooldown_minutes = ?, market_hours_enabled = ?, updated_at = ?
                     WHERE message_type = ?
                     """,
                     (
@@ -720,6 +740,7 @@ class SQLiteNotificationRuleStore(OperationalConnection):
                         json_dumps(configured_similarity_fields),
                         state_cooldown_enabled,
                         state_cooldown_minutes,
+                        market_hours_enabled,
                         stamp,
                         message_type,
                     ),
@@ -2262,7 +2283,19 @@ class SQLiteNotificationJobStore(OperationalConnection):
         decision = self.evaluate_job_with_connection(connection, job)
         context = dict(job.context or {})
         context.update(decision.to_context())
+        freshness_decision = evaluate_notification_data_freshness(context, runtime_settings())
+        context.update(freshness_decision.to_context())
         job.context = context
+        if decision.should_send and not freshness_decision.should_send:
+            job.status = "suppressed"
+            job.updated_at = utc_now()
+            job.last_error = "데이터 신선도 기준 미통과로 발송하지 않았습니다. " + str(freshness_decision.reason or "")
+            job.context["honeySuppressionReason"] = "stale_data"
+            try:
+                self.upsert_job_with_connection(connection, job)
+            except sqlite3.IntegrityError:
+                return False
+            return False
         if not decision.should_send:
             job.status = "suppressed"
             job.updated_at = utc_now()

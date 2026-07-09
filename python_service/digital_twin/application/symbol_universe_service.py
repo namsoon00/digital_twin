@@ -1,5 +1,6 @@
 from typing import Dict, Iterable, List
 
+from ..domain.data_freshness import age_minutes, int_setting
 from ..domain.market_data import known_stock
 from ..domain.repositories import MarketQuoteRepository, SymbolSourceGateway, SymbolUniverseRepository
 from ..domain.symbol_universe import ListedSymbol, SUPPORTED_MARKETS, is_stale, stale_after_hours
@@ -45,6 +46,9 @@ class SymbolUniverseService:
     def max_age_hours(self) -> int:
         return stale_after_hours(self.settings.get("symbolUniverseMaxAgeHours"), 24)
 
+    def market_data_max_age_minutes(self) -> int:
+        return int_setting(self.settings, "marketDataMaxAgeMinutes", 240, 1, 1440 * 30)
+
     def ensure_seed(self) -> None:
         counts = self.store.counts_by_market()
         if counts:
@@ -88,6 +92,16 @@ class SymbolUniverseService:
             quote = quotes.get(symbol) or {}
             next_item = dict(item)
             if quote:
+                updated_at = quote.get("updatedAt") or ""
+                quote_age = age_minutes(updated_at)
+                max_age = self.market_data_max_age_minutes()
+                next_item["marketDataUpdatedAt"] = updated_at
+                next_item["marketDataAgeMinutes"] = quote_age
+                next_item["marketDataMaxAgeMinutes"] = max_age
+                next_item["marketDataStale"] = quote_age is None or quote_age > max_age
+                if next_item["marketDataStale"]:
+                    merged.append(next_item)
+                    continue
                 for key in [
                     "currentPrice",
                     "changeRate",
@@ -110,7 +124,6 @@ class SymbolUniverseService:
                 ]:
                     if quote.get(key) not in (None, ""):
                         next_item[key] = quote.get(key)
-                next_item["marketDataUpdatedAt"] = quote.get("updatedAt") or ""
             merged.append(next_item)
         return merged
 

@@ -1,6 +1,7 @@
 from typing import Dict, Iterable, List, Tuple
 
 from .alert_formatting import compact_number
+from .data_freshness import aggregate_freshness
 from .market_data import number
 from .message_types import (
     EXTERNAL_CRYPTO_MOVE,
@@ -106,6 +107,9 @@ SOURCE_METADATA_KEYS = {
     "cryptoMoveScore",
     "disclosureCount",
     "latestTradingDay",
+    "lastUpdated",
+    "dataFreshness",
+    "dataFreshnessRequired",
 }
 ONTOLOGY_CONTEXT_KEYS = (
     "ontologyRelationContext",
@@ -371,6 +375,16 @@ def promoted_ontology_context(events: List[AlertEvent]) -> Dict[str, object]:
     return promoted
 
 
+def promoted_data_freshness(events: List[AlertEvent]) -> Dict[str, object]:
+    records = []
+    for event in events:
+        metadata = event.metadata if isinstance(event.metadata, dict) else {}
+        freshness = metadata.get("dataFreshness")
+        if isinstance(freshness, dict):
+            records.append(freshness)
+    return aggregate_freshness(records, INSIGHT_RULE)
+
+
 def promoted_active_opinion(promoted: Dict[str, object]) -> Dict[str, object]:
     value = promoted.get("activeInvestmentOpinion") if isinstance(promoted, dict) else {}
     if isinstance(value, dict):
@@ -463,6 +477,8 @@ def build_investment_insight_events(snapshot: AccountSnapshot, signal_events: It
                 }
                 for event in events
             ],
+            "dataFreshness": promoted_data_freshness(events),
+            "dataFreshnessRequired": True,
             "dispatchPolicy": {
                 "mode": "insight-driven-only",
                 "cooldownPolicy": "insight-cadence-key",

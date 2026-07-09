@@ -1,6 +1,7 @@
 from typing import Dict, List
 
 from .alert_formatting import compact_number, money, price_money, signed_number, signed_pct
+from .data_freshness import freshness_record
 from .market_data import number
 from .investment_research import ACTIVE_INVESTMENT_OPINION_VERSION, ACTION_LABELS
 from .ontology_rules import AI_PROMPT_REGISTRY_VERSION, strength_label
@@ -425,6 +426,18 @@ def crypto_relation_context(model: Dict[str, object], item: Dict[str, object], i
 
 
 class ExternalSignalAlertMixin:
+    def external_signal_freshness(self, signals: Dict[str, object], message_type: str, source: str, source_as_of: str = "") -> Dict[str, object]:
+        freshness = signals.get("freshness") if isinstance(signals.get("freshness"), dict) else {}
+        quality = signals.get("quality") if isinstance(signals.get("quality"), dict) else {}
+        return freshness_record(
+            source,
+            message_type,
+            settings=getattr(self, "settings", {}),
+            source_fetched_at=freshness.get("fetchedAt") or signals.get("fetchedAt"),
+            source_as_of=source_as_of,
+            data_quality=quality.get("score"),
+        )
+
     def external_signal_events(self, snapshot: AccountSnapshot, previous: Dict[str, object]) -> List[AlertEvent]:
         signals = snapshot.external_signals or {}
         if not signals:
@@ -476,6 +489,7 @@ class ExternalSignalAlertMixin:
             volume = number(quote.get("volume"))
             provider = str(quote.get("provider") or "Alpha Vantage")
             latest_trading_day = str(quote.get("latestTradingDay") or "")
+            data_freshness = self.external_signal_freshness(signals, "externalEquityMove", provider, latest_trading_day)
             position_context = dict(positions.get(symbol_label) or {})
             if position_context and price:
                 position_context["current_price"] = price
@@ -507,6 +521,7 @@ class ExternalSignalAlertMixin:
                     "volume": volume,
                     "latestTradingDay": latest_trading_day,
                     "provider": provider,
+                    "dataFreshness": data_freshness,
                 },
             ))
         return events
@@ -541,6 +556,7 @@ class ExternalSignalAlertMixin:
             price = number(item.get("price"))
             volume24h = number(item.get("volume24h"))
             provider = str(item.get("provider") or "CoinGecko")
+            data_freshness = self.external_signal_freshness(signals, "externalCryptoMove", provider, str(item.get("lastUpdated") or ""))
             change_label = "비트코인 변동" if is_bitcoin else "크립토 변동"
             change_value = "24h " + signed_pct(change24h) + " · 7d " + signed_pct(change7d)
             execution_plan = active_opinion.get("executionPlan") if isinstance(active_opinion.get("executionPlan"), dict) else {}
@@ -583,6 +599,8 @@ class ExternalSignalAlertMixin:
                     "volume24h": volume24h,
                     "provider": provider,
                     "coinId": str(coin_id or ""),
+                    "lastUpdated": str(item.get("lastUpdated") or ""),
+                    "dataFreshness": data_freshness,
                     "cryptoMoveModel": model,
                     "cryptoMoveScore": model.get("score"),
                     "cryptoMoveDirection": model.get("directionLabel"),
@@ -627,6 +645,7 @@ class ExternalSignalAlertMixin:
         if not lines:
             return events
         severity = "ALERT" if any("(-" in line for line in lines) else "WATCH"
+        data_freshness = self.external_signal_freshness(signals, "externalMacroShift", "FRED")
         events.append(AlertEvent(
             snapshot.account_id,
             snapshot.account_label,
@@ -639,6 +658,7 @@ class ExternalSignalAlertMixin:
                 "FRED 금리 또는 10Y-2Y 스프레드 변화 ±" + self.threshold_text("externalMacroRateDeltaBp", "bp") + " 이상",
                 ", ".join(lines[:3]),
             ),
+            metadata={"dataFreshness": data_freshness},
         ))
         return events
 
@@ -657,6 +677,7 @@ class ExternalSignalAlertMixin:
                 continue
             symbol_label = str(symbol or "").upper()
             provider = str(item.get("provider") or "OpenDART")
+            data_freshness = self.external_signal_freshness(signals, "externalDartDisclosure", provider, str(item.get("receiptDate") or ""))
             holding_price_lines = self.holding_price_lines(positions.get(symbol_label) or {})
             events.append(AlertEvent(
                 snapshot.account_id,
@@ -687,6 +708,7 @@ class ExternalSignalAlertMixin:
                     "receiptNo": receipt,
                     "receiptDate": str(item.get("receiptDate") or ""),
                     "disclosureCount": number(item.get("count")),
+                    "dataFreshness": data_freshness,
                 },
             ))
         return events

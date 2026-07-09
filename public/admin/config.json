@@ -13,7 +13,7 @@
     "공유 미리보기에서는 서버 설정과 계정 DB 쓰기를 차단합니다."
   ],
   "localData": {
-    "generatedAt": "2026-07-09T00:11:22.545135Z",
+    "generatedAt": "2026-07-09T01:45:49.271140Z",
     "sources": {
       "serviceDb": "data/service.db",
       "serviceDbExists": true,
@@ -111,7 +111,17 @@
       "kisMarketSignalMaxSymbols": "20",
       "kisMarketSignalCacheMinutes": "3",
       "kisMarketSignalGapSeconds": "0.35",
+      "marketDataMaxAgeMinutes": "240",
+      "dataFreshnessEnabled": "1",
+      "dataFreshnessDefaultMaxAgeMinutes": "10",
+      "dataFreshnessQuoteMaxAgeMinutes": "10",
+      "dataFreshnessExternalMaxAgeMinutes": "10",
+      "dataFreshnessExternalEquityMaxAgeMinutes": "10",
+      "dataFreshnessExternalCryptoMaxAgeMinutes": "10",
+      "dataFreshnessMacroMaxAgeMinutes": "120",
+      "dataFreshnessDisclosureMaxAgeMinutes": "120",
       "externalApiFetchIntervalMinutes": "30",
+      "externalSignalCacheMaxAgeMinutes": "10",
       "externalAlphaEnabled": "1",
       "externalCoinGeckoEnabled": "1",
       "externalFredEnabled": "1",
@@ -966,6 +976,82 @@
           "default": "auto"
         },
         {
+          "key": "externalApiFetchIntervalMinutes",
+          "label": "외부 API 캐시",
+          "type": "number",
+          "default": "30",
+          "unit": "minutes"
+        },
+        {
+          "key": "externalSignalCacheMaxAgeMinutes",
+          "label": "외부 신호 캐시 TTL",
+          "type": "number",
+          "default": "10",
+          "unit": "minutes"
+        },
+        {
+          "key": "dataFreshnessEnabled",
+          "label": "알림 데이터 신선도 게이트",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
+          "key": "dataFreshnessDefaultMaxAgeMinutes",
+          "label": "알림 기본 신선도",
+          "type": "number",
+          "default": "10",
+          "unit": "minutes"
+        },
+        {
+          "key": "dataFreshnessQuoteMaxAgeMinutes",
+          "label": "시세 알림 신선도",
+          "type": "number",
+          "default": "10",
+          "unit": "minutes"
+        },
+        {
+          "key": "dataFreshnessExternalMaxAgeMinutes",
+          "label": "외부 신호 신선도",
+          "type": "number",
+          "default": "10",
+          "unit": "minutes"
+        },
+        {
+          "key": "dataFreshnessExternalEquityMaxAgeMinutes",
+          "label": "미장 신호 신선도",
+          "type": "number",
+          "default": "10",
+          "unit": "minutes"
+        },
+        {
+          "key": "dataFreshnessExternalCryptoMaxAgeMinutes",
+          "label": "크립토 신호 신선도",
+          "type": "number",
+          "default": "10",
+          "unit": "minutes"
+        },
+        {
+          "key": "dataFreshnessMacroMaxAgeMinutes",
+          "label": "거시 신호 신선도",
+          "type": "number",
+          "default": "120",
+          "unit": "minutes"
+        },
+        {
+          "key": "dataFreshnessDisclosureMaxAgeMinutes",
+          "label": "공시 신선도",
+          "type": "number",
+          "default": "120",
+          "unit": "minutes"
+        },
+        {
+          "key": "marketDataMaxAgeMinutes",
+          "label": "추천 시세 신선도",
+          "type": "number",
+          "default": "240",
+          "unit": "minutes"
+        },
+        {
           "key": "externalFredSeries",
           "label": "FRED 지표",
           "type": "text"
@@ -1727,5 +1813,5 @@
       ]
     }
   ],
-  "buildId": "fa3ee3bad7dd"
+  "buildId": "f7e3da1278da"
 }

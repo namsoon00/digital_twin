@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from typing import Dict, List
 
 from .alert_formatting import compact_number, money, pct_delta, price_money, signed_number, signed_pct
+from .data_freshness import data_freshness_required, freshness_from_position, freshness_record
 from .market_data import number
 from .message_types import (
     DEFAULT_ALERT_RULES,
@@ -142,6 +143,7 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
         raw_events.extend(self.external_signal_events(snapshot, previous or {}))
         if has_account_data:
             raw_events.extend(self.holding_timing_events(snapshot))
+        raw_events = self.attach_data_freshness(snapshot, raw_events)
         system_events, signal_events = split_operational_and_investment_events(raw_events)
         signal_events = self.enabled_signal_events(signal_events)
         events = [*system_events, *build_investment_insight_events(snapshot, signal_events)]
@@ -209,9 +211,37 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
             ])
             timing_events = self.holding_timing_events(timing_snapshot)
         events.extend(self.only_rule("holdingTiming", timing_events))
+        events = self.attach_data_freshness(snapshot, events)
         investment_insights = build_investment_insight_events(snapshot, self.enabled_signal_events(events))
         events.extend(self.only_rule(INVESTMENT_INSIGHT, investment_insights))
         return self.unique_rules([event for event in self.stamp_events(snapshot, events) if self.enabled(event.rule)])
+
+    def attach_data_freshness(self, snapshot: AccountSnapshot, events: List[AlertEvent]) -> List[AlertEvent]:
+        state = snapshot.to_monitor_state()
+        positions: Dict[str, Dict[str, object]] = {}
+        for group_key in ["positions", "watchlist"]:
+            group = state.get(group_key) if isinstance(state.get(group_key), dict) else {}
+            for symbol, item in group.items():
+                if isinstance(item, dict):
+                    positions[str(symbol or "").upper()] = item
+        for event in events:
+            event.metadata = dict(event.metadata or {})
+            event.metadata.setdefault("dataFreshnessRequired", data_freshness_required(event.rule))
+            if event.metadata.get("dataFreshness"):
+                continue
+            symbol = str(event.symbol or "").upper()
+            position = positions.get(symbol)
+            if position:
+                event.metadata["dataFreshness"] = freshness_from_position(position, event.rule, self.settings)
+            elif data_freshness_required(event.rule):
+                event.metadata["dataFreshness"] = freshness_record(
+                    "accountSnapshot",
+                    event.rule,
+                    settings=self.settings,
+                    source_fetched_at=snapshot.generated_at,
+                    data_quality=snapshot.mode,
+                )
+        return events
 
     def stamp_events(self, snapshot: AccountSnapshot, events: List[AlertEvent]) -> List[AlertEvent]:
         generated_at = str(snapshot.generated_at or "").strip()

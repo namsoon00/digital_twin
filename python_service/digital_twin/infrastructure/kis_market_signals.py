@@ -7,6 +7,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
+from ..domain.data_freshness import combine_quality
 from ..domain.market_data import known_stock, number, pct_distance
 from ..domain.portfolio import Position, utc_now_iso
 from .settings import runtime_settings
@@ -665,9 +666,7 @@ class KISMarketSignalProvider:
         if not market_value and position.quantity and merged_price:
             market_value = position.quantity * merged_price
 
-        data_quality = str(signal.get("dataQuality") or "")
-        if position.data_quality == "actual" and data_quality == "cached":
-            data_quality = position.data_quality
+        data_quality = combine_quality(position.data_quality, signal.get("dataQuality"))
         ma20_distance = pct_distance(merged_price, position.ma20) if merged_price and position.ma20 else position.ma20_distance
         ma60_distance = pct_distance(merged_price, position.ma60) if merged_price and position.ma60 else position.ma60_distance
 

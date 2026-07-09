@@ -7,6 +7,7 @@ from dataclasses import replace
 from typing import Dict, List, Optional, Tuple
 
 from ..domain.accounts import AccountConfig
+from ..domain.data_freshness import combine_quality
 from ..domain.market_data import known_stock, normalize_position, number, pct_distance, technical_indicators_from_candles
 from ..domain.portfolio import AccountSnapshot, Position, utc_now_iso
 from ..domain.portfolio_calculations import portfolio_summary
@@ -584,7 +585,7 @@ class TossProvider:
         quote_message = "현재가는 토스 prices, 이동평균은 토스 candles 기준입니다."
         quote_status = "토스 prices 반영" if live_price else ""
         quote_source = str(quote.get("quoteSource") or "")
-        data_quality = "actual" if live_price or indicators_live else position.data_quality
+        data_quality = "actual" if live_price and indicators_live else position.data_quality
         updated_at = str(quote.get("updatedAt") or "")
         if used_cached_price:
             quote_status = "마지막 저장 시세"
@@ -594,10 +595,12 @@ class TossProvider:
             updated_at = str(cached.get("updatedAt") or "")
         elif live_price and not indicators_live and cached:
             quote_message = "현재가는 토스 prices, 이동평균은 마지막 저장 candles 기준입니다."
+            data_quality = combine_quality("actual", str(cached.get("dataQuality") or "cached"))
         elif not live_price and indicators_live and not position.current_price:
             quote_status = "토스 candles 지표 반영"
             quote_message = "토스 prices 현재가 없이 candles 지표만 반영했습니다."
             quote_source = "Toss /api/v1/candles"
+            data_quality = combine_quality(position.data_quality, "actual")
         elif not live_price and position.current_price:
             quote_status = position.quote_status or "토스 잔고 시세"
             quote_message = position.quote_message or "잔고 응답의 현재가를 표시합니다."

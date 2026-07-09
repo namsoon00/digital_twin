@@ -427,6 +427,16 @@ def settings_status_payload() -> Dict[str, object]:
         "dartDisclosureAiUseCodex",
         "dartDisclosureAiCommand",
         "dartDisclosureAiTimeoutSeconds",
+        "marketDataMaxAgeMinutes",
+        "dataFreshnessEnabled",
+        "dataFreshnessDefaultMaxAgeMinutes",
+        "dataFreshnessQuoteMaxAgeMinutes",
+        "dataFreshnessExternalMaxAgeMinutes",
+        "dataFreshnessExternalEquityMaxAgeMinutes",
+        "dataFreshnessExternalCryptoMaxAgeMinutes",
+        "dataFreshnessMacroMaxAgeMinutes",
+        "dataFreshnessDisclosureMaxAgeMinutes",
+        "externalSignalCacheMaxAgeMinutes",
     ]
     public = {key: settings.get(key, "") for key in public_keys}
     public.update({

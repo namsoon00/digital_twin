@@ -137,7 +137,9 @@ class ResearchEvidenceStoreTests(unittest.TestCase):
 
             latest = store.latest(symbol="005930")
 
-            self.assertIs(result, signals)
+            self.assertEqual(signals["fetchedAt"], result["fetchedAt"])
+            self.assertEqual(signals["dartDisclosures"], result["dartDisclosures"])
+            self.assertEqual(signals["newsHeadlines"], result["newsHeadlines"])
             self.assertIsNone(cache.replaced)
             self.assertEqual(2, len(latest))
             self.assertEqual({"disclosure", "news"}, {item.kind for item in latest})

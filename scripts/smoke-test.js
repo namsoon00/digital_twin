@@ -1283,6 +1283,10 @@ function checkFrontendAdminRender() {
     assertOk(settingsHtml.indexOf('data-setting="externalSecEnabled"') >= 0, "설정 탭에 SEC EDGAR 사용 옵션이 없습니다.");
     assertOk(settingsHtml.indexOf('data-setting="externalNewsEnabled"') >= 0, "설정 탭에 뉴스 헤드라인 사용 옵션이 없습니다.");
     assertOk(settingsHtml.indexOf('data-setting="externalNewsProvider"') >= 0, "설정 탭에 뉴스 공급자 옵션이 없습니다.");
+    assertOk(settingsHtml.indexOf('data-setting="dataFreshnessEnabled"') >= 0, "설정 탭에 알림 데이터 신선도 게이트 옵션이 없습니다.");
+    assertOk(settingsHtml.indexOf('data-setting="dataFreshnessQuoteMaxAgeMinutes"') >= 0, "설정 탭에 시세 알림 신선도 기준이 없습니다.");
+    assertOk(settingsHtml.indexOf('data-setting="externalSignalCacheMaxAgeMinutes"') >= 0, "설정 탭에 외부 신호 캐시 TTL 기준이 없습니다.");
+    assertOk(settingsHtml.indexOf('data-setting="marketDataMaxAgeMinutes"') >= 0, "설정 탭에 추천 시세 신선도 기준이 없습니다.");
     assertOk(settingsHtml.indexOf('data-setting="dartDisclosureAiAnalysisEnabled"') >= 0, "설정 탭에 공시 AI 해석 옵션이 없습니다.");
     assertOk(settingsHtml.indexOf('data-setting="dartDisclosureAiTimeoutSeconds"') >= 0, "설정 탭에 공시 AI 타임아웃 옵션이 없습니다.");
     assertOk(settingsHtml.indexOf('data-setting="tossClientId"') < 0, "설정 탭에 계정 Client ID 입력이 남아 있습니다.");
@@ -1505,6 +1509,10 @@ async function checkNormalMode(port, context) {
   assertOk(Object.prototype.hasOwnProperty.call(settingsPayload.settings, "externalSecEnabled"), "설정 API에 SEC EDGAR 사용 옵션이 없습니다.");
   assertOk(Object.prototype.hasOwnProperty.call(settingsPayload.settings, "externalNewsEnabled"), "설정 API에 뉴스 헤드라인 사용 옵션이 없습니다.");
   assertOk(Object.prototype.hasOwnProperty.call(settingsPayload.settings, "externalNewsProvider"), "설정 API에 뉴스 공급자 옵션이 없습니다.");
+  assertOk(settingsPayload.settings.dataFreshnessEnabled === "1", "설정 API의 데이터 신선도 게이트 기본값이 없습니다.");
+  assertOk(settingsPayload.settings.dataFreshnessQuoteMaxAgeMinutes === "10", "설정 API의 시세 신선도 기본값이 없습니다.");
+  assertOk(settingsPayload.settings.externalSignalCacheMaxAgeMinutes === "10", "설정 API의 외부 신호 캐시 TTL 기본값이 없습니다.");
+  assertOk(settingsPayload.settings.marketDataMaxAgeMinutes === "240", "설정 API의 추천 시세 신선도 기본값이 없습니다.");
   assertOk(settingsPayload.settings.dartDisclosureAiTimeoutSeconds === "90", "설정 API의 공시 AI 타임아웃 기본값이 없습니다.");
   assertOk(settingsPayload.settings.watchlistSymbols.indexOf("TSLA") >= 0, "기본 관심 종목에 TSLA가 없습니다.");
   assertOk(settingsPayload.settings.watchlistSymbols.indexOf("AAPL") >= 0, "기본 관심 종목에 AAPL이 없습니다.");
@@ -1552,6 +1560,10 @@ async function checkNormalMode(port, context) {
         externalSecEnabled: "0",
         externalNewsEnabled: "0",
         externalNewsProvider: "gdelt",
+        dataFreshnessEnabled: "1",
+        dataFreshnessQuoteMaxAgeMinutes: "12",
+        externalSignalCacheMaxAgeMinutes: "9",
+        marketDataMaxAgeMinutes: "180",
         alertRules: "priceStop=1\nmodelSell=1",
         modelDecisionThresholds: "modelBuy=75\nmodelSell=70"
       }
@@ -1577,11 +1589,16 @@ async function checkNormalMode(port, context) {
   assertOk(savedSettingsPayload.settings.externalSecEnabled === "0", "저장된 SEC EDGAR 사용 설정이 응답에 없습니다.");
   assertOk(savedSettingsPayload.settings.externalNewsEnabled === "0", "저장된 뉴스 헤드라인 사용 설정이 응답에 없습니다.");
   assertOk(savedSettingsPayload.settings.externalNewsProvider === "gdelt", "저장된 뉴스 공급자 설정이 응답에 없습니다.");
+  assertOk(savedSettingsPayload.settings.dataFreshnessQuoteMaxAgeMinutes === "12", "저장된 시세 신선도 기준이 응답에 없습니다.");
+  assertOk(savedSettingsPayload.settings.externalSignalCacheMaxAgeMinutes === "9", "저장된 외부 신호 캐시 TTL이 응답에 없습니다.");
+  assertOk(savedSettingsPayload.settings.marketDataMaxAgeMinutes === "180", "저장된 추천 시세 신선도 기준이 응답에 없습니다.");
   assertOk(readSqliteSetting(context.serviceDbPath, "appTheme") === "dark", "화면 테마 설정이 SQLite DB에 저장되지 않았습니다.");
   assertOk(readSqliteSetting(context.serviceDbPath, "notifyProvider") === "telegram", "알림 제공자 설정이 SQLite DB에 저장되지 않았습니다.");
   assertOk(readSqliteSetting(context.serviceDbPath, "telegramChatId") === "1234", "Telegram Chat ID 설정이 SQLite DB에 저장되지 않았습니다.");
   assertOk(readSqliteSetting(context.serviceDbPath, "dartDisclosureAiUseCodex") === "0", "공시 AI 엔진 설정이 SQLite DB에 저장되지 않았습니다.");
   assertOk(readSqliteSetting(context.serviceDbPath, "tossClientSecret") === "fake-secret", "Toss secret 설정이 SQLite DB에 저장되지 않았습니다.");
+  assertOk(readSqliteSetting(context.serviceDbPath, "dataFreshnessQuoteMaxAgeMinutes") === "12", "시세 신선도 기준이 SQLite DB에 저장되지 않았습니다.");
+  assertOk(readSqliteSetting(context.serviceDbPath, "externalSignalCacheMaxAgeMinutes") === "9", "외부 신호 캐시 TTL이 SQLite DB에 저장되지 않았습니다.");
   const eventStatusAfterSettings = JSON.parse((await request(port, "/api/realtime/status")).body);
   assertOk(eventStatusAfterSettings.events["settings.updated"] >= 1, "설정 저장 이벤트가 이벤트 로그에 없습니다.");
   assertOk(eventStatusAfterSettings.latestEvents.some(function (event) { return event.name === "settings.updated"; }), "최근 이벤트에 설정 저장 이벤트가 없습니다.");

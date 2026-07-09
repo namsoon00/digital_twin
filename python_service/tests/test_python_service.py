@@ -6540,6 +6540,8 @@ class PythonServiceTests(unittest.TestCase):
         }, source="test AI")
         enriched = context_with_validated_ai_response(context, response)
 
+        self.assertTrue(enriched["telegramMessage"].startswith("<b>🔔 새 알림</b>"))
+        self.assertEqual(1, enriched["telegramMessage"].count("🔔 새 알림"))
         self.assertEqual(urls, response.source_urls)
         self.assertNotIn(truncated_payload_url, response.source_urls)
         for url in urls:
@@ -7379,7 +7381,8 @@ class PythonServiceTests(unittest.TestCase):
         )
 
         self.assertEqual(1, runner.run_once(limit=10))
-        self.assertTrue(sent[0].startswith("[monitorHeartbeat] 상태 확인\n정상\n기준일 2026-07-03 15:58 KST"))
+        self.assertTrue(sent[0].startswith("🔔 새 알림\n\n[monitorHeartbeat] 상태 확인\n정상\n기준일 2026-07-03 15:58 KST"))
+        self.assertEqual(1, sent[0].count("🔔 새 알림"))
         self.assertNotIn("알림 발송", sent[0])
         self.assertNotIn("발송 우선도", sent[0])
         self.assertNotIn("기본 우선도", sent[0])
@@ -7900,6 +7903,8 @@ class PythonServiceTests(unittest.TestCase):
 
         message = templates.render(event.rule, alert_context(event))
 
+        self.assertTrue(message.startswith("<b>🔔 새 알림</b>"))
+        self.assertEqual(1, message.count("🔔 새 알림"))
         self.assertIn("<b>[주의] 🇺🇸 Tesla: 미장 가격 급락</b>\n<code>Tesla / TSLA</code>", message)
         self.assertNotIn("<code>TSLA</code>", message)
         self.assertNotIn("━━━━━━━━", message)

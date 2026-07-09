@@ -36,6 +36,7 @@ from .notification_ai import (
 NOTIFICATION_AI_GATE_VERSION = "notification-ai-gate-v1"
 AI_DECISION_MODE = "ai-first"
 AI_DECISION_SOURCE_LABEL = "AI 투자 판단"
+MESSAGE_START_BADGE = "🔔 새 알림"
 VALID_ACTIONS = {"BUY", "ADD", "HOLD", "TRIM", "SELL", "AVOID"}
 ACTION_LABELS = {
     "BUY": "매수",
@@ -1051,6 +1052,15 @@ def source_url_rows(urls: List[str], context: Dict[str, object]) -> List[str]:
     return rows
 
 
+def prepend_execution_start_badge(rendered: str) -> str:
+    text = str(rendered or "").strip()
+    if not text:
+        return text
+    if text.startswith(MESSAGE_START_BADGE) or text.startswith("<b>" + MESSAGE_START_BADGE + "</b>"):
+        return text
+    return "<b>" + MESSAGE_START_BADGE + "</b>\n\n" + text
+
+
 def delivery_profile_from_context(context: Dict[str, object]) -> Dict[str, object]:
     profile = context.get("messageDeliveryProfile") if isinstance(context, dict) else {}
     if isinstance(profile, dict) and profile.get("level"):
@@ -1595,6 +1605,6 @@ def context_with_validated_ai_response(
         "lines": lines,
         "validatedResponse": payload,
     }
-    enriched["telegramMessage"] = execution_telegram_message(enriched, response)
+    enriched["telegramMessage"] = prepend_execution_start_badge(execution_telegram_message(enriched, response))
     enriched["readableMessage"] = re.sub(r"</?(?:b|code)>", "", enriched["telegramMessage"])
     return enriched

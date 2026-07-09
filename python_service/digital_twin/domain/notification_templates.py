@@ -16,6 +16,7 @@ LEGACY_DEFAULT_TEMPLATE = "{title}\n{lines}"
 PREVIOUS_DEFAULT_TEMPLATE = "{readableMessage}"
 DEFAULT_TEMPLATE = "{telegramMessage}"
 BODY_TEMPLATE = "{body}"
+MESSAGE_START_BADGE = "🔔 새 알림"
 KST = timezone(timedelta(hours=9))
 SYMBOL_DISPLAY_NAMES = {
     "005930": "삼성전자",
@@ -2163,6 +2164,16 @@ def append_ai_opinion(rendered: str, context: Dict[str, object], rich: bool = Fa
     return rendered_text.rstrip() + "\n\n" + block
 
 
+def prepend_message_start_badge(rendered: str, rich: bool = False) -> str:
+    text = str(rendered or "").strip()
+    if not text:
+        return text
+    if text.startswith(MESSAGE_START_BADGE) or text.startswith("<b>" + MESSAGE_START_BADGE + "</b>"):
+        return text
+    badge = "<b>" + MESSAGE_START_BADGE + "</b>" if rich else MESSAGE_START_BADGE
+    return badge + "\n\n" + text
+
+
 def render_notification(template: NotificationTemplate, context: Dict[str, object]) -> str:
     values = context_with_score_explanation(context)
     if template and template.enabled:
@@ -2170,12 +2181,14 @@ def render_notification(template: NotificationTemplate, context: Dict[str, objec
         rich = template_prefers_rich_score(template.template, rendered)
         rendered = append_ai_opinion(rendered, values, rich)
         rendered = beginner_friendly_text(append_score_explanation(rendered, values, rich))
-        return append_message_footer(rendered, values, rich)
+        rendered = append_message_footer(rendered, values, rich)
+        return prepend_message_start_badge(rendered, rich)
     rendered = render_template(BODY_TEMPLATE, values)
     rich = template_prefers_rich_score(BODY_TEMPLATE, rendered)
     rendered = append_ai_opinion(rendered, values, rich)
     rendered = beginner_friendly_text(append_score_explanation(rendered, values, rich))
-    return append_message_footer(rendered, values, rich)
+    rendered = append_message_footer(rendered, values, rich)
+    return prepend_message_start_badge(rendered, rich)
 
 
 

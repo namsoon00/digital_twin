@@ -6010,14 +6010,15 @@ class PythonServiceTests(unittest.TestCase):
         enriched = context_with_validated_ai_response(context, response)
         message = enriched["telegramMessage"]
 
-        self.assertIn("<b>판단</b>", message)
+        self.assertIn("<b>AI 최종 판단</b>", message)
+        self.assertIn("AI 판단 이유", message)
         self.assertIn("매도", message)
         self.assertIn("<b>평균매입가</b>: <code>2,571,000원</code>", message)
         self.assertIn("<b>보유 수량</b>: <code>10주</code>", message)
         self.assertIn("<b>매도가능 수량</b>: <code>10주</code>", message)
         self.assertIn("<b>종목 평가금액</b>: <code>2,115만 원</code>", message)
         self.assertIn("<b>계좌 평가금액</b>: <code>4,000만 원</code>", message)
-        self.assertIn("반대 신호", message)
+        self.assertIn("확인할 반대 신호", message)
         self.assertIn("60일선은 아직 위", message)
         self.assertIn("투자자별 수급", message)
         self.assertIn("외국인 -3,015,093", message)
@@ -6076,9 +6077,9 @@ class PythonServiceTests(unittest.TestCase):
         enriched = context_with_validated_ai_response(context, response)
         message = enriched["telegramMessage"]
 
-        self.assertIn("<b>판단</b>", message)
+        self.assertIn("<b>AI 최종 판단</b>", message)
         self.assertNotIn("<b>현재 상태</b>", message)
-        self.assertIn("<b>핵심 근거</b>", message)
+        self.assertIn("<b>AI가 중요하게 본 근거</b>", message)
 
     def test_validated_ai_response_uses_absolute_beginner_delivery_level(self):
         context = {
@@ -6112,13 +6113,13 @@ class PythonServiceTests(unittest.TestCase):
 
         message = context_with_validated_ai_response(context, response)["telegramMessage"]
 
-        self.assertIn("<b>한줄 판단</b>", message)
+        self.assertIn("<b>AI 최종 판단</b>", message)
         self.assertIn("<b>현재 상황</b>", message)
         self.assertIn("<b>투자자</b>", message)
         self.assertIn("외국인: 순매도 3,015,093주", message)
         self.assertIn("기관: 순매수 971,031주", message)
         self.assertIn("개인: 순매수 2,031,705주", message)
-        self.assertIn("<b>왜 이렇게 봤나</b>", message)
+        self.assertIn("<b>AI가 중요하게 본 근거</b>", message)
         self.assertIn("<b>다르게 볼 점</b>", message)
         self.assertIn("<b>왜 온 알림</b>", message)
         self.assertNotIn("<b>핵심 근거</b>", message)
@@ -6237,6 +6238,9 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("최종 투자 의견을 판단하는 AI 분석가", prompt)
         self.assertIn("사전 계산 후보일 뿐 최종 답변이 아니다", prompt)
         self.assertIn("관계형/온톨로지 데이터베이스 추론", prompt)
+        self.assertIn("AI가 독립적으로 고른 최종 판단", prompt)
+        self.assertIn("관계 규칙명, 점수, 사전 계산 후보는 판단 재료로만", prompt)
+        self.assertIn("disagreementReason에 왜 달라졌는지 반드시", prompt)
         self.assertIn("신뢰하지 않는 분석 대상 텍스트", prompt)
         self.assertIn("sourceUrls", prompt)
         self.assertIn("disagreementReason", prompt)
@@ -6292,6 +6296,10 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("SELL", enriched["notificationAiValidatedResponse"]["action"])
         self.assertEqual("HOLD", context["activeInvestmentOpinion"]["action"])
         self.assertIn("AI 투자 판단", enriched["telegramMessage"])
+        self.assertIn("<b>AI 최종 판단</b>", enriched["telegramMessage"])
+        self.assertIn("<b>계산 후보와 다른 점</b>", enriched["telegramMessage"])
+        self.assertIn("계산 후보", enriched["telegramMessage"])
+        self.assertIn("AI 최종", enriched["telegramMessage"])
         self.assertIn("매도", enriched["telegramMessage"])
         self.assertIn("사전 계산 후보는 보유", enriched["telegramMessage"])
 

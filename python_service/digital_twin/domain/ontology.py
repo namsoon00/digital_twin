@@ -265,6 +265,11 @@ def event_relation_properties(item: object) -> Dict[str, object]:
         "mentionedPeers",
         "topicTags",
         "marketTopics",
+        "eventType",
+        "materialityScore",
+        "ontologyRelations",
+        "analysisSummary",
+        "analysisVersion",
     ]:
         if key in raw_payload:
             props[key] = raw_payload.get(key)
@@ -1192,6 +1197,10 @@ def add_research_evidence_concepts(
             "mentionedPeers": raw_payload.get("mentionedPeers"),
             "topicTags": raw_payload.get("topicTags"),
             "marketTopics": raw_payload.get("marketTopics"),
+            "eventType": raw_payload.get("eventType"),
+            "materialityScore": raw_payload.get("materialityScore"),
+            "analysisSummary": raw_payload.get("analysisSummary"),
+            "analysisVersion": raw_payload.get("analysisVersion"),
         })
         graph.evidence.append(OntologyEvidence(
             item.evidence_id,
@@ -1208,6 +1217,32 @@ def add_research_evidence_concepts(
         add_relation(graph, event_id, stock_id, "MENTIONS_INSTRUMENT", weight=relation_weight, evidence_ids=[item.evidence_id], properties=props)
         if relation_scope in {"peer", "sector", "market"}:
             add_relation(graph, event_id, stock_id, "AFFECTS", weight=relation_weight, evidence_ids=[item.evidence_id], properties=props)
+        event_type = str(raw_payload.get("eventType") or "").strip()
+        if event_type:
+            event_type_id = add_entity(graph, "news-event-type", event_type, event_type, {
+                "tboxClass": "NewsEventType",
+                "eventType": event_type,
+                "symbol": symbol,
+                "materialityScore": raw_payload.get("materialityScore"),
+            })
+            add_relation(graph, event_id, event_type_id, "HAS_EVENT_TYPE", weight=relation_weight, evidence_ids=[item.evidence_id], properties=props)
+            add_relation(graph, event_type_id, stock_id, "AFFECTS", weight=round(relation_weight * 0.7, 4), evidence_ids=[item.evidence_id], properties=props)
+        ontology_relations = raw_payload.get("ontologyRelations") if isinstance(raw_payload.get("ontologyRelations"), list) else []
+        for relation in ontology_relations[:5]:
+            if not isinstance(relation, dict):
+                continue
+            relation_type = str(relation.get("type") or "").strip().upper()
+            if not relation_type:
+                continue
+            add_relation(
+                graph,
+                event_id,
+                stock_id,
+                relation_type,
+                weight=relation_weight,
+                evidence_ids=[item.evidence_id],
+                properties={**props, "newsOntologyRelation": dict(relation)},
+            )
         topic_tags = raw_payload.get("topicTags") if isinstance(raw_payload.get("topicTags"), list) else []
         market_topics = raw_payload.get("marketTopics") if isinstance(raw_payload.get("marketTopics"), list) else []
         for topic in unique_list(list(topic_tags or []) + list(market_topics or []))[:8]:

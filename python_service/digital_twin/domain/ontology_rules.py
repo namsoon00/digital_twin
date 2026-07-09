@@ -401,7 +401,7 @@ DEFAULT_RELATION_RULES = [
         "event_risk",
         "대상 종목 직접 뉴스가 부정 성격이고 가격 하락, 거래량 증가, 추세 훼손 중 하나 이상으로 확인될 때",
         "뉴스 제목만으로 결론 내리지 말고 직접 관련성, 출처 신뢰도, 가격·수급 동조 여부, 반대 신호를 함께 검토합니다.",
-        ["researchEvidence", "directRiskNewsCount", "priceChangeRate", "volumeRatio", "ma20Distance"],
+        ["researchEvidence", "directRiskNewsCount", "averageNewsRelevanceScore", "averageNewsMaterialityScore", "topNewsEventTypes", "priceChangeRate", "volumeRatio", "ma20Distance"],
     ),
     RelationRuleDefinition(
         "news.direct_support.price_confirmed.v1",
@@ -411,7 +411,7 @@ DEFAULT_RELATION_RULES = [
         "event_confirmation",
         "대상 종목 직접 뉴스가 우호 성격이고 가격 상승, 거래량 증가, 체결강도 개선 중 하나 이상으로 확인될 때",
         "우호 뉴스도 매수 지시가 아니라 가격·수급 확인과 무효화 조건을 분리해 검토합니다.",
-        ["researchEvidence", "directSupportNewsCount", "priceChangeRate", "volumeRatio", "tradeStrength"],
+        ["researchEvidence", "directSupportNewsCount", "averageNewsRelevanceScore", "averageNewsMaterialityScore", "topNewsEventTypes", "priceChangeRate", "volumeRatio", "tradeStrength"],
     ),
     RelationRuleDefinition(
         "news.sector_peer_context.v1",
@@ -421,7 +421,7 @@ DEFAULT_RELATION_RULES = [
         "sector_context",
         "직접 뉴스는 아니지만 피어, 섹터, 시장 뉴스가 대상 종목의 팩터·섹터 노출과 연결될 때",
         "직접 기사와 섹터 맥락을 구분하고, 대상 가격·수급이 동조하는 경우에만 판단 강도를 높입니다.",
-        ["researchEvidence", "sectorNewsCount", "peerNewsCount", "marketNewsCount"],
+        ["researchEvidence", "sectorNewsCount", "peerNewsCount", "marketNewsCount", "topNewsEventTypes", "averageNewsMaterialityScore"],
     ),
     RelationRuleDefinition(
         "data.quality.guard.v1",
@@ -1595,6 +1595,16 @@ def _evidence_title(item: Dict[str, object]) -> str:
     return " ".join(str(item.get("title") or item.get("summary") or "").split())[:180]
 
 
+def _evidence_event_type(item: Dict[str, object]) -> str:
+    payload = _evidence_payload(item)
+    return str(item.get("eventType") or payload.get("eventType") or "general").strip() or "general"
+
+
+def _evidence_materiality(item: Dict[str, object]) -> float:
+    payload = _evidence_payload(item)
+    return number(item.get("materialityScore") or payload.get("materialityScore"))
+
+
 def _evidence_minutes_since(item: Dict[str, object]) -> float:
     raw = str(item.get("publishedAt") or item.get("observedAt") or "").strip()
     if not raw:
@@ -1630,8 +1640,12 @@ def research_evidence_facts(evidence_items: Iterable[Dict[str, object]]) -> Dict
     material = [
         item
         for item in news_items
-        if _evidence_scope(item) == "direct" or _evidence_relevance(item) >= 55
+        if _evidence_scope(item) == "direct" or _evidence_relevance(item) >= 55 or _evidence_materiality(item) >= 45
     ]
+    event_type_counts: Dict[str, int] = {}
+    for item in news_items:
+        event_type = _evidence_event_type(item)
+        event_type_counts[event_type] = event_type_counts.get(event_type, 0) + 1
 
     def titles(rows: List[Dict[str, object]], limit: int = 4) -> List[str]:
         result: List[str] = []
@@ -1645,8 +1659,9 @@ def research_evidence_facts(evidence_items: Iterable[Dict[str, object]]) -> Dict
 
     relevance_values = [_evidence_relevance(item) for item in news_items if _evidence_relevance(item)]
     reliability_values = [_evidence_source_reliability(item) for item in news_items if _evidence_source_reliability(item)]
-    risk_score = sum((number(item.get("impactScore")) or 2.0) * max(0.35, _evidence_relevance(item) / 100) for item in risk)
-    support_score = sum((number(item.get("impactScore")) or 2.0) * max(0.35, _evidence_relevance(item) / 100) for item in support)
+    materiality_values = [_evidence_materiality(item) for item in news_items if _evidence_materiality(item)]
+    risk_score = sum((number(item.get("impactScore")) or 2.0) * max(0.35, _evidence_relevance(item) / 100) * max(0.8, _evidence_materiality(item) / 55 if _evidence_materiality(item) else 1) for item in risk)
+    support_score = sum((number(item.get("impactScore")) or 2.0) * max(0.35, _evidence_relevance(item) / 100) * max(0.8, _evidence_materiality(item) / 55 if _evidence_materiality(item) else 1) for item in support)
     latest_direct_age = min([_evidence_minutes_since(item) for item in direct if _evidence_minutes_since(item)], default=0.0)
     return {
         "researchEvidenceCount": len([item for item in evidence_items or [] if isinstance(item, dict)]),
@@ -1660,6 +1675,9 @@ def research_evidence_facts(evidence_items: Iterable[Dict[str, object]]) -> Dict
         "materialNewsCount": len(material),
         "averageNewsRelevanceScore": round(sum(relevance_values) / len(relevance_values), 1) if relevance_values else 0.0,
         "averageNewsSourceReliability": round(sum(reliability_values) / len(reliability_values), 2) if reliability_values else 0.0,
+        "averageNewsMaterialityScore": round(sum(materiality_values) / len(materiality_values), 1) if materiality_values else 0.0,
+        "newsEventTypeCounts": event_type_counts,
+        "topNewsEventTypes": [key for key, _count in sorted(event_type_counts.items(), key=lambda entry: entry[1], reverse=True)[:5]],
         "latestDirectNewsAgeMinutes": round(latest_direct_age, 1),
         "newsMomentumScore": round(support_score - risk_score, 1),
         "newsConflictScore": round(min(support_score, risk_score), 1) if risk_score and support_score else 0.0,
@@ -2154,6 +2172,8 @@ def evaluate_position_relation_rules(
 
     news_relevance = float(facts.get("averageNewsRelevanceScore") or 0)
     news_reliability = float(facts.get("averageNewsSourceReliability") or 0)
+    news_materiality = float(facts.get("averageNewsMaterialityScore") or 0)
+    top_news_event_types = [str(item) for item in list(facts.get("topNewsEventTypes") or [])[:3] if str(item or "").strip()]
     news_confidence = min(data_quality, 55 + min(40, news_reliability * 45)) if news_reliability else data_quality
     risk_news_confirmation_count = sum(
         1
@@ -2171,6 +2191,7 @@ def evaluate_position_relation_rules(
             54
             + min(14, direct_risk_news_count * 4)
             + min(12, news_relevance * 0.12)
+            + min(8, news_materiality * 0.08)
             + min(12, risk_news_confirmation_count * 4)
             + (6 if price_change <= -2 else 0)
             + (5 if ma20_distance <= -5 else 0)
@@ -2182,6 +2203,8 @@ def evaluate_position_relation_rules(
             [
                 "직접 부정 뉴스 " + str(direct_risk_news_count) + "건",
                 "평균 관련성 " + ("%.1f" % news_relevance) + "점",
+                "평균 중요도 " + ("%.1f" % news_materiality) + "점" if news_materiality else "",
+                "사건 유형 " + " · ".join(top_news_event_types) if top_news_event_types else "",
                 "최신 직접 뉴스 " + ("%.1f" % float(facts.get("latestDirectNewsAgeMinutes") or 0)) + "분 전" if facts.get("latestDirectNewsAgeMinutes") else "",
                 "가격 변화율 " + ("%.1f" % price_change) + "%",
                 "거래량 배율 " + ("%.1f" % volume_ratio) + "x" if volume_ratio else "",
@@ -2208,6 +2231,7 @@ def evaluate_position_relation_rules(
             50
             + min(14, direct_support_news_count * 4)
             + min(12, news_relevance * 0.12)
+            + min(8, news_materiality * 0.08)
             + min(12, support_news_confirmation_count * 4)
             + (6 if price_change >= 2 else 0)
         )
@@ -2218,6 +2242,8 @@ def evaluate_position_relation_rules(
             [
                 "직접 우호 뉴스 " + str(direct_support_news_count) + "건",
                 "평균 관련성 " + ("%.1f" % news_relevance) + "점",
+                "평균 중요도 " + ("%.1f" % news_materiality) + "점" if news_materiality else "",
+                "사건 유형 " + " · ".join(top_news_event_types) if top_news_event_types else "",
                 "가격 변화율 " + ("%.1f" % price_change) + "%",
                 "거래량 배율 " + ("%.1f" % volume_ratio) + "x" if volume_ratio else "",
                 "체결강도 " + ("%.1f" % trade_strength) if trade_strength else "",
@@ -2236,6 +2262,7 @@ def evaluate_position_relation_rules(
             36
             + min(10, sector_context_news_count * 2.5)
             + min(10, news_relevance * 0.1)
+            + min(6, news_materiality * 0.06)
             + (8 if sector_context_confirmed else 0)
         )
         matches.append(_match(
@@ -2246,6 +2273,7 @@ def evaluate_position_relation_rules(
                 "피어 뉴스 " + str(peer_news_count) + "건",
                 "섹터 뉴스 " + str(sector_news_count) + "건",
                 "시장 뉴스 " + str(market_news_count) + "건",
+                "사건 유형 " + " · ".join(top_news_event_types) if top_news_event_types else "",
                 "가격 변화율 " + ("%.1f" % price_change) + "%",
                 "뉴스 제목 " + " / ".join(str(item) for item in list(facts.get("sectorNewsTitles") or [])[:2]),
             ],

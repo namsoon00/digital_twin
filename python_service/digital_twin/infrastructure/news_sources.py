@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from typing import Callable, Dict, Iterable, List, Tuple
 
+from ..domain import news_analysis as news_domain
 from ..domain.investment_research import NewsCollectionTarget, ResearchEvidence, classify_news_relevance, compact_text, keyword_polarity, stable_evidence_token
 from ..domain.market_data import number
 from ..domain.portfolio import utc_now_iso
@@ -169,7 +170,7 @@ class NewsSourceGateway:
             if number(relevance.get("relevanceScore")) < self.min_relevance_score() or relevance.get("relationScope") == "noise":
                 continue
             polarity, impact = keyword_polarity(title + " " + summary)
-            confidence = min(0.9, max(0.35, number(relevance.get("sourceReliability")) * 0.45 + number(relevance.get("relevanceScore")) / 100 * 0.45))
+            confidence = news_domain.confidence_from_analysis_payload(relevance)
             evidence.append(ResearchEvidence(
                 "research:" + symbol + ":news:" + stable_evidence_token(source_name, title, link),
                 symbol,
@@ -180,7 +181,7 @@ class NewsSourceGateway:
                 link,
                 utc_now_iso(),
                 polarity,
-                round(impact * max(0.6, number(relevance.get("relevanceScore")) / 80), 1),
+                news_domain.impact_from_analysis_payload(impact, relevance),
                 confidence,
                 iso_or_empty(published),
                 {
@@ -223,7 +224,7 @@ class NewsSourceGateway:
             if number(relevance.get("relevanceScore")) < self.min_relevance_score() or relevance.get("relationScope") == "noise":
                 continue
             polarity, impact = keyword_polarity(title)
-            confidence = min(0.9, max(0.35, number(relevance.get("sourceReliability")) * 0.45 + number(relevance.get("relevanceScore")) / 100 * 0.45))
+            confidence = news_domain.confidence_from_analysis_payload(relevance)
             evidence.append(ResearchEvidence(
                 "research:" + symbol + ":news:" + stable_evidence_token("GDELT", title, link),
                 symbol,
@@ -234,7 +235,7 @@ class NewsSourceGateway:
                 link,
                 utc_now_iso(),
                 polarity,
-                round(impact * max(0.6, number(relevance.get("relevanceScore")) / 80), 1),
+                news_domain.impact_from_analysis_payload(impact, relevance),
                 confidence,
                 iso_or_empty(published),
                 {

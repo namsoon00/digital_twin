@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Tuple
 
 from .market_data import clamp, number
+from . import news_analysis as news_domain
 from .portfolio import Position
 from .symbol_universe import normalize_market
 
@@ -159,6 +160,11 @@ class ResearchEvidence:
             "relevanceScore": round(number((self.raw_payload or {}).get("relevanceScore")), 1),
             "relationScope": str((self.raw_payload or {}).get("relationScope") or ""),
             "sourceReliability": round(number((self.raw_payload or {}).get("sourceReliability")), 2),
+            "eventType": str((self.raw_payload or {}).get("eventType") or ""),
+            "materialityScore": round(number((self.raw_payload or {}).get("materialityScore")), 1),
+            "ontologyRelations": list((self.raw_payload or {}).get("ontologyRelations") or []),
+            "excludedReason": str((self.raw_payload or {}).get("excludedReason") or ""),
+            "analysisSummary": str((self.raw_payload or {}).get("analysisSummary") or ""),
             "payload": dict(self.raw_payload or {}),
         }
 
@@ -243,14 +249,7 @@ def matched_terms(text: str, terms: Iterable[str]) -> List[str]:
 
 
 def source_reliability_score(source: object, provider: object = "") -> float:
-    text = _lower_text(str(source or "") + " " + str(provider or ""))
-    if any(token in text for token in LOW_RELIABILITY_SOURCE_TERMS):
-        return 0.45
-    if any(token in text for token in HIGH_RELIABILITY_SOURCE_TERMS):
-        return 0.78
-    if any(token in text for token in ["google news", "gdelt", "yahoo finance", "investing", "매일경제", "한국경제", "이데일리", "머니투데이", "조선비즈", "서울경제"]):
-        return 0.68
-    return 0.58
+    return news_domain.source_reliability_score(source, provider)
 
 
 def classify_news_relevance(
@@ -260,55 +259,7 @@ def classify_news_relevance(
     source: object = "",
     provider: object = "",
 ) -> Dict[str, object]:
-    title_text = str(title or "")
-    summary_text = str(summary or "")
-    combined = title_text + " " + summary_text
-    aliases = target_aliases(target)
-    peers = peer_aliases(target)
-    topics = sector_topic_keywords(target)
-    direct_title = matched_terms(title_text, aliases)
-    direct_body = matched_terms(summary_text, aliases)
-    peer_hits = matched_terms(combined, peers)
-    topic_hits = matched_terms(combined, topics)
-    market_hits = matched_terms(combined, MARKET_TOPIC_KEYWORDS)
-    reliability = source_reliability_score(source, provider)
-
-    score = 0.0
-    scope = "noise"
-    if direct_title:
-        score = 95.0
-        scope = "direct"
-    elif direct_body:
-        score = 82.0
-        scope = "direct"
-    elif peer_hits and topic_hits:
-        score = 64.0
-        scope = "peer"
-    elif peer_hits:
-        score = 58.0
-        scope = "peer"
-    elif topic_hits:
-        score = 52.0
-        scope = "sector"
-    elif market_hits:
-        score = 40.0
-        scope = "market"
-    else:
-        score = 24.0
-
-    if scope != "noise":
-        score += max(-8.0, min(8.0, (reliability - 0.6) * 25.0))
-    score = clamp(score, 0.0, 100.0)
-    return {
-        "relevanceScore": round(score, 1),
-        "relationScope": scope,
-        "matchedAliases": _unique_texts([*direct_title, *direct_body]),
-        "mentionedPeers": peer_hits,
-        "topicTags": topic_hits[:8],
-        "marketTopics": market_hits[:8],
-        "sourceReliability": round(reliability, 2),
-        "directMention": bool(direct_title or direct_body),
-    }
+    return news_domain.classify_news_relevance(target, title, summary, source, provider)
 
 
 @dataclass
@@ -390,9 +341,34 @@ def research_evidence_from_payload(payload: Dict[str, object], fallback_symbol: 
         "marketTopics",
         "sourceReliability",
         "directMention",
+        "eventType",
+        "materialityScore",
+        "ontologyRelations",
+        "excludedReason",
+        "analysisSummary",
+        "analysisVersion",
     ]:
         if key in source_payload and key not in raw_payload:
             raw_payload[key] = source_payload.get(key)
+    if kind == "news" and title and not raw_payload.get("analysisVersion"):
+        target = NewsCollectionTarget(
+            symbol,
+            str(source_payload.get("name") or source_payload.get("companyName") or symbol).strip(),
+            str(source_payload.get("market") or "").strip(),
+            str(source_payload.get("currency") or "").strip(),
+            str(source_payload.get("sector") or "").strip(),
+        )
+        analysis = classify_news_relevance(target, title, source_payload.get("summary") or title, source, source_payload.get("provider") or raw_payload.get("provider") or "")
+        for key, value in analysis.items():
+            raw_payload.setdefault(key, value)
+    polarity = str(source_payload.get("polarity") or "").strip()
+    if kind == "news" and not polarity:
+        polarity, _unused_impact = keyword_polarity(title + " " + str(source_payload.get("summary") or ""))
+    confidence = number(source_payload.get("confidence")) or (news_domain.confidence_from_analysis_payload(raw_payload) if kind == "news" else 0.55)
+    impact_score = number(source_payload.get("impactScore") or source_payload.get("impact_score"))
+    if kind == "news" and not impact_score:
+        _polarity, base_impact = keyword_polarity(title + " " + str(source_payload.get("summary") or ""))
+        impact_score = news_domain.impact_from_analysis_payload(base_impact, raw_payload)
     return ResearchEvidence(
         evidence_id,
         symbol,
@@ -402,23 +378,16 @@ def research_evidence_from_payload(payload: Dict[str, object], fallback_symbol: 
         compact_text(source_payload.get("summary") or title),
         url,
         str(source_payload.get("observedAt") or source_payload.get("observed_at") or source_payload.get("seenDate") or ""),
-        str(source_payload.get("polarity") or "context"),
-        number(source_payload.get("impactScore") or source_payload.get("impact_score")),
-        number(source_payload.get("confidence")) or 0.55,
+        polarity or "context",
+        impact_score,
+        confidence,
         str(source_payload.get("publishedAt") or source_payload.get("published_at") or source_payload.get("seenDate") or ""),
         raw_payload,
     )
 
 
 def keyword_polarity(text: object) -> Tuple[str, float]:
-    lowered = str(text or "").lower()
-    support_hits = sum(1 for item in SUPPORT_KEYWORDS if item.lower() in lowered)
-    risk_hits = sum(1 for item in RISK_KEYWORDS if item.lower() in lowered)
-    if risk_hits > support_hits:
-        return "risk", min(16.0, 6.0 + risk_hits * 4.0)
-    if support_hits > risk_hits:
-        return "support", min(14.0, 5.0 + support_hits * 3.5)
-    return "context", 2.0
+    return news_domain.keyword_polarity(text)
 
 
 def source_urls(items: Iterable[ResearchEvidence]) -> List[str]:
@@ -577,10 +546,7 @@ def research_evidence_from_facts(symbol: str, facts: Dict[str, object]) -> List[
             ))
         if raw_payload.get("relationScope") == "noise":
             continue
-        confidence = min(0.9, max(
-            0.35,
-            number(raw_payload.get("sourceReliability")) * 0.45 + number(raw_payload.get("relevanceScore")) / 100 * 0.45,
-        ))
+        confidence = news_domain.confidence_from_analysis_payload(raw_payload)
         evidence.append(ResearchEvidence(
             "research:" + normalized_symbol + ":news:" + stable_evidence_token(source, title, url, item.get("seenDate") or item.get("seendate")),
             normalized_symbol,
@@ -591,7 +557,7 @@ def research_evidence_from_facts(symbol: str, facts: Dict[str, object]) -> List[
             url,
             str(item.get("seenDate") or item.get("seendate") or ""),
             polarity,
-            round(impact * max(0.6, number(raw_payload.get("relevanceScore")) / 80), 1),
+            news_domain.impact_from_analysis_payload(impact, raw_payload),
             confidence,
             str(item.get("publishedAt") or item.get("seenDate") or item.get("seendate") or ""),
             raw_payload,

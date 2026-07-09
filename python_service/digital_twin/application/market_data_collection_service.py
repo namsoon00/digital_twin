@@ -3,7 +3,8 @@ import time
 from typing import Dict, Iterable, List
 
 from ..domain.accounts import AccountConfig
-from ..domain.events import market_data_collected_event
+from ..domain.events import market_data_collected_event, ontology_reasoning_requested_event
+from ..domain.fact_changes import market_fact_change
 from ..domain.market_data import normalize_position, number, technical_indicators_from_candles
 from ..domain.portfolio import Position, utc_now_iso
 from ..domain.repositories import AccountRepository, MarketDataProvider, MarketDataProviderFactory, MarketQuoteRepository
@@ -188,6 +189,9 @@ class MarketDataCollectionRunner:
         candle_symbols = symbols[:self.candle_batch_size()]
         indicators, token = self.collect_candles(provider, token, candle_symbols)
         saved = 0
+        changed = 0
+        changed_symbols: List[str] = []
+        changed_fields_by_symbol: Dict[str, List[str]] = {}
         for item in selected:
             symbol = str(item.get("symbol") or "").upper()
             if not symbol:
@@ -196,27 +200,37 @@ class MarketDataCollectionRunner:
             indicator = indicators.get(symbol) or {}
             if not quote and not indicator:
                 continue
+            cached = self.quote_cache.load("toss", MARKET_DATA_ACCOUNT_ID, symbol)
             position = provider.merge_market_data(
                 self.base_position(item),
                 quote,
                 indicator,
-                self.quote_cache.load("toss", MARKET_DATA_ACCOUNT_ID, symbol),
+                cached,
                 quote_live=bool(quote),
                 indicators_live=bool(indicator),
             )
             payload = position_payload(position, item)
             if not number(payload.get("currentPrice")) and not any(number(payload.get(key)) for key in ["ma20", "ma60", "volume"]):
                 continue
+            change = market_fact_change(cached, payload)
             self.quote_cache.save("toss", MARKET_DATA_ACCOUNT_ID, symbol, payload)
             saved += 1
+            if change.get("changed"):
+                changed += 1
+                changed_symbols.append(symbol)
+                changed_fields_by_symbol[symbol] = list(change.get("fields") or [])
         result = {
             "status": "ok",
             "provider": "toss",
             "markets": markets,
+            "symbols": symbols,
             "selectedCount": len(selected),
             "priceCount": len(prices),
             "candleCount": len(indicators),
             "savedCount": saved,
+            "changedCount": changed,
+            "changedSymbols": changed_symbols,
+            "changedFieldsBySymbol": changed_fields_by_symbol,
             "dataQuality": "actual",
             "universeRefresh": universe_refresh,
             "cache": self.quote_cache.summary("toss", MARKET_DATA_ACCOUNT_ID),
@@ -225,8 +239,28 @@ class MarketDataCollectionRunner:
             event = market_data_collected_event(result)
             if hasattr(self.event_publisher, "publish"):
                 self.event_publisher.publish(event)
+                if changed:
+                    self.event_publisher.publish(ontology_reasoning_requested_event(
+                        event,
+                        "market-data-update",
+                        changed_symbols,
+                        changed_count=changed,
+                        observed_count=saved,
+                        fact_types=["MarketQuote", "TechnicalIndicator"],
+                        reason="시장 데이터 의미 필드가 변경되어 온톨로지 추론을 요청합니다.",
+                    ))
             else:
                 self.event_publisher.handle(event)
+                if changed:
+                    self.event_publisher.handle(ontology_reasoning_requested_event(
+                        event,
+                        "market-data-update",
+                        changed_symbols,
+                        changed_count=changed,
+                        observed_count=saved,
+                        fact_types=["MarketQuote", "TechnicalIndicator"],
+                        reason="시장 데이터 의미 필드가 변경되어 온톨로지 추론을 요청합니다.",
+                    ))
         return result
 
     def status(self) -> Dict[str, object]:

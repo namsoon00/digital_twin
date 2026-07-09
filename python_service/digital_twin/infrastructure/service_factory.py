@@ -13,6 +13,7 @@ from ..application.notification_service import (
     NotificationHoldingSnapshotEnricher,
     NotificationQueueRunner,
 )
+from ..application.ontology_reasoning_service import OntologyReasoningRunner
 from ..application.symbol_universe_service import SymbolUniverseService
 from ..domain.accounts import AccountConfig
 from ..domain.market_data import number
@@ -31,8 +32,10 @@ from .news_sources import NewsSourceGateway
 from .settings import currency_rates, runtime_settings
 from .sqlite_model_review import SQLiteModelReviewJobStore
 from .sqlite_monitoring import SQLiteMonitorStore
+from .sqlite_monitoring import SQLiteEventLog
 from .sqlite_monitoring import SQLiteMarketQuoteCache
 from .sqlite_monitoring import SQLiteMonitoringCycleRecorder
+from .sqlite_monitoring import SQLiteOntologyReasoningCursorStore
 from .sqlite_monitoring import SQLiteOntologyQualitySampleStore
 from .sqlite_monitoring import SQLiteResearchEvidenceStore
 from .sqlite_notifications import SQLiteNotificationJobStore, SQLiteNotificationTemplateStore
@@ -139,6 +142,18 @@ def build_news_collection_runner(settings=None, event_publisher=None) -> NewsCol
         gateway=NewsSourceGateway(configured_settings),
         settings=configured_settings,
         event_publisher=event_publisher or default_event_bus(),
+    )
+
+
+def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> OntologyReasoningRunner:
+    configured_settings = settings or runtime_settings()
+    registry = AccountRegistry()
+    return OntologyReasoningRunner(
+        event_reader=SQLiteEventLog(),
+        cursor_store=SQLiteOntologyReasoningCursorStore(),
+        monitor_runner_factory=lambda: build_monitor_runner(registry.load()),
+        event_publisher=event_publisher or default_event_bus(),
+        settings=configured_settings,
     )
 
 

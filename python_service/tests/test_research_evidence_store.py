@@ -48,13 +48,28 @@ class ResearchEvidenceStoreTests(unittest.TestCase):
             )
 
             self.assertEqual(1, store.upsert_many([evidence]))
-            self.assertEqual(1, store.upsert_many([evidence]))
+            self.assertEqual(0, store.upsert_many([evidence]))
+            updated = ResearchEvidence(
+                "research:005930:news:1",
+                "005930",
+                "news",
+                "Naver News",
+                "삼성전자 실적 개선 기대",
+                "반도체 업황 개선과 수요 회복 보도",
+                "https://example.test/news/1",
+                "2026-07-08T01:00:00Z",
+                "support",
+                8.5,
+                0.72,
+            )
+            self.assertEqual(1, store.upsert_many([updated]))
 
             latest = store.latest(symbol="005930")
             summary = store.summary()
 
             self.assertEqual(1, len(latest))
             self.assertEqual("삼성전자 실적 개선 기대", latest[0].title)
+            self.assertEqual("반도체 업황 개선과 수요 회복 보도", latest[0].summary)
             self.assertEqual(1, summary["total"])
             self.assertEqual("005930", summary["bySymbol"][0]["name"])
             self.assertEqual("news", summary["byKind"][0]["name"])

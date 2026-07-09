@@ -11,6 +11,7 @@ from .application.market_data_collection_service import MarketDataCollectionSche
 from .application.model_review_service import ModelReviewScheduler
 from .application.news_collection_service import NewsCollectionScheduler
 from .application.notification_service import NotificationQueueScheduler
+from .application.ontology_reasoning_service import OntologyReasoningScheduler
 from .application.scheduler import MIN_REALTIME_INTERVAL_SECONDS, RealtimeScheduler
 from .domain.accounts import AccountConfig, split_symbols
 from .domain.monitoring import RealtimeMonitor
@@ -22,7 +23,7 @@ from .infrastructure.sqlite_monitoring import SQLiteMonitorStore
 from .infrastructure.sqlite_notifications import SQLiteNotificationJobStore, SQLiteNotificationTemplateStore
 from .infrastructure.sqlite_runtime import SQLiteAppStore
 from .infrastructure.notifications import queued_notifier_for_account, send_events
-from .infrastructure.service_factory import build_market_data_collection_runner, build_model_review_runner, build_monitor_runner, build_news_collection_runner, build_notification_queue_runner, build_symbol_universe_service
+from .infrastructure.service_factory import build_market_data_collection_runner, build_model_review_runner, build_monitor_runner, build_news_collection_runner, build_notification_queue_runner, build_ontology_reasoning_runner, build_symbol_universe_service
 from .infrastructure.settings import (
     SECRET_SETTING_KEYS,
     read_settings_store,
@@ -268,6 +269,27 @@ def notifications_command(args) -> int:
     return 1
 
 
+def ontology_reasoning_command(args) -> int:
+    settings = runtime_settings()
+    limit = int(args.limit or settings.get("ontologyReasoningBatchSize") or 20) if hasattr(args, "limit") else int(settings.get("ontologyReasoningBatchSize") or 20)
+    runner = build_ontology_reasoning_runner(settings)
+    if args.ontology_reasoning_action == "status":
+        print(json.dumps(runner.status(), ensure_ascii=False))
+        return 0
+    if args.ontology_reasoning_action == "once":
+        print(json.dumps(runner.run_once(limit=limit, force=True), ensure_ascii=False))
+        return 0
+    if args.ontology_reasoning_action == "watch":
+        interval = int(
+            os.environ.get("ONTOLOGY_REASONING_INTERVAL_SECONDS")
+            or settings.get("ontologyReasoningIntervalSeconds")
+            or 10
+        )
+        OntologyReasoningScheduler(runner, interval).run_forever(limit=limit)
+        return 0
+    return 1
+
+
 MASKED_RUNTIME_SETTING_KEYS = set(SECRET_SETTING_KEYS) | {"tossAccountSeq", "telegramChatId"}
 
 
@@ -501,6 +523,15 @@ def build_parser() -> argparse.ArgumentParser:
     notify_watch.add_argument("--limit", default="")
     notification_actions.add_parser("status")
     notifications.set_defaults(func=notifications_command)
+
+    ontology_reasoning = subparsers.add_parser("ontology-reasoning", help="Run data-update driven ontology reasoning")
+    ontology_reasoning_actions = ontology_reasoning.add_subparsers(dest="ontology_reasoning_action", required=True)
+    ontology_once = ontology_reasoning_actions.add_parser("once")
+    ontology_once.add_argument("--limit", default="")
+    ontology_watch = ontology_reasoning_actions.add_parser("watch")
+    ontology_watch.add_argument("--limit", default="")
+    ontology_reasoning_actions.add_parser("status")
+    ontology_reasoning.set_defaults(func=ontology_reasoning_command)
 
     settings = subparsers.add_parser("settings", help="Manage runtime settings")
     settings_actions = settings.add_subparsers(dest="settings_action", required=True)

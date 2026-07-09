@@ -1,0 +1,145 @@
+import signal
+import time
+from typing import Callable, Dict, Iterable, List
+
+from ..domain.events import ONTOLOGY_REASONING_REQUESTED, ontology_reasoning_completed_event
+
+
+DISABLED_VALUES = {"0", "false", "no", "off", "disabled"}
+
+
+def truthy(value: object, default: bool = True) -> bool:
+    text = str(value if value is not None else "").strip().lower()
+    if not text:
+        return default
+    return text not in DISABLED_VALUES
+
+
+def int_setting(settings: Dict[str, object], key: str, fallback: int, lower: int = 1, upper: int = 1000) -> int:
+    try:
+        parsed = int(float(str((settings or {}).get(key) or "").strip()))
+    except ValueError:
+        parsed = fallback
+    return max(lower, min(upper, parsed))
+
+
+class OntologyReasoningRunner:
+    def __init__(
+        self,
+        event_reader,
+        cursor_store,
+        monitor_runner_factory: Callable,
+        event_publisher=None,
+        settings: Dict[str, object] = None,
+    ):
+        self.event_reader = event_reader
+        self.cursor_store = cursor_store
+        self.monitor_runner_factory = monitor_runner_factory
+        self.event_publisher = event_publisher
+        self.settings = dict(settings or {})
+
+    def enabled(self) -> bool:
+        return truthy(self.settings.get("ontologyReasoningEnabled"), True)
+
+    def batch_size(self) -> int:
+        return int_setting(self.settings, "ontologyReasoningBatchSize", 20, 1, 200)
+
+    def pending_requests(self, limit: int = 0) -> List[object]:
+        processed = set(self.cursor_store.processed_event_ids())
+        events = [
+            event
+            for event in self.event_reader.events(name=ONTOLOGY_REASONING_REQUESTED)
+            if event.event_id not in processed and int((event.payload or {}).get("changedCount") or 0) > 0
+        ]
+        return events[: max(1, int(limit or self.batch_size()))]
+
+    def publish(self, event) -> None:
+        if not self.event_publisher:
+            return
+        if hasattr(self.event_publisher, "publish"):
+            self.event_publisher.publish(event)
+        else:
+            self.event_publisher.handle(event)
+
+    def request_symbols(self, requests: Iterable[object]) -> List[str]:
+        symbols = []
+        for event in requests or []:
+            for symbol in (event.payload or {}).get("symbols") or []:
+                clean = str(symbol or "").upper().strip()
+                if clean and clean not in symbols:
+                    symbols.append(clean)
+        return symbols
+
+    def run_once(self, limit: int = 0, force: bool = True) -> Dict[str, object]:
+        if not self.enabled():
+            return {"status": "disabled", "processedCount": 0, "alertCount": 0}
+        requests = self.pending_requests(limit)
+        if not requests:
+            return {"status": "idle", "processedCount": 0, "alertCount": 0}
+        symbols = self.request_symbols(requests)
+        runner = self.monitor_runner_factory()
+        alerts = runner.run_once(force=force)
+        account_ids = [getattr(account, "account_id", "") for account in getattr(runner, "accounts", [])]
+        trigger_event_ids = [event.event_id for event in requests]
+        completed = ontology_reasoning_completed_event(
+            trigger_event_ids,
+            account_ids,
+            symbols,
+            len(alerts or []),
+            status="ok",
+            reason="데이터 변경 이벤트가 온톨로지 추론 사이클을 실행했습니다.",
+        )
+        self.publish(completed)
+        self.cursor_store.mark_processed(trigger_event_ids)
+        return {
+            "status": "ok",
+            "processedCount": len(trigger_event_ids),
+            "alertCount": len(alerts or []),
+            "symbols": symbols,
+            "accountIds": [item for item in account_ids if item],
+        }
+
+    def status(self) -> Dict[str, object]:
+        pending = self.pending_requests(self.batch_size())
+        return {
+            "enabled": self.enabled(),
+            "pendingCount": len(pending),
+            "batchSize": self.batch_size(),
+            "processedCount": len(self.cursor_store.processed_event_ids()),
+            "pendingSymbols": self.request_symbols(pending),
+        }
+
+
+class OntologyReasoningScheduler:
+    def __init__(self, runner: OntologyReasoningRunner, interval_seconds: int):
+        self.runner = runner
+        self.interval_seconds = max(5, int(interval_seconds or 10))
+        self.running = True
+
+    def stop(self, *_args) -> None:
+        self.running = False
+
+    def run_forever(self, limit: int = 0) -> None:
+        signal.signal(signal.SIGTERM, self.stop)
+        signal.signal(signal.SIGINT, self.stop)
+        print("Python ontology reasoning worker started. interval=" + str(self.interval_seconds) + "s")
+        while self.running:
+            started = time.monotonic()
+            try:
+                result = self.runner.run_once(limit=limit)
+                if result.get("processedCount"):
+                    print(
+                        "Ontology reasoning "
+                        + str(result.get("status"))
+                        + " processed="
+                        + str(result.get("processedCount", 0))
+                        + " alerts="
+                        + str(result.get("alertCount", 0))
+                    )
+            except Exception as error:  # noqa: BLE001 - long-running reasoning worker must continue after a cycle failure.
+                print("Python ontology reasoning worker error: " + str(error))
+            elapsed = time.monotonic() - started
+            sleep_seconds = max(1.0, self.interval_seconds - elapsed)
+            end_at = time.monotonic() + sleep_seconds
+            while self.running and time.monotonic() < end_at:
+                time.sleep(min(1.0, end_at - time.monotonic()))

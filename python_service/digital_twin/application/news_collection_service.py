@@ -3,7 +3,7 @@ import time
 from typing import Dict, Iterable, List
 
 from ..domain.accounts import AccountConfig
-from ..domain.events import research_evidence_collected_event
+from ..domain.events import ontology_reasoning_requested_event, research_evidence_collected_event
 from ..domain.investment_research import NewsCollectionTarget, ResearchEvidence
 from ..domain.market_data import number
 from ..domain.repositories import AccountRepository, MonitorSnapshotReader, ResearchEvidenceGateway, ResearchEvidenceRepository, SymbolUniverseRepository
@@ -138,11 +138,16 @@ class NewsCollectionRunner:
             collected.extend(items)
             statuses.extend(target_statuses)
         saved = self.evidence_store.upsert_many(collected) if collected else 0
+        changed_symbols = list(getattr(self.evidence_store, "last_changed_symbols", []) or [])
+        if saved and not changed_symbols:
+            changed_symbols = sorted(set(str(item.symbol or "").upper().strip() for item in collected if str(item.symbol or "").strip()))
         result = {
             "status": "ok",
             "targetCount": len(targets),
             "fetchedCount": len(collected),
             "savedCount": saved,
+            "changedCount": saved,
+            "changedSymbols": changed_symbols,
             "symbols": [target.symbol for target in targets],
             "providers": self.gateway.providers(),
             "statuses": statuses[-50:],
@@ -152,8 +157,26 @@ class NewsCollectionRunner:
             event = research_evidence_collected_event(result)
             if hasattr(self.event_publisher, "publish"):
                 self.event_publisher.publish(event)
+                self.event_publisher.publish(ontology_reasoning_requested_event(
+                    event,
+                    "research-evidence-update",
+                    changed_symbols,
+                    changed_count=saved,
+                    observed_count=len(collected),
+                    fact_types=["ResearchEvidence", "NewsEvent"],
+                    reason="새로운 뉴스/리서치 근거가 저장되어 온톨로지 추론을 요청합니다.",
+                ))
             else:
                 self.event_publisher.handle(event)
+                self.event_publisher.handle(ontology_reasoning_requested_event(
+                    event,
+                    "research-evidence-update",
+                    changed_symbols,
+                    changed_count=saved,
+                    observed_count=len(collected),
+                    fact_types=["ResearchEvidence", "NewsEvent"],
+                    reason="새로운 뉴스/리서치 근거가 저장되어 온톨로지 추론을 요청합니다.",
+                ))
         return result
 
     def status(self) -> Dict[str, object]:

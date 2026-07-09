@@ -38,6 +38,13 @@ WORKERS = {
         "command": [sys.executable, "-u", "python_service/service.py", "model-review", "watch"],
         "needle": "python_service/service.py model-review watch",
     },
+    "ontology-reasoning": {
+        "label": "Python ontology reasoning worker",
+        "pid": data_dir() / "python-ontology-reasoning.pid",
+        "log": data_dir() / "python-ontology-reasoning.log",
+        "command": [sys.executable, "-u", "python_service/service.py", "ontology-reasoning", "watch"],
+        "needle": "python_service/service.py ontology-reasoning watch",
+    },
     "notifications": {
         "label": "Python notification worker",
         "pid": data_dir() / "python-notifications.pid",

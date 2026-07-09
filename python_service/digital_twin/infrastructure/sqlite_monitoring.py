@@ -5,6 +5,7 @@ from .sqlite_operational import (
     SQLiteMarketQuoteCache,
     SQLiteMonitoringCycleRecorder,
     SQLiteMonitorStore,
+    SQLiteOntologyReasoningCursorStore,
     SQLiteResearchEvidenceStore,
 )
 
@@ -15,5 +16,6 @@ __all__ = [
     "SQLiteMarketQuoteCache",
     "SQLiteMonitoringCycleRecorder",
     "SQLiteMonitorStore",
+    "SQLiteOntologyReasoningCursorStore",
     "SQLiteResearchEvidenceStore",
 ]

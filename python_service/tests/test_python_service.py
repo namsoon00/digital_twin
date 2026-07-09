@@ -19,6 +19,7 @@ from digital_twin.application.flow_lens_service import FlowLensService
 from digital_twin.application.market_data_collection_service import MARKET_DATA_ACCOUNT_ID, MarketDataCollectionRunner
 from digital_twin.application.model_review_service import ModelReviewRunner
 from digital_twin.application.news_collection_service import NewsCollectionRunner
+from digital_twin.application.ontology_reasoning_service import OntologyReasoningRunner
 from digital_twin.application.monitoring_service import MonitorRunner as ApplicationMonitorRunner
 from digital_twin.application.notification_service import CompositeNotificationContextEnricher, DisclosureAnalysisNotificationEnricher, NotificationAIValidatedGateEnricher, NotificationAIOpinionEnricher, NotificationHoldingSnapshotEnricher, NotificationQueueRunner
 from digital_twin.application.symbol_universe_service import SymbolUniverseService, seed_symbol
@@ -34,7 +35,7 @@ from digital_twin.domain.ontology import OntologyEntity, OntologyRelation, abox_
 from digital_twin.domain.ontology_rules import decision_action_group_for_label, evaluate_position_relation_rules, prompt_template_for_message_type
 from digital_twin.domain.portfolio_calculations import portfolio_summary
 from digital_twin.domain.strategy import SafeFormula, StrategyModel, decisions_for_positions
-from digital_twin.domain.events import ACCOUNT_SAVED, MARKET_DATA_COLLECTED, MONITORING_ALERTS_DETECTED, MONITORING_CYCLE_COMPLETED, MONITORING_SNAPSHOT_COLLECTED, alerts_detected_event, monitoring_cycle_completed_event, snapshot_collected_event
+from digital_twin.domain.events import ACCOUNT_SAVED, MARKET_DATA_COLLECTED, MONITORING_ALERTS_DETECTED, MONITORING_CYCLE_COMPLETED, MONITORING_SNAPSHOT_COLLECTED, ONTOLOGY_REASONING_COMPLETED, ONTOLOGY_REASONING_REQUESTED, RESEARCH_EVIDENCE_COLLECTED, DomainEvent, alerts_detected_event, monitoring_cycle_completed_event, ontology_reasoning_requested_event, snapshot_collected_event
 from digital_twin.domain.monitoring import RealtimeMonitor
 from digital_twin.domain.model_review import ModelReviewJob, build_model_review_prompt, local_model_review
 from digital_twin.domain.disclosure_analysis import DisclosureAnalysisResult, local_disclosure_analysis
@@ -59,7 +60,7 @@ from digital_twin.infrastructure.ontology_projection import PortfolioOntologyPro
 from digital_twin.infrastructure.service_factory import flow_lens_snapshot
 from digital_twin.infrastructure.settings import runtime_settings, save_runtime_settings
 from digital_twin.infrastructure.sqlite_model_review import SQLiteModelReviewJobStore
-from digital_twin.infrastructure.sqlite_monitoring import SQLiteEventLog, SQLiteExternalSignalCache, SQLiteMarketQuoteCache, SQLiteMonitoringCycleRecorder, SQLiteMonitorStore, SQLiteOntologyQualitySampleStore, SQLiteResearchEvidenceStore
+from digital_twin.infrastructure.sqlite_monitoring import SQLiteEventLog, SQLiteExternalSignalCache, SQLiteMarketQuoteCache, SQLiteMonitoringCycleRecorder, SQLiteMonitorStore, SQLiteOntologyQualitySampleStore, SQLiteOntologyReasoningCursorStore, SQLiteResearchEvidenceStore
 from digital_twin.infrastructure.sqlite_notifications import SQLiteNotificationJobStore, SQLiteNotificationRuleStore, SQLiteNotificationTemplateStore
 from digital_twin.infrastructure.sqlite_runtime import SQLiteAppStore, SQLiteRuntimeSettingsStore
 from digital_twin.infrastructure.sqlite_symbols import SQLiteSymbolUniverseStore
@@ -4034,12 +4035,81 @@ class PythonServiceTests(unittest.TestCase):
 
         self.assertEqual("ok", result["status"])
         self.assertEqual(2, result["savedCount"])
+        self.assertEqual(2, result["changedCount"])
         self.assertEqual(1, result["candleCount"])
         self.assertEqual("recommendation-universe", cached_aapl["collectionPurpose"])
         self.assertEqual(100, cached_aapl["currentPrice"])
         self.assertGreater(cached_aapl["ma20"], 0)
         self.assertEqual(101, cached_tsla["currentPrice"])
+        self.assertEqual([MARKET_DATA_COLLECTED, ONTOLOGY_REASONING_REQUESTED], [event.name for event in events.published])
+        self.assertEqual(["AAPL", "TSLA"], events.published[-1].payload["symbols"])
+
+        events.published.clear()
+        repeat = runner.run_once(force=True)
+
+        self.assertEqual(2, repeat["savedCount"])
+        self.assertEqual(0, repeat["changedCount"])
         self.assertEqual([MARKET_DATA_COLLECTED], [event.name for event in events.published])
+
+    def test_ontology_reasoning_runner_consumes_data_update_requests_once(self):
+        source = DomainEvent(
+            name=MARKET_DATA_COLLECTED,
+            aggregate_id="toss:NASDAQ",
+            payload={"changedCount": 1, "symbols": ["AAPL"]},
+        )
+        request = ontology_reasoning_requested_event(
+            source,
+            "market-data-update",
+            ["AAPL"],
+            changed_count=1,
+            observed_count=1,
+            fact_types=["MarketQuote"],
+        )
+
+        class Reader:
+            def events(self, name="", aggregate_id="", limit=0):
+                return [request] if name == ONTOLOGY_REASONING_REQUESTED else []
+
+        class Cursor:
+            def __init__(self):
+                self.ids = []
+
+            def processed_event_ids(self):
+                return list(self.ids)
+
+            def mark_processed(self, event_ids):
+                self.ids.extend(event_ids)
+
+        class FakeMonitorRunner:
+            def __init__(self):
+                self.accounts = [AccountConfig("main", "메인", "toss", "https://example.test", "", "", "", [])]
+                self.calls = []
+
+            def run_once(self, dry_run=False, force=False):
+                self.calls.append({"dryRun": dry_run, "force": force})
+                return [AlertEvent("main", "메인", "WATCH", "investmentInsight", "key", "Apple", ["관계 변화"], symbol="AAPL")]
+
+        cursor = Cursor()
+        fake_monitor = FakeMonitorRunner()
+        events = EventBus()
+        runner = OntologyReasoningRunner(
+            Reader(),
+            cursor,
+            monitor_runner_factory=lambda: fake_monitor,
+            event_publisher=events,
+            settings={"ontologyReasoningEnabled": "1", "ontologyReasoningBatchSize": "10"},
+        )
+
+        result = runner.run_once()
+        repeat = runner.run_once()
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual(1, result["processedCount"])
+        self.assertEqual(1, result["alertCount"])
+        self.assertEqual([{"dryRun": False, "force": True}], fake_monitor.calls)
+        self.assertEqual([request.event_id], cursor.processed_event_ids())
+        self.assertEqual([ONTOLOGY_REASONING_COMPLETED], [event.name for event in events.published])
+        self.assertEqual("idle", repeat["status"])
 
     def test_market_quote_cache_selects_stale_symbols_before_fresh_symbols(self):
         db_path = Path(self.temp.name) / "service.db"
@@ -4731,6 +4801,7 @@ class PythonServiceTests(unittest.TestCase):
                 "</item></channel></rss>"
             )
 
+        events = EventBus()
         runner = NewsCollectionRunner(
             account_repository=account_repository,
             monitor_store=monitor_store,
@@ -4746,6 +4817,7 @@ class PythonServiceTests(unittest.TestCase):
                 "newsCollectionProviders": "google_rss_kr,google_rss_us",
                 "newsCollectionRateLimitSeconds": "0",
             },
+            event_publisher=events,
             sleep_fn=lambda _: None,
         )
 
@@ -4756,9 +4828,18 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("ok", result["status"])
         self.assertEqual(2, result["targetCount"])
         self.assertGreaterEqual(result["savedCount"], 2)
+        self.assertEqual(result["savedCount"], result["changedCount"])
+        self.assertEqual([RESEARCH_EVIDENCE_COLLECTED, ONTOLOGY_REASONING_REQUESTED], [event.name for event in events.published])
         self.assertTrue(any(item.symbol == "005930" and "삼성전자" in item.title for item in latest))
         self.assertTrue(any(item.symbol == "AAPL" and "Apple" in item.title for item in latest))
         self.assertEqual(store.summary()["byKind"][0]["name"], "news")
+
+        events.published.clear()
+        repeat = runner.run_once()
+
+        self.assertEqual("ok", repeat["status"])
+        self.assertEqual(0, repeat["savedCount"])
+        self.assertEqual([], events.published)
 
     def test_external_signal_provider_attaches_stored_news_evidence(self):
         path = Path(self.temp.name) / "service.db"

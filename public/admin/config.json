@@ -13,7 +13,7 @@
     "공유 미리보기에서는 서버 설정과 계정 DB 쓰기를 차단합니다."
   ],
   "localData": {
-    "generatedAt": "2026-07-09T04:32:34.018658Z",
+    "generatedAt": "2026-07-09T10:31:34.210565Z",
     "sources": {
       "serviceDb": "data/service.db",
       "serviceDbExists": true,
@@ -151,6 +151,9 @@
       "newsCollectionIncludeWatchlist": "1",
       "newsCollectionIncludeHoldings": "1",
       "newsCollectionRateLimitSeconds": "0.25",
+      "ontologyReasoningEnabled": "1",
+      "ontologyReasoningIntervalSeconds": "10",
+      "ontologyReasoningBatchSize": "20",
       "dartDisclosureAiAnalysisEnabled": "1",
       "dartDisclosureAiUseCodex": "1",
       "dartDisclosureAiTimeoutSeconds": "90"
@@ -1144,6 +1147,25 @@
           "default": "1"
         },
         {
+          "key": "ontologyReasoningEnabled",
+          "label": "데이터 변경 추론 사용",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
+          "key": "ontologyReasoningIntervalSeconds",
+          "label": "추론 요청 확인 주기",
+          "type": "number",
+          "default": "10",
+          "unit": "seconds"
+        },
+        {
+          "key": "ontologyReasoningBatchSize",
+          "label": "추론 요청 배치",
+          "type": "number",
+          "default": "20"
+        },
+        {
           "key": "dartDisclosureAiAnalysisEnabled",
           "label": "공시 AI 해석 사용",
           "type": "toggle",
@@ -1230,6 +1252,7 @@
       "commands": [
         "npm run python:monitor:once -- --dry-run --force",
         "npm run python:monitor:watch",
+        "npm run python:ontology-reasoning:watch",
         "npm run python:service:start",
         "npm run python:service:status"
       ],
@@ -1831,5 +1854,5 @@
       ]
     }
   ],
-  "buildId": "bbfd881f5e11"
+  "buildId": "505d594f0cd9"
 }

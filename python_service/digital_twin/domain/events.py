@@ -26,6 +26,8 @@ CHAT_MESSAGE_APPENDED = "chat.message_appended"
 SYMBOL_UNIVERSE_REFRESHED = "symbol_universe.refreshed"
 MARKET_DATA_COLLECTED = "market_data.collected"
 RESEARCH_EVIDENCE_COLLECTED = "research_evidence.collected"
+ONTOLOGY_REASONING_REQUESTED = "ontology.reasoning_requested"
+ONTOLOGY_REASONING_COMPLETED = "ontology.reasoning_completed"
 
 
 @dataclass(frozen=True)
@@ -145,16 +147,20 @@ def monitoring_cycle_completed_event(
 def market_data_collected_event(payload: Dict[str, object]) -> DomainEvent:
     provider = str(payload.get("provider") or "market-data")
     markets = ",".join(str(market) for market in payload.get("markets") or []) or "all"
+    symbols = list(payload.get("changedSymbols") or payload.get("symbols") or [])
     return DomainEvent(
         name=MARKET_DATA_COLLECTED,
         aggregate_id=provider + ":" + markets,
         payload={
             "provider": provider,
             "markets": list(payload.get("markets") or []),
+            "symbols": symbols[:200],
             "selectedCount": int(payload.get("selectedCount") or 0),
             "priceCount": int(payload.get("priceCount") or 0),
             "candleCount": int(payload.get("candleCount") or 0),
             "savedCount": int(payload.get("savedCount") or 0),
+            "changedCount": int(payload.get("changedCount") or 0),
+            "changedSymbols": symbols[:200],
             "status": str(payload.get("status") or ""),
             "dataQuality": str(payload.get("dataQuality") or "actual"),
         },
@@ -172,7 +178,65 @@ def research_evidence_collected_event(payload: Dict[str, object]) -> DomainEvent
             "targetCount": int(payload.get("targetCount") or 0),
             "fetchedCount": int(payload.get("fetchedCount") or 0),
             "savedCount": int(payload.get("savedCount") or 0),
+            "changedCount": int(payload.get("changedCount") or payload.get("savedCount") or 0),
             "symbols": symbols[:100],
+            "changedSymbols": list(payload.get("changedSymbols") or symbols)[:100],
             "providers": list(payload.get("providers") or [])[:20],
+        },
+    )
+
+
+def ontology_reasoning_requested_event(
+    source_event: DomainEvent,
+    trigger: str,
+    symbols: Iterable[str] = None,
+    changed_count: int = 0,
+    observed_count: int = 0,
+    fact_types: Iterable[str] = None,
+    reason: str = "",
+) -> DomainEvent:
+    clean_symbols = sorted(set(str(symbol or "").upper().strip() for symbol in (symbols or []) if str(symbol or "").strip()))
+    clean_fact_types = sorted(set(str(item or "").strip() for item in (fact_types or []) if str(item or "").strip()))
+    return DomainEvent(
+        name=ONTOLOGY_REASONING_REQUESTED,
+        aggregate_id="ontology:" + (",".join(clean_symbols) or str(trigger or "all"))[:180],
+        correlation_id=source_event.correlation_id or source_event.event_id,
+        payload={
+            "trigger": str(trigger or "data-update"),
+            "sourceEventId": source_event.event_id,
+            "sourceEventName": source_event.name,
+            "sourceAggregateId": source_event.aggregate_id,
+            "symbols": clean_symbols[:200],
+            "changedCount": int(changed_count or 0),
+            "observedCount": int(observed_count or 0),
+            "factTypes": clean_fact_types[:20],
+            "reason": str(reason or ""),
+            "dispatchMode": "data-update-driven",
+        },
+    )
+
+
+def ontology_reasoning_completed_event(
+    trigger_event_ids: Iterable[str],
+    account_ids: Iterable[str],
+    symbols: Iterable[str],
+    alert_count: int,
+    status: str = "ok",
+    reason: str = "",
+) -> DomainEvent:
+    clean_trigger_ids = [str(item or "").strip() for item in (trigger_event_ids or []) if str(item or "").strip()]
+    clean_accounts = sorted(set(str(item or "").strip() for item in (account_ids or []) if str(item or "").strip()))
+    clean_symbols = sorted(set(str(item or "").upper().strip() for item in (symbols or []) if str(item or "").strip()))
+    return DomainEvent(
+        name=ONTOLOGY_REASONING_COMPLETED,
+        aggregate_id="ontology:" + (",".join(clean_accounts) or "all")[:180],
+        payload={
+            "triggerEventIds": clean_trigger_ids[:200],
+            "accountIds": clean_accounts[:100],
+            "symbols": clean_symbols[:200],
+            "alertCount": int(alert_count or 0),
+            "status": str(status or "ok"),
+            "reason": str(reason or ""),
+            "dispatchMode": "data-update-driven",
         },
     )

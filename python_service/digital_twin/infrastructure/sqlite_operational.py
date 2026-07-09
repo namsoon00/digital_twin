@@ -12,6 +12,7 @@ from ..domain.events import (
     snapshot_collected_event,
 )
 from ..domain.data_freshness import evaluate_notification_data_freshness
+from ..domain.fact_changes import fact_signature, research_evidence_fact_payload
 from ..domain.investment_research import ResearchEvidence
 from ..domain.model_review import ModelReviewJob
 from ..domain.notification_rules import DEFAULT_NOTIFICATION_RULES, NotificationRuleConfig, apply_market_hours_rule, apply_similarity_rule, apply_state_cooldown_rule, default_notification_rule, evaluate_notification_rule, notification_fingerprint
@@ -141,6 +142,34 @@ def research_evidence_from_row(row) -> ResearchEvidence:
         published_at=row["published_at"],
         raw_payload=payload if isinstance(payload, dict) else {},
     )
+
+
+def research_evidence_change_payload(
+    symbol: str,
+    kind: str,
+    source: str,
+    title: str,
+    summary: str,
+    url: str,
+    published_at: str,
+    polarity: str,
+    impact_score: float,
+    confidence: float,
+    payload: Dict[str, object],
+) -> Dict[str, object]:
+    return research_evidence_fact_payload({
+        "symbol": symbol,
+        "kind": kind,
+        "source": source,
+        "title": title,
+        "summary": summary,
+        "url": url,
+        "publishedAt": published_at,
+        "polarity": polarity,
+        "impactScore": round(float(impact_score or 0), 6),
+        "confidence": round(float(confidence or 0), 6),
+        "payload": payload if isinstance(payload, dict) else {},
+    })
 
 
 class OperationalConnection:
@@ -976,6 +1005,7 @@ class SQLiteResearchEvidenceStore(OperationalConnection):
     def upsert_many(self, items: Iterable[ResearchEvidence]) -> int:
         stamp = utc_now()
         written = 0
+        changed_symbols: List[str] = []
         with self.connect() as connection:
             for item in items or []:
                 evidence_id = str(item.evidence_id or "").strip()
@@ -989,6 +1019,47 @@ class SQLiteResearchEvidenceStore(OperationalConnection):
                 published_at = str(item.published_at or item.observed_at or "").strip()
                 dedupe_key = "|".join([symbol, kind, source, title, str(item.url or "").strip()])[:500]
                 payload = dict(item.raw_payload or {})
+                current_signature = fact_signature(research_evidence_change_payload(
+                    symbol,
+                    kind,
+                    source,
+                    title,
+                    str(item.summary or ""),
+                    str(item.url or ""),
+                    published_at,
+                    str(item.polarity or "context"),
+                    float(item.impact_score or 0),
+                    float(item.confidence or 0),
+                    payload,
+                ))
+                previous_row = connection.execute(
+                    """
+                    SELECT symbol, kind, source, title, summary, url, published_at,
+                           polarity, impact_score, confidence, payload_json
+                    FROM research_evidence
+                    WHERE evidence_id = ?
+                    """,
+                    (evidence_id,),
+                ).fetchone()
+                previous_signature = ""
+                if previous_row:
+                    try:
+                        previous_payload = json.loads(previous_row["payload_json"] or "{}")
+                    except json.JSONDecodeError:
+                        previous_payload = {}
+                    previous_signature = fact_signature(research_evidence_change_payload(
+                        str(previous_row["symbol"] or ""),
+                        str(previous_row["kind"] or ""),
+                        str(previous_row["source"] or ""),
+                        str(previous_row["title"] or ""),
+                        str(previous_row["summary"] or ""),
+                        str(previous_row["url"] or ""),
+                        str(previous_row["published_at"] or ""),
+                        str(previous_row["polarity"] or "context"),
+                        float(previous_row["impact_score"] or 0),
+                        float(previous_row["confidence"] or 0),
+                        previous_payload,
+                    ))
                 connection.execute(
                     """
                     INSERT INTO research_evidence (
@@ -1032,7 +1103,11 @@ class SQLiteResearchEvidenceStore(OperationalConnection):
                         json_dumps(payload),
                     ),
                 )
-                written += 1
+                if not previous_row or current_signature != previous_signature:
+                    written += 1
+                    if symbol and symbol not in changed_symbols:
+                        changed_symbols.append(symbol)
+        self.last_changed_symbols = changed_symbols
         return written
 
     def latest(self, symbol: str = "", kind: str = "", limit: int = 50) -> List[ResearchEvidence]:
@@ -1942,6 +2017,56 @@ class SQLiteEventLog(OperationalConnection):
         for event in self.events():
             counts[event.name] = counts.get(event.name, 0) + 1
         return counts
+
+
+class SQLiteOntologyReasoningCursorStore(OperationalConnection):
+    store_id = "ontology_reasoning_cursor"
+
+    def load(self) -> Dict[str, object]:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM app_store WHERE store_id = ?",
+                (self.store_id,),
+            ).fetchone()
+        if not row:
+            return {"processedEventIds": []}
+        try:
+            payload = json.loads(row["payload_json"] or "{}")
+        except json.JSONDecodeError:
+            return {"processedEventIds": []}
+        return payload if isinstance(payload, dict) else {"processedEventIds": []}
+
+    def processed_event_ids(self) -> List[str]:
+        return [
+            str(item or "").strip()
+            for item in (self.load().get("processedEventIds") or [])
+            if str(item or "").strip()
+        ]
+
+    def mark_processed(self, event_ids: Iterable[str]) -> None:
+        existing = self.processed_event_ids()
+        seen = set(existing)
+        merged = list(existing)
+        for event_id in event_ids or []:
+            clean = str(event_id or "").strip()
+            if clean and clean not in seen:
+                seen.add(clean)
+                merged.append(clean)
+        payload = {
+            "processedEventIds": merged[-1000:],
+            "updatedAt": utc_now(),
+        }
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO app_store (store_id, payload_json, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(store_id) DO UPDATE SET
+                    payload_json = excluded.payload_json,
+                    updated_at = excluded.updated_at
+                """,
+                (self.store_id, json_dumps(payload), payload["updatedAt"]),
+            )
 
 
 class SQLiteModelReviewJobStore(OperationalConnection):

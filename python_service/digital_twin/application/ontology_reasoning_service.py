@@ -1,5 +1,6 @@
 import signal
 import time
+import inspect
 from typing import Callable, Dict, Iterable, List
 
 from ..domain.events import ONTOLOGY_REASONING_REQUESTED, ontology_reasoning_completed_event
@@ -78,7 +79,10 @@ class OntologyReasoningRunner:
             return {"status": "idle", "processedCount": 0, "alertCount": 0}
         symbols = self.request_symbols(requests)
         runner = self.monitor_runner_factory()
-        alerts = runner.run_once(force=force)
+        if "symbol_filter" in inspect.signature(runner.run_once).parameters:
+            alerts = runner.run_once(force=force, symbol_filter=symbols)
+        else:
+            alerts = runner.run_once(force=force)
         account_ids = [getattr(account, "account_id", "") for account in getattr(runner, "accounts", [])]
         trigger_event_ids = [event.event_id for event in requests]
         completed = ontology_reasoning_completed_event(

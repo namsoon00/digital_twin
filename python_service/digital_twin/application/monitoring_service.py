@@ -29,9 +29,10 @@ class MonitorRunner:
         self.cycle_recorder = cycle_recorder
         self.ontology_projection_recorder = ontology_projection_recorder
 
-    def run_once(self, dry_run: bool = False, force: bool = False) -> List[AlertEvent]:
+    def run_once(self, dry_run: bool = False, force: bool = False, symbol_filter: Iterable[str] = None) -> List[AlertEvent]:
         all_events: List[AlertEvent] = []
         snapshots = []
+        allowed_symbols = set(str(symbol or "").upper().strip() for symbol in (symbol_filter or []) if str(symbol or "").strip())
         for account in self.accounts:
             snapshot = self.snapshot_builder(account)
             snapshots.append(snapshot)
@@ -41,6 +42,8 @@ class MonitorRunner:
             snapshot.metadata["previousMonitorState"] = self.compact_previous_state(previous)
             snapshot.metadata.setdefault("ontology", {})["previousStateAvailable"] = bool(previous)
             events = self.monitor.events_for_snapshot(snapshot, previous)
+            if allowed_symbols:
+                events = self.filter_events_by_symbol(events, allowed_symbols)
             if not dry_run:
                 self.record_ontology_projection(snapshot)
             events = self.monitor.apply_cadence(events, self.store, force=force)
@@ -75,6 +78,13 @@ class MonitorRunner:
                 self.store.save_snapshot(snapshot)
             self.store.write()
         return all_events
+
+    def filter_events_by_symbol(self, events: List[AlertEvent], allowed_symbols: set) -> List[AlertEvent]:
+        return [
+            event
+            for event in events
+            if str(event.symbol or "").upper().strip() in allowed_symbols
+        ]
 
     def use_cycle_recorder(self, dry_run: bool) -> bool:
         return self.cycle_recorder is not None and not dry_run

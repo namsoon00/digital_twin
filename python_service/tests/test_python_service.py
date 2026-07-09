@@ -4056,8 +4056,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(100, cached_aapl["currentPrice"])
         self.assertGreater(cached_aapl["ma20"], 0)
         self.assertEqual(101, cached_tsla["currentPrice"])
-        self.assertEqual([MARKET_DATA_COLLECTED, ONTOLOGY_REASONING_REQUESTED], [event.name for event in events.published])
-        self.assertEqual(["AAPL", "TSLA"], events.published[-1].payload["symbols"])
+        self.assertEqual(0, result["materialChangedCount"])
+        self.assertEqual([MARKET_DATA_COLLECTED], [event.name for event in events.published])
 
         events.published.clear()
         repeat = runner.run_once(force=True)

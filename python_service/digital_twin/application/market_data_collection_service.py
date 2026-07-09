@@ -6,6 +6,7 @@ from ..domain.accounts import AccountConfig
 from ..domain.events import market_data_collected_event, ontology_reasoning_requested_event
 from ..domain.fact_changes import market_fact_change
 from ..domain.market_data import normalize_position, number, technical_indicators_from_candles
+from ..domain.materiality import market_change_materiality
 from ..domain.portfolio import Position, utc_now_iso
 from ..domain.repositories import AccountRepository, MarketDataProvider, MarketDataProviderFactory, MarketQuoteRepository
 from ..domain.symbol_universe import SUPPORTED_MARKETS, normalize_market
@@ -192,6 +193,8 @@ class MarketDataCollectionRunner:
         changed = 0
         changed_symbols: List[str] = []
         changed_fields_by_symbol: Dict[str, List[str]] = {}
+        material_symbols: List[str] = []
+        materiality_assessments: Dict[str, Dict[str, object]] = {}
         for item in selected:
             symbol = str(item.get("symbol") or "").upper()
             if not symbol:
@@ -219,6 +222,10 @@ class MarketDataCollectionRunner:
                 changed += 1
                 changed_symbols.append(symbol)
                 changed_fields_by_symbol[symbol] = list(change.get("fields") or [])
+                assessment = market_change_materiality(symbol, cached, payload, change, self.settings)
+                materiality_assessments[symbol] = assessment.to_dict()
+                if assessment.passed:
+                    material_symbols.append(symbol)
         result = {
             "status": "ok",
             "provider": "toss",
@@ -231,6 +238,9 @@ class MarketDataCollectionRunner:
             "changedCount": changed,
             "changedSymbols": changed_symbols,
             "changedFieldsBySymbol": changed_fields_by_symbol,
+            "materialChangedCount": len(material_symbols),
+            "materialChangedSymbols": material_symbols,
+            "materialityAssessments": materiality_assessments,
             "dataQuality": "actual",
             "universeRefresh": universe_refresh,
             "cache": self.quote_cache.summary("toss", MARKET_DATA_ACCOUNT_ID),
@@ -239,27 +249,29 @@ class MarketDataCollectionRunner:
             event = market_data_collected_event(result)
             if hasattr(self.event_publisher, "publish"):
                 self.event_publisher.publish(event)
-                if changed:
+                if material_symbols:
                     self.event_publisher.publish(ontology_reasoning_requested_event(
                         event,
                         "market-data-update",
-                        changed_symbols,
-                        changed_count=changed,
+                        material_symbols,
+                        changed_count=len(material_symbols),
                         observed_count=saved,
                         fact_types=["MarketQuote", "TechnicalIndicator"],
-                        reason="시장 데이터 의미 필드가 변경되어 온톨로지 추론을 요청합니다.",
+                        reason="중요 시장 데이터 변화가 감지되어 온톨로지 추론을 요청합니다.",
+                        materiality_assessments=[materiality_assessments[symbol] for symbol in material_symbols],
                     ))
             else:
                 self.event_publisher.handle(event)
-                if changed:
+                if material_symbols:
                     self.event_publisher.handle(ontology_reasoning_requested_event(
                         event,
                         "market-data-update",
-                        changed_symbols,
-                        changed_count=changed,
+                        material_symbols,
+                        changed_count=len(material_symbols),
                         observed_count=saved,
                         fact_types=["MarketQuote", "TechnicalIndicator"],
-                        reason="시장 데이터 의미 필드가 변경되어 온톨로지 추론을 요청합니다.",
+                        reason="중요 시장 데이터 변화가 감지되어 온톨로지 추론을 요청합니다.",
+                        materiality_assessments=[materiality_assessments[symbol] for symbol in material_symbols],
                     ))
         return result
 

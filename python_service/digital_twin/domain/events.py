@@ -148,6 +148,7 @@ def market_data_collected_event(payload: Dict[str, object]) -> DomainEvent:
     provider = str(payload.get("provider") or "market-data")
     markets = ",".join(str(market) for market in payload.get("markets") or []) or "all"
     symbols = list(payload.get("changedSymbols") or payload.get("symbols") or [])
+    material_symbols = list(payload.get("materialChangedSymbols") or [])
     return DomainEvent(
         name=MARKET_DATA_COLLECTED,
         aggregate_id=provider + ":" + markets,
@@ -161,6 +162,9 @@ def market_data_collected_event(payload: Dict[str, object]) -> DomainEvent:
             "savedCount": int(payload.get("savedCount") or 0),
             "changedCount": int(payload.get("changedCount") or 0),
             "changedSymbols": symbols[:200],
+            "materialChangedCount": int(payload.get("materialChangedCount") or len(material_symbols) or 0),
+            "materialChangedSymbols": material_symbols[:200],
+            "materialityAssessments": dict(payload.get("materialityAssessments") or {}),
             "status": str(payload.get("status") or ""),
             "dataQuality": str(payload.get("dataQuality") or "actual"),
         },
@@ -169,6 +173,7 @@ def market_data_collected_event(payload: Dict[str, object]) -> DomainEvent:
 
 def research_evidence_collected_event(payload: Dict[str, object]) -> DomainEvent:
     symbols = list(payload.get("symbols") or [])
+    material_symbols = list(payload.get("materialChangedSymbols") or [])
     return DomainEvent(
         name=RESEARCH_EVIDENCE_COLLECTED,
         aggregate_id="news:" + (",".join(str(symbol) for symbol in symbols) or "all")[:180],
@@ -181,6 +186,9 @@ def research_evidence_collected_event(payload: Dict[str, object]) -> DomainEvent
             "changedCount": int(payload.get("changedCount") or payload.get("savedCount") or 0),
             "symbols": symbols[:100],
             "changedSymbols": list(payload.get("changedSymbols") or symbols)[:100],
+            "materialChangedCount": int(payload.get("materialChangedCount") or len(material_symbols) or 0),
+            "materialChangedSymbols": material_symbols[:100],
+            "materialityAssessments": list(payload.get("materialityAssessments") or [])[:100],
             "providers": list(payload.get("providers") or [])[:20],
         },
     )
@@ -194,6 +202,7 @@ def ontology_reasoning_requested_event(
     observed_count: int = 0,
     fact_types: Iterable[str] = None,
     reason: str = "",
+    materiality_assessments=None,
 ) -> DomainEvent:
     clean_symbols = sorted(set(str(symbol or "").upper().strip() for symbol in (symbols or []) if str(symbol or "").strip()))
     clean_fact_types = sorted(set(str(item or "").strip() for item in (fact_types or []) if str(item or "").strip()))
@@ -212,6 +221,8 @@ def ontology_reasoning_requested_event(
             "factTypes": clean_fact_types[:20],
             "reason": str(reason or ""),
             "dispatchMode": "data-update-driven",
+            "importanceGate": "materiality-first",
+            "materialityAssessments": materiality_assessments if materiality_assessments is not None else [],
         },
     )
 

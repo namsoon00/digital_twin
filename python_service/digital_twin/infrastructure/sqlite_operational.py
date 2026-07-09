@@ -999,6 +999,7 @@ class SQLiteResearchEvidenceStore(OperationalConnection):
         stamp = utc_now()
         written = 0
         changed_symbols: List[str] = []
+        changed_items: List[ResearchEvidence] = []
         with self.connect() as connection:
             for item in items or []:
                 evidence_id = str(item.evidence_id or "").strip()
@@ -1100,7 +1101,9 @@ class SQLiteResearchEvidenceStore(OperationalConnection):
                     written += 1
                     if symbol and symbol not in changed_symbols:
                         changed_symbols.append(symbol)
+                    changed_items.append(item)
         self.last_changed_symbols = changed_symbols
+        self.last_changed_items = changed_items
         return written
 
     def latest(self, symbol: str = "", kind: str = "", limit: int = 50) -> List[ResearchEvidence]:

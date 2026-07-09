@@ -6,6 +6,7 @@ from ..domain.accounts import AccountConfig
 from ..domain.events import ontology_reasoning_requested_event, research_evidence_collected_event
 from ..domain.investment_research import NewsCollectionTarget, ResearchEvidence
 from ..domain.market_data import number
+from ..domain.materiality import evidence_materiality
 from ..domain.repositories import AccountRepository, MonitorSnapshotReader, ResearchEvidenceGateway, ResearchEvidenceRepository, SymbolUniverseRepository
 from ..domain.symbol_universe import ListedSymbol, normalize_market
 
@@ -141,6 +142,17 @@ class NewsCollectionRunner:
         changed_symbols = list(getattr(self.evidence_store, "last_changed_symbols", []) or [])
         if saved and not changed_symbols:
             changed_symbols = sorted(set(str(item.symbol or "").upper().strip() for item in collected if str(item.symbol or "").strip()))
+        changed_items = list(getattr(self.evidence_store, "last_changed_items", []) or [])
+        if saved and not changed_items:
+            changed_symbols_set = set(changed_symbols)
+            changed_items = [item for item in collected if str(item.symbol or "").upper().strip() in changed_symbols_set]
+        materiality_assessments = [evidence_materiality(item, self.settings).to_dict() for item in changed_items]
+        material_items = [
+            item
+            for item, assessment in zip(changed_items, materiality_assessments)
+            if assessment.get("passed")
+        ]
+        material_symbols = sorted(set(str(item.symbol or "").upper().strip() for item in material_items if str(item.symbol or "").strip()))
         result = {
             "status": "ok",
             "targetCount": len(targets),
@@ -148,6 +160,9 @@ class NewsCollectionRunner:
             "savedCount": saved,
             "changedCount": saved,
             "changedSymbols": changed_symbols,
+            "materialChangedCount": len(material_items),
+            "materialChangedSymbols": material_symbols,
+            "materialityAssessments": materiality_assessments,
             "symbols": [target.symbol for target in targets],
             "providers": self.gateway.providers(),
             "statuses": statuses[-50:],
@@ -157,26 +172,30 @@ class NewsCollectionRunner:
             event = research_evidence_collected_event(result)
             if hasattr(self.event_publisher, "publish"):
                 self.event_publisher.publish(event)
-                self.event_publisher.publish(ontology_reasoning_requested_event(
-                    event,
-                    "research-evidence-update",
-                    changed_symbols,
-                    changed_count=saved,
-                    observed_count=len(collected),
-                    fact_types=["ResearchEvidence", "NewsEvent"],
-                    reason="새로운 뉴스/리서치 근거가 저장되어 온톨로지 추론을 요청합니다.",
-                ))
+                if material_symbols:
+                    self.event_publisher.publish(ontology_reasoning_requested_event(
+                        event,
+                        "research-evidence-update",
+                        material_symbols,
+                        changed_count=len(material_items),
+                        observed_count=len(collected),
+                        fact_types=["ResearchEvidence", "NewsEvent"],
+                        reason="중요 뉴스/리서치 근거가 감지되어 온톨로지 추론을 요청합니다.",
+                        materiality_assessments=[assessment for assessment in materiality_assessments if assessment.get("passed")],
+                    ))
             else:
                 self.event_publisher.handle(event)
-                self.event_publisher.handle(ontology_reasoning_requested_event(
-                    event,
-                    "research-evidence-update",
-                    changed_symbols,
-                    changed_count=saved,
-                    observed_count=len(collected),
-                    fact_types=["ResearchEvidence", "NewsEvent"],
-                    reason="새로운 뉴스/리서치 근거가 저장되어 온톨로지 추론을 요청합니다.",
-                ))
+                if material_symbols:
+                    self.event_publisher.handle(ontology_reasoning_requested_event(
+                        event,
+                        "research-evidence-update",
+                        material_symbols,
+                        changed_count=len(material_items),
+                        observed_count=len(collected),
+                        fact_types=["ResearchEvidence", "NewsEvent"],
+                        reason="중요 뉴스/리서치 근거가 감지되어 온톨로지 추론을 요청합니다.",
+                        materiality_assessments=[assessment for assessment in materiality_assessments if assessment.get("passed")],
+                    ))
         return result
 
     def status(self) -> Dict[str, object]:

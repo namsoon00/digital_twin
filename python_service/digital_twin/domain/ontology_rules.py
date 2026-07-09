@@ -161,6 +161,10 @@ DECISION_STAGE_DEFINITIONS = {
     "DATA_CONFLICT": DecisionStageDefinition("DATA_CONFLICT", "dataQuality", "review", "데이터 충돌 점검", "caution", 55.0, 70.0),
     "PROFIT_PROTECT": DecisionStageDefinition("PROFIT_PROTECT", "profitTake", "review", "수익 보호 점검", "caution", 55.0, 70.0),
     "MACRO_REGIME": DecisionStageDefinition("MACRO_REGIME", "macroRegime", "review", "거시 레짐 점검", "watch", 55.0, 70.0),
+    "RATE_REVIEW": DecisionStageDefinition("RATE_REVIEW", "rateRegime", "review", "금리 민감도 점검", "watch", 55.0, 70.0),
+    "RATE_ACTION": DecisionStageDefinition("RATE_ACTION", "rateRegime", "action", "금리 리스크 대응 점검", "caution", 70.0, 85.0),
+    "FX_REVIEW": DecisionStageDefinition("FX_REVIEW", "fxRegime", "review", "환율 민감도 점검", "watch", 55.0, 70.0),
+    "FX_ACTION": DecisionStageDefinition("FX_ACTION", "fxRegime", "action", "환율 리스크 대응 점검", "caution", 70.0, 85.0),
     "ENTRY_WATCH": DecisionStageDefinition("ENTRY_WATCH", "entry", "watch", "분할매수 관찰", "watch", 35.0, 55.0),
     "ENTRY_SPLIT_BUY": DecisionStageDefinition("ENTRY_SPLIT_BUY", "entry", "review", "분할매수 후보", "watch", 55.0, 70.0),
     "ENTRY_READY": DecisionStageDefinition("ENTRY_READY", "entry", "action", "소액 분할매수 검토", "caution", 70.0, 85.0),
@@ -372,6 +376,26 @@ DEFAULT_RELATION_RULES = [
         "금리, 스프레드, 크립토 유동성 또는 환율 변화가 성장주/반도체/디지털자산 민감 종목에 영향을 줄 때",
         "개별 가격 신호와 레짐 신호를 섞지 말고 민감도와 후속 확인 지표를 분리합니다.",
         ["macro", "btcChange24h", "btcChange7d", "currency"],
+    ),
+    RelationRuleDefinition(
+        "rates.interest_rate.sensitivity.v1",
+        "금리 레짐 + 민감 섹터 -> 할인율 점검",
+        "v1",
+        "RATE_REGIME_SENSITIVITY",
+        "macro_rate_risk",
+        "미국 10년 금리나 10Y-2Y 스프레드가 기준 구간에 있고 성장주/반도체/디지털자산 같은 민감 섹터에 노출될 때",
+        "금리는 주가 방향 예측값이 아니라 밸류에이션과 위험 선호를 흔드는 배경 변수로 설명합니다.",
+        ["macroDgs10", "macroDgs2", "macroYieldSpread10y2y", "sector", "currency"],
+    ),
+    RelationRuleDefinition(
+        "fx.usd_krw.exposure.v1",
+        "환율 레짐 + 외화 노출 -> 환율 민감도 점검",
+        "v1",
+        "FX_REGIME_EXPOSURE",
+        "fx_risk",
+        "USD/KRW가 기준 구간에 있거나 외화 보유 비중이 높아 원화 기준 평가액과 실제 종목 흐름을 분리해야 할 때",
+        "주가 변화와 환율 효과를 분리하고, 외화 노출 비중과 환율 기준값을 함께 확인하도록 안내합니다.",
+        ["fxRatePair", "fxRateToKrw", "fxExposureRatio", "currency"],
     ),
     RelationRuleDefinition(
         "external.crypto.btc_sensitivity.v1",
@@ -844,6 +868,10 @@ def decision_action_group_for_label(label: object) -> str:
         return "rebalance"
     if any(term in text for term in ["매수", "진입"]):
         return "entryRisk" if "보류" in text else "entry"
+    if "금리" in text:
+        return "rateRegime"
+    if "환율" in text:
+        return "fxRegime"
     if "공시" in text:
         return "disclosure"
     if "뉴스" in text and any(term in text for term in ["리스크", "대응", "부정"]):
@@ -899,6 +927,10 @@ def resolve_decision_stage(rule_id: str, score: float, facts: Dict[str, object])
         return decision_stage_by_key("DATA_CONFLICT")
     if rule_id == "macro.regime.shift.v1":
         return decision_stage_by_key("MACRO_REGIME")
+    if rule_id == "rates.interest_rate.sensitivity.v1":
+        return _stage_for_score("RATE_REVIEW", "RATE_ACTION", value)
+    if rule_id == "fx.usd_krw.exposure.v1":
+        return _stage_for_score("FX_REVIEW", "FX_ACTION", value)
     if rule_id == "external.crypto.btc_sensitivity.v1":
         return _stage_for_score("BTC_REVIEW", "BTC_REDUCE", value)
     if rule_id == "disclosure.material_event.v1":
@@ -1220,6 +1252,88 @@ def _fx_regime_facts(position: Position, portfolio: PortfolioSummary, external_s
         "fxRegime": regime,
         "hasFxRateSignal": bool(rate_value),
     }
+
+
+def _has_numeric_fact(value: object) -> bool:
+    if value in (None, ""):
+        return False
+    try:
+        float(str(value).replace(",", "").strip())
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
+def _number_text(value: object, decimals: int = 2, signed: bool = False) -> str:
+    amount = number(value)
+    text = (("%." + str(decimals) + "f") % amount).rstrip("0").rstrip(".")
+    if "." not in text and abs(amount) >= 1000:
+        text = format(int(round(amount)), ",")
+    if signed and amount > 0:
+        return "+" + text
+    return text
+
+
+def _rate_context_line_from_facts(facts: Dict[str, object]) -> str:
+    parts: List[str] = []
+    if _has_numeric_fact(facts.get("macroDgs10")) and number(facts.get("macroDgs10")) > 0:
+        parts.append("미국10년 " + _number_text(facts.get("macroDgs10"), 2) + "%")
+    if _has_numeric_fact(facts.get("macroDgs2")) and number(facts.get("macroDgs2")) > 0:
+        parts.append("미국2년 " + _number_text(facts.get("macroDgs2"), 2) + "%")
+    if _has_numeric_fact(facts.get("macroDff")) and number(facts.get("macroDff")) > 0:
+        parts.append("연방기금 " + _number_text(facts.get("macroDff"), 2) + "%")
+    if _has_numeric_fact(facts.get("macroYieldSpread10y2y")):
+        parts.append("10Y-2Y " + _number_text(facts.get("macroYieldSpread10y2y"), 2, signed=True) + "%p")
+    if not parts:
+        return ""
+    regime = str(facts.get("rateRegime") or "")
+    curve = str(facts.get("yieldCurveRegime") or "")
+    regime_labels = {
+        "high_rate": "고금리",
+        "low_rate": "저금리",
+        "neutral_rate": "중립 금리",
+    }
+    curve_labels = {
+        "inverted_curve": "수익률곡선 역전",
+        "positive_curve": "수익률곡선 정상",
+        "flat_or_unknown_curve": "수익률곡선 평탄/미확인",
+    }
+    labels = [label for label in [regime_labels.get(regime, ""), curve_labels.get(curve, "")] if label]
+    if labels:
+        parts.append("레짐 " + " / ".join(labels))
+    return "금리: " + " · ".join(parts)
+
+
+def _fx_context_line_from_facts(facts: Dict[str, object]) -> str:
+    pair = str(facts.get("fxRatePair") or "").upper().replace("/", "").strip()
+    rate_value = facts.get("fxRateToKrw")
+    if not _has_numeric_fact(rate_value):
+        rate_value = facts.get("usdKrwRate")
+    rate_amount = number(rate_value)
+    if not pair and _has_numeric_fact(facts.get("usdKrwRate")) and number(facts.get("usdKrwRate")) > 0:
+        pair = "USDKRW"
+        rate_value = facts.get("usdKrwRate")
+        rate_amount = number(rate_value)
+    if not pair or len(pair) < 6 or rate_amount <= 0:
+        return ""
+    base = pair[:3]
+    quote = pair[3:6]
+    if base == quote:
+        return ""
+    parts = [base + "/" + quote, "1 " + base + " = " + _number_text(rate_value, 2) + " " + quote]
+    exposure = facts.get("fxExposureRatio")
+    if _has_numeric_fact(exposure) and number(exposure) > 0:
+        parts.append("노출 " + _number_text(exposure, 1) + "%")
+    regime_labels = {
+        "krw_weakening": "원화 약세",
+        "krw_strengthening": "원화 강세",
+        "fx_observed": "환율 관찰",
+        "base_currency_or_unknown": "기준통화/미확인",
+    }
+    regime = regime_labels.get(str(facts.get("fxRegime") or ""), "")
+    if regime:
+        parts.append(regime)
+    return "환율: " + " · ".join(parts)
 
 
 def _btc_market(external_signals: Dict[str, object]) -> Dict[str, object]:
@@ -1757,8 +1871,10 @@ def decision_from_matches(facts: Dict[str, object], matches: List[OntologyRuleMa
         "news.direct_risk.price_confirmed.v1": 32,
         "disclosure.material_event.v1": 30,
         "news.direct_support.price_confirmed.v1": 28,
+        "rates.interest_rate.sensitivity.v1": 27,
         "factor.crowding.v1": 19,
         "macro.regime.shift.v1": 27,
+        "fx.usd_krw.exposure.v1": 26,
         "external.crypto.btc_sensitivity.v1": 25,
         "news.sector_peer_context.v1": 24,
         "data.conflict.v1": 23,
@@ -1953,6 +2069,20 @@ def execution_plan_from_relation_context(
         _append_unique(blocked_actions, "레짐 악화 중 민감 팩터 비중 확대")
         _append_unique(risk_signals, "금리·크립토·통화 레짐이 민감 종목에 전파")
         _append_unique(next_checks, "금리, 환율, BTC, 지수 반응을 다음 데이터에서 함께 확인")
+    elif action_group == "rateRegime":
+        primary_action = "RATE_EXPOSURE_REVIEW"
+        primary_label = "금리 변화가 밸류에이션에 주는 영향 점검"
+        _append_unique(blocked_actions, "금리 부담 확인 없이 성장/테마 비중 확대")
+        _append_unique(risk_signals, "금리 상승 또는 수익률곡선 변화가 밸류에이션과 위험 선호에 전파")
+        _append_unique(next_checks, "미국 10년 금리, 2년 금리, 10Y-2Y 스프레드와 보유 종목 반응을 함께 확인")
+        _append_unique(weaken_conditions, "금리가 기준 아래로 내려가거나 종목 가격·수급이 금리 부담을 이겨내면 신호 약화")
+    elif action_group == "fxRegime":
+        primary_action = "FX_EXPOSURE_REVIEW"
+        primary_label = "환율 효과와 실제 주가 흐름 분리"
+        _append_unique(blocked_actions, "환율로 오른 평가액을 종목 자체 상승으로 단정")
+        _append_unique(risk_signals, "원화 기준 평가액이 환율 변화에 흔들릴 수 있음")
+        _append_unique(next_checks, "USD/KRW, 외화 노출 비중, 현지 통화 기준 주가 변화를 나눠 확인")
+        _append_unique(weaken_conditions, "환율이 기준 구간으로 돌아오거나 외화 노출이 줄면 신호 약화")
 
     for item in _active_rule_labels(matches):
         if any(token in item for token in ["손실", "리스크", "하락", "공시", "집중", "부정"]):
@@ -2154,6 +2284,20 @@ def evaluate_position_relation_rules(
     external_errors = float(facts.get("externalSignalErrorCount") or 0)
     macro_spread = float(facts.get("macroYieldSpread10y2y") or 0)
     macro_dgs10 = float(facts.get("macroDgs10") or 0)
+    macro_dgs2 = float(facts.get("macroDgs2") or 0)
+    currency = str(facts.get("currency") or "").upper().strip()
+    usd_krw_rate = float(facts.get("usdKrwRate") or 0)
+    fx_rate_to_krw = float(facts.get("fxRateToKrw") or 0)
+    fx_exposure_ratio = float(facts.get("fxExposureRatio") or 0)
+    has_rate_signals = bool(facts.get("hasInterestRateSignals"))
+    has_fx_rate_signal = bool(facts.get("hasFxRateSignal"))
+    rate_high_threshold = float(thresholds.get("macroRateHighPct", 4.5) or 4.5)
+    rate_low_threshold = float(thresholds.get("macroRateLowPct", 3.0) or 3.0)
+    curve_inversion_threshold = float(thresholds.get("macroCurveInversionPct", 0.0) or 0.0)
+    usd_krw_high = float(thresholds.get("usdKrwHigh", 1450.0) or 1450.0)
+    usd_krw_low = float(thresholds.get("usdKrwLow", 1300.0) or 1300.0)
+    fx_exposure_review = float(thresholds.get("fxExposureReview", 5.0) or 5.0)
+    fx_exposure_high = float(thresholds.get("fxExposureHigh", 10.0) or 10.0)
 
     if pnl >= 10 and (ma20_distance <= -2 or ma60_distance <= -5 or trend_score < -3):
         score = 55 + min(25, max(0, pnl - 10) * 1.2) + min(20, abs(min(ma20_distance, ma60_distance, trend_score)))
@@ -2704,14 +2848,68 @@ def evaluate_position_relation_rules(
             missing_labels,
             definitions=relation_definitions,
         ))
-    macro_sensitive = any(token in str(facts.get("sector") or "") for token in ["반도체", "AI", "플랫폼", "디지털자산"]) or str(facts.get("currency") or "").upper() == "USD" or facts.get("isBtcSensitive")
+    macro_sensitive = any(token in str(facts.get("sector") or "") for token in ["반도체", "AI", "플랫폼", "디지털자산"]) or currency == "USD" or facts.get("isBtcSensitive")
+    rate_sensitive = macro_sensitive or any(token in str(facts.get("sector") or "") for token in ["성장", "소프트웨어", "테크", "바이오"])
+    high_rate_active = bool(has_rate_signals and macro_dgs10 and macro_dgs10 >= rate_high_threshold)
+    low_rate_active = bool(has_rate_signals and macro_dgs10 and macro_dgs10 <= rate_low_threshold)
+    inverted_curve_active = bool(has_rate_signals and macro_spread < curve_inversion_threshold)
+    if rate_sensitive and (high_rate_active or low_rate_active or inverted_curve_active):
+        score = (
+            49
+            + (10 if high_rate_active else 0)
+            + (6 if low_rate_active else 0)
+            + (9 if inverted_curve_active else 0)
+            + min(10, max(0.0, macro_dgs10 - rate_high_threshold) * 5.0 if high_rate_active else 0.0)
+            + min(8, max(0.0, fx_exposure_ratio - fx_exposure_review) * 0.4)
+        )
+        matches.append(_match(
+            "rates.interest_rate.sensitivity.v1",
+            score,
+            data_quality,
+            [
+                "10년 금리 " + ("%.2f" % macro_dgs10) + "%" if macro_dgs10 else "",
+                "2년 금리 " + ("%.2f" % macro_dgs2) + "%" if macro_dgs2 else "",
+                "10Y-2Y 스프레드 " + ("%.2f" % macro_spread) + "%p" if _has_numeric_fact(facts.get("macroYieldSpread10y2y")) else "",
+                "금리 레짐 " + str(facts.get("rateRegime") or "-"),
+                "민감 섹터/통화 " + str(facts.get("sector") or "-") + "/" + (currency or "-"),
+            ],
+            missing_labels,
+            definitions=relation_definitions,
+        ))
+    fx_extreme_active = bool(
+        currency == "USD"
+        and usd_krw_rate
+        and (usd_krw_rate >= usd_krw_high or usd_krw_rate <= usd_krw_low)
+    )
+    fx_exposure_active = bool(has_fx_rate_signal and currency != "KRW" and fx_exposure_ratio >= fx_exposure_high)
+    if fx_extreme_active or fx_exposure_active:
+        score = (
+            48
+            + (12 if fx_extreme_active else 0)
+            + min(16, abs(usd_krw_rate - (usd_krw_high if usd_krw_rate >= usd_krw_high else usd_krw_low)) / 10.0 if fx_extreme_active else 0.0)
+            + min(18, max(0.0, fx_exposure_ratio - fx_exposure_review) * 1.1)
+        )
+        matches.append(_match(
+            "fx.usd_krw.exposure.v1",
+            score,
+            data_quality,
+            [
+                "환율 " + str(facts.get("fxRatePair") or "USDKRW") + " " + ("%.2f" % (usd_krw_rate or fx_rate_to_krw)),
+                "환율 레짐 " + str(facts.get("fxRegime") or "-"),
+                "외화 노출 " + ("%.1f" % fx_exposure_ratio) + "%",
+                "보유 통화 " + (currency or "-"),
+            ],
+            missing_labels,
+            definitions=relation_definitions,
+        ))
     macro_risk_active = macro_sensitive and (
-        (macro_dgs10 and macro_dgs10 >= 4.5)
+        high_rate_active
         or macro_spread < 0
         or abs(btc_change24h) >= float(thresholds.get("externalBitcoinChange24hPct", 3.0) or 3.0)
+        or fx_extreme_active
     )
     if macro_risk_active:
-        score = 50 + (8 if macro_dgs10 >= 4.5 else 0) + (8 if macro_spread < 0 else 0) + min(18, abs(btc_change24h) * 2.0)
+        score = 50 + (8 if high_rate_active else 0) + (8 if macro_spread < 0 else 0) + min(18, abs(btc_change24h) * 2.0) + (6 if fx_extreme_active else 0)
         matches.append(_match(
             "macro.regime.shift.v1",
             score,
@@ -2720,7 +2918,8 @@ def evaluate_position_relation_rules(
                 "10년 금리 " + ("%.2f" % macro_dgs10) if macro_dgs10 else "",
                 "10Y-2Y 스프레드 " + ("%.2f" % macro_spread) if macro_spread else "",
                 "BTC 24h " + ("%.1f" % btc_change24h) + "%" if btc_change24h else "",
-                "민감 섹터/통화 " + str(facts.get("sector") or "-") + "/" + str(facts.get("currency") or "-"),
+                "환율 " + ("%.2f" % usd_krw_rate) if fx_extreme_active else "",
+                "민감 섹터/통화 " + str(facts.get("sector") or "-") + "/" + (currency or "-"),
             ],
             missing_labels,
             definitions=relation_definitions,
@@ -2802,6 +3001,18 @@ def relation_rule_context_summary_lines(context: Dict[str, object]) -> List[str]
     strength_label_value = str(context.get("signalStrengthLabel") or "").strip()
     if strength not in (None, ""):
         lines.append("관계 신호 " + strength_label_value + " (" + ("%.1f" % float(strength)) + "점)")
+    fact_rows: List[Dict[str, object]] = []
+    for candidate in [
+        context.get("facts"),
+        (context.get("executionPlan") or {}).get("sourceFacts") if isinstance(context.get("executionPlan"), dict) else {},
+        (context.get("promptContext") or {}).get("facts") if isinstance(context.get("promptContext"), dict) else {},
+    ]:
+        if isinstance(candidate, dict) and candidate:
+            fact_rows.append(candidate)
+    for facts in fact_rows:
+        for fact_line in [_rate_context_line_from_facts(facts), _fx_context_line_from_facts(facts)]:
+            if fact_line and fact_line not in lines:
+                lines.append(fact_line)
     active_rules = context.get("activeRules") or context.get("matchedRules") or []
     names = []
     for item in active_rules:

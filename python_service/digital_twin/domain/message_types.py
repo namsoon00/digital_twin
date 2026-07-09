@@ -124,6 +124,13 @@ DEFAULT_RELATION_RULE_THRESHOLDS = {
     "entryOrderbookImbalanceMin": 5,
     "entryMaxPositionWeight": 20,
     "entryMaxSectorWeight": 45,
+    "macroRateHighPct": 4.5,
+    "macroRateLowPct": 3.0,
+    "macroCurveInversionPct": 0,
+    "usdKrwHigh": 1450,
+    "usdKrwLow": 1300,
+    "fxExposureReview": 5,
+    "fxExposureHigh": 10,
 }
 
 DEFAULT_CADENCE = {

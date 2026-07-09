@@ -70,6 +70,13 @@
     ontologyReasoningEnabled: "1",
     ontologyReasoningIntervalSeconds: "10",
     ontologyReasoningBatchSize: "20",
+    materialityGateEnabled: "1",
+    materialityMinimumScore: "65",
+    marketMaterialityMinimumScore: "65",
+    marketMaterialityPriceChangePct: "0.6",
+    marketMaterialityTrendDistancePct: "2",
+    marketMaterialityVolumeRatio: "1.5",
+    newsMaterialityMinimumScore: "65",
     externalDartCorpCodes: [
       "005930=00126380",
       "000660=00164779",
@@ -3724,6 +3731,13 @@
       ontologyReasoningEnabled: settingValue("ontologyReasoningEnabled"),
       ontologyReasoningIntervalSeconds: settingValue("ontologyReasoningIntervalSeconds"),
       ontologyReasoningBatchSize: settingValue("ontologyReasoningBatchSize"),
+      materialityGateEnabled: settingValue("materialityGateEnabled"),
+      materialityMinimumScore: settingValue("materialityMinimumScore"),
+      marketMaterialityMinimumScore: settingValue("marketMaterialityMinimumScore"),
+      marketMaterialityPriceChangePct: settingValue("marketMaterialityPriceChangePct"),
+      marketMaterialityTrendDistancePct: settingValue("marketMaterialityTrendDistancePct"),
+      marketMaterialityVolumeRatio: settingValue("marketMaterialityVolumeRatio"),
+      newsMaterialityMinimumScore: settingValue("newsMaterialityMinimumScore"),
       externalDartCorpCodes: settingValue("externalDartCorpCodes"),
       dartDisclosureAiAnalysisEnabled: settingValue("dartDisclosureAiAnalysisEnabled"),
       dartDisclosureAiUseCodex: settingValue("dartDisclosureAiUseCodex"),
@@ -13501,6 +13515,16 @@
       ]),
       renderSettingField("ontologyReasoningIntervalSeconds", "추론 요청 확인 주기(초)", "number", "10"),
       renderSettingField("ontologyReasoningBatchSize", "추론 요청 배치", "number", "20"),
+      renderSettingSelect("materialityGateEnabled", "중요 변경 게이트", [
+        { value: "1", label: "사용" },
+        { value: "0", label: "사용 안 함" }
+      ]),
+      renderSettingField("materialityMinimumScore", "중요 변경 기본 기준", "number", "65"),
+      renderSettingField("marketMaterialityMinimumScore", "시장 데이터 중요 기준", "number", "65"),
+      renderSettingField("marketMaterialityPriceChangePct", "가격 중요 변화율(%)", "number", "0.6"),
+      renderSettingField("marketMaterialityTrendDistancePct", "추세 중요 이격(%)", "number", "2"),
+      renderSettingField("marketMaterialityVolumeRatio", "거래량 중요 배율", "number", "1.5"),
+      renderSettingField("newsMaterialityMinimumScore", "뉴스 중요 기준", "number", "65"),
       renderSettingSelect("externalDartEnabled", "OpenDART 공시 수집", [
         { value: "1", label: "사용" },
         { value: "0", label: "사용 안 함" }
@@ -14137,6 +14161,9 @@
       renderSettingField("newsCollectionMinRelevanceScore", "뉴스 관련성 최소 점수", "number", "35"),
       renderSettingField("ontologyReasoningIntervalSeconds", "추론 요청 확인 주기(초)", "number", "10"),
       renderSettingField("ontologyReasoningBatchSize", "추론 요청 배치", "number", "20"),
+      renderSettingField("materialityMinimumScore", "중요 변경 기본 기준", "number", "65"),
+      renderSettingField("marketMaterialityPriceChangePct", "가격 중요 변화율(%)", "number", "0.6"),
+      renderSettingField("newsMaterialityMinimumScore", "뉴스 중요 기준", "number", "65"),
       renderSettingSelect("dartDisclosureAiAnalysisEnabled", "공시 AI 해석", [
         { value: "1", label: "사용" },
         { value: "0", label: "사용 안 함" }

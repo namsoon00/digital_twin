@@ -6394,9 +6394,27 @@ class PythonServiceTests(unittest.TestCase):
             ],
             "newsHeadlines": {
                 "items": [
-                    {"title": "NVIDIA news 1", "url": urls[0], "domain": "news.google.com"},
-                    {"title": "NVIDIA news 2", "url": urls[1], "domain": "news.google.com"},
-                    {"title": "NVIDIA news 3", "url": urls[2], "domain": "news.google.com"},
+                    {
+                        "title": "NVIDIA news 1",
+                        "summary": "Data center demand remains strong.",
+                        "url": urls[0],
+                        "domain": "news.google.com",
+                        "payload": {"sourceReliability": 0.82, "relevanceScore": 91, "materialityScore": 74},
+                    },
+                    {
+                        "title": "NVIDIA news 2",
+                        "summary": "Analysts watch chip supply updates.",
+                        "url": urls[1],
+                        "domain": "news.google.com",
+                        "payload": {"sourceReliability": 0.61, "relevanceScore": 84, "materialityScore": 52},
+                    },
+                    {
+                        "title": "NVIDIA news 3",
+                        "summary": "AI server orders are in focus.",
+                        "url": urls[2],
+                        "domain": "news.google.com",
+                        "payload": {"sourceReliability": 0.48, "relevanceScore": 77, "materialityScore": 36},
+                    },
                 ]
             },
         }
@@ -6421,6 +6439,11 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn(">뉴스 원문 1</a>", enriched["telegramMessage"])
         self.assertIn(">뉴스 원문 2</a>", enriched["telegramMessage"])
         self.assertIn(">뉴스 원문 3</a>", enriched["telegramMessage"])
+        self.assertIn("NVIDIA news 1", enriched["telegramMessage"])
+        self.assertIn("신뢰도 높음(82%)", enriched["telegramMessage"])
+        self.assertIn("관련성 91점", enriched["telegramMessage"])
+        self.assertIn("중요도 74점", enriched["telegramMessage"])
+        self.assertIn("요약: Data center demand remains strong.", enriched["telegramMessage"])
         self.assertNotIn(truncated_payload_url, enriched["telegramMessage"])
         self.assertEqual(3, enriched["telegramMessage"].count("https://news.google.com/rss/articles/"))
 

@@ -26,7 +26,9 @@ from .notification_ai import (
     criterion_lines,
     line_value,
     missing_data_labels,
+    news_headline_items,
     notification_ai_prompt_context,
+    research_evidence_items,
     relation_context_value,
 )
 
@@ -414,6 +416,26 @@ def collect_source_urls(value: object, limit: int = 16) -> List[str]:
                 if normalized in SOURCE_URL_KEYS:
                     append_unique_source_url(rows, raw)
                 elif isinstance(raw, (dict, list)):
+                    visit(raw)
+        elif isinstance(item, list):
+            for part in item:
+                visit(part)
+
+    visit(value)
+    return rows[:limit]
+
+
+def collect_source_detail_items(value: object, limit: int = 32) -> List[Dict[str, object]]:
+    rows: List[Dict[str, object]] = []
+
+    def visit(item: object) -> None:
+        if len(rows) >= limit:
+            return
+        if isinstance(item, dict):
+            if any(str(item.get(key) or "").strip().startswith(("http://", "https://")) for key in SOURCE_URL_KEYS):
+                rows.append(item)
+            for raw in item.values():
+                if isinstance(raw, (dict, list)):
                     visit(raw)
         elif isinstance(item, list):
             for part in item:
@@ -890,14 +912,121 @@ def source_url_label(url: str, index: int) -> str:
     return prefix + " " + str(index)
 
 
-def source_url_rows(urls: List[str]) -> List[str]:
+def first_source_url(item: Dict[str, object]) -> str:
+    if not isinstance(item, dict):
+        return ""
+    for key in ["url", "sourceUrl", "sourceURL", "source_url", "link"]:
+        value = str(item.get(key) or "").strip()
+        if value.startswith(("http://", "https://")):
+            return html.unescape(value)
+    return ""
+
+
+def source_detail_number(item: Dict[str, object], *keys: str) -> float:
+    if not isinstance(item, dict):
+        return 0.0
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    raw_payload = item.get("rawPayload") if isinstance(item.get("rawPayload"), dict) else {}
+    for key in keys:
+        for source in [item, payload, raw_payload]:
+            value = source.get(key) if isinstance(source, dict) else None
+            if value not in (None, ""):
+                return _number(value)
+    return 0.0
+
+
+def source_reliability_text(item: Dict[str, object]) -> str:
+    value = source_detail_number(item, "sourceReliability", "confidence")
+    if not value:
+        return ""
+    pct = value * 100 if value <= 1 else value
+    if pct >= 75:
+        label = "높음"
+    elif pct >= 55:
+        label = "보통"
+    else:
+        label = "낮음"
+    return label + "(" + str(round(pct, 1)).rstrip("0").rstrip(".") + "%)"
+
+
+def source_score_piece(label: str, value: float) -> str:
+    if not value:
+        return ""
+    return label + " " + str(round(value, 1)).rstrip("0").rstrip(".") + "점"
+
+
+def source_detail_map(context: Dict[str, object]) -> Dict[str, Dict[str, object]]:
+    message_type = str((context or {}).get("messageType") or (context or {}).get("rule") or "notification")
+    prompt_context = notification_ai_prompt_context(message_type, context or {})
+    rows: List[Dict[str, object]] = []
+    rows.extend(research_evidence_items(context or {}))
+    rows.extend(news_headline_items(context or {}))
+    rows.extend(collect_source_detail_items([context or {}, prompt_context or {}], 48))
+    details: Dict[str, Dict[str, object]] = {}
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        url = first_source_url(item)
+        if url and url not in details:
+            details[url] = item
+    return details
+
+
+def source_detail_for_url(url: str, details: Dict[str, Dict[str, object]]) -> Dict[str, object]:
+    if url in details:
+        return details[url]
+    url_prefix = str(url or "").rstrip(".…")
+    for key, item in details.items():
+        key_prefix = str(key or "").rstrip(".…")
+        if url_prefix and key.startswith(url_prefix):
+            return item
+        if key_prefix and url.startswith(key_prefix):
+            return item
+    return {}
+
+
+def source_detail_summary(item: Dict[str, object]) -> str:
+    if not isinstance(item, dict):
+        return ""
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    raw_payload = item.get("rawPayload") if isinstance(item.get("rawPayload"), dict) else {}
+    return _text(
+        item.get("summary")
+        or item.get("analysisSummary")
+        or payload.get("analysisSummary")
+        or raw_payload.get("analysisSummary")
+        or item.get("title"),
+        140,
+    )
+
+
+def source_url_rows(urls: List[str], context: Dict[str, object]) -> List[str]:
+    details = source_detail_map(context)
     rows: List[str] = []
     for index, url in enumerate(urls, start=1):
         text = str(url or "").strip()
         if not text:
             continue
         label = source_url_label(text, index)
-        rows.append("• <a href=\"" + html.escape(text, quote=True) + "\">" + html.escape(label, quote=False) + "</a>")
+        detail = source_detail_for_url(text, details)
+        title = _text((detail or {}).get("title") or (detail or {}).get("summary"), 92)
+        source = _text((detail or {}).get("source") or (detail or {}).get("domain") or (detail or {}).get("provider"), 40)
+        reliability = source_reliability_text(detail)
+        relevance = source_score_piece("관련성", source_detail_number(detail, "relevanceScore"))
+        materiality = source_score_piece("중요도", source_detail_number(detail, "materialityScore"))
+        summary = source_detail_summary(detail)
+        link_text = "• <a href=\"" + html.escape(text, quote=True) + "\">" + html.escape(label, quote=False) + "</a>"
+        rows.append(link_text + (": " + html.escape(title, quote=False) if title else ""))
+        meta = ", ".join(item for item in [
+            ("신뢰도 " + reliability) if reliability else "",
+            relevance,
+            materiality,
+            ("출처 " + source) if source else "",
+        ] if item)
+        if meta:
+            rows.append("  " + html.escape(meta, quote=False))
+        if summary and summary != title:
+            rows.append("  " + html.escape("요약: " + summary, quote=False))
     return rows
 
 
@@ -1122,7 +1251,7 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
     parts.extend("• " + html.escape(item, quote=False) for item in response.evidence[:evidence_limit])
     if response.source_urls:
         parts.extend(["", "<b>출처</b>"])
-        parts.extend(source_url_rows(response.source_urls))
+        parts.extend(source_url_rows(response.source_urls, context))
     if response.counter_evidence:
         parts.extend(["", "<b>" + ("다르게 볼 점" if level == "beginner" else "확인할 반대 신호") + "</b>"])
         parts.extend("• " + html.escape(item, quote=False) for item in response.counter_evidence[:3 if level == "beginner" else 4])
@@ -1175,7 +1304,7 @@ def execution_telegram_message_absolute_beginner(context: Dict[str, object], res
         parts.extend("• " + html.escape(item, quote=False) for item in response.evidence[:3])
     if response.source_urls:
         parts.extend(["", "<b>원문/출처</b>"])
-        parts.extend(source_url_rows(response.source_urls))
+        parts.extend(source_url_rows(response.source_urls, context))
     if response.counter_evidence:
         parts.extend(["", "<b>다르게 볼 점</b>"])
         parts.extend("• " + html.escape(item, quote=False) for item in response.counter_evidence[:2])

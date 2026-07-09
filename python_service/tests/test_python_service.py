@@ -152,6 +152,27 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("22:00", accounts[0].quiet_hours_start)
         self.assertEqual("05:00", accounts[0].quiet_hours_end)
 
+    def test_account_registry_skips_schema_ddl_when_existing_schema_is_ready(self):
+        registry = AccountRegistry()
+        registry.upsert(AccountConfig("main", "메인", "toss", "https://example.test", "id1", "secret1", "1", ["AAPL"]))
+
+        db_path = Path(self.temp.name) / "service.db"
+        AccountRegistry._schema_ready_paths.discard(str(db_path.resolve()))
+        original_ensure_schema = AccountRegistry.ensure_schema
+        ensure_calls = []
+
+        def fail_if_called(self):
+            ensure_calls.append(self.path)
+            raise AssertionError("ready account schema should not run DDL")
+
+        try:
+            AccountRegistry.ensure_schema = fail_if_called
+            reopened = AccountRegistry()
+            self.assertEqual(["main"], [item.account_id for item in reopened.load_saved()])
+            self.assertEqual([], ensure_calls)
+        finally:
+            AccountRegistry.ensure_schema = original_ensure_schema
+
     def test_account_registry_persists_quiet_hours_for_many_accounts(self):
         registry = AccountRegistry()
         for index in range(60):

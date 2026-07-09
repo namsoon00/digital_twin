@@ -1,5 +1,4 @@
 import json
-import os
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -24,6 +23,7 @@ from ..domain.repositories import MonitoringCycleRecordResult
 from ..domain.symbol_universe import ListedSymbol, normalize_market, normalize_symbol, utc_now_iso as symbol_utc_now_iso
 from .model_review_queue import model_review_payloads_from_event
 from .settings import data_dir, read_json, runtime_settings, service_db_path, settings_path, utc_now
+from .sqlite_support import connect_sqlite
 
 
 def json_dumps(payload) -> str:
@@ -178,15 +178,7 @@ class OperationalConnection:
         self.ensure_schema()
 
     def connect(self):
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        connection = sqlite3.connect(str(self.path), timeout=30)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA busy_timeout = 30000")
-        try:
-            os.chmod(self.path, 0o600)
-        except OSError:
-            pass
-        return connection
+        return connect_sqlite(self.path)
 
     def ensure_schema(self) -> None:
         with self.connect() as connection:

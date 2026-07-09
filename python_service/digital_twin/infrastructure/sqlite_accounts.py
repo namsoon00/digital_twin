@@ -1,12 +1,13 @@
 import json
-import os
 import sqlite3
+import threading
 from pathlib import Path
 from typing import List, Optional
 
 from ..domain.accounts import AccountConfig, split_symbols
 from ..domain.events import DomainEvent
 from .settings import data_dir, read_json, runtime_settings, service_db_path, utc_now
+from .sqlite_support import connect_sqlite
 
 
 def json_dumps(payload) -> str:
@@ -14,22 +15,70 @@ def json_dumps(payload) -> str:
 
 
 class AccountRegistry:
+    REQUIRED_TABLES = {"service_accounts", "toss_credentials", "telegram_configs", "domain_events"}
+    REQUIRED_SERVICE_ACCOUNT_COLUMNS = {
+        "id",
+        "label",
+        "provider",
+        "enabled",
+        "watchlist_symbols",
+        "quiet_hours_enabled",
+        "quiet_hours_start",
+        "quiet_hours_end",
+        "quiet_hours_timezone",
+        "message_delivery_level",
+        "created_at",
+        "updated_at",
+    }
+    _schema_ready_paths = set()
+    _schema_lock = threading.Lock()
+
     def __init__(self, path: Optional[Path] = None, legacy_path: Optional[Path] = None):
         self.path = path or service_db_path()
         self.legacy_path = legacy_path or data_dir() / "accounts.json"
         self.settings = runtime_settings()
-        self.ensure_schema()
-        self.import_legacy_accounts_if_needed()
+        self.ensure_ready()
 
     def connect(self):
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        connection = sqlite3.connect(str(self.path))
-        connection.row_factory = sqlite3.Row
-        try:
-            os.chmod(self.path, 0o600)
-        except OSError:
-            pass
-        return connection
+        return connect_sqlite(self.path)
+
+    def schema_key(self) -> str:
+        return str(Path(self.path).resolve())
+
+    def ensure_ready(self) -> None:
+        key = self.schema_key()
+        with self._schema_lock:
+            if key in self._schema_ready_paths:
+                return
+            if not self.schema_is_ready():
+                self.ensure_schema()
+            self.import_legacy_accounts_if_needed()
+            self._schema_ready_paths.add(key)
+
+    def schema_is_ready(self) -> bool:
+        if not Path(self.path).exists():
+            return False
+        with self.connect() as connection:
+            tables = {
+                row["name"]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (?, ?, ?, ?)",
+                    tuple(sorted(self.REQUIRED_TABLES)),
+                ).fetchall()
+            }
+            if not self.REQUIRED_TABLES.issubset(tables):
+                return False
+            columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(service_accounts)").fetchall()
+            }
+            if not self.REQUIRED_SERVICE_ACCOUNT_COLUMNS.issubset(columns):
+                return False
+            index = connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?",
+                ("idx_domain_events_name_time",),
+            ).fetchone()
+            return bool(index)
 
     def ensure_schema(self) -> None:
         with self.connect() as connection:

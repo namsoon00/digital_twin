@@ -5583,6 +5583,45 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("미국2년 4.1%", message)
         self.assertIn("10Y-2Y +0.25%p", message)
 
+    def test_notification_render_skips_zero_or_base_currency_fx_context(self):
+        event = AlertEvent(
+            "main",
+            "메인",
+            "WATCH",
+            "investmentInsight",
+            "main:insight:005930",
+            "삼성전자",
+            ["상태 조건부 보유 (62점)"],
+            "005930",
+            metadata={
+                "ontologyRelationContext": {
+                    "executionPlan": {
+                        "sourceFacts": {
+                            "fxRatePair": "",
+                            "fxBaseCurrency": "KRW",
+                            "fxQuoteCurrency": "KRW",
+                            "fxRateToKrw": 0,
+                            "usdKrwRate": 0,
+                            "fxRegime": "base_currency_or_unknown",
+                            "macroDgs10": 4.55,
+                            "macroDgs2": 4.19,
+                            "macroYieldSpread10y2y": 0.36,
+                            "rateRegime": "high_rate",
+                            "yieldCurveRegime": "positive_curve",
+                        }
+                    }
+                }
+            },
+        )
+
+        context = alert_context(event)
+        message = render_notification(NotificationTemplate("investmentInsight", "{telegramMessage}"), context)
+
+        self.assertNotIn("1 USD = 0 KRW", message)
+        self.assertNotIn("KRW/KRW", message)
+        self.assertNotIn("<b>환율</b>", message)
+        self.assertIn("<b>금리</b>", message)
+
     def test_investment_insight_telegram_message_does_not_duplicate_ontology_sections(self):
         position = Position(
             symbol="035420",

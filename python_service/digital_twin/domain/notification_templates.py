@@ -1045,15 +1045,21 @@ def fx_fact_line(facts: Dict[str, object]) -> str:
     rate_value = facts.get("fxRateToKrw")
     if not has_fact_value(rate_value):
         rate_value = facts.get("usdKrwRate")
-    if not pair and not has_fact_value(rate_value):
+    rate_amount = fact_number(rate_value)
+    if not pair and has_fact_value(facts.get("usdKrwRate")) and fact_number(facts.get("usdKrwRate")) > 0:
+        pair = "USDKRW"
+        rate_value = facts.get("usdKrwRate")
+        rate_amount = fact_number(rate_value)
+    if not pair or len(pair) < 6 or rate_amount <= 0:
         return ""
     base = pair[:3] if len(pair) >= 6 else str(facts.get("fxBaseCurrency") or "USD").upper()
     quote = pair[3:6] if len(pair) >= 6 else str(facts.get("fxQuoteCurrency") or "KRW").upper()
+    if base == quote:
+        return ""
     parts = []
     if base and quote:
         parts.append(base + "/" + quote)
-    if has_fact_value(rate_value):
-        parts.append("1 " + base + " = " + fact_number_text(rate_value, 2) + " " + quote)
+    parts.append("1 " + base + " = " + fact_number_text(rate_value, 2) + " " + quote)
     exposure = facts.get("fxExposureRatio")
     if has_fact_value(exposure) and fact_number(exposure):
         parts.append("노출 " + fact_number_text(exposure, 1) + "%")

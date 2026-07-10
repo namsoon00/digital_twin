@@ -32,6 +32,7 @@ FORMULA_VARIABLE_BY_CONDITION_ID = {
     "body_present": "bodyScore",
     "status_noise": "noisePenalty",
 }
+DATA_QUALITY_REPEAT_BYPASS_IDS = {"novelty_score_delta", "new_source_signal", "new_relation_event"}
 
 CONDITION_TYPE_LABELS = [
     {"type": "text_contains_any", "label": "메시지에 단어 포함", "description": "본문이나 알림 정보에 지정 단어 중 하나가 있으면 점수를 더합니다."},
@@ -691,6 +692,14 @@ def field_value(context: Dict[str, object], field: str):
     return current
 
 
+def is_data_quality_insight_context(context: Dict[str, object]) -> bool:
+    insight = context.get("ontologyInsight") if isinstance(context, dict) else {}
+    if not isinstance(insight, dict):
+        return False
+    insight_type = str(insight.get("dispatchInsightType") or insight.get("insightType") or "").strip()
+    return insight_type == "dataQualityWarning"
+
+
 def is_present(value) -> bool:
     if value is None:
         return False
@@ -821,6 +830,8 @@ def similarity_bypass_match(
     condition_type = condition.condition_type
     label = condition.label or condition.condition_id or "반복 예외"
     field = condition.field or ""
+    if condition.condition_id in DATA_QUALITY_REPEAT_BYPASS_IDS and is_data_quality_insight_context(context):
+        return False, ""
     if condition_type == "score_delta_gte":
         current = int(decision.score or 0)
         previous = int(previous_score or 0)

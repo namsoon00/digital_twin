@@ -30,7 +30,7 @@ class StrategyAlertMixin:
             "holding.trend_flow.confirmation.v1",
         ]) or action_group in {"trendReview", "recovery", "flowTrend"}:
             return "trendReview"
-        if relation_context.get("missingData"):
+        if "data.conflict.v1" in rule_ids or relation_context.get("missingData"):
             return "dataQuality"
         return "relationshipChange"
 

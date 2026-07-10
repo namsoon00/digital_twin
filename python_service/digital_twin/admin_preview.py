@@ -59,7 +59,6 @@ PUBLIC_SETTING_KEYS = [
     "tossApiBaseUrl",
     "notifyProvider",
     "notifyLinkUrl",
-    "notifyIntervalMinutes",
     "fxRates",
     "valuationAssumptions",
     "marketSignalInputs",

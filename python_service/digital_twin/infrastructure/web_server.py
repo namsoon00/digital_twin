@@ -362,7 +362,6 @@ def settings_status_payload() -> Dict[str, object]:
         "appTheme",
         "watchlistSymbols",
         "tossApiBaseUrl",
-        "kisEnv",
         "kisBaseUrl",
         "kisMarketSignalsEnabled",
         "kisMarketSignalMaxSymbols",
@@ -372,7 +371,6 @@ def settings_status_payload() -> Dict[str, object]:
         "kisMarketSignalLiveRefreshSeconds",
         "notifyProvider",
         "notifyLinkUrl",
-        "notifyIntervalMinutes",
         "fxRates",
         "fairValueFormula",
         "buyScoreFormula",
@@ -473,8 +471,6 @@ def settings_status_payload() -> Dict[str, object]:
         "tossAccountSeq": "",
         "kisAppKey": "",
         "kisAppSecret": "",
-        "kisAccountNo": "",
-        "kisAccountProductCode": "",
         "telegramBotToken": "",
         "telegramChatId": "",
         "alphaVantageApiKey": "",
@@ -494,8 +490,6 @@ def settings_status_payload() -> Dict[str, object]:
             "tossAccountSeq": bool(settings.get("tossAccountSeq")),
             "kisAppKey": bool(settings.get("kisAppKey")),
             "kisAppSecret": bool(settings.get("kisAppSecret")),
-            "kisAccountNo": bool(settings.get("kisAccountNo")),
-            "kisAccountProductCode": bool(settings.get("kisAccountProductCode")),
             "telegramBotToken": bool(settings.get("telegramBotToken")),
             "telegramChatId": bool(settings.get("telegramChatId")),
             "alphaVantageApiKey": bool(settings.get("alphaVantageApiKey")),
@@ -1141,39 +1135,6 @@ def fetch_json_url(target_url: str, timeout: int = 8, headers: Dict[str, str] = 
     return json.loads(fetch_text(target_url, timeout=timeout, headers={"Accept": "application/json", **(headers or {})}))
 
 
-def normalize_economic_feed_rss_url(raw_url: str) -> str:
-    parsed = urllib.parse.urlparse(str(raw_url or ""))
-    query = urllib.parse.parse_qs(parsed.query)
-    allowed = (
-        parsed.scheme == "https"
-        and (
-            (parsed.hostname == "news.google.com" and parsed.path == "/rss/search" and query.get("q"))
-            or (parsed.hostname == "www.cnbc.com" and re.match(r"^/id/\d+/device/rss/rss\.html$", parsed.path))
-            or (parsed.hostname == "feeds.finance.yahoo.com" and parsed.path == "/rss/2.0/headline" and query.get("s"))
-            or (parsed.hostname == "www.coindesk.com" and parsed.path == "/arc/outboundfeeds/rss/")
-            or (parsed.hostname == "www.federalreserve.gov" and re.match(r"^/feeds/[a-z0-9_-]+\.xml$", parsed.path, re.I))
-            or (parsed.hostname == "www.yna.co.kr" and re.match(r"^/rss/[a-z0-9_-]+\.xml$", parsed.path, re.I))
-        )
-    )
-    if not allowed:
-        raise ValueError("허용된 RSS URL은 등록된 경제 뉴스 공급자만 가능합니다.")
-    return urllib.parse.urlunparse(parsed)
-
-
-def normalize_economic_feed_gdelt_url(raw_url: str) -> str:
-    parsed = urllib.parse.urlparse(str(raw_url or ""))
-    query = urllib.parse.parse_qs(parsed.query)
-    if parsed.scheme != "https" or parsed.hostname != "api.gdeltproject.org" or parsed.path != "/api/v2/doc/doc":
-        raise ValueError("허용된 GDELT URL은 api.gdeltproject.org/api/v2/doc/doc 뿐입니다.")
-    if not query.get("query"):
-        raise ValueError("GDELT 검색어가 필요합니다.")
-    if (query.get("mode", [""])[0]).lower() != "artlist":
-        raise ValueError("GDELT mode=ArtList 요청만 허용됩니다.")
-    if (query.get("format", [""])[0]).lower() != "json":
-        raise ValueError("GDELT format=JSON 요청만 허용됩니다.")
-    return urllib.parse.urlunparse(parsed)
-
-
 def normalize_fred_observations_url(query: Dict[str, List[str]]) -> str:
     series_id = configured(first_query(query, "series_id")).upper()
     api_key = configured(first_query(query, "api_key"))
@@ -1802,18 +1763,6 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
             if not self.ensure_writable("공유 모드에서는 알림 룰을 변경할 수 없습니다."):
                 return
             return self.send_payload(200, reset_notification_rule_payload(urllib.parse.unquote(rule_match.group(1))))
-
-        if path == "/api/economic-feed/rss":
-            if self.command == "OPTIONS":
-                return self.send_payload(204, "", "text/plain; charset=utf-8", cors=True)
-            target = normalize_economic_feed_rss_url(first_query(query, "url"))
-            return self.send_payload(200, fetch_text(target), "application/rss+xml; charset=utf-8", cors=True)
-
-        if path == "/api/economic-feed/gdelt":
-            if self.command == "OPTIONS":
-                return self.send_payload(204, "", "text/plain; charset=utf-8", cors=True)
-            target = normalize_economic_feed_gdelt_url(first_query(query, "url"))
-            return self.send_payload(200, fetch_text(target), "application/json; charset=utf-8", cors=True)
 
         if path == "/api/data-api/fred/observations":
             if self.command == "OPTIONS":

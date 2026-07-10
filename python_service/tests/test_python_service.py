@@ -1031,18 +1031,14 @@ class PythonServiceTests(unittest.TestCase):
 
     def test_runtime_settings_store_masks_kis_credentials(self):
         save_runtime_settings({
-            "kisEnv": "prod",
             "kisBaseUrl": "https://openapi.koreainvestment.com:9443",
             "kisAppKey": "app-key",
             "kisAppSecret": "app-secret",
-            "kisAccountNo": "12345678",
-            "kisAccountProductCode": "01",
         })
 
         settings = runtime_settings()
         status = settings_status_payload()
 
-        self.assertEqual("prod", settings["kisEnv"])
         self.assertEqual("https://openapi.koreainvestment.com:9443", settings["kisBaseUrl"])
         self.assertEqual("app-key", settings["kisAppKey"])
         self.assertEqual("app-secret", settings["kisAppSecret"])
@@ -1053,8 +1049,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("aiPromptPolicy", status["settings"])
         self.assertTrue(status["configured"]["kisAppKey"])
         self.assertTrue(status["configured"]["kisAppSecret"])
-        self.assertTrue(status["configured"]["kisAccountNo"])
-        self.assertTrue(status["configured"]["kisAccountProductCode"])
+        self.assertNotIn("kisAccountNo", status["configured"])
+        self.assertNotIn("kisAccountProductCode", status["configured"])
 
     def test_save_json_preserves_existing_secrets_when_omitted(self):
         registry = AccountRegistry()

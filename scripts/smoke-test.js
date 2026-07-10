@@ -1015,28 +1015,6 @@ function checkFrontendAdminRender() {
       },
       fetch: function (requestedPath) {
         const key = String(requestedPath).split("?")[0];
-        if (key === "/api/economic-feed/rss") {
-          return Promise.resolve({
-            ok: true,
-            json: function () {
-              return Promise.resolve({});
-            },
-            text: function () {
-              return Promise.resolve("<rss><channel><item><title>시장 피드 테스트</title><link>https://example.test/feed</link><pubDate>Wed, 08 Jul 2026 00:00:00 GMT</pubDate><description>테스트용 RSS 피드</description></item></channel></rss>");
-            }
-          });
-        }
-        if (key === "/api/economic-feed/gdelt") {
-          return Promise.resolve({
-            ok: true,
-            json: function () {
-              return Promise.resolve({ articles: [{ title: "글로벌 시장 테스트", url: "https://example.test/gdelt", seendate: "20260708T000000Z", domain: "example.test" }] });
-            },
-            text: function () {
-              return Promise.resolve(JSON.stringify({ articles: [] }));
-            }
-          });
-        }
         if (!payloads[key]) throw new Error("unexpected frontend fetch: " + requestedPath);
         return Promise.resolve({
           ok: true,
@@ -1350,7 +1328,7 @@ function checkFrontendAdminRender() {
     assertOk(modelingRegistryHtml.indexOf("prompt-registry-list") >= 0 && modelingRegistryHtml.indexOf("prompt-registry-row") >= 0, "프롬프트 레지스트리 목록에 모바일 전용 행 구조가 없습니다.");
     assertOk(/@media \(max-width: 860px\)[\s\S]*\.prompt-registry-row\s*\{[\s\S]*grid-template-columns: 1fr;/.test(styles), "프롬프트 레지스트리 행이 모바일에서 1열 카드로 전환되지 않습니다.");
     assertOk(/@media \(max-width: 860px\)[\s\S]*\.prompt-registry-panel \.prompt-registry-row\s*\{[\s\S]*grid-template-columns: 1fr;/.test(styles), "프롬프트 레지스트리 모바일 1열 전환 규칙의 우선순위가 충분하지 않습니다.");
-    assertOk(modelingRegistryHtml.indexOf("admin-modeling-panel") >= 0 && modelingRegistryHtml.indexOf("model-version-panel") >= 0, "규칙·프롬프트 섹션에 보조 모델 정책과 버전 관리가 유지되지 않았습니다.");
+    assertOk(modelingRegistryHtml.indexOf("admin-modeling-panel") >= 0 && modelingRegistryHtml.indexOf("model-version-panel") < 0, "규칙·프롬프트 섹션은 보조 모델 정책만 유지하고 로컬 모델 버전 패널은 제거해야 합니다.");
     assertOk(modelingRegistryHtml.indexOf('data-model-setting="notificationScoreFormula"') >= 0, "규칙·프롬프트 섹션에 알림 발송 공식 편집기가 없습니다.");
     assertOk(modelingTraceHtml.indexOf("테이블 저장 구조") >= 0 && modelingTraceHtml.indexOf("규칙 추적") >= 0, "검증 추적 섹션에 관계형 규칙 추적이 없습니다.");
     assertOk(modelingTraceHtml.indexOf("ontology-relation-table") >= 0 && modelingTraceHtml.indexOf("ontology-rule-list") >= 0, "검증 추적 섹션에 관계/규칙 보조 표가 렌더링되지 않았습니다.");

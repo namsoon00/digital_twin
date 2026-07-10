@@ -5215,9 +5215,9 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("HOLD", active.get("action"))
         self.assertIn("보유 영향만 점검", active.get("executionPlan", {}).get("primaryActionLabel"))
         self.assertIn("외부 신호: 보유 영향 점검", message)
-        self.assertIn("쉽게 말하면", message)
+        self.assertIn("이유", message)
         self.assertIn("보유 영향만 점검", message)
-        self.assertIn("지금 피할 일", message)
+        self.assertIn("피할 일", message)
         self.assertIn("직접 민감 보유 종목이 없어 단독 매매 근거는 약함", message)
         self.assertNotIn("실행보다 관찰 우선", message)
         self.assertNotIn("크립토 변동가", message)
@@ -6706,17 +6706,90 @@ class PythonServiceTests(unittest.TestCase):
         opinion = build_notification_ai_opinion(context)
         text = "\n".join(opinion["lines"])
 
-        self.assertIn("판단: 추가매수 보류", text)
-        self.assertIn("가격 위치", text)
-        self.assertIn("뉴스·공시", text)
-        self.assertIn("NAVER governance update", text)
-        self.assertIn("회사 재무 요약", text)
+        self.assertIn("판단: 추가매수는 보류", text)
+        self.assertIn("이유:", text)
+        self.assertIn("공시:", text)
+        self.assertIn("주식교환ㆍ이전결정", text)
         self.assertIn("공시 의미", text)
-        self.assertIn("추세 동역학", text)
+        self.assertIn("60일선", text)
+        self.assertNotIn("추세 동역학", text)
+        self.assertNotIn("분석출처", text)
         self.assertEqual("회사 재무 요약", opinion["promptContext"]["facts"]["researchEvidence"][0]["title"])
         self.assertTrue(opinion["promptContext"]["facts"]["trendDynamics"]["supportRetest"])
         self.assertEqual("[redacted]", opinion["promptContext"]["facts"]["allAvailableData"]["metadata"]["telegramBotToken"])
         self.assertIn("allAvailableData", opinion["promptContext"]["facts"])
+
+    def test_investment_insight_ai_opinion_compacts_watchlist_relation_signal(self):
+        context = {
+            "messageType": "investmentInsight",
+            "target": "PLTR",
+            "rawLines": [
+                "상태: 신규 진입 관찰 (72.0점)",
+                "현재가: $126.47",
+                "수급: 거래량 15,815,798(0.4x), 거래액 $4,108,779,042",
+                "추세: 20일선 $124.9보다 1.3% 높음, 60일선 $135.12보다 6.4% 낮음",
+                "권장 액션: 새 관계가 다음 데이터 업데이트에서도 유지되는지 확인",
+                "인사이트 유형: 관계 변화",
+                "핵심 결론: PLTR에서 관심종목 관계 신호 관계가 새로 감지되었습니다.",
+                "근거 신호: 관심종목 관계 신호",
+                "다음 확인: 새 관계가 다음 데이터 업데이트에서도 유지되는지 확인하세요.",
+            ],
+            "ontologyInsight": {
+                "insightLabel": "관계 변화",
+                "thesis": "PLTR에서 관심종목 관계 신호 관계가 새로 감지되었습니다.",
+                "sourceSignalTypes": ["watchlistOntologySignal"],
+                "nextCheck": "20일선 위 유지와 거래량 회복을 다음 조회에서 확인하세요.",
+            },
+            "metadata": {
+                "ontologyRelationContext": {
+                    "executionPlan": {
+                        "blockedActions": ["5일선·60일선·거래량·금리·환율 확인 전 신규 매수"],
+                        "nextChecks": ["20일선 위 유지", "거래량 회복"],
+                    },
+                    "facts": {
+                        "trendDynamics": {
+                            "state": "추세 혼조",
+                            "priceMomentum": "보합",
+                            "priceChangeRate": 0,
+                            "dynamicRiskScore": 20.6,
+                        },
+                        "newsHeadlines": {
+                            "items": [
+                                {
+                                    "provider": "Zacks Investment Research",
+                                    "title": "PLTR earnings outlook improves",
+                                    "summary": "PLTR 관련 실적 전망 뉴스입니다.",
+                                    "stockImpactLabel": "호재",
+                                    "relevanceScore": 97,
+                                },
+                                {
+                                    "provider": "Yahoo! Finance Canada",
+                                    "title": "PLTR stock commentary",
+                                    "summary": "PLTR 주가 해설입니다.",
+                                    "stockImpactLabel": "중립",
+                                    "relevanceScore": 91,
+                                },
+                            ],
+                        },
+                    },
+                }
+            },
+        }
+
+        opinion = build_notification_ai_opinion(context)
+        text = "\n".join(opinion["lines"])
+
+        self.assertLessEqual(len(opinion["lines"]), 5)
+        self.assertIn("판단: 실행보다 관찰 우선", text)
+        self.assertIn("이유:", text)
+        self.assertIn("거래량 낮음(0.4x)", text)
+        self.assertIn("20일선 위, 60일선 아래", text)
+        self.assertIn("뉴스: Zacks Investment Research 호재", text)
+        self.assertIn("피할 일: 5일선·60일선·거래량·금리·환율 확인 전 신규 매수", text)
+        self.assertIn("다음 확인: 20일선 위 유지 / 거래량 회복", text)
+        self.assertNotIn("관계 신호 관계", text)
+        self.assertNotIn("추세 동역학", text)
+        self.assertNotIn("분석출처", text)
 
     def test_investment_insight_ai_opinion_interprets_self_stock_disposal_disclosure(self):
         context = {
@@ -6797,7 +6870,7 @@ class PythonServiceTests(unittest.TestCase):
         text = "\n".join(opinion["lines"])
 
         self.assertIn("판단: 매도", text)
-        self.assertIn("투자 의견 근거", text)
+        self.assertIn("이유", text)
         self.assertIn("주요사항보고서(유상증자결정)", text)
         self.assertIn("반대 근거", text)
         self.assertIn("무효화 조건", text)

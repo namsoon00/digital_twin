@@ -102,6 +102,32 @@ class OntologyInferenceContextTests(unittest.TestCase):
         self.assertEqual("neo4jInferenceBox", decisions[0].relation_rule_context["decision"]["basis"])
         self.assertTrue(decisions[0].relation_rule_context["graphStoreUsed"])
 
+    def test_strict_decision_path_blocks_python_relation_rule_fallback(self):
+        position = Position(
+            symbol="005930",
+            name="삼성전자",
+            market="KR",
+            currency="KRW",
+            quantity=10,
+            current_price=70000,
+            market_value=700000,
+            profit_loss_rate=-12.5,
+            sector="반도체",
+        )
+        portfolio = portfolio_summary([position], fx_rates={"KRW": 1})
+
+        decisions = decisions_for_positions(
+            [position],
+            portfolio,
+            require_inference_context=True,
+        )
+
+        self.assertEqual(1, len(decisions))
+        self.assertEqual("ontologyInferenceRequired", decisions[0].decision_basis)
+        self.assertEqual(0, decisions[0].exit_pressure)
+        self.assertTrue(decisions[0].relation_rule_context["blocked"])
+        self.assertFalse(decisions[0].relation_rule_context["fallbackUsed"])
+
     def test_neo4j_entry_wait_inference_maps_to_entry_wait_stage(self):
         watch = Position(
             symbol="NVDA",
@@ -141,6 +167,10 @@ class OntologyInferenceContextTests(unittest.TestCase):
                                     "polarity": "risk",
                                     "riskImpact": 8,
                                     "weight": 0.72,
+                                    "decisionStage": "ENTRY_WAIT",
+                                    "stagePriority": 31,
+                                    "actionGroup": "entryWait",
+                                    "actionLevel": "review",
                                     "nativeNeo4jReasoned": True,
                                 }
                             ],
@@ -204,6 +234,10 @@ class OntologyInferenceContextTests(unittest.TestCase):
                                     "polarity": "support",
                                     "supportImpact": 12,
                                     "weight": 0.82,
+                                    "decisionStage": "ENTRY_READY",
+                                    "stagePriority": 37,
+                                    "actionGroup": "entry",
+                                    "actionLevel": "action",
                                     "nativeNeo4jReasoned": True,
                                 }
                             ],
@@ -227,6 +261,7 @@ class OntologyInferenceContextTests(unittest.TestCase):
         self.assertEqual("소액 분할매수 검토", contexts["AAPL"]["decision"]["label"])
         self.assertEqual("ENTRY_READY", contexts["AAPL"]["decision"]["decisionStage"])
         self.assertEqual("entry", contexts["AAPL"]["decision"]["actionGroup"])
+        self.assertEqual("neo4jInferenceRelation", contexts["AAPL"]["decision"]["stagePolicySource"])
 
 
 if __name__ == "__main__":

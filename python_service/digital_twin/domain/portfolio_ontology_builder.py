@@ -1884,6 +1884,7 @@ def build_portfolio_ontology(
         if previous is None or (is_watchlist_position(previous) and is_holding_position(item)):
             observed_by_symbol[key] = item
     observed_positions = list(observed_by_symbol.values())
+    include_legacy_score_model = bool(legacy_by_symbol) and include_reasoning_outputs
     graph = PortfolioOntology(portfolio_id=portfolio_id)
     graph.entities.extend(tbox_entities())
     graph.relations.extend(tbox_relations())
@@ -1907,10 +1908,11 @@ def build_portfolio_ontology(
     })))
     add_relation(graph, account_id_value, portfolio_node_id, "MANAGES_PORTFOLIO", weight=1.0, properties={"source": "account-context"})
     add_account_delivery_profile_concepts(graph, account_id_value, portfolio_node_id, account_context)
-    graph.entities.append(OntologyEntity(entity_id("concept", "legacy-score-model"), "관계 규칙 점수 모델", "model", abox_properties({
-        "role": "final-scoring",
-        "tboxClass": "LegacyScoreModel",
-    })))
+    if include_legacy_score_model:
+        graph.entities.append(OntologyEntity(entity_id("concept", "legacy-score-model"), "관계 규칙 점수 모델", "model", abox_properties({
+            "role": "research-only",
+            "tboxClass": "LegacyScoreModel",
+        })))
     graph.entities.append(OntologyEntity(entity_id("concept", "ai-investment-review"), "AI 투자 의견", "ai-review", abox_properties({
         "promptVersion": ONTOLOGY_PROMPT_VERSION,
         "tboxClass": "AIReview",
@@ -1959,6 +1961,7 @@ def build_portfolio_ontology(
         stock_id = entity_id("stock", symbol)
         source = "watchlist" if is_watchlist_position(position) else "holding"
         holding = is_holding_position(position)
+        legacy = legacy_by_symbol.get(symbol) or legacy_by_symbol.get(position.symbol) or {}
         stock_tbox_classes = instrument_tbox_classes(position) + (["WatchlistCandidate"] if source == "watchlist" else [])
         graph.entities.append(OntologyEntity(stock_id, position.name or symbol, "stock", abox_properties({
             "symbol": symbol,
@@ -2002,7 +2005,7 @@ def build_portfolio_ontology(
             OntologyRelation(stock_id, entity_id("currency", position.currency or "unknown"), "DENOMINATED_IN", weight=1.0, properties=abox_properties({"source": source})),
             OntologyRelation(stock_id, entity_id("concept", "ai-investment-review"), "REQUESTS_OPINION_FROM", weight=1.0, properties=abox_properties({"source": source})),
         ])
-        if holding:
+        if holding and include_legacy_score_model:
             graph.relations.append(OntologyRelation(
                 stock_id,
                 entity_id("concept", "legacy-score-model"),
@@ -2010,12 +2013,12 @@ def build_portfolio_ontology(
                 weight=0.55,
                 properties=abox_properties({"source": source}),
             ))
-        legacy = legacy_by_symbol.get(symbol) or legacy_by_symbol.get(position.symbol) or {}
         add_instrument_identity_concepts(graph, stock_id, position, source)
         add_data_source_concept(graph, stock_id, position, source)
         add_metric_concepts(graph, stock_id, position, source)
         add_price_level_and_liquidity_concepts(graph, stock_id, position, source)
-        add_legacy_model_score_concepts(graph, stock_id, symbol, legacy)
+        if include_legacy_score_model:
+            add_legacy_model_score_concepts(graph, stock_id, symbol, legacy)
         add_symbol_external_signal_concepts(graph, stock_id, symbol, external_signals)
         add_position_factor_concepts(graph, stock_id, portfolio_node_id, position, portfolio)
         add_position_macro_context_concepts(graph, stock_id, position, portfolio, external_signals, runtime_context)

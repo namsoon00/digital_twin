@@ -1,9 +1,7 @@
-from dataclasses import replace
 from typing import Dict, List
 
 from .message_types import WATCHLIST_ONTOLOGY_SIGNAL
 from .ontology_inference_context import relation_contexts_from_snapshot
-from .ontology_relation_rules import evaluate_position_relation_rules
 from .portfolio import AccountSnapshot, AlertEvent
 
 
@@ -166,13 +164,9 @@ class StrategyAlertMixin:
                 continue
             symbol = position.symbol.upper()
             position_context = position.to_dict()
-            relation_position = replace(position, source="watchlist" if source == "관심" else "holding")
-            relation_context = inference_contexts.get(symbol) or evaluate_position_relation_rules(
-                relation_position,
-                snapshot.portfolio,
-                external_signals=snapshot.external_signals,
-                settings=getattr(self.strategy_model, "settings", {}) if self.strategy_model else {},
-            )
+            relation_context = inference_contexts.get(symbol)
+            if not relation_context:
+                continue
             current_price = self.current_price_line(position_context)
             price_lines = self.holding_price_lines(position_context) if source == "보유" else [current_price] if current_price else []
             common_lines = [
@@ -265,17 +259,13 @@ class StrategyAlertMixin:
         position_context = position.to_dict()
         current_price = self.current_price_line(position_context)
         price_lines = self.holding_price_lines(position_context) if position.symbol.upper() in holding_symbols else [current_price] if current_price else []
-        relation_position = replace(position, source="watchlist" if position.symbol.upper() not in holding_symbols else "holding")
         inference_contexts = relation_contexts_from_snapshot(
             snapshot,
             getattr(self.strategy_model, "settings", {}) if self.strategy_model else {},
         )
-        relation_context = inference_contexts.get(position.symbol.upper()) or evaluate_position_relation_rules(
-            relation_position,
-            snapshot.portfolio,
-            external_signals=snapshot.external_signals,
-            settings=getattr(self.strategy_model, "settings", {}) if self.strategy_model else {},
-        )
+        relation_context = inference_contexts.get(position.symbol.upper())
+        if not relation_context:
+            return []
         symbol = position.symbol.upper()
         if rule == "modelSell":
             sell_phrase = self.relation_score_phrase(relation_context, "매도/축소 점검")

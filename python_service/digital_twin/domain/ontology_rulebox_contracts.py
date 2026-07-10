@@ -58,6 +58,8 @@ class GraphRuleDerivation:
     ai_influence_label: str = ""
     action_group: str = ""
     action_level: str = ""
+    decision_stage: str = ""
+    stage_priority: float = 0.0
 
     def to_dict(self) -> Dict[str, object]:
         return asdict(self)
@@ -80,6 +82,8 @@ class GraphRuleDerivation:
             ai_influence_label=str(payload.get("ai_influence_label") or payload.get("aiInfluenceLabel") or ""),
             action_group=str(payload.get("action_group") or payload.get("actionGroup") or ""),
             action_level=str(payload.get("action_level") or payload.get("actionLevel") or ""),
+            decision_stage=str(payload.get("decision_stage") or payload.get("decisionStage") or ""),
+            stage_priority=float(payload.get("stage_priority") or payload.get("stagePriority") or 0),
         )
 
 

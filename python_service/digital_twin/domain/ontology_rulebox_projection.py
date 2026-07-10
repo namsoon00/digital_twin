@@ -64,13 +64,16 @@ def add_rulebox_concepts(graph: PortfolioOntology, rules: Iterable[GraphInferenc
             ))
         for index, derivation in enumerate(rule.derivations):
             template_id = entity_id("relation-template", rule.rule_id + ":" + str(index))
+            derivation_payload = derivation.to_dict()
+            derivation_payload["action_group"] = derivation.action_group or rule.action_group
+            derivation_payload["action_level"] = derivation.action_level or rule.action_level
             graph.entities.append(OntologyEntity(template_id, derivation.target_label, "relation-template", rulebox_properties({
                 "tboxClass": "RelationTemplate",
-                "tboxClasses": ["RelationTemplate", "DerivedAssertion"],
+                "tboxClasses": ["RelationTemplate", "DerivedAssertion", "RuleDecisionPolicy", "RulePriorityPolicy"],
                 "ruleId": rule.rule_id,
                 "relationType": derivation.relation_type,
                 "derivationIndex": index,
-                "derivation": derivation.to_dict(),
+                "derivation": derivation_payload,
             })))
             graph.relations.append(OntologyRelation(
                 rule_id,

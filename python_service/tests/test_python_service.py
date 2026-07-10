@@ -140,6 +140,62 @@ class PythonServiceTests(unittest.TestCase):
                 ids.append(item.get("ruleId") or item.get("rule_id"))
         return ids
 
+    def inferencebox_metadata(
+        self,
+        symbol: str,
+        rule_id: str,
+        decision_stage: str,
+        label: str,
+        relation_type: str = "HAS_INFERRED_RISK",
+        polarity: str = "risk",
+        risk_impact: float = 16,
+        support_impact: float = 0,
+        weight: float = 0.86,
+        stage_priority: float = 40,
+    ):
+        symbol = str(symbol or "").upper()
+        trace_id = "inference-trace:" + symbol + ":" + rule_id
+        target_kind = "opportunity" if polarity == "support" else "risk"
+        return {
+            "ontology": {
+                "neo4j": {
+                    "inferenceBox": {
+                        "status": "ok",
+                        "neo4jNativeReasoningUsed": True,
+                        "relations": [
+                            {
+                                "type": relation_type,
+                                "source": "stock:" + symbol,
+                                "sourceLabel": symbol,
+                                "target": target_kind + ":" + symbol + ":" + rule_id,
+                                "targetLabel": label,
+                                "ruleId": rule_id,
+                                "polarity": polarity,
+                                "riskImpact": risk_impact,
+                                "supportImpact": support_impact,
+                                "weight": weight,
+                                "decisionStage": decision_stage,
+                                "stagePriority": stage_priority,
+                                "aiInfluenceLabel": label,
+                                "inferenceTraceId": trace_id,
+                                "nativeNeo4jReasoned": True,
+                            }
+                        ],
+                        "traces": [
+                            {
+                                "id": trace_id,
+                                "label": symbol + " · " + label,
+                                "symbol": symbol,
+                                "ruleId": rule_id,
+                                "confidence": weight,
+                                "nativeNeo4jReasoned": True,
+                            }
+                        ],
+                    }
+                }
+            }
+        }
+
     def test_account_registry_supports_multiple_accounts(self):
         registry = AccountRegistry()
         first = AccountConfig("main", "메인", "toss", "https://example.test", "id1", "secret1", "1", ["AAPL"])
@@ -2053,6 +2109,17 @@ class PythonServiceTests(unittest.TestCase):
             [],
             [],
             watchlist=[watch],
+            metadata=self.inferencebox_metadata(
+                "005380",
+                "trend.breakdown_acceleration.v1",
+                "LOSS_REDUCE",
+                "추세 이탈 가속",
+                relation_type="HAS_INFERRED_RISK",
+                polarity="risk",
+                risk_impact=18,
+                weight=0.88,
+                stage_priority=42,
+            ),
         )
 
         class FakeRepository:
@@ -3271,6 +3338,17 @@ class PythonServiceTests(unittest.TestCase):
             [position],
             decisions_for_positions([position], portfolio, external_signals=external_signals),
             external_signals=external_signals,
+            metadata=self.inferencebox_metadata(
+                "MSTR",
+                "graph.profit_protect.trend_break.v1",
+                "PROFIT_SPLIT",
+                "수익 보유 + 추세 약화 -> 익절 점검",
+                relation_type="HAS_INFERRED_RISK",
+                polarity="risk",
+                risk_impact=20,
+                weight=0.92,
+                stage_priority=43,
+            ),
         )
 
         events = RealtimeMonitor().events_for_snapshot(snapshot, {})
@@ -3534,6 +3612,18 @@ class PythonServiceTests(unittest.TestCase):
                 },
             },
             watchlist=[watch],
+            metadata=self.inferencebox_metadata(
+                "AAPL",
+                "entry.pullback.supported.v1",
+                "ENTRY_SPLIT_BUY",
+                "진입 조건 점검",
+                relation_type="HAS_INFERRED_SUPPORT",
+                polarity="support",
+                risk_impact=0,
+                support_impact=16,
+                weight=0.9,
+                stage_priority=38,
+            ),
         )
 
         events = RealtimeMonitor({
@@ -3548,7 +3638,7 @@ class PythonServiceTests(unittest.TestCase):
 
         self.assertIn("watchlistBuyCandidate", self.insight_source_rules(candidate))
         self.assertIn("watchlistOntologySignal", self.insight_source_rules(candidate))
-        self.assertIn("소액 분할매수 검토", source_message)
+        self.assertIn("소액 진입 검토", source_message)
         self.assertIn(
             "관심종목 온톨로지 관계 신호",
             self.insight_source_message(candidate, "watchlistOntologySignal"),
@@ -3641,6 +3731,17 @@ class PythonServiceTests(unittest.TestCase):
             [],
             [],
             watchlist=[watch],
+            metadata=self.inferencebox_metadata(
+                "005380",
+                "trend.breakdown_acceleration.v1",
+                "LOSS_REDUCE",
+                "추세 이탈 가속",
+                relation_type="HAS_INFERRED_RISK",
+                polarity="risk",
+                risk_impact=18,
+                weight=0.88,
+                stage_priority=42,
+            ),
         )
 
         events = RealtimeMonitor({
@@ -3728,7 +3829,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertFalse(any(event.rule == "investmentInsight" for event in events))
         self.assertFalse(any(event.rule == "watchlistBuyCandidate" for event in events))
 
-    def test_realtime_monitor_keeps_decision_scores_on_relation_rules(self):
+    def test_realtime_monitor_blocks_decision_scores_without_inferencebox(self):
         position = normalize_position({
             "symbol": "005930",
             "name": "삼성전자",
@@ -3762,10 +3863,10 @@ class PythonServiceTests(unittest.TestCase):
             AlertEvent("main", "메인", "WATCH", "holdingTiming", "main:timing:005930", "삼성전자", ["상태 손절 기준 확인 (91점)"], "005930")
         ])
 
-        self.assertNotEqual(91, rescored.decisions[0].loss_cut_pressure)
-        self.assertGreaterEqual(rescored.decisions[0].loss_cut_pressure, 70)
-        self.assertEqual("ontologyRelationRules", rescored.decisions[0].decision_basis)
-        self.assertNotEqual(91, rescored.decisions[0].exit_pressure)
+        self.assertEqual(0, rescored.decisions[0].loss_cut_pressure)
+        self.assertEqual("ontologyInferenceRequired", rescored.decisions[0].decision_basis)
+        self.assertEqual(0, rescored.decisions[0].exit_pressure)
+        self.assertTrue(rescored.decisions[0].relation_rule_context["blocked"])
         self.assertEqual("baseScore + symbolScore", stamped[0].metadata["notificationScoreFormula"])
 
     def test_stamp_events_attaches_ontology_quality_gate_metadata(self):
@@ -4119,7 +4220,7 @@ class PythonServiceTests(unittest.TestCase):
         )
         message = self.insight_source_message(event, "monitorTrendChange")
 
-        self.assertEqual("ALERT", event.severity)
+        self.assertEqual("WATCH", event.severity)
         self.assertIn("monitorTrendChange", self.insight_source_rules(event))
         self.assertFalse("monitorTrendChange" == event.rule)
         self.assertIn("20일선 상향 돌파", message)
@@ -4671,26 +4772,24 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(any(item["symbol"] == "AAPL" for item in payload["tossDecision"]["items"]))
         self.assertTrue(any(item["symbol"] == "TSLA" for item in payload["tossDecision"]["items"]))
         self.assertIn("investmentAnalysis", payload["tossDecision"])
-        self.assertTrue(payload["tossDecision"]["investmentAnalysis"]["reasoningCards"])
+        self.assertEqual([], payload["tossDecision"]["investmentAnalysis"]["reasoningCards"])
         self.assertEqual("investment-ontology-ai-inference-v1", payload["tossDecision"]["investmentAnalysis"]["aiInferencePacket"]["contract"])
-        self.assertTrue(any(item.get("reasoningCard") for item in payload["tossDecision"]["items"]))
+        self.assertTrue(any(item.get("decisionBasis") == "ontologyInferenceRequired" for item in payload["tossDecision"]["items"]))
         ontology_strategy = payload["tossDecision"]["ontologyStrategy"]
         abox_kinds = {item.get("kind") for item in ontology_strategy["aboxEntities"]}
         abox_relation_types = {item.get("type") for item in ontology_strategy["aboxRelations"]}
+        self.assertEqual("abox-facts-only-neo4j-rulebox", ontology_strategy["worldview"]["runtimeProjectionMode"])
         self.assertTrue(ontology_strategy["tboxEntities"])
         self.assertTrue(ontology_strategy["tboxRelations"])
         self.assertTrue(ontology_strategy["aboxEntities"])
         self.assertTrue(ontology_strategy["aboxRelations"])
-        self.assertTrue(ontology_strategy["activeInvestmentOpinions"])
-        self.assertTrue(ontology_strategy["executionPlans"])
-        self.assertTrue(ontology_strategy["insights"])
+        self.assertEqual([], ontology_strategy["activeInvestmentOpinions"])
+        self.assertEqual([], ontology_strategy["executionPlans"])
+        self.assertEqual([], ontology_strategy["insights"])
         self.assertTrue(ontology_strategy["dataQuality"])
-        self.assertEqual("insight-driven-only", ontology_strategy["operationalOntology"]["dispatchMode"])
+        self.assertNotIn("dispatchMode", ontology_strategy["operationalOntology"])
         self.assertIn("stock", abox_kinds)
-        self.assertIn("execution-plan", abox_kinds)
-        self.assertIn("insight", abox_kinds)
-        self.assertIn("HAS_EXECUTION_PLAN", abox_relation_types)
-        self.assertIn("PRODUCES_INSIGHT", abox_relation_types)
+        self.assertIn("HAS_POSITION", abox_relation_types)
         self.assertFalse("news" in payload)
 
     def test_mock_market_contract_is_python_native(self):
@@ -4731,10 +4830,6 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(
             {
                 "investmentInsight",
-                "modelBuy",
-                "modelSell",
-                "watchlistBuyCandidate",
-                "watchlistOntologySignal",
                 "watchlistQuote",
                 "watchlistQuotePending",
                 "holdingTiming",
@@ -8955,6 +9050,44 @@ class PythonServiceTests(unittest.TestCase):
             portfolio,
             [position],
             decisions_for_positions([position], portfolio),
+            metadata={
+                "ontology": {
+                    "neo4j": {
+                        "inferenceBox": {
+                            "status": "ok",
+                            "neo4jNativeReasoningUsed": True,
+                            "relations": [
+                                {
+                                    "type": "HAS_INFERRED_RISK",
+                                    "source": "stock:005930",
+                                    "sourceLabel": "삼성전자",
+                                    "target": "risk:005930:loss-guard-breakdown",
+                                    "targetLabel": "삼성전자 손실 방어 리스크",
+                                    "ruleId": "graph.loss_guard.breakdown.v1",
+                                    "polarity": "risk",
+                                    "riskImpact": 20,
+                                    "weight": 1,
+                                    "aiInfluenceLabel": "손실 방어 추론",
+                                    "decisionStage": "LOSS_REDUCE",
+                                    "stagePriority": 40,
+                                    "inferenceTraceId": "inference-trace:005930:graph.loss_guard.breakdown.v1",
+                                    "nativeNeo4jReasoned": True,
+                                }
+                            ],
+                            "traces": [
+                                {
+                                    "id": "inference-trace:005930:graph.loss_guard.breakdown.v1",
+                                    "label": "삼성전자 · 손실 보유 + 기준선 이탈 -> 손실 방어 추론",
+                                    "symbol": "005930",
+                                    "ruleId": "graph.loss_guard.breakdown.v1",
+                                    "confidence": 1,
+                                    "nativeNeo4jReasoned": True,
+                                }
+                            ],
+                        }
+                    }
+                }
+            },
         )
         monitor = RealtimeMonitor({"alertThresholds": "modelBuyScore=99\nmodelSellScore=1\nwatchlistBuyScore=99"})
         event = next(item for item in monitor.model_score_events(snapshot) if item.rule == "modelSell")
@@ -8962,13 +9095,13 @@ class PythonServiceTests(unittest.TestCase):
         message = templates.render(event.rule, alert_context(event))
 
         self.assertFalse(event.metadata.get("formulaAudits"))
-        self.assertEqual("ontology-relation-rules-v1", event.metadata["ontologyRelationContext"]["engineVersion"])
+        self.assertEqual("neo4j-inferencebox-relation-context-v1", event.metadata["ontologyRelationContext"]["engineVersion"])
         self.assertEqual(100.0, event.metadata["relationRuleScore"])
         self.assertIn("• <b>현재가</b>: <code>71,000원</code>", message)
         self.assertIn("• <b>평균매입가</b>: <code>74,000원</code>", message)
         self.assertIn("• <b>수익률</b>: <code>-4.1%</code>", message)
         self.assertIn("관계 규칙 모델", message)
-        self.assertIn("선택 규칙 holding.concentration.rebalance.v1", message)
+        self.assertIn("선택 규칙 graph.loss_guard.breakdown.v1", message)
         self.assertIn("성립 규칙", message)
         self.assertIn("부족 데이터", message)
         self.assertNotIn("매수 공식(buyScoreFormula)", message)

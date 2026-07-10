@@ -5,6 +5,7 @@ import urllib.request
 from typing import Dict, Iterable, List
 
 from ..domain.ontology_contracts import PortfolioOntology
+from ..domain.ontology_decision_policy import decision_stage_from_action, relation_stage_priority
 from ..domain.ontology_rulebox_catalog import default_graph_inference_rules
 from ..domain.ontology_rulebox_contracts import GRAPH_REASONER_VERSION, GraphInferenceRule
 from ..domain.ontology_rulebox_projection import add_rulebox_concepts
@@ -224,6 +225,8 @@ class Neo4jOntologyGraphRepository:
                 "derivationAiInfluenceLabel": str(derivation.get("ai_influence_label") or ""),
                 "derivationActionGroup": str(derivation.get("action_group") or ""),
                 "derivationActionLevel": str(derivation.get("action_level") or ""),
+                "derivationDecisionStage": derivation_decision_stage(derivation),
+                "derivationStagePriority": derivation_stage_priority(derivation),
                 "propertiesJson": json.dumps(properties, ensure_ascii=False, sort_keys=True),
             })
         return rows
@@ -248,6 +251,8 @@ class Neo4jOntologyGraphRepository:
                 "materialityScore": number_or_none(properties.get("materialityScore")),
                 "riskImpact": number_or_none(properties.get("riskImpact") or properties.get("opinionImpact")),
                 "supportImpact": number_or_none(properties.get("supportImpact")),
+                "decisionStage": str(properties.get("decisionStage") or ""),
+                "stagePriority": number_or_none(properties.get("stagePriority")),
                 "aiInfluenceLabel": str(properties.get("aiInfluenceLabel") or ""),
                 "evidenceIds": [str(value) for value in item.evidence_ids],
                 "propertiesJson": json.dumps(properties, ensure_ascii=False, sort_keys=True),
@@ -356,7 +361,8 @@ class Neo4jOntologyGraphRepository:
                     "n.derivationRiskImpact = row.derivationRiskImpact, n.derivationSupportImpact = row.derivationSupportImpact, "
                     "n.derivationWeight = row.derivationWeight, n.derivationBeliefLabel = row.derivationBeliefLabel, "
                     "n.derivationAiInfluenceLabel = row.derivationAiInfluenceLabel, n.derivationActionGroup = row.derivationActionGroup, "
-                    "n.derivationActionLevel = row.derivationActionLevel, "
+                    "n.derivationActionLevel = row.derivationActionLevel, n.derivationDecisionStage = row.derivationDecisionStage, "
+                    "n.derivationStagePriority = row.derivationStagePriority, "
                     "n.propertiesJson = row.propertiesJson, n.updatedAt = $updatedAt "
                     "FOREACH (_ IN CASE WHEN row.ontologyBox = 'TBox' THEN [1] ELSE [] END | SET n:TBox) "
                     "FOREACH (_ IN CASE WHEN row.ontologyBox = 'ABox' THEN [1] ELSE [] END | SET n:ABox) "
@@ -432,7 +438,8 @@ class Neo4jOntologyGraphRepository:
                     "SET r.weight = row.weight, r.evidenceIds = row.evidenceIds, "
                     "r.ontologyBox = row.ontologyBox, r.ruleId = row.ruleId, r.boundedContext = row.boundedContext, "
                     "r.polarity = row.polarity, r.transitionType = row.transitionType, r.riskImpact = row.riskImpact, "
-                    "r.supportImpact = row.supportImpact, r.aiInfluenceLabel = row.aiInfluenceLabel, "
+                    "r.supportImpact = row.supportImpact, r.decisionStage = row.decisionStage, r.stagePriority = row.stagePriority, "
+                    "r.aiInfluenceLabel = row.aiInfluenceLabel, "
                     "r.field = row.field, r.signalGroup = row.signalGroup, r.materialityPassed = row.materialityPassed, r.materialityScore = row.materialityScore, "
                     "r.propertiesJson = row.propertiesJson, r.updatedAt = $updatedAt"
                 ),
@@ -544,9 +551,11 @@ class Neo4jOntologyGraphRepository:
             "configured": True,
             "saved": False,
             "status": "unsupported-uri",
-            "source": "defaults",
+            "source": "neo4j",
             "reason": "Neo4j URI must start with http://, https://, bolt://, or neo4j://.",
-            "rules": rulebox_rules_to_payload(default_graph_inference_rules()),
+            "rules": [],
+            "ruleCount": 0,
+            "defaultsFallbackUsed": False,
         }
 
     def rulebox_snapshot_via_http(self) -> Dict[str, object]:
@@ -554,10 +563,10 @@ class Neo4jOntologyGraphRepository:
         try:
             payload = self.post_http_statements(endpoint, headers, rulebox_snapshot_statements())
         except Exception as error:  # noqa: BLE001 - admin read should degrade to defaults.
-            return rulebox_default_snapshot("error", str(error)[:180], configured=True)
+            return rulebox_store_snapshot_unavailable("error", str(error)[:180], source="neo4j-http")
         errors = payload.get("errors") or []
         if errors:
-            return rulebox_default_snapshot("neo4j-error", json.dumps(errors[:2], ensure_ascii=False)[:300], configured=True)
+            return rulebox_store_snapshot_unavailable("neo4j-error", json.dumps(errors[:2], ensure_ascii=False)[:300], source="neo4j-http")
         rowsets = http_result_rowsets(payload, ["rules", "conditions", "derivations", "relationTypes"])
         return rulebox_snapshot_from_rows(rowsets, source="neo4j-http")
 
@@ -565,7 +574,7 @@ class Neo4jOntologyGraphRepository:
         try:
             from neo4j import GraphDatabase
         except Exception as error:  # noqa: BLE001 - optional dependency.
-            return rulebox_default_snapshot("driver-missing", "neo4j Python driver is not installed: " + str(error)[:120], configured=True)
+            return rulebox_store_snapshot_unavailable("driver-missing", "neo4j Python driver is not installed: " + str(error)[:120], source="neo4j-driver")
         try:
             driver = GraphDatabase.driver(self.uri, auth=(self.user, self.password) if self.user or self.password else None)
             with driver.session(database=self.database) as session:
@@ -576,7 +585,7 @@ class Neo4jOntologyGraphRepository:
             driver.close()
             return rulebox_snapshot_from_rows(rowsets, source="neo4j-driver")
         except Exception as error:  # noqa: BLE001 - admin read should degrade to defaults.
-            return rulebox_default_snapshot("error", str(error)[:180], configured=True)
+            return rulebox_store_snapshot_unavailable("error", str(error)[:180], source="neo4j-driver")
 
     def save_rulebox(self, payload: Dict[str, object] = None) -> Dict[str, object]:
         if not self.uri:
@@ -933,7 +942,10 @@ def rulebox_rules_from_payload(payload: Dict[str, object]) -> List[GraphInferenc
     if payload.get("rulesJson"):
         raw_rules = json.loads(str(payload.get("rulesJson") or "[]"))
     if raw_rules is None:
-        raw_rules = rulebox_rules_to_payload(default_graph_inference_rules())
+        if payload.get("useBootstrapDefaults") or payload.get("resetToDefaults"):
+            raw_rules = rulebox_rules_to_payload(default_graph_inference_rules())
+        else:
+            raise ValueError("RuleBox rules are required. Use seed_ontology or useBootstrapDefaults to write bootstrap defaults.")
     if not isinstance(raw_rules, list):
         raise ValueError("RuleBox rules must be a list.")
     rules = [GraphInferenceRule.from_dict(item) for item in raw_rules if isinstance(item, dict)]
@@ -968,12 +980,34 @@ def rulebox_default_snapshot(status: str = "defaults", reason: str = "", configu
         "ruleCount": len(rules),
         "conditionCount": sum(len(item.get("conditions") or []) for item in rules),
         "derivationCount": sum(len(item.get("derivations") or []) for item in rules),
+        "defaultsFallbackUsed": True,
         "relationTypes": sorted(set(
             safe_relation_type(derivation.get("relation_type") or "")
             for rule in rules
             for derivation in (rule.get("derivations") or [])
             if derivation.get("relation_type")
         )),
+    }
+
+
+def rulebox_store_snapshot_unavailable(status: str, reason: str = "", source: str = "neo4j") -> Dict[str, object]:
+    bootstrap_rules = rulebox_rules_to_payload(default_graph_inference_rules())
+    return {
+        "configured": True,
+        "saved": False,
+        "status": status,
+        "source": source,
+        "reason": reason,
+        "engineVersion": GRAPH_REASONER_VERSION,
+        "rules": [],
+        "ruleCount": 0,
+        "conditionCount": 0,
+        "derivationCount": 0,
+        "relationTypes": [],
+        "defaultsFallbackUsed": False,
+        "bootstrapAvailable": True,
+        "bootstrapRuleCount": len(bootstrap_rules),
+        "bootstrapRules": bootstrap_rules,
     }
 
 
@@ -1026,7 +1060,8 @@ def rulebox_snapshot_statements() -> List[Dict[str, object]]:
                 "template.derivationRiskImpact AS riskImpact, template.derivationSupportImpact AS supportImpact, "
                 "template.derivationWeight AS weight, template.derivationBeliefLabel AS beliefLabel, "
                 "template.derivationAiInfluenceLabel AS aiInfluenceLabel, template.derivationActionGroup AS actionGroup, "
-                "template.derivationActionLevel AS actionLevel, template.propertiesJson AS propertiesJson "
+                "template.derivationActionLevel AS actionLevel, template.derivationDecisionStage AS decisionStage, "
+                "template.derivationStagePriority AS stagePriority, template.propertiesJson AS propertiesJson "
                 "ORDER BY rule.ruleId, template.derivationIndex"
             ),
             "parameters": {},
@@ -1082,6 +1117,7 @@ def inferencebox_snapshot_statements(symbols: List[str] = None, limit: int = 80)
                 "RETURN n.id AS id, n.label AS label, n.kind AS kind, n.symbol AS symbol, "
                 "n.ruleId AS ruleId, n.tboxClass AS tboxClass, n.polarity AS polarity, "
                 "n.actionGroup AS actionGroup, n.actionLevel AS actionLevel, n.confidence AS confidence, "
+                "n.decisionStage AS decisionStage, n.stagePriority AS stagePriority, "
                 "n.nativeNeo4jReasoned AS nativeNeo4jReasoned, n.updatedAt AS updatedAt "
                 "ORDER BY coalesce(n.updatedAt, '') DESC, n.id LIMIT $limit"
             ),
@@ -1092,7 +1128,8 @@ def inferencebox_snapshot_statements(symbols: List[str] = None, limit: int = 80)
                 "MATCH (a)-[r]->(b) WHERE " + relation_scope + " "
                 "RETURN type(r) AS type, a.id AS source, a.label AS sourceLabel, b.id AS target, b.label AS targetLabel, "
                 "r.ruleId AS ruleId, r.polarity AS polarity, r.riskImpact AS riskImpact, r.supportImpact AS supportImpact, "
-                "r.weight AS weight, r.aiInfluenceLabel AS aiInfluenceLabel, r.inferenceTraceId AS inferenceTraceId, "
+                "r.weight AS weight, r.decisionStage AS decisionStage, r.stagePriority AS stagePriority, "
+                "r.aiInfluenceLabel AS aiInfluenceLabel, r.inferenceTraceId AS inferenceTraceId, "
                 "r.nativeNeo4jReasoned AS nativeNeo4jReasoned, r.updatedAt AS updatedAt "
                 "ORDER BY coalesce(r.updatedAt, '') DESC, type(r), a.id, b.id LIMIT $limit"
             ),
@@ -1166,9 +1203,11 @@ def rulebox_snapshot_from_rows(rowsets: Dict[str, List[Dict[str, object]]], sour
         rowsets.get("derivations") or [],
     )
     if not rules:
-        fallback = rulebox_default_snapshot("empty", "Neo4j RuleBox nodes are empty. 기본 규칙을 표시합니다.", configured=True)
-        fallback["source"] = source + "+defaults"
-        return fallback
+        return rulebox_store_snapshot_unavailable(
+            "empty",
+            "Neo4j RuleBox nodes are empty. Seed or save RuleBox rules before running graph reasoning.",
+            source=source,
+        )
     relation_types = sorted(set(
         safe_relation_type(row.get("relationType") or "")
         for row in (rowsets.get("relationTypes") or [])
@@ -1186,6 +1225,7 @@ def rulebox_snapshot_from_rows(rowsets: Dict[str, List[Dict[str, object]]], sour
         "conditionCount": sum(len(item.get("conditions") or []) for item in payload),
         "derivationCount": sum(len(item.get("derivations") or []) for item in payload),
         "relationTypes": relation_types,
+        "defaultsFallbackUsed": False,
     }
 
 
@@ -1253,6 +1293,8 @@ def inferencebox_entity_payload(row: Dict[str, object]) -> Dict[str, object]:
         "polarity": str(row.get("polarity") or ""),
         "actionGroup": str(row.get("actionGroup") or ""),
         "actionLevel": str(row.get("actionLevel") or ""),
+        "decisionStage": str(row.get("decisionStage") or ""),
+        "stagePriority": number_or_none(row.get("stagePriority")),
         "confidence": number_or_none(row.get("confidence")),
         "nativeNeo4jReasoned": bool(row.get("nativeNeo4jReasoned")),
         "updatedAt": str(row.get("updatedAt") or ""),
@@ -1271,6 +1313,8 @@ def inferencebox_relation_payload(row: Dict[str, object]) -> Dict[str, object]:
         "riskImpact": number_or_none(row.get("riskImpact")),
         "supportImpact": number_or_none(row.get("supportImpact")),
         "weight": number_or_none(row.get("weight")),
+        "decisionStage": str(row.get("decisionStage") or ""),
+        "stagePriority": number_or_none(row.get("stagePriority")),
         "label": str(row.get("aiInfluenceLabel") or ""),
         "aiInfluenceLabel": str(row.get("aiInfluenceLabel") or ""),
         "inferenceTraceId": str(row.get("inferenceTraceId") or ""),
@@ -1405,7 +1449,7 @@ def condition_payload_from_row(row: Dict[str, object]) -> Dict[str, object]:
 def derivation_payload_from_row(row: Dict[str, object]) -> Dict[str, object]:
     props = json_object(row.get("propertiesJson"))
     derivation = props.get("derivation") if isinstance(props.get("derivation"), dict) else {}
-    return {
+    payload = {
         "relation_type": str(row.get("relationType") or derivation.get("relation_type") or ""),
         "target_kind": str(row.get("targetKind") or derivation.get("target_kind") or ""),
         "target_key": str(row.get("targetKey") or derivation.get("target_key") or ""),
@@ -1420,7 +1464,20 @@ def derivation_payload_from_row(row: Dict[str, object]) -> Dict[str, object]:
         "ai_influence_label": str(row.get("aiInfluenceLabel") or derivation.get("ai_influence_label") or ""),
         "action_group": str(row.get("actionGroup") or derivation.get("action_group") or ""),
         "action_level": str(row.get("actionLevel") or derivation.get("action_level") or ""),
+        "decision_stage": str(row.get("decisionStage") or row.get("derivationDecisionStage") or derivation.get("decision_stage") or derivation.get("decisionStage") or ""),
+        "stage_priority": float(row.get("stagePriority") or row.get("derivationStagePriority") or derivation.get("stage_priority") or derivation.get("stagePriority") or 0),
     }
+    if not payload["decision_stage"]:
+        payload["decision_stage"] = decision_stage_from_action(payload["action_group"], payload["action_level"])
+    if not payload["stage_priority"]:
+        payload["stage_priority"] = float(relation_stage_priority({
+            "decisionStage": payload["decision_stage"],
+            "actionGroup": payload["action_group"],
+            "actionLevel": payload["action_level"],
+            "riskImpact": payload["risk_impact"],
+            "supportImpact": payload["support_impact"],
+        }))
+    return payload
 
 
 def json_object(value: object) -> Dict[str, object]:
@@ -1521,6 +1578,8 @@ def native_reasoning_statement_for_relation_type(relation_type: str) -> Dict[str
         "MERGE (target:OntologyEntity {id: targetId}) "
         "SET target.label = targetLabel, target.kind = template.derivationTargetKind, target.ontologyBox = 'InferenceBox', "
         "target.symbol = stock.symbol, target.ruleId = rule.ruleId, target.tboxClass = template.derivationTboxClass, "
+        "target.actionGroup = template.derivationActionGroup, target.actionLevel = template.derivationActionLevel, "
+        "target.decisionStage = template.derivationDecisionStage, target.stagePriority = template.derivationStagePriority, "
         "target.boundedContext = 'reasoning-insight', target.nativeNeo4jReasoned = true, target.updatedAt = $updatedAt "
         "MERGE (trace:OntologyEntity {id: traceId}) "
         "SET trace.label = stock.label + ' · ' + rule.label, trace.kind = 'inference-trace', trace.ontologyBox = 'InferenceBox', "
@@ -1540,7 +1599,8 @@ def native_reasoning_statement_for_relation_type(relation_type: str) -> Dict[str
         "SET inferred.weight = coalesce(template.derivationWeight, 0.72), inferred.ontologyBox = 'InferenceBox', inferred.ruleId = rule.ruleId, "
         "inferred.polarity = template.derivationPolarity, inferred.riskImpact = template.derivationRiskImpact, "
         "inferred.supportImpact = template.derivationSupportImpact, inferred.actionGroup = template.derivationActionGroup, "
-        "inferred.actionLevel = template.derivationActionLevel, inferred.aiInfluenceLabel = template.derivationAiInfluenceLabel, "
+        "inferred.actionLevel = template.derivationActionLevel, inferred.decisionStage = template.derivationDecisionStage, "
+        "inferred.stagePriority = template.derivationStagePriority, inferred.aiInfluenceLabel = template.derivationAiInfluenceLabel, "
         "inferred.inferenceTraceId = traceId, inferred.evidenceIds = [evidenceId], inferred.nativeNeo4jReasoned = true, inferred.updatedAt = $updatedAt "
         "MERGE (target)-[explained:EXPLAINED_BY_TRACE]->(trace) "
         "SET explained.weight = confidence, explained.ontologyBox = 'InferenceBox', explained.ruleId = rule.ruleId, explained.nativeNeo4jReasoned = true, explained.updatedAt = $updatedAt "
@@ -1561,6 +1621,30 @@ def number_or_none(value: object):
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def derivation_decision_stage(derivation: Dict[str, object]) -> str:
+    explicit = str(derivation.get("decision_stage") or derivation.get("decisionStage") or "").strip()
+    if explicit:
+        return explicit
+    return decision_stage_from_action(
+        str(derivation.get("action_group") or derivation.get("actionGroup") or ""),
+        str(derivation.get("action_level") or derivation.get("actionLevel") or ""),
+    )
+
+
+def derivation_stage_priority(derivation: Dict[str, object]):
+    explicit = number_or_none(derivation.get("stage_priority") or derivation.get("stagePriority"))
+    if explicit:
+        return explicit
+    stage = derivation_decision_stage(derivation)
+    return float(relation_stage_priority({
+        "decisionStage": stage,
+        "actionGroup": derivation.get("action_group") or derivation.get("actionGroup"),
+        "actionLevel": derivation.get("action_level") or derivation.get("actionLevel"),
+        "riskImpact": derivation.get("risk_impact") or derivation.get("riskImpact"),
+        "supportImpact": derivation.get("support_impact") or derivation.get("supportImpact"),
+    }))
 
 
 def list_of_strings(value: object) -> List[str]:

@@ -1,6 +1,7 @@
 from typing import Dict, Iterable, List, Optional
 
 from .market_data import number
+from .ontology_decision_policy import decision_stage_from_action, relation_stage_priority
 from .ontology_relation_rules import (
     OntologyRuleMatch,
     build_ai_prompt_context,
@@ -14,24 +15,6 @@ from .portfolio import AccountSnapshot, PortfolioSummary, Position
 
 
 NEO4J_RELATION_CONTEXT_VERSION = "neo4j-inferencebox-relation-context-v1"
-
-RULE_STAGE_BY_ID = {
-    "graph.loss_guard.breakdown.v1": "LOSS_REDUCE",
-    "graph.profit_protect.trend_break.v1": "PROFIT_PARTIAL",
-    "graph.watchlist.pullback.entry.v1": "ENTRY_WATCH",
-    "graph.materiality.alert_candidate.v1": "RELATION_WATCH",
-    "graph.holding.trend_transition.risk.v1": "LOSS_REDUCE",
-    "graph.watchlist.trend_transition.support.v1": "ENTRY_SPLIT_BUY",
-    "graph.flow.sell_pressure.v1": "LIQUIDITY_REVIEW",
-    "graph.flow.accumulation.entry.v1": "ENTRY_SPLIT_BUY",
-    "graph.news.direct_material_risk.v1": "LOSS_REDUCE",
-    "graph.news.direct_material_support.v1": "ENTRY_SPLIT_BUY",
-    "graph.disclosure.event_risk.v1": "LOSS_REDUCE",
-    "entry.pullback.supported.v1": "ENTRY_SPLIT_BUY",
-    "entry.momentum.confirmed.v1": "ENTRY_READY",
-    "entry.wait_for_confirmation.v1": "ENTRY_WAIT",
-    "graph.liquidity.execution_guard.v1": "LIQUIDITY_REVIEW",
-}
 
 
 def inferencebox_from_snapshot(snapshot: AccountSnapshot) -> Dict[str, object]:
@@ -271,8 +254,8 @@ def decision_from_inference(
     relations: List[Dict[str, object]],
     traces: List[Dict[str, object]],
 ) -> Dict[str, object]:
-    selected = max(matches, key=lambda item: (stage_priority(item.rule_id), item.strength_score, item.confidence))
-    relation = next((item for item in relations if str(item.get("ruleId") or "") == selected.rule_id), {})
+    selected = max(matches, key=lambda item: (stage_priority_for_match(item, relations), item.strength_score, item.confidence))
+    relation = relation_for_match(selected, relations)
     stage_key = stage_key_for_inference(selected.rule_id, relation)
     stage = decision_stage_by_key(stage_key)
     band = score_band(selected.strength_score)
@@ -290,55 +273,41 @@ def decision_from_inference(
         "scoreBand": band.to_dict(),
         "nextStageAt": stage.next_stage_at,
         "sourceRelationType": str(relation.get("type") or ""),
+        "stagePriority": relation_stage_priority(relation),
+        "stagePolicySource": "neo4jInferenceRelation" if relation.get("decisionStage") or relation.get("stagePriority") else "actionFallback",
         "nativeNeo4jReasoned": bool(relation.get("nativeNeo4jReasoned") or trace.get("nativeNeo4jReasoned")),
     }
 
 
 def stage_key_for_inference(rule_id: str, relation: Dict[str, object]) -> str:
-    explicit = stage_key_from_action(str(relation.get("actionGroup") or ""), str(relation.get("actionLevel") or ""))
+    explicit = str((relation or {}).get("decisionStage") or "").strip()
     if explicit:
         return explicit
-    return RULE_STAGE_BY_ID.get(str(rule_id or ""), "RELATION_WATCH")
+    explicit = stage_key_from_action(str((relation or {}).get("actionGroup") or ""), str((relation or {}).get("actionLevel") or ""))
+    return explicit or "RELATION_WATCH"
 
 
 def stage_key_from_action(action_group: str, action_level: str) -> str:
-    group = str(action_group or "")
-    level = str(action_level or "")
-    if group == "lossControl":
-        return "LOSS_CUT" if level in {"action", "urgent"} else "LOSS_REDUCE"
-    if group == "profitTake":
-        return "PROFIT_SPLIT" if level in {"action", "urgent"} else "PROFIT_PARTIAL"
-    if group == "entry":
-        return "ENTRY_READY" if level in {"action", "urgent"} else "ENTRY_SPLIT_BUY" if level == "review" else "ENTRY_WATCH"
-    if group == "entryWait":
-        return "ENTRY_WAIT" if level in {"review", "action", "urgent"} else "ENTRY_WATCH"
-    if group == "entryRisk":
-        return "ADD_BUY_BLOCKED"
-    if group == "executionRisk":
-        return "LIQUIDITY_ACTION" if level in {"action", "urgent"} else "LIQUIDITY_REVIEW"
-    return ""
+    return decision_stage_from_action(action_group, action_level)
 
 
-def stage_priority(rule_id: str) -> int:
-    return {
-        "graph.loss_guard.breakdown.v1": 40,
-        "graph.holding.trend_transition.risk.v1": 39,
-        "graph.news.direct_material_risk.v1": 39,
-        "graph.materiality.alert_candidate.v1": 38,
-        "entry.wait_for_confirmation.v1": 39,
-        "entry.momentum.confirmed.v1": 38,
-        "entry.pullback.supported.v1": 38,
-        "entry.add_buy.blocked.v1": 37,
-        "averaging_down.block.v1": 37,
-        "graph.flow.sell_pressure.v1": 36,
-        "graph.disclosure.event_risk.v1": 36,
-        "graph.profit_protect.trend_break.v1": 35,
-        "graph.liquidity.execution_guard.v1": 34,
-        "graph.news.direct_material_support.v1": 33,
-        "graph.flow.accumulation.entry.v1": 32,
-        "graph.watchlist.trend_transition.support.v1": 30,
-        "graph.watchlist.pullback.entry.v1": 20,
-    }.get(str(rule_id or ""), 10)
+def stage_priority_for_match(match: OntologyRuleMatch, relations: List[Dict[str, object]]) -> int:
+    return relation_stage_priority(relation_for_match(match, relations))
+
+
+def relation_for_match(match: OntologyRuleMatch, relations: List[Dict[str, object]]) -> Dict[str, object]:
+    matched = next(
+        (
+            item
+            for item in relations or []
+            if str(item.get("ruleId") or "") == match.rule_id
+            and str(item.get("type") or "") == match.relation_type
+        ),
+        None,
+    )
+    if matched:
+        return matched
+    return next((item for item in relations or [] if str(item.get("ruleId") or "") == match.rule_id), {})
 
 
 def evidence_subgraph_packet(
@@ -386,6 +355,8 @@ def evidence_subgraph_packet(
             "polarity": str(relation.get("polarity") or ""),
             "riskImpact": number(relation.get("riskImpact")),
             "supportImpact": number(relation.get("supportImpact")),
+            "decisionStage": str(relation.get("decisionStage") or ""),
+            "stagePriority": number(relation.get("stagePriority")),
             "label": str(relation.get("aiInfluenceLabel") or relation.get("targetLabel") or ""),
         })
     return {

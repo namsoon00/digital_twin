@@ -208,25 +208,26 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
     def events_for_snapshot(self, snapshot: AccountSnapshot, previous: Dict[str, object]) -> List[AlertEvent]:
         raw_events: List[AlertEvent] = []
         snapshot = self.snapshot_with_external_signal_deltas(snapshot, previous or {})
-        snapshot = self.snapshot_with_strategy_scores(snapshot)
-        has_account_data = snapshot.has_live_account_data()
+        signal_snapshot = snapshot
+        decision_snapshot = self.snapshot_with_strategy_scores(snapshot)
+        has_account_data = decision_snapshot.has_live_account_data()
         previous_has_account_data = monitor_state_has_live_account_data(previous)
-        raw_events.extend(self.connection_events(snapshot, previous))
-        raw_events.extend(self.heartbeat_events(snapshot))
+        raw_events.extend(self.connection_events(decision_snapshot, previous))
+        raw_events.extend(self.heartbeat_events(decision_snapshot))
         if has_account_data:
-            raw_events.extend(self.model_score_events(snapshot))
+            raw_events.extend(self.model_score_events(signal_snapshot))
         if has_account_data and previous_has_account_data:
-            raw_events.extend(self.position_change_events(snapshot, previous))
-            raw_events.extend(self.cash_events(snapshot, previous))
-        raw_events.extend(self.watchlist_quote_events(snapshot, previous or {}))
-        raw_events.extend(self.external_signal_events(snapshot, previous or {}))
+            raw_events.extend(self.position_change_events(decision_snapshot, previous))
+            raw_events.extend(self.cash_events(decision_snapshot, previous))
+        raw_events.extend(self.watchlist_quote_events(signal_snapshot, previous or {}))
+        raw_events.extend(self.external_signal_events(signal_snapshot, previous or {}))
         if has_account_data:
-            raw_events.extend(self.holding_timing_events(snapshot))
-        raw_events = self.attach_data_freshness(snapshot, raw_events)
+            raw_events.extend(self.holding_timing_events(decision_snapshot))
+        raw_events = self.attach_data_freshness(decision_snapshot, raw_events)
         system_events, signal_events = split_operational_and_investment_events(raw_events)
         signal_events = self.enabled_signal_events(signal_events)
-        events = [*system_events, *build_investment_insight_events(snapshot, signal_events)]
-        return [event for event in self.stamp_events(snapshot, events) if self.enabled(event.rule)]
+        events = [*system_events, *build_investment_insight_events(decision_snapshot, signal_events)]
+        return [event for event in self.stamp_events(decision_snapshot, events) if self.enabled(event.rule)]
 
     def snapshot_with_external_signal_deltas(self, snapshot: AccountSnapshot, previous: Dict[str, object]) -> AccountSnapshot:
         previous_signals = previous.get("externalSignals") if isinstance(previous, dict) and isinstance(previous.get("externalSignals"), dict) else {}
@@ -355,17 +356,12 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
             self.strategy_model,
             external_signals=snapshot.external_signals,
             relation_contexts_by_symbol=inference_contexts,
+            require_inference_context=True,
         )
         return snapshot
 
     def notification_formula_metadata(self) -> Dict[str, object]:
-        keys = [
-            "buyScoreFormula",
-            "sellScoreFormula",
-            "profitTakeScoreFormula",
-            "lossCutScoreFormula",
-            "notificationScoreFormula",
-        ]
+        keys = ["notificationScoreFormula"]
         return {
             key: str(self.settings.get(key) or "").strip()
             for key in keys

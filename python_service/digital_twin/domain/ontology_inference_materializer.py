@@ -2,6 +2,7 @@ from typing import Dict
 
 from .market_data import number
 from .ontology_contracts import OntologyBelief, OntologyEntity, OntologyEvidence, OntologyRelation, PortfolioOntology, entity_id
+from .ontology_decision_policy import decision_stage_from_action, relation_stage_priority
 from .ontology_rulebox_contracts import GRAPH_REASONER_VERSION, GraphInferenceRule
 from .ontology_schema import abox_relation_properties
 
@@ -77,6 +78,16 @@ def materialize_rule_inference(
         target_key = fill_template(derivation.target_key, symbol, display_name)
         target_label = fill_template(derivation.target_label, symbol, display_name)
         target_id = entity_id(derivation.target_kind, target_key)
+        action_group = derivation.action_group or rule.action_group
+        action_level = derivation.action_level or rule.action_level
+        decision_stage = derivation.decision_stage or decision_stage_from_action(action_group, action_level)
+        stage_priority = derivation.stage_priority or relation_stage_priority({
+            "decisionStage": decision_stage,
+            "actionGroup": action_group,
+            "actionLevel": action_level,
+            "riskImpact": derivation.risk_impact,
+            "supportImpact": derivation.support_impact,
+        })
         graph.entities.append(OntologyEntity(target_id, target_label, derivation.target_kind, inference_properties({
             "tboxClass": derivation.tbox_class,
             "tboxClasses": derivation.tbox_classes or [derivation.tbox_class],
@@ -84,8 +95,10 @@ def materialize_rule_inference(
             "ruleId": rule.rule_id,
             "ruleLabel": rule.label,
             "polarity": derivation.polarity,
-            "actionGroup": derivation.action_group or rule.action_group,
-            "actionLevel": derivation.action_level or rule.action_level,
+            "actionGroup": action_group,
+            "actionLevel": action_level,
+            "decisionStage": decision_stage,
+            "stagePriority": stage_priority,
             "inferenceTraceId": trace_id,
         })))
         relation_properties = {
@@ -95,8 +108,10 @@ def materialize_rule_inference(
             "polarity": derivation.polarity,
             "riskImpact": derivation.risk_impact,
             "supportImpact": derivation.support_impact,
-            "actionGroup": derivation.action_group or rule.action_group,
-            "actionLevel": derivation.action_level or rule.action_level,
+            "actionGroup": action_group,
+            "actionLevel": action_level,
+            "decisionStage": decision_stage,
+            "stagePriority": stage_priority,
             "aiInfluenceLabel": derivation.ai_influence_label or derivation.belief_label or target_label,
             "inferenceTraceId": trace_id,
             "source": GRAPH_REASONER_VERSION,

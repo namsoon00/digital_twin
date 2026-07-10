@@ -729,7 +729,12 @@ def build_snapshot(account: AccountConfig, external_settings: Optional[Dict[str,
     positions, watchlist = kis_provider.enrich_collections(positions, watchlist)
     external_signals = ExternalSignalProvider(settings=external_settings).signals_for_positions(positions + watchlist)
     portfolio = portfolio_summary(positions, cash, currency, currency_rates())
-    decisions = decisions_for_positions(positions, portfolio, external_signals=external_signals)
+    decisions = decisions_for_positions(
+        positions,
+        portfolio,
+        external_signals=external_signals,
+        require_inference_context=True,
+    )
     metadata = provider.diagnostics_payload()
     metadata.update(kis_provider.diagnostics_payload())
     return AccountSnapshot(

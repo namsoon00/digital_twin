@@ -241,6 +241,8 @@ CLASS_DEFS: List[TBoxClassDef] = [
     TBoxClassDef("RelationRuleCondition", "reasoning-insight", "투자 관계 규칙 조건", parent="RuleCondition"),
     TBoxClassDef("RelationTemplate", "reasoning-insight", "파생 관계 템플릿", parent="ReasoningRule"),
     TBoxClassDef("RelationRuleTemplate", "reasoning-insight", "투자 관계 파생 템플릿", parent="RelationTemplate"),
+    TBoxClassDef("RuleDecisionPolicy", "reasoning-insight", "규칙 판단 단계 정책", parent="RelationTemplate"),
+    TBoxClassDef("RulePriorityPolicy", "reasoning-insight", "규칙 우선순위 정책", parent="RelationTemplate"),
     TBoxClassDef("DerivedAssertion", "reasoning-insight", "파생 어설션"),
     TBoxClassDef("InferenceTrace", "reasoning-insight", "추론 경로"),
     TBoxClassDef("InferencePath", "reasoning-insight", "추론 패스", parent="InferenceTrace"),
@@ -485,6 +487,7 @@ RULE_DEFS: List[TBoxRuleDef] = [
     TBoxRuleDef("AI receives a compact evidence subgraph built from InferenceBox relations, traces, current facts, missing data, and source freshness instead of an undifferentiated raw dump", "reasoning-insight"),
     TBoxRuleDef("RuleBox graph conditions can filter ABox fact values such as trade strength, volume ratio, orderbook imbalance, materiality score, event type, and relation scope before deriving opinions", "reasoning-insight"),
     TBoxRuleDef("material direct news, disclosures, trade-flow pressure, trend transitions, and fact-change gates can each independently create InferenceBox relations that alter AI investment opinions", "reasoning-insight"),
+    TBoxRuleDef("RuleBox relation templates own decisionStage and stagePriority so graph-store policy, not rule-id code maps, controls AI decision routing", "reasoning-insight"),
 ]
 
 

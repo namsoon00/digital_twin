@@ -11,13 +11,12 @@ from ..domain.market_data import (
 )
 from ..domain.ontology_prompting import ONTOLOGY_PROMPT_VERSION
 from ..domain.portfolio_ontology_builder import build_portfolio_ontology
-from ..domain.ontology_relation_rules import evaluate_position_relation_rules
 from ..domain.portfolio import PortfolioSummary, Position, utc_now_iso
 from ..domain.portfolio_calculations import (
     normalized_fx_rates,
     value_in_base,
 )
-from ..domain.strategy import StrategyModel
+from ..domain.strategy import StrategyModel, inference_required_relation_context
 
 
 def clamp_score(value: float) -> int:
@@ -399,28 +398,19 @@ def toss_decision_for_holding(item: Dict[str, object], portfolio: Dict[str, obje
         ma60_distance=number(item.get("ma60Distance")),
         sector=sector,
     )
-    relation_context = evaluate_position_relation_rules(
+    relation_context = inference_required_relation_context(
         decision_position,
-        portfolio_summary_from_payload(portfolio),
-        settings=getattr(strategy_model, "settings", {}) if strategy_model else {},
+        "Flow Lens에서는 Neo4j InferenceBox 결과가 없으면 매수·매도 판단을 만들지 않습니다.",
     )
     relation_decision = relation_context.get("decision") if isinstance(relation_context, dict) else {}
     if not isinstance(relation_decision, dict):
         relation_decision = {}
-    action_group = str(relation_decision.get("actionGroup") or "")
-    exit_pressure = clamp_score(relation_decision.get("score") or relation_context.get("signalStrength") or 0)
-    label = str(relation_decision.get("label") or "관계 규칙 관찰")
-    tone = str(relation_decision.get("tone") or "watch")
-    profit_take_pressure = exit_pressure if action_group == "profitTake" else 0
-    loss_cut_pressure = exit_pressure if action_group in {"lossControl", "distributionRisk", "executionRisk", "eventRisk", "entryRisk"} else 0
-    if exit_pressure >= 72:
-        priority = 1
-    elif exit_pressure >= 55:
-        priority = 2
-    elif exit_pressure >= 38:
-        priority = 3
-    else:
-        priority = 4
+    exit_pressure = 0
+    label = str(relation_decision.get("label") or "온톨로지 추론 대기")
+    tone = str(relation_decision.get("tone") or "hold")
+    profit_take_pressure = 0
+    loss_cut_pressure = 0
+    priority = 5
     reasons = [
         "토스 잔고 기준 수익률이 " + ("+" if pnl_rate > 0 else "") + str(pnl_rate) + "%입니다.",
         "평가손익은 " + format(round(number(item.get("profitLoss"))), ",") + " " + str(item.get("currency") or "") + "입니다.",
@@ -442,12 +432,12 @@ def toss_decision_for_holding(item: Dict[str, object], portfolio: Dict[str, obje
         "exitPressure": exit_pressure,
         "profitTakePressure": profit_take_pressure,
         "lossCutPressure": loss_cut_pressure,
-        "decisionBasis": relation_decision.get("basis") or "ontologyRelationRules",
+        "decisionBasis": relation_decision.get("basis") or "ontologyInferenceRequired",
         "decision": label,
         "tone": tone,
         "priority": priority,
         "reasons": reasons[:3],
-        "triggers": ["관계 규칙", "수급", "추세"],
+        "triggers": ["온톨로지 추론 대기"],
         "ontologyRelationContext": relation_context,
     }
 
@@ -744,15 +734,7 @@ def build_toss_ontology(
 ):
     normalized_positions = [normalize_position(item) for item in list(positions or []) + list(watchlist or [])]
     summary = portfolio_summary_from_payload(portfolio)
-    legacy_by_symbol = {
-        str(item.get("symbol") or "").upper(): {
-            "exitPressure": number(item.get("exitPressure")),
-            "profitTakePressure": number(item.get("profitTakePressure")),
-            "lossCutPressure": number(item.get("lossCutPressure")),
-            "decisionBasis": str(item.get("decisionBasis") or ""),
-        }
-        for item in decision_items
-    }
+    legacy_by_symbol = {}
     return build_portfolio_ontology(
         normalized_positions,
         summary,
@@ -764,6 +746,7 @@ def build_toss_ontology(
             "decisionItems": list(decision_items or []),
             "account": dict((toss or {}).get("account") or {}),
         },
+        include_reasoning_outputs=False,
     )
 
 

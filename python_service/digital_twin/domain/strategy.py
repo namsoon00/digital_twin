@@ -11,6 +11,9 @@ from .parsing import parse_assignments
 from .portfolio import DecisionItem, PortfolioSummary, Position, expects_kr_microstructure_signals
 
 
+ONTOLOGY_INFERENCE_REQUIRED_BASIS = "ontologyInferenceRequired"
+NEO4J_INFERENCE_BASIS = "neo4jInferenceBox"
+
 DERIVED_FORMULA_DEPENDENCIES = {
     "holdingSignalScore": [
         "tradeStrength",
@@ -458,6 +461,139 @@ def legacy_decision_payload(position: Position, portfolio: PortfolioSummary, str
     }
 
 
+def baseline_position_payload(position: Position) -> Dict[str, object]:
+    return {
+        "symbol": position.symbol,
+        "name": position.name,
+        "sector": position.sector,
+        "market": position.market,
+        "currency": position.currency,
+        "marketValue": position.market_value,
+        "profitLoss": position.profit_loss,
+        "profitLossRate": round(number(position.profit_loss_rate), 2),
+        "exitPressure": 0.0,
+        "decision": "온톨로지 추론 대기",
+        "tone": "hold",
+        "profitTakePressure": 0.0,
+        "lossCutPressure": 0.0,
+        "decisionBasis": ONTOLOGY_INFERENCE_REQUIRED_BASIS,
+    }
+
+
+def is_graph_inference_context(relation_context: Dict[str, object]) -> bool:
+    if not isinstance(relation_context, dict) or not relation_context:
+        return False
+    decision = relation_context.get("decision") if isinstance(relation_context.get("decision"), dict) else {}
+    return (
+        str(relation_context.get("source") or "") == NEO4J_INFERENCE_BASIS
+        and str(decision.get("basis") or "") == NEO4J_INFERENCE_BASIS
+        and bool(relation_context.get("graphStoreUsed"))
+        and not bool(relation_context.get("fallbackUsed"))
+    )
+
+
+def inference_required_relation_context(position: Position, reason: str = "") -> Dict[str, object]:
+    return {
+        "engineVersion": "ontology-inference-required-v1",
+        "source": "ontologyInferenceGate",
+        "graphStoreUsed": False,
+        "fallbackUsed": False,
+        "blocked": True,
+        "reason": reason or "Neo4j InferenceBox 관계가 없어 투자 판단을 만들지 않았습니다.",
+        "subject": {
+            "symbol": position.symbol,
+            "name": position.name,
+            "market": position.market,
+            "sector": position.sector,
+        },
+        "facts": {
+            "symbol": position.symbol,
+            "name": position.name,
+            "market": position.market,
+            "currency": position.currency,
+            "profitLossRate": round(number(position.profit_loss_rate), 2),
+            "currentPrice": number(position.current_price),
+            "ma20Distance": round(number(position.ma20_distance), 2),
+            "ma60Distance": round(number(position.ma60_distance), 2),
+            "volumeRatio": round(number(position.volume_ratio), 3),
+        },
+        "matchedRules": [],
+        "activeRules": [],
+        "referenceRules": [],
+        "missingData": [{"key": "neo4jInferenceBox", "label": "온톨로지 추론 결과", "effect": "추론 결과가 없으면 매수·매도 판단을 만들지 않습니다."}],
+        "dominantSignals": [],
+        "signalStrength": 0.0,
+        "signalStrengthLabel": "없음",
+        "confidence": 0.0,
+        "decision": {
+            "label": "온톨로지 추론 대기",
+            "tone": "hold",
+            "score": 0.0,
+            "basis": ONTOLOGY_INFERENCE_REQUIRED_BASIS,
+            "selectedRuleId": "",
+            "decisionStage": "ONTOLOGY_INFERENCE_REQUIRED",
+            "actionGroup": "inferenceRequired",
+            "actionLevel": "blocked",
+            "scoreBand": {},
+            "nextStageAt": 0.0,
+        },
+        "executionPlan": {
+            "engineVersion": "ontology-inference-required-v1",
+            "primaryAction": "WAIT_FOR_ONTOLOGY_INFERENCE",
+            "primaryActionLabel": "온톨로지 추론 완료 전 투자 판단 보류",
+            "blockedActions": ["InferenceBox 없는 매수 판단", "InferenceBox 없는 매도 판단", "Python 관계 규칙 fallback"],
+            "nextChecks": ["Neo4j RuleBox 저장 상태 확인", "InferenceBox 관계 생성 여부 확인", "온톨로지 품질 점수 확인"],
+            "missingDataImpact": ["온톨로지 추론 결과가 없어 판단 강도를 0으로 고정했습니다."],
+            "sourceFacts": {},
+        },
+        "promptContext": {
+            "promptVersion": ONTOLOGY_PROMPT_VERSION,
+            "promptId": "ontologyInferenceRequired",
+            "missingData": [{"key": "neo4jInferenceBox", "label": "온톨로지 추론 결과"}],
+            "guardrails": ["InferenceBox 없이 매수·매도 판단을 만들지 않습니다."],
+        },
+    }
+
+
+def inference_required_decision_for_position(
+    position: Position,
+    ontology_opinion=None,
+    ontology_worldview: Dict[str, object] = None,
+    reason: str = "",
+) -> DecisionItem:
+    payload = baseline_position_payload(position)
+    relation_context = inference_required_relation_context(position, reason)
+    opinion_payload = ontology_opinion.to_dict() if ontology_opinion else {}
+    return DecisionItem(
+        symbol=position.symbol,
+        name=position.name,
+        sector=position.sector,
+        market=position.market,
+        currency=position.currency,
+        market_value=position.market_value,
+        profit_loss=position.profit_loss,
+        profit_loss_rate=number(position.profit_loss_rate),
+        exit_pressure=0.0,
+        decision=str(payload.get("decision")),
+        tone=str(payload.get("tone")),
+        profit_take_pressure=0.0,
+        loss_cut_pressure=0.0,
+        decision_basis=ONTOLOGY_INFERENCE_REQUIRED_BASIS,
+        ontology_opinion=opinion_payload,
+        ontology_worldview=dict(ontology_worldview or {}),
+        relation_rule_context=relation_context,
+        ai_prompt_context=dict(relation_context.get("promptContext") or {}),
+        active_investment_opinion={},
+        ai_context={
+            "promptVersion": ONTOLOGY_PROMPT_VERSION,
+            "role": "ontology-inference-required",
+            "legacyModelRole": "blocked",
+            "relationRuleContext": relation_context,
+            "blockedReason": relation_context["reason"],
+        },
+    )
+
+
 def decision_for_position(
     position: Position,
     portfolio: PortfolioSummary,
@@ -468,15 +604,26 @@ def decision_for_position(
     ontology_prompt: str = "",
     relation_context: Dict[str, object] = None,
     external_signals: Dict[str, object] = None,
+    require_inference_context: bool = False,
 ) -> DecisionItem:
-    payload = legacy_payload or legacy_decision_payload(position, portfolio, strategy_model)
-    relation_context = relation_context or evaluate_position_relation_rules(
-        position,
-        portfolio,
-        external_signals=external_signals or {},
-        settings=getattr(strategy_model, "settings", {}) if strategy_model else {},
-        legacy_model=payload,
+    payload = legacy_payload if legacy_payload is not None else (
+        baseline_position_payload(position) if require_inference_context else legacy_decision_payload(position, portfolio, strategy_model)
     )
+    if require_inference_context and not is_graph_inference_context(relation_context):
+        return inference_required_decision_for_position(
+            position,
+            ontology_opinion=ontology_opinion,
+            ontology_worldview=ontology_worldview,
+            reason="Neo4j InferenceBox 결과가 없어 Python 관계 규칙 fallback을 차단했습니다.",
+        )
+    if not relation_context:
+        relation_context = evaluate_position_relation_rules(
+            position,
+            portfolio,
+            external_signals=external_signals or {},
+            settings=getattr(strategy_model, "settings", {}) if strategy_model else {},
+            legacy_model=payload,
+        )
     relation_decision = relation_context.get("decision") if isinstance(relation_context, dict) else {}
     if not isinstance(relation_decision, dict):
         relation_decision = {}
@@ -723,10 +870,11 @@ def decisions_for_positions(
     strategy_model: StrategyModel = None,
     external_signals: Dict[str, object] = None,
     relation_contexts_by_symbol: Dict[str, Dict[str, object]] = None,
+    require_inference_context: bool = False,
 ) -> List[DecisionItem]:
     active_positions = [item for item in positions if not item.is_cash() and item.market_value > 0]
     relation_contexts_by_symbol = relation_contexts_by_symbol or {}
-    legacy_by_symbol = {
+    legacy_by_symbol = {} if require_inference_context else {
         item.symbol.upper(): legacy_decision_payload(item, portfolio, strategy_model)
         for item in active_positions
     }
@@ -742,17 +890,20 @@ def decisions_for_positions(
                 for symbol, payload in legacy_by_symbol.items()
             ],
         },
+        include_reasoning_outputs=not require_inference_context,
     )
     decisions = []
     for item in active_positions:
         legacy_payload = legacy_by_symbol.get(item.symbol.upper())
-        relation_context = relation_contexts_by_symbol.get(item.symbol.upper()) or evaluate_position_relation_rules(
-            item,
-            portfolio,
-            external_signals=external_signals or {},
-            settings=getattr(strategy_model, "settings", {}) if strategy_model else {},
-            legacy_model=legacy_payload,
-        )
+        relation_context = relation_contexts_by_symbol.get(item.symbol.upper())
+        if not require_inference_context and not relation_context:
+            relation_context = evaluate_position_relation_rules(
+                item,
+                portfolio,
+                external_signals=external_signals or {},
+                settings=getattr(strategy_model, "settings", {}) if strategy_model else {},
+                legacy_model=legacy_payload,
+            )
         decisions.append(decision_for_position(
             item,
             portfolio,
@@ -763,5 +914,6 @@ def decisions_for_positions(
             ontology_prompt=ontology.prompt,
             relation_context=relation_context,
             external_signals=external_signals or {},
+            require_inference_context=require_inference_context,
         ))
     return sorted(decisions, key=lambda item: (-item.exit_pressure, item.symbol))

@@ -163,9 +163,13 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertEqual([], condition_row["conditionTargetFields"])
         self.assertEqual("HAS_INFERRED_RISK", template_row["derivationRelationType"])
         self.assertEqual("risk", template_row["derivationTargetKind"])
+        self.assertEqual("LOSS_REDUCE", template_row["derivationDecisionStage"])
+        self.assertGreaterEqual(template_row["derivationStagePriority"], 40)
         self.assertEqual("InferenceBox", inference_row["ontologyBox"])
         self.assertEqual("InferenceBox", risk_relation["ontologyBox"])
         self.assertEqual("graph.loss_guard.breakdown.v1", risk_relation["ruleId"])
+        self.assertEqual("LOSS_REDUCE", risk_relation["decisionStage"])
+        self.assertGreaterEqual(risk_relation["stagePriority"], 40)
         self.assertEqual("InferenceBox", inference_evidence["ontologyBox"])
         self.assertIn("ontology_entity_rule_id", schema_text)
         self.assertIn("ontology_entity_condition_kind", schema_text)
@@ -212,6 +216,8 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertIn("condition.conditionTargetMaxValue", cypher)
         self.assertIn("condition.conditionTargetRelationScopes", cypher)
         self.assertIn("condition.conditionTargetMaterialityPassed", cypher)
+        self.assertIn("template.derivationDecisionStage", cypher)
+        self.assertIn("inferred.decisionStage = template.derivationDecisionStage", cypher)
 
     def test_default_rulebox_covers_materiality_and_trend_transition_rules(self):
         rules = default_graph_inference_rules()
@@ -299,11 +305,27 @@ class OntologyRuleBoxTests(unittest.TestCase):
 
         self.assertEqual("ok", snapshot["status"])
         self.assertEqual("test", snapshot["source"])
+        self.assertFalse(snapshot["defaultsFallbackUsed"])
         self.assertTrue(loss_guard["conditions"])
         self.assertTrue(loss_guard["derivations"])
+        self.assertEqual("LOSS_REDUCE", loss_guard["derivations"][0]["decision_stage"])
+        self.assertGreaterEqual(loss_guard["derivations"][0]["stage_priority"], 40)
         self.assertEqual("bidAskImbalance", ask_pressure["target_property_filters"]["field"])
         self.assertEqual(-15, ask_pressure["target_property_filters"]["maxValue"])
         self.assertIn("HAS_INFERRED_RISK", snapshot["relationTypes"])
+
+    def test_empty_neo4j_rulebox_snapshot_does_not_fallback_to_runtime_defaults(self):
+        snapshot = rulebox_snapshot_from_rows(
+            {"rules": [], "conditions": [], "derivations": [], "relationTypes": []},
+            source="neo4j-http",
+        )
+
+        self.assertEqual("empty", snapshot["status"])
+        self.assertEqual([], snapshot["rules"])
+        self.assertEqual(0, snapshot["ruleCount"])
+        self.assertFalse(snapshot["defaultsFallbackUsed"])
+        self.assertTrue(snapshot["bootstrapAvailable"])
+        self.assertGreater(snapshot["bootstrapRuleCount"], 0)
 
     def test_inferencebox_snapshot_payload_marks_native_neo4j_reasoning(self):
         statements = inferencebox_snapshot_statements(["005930"], limit=10)
@@ -337,6 +359,8 @@ class OntologyRuleBoxTests(unittest.TestCase):
                     "polarity": "risk",
                     "riskImpact": 13,
                     "weight": 0.86,
+                    "decisionStage": "LOSS_REDUCE",
+                    "stagePriority": 43,
                     "aiInfluenceLabel": "손실 방어 추론",
                     "nativeNeo4jReasoned": True,
                 }
@@ -358,10 +382,13 @@ class OntologyRuleBoxTests(unittest.TestCase):
 
         self.assertIn("n.ontologyBox = 'InferenceBox'", statement_text)
         self.assertIn("size($symbols) = 0 OR n.symbol IN $symbols", statement_text)
+        self.assertIn("r.decisionStage AS decisionStage", statement_text)
         self.assertEqual("ok", payload["status"])
         self.assertTrue(payload["neo4jNativeReasoningUsed"])
         self.assertEqual(2, payload["nativeRelationCount"])
         self.assertEqual("HAS_INFERRED_RISK", payload["relations"][0]["type"])
+        self.assertEqual("LOSS_REDUCE", payload["relations"][0]["decisionStage"])
+        self.assertEqual(43, payload["relations"][0]["stagePriority"])
         self.assertEqual(["holding-loss", "holding-source", "ma-break"], payload["traces"][0]["matchedConditionIds"])
 
     def test_rulebox_admin_clear_and_native_execution_statements_are_graph_native(self):

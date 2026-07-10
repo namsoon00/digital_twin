@@ -271,6 +271,8 @@ class OperationalConnection:
                 )
             """)
             connection.execute("CREATE INDEX IF NOT EXISTS idx_domain_events_name_time ON domain_events(name, occurred_at)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_domain_events_occurred_at ON domain_events(occurred_at, event_id)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_domain_events_aggregate_time ON domain_events(aggregate_id, occurred_at, event_id)")
             connection.execute("""
                 CREATE TABLE IF NOT EXISTS model_review_jobs (
                     job_id TEXT PRIMARY KEY,
@@ -298,6 +300,9 @@ class OperationalConnection:
                 },
             )
             connection.execute("CREATE INDEX IF NOT EXISTS idx_model_review_jobs_status ON model_review_jobs(status, created_at)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_model_review_jobs_created ON model_review_jobs(created_at, job_id)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_model_review_jobs_pending_order ON model_review_jobs(created_at, job_id) WHERE status IN ('pending', 'failed')")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_model_review_jobs_processing_started ON model_review_jobs(processing_started_at, updated_at, created_at, job_id) WHERE status = 'processing'")
             connection.execute("""
                 CREATE TABLE IF NOT EXISTS ontology_ai_opinion_samples (
                     sample_id TEXT PRIMARY KEY,
@@ -352,6 +357,11 @@ class OperationalConnection:
                 },
             )
             connection.execute("CREATE INDEX IF NOT EXISTS idx_notification_jobs_status ON notification_jobs(status, created_at)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_notification_jobs_created ON notification_jobs(created_at, job_id)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_notification_jobs_status_created ON notification_jobs(status, created_at, job_id)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_notification_jobs_pending_order ON notification_jobs(created_at, job_id) WHERE status = 'pending'")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_notification_jobs_failed_attempts ON notification_jobs(attempts, created_at, job_id) WHERE status = 'failed'")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_notification_jobs_processing_started ON notification_jobs(processing_started_at, updated_at, created_at, job_id) WHERE status = 'processing'")
             connection.execute("CREATE INDEX IF NOT EXISTS idx_notification_jobs_message_time_status ON notification_jobs(message_type, created_at, status)")
             connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_notification_jobs_dedupe ON notification_jobs(dedupe_key) WHERE dedupe_key != ''")
             connection.execute("""
@@ -391,6 +401,8 @@ class OperationalConnection:
             connection.execute("CREATE INDEX IF NOT EXISTS idx_research_evidence_symbol_time ON research_evidence(symbol, last_seen_at)")
             connection.execute("CREATE INDEX IF NOT EXISTS idx_research_evidence_kind_time ON research_evidence(kind, last_seen_at)")
             connection.execute("CREATE INDEX IF NOT EXISTS idx_research_evidence_source_time ON research_evidence(source, last_seen_at)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_research_evidence_last_seen ON research_evidence(last_seen_at, evidence_id)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_research_evidence_symbol_last_seen ON research_evidence(symbol, last_seen_at, evidence_id)")
             connection.execute("""
                 CREATE TABLE IF NOT EXISTS market_quote_cache (
                     provider TEXT NOT NULL,
@@ -402,6 +414,8 @@ class OperationalConnection:
                 )
             """)
             connection.execute("CREATE INDEX IF NOT EXISTS idx_market_quote_cache_account ON market_quote_cache(account_id, symbol)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_market_quote_cache_updated ON market_quote_cache(updated_at, provider, account_id, symbol)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_market_quote_cache_account_updated ON market_quote_cache(provider, account_id, updated_at, symbol)")
             connection.execute("""
                 CREATE TABLE IF NOT EXISTS notification_templates (
                     message_type TEXT PRIMARY KEY,
@@ -411,6 +425,7 @@ class OperationalConnection:
                     updated_at TEXT NOT NULL
                 )
             """)
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_app_store_updated ON app_store(updated_at)")
             connection.execute("""
                 CREATE TABLE IF NOT EXISTS notification_rules (
                     message_type TEXT PRIMARY KEY,
@@ -518,6 +533,7 @@ class OperationalConnection:
             connection.execute("CREATE INDEX IF NOT EXISTS idx_symbol_universe_symbol ON symbol_universe(symbol)")
             connection.execute("CREATE INDEX IF NOT EXISTS idx_symbol_universe_name ON symbol_universe(name)")
             connection.execute("CREATE INDEX IF NOT EXISTS idx_symbol_universe_market_seen ON symbol_universe(market, last_seen_at)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_symbol_universe_active_market_symbol ON symbol_universe(active, market, symbol)")
             connection.execute("""
                 CREATE TABLE IF NOT EXISTS symbol_universe_sources (
                     market TEXT PRIMARY KEY,
@@ -1228,9 +1244,7 @@ class SQLiteResearchEvidenceStore(OperationalConnection):
                 """
                 SELECT * FROM research_evidence
                 """ + where + """
-                ORDER BY
-                    COALESCE(NULLIF(published_at, ''), NULLIF(observed_at, ''), last_seen_at) DESC,
-                    last_seen_at DESC
+                ORDER BY last_seen_at DESC, published_at DESC, evidence_id DESC
                 LIMIT ?
                 """,
                 params,
@@ -1434,12 +1448,44 @@ class SQLiteMarketQuoteCache(OperationalConnection):
         return payload
 
     def load_many(self, provider: str, account_id: str, symbols: Iterable[str]) -> Dict[str, Dict[str, object]]:
-        return {
-            str(symbol or "").upper(): payload
-            for symbol in symbols
-            for payload in [self.load(provider, account_id, str(symbol or ""))]
-            if payload
-        }
+        clean_symbols = []
+        seen = set()
+        for symbol in symbols or []:
+            clean_symbol = str(symbol or "").upper().strip()
+            if not clean_symbol or clean_symbol in seen:
+                continue
+            seen.add(clean_symbol)
+            clean_symbols.append(clean_symbol)
+        if not clean_symbols:
+            return {}
+        placeholders = ",".join(["?"] * len(clean_symbols))
+        params = [
+            str(provider or "").strip().lower() or "unknown",
+            str(account_id or "").strip(),
+            *clean_symbols,
+        ]
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT symbol, payload_json, updated_at
+                FROM market_quote_cache
+                WHERE provider = ? AND account_id = ? AND symbol IN (""" + placeholders + """)
+                """,
+                params,
+            ).fetchall()
+        result: Dict[str, Dict[str, object]] = {}
+        for row in rows:
+            clean_symbol = str(row["symbol"] or "").upper().strip()
+            try:
+                payload = json.loads(row["payload_json"])
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(payload, dict):
+                continue
+            payload.setdefault("updatedAt", row["updated_at"])
+            payload.setdefault("symbol", clean_symbol)
+            result[clean_symbol] = payload
+        return result
 
     def stale_universe_symbols(
         self,
@@ -2165,11 +2211,56 @@ class SQLiteEventLog(OperationalConnection):
                 continue
         return events
 
+    def latest_events(self, limit: int = 12) -> List[DomainEvent]:
+        normalized_limit = max(1, min(200, int(limit or 12)))
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT event_json FROM domain_events
+                ORDER BY occurred_at DESC, event_id DESC
+                LIMIT ?
+                """,
+                (normalized_limit,),
+            ).fetchall()
+        events: List[DomainEvent] = []
+        for row in reversed(rows):
+            try:
+                events.append(DomainEvent.from_dict(json.loads(row["event_json"])))
+            except json.JSONDecodeError:
+                continue
+        return events
+
+    def latest_events_by_name(self, names: Iterable[str]) -> Dict[str, DomainEvent]:
+        result: Dict[str, DomainEvent] = {}
+        with self.connect() as connection:
+            for name in [str(item or "").strip() for item in names or [] if str(item or "").strip()]:
+                row = connection.execute(
+                    """
+                    SELECT event_json FROM domain_events
+                    WHERE name = ?
+                    ORDER BY occurred_at DESC, event_id DESC
+                    LIMIT 1
+                    """,
+                    (name,),
+                ).fetchone()
+                if not row:
+                    continue
+                try:
+                    result[name] = DomainEvent.from_dict(json.loads(row["event_json"]))
+                except json.JSONDecodeError:
+                    continue
+        return result
+
     def event_counts(self) -> Dict[str, int]:
-        counts: Dict[str, int] = {}
-        for event in self.events():
-            counts[event.name] = counts.get(event.name, 0) + 1
-        return counts
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT name, COUNT(*) AS count
+                FROM domain_events
+                GROUP BY name
+                """
+            ).fetchall()
+        return {row["name"]: int(row["count"] or 0) for row in rows}
 
 
 class SQLiteOntologyReasoningCursorStore(OperationalConnection):
@@ -2349,19 +2440,33 @@ class SQLiteModelReviewJobStore(OperationalConnection):
         cutoff = (datetime.now(timezone.utc) - timedelta(minutes=max(1, int(stale_after_minutes or 30)))).isoformat().replace("+00:00", "Z")
         claimed: List[ModelReviewJob] = []
         with self.transaction() as connection:
-            rows = connection.execute(
-                """
-                SELECT job_id, payload_json FROM model_review_jobs
-                WHERE status IN ('pending', 'failed')
-                   OR (
-                    status = 'processing'
-                    AND COALESCE(NULLIF(processing_started_at, ''), NULLIF(updated_at, ''), created_at) <= ?
-                   )
-                ORDER BY created_at, job_id
-                LIMIT ?
-                """,
-                (cutoff, int(limit or 1)),
-            ).fetchall()
+            requested = max(1, int(limit or 1))
+            rows = []
+            for sql, params in [
+                (
+                    """
+                    SELECT job_id, payload_json FROM model_review_jobs
+                    WHERE status IN ('pending', 'failed')
+                    ORDER BY created_at, job_id
+                    LIMIT ?
+                    """,
+                    (),
+                ),
+                (
+                    """
+                    SELECT job_id, payload_json FROM model_review_jobs
+                    WHERE status = 'processing'
+                      AND COALESCE(NULLIF(processing_started_at, ''), NULLIF(updated_at, ''), created_at) <= ?
+                    ORDER BY created_at, job_id
+                    LIMIT ?
+                    """,
+                    (cutoff,),
+                ),
+            ]:
+                remaining = requested - len(rows)
+                if remaining <= 0:
+                    break
+                rows.extend(connection.execute(sql, tuple(params) + (remaining,)).fetchall())
             for row in rows:
                 try:
                     job = ModelReviewJob.from_dict(json.loads(row["payload_json"]))
@@ -2713,27 +2818,42 @@ class SQLiteNotificationJobStore(OperationalConnection):
             cutoff = (datetime.now(timezone.utc) - timedelta(minutes=max(1, int(stale_after_minutes or 30)))).isoformat().replace("+00:00", "Z")
             claimed: List[NotificationJob] = []
             with self.transaction() as connection:
-                rows = connection.execute(
-                    """
-                    SELECT job_id, payload_json FROM notification_jobs
-                    WHERE status = 'pending'
-                       OR (status = 'failed' AND attempts < ?)
-                       OR (
-                        status = 'processing'
-                        AND COALESCE(NULLIF(processing_started_at, ''), NULLIF(updated_at, ''), created_at) <= ?
-                       )
-                    ORDER BY
-                        CASE
-                            WHEN status = 'pending' THEN 0
-                            WHEN status = 'processing' THEN 1
-                            ELSE 2
-                        END,
-                        created_at,
-                        job_id
-                    LIMIT ?
-                    """,
-                    (MAX_NOTIFICATION_DELIVERY_ATTEMPTS, cutoff, int(limit or 10)),
-                ).fetchall()
+                requested = max(1, int(limit or 10))
+                rows = []
+                for sql, params in [
+                    (
+                        """
+                        SELECT job_id, payload_json FROM notification_jobs
+                        WHERE status = 'pending'
+                        ORDER BY created_at, job_id
+                        LIMIT ?
+                        """,
+                        (),
+                    ),
+                    (
+                        """
+                        SELECT job_id, payload_json FROM notification_jobs
+                        WHERE status = 'processing'
+                          AND COALESCE(NULLIF(processing_started_at, ''), NULLIF(updated_at, ''), created_at) <= ?
+                        ORDER BY created_at, job_id
+                        LIMIT ?
+                        """,
+                        (cutoff,),
+                    ),
+                    (
+                        """
+                        SELECT job_id, payload_json FROM notification_jobs
+                        WHERE status = 'failed' AND attempts < ?
+                        ORDER BY attempts, created_at, job_id
+                        LIMIT ?
+                        """,
+                        (MAX_NOTIFICATION_DELIVERY_ATTEMPTS,),
+                    ),
+                ]:
+                    remaining = requested - len(rows)
+                    if remaining <= 0:
+                        break
+                    rows.extend(connection.execute(sql, tuple(params) + (remaining,)).fetchall())
                 for row in rows:
                     try:
                         job = NotificationJob.from_dict(json.loads(row["payload_json"]))

@@ -22,6 +22,9 @@ LOG_FILES = [
 DEFAULT_RETENTION_DAYS = int(os.environ.get("SQLITE_RETENTION_DAYS") or "7")
 DEFAULT_CLEANUP_BATCH_SIZE = int(os.environ.get("SQLITE_CLEANUP_BATCH_SIZE") or "500")
 DEFAULT_MAX_DELETE_PER_TABLE = int(os.environ.get("SQLITE_CLEANUP_MAX_DELETE_PER_TABLE") or "5000")
+DEFAULT_APP_STORE_MESSAGE_LIMIT = int(os.environ.get("SQLITE_APP_STORE_MESSAGE_LIMIT") or "120")
+DEFAULT_APP_STORE_ITEM_LIMIT = int(os.environ.get("SQLITE_APP_STORE_ITEM_LIMIT") or "500")
+DEFAULT_APP_STORE_MEMORY_LIMIT = int(os.environ.get("SQLITE_APP_STORE_MEMORY_LIMIT") or "500")
 
 CLEANUP_POLICIES = [
     {
@@ -76,13 +79,91 @@ CLEANUP_POLICIES = [
 ]
 
 CLEANUP_INDEXES = [
-    ("monitor_sent", "idx_monitor_sent_sent_at", "sent_at"),
-    ("domain_events", "idx_domain_events_occurred_at", "occurred_at"),
-    ("model_review_jobs", "idx_model_review_jobs_created", "created_at"),
-    ("ontology_ai_opinion_samples", "idx_ontology_quality_created_at", "created_at"),
-    ("notification_jobs", "idx_notification_jobs_created", "created_at"),
-    ("research_evidence", "idx_research_evidence_last_seen", "last_seen_at"),
-    ("market_quote_cache", "idx_market_quote_cache_updated", "updated_at"),
+    {
+        "name": "idx_monitor_sent_sent_at",
+        "table": "monitor_sent",
+        "sql": "CREATE INDEX IF NOT EXISTS idx_monitor_sent_sent_at ON monitor_sent(sent_at)",
+    },
+    {
+        "name": "idx_domain_events_occurred_at",
+        "table": "domain_events",
+        "sql": "CREATE INDEX IF NOT EXISTS idx_domain_events_occurred_at ON domain_events(occurred_at, event_id)",
+    },
+    {
+        "name": "idx_domain_events_name_time",
+        "table": "domain_events",
+        "sql": "CREATE INDEX IF NOT EXISTS idx_domain_events_name_time ON domain_events(name, occurred_at, event_id)",
+    },
+    {
+        "name": "idx_model_review_jobs_created",
+        "table": "model_review_jobs",
+        "sql": "CREATE INDEX IF NOT EXISTS idx_model_review_jobs_created ON model_review_jobs(created_at, job_id)",
+    },
+    {
+        "name": "idx_model_review_jobs_pending_order",
+        "table": "model_review_jobs",
+        "sql": "CREATE INDEX IF NOT EXISTS idx_model_review_jobs_pending_order ON model_review_jobs(created_at, job_id) WHERE status IN ('pending', 'failed')",
+    },
+    {
+        "name": "idx_ontology_quality_created_at",
+        "table": "ontology_ai_opinion_samples",
+        "sql": "CREATE INDEX IF NOT EXISTS idx_ontology_quality_created_at ON ontology_ai_opinion_samples(created_at, sample_id)",
+    },
+    {
+        "name": "idx_notification_jobs_created",
+        "table": "notification_jobs",
+        "sql": "CREATE INDEX IF NOT EXISTS idx_notification_jobs_created ON notification_jobs(created_at, job_id)",
+    },
+    {
+        "name": "idx_notification_jobs_status_created",
+        "table": "notification_jobs",
+        "sql": "CREATE INDEX IF NOT EXISTS idx_notification_jobs_status_created ON notification_jobs(status, created_at, job_id)",
+    },
+    {
+        "name": "idx_notification_jobs_pending_order",
+        "table": "notification_jobs",
+        "sql": "CREATE INDEX IF NOT EXISTS idx_notification_jobs_pending_order ON notification_jobs(created_at, job_id) WHERE status = 'pending'",
+    },
+    {
+        "name": "idx_notification_jobs_failed_attempts",
+        "table": "notification_jobs",
+        "sql": "CREATE INDEX IF NOT EXISTS idx_notification_jobs_failed_attempts ON notification_jobs(attempts, created_at, job_id) WHERE status = 'failed'",
+    },
+    {
+        "name": "idx_notification_jobs_processing_started",
+        "table": "notification_jobs",
+        "sql": "CREATE INDEX IF NOT EXISTS idx_notification_jobs_processing_started ON notification_jobs(processing_started_at, updated_at, created_at, job_id) WHERE status = 'processing'",
+    },
+    {
+        "name": "idx_notification_jobs_message_time_status",
+        "table": "notification_jobs",
+        "sql": "CREATE INDEX IF NOT EXISTS idx_notification_jobs_message_time_status ON notification_jobs(message_type, created_at, status)",
+    },
+    {
+        "name": "idx_research_evidence_last_seen",
+        "table": "research_evidence",
+        "sql": "CREATE INDEX IF NOT EXISTS idx_research_evidence_last_seen ON research_evidence(last_seen_at, evidence_id)",
+    },
+    {
+        "name": "idx_research_evidence_symbol_last_seen",
+        "table": "research_evidence",
+        "sql": "CREATE INDEX IF NOT EXISTS idx_research_evidence_symbol_last_seen ON research_evidence(symbol, last_seen_at, evidence_id)",
+    },
+    {
+        "name": "idx_market_quote_cache_updated",
+        "table": "market_quote_cache",
+        "sql": "CREATE INDEX IF NOT EXISTS idx_market_quote_cache_updated ON market_quote_cache(updated_at, provider, account_id, symbol)",
+    },
+    {
+        "name": "idx_market_quote_cache_account_updated",
+        "table": "market_quote_cache",
+        "sql": "CREATE INDEX IF NOT EXISTS idx_market_quote_cache_account_updated ON market_quote_cache(provider, account_id, updated_at, symbol)",
+    },
+    {
+        "name": "idx_symbol_universe_active_market_symbol",
+        "table": "symbol_universe",
+        "sql": "CREATE INDEX IF NOT EXISTS idx_symbol_universe_active_market_symbol ON symbol_universe(active, market, symbol)",
+    },
 ]
 
 
@@ -122,6 +203,16 @@ def cleanup_policy_summary() -> List[Dict[str, object]]:
     ]
 
 
+def cleanup_index_summary() -> List[Dict[str, object]]:
+    return [
+        {
+            "name": str(index["name"]),
+            "table": str(index["table"]),
+        }
+        for index in CLEANUP_INDEXES
+    ]
+
+
 def _recent_lock_count() -> int:
     count = 0
     for name in LOG_FILES:
@@ -155,6 +246,7 @@ def sqlite_health_snapshot(path: Path = None) -> Dict[str, object]:
         "freelistCount": 0,
         "freelistBytes": 0,
         "cleanupPolicy": cleanup_policy_summary(),
+        "cleanupIndexes": cleanup_index_summary(),
     }
     if not db_path.exists():
         return payload
@@ -216,6 +308,98 @@ def _write_archive_rows(table: str, rows: List[sqlite3.Row], archive_id: str) ->
     return str(path)
 
 
+def _write_archive_payloads(table: str, payloads: List[Dict[str, object]], archive_id: str) -> str:
+    if not payloads:
+        return ""
+    path = _archive_path(table, archive_id)
+    with path.open("a", encoding="utf-8") as handle:
+        for payload in payloads:
+            handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+    return str(path)
+
+
+def _trim_ordered_list(items: object, limit: int, keep_tail: bool) -> Dict[str, object]:
+    if not isinstance(items, list):
+        return {"items": [], "removed": []}
+    normalized_limit = max(0, int(limit or 0))
+    if not normalized_limit or len(items) <= normalized_limit:
+        return {"items": list(items), "removed": []}
+    if keep_tail:
+        return {
+            "items": list(items[-normalized_limit:]),
+            "removed": list(items[:-normalized_limit]),
+        }
+    return {
+        "items": list(items[:normalized_limit]),
+        "removed": list(items[normalized_limit:]),
+    }
+
+
+def compact_app_store_payload(
+    path: Path = None,
+    archive_old_data: bool = False,
+    archive_id: str = "",
+    message_limit: int = DEFAULT_APP_STORE_MESSAGE_LIMIT,
+    item_limit: int = DEFAULT_APP_STORE_ITEM_LIMIT,
+    memory_limit: int = DEFAULT_APP_STORE_MEMORY_LIMIT,
+) -> Dict[str, object]:
+    db_path = Path(path or service_db_path()).resolve()
+    result = {
+        "table": "app_store",
+        "deleted": 0,
+        "archivePath": "",
+        "limits": {
+            "messages": max(1, int(message_limit or DEFAULT_APP_STORE_MESSAGE_LIMIT)),
+            "items": max(1, int(item_limit or DEFAULT_APP_STORE_ITEM_LIMIT)),
+            "memories": max(1, int(memory_limit or DEFAULT_APP_STORE_MEMORY_LIMIT)),
+        },
+    }
+    with sqlite_transaction(db_path) as connection:
+        row = connection.execute(
+            "SELECT payload_json FROM app_store WHERE store_id = 'default'"
+        ).fetchone()
+        if not row:
+            return result
+        try:
+            payload = json.loads(row["payload_json"] or "{}")
+        except json.JSONDecodeError:
+            return result
+        if not isinstance(payload, dict):
+            return result
+        messages = _trim_ordered_list(payload.get("messages"), result["limits"]["messages"], keep_tail=True)
+        items = _trim_ordered_list(payload.get("items"), result["limits"]["items"], keep_tail=False)
+        memories = _trim_ordered_list(payload.get("memories"), result["limits"]["memories"], keep_tail=False)
+        removed_payloads = []
+        for key, trimmed in [("messages", messages), ("items", items), ("memories", memories)]:
+            removed = list(trimmed["removed"] or [])
+            if not removed:
+                continue
+            payload[key] = list(trimmed["items"] or [])
+            result["deleted"] += len(removed)
+            removed_payloads.append({
+                "storeId": "default",
+                "field": key,
+                "removed": removed,
+            })
+        if not result["deleted"]:
+            return result
+        if archive_old_data:
+            result["archivePath"] = _write_archive_payloads("app_store", removed_payloads, archive_id or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"))
+        connection.execute(
+            """
+            UPDATE app_store
+            SET payload_json = ?, updated_at = ?
+            WHERE store_id = 'default'
+            """,
+            (json.dumps(payload, ensure_ascii=False, sort_keys=True), utc_now()),
+        )
+    return result
+
+
 def _protected_clause(protect_where: str) -> str:
     return "NOT (" + protect_where + ")" if str(protect_where or "").strip() else "1 = 1"
 
@@ -231,6 +415,33 @@ def _candidate_rowids(
     return connection.execute(
         "SELECT rowid FROM " + table + " WHERE " + where_sql + " ORDER BY " + time_column + ", rowid LIMIT ?",
         tuple(params) + (int(limit),),
+    ).fetchall()
+
+
+def _candidate_overflow_rowids(
+    connection,
+    table: str,
+    time_column: str,
+    where_sql: str,
+    params: Iterable[object],
+    keep_rows: int,
+    limit: int,
+):
+    normalized_params = tuple(params)
+    return connection.execute(
+        """
+        SELECT rowid FROM """ + table + """
+        WHERE """ + where_sql + """
+          AND rowid NOT IN (
+            SELECT rowid FROM """ + table + """
+            WHERE """ + where_sql + """
+            ORDER BY """ + time_column + """ DESC, rowid DESC
+            LIMIT ?
+          )
+        ORDER BY """ + time_column + """, rowid
+        LIMIT ?
+        """,
+        normalized_params + normalized_params + (max(0, int(keep_rows or 0)), int(limit)),
     ).fetchall()
 
 
@@ -290,31 +501,36 @@ def _cleanup_policy(
                 break
         return total
 
+    def delete_overflow(where_sql: str, params: Iterable[object], keep_rows: int, allowance: int) -> int:
+        total = 0
+        while allowance > 0:
+            limit = max(1, min(batch_size, allowance))
+            with sqlite_transaction(db_path) as connection:
+                rows = _candidate_overflow_rowids(connection, table, time_column, where_sql, params, keep_rows, limit)
+                rowids = [int(row["rowid"]) for row in rows]
+                deleted = _delete_rowids(connection, table, rowids, archive_old_data, archive_id)
+            count = int(deleted["deleted"] or 0)
+            if deleted.get("archivePath"):
+                result["archivePath"] = deleted["archivePath"]
+            total += count
+            allowance -= count
+            if count <= 0 or count < limit:
+                break
+        return total
+
     age_where = protected + " AND " + time_column + " != '' AND " + time_column + " < ?"
     result["deleted"] += delete_where(age_where, (cutoff_text,), max_delete)
     remaining_allowance = max(0, max_delete - int(result["deleted"]))
     if remaining_allowance and max_rows:
-        with connect_sqlite(db_path) as connection:
-            try:
-                eligible = int(connection.execute(
-                    "SELECT COUNT(*) AS count FROM " + table + " WHERE " + protected,
-                ).fetchone()["count"])
-            except sqlite3.Error:
-                eligible = 0
-        overflow = max(0, eligible - max_rows)
-        if overflow:
-            trim_where = protected
-            result["deleted"] += delete_where(trim_where, (), min(overflow, remaining_allowance))
+        result["deleted"] += delete_overflow(protected, (), max_rows, remaining_allowance)
     return result
 
 
 def _ensure_cleanup_indexes(db_path: Path) -> None:
     with sqlite_transaction(db_path) as connection:
-        for table, index_name, column in CLEANUP_INDEXES:
+        for index in CLEANUP_INDEXES:
             try:
-                connection.execute(
-                    "CREATE INDEX IF NOT EXISTS " + index_name + " ON " + table + "(" + column + ")"
-                )
+                connection.execute(str(index["sql"]))
             except sqlite3.Error:
                 continue
 
@@ -325,6 +541,7 @@ def cleanup_old_sqlite_data(
     archive_old_data: bool = False,
     batch_size: int = DEFAULT_CLEANUP_BATCH_SIZE,
     max_delete_per_table: int = DEFAULT_MAX_DELETE_PER_TABLE,
+    compact_app_store: bool = True,
 ) -> Dict[str, object]:
     db_path = Path(path or service_db_path()).resolve()
     cutoff = (datetime.now(timezone.utc) - timedelta(days=max(1, int(retention_days or DEFAULT_RETENTION_DAYS)))).isoformat().replace("+00:00", "Z")
@@ -352,6 +569,17 @@ def cleanup_old_sqlite_data(
             item = {"table": policy["table"], "deleted": 0, "error": str(error)}
         result["tables"][policy["key"]] = item
         result["deletedTotal"] += int(item.get("deleted") or 0)
+    if compact_app_store:
+        try:
+            item = compact_app_store_payload(
+                db_path,
+                archive_old_data=bool(archive_old_data),
+                archive_id=archive_id,
+            )
+        except sqlite3.Error as error:
+            item = {"table": "app_store", "deleted": 0, "error": str(error)}
+        result["tables"]["appStore"] = item
+        result["deletedTotal"] += int(item.get("deleted") or 0)
     return result
 
 
@@ -363,6 +591,7 @@ def run_sqlite_maintenance(
     cleanup_old_data: bool = False,
     archive_old_data: bool = False,
     retention_days: int = DEFAULT_RETENTION_DAYS,
+    compact_app_store: bool = True,
     vacuum: bool = False,
 ) -> Dict[str, object]:
     db_path = Path(path or service_db_path()).resolve()
@@ -412,6 +641,7 @@ def run_sqlite_maintenance(
             db_path,
             retention_days=retention_days,
             archive_old_data=archive_old_data,
+            compact_app_store=compact_app_store,
         )
     if checkpoint:
         with connect_sqlite(db_path) as connection:

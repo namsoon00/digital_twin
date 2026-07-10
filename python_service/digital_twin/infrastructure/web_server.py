@@ -205,12 +205,14 @@ def realtime_event_payload(event: DomainEvent) -> Dict[str, object]:
 
 
 def realtime_status_payload() -> Dict[str, object]:
-    events = SQLiteEventLog().events()
-    counts: Dict[str, int] = {}
-    latest_by_name: Dict[str, DomainEvent] = {}
-    for event in events:
-        counts[event.name] = counts.get(event.name, 0) + 1
-        latest_by_name[event.name] = event
+    event_log = SQLiteEventLog()
+    counts = event_log.event_counts()
+    latest_by_name = event_log.latest_events_by_name([
+        MONITORING_CYCLE_COMPLETED,
+        MONITORING_ALERTS_DETECTED,
+        MONITORING_SNAPSHOT_COLLECTED,
+    ])
+    latest_events = event_log.latest_events(limit=12)
     monitoring = {}
     if latest_by_name.get(MONITORING_CYCLE_COMPLETED):
         monitoring["cycle"] = realtime_event_payload(latest_by_name[MONITORING_CYCLE_COMPLETED])
@@ -221,7 +223,7 @@ def realtime_status_payload() -> Dict[str, object]:
     return {
         **REALTIME_HUB.status(),
         "events": counts,
-        "latestEvents": [realtime_event_payload(event) for event in events[-12:]],
+        "latestEvents": [realtime_event_payload(event) for event in latest_events],
         "monitoring": monitoring,
         "notificationJobs": notification_queue_store().summary(),
     }
@@ -655,6 +657,7 @@ def sqlite_maintenance_payload(payload: Dict[str, object]) -> Dict[str, object]:
         cleanup_old_data=bool(payload.get("cleanupOldData") or payload.get("cleanup_old_data")),
         archive_old_data=bool(payload.get("archiveOldData") or payload.get("archive_old_data")),
         retention_days=max(1, retention_days),
+        compact_app_store=payload.get("compactAppStore", payload.get("compact_app_store", True)) is not False,
         vacuum=bool(payload.get("vacuum")),
     )
 

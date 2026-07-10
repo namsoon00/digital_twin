@@ -45,6 +45,13 @@ WORKERS = {
         "command": [sys.executable, "-u", "python_service/service.py", "ontology-reasoning", "watch"],
         "needle": "python_service/service.py ontology-reasoning watch",
     },
+    "sqlite-maintenance": {
+        "label": "Python SQLite maintenance worker",
+        "pid": data_dir() / "python-sqlite-maintenance.pid",
+        "log": data_dir() / "python-sqlite-maintenance.log",
+        "command": [sys.executable, "-u", "python_service/service.py", "sqlite-maintenance", "watch"],
+        "needle": "python_service/service.py sqlite-maintenance watch",
+    },
     "notifications": {
         "label": "Python notification worker",
         "pid": data_dir() / "python-notifications.pid",

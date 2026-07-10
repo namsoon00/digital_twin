@@ -647,10 +647,15 @@ def sqlite_health_payload() -> Dict[str, object]:
 
 
 def sqlite_maintenance_payload(payload: Dict[str, object]) -> Dict[str, object]:
+    retention_days = int(payload.get("retentionDays") or payload.get("retention_days") or 7)
     return run_sqlite_maintenance(
         checkpoint=payload.get("checkpoint") is not False,
         optimize=payload.get("optimize") is not False,
         recover_processing=payload.get("recoverProcessing") is not False,
+        cleanup_old_data=bool(payload.get("cleanupOldData") or payload.get("cleanup_old_data")),
+        archive_old_data=bool(payload.get("archiveOldData") or payload.get("archive_old_data")),
+        retention_days=max(1, retention_days),
+        vacuum=bool(payload.get("vacuum")),
     )
 
 

@@ -5,7 +5,7 @@ from .connection import (
     sqlite_transaction,
     with_sqlite_retry,
 )
-from .health import sqlite_health_snapshot, run_sqlite_maintenance
+from .health import cleanup_old_sqlite_data, sqlite_health_snapshot, run_sqlite_maintenance
 
 __all__ = [
     "SQLITE_BUSY_TIMEOUT_MS",
@@ -15,4 +15,5 @@ __all__ = [
     "with_sqlite_retry",
     "sqlite_health_snapshot",
     "run_sqlite_maintenance",
+    "cleanup_old_sqlite_data",
 ]

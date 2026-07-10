@@ -157,6 +157,7 @@ class Neo4jOntologyGraphRepository:
                 "actionLevel": str(properties.get("actionLevel") or ""),
                 "promptHint": str(properties.get("promptHint") or ""),
                 "tboxClass": str(properties.get("tboxClass") or ""),
+                "tboxClasses": list_of_strings(properties.get("tboxClasses")),
                 "className": str(properties.get("className") or ""),
                 "parentClass": str(properties.get("parentClass") or ""),
                 "relationTypeName": str(properties.get("relationType") or ""),
@@ -167,6 +168,18 @@ class Neo4jOntologyGraphRepository:
                 "sourceValue": str(properties.get("source") or ""),
                 "profitLossRate": number_or_none(properties.get("profitLossRate")),
                 "levelType": str(properties.get("levelType") or ""),
+                "field": str(properties.get("field") or ""),
+                "valueNumber": number_or_none(properties.get("value")),
+                "polarity": str(properties.get("polarity") or ""),
+                "group": str(properties.get("group") or ""),
+                "relationScope": str(properties.get("relationScope") or ""),
+                "eventType": str(properties.get("eventType") or ""),
+                "materialityScore": number_or_none(properties.get("materialityScore")),
+                "materialityPassed": bool(properties.get("materialityPassed")) if "materialityPassed" in properties else None,
+                "relevanceScore": number_or_none(properties.get("relevanceScore")),
+                "sourceReliability": number_or_none(properties.get("sourceReliability")),
+                "impactScore": number_or_none(properties.get("impactScore")),
+                "confidence": number_or_none(properties.get("confidence")),
                 "enabled": bool(properties.get("enabled")) if "enabled" in properties else False,
                 "conditionId": str(properties.get("conditionId") or condition.get("condition_id") or ""),
                 "conditionKind": str(condition.get("kind") or ""),
@@ -178,8 +191,23 @@ class Neo4jOntologyGraphRepository:
                 "conditionDirection": str(condition.get("direction") or "out"),
                 "conditionTargetKind": str(condition.get("target_kind") or ""),
                 "conditionTargetLevelTypes": condition_target_level_types(condition),
+                "conditionTargetFields": condition_target_filter_values(condition, "field"),
+                "conditionTargetTboxClasses": condition_target_filter_values(condition, "tboxClass") + condition_target_filter_values(condition, "tboxClasses"),
+                "conditionTargetGroups": condition_target_filter_values(condition, "group"),
+                "conditionTargetRelationScopes": condition_target_filter_values(condition, "relationScope"),
+                "conditionTargetEventTypes": condition_target_filter_values(condition, "eventType"),
+                "conditionTargetPolarities": condition_target_filter_values(condition, "polarity"),
+                "conditionTargetMaterialityPassed": condition_target_filter_bool(condition, "materialityPassed"),
+                "conditionTargetMinMaterialityScore": condition_target_filter_number(condition, "minMaterialityScore"),
+                "conditionTargetMinValue": condition_target_filter_number(condition, "minValue"),
+                "conditionTargetMaxValue": condition_target_filter_number(condition, "maxValue"),
                 "conditionRelationPolarities": condition_relation_filter_values(condition, "polarity"),
                 "conditionRelationTransitionTypes": condition_relation_filter_values(condition, "transitionType"),
+                "conditionRelationFields": condition_relation_filter_values(condition, "field"),
+                "conditionRelationSignalGroups": condition_relation_filter_values(condition, "signalGroup"),
+                "conditionRelationMaterialityPassed": condition_relation_filter_bool(condition, "materialityPassed"),
+                "conditionRelationMinRiskImpact": condition_relation_filter_number(condition, "minRiskImpact"),
+                "conditionRelationMinSupportImpact": condition_relation_filter_number(condition, "minSupportImpact"),
                 "conditionMinWeight": float(condition.get("min_weight") or 0),
                 "derivationRelationType": str(derivation.get("relation_type") or "").upper(),
                 "derivationIndex": int(properties.get("derivationIndex") or 0),
@@ -214,6 +242,10 @@ class Neo4jOntologyGraphRepository:
                 "ruleId": str(properties.get("ruleId") or ""),
                 "polarity": str(properties.get("polarity") or ""),
                 "transitionType": str(properties.get("transitionType") or ""),
+                "field": str(properties.get("field") or properties.get("observationField") or ""),
+                "signalGroup": str(properties.get("signalGroup") or ""),
+                "materialityPassed": bool(properties.get("materialityPassed")) if "materialityPassed" in properties else None,
+                "materialityScore": number_or_none(properties.get("materialityScore")),
                 "riskImpact": number_or_none(properties.get("riskImpact") or properties.get("opinionImpact")),
                 "supportImpact": number_or_none(properties.get("supportImpact")),
                 "aiInfluenceLabel": str(properties.get("aiInfluenceLabel") or ""),
@@ -293,16 +325,29 @@ class Neo4jOntologyGraphRepository:
                     "n.ontologyBox = row.ontologyBox, n.symbol = row.symbol, n.ruleId = row.ruleId, "
                     "n.version = row.version, n.sourceKind = row.sourceKind, "
                     "n.actionGroup = row.actionGroup, n.actionLevel = row.actionLevel, n.promptHint = row.promptHint, "
-                    "n.tboxClass = row.tboxClass, n.boundedContext = row.boundedContext, "
+                    "n.tboxClass = row.tboxClass, n.tboxClasses = row.tboxClasses, n.boundedContext = row.boundedContext, "
                     "n.className = row.className, n.parentClass = row.parentClass, n.relationTypeName = row.relationTypeName, "
                     "n.box = row.box, n.sourceContext = row.sourceContext, n.targetContext = row.targetContext, "
                     "n.sourceValue = row.sourceValue, n.profitLossRate = row.profitLossRate, n.levelType = row.levelType, "
+                    "n.field = row.field, n.valueNumber = row.valueNumber, n.polarity = row.polarity, n.group = row.group, "
+                    "n.relationScope = row.relationScope, n.eventType = row.eventType, n.materialityScore = row.materialityScore, "
+                    "n.materialityPassed = row.materialityPassed, n.relevanceScore = row.relevanceScore, "
+                    "n.sourceReliability = row.sourceReliability, n.impactScore = row.impactScore, n.confidence = row.confidence, "
                     "n.enabled = row.enabled, n.conditionId = row.conditionId, n.conditionKind = row.conditionKind, "
                     "n.conditionField = row.conditionField, n.conditionOperator = row.conditionOperator, "
                     "n.conditionValueString = row.conditionValueString, n.conditionValueNumber = row.conditionValueNumber, "
                     "n.conditionRelationType = row.conditionRelationType, n.conditionDirection = row.conditionDirection, "
                     "n.conditionTargetKind = row.conditionTargetKind, n.conditionTargetLevelTypes = row.conditionTargetLevelTypes, "
+                    "n.conditionTargetFields = row.conditionTargetFields, n.conditionTargetTboxClasses = row.conditionTargetTboxClasses, "
+                    "n.conditionTargetGroups = row.conditionTargetGroups, n.conditionTargetRelationScopes = row.conditionTargetRelationScopes, "
+                    "n.conditionTargetEventTypes = row.conditionTargetEventTypes, n.conditionTargetPolarities = row.conditionTargetPolarities, "
+                    "n.conditionTargetMaterialityPassed = row.conditionTargetMaterialityPassed, "
+                    "n.conditionTargetMinMaterialityScore = row.conditionTargetMinMaterialityScore, "
+                    "n.conditionTargetMinValue = row.conditionTargetMinValue, n.conditionTargetMaxValue = row.conditionTargetMaxValue, "
                     "n.conditionRelationPolarities = row.conditionRelationPolarities, n.conditionRelationTransitionTypes = row.conditionRelationTransitionTypes, "
+                    "n.conditionRelationFields = row.conditionRelationFields, n.conditionRelationSignalGroups = row.conditionRelationSignalGroups, "
+                    "n.conditionRelationMaterialityPassed = row.conditionRelationMaterialityPassed, "
+                    "n.conditionRelationMinRiskImpact = row.conditionRelationMinRiskImpact, n.conditionRelationMinSupportImpact = row.conditionRelationMinSupportImpact, "
                     "n.conditionMinWeight = row.conditionMinWeight, n.derivationRelationType = row.derivationRelationType, "
                     "n.derivationIndex = row.derivationIndex, "
                     "n.derivationTargetKind = row.derivationTargetKind, n.derivationTargetKey = row.derivationTargetKey, "
@@ -388,6 +433,7 @@ class Neo4jOntologyGraphRepository:
                     "r.ontologyBox = row.ontologyBox, r.ruleId = row.ruleId, r.boundedContext = row.boundedContext, "
                     "r.polarity = row.polarity, r.transitionType = row.transitionType, r.riskImpact = row.riskImpact, "
                     "r.supportImpact = row.supportImpact, r.aiInfluenceLabel = row.aiInfluenceLabel, "
+                    "r.field = row.field, r.signalGroup = row.signalGroup, r.materialityPassed = row.materialityPassed, r.materialityScore = row.materialityScore, "
                     "r.propertiesJson = row.propertiesJson, r.updatedAt = $updatedAt"
                 ),
                 "parameters": {"rows": rows, "updatedAt": updated_at},
@@ -954,6 +1000,16 @@ def rulebox_snapshot_statements() -> List[Dict[str, object]]:
                 "condition.conditionDirection AS direction, condition.conditionTargetKind AS targetKind, "
                 "condition.conditionTargetLevelTypes AS targetLevelTypes, condition.conditionRelationPolarities AS relationPolarities, "
                 "condition.conditionRelationTransitionTypes AS relationTransitionTypes, condition.conditionMinWeight AS minWeight, "
+                "condition.conditionTargetFields AS targetFields, condition.conditionTargetTboxClasses AS targetTboxClasses, "
+                "condition.conditionTargetGroups AS targetGroups, condition.conditionTargetRelationScopes AS targetRelationScopes, "
+                "condition.conditionTargetEventTypes AS targetEventTypes, condition.conditionTargetPolarities AS targetPolarities, "
+                "condition.conditionTargetMaterialityPassed AS targetMaterialityPassed, "
+                "condition.conditionTargetMinMaterialityScore AS targetMinMaterialityScore, "
+                "condition.conditionTargetMinValue AS targetMinValue, condition.conditionTargetMaxValue AS targetMaxValue, "
+                "condition.conditionRelationFields AS relationFields, condition.conditionRelationSignalGroups AS relationSignalGroups, "
+                "condition.conditionRelationMaterialityPassed AS relationMaterialityPassed, "
+                "condition.conditionRelationMinRiskImpact AS relationMinRiskImpact, "
+                "condition.conditionRelationMinSupportImpact AS relationMinSupportImpact, "
                 "condition.propertiesJson AS propertiesJson ORDER BY rule.ruleId, condition.conditionId"
             ),
             "parameters": {},
@@ -1282,15 +1338,54 @@ def condition_payload_from_row(row: Dict[str, object]) -> Dict[str, object]:
     target_level_types = row.get("targetLevelTypes")
     if not isinstance(target_level_types, list):
         target_level_types = []
+    target_filters = condition.get("target_property_filters") if isinstance(condition.get("target_property_filters"), dict) else {}
+    if not target_filters:
+        target_filters = {}
+        if target_level_types:
+            target_filters["levelType"] = target_level_types
+        for row_key, filter_key in [
+            ("targetFields", "field"),
+            ("targetTboxClasses", "tboxClasses"),
+            ("targetGroups", "group"),
+            ("targetRelationScopes", "relationScope"),
+            ("targetEventTypes", "eventType"),
+            ("targetPolarities", "polarity"),
+        ]:
+            values = row.get(row_key) if isinstance(row.get(row_key), list) else []
+            if values:
+                target_filters[filter_key] = values
+        if row.get("targetMaterialityPassed") is not None:
+            target_filters["materialityPassed"] = bool(row.get("targetMaterialityPassed"))
+        for row_key, filter_key in [
+            ("targetMinMaterialityScore", "minMaterialityScore"),
+            ("targetMinValue", "minValue"),
+            ("targetMaxValue", "maxValue"),
+        ]:
+            if row.get(row_key) is not None:
+                target_filters[filter_key] = row.get(row_key)
     relation_filters = condition.get("relation_property_filters") if isinstance(condition.get("relation_property_filters"), dict) else {}
     if not relation_filters:
         relation_filters = {}
         polarities = row.get("relationPolarities") if isinstance(row.get("relationPolarities"), list) else []
         transition_types = row.get("relationTransitionTypes") if isinstance(row.get("relationTransitionTypes"), list) else []
+        fields = row.get("relationFields") if isinstance(row.get("relationFields"), list) else []
+        signal_groups = row.get("relationSignalGroups") if isinstance(row.get("relationSignalGroups"), list) else []
         if polarities:
             relation_filters["polarity"] = polarities
         if transition_types:
             relation_filters["transitionType"] = transition_types
+        if fields:
+            relation_filters["field"] = fields
+        if signal_groups:
+            relation_filters["signalGroup"] = signal_groups
+        if row.get("relationMaterialityPassed") is not None:
+            relation_filters["materialityPassed"] = bool(row.get("relationMaterialityPassed"))
+        for row_key, filter_key in [
+            ("relationMinRiskImpact", "minRiskImpact"),
+            ("relationMinSupportImpact", "minSupportImpact"),
+        ]:
+            if row.get(row_key) is not None:
+                relation_filters[filter_key] = row.get(row_key)
     return {
         "condition_id": str(row.get("conditionId") or condition.get("condition_id") or ""),
         "kind": str(row.get("kind") or condition.get("kind") or ""),
@@ -1301,9 +1396,7 @@ def condition_payload_from_row(row: Dict[str, object]) -> Dict[str, object]:
         "relation_type": str(row.get("relationType") or condition.get("relation_type") or ""),
         "direction": str(row.get("direction") or condition.get("direction") or "out"),
         "target_kind": str(row.get("targetKind") or condition.get("target_kind") or ""),
-        "target_property_filters": condition.get("target_property_filters") if isinstance(condition.get("target_property_filters"), dict) else (
-            {"levelType": target_level_types} if target_level_types else {}
-        ),
+        "target_property_filters": target_filters,
         "relation_property_filters": relation_filters,
         "min_weight": float(row.get("minWeight") or condition.get("min_weight") or 0),
     }
@@ -1396,8 +1489,23 @@ def native_reasoning_statement_for_relation_type(relation_type: str) -> Dict[str
         "AND coalesce(rel.weight, 0.0) >= coalesce(condition.conditionMinWeight, 0.0) "
         "AND (condition.conditionTargetKind = '' OR target.kind = condition.conditionTargetKind) "
         "AND (size(coalesce(condition.conditionTargetLevelTypes, [])) = 0 OR target.levelType IN condition.conditionTargetLevelTypes) "
+        "AND (size(coalesce(condition.conditionTargetFields, [])) = 0 OR target.field IN condition.conditionTargetFields) "
+        "AND (size(coalesce(condition.conditionTargetTboxClasses, [])) = 0 OR target.tboxClass IN condition.conditionTargetTboxClasses OR any(cls IN coalesce(target.tboxClasses, []) WHERE cls IN condition.conditionTargetTboxClasses)) "
+        "AND (size(coalesce(condition.conditionTargetGroups, [])) = 0 OR target.group IN condition.conditionTargetGroups) "
+        "AND (size(coalesce(condition.conditionTargetRelationScopes, [])) = 0 OR target.relationScope IN condition.conditionTargetRelationScopes) "
+        "AND (size(coalesce(condition.conditionTargetEventTypes, [])) = 0 OR target.eventType IN condition.conditionTargetEventTypes) "
+        "AND (size(coalesce(condition.conditionTargetPolarities, [])) = 0 OR target.polarity IN condition.conditionTargetPolarities) "
+        "AND (condition.conditionTargetMaterialityPassed IS NULL OR target.materialityPassed = condition.conditionTargetMaterialityPassed) "
+        "AND (condition.conditionTargetMinMaterialityScore IS NULL OR coalesce(target.materialityScore, 0.0) >= condition.conditionTargetMinMaterialityScore) "
+        "AND (condition.conditionTargetMinValue IS NULL OR coalesce(target.valueNumber, 0.0) >= condition.conditionTargetMinValue) "
+        "AND (condition.conditionTargetMaxValue IS NULL OR coalesce(target.valueNumber, 0.0) <= condition.conditionTargetMaxValue) "
         "AND (size(coalesce(condition.conditionRelationPolarities, [])) = 0 OR rel.polarity IN condition.conditionRelationPolarities) "
         "AND (size(coalesce(condition.conditionRelationTransitionTypes, [])) = 0 OR rel.transitionType IN condition.conditionRelationTransitionTypes) "
+        "AND (size(coalesce(condition.conditionRelationFields, [])) = 0 OR rel.field IN condition.conditionRelationFields) "
+        "AND (size(coalesce(condition.conditionRelationSignalGroups, [])) = 0 OR rel.signalGroup IN condition.conditionRelationSignalGroups) "
+        "AND (condition.conditionRelationMaterialityPassed IS NULL OR rel.materialityPassed = condition.conditionRelationMaterialityPassed) "
+        "AND (condition.conditionRelationMinRiskImpact IS NULL OR coalesce(rel.riskImpact, 0.0) >= condition.conditionRelationMinRiskImpact) "
+        "AND (condition.conditionRelationMinSupportImpact IS NULL OR coalesce(rel.supportImpact, 0.0) >= condition.conditionRelationMinSupportImpact) "
         "} "
         "ELSE false END) "
         "WITH rule, template, stock, conditions, "
@@ -1468,9 +1576,49 @@ def condition_target_level_types(condition: Dict[str, object]) -> List[str]:
     return list_of_strings(filters.get("levelType"))
 
 
+def condition_target_filter_values(condition: Dict[str, object], key: str) -> List[str]:
+    filters = condition.get("target_property_filters") if isinstance(condition.get("target_property_filters"), dict) else {}
+    return list_of_strings(filters.get(key))
+
+
+def condition_target_filter_bool(condition: Dict[str, object], key: str):
+    filters = condition.get("target_property_filters") if isinstance(condition.get("target_property_filters"), dict) else {}
+    return bool_or_none(filters.get(key))
+
+
+def condition_target_filter_number(condition: Dict[str, object], key: str):
+    filters = condition.get("target_property_filters") if isinstance(condition.get("target_property_filters"), dict) else {}
+    return number_or_none(filters.get(key))
+
+
 def condition_relation_filter_values(condition: Dict[str, object], key: str) -> List[str]:
     filters = condition.get("relation_property_filters") if isinstance(condition.get("relation_property_filters"), dict) else {}
     return list_of_strings(filters.get(key))
+
+
+def condition_relation_filter_bool(condition: Dict[str, object], key: str):
+    filters = condition.get("relation_property_filters") if isinstance(condition.get("relation_property_filters"), dict) else {}
+    return bool_or_none(filters.get(key))
+
+
+def condition_relation_filter_number(condition: Dict[str, object], key: str):
+    filters = condition.get("relation_property_filters") if isinstance(condition.get("relation_property_filters"), dict) else {}
+    return number_or_none(filters.get(key))
+
+
+def bool_or_none(value: object):
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "n", "off"}:
+        return False
+    return None
 
 
 def neo4j_http_endpoint(uri: str, database: str) -> str:

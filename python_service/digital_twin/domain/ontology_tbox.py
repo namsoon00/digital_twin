@@ -131,6 +131,7 @@ CLASS_DEFS: List[TBoxClassDef] = [
     TBoxClassDef("NewsEvent", "observation-data", "뉴스 이벤트", parent="ExternalSignal"),
     TBoxClassDef("NewsArticle", "observation-data", "뉴스 기사", parent="NewsEvent"),
     TBoxClassDef("NewsTopic", "observation-data", "뉴스 토픽", parent="NewsEvent"),
+    TBoxClassDef("NewsEventType", "observation-data", "뉴스 이벤트 유형", parent="NewsEvent"),
     TBoxClassDef("PeerCompanyMention", "observation-data", "피어 회사 언급", parent="ExternalObservation"),
     TBoxClassDef("DisclosureEvent", "observation-data", "공시 이벤트", parent="ExternalSignal"),
     TBoxClassDef("DisclosureFiling", "observation-data", "공시 문서", parent="DisclosureEvent"),
@@ -333,6 +334,7 @@ RELATION_DEFS: List[TBoxRelationDef] = [
     TBoxRelationDef("MENTIONS_INSTRUMENT", "observation-data", "observation-data", "investment-core"),
     TBoxRelationDef("MENTIONS_PEER", "observation-data", "observation-data", "investment-core"),
     TBoxRelationDef("HAS_TOPIC", "observation-data", "observation-data", "observation-data"),
+    TBoxRelationDef("HAS_EVENT_TYPE", "observation-data", "observation-data", "observation-data"),
     TBoxRelationDef("AFFECTS_SECTOR", "observation-data", "observation-data", "investment-core"),
     TBoxRelationDef("MATERIAL_TO", "observation-data", "observation-data", "strategy-thesis"),
     TBoxRelationDef("DECAYS_AFTER", "observation-data", "observation-data", "observation-data"),
@@ -373,6 +375,7 @@ RELATION_DEFS: List[TBoxRelationDef] = [
     TBoxRelationDef("EXPLAINED_BY_TRACE", "reasoning-insight", "reasoning-insight", "reasoning-insight"),
     TBoxRelationDef("HAS_INFERRED_RISK", "risk-exposure", "investment-core", "risk-exposure"),
     TBoxRelationDef("HAS_INFERRED_SUPPORT", "strategy-thesis", "investment-core", "reasoning-insight"),
+    TBoxRelationDef("HAS_INFERRED_ENTRY_OPPORTUNITY", "strategy-thesis", "investment-core", "reasoning-insight"),
     TBoxRelationDef("HAS_ACTION_CANDIDATE", "reasoning-insight", "investment-core", "reasoning-insight"),
     TBoxRelationDef("USED_AS_EVIDENCE", "reasoning-insight", "reasoning-insight", "reasoning-insight"),
     TBoxRelationDef("CONFIRMS_SIGNAL", "reasoning-insight", "reasoning-insight", "reasoning-insight"),
@@ -480,6 +483,8 @@ RULE_DEFS: List[TBoxRuleDef] = [
     TBoxRuleDef("market-data changes become FactChange and MaterialityAssessment ABox nodes before any alert candidate is created", "observation-data"),
     TBoxRuleDef("trend transitions remain ABox facts in Neo4j even when local Python opinions are disabled for production projection", "reasoning-insight"),
     TBoxRuleDef("AI receives a compact evidence subgraph built from InferenceBox relations, traces, current facts, missing data, and source freshness instead of an undifferentiated raw dump", "reasoning-insight"),
+    TBoxRuleDef("RuleBox graph conditions can filter ABox fact values such as trade strength, volume ratio, orderbook imbalance, materiality score, event type, and relation scope before deriving opinions", "reasoning-insight"),
+    TBoxRuleDef("material direct news, disclosures, trade-flow pressure, trend transitions, and fact-change gates can each independently create InferenceBox relations that alter AI investment opinions", "reasoning-insight"),
 ]
 
 

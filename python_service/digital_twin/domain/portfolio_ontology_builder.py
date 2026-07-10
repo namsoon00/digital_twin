@@ -347,12 +347,15 @@ def event_relation_properties(item: object) -> Dict[str, object]:
         "marketTopics",
         "eventType",
         "materialityScore",
+        "materialityPassed",
         "ontologyRelations",
         "analysisSummary",
         "analysisVersion",
     ]:
         if key in raw_payload:
             props[key] = raw_payload.get(key)
+    if "materialityPassed" not in props and raw_payload.get("materialityScore") is not None:
+        props["materialityPassed"] = number(raw_payload.get("materialityScore")) >= 65
     if polarity == "risk":
         props["opinionImpact"] = min(18.0, max(4.0, impact))
     elif polarity == "support":
@@ -1174,6 +1177,9 @@ def add_research_evidence_concepts(
     for item in evidence_by_id.values():
         raw_payload = item.raw_payload if isinstance(item.raw_payload, dict) else {}
         relation_scope = str(raw_payload.get("relationScope") or "").lower().strip()
+        materiality_passed = raw_payload.get("materialityPassed") if "materialityPassed" in raw_payload else None
+        if materiality_passed is None and raw_payload.get("materialityScore") is not None:
+            materiality_passed = number(raw_payload.get("materialityScore")) >= 65
         scope_weight = {
             "direct": 1.0,
             "peer": 0.62,
@@ -1205,6 +1211,7 @@ def add_research_evidence_concepts(
             "marketTopics": raw_payload.get("marketTopics"),
             "eventType": raw_payload.get("eventType"),
             "materialityScore": raw_payload.get("materialityScore"),
+            "materialityPassed": materiality_passed,
             "analysisSummary": raw_payload.get("analysisSummary"),
             "analysisVersion": raw_payload.get("analysisVersion"),
         })

@@ -128,18 +128,53 @@ def property_matches(properties: Dict[str, object], field: str, operator: str, e
 
 def property_filters_match(properties: Dict[str, object], filters: Dict[str, object]) -> bool:
     for key, expected in (filters or {}).items():
+        if key == "minValue":
+            if not property_matches(properties, "value", ">=", expected):
+                return False
+            continue
+        if key == "maxValue":
+            if not property_matches(properties, "value", "<=", expected):
+                return False
+            continue
+        if key == "minMaterialityScore":
+            if not property_matches(properties, "materialityScore", ">=", expected):
+                return False
+            continue
+        if key == "minRiskImpact":
+            actual = properties.get("riskImpact") if properties.get("riskImpact") is not None else properties.get("opinionImpact")
+            if number(actual) < number(expected):
+                return False
+            continue
+        if key == "minSupportImpact":
+            if number(properties.get("supportImpact")) < number(expected):
+                return False
+            continue
         actual = properties.get(key)
+        if key in {"tboxClass", "tboxClasses"}:
+            actual = list_property_values(properties.get("tboxClasses")) + list_property_values(properties.get("tboxClass"))
         if isinstance(expected, dict):
             if not property_matches(properties, key, str(expected.get("operator") or "=="), expected.get("value")):
                 return False
             continue
-        if isinstance(expected, list):
-            if not any(compare_equal(actual, item) for item in expected):
-                return False
-            continue
-        if not compare_equal(actual, expected):
+        if not filter_value_matches(actual, expected):
             return False
     return True
+
+
+def filter_value_matches(actual: object, expected: object) -> bool:
+    if isinstance(expected, list):
+        return any(filter_value_matches(actual, item) for item in expected)
+    if isinstance(actual, list):
+        return any(compare_equal(item, expected) for item in actual)
+    return compare_equal(actual, expected)
+
+
+def list_property_values(value: object) -> List[object]:
+    if isinstance(value, list):
+        return [item for item in value if item not in (None, "")]
+    if value in (None, ""):
+        return []
+    return [value]
 
 
 def compare_equal(actual: object, expected: object) -> bool:

@@ -49,6 +49,28 @@ class OntologyRuleBoxTests(unittest.TestCase):
         portfolio = portfolio_summary([position], account_cash=200000)
         return build_portfolio_ontology([position], portfolio, portfolio_id="rulebox-test")
 
+    def flow_pressure_graph(self):
+        position = Position(
+            symbol="000660",
+            name="SK하이닉스",
+            market="KR",
+            currency="KRW",
+            quantity=5,
+            sellable_quantity=5,
+            average_price=210000,
+            current_price=208000,
+            market_value=1040000,
+            profit_loss=-10000,
+            profit_loss_rate=-1.0,
+            volume_ratio=1.6,
+            bid_ask_imbalance=-24.0,
+            trade_strength=91.0,
+            trading_value=9000000000,
+            sector="반도체",
+        )
+        portfolio = portfolio_summary([position], account_cash=200000)
+        return build_portfolio_ontology([position], portfolio, portfolio_id="rulebox-flow-test")
+
     def test_rulebox_materializes_rules_and_inference_relations(self):
         graph = self.loss_guard_graph()
 
@@ -76,6 +98,31 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertTrue(any(item.kind == "inference-trace" for item in graph.evidence))
         self.assertIsNotNone(opinion)
         self.assertTrue(any("손실 방어 추론" in str(item.get("label") or "") for item in opinion.relation_influences))
+
+    def test_local_rulebox_uses_flow_value_filters(self):
+        graph = self.flow_pressure_graph()
+
+        flow_risk_relations = [
+            item
+            for item in graph.relations
+            if item.source == "stock:000660"
+            and item.relation_type == "HAS_INFERRED_RISK"
+            and (item.properties or {}).get("ruleId") == "graph.flow.sell_pressure.v1"
+        ]
+        flow_trace = next(
+            item
+            for item in graph.entities
+            if item.kind == "inference-trace" and (item.properties or {}).get("ruleId") == "graph.flow.sell_pressure.v1"
+        )
+        matched_ids = [
+            item.get("conditionId")
+            for item in ((flow_trace.properties or {}).get("matchedConditions") or [])
+            if isinstance(item, dict)
+        ]
+
+        self.assertTrue(flow_risk_relations)
+        self.assertIn("ask-pressure", matched_ids)
+        self.assertIn("volume-confirmation", matched_ids)
 
     def test_prompt_payload_exposes_rulebox_and_inferencebox(self):
         graph = self.loss_guard_graph()
@@ -113,6 +160,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertEqual("relation", condition_row["conditionKind"])
         self.assertEqual("BREAKS_LEVEL", condition_row["conditionRelationType"])
         self.assertEqual(["ma20", "ma60"], condition_row["conditionTargetLevelTypes"])
+        self.assertEqual([], condition_row["conditionTargetFields"])
         self.assertEqual("HAS_INFERRED_RISK", template_row["derivationRelationType"])
         self.assertEqual("risk", template_row["derivationTargetKind"])
         self.assertEqual("InferenceBox", inference_row["ontologyBox"])
@@ -158,6 +206,12 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertIn("MATCH (rule)-[:DERIVES_RELATION]->(template:OntologyEntity", cypher)
         self.assertIn("MERGE (stock)-[inferred:HAS_INFERRED_RISK]->(target)", cypher)
         self.assertIn("nativeNeo4jReasoned = true", cypher)
+        self.assertIn("condition.conditionTargetFields", cypher)
+        self.assertIn("target.valueNumber", cypher)
+        self.assertIn("condition.conditionTargetMinValue", cypher)
+        self.assertIn("condition.conditionTargetMaxValue", cypher)
+        self.assertIn("condition.conditionTargetRelationScopes", cypher)
+        self.assertIn("condition.conditionTargetMaterialityPassed", cypher)
 
     def test_default_rulebox_covers_materiality_and_trend_transition_rules(self):
         rules = default_graph_inference_rules()
@@ -175,12 +229,46 @@ class OntologyRuleBoxTests(unittest.TestCase):
             for item in condition_rows
             if item["id"] == "rule-condition:graph.holding.trend_transition.risk.v1:risk-transition"
         )
+        sell_pressure = next(
+            item
+            for item in condition_rows
+            if item["id"] == "rule-condition:graph.flow.sell_pressure.v1:ask-pressure"
+        )
+        sell_volume = next(
+            item
+            for item in condition_rows
+            if item["id"] == "rule-condition:graph.flow.sell_pressure.v1:volume-confirmation"
+        )
+        direct_news_risk = next(
+            item
+            for item in condition_rows
+            if item["id"] == "rule-condition:graph.news.direct_material_risk.v1:direct-material-risk"
+        )
+        fact_change_gate = next(
+            item
+            for item in condition_rows
+            if item["id"] == "rule-condition:graph.materiality.alert_candidate.v1:material-fact-change"
+        )
 
         self.assertIn("graph.materiality.alert_candidate.v1", rule_ids)
         self.assertIn("graph.holding.trend_transition.risk.v1", rule_ids)
         self.assertIn("graph.watchlist.trend_transition.support.v1", rule_ids)
+        self.assertIn("graph.flow.sell_pressure.v1", rule_ids)
+        self.assertIn("graph.flow.accumulation.entry.v1", rule_ids)
+        self.assertIn("graph.news.direct_material_risk.v1", rule_ids)
+        self.assertIn("graph.news.direct_material_support.v1", rule_ids)
+        self.assertIn("graph.disclosure.event_risk.v1", rule_ids)
         self.assertEqual(["support"], support_transition["conditionRelationPolarities"])
         self.assertEqual(["risk"], risk_transition["conditionRelationPolarities"])
+        self.assertEqual(["bidAskImbalance"], sell_pressure["conditionTargetFields"])
+        self.assertEqual(-15.0, sell_pressure["conditionTargetMaxValue"])
+        self.assertEqual(["volumeRatio"], sell_volume["conditionTargetFields"])
+        self.assertEqual(1.2, sell_volume["conditionTargetMinValue"])
+        self.assertEqual(["direct"], direct_news_risk["conditionTargetRelationScopes"])
+        self.assertEqual(["risk"], direct_news_risk["conditionTargetPolarities"])
+        self.assertTrue(direct_news_risk["conditionTargetMaterialityPassed"])
+        self.assertEqual(65.0, direct_news_risk["conditionTargetMinMaterialityScore"])
+        self.assertTrue(fact_change_gate["conditionTargetMaterialityPassed"])
 
     def test_rulebox_admin_payload_roundtrips_to_graph(self):
         rules = default_graph_inference_rules()
@@ -206,11 +294,15 @@ class OntologyRuleBoxTests(unittest.TestCase):
 
         snapshot = rulebox_snapshot_from_rows(rowsets, source="test")
         loss_guard = next(item for item in snapshot["rules"] if item["rule_id"] == "graph.loss_guard.breakdown.v1")
+        sell_pressure = next(item for item in snapshot["rules"] if item["rule_id"] == "graph.flow.sell_pressure.v1")
+        ask_pressure = next(item for item in sell_pressure["conditions"] if item["condition_id"] == "ask-pressure")
 
         self.assertEqual("ok", snapshot["status"])
         self.assertEqual("test", snapshot["source"])
         self.assertTrue(loss_guard["conditions"])
         self.assertTrue(loss_guard["derivations"])
+        self.assertEqual("bidAskImbalance", ask_pressure["target_property_filters"]["field"])
+        self.assertEqual(-15, ask_pressure["target_property_filters"]["maxValue"])
         self.assertIn("HAS_INFERRED_RISK", snapshot["relationTypes"])
 
     def test_inferencebox_snapshot_payload_marks_native_neo4j_reasoning(self):

@@ -21,7 +21,7 @@ DEFAULT_LOW_SCORE_ACTION = "suppress"
 DEFAULT_SIMILARITY_FIELDS = ["messageType", "accountId", "symbol", "severity", "title"]
 STATE_COOLDOWN_MESSAGE_TYPES = {INVESTMENT_INSIGHT, "holdingTiming", "externalEquityMove", "externalCryptoMove"}
 DEFAULT_NOTIFICATION_SCORE_FORMULA = "rawScore"
-VOLATILE_SCORE_SUFFIX = re.compile(r":-?\d+(?:\.\d+)?$")
+VOLATILE_SCORE_SUFFIX = re.compile(r":[+-]?\d+(?:\.\d+)?%?$")
 FORMULA_VARIABLE_BY_CONDITION_ID = {
     "severity_alert": "severityScore",
     "severity_watch": "severityScore",

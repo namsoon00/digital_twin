@@ -33,6 +33,7 @@ Domain:
 - `python_service/digital_twin/domain/external_signal_quality.py`: external signal provenance, freshness, source-health, and symbol-coverage scoring
 - `python_service/digital_twin/domain/ontology_quality.py`: AI opinion readiness and ontology graph quality sample metrics
 - `python_service/digital_twin/domain/ontology_relation_rules.py`: ontology relation-rule definitions, relation-context contracts, missing-data contracts, and AI prompt context
+- `python_service/digital_twin/domain/ontology_inference_context.py`: Neo4j InferenceBox to relation-context adapter; runtime monitoring should prefer this graph-store result and use Python relation rules only as fallback
 - `python_service/digital_twin/domain/ontology_rules.py`: compatibility facade only; do not add new rule logic here
 - `python_service/digital_twin/domain/scoring.py`: reusable scoring signals and fallback vocabularies used by notification and strategy-adjacent scores
 - `python_service/digital_twin/domain/message_types.py`: shared message-type catalog, labels, default alert rules, thresholds, and cadence

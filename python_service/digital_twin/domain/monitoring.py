@@ -16,6 +16,7 @@ from .message_types import (
     WATCHLIST_ONTOLOGY_SIGNAL,
 )
 from .model_review import decision_change_context, decision_change_review_lines
+from .ontology_inference_context import relation_contexts_from_snapshot
 from .ontology_insights import build_investment_insight_events, split_operational_and_investment_events
 from .ontology_relation_rules import decision_action_group_for_label, relation_rule_context_summary_lines, relation_thresholds_from_settings
 from .parsing import parse_assignments
@@ -347,11 +348,13 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
     def snapshot_with_strategy_scores(self, snapshot: AccountSnapshot) -> AccountSnapshot:
         if not snapshot.has_live_account_data():
             return snapshot
+        inference_contexts = relation_contexts_from_snapshot(snapshot, getattr(self.strategy_model, "settings", {}) if self.strategy_model else {})
         snapshot.decisions = decisions_for_positions(
             snapshot.positions,
             snapshot.portfolio,
             self.strategy_model,
             external_signals=snapshot.external_signals,
+            relation_contexts_by_symbol=inference_contexts,
         )
         return snapshot
 

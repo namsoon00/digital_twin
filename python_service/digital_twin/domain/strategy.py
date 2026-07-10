@@ -722,8 +722,10 @@ def decisions_for_positions(
     portfolio: PortfolioSummary,
     strategy_model: StrategyModel = None,
     external_signals: Dict[str, object] = None,
+    relation_contexts_by_symbol: Dict[str, Dict[str, object]] = None,
 ) -> List[DecisionItem]:
     active_positions = [item for item in positions if not item.is_cash() and item.market_value > 0]
+    relation_contexts_by_symbol = relation_contexts_by_symbol or {}
     legacy_by_symbol = {
         item.symbol.upper(): legacy_decision_payload(item, portfolio, strategy_model)
         for item in active_positions
@@ -744,7 +746,7 @@ def decisions_for_positions(
     decisions = []
     for item in active_positions:
         legacy_payload = legacy_by_symbol.get(item.symbol.upper())
-        relation_context = evaluate_position_relation_rules(
+        relation_context = relation_contexts_by_symbol.get(item.symbol.upper()) or evaluate_position_relation_rules(
             item,
             portfolio,
             external_signals=external_signals or {},

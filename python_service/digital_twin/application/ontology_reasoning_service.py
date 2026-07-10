@@ -1,6 +1,7 @@
 import signal
 import time
 import inspect
+from datetime import datetime, timezone
 from typing import Callable, Dict, Iterable, List
 
 from ..domain.events import ONTOLOGY_REASONING_REQUESTED, ontology_reasoning_completed_event
@@ -32,18 +33,26 @@ class OntologyReasoningRunner:
         monitor_runner_factory: Callable,
         event_publisher=None,
         settings: Dict[str, object] = None,
+        rule_candidate_service=None,
     ):
         self.event_reader = event_reader
         self.cursor_store = cursor_store
         self.monitor_runner_factory = monitor_runner_factory
         self.event_publisher = event_publisher
         self.settings = dict(settings or {})
+        self.rule_candidate_service = rule_candidate_service
 
     def enabled(self) -> bool:
         return truthy(self.settings.get("ontologyReasoningEnabled"), True)
 
     def batch_size(self) -> int:
         return int_setting(self.settings, "ontologyReasoningBatchSize", 20, 1, 200)
+
+    def rule_candidate_ai_enabled(self) -> bool:
+        return truthy(self.settings.get("ontologyRuleCandidateAiEnabled"), True)
+
+    def rule_candidate_interval_minutes(self) -> int:
+        return int_setting(self.settings, "ontologyRuleCandidateAiIntervalMinutes", 60, 5, 1440)
 
     def pending_requests(self, limit: int = 0) -> List[object]:
         processed = set(self.cursor_store.processed_event_ids())
@@ -93,6 +102,7 @@ class OntologyReasoningRunner:
             status="ok",
             reason="데이터 변경 이벤트가 온톨로지 추론 사이클을 실행했습니다.",
         )
+        rule_candidate_result = self.propose_rule_candidates(symbols, requests, alerts, force=False)
         self.publish(completed)
         self.cursor_store.mark_processed(trigger_event_ids)
         return {
@@ -101,7 +111,59 @@ class OntologyReasoningRunner:
             "alertCount": len(alerts or []),
             "symbols": symbols,
             "accountIds": [item for item in account_ids if item],
+            "ruleCandidateResult": rule_candidate_result,
         }
+
+    def propose_rule_candidates(
+        self,
+        symbols: Iterable[str] = None,
+        requests: Iterable[object] = None,
+        alerts: Iterable[object] = None,
+        force: bool = False,
+    ) -> Dict[str, object]:
+        if not self.rule_candidate_ai_enabled():
+            return {"status": "disabled", "candidateCount": 0, "savedCount": 0}
+        if not self.rule_candidate_service:
+            return {"status": "not-configured", "candidateCount": 0, "savedCount": 0}
+        if not force and not self.rule_candidate_due():
+            return {"status": "cooldown", "candidateCount": 0, "savedCount": 0}
+        try:
+            result = self.rule_candidate_service.propose(
+                symbols=symbols or [],
+                trigger="ontology-reasoning",
+                requests=requests or [],
+                alerts=alerts or [],
+            )
+        except Exception as error:  # noqa: BLE001 - AI proposal must not block graph reasoning.
+            result = {"status": "error", "reason": str(error)[:180], "candidateCount": 0, "savedCount": 0}
+        self.mark_rule_candidate_run(result)
+        return result
+
+    def rule_candidate_due(self) -> bool:
+        if not hasattr(self.cursor_store, "load"):
+            return True
+        payload = self.cursor_store.load()
+        raw = str(payload.get("lastRuleCandidateAiAt") or "")
+        if not raw:
+            return True
+        try:
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            return True
+        elapsed = datetime.now(timezone.utc) - parsed.astimezone(timezone.utc)
+        return elapsed.total_seconds() >= self.rule_candidate_interval_minutes() * 60
+
+    def mark_rule_candidate_run(self, result: Dict[str, object]) -> None:
+        if not hasattr(self.cursor_store, "load") or not hasattr(self.cursor_store, "save"):
+            return
+        payload = self.cursor_store.load()
+        payload["lastRuleCandidateAiAt"] = datetime.now(timezone.utc).isoformat()
+        payload["lastRuleCandidateAiResult"] = {
+            "status": str((result or {}).get("status") or ""),
+            "candidateCount": int((result or {}).get("candidateCount") or 0),
+            "savedCount": int((result or {}).get("savedCount") or 0),
+        }
+        self.cursor_store.save(payload)
 
     def status(self) -> Dict[str, object]:
         pending = self.pending_requests(self.batch_size())
@@ -111,6 +173,8 @@ class OntologyReasoningRunner:
             "batchSize": self.batch_size(),
             "processedCount": len(self.cursor_store.processed_event_ids()),
             "pendingSymbols": self.request_symbols(pending),
+            "ruleCandidateAiEnabled": self.rule_candidate_ai_enabled(),
+            "ruleCandidateAiDue": self.rule_candidate_due(),
         }
 
 

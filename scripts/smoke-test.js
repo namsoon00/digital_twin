@@ -283,6 +283,10 @@ function checkFrontendAdminRender() {
         tossApiBaseUrl: "https://openapi.tossinvest.com",
         notifyProvider: "telegram",
         notifyLinkUrl: "http://127.0.0.1:3000?tab=notifications",
+        ontologyRuleCandidateAiEnabled: "1",
+        ontologyRuleCandidateAiUseCodex: "1",
+        ontologyRuleCandidateAiIntervalMinutes: "60",
+        ontologyRuleCandidateAiMaxCandidates: "3",
         valuationAssumptions: "005930,6500,12,20\nNVDA,4.2,45,15",
         marketSignalInputs: "005930,118,1.8,620000,480000,18,2.1,71000,68000,14500000000,8200000000,-11200000000\nNVDA,132,2.3,780000,520000,22,3.5,174,159,11800000,7400000,-9300000"
       },
@@ -359,6 +363,13 @@ function checkFrontendAdminRender() {
           ]
         }
       ]
+    },
+    "/api/ontology/rulebox/candidates": {
+      status: "ok",
+      trigger: "manual",
+      candidateCount: 1,
+      savedCount: 1,
+      rulebox: null
     },
     "/api/research-evidence": {
       items: [
@@ -1326,6 +1337,8 @@ function checkFrontendAdminRender() {
     assertOk(modelingRegistryHtml.indexOf('data-ontology-rulebox-json') >= 0 && modelingRegistryHtml.indexOf('data-action="run-rulebox"') >= 0, "Neo4j RuleBox JSON 편집기나 실행 버튼이 없습니다.");
     assertOk(modelingRegistryHtml.indexOf("최근 버전") >= 0 && modelingRegistryHtml.indexOf("AI 관계 후보 검토") >= 0, "Neo4j RuleBox 버전/후보 검토 섹션이 없습니다.");
     assertOk(modelingRegistryHtml.indexOf('data-ontology-rulebox-change-reason') >= 0 && modelingRegistryHtml.indexOf('data-action="append-rulebox-candidate"') >= 0, "RuleBox 변경 이유 입력이나 후보 추가 버튼이 없습니다.");
+    assertOk(modelingRegistryHtml.indexOf('data-action="propose-rulebox-candidates"') >= 0 && modelingRegistryHtml.indexOf("AI 후보 생성") >= 0, "RuleBox AI 후보 생성 버튼이 없습니다.");
+    assertOk(modelingRegistryHtml.indexOf('data-model-setting="ontologyRuleCandidateAiEnabled"') >= 0 && modelingRegistryHtml.indexOf('data-model-setting="ontologyRuleCandidateAiIntervalMinutes"') >= 0, "RuleBox AI 후보 생성 설정이 없습니다.");
     assertOk(modelingRegistryHtml.indexOf("prompt-registry-panel") >= 0 && modelingRegistryHtml.indexOf("Prompt Registry") >= 0, "규칙·프롬프트 섹션에 프롬프트 레지스트리가 없습니다.");
     assertOk(modelingRegistryHtml.indexOf("admin-modeling-panel") >= 0 && modelingRegistryHtml.indexOf("model-version-panel") >= 0, "규칙·프롬프트 섹션에 보조 모델 정책과 버전 관리가 유지되지 않았습니다.");
     assertOk(modelingRegistryHtml.indexOf('data-model-setting="notificationScoreFormula"') >= 0, "규칙·프롬프트 섹션에 알림 발송 공식 편집기가 없습니다.");

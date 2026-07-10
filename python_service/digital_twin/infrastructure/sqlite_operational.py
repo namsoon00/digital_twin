@@ -2287,19 +2287,10 @@ class SQLiteOntologyReasoningCursorStore(OperationalConnection):
             if str(item or "").strip()
         ]
 
-    def mark_processed(self, event_ids: Iterable[str]) -> None:
-        existing = self.processed_event_ids()
-        seen = set(existing)
-        merged = list(existing)
-        for event_id in event_ids or []:
-            clean = str(event_id or "").strip()
-            if clean and clean not in seen:
-                seen.add(clean)
-                merged.append(clean)
-        payload = {
-            "processedEventIds": merged[-1000:],
-            "updatedAt": utc_now(),
-        }
+    def save(self, payload: Dict[str, object]) -> None:
+        payload = dict(payload or {})
+        payload.setdefault("processedEventIds", self.processed_event_ids())
+        payload["updatedAt"] = utc_now()
         with self.connect() as connection:
             connection.execute(
                 """
@@ -2311,6 +2302,19 @@ class SQLiteOntologyReasoningCursorStore(OperationalConnection):
                 """,
                 (self.store_id, json_dumps(payload), payload["updatedAt"]),
             )
+
+    def mark_processed(self, event_ids: Iterable[str]) -> None:
+        existing = self.processed_event_ids()
+        seen = set(existing)
+        merged = list(existing)
+        for event_id in event_ids or []:
+            clean = str(event_id or "").strip()
+            if clean and clean not in seen:
+                seen.add(clean)
+                merged.append(clean)
+        payload = self.load()
+        payload["processedEventIds"] = merged[-1000:]
+        self.save(payload)
 
 
 class SQLiteModelReviewJobStore(OperationalConnection):

@@ -96,6 +96,9 @@ class OntologyGraphRepository(Protocol):
     def inferencebox_snapshot(self, symbols: List[str] = None, limit: int = 80) -> Dict[str, object]:
         ...
 
+    def save_rule_change_candidates(self, candidates: List[Dict[str, object]], context: Dict[str, object] = None) -> Dict[str, object]:
+        ...
+
 
 class OntologyProjectionRecorder(Protocol):
     def record_snapshot(self, snapshot: AccountSnapshot) -> Dict[str, object]:

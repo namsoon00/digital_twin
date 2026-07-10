@@ -14,6 +14,7 @@ from ..application.notification_service import (
     NotificationQueueRunner,
 )
 from ..application.ontology_reasoning_service import OntologyReasoningRunner
+from ..application.ontology_rule_candidate_service import RuleChangeCandidateProposalService
 from ..application.symbol_universe_service import SymbolUniverseService
 from ..domain.accounts import AccountConfig
 from ..domain.market_data import number
@@ -25,6 +26,7 @@ from .model_reviewer import reviewer_from_settings
 from .notification_ai_reviewer import notification_ai_reviewer_from_settings
 from .neo4j_ontology import ontology_repository_from_settings
 from .ontology_projection import PortfolioOntologyProjectionRecorder
+from .rule_change_candidate_ai import rule_change_candidate_advisor_from_settings
 from .notifications import queued_notifier_for_account
 from .notifications import send_events
 from .notifications import notifier_for_account
@@ -148,11 +150,29 @@ def build_news_collection_runner(settings=None, event_publisher=None) -> NewsCol
 def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> OntologyReasoningRunner:
     configured_settings = settings or runtime_settings()
     registry = AccountRegistry()
+    event_log = SQLiteEventLog()
+    ontology_repository = ontology_repository_from_settings(configured_settings)
     return OntologyReasoningRunner(
-        event_reader=SQLiteEventLog(),
+        event_reader=event_log,
         cursor_store=SQLiteOntologyReasoningCursorStore(),
         monitor_runner_factory=lambda: build_monitor_runner(registry.load()),
         event_publisher=event_publisher or default_event_bus(),
+        settings=configured_settings,
+        rule_candidate_service=RuleChangeCandidateProposalService(
+            ontology_repository=ontology_repository,
+            advisor=rule_change_candidate_advisor_from_settings(configured_settings),
+            event_reader=event_log,
+            settings=configured_settings,
+        ),
+    )
+
+
+def build_rule_change_candidate_service(settings=None) -> RuleChangeCandidateProposalService:
+    configured_settings = settings or runtime_settings()
+    return RuleChangeCandidateProposalService(
+        ontology_repository=ontology_repository_from_settings(configured_settings),
+        advisor=rule_change_candidate_advisor_from_settings(configured_settings),
+        event_reader=SQLiteEventLog(),
         settings=configured_settings,
     )
 

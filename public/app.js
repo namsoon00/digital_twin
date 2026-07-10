@@ -70,6 +70,12 @@
     ontologyReasoningEnabled: "1",
     ontologyReasoningIntervalSeconds: "10",
     ontologyReasoningBatchSize: "20",
+    ontologyRuleCandidateAiEnabled: "1",
+    ontologyRuleCandidateAiUseCodex: "1",
+    ontologyRuleCandidateAiCommand: "",
+    ontologyRuleCandidateAiTimeoutSeconds: "120",
+    ontologyRuleCandidateAiIntervalMinutes: "60",
+    ontologyRuleCandidateAiMaxCandidates: "3",
     materialityGateEnabled: "1",
     materialityMinimumScore: "65",
     marketMaterialityMinimumScore: "65",
@@ -898,6 +904,7 @@
     ontologyRuleboxLoading: false,
     ontologyRuleboxSaving: false,
     ontologyRuleboxRunning: false,
+    ontologyRuleboxProposing: false,
     ontologyRuleboxError: "",
     ontologyRuleboxLastRun: null,
     ontologyRuleboxChangeReason: "",
@@ -3888,6 +3895,12 @@
       ontologyReasoningEnabled: settingValue("ontologyReasoningEnabled"),
       ontologyReasoningIntervalSeconds: settingValue("ontologyReasoningIntervalSeconds"),
       ontologyReasoningBatchSize: settingValue("ontologyReasoningBatchSize"),
+      ontologyRuleCandidateAiEnabled: settingValue("ontologyRuleCandidateAiEnabled"),
+      ontologyRuleCandidateAiUseCodex: settingValue("ontologyRuleCandidateAiUseCodex"),
+      ontologyRuleCandidateAiCommand: settingValue("ontologyRuleCandidateAiCommand"),
+      ontologyRuleCandidateAiTimeoutSeconds: settingValue("ontologyRuleCandidateAiTimeoutSeconds"),
+      ontologyRuleCandidateAiIntervalMinutes: settingValue("ontologyRuleCandidateAiIntervalMinutes"),
+      ontologyRuleCandidateAiMaxCandidates: settingValue("ontologyRuleCandidateAiMaxCandidates"),
       materialityGateEnabled: settingValue("materialityGateEnabled"),
       materialityMinimumScore: settingValue("materialityMinimumScore"),
       marketMaterialityMinimumScore: settingValue("marketMaterialityMinimumScore"),
@@ -4073,6 +4086,30 @@
       })
       .finally(function () {
         state.ontologyRuleboxRunning = false;
+        render();
+      });
+  }
+
+  function proposeOntologyRuleCandidates() {
+    if (state.ontologyRuleboxProposing) return;
+    state.ontologyRuleboxProposing = true;
+    state.ontologyRuleboxError = "";
+    render();
+    sendJson("/api/ontology/rulebox/candidates", "POST", { trigger: "manual" })
+      .then(function (payload) {
+        state.ontologyRuleboxCandidateResult = payload;
+        if (payload && payload.rulebox) applyOntologyRuleboxPayload(payload.rulebox);
+        showSnackbar(
+          payload && payload.savedCount ? "AI 관계 후보를 Neo4j에 저장했습니다." : "AI 관계 후보 생성 결과가 없습니다.",
+          payload && payload.savedCount ? "success" : "caution"
+        );
+      })
+      .catch(function (error) {
+        state.ontologyRuleboxError = error.message || "AI 관계 후보 생성에 실패했습니다.";
+        showSnackbar(state.ontologyRuleboxError, "danger");
+      })
+      .finally(function () {
+        state.ontologyRuleboxProposing = false;
         render();
       });
   }
@@ -12308,7 +12345,7 @@
     var versions = Array.isArray(payload.versions) ? payload.versions : [];
     var candidates = Array.isArray(payload.changeCandidates) ? payload.changeCandidates : [];
     var lastRun = state.ontologyRuleboxLastRun || {};
-    var disabled = state.ontologyRuleboxSaving || state.ontologyRuleboxRunning || state.serverSettingsLocked;
+    var disabled = state.ontologyRuleboxSaving || state.ontologyRuleboxRunning || state.ontologyRuleboxProposing || state.serverSettingsLocked;
     return [
       '<article class="panel model-panel neo4j-rulebox-panel">',
       '<div class="panel-head">',
@@ -12344,6 +12381,13 @@
       '<button class="text-button" type="button" data-action="seed-rulebox"' + (disabled ? ' disabled' : '') + '>기본값 시드</button>',
       '<button class="text-button primary" type="button" data-action="save-rulebox"' + (disabled ? ' disabled' : '') + '>' + escapeHtml(state.ontologyRuleboxSaving ? "저장 중" : "RuleBox 저장") + '</button>',
       '<button class="text-button primary" type="button" data-action="run-rulebox"' + (disabled ? ' disabled' : '') + '>' + escapeHtml(state.ontologyRuleboxRunning ? "실행 중" : "Neo4j 추론 실행") + '</button>',
+      '<button class="text-button primary" type="button" data-action="propose-rulebox-candidates"' + (disabled ? ' disabled' : '') + '>' + escapeHtml(state.ontologyRuleboxProposing ? "생성 중" : "AI 후보 생성") + '</button>',
+      '</div>',
+      '<div class="settings-grid compact-settings-grid">',
+      '<label class="setting-field"><span>AI 후보 사용</span><select data-model-setting="ontologyRuleCandidateAiEnabled"><option value="1"' + ((settingValue("ontologyRuleCandidateAiEnabled") || defaultSettings.ontologyRuleCandidateAiEnabled) !== "0" ? " selected" : "") + '>사용</option><option value="0"' + ((settingValue("ontologyRuleCandidateAiEnabled") || defaultSettings.ontologyRuleCandidateAiEnabled) === "0" ? " selected" : "") + '>끄기</option></select></label>',
+      '<label class="setting-field"><span>Codex 사용</span><select data-model-setting="ontologyRuleCandidateAiUseCodex"><option value="1"' + ((settingValue("ontologyRuleCandidateAiUseCodex") || defaultSettings.ontologyRuleCandidateAiUseCodex) !== "0" ? " selected" : "") + '>사용</option><option value="0"' + ((settingValue("ontologyRuleCandidateAiUseCodex") || defaultSettings.ontologyRuleCandidateAiUseCodex) === "0" ? " selected" : "") + '>로컬</option></select></label>',
+      '<label class="setting-field"><span>주기(분)</span><input data-model-setting="ontologyRuleCandidateAiIntervalMinutes" type="number" min="5" step="5" value="' + escapeHtml(settingValue("ontologyRuleCandidateAiIntervalMinutes") || defaultSettings.ontologyRuleCandidateAiIntervalMinutes) + '"></label>',
+      '<label class="setting-field"><span>최대 후보</span><input data-model-setting="ontologyRuleCandidateAiMaxCandidates" type="number" min="1" max="10" step="1" value="' + escapeHtml(settingValue("ontologyRuleCandidateAiMaxCandidates") || defaultSettings.ontologyRuleCandidateAiMaxCandidates) + '"></label>',
       '</div>',
       '<div class="model-section">',
       '<div class="flow-title"><div><strong>최근 버전</strong><span>저장된 RuleBox 해시와 변경 이유입니다.</span></div></div>',
@@ -15304,6 +15348,13 @@
     if (runRuleboxButton) {
       runRuleboxButton.addEventListener("click", function () {
         runOntologyRulebox();
+      });
+    }
+
+    var proposeRuleboxCandidatesButton = app.querySelector('[data-action="propose-rulebox-candidates"]');
+    if (proposeRuleboxCandidatesButton) {
+      proposeRuleboxCandidatesButton.addEventListener("click", function () {
+        proposeOntologyRuleCandidates();
       });
     }
 

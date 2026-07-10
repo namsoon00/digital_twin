@@ -1,5 +1,6 @@
 import hashlib
 import json
+import re
 from typing import Dict, Iterable, List
 
 from .ontology_rulebox_contracts import GRAPH_REASONER_VERSION, GraphInferenceRule, GraphRuleCondition, GraphRuleDerivation
@@ -49,15 +50,22 @@ def rulebox_version_payload(
 def rulebox_governance_candidates(
     rules_payload: List[Dict[str, object]],
     versions: List[Dict[str, object]] = None,
+    persisted_candidates: List[Dict[str, object]] = None,
 ) -> List[Dict[str, object]]:
     rules_payload = list(rules_payload or [])
     versions = list(versions or [])
+    persisted_candidates = list(persisted_candidates or [])
     rule_ids = {
         str(item.get("rule_id") or item.get("ruleId") or "").strip()
         for item in rules_payload
         if isinstance(item, dict)
     }
     candidates: List[Dict[str, object]] = []
+
+    for candidate in persisted_candidates:
+        normalized = normalize_rule_change_candidate(candidate, existing_rule_ids=rule_ids)
+        if normalized:
+            candidates.append(normalized)
 
     if not versions:
         candidates.append({
@@ -95,7 +103,225 @@ def rulebox_governance_candidates(
             candidate["rationale"] = "동일 rule_id가 이미 RuleBox에 있습니다."
         candidates.append(candidate)
 
-    return sorted(candidates, key=lambda item: (int(item.get("priority") or 0), str(item.get("id") or "")), reverse=True)
+    return sorted(deduplicate_candidates(candidates), key=lambda item: (int(item.get("priority") or 0), str(item.get("id") or "")), reverse=True)
+
+
+def deduplicate_candidates(candidates: List[Dict[str, object]]) -> List[Dict[str, object]]:
+    result: List[Dict[str, object]] = []
+    seen = set()
+    for candidate in candidates or []:
+        candidate_id = str(candidate.get("id") or "").strip()
+        proposed = candidate.get("proposedRule") if isinstance(candidate.get("proposedRule"), dict) else {}
+        proposed_id = str(proposed.get("rule_id") or proposed.get("ruleId") or "").strip()
+        key = candidate_id or proposed_id or str(candidate.get("title") or "")
+        if key and key in seen:
+            continue
+        if key:
+            seen.add(key)
+        result.append(candidate)
+    return result
+
+
+def build_rule_change_candidate_prompt(context: Dict[str, object]) -> str:
+    payload = compact_candidate_context(context or {})
+    contract = {
+        "candidates": [
+            {
+                "title": "string",
+                "rationale": "why this ontology relation is useful",
+                "expectedEffect": "how this changes AI opinions or alert quality",
+                "risk": "false positive or data risk",
+                "requiresData": ["existing ABox relation or missing data"],
+                "priority": 0,
+                "proposedRule": {
+                    "rule_id": "graph.example.context.v1",
+                    "label": "Korean label",
+                    "version": "ai-candidate-v1",
+                    "source_kind": "stock",
+                    "enabled": False,
+                    "action_group": "alertReview",
+                    "action_level": "watch",
+                    "prompt_hint": "Korean prompt hint",
+                    "conditions": [],
+                    "derivations": [],
+                },
+            }
+        ]
+    }
+    return "\n".join([
+        "너는 자동매매 시스템이 아니라 투자 온톨로지 RuleBox 설계 리뷰어다.",
+        "목표: 현재 Neo4j RuleBox, InferenceBox, 최근 데이터 변경, 알림 근거를 보고 새로운 RuleChangeCandidate만 제안한다.",
+        "제약:",
+        "- 매수/매도 지시를 만들지 말고 관계 후보만 제안한다.",
+        "- proposedRule.enabled는 반드시 false다.",
+        "- ABox에 없는 데이터가 필요하면 proposedRule을 비우고 requiresData에 적는다.",
+        "- relation_type, condition field, target filters는 제공된 RuleBox/InferenceBox/TBox에서 확인 가능한 형태를 우선 사용한다.",
+        "- derivations에는 decision_stage와 stage_priority를 포함한다.",
+        "- 중복 rule_id를 만들지 않는다.",
+        "- 응답은 설명 없이 JSON 하나만 반환한다.",
+        "JSON 계약:",
+        json.dumps(contract, ensure_ascii=False, indent=2),
+        "입력 컨텍스트:",
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
+    ])
+
+
+def compact_candidate_context(context: Dict[str, object]) -> Dict[str, object]:
+    rulebox = context.get("ruleBox") if isinstance(context.get("ruleBox"), dict) else {}
+    inferencebox = context.get("inferenceBox") if isinstance(context.get("inferenceBox"), dict) else {}
+    return {
+        "trigger": context.get("trigger") or "manual",
+        "symbols": list(context.get("symbols") or [])[:30],
+        "ruleBox": {
+            "ruleCount": rulebox.get("ruleCount"),
+            "relationTypes": list(rulebox.get("relationTypes") or [])[:40],
+            "rules": [
+                {
+                    "rule_id": item.get("rule_id") or item.get("ruleId"),
+                    "label": item.get("label"),
+                    "enabled": item.get("enabled"),
+                    "action_group": item.get("action_group") or item.get("actionGroup"),
+                    "action_level": item.get("action_level") or item.get("actionLevel"),
+                    "conditionCount": len(item.get("conditions") or []),
+                    "derivationTypes": [
+                        derivation.get("relation_type") or derivation.get("relationType")
+                        for derivation in (item.get("derivations") or [])[:4]
+                    ],
+                }
+                for item in list(rulebox.get("rules") or [])[:30]
+                if isinstance(item, dict)
+            ],
+        },
+        "inferenceBox": {
+            "status": inferencebox.get("status"),
+            "relationCount": inferencebox.get("relationCount"),
+            "relations": [
+                {
+                    "type": item.get("type"),
+                    "ruleId": item.get("ruleId"),
+                    "polarity": item.get("polarity"),
+                    "decisionStage": item.get("decisionStage"),
+                    "stagePriority": item.get("stagePriority"),
+                    "label": item.get("label") or item.get("aiInfluenceLabel"),
+                }
+                for item in list(inferencebox.get("relations") or [])[:40]
+                if isinstance(item, dict)
+            ],
+        },
+        "recentEvents": list(context.get("recentEvents") or [])[:20],
+        "alerts": list(context.get("alerts") or [])[:20],
+        "materialityAssessments": list(context.get("materialityAssessments") or [])[:20],
+        "existingCandidates": [
+            {"id": item.get("id"), "status": item.get("status"), "title": item.get("title")}
+            for item in list(rulebox.get("changeCandidates") or [])[:20]
+            if isinstance(item, dict)
+        ],
+    }
+
+
+def rule_change_candidates_from_text(text: str, context: Dict[str, object] = None) -> List[Dict[str, object]]:
+    payload = json_object_from_text(text)
+    raw_candidates = payload.get("candidates") if isinstance(payload.get("candidates"), list) else []
+    rulebox = (context or {}).get("ruleBox") if isinstance((context or {}).get("ruleBox"), dict) else {}
+    existing_rule_ids = {
+        str(item.get("rule_id") or item.get("ruleId") or "").strip()
+        for item in (rulebox.get("rules") or [])
+        if isinstance(item, dict)
+    }
+    candidates = [
+        normalize_rule_change_candidate(item, existing_rule_ids=existing_rule_ids, source="ai-rule-candidate")
+        for item in raw_candidates
+        if isinstance(item, dict)
+    ]
+    return [item for item in candidates if item]
+
+
+def json_object_from_text(text: str) -> Dict[str, object]:
+    raw = str(text or "").strip()
+    if not raw:
+        return {}
+    fenced = re.search(r"```(?:json)?\s*(.*?)```", raw, re.DOTALL | re.IGNORECASE)
+    if fenced:
+        raw = fenced.group(1).strip()
+    try:
+        decoded = json.loads(raw)
+    except json.JSONDecodeError:
+        start = raw.find("{")
+        end = raw.rfind("}")
+        if start < 0 or end <= start:
+            return {}
+        try:
+            decoded = json.loads(raw[start:end + 1])
+        except json.JSONDecodeError:
+            return {}
+    return decoded if isinstance(decoded, dict) else {}
+
+
+def normalize_rule_change_candidate(
+    candidate: Dict[str, object],
+    existing_rule_ids: Iterable[str] = None,
+    source: str = "",
+) -> Dict[str, object]:
+    candidate = dict(candidate or {})
+    existing = {str(item or "").strip() for item in (existing_rule_ids or []) if str(item or "").strip()}
+    proposed = candidate.get("proposedRule") if isinstance(candidate.get("proposedRule"), dict) else None
+    warnings: List[str] = [str(item) for item in (candidate.get("validationWarnings") or []) if str(item or "").strip()]
+    normalized_rule = None
+    proposed_rule_id = ""
+    if proposed:
+        proposed = dict(proposed)
+        proposed["enabled"] = False
+        proposed.setdefault("version", "ai-candidate-v1")
+        proposed.setdefault("source_kind", "ai")
+        proposed_rule_id = str(proposed.get("rule_id") or proposed.get("ruleId") or "").strip()
+        try:
+            normalized_rule = GraphInferenceRule.from_dict(proposed).to_dict()
+            normalized_rule["enabled"] = False
+        except ValueError as error:
+            warnings.append("proposedRule invalid: " + str(error))
+            normalized_rule = None
+    status = str(candidate.get("status") or "").strip() or ("candidate" if normalized_rule else "data-required")
+    if proposed_rule_id and proposed_rule_id in existing:
+        status = "covered"
+        warnings.append("same rule_id already exists in RuleBox")
+    payload = {
+        "id": str(candidate.get("id") or "") or candidate_id(candidate, normalized_rule),
+        "title": str(candidate.get("title") or (normalized_rule or {}).get("label") or "AI 관계 후보"),
+        "status": status,
+        "priority": int(float(candidate.get("priority") or (74 if normalized_rule else 58))),
+        "source": str(source or candidate.get("source") or "ai-rule-candidate"),
+        "rationale": str(candidate.get("rationale") or ""),
+        "expectedEffect": str(candidate.get("expectedEffect") or ""),
+        "risk": str(candidate.get("risk") or ""),
+        "action": str(candidate.get("action") or ("append-disabled-rule" if normalized_rule else "data-required")),
+        "requiresData": [str(item) for item in (candidate.get("requiresData") or []) if str(item or "").strip()],
+        "proposedRule": normalized_rule,
+        "validationWarnings": dedupe_strings(warnings),
+    }
+    if not payload["id"].startswith(("candidate.", "governance.", "ai-candidate:")):
+        payload["id"] = "ai-candidate:" + payload["id"]
+    return payload
+
+
+def candidate_id(candidate: Dict[str, object], proposed_rule: Dict[str, object] = None) -> str:
+    basis = {
+        "title": candidate.get("title"),
+        "rationale": candidate.get("rationale"),
+        "ruleId": (proposed_rule or {}).get("rule_id") or (proposed_rule or {}).get("ruleId"),
+    }
+    encoded = json.dumps(basis, ensure_ascii=False, sort_keys=True)
+    return "ai-candidate:" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:16]
+
+
+def dedupe_strings(values: Iterable[str]) -> List[str]:
+    result = []
+    seen = set()
+    for value in values or []:
+        clean = str(value or "").strip()
+        if clean and clean not in seen:
+            seen.add(clean)
+            result.append(clean)
+    return result
 
 
 def missing_decision_policy_count(rules_payload: List[Dict[str, object]]) -> int:

@@ -59,7 +59,7 @@ from ..domain.portfolio import utc_now_iso
 from ..infrastructure.event_bus import default_event_bus
 from ..infrastructure.mock_market import mock_market_payload, mock_market_scenario_list
 from ..infrastructure.neo4j_ontology import ontology_repository_from_settings
-from ..infrastructure.service_factory import build_symbol_universe_service, flow_lens_snapshot
+from ..infrastructure.service_factory import build_rule_change_candidate_service, build_symbol_universe_service, flow_lens_snapshot
 from ..infrastructure.settings import ROOT_DIR, runtime_settings, save_runtime_settings
 from ..infrastructure.sqlite_accounts import AccountRegistry
 from ..infrastructure.sqlite.health import run_sqlite_maintenance, sqlite_health_snapshot
@@ -404,6 +404,12 @@ def settings_status_payload() -> Dict[str, object]:
         "ontologyReasoningEnabled",
         "ontologyReasoningIntervalSeconds",
         "ontologyReasoningBatchSize",
+        "ontologyRuleCandidateAiEnabled",
+        "ontologyRuleCandidateAiUseCodex",
+        "ontologyRuleCandidateAiCommand",
+        "ontologyRuleCandidateAiTimeoutSeconds",
+        "ontologyRuleCandidateAiIntervalMinutes",
+        "ontologyRuleCandidateAiMaxCandidates",
         "materialityGateEnabled",
         "materialityMinimumScore",
         "marketMaterialityMinimumScore",
@@ -527,6 +533,18 @@ def save_ontology_rulebox_payload(payload: Dict[str, object]) -> Dict[str, objec
 
 def run_ontology_rulebox_payload(payload: Dict[str, object]) -> Dict[str, object]:
     return ontology_repository_from_settings(runtime_settings()).run_rulebox(payload)
+
+
+def propose_ontology_rule_candidates_payload(payload: Dict[str, object]) -> Dict[str, object]:
+    body = payload if isinstance(payload, dict) else {}
+    symbols = body.get("symbols") if isinstance(body.get("symbols"), list) else []
+    result = build_rule_change_candidate_service(runtime_settings()).propose(
+        symbols=symbols,
+        trigger=str(body.get("trigger") or "manual"),
+    )
+    snapshot = ontology_repository_from_settings(runtime_settings()).rulebox_snapshot()
+    result["rulebox"] = snapshot
+    return result
 
 
 def seed_ontology_payload(payload: Dict[str, object]) -> Dict[str, object]:
@@ -1707,6 +1725,11 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
             if not self.ensure_writable("공유 모드에서는 Neo4j RuleBox 추론을 실행할 수 없습니다."):
                 return
             return self.send_payload(200, run_ontology_rulebox_payload(self.read_json_body()))
+
+        if path == "/api/ontology/rulebox/candidates" and self.command == "POST":
+            if not self.ensure_writable("공유 모드에서는 Neo4j RuleBox 후보를 생성할 수 없습니다."):
+                return
+            return self.send_payload(200, propose_ontology_rule_candidates_payload(self.read_json_body()))
 
         if path == "/api/ontology/seed" and self.command == "POST":
             if not self.ensure_writable("공유 모드에서는 Neo4j 온톨로지 시드를 실행할 수 없습니다."):

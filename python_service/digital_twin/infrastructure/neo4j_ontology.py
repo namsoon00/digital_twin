@@ -9,6 +9,7 @@ from ..domain.ontology_decision_policy import decision_stage_from_action, relati
 from ..domain.ontology_rulebox_catalog import default_graph_inference_rules
 from ..domain.ontology_rulebox_contracts import GRAPH_REASONER_VERSION, GraphInferenceRule
 from ..domain.ontology_rulebox_governance import (
+    normalize_rule_change_candidate,
     rulebox_governance_candidates,
     rulebox_version_payload,
 )
@@ -87,6 +88,15 @@ class NullOntologyGraphRepository:
             "entityCount": 0,
             "relationCount": 0,
             "traceCount": 0,
+        }
+
+    def save_rule_change_candidates(self, candidates: List[Dict[str, object]], context: Dict[str, object] = None) -> Dict[str, object]:
+        return {
+            "configured": False,
+            "status": "disabled",
+            "reason": "Neo4j URI가 없어 RuleChangeCandidate를 저장하지 않았습니다.",
+            "candidateCount": len(list(candidates or [])),
+            "savedCount": 0,
         }
 
 
@@ -577,7 +587,7 @@ class Neo4jOntologyGraphRepository:
         errors = payload.get("errors") or []
         if errors:
             return rulebox_store_snapshot_unavailable("neo4j-error", json.dumps(errors[:2], ensure_ascii=False)[:300], source="neo4j-http")
-        rowsets = http_result_rowsets(payload, ["rules", "conditions", "derivations", "relationTypes", "versions"])
+        rowsets = http_result_rowsets(payload, ["rules", "conditions", "derivations", "relationTypes", "versions", "candidates"])
         return rulebox_snapshot_from_rows(rowsets, source="neo4j-http")
 
     def rulebox_snapshot_via_driver(self) -> Dict[str, object]:
@@ -589,7 +599,7 @@ class Neo4jOntologyGraphRepository:
             driver = GraphDatabase.driver(self.uri, auth=(self.user, self.password) if self.user or self.password else None)
             with driver.session(database=self.database) as session:
                 rowsets = {}
-                for key, statement in zip(["rules", "conditions", "derivations", "relationTypes", "versions"], rulebox_snapshot_statements()):
+                for key, statement in zip(["rules", "conditions", "derivations", "relationTypes", "versions", "candidates"], rulebox_snapshot_statements()):
                     result = session.run(statement["statement"], **statement["parameters"])
                     rowsets[key] = [neo4j_record_to_dict(record) for record in result]
             driver.close()
@@ -662,6 +672,52 @@ class Neo4jOntologyGraphRepository:
             except Exception as error:  # noqa: BLE001 - governance write should report structured errors.
                 return {"status": "error", "reason": str(error)[:180], "version": version}
         return {"status": "unsupported-uri", "reason": "Unsupported Neo4j URI.", "version": version}
+
+    def save_rule_change_candidates(self, candidates: List[Dict[str, object]], context: Dict[str, object] = None) -> Dict[str, object]:
+        if not self.uri:
+            return NullOntologyGraphRepository().save_rule_change_candidates(candidates, context)
+        rules = []
+        try:
+            snapshot = self.rulebox_snapshot()
+            rules = snapshot.get("rules") or []
+        except Exception:  # noqa: BLE001 - candidate save can still validate without the snapshot.
+            rules = []
+        existing_rule_ids = [
+            str(item.get("rule_id") or item.get("ruleId") or "")
+            for item in rules
+            if isinstance(item, dict)
+        ]
+        normalized = [
+            normalize_rule_change_candidate(candidate, existing_rule_ids=existing_rule_ids)
+            for candidate in (candidates or [])
+            if isinstance(candidate, dict)
+        ]
+        normalized = [item for item in normalized if item]
+        if not normalized:
+            return {"configured": True, "status": "no-candidates", "candidateCount": 0, "savedCount": 0}
+        statements = rule_change_candidate_statements(normalized, context or {})
+        if self.uri.startswith("http://") or self.uri.startswith("https://"):
+            endpoint, headers = self.http_endpoint_and_headers()
+            try:
+                response = self.post_http_statements(endpoint, headers, statements)
+            except Exception as error:  # noqa: BLE001 - admin command should report structured errors.
+                return {"configured": True, "status": "error", "reason": str(error)[:180], "candidateCount": len(normalized), "savedCount": 0}
+            errors = response.get("errors") or []
+            if errors:
+                return {"configured": True, "status": "neo4j-error", "reason": json.dumps(errors[:2], ensure_ascii=False)[:300], "candidateCount": len(normalized), "savedCount": 0}
+            return {"configured": True, "status": "ok", "candidateCount": len(normalized), "savedCount": len(normalized)}
+        if self.uri.startswith("bolt://") or self.uri.startswith("neo4j://"):
+            try:
+                from neo4j import GraphDatabase
+                driver = GraphDatabase.driver(self.uri, auth=(self.user, self.password) if self.user or self.password else None)
+                with driver.session(database=self.database) as session:
+                    for statement in statements:
+                        session.run(statement["statement"], **statement["parameters"])
+                driver.close()
+                return {"configured": True, "status": "ok", "candidateCount": len(normalized), "savedCount": len(normalized)}
+            except Exception as error:  # noqa: BLE001 - admin command should report structured errors.
+                return {"configured": True, "status": "error", "reason": str(error)[:180], "candidateCount": len(normalized), "savedCount": 0}
+        return {"configured": True, "status": "unsupported-uri", "reason": "Unsupported Neo4j URI.", "candidateCount": len(normalized), "savedCount": 0}
 
     def seed_ontology(self, payload: Dict[str, object] = None) -> Dict[str, object]:
         if not self.uri:
@@ -1137,6 +1193,19 @@ def rulebox_snapshot_statements() -> List[Dict[str, object]]:
             ),
             "parameters": {},
         },
+        {
+            "statement": (
+                "MATCH (candidate:OntologyEntity {kind: 'rule-change-candidate', ontologyBox: 'RuleBoxGovernance'}) "
+                "RETURN candidate.id AS id, candidate.label AS label, candidate.title AS title, "
+                "candidate.status AS status, candidate.priority AS priority, candidate.source AS source, "
+                "candidate.rationale AS rationale, candidate.expectedEffect AS expectedEffect, candidate.risk AS risk, "
+                "candidate.action AS action, candidate.requiresData AS requiresData, candidate.proposedRuleJson AS proposedRuleJson, "
+                "candidate.validationWarnings AS validationWarnings, candidate.promptVersion AS promptVersion, "
+                "candidate.createdAt AS createdAt, candidate.updatedAt AS updatedAt, candidate.symbols AS symbols "
+                "ORDER BY coalesce(candidate.updatedAt, candidate.createdAt, '') DESC LIMIT 20"
+            ),
+            "parameters": {},
+        },
     ]
 
 
@@ -1176,6 +1245,56 @@ def rulebox_version_statements(version: Dict[str, object]) -> List[Dict[str, obj
                 "clearInference": bool(version.get("clearInference")),
                 "createdAt": str(version.get("createdAt") or utc_now()),
             },
+        }
+    ]
+
+
+def rule_change_candidate_statements(candidates: List[Dict[str, object]], context: Dict[str, object] = None) -> List[Dict[str, object]]:
+    updated_at = utc_now()
+    rows = []
+    symbols = [str(item or "").upper().strip() for item in ((context or {}).get("symbols") or []) if str(item or "").strip()]
+    for candidate in candidates or []:
+        proposed = candidate.get("proposedRule") if isinstance(candidate.get("proposedRule"), dict) else None
+        rows.append({
+            "id": str(candidate.get("id") or ""),
+            "label": str(candidate.get("title") or candidate.get("id") or ""),
+            "title": str(candidate.get("title") or ""),
+            "status": str(candidate.get("status") or "candidate"),
+            "priority": int(candidate.get("priority") or 0),
+            "source": str(candidate.get("source") or "ai-rule-candidate"),
+            "rationale": str(candidate.get("rationale") or ""),
+            "expectedEffect": str(candidate.get("expectedEffect") or ""),
+            "risk": str(candidate.get("risk") or ""),
+            "action": str(candidate.get("action") or ""),
+            "requiresData": [str(item) for item in (candidate.get("requiresData") or []) if str(item or "").strip()],
+            "proposedRuleJson": json.dumps(proposed, ensure_ascii=False, sort_keys=True) if proposed else "",
+            "validationWarnings": [str(item) for item in (candidate.get("validationWarnings") or []) if str(item or "").strip()],
+            "promptVersion": str(candidate.get("promptVersion") or "rule-change-candidate-ai-v1"),
+            "symbols": symbols,
+            "updatedAt": updated_at,
+        })
+    return [
+        {
+            "statement": (
+                "MERGE (registry:OntologyEntity {id: 'rulebox-governance:graph-reasoner'}) "
+                "SET registry.label = 'RuleBox Governance', registry.kind = 'rulebox-governance', "
+                "registry.ontologyBox = 'RuleBoxGovernance', registry.boundedContext = 'reasoning-insight', "
+                "registry.tboxClass = 'RuleBoxGovernance', registry.updatedAt = $updatedAt "
+                "WITH registry "
+                "UNWIND $rows AS row "
+                "MERGE (candidate:OntologyEntity {id: row.id}) "
+                "ON CREATE SET candidate.createdAt = row.updatedAt "
+                "SET candidate.label = row.label, candidate.title = row.title, candidate.kind = 'rule-change-candidate', "
+                "candidate.ontologyBox = 'RuleBoxGovernance', candidate.boundedContext = 'reasoning-insight', "
+                "candidate.tboxClass = 'RuleChangeCandidate', candidate.status = row.status, candidate.priority = row.priority, "
+                "candidate.source = row.source, candidate.rationale = row.rationale, candidate.expectedEffect = row.expectedEffect, "
+                "candidate.risk = row.risk, candidate.action = row.action, candidate.requiresData = row.requiresData, "
+                "candidate.proposedRuleJson = row.proposedRuleJson, candidate.validationWarnings = row.validationWarnings, "
+                "candidate.promptVersion = row.promptVersion, candidate.symbols = row.symbols, candidate.updatedAt = row.updatedAt "
+                "MERGE (registry)-[rel:HAS_RULE_CHANGE_CANDIDATE]->(candidate) "
+                "SET rel.weight = 1.0, rel.ontologyBox = 'RuleBoxGovernance', rel.updatedAt = row.updatedAt"
+            ),
+            "parameters": {"rows": rows, "updatedAt": updated_at},
         }
     ]
 
@@ -1325,6 +1444,7 @@ def rulebox_snapshot_from_rows(rowsets: Dict[str, List[Dict[str, object]]], sour
     ))
     payload = rulebox_rules_to_payload(rules)
     versions = [rulebox_version_from_row(row) for row in (rowsets.get("versions") or [])]
+    candidates = [rule_change_candidate_from_row(row) for row in (rowsets.get("candidates") or [])]
     return {
         "configured": True,
         "saved": True,
@@ -1339,7 +1459,7 @@ def rulebox_snapshot_from_rows(rowsets: Dict[str, List[Dict[str, object]]], sour
         "defaultsFallbackUsed": False,
         "versions": versions,
         "versionCount": len(versions),
-        "changeCandidates": rulebox_governance_candidates(payload, versions),
+        "changeCandidates": rulebox_governance_candidates(payload, versions, candidates),
     }
 
 
@@ -1358,6 +1478,28 @@ def rulebox_version_from_row(row: Dict[str, object]) -> Dict[str, object]:
         "author": str(row.get("author") or ""),
         "engineVersion": str(row.get("engineVersion") or ""),
         "createdAt": str(row.get("createdAt") or ""),
+    }
+
+
+def rule_change_candidate_from_row(row: Dict[str, object]) -> Dict[str, object]:
+    proposed = json_object(row.get("proposedRuleJson"))
+    return {
+        "id": str(row.get("id") or ""),
+        "title": str(row.get("title") or row.get("label") or ""),
+        "status": str(row.get("status") or ""),
+        "priority": int(number_or_none(row.get("priority")) or 0),
+        "source": str(row.get("source") or ""),
+        "rationale": str(row.get("rationale") or ""),
+        "expectedEffect": str(row.get("expectedEffect") or ""),
+        "risk": str(row.get("risk") or ""),
+        "action": str(row.get("action") or ""),
+        "requiresData": list_of_strings(row.get("requiresData")),
+        "proposedRule": proposed if proposed else None,
+        "validationWarnings": list_of_strings(row.get("validationWarnings")),
+        "promptVersion": str(row.get("promptVersion") or ""),
+        "createdAt": str(row.get("createdAt") or ""),
+        "updatedAt": str(row.get("updatedAt") or ""),
+        "symbols": list_of_strings(row.get("symbols")),
     }
 
 

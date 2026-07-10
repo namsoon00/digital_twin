@@ -28,7 +28,14 @@ Domain:
 - `python_service/digital_twin/domain/ontology_tbox.py`: bounded-context TBox vocabulary, relation definitions, and ontology reasoning rule catalog
 - `python_service/digital_twin/domain/ontology_contracts.py`: ontology graph data contracts such as entities, relations, evidence, beliefs, opinions, and portfolio ontology snapshots
 - `python_service/digital_twin/domain/ontology_schema.py`: TBox/ABox payloads, bounded-context property assignment, and basic ontology graph mutation helpers
+- `python_service/digital_twin/domain/ontology_relation_contracts.py`: relation-rule engine data contracts, prompt template contracts, score bands, decision stages, and threshold constants
+- `python_service/digital_twin/domain/ontology_rule_catalog.py`: default relation-rule catalog, score-band catalog, and decision-stage catalog
+- `python_service/digital_twin/domain/ontology_prompt_registry.py`: default AI prompt registry text, prompt guardrails, and prompt policy defaults
+- `python_service/digital_twin/domain/ontology_relation_facts.py`: position, temporal, liquidity, macro, research-evidence, and missing-data facts used by relation-rule evaluation
 - `python_service/digital_twin/domain/portfolio_ontology_builder.py`: portfolio snapshot to ontology builder; Neo4j projection must call it in ABox-facts-only mode and leave opinions, insights, and inference to graph-store/AI stages
+- `python_service/digital_twin/domain/portfolio_ontology_catalog.py`: portfolio ontology projection catalogs for metrics, runtime settings, operational pipelines, insight types, factors, and sectors
+- `python_service/digital_twin/domain/portfolio_ontology_market_concepts.py`: market metric, trend, data-source, model-score, price-level, and liquidity ABox concept builders
+- `python_service/digital_twin/domain/portfolio_ontology_runtime_concepts.py`: runtime settings, account delivery profile, operational pipeline, strategy world, and decision-item ABox concept builders
 - `python_service/digital_twin/domain/ontology_prompting.py`: ontology read models for reasoning cards, AI inference packets, worldview summaries, and prompt payloads
 - `python_service/digital_twin/domain/external_signal_quality.py`: external signal provenance, freshness, source-health, and symbol-coverage scoring
 - `python_service/digital_twin/domain/ontology_quality.py`: AI opinion readiness and ontology graph quality sample metrics

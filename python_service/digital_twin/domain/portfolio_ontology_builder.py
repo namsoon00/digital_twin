@@ -35,9 +35,6 @@ from .ontology_schema import (
     tbox_entities,
     tbox_relations,
 )
-from .ontology_tbox import (
-    tbox_class_def,
-)
 from .ontology_external_abox import (
     add_external_signal_concepts,
     add_position_macro_context_concepts,
@@ -45,136 +42,32 @@ from .ontology_external_abox import (
 )
 from .ontology_reasoning import apply_graph_reasoning
 from .ontology_relation_rules import evaluate_position_relation_rules
+from .portfolio_ontology_catalog import (
+    FACTOR_BENCHMARKS,
+    SECTOR_FACTORS,
+)
+from .portfolio_ontology_runtime_concepts import (
+    add_account_delivery_profile_concepts,
+    add_decision_item_concepts,
+    add_operational_world_concepts,
+    add_runtime_metadata_concepts,
+    add_runtime_setting_concepts,
+    add_strategy_world_concepts,
+    runtime_settings,
+)
+from .portfolio_ontology_market_concepts import (
+    add_data_source_concept,
+    add_legacy_model_score_concepts,
+    add_metric_concepts,
+    add_price_level_and_liquidity_concepts,
+    data_quality_score,
+    pct_distance_safe,
+    smart_money_score,
+    trend_dynamic_facts,
+    trend_score,
+)
 from .portfolio import PortfolioSummary, Position
 from .trend_transitions import trend_transition_assessment
-
-
-SENSITIVE_SETTING_TOKENS = ("secret", "token", "password", "clientid", "client_id", "accountseq", "account_seq", "chatid", "chat_id", "key")
-
-METRIC_CONCEPTS = [
-    ("quantity", "수량", "Position", "HAS_POSITION", "position", "quantity"),
-    ("sellable_quantity", "매도 가능 수량", "Position", "HAS_POSITION", "position", "sellableQuantity"),
-    ("average_price", "평단", "PriceMetric", "HAS_PRICE", "price", "averagePrice"),
-    ("current_price", "현재가", "PriceMetric", "HAS_PRICE", "price", "currentPrice"),
-    ("market_value", "평가액", "PriceMetric", "HAS_PRICE", "price", "marketValue"),
-    ("profit_loss", "평가손익", "PriceMetric", "HAS_PRICE", "price", "profitLoss"),
-    ("profit_loss_rate", "손익률", "PriceMetric", "HAS_PRICE", "price", "profitLossRate"),
-    ("change_rate", "가격 변화율", "PriceMetric", "HAS_PRICE", "price", "changeRate"),
-    ("volume", "거래량", "TradeFlow", "HAS_TRADE_FLOW", "flow", "volume"),
-    ("volume_ratio", "거래량 배율", "TradeFlow", "HAS_TRADE_FLOW", "flow", "volumeRatio"),
-    ("trade_strength", "체결강도", "TradeFlow", "HAS_TRADE_FLOW", "flow", "tradeStrength"),
-    ("trading_value", "거래대금", "TradeFlow", "HAS_TRADE_FLOW", "flow", "tradingValue"),
-    ("buy_volume", "매수 체결량", "TradeFlow", "HAS_TRADE_FLOW", "flow", "buyVolume"),
-    ("sell_volume", "매도 체결량", "TradeFlow", "HAS_TRADE_FLOW", "flow", "sellVolume"),
-    ("orderbook_bid_volume", "매수호가 잔량", "TradeFlow", "HAS_TRADE_FLOW", "flow", "orderbookBidVolume"),
-    ("orderbook_ask_volume", "매도호가 잔량", "TradeFlow", "HAS_TRADE_FLOW", "flow", "orderbookAskVolume"),
-    ("bid_ask_imbalance", "호가 불균형", "TradeFlow", "HAS_TRADE_FLOW", "flow", "bidAskImbalance"),
-    ("foreign_net_volume", "외국인 순매수", "TradeFlow", "HAS_TRADE_FLOW", "flow", "foreignNetVolume"),
-    ("foreign_net_amount", "외국인 순매수 금액", "TradeFlow", "HAS_TRADE_FLOW", "flow", "foreignNetAmount"),
-    ("institution_net_volume", "기관 순매수", "TradeFlow", "HAS_TRADE_FLOW", "flow", "institutionNetVolume"),
-    ("institution_net_amount", "기관 순매수 금액", "TradeFlow", "HAS_TRADE_FLOW", "flow", "institutionNetAmount"),
-    ("individual_net_volume", "개인 순매수", "TradeFlow", "HAS_TRADE_FLOW", "flow", "individualNetVolume"),
-    ("individual_net_amount", "개인 순매수 금액", "TradeFlow", "HAS_TRADE_FLOW", "flow", "individualNetAmount"),
-    ("ma5", "5일선", "TechnicalIndicator", "HAS_TECHNICAL_INDICATOR", "technical", "ma5"),
-    ("ma20", "20일선", "TechnicalIndicator", "HAS_TECHNICAL_INDICATOR", "technical", "ma20"),
-    ("ma60", "60일선", "TechnicalIndicator", "HAS_TECHNICAL_INDICATOR", "technical", "ma60"),
-    ("ma120", "120일선", "TechnicalIndicator", "HAS_TECHNICAL_INDICATOR", "technical", "ma120"),
-    ("ma200", "200일선", "TechnicalIndicator", "HAS_TECHNICAL_INDICATOR", "technical", "ma200"),
-    ("ma20_slope", "20일선 기울기", "TechnicalIndicator", "HAS_TECHNICAL_INDICATOR", "technical", "ma20Slope"),
-    ("ma60_slope", "60일선 기울기", "TechnicalIndicator", "HAS_TECHNICAL_INDICATOR", "technical", "ma60Slope"),
-    ("ma20_distance", "20일선 괴리", "TechnicalIndicator", "HAS_TECHNICAL_INDICATOR", "technical", "ma20Distance"),
-    ("ma60_distance", "60일선 괴리", "TechnicalIndicator", "HAS_TECHNICAL_INDICATOR", "technical", "ma60Distance"),
-]
-
-SETTING_CONCEPT_TYPES = {
-    "ontologyRelationRules": ("AlertRule", "HAS_ALERT_RULE"),
-    "aiPromptTemplates": ("PromptTemplate", "HAS_PROMPT_TEMPLATE"),
-    "aiPromptPolicy": ("NotificationPolicy", "HAS_NOTIFICATION_POLICY"),
-    "alertThresholds": ("Threshold", "HAS_THRESHOLD"),
-    "relationRuleThresholds": ("Threshold", "HAS_THRESHOLD"),
-    "modelDecisionThresholds": ("Threshold", "HAS_THRESHOLD"),
-    "formulaWeights": ("Threshold", "HAS_THRESHOLD"),
-    "alertCadenceMinutes": ("CooldownPolicy", "HAS_COOLDOWN_POLICY"),
-    "externalApiFetchIntervalMinutes": ("CollectionSchedule", "RUNS_ON_SCHEDULE"),
-    "marketSnapshotIntervalMinutes": ("CollectionSchedule", "RUNS_ON_SCHEDULE"),
-    "watchlistSnapshotIntervalMinutes": ("CollectionSchedule", "RUNS_ON_SCHEDULE"),
-    "externalSignalsIntervalMinutes": ("CollectionSchedule", "RUNS_ON_SCHEDULE"),
-    "notificationNoveltyThreshold": ("NoveltyPolicy", "HAS_NOVELTY_POLICY"),
-    "notificationCooldownMinutes": ("CooldownPolicy", "HAS_COOLDOWN_POLICY"),
-    "buyScoreFormula": ("StrategySignal", "CONFIGURES"),
-    "sellScoreFormula": ("StrategySignal", "CONFIGURES"),
-    "customBuyModelFormula": ("StrategySignal", "CONFIGURES"),
-    "customSellModelFormula": ("StrategySignal", "CONFIGURES"),
-    "profitTakeScoreFormula": ("StrategySignal", "CONFIGURES"),
-    "lossCutScoreFormula": ("StrategySignal", "CONFIGURES"),
-    "notificationScoreFormula": ("NotificationPolicy", "HAS_NOTIFICATION_POLICY"),
-    "messageDeliveryLevel": ("MessageDeliveryProfile", "HAS_MESSAGE_DELIVERY_PROFILE"),
-    "newsCollectionMinRelevanceScore": ("Threshold", "HAS_THRESHOLD"),
-}
-
-OPERATIONAL_PIPELINES = [
-    {
-        "key": "marketSnapshot",
-        "label": "marketSnapshot",
-        "tboxClasses": ["DataPipeline", "MarketSnapshot"],
-        "sourceKey": "account-market-data",
-        "sourceLabel": "계좌·보유·시세 데이터",
-        "scheduleKey": "marketSnapshotIntervalMinutes",
-        "defaultMinutes": 3,
-        "dataKinds": ["portfolio", "positions", "quotes", "cash"],
-        "description": "보유 잔고, 현재가, 현금, 포트폴리오 노출을 갱신합니다.",
-    },
-    {
-        "key": "watchlistSnapshot",
-        "label": "watchlistSnapshot",
-        "tboxClasses": ["DataPipeline", "WatchlistSnapshot"],
-        "sourceKey": "watchlist-market-data",
-        "sourceLabel": "관심종목 시세 데이터",
-        "scheduleKey": "watchlistSnapshotIntervalMinutes",
-        "defaultMinutes": 5,
-        "dataKinds": ["watchlist", "quotes", "technicalIndicators"],
-        "description": "관심 종목의 시세, 추세, 진입 관찰 데이터를 갱신합니다.",
-    },
-    {
-        "key": "externalSignals",
-        "label": "externalSignals",
-        "tboxClasses": ["DataPipeline", "ExternalSignalCollection"],
-        "sourceKey": "external-signal-data",
-        "sourceLabel": "뉴스·공시·거시·크립토 외부 신호",
-        "scheduleKey": "externalSignalsIntervalMinutes",
-        "fallbackSettingKey": "externalApiFetchIntervalMinutes",
-        "defaultMinutes": 30,
-        "dataKinds": ["news", "disclosures", "macro", "fx", "crypto", "foreignMarket"],
-        "description": "외부 신호를 수집해 종목과 포트폴리오 관계에 연결합니다.",
-    },
-]
-
-INSIGHT_TYPES = [
-    ("riskIncrease", "리스크 증가"),
-    ("opportunityDetected", "기회 포착"),
-    ("contradictionDetected", "관계 충돌"),
-    ("dataQualityWarning", "데이터 품질 경고"),
-    ("portfolioExposureShift", "포트폴리오 노출 변화"),
-    ("watchlistEntrySignal", "관심종목 진입 관찰"),
-]
-
-FACTOR_BENCHMARKS = {
-    "KR": ("benchmark:KOSPI", "KOSPI"),
-    "KOSPI": ("benchmark:KOSPI", "KOSPI"),
-    "KOSDAQ": ("benchmark:KOSDAQ", "KOSDAQ"),
-    "US": ("benchmark:NASDAQ", "NASDAQ/US Growth"),
-    "USA": ("benchmark:NASDAQ", "NASDAQ/US Growth"),
-    "NASDAQ": ("benchmark:NASDAQ", "NASDAQ/US Growth"),
-    "NYSE": ("benchmark:SP500", "S&P 500"),
-    "CRYPTO": ("benchmark:BTC", "Bitcoin/Crypto Liquidity"),
-}
-
-SECTOR_FACTORS = {
-    "반도체": ["AI 인프라", "반도체 사이클", "수출 민감"],
-    "AI/플랫폼": ["AI/플랫폼 성장", "금리 민감 성장주", "광고·클라우드 수요"],
-    "모빌리티": ["전기차 수요", "경기 민감 소비재"],
-    "디지털자산": ["크립토 유동성", "위험자산 심리"],
-}
 
 
 def unique_list(values: Iterable[str]) -> List[str]:
@@ -365,19 +258,6 @@ def event_relation_properties(item: object) -> Dict[str, object]:
     return props
 
 
-def metric_tbox_classes(tbox_class: str, field_name: str) -> List[str]:
-    if tbox_class == "PriceMetric":
-        return ["Observation", "PriceObservation", "PriceMetric"]
-    if tbox_class == "TechnicalIndicator":
-        return ["Observation", "TechnicalObservation", "TechnicalIndicator", "TrendSignal"]
-    if tbox_class == "TradeFlow":
-        if field_name == "volume":
-            return ["Observation", "VolumeObservation", "TradeFlow", "FlowSignal"]
-        return ["Observation", "FlowObservation", "TradeFlow", "FlowSignal"]
-    if tbox_class == "DataQuality":
-        return ["Observation", "DataQuality", "DataQualitySignal"]
-    return [tbox_class]
-
 
 def instrument_tbox_classes(position: Position) -> List[str]:
     market = str(position.market or "").lower()
@@ -486,42 +366,6 @@ def add_execution_plan_concepts(
     return plan_id
 
 
-def safe_setting_value(key: str, value: object) -> object:
-    lowered = str(key or "").replace("-", "").replace("_", "").lower()
-    if any(token.replace("_", "") in lowered for token in SENSITIVE_SETTING_TOKENS):
-        return "configured" if value not in (None, "", False) else ""
-    text = str(value or "")
-    return text[:1200] if len(text) > 1200 else value
-
-
-def metric_value(position: Position, field_name: str) -> float:
-    return number(getattr(position, field_name, 0))
-
-
-def metric_relation_properties(field_name: str, value: float, source: str) -> Dict[str, object]:
-    properties: Dict[str, object] = {"field": field_name, "source": source}
-    if field_name == "profit_loss_rate":
-        if value <= -8:
-            properties.update({"polarity": "risk", "opinionImpact": min(18.0, abs(value)), "aiInfluenceLabel": "손실률이 관계 리스크를 높임"})
-        elif value >= 20:
-            properties.update({"polarity": "risk", "opinionImpact": 8.0, "aiInfluenceLabel": "큰 수익 구간이 이익 보호 필요성을 높임"})
-        elif value > 0:
-            properties.update({"polarity": "support", "supportImpact": min(8.0, value / 3), "aiInfluenceLabel": "수익 구간이 보유 근거를 보강"})
-    elif field_name in {"ma20_distance", "ma60_distance", "ma20_slope", "ma60_slope"}:
-        if value <= -5:
-            properties.update({"polarity": "risk", "opinionImpact": min(14.0, abs(value)), "aiInfluenceLabel": "추세 지표 약화"})
-        elif value >= 5:
-            properties.update({"polarity": "support", "supportImpact": min(10.0, value), "aiInfluenceLabel": "추세 지표 우호"})
-    elif field_name in {"foreign_net_volume", "institution_net_volume", "foreign_net_amount", "institution_net_amount"}:
-        if value < 0:
-            properties.update({"polarity": "risk", "opinionImpact": 5.0, "aiInfluenceLabel": "주요 수급 순매도"})
-        elif value > 0:
-            properties.update({"polarity": "support", "supportImpact": 5.0, "aiInfluenceLabel": "주요 수급 순매수"})
-    elif field_name in {"volume_ratio", "trade_strength", "bid_ask_imbalance"}:
-        if value:
-            properties.update({"polarity": "context", "aiInfluenceLabel": "단기 수급 맥락"})
-    return properties
-
 
 def relation_relation_label(relation: OntologyRelation, labels: Dict[str, str]) -> str:
     properties = relation.properties or {}
@@ -565,118 +409,8 @@ def position_weight(position: Position, portfolio: PortfolioSummary) -> float:
     return (number(position.market_value) / base) * 100 if base else 0.0
 
 
-def smart_money_score(position: Position) -> float:
-    foreign_net = number(position.foreign_net_volume) or number(position.foreign_buy_volume) - number(position.foreign_sell_volume)
-    institution_net = number(position.institution_net_volume) or number(position.institution_buy_volume) - number(position.institution_sell_volume)
-    base = abs(foreign_net) + abs(institution_net)
-    return clamp(((foreign_net + institution_net) / base) * 100, -100.0, 100.0) if base else 0.0
 
 
-def trend_score(position: Position) -> float:
-    return clamp(
-        number(position.ma20_distance) * 0.45
-        + number(position.ma60_distance) * 0.25
-        + number(position.ma20_slope) * 4
-        + number(position.ma60_slope) * 3
-        + number(position.change_rate) * 0.4,
-        -35.0,
-        35.0,
-    )
-
-
-def trend_dynamic_facts(position: Position) -> Dict[str, object]:
-    ma20_distance = number(position.ma20_distance)
-    ma60_distance = number(position.ma60_distance)
-    ma20_slope = number(position.ma20_slope)
-    ma60_slope = number(position.ma60_slope)
-    price_change = number(position.change_rate)
-    trend_curve = ma20_slope - ma60_slope
-    has_ma20_context = bool(number(position.ma20) or ma20_distance)
-    has_ma60_context = bool(number(position.ma60) or ma60_distance)
-    short_term_breakdown = has_ma20_context and ma20_distance <= -5.0
-    medium_term_support = has_ma60_context and ma60_distance >= 0.0
-    support_retest = short_term_breakdown and has_ma60_context and ma60_distance >= -1.0
-    recovery_attempt = (
-        (ma20_distance < 0 or number(position.profit_loss_rate) < 0)
-        and has_ma60_context
-        and ma60_distance >= -1.0
-        and (price_change >= 1.0 or ma20_slope >= 0.3 or trend_curve >= 0.5)
-    )
-    breakdown_acceleration = (
-        short_term_breakdown
-        and (
-            price_change <= -2.0
-            or ma20_slope <= -1.0
-            or trend_curve <= -1.0
-            or (ma60_distance <= -5.0 and ma20_slope < 0 and ma60_slope < 0)
-        )
-    )
-    if breakdown_acceleration:
-        state = "하락 가속"
-        polarity = "risk"
-        impact = 16.0
-    elif support_retest:
-        state = "60일선 지지 재확인"
-        polarity = "context"
-        impact = 7.0
-    elif recovery_attempt:
-        state = "회복 시도"
-        polarity = "support"
-        impact = 7.0
-    elif has_ma20_context and has_ma60_context and ma20_distance >= 0 and ma60_distance >= 0:
-        state = "상승 추세 유지"
-        polarity = "support"
-        impact = 6.0
-    elif short_term_breakdown:
-        state = "단기 추세 훼손"
-        polarity = "risk"
-        impact = 10.0
-    else:
-        state = "중립 추세"
-        polarity = "context"
-        impact = 0.0
-    risk_score = clamp(
-        abs(min(0.0, ma20_distance)) * 2.0
-        + abs(min(0.0, ma60_distance)) * 1.4
-        + abs(min(0.0, price_change)) * 3.0
-        + abs(min(0.0, ma20_slope)) * 6.0
-        + abs(min(0.0, trend_curve)) * 4.0
-        - (10.0 if support_retest or recovery_attempt else 0.0),
-        0.0,
-        100.0,
-    )
-    return {
-        "state": state,
-        "priceChangeRate": round(price_change, 2),
-        "ma20Distance": round(ma20_distance, 2),
-        "ma60Distance": round(ma60_distance, 2),
-        "ma20Slope": round(ma20_slope, 2),
-        "ma60Slope": round(ma60_slope, 2),
-        "trendCurve": round(trend_curve, 2),
-        "shortTermBreakdown": short_term_breakdown,
-        "mediumTermSupport": medium_term_support,
-        "supportRetest": support_retest,
-        "recoveryAttempt": recovery_attempt,
-        "breakdownAcceleration": breakdown_acceleration,
-        "dynamicRiskScore": round(risk_score, 1),
-        "polarity": polarity,
-        "opinionImpact": impact,
-    }
-
-
-def data_quality_score(position: Position) -> float:
-    missing = 0
-    for value in [
-        position.current_price,
-        position.market_value,
-        position.quantity,
-        position.profit_loss_rate,
-        position.ma20,
-        position.ma60,
-    ]:
-        if value in (None, "", 0):
-            missing += 1
-    return clamp(100 - missing * 14, 15.0, 100.0)
 
 
 def evidence_id(symbol: str, kind: str) -> str:
@@ -929,218 +663,11 @@ def add_portfolio_factor_exposure_concepts(
         add_relation(graph, portfolio_node_id, risk_id, "EXPOSED_TO", weight=round(ratio / 100, 4), properties={"source": "sector-correlation", "polarity": "context", "aiInfluenceLabel": label + " 섹터 상관 리스크"})
 
 
-def add_metric_concepts(graph: PortfolioOntology, stock_id: str, position: Position, source: str) -> None:
-    symbol = symbol_key(position)
-    for field_name, label, tbox_class, relation_type, kind, public_key in METRIC_CONCEPTS:
-        value = metric_value(position, field_name)
-        if value in (None, "", 0):
-            continue
-        metric_id = add_entity(graph, kind + "-metric", symbol + ":" + public_key, label, {
-            "tboxClass": tbox_class,
-            "tboxClasses": metric_tbox_classes(tbox_class, field_name),
-            "field": public_key,
-            "value": round(value, 4),
-            "source": source,
-        })
-        properties = metric_relation_properties(field_name, value, source)
-        add_relation(
-            graph,
-            stock_id,
-            metric_id,
-            "HAS_OBSERVATION",
-            weight=1.0,
-            properties={**properties, "observationField": public_key},
-        )
-        add_relation(
-            graph,
-            stock_id,
-            metric_id,
-            relation_type,
-            weight=1.0,
-            properties=properties,
-        )
-    trend_dynamic = trend_dynamic_facts(position)
-    scenario_id = add_entity(graph, "trend-scenario", symbol, str(trend_dynamic.get("state") or "추세 시나리오"), {
-        "tboxClass": "TrendSignal",
-        "tboxClasses": ["Observation", "TechnicalObservation", "TrendSignal", "Scenario"],
-        "source": source,
-        **trend_dynamic,
-    })
-    trend_properties = {
-        "source": source,
-        "polarity": str(trend_dynamic.get("polarity") or "context"),
-        "opinionImpact": number(trend_dynamic.get("opinionImpact")),
-        "aiInfluenceLabel": "추세 동역학: " + str(trend_dynamic.get("state") or "중립 추세"),
-    }
-    add_relation(graph, stock_id, scenario_id, "HAS_OBSERVATION", weight=1.0, properties=trend_properties)
-    add_relation(graph, stock_id, scenario_id, "HAS_TECHNICAL_INDICATOR", weight=1.0, properties=trend_properties)
-    quality = data_quality_score(position)
-    quality_id = add_entity(graph, "data-quality", symbol, "데이터 품질", {
-        "tboxClass": "DataQuality",
-        "tboxClasses": metric_tbox_classes("DataQuality", "dataQuality"),
-        "qualityScore": round(quality, 2),
-        "dataQuality": position.data_quality,
-        "quoteStatus": position.quote_status,
-    })
-    quality_properties = {"field": "dataQuality", "source": source, "aiInfluenceLabel": "데이터 품질"}
-    if quality < 60:
-        quality_properties.update({"polarity": "risk", "opinionImpact": round((60 - quality) * 0.2, 2)})
-    add_relation(graph, stock_id, quality_id, "HAS_OBSERVATION", weight=round(quality / 100, 4), properties=quality_properties)
-    add_relation(graph, stock_id, quality_id, "HAS_DATA_QUALITY", weight=round(quality / 100, 4), properties=quality_properties)
 
 
-def add_data_source_concept(graph: PortfolioOntology, stock_id: str, position: Position, source: str) -> None:
-    label = str(position.quote_source or position.data_quality or source or "runtime-data")
-    quality = data_quality_score(position)
-    source_id = add_entity(graph, "data-source", label, label, {
-        "tboxClass": "DataSource",
-        "tboxClasses": ["DataSource", "Provenance"],
-        "quoteStatus": position.quote_status,
-        "quoteMessage": position.quote_message,
-        "dataQuality": position.data_quality,
-    })
-    add_relation(graph, stock_id, source_id, "OBSERVED_FROM", weight=1.0, properties={"source": source, "basis": "quote-source"})
-    add_relation(graph, stock_id, source_id, "HAS_PROVENANCE", weight=1.0, properties={"source": source, "basis": "quote-source"})
-    reliability_id = add_entity(graph, "source-reliability", label, label + " 신뢰도", {
-        "tboxClass": "SourceReliability",
-        "tboxClasses": ["Provenance", "SourceReliability", "DataQuality"],
-        "qualityScore": round(quality, 2),
-        "quoteStatus": position.quote_status,
-        "quoteMessage": position.quote_message,
-    })
-    props = {"source": source, "aiInfluenceLabel": label + " 신뢰도", "confidence": round(quality / 100, 3)}
-    if quality < 60:
-        props.update({"polarity": "risk", "opinionImpact": round((60 - quality) * 0.18, 2)})
-    add_relation(graph, source_id, reliability_id, "HAS_SOURCE_RELIABILITY", weight=round(quality / 100, 4), properties=props)
-    add_relation(graph, stock_id, reliability_id, "WEIGHTED_BY_CONFIDENCE", weight=round(quality / 100, 4), properties=props)
 
 
-def add_legacy_model_score_concepts(graph: PortfolioOntology, stock_id: str, symbol: str, legacy: Dict[str, object]) -> None:
-    score_rows = [
-        ("exitPressure", "관계 규칙 강도", number(legacy.get("exitPressure") or legacy.get("exit_pressure")), "risk"),
-        ("profitTakePressure", "익절 관계 강도", number(legacy.get("profitTakePressure") or legacy.get("profit_take_pressure")), "risk"),
-        ("lossCutPressure", "손실 관리 관계 강도", number(legacy.get("lossCutPressure") or legacy.get("loss_cut_pressure")), "risk"),
-        ("buyScore", "매수 관계 점수", number(legacy.get("buyScore") or legacy.get("modelBuyScore")), "support"),
-        ("sellScore", "매도 관계 점수", number(legacy.get("sellScore") or legacy.get("modelSellScore")), "risk"),
-    ]
-    for key, label, value, polarity in score_rows:
-        if not value:
-            continue
-        score_id = add_entity(graph, "model-score", symbol + ":" + key, label, {
-            "tboxClass": "ModelScore",
-            "tboxClasses": ["Signal", "StrategySignal", "ModelScore"],
-            "field": key,
-            "value": round(value, 2),
-            "modelRole": "relation-rule-score",
-        })
-        properties = {"field": key, "polarity": polarity, "aiInfluenceLabel": label, "source": "relation-rule"}
-        if polarity == "risk" and value >= 55:
-            properties["opinionImpact"] = min(18.0, (value - 45) * 0.35)
-        if polarity == "support" and value >= 55:
-            properties["supportImpact"] = min(14.0, (value - 45) * 0.35)
-        add_relation(graph, stock_id, score_id, "HAS_MODEL_SCORE", weight=round(value / 100, 4), properties=properties)
-        add_relation(graph, score_id, stock_id, "USED_AS_EVIDENCE", weight=round(value / 100, 4), properties={**properties, "source": "relation-rule"})
 
-
-def add_price_level_and_liquidity_concepts(graph: PortfolioOntology, stock_id: str, position: Position, source: str) -> None:
-    symbol = symbol_key(position)
-    current_price = number(position.current_price)
-    if current_price:
-        bar_id = add_entity(graph, "price-bar", symbol + ":latest", (position.name or symbol) + " 현재 가격 봉", {
-            "tboxClass": "PriceBar",
-            "tboxClasses": ["Observation", "PriceObservation", "PriceBar"],
-            "symbol": symbol,
-            "close": round(current_price, 4),
-            "changeRate": round(number(position.change_rate), 2),
-            "volume": round(number(position.volume), 2),
-            "volumeRatio": round(number(position.volume_ratio), 3),
-            "observedAt": position.updated_at,
-        })
-        add_relation(graph, stock_id, bar_id, "HAS_PRICE", weight=1.0, properties={"source": source, "aiInfluenceLabel": "현재 가격 봉"})
-        add_relation(graph, stock_id, bar_id, "HAS_OBSERVATION", weight=1.0, properties={"source": source, "aiInfluenceLabel": "현재 가격 봉"})
-    level_rows = [
-        ("ma20", "20일선", number(position.ma20), number(position.ma20_distance), "SupportLevel" if number(position.ma20_distance) >= -1 else "ResistanceLevel"),
-        ("ma60", "60일선", number(position.ma60), number(position.ma60_distance), "SupportLevel" if number(position.ma60_distance) >= -1 else "ResistanceLevel"),
-        ("average", "평단가", number(position.average_price), pct_distance_safe(current_price, number(position.average_price)), "KeyLevel"),
-    ]
-    for key, label, level, distance, tbox_class in level_rows:
-        if not level:
-            continue
-        level_id = add_entity(graph, "key-level", symbol + ":" + key, label + " " + compact_price(level), {
-            "tboxClass": tbox_class,
-            "tboxClasses": ["Observation", "TechnicalObservation", "KeyLevel", tbox_class],
-            "symbol": symbol,
-            "levelType": key,
-            "price": round(level, 4),
-            "distancePct": round(distance, 2),
-        })
-        add_relation(graph, stock_id, level_id, "HAS_TECHNICAL_INDICATOR", weight=1.0, properties={"source": source, "aiInfluenceLabel": label + " 위치"})
-        if -1.0 <= distance <= 1.5:
-            add_relation(graph, stock_id, level_id, "RETESTS_LEVEL", weight=0.82, properties={"source": source, "polarity": "context", "aiInfluenceLabel": label + " 재시험"})
-        elif distance <= -5.0:
-            add_relation(graph, stock_id, level_id, "BREAKS_LEVEL", weight=0.88, properties={"source": source, "polarity": "risk", "opinionImpact": min(14.0, abs(distance)), "aiInfluenceLabel": label + " 이탈"})
-        elif distance >= 0 and number(position.change_rate) > 0:
-            add_relation(graph, stock_id, level_id, "RECLAIMS_LEVEL", weight=0.74, properties={"source": source, "polarity": "support", "supportImpact": min(8.0, distance + 2), "aiInfluenceLabel": label + " 회복"})
-    liquidity = liquidity_profile(position)
-    liquidity_id = add_entity(graph, "liquidity-profile", symbol, (position.name or symbol) + " 유동성 프로파일", {
-        "tboxClass": "LiquidityProfile",
-        "tboxClasses": ["Risk", "LiquidityRisk", "LiquidityProfile"],
-        **liquidity,
-    })
-    risk_props = {"source": source, "aiInfluenceLabel": "유동성/실행 가능성"}
-    if number(liquidity.get("liquidityRiskScore")) >= 55:
-        risk_props.update({"polarity": "risk", "opinionImpact": min(16.0, number(liquidity.get("liquidityRiskScore")) * 0.18)})
-    add_relation(graph, stock_id, liquidity_id, "LIMITED_BY_LIQUIDITY", weight=round(number(liquidity.get("liquidityRiskScore")) / 100, 4), properties=risk_props)
-    capacity_id = add_entity(graph, "exit-capacity", symbol, (position.name or symbol) + " 청산 가능 용량", {
-        "tboxClass": "ExitCapacity",
-        "tboxClasses": ["Risk", "LiquidityRisk", "ExitCapacity"],
-        "sellableQuantity": round(number(position.sellable_quantity), 4),
-        "positionValue": round(number(position.market_value), 2),
-        "tradingValue": round(number(position.trading_value), 2),
-        "exitDaysAtTenPctADV": liquidity.get("exitDaysAtTenPctADV"),
-    })
-    add_relation(graph, stock_id, capacity_id, "HAS_EXIT_CAPACITY", weight=1.0, properties={"source": source, "aiInfluenceLabel": "청산 가능 용량"})
-    slippage_id = add_entity(graph, "slippage-estimate", symbol, (position.name or symbol) + " 슬리피지 추정", {
-        "tboxClass": "SlippageEstimate",
-        "tboxClasses": ["Risk", "ExecutionRisk", "SlippageEstimate"],
-        "slippageRiskScore": liquidity.get("slippageRiskScore"),
-        "bidAskImbalance": round(number(position.bid_ask_imbalance), 2),
-        "volumeRatio": round(number(position.volume_ratio), 3),
-    })
-    add_relation(graph, stock_id, slippage_id, "HAS_SLIPPAGE_RISK", weight=round(number(liquidity.get("slippageRiskScore")) / 100, 4), properties=risk_props)
-
-
-def pct_distance_safe(value: float, reference: float) -> float:
-    return ((number(value) / number(reference)) - 1) * 100 if number(value) and number(reference) else 0.0
-
-
-def compact_price(value: object) -> str:
-    numeric = number(value)
-    if numeric >= 1000:
-        return str(int(round(numeric)))
-    return str(round(numeric, 4)).rstrip("0").rstrip(".")
-
-
-def liquidity_profile(position: Position) -> Dict[str, object]:
-    market_value = number(position.market_value)
-    trading_value = number(position.trading_value)
-    volume_ratio = number(position.volume_ratio)
-    ask_pressure = max(0.0, -number(position.bid_ask_imbalance))
-    sellable_quantity = number(position.sellable_quantity)
-    quantity = number(position.quantity)
-    exit_days = market_value / max(1.0, trading_value * 0.1) if market_value and trading_value else 0.0
-    position_to_value = (market_value / trading_value) * 100 if market_value and trading_value else 0.0
-    sellable_gap = 100.0 if quantity and sellable_quantity <= 0 else 0.0
-    liquidity_risk = clamp(position_to_value * 2.0 + max(0.0, 1.0 - volume_ratio) * 18.0 + ask_pressure * 0.25 + sellable_gap * 0.25, 0.0, 100.0)
-    slippage_risk = clamp(position_to_value * 1.4 + ask_pressure * 0.35 + max(0.0, 0.8 - volume_ratio) * 20.0, 0.0, 100.0)
-    return {
-        "positionToTradingValuePct": round(position_to_value, 2),
-        "exitDaysAtTenPctADV": round(exit_days, 2),
-        "liquidityRiskScore": round(liquidity_risk, 1),
-        "slippageRiskScore": round(slippage_risk, 1),
-        "volumeRatio": round(volume_ratio, 3),
-        "bidAskImbalance": round(number(position.bid_ask_imbalance), 2),
-    }
 
 
 def add_position_factor_concepts(graph: PortfolioOntology, stock_id: str, portfolio_node_id: str, position: Position, portfolio: PortfolioSummary) -> None:
@@ -1494,266 +1021,12 @@ def signed_pct_text(value: object, suffix: str = "%") -> str:
     return ("+" if numeric > 0 else "") + str(numeric).rstrip("0").rstrip(".") + suffix
 
 
-def add_runtime_setting_concepts(graph: PortfolioOntology, portfolio_node_id: str, runtime_context: Dict[str, object]) -> None:
-    settings = runtime_context.get("settings") if isinstance(runtime_context, dict) else {}
-    if not isinstance(settings, dict):
-        return
-    for key, value in sorted(settings.items()):
-        if value in (None, "", False):
-            continue
-        concept = SETTING_CONCEPT_TYPES.get(str(key))
-        tbox_class, relation_type = concept if concept else ("RuntimeSetting", "HAS_RUNTIME_SETTING")
-        setting_id = add_entity(graph, "runtime-setting", key, str(key), {
-            "tboxClass": tbox_class,
-            "key": str(key),
-            "value": safe_setting_value(str(key), value),
-        })
-        add_relation(graph, portfolio_node_id, setting_id, relation_type, weight=1.0, properties={"source": "runtime-settings", "aiInfluenceLabel": str(key)})
 
 
-def add_runtime_metadata_concepts(graph: PortfolioOntology, portfolio_node_id: str, runtime_context: Dict[str, object]) -> None:
-    metadata = runtime_context.get("metadata") if isinstance(runtime_context, dict) else {}
-    if not isinstance(metadata, dict):
-        return
-    for key, value in sorted(metadata.items()):
-        if value in (None, "", False):
-            continue
-        metadata_id = add_entity(graph, "runtime-metadata", key, "metadata:" + str(key), {
-            "tboxClass": "RuntimeSetting",
-            "key": str(key),
-            "value": safe_setting_value(str(key), value),
-        })
-        add_relation(graph, portfolio_node_id, metadata_id, "HAS_RUNTIME_SETTING", weight=1.0, properties={"source": "runtime-metadata", "aiInfluenceLabel": "metadata:" + str(key)})
 
 
-def add_account_delivery_profile_concepts(
-    graph: PortfolioOntology,
-    account_node_id: str,
-    portfolio_node_id: str,
-    account_context: Dict[str, object],
-) -> None:
-    profile_payload = account_context.get("messageDeliveryProfile") if isinstance(account_context.get("messageDeliveryProfile"), dict) else {}
-    level = profile_payload.get("level") if isinstance(profile_payload, dict) else account_context.get("messageDeliveryLevel")
-    profile = message_delivery_profile(level)
-    profile_id = add_entity(graph, "message-delivery-profile", str(profile.get("level") or "absoluteBeginner"), str(profile.get("label") or "메시지 전달 수준"), {
-        "tboxClass": "MessageDeliveryProfile",
-        "level": profile.get("level"),
-        "label": profile.get("label"),
-        "detailLevel": profile.get("detailLevel"),
-        "terminology": profile.get("terminology"),
-        "scoreVisibility": profile.get("scoreVisibility"),
-        "ruleVisibility": profile.get("ruleVisibility"),
-        "description": profile.get("description"),
-    })
-    add_relation(graph, account_node_id, profile_id, "HAS_MESSAGE_DELIVERY_PROFILE", weight=1.0, properties={"source": "account-context"})
-    add_relation(graph, portfolio_node_id, profile_id, "USES_MESSAGE_DELIVERY_PROFILE", weight=1.0, properties={"source": "account-context"})
 
 
-def runtime_settings(runtime_context: Dict[str, object]) -> Dict[str, object]:
-    settings = runtime_context.get("settings") if isinstance(runtime_context, dict) else {}
-    return settings if isinstance(settings, dict) else {}
-
-
-def configured_minutes(settings: Dict[str, object], primary_key: str, fallback: float, secondary_key: str = "") -> float:
-    raw = settings.get(primary_key)
-    if raw in (None, "") and secondary_key:
-        raw = settings.get(secondary_key)
-    value = number(raw)
-    return value if value > 0 else number(fallback)
-
-
-def add_operational_world_concepts(
-    graph: PortfolioOntology,
-    portfolio_node_id: str,
-    runtime_context: Dict[str, object],
-    observed_positions: List[Position],
-) -> None:
-    settings = runtime_settings(runtime_context)
-    collection_policy_id = add_entity(graph, "collection-policy", "adaptive-polling", "적응형 데이터 수집 정책", {
-        "tboxClass": "CollectionPolicy",
-        "mode": "adaptive",
-        "description": "데이터는 성격별 목표 주기로 갱신하고, 알림은 의미 변화가 있을 때만 검토합니다.",
-    })
-    market_session_id = add_entity(graph, "market-session", "runtime-market-session", "현재 시장 세션", {
-        "tboxClass": "MarketSession",
-        "mode": str(runtime_context.get("mode") or ""),
-        "positionCount": len([item for item in observed_positions if is_holding_position(item)]),
-        "watchlistCount": len([item for item in observed_positions if is_watchlist_position(item)]),
-    })
-    reasoning_id = add_entity(graph, "reasoning-cycle", "ontologyReasoning", "ontologyReasoning", {
-        "tboxClass": "ReasoningCycle",
-        "trigger": "every-data-update",
-        "description": "데이터 갱신 직후 관계 영향과 인사이트를 재계산합니다.",
-    })
-    strategy_analysis_id = add_entity(graph, "analysis-job", "strategyAnalysis", "전략 분석", {
-        "tboxClass": "AnalysisJob",
-        "role": "supporting-analysis",
-        "description": "기존 모델 점수와 관계 규칙을 보조 분석으로 유지합니다.",
-    })
-    insight_policy_id = add_entity(graph, "insight-policy", "meaningful-change", "의미 변화 인사이트 정책", {
-        "tboxClass": "InsightPolicy",
-        "mode": "meaningful-change",
-        "minimumNovelty": number(settings.get("notificationNoveltyThreshold")) or 0.65,
-        "minimumConfidence": number(settings.get("notificationConfidenceThreshold")) or 0.55,
-    })
-    importance_gate_id = add_entity(graph, "importance-gate", "materiality-first", "중요 변경 게이트", {
-        "tboxClass": "ImportanceGate",
-        "mode": "materiality-first",
-        "enabled": str(settings.get("materialityGateEnabled") or "1") not in {"0", "false", "False", "off"},
-        "minimumScore": number(settings.get("materialityMinimumScore")) or 65,
-        "marketMinimumScore": number(settings.get("marketMaterialityMinimumScore")) or 65,
-        "newsMinimumScore": number(settings.get("newsMaterialityMinimumScore")) or 65,
-        "priceChangePct": number(settings.get("marketMaterialityPriceChangePct")) or 0.6,
-        "trendDistancePct": number(settings.get("marketMaterialityTrendDistancePct")) or 2.0,
-        "volumeRatio": number(settings.get("marketMaterialityVolumeRatio")) or 1.5,
-        "description": "데이터 변경이 투자 판단에 충분히 중요한 경우에만 추론과 알림 의도로 승격합니다.",
-    })
-    novelty_policy_id = add_entity(graph, "novelty-policy", "relation-novelty", "관계 신규성 정책", {
-        "tboxClass": "NoveltyPolicy",
-        "minimumNovelty": number(settings.get("notificationNoveltyThreshold")) or 0.65,
-    })
-    cooldown_policy_id = add_entity(graph, "cooldown-policy", "insight-cooldown", "인사이트 발송 쿨다운", {
-        "tboxClass": "CooldownPolicy",
-        "fallbackMinutes": number(settings.get("notificationCooldownMinutes")) or 10,
-        "legacyAlertCadence": safe_setting_value("alertCadenceMinutes", settings.get("alertCadenceMinutes") or ""),
-    })
-    suppression_policy_id = add_entity(graph, "suppression-policy", "duplicate-insight", "중복 인사이트 억제 정책", {
-        "tboxClass": "SuppressionPolicy",
-        "basis": "same-subject-same-insight-type-without-material-relation-change",
-    })
-    dispatch_id = add_entity(graph, "notification-dispatch", "investmentInsight", "investmentInsight 디스패치", {
-        "tboxClass": "NotificationDispatch",
-        "mode": "insight-driven-only",
-        "legacyAlertTypesRole": "presentation-and-compatibility",
-        "description": "투자 알림은 알림 타입별 폴링이 아니라 온톨로지 인사이트를 전달합니다.",
-    })
-    add_relation(graph, portfolio_node_id, collection_policy_id, "USES_COLLECTION_POLICY", properties={"source": "operational-ontology"})
-    add_relation(graph, portfolio_node_id, market_session_id, "OBSERVES_MARKET_SESSION", properties={"source": "operational-ontology"})
-    add_relation(graph, portfolio_node_id, reasoning_id, "HAS_REASONING_CYCLE", properties={"source": "operational-ontology"})
-    add_relation(graph, portfolio_node_id, dispatch_id, "HAS_NOTIFICATION_DISPATCH", properties={"source": "operational-ontology"})
-    add_relation(graph, dispatch_id, insight_policy_id, "USES_INSIGHT_POLICY", properties={"source": "operational-ontology"})
-    add_relation(graph, dispatch_id, importance_gate_id, "USES_IMPORTANCE_GATE", properties={"source": "operational-ontology"})
-    add_relation(graph, dispatch_id, cooldown_policy_id, "HAS_COOLDOWN_POLICY", properties={"source": "operational-ontology"})
-    add_relation(graph, dispatch_id, novelty_policy_id, "HAS_NOVELTY_POLICY", properties={"source": "operational-ontology"})
-    add_relation(graph, dispatch_id, suppression_policy_id, "SUPPRESSED_BY_POLICY", properties={"source": "operational-ontology"})
-    add_relation(graph, reasoning_id, strategy_analysis_id, "SCHEDULES_ANALYSIS", properties={"source": "operational-ontology"})
-    add_relation(graph, reasoning_id, importance_gate_id, "USES_IMPORTANCE_GATE", properties={"source": "operational-ontology"})
-    for key, label in INSIGHT_TYPES:
-        add_entity(graph, "insight-type", key, label, {"tboxClass": "InsightType", "key": key})
-    for pipeline in OPERATIONAL_PIPELINES:
-        key = str(pipeline["key"])
-        fallback_key = str(pipeline.get("fallbackSettingKey") or "")
-        target_minutes = number(pipeline.get("defaultMinutes"))
-        minutes = configured_minutes(settings, str(pipeline["scheduleKey"]), target_minutes, fallback_key)
-        pipeline_id = add_entity(graph, "data-pipeline", key, str(pipeline["label"]), {
-            "tboxClass": "DataPipeline",
-            "tboxClasses": list(pipeline.get("tboxClasses") or ["DataPipeline"]),
-            "key": key,
-            "dataKinds": list(pipeline.get("dataKinds") or []),
-            "targetMinutes": target_minutes,
-            "configuredMinutes": minutes,
-            "description": str(pipeline.get("description") or ""),
-        })
-        source_id = add_entity(graph, "data-source", str(pipeline["sourceKey"]), str(pipeline["sourceLabel"]), {
-            "tboxClass": "DataSource",
-            "dataKinds": list(pipeline.get("dataKinds") or []),
-        })
-        schedule_id = add_entity(graph, "collection-schedule", key + ":" + str(int(minutes)), str(pipeline["label"]) + " " + str(int(minutes)) + "분", {
-            "tboxClass": "CollectionSchedule",
-            "pipeline": key,
-            "targetMinutes": target_minutes,
-            "configuredMinutes": minutes,
-            "settingKey": str(pipeline.get("scheduleKey") or ""),
-            "fallbackSettingKey": fallback_key,
-        })
-        freshness_id = add_entity(graph, "data-freshness", key, str(pipeline["label"]) + " freshness", {
-            "tboxClass": "DataFreshness",
-            "targetMinutes": target_minutes,
-            "configuredMinutes": minutes,
-            "freshnessRole": "ai-confidence-input",
-        })
-        add_relation(graph, portfolio_node_id, pipeline_id, "HAS_PIPELINE", properties={"source": "operational-ontology"})
-        add_relation(graph, pipeline_id, source_id, "COLLECTS_DATA_FROM", properties={"source": "operational-ontology"})
-        add_relation(graph, pipeline_id, schedule_id, "RUNS_ON_SCHEDULE", properties={"source": "operational-ontology"})
-        add_relation(graph, pipeline_id, freshness_id, "HAS_DATA_FRESHNESS", properties={"source": "operational-ontology"})
-        add_relation(graph, pipeline_id, collection_policy_id, "USES_COLLECTION_POLICY", properties={"source": "operational-ontology"})
-        add_relation(graph, pipeline_id, portfolio_node_id, "UPDATES_GRAPH", properties={"source": "operational-ontology"})
-        add_relation(graph, pipeline_id, reasoning_id, "TRIGGERS_REASONING", properties={"source": "operational-ontology"})
-
-
-def add_strategy_world_concepts(
-    graph: PortfolioOntology,
-    portfolio_node_id: str,
-    runtime_context: Dict[str, object],
-) -> str:
-    settings = runtime_settings(runtime_context)
-    strategy_id = add_entity(graph, "strategy", "ontology-first-investment-strategy", "온톨로지 투자전략", {
-        "tboxClass": "Strategy",
-        "mode": "ontology-first",
-        "description": "최종 점수는 TBox/ABox 관계 규칙, 근거 충돌, 데이터 품질, 운영 정책으로만 계산합니다.",
-    })
-    thesis_id = add_entity(graph, "investment-thesis", "portfolio-relation-thesis", "포트폴리오 관계 투자 가설", {
-        "tboxClass": "InvestmentThesis",
-        "scope": "portfolio",
-        "thesis": "실세계 관측값과 포트폴리오 노출이 투자 의견과 점수의 근거이며 개별 공식 점수는 최종 판단에 쓰지 않습니다.",
-    })
-    entry_id = add_entity(graph, "entry-condition", "evidence-confirmed-entry", "근거 확인 진입 조건", {
-        "tboxClass": "EntryCondition",
-        "requires": ["price-observation", "trend-signal", "flow-signal", "data-quality"],
-    })
-    exit_id = add_entity(graph, "exit-condition", "risk-invalidates-thesis", "가설 약화 청산 조건", {
-        "tboxClass": "ExitCondition",
-        "requires": ["risk-amplification", "contradiction", "position-sizing-check"],
-    })
-    risk_rule_id = add_entity(graph, "risk-management-rule", "relation-risk-first", "관계 리스크 우선 규칙", {
-        "tboxClass": "RiskManagementRule",
-        "minimumDataQuality": 60,
-        "riskPressureThreshold": 55,
-    })
-    sizing_id = add_entity(graph, "position-sizing-rule", "exposure-aware-sizing", "노출 기반 비중 규칙", {
-        "tboxClass": "PositionSizingRule",
-        "uses": ["positionWeight", "sectorWeight", "cashRatio"],
-    })
-    rebalance_id = add_entity(graph, "rebalancing-rule", "meaningful-exposure-change", "의미 있는 노출 변화 리밸런싱", {
-        "tboxClass": "RebalancingRule",
-        "noveltyThreshold": number(settings.get("notificationNoveltyThreshold")) or 0.65,
-    })
-    add_relation(graph, portfolio_node_id, strategy_id, "USES_STRATEGY", properties={"source": "strategy-ontology"})
-    add_relation(graph, strategy_id, thesis_id, "BASED_ON_THESIS", properties={"source": "strategy-ontology"})
-    add_relation(graph, strategy_id, entry_id, "HAS_ENTRY_CONDITION", properties={"source": "strategy-ontology"})
-    add_relation(graph, strategy_id, exit_id, "HAS_EXIT_CONDITION", properties={"source": "strategy-ontology"})
-    add_relation(graph, strategy_id, risk_rule_id, "HAS_RISK_MANAGEMENT_RULE", properties={"source": "strategy-ontology"})
-    add_relation(graph, strategy_id, sizing_id, "HAS_POSITION_SIZING_RULE", properties={"source": "strategy-ontology"})
-    add_relation(graph, strategy_id, rebalance_id, "HAS_REBALANCING_RULE", properties={"source": "strategy-ontology"})
-    return strategy_id
-
-
-def add_decision_item_concepts(graph: PortfolioOntology, runtime_context: Dict[str, object]) -> None:
-    items = runtime_context.get("decisionItems") if isinstance(runtime_context, dict) else []
-    if not isinstance(items, list):
-        return
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        symbol = str(item.get("symbol") or "").upper()
-        if not symbol:
-            continue
-        stock_id = entity_id("stock", symbol)
-        signal_id = add_entity(graph, "strategy-signal", symbol + ":" + str(item.get("decision") or "decision"), str(item.get("decision") or "전략 판단"), {
-            "tboxClass": "StrategySignal",
-            "tboxClasses": ["Signal", "StrategySignal"],
-            "source": str(item.get("source") or ""),
-            "tone": str(item.get("tone") or ""),
-            "priority": number(item.get("priority")),
-            "exitPressure": number(item.get("exitPressure")),
-            "reasons": list(item.get("reasons") or [])[:5],
-            "triggers": list(item.get("triggers") or [])[:8],
-        })
-        properties = {"source": "decision-item", "aiInfluenceLabel": str(item.get("decision") or "전략 판단")}
-        if number(item.get("exitPressure")) >= 55:
-            properties.update({"polarity": "risk", "opinionImpact": min(16.0, (number(item.get("exitPressure")) - 45) * 0.3)})
-        add_relation(graph, stock_id, signal_id, "DERIVES", weight=round(number(item.get("exitPressure")) / 100, 4), properties=properties)
-        add_relation(graph, signal_id, stock_id, "USED_AS_EVIDENCE", weight=0.55, properties={"source": "decision-item"})
 
 
 def add_instrument_identity_concepts(

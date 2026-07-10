@@ -7526,10 +7526,10 @@
         ].join("");
       }).join(""),
       '</div>',
-      '<div class="settings-actions">',
-      '<button class="text-button" type="button" data-action="refresh-sqlite-health"' + (state.sqliteHealthLoading ? ' disabled' : '') + '>' + escapeHtml(state.sqliteHealthLoading ? "확인 중" : "상태 새로고침") + '</button>',
-      '<button class="text-button primary" type="button" data-action="sqlite-maintenance"' + (locked || state.sqliteMaintenanceRunning ? ' disabled' : '') + '>' + escapeHtml(state.sqliteMaintenanceRunning ? "정리 중" : "Checkpoint · Optimize") + '</button>',
-      '<button class="text-button danger" type="button" data-action="sqlite-cleanup"' + (locked || state.sqliteCleanupRunning ? ' disabled' : '') + '>' + escapeHtml(state.sqliteCleanupRunning ? "삭제 중" : "오래된 데이터 삭제") + '</button>',
+      '<div class="settings-actions system-sqlite-actions">',
+      '<button class="text-button" type="button" data-action="refresh-sqlite-health"' + (state.sqliteHealthLoading ? ' disabled' : '') + '>' + escapeHtml(state.sqliteHealthLoading ? "확인 중" : "새로고침") + '</button>',
+      '<button class="text-button primary" type="button" data-action="sqlite-maintenance"' + (locked || state.sqliteMaintenanceRunning ? ' disabled' : '') + '>' + escapeHtml(state.sqliteMaintenanceRunning ? "정리 중" : "DB 최적화") + '</button>',
+      '<button class="text-button danger" type="button" data-action="sqlite-cleanup"' + (locked || state.sqliteCleanupRunning ? ' disabled' : '') + '>' + escapeHtml(state.sqliteCleanupRunning ? "삭제 중" : "데이터 정리") + '</button>',
       '</div>',
       '<div class="rule-strip"><span>오래된 데이터 삭제는 pending/processing 작업을 보호하고, 알림·이벤트·캐시·근거·품질 샘플을 7일 또는 상한 기준으로 정리합니다.</span></div>',
       '</article>'

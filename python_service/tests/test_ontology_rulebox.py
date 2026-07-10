@@ -18,10 +18,12 @@ from digital_twin.infrastructure.neo4j_ontology import (
     native_reasoning_statements_for_relation_types,
     ontology_seed_graph,
     rulebox_graph_from_rules,
+    rulebox_version_statements,
     rulebox_rules_from_payload,
     rulebox_rules_to_payload,
     rulebox_snapshot_from_rows,
 )
+from digital_twin.domain.ontology_rulebox_governance import rulebox_governance_candidates, rulebox_version_payload
 
 
 class OntologyRuleBoxTests(unittest.TestCase):
@@ -296,6 +298,21 @@ class OntologyRuleBoxTests(unittest.TestCase):
             "conditions": [item for item in entity_rows if item["kind"] == "rule-condition" and item["ontologyBox"] == "RuleBox"],
             "derivations": [item for item in entity_rows if item["kind"] == "relation-template" and item["ontologyBox"] == "RuleBox"],
             "relationTypes": [{"relationType": "HAS_INFERRED_RISK"}],
+            "versions": [
+                {
+                    "id": "rulebox-version:test001",
+                    "versionLabel": "test001",
+                    "rulesHash": "test001",
+                    "ruleCount": 12,
+                    "conditionCount": 31,
+                    "derivationCount": 14,
+                    "status": "saved",
+                    "changeReason": "baseline",
+                    "author": "test",
+                    "engineVersion": "neo4j-rulebox-graph-reasoner-v1",
+                    "createdAt": "2026-07-10T00:00:00Z",
+                }
+            ],
         }
 
         snapshot = rulebox_snapshot_from_rows(rowsets, source="test")
@@ -313,6 +330,24 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertEqual("bidAskImbalance", ask_pressure["target_property_filters"]["field"])
         self.assertEqual(-15, ask_pressure["target_property_filters"]["maxValue"])
         self.assertIn("HAS_INFERRED_RISK", snapshot["relationTypes"])
+        self.assertEqual("test001", snapshot["versions"][0]["versionLabel"])
+        self.assertTrue(snapshot["changeCandidates"])
+
+    def test_rulebox_governance_versions_and_candidates_are_reviewable(self):
+        rules = default_graph_inference_rules()
+        version = rulebox_version_payload(rules, "2026-07-10T00:00:00Z", "baseline", "test")
+        statements = rulebox_version_statements(version)
+        candidates = rulebox_governance_candidates(rulebox_rules_to_payload(rules), [version])
+        factor_candidate = next(item for item in candidates if item["id"] == "candidate.factor-concentration-context.v1")
+
+        cypher = "\n".join(item["statement"] for item in statements)
+
+        self.assertIn("RuleBoxGovernance", cypher)
+        self.assertIn("HAS_RULEBOX_VERSION", cypher)
+        self.assertEqual("baseline", statements[0]["parameters"]["changeReason"])
+        self.assertEqual("candidate", factor_candidate["status"])
+        self.assertFalse(factor_candidate["proposedRule"]["enabled"])
+        self.assertEqual("append-disabled-rule", factor_candidate["action"])
 
     def test_empty_neo4j_rulebox_snapshot_does_not_fallback_to_runtime_defaults(self):
         snapshot = rulebox_snapshot_from_rows(
@@ -326,6 +361,8 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertFalse(snapshot["defaultsFallbackUsed"])
         self.assertTrue(snapshot["bootstrapAvailable"])
         self.assertGreater(snapshot["bootstrapRuleCount"], 0)
+        self.assertEqual([], snapshot["versions"])
+        self.assertTrue(snapshot["changeCandidates"])
 
     def test_inferencebox_snapshot_payload_marks_native_neo4j_reasoning(self):
         statements = inferencebox_snapshot_statements(["005930"], limit=10)

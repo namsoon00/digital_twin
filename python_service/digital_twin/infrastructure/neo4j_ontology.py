@@ -8,6 +8,10 @@ from ..domain.ontology_contracts import PortfolioOntology
 from ..domain.ontology_decision_policy import decision_stage_from_action, relation_stage_priority
 from ..domain.ontology_rulebox_catalog import default_graph_inference_rules
 from ..domain.ontology_rulebox_contracts import GRAPH_REASONER_VERSION, GraphInferenceRule
+from ..domain.ontology_rulebox_governance import (
+    rulebox_governance_candidates,
+    rulebox_version_payload,
+)
 from ..domain.ontology_rulebox_projection import add_rulebox_concepts
 from ..domain.ontology_schema import tbox_entities, tbox_relations
 from .settings import runtime_settings, utc_now
@@ -49,6 +53,9 @@ class NullOntologyGraphRepository:
             "ruleCount": len(rules),
             "conditionCount": sum(len(item.get("conditions") or []) for item in rules),
             "derivationCount": sum(len(item.get("derivations") or []) for item in rules),
+            "versions": [],
+            "versionCount": 0,
+            "changeCandidates": rulebox_governance_candidates(rules, []),
         }
 
     def save_rulebox(self, payload: Dict[str, object] = None) -> Dict[str, object]:
@@ -556,6 +563,9 @@ class Neo4jOntologyGraphRepository:
             "rules": [],
             "ruleCount": 0,
             "defaultsFallbackUsed": False,
+            "versions": [],
+            "versionCount": 0,
+            "changeCandidates": rulebox_governance_candidates([], []),
         }
 
     def rulebox_snapshot_via_http(self) -> Dict[str, object]:
@@ -567,7 +577,7 @@ class Neo4jOntologyGraphRepository:
         errors = payload.get("errors") or []
         if errors:
             return rulebox_store_snapshot_unavailable("neo4j-error", json.dumps(errors[:2], ensure_ascii=False)[:300], source="neo4j-http")
-        rowsets = http_result_rowsets(payload, ["rules", "conditions", "derivations", "relationTypes"])
+        rowsets = http_result_rowsets(payload, ["rules", "conditions", "derivations", "relationTypes", "versions"])
         return rulebox_snapshot_from_rows(rowsets, source="neo4j-http")
 
     def rulebox_snapshot_via_driver(self) -> Dict[str, object]:
@@ -579,7 +589,7 @@ class Neo4jOntologyGraphRepository:
             driver = GraphDatabase.driver(self.uri, auth=(self.user, self.password) if self.user or self.password else None)
             with driver.session(database=self.database) as session:
                 rowsets = {}
-                for key, statement in zip(["rules", "conditions", "derivations", "relationTypes"], rulebox_snapshot_statements()):
+                for key, statement in zip(["rules", "conditions", "derivations", "relationTypes", "versions"], rulebox_snapshot_statements()):
                     result = session.run(statement["statement"], **statement["parameters"])
                     rowsets[key] = [neo4j_record_to_dict(record) for record in result]
             driver.close()
@@ -601,6 +611,7 @@ class Neo4jOntologyGraphRepository:
             snapshot.update({"saved": False, "status": clear_result.get("status"), "reason": clear_result.get("reason"), "clearResult": clear_result})
             return snapshot
         save_result = self.save_graph(rulebox_graph_from_rules(rules))
+        version_result = self.record_rulebox_version(rules, payload or {}, save_result, clear_result)
         snapshot = self.rulebox_snapshot()
         snapshot.update({
             "saved": bool(save_result.get("saved")),
@@ -608,8 +619,49 @@ class Neo4jOntologyGraphRepository:
             "reason": save_result.get("reason") or snapshot.get("reason") or "",
             "clearResult": clear_result,
             "saveResult": save_result,
+            "versionResult": version_result,
         })
         return snapshot
+
+    def record_rulebox_version(
+        self,
+        rules: Iterable[GraphInferenceRule],
+        payload: Dict[str, object],
+        save_result: Dict[str, object],
+        clear_result: Dict[str, object],
+    ) -> Dict[str, object]:
+        if not save_result.get("saved"):
+            return {"status": "skipped", "reason": "RuleBox graph was not saved."}
+        version = rulebox_version_payload(
+            list(rules),
+            utc_now(),
+            change_reason=str((payload or {}).get("changeReason") or "").strip(),
+            author=str((payload or {}).get("author") or "local-admin").strip(),
+        )
+        version["clearInference"] = bool((clear_result or {}).get("clearInference"))
+        statements = rulebox_version_statements(version)
+        if self.uri.startswith("http://") or self.uri.startswith("https://"):
+            endpoint, headers = self.http_endpoint_and_headers()
+            try:
+                response = self.post_http_statements(endpoint, headers, statements)
+            except Exception as error:  # noqa: BLE001 - governance write should report structured errors.
+                return {"status": "error", "reason": str(error)[:180], "version": version}
+            errors = response.get("errors") or []
+            if errors:
+                return {"status": "neo4j-error", "reason": json.dumps(errors[:2], ensure_ascii=False)[:300], "version": version}
+            return {"status": "ok", "version": version}
+        if self.uri.startswith("bolt://") or self.uri.startswith("neo4j://"):
+            try:
+                from neo4j import GraphDatabase
+                driver = GraphDatabase.driver(self.uri, auth=(self.user, self.password) if self.user or self.password else None)
+                with driver.session(database=self.database) as session:
+                    for statement in statements:
+                        session.run(statement["statement"], **statement["parameters"])
+                driver.close()
+                return {"status": "ok", "version": version}
+            except Exception as error:  # noqa: BLE001 - governance write should report structured errors.
+                return {"status": "error", "reason": str(error)[:180], "version": version}
+        return {"status": "unsupported-uri", "reason": "Unsupported Neo4j URI.", "version": version}
 
     def seed_ontology(self, payload: Dict[str, object] = None) -> Dict[str, object]:
         if not self.uri:
@@ -987,6 +1039,9 @@ def rulebox_default_snapshot(status: str = "defaults", reason: str = "", configu
             for derivation in (rule.get("derivations") or [])
             if derivation.get("relation_type")
         )),
+        "versions": [],
+        "versionCount": 0,
+        "changeCandidates": rulebox_governance_candidates(rules, []),
     }
 
 
@@ -1008,6 +1063,9 @@ def rulebox_store_snapshot_unavailable(status: str, reason: str = "", source: st
         "bootstrapAvailable": True,
         "bootstrapRuleCount": len(bootstrap_rules),
         "bootstrapRules": bootstrap_rules,
+        "versions": [],
+        "versionCount": 0,
+        "changeCandidates": rulebox_governance_candidates([], []),
     }
 
 
@@ -1067,6 +1125,58 @@ def rulebox_snapshot_statements() -> List[Dict[str, object]]:
             "parameters": {},
         },
         rulebox_relation_types_statement(),
+        {
+            "statement": (
+                "MATCH (version:OntologyEntity {kind: 'rulebox-version', ontologyBox: 'RuleBoxGovernance'}) "
+                "RETURN version.id AS id, version.label AS label, version.versionLabel AS versionLabel, "
+                "version.rulesHash AS rulesHash, version.shortHash AS shortHash, version.ruleCount AS ruleCount, "
+                "version.conditionCount AS conditionCount, version.derivationCount AS derivationCount, "
+                "version.status AS status, version.changeReason AS changeReason, version.author AS author, "
+                "version.engineVersion AS engineVersion, version.createdAt AS createdAt "
+                "ORDER BY version.createdAt DESC LIMIT 12"
+            ),
+            "parameters": {},
+        },
+    ]
+
+
+def rulebox_version_statements(version: Dict[str, object]) -> List[Dict[str, object]]:
+    return [
+        {
+            "statement": (
+                "MERGE (registry:OntologyEntity {id: 'rulebox-governance:graph-reasoner'}) "
+                "SET registry.label = 'RuleBox Governance', registry.kind = 'rulebox-governance', "
+                "registry.ontologyBox = 'RuleBoxGovernance', registry.boundedContext = 'reasoning-insight', "
+                "registry.tboxClass = 'RuleBoxGovernance', registry.engineVersion = $engineVersion, registry.updatedAt = $createdAt "
+                "MERGE (version:OntologyEntity {id: $id}) "
+                "SET version.label = $label, version.kind = 'rulebox-version', version.ontologyBox = 'RuleBoxGovernance', "
+                "version.boundedContext = 'reasoning-insight', version.tboxClass = 'RuleBoxVersion', version.versionLabel = $versionLabel, "
+                "version.rulesHash = $rulesHash, version.shortHash = $shortHash, version.ruleCount = $ruleCount, "
+                "version.conditionCount = $conditionCount, version.derivationCount = $derivationCount, "
+                "version.status = $status, version.changeReason = $changeReason, version.author = $author, "
+                "version.engineVersion = $engineVersion, version.rulesJson = $rulesJson, "
+                "version.clearInference = $clearInference, version.createdAt = $createdAt, version.updatedAt = $createdAt "
+                "MERGE (registry)-[rel:HAS_RULEBOX_VERSION]->(version) "
+                "SET rel.weight = 1.0, rel.ontologyBox = 'RuleBoxGovernance', rel.updatedAt = $createdAt"
+            ),
+            "parameters": {
+                "id": str(version.get("id") or ""),
+                "label": str(version.get("label") or ""),
+                "versionLabel": str(version.get("versionLabel") or ""),
+                "rulesHash": str(version.get("rulesHash") or ""),
+                "shortHash": str(version.get("shortHash") or ""),
+                "ruleCount": int(version.get("ruleCount") or 0),
+                "conditionCount": int(version.get("conditionCount") or 0),
+                "derivationCount": int(version.get("derivationCount") or 0),
+                "status": str(version.get("status") or "saved"),
+                "changeReason": str(version.get("changeReason") or ""),
+                "author": str(version.get("author") or "local-admin"),
+                "engineVersion": str(version.get("engineVersion") or GRAPH_REASONER_VERSION),
+                "rulesJson": str(version.get("rulesJson") or "[]"),
+                "clearInference": bool(version.get("clearInference")),
+                "createdAt": str(version.get("createdAt") or utc_now()),
+            },
+        }
     ]
 
 
@@ -1214,6 +1324,7 @@ def rulebox_snapshot_from_rows(rowsets: Dict[str, List[Dict[str, object]]], sour
         if row.get("relationType")
     ))
     payload = rulebox_rules_to_payload(rules)
+    versions = [rulebox_version_from_row(row) for row in (rowsets.get("versions") or [])]
     return {
         "configured": True,
         "saved": True,
@@ -1226,6 +1337,27 @@ def rulebox_snapshot_from_rows(rowsets: Dict[str, List[Dict[str, object]]], sour
         "derivationCount": sum(len(item.get("derivations") or []) for item in payload),
         "relationTypes": relation_types,
         "defaultsFallbackUsed": False,
+        "versions": versions,
+        "versionCount": len(versions),
+        "changeCandidates": rulebox_governance_candidates(payload, versions),
+    }
+
+
+def rulebox_version_from_row(row: Dict[str, object]) -> Dict[str, object]:
+    return {
+        "id": str(row.get("id") or ""),
+        "label": str(row.get("label") or ""),
+        "versionLabel": str(row.get("versionLabel") or row.get("shortHash") or ""),
+        "rulesHash": str(row.get("rulesHash") or ""),
+        "shortHash": str(row.get("shortHash") or ""),
+        "ruleCount": int(number_or_none(row.get("ruleCount")) or 0),
+        "conditionCount": int(number_or_none(row.get("conditionCount")) or 0),
+        "derivationCount": int(number_or_none(row.get("derivationCount")) or 0),
+        "status": str(row.get("status") or ""),
+        "changeReason": str(row.get("changeReason") or ""),
+        "author": str(row.get("author") or ""),
+        "engineVersion": str(row.get("engineVersion") or ""),
+        "createdAt": str(row.get("createdAt") or ""),
     }
 
 

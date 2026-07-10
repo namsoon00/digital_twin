@@ -243,6 +243,9 @@ CLASS_DEFS: List[TBoxClassDef] = [
     TBoxClassDef("RelationRuleTemplate", "reasoning-insight", "투자 관계 파생 템플릿", parent="RelationTemplate"),
     TBoxClassDef("RuleDecisionPolicy", "reasoning-insight", "규칙 판단 단계 정책", parent="RelationTemplate"),
     TBoxClassDef("RulePriorityPolicy", "reasoning-insight", "규칙 우선순위 정책", parent="RelationTemplate"),
+    TBoxClassDef("RuleBoxGovernance", "reasoning-insight", "RuleBox 운영 거버넌스"),
+    TBoxClassDef("RuleBoxVersion", "reasoning-insight", "RuleBox 저장 버전", parent="RuleBoxGovernance"),
+    TBoxClassDef("RuleChangeCandidate", "reasoning-insight", "규칙 변경 후보", parent="RuleBoxGovernance"),
     TBoxClassDef("DerivedAssertion", "reasoning-insight", "파생 어설션"),
     TBoxClassDef("InferenceTrace", "reasoning-insight", "추론 경로"),
     TBoxClassDef("InferencePath", "reasoning-insight", "추론 패스", parent="InferenceTrace"),
@@ -370,6 +373,8 @@ RELATION_DEFS: List[TBoxRelationDef] = [
     TBoxRelationDef("DEFINES_RULE", "reasoning-insight", "reasoning-insight", "reasoning-insight"),
     TBoxRelationDef("HAS_CONDITION", "reasoning-insight", "reasoning-insight", "reasoning-insight"),
     TBoxRelationDef("DERIVES_RELATION", "reasoning-insight", "reasoning-insight", "reasoning-insight"),
+    TBoxRelationDef("HAS_RULEBOX_VERSION", "reasoning-insight", "reasoning-insight", "reasoning-insight"),
+    TBoxRelationDef("HAS_RULE_CHANGE_CANDIDATE", "reasoning-insight", "reasoning-insight", "reasoning-insight"),
     TBoxRelationDef("TRIGGERED_INFERENCE", "reasoning-insight", "reasoning-insight", "reasoning-insight"),
     TBoxRelationDef("EXECUTES_RULEBOX", "reasoning-insight", "reasoning-insight", "reasoning-insight"),
     TBoxRelationDef("MATERIALIZES_INFERENCE", "reasoning-insight", "reasoning-insight", "reasoning-insight"),
@@ -488,6 +493,7 @@ RULE_DEFS: List[TBoxRuleDef] = [
     TBoxRuleDef("RuleBox graph conditions can filter ABox fact values such as trade strength, volume ratio, orderbook imbalance, materiality score, event type, and relation scope before deriving opinions", "reasoning-insight"),
     TBoxRuleDef("material direct news, disclosures, trade-flow pressure, trend transitions, and fact-change gates can each independently create InferenceBox relations that alter AI investment opinions", "reasoning-insight"),
     TBoxRuleDef("RuleBox relation templates own decisionStage and stagePriority so graph-store policy, not rule-id code maps, controls AI decision routing", "reasoning-insight"),
+    TBoxRuleDef("RuleBox changes must produce governance versions and reviewable rule-change candidates before candidate rules affect InferenceBox decisions", "reasoning-insight"),
 ]
 
 

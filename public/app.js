@@ -900,6 +900,7 @@
     ontologyRuleboxRunning: false,
     ontologyRuleboxError: "",
     ontologyRuleboxLastRun: null,
+    ontologyRuleboxChangeReason: "",
     activeWatchAccountId: "",
     editingWatchAccountId: "",
     editingWatchSymbol: "",
@@ -2310,6 +2311,7 @@
       cleanupOldData: true,
       archiveOldData: false,
       retentionDays: 7,
+      compactAppStore: true,
       vacuum: false
     })
       .then(function (payload) {
@@ -3999,9 +4001,18 @@
     state.ontologyRuleboxSaving = true;
     state.ontologyRuleboxError = "";
     render();
-    sendJson("/api/ontology/rulebox", "PUT", seedDefaults ? { clearInference: true } : { rules: rules, clearInference: true })
+    sendJson("/api/ontology/rulebox", "PUT", seedDefaults ? {
+      clearInference: true,
+      useBootstrapDefaults: true,
+      changeReason: state.ontologyRuleboxChangeReason || "기본 RuleBox 시드"
+    } : {
+      rules: rules,
+      clearInference: true,
+      changeReason: state.ontologyRuleboxChangeReason || "RuleBox 관리 화면 저장"
+    })
       .then(function (payload) {
         applyOntologyRuleboxPayload(payload);
+        state.ontologyRuleboxChangeReason = "";
         showSnackbar(seedDefaults ? "기본 RuleBox를 Neo4j에 시드했습니다." : "Neo4j RuleBox를 저장했습니다.");
       })
       .catch(function (error) {
@@ -4012,6 +4023,37 @@
         state.ontologyRuleboxSaving = false;
         render();
       });
+  }
+
+  function appendRuleboxCandidate(candidateId) {
+    var payload = state.ontologyRulebox || {};
+    var candidates = Array.isArray(payload.changeCandidates) ? payload.changeCandidates : [];
+    var candidate = candidates.filter(function (item) {
+      return String(item.id || "") === String(candidateId || "");
+    })[0];
+    var proposedRule = candidate && candidate.proposedRule && typeof candidate.proposedRule === "object" ? candidate.proposedRule : null;
+    if (!proposedRule) {
+      showSnackbar("이 후보는 먼저 데이터나 스키마 보강이 필요합니다.", "caution");
+      return;
+    }
+    try {
+      var rules = parseOntologyRuleboxEditor();
+      var proposedId = proposedRule.rule_id || proposedRule.ruleId || "";
+      if (rules.some(function (rule) { return String(rule.rule_id || rule.ruleId || "") === String(proposedId); })) {
+        showSnackbar("이미 같은 rule_id가 RuleBox JSON에 있습니다.", "caution");
+        return;
+      }
+      rules.push(proposedRule);
+      state.ontologyRuleboxJson = JSON.stringify(rules, null, 2);
+      state.ontologyRuleboxChangeReason = state.ontologyRuleboxChangeReason || ("AI 후보 추가 검토: " + (candidate.title || proposedId));
+      state.ontologyRuleboxError = "";
+      showSnackbar("후보 규칙 초안을 JSON에 추가했습니다. 검토 후 저장하세요.");
+      render();
+    } catch (error) {
+      state.ontologyRuleboxError = error.message || "RuleBox JSON 형식을 확인하세요.";
+      showSnackbar(state.ontologyRuleboxError, "danger");
+      render();
+    }
   }
 
   function runOntologyRulebox() {
@@ -12263,6 +12305,8 @@
     var payload = state.ontologyRulebox || {};
     var rules = Array.isArray(payload.rules) ? payload.rules : [];
     var relationTypes = Array.isArray(payload.relationTypes) ? payload.relationTypes : [];
+    var versions = Array.isArray(payload.versions) ? payload.versions : [];
+    var candidates = Array.isArray(payload.changeCandidates) ? payload.changeCandidates : [];
     var lastRun = state.ontologyRuleboxLastRun || {};
     var disabled = state.ontologyRuleboxSaving || state.ontologyRuleboxRunning || state.serverSettingsLocked;
     return [
@@ -12279,11 +12323,11 @@
       renderLabStat("규칙", payload.ruleCount || rules.length || 0, "개"),
       renderLabStat("조건", payload.conditionCount || countRuleboxConditions(rules), "개"),
       renderLabStat("파생 관계", payload.derivationCount || countRuleboxDerivations(rules), "개"),
-      renderLabStat("실행문", lastRun.statementCount == null ? "-" : lastRun.statementCount, "개"),
+      renderLabStat("버전", payload.versionCount || versions.length || 0, "개"),
       '</div>',
       '<div class="settings-note model-settings-note">',
       '<strong>Neo4j를 RuleBox 원본으로 사용합니다.</strong>',
-      '<p>저장 시 RuleBox와 InferenceBox를 지우고 규칙 구조를 다시 적재합니다. 실행 버튼은 Neo4j 안의 관계 조건을 읽어 InferenceBox 관계를 다시 만듭니다.</p>',
+      '<p>저장 시 RuleBox와 InferenceBox를 지우고 규칙 구조를 다시 적재한 뒤 버전 해시를 남깁니다. 실행 버튼은 Neo4j 안의 관계 조건을 읽어 InferenceBox 관계를 다시 만듭니다.</p>',
       '</div>',
       '<div class="rulebox-console-strip">',
       '<span><strong>source</strong>' + escapeHtml(payload.source || "-") + '</span>',
@@ -12294,11 +12338,24 @@
       state.ontologyRuleboxLoading ? '<p class="lab-message">Neo4j RuleBox를 읽는 중입니다.</p>' : '',
       state.ontologyRuleboxError ? '<p class="form-error">' + escapeHtml(state.ontologyRuleboxError) + '</p>' : '',
       payload.reason ? '<p class="lab-message caution">' + escapeHtml(payload.reason) + '</p>' : '',
+      '<label class="setting-field wide"><span>변경 이유</span><input data-ontology-rulebox-change-reason type="text" autocomplete="off" placeholder="예: 피어 뉴스 후보 검토, 판단 단계 정책 보강" value="' + escapeHtml(state.ontologyRuleboxChangeReason || "") + '"></label>',
       '<div class="settings-actions rulebox-actions">',
       '<button class="text-button" type="button" data-action="refresh-rulebox"' + (state.ontologyRuleboxLoading ? ' disabled' : '') + '>새로고침</button>',
       '<button class="text-button" type="button" data-action="seed-rulebox"' + (disabled ? ' disabled' : '') + '>기본값 시드</button>',
       '<button class="text-button primary" type="button" data-action="save-rulebox"' + (disabled ? ' disabled' : '') + '>' + escapeHtml(state.ontologyRuleboxSaving ? "저장 중" : "RuleBox 저장") + '</button>',
       '<button class="text-button primary" type="button" data-action="run-rulebox"' + (disabled ? ' disabled' : '') + '>' + escapeHtml(state.ontologyRuleboxRunning ? "실행 중" : "Neo4j 추론 실행") + '</button>',
+      '</div>',
+      '<div class="model-section">',
+      '<div class="flow-title"><div><strong>최근 버전</strong><span>저장된 RuleBox 해시와 변경 이유입니다.</span></div></div>',
+      '<div class="source-stack rulebox-version-list">',
+      versions.length ? versions.map(renderNeo4jRuleboxVersionRow).join("") : '<p class="subtle">아직 기록된 RuleBox 버전이 없습니다.</p>',
+      '</div>',
+      '</div>',
+      '<div class="model-section">',
+      '<div class="flow-title"><div><strong>AI 관계 후보 검토</strong><span>후보는 JSON 초안에만 추가됩니다. enabled=false 상태로 검토 후 활성화하세요.</span></div></div>',
+      '<div class="source-stack rulebox-candidate-list">',
+      candidates.length ? candidates.map(function (candidate) { return renderNeo4jRuleboxCandidateRow(candidate, disabled); }).join("") : '<p class="subtle">검토할 관계 후보가 없습니다.</p>',
+      '</div>',
       '</div>',
       '<div class="model-section">',
       '<div class="flow-title"><div><strong>Neo4j 저장 원본 JSON</strong><span>GraphInferenceRule 배열입니다. 조건과 derivation을 추가하면 다음 실행부터 관계 추론 대상이 됩니다.</span></div></div>',
@@ -12344,6 +12401,30 @@
       '<span>' + escapeHtml(rule.enabled === false ? "disabled" : (rule.action_group || rule.actionGroup || "enabled")) + '</span>',
       '<strong>' + escapeHtml(rule.label || rule.rule_id || rule.ruleId || "Rule") + '</strong>',
       '<em>' + escapeHtml((rule.rule_id || rule.ruleId || "") + " · " + conditions.length + " conditions · " + (relationTypes.join(", ") || derivations.length + " derivations")) + '</em>',
+      '</div>'
+    ].join("");
+  }
+
+  function renderNeo4jRuleboxVersionRow(version) {
+    return [
+      '<div class="source-row rulebox-version-row">',
+      '<span>' + escapeHtml(version.versionLabel || version.shortHash || "-") + '</span>',
+      '<strong>' + escapeHtml(version.changeReason || "변경 이유 없음") + '</strong>',
+      '<em>' + escapeHtml([formatClock(version.createdAt), (version.ruleCount || 0) + " rules", version.author || ""].filter(Boolean).join(" · ")) + '</em>',
+      '</div>'
+    ].join("");
+  }
+
+  function renderNeo4jRuleboxCandidateRow(candidate, disabled) {
+    var requiresData = Array.isArray(candidate.requiresData) ? candidate.requiresData : [];
+    var proposed = candidate.proposedRule && typeof candidate.proposedRule === "object" ? candidate.proposedRule : null;
+    var canAppend = proposed && candidate.status !== "covered";
+    return [
+      '<div class="source-row rulebox-candidate-row">',
+      '<span>' + escapeHtml(candidate.status || "candidate") + '</span>',
+      '<strong>' + escapeHtml(candidate.title || candidate.id || "관계 후보") + '</strong>',
+      '<em>' + escapeHtml(candidate.rationale || "") + (requiresData.length ? '<br><small>' + escapeHtml("필요 데이터: " + requiresData.join(", ")) + '</small>' : '') + '</em>',
+      '<button class="text-button" type="button" data-action="append-rulebox-candidate" data-candidate-id="' + escapeHtml(candidate.id || "") + '"' + (!canAppend || disabled ? ' disabled' : '') + '>' + escapeHtml(candidate.status === "covered" ? "반영됨" : proposed ? "JSON에 추가" : "데이터 필요") + '</button>',
       '</div>'
     ].join("");
   }
@@ -15190,6 +15271,12 @@
       });
     });
 
+    Array.prototype.slice.call(app.querySelectorAll("[data-ontology-rulebox-change-reason]")).forEach(function (field) {
+      field.addEventListener("input", function () {
+        state.ontologyRuleboxChangeReason = field.value;
+      });
+    });
+
     var refreshRuleboxButton = app.querySelector('[data-action="refresh-rulebox"]');
     if (refreshRuleboxButton) {
       refreshRuleboxButton.addEventListener("click", function () {
@@ -15219,6 +15306,12 @@
         runOntologyRulebox();
       });
     }
+
+    Array.prototype.slice.call(app.querySelectorAll('[data-action="append-rulebox-candidate"]')).forEach(function (button) {
+      button.addEventListener("click", function () {
+        appendRuleboxCandidate(button.getAttribute("data-candidate-id"));
+      });
+    });
 
     Array.prototype.slice.call(app.querySelectorAll("[data-number-setting]")).forEach(function (field) {
       field.addEventListener("change", function () {

@@ -305,6 +305,42 @@ function checkFrontendAdminRender() {
       conditionCount: 1,
       derivationCount: 1,
       relationTypes: ["HAS_INFERRED_RISK"],
+      versionCount: 1,
+      versions: [
+        {
+          id: "rulebox-version:smoke001",
+          versionLabel: "smoke001",
+          changeReason: "smoke baseline",
+          createdAt: "2026-07-10T00:00:00Z",
+          ruleCount: 1,
+          author: "smoke"
+        }
+      ],
+      changeCandidates: [
+        {
+          id: "candidate.factor-concentration-context.v1",
+          title: "팩터 집중 노출 컨텍스트",
+          status: "candidate",
+          rationale: "팩터 노출을 포트폴리오 리스크로 검토합니다.",
+          requiresData: ["HAS_FACTOR_EXPOSURE"],
+          proposedRule: {
+            rule_id: "graph.factor.concentration.context.v1",
+            label: "보유 종목 + 높은 팩터 노출 -> 팩터 집중 점검",
+            version: "candidate-v1",
+            source_kind: "stock",
+            enabled: false,
+            action_group: "factorRisk",
+            action_level: "review",
+            prompt_hint: "팩터 노출을 포트폴리오 리스크로 설명",
+            conditions: [
+              { condition_id: "factor-exposure", kind: "relation", description: "팩터 노출", relation_type: "HAS_FACTOR_EXPOSURE", target_kind: "factor", min_weight: 0.25 }
+            ],
+            derivations: [
+              { relation_type: "REQUIRES_NEXT_CHECK", target_kind: "next-check", target_key: "{symbol}:factor-concentration-review", target_label: "{displayName} 팩터 집중 점검", tbox_class: "NextCheck", polarity: "context", weight: 0.68, decision_stage: "FACTOR_CROWDING", stage_priority: 32 }
+            ]
+          }
+        }
+      ],
       rules: [
         {
           rule_id: "graph.loss_guard.breakdown.v1",
@@ -1288,6 +1324,8 @@ function checkFrontendAdminRender() {
     assertOk(modelingRegistryHtml.indexOf('data-model-setting="ontologyRelationRules"') >= 0, "규칙·프롬프트 섹션에 관계 규칙 편집기가 없습니다.");
     assertOk(modelingRegistryHtml.indexOf("neo4j-rulebox-panel") >= 0 && modelingRegistryHtml.indexOf("Neo4j RuleBox") >= 0, "규칙·프롬프트 섹션에 Neo4j RuleBox 관리 콘솔이 없습니다.");
     assertOk(modelingRegistryHtml.indexOf('data-ontology-rulebox-json') >= 0 && modelingRegistryHtml.indexOf('data-action="run-rulebox"') >= 0, "Neo4j RuleBox JSON 편집기나 실행 버튼이 없습니다.");
+    assertOk(modelingRegistryHtml.indexOf("최근 버전") >= 0 && modelingRegistryHtml.indexOf("AI 관계 후보 검토") >= 0, "Neo4j RuleBox 버전/후보 검토 섹션이 없습니다.");
+    assertOk(modelingRegistryHtml.indexOf('data-ontology-rulebox-change-reason') >= 0 && modelingRegistryHtml.indexOf('data-action="append-rulebox-candidate"') >= 0, "RuleBox 변경 이유 입력이나 후보 추가 버튼이 없습니다.");
     assertOk(modelingRegistryHtml.indexOf("prompt-registry-panel") >= 0 && modelingRegistryHtml.indexOf("Prompt Registry") >= 0, "규칙·프롬프트 섹션에 프롬프트 레지스트리가 없습니다.");
     assertOk(modelingRegistryHtml.indexOf("admin-modeling-panel") >= 0 && modelingRegistryHtml.indexOf("model-version-panel") >= 0, "규칙·프롬프트 섹션에 보조 모델 정책과 버전 관리가 유지되지 않았습니다.");
     assertOk(modelingRegistryHtml.indexOf('data-model-setting="notificationScoreFormula"') >= 0, "규칙·프롬프트 섹션에 알림 발송 공식 편집기가 없습니다.");

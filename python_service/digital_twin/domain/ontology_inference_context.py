@@ -19,6 +19,9 @@ RULE_STAGE_BY_ID = {
     "graph.loss_guard.breakdown.v1": "LOSS_REDUCE",
     "graph.profit_protect.trend_break.v1": "PROFIT_PARTIAL",
     "graph.watchlist.pullback.entry.v1": "ENTRY_WATCH",
+    "entry.pullback.supported.v1": "ENTRY_SPLIT_BUY",
+    "entry.momentum.confirmed.v1": "ENTRY_READY",
+    "entry.wait_for_confirmation.v1": "ENTRY_WAIT",
     "graph.liquidity.execution_guard.v1": "LIQUIDITY_REVIEW",
 }
 
@@ -295,6 +298,10 @@ def stage_key_from_action(action_group: str, action_level: str) -> str:
         return "PROFIT_SPLIT" if level in {"action", "urgent"} else "PROFIT_PARTIAL"
     if group == "entry":
         return "ENTRY_READY" if level in {"action", "urgent"} else "ENTRY_SPLIT_BUY" if level == "review" else "ENTRY_WATCH"
+    if group == "entryWait":
+        return "ENTRY_WAIT" if level in {"review", "action", "urgent"} else "ENTRY_WATCH"
+    if group == "entryRisk":
+        return "ADD_BUY_BLOCKED"
     if group == "executionRisk":
         return "LIQUIDITY_ACTION" if level in {"action", "urgent"} else "LIQUIDITY_REVIEW"
     return ""
@@ -303,6 +310,11 @@ def stage_key_from_action(action_group: str, action_level: str) -> str:
 def stage_priority(rule_id: str) -> int:
     return {
         "graph.loss_guard.breakdown.v1": 40,
+        "entry.wait_for_confirmation.v1": 39,
+        "entry.momentum.confirmed.v1": 38,
+        "entry.pullback.supported.v1": 38,
+        "entry.add_buy.blocked.v1": 37,
+        "averaging_down.block.v1": 37,
         "graph.profit_protect.trend_break.v1": 35,
         "graph.liquidity.execution_guard.v1": 34,
         "graph.watchlist.pullback.entry.v1": 20,

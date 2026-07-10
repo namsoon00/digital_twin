@@ -98,6 +98,132 @@ class OntologyInferenceContextTests(unittest.TestCase):
         self.assertEqual("neo4jInferenceBox", decisions[0].relation_rule_context["decision"]["basis"])
         self.assertTrue(decisions[0].relation_rule_context["graphStoreUsed"])
 
+    def test_neo4j_entry_wait_inference_maps_to_entry_wait_stage(self):
+        watch = Position(
+            symbol="NVDA",
+            name="NVIDIA",
+            market="US",
+            currency="USD",
+            current_price=201.84,
+            ma5=201.7,
+            ma20=201.5,
+            ma60=208.2,
+            volume_ratio=0,
+            source="watchlist",
+            sector="반도체",
+        )
+        snapshot = AccountSnapshot(
+            "acct",
+            "계좌",
+            "test",
+            "live",
+            "ok",
+            "2026-07-10T00:00:00Z",
+            portfolio_summary([], fx_rates={"KRW": 1, "USD": 1400}),
+            watchlist=[watch],
+            metadata={
+                "ontology": {
+                    "neo4j": {
+                        "inferenceBox": {
+                            "status": "ok",
+                            "neo4jNativeReasoningUsed": True,
+                            "relations": [
+                                {
+                                    "type": "HAS_INFERRED_ENTRY_WAIT",
+                                    "source": "stock:NVDA",
+                                    "target": "entry:NVDA:wait",
+                                    "targetLabel": "NVIDIA 신규 진입 대기",
+                                    "ruleId": "entry.wait_for_confirmation.v1",
+                                    "polarity": "risk",
+                                    "riskImpact": 8,
+                                    "weight": 0.72,
+                                    "nativeNeo4jReasoned": True,
+                                }
+                            ],
+                            "traces": [
+                                {
+                                    "id": "inference-trace:NVDA:entry.wait_for_confirmation.v1",
+                                    "label": "NVIDIA · 관심종목 + 확인 부족/거시 부담 -> 신규 진입 대기",
+                                    "symbol": "NVDA",
+                                    "ruleId": "entry.wait_for_confirmation.v1",
+                                    "confidence": 0.72,
+                                }
+                            ],
+                        }
+                    }
+                }
+            },
+        )
+
+        contexts = relation_contexts_from_snapshot(snapshot)
+
+        self.assertEqual("신규 진입 대기", contexts["NVDA"]["decision"]["label"])
+        self.assertEqual("ENTRY_WAIT", contexts["NVDA"]["decision"]["decisionStage"])
+        self.assertEqual("entryWait", contexts["NVDA"]["decision"]["actionGroup"])
+
+    def test_neo4j_entry_momentum_inference_maps_to_entry_ready_stage(self):
+        watch = Position(
+            symbol="AAPL",
+            name="Apple",
+            market="US",
+            currency="USD",
+            current_price=210,
+            ma5=207,
+            ma20=205,
+            ma60=202,
+            volume_ratio=1.3,
+            source="watchlist",
+            sector="AI/플랫폼",
+        )
+        snapshot = AccountSnapshot(
+            "acct",
+            "계좌",
+            "test",
+            "live",
+            "ok",
+            "2026-07-10T00:00:00Z",
+            portfolio_summary([], fx_rates={"KRW": 1, "USD": 1400}),
+            watchlist=[watch],
+            metadata={
+                "ontology": {
+                    "neo4j": {
+                        "inferenceBox": {
+                            "status": "ok",
+                            "neo4jNativeReasoningUsed": True,
+                            "relations": [
+                                {
+                                    "type": "HAS_INFERRED_ENTRY_OPPORTUNITY",
+                                    "source": "stock:AAPL",
+                                    "target": "entry:AAPL:momentum",
+                                    "targetLabel": "Apple 신규 진입 후보",
+                                    "ruleId": "entry.momentum.confirmed.v1",
+                                    "polarity": "support",
+                                    "supportImpact": 12,
+                                    "weight": 0.82,
+                                    "nativeNeo4jReasoned": True,
+                                }
+                            ],
+                            "traces": [
+                                {
+                                    "id": "inference-trace:AAPL:entry.momentum.confirmed.v1",
+                                    "label": "Apple · 5/20/60일선 회복 + 거래 증가 + 거시 확인 -> 신규 진입 후보",
+                                    "symbol": "AAPL",
+                                    "ruleId": "entry.momentum.confirmed.v1",
+                                    "confidence": 0.82,
+                                }
+                            ],
+                        }
+                    }
+                }
+            },
+        )
+
+        contexts = relation_contexts_from_snapshot(snapshot)
+
+        self.assertEqual("소액 분할매수 검토", contexts["AAPL"]["decision"]["label"])
+        self.assertEqual("ENTRY_READY", contexts["AAPL"]["decision"]["decisionStage"])
+        self.assertEqual("entry", contexts["AAPL"]["decision"]["actionGroup"])
+
 
 if __name__ == "__main__":
     unittest.main()

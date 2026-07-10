@@ -1,3 +1,6 @@
+import re
+from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from typing import Dict, List, Optional
 
 from .message_types import MESSAGE_TYPE_LABELS
@@ -13,6 +16,19 @@ from .ontology_relation_rules import (
 SKIP_AI_OPINION_TYPES = {"workHandoff", "modelReview"}
 AI_OPINION_ENGINE_VERSION = "notification-ai-opinion-v1"
 SENSITIVE_PROMPT_KEY_TERMS = ("secret", "token", "password", "clientid", "client_id", "appsecret", "app_key", "apikey", "api_key", "accountseq", "account_seq", "chatid", "chat_id")
+KST = timezone(timedelta(hours=9))
+NEWS_DATE_KEYS = (
+    "publishedAt",
+    "published_at",
+    "observedAt",
+    "observed_at",
+    "seenDate",
+    "seendate",
+    "pubDate",
+    "published",
+    "time_published",
+    "timePublished",
+)
 
 
 def context_raw_lines(context: Dict[str, object]) -> List[str]:
@@ -236,6 +252,165 @@ def news_headline_items(context: Dict[str, object]) -> List[Dict[str, object]]:
     return [item for item in raw_items if isinstance(item, dict) and str(item.get("title") or "").strip()]
 
 
+def _nested_payloads(item: Dict[str, object]) -> List[Dict[str, object]]:
+    if not isinstance(item, dict):
+        return []
+    rows = [item]
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    raw_payload = item.get("rawPayload") if isinstance(item.get("rawPayload"), dict) else {}
+    if payload:
+        rows.append(payload)
+    if raw_payload:
+        rows.append(raw_payload)
+    return rows
+
+
+def news_item_value(item: Dict[str, object], *keys: str) -> object:
+    for key in keys:
+        for payload in _nested_payloads(item):
+            value = payload.get(key)
+            if value not in (None, ""):
+                return value
+    return ""
+
+
+def news_item_number(item: Dict[str, object], *keys: str) -> float:
+    value = news_item_value(item, *keys)
+    try:
+        number = float(str(value).replace(",", "").strip())
+    except (TypeError, ValueError):
+        return 0.0
+    return number * 100 if 0 < number <= 1 else number
+
+
+def parse_news_datetime(value: object) -> Optional[datetime]:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    if re.fullmatch(r"\d{8}", raw):
+        try:
+            return datetime.strptime(raw, "%Y%m%d").replace(tzinfo=KST)
+        except ValueError:
+            return None
+    candidates = [
+        raw,
+        raw.replace("Z", "+00:00"),
+        raw.replace(" KST", "+09:00"),
+        raw.replace(" GMT", "+00:00"),
+    ]
+    for candidate in candidates:
+        try:
+            parsed = datetime.fromisoformat(candidate)
+            return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed
+        except ValueError:
+            pass
+    for fmt in ["%Y%m%dT%H%M%SZ", "%Y%m%dT%H%M%S", "%Y%m%d%H%M%S"]:
+        try:
+            return datetime.strptime(raw, fmt).replace(tzinfo=timezone.utc)
+        except ValueError:
+            pass
+    try:
+        parsed = parsedate_to_datetime(raw)
+        return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed
+    except (TypeError, ValueError):
+        return None
+
+
+def news_item_published_at(item: Dict[str, object]) -> Optional[datetime]:
+    for key in NEWS_DATE_KEYS:
+        parsed = parse_news_datetime(news_item_value(item, key))
+        if parsed:
+            return parsed
+    return None
+
+
+def news_reference_datetime(context: Dict[str, object] = None) -> datetime:
+    candidates: List[object] = []
+    if isinstance(context, dict):
+        candidates.extend([
+            context.get("referenceDate"),
+            context.get("sentTime"),
+            context.get("eventGeneratedAt"),
+            context.get("generatedAt"),
+        ])
+        for line in context_raw_lines(context):
+            if line.startswith("기준일:") or line.startswith("기준시각:"):
+                candidates.append(line.split(":", 1)[1].strip())
+    for value in candidates:
+        parsed = parse_news_datetime(value)
+        if parsed:
+            return parsed
+    return datetime.now(timezone.utc)
+
+
+def news_freshness_score(item: Dict[str, object], reference: datetime = None) -> float:
+    published = news_item_published_at(item)
+    if not published:
+        return 30.0
+    reference = reference or datetime.now(timezone.utc)
+    if reference.tzinfo is None:
+        reference = reference.replace(tzinfo=timezone.utc)
+    if published.tzinfo is None:
+        published = published.replace(tzinfo=timezone.utc)
+    age_hours = max(0.0, (reference.astimezone(timezone.utc) - published.astimezone(timezone.utc)).total_seconds() / 3600.0)
+    if age_hours <= 6:
+        return 100.0
+    if age_hours <= 24:
+        return 85.0
+    if age_hours <= 72:
+        return 65.0
+    if age_hours <= 168:
+        return 35.0
+    return 10.0
+
+
+def news_item_rank_score(item: Dict[str, object], reference: datetime = None) -> float:
+    relevance = news_item_number(item, "relevanceScore", "relevance_score")
+    materiality = news_item_number(item, "materialityScore", "impactScore", "impact_score")
+    reliability = news_item_number(item, "sourceReliability", "confidence")
+    freshness = news_freshness_score(item, reference)
+    impact_label = str(news_item_value(item, "stockImpactLabel") or "").strip()
+    impact_bonus = 6.0 if impact_label and impact_label not in {"중립", "neutral", "Neutral"} else 0.0
+    return round(relevance * 0.45 + freshness * 0.30 + reliability * 0.15 + materiality * 0.10 + impact_bonus, 3)
+
+
+def news_cluster_key(item: Dict[str, object]) -> str:
+    title = str(item.get("title") or item.get("summary") or news_item_value(item, "title") or "").lower()
+    title = re.sub(r"https?://\S+", "", title)
+    title = re.sub(r"[^0-9a-z가-힣]+", " ", title).strip()
+    return " ".join(title.split())[:80]
+
+
+def rank_news_items(items: List[Dict[str, object]], context: Dict[str, object] = None, limit: int = 0) -> List[Dict[str, object]]:
+    reference = news_reference_datetime(context or {})
+    ranked: List[Dict[str, object]] = []
+    seen_clusters = set()
+    for index, item in enumerate(items or []):
+        if not isinstance(item, dict):
+            continue
+        cluster = news_cluster_key(item)
+        if cluster and cluster in seen_clusters:
+            continue
+        if cluster:
+            seen_clusters.add(cluster)
+        relevance = news_item_number(item, "relevanceScore", "relevance_score")
+        freshness = news_freshness_score(item, reference)
+        ranked.append({
+            "index": index,
+            "score": news_item_rank_score(item, reference),
+            "relevance": relevance,
+            "freshness": freshness,
+            "item": item,
+        })
+    ranked.sort(key=lambda row: (row["score"], row["relevance"], row["freshness"], -row["index"]), reverse=True)
+    rows = [row["item"] for row in ranked]
+    return rows[:limit] if limit and limit > 0 else rows
+
+
+def selected_news_headline_items(context: Dict[str, object], limit: int = 3) -> List[Dict[str, object]]:
+    return rank_news_items(news_headline_items(context), context, limit)
+
+
 def research_evidence_items(context: Dict[str, object]) -> List[Dict[str, object]]:
     rows: List[Dict[str, object]] = []
 
@@ -271,6 +446,10 @@ def research_evidence_items(context: Dict[str, object]) -> List[Dict[str, object
         seen.add(key)
         unique.append(item)
     return unique
+
+
+def selected_research_evidence_items(context: Dict[str, object], limit: int = 8) -> List[Dict[str, object]]:
+    return rank_news_items(research_evidence_items(context), context, limit)
 
 
 def compact_text(value: object, max_len: int = 96) -> str:
@@ -386,8 +565,8 @@ def sanitized_prompt_data(value: object, depth: int = 0, max_items: int = 40) ->
 
 def news_summary_text(context: Dict[str, object]) -> str:
     disclosure = disclosure_context(context)
-    news_items = news_headline_items(context)
-    evidence_items = research_evidence_items(context)
+    news_items = selected_news_headline_items(context, 2)
+    evidence_items = selected_research_evidence_items(context, 4)
     parts: List[str] = []
     if disclosure:
         report = str(disclosure.get("reportName") or disclosure.get("report_name") or "").strip()
@@ -508,10 +687,10 @@ def notification_ai_prompt_context(
                     "stockImpactReasonKo": str(item.get("stockImpactReasonKo") or ""),
                     "seenDate": str(item.get("seenDate") or item.get("seendate") or ""),
                 }
-                for item in news_headline_items(context)[:3]
+                for item in selected_news_headline_items(context, 3)
             ],
             "disclosure": disclosure_context(context),
-            "researchEvidence": sanitized_prompt_data(research_evidence_items(context)[:8]),
+            "researchEvidence": sanitized_prompt_data(selected_research_evidence_items(context, 8)),
             "referenceDate": str(context.get("referenceDate") or ""),
             "activeRules": active_rule_items(context),
             "relationFacts": sanitized_prompt_data(relation_context.get("facts") if isinstance(relation_context, dict) else {}),

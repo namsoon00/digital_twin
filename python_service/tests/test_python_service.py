@@ -7068,6 +7068,86 @@ class PythonServiceTests(unittest.TestCase):
         self.assertNotIn(truncated_payload_url, enriched["telegramMessage"])
         self.assertEqual(3, enriched["telegramMessage"].count("https://news.google.com/rss/articles/"))
 
+    def test_notification_ai_gate_prefers_fresh_relevant_news_when_many_sources_exist(self):
+        urls = [
+            "https://news.example.com/old-relevant",
+            "https://news.example.com/fresh-relevant-1",
+            "https://news.example.com/fresh-relevant-2",
+            "https://news.example.com/fresh-unrelated",
+            "https://news.example.com/fresh-relevant-3",
+        ]
+        context = {
+            "messageType": "investmentInsight",
+            "messageDeliveryLevel": "absoluteBeginner",
+            "headline": "[관찰] NVIDIA: 뉴스 확인",
+            "displayTarget": "NVIDIA / NVDA",
+            "referenceDate": "2026-07-10 18:00 KST",
+            "rawLines": ["현재가: $201.84"],
+            "newsHeadlines": {
+                "items": [
+                    {
+                        "title": "Old but highly related NVIDIA chip demand story",
+                        "summary": "Old but relevant.",
+                        "url": urls[0],
+                        "domain": "Reuters",
+                        "publishedAt": "2026-06-01T00:00:00Z",
+                        "payload": {"sourceReliability": 0.9, "relevanceScore": 99, "materialityScore": 90},
+                    },
+                    {
+                        "title": "Fresh NVIDIA earnings demand update",
+                        "summary": "Fresh and relevant.",
+                        "url": urls[1],
+                        "domain": "Reuters",
+                        "publishedAt": "2026-07-10T07:00:00Z",
+                        "payload": {"sourceReliability": 0.82, "relevanceScore": 92, "materialityScore": 76},
+                    },
+                    {
+                        "title": "Fresh NVIDIA data center order update",
+                        "summary": "Fresh and relevant too.",
+                        "url": urls[2],
+                        "domain": "Bloomberg",
+                        "publishedAt": "2026-07-10T06:30:00Z",
+                        "payload": {"sourceReliability": 0.78, "relevanceScore": 88, "materialityScore": 72},
+                    },
+                    {
+                        "title": "Fresh generic technology market note",
+                        "summary": "Recent but weakly related.",
+                        "url": urls[3],
+                        "domain": "Generic Markets",
+                        "publishedAt": "2026-07-10T08:30:00Z",
+                        "payload": {"sourceReliability": 0.74, "relevanceScore": 18, "materialityScore": 40},
+                    },
+                    {
+                        "title": "Fresh NVIDIA institutional buying update",
+                        "summary": "Fresh and relevant third.",
+                        "url": urls[4],
+                        "domain": "MarketBeat",
+                        "publishedAt": "2026-07-10T05:30:00Z",
+                        "payload": {"sourceReliability": 0.68, "relevanceScore": 84, "materialityScore": 74},
+                    },
+                ]
+            },
+        }
+        response = validated_response_from_payload(context, {
+            "action": "HOLD",
+            "confidence": 70,
+            "summary": "뉴스 확인 후 보유 판단입니다.",
+            "opinion": "뉴스 신선도와 가격 흐름을 같이 보세요.",
+            "evidence": ["최근 NVIDIA 직접 뉴스가 있습니다.", "현재가 확인이 필요합니다."],
+            "counterEvidence": ["60일선 확인 전입니다."],
+            "referenceDate": "2026-07-10 18:00 KST",
+        }, source="test AI")
+
+        message = context_with_validated_ai_response(context, response)["telegramMessage"]
+
+        self.assertIn(urls[1], message)
+        self.assertIn(urls[2], message)
+        self.assertIn(urls[4], message)
+        self.assertNotIn(urls[0], message)
+        self.assertNotIn(urls[3], message)
+        self.assertIn("외 2건은 웹 상세에서 확인", message)
+        self.assertEqual(3, message.count("https://news.example.com/"))
+
     def test_notification_ai_gate_renders_article_summary_and_stock_impact_at_bottom(self):
         url = "https://news.example.com/samsung-hbm"
         context = {

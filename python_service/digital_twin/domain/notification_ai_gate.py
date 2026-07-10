@@ -29,6 +29,8 @@ from .notification_ai import (
     line_value,
     missing_data_labels,
     news_headline_items,
+    news_item_number,
+    news_item_rank_score,
     notification_ai_prompt_context,
     research_evidence_items,
     relation_context_value,
@@ -452,7 +454,8 @@ def collect_source_detail_items(value: object, limit: int = 32) -> List[Dict[str
 def source_urls_from_context(context: Dict[str, object], payload: Dict[str, object] = None) -> List[str]:
     message_type = str((context or {}).get("messageType") or (context or {}).get("rule") or "notification")
     prompt_context = notification_ai_prompt_context(message_type, context or {})
-    return collect_source_urls([context or {}, prompt_context or {}, payload or {}], 12)[:8]
+    raw_urls = collect_source_urls([context or {}, prompt_context or {}, payload or {}], 24)
+    return select_source_urls_for_message(context or {}, raw_urls, payload or {})
 
 
 def source_labels_from_context(context: Dict[str, object], payload: Dict[str, object] = None) -> List[str]:
@@ -827,7 +830,7 @@ def validated_response_from_payload(
     source_urls = source_urls_from_context(context, payload)
     for item in payload.get("sourceUrls") or payload.get("source_urls") or []:
         append_unique_source_url(source_urls, item)
-    source_urls = source_urls[:8]
+    source_urls = select_source_urls_for_message(context, source_urls, payload)
     source_labels = source_labels_from_context(context, payload)
     if not source_urls and source_labels:
         append_unique_text(evidence, "데이터 출처: " + ", ".join(source_labels[:3]), 180)
@@ -971,9 +974,138 @@ def source_detail_map(context: Dict[str, object]) -> Dict[str, Dict[str, object]
         if not isinstance(item, dict):
             continue
         url = first_source_url(item)
-        if url and url not in details:
+        if not url:
+            continue
+        if url not in details:
+            details[url] = item
+            continue
+        if news_item_rank_score(item, news_reference_datetime_for_source(context)) > news_item_rank_score(details[url], news_reference_datetime_for_source(context)):
             details[url] = item
     return details
+
+
+def news_reference_datetime_for_source(context: Dict[str, object]) -> datetime:
+    reference = reference_date(context or {})
+    parsed = parse_source_datetime(reference)
+    return parsed or datetime.now(timezone.utc)
+
+
+def parse_source_datetime(value: object) -> Optional[datetime]:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    if re.fullmatch(r"\d{8}", raw):
+        try:
+            return datetime.strptime(raw, "%Y%m%d").replace(tzinfo=KST)
+        except ValueError:
+            return None
+    candidates = [
+        raw,
+        raw.replace("Z", "+00:00"),
+        raw.replace(" KST", "+09:00"),
+        raw.replace(" GMT", "+00:00"),
+    ]
+    for candidate in candidates:
+        try:
+            parsed = datetime.fromisoformat(candidate)
+            return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed
+        except ValueError:
+            pass
+    for fmt in ["%Y%m%dT%H%M%SZ", "%Y%m%dT%H%M%S", "%Y%m%d%H%M%S"]:
+        try:
+            return datetime.strptime(raw, fmt).replace(tzinfo=timezone.utc)
+        except ValueError:
+            pass
+    try:
+        parsed = parsedate_to_datetime(raw)
+        return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed
+    except (TypeError, ValueError):
+        return None
+
+
+def source_url_display_limit(context: Dict[str, object]) -> int:
+    level = normalize_message_delivery_level((context or {}).get("messageDeliveryLevel"))
+    return 5 if level == "advanced" else 3
+
+
+def source_url_kind_priority(url: str, detail: Dict[str, object]) -> float:
+    text = str(url or "").lower()
+    kind = str((detail or {}).get("kind") or "").lower()
+    if "dart.fss.or.kr" in text or "opendart" in text or kind == "disclosure":
+        return 40.0
+    if "sec.gov" in text:
+        return 34.0
+    return 0.0
+
+
+def source_url_rank_score(url: str, detail: Dict[str, object], context: Dict[str, object]) -> float:
+    if isinstance(detail, dict) and detail:
+        relevance = news_item_number(detail, "relevanceScore", "relevance_score")
+        return source_url_kind_priority(url, detail) + news_item_rank_score(detail, news_reference_datetime_for_source(context)) + (5.0 if relevance >= 80 else 0.0)
+    text = str(url or "").lower()
+    if "dart.fss.or.kr" in text or "opendart" in text:
+        return 70.0
+    if "sec.gov" in text:
+        return 64.0
+    return 20.0
+
+
+def source_url_cluster_key(url: str, detail: Dict[str, object]) -> str:
+    title = str((detail or {}).get("title") or (detail or {}).get("summary") or "").lower()
+    if title:
+        title = re.sub(r"[^0-9a-z가-힣]+", " ", title).strip()
+        return "title:" + " ".join(title.split())[:80]
+    return "url:" + str(url or "").strip()
+
+
+def all_source_urls_for_context(context: Dict[str, object], payload: Dict[str, object] = None) -> List[str]:
+    message_type = str((context or {}).get("messageType") or (context or {}).get("rule") or "notification")
+    prompt_context = notification_ai_prompt_context(message_type, context or {})
+    return collect_source_urls([context or {}, prompt_context or {}, payload or {}], 48)
+
+
+def select_source_urls_for_message(
+    context: Dict[str, object],
+    urls: List[str],
+    payload: Dict[str, object] = None,
+) -> List[str]:
+    limit = source_url_display_limit(context)
+    details = source_detail_map(context)
+    candidates: List[Dict[str, object]] = []
+    seen_urls = set()
+    for url in list(urls or []) + list(details.keys()):
+        text = str(url or "").strip()
+        if not text or text in seen_urls:
+            continue
+        seen_urls.add(text)
+        detail = source_detail_for_url(text, details)
+        candidates.append({
+            "url": text,
+            "detail": detail,
+            "score": source_url_rank_score(text, detail, context),
+            "relevance": news_item_number(detail, "relevanceScore", "relevance_score") if detail else 0.0,
+        })
+    candidates.sort(key=lambda item: (item["score"], item["relevance"], item["url"]), reverse=True)
+    selected: List[str] = []
+    selected_clusters = set()
+    for item in candidates:
+        cluster = source_url_cluster_key(item["url"], item["detail"])
+        if cluster in selected_clusters:
+            continue
+        if item["relevance"] and item["relevance"] < 35 and len(candidates) > limit:
+            continue
+        selected.append(item["url"])
+        selected_clusters.add(cluster)
+        if len(selected) >= limit:
+            break
+    if len(selected) < limit:
+        for item in candidates:
+            if item["url"] in selected:
+                continue
+            selected.append(item["url"])
+            if len(selected) >= limit:
+                break
+    return selected[:limit]
 
 
 def source_detail_for_url(url: str, details: Dict[str, Dict[str, object]]) -> Dict[str, object]:
@@ -1101,6 +1233,7 @@ def source_published_at_text(item: Dict[str, object]) -> str:
 def source_url_rows(urls: List[str], context: Dict[str, object]) -> List[str]:
     details = source_detail_map(context)
     rows: List[str] = []
+    displayed_urls = {str(url or "").strip() for url in urls or [] if str(url or "").strip()}
     for index, url in enumerate(urls, start=1):
         text = str(url or "").strip()
         if not text:
@@ -1132,6 +1265,11 @@ def source_url_rows(urls: List[str], context: Dict[str, object]) -> List[str]:
             rows.append("  " + html.escape("요약: " + summary, quote=False))
         if impact_reason:
             rows.append("  " + html.escape("영향 분석: " + impact_reason, quote=False))
+    all_urls = set(all_source_urls_for_context(context))
+    all_urls.update(details.keys())
+    omitted = len([url for url in all_urls if url and url not in displayed_urls])
+    if omitted > 0:
+        rows.append("• " + html.escape("외 " + str(omitted) + "건은 웹 상세에서 확인", quote=False))
     return rows
 
 

@@ -169,8 +169,8 @@ def default_similarity_bypass_conditions(message_type: str) -> List["SimilarityB
                 "insight_type_changed",
                 "인사이트 유형 변경",
                 "field_changed",
-                field="ontologyInsight.insightType",
-                description="위험, 기회, 데이터 품질처럼 의미 분류가 바뀌면 보냅니다.",
+                field="ontologyInsight.dispatchInsightType",
+                description="위험, 기회, 데이터 품질처럼 발송 정책 분류가 바뀌면 보냅니다.",
             ),
             SimilarityBypassCondition(
                 "relation_score_delta",
@@ -626,7 +626,7 @@ def default_notification_rule(message_type: str) -> NotificationRuleConfig:
     similarity_fields = list(DEFAULT_SIMILARITY_FIELDS)
     if key == INVESTMENT_INSIGHT:
         conditions.extend(NotificationRuleCondition.from_dict(condition.to_dict()) for condition in ontology_insight_conditions())
-        similarity_fields = ["messageType", "accountId", "ontologyInsight.subject", "ontologyInsight.insightType"]
+        similarity_fields = ["messageType", "accountId", "ontologyInsight.subject", "ontologyInsight.dispatchInsightType"]
     return NotificationRuleConfig(
         message_type=key,
         enabled=True,
@@ -675,6 +675,13 @@ def normalized_text(value) -> str:
 
 
 def field_value(context: Dict[str, object], field: str):
+    if str(field or "") == "ontologyInsight.dispatchInsightType":
+        insight = context.get("ontologyInsight") if isinstance(context, dict) else {}
+        if isinstance(insight, dict):
+            value = insight.get("dispatchInsightType")
+            if value not in (None, ""):
+                return value
+            return insight.get("insightType", "")
     current = context
     for part in [item for item in str(field or "").split(".") if item]:
         if isinstance(current, dict) and part in current:

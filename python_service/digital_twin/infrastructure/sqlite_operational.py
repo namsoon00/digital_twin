@@ -705,6 +705,23 @@ class SQLiteNotificationRuleStore(OperationalConnection):
                     if condition.condition_id and condition.condition_id not in existing_ids
                 ]
                 configured_conditions.extend(missing_conditions)
+                bypass_conditions_changed = bool(missing_conditions)
+                if message_type == "investmentInsight":
+                    default_bypass_by_id = {
+                        condition.condition_id: condition.to_dict()
+                        for condition in rule.similarity_bypass_conditions
+                        if condition.condition_id
+                    }
+                    default_insight_change = default_bypass_by_id.get("insight_type_changed") or {}
+                    for item in configured_conditions:
+                        if not isinstance(item, dict):
+                            continue
+                        if str(item.get("id") or "") != "insight_type_changed":
+                            continue
+                        if item.get("field") == "ontologyInsight.insightType":
+                            item["field"] = default_insight_change.get("field", "ontologyInsight.dispatchInsightType")
+                            item["description"] = default_insight_change.get("description", item.get("description"))
+                            bypass_conditions_changed = True
                 missing_rule_conditions = [
                     condition.to_dict()
                     for condition in rule.conditions
@@ -722,7 +739,10 @@ class SQLiteNotificationRuleStore(OperationalConnection):
                 similarity_fields_changed = False
                 if (
                     message_type == "investmentInsight"
-                    and configured_similarity_fields == ["messageType", "accountId", "symbol", "severity", "title"]
+                    and configured_similarity_fields in (
+                        ["messageType", "accountId", "symbol", "severity", "title"],
+                        ["messageType", "accountId", "ontologyInsight.subject", "ontologyInsight.insightType"],
+                    )
                     and list(rule.similarity_fields or []) != configured_similarity_fields
                 ):
                     configured_similarity_fields = list(rule.similarity_fields or configured_similarity_fields)
@@ -755,6 +775,7 @@ class SQLiteNotificationRuleStore(OperationalConnection):
                     market_hours_changed = True
                 if (
                     not missing_conditions
+                    and not bypass_conditions_changed
                     and not rule_conditions_changed
                     and not similarity_fields_changed
                     and not state_cooldown_changed

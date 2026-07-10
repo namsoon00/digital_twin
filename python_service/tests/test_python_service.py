@@ -3107,6 +3107,49 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("95", first_insight["scoreBucket"])
         self.assertEqual("100", second_insight["scoreBucket"])
 
+    def test_holding_investment_insight_uses_common_dispatch_policy(self):
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "ok",
+            utc_now_iso(),
+            portfolio_summary([]),
+        )
+        holding_event = AlertEvent(
+            "main",
+            "메인",
+            "ALERT",
+            "holdingTiming",
+            "main:holding:000660:risk",
+            "SK하이닉스",
+            ["상태: 손절·분할축소 권장 (88점)", "수익률: -13.2%"],
+            "000660",
+        )
+        trend_event = AlertEvent(
+            "main",
+            "메인",
+            "WATCH",
+            "monitorTrendChange",
+            "main:trend:000660:ma",
+            "SK하이닉스",
+            ["이동평균 변화", "20일 평균선 아래"],
+            "000660",
+        )
+
+        holding_insight = build_investment_insight_events(snapshot, [holding_event])[0]
+        trend_insight = build_investment_insight_events(snapshot, [trend_event])[0]
+        holding_metadata = holding_insight.metadata["ontologyInsight"]
+        trend_metadata = trend_insight.metadata["ontologyInsight"]
+
+        self.assertEqual("riskIncrease", holding_metadata["insightType"])
+        self.assertEqual("portfolioShift", trend_metadata["insightType"])
+        self.assertEqual("holdingPositionCommon", holding_metadata["dispatchInsightType"])
+        self.assertEqual("holdingPositionCommon", trend_metadata["dispatchInsightType"])
+        self.assertEqual("holdingPosition", holding_metadata["dispatchSourceKey"])
+        self.assertEqual(holding_metadata["cadenceKey"], trend_metadata["cadenceKey"])
+
     def test_investment_insight_loss_title_wins_over_rebalance_signal(self):
         event = AlertEvent(
             "main",
@@ -3846,7 +3889,9 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("ontology_novelty_score", condition_ids)
         self.assertIn("insight_type_changed", bypass_ids)
         self.assertIn("new_relation_event", bypass_ids)
-        self.assertEqual(["messageType", "accountId", "ontologyInsight.subject", "ontologyInsight.insightType"], rule.similarity_fields)
+        insight_change = next(condition for condition in rule.similarity_bypass_conditions if condition.condition_id == "insight_type_changed")
+        self.assertEqual("ontologyInsight.dispatchInsightType", insight_change.field)
+        self.assertEqual(["messageType", "accountId", "ontologyInsight.subject", "ontologyInsight.dispatchInsightType"], rule.similarity_fields)
         job = NotificationJob.create(
             "관계 인사이트",
             account_id="main",
@@ -3890,6 +3935,36 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(decision.should_send)
         self.assertEqual("material_change", decision.state_decision)
         self.assertTrue(decision.similarity_bypassed)
+
+    def test_notification_rule_store_migrates_investment_insight_dispatch_policy_defaults(self):
+        db_path = Path(self.temp.name) / "service.db"
+        store = SQLiteNotificationRuleStore(db_path)
+        rule = store.get("investmentInsight")
+        legacy_conditions = []
+        for condition in rule.similarity_bypass_conditions:
+            payload = condition.to_dict()
+            if payload.get("id") == "insight_type_changed":
+                payload["field"] = "ontologyInsight.insightType"
+            legacy_conditions.append(payload)
+        with sqlite3.connect(db_path) as connection:
+            connection.execute(
+                """
+                UPDATE notification_rules
+                SET similarity_fields_json = ?, similarity_bypass_conditions_json = ?
+                WHERE message_type = ?
+                """,
+                (
+                    json.dumps(["messageType", "accountId", "ontologyInsight.subject", "ontologyInsight.insightType"]),
+                    json.dumps(legacy_conditions),
+                    "investmentInsight",
+                ),
+            )
+
+        migrated = SQLiteNotificationRuleStore(db_path).get("investmentInsight")
+        insight_change = next(condition for condition in migrated.similarity_bypass_conditions if condition.condition_id == "insight_type_changed")
+
+        self.assertEqual(["messageType", "accountId", "ontologyInsight.subject", "ontologyInsight.dispatchInsightType"], migrated.similarity_fields)
+        self.assertEqual("ontologyInsight.dispatchInsightType", insight_change.field)
 
     def test_symbol_universe_parsers_and_store_support_market_catalog(self):
         nasdaq_text = "\n".join([
@@ -6917,6 +6992,56 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("cooldown", jobs[1].context["honeyStateDecision"])
         self.assertFalse(jobs[1].context["honeySimilarityBypassed"])
         self.assertIn("같은 임계값 상태 지속", jobs[1].last_error)
+
+    def test_investment_insight_state_cooldown_groups_holding_dispatch_type_changes(self):
+        rule = default_notification_rule("investmentInsight")
+        job = NotificationJob.create(
+            "보유 포지션 인사이트",
+            account_id="main",
+            message_type="investmentInsight",
+            context={
+                "severity": "ALERT",
+                "body": "SK하이닉스 손실 관리",
+                "symbol": "000660",
+                "ontologyInsight": {
+                    "subject": "000660",
+                    "insightType": "riskIncrease",
+                    "dispatchInsightType": "holdingPositionCommon",
+                    "score": 82,
+                    "noveltyScore": 25,
+                    "confidence": 80,
+                },
+                "sourceSignalTypes": ["holdingTiming"],
+            },
+        )
+        previous_context = {
+            "severity": "ALERT",
+            "ontologyInsight": {
+                "subject": "000660",
+                "insightType": "portfolioShift",
+                "dispatchInsightType": "holdingPositionCommon",
+                "score": 82,
+                "noveltyScore": 25,
+                "confidence": 80,
+            },
+            "sourceSignalTypes": ["holdingTiming"],
+        }
+        decision = evaluate_notification_rule(job, rule)
+
+        decision = apply_state_cooldown_rule(
+            decision,
+            rule,
+            sent_count=1,
+            previous_score=decision.score,
+            previous_context=previous_context,
+            last_sent_at=utc_now_iso(),
+            last_sent_age_minutes=10,
+            job=job,
+        )
+
+        self.assertFalse(decision.should_send)
+        self.assertEqual("cooldown", decision.state_decision)
+        self.assertFalse(decision.similarity_bypassed)
 
     def test_investment_insight_state_cooldown_ignores_stale_processing_jobs(self):
         db_path = Path(self.temp.name) / "service.db"

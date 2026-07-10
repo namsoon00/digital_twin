@@ -64,6 +64,19 @@ INVESTMENT_SIGNAL_TYPES = {
     EXTERNAL_DART_DISCLOSURE,
 }
 
+HOLDING_POSITION_SIGNAL_TYPES = {
+    MODEL_SELL,
+    HOLDING_TIMING,
+    MONITOR_POSITION_CHANGE,
+    MONITOR_PNL_CHANGE,
+    MONITOR_VALUE_CHANGE,
+    MONITOR_TREND_CHANGE,
+    MONITOR_DECISION_CHANGE,
+}
+HOLDING_POSITION_POLICY_GROUP = "holdingPositionCommon"
+HOLDING_POSITION_DISPATCH_TYPE = "holdingPositionCommon"
+HOLDING_POSITION_DISPATCH_SOURCE_KEY = "holdingPosition"
+
 INSIGHT_TYPE_LABELS = {
     "riskIncrease": "리스크 증가",
     "riskManagement": "리스크 관리",
@@ -268,6 +281,24 @@ def infer_insight_type(events: List[AlertEvent]) -> str:
     return "relationshipChange"
 
 
+def holding_position_policy_group(source_types: Iterable[str]) -> str:
+    if set(source_types or []) & HOLDING_POSITION_SIGNAL_TYPES:
+        return HOLDING_POSITION_POLICY_GROUP
+    return ""
+
+
+def dispatch_insight_type(insight_type: str, source_types: Iterable[str]) -> str:
+    if holding_position_policy_group(source_types) and insight_type in {"riskIncrease", "riskManagement", "portfolioShift"}:
+        return HOLDING_POSITION_DISPATCH_TYPE
+    return str(insight_type or "")
+
+
+def dispatch_source_key(source_key: str, source_types: Iterable[str]) -> str:
+    if holding_position_policy_group(source_types):
+        return HOLDING_POSITION_DISPATCH_SOURCE_KEY
+    return str(source_key or "")
+
+
 def highest_severity(events: List[AlertEvent]) -> str:
     if any(str(event.severity or "").upper() == "ALERT" for event in events):
         return "ALERT"
@@ -421,6 +452,8 @@ def build_investment_insight_events(snapshot: AccountSnapshot, signal_events: It
         confidence = max(55.0, min(95.0, (sum(scores) / len(scores) if scores else score) * 0.72 + min(len(source_types), 5) * 5))
         novelty_score = max(25.0, min(100.0, len(source_types) * 18.0 + min(len(events), 6) * 6.0))
         insight_type = infer_insight_type(events)
+        policy_group = holding_position_policy_group(source_types)
+        policy_dispatch_type = dispatch_insight_type(insight_type, source_types)
         insight_label = INSIGHT_TYPE_LABELS.get(insight_type, insight_type)
         subject_name = subject_display_name(snapshot, subject, events)
         thesis = insight_thesis(insight_type, subject_name, source_labels, score)
@@ -442,6 +475,7 @@ def build_investment_insight_events(snapshot: AccountSnapshot, signal_events: It
         if active_thesis:
             active_lines.append("의견 근거: " + active_thesis)
         source_key = "|".join(sorted(source_types))
+        policy_source_key = dispatch_source_key(source_key, source_types)
         score_bucket = str(int(round(score / 5.0) * 5))
         insight_id = ":".join([snapshot.account_id, "ontology-insight", subject, insight_type, source_key])
         criteria = [
@@ -451,8 +485,11 @@ def build_investment_insight_events(snapshot: AccountSnapshot, signal_events: It
         metadata = {
             "ontologyInsight": {
                 "id": insight_id,
-                "cadenceKey": ":".join(["cadence", "python", snapshot.account_id, INSIGHT_RULE, subject, insight_type, source_key]),
+                "cadenceKey": ":".join(["cadence", "python", snapshot.account_id, INSIGHT_RULE, subject, policy_dispatch_type, policy_source_key]),
                 "insightType": insight_type,
+                "dispatchInsightType": policy_dispatch_type,
+                "dispatchSourceKey": policy_source_key,
+                "holdingPolicyGroup": policy_group,
                 "insightLabel": insight_label,
                 "subject": subject,
                 "subjectName": subject_name,
@@ -470,6 +507,9 @@ def build_investment_insight_events(snapshot: AccountSnapshot, signal_events: It
                 "referenceDataLines": reference_lines,
             },
             "sourceSignalTypes": source_types,
+            "dispatchInsightType": policy_dispatch_type,
+            "dispatchSourceKey": policy_source_key,
+            "holdingPolicyGroup": policy_group,
             "sourceAlertEvents": [
                 {
                     "rule": event.rule,
@@ -488,6 +528,7 @@ def build_investment_insight_events(snapshot: AccountSnapshot, signal_events: It
             "dataFreshnessRequired": True,
             "dispatchPolicy": {
                 "mode": "insight-driven-only",
+                "policyGroup": policy_group or "default",
                 "cooldownPolicy": "insight-cadence-key",
                 "noveltyPolicy": "source-relation-change",
                 "suppressionPolicy": "legacy-signal-direct-dispatch-disabled",

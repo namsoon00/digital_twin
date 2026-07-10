@@ -4,11 +4,11 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from digital_twin.domain.ontology import build_portfolio_ontology
 from digital_twin.domain.ontology_contracts import OntologyEntity, OntologyRelation, PortfolioOntology
 from digital_twin.domain.ontology_quality import build_ontology_quality_sample
 from digital_twin.domain.ontology_schema import abox_properties, abox_relation_properties
 from digital_twin.domain.ontology_validator import validate_ontology
+from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontology
 from digital_twin.domain.portfolio import Position
 from digital_twin.domain.portfolio_calculations import portfolio_summary
 

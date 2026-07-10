@@ -4,7 +4,8 @@ from typing import Dict, Iterable, List
 
 from .market_data import clamp, number
 from .investment_research import build_active_investment_opinion
-from .ontology import ONTOLOGY_PROMPT_VERSION, build_portfolio_ontology, build_position_opinion
+from .ontology_prompting import ONTOLOGY_PROMPT_VERSION
+from .portfolio_ontology_builder import build_portfolio_ontology, build_position_opinion
 from .ontology_rules import DEFAULT_RELATION_THRESHOLDS, evaluate_position_relation_rules, relation_thresholds_from_settings
 from .parsing import parse_assignments
 from .portfolio import DecisionItem, PortfolioSummary, Position, expects_kr_microstructure_signals

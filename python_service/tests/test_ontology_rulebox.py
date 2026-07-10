@@ -4,9 +4,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from digital_twin.domain.ontology import build_portfolio_ontology
 from digital_twin.domain.ontology_prompting import prompt_payload
 from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
+from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontology
 from digital_twin.domain.portfolio import Position
 from digital_twin.domain.portfolio_calculations import portfolio_summary
 from digital_twin.infrastructure.neo4j_ontology import (

@@ -1,7 +1,7 @@
 from typing import Dict, List, Set
 
-from ..domain.ontology import build_portfolio_ontology
 from ..domain.ontology_contracts import PortfolioOntology
+from ..domain.portfolio_ontology_builder import build_portfolio_ontology
 from ..domain.portfolio import AccountSnapshot
 
 

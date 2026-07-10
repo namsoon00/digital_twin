@@ -31,7 +31,9 @@ from digital_twin.domain.external_signal_quality import attach_external_signal_q
 from digital_twin.domain.investment_research import NewsCollectionTarget, build_active_investment_opinion, research_evidence_from_facts
 from digital_twin.domain.market_data import normalize_position, technical_indicators_from_candles
 from digital_twin.domain.message_types import DEFAULT_ALERT_RULES, DEFAULT_CADENCE, MESSAGE_TYPE_EMOJIS, MESSAGE_TYPE_LABELS, public_message_catalog
-from digital_twin.domain.ontology import OntologyEntity, OntologyRelation, abox_properties, apply_relation_driven_opinions, build_portfolio_ontology, entity_id
+from digital_twin.domain.ontology_contracts import OntologyEntity, OntologyRelation, entity_id
+from digital_twin.domain.ontology_schema import abox_properties
+from digital_twin.domain.portfolio_ontology_builder import apply_relation_driven_opinions, build_portfolio_ontology
 from digital_twin.domain.ontology_rules import decision_action_group_for_label, evaluate_position_relation_rules, prompt_template_for_message_type
 from digital_twin.domain.portfolio_calculations import portfolio_summary
 from digital_twin.domain.strategy import SafeFormula, StrategyModel, decisions_for_positions

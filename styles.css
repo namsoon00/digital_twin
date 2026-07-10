@@ -10719,6 +10719,739 @@ h3 {
   }
 }
 
+/* System guide manual */
+.system-guide-view {
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  align-items: start;
+}
+
+.system-guide-view > .panel {
+  min-width: 0;
+}
+
+.system-guide-hero,
+.system-data-flow-panel,
+.system-event-panel {
+  grid-column: 1 / -1;
+}
+
+.system-manual-panel,
+.system-notification-panel,
+.system-ontology-panel,
+.system-operations-panel,
+.system-glossary-panel {
+  grid-column: span 6;
+}
+
+.system-guide-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.12fr) minmax(360px, 0.88fr);
+  gap: var(--ds-space-9);
+  align-items: stretch;
+  padding: var(--ds-panel-pad-y) var(--ds-panel-pad-x);
+}
+
+.system-guide-hero-copy {
+  display: grid;
+  align-content: center;
+  gap: var(--ds-space-7);
+  min-width: 0;
+}
+
+.system-guide-hero-copy h2 {
+  max-width: 860px;
+  font-size: 24px;
+  line-height: 1.24;
+}
+
+.system-guide-hero-copy p {
+  max-width: 920px;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 780;
+  line-height: 1.65;
+  word-break: keep-all;
+}
+
+.system-guide-kpis,
+.system-manual-grid,
+.system-glossary-grid,
+.system-ops-list {
+  display: grid;
+  gap: var(--ds-section-gap);
+  min-width: 0;
+}
+
+.system-guide-kpis {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.system-guide-kpis span,
+.system-manual-step,
+.system-ops-row,
+.system-glossary-grid section,
+.system-flow-node,
+.system-notification-node,
+.system-ontology-card,
+.system-guide-note {
+  min-width: 0;
+  border: 1px solid var(--ds-card-border);
+  border-left: 3px solid var(--ds-card-status-neutral);
+  border-radius: var(--ds-radius-control);
+  background: linear-gradient(180deg, var(--ds-card-row-bg), var(--ds-card-bg));
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--panel) 72%, transparent);
+}
+
+.system-guide-kpis span {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+}
+
+.system-guide-kpis em,
+.system-guide-kpis b,
+.system-manual-step p,
+.system-ops-row p,
+.system-glossary-grid p,
+.system-flow-node li,
+.system-notification-node p,
+.system-ontology-card p,
+.system-guide-note p {
+  color: var(--muted);
+  font-style: normal;
+  font-weight: 780;
+  line-height: 1.48;
+  overflow-wrap: anywhere;
+  word-break: keep-all;
+}
+
+.system-guide-kpis em {
+  font-size: 11px;
+  font-weight: 950;
+  text-transform: uppercase;
+}
+
+.system-guide-kpis strong {
+  color: var(--ink);
+  font-size: 20px;
+  font-weight: 950;
+  font-variant-numeric: tabular-nums;
+}
+
+.system-guide-kpis b {
+  font-size: 11px;
+}
+
+.system-orbit-map {
+  position: relative;
+  min-height: 320px;
+  overflow: hidden;
+  border: 1px solid var(--ds-card-border);
+  border-radius: var(--ds-radius-panel);
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--line) 34%, transparent) 1px, transparent 1px),
+    linear-gradient(180deg, color-mix(in srgb, var(--line) 34%, transparent) 1px, transparent 1px),
+    var(--panel-soft);
+  background-size: 44px 44px;
+}
+
+.system-orbit-ring {
+  position: absolute;
+  inset: 52px;
+  border: 1px solid color-mix(in srgb, var(--blue) 32%, var(--line));
+  border-radius: 50%;
+}
+
+.system-orbit-ring.ring-two {
+  inset: 86px;
+  border-color: color-mix(in srgb, var(--green) 32%, var(--line));
+}
+
+.system-orbit-node {
+  position: absolute;
+  display: grid;
+  gap: 3px;
+  min-width: 124px;
+  max-width: 170px;
+  padding: 10px 12px;
+  border: 1px solid var(--ds-card-border);
+  border-left: 3px solid var(--blue);
+  border-radius: var(--ds-radius-control);
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.system-orbit-node.core {
+  top: 50%;
+  left: 50%;
+  place-items: center;
+  text-align: center;
+  transform: translate(-50%, -50%);
+  border-left-color: var(--green);
+}
+
+.system-orbit-node.data {
+  top: 24px;
+  left: 28px;
+}
+
+.system-orbit-node.model {
+  top: 34px;
+  right: 24px;
+}
+
+.system-orbit-node.alert {
+  right: 28px;
+  bottom: 30px;
+}
+
+.system-orbit-node.ui {
+  left: 28px;
+  bottom: 32px;
+}
+
+.system-orbit-node strong,
+.system-orbit-node em {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.system-orbit-node strong {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 950;
+}
+
+.system-orbit-node em {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 850;
+  line-height: 1.35;
+}
+
+.system-manual-grid {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  padding: var(--ds-space-4) var(--ds-panel-pad-x) var(--ds-panel-pad-y);
+}
+
+.system-manual-step {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-height: 178px;
+  padding: var(--ds-row-pad-y) var(--ds-row-pad-x);
+}
+
+.system-manual-step b,
+.system-flow-node b,
+.system-notification-node b {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  min-height: 28px;
+  border-radius: var(--ds-radius-control);
+  background: var(--chip);
+  color: var(--blue);
+  font-size: 12px;
+  font-weight: 950;
+  font-variant-numeric: tabular-nums;
+}
+
+.system-manual-step strong,
+.system-ops-row strong,
+.system-glossary-grid strong,
+.system-flow-node strong,
+.system-notification-node strong,
+.system-ontology-card strong,
+.system-guide-note strong {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 950;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  word-break: keep-all;
+}
+
+.system-data-flow-panel .panel-head span,
+.system-event-panel .panel-head span,
+.system-ontology-panel .panel-head span {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.45;
+}
+
+.system-flow-diagram,
+.system-notification-flow,
+.system-ontology-map {
+  display: grid;
+  gap: var(--ds-section-gap);
+  min-width: 0;
+  padding: var(--ds-space-4) var(--ds-panel-pad-x) var(--ds-panel-pad-y);
+}
+
+.system-flow-diagram {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.system-flow-node,
+.system-notification-node,
+.system-ontology-card {
+  position: relative;
+  display: grid;
+  align-content: start;
+  gap: 9px;
+  padding: var(--ds-row-pad-y) var(--ds-row-pad-x);
+}
+
+.system-flow-node {
+  min-height: 170px;
+  border-left-color: var(--blue);
+}
+
+.system-flow-node:not(:last-child)::after,
+.system-notification-node:not(:last-child)::after,
+.system-ontology-card:not(:last-child)::after {
+  content: "→";
+  position: absolute;
+  top: 50%;
+  right: calc(var(--ds-section-gap) * -1 + 2px);
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--ds-card-border);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 950;
+  transform: translate(50%, -50%);
+}
+
+.system-flow-node ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 17px;
+}
+
+.system-flow-node li,
+.system-notification-node p,
+.system-ontology-card p,
+.system-manual-step p,
+.system-ops-row p,
+.system-glossary-grid p {
+  font-size: 12px;
+}
+
+.system-lineage-grid {
+  display: grid;
+  min-width: 0;
+  margin: 0 var(--ds-panel-pad-x) var(--ds-panel-pad-y);
+  border: 1px solid var(--ds-card-border);
+  border-radius: var(--ds-radius-panel);
+  overflow: hidden;
+}
+
+.system-lineage-head,
+.system-lineage-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.7fr) minmax(150px, 0.8fr) minmax(180px, 0.9fr) minmax(0, 1.4fr);
+  gap: 0;
+  min-width: 0;
+}
+
+.system-lineage-head {
+  background: var(--ds-card-head-bg);
+  border-bottom: 1px solid var(--ds-card-border);
+}
+
+.system-lineage-row:not(:last-child) {
+  border-bottom: 1px solid var(--ds-card-border);
+}
+
+.system-lineage-head span,
+.system-lineage-row strong,
+.system-lineage-row span,
+.system-lineage-row code,
+.system-lineage-row em {
+  min-width: 0;
+  padding: 10px 12px;
+  border-left: 1px solid var(--ds-card-rule);
+  overflow-wrap: anywhere;
+  line-height: 1.4;
+}
+
+.system-lineage-head span:first-child,
+.system-lineage-row strong:first-child {
+  border-left: 0;
+}
+
+.system-lineage-head span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 950;
+  text-transform: uppercase;
+}
+
+.system-lineage-row strong,
+.system-lineage-row code {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.system-lineage-row span,
+.system-lineage-row em {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 780;
+}
+
+.system-lineage-row code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: normal;
+}
+
+.system-event-track {
+  display: grid;
+  min-width: 0;
+  padding: var(--ds-space-4) var(--ds-panel-pad-x) var(--ds-panel-pad-y);
+}
+
+.system-event-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 44px minmax(210px, 0.5fr) minmax(130px, 0.36fr) minmax(0, 1fr);
+  gap: var(--ds-space-5);
+  align-items: start;
+  min-width: 0;
+  padding: 12px 0 12px 22px;
+  border-left: 2px solid var(--ds-card-border);
+}
+
+.system-event-row::before {
+  content: "";
+  position: absolute;
+  left: -6px;
+  top: 18px;
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--panel);
+  border-radius: 999px;
+  background: var(--blue);
+}
+
+.system-event-row:last-child {
+  padding-bottom: 0;
+}
+
+.system-event-row b,
+.system-event-row code,
+.system-event-row strong,
+.system-event-row p {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.system-event-row b {
+  color: var(--blue);
+  font-size: 12px;
+  font-weight: 950;
+  font-variant-numeric: tabular-nums;
+}
+
+.system-event-row code {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.system-event-row strong {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 950;
+}
+
+.system-event-row p {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 780;
+  line-height: 1.48;
+  word-break: keep-all;
+}
+
+.system-notification-flow {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.system-notification-node {
+  min-height: 154px;
+  border-left-color: var(--green);
+}
+
+.system-notification-node:nth-child(3n)::after {
+  display: none;
+}
+
+.system-guide-note {
+  display: grid;
+  gap: 6px;
+  margin: 0 var(--ds-panel-pad-x) var(--ds-panel-pad-y);
+  padding: var(--ds-row-pad-y) var(--ds-row-pad-x);
+  border-left-color: var(--amber);
+  background: color-mix(in srgb, var(--amber-soft) 34%, var(--ds-card-bg));
+}
+
+.system-ontology-map {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.system-ontology-card {
+  min-height: 190px;
+  border-left-color: var(--blue);
+}
+
+.system-ontology-card.step-2,
+.system-ontology-card.step-4 {
+  border-left-color: var(--green);
+}
+
+.system-ontology-card.step-3 {
+  border-left-color: var(--amber);
+}
+
+.system-ontology-card.step-5 {
+  border-left-color: var(--violet);
+}
+
+.system-ontology-card b {
+  color: var(--blue);
+  font-size: 12px;
+  font-weight: 950;
+}
+
+.system-ontology-card em {
+  align-self: end;
+  display: inline-grid;
+  justify-self: start;
+  padding: 5px 8px;
+  border-radius: var(--ds-radius-control);
+  background: var(--chip);
+  color: var(--ink);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+}
+
+.system-ops-list,
+.system-glossary-grid {
+  padding: var(--ds-space-4) var(--ds-panel-pad-x) var(--ds-panel-pad-y);
+}
+
+.system-ops-row,
+.system-glossary-grid section {
+  display: grid;
+  gap: 6px;
+  padding: var(--ds-row-pad-y) var(--ds-row-pad-x);
+}
+
+.system-glossary-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@media (max-width: 1180px) {
+  .system-guide-hero,
+  .system-manual-panel,
+  .system-notification-panel,
+  .system-ontology-panel,
+  .system-operations-panel,
+  .system-glossary-panel {
+    grid-column: 1 / -1;
+  }
+
+  .system-guide-hero {
+    grid-template-columns: 1fr;
+  }
+
+  .system-guide-kpis,
+  .system-manual-grid,
+  .system-flow-diagram,
+  .system-ontology-map {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .system-flow-node:nth-child(2n)::after,
+  .system-ontology-card:nth-child(2n)::after {
+    display: none;
+  }
+
+  .system-notification-flow {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .system-notification-node:nth-child(3n)::after {
+    display: grid;
+  }
+
+  .system-notification-node:nth-child(2n)::after {
+    display: none;
+  }
+
+  .system-lineage-head,
+  .system-lineage-row {
+    grid-template-columns: minmax(120px, 0.72fr) minmax(140px, 0.8fr) minmax(0, 1.2fr);
+  }
+
+  .system-lineage-head span:nth-child(4),
+  .system-lineage-row em {
+    grid-column: 1 / -1;
+    border-left: 0;
+    border-top: 1px solid var(--ds-card-rule);
+  }
+
+  .system-event-row {
+    grid-template-columns: 44px minmax(180px, 0.7fr) minmax(0, 1fr);
+  }
+
+  .system-event-row p {
+    grid-column: 2 / -1;
+  }
+}
+
+@media (max-width: 860px) {
+  .system-guide-view {
+    grid-template-columns: 1fr;
+  }
+
+  .system-guide-hero,
+  .system-data-flow-panel,
+  .system-event-panel,
+  .system-manual-panel,
+  .system-notification-panel,
+  .system-ontology-panel,
+  .system-operations-panel,
+  .system-glossary-panel {
+    grid-column: 1;
+  }
+
+  .system-guide-hero {
+    gap: var(--ds-space-7);
+    padding: var(--ds-panel-pad-y) var(--ds-panel-pad-x);
+  }
+
+  .system-guide-hero-copy h2 {
+    font-size: 19px;
+  }
+
+  .system-guide-kpis,
+  .system-manual-grid,
+  .system-flow-diagram,
+  .system-notification-flow,
+  .system-ontology-map,
+  .system-glossary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .system-manual-grid,
+  .system-flow-diagram,
+  .system-notification-flow,
+  .system-ontology-map,
+  .system-ops-list,
+  .system-glossary-grid,
+  .system-event-track {
+    gap: var(--ds-space-5);
+    padding: var(--ds-section-gap) var(--ds-panel-pad-x) var(--ds-panel-pad-y);
+  }
+
+  .system-flow-node,
+  .system-notification-node,
+  .system-ontology-card,
+  .system-manual-step {
+    min-height: 0;
+  }
+
+  .system-flow-node::after,
+  .system-notification-node::after,
+  .system-ontology-card::after {
+    display: none !important;
+  }
+
+  .system-orbit-map {
+    min-height: 360px;
+  }
+
+  .system-orbit-ring {
+    inset: 62px 26px;
+    border-radius: 120px;
+  }
+
+  .system-orbit-ring.ring-two {
+    inset: 104px 58px;
+  }
+
+  .system-orbit-node {
+    min-width: 116px;
+    max-width: 148px;
+    padding: 9px 10px;
+  }
+
+  .system-orbit-node.data,
+  .system-orbit-node.ui {
+    left: 12px;
+  }
+
+  .system-orbit-node.model,
+  .system-orbit-node.alert {
+    right: 12px;
+  }
+
+  .system-lineage-grid {
+    margin: 0 var(--ds-panel-pad-x) var(--ds-panel-pad-y);
+  }
+
+  .system-lineage-head {
+    display: none;
+  }
+
+  .system-lineage-row {
+    display: grid;
+    grid-template-columns: 1fr;
+    border-bottom: 1px solid var(--ds-card-border);
+  }
+
+  .system-lineage-row strong,
+  .system-lineage-row span,
+  .system-lineage-row code,
+  .system-lineage-row em {
+    border-left: 0;
+    border-top: 1px solid var(--ds-card-rule);
+  }
+
+  .system-lineage-row strong {
+    border-top: 0;
+    background: var(--ds-card-head-bg);
+  }
+
+  .system-event-row {
+    grid-template-columns: 36px minmax(0, 1fr);
+    gap: var(--ds-space-4);
+    padding-left: 18px;
+  }
+
+  .system-event-row code,
+  .system-event-row strong,
+  .system-event-row p {
+    grid-column: 2;
+  }
+}
+
 /* Institutional finance card layer */
 .panel {
   border-color: var(--ds-card-border);

@@ -29,6 +29,7 @@ from .sqlite_support import connect_sqlite, with_sqlite_retry, sqlite_transactio
 
 IN_FLIGHT_NOTIFICATION_HISTORY_MINUTES = 30
 MAX_NOTIFICATION_DELIVERY_ATTEMPTS = 5
+NOTIFICATION_SQLITE_RETRY_ATTEMPTS = 8
 NOTIFICATION_HISTORY_LOOKBACK_LIMIT = 25
 
 
@@ -2539,8 +2540,11 @@ class SQLiteNotificationJobStore(OperationalConnection):
         )
 
     def upsert_job(self, job: NotificationJob) -> None:
-        with self.transaction() as connection:
-            self.upsert_job_with_connection(connection, job)
+        def operation() -> None:
+            with self.transaction() as connection:
+                self.upsert_job_with_connection(connection, job)
+
+        with_sqlite_retry(operation, attempts=NOTIFICATION_SQLITE_RETRY_ATTEMPTS)
 
     def rule_for_connection(self, connection, message_type: str) -> NotificationRuleConfig:
         key = str(message_type or "notification").strip() or "notification"
@@ -2678,8 +2682,11 @@ class SQLiteNotificationJobStore(OperationalConnection):
         return True
 
     def enqueue(self, job: NotificationJob) -> bool:
-        with self.transaction() as connection:
-            return self.enqueue_with_connection(connection, job)
+        def operation() -> bool:
+            with self.transaction() as connection:
+                return self.enqueue_with_connection(connection, job)
+
+        return with_sqlite_retry(operation, attempts=NOTIFICATION_SQLITE_RETRY_ATTEMPTS)
 
     def pending(self, limit: int = 10) -> List[NotificationJob]:
         with self.connect() as connection:
@@ -2701,71 +2708,74 @@ class SQLiteNotificationJobStore(OperationalConnection):
         return jobs
 
     def claim_pending(self, limit: int = 10, stale_after_minutes: int = 30) -> List[NotificationJob]:
-        stamp = utc_now()
-        cutoff = (datetime.now(timezone.utc) - timedelta(minutes=max(1, int(stale_after_minutes or 30)))).isoformat().replace("+00:00", "Z")
-        claimed: List[NotificationJob] = []
-        with self.transaction() as connection:
-            rows = connection.execute(
-                """
-                SELECT job_id, payload_json FROM notification_jobs
-                WHERE status = 'pending'
-                   OR (status = 'failed' AND attempts < ?)
-                   OR (
-                    status = 'processing'
-                    AND COALESCE(NULLIF(processing_started_at, ''), NULLIF(updated_at, ''), created_at) <= ?
-                   )
-                ORDER BY
-                    CASE
-                        WHEN status = 'pending' THEN 0
-                        WHEN status = 'processing' THEN 1
-                        ELSE 2
-                    END,
-                    created_at,
-                    job_id
-                LIMIT ?
-                """,
-                (MAX_NOTIFICATION_DELIVERY_ATTEMPTS, cutoff, int(limit or 10)),
-            ).fetchall()
-            for row in rows:
-                try:
-                    job = NotificationJob.from_dict(json.loads(row["payload_json"]))
-                except json.JSONDecodeError:
-                    continue
-                job.status = "processing"
-                job.attempts += 1
-                job.updated_at = stamp
-                job.last_error = ""
-                payload = job.to_dict()
-                cursor = connection.execute(
+        def operation() -> List[NotificationJob]:
+            stamp = utc_now()
+            cutoff = (datetime.now(timezone.utc) - timedelta(minutes=max(1, int(stale_after_minutes or 30)))).isoformat().replace("+00:00", "Z")
+            claimed: List[NotificationJob] = []
+            with self.transaction() as connection:
+                rows = connection.execute(
                     """
-                    UPDATE notification_jobs
-                    SET status = ?, attempts = ?, updated_at = ?, last_error = ?, processing_started_at = ?,
-                        payload_json = ?
-                    WHERE job_id = ?
-                      AND (
-                        status = 'pending'
-                        OR (status = 'failed' AND attempts < ?)
-                        OR (
-                          status = 'processing'
-                          AND COALESCE(NULLIF(processing_started_at, ''), NULLIF(updated_at, ''), created_at) <= ?
-                        )
-                      )
+                    SELECT job_id, payload_json FROM notification_jobs
+                    WHERE status = 'pending'
+                       OR (status = 'failed' AND attempts < ?)
+                       OR (
+                        status = 'processing'
+                        AND COALESCE(NULLIF(processing_started_at, ''), NULLIF(updated_at, ''), created_at) <= ?
+                       )
+                    ORDER BY
+                        CASE
+                            WHEN status = 'pending' THEN 0
+                            WHEN status = 'processing' THEN 1
+                            ELSE 2
+                        END,
+                        created_at,
+                        job_id
+                    LIMIT ?
                     """,
-                    (
-                        job.status,
-                        job.attempts,
-                        job.updated_at,
-                        job.last_error,
-                        stamp,
-                        json_dumps(payload),
-                        job.job_id,
-                        MAX_NOTIFICATION_DELIVERY_ATTEMPTS,
-                        cutoff,
-                    ),
-                )
-                if cursor.rowcount:
-                    claimed.append(job)
-        return claimed
+                    (MAX_NOTIFICATION_DELIVERY_ATTEMPTS, cutoff, int(limit or 10)),
+                ).fetchall()
+                for row in rows:
+                    try:
+                        job = NotificationJob.from_dict(json.loads(row["payload_json"]))
+                    except json.JSONDecodeError:
+                        continue
+                    job.status = "processing"
+                    job.attempts += 1
+                    job.updated_at = stamp
+                    job.last_error = ""
+                    payload = job.to_dict()
+                    cursor = connection.execute(
+                        """
+                        UPDATE notification_jobs
+                        SET status = ?, attempts = ?, updated_at = ?, last_error = ?, processing_started_at = ?,
+                            payload_json = ?
+                        WHERE job_id = ?
+                          AND (
+                            status = 'pending'
+                            OR (status = 'failed' AND attempts < ?)
+                            OR (
+                              status = 'processing'
+                              AND COALESCE(NULLIF(processing_started_at, ''), NULLIF(updated_at, ''), created_at) <= ?
+                            )
+                          )
+                        """,
+                        (
+                            job.status,
+                            job.attempts,
+                            job.updated_at,
+                            job.last_error,
+                            stamp,
+                            json_dumps(payload),
+                            job.job_id,
+                            MAX_NOTIFICATION_DELIVERY_ATTEMPTS,
+                            cutoff,
+                        ),
+                    )
+                    if cursor.rowcount:
+                        claimed.append(job)
+            return claimed
+
+        return with_sqlite_retry(operation, attempts=NOTIFICATION_SQLITE_RETRY_ATTEMPTS)
 
     def update(self, updated: NotificationJob) -> None:
         self.upsert_job(updated)
@@ -2774,16 +2784,19 @@ class SQLiteNotificationJobStore(OperationalConnection):
         job.status = "processing"
         job.attempts += 1
         job.updated_at = utc_now()
-        with self.transaction() as connection:
-            self.upsert_job_with_connection(connection, job)
-            connection.execute(
-                """
-                UPDATE notification_jobs
-                SET processing_started_at = ?
-                WHERE job_id = ?
-                """,
-                (job.updated_at, job.job_id),
-            )
+        def operation() -> None:
+            with self.transaction() as connection:
+                self.upsert_job_with_connection(connection, job)
+                connection.execute(
+                    """
+                    UPDATE notification_jobs
+                    SET processing_started_at = ?
+                    WHERE job_id = ?
+                    """,
+                    (job.updated_at, job.job_id),
+                )
+
+        with_sqlite_retry(operation, attempts=NOTIFICATION_SQLITE_RETRY_ATTEMPTS)
         return job
 
     def mark_done(self, job: NotificationJob) -> None:

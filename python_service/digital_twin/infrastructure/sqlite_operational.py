@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
+from ..domain.accounts import AccountConfig
 from ..domain.events import (
     DomainEvent,
     alerts_detected_event,
@@ -20,7 +21,7 @@ from ..domain.notification_templates import DEFAULT_NOTIFICATION_TEMPLATES, LEGA
 from ..domain.notifications import NotificationJob, notification_debug_number
 from ..domain.ontology_quality import OntologyQualitySample, build_ontology_quality_sample
 from ..domain.portfolio import AccountSnapshot, AlertEvent
-from ..domain.repositories import MonitoringCycleRecordResult
+from ..domain.repositories import MonitorAccountJob, MonitoringCycleRecordResult
 from ..domain.symbol_universe import ListedSymbol, normalize_market, normalize_symbol, utc_now_iso as symbol_utc_now_iso
 from .model_review_queue import model_review_payloads_from_event
 from .settings import data_dir, read_json, runtime_settings, service_db_path, settings_path, utc_now
@@ -253,6 +254,23 @@ class OperationalConnection:
                 )
             """)
             connection.execute("CREATE INDEX IF NOT EXISTS idx_monitor_snapshot_history_account_time ON monitor_snapshot_history(account_id, generated_at)")
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS monitor_account_jobs (
+                    account_id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    priority INTEGER NOT NULL DEFAULT 100,
+                    next_run_at TEXT NOT NULL DEFAULT '',
+                    locked_by TEXT NOT NULL DEFAULT '',
+                    locked_until TEXT NOT NULL DEFAULT '',
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    last_started_at TEXT NOT NULL DEFAULT '',
+                    last_finished_at TEXT NOT NULL DEFAULT '',
+                    last_error TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT NOT NULL
+                )
+            """)
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_monitor_account_jobs_due ON monitor_account_jobs(status, next_run_at, priority, account_id)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_monitor_account_jobs_lock ON monitor_account_jobs(status, locked_until, account_id)")
             connection.execute("""
                 CREATE TABLE IF NOT EXISTS monitor_sent (
                     key TEXT PRIMARY KEY,
@@ -1869,6 +1887,195 @@ class SQLiteRuntimeSettingsStore(OperationalConnection):
                     """,
                     (str(key), str(value or ""), stamp),
                 )
+
+
+def monitor_account_job_from_row(row) -> MonitorAccountJob:
+    return MonitorAccountJob(
+        account_id=str(row["account_id"] or ""),
+        status=str(row["status"] or "pending"),
+        priority=int(row["priority"] or 100),
+        next_run_at=str(row["next_run_at"] or ""),
+        locked_by=str(row["locked_by"] or ""),
+        locked_until=str(row["locked_until"] or ""),
+        attempts=int(row["attempts"] or 0),
+        last_started_at=str(row["last_started_at"] or ""),
+        last_finished_at=str(row["last_finished_at"] or ""),
+        last_error=str(row["last_error"] or ""),
+        updated_at=str(row["updated_at"] or ""),
+    )
+
+
+class SQLiteMonitorAccountJobStore(OperationalConnection):
+    def sync_accounts(self, accounts: Iterable[AccountConfig], default_interval_seconds: int) -> None:
+        enabled_accounts = [account for account in (accounts or []) if getattr(account, "enabled", True)]
+        stamp = utc_now()
+
+        def operation() -> None:
+            with self.transaction("IMMEDIATE") as connection:
+                for account in enabled_accounts:
+                    connection.execute(
+                        """
+                        INSERT INTO monitor_account_jobs (
+                            account_id, status, priority, next_run_at, locked_by, locked_until,
+                            attempts, last_started_at, last_finished_at, last_error, updated_at
+                        )
+                        VALUES (?, 'pending', 100, ?, '', '', 0, '', '', '', ?)
+                        ON CONFLICT(account_id) DO UPDATE SET
+                            next_run_at = CASE
+                                WHEN monitor_account_jobs.next_run_at = '' THEN excluded.next_run_at
+                                ELSE monitor_account_jobs.next_run_at
+                            END,
+                            updated_at = excluded.updated_at
+                        """,
+                        (account.account_id, stamp, stamp),
+                    )
+                if enabled_accounts:
+                    placeholders = ",".join(["?"] * len(enabled_accounts))
+                    connection.execute(
+                        "DELETE FROM monitor_account_jobs WHERE account_id NOT IN (" + placeholders + ")",
+                        [account.account_id for account in enabled_accounts],
+                    )
+                else:
+                    connection.execute("DELETE FROM monitor_account_jobs")
+
+        with_sqlite_retry(operation, attempts=8)
+
+    def claim_due(
+        self,
+        limit: int,
+        worker_id: str,
+        lock_seconds: int,
+        default_interval_seconds: int,
+    ) -> List[MonitorAccountJob]:
+        def operation() -> List[MonitorAccountJob]:
+            stamp = utc_now()
+            locked_until = (datetime.now(timezone.utc) + timedelta(seconds=max(60, int(lock_seconds or 600)))).isoformat().replace("+00:00", "Z")
+            claimed: List[MonitorAccountJob] = []
+            with self.transaction("IMMEDIATE") as connection:
+                rows = connection.execute(
+                    """
+                    SELECT account_id, status, priority, next_run_at, locked_by, locked_until,
+                        attempts, last_started_at, last_finished_at, last_error, updated_at
+                    FROM monitor_account_jobs
+                    WHERE (
+                        status IN ('pending', 'done', 'failed')
+                        AND (next_run_at = '' OR next_run_at <= ?)
+                    ) OR (
+                        status = 'processing'
+                        AND COALESCE(NULLIF(locked_until, ''), next_run_at, updated_at) <= ?
+                    )
+                    ORDER BY priority ASC, next_run_at ASC, account_id ASC
+                    LIMIT ?
+                    """,
+                    (stamp, stamp, max(1, int(limit or 1))),
+                ).fetchall()
+                for row in rows:
+                    job = monitor_account_job_from_row(row)
+                    cursor = connection.execute(
+                        """
+                        UPDATE monitor_account_jobs
+                        SET status = 'processing',
+                            locked_by = ?,
+                            locked_until = ?,
+                            attempts = attempts + 1,
+                            last_started_at = ?,
+                            last_error = '',
+                            updated_at = ?
+                        WHERE account_id = ?
+                          AND (
+                            (
+                              status IN ('pending', 'done', 'failed')
+                              AND (next_run_at = '' OR next_run_at <= ?)
+                            ) OR (
+                              status = 'processing'
+                              AND COALESCE(NULLIF(locked_until, ''), next_run_at, updated_at) <= ?
+                            )
+                          )
+                        """,
+                        (worker_id, locked_until, stamp, stamp, job.account_id, stamp, stamp),
+                    )
+                    if cursor.rowcount:
+                        job.status = "processing"
+                        job.locked_by = worker_id
+                        job.locked_until = locked_until
+                        job.attempts += 1
+                        job.last_started_at = stamp
+                        job.last_error = ""
+                        job.updated_at = stamp
+                        claimed.append(job)
+            return claimed
+
+        return with_sqlite_retry(operation, attempts=8)
+
+    def mark_done(self, account_id: str, next_run_at: str) -> None:
+        stamp = utc_now()
+
+        def operation() -> None:
+            with self.transaction("IMMEDIATE") as connection:
+                connection.execute(
+                    """
+                    UPDATE monitor_account_jobs
+                    SET status = 'done',
+                        next_run_at = ?,
+                        locked_by = '',
+                        locked_until = '',
+                        attempts = 0,
+                        last_finished_at = ?,
+                        last_error = '',
+                        updated_at = ?
+                    WHERE account_id = ?
+                    """,
+                    (str(next_run_at or stamp), stamp, stamp, str(account_id or "")),
+                )
+
+        with_sqlite_retry(operation, attempts=8)
+
+    def mark_failed(self, account_id: str, error: str, next_run_at: str) -> None:
+        stamp = utc_now()
+
+        def operation() -> None:
+            with self.transaction("IMMEDIATE") as connection:
+                connection.execute(
+                    """
+                    UPDATE monitor_account_jobs
+                    SET status = 'failed',
+                        next_run_at = ?,
+                        locked_by = '',
+                        locked_until = '',
+                        last_finished_at = ?,
+                        last_error = ?,
+                        updated_at = ?
+                    WHERE account_id = ?
+                    """,
+                    (str(next_run_at or stamp), stamp, str(error or "")[:500], stamp, str(account_id or "")),
+                )
+
+        with_sqlite_retry(operation, attempts=8)
+
+    def summary(self) -> Dict[str, object]:
+        stamp = utc_now()
+        with self.connect() as connection:
+            rows = connection.execute("SELECT status, COUNT(*) AS count FROM monitor_account_jobs GROUP BY status").fetchall()
+            due = connection.execute(
+                """
+                SELECT COUNT(*) AS count FROM monitor_account_jobs
+                WHERE (
+                    status IN ('pending', 'done', 'failed')
+                    AND (next_run_at = '' OR next_run_at <= ?)
+                ) OR (
+                    status = 'processing'
+                    AND COALESCE(NULLIF(locked_until, ''), next_run_at, updated_at) <= ?
+                )
+                """,
+                (stamp, stamp),
+            ).fetchone()
+            total = connection.execute("SELECT COUNT(*) AS count FROM monitor_account_jobs").fetchone()
+        return {
+            "backend": "sqlite",
+            "total": int(total["count"] if total else 0),
+            "due": int(due["count"] if due else 0),
+            "statuses": {row["status"]: int(row["count"] or 0) for row in rows},
+        }
 
 
 class SQLiteMonitorStore(OperationalConnection):

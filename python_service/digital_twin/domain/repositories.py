@@ -86,6 +86,44 @@ class MonitoringCycleRecorder(Protocol):
         ...
 
 
+@dataclass
+class MonitorAccountJob:
+    account_id: str
+    status: str = "pending"
+    priority: int = 100
+    next_run_at: str = ""
+    locked_by: str = ""
+    locked_until: str = ""
+    attempts: int = 0
+    last_started_at: str = ""
+    last_finished_at: str = ""
+    last_error: str = ""
+    updated_at: str = ""
+
+
+class MonitorAccountJobRepository(Protocol):
+    def sync_accounts(self, accounts: Iterable[AccountConfig], default_interval_seconds: int) -> None:
+        ...
+
+    def claim_due(
+        self,
+        limit: int,
+        worker_id: str,
+        lock_seconds: int,
+        default_interval_seconds: int,
+    ) -> List[MonitorAccountJob]:
+        ...
+
+    def mark_done(self, account_id: str, next_run_at: str) -> None:
+        ...
+
+    def mark_failed(self, account_id: str, error: str, next_run_at: str) -> None:
+        ...
+
+    def summary(self) -> Dict[str, object]:
+        ...
+
+
 class OntologyGraphRepository(Protocol):
     def active_tbox_metadata(self) -> Dict[str, object]:
         ...

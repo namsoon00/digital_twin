@@ -361,6 +361,13 @@ def settings_status_payload() -> Dict[str, object]:
     public_keys = [
         "appTheme",
         "watchlistSymbols",
+        "operationalDbBackend",
+        "mysqlUrl",
+        "mysqlHost",
+        "mysqlPort",
+        "mysqlDatabase",
+        "mysqlUser",
+        "mysqlUnixSocket",
         "tossApiBaseUrl",
         "kisBaseUrl",
         "kisMarketSignalsEnabled",
@@ -453,6 +460,14 @@ def settings_status_payload() -> Dict[str, object]:
         "dartDisclosureAiUseCodex",
         "dartDisclosureAiCommand",
         "dartDisclosureAiTimeoutSeconds",
+        "notificationQueueIntervalSeconds",
+        "notificationQueueBatchSize",
+        "notificationSendGapSeconds",
+        "notificationProcessingStaleMinutes",
+        "monitorAccountQueueEnabled",
+        "monitorAccountIntervalSeconds",
+        "monitorAccountBatchSize",
+        "monitorAccountLockSeconds",
         "marketDataMaxAgeMinutes",
         "dataFreshnessEnabled",
         "dataFreshnessDefaultMaxAgeMinutes",
@@ -478,6 +493,7 @@ def settings_status_payload() -> Dict[str, object]:
         "fredApiKey": "",
         "opendartApiKey": "",
         "neo4jPassword": "",
+        "mysqlPassword": "",
     })
     for optional_key in ["valuationAssumptions", "marketSignalInputs"]:
         if configured(settings.get(optional_key)):
@@ -498,6 +514,7 @@ def settings_status_payload() -> Dict[str, object]:
             "opendartApiKey": bool(settings.get("opendartApiKey")),
             "neo4jUri": bool(settings.get("neo4jUri")),
             "neo4jPassword": bool(settings.get("neo4jPassword")),
+            "mysqlPassword": bool(settings.get("mysqlPassword")),
         },
         "locked": bool(configured(os.environ.get("SHARE_TOKEN"))),
     }

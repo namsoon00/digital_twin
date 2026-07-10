@@ -90,6 +90,22 @@ If the SQLite database has no account rows, the service falls back to single-acc
 
 `python:monitor:watch` runs realtime monitoring in the foreground. `python:model-review:watch` runs the asynchronous model-review worker in the foreground. `python:notifications:watch` runs the single notification delivery worker.
 
+For account-scale monitoring, enable the account monitor queue. With SQLite this is useful for local testing; with MySQL it becomes the production coordination point for 100+ accounts and multiple monitor workers:
+
+```bash
+OPERATIONAL_DB_BACKEND=mysql
+MYSQL_HOST=127.0.0.1
+MYSQL_PORT=3306
+MYSQL_DATABASE=orbit_alpha
+MYSQL_USER=orbit_alpha
+MYSQL_PASSWORD=
+MONITOR_ACCOUNT_BATCH_SIZE=10
+MONITOR_ACCOUNT_INTERVAL_SECONDS=180
+MONITOR_ACCOUNT_LOCK_SECONDS=600
+```
+
+The MySQL monitor queue requires `pymysql` in the Python environment. It stores due/processing/done/failed account jobs in `monitor_account_jobs` and uses row-level locking so multiple monitor workers can claim different accounts. Snapshot state, notification outbox, templates, and other local-first stores still use SQLite unless separately migrated.
+
 The `python:service:*` commands run all background workers:
 
 - realtime monitor: `data/python-monitor.pid`, `data/python-monitor.log`

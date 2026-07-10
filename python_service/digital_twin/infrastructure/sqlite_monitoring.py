@@ -1,6 +1,7 @@
 from .sqlite_operational import (
     SQLiteEventLog,
     SQLiteExternalSignalCache,
+    SQLiteMonitorAccountJobStore,
     SQLiteOntologyQualitySampleStore,
     SQLiteMarketQuoteCache,
     SQLiteMonitoringCycleRecorder,
@@ -12,6 +13,7 @@ from .sqlite_operational import (
 __all__ = [
     "SQLiteEventLog",
     "SQLiteExternalSignalCache",
+    "SQLiteMonitorAccountJobStore",
     "SQLiteOntologyQualitySampleStore",
     "SQLiteMarketQuoteCache",
     "SQLiteMonitoringCycleRecorder",

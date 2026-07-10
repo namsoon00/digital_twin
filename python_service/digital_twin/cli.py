@@ -24,7 +24,7 @@ from .infrastructure.sqlite_notifications import SQLiteNotificationJobStore, SQL
 from .infrastructure.sqlite_runtime import SQLiteAppStore
 from .infrastructure.notifications import queued_notifier_for_account, send_events
 from .infrastructure.neo4j_ontology import ontology_repository_from_settings
-from .infrastructure.service_factory import build_market_data_collection_runner, build_model_review_runner, build_monitor_runner, build_news_collection_runner, build_notification_queue_runner, build_ontology_reasoning_runner, build_symbol_universe_service
+from .infrastructure.service_factory import build_market_data_collection_runner, build_model_review_runner, build_monitor_runner, build_news_collection_runner, build_notification_queue_runner, build_ontology_reasoning_runner, build_symbol_universe_service, monitor_account_job_store_from_settings
 from .infrastructure.sqlite_maintenance_service import SQLiteMaintenanceRunner, SQLiteMaintenanceScheduler
 from .infrastructure.settings import (
     SECRET_SETTING_KEYS,
@@ -173,11 +173,17 @@ def monitor_command(args) -> int:
     accounts = registry.load()
     if args.monitor_action == "status":
         store = SQLiteMonitorStore()
+        settings = runtime_settings()
         print("Accounts: " + str(len(accounts)))
         for account in accounts:
             previous = store.previous.get(account.account_id)
             print(account.account_id + " · " + account.label + " · previous=" + ("yes" if previous else "no"))
         print("Sent cadence keys: " + str(len([key for key in store.sent.keys() if str(key).startswith("cadence:")])))
+        job_store = monitor_account_job_store_from_settings(settings)
+        if job_store:
+            print("Account monitor jobs: " + json.dumps(job_store.summary(), ensure_ascii=False))
+        else:
+            print("Account monitor jobs: disabled")
         return 0
 
     runner = build_monitor_runner(accounts)

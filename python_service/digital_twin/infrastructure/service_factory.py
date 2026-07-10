@@ -1,3 +1,5 @@
+import os
+import uuid
 from typing import Iterable
 
 from ..application.flow_lens_service import FlowLensService
@@ -32,8 +34,9 @@ from .notifications import send_events
 from .notifications import notifier_for_account
 from .news_sources import NewsSourceGateway
 from .settings import currency_rates, runtime_settings
+from .mysql_monitoring import MySQLMonitorAccountJobStore, mysql_backend_enabled
 from .sqlite_model_review import SQLiteModelReviewJobStore
-from .sqlite_monitoring import SQLiteMonitorStore
+from .sqlite_monitoring import SQLiteMonitorAccountJobStore, SQLiteMonitorStore
 from .sqlite_monitoring import SQLiteEventLog
 from .sqlite_monitoring import SQLiteMarketQuoteCache
 from .sqlite_monitoring import SQLiteMonitoringCycleRecorder
@@ -53,10 +56,19 @@ def monitor_event_bus() -> EventBus:
     return bus
 
 
+def monitor_account_job_store_from_settings(settings):
+    if mysql_backend_enabled(settings):
+        return MySQLMonitorAccountJobStore(settings)
+    if str(settings.get("monitorAccountQueueEnabled") or os.environ.get("MONITOR_ACCOUNT_QUEUE_ENABLED") or "").strip().lower() in {"1", "true", "yes", "on"}:
+        return SQLiteMonitorAccountJobStore()
+    return None
+
+
 def build_monitor_runner(accounts: Iterable[AccountConfig], event_publisher=None) -> MonitorRunner:
     settings = runtime_settings()
     store = SQLiteMonitorStore()
     ontology_quality_store = SQLiteOntologyQualitySampleStore()
+    interval_seconds = int(os.environ.get("PYTHON_REALTIME_INTERVAL_SECONDS") or os.environ.get("REALTIME_NOTIFY_INTERVAL_SECONDS") or settings.get("monitorAccountIntervalSeconds") or 180)
     return MonitorRunner(
         accounts,
         store=store,
@@ -70,6 +82,11 @@ def build_monitor_runner(accounts: Iterable[AccountConfig], event_publisher=None
             quality_store=ontology_quality_store,
             settings=settings,
         ),
+        account_job_store=monitor_account_job_store_from_settings(settings),
+        account_job_batch_size=int(settings.get("monitorAccountBatchSize") or os.environ.get("MONITOR_ACCOUNT_BATCH_SIZE") or 10),
+        account_job_interval_seconds=interval_seconds,
+        account_job_lock_seconds=int(settings.get("monitorAccountLockSeconds") or os.environ.get("MONITOR_ACCOUNT_LOCK_SECONDS") or max(600, interval_seconds * 4)),
+        worker_id=os.environ.get("MONITOR_WORKER_ID") or ("monitor-" + uuid.uuid4().hex[:12]),
     )
 
 

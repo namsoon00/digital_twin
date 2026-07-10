@@ -1145,6 +1145,66 @@ h3 {
   font-size: 13px;
 }
 
+.prompt-registry-list {
+  gap: var(--ds-section-gap);
+}
+
+.prompt-registry-row {
+  display: grid;
+  grid-template-columns: minmax(160px, 0.42fr) minmax(180px, 0.5fr) minmax(0, 1fr);
+  align-items: start;
+  gap: var(--ds-space-4) var(--ds-section-gap);
+  min-width: 0;
+}
+
+.prompt-registry-panel .prompt-registry-row {
+  display: grid;
+  grid-template-columns: minmax(160px, 0.42fr) minmax(180px, 0.5fr) minmax(0, 1fr);
+  align-items: start;
+}
+
+.prompt-registry-row span,
+.prompt-registry-row strong,
+.prompt-registry-row em {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.prompt-registry-panel .prompt-registry-row span,
+.prompt-registry-panel .prompt-registry-row strong,
+.prompt-registry-panel .prompt-registry-row em {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+
+.prompt-registry-row span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.prompt-registry-row strong {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 950;
+  line-height: 1.35;
+  word-break: keep-all;
+}
+
+.prompt-registry-panel .prompt-registry-row strong {
+  justify-self: start;
+}
+
+.prompt-registry-row em {
+  color: var(--muted);
+  font-size: 13px;
+  font-style: normal;
+  font-weight: 780;
+  line-height: 1.5;
+  word-break: keep-all;
+}
+
 .metric {
   color: var(--blue);
   font-size: 18px;
@@ -10540,6 +10600,44 @@ h3 {
   .ontology-execution-row .tone-chip {
     max-width: 100%;
     text-align: left;
+  }
+
+  .prompt-registry-list {
+    gap: var(--ds-space-5);
+  }
+
+  .prompt-registry-row {
+    grid-template-columns: 1fr;
+    gap: var(--ds-space-3);
+    align-items: start;
+    padding: var(--ds-row-pad-y) var(--ds-row-pad-x);
+  }
+
+  .prompt-registry-panel .prompt-registry-row {
+    grid-template-columns: 1fr;
+  }
+
+  .prompt-registry-row span,
+  .prompt-registry-row strong,
+  .prompt-registry-row em {
+    grid-column: 1;
+    justify-self: start;
+    text-align: left;
+  }
+
+  .prompt-registry-row span {
+    font-size: 11px;
+    line-height: 1.25;
+  }
+
+  .prompt-registry-row strong {
+    font-size: 15px;
+    line-height: 1.35;
+  }
+
+  .prompt-registry-row em {
+    font-size: 13px;
+    line-height: 1.55;
   }
 
   .reasoning-execution-head {

@@ -1340,6 +1340,9 @@ function checkFrontendAdminRender() {
     assertOk(modelingRegistryHtml.indexOf('data-action="propose-rulebox-candidates"') >= 0 && modelingRegistryHtml.indexOf("AI 후보 생성") >= 0, "RuleBox AI 후보 생성 버튼이 없습니다.");
     assertOk(modelingRegistryHtml.indexOf('data-model-setting="ontologyRuleCandidateAiEnabled"') >= 0 && modelingRegistryHtml.indexOf('data-model-setting="ontologyRuleCandidateAiIntervalMinutes"') >= 0, "RuleBox AI 후보 생성 설정이 없습니다.");
     assertOk(modelingRegistryHtml.indexOf("prompt-registry-panel") >= 0 && modelingRegistryHtml.indexOf("Prompt Registry") >= 0, "규칙·프롬프트 섹션에 프롬프트 레지스트리가 없습니다.");
+    assertOk(modelingRegistryHtml.indexOf("prompt-registry-list") >= 0 && modelingRegistryHtml.indexOf("prompt-registry-row") >= 0, "프롬프트 레지스트리 목록에 모바일 전용 행 구조가 없습니다.");
+    assertOk(/@media \(max-width: 860px\)[\s\S]*\.prompt-registry-row\s*\{[\s\S]*grid-template-columns: 1fr;/.test(styles), "프롬프트 레지스트리 행이 모바일에서 1열 카드로 전환되지 않습니다.");
+    assertOk(/@media \(max-width: 860px\)[\s\S]*\.prompt-registry-panel \.prompt-registry-row\s*\{[\s\S]*grid-template-columns: 1fr;/.test(styles), "프롬프트 레지스트리 모바일 1열 전환 규칙의 우선순위가 충분하지 않습니다.");
     assertOk(modelingRegistryHtml.indexOf("admin-modeling-panel") >= 0 && modelingRegistryHtml.indexOf("model-version-panel") >= 0, "규칙·프롬프트 섹션에 보조 모델 정책과 버전 관리가 유지되지 않았습니다.");
     assertOk(modelingRegistryHtml.indexOf('data-model-setting="notificationScoreFormula"') >= 0, "규칙·프롬프트 섹션에 알림 발송 공식 편집기가 없습니다.");
     assertOk(modelingTraceHtml.indexOf("테이블 저장 구조") >= 0 && modelingTraceHtml.indexOf("규칙 추적") >= 0, "검증 추적 섹션에 관계형 규칙 추적이 없습니다.");

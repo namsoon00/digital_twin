@@ -799,6 +799,7 @@
     notificationJobsLoaded: false,
     notificationJobsError: "",
     notificationJobsSummary: {},
+    notificationJobDiagnostics: {},
     notificationExpandedJobs: {},
     sqliteHealth: null,
     sqliteHealthLoading: false,
@@ -2073,6 +2074,7 @@
       if (!visibleJobs[key]) delete state.notificationExpandedJobs[key];
     });
     state.notificationJobsSummary = payload.summary && typeof payload.summary === "object" ? payload.summary : {};
+    state.notificationJobDiagnostics = payload.diagnostics && typeof payload.diagnostics === "object" ? payload.diagnostics : {};
     state.notificationJobsLoaded = true;
     state.notificationJobsLoading = false;
     state.notificationJobsError = "";
@@ -2100,6 +2102,7 @@
         }
         state.notificationJobsError = error.message || "최근 알림 판단을 읽지 못했습니다.";
         state.notificationJobItems = [];
+        state.notificationJobDiagnostics = {};
       })
       .finally(function () {
         state.notificationJobsLoading = false;
@@ -3303,15 +3306,18 @@
     state.notificationTemplateSending = messageType;
     state.notificationTemplatesError = "";
     render();
-    return sendJson("/api/notification-templates/test-send", "POST", { messageType: messageType })
+    var directInvestmentTest = messageType === "investmentInsight";
+    return sendJson("/api/notification-templates/test-send", "POST", { messageType: messageType, bypassPolicy: directInvestmentTest })
       .then(function (payload) {
         var event = payload.event || {};
         if (payload.suppressed) {
-          showSnackbar("발송 우선도 " + (payload.score || 0) + "/" + (payload.threshold || 0) + "로 발송하지 않았습니다.", "danger");
+          showSnackbar(payload.error || ("발송 우선도 " + (payload.score || 0) + "/" + (payload.threshold || 0) + "로 발송하지 않았습니다."), "danger");
+        } else if (payload.delivered) {
+          showSnackbar("테스트 알림을 실제 발송했습니다: " + (event.title || notificationTemplateLabel(messageType)));
         } else {
           showSnackbar("알림 발송 요청을 큐에 적재했습니다: " + (event.title || notificationTemplateLabel(messageType)));
         }
-        return loadNotificationSchedules();
+        return Promise.all([loadNotificationSchedules(), loadNotificationJobs()]);
       })
       .catch(function (error) {
         state.notificationTemplatesError = error.message || "실제 데이터 알림을 보내지 못했습니다.";
@@ -9153,6 +9159,7 @@
   function renderNotificationDecisionPanel() {
     var jobs = state.notificationJobItems || [];
     var summary = state.notificationJobsSummary || state.realtime.notificationJobs || {};
+    var diagnostics = state.notificationJobDiagnostics || {};
     var hasError = Boolean(state.notificationJobsError);
     var summaryItems = ["pending", "done", "suppressed", "failed"].map(function (key) {
       return '<span class="chip">' + escapeHtml(notificationJobStatusLabel(key)) + ' ' + escapeHtml(Number(summary[key] || 0)) + '</span>';
@@ -9171,6 +9178,7 @@
       summaryItems,
       '</div>',
       '</div>',
+      renderNotificationDecisionDiagnostics(diagnostics),
       '<div class="notification-decision-body">',
       '<div class="notification-decision-status">',
       '<span class="tone-chip ' + escapeHtml(hasError ? "hold" : "watch") + '">' + escapeHtml(hasError ? "확인 필요" : "현황") + '</span>',
@@ -9180,6 +9188,23 @@
       '</div>',
       '</article>'
     ].join("");
+  }
+
+  function renderNotificationDecisionDiagnostics(diagnostics) {
+    diagnostics = diagnostics || {};
+    var reasons = Array.isArray(diagnostics.suppressionReasons) ? diagnostics.suppressionReasons : [];
+    var chips = [];
+    var staleCount = Number(diagnostics.staleProcessingCount || 0);
+    if (staleCount) {
+      chips.push("처리 재시도 가능 " + staleCount + "건");
+    }
+    reasons.slice(0, 3).forEach(function (item) {
+      chips.push(String(item.reason || "보류") + " " + Number(item.count || 0) + "건");
+    });
+    if (!chips.length) return "";
+    return '<div class="notification-decision-diagnostics">' + chips.map(function (chip) {
+      return '<span>' + escapeHtml(chip) + '</span>';
+    }).join("") + '</div>';
   }
 
   function renderNotificationStateMessage(tone, title, description) {
@@ -9228,6 +9253,9 @@
     ].join("") : "";
     var fullMessageBlock = canExpand && expanded ? '<pre class="notification-full-message">' + escapeHtml(fullText) + '</pre>' : "";
     var fingerprint = textWithKnownDisplaySymbols(job.honeyFingerprint || "", resolvedSymbol, job);
+    var suppression = textWithKnownDisplaySymbols(job.suppressionSummary || "", resolvedSymbol, job);
+    var nextEligible = job.nextEligibleAt ? "다음 가능 " + formatClock(job.nextEligibleAt) : "";
+    var processing = job.recoverableProcessing ? "처리 중 지연 " + String(job.processingAgeMinutes || 0) + "분 · 워커 재시도 가능" : "";
     return [
       '<div class="notification-decision-row">',
       '<div class="notification-decision-top">',
@@ -9242,6 +9270,9 @@
       notificationJobStateCooldownText(job) ? '<span>' + escapeHtml(notificationJobStateCooldownText(job)) + '</span>' : '',
       notificationJobMarketHoursText(job) ? '<span>' + escapeHtml(notificationJobMarketHoursText(job)) + '</span>' : '',
       notificationJobQuietHoursText(job) ? '<span>' + escapeHtml(notificationJobQuietHoursText(job)) + '</span>' : '',
+      suppression ? '<span>' + escapeHtml(suppression) + '</span>' : '',
+      nextEligible ? '<span>' + escapeHtml(nextEligible) + '</span>' : '',
+      processing ? '<span>' + escapeHtml(processing) + '</span>' : '',
       job.honeySimilarityBypassed ? '<span>' + escapeHtml(job.honeySimilarityBypassReason ? "반복 예외 " + job.honeySimilarityBypassReason : "반복 예외 적용") + '</span>' : '',
       '</div>',
       '<p>' + escapeHtml(preview) + '</p>',

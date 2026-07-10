@@ -814,6 +814,7 @@
     sqliteHealthLoading: false,
     sqliteHealthError: "",
     sqliteMaintenanceRunning: false,
+    sqliteCleanupRunning: false,
     messageSchedules: [],
     messageSchedulesLoading: false,
     messageSchedulesError: "",
@@ -2234,6 +2235,35 @@
       })
       .finally(function () {
         state.sqliteMaintenanceRunning = false;
+        render();
+      });
+  }
+
+  function runSqliteCleanupAction() {
+    if (state.sqliteCleanupRunning || isStaticPreviewHost() || state.serverSettingsLocked) return Promise.resolve();
+    state.sqliteCleanupRunning = true;
+    state.sqliteHealthError = "";
+    render();
+    return sendJson("/api/sqlite/maintenance", "POST", {
+      checkpoint: true,
+      optimize: true,
+      recoverProcessing: true,
+      cleanupOldData: true,
+      archiveOldData: false,
+      retentionDays: 7,
+      vacuum: false
+    })
+      .then(function (payload) {
+        applySqliteHealth(payload.health || payload);
+        var cleanup = payload.cleanup || {};
+        showSnackbar("오래된 SQLite 데이터를 정리했습니다 · 삭제 " + Number(cleanup.deletedTotal || 0) + "건");
+      })
+      .catch(function (error) {
+        state.sqliteHealthError = error.message || "오래된 SQLite 데이터를 정리하지 못했습니다.";
+        showSnackbar(state.sqliteHealthError, "danger");
+      })
+      .finally(function () {
+        state.sqliteCleanupRunning = false;
         render();
       });
   }
@@ -7484,8 +7514,9 @@
       '<div class="settings-actions">',
       '<button class="text-button" type="button" data-action="refresh-sqlite-health"' + (state.sqliteHealthLoading ? ' disabled' : '') + '>' + escapeHtml(state.sqliteHealthLoading ? "확인 중" : "상태 새로고침") + '</button>',
       '<button class="text-button primary" type="button" data-action="sqlite-maintenance"' + (locked || state.sqliteMaintenanceRunning ? ' disabled' : '') + '>' + escapeHtml(state.sqliteMaintenanceRunning ? "정리 중" : "Checkpoint · Optimize") + '</button>',
+      '<button class="text-button danger" type="button" data-action="sqlite-cleanup"' + (locked || state.sqliteCleanupRunning ? ' disabled' : '') + '>' + escapeHtml(state.sqliteCleanupRunning ? "삭제 중" : "오래된 데이터 삭제") + '</button>',
       '</div>',
-      '<div class="rule-strip"><span>운영 데이터는 SQLite에 짧게 쓰고, TBox/ABox/RuleBox/InferenceBox 관계는 Neo4j에 투영합니다.</span></div>',
+      '<div class="rule-strip"><span>오래된 데이터 삭제는 pending/processing 작업을 보호하고, 알림·이벤트·캐시·근거·품질 샘플을 7일 또는 상한 기준으로 정리합니다.</span></div>',
       '</article>'
     ].join("");
   }
@@ -14937,6 +14968,12 @@
     Array.prototype.slice.call(app.querySelectorAll('[data-action="sqlite-maintenance"]')).forEach(function (sqliteMaintenance) {
       sqliteMaintenance.addEventListener("click", function () {
         runSqliteMaintenanceAction();
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll('[data-action="sqlite-cleanup"]')).forEach(function (sqliteCleanup) {
+      sqliteCleanup.addEventListener("click", function () {
+        runSqliteCleanupAction();
       });
     });
 

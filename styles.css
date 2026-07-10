@@ -6481,6 +6481,55 @@ h3 {
   padding: 16px;
 }
 
+.neo4j-rulebox-panel .panel-head {
+  align-items: flex-start;
+}
+
+.neo4j-rulebox-editor {
+  gap: 14px;
+}
+
+.rulebox-console-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 8px;
+}
+
+.rulebox-console-strip span {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.rulebox-console-strip strong {
+  color: var(--ink);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.rulebox-actions {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+
+.rulebox-rule-list {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.rulebox-rule-row {
+  grid-template-columns: minmax(92px, 0.7fr) minmax(180px, 1.2fr) minmax(220px, 1.4fr);
+}
+
 .model-section {
   display: grid;
   gap: 12px;

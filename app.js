@@ -829,6 +829,13 @@
     labRecordError: "",
     modelSaved: false,
     modelError: "",
+    ontologyRulebox: null,
+    ontologyRuleboxJson: "",
+    ontologyRuleboxLoading: false,
+    ontologyRuleboxSaving: false,
+    ontologyRuleboxRunning: false,
+    ontologyRuleboxError: "",
+    ontologyRuleboxLastRun: null,
     activeWatchAccountId: "",
     editingWatchAccountId: "",
     editingWatchSymbol: "",
@@ -3785,10 +3792,98 @@
     return sendJson("/api/settings", "PUT", { settings: serverSettingsPayload() })
       .then(function (payload) {
         applyServerSettings(payload);
-        return loadNotificationSchedules()
+        return Promise.all([
+          loadNotificationSchedules(),
+          loadOntologyRulebox(true)
+        ])
           .catch(function (error) {
-            state.messageSchedulesError = error.message || "메시지 스케줄을 다시 읽지 못했습니다.";
+            state.messageSchedulesError = error.message || "설정 적용 후 운영 데이터를 다시 읽지 못했습니다.";
           });
+      });
+  }
+
+  function loadOntologyRulebox(force) {
+    if (isStaticPreviewHost()) return Promise.resolve(null);
+    if (state.ontologyRuleboxLoading && !force) return Promise.resolve(state.ontologyRulebox);
+    state.ontologyRuleboxLoading = true;
+    state.ontologyRuleboxError = "";
+    return requestJson("/api/ontology/rulebox")
+      .then(function (payload) {
+        applyOntologyRuleboxPayload(payload);
+        return payload;
+      })
+      .catch(function (error) {
+        state.ontologyRuleboxError = error.message || "Neo4j RuleBox를 읽지 못했습니다.";
+        return null;
+      })
+      .finally(function () {
+        state.ontologyRuleboxLoading = false;
+        if (state.snapshot) render();
+      });
+  }
+
+  function applyOntologyRuleboxPayload(payload) {
+    state.ontologyRulebox = payload || {};
+    state.ontologyRuleboxJson = JSON.stringify((payload && payload.rules) || [], null, 2);
+    state.ontologyRuleboxError = "";
+  }
+
+  function parseOntologyRuleboxEditor() {
+    var raw = String(state.ontologyRuleboxJson || "[]").trim() || "[]";
+    var parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) throw new Error("RuleBox JSON은 규칙 배열이어야 합니다.");
+    return parsed;
+  }
+
+  function saveOntologyRulebox(seedDefaults) {
+    if (state.ontologyRuleboxSaving) return;
+    var rules = null;
+    if (!seedDefaults) {
+      try {
+        rules = parseOntologyRuleboxEditor();
+      } catch (error) {
+        state.ontologyRuleboxError = error.message || "RuleBox JSON 형식을 확인하세요.";
+        showSnackbar(state.ontologyRuleboxError, "danger");
+        render();
+        return;
+      }
+    }
+    state.ontologyRuleboxSaving = true;
+    state.ontologyRuleboxError = "";
+    render();
+    sendJson("/api/ontology/rulebox", "PUT", seedDefaults ? { clearInference: true } : { rules: rules, clearInference: true })
+      .then(function (payload) {
+        applyOntologyRuleboxPayload(payload);
+        showSnackbar(seedDefaults ? "기본 RuleBox를 Neo4j에 시드했습니다." : "Neo4j RuleBox를 저장했습니다.");
+      })
+      .catch(function (error) {
+        state.ontologyRuleboxError = error.message || "Neo4j RuleBox를 저장하지 못했습니다.";
+        showSnackbar(state.ontologyRuleboxError, "danger");
+      })
+      .finally(function () {
+        state.ontologyRuleboxSaving = false;
+        render();
+      });
+  }
+
+  function runOntologyRulebox() {
+    if (state.ontologyRuleboxRunning) return;
+    state.ontologyRuleboxRunning = true;
+    state.ontologyRuleboxError = "";
+    render();
+    sendJson("/api/ontology/rulebox/run", "POST", { clearInference: true })
+      .then(function (payload) {
+        state.ontologyRuleboxLastRun = payload;
+        showSnackbar(payload.status === "ok" ? "Neo4j RuleBox 추론을 실행했습니다." : "RuleBox 실행 결과: " + (payload.status || "확인 필요"), payload.status === "ok" ? "success" : "caution");
+        return loadOntologyRulebox(true);
+      })
+      .catch(function (error) {
+        state.ontologyRuleboxError = error.message || "Neo4j RuleBox 추론 실행에 실패했습니다.";
+        showSnackbar(state.ontologyRuleboxError, "danger");
+      })
+      .finally(function () {
+        state.ontologyRuleboxRunning = false;
+        render();
       });
   }
 
@@ -7948,6 +8043,7 @@
       return [
         renderInvestmentAiPacketPanel(snapshot),
         renderOntologyRuleEditorPanel(snapshot),
+        renderNeo4jRuleboxPanel(snapshot),
         renderAiPromptRegistryPanel(snapshot),
         renderAdminModelingPanel(snapshot),
         renderModelVersionPanel(snapshot)
@@ -11638,6 +11734,95 @@
     ].join("");
   }
 
+  function renderNeo4jRuleboxPanel() {
+    var payload = state.ontologyRulebox || {};
+    var rules = Array.isArray(payload.rules) ? payload.rules : [];
+    var relationTypes = Array.isArray(payload.relationTypes) ? payload.relationTypes : [];
+    var lastRun = state.ontologyRuleboxLastRun || {};
+    var disabled = state.ontologyRuleboxSaving || state.ontologyRuleboxRunning || state.serverSettingsLocked;
+    return [
+      '<article class="panel model-panel neo4j-rulebox-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Neo4j RuleBox</p>',
+      '<h2>그래프 규칙 실행 콘솔</h2>',
+      '</div>',
+      '<span class="tone-chip ' + escapeHtml(payload.status === "ok" ? "watch" : payload.configured ? "caution" : "hold") + '">' + escapeHtml(ruleboxStatusLabel(payload)) + '</span>',
+      '</div>',
+      '<div class="model-editor neo4j-rulebox-editor">',
+      '<div class="lab-stats-grid model-stats-grid">',
+      renderLabStat("규칙", payload.ruleCount || rules.length || 0, "개"),
+      renderLabStat("조건", payload.conditionCount || countRuleboxConditions(rules), "개"),
+      renderLabStat("파생 관계", payload.derivationCount || countRuleboxDerivations(rules), "개"),
+      renderLabStat("실행문", lastRun.statementCount == null ? "-" : lastRun.statementCount, "개"),
+      '</div>',
+      '<div class="settings-note model-settings-note">',
+      '<strong>Neo4j를 RuleBox 원본으로 사용합니다.</strong>',
+      '<p>저장 시 RuleBox와 InferenceBox를 지우고 규칙 구조를 다시 적재합니다. 실행 버튼은 Neo4j 안의 관계 조건을 읽어 InferenceBox 관계를 다시 만듭니다.</p>',
+      '</div>',
+      '<div class="rulebox-console-strip">',
+      '<span><strong>source</strong>' + escapeHtml(payload.source || "-") + '</span>',
+      '<span><strong>engine</strong>' + escapeHtml(payload.engineVersion || "-") + '</span>',
+      '<span><strong>relations</strong>' + escapeHtml(relationTypes.length ? relationTypes.join(", ") : "-") + '</span>',
+      lastRun.status ? '<span><strong>last run</strong>' + escapeHtml(lastRun.status + (lastRun.reason ? " · " + lastRun.reason : "")) + '</span>' : '',
+      '</div>',
+      state.ontologyRuleboxLoading ? '<p class="lab-message">Neo4j RuleBox를 읽는 중입니다.</p>' : '',
+      state.ontologyRuleboxError ? '<p class="form-error">' + escapeHtml(state.ontologyRuleboxError) + '</p>' : '',
+      payload.reason ? '<p class="lab-message caution">' + escapeHtml(payload.reason) + '</p>' : '',
+      '<div class="settings-actions rulebox-actions">',
+      '<button class="text-button" type="button" data-action="refresh-rulebox"' + (state.ontologyRuleboxLoading ? ' disabled' : '') + '>새로고침</button>',
+      '<button class="text-button" type="button" data-action="seed-rulebox"' + (disabled ? ' disabled' : '') + '>기본값 시드</button>',
+      '<button class="text-button primary" type="button" data-action="save-rulebox"' + (disabled ? ' disabled' : '') + '>' + escapeHtml(state.ontologyRuleboxSaving ? "저장 중" : "RuleBox 저장") + '</button>',
+      '<button class="text-button primary" type="button" data-action="run-rulebox"' + (disabled ? ' disabled' : '') + '>' + escapeHtml(state.ontologyRuleboxRunning ? "실행 중" : "Neo4j 추론 실행") + '</button>',
+      '</div>',
+      '<div class="model-section">',
+      '<div class="flow-title"><div><strong>Neo4j 저장 원본 JSON</strong><span>GraphInferenceRule 배열입니다. 조건과 derivation을 추가하면 다음 실행부터 관계 추론 대상이 됩니다.</span></div></div>',
+      '<label class="setting-field wide"><textarea data-ontology-rulebox-json rows="18" autocomplete="off">' + escapeHtml(state.ontologyRuleboxJson || JSON.stringify(rules, null, 2)) + '</textarea></label>',
+      '</div>',
+      '<div class="model-section">',
+      '<div class="flow-title"><div><strong>활성 규칙 요약</strong><span>Neo4j에 적재된 RuleBox 노드를 사람이 읽기 쉽게 펼친 목록입니다.</span></div></div>',
+      '<div class="source-stack rulebox-rule-list">',
+      rules.length ? rules.map(renderNeo4jRuleboxRuleRow).join("") : '<p class="subtle">Neo4j RuleBox 규칙이 비어 있습니다.</p>',
+      '</div>',
+      '</div>',
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function ruleboxStatusLabel(payload) {
+    if (!payload || !payload.configured) return "Neo4j 미연결";
+    if (payload.status === "ok") return "Neo4j 연결";
+    return payload.status || "확인 필요";
+  }
+
+  function countRuleboxConditions(rules) {
+    return (rules || []).reduce(function (count, rule) {
+      return count + ((rule.conditions || []).length || 0);
+    }, 0);
+  }
+
+  function countRuleboxDerivations(rules) {
+    return (rules || []).reduce(function (count, rule) {
+      return count + ((rule.derivations || []).length || 0);
+    }, 0);
+  }
+
+  function renderNeo4jRuleboxRuleRow(rule) {
+    var conditions = Array.isArray(rule.conditions) ? rule.conditions : [];
+    var derivations = Array.isArray(rule.derivations) ? rule.derivations : [];
+    var relationTypes = derivations.map(function (item) {
+      return item.relation_type || item.relationType || "";
+    }).filter(Boolean);
+    return [
+      '<div class="source-row rulebox-rule-row">',
+      '<span>' + escapeHtml(rule.enabled === false ? "disabled" : (rule.action_group || rule.actionGroup || "enabled")) + '</span>',
+      '<strong>' + escapeHtml(rule.label || rule.rule_id || rule.ruleId || "Rule") + '</strong>',
+      '<em>' + escapeHtml((rule.rule_id || rule.ruleId || "") + " · " + conditions.length + " conditions · " + (relationTypes.join(", ") || derivations.length + " derivations")) + '</em>',
+      '</div>'
+    ].join("");
+  }
+
   function renderAiPromptRegistryPanel(snapshot) {
     var prompts = promptTemplateRows();
     return [
@@ -14453,6 +14638,43 @@
       });
     });
 
+    Array.prototype.slice.call(app.querySelectorAll("[data-ontology-rulebox-json]")).forEach(function (field) {
+      field.addEventListener("input", function () {
+        state.ontologyRuleboxJson = field.value;
+        state.ontologyRuleboxError = "";
+      });
+    });
+
+    var refreshRuleboxButton = app.querySelector('[data-action="refresh-rulebox"]');
+    if (refreshRuleboxButton) {
+      refreshRuleboxButton.addEventListener("click", function () {
+        loadOntologyRulebox(true).then(function () {
+          showSnackbar("Neo4j RuleBox를 다시 읽었습니다.");
+        });
+      });
+    }
+
+    var seedRuleboxButton = app.querySelector('[data-action="seed-rulebox"]');
+    if (seedRuleboxButton) {
+      seedRuleboxButton.addEventListener("click", function () {
+        saveOntologyRulebox(true);
+      });
+    }
+
+    var saveRuleboxButton = app.querySelector('[data-action="save-rulebox"]');
+    if (saveRuleboxButton) {
+      saveRuleboxButton.addEventListener("click", function () {
+        saveOntologyRulebox(false);
+      });
+    }
+
+    var runRuleboxButton = app.querySelector('[data-action="run-rulebox"]');
+    if (runRuleboxButton) {
+      runRuleboxButton.addEventListener("click", function () {
+        runOntologyRulebox();
+      });
+    }
+
     Array.prototype.slice.call(app.querySelectorAll("[data-number-setting]")).forEach(function (field) {
       field.addEventListener("change", function () {
         updateNumberAssignmentSetting(
@@ -15080,6 +15302,7 @@
     loadNotificationRules(),
     loadNotificationJobs(),
     loadNotificationSchedules(),
+    loadOntologyRulebox(),
     loadSymbolUniverse()
   ];
   Promise.all(snapshotPrerequisites.map(function (task) {

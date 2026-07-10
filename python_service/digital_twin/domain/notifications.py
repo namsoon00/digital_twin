@@ -5,6 +5,13 @@ from typing import Dict
 from .portfolio import utc_now_iso
 
 
+def notification_debug_number(value: str) -> str:
+    text = str(value or "").replace("-", "").strip()
+    if not text:
+        return ""
+    return "N-" + text[:8].upper()
+
+
 @dataclass
 class NotificationJob:
     job_id: str

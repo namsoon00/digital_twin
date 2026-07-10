@@ -6230,6 +6230,21 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(0, rendered.count("<b>알림 정보</b>"))
         self.assertNotIn("• <b>분석</b>: <code>AI 투자 판단 / test AI</code>", rendered)
 
+    def test_notification_render_appends_short_tracking_number_only(self):
+        rendered = render_notification(
+            NotificationTemplate("investmentInsight", "{telegramMessage}"),
+            {
+                "messageType": "investmentInsight",
+                "telegramMessage": "<b>[주의] 🛡️ 삼성전자: 분할축소 우선 점검</b>",
+                "jobId": "abcdef1234567890",
+            },
+        )
+
+        self.assertIn("<b>알림 추적</b>", rendered)
+        self.assertIn("• <b>번호</b>: <code>N-ABCDEF12</code>", rendered)
+        self.assertNotIn("<b>알림 정보</b>", rendered)
+        self.assertNotIn("알림ID", rendered)
+
     def test_validated_ai_response_omits_empty_current_state_section(self):
         context = {
             "messageType": "investmentInsight",
@@ -7791,9 +7806,12 @@ class PythonServiceTests(unittest.TestCase):
         )
 
         self.assertEqual(1, runner.run_once(limit=10))
+        self.assertIn("<b>알림 추적</b>", sent[0])
+        self.assertIn("• <b>번호</b>: <code>N-", sent[0])
         self.assertNotIn("<b>알림 정보</b>", sent[0])
         self.assertNotIn("• <b>발송</b>: <code>2026-07-05 09:06 KST</code>", sent[0])
         self.assertEqual("2026-07-05 09:06 KST", queue.jobs()[0].context["sentTime"])
+        self.assertTrue(str(queue.jobs()[0].context["notificationNumber"]).startswith("N-"))
 
     def test_notification_score_explanation_uses_friendly_korean(self):
         db_path = Path(self.temp.name) / "service.db"

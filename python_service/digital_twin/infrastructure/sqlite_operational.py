@@ -16,7 +16,7 @@ from ..domain.investment_research import ResearchEvidence
 from ..domain.model_review import ModelReviewJob
 from ..domain.notification_rules import DEFAULT_NOTIFICATION_RULES, NotificationRuleConfig, apply_market_hours_rule, apply_similarity_rule, apply_state_cooldown_rule, default_notification_rule, evaluate_notification_rule, notification_fingerprint
 from ..domain.notification_templates import DEFAULT_NOTIFICATION_TEMPLATES, LEGACY_DEFAULT_TEMPLATE, PREVIOUS_DEFAULT_TEMPLATE, NotificationTemplate, alert_context, render_notification
-from ..domain.notifications import NotificationJob
+from ..domain.notifications import NotificationJob, notification_debug_number
 from ..domain.ontology_quality import OntologyQualitySample, build_ontology_quality_sample
 from ..domain.portfolio import AccountSnapshot, AlertEvent
 from ..domain.repositories import MonitoringCycleRecordResult
@@ -601,6 +601,8 @@ class SQLiteNotificationTemplateStore(OperationalConnection):
         context.setdefault("messageType", job.message_type)
         context.setdefault("accountId", job.account_id)
         context.setdefault("accountLabel", job.account_label)
+        context.setdefault("jobId", job.job_id)
+        context.setdefault("notificationNumber", notification_debug_number(job.job_id))
         return self.render(job.message_type, context)
 
 

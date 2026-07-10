@@ -7,7 +7,7 @@ from ..domain.disclosure_analysis import context_with_disclosure_analysis, local
 from ..domain.monitoring import RealtimeMonitor
 from ..domain.notification_ai import enrich_notification_ai_context
 from ..domain.notification_ai_gate import ai_gate_enabled_for_message_type, context_with_validated_ai_response, local_validated_ai_response
-from ..domain.notifications import NotificationJob
+from ..domain.notifications import NotificationJob, notification_debug_number
 
 
 class CompositeNotificationContextEnricher:
@@ -233,6 +233,8 @@ class NotificationQueueRunner:
         sent_time = now.astimezone(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d %H:%M KST")
         context = dict(job.context or {})
         context.update({
+            "jobId": job.job_id,
+            "notificationNumber": notification_debug_number(job.job_id),
             "sentAt": sent_at,
             "sentTime": sent_time,
             "sentLine": "발송시각 " + sent_time,

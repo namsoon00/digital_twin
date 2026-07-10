@@ -7,6 +7,7 @@ from typing import Dict, List
 from .alert_formatting import signed_pct
 from .message_types import MESSAGE_TYPE_EMOJIS, MESSAGE_TYPE_LABELS, TRIGGER_SUMMARIES
 from .notification_ai import enrich_notification_ai_context
+from .notifications import notification_debug_number
 from .ontology_rules import relation_score_meaning
 from .portfolio import AlertEvent
 from .scoring import notification_signal_labels
@@ -2098,25 +2099,27 @@ def footer_row(label: str, value: str, rich: bool = False) -> str:
 
 
 def message_footer(context: Dict[str, object], rich: bool = False) -> str:
-    reference = footer_value_from_context(context, "referenceDate", "기준일", "기준시각")
-    sent = footer_value_from_context(context, "sentTime", "발송시각")
-    key = footer_value_from_context(context, "key", "dedupeKey", "jobId")
-    source = footer_analysis_source(context)
+    number = footer_value_from_context(context, "notificationNumber", "notificationNo", "debugNotificationNumber")
+    if not number:
+        number = notification_debug_number(footer_value_from_context(context, "jobId"))
     rows = [
-        footer_row("기준", reference, rich),
-        footer_row("발송", sent, rich),
-        footer_row("알림ID", key, rich),
-        footer_row("분석", source, rich),
+        footer_row("번호", number, rich),
     ]
     rows = [row for row in rows if row]
     if not rows:
         return ""
-    title = "<b>알림 정보</b>" if rich else "알림 정보"
+    title = "<b>알림 추적</b>" if rich else "알림 추적"
     return "\n".join([title, *rows])
 
 
 def append_message_footer(rendered: str, context: Dict[str, object], rich: bool = False) -> str:
-    return str(rendered or "").rstrip()
+    rendered_text = str(rendered or "").rstrip()
+    if not rendered_text or "알림 추적" in rendered_text:
+        return rendered_text
+    footer = message_footer(context, rich)
+    if not footer:
+        return rendered_text
+    return rendered_text + "\n\n" + footer
 
 
 def append_score_explanation(rendered: str, context: Dict[str, object], rich: bool = False) -> str:
@@ -2243,6 +2246,8 @@ def template_variables() -> List[str]:
         "notificationSignalText",
         "referenceDate",
         "eventGeneratedAt",
+        "jobId",
+        "notificationNumber",
         "sentAt",
         "sentTime",
         "sentLine",

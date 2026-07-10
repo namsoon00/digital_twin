@@ -54,11 +54,6 @@ def connect_sqlite(path: Path):
     connection = sqlite3.connect(str(resolved), timeout=SQLITE_BUSY_TIMEOUT_MS / 1000, factory=ManagedSQLiteConnection)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA busy_timeout = " + str(SQLITE_BUSY_TIMEOUT_MS))
-    try:
-        connection.execute("PRAGMA journal_mode = WAL")
-    except sqlite3.OperationalError as error:
-        if not is_locked_error(error):
-            raise
     connection.execute("PRAGMA synchronous = NORMAL")
     connection.execute("PRAGMA foreign_keys = ON")
     try:
@@ -69,11 +64,11 @@ def connect_sqlite(path: Path):
 
 
 @contextmanager
-def sqlite_transaction(path: Path, mode: str = "IMMEDIATE"):
+def sqlite_transaction(path: Path, mode: str = "DEFERRED"):
     connection = connect_sqlite(path)
     opened = False
     try:
-        statement = "BEGIN " + str(mode or "IMMEDIATE").upper()
+        statement = "BEGIN " + str(mode or "DEFERRED").upper()
         with_sqlite_retry(lambda: connection.execute(statement))
         opened = True
         yield connection

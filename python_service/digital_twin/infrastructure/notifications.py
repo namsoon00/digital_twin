@@ -15,6 +15,7 @@ from .settings import runtime_settings
 
 
 TELEGRAM_HTML_PATTERN = re.compile(r"</?(?:b|strong|i|em|u|ins|s|strike|del|code|pre|a|blockquote)(?:\s+[^>]*)?>", re.IGNORECASE)
+TELEGRAM_MESSAGE_LIMIT = 3900
 FORMULA_SETTING_KEYS = [
     "buyScoreFormula",
     "sellScoreFormula",
@@ -31,6 +32,27 @@ def uses_telegram_html(text: str) -> bool:
 def telegram_plain_text(text: str) -> str:
     without_tags = TELEGRAM_HTML_PATTERN.sub("", str(text or ""))
     return unescape(without_tags)
+
+
+def telegram_message_chunks(text: str, limit: int = TELEGRAM_MESSAGE_LIMIT) -> Iterable[str]:
+    remaining = str(text or "").strip()
+    if not remaining:
+        return []
+    chunks = []
+    max_length = max(500, int(limit or TELEGRAM_MESSAGE_LIMIT))
+    while len(remaining) > max_length:
+        split_at = remaining.rfind("\n", 0, max_length)
+        if split_at < max_length // 2:
+            split_at = remaining.rfind(" ", 0, max_length)
+        if split_at < max_length // 2:
+            split_at = max_length
+        chunk = remaining[:split_at].strip()
+        if chunk:
+            chunks.append(chunk)
+        remaining = remaining[split_at:].strip()
+    if remaining:
+        chunks.append(remaining)
+    return chunks
 
 
 class NotificationResult:
@@ -72,13 +94,36 @@ class TelegramNotifier:
                 payload = json.loads(response.read().decode("utf-8") or "{}")
                 if payload.get("ok") is False:
                     return NotificationResult(False, self.label, str(payload.get("description") or "발송 실패"))
-        except (urllib.error.URLError, urllib.error.HTTPError, ValueError) as error:
+        except urllib.error.HTTPError as error:
+            detail = ""
+            try:
+                payload = json.loads(error.read().decode("utf-8", "replace") or "{}")
+                detail = str(payload.get("description") or "")
+            except (ValueError, OSError):
+                detail = ""
+            reason = str(error)
+            if detail:
+                reason = reason + " · " + detail
+            return NotificationResult(False, self.label, reason)
+        except (urllib.error.URLError, ValueError) as error:
             return NotificationResult(False, self.label, str(error))
         return NotificationResult(True, self.label)
 
     def send(self, text: str) -> NotificationResult:
         if not self.bot_token or not self.chat_id:
             return NotificationResult(False, self.label, "텔레그램 토큰 또는 chat id 미설정")
+        if len(str(text or "")) > TELEGRAM_MESSAGE_LIMIT:
+            chunks = list(telegram_message_chunks(telegram_plain_text(text)))
+            total = len(chunks)
+            for index, chunk in enumerate(chunks, start=1):
+                label = ("(" + str(index) + "/" + str(total) + ")\n") if total > 1 else ""
+                result = self.post_message({
+                    "chat_id": self.chat_id,
+                    "text": label + chunk,
+                })
+                if not result.delivered:
+                    return result
+            return NotificationResult(True, self.label)
         payload: Dict[str, object] = {
             "chat_id": self.chat_id,
             "text": text,

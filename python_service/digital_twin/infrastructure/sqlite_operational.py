@@ -24,10 +24,12 @@ from ..domain.repositories import MonitoringCycleRecordResult
 from ..domain.symbol_universe import ListedSymbol, normalize_market, normalize_symbol, utc_now_iso as symbol_utc_now_iso
 from .model_review_queue import model_review_payloads_from_event
 from .settings import data_dir, read_json, runtime_settings, service_db_path, settings_path, utc_now
-from .sqlite_support import connect_sqlite, sqlite_transaction
+from .sqlite_support import connect_sqlite, with_sqlite_retry, sqlite_transaction
 
 
 IN_FLIGHT_NOTIFICATION_HISTORY_MINUTES = 30
+MAX_NOTIFICATION_DELIVERY_ATTEMPTS = 5
+NOTIFICATION_HISTORY_LOOKBACK_LIMIT = 25
 
 
 def json_dumps(payload) -> str:
@@ -199,7 +201,7 @@ class OperationalConnection:
     def connect(self):
         return connect_sqlite(self.path)
 
-    def transaction(self, mode: str = "IMMEDIATE"):
+    def transaction(self, mode: str = "DEFERRED"):
         return sqlite_transaction(self.path, mode)
 
     def ensure_schema(self) -> None:
@@ -209,8 +211,16 @@ class OperationalConnection:
         with self._schema_lock:
             if key in self._schema_ready_paths:
                 return
-            self._ensure_schema_locked()
+            with_sqlite_retry(lambda: self._ensure_wal_mode(), attempts=8)
+            with_sqlite_retry(lambda: self._ensure_schema_locked(), attempts=8)
             self._schema_ready_paths.add(key)
+
+    def _ensure_wal_mode(self) -> None:
+        with self.connect() as connection:
+            mode_row = connection.execute("PRAGMA journal_mode").fetchone()
+            mode = str(mode_row[0] if mode_row else "").lower()
+            if mode != "wal":
+                connection.execute("PRAGMA journal_mode = WAL")
 
     def _ensure_schema_locked(self) -> None:
         with self.transaction() as connection:
@@ -341,6 +351,7 @@ class OperationalConnection:
                 },
             )
             connection.execute("CREATE INDEX IF NOT EXISTS idx_notification_jobs_status ON notification_jobs(status, created_at)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_notification_jobs_message_time_status ON notification_jobs(message_type, created_at, status)")
             connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_notification_jobs_dedupe ON notification_jobs(dedupe_key) WHERE dedupe_key != ''")
             connection.execute("""
                 CREATE TABLE IF NOT EXISTS runtime_settings (
@@ -980,9 +991,9 @@ class SQLiteNotificationRuleStore(OperationalConnection):
                 SELECT payload_json, created_at, status FROM notification_jobs
                 WHERE message_type = ? AND created_at >= ? AND status IN ('pending', 'processing', 'done')
                 ORDER BY created_at DESC
-                LIMIT 100
+                LIMIT ?
                 """,
-                (job.message_type, cutoff_text),
+                (job.message_type, cutoff_text, NOTIFICATION_HISTORY_LOOKBACK_LIMIT),
             ).fetchall()
         count = 0
         previous_score = 0
@@ -2568,9 +2579,9 @@ class SQLiteNotificationJobStore(OperationalConnection):
             SELECT payload_json, created_at, status FROM notification_jobs
             WHERE message_type = ? AND created_at >= ? AND status IN ('pending', 'processing', 'done')
             ORDER BY created_at DESC
-            LIMIT 100
+            LIMIT ?
             """,
-            (job.message_type, cutoff_text),
+            (job.message_type, cutoff_text, NOTIFICATION_HISTORY_LOOKBACK_LIMIT),
         ).fetchall()
         count = 0
         previous_score = 0
@@ -2697,15 +2708,23 @@ class SQLiteNotificationJobStore(OperationalConnection):
             rows = connection.execute(
                 """
                 SELECT job_id, payload_json FROM notification_jobs
-                WHERE status IN ('pending', 'failed')
+                WHERE status = 'pending'
+                   OR (status = 'failed' AND attempts < ?)
                    OR (
                     status = 'processing'
                     AND COALESCE(NULLIF(processing_started_at, ''), NULLIF(updated_at, ''), created_at) <= ?
                    )
-                ORDER BY created_at, job_id
+                ORDER BY
+                    CASE
+                        WHEN status = 'pending' THEN 0
+                        WHEN status = 'processing' THEN 1
+                        ELSE 2
+                    END,
+                    created_at,
+                    job_id
                 LIMIT ?
                 """,
-                (cutoff, int(limit or 10)),
+                (MAX_NOTIFICATION_DELIVERY_ATTEMPTS, cutoff, int(limit or 10)),
             ).fetchall()
             for row in rows:
                 try:
@@ -2724,7 +2743,8 @@ class SQLiteNotificationJobStore(OperationalConnection):
                         payload_json = ?
                     WHERE job_id = ?
                       AND (
-                        status IN ('pending', 'failed')
+                        status = 'pending'
+                        OR (status = 'failed' AND attempts < ?)
                         OR (
                           status = 'processing'
                           AND COALESCE(NULLIF(processing_started_at, ''), NULLIF(updated_at, ''), created_at) <= ?
@@ -2739,6 +2759,7 @@ class SQLiteNotificationJobStore(OperationalConnection):
                         stamp,
                         json_dumps(payload),
                         job.job_id,
+                        MAX_NOTIFICATION_DELIVERY_ATTEMPTS,
                         cutoff,
                     ),
                 )

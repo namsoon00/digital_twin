@@ -28,7 +28,7 @@ Domain:
 - `python_service/digital_twin/domain/ontology_tbox.py`: bounded-context TBox vocabulary, relation definitions, and ontology reasoning rule catalog
 - `python_service/digital_twin/domain/ontology_contracts.py`: ontology graph data contracts such as entities, relations, evidence, beliefs, opinions, and portfolio ontology snapshots
 - `python_service/digital_twin/domain/ontology_schema.py`: TBox/ABox payloads, bounded-context property assignment, and basic ontology graph mutation helpers
-- `python_service/digital_twin/domain/portfolio_ontology_builder.py`: portfolio snapshot to ontology ABox/read-model builder; production code should use this instead of the compatibility `ontology.py` facade
+- `python_service/digital_twin/domain/portfolio_ontology_builder.py`: portfolio snapshot to ontology builder; Neo4j projection must call it in ABox-facts-only mode and leave opinions, insights, and inference to graph-store/AI stages
 - `python_service/digital_twin/domain/ontology_prompting.py`: ontology read models for reasoning cards, AI inference packets, worldview summaries, and prompt payloads
 - `python_service/digital_twin/domain/external_signal_quality.py`: external signal provenance, freshness, source-health, and symbol-coverage scoring
 - `python_service/digital_twin/domain/ontology_quality.py`: AI opinion readiness and ontology graph quality sample metrics

@@ -1928,13 +1928,19 @@ class PythonServiceTests(unittest.TestCase):
 
         persisted = repository.graphs[0]
         self.assertTrue(result["saved"])
-        self.assertEqual("abox-first-neo4j-rulebox", result["projectionMode"])
+        self.assertEqual("abox-facts-only-neo4j-rulebox", result["projectionMode"])
         self.assertEqual({"clearInference": True}, repository.executions[0])
         self.assertEqual(["005930"], repository.queried_symbols[0])
         self.assertTrue(result["inferenceBox"]["neo4jNativeReasoningUsed"])
         self.assertFalse(any((item.properties or {}).get("ontologyBox") == "RuleBox" for item in persisted.entities))
         self.assertFalse(any((item.properties or {}).get("ontologyBox") == "InferenceBox" for item in persisted.entities))
+        self.assertFalse(any(item.kind == "active-opinion" for item in persisted.entities))
+        self.assertFalse(any(item.kind == "insight" for item in persisted.entities))
+        self.assertFalse(persisted.opinions)
+        self.assertFalse(persisted.reasoning_cards)
         self.assertTrue(any((item.properties or {}).get("ontologyBox") == "ABox" for item in persisted.entities))
+        self.assertTrue(any(item.kind == "stock" for item in persisted.entities))
+        self.assertTrue(any(item.relation_type == "BREAKS_LEVEL" for item in persisted.relations))
 
     def test_ontology_projection_recorder_includes_watchlist_candidates(self):
         holding = normalize_position({
@@ -1995,7 +2001,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("watchlist", stock.properties.get("source"))
         self.assertIn("WatchlistCandidate", stock.properties.get("tboxClasses"))
         self.assertIn("WATCHES", relation_types)
-        self.assertEqual(2, len(graph.reasoning_cards))
+        self.assertFalse(graph.reasoning_cards)
+        self.assertFalse(graph.opinions)
 
     def test_ontology_projection_recorder_persists_watchlist_only_snapshot(self):
         watch = normalize_position({

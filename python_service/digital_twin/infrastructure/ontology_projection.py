@@ -32,12 +32,13 @@ class PortfolioOntologyProjectionRecorder:
                 external_signals=snapshot.external_signals,
                 portfolio_id=snapshot.account_id,
                 runtime_context=self.runtime_context(snapshot),
+                include_reasoning_outputs=False,
             )
             persistence_graph = self.graph_for_neo4j_persistence(graph)
             result = self.repository.save_graph(persistence_graph)
             if not isinstance(result, dict):
                 result = {"saved": False, "status": "error", "reason": "ontology repository returned non-dict result"}
-            result["projectionMode"] = "abox-first-neo4j-rulebox"
+            result["projectionMode"] = "abox-facts-only-neo4j-rulebox"
             if result.get("saved"):
                 self.attach_neo4j_inference_result(result, snapshot)
             if self.quality_store:
@@ -82,9 +83,9 @@ class PortfolioOntologyProjectionRecorder:
             relations=relations,
             evidence=evidence,
             beliefs=beliefs,
-            opinions=list(graph.opinions or []),
-            reasoning_cards=list(graph.reasoning_cards or []),
-            worldview={**dict(graph.worldview or {}), "runtimeProjectionMode": "abox-first-neo4j-rulebox"},
+            opinions=[],
+            reasoning_cards=[],
+            worldview={**dict(graph.worldview or {}), "runtimeProjectionMode": "abox-facts-only-neo4j-rulebox"},
             prompt=graph.prompt,
         )
 

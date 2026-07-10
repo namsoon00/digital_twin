@@ -1678,6 +1678,7 @@ def build_portfolio_ontology(
     external_signals: Dict[str, object] = None,
     portfolio_id: str = "portfolio",
     runtime_context: Dict[str, object] = None,
+    include_reasoning_outputs: bool = True,
 ) -> PortfolioOntology:
     legacy_by_symbol = legacy_by_symbol or {}
     external_signals = external_signals or {}
@@ -1825,6 +1826,8 @@ def build_portfolio_ontology(
         add_symbol_external_signal_concepts(graph, stock_id, symbol, external_signals)
         add_position_factor_concepts(graph, stock_id, portfolio_node_id, position, portfolio)
         add_position_macro_context_concepts(graph, stock_id, position, portfolio, external_signals, runtime_context)
+        if not include_reasoning_outputs:
+            continue
         opinion = build_position_opinion(position, portfolio, legacy) if holding else build_watchlist_opinion(position, legacy)
         graph.opinions.append(opinion)
         thesis_id = add_entity(graph, "investment-thesis", symbol, (position.name or symbol) + " 투자 가설", {
@@ -1998,6 +2001,18 @@ def build_portfolio_ontology(
                 "aiInfluenceLabel": opinion.contradictions[0],
             })))
     add_decision_item_concepts(graph, runtime_context)
+    if not include_reasoning_outputs:
+        graph.entities = dedupe_entities(graph.entities)
+        graph.relations = dedupe_relations(graph.relations)
+        graph.evidence = dedupe_evidence(graph.evidence)
+        graph.worldview = {
+            "model": "ontology-abox-facts",
+            "runtimeProjectionMode": "abox-facts-only-neo4j-rulebox",
+            "description": "Runtime ABox facts are projected for Neo4j RuleBox reasoning; opinions, insights, and inference are produced after graph-store reasoning.",
+            "positionCount": len([item for item in observed_positions if is_holding_position(item)]),
+            "watchlistCount": len([item for item in observed_positions if is_watchlist_position(item)]),
+        }
+        return graph
     apply_graph_reasoning(graph)
     graph.entities = dedupe_entities(graph.entities)
     graph.relations = dedupe_relations(graph.relations)

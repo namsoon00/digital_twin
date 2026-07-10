@@ -520,9 +520,6 @@ _ABSTRACT_CLASS_NAMES = {
     "RuleRegistry",
     "RuleCondition",
     "RelationTemplate",
-    "DataPipeline",
-    "NotificationPolicy",
-    "NotificationIntent",
 }
 
 _SOURCE_BACKED_CLASS_NAMES = {
@@ -709,6 +706,7 @@ _GOVERNANCE_CLASS_NAMES = {
 }
 
 _OPERATIONAL_CLASS_NAMES = {
+    "DataPipeline",
     "CollectionSchedule",
     "CollectionPolicy",
     "MarketSnapshot",
@@ -716,7 +714,9 @@ _OPERATIONAL_CLASS_NAMES = {
     "ExternalSignalCollection",
     "AnalysisJob",
     "ReasoningCycle",
+    "NotificationPolicy",
     "NotificationDispatch",
+    "NotificationIntent",
     "AlertCandidate",
     "ImportanceGate",
     "CooldownPolicy",

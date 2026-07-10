@@ -11,7 +11,7 @@ from ..domain.market_data import (
 )
 from ..domain.ontology_prompting import ONTOLOGY_PROMPT_VERSION
 from ..domain.portfolio_ontology_builder import build_portfolio_ontology
-from ..domain.ontology_rules import evaluate_position_relation_rules
+from ..domain.ontology_relation_rules import evaluate_position_relation_rules
 from ..domain.portfolio import PortfolioSummary, Position, utc_now_iso
 from ..domain.portfolio_calculations import (
     normalized_fx_rates,

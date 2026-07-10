@@ -2,7 +2,7 @@ from dataclasses import replace
 from typing import Dict, List
 
 from .message_types import WATCHLIST_ONTOLOGY_SIGNAL
-from .ontology_rules import evaluate_position_relation_rules
+from .ontology_relation_rules import evaluate_position_relation_rules
 from .portfolio import AccountSnapshot, AlertEvent
 
 

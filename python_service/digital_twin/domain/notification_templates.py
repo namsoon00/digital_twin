@@ -8,7 +8,7 @@ from .alert_formatting import signed_pct
 from .message_types import MESSAGE_TYPE_EMOJIS, MESSAGE_TYPE_LABELS, TRIGGER_SUMMARIES
 from .notification_ai import enrich_notification_ai_context
 from .notifications import notification_debug_number
-from .ontology_rules import relation_score_meaning
+from .ontology_relation_rules import relation_score_meaning
 from .portfolio import AlertEvent
 from .scoring import notification_signal_labels
 

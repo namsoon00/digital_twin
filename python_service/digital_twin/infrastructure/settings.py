@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Dict
 
 from ..domain.accounts import configured
-from ..domain.ontology_rules import (
+from ..domain.ontology_relation_rules import (
     DEFAULT_RELATION_THRESHOLDS,
     default_ai_prompt_policy_text,
     default_ai_prompt_templates_text,

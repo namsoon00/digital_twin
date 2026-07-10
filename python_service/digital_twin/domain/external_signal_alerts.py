@@ -4,7 +4,7 @@ from .alert_formatting import compact_number, money, price_money, signed_number,
 from .data_freshness import freshness_record
 from .market_data import number
 from .investment_research import ACTIVE_INVESTMENT_OPINION_VERSION, ACTION_LABELS
-from .ontology_rules import AI_PROMPT_REGISTRY_VERSION, strength_label
+from .ontology_relation_rules import AI_PROMPT_REGISTRY_VERSION, strength_label
 from .portfolio import AccountSnapshot, AlertEvent
 
 

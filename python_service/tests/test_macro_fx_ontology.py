@@ -7,7 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from digital_twin.domain.fx import fx_exposure_facts
 from digital_twin.domain.external_signal_deltas import external_signals_with_deltas
 from digital_twin.domain.macro_context import macro_context_facts
-from digital_twin.domain.ontology_rules import evaluate_position_relation_rules, relation_rule_context_summary_lines
+from digital_twin.domain.ontology_relation_rules import evaluate_position_relation_rules, relation_rule_context_summary_lines
 from digital_twin.domain.portfolio import Position
 from digital_twin.domain.portfolio_calculations import portfolio_summary
 from digital_twin.domain.rates import interest_rate_facts

@@ -41,7 +41,7 @@ from .ontology_external_abox import (
     add_symbol_external_signal_concepts,
 )
 from .ontology_reasoning import apply_graph_reasoning
-from .ontology_rules import evaluate_position_relation_rules
+from .ontology_relation_rules import evaluate_position_relation_rules
 from .portfolio import PortfolioSummary, Position
 from .trend_transitions import trend_transition_assessment
 

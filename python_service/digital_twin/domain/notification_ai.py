@@ -3,7 +3,7 @@ from typing import Dict, List, Optional
 from .message_types import MESSAGE_TYPE_LABELS
 from .accounts import message_delivery_profile
 from .disclosure_analysis import local_disclosure_analysis
-from .ontology_rules import (
+from .ontology_relation_rules import (
     AI_PROMPT_REGISTRY_VERSION,
     default_ai_prompt_policy_text,
     prompt_template_for_message_type,

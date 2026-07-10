@@ -17,7 +17,7 @@ from .message_types import (
 )
 from .model_review import decision_change_context, decision_change_review_lines
 from .ontology_insights import build_investment_insight_events, split_operational_and_investment_events
-from .ontology_rules import decision_action_group_for_label, relation_rule_context_summary_lines, relation_thresholds_from_settings
+from .ontology_relation_rules import decision_action_group_for_label, relation_rule_context_summary_lines, relation_thresholds_from_settings
 from .parsing import parse_assignments
 from .portfolio import AccountSnapshot, AlertEvent, Position, monitor_state_has_live_account_data, status_has_account_data_failure
 from .portfolio_calculations import DEFAULT_FX_RATES, value_in_base

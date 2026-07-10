@@ -34,7 +34,7 @@ from digital_twin.domain.message_types import DEFAULT_ALERT_RULES, DEFAULT_CADEN
 from digital_twin.domain.ontology_contracts import OntologyEntity, OntologyRelation, entity_id
 from digital_twin.domain.ontology_schema import abox_properties
 from digital_twin.domain.portfolio_ontology_builder import apply_relation_driven_opinions, build_portfolio_ontology
-from digital_twin.domain.ontology_rules import decision_action_group_for_label, evaluate_position_relation_rules, prompt_template_for_message_type
+from digital_twin.domain.ontology_relation_rules import decision_action_group_for_label, evaluate_position_relation_rules, prompt_template_for_message_type
 from digital_twin.domain.portfolio_calculations import portfolio_summary
 from digital_twin.domain.strategy import SafeFormula, StrategyModel, decisions_for_positions
 from digital_twin.domain.trend_transitions import trend_transition_assessment

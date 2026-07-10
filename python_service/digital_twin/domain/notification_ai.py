@@ -14,7 +14,7 @@ from .ontology_relation_rules import (
 
 
 SKIP_AI_OPINION_TYPES = {"workHandoff", "modelReview"}
-AI_OPINION_ENGINE_VERSION = "notification-ai-opinion-v1"
+AI_OPINION_ENGINE_VERSION = "notification-ai-opinion-v2"
 SENSITIVE_PROMPT_KEY_TERMS = ("secret", "token", "password", "clientid", "client_id", "appsecret", "app_key", "apikey", "api_key", "accountseq", "account_seq", "chatid", "chat_id")
 KST = timezone(timedelta(hours=9))
 NEWS_DATE_KEYS = (
@@ -506,6 +506,135 @@ def join_unique_segments(*values: str) -> str:
     return " / ".join(rows)
 
 
+def user_facing_investment_text(value: object, max_len: int = 110) -> str:
+    text = compact_text(value, max_len)
+    replacements = [
+        ("관심종목 관계 신호 관계가 새로 감지되었습니다", "관심종목 조건 변화가 새로 잡혔습니다"),
+        ("관심종목 관계 신호", "관심종목 조건"),
+        ("관계 분석 관계 신호", "관계 신호"),
+        ("관계 신호 관계", "조건 변화"),
+        ("관계 변화", "조건 변화"),
+        ("온톨로지 인사이트", "투자 인사이트"),
+    ]
+    for before, after in replacements:
+        text = text.replace(before, after)
+    return " ".join(text.split())
+
+
+def volume_context_summary(flow: str) -> str:
+    match = re.search(r"\(([0-9]+(?:\.[0-9]+)?)x\)", str(flow or ""))
+    if not match:
+        return ""
+    try:
+        ratio = float(match.group(1))
+    except ValueError:
+        return ""
+    if ratio < 0.7:
+        return "거래량 낮음(" + match.group(1) + "x)"
+    if ratio >= 1.5:
+        return "거래량 증가(" + match.group(1) + "x)"
+    return "거래량 보통(" + match.group(1) + "x)"
+
+
+def trend_position_summary(trend: str) -> str:
+    text = str(trend or "")
+    rows: List[str] = []
+    for period in ["5", "20", "60"]:
+        segment_match = re.search(period + r"일선[^,/]*(높음|낮음)", text)
+        if not segment_match:
+            continue
+        label = period + "일선 " + ("위" if segment_match.group(1) == "높음" else "아래")
+        if label not in rows:
+            rows.append(label)
+    return ", ".join(rows[:3])
+
+
+def compact_trend_dynamics_summary(context: Dict[str, object]) -> str:
+    dynamics = relation_trend_dynamics(context)
+    if not dynamics:
+        return ""
+    rows: List[str] = []
+    state = str(dynamics.get("state") or "").strip()
+    if state:
+        rows.append(user_facing_investment_text(state, 36))
+    scenario_parts = []
+    if dynamics.get("supportRetest"):
+        scenario_parts.append("지지 재확인")
+    if dynamics.get("recoveryAttempt"):
+        scenario_parts.append("회복 시도")
+    if dynamics.get("breakdownAcceleration"):
+        scenario_parts.append("하락 가속")
+    if scenario_parts:
+        rows.append("/".join(scenario_parts[:2]))
+    if dynamics.get("dynamicRiskScore") not in (None, ""):
+        rows.append("리스크 " + str(dynamics.get("dynamicRiskScore")) + "점")
+    return ", ".join(rows[:3])
+
+
+def compact_market_context(flow: str, trend: str, context: Dict[str, object]) -> str:
+    rows = [
+        volume_context_summary(flow),
+        trend_position_summary(trend),
+        compact_trend_dynamics_summary(context),
+    ]
+    unique: List[str] = []
+    for row in rows:
+        text = compact_text(row, 70)
+        if text and text not in unique:
+            unique.append(text)
+    return " / ".join(unique[:3])
+
+
+def compact_news_summary_text(context: Dict[str, object]) -> str:
+    disclosure = disclosure_context(context)
+    if disclosure:
+        report = str(disclosure.get("reportName") or disclosure.get("report_name") or "").strip()
+        receipt_date = str(disclosure.get("receiptDate") or disclosure.get("receipt_date") or "").strip()
+        if report:
+            return compact_text("공시: " + report + (", " + receipt_date if receipt_date else ""), 115)
+    news_items = selected_news_headline_items(context, 4)
+    if news_items:
+        first = news_items[0]
+        payload = first.get("payload") if isinstance(first.get("payload"), dict) else {}
+        source = str(first.get("domain") or first.get("provider") or "뉴스").strip()
+        impact = str(first.get("stockImpactLabel") or payload.get("stockImpactLabel") or "").strip()
+        summary = (
+            first.get("articleSummaryKo")
+            or payload.get("articleSummaryKo")
+            or first.get("summary")
+            or first.get("title")
+        )
+        prefix = source + ((" " + impact) if impact and impact not in {"중립", "neutral", "Neutral"} else "")
+        suffix = " 외 " + str(len(news_items) - 1) + "건" if len(news_items) > 1 else ""
+        return compact_text(prefix + ": " + compact_text(summary, 58) + suffix, 125)
+    evidence_items = selected_research_evidence_items(context, 1)
+    if evidence_items:
+        item = evidence_items[0]
+        source = str(item.get("source") or "리서치").strip()
+        title = str(item.get("title") or item.get("summary") or "").strip()
+        if title:
+            return compact_text(source + ": " + title, 115)
+    return ""
+
+
+def investment_reason_text(
+    target: str,
+    insight_label: str,
+    thesis: str,
+    flow_line: str,
+    trend_line: str,
+    context: Dict[str, object],
+) -> str:
+    base = user_facing_investment_text(thesis, 110)
+    if not base:
+        label = user_facing_investment_text(insight_label, 48)
+        base = (target + "에서 " + label + "이 감지됐습니다.").strip()
+    market = compact_market_context(flow_line, trend_line, context)
+    if market:
+        return compact_text(base.rstrip(".") + ". " + market, 170)
+    return compact_text(base, 150)
+
+
 def trend_dynamics_summary(context: Dict[str, object]) -> str:
     dynamics = relation_trend_dynamics(context)
     if not dynamics:
@@ -739,7 +868,6 @@ def opinion_lines_for_type(message_type: str, context: Dict[str, object]) -> Lis
     active_evidence = active_opinion_evidence_text(active_opinion, "evidence") if active_opinion else ""
     active_counter = active_opinion_evidence_text(active_opinion, "counterEvidence") if active_opinion else ""
     execution_plan = execution_plan_value(context)
-    beginner_summary = str(execution_plan.get("beginnerSummary") or "").strip()
     primary_action = str(execution_plan.get("primaryActionLabel") or "").strip()
     plan_next = execution_plan_text(execution_plan, "nextChecks", 2)
     plan_blocked = execution_plan_text(execution_plan, "blockedActions", 2)
@@ -752,26 +880,13 @@ def opinion_lines_for_type(message_type: str, context: Dict[str, object]) -> Lis
         insight_label = str(insight.get("insightLabel") or line_value(lines, "인사이트 유형") or "온톨로지 인사이트").strip()
         thesis = str(insight.get("thesis") or line_value(lines, "핵심 결론") or "").strip()
         next_check = str(insight.get("nextCheck") or line_value(lines, "다음 확인") or "").strip()
-        current_price = line_value(lines, "현재가")
-        average_price = line_value(lines, "평균매입가") or line_value(lines, "평단가")
-        return_rate = line_value(lines, "수익률") or line_value(lines, "손익")
-        quantity = line_value(lines, "보유 수량")
-        position_value = line_value(lines, "종목 평가금액")
-        account_value = line_value(lines, "계좌 평가금액")
         action_line = line_value(lines, "권장 액션")
         risk_line = line_value(lines, "주요 리스크")
         trend_line = line_value(lines, "추세")
         flow_line = line_value(lines, "수급")
         investor_line = line_value(lines, "투자자")
-        trend_dynamics_text = trend_dynamics_summary(context)
-        news_text = news_summary_text(context)
+        news_text = compact_news_summary_text(context)
         disclosure_lines = disclosure_analysis_opinion_lines(context)
-        source_types = insight.get("sourceSignalTypes") or context.get("sourceSignalTypes") if isinstance(context, dict) else []
-        if isinstance(source_types, list):
-            source_labels = [MESSAGE_TYPE_LABELS.get(str(item), str(item)) for item in source_types[:5]]
-        else:
-            source_labels = []
-        source_text = ", ".join(source_labels) if source_labels else (line_value(lines, "근거 신호") or "관계 신호")
         stance = active_label or "실행보다 관찰 우선"
         if "기회" in insight_label or "매수" in (action_line + thesis):
             stance = "소액 분할매수 검토"
@@ -783,50 +898,39 @@ def opinion_lines_for_type(message_type: str, context: Dict[str, object]) -> Lis
             stance = active_label + (" · 확신 " + str(active_conviction) + "%" if active_conviction not in (None, "") else "")
             if primary_action and primary_action not in stance:
                 stance += " · " + primary_action
-        summary_bits = [part for part in [
-            ("현재가 " + current_price) if current_price else "",
-            ("평균매입가 " + average_price) if average_price else "",
-            ("수익률 " + return_rate) if return_rate else "",
-            ("보유 수량 " + quantity) if quantity else "",
-            ("종목 평가금액 " + position_value) if position_value else "",
-            ("계좌 평가금액 " + account_value) if account_value else "",
-        ] if part]
+        reason_text = investment_reason_text(
+            target,
+            insight_label,
+            active_thesis or thesis,
+            flow_line or investor_line,
+            trend_line,
+            context,
+        )
         result = [
-            "판단: " + stance,
-            "해석: " + target + "의 " + insight_label + "입니다. " + (thesis or "가격·수급·추세·외부 신호가 하나의 인사이트로 합성됐습니다."),
+            "판단: " + user_facing_investment_text(stance, 80),
+            "이유: " + reason_text,
         ]
-        if beginner_summary:
-            result.append("쉽게 말하면: " + beginner_summary)
-        if active_thesis:
-            result.append("투자 의견 근거: " + active_thesis)
-        if summary_bits:
-            result.append("가격 위치: " + ", ".join(summary_bits))
-        if active_evidence:
-            result.append("근거: " + active_evidence)
-        elif flow_line or investor_line or trend_line:
-            result.append("근거: " + " / ".join(part for part in [flow_line, investor_line, trend_line] if part))
         counter_text = join_unique_segments(active_counter, plan_counter)
         if counter_text:
-            result.append("반대 근거: " + counter_text)
-        if trend_dynamics_text:
-            result.append("추세 동역학: " + trend_dynamics_text)
-        if risk_line:
-            result.append("주의: " + risk_line)
+            result.append("반대 근거: " + user_facing_investment_text(counter_text, 110))
+        elif risk_line:
+            result.append("주의: " + user_facing_investment_text(risk_line, 110))
         if news_text:
-            result.append("뉴스·공시: " + news_text)
-        result.extend(disclosure_lines)
+            result.append("뉴스: " + news_text)
+        result.extend(disclosure_lines[:2])
         opinion_text = active_label or action_line or stance
         if primary_action and primary_action not in opinion_text:
             opinion_text += " · " + primary_action
         if active_invalidation:
             opinion_text += ". 무효화 조건: " + active_invalidation
-        source_phrase = "근거 신호(" + source_text + ")가" if source_text else "근거 신호가"
         if plan_blocked:
-            result.append("지금 피할 일: " + plan_blocked)
-        result.extend([
-            "의견: " + opinion_text + ". " + source_phrase + " 같은 방향으로 유지되는지 확인하고, 반대 신호가 있으면 실행 강도를 낮추세요.",
-            "다음 확인: " + (plan_next or active_next_check or next_check or "다음 조회에서도 같은 관계 규칙이 유지되는지, 뉴스·공시 원문에 반대 근거가 있는지 확인하세요."),
-        ])
+            result.append("피할 일: " + user_facing_investment_text(plan_blocked, 120))
+        elif opinion_text:
+            result.append("의견: " + user_facing_investment_text(opinion_text, 120))
+        result.append("다음 확인: " + user_facing_investment_text(
+            plan_next or active_next_check or next_check or "다음 조회에서도 같은 조건이 유지되는지 확인하세요.",
+            140,
+        ))
         return result
     if message_type == "holdingTiming":
         evidence = active_rule_evidence(context, 5)
@@ -1012,7 +1116,6 @@ def build_notification_ai_opinion(
     lines = opinion_lines_for_type(message_type, context or {})
     if missing_data_labels(context or {}) and not any(line.startswith("부족 데이터:") for line in lines):
         lines.append("부족 데이터: " + ", ".join(missing_data_labels(context or {})[:3]) + "는 결론 강도를 낮추는 요소입니다.")
-    lines.append("분석출처: 알림 AI 의견 / " + str(prompt_context.get("promptId") or message_type))
     return {
         "engineVersion": AI_OPINION_ENGINE_VERSION,
         "messageType": message_type,

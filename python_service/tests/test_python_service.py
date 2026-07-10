@@ -3310,6 +3310,7 @@ class PythonServiceTests(unittest.TestCase):
             current_portfolio,
             [current_position],
             decisions_for_positions([current_position], current_portfolio),
+            metadata=self.inferencebox_metadata("005930", "graph.loss_guard.breakdown.v1", "lossControl", "손실 방어 추론"),
         )
 
         events = RealtimeMonitor().events_for_snapshot(current_snapshot, previous_snapshot.to_monitor_state())
@@ -4024,6 +4025,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("missingProjection", inference_event.metadata["missingInferenceReasonCode"])
         self.assertEqual("neo4jInferenceBox", inference_event.metadata["ontologyInference"]["source"])
         self.assertTrue(inference_event.metadata["ontologyInference"]["missing"])
+        self.assertFalse(any(event.rule == "investmentInsight" for event in events))
 
     def test_events_skip_operational_alert_when_inferencebox_matches_holding(self):
         position = normalize_position({
@@ -4318,6 +4320,7 @@ class PythonServiceTests(unittest.TestCase):
             current_portfolio,
             [current_position],
             decisions_for_positions([current_position], current_portfolio),
+            metadata=self.inferencebox_metadata("005930", "graph.trend.recovery.v1", "holdReview", "추세 회복 추론", polarity="support", risk_impact=0, support_impact=12),
         )
 
         event = self.insight_event(
@@ -4391,6 +4394,7 @@ class PythonServiceTests(unittest.TestCase):
             current_portfolio,
             [current_position],
             decisions_for_positions([current_position], current_portfolio),
+            metadata=self.inferencebox_metadata("AAPL", "graph.value.change.v1", "holdReview", "평가금액 변화 추론", polarity="support", risk_impact=0, support_impact=10),
         )
 
         events = RealtimeMonitor({
@@ -5784,6 +5788,7 @@ class PythonServiceTests(unittest.TestCase):
             current_portfolio,
             [current_position],
             decisions_for_positions([current_position], current_portfolio),
+            metadata=self.inferencebox_metadata("AAPL", "graph.decision.change.v1", "profitProtect", "판단 변화 추론", polarity="support", risk_impact=0, support_impact=15),
         )
 
         events = RealtimeMonitor().events_for_snapshot(current_snapshot, previous_snapshot.to_monitor_state())
@@ -5952,6 +5957,7 @@ class PythonServiceTests(unittest.TestCase):
             [position],
             [],
             external_signals=external_signals,
+            metadata=self.inferencebox_metadata("STRC", "graph.crypto.sensitivity.v1", "riskWatch", "비트코인 민감도 추론"),
         )
         scored_snapshot = monitor.snapshot_with_strategy_scores(snapshot)
         previous = scored_snapshot.to_monitor_state()
@@ -6210,6 +6216,9 @@ class PythonServiceTests(unittest.TestCase):
         self.assertNotIn("<b>", item["fullText"])
         self.assertLess(item["honeyScore"], item["honeyThreshold"])
         self.assertTrue(item["honeyReasons"])
+        self.assertIn("suppressionSummary", item)
+        self.assertIn("diagnostics", payload)
+        self.assertTrue(payload["diagnostics"]["suppressionReasons"])
         self.assertEqual(10, payload["limit"])
         self.assertEqual({"suppressed": 1}, payload["summary"])
 
@@ -6544,7 +6553,6 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("• <b>상황</b>:", message)
         self.assertIn("• <b>의견</b>:", message)
         self.assertIn("• <b>다음 확인</b>:", message)
-        self.assertIn("• <b>분석출처</b>: 알림 AI 의견 / holdingTiming", message)
         self.assertNotIn("<b>AI 프롬프트</b>", message)
         self.assertNotIn("보유 타이밍 AI 분석", message)
         self.assertNotIn("thesis", message)
@@ -9575,6 +9583,100 @@ class PythonServiceTests(unittest.TestCase):
         counts = SQLiteEventLog().event_counts()
         self.assertEqual(1, counts["notification.test_requested"])
         self.assertEqual(1, counts["notification.job_queued"])
+
+    def test_investment_insight_test_send_bypasses_policy_and_sends_directly(self):
+        registry = AccountRegistry()
+        account = AccountConfig("main", "메인", "toss", "https://example.test", "client", "secret", "1", ["005930"])
+        registry.upsert(account)
+        position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "marketValue": 720000,
+            "quantity": 10,
+            "sellableQuantity": 10,
+            "averagePrice": 80000,
+            "currentPrice": 72000,
+            "profitLossRate": -10,
+            "sector": "반도체",
+        })
+        portfolio = portfolio_summary([position], 1000000, "KRW")
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "토스 계좌 동기화",
+            utc_now_iso(),
+            portfolio,
+            [position],
+            decisions_for_positions([position], portfolio),
+            metadata=self.inferencebox_metadata("005930", "graph.loss_guard.breakdown.v1", "lossControl", "손실 방어 추론"),
+        )
+        sent_messages = []
+
+        class FakeNotifier:
+            def send(self, text):
+                sent_messages.append(text)
+                return SimpleNamespace(delivered=True, reason="")
+
+        save_runtime_settings({
+            "notificationAiGateEnabled": "0",
+            "dartDisclosureAiAnalysisEnabled": "0",
+        })
+        with mock.patch("digital_twin.infrastructure.web_server.build_snapshot", return_value=snapshot), \
+                mock.patch("digital_twin.infrastructure.service_factory.notifier_for_account", return_value=FakeNotifier()):
+            status, payload = notification_template_test_payload({"messageType": "investmentInsight", "bypassPolicy": True})
+
+        self.assertEqual(200, status)
+        self.assertTrue(payload["delivered"])
+        self.assertTrue(payload["direct"])
+        self.assertFalse(payload["queued"])
+        self.assertEqual("investmentInsight", payload["messageType"])
+        self.assertTrue(sent_messages)
+        jobs = SQLiteNotificationJobStore().jobs()
+        self.assertEqual(1, len(jobs))
+        self.assertEqual("done", jobs[0].status)
+        self.assertEqual("investmentInsight", jobs[0].message_type)
+
+    def test_investment_insight_test_send_blocks_when_inference_missing(self):
+        registry = AccountRegistry()
+        account = AccountConfig("main", "메인", "toss", "https://example.test", "client", "secret", "1", ["005930"])
+        registry.upsert(account)
+        position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "marketValue": 720000,
+            "quantity": 10,
+            "sellableQuantity": 10,
+            "averagePrice": 80000,
+            "currentPrice": 72000,
+            "profitLossRate": -10,
+            "sector": "반도체",
+        })
+        portfolio = portfolio_summary([position], 1000000, "KRW")
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "토스 계좌 동기화",
+            utc_now_iso(),
+            portfolio,
+            [position],
+            decisions_for_positions([position], portfolio),
+        )
+
+        with mock.patch("digital_twin.infrastructure.web_server.build_snapshot", return_value=snapshot):
+            status, payload = notification_template_test_payload({"messageType": "investmentInsight", "bypassPolicy": True})
+
+        self.assertEqual(409, status)
+        self.assertFalse(payload["delivered"])
+        self.assertEqual("ontologyInferenceMissing", payload["blockedBy"])
+        self.assertEqual("ontologyInferenceMissing", payload["event"]["messageType"])
 
     def test_notification_template_test_send_rejects_demo_snapshot_by_default(self):
         registry = AccountRegistry()

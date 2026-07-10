@@ -94,6 +94,7 @@ def build_notification_queue_runner(dry_run: bool = False) -> NotificationQueueR
         notifier_factory=notifier_for_account,
         dry_run=dry_run,
         send_gap_seconds=float(settings.get("notificationSendGapSeconds") or 0),
+        stale_after_minutes=int(settings.get("notificationProcessingStaleMinutes") or 30),
         template_renderer=SQLiteNotificationTemplateStore().render_job,
         context_enricher=CompositeNotificationContextEnricher(
             NotificationHoldingSnapshotEnricher(

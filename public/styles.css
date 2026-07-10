@@ -4057,6 +4057,7 @@ h3 {
 }
 
 .notification-decision-summary,
+.notification-decision-diagnostics,
 .notification-decision-score,
 .notification-decision-reasons,
 .notification-decision-actions {
@@ -4110,6 +4111,7 @@ h3 {
 }
 
 .notification-decision-score span,
+.notification-decision-diagnostics span,
 .notification-decision-reasons span {
   display: inline-flex;
   align-items: center;
@@ -9105,6 +9107,7 @@ h3 {
   .notification-decision-actions,
   .notification-full-message,
   .notification-decision-reasons,
+  .notification-decision-diagnostics,
   .notification-fingerprint {
     grid-column: 2;
   }

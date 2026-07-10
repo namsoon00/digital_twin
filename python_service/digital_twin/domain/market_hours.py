@@ -127,6 +127,34 @@ def infer_market_from_context(message_type: str, context: Dict[str, object]) -> 
     return ""
 
 
+def _context_text(value: object) -> str:
+    if isinstance(value, dict):
+        return " ".join(_context_text(item) for item in value.values())
+    if isinstance(value, list):
+        return " ".join(_context_text(item) for item in value)
+    return str(value or "")
+
+
+def market_hours_important_exception_reason(message_type: str, context: Dict[str, object]) -> str:
+    key = str(message_type or (context or {}).get("messageType") or "").strip()
+    context = context or {}
+    if key == "externalDartDisclosure":
+        return "공시는 장 시간 외에도 확인이 필요한 이벤트라 발송"
+    if key != "investmentInsight":
+        return ""
+    blob = _context_text({
+        "severity": context.get("severity"),
+        "headline": context.get("headline") or context.get("title"),
+        "rawLines": context.get("rawLines"),
+        "ontologyInsight": context.get("ontologyInsight"),
+        "sourceSignalTypes": context.get("sourceSignalTypes"),
+        "body": context.get("body"),
+    })
+    if any(term in blob for term in ["공시", "손실", "손절", "분할축소", "리스크 증가", "위험", "riskIncrease", "riskManagement", "externalDartDisclosure"]):
+        return "손실·공시·위험 증가 계열 투자 판단이라 장 시간 외에도 발송"
+    return ""
+
+
 def parse_hhmm(value: object):
     parts = str(value or "").strip().split(":")
     if len(parts) < 2:
@@ -218,12 +246,16 @@ def evaluate_market_hours(
     else:
         reason = market_label + " 닫힘 (" + session_summary(sessions) + ")"
         status = "closed"
+        exception_reason = market_hours_important_exception_reason(message_type, context)
+        if exception_reason:
+            reason = reason + " · " + exception_reason
+            status = "closed_exception"
     return MarketHoursDecision(
         True,
         market=market,
         label=label,
         status=status,
-        should_send=bool(matched_session),
+        should_send=bool(matched_session) or status == "closed_exception",
         reason=reason,
         local_time=local_time,
         open_time=open_time,

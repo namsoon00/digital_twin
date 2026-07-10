@@ -59,7 +59,7 @@ from ..domain.portfolio import utc_now_iso
 from ..infrastructure.event_bus import default_event_bus
 from ..infrastructure.mock_market import mock_market_payload, mock_market_scenario_list
 from ..infrastructure.neo4j_ontology import ontology_repository_from_settings
-from ..infrastructure.service_factory import build_rule_change_candidate_service, build_symbol_universe_service, flow_lens_snapshot
+from ..infrastructure.service_factory import build_notification_queue_runner, build_rule_change_candidate_service, build_symbol_universe_service, flow_lens_snapshot
 from ..infrastructure.settings import ROOT_DIR, runtime_settings, save_runtime_settings
 from ..infrastructure.sqlite_accounts import AccountRegistry
 from ..infrastructure.sqlite.health import run_sqlite_maintenance, sqlite_health_snapshot
@@ -613,10 +613,83 @@ def full_notification_text(value: str) -> str:
     return text.strip()
 
 
+def notification_processing_age_minutes(job: NotificationJob) -> float:
+    started_at = parse_utc(str((job.context or {}).get("processingStartedAt") or job.updated_at or job.created_at or ""))
+    if job.status != "processing" or not started_at:
+        return 0.0
+    return max(0.0, (datetime.now(timezone.utc) - started_at).total_seconds() / 60)
+
+
+def notification_next_eligible_at(context: Dict[str, object]) -> str:
+    if not context.get("honeyStateCooldownEnabled"):
+        return ""
+    if str(context.get("honeyStateDecision") or "") != "cooldown" and not context.get("honeyStateSuppressed"):
+        return ""
+    last_sent_at = parse_utc(str(context.get("honeyStateLastSentAt") or ""))
+    if not last_sent_at:
+        return ""
+    try:
+        minutes = int(float(context.get("honeyStateCooldownMinutes") or 0))
+    except (TypeError, ValueError):
+        minutes = 0
+    if minutes <= 0:
+        return ""
+    return utc_iso(last_sent_at + timedelta(minutes=minutes))
+
+
+def notification_suppression_summary(job: NotificationJob) -> str:
+    context = dict(job.context or {})
+    if job.status != "suppressed":
+        return ""
+    if job.last_error:
+        return job.last_error
+    if context.get("honeyStateReason"):
+        return str(context.get("honeyStateReason"))
+    if context.get("marketHoursReason"):
+        return str(context.get("marketHoursReason"))
+    if context.get("quietHoursReason"):
+        return str(context.get("quietHoursReason"))
+    reason = str(context.get("honeySuppressionReason") or "").strip()
+    if reason == "stale_data":
+        return "데이터 신선도 기준 미통과"
+    if reason == "market_closed":
+        return "장 시간 외 발송 보류"
+    if reason == "state_cooldown":
+        return "같은 상태 반복 발송 보류"
+    return reason or "알림 정책으로 발송 보류"
+
+
+def notification_job_diagnostics(jobs: List[NotificationJob]) -> Dict[str, object]:
+    settings = runtime_settings()
+    try:
+        stale_minutes = max(1, int(settings.get("notificationProcessingStaleMinutes") or 30))
+    except (TypeError, ValueError):
+        stale_minutes = 30
+    reason_counts: Dict[str, int] = {}
+    stale_processing = 0
+    for job in jobs:
+        if job.status == "suppressed":
+            reason = notification_suppression_summary(job) or "보류 사유 없음"
+            reason_counts[reason] = reason_counts.get(reason, 0) + 1
+        if job.status == "processing" and notification_processing_age_minutes(job) >= stale_minutes:
+            stale_processing += 1
+    top_reasons = sorted(reason_counts.items(), key=lambda item: item[1], reverse=True)[:6]
+    return {
+        "processingStaleMinutes": stale_minutes,
+        "staleProcessingCount": stale_processing,
+        "suppressionReasons": [{"reason": reason, "count": count} for reason, count in top_reasons],
+    }
+
+
 def notification_job_public_payload(job: NotificationJob) -> Dict[str, object]:
     context = job.context or {}
     reasons = context.get("honeyReasons") if isinstance(context.get("honeyReasons"), list) else []
     title = str(context.get("title") or context.get("headline") or "").strip()
+    processing_age = notification_processing_age_minutes(job)
+    try:
+        stale_minutes = max(1, int(runtime_settings().get("notificationProcessingStaleMinutes") or 30))
+    except (TypeError, ValueError):
+        stale_minutes = 30
     return {
         "jobId": job.job_id,
         "messageType": job.message_type,
@@ -635,6 +708,10 @@ def notification_job_public_payload(job: NotificationJob) -> Dict[str, object]:
         "textPreview": compact_notification_text(job.text),
         "fullText": full_notification_text(job.text),
         "lastError": job.last_error,
+        "suppressionSummary": notification_suppression_summary(job),
+        "nextEligibleAt": notification_next_eligible_at(context),
+        "processingAgeMinutes": round(processing_age, 1),
+        "recoverableProcessing": bool(job.status == "processing" and processing_age >= stale_minutes),
         "honeyScore": context.get("honeyScore"),
         "honeyThreshold": context.get("honeyThreshold"),
         "honeyDecision": context.get("honeyDecision") or ("send" if job.status in {"pending", "processing", "done"} else job.status),
@@ -683,6 +760,7 @@ def notification_jobs_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
     return {
         "jobs": [notification_job_public_payload(job) for job in jobs],
         "summary": notification_queue_store().summary(),
+        "diagnostics": notification_job_diagnostics(jobs),
         "limit": limit,
     }
 
@@ -951,6 +1029,7 @@ def notification_template_test_payload(payload: Dict[str, object]):
     if not message_type:
         raise ValueError("messageType은 필요합니다.")
     dry_run = bool(payload.get("dryRun") or payload.get("dry_run"))
+    bypass_policy = bool(payload.get("bypassPolicy") or payload.get("bypass_policy") or payload.get("directSend") or payload.get("direct_send"))
     account = selected_notification_test_account(payload)
     snapshot = build_snapshot(account)
     if snapshot.mode != "live" and not payload.get("allowDemo"):
@@ -966,6 +1045,16 @@ def notification_template_test_payload(payload: Dict[str, object]):
                 "generatedAt": snapshot.generated_at,
             },
         }
+    if message_type == "investmentInsight":
+        missing_event = notification_test_event("ontologyInferenceMissing", snapshot)
+        if missing_event:
+            return 409, {
+                "delivered": False,
+                "messageType": message_type,
+                "blockedBy": "ontologyInferenceMissing",
+                "error": "온톨로지 추론 결과가 없어 투자 판단 테스트 발송을 막았습니다.",
+                "event": alert_event_public_payload(missing_event),
+            }
     event = notification_test_event(message_type, snapshot)
     if not event:
         return 422, {
@@ -973,13 +1062,32 @@ def notification_template_test_payload(payload: Dict[str, object]):
             "messageType": message_type,
             "error": "현재 데이터로 만들 수 있는 알림 이벤트가 없습니다.",
         }
-    message = notification_store().render(event.rule, alert_context(event))
+    context = alert_context(event)
+    context.update({
+        "testDispatch": True,
+        "notificationTestBypassPolicy": bypass_policy,
+        "messageType": event.rule or message_type,
+    })
+    message = notification_store().render(event.rule, context)
+    job = NotificationJob.create(
+        message,
+        account_id=account.account_id,
+        account_label=account.label,
+        message_type=event.rule or message_type,
+        context=context,
+    )
+    runner = build_notification_queue_runner(dry_run=dry_run)
+    runner.apply_account_delivery_context(job, account)
+    rendered_message = runner.render(job)
+    if rendered_message:
+        job.text = rendered_message
     if dry_run:
         return 200, {
             "delivered": False,
             "dryRun": True,
             "messageType": message_type,
-            "message": message,
+            "direct": bypass_policy,
+            "message": job.text,
             "event": alert_event_public_payload(event),
         }
     public_event = alert_event_public_payload(event)
@@ -988,15 +1096,40 @@ def notification_template_test_payload(payload: Dict[str, object]):
         event.key or message_type,
         {"messageType": message_type, "accountId": account.account_id, "accountLabel": account.label, "event": public_event},
     )
-    job = NotificationJob.create(
-        message,
-        account_id=account.account_id,
-        account_label=account.label,
-        message_type=event.rule or message_type,
-        source_event_id=source_event.event_id,
-        source_event_name=source_event.name,
-        context=alert_context(event),
-    )
+    job.source_event_id = source_event.event_id
+    job.source_event_name = source_event.name
+    if bypass_policy:
+        store = notification_queue_store()
+        job.status = "processing"
+        job.attempts = 1
+        job.updated_at = utc_now_iso()
+        store.upsert_job(job)
+        try:
+            runner.deliver(job, {account.account_id: account}, job.text)
+            store.mark_done(job)
+            return 200, {
+                "delivered": True,
+                "queued": False,
+                "direct": True,
+                "bypassPolicy": True,
+                "jobId": job.job_id,
+                "provider": "Notification Direct Test",
+                "messageType": message_type,
+                "event": public_event,
+            }
+        except Exception as error:  # noqa: BLE001 - expose direct test failures to the UI.
+            store.mark_failed(job, str(error))
+            return 502, {
+                "delivered": False,
+                "queued": False,
+                "direct": True,
+                "bypassPolicy": True,
+                "jobId": job.job_id,
+                "provider": "Notification Direct Test",
+                "messageType": message_type,
+                "event": public_event,
+                "error": str(error),
+            }
     if not notification_queue_store().enqueue(job):
         if job.status == "suppressed":
             return 202, {

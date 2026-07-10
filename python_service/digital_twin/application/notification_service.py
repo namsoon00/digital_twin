@@ -253,6 +253,7 @@ class NotificationQueueRunner:
         notifier_factory: Callable,
         dry_run: bool = False,
         send_gap_seconds: float = 0.0,
+        stale_after_minutes: int = 30,
         template_renderer: Callable = None,
         context_enricher: Callable = None,
         now_provider: Callable = None,
@@ -262,6 +263,7 @@ class NotificationQueueRunner:
         self.notifier_factory = notifier_factory
         self.dry_run = dry_run
         self.send_gap_seconds = max(0.0, float(send_gap_seconds or 0))
+        self.stale_after_minutes = max(1, int(stale_after_minutes or 30))
         self.template_renderer = template_renderer
         self.context_enricher = context_enricher
         self.now_provider = now_provider or (lambda: datetime.now(ZoneInfo("UTC")))
@@ -271,7 +273,7 @@ class NotificationQueueRunner:
 
     def run_once(self, limit: int = 10) -> int:
         use_claim = (not self.dry_run) and hasattr(self.queue, "claim_pending")
-        jobs = self.queue.claim_pending(limit=limit) if use_claim else self.queue.pending(limit=limit)
+        jobs = self.queue.claim_pending(limit=limit, stale_after_minutes=self.stale_after_minutes) if use_claim else self.queue.pending(limit=limit)
         if not jobs:
             print("No pending notification jobs.")
             return 0

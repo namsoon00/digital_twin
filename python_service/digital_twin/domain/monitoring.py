@@ -218,21 +218,26 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
         decision_snapshot = self.snapshot_with_strategy_scores(snapshot)
         has_account_data = decision_snapshot.has_live_account_data()
         previous_has_account_data = monitor_state_has_live_account_data(previous)
+        inference_missing_events: List[AlertEvent] = []
         raw_events.extend(self.connection_events(decision_snapshot, previous))
         raw_events.extend(self.heartbeat_events(decision_snapshot))
         if has_account_data:
-            raw_events.extend(self.ontology_inference_missing_events(decision_snapshot))
-            raw_events.extend(self.model_score_events(signal_snapshot))
+            inference_missing_events = self.ontology_inference_missing_events(decision_snapshot)
+            raw_events.extend(inference_missing_events)
+            if not inference_missing_events:
+                raw_events.extend(self.model_score_events(signal_snapshot))
         if has_account_data and previous_has_account_data:
             raw_events.extend(self.position_change_events(decision_snapshot, previous))
             raw_events.extend(self.cash_events(decision_snapshot, previous))
         raw_events.extend(self.watchlist_quote_events(signal_snapshot, previous or {}))
         raw_events.extend(self.external_signal_events(signal_snapshot, previous or {}))
-        if has_account_data:
+        if has_account_data and not inference_missing_events:
             raw_events.extend(self.holding_timing_events(decision_snapshot))
         raw_events = self.attach_data_freshness(decision_snapshot, raw_events)
         system_events, signal_events = split_operational_and_investment_events(raw_events)
         signal_events = self.enabled_signal_events(signal_events)
+        if inference_missing_events:
+            signal_events = []
         events = [*system_events, *build_investment_insight_events(decision_snapshot, signal_events)]
         return [event for event in self.stamp_events(decision_snapshot, events) if self.enabled(event.rule)]
 
@@ -249,7 +254,8 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
         snapshot = self.snapshot_with_strategy_scores(snapshot)
         events.extend(self.connection_events(snapshot, {"status": "이전 연결 상태"}))
         events.extend(self.heartbeat_events(snapshot))
-        events.extend(self.only_rule(ONTOLOGY_INFERENCE_MISSING, self.ontology_inference_missing_events(snapshot)))
+        inference_missing_events = self.only_rule(ONTOLOGY_INFERENCE_MISSING, self.ontology_inference_missing_events(snapshot))
+        events.extend(inference_missing_events)
         model_events = self.model_score_events(snapshot)
         events.extend(self.only_rule("modelBuy", model_events) or self.model_sample_events(snapshot, "modelBuy"))
         events.extend(self.only_rule("modelSell", model_events) or self.model_sample_events(snapshot, "modelSell"))

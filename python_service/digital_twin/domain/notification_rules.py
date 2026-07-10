@@ -1109,7 +1109,7 @@ def apply_market_hours_rule(
     decision.market_hours_close_time = market_decision.close_time
     decision.market_hours_timezone = market_decision.timezone
     decision.market_hours_markets = list(config.market_hours_markets or [])
-    if config.enabled and config.market_hours_enabled and market_decision.status in {"open", "closed"}:
+    if config.enabled and config.market_hours_enabled and market_decision.status in {"open", "closed", "closed_exception"}:
         decision.reasons.append("장 시간 " + market_decision.reason)
     if config.enabled and config.market_hours_enabled and not market_decision.should_send:
         decision.should_send = False

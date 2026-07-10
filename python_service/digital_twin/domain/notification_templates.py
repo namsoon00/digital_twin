@@ -579,6 +579,18 @@ def investment_insight_decision_blob(raw_lines: List[str], event: AlertEvent) ->
     return " ".join(part for part in parts if part)
 
 
+def investment_insight_is_holding(raw_lines: List[str], event: AlertEvent) -> bool:
+    metadata = dict(getattr(event, "metadata", {}) or {})
+    insight = metadata.get("ontologyInsight") if isinstance(metadata.get("ontologyInsight"), dict) else {}
+    source_types = metadata.get("sourceSignalTypes") or insight.get("sourceSignalTypes") or []
+    if isinstance(source_types, list) and any(str(item or "") in {"holdingTiming", "monitorPositionChange", "monitorPnlChange", "monitorValueChange", "monitorTrendChange", "monitorDecisionChange", "modelSell"} for item in source_types):
+        return True
+    if str(insight.get("holdingPolicyGroup") or metadata.get("holdingPolicyGroup") or "") == "holdingPositionCommon":
+        return True
+    blob = " ".join(list(raw_lines) + [str(getattr(event, "title", "") or "")])
+    return any(term in blob for term in ["보유 수량", "매도가능 수량", "평균매입가", "평단가", "종목 평가금액", "손절", "분할축소", "분할매도"])
+
+
 def percent_text(value: str) -> str:
     text = str(value or "").strip()
     match = re.search(r"[-+]?\d+(?:\.\d+)?%", text)
@@ -633,6 +645,11 @@ def notification_title_icon(rule: str, raw_lines: List[str], event: AlertEvent) 
     if key == "investmentInsight":
         blob = investment_insight_signal_blob(raw_lines, event)
         decision_blob = investment_insight_decision_blob(raw_lines, event)
+        is_holding = investment_insight_is_holding(raw_lines, event)
+        if is_holding and signed_direction(profit) < 0:
+            return "🛡️"
+        if is_holding and (signed_direction(profit) > 0 or has_investment_profit_signal(decision_blob)):
+            return "💰"
         if has_entry_wait_signal(blob) or has_entry_wait_signal(decision_blob):
             return "🧭"
         if any(term in blob for term in ["분할매수", "매수 후보", "기회 후보", "opportunityDetected", "watchlistBuyCandidate", "entry.pullback.supported"]):
@@ -697,6 +714,13 @@ def notification_title_headline(rule: str, raw_lines: List[str], event: AlertEve
         blob = investment_insight_signal_blob(raw_lines, event)
         decision_blob = investment_insight_decision_blob(raw_lines, event)
         profit_text = percent_text(profit)
+        is_holding = investment_insight_is_holding(raw_lines, event)
+        if is_holding and (has_entry_wait_signal(blob) or has_entry_wait_signal(decision_blob)):
+            if signed_direction(profit) < 0 or has_investment_loss_signal(decision_blob):
+                return ("손실 " + profit_text + ": " if profit_text and signed_direction(profit) < 0 else "") + "추가매수 보류·손실 기준 점검"
+            if signed_direction(profit) > 0 or has_investment_profit_signal(decision_blob):
+                return ("수익 " + profit_text + ": " if profit_text and signed_direction(profit) > 0 else "") + "보유 유지·수익 보호 조건 점검"
+            return "보유 판단: 추가매수 보류 조건 점검"
         if has_entry_wait_signal(blob) or has_entry_wait_signal(decision_blob):
             return "신규 진입 대기: 조건 재확인"
         if any(term in blob for term in ["분할매수", "매수 후보", "기회 후보", "opportunityDetected", "watchlistBuyCandidate", "entry.pullback.supported"]):

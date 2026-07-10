@@ -504,6 +504,249 @@ TBOX_REASONING_RULES = [item.text for item in RULE_DEFS]
 _CLASS_BY_NAME: Dict[str, TBoxClassDef] = {item.name: item for item in CLASS_DEFS}
 _RELATION_BY_NAME: Dict[str, TBoxRelationDef] = {item.name: item for item in RELATION_DEFS}
 
+_ABSTRACT_CLASS_NAMES = {
+    "Instrument",
+    "Security",
+    "Equity",
+    "Observation",
+    "ExternalObservation",
+    "ExternalSignal",
+    "Risk",
+    "Signal",
+    "Evidence",
+    "Belief",
+    "Opinion",
+    "ReasoningRule",
+    "RuleRegistry",
+    "RuleCondition",
+    "RelationTemplate",
+    "DataPipeline",
+    "NotificationPolicy",
+    "NotificationIntent",
+}
+
+_SOURCE_BACKED_CLASS_NAMES = {
+    "Portfolio",
+    "Account",
+    "Company",
+    "Stock",
+    "ETF",
+    "CryptoAsset",
+    "CashAsset",
+    "Derivative",
+    "Index",
+    "FXPair",
+    "Position",
+    "Watchlist",
+    "WatchlistCandidate",
+    "Sector",
+    "Industry",
+    "PeerGroup",
+    "Market",
+    "Currency",
+    "Cash",
+    "MarketExposure",
+    "FactChange",
+    "PriceObservation",
+    "VolumeObservation",
+    "TechnicalObservation",
+    "FlowObservation",
+    "FundamentalObservation",
+    "PriceMetric",
+    "TechnicalIndicator",
+    "TradeFlow",
+    "DataQuality",
+    "DataSource",
+    "DataFreshness",
+    "MissingData",
+    "Provenance",
+    "SourceReliability",
+    "ObservationConfidence",
+    "TimeWindow",
+    "ObservationTime",
+    "SignalHorizon",
+    "HoldingPeriod",
+    "ValidityInterval",
+    "Staleness",
+    "ValidationRule",
+    "PriceBar",
+    "PricePath",
+    "VolumeProfile",
+    "KeyLevel",
+    "SupportLevel",
+    "ResistanceLevel",
+    "Breakout",
+    "FailedBreakout",
+    "Retest",
+    "ResearchEvidence",
+    "NewsEvent",
+    "NewsArticle",
+    "NewsTopic",
+    "NewsEventType",
+    "PeerCompanyMention",
+    "DisclosureEvent",
+    "DisclosureFiling",
+    "MacroIndicator",
+    "MacroPrint",
+    "RateSignal",
+    "InterestRate",
+    "YieldCurve",
+    "FXRateSignal",
+    "CreditSpreadSignal",
+    "CryptoMarketSignal",
+    "EarningsEvent",
+    "EarningsCalendarEvent",
+    "AnalystRevision",
+    "CorporateAction",
+    "RegulatoryEvent",
+    "ProductLine",
+    "SupplyChainExposure",
+    "CustomerExposure",
+    "RevenueExposure",
+    "Factor",
+    "FactorExposure",
+    "BenchmarkIndex",
+    "HedgeCandidate",
+    "Strategy",
+    "InvestmentThesis",
+    "EntryCondition",
+    "ExitCondition",
+    "RiskManagementRule",
+    "RebalancingRule",
+    "PositionSizingRule",
+    "Scenario",
+    "StrategyExperiment",
+    "StrategySignal",
+    "ModelScore",
+    "Threshold",
+    "RuntimeSetting",
+    "AlertRule",
+    "PromptTemplate",
+    "ValuationAssumption",
+    "LegacyScoreModel",
+    "MarketRisk",
+    "LiquidityRisk",
+    "LiquidityProfile",
+    "ExitCapacity",
+    "SlippageEstimate",
+    "ConcentrationRisk",
+    "CurrencyRisk",
+    "VolatilityRisk",
+    "EventRisk",
+    "DataQualityRisk",
+    "ModelRisk",
+    "ExecutionRisk",
+    "CorrelationRisk",
+    "RegimeRisk",
+}
+
+_INFERRED_CLASS_NAMES = {
+    "PriceSignal",
+    "TrendSignal",
+    "FlowSignal",
+    "ValuationSignal",
+    "MacroSignal",
+    "DisclosureSignal",
+    "CryptoSignal",
+    "DataQualitySignal",
+    "RelationStateSnapshot",
+    "SignalTransition",
+    "TrendPhase",
+    "TrendTransition",
+    "ReversalSignal",
+    "ConsolidationBreak",
+    "AccelerationSignal",
+    "DecelerationSignal",
+    "MaterialityAssessment",
+    "ThresholdCrossing",
+    "ExposureAssessment",
+    "ConfidenceAssessment",
+    "ActionabilityAssessment",
+    "PreviousInsight",
+    "ActiveInvestmentOpinion",
+    "ExecutionPlan",
+    "ActionCandidate",
+    "BlockedAction",
+    "InvalidationCondition",
+    "NextCheck",
+    "AIValidation",
+    "ValidatedOpinion",
+    "AIJudgmentAudit",
+    "AIContextPacket",
+    "EvidenceSubgraph",
+    "GraphNeighborhood",
+    "Opportunity",
+    "Contradiction",
+    "Insight",
+    "InsightType",
+    "InsightPolicy",
+    "MessageDeliveryProfile",
+    "DerivedAssertion",
+    "InferenceTrace",
+    "InferencePath",
+    "GraphReasoner",
+    "Neo4jNativeReasoner",
+    "ReasoningCard",
+    "ConfidenceScore",
+    "ReliabilityScore",
+    "AIReview",
+}
+
+_RULEBOX_CLASS_NAMES = {
+    "RelationRuleRegistry",
+    "GraphInferenceRule",
+    "RelationReasoningRule",
+    "RelationRuleCondition",
+    "RelationRuleTemplate",
+    "RuleDecisionPolicy",
+    "RulePriorityPolicy",
+}
+
+_GOVERNANCE_CLASS_NAMES = {
+    "RuleBoxGovernance",
+    "RuleBoxVersion",
+    "RuleChangeCandidate",
+}
+
+_OPERATIONAL_CLASS_NAMES = {
+    "CollectionSchedule",
+    "CollectionPolicy",
+    "MarketSnapshot",
+    "WatchlistSnapshot",
+    "ExternalSignalCollection",
+    "AnalysisJob",
+    "ReasoningCycle",
+    "NotificationDispatch",
+    "AlertCandidate",
+    "ImportanceGate",
+    "CooldownPolicy",
+    "NoveltyPolicy",
+    "SuppressionPolicy",
+    "MarketSession",
+    "OperationalEvent",
+}
+
+_SCHEMA_RELATION_NAMES = {
+    "DEFINES_BOUNDED_CONTEXT",
+    "DEFINES_CLASS",
+    "DEFINES_RELATION",
+    "CONSTRAINS_ASSERTIONS",
+    "CONSTRAINS_RULES",
+    "DERIVES_ASSERTIONS",
+    "IS_A",
+}
+
+_RULEBOX_RELATION_NAMES = {
+    "HAS_RULE_CONDITION",
+    "USES_RULE_TEMPLATE",
+    "MATCHES_CONDITION",
+    "PRODUCES_DERIVED_ASSERTION",
+    "DERIVES_RELATION",
+    "GOVERNED_BY",
+    "PROPOSES_RULE_CHANGE",
+    "SUPERSEDES_RULE_VERSION",
+}
+
 
 def tbox_class_def(name: str) -> Optional[TBoxClassDef]:
     return _CLASS_BY_NAME.get(str(name or ""))
@@ -513,16 +756,72 @@ def tbox_relation_def(name: str) -> Optional[TBoxRelationDef]:
     return _RELATION_BY_NAME.get(str(name or "").upper())
 
 
+def tbox_class_materialization_policy(name: str) -> str:
+    value = str(name or "")
+    if value in _GOVERNANCE_CLASS_NAMES:
+        return "governance"
+    if value in _RULEBOX_CLASS_NAMES:
+        return "rulebox"
+    if value in _INFERRED_CLASS_NAMES:
+        return "inferred"
+    if value in _OPERATIONAL_CLASS_NAMES:
+        return "operational"
+    if value in _SOURCE_BACKED_CLASS_NAMES:
+        return "source-backed"
+    if value in _ABSTRACT_CLASS_NAMES:
+        return "abstract"
+    return "source-backed"
+
+
+def tbox_materialization_box(policy: str) -> str:
+    value = str(policy or "")
+    if value in {"abstract", "schema"}:
+        return "TBox"
+    if value == "rulebox":
+        return "RuleBox"
+    if value == "governance":
+        return "RuleBoxGovernance"
+    if value == "inferred":
+        return "InferenceBox"
+    return "ABox"
+
+
+def tbox_relation_materialization_policy(name: str) -> str:
+    value = str(name or "").upper()
+    if value in _SCHEMA_RELATION_NAMES:
+        return "schema"
+    if value in _RULEBOX_RELATION_NAMES:
+        return "rulebox"
+    definition = tbox_relation_def(value)
+    if definition and definition.bounded_context in {"reasoning-insight", "operations-dispatch"}:
+        return "inferred-or-operational"
+    return "source-backed"
+
+
 def bounded_contexts_payload() -> List[Dict[str, object]]:
     return [asdict(item) for item in BOUNDED_CONTEXTS]
 
 
 def class_definitions_payload() -> List[Dict[str, object]]:
-    return [asdict(item) for item in CLASS_DEFS]
+    rows: List[Dict[str, object]] = []
+    for item in CLASS_DEFS:
+        payload = asdict(item)
+        policy = tbox_class_materialization_policy(item.name)
+        payload["materializationPolicy"] = policy
+        payload["materializationBox"] = tbox_materialization_box(policy)
+        rows.append(payload)
+    return rows
 
 
 def relation_definitions_payload() -> List[Dict[str, object]]:
-    return [asdict(item) for item in RELATION_DEFS]
+    rows: List[Dict[str, object]] = []
+    for item in RELATION_DEFS:
+        payload = asdict(item)
+        policy = tbox_relation_materialization_policy(item.name)
+        payload["materializationPolicy"] = policy
+        payload["materializationBox"] = tbox_materialization_box(policy)
+        rows.append(payload)
+    return rows
 
 
 def rule_definitions_payload() -> List[Dict[str, object]]:

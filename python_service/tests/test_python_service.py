@@ -63,7 +63,7 @@ from digital_twin.infrastructure.ontology_projection import PortfolioOntologyPro
 from digital_twin.infrastructure.service_factory import flow_lens_snapshot
 from digital_twin.infrastructure.settings import runtime_settings, save_runtime_settings
 from digital_twin.infrastructure.sqlite_model_review import SQLiteModelReviewJobStore
-from digital_twin.infrastructure.sqlite_monitoring import SQLiteEventLog, SQLiteExternalSignalCache, SQLiteMarketQuoteCache, SQLiteMonitoringCycleRecorder, SQLiteMonitorStore, SQLiteOntologyQualitySampleStore, SQLiteOntologyReasoningCursorStore, SQLiteResearchEvidenceStore
+from digital_twin.infrastructure.sqlite_monitoring import SQLiteEventLog, SQLiteExternalSignalCache, SQLiteMarketQuoteCache, SQLiteMonitorAccountJobStore, SQLiteMonitoringCycleRecorder, SQLiteMonitorStore, SQLiteOntologyQualitySampleStore, SQLiteOntologyReasoningCursorStore, SQLiteResearchEvidenceStore
 from digital_twin.infrastructure.sqlite_notifications import SQLiteNotificationJobStore, SQLiteNotificationRuleStore, SQLiteNotificationTemplateStore
 from digital_twin.infrastructure.sqlite_runtime import SQLiteAppStore, SQLiteRuntimeSettingsStore
 from digital_twin.infrastructure.sqlite_symbols import SQLiteSymbolUniverseStore
@@ -1363,6 +1363,8 @@ class PythonServiceTests(unittest.TestCase):
             "ma20": 100000,
             "ma60": 90000,
             "ma20Distance": -6,
+            "volume": 245000,
+            "volumeRatio": 1.4,
             "sector": "반도체",
         })
         platform = normalize_position({
@@ -1431,6 +1433,7 @@ class PythonServiceTests(unittest.TestCase):
                     "watchlistSnapshotIntervalMinutes": "5",
                     "externalSignalsIntervalMinutes": "30",
                     "notificationNoveltyThreshold": "0.7",
+                    "valuationAssumptions": "AAPL,eps=8.2,pe=28,growth=12",
                 },
                 "decisionItems": [
                     {"symbol": "000660", "decision": "손실 관리", "exitPressure": 76, "tone": "danger"},
@@ -1554,6 +1557,11 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(any(item.kind == "liquidity-profile" for item in graph.entities))
         self.assertTrue(any(item.kind == "factor" for item in graph.entities))
         self.assertTrue(any(item.kind == "research-evidence" for item in graph.entities))
+        self.assertTrue(any(item.kind == "news-article" for item in graph.entities))
+        self.assertTrue(any(item.kind == "disclosure-filing" for item in graph.entities))
+        self.assertTrue(any(item.kind == "volume-profile" for item in graph.entities))
+        self.assertTrue(any(item.kind == "missing-data" for item in graph.entities))
+        self.assertTrue(any(item.kind == "valuation-assumption" for item in graph.entities))
         self.assertTrue(any(item.kind == "price-metric" for item in graph.entities))
         self.assertTrue(any(item.kind == "fx-rate" for item in graph.entities))
         self.assertTrue(any(item.kind == "interest-rate" for item in graph.entities))
@@ -1565,6 +1573,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(any(item.kind == "tbox-class" for item in graph.entities))
         self.assertTrue(any((item.properties or {}).get("boundedContext") == "strategy-thesis" for item in graph.entities if item.kind == "investment-thesis"))
         self.assertTrue(any((item.properties or {}).get("boundedContext") == "observation-data" for item in graph.entities if item.kind == "price-metric"))
+        self.assertTrue(any((item.properties or {}).get("materializationPolicy") == "source-backed" for item in graph.entities if item.entity_id == "tbox-class:NewsArticle"))
+        self.assertTrue(any((item.properties or {}).get("materializationPolicy") == "rulebox" for item in graph.entities if item.entity_id == "tbox-class:GraphInferenceRule"))
         self.assertTrue(any((item.properties or {}).get("boundedContext") == "strategy-thesis" for item in graph.relations if item.relation_type == "BASED_ON_THESIS"))
         self.assertTrue(any("CurrencyRisk" in (item.properties or {}).get("tboxClasses", []) for item in graph.entities if item.kind == "risk"))
         self.assertTrue(any("FXRateSignal" in (item.properties or {}).get("tboxClasses", []) for item in graph.entities if item.kind == "fx-rate"))
@@ -10121,6 +10131,78 @@ class PythonServiceTests(unittest.TestCase):
             },
             event_counts,
         )
+
+    def test_application_runner_claims_account_monitor_jobs_independently(self):
+        db_path = Path(self.temp.name) / "service.db"
+        legacy_missing = Path(self.temp.name) / "missing.json"
+        store = SQLiteMonitorStore(db_path, legacy_path=legacy_missing)
+        cycle_recorder = SQLiteMonitoringCycleRecorder(db_path, monitor_store=store)
+        job_store = SQLiteMonitorAccountJobStore(db_path)
+        accounts = [
+            AccountConfig("a1", "계정 1", "toss", "https://example.test", "", "", "", ["AAPL"]),
+            AccountConfig("bad", "실패 계정", "toss", "https://example.test", "", "", "", ["AAPL"]),
+            AccountConfig("a3", "계정 3", "toss", "https://example.test", "", "", "", ["AAPL"]),
+        ]
+        built = []
+
+        def snapshot_builder(account):
+            if account.account_id == "bad":
+                raise RuntimeError("vendor timeout")
+            built.append(account.account_id)
+            portfolio = portfolio_summary([])
+            return AccountSnapshot(
+                account.account_id,
+                account.label,
+                "toss",
+                "live",
+                "ok",
+                utc_now_iso(),
+                portfolio,
+                [],
+                {},
+            )
+
+        class QuietMonitor:
+            def events_for_snapshot(self, _snapshot, _previous):
+                return []
+
+            def apply_cadence(self, events, _store, force=False):
+                return events
+
+        events = ApplicationMonitorRunner(
+            accounts,
+            store=store,
+            monitor=QuietMonitor(),
+            snapshot_builder=snapshot_builder,
+            event_sender=lambda *_args, **_kwargs: SimpleNamespace(delivered=True),
+            event_publisher=EventBus(),
+            cycle_recorder=cycle_recorder,
+            account_job_store=job_store,
+            account_job_batch_size=3,
+            account_job_interval_seconds=180,
+            account_job_lock_seconds=600,
+            worker_id="unit-test-worker",
+        ).run_once()
+
+        self.assertEqual([], events)
+        self.assertEqual(["a1", "a3"], built)
+        self.assertIn("a1", store.previous)
+        self.assertIn("a3", store.previous)
+        with sqlite3.connect(str(db_path)) as connection:
+            rows = {
+                row[0]: row[1]
+                for row in connection.execute(
+                    "SELECT account_id, status FROM monitor_account_jobs ORDER BY account_id"
+                ).fetchall()
+            }
+            errors = {
+                row[0]: row[1]
+                for row in connection.execute(
+                    "SELECT account_id, last_error FROM monitor_account_jobs"
+                ).fetchall()
+            }
+        self.assertEqual({"a1": "done", "a3": "done", "bad": "failed"}, rows)
+        self.assertIn("vendor timeout", errors["bad"])
 
     def test_json_event_log_writes_jsonl(self):
         event_bus = EventBus()

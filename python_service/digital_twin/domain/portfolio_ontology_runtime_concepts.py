@@ -32,6 +32,62 @@ def safe_setting_value(key: str, value: object) -> object:
     text = str(value or "")
     return text[:1200] if len(text) > 1200 else value
 
+def valuation_assumption_rows(value: object) -> List[Dict[str, object]]:
+    if isinstance(value, list):
+        rows = []
+        for index, item in enumerate(value):
+            if isinstance(item, dict):
+                row = dict(item)
+                row.setdefault("assumptionKey", str(row.get("symbol") or row.get("name") or index))
+                rows.append(row)
+            elif str(item or "").strip():
+                rows.extend(valuation_assumption_rows(str(item)))
+        return rows
+    if isinstance(value, dict):
+        rows = []
+        for key, item in sorted(value.items()):
+            row = dict(item) if isinstance(item, dict) else {"value": item}
+            row.setdefault("assumptionKey", str(key))
+            if not row.get("symbol") and str(key).upper() != "PORTFOLIO":
+                row["symbol"] = str(key).upper()
+            rows.append(row)
+        return rows
+    text = str(value or "").strip()
+    if not text:
+        return []
+    rows: List[Dict[str, object]] = []
+    normalized = text.replace("\r", "\n").replace(";", "\n")
+    for index, line in enumerate([item.strip() for item in normalized.split("\n") if item.strip()]):
+        parts = [item.strip() for item in line.replace("|", ",").replace("\t", ",").split(",")]
+        symbol = str(parts[0] if parts else "").upper().strip()
+        key = symbol or "line-" + str(index + 1)
+        rows.append({
+            "assumptionKey": key,
+            "symbol": symbol,
+            "rawLine": line,
+            "values": parts[1:] if len(parts) > 1 else [],
+        })
+    return rows
+
+def add_valuation_assumption_concepts(graph: PortfolioOntology, portfolio_node_id: str, value: object) -> None:
+    for row in valuation_assumption_rows(value):
+        key = str(row.get("assumptionKey") or row.get("symbol") or row.get("name") or "portfolio").strip()
+        if not key:
+            continue
+        symbol = str(row.get("symbol") or "").upper().strip()
+        label = str(row.get("label") or row.get("name") or (symbol + " 밸류에이션 가정" if symbol else "포트폴리오 밸류에이션 가정"))
+        assumption_id = add_entity(graph, "valuation-assumption", key, label, {
+            "tboxClass": "ValuationAssumption",
+            "tboxClasses": ["ValuationAssumption", "StrategySignal"],
+            "symbol": symbol,
+            "assumptionKey": key,
+            "label": label,
+            "rawLine": row.get("rawLine"),
+            "values": row.get("values") if isinstance(row.get("values"), list) else [],
+            "payload": {k: v for k, v in row.items() if k not in {"assumptionKey", "symbol", "label", "name"}},
+        })
+        add_relation(graph, portfolio_node_id, assumption_id, "HAS_VALUATION", weight=1.0, properties={"source": "runtime-settings", "aiInfluenceLabel": label})
+
 def add_runtime_setting_concepts(graph: PortfolioOntology, portfolio_node_id: str, runtime_context: Dict[str, object]) -> None:
     settings = runtime_context.get("settings") if isinstance(runtime_context, dict) else {}
     if not isinstance(settings, dict):
@@ -47,6 +103,7 @@ def add_runtime_setting_concepts(graph: PortfolioOntology, portfolio_node_id: st
             "value": safe_setting_value(str(key), value),
         })
         add_relation(graph, portfolio_node_id, setting_id, relation_type, weight=1.0, properties={"source": "runtime-settings", "aiInfluenceLabel": str(key)})
+    add_valuation_assumption_concepts(graph, portfolio_node_id, settings.get("valuationAssumptions"))
 
 def add_runtime_metadata_concepts(graph: PortfolioOntology, portfolio_node_id: str, runtime_context: Dict[str, object]) -> None:
     metadata = runtime_context.get("metadata") if isinstance(runtime_context, dict) else {}
@@ -285,4 +342,3 @@ def add_decision_item_concepts(graph: PortfolioOntology, runtime_context: Dict[s
             properties.update({"polarity": "risk", "opinionImpact": min(16.0, (number(item.get("exitPressure")) - 45) * 0.3)})
         add_relation(graph, stock_id, signal_id, "DERIVES", weight=round(number(item.get("exitPressure")) / 100, 4), properties=properties)
         add_relation(graph, signal_id, stock_id, "USED_AS_EVIDENCE", weight=0.55, properties={"source": "decision-item"})
-

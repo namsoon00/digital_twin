@@ -440,3 +440,19 @@ def add_symbol_fundamental_event_concepts(graph: PortfolioOntology, stock_id: st
     })
     add_relation(graph, stock_id, event_id, "HAS_OBSERVATION", weight=1.0, properties={"source": group, "aiInfluenceLabel": label})
     add_relation(graph, stock_id, event_id, "HAS_VALUATION", weight=0.7, properties={"source": group, "polarity": "context", "aiInfluenceLabel": label})
+    filing_id = add_entity(graph, "disclosure-filing", symbol + ":" + group, label, {
+        "tboxClass": "DisclosureFiling",
+        "tboxClasses": ["Observation", "ExternalObservation", "ExternalSignal", "DisclosureEvent", "DisclosureFiling", "EventRisk"],
+        "symbol": symbol,
+        "group": group,
+        "provider": str(value.get("provider") or ""),
+        "reportName": str(value.get("reportName") or value.get("report_name") or latest.get("form") or label),
+        "receiptNo": str(value.get("receiptNo") or value.get("receipt_no") or latest.get("accessionNumber") or ""),
+        "receiptDate": str(value.get("receiptDate") or value.get("receipt_date") or latest.get("filingDate") or ""),
+        "latestFiling": latest,
+    })
+    props = {"source": group, "polarity": "context", "aiInfluenceLabel": label}
+    add_relation(graph, stock_id, filing_id, "HAS_OBSERVATION", weight=1.0, properties=props)
+    add_relation(graph, stock_id, filing_id, "HAS_EXTERNAL_SIGNAL", weight=1.0, properties=props)
+    add_relation(graph, filing_id, stock_id, "MENTIONS_INSTRUMENT", weight=0.78, properties=props)
+    add_relation(graph, event_id, filing_id, "HAS_PROVENANCE", weight=1.0, properties=props)

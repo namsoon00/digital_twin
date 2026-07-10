@@ -191,6 +191,74 @@ def liquidity_profile(position: Position) -> Dict[str, object]:
         "bidAskImbalance": round(number(position.bid_ask_imbalance), 2),
     }
 
+def volume_profile(position: Position) -> Dict[str, object]:
+    return {
+        "volume": round(number(position.volume), 2),
+        "volumeRatio": round(number(position.volume_ratio), 3),
+        "tradingValue": round(number(position.trading_value), 2),
+        "tradeStrength": round(number(position.trade_strength), 2),
+        "buyVolume": round(number(position.buy_volume), 2),
+        "sellVolume": round(number(position.sell_volume), 2),
+        "orderbookBidVolume": round(number(position.orderbook_bid_volume), 2),
+        "orderbookAskVolume": round(number(position.orderbook_ask_volume), 2),
+        "bidAskImbalance": round(number(position.bid_ask_imbalance), 2),
+        "foreignNetVolume": round(number(position.foreign_net_volume), 2),
+        "foreignNetAmount": round(number(position.foreign_net_amount), 2),
+        "institutionNetVolume": round(number(position.institution_net_volume), 2),
+        "institutionNetAmount": round(number(position.institution_net_amount), 2),
+        "individualNetVolume": round(number(position.individual_net_volume), 2),
+        "individualNetAmount": round(number(position.individual_net_amount), 2),
+    }
+
+def missing_market_microstructure_fields(position: Position) -> List[Dict[str, str]]:
+    missing: List[Dict[str, str]] = []
+    if number(position.trade_strength) == 0:
+        missing.append({"field": "tradeStrength", "label": "체결강도"})
+    if number(position.buy_volume) == 0 and number(position.sell_volume) == 0:
+        missing.extend([
+            {"field": "buyVolume", "label": "매수 체결량"},
+            {"field": "sellVolume", "label": "매도 체결량"},
+        ])
+    if number(position.orderbook_bid_volume) == 0 and number(position.orderbook_ask_volume) == 0:
+        missing.extend([
+            {"field": "orderbookBidVolume", "label": "매수호가 잔량"},
+            {"field": "orderbookAskVolume", "label": "매도호가 잔량"},
+            {"field": "bidAskImbalance", "label": "호가 불균형"},
+        ])
+    if (
+        number(position.foreign_net_volume) == 0
+        and number(position.foreign_net_amount) == 0
+        and number(position.foreign_buy_volume) == 0
+        and number(position.foreign_sell_volume) == 0
+    ):
+        missing.append({"field": "foreignNetVolume", "label": "외국인 순매수"})
+    if (
+        number(position.institution_net_volume) == 0
+        and number(position.institution_net_amount) == 0
+        and number(position.institution_buy_volume) == 0
+        and number(position.institution_sell_volume) == 0
+    ):
+        missing.append({"field": "institutionNetVolume", "label": "기관 순매수"})
+    if (
+        number(position.individual_net_volume) == 0
+        and number(position.individual_net_amount) == 0
+        and number(position.individual_buy_volume) == 0
+        and number(position.individual_sell_volume) == 0
+    ):
+        missing.append({"field": "individualNetVolume", "label": "개인 순매수"})
+    return missing
+
+def quote_staleness_reason(position: Position) -> str:
+    text = " ".join([
+        str(position.data_quality or ""),
+        str(position.quote_status or ""),
+        str(position.quote_message or ""),
+    ]).lower()
+    for token in ["stale", "cached", "fallback", "expired", "timeout", "old", "지연", "캐시"]:
+        if token in text:
+            return token
+    return ""
+
 def add_metric_concepts(graph: PortfolioOntology, stock_id: str, position: Position, source: str) -> None:
     symbol = symbol_key(position)
     for field_name, label, tbox_class, relation_type, kind, public_key in METRIC_CONCEPTS:
@@ -304,6 +372,7 @@ def add_legacy_model_score_concepts(graph: PortfolioOntology, stock_id: str, sym
 def add_price_level_and_liquidity_concepts(graph: PortfolioOntology, stock_id: str, position: Position, source: str) -> None:
     symbol = symbol_key(position)
     current_price = number(position.current_price)
+    bar_id = ""
     if current_price:
         bar_id = add_entity(graph, "price-bar", symbol + ":latest", (position.name or symbol) + " 현재 가격 봉", {
             "tboxClass": "PriceBar",
@@ -317,6 +386,67 @@ def add_price_level_and_liquidity_concepts(graph: PortfolioOntology, stock_id: s
         })
         add_relation(graph, stock_id, bar_id, "HAS_PRICE", weight=1.0, properties={"source": source, "aiInfluenceLabel": "현재 가격 봉"})
         add_relation(graph, stock_id, bar_id, "HAS_OBSERVATION", weight=1.0, properties={"source": source, "aiInfluenceLabel": "현재 가격 봉"})
+        if position.updated_at:
+            validity_id = add_entity(graph, "validity-interval", symbol + ":quote", (position.name or symbol) + " 시세 유효 구간", {
+                "tboxClass": "ValidityInterval",
+                "tboxClasses": ["Observation", "DataQuality", "ValidityInterval", "DataFreshness"],
+                "symbol": symbol,
+                "validFrom": position.updated_at,
+                "observedAt": position.updated_at,
+                "source": source,
+            })
+            add_relation(graph, bar_id, validity_id, "VALID_DURING", weight=1.0, properties={"source": source, "aiInfluenceLabel": "시세 유효 구간"})
+            add_relation(graph, stock_id, validity_id, "HAS_DATA_QUALITY", weight=1.0, properties={"source": source, "aiInfluenceLabel": "시세 유효 구간"})
+    flow = volume_profile(position)
+    if any(number(value) for value in flow.values()):
+        volume_id = add_entity(graph, "volume-profile", symbol, (position.name or symbol) + " 거래량 프로파일", {
+            "tboxClass": "VolumeProfile",
+            "tboxClasses": ["Observation", "VolumeObservation", "FlowObservation", "VolumeProfile", "TradeFlow", "FlowSignal"],
+            "symbol": symbol,
+            "source": source,
+            **flow,
+        })
+        flow_props = {"source": source, "aiInfluenceLabel": "거래량/체결/호가 프로파일", "polarity": "context"}
+        if number(flow.get("volumeRatio")) >= 1.5 or abs(number(flow.get("bidAskImbalance"))) >= 35:
+            flow_props["opinionImpact"] = min(12.0, number(flow.get("volumeRatio")) * 3 + abs(number(flow.get("bidAskImbalance"))) * 0.08)
+        add_relation(graph, stock_id, volume_id, "HAS_OBSERVATION", weight=1.0, properties=flow_props)
+        add_relation(graph, stock_id, volume_id, "HAS_TRADE_FLOW", weight=1.0, properties=flow_props)
+    missing_fields = missing_market_microstructure_fields(position)
+    if missing_fields:
+        missing_id = add_entity(graph, "missing-data", symbol + ":market-microstructure", (position.name or symbol) + " 부족 데이터", {
+            "tboxClass": "MissingData",
+            "tboxClasses": ["Observation", "DataQuality", "MissingData", "DataQualitySignal"],
+            "symbol": symbol,
+            "source": source,
+            "missingFields": [item["field"] for item in missing_fields],
+            "missingLabels": [item["label"] for item in missing_fields],
+            "missingCount": len(missing_fields),
+            "scope": "market-microstructure",
+        })
+        missing_props = {"source": source, "polarity": "risk", "opinionImpact": min(10.0, len(missing_fields) * 0.8), "aiInfluenceLabel": "체결/호가/투자자별 수급 결측"}
+        add_relation(graph, stock_id, missing_id, "HAS_DATA_QUALITY", weight=round(max(0.1, 1 - len(missing_fields) / 10), 4), properties=missing_props)
+        risk_id = add_entity(graph, "risk", symbol + ":data-quality-risk", (position.name or symbol) + " 데이터 품질 리스크", {
+            "tboxClass": "DataQualityRisk",
+            "tboxClasses": ["Risk", "DataQualityRisk"],
+            "symbol": symbol,
+            "missingFields": [item["field"] for item in missing_fields],
+            "riskScore": min(100, len(missing_fields) * 8),
+        })
+        add_relation(graph, stock_id, risk_id, "EXPOSED_TO", weight=round(min(1.0, len(missing_fields) / 10), 4), properties=missing_props)
+        add_relation(graph, missing_id, risk_id, "AFFECTS", weight=round(min(1.0, len(missing_fields) / 10), 4), properties=missing_props)
+    stale_reason = quote_staleness_reason(position)
+    if stale_reason:
+        stale_id = add_entity(graph, "staleness", symbol + ":quote", (position.name or symbol) + " 시세 노후화", {
+            "tboxClass": "Staleness",
+            "tboxClasses": ["Observation", "DataQuality", "DataFreshness", "Staleness", "DataQualitySignal"],
+            "symbol": symbol,
+            "reason": stale_reason,
+            "dataQuality": position.data_quality,
+            "quoteStatus": position.quote_status,
+            "quoteMessage": position.quote_message,
+            "observedAt": position.updated_at,
+        })
+        add_relation(graph, stock_id, stale_id, "HAS_DATA_QUALITY", weight=0.35, properties={"source": source, "polarity": "risk", "opinionImpact": 6.0, "aiInfluenceLabel": "시세 신선도 저하"})
     level_rows = [
         ("ma20", "20일선", number(position.ma20), number(position.ma20_distance), "SupportLevel" if number(position.ma20_distance) >= -1 else "ResistanceLevel"),
         ("ma60", "60일선", number(position.ma60), number(position.ma60_distance), "SupportLevel" if number(position.ma60_distance) >= -1 else "ResistanceLevel"),
@@ -367,4 +497,3 @@ def add_price_level_and_liquidity_concepts(graph: PortfolioOntology, stock_id: s
         "volumeRatio": round(number(position.volume_ratio), 3),
     })
     add_relation(graph, stock_id, slippage_id, "HAS_SLIPPAGE_RISK", weight=round(number(liquidity.get("slippageRiskScore")) / 100, 4), properties=risk_props)
-

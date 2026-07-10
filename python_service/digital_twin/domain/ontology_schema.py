@@ -14,7 +14,10 @@ from .ontology_tbox import (
     relation_definitions_payload,
     rule_definitions_payload,
     tbox_class_def,
+    tbox_class_materialization_policy,
+    tbox_materialization_box,
     tbox_relation_def,
+    tbox_relation_materialization_policy,
 )
 
 
@@ -154,6 +157,7 @@ def tbox_entities() -> List[OntologyEntity]:
         }))
     for name in TBOX_CLASSES:
         definition = tbox_class_def(name)
+        policy = tbox_class_materialization_policy(name)
         entities.append(OntologyEntity(entity_id("tbox-class", name), name, "tbox-class", {
             "ontologyBox": "TBox",
             "box": "TBox",
@@ -165,9 +169,12 @@ def tbox_entities() -> List[OntologyEntity]:
             "label": definition.label if definition else name,
             "parentClass": definition.parent if definition else "",
             "description": definition.description if definition else "",
+            "materializationPolicy": policy,
+            "materializationBox": tbox_materialization_box(policy),
         }))
     for name in TBOX_RELATION_TYPES:
         definition = tbox_relation_def(name)
+        policy = tbox_relation_materialization_policy(name)
         entities.append(OntologyEntity(entity_id("tbox-relation", name), name, "tbox-relation", {
             "ontologyBox": "TBox",
             "box": "TBox",
@@ -179,6 +186,8 @@ def tbox_entities() -> List[OntologyEntity]:
             "sourceContext": definition.source_context if definition else "",
             "targetContext": definition.target_context if definition else "",
             "description": definition.description if definition else "",
+            "materializationPolicy": policy,
+            "materializationBox": tbox_materialization_box(policy),
         }))
     return entities
 

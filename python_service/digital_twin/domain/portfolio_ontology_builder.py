@@ -258,6 +258,77 @@ def event_relation_properties(item: object) -> Dict[str, object]:
     return props
 
 
+def evidence_document_shape(item: object) -> Dict[str, object]:
+    kind = str(getattr(item, "kind", "") or "").lower()
+    source = str(getattr(item, "source", "") or "").lower()
+    title = str(getattr(item, "title", "") or "").lower()
+    url = str(getattr(item, "url", "") or "").lower()
+    disclosure_terms = ["disclosure", "filing", "dart", "opendart", "edgar", "sec", "공시", "보고서"]
+    if any(token in value for token in disclosure_terms for value in [kind, source, title, url]):
+        return {
+            "kind": "disclosure-filing",
+            "tboxClass": "DisclosureFiling",
+            "tboxClasses": ["Observation", "ExternalObservation", "ExternalSignal", "DisclosureEvent", "DisclosureFiling", "EventRisk"],
+            "documentType": "disclosure",
+        }
+    if "news" in kind or str(getattr(item, "url", "") or "").strip():
+        return {
+            "kind": "news-article",
+            "tboxClass": "NewsArticle",
+            "tboxClasses": ["Observation", "ExternalObservation", "ExternalSignal", "NewsEvent", "NewsArticle", "EventRisk"],
+            "documentType": "news",
+        }
+    return {}
+
+
+def add_research_document_concept(
+    graph: PortfolioOntology,
+    stock_id: str,
+    event_id: str,
+    thesis_id: str,
+    active_opinion_id: str,
+    item: object,
+    props: Dict[str, object],
+    relation_weight: float,
+) -> None:
+    shape = evidence_document_shape(item)
+    if not shape:
+        return
+    raw_payload = getattr(item, "raw_payload", {}) if isinstance(getattr(item, "raw_payload", {}), dict) else {}
+    evidence_id = str(getattr(item, "evidence_id", "") or "")
+    document_id = add_entity(graph, str(shape["kind"]), evidence_id or str(getattr(item, "title", "") or ""), str(getattr(item, "title", "") or shape["tboxClass"]), {
+        "tboxClass": str(shape["tboxClass"]),
+        "tboxClasses": list(shape["tboxClasses"]),
+        "symbol": str(getattr(item, "symbol", "") or ""),
+        "kind": str(getattr(item, "kind", "") or ""),
+        "source": str(getattr(item, "source", "") or ""),
+        "title": str(getattr(item, "title", "") or ""),
+        "summary": str(getattr(item, "summary", "") or ""),
+        "url": str(getattr(item, "url", "") or ""),
+        "publishedAt": str(getattr(item, "published_at", "") or ""),
+        "observedAt": str(getattr(item, "observed_at", "") or ""),
+        "documentType": str(shape["documentType"]),
+        "relationScope": raw_payload.get("relationScope"),
+        "relevanceScore": raw_payload.get("relevanceScore"),
+        "sourceReliability": raw_payload.get("sourceReliability"),
+        "materialityScore": raw_payload.get("materialityScore"),
+        "materialityPassed": raw_payload.get("materialityPassed"),
+        "eventType": raw_payload.get("eventType"),
+    })
+    source_label = str(getattr(item, "source", "") or "ResearchEvidence").strip() or "ResearchEvidence"
+    source_id = add_entity(graph, "data-source", source_label, source_label, {
+        "tboxClass": "DataSource",
+        "tboxClasses": ["DataSource", "Provenance"],
+        "documentType": str(shape["documentType"]),
+    })
+    add_relation(graph, stock_id, document_id, "HAS_OBSERVATION", weight=relation_weight, evidence_ids=[evidence_id], properties=props)
+    add_relation(graph, stock_id, document_id, "HAS_EXTERNAL_SIGNAL", weight=relation_weight, evidence_ids=[evidence_id], properties=props)
+    add_relation(graph, document_id, stock_id, "MENTIONS_INSTRUMENT", weight=relation_weight, evidence_ids=[evidence_id], properties=props)
+    add_relation(graph, event_id, document_id, "HAS_PROVENANCE", weight=relation_weight, evidence_ids=[evidence_id], properties={**props, "source": "research-document"})
+    add_relation(graph, document_id, source_id, "HAS_PROVENANCE", weight=1.0, evidence_ids=[evidence_id], properties={**props, "source": "research-document-source"})
+    add_relation(graph, document_id, thesis_id, "MATERIAL_TO", weight=round((number(getattr(item, "impact_score", 0)) or 2) / 20, 4), evidence_ids=[evidence_id], properties=props)
+    add_relation(graph, document_id, active_opinion_id, "IMPACTS_OPINION", weight=round((number(getattr(item, "impact_score", 0)) or 2) / 20, 4), evidence_ids=[evidence_id], properties=props)
+
 
 def instrument_tbox_classes(position: Position) -> List[str]:
     market = str(position.market or "").lower()
@@ -757,6 +828,7 @@ def add_research_evidence_concepts(
         add_relation(graph, stock_id, event_id, "HAS_OBSERVATION", weight=round(number(item.confidence), 4), evidence_ids=[item.evidence_id], properties=props)
         add_relation(graph, stock_id, event_id, "HAS_EXTERNAL_SIGNAL", weight=round(number(item.confidence), 4), evidence_ids=[item.evidence_id], properties=props)
         add_relation(graph, event_id, stock_id, "MENTIONS_INSTRUMENT", weight=relation_weight, evidence_ids=[item.evidence_id], properties=props)
+        add_research_document_concept(graph, stock_id, event_id, thesis_id, active_opinion_id, item, props, relation_weight)
         if relation_scope in {"peer", "sector", "market"}:
             add_relation(graph, event_id, stock_id, "AFFECTS", weight=relation_weight, evidence_ids=[item.evidence_id], properties=props)
         event_type = str(raw_payload.get("eventType") or "").strip()

@@ -443,13 +443,13 @@ def korean_article_summary(
         detail_parts.append("제목과 본문 흐름상 투자 판단에 필요한 사실을 추가 확인해야 합니다")
     return compact_text(
         body_status
-        + "을 한국어로 정리하면, "
+        + " 요약: "
         + subject
-        + "와 관련한 "
+        + " 관련 뉴스입니다. 뉴스 유형은 "
         + event_label
-        + " 이슈입니다. "
+        + "입니다. 관련성 분류는 "
         + scope_label
-        + "로 분류되며, "
+        + "입니다. "
         + ". ".join(detail_parts)
         + ".",
         520,

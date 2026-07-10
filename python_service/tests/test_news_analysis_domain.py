@@ -5,7 +5,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.domain.investment_research import NewsCollectionTarget, ResearchEvidence
-from digital_twin.domain.news_analysis import classify_news_relevance, confidence_from_analysis_payload, impact_from_analysis_payload
+from digital_twin.domain.news_analysis import (
+    classify_news_relevance,
+    confidence_from_analysis_payload,
+    impact_from_analysis_payload,
+    korean_article_summary,
+)
 from digital_twin.domain.ontology_rules import research_evidence_facts
 
 
@@ -89,6 +94,22 @@ class NewsAnalysisDomainTests(unittest.TestCase):
         self.assertIn("earnings", facts["topNewsEventTypes"])
         self.assertGreaterEqual(facts["averageNewsMaterialityScore"], 60)
         self.assertGreater(facts["newsMomentumScore"], 0)
+
+    def test_korean_article_summary_removes_translation_preface_for_english_source(self):
+        target = NewsCollectionTarget("005930", "삼성전자", "KOSPI", "KRW", "반도체")
+
+        summary = korean_article_summary(
+            target,
+            "Samsung Electronics shares track chip demand",
+            "Samsung Electronics shares moved after semiconductor demand expectations improved.",
+            analysis={"relationScope": "direct", "eventType": "general"},
+        )
+
+        self.assertNotIn("한국어로 정리하면", summary)
+        self.assertNotIn("이슈 이슈", summary)
+        self.assertIn("삼성전자 관련 뉴스입니다", summary)
+        self.assertIn("뉴스 유형은 일반 이슈입니다", summary)
+        self.assertIn("관련성 분류는 종목 직접 뉴스입니다", summary)
 
 
 if __name__ == "__main__":

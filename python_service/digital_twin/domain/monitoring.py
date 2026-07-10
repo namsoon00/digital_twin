@@ -5,6 +5,7 @@ from typing import Dict, List
 
 from .alert_formatting import compact_number, money, pct_delta, price_money, signed_number, signed_pct
 from .data_freshness import data_freshness_required, freshness_from_position, freshness_record
+from .external_signal_deltas import external_signals_with_deltas
 from .market_data import number
 from .message_types import (
     DEFAULT_ALERT_RULES,
@@ -205,6 +206,7 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
 
     def events_for_snapshot(self, snapshot: AccountSnapshot, previous: Dict[str, object]) -> List[AlertEvent]:
         raw_events: List[AlertEvent] = []
+        snapshot = self.snapshot_with_external_signal_deltas(snapshot, previous or {})
         snapshot = self.snapshot_with_strategy_scores(snapshot)
         has_account_data = snapshot.has_live_account_data()
         previous_has_account_data = monitor_state_has_live_account_data(previous)
@@ -224,6 +226,13 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
         signal_events = self.enabled_signal_events(signal_events)
         events = [*system_events, *build_investment_insight_events(snapshot, signal_events)]
         return [event for event in self.stamp_events(snapshot, events) if self.enabled(event.rule)]
+
+    def snapshot_with_external_signal_deltas(self, snapshot: AccountSnapshot, previous: Dict[str, object]) -> AccountSnapshot:
+        previous_signals = previous.get("externalSignals") if isinstance(previous, dict) and isinstance(previous.get("externalSignals"), dict) else {}
+        if not previous_signals or not isinstance(snapshot.external_signals, dict):
+            return snapshot
+        snapshot.external_signals = external_signals_with_deltas(snapshot.external_signals, previous_signals)
+        return snapshot
 
     def type_check_events_for_snapshot(self, snapshot: AccountSnapshot) -> List[AlertEvent]:
         events: List[AlertEvent] = []

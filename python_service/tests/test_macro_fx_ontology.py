@@ -5,6 +5,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.domain.fx import fx_exposure_facts
+from digital_twin.domain.external_signal_deltas import external_signals_with_deltas
 from digital_twin.domain.macro_context import macro_context_facts
 from digital_twin.domain.ontology_rules import evaluate_position_relation_rules, relation_rule_context_summary_lines
 from digital_twin.domain.portfolio import Position
@@ -13,6 +14,51 @@ from digital_twin.domain.rates import interest_rate_facts
 
 
 class MacroFxOntologyTests(unittest.TestCase):
+    def test_external_signal_deltas_are_attached_from_previous_snapshot(self):
+        current = {
+            "macro": {
+                "series": {
+                    "DGS10": {"provider": "FRED", "value": 4.56},
+                },
+                "yieldSpread10y2y": 0.35,
+            },
+            "fxRates": {
+                "USDKRW": {
+                    "provider": "RuntimeSettings",
+                    "base": "USD",
+                    "quote": "KRW",
+                    "rate": 1502,
+                }
+            },
+        }
+        previous = {
+            "macro": {
+                "series": {
+                    "DGS10": {"provider": "FRED", "value": 4.35, "date": "2026-07-09"},
+                },
+                "yieldSpread10y2y": 0.14,
+            },
+            "fxRates": {
+                "USDKRW": {
+                    "provider": "RuntimeSettings",
+                    "base": "USD",
+                    "quote": "KRW",
+                    "rate": 1470,
+                }
+            },
+        }
+
+        enriched = external_signals_with_deltas(current, previous)
+
+        self.assertNotIn("previousValue", current["macro"]["series"]["DGS10"])
+        self.assertAlmostEqual(21, enriched["macro"]["series"]["DGS10"]["deltaBp"])
+        self.assertEqual(4.35, enriched["macro"]["series"]["DGS10"]["previousValue"])
+        self.assertEqual("2026-07-09", enriched["macro"]["series"]["DGS10"]["previousDate"])
+        self.assertAlmostEqual(21, enriched["macro"]["yieldSpread10y2yDeltaBp"])
+        self.assertEqual(1470, enriched["fxRates"]["USDKRW"]["previousRate"])
+        self.assertEqual(32, enriched["fxRates"]["USDKRW"]["deltaKrw"])
+        self.assertAlmostEqual(32 / 1470 * 100, enriched["fxRates"]["USDKRW"]["deltaPct"])
+
     def test_macro_context_combines_rate_and_fx_domain_facts_without_deciding(self):
         position = Position(
             symbol="NVDA",
@@ -26,10 +72,11 @@ class MacroFxOntologyTests(unittest.TestCase):
         external_signals = {
             "macro": {
                 "series": {
-                    "DGS10": {"provider": "FRED", "value": 4.56},
-                    "DGS2": {"provider": "FRED", "value": 4.21},
+                    "DGS10": {"provider": "FRED", "value": 4.56, "previousValue": 4.35},
+                    "DGS2": {"provider": "FRED", "value": 4.21, "previousValue": 4.21},
                 },
                 "yieldSpread10y2y": 0.35,
+                "previousYieldSpread10y2y": 0.14,
             },
             "fxRates": {
                 "USDKRW": {
@@ -37,6 +84,7 @@ class MacroFxOntologyTests(unittest.TestCase):
                     "base": "USD",
                     "quote": "KRW",
                     "rate": 1502,
+                    "previousRate": 1470,
                 }
             },
         }
@@ -46,7 +94,11 @@ class MacroFxOntologyTests(unittest.TestCase):
         macro_facts = macro_context_facts(position, portfolio, external_signals)
 
         self.assertEqual("high_rate", rate_facts["rateRegime"])
+        self.assertTrue(rate_facts["hasInterestRateDeltaSignal"])
+        self.assertAlmostEqual(21, rate_facts["macroDgs10DeltaBp"])
         self.assertEqual("krw_weakening", fx_facts["fxRegime"])
+        self.assertTrue(fx_facts["hasFxDeltaSignal"])
+        self.assertAlmostEqual(32, fx_facts["usdKrwDeltaKrw"])
         self.assertEqual(rate_facts["macroDgs10"], macro_facts["macroDgs10"])
         self.assertEqual(fx_facts["usdKrwRate"], macro_facts["usdKrwRate"])
         self.assertNotIn("decision", macro_facts)
@@ -107,9 +159,55 @@ class MacroFxOntologyTests(unittest.TestCase):
             external_signals={
                 "macro": {
                     "series": {
+                        "DGS10": {"provider": "FRED", "value": 4.56, "previousValue": 4.35},
+                        "DGS2": {"provider": "FRED", "value": 4.21, "previousValue": 4.21},
+                        "DFF": {"provider": "FRED", "value": 3.62},
+                    },
+                    "yieldSpread10y2y": 0.35,
+                    "previousYieldSpread10y2y": 0.14,
+                },
+                "fxRates": {
+                    "USDKRW": {
+                        "provider": "RuntimeSettings",
+                        "base": "USD",
+                        "quote": "KRW",
+                        "rate": 1502,
+                        "previousRate": 1470,
+                    }
+                },
+            },
+        )
+
+        active_ids = [item.get("ruleId") or item.get("rule_id") for item in context["activeRules"]]
+        summary_lines = relation_rule_context_summary_lines(context)
+
+        self.assertIn("rates.interest_rate.sensitivity.v1", active_ids)
+        self.assertIn("fx.usd_krw.exposure.v1", active_ids)
+        self.assertTrue(any(line.startswith("금리: 미국10년 4.56%") and "10년 +21bp" in line for line in summary_lines))
+        self.assertTrue(any("환율: USD/KRW" in line and "1 USD = 1,502 KRW" in line and "+32 KRW" in line for line in summary_lines))
+        self.assertEqual(1502, context["executionPlan"]["sourceFacts"]["usdKrwRate"])
+
+    def test_absolute_macro_fx_levels_do_not_trigger_without_deltas(self):
+        position = Position(
+            symbol="NVDA",
+            name="NVIDIA",
+            market="US",
+            currency="USD",
+            market_value=1000,
+            current_price=180,
+            ma20=175,
+            ma60=160,
+            sellable_quantity=2,
+            sector="반도체",
+        )
+        context = evaluate_position_relation_rules(
+            position,
+            portfolio_summary([position], fx_rates={"USD": 1502, "KRW": 1}),
+            external_signals={
+                "macro": {
+                    "series": {
                         "DGS10": {"provider": "FRED", "value": 4.56},
                         "DGS2": {"provider": "FRED", "value": 4.21},
-                        "DFF": {"provider": "FRED", "value": 3.62},
                     },
                     "yieldSpread10y2y": 0.35,
                 },
@@ -125,13 +223,9 @@ class MacroFxOntologyTests(unittest.TestCase):
         )
 
         active_ids = [item.get("ruleId") or item.get("rule_id") for item in context["activeRules"]]
-        summary_lines = relation_rule_context_summary_lines(context)
 
-        self.assertIn("rates.interest_rate.sensitivity.v1", active_ids)
-        self.assertIn("fx.usd_krw.exposure.v1", active_ids)
-        self.assertTrue(any(line.startswith("금리: 미국10년 4.56%") for line in summary_lines))
-        self.assertTrue(any("환율: USD/KRW" in line and "1 USD = 1,502 KRW" in line for line in summary_lines))
-        self.assertEqual(1502, context["executionPlan"]["sourceFacts"]["usdKrwRate"])
+        self.assertNotIn("rates.interest_rate.sensitivity.v1", active_ids)
+        self.assertNotIn("fx.usd_krw.exposure.v1", active_ids)
 
     def test_fx_relation_rule_does_not_attach_usd_pair_to_krw_holding(self):
         position = Position(

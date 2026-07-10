@@ -380,23 +380,23 @@ DEFAULT_RELATION_RULES = [
     ),
     RelationRuleDefinition(
         "rates.interest_rate.sensitivity.v1",
-        "금리 레짐 + 민감 섹터 -> 할인율 점검",
+        "금리 변화 + 민감 섹터 -> 할인율 점검",
         "v1",
         "RATE_REGIME_SENSITIVITY",
         "macro_rate_risk",
-        "미국 10년 금리나 10Y-2Y 스프레드가 기준 구간에 있고 성장주/반도체/디지털자산 같은 민감 섹터에 노출될 때",
+        "미국 10년 금리나 10Y-2Y 스프레드가 이전값 대비 변화폭 기준을 넘고 성장주/반도체/디지털자산 같은 민감 섹터에 노출될 때",
         "금리는 주가 방향 예측값이 아니라 밸류에이션과 위험 선호를 흔드는 배경 변수로 설명합니다.",
-        ["macroDgs10", "macroDgs2", "macroYieldSpread10y2y", "sector", "currency"],
+        ["macroDgs10", "macroDgs10DeltaBp", "macroDgs2", "macroYieldSpreadDeltaBp", "sector", "currency"],
     ),
     RelationRuleDefinition(
         "fx.usd_krw.exposure.v1",
-        "환율 레짐 + 외화 노출 -> 환율 민감도 점검",
+        "환율 변화 + 외화 노출 -> 환율 민감도 점검",
         "v1",
         "FX_REGIME_EXPOSURE",
         "fx_risk",
-        "USD/KRW가 기준 구간에 있거나 외화 보유 비중이 높아 원화 기준 평가액과 실제 종목 흐름을 분리해야 할 때",
+        "USD/KRW가 이전값 대비 변화폭 기준을 넘고 외화 보유 비중이 높아 원화 기준 평가액과 실제 종목 흐름을 분리해야 할 때",
         "주가 변화와 환율 효과를 분리하고, 외화 노출 비중과 환율 기준값을 함께 확인하도록 안내합니다.",
-        ["fxRatePair", "fxRateToKrw", "fxExposureRatio", "currency"],
+        ["fxRatePair", "fxRateToKrw", "usdKrwDeltaKrw", "usdKrwDeltaPct", "fxExposureRatio", "currency"],
     ),
     RelationRuleDefinition(
         "external.crypto.btc_sensitivity.v1",
@@ -1201,6 +1201,10 @@ def _number_text(value: object, decimals: int = 2, signed: bool = False) -> str:
     return text
 
 
+def _bp_text(value: object) -> str:
+    return _number_text(value, 0, signed=True) + "bp"
+
+
 def _rate_context_line_from_facts(facts: Dict[str, object]) -> str:
     parts: List[str] = []
     if _has_numeric_fact(facts.get("macroDgs10")) and number(facts.get("macroDgs10")) > 0:
@@ -1211,6 +1215,16 @@ def _rate_context_line_from_facts(facts: Dict[str, object]) -> str:
         parts.append("연방기금 " + _number_text(facts.get("macroDff"), 2) + "%")
     if _has_numeric_fact(facts.get("macroYieldSpread10y2y")):
         parts.append("10Y-2Y " + _number_text(facts.get("macroYieldSpread10y2y"), 2, signed=True) + "%p")
+    if facts.get("hasInterestRateDeltaSignal"):
+        delta_parts = []
+        if facts.get("hasMacroDgs10Delta"):
+            delta_parts.append("10년 " + _bp_text(facts.get("macroDgs10DeltaBp")))
+        if facts.get("hasMacroDgs2Delta"):
+            delta_parts.append("2년 " + _bp_text(facts.get("macroDgs2DeltaBp")))
+        if facts.get("hasMacroYieldSpreadDelta"):
+            delta_parts.append("스프레드 " + _bp_text(facts.get("macroYieldSpreadDeltaBp")))
+        if delta_parts:
+            parts.append("변화 " + " / ".join(delta_parts))
     if not parts:
         return ""
     regime = str(facts.get("rateRegime") or "")
@@ -1248,6 +1262,16 @@ def _fx_context_line_from_facts(facts: Dict[str, object]) -> str:
     if base == quote:
         return ""
     parts = [base + "/" + quote, "1 " + base + " = " + _number_text(rate_value, 2) + " " + quote]
+    if facts.get("hasFxDeltaSignal"):
+        delta_krw = facts.get("usdKrwDeltaKrw")
+        delta_pct = facts.get("usdKrwDeltaPct")
+        delta_parts = []
+        if _has_numeric_fact(delta_krw):
+            delta_parts.append(_number_text(delta_krw, 2, signed=True) + " " + quote)
+        if _has_numeric_fact(delta_pct):
+            delta_parts.append(_number_text(delta_pct, 2, signed=True) + "%")
+        if delta_parts:
+            parts.append("변화 " + " / ".join(delta_parts))
     exposure = facts.get("fxExposureRatio")
     if _has_numeric_fact(exposure) and number(exposure) > 0:
         parts.append("노출 " + _number_text(exposure, 1) + "%")
@@ -2211,17 +2235,34 @@ def evaluate_position_relation_rules(
     macro_spread = float(facts.get("macroYieldSpread10y2y") or 0)
     macro_dgs10 = float(facts.get("macroDgs10") or 0)
     macro_dgs2 = float(facts.get("macroDgs2") or 0)
+    macro_dgs10_delta_bp = float(facts.get("macroDgs10DeltaBp") or 0)
+    macro_dgs2_delta_bp = float(facts.get("macroDgs2DeltaBp") or 0)
+    macro_dff_delta_bp = float(facts.get("macroDffDeltaBp") or 0)
+    macro_spread_delta_bp = float(facts.get("macroYieldSpreadDeltaBp") or 0)
     currency = str(facts.get("currency") or "").upper().strip()
     usd_krw_rate = float(facts.get("usdKrwRate") or 0)
+    usd_krw_delta_krw = float(facts.get("usdKrwDeltaKrw") or 0)
+    usd_krw_delta_pct = float(facts.get("usdKrwDeltaPct") or 0)
+    usd_krw_7d_delta_krw = float(facts.get("usdKrw7dDeltaKrw") or 0)
+    usd_krw_7d_delta_pct = float(facts.get("usdKrw7dDeltaPct") or 0)
     fx_rate_to_krw = float(facts.get("fxRateToKrw") or 0)
     fx_exposure_ratio = float(facts.get("fxExposureRatio") or 0)
     has_rate_signals = bool(facts.get("hasInterestRateSignals"))
+    has_rate_delta_signal = bool(facts.get("hasInterestRateDeltaSignal"))
     has_fx_rate_signal = bool(facts.get("hasFxRateSignal"))
+    has_fx_delta_signal = bool(facts.get("hasFxDeltaSignal"))
     rate_high_threshold = float(thresholds.get("macroRateHighPct", 4.5) or 4.5)
     rate_low_threshold = float(thresholds.get("macroRateLowPct", 3.0) or 3.0)
     curve_inversion_threshold = float(thresholds.get("macroCurveInversionPct", 0.0) or 0.0)
+    rate_delta_threshold = float(
+        thresholds.get("macroRateDeltaBp", thresholds.get("externalMacroRateDeltaBp", 15.0)) or 0.0
+    )
     usd_krw_high = float(thresholds.get("usdKrwHigh", 1450.0) or 1450.0)
     usd_krw_low = float(thresholds.get("usdKrwLow", 1300.0) or 1300.0)
+    usd_krw_delta_krw_threshold = float(thresholds.get("usdKrwDeltaKrw", 15.0) or 0.0)
+    usd_krw_delta_pct_threshold = float(thresholds.get("usdKrwDeltaPct", 1.0) or 0.0)
+    usd_krw_7d_delta_krw_threshold = float(thresholds.get("usdKrw7dDeltaKrw", 30.0) or 0.0)
+    usd_krw_7d_delta_pct_threshold = float(thresholds.get("usdKrw7dDeltaPct", 2.0) or 0.0)
     fx_exposure_review = float(thresholds.get("fxExposureReview", 5.0) or 5.0)
     fx_exposure_high = float(thresholds.get("fxExposureHigh", 10.0) or 10.0)
 
@@ -2779,9 +2820,20 @@ def evaluate_position_relation_rules(
     high_rate_active = bool(has_rate_signals and macro_dgs10 and macro_dgs10 >= rate_high_threshold)
     low_rate_active = bool(has_rate_signals and macro_dgs10 and macro_dgs10 <= rate_low_threshold)
     inverted_curve_active = bool(has_rate_signals and macro_spread < curve_inversion_threshold)
-    if rate_sensitive and (high_rate_active or low_rate_active or inverted_curve_active):
+    rate_delta_magnitude = max(
+        abs(macro_dgs10_delta_bp),
+        abs(macro_dgs2_delta_bp),
+        abs(macro_dff_delta_bp),
+        abs(macro_spread_delta_bp),
+    )
+    rate_delta_active = bool(
+        has_rate_delta_signal
+        and (not rate_delta_threshold or rate_delta_magnitude >= rate_delta_threshold)
+    )
+    if rate_sensitive and rate_delta_active:
         score = (
             49
+            + min(22, rate_delta_magnitude / max(1.0, rate_delta_threshold or 1.0) * 10.0)
             + (10 if high_rate_active else 0)
             + (6 if low_rate_active else 0)
             + (9 if inverted_curve_active else 0)
@@ -2794,24 +2846,39 @@ def evaluate_position_relation_rules(
             data_quality,
             [
                 "10년 금리 " + ("%.2f" % macro_dgs10) + "%" if macro_dgs10 else "",
+                "10년 금리 변화 " + _bp_text(macro_dgs10_delta_bp) if facts.get("hasMacroDgs10Delta") else "",
                 "2년 금리 " + ("%.2f" % macro_dgs2) + "%" if macro_dgs2 else "",
+                "2년 금리 변화 " + _bp_text(macro_dgs2_delta_bp) if facts.get("hasMacroDgs2Delta") else "",
                 "10Y-2Y 스프레드 " + ("%.2f" % macro_spread) + "%p" if _has_numeric_fact(facts.get("macroYieldSpread10y2y")) else "",
+                "10Y-2Y 스프레드 변화 " + _bp_text(macro_spread_delta_bp) if facts.get("hasMacroYieldSpreadDelta") else "",
                 "금리 레짐 " + str(facts.get("rateRegime") or "-"),
                 "민감 섹터/통화 " + str(facts.get("sector") or "-") + "/" + (currency or "-"),
             ],
             missing_labels,
             definitions=relation_definitions,
         ))
-    fx_extreme_active = bool(
+    fx_extreme_regime = bool(
         currency == "USD"
         and usd_krw_rate
         and (usd_krw_rate >= usd_krw_high or usd_krw_rate <= usd_krw_low)
     )
-    fx_exposure_active = bool(has_fx_rate_signal and currency != "KRW" and fx_exposure_ratio >= fx_exposure_high)
+    fx_delta_active = bool(
+        has_fx_delta_signal
+        and (
+            (not usd_krw_delta_krw_threshold or abs(usd_krw_delta_krw) >= usd_krw_delta_krw_threshold)
+            or (not usd_krw_delta_pct_threshold or abs(usd_krw_delta_pct) >= usd_krw_delta_pct_threshold)
+            or (not usd_krw_7d_delta_krw_threshold or abs(usd_krw_7d_delta_krw) >= usd_krw_7d_delta_krw_threshold)
+            or (not usd_krw_7d_delta_pct_threshold or abs(usd_krw_7d_delta_pct) >= usd_krw_7d_delta_pct_threshold)
+        )
+    )
+    fx_extreme_active = bool(fx_delta_active and fx_extreme_regime)
+    fx_exposure_active = bool(fx_delta_active and has_fx_rate_signal and currency != "KRW" and fx_exposure_ratio >= fx_exposure_high)
     if fx_extreme_active or fx_exposure_active:
         score = (
             48
             + (12 if fx_extreme_active else 0)
+            + min(18, abs(usd_krw_delta_pct) / max(0.1, usd_krw_delta_pct_threshold or 1.0) * 8.0)
+            + min(12, abs(usd_krw_delta_krw) / max(1.0, usd_krw_delta_krw_threshold or 1.0) * 5.0)
             + min(16, abs(usd_krw_rate - (usd_krw_high if usd_krw_rate >= usd_krw_high else usd_krw_low)) / 10.0 if fx_extreme_active else 0.0)
             + min(18, max(0.0, fx_exposure_ratio - fx_exposure_review) * 1.1)
         )
@@ -2821,6 +2888,8 @@ def evaluate_position_relation_rules(
             data_quality,
             [
                 "환율 " + str(facts.get("fxRatePair") or "USDKRW") + " " + ("%.2f" % (usd_krw_rate or fx_rate_to_krw)),
+                "환율 변화 " + _number_text(usd_krw_delta_krw, 2, signed=True) + "원"
+                + (" (" + _number_text(usd_krw_delta_pct, 2, signed=True) + "%)" if _has_numeric_fact(facts.get("usdKrwDeltaPct")) else ""),
                 "환율 레짐 " + str(facts.get("fxRegime") or "-"),
                 "외화 노출 " + ("%.1f" % fx_exposure_ratio) + "%",
                 "보유 통화 " + (currency or "-"),
@@ -2829,22 +2898,23 @@ def evaluate_position_relation_rules(
             definitions=relation_definitions,
         ))
     macro_risk_active = macro_sensitive and (
-        high_rate_active
-        or macro_spread < 0
+        rate_delta_active
         or abs(btc_change24h) >= float(thresholds.get("externalBitcoinChange24hPct", 3.0) or 3.0)
         or fx_extreme_active
     )
     if macro_risk_active:
-        score = 50 + (8 if high_rate_active else 0) + (8 if macro_spread < 0 else 0) + min(18, abs(btc_change24h) * 2.0) + (6 if fx_extreme_active else 0)
+        score = 50 + (8 if high_rate_active else 0) + (8 if inverted_curve_active else 0) + min(12, rate_delta_magnitude / max(1.0, rate_delta_threshold or 1.0) * 5.0) + min(18, abs(btc_change24h) * 2.0) + (6 if fx_extreme_active else 0)
         matches.append(_match(
             "macro.regime.shift.v1",
             score,
             data_quality,
             [
                 "10년 금리 " + ("%.2f" % macro_dgs10) if macro_dgs10 else "",
+                "10년 금리 변화 " + _bp_text(macro_dgs10_delta_bp) if facts.get("hasMacroDgs10Delta") else "",
                 "10Y-2Y 스프레드 " + ("%.2f" % macro_spread) if macro_spread else "",
+                "10Y-2Y 스프레드 변화 " + _bp_text(macro_spread_delta_bp) if facts.get("hasMacroYieldSpreadDelta") else "",
                 "BTC 24h " + ("%.1f" % btc_change24h) + "%" if btc_change24h else "",
-                "환율 " + ("%.2f" % usd_krw_rate) if fx_extreme_active else "",
+                "환율 " + ("%.2f" % usd_krw_rate) + " · 변화 " + _number_text(usd_krw_delta_krw, 2, signed=True) + "원" if fx_extreme_active else "",
                 "민감 섹터/통화 " + str(facts.get("sector") or "-") + "/" + (currency or "-"),
             ],
             missing_labels,

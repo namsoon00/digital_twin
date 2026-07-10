@@ -258,6 +258,18 @@ DEFAULT_RELATION_RULE_THRESHOLDS = [
         "entryOrderbookImbalanceMin",
         "entryMaxPositionWeight",
         "entryMaxSectorWeight",
+        "macroRateDeltaBp",
+        "macroRateHighPct",
+        "macroRateLowPct",
+        "macroCurveInversionPct",
+        "usdKrwDeltaKrw",
+        "usdKrwDeltaPct",
+        "usdKrw7dDeltaKrw",
+        "usdKrw7dDeltaPct",
+        "usdKrwHigh",
+        "usdKrwLow",
+        "fxExposureReview",
+        "fxExposureHigh",
     ]
 ]
 

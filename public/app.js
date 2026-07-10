@@ -453,7 +453,19 @@
       "entryTradeStrengthMin=100",
       "entryOrderbookImbalanceMin=5",
       "entryMaxPositionWeight=20",
-      "entryMaxSectorWeight=45"
+      "entryMaxSectorWeight=45",
+      "macroRateDeltaBp=15",
+      "macroRateHighPct=4.5",
+      "macroRateLowPct=3.0",
+      "macroCurveInversionPct=0",
+      "usdKrwDeltaKrw=15",
+      "usdKrwDeltaPct=1",
+      "usdKrw7dDeltaKrw=30",
+      "usdKrw7dDeltaPct=2",
+      "usdKrwHigh=1450",
+      "usdKrwLow=1300",
+      "fxExposureReview=5",
+      "fxExposureHigh=10"
     ].join("\n")
   };
   var tabs = [
@@ -715,7 +727,19 @@
     { key: "entryTradeStrengthMin", label: "매수 체결강도", unit: "점", step: "1" },
     { key: "entryOrderbookImbalanceMin", label: "매수 호가 우위", unit: "%", step: "1" },
     { key: "entryMaxPositionWeight", label: "매수 가능 종목 비중", unit: "%", step: "1" },
-    { key: "entryMaxSectorWeight", label: "매수 가능 섹터 비중", unit: "%", step: "1" }
+    { key: "entryMaxSectorWeight", label: "매수 가능 섹터 비중", unit: "%", step: "1" },
+    { key: "macroRateDeltaBp", label: "금리 변화 기준", unit: "bp", step: "1" },
+    { key: "macroRateHighPct", label: "고금리 참고 레벨", unit: "%", step: "0.1" },
+    { key: "macroRateLowPct", label: "저금리 참고 레벨", unit: "%", step: "0.1" },
+    { key: "macroCurveInversionPct", label: "금리 스프레드 참고", unit: "%p", step: "0.1" },
+    { key: "usdKrwDeltaKrw", label: "USD/KRW 변화액", unit: "원", step: "1" },
+    { key: "usdKrwDeltaPct", label: "USD/KRW 변화율", unit: "%", step: "0.1" },
+    { key: "usdKrw7dDeltaKrw", label: "USD/KRW 7일 변화액", unit: "원", step: "1" },
+    { key: "usdKrw7dDeltaPct", label: "USD/KRW 7일 변화율", unit: "%", step: "0.1" },
+    { key: "usdKrwHigh", label: "USD/KRW 약세 참고", unit: "원", step: "1" },
+    { key: "usdKrwLow", label: "USD/KRW 강세 참고", unit: "원", step: "1" },
+    { key: "fxExposureReview", label: "외화 노출 참고", unit: "%", step: "1" },
+    { key: "fxExposureHigh", label: "외화 노출 기준", unit: "%", step: "1" }
   ];
   var relationThresholdKeys = {
     lossRateLow: 1,
@@ -737,7 +761,19 @@
     entryTradeStrengthMin: 1,
     entryOrderbookImbalanceMin: 1,
     entryMaxPositionWeight: 1,
-    entryMaxSectorWeight: 1
+    entryMaxSectorWeight: 1,
+    macroRateDeltaBp: 1,
+    macroRateHighPct: 1,
+    macroRateLowPct: 1,
+    macroCurveInversionPct: 1,
+    usdKrwDeltaKrw: 1,
+    usdKrwDeltaPct: 1,
+    usdKrw7dDeltaKrw: 1,
+    usdKrw7dDeltaPct: 1,
+    usdKrwHigh: 1,
+    usdKrwLow: 1,
+    fxExposureReview: 1,
+    fxExposureHigh: 1
   };
   var settingsMemoryStore = "";
   var snapshotMemoryStore = "";

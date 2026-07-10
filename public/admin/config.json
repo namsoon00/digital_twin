@@ -13,7 +13,7 @@
     "공유 미리보기에서는 서버 설정과 계정 DB 쓰기를 차단합니다."
   ],
   "localData": {
-    "generatedAt": "2026-07-10T08:34:54.817733Z",
+    "generatedAt": "2026-07-10T09:55:45.187728Z",
     "sources": {
       "serviceDb": "data/service.db",
       "serviceDbExists": true,
@@ -573,6 +573,11 @@
           "unit": ""
         },
         {
+          "key": "macroRateDeltaBp",
+          "default": 15,
+          "unit": ""
+        },
+        {
           "key": "macroRateHighPct",
           "default": 4.5,
           "unit": ""
@@ -585,6 +590,26 @@
         {
           "key": "macroCurveInversionPct",
           "default": 0,
+          "unit": ""
+        },
+        {
+          "key": "usdKrwDeltaKrw",
+          "default": 15,
+          "unit": ""
+        },
+        {
+          "key": "usdKrwDeltaPct",
+          "default": 1,
+          "unit": ""
+        },
+        {
+          "key": "usdKrw7dDeltaKrw",
+          "default": 30,
+          "unit": ""
+        },
+        {
+          "key": "usdKrw7dDeltaPct",
+          "default": 2,
           "unit": ""
         },
         {
@@ -1640,6 +1665,11 @@
             "unit": ""
           },
           {
+            "key": "macroRateDeltaBp",
+            "default": 15,
+            "unit": ""
+          },
+          {
             "key": "macroRateHighPct",
             "default": 4.5,
             "unit": ""
@@ -1652,6 +1682,26 @@
           {
             "key": "macroCurveInversionPct",
             "default": 0,
+            "unit": ""
+          },
+          {
+            "key": "usdKrwDeltaKrw",
+            "default": 15,
+            "unit": ""
+          },
+          {
+            "key": "usdKrwDeltaPct",
+            "default": 1,
+            "unit": ""
+          },
+          {
+            "key": "usdKrw7dDeltaKrw",
+            "default": 30,
+            "unit": ""
+          },
+          {
+            "key": "usdKrw7dDeltaPct",
+            "default": 2,
             "unit": ""
           },
           {
@@ -1976,5 +2026,5 @@
       ]
     }
   ],
-  "buildId": "14a1fc95fd68"
+  "buildId": "6bef35a87255"
 }

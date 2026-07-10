@@ -7326,6 +7326,82 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("추가매수 여력과 일부 지지 신호", message)
         self.assertIn("의견이 약해지는 조건", message)
 
+    def test_validated_ai_response_adds_context_specific_mstr_insight(self):
+        context = {
+            "messageType": "investmentInsight",
+            "headline": "[주의] 💰 스트래티지: 매도 우선 점검",
+            "displayTarget": "스트래티지 / Strategy / MSTR",
+            "messageDeliveryLevel": "absoluteBeginner",
+            "referenceDate": "2026-07-11 06:40 KST",
+            "sentTime": "2026-07-11 06:41 KST",
+            "rawLines": "\n".join([
+                "현재가: $94.55",
+                "평균매입가: $88.9",
+                "수익률: +6.5%",
+                "보유 수량: 230주",
+                "종목 평가금액: $21,767 (약 3,047만 원)",
+                "계좌 평가금액: 4,929만 원",
+                "추세: 20일선 $102.83보다 8% 낮음, 60일선 $142.08보다 33.5% 낮음",
+                "수급: 거래량 11,022,528(0.4x), 거래액 $1,219,063,438",
+            ]),
+            "metadata": {
+                "ontologyRelationContext": {
+                    "facts": {
+                        "symbol": "MSTR",
+                        "currentPrice": 94.55,
+                        "ma5": 96.1,
+                        "ma5Distance": -1.6,
+                        "ma20": 102.83,
+                        "ma20Distance": -8.0,
+                        "ma60": 142.08,
+                        "ma60Distance": -33.5,
+                        "isBtcSensitive": True,
+                        "btcChange24h": 2.1,
+                        "btcChange7d": 4.3,
+                        "newsHeadlines": {
+                            "items": [
+                                {
+                                    "title": "Strategy (MSTR) Sells 3,588 Bitcoin And Rewrites Its Treasury Playbook",
+                                    "domain": "Yahoo Finance",
+                                    "publishedAt": "2026-07-11T02:13:00+09:00",
+                                    "relevanceScore": 97,
+                                    "sourceReliability": 68,
+                                    "materialityScore": 66.5,
+                                    "stockImpactLabel": "중립",
+                                }
+                            ]
+                        },
+                    },
+                    "executionPlan": {
+                        "riskSignals": ["디지털자산 관련 종목 비중이 높음", "20일선과 60일선 아래"],
+                        "counterSignals": ["수익률은 아직 +6.5%"],
+                        "nextChecks": ["BTC와 MSTR 가격 반응이 같은 방향인지 확인", "20일선 회복 여부 확인"],
+                    },
+                }
+            },
+        }
+
+        response = validated_response_from_payload(context, {
+            "action": "SELL",
+            "confidence": 62,
+            "summary": "주요 평균선 아래라 매도 의견입니다.",
+            "opinion": "보유 물량 매도 기준을 먼저 확인하세요.",
+            "evidence": ["현재 가격이 20일 평균과 60일 평균보다 낮습니다."],
+            "counterEvidence": ["현재 수익률은 약 +6.5%라 손실 구간은 아닙니다."],
+            "nextChecks": ["20일 평균선 회복 여부 확인"],
+            "referenceDate": "2026-07-11 06:40 KST",
+        }, source="Codex AI")
+        message = context_with_validated_ai_response(context, response)["telegramMessage"]
+
+        self.assertEqual("TRIM", response.action)
+        self.assertIn("분할축소", message)
+        self.assertIn("이번 알림에서 봐야 할 것", message)
+        self.assertIn("아직 수익 구간", message)
+        self.assertIn("5일선 아래 1.6%", message)
+        self.assertIn("BTC 민감 종목", message)
+        self.assertIn("보유자산 매각/처분", message)
+        self.assertIn("Strategy (MSTR) Sells 3,588 Bitcoin", message)
+
     def test_notification_ai_gate_prompt_requires_user_friendly_language(self):
         prompt = build_notification_ai_gate_prompt({
             "messageType": "investmentInsight",
@@ -7342,6 +7418,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("관계형/온톨로지 데이터베이스 추론", prompt)
         self.assertIn("AI가 독립적으로 고른 최종 판단", prompt)
         self.assertIn("관계 규칙명, 점수, 사전 계산 후보는 판단 재료로만", prompt)
+        self.assertIn("뻔한 말만 쓰지 말고", prompt)
+        self.assertIn("비트코인 민감 종목이면 BTC", prompt)
         self.assertIn("disagreementReason에 왜 달라졌는지 반드시", prompt)
         self.assertIn("신뢰하지 않는 분석 대상 텍스트", prompt)
         self.assertIn("sourceUrls", prompt)

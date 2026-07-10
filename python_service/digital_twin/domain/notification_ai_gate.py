@@ -11,6 +11,7 @@ from .notification_ai import (
     missing_data_labels,
     notification_ai_prompt_context,
     relation_context_value,
+    relation_facts,
 )
 from .notification_ai_gate_contracts import (
     ACTION_LABELS,
@@ -151,6 +152,36 @@ def default_next_checks_for_action(action: str) -> List[str]:
     return ["다음 데이터 업데이트에서 같은 관계 규칙과 반대 근거를 다시 확인"]
 
 
+def signed_percent_from_text(value: object) -> float:
+    match = re.search(r"[-+]?\d+(?:\.\d+)?\s*%", str(value or ""))
+    if not match:
+        return 0.0
+    try:
+        return float(match.group(0).replace("%", "").strip())
+    except ValueError:
+        return 0.0
+
+
+def soften_low_confidence_sell(context: Dict[str, object], response: NotificationAIValidatedResponse) -> NotificationAIValidatedResponse:
+    if response.action != "SELL":
+        return response
+    pnl = signed_percent_from_text(_line_after_colon(_raw_lines(context or {}), "수익률") or _line_after_colon(_raw_lines(context or {}), "손익"))
+    if pnl <= 0 or response.confidence >= 70:
+        return response
+    response.action = "TRIM"
+    response.action_label = ACTION_LABELS["TRIM"]
+    reason = "수익 구간이고 AI 판단 강도가 높지 않아 전량 매도보다 일부 축소로 완화했습니다."
+    append_unique_text(response.counter_evidence, reason, 180)
+    append_unique_text(response.validation_warnings, reason, 180)
+    if response.opinion and "매도" in response.opinion:
+        response.opinion = response.opinion.replace("매도", "분할축소")
+    elif response.opinion:
+        response.opinion = response.opinion + " 다만 한 번에 모두 줄이기보다 일부 축소부터 보는 판단입니다."
+    else:
+        response.opinion = "한 번에 모두 줄이기보다 일부 축소부터 보는 판단입니다."
+    return response
+
+
 def confidence_cap_for_response(
     context: Dict[str, object],
     evidence_count: int,
@@ -260,7 +291,7 @@ def local_validated_ai_response(context: Dict[str, object], source: str = "local
     missing_impact = list(execution_plan.get("missingDataImpact") or []) if isinstance(execution_plan.get("missingDataImpact"), list) else []
     if not missing_impact:
         missing_impact = [item + "는 결론 강도를 낮추는 요소입니다." for item in missing[:4]]
-    return NotificationAIValidatedResponse(
+    return soften_low_confidence_sell(context, NotificationAIValidatedResponse(
         action=action,
         action_label=ACTION_LABELS.get(action, action),
         confidence=confidence,
@@ -276,7 +307,7 @@ def local_validated_ai_response(context: Dict[str, object], source: str = "local
         precomputed_action=precomputed_action_value(context),
         reference_date=reference_date(context),
         source=source,
-    )
+    ))
 
 
 def ai_decision_input_packet(
@@ -349,6 +380,8 @@ def build_notification_ai_gate_prompt(context: Dict[str, object]) -> str:
         "activeInvestmentOpinion과 executionPlan은 사전 계산 후보일 뿐 최종 답변이 아니다. 근거가 부족하거나 반대 근거가 더 강하면 다른 action을 선택할 수 있다.",
         "summary와 opinion의 첫 문장은 관계 규칙 이름이나 점수 요약이 아니라 AI가 독립적으로 고른 최종 판단과 그 이유여야 한다.",
         "관계 규칙명, 점수, 사전 계산 후보는 판단 재료로만 쓰고, 사용자에게 보이는 문장에서는 가격·수급·뉴스·공시·반대 근거를 비교한 결론을 먼저 말한다.",
+        "evidence에는 가능한 한 숫자나 원문 제목을 넣는다. '가격 흐름이 약하다'처럼 뻔한 말만 쓰지 말고 현재가/평단가/수익률/5일선/20일선/60일선/거래량/BTC/금리/환율/뉴스 제목 중 제공된 값을 구체적으로 연결한다.",
+        "MSTR, STRC 등 비트코인 민감 종목이면 BTC 24시간·7일 변동과 보유 종목 가격 반응을 비교한다. 뉴스·공시 제목에 매각, 처분, 실적, 자금조달, 소송, 규제 같은 사건이 있으면 그 사건을 evidence 또는 counterEvidence에 반드시 반영한다.",
         "BUY, ADD, HOLD, TRIM, SELL, AVOID 중 하나를 반드시 고르되 자동 주문 지시처럼 쓰지 않는다.",
         "사전 계산 후보와 다른 action을 고르면 disagreementReason에 왜 달라졌는지 반드시 쓴다. 같은 action이어도 단순 추종이 아니라 어떤 증거가 그 판단을 지지했는지 summary에 쓴다.",
         "가능하면 sourceUrls에 판단에 사용한 원문 URL을 넣고, URL이 없으면 evidence에 데이터 출처명을 함께 쓴다.",
@@ -466,7 +499,7 @@ def validated_response_from_payload(
     confidence = min(original_confidence, cap)
     if confidence < original_confidence:
         warnings.append("AI 확신도 " + str(round(original_confidence, 1)) + "%를 검증 기준에 따라 " + str(round(confidence, 1)) + "%로 낮췄습니다.")
-    return NotificationAIValidatedResponse(
+    return soften_low_confidence_sell(context, NotificationAIValidatedResponse(
         action=action,
         action_label=ACTION_LABELS.get(action, action),
         confidence=confidence,
@@ -487,7 +520,7 @@ def validated_response_from_payload(
         validation_warnings=warnings,
         source=source,
         raw_response=raw_response,
-    )
+    ))
 
 
 
@@ -799,6 +832,107 @@ def notification_reason_summary(context: Dict[str, object]) -> str:
     )
 
 
+def _contains_any(value: object, terms: List[str]) -> bool:
+    text = str(value or "").lower()
+    return any(str(term or "").lower() in text for term in terms)
+
+
+def _source_event_titles(context: Dict[str, object], limit: int = 3) -> List[str]:
+    prompt_context = notification_ai_prompt_context(str((context or {}).get("messageType") or (context or {}).get("rule") or "notification"), context or {})
+    facts = prompt_context.get("facts") if isinstance(prompt_context.get("facts"), dict) else {}
+    rows: List[str] = []
+    for item in (facts.get("newsHeadlines") or []) + (facts.get("researchEvidence") or []):
+        if not isinstance(item, dict):
+            continue
+        title = source_detail_text(item, "title", "summary", "articleSummaryKo")
+        source = source_detail_text(item, "domain", "provider", "source")
+        impact = source_detail_text(item, "stockImpactLabel", "impactLabel")
+        if not title:
+            continue
+        prefix = (source + " · ") if source else ""
+        suffix = (" · " + impact) if impact and impact not in {"중립", "neutral", "Neutral"} else ""
+        append_unique_text(rows, prefix + title + suffix, 150)
+        if len(rows) >= limit:
+            break
+    return rows[:limit]
+
+
+def _price_position_summary(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
+    current = _plain_value(context, "현재가")
+    average = _plain_value(context, "평균매입가") or _plain_value(context, "평단가")
+    pnl = _plain_value(context, "수익률") or _plain_value(context, "손익")
+    trend = _plain_value(context, "추세")
+    if not any([current, average, pnl, trend]):
+        return ""
+    if response.action in {"TRIM", "SELL"} and signed_percent_from_text(pnl) > 0:
+        base = "아직 수익 구간이지만 가격 흐름이 약해져 수익 보호 쪽으로 봅니다."
+    elif response.action in {"TRIM", "SELL"}:
+        base = "손실 또는 가격 약화가 커져 비중 관리 쪽으로 봅니다."
+    elif response.action in {"BUY", "ADD"}:
+        base = "가격 회복 조건이 일부 잡혀 진입 조건을 봅니다."
+    else:
+        base = "바로 실행보다 다음 조건 확인이 먼저입니다."
+    details = []
+    if pnl:
+        details.append("수익률 " + pnl)
+    if trend:
+        details.append(trend)
+    return _text(base + (" " + " / ".join(details[:2]) if details else ""), 210)
+
+
+def _relation_feature_summary(context: Dict[str, object]) -> str:
+    facts = relation_facts(context or {})
+    if not facts:
+        return ""
+    rows: List[str] = []
+    ma5 = _number(facts.get("ma5Distance"))
+    ma20 = _number(facts.get("ma20Distance"))
+    ma60 = _number(facts.get("ma60Distance"))
+    if facts.get("ma5"):
+        rows.append("5일선 " + ("위" if ma5 >= 0 else "아래") + " " + str(abs(round(ma5, 1))) + "%")
+    if facts.get("ma20"):
+        rows.append("20일선 " + ("위" if ma20 >= 0 else "아래") + " " + str(abs(round(ma20, 1))) + "%")
+    if facts.get("ma60"):
+        rows.append("60일선 " + ("위" if ma60 >= 0 else "아래") + " " + str(abs(round(ma60, 1))) + "%")
+    btc24 = _number(facts.get("btcChange24h"))
+    btc7 = _number(facts.get("btcChange7d"))
+    if facts.get("isBtcSensitive") and (btc24 or btc7):
+        rows.append("BTC 민감 종목 · 24h " + str(round(btc24, 1)) + "% / 7d " + str(round(btc7, 1)) + "%")
+    ten_year = _number(facts.get("us10yYield") or facts.get("us10y") or facts.get("tenYearYield"))
+    fx = _number(facts.get("usdKrw") or facts.get("usdkrw") or facts.get("fxRate"))
+    if ten_year:
+        rows.append("미 10년 금리 " + str(round(ten_year, 2)) + "%")
+    if fx:
+        rows.append("USD/KRW " + str(round(fx, 1)))
+    return " / ".join(rows[:4])
+
+
+def _news_event_summary(context: Dict[str, object]) -> str:
+    titles = _source_event_titles(context, 3)
+    if not titles:
+        return ""
+    joined = " / ".join(titles)
+    if _contains_any(joined, ["sell", "sells", "sold", "매도", "처분", "disposal"]):
+        return "뉴스·공시에서 보유자산 매각/처분 성격의 이벤트가 보여 원문 확인 우선입니다: " + joined
+    if _contains_any(joined, ["rise", "rises", "상승", "defend", "호재", "beat"]):
+        return "뉴스에는 반대 방향 신호도 있어 가격 반응 확인이 필요합니다: " + joined
+    return "뉴스·공시 확인 대상: " + joined
+
+
+def context_specific_insight_rows(context: Dict[str, object], response: NotificationAIValidatedResponse, limit: int = 4) -> List[str]:
+    rows: List[str] = []
+    append_unique_text(rows, _price_position_summary(context, response), 230)
+    append_unique_text(rows, _relation_feature_summary(context), 210)
+    append_unique_text(rows, _news_event_summary(context), 230)
+    if response.precomputed_action and response.precomputed_action != response.action:
+        append_unique_text(
+            rows,
+            "계산 후보는 " + action_label_for_action(response.precomputed_action) + "였지만 최종 메시지는 " + response.action_label + " 기준으로 완화/조정했습니다.",
+            210,
+        )
+    return rows[:limit]
+
+
 def execution_telegram_message(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
     level = delivery_level_from_context(context)
     if level == "absoluteBeginner":
@@ -844,6 +978,10 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
         parts.extend(["", "<b>계산 후보와 다른 점</b>", *difference_rows])
     if current_state_rows:
         parts.extend(["", "<b>현재 상태</b>", *current_state_rows])
+    context_rows = context_specific_insight_rows(context, response, 4)
+    if context_rows:
+        parts.extend(["", "<b>이번 알림에서 봐야 할 것</b>"])
+        parts.extend("• " + html.escape(item, quote=False) for item in context_rows)
     parts.extend(["", "<b>AI가 중요하게 본 근거</b>"])
     evidence_limit = 3 if level == "beginner" else 4
     parts.extend("• " + html.escape(item, quote=False) for item in response.evidence[:evidence_limit])
@@ -897,6 +1035,10 @@ def execution_telegram_message_absolute_beginner(context: Dict[str, object], res
         parts.extend(["", "<b>AI가 다르게 본 점</b>", *difference_rows])
     if current_state_rows:
         parts.extend(["", "<b>현재 상황</b>", *current_state_rows])
+    context_rows = context_specific_insight_rows(context, response, 3)
+    if context_rows:
+        parts.extend(["", "<b>이번 알림에서 봐야 할 것</b>"])
+        parts.extend("• " + html.escape(item, quote=False) for item in context_rows)
     if response.evidence:
         parts.extend(["", "<b>AI가 중요하게 본 근거</b>"])
         parts.extend("• " + html.escape(item, quote=False) for item in response.evidence[:3])

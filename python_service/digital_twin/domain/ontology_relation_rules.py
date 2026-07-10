@@ -166,8 +166,9 @@ DECISION_STAGE_DEFINITIONS = {
     "RATE_ACTION": DecisionStageDefinition("RATE_ACTION", "rateRegime", "action", "금리 리스크 대응 점검", "caution", 70.0, 85.0),
     "FX_REVIEW": DecisionStageDefinition("FX_REVIEW", "fxRegime", "review", "환율 민감도 점검", "watch", 55.0, 70.0),
     "FX_ACTION": DecisionStageDefinition("FX_ACTION", "fxRegime", "action", "환율 리스크 대응 점검", "caution", 70.0, 85.0),
-    "ENTRY_WATCH": DecisionStageDefinition("ENTRY_WATCH", "entry", "watch", "분할매수 관찰", "watch", 35.0, 55.0),
-    "ENTRY_SPLIT_BUY": DecisionStageDefinition("ENTRY_SPLIT_BUY", "entry", "review", "분할매수 후보", "watch", 55.0, 70.0),
+    "ENTRY_WATCH": DecisionStageDefinition("ENTRY_WATCH", "entryWait", "watch", "신규 진입 관찰", "watch", 35.0, 55.0),
+    "ENTRY_WAIT": DecisionStageDefinition("ENTRY_WAIT", "entryWait", "review", "신규 진입 대기", "watch", 55.0, 70.0),
+    "ENTRY_SPLIT_BUY": DecisionStageDefinition("ENTRY_SPLIT_BUY", "entry", "review", "소액 진입 검토", "watch", 55.0, 70.0),
     "ENTRY_READY": DecisionStageDefinition("ENTRY_READY", "entry", "action", "소액 분할매수 검토", "caution", 70.0, 85.0),
     "ADD_BUY_BLOCKED": DecisionStageDefinition("ADD_BUY_BLOCKED", "entryRisk", "review", "추가매수 보류", "caution", 55.0, 70.0),
 }
@@ -290,13 +291,33 @@ DEFAULT_RELATION_RULES = [
     ),
     RelationRuleDefinition(
         "entry.pullback.supported.v1",
-        "눌림목 + 지지 수급 -> 분할매수 후보",
+        "눌림목 + 단기 회복 + 거시 확인 -> 소액 진입 후보",
         "v1",
         "ENTRY_OPPORTUNITY",
         "entry_timing",
-        "20일선보다 낮아졌지만 60일선 지지가 유지되고 거래량·체결·투자자 수급이 회복 쪽일 때",
-        "싸졌다는 이유만으로 매수하지 말고 지지선, 수급 회복, 보유 비중, 뉴스·공시 리스크를 함께 비교합니다.",
-        ["currentPrice", "ma20", "ma60", "volumeRatio", "tradeStrength", "investorFlow"],
+        "20일선보다 낮아졌지만 60일선 지지, 5일선 회복, 거래량·체결·투자자 수급, 금리·환율 부담이 함께 통과할 때",
+        "싸졌다는 이유만으로 매수하지 말고 5일선 타이밍, 지지선, 수급 회복, 금리·환율, 뉴스·공시 리스크를 함께 비교합니다.",
+        ["currentPrice", "ma5", "ma20", "ma60", "volumeRatio", "tradeStrength", "investorFlow", "macro", "fxRatePair"],
+    ),
+    RelationRuleDefinition(
+        "entry.momentum.confirmed.v1",
+        "5/20/60일선 회복 + 거래 증가 + 거시 확인 -> 신규 진입 후보",
+        "v1",
+        "ENTRY_OPPORTUNITY",
+        "entry_timing",
+        "관심종목이 5일·20일·60일 평균 가격을 회복하고 거래량과 금리·환율 조건도 통과할 때",
+        "회복 확인 전 추격 매수를 피하고, 거래량·뉴스 품질·금리·환율 조건이 유지되는지 함께 확인합니다.",
+        ["currentPrice", "ma5", "ma20", "ma60", "volumeRatio", "macro", "fxRatePair"],
+    ),
+    RelationRuleDefinition(
+        "entry.wait_for_confirmation.v1",
+        "관심종목 + 확인 부족/거시 부담 -> 신규 진입 대기",
+        "v1",
+        "ENTRY_WAIT",
+        "entry_risk",
+        "관심종목의 일부 가격 신호는 있으나 5일선·60일선·거래량·금리·환율·뉴스 품질 중 확인이 부족할 때",
+        "매수보다 대기를 우선하고 어떤 조건이 채워지면 진입 검토로 바뀌는지 명확히 설명합니다.",
+        ["source", "ma5", "ma20", "ma60", "volumeRatio", "macro", "fxRatePair", "newsHeadlines"],
     ),
     RelationRuleDefinition(
         "entry.add_buy.blocked.v1",
@@ -950,6 +971,12 @@ def resolve_decision_stage(rule_id: str, score: float, facts: Dict[str, object])
         if value >= 55:
             return decision_stage_by_key("ENTRY_SPLIT_BUY")
         return decision_stage_by_key("ENTRY_WATCH")
+    if rule_id == "entry.momentum.confirmed.v1":
+        if value >= 70:
+            return decision_stage_by_key("ENTRY_READY")
+        return decision_stage_by_key("ENTRY_SPLIT_BUY")
+    if rule_id == "entry.wait_for_confirmation.v1":
+        return decision_stage_by_key("ENTRY_WAIT")
     if rule_id == "entry.add_buy.blocked.v1":
         return decision_stage_by_key("ADD_BUY_BLOCKED")
     if rule_id == "averaging_down.block.v1":
@@ -1005,8 +1032,10 @@ def _investor_flow(position: Position) -> Dict[str, float]:
 
 def _trend_facts(position: Position) -> Dict[str, object]:
     current = number(position.current_price)
+    ma5 = number(position.ma5)
     ma20 = number(position.ma20)
     ma60 = number(position.ma60)
+    ma5_distance = (((current / ma5) - 1) * 100.0 if current and ma5 else 0.0)
     ma20_distance = number(position.ma20_distance) or (((current / ma20) - 1) * 100.0 if current and ma20 else 0.0)
     ma60_distance = number(position.ma60_distance) or (((current / ma60) - 1) * 100.0 if current and ma60 else 0.0)
     ma20_slope = number(position.ma20_slope)
@@ -1056,8 +1085,10 @@ def _trend_facts(position: Position) -> Dict[str, object]:
     )
     return {
         "currentPrice": current,
+        "ma5": ma5,
         "ma20": ma20,
         "ma60": ma60,
+        "ma5Distance": ma5_distance,
         "ma20Distance": ma20_distance,
         "ma60Distance": ma60_distance,
         "ma20Slope": ma20_slope,
@@ -1083,6 +1114,7 @@ def _trend_facts(position: Position) -> Dict[str, object]:
             "ma60Slope": round(ma60_slope, 2),
             "curve": curve_label,
             "trendCurve": round(trend_curve, 2),
+            "ma5Distance": round(ma5_distance, 2),
             "ma20Distance": round(ma20_distance, 2),
             "ma60Distance": round(ma60_distance, 2),
             "shortTermBreakdown": short_term_breakdown,
@@ -1541,6 +1573,8 @@ def position_signal_facts(
     missing: List[Dict[str, str]] = []
     if not facts["currentPrice"]:
         missing.append(_missing("currentPrice", "현재가", "가격·이동평균 관계 판단 신뢰도가 낮아집니다."))
+    if facts.get("isWatchlist") and not facts["ma5"]:
+        missing.append(_missing("ma5", "5일 이동평균", "짧은 진입 타이밍을 확인할 수 없어 신규 진입 판단 강도를 낮춥니다."))
     if not facts["ma20"]:
         missing.append(_missing("ma20", "20일 이동평균", "단기 추세 이탈 여부를 확인할 수 없습니다."))
     if not facts["ma60"]:
@@ -1812,6 +1846,8 @@ def decision_from_matches(facts: Dict[str, object], matches: List[OntologyRuleMa
         "trend.breakdown_acceleration.v1": 45,
         "support.retest.failed.v1": 43,
         "holding.loss_guard.breakdown.v1": 40,
+        "entry.wait_for_confirmation.v1": 39,
+        "entry.momentum.confirmed.v1": 38,
         "entry.pullback.supported.v1": 38,
         "averaging_down.block.v1": 37,
         "distribution.detected.v1": 36,
@@ -1940,10 +1976,21 @@ def execution_plan_from_relation_context(
         primary_action = "SPLIT_BUY_REVIEW"
         primary_label = "소액 분할매수 조건 검토"
         _append_unique(blocked_actions, "확인 없는 일괄 매수")
-        _append_unique(support_signals, "눌림목과 지지 신호가 함께 성립")
-        _append_unique(strengthen_conditions, "20일선 회복, 거래량 증가, 수급 개선이 함께 나오면 진입 강도 상향")
-        _append_unique(weaken_conditions, "60일선 이탈 또는 부정 공시가 나오면 매수 후보 해제")
-        _append_unique(next_checks, "첫 진입 가격, 손절 기준, 추가매수 조건 확인")
+        _append_unique(support_signals, "5일선 타이밍, 20/60일선, 거래량, 금리·환율 조건이 함께 통과")
+        _append_unique(strengthen_conditions, "5일선 위 유지, 거래량 증가, 20/60일선 회복이 함께 유지되면 진입 강도 상향")
+        _append_unique(weaken_conditions, "5일선 재이탈, 60일선 이탈, 금리·환율 부담 확대 또는 부정 공시가 나오면 매수 후보 해제")
+        _append_unique(next_checks, "첫 진입 가격, 손절 기준, 추가매수 조건, 환율 기준 확인")
+    elif action_group == "entryWait":
+        primary_action = "WAIT_FOR_ENTRY_CONFIRMATION"
+        primary_label = "신규 진입 대기, 조건 재확인"
+        _append_unique(blocked_actions, "5일선·60일선·거래량·금리·환율 확인 전 신규 매수")
+        for reason in list(facts.get("entryBlockReasons") or [])[:4]:
+            _append_unique(risk_signals, reason)
+        if ma20_distance >= 0:
+            _append_unique(support_signals, "20일선 위라 단기 반등 관찰 근거는 있음")
+        _append_unique(strengthen_conditions, "5일선 위 유지, 60일선 회복, 거래량 증가, 금리·환율 부담 완화가 같이 나오면 소액 진입 검토")
+        _append_unique(weaken_conditions, "20일선 아래로 다시 내려가거나 거래량이 붙지 않으면 대기 유지")
+        _append_unique(next_checks, "5일선·20일선·60일선 위치, 거래량 배율, 미국 10년 금리, USD/KRW를 다음 조회에서 확인")
     elif action_group == "entryRisk":
         primary_action = "AVOID_OR_WAIT"
         primary_label = "추가매수 보류, 회복 조건 대기"
@@ -2076,6 +2123,7 @@ def execution_plan_from_relation_context(
             "currentPrice": facts.get("currentPrice"),
             "averagePrice": facts.get("averagePrice"),
             "profitLossRate": facts.get("profitLossRate"),
+            "ma5Distance": round(float(facts.get("ma5Distance") or 0), 2),
             "ma20Distance": round(float(facts.get("ma20Distance") or 0), 2),
             "ma60Distance": round(float(facts.get("ma60Distance") or 0), 2),
             "volumeRatio": facts.get("volumeRatio"),
@@ -2116,6 +2164,13 @@ def execution_plan_from_relation_context(
             "fxRateToKrw": facts.get("fxRateToKrw"),
             "usdKrwRate": facts.get("usdKrwRate"),
             "fxExposureRatio": round(float(facts.get("fxExposureRatio") or 0), 2),
+            "entryMa5TimingOk": facts.get("entryMa5TimingOk"),
+            "entryMomentumTrendReady": facts.get("entryMomentumTrendReady"),
+            "entrySupportCount": facts.get("entrySupportCount"),
+            "entryMacroBlocked": facts.get("entryMacroBlocked"),
+            "entryFxBlocked": facts.get("entryFxBlocked"),
+            "entryRequiredDataMissing": facts.get("entryRequiredDataMissing"),
+            "entryBlockReasons": list(facts.get("entryBlockReasons") or [])[:6],
             "fxRegime": facts.get("fxRegime"),
         },
     }
@@ -2186,6 +2241,7 @@ def evaluate_position_relation_rules(
     matches: List[OntologyRuleMatch] = []
     data_quality = float(facts.get("dataQualityScore") or 0)
     pnl = float(facts.get("profitLossRate") or 0)
+    ma5_distance = float(facts.get("ma5Distance") or 0)
     ma20_distance = float(facts.get("ma20Distance") or 0)
     ma60_distance = float(facts.get("ma60Distance") or 0)
     sector_ratio = float(facts.get("sectorRatio") or 0)
@@ -2265,6 +2321,45 @@ def evaluate_position_relation_rules(
     usd_krw_7d_delta_pct_threshold = float(thresholds.get("usdKrw7dDeltaPct", 2.0) or 0.0)
     fx_exposure_review = float(thresholds.get("fxExposureReview", 5.0) or 5.0)
     fx_exposure_high = float(thresholds.get("fxExposureHigh", 10.0) or 10.0)
+    macro_sensitive = any(token in str(facts.get("sector") or "") for token in ["반도체", "AI", "플랫폼", "디지털자산"]) or currency == "USD" or facts.get("isBtcSensitive")
+    rate_sensitive = macro_sensitive or any(token in str(facts.get("sector") or "") for token in ["성장", "소프트웨어", "테크", "바이오"])
+    high_rate_active = bool(has_rate_signals and macro_dgs10 and macro_dgs10 >= rate_high_threshold)
+    low_rate_active = bool(has_rate_signals and macro_dgs10 and macro_dgs10 <= rate_low_threshold)
+    inverted_curve_active = bool(has_rate_signals and macro_spread < curve_inversion_threshold)
+    rate_delta_magnitude = max(
+        abs(macro_dgs10_delta_bp),
+        abs(macro_dgs2_delta_bp),
+        abs(macro_dff_delta_bp),
+        abs(macro_spread_delta_bp),
+    )
+    rate_delta_active = bool(
+        has_rate_delta_signal
+        and (not rate_delta_threshold or rate_delta_magnitude >= rate_delta_threshold)
+    )
+    fx_extreme_regime = bool(
+        currency == "USD"
+        and usd_krw_rate
+        and (usd_krw_rate >= usd_krw_high or usd_krw_rate <= usd_krw_low)
+    )
+    fx_delta_active = bool(
+        has_fx_delta_signal
+        and (
+            (not usd_krw_delta_krw_threshold or abs(usd_krw_delta_krw) >= usd_krw_delta_krw_threshold)
+            or (not usd_krw_delta_pct_threshold or abs(usd_krw_delta_pct) >= usd_krw_delta_pct_threshold)
+            or (not usd_krw_7d_delta_krw_threshold or abs(usd_krw_7d_delta_krw) >= usd_krw_7d_delta_krw_threshold)
+            or (not usd_krw_7d_delta_pct_threshold or abs(usd_krw_7d_delta_pct) >= usd_krw_7d_delta_pct_threshold)
+        )
+    )
+    fx_extreme_active = bool(fx_delta_active and fx_extreme_regime)
+    fx_exposure_active = bool(fx_delta_active and has_fx_rate_signal and currency != "KRW" and fx_exposure_ratio >= fx_exposure_high)
+    entry_macro_blocked = bool(rate_sensitive and (high_rate_active or inverted_curve_active or rate_delta_active))
+    entry_fx_blocked = bool(currency == "USD" and has_fx_rate_signal and (fx_extreme_regime or fx_delta_active or fx_exposure_active))
+    entry_macro_missing = bool(rate_sensitive and not has_rate_signals)
+    entry_fx_missing = bool(currency == "USD" and not has_fx_rate_signal)
+    facts["entryMacroBlocked"] = entry_macro_blocked
+    facts["entryFxBlocked"] = entry_fx_blocked
+    facts["entryMacroMissing"] = entry_macro_missing
+    facts["entryFxMissing"] = entry_fx_missing
 
     if pnl >= 10 and (ma20_distance <= -2 or ma60_distance <= -5 or trend_score < -3):
         score = 55 + min(25, max(0, pnl - 10) * 1.2) + min(20, abs(min(ma20_distance, ma60_distance, trend_score)))
@@ -2395,6 +2490,9 @@ def evaluate_position_relation_rules(
 
     entry_ma20_below = float(thresholds.get("entryPullbackMa20BelowPct", -2.0) or -2.0)
     entry_ma20_deep = float(thresholds.get("entryPullbackMa20DeepPct", -8.0) or -8.0)
+    entry_ma5_min = float(thresholds.get("entryMa5TimingMinPct", -0.5) or -0.5)
+    entry_momentum_ma20_min = float(thresholds.get("entryMomentumMa20MinPct", -0.5) or -0.5)
+    entry_momentum_ma60_min = float(thresholds.get("entryMomentumMa60MinPct", 0.0) or 0.0)
     entry_ma60_support = float(thresholds.get("entryMa60SupportPct", -1.0) or -1.0)
     entry_volume_min = float(thresholds.get("entryVolumeMinRatio", 0.6) or 0.0)
     entry_volume_max = float(thresholds.get("entryVolumeMaxRatio", 1.8) or 0.0)
@@ -2404,7 +2502,10 @@ def evaluate_position_relation_rules(
     entry_position_max = float(thresholds.get("entryMaxPositionWeight", 20.0) or 0.0)
     entry_sector_max = float(thresholds.get("entryMaxSectorWeight", 45.0) or 0.0)
     pullback_zone = entry_ma20_deep <= ma20_distance <= entry_ma20_below
+    ma5_supports_entry = bool(facts.get("ma5")) and ma5_distance >= entry_ma5_min
     ma60_supports_entry = bool(facts.get("ma60")) and ma60_distance >= entry_ma60_support
+    ma20_momentum_ready = bool(facts.get("ma20")) and ma20_distance >= entry_momentum_ma20_min
+    ma60_momentum_ready = bool(facts.get("ma60")) and ma60_distance >= entry_momentum_ma60_min
     volume_is_usable = bool(volume_ratio) and volume_ratio >= entry_volume_min and (not entry_volume_max or volume_ratio <= entry_volume_max)
     smart_money_supports = bool(flow_score) and flow_score >= entry_smart_money_min
     execution_supports = bool(trade_strength) and trade_strength >= entry_trade_strength_min
@@ -2412,24 +2513,70 @@ def evaluate_position_relation_rules(
     allocation_room = (not position_weight or position_weight <= entry_position_max) and (not sector_ratio or sector_ratio <= entry_sector_max)
     entry_support_count = sum(
         1
-        for value in [ma60_supports_entry, volume_is_usable, smart_money_supports, execution_supports, orderbook_supports]
+        for value in [
+            ma5_supports_entry,
+            volume_is_usable,
+            smart_money_supports,
+            execution_supports,
+            orderbook_supports,
+            direct_support_news_count > 0,
+        ]
         if value
     )
+    entry_data_blocked = bool((external_quality and external_quality < 60) or external_errors >= 2)
+    entry_external_risk_blocked = bool(has_disclosure or direct_risk_news_count or entry_macro_blocked or entry_fx_blocked or entry_data_blocked)
+    entry_required_data_missing = bool(not facts.get("ma5") or entry_macro_missing or entry_fx_missing)
+    entry_block_reasons = [
+        reason
+        for reason in [
+            "5일선 타이밍 미확인" if not facts.get("ma5") else "",
+            "5일선보다 낮아 짧은 진입 타이밍 부족" if facts.get("ma5") and not ma5_supports_entry else "",
+            "60일선 지지 부족" if not ma60_supports_entry else "",
+            "거래량 확인 부족" if not volume_is_usable else "",
+            "금리 부담 또는 금리 변화 확인 필요" if entry_macro_blocked else "",
+            "금리 데이터 없음" if entry_macro_missing else "",
+            "환율 부담 또는 환율 변화 확인 필요" if entry_fx_blocked else "",
+            "환율 데이터 없음" if entry_fx_missing else "",
+            "공시/부정 뉴스 리스크" if has_disclosure or direct_risk_news_count else "",
+            "외부 데이터 품질 확인 필요" if entry_data_blocked else "",
+            "보유 손실 구간이라 추가매수보다 손실 관리 우선" if is_holding and pnl < 0 else "",
+        ]
+        if reason
+    ]
     facts["entryPullbackZone"] = pullback_zone
+    facts["entryMa5TimingOk"] = ma5_supports_entry
+    facts["entryMomentumTrendReady"] = ma20_momentum_ready and ma60_momentum_ready
     facts["entrySupportCount"] = entry_support_count
     facts["entryAllocationRoom"] = allocation_room
-    facts["entryExternalRiskBlocked"] = bool(has_disclosure or direct_risk_news_count)
-    if (
+    facts["entryExternalRiskBlocked"] = entry_external_risk_blocked
+    facts["entryRequiredDataMissing"] = entry_required_data_missing
+    facts["entryBlockReasons"] = entry_block_reasons
+    pullback_entry_ready = (
         pullback_zone
+        and ma5_supports_entry
         and ma60_supports_entry
         and allocation_room
-        and entry_support_count >= 2
-        and not has_disclosure
-        and not direct_risk_news_count
-        and (source == "watchlist" or pnl > -8)
+        and entry_support_count >= 3
+        and not entry_external_risk_blocked
+        and not entry_required_data_missing
+        and (source == "watchlist" or pnl >= 0)
+    )
+    momentum_entry_ready = (
+        source == "watchlist"
+        and ma5_supports_entry
+        and ma20_momentum_ready
+        and ma60_momentum_ready
+        and volume_is_usable
+        and allocation_room
+        and entry_support_count >= 3
+        and not entry_external_risk_blocked
+        and not entry_required_data_missing
+    )
+    if (
+        pullback_entry_ready
     ):
         score = (
-            48
+            52
             + min(14, entry_support_count * 4)
             + (8 if smart_money_supports else 0)
             + (6 if execution_supports or orderbook_supports else 0)
@@ -2440,6 +2587,7 @@ def evaluate_position_relation_rules(
             score,
             data_quality,
             [
+                moving_average_distance_text("5일선", ma5_distance),
                 moving_average_distance_text("20일선", ma20_distance),
                 moving_average_distance_text("60일선", ma60_distance),
                 "거래량 배율 " + ("%.1f" % volume_ratio) + "x" if volume_ratio else "거래량 배율 미확인",
@@ -2452,6 +2600,60 @@ def evaluate_position_relation_rules(
             missing_labels,
             definitions=relation_definitions,
         ))
+    if momentum_entry_ready:
+        score = (
+            58
+            + min(16, entry_support_count * 4)
+            + (8 if ma20_distance >= 0 else 0)
+            + (8 if ma60_distance >= 0 else 0)
+            + (6 if direct_support_news_count else 0)
+        )
+        matches.append(_match(
+            "entry.momentum.confirmed.v1",
+            score,
+            data_quality,
+            [
+                moving_average_distance_text("5일선", ma5_distance),
+                moving_average_distance_text("20일선", ma20_distance),
+                moving_average_distance_text("60일선", ma60_distance),
+                "거래량 배율 " + ("%.1f" % volume_ratio) + "x",
+                "확인 신호 " + str(entry_support_count) + "/6",
+                "금리·환율 진입 차단 없음",
+            ],
+            missing_labels,
+            definitions=relation_definitions,
+        ))
+    wait_for_entry_confirmation = (
+        source == "watchlist"
+        and not pullback_entry_ready
+        and not momentum_entry_ready
+        and (
+            ma20_distance >= -2
+            or direct_support_news_count > 0
+            or has_news
+            or entry_macro_blocked
+            or entry_fx_blocked
+            or entry_required_data_missing
+            or volume_ratio < entry_volume_min
+        )
+    )
+    if wait_for_entry_confirmation:
+        score = 50 + min(12, len(entry_block_reasons) * 3) + (8 if direct_support_news_count else 0) + (6 if ma20_distance >= 0 else 0)
+        matches.append(_match(
+            "entry.wait_for_confirmation.v1",
+            score,
+            data_quality,
+            [
+                moving_average_distance_text("5일선", ma5_distance) if facts.get("ma5") else "5일선 미확인",
+                moving_average_distance_text("20일선", ma20_distance),
+                moving_average_distance_text("60일선", ma60_distance),
+                "거래량 배율 " + ("%.1f" % volume_ratio) + "x" if volume_ratio else "거래량 배율 미확인",
+                "대기 사유 " + " · ".join(entry_block_reasons[:4]) if entry_block_reasons else "확인 조건 부족",
+                "매수보다 5일선·60일선·거래량·금리·환율 재확인 우선",
+            ],
+            missing_labels,
+            definitions=relation_definitions,
+        ))
 
     add_buy_risk = (
         is_holding
@@ -2460,6 +2662,8 @@ def evaluate_position_relation_rules(
             or ma60_distance < entry_ma60_support
             or has_disclosure
             or has_news and pnl < 0 and ma20_distance < 0
+            or entry_macro_blocked
+            or entry_fx_blocked
         )
     )
     if add_buy_risk:
@@ -2486,6 +2690,8 @@ def evaluate_position_relation_rules(
                 moving_average_distance_text("60일선", ma60_distance),
                 "신규 공시 있음" if has_disclosure else "",
                 "관련 뉴스 있음" if has_news else "",
+                "금리 부담 있음" if entry_macro_blocked else "",
+                "환율 부담 있음" if entry_fx_blocked else "",
                 "추가매수보다 회복 조건 확인 우선",
             ],
             missing_labels,
@@ -2815,21 +3021,6 @@ def evaluate_position_relation_rules(
             missing_labels,
             definitions=relation_definitions,
         ))
-    macro_sensitive = any(token in str(facts.get("sector") or "") for token in ["반도체", "AI", "플랫폼", "디지털자산"]) or currency == "USD" or facts.get("isBtcSensitive")
-    rate_sensitive = macro_sensitive or any(token in str(facts.get("sector") or "") for token in ["성장", "소프트웨어", "테크", "바이오"])
-    high_rate_active = bool(has_rate_signals and macro_dgs10 and macro_dgs10 >= rate_high_threshold)
-    low_rate_active = bool(has_rate_signals and macro_dgs10 and macro_dgs10 <= rate_low_threshold)
-    inverted_curve_active = bool(has_rate_signals and macro_spread < curve_inversion_threshold)
-    rate_delta_magnitude = max(
-        abs(macro_dgs10_delta_bp),
-        abs(macro_dgs2_delta_bp),
-        abs(macro_dff_delta_bp),
-        abs(macro_spread_delta_bp),
-    )
-    rate_delta_active = bool(
-        has_rate_delta_signal
-        and (not rate_delta_threshold or rate_delta_magnitude >= rate_delta_threshold)
-    )
     if rate_sensitive and rate_delta_active:
         score = (
             49
@@ -2857,22 +3048,6 @@ def evaluate_position_relation_rules(
             missing_labels,
             definitions=relation_definitions,
         ))
-    fx_extreme_regime = bool(
-        currency == "USD"
-        and usd_krw_rate
-        and (usd_krw_rate >= usd_krw_high or usd_krw_rate <= usd_krw_low)
-    )
-    fx_delta_active = bool(
-        has_fx_delta_signal
-        and (
-            (not usd_krw_delta_krw_threshold or abs(usd_krw_delta_krw) >= usd_krw_delta_krw_threshold)
-            or (not usd_krw_delta_pct_threshold or abs(usd_krw_delta_pct) >= usd_krw_delta_pct_threshold)
-            or (not usd_krw_7d_delta_krw_threshold or abs(usd_krw_7d_delta_krw) >= usd_krw_7d_delta_krw_threshold)
-            or (not usd_krw_7d_delta_pct_threshold or abs(usd_krw_7d_delta_pct) >= usd_krw_7d_delta_pct_threshold)
-        )
-    )
-    fx_extreme_active = bool(fx_delta_active and fx_extreme_regime)
-    fx_exposure_active = bool(fx_delta_active and has_fx_rate_signal and currency != "KRW" and fx_exposure_ratio >= fx_exposure_high)
     if fx_extreme_active or fx_exposure_active:
         score = (
             48

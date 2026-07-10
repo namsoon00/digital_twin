@@ -2368,6 +2368,7 @@ class PythonServiceTests(unittest.TestCase):
             market="US",
             currency="USD",
             current_price=100,
+            ma5=99.4,
             ma20=104,
             ma60=99,
             ma20_distance=-3.8,
@@ -2381,7 +2382,22 @@ class PythonServiceTests(unittest.TestCase):
             sector="AI/플랫폼",
         )
 
-        context = evaluate_position_relation_rules(watch, portfolio_summary([]))
+        context = evaluate_position_relation_rules(
+            watch,
+            portfolio_summary([]),
+            external_signals={
+                "macro": {
+                    "series": {
+                        "DGS10": {"provider": "FRED", "value": 4.0},
+                        "DGS2": {"provider": "FRED", "value": 3.8},
+                    },
+                    "yieldSpread10y2y": 0.2,
+                },
+                "fxRates": {
+                    "USDKRW": {"provider": "RuntimeSettings", "base": "USD", "quote": "KRW", "rate": 1390}
+                },
+            },
+        )
 
         active_ids = [item.get("rule_id") or item.get("ruleId") for item in context["activeRules"]]
         self.assertIn("entry.pullback.supported.v1", active_ids)
@@ -3455,6 +3471,7 @@ class PythonServiceTests(unittest.TestCase):
             "market": "US",
             "currency": "USD",
             "currentPrice": 100,
+            "ma5": 99.4,
             "ma20": 104,
             "ma60": 99,
             "ma20Distance": -3.8,
@@ -3480,6 +3497,18 @@ class PythonServiceTests(unittest.TestCase):
             portfolio,
             [],
             [],
+            external_signals={
+                "macro": {
+                    "series": {
+                        "DGS10": {"provider": "FRED", "value": 4.0},
+                        "DGS2": {"provider": "FRED", "value": 3.8},
+                    },
+                    "yieldSpread10y2y": 0.2,
+                },
+                "fxRates": {
+                    "USDKRW": {"provider": "RuntimeSettings", "base": "USD", "quote": "KRW", "rate": 1390}
+                },
+            },
             watchlist=[watch],
         )
 

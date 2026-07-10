@@ -687,10 +687,12 @@ def support_risk_scores(evidence: List[ResearchEvidence], relation_context: Dict
         score = number(item.get("strengthScore") or item.get("strength_score"))
         relation_type = str(item.get("relationType") or item.get("relation_type") or "").upper()
         label = str(item.get("label") or "")
-        if any(token in relation_type + " " + label for token in ["ENTRY", "SUPPORT", "CONFIRM", "기회", "매수"]):
-            support += min(18.0, score * 0.22)
-        if any(token in relation_type + " " + label for token in ["LOSS", "RISK", "DISCLOSURE", "CONCENTRATION", "리스크", "손실", "매도", "하락"]):
+        combined = relation_type + " " + label
+        if any(token in combined for token in ["ENTRY_WAIT", "ENTRY_RISK", "LOSS", "RISK", "DISCLOSURE", "CONCENTRATION", "리스크", "손실", "매도", "하락", "대기", "보류", "차단"]):
             risk += min(22.0, score * 0.28)
+            continue
+        if any(token in combined for token in ["ENTRY_OPPORTUNITY", "SUPPORT", "CONFIRM", "기회", "소액 진입", "우호"]):
+            support += min(18.0, score * 0.22)
     return support, risk
 
 
@@ -701,13 +703,13 @@ def choose_action(position: Position, relation_context: Dict[str, object], suppo
     relation_score = number(decision.get("score") or relation_context.get("signalStrength"))
     is_watchlist = str(position.source or "") == "watchlist"
     if is_watchlist:
-        if risk_score >= support_score + 10 or action_group in {"entryRisk", "lossControl"}:
+        if risk_score >= support_score + 8 or action_group in {"entryRisk", "entryWait", "lossControl", "dataQuality", "rateRegime", "fxRegime", "macroRegime"}:
             return "AVOID"
-        if action_group == "entry" and relation_score >= 70:
+        if action_group == "entry" and relation_score >= 70 and support_score >= risk_score + 8:
             return "BUY"
-        if action_group == "entry" and relation_score >= 55:
+        if action_group == "entry" and relation_score >= 55 and support_score >= risk_score + 16:
             return "BUY"
-        return "AVOID" if relation_score < 45 else "BUY"
+        return "AVOID"
     if action_group == "lossControl" or action_level == "urgent" or relation_score >= 85:
         return "SELL" if relation_score >= 78 or risk_score >= support_score + 18 else "TRIM"
     if action_group in {"profitTake", "rebalance"}:

@@ -515,6 +515,7 @@ def user_facing_investment_text(value: object, max_len: int = 110) -> str:
         ("관계 신호 관계", "조건 변화"),
         ("관계 변화", "조건 변화"),
         ("온톨로지 인사이트", "투자 인사이트"),
+        ("추가매수 보류", "추가매수는 보류"),
     ]
     for before, after in replacements:
         text = text.replace(before, after)
@@ -916,7 +917,10 @@ def opinion_lines_for_type(message_type: str, context: Dict[str, object]) -> Lis
         elif risk_line:
             result.append("주의: " + user_facing_investment_text(risk_line, 110))
         if news_text:
-            result.append("뉴스: " + news_text)
+            if news_text.startswith("공시:"):
+                result.append("공시: " + news_text.split(":", 1)[1].strip())
+            else:
+                result.append("뉴스: " + news_text)
         result.extend(disclosure_lines[:2])
         opinion_text = active_label or action_line or stance
         if primary_action and primary_action not in opinion_text:

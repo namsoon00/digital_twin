@@ -6530,6 +6530,34 @@ h3 {
   grid-template-columns: minmax(92px, 0.7fr) minmax(180px, 1.2fr) minmax(220px, 1.4fr);
 }
 
+.rulebox-version-list,
+.rulebox-candidate-list {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.rulebox-version-row {
+  grid-template-columns: minmax(90px, 0.7fr) minmax(180px, 1.4fr) minmax(220px, 1.4fr);
+}
+
+.rulebox-candidate-row {
+  grid-template-columns: minmax(92px, 0.6fr) minmax(180px, 1.1fr) minmax(260px, 1.8fr) minmax(110px, 0.6fr);
+}
+
+.rulebox-candidate-row small {
+  display: inline-block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.rulebox-candidate-row .text-button {
+  justify-self: end;
+  white-space: nowrap;
+}
+
 .model-section {
   display: grid;
   gap: 12px;

@@ -3,6 +3,26 @@ from typing import Dict, List
 from .ontology_relation_contracts import OntologyRuleMatch
 
 
+def _float_value(value: object) -> float:
+    try:
+        return float(str(value).replace(",", "").strip())
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _signed_pct(value: object) -> str:
+    amount = _float_value(value)
+    return ("+" if amount > 0 else "") + ("%.1f" % amount) + "%"
+
+
+def _plain_number(value: object) -> str:
+    amount = _float_value(value)
+    if abs(amount) >= 1000:
+        return format(int(round(amount)), ",")
+    text = ("%.1f" % amount).rstrip("0").rstrip(".")
+    return text or "0"
+
+
 def _append_unique(rows: List[str], value: object) -> None:
     text = str(value or "").strip()
     if text and text not in rows:
@@ -15,6 +35,262 @@ def _active_rule_labels(matches: List[OntologyRuleMatch]) -> List[str]:
         for item in matches or []
         if item.matched and not item.reference_only and str(item.label or "").strip()
     ]
+
+
+def _append_driver(
+    rows: List[Dict[str, object]],
+    seen: set,
+    category: str,
+    direction: str,
+    label: str,
+    summary: object,
+    importance: float,
+    data_keys: List[str],
+) -> None:
+    text = str(summary or "").strip()
+    if not text:
+        return
+    key = (category, direction, label, text)
+    if key in seen:
+        return
+    seen.add(key)
+    rows.append({
+        "category": category,
+        "direction": direction,
+        "label": label,
+        "summary": text,
+        "importance": round(max(0.0, min(100.0, _float_value(importance))), 1),
+        "dataKeys": [str(item) for item in data_keys or [] if str(item or "").strip()],
+        "source": "ABox facts + relation rules",
+    })
+
+
+def _first_text(values: List[object]) -> str:
+    for value in values or []:
+        text = " ".join(str(value or "").split())
+        if text:
+            return text[:180]
+    return ""
+
+
+def decision_drivers_from_relation_context(
+    facts: Dict[str, object],
+    decision: Dict[str, object],
+    matches: List[OntologyRuleMatch],
+) -> List[Dict[str, object]]:
+    facts = facts or {}
+    decision = decision or {}
+    action_group = str(decision.get("actionGroup") or "")
+    rows: List[Dict[str, object]] = []
+    seen = set()
+
+    pnl = _float_value(facts.get("profitLossRate"))
+    if facts.get("isHolding") and pnl < 0:
+        _append_driver(
+            rows,
+            seen,
+            "position",
+            "risk",
+            "손익 위치",
+            "보유 수익률이 " + _signed_pct(pnl) + "라 손실 관리 기준을 먼저 봐야 합니다.",
+            62 + min(30, abs(pnl) * 1.8),
+            ["profitLossRate", "averagePrice", "currentPrice"],
+        )
+    elif facts.get("isHolding") and pnl > 0:
+        _append_driver(
+            rows,
+            seen,
+            "position",
+            "support" if action_group not in {"profitTake", "rebalance"} else "counter",
+            "손익 위치",
+            "보유 수익률이 " + _signed_pct(pnl) + "라 손실 구간은 아니며 수익 보호 기준을 함께 봅니다.",
+            55 + min(24, pnl * 1.2),
+            ["profitLossRate", "averagePrice", "currentPrice"],
+        )
+
+    ma5_distance = _float_value(facts.get("ma5Distance"))
+    ma20_distance = _float_value(facts.get("ma20Distance"))
+    ma60_distance = _float_value(facts.get("ma60Distance"))
+    if facts.get("ma5") and (abs(ma5_distance) >= 0.8 or action_group in {"entry", "entryWait"}):
+        _append_driver(
+            rows,
+            seen,
+            "trend",
+            "support" if ma5_distance >= 0 else "risk",
+            "5일 가격 위치",
+            "현재가가 5일 평균보다 " + ("높아" if ma5_distance >= 0 else "낮아") + " 아주 짧은 가격 흐름은 " + ("살아 있습니다." if ma5_distance >= 0 else "약합니다."),
+            48 + min(22, abs(ma5_distance) * 3.0),
+            ["currentPrice", "ma5", "ma5Distance"],
+        )
+    if facts.get("ma20") or facts.get("ma60"):
+        if ma20_distance < 0 and ma60_distance < 0:
+            summary = (
+                "현재가가 20일 평균보다 " + _plain_number(abs(ma20_distance)) + "% 낮고 "
+                "60일 평균보다 " + _plain_number(abs(ma60_distance)) + "% 낮아 단기와 중기 가격 흐름이 모두 약합니다."
+            )
+            direction = "risk"
+        elif ma20_distance < 0 and ma60_distance >= 0:
+            summary = (
+                "현재가가 20일 평균보다 " + _plain_number(abs(ma20_distance)) + "% 낮지만 "
+                "60일 평균보다 " + _plain_number(abs(ma60_distance)) + "% 높아 중기 방어선은 아직 남아 있습니다."
+            )
+            direction = "counter"
+        elif ma20_distance >= 0 and ma60_distance < 0:
+            summary = (
+                "현재가가 20일 평균보다 " + _plain_number(abs(ma20_distance)) + "% 높지만 "
+                "60일 평균보다 " + _plain_number(abs(ma60_distance)) + "% 낮아 중기 회복 확인이 더 필요합니다."
+            )
+            direction = "counter"
+        else:
+            summary = (
+                "현재가가 20일 평균과 60일 평균 위에 있어 가격 흐름은 우호적으로 봅니다."
+            )
+            direction = "support"
+        _append_driver(
+            rows,
+            seen,
+            "trend",
+            direction,
+            "20일·60일 가격 위치",
+            summary,
+            58 + min(32, abs(ma20_distance) * 1.5 + abs(ma60_distance)),
+            ["currentPrice", "ma20", "ma20Distance", "ma60", "ma60Distance"],
+        )
+
+    volume_ratio = _float_value(facts.get("volumeRatio"))
+    trade_strength = _float_value(facts.get("tradeStrength"))
+    bid_ask_imbalance = _float_value(facts.get("bidAskImbalance"))
+    if volume_ratio:
+        if volume_ratio < 0.7:
+            summary = "거래량이 평소의 " + _plain_number(volume_ratio) + "배라 강한 매수세나 투매를 단정하기 어렵습니다."
+            direction = "counter"
+        elif volume_ratio >= 1.5:
+            summary = "거래량이 평소의 " + _plain_number(volume_ratio) + "배로 늘어 가격 신호의 확인 강도가 커졌습니다."
+            direction = "support" if ma20_distance >= 0 else "risk"
+        else:
+            summary = "거래량이 평소와 비슷해 가격 흐름을 보조 근거로만 봅니다."
+            direction = "neutral"
+        _append_driver(rows, seen, "liquidity", direction, "거래량 확인", summary, 52 + min(28, abs(volume_ratio - 1) * 12), ["volumeRatio", "volume"])
+    if trade_strength:
+        _append_driver(
+            rows,
+            seen,
+            "liquidity",
+            "support" if trade_strength >= 100 else "risk",
+            "체결강도",
+            "체결강도 " + _plain_number(trade_strength) + "로 당일 체결 흐름은 " + ("매수 쪽이 우세합니다." if trade_strength >= 100 else "매수 우위가 약합니다."),
+            55 + min(25, abs(trade_strength - 100) * 0.6),
+            ["tradeStrength"],
+        )
+    if bid_ask_imbalance:
+        _append_driver(
+            rows,
+            seen,
+            "liquidity",
+            "support" if bid_ask_imbalance > 0 else "risk",
+            "호가 잔량",
+            "호가 잔량은 " + ("매수" if bid_ask_imbalance > 0 else "매도") + " 쪽이 " + _plain_number(abs(bid_ask_imbalance)) + "% 많습니다.",
+            50 + min(25, abs(bid_ask_imbalance) * 0.4),
+            ["bidAskImbalance", "orderbookBidVolume", "orderbookAskVolume"],
+        )
+
+    smart_money = _float_value(facts.get("smartMoneyNetVolume"))
+    if smart_money:
+        _append_driver(
+            rows,
+            seen,
+            "investorFlow",
+            "support" if smart_money > 0 else "risk",
+            "외국인·기관 흐름",
+            "외국인과 기관 합산 흐름은 " + ("순매수 " if smart_money > 0 else "순매도 ") + _plain_number(abs(smart_money)) + "주입니다.",
+            58 + min(24, abs(_float_value(facts.get("investorFlowScore"))) * 0.25),
+            ["foreignNetVolume", "institutionNetVolume", "smartMoneyNetVolume", "investorFlowScore"],
+        )
+
+    btc24 = _float_value(facts.get("btcChange24h"))
+    btc7 = _float_value(facts.get("btcChange7d"))
+    if facts.get("isBtcSensitive") and (btc24 or btc7):
+        _append_driver(
+            rows,
+            seen,
+            "crossAsset",
+            "risk" if abs(btc24) >= 3 or abs(btc7) >= 4 else "neutral",
+            "비트코인 민감도",
+            "비트코인 민감 종목입니다. BTC 24시간 " + _signed_pct(btc24) + ", 7일 " + _signed_pct(btc7) + "와 종목 가격 반응을 같이 확인해야 합니다.",
+            56 + min(28, abs(btc24) * 2.0 + abs(btc7)),
+            ["isBtcSensitive", "btcChange24h", "btcChange7d", "btcPrice"],
+        )
+
+    if _float_value(facts.get("macroDgs10")):
+        _append_driver(
+            rows,
+            seen,
+            "macro",
+            "risk" if _float_value(facts.get("macroDgs10")) >= 4 else "neutral",
+            "금리 환경",
+            "미국 10년 금리 " + _plain_number(facts.get("macroDgs10")) + "% 환경이라 성장주·테마주에는 부담 여부를 봅니다.",
+            52 + min(25, max(0.0, _float_value(facts.get("macroDgs10")) - 3.5) * 10),
+            ["macroDgs10", "macroDgs2", "macroYieldSpread10y2y", "rateRegime"],
+        )
+    if _float_value(facts.get("usdKrwRate") or facts.get("fxRateToKrw")) and _float_value(facts.get("fxExposureRatio")):
+        _append_driver(
+            rows,
+            seen,
+            "macro",
+            "neutral",
+            "환율 영향",
+            "외화 노출이 있어 원화 평가금액은 환율과 현지 주가를 나눠서 봐야 합니다.",
+            50 + min(20, _float_value(facts.get("fxExposureRatio")) * 0.25),
+            ["usdKrwRate", "fxRateToKrw", "fxExposureRatio", "fxRegime"],
+        )
+
+    risk_title = _first_text(list(facts.get("directRiskNewsTitles") or []))
+    support_title = _first_text(list(facts.get("directSupportNewsTitles") or []))
+    top_title = _first_text(list(facts.get("topNewsTitles") or []))
+    if _float_value(facts.get("directRiskNewsCount")):
+        _append_driver(rows, seen, "research", "risk", "위험 뉴스", "직접 위험 뉴스가 확인됐습니다: " + (risk_title or top_title), 72, ["directRiskNewsCount", "directRiskNewsTitles", "researchEvidence"])
+    if _float_value(facts.get("directSupportNewsCount")):
+        _append_driver(rows, seen, "research", "support", "우호 뉴스", "직접 우호 뉴스가 확인됐습니다: " + (support_title or top_title), 68, ["directSupportNewsCount", "directSupportNewsTitles", "researchEvidence"])
+    if facts.get("dartDisclosure"):
+        disclosure = facts.get("dartDisclosure") if isinstance(facts.get("dartDisclosure"), dict) else {}
+        _append_driver(
+            rows,
+            seen,
+            "research",
+            "risk",
+            "공시 이벤트",
+            "새 공시가 있어 원문 조건과 가격 반응을 함께 확인해야 합니다: " + str(disclosure.get("reportName") or "공시"),
+            64,
+            ["dartDisclosure"],
+        )
+
+    missing_labels = [str(item.get("label") or item.get("key") or "") for item in facts.get("missingData") or [] if isinstance(item, dict)]
+    if missing_labels:
+        _append_driver(
+            rows,
+            seen,
+            "dataQuality",
+            "counter",
+            "부족 데이터",
+            "부족 데이터가 있어 판단 강도를 낮춥니다: " + ", ".join(missing_labels[:4]),
+            66,
+            ["missingData", "dataAvailability"],
+        )
+
+    active_labels = _active_rule_labels(matches)
+    if active_labels:
+        _append_driver(
+            rows,
+            seen,
+            "relationRule",
+            "neutral",
+            "성립 규칙",
+            "관계 규칙은 " + " · ".join(active_labels[:3]) + "를 핵심 근거로 봅니다.",
+            60,
+            ["activeRules", "matchedRules"],
+        )
+
+    return sorted(rows, key=lambda item: float(item.get("importance") or 0), reverse=True)[:10]
 
 
 def execution_plan_from_relation_context(
@@ -208,6 +484,7 @@ def execution_plan_from_relation_context(
         effect = str(item.get("effect") or "").strip()
         if name:
             missing_impact.append(name + (": " + effect if effect else "는 판단 강도를 낮춥니다."))
+    decision_drivers = decision_drivers_from_relation_context(facts, decision, matches)
 
     return {
         "engineVersion": "ontology-execution-plan-v1",
@@ -232,6 +509,7 @@ def execution_plan_from_relation_context(
         "weakenConditions": weaken_conditions[:5],
         "nextChecks": next_checks[:5],
         "missingDataImpact": missing_impact[:5],
+        "decisionDrivers": decision_drivers,
         "sourceFacts": {
             "currentPrice": facts.get("currentPrice"),
             "averagePrice": facts.get("averagePrice"),

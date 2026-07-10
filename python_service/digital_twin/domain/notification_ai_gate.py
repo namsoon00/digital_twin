@@ -82,6 +82,47 @@ from .notification_ai_gate_text import (
 )
 
 
+def _execution_plan_from_context(context: Dict[str, object]) -> Dict[str, object]:
+    relation_context = relation_context_value(context or {})
+    plan = relation_context.get("executionPlan") if isinstance(relation_context.get("executionPlan"), dict) else {}
+    if plan:
+        return plan
+    opinion = active_investment_opinion_value(context or {})
+    if isinstance(opinion, dict) and isinstance(opinion.get("executionPlan"), dict):
+        return opinion.get("executionPlan") or {}
+    return {}
+
+
+def _decision_drivers_from_context(context: Dict[str, object]) -> List[Dict[str, object]]:
+    plan = _execution_plan_from_context(context or {})
+    rows = plan.get("decisionDrivers") if isinstance(plan.get("decisionDrivers"), list) else []
+    return [item for item in rows if isinstance(item, dict)]
+
+
+def _driver_summary(driver: Dict[str, object]) -> str:
+    return user_friendly_ai_text(
+        driver.get("summary") or driver.get("text") or driver.get("label") or "",
+        220,
+    )
+
+
+def _driver_rows(context: Dict[str, object], directions: List[str] = None, limit: int = 5) -> List[str]:
+    accepted = {str(item) for item in directions or []}
+    rows: List[str] = []
+    for driver in sorted(
+        _decision_drivers_from_context(context),
+        key=lambda item: float(item.get("importance") or 0),
+        reverse=True,
+    ):
+        direction = str(driver.get("direction") or "")
+        if accepted and direction not in accepted:
+            continue
+        append_unique_text(rows, _driver_summary(driver), 220)
+        if len(rows) >= limit:
+            break
+    return rows[:limit]
+
+
 
 
 
@@ -92,6 +133,8 @@ from .notification_ai_gate_text import (
 
 def fallback_evidence_rows(context: Dict[str, object], limit: int = 5) -> List[str]:
     rows: List[str] = []
+    for item in _driver_rows(context, ["risk", "support", "neutral"], limit):
+        append_unique_text(rows, item, 160)
     opinion = active_investment_opinion_value(context)
     if isinstance(opinion, dict):
         append_unique_text(rows, opinion.get("thesis"), 140)
@@ -115,6 +158,8 @@ def fallback_evidence_rows(context: Dict[str, object], limit: int = 5) -> List[s
 
 def fallback_counter_rows(context: Dict[str, object], limit: int = 4) -> List[str]:
     rows: List[str] = []
+    for item in _driver_rows(context, ["counter"], limit):
+        append_unique_text(rows, item, 160)
     opinion = active_investment_opinion_value(context)
     if isinstance(opinion, dict):
         for item in opinion.get("counterEvidence") or []:
@@ -237,10 +282,8 @@ def disagreement_reason_text(precomputed_action: str, action: str, payload: Dict
 def local_validated_ai_response(context: Dict[str, object], source: str = "local") -> NotificationAIValidatedResponse:
     context = dict(context or {})
     relation_context = relation_context_value(context)
-    execution_plan = relation_context.get("executionPlan") if isinstance(relation_context.get("executionPlan"), dict) else {}
+    execution_plan = _execution_plan_from_context(context)
     opinion = active_investment_opinion_value(context)
-    if not execution_plan and isinstance(opinion, dict):
-        execution_plan = opinion.get("executionPlan") if isinstance(opinion.get("executionPlan"), dict) else {}
     lines = build_notification_ai_opinion(context).get("lines") or []
     raw_lines = _raw_lines(context)
     action = str(opinion.get("action") or "").strip().upper() if isinstance(opinion, dict) else ""
@@ -254,6 +297,8 @@ def local_validated_ai_response(context: Dict[str, object], source: str = "local
     if not confidence:
         confidence = 60.0
     evidence = []
+    for item in _driver_rows(context, ["risk", "support", "neutral"], 5):
+        evidence.append(item)
     for item in execution_plan.get("riskSignals") or []:
         evidence.append(_text(item))
     for item in execution_plan.get("supportSignals") or []:
@@ -263,6 +308,8 @@ def local_validated_ai_response(context: Dict[str, object], source: str = "local
         if value:
             evidence.append(value)
     counter = []
+    for item in _driver_rows(context, ["counter"], 4):
+        counter.append(item)
     for item in execution_plan.get("counterSignals") or []:
         counter.append(_text(item))
     if isinstance(opinion, dict):
@@ -320,6 +367,8 @@ def ai_decision_input_packet(
     active_opinion = active_investment_opinion_value(context)
     relation_execution_plan = relation_context.get("executionPlan") if isinstance(relation_context.get("executionPlan"), dict) else {}
     opinion_execution_plan = active_opinion.get("executionPlan") if isinstance(active_opinion.get("executionPlan"), dict) else {}
+    execution_plan = relation_execution_plan or opinion_execution_plan
+    decision_drivers = execution_plan.get("decisionDrivers") if isinstance(execution_plan.get("decisionDrivers"), list) else []
     return {
         "decisionMode": AI_DECISION_MODE,
         "finalDecisionOwner": "aiResponse",
@@ -338,7 +387,8 @@ def ai_decision_input_packet(
             "signalStrength": relation_context.get("signalStrength"),
             "signalStrengthLabel": relation_context.get("signalStrengthLabel"),
             "activeRules": relation_context.get("activeRules") or relation_context.get("matchedRules") or [],
-            "executionPlan": relation_execution_plan or opinion_execution_plan,
+            "executionPlan": execution_plan,
+            "decisionDrivers": decision_drivers,
             "missingData": relation_context.get("missingData") or facts.get("missingData") or [],
             "relationFacts": facts.get("relationFacts") or relation_context.get("facts") or {},
             "trendDynamics": facts.get("trendDynamics") or {},
@@ -348,7 +398,8 @@ def ai_decision_input_packet(
         "disclosure": facts.get("disclosure") or {},
         "sourceAlertEvents": facts.get("sourceAlertEvents") or [],
         "precomputedOpinionCandidate": active_opinion,
-        "precomputedExecutionPlanCandidate": relation_execution_plan or opinion_execution_plan,
+        "precomputedExecutionPlanCandidate": execution_plan,
+        "ontologyDecisionDrivers": decision_drivers,
         "messageDeliveryProfile": delivery_profile,
     }
 
@@ -380,6 +431,7 @@ def build_notification_ai_gate_prompt(context: Dict[str, object]) -> str:
         "activeInvestmentOpinion과 executionPlan은 사전 계산 후보일 뿐 최종 답변이 아니다. 근거가 부족하거나 반대 근거가 더 강하면 다른 action을 선택할 수 있다.",
         "summary와 opinion의 첫 문장은 관계 규칙 이름이나 점수 요약이 아니라 AI가 독립적으로 고른 최종 판단과 그 이유여야 한다.",
         "관계 규칙명, 점수, 사전 계산 후보는 판단 재료로만 쓰고, 사용자에게 보이는 문장에서는 가격·수급·뉴스·공시·반대 근거를 비교한 결론을 먼저 말한다.",
+        "relationshipDatabaseInference.decisionDrivers는 온톨로지 실행계획이 고른 핵심 판단 축이다. 이 항목을 먼저 읽고, 방향(risk/support/counter/neutral), 중요도, dataKeys를 근거·반대근거·다음 확인에 반영한다.",
         "evidence에는 가능한 한 숫자나 원문 제목을 넣는다. '가격 흐름이 약하다'처럼 뻔한 말만 쓰지 말고 현재가/평단가/수익률/5일선/20일선/60일선/거래량/BTC/금리/환율/뉴스 제목 중 제공된 값을 구체적으로 연결한다.",
         "MSTR, STRC 등 비트코인 민감 종목이면 BTC 24시간·7일 변동과 보유 종목 가격 반응을 비교한다. 뉴스·공시 제목에 매각, 처분, 실적, 자금조달, 소송, 규제 같은 사건이 있으면 그 사건을 evidence 또는 counterEvidence에 반드시 반영한다.",
         "BUY, ADD, HOLD, TRIM, SELL, AVOID 중 하나를 반드시 고르되 자동 주문 지시처럼 쓰지 않는다.",
@@ -921,6 +973,8 @@ def _news_event_summary(context: Dict[str, object]) -> str:
 
 def context_specific_insight_rows(context: Dict[str, object], response: NotificationAIValidatedResponse, limit: int = 4) -> List[str]:
     rows: List[str] = []
+    for item in _driver_rows(context, ["risk", "support", "counter", "neutral"], limit):
+        append_unique_text(rows, item, 230)
     append_unique_text(rows, _price_position_summary(context, response), 230)
     append_unique_text(rows, _relation_feature_summary(context), 210)
     append_unique_text(rows, _news_event_summary(context), 230)

@@ -255,7 +255,7 @@ def build_ai_inference_packet(graph: PortfolioOntology) -> Dict[str, object]:
             "relationThesis": "string",
             "companyOpinions": ["symbol", "action", "thesis", "relationInfluences", "executionPlan", "contradictions", "nextChecks"],
             "activeInvestmentOpinions": ["symbol", "action", "conviction", "evidence", "counterEvidence", "executionPlan", "invalidationCondition"],
-            "executionPlans": ["symbol", "primaryAction", "blockedActions", "riskSignals", "supportSignals", "counterSignals", "strengthenConditions", "weakenConditions", "nextChecks"],
+            "executionPlans": ["symbol", "primaryAction", "decisionDrivers", "blockedActions", "riskSignals", "supportSignals", "counterSignals", "strengthenConditions", "weakenConditions", "nextChecks"],
             "insightDispatch": ["subject", "insightType", "novelty", "confidence", "dispatchDecision"],
             "missingDataImpact": ["string"],
         },

@@ -242,6 +242,39 @@ def compact_string_rows(values: object, limit: int = 5) -> List[str]:
     return rows
 
 
+def compact_decision_drivers(values: object, limit: int = 8) -> List[Dict[str, object]]:
+    if not isinstance(values, list):
+        return []
+    rows: List[Dict[str, object]] = []
+    seen = set()
+    for value in values:
+        if not isinstance(value, dict):
+            continue
+        summary = " ".join(str(value.get("summary") or value.get("text") or value.get("label") or "").split())
+        if not summary:
+            continue
+        key = (
+            str(value.get("category") or ""),
+            str(value.get("direction") or ""),
+            summary,
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append({
+            "category": str(value.get("category") or "decision"),
+            "direction": str(value.get("direction") or "neutral"),
+            "label": str(value.get("label") or "")[:120],
+            "summary": summary[:240],
+            "importance": number(value.get("importance")),
+            "dataKeys": [str(item) for item in value.get("dataKeys") or [] if str(item or "").strip()][:12],
+            "source": str(value.get("source") or "ontology-execution-plan")[:120],
+        })
+        if len(rows) >= limit:
+            break
+    return rows
+
+
 def add_execution_plan_concepts(
     graph: PortfolioOntology,
     stock_id: str,
@@ -275,6 +308,35 @@ def add_execution_plan_concepts(
             "label": primary_label,
         })
         add_relation(graph, plan_id, action_id, "HAS_PRIMARY_ACTION", weight=0.95, properties={"source": "ontology-execution-plan"})
+    for index, item in enumerate(compact_decision_drivers(execution_plan.get("decisionDrivers"), 8)):
+        label = item.get("label") or item.get("summary") or "판단 근거"
+        driver_id = add_entity(graph, "decision-driver", symbol + ":" + source + ":" + str(index) + ":" + str(label), str(label), {
+            "tboxClass": "DecisionDriver",
+            "tboxClasses": ["DecisionDriver", "ReasoningCard"],
+            "symbol": symbol,
+            "category": item.get("category"),
+            "direction": item.get("direction"),
+            "label": label,
+            "summary": item.get("summary"),
+            "importance": item.get("importance"),
+            "dataKeys": item.get("dataKeys"),
+            "source": item.get("source"),
+        })
+        weight = max(0.35, min(0.98, (number(item.get("importance")) or 60.0) / 100.0))
+        add_relation(
+            graph,
+            plan_id,
+            driver_id,
+            "HAS_DECISION_DRIVER",
+            weight=weight,
+            properties={
+                "source": "ontology-execution-plan",
+                "category": item.get("category"),
+                "direction": item.get("direction"),
+                "importance": item.get("importance"),
+                "aiInfluenceLabel": item.get("summary"),
+            },
+        )
     for index, item in enumerate(compact_string_rows(execution_plan.get("blockedActions"), 5)):
         blocked_id = add_entity(graph, "blocked-action", symbol + ":" + str(index) + ":" + item, item, {
             "tboxClass": "BlockedAction",

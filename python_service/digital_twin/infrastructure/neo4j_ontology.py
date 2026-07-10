@@ -61,6 +61,9 @@ class Neo4jOntologyGraphRepository:
             "CREATE INDEX ontology_entity_symbol IF NOT EXISTS FOR (n:OntologyEntity) ON (n.symbol)",
             "CREATE INDEX ontology_entity_tbox_class IF NOT EXISTS FOR (n:OntologyEntity) ON (n.tboxClass)",
             "CREATE INDEX ontology_entity_bounded_context IF NOT EXISTS FOR (n:OntologyEntity) ON (n.boundedContext)",
+            "CREATE INDEX ontology_entity_condition_kind IF NOT EXISTS FOR (n:OntologyEntity) ON (n.conditionKind)",
+            "CREATE INDEX ontology_entity_derivation_relation_type IF NOT EXISTS FOR (n:OntologyEntity) ON (n.derivationRelationType)",
+            "CREATE INDEX ontology_entity_level_type IF NOT EXISTS FOR (n:OntologyEntity) ON (n.levelType)",
             "CREATE INDEX ontology_evidence_subject IF NOT EXISTS FOR (n:OntologyEvidence) ON (n.subject)",
             "CREATE INDEX ontology_opinion_symbol IF NOT EXISTS FOR (n:OntologyOpinion) ON (n.symbol)",
             "CREATE INDEX ontology_reasoning_card_symbol IF NOT EXISTS FOR (n:OntologyReasoningCard) ON (n.symbol)",
@@ -71,6 +74,8 @@ class Neo4jOntologyGraphRepository:
         rows: List[Dict[str, object]] = []
         for item in graph.entities:
             properties = item.properties or {}
+            condition = properties.get("condition") if isinstance(properties.get("condition"), dict) else {}
+            derivation = properties.get("derivation") if isinstance(properties.get("derivation"), dict) else {}
             rows.append({
                 "id": item.entity_id,
                 "label": item.label,
@@ -80,6 +85,36 @@ class Neo4jOntologyGraphRepository:
                 "ruleId": str(properties.get("ruleId") or ""),
                 "tboxClass": str(properties.get("tboxClass") or ""),
                 "boundedContext": str(properties.get("boundedContext") or ""),
+                "sourceValue": str(properties.get("source") or ""),
+                "profitLossRate": number_or_none(properties.get("profitLossRate")),
+                "levelType": str(properties.get("levelType") or ""),
+                "enabled": bool(properties.get("enabled")) if "enabled" in properties else False,
+                "conditionId": str(properties.get("conditionId") or condition.get("condition_id") or ""),
+                "conditionKind": str(condition.get("kind") or ""),
+                "conditionField": str(condition.get("field") or ""),
+                "conditionOperator": str(condition.get("operator") or ""),
+                "conditionValueString": str(condition.get("value") or ""),
+                "conditionValueNumber": number_or_none(condition.get("value")),
+                "conditionRelationType": str(condition.get("relation_type") or "").upper(),
+                "conditionDirection": str(condition.get("direction") or "out"),
+                "conditionTargetKind": str(condition.get("target_kind") or ""),
+                "conditionTargetLevelTypes": condition_target_level_types(condition),
+                "conditionMinWeight": float(condition.get("min_weight") or 0),
+                "derivationRelationType": str(derivation.get("relation_type") or "").upper(),
+                "derivationIndex": int(properties.get("derivationIndex") or 0),
+                "derivationTargetKind": str(derivation.get("target_kind") or ""),
+                "derivationTargetKey": str(derivation.get("target_key") or ""),
+                "derivationTargetLabel": str(derivation.get("target_label") or ""),
+                "derivationTboxClass": str(derivation.get("tbox_class") or ""),
+                "derivationTboxClasses": list_of_strings(derivation.get("tbox_classes")),
+                "derivationPolarity": str(derivation.get("polarity") or ""),
+                "derivationRiskImpact": float(derivation.get("risk_impact") or 0),
+                "derivationSupportImpact": float(derivation.get("support_impact") or 0),
+                "derivationWeight": float(derivation.get("weight") or 0),
+                "derivationBeliefLabel": str(derivation.get("belief_label") or ""),
+                "derivationAiInfluenceLabel": str(derivation.get("ai_influence_label") or ""),
+                "derivationActionGroup": str(derivation.get("action_group") or ""),
+                "derivationActionLevel": str(derivation.get("action_level") or ""),
                 "propertiesJson": json.dumps(properties, ensure_ascii=False, sort_keys=True),
             })
         return rows
@@ -171,6 +206,21 @@ class Neo4jOntologyGraphRepository:
                     "SET n.label = row.label, n.kind = row.kind, "
                     "n.ontologyBox = row.ontologyBox, n.symbol = row.symbol, n.ruleId = row.ruleId, "
                     "n.tboxClass = row.tboxClass, n.boundedContext = row.boundedContext, "
+                    "n.sourceValue = row.sourceValue, n.profitLossRate = row.profitLossRate, n.levelType = row.levelType, "
+                    "n.enabled = row.enabled, n.conditionId = row.conditionId, n.conditionKind = row.conditionKind, "
+                    "n.conditionField = row.conditionField, n.conditionOperator = row.conditionOperator, "
+                    "n.conditionValueString = row.conditionValueString, n.conditionValueNumber = row.conditionValueNumber, "
+                    "n.conditionRelationType = row.conditionRelationType, n.conditionDirection = row.conditionDirection, "
+                    "n.conditionTargetKind = row.conditionTargetKind, n.conditionTargetLevelTypes = row.conditionTargetLevelTypes, "
+                    "n.conditionMinWeight = row.conditionMinWeight, n.derivationRelationType = row.derivationRelationType, "
+                    "n.derivationIndex = row.derivationIndex, "
+                    "n.derivationTargetKind = row.derivationTargetKind, n.derivationTargetKey = row.derivationTargetKey, "
+                    "n.derivationTargetLabel = row.derivationTargetLabel, n.derivationTboxClass = row.derivationTboxClass, "
+                    "n.derivationTboxClasses = row.derivationTboxClasses, n.derivationPolarity = row.derivationPolarity, "
+                    "n.derivationRiskImpact = row.derivationRiskImpact, n.derivationSupportImpact = row.derivationSupportImpact, "
+                    "n.derivationWeight = row.derivationWeight, n.derivationBeliefLabel = row.derivationBeliefLabel, "
+                    "n.derivationAiInfluenceLabel = row.derivationAiInfluenceLabel, n.derivationActionGroup = row.derivationActionGroup, "
+                    "n.derivationActionLevel = row.derivationActionLevel, "
                     "n.propertiesJson = row.propertiesJson, n.updatedAt = $updatedAt"
                 ),
                 "parameters": {"rows": self.rows_for_entities(graph), "updatedAt": updated_at},
@@ -275,11 +325,13 @@ class Neo4jOntologyGraphRepository:
                 "entityCount": len(graph.entities),
                 "relationCount": len(graph.relations),
             }
+        native_reasoning = self.run_native_reasoning_via_http(endpoint, headers, graph)
         return {
             "saved": True,
             "status": "ok",
             "schemaPrepared": schema_prepared,
             "schemaReason": schema_reason,
+            "nativeReasoning": native_reasoning,
             "entityCount": len(graph.entities),
             "relationCount": len(graph.relations),
             "evidenceCount": len(graph.evidence),
@@ -317,6 +369,7 @@ class Neo4jOntologyGraphRepository:
                         schema_reason = str(error)[:180]
                 for statement in self.statements(graph):
                     session.run(statement["statement"], **statement["parameters"])
+                native_reasoning = self.run_native_reasoning_via_driver(session, graph)
             driver.close()
         except Exception as error:  # noqa: BLE001 - persistence must not break monitoring.
             return {
@@ -332,11 +385,52 @@ class Neo4jOntologyGraphRepository:
             "status": "ok",
             "schemaPrepared": schema_prepared,
             "schemaReason": schema_reason,
+            "nativeReasoning": native_reasoning,
             "entityCount": len(graph.entities),
             "relationCount": len(graph.relations),
             "evidenceCount": len(graph.evidence),
             "reasoningCardCount": len(getattr(graph, "reasoning_cards", []) or []),
         }
+
+    def native_reasoning_statements(self, graph: PortfolioOntology) -> List[Dict[str, object]]:
+        relation_types = sorted(set(
+            safe_relation_type((item.properties or {}).get("relationType") or ((item.properties or {}).get("derivation") or {}).get("relation_type") or "")
+            for item in graph.entities
+            if item.kind == "relation-template"
+        ))
+        relation_types = [item for item in relation_types if item]
+        return [native_reasoning_statement_for_relation_type(relation_type) for relation_type in relation_types]
+
+    def run_native_reasoning_via_http(self, endpoint: str, headers: Dict[str, str], graph: PortfolioOntology) -> Dict[str, object]:
+        statements = self.native_reasoning_statements(graph)
+        if not statements:
+            return {"status": "skipped", "statementCount": 0, "reason": "no RuleBox relation templates"}
+        try:
+            payload = self.post_http_statements(endpoint, headers, statements)
+        except Exception as error:  # noqa: BLE001 - native reasoning is best effort.
+            return {"status": "error", "statementCount": len(statements), "reason": str(error)[:180]}
+        errors = payload.get("errors") or []
+        if errors:
+            return {
+                "status": "neo4j-error",
+                "statementCount": len(statements),
+                "reason": json.dumps(errors[:2], ensure_ascii=False)[:300],
+            }
+        return {"status": "ok", "statementCount": len(statements)}
+
+    def run_native_reasoning_via_driver(self, session, graph: PortfolioOntology) -> Dict[str, object]:
+        statements = self.native_reasoning_statements(graph)
+        if not statements:
+            return {"status": "skipped", "statementCount": 0, "reason": "no RuleBox relation templates"}
+        failures: List[str] = []
+        for statement in statements:
+            try:
+                session.run(statement["statement"], **statement["parameters"])
+            except Exception as error:  # noqa: BLE001 - native reasoning is best effort.
+                failures.append(str(error)[:180])
+        if failures:
+            return {"status": "error", "statementCount": len(statements), "reason": "; ".join(failures[:2])}
+        return {"status": "ok", "statementCount": len(statements)}
 
 
 def safe_relation_type(value: str) -> str:
@@ -353,6 +447,109 @@ def group_relation_rows(rows: Iterable[Dict[str, object]]) -> Dict[str, List[Dic
     for row in rows:
         grouped.setdefault(str(row.get("type") or "RELATED_TO"), []).append(row)
     return grouped
+
+
+def native_reasoning_statement_for_relation_type(relation_type: str) -> Dict[str, object]:
+    safe_type = safe_relation_type(relation_type)
+    statement = (
+        "MATCH (rule:OntologyEntity {kind: 'rule', ontologyBox: 'RuleBox'}) "
+        "WHERE coalesce(rule.enabled, false) = true "
+        "MATCH (rule)-[:HAS_CONDITION]->(condition:OntologyEntity {kind: 'rule-condition', ontologyBox: 'RuleBox'}) "
+        "WITH rule, collect(condition) AS conditions "
+        "MATCH (rule)-[:DERIVES_RELATION]->(template:OntologyEntity {kind: 'relation-template', ontologyBox: 'RuleBox'}) "
+        "WHERE template.derivationRelationType = $relationType "
+        "MATCH (stock:OntologyEntity {kind: 'stock'}) "
+        "WHERE stock.ontologyBox <> 'TBox' AND all(condition IN conditions WHERE "
+        "CASE condition.conditionKind "
+        "WHEN 'subject_property' THEN "
+        "CASE condition.conditionOperator "
+        "WHEN '==' THEN toLower(toString(CASE condition.conditionField WHEN 'source' THEN stock.sourceValue ELSE stock[condition.conditionField] END)) = toLower(condition.conditionValueString) "
+        "WHEN 'eq' THEN toLower(toString(CASE condition.conditionField WHEN 'source' THEN stock.sourceValue ELSE stock[condition.conditionField] END)) = toLower(condition.conditionValueString) "
+        "WHEN '!=' THEN toLower(toString(CASE condition.conditionField WHEN 'source' THEN stock.sourceValue ELSE stock[condition.conditionField] END)) <> toLower(condition.conditionValueString) "
+        "WHEN 'ne' THEN toLower(toString(CASE condition.conditionField WHEN 'source' THEN stock.sourceValue ELSE stock[condition.conditionField] END)) <> toLower(condition.conditionValueString) "
+        "WHEN '<=' THEN coalesce(toFloat(CASE condition.conditionField WHEN 'source' THEN stock.sourceValue ELSE stock[condition.conditionField] END), 999999999.0) <= condition.conditionValueNumber "
+        "WHEN 'lte' THEN coalesce(toFloat(CASE condition.conditionField WHEN 'source' THEN stock.sourceValue ELSE stock[condition.conditionField] END), 999999999.0) <= condition.conditionValueNumber "
+        "WHEN '>=' THEN coalesce(toFloat(CASE condition.conditionField WHEN 'source' THEN stock.sourceValue ELSE stock[condition.conditionField] END), -999999999.0) >= condition.conditionValueNumber "
+        "WHEN 'gte' THEN coalesce(toFloat(CASE condition.conditionField WHEN 'source' THEN stock.sourceValue ELSE stock[condition.conditionField] END), -999999999.0) >= condition.conditionValueNumber "
+        "WHEN '<' THEN coalesce(toFloat(CASE condition.conditionField WHEN 'source' THEN stock.sourceValue ELSE stock[condition.conditionField] END), 999999999.0) < condition.conditionValueNumber "
+        "WHEN 'lt' THEN coalesce(toFloat(CASE condition.conditionField WHEN 'source' THEN stock.sourceValue ELSE stock[condition.conditionField] END), 999999999.0) < condition.conditionValueNumber "
+        "WHEN '>' THEN coalesce(toFloat(CASE condition.conditionField WHEN 'source' THEN stock.sourceValue ELSE stock[condition.conditionField] END), -999999999.0) > condition.conditionValueNumber "
+        "WHEN 'gt' THEN coalesce(toFloat(CASE condition.conditionField WHEN 'source' THEN stock.sourceValue ELSE stock[condition.conditionField] END), -999999999.0) > condition.conditionValueNumber "
+        "ELSE false END "
+        "WHEN 'relation' THEN EXISTS { "
+        "MATCH (stock)-[rel]->(target:OntologyEntity) "
+        "WHERE type(rel) = condition.conditionRelationType "
+        "AND coalesce(rel.weight, 0.0) >= coalesce(condition.conditionMinWeight, 0.0) "
+        "AND (condition.conditionTargetKind = '' OR target.kind = condition.conditionTargetKind) "
+        "AND (size(coalesce(condition.conditionTargetLevelTypes, [])) = 0 OR target.levelType IN condition.conditionTargetLevelTypes) "
+        "} "
+        "ELSE false END) "
+        "WITH rule, template, stock, conditions, "
+        "CASE WHEN 0.62 + size(conditions) * 0.08 > 0.94 THEN 0.94 ELSE 0.62 + size(conditions) * 0.08 END AS confidence "
+        "WITH rule, template, stock, conditions, confidence, "
+        "replace(replace(template.derivationTargetKey, '{symbol}', stock.symbol), '{displayName}', stock.label) AS targetValue, "
+        "replace(replace(template.derivationTargetLabel, '{symbol}', stock.symbol), '{displayName}', stock.label) AS targetLabel "
+        "WITH rule, template, stock, conditions, confidence, targetLabel, "
+        "template.derivationTargetKind + ':' + targetValue AS targetId, "
+        "'inference-trace:' + stock.symbol + ':' + rule.ruleId AS traceId, "
+        "'evidence:inference:' + stock.symbol + ':' + rule.ruleId AS evidenceId, "
+        "'belief:inference:' + stock.symbol + ':' + rule.ruleId + ':' + toString(coalesce(template.derivationIndex, 0)) AS beliefId "
+        "MERGE (target:OntologyEntity {id: targetId}) "
+        "SET target.label = targetLabel, target.kind = template.derivationTargetKind, target.ontologyBox = 'InferenceBox', "
+        "target.symbol = stock.symbol, target.ruleId = rule.ruleId, target.tboxClass = template.derivationTboxClass, "
+        "target.boundedContext = 'reasoning-insight', target.nativeNeo4jReasoned = true, target.updatedAt = $updatedAt "
+        "MERGE (trace:OntologyEntity {id: traceId}) "
+        "SET trace.label = stock.label + ' · ' + rule.label, trace.kind = 'inference-trace', trace.ontologyBox = 'InferenceBox', "
+        "trace.symbol = stock.symbol, trace.ruleId = rule.ruleId, trace.tboxClass = 'InferenceTrace', "
+        "trace.boundedContext = 'reasoning-insight', trace.confidence = confidence, trace.nativeNeo4jReasoned = true, "
+        "trace.matchedConditionIds = [c IN conditions | c.conditionId], trace.updatedAt = $updatedAt "
+        "MERGE (evidence:OntologyEvidence {id: evidenceId}) "
+        "SET evidence.subject = stock.id, evidence.kind = 'inference-trace', evidence.source = 'neo4j-native-rulebox', "
+        "evidence.summary = stock.label + ' · ' + rule.label, evidence.ontologyBox = 'InferenceBox', "
+        "evidence.confidence = confidence, evidence.nativeNeo4jReasoned = true, evidence.updatedAt = $updatedAt "
+        "MERGE (stock)-[:HAS_EVIDENCE]->(evidence) "
+        "MERGE (rule)-[triggered:TRIGGERED_INFERENCE]->(trace) "
+        "SET triggered.weight = confidence, triggered.ontologyBox = 'InferenceBox', triggered.ruleId = rule.ruleId, triggered.nativeNeo4jReasoned = true, triggered.updatedAt = $updatedAt "
+        "MERGE (stock)-[hasTrace:HAS_INFERENCE_TRACE]->(trace) "
+        "SET hasTrace.weight = confidence, hasTrace.ontologyBox = 'InferenceBox', hasTrace.ruleId = rule.ruleId, hasTrace.nativeNeo4jReasoned = true, hasTrace.updatedAt = $updatedAt "
+        "MERGE (stock)-[inferred:" + safe_type + "]->(target) "
+        "SET inferred.weight = coalesce(template.derivationWeight, 0.72), inferred.ontologyBox = 'InferenceBox', inferred.ruleId = rule.ruleId, "
+        "inferred.polarity = template.derivationPolarity, inferred.riskImpact = template.derivationRiskImpact, "
+        "inferred.supportImpact = template.derivationSupportImpact, inferred.actionGroup = template.derivationActionGroup, "
+        "inferred.actionLevel = template.derivationActionLevel, inferred.aiInfluenceLabel = template.derivationAiInfluenceLabel, "
+        "inferred.inferenceTraceId = traceId, inferred.evidenceIds = [evidenceId], inferred.nativeNeo4jReasoned = true, inferred.updatedAt = $updatedAt "
+        "MERGE (target)-[explained:EXPLAINED_BY_TRACE]->(trace) "
+        "SET explained.weight = confidence, explained.ontologyBox = 'InferenceBox', explained.ruleId = rule.ruleId, explained.nativeNeo4jReasoned = true, explained.updatedAt = $updatedAt "
+        "FOREACH (_ IN CASE WHEN template.derivationBeliefLabel <> '' THEN [1] ELSE [] END | "
+        "MERGE (belief:OntologyBelief {id: beliefId}) "
+        "SET belief.label = template.derivationBeliefLabel, belief.polarity = CASE WHEN template.derivationPolarity IN ['risk', 'support'] THEN template.derivationPolarity ELSE 'context' END, "
+        "belief.confidence = confidence, belief.ontologyBox = 'InferenceBox', belief.evidenceIds = [evidenceId], belief.nativeNeo4jReasoned = true, belief.updatedAt = $updatedAt "
+        "MERGE (stock)-[:HAS_BELIEF]->(belief) "
+        ")"
+    )
+    return {"statement": statement, "parameters": {"relationType": safe_type, "updatedAt": utc_now()}}
+
+
+def number_or_none(value: object):
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def list_of_strings(value: object) -> List[str]:
+    if isinstance(value, list):
+        return [str(item) for item in value if str(item or "").strip()]
+    if value is None or value == "":
+        return []
+    return [str(value)]
+
+
+def condition_target_level_types(condition: Dict[str, object]) -> List[str]:
+    filters = condition.get("target_property_filters") if isinstance(condition.get("target_property_filters"), dict) else {}
+    return list_of_strings(filters.get("levelType"))
 
 
 def neo4j_http_endpoint(uri: str, database: str) -> str:

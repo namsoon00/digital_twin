@@ -68,6 +68,7 @@ def add_rulebox_concepts(graph: PortfolioOntology, rules: Iterable[GraphInferenc
                 "tboxClasses": ["RelationTemplate", "DerivedAssertion"],
                 "ruleId": rule.rule_id,
                 "relationType": derivation.relation_type,
+                "derivationIndex": index,
                 "derivation": derivation.to_dict(),
             })))
             graph.relations.append(OntologyRelation(

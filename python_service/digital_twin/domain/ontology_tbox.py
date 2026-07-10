@@ -221,6 +221,7 @@ CLASS_DEFS: List[TBoxClassDef] = [
     TBoxClassDef("InferenceTrace", "reasoning-insight", "추론 경로"),
     TBoxClassDef("InferencePath", "reasoning-insight", "추론 패스", parent="InferenceTrace"),
     TBoxClassDef("GraphReasoner", "reasoning-insight", "그래프 추론기"),
+    TBoxClassDef("Neo4jNativeReasoner", "reasoning-insight", "Neo4j 네이티브 추론기", parent="GraphReasoner"),
     TBoxClassDef("ReasoningCard", "reasoning-insight", "추론 카드"),
     TBoxClassDef("ConfidenceScore", "reasoning-insight", "확신도"),
     TBoxClassDef("ReliabilityScore", "reasoning-insight", "신뢰도"),
@@ -327,6 +328,8 @@ RELATION_DEFS: List[TBoxRelationDef] = [
     TBoxRelationDef("HAS_CONDITION", "reasoning-insight", "reasoning-insight", "reasoning-insight"),
     TBoxRelationDef("DERIVES_RELATION", "reasoning-insight", "reasoning-insight", "reasoning-insight"),
     TBoxRelationDef("TRIGGERED_INFERENCE", "reasoning-insight", "reasoning-insight", "reasoning-insight"),
+    TBoxRelationDef("EXECUTES_RULEBOX", "reasoning-insight", "reasoning-insight", "reasoning-insight"),
+    TBoxRelationDef("MATERIALIZES_INFERENCE", "reasoning-insight", "reasoning-insight", "reasoning-insight"),
     TBoxRelationDef("HAS_INFERENCE_TRACE", "reasoning-insight", "investment-core", "reasoning-insight"),
     TBoxRelationDef("EXPLAINED_BY_TRACE", "reasoning-insight", "reasoning-insight", "reasoning-insight"),
     TBoxRelationDef("HAS_INFERRED_RISK", "risk-exposure", "investment-core", "risk-exposure"),
@@ -426,6 +429,7 @@ RULE_DEFS: List[TBoxRuleDef] = [
     TBoxRuleDef("RuleBox stores executable graph inference rules as first-class ontology nodes linked to their conditions and derived relation templates", "reasoning-insight"),
     TBoxRuleDef("InferenceBox stores derived assertions, inference traces, matched conditions, and source relation ids so new ABox facts can immediately affect opinions", "reasoning-insight"),
     TBoxRuleDef("Neo4j projection preserves TBox, RuleBox, ABox, and InferenceBox as queryable ontology layers instead of flattening rule output into text", "operations-dispatch"),
+    TBoxRuleDef("Neo4j native Cypher executes RuleBox conditions and materializes InferenceBox nodes, evidence, beliefs, and derived relations after graph persistence", "reasoning-insight"),
 ]
 
 

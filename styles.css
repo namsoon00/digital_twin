@@ -12758,3 +12758,584 @@ input[type="radio"]:disabled {
     line-height: 1.32;
   }
 }
+
+/* Professional workstation refinement layer */
+:root {
+  --ds-type-caption: 11px;
+  --ds-type-label: 12px;
+  --ds-type-body: 14px;
+  --ds-type-title: 18px;
+  --ds-type-section: 22px;
+  --ds-type-metric: 24px;
+  --ds-shadow-card-soft: 0 1px 0 color-mix(in srgb, var(--panel) 70%, transparent);
+  --ds-shadow-card-focus: 0 0 0 3px var(--blue-soft);
+  --ds-surface-muted: color-mix(in srgb, var(--ds-card-row-bg) 78%, var(--panel) 22%);
+  --ds-surface-elevated: color-mix(in srgb, var(--ds-card-bg) 92%, var(--panel-soft) 8%);
+}
+
+body {
+  font-size: var(--ds-type-body);
+}
+
+.label,
+.eyebrow,
+.panel-head .label,
+.settings-section-label {
+  font-size: var(--ds-type-caption);
+  letter-spacing: 0;
+}
+
+.panel-head h2 {
+  font-size: var(--ds-type-title);
+  line-height: 1.22;
+}
+
+.metric,
+.deskbar-cell strong,
+.page-command-metric strong {
+  font-size: var(--ds-type-section);
+  letter-spacing: 0;
+}
+
+.panel {
+  box-shadow: var(--ds-shadow-panel), var(--ds-shadow-card-soft);
+}
+
+:where(
+  .settings-overview-panel,
+  .notification-decision-panel,
+  .investment-bridge-panel,
+  .investment-evidence-panel,
+  .system-guide-hero,
+  .system-data-flow-panel,
+  .ontology-panel
+) {
+  background: linear-gradient(180deg, var(--ds-surface-elevated), var(--ds-card-bg));
+}
+
+:where(
+  .notification-ops-cell,
+  .settings-smart-save,
+  .settings-status-band,
+  .system-guide-note,
+  .ontology-surface,
+  .reasoning-execution-plan,
+  .investment-packet-grid section,
+  .notification-state-message
+) {
+  border: 1px solid var(--ds-card-border);
+  border-left: 3px solid var(--ds-card-status-neutral);
+  border-radius: var(--ds-radius-control);
+  background: linear-gradient(180deg, var(--ds-card-row-bg), var(--ds-card-bg));
+  box-shadow: var(--ds-shadow-card-soft);
+}
+
+.notification-state-message,
+.ontology-empty {
+  display: grid;
+  align-content: center;
+  gap: var(--ds-space-3);
+  min-height: 96px;
+  padding: var(--ds-panel-pad-y) var(--ds-panel-pad-x);
+  color: var(--muted);
+  text-align: left;
+}
+
+.notification-state-message strong,
+.ontology-empty strong {
+  color: var(--ink);
+  font-size: var(--ds-type-body);
+  font-weight: 950;
+}
+
+.notification-state-message.muted,
+.ontology-empty {
+  border-left-color: var(--ds-card-status-neutral);
+}
+
+.notification-state-message.hold {
+  border-left-color: var(--amber);
+}
+
+.notification-state-message.watch {
+  border-left-color: var(--green);
+}
+
+.notification-state-message.danger {
+  border-left-color: var(--red);
+}
+
+.notification-full-message,
+pre.notification-full-message {
+  max-height: 360px;
+  overflow: auto;
+  margin: 0;
+  padding: var(--ds-row-pad-y) var(--ds-row-pad-x);
+  border: 1px solid var(--ds-card-border);
+  border-radius: var(--ds-radius-control);
+  background: var(--input);
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: keep-all;
+}
+
+.notification-fingerprint {
+  display: block;
+  min-width: 0;
+  padding: var(--ds-space-3) var(--ds-space-4);
+  border: 1px solid var(--ds-card-border);
+  border-radius: var(--ds-radius-control);
+  background: var(--ds-surface-muted);
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.setting-field {
+  align-content: start;
+  gap: var(--ds-space-3);
+  padding: var(--ds-space-5);
+  border: 1px solid color-mix(in srgb, var(--ds-card-border) 76%, transparent);
+  border-radius: var(--ds-radius-control);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--ds-card-row-bg) 86%, transparent), var(--ds-card-bg));
+}
+
+.setting-field:focus-within {
+  border-color: color-mix(in srgb, var(--blue) 56%, var(--ds-card-border));
+  box-shadow: var(--ds-shadow-card-focus);
+}
+
+.setting-field > span {
+  color: var(--muted);
+  font-size: var(--ds-type-label);
+  font-weight: 950;
+}
+
+.setting-field-note {
+  align-self: start;
+  width: fit-content;
+  padding: 2px 7px;
+  border: 1px solid var(--green);
+  border-radius: 999px;
+  color: var(--green);
+  font-size: var(--ds-type-caption);
+  font-style: normal;
+  font-weight: 900;
+}
+
+.settings-smart-save {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--ds-section-gap);
+  padding: var(--ds-row-pad-y) var(--ds-row-pad-x);
+  border-left-color: var(--blue);
+}
+
+.settings-smart-save-copy {
+  min-width: 0;
+}
+
+.settings-smart-save-copy strong,
+.settings-smart-save-copy span {
+  display: block;
+  min-width: 0;
+}
+
+.settings-smart-save-copy span {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: var(--ds-type-label);
+  font-weight: 780;
+}
+
+.ontology-graph-panel,
+.ontology-cytoscape {
+  border: 1px solid var(--ds-card-border);
+  border-radius: var(--ds-radius-panel);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--panel) 92%, var(--blue-soft) 8%), var(--panel)),
+    radial-gradient(circle at 14% 12%, var(--ds-color-orbit-glow), transparent 30%);
+}
+
+.ontology-cytoscape {
+  min-height: 420px;
+  overflow: hidden;
+}
+
+.ontology-cytoscape > span {
+  display: grid;
+  place-items: center;
+  min-height: inherit;
+  color: var(--muted);
+  font-weight: 900;
+}
+
+html[data-theme="dark"] .ontology-graph-panel,
+html[data-theme="dark"] .ontology-cytoscape {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--panel) 88%, #000000 12%), var(--panel)),
+    radial-gradient(circle at 14% 12%, var(--ds-color-orbit-glow), transparent 34%);
+}
+
+.system-flow-node,
+.system-notification-node,
+.system-ontology-card,
+.system-manual-step,
+.system-ops-row,
+.system-glossary-grid section,
+.system-event-row {
+  border: 1px solid var(--ds-card-border);
+  border-left: 3px solid var(--ds-card-status-neutral);
+  border-radius: var(--ds-radius-control);
+  background: linear-gradient(180deg, var(--ds-card-row-bg), var(--ds-card-bg));
+  box-shadow: var(--ds-shadow-card-soft);
+}
+
+.system-flow-node b,
+.system-notification-node b,
+.system-ontology-card b,
+.system-manual-step b,
+.system-event-row b {
+  background: var(--ds-color-orbit-core);
+  color: var(--ds-color-on-action);
+}
+
+.system-lineage-grid {
+  border: 1px solid var(--ds-card-border);
+  border-radius: var(--ds-radius-panel);
+  background: var(--ds-card-bg);
+  overflow: hidden;
+}
+
+.system-lineage-head {
+  background: var(--ds-card-head-bg);
+}
+
+.loading-shell-preview span,
+.skeleton {
+  background: linear-gradient(90deg, var(--panel-soft), var(--chip-strong), var(--panel-soft));
+  background-size: 260% 100%;
+}
+
+@media (min-width: 1181px) {
+  .notifications-view,
+  .strategy-view,
+  .system-guide-view,
+  .settings-view {
+    grid-template-columns: repeat(12, minmax(0, 1fr));
+    align-items: start;
+  }
+
+  .notification-section-bar,
+  .strategy-section-bar,
+  .system-guide-hero,
+  .settings-overview-panel {
+    grid-column: 1 / -1;
+  }
+
+  .notification-decision-panel {
+    grid-column: 1 / -1;
+  }
+
+  .notification-decision-panel .panel-head {
+    min-height: 72px;
+  }
+
+  .notification-decision-body {
+    display: grid;
+    grid-template-columns: minmax(260px, 0.28fr) minmax(0, 1fr);
+    gap: var(--ds-section-gap);
+    align-items: start;
+    padding: var(--ds-panel-pad-y) var(--ds-panel-pad-x);
+    border-top: 1px solid var(--ds-card-border);
+    background: color-mix(in srgb, var(--panel) 90%, transparent);
+  }
+
+  .notification-decision-status {
+    position: sticky;
+    top: 18px;
+    display: grid;
+    align-content: start;
+    gap: var(--ds-space-4);
+    min-height: 180px;
+    padding: var(--ds-panel-pad-y) var(--ds-panel-pad-x);
+  }
+
+  .notification-decision-list {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--ds-section-gap);
+    max-height: min(74vh, 920px);
+    overflow: auto;
+    padding: 0;
+    border-top: 0;
+    background: transparent;
+    scrollbar-gutter: stable;
+  }
+
+  .notification-decision-row {
+    display: grid;
+    grid-template-columns: minmax(230px, 0.3fr) minmax(0, 1fr);
+    grid-template-areas:
+      "meta title"
+      "score preview"
+      "score actions"
+      "reasons reasons"
+      "full full"
+      "fingerprint fingerprint";
+    gap: var(--ds-space-5) var(--ds-section-gap);
+    align-items: start;
+    padding: var(--ds-panel-pad-y) var(--ds-panel-pad-x);
+  }
+
+  .notification-decision-top {
+    grid-area: meta;
+    align-content: start;
+  }
+
+  .notification-decision-target {
+    grid-area: title;
+    font-size: 16px;
+    font-weight: 950;
+    line-height: 1.35;
+  }
+
+  .notification-decision-score {
+    grid-area: score;
+    align-content: start;
+    gap: var(--ds-space-3);
+    padding: var(--ds-space-4);
+    border: 1px solid var(--ds-card-border);
+    border-radius: var(--ds-radius-control);
+    background: var(--ds-surface-muted);
+  }
+
+  .notification-decision-row > p {
+    grid-area: preview;
+    align-self: start;
+    margin: 0;
+    color: var(--ink);
+    line-height: 1.6;
+    word-break: keep-all;
+  }
+
+  .notification-decision-actions {
+    grid-area: actions;
+  }
+
+  .notification-decision-reasons {
+    grid-area: reasons;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: var(--ds-space-4);
+  }
+
+  .notification-decision-reasons span {
+    margin: 0;
+    padding: var(--ds-space-4);
+    border: 1px solid var(--ds-card-border);
+    border-radius: var(--ds-radius-control);
+    background: var(--ds-surface-muted);
+  }
+
+  .notification-full-message {
+    grid-area: full;
+  }
+
+  .notification-fingerprint {
+    grid-area: fingerprint;
+  }
+
+  .admin-message-panel .settings-body,
+  .notification-template-manager-panel .settings-body,
+  .settings-external-data-panel .settings-body {
+    max-height: none;
+  }
+
+  .admin-message-group-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+    gap: var(--ds-section-gap);
+  }
+
+  .investment-bridge-panel {
+    grid-column: 1 / -1;
+  }
+
+  .macro-signal-panel,
+  .investment-ai-packet-panel,
+  .ontology-operational-surface,
+  .strategy-process-panel,
+  .model-guide-panel {
+    grid-column: span 6;
+  }
+
+  .investment-evidence-panel {
+    grid-column: span 8;
+  }
+
+  .ontology-execution-surface,
+  .strategy-data-panel,
+  .model-preview-panel {
+    grid-column: span 4;
+  }
+
+  .strategy-view .ontology-panel,
+  .strategy-view .ontology-rule-panel,
+  .strategy-view .prompt-registry-panel,
+  .strategy-view .admin-modeling-panel,
+  .strategy-view .model-panel {
+    grid-column: 1 / -1;
+  }
+
+  .investment-evidence-list {
+    grid-template-columns: minmax(0, 1fr);
+    max-height: min(78vh, 980px);
+    overflow: auto;
+    scrollbar-gutter: stable;
+  }
+
+  .investment-evidence-card {
+    display: grid;
+    grid-template-columns: minmax(240px, 0.32fr) minmax(0, 1fr);
+    grid-template-areas:
+      "head narrative"
+      "metrics columns"
+      "plan plan"
+      "refs refs";
+    gap: var(--ds-section-gap);
+    align-items: start;
+  }
+
+  .investment-evidence-head {
+    grid-area: head;
+  }
+
+  .investment-evidence-grid {
+    grid-area: metrics;
+    grid-template-columns: 1fr;
+    gap: var(--ds-space-4);
+  }
+
+  .investment-evidence-narrative {
+    grid-area: narrative;
+    min-height: 100%;
+    padding: var(--ds-row-pad-y) var(--ds-row-pad-x);
+    border: 1px solid var(--ds-card-border);
+    border-radius: var(--ds-radius-control);
+    background: var(--ds-surface-muted);
+  }
+
+  .investment-evidence-columns {
+    grid-area: columns;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--ds-space-5);
+  }
+
+  .reasoning-execution-plan {
+    grid-area: plan;
+  }
+
+  .reasoning-graph-refs {
+    grid-area: refs;
+  }
+
+  .system-guide-hero {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(360px, 0.38fr);
+    gap: var(--ds-page-gap);
+    align-items: stretch;
+  }
+
+  .system-manual-panel,
+  .system-notification-panel,
+  .system-ontology-panel,
+  .system-glossary-panel {
+    grid-column: span 6;
+  }
+
+  .system-data-flow-panel,
+  .system-sqlite-panel {
+    grid-column: span 7;
+  }
+
+  .system-event-panel,
+  .system-operations-panel {
+    grid-column: span 5;
+  }
+
+  .system-flow-diagram,
+  .system-notification-flow,
+  .system-ontology-map,
+  .system-manual-grid,
+  .system-glossary-grid {
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: var(--ds-section-gap);
+  }
+
+  .system-event-track,
+  .system-ops-list {
+    display: grid;
+    gap: var(--ds-section-gap);
+  }
+
+  .system-event-row {
+    grid-template-columns: 42px minmax(150px, 0.32fr) minmax(0, 1fr);
+    gap: var(--ds-space-4) var(--ds-section-gap);
+    padding: var(--ds-row-pad-y) var(--ds-row-pad-x);
+  }
+
+  .settings-view .settings-environment-panel,
+  .settings-view .settings-delivery-panel {
+    grid-column: span 6;
+  }
+
+  .settings-grid {
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: var(--ds-section-gap);
+  }
+}
+
+@media (min-width: 1440px) {
+  .macro-signal-panel,
+  .investment-ai-packet-panel,
+  .ontology-operational-surface {
+    grid-column: span 4;
+  }
+
+  .investment-evidence-panel {
+    grid-column: span 8;
+  }
+
+  .ontology-execution-surface {
+    grid-column: span 4;
+  }
+
+  .strategy-process-panel,
+  .model-guide-panel {
+    grid-column: span 6;
+  }
+}
+
+@media (max-width: 860px) {
+  .settings-smart-save {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .setting-field {
+    padding: var(--ds-row-pad-y) var(--ds-row-pad-x);
+  }
+
+  .notification-decision-row > p,
+  .investment-evidence-narrative p,
+  .system-guide-hero-copy p {
+    word-break: keep-all;
+  }
+
+  .ontology-cytoscape {
+    min-height: 320px;
+  }
+}

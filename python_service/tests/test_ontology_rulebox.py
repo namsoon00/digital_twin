@@ -13,6 +13,8 @@ from digital_twin.infrastructure.neo4j_ontology import (
     Neo4jOntologyGraphRepository,
     NullOntologyGraphRepository,
     clear_rulebox_statements,
+    inferencebox_snapshot_from_rows,
+    inferencebox_snapshot_statements,
     native_reasoning_statements_for_relation_types,
     ontology_seed_graph,
     rulebox_graph_from_rules,
@@ -187,6 +189,65 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertTrue(loss_guard["conditions"])
         self.assertTrue(loss_guard["derivations"])
         self.assertIn("HAS_INFERRED_RISK", snapshot["relationTypes"])
+
+    def test_inferencebox_snapshot_payload_marks_native_neo4j_reasoning(self):
+        statements = inferencebox_snapshot_statements(["005930"], limit=10)
+        statement_text = "\n".join(item["statement"] for item in statements)
+        rowsets = {
+            "entityCounts": [{"entityCount": 2, "nativeEntityCount": 1}],
+            "relationCounts": [{"relationCount": 3, "nativeRelationCount": 2}],
+            "traceCounts": [{"traceCount": 1, "nativeTraceCount": 1}],
+            "entities": [
+                {
+                    "id": "risk:005930:loss-guard-breakdown",
+                    "label": "삼성전자 손실 방어 리스크",
+                    "kind": "risk",
+                    "symbol": "005930",
+                    "ruleId": "graph.loss_guard.breakdown.v1",
+                    "tboxClass": "MarketRisk",
+                    "polarity": "risk",
+                    "actionGroup": "lossControl",
+                    "actionLevel": "review",
+                    "nativeNeo4jReasoned": True,
+                }
+            ],
+            "relations": [
+                {
+                    "type": "HAS_INFERRED_RISK",
+                    "source": "stock:005930",
+                    "sourceLabel": "삼성전자",
+                    "target": "risk:005930:loss-guard-breakdown",
+                    "targetLabel": "삼성전자 손실 방어 리스크",
+                    "ruleId": "graph.loss_guard.breakdown.v1",
+                    "polarity": "risk",
+                    "riskImpact": 13,
+                    "weight": 0.86,
+                    "aiInfluenceLabel": "손실 방어 추론",
+                    "nativeNeo4jReasoned": True,
+                }
+            ],
+            "traces": [
+                {
+                    "id": "inference-trace:005930:graph.loss_guard.breakdown.v1",
+                    "label": "삼성전자 · 손실 보유 + 기준선 이탈 -> 손실 방어 추론",
+                    "symbol": "005930",
+                    "ruleId": "graph.loss_guard.breakdown.v1",
+                    "confidence": 0.86,
+                    "matchedConditionIds": ["holding-loss", "holding-source", "ma-break"],
+                    "nativeNeo4jReasoned": True,
+                }
+            ],
+        }
+
+        payload = inferencebox_snapshot_from_rows(rowsets, source="test", symbols=["005930"])
+
+        self.assertIn("n.ontologyBox = 'InferenceBox'", statement_text)
+        self.assertIn("size($symbols) = 0 OR n.symbol IN $symbols", statement_text)
+        self.assertEqual("ok", payload["status"])
+        self.assertTrue(payload["neo4jNativeReasoningUsed"])
+        self.assertEqual(2, payload["nativeRelationCount"])
+        self.assertEqual("HAS_INFERRED_RISK", payload["relations"][0]["type"])
+        self.assertEqual(["holding-loss", "holding-source", "ma-break"], payload["traces"][0]["matchedConditionIds"])
 
     def test_rulebox_admin_clear_and_native_execution_statements_are_graph_native(self):
         clear_text = "\n".join(item["statement"] for item in clear_rulebox_statements(clear_inference=True))

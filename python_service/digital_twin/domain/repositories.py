@@ -90,6 +90,12 @@ class OntologyGraphRepository(Protocol):
     def save_graph(self, graph: PortfolioOntology) -> Dict[str, object]:
         ...
 
+    def run_rulebox(self, payload: Dict[str, object] = None) -> Dict[str, object]:
+        ...
+
+    def inferencebox_snapshot(self, symbols: List[str] = None, limit: int = 80) -> Dict[str, object]:
+        ...
+
 
 class OntologyProjectionRecorder(Protocol):
     def record_snapshot(self, snapshot: AccountSnapshot) -> Dict[str, object]:

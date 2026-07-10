@@ -53,6 +53,55 @@ def ontology_quality_event_metadata(snapshot: AccountSnapshot, min_score: float)
     }
 
 
+def ontology_inference_event_metadata(snapshot: AccountSnapshot) -> Dict[str, object]:
+    metadata = snapshot.metadata if isinstance(snapshot.metadata, dict) else {}
+    ontology = metadata.get("ontology") if isinstance(metadata.get("ontology"), dict) else {}
+    projection = ontology.get("neo4j") if isinstance(ontology.get("neo4j"), dict) else ontology.get("projection")
+    if not isinstance(projection, dict):
+        return {}
+    inference = projection.get("inferenceBox") if isinstance(projection.get("inferenceBox"), dict) else {}
+    if not inference:
+        return {}
+    relations = [
+        {
+            "type": str(item.get("type") or ""),
+            "ruleId": str(item.get("ruleId") or ""),
+            "label": str(item.get("label") or item.get("targetLabel") or ""),
+            "polarity": str(item.get("polarity") or ""),
+            "riskImpact": item.get("riskImpact"),
+            "supportImpact": item.get("supportImpact"),
+            "nativeNeo4jReasoned": bool(item.get("nativeNeo4jReasoned")),
+        }
+        for item in (inference.get("relations") or [])[:8]
+        if isinstance(item, dict)
+    ]
+    traces = [
+        {
+            "ruleId": str(item.get("ruleId") or ""),
+            "label": str(item.get("label") or ""),
+            "confidence": item.get("confidence"),
+            "matchedConditionIds": list(item.get("matchedConditionIds") or [])[:8] if isinstance(item.get("matchedConditionIds"), list) else [],
+            "nativeNeo4jReasoned": bool(item.get("nativeNeo4jReasoned")),
+        }
+        for item in (inference.get("traces") or [])[:8]
+        if isinstance(item, dict)
+    ]
+    rulebox_execution = projection.get("ruleboxExecution") if isinstance(projection.get("ruleboxExecution"), dict) else {}
+    return {
+        "source": "neo4jInferenceBox",
+        "status": str(inference.get("status") or projection.get("status") or ""),
+        "projectionMode": str(projection.get("projectionMode") or ""),
+        "ruleboxExecutionStatus": str(rulebox_execution.get("status") or ""),
+        "neo4jNativeReasoningUsed": bool(inference.get("neo4jNativeReasoningUsed")),
+        "entityCount": int(number(inference.get("entityCount")) or 0),
+        "relationCount": int(number(inference.get("relationCount")) or 0),
+        "traceCount": int(number(inference.get("traceCount")) or 0),
+        "nativeRelationCount": int(number(inference.get("nativeRelationCount")) or 0),
+        "relations": relations,
+        "traces": traces,
+    }
+
+
 class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
     def __init__(self, settings: Dict[str, str] = None):
         settings = settings or {}
@@ -274,6 +323,7 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
         generated_at = str(snapshot.generated_at or "").strip()
         formula_metadata = self.notification_formula_metadata()
         ontology_quality = ontology_quality_event_metadata(snapshot, self.ontology_quality_min_score())
+        ontology_inference = ontology_inference_event_metadata(snapshot)
         for event in events:
             if generated_at:
                 event.generated_at = generated_at
@@ -281,6 +331,8 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
                 event.metadata.update({key: value for key, value in formula_metadata.items() if key not in event.metadata})
             if ontology_quality:
                 event.metadata.setdefault("ontologyQuality", ontology_quality)
+            if ontology_inference:
+                event.metadata.setdefault("ontologyInference", ontology_inference)
         return events
 
     def snapshot_with_strategy_scores(self, snapshot: AccountSnapshot) -> AccountSnapshot:

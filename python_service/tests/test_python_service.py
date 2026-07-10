@@ -1869,6 +1869,71 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("sample-1", snapshot.metadata["ontology"]["neo4j"]["qualitySampleId"])
         self.assertEqual(91.5, snapshot.metadata["ontology"]["neo4j"]["qualityScore"])
 
+    def test_ontology_projection_recorder_runs_neo4j_rulebox_and_reads_inferencebox(self):
+        position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "marketValue": 1000,
+            "profitLossRate": -12,
+            "ma20": 76000,
+            "ma60": 73000,
+            "ma20Distance": -9,
+            "ma60Distance": -5,
+            "sector": "반도체",
+        })
+        portfolio = portfolio_summary([position])
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "ok",
+            utc_now_iso(),
+            portfolio,
+            [position],
+            decisions_for_positions([position], portfolio),
+        )
+
+        class FakeRepository:
+            def __init__(self):
+                self.graphs = []
+                self.executions = []
+                self.queried_symbols = []
+
+            def save_graph(self, graph):
+                self.graphs.append(graph)
+                return {"saved": True, "entityCount": len(graph.entities), "relationCount": len(graph.relations)}
+
+            def run_rulebox(self, payload=None):
+                self.executions.append(dict(payload or {}))
+                return {"status": "ok", "statementCount": 2, "relationTypes": ["HAS_INFERRED_RISK"]}
+
+            def inferencebox_snapshot(self, symbols=None, limit=80):
+                self.queried_symbols.append(list(symbols or []))
+                return {
+                    "status": "ok",
+                    "neo4jNativeReasoningUsed": True,
+                    "nativeRelationCount": 1,
+                    "relations": [{"type": "HAS_INFERRED_RISK", "ruleId": "graph.loss_guard.breakdown.v1"}],
+                }
+
+        repository = FakeRepository()
+        recorder = PortfolioOntologyProjectionRecorder(repository)
+
+        result = recorder.record_snapshot(snapshot)
+
+        persisted = repository.graphs[0]
+        self.assertTrue(result["saved"])
+        self.assertEqual("abox-first-neo4j-rulebox", result["projectionMode"])
+        self.assertEqual({"clearInference": True}, repository.executions[0])
+        self.assertEqual(["005930"], repository.queried_symbols[0])
+        self.assertTrue(result["inferenceBox"]["neo4jNativeReasoningUsed"])
+        self.assertFalse(any((item.properties or {}).get("ontologyBox") == "RuleBox" for item in persisted.entities))
+        self.assertFalse(any((item.properties or {}).get("ontologyBox") == "InferenceBox" for item in persisted.entities))
+        self.assertTrue(any((item.properties or {}).get("ontologyBox") == "ABox" for item in persisted.entities))
+
     def test_ontology_projection_recorder_includes_watchlist_candidates(self):
         holding = normalize_position({
             "symbol": "005930",
@@ -3617,6 +3682,62 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("limited", stamped[0].metadata["ontologyQuality"]["status"])
         self.assertEqual(42, stamped[0].metadata["ontologyQuality"]["score"])
         self.assertEqual(55, stamped[0].metadata["ontologyQuality"]["minScore"])
+
+    def test_stamp_events_attaches_neo4j_inferencebox_metadata(self):
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "ok",
+            utc_now_iso(),
+            portfolio_summary([]),
+            [],
+            [],
+        )
+        snapshot.metadata.setdefault("ontology", {})["neo4j"] = {
+            "projectionMode": "abox-first-neo4j-rulebox",
+            "ruleboxExecution": {"status": "ok"},
+            "inferenceBox": {
+                "status": "ok",
+                "neo4jNativeReasoningUsed": True,
+                "entityCount": 2,
+                "relationCount": 3,
+                "traceCount": 1,
+                "nativeRelationCount": 2,
+                "relations": [
+                    {
+                        "type": "HAS_INFERRED_RISK",
+                        "ruleId": "graph.loss_guard.breakdown.v1",
+                        "label": "손실 방어 추론",
+                        "polarity": "risk",
+                        "riskImpact": 13,
+                        "nativeNeo4jReasoned": True,
+                    }
+                ],
+                "traces": [
+                    {
+                        "ruleId": "graph.loss_guard.breakdown.v1",
+                        "label": "삼성전자 · 손실 방어 추론",
+                        "confidence": 0.86,
+                        "matchedConditionIds": ["holding-loss", "ma-break"],
+                        "nativeNeo4jReasoned": True,
+                    }
+                ],
+            },
+        }
+
+        stamped = RealtimeMonitor().stamp_events(snapshot, [
+            AlertEvent("main", "메인", "WATCH", "investmentInsight", "main:insight:test", "테스트", ["상태: 점검"], "")
+        ])
+
+        inference = stamped[0].metadata["ontologyInference"]
+        self.assertEqual("neo4jInferenceBox", inference["source"])
+        self.assertEqual("abox-first-neo4j-rulebox", inference["projectionMode"])
+        self.assertTrue(inference["neo4jNativeReasoningUsed"])
+        self.assertEqual(2, inference["nativeRelationCount"])
+        self.assertEqual("HAS_INFERRED_RISK", inference["relations"][0]["type"])
+        self.assertEqual(["holding-loss", "ma-break"], inference["traces"][0]["matchedConditionIds"])
 
     def test_account_data_failure_suppresses_investment_change_alerts(self):
         live_position = normalize_position({

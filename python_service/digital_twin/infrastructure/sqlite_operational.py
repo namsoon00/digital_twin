@@ -26,6 +26,9 @@ from .settings import data_dir, read_json, runtime_settings, service_db_path, se
 from .sqlite_support import connect_sqlite
 
 
+IN_FLIGHT_NOTIFICATION_HISTORY_MINUTES = 30
+
+
 def json_dumps(payload) -> str:
     return json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
@@ -44,6 +47,17 @@ def age_minutes_since(value: str, now=None) -> int:
         return 0
     current = now or datetime.now(timezone.utc)
     return max(0, int((current.astimezone(timezone.utc) - parsed.astimezone(timezone.utc)).total_seconds() // 60))
+
+
+def notification_history_row_age_minutes(row) -> int:
+    return age_minutes_since(str(row["created_at"] or ""))
+
+
+def notification_history_is_recent_in_flight(row) -> bool:
+    status = str(row["status"] or "").strip()
+    if status not in {"pending", "processing"}:
+        return False
+    return notification_history_row_age_minutes(row) <= IN_FLIGHT_NOTIFICATION_HISTORY_MINUTES
 
 
 def insert_domain_event_with_connection(connection, event: DomainEvent) -> None:
@@ -889,7 +903,7 @@ class SQLiteNotificationRuleStore(OperationalConnection):
         with self.connect() as connection:
             rows = connection.execute(
                 """
-                SELECT payload_json, created_at FROM notification_jobs
+                SELECT payload_json, created_at, status FROM notification_jobs
                 WHERE message_type = ? AND created_at >= ? AND status IN ('pending', 'processing', 'done')
                 ORDER BY created_at DESC
                 LIMIT 100
@@ -911,9 +925,13 @@ class SQLiteNotificationRuleStore(OperationalConnection):
             previous_fingerprint = str(previous_context.get("honeyFingerprint") or notification_fingerprint(previous, rule))
             if previous_fingerprint != fingerprint:
                 continue
+            status = str(row["status"] or "").strip()
+            if status != "done" and not notification_history_is_recent_in_flight(row):
+                continue
             count += 1
             if not most_recent_context:
                 most_recent_context = dict(previous_context)
+            if status == "done" and not most_recent_at:
                 most_recent_at = row["created_at"] or previous.created_at
             previous_score = max(previous_score, int(previous_context.get("honeyScore") or 0))
         return count, previous_score, most_recent_context, most_recent_at
@@ -2354,7 +2372,7 @@ class SQLiteNotificationJobStore(OperationalConnection):
         cutoff_text = cutoff.isoformat().replace("+00:00", "Z")
         rows = connection.execute(
             """
-            SELECT payload_json, created_at FROM notification_jobs
+            SELECT payload_json, created_at, status FROM notification_jobs
             WHERE message_type = ? AND created_at >= ? AND status IN ('pending', 'processing', 'done')
             ORDER BY created_at DESC
             LIMIT 100
@@ -2376,9 +2394,13 @@ class SQLiteNotificationJobStore(OperationalConnection):
             previous_fingerprint = str(previous_context.get("honeyFingerprint") or notification_fingerprint(previous, rule))
             if previous_fingerprint != fingerprint:
                 continue
+            status = str(row["status"] or "").strip()
+            if status != "done" and not notification_history_is_recent_in_flight(row):
+                continue
             count += 1
             if not most_recent_context:
                 most_recent_context = dict(previous_context)
+            if status == "done" and not most_recent_at:
                 most_recent_at = row["created_at"] or previous.created_at
             previous_score = max(previous_score, int(previous_context.get("honeyScore") or 0))
         return count, previous_score, most_recent_context, most_recent_at

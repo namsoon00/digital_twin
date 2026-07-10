@@ -6918,6 +6918,104 @@ class PythonServiceTests(unittest.TestCase):
         self.assertFalse(jobs[1].context["honeySimilarityBypassed"])
         self.assertIn("같은 임계값 상태 지속", jobs[1].last_error)
 
+    def test_investment_insight_state_cooldown_ignores_stale_processing_jobs(self):
+        db_path = Path(self.temp.name) / "service.db"
+        queue = SQLiteNotificationJobStore(db_path)
+        rules = SQLiteNotificationRuleStore(db_path)
+        rule = rules.get("investmentInsight")
+        rule.market_hours_enabled = False
+        rules.upsert(rule)
+
+        def event_for_key(key):
+            return AlertEvent(
+                "main",
+                "메인",
+                "ALERT",
+                "investmentInsight",
+                key,
+                "SK하이닉스",
+                ["인사이트 유형: 리스크 증가", "핵심 결론: SK하이닉스 손실 관리"],
+                "000660",
+                metadata={
+                    "ontologyInsight": {
+                        "subject": "000660",
+                        "insightType": "riskIncrease",
+                        "score": 91,
+                        "noveltyScore": 25,
+                        "confidence": 84,
+                        "sourceSignalTypes": ["holdingTiming", "modelSell"],
+                        "sourceEventKeys": ["main:holding:000660:risk"],
+                    },
+                    "sourceSignalTypes": ["holdingTiming", "modelSell"],
+                    "dataFreshness": self.fresh_data_freshness("unit-test-position"),
+                },
+            )
+
+        self.assertEqual(1, send_events([event_for_key("main:insight:000660:processing")], queue=queue).queued)
+        stale = queue.jobs()[0]
+        stale.status = "processing"
+        stale.created_at = (datetime.now(timezone.utc) - timedelta(minutes=45)).isoformat().replace("+00:00", "Z")
+        queue.update(stale)
+
+        self.assertEqual(1, send_events([event_for_key("main:insight:000660:new")], queue=queue).queued)
+
+        jobs = queue.jobs()
+        self.assertEqual(["processing", "pending"], [job.status for job in jobs])
+        self.assertEqual("new_threshold", jobs[1].context["honeyStateDecision"])
+
+    def test_investment_insight_state_cooldown_uses_done_time_not_stale_processing_time(self):
+        db_path = Path(self.temp.name) / "service.db"
+        queue = SQLiteNotificationJobStore(db_path)
+        rules = SQLiteNotificationRuleStore(db_path)
+        rule = rules.get("investmentInsight")
+        rule.market_hours_enabled = False
+        rules.upsert(rule)
+
+        def event_for_key(key):
+            return AlertEvent(
+                "main",
+                "메인",
+                "ALERT",
+                "investmentInsight",
+                key,
+                "SK하이닉스",
+                ["인사이트 유형: 리스크 증가", "핵심 결론: SK하이닉스 손실 관리"],
+                "000660",
+                metadata={
+                    "ontologyInsight": {
+                        "subject": "000660",
+                        "insightType": "riskIncrease",
+                        "score": 91,
+                        "noveltyScore": 25,
+                        "confidence": 84,
+                        "sourceSignalTypes": ["holdingTiming", "modelSell"],
+                        "sourceEventKeys": ["main:holding:000660:risk"],
+                    },
+                    "sourceSignalTypes": ["holdingTiming", "modelSell"],
+                    "dataFreshness": self.fresh_data_freshness("unit-test-position"),
+                },
+            )
+
+        self.assertEqual(1, send_events([event_for_key("main:insight:000660:done")], queue=queue).queued)
+        done = queue.jobs()[0]
+        done.status = "done"
+        done.created_at = (datetime.now(timezone.utc) - timedelta(minutes=400)).isoformat().replace("+00:00", "Z")
+        done.context["honeyStateDecision"] = "new_threshold"
+        queue.update(done)
+
+        self.assertEqual(1, send_events([event_for_key("main:insight:000660:processing")], queue=queue).queued)
+        stale = queue.jobs()[1]
+        stale.status = "processing"
+        stale.created_at = (datetime.now(timezone.utc) - timedelta(minutes=45)).isoformat().replace("+00:00", "Z")
+        queue.update(stale)
+
+        self.assertEqual(1, send_events([event_for_key("main:insight:000660:summary")], queue=queue).queued)
+
+        jobs = queue.jobs()
+        self.assertEqual(["done", "processing", "pending"], [job.status for job in jobs])
+        self.assertEqual("sustained_summary", jobs[2].context["honeyStateDecision"])
+        self.assertGreaterEqual(jobs[2].context["honeyStateLastSentAgeMinutes"], 360)
+
     def test_notification_rule_penalizes_similar_recent_messages(self):
         db_path = Path(self.temp.name) / "service.db"
         queue = SQLiteNotificationJobStore(db_path)
@@ -7246,10 +7344,14 @@ class PythonServiceTests(unittest.TestCase):
         )
 
         self.assertTrue(queue.enqueue(old_job))
+        old_saved = queue.jobs()[0]
+        old_saved.status = "done"
+        old_saved.created_at = old_job.created_at
+        queue.update(old_saved)
         self.assertTrue(queue.enqueue(new_job))
 
         jobs = queue.jobs()
-        self.assertEqual(["pending", "pending"], [job.status for job in jobs])
+        self.assertEqual(["done", "pending"], [job.status for job in jobs])
         self.assertEqual("sustained_summary", jobs[1].context["honeyStateDecision"])
         self.assertIn("지속 상태 요약", jobs[1].context["honeyStateReason"])
 

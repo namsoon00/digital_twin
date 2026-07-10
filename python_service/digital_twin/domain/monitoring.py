@@ -22,7 +22,7 @@ from .ontology_insights import build_investment_insight_events, split_operationa
 from .ontology_relation_rules import decision_action_group_for_label, relation_rule_context_summary_lines, relation_thresholds_from_settings
 from .parsing import parse_assignments
 from .portfolio import AccountSnapshot, AlertEvent, Position, monitor_state_has_live_account_data, status_has_account_data_failure
-from .portfolio_calculations import DEFAULT_FX_RATES, value_in_base
+from .portfolio_calculations import DEFAULT_FX_RATES, fx_rates_with_external_signals, value_in_base
 from .repositories import MonitorStateRepository
 from .strategy import StrategyModel, decisions_for_positions
 from .strategy_alerts import StrategyAlertMixin
@@ -117,7 +117,11 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
             str(key).upper(): float(value or 0)
             for key, value in parse_assignments(settings.get("fxRates", ""), DEFAULT_FX_RATES).items()
         }
+        self.base_fx_rates = dict(self.fx_rates)
         self.strategy_model = StrategyModel(settings)
+
+    def use_external_fx_rates(self, external_signals: Dict[str, object] = None) -> None:
+        self.fx_rates = fx_rates_with_external_signals(self.base_fx_rates, external_signals)
 
     def enabled(self, rule: str) -> bool:
         return self.rules.get(rule, 1) != 0
@@ -207,6 +211,7 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
         return abs(float(pressure_delta or 0)) >= label_buffer
 
     def events_for_snapshot(self, snapshot: AccountSnapshot, previous: Dict[str, object]) -> List[AlertEvent]:
+        self.use_external_fx_rates(snapshot.external_signals)
         raw_events: List[AlertEvent] = []
         snapshot = self.snapshot_with_external_signal_deltas(snapshot, previous or {})
         signal_snapshot = snapshot
@@ -239,6 +244,7 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
         return snapshot
 
     def type_check_events_for_snapshot(self, snapshot: AccountSnapshot) -> List[AlertEvent]:
+        self.use_external_fx_rates(snapshot.external_signals)
         events: List[AlertEvent] = []
         snapshot = self.snapshot_with_strategy_scores(snapshot)
         events.extend(self.connection_events(snapshot, {"status": "이전 연결 상태"}))

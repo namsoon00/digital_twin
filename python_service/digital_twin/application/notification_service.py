@@ -67,6 +67,7 @@ class NotificationHoldingSnapshotEnricher:
             return
         raw_lines = self.raw_lines(context)
         next_lines = list(raw_lines)
+        self.monitor.use_external_fx_rates(state.get("externalSignals") if isinstance(state, dict) else {})
         for line in self.monitor.holding_price_lines(position, state.get("portfolio") if isinstance(state, dict) else None):
             label = str(line or "").split(":", 1)[0].strip()
             if line and not self.has_labeled_line(next_lines, label):

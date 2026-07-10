@@ -32,6 +32,35 @@ def normalized_fx_rates(fx_rates: Dict[str, float] = None) -> Dict[str, float]:
     return rates
 
 
+def fx_rates_with_external_signals(
+    fx_rates: Dict[str, float] = None,
+    external_signals: Dict[str, object] = None,
+) -> Dict[str, float]:
+    rates = normalized_fx_rates(fx_rates)
+    external_fx_rates = external_signals.get("fxRates") if isinstance(external_signals, dict) else {}
+    if not isinstance(external_fx_rates, dict):
+        return rates
+    for key, item in external_fx_rates.items():
+        if not isinstance(item, dict):
+            continue
+        normalized_key = str(key or "").upper().replace("/", "").strip()
+        base = str(item.get("base") or item.get("baseCurrency") or "").upper().strip()
+        quote = str(item.get("quote") or item.get("quoteCurrency") or "").upper().strip()
+        if not base and len(normalized_key) >= 6:
+            base = normalized_key[:3]
+        if not quote and len(normalized_key) >= 6:
+            quote = normalized_key[3:6]
+        rate = number(item.get("rate") if item.get("rate") not in (None, "") else item.get("value"))
+        if not rate:
+            continue
+        if base and quote == "KRW":
+            rates[base] = rate
+        elif quote and base == "KRW":
+            rates[quote] = 1 / rate
+    rates["KRW"] = 1.0
+    return rates
+
+
 def value_in_base(value: float, currency: str, fx_rates: Dict[str, float] = None) -> float:
     rates = normalized_fx_rates(fx_rates)
     code = str(currency or "KRW").upper()

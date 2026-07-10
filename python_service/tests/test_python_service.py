@@ -5243,6 +5243,13 @@ class PythonServiceTests(unittest.TestCase):
                         "ticker_sentiment_label": "Bullish",
                     }],
                 }]}
+            if "alphavantage" in url and "CURRENCY_EXCHANGE_RATE" in url:
+                return {"Realtime Currency Exchange Rate": {
+                    "1. From_Currency Code": "USD",
+                    "3. To_Currency Code": "KRW",
+                    "5. Exchange Rate": "1419.7",
+                    "6. Last Refreshed": "2026-07-01 00:00:00",
+                }}
             if "alphavantage" in url:
                 return {"Global Quote": {
                     "05. price": "130.25",
@@ -5328,7 +5335,7 @@ class PythonServiceTests(unittest.TestCase):
         signals = provider.signals_for_positions(positions)
         cached_signals = provider.signals_for_positions(positions)
 
-        self.assertEqual(8, len(calls))
+        self.assertEqual(9, len(calls))
         self.assertEqual(signals["fetchedAt"], cached_signals["fetchedAt"])
         self.assertEqual(signals["equityQuotes"], cached_signals["equityQuotes"])
         self.assertEqual(signals["cryptoMarkets"], cached_signals["cryptoMarkets"])
@@ -5342,8 +5349,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("Bullish", signals["newsHeadlines"]["AAPL"]["items"][0]["tickerSentimentLabel"])
         self.assertEqual("GDELT", signals["newsHeadlines"]["005930"]["provider"])
         self.assertIn("Samsung Electronics", signals["newsHeadlines"]["005930"]["items"][0]["title"])
-        self.assertEqual(1400, signals["fxRates"]["USDKRW"]["rate"])
-        self.assertEqual("RuntimeSettings", signals["fxRates"]["USDKRW"]["provider"])
+        self.assertEqual(1419.7, signals["fxRates"]["USDKRW"]["rate"])
+        self.assertEqual("Alpha Vantage", signals["fxRates"]["USDKRW"]["provider"])
 
     def test_external_signal_cache_recomputes_freshness_age_on_read(self):
         db_path = Path(self.temp.name) / "service.db"
@@ -7020,6 +7027,61 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("매도가능 수량: 230주", raw_lines)
         self.assertIn("종목 평가금액: $22,535", raw_lines)
         self.assertIn("계좌 평가금액: 3,155만 원", raw_lines)
+
+    def test_holding_snapshot_enricher_uses_snapshot_external_fx_rate(self):
+        position = normalize_position({
+            "symbol": "STRC",
+            "name": "Strategy Preferred",
+            "market": "US",
+            "currency": "USD",
+            "marketValue": 2097.6,
+            "quantity": 24,
+            "sellableQuantity": 24,
+            "averagePrice": 84.08,
+            "currentPrice": 87.4,
+            "profitLossRate": 3.7,
+        })
+        external_signals = {
+            "fxRates": {
+                "USDKRW": {
+                    "provider": "Alpha Vantage",
+                    "base": "USD",
+                    "quote": "KRW",
+                    "rate": 1425.5,
+                }
+            }
+        }
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "ok",
+            utc_now_iso(),
+            portfolio_summary([position], fx_rates={"USD": 1425.5, "KRW": 1}),
+            [position],
+            external_signals=external_signals,
+        )
+        job = NotificationJob.create(
+            "Strategy Preferred",
+            account_id="main",
+            account_label="메인",
+            message_type="investmentInsight",
+            context={
+                "target": "STRC",
+                "displayTarget": "Strategy Preferred / STRC",
+                "rawLines": "상태: 보유",
+            },
+        )
+
+        NotificationHoldingSnapshotEnricher(
+            lambda: {"main": snapshot.to_monitor_state()},
+            RealtimeMonitor({"fxRates": "KRW=1\nUSD=1400"}),
+        )(job)
+        raw_lines = job.context["rawLines"]
+
+        self.assertIn("종목 평가금액: $2,098 (약 299만 원)", raw_lines)
+        self.assertIn("계좌 평가금액: 299만 원", raw_lines)
 
     def test_validated_ai_response_hides_internal_variables_and_jargon(self):
         context = {

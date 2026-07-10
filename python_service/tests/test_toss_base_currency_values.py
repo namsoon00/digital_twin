@@ -7,6 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from digital_twin.domain.market_data import normalize_position
 from digital_twin.domain.monitoring import RealtimeMonitor
 from digital_twin.domain.portfolio_calculations import portfolio_summary
+from digital_twin.infrastructure.toss_snapshots import currency_rates_from_external_signals
 
 
 class TossBaseCurrencyValueTests(unittest.TestCase):
@@ -66,6 +67,38 @@ class TossBaseCurrencyValueTests(unittest.TestCase):
         line = RealtimeMonitor().position_market_value_line(position.to_dict())
 
         self.assertEqual("종목 평가금액: $22,540 (약 3,200만 원)", line)
+
+    def test_external_fx_rate_is_used_when_toss_krw_value_is_missing(self):
+        position = normalize_position(
+            {
+                "symbol": "STRC",
+                "market": "US",
+                "currency": "USD",
+                "quantity": 24,
+                "currentPrice": 87.4,
+                "marketValue": 2097.6,
+            }
+        )
+        external_signals = {
+            "fxRates": {
+                "USDKRW": {
+                    "provider": "Alpha Vantage",
+                    "base": "USD",
+                    "quote": "KRW",
+                    "rate": 1425.5,
+                }
+            }
+        }
+
+        rates = currency_rates_from_external_signals({"fxRates": "KRW=1\nUSD=1400"}, external_signals)
+        summary = portfolio_summary([position], fx_rates=rates)
+        monitor = RealtimeMonitor({"fxRates": "KRW=1\nUSD=1400"})
+        monitor.use_external_fx_rates(external_signals)
+        line = monitor.position_market_value_line(position.to_dict())
+
+        self.assertEqual(1425.5, rates["USD"])
+        self.assertAlmostEqual(2097.6 * 1425.5, summary.total)
+        self.assertEqual("종목 평가금액: $2,098 (약 299만 원)", line)
 
 
 if __name__ == "__main__":

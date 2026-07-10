@@ -278,6 +278,7 @@ class ExternalSignalProvider:
             "newsProvider": self.news_provider(),
             "newsMax": str(self.settings.get("externalNewsMaxSymbols") or "3"),
             "newsLookbackHours": str(self.settings.get("externalNewsLookbackHours") or "48"),
+            "fxRateSourceVersion": "alpha-vantage-currency-exchange-v1",
             "secMappings": symbol_assignments(self.settings.get("externalSecCompanyCiks") or ""),
             "dartLookbackDays": str(self.settings.get("externalDartLookbackDays") or "14"),
             "dartMappings": symbol_assignments(self.settings.get("externalDartCorpCodes") or ""),
@@ -289,6 +290,7 @@ class ExternalSignalProvider:
                 "opendart": self.external_api_enabled("externalDartEnabled"),
                 "sec": self.sec_enabled(),
                 "news": self.external_api_enabled("externalNewsEnabled"),
+                "fx": self.external_api_enabled("externalFxRateEnabled"),
             },
             "configured": {
                 "alpha": self.external_api_enabled("externalAlphaEnabled") and bool(str(self.settings.get("alphaVantageApiKey") or "").strip()),
@@ -297,6 +299,7 @@ class ExternalSignalProvider:
                 "opendart": self.external_api_enabled("externalDartEnabled") and bool(str(self.settings.get("opendartApiKey") or "").strip()),
                 "sec": self.sec_enabled(),
                 "news": self.external_api_enabled("externalNewsEnabled"),
+                "fx": self.fx_live_rate_enabled(),
             },
         }
         raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -345,6 +348,13 @@ class ExternalSignalProvider:
 
     def external_api_enabled(self, key: str) -> bool:
         return str(self.settings.get(key) or "1").strip().lower() not in DISABLED_SETTING_VALUES
+
+    def fx_live_rate_enabled(self) -> bool:
+        return (
+            self.external_api_enabled("externalFxRateEnabled")
+            and self.external_api_enabled("externalAlphaEnabled")
+            and bool(str(self.settings.get("alphaVantageApiKey") or "").strip())
+        )
 
     def guarded_call(self, source: str, target: str, fetch: Callable[[], object]):
         guard = ExternalApiGuard(self.provider_state, sleep=self.sleep)
@@ -696,24 +706,73 @@ class ExternalSignalProvider:
         assignments = symbol_assignments(self.settings.get("fxRates") or "")
         rates: Dict[str, object] = {}
         fetched_at = str(signals.get("fetchedAt") or utc_now_iso())
+        live_rates = self.live_fx_rates(signals, sorted(assignments.keys()))
         for currency, raw_rate in sorted(assignments.items()):
             base = str(currency or "").upper().strip()
             if not base or base == "KRW":
                 continue
-            rate = number(raw_rate)
+            live = live_rates.get(base) if isinstance(live_rates.get(base), dict) else {}
+            rate = number(live.get("rate")) or number(raw_rate)
             if rate <= 0:
                 continue
             pair = base + "KRW"
             rates[pair] = {
-                "provider": "RuntimeSettings",
+                "provider": str(live.get("provider") or "RuntimeSettings"),
                 "base": base,
                 "quote": "KRW",
                 "rate": rate,
                 "value": rate,
+                "lastUpdated": str(live.get("lastUpdated") or ""),
                 "fetchedAt": fetched_at,
             }
         if rates:
             signals["fxRates"] = rates
+
+    def live_fx_rates(self, signals: Dict[str, object], currencies: List[str]) -> Dict[str, Dict[str, object]]:
+        if not self.fx_live_rate_enabled():
+            return {}
+        api_key = str(self.settings.get("alphaVantageApiKey") or "").strip()
+        rows: Dict[str, Dict[str, object]] = {}
+        for currency in currencies:
+            base = str(currency or "").upper().strip()
+            if not base or base == "KRW":
+                continue
+            try:
+                def fetch_rate():
+                    url = "https://www.alphavantage.co/query?" + urllib.parse.urlencode({
+                        "function": "CURRENCY_EXCHANGE_RATE",
+                        "from_currency": base,
+                        "to_currency": "KRW",
+                        "apikey": api_key,
+                    })
+                    payload = self.fetch_json(url, {"Accept": "application/json"})
+                    data = payload.get("Realtime Currency Exchange Rate") if isinstance(payload.get("Realtime Currency Exchange Rate"), dict) else payload
+                    rate = number(
+                        data.get("5. Exchange Rate")
+                        or data.get("exchangeRate")
+                        or data.get("rate")
+                        or data.get("value")
+                    ) if isinstance(data, dict) else 0.0
+                    if not rate:
+                        reason = ""
+                        if isinstance(payload, dict):
+                            reason = str(payload.get("Note") or payload.get("Information") or payload.get("Error Message") or "")
+                        raise RuntimeError(reason or "empty FX rate")
+                    return {
+                        "provider": "Alpha Vantage",
+                        "rate": rate,
+                        "lastUpdated": str(
+                            data.get("6. Last Refreshed")
+                            or data.get("lastRefreshed")
+                            or data.get("lastUpdated")
+                            or ""
+                        ) if isinstance(data, dict) else "",
+                    }
+
+                rows[base] = self.guarded_call("Alpha Vantage", "fx:" + base + "KRW", fetch_rate)
+            except Exception as error:  # noqa: BLE001
+                self.status_for_error(signals, "Alpha Vantage", "fx:" + base + "KRW", error)
+        return rows
 
     def add_opendart(self, signals: Dict[str, object], positions: List[Position]) -> None:
         if not self.external_api_enabled("externalDartEnabled"):

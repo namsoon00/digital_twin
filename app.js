@@ -8,7 +8,6 @@
     tossClientId: "",
     tossClientSecret: "",
     tossAccountSeq: "",
-    kisEnv: "prod",
     kisBaseUrl: "https://openapi.koreainvestment.com:9443",
     kisMarketSignalsEnabled: "1",
     kisMarketSignalMaxSymbols: "20",
@@ -20,7 +19,6 @@
     telegramBotToken: "",
     telegramChatId: "",
     notifyLinkUrl: "http://127.0.0.1:3000?tab=notifications",
-    notifyIntervalMinutes: "10",
     symbolUniverseMaxAgeHours: "24",
     marketDataMaxAgeMinutes: "240",
     dataFreshnessEnabled: "1",
@@ -322,7 +320,6 @@
       "modelSell=1",
       "watchlistBuyCandidate=1",
       "modelScoreGap=1",
-      "modelVersionDrift=1",
       "flowVolume=1",
       "flowBuyShare=1",
       "flowSellShare=1",
@@ -334,8 +331,6 @@
       "holdingConcentration=1",
       "sectorConcentration=1",
       "marketCashLow=1",
-      "recordGain=1",
-      "recordLoss=1",
       "dataFreshness=1",
       "tossConnection=1",
       "orderPending=1",
@@ -366,7 +361,6 @@
       "modelSell=10",
       "watchlistBuyCandidate=10",
       "modelScoreGap=10",
-      "modelVersionDrift=10",
       "flowVolume=10",
       "flowBuyShare=10",
       "flowSellShare=10",
@@ -378,8 +372,6 @@
       "holdingConcentration=10",
       "sectorConcentration=10",
       "marketCashLow=10",
-      "recordGain=10",
-      "recordLoss=10",
       "dataFreshness=10",
       "tossConnection=10",
       "orderPending=10",
@@ -421,8 +413,6 @@
       "positionWeightHigh=30",
       "sectorWeightHigh=50",
       "marketCashLow=10",
-      "recordGain=10",
-      "recordLoss=-5",
       "priceNearPercent=1",
       "staleMinutes=30",
       "pendingOrderMinutes=30",
@@ -519,56 +509,6 @@
     return tabs.filter(function (tab) { return tab.id === state.activeTab; })[0] || tabs[0];
   }
 
-  var feedChannels = [
-    {
-      id: "cnbc-markets",
-      label: "CNBC 시장",
-      provider: "CNBC",
-      kind: "rss",
-      feedUrl: "https://www.cnbc.com/id/15839135/device/rss/rss.html",
-      tags: ["미국", "실적", "AI"]
-    },
-    {
-      id: "yahoo-market-tape",
-      label: "Yahoo 시장",
-      provider: "Yahoo Finance",
-      kind: "rss",
-      feedUrl: "https://feeds.finance.yahoo.com/rss/2.0/headline?s=%5EGSPC,%5EIXIC,KRW=X,BTC-USD&region=US&lang=en-US",
-      tags: ["지수", "환율", "유동성"]
-    },
-    {
-      id: "fed-policy",
-      label: "Fed 정책",
-      provider: "Federal Reserve",
-      kind: "rss",
-      feedUrl: "https://www.federalreserve.gov/feeds/press_all.xml",
-      tags: ["금리", "정책", "달러"]
-    },
-    {
-      id: "yonhap-economy",
-      label: "연합뉴스 경제",
-      provider: "연합뉴스",
-      kind: "rss",
-      feedUrl: "https://www.yna.co.kr/rss/economy.xml",
-      tags: ["한국", "증권", "산업"]
-    },
-    {
-      id: "coindesk-markets",
-      label: "CoinDesk 마켓",
-      provider: "CoinDesk",
-      kind: "rss",
-      feedUrl: "https://www.coindesk.com/arc/outboundfeeds/rss/",
-      tags: ["코인", "유동성", "리스크"]
-    },
-    {
-      id: "gdelt-cross-source",
-      label: "GDELT 글로벌",
-      provider: "GDELT",
-      kind: "gdelt",
-      query: '"stock market" OR "central bank" OR semiconductor OR Korea OR cryptocurrency',
-      tags: ["글로벌", "교차검증", "뉴스"]
-    }
-  ];
   var alertRuleCatalog = [
     { key: "priceBuyLimit", group: "가격", label: "매수 상한 접근", description: "현재가가 실험실 매수 상한에 접근하거나 하회할 때" },
     { key: "priceStop", group: "가격", label: "손절 기준 접근", description: "현재가가 손절 기준선에 접근하거나 하회할 때" },
@@ -578,7 +518,6 @@
     { key: "modelSell", group: "온톨로지 근거", label: "모델 매도 신호", description: "투자 인사이트에 넣을 모델 매도 근거 신호" },
     { key: "watchlistBuyCandidate", group: "온톨로지 근거", label: "관심종목 매수 후보 신호", description: "투자 인사이트에 넣을 관심종목 후보 근거 신호" },
     { key: "modelScoreGap", group: "모델", label: "모델 방향성", description: "매수와 매도 점수 차이가 크게 벌어질 때" },
-    { key: "modelVersionDrift", group: "모델", label: "모델 버전 변화", description: "저장한 실험 버전과 현재 모델 점수가 크게 달라질 때" },
     { key: "flowVolume", group: "수급", label: "거래량 급증", description: "거래량 배율이 설정값 이상으로 커질 때" },
     { key: "flowBuyShare", group: "수급", label: "매수 체결 우위", description: "매수 체결 비중이 높아질 때" },
     { key: "flowSellShare", group: "수급", label: "매도 체결 우위", description: "매도 체결 비중이 높아질 때" },
@@ -590,8 +529,6 @@
     { key: "holdingConcentration", group: "보유", label: "종목 비중 쏠림", description: "단일 보유 종목 비중이 높아질 때" },
     { key: "sectorConcentration", group: "보유", label: "섹터 쏠림", description: "계좌의 최대 섹터 노출이 높아질 때" },
     { key: "marketCashLow", group: "보유", label: "시장별 현금 부족", description: "한국장 또는 미국장별 현금 비중이 낮을 때" },
-    { key: "recordGain", group: "기록", label: "저장 후 성과", description: "실험 버전 저장 후 성과가 목표 이상일 때" },
-    { key: "recordLoss", group: "기록", label: "저장 후 손실", description: "실험 버전 저장 후 성과가 손실 기준을 밑돌 때" },
     { key: "dataFreshness", group: "데이터", label: "데이터 지연", description: "마지막 데이터 생성 시각이 오래되었을 때" },
     { key: "tossConnection", group: "데이터", label: "토스 연결 상태", description: "토스 live 연결이 아니거나 비어 있을 때" },
     { key: "orderPending", group: "주문", label: "미체결 주문", description: "주문 데이터가 연결되면 오래된 미체결을 표시" },
@@ -644,7 +581,6 @@
     modelSell: "🔴",
     watchlistBuyCandidate: "👀",
     modelScoreGap: "⚖️",
-    modelVersionDrift: "🧪",
     flowVolume: "📊",
     flowBuyShare: "🟢",
     flowSellShare: "🔴",
@@ -656,8 +592,6 @@
     holdingConcentration: "📦",
     sectorConcentration: "🏭",
     marketCashLow: "💵",
-    recordGain: "📈",
-    recordLoss: "📉",
     dataFreshness: "🕒",
     tossConnection: "🔌",
     orderPending: "⏳",
@@ -710,8 +644,6 @@
     { key: "positionWeightHigh", label: "단일 종목 비중", unit: "%", step: "1" },
     { key: "sectorWeightHigh", label: "섹터 비중", unit: "%", step: "1" },
     { key: "marketCashLow", label: "시장별 현금 하단", unit: "%", step: "1" },
-    { key: "recordGain", label: "기록 성과 상단", unit: "%", step: "0.1" },
-    { key: "recordLoss", label: "기록 성과 하단", unit: "%", step: "0.1" },
     { key: "priceNearPercent", label: "가격 접근 허용폭", unit: "%", step: "0.1" },
     { key: "staleMinutes", label: "데이터 지연 시간", unit: "분", step: "1" },
     { key: "pendingOrderMinutes", label: "미체결 점검 시간", unit: "분", step: "1" },
@@ -792,9 +724,6 @@
   };
   var settingsMemoryStore = "";
   var snapshotMemoryStore = "";
-  var labDraftsMemoryStore = "";
-  var labRecordsMemoryStore = "";
-  var modelVersionsMemoryStore = "";
   var staticBuildConfigPromise = null;
   var watchSuggestTimer = null;
   var watchSuggestRequestId = 0;
@@ -813,9 +742,6 @@
     error: "",
     snapshot: cachedSnapshot,
     snapshotFromCache: Boolean(cachedSnapshot),
-    feed: null,
-    feedLoading: false,
-    feedError: "",
     researchEvidence: null,
     researchEvidenceLoading: false,
     researchEvidenceError: "",
@@ -892,13 +818,6 @@
     accountDraft: defaultAccountDraft(),
     editingAccountId: "",
     accountSaved: false,
-    labDrafts: loadLabDrafts(),
-    labRecords: loadLabRecords(),
-    modelVersions: loadModelVersions(),
-    labRecordSaved: false,
-    labRecordError: "",
-    modelSaved: false,
-    modelError: "",
     ontologyRulebox: null,
     ontologyRuleboxJson: "",
     ontologyRuleboxLoading: false,
@@ -1797,70 +1716,6 @@
     } catch (error) {
       return true;
     }
-  }
-
-  function readLocalPayload(key, fallback) {
-    try {
-      var storage = window.localStorage;
-      return storage ? storage.getItem(key) : fallback;
-    } catch (error) {
-      return fallback;
-    }
-  }
-
-  function writeLocalPayload(key, payload, memorySetter) {
-    memorySetter(payload);
-    try {
-      var storage = window.localStorage;
-      if (storage) storage.setItem(key, payload);
-      return true;
-    } catch (error) {
-      return true;
-    }
-  }
-
-  function loadLabDrafts() {
-    try {
-      return JSON.parse(readLocalPayload("exitLensLabDrafts", labDraftsMemoryStore) || "{}") || {};
-    } catch (error) {
-      return {};
-    }
-  }
-
-  function persistLabDrafts() {
-    return writeLocalPayload("exitLensLabDrafts", JSON.stringify(state.labDrafts || {}), function (payload) {
-      labDraftsMemoryStore = payload;
-    });
-  }
-
-  function loadLabRecords() {
-    try {
-      var records = JSON.parse(readLocalPayload("exitLensLabRecords", labRecordsMemoryStore) || "[]");
-      return Array.isArray(records) ? records : [];
-    } catch (error) {
-      return [];
-    }
-  }
-
-  function persistLabRecords() {
-    return writeLocalPayload("exitLensLabRecords", JSON.stringify(state.labRecords || []), function (payload) {
-      labRecordsMemoryStore = payload;
-    });
-  }
-
-  function loadModelVersions() {
-    try {
-      var versions = JSON.parse(readLocalPayload("exitLensModelVersions", modelVersionsMemoryStore) || "[]");
-      return Array.isArray(versions) ? versions : [];
-    } catch (error) {
-      return [];
-    }
-  }
-
-  function persistModelVersions() {
-    return writeLocalPayload("exitLensModelVersions", JSON.stringify(state.modelVersions || []), function (payload) {
-      modelVersionsMemoryStore = payload;
-    });
   }
 
   function persistSettings() {
@@ -3852,7 +3707,6 @@
       telegramBotToken: settingValue("telegramBotToken"),
       telegramChatId: settingValue("telegramChatId"),
       notifyLinkUrl: settingValue("notifyLinkUrl"),
-      notifyIntervalMinutes: settingValue("notifyIntervalMinutes"),
       symbolUniverseMaxAgeHours: settingValue("symbolUniverseMaxAgeHours"),
       marketDataMaxAgeMinutes: settingValue("marketDataMaxAgeMinutes"),
       dataFreshnessEnabled: settingValue("dataFreshnessEnabled"),
@@ -4520,37 +4374,6 @@
     return "/api/flow-lens" + (query ? "?" + query : "");
   }
 
-  function gdeltFeedUrl(channel) {
-    var target = new URL("https://api.gdeltproject.org/api/v2/doc/doc");
-    target.searchParams.set("query", channel.query || "market stocks");
-    target.searchParams.set("mode", "ArtList");
-    target.searchParams.set("format", "JSON");
-    target.searchParams.set("maxrecords", "24");
-    target.searchParams.set("timespan", "3d");
-    target.searchParams.set("sort", "DateDesc");
-    return target.toString();
-  }
-
-  function economicFeedProxyPath(channel) {
-    var target = channel.kind === "gdelt" ? gdeltFeedUrl(channel) : channel.feedUrl;
-    var route = channel.kind === "gdelt" ? "/api/economic-feed/gdelt" : "/api/economic-feed/rss";
-    return route + "?url=" + encodeURIComponent(target);
-  }
-
-  function textFromXml(node, selector) {
-    var found = node.querySelector(selector);
-    return found ? String(found.textContent || "").replace(/\s+/g, " ").trim() : "";
-  }
-
-  function cleanSummary(value, fallback) {
-    var text = String(value || "")
-      .replace(/<[^>]+>/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-    if (text.length > 220) text = text.slice(0, 217) + "...";
-    return text || fallback || "요약 대기";
-  }
-
   function feedTimeValue(value) {
     var raw = String(value || "");
     var compact = raw.replace(/\D/g, "");
@@ -4575,168 +4398,6 @@
       return compact.slice(4, 6) + "." + compact.slice(6, 8) + " " + compact.slice(8, 10) + ":" + compact.slice(10, 12);
     }
     return formatClock(value);
-  }
-
-  function parseRssFeed(raw, channel) {
-    var parsed = new DOMParser().parseFromString(raw, "application/xml");
-    var items = Array.prototype.slice.call(parsed.querySelectorAll("item"));
-    return items.slice(0, 6).map(function (item, index) {
-      var title = textFromXml(item, "title");
-      var url = textFromXml(item, "link") || textFromXml(item, "guid");
-      var publishedAt = textFromXml(item, "pubDate") || textFromXml(item, "updated");
-      var summary = cleanSummary(textFromXml(item, "description") || textFromXml(item, "content\\:encoded"), title);
-      if (!title || !url) return null;
-      return {
-        id: channel.id + "-" + index + "-" + title,
-        title: title,
-        summary: summary,
-        url: url,
-        source: channel.provider,
-        channelId: channel.id,
-        channelLabel: channel.label,
-        publishedAt: publishedAt,
-        publishedLabel: formatFeedTime(publishedAt),
-        tags: channel.tags || [],
-        sortValue: feedTimeValue(publishedAt)
-      };
-    }).filter(Boolean);
-  }
-
-  function parseGdeltFeed(payload, channel) {
-    var articles = Array.isArray(payload.articles) ? payload.articles : [];
-    return articles.slice(0, 6).map(function (article, index) {
-      var title = String(article.title || "").trim();
-      var url = String(article.url || "").trim();
-      var publishedAt = String(article.seendate || "");
-      var domain = String(article.domain || "GDELT").trim();
-      if (!title || !url) return null;
-      return {
-        id: channel.id + "-" + index + "-" + title,
-        title: title,
-        summary: "GDELT가 수집한 " + domain + " 기사입니다.",
-        url: url,
-        source: domain,
-        channelId: channel.id,
-        channelLabel: channel.label,
-        publishedAt: publishedAt,
-        publishedLabel: formatFeedTime(publishedAt),
-        tags: channel.tags || [],
-        sortValue: feedTimeValue(publishedAt)
-      };
-    }).filter(Boolean);
-  }
-
-  function fetchFeedChannel(channel) {
-    if (channel.kind === "gdelt") {
-      return requestJson(economicFeedProxyPath(channel)).then(function (payload) {
-        return parseGdeltFeed(payload, channel);
-      });
-    }
-    return requestText(economicFeedProxyPath(channel)).then(function (raw) {
-      return parseRssFeed(raw, channel);
-    });
-  }
-
-  function staticFeedSnapshot(reason) {
-    var stamped = new Date().toISOString();
-    var items = [
-      {
-        title: "AI 인프라 지출과 금리 경로가 성장주 판단을 흔듭니다",
-        summary: "정적 미리보기에서는 실제 RSS 대신 예시 피드를 보여줍니다. 로컬 서버에서는 CNBC, Yahoo, Fed, 연합뉴스, CoinDesk, GDELT를 직접 조회합니다.",
-        source: "Static Preview",
-        url: "",
-        channelId: "preview",
-        channelLabel: "미리보기",
-        publishedAt: stamped,
-        publishedLabel: formatFeedTime(stamped),
-        tags: ["AI", "금리", "성장주"],
-        sortValue: Date.now()
-      },
-      {
-        title: "한국 수급과 코인 유동성은 별도 채널로 분리해 확인합니다",
-        summary: reason || "피드 탭은 시장 관점을 여러 원천으로 나눠 비교합니다.",
-        source: "Static Preview",
-        url: "",
-        channelId: "preview",
-        channelLabel: "미리보기",
-        publishedAt: stamped,
-        publishedLabel: formatFeedTime(stamped),
-        tags: ["한국", "코인", "유동성"],
-        sortValue: Date.now() - 1
-      }
-    ];
-    return {
-      generatedAt: stamped,
-      mock: true,
-      items: items,
-      channels: feedChannels.map(function (channel) {
-        return { id: channel.id, label: channel.label, provider: channel.provider, count: 0, error: "" };
-      }),
-      errors: reason ? [reason] : []
-    };
-  }
-
-  function buildFeedSnapshot(results) {
-    var items = [];
-    var errors = [];
-    var channels = results.map(function (result) {
-      if (result.error) errors.push(result.channel.label + ": " + result.error);
-      items = items.concat(result.items || []);
-      return {
-        id: result.channel.id,
-        label: result.channel.label,
-        provider: result.channel.provider,
-        count: (result.items || []).length,
-        error: result.error || ""
-      };
-    });
-    items.sort(function (a, b) {
-      return (b.sortValue || 0) - (a.sortValue || 0);
-    });
-    if (!items.length) {
-      throw new Error(errors[0] || "피드 결과 없음");
-    }
-    return {
-      generatedAt: new Date().toISOString(),
-      mock: false,
-      items: items.slice(0, 30),
-      channels: channels,
-      errors: errors
-    };
-  }
-
-  function loadFeed(force) {
-    if (state.feedLoading) return Promise.resolve();
-    if (state.feed && !force) return Promise.resolve(state.feed);
-    state.feedLoading = true;
-    state.feedError = "";
-    render();
-
-    var promise = isStaticPreviewHost()
-      ? Promise.resolve(staticFeedSnapshot("정적 미리보기"))
-      : Promise.all(feedChannels.map(function (channel) {
-        return fetchFeedChannel(channel)
-          .then(function (items) {
-            return { channel: channel, items: items, error: "" };
-          })
-          .catch(function (error) {
-            return { channel: channel, items: [], error: error.message || String(error) };
-          });
-      })).then(buildFeedSnapshot);
-
-    return promise
-      .then(function (feed) {
-        state.feed = feed;
-        state.feedError = "";
-      })
-      .catch(function (error) {
-        state.feed = null;
-        state.feedError = error.message || "피드를 불러오지 못했습니다.";
-      })
-      .finally(function () {
-        state.feedLoading = false;
-        render();
-      });
   }
 
   function currentResearchEvidence() {
@@ -5262,8 +4923,6 @@
     }
     persistSettings();
     state.settingsSaved = false;
-    state.modelSaved = false;
-    state.modelError = "";
     render();
   }
 
@@ -5945,21 +5604,6 @@
     ];
   }
 
-  function pressureLabel(score) {
-    var value = Number(score || 0);
-    if (value >= 72) return "높음";
-    if (value >= 55) return "검토";
-    if (value >= 38) return "관찰";
-    return "낮음";
-  }
-
-  function labPriceDiff(value, currentPrice) {
-    var price = Number(value || 0);
-    var current = Number(currentPrice || 0);
-    if (!price || !current) return "-";
-    return signedPct(((price / current) - 1) * 100);
-  }
-
   function labActionPrices(item) {
     var valuation = item.valuation || {};
     var current = Number(item.currentPrice || valuation.currentPrice || 0);
@@ -6023,18 +5667,6 @@
       .join("\n");
   }
 
-  function updateValuationAssumption(symbol, field, value) {
-    var key = String(symbol || "").toUpperCase();
-    if (!key || ["eps", "targetPer", "margin"].indexOf(field) < 0) return;
-    var map = parseValuationAssumptions();
-    map[key] = Object.assign({ symbol: key, eps: 0, targetPer: 0, margin: 15 }, map[key] || {});
-    map[key][field] = numeric(value);
-    state.settings.valuationAssumptions = serializeValuationAssumptions(map);
-    persistSettings();
-    state.settingsSaved = false;
-    render();
-  }
-
   function labDraftDefaults(item) {
     var valuation = item.valuation || {};
     var current = Number(item.currentPrice || 0);
@@ -6050,151 +5682,7 @@
   }
 
   function labDraftForItem(item) {
-    var symbol = String(item.symbol || "").toUpperCase();
-    return Object.assign({}, labDraftDefaults(item), state.labDrafts[symbol] || {});
-  }
-
-  function updateLabDraft(symbol, field, value, shouldRender) {
-    var key = String(symbol || "").toUpperCase();
-    var allowed = ["thesisScore", "riskScore", "confidenceScore", "targetReturn", "stopLoss", "positionSize"];
-    if (!key || allowed.indexOf(field) < 0) return;
-    state.labDrafts[key] = Object.assign({}, state.labDrafts[key] || {});
-    state.labDrafts[key][field] = numeric(value);
-    state.labRecordSaved = false;
-    state.labRecordError = "";
-    persistLabDrafts();
-    if (shouldRender !== false) render();
-  }
-
-  function labRecordsForSymbol(symbol) {
-    var key = String(symbol || "").toUpperCase();
-    return (state.labRecords || [])
-      .filter(function (record) { return String(record.symbol || "").toUpperCase() === key; })
-      .sort(function (a, b) { return String(b.createdAt || "").localeCompare(String(a.createdAt || "")); });
-  }
-
-  function latestLabRecordFor(symbol) {
-    return labRecordsForSymbol(symbol)[0] || null;
-  }
-
-  function labRecordReturn(record, currentPrice) {
-    var start = Number(record && record.priceAtRecord || 0);
-    var current = Number(currentPrice || 0);
-    if (!start || !current) return 0;
-    return ((current / start) - 1) * 100;
-  }
-
-  function labRecordVersion(symbol) {
-    return labRecordsForSymbol(symbol).length + 1;
-  }
-
-  function saveLabRecord(symbol) {
-    var key = String(symbol || "").toUpperCase();
-    if (!key || !state.snapshot) return;
-    var item = buildTradeSignalItems(state.snapshot).filter(function (candidate) {
-      return candidate.symbol === key;
-    })[0];
-    if (!item) {
-      state.labRecordError = "저장할 종목을 찾지 못했습니다.";
-      showSnackbar(state.labRecordError, "danger");
-      render();
-      return;
-    }
-    var valuation = item.valuation || {};
-    var draft = labDraftForItem(item);
-    var model = customModelScores(item);
-    var lines = labActionPrices(item);
-    var lineMap = {};
-    lines.forEach(function (line) {
-      lineMap[line.label] = Number(line.value || 0);
-    });
-    var record = {
-      id: key + "-" + Date.now(),
-      schemaVersion: 1,
-      version: labRecordVersion(key),
-      createdAt: new Date().toISOString(),
-      symbol: key,
-      name: item.name || key,
-      source: item.source || "",
-      currency: item.currency || "",
-      action: item.action || "",
-      tone: item.tone || "hold",
-      modelAction: model.action,
-      modelTone: model.tone,
-      priceAtRecord: Number(item.currentPrice || 0),
-      averagePrice: Number(item.averagePrice || 0),
-      fairValue: Number(valuation.fairValue || 0),
-      marginPrice: Number(valuation.marginPrice || 0),
-      fairValueGap: Number(valuation.gap || 0),
-      buyScore: Number(item.buyScore || 0),
-      sellScore: Number(item.sellScore || 0),
-      modelBuyScore: Number(model.buyScore || 0),
-      modelSellScore: Number(model.sellScore || 0),
-      buyShare: Number(item.buyShare || 0),
-      inputs: {
-        buyReasonScore: Number(draft.buyReasonScore || draft.thesisScore || 0),
-        thesisScore: Number(draft.thesisScore || 0),
-        riskScore: Number(draft.riskScore || 0),
-        confidenceScore: Number(draft.confidenceScore || 0),
-        targetReturn: Number(draft.targetReturn || 0),
-        stopLoss: Number(draft.stopLoss || 0),
-        positionSize: Number(draft.positionSize || 0)
-      },
-      pricePlan: {
-        buyLimit: Number(lineMap["매수 상한"] || 0),
-        stopPrice: Number(lineMap["손절 기준"] || 0),
-        trimOne: Number(lineMap["1차 매도"] || 0),
-        trimTwo: Number(lineMap["2차 매도"] || 0)
-      }
-    };
-    state.labRecords = (state.labRecords || []).concat(record);
-    state.labRecordSaved = persistLabRecords();
-    state.labRecordError = state.labRecordSaved ? "" : "실험 기록을 저장하지 못했습니다.";
-    showSnackbar(state.labRecordSaved ? "실험 기록을 저장했습니다." : state.labRecordError, state.labRecordSaved ? "success" : "danger");
-    render();
-  }
-
-  function labLatestRecordMap() {
-    var map = {};
-    (state.labRecords || []).forEach(function (record) {
-      var symbol = String(record.symbol || "").toUpperCase();
-      if (!symbol) return;
-      if (!map[symbol] || String(record.createdAt || "") > String(map[symbol].createdAt || "")) {
-        map[symbol] = record;
-      }
-    });
-    return map;
-  }
-
-  function labStatsForItems(items) {
-    var latestMap = labLatestRecordMap();
-    var latestRecords = Object.keys(latestMap).map(function (symbol) { return latestMap[symbol]; });
-    var itemMap = {};
-    items.forEach(function (item) {
-      itemMap[item.symbol] = item;
-    });
-    var returns = latestRecords
-      .map(function (record) {
-        var item = itemMap[record.symbol] || {};
-        return labRecordReturn(record, item.currentPrice);
-      })
-      .filter(function (value) { return Number.isFinite(value); });
-    var scoreTotal = latestRecords.reduce(function (sum, record) {
-      return sum + Number(record.inputs && (record.inputs.buyReasonScore || record.inputs.thesisScore) || 0);
-    }, 0);
-    var riskTotal = latestRecords.reduce(function (sum, record) {
-      return sum + Number(record.inputs && record.inputs.riskScore || 0);
-    }, 0);
-    var returnTotal = returns.reduce(function (sum, value) { return sum + value; }, 0);
-    var winners = returns.filter(function (value) { return value > 0; }).length;
-    return {
-      recordCount: (state.labRecords || []).length,
-      symbolCount: latestRecords.length,
-      averageReturn: returns.length ? returnTotal / returns.length : 0,
-      winRate: returns.length ? (winners / returns.length) * 100 : 0,
-      averageScore: latestRecords.length ? scoreTotal / latestRecords.length : 0,
-      averageRisk: latestRecords.length ? riskTotal / latestRecords.length : 0
-    };
+    return labDraftDefaults(item);
   }
 
   function modelFormulaVariables(item) {
@@ -6430,117 +5918,13 @@
     var actionCount = scored.filter(function (score) {
       return score.relationStrength >= 55 || score.tone === "danger" || score.tone === "caution";
     }).length;
-    var stats = labStatsForItems(items);
     return {
       buyAverage: relationAverage,
       sellAverage: riskAverage,
       relationAverage: relationAverage,
       riskAverage: riskAverage,
-      actionCount: actionCount,
-      recordCount: stats.recordCount,
-      symbolCount: stats.symbolCount,
-      averageReturn: stats.averageReturn,
-      winRate: stats.winRate
+      actionCount: actionCount
     };
-  }
-
-  function currentModelSnapshot(items) {
-    return {
-      name: settingValue("modelName") || defaultSettings.modelName,
-      hypothesis: settingValue("modelHypothesis") || defaultSettings.modelHypothesis,
-      fairValueFormula: formulaSetting("fairValueFormula"),
-      buyScoreFormula: formulaSetting("buyScoreFormula"),
-      sellScoreFormula: formulaSetting("sellScoreFormula"),
-      profitTakeScoreFormula: formulaSetting("profitTakeScoreFormula"),
-      lossCutScoreFormula: formulaSetting("lossCutScoreFormula"),
-      notificationScoreFormula: formulaSetting("notificationScoreFormula"),
-      ontologyRelationRules: settingValue("ontologyRelationRules") || defaultSettings.ontologyRelationRules,
-      aiPromptTemplates: settingValue("aiPromptTemplates") || defaultSettings.aiPromptTemplates,
-      aiPromptPolicy: settingValue("aiPromptPolicy") || defaultSettings.aiPromptPolicy,
-      notificationAiGateEnabled: settingValue("notificationAiGateEnabled") || defaultSettings.notificationAiGateEnabled,
-      notificationAiGateMessageTypes: settingValue("notificationAiGateMessageTypes") || defaultSettings.notificationAiGateMessageTypes,
-      notificationAiUseCodex: settingValue("notificationAiUseCodex") || defaultSettings.notificationAiUseCodex,
-      notificationAiTimeoutSeconds: settingValue("notificationAiTimeoutSeconds") || defaultSettings.notificationAiTimeoutSeconds,
-      customBuyModelFormula: formulaSetting("customBuyModelFormula"),
-      customSellModelFormula: formulaSetting("customSellModelFormula"),
-      formulaWeights: formulaWeights(),
-      decisionThresholds: decisionThresholds(),
-      modelDecisionThresholds: modelDecisionThresholds(),
-      alertRules: alertRules(),
-      alertThresholds: alertThresholds(),
-      stats: modelStatsForItems(items || [])
-    };
-  }
-
-  function saveModelVersion() {
-    if (!state.snapshot) return;
-    var items = buildTradeSignalItems(state.snapshot);
-    var snapshot = currentModelSnapshot(items);
-    var version = {
-      id: "model-" + Date.now(),
-      schemaVersion: 1,
-      version: (state.modelVersions || []).length + 1,
-      createdAt: new Date().toISOString(),
-      model: snapshot
-    };
-    state.modelVersions = (state.modelVersions || []).concat(version);
-    state.modelSaved = persistModelVersions();
-    state.modelError = state.modelSaved ? "" : "모델 버전을 저장하지 못했습니다.";
-    showSnackbar(state.modelSaved ? "모델 버전을 저장했습니다." : state.modelError, state.modelSaved ? "success" : "danger");
-    render();
-  }
-
-  function downloadText(filename, content, mimeType) {
-    try {
-      var blob = new Blob([content], { type: mimeType || "text/plain;charset=utf-8" });
-      var url = URL.createObjectURL(blob);
-      var link = document.createElement("a");
-      link.href = url;
-      link.download = filename;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
-    } catch (error) {
-      state.modelError = "파일을 만들지 못했습니다: " + (error.message || "알 수 없는 오류");
-      render();
-    }
-  }
-
-  function csvCell(value) {
-    var text = String(value == null ? "" : value);
-    return '"' + text.replace(/"/g, '""') + '"';
-  }
-
-  function exportLabRecords(format) {
-    var records = state.labRecords || [];
-    if (format === "csv") {
-      var headers = ["version", "createdAt", "symbol", "name", "action", "priceAtRecord", "modelBuyScore", "modelSellScore", "buyReasonScore", "riskScore", "targetReturn", "stopLoss"];
-      var rows = records.map(function (record) {
-        var inputs = record.inputs || {};
-        return [
-          record.version,
-          record.createdAt,
-          record.symbol,
-          record.name,
-          record.action,
-          record.priceAtRecord,
-          record.modelBuyScore,
-          record.modelSellScore,
-          inputs.buyReasonScore || inputs.thesisScore,
-          inputs.riskScore,
-          inputs.targetReturn,
-          inputs.stopLoss
-        ].map(csvCell).join(",");
-      });
-      downloadText("lab-records.csv", headers.map(csvCell).join(",") + "\n" + rows.join("\n"), "text/csv;charset=utf-8");
-      return;
-    }
-    downloadText("lab-records.json", JSON.stringify(records, null, 2), "application/json;charset=utf-8");
-  }
-
-  function exportModelVersions() {
-    downloadText("model-versions.json", JSON.stringify(state.modelVersions || [], null, 2), "application/json;charset=utf-8");
   }
 
   function alertRules() {
@@ -6653,7 +6037,6 @@
 
   function addModelAlerts(alerts, rules, thresholds, item) {
     var model = customModelScores(item);
-    var latest = latestLabRecordFor(item.symbol);
     if (model.buyScore >= Number(thresholds.modelBuyScore || 0)) {
       addAlert(alerts, rules, {
         rule: "modelBuy",
@@ -6690,22 +6073,6 @@
         threshold: Math.round(thresholds.modelScoreGap || 0) + "점 차이",
         source: "내 모델"
       });
-    }
-    if (latest) {
-      var buyDrift = Math.abs(Number(model.buyScore || 0) - Number(latest.modelBuyScore || 0));
-      var sellDrift = Math.abs(Number(model.sellScore || 0) - Number(latest.modelSellScore || 0));
-      if (Math.max(buyDrift, sellDrift) >= Number(thresholds.modelScoreGap || 0)) {
-        addAlert(alerts, rules, {
-          rule: "modelVersionDrift",
-          severity: "info",
-          symbol: item.symbol,
-          title: item.name + " 저장 버전 대비 변화",
-          message: "최근 저장한 실험 버전과 현재 모델 점수가 달라졌습니다.",
-          value: "매수 " + Math.round(buyDrift) + " / 매도 " + Math.round(sellDrift),
-          threshold: Math.round(thresholds.modelScoreGap || 0) + "점",
-          source: "버전 기록"
-        });
-      }
     }
   }
 
@@ -6830,36 +6197,6 @@
         value: pct(weight),
         threshold: pct(thresholds.positionWeightHigh),
         source: "보유"
-      });
-    }
-  }
-
-  function addRecordAlerts(alerts, rules, thresholds, item) {
-    var latest = latestLabRecordFor(item.symbol);
-    if (!latest) return;
-    var result = labRecordReturn(latest, item.currentPrice);
-    if (result >= Number(thresholds.recordGain || 0)) {
-      addAlert(alerts, rules, {
-        rule: "recordGain",
-        severity: "watch",
-        symbol: item.symbol,
-        title: item.name + " 저장 후 성과 도달",
-        message: "최근 실험 버전 저장 이후 성과가 목표값을 넘었습니다.",
-        value: signedPct(result),
-        threshold: signedPct(thresholds.recordGain),
-        source: "버전 기록"
-      });
-    }
-    if (result <= Number(thresholds.recordLoss || 0)) {
-      addAlert(alerts, rules, {
-        rule: "recordLoss",
-        severity: "caution",
-        symbol: item.symbol,
-        title: item.name + " 저장 후 손실 확대",
-        message: "최근 실험 버전 저장 이후 성과가 손실 기준을 밑돌았습니다.",
-        value: signedPct(result),
-        threshold: signedPct(thresholds.recordLoss),
-        source: "버전 기록"
       });
     }
   }
@@ -7007,7 +6344,6 @@
       addModelAlerts(alerts, rules, thresholds, item);
       addFlowAlerts(alerts, rules, thresholds, item);
       addHoldingAlerts(alerts, rules, thresholds, item, portfolio);
-      addRecordAlerts(alerts, rules, thresholds, item);
     });
     addPortfolioAlerts(alerts, rules, thresholds, snapshot);
     addDataAlerts(alerts, rules, thresholds, snapshot);
@@ -7074,9 +6410,6 @@
     restoreRenderedPageScrollPosition();
     bindPageScrollMemory();
     syncAppNavScrollState();
-    if (state.activeTab === "feed" && !state.feed && !state.feedLoading) {
-      loadFeed(false);
-    }
     if (state.activeTab === "feed" && !state.researchEvidence && !state.researchEvidenceLoading) {
       loadResearchEvidence(false);
     }
@@ -7875,25 +7208,6 @@
     return renderStrategyModelingPage(snapshot);
   }
 
-  function renderOntologySectionBar() {
-    var section = activeOntologySectionMeta();
-    return [
-      '<div class="ontology-section-bar">',
-      '<div class="ontology-section-tabs" role="tablist" aria-label="관계 분석 섹션">',
-      ontologySections.map(function (item) {
-        var active = section.id === item.id;
-        return [
-          '<button type="button" role="tab" class="' + (active ? "active" : "") + '" data-ontology-section="' + escapeHtml(item.id) + '"' + (active ? ' aria-selected="true"' : ' aria-selected="false"') + '>',
-          '<strong>' + escapeHtml(item.label) + '</strong>',
-          '<span>' + escapeHtml(item.description) + '</span>',
-          '</button>'
-        ].join("");
-      }).join(""),
-      '</div>',
-      '</div>'
-    ].join("");
-  }
-
   function renderStrategySectionBar() {
     var section = activeStrategySectionMeta();
     return [
@@ -8645,8 +7959,7 @@
         renderOntologyRuleEditorPanel(snapshot),
         renderNeo4jRuleboxPanel(snapshot),
         renderAiPromptRegistryPanel(snapshot),
-        renderAdminModelingPanel(snapshot),
-        renderModelVersionPanel(snapshot)
+        renderAdminModelingPanel(snapshot)
       ].join("");
     }
     if (section === "trace") {
@@ -8723,51 +8036,6 @@
       '<em>' + escapeHtml(step[2]) + '</em>',
       '</span>',
       '<i>' + escapeHtml(step[3]) + '</i>',
-      '</div>'
-    ].join("");
-  }
-
-  function modelFormulaRows() {
-    return [
-      ["Valuation", "적정가 공식", formulaSetting("fairValueFormula")],
-      ["Signal", "매수 점수 공식", formulaSetting("buyScoreFormula")],
-      ["Signal", "매도 점수 공식", formulaSetting("sellScoreFormula")],
-      ["Custom", "참고 매수 계산식", formulaSetting("customBuyModelFormula")],
-      ["Custom", "참고 매도 계산식", formulaSetting("customSellModelFormula")],
-      ["Holding", "익절 점검 공식", formulaSetting("profitTakeScoreFormula")],
-      ["Holding", "손실 관리 공식", formulaSetting("lossCutScoreFormula")],
-      ["Delivery", "알림 발송 공식", formulaSetting("notificationScoreFormula")]
-    ];
-  }
-
-  function renderFormulaLedgerPanel() {
-    return [
-      '<article class="panel formula-ledger-panel">',
-      '<div class="panel-head">',
-      '<div>',
-      '<p class="label">Formula Ledger</p>',
-      '<h2>공식 전체 목록</h2>',
-      '<p class="subtle">전통 금융 시스템처럼 공식의 목적, 영역, 표현식을 한 표에서 확인합니다.</p>',
-      '</div>',
-      '<span class="metric">' + escapeHtml(modelFormulaRows().length) + '</span>',
-      '</div>',
-      '<div class="formula-ledger">',
-      modelFormulaRows().map(renderFormulaLedgerRow).join(""),
-      '</div>',
-      '<div class="rule-strip">',
-      '<span>지원 연산: +, -, *, /, 괄호, min, max, abs, round, sqrt, pow, clamp</span>',
-      '<span>공식은 저장 전후 같은 입력으로 재현성 검증을 통과해야 운영 기준으로 봅니다.</span>',
-      '</div>',
-      '</article>'
-    ].join("");
-  }
-
-  function renderFormulaLedgerRow(row) {
-    return [
-      '<div class="formula-ledger-row">',
-      '<em>' + escapeHtml(row[0]) + '</em>',
-      '<strong>' + escapeHtml(row[1]) + '</strong>',
-      '<code>' + escapeHtml(row[2] || "-") + '</code>',
       '</div>'
     ].join("");
   }
@@ -9607,14 +8875,12 @@
     var summary = state.notificationJobsSummary || state.realtime.notificationJobs || {};
     var templateCount = notificationTemplateItems().length;
     var scheduleCount = Array.isArray(state.messageSchedules) ? state.messageSchedules.length : 0;
-    var interval = settingValue("notifyIntervalMinutes") || defaultSettings.notifyIntervalMinutes;
     var items = [
       ["대기", Number(summary.pending || 0), "watch"],
       ["발송", Number(summary.done || 0), "watch"],
       ["보류", Number(summary.suppressed || 0), "muted"],
       ["실패", Number(summary.failed || 0), Number(summary.failed || 0) ? "danger" : "muted"],
       ["관리 룰", notificationEnabledRuleCount() + "/" + notificationPolicyCatalog().length, "policy"],
-      ["기본 주기", interval + "분", "muted"],
       ["템플릿", templateCount + "개", "muted"],
       ["스케줄", scheduleCount || "-", "muted"]
     ];
@@ -10345,31 +9611,6 @@
     ].join("");
   }
 
-  function renderNotificationTemplatePanel() {
-    var templates = (state.notificationTemplates.length ? state.notificationTemplates : defaultNotificationTemplates()).filter(function (item) {
-      return !isAlertTemplateType(item.messageType);
-    });
-    if (!templates.length) return "";
-    var variables = notificationTemplateVariables();
-    return [
-      '<div class="model-section notification-template-section">',
-      '<div class="flow-title"><div><strong>시스템 템플릿</strong><span>알림 타입이 아닌 기본, 모델 리뷰, 작업 완료 메시지 포맷입니다.</span></div></div>',
-      state.notificationTemplatesError ? '<p class="form-error">' + escapeHtml(state.notificationTemplatesError) + '</p>' : '',
-      state.notificationTemplatesSaved ? '<p class="lab-message">알림 템플릿을 저장했습니다.</p>' : '',
-      '<div class="template-variable-row">',
-      variables.map(function (name) {
-        return '<span class="chip">{' + escapeHtml(name) + '}</span>';
-      }).join(""),
-      '</div>',
-      '<div class="notification-template-list">',
-      templates.map(function (item) {
-        return renderNotificationTemplateRow(item, { templateOnly: true });
-      }).join(""),
-      '</div>',
-      '</div>'
-    ].join("");
-  }
-
   function renderNotificationTemplateRow(item, options) {
     options = options || {};
     var detailMode = Boolean(options.inline || options.policyDetail || options.templateDetail);
@@ -10496,15 +9737,6 @@
     ].join("");
   }
 
-  function strongestModelExample(items) {
-    return items.slice().map(function (item) {
-      return Object.assign({}, item, { model: customModelScores(item) });
-    }).sort(function (a, b) {
-      if (a.hasData !== b.hasData) return a.hasData ? -1 : 1;
-      return Math.max(b.model.buyScore, b.model.sellScore) - Math.max(a.model.buyScore, a.model.sellScore);
-    })[0] || null;
-  }
-
   function valuationBeginnerText(item) {
     var valuation = item && item.valuation ? item.valuation : {};
     if (!item || !item.currentPrice || !valuation.fairValue) {
@@ -10515,14 +9747,6 @@
     return item.name + " 예시: 현재가 " + formatPrice(item.currentPrice, item.currency)
       + ", 적정가 " + formatPrice(valuation.fairValue, item.currency)
       + "입니다. 적정가와 현재가 차이가 " + signedPct(gap) + "라 " + direction + "입니다.";
-  }
-
-  function tradeStrengthBeginnerText(item, variables) {
-    var strength = Number(variables.tradeStrength || 0);
-    if (!strength) return "이 항목은 현재 실제 데이터로 안정 제공되지 않아 기본값으로만 처리합니다.";
-    var direction = strength >= 100 ? "매수 체결이 더 강한 편" : "매도 체결이 더 강한 편";
-    return item.name + "의 체결 방향 참고값은 " + formatSignalNumber(strength, "")
-      + "입니다. 실제 데이터가 연결될 때만 " + direction + "으로 참고합니다.";
   }
 
   function volumeBeginnerText(item, variables) {
@@ -10553,46 +9777,6 @@
       ["거래량", volumeBeginnerText(item, variables)],
       ["종합", decisionBeginnerText(item, model)]
     ];
-  }
-
-  function renderStrategyBeginnerPanel(snapshot) {
-    var items = buildTradeSignalItems(snapshot);
-    var example = strongestModelExample(items);
-    var model = example ? example.model : null;
-    var rows = beginnerModelRows(example, model);
-    var glossary = [
-      ["적정가", "내가 계산한 합리적인 기준 가격입니다. 현재가가 적정가보다 낮으면 싸게 보는 근거가 됩니다."],
-      ["거래량", "평소보다 사람들이 많이 사고파는지 보는 값입니다. 방향이 없으면 신호로 약하게 봅니다."],
-      ["이동평균", "20일선과 60일선으로 가격의 큰 방향을 확인하는 값입니다."],
-      ["투자자 수급", "외국인, 기관, 개인 중 누가 순매수하는지 보는 값입니다."]
-    ];
-    return [
-      '<article class="panel model-beginner-panel">',
-      '<div class="panel-head">',
-      '<div>',
-      '<p class="label">Beginner Guide</p>',
-      '<h2>처음 보는 사람용 쉬운 설명</h2>',
-      '</div>',
-      '<span class="tone-chip hold">' + escapeHtml(example ? "현재 데이터 예시" : "데이터 대기") + '</span>',
-      '</div>',
-      '<div class="settings-body">',
-      '<div class="settings-note model-settings-note">',
-      '<strong>읽는 순서</strong>',
-      '<p>먼저 현재가가 적정가보다 싼지 비싼지 보고, 다음으로 거래량과 이동평균이 같은 방향인지 확인합니다. 마지막으로 매수 점수와 매도 점수 중 어느 쪽이 높은지 봅니다.</p>',
-      '</div>',
-      '<div class="variable-grid">',
-      rows.map(function (row) {
-        return '<span><strong>' + escapeHtml(row[0]) + '</strong>' + escapeHtml(row[1]) + '</span>';
-      }).join(""),
-      '</div>',
-      '<div class="variable-grid">',
-      glossary.map(function (row) {
-        return '<span><strong>' + escapeHtml(row[0]) + '</strong>' + escapeHtml(row[1]) + '</span>';
-      }).join(""),
-      '</div>',
-      '</div>',
-      '</article>'
-    ].join("");
   }
 
   function renderStrategyDataPanel(snapshot) {
@@ -10714,7 +9898,6 @@
       '<h2>모델·알림 정책 관리</h2>',
       '</div>',
       '<div class="settings-actions">',
-      '<button class="text-button" data-action="save-model-version">모델 버전 저장</button>',
       '<button class="' + settingsSaveButtonClass() + '" data-action="save-settings"' + settingsSaveDisabledAttr() + '>' + settingsSaveButtonLabel() + '</button>',
       '</div>',
       '</div>',
@@ -10722,12 +9905,7 @@
       renderLabStat("평균 관계 강도", Math.round(stats.relationAverage || stats.buyAverage), "점"),
       renderLabStat("위험 관계 강도", Math.round(stats.riskAverage || stats.sellAverage), "점"),
       renderLabStat("판단 발생", stats.actionCount, "개"),
-      renderLabStat("저장 실험", stats.recordCount, "개"),
-      renderLabStat("실험 평균 성과", signedPct(stats.averageReturn), ""),
-      renderLabStat("실험 승률", pct(stats.winRate), ""),
       '</div>',
-      state.modelError ? '<div class="lab-message danger">' + escapeHtml(state.modelError) + '</div>' : '',
-      state.modelSaved ? '<div class="lab-message">모델 버전을 저장했습니다.</div>' : '',
       '<div class="model-editor">',
       '<div class="settings-note model-settings-note">',
       '<strong>처음 운영할 때</strong>',
@@ -10756,7 +9934,7 @@
       '</div>',
       '<div class="settings-note model-settings-note">',
       '<strong>공식 변수 도움말</strong>',
-      '<p>아래 이름들은 고급 공식에서 사용할 수 있는 값입니다. 수식 편집이 익숙하지 않으면 기본 공식과 위의 가중치만 사용하고, 계수는 저장 실험으로 검증하세요.</p>',
+      '<p>아래 이름들은 고급 공식에서 사용할 수 있는 값입니다. 수식 편집이 익숙하지 않으면 기본 공식과 위의 가중치만 사용하고, 변경 결과는 알림 이력과 실제 종목 흐름으로 검증하세요.</p>',
       '</div>',
       renderVariableGuide(modelVariableGuide()),
       '<div class="rule-strip"><span>공식은 +, -, *, /, 괄호와 min, max, abs, round, sqrt, pow, clamp 함수를 지원합니다.</span><span>공식 오류가 있으면 기본 공식으로 계산하고 종목 카드에 오류를 표시합니다.</span></div>',
@@ -10768,118 +9946,6 @@
 
   function renderAdminDeliveryPanel() {
     return renderAlertDeliveryPanel();
-  }
-
-  function renderScorePanel(snapshot) {
-    var decision = snapshot.tossDecision || {};
-    var score = Number(snapshot.exitScore || decision.overallPressure || 0);
-    return [
-      '<article class="panel score-panel">',
-      '<div class="score-wrap">',
-      '<div class="score-ring" style="--score:' + score + '">',
-      '<span>' + escapeHtml(score) + '</span>',
-      '</div>',
-      '<div>',
-      '<p class="label">Toss Check</p>',
-      '<h2>매도 검토 강도 ' + escapeHtml(pressureLabel(score)) + '</h2>',
-      '<p class="subtle">토스 조회값으로 설명 가능한 기준만 사용합니다.</p>',
-      '</div>',
-      '</div>',
-      '<div class="summary-list">',
-      (snapshot.summary || []).map(function (item) {
-        return '<p>' + escapeHtml(item) + '</p>';
-      }).join(""),
-      '</div>',
-      '</article>'
-    ].join("");
-  }
-
-  function renderSourcePanel(snapshot) {
-    var toss = snapshot.toss || { account: {} };
-    var decision = snapshot.tossDecision || {};
-    var account = toss.account || {};
-    return [
-      '<aside class="panel source-panel">',
-      '<div class="panel-head">',
-      '<div>',
-      '<p class="label">데이터 상태</p>',
-      '<h2>토스 API 범위</h2>',
-      '</div>',
-      '</div>',
-      '<div class="source-stack">',
-      '<div class="source-row"><span>표시 모드</span><strong>' + escapeHtml(snapshot.preview ? "정적 미리보기" : "실제 데이터") + '</strong></div>',
-      '<div class="source-row"><span>토스</span><strong>' + escapeHtml(toss.status || "-") + '</strong></div>',
-      '<div class="source-row"><span>계좌</span><strong>' + escapeHtml(account.displayNumber || "-") + '</strong></div>',
-      '<div class="source-row"><span>주문 가능 금액</span><strong>' + escapeHtml(formatCurrency(account.orderableAmount || 0, account.currency || "KRW")) + '</strong></div>',
-      '<div class="source-row"><span>보유/관심</span><strong>' + escapeHtml(decision.holdingCount || 0) + ' / ' + escapeHtml(decision.watchCount || 0) + '</strong></div>',
-      '<div class="source-row"><span>수급 신호</span><strong>설정/토스 시장 데이터</strong></div>',
-      '<div class="source-row"><span>뉴스·X</span><strong>매매 점수 제외</strong></div>',
-      '</div>',
-      '</aside>'
-    ].join("");
-  }
-
-  function renderDecisionPanel(snapshot) {
-    var decision = snapshot.tossDecision || { items: [], rules: [] };
-    var items = decision.items || [];
-    return [
-      '<article class="panel exit-panel">',
-      '<div class="panel-head">',
-      '<div>',
-      '<p class="label">Account Priority</p>',
-      '<h2>계좌 데이터 기준 우선 점검 종목</h2>',
-      '</div>',
-      '<span class="metric">' + escapeHtml(items.length) + '</span>',
-      '</div>',
-      '<div class="exit-list">',
-      items.map(renderDecisionRow).join(""),
-      '</div>',
-      '<div class="rule-strip">',
-      (decision.rules || []).map(function (rule) {
-        return '<span>' + escapeHtml(rule) + '</span>';
-      }).join(""),
-      '</div>',
-      '</article>'
-    ].join("");
-  }
-
-  function renderDecisionRow(item) {
-    var displayName = stockDisplayName(item.symbol, item);
-    return [
-      '<div class="exit-row">',
-      '<div class="exit-main">',
-      '<div class="exit-title">',
-      '<div>',
-      '<h3>' + escapeHtml(displayName) + '</h3>',
-      '<p class="subtle">' + escapeHtml(stockDisplayMeta(item, [item.sector || "-", sourceLabel(item.source)])) + '</p>',
-      '</div>',
-      '<div class="exit-badges">',
-      '<span class="source-chip ' + escapeHtml(item.source) + '">' + escapeHtml(sourceLabel(item.source)) + '</span>',
-      '<span class="decision-chip ' + escapeHtml(item.tone || "hold") + '">' + escapeHtml(item.decision) + '</span>',
-      '</div>',
-      '</div>',
-      '<div class="exit-reasons">',
-      (item.reasons || []).map(function (reason) {
-        return '<p>' + escapeHtml(reason) + '</p>';
-      }).join(""),
-      renderOntologyInline(item),
-      '</div>',
-      '<div class="trigger-list">',
-      (item.triggers || []).map(function (trigger) {
-        return '<span>' + escapeHtml(trigger) + '</span>';
-      }).join(""),
-      '</div>',
-      '</div>',
-      '<div class="exit-score">',
-      '<strong>' + escapeHtml(item.exitPressure || 0) + '</strong>',
-      '<span>검토</span>',
-      item.source === "holding" && (item.profitTakePressure || item.lossCutPressure)
-        ? '<small>익절 ' + escapeHtml(item.profitTakePressure || 0) + ' · 손절 ' + escapeHtml(item.lossCutPressure || 0) + '</small>'
-        : '',
-      item.source === "holding" ? '<em>' + escapeHtml(signedPct(item.profitLossRate)) + '</em>' : '<em>watch</em>',
-      '</div>',
-      '</div>'
-    ].join("");
   }
 
   function ontologyOpinionOf(item) {
@@ -11043,304 +10109,6 @@
     }
     fallback.output = rule || fallback.output;
     return fallback;
-  }
-
-  function renderOntologyInline(item) {
-    var opinion = ontologyOpinionOf(item);
-    if (!opinion || !opinion.action) return "";
-    return [
-      '<p>관계 판단: ' + escapeHtml(opinion.action) + ' · 관계 신호 ' + escapeHtml(Math.round(ontologyPressureOf(opinion))) + '점 · 확신 ' + escapeHtml(opinion.conviction || 0) + '점</p>',
-      opinion.thesis ? '<p>판단 근거: ' + escapeHtml(textWithKnownDisplaySymbols(beginnerFriendlyText(opinion.thesis), item.symbol, item)) + '</p>' : ''
-    ].join("");
-  }
-
-  function renderOntologyStrategyPanel(snapshot) {
-    var parts = ontologyStrategyParts(snapshot);
-    var decision = parts.decision;
-    var strategy = parts.strategy;
-    var worldview = parts.worldview;
-    var tbox = parts.tbox;
-    var abox = parts.abox;
-    var entities = parts.entities;
-    var relations = parts.relations;
-    var evidence = parts.evidence;
-    var beliefs = parts.beliefs;
-    var opinions = parts.opinions;
-    var aboxEntities = parts.aboxEntities;
-    var aboxRelations = parts.aboxRelations;
-    var relationCounts = parts.relationCounts;
-    var entityLabels = parts.entityLabels;
-    var items = (decision.items || []).filter(function (item) { return item.ontologyOpinion; });
-    var section = normalizeOntologySection(state.activeOntologySection);
-    if (section === "structure") {
-      return [
-        '<article class="panel ontology-panel ontology-structure-panel">',
-        '<div class="panel-head">',
-        '<div>',
-        '<p class="label">Structure Map</p>',
-        '<h2>관계 분석 전체 구조</h2>',
-        '</div>',
-        '<span class="metric">' + escapeHtml((tbox.classes || []).length + aboxEntities.length + aboxRelations.length) + '</span>',
-        '</div>',
-        '<div class="ontology-dashboard ontology-structure-dashboard">',
-        renderOntologyStructureMap(tbox, abox, aboxRelations, evidence, beliefs, opinions),
-        renderOntologyStructureHealth(tbox, abox, aboxRelations, evidence, beliefs, opinions),
-        renderOntologyOperationalPanel(parts),
-        renderOntologyInsightPanel(parts),
-        renderOntologyRelationMatrixPanel(tbox, relationCounts),
-        renderOntologyStructureNavigation(),
-        '</div>',
-        '</article>'
-      ].join("");
-    }
-    if (section === "graphs") {
-      return [
-        '<article class="panel ontology-panel">',
-        '<div class="panel-head">',
-        '<div>',
-        '<p class="label">Ontology Graphs</p>',
-        '<h2>TBox·ABox 관계 그래프</h2>',
-        '</div>',
-        '<span class="metric">' + escapeHtml(aboxRelations.length) + '</span>',
-        '</div>',
-        '<div class="ontology-dashboard">',
-        renderOntologyRelationshipGraphs(tbox, abox, aboxEntities, aboxRelations, evidence, beliefs, opinions, entityLabels, relationCounts),
-        renderOntologyClassPanel(tbox),
-        renderOntologyAboxPanel(abox, aboxEntities, evidence, beliefs, opinions),
-        '</div>',
-        '<div class="rule-strip">',
-        '<span>TBox 그래프는 허용 클래스·관계 타입·추론 규칙의 내부 연결을 보여줍니다.</span>',
-      '<span>현재 데이터 그래프는 보유 종목, 판단 근거, AI 의견 관계를 보여줍니다.</span>',
-        '</div>',
-        '</article>'
-      ].join("");
-    }
-    if (section === "registry") {
-      return [
-        renderOntologyRuleEditorPanel(snapshot),
-        renderAiPromptRegistryPanel(snapshot)
-      ].join("");
-    }
-    if (section === "trace") {
-      return [
-        '<article class="panel ontology-panel ontology-trace-panel">',
-        '<div class="panel-head">',
-        '<div>',
-        '<p class="label">Relation Trace</p>',
-        '<h2>관계형 데이터·규칙 추적</h2>',
-        '</div>',
-        '<span class="metric">' + escapeHtml(relations.length) + '</span>',
-        '</div>',
-        '<div class="ontology-dashboard">',
-        renderOntologyRelationalProjectionPanel(entities, relations, evidence, beliefs, opinions, parts),
-        renderOntologyInsightPanel(parts),
-        renderOntologyDataQualityPanel(parts),
-        renderOntologyMacroRelationPanel({ entities: entities, relations: relations, aboxRelations: aboxRelations, entityLabels: entityLabels }),
-        renderOntologyRelationPanel(tbox, relations, aboxRelations, relationCounts, entityLabels),
-        renderOntologyRulePanel(tbox, relationCounts, evidence, beliefs, opinions),
-        '</div>',
-        '</article>'
-      ].join("");
-    }
-    return [
-      '<article class="panel ontology-panel">',
-      '<div class="panel-head">',
-      '<div>',
-      '<p class="label">Relation Control</p>',
-      '<h2>관계 분석 운영 개요</h2>',
-      '</div>',
-      '<span class="metric">' + escapeHtml(items.length) + '</span>',
-      '</div>',
-      '<div class="ontology-dashboard">',
-      renderOntologyControlStrip(tbox, abox, aboxRelations, evidence, beliefs, opinions),
-      renderOntologyBoxSummary(tbox, abox, worldview, strategy),
-      renderOntologyExecutionPlanPanel(investmentReasoningCards(snapshot), parts),
-      renderOntologyOperationalPanel(parts),
-      renderOntologyInsightPanel(parts),
-      renderOntologyDataQualityPanel(parts),
-      renderOntologyRelationMatrixPanel(tbox, relationCounts),
-      '</div>',
-      '<div class="lab-list">',
-      items.length ? items.map(renderOntologyRow).join("") : '<p class="subtle">관계 분석 의견을 만들 보유 종목이 없습니다.</p>',
-      '</div>',
-      '<div class="rule-strip">',
-      '<span>그래프와 관계 추적은 상단 내부 탭에서 분리해 확인합니다.</span>',
-      '<span>관계 규칙과 AI 프롬프트 레지스트리는 규칙·프롬프트 탭에서 관리합니다.</span>',
-      '</div>',
-      '</article>'
-    ].join("");
-  }
-
-  function renderOntologyControlStrip(tbox, abox, relations, evidence, beliefs, opinions) {
-    var steps = [
-      ["TBox", "Schema", (tbox.classes || []).length + " classes"],
-      ["ABox", "Assertions", (abox.entityCount || 0) + " entities"],
-      ["Relation", "Runtime rows", relations.length + " rows"],
-      ["근거", "사실", evidence.length + "개"],
-      ["판단 근거", "계산 결과", beliefs.length + "개"],
-      ["Opinion", "Output", opinions.length + " rows"]
-    ];
-    return [
-      '<section class="ontology-control-strip" aria-label="관계 분석 순서">',
-      steps.map(function (step, index) {
-        return [
-          '<div class="ontology-control-step">',
-          '<b>' + escapeHtml(String(index + 1).padStart(2, "0")) + '</b>',
-          '<span>',
-          '<strong>' + escapeHtml(step[0]) + '</strong>',
-          '<em>' + escapeHtml(step[1]) + '</em>',
-          '</span>',
-          '<i>' + escapeHtml(step[2]) + '</i>',
-          '</div>'
-        ].join("");
-      }).join(""),
-      '</section>'
-    ].join("");
-  }
-
-  function renderOntologyRelationMatrixPanel(tbox, relationCounts) {
-    var relationTypes = (tbox.relationTypes || []).slice(0, 8);
-    ontologyTopEntries(relationCounts || {}, 10).forEach(function (item) {
-      if (relationTypes.indexOf(item.key) < 0) relationTypes.push(item.key);
-    });
-    return [
-      '<section class="ontology-surface ontology-matrix-surface">',
-      '<div class="ontology-surface-head">',
-      '<strong>관계 매트릭스</strong>',
-      '<span>규칙 구조의 허용 타입과 현재 데이터 사용량</span>',
-      '</div>',
-      '<div class="relation-matrix">',
-      relationTypes.length ? relationTypes.slice(0, 16).map(function (type) {
-        return renderRelationMatrixRow(type, relationCounts[type] || 0);
-      }).join("") : '<div class="ontology-empty">relation type 없음</div>',
-      '</div>',
-      '</section>'
-    ].join("");
-  }
-
-  function renderRelationMatrixRow(type, count) {
-    var active = Number(count || 0) > 0;
-    return [
-      '<div class="relation-matrix-row ' + (active ? "active" : "empty") + '">',
-      '<strong>' + escapeHtml(type) + '</strong>',
-      '<span>' + escapeHtml(active ? "ABox linked" : "schema only") + '</span>',
-      '<em>' + escapeHtml(count) + '</em>',
-      '</div>'
-    ].join("");
-  }
-
-  function renderOntologyStructureMap(tbox, abox, relations, evidence, beliefs, opinions) {
-    var nodes = [
-      {
-        tone: "schema",
-        title: "TBox 규칙 구조",
-        meta: (tbox.classes || []).length + " 분류 · " + (tbox.relationTypes || []).length + " 관계 타입",
-        copy: "포트폴리오, 종목, 근거, 판단 근거, AI 의견이 어떤 타입으로 연결될 수 있는지 정의합니다."
-      },
-      {
-        tone: "assertion",
-        title: "ABox 현재 데이터",
-        meta: (abox.entityCount || 0) + " 데이터 · " + (abox.relationCount || relations.length || 0) + " 관계",
-        copy: "실제 보유·관심 종목, 계좌, 업종, 시장 같은 현재 실행 데이터를 행 단위로 담습니다."
-      },
-      {
-        tone: "relation",
-        title: "관계 매트릭스",
-        meta: relations.length + " runtime rows",
-        copy: "규칙 구조에 있는 relation type이 현재 데이터에서 실제로 몇 번 쓰였는지 비교합니다."
-      },
-      {
-        tone: "evidence",
-        title: "근거와 판단 근거",
-        meta: evidence.length + " 근거 · " + beliefs.length + " 판단 근거",
-        copy: "가격, 추세, 수급, 데이터 품질이 규칙을 통과하며 위험·기회 판단 근거로 바뀝니다."
-      },
-      {
-        tone: "opinion",
-        title: "AI 의견",
-        meta: opinions.length + " 의견",
-        copy: "규칙으로 정리된 관계 컨텍스트를 AI 프롬프트에 전달해 종목별 판단 문장으로 만듭니다."
-      }
-    ];
-    return [
-      '<section class="ontology-structure-map" aria-label="관계 분석 전체 구조 맵">',
-      '<div class="ontology-surface-head">',
-      '<strong>전체 구조 맵</strong>',
-      '<span>규칙 구조에서 현재 데이터와 AI 의견까지 이어지는 처리 흐름</span>',
-      '</div>',
-      '<div class="ontology-structure-flow">',
-      nodes.map(renderOntologyStructureNode).join(""),
-      '</div>',
-      '</section>'
-    ].join("");
-  }
-
-  function renderOntologyStructureNode(node, index) {
-    return [
-      '<div class="ontology-structure-node ' + escapeHtml(node.tone || "schema") + '">',
-      '<b>' + escapeHtml(String(index + 1).padStart(2, "0")) + '</b>',
-      '<strong>' + escapeHtml(node.title) + '</strong>',
-      '<em>' + escapeHtml(node.meta) + '</em>',
-      '<span>' + escapeHtml(node.copy) + '</span>',
-      '</div>'
-    ].join("");
-  }
-
-  function renderOntologyStructureHealth(tbox, abox, relations, evidence, beliefs, opinions) {
-    var rows = [
-      ["규칙 분류", (tbox.classes || []).length, "TBox"],
-      ["관계 타입", (tbox.relationTypes || []).length, "TBox"],
-      ["현재 데이터", abox.entityCount || 0, "ABox"],
-      ["현재 관계", abox.relationCount || relations.length || 0, "ABox"],
-      ["근거", evidence.length, "Evidence"],
-      ["판단 근거", beliefs.length, "Belief"],
-      ["AI 의견", opinions.length, "Output"]
-    ];
-    return [
-      '<section class="ontology-surface ontology-structure-health">',
-      '<div class="ontology-surface-head">',
-      '<strong>구조 상태</strong>',
-      '<span>전체 구조를 이루는 핵심 행 수</span>',
-      '</div>',
-      '<div class="ontology-structure-health-grid">',
-      rows.map(function (row) {
-        return [
-          '<div class="ontology-structure-health-row">',
-          '<span>' + escapeHtml(row[2]) + '</span>',
-          '<strong>' + escapeHtml(row[0]) + '</strong>',
-          '<em>' + escapeHtml(row[1]) + '</em>',
-          '</div>'
-        ].join("");
-      }).join(""),
-      '</div>',
-      '</section>'
-    ].join("");
-  }
-
-  function renderOntologyStructureNavigation() {
-    var links = [
-      ["graphs", "그래프 보기", "규칙 구조와 현재 데이터 그래프를 전폭으로 확인"],
-      ["registry", "규칙·프롬프트", "관계 규칙과 AI 프롬프트 원문 관리"],
-      ["trace", "관계 추적", "테이블 저장 구조와 규칙별 산출 행 검증"]
-    ];
-    return [
-      '<section class="ontology-surface ontology-structure-navigation">',
-      '<div class="ontology-surface-head">',
-      '<strong>다음 확인 경로</strong>',
-      '<span>전체 구조에서 필요한 상세 화면으로 바로 이동</span>',
-      '</div>',
-      '<div class="ontology-structure-link-grid">',
-      links.map(function (link) {
-        return [
-          '<button class="text-button" type="button" data-strategy-section="' + escapeHtml(link[0]) + '">',
-          '<strong>' + escapeHtml(link[1]) + '</strong>',
-          '<span>' + escapeHtml(link[2]) + '</span>',
-          '</button>'
-        ].join("");
-      }).join(""),
-      '</div>',
-      '</section>'
-    ].join("");
   }
 
   function renderOntologyRelationshipGraphs(tbox, abox, aboxEntities, aboxRelations, evidence, beliefs, opinions, entityLabels, relationCounts) {
@@ -11818,29 +10586,6 @@
     }).run();
   }
 
-  function renderOntologyBoxSummary(tbox, abox, worldview, strategy) {
-    return [
-      '<section class="ontology-ledger">',
-      renderOntologyLedgerItem("컨텍스트", ((tbox.boundedContexts || []).length || 0), "schema"),
-      renderOntologyLedgerItem("규칙 분류", (tbox.classes || []).length || 0, "schema"),
-      renderOntologyLedgerItem("관계 종류", (tbox.relationTypes || []).length || 0, "schema"),
-      renderOntologyLedgerItem("현재 데이터", abox.entityCount || 0, "assertion"),
-      renderOntologyLedgerItem("현재 관계", abox.relationCount || strategy.relationCount || 0, "assertion"),
-      renderOntologyLedgerItem("근거", strategy.evidenceCount || 0, "evidence"),
-      renderOntologyLedgerItem("반대 신호", worldview.contradictionCount || 0, "risk"),
-      '</section>'
-    ].join("");
-  }
-
-  function renderOntologyLedgerItem(label, value, tone) {
-    return [
-      '<span class="ontology-ledger-item ' + escapeHtml(tone || "schema") + '">',
-      '<em>' + escapeHtml(label) + '</em>',
-      '<strong>' + escapeHtml(value) + '</strong>',
-      '</span>'
-    ].join("");
-  }
-
   function renderOntologyClassPanel(tbox) {
     var classes = tbox.classes || [];
     var relationTypes = tbox.relationTypes || [];
@@ -12026,220 +10771,12 @@
     ].join("");
   }
 
-  function renderOntologyRow(item) {
-    var opinion = ontologyOpinionOf(item);
-    var risks = ontologyRisksOf(opinion);
-    var contradictions = Array.isArray(opinion.contradictions) ? opinion.contradictions : [];
-    var supports = Array.isArray(opinion.supporting_beliefs) ? opinion.supporting_beliefs : [];
-    var displayName = stockDisplayName(item.symbol, item);
-    return [
-      '<div class="lab-row">',
-      '<div class="lab-row-head">',
-      '<div>',
-      '<strong>' + escapeHtml(displayName) + '</strong>',
-      '<span>' + escapeHtml(stockDisplayMeta(item, [item.sector || "-", sourceLabel(item.source)])) + '</span>',
-      '</div>',
-      '<div class="exit-badges">',
-      '<span class="tone-chip ' + escapeHtml(opinion.tone || item.tone || "hold") + '">' + escapeHtml(opinion.action || "-") + '</span>',
-      '</div>',
-      '</div>',
-      '<div class="lab-model-grid">',
-      '<span>관계 신호 <strong>' + escapeHtml(Math.round(ontologyPressureOf(opinion))) + '</strong></span>',
-      '<span>확신 <strong>' + escapeHtml(opinion.conviction || 0) + '</strong></span>',
-      '<span>기존 검토 <strong>' + escapeHtml(item.exitPressure || 0) + '</strong></span>',
-      '<span>모델 역할 <strong>보조 근거</strong></span>',
-      '</div>',
-      '<div class="exit-reasons">',
-      opinion.thesis ? '<p>' + escapeHtml(textWithKnownDisplaySymbols(beginnerFriendlyText(opinion.thesis), item.symbol, item)) + '</p>' : '',
-      risks.slice(0, 3).map(function (risk) { return '<p>리스크: ' + escapeHtml(textWithKnownDisplaySymbols(risk, item.symbol, item)) + '</p>'; }).join(""),
-      contradictions.slice(0, 2).map(function (risk) { return '<p>충돌: ' + escapeHtml(textWithKnownDisplaySymbols(risk, item.symbol, item)) + '</p>'; }).join(""),
-      supports.slice(0, 2).map(function (support) { return '<p>지지: ' + escapeHtml(textWithKnownDisplaySymbols(support, item.symbol, item)) + '</p>'; }).join(""),
-      '</div>',
-      '</div>'
-    ].join("");
-  }
-
-  function renderLabPanel(snapshot, full) {
-    var items = buildTradeSignalItems(snapshot);
-    var visible = full ? items : items.slice(0, 3);
-    var actionCount = items.filter(function (item) {
-      return item.tone === "danger" || item.tone === "caution" || item.tone === "watch";
-    }).length;
-    return [
-      '<article class="panel lab-panel">',
-      '<div class="panel-head">',
-      '<div>',
-      '<p class="label">Position Lab</p>',
-      '<h2>매수·보유·매도 타이밍 실험실</h2>',
-      '</div>',
-      '<span class="metric">' + escapeHtml(actionCount) + '</span>',
-      '</div>',
-      renderLabStats(items),
-      '<div class="lab-list">',
-      visible.length ? visible.map(renderLabRow).join("") : '<p class="subtle">보유 또는 관심 종목을 찾지 못했습니다.</p>',
-      '</div>',
-      '<div class="rule-strip">',
-      '<span>주문 실행이 아니라 매매 타이밍을 찾기 위한 읽기 전용 계산판입니다.</span>',
-      full ? '<span>EPS, 목표 PER, 안전마진을 바꾸면 적정가와 가격 기준선이 다시 계산됩니다.</span>' : '<span>시장 전체 목록은 전체종목 탭에서 봅니다.</span>',
-      '</div>',
-      '</article>'
-    ].join("");
-  }
-
-  function renderLabStats(items) {
-    var stats = labStatsForItems(items);
-    return [
-      '<div class="lab-stats-grid">',
-      renderLabStat("저장 버전", stats.recordCount, "개"),
-      renderLabStat("기록 종목", stats.symbolCount, "종목"),
-      renderLabStat("평균 성과", signedPct(stats.averageReturn), ""),
-      renderLabStat("승률", pct(stats.winRate), ""),
-      renderLabStat("평균 내 점수", Math.round(stats.averageScore), "점"),
-      renderLabStat("평균 리스크", Math.round(stats.averageRisk), "점"),
-      '</div>',
-      state.labRecordError ? '<div class="lab-message danger">' + escapeHtml(state.labRecordError) + '</div>' : '',
-      state.labRecordSaved ? '<div class="lab-message">실험 기록을 저장했습니다.</div>' : ''
-    ].join("");
-  }
-
   function renderLabStat(label, value, suffix) {
     return [
       '<span>',
       '<em>' + escapeHtml(label) + '</em>',
       '<strong>' + escapeHtml(value) + escapeHtml(suffix || "") + '</strong>',
       '</span>'
-    ].join("");
-  }
-
-  function renderLabRow(item) {
-    var valuation = item.valuation || {};
-    var signal = item.signal || {};
-    var lines = labActionPrices(item);
-    var notes = labScenarioNotes(item);
-    var draft = labDraftForItem(item);
-    var latest = latestLabRecordFor(item.symbol);
-    var versionCount = labRecordsForSymbol(item.symbol).length;
-    var model = customModelScores(item);
-    var displayName = stockDisplayName(item.symbol, item);
-    return [
-      '<div class="lab-row">',
-      '<div class="lab-row-head">',
-      '<div>',
-      '<strong>' + escapeHtml(displayName) + '</strong>',
-      '<span>' + escapeHtml(stockDisplayMeta(item, [item.sector || "-", sourceLabel(item.source)])) + '</span>',
-      '</div>',
-      '<div class="exit-badges">',
-      '<span class="source-chip ' + escapeHtml(item.source) + '">' + escapeHtml(sourceLabel(item.source)) + '</span>',
-      '<span class="tone-chip ' + escapeHtml(item.tone || "hold") + '">' + escapeHtml(item.action) + '</span>',
-      '</div>',
-      '</div>',
-      '<div class="lab-status-grid">',
-      '<span>현재가 <strong>' + escapeHtml(item.currentPrice ? formatPrice(item.currentPrice, item.currency) : "-") + '</strong></span>',
-      '<span>' + escapeHtml(item.source === "watchlist" ? "관심 기준" : "평단") + ' <strong>' + escapeHtml((item.averagePrice || item.currentPrice) ? formatPrice(item.averagePrice || item.currentPrice, item.currency) : "-") + '</strong></span>',
-      '<span>수량 <strong>' + escapeHtml(item.source === "watchlist" ? "-" : (item.quantity || "-")) + '</strong></span>',
-      '<span>손익률 <strong>' + escapeHtml(item.source === "watchlist" ? "-" : signedPct(item.profitLossRate)) + '</strong></span>',
-      '<span>매수 점수 <strong class="buy">' + escapeHtml(item.hasData ? item.buyScore : "-") + '</strong></span>',
-      '<span>매도 점수 <strong class="sell">' + escapeHtml(item.hasData ? item.sellScore : "-") + '</strong></span>',
-      '</div>',
-      '<div class="lab-model-grid">',
-      '<span>내 모델 매수 <strong class="buy">' + escapeHtml(model.buyScore) + '</strong></span>',
-      '<span>내 모델 매도 <strong class="sell">' + escapeHtml(model.sellScore) + '</strong></span>',
-      '<span>내 모델 판단 <strong>' + escapeHtml(model.action) + '</strong></span>',
-      '<span>공식 상태 <strong>' + escapeHtml(model.errors.length ? "확인 필요" : "정상") + '</strong></span>',
-      '</div>',
-      '<div class="lab-body-grid">',
-      '<div class="lab-price-ladder">',
-      lines.map(function (line) { return renderLabPriceLine(line, item); }).join(""),
-      '</div>',
-      '<div class="lab-side">',
-      '<div class="lab-control-grid">',
-      renderLabControl(item.symbol, "eps", "EPS", valuation.eps || 0, "1"),
-      renderLabControl(item.symbol, "targetPer", "목표 PER", valuation.targetPer || 0, "0.1"),
-      renderLabControl(item.symbol, "margin", "안전마진 %", valuation.margin || 15, "1"),
-      '</div>',
-      '<div class="lab-draft-grid">',
-      renderLabDraftControl(item.symbol, "thesisScore", "내 매수 점수", draft.thesisScore, "1"),
-      renderLabDraftControl(item.symbol, "riskScore", "위험 점수", draft.riskScore, "1"),
-      renderLabDraftControl(item.symbol, "confidenceScore", "확신 점수", draft.confidenceScore, "1"),
-      renderLabDraftControl(item.symbol, "targetReturn", "목표 수익률 %", draft.targetReturn, "0.1"),
-      renderLabDraftControl(item.symbol, "stopLoss", "허용 손절 %", draft.stopLoss, "0.1"),
-      renderLabDraftControl(item.symbol, "positionSize", "비중 계획 %", draft.positionSize, "1"),
-      '</div>',
-      '<div class="signal-metric-grid compact">',
-      '<span>거래량 <strong>' + escapeHtml(formatSignalRatio(signal.volumeRatio)) + '</strong></span>',
-      '<span>매수비중 <strong>' + escapeHtml(item.hasData ? item.buyShare + "%" : "-") + '</strong></span>',
-      '<span>호가 <strong>' + escapeHtml(formatSignalNumber(signal.bidAskImbalance, "%")) + '</strong></span>',
-      '<span>20일선 <strong>' + escapeHtml(formatSignalNumber(signal.ma20, "")) + '</strong></span>',
-      '<span>60일선 <strong>' + escapeHtml(formatSignalNumber(signal.ma60, "")) + '</strong></span>',
-      '<span>외국인 <strong>' + escapeHtml(formatSignalVolume(signal.foreignNet)) + '</strong></span>',
-      '<span>기관 <strong>' + escapeHtml(formatSignalVolume(signal.institutionNet)) + '</strong></span>',
-      '</div>',
-      renderLabVersionBar(item, latest, versionCount),
-      '<div class="exit-reasons">',
-      notes.concat(model.errors).map(function (note) { return '<p>' + escapeHtml(note) + '</p>'; }).join(""),
-      '</div>',
-      '</div>',
-      '</div>',
-      '</div>'
-    ].join("");
-  }
-
-  function renderLabPriceLine(line, item) {
-    var value = Number(line.value || 0);
-    return [
-      '<div class="lab-price-line ' + escapeHtml(line.tone || "hold") + '">',
-      '<span>' + escapeHtml(line.label) + '</span>',
-      '<strong>' + escapeHtml(value ? formatPrice(value, item.currency) : "-") + '</strong>',
-      '<em>' + escapeHtml(labPriceDiff(value, item.currentPrice)) + '</em>',
-      '</div>'
-    ].join("");
-  }
-
-  function renderLabControl(symbol, field, label, value, step) {
-    return [
-      '<label class="lab-control">',
-      '<span>' + escapeHtml(label) + '</span>',
-      '<input type="number" step="' + escapeHtml(step || "1") + '" value="' + escapeHtml(value || "") + '" data-lab-symbol="' + escapeHtml(symbol) + '" data-lab-assumption="' + escapeHtml(field) + '" />',
-      '</label>'
-    ].join("");
-  }
-
-  function renderLabDraftControl(symbol, field, label, value, step) {
-    return [
-      '<label class="lab-control lab-draft-control">',
-      '<span>' + escapeHtml(label) + '</span>',
-      '<input type="number" step="' + escapeHtml(step || "1") + '" value="' + escapeHtml(value) + '" data-lab-symbol="' + escapeHtml(symbol) + '" data-lab-draft="' + escapeHtml(field) + '" />',
-      '</label>'
-    ].join("");
-  }
-
-  function renderLabVersionBar(item, latest, versionCount) {
-    var returnText = latest ? signedPct(labRecordReturn(latest, item.currentPrice)) : "-";
-    return [
-      '<div class="lab-version-bar">',
-      '<div>',
-      '<strong>' + escapeHtml(versionCount ? "v" + versionCount : "기록 없음") + '</strong>',
-      '<span>' + escapeHtml(latest ? "최근 저장 " + formatClock(latest.createdAt) + " · 이후 성과 " + returnText : "점수와 수치를 입력한 뒤 버전을 저장하세요.") + '</span>',
-      '</div>',
-      '<button class="text-button primary compact" data-lab-save="' + escapeHtml(item.symbol) + '">버전 저장</button>',
-      '</div>',
-      latest ? renderLabLatestRecord(latest, item) : ''
-    ].join("");
-  }
-
-  function renderLabLatestRecord(record, item) {
-    var inputs = record.inputs || {};
-    return [
-      '<div class="lab-record-grid">',
-      '<span>저장가 <strong>' + escapeHtml(record.priceAtRecord ? formatPrice(record.priceAtRecord, record.currency) : "-") + '</strong></span>',
-      '<span>현재 성과 <strong>' + escapeHtml(signedPct(labRecordReturn(record, item.currentPrice))) + '</strong></span>',
-      '<span>내 점수 <strong>' + escapeHtml(Math.round(inputs.buyReasonScore || inputs.thesisScore || 0)) + '</strong></span>',
-      '<span>리스크 <strong>' + escapeHtml(Math.round(inputs.riskScore || 0)) + '</strong></span>',
-      '<span>모델 매수 <strong>' + escapeHtml(record.modelBuyScore == null ? "-" : Math.round(record.modelBuyScore)) + '</strong></span>',
-      '<span>모델 매도 <strong>' + escapeHtml(record.modelSellScore == null ? "-" : Math.round(record.modelSellScore)) + '</strong></span>',
-      '<span>목표 <strong>' + escapeHtml(signedPct(inputs.targetReturn || 0)) + '</strong></span>',
-      '<span>손절 <strong>' + escapeHtml("-" + Math.abs(Number(inputs.stopLoss || 0)).toFixed(1) + "%") + '</strong></span>',
-      '</div>'
     ].join("");
   }
 
@@ -12522,146 +11059,6 @@
     ].join("");
   }
 
-  function renderLabMethodPanel() {
-    var rows = [
-      ["핵심 질문", "지금 어떤 관계가 성립해서 매수·보유·분할매도·손실관리 중 어디를 봐야 하는가"],
-      ["관계 규칙", "보유, 추세, 수급, 외부 신호, 공시, 부족 데이터를 관계 타입으로 연결"],
-      ["근거 분리", "성립한 근거, 반대 근거, 부족 데이터를 같은 메시지 안에서 분리"],
-      ["AI 해석", "정해진 규칙이 만든 정보를 비동기 프롬프트가 설명"],
-      ["입력 기록", "관계 규칙과 판단 메모는 버전으로 저장해 성과 분석에 사용"],
-      ["성과 분석", "규칙 버전과 프롬프트 버전별 알림 결과와 실제 성과를 비교"]
-    ];
-    var variables = [
-      ["profitLossRate", "평단 대비 손익률"],
-      ["volumeRatio", "거래량 배율"],
-      ["tradeStrength", "체결강도"],
-      ["ma20Distance", "20일선과 현재가 차이"],
-      ["ma60Distance", "60일선과 현재가 차이"],
-      ["foreignNetVolume", "외국인 순매수"],
-      ["institutionNetVolume", "기관 순매수"],
-      ["sectorRatio", "업종 비중"],
-      ["btcChange7d", "BTC 7일 변화율"],
-      ["missingData", "부족 데이터 목록"]
-    ];
-    return [
-      '<article class="panel lab-method-panel">',
-      '<div class="panel-head">',
-      '<div>',
-      '<p class="label">Lab Method</p>',
-      '<h2>실험실 계산 기준</h2>',
-      '</div>',
-      '</div>',
-      '<div class="source-stack">',
-      rows.map(function (row) {
-        return '<div class="source-row"><span>' + escapeHtml(row[0]) + '</span><strong>' + escapeHtml(row[1]) + '</strong></div>';
-      }).join(""),
-      '</div>',
-      '<div class="source-stack">',
-      ontologyRuleRows().slice(0, 4).map(function (rule) {
-        return '<div class="source-row"><span>' + escapeHtml(rule.signal || rule.relation) + '</span><strong>' + escapeHtml(rule.label) + '</strong><em>' + escapeHtml(rule.condition) + '</em></div>';
-      }).join(""),
-      '</div>',
-      renderVariableGuide(variables),
-      '<div class="rule-strip"><span>가격 기준선은 관계 규칙의 입력값입니다. 실제 판단 메시지는 관계 규칙, 근거, 부족 데이터, AI 프롬프트 정보를 기준으로 만듭니다.</span></div>',
-      '</article>'
-    ].join("");
-  }
-
-  function renderModelStudioPanel(snapshot) {
-    var items = buildTradeSignalItems(snapshot);
-    var stats = modelStatsForItems(items);
-    var weights = formulaWeights();
-    var thresholds = modelDecisionThresholds();
-    return [
-      '<article class="panel model-panel">',
-      '<div class="panel-head">',
-      '<div>',
-      '<p class="label">Model Studio</p>',
-      '<h2>나만의 관계 규칙 모델</h2>',
-      '</div>',
-      '<span class="metric">' + escapeHtml(Math.round(stats.buyAverage)) + '</span>',
-      '</div>',
-      '<div class="lab-stats-grid model-stats-grid">',
-      renderLabStat("평균 관계 강도", Math.round(stats.relationAverage || stats.buyAverage), "점"),
-      renderLabStat("위험 관계 강도", Math.round(stats.riskAverage || stats.sellAverage), "점"),
-      renderLabStat("관계 신호", stats.actionCount, "개"),
-      renderLabStat("실험 기록", stats.recordCount, "개"),
-      renderLabStat("평균 성과", signedPct(stats.averageReturn), ""),
-      renderLabStat("승률", pct(stats.winRate), ""),
-      '</div>',
-      state.modelError ? '<div class="lab-message danger">' + escapeHtml(state.modelError) + '</div>' : '',
-      state.modelSaved ? '<div class="lab-message">모델 버전을 저장했습니다.</div>' : '',
-      '<div class="model-editor">',
-      '<div class="settings-grid">',
-      renderModelSettingField("modelName", "모델 이름", "text", "나의 모델"),
-      renderModelFormulaField("modelHypothesis", "관계 모델 설명", "어떤 관계가 성립하면 매수/보유/분할매도/손실관리를 볼지"),
-      renderModelFormulaField("customBuyModelFormula", "참고 매수 계산식", "buyScore * 0.35 + buyReasonScore * buyReasonWeight"),
-      renderModelFormulaField("customSellModelFormula", "참고 매도 계산식", "sellScore * 0.35 + riskScore * riskControlWeight"),
-      renderModelFormulaField("profitTakeScoreFormula", "참고 익절 계산식", "baseScore + profitTakePnlScore + holdingSignalScore"),
-      renderModelFormulaField("lossCutScoreFormula", "참고 손실 관리 계산식", "baseScore + lossCutPnlScore + holdingSignalScore + lossGuardConfirmationScore - lossGuardWeakEvidencePenalty"),
-      renderModelFormulaField("notificationScoreFormula", "알림 발송 공식", "rawScore"),
-      '</div>',
-      '<div class="model-section">',
-      '<div class="flow-title"><div><strong>참고 가중치</strong><span>보조 계산식에서만 사용하는 변수입니다.</span></div></div>',
-      renderNumberSettingGrid("formulaWeights", weights, ["growthWeight", "qualityWeight", "riskWeight", "flowWeight", "valuationWeight", "buyReasonWeight", "confidenceWeight", "riskControlWeight"]),
-      '</div>',
-      '<div class="model-section">',
-      '<div class="flow-title"><div><strong>관계 판단 기준</strong><span>관계 규칙 점수가 이 기준을 넘으면 라벨이 바뀝니다.</span></div></div>',
-      renderNumberSettingGrid("modelDecisionThresholds", thresholds, ["modelBuy", "modelAdd", "modelSell", "modelReduce", "modelHold"]),
-      '</div>',
-      renderVariableGuide(modelVariableGuide()),
-      '<div class="rule-strip"><span>공식은 +, -, *, /, 괄호와 min, max, abs, round, sqrt, pow, clamp 함수를 지원합니다.</span></div>',
-      '</div>',
-      '</article>'
-    ].join("");
-  }
-
-  function renderModelVersionPanel(snapshot) {
-    var versions = (state.modelVersions || []).slice().sort(function (a, b) {
-      return String(b.createdAt || "").localeCompare(String(a.createdAt || ""));
-    });
-    return [
-      '<article class="panel model-version-panel">',
-      '<div class="panel-head">',
-      '<div>',
-      '<p class="label">Model Versions</p>',
-      '<h2>모델 버전과 데이터</h2>',
-      '</div>',
-      '<span class="metric">' + escapeHtml(versions.length) + '</span>',
-      '</div>',
-      '<div class="settings-body">',
-      '<div class="settings-note">',
-      '<strong>버전 저장</strong>',
-      '<p>현재 투자 분석 이름, 설명, 보조 공식, 기준값, 현재 성과 통계를 하나의 버전으로 저장합니다. 관계 규칙과 AI 프롬프트는 규칙·프롬프트 섹션에서 관리합니다.</p>',
-      '</div>',
-      '<div class="settings-actions">',
-      '<button class="text-button primary" data-action="save-model-version">모델 버전 저장</button>',
-      '<button class="text-button" data-export-lab="json">실험 JSON</button>',
-      '<button class="text-button" data-export-lab="csv">실험 CSV</button>',
-      '<button class="text-button" data-action="export-model-versions">모델 JSON</button>',
-      '</div>',
-      '<div class="model-version-list">',
-      versions.length ? versions.slice(0, 6).map(renderModelVersionRow).join("") : '<p class="subtle">아직 저장한 모델 버전이 없습니다.</p>',
-      '</div>',
-      '</div>',
-      '</article>'
-    ].join("");
-  }
-
-  function renderModelVersionRow(version) {
-    var model = version.model || {};
-    var stats = model.stats || {};
-    return [
-      '<div class="model-version-row">',
-      '<div>',
-      '<strong>v' + escapeHtml(version.version || "-") + ' · ' + escapeHtml(model.name || "-") + '</strong>',
-      '<span>' + escapeHtml(formatClock(version.createdAt)) + ' · 평균 성과 ' + escapeHtml(signedPct(stats.averageReturn || 0)) + ' · 승률 ' + escapeHtml(pct(stats.winRate || 0)) + '</span>',
-      '</div>',
-      '<span class="tone-chip hold">' + escapeHtml(Math.round(stats.buyAverage || 0)) + ' / ' + escapeHtml(Math.round(stats.sellAverage || 0)) + '</span>',
-      '</div>'
-    ].join("");
-  }
-
   function renderModelPreviewPanel(snapshot) {
     var items = buildTradeSignalItems(snapshot).map(function (item) {
       return Object.assign({}, item, { model: customModelScores(item) });
@@ -12869,120 +11266,12 @@
     ].join("");
   }
 
-  function renderAlertSettingsPanel() {
-    var rules = alertRules();
-    var thresholds = alertThresholds();
-    var cadences = alertCadenceMinutes();
-    return [
-      '<article class="panel alert-settings-panel">',
-      '<div class="panel-head">',
-      '<div>',
-      '<p class="label">Alert Rules</p>',
-      '<h2>알림 규칙과 기준값</h2>',
-      '</div>',
-      '<span class="metric">' + escapeHtml(alertRuleCatalog.filter(function (rule) { return enabledAlertRule(rules, rule.key); }).length) + '</span>',
-      '</div>',
-      '<div class="alert-rule-grid">',
-      alertRuleCatalog.map(function (rule) {
-        return renderAlertRuleToggle(rule, enabledAlertRule(rules, rule.key));
-      }).join(""),
-      '</div>',
-      '<div class="model-section alert-threshold-section">',
-      '<div class="flow-title"><div><strong>임계값</strong><span>알림 발생 기준입니다. 값 변경 즉시 다시 계산됩니다.</span></div></div>',
-      '<div class="alert-threshold-grid">',
-      alertThresholdCatalog.filter(function (item) {
-        return !relationThresholdKeys[item.key];
-      }).map(function (item) {
-        return renderAlertThresholdInput(item, thresholds[item.key]);
-      }).join(""),
-      '</div>',
-      '</div>',
-      '<div class="model-section alert-threshold-section">',
-      '<div class="flow-title"><div><strong>발송·근거 주기</strong><span>투자 인사이트는 실제 발송 쿨다운이고, 근거 신호 주기는 호환 알림과 테스트 발송에 사용됩니다. 최소 10분입니다.</span></div></div>',
-      '<div class="alert-threshold-grid">',
-      alertRuleCatalog.map(function (rule) {
-        return renderAlertCadenceInput(rule, cadences[rule.key]);
-      }).join(""),
-      '</div>',
-      '</div>',
-      '</article>'
-    ].join("");
-  }
-
-  function renderAlertRuleToggle(rule, checked) {
-    var role = ontologyEvidenceSignalRule(rule.key) ? "근거 신호" : rule.key === "investmentInsight" ? "실제 발송" : rule.group;
-    return [
-      '<label class="alert-rule">',
-      '<input type="checkbox" data-alert-rule="' + escapeHtml(rule.key) + '"' + (checked ? " checked" : "") + ' />',
-      '<span>',
-      '<strong>' + escapeHtml(rule.label) + '</strong>',
-      '<em>' + escapeHtml(role + " · " + rule.description) + '</em>',
-      '</span>',
-      '</label>'
-    ].join("");
-  }
-
   function renderAlertThresholdInput(item, value) {
     return [
       '<label class="lab-control alert-threshold">',
       '<span>' + escapeHtml(item.label) + (item.unit ? " (" + escapeHtml(item.unit) + ")" : "") + '</span>',
       '<input data-alert-threshold="' + escapeHtml(item.key) + '" type="number" step="' + escapeHtml(item.step || "1") + '" value="' + escapeHtml(value) + '" />',
       '</label>'
-    ].join("");
-  }
-
-  function renderAlertCadenceInput(rule, value) {
-    var role = ontologyEvidenceSignalRule(rule.key) ? "근거" : rule.key === "investmentInsight" ? "발송" : "메시지";
-    return [
-      '<label class="lab-control alert-threshold">',
-      '<span>' + escapeHtml(rule.label + " " + role) + ' (분)</span>',
-      '<input data-alert-cadence="' + escapeHtml(rule.key) + '" type="number" min="10" step="10" value="' + escapeHtml(value) + '" />',
-      '</label>'
-    ].join("");
-  }
-
-  function renderAlertModelSettingsPanel(snapshot) {
-    var items = buildTradeSignalItems(snapshot);
-    var stats = modelStatsForItems(items);
-    var weights = formulaWeights();
-    var thresholds = modelDecisionThresholds();
-    return [
-      '<article class="panel alert-model-panel">',
-      '<div class="panel-head">',
-      '<div>',
-      '<p class="label">Model Settings</p>',
-      '<h2>관계 모델 설정</h2>',
-      '</div>',
-      '<span class="metric">' + escapeHtml(Math.round(stats.buyAverage)) + '</span>',
-      '</div>',
-      '<div class="lab-stats-grid model-stats-grid">',
-      renderLabStat("평균 관계 강도", Math.round(stats.relationAverage || stats.buyAverage), "점"),
-      renderLabStat("위험 관계 강도", Math.round(stats.riskAverage || stats.sellAverage), "점"),
-      renderLabStat("관계 신호", stats.actionCount, "개"),
-      renderLabStat("실험 기록", stats.recordCount, "개"),
-      renderLabStat("평균 성과", signedPct(stats.averageReturn), ""),
-      renderLabStat("승률", pct(stats.winRate), ""),
-      '</div>',
-      '<div class="model-editor">',
-      '<div class="settings-grid">',
-      renderModelSettingField("modelName", "모델 이름", "text", "나의 모델"),
-      renderModelFormulaField("modelHypothesis", "관계 모델 설명", "어떤 관계가 성립하면 매수/보유/분할매도/손실관리를 볼지"),
-      renderModelFormulaField("customBuyModelFormula", "참고 매수 계산식", "buyScore * 0.35 + buyReasonScore * buyReasonWeight"),
-      renderModelFormulaField("customSellModelFormula", "참고 매도 계산식", "sellScore * 0.35 + riskScore * riskControlWeight"),
-      renderModelFormulaField("profitTakeScoreFormula", "참고 익절 계산식", "baseScore + profitTakePnlScore + holdingSignalScore"),
-      renderModelFormulaField("lossCutScoreFormula", "참고 손실 관리 계산식", "baseScore + lossCutPnlScore + holdingSignalScore + lossGuardConfirmationScore - lossGuardWeakEvidencePenalty"),
-      renderModelFormulaField("notificationScoreFormula", "알림 발송 공식", "rawScore"),
-      '</div>',
-      '<div class="model-section">',
-      '<div class="flow-title"><div><strong>참고 가중치</strong><span>보조 계산식에서만 사용하는 변수입니다.</span></div></div>',
-      renderNumberSettingGrid("formulaWeights", weights, ["growthWeight", "qualityWeight", "riskWeight", "flowWeight", "valuationWeight", "buyReasonWeight", "confidenceWeight", "riskControlWeight"]),
-      '</div>',
-      '<div class="model-section">',
-      '<div class="flow-title"><div><strong>관계 판단 기준</strong><span>관계 규칙 점수가 이 기준을 넘으면 판단 라벨과 알림이 바뀝니다.</span></div></div>',
-      renderNumberSettingGrid("modelDecisionThresholds", thresholds, ["modelBuy", "modelAdd", "modelSell", "modelReduce", "modelHold"]),
-      '</div>',
-      '</div>',
-      '</article>'
     ].join("");
   }
 
@@ -13008,7 +11297,6 @@
       '<div class="settings-grid">',
       renderSettingField("notifyProvider", "알림 제공자", "text", "telegram"),
       renderSettingField("notifyLinkUrl", "알림 링크 URL", "url", "http://127.0.0.1:3000?tab=notifications"),
-      renderSettingField("notifyIntervalMinutes", "알림 주기(분)", "number", "10"),
       renderSettingField("telegramBotToken", "Telegram Bot Token", secretType, "bot token", { preserveConfigured: true }),
       renderSettingField("telegramChatId", "Telegram Chat ID", "text", "chat id", { preserveConfigured: true }),
       '</div>',
@@ -13125,91 +11413,6 @@
     ];
   }
 
-  function renderTradeSignalPanel(snapshot, full) {
-    var items = buildTradeSignalItems(snapshot);
-    var visible = full ? items : items.slice(0, 3);
-    var actionCount = items.filter(function (item) {
-      return item.tone === "danger" || item.tone === "caution" || item.tone === "watch";
-    }).length;
-    return [
-      '<article class="panel signal-panel">',
-      '<div class="panel-head">',
-      '<div>',
-      '<p class="label">Trade Signal</p>',
-      '<h2>체결·거래량 매매 신호</h2>',
-      '</div>',
-      '<span class="metric">' + escapeHtml(actionCount) + '</span>',
-      '</div>',
-      '<div class="signal-list">',
-      visible.length ? visible.map(renderTradeSignalRow).join("") : '<p class="subtle">보유 또는 관심 종목을 찾지 못했습니다.</p>',
-      '</div>',
-      '<div class="rule-strip">',
-      '<span>매수/매도 실행 지시가 아니라 수급 데이터 점검 라벨입니다.</span>',
-      full ? '<span>값은 설정에서 직접 수정하거나 향후 토스 시장 데이터로 교체합니다.</span>' : '<span>전체 목록은 실험실 탭에서 봅니다.</span>',
-      '</div>',
-      '</article>'
-    ].join("");
-  }
-
-  function renderTradeSignalRow(item) {
-    var signal = item.signal || {};
-    var valuationText = item.valuation && item.valuation.status ? item.valuation.status : "가정 대기";
-    var displayName = stockDisplayName(item.symbol, item);
-    return [
-      '<div class="signal-row">',
-      '<div class="signal-main">',
-      '<div class="flow-title">',
-      '<div>',
-      '<strong>' + escapeHtml(displayName) + '</strong>',
-      '<span>' + escapeHtml(stockDisplayMeta(item, [item.sector || "-", sourceLabel(item.source)])) + '</span>',
-      '</div>',
-      '<div class="exit-badges">',
-      '<span class="source-chip ' + escapeHtml(item.source) + '">' + escapeHtml(sourceLabel(item.source)) + '</span>',
-      '<span class="tone-chip ' + escapeHtml(item.tone || "hold") + '">' + escapeHtml(item.action) + '</span>',
-      '</div>',
-      '</div>',
-      '<div class="signal-score-grid">',
-      '<span>매수 점수 <strong class="buy">' + escapeHtml(item.hasData ? item.buyScore : "-") + '</strong></span>',
-      '<span>매도 점수 <strong class="sell">' + escapeHtml(item.hasData ? item.sellScore : "-") + '</strong></span>',
-      '<span>매수 비중 <strong>' + escapeHtml(item.hasData ? item.buyShare + "%" : "-") + '</strong></span>',
-      '<span>가치 판단 <strong>' + escapeHtml(valuationText) + '</strong></span>',
-      '</div>',
-      '<div class="signal-metric-grid">',
-      '<span>거래량 <strong>' + escapeHtml(formatSignalRatio(signal.volumeRatio)) + '</strong></span>',
-      '<span>매수량 <strong>' + escapeHtml(formatSignalVolume(signal.buyVolume)) + '</strong></span>',
-      '<span>매도량 <strong>' + escapeHtml(formatSignalVolume(signal.sellVolume)) + '</strong></span>',
-      '<span>호가 불균형 <strong>' + escapeHtml(formatSignalNumber(signal.bidAskImbalance, "%")) + '</strong></span>',
-      '<span>가격 변화 <strong>' + escapeHtml(formatSignalNumber(signal.priceChangeRate, "%")) + '</strong></span>',
-      '<span>20일선 <strong>' + escapeHtml(formatSignalNumber(signal.ma20, "")) + '</strong></span>',
-      '<span>60일선 <strong>' + escapeHtml(formatSignalNumber(signal.ma60, "")) + '</strong></span>',
-      '<span>외국인 <strong>' + escapeHtml(formatSignalVolume(signal.foreignNet)) + '</strong></span>',
-      '<span>기관 <strong>' + escapeHtml(formatSignalVolume(signal.institutionNet)) + '</strong></span>',
-      '<span>개인 <strong>' + escapeHtml(formatSignalVolume(signal.individualNet)) + '</strong></span>',
-      '</div>',
-      '<div class="exit-reasons">',
-      (item.reasons || []).map(function (reason) {
-        return '<p>' + escapeHtml(reason) + '</p>';
-      }).join(""),
-      '</div>',
-      '<div class="trigger-list">',
-      (item.triggers || []).map(function (trigger) {
-        return '<span>' + escapeHtml(trigger) + '</span>';
-      }).join(""),
-      '</div>',
-      '</div>',
-      '</div>'
-    ].join("");
-  }
-
-  function renderFormulaBlock(label, formula) {
-    return [
-      '<div class="formula-block">',
-      '<span>' + escapeHtml(label) + '</span>',
-      '<code>' + escapeHtml(formula || "-") + '</code>',
-      '</div>'
-    ].join("");
-  }
-
   function renderVariableGuide(items) {
     return [
       '<div class="variable-grid">',
@@ -13217,149 +11420,6 @@
         return '<span><strong>' + escapeHtml(item[0]) + '</strong>' + escapeHtml(item[1]) + '</span>';
       }).join(""),
       '</div>'
-    ].join("");
-  }
-
-  function renderTradeSignalMethodPanel() {
-    var rows = [
-      ["거래량 배율", "평균 대비 거래량이 커질수록 신호 영향은 커지지만 방향은 별도로 확인"],
-      ["매수/매도량", "실제 체결 방향의 비중으로 매수·매도 압력 분리"],
-      ["거래량 방향성", "거래량 급증이 매수비중, 호가, 가격, 추세와 같은 방향일 때만 강한 신호로 처리"],
-      ["이동평균", "현재가와 20일·60일선 차이, 두 이동평균의 간격으로 추세 확인"],
-      ["투자자별 수급", "외국인·기관·개인의 순매수 균형을 점수화해 수급 반복성을 검증"],
-      ["정규화", "서로 단위가 다른 값을 제한된 점수 범위로 바꾼 뒤 합산"],
-      ["호가 불균형", "매수잔량 우위는 양수, 매도잔량 우위는 음수로 입력"],
-      ["최종 라벨", "매수/매도 점수 + 보유 여부 + 기준값을 조합"]
-    ];
-    var variables = [
-      ["volumeRatio", "거래량 배율"],
-      ["directionalVolumePressure", "방향성 거래량 압력"],
-      ["flowDirectionScore", "수급 방향 합성 점수"],
-      ["buyShare", "매수 체결 비중"],
-      ["bidAskImbalance", "호가 불균형"],
-      ["priceChangeRate", "가격 변화율"],
-      ["trendScore", "이동평균 추세 점수"],
-      ["investorFlowScore", "투자자별 수급 점수"],
-      ["fairValueGap", "적정가와 현재가 차이"],
-      ["undervalueBonus", "저평가 보너스"],
-      ["expensivePenalty", "고평가 감점"],
-      ["flowWeight", "수급 가중치"],
-      ["valuationWeight", "가치 가중치"]
-    ];
-    return [
-      '<article class="panel signal-method-panel">',
-      '<div class="panel-head">',
-      '<div>',
-      '<p class="label">Signal Method</p>',
-      '<h2>수급 계산 기준</h2>',
-      '</div>',
-      '</div>',
-      '<div class="source-stack">',
-      rows.map(function (row) {
-        return '<div class="source-row"><span>' + escapeHtml(row[0]) + '</span><strong>' + escapeHtml(row[1]) + '</strong></div>';
-      }).join(""),
-      '</div>',
-      '<div class="formula-stack">',
-      renderFormulaBlock("참고 매수 계산식", formulaSetting("buyScoreFormula")),
-      renderFormulaBlock("참고 매도 계산식", formulaSetting("sellScoreFormula")),
-      renderFormulaBlock("참고 익절 계산식", formulaSetting("profitTakeScoreFormula")),
-      renderFormulaBlock("참고 손실 관리 계산식", formulaSetting("lossCutScoreFormula")),
-      renderFormulaBlock("알림 발송 공식", formulaSetting("notificationScoreFormula")),
-      '</div>',
-      renderVariableGuide(variables),
-      '<div class="rule-strip"><span>입력 형식: SYMBOL, 거래량배율, 매수량, 매도량, 호가불균형%, 가격변화%, 20일선, 60일선, 외국인순매수, 기관순매수, 개인순매수</span></div>',
-      '</article>'
-    ].join("");
-  }
-
-  function renderValuationPanel(snapshot, full) {
-    var items = buildValuationItems(snapshot);
-    var expensive = items.filter(function (item) {
-      return item.tone === "danger" || item.tone === "caution";
-    }).length;
-    return [
-      '<article class="panel valuation-panel">',
-      '<div class="panel-head">',
-      '<div>',
-      '<p class="label">Valuation</p>',
-      '<h2>보유 종목 적정가 점검</h2>',
-      '</div>',
-      '<span class="metric">' + escapeHtml(expensive) + '</span>',
-      '</div>',
-      '<div class="valuation-list">',
-      items.length ? items.map(renderValuationRow).join("") : '<p class="subtle">토스 잔고에서 밸류에이션할 보유 종목을 찾지 못했습니다.</p>',
-      '</div>',
-      full ? '' : '<div class="rule-strip"><span>상세 가정은 실험실 탭과 상단 설정에서 조정합니다.</span></div>',
-      '</article>'
-    ].join("");
-  }
-
-  function renderValuationRow(item) {
-    var hasValue = item.currentPrice && item.fairValue;
-    var displayName = stockDisplayName(item.symbol, item);
-    return [
-      '<div class="valuation-row">',
-      '<div class="valuation-main">',
-      '<div class="flow-title">',
-      '<div>',
-      '<strong>' + escapeHtml(displayName) + '</strong>',
-      '<span>' + escapeHtml("현재 " + (item.currentPrice ? formatPrice(item.currentPrice, item.currency) : "-")) + '</span>',
-      '</div>',
-      '<span class="tone-chip ' + escapeHtml(item.tone || "hold") + '">' + escapeHtml(item.status) + '</span>',
-      '</div>',
-      '<div class="valuation-grid">',
-      '<span>EPS <strong>' + escapeHtml(item.eps || "-") + '</strong></span>',
-      '<span>목표 PER <strong>' + escapeHtml(item.targetPer || "-") + '</strong></span>',
-      '<span>적정가 <strong>' + escapeHtml(hasValue ? formatPrice(item.fairValue, item.currency) : "-") + '</strong></span>',
-      '<span>차이 <strong>' + escapeHtml(hasValue ? signedPct(item.gap) : "-") + '</strong></span>',
-      '</div>',
-      '<div class="exit-reasons">',
-      item.reasons.map(function (reason) {
-        return '<p>' + escapeHtml(reason) + '</p>';
-      }).join(""),
-      '</div>',
-      '</div>',
-      '</div>'
-    ].join("");
-  }
-
-  function renderValuationMethodPanel() {
-    var rows = [
-      ["적정가", "사용자 공식 결과"],
-      ["싸다", "현재가가 안전마진 가격 이하"],
-      ["적정권", "현재가가 적정가 이하"],
-      ["비싸다", "현재가가 적정가를 초과"]
-    ];
-    var variables = [
-      ["eps", "주당순이익"],
-      ["targetPer", "목표 PER"],
-      ["margin", "안전마진"],
-      ["currentPrice", "현재가"],
-      ["averagePrice", "평균단가"],
-      ["profitLossRate", "수익률"],
-      ["growthWeight", "성장 가중치"],
-      ["qualityWeight", "품질 가중치"],
-      ["riskWeight", "리스크 가중치"]
-    ];
-    return [
-      '<article class="panel">',
-      '<div class="panel-head">',
-      '<div>',
-      '<p class="label">Method</p>',
-      '<h2>계산 기준</h2>',
-      '</div>',
-      '</div>',
-      '<div class="source-stack">',
-      rows.map(function (row) {
-        return '<div class="source-row"><span>' + escapeHtml(row[0]) + '</span><strong>' + escapeHtml(row[1]) + '</strong></div>';
-      }).join(""),
-      '</div>',
-      '<div class="formula-stack">',
-      renderFormulaBlock("적정가 공식", formulaSetting("fairValueFormula")),
-      '</div>',
-      renderVariableGuide(variables),
-      '<div class="rule-strip"><span>현재가는 토스 잔고/시세 값, EPS·목표 PER·공식·가중치는 사용자가 설정합니다.</span></div>',
-      '</article>'
     ].join("");
   }
 
@@ -13505,45 +11565,6 @@
       '</div>',
       '<div class="rule-strip"><span>금액이 맞지 않으면 먼저 보유 원장 합계, 현금 기준, 환율 기준의 차이 행을 확인하세요.</span></div>',
       '</article>'
-    ].join("");
-  }
-
-  function renderHoldingsPanel(snapshot) {
-    var toss = snapshot.toss || { positions: [] };
-    var positions = (toss.positions || []).filter(function (item) {
-      return item.source !== "cash" && item.sector !== "현금";
-    });
-    return [
-      '<article class="panel holdings-panel">',
-      '<div class="panel-head">',
-      '<div>',
-      '<p class="label">Holdings</p>',
-      '<h2>보유 종목</h2>',
-      '</div>',
-      '<span class="metric">' + escapeHtml(positions.length) + '</span>',
-      '</div>',
-      '<div class="position-list">',
-      positions.length ? positions.map(renderHoldingRow).join("") : '<p class="subtle">토스 잔고에서 보유 종목을 찾지 못했습니다.</p>',
-      '</div>',
-      '</article>'
-    ].join("");
-  }
-
-  function renderHoldingRow(item) {
-    var displayName = stockDisplayName(item.symbol, item);
-    return [
-      '<div class="position-row rich-row">',
-      '<div>',
-      '<strong>' + escapeHtml(displayName) + '</strong>',
-      '<span>' + escapeHtml(stockDisplayMeta(item, [marketLabel(item.market || "-"), "수량 " + (item.quantity || "-")])) + '</span>',
-      '<span>평균 ' + escapeHtml(formatCurrency(item.averagePrice || 0, item.currency)) + ' · 현재 ' + escapeHtml(formatCurrency(item.currentPrice || 0, item.currency)) + '</span>',
-      '</div>',
-      '<div class="right">',
-      '<strong>' + escapeHtml(formatCurrency(item.marketValue, item.currency)) + '</strong>',
-      '<span>' + escapeHtml(signedMoney(item.profitLoss, item.currency)) + ' · ' + escapeHtml(signedPct(item.profitLossRate)) + '</span>',
-      '<span>매도 가능 ' + escapeHtml(item.sellableQuantity || item.quantity || "-") + '</span>',
-      '</div>',
-      '</div>'
     ].join("");
   }
 
@@ -13856,49 +11877,6 @@
     ].join("");
   }
 
-  function renderWatchlistPanel(snapshot) {
-    var toss = snapshot.toss || {};
-    var watchlist = toss.watchlist || [];
-    var symbols = watchlistSymbols();
-    var lookup = {};
-    (watchlist || []).forEach(function (item) {
-      lookup[String(item.symbol || "").toUpperCase()] = item;
-    });
-    ((toss.positions || []) || []).forEach(function (item) {
-      var symbol = String(item.symbol || "").toUpperCase();
-      if (!symbol) return;
-      lookup[symbol] = Object.assign({}, item, {
-        source: item.source || "holding",
-        quoteStatus: "보유 종목으로 분류됨"
-      });
-    });
-    return [
-      '<article class="panel watchlist-panel">',
-      '<div class="panel-head">',
-      '<div>',
-      '<p class="label">Watchlist</p>',
-      '<h2>관심 종목</h2>',
-      '</div>',
-      '<span class="metric">' + escapeHtml(symbols.length) + '</span>',
-      '</div>',
-      '<div class="watch-editor">',
-      '<form class="watch-add-form" data-watch-add-form>',
-      '<input name="symbol" data-watch-symbol-input placeholder="회사명으로 검색 후 추가" value="' + escapeHtml(state.watchSuggestQuery || "") + '" autocomplete="off" />',
-      '<button class="text-button primary">추가</button>',
-      '</form>',
-      '<div class="watch-suggest-box" data-watch-suggest-list>' + renderWatchSuggestList() + '</div>',
-      '<p class="subtle">토스 앱의 관심 목록은 공개 API에서 직접 읽지 못해, 여기 저장한 관심 종목을 기준으로 점검합니다.</p>',
-      state.watchlistError ? '<p class="form-error">' + escapeHtml(state.watchlistError) + '</p>' : '',
-      '</div>',
-      '<div class="position-list">',
-      symbols.length ? symbols.map(function (symbol) {
-        return renderEditableWatchRow(symbol, lookup[symbol] || clientKnownStockInfo(symbol));
-      }).join("") : '<p class="subtle">관심 종목을 추가하세요.</p>',
-      '</div>',
-      '</article>'
-    ].join("");
-  }
-
   function marketLabel(market) {
     var key = String(market || "").toUpperCase();
     if (key === "KOSPI") return "코스피";
@@ -14099,20 +12077,6 @@
     ].join("");
   }
 
-  function renderEditableWatchRow(symbol, item) {
-    var original = String(symbol || "").toUpperCase();
-    if (state.editingWatchSymbol === original) {
-      return [
-        '<form class="watch-edit-row" data-watch-edit-form="' + escapeHtml(original) + '">',
-        '<input name="symbol" value="' + escapeHtml(original) + '" autocomplete="off" />',
-        '<button class="text-button primary">저장</button>',
-        '<button class="text-button" type="button" data-watch-cancel>취소</button>',
-        '</form>'
-      ].join("");
-    }
-    return renderWatchRow(Object.assign({}, item, { symbol: original }), true);
-  }
-
   function renderWatchAlertMeta(item) {
     var rules = alertRules();
     var hasPrice = Boolean(item.currentPrice);
@@ -14141,160 +12105,14 @@
     ].join("");
   }
 
-  function renderWatchRow(item) {
-    item = Object.assign(clientKnownStockInfo(item && item.symbol), item || {});
-    var editable = arguments.length > 1 && arguments[1];
-    var source = item.source === "holding" ? "보유" : "관심";
-    var displayName = stockDisplayName(item.symbol, item);
-    return [
-      '<div class="position-row rich-row">',
-      '<div>',
-      '<strong>' + escapeHtml(displayName) + '</strong>',
-      '<span>' + escapeHtml(stockDisplayMeta(item, [marketLabel(item.market || "-"), item.sector || "-", source])) + '</span>',
-      renderWatchAlertMeta(item),
-      '</div>',
-      '<div class="right">',
-      '<strong>' + escapeHtml(item.currentPrice ? formatCurrency(item.currentPrice, item.currency) : "시세 대기") + '</strong>',
-      '<span>' + escapeHtml(item.changeRate == null ? item.quoteStatus || "토스 시세 연결 후 표시" : signedPct(item.changeRate)) + '</span>',
-      editable ? '<div class="row-actions"><button class="mini-button" data-watch-edit="' + escapeHtml(item.symbol) + '">수정</button><button class="mini-button danger" data-watch-remove="' + escapeHtml(item.symbol) + '">삭제</button></div>' : '',
-      '</div>',
-      '</div>'
-    ].join("");
-  }
-
-  function renderApiScopePanel() {
-    var rows = [
-      ["계좌", "계좌 식별, 주문 가능 금액"],
-      ["잔고", "보유 종목, 수량, 평가금액, 손익"],
-      ["시세", "Toss /api/v1/prices 현재가, /api/v1/candles 이동평균"],
-      ["거래", "주문/정정/취소는 별도 잠금 단계"]
-    ];
-    return [
-      '<article class="panel">',
-      '<div class="panel-head">',
-      '<div>',
-      '<p class="label">Scope</p>',
-      '<h2>토스 API로만 쓰는 정보</h2>',
-      '</div>',
-      '</div>',
-      '<div class="source-stack">',
-      rows.map(function (row) {
-        return '<div class="source-row"><span>' + escapeHtml(row[0]) + '</span><strong>' + escapeHtml(row[1]) + '</strong></div>';
-      }).join(""),
-      '</div>',
-      '</article>'
-    ].join("");
-  }
-
-  function currentFeed() {
-    return state.feed || { items: [], channels: [], errors: [] };
-  }
-
   function renderFeedPage(snapshot) {
     return renderManagedPage("feed", snapshot, [
       '<section class="admin-grid feed-view">',
-      renderFeedOverviewPanel(),
       renderFeedSettingsPanel(),
       renderFeedQualityPanel(),
       renderResearchEvidencePanel(),
-      renderFeedChannelPanel(),
-      renderFeedListPanel(),
       '</section>'
     ].join(""));
-  }
-
-  function uniqueCount(items, key) {
-    var seen = {};
-    (items || []).forEach(function (item) {
-      var value = String(item[key] || "").trim();
-      if (value) seen[value] = true;
-    });
-    return Object.keys(seen).length;
-  }
-
-  function feedTagCounts(items) {
-    var counts = {};
-    (items || []).forEach(function (item) {
-      (item.tags || []).forEach(function (tag) {
-        counts[tag] = (counts[tag] || 0) + 1;
-      });
-    });
-    return Object.keys(counts)
-      .map(function (tag) {
-        return { tag: tag, count: counts[tag] };
-      })
-      .sort(function (a, b) {
-        return b.count - a.count;
-      });
-  }
-
-  function renderFeedOverviewPanel() {
-    var feed = currentFeed();
-    var items = feed.items || [];
-    var tags = feedTagCounts(items);
-    return [
-      '<article class="panel feed-overview-panel">',
-      '<div class="panel-head">',
-      '<div>',
-      '<p class="label">Market Feed</p>',
-      '<h2>여러 채널로 보는 시장 피드</h2>',
-      '</div>',
-      '<button class="text-button primary" data-action="refresh-feed">' + (state.feedLoading ? "갱신 중" : "피드 갱신") + '</button>',
-      '</div>',
-      '<div class="feed-stat-grid">',
-      '<div class="feed-stat"><span>기사</span><strong>' + escapeHtml(items.length) + '</strong></div>',
-      '<div class="feed-stat"><span>소스</span><strong>' + escapeHtml(uniqueCount(items, "source")) + '</strong></div>',
-      '<div class="feed-stat"><span>채널</span><strong>' + escapeHtml(feedChannels.length) + '</strong></div>',
-      '<div class="feed-stat"><span>갱신</span><strong>' + escapeHtml(feed.generatedAt ? formatFeedTime(feed.generatedAt) : "-") + '</strong></div>',
-      '</div>',
-      '<div class="theme-radar">',
-      tags.length ? tags.slice(0, 8).map(function (entry) {
-        return '<span>' + escapeHtml(entry.tag) + ' <strong>' + escapeHtml(entry.count) + '</strong></span>';
-      }).join("") : '<span>키워드 대기</span>',
-      '</div>',
-      feed.errors && feed.errors.length ? '<p class="form-error">' + escapeHtml(feed.errors.slice(0, 2).join(" · ")) + '</p>' : '',
-      '</article>'
-    ].join("");
-  }
-
-  function renderFeedListPanel() {
-    var feed = currentFeed();
-    var items = feed.items || [];
-    return [
-      '<article class="panel feed-list-panel">',
-      '<div class="panel-head">',
-      '<div>',
-      '<p class="label">Articles</p>',
-      '<h2>최신 기사</h2>',
-      '</div>',
-      '<span class="metric">' + escapeHtml(items.length) + '</span>',
-      '</div>',
-      '<div class="news-list">',
-      state.feedLoading ? '<div class="panel skeleton"></div>' : '',
-      state.feedError ? '<p class="form-error">' + escapeHtml(state.feedError) + '</p>' : '',
-      (!state.feedLoading && !state.feedError && !items.length) ? '<p class="subtle">피드 탭을 열면 실제 채널을 조회합니다.</p>' : '',
-      (!state.feedLoading && items.length) ? items.map(renderFeedItem).join("") : '',
-      '</div>',
-      '</article>'
-    ].join("");
-  }
-
-  function renderFeedItem(item) {
-    return [
-      '<div class="news-item">',
-      '<div>',
-      '<div class="news-source">' + escapeHtml(item.channelLabel || item.source) + ' · ' + escapeHtml(item.source || "-") + ' · ' + escapeHtml(item.publishedLabel || "-") + '</div>',
-      '<h3>' + escapeHtml(item.title) + '</h3>',
-      '<p>' + escapeHtml(item.summary || "요약 대기") + '</p>',
-      '<div class="trigger-list">',
-      (item.tags || []).map(function (tag) {
-        return '<span>' + escapeHtml(tag) + '</span>';
-      }).join(""),
-      '</div>',
-      '</div>',
-      item.url ? '<a class="open-link" href="' + escapeHtml(item.url) + '" target="_blank" rel="noreferrer" title="원문 열기">↗</a>' : '<span class="open-link muted">-</span>',
-      '</div>'
-    ].join("");
   }
 
   function renderFeedSettingsPanel() {
@@ -14405,13 +12223,8 @@
   }
 
   function feedQualitySignals() {
-    var feed = currentFeed();
     var evidence = currentResearchEvidence();
     var summary = evidence.summary || {};
-    var channelErrors = Array.isArray(feed.errors) ? feed.errors.length : 0;
-    var activeChannels = (feed.channels || []).filter(function (channel) {
-      return Number(channel.count || 0) > 0 && !channel.error;
-    }).length;
     var latest = feedFreshness(summary.latestSeenAt);
     var kisEnabled = settingEnabled("kisMarketSignalsEnabled");
     var newsEnabled = settingEnabled("externalNewsEnabled");
@@ -14421,12 +12234,6 @@
     var fredEnabled = settingEnabled("externalFredEnabled");
     var cryptoEnabled = settingEnabled("externalCoinGeckoEnabled");
     return [
-      {
-        label: "실시간 피드 채널",
-        value: activeChannels + "/" + feedChannels.length,
-        tone: channelErrors ? "caution" : (activeChannels ? "watch" : "hold"),
-        description: channelErrors ? "일부 웹 피드 조회가 실패했습니다." : "RSS/GDELT 채널에서 화면용 시장 피드를 가져옵니다."
-      },
       {
         label: "저장된 리서치 근거",
         value: Number(summary.total || 0) + "건",
@@ -14485,7 +12292,6 @@
       '</div>',
       '<div class="settings-actions">',
       '<button class="text-button" data-action="refresh-research-evidence">' + (state.researchEvidenceLoading ? "조회 중" : "저장 근거 조회") + '</button>',
-      '<button class="text-button primary" data-action="refresh-feed">' + (state.feedLoading ? "갱신 중" : "웹 피드 갱신") + '</button>',
       '</div>',
       '</div>',
       '<div class="feed-quality-grid">',
@@ -14617,32 +12423,6 @@
       '<button class="mini-button danger" type="button" data-research-delete="' + escapeHtml(item.evidenceId || "") + '"' + (deleting || item.evidenceId === "preview:005930:news" ? " disabled" : "") + '>' + (deleting ? "삭제 중" : "삭제") + '</button>',
       '</div>',
       '</div>'
-    ].join("");
-  }
-
-  function renderFeedChannelPanel() {
-    var feed = currentFeed();
-    var channelMap = {};
-    (feed.channels || []).forEach(function (channel) {
-      channelMap[channel.id] = channel;
-    });
-    return [
-      '<article class="panel feed-channel-panel">',
-      '<div class="panel-head">',
-      '<div>',
-      '<p class="label">Channels</p>',
-      '<h2>피드 채널 상태</h2>',
-      '</div>',
-      '</div>',
-      '<div class="source-stack">',
-      feedChannels.map(function (channel) {
-        var stateChannel = channelMap[channel.id] || {};
-        var count = stateChannel.count || 0;
-        var status = stateChannel.error ? "오류" : (count ? count + "건" : "대기");
-        return '<div class="source-row"><span>' + escapeHtml(channel.label) + '</span><strong>' + escapeHtml(status) + '</strong></div>';
-      }).join(""),
-      '</div>',
-      '</article>'
     ].join("");
   }
 
@@ -14896,7 +12676,6 @@
       renderSettingField("telegramBotToken", "Telegram Bot Token", secretType, "bot token", { preserveConfigured: true }),
       renderSettingField("telegramChatId", "Telegram Chat ID", "text", "chat id", { preserveConfigured: true }),
       renderSettingField("notifyLinkUrl", "알림 링크 URL", "url", "http://127.0.0.1:3000?tab=notifications"),
-      renderSettingField("notifyIntervalMinutes", "알림 주기(분)", "number", "10"),
       '</div>',
       '</div>',
       '</article>'
@@ -14915,15 +12694,9 @@
       '</div>',
       '<div class="settings-body">',
       '<div class="settings-grid">',
-      renderSettingSelect("kisEnv", "KIS 환경", [
-        { value: "prod", label: "실전" },
-        { value: "vts", label: "모의" }
-      ]),
       renderSettingField("kisBaseUrl", "KIS Base URL", "url", "https://openapi.koreainvestment.com:9443"),
       renderSettingField("kisAppKey", "KIS App Key", secretType, "app key", { preserveConfigured: true }),
       renderSettingField("kisAppSecret", "KIS App Secret", secretType, "app secret", { preserveConfigured: true }),
-      renderSettingField("kisAccountNo", "KIS 계좌번호", secretType, "계좌번호 앞 8자리", { preserveConfigured: true }),
-      renderSettingField("kisAccountProductCode", "KIS 상품코드", secretType, "계좌번호 뒤 2자리", { preserveConfigured: true }),
       renderSettingSelect("kisMarketSignalsEnabled", "KIS 수급 수집", [
         { value: "1", label: "사용" },
         { value: "0", label: "사용 안 함" }
@@ -15044,29 +12817,6 @@
     ].join("");
   }
 
-  function renderChecklistPanel(snapshot) {
-    return [
-      '<article class="panel">',
-      '<div class="panel-head">',
-      '<div>',
-      '<p class="label">Read Only Guard</p>',
-      '<h2>토스 전용 체크</h2>',
-      '</div>',
-      '</div>',
-      '<div class="check-list">',
-      (snapshot.checklist || []).map(function (item) {
-        return [
-          '<div class="check-row">',
-          '<span class="check-state ' + escapeHtml(item.status) + '">' + escapeHtml(item.status) + '</span>',
-          '<p>' + escapeHtml(item.label) + '</p>',
-          '</div>'
-        ].join("");
-      }).join(""),
-      '</div>',
-      '</article>'
-    ].join("");
-  }
-
   function bindActions() {
     var refresh = app.querySelector('[data-action="refresh"]');
     if (refresh) {
@@ -15133,12 +12883,6 @@
         navigateToTab(state.previousTab || "overview", { replace: true, skipPrevious: true });
       });
     }
-
-    Array.prototype.slice.call(app.querySelectorAll('[data-action="refresh-feed"]')).forEach(function (refreshFeed) {
-      refreshFeed.addEventListener("click", function () {
-        loadFeed(true);
-      });
-    });
 
     Array.prototype.slice.call(app.querySelectorAll('[data-action="refresh-research-evidence"]')).forEach(function (refreshEvidence) {
       refreshEvidence.addEventListener("click", function () {
@@ -15255,41 +12999,6 @@
       });
     });
 
-    Array.prototype.slice.call(app.querySelectorAll("[data-lab-assumption]")).forEach(function (field) {
-      field.addEventListener("change", function () {
-        updateValuationAssumption(
-          field.getAttribute("data-lab-symbol"),
-          field.getAttribute("data-lab-assumption"),
-          field.value
-        );
-      });
-    });
-
-    Array.prototype.slice.call(app.querySelectorAll("[data-lab-draft]")).forEach(function (field) {
-      field.addEventListener("input", function () {
-        updateLabDraft(
-          field.getAttribute("data-lab-symbol"),
-          field.getAttribute("data-lab-draft"),
-          field.value,
-          false
-        );
-      });
-      field.addEventListener("change", function () {
-        updateLabDraft(
-          field.getAttribute("data-lab-symbol"),
-          field.getAttribute("data-lab-draft"),
-          field.value,
-          true
-        );
-      });
-    });
-
-    Array.prototype.slice.call(app.querySelectorAll("[data-lab-save]")).forEach(function (button) {
-      button.addEventListener("click", function () {
-        saveLabRecord(button.getAttribute("data-lab-save"));
-      });
-    });
-
     Array.prototype.slice.call(app.querySelectorAll("[data-model-setting]")).forEach(function (field) {
       field.addEventListener("input", function () {
         var name = field.getAttribute("data-model-setting");
@@ -15297,8 +13006,6 @@
         state.settings[name] = field.value;
         persistSettings();
         state.settingsSaved = false;
-        state.modelSaved = false;
-        state.modelError = "";
         refreshSettingsSaveControls();
       });
       field.addEventListener("change", function () {
@@ -15698,26 +13405,6 @@
       });
     });
 
-    var saveModelVersionButton = app.querySelector('[data-action="save-model-version"]');
-    if (saveModelVersionButton) {
-      saveModelVersionButton.addEventListener("click", function () {
-        saveModelVersion();
-      });
-    }
-
-    Array.prototype.slice.call(app.querySelectorAll("[data-export-lab]")).forEach(function (button) {
-      button.addEventListener("click", function () {
-        exportLabRecords(button.getAttribute("data-export-lab"));
-      });
-    });
-
-    var exportModelVersionsButton = app.querySelector('[data-action="export-model-versions"]');
-    if (exportModelVersionsButton) {
-      exportModelVersionsButton.addEventListener("click", function () {
-        exportModelVersions();
-      });
-    }
-
     Array.prototype.slice.call(app.querySelectorAll("[data-setting]")).forEach(function (field) {
       var updateSettingField = function () {
         var name = field.getAttribute("data-setting");
@@ -15889,55 +13576,6 @@
     if (accountWatchCancel) {
       accountWatchCancel.addEventListener("click", function () {
         state.editingWatchAccountId = "";
-        state.editingWatchSymbol = "";
-        state.watchlistError = "";
-        render();
-      });
-    }
-
-    Array.prototype.slice.call(app.querySelectorAll("[data-watch-edit]")).forEach(function (button) {
-      button.addEventListener("click", function () {
-        state.editingWatchSymbol = String(button.getAttribute("data-watch-edit") || "").toUpperCase();
-        state.watchlistError = "";
-        render();
-      });
-    });
-
-    Array.prototype.slice.call(app.querySelectorAll("[data-watch-remove]")).forEach(function (button) {
-      button.addEventListener("click", function () {
-        var removeSymbol = String(button.getAttribute("data-watch-remove") || "").toUpperCase();
-        saveWatchlistSymbols(watchlistSymbols().filter(function (symbol) {
-          return symbol !== removeSymbol;
-        }));
-      });
-    });
-
-    Array.prototype.slice.call(app.querySelectorAll("[data-watch-edit-form]")).forEach(function (form) {
-      form.addEventListener("submit", function (event) {
-        event.preventDefault();
-        var original = String(form.getAttribute("data-watch-edit-form") || "").toUpperCase();
-        var input = form.querySelector('input[name="symbol"]');
-        var next = normalizeSymbols(input ? input.value : "");
-        if (!next.length) {
-          state.watchlistError = "수정할 종목을 입력하세요.";
-          render();
-          return;
-        }
-        var symbols = watchlistSymbols();
-        if (next[0] !== original && symbols.indexOf(next[0]) >= 0) {
-          state.watchlistError = "이미 추가된 관심 종목입니다.";
-          render();
-          return;
-        }
-        saveWatchlistSymbols(symbols.map(function (symbol) {
-          return symbol === original ? next[0] : symbol;
-        }));
-      });
-    });
-
-    var watchCancel = app.querySelector("[data-watch-cancel]");
-    if (watchCancel) {
-      watchCancel.addEventListener("click", function () {
         state.editingWatchSymbol = "";
         state.watchlistError = "";
         render();

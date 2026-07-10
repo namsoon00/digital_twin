@@ -1878,11 +1878,14 @@ class PythonServiceTests(unittest.TestCase):
             "market": "KR",
             "currency": "KRW",
             "marketValue": 1000,
+            "currentPrice": 69000,
             "profitLossRate": -12,
             "ma20": 76000,
             "ma60": 73000,
             "ma20Distance": -9,
             "ma60Distance": -5,
+            "volumeRatio": 1.6,
+            "tradeStrength": 130,
             "sector": "반도체",
         })
         portfolio = portfolio_summary([position])
@@ -1896,6 +1899,20 @@ class PythonServiceTests(unittest.TestCase):
             portfolio,
             [position],
             decisions_for_positions([position], portfolio),
+            metadata={
+                "previousMonitorState": {
+                    "positions": {
+                        "005930": {
+                            "currentPrice": 80000,
+                            "profitLossRate": -2,
+                            "ma20Distance": 2,
+                            "ma60Distance": 1,
+                            "volumeRatio": 0.8,
+                            "tradeStrength": 100,
+                        }
+                    }
+                }
+            },
         )
 
         class FakeRepository:
@@ -1940,7 +1957,14 @@ class PythonServiceTests(unittest.TestCase):
         self.assertFalse(persisted.reasoning_cards)
         self.assertTrue(any((item.properties or {}).get("ontologyBox") == "ABox" for item in persisted.entities))
         self.assertTrue(any(item.kind == "stock" for item in persisted.entities))
+        self.assertTrue(any(item.kind == "company" for item in persisted.entities))
+        self.assertTrue(any(item.kind == "security" for item in persisted.entities))
+        self.assertTrue(any(item.kind == "fact-change" for item in persisted.entities))
+        self.assertTrue(any(item.kind == "materiality-assessment" for item in persisted.entities))
+        self.assertTrue(any(item.kind == "trend-transition" for item in persisted.entities))
         self.assertTrue(any(item.relation_type == "BREAKS_LEVEL" for item in persisted.relations))
+        self.assertTrue(any(item.relation_type == "PASSES_IMPORTANCE_GATE" for item in persisted.relations))
+        self.assertTrue(any(item.relation_type == "HAS_TREND_TRANSITION" for item in persisted.relations))
 
     def test_ontology_projection_recorder_includes_watchlist_candidates(self):
         holding = normalize_position({

@@ -159,6 +159,29 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertIn("MERGE (stock)-[inferred:HAS_INFERRED_RISK]->(target)", cypher)
         self.assertIn("nativeNeo4jReasoned = true", cypher)
 
+    def test_default_rulebox_covers_materiality_and_trend_transition_rules(self):
+        rules = default_graph_inference_rules()
+        rule_ids = {item.rule_id for item in rules}
+        graph = rulebox_graph_from_rules(rules)
+        repository = Neo4jOntologyGraphRepository("http://neo4j.example.test")
+        condition_rows = repository.rows_for_entities(graph)
+        support_transition = next(
+            item
+            for item in condition_rows
+            if item["id"] == "rule-condition:graph.watchlist.trend_transition.support.v1:support-transition"
+        )
+        risk_transition = next(
+            item
+            for item in condition_rows
+            if item["id"] == "rule-condition:graph.holding.trend_transition.risk.v1:risk-transition"
+        )
+
+        self.assertIn("graph.materiality.alert_candidate.v1", rule_ids)
+        self.assertIn("graph.holding.trend_transition.risk.v1", rule_ids)
+        self.assertIn("graph.watchlist.trend_transition.support.v1", rule_ids)
+        self.assertEqual(["support"], support_transition["conditionRelationPolarities"])
+        self.assertEqual(["risk"], risk_transition["conditionRelationPolarities"])
+
     def test_rulebox_admin_payload_roundtrips_to_graph(self):
         rules = default_graph_inference_rules()
         payload = {"rules": rulebox_rules_to_payload(rules)}
@@ -258,6 +281,8 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertIn("n.ontologyBox = 'InferenceBox' DETACH DELETE n", clear_text)
         self.assertEqual(["HAS_INFERRED_RISK", "HAS_INFERRED_SUPPORT"], [item["parameters"]["relationType"] for item in statements])
         self.assertIn("MATCH (rule:OntologyEntity {kind: 'rule', ontologyBox: 'RuleBox'})", cypher)
+        self.assertIn("condition.conditionRelationPolarities", cypher)
+        self.assertIn("rel.polarity IN condition.conditionRelationPolarities", cypher)
 
 
 if __name__ == "__main__":

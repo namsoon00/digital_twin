@@ -178,6 +178,8 @@ class Neo4jOntologyGraphRepository:
                 "conditionDirection": str(condition.get("direction") or "out"),
                 "conditionTargetKind": str(condition.get("target_kind") or ""),
                 "conditionTargetLevelTypes": condition_target_level_types(condition),
+                "conditionRelationPolarities": condition_relation_filter_values(condition, "polarity"),
+                "conditionRelationTransitionTypes": condition_relation_filter_values(condition, "transitionType"),
                 "conditionMinWeight": float(condition.get("min_weight") or 0),
                 "derivationRelationType": str(derivation.get("relation_type") or "").upper(),
                 "derivationIndex": int(properties.get("derivationIndex") or 0),
@@ -210,6 +212,11 @@ class Neo4jOntologyGraphRepository:
                 "ontologyBox": str(properties.get("ontologyBox") or "ABox"),
                 "boundedContext": str(properties.get("boundedContext") or ""),
                 "ruleId": str(properties.get("ruleId") or ""),
+                "polarity": str(properties.get("polarity") or ""),
+                "transitionType": str(properties.get("transitionType") or ""),
+                "riskImpact": number_or_none(properties.get("riskImpact") or properties.get("opinionImpact")),
+                "supportImpact": number_or_none(properties.get("supportImpact")),
+                "aiInfluenceLabel": str(properties.get("aiInfluenceLabel") or ""),
                 "evidenceIds": [str(value) for value in item.evidence_ids],
                 "propertiesJson": json.dumps(properties, ensure_ascii=False, sort_keys=True),
             })
@@ -295,6 +302,7 @@ class Neo4jOntologyGraphRepository:
                     "n.conditionValueString = row.conditionValueString, n.conditionValueNumber = row.conditionValueNumber, "
                     "n.conditionRelationType = row.conditionRelationType, n.conditionDirection = row.conditionDirection, "
                     "n.conditionTargetKind = row.conditionTargetKind, n.conditionTargetLevelTypes = row.conditionTargetLevelTypes, "
+                    "n.conditionRelationPolarities = row.conditionRelationPolarities, n.conditionRelationTransitionTypes = row.conditionRelationTransitionTypes, "
                     "n.conditionMinWeight = row.conditionMinWeight, n.derivationRelationType = row.derivationRelationType, "
                     "n.derivationIndex = row.derivationIndex, "
                     "n.derivationTargetKind = row.derivationTargetKind, n.derivationTargetKey = row.derivationTargetKey, "
@@ -378,6 +386,8 @@ class Neo4jOntologyGraphRepository:
                     "MERGE (a)-[r:" + relation_type + "]->(b) "
                     "SET r.weight = row.weight, r.evidenceIds = row.evidenceIds, "
                     "r.ontologyBox = row.ontologyBox, r.ruleId = row.ruleId, r.boundedContext = row.boundedContext, "
+                    "r.polarity = row.polarity, r.transitionType = row.transitionType, r.riskImpact = row.riskImpact, "
+                    "r.supportImpact = row.supportImpact, r.aiInfluenceLabel = row.aiInfluenceLabel, "
                     "r.propertiesJson = row.propertiesJson, r.updatedAt = $updatedAt"
                 ),
                 "parameters": {"rows": rows, "updatedAt": updated_at},
@@ -942,7 +952,8 @@ def rulebox_snapshot_statements() -> List[Dict[str, object]]:
                 "condition.conditionOperator AS operator, condition.conditionValueString AS valueString, "
                 "condition.conditionValueNumber AS valueNumber, condition.conditionRelationType AS relationType, "
                 "condition.conditionDirection AS direction, condition.conditionTargetKind AS targetKind, "
-                "condition.conditionTargetLevelTypes AS targetLevelTypes, condition.conditionMinWeight AS minWeight, "
+                "condition.conditionTargetLevelTypes AS targetLevelTypes, condition.conditionRelationPolarities AS relationPolarities, "
+                "condition.conditionRelationTransitionTypes AS relationTransitionTypes, condition.conditionMinWeight AS minWeight, "
                 "condition.propertiesJson AS propertiesJson ORDER BY rule.ruleId, condition.conditionId"
             ),
             "parameters": {},
@@ -1205,6 +1216,7 @@ def inferencebox_relation_payload(row: Dict[str, object]) -> Dict[str, object]:
         "supportImpact": number_or_none(row.get("supportImpact")),
         "weight": number_or_none(row.get("weight")),
         "label": str(row.get("aiInfluenceLabel") or ""),
+        "aiInfluenceLabel": str(row.get("aiInfluenceLabel") or ""),
         "inferenceTraceId": str(row.get("inferenceTraceId") or ""),
         "nativeNeo4jReasoned": bool(row.get("nativeNeo4jReasoned")),
         "updatedAt": str(row.get("updatedAt") or ""),
@@ -1270,6 +1282,15 @@ def condition_payload_from_row(row: Dict[str, object]) -> Dict[str, object]:
     target_level_types = row.get("targetLevelTypes")
     if not isinstance(target_level_types, list):
         target_level_types = []
+    relation_filters = condition.get("relation_property_filters") if isinstance(condition.get("relation_property_filters"), dict) else {}
+    if not relation_filters:
+        relation_filters = {}
+        polarities = row.get("relationPolarities") if isinstance(row.get("relationPolarities"), list) else []
+        transition_types = row.get("relationTransitionTypes") if isinstance(row.get("relationTransitionTypes"), list) else []
+        if polarities:
+            relation_filters["polarity"] = polarities
+        if transition_types:
+            relation_filters["transitionType"] = transition_types
     return {
         "condition_id": str(row.get("conditionId") or condition.get("condition_id") or ""),
         "kind": str(row.get("kind") or condition.get("kind") or ""),
@@ -1283,7 +1304,7 @@ def condition_payload_from_row(row: Dict[str, object]) -> Dict[str, object]:
         "target_property_filters": condition.get("target_property_filters") if isinstance(condition.get("target_property_filters"), dict) else (
             {"levelType": target_level_types} if target_level_types else {}
         ),
-        "relation_property_filters": condition.get("relation_property_filters") if isinstance(condition.get("relation_property_filters"), dict) else {},
+        "relation_property_filters": relation_filters,
         "min_weight": float(row.get("minWeight") or condition.get("min_weight") or 0),
     }
 
@@ -1375,6 +1396,8 @@ def native_reasoning_statement_for_relation_type(relation_type: str) -> Dict[str
         "AND coalesce(rel.weight, 0.0) >= coalesce(condition.conditionMinWeight, 0.0) "
         "AND (condition.conditionTargetKind = '' OR target.kind = condition.conditionTargetKind) "
         "AND (size(coalesce(condition.conditionTargetLevelTypes, [])) = 0 OR target.levelType IN condition.conditionTargetLevelTypes) "
+        "AND (size(coalesce(condition.conditionRelationPolarities, [])) = 0 OR rel.polarity IN condition.conditionRelationPolarities) "
+        "AND (size(coalesce(condition.conditionRelationTransitionTypes, [])) = 0 OR rel.transitionType IN condition.conditionRelationTransitionTypes) "
         "} "
         "ELSE false END) "
         "WITH rule, template, stock, conditions, "
@@ -1443,6 +1466,11 @@ def list_of_strings(value: object) -> List[str]:
 def condition_target_level_types(condition: Dict[str, object]) -> List[str]:
     filters = condition.get("target_property_filters") if isinstance(condition.get("target_property_filters"), dict) else {}
     return list_of_strings(filters.get("levelType"))
+
+
+def condition_relation_filter_values(condition: Dict[str, object], key: str) -> List[str]:
+    filters = condition.get("relation_property_filters") if isinstance(condition.get("relation_property_filters"), dict) else {}
+    return list_of_strings(filters.get(key))
 
 
 def neo4j_http_endpoint(uri: str, database: str) -> str:

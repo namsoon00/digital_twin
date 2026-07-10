@@ -19,6 +19,9 @@ RULE_STAGE_BY_ID = {
     "graph.loss_guard.breakdown.v1": "LOSS_REDUCE",
     "graph.profit_protect.trend_break.v1": "PROFIT_PARTIAL",
     "graph.watchlist.pullback.entry.v1": "ENTRY_WATCH",
+    "graph.materiality.alert_candidate.v1": "RELATION_WATCH",
+    "graph.holding.trend_transition.risk.v1": "LOSS_REDUCE",
+    "graph.watchlist.trend_transition.support.v1": "ENTRY_SPLIT_BUY",
     "entry.pullback.supported.v1": "ENTRY_SPLIT_BUY",
     "entry.momentum.confirmed.v1": "ENTRY_READY",
     "entry.wait_for_confirmation.v1": "ENTRY_WAIT",
@@ -101,6 +104,9 @@ def relation_context_from_inferencebox(
     prompt_context = build_ai_prompt_context(prompt_id, facts, matches, settings or {}, execution_plan)
     active_matches = [item for item in matches if item.matched and not item.reference_only]
     max_strength = max([item.strength_score for item in active_matches], default=decision.get("score") or 0)
+    evidence_subgraph = evidence_subgraph_packet(position, facts, matches, relations, traces)
+    if isinstance(prompt_context, dict):
+        prompt_context["evidenceSubgraph"] = evidence_subgraph
     return {
         "engineVersion": NEO4J_RELATION_CONTEXT_VERSION,
         "source": "neo4jInferenceBox",
@@ -124,6 +130,7 @@ def relation_context_from_inferencebox(
         "confidence": round(max([item.confidence for item in active_matches], default=0), 1),
         "decision": decision,
         "executionPlan": execution_plan,
+        "evidenceSubgraph": evidence_subgraph,
         "promptContext": prompt_context,
         "neo4jInference": {
             "relations": relations,
@@ -310,6 +317,8 @@ def stage_key_from_action(action_group: str, action_level: str) -> str:
 def stage_priority(rule_id: str) -> int:
     return {
         "graph.loss_guard.breakdown.v1": 40,
+        "graph.holding.trend_transition.risk.v1": 39,
+        "graph.materiality.alert_candidate.v1": 38,
         "entry.wait_for_confirmation.v1": 39,
         "entry.momentum.confirmed.v1": 38,
         "entry.pullback.supported.v1": 38,
@@ -317,5 +326,87 @@ def stage_priority(rule_id: str) -> int:
         "averaging_down.block.v1": 37,
         "graph.profit_protect.trend_break.v1": 35,
         "graph.liquidity.execution_guard.v1": 34,
+        "graph.watchlist.trend_transition.support.v1": 30,
         "graph.watchlist.pullback.entry.v1": 20,
     }.get(str(rule_id or ""), 10)
+
+
+def evidence_subgraph_packet(
+    position: Position,
+    facts: Dict[str, object],
+    matches: List[OntologyRuleMatch],
+    relations: List[Dict[str, object]],
+    traces: List[Dict[str, object]],
+) -> Dict[str, object]:
+    symbol = str(position.symbol or facts.get("symbol") or "").upper().strip()
+    target_id = "stock:" + symbol if symbol else ""
+    nodes: Dict[str, Dict[str, object]] = {}
+
+    def add_node(node_id: str, label: str, kind: str, **properties: object) -> None:
+        if not node_id:
+            return
+        nodes[node_id] = {
+            "id": node_id,
+            "label": str(label or node_id),
+            "kind": str(kind or "node"),
+            "properties": {key: value for key, value in properties.items() if value not in (None, "", [], {})},
+        }
+
+    add_node(target_id, position.name or symbol, "stock", symbol=symbol, market=position.market, sector=position.sector)
+    edges: List[Dict[str, object]] = []
+    for relation in relations or []:
+        if not isinstance(relation, dict):
+            continue
+        source = str(relation.get("source") or target_id)
+        target = str(relation.get("target") or "")
+        add_node(source, relation.get("sourceLabel") or source, "source")
+        add_node(
+            target,
+            relation.get("targetLabel") or target,
+            str(relation.get("targetKind") or "inference"),
+            ruleId=relation.get("ruleId"),
+            polarity=relation.get("polarity"),
+        )
+        edges.append({
+            "source": source,
+            "target": target,
+            "type": str(relation.get("type") or "INFERRED_RELATION"),
+            "ruleId": str(relation.get("ruleId") or ""),
+            "weight": number(relation.get("weight")),
+            "polarity": str(relation.get("polarity") or ""),
+            "riskImpact": number(relation.get("riskImpact")),
+            "supportImpact": number(relation.get("supportImpact")),
+            "label": str(relation.get("aiInfluenceLabel") or relation.get("targetLabel") or ""),
+        })
+    return {
+        "packetId": "ai-context:" + symbol if symbol else "ai-context",
+        "target": {
+            "id": target_id,
+            "symbol": symbol,
+            "name": position.name,
+            "market": position.market,
+            "sector": position.sector,
+        },
+        "nodes": list(nodes.values())[:24],
+        "edges": edges[:32],
+        "matchedRuleIds": [item.rule_id for item in matches if item.matched][:12],
+        "traces": [
+            {
+                "id": str(item.get("id") or ""),
+                "ruleId": str(item.get("ruleId") or ""),
+                "label": str(item.get("label") or ""),
+                "confidence": number(item.get("confidence")),
+                "matchedConditionIds": list(item.get("matchedConditionIds") or [])[:12],
+            }
+            for item in traces[:12]
+            if isinstance(item, dict)
+        ],
+        "factSummary": {
+            "profitLossRate": facts.get("profitLossRate"),
+            "ma20Distance": facts.get("ma20Distance"),
+            "ma60Distance": facts.get("ma60Distance"),
+            "volumeRatio": facts.get("volumeRatio"),
+            "dataQuality": facts.get("dataQuality"),
+        },
+        "missingData": list(facts.get("missingData") or [])[:8],
+    }

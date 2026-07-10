@@ -88,6 +88,10 @@ class OntologyInferenceContextTests(unittest.TestCase):
         self.assertEqual("neo4jInferenceBox", contexts["005930"]["source"])
         self.assertEqual("neo4jInferenceBox", contexts["005930"]["decision"]["basis"])
         self.assertEqual("graph.loss_guard.breakdown.v1", contexts["005930"]["decision"]["selectedRuleId"])
+        self.assertEqual("stock:005930", contexts["005930"]["evidenceSubgraph"]["target"]["id"])
+        self.assertEqual(["graph.loss_guard.breakdown.v1"], contexts["005930"]["evidenceSubgraph"]["matchedRuleIds"])
+        self.assertTrue(any(item["type"] == "HAS_INFERRED_RISK" for item in contexts["005930"]["evidenceSubgraph"]["edges"]))
+        self.assertIn("evidenceSubgraph", contexts["005930"]["promptContext"])
 
         decisions = decisions_for_positions(
             [position],

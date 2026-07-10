@@ -2,6 +2,7 @@ from typing import Dict, Iterable, List
 
 from .investment_research import build_active_investment_opinion, research_evidence_from_external_signals, research_evidence_from_facts
 from .accounts import message_delivery_profile
+from .materiality import market_change_materiality
 from .market_data import clamp, number
 from .ontology_contracts import (
     OntologyBelief,
@@ -212,6 +213,79 @@ def previous_decision_state(runtime_context: Dict[str, object], symbol: str) -> 
     rows = previous.get("decisions") if isinstance(previous.get("decisions"), dict) else {}
     item = rows.get(str(symbol or "").upper()) if isinstance(rows, dict) else {}
     return item if isinstance(item, dict) else {}
+
+
+def position_market_state_payload(position: Position) -> Dict[str, object]:
+    return {
+        "currentPrice": number(position.current_price),
+        "profitLossRate": number(position.profit_loss_rate),
+        "ma20Distance": number(position.ma20_distance),
+        "ma60Distance": number(position.ma60_distance),
+        "ma20Slope": number(position.ma20_slope),
+        "ma60Slope": number(position.ma60_slope),
+        "changeRate": number(position.change_rate),
+        "volumeRatio": number(position.volume_ratio),
+        "tradeStrength": number(position.trade_strength),
+        "tradingValue": number(position.trading_value),
+        "orderbookImbalance": number(position.bid_ask_imbalance),
+        "dataQuality": str(position.data_quality or ""),
+        "updatedAt": str(position.updated_at or ""),
+    }
+
+
+def previous_market_state_payload(previous: Dict[str, object]) -> Dict[str, object]:
+    if not isinstance(previous, dict):
+        return {}
+    pairs = {
+        "currentPrice": ("currentPrice", "current_price", "price"),
+        "profitLossRate": ("profitLossRate", "profit_loss_rate"),
+        "ma20Distance": ("ma20Distance", "ma20_distance"),
+        "ma60Distance": ("ma60Distance", "ma60_distance"),
+        "ma20Slope": ("ma20Slope", "ma20_slope"),
+        "ma60Slope": ("ma60Slope", "ma60_slope"),
+        "changeRate": ("changeRate", "change_rate", "priceChangeRate"),
+        "volumeRatio": ("volumeRatio", "volume_ratio"),
+        "tradeStrength": ("tradeStrength", "trade_strength"),
+        "tradingValue": ("tradingValue", "trading_value"),
+        "orderbookImbalance": ("orderbookImbalance", "bidAskImbalance", "bid_ask_imbalance"),
+        "dataQuality": ("dataQuality", "data_quality"),
+        "updatedAt": ("updatedAt", "updated_at"),
+    }
+    normalized: Dict[str, object] = {}
+    for target_key, keys in pairs.items():
+        for key in keys:
+            if key in previous and previous.get(key) not in (None, ""):
+                normalized[target_key] = previous.get(key)
+                break
+    return normalized
+
+
+def changed_market_fields(previous: Dict[str, object], current: Dict[str, object]) -> List[str]:
+    if not current:
+        return []
+    if not previous:
+        return [key for key, value in current.items() if value not in (None, "", 0, 0.0)]
+    fields: List[str] = []
+    numeric_fields = [
+        "currentPrice",
+        "profitLossRate",
+        "ma20Distance",
+        "ma60Distance",
+        "ma20Slope",
+        "ma60Slope",
+        "changeRate",
+        "volumeRatio",
+        "tradeStrength",
+        "tradingValue",
+        "orderbookImbalance",
+    ]
+    for key in numeric_fields:
+        if abs(number(current.get(key)) - number(previous.get(key))) >= 0.0001:
+            fields.append(key)
+    for key in ["dataQuality"]:
+        if str(current.get(key) or "") != str(previous.get(key) or ""):
+            fields.append(key)
+    return fields
 
 
 def factor_labels_for_position(position: Position) -> List[str]:
@@ -1398,6 +1472,8 @@ def add_trend_transition_concepts(
     hint = str(assessment.get("relationHint") or "")
     if hint:
         add_relation(graph, transition_id, current_phase_id, hint, weight=weight, properties=props)
+    if not thesis_id:
+        return
     if polarity == "support":
         add_relation(graph, transition_id, thesis_id, "SUPPORTS_THESIS", weight=weight, properties=props)
     elif polarity == "risk":
@@ -1671,6 +1747,115 @@ def add_decision_item_concepts(graph: PortfolioOntology, runtime_context: Dict[s
         add_relation(graph, signal_id, stock_id, "USED_AS_EVIDENCE", weight=0.55, properties={"source": "decision-item"})
 
 
+def add_instrument_identity_concepts(
+    graph: PortfolioOntology,
+    stock_id: str,
+    position: Position,
+    source: str,
+) -> None:
+    symbol = str(position.symbol or "").upper().strip()
+    if not symbol:
+        return
+    company_label = str(position.name or symbol)
+    company_id = add_entity(graph, "company", symbol, company_label, {
+        "tboxClass": "Company",
+        "symbol": symbol,
+        "market": position.market,
+        "sector": position.sector,
+        "source": source,
+    })
+    security_id = add_entity(graph, "security", symbol, company_label + " 보통주", {
+        "tboxClass": "Security",
+        "tboxClasses": instrument_tbox_classes(position) + ["Security"],
+        "symbol": symbol,
+        "market": position.market,
+        "currency": position.currency,
+        "source": source,
+    })
+    peer_key = str(position.market or "unknown") + ":" + str(position.sector or "기타")
+    peer_id = add_entity(graph, "peer-group", peer_key, str(position.market or "unknown") + " " + str(position.sector or "기타") + " 피어 그룹", {
+        "tboxClass": "PeerGroup",
+        "market": position.market,
+        "sector": position.sector,
+    })
+    props = {"source": "instrument-identity", "polarity": "context", "aiInfluenceLabel": "회사-증권 정체성"}
+    add_relation(graph, company_id, security_id, "ISSUES", weight=1.0, properties=props)
+    add_relation(graph, security_id, stock_id, "REPRESENTS_STOCK", weight=1.0, properties=props)
+    add_relation(graph, stock_id, security_id, "REPRESENTS_INSTRUMENT", weight=1.0, properties=props)
+    add_relation(graph, company_id, peer_id, "BELONGS_TO", weight=0.85, properties={"source": "peer-map", "aiInfluenceLabel": "피어 그룹"})
+    add_relation(graph, stock_id, peer_id, "BELONGS_TO", weight=0.85, properties={"source": "peer-map", "aiInfluenceLabel": "피어 그룹"})
+
+
+def add_fact_change_concepts(
+    graph: PortfolioOntology,
+    stock_id: str,
+    symbol: str,
+    position: Position,
+    source: str,
+    runtime_context: Dict[str, object],
+) -> None:
+    previous = previous_market_state_payload(previous_position_state(runtime_context, symbol, source))
+    current = position_market_state_payload(position)
+    fields = changed_market_fields(previous, current)
+    assessment = market_change_materiality(
+        symbol,
+        previous,
+        current,
+        {"fields": fields},
+        runtime_settings(runtime_context),
+    )
+    payload = assessment.to_dict()
+    score = number(payload.get("score"))
+    fact_id = add_entity(graph, "fact-change", symbol + ":market-data-update", (position.name or symbol) + " 시장 데이터 변경", {
+        "tboxClass": "FactChange",
+        "tboxClasses": ["Observation", "FactChange"],
+        "symbol": symbol,
+        "source": source,
+        "trigger": payload.get("trigger"),
+        "changedFields": list(payload.get("changedFields") or []),
+        "previous": previous,
+        "current": current,
+        "materialityScore": score,
+        "materialityPassed": bool(payload.get("passed")),
+        "materialityGrade": payload.get("grade"),
+        "reason": payload.get("reason"),
+    })
+    relation_props = {
+        "source": "materiality-gate",
+        "polarity": "context",
+        "aiInfluenceLabel": "시장 데이터 의미 변화",
+        "materialityScore": score,
+        "materialityPassed": bool(payload.get("passed")),
+        "materialityGrade": payload.get("grade"),
+    }
+    if bool(payload.get("passed")):
+        relation_props.update({"polarity": "risk" if score >= 82 else "context", "opinionImpact": min(12.0, score * 0.08)})
+    fact_weight = round(max(0.05, min(1.0, score / 100.0)), 4)
+    add_relation(graph, stock_id, fact_id, "HAS_OBSERVATION", weight=fact_weight, properties=relation_props)
+    add_relation(graph, fact_id, stock_id, "CHANGES_FACT", weight=fact_weight, properties=relation_props)
+
+    assessment_id = add_entity(graph, "materiality-assessment", symbol + ":market-data-update", (position.name or symbol) + " 중요 변경 평가", {
+        "tboxClass": "MaterialityAssessment",
+        "tboxClasses": ["MaterialityAssessment", "ConfidenceAssessment", "ActionabilityAssessment"],
+        **payload,
+    })
+    add_relation(graph, fact_id, assessment_id, "TRIGGERS_MATERIALITY_ASSESSMENT", weight=fact_weight, properties=relation_props)
+    gate_relation = "PASSES_IMPORTANCE_GATE" if bool(payload.get("passed")) else "BLOCKED_BY_IMPORTANCE_GATE"
+    add_relation(graph, assessment_id, entity_id("importance-gate", "materiality-first"), gate_relation, weight=fact_weight, properties=relation_props)
+
+    components = payload.get("components") if isinstance(payload.get("components"), dict) else {}
+    threshold_components = [key for key in ["priceMove", "ma20Threshold", "ma60Threshold", "volumeConfirmation", "tradeStrength", "orderbookImbalance"] if number(components.get(key))]
+    if threshold_components:
+        threshold_id = add_entity(graph, "threshold-crossing", symbol + ":market-data-update", (position.name or symbol) + " 기준선/변동성 변화", {
+            "tboxClass": "ThresholdCrossing",
+            "symbol": symbol,
+            "components": threshold_components,
+            "facts": payload.get("facts") if isinstance(payload.get("facts"), dict) else {},
+            "score": score,
+        })
+        add_relation(graph, assessment_id, threshold_id, "HAS_THRESHOLD_CROSSING", weight=fact_weight, properties=relation_props)
+
+
 def build_portfolio_ontology(
     positions: Iterable[Position],
     portfolio: PortfolioSummary,
@@ -1819,6 +2004,7 @@ def build_portfolio_ontology(
                 properties=abox_properties({"source": source}),
             ))
         legacy = legacy_by_symbol.get(symbol) or legacy_by_symbol.get(position.symbol) or {}
+        add_instrument_identity_concepts(graph, stock_id, position, source)
         add_data_source_concept(graph, stock_id, position, source)
         add_metric_concepts(graph, stock_id, position, source)
         add_price_level_and_liquidity_concepts(graph, stock_id, position, source)
@@ -1826,6 +2012,16 @@ def build_portfolio_ontology(
         add_symbol_external_signal_concepts(graph, stock_id, symbol, external_signals)
         add_position_factor_concepts(graph, stock_id, portfolio_node_id, position, portfolio)
         add_position_macro_context_concepts(graph, stock_id, position, portfolio, external_signals, runtime_context)
+        add_fact_change_concepts(graph, stock_id, symbol, position, source, runtime_context)
+        add_trend_transition_concepts(
+            graph,
+            stock_id,
+            "",
+            symbol,
+            position,
+            source,
+            runtime_context,
+        )
         if not include_reasoning_outputs:
             continue
         opinion = build_position_opinion(position, portfolio, legacy) if holding else build_watchlist_opinion(position, legacy)

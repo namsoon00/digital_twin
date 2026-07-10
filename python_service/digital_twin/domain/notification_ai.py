@@ -694,6 +694,7 @@ def notification_ai_prompt_context(
             "referenceDate": str(context.get("referenceDate") or ""),
             "activeRules": active_rule_items(context),
             "relationFacts": sanitized_prompt_data(relation_context.get("facts") if isinstance(relation_context, dict) else {}),
+            "evidenceSubgraph": sanitized_prompt_data(relation_context.get("evidenceSubgraph") if isinstance(relation_context, dict) else {}),
             "trendDynamics": sanitized_prompt_data(relation_trend_dynamics(context)),
             "activeInvestmentOpinion": sanitized_prompt_data(active_opinion),
             "executionPlan": sanitized_prompt_data(execution_plan),

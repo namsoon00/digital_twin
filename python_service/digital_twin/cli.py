@@ -23,6 +23,7 @@ from .infrastructure.sqlite_monitoring import SQLiteMonitorStore
 from .infrastructure.sqlite_notifications import SQLiteNotificationJobStore, SQLiteNotificationTemplateStore
 from .infrastructure.sqlite_runtime import SQLiteAppStore
 from .infrastructure.notifications import queued_notifier_for_account, send_events
+from .infrastructure.neo4j_ontology import ontology_repository_from_settings
 from .infrastructure.service_factory import build_market_data_collection_runner, build_model_review_runner, build_monitor_runner, build_news_collection_runner, build_notification_queue_runner, build_ontology_reasoning_runner, build_symbol_universe_service
 from .infrastructure.settings import (
     SECRET_SETTING_KEYS,
@@ -290,6 +291,20 @@ def ontology_reasoning_command(args) -> int:
     return 1
 
 
+def ontology_command(args) -> int:
+    settings = runtime_settings()
+    repository = ontology_repository_from_settings(settings)
+    if args.ontology_action == "seed":
+        payload = {
+            "replaceRuleBox": bool(args.replace_rulebox),
+            "clearInference": bool(args.clear_inference),
+        }
+        result = repository.seed_ontology(payload)
+        print(json.dumps(result, ensure_ascii=False))
+        return 0 if result.get("status") in {"ok", "disabled"} else 1
+    return 1
+
+
 MASKED_RUNTIME_SETTING_KEYS = set(SECRET_SETTING_KEYS) | {"tossAccountSeq", "telegramChatId"}
 
 
@@ -532,6 +547,13 @@ def build_parser() -> argparse.ArgumentParser:
     ontology_watch.add_argument("--limit", default="")
     ontology_reasoning_actions.add_parser("status")
     ontology_reasoning.set_defaults(func=ontology_reasoning_command)
+
+    ontology = subparsers.add_parser("ontology", help="Manage ontology graph projection")
+    ontology_actions = ontology.add_subparsers(dest="ontology_action", required=True)
+    ontology_seed = ontology_actions.add_parser("seed")
+    ontology_seed.add_argument("--replace-rulebox", action="store_true")
+    ontology_seed.add_argument("--keep-inference", dest="clear_inference", action="store_false", default=True)
+    ontology.set_defaults(func=ontology_command)
 
     settings = subparsers.add_parser("settings", help="Manage runtime settings")
     settings_actions = settings.add_subparsers(dest="settings_action", required=True)

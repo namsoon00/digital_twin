@@ -11,8 +11,10 @@ from digital_twin.domain.portfolio import Position
 from digital_twin.domain.portfolio_calculations import portfolio_summary
 from digital_twin.infrastructure.neo4j_ontology import (
     Neo4jOntologyGraphRepository,
+    NullOntologyGraphRepository,
     clear_rulebox_statements,
     native_reasoning_statements_for_relation_types,
+    ontology_seed_graph,
     rulebox_graph_from_rules,
     rulebox_rules_from_payload,
     rulebox_rules_to_payload,
@@ -87,13 +89,20 @@ class OntologyRuleBoxTests(unittest.TestCase):
         repository = Neo4jOntologyGraphRepository("http://neo4j.example.test")
 
         rule_row = next(item for item in repository.rows_for_entities(graph) if item["id"] == "rule:graph.loss_guard.breakdown.v1")
+        stock_class_row = next(item for item in repository.rows_for_entities(graph) if item["id"] == "tbox-class:Stock")
+        holds_relation_row = next(item for item in repository.rows_for_entities(graph) if item["id"] == "tbox-relation:HOLDS")
         condition_row = next(item for item in repository.rows_for_entities(graph) if item["id"] == "rule-condition:graph.loss_guard.breakdown.v1:ma-break")
         template_row = next(item for item in repository.rows_for_entities(graph) if item["id"] == "relation-template:graph.loss_guard.breakdown.v1:0")
         inference_row = next(item for item in repository.rows_for_entities(graph) if item["kind"] == "inference-trace")
         risk_relation = next(item for item in repository.rows_for_relations(graph) if item["type"] == "HAS_INFERRED_RISK")
         inference_evidence = next(item for item in repository.rows_for_evidence(graph) if item["kind"] == "inference-trace")
         schema_text = "\n".join(item["statement"] for item in repository.schema_statements())
+        statement_text = "\n".join(item["statement"] for item in repository.statements(graph))
 
+        self.assertEqual("Stock", stock_class_row["className"])
+        self.assertEqual("HOLDS", holds_relation_row["relationTypeName"])
+        self.assertEqual("TBox", stock_class_row["ontologyBox"])
+        self.assertEqual("TBox", holds_relation_row["ontologyBox"])
         self.assertEqual("RuleBox", rule_row["ontologyBox"])
         self.assertEqual("graph.loss_guard.breakdown.v1", rule_row["ruleId"])
         self.assertEqual("relation", condition_row["conditionKind"])
@@ -107,6 +116,28 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertEqual("InferenceBox", inference_evidence["ontologyBox"])
         self.assertIn("ontology_entity_rule_id", schema_text)
         self.assertIn("ontology_entity_condition_kind", schema_text)
+        self.assertIn("ontology_tbox_class_name", schema_text)
+        self.assertIn("SET n:TBox", statement_text)
+        self.assertIn("SET n:ABox", statement_text)
+        self.assertIn("SET n:RuleBox", statement_text)
+        self.assertIn("SET n:InferenceBox", statement_text)
+        self.assertIn("SET n:OntologyTBoxClass", statement_text)
+        self.assertIn("SET n:OntologyTBoxRelation", statement_text)
+
+    def test_ontology_seed_graph_contains_tbox_and_rulebox_for_neo4j(self):
+        graph = ontology_seed_graph()
+        repository = Neo4jOntologyGraphRepository("http://neo4j.example.test")
+        entity_rows = repository.rows_for_entities(graph)
+        relation_rows = repository.rows_for_relations(graph)
+        result = NullOntologyGraphRepository().seed_ontology()
+
+        self.assertTrue(any(row["ontologyBox"] == "TBox" and row["kind"] == "tbox-class" for row in entity_rows))
+        self.assertTrue(any(row["ontologyBox"] == "RuleBox" and row["kind"] == "rule" for row in entity_rows))
+        self.assertTrue(any(row["ontologyBox"] == "TBox" and row["type"] == "DEFINES_CLASS" for row in relation_rows))
+        self.assertTrue(any(row["ontologyBox"] == "RuleBox" and row["type"] == "HAS_CONDITION" for row in relation_rows))
+        self.assertFalse(result["saved"])
+        self.assertGreater(result["tboxEntityCount"], 0)
+        self.assertGreater(result["ruleBoxEntityCount"], 0)
 
     def test_neo4j_native_reasoning_cypher_uses_rulebox_as_execution_source(self):
         graph = self.loss_guard_graph()

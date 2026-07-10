@@ -23,6 +23,18 @@ class NullOntologyGraphRepository:
             "reasoningCardCount": len(getattr(graph, "reasoning_cards", []) or []),
         }
 
+    def seed_ontology(self, payload: Dict[str, object] = None) -> Dict[str, object]:
+        graph = ontology_seed_graph()
+        result = self.save_graph(graph)
+        result.update({
+            "configured": False,
+            "seeded": False,
+            "reason": "Neo4j ontology storage is not configured.",
+            "tboxEntityCount": graph_box_entity_counts(graph).get("TBox", 0),
+            "ruleBoxEntityCount": graph_box_entity_counts(graph).get("RuleBox", 0),
+        })
+        return result
+
     def rulebox_snapshot(self) -> Dict[str, object]:
         rules = rulebox_rules_to_payload(default_graph_inference_rules())
         return {
@@ -100,6 +112,12 @@ class Neo4jOntologyGraphRepository:
             "CREATE INDEX ontology_entity_condition_kind IF NOT EXISTS FOR (n:OntologyEntity) ON (n.conditionKind)",
             "CREATE INDEX ontology_entity_derivation_relation_type IF NOT EXISTS FOR (n:OntologyEntity) ON (n.derivationRelationType)",
             "CREATE INDEX ontology_entity_level_type IF NOT EXISTS FOR (n:OntologyEntity) ON (n.levelType)",
+            "CREATE INDEX ontology_tbox_class_name IF NOT EXISTS FOR (n:OntologyTBoxClass) ON (n.className)",
+            "CREATE INDEX ontology_tbox_relation_type IF NOT EXISTS FOR (n:OntologyTBoxRelation) ON (n.relationTypeName)",
+            "CREATE INDEX ontology_box_name IF NOT EXISTS FOR (n:OntologyBox) ON (n.label)",
+            "CREATE INDEX ontology_abox_symbol IF NOT EXISTS FOR (n:ABox) ON (n.symbol)",
+            "CREATE INDEX ontology_rulebox_rule_id IF NOT EXISTS FOR (n:RuleBox) ON (n.ruleId)",
+            "CREATE INDEX ontology_inferencebox_rule_id IF NOT EXISTS FOR (n:InferenceBox) ON (n.ruleId)",
             "CREATE INDEX ontology_evidence_subject IF NOT EXISTS FOR (n:OntologyEvidence) ON (n.subject)",
             "CREATE INDEX ontology_opinion_symbol IF NOT EXISTS FOR (n:OntologyOpinion) ON (n.symbol)",
             "CREATE INDEX ontology_reasoning_card_symbol IF NOT EXISTS FOR (n:OntologyReasoningCard) ON (n.symbol)",
@@ -125,7 +143,13 @@ class Neo4jOntologyGraphRepository:
                 "actionLevel": str(properties.get("actionLevel") or ""),
                 "promptHint": str(properties.get("promptHint") or ""),
                 "tboxClass": str(properties.get("tboxClass") or ""),
+                "className": str(properties.get("className") or ""),
+                "parentClass": str(properties.get("parentClass") or ""),
+                "relationTypeName": str(properties.get("relationType") or ""),
                 "boundedContext": str(properties.get("boundedContext") or ""),
+                "box": str(properties.get("box") or properties.get("ontologyBox") or ""),
+                "sourceContext": str(properties.get("sourceContext") or ""),
+                "targetContext": str(properties.get("targetContext") or ""),
                 "sourceValue": str(properties.get("source") or ""),
                 "profitLossRate": number_or_none(properties.get("profitLossRate")),
                 "levelType": str(properties.get("levelType") or ""),
@@ -249,6 +273,8 @@ class Neo4jOntologyGraphRepository:
                     "n.version = row.version, n.sourceKind = row.sourceKind, "
                     "n.actionGroup = row.actionGroup, n.actionLevel = row.actionLevel, n.promptHint = row.promptHint, "
                     "n.tboxClass = row.tboxClass, n.boundedContext = row.boundedContext, "
+                    "n.className = row.className, n.parentClass = row.parentClass, n.relationTypeName = row.relationTypeName, "
+                    "n.box = row.box, n.sourceContext = row.sourceContext, n.targetContext = row.targetContext, "
                     "n.sourceValue = row.sourceValue, n.profitLossRate = row.profitLossRate, n.levelType = row.levelType, "
                     "n.enabled = row.enabled, n.conditionId = row.conditionId, n.conditionKind = row.conditionKind, "
                     "n.conditionField = row.conditionField, n.conditionOperator = row.conditionOperator, "
@@ -264,7 +290,15 @@ class Neo4jOntologyGraphRepository:
                     "n.derivationWeight = row.derivationWeight, n.derivationBeliefLabel = row.derivationBeliefLabel, "
                     "n.derivationAiInfluenceLabel = row.derivationAiInfluenceLabel, n.derivationActionGroup = row.derivationActionGroup, "
                     "n.derivationActionLevel = row.derivationActionLevel, "
-                    "n.propertiesJson = row.propertiesJson, n.updatedAt = $updatedAt"
+                    "n.propertiesJson = row.propertiesJson, n.updatedAt = $updatedAt "
+                    "FOREACH (_ IN CASE WHEN row.ontologyBox = 'TBox' THEN [1] ELSE [] END | SET n:TBox) "
+                    "FOREACH (_ IN CASE WHEN row.ontologyBox = 'ABox' THEN [1] ELSE [] END | SET n:ABox) "
+                    "FOREACH (_ IN CASE WHEN row.ontologyBox = 'RuleBox' THEN [1] ELSE [] END | SET n:RuleBox) "
+                    "FOREACH (_ IN CASE WHEN row.ontologyBox = 'InferenceBox' THEN [1] ELSE [] END | SET n:InferenceBox) "
+                    "FOREACH (_ IN CASE WHEN row.kind = 'ontology-box' THEN [1] ELSE [] END | SET n:OntologyBox) "
+                    "FOREACH (_ IN CASE WHEN row.kind = 'bounded-context' THEN [1] ELSE [] END | SET n:OntologyBoundedContext) "
+                    "FOREACH (_ IN CASE WHEN row.kind = 'tbox-class' THEN [1] ELSE [] END | SET n:OntologyTBoxClass) "
+                    "FOREACH (_ IN CASE WHEN row.kind = 'tbox-relation' THEN [1] ELSE [] END | SET n:OntologyTBoxRelation)"
                 ),
                 "parameters": {"rows": self.rows_for_entities(graph), "updatedAt": updated_at},
             },
@@ -274,6 +308,8 @@ class Neo4jOntologyGraphRepository:
                     "MERGE (n:OntologyEvidence {id: row.id}) "
                     "SET n.subject = row.subject, n.kind = row.kind, n.source = row.source, n.summary = row.summary, n.ontologyBox = row.ontologyBox, "
                     "n.valueJson = row.valueJson, n.confidence = row.confidence, n.updatedAt = $updatedAt "
+                    "FOREACH (_ IN CASE WHEN row.ontologyBox = 'ABox' THEN [1] ELSE [] END | SET n:ABox) "
+                    "FOREACH (_ IN CASE WHEN row.ontologyBox = 'InferenceBox' THEN [1] ELSE [] END | SET n:InferenceBox) "
                     "WITH row, n MATCH (s:OntologyEntity {id: row.subject}) "
                     "MERGE (s)-[:HAS_EVIDENCE]->(n)"
                 ),
@@ -285,6 +321,8 @@ class Neo4jOntologyGraphRepository:
                     "MERGE (n:OntologyBelief {id: row.id}) "
                     "SET n.label = row.label, n.polarity = row.polarity, "
                     "n.confidence = row.confidence, n.ontologyBox = row.ontologyBox, n.evidenceIds = row.evidenceIds, n.updatedAt = $updatedAt "
+                    "FOREACH (_ IN CASE WHEN row.ontologyBox = 'ABox' THEN [1] ELSE [] END | SET n:ABox) "
+                    "FOREACH (_ IN CASE WHEN row.ontologyBox = 'InferenceBox' THEN [1] ELSE [] END | SET n:InferenceBox) "
                     "WITH row, n MATCH (s:OntologyEntity {id: row.subject}) "
                     "MERGE (s)-[:HAS_BELIEF]->(n)"
                 ),
@@ -297,6 +335,7 @@ class Neo4jOntologyGraphRepository:
                     "SET n.symbol = row.symbol, n.action = row.action, n.tone = row.tone, "
                     "n.conviction = row.conviction, n.ontologyPressure = row.ontologyPressure, "
                     "n.ontologyBox = row.ontologyBox, n.payloadJson = row.payloadJson, n.updatedAt = $updatedAt "
+                    "FOREACH (_ IN CASE WHEN row.ontologyBox = 'ABox' THEN [1] ELSE [] END | SET n:ABox) "
                     "WITH row, n, 'stock:' + row.symbol AS stockId MATCH (s:OntologyEntity {id: stockId}) "
                     "MERGE (s)-[:HAS_OPINION]->(n)"
                 ),
@@ -309,6 +348,7 @@ class Neo4jOntologyGraphRepository:
                     "SET n.symbol = row.symbol, n.companyName = row.companyName, n.source = row.source, "
                     "n.portfolioRelation = row.portfolioRelation, n.status = row.status, "
                     "n.ontologyBox = row.ontologyBox, n.payloadJson = row.payloadJson, n.updatedAt = $updatedAt "
+                    "FOREACH (_ IN CASE WHEN row.ontologyBox = 'ABox' THEN [1] ELSE [] END | SET n:ABox) "
                     "WITH row, n, 'stock:' + row.symbol AS stockId MATCH (s:OntologyEntity {id: stockId}) "
                     "MERGE (s)-[:HAS_REASONING_CARD]->(n)"
                 ),
@@ -349,7 +389,7 @@ class Neo4jOntologyGraphRepository:
             schema_reason = str(error)[:180]
 
         try:
-            payload = self.post_http_statements(endpoint, headers, self.statements(graph))
+            payload = self.post_http_statements_batched(endpoint, headers, self.statements(graph))
         except Exception as error:  # noqa: BLE001 - persistence must not break monitoring.
             return {
                 "saved": False,
@@ -368,7 +408,13 @@ class Neo4jOntologyGraphRepository:
                 "entityCount": len(graph.entities),
                 "relationCount": len(graph.relations),
             }
-        native_reasoning = self.run_native_reasoning_via_http(endpoint, headers, graph)
+        native_reasoning = self.run_native_reasoning_via_http(endpoint, headers, graph) if self.should_run_native_reasoning(graph) else {
+            "status": "skipped",
+            "statementCount": 0,
+            "reason": "graph requested persistence-only Neo4j seed",
+        }
+        box_entity_counts = graph_box_entity_counts(graph)
+        box_relation_counts = graph_box_relation_counts(graph)
         return {
             "saved": True,
             "status": "ok",
@@ -377,6 +423,14 @@ class Neo4jOntologyGraphRepository:
             "nativeReasoning": native_reasoning,
             "entityCount": len(graph.entities),
             "relationCount": len(graph.relations),
+            "tboxEntityCount": box_entity_counts.get("TBox", 0),
+            "aboxEntityCount": box_entity_counts.get("ABox", 0),
+            "ruleBoxEntityCount": box_entity_counts.get("RuleBox", 0),
+            "inferenceBoxEntityCount": box_entity_counts.get("InferenceBox", 0),
+            "tboxRelationCount": box_relation_counts.get("TBox", 0),
+            "aboxRelationCount": box_relation_counts.get("ABox", 0),
+            "ruleBoxRelationCount": box_relation_counts.get("RuleBox", 0),
+            "inferenceBoxRelationCount": box_relation_counts.get("InferenceBox", 0),
             "evidenceCount": len(graph.evidence),
             "reasoningCardCount": len(getattr(graph, "reasoning_cards", []) or []),
         }
@@ -386,6 +440,20 @@ class Neo4jOntologyGraphRepository:
         request = urllib.request.Request(endpoint, data=body, method="POST", headers=headers)
         with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
             return json.loads(response.read().decode("utf-8") or "{}")
+
+    def post_http_statements_batched(self, endpoint: str, headers: Dict[str, str], statements: List[Dict[str, object]], batch_size: int = 12) -> Dict[str, object]:
+        if not statements:
+            return {"results": [], "errors": []}
+        merged = {"results": [], "errors": []}
+        safe_batch_size = max(1, int(batch_size or 12))
+        for index in range(0, len(statements), safe_batch_size):
+            payload = self.post_http_statements(endpoint, headers, statements[index:index + safe_batch_size])
+            merged["results"].extend(payload.get("results") or [])
+            errors = payload.get("errors") or []
+            if errors:
+                merged["errors"].extend(errors)
+                break
+        return merged
 
     def http_endpoint_and_headers(self):
         endpoint = neo4j_http_endpoint(self.uri, self.database)
@@ -463,6 +531,32 @@ class Neo4jOntologyGraphRepository:
             "saveResult": save_result,
         })
         return snapshot
+
+    def seed_ontology(self, payload: Dict[str, object] = None) -> Dict[str, object]:
+        if not self.uri:
+            return NullOntologyGraphRepository().seed_ontology(payload)
+        payload = payload or {}
+        try:
+            rules = rulebox_rules_from_payload(payload) if (payload.get("rules") is not None or payload.get("rulesJson")) else default_graph_inference_rules()
+        except ValueError as error:
+            return {"configured": True, "saved": False, "seeded": False, "status": "invalid-rulebox", "reason": str(error)}
+        rules = list(rules)
+        if payload.get("replaceRuleBox"):
+            clear_result = self.clear_rulebox(clear_inference=bool(payload.get("clearInference", True)))
+            if clear_result.get("status") not in {"ok", "skipped"}:
+                return {"configured": True, "saved": False, "seeded": False, "status": clear_result.get("status"), "reason": clear_result.get("reason"), "clearResult": clear_result}
+        else:
+            clear_result = {"status": "skipped", "reason": "replaceRuleBox disabled"}
+        graph = ontology_seed_graph(rules)
+        result = self.save_graph(graph)
+        result.update({
+            "configured": True,
+            "seeded": bool(result.get("saved")),
+            "engineVersion": GRAPH_REASONER_VERSION,
+            "ruleCount": len(rules),
+            "clearResult": clear_result,
+        })
+        return result
 
     def run_rulebox(self, payload: Dict[str, object] = None) -> Dict[str, object]:
         if not self.uri:
@@ -554,7 +648,11 @@ class Neo4jOntologyGraphRepository:
                         schema_reason = str(error)[:180]
                 for statement in self.statements(graph):
                     session.run(statement["statement"], **statement["parameters"])
-                native_reasoning = self.run_native_reasoning_via_driver(session, graph)
+                native_reasoning = self.run_native_reasoning_via_driver(session, graph) if self.should_run_native_reasoning(graph) else {
+                    "status": "skipped",
+                    "statementCount": 0,
+                    "reason": "graph requested persistence-only Neo4j seed",
+                }
             driver.close()
         except Exception as error:  # noqa: BLE001 - persistence must not break monitoring.
             return {
@@ -576,6 +674,10 @@ class Neo4jOntologyGraphRepository:
             "evidenceCount": len(graph.evidence),
             "reasoningCardCount": len(getattr(graph, "reasoning_cards", []) or []),
         }
+
+    def should_run_native_reasoning(self, graph: PortfolioOntology) -> bool:
+        worldview = getattr(graph, "worldview", {}) if isinstance(getattr(graph, "worldview", {}), dict) else {}
+        return not bool(worldview.get("skipNativeReasoning"))
 
     def native_reasoning_statements(self, graph: PortfolioOntology) -> List[Dict[str, object]]:
         relation_types = sorted(set(
@@ -671,6 +773,33 @@ class Neo4jOntologyGraphRepository:
         if failures:
             return {"status": "error", "statementCount": len(statements), "reason": "; ".join(failures[:2]), "relationTypes": relation_types}
         return {"status": "ok", "statementCount": len(statements), "relationTypes": relation_types}
+
+
+def ontology_seed_graph(rules: Iterable[GraphInferenceRule] = None) -> PortfolioOntology:
+    graph = rulebox_graph_from_rules(rules or default_graph_inference_rules())
+    graph.portfolio_id = "ontology-seed"
+    graph.worldview.update({
+        "model": "investment-ontology-seed",
+        "description": "TBox schema and default RuleBox concepts persisted to Neo4j before runtime ABox projections arrive.",
+        "skipNativeReasoning": True,
+    })
+    return graph
+
+
+def graph_box_entity_counts(graph: PortfolioOntology) -> Dict[str, int]:
+    counts: Dict[str, int] = {}
+    for item in graph.entities:
+        box = str((item.properties or {}).get("ontologyBox") or "ABox")
+        counts[box] = counts.get(box, 0) + 1
+    return counts
+
+
+def graph_box_relation_counts(graph: PortfolioOntology) -> Dict[str, int]:
+    counts: Dict[str, int] = {}
+    for item in graph.relations:
+        box = str((item.properties or {}).get("ontologyBox") or "ABox")
+        counts[box] = counts.get(box, 0) + 1
+    return counts
 
 
 def rulebox_rules_to_payload(rules: Iterable[GraphInferenceRule]) -> List[Dict[str, object]]:

@@ -519,6 +519,10 @@ def run_ontology_rulebox_payload(payload: Dict[str, object]) -> Dict[str, object
     return ontology_repository_from_settings(runtime_settings()).run_rulebox(payload)
 
 
+def seed_ontology_payload(payload: Dict[str, object]) -> Dict[str, object]:
+    return ontology_repository_from_settings(runtime_settings()).seed_ontology(payload)
+
+
 def notification_store() -> SQLiteNotificationTemplateStore:
     return SQLiteNotificationTemplateStore()
 
@@ -1647,6 +1651,11 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
             if not self.ensure_writable("공유 모드에서는 Neo4j RuleBox 추론을 실행할 수 없습니다."):
                 return
             return self.send_payload(200, run_ontology_rulebox_payload(self.read_json_body()))
+
+        if path == "/api/ontology/seed" and self.command == "POST":
+            if not self.ensure_writable("공유 모드에서는 Neo4j 온톨로지 시드를 실행할 수 없습니다."):
+                return
+            return self.send_payload(200, seed_ontology_payload(self.read_json_body()))
 
         if path == "/api/symbol-universe":
             if self.command == "GET":

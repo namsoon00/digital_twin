@@ -39,6 +39,7 @@
     "python:ontology-reasoning:once": "python3 python_service/service.py ontology-reasoning once",
     "python:ontology-reasoning:status": "python3 python_service/service.py ontology-reasoning status",
     "python:ontology-reasoning:watch": "python3 python_service/service.py ontology-reasoning watch",
+    "python:ontology:seed": "python3 python_service/service.py ontology seed",
     "python:symbols:refresh": "python3 python_service/service.py symbols refresh",
     "python:symbols:search": "python3 python_service/service.py symbols search",
     "python:symbols:status": "python3 python_service/service.py symbols status",

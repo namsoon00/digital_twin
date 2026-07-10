@@ -41,7 +41,14 @@ from ..domain.events import (
     SYMBOL_UNIVERSE_REFRESHED,
     DomainEvent,
 )
-from ..domain.message_types import DEFAULT_ALERT_RULES, DEFAULT_CADENCE, MESSAGE_TYPE_EMOJIS
+from ..domain.message_types import (
+    DEFAULT_ALERT_RULES,
+    DEFAULT_CADENCE,
+    MESSAGE_TYPE_EMOJIS,
+    public_message_catalog,
+    user_managed_notification_types,
+    visible_notification_template_types,
+)
 from ..domain.market_hours import DEFAULT_MARKET_HOUR_SESSIONS
 from ..domain.monitoring import RealtimeMonitor
 from ..domain.notification_rules import CONDITION_TYPE_LABELS, DEFAULT_HONEY_THRESHOLD, NotificationRuleConfig
@@ -539,19 +546,43 @@ def notification_rule_store() -> SQLiteNotificationRuleStore:
 
 
 def list_templates_payload() -> Dict[str, object]:
+    visible_types = set(visible_notification_template_types())
+    templates = [
+        item
+        for item in notification_store().list()
+        if item.message_type in visible_types
+    ]
     return {
-        "templates": [item.to_dict() for item in notification_store().list()],
+        "templates": [item.to_dict() for item in templates],
         "variables": template_variables(),
+        "visibleMessageTypes": visible_notification_template_types(),
     }
 
 
-def list_notification_rules_payload() -> Dict[str, object]:
-    return {
-        "rules": [item.to_dict() for item in notification_rule_store().list()],
+def list_notification_rules_payload(include_internal: bool = False) -> Dict[str, object]:
+    managed_order = user_managed_notification_types()
+    managed_types = set(managed_order)
+    rules = notification_rule_store().list()
+    rules_by_type = {item.message_type: item for item in rules}
+    visible_rules = [rules_by_type[item] for item in managed_order if item in rules_by_type]
+    internal_rules = [item for item in rules if item.message_type not in managed_types]
+    payload = {
+        "rules": [item.to_dict() for item in visible_rules],
         "conditionTypes": CONDITION_TYPE_LABELS,
         "defaultThreshold": DEFAULT_HONEY_THRESHOLD,
         "marketHoursSessions": list(DEFAULT_MARKET_HOUR_SESSIONS.values()),
+        "messageCatalog": public_message_catalog(),
+        "managedMessageTypes": user_managed_notification_types(),
+        "internalRuleCount": len(internal_rules),
     }
+    if include_internal:
+        payload["internalRules"] = [item.to_dict() for item in internal_rules]
+    return payload
+
+
+def include_internal_notification_query(query: Dict[str, List[str]]) -> bool:
+    value = first_query(query, "includeInternal").lower()
+    return value in {"1", "true", "yes", "y"}
 
 
 def compact_notification_text(value: str, limit: int = 260) -> str:
@@ -728,14 +759,17 @@ def cadence_records_for_type(sent: Dict[str, object], message_type: str) -> List
     return records
 
 
-def notification_schedules_payload() -> Dict[str, object]:
+def notification_schedules_payload(include_internal: bool = False) -> Dict[str, object]:
     settings = runtime_settings()
     rules = parse_assignments(settings.get("alertRules", ""), DEFAULT_ALERT_RULES)
     cadence = parse_assignments(settings.get("alertCadenceMinutes", ""), DEFAULT_CADENCE)
     store = SQLiteMonitorStore()
     accounts = {account.account_id: account for account in AccountRegistry().load()}
     now_at = datetime.now(timezone.utc)
-    message_types = list(dict.fromkeys(list(DEFAULT_CADENCE.keys()) + list(DEFAULT_NOTIFICATION_TEMPLATES.keys())))
+    if include_internal:
+        message_types = list(dict.fromkeys(list(DEFAULT_CADENCE.keys()) + list(DEFAULT_NOTIFICATION_TEMPLATES.keys())))
+    else:
+        message_types = user_managed_notification_types()
     schedules = []
     for message_type in message_types:
         has_cadence = message_type in DEFAULT_CADENCE
@@ -784,6 +818,7 @@ def notification_schedules_payload() -> Dict[str, object]:
     return {
         "generatedAt": utc_now_iso(),
         "schedules": schedules,
+        "managedMessageTypes": user_managed_notification_types(),
     }
 
 
@@ -1697,7 +1732,7 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
 
         if path == "/api/notification-rules":
             if self.command == "GET":
-                return self.send_payload(200, list_notification_rules_payload())
+                return self.send_payload(200, list_notification_rules_payload(include_internal_notification_query(query)))
             if self.command in {"POST", "PUT"}:
                 if not self.ensure_writable("공유 모드에서는 알림 룰을 변경할 수 없습니다."):
                     return
@@ -1725,7 +1760,7 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
             return self.send_payload(200, delete_research_evidence_payload(evidence_id, query))
 
         if path == "/api/notification-schedules" and self.command == "GET":
-            return self.send_payload(200, notification_schedules_payload())
+            return self.send_payload(200, notification_schedules_payload(include_internal_notification_query(query)))
 
         if path == "/api/notification-templates/test-send" and self.command == "POST":
             if not self.ensure_writable("공유 모드에서는 실제 알림을 발송할 수 없습니다."):

@@ -58,6 +58,24 @@ SYSTEM_MESSAGE_TYPES = {
     GENERIC_NOTIFICATION,
 }
 
+USER_MANAGED_NOTIFICATION_TYPES = [
+    INVESTMENT_INSIGHT,
+    MONITOR_CONNECTION,
+    EXTERNAL_DATA_CONNECTION,
+]
+
+SYSTEM_MANAGED_NOTIFICATION_TYPES = [
+    MODEL_REVIEW,
+    WORK_HANDOFF,
+    GENERIC_NOTIFICATION,
+]
+
+VISIBLE_NOTIFICATION_TEMPLATE_TYPES = [
+    DEFAULT_MESSAGE,
+    *USER_MANAGED_NOTIFICATION_TYPES,
+    *SYSTEM_MANAGED_NOTIFICATION_TYPES,
+]
+
 MIN_CADENCE_MINUTES = 10
 
 DEFAULT_ALERT_RULES = {
@@ -83,6 +101,26 @@ DEFAULT_ALERT_RULES = {
     EXTERNAL_DART_DISCLOSURE: 1,
     EXTERNAL_DATA_CONNECTION: 1,
 }
+
+EVIDENCE_ONLY_MESSAGE_TYPES = [
+    MODEL_BUY,
+    MODEL_SELL,
+    WATCHLIST_BUY_CANDIDATE,
+    WATCHLIST_QUOTE,
+    WATCHLIST_QUOTE_PENDING,
+    WATCHLIST_ONTOLOGY_SIGNAL,
+    HOLDING_TIMING,
+    MONITOR_POSITION_CHANGE,
+    MONITOR_PNL_CHANGE,
+    MONITOR_VALUE_CHANGE,
+    MONITOR_TREND_CHANGE,
+    MONITOR_CASH_CHANGE,
+    MONITOR_DECISION_CHANGE,
+    EXTERNAL_EQUITY_MOVE,
+    EXTERNAL_CRYPTO_MOVE,
+    EXTERNAL_MACRO_SHIFT,
+    EXTERNAL_DART_DISCLOSURE,
+]
 
 DEFAULT_ALERT_THRESHOLDS = {
     "modelBuyScore": 74,
@@ -253,6 +291,28 @@ def notification_message_types(extra_types: List[str] = None) -> List[str]:
     return ordered
 
 
+def user_managed_notification_types(include_system: bool = False) -> List[str]:
+    keys = list(USER_MANAGED_NOTIFICATION_TYPES)
+    if include_system:
+        keys.extend(SYSTEM_MANAGED_NOTIFICATION_TYPES)
+    return list(dict.fromkeys(keys))
+
+
+def visible_notification_template_types() -> List[str]:
+    return list(dict.fromkeys(VISIBLE_NOTIFICATION_TEMPLATE_TYPES))
+
+
+def notification_type_role(key: str) -> str:
+    normalized = str(key or "").strip()
+    if normalized in USER_MANAGED_NOTIFICATION_TYPES:
+        return "user"
+    if normalized in SYSTEM_MANAGED_NOTIFICATION_TYPES or normalized == DEFAULT_MESSAGE:
+        return "system"
+    if normalized in EVIDENCE_ONLY_MESSAGE_TYPES:
+        return "evidence"
+    return "internal"
+
+
 def public_message_catalog() -> Dict[str, Dict[str, object]]:
     return {
         key: {
@@ -261,6 +321,10 @@ def public_message_catalog() -> Dict[str, Dict[str, object]]:
             "triggerSummary": TRIGGER_SUMMARIES.get(key, ""),
             "monitoring": key in MONITORING_MESSAGE_TYPES,
             "system": key in SYSTEM_MESSAGE_TYPES,
+            "role": notification_type_role(key),
+            "userManaged": key in USER_MANAGED_NOTIFICATION_TYPES,
+            "templateManaged": key in VISIBLE_NOTIFICATION_TEMPLATE_TYPES,
+            "evidenceOnly": key in EVIDENCE_ONLY_MESSAGE_TYPES,
             "cadenceMinutes": DEFAULT_CADENCE.get(key, 0),
             "enabledByDefault": DEFAULT_ALERT_RULES.get(key, 1),
         }

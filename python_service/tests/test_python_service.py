@@ -69,7 +69,7 @@ from digital_twin.infrastructure.symbol_sources import RemoteSymbolSourceGateway
 from digital_twin.infrastructure.sqlite_accounts import AccountRegistry
 from digital_twin.infrastructure.toss_snapshots import TossProvider, account_cash_amount, normalize_price_items, select_account
 from digital_twin.infrastructure.sqlite.health import run_sqlite_maintenance, sqlite_health_snapshot
-from digital_twin.infrastructure.web_server import list_notification_rules_payload, notification_jobs_payload, notification_schedules_payload, notification_template_test_payload, realtime_status_payload, save_notification_rule_payload, settings_status_payload
+from digital_twin.infrastructure.web_server import list_notification_rules_payload, list_templates_payload, notification_jobs_payload, notification_schedules_payload, notification_template_test_payload, realtime_status_payload, save_notification_rule_payload, settings_status_payload
 from digital_twin.scheduler import MonitorRunner
 
 
@@ -4423,6 +4423,11 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(catalog["investmentInsight"]["monitoring"])
         self.assertTrue(catalog["modelBuy"]["monitoring"])
         self.assertTrue(catalog["watchlistBuyCandidate"]["monitoring"])
+        self.assertTrue(catalog["investmentInsight"]["userManaged"])
+        self.assertEqual("user", catalog["investmentInsight"]["role"])
+        self.assertFalse(catalog["modelBuy"]["userManaged"])
+        self.assertTrue(catalog["modelBuy"]["evidenceOnly"])
+        self.assertEqual("evidence", catalog["modelBuy"]["role"])
         self.assertTrue(catalog["watchlistOntologySignal"]["monitoring"])
         self.assertTrue(catalog["workHandoff"]["system"])
 
@@ -7751,8 +7756,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("지속 상태 요약", jobs[1].context["honeyStateReason"])
 
     def test_notification_rule_payload_saves_similarity_bypass_conditions(self):
-        payload = list_notification_rules_payload()
-        equity_rule = next(item for item in payload["rules"] if item["messageType"] == "externalEquityMove")
+        payload = list_notification_rules_payload(include_internal=True)
+        equity_rule = next(item for item in payload["internalRules"] if item["messageType"] == "externalEquityMove")
         self.assertTrue(equity_rule["similarityBypassConditions"])
         self.assertTrue(equity_rule["stateCooldownEnabled"])
         change_condition = next(item for item in equity_rule["similarityBypassConditions"] if item["id"] == "change_abs_delta")
@@ -7766,11 +7771,45 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("3.5", str(saved_condition["value"]))
         self.assertFalse(saved_condition["enabled"])
         self.assertEqual(720, saved["stateCooldownMinutes"])
-        reloaded = next(item for item in list_notification_rules_payload()["rules"] if item["messageType"] == "externalEquityMove")
+        reloaded = next(item for item in list_notification_rules_payload(include_internal=True)["internalRules"] if item["messageType"] == "externalEquityMove")
         reloaded_condition = next(item for item in reloaded["similarityBypassConditions"] if item["id"] == "change_abs_delta")
         self.assertEqual("3.5", str(reloaded_condition["value"]))
         self.assertFalse(reloaded_condition["enabled"])
         self.assertEqual(720, reloaded["stateCooldownMinutes"])
+
+    def test_notification_policy_payload_defaults_to_managed_types(self):
+        payload = list_notification_rules_payload()
+        message_types = [item["messageType"] for item in payload["rules"]]
+
+        self.assertEqual([
+            "investmentInsight",
+            "monitorConnection",
+            "externalDataConnection",
+        ], message_types)
+        self.assertGreater(payload["internalRuleCount"], 0)
+        self.assertNotIn("modelBuy", message_types)
+        self.assertNotIn("externalCryptoMove", message_types)
+        self.assertNotIn("internalRules", payload)
+
+        internal_payload = list_notification_rules_payload(include_internal=True)
+        internal_types = [item["messageType"] for item in internal_payload["internalRules"]]
+        self.assertIn("modelBuy", internal_types)
+        self.assertIn("externalCryptoMove", internal_types)
+
+    def test_notification_template_payload_hides_internal_templates(self):
+        payload = list_templates_payload()
+        message_types = [item["messageType"] for item in payload["templates"]]
+
+        self.assertIn("default", message_types)
+        self.assertIn("investmentInsight", message_types)
+        self.assertIn("externalDataConnection", message_types)
+        self.assertIn("monitorConnection", message_types)
+        self.assertIn("modelReview", message_types)
+        self.assertIn("workHandoff", message_types)
+        self.assertNotIn("modelBuy", message_types)
+        self.assertNotIn("monitorHeartbeat", message_types)
+        self.assertNotIn("watchlistBuyCandidate", message_types)
+        self.assertNotIn("watchlistQuote", message_types)
 
     def test_notification_queue_runner_delivers_pending_messages_in_order(self):
         registry = AccountRegistry()
@@ -8840,7 +8879,7 @@ class PythonServiceTests(unittest.TestCase):
         event = AlertEvent("main", "메인", "WATCH", "monitorHeartbeat", "main:heartbeat", "상태 확인", ["정상"], "")
         store.mark_sent([event])
 
-        payload = notification_schedules_payload()
+        payload = notification_schedules_payload(include_internal=True)
         schedule = next(item for item in payload["schedules"] if item["messageType"] == "monitorHeartbeat")
 
         self.assertTrue(schedule["enabled"])

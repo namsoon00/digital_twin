@@ -376,9 +376,9 @@ function checkFrontendAdminRender() {
     "/api/notification-templates": {
       templates: [
         {
-          messageType: "monitorHeartbeat",
+          messageType: "investmentInsight",
           template: "{readableMessage}",
-          description: "상태 확인 템플릿",
+          description: "투자 인사이트 템플릿",
           enabled: true,
           updatedAt: "2026-07-01T00:00:00.000Z"
         },
@@ -395,10 +395,10 @@ function checkFrontendAdminRender() {
     "/api/notification-rules": {
       rules: [
         {
-          messageType: "monitorHeartbeat",
+          messageType: "investmentInsight",
           enabled: true,
-          threshold: 45,
-          baseScore: 15,
+          threshold: 50,
+          baseScore: 35,
           lowScoreAction: "suppress",
           similarityEnabled: true,
           similarityWindowMinutes: 360,
@@ -549,13 +549,13 @@ function checkFrontendAdminRender() {
       generatedAt: "2026-07-01T00:00:00.000Z",
       schedules: [
         {
-          messageType: "monitorHeartbeat",
-          label: "실시간 상태",
+          messageType: "investmentInsight",
+          label: "투자 인사이트",
           enabled: true,
           status: "waiting",
           cadenceMinutes: 10,
           cadenceText: "조건이 다시 충족되면 최소 10분 간격으로 보냅니다.",
-          triggerSummary: "실시간 모니터링 워커가 정상 작동 중인지 확인할 때 보냅니다.",
+          triggerSummary: "온톨로지 관계 그래프에서 의미 있는 투자 인사이트가 생성될 때 보냅니다.",
           lastSentAt: "2026-07-01T00:00:00.000Z",
           nextEligibleAt: "2026-07-01T00:10:00.000Z",
           eligibleNow: false,
@@ -1223,7 +1223,7 @@ function checkFrontendAdminRender() {
     assertOk(code.indexOf("프리마켓") >= 0 && code.indexOf("애프터마켓") >= 0, "프리/애프터마켓 장 시간 설정 경로가 없습니다.");
     assertOk(code.indexOf("data-notification-rule-market-hours-market") >= 0, "장 시간 시장 선택 체크박스 경로가 없습니다.");
     assertOk(code.indexOf("data-notification-rule-condition-value") >= 0, "발송 우선도 조건 값 편집 입력 경로가 없습니다.");
-    assertOk(code.indexOf("data-rule-save") >= 0 && code.indexOf("monitorHeartbeat") >= 0, "알림 타입별 룰 저장 경로가 없습니다.");
+    assertOk(code.indexOf("data-rule-save") >= 0 && code.indexOf("investmentInsight") >= 0, "알림 타입별 룰 저장 경로가 없습니다.");
     assertOk(code.indexOf("externalEquityMove") >= 0 && code.indexOf("externalEquityMove=60") >= 0, "미장 가격/거래량 기본 발송 기준 60점 계약이 없습니다.");
     assertOk(notificationHtml.indexOf("최근 알림 판단") >= 0, "최근 알림 판단 제목이 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("발송 우선도 30/45") >= 0, "최근 알림 판단의 발송 우선도가 렌더링되지 않았습니다.");
@@ -1245,7 +1245,7 @@ function checkFrontendAdminRender() {
     assertOk(code.indexOf("data-template-test-send") >= 0, "실제 데이터 알림 테스트 발송 경로가 없습니다.");
     assertOk(code.indexOf("모니터링 정상 작동") >= 0, "상태 확인 템플릿 미리보기 샘플 경로가 없습니다.");
     assertOk(code.indexOf("매수 점수") >= 0, "타입별 템플릿 미리보기 샘플 경로가 없습니다.");
-    assertOk(code.indexOf("data-notification-template") >= 0 && code.indexOf("monitorHeartbeat") >= 0, "상태 확인 템플릿 textarea 경로가 없습니다.");
+    assertOk(code.indexOf("data-notification-template") >= 0 && code.indexOf("investmentInsight") >= 0, "투자 인사이트 템플릿 textarea 경로가 없습니다.");
     assertOk(notificationTemplateHtml.indexOf("{rawLines}") >= 0, "알림 템플릿 변수가 렌더링되지 않았습니다.");
     assertOk(notificationAdvancedHtml.indexOf("tab=notifications") >= 0, "알림 링크 기본값이 새 알림 탭을 가리키지 않습니다.");
     assertOk(modelingHtml.indexOf("strategy-section-bar") >= 0, "투자 분석 내부 섹션 탭 바가 렌더링되지 않았습니다.");
@@ -1679,18 +1679,19 @@ async function checkNormalMode(port, context) {
   assertOk(templates.statusCode === 200, "알림 템플릿 API 응답 코드가 200이 아닙니다: " + templates.statusCode);
   const templatesPayload = JSON.parse(templates.body);
   assertOk(Array.isArray(templatesPayload.templates), "알림 템플릿 API templates가 배열이 아닙니다.");
-  assertOk(templatesPayload.templates.some(function (item) { return item.messageType === "monitorHeartbeat"; }), "상태 확인 템플릿이 없습니다.");
-  assertOk(templatesPayload.templates.some(function (item) { return item.messageType === "watchlistQuote"; }), "관심종목 시세 템플릿이 없습니다.");
-  assertOk(templatesPayload.templates.some(function (item) { return item.messageType === "watchlistBuyCandidate"; }), "관심종목 매수 후보 템플릿이 없습니다.");
+  assertOk(templatesPayload.templates.some(function (item) { return item.messageType === "investmentInsight"; }), "투자 인사이트 템플릿이 없습니다.");
+  assertOk(templatesPayload.templates.some(function (item) { return item.messageType === "externalDataConnection"; }), "외부 데이터 연결 템플릿이 없습니다.");
+  assertOk(!templatesPayload.templates.some(function (item) { return item.messageType === "monitorHeartbeat"; }), "내부 상태 확인 템플릿이 기본 목록에 노출됩니다.");
+  assertOk(!templatesPayload.templates.some(function (item) { return item.messageType === "watchlistQuote"; }), "근거 시세 템플릿이 기본 목록에 노출됩니다.");
   assertOk(Array.isArray(templatesPayload.variables) && templatesPayload.variables.indexOf("body") >= 0, "알림 템플릿 변수 목록이 없습니다.");
 
   const savedTemplate = await request(port, "/api/notification-templates", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      messageType: "monitorHeartbeat",
+      messageType: "investmentInsight",
       template: "[{messageType}] {title}\n{rawLines}",
-      description: "상태 확인 템플릿"
+      description: "투자 인사이트 템플릿"
     })
   });
   assertOk(savedTemplate.statusCode === 200, "알림 템플릿 저장 API 응답 코드가 200이 아닙니다: " + savedTemplate.statusCode);
@@ -1704,7 +1705,8 @@ async function checkNormalMode(port, context) {
   assertOk(rules.statusCode === 200, "알림 룰 API 응답 코드가 200이 아닙니다: " + rules.statusCode);
   const rulesPayload = JSON.parse(rules.body);
   assertOk(Array.isArray(rulesPayload.rules), "알림 룰 API rules가 배열이 아닙니다.");
-  assertOk(rulesPayload.rules.some(function (item) { return item.messageType === "monitorHeartbeat"; }), "상태 확인 발송 우선도 룰이 없습니다.");
+  assertOk(rulesPayload.rules.some(function (item) { return item.messageType === "investmentInsight"; }), "투자 인사이트 발송 우선도 룰이 없습니다.");
+  assertOk(!rulesPayload.rules.some(function (item) { return item.messageType === "externalCryptoMove"; }), "근거 신호 룰이 기본 목록에 노출됩니다.");
   assertOk(Array.isArray(rulesPayload.conditionTypes) && rulesPayload.conditionTypes.length, "알림 룰 조건 타입 목록이 없습니다.");
   assertOk(Array.isArray(rulesPayload.marketHoursSessions) && rulesPayload.marketHoursSessions.length >= 2, "장 시간 세션 목록이 없습니다.");
 
@@ -1712,7 +1714,7 @@ async function checkNormalMode(port, context) {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      messageType: "monitorHeartbeat",
+      messageType: "investmentInsight",
       enabled: true,
       threshold: 40,
       baseScore: 20,
@@ -1738,7 +1740,7 @@ async function checkNormalMode(port, context) {
   assertOk(savedRulePayload.rule.similarityFields.indexOf("symbol") >= 0, "저장된 fingerprint 필드가 응답에 없습니다.");
   assertOk(savedRulePayload.rule.marketHoursEnabled === true, "저장된 장 시간 필터 토글이 응답에 없습니다.");
   assertOk(savedRulePayload.rule.marketHoursMarkets.indexOf("KR") >= 0, "저장된 장 시간 시장 설정이 응답에 없습니다.");
-  const resetRule = await request(port, "/api/notification-rules/monitorHeartbeat", { method: "DELETE" });
+  const resetRule = await request(port, "/api/notification-rules/investmentInsight", { method: "DELETE" });
   assertOk(resetRule.statusCode === 200, "알림 룰 초기화 API 응답 코드가 200이 아닙니다: " + resetRule.statusCode);
   const eventStatusAfterRule = JSON.parse((await request(port, "/api/realtime/status")).body);
   assertOk(eventStatusAfterRule.events["notification_rule.updated"] >= 2, "알림 룰 저장 이벤트가 이벤트 로그에 없습니다.");

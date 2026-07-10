@@ -71,7 +71,7 @@ class MaterialityGateTests(unittest.TestCase):
         self.assertFalse(evidence_materiality(weak).passed)
         self.assertTrue(evidence_materiality(strong).passed)
 
-    def test_news_collection_requests_reasoning_only_for_material_evidence(self):
+    def test_news_collection_requests_reasoning_for_all_changed_evidence_and_keeps_materiality_gate(self):
         weak = ResearchEvidence(
             "weak",
             "TSLA",
@@ -131,7 +131,9 @@ class MaterialityGateTests(unittest.TestCase):
         self.assertEqual(2, result["changedCount"])
         self.assertEqual(["AAPL"], result["materialChangedSymbols"])
         self.assertEqual([RESEARCH_EVIDENCE_COLLECTED, ONTOLOGY_REASONING_REQUESTED], [event.name for event in events.published])
-        self.assertEqual(["AAPL"], events.published[-1].payload["symbols"])
+        self.assertEqual(["AAPL", "TSLA"], events.published[-1].payload["symbols"])
+        self.assertEqual(2, events.published[-1].payload["changedCount"])
+        self.assertEqual(2, len(events.published[-1].payload["materialityAssessments"]))
 
     def test_ontology_reasoning_limits_monitoring_to_material_symbols(self):
         source = DomainEvent(

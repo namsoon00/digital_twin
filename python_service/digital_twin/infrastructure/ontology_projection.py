@@ -24,6 +24,7 @@ class PortfolioOntologyProjectionRecorder:
         if not self.repository or not self.has_projectable_data(snapshot):
             return {}
         try:
+            rulebox_bootstrap = self.ensure_rulebox_ready()
             graph = build_portfolio_ontology(
                 list(snapshot.positions or []) + list(snapshot.watchlist or []),
                 snapshot.portfolio,
@@ -52,6 +53,8 @@ class PortfolioOntologyProjectionRecorder:
                 result = {"saved": False, "status": "error", "reason": "ontology repository returned non-dict result"}
             result["projectionMode"] = "abox-facts-only-neo4j-rulebox"
             result["aboxValidation"] = validation.to_dict()
+            if rulebox_bootstrap:
+                result["ruleboxBootstrap"] = rulebox_bootstrap
             if result.get("saved"):
                 self.attach_neo4j_inference_result(result, snapshot)
             if self.quality_store:
@@ -62,6 +65,42 @@ class PortfolioOntologyProjectionRecorder:
             result = {"saved": False, "status": "error", "reason": str(error)[:180]}
         snapshot.metadata.setdefault("ontology", {})["neo4j"] = result
         return result
+
+    def ensure_rulebox_ready(self) -> Dict[str, object]:
+        if not hasattr(self.repository, "rulebox_snapshot") or not hasattr(self.repository, "seed_ontology"):
+            return {}
+        try:
+            snapshot = self.repository.rulebox_snapshot()
+        except Exception as error:  # noqa: BLE001 - projection will still expose the persistence error later.
+            return {"status": "error", "reason": str(error)[:180]}
+        if not isinstance(snapshot, dict):
+            return {"status": "invalid", "reason": "RuleBox snapshot returned non-dict result."}
+        if not snapshot.get("configured"):
+            return {
+                "status": "disabled",
+                "reason": str(snapshot.get("reason") or "Neo4j ontology storage is not configured."),
+            }
+        if int(snapshot.get("ruleCount") or 0) > 0 and str(snapshot.get("status") or "") == "ok":
+            return {"status": "ready", "ruleCount": int(snapshot.get("ruleCount") or 0)}
+        if str(snapshot.get("status") or "") != "empty":
+            return {
+                "status": "not-ready",
+                "reason": str(snapshot.get("reason") or snapshot.get("status") or "RuleBox is not ready."),
+                "ruleCount": int(snapshot.get("ruleCount") or 0),
+            }
+        try:
+            seeded = self.repository.seed_ontology({
+                "replaceRuleBox": False,
+                "clearInference": False,
+                "changeReason": "자동 RuleBox 부트스트랩: ABox 투영 전에 그래프 추론 규칙을 준비합니다.",
+            })
+        except Exception as error:  # noqa: BLE001 - projection will report readiness failure instead of crashing.
+            return {"status": "error", "reason": str(error)[:180]}
+        return {
+            "status": "seeded" if bool((seeded or {}).get("seeded")) else str((seeded or {}).get("status") or "not-seeded"),
+            "ruleCount": int((seeded or {}).get("ruleCount") or 0),
+            "reason": str((seeded or {}).get("reason") or ""),
+        }
 
     def graph_for_neo4j_persistence(self, graph: PortfolioOntology) -> PortfolioOntology:
         stripped_boxes = {"RuleBox", "InferenceBox"}

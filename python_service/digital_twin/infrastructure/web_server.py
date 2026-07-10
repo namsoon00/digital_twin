@@ -496,6 +496,7 @@ def settings_status_payload() -> Dict[str, object]:
             "coingeckoApiKey": bool(settings.get("coingeckoApiKey")),
             "fredApiKey": bool(settings.get("fredApiKey")),
             "opendartApiKey": bool(settings.get("opendartApiKey")),
+            "neo4jUri": bool(settings.get("neo4jUri")),
             "neo4jPassword": bool(settings.get("neo4jPassword")),
         },
         "locked": bool(configured(os.environ.get("SHARE_TOKEN"))),

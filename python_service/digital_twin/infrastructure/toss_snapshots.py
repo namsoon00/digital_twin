@@ -18,6 +18,9 @@ from .settings import currency_rates, runtime_settings
 from .sqlite_monitoring import SQLiteMarketQuoteCache
 
 
+MARKET_DATA_ACCOUNT_ID = "__market_data__"
+
+
 class TossAPIError(RuntimeError):
     def __init__(self, stage: str, error: Exception):
         self.stage = str(stage or "")
@@ -493,8 +496,17 @@ class TossProvider:
         return normalize_candles(payload), token
 
     def cached_quote(self, symbol: str) -> Dict[str, object]:
+        clean_symbol = str(symbol or "").upper().strip()
+        if not clean_symbol:
+            return {}
         try:
-            return self.quote_cache.load("toss", self.account.account_id, symbol)
+            payload = self.quote_cache.load("toss", self.account.account_id, clean_symbol)
+            if payload:
+                return payload
+        except Exception:
+            pass
+        try:
+            return self.quote_cache.load("toss", MARKET_DATA_ACCOUNT_ID, clean_symbol)
         except Exception:
             return {}
 

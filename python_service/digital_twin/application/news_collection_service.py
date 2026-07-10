@@ -168,33 +168,34 @@ class NewsCollectionRunner:
             "statuses": statuses[-50:],
             "dataQuality": "actual",
         }
+        ontology_symbols = changed_symbols
         if self.event_publisher and saved:
             event = research_evidence_collected_event(result)
             if hasattr(self.event_publisher, "publish"):
                 self.event_publisher.publish(event)
-                if material_symbols:
+                if ontology_symbols:
                     self.event_publisher.publish(ontology_reasoning_requested_event(
                         event,
                         "research-evidence-update",
-                        material_symbols,
-                        changed_count=len(material_items),
+                        ontology_symbols,
+                        changed_count=len(ontology_symbols),
                         observed_count=len(collected),
                         fact_types=["ResearchEvidence", "NewsEvent"],
-                        reason="중요 뉴스/리서치 근거가 감지되어 온톨로지 추론을 요청합니다.",
-                        materiality_assessments=[assessment for assessment in materiality_assessments if assessment.get("passed")],
+                        reason="뉴스/리서치 근거 변경을 Neo4j ABox에 반영하고 RuleBox 추론을 갱신합니다. 알림은 중요 변경 게이트를 별도로 통과해야 합니다.",
+                        materiality_assessments=materiality_assessments,
                     ))
             else:
                 self.event_publisher.handle(event)
-                if material_symbols:
+                if ontology_symbols:
                     self.event_publisher.handle(ontology_reasoning_requested_event(
                         event,
                         "research-evidence-update",
-                        material_symbols,
-                        changed_count=len(material_items),
+                        ontology_symbols,
+                        changed_count=len(ontology_symbols),
                         observed_count=len(collected),
                         fact_types=["ResearchEvidence", "NewsEvent"],
-                        reason="중요 뉴스/리서치 근거가 감지되어 온톨로지 추론을 요청합니다.",
-                        materiality_assessments=[assessment for assessment in materiality_assessments if assessment.get("passed")],
+                        reason="뉴스/리서치 근거 변경을 Neo4j ABox에 반영하고 RuleBox 추론을 갱신합니다. 알림은 중요 변경 게이트를 별도로 통과해야 합니다.",
+                        materiality_assessments=materiality_assessments,
                     ))
         return result
 

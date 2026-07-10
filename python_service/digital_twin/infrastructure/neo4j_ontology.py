@@ -547,7 +547,7 @@ class Neo4jOntologyGraphRepository:
     def save_graph_via_http(self, graph: PortfolioOntology) -> Dict[str, object]:
         endpoint = neo4j_http_endpoint(self.uri, self.database)
         headers = {"Content-Type": "application/json", "Accept": "application/json"}
-        if self.user or self.password:
+        if self.user and self.password:
             token = base64.b64encode((self.user + ":" + self.password).encode("utf-8")).decode("ascii")
             headers["Authorization"] = "Basic " + token
 
@@ -632,7 +632,7 @@ class Neo4jOntologyGraphRepository:
     def http_endpoint_and_headers(self):
         endpoint = neo4j_http_endpoint(self.uri, self.database)
         headers = {"Content-Type": "application/json", "Accept": "application/json"}
-        if self.user or self.password:
+        if self.user and self.password:
             token = base64.b64encode((self.user + ":" + self.password).encode("utf-8")).decode("ascii")
             headers["Authorization"] = "Basic " + token
         return endpoint, headers
@@ -654,7 +654,7 @@ class Neo4jOntologyGraphRepository:
         except Exception as error:  # noqa: BLE001 - optional dependency.
             return active_tbox_metadata_unavailable("driver-missing", "neo4j Python driver is not installed: " + str(error)[:120], "neo4j-driver")
         try:
-            driver = GraphDatabase.driver(self.uri, auth=(self.user, self.password) if self.user or self.password else None)
+            driver = GraphDatabase.driver(self.uri, auth=(self.user, self.password) if self.user and self.password else None)
             rowsets: Dict[str, List[Dict[str, object]]] = {}
             with driver.session(database=self.database) as session:
                 for key, statement in zip(["entities", "relations"], active_tbox_metadata_statements()):
@@ -703,7 +703,7 @@ class Neo4jOntologyGraphRepository:
         except Exception as error:  # noqa: BLE001 - optional dependency.
             return rulebox_store_snapshot_unavailable("driver-missing", "neo4j Python driver is not installed: " + str(error)[:120], source="neo4j-driver")
         try:
-            driver = GraphDatabase.driver(self.uri, auth=(self.user, self.password) if self.user or self.password else None)
+            driver = GraphDatabase.driver(self.uri, auth=(self.user, self.password) if self.user and self.password else None)
             with driver.session(database=self.database) as session:
                 rowsets = {}
                 for key, statement in zip(["rules", "conditions", "derivations", "relationTypes", "versions", "candidates"], rulebox_snapshot_statements()):
@@ -770,7 +770,7 @@ class Neo4jOntologyGraphRepository:
         if self.uri.startswith("bolt://") or self.uri.startswith("neo4j://"):
             try:
                 from neo4j import GraphDatabase
-                driver = GraphDatabase.driver(self.uri, auth=(self.user, self.password) if self.user or self.password else None)
+                driver = GraphDatabase.driver(self.uri, auth=(self.user, self.password) if self.user and self.password else None)
                 with driver.session(database=self.database) as session:
                     for statement in statements:
                         session.run(statement["statement"], **statement["parameters"])
@@ -816,7 +816,7 @@ class Neo4jOntologyGraphRepository:
         if self.uri.startswith("bolt://") or self.uri.startswith("neo4j://"):
             try:
                 from neo4j import GraphDatabase
-                driver = GraphDatabase.driver(self.uri, auth=(self.user, self.password) if self.user or self.password else None)
+                driver = GraphDatabase.driver(self.uri, auth=(self.user, self.password) if self.user and self.password else None)
                 with driver.session(database=self.database) as session:
                     for statement in statements:
                         session.run(statement["statement"], **statement["parameters"])
@@ -909,7 +909,7 @@ class Neo4jOntologyGraphRepository:
         except Exception as error:  # noqa: BLE001 - optional dependency.
             return inferencebox_snapshot_default("driver-missing", "neo4j Python driver is not installed: " + str(error)[:120], True, symbols)
         try:
-            driver = GraphDatabase.driver(self.uri, auth=(self.user, self.password) if self.user or self.password else None)
+            driver = GraphDatabase.driver(self.uri, auth=(self.user, self.password) if self.user and self.password else None)
             rowsets = {}
             with driver.session(database=self.database) as session:
                 for key, statement in zip(["entityCounts", "relationCounts", "traceCounts", "entities", "relations", "traces"], inferencebox_snapshot_statements(symbols, limit)):
@@ -934,7 +934,7 @@ class Neo4jOntologyGraphRepository:
         if self.uri.startswith("bolt://") or self.uri.startswith("neo4j://"):
             try:
                 from neo4j import GraphDatabase
-                driver = GraphDatabase.driver(self.uri, auth=(self.user, self.password) if self.user or self.password else None)
+                driver = GraphDatabase.driver(self.uri, auth=(self.user, self.password) if self.user and self.password else None)
                 with driver.session(database=self.database) as session:
                     for statement in clear_rulebox_statements(clear_inference):
                         session.run(statement["statement"], **statement["parameters"])
@@ -958,7 +958,7 @@ class Neo4jOntologyGraphRepository:
         if self.uri.startswith("bolt://") or self.uri.startswith("neo4j://"):
             try:
                 from neo4j import GraphDatabase
-                driver = GraphDatabase.driver(self.uri, auth=(self.user, self.password) if self.user or self.password else None)
+                driver = GraphDatabase.driver(self.uri, auth=(self.user, self.password) if self.user and self.password else None)
                 with driver.session(database=self.database) as session:
                     for statement in clear_inferencebox_statements():
                         session.run(statement["statement"], **statement["parameters"])
@@ -981,7 +981,7 @@ class Neo4jOntologyGraphRepository:
                 "reasoningCardCount": len(getattr(graph, "reasoning_cards", []) or []),
             }
         try:
-            driver = GraphDatabase.driver(self.uri, auth=(self.user, self.password) if self.user or self.password else None)
+            driver = GraphDatabase.driver(self.uri, auth=(self.user, self.password) if self.user and self.password else None)
             with driver.session(database=self.database) as session:
                 schema_prepared = True
                 schema_reason = ""
@@ -1096,7 +1096,7 @@ class Neo4jOntologyGraphRepository:
         except Exception as error:  # noqa: BLE001 - optional dependency.
             return {"status": "driver-missing", "reason": "neo4j Python driver is not installed: " + str(error)[:120]}
         try:
-            driver = GraphDatabase.driver(self.uri, auth=(self.user, self.password) if self.user or self.password else None)
+            driver = GraphDatabase.driver(self.uri, auth=(self.user, self.password) if self.user and self.password else None)
             failures: List[str] = []
             with driver.session(database=self.database) as session:
                 relation_types = sorted(set(

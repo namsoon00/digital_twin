@@ -517,7 +517,7 @@ def runtime_settings() -> Dict[str, str]:
         "marketMaterialityTrendDistancePct": value("marketMaterialityTrendDistancePct", "MARKET_MATERIALITY_TREND_DISTANCE_PCT", "2"),
         "marketMaterialityVolumeRatio": value("marketMaterialityVolumeRatio", "MARKET_MATERIALITY_VOLUME_RATIO", "1.5"),
         "newsMaterialityMinimumScore": value("newsMaterialityMinimumScore", "NEWS_MATERIALITY_MINIMUM_SCORE", "65"),
-        "neo4jUri": value("neo4jUri", "NEO4J_URI", ""),
+        "neo4jUri": value("neo4jUri", "NEO4J_URI", "http://127.0.0.1:7474"),
         "neo4jUser": value("neo4jUser", "NEO4J_USER", "neo4j"),
         "neo4jPassword": value("neo4jPassword", "NEO4J_PASSWORD", ""),
         "neo4jDatabase": value("neo4jDatabase", "NEO4J_DATABASE", "neo4j"),

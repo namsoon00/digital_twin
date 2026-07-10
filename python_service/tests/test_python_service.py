@@ -396,6 +396,50 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("cached", tsla.data_quality)
         self.assertEqual("마지막 저장 시세", tsla.quote_status)
 
+    def test_toss_snapshot_uses_shared_market_data_cache_when_account_cache_is_empty(self):
+        db_path = Path(self.temp.name) / "service.db"
+        cache = SQLiteMarketQuoteCache(db_path)
+        cache.save("toss", MARKET_DATA_ACCOUNT_ID, "TSLA", {
+            "symbol": "TSLA",
+            "name": "Tesla",
+            "market": "US",
+            "currency": "USD",
+            "currentPrice": 251,
+            "quoteSource": "market-data-collector",
+            "quoteStatus": "수집기 저장 시세",
+            "dataQuality": "actual",
+            "ma20": 241,
+            "ma60": 221,
+            "updatedAt": "2026-07-03T00:00:00Z",
+        })
+        account = AccountConfig("main", "메인", "toss", "https://example.test", "id", "secret", "1", ["TSLA"])
+
+        def fake_http_json(method, url, headers, body=None, timeout=12):
+            path = urllib.parse.urlparse(url).path
+            if path == "/oauth2/token":
+                return {"access_token": "token"}
+            if path == "/api/v1/accounts":
+                return {"result": [{"accountSeq": "1", "currency": "KRW", "orderableAmount": "1000"}]}
+            if path == "/api/v1/buying-power":
+                return {"result": {"cashBuyingPower": "0"}}
+            if path == "/api/v1/holdings":
+                return {"result": {"holdings": []}}
+            if path in {"/api/v1/prices", "/api/v1/candles"}:
+                raise urllib.error.URLError("rate limit")
+            return {}
+
+        provider = TossProvider(account, quote_cache=cache)
+        with mock.patch("digital_twin.infrastructure.toss_snapshots.http_json", side_effect=fake_http_json):
+            mode, _, _, _, _, watchlist = provider.fetch_positions()
+
+        tsla = next(item for item in watchlist if item.symbol == "TSLA")
+
+        self.assertEqual("live", mode)
+        self.assertEqual(251, tsla.current_price)
+        self.assertEqual(241, tsla.ma20)
+        self.assertEqual("cached", tsla.data_quality)
+        self.assertEqual("마지막 저장 시세", tsla.quote_status)
+
     def test_kis_market_signal_provider_enriches_kr_positions(self):
         db_path = Path(self.temp.name) / "service.db"
         calls = []
@@ -2057,6 +2101,67 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(any(item.relation_type == "BREAKS_LEVEL" for item in persisted.relations))
         self.assertTrue(any(item.relation_type == "PASSES_IMPORTANCE_GATE" for item in persisted.relations))
         self.assertTrue(any(item.relation_type == "HAS_TREND_TRANSITION" for item in persisted.relations))
+
+    def test_ontology_projection_bootstraps_empty_rulebox_before_abox_projection(self):
+        position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "marketValue": 1000,
+            "currentPrice": 69000,
+            "sector": "반도체",
+        })
+        portfolio = portfolio_summary([position])
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "ok",
+            utc_now_iso(),
+            portfolio,
+            [position],
+            [],
+        )
+
+        class FakeRepository:
+            def __init__(self):
+                self.seed_calls = []
+                self.graphs = []
+
+            def rulebox_snapshot(self):
+                return {
+                    "configured": True,
+                    "status": "empty",
+                    "ruleCount": 0,
+                    "reason": "RuleBox empty",
+                }
+
+            def seed_ontology(self, payload=None):
+                self.seed_calls.append(dict(payload or {}))
+                return {"seeded": True, "status": "ok", "ruleCount": 12}
+
+            def save_graph(self, graph):
+                self.graphs.append(graph)
+                return {"saved": True, "status": "ok"}
+
+            def active_tbox_metadata(self):
+                return {"source": "neo4j", "status": "ok", "version": "stored", "fingerprint": "fp"}
+
+            def run_rulebox(self, payload=None):
+                return {"status": "ok"}
+
+            def inferencebox_snapshot(self, symbols=None, limit=80):
+                return {"status": "ok", "neo4jNativeReasoningUsed": True, "relations": [], "traces": []}
+
+        repository = FakeRepository()
+        result = PortfolioOntologyProjectionRecorder(repository).record_snapshot(snapshot)
+
+        self.assertEqual(1, len(repository.seed_calls))
+        self.assertFalse(repository.seed_calls[0]["replaceRuleBox"])
+        self.assertEqual("seeded", result["ruleboxBootstrap"]["status"])
+        self.assertEqual(12, result["ruleboxBootstrap"]["ruleCount"])
 
     def test_ontology_projection_recorder_includes_watchlist_candidates(self):
         holding = normalize_position({
@@ -4718,7 +4823,9 @@ class PythonServiceTests(unittest.TestCase):
         self.assertGreater(cached_aapl["ma20"], 0)
         self.assertEqual(101, cached_tsla["currentPrice"])
         self.assertEqual(0, result["materialChangedCount"])
-        self.assertEqual([MARKET_DATA_COLLECTED], [event.name for event in events.published])
+        self.assertEqual([MARKET_DATA_COLLECTED, ONTOLOGY_REASONING_REQUESTED], [event.name for event in events.published])
+        self.assertEqual(["AAPL", "TSLA"], events.published[-1].payload["symbols"])
+        self.assertEqual(2, events.published[-1].payload["changedCount"])
 
         events.published.clear()
         repeat = runner.run_once(force=True)

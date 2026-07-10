@@ -284,12 +284,19 @@ function checkFrontendAdminRender() {
   assertOk(designSystemDoc.indexOf("Button Placement") >= 0, "디자인 시스템 문서에 버튼 위치 정책이 없습니다.");
   assertOk(designSystemDoc.indexOf("aria-current") >= 0, "디자인 시스템 문서에 내비게이션 접근성 기준이 없습니다.");
   assertOk(code.indexOf('appTheme: settingValue("appTheme")') >= 0, "설정 저장 payload에 화면 테마가 포함되지 않았습니다.");
+  assertOk(code.indexOf('neo4jUri: settingValue("neo4jUri")') >= 0, "설정 저장 payload에 Neo4j URI가 포함되지 않았습니다.");
+  assertOk(code.indexOf('renderSettingField("neo4jUri"') >= 0, "설정 화면에 Neo4j URI 입력 필드가 없습니다.");
   const payloads = {
     "/api/settings": {
       settings: {
         tossApiBaseUrl: "https://openapi.tossinvest.com",
         notifyProvider: "telegram",
         notifyLinkUrl: "http://127.0.0.1:3000?tab=notifications",
+        ontologyNeo4jEnabled: "1",
+        neo4jUri: "http://127.0.0.1:7474",
+        neo4jUser: "neo4j",
+        neo4jDatabase: "neo4j",
+        neo4jTimeoutSeconds: "8",
         ontologyRuleCandidateAiEnabled: "1",
         ontologyRuleCandidateAiUseCodex: "1",
         ontologyRuleCandidateAiIntervalMinutes: "60",

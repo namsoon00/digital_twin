@@ -74,6 +74,11 @@
     ontologyRuleCandidateAiTimeoutSeconds: "120",
     ontologyRuleCandidateAiIntervalMinutes: "60",
     ontologyRuleCandidateAiMaxCandidates: "3",
+    ontologyNeo4jEnabled: "1",
+    neo4jUri: "http://127.0.0.1:7474",
+    neo4jUser: "neo4j",
+    neo4jDatabase: "neo4j",
+    neo4jTimeoutSeconds: "8",
     materialityGateEnabled: "1",
     materialityMinimumScore: "65",
     marketMaterialityMinimumScore: "65",
@@ -3761,6 +3766,11 @@
       ontologyRuleCandidateAiTimeoutSeconds: settingValue("ontologyRuleCandidateAiTimeoutSeconds"),
       ontologyRuleCandidateAiIntervalMinutes: settingValue("ontologyRuleCandidateAiIntervalMinutes"),
       ontologyRuleCandidateAiMaxCandidates: settingValue("ontologyRuleCandidateAiMaxCandidates"),
+      ontologyNeo4jEnabled: settingValue("ontologyNeo4jEnabled"),
+      neo4jUri: settingValue("neo4jUri"),
+      neo4jUser: settingValue("neo4jUser"),
+      neo4jDatabase: settingValue("neo4jDatabase"),
+      neo4jTimeoutSeconds: settingValue("neo4jTimeoutSeconds"),
       materialityGateEnabled: settingValue("materialityGateEnabled"),
       materialityMinimumScore: settingValue("materialityMinimumScore"),
       marketMaterialityMinimumScore: settingValue("marketMaterialityMinimumScore"),
@@ -12197,6 +12207,14 @@
         { value: "1", label: "사용" },
         { value: "0", label: "사용 안 함" }
       ]),
+      renderSettingSelect("ontologyNeo4jEnabled", "Neo4j 그래프 저장소", [
+        { value: "1", label: "사용" },
+        { value: "0", label: "사용 안 함" }
+      ]),
+      renderSettingField("neo4jUri", "Neo4j URI", "text", "http://127.0.0.1:7474"),
+      renderSettingField("neo4jUser", "Neo4j 사용자", "text", "neo4j"),
+      renderSettingField("neo4jDatabase", "Neo4j DB", "text", "neo4j"),
+      renderSettingField("neo4jTimeoutSeconds", "Neo4j 타임아웃(초)", "number", "8"),
       renderSettingField("ontologyReasoningIntervalSeconds", "추론 요청 확인 주기(초)", "number", "10"),
       renderSettingField("ontologyReasoningBatchSize", "추론 요청 배치", "number", "20"),
       renderSettingSelect("materialityGateEnabled", "중요 변경 게이트", [

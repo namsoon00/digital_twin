@@ -245,33 +245,34 @@ class MarketDataCollectionRunner:
             "universeRefresh": universe_refresh,
             "cache": self.quote_cache.summary("toss", MARKET_DATA_ACCOUNT_ID),
         }
+        ontology_symbols = changed_symbols
         if self.event_publisher and saved:
             event = market_data_collected_event(result)
             if hasattr(self.event_publisher, "publish"):
                 self.event_publisher.publish(event)
-                if material_symbols:
+                if ontology_symbols:
                     self.event_publisher.publish(ontology_reasoning_requested_event(
                         event,
                         "market-data-update",
-                        material_symbols,
-                        changed_count=len(material_symbols),
+                        ontology_symbols,
+                        changed_count=len(ontology_symbols),
                         observed_count=saved,
                         fact_types=["MarketQuote", "TechnicalIndicator"],
-                        reason="중요 시장 데이터 변화가 감지되어 온톨로지 추론을 요청합니다.",
-                        materiality_assessments=[materiality_assessments[symbol] for symbol in material_symbols],
+                        reason="시장 데이터 변경을 Neo4j ABox에 반영하고 RuleBox 추론을 갱신합니다. 알림은 중요 변경 게이트를 별도로 통과해야 합니다.",
+                        materiality_assessments=[materiality_assessments[symbol] for symbol in changed_symbols if symbol in materiality_assessments],
                     ))
             else:
                 self.event_publisher.handle(event)
-                if material_symbols:
+                if ontology_symbols:
                     self.event_publisher.handle(ontology_reasoning_requested_event(
                         event,
                         "market-data-update",
-                        material_symbols,
-                        changed_count=len(material_symbols),
+                        ontology_symbols,
+                        changed_count=len(ontology_symbols),
                         observed_count=saved,
                         fact_types=["MarketQuote", "TechnicalIndicator"],
-                        reason="중요 시장 데이터 변화가 감지되어 온톨로지 추론을 요청합니다.",
-                        materiality_assessments=[materiality_assessments[symbol] for symbol in material_symbols],
+                        reason="시장 데이터 변경을 Neo4j ABox에 반영하고 RuleBox 추론을 갱신합니다. 알림은 중요 변경 게이트를 별도로 통과해야 합니다.",
+                        materiality_assessments=[materiality_assessments[symbol] for symbol in changed_symbols if symbol in materiality_assessments],
                     ))
         return result
 

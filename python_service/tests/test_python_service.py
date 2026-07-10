@@ -3476,6 +3476,32 @@ class PythonServiceTests(unittest.TestCase):
         self.assertNotEqual(91, rescored.decisions[0].exit_pressure)
         self.assertEqual("baseScore + symbolScore", stamped[0].metadata["notificationScoreFormula"])
 
+    def test_stamp_events_attaches_ontology_quality_gate_metadata(self):
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "ok",
+            utc_now_iso(),
+            portfolio_summary([]),
+            [],
+            [],
+        )
+        snapshot.metadata.setdefault("ontology", {})["neo4j"] = {
+            "qualityScore": 42,
+            "qualitySampleId": "ontology-quality:test",
+        }
+        monitor = RealtimeMonitor({"notificationOntologyQualityMinScore": "55"})
+
+        stamped = monitor.stamp_events(snapshot, [
+            AlertEvent("main", "메인", "WATCH", "investmentInsight", "main:insight:test", "테스트", ["상태: 점검"], "")
+        ])
+
+        self.assertEqual("limited", stamped[0].metadata["ontologyQuality"]["status"])
+        self.assertEqual(42, stamped[0].metadata["ontologyQuality"]["score"])
+        self.assertEqual(55, stamped[0].metadata["ontologyQuality"]["minScore"])
+
     def test_account_data_failure_suppresses_investment_change_alerts(self):
         live_position = normalize_position({
             "symbol": "005930",
@@ -6745,6 +6771,61 @@ class PythonServiceTests(unittest.TestCase):
         self.assertNotIn("AI 투자 판단", job.context["telegramMessage"])
         self.assertIn("분할축소", job.context["telegramMessage"])
         self.assertNotIn("old rendered message", job.context["telegramMessage"])
+
+    def test_notification_ai_gate_limits_confidence_when_ontology_quality_is_low(self):
+        class FakeReviewer:
+            received_context = {}
+
+            def review(self, context):
+                self.received_context = dict(context)
+                return validated_response_from_payload(context, {
+                    "action": "SELL",
+                    "confidence": 92,
+                    "summary": "손실 확대와 추세 약화가 겹쳐 매도 기준 확인이 필요합니다.",
+                    "opinion": "즉시 결론보다 데이터 품질과 주요 기준을 함께 재확인합니다.",
+                    "evidence": ["수익률 -12%", "20일선 아래"],
+                    "counterEvidence": ["온톨로지 품질 점수가 낮음"],
+                    "invalidationCondition": "20일선 회복 시 매도 강도를 낮춥니다.",
+                    "nextChecks": ["온톨로지 품질 샘플과 원천 데이터를 확인"],
+                    "sourceUrls": ["https://example.test/source"],
+                    "referenceDate": "2026-07-08 14:30 KST",
+                }, source="fake AI")
+
+        reviewer = FakeReviewer()
+        job = NotificationJob.create(
+            "품질 게이트 검증",
+            account_id="main",
+            account_label="메인",
+            message_type="investmentInsight",
+            context={
+                "messageType": "investmentInsight",
+                "headline": "[주의] 손실 관리 기준 확인",
+                "displayTarget": "삼성전자 / 005930",
+                "referenceDate": "2026-07-08 14:30 KST",
+                "metadata": {
+                    "ontologyQuality": {
+                        "score": 42,
+                        "minScore": 55,
+                        "qualitySampleId": "ontology-quality:test",
+                        "source": "ontologyProjection",
+                    },
+                },
+            },
+        )
+        enricher = NotificationAIValidatedGateEnricher(reviewer, {
+            "notificationAiGateEnabled": "1",
+            "notificationAiGateMessageTypes": "investmentInsight",
+        })
+        enricher(job)
+
+        gate = job.context["ontologyQualityGate"]
+        response = job.context["notificationAiValidatedResponse"]
+
+        self.assertEqual("limited", reviewer.received_context["ontologyQualityGate"]["status"])
+        self.assertEqual("limited", gate["status"])
+        self.assertEqual(62.0, response["confidence"])
+        self.assertEqual(62.0, response["confidenceCap"])
+        self.assertTrue(any("온톨로지 품질" in item for item in response["validationWarnings"]))
 
     def test_notification_delivery_score_uses_user_formula(self):
         event = AlertEvent(

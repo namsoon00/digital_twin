@@ -61,6 +61,9 @@ def rulebox_payload(graph: PortfolioOntology) -> Dict[str, object]:
     rules = [item for item in entities if item.kind == "rule"]
     conditions = [item for item in entities if item.kind == "rule-condition"]
     templates = [item for item in entities if item.kind == "relation-template"]
+    relation_rules = [item for item in entities if item.kind == "relation-rule"]
+    relation_rule_conditions = [item for item in entities if item.kind == "relation-rule-condition"]
+    relation_rule_templates = [item for item in entities if item.kind == "relation-rule-template"]
     return {
         "box": "RuleBox",
         "description": "Executable graph rules represented as ontology nodes.",
@@ -69,9 +72,15 @@ def rulebox_payload(graph: PortfolioOntology) -> Dict[str, object]:
         "ruleCount": len(rules),
         "conditionCount": len(conditions),
         "relationTemplateCount": len(templates),
+        "relationRuleCount": len(relation_rules),
+        "relationRuleConditionCount": len(relation_rule_conditions),
+        "relationRuleTemplateCount": len(relation_rule_templates),
         "rules": [item.to_dict() for item in rules[:24]],
         "conditions": [item.to_dict() for item in conditions[:40]],
         "relationTemplates": [item.to_dict() for item in templates[:40]],
+        "relationRules": [item.to_dict() for item in relation_rules[:40]],
+        "relationRuleConditions": [item.to_dict() for item in relation_rule_conditions[:40]],
+        "relationRuleTemplates": [item.to_dict() for item in relation_rule_templates[:40]],
         "relations": [compact_relation_row(item, labels) for item in relations[:80]],
     }
 

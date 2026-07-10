@@ -69,6 +69,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
 
         self.assertTrue(any((item.properties or {}).get("ruleId") == "graph.loss_guard.breakdown.v1" for item in rule_entities))
         self.assertTrue(loss_guard_relations)
+        self.assertTrue(any(item.kind == "relation-rule" and (item.properties or {}).get("ruleId") == "holding.loss_guard.breakdown.v1" for item in graph.entities))
         self.assertTrue(any(item.kind == "inference-trace" for item in graph.entities))
         self.assertTrue(any(item.kind == "inference-trace" for item in graph.evidence))
         self.assertIsNotNone(opinion)
@@ -79,6 +80,8 @@ class OntologyRuleBoxTests(unittest.TestCase):
         payload = prompt_payload(graph)
 
         self.assertGreater(payload["ruleBox"]["ruleCount"], 0)
+        self.assertGreater(payload["ruleBox"]["relationRuleCount"], 0)
+        self.assertTrue(any(item["properties"]["ruleId"] == "holding.loss_guard.breakdown.v1" for item in payload["ruleBox"]["relationRules"]))
         self.assertGreater(payload["inferenceBox"]["traceCount"], 0)
         self.assertTrue(any(item["type"] == "HAS_INFERRED_RISK" for item in payload["derivedRelations"]))
         self.assertIn("ruleBox", payload["aiInferencePacket"]["inputOrder"])

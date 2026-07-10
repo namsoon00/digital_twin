@@ -33,6 +33,26 @@ def now_ms() -> int:
     return int(datetime.now(timezone.utc).timestamp() * 1000)
 
 
+def ontology_quality_event_metadata(snapshot: AccountSnapshot, min_score: float) -> Dict[str, object]:
+    metadata = snapshot.metadata if isinstance(snapshot.metadata, dict) else {}
+    ontology = metadata.get("ontology") if isinstance(metadata.get("ontology"), dict) else {}
+    projection = ontology.get("neo4j") if isinstance(ontology.get("neo4j"), dict) else ontology.get("projection")
+    if not isinstance(projection, dict) or "qualityScore" not in projection:
+        return {}
+    if projection.get("qualityScore") in (None, ""):
+        return {}
+    score = number(projection.get("qualityScore"))
+    status = "passed" if score >= float(min_score or 0) else "limited"
+    return {
+        "score": round(score, 2),
+        "minScore": round(float(min_score or 0), 2),
+        "status": status,
+        "qualitySampleId": str(projection.get("qualitySampleId") or ""),
+        "source": "ontologyProjection",
+        "reason": "온톨로지 품질 점수가 알림 판단 기준 이상입니다." if status == "passed" else "온톨로지 품질 점수가 알림 판단 기준보다 낮아 판단 강도를 제한합니다.",
+    }
+
+
 class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
     def __init__(self, settings: Dict[str, str] = None):
         settings = settings or {}
@@ -73,6 +93,13 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
             if str(event.key or "").strip():
                 return ":".join(["cadence", "python", event.account_id, event.rule, event.key])
         return event.cadence_key()
+
+    def ontology_quality_min_score(self) -> float:
+        raw = self.settings.get("notificationOntologyQualityMinScore") or self.settings.get("ontologyNotificationQualityMinScore") or 55
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return 55.0
 
     def criteria(self, setting: str, detected: str = "") -> List[str]:
         lines = []
@@ -246,11 +273,14 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
     def stamp_events(self, snapshot: AccountSnapshot, events: List[AlertEvent]) -> List[AlertEvent]:
         generated_at = str(snapshot.generated_at or "").strip()
         formula_metadata = self.notification_formula_metadata()
+        ontology_quality = ontology_quality_event_metadata(snapshot, self.ontology_quality_min_score())
         for event in events:
             if generated_at:
                 event.generated_at = generated_at
             if formula_metadata:
                 event.metadata.update({key: value for key, value in formula_metadata.items() if key not in event.metadata})
+            if ontology_quality:
+                event.metadata.setdefault("ontologyQuality", ontology_quality)
         return events
 
     def snapshot_with_strategy_scores(self, snapshot: AccountSnapshot) -> AccountSnapshot:

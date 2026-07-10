@@ -4,6 +4,7 @@ from typing import Callable, Dict, List
 from zoneinfo import ZoneInfo
 
 from ..domain.disclosure_analysis import context_with_disclosure_analysis, local_disclosure_analysis
+from ..domain.market_data import number
 from ..domain.monitoring import RealtimeMonitor
 from ..domain.notification_ai import enrich_notification_ai_context
 from ..domain.notification_ai_gate import ai_gate_enabled_for_message_type, context_with_validated_ai_response, local_validated_ai_response
@@ -125,6 +126,98 @@ class NotificationHoldingSnapshotEnricher:
         return bool(text and len(text) <= 12 and all(ch.isalnum() or ch in {".", "-"} for ch in text))
 
 
+def notification_ontology_quality_min_score(settings: Dict[str, object] = None) -> float:
+    settings = settings or {}
+    raw = settings.get("notificationOntologyQualityMinScore") or settings.get("ontologyNotificationQualityMinScore") or 55
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return 55.0
+
+
+def _dict_value(value: object) -> Dict[str, object]:
+    return value if isinstance(value, dict) else {}
+
+
+def ontology_quality_candidates(context: Dict[str, object]) -> List[Dict[str, object]]:
+    context = _dict_value(context)
+    metadata = _dict_value(context.get("metadata"))
+    ontology = _dict_value(context.get("ontology"))
+    metadata_ontology = _dict_value(metadata.get("ontology"))
+    return [
+        _dict_value(context.get("ontologyQuality")),
+        _dict_value(context.get("ontologyQualitySample")),
+        _dict_value(metadata.get("ontologyQuality")),
+        _dict_value(metadata.get("ontologyQualitySample")),
+        _dict_value(ontology.get("neo4j")),
+        _dict_value(metadata_ontology.get("neo4j")),
+        _dict_value(metadata_ontology.get("projection")),
+    ]
+
+
+def ontology_quality_score(candidate: Dict[str, object]):
+    candidate = _dict_value(candidate)
+    for key in ["score", "qualityScore", "overallScore", "overall_score"]:
+        if key in candidate:
+            if candidate.get(key) in (None, ""):
+                return None
+            return number(candidate.get(key))
+    scores = _dict_value(candidate.get("scores"))
+    if "overall" in scores:
+        if scores.get("overall") in (None, ""):
+            return None
+        return number(scores.get("overall"))
+    payload_scores = _dict_value(_dict_value(candidate.get("payload")).get("scores"))
+    if "overall" in payload_scores:
+        if payload_scores.get("overall") in (None, ""):
+            return None
+        return number(payload_scores.get("overall"))
+    return None
+
+
+def ontology_quality_gate_context(context: Dict[str, object], settings: Dict[str, object] = None) -> Dict[str, object]:
+    min_score = notification_ontology_quality_min_score(settings)
+    for candidate in ontology_quality_candidates(context):
+        score = ontology_quality_score(candidate)
+        if score is None:
+            continue
+        status = "passed" if score >= min_score else "limited"
+        cap = 100.0 if status == "passed" else max(35.0, min(75.0, score + 20.0))
+        return {
+            "enabled": True,
+            "status": status,
+            "score": round(score, 2),
+            "minScore": round(min_score, 2),
+            "confidenceCap": round(cap, 1),
+            "qualitySampleId": str(candidate.get("qualitySampleId") or candidate.get("sampleId") or candidate.get("sample_id") or ""),
+            "source": str(candidate.get("source") or "ontologyQuality"),
+            "reason": "온톨로지 품질 점수가 알림 기준 이상입니다." if status == "passed" else "온톨로지 품질 점수가 알림 기준보다 낮아 확신도와 판단 강도를 제한합니다.",
+        }
+    return {
+        "enabled": True,
+        "status": "unknown",
+        "minScore": round(min_score, 2),
+        "confidenceCap": 100.0,
+        "reason": "알림 컨텍스트에 온톨로지 품질 점수가 없어 별도 제한을 적용하지 않았습니다.",
+    }
+
+
+def apply_ontology_quality_gate_to_response(response, gate: Dict[str, object]) -> None:
+    if not response or not isinstance(gate, dict) or gate.get("status") != "limited":
+        return
+    cap = number(gate.get("confidenceCap")) or 75.0
+    reason = str(gate.get("reason") or "온톨로지 품질 점수가 낮아 확신도를 제한했습니다.")
+    if reason not in response.confidence_cap_reasons:
+        response.confidence_cap_reasons.append(reason)
+    if reason not in response.validation_warnings:
+        response.validation_warnings.append(reason)
+    if number(response.confidence_cap) > cap:
+        response.confidence_cap = cap
+    if number(response.confidence) > cap:
+        response.validation_warnings.append("온톨로지 품질 게이트로 AI 확신도 " + str(round(number(response.confidence), 1)) + "%를 " + str(round(cap, 1)) + "%로 낮췄습니다.")
+        response.confidence = cap
+
+
 class NotificationAIValidatedGateEnricher:
     def __init__(self, reviewer=None, settings: Dict[str, object] = None):
         self.reviewer = reviewer
@@ -137,13 +230,17 @@ class NotificationAIValidatedGateEnricher:
         context.setdefault("messageType", job.message_type)
         context.setdefault("accountId", job.account_id)
         context.setdefault("accountLabel", job.account_label)
+        quality_gate = ontology_quality_gate_context(context, self.settings)
+        context["ontologyQualityGate"] = quality_gate
         if context.get("notificationAiValidatedResponse"):
+            job.context = context
             return
         try:
             response = self.reviewer.review(context) if self.reviewer else local_validated_ai_response(context)
         except Exception as error:  # noqa: BLE001 - notification delivery should degrade to local validation.
             response = local_validated_ai_response(context, source="local fallback")
             response.validation_warnings.append("AI 검증 실패로 로컬 의견을 사용했습니다: " + str(error)[:140])
+        apply_ontology_quality_gate_to_response(response, quality_gate)
         job.context = context_with_validated_ai_response(context, response)
 
 

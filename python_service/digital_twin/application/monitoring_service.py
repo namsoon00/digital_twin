@@ -41,11 +41,11 @@ class MonitorRunner:
             previous = self.store.previous.get(snapshot.account_id) or {}
             snapshot.metadata["previousMonitorState"] = self.compact_previous_state(previous)
             snapshot.metadata.setdefault("ontology", {})["previousStateAvailable"] = bool(previous)
+            if not dry_run:
+                self.record_ontology_projection(snapshot)
             events = self.monitor.events_for_snapshot(snapshot, previous)
             if allowed_symbols:
                 events = self.filter_events_by_symbol(events, allowed_symbols)
-            if not dry_run:
-                self.record_ontology_projection(snapshot)
             events = self.monitor.apply_cadence(events, self.store, force=force)
             all_events.extend(events)
         if self.use_cycle_recorder(dry_run):

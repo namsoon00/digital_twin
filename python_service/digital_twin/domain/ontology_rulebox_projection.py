@@ -2,6 +2,7 @@ from typing import Dict, Iterable
 
 from .ontology_contracts import OntologyEntity, OntologyRelation, PortfolioOntology, entity_id
 from .ontology_rulebox_contracts import GRAPH_REASONER_VERSION, GraphInferenceRule
+from .ontology_rules import ONTOLOGY_RULE_ENGINE_VERSION, RelationRuleDefinition
 from .ontology_schema import abox_relation_properties
 
 
@@ -81,6 +82,79 @@ def add_rulebox_concepts(graph: PortfolioOntology, rules: Iterable[GraphInferenc
                     "relationType": derivation.relation_type,
                 }),
             ))
+
+
+def add_relation_rulebox_concepts(graph: PortfolioOntology, rules: Iterable[RelationRuleDefinition]) -> None:
+    registry_id = entity_id("relation-rule-registry", ONTOLOGY_RULE_ENGINE_VERSION)
+    graph.entities.append(OntologyEntity(registry_id, "Relation RuleBox", "relation-rule-registry", rulebox_properties({
+        "tboxClass": "RuleRegistry",
+        "tboxClasses": ["RuleRegistry", "RelationRuleRegistry"],
+        "version": ONTOLOGY_RULE_ENGINE_VERSION,
+        "engine": "ontology-relation-rules",
+    })))
+    graph.relations.append(OntologyRelation(
+        entity_id("ontology-box", "RuleBox"),
+        registry_id,
+        "DEFINES_RULE",
+        weight=1.0,
+        properties=rulebox_relation_properties("DEFINES_RULE", {"source": ONTOLOGY_RULE_ENGINE_VERSION}),
+    ))
+    for rule in rules or []:
+        rule_id = entity_id("relation-rule", rule.rule_id)
+        graph.entities.append(OntologyEntity(rule_id, rule.label, "relation-rule", rulebox_properties({
+            "tboxClass": "RelationReasoningRule",
+            "tboxClasses": ["ReasoningRule", "RelationReasoningRule"],
+            "ruleId": rule.rule_id,
+            "version": rule.version,
+            "engine": ONTOLOGY_RULE_ENGINE_VERSION,
+            "relationType": rule.relation_type,
+            "signalType": rule.signal_type,
+            "conditionSummary": rule.condition_summary,
+            "promptHint": rule.prompt_hint,
+            "requiredFields": list(rule.required_fields or []),
+        })))
+        graph.relations.append(OntologyRelation(
+            registry_id,
+            rule_id,
+            "DEFINES_RULE",
+            weight=1.0,
+            properties=rulebox_relation_properties("DEFINES_RULE", {"ruleId": rule.rule_id, "source": ONTOLOGY_RULE_ENGINE_VERSION}),
+        ))
+        condition_id = entity_id("relation-rule-condition", rule.rule_id)
+        graph.entities.append(OntologyEntity(condition_id, rule.condition_summary or rule.label, "relation-rule-condition", rulebox_properties({
+            "tboxClass": "RuleCondition",
+            "tboxClasses": ["RuleCondition", "RelationRuleCondition"],
+            "ruleId": rule.rule_id,
+            "conditionSummary": rule.condition_summary,
+            "requiredFields": list(rule.required_fields or []),
+        })))
+        graph.relations.append(OntologyRelation(
+            rule_id,
+            condition_id,
+            "HAS_CONDITION",
+            weight=1.0,
+            properties=rulebox_relation_properties("HAS_CONDITION", {"ruleId": rule.rule_id, "source": ONTOLOGY_RULE_ENGINE_VERSION}),
+        ))
+        template_id = entity_id("relation-rule-template", rule.rule_id)
+        graph.entities.append(OntologyEntity(template_id, rule.relation_type, "relation-rule-template", rulebox_properties({
+            "tboxClass": "RelationTemplate",
+            "tboxClasses": ["RelationTemplate", "RelationRuleTemplate"],
+            "ruleId": rule.rule_id,
+            "relationType": rule.relation_type,
+            "signalType": rule.signal_type,
+            "promptHint": rule.prompt_hint,
+        })))
+        graph.relations.append(OntologyRelation(
+            rule_id,
+            template_id,
+            "DERIVES_RELATION",
+            weight=1.0,
+            properties=rulebox_relation_properties("DERIVES_RELATION", {
+                "ruleId": rule.rule_id,
+                "relationType": rule.relation_type,
+                "source": ONTOLOGY_RULE_ENGINE_VERSION,
+            }),
+        ))
 
 
 def rulebox_properties(properties: Dict[str, object]) -> Dict[str, object]:

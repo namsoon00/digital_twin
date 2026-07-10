@@ -1140,7 +1140,11 @@ function checkFrontendAdminRender() {
     assertOk(systemHtml.indexOf("EVENT FLOW") >= 0 && systemHtml.indexOf("monitoring.snapshot_collected") >= 0 && systemHtml.indexOf("notification.job_queued") >= 0, "시스템 탭에 이벤트 흐름 설명이 없습니다.");
     assertOk(systemHtml.indexOf("ALERT PIPELINE") >= 0 && systemHtml.indexOf("system-notification-flow") >= 0, "시스템 탭에 알림 생성 흐름 다이어그램이 없습니다.");
     assertOk(systemHtml.indexOf("ONTOLOGY MODEL") >= 0 && systemHtml.indexOf("TBox") >= 0 && systemHtml.indexOf("ABox") >= 0, "시스템 탭에 온톨로지 모델 설명이 없습니다.");
+    assertOk(systemHtml.indexOf("system-sqlite-panel") >= 0 && systemHtml.indexOf("system-sqlite-actions") >= 0, "시스템 탭에 SQLite 운영 상태 패널이 정리된 액션 레이아웃으로 렌더링되지 않습니다.");
+    assertOk(systemHtml.indexOf("DB 최적화") >= 0 && systemHtml.indexOf("Checkpoint · Optimize") < 0, "시스템 탭 SQLite 액션 버튼 라벨이 모바일에 맞게 줄어들지 않았습니다.");
     assertOk(styles.indexOf(".system-guide-view") >= 0 && styles.indexOf(".system-flow-diagram") >= 0 && styles.indexOf(".system-event-track") >= 0, "시스템 설명 탭 스타일이 없습니다.");
+    assertOk(/\.system-sqlite-panel \.sqlite-health-ledger\s*\{[\s\S]*grid-template-columns: repeat\(auto-fit, minmax\(230px, 1fr\)\);/.test(styles), "시스템 SQLite 상태 카드가 PC에서 카드 그리드로 정렬되지 않습니다.");
+    assertOk(/@media \(max-width: 860px\)[\s\S]*\.system-sqlite-panel \.sqlite-migration-grid\s*\{[\s\S]*display: none;/.test(styles), "시스템 SQLite migration 상세 표가 모바일에서 숨겨지지 않습니다.");
     assertOk(overviewHtml.indexOf("admin-monitoring-panel") >= 0, "모니터링 상태 패널이 렌더링되지 않았습니다.");
     assertOk(overviewHtml.indexOf("account-directory-panel") >= 0, "홈에 DB 계정 패널이 렌더링되지 않았습니다.");
     assertOk(overviewHtml.indexOf("account-watchlist-panel") >= 0, "홈에 계정별 관심 종목 패널이 렌더링되지 않았습니다.");

@@ -10731,7 +10731,8 @@ h3 {
 
 .system-guide-hero,
 .system-data-flow-panel,
-.system-event-panel {
+.system-event-panel,
+.system-sqlite-panel {
   grid-column: 1 / -1;
 }
 
@@ -11266,8 +11267,86 @@ h3 {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.system-sqlite-panel .sqlite-health-ledger {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: var(--ds-section-gap);
+  margin: 0;
+  padding: var(--ds-space-4) var(--ds-panel-pad-x) var(--ds-panel-pad-y);
+  border: 0;
+  border-top: 1px solid var(--ds-card-border);
+  border-radius: 0;
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
+  overflow: visible;
+}
+
+.system-sqlite-panel .sqlite-health-cell {
+  display: grid;
+  grid-template-columns: 1fr;
+  align-content: start;
+  gap: 5px;
+  min-height: 104px;
+  padding: var(--ds-row-pad-y) var(--ds-row-pad-x);
+  border: 1px solid var(--ds-card-border);
+  border-left: 3px solid var(--blue);
+  border-radius: var(--ds-radius-control);
+  background: var(--ds-card-bg);
+}
+
+.system-sqlite-panel .sqlite-health-cell.hold {
+  border-left-color: var(--amber);
+}
+
+.system-sqlite-panel .sqlite-health-cell.watch {
+  border-left-color: var(--green);
+}
+
+.system-sqlite-panel .sqlite-health-cell span,
+.system-sqlite-panel .sqlite-health-cell strong,
+.system-sqlite-panel .sqlite-health-cell em {
+  grid-column: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.system-sqlite-panel .sqlite-health-cell strong {
+  font-size: 15px;
+  line-height: 1.35;
+}
+
+.system-sqlite-panel .sqlite-health-cell em {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 780;
+  line-height: 1.38;
+}
+
+.system-sqlite-panel .sqlite-migration-grid {
+  margin-top: 0;
+}
+
+.system-sqlite-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--ds-space-5);
+  align-items: stretch;
+  justify-content: stretch;
+  padding: 0 var(--ds-panel-pad-x) var(--ds-panel-pad-y);
+}
+
+.system-sqlite-actions .text-button {
+  width: 100%;
+  min-width: 0;
+  min-height: 42px;
+  justify-content: center;
+  white-space: normal;
+  text-align: center;
+}
+
 @media (max-width: 1180px) {
   .system-guide-hero,
+  .system-sqlite-panel,
   .system-manual-panel,
   .system-notification-panel,
   .system-ontology-panel,
@@ -11333,6 +11412,7 @@ h3 {
   .system-guide-hero,
   .system-data-flow-panel,
   .system-event-panel,
+  .system-sqlite-panel,
   .system-manual-panel,
   .system-notification-panel,
   .system-ontology-panel,
@@ -11414,6 +11494,35 @@ h3 {
 
   .system-lineage-grid {
     margin: 0 var(--ds-panel-pad-x) var(--ds-panel-pad-y);
+  }
+
+  .system-sqlite-panel .sqlite-health-ledger {
+    grid-template-columns: 1fr;
+    gap: var(--ds-space-5);
+    padding: var(--ds-section-gap) var(--ds-panel-pad-x) var(--ds-panel-pad-y);
+  }
+
+  .system-sqlite-panel .sqlite-health-cell {
+    min-height: 0;
+    padding: var(--ds-row-pad-y) var(--ds-row-pad-x);
+  }
+
+  .system-sqlite-panel .sqlite-health-cell strong {
+    font-size: 14px;
+  }
+
+  .system-sqlite-panel .sqlite-migration-grid {
+    display: none;
+  }
+
+  .system-sqlite-actions {
+    grid-template-columns: 1fr;
+    gap: var(--ds-space-4);
+    padding: 0 var(--ds-panel-pad-x) var(--ds-panel-pad-y);
+  }
+
+  .system-sqlite-actions .text-button {
+    min-height: 44px;
   }
 
   .system-lineage-head {

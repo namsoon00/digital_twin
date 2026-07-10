@@ -51,6 +51,7 @@ from ..domain.parsing import parse_assignments
 from ..domain.portfolio import utc_now_iso
 from ..infrastructure.event_bus import default_event_bus
 from ..infrastructure.mock_market import mock_market_payload, mock_market_scenario_list
+from ..infrastructure.neo4j_ontology import ontology_repository_from_settings
 from ..infrastructure.service_factory import build_symbol_universe_service, flow_lens_snapshot
 from ..infrastructure.settings import ROOT_DIR, runtime_settings, save_runtime_settings
 from ..infrastructure.sqlite_accounts import AccountRegistry
@@ -504,6 +505,18 @@ def save_settings_payload(payload: Dict[str, object]) -> Dict[str, object]:
         },
     )
     return status
+
+
+def ontology_rulebox_payload() -> Dict[str, object]:
+    return ontology_repository_from_settings(runtime_settings()).rulebox_snapshot()
+
+
+def save_ontology_rulebox_payload(payload: Dict[str, object]) -> Dict[str, object]:
+    return ontology_repository_from_settings(runtime_settings()).save_rulebox(payload)
+
+
+def run_ontology_rulebox_payload(payload: Dict[str, object]) -> Dict[str, object]:
+    return ontology_repository_from_settings(runtime_settings()).run_rulebox(payload)
 
 
 def notification_store() -> SQLiteNotificationTemplateStore:
@@ -1621,6 +1634,19 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
                 if not self.ensure_writable("공유 모드에서는 서버 설정을 변경할 수 없습니다."):
                     return
                 return self.send_payload(200, save_settings_payload(self.read_json_body()))
+
+        if path == "/api/ontology/rulebox":
+            if self.command == "GET":
+                return self.send_payload(200, ontology_rulebox_payload())
+            if self.command in {"POST", "PUT"}:
+                if not self.ensure_writable("공유 모드에서는 Neo4j RuleBox를 변경할 수 없습니다."):
+                    return
+                return self.send_payload(200, save_ontology_rulebox_payload(self.read_json_body()))
+
+        if path == "/api/ontology/rulebox/run" and self.command == "POST":
+            if not self.ensure_writable("공유 모드에서는 Neo4j RuleBox 추론을 실행할 수 없습니다."):
+                return
+            return self.send_payload(200, run_ontology_rulebox_payload(self.read_json_body()))
 
         if path == "/api/symbol-universe":
             if self.command == "GET":

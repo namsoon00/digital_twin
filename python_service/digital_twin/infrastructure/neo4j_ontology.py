@@ -5,6 +5,10 @@ import urllib.request
 from typing import Dict, Iterable, List
 
 from ..domain.ontology_contracts import PortfolioOntology
+from ..domain.ontology_rulebox_catalog import default_graph_inference_rules
+from ..domain.ontology_rulebox_contracts import GRAPH_REASONER_VERSION, GraphInferenceRule
+from ..domain.ontology_rulebox_projection import add_rulebox_concepts
+from ..domain.ontology_schema import tbox_entities, tbox_relations
 from .settings import runtime_settings, utc_now
 
 
@@ -17,6 +21,38 @@ class NullOntologyGraphRepository:
             "entityCount": len(graph.entities),
             "relationCount": len(graph.relations),
             "reasoningCardCount": len(getattr(graph, "reasoning_cards", []) or []),
+        }
+
+    def rulebox_snapshot(self) -> Dict[str, object]:
+        rules = rulebox_rules_to_payload(default_graph_inference_rules())
+        return {
+            "configured": False,
+            "saved": False,
+            "status": "disabled",
+            "source": "defaults",
+            "reason": "Neo4j ontology storage is not configured.",
+            "engineVersion": GRAPH_REASONER_VERSION,
+            "rules": rules,
+            "ruleCount": len(rules),
+            "conditionCount": sum(len(item.get("conditions") or []) for item in rules),
+            "derivationCount": sum(len(item.get("derivations") or []) for item in rules),
+        }
+
+    def save_rulebox(self, payload: Dict[str, object] = None) -> Dict[str, object]:
+        snapshot = self.rulebox_snapshot()
+        snapshot.update({
+            "saved": False,
+            "status": "disabled",
+            "reason": "Neo4j URI가 없어 RuleBox를 저장하지 않았습니다.",
+        })
+        return snapshot
+
+    def run_rulebox(self, payload: Dict[str, object] = None) -> Dict[str, object]:
+        return {
+            "configured": False,
+            "status": "disabled",
+            "reason": "Neo4j URI가 없어 RuleBox 추론을 실행하지 않았습니다.",
+            "statementCount": 0,
         }
 
 
@@ -83,6 +119,11 @@ class Neo4jOntologyGraphRepository:
                 "ontologyBox": str(properties.get("ontologyBox") or "ABox"),
                 "symbol": str(properties.get("symbol") or ""),
                 "ruleId": str(properties.get("ruleId") or ""),
+                "version": str(properties.get("version") or ""),
+                "sourceKind": str(properties.get("sourceKind") or ""),
+                "actionGroup": str(properties.get("actionGroup") or ""),
+                "actionLevel": str(properties.get("actionLevel") or ""),
+                "promptHint": str(properties.get("promptHint") or ""),
                 "tboxClass": str(properties.get("tboxClass") or ""),
                 "boundedContext": str(properties.get("boundedContext") or ""),
                 "sourceValue": str(properties.get("source") or ""),
@@ -205,6 +246,8 @@ class Neo4jOntologyGraphRepository:
                     "MERGE (n:OntologyEntity {id: row.id}) "
                     "SET n.label = row.label, n.kind = row.kind, "
                     "n.ontologyBox = row.ontologyBox, n.symbol = row.symbol, n.ruleId = row.ruleId, "
+                    "n.version = row.version, n.sourceKind = row.sourceKind, "
+                    "n.actionGroup = row.actionGroup, n.actionLevel = row.actionLevel, n.promptHint = row.promptHint, "
                     "n.tboxClass = row.tboxClass, n.boundedContext = row.boundedContext, "
                     "n.sourceValue = row.sourceValue, n.profitLossRate = row.profitLossRate, n.levelType = row.levelType, "
                     "n.enabled = row.enabled, n.conditionId = row.conditionId, n.conditionKind = row.conditionKind, "
@@ -344,6 +387,148 @@ class Neo4jOntologyGraphRepository:
         with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
             return json.loads(response.read().decode("utf-8") or "{}")
 
+    def http_endpoint_and_headers(self):
+        endpoint = neo4j_http_endpoint(self.uri, self.database)
+        headers = {"Content-Type": "application/json", "Accept": "application/json"}
+        if self.user or self.password:
+            token = base64.b64encode((self.user + ":" + self.password).encode("utf-8")).decode("ascii")
+            headers["Authorization"] = "Basic " + token
+        return endpoint, headers
+
+    def rulebox_snapshot(self) -> Dict[str, object]:
+        if not self.uri:
+            return NullOntologyGraphRepository().rulebox_snapshot()
+        if self.uri.startswith("http://") or self.uri.startswith("https://"):
+            return self.rulebox_snapshot_via_http()
+        if self.uri.startswith("bolt://") or self.uri.startswith("neo4j://"):
+            return self.rulebox_snapshot_via_driver()
+        return {
+            "configured": True,
+            "saved": False,
+            "status": "unsupported-uri",
+            "source": "defaults",
+            "reason": "Neo4j URI must start with http://, https://, bolt://, or neo4j://.",
+            "rules": rulebox_rules_to_payload(default_graph_inference_rules()),
+        }
+
+    def rulebox_snapshot_via_http(self) -> Dict[str, object]:
+        endpoint, headers = self.http_endpoint_and_headers()
+        try:
+            payload = self.post_http_statements(endpoint, headers, rulebox_snapshot_statements())
+        except Exception as error:  # noqa: BLE001 - admin read should degrade to defaults.
+            return rulebox_default_snapshot("error", str(error)[:180], configured=True)
+        errors = payload.get("errors") or []
+        if errors:
+            return rulebox_default_snapshot("neo4j-error", json.dumps(errors[:2], ensure_ascii=False)[:300], configured=True)
+        rowsets = http_result_rowsets(payload, ["rules", "conditions", "derivations", "relationTypes"])
+        return rulebox_snapshot_from_rows(rowsets, source="neo4j-http")
+
+    def rulebox_snapshot_via_driver(self) -> Dict[str, object]:
+        try:
+            from neo4j import GraphDatabase
+        except Exception as error:  # noqa: BLE001 - optional dependency.
+            return rulebox_default_snapshot("driver-missing", "neo4j Python driver is not installed: " + str(error)[:120], configured=True)
+        try:
+            driver = GraphDatabase.driver(self.uri, auth=(self.user, self.password) if self.user or self.password else None)
+            with driver.session(database=self.database) as session:
+                rowsets = {}
+                for key, statement in zip(["rules", "conditions", "derivations", "relationTypes"], rulebox_snapshot_statements()):
+                    result = session.run(statement["statement"], **statement["parameters"])
+                    rowsets[key] = [neo4j_record_to_dict(record) for record in result]
+            driver.close()
+            return rulebox_snapshot_from_rows(rowsets, source="neo4j-driver")
+        except Exception as error:  # noqa: BLE001 - admin read should degrade to defaults.
+            return rulebox_default_snapshot("error", str(error)[:180], configured=True)
+
+    def save_rulebox(self, payload: Dict[str, object] = None) -> Dict[str, object]:
+        if not self.uri:
+            return NullOntologyGraphRepository().save_rulebox(payload)
+        try:
+            rules = rulebox_rules_from_payload(payload or {})
+        except ValueError as error:
+            return {"configured": True, "saved": False, "status": "invalid-rulebox", "reason": str(error)}
+        clear_inference = bool((payload or {}).get("clearInference", True))
+        clear_result = self.clear_rulebox(clear_inference=clear_inference)
+        if clear_result.get("status") not in {"ok", "skipped"}:
+            snapshot = self.rulebox_snapshot()
+            snapshot.update({"saved": False, "status": clear_result.get("status"), "reason": clear_result.get("reason"), "clearResult": clear_result})
+            return snapshot
+        save_result = self.save_graph(rulebox_graph_from_rules(rules))
+        snapshot = self.rulebox_snapshot()
+        snapshot.update({
+            "saved": bool(save_result.get("saved")),
+            "status": save_result.get("status") or snapshot.get("status"),
+            "reason": save_result.get("reason") or snapshot.get("reason") or "",
+            "clearResult": clear_result,
+            "saveResult": save_result,
+        })
+        return snapshot
+
+    def run_rulebox(self, payload: Dict[str, object] = None) -> Dict[str, object]:
+        if not self.uri:
+            return NullOntologyGraphRepository().run_rulebox(payload)
+        clear_inference = bool((payload or {}).get("clearInference", True))
+        clear_result = self.clear_inferencebox() if clear_inference else {"status": "skipped", "reason": "clearInference disabled"}
+        if clear_result.get("status") not in {"ok", "skipped"}:
+            return {"configured": True, "status": clear_result.get("status"), "reason": clear_result.get("reason"), "clearResult": clear_result}
+        if self.uri.startswith("http://") or self.uri.startswith("https://"):
+            endpoint, headers = self.http_endpoint_and_headers()
+            reasoning = self.run_native_rulebox_reasoning_via_http(endpoint, headers)
+        elif self.uri.startswith("bolt://") or self.uri.startswith("neo4j://"):
+            reasoning = self.run_native_rulebox_reasoning_via_driver()
+        else:
+            reasoning = {"status": "unsupported-uri", "reason": "Neo4j URI must start with http://, https://, bolt://, or neo4j://."}
+        reasoning.update({"configured": True, "clearResult": clear_result})
+        return reasoning
+
+    def clear_rulebox(self, clear_inference: bool = True) -> Dict[str, object]:
+        if self.uri.startswith("http://") or self.uri.startswith("https://"):
+            endpoint, headers = self.http_endpoint_and_headers()
+            try:
+                payload = self.post_http_statements(endpoint, headers, clear_rulebox_statements(clear_inference))
+            except Exception as error:  # noqa: BLE001 - admin command should report structured errors.
+                return {"status": "error", "reason": str(error)[:180]}
+            errors = payload.get("errors") or []
+            if errors:
+                return {"status": "neo4j-error", "reason": json.dumps(errors[:2], ensure_ascii=False)[:300]}
+            return {"status": "ok", "clearInference": clear_inference}
+        if self.uri.startswith("bolt://") or self.uri.startswith("neo4j://"):
+            try:
+                from neo4j import GraphDatabase
+                driver = GraphDatabase.driver(self.uri, auth=(self.user, self.password) if self.user or self.password else None)
+                with driver.session(database=self.database) as session:
+                    for statement in clear_rulebox_statements(clear_inference):
+                        session.run(statement["statement"], **statement["parameters"])
+                driver.close()
+                return {"status": "ok", "clearInference": clear_inference}
+            except Exception as error:  # noqa: BLE001 - admin command should report structured errors.
+                return {"status": "error", "reason": str(error)[:180]}
+        return {"status": "unsupported-uri", "reason": "Unsupported Neo4j URI."}
+
+    def clear_inferencebox(self) -> Dict[str, object]:
+        if self.uri.startswith("http://") or self.uri.startswith("https://"):
+            endpoint, headers = self.http_endpoint_and_headers()
+            try:
+                payload = self.post_http_statements(endpoint, headers, clear_inferencebox_statements())
+            except Exception as error:  # noqa: BLE001 - admin command should report structured errors.
+                return {"status": "error", "reason": str(error)[:180]}
+            errors = payload.get("errors") or []
+            if errors:
+                return {"status": "neo4j-error", "reason": json.dumps(errors[:2], ensure_ascii=False)[:300]}
+            return {"status": "ok"}
+        if self.uri.startswith("bolt://") or self.uri.startswith("neo4j://"):
+            try:
+                from neo4j import GraphDatabase
+                driver = GraphDatabase.driver(self.uri, auth=(self.user, self.password) if self.user or self.password else None)
+                with driver.session(database=self.database) as session:
+                    for statement in clear_inferencebox_statements():
+                        session.run(statement["statement"], **statement["parameters"])
+                driver.close()
+                return {"status": "ok"}
+            except Exception as error:  # noqa: BLE001 - admin command should report structured errors.
+                return {"status": "error", "reason": str(error)[:180]}
+        return {"status": "unsupported-uri", "reason": "Unsupported Neo4j URI."}
+
     def save_graph_via_driver(self, graph: PortfolioOntology) -> Dict[str, object]:
         try:
             from neo4j import GraphDatabase
@@ -399,7 +584,7 @@ class Neo4jOntologyGraphRepository:
             if item.kind == "relation-template"
         ))
         relation_types = [item for item in relation_types if item]
-        return [native_reasoning_statement_for_relation_type(relation_type) for relation_type in relation_types]
+        return native_reasoning_statements_for_relation_types(relation_types)
 
     def run_native_reasoning_via_http(self, endpoint: str, headers: Dict[str, str], graph: PortfolioOntology) -> Dict[str, object]:
         statements = self.native_reasoning_statements(graph)
@@ -431,6 +616,352 @@ class Neo4jOntologyGraphRepository:
         if failures:
             return {"status": "error", "statementCount": len(statements), "reason": "; ".join(failures[:2])}
         return {"status": "ok", "statementCount": len(statements)}
+
+    def run_native_rulebox_reasoning_via_http(self, endpoint: str, headers: Dict[str, str]) -> Dict[str, object]:
+        relation_types = self.rulebox_relation_types_via_http(endpoint, headers)
+        statements = native_reasoning_statements_for_relation_types(relation_types)
+        if not statements:
+            return {"status": "skipped", "statementCount": 0, "reason": "no RuleBox relation templates"}
+        try:
+            payload = self.post_http_statements(endpoint, headers, statements)
+        except Exception as error:  # noqa: BLE001 - admin command should report structured errors.
+            return {"status": "error", "statementCount": len(statements), "reason": str(error)[:180]}
+        errors = payload.get("errors") or []
+        if errors:
+            return {
+                "status": "neo4j-error",
+                "statementCount": len(statements),
+                "reason": json.dumps(errors[:2], ensure_ascii=False)[:300],
+            }
+        return {"status": "ok", "statementCount": len(statements), "relationTypes": relation_types}
+
+    def rulebox_relation_types_via_http(self, endpoint: str, headers: Dict[str, str]) -> List[str]:
+        payload = self.post_http_statements(endpoint, headers, [rulebox_relation_types_statement()])
+        errors = payload.get("errors") or []
+        if errors:
+            return []
+        rowsets = http_result_rowsets(payload, ["relationTypes"])
+        return sorted(set(safe_relation_type(row.get("relationType") or "") for row in rowsets.get("relationTypes", []) if row.get("relationType")))
+
+    def run_native_rulebox_reasoning_via_driver(self) -> Dict[str, object]:
+        try:
+            from neo4j import GraphDatabase
+        except Exception as error:  # noqa: BLE001 - optional dependency.
+            return {"status": "driver-missing", "reason": "neo4j Python driver is not installed: " + str(error)[:120]}
+        try:
+            driver = GraphDatabase.driver(self.uri, auth=(self.user, self.password) if self.user or self.password else None)
+            failures: List[str] = []
+            with driver.session(database=self.database) as session:
+                relation_types = sorted(set(
+                    safe_relation_type(record.get("relationType") or "")
+                    for record in session.run(rulebox_relation_types_statement()["statement"], **rulebox_relation_types_statement()["parameters"])
+                    if record.get("relationType")
+                ))
+                statements = native_reasoning_statements_for_relation_types(relation_types)
+                for statement in statements:
+                    try:
+                        session.run(statement["statement"], **statement["parameters"])
+                    except Exception as error:  # noqa: BLE001 - keep running other relation types.
+                        failures.append(str(error)[:180])
+            driver.close()
+        except Exception as error:  # noqa: BLE001 - admin command should report structured errors.
+            return {"status": "error", "reason": str(error)[:180]}
+        if not relation_types:
+            return {"status": "skipped", "statementCount": 0, "reason": "no RuleBox relation templates"}
+        if failures:
+            return {"status": "error", "statementCount": len(statements), "reason": "; ".join(failures[:2]), "relationTypes": relation_types}
+        return {"status": "ok", "statementCount": len(statements), "relationTypes": relation_types}
+
+
+def rulebox_rules_to_payload(rules: Iterable[GraphInferenceRule]) -> List[Dict[str, object]]:
+    return [rule.to_dict() for rule in rules]
+
+
+def rulebox_rules_from_payload(payload: Dict[str, object]) -> List[GraphInferenceRule]:
+    payload = payload or {}
+    raw_rules = payload.get("rules")
+    if payload.get("rulesJson"):
+        raw_rules = json.loads(str(payload.get("rulesJson") or "[]"))
+    if raw_rules is None:
+        raw_rules = rulebox_rules_to_payload(default_graph_inference_rules())
+    if not isinstance(raw_rules, list):
+        raise ValueError("RuleBox rules must be a list.")
+    rules = [GraphInferenceRule.from_dict(item) for item in raw_rules if isinstance(item, dict)]
+    if not rules:
+        raise ValueError("RuleBox rules are empty.")
+    return rules
+
+
+def rulebox_graph_from_rules(rules: Iterable[GraphInferenceRule]) -> PortfolioOntology:
+    graph = PortfolioOntology("neo4j-rulebox-admin")
+    graph.entities.extend(tbox_entities())
+    graph.relations.extend(tbox_relations())
+    add_rulebox_concepts(graph, rules)
+    graph.worldview = {
+        "model": "neo4j-rulebox-source-of-truth",
+        "engineVersion": GRAPH_REASONER_VERSION,
+        "adminEditable": True,
+    }
+    return graph
+
+
+def rulebox_default_snapshot(status: str = "defaults", reason: str = "", configured: bool = False) -> Dict[str, object]:
+    rules = rulebox_rules_to_payload(default_graph_inference_rules())
+    return {
+        "configured": configured,
+        "saved": False,
+        "status": status,
+        "source": "defaults",
+        "reason": reason,
+        "engineVersion": GRAPH_REASONER_VERSION,
+        "rules": rules,
+        "ruleCount": len(rules),
+        "conditionCount": sum(len(item.get("conditions") or []) for item in rules),
+        "derivationCount": sum(len(item.get("derivations") or []) for item in rules),
+        "relationTypes": sorted(set(
+            safe_relation_type(derivation.get("relation_type") or "")
+            for rule in rules
+            for derivation in (rule.get("derivations") or [])
+            if derivation.get("relation_type")
+        )),
+    }
+
+
+def rulebox_snapshot_statements() -> List[Dict[str, object]]:
+    return [
+        {
+            "statement": (
+                "MATCH (rule:OntologyEntity {kind: 'rule', ontologyBox: 'RuleBox'}) "
+                "RETURN rule.id AS id, rule.ruleId AS ruleId, rule.label AS label, rule.version AS version, "
+                "rule.sourceKind AS sourceKind, rule.enabled AS enabled, rule.actionGroup AS actionGroup, "
+                "rule.actionLevel AS actionLevel, rule.promptHint AS promptHint, rule.propertiesJson AS propertiesJson, "
+                "rule.updatedAt AS updatedAt ORDER BY rule.ruleId"
+            ),
+            "parameters": {},
+        },
+        {
+            "statement": (
+                "MATCH (rule:OntologyEntity {kind: 'rule', ontologyBox: 'RuleBox'})-[:HAS_CONDITION]->"
+                "(condition:OntologyEntity {kind: 'rule-condition', ontologyBox: 'RuleBox'}) "
+                "RETURN rule.ruleId AS ruleId, condition.id AS id, condition.conditionId AS conditionId, "
+                "condition.label AS description, condition.conditionKind AS kind, condition.conditionField AS field, "
+                "condition.conditionOperator AS operator, condition.conditionValueString AS valueString, "
+                "condition.conditionValueNumber AS valueNumber, condition.conditionRelationType AS relationType, "
+                "condition.conditionDirection AS direction, condition.conditionTargetKind AS targetKind, "
+                "condition.conditionTargetLevelTypes AS targetLevelTypes, condition.conditionMinWeight AS minWeight, "
+                "condition.propertiesJson AS propertiesJson ORDER BY rule.ruleId, condition.conditionId"
+            ),
+            "parameters": {},
+        },
+        {
+            "statement": (
+                "MATCH (rule:OntologyEntity {kind: 'rule', ontologyBox: 'RuleBox'})-[:DERIVES_RELATION]->"
+                "(template:OntologyEntity {kind: 'relation-template', ontologyBox: 'RuleBox'}) "
+                "RETURN rule.ruleId AS ruleId, template.id AS id, template.label AS label, "
+                "template.derivationIndex AS derivationIndex, template.derivationRelationType AS relationType, "
+                "template.derivationTargetKind AS targetKind, template.derivationTargetKey AS targetKey, "
+                "template.derivationTargetLabel AS targetLabel, template.derivationTboxClass AS tboxClass, "
+                "template.derivationTboxClasses AS tboxClasses, template.derivationPolarity AS polarity, "
+                "template.derivationRiskImpact AS riskImpact, template.derivationSupportImpact AS supportImpact, "
+                "template.derivationWeight AS weight, template.derivationBeliefLabel AS beliefLabel, "
+                "template.derivationAiInfluenceLabel AS aiInfluenceLabel, template.derivationActionGroup AS actionGroup, "
+                "template.derivationActionLevel AS actionLevel, template.propertiesJson AS propertiesJson "
+                "ORDER BY rule.ruleId, template.derivationIndex"
+            ),
+            "parameters": {},
+        },
+        rulebox_relation_types_statement(),
+    ]
+
+
+def rulebox_relation_types_statement() -> Dict[str, object]:
+    return {
+        "statement": (
+            "MATCH (template:OntologyEntity {kind: 'relation-template', ontologyBox: 'RuleBox'}) "
+            "RETURN DISTINCT template.derivationRelationType AS relationType ORDER BY relationType"
+        ),
+        "parameters": {},
+    }
+
+
+def clear_rulebox_statements(clear_inference: bool = True) -> List[Dict[str, object]]:
+    statements = []
+    if clear_inference:
+        statements.extend(clear_inferencebox_statements())
+    statements.append({
+        "statement": "MATCH (n:OntologyEntity) WHERE n.ontologyBox = 'RuleBox' DETACH DELETE n",
+        "parameters": {},
+    })
+    return statements
+
+
+def clear_inferencebox_statements() -> List[Dict[str, object]]:
+    return [
+        {
+            "statement": "MATCH (n:OntologyEntity) WHERE n.ontologyBox = 'InferenceBox' DETACH DELETE n",
+            "parameters": {},
+        },
+        {
+            "statement": "MATCH (n:OntologyEvidence) WHERE n.ontologyBox = 'InferenceBox' DETACH DELETE n",
+            "parameters": {},
+        },
+        {
+            "statement": "MATCH (n:OntologyBelief) WHERE n.ontologyBox = 'InferenceBox' DETACH DELETE n",
+            "parameters": {},
+        },
+    ]
+
+
+def http_result_rowsets(payload: Dict[str, object], keys: List[str]) -> Dict[str, List[Dict[str, object]]]:
+    rowsets: Dict[str, List[Dict[str, object]]] = {}
+    for key, result in zip(keys, payload.get("results") or []):
+        columns = result.get("columns") or []
+        rows = []
+        for item in result.get("data") or []:
+            values = item.get("row") if isinstance(item, dict) else []
+            rows.append(dict(zip(columns, values or [])))
+        rowsets[key] = rows
+    for key in keys:
+        rowsets.setdefault(key, [])
+    return rowsets
+
+
+def neo4j_record_to_dict(record) -> Dict[str, object]:
+    if hasattr(record, "data"):
+        return record.data()
+    return dict(record)
+
+
+def rulebox_snapshot_from_rows(rowsets: Dict[str, List[Dict[str, object]]], source: str) -> Dict[str, object]:
+    rules = build_rulebox_rules_from_rows(
+        rowsets.get("rules") or [],
+        rowsets.get("conditions") or [],
+        rowsets.get("derivations") or [],
+    )
+    if not rules:
+        fallback = rulebox_default_snapshot("empty", "Neo4j RuleBox nodes are empty. 기본 규칙을 표시합니다.", configured=True)
+        fallback["source"] = source + "+defaults"
+        return fallback
+    relation_types = sorted(set(
+        safe_relation_type(row.get("relationType") or "")
+        for row in (rowsets.get("relationTypes") or [])
+        if row.get("relationType")
+    ))
+    payload = rulebox_rules_to_payload(rules)
+    return {
+        "configured": True,
+        "saved": True,
+        "status": "ok",
+        "source": source,
+        "engineVersion": GRAPH_REASONER_VERSION,
+        "rules": payload,
+        "ruleCount": len(payload),
+        "conditionCount": sum(len(item.get("conditions") or []) for item in payload),
+        "derivationCount": sum(len(item.get("derivations") or []) for item in payload),
+        "relationTypes": relation_types,
+    }
+
+
+def build_rulebox_rules_from_rows(
+    rule_rows: List[Dict[str, object]],
+    condition_rows: List[Dict[str, object]],
+    derivation_rows: List[Dict[str, object]],
+) -> List[GraphInferenceRule]:
+    conditions_by_rule: Dict[str, List[Dict[str, object]]] = {}
+    derivations_by_rule: Dict[str, List[Dict[str, object]]] = {}
+    for row in condition_rows:
+        rule_id = str(row.get("ruleId") or "")
+        if rule_id:
+            conditions_by_rule.setdefault(rule_id, []).append(condition_payload_from_row(row))
+    for row in derivation_rows:
+        rule_id = str(row.get("ruleId") or "")
+        if rule_id:
+            derivations_by_rule.setdefault(rule_id, []).append(derivation_payload_from_row(row))
+    rules = []
+    for row in rule_rows:
+        props = json_object(row.get("propertiesJson"))
+        rule_id = str(row.get("ruleId") or props.get("ruleId") or "")
+        if not rule_id:
+            continue
+        payload = {
+            "rule_id": rule_id,
+            "label": str(row.get("label") or props.get("label") or rule_id),
+            "version": str(row.get("version") or props.get("version") or GRAPH_REASONER_VERSION),
+            "source_kind": str(row.get("sourceKind") or props.get("sourceKind") or "neo4j"),
+            "conditions": conditions_by_rule.get(rule_id) or [],
+            "derivations": derivations_by_rule.get(rule_id) or [],
+            "action_group": str(row.get("actionGroup") or props.get("actionGroup") or ""),
+            "action_level": str(row.get("actionLevel") or props.get("actionLevel") or ""),
+            "prompt_hint": str(row.get("promptHint") or props.get("promptHint") or ""),
+            "enabled": bool(row.get("enabled")) if row.get("enabled") is not None else bool(props.get("enabled", True)),
+        }
+        try:
+            rules.append(GraphInferenceRule.from_dict(payload))
+        except ValueError:
+            continue
+    return rules
+
+
+def condition_payload_from_row(row: Dict[str, object]) -> Dict[str, object]:
+    props = json_object(row.get("propertiesJson"))
+    condition = props.get("condition") if isinstance(props.get("condition"), dict) else {}
+    target_level_types = row.get("targetLevelTypes")
+    if not isinstance(target_level_types, list):
+        target_level_types = []
+    return {
+        "condition_id": str(row.get("conditionId") or condition.get("condition_id") or ""),
+        "kind": str(row.get("kind") or condition.get("kind") or ""),
+        "description": str(row.get("description") or condition.get("description") or ""),
+        "field": str(row.get("field") or condition.get("field") or ""),
+        "operator": str(row.get("operator") or condition.get("operator") or "=="),
+        "value": condition.get("value") if "value" in condition else (row.get("valueNumber") if row.get("valueNumber") is not None else row.get("valueString")),
+        "relation_type": str(row.get("relationType") or condition.get("relation_type") or ""),
+        "direction": str(row.get("direction") or condition.get("direction") or "out"),
+        "target_kind": str(row.get("targetKind") or condition.get("target_kind") or ""),
+        "target_property_filters": condition.get("target_property_filters") if isinstance(condition.get("target_property_filters"), dict) else (
+            {"levelType": target_level_types} if target_level_types else {}
+        ),
+        "relation_property_filters": condition.get("relation_property_filters") if isinstance(condition.get("relation_property_filters"), dict) else {},
+        "min_weight": float(row.get("minWeight") or condition.get("min_weight") or 0),
+    }
+
+
+def derivation_payload_from_row(row: Dict[str, object]) -> Dict[str, object]:
+    props = json_object(row.get("propertiesJson"))
+    derivation = props.get("derivation") if isinstance(props.get("derivation"), dict) else {}
+    return {
+        "relation_type": str(row.get("relationType") or derivation.get("relation_type") or ""),
+        "target_kind": str(row.get("targetKind") or derivation.get("target_kind") or ""),
+        "target_key": str(row.get("targetKey") or derivation.get("target_key") or ""),
+        "target_label": str(row.get("targetLabel") or derivation.get("target_label") or row.get("label") or ""),
+        "tbox_class": str(row.get("tboxClass") or derivation.get("tbox_class") or ""),
+        "tbox_classes": list_of_strings(row.get("tboxClasses") or derivation.get("tbox_classes") or []),
+        "polarity": str(row.get("polarity") or derivation.get("polarity") or "context"),
+        "risk_impact": float(row.get("riskImpact") or derivation.get("risk_impact") or 0),
+        "support_impact": float(row.get("supportImpact") or derivation.get("support_impact") or 0),
+        "weight": float(row.get("weight") or derivation.get("weight") or 0.72),
+        "belief_label": str(row.get("beliefLabel") or derivation.get("belief_label") or ""),
+        "ai_influence_label": str(row.get("aiInfluenceLabel") or derivation.get("ai_influence_label") or ""),
+        "action_group": str(row.get("actionGroup") or derivation.get("action_group") or ""),
+        "action_level": str(row.get("actionLevel") or derivation.get("action_level") or ""),
+    }
+
+
+def json_object(value: object) -> Dict[str, object]:
+    if isinstance(value, dict):
+        return value
+    if not value:
+        return {}
+    try:
+        decoded = json.loads(str(value))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    return decoded if isinstance(decoded, dict) else {}
+
+
+def native_reasoning_statements_for_relation_types(relation_types: Iterable[str]) -> List[Dict[str, object]]:
+    cleaned = sorted(set(safe_relation_type(relation_type) for relation_type in relation_types if safe_relation_type(relation_type)))
+    return [native_reasoning_statement_for_relation_type(relation_type) for relation_type in cleaned]
 
 
 def safe_relation_type(value: str) -> str:

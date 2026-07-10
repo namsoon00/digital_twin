@@ -6,9 +6,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.domain.ontology import build_portfolio_ontology
 from digital_twin.domain.ontology_prompting import prompt_payload
+from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
 from digital_twin.domain.portfolio import Position
 from digital_twin.domain.portfolio_calculations import portfolio_summary
-from digital_twin.infrastructure.neo4j_ontology import Neo4jOntologyGraphRepository
+from digital_twin.infrastructure.neo4j_ontology import (
+    Neo4jOntologyGraphRepository,
+    clear_rulebox_statements,
+    native_reasoning_statements_for_relation_types,
+    rulebox_graph_from_rules,
+    rulebox_rules_from_payload,
+    rulebox_rules_to_payload,
+    rulebox_snapshot_from_rows,
+)
 
 
 class OntologyRuleBoxTests(unittest.TestCase):
@@ -113,6 +122,47 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertIn("MATCH (rule)-[:DERIVES_RELATION]->(template:OntologyEntity", cypher)
         self.assertIn("MERGE (stock)-[inferred:HAS_INFERRED_RISK]->(target)", cypher)
         self.assertIn("nativeNeo4jReasoned = true", cypher)
+
+    def test_rulebox_admin_payload_roundtrips_to_graph(self):
+        rules = default_graph_inference_rules()
+        payload = {"rules": rulebox_rules_to_payload(rules)}
+        parsed = rulebox_rules_from_payload(payload)
+        graph = rulebox_graph_from_rules(parsed)
+
+        self.assertEqual([rule.rule_id for rule in rules], [rule.rule_id for rule in parsed])
+        self.assertTrue(any(item.entity_id == "ontology-box:RuleBox" for item in graph.entities))
+        self.assertTrue(any(item.kind == "rule" and (item.properties or {}).get("ontologyBox") == "RuleBox" for item in graph.entities))
+        self.assertTrue(any(item.relation_type == "DERIVES_RELATION" for item in graph.relations))
+
+    def test_rulebox_snapshot_reconstructs_rules_from_neo4j_rows(self):
+        graph = self.loss_guard_graph()
+        repository = Neo4jOntologyGraphRepository("http://neo4j.example.test")
+        entity_rows = repository.rows_for_entities(graph)
+        rowsets = {
+            "rules": [item for item in entity_rows if item["kind"] == "rule" and item["ontologyBox"] == "RuleBox"],
+            "conditions": [item for item in entity_rows if item["kind"] == "rule-condition" and item["ontologyBox"] == "RuleBox"],
+            "derivations": [item for item in entity_rows if item["kind"] == "relation-template" and item["ontologyBox"] == "RuleBox"],
+            "relationTypes": [{"relationType": "HAS_INFERRED_RISK"}],
+        }
+
+        snapshot = rulebox_snapshot_from_rows(rowsets, source="test")
+        loss_guard = next(item for item in snapshot["rules"] if item["rule_id"] == "graph.loss_guard.breakdown.v1")
+
+        self.assertEqual("ok", snapshot["status"])
+        self.assertEqual("test", snapshot["source"])
+        self.assertTrue(loss_guard["conditions"])
+        self.assertTrue(loss_guard["derivations"])
+        self.assertIn("HAS_INFERRED_RISK", snapshot["relationTypes"])
+
+    def test_rulebox_admin_clear_and_native_execution_statements_are_graph_native(self):
+        clear_text = "\n".join(item["statement"] for item in clear_rulebox_statements(clear_inference=True))
+        statements = native_reasoning_statements_for_relation_types(["HAS_INFERRED_RISK", "HAS_INFERRED_SUPPORT"])
+        cypher = "\n".join(item["statement"] for item in statements)
+
+        self.assertIn("n.ontologyBox = 'RuleBox' DETACH DELETE n", clear_text)
+        self.assertIn("n.ontologyBox = 'InferenceBox' DETACH DELETE n", clear_text)
+        self.assertEqual(["HAS_INFERRED_RISK", "HAS_INFERRED_SUPPORT"], [item["parameters"]["relationType"] for item in statements])
+        self.assertIn("MATCH (rule:OntologyEntity {kind: 'rule', ontologyBox: 'RuleBox'})", cypher)
 
 
 if __name__ == "__main__":

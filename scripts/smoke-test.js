@@ -295,6 +295,35 @@ function checkFrontendAdminRender() {
       },
       locked: false
     },
+    "/api/ontology/rulebox": {
+      configured: false,
+      saved: false,
+      status: "disabled",
+      source: "defaults",
+      engineVersion: "neo4j-rulebox-graph-reasoner-v1",
+      ruleCount: 1,
+      conditionCount: 1,
+      derivationCount: 1,
+      relationTypes: ["HAS_INFERRED_RISK"],
+      rules: [
+        {
+          rule_id: "graph.loss_guard.breakdown.v1",
+          label: "손실 방어 추론",
+          version: "neo4j-rulebox-graph-reasoner-v1",
+          source_kind: "smoke",
+          enabled: true,
+          action_group: "riskControl",
+          action_level: "lossGuard",
+          prompt_hint: "손실 확대 요인과 회복 조건을 분리",
+          conditions: [
+            { condition_id: "ma-break", kind: "relation", description: "기준선 이탈", relation_type: "BREAKS_LEVEL", target_kind: "price-level", min_weight: 0.4 }
+          ],
+          derivations: [
+            { relation_type: "HAS_INFERRED_RISK", target_kind: "risk", target_key: "loss-guard:{symbol}", target_label: "{displayName} 손실 방어", tbox_class: "RiskInsight", polarity: "risk", weight: 0.82 }
+          ]
+        }
+      ]
+    },
     "/api/research-evidence": {
       items: [
         {
@@ -1215,6 +1244,8 @@ function checkFrontendAdminRender() {
     assertOk(modelingRegistryHtml.indexOf("investment-ai-packet-panel") >= 0 && modelingRegistryHtml.indexOf("AI 추론 입력 계약") >= 0, "규칙·프롬프트 섹션에 AI 추론 입력 계약이 없습니다.");
     assertOk(modelingRegistryHtml.indexOf("ontology-rule-panel") >= 0 && modelingRegistryHtml.indexOf("Relation Rule Registry") >= 0, "규칙·프롬프트 섹션에 관계 규칙 레지스트리가 없습니다.");
     assertOk(modelingRegistryHtml.indexOf('data-model-setting="ontologyRelationRules"') >= 0, "규칙·프롬프트 섹션에 관계 규칙 편집기가 없습니다.");
+    assertOk(modelingRegistryHtml.indexOf("neo4j-rulebox-panel") >= 0 && modelingRegistryHtml.indexOf("Neo4j RuleBox") >= 0, "규칙·프롬프트 섹션에 Neo4j RuleBox 관리 콘솔이 없습니다.");
+    assertOk(modelingRegistryHtml.indexOf('data-ontology-rulebox-json') >= 0 && modelingRegistryHtml.indexOf('data-action="run-rulebox"') >= 0, "Neo4j RuleBox JSON 편집기나 실행 버튼이 없습니다.");
     assertOk(modelingRegistryHtml.indexOf("prompt-registry-panel") >= 0 && modelingRegistryHtml.indexOf("Prompt Registry") >= 0, "규칙·프롬프트 섹션에 프롬프트 레지스트리가 없습니다.");
     assertOk(modelingRegistryHtml.indexOf("admin-modeling-panel") >= 0 && modelingRegistryHtml.indexOf("model-version-panel") >= 0, "규칙·프롬프트 섹션에 보조 모델 정책과 버전 관리가 유지되지 않았습니다.");
     assertOk(modelingRegistryHtml.indexOf('data-model-setting="notificationScoreFormula"') >= 0, "규칙·프롬프트 섹션에 알림 발송 공식 편집기가 없습니다.");

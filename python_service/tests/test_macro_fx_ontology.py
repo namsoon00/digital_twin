@@ -4,12 +4,54 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from digital_twin.domain.fx import fx_exposure_facts
+from digital_twin.domain.macro_context import macro_context_facts
 from digital_twin.domain.ontology_rules import evaluate_position_relation_rules, relation_rule_context_summary_lines
 from digital_twin.domain.portfolio import Position
 from digital_twin.domain.portfolio_calculations import portfolio_summary
+from digital_twin.domain.rates import interest_rate_facts
 
 
 class MacroFxOntologyTests(unittest.TestCase):
+    def test_macro_context_combines_rate_and_fx_domain_facts_without_deciding(self):
+        position = Position(
+            symbol="NVDA",
+            name="NVIDIA",
+            market="US",
+            currency="USD",
+            market_value=1000,
+            sector="반도체",
+        )
+        portfolio = portfolio_summary([position], fx_rates={"USD": 1502, "KRW": 1})
+        external_signals = {
+            "macro": {
+                "series": {
+                    "DGS10": {"provider": "FRED", "value": 4.56},
+                    "DGS2": {"provider": "FRED", "value": 4.21},
+                },
+                "yieldSpread10y2y": 0.35,
+            },
+            "fxRates": {
+                "USDKRW": {
+                    "provider": "RuntimeSettings",
+                    "base": "USD",
+                    "quote": "KRW",
+                    "rate": 1502,
+                }
+            },
+        }
+
+        rate_facts = interest_rate_facts(external_signals)
+        fx_facts = fx_exposure_facts(position, portfolio, external_signals)
+        macro_facts = macro_context_facts(position, portfolio, external_signals)
+
+        self.assertEqual("high_rate", rate_facts["rateRegime"])
+        self.assertEqual("krw_weakening", fx_facts["fxRegime"])
+        self.assertEqual(rate_facts["macroDgs10"], macro_facts["macroDgs10"])
+        self.assertEqual(fx_facts["usdKrwRate"], macro_facts["usdKrwRate"])
+        self.assertNotIn("decision", macro_facts)
+        self.assertNotIn("score", macro_facts)
+
     def test_rate_and_fx_relation_rules_are_scored_from_ontology_context(self):
         position = Position(
             symbol="NVDA",

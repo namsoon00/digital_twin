@@ -4,6 +4,7 @@ from typing import Dict, Iterable, List, Optional
 
 from .market_data import clamp, number
 from .investment_research import research_evidence_from_external_signals, research_evidence_from_facts
+from .macro_context import macro_context_facts
 from .message_types import DEFAULT_RELATION_RULE_THRESHOLDS
 from .parsing import parse_assignments
 from .portfolio import PortfolioSummary, Position, expects_kr_microstructure_signals
@@ -1180,80 +1181,6 @@ def _external_quality_facts(external_signals: Dict[str, object]) -> Dict[str, ob
     }
 
 
-def _macro_regime_facts(external_signals: Dict[str, object]) -> Dict[str, object]:
-    macro = external_signals.get("macro") if isinstance(external_signals, dict) and isinstance(external_signals.get("macro"), dict) else {}
-    series = macro.get("series") if isinstance(macro.get("series"), dict) else {}
-    dgs10 = number((series.get("DGS10") or {}).get("value")) if isinstance(series.get("DGS10"), dict) else 0.0
-    dgs2 = number((series.get("DGS2") or {}).get("value")) if isinstance(series.get("DGS2"), dict) else 0.0
-    dff = number((series.get("DFF") or {}).get("value")) if isinstance(series.get("DFF"), dict) else 0.0
-    spread = number(macro.get("yieldSpread10y2y"))
-    rate_regime = "high_rate" if dgs10 >= 4.5 else "low_rate" if dgs10 and dgs10 <= 3.0 else "neutral_rate"
-    curve_regime = "inverted_curve" if spread < 0 else "positive_curve" if spread > 0 else "flat_or_unknown_curve"
-    return {
-        "macroYieldSpread10y2y": spread,
-        "macroDgs10": dgs10,
-        "macroDgs2": dgs2,
-        "macroDff": dff,
-        "rateRegime": rate_regime,
-        "yieldCurveRegime": curve_regime,
-        "hasInterestRateSignals": bool(dgs10 or dgs2 or dff or macro.get("yieldSpread10y2y") not in (None, "")),
-        "hasMacroSignals": bool(series or macro.get("yieldSpread10y2y") not in (None, "")),
-    }
-
-
-def _fx_rate_for_currency(external_signals: Dict[str, object], currency: str, quote: str = "KRW") -> Dict[str, object]:
-    rates = external_signals.get("fxRates") if isinstance(external_signals, dict) else {}
-    if not isinstance(rates, dict):
-        return {}
-    base = str(currency or "").upper().strip()
-    quote_currency = str(quote or "KRW").upper().strip()
-    if not base or base == quote_currency:
-        return {}
-    direct_key = base + quote_currency
-    reverse_key = quote_currency + base
-    for key in [direct_key, base, reverse_key]:
-        item = rates.get(key)
-        if isinstance(item, dict):
-            item_base = str(item.get("base") or item.get("baseCurrency") or base).upper().strip()
-            item_quote = str(item.get("quote") or item.get("quoteCurrency") or quote_currency).upper().strip()
-            rate = number(item.get("rate") if item.get("rate") not in (None, "") else item.get("value"))
-            if item_base == base and item_quote == quote_currency and rate:
-                return {**item, "pair": item_base + item_quote, "base": item_base, "quote": item_quote, "rate": rate}
-            if item_base == quote_currency and item_quote == base and rate:
-                return {**item, "pair": base + quote_currency, "base": base, "quote": quote_currency, "rate": 1 / rate if rate else 0.0}
-        elif item not in (None, ""):
-            rate = number(item)
-            if rate:
-                return {"pair": direct_key, "base": base, "quote": quote_currency, "rate": rate, "provider": "externalSignals"}
-    return {}
-
-
-def _fx_regime_facts(position: Position, portfolio: PortfolioSummary, external_signals: Dict[str, object]) -> Dict[str, object]:
-    currency = str(position.currency or "").upper().strip()
-    rate = _fx_rate_for_currency(external_signals, currency)
-    rate_value = number(rate.get("rate")) if rate else 0.0
-    exposure_ratio = _position_weight(position, portfolio) if currency and currency != "KRW" else 0.0
-    if currency == "USD" and rate_value >= 1450:
-        regime = "krw_weakening"
-    elif currency == "USD" and rate_value and rate_value <= 1300:
-        regime = "krw_strengthening"
-    elif currency and currency != "KRW" and rate_value:
-        regime = "fx_observed"
-    else:
-        regime = "base_currency_or_unknown"
-    return {
-        "fxRatePair": str(rate.get("pair") or ""),
-        "fxBaseCurrency": str(rate.get("base") or currency),
-        "fxQuoteCurrency": str(rate.get("quote") or "KRW"),
-        "fxRateToKrw": rate_value,
-        "usdKrwRate": rate_value if currency == "USD" else 0.0,
-        "fxProvider": str(rate.get("provider") or ""),
-        "fxExposureRatio": exposure_ratio,
-        "fxRegime": regime,
-        "hasFxRateSignal": bool(rate_value),
-    }
-
-
 def _has_numeric_fact(value: object) -> bool:
     if value in (None, ""):
         return False
@@ -1586,8 +1513,7 @@ def position_signal_facts(
     facts.update(_temporal_facts(position, previous_state, previous_decision))
     facts.update(_liquidity_facts(position))
     facts.update(_external_quality_facts(external_signals))
-    facts.update(_macro_regime_facts(external_signals))
-    facts.update(_fx_regime_facts(position, portfolio, external_signals))
+    facts.update(macro_context_facts(position, portfolio, external_signals))
     missing: List[Dict[str, str]] = []
     if not facts["currentPrice"]:
         missing.append(_missing("currentPrice", "현재가", "가격·이동평균 관계 판단 신뢰도가 낮아집니다."))

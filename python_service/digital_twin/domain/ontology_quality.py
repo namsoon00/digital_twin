@@ -6,6 +6,7 @@ from typing import Dict, List
 from .market_data import clamp, number
 from .ontology_contracts import PortfolioOntology
 from .ontology_schema import ontology_abox
+from .ontology_validator import validate_ontology
 from .portfolio import utc_now_iso
 
 
@@ -70,7 +71,17 @@ def build_ontology_quality_sample(graph: PortfolioOntology, source: str = "runti
     context_coverage = clamp((len(contexts) / 6) * 100, 0.0, 100.0)
     reasoning_readiness = clamp((ready_cards / max(1, card_count)) * 100, 0.0, 100.0)
     relation_density = clamp((relation_count / max(1, entity_count)) * 55, 0.0, 100.0)
-    overall = clamp(data_coverage * 0.32 + context_coverage * 0.26 + reasoning_readiness * 0.26 + relation_density * 0.16, 0.0, 100.0)
+    validation = validate_ontology(graph)
+    validation_penalty = min(35.0, validation.error_count * 6.0 + validation.warning_count * 1.5)
+    overall = clamp(
+        data_coverage * 0.32
+        + context_coverage * 0.26
+        + reasoning_readiness * 0.26
+        + relation_density * 0.16
+        - validation_penalty,
+        0.0,
+        100.0,
+    )
     high_pressure = len([opinion for opinion in graph.opinions or [] if number(opinion.ontology_pressure) >= 55])
     payload = {
         "source": source,
@@ -81,6 +92,7 @@ def build_ontology_quality_sample(graph: PortfolioOntology, source: str = "runti
             "contextCoverage": round(context_coverage, 2),
             "reasoningReadiness": round(reasoning_readiness, 2),
             "relationDensity": round(relation_density, 2),
+            "validationPenalty": round(validation_penalty, 2),
         },
         "counts": {
             "entity": entity_count,
@@ -93,6 +105,7 @@ def build_ontology_quality_sample(graph: PortfolioOntology, source: str = "runti
         },
         "boundedContexts": sorted(contexts),
         "dataGaps": gaps,
+        "validation": validation.to_dict(),
         "highPressureSymbols": [opinion.symbol for opinion in graph.opinions or [] if number(opinion.ontology_pressure) >= 55],
         "promptVersion": graph.to_dict().get("promptVersion"),
     }

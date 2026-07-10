@@ -2005,7 +2005,7 @@ def build_portfolio_ontology(
     })))
     add_relation(graph, account_id_value, portfolio_node_id, "MANAGES_PORTFOLIO", weight=1.0, properties={"source": "account-context"})
     add_account_delivery_profile_concepts(graph, account_id_value, portfolio_node_id, account_context)
-    graph.entities.append(OntologyEntity(entity_id("concept", "relation-rule-score-model"), "관계 규칙 점수 모델", "model", abox_properties({
+    graph.entities.append(OntologyEntity(entity_id("concept", "legacy-score-model"), "관계 규칙 점수 모델", "model", abox_properties({
         "role": "final-scoring",
         "tboxClass": "LegacyScoreModel",
     })))

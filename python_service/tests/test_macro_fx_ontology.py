@@ -52,6 +52,42 @@ class MacroFxOntologyTests(unittest.TestCase):
         self.assertNotIn("decision", macro_facts)
         self.assertNotIn("score", macro_facts)
 
+    def test_fx_exposure_ratio_uses_base_currency_value_for_usd_holding(self):
+        usd_position = Position(
+            symbol="MSTR",
+            name="Strategy",
+            market="US",
+            currency="USD",
+            market_value=22540,
+            sector="디지털자산",
+        )
+        kr_position = Position(
+            symbol="000660",
+            name="SK하이닉스",
+            market="KR",
+            currency="KRW",
+            market_value=15761000,
+            sector="반도체",
+        )
+        portfolio = portfolio_summary([usd_position, kr_position], account_cash=72140, fx_rates={"USD": 1400, "KRW": 1})
+        facts = fx_exposure_facts(
+            usd_position,
+            portfolio,
+            {
+                "fxRates": {
+                    "USDKRW": {
+                        "provider": "RuntimeSettings",
+                        "base": "USD",
+                        "quote": "KRW",
+                        "rate": 1400,
+                    }
+                }
+            },
+        )
+
+        self.assertAlmostEqual(22540 * 1400 / portfolio.invested * 100, facts["fxExposureRatio"])
+        self.assertGreater(facts["fxExposureRatio"], 60)
+
     def test_rate_and_fx_relation_rules_are_scored_from_ontology_context(self):
         position = Position(
             symbol="NVDA",

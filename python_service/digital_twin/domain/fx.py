@@ -46,11 +46,16 @@ class FxExposureContext:
         return asdict(self)
 
 
-def position_weight_pct(position: Position, portfolio: PortfolioSummary) -> float:
+def position_weight_pct(position: Position, portfolio: PortfolioSummary, rate_to_krw: float = 0.0) -> float:
     invested = number(portfolio.invested)
     if invested <= 0:
         return 0.0
-    return (number(position.market_value) / invested) * 100.0
+    currency = str(position.currency or "").upper().strip()
+    rate = number(rate_to_krw)
+    value = number(position.market_value)
+    if currency and currency != "KRW" and rate > 0:
+        value *= rate
+    return (value / invested) * 100.0
 
 
 def fx_rate_for_currency(external_signals: Dict[str, object], currency: str, quote: str = "KRW") -> FxRateSignal:
@@ -97,7 +102,7 @@ def fx_exposure_context(position: Position, portfolio: PortfolioSummary, externa
     currency = str(position.currency or "").upper().strip()
     signal = fx_rate_for_currency(external_signals, currency)
     rate_value = number(signal.rate)
-    exposure_ratio = position_weight_pct(position, portfolio) if currency and currency != "KRW" else 0.0
+    exposure_ratio = position_weight_pct(position, portfolio, rate_value) if currency and currency != "KRW" else 0.0
     return FxExposureContext(
         pair=str(signal.pair or ""),
         base_currency=str(signal.base or currency),

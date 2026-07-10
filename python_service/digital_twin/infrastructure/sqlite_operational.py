@@ -1,5 +1,6 @@
 import json
 import sqlite3
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
@@ -23,7 +24,7 @@ from ..domain.repositories import MonitoringCycleRecordResult
 from ..domain.symbol_universe import ListedSymbol, normalize_market, normalize_symbol, utc_now_iso as symbol_utc_now_iso
 from .model_review_queue import model_review_payloads_from_event
 from .settings import data_dir, read_json, runtime_settings, service_db_path, settings_path, utc_now
-from .sqlite_support import connect_sqlite
+from .sqlite_support import connect_sqlite, sqlite_transaction
 
 
 IN_FLIGHT_NOTIFICATION_HISTORY_MINUTES = 30
@@ -187,6 +188,10 @@ def research_evidence_change_payload(
 
 
 class OperationalConnection:
+    SCHEMA_VERSION = "sqlite_operational_schema_20260710"
+    _schema_ready_paths = set()
+    _schema_lock = threading.Lock()
+
     def __init__(self, path: Optional[Path] = None):
         self.path = Path(path or service_db_path()).resolve()
         self.ensure_schema()
@@ -194,8 +199,27 @@ class OperationalConnection:
     def connect(self):
         return connect_sqlite(self.path)
 
+    def transaction(self, mode: str = "IMMEDIATE"):
+        return sqlite_transaction(self.path, mode)
+
     def ensure_schema(self) -> None:
-        with self.connect() as connection:
+        key = str(self.path)
+        if key in self._schema_ready_paths:
+            return
+        with self._schema_lock:
+            if key in self._schema_ready_paths:
+                return
+            self._ensure_schema_locked()
+            self._schema_ready_paths.add(key)
+
+    def _ensure_schema_locked(self) -> None:
+        with self.transaction() as connection:
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS schema_migrations (
+                    version TEXT PRIMARY KEY,
+                    applied_at TEXT NOT NULL
+                )
+            """)
             connection.execute("""
                 CREATE TABLE IF NOT EXISTS monitor_snapshots (
                     account_id TEXT PRIMARY KEY,
@@ -244,6 +268,14 @@ class OperationalConnection:
                     payload_json TEXT NOT NULL
                 )
             """)
+            self.ensure_columns(
+                connection,
+                "model_review_jobs",
+                {
+                    "processing_started_at": "TEXT NOT NULL DEFAULT ''",
+                    "retry_at": "TEXT NOT NULL DEFAULT ''",
+                },
+            )
             connection.execute("CREATE INDEX IF NOT EXISTS idx_model_review_jobs_status ON model_review_jobs(status, created_at)")
             connection.execute("""
                 CREATE TABLE IF NOT EXISTS ontology_ai_opinion_samples (
@@ -294,6 +326,8 @@ class OperationalConnection:
                     "source_event_id": "TEXT NOT NULL DEFAULT ''",
                     "source_event_name": "TEXT NOT NULL DEFAULT ''",
                     "dedupe_key": "TEXT NOT NULL DEFAULT ''",
+                    "processing_started_at": "TEXT NOT NULL DEFAULT ''",
+                    "retry_at": "TEXT NOT NULL DEFAULT ''",
                 },
             )
             connection.execute("CREATE INDEX IF NOT EXISTS idx_notification_jobs_status ON notification_jobs(status, created_at)")
@@ -475,6 +509,13 @@ class OperationalConnection:
                     updated_at TEXT NOT NULL
                 )
             """)
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO schema_migrations (version, applied_at)
+                VALUES (?, ?)
+                """,
+                (self.SCHEMA_VERSION, utc_now()),
+            )
 
     def ensure_columns(self, connection, table: str, columns: Dict[str, str]) -> List[str]:
         existing = {
@@ -500,7 +541,7 @@ class SQLiteNotificationTemplateStore(OperationalConnection):
 
     def seed_defaults(self) -> None:
         stamp = utc_now()
-        with self.connect() as connection:
+        with self.transaction() as connection:
             for message_type, payload in DEFAULT_NOTIFICATION_TEMPLATES.items():
                 template = str(payload.get("template") or "")
                 description = str(payload.get("description") or "")
@@ -614,7 +655,7 @@ class SQLiteNotificationRuleStore(OperationalConnection):
 
     def seed_defaults(self) -> None:
         stamp = utc_now()
-        with self.connect() as connection:
+        with self.transaction() as connection:
             for message_type, rule in DEFAULT_NOTIFICATION_RULES.items():
                 connection.execute(
                     """
@@ -1738,7 +1779,7 @@ class SQLiteRuntimeSettingsStore(OperationalConnection):
 
     def replace(self, settings: Dict[str, object]) -> None:
         stamp = utc_now()
-        with self.connect() as connection:
+        with self.transaction() as connection:
             connection.execute("DELETE FROM runtime_settings")
             for key, value in settings.items():
                 connection.execute(
@@ -1748,7 +1789,7 @@ class SQLiteRuntimeSettingsStore(OperationalConnection):
 
     def save(self, settings: Dict[str, object]) -> None:
         stamp = utc_now()
-        with self.connect() as connection:
+        with self.transaction() as connection:
             for key, value in settings.items():
                 connection.execute(
                     """
@@ -1908,7 +1949,6 @@ class SQLiteMonitoringCycleRecorder(OperationalConnection):
     ) -> MonitoringCycleRecordResult:
         if dry_run:
             return MonitoringCycleRecordResult(False, 0, "dry-run")
-        SQLiteNotificationTemplateStore(self.path)
         notification_store = SQLiteNotificationJobStore(self.path)
         model_review_store = SQLiteModelReviewJobStore(self.path)
         snapshot_states = {
@@ -1920,7 +1960,7 @@ class SQLiteMonitoringCycleRecorder(OperationalConnection):
         stamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         queued = 0
         sent_entries: Dict[str, str] = {}
-        with self.connect() as connection:
+        with self.transaction() as connection:
             for snapshot in snapshots:
                 insert_domain_event_with_connection(connection, snapshot_collected_event(snapshot))
             if alert_source_event:
@@ -2020,7 +2060,7 @@ class SQLiteEventLog(OperationalConnection):
         self.handle(DomainEvent.from_dict(event))
 
     def handle(self, event: DomainEvent) -> None:
-        with self.connect() as connection:
+        with self.transaction() as connection:
             insert_domain_event_with_connection(connection, event)
 
     def events(self, name: str = "", aggregate_id: str = "", limit: int = 0) -> List[DomainEvent]:
@@ -2136,7 +2176,7 @@ class SQLiteModelReviewJobStore(OperationalConnection):
         return jobs
 
     def write_jobs(self, jobs: Iterable[ModelReviewJob]) -> None:
-        with self.connect() as connection:
+        with self.transaction() as connection:
             connection.execute("DELETE FROM model_review_jobs")
             for job in jobs:
                 self.upsert_job_with_connection(connection, job)
@@ -2184,7 +2224,7 @@ class SQLiteModelReviewJobStore(OperationalConnection):
         )
 
     def upsert_job(self, job: ModelReviewJob) -> None:
-        with self.connect() as connection:
+        with self.transaction() as connection:
             self.upsert_job_with_connection(connection, job)
 
     def enqueue_with_connection(self, connection, job: ModelReviewJob) -> bool:
@@ -2195,7 +2235,7 @@ class SQLiteModelReviewJobStore(OperationalConnection):
         return True
 
     def enqueue(self, job: ModelReviewJob) -> bool:
-        with self.connect() as connection:
+        with self.transaction() as connection:
             return self.enqueue_with_connection(connection, job)
 
     def enqueue_from_event_with_connection(self, connection, event: DomainEvent) -> int:
@@ -2206,7 +2246,7 @@ class SQLiteModelReviewJobStore(OperationalConnection):
         return count
 
     def enqueue_from_event(self, event: DomainEvent) -> int:
-        with self.connect() as connection:
+        with self.transaction() as connection:
             return self.enqueue_from_event_with_connection(connection, event)
 
     def pending(self, limit: int = 1) -> List[ModelReviewJob]:
@@ -2228,6 +2268,63 @@ class SQLiteModelReviewJobStore(OperationalConnection):
                 continue
         return jobs
 
+    def claim_pending(self, limit: int = 1, stale_after_minutes: int = 30) -> List[ModelReviewJob]:
+        stamp = utc_now()
+        cutoff = (datetime.now(timezone.utc) - timedelta(minutes=max(1, int(stale_after_minutes or 30)))).isoformat().replace("+00:00", "Z")
+        claimed: List[ModelReviewJob] = []
+        with self.transaction() as connection:
+            rows = connection.execute(
+                """
+                SELECT job_id, payload_json FROM model_review_jobs
+                WHERE status IN ('pending', 'failed')
+                   OR (
+                    status = 'processing'
+                    AND COALESCE(NULLIF(processing_started_at, ''), NULLIF(updated_at, ''), created_at) <= ?
+                   )
+                ORDER BY created_at, job_id
+                LIMIT ?
+                """,
+                (cutoff, int(limit or 1)),
+            ).fetchall()
+            for row in rows:
+                try:
+                    job = ModelReviewJob.from_dict(json.loads(row["payload_json"]))
+                except json.JSONDecodeError:
+                    continue
+                job.status = "processing"
+                job.attempts += 1
+                job.updated_at = stamp
+                job.last_error = ""
+                payload = job.to_dict()
+                cursor = connection.execute(
+                    """
+                    UPDATE model_review_jobs
+                    SET status = ?, attempts = ?, updated_at = ?, last_error = ?, processing_started_at = ?,
+                        payload_json = ?
+                    WHERE job_id = ?
+                      AND (
+                        status IN ('pending', 'failed')
+                        OR (
+                          status = 'processing'
+                          AND COALESCE(NULLIF(processing_started_at, ''), NULLIF(updated_at, ''), created_at) <= ?
+                        )
+                      )
+                    """,
+                    (
+                        job.status,
+                        job.attempts,
+                        job.updated_at,
+                        job.last_error,
+                        stamp,
+                        json_dumps(payload),
+                        job.job_id,
+                        cutoff,
+                    ),
+                )
+                if cursor.rowcount:
+                    claimed.append(job)
+        return claimed
+
     def update(self, updated: ModelReviewJob) -> None:
         self.upsert_job(updated)
 
@@ -2235,7 +2332,16 @@ class SQLiteModelReviewJobStore(OperationalConnection):
         job.status = "processing"
         job.attempts += 1
         job.updated_at = utc_now()
-        self.update(job)
+        with self.transaction() as connection:
+            self.upsert_job_with_connection(connection, job)
+            connection.execute(
+                """
+                UPDATE model_review_jobs
+                SET processing_started_at = ?
+                WHERE job_id = ?
+                """,
+                (job.updated_at, job.job_id),
+            )
         return job
 
     def mark_done(self, job: ModelReviewJob, result: str) -> None:
@@ -2358,7 +2464,7 @@ class SQLiteNotificationJobStore(OperationalConnection):
         )
 
     def upsert_job(self, job: NotificationJob) -> None:
-        with self.connect() as connection:
+        with self.transaction() as connection:
             self.upsert_job_with_connection(connection, job)
 
     def rule_for_connection(self, connection, message_type: str) -> NotificationRuleConfig:
@@ -2497,7 +2603,7 @@ class SQLiteNotificationJobStore(OperationalConnection):
         return True
 
     def enqueue(self, job: NotificationJob) -> bool:
-        with self.connect() as connection:
+        with self.transaction() as connection:
             return self.enqueue_with_connection(connection, job)
 
     def pending(self, limit: int = 10) -> List[NotificationJob]:
@@ -2519,6 +2625,63 @@ class SQLiteNotificationJobStore(OperationalConnection):
                 continue
         return jobs
 
+    def claim_pending(self, limit: int = 10, stale_after_minutes: int = 30) -> List[NotificationJob]:
+        stamp = utc_now()
+        cutoff = (datetime.now(timezone.utc) - timedelta(minutes=max(1, int(stale_after_minutes or 30)))).isoformat().replace("+00:00", "Z")
+        claimed: List[NotificationJob] = []
+        with self.transaction() as connection:
+            rows = connection.execute(
+                """
+                SELECT job_id, payload_json FROM notification_jobs
+                WHERE status IN ('pending', 'failed')
+                   OR (
+                    status = 'processing'
+                    AND COALESCE(NULLIF(processing_started_at, ''), NULLIF(updated_at, ''), created_at) <= ?
+                   )
+                ORDER BY created_at, job_id
+                LIMIT ?
+                """,
+                (cutoff, int(limit or 10)),
+            ).fetchall()
+            for row in rows:
+                try:
+                    job = NotificationJob.from_dict(json.loads(row["payload_json"]))
+                except json.JSONDecodeError:
+                    continue
+                job.status = "processing"
+                job.attempts += 1
+                job.updated_at = stamp
+                job.last_error = ""
+                payload = job.to_dict()
+                cursor = connection.execute(
+                    """
+                    UPDATE notification_jobs
+                    SET status = ?, attempts = ?, updated_at = ?, last_error = ?, processing_started_at = ?,
+                        payload_json = ?
+                    WHERE job_id = ?
+                      AND (
+                        status IN ('pending', 'failed')
+                        OR (
+                          status = 'processing'
+                          AND COALESCE(NULLIF(processing_started_at, ''), NULLIF(updated_at, ''), created_at) <= ?
+                        )
+                      )
+                    """,
+                    (
+                        job.status,
+                        job.attempts,
+                        job.updated_at,
+                        job.last_error,
+                        stamp,
+                        json_dumps(payload),
+                        job.job_id,
+                        cutoff,
+                    ),
+                )
+                if cursor.rowcount:
+                    claimed.append(job)
+        return claimed
+
     def update(self, updated: NotificationJob) -> None:
         self.upsert_job(updated)
 
@@ -2526,7 +2689,16 @@ class SQLiteNotificationJobStore(OperationalConnection):
         job.status = "processing"
         job.attempts += 1
         job.updated_at = utc_now()
-        self.update(job)
+        with self.transaction() as connection:
+            self.upsert_job_with_connection(connection, job)
+            connection.execute(
+                """
+                UPDATE notification_jobs
+                SET processing_started_at = ?
+                WHERE job_id = ?
+                """,
+                (job.updated_at, job.job_id),
+            )
         return job
 
     def mark_done(self, job: NotificationJob) -> None:

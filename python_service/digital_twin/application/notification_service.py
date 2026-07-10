@@ -269,7 +269,8 @@ class NotificationQueueRunner:
         return {account.account_id: account for account in self.account_repository.load_all()}
 
     def run_once(self, limit: int = 10) -> int:
-        jobs = self.queue.pending(limit=limit)
+        use_claim = (not self.dry_run) and hasattr(self.queue, "claim_pending")
+        jobs = self.queue.claim_pending(limit=limit) if use_claim else self.queue.pending(limit=limit)
         if not jobs:
             print("No pending notification jobs.")
             return 0
@@ -285,7 +286,7 @@ class NotificationQueueRunner:
                 self.mark_quiet_hours_suppressed(job, account)
                 processed += 1
                 continue
-            if not self.dry_run:
+            if not self.dry_run and not use_claim:
                 self.queue.mark_processing(job)
             message = self.render(job)
             if not message:

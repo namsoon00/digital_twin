@@ -7,7 +7,7 @@ from typing import List, Optional
 from ..domain.accounts import AccountConfig, split_symbols
 from ..domain.events import DomainEvent
 from .settings import data_dir, read_json, runtime_settings, service_db_path, utc_now
-from .sqlite_support import connect_sqlite
+from .sqlite_support import connect_sqlite, sqlite_transaction
 
 
 def json_dumps(payload) -> str:
@@ -41,6 +41,9 @@ class AccountRegistry:
 
     def connect(self):
         return connect_sqlite(self.path)
+
+    def transaction(self):
+        return sqlite_transaction(self.path)
 
     def schema_key(self) -> str:
         return str(Path(self.path).resolve())
@@ -81,7 +84,7 @@ class AccountRegistry:
             return bool(index)
 
     def ensure_schema(self) -> None:
-        with self.connect() as connection:
+        with self.transaction() as connection:
             connection.execute("PRAGMA foreign_keys = ON")
             connection.execute("""
                 CREATE TABLE IF NOT EXISTS service_accounts (
@@ -271,7 +274,7 @@ class AccountRegistry:
         )
 
     def save_all(self, accounts: List[AccountConfig]) -> None:
-        with self.connect() as connection:
+        with self.transaction() as connection:
             connection.execute("PRAGMA foreign_keys = ON")
             connection.execute("DELETE FROM telegram_configs")
             connection.execute("DELETE FROM toss_credentials")
@@ -353,7 +356,7 @@ class AccountRegistry:
         )
 
     def upsert(self, account: AccountConfig) -> None:
-        with self.connect() as connection:
+        with self.transaction() as connection:
             connection.execute("PRAGMA foreign_keys = ON")
             self.upsert_with_connection(connection, account)
 
@@ -377,13 +380,13 @@ class AccountRegistry:
         )
 
     def upsert_with_event(self, account: AccountConfig, event: DomainEvent) -> None:
-        with self.connect() as connection:
+        with self.transaction() as connection:
             connection.execute("PRAGMA foreign_keys = ON")
             self.upsert_with_connection(connection, account)
             self.insert_event_with_connection(connection, event)
 
     def remove(self, account_id: str) -> bool:
-        with self.connect() as connection:
+        with self.transaction() as connection:
             connection.execute("PRAGMA foreign_keys = ON")
             cursor = connection.execute("DELETE FROM service_accounts WHERE id = ?", (account_id,))
             removed = cursor.rowcount > 0
@@ -392,7 +395,7 @@ class AccountRegistry:
         return True
 
     def remove_with_event(self, account_id: str, event: DomainEvent) -> bool:
-        with self.connect() as connection:
+        with self.transaction() as connection:
             connection.execute("PRAGMA foreign_keys = ON")
             cursor = connection.execute("DELETE FROM service_accounts WHERE id = ?", (account_id,))
             removed = cursor.rowcount > 0

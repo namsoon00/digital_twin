@@ -67,6 +67,7 @@ from digital_twin.infrastructure.sqlite_symbols import SQLiteSymbolUniverseStore
 from digital_twin.infrastructure.symbol_sources import RemoteSymbolSourceGateway, parse_krx_kind_table, parse_nasdaq_listed
 from digital_twin.infrastructure.sqlite_accounts import AccountRegistry
 from digital_twin.infrastructure.toss_snapshots import TossProvider, account_cash_amount, normalize_price_items, select_account
+from digital_twin.infrastructure.sqlite.health import run_sqlite_maintenance, sqlite_health_snapshot
 from digital_twin.infrastructure.web_server import list_notification_rules_payload, notification_jobs_payload, notification_schedules_payload, notification_template_test_payload, realtime_status_payload, save_notification_rule_payload, settings_status_payload
 from digital_twin.scheduler import MonitorRunner
 
@@ -5553,6 +5554,64 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("이동평균", jobs[0].context["lines"])
         self.assertGreaterEqual(jobs[0].context["honeyScore"], jobs[0].context["honeyThreshold"])
         self.assertIn("SK하이닉스", jobs[0].text)
+
+    def test_notification_outbox_claim_marks_processing_atomically(self):
+        db_path = Path(self.temp.name) / "service.db"
+        queue = SQLiteNotificationJobStore(db_path)
+        queue.enqueue(NotificationJob.create("첫 번째", account_id="main", message_type="notification"))
+        queue.enqueue(NotificationJob.create("두 번째", account_id="main", message_type="notification"))
+
+        first_claim = queue.claim_pending(limit=1)
+        second_claim = SQLiteNotificationJobStore(db_path).claim_pending(limit=10)
+
+        self.assertEqual(1, len(first_claim))
+        self.assertEqual("processing", first_claim[0].status)
+        self.assertEqual(1, first_claim[0].attempts)
+        self.assertEqual(1, len(second_claim))
+        self.assertNotEqual(first_claim[0].job_id, second_claim[0].job_id)
+        self.assertEqual({"processing": 2}, queue.summary())
+
+    def test_model_review_outbox_claim_marks_processing_atomically(self):
+        db_path = Path(self.temp.name) / "service.db"
+        queue = SQLiteModelReviewJobStore(db_path, legacy_path=Path(self.temp.name) / "missing.json")
+        queue.enqueue(ModelReviewJob.create({
+            "accountId": "main",
+            "accountLabel": "메인",
+            "symbol": "AAPL",
+            "title": "Apple",
+            "key": "main:decision:AAPL",
+            "lines": ["판단 변화"],
+        }))
+
+        claimed = queue.claim_pending(limit=1)
+        duplicate = SQLiteModelReviewJobStore(db_path, legacy_path=Path(self.temp.name) / "missing.json").claim_pending(limit=1)
+
+        self.assertEqual(1, len(claimed))
+        self.assertEqual("processing", claimed[0].status)
+        self.assertEqual(1, claimed[0].attempts)
+        self.assertEqual([], duplicate)
+        self.assertEqual({"processing": 1}, queue.summary())
+
+    def test_sqlite_health_and_maintenance_report_outbox_state(self):
+        db_path = Path(self.temp.name) / "service.db"
+        queue = SQLiteNotificationJobStore(db_path)
+        queue.enqueue(NotificationJob.create("점검", account_id="main", message_type="notification"))
+        claimed = queue.claim_pending(limit=1)[0]
+        stale_at = (datetime.now(timezone.utc) - timedelta(minutes=45)).isoformat().replace("+00:00", "Z")
+        with sqlite3.connect(str(db_path)) as connection:
+            connection.execute(
+                "UPDATE notification_jobs SET processing_started_at = ?, updated_at = ? WHERE job_id = ?",
+                (stale_at, stale_at, claimed.job_id),
+            )
+
+        health = sqlite_health_snapshot(db_path)
+        maintenance = run_sqlite_maintenance(db_path)
+
+        self.assertTrue(health["exists"])
+        self.assertEqual("wal", str(health["journalMode"]).lower())
+        self.assertEqual(1, health["outbox"]["notificationJobs"]["processing"])
+        self.assertEqual(1, maintenance["recoveredProcessing"]["notification_jobs"])
+        self.assertEqual({"failed": 1}, queue.summary())
 
     def test_notification_rule_suppresses_low_score_heartbeat(self):
         queue = SQLiteNotificationJobStore(Path(self.temp.name) / "service.db")

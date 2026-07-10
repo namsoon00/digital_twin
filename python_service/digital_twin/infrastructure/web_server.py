@@ -55,6 +55,7 @@ from ..infrastructure.neo4j_ontology import ontology_repository_from_settings
 from ..infrastructure.service_factory import build_symbol_universe_service, flow_lens_snapshot
 from ..infrastructure.settings import ROOT_DIR, runtime_settings, save_runtime_settings
 from ..infrastructure.sqlite_accounts import AccountRegistry
+from ..infrastructure.sqlite.health import run_sqlite_maintenance, sqlite_health_snapshot
 from ..infrastructure.sqlite_monitoring import SQLiteEventLog, SQLiteMonitorStore, SQLiteResearchEvidenceStore
 from ..infrastructure.sqlite_notifications import SQLiteNotificationJobStore, SQLiteNotificationRuleStore, SQLiteNotificationTemplateStore
 from ..infrastructure.sqlite_runtime import SQLiteAppStore
@@ -639,6 +640,18 @@ def notification_jobs_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
         "summary": notification_queue_store().summary(),
         "limit": limit,
     }
+
+
+def sqlite_health_payload() -> Dict[str, object]:
+    return sqlite_health_snapshot()
+
+
+def sqlite_maintenance_payload(payload: Dict[str, object]) -> Dict[str, object]:
+    return run_sqlite_maintenance(
+        checkpoint=payload.get("checkpoint") is not False,
+        optimize=payload.get("optimize") is not False,
+        recover_processing=payload.get("recoverProcessing") is not False,
+    )
 
 
 def research_evidence_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
@@ -1684,6 +1697,14 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
 
         if path == "/api/notification-jobs" and self.command == "GET":
             return self.send_payload(200, notification_jobs_payload(query))
+
+        if path == "/api/sqlite/health" and self.command == "GET":
+            return self.send_payload(200, sqlite_health_payload())
+
+        if path == "/api/sqlite/maintenance" and self.command == "POST":
+            if not self.ensure_writable("공유 모드에서는 로컬 SQLite 유지보수를 실행할 수 없습니다."):
+                return
+            return self.send_payload(200, sqlite_maintenance_payload(self.read_json_body()))
 
         if path == "/api/research-evidence" and self.command == "GET":
             return self.send_payload(200, research_evidence_payload(query))

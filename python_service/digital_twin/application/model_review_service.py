@@ -19,8 +19,10 @@ class ModelReviewRunner:
     def run_once(self, limit: int = 1) -> int:
         processed = 0
         accounts = self.account_map()
-        for job in self.queue.pending(limit):
-            self.queue.mark_processing(job)
+        jobs = self.queue.claim_pending(limit) if hasattr(self.queue, "claim_pending") else self.queue.pending(limit)
+        for job in jobs:
+            if not hasattr(self.queue, "claim_pending"):
+                self.queue.mark_processing(job)
             try:
                 result = normalize_model_review_result(job, self.reviewer.review(job))
                 if should_deliver_model_review(job, result, self.settings):

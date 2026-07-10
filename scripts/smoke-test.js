@@ -519,6 +519,32 @@ function checkFrontendAdminRender() {
       summary: { done: 2, suppressed: 2, failed: 0 },
       limit: 40
     },
+    "/api/sqlite/health": {
+      generatedAt: "2026-07-01T00:00:00.000Z",
+      path: "/tmp/service.db",
+      exists: true,
+      sizeBytes: 40960,
+      walSizeBytes: 0,
+      shmSizeBytes: 0,
+      recentLockLogCount: 0,
+      journalMode: "wal",
+      busyTimeoutMs: 30000,
+      tables: {
+        runtimeSettings: 12,
+        domainEvents: 5,
+        monitorSnapshots: 1,
+        researchEvidence: 4,
+        symbolUniverse: 8,
+        marketQuoteCache: 3
+      },
+      outbox: {
+        notificationJobs: { pending: 1, done: 2, suppressed: 2 },
+        modelReviewJobs: { pending: 1 }
+      },
+      migrations: [
+        { version: "sqlite_operational_schema_20260710", appliedAt: "2026-07-01T00:00:00.000Z" }
+      ]
+    },
     "/api/notification-schedules": {
       generatedAt: "2026-07-01T00:00:00.000Z",
       schedules: [

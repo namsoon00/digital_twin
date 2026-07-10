@@ -810,6 +810,10 @@
     notificationJobsError: "",
     notificationJobsSummary: {},
     notificationExpandedJobs: {},
+    sqliteHealth: null,
+    sqliteHealthLoading: false,
+    sqliteHealthError: "",
+    sqliteMaintenanceRunning: false,
     messageSchedules: [],
     messageSchedulesLoading: false,
     messageSchedulesError: "",
@@ -2177,6 +2181,60 @@
       .finally(function () {
         state.notificationJobsLoading = false;
         if (state.snapshot) render();
+      });
+  }
+
+  function applySqliteHealth(payload) {
+    state.sqliteHealth = payload && typeof payload === "object" ? payload : null;
+    state.sqliteHealthLoading = false;
+    state.sqliteHealthError = "";
+  }
+
+  function loadSqliteHealth() {
+    state.sqliteHealthLoading = true;
+    state.sqliteHealthError = "";
+    if (isStaticPreviewHost()) {
+      applySqliteHealth(null);
+      state.sqliteHealthLoading = false;
+      return Promise.resolve();
+    }
+    return requestJson("/api/sqlite/health")
+      .then(function (payload) {
+        applySqliteHealth(payload);
+      })
+      .catch(function (error) {
+        state.sqliteHealthError = error.message || "SQLite 상태를 읽지 못했습니다.";
+        state.sqliteHealth = null;
+      })
+      .finally(function () {
+        state.sqliteHealthLoading = false;
+        if (state.snapshot) render();
+      });
+  }
+
+  function runSqliteMaintenanceAction() {
+    if (state.sqliteMaintenanceRunning || isStaticPreviewHost() || state.serverSettingsLocked) return Promise.resolve();
+    state.sqliteMaintenanceRunning = true;
+    state.sqliteHealthError = "";
+    render();
+    return sendJson("/api/sqlite/maintenance", "POST", {
+      checkpoint: true,
+      optimize: true,
+      recoverProcessing: true
+    })
+      .then(function (payload) {
+        applySqliteHealth(payload.health || payload);
+        var recovered = payload.recoveredProcessing || {};
+        var recoveredCount = Number(recovered.notification_jobs || 0) + Number(recovered.model_review_jobs || 0);
+        showSnackbar("SQLite 유지보수를 완료했습니다" + (recoveredCount ? " · 복구 " + recoveredCount + "건" : "") + ".");
+      })
+      .catch(function (error) {
+        state.sqliteHealthError = error.message || "SQLite 유지보수를 실행하지 못했습니다.";
+        showSnackbar(state.sqliteHealthError, "danger");
+      })
+      .finally(function () {
+        state.sqliteMaintenanceRunning = false;
+        render();
       });
   }
 
@@ -7159,6 +7217,7 @@
       renderSystemEventFlowPanel(),
       renderSystemNotificationFlowPanel(),
       renderSystemOntologyPanel(snapshot),
+      renderSystemSqliteHealthPanel(),
       renderSystemOperationsPanel(),
       renderSystemGlossaryPanel(),
       '</section>'
@@ -7339,6 +7398,94 @@
       '<strong>중요한 운영 원칙</strong>',
       '<p>투자 알림은 자동 주문이 아닙니다. 시스템은 근거를 모아 대응 우선순위를 제안하고, 실제 실행 전 확인할 조건을 사용자에게 보여줍니다.</p>',
       '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function formatBytes(value) {
+    var size = Number(value || 0);
+    if (!Number.isFinite(size) || size <= 0) return "0 B";
+    var units = ["B", "KB", "MB", "GB"];
+    var unit = 0;
+    while (size >= 1024 && unit < units.length - 1) {
+      size = size / 1024;
+      unit += 1;
+    }
+    return (unit === 0 ? Math.round(size) : size.toFixed(size >= 10 ? 1 : 2)) + " " + units[unit];
+  }
+
+  function sqliteStatusTone(health) {
+    if (!health || !health.exists) return "caution";
+    if (Number(health.recentLockLogCount || 0) > 0) return "hold";
+    if (String(health.journalMode || "").toLowerCase() === "wal") return "watch";
+    return "hold";
+  }
+
+  function outboxCountText(counts) {
+    counts = counts || {};
+    var pending = Number(counts.pending || 0);
+    var processing = Number(counts.processing || 0);
+    var failed = Number(counts.failed || 0);
+    var done = Number(counts.done || 0);
+    var suppressed = Number(counts.suppressed || 0);
+    return "대기 " + pending + " · 처리 " + processing + " · 실패 " + failed + " · 완료 " + done + (suppressed ? " · 억제 " + suppressed : "");
+  }
+
+  function renderSqliteHealthCell(label, value, detail, tone) {
+    return [
+      '<div class="monitor-runtime-row sqlite-health-cell ' + escapeHtml(tone || "") + '">',
+      '<span>' + escapeHtml(label || "-") + '</span>',
+      '<strong>' + escapeHtml(value == null ? "-" : value) + '</strong>',
+      detail ? '<em>' + escapeHtml(detail) + '</em>' : '',
+      '</div>'
+    ].join("");
+  }
+
+  function renderSystemSqliteHealthPanel() {
+    var health = state.sqliteHealth || {};
+    var tables = health.tables || {};
+    var outbox = health.outbox || {};
+    var migrations = Array.isArray(health.migrations) ? health.migrations : [];
+    var locked = state.serverSettingsLocked || isStaticPreviewHost();
+    var rows = [
+      ["DB 파일", health.exists ? formatBytes(health.sizeBytes) : "없음", health.path || "data/service.db"],
+      ["WAL", formatBytes(health.walSizeBytes), "journal " + (health.journalMode || "-") + " · busy " + (health.busyTimeoutMs || 0) + "ms"],
+      ["최근 lock 로그", Number(health.recentLockLogCount || 0) + "건", "worker 로그 최근 구간 기준"],
+      ["이벤트", Number(tables.domainEvents || 0) + "건", "domain_events"],
+      ["근거·종목", Number(tables.researchEvidence || 0) + " / " + Number(tables.symbolUniverse || 0), "research_evidence / symbol_universe"],
+      ["알림 Outbox", outboxCountText(outbox.notificationJobs), "notification_jobs"],
+      ["모델 리뷰 Outbox", outboxCountText(outbox.modelReviewJobs), "model_review_jobs"]
+    ];
+    return [
+      '<article class="panel system-sqlite-panel">',
+      '<div class="panel-head">',
+      '<div><p class="label">SQLite Operations</p><h2>로컬 운영 DB 상태</h2><span>SQLite는 설정, 이벤트, 캐시, Outbox만 맡고 관계 추론은 Neo4j가 맡습니다.</span></div>',
+      '<span class="status-pill ' + escapeHtml(sqliteStatusTone(health)) + '">' + escapeHtml(state.sqliteHealthLoading ? "checking" : (health.exists ? "local db" : "missing")) + '</span>',
+      '</div>',
+      state.sqliteHealthError ? '<p class="error-text">' + escapeHtml(state.sqliteHealthError) + '</p>' : '',
+      '<div class="monitor-runtime-timeline sqlite-health-ledger">',
+      rows.map(function (row) {
+        return renderSqliteHealthCell(row[0], row[1], row[2]);
+      }).join(""),
+      '</div>',
+      '<div class="system-lineage-grid sqlite-migration-grid" role="table" aria-label="SQLite migration 기록">',
+      '<div class="system-lineage-head" role="row"><span>Migration</span><span>적용 시각</span><span>범위</span><span>상태</span></div>',
+      (migrations.length ? migrations : [{ version: "기록 없음", appliedAt: "", scope: "schema", status: "대기" }]).slice(0, 6).map(function (item) {
+        return [
+          '<div class="system-lineage-row" role="row">',
+          '<strong>' + escapeHtml(item.version || "-") + '</strong>',
+          '<span>' + escapeHtml(item.appliedAt ? formatClock(item.appliedAt) : "-") + '</span>',
+          '<code>service.db</code>',
+          '<em>' + escapeHtml(item.version ? "applied" : "pending") + '</em>',
+          '</div>'
+        ].join("");
+      }).join(""),
+      '</div>',
+      '<div class="settings-actions">',
+      '<button class="text-button" type="button" data-action="refresh-sqlite-health"' + (state.sqliteHealthLoading ? ' disabled' : '') + '>' + escapeHtml(state.sqliteHealthLoading ? "확인 중" : "상태 새로고침") + '</button>',
+      '<button class="text-button primary" type="button" data-action="sqlite-maintenance"' + (locked || state.sqliteMaintenanceRunning ? ' disabled' : '') + '>' + escapeHtml(state.sqliteMaintenanceRunning ? "정리 중" : "Checkpoint · Optimize") + '</button>',
+      '</div>',
+      '<div class="rule-strip"><span>운영 데이터는 SQLite에 짧게 쓰고, TBox/ABox/RuleBox/InferenceBox 관계는 Neo4j에 투영합니다.</span></div>',
       '</article>'
     ].join("");
   }
@@ -14779,6 +14926,20 @@
       });
     });
 
+    Array.prototype.slice.call(app.querySelectorAll('[data-action="refresh-sqlite-health"]')).forEach(function (refreshSqliteHealth) {
+      refreshSqliteHealth.addEventListener("click", function () {
+        loadSqliteHealth().then(function () {
+          showSnackbar("SQLite 상태를 다시 읽었습니다.");
+        });
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll('[data-action="sqlite-maintenance"]')).forEach(function (sqliteMaintenance) {
+      sqliteMaintenance.addEventListener("click", function () {
+        runSqliteMaintenanceAction();
+      });
+    });
+
     var researchEvidenceForm = app.querySelector("[data-research-evidence-form]");
     if (researchEvidenceForm) {
       researchEvidenceForm.addEventListener("submit", function (event) {
@@ -15586,7 +15747,8 @@
     loadNotificationJobs(),
     loadNotificationSchedules(),
     loadOntologyRulebox(),
-    loadSymbolUniverse()
+    loadSymbolUniverse(),
+    loadSqliteHealth()
   ];
   Promise.all(snapshotPrerequisites.map(function (task) {
     return task.catch(function () {

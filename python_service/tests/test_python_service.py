@@ -1868,12 +1868,17 @@ class PythonServiceTests(unittest.TestCase):
         statements = repository.statements(graph)
         entity_rows = repository.rows_for_entities(graph)
         relation_rows = repository.rows_for_relations(graph)
+        stock_row = next(row for row in entity_rows if row["id"] == "stock:005930")
 
         self.assertEqual("CONTRADICTS", safe_relation_type("contradicts"))
         self.assertIn("TBox", {row["ontologyBox"] for row in entity_rows})
         self.assertIn("ABox", {row["ontologyBox"] for row in relation_rows})
+        self.assertTrue(stock_row["isCurrent"])
+        self.assertTrue(stock_row["aboxSnapshotId"])
+        self.assertTrue(stock_row["tboxVersion"])
         self.assertTrue(any("OntologyEntity" in item["statement"] for item in statements))
         self.assertTrue(any("CREATE CONSTRAINT ontology_entity_id" in item["statement"] for item in repository.schema_statements()))
+        self.assertTrue(any("SET n.isCurrent = false" in item["statement"] for item in statements))
         self.assertTrue(any("OntologyReasoningCard" in item["statement"] for item in statements))
         self.assertGreater(len(repository.rows_for_reasoning_cards(graph)), 0)
         self.assertTrue(any("MERGE (a)-[r:HOLDS]" in item["statement"] for item in statements))
@@ -1908,6 +1913,16 @@ class PythonServiceTests(unittest.TestCase):
                 self.graphs.append(graph)
                 return {"saved": True, "entityCount": len(graph.entities)}
 
+            def active_tbox_metadata(self):
+                return {
+                    "source": "neo4j",
+                    "version": "stored-tbox-test",
+                    "fingerprint": "stored-fingerprint",
+                    "entityCount": 10,
+                    "relationCount": 20,
+                    "status": "ok",
+                }
+
         class FakeQualityStore:
             def record_graph(self, graph, source="monitoring", created_at=""):
                 return SimpleNamespace(sample_id="sample-1", overall_score=91.5)
@@ -1924,6 +1939,11 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(result["saved"])
         self.assertEqual(1, len(repository.graphs))
         self.assertEqual("main", repository.graphs[0].portfolio_id)
+        stock = next(item for item in repository.graphs[0].entities if item.kind == "stock")
+        self.assertEqual("stored-tbox-test", stock.properties["tboxVersion"])
+        self.assertTrue(stock.properties["isCurrent"])
+        self.assertIn("aboxValidation", result)
+        self.assertEqual("valid", result["aboxValidation"]["status"])
         self.assertEqual("sample-1", snapshot.metadata["ontology"]["neo4j"]["qualitySampleId"])
         self.assertEqual(91.5, snapshot.metadata["ontology"]["neo4j"]["qualityScore"])
 
@@ -1981,6 +2001,16 @@ class PythonServiceTests(unittest.TestCase):
                 self.graphs.append(graph)
                 return {"saved": True, "entityCount": len(graph.entities), "relationCount": len(graph.relations)}
 
+            def active_tbox_metadata(self):
+                return {
+                    "source": "neo4j",
+                    "version": "stored-tbox-test",
+                    "fingerprint": "stored-fingerprint",
+                    "entityCount": 10,
+                    "relationCount": 20,
+                    "status": "ok",
+                }
+
             def run_rulebox(self, payload=None):
                 self.executions.append(dict(payload or {}))
                 return {"status": "ok", "statementCount": 2, "relationTypes": ["HAS_INFERRED_RISK"]}
@@ -2012,6 +2042,16 @@ class PythonServiceTests(unittest.TestCase):
         self.assertFalse(persisted.opinions)
         self.assertFalse(persisted.reasoning_cards)
         self.assertTrue(any((item.properties or {}).get("ontologyBox") == "ABox" for item in persisted.entities))
+        self.assertTrue(all(
+            (item.properties or {}).get("tboxVersion") == "stored-tbox-test"
+            for item in persisted.entities
+            if (item.properties or {}).get("ontologyBox") == "ABox"
+        ))
+        self.assertTrue(all(
+            (item.properties or {}).get("isCurrent") is True
+            for item in persisted.entities
+            if (item.properties or {}).get("ontologyBox") == "ABox"
+        ))
         self.assertTrue(any(item.kind == "stock" for item in persisted.entities))
         self.assertTrue(any(item.kind == "company" for item in persisted.entities))
         self.assertTrue(any(item.kind == "security" for item in persisted.entities))
@@ -3951,6 +3991,76 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("HAS_INFERRED_RISK", inference["relations"][0]["type"])
         self.assertEqual(["holding-loss", "ma-break"], inference["traces"][0]["matchedConditionIds"])
 
+    def test_events_include_operational_alert_when_inferencebox_missing(self):
+        position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "marketValue": 864000,
+            "quantity": 10,
+            "sellableQuantity": 10,
+            "averagePrice": 80000,
+            "currentPrice": 86400,
+            "profitLossRate": 8,
+            "sector": "반도체",
+        })
+        portfolio = portfolio_summary([position])
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "토스 계좌 동기화",
+            utc_now_iso(),
+            portfolio,
+            [position],
+            decisions_for_positions([position], portfolio),
+        )
+
+        events = RealtimeMonitor().events_for_snapshot(snapshot, {})
+        inference_event = next(event for event in events if event.rule == "ontologyInferenceMissing")
+
+        self.assertEqual("WATCH", inference_event.severity)
+        self.assertEqual("온톨로지 추론 상태", inference_event.title)
+        self.assertTrue(any("매수·매도 판단은 생성하지 않았습니다" in line for line in inference_event.lines))
+        self.assertTrue(inference_event.metadata["blockedInvestmentJudgment"])
+        self.assertEqual("missingProjection", inference_event.metadata["missingInferenceReasonCode"])
+        self.assertEqual("neo4jInferenceBox", inference_event.metadata["ontologyInference"]["source"])
+        self.assertTrue(inference_event.metadata["ontologyInference"]["missing"])
+
+    def test_events_skip_operational_alert_when_inferencebox_matches_holding(self):
+        position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "marketValue": 864000,
+            "quantity": 10,
+            "sellableQuantity": 10,
+            "averagePrice": 80000,
+            "currentPrice": 72000,
+            "profitLossRate": -10,
+            "sector": "반도체",
+        })
+        portfolio = portfolio_summary([position])
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "토스 계좌 동기화",
+            utc_now_iso(),
+            portfolio,
+            [position],
+            decisions_for_positions([position], portfolio),
+            metadata=self.inferencebox_metadata("005930", "graph.loss_guard.breakdown.v1", "lossControl", "손실 방어 추론"),
+        )
+
+        events = RealtimeMonitor().events_for_snapshot(snapshot, {})
+
+        self.assertFalse(any(event.rule == "ontologyInferenceMissing" for event in events))
+
     def test_account_data_failure_suppresses_investment_change_alerts(self):
         live_position = normalize_position({
             "symbol": "005930",
@@ -4340,6 +4450,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(all(value >= 10 for value in DEFAULT_CADENCE.values()))
         self.assertEqual(10, DEFAULT_CADENCE["monitorHeartbeat"])
         self.assertEqual(60, DEFAULT_CADENCE["externalMacroShift"])
+        self.assertEqual(60, DEFAULT_CADENCE["ontologyInferenceMissing"])
 
     def test_default_watchlist_and_model_alerts_include_requested_symbols(self):
         symbols = runtime_settings()["watchlistSymbols"].split(",")
@@ -4745,10 +4856,12 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("모델 매수", MESSAGE_TYPE_LABELS["modelBuy"])
         self.assertEqual("관심종목 매수 후보", MESSAGE_TYPE_LABELS["watchlistBuyCandidate"])
         self.assertEqual("관심종목 관계 신호", MESSAGE_TYPE_LABELS["watchlistOntologySignal"])
+        self.assertEqual("온톨로지 추론 상태", MESSAGE_TYPE_LABELS["ontologyInferenceMissing"])
         self.assertEqual(10, catalog["investmentInsight"]["cadenceMinutes"])
         self.assertEqual(10, catalog["modelBuy"]["cadenceMinutes"])
         self.assertEqual(10, catalog["watchlistBuyCandidate"]["cadenceMinutes"])
         self.assertEqual(10, catalog["watchlistOntologySignal"]["cadenceMinutes"])
+        self.assertEqual(60, catalog["ontologyInferenceMissing"]["cadenceMinutes"])
         self.assertEqual("🧭", catalog["investmentInsight"]["icon"])
         self.assertEqual("🟢", catalog["modelBuy"]["icon"])
         self.assertEqual("🧠", MESSAGE_TYPE_EMOJIS["modelReview"])
@@ -4757,6 +4870,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(catalog["modelBuy"]["monitoring"])
         self.assertTrue(catalog["watchlistBuyCandidate"]["monitoring"])
         self.assertTrue(catalog["investmentInsight"]["userManaged"])
+        self.assertTrue(catalog["ontologyInferenceMissing"]["userManaged"])
         self.assertEqual("user", catalog["investmentInsight"]["role"])
         self.assertFalse(catalog["modelBuy"]["userManaged"])
         self.assertTrue(catalog["modelBuy"]["evidenceOnly"])
@@ -4830,6 +4944,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(
             {
                 "investmentInsight",
+                "ontologyInferenceMissing",
                 "watchlistQuote",
                 "watchlistQuotePending",
                 "holdingTiming",
@@ -8190,6 +8305,7 @@ class PythonServiceTests(unittest.TestCase):
 
         self.assertEqual([
             "investmentInsight",
+            "ontologyInferenceMissing",
             "monitorConnection",
             "externalDataConnection",
         ], message_types)
@@ -8209,6 +8325,7 @@ class PythonServiceTests(unittest.TestCase):
 
         self.assertIn("default", message_types)
         self.assertIn("investmentInsight", message_types)
+        self.assertIn("ontologyInferenceMissing", message_types)
         self.assertIn("externalDataConnection", message_types)
         self.assertIn("monitorConnection", message_types)
         self.assertIn("modelReview", message_types)

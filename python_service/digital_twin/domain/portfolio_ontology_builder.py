@@ -24,8 +24,10 @@ from .ontology_prompting import (
     relation_key,
 )
 from .ontology_schema import (
+    abox_lifecycle_metadata,
     abox_relation_properties,
     abox_properties,
+    apply_abox_lifecycle,
     add_entity,
     add_relation,
     ontology_abox,
@@ -1875,6 +1877,11 @@ def build_portfolio_ontology(
     legacy_by_symbol = legacy_by_symbol or {}
     external_signals = external_signals or {}
     runtime_context = runtime_context or {}
+    lifecycle_metadata = abox_lifecycle_metadata(
+        portfolio_id,
+        runtime_context,
+        runtime_context.get("activeTBox") if isinstance(runtime_context, dict) else None,
+    )
     observed_by_symbol: Dict[str, Position] = {}
     for item in positions:
         if not observable_position(item):
@@ -1956,6 +1963,17 @@ def build_portfolio_ontology(
             weight=round(number(sector.get("ratio")) / 100, 4),
             properties=abox_properties({"basis": "sector-weight"}),
         ))
+    for position in observed_positions:
+        label = str(position.sector or "기타").strip() or "기타"
+        if label in sector_weights:
+            continue
+        sector_weights[label] = 0.0
+        graph.entities.append(OntologyEntity(entity_id("sector", label), label, "sector", abox_properties({
+            "sector": label,
+            "ratio": 0,
+            "tboxClass": "Sector",
+            "source": "observed-position",
+        })))
     for position in observed_positions:
         symbol = symbol_key(position)
         stock_id = entity_id("stock", symbol)
@@ -2211,12 +2229,15 @@ def build_portfolio_ontology(
         graph.entities = dedupe_entities(graph.entities)
         graph.relations = dedupe_relations(graph.relations)
         graph.evidence = dedupe_evidence(graph.evidence)
+        apply_abox_lifecycle(graph, lifecycle_metadata)
         graph.worldview = {
             "model": "ontology-abox-facts",
             "runtimeProjectionMode": "abox-facts-only-neo4j-rulebox",
             "description": "Runtime ABox facts are projected for Neo4j RuleBox reasoning; opinions, insights, and inference are produced after graph-store reasoning.",
             "positionCount": len([item for item in observed_positions if is_holding_position(item)]),
             "watchlistCount": len([item for item in observed_positions if is_watchlist_position(item)]),
+            "aboxLifecycle": dict(lifecycle_metadata),
+            "activeTBox": dict(runtime_context.get("activeTBox") or {}),
         }
         return graph
     apply_graph_reasoning(graph)
@@ -2227,8 +2248,11 @@ def build_portfolio_ontology(
     add_ontology_insight_concepts(graph)
     graph.entities = dedupe_entities(graph.entities)
     graph.relations = dedupe_relations(graph.relations)
+    apply_abox_lifecycle(graph, lifecycle_metadata)
     graph.reasoning_cards = build_reasoning_cards(graph)
     graph.worldview = portfolio_worldview(graph, portfolio, external_signals)
+    graph.worldview["aboxLifecycle"] = dict(lifecycle_metadata)
+    graph.worldview["activeTBox"] = dict(runtime_context.get("activeTBox") or {})
     graph.prompt = build_investment_opinion_prompt(graph)
     return graph
 

@@ -14,11 +14,21 @@ from ..domain.ontology_rulebox_governance import (
     rulebox_version_payload,
 )
 from ..domain.ontology_rulebox_projection import add_rulebox_concepts
-from ..domain.ontology_schema import tbox_entities, tbox_relations
+from ..domain.ontology_schema import default_tbox_metadata, normalize_tbox_metadata, tbox_entities, tbox_relations
 from .settings import runtime_settings, utc_now
 
 
 class NullOntologyGraphRepository:
+    def active_tbox_metadata(self) -> Dict[str, object]:
+        metadata = default_tbox_metadata()
+        metadata.update({
+            "configured": False,
+            "status": "code-fallback",
+            "source": "code",
+            "reason": "Neo4j ontology storage is not configured.",
+        })
+        return metadata
+
     def save_graph(self, graph: PortfolioOntology) -> Dict[str, object]:
         return {
             "saved": False,
@@ -115,6 +125,17 @@ class Neo4jOntologyGraphRepository:
         self.database = str(database or "neo4j").strip() or "neo4j"
         self.timeout_seconds = max(2, int(timeout_seconds or 8))
 
+    def active_tbox_metadata(self) -> Dict[str, object]:
+        if not self.uri:
+            return NullOntologyGraphRepository().active_tbox_metadata()
+        if self.uri.startswith("http://") or self.uri.startswith("https://"):
+            return self.active_tbox_metadata_via_http()
+        if self.uri.startswith("bolt://") or self.uri.startswith("neo4j://"):
+            return self.active_tbox_metadata_via_driver()
+        metadata = default_tbox_metadata()
+        metadata.update({"configured": True, "status": "unsupported-uri", "source": "code-fallback"})
+        return metadata
+
     def save_graph(self, graph: PortfolioOntology) -> Dict[str, object]:
         if not self.uri:
             return NullOntologyGraphRepository().save_graph(graph)
@@ -139,6 +160,9 @@ class Neo4jOntologyGraphRepository:
             "CREATE INDEX ontology_entity_updated IF NOT EXISTS FOR (n:OntologyEntity) ON (n.updatedAt)",
             "CREATE INDEX ontology_entity_rule_id IF NOT EXISTS FOR (n:OntologyEntity) ON (n.ruleId)",
             "CREATE INDEX ontology_entity_symbol IF NOT EXISTS FOR (n:OntologyEntity) ON (n.symbol)",
+            "CREATE INDEX ontology_entity_current_account IF NOT EXISTS FOR (n:OntologyEntity) ON (n.ontologyBox, n.accountId, n.isCurrent)",
+            "CREATE INDEX ontology_entity_abox_snapshot IF NOT EXISTS FOR (n:OntologyEntity) ON (n.aboxSnapshotId)",
+            "CREATE INDEX ontology_entity_tbox_version IF NOT EXISTS FOR (n:OntologyEntity) ON (n.tboxVersion)",
             "CREATE INDEX ontology_entity_tbox_class IF NOT EXISTS FOR (n:OntologyEntity) ON (n.tboxClass)",
             "CREATE INDEX ontology_entity_bounded_context IF NOT EXISTS FOR (n:OntologyEntity) ON (n.boundedContext)",
             "CREATE INDEX ontology_entity_condition_kind IF NOT EXISTS FOR (n:OntologyEntity) ON (n.conditionKind)",
@@ -184,6 +208,15 @@ class Neo4jOntologyGraphRepository:
                 "sourceContext": str(properties.get("sourceContext") or ""),
                 "targetContext": str(properties.get("targetContext") or ""),
                 "sourceValue": str(properties.get("source") or ""),
+                "accountId": str(properties.get("accountId") or ""),
+                "aboxSnapshotId": str(properties.get("aboxSnapshotId") or properties.get("snapshotId") or ""),
+                "snapshotId": str(properties.get("snapshotId") or properties.get("aboxSnapshotId") or ""),
+                "asOf": str(properties.get("asOf") or ""),
+                "isCurrent": bool(properties.get("isCurrent")) if "isCurrent" in properties else False,
+                "tboxVersion": str(properties.get("tboxVersion") or properties.get("version") or (default_tbox_metadata()["version"] if str(properties.get("ontologyBox") or "") in {"TBox", "RuleBox", "InferenceBox"} else "")),
+                "activeTboxVersion": str(properties.get("activeTboxVersion") or properties.get("tboxVersion") or properties.get("version") or (default_tbox_metadata()["version"] if str(properties.get("ontologyBox") or "") in {"TBox", "RuleBox", "InferenceBox"} else "")),
+                "tboxFingerprint": str(properties.get("tboxFingerprint") or (default_tbox_metadata()["fingerprint"] if str(properties.get("ontologyBox") or "") in {"TBox", "RuleBox", "InferenceBox"} else "")),
+                "activeTboxSource": str(properties.get("activeTboxSource") or ""),
                 "profitLossRate": number_or_none(properties.get("profitLossRate")),
                 "levelType": str(properties.get("levelType") or ""),
                 "field": str(properties.get("field") or ""),
@@ -258,6 +291,14 @@ class Neo4jOntologyGraphRepository:
                 "type": safe_relation_type(item.relation_type),
                 "weight": float(item.weight or 0),
                 "ontologyBox": str(properties.get("ontologyBox") or "ABox"),
+                "accountId": str(properties.get("accountId") or ""),
+                "aboxSnapshotId": str(properties.get("aboxSnapshotId") or properties.get("snapshotId") or ""),
+                "snapshotId": str(properties.get("snapshotId") or properties.get("aboxSnapshotId") or ""),
+                "asOf": str(properties.get("asOf") or ""),
+                "isCurrent": bool(properties.get("isCurrent")) if "isCurrent" in properties else False,
+                "tboxVersion": str(properties.get("tboxVersion") or (default_tbox_metadata()["version"] if str(properties.get("ontologyBox") or "") in {"TBox", "RuleBox", "InferenceBox"} else "")),
+                "activeTboxVersion": str(properties.get("activeTboxVersion") or properties.get("tboxVersion") or (default_tbox_metadata()["version"] if str(properties.get("ontologyBox") or "") in {"TBox", "RuleBox", "InferenceBox"} else "")),
+                "tboxFingerprint": str(properties.get("tboxFingerprint") or (default_tbox_metadata()["fingerprint"] if str(properties.get("ontologyBox") or "") in {"TBox", "RuleBox", "InferenceBox"} else "")),
                 "boundedContext": str(properties.get("boundedContext") or ""),
                 "ruleId": str(properties.get("ruleId") or ""),
                 "polarity": str(properties.get("polarity") or ""),
@@ -285,6 +326,12 @@ class Neo4jOntologyGraphRepository:
                 "source": item.source,
                 "summary": item.summary,
                 "ontologyBox": str((item.value or {}).get("ontologyBox") or ("InferenceBox" if item.kind == "inference-trace" else "ABox")),
+                "accountId": str((item.value or {}).get("accountId") or ""),
+                "aboxSnapshotId": str((item.value or {}).get("aboxSnapshotId") or (item.value or {}).get("snapshotId") or ""),
+                "snapshotId": str((item.value or {}).get("snapshotId") or (item.value or {}).get("aboxSnapshotId") or ""),
+                "asOf": str((item.value or {}).get("asOf") or ""),
+                "isCurrent": bool((item.value or {}).get("isCurrent")) if "isCurrent" in (item.value or {}) else False,
+                "tboxVersion": str((item.value or {}).get("tboxVersion") or ""),
                 "valueJson": json.dumps(item.value or {}, ensure_ascii=False, sort_keys=True),
                 "confidence": float(item.confidence or 0),
             }
@@ -300,6 +347,12 @@ class Neo4jOntologyGraphRepository:
                 "polarity": item.polarity,
                 "confidence": float(item.confidence or 0),
                 "ontologyBox": "InferenceBox" if str(item.belief_id or "").startswith("belief:inference:") else "ABox",
+                "accountId": "",
+                "aboxSnapshotId": "",
+                "snapshotId": "",
+                "asOf": "",
+                "isCurrent": False,
+                "tboxVersion": "",
                 "evidenceIds": [str(value) for value in item.evidence_ids],
             }
             for item in graph.beliefs
@@ -315,6 +368,12 @@ class Neo4jOntologyGraphRepository:
                 "conviction": float(item.conviction or 0),
                 "ontologyPressure": float(item.ontology_pressure or 0),
                 "ontologyBox": "ABox",
+                "accountId": str((item.legacy_model or {}).get("accountId") or ""),
+                "aboxSnapshotId": str((item.legacy_model or {}).get("aboxSnapshotId") or ""),
+                "snapshotId": str((item.legacy_model or {}).get("snapshotId") or ""),
+                "asOf": str((item.legacy_model or {}).get("asOf") or ""),
+                "isCurrent": bool((item.legacy_model or {}).get("isCurrent")) if "isCurrent" in (item.legacy_model or {}) else False,
+                "tboxVersion": str((item.legacy_model or {}).get("tboxVersion") or ""),
                 "payloadJson": json.dumps(item.to_dict(), ensure_ascii=False, sort_keys=True),
             }
             for item in graph.opinions
@@ -330,6 +389,12 @@ class Neo4jOntologyGraphRepository:
                 "portfolioRelation": str(item.get("portfolioRelation") or ""),
                 "status": str(item.get("status") or ""),
                 "ontologyBox": "ABox",
+                "accountId": str(item.get("accountId") or ""),
+                "aboxSnapshotId": str(item.get("aboxSnapshotId") or item.get("snapshotId") or ""),
+                "snapshotId": str(item.get("snapshotId") or item.get("aboxSnapshotId") or ""),
+                "asOf": str(item.get("asOf") or ""),
+                "isCurrent": bool(item.get("isCurrent")) if "isCurrent" in item else False,
+                "tboxVersion": str(item.get("tboxVersion") or ""),
                 "payloadJson": json.dumps(item, ensure_ascii=False, sort_keys=True),
             }
             for item in (getattr(graph, "reasoning_cards", []) or [])
@@ -338,7 +403,8 @@ class Neo4jOntologyGraphRepository:
 
     def statements(self, graph: PortfolioOntology) -> List[Dict[str, object]]:
         updated_at = utc_now()
-        statements = [
+        statements = deactivate_current_abox_statements(graph)
+        statements.extend([
             {
                 "statement": (
                     "UNWIND $rows AS row "
@@ -350,6 +416,9 @@ class Neo4jOntologyGraphRepository:
                     "n.tboxClass = row.tboxClass, n.tboxClasses = row.tboxClasses, n.boundedContext = row.boundedContext, "
                     "n.className = row.className, n.parentClass = row.parentClass, n.relationTypeName = row.relationTypeName, "
                     "n.box = row.box, n.sourceContext = row.sourceContext, n.targetContext = row.targetContext, "
+                    "n.accountId = row.accountId, n.aboxSnapshotId = row.aboxSnapshotId, n.snapshotId = row.snapshotId, "
+                    "n.asOf = row.asOf, n.isCurrent = row.isCurrent, n.tboxVersion = row.tboxVersion, "
+                    "n.activeTboxVersion = row.activeTboxVersion, n.tboxFingerprint = row.tboxFingerprint, n.activeTboxSource = row.activeTboxSource, "
                     "n.sourceValue = row.sourceValue, n.profitLossRate = row.profitLossRate, n.levelType = row.levelType, "
                     "n.field = row.field, n.valueNumber = row.valueNumber, n.polarity = row.polarity, n.group = row.group, "
                     "n.relationScope = row.relationScope, n.eventType = row.eventType, n.materialityScore = row.materialityScore, "
@@ -397,6 +466,8 @@ class Neo4jOntologyGraphRepository:
                     "UNWIND $rows AS row "
                     "MERGE (n:OntologyEvidence {id: row.id}) "
                     "SET n.subject = row.subject, n.kind = row.kind, n.source = row.source, n.summary = row.summary, n.ontologyBox = row.ontologyBox, "
+                    "n.accountId = row.accountId, n.aboxSnapshotId = row.aboxSnapshotId, n.snapshotId = row.snapshotId, "
+                    "n.asOf = row.asOf, n.isCurrent = row.isCurrent, n.tboxVersion = row.tboxVersion, "
                     "n.valueJson = row.valueJson, n.confidence = row.confidence, n.updatedAt = $updatedAt "
                     "FOREACH (_ IN CASE WHEN row.ontologyBox = 'ABox' THEN [1] ELSE [] END | SET n:ABox) "
                     "FOREACH (_ IN CASE WHEN row.ontologyBox = 'InferenceBox' THEN [1] ELSE [] END | SET n:InferenceBox) "
@@ -410,7 +481,9 @@ class Neo4jOntologyGraphRepository:
                     "UNWIND $rows AS row "
                     "MERGE (n:OntologyBelief {id: row.id}) "
                     "SET n.label = row.label, n.polarity = row.polarity, "
-                    "n.confidence = row.confidence, n.ontologyBox = row.ontologyBox, n.evidenceIds = row.evidenceIds, n.updatedAt = $updatedAt "
+                    "n.confidence = row.confidence, n.ontologyBox = row.ontologyBox, n.evidenceIds = row.evidenceIds, "
+                    "n.accountId = row.accountId, n.aboxSnapshotId = row.aboxSnapshotId, n.snapshotId = row.snapshotId, "
+                    "n.asOf = row.asOf, n.isCurrent = row.isCurrent, n.tboxVersion = row.tboxVersion, n.updatedAt = $updatedAt "
                     "FOREACH (_ IN CASE WHEN row.ontologyBox = 'ABox' THEN [1] ELSE [] END | SET n:ABox) "
                     "FOREACH (_ IN CASE WHEN row.ontologyBox = 'InferenceBox' THEN [1] ELSE [] END | SET n:InferenceBox) "
                     "WITH row, n MATCH (s:OntologyEntity {id: row.subject}) "
@@ -424,7 +497,9 @@ class Neo4jOntologyGraphRepository:
                     "MERGE (n:OntologyOpinion {id: row.id}) "
                     "SET n.symbol = row.symbol, n.action = row.action, n.tone = row.tone, "
                     "n.conviction = row.conviction, n.ontologyPressure = row.ontologyPressure, "
-                    "n.ontologyBox = row.ontologyBox, n.payloadJson = row.payloadJson, n.updatedAt = $updatedAt "
+                    "n.ontologyBox = row.ontologyBox, n.accountId = row.accountId, n.aboxSnapshotId = row.aboxSnapshotId, "
+                    "n.snapshotId = row.snapshotId, n.asOf = row.asOf, n.isCurrent = row.isCurrent, "
+                    "n.tboxVersion = row.tboxVersion, n.payloadJson = row.payloadJson, n.updatedAt = $updatedAt "
                     "FOREACH (_ IN CASE WHEN row.ontologyBox = 'ABox' THEN [1] ELSE [] END | SET n:ABox) "
                     "WITH row, n, 'stock:' + row.symbol AS stockId MATCH (s:OntologyEntity {id: stockId}) "
                     "MERGE (s)-[:HAS_OPINION]->(n)"
@@ -437,14 +512,16 @@ class Neo4jOntologyGraphRepository:
                     "MERGE (n:OntologyReasoningCard {id: row.id}) "
                     "SET n.symbol = row.symbol, n.companyName = row.companyName, n.source = row.source, "
                     "n.portfolioRelation = row.portfolioRelation, n.status = row.status, "
-                    "n.ontologyBox = row.ontologyBox, n.payloadJson = row.payloadJson, n.updatedAt = $updatedAt "
+                    "n.ontologyBox = row.ontologyBox, n.accountId = row.accountId, n.aboxSnapshotId = row.aboxSnapshotId, "
+                    "n.snapshotId = row.snapshotId, n.asOf = row.asOf, n.isCurrent = row.isCurrent, "
+                    "n.tboxVersion = row.tboxVersion, n.payloadJson = row.payloadJson, n.updatedAt = $updatedAt "
                     "FOREACH (_ IN CASE WHEN row.ontologyBox = 'ABox' THEN [1] ELSE [] END | SET n:ABox) "
                     "WITH row, n, 'stock:' + row.symbol AS stockId MATCH (s:OntologyEntity {id: stockId}) "
                     "MERGE (s)-[:HAS_REASONING_CARD]->(n)"
                 ),
                 "parameters": {"rows": self.rows_for_reasoning_cards(graph), "updatedAt": updated_at},
             },
-        ]
+        ])
         for relation_type, rows in group_relation_rows(self.rows_for_relations(graph)).items():
             statements.append({
                 "statement": (
@@ -453,7 +530,10 @@ class Neo4jOntologyGraphRepository:
                     "MATCH (b:OntologyEntity {id: row.target}) "
                     "MERGE (a)-[r:" + relation_type + "]->(b) "
                     "SET r.weight = row.weight, r.evidenceIds = row.evidenceIds, "
-                    "r.ontologyBox = row.ontologyBox, r.ruleId = row.ruleId, r.boundedContext = row.boundedContext, "
+                    "r.ontologyBox = row.ontologyBox, r.accountId = row.accountId, r.aboxSnapshotId = row.aboxSnapshotId, "
+                    "r.snapshotId = row.snapshotId, r.asOf = row.asOf, r.isCurrent = row.isCurrent, "
+                    "r.tboxVersion = row.tboxVersion, r.activeTboxVersion = row.activeTboxVersion, r.tboxFingerprint = row.tboxFingerprint, "
+                    "r.ruleId = row.ruleId, r.boundedContext = row.boundedContext, "
                     "r.polarity = row.polarity, r.transitionType = row.transitionType, r.riskImpact = row.riskImpact, "
                     "r.supportImpact = row.supportImpact, r.decisionStage = row.decisionStage, r.stagePriority = row.stagePriority, "
                     "r.aiInfluenceLabel = row.aiInfluenceLabel, "
@@ -556,6 +636,33 @@ class Neo4jOntologyGraphRepository:
             token = base64.b64encode((self.user + ":" + self.password).encode("utf-8")).decode("ascii")
             headers["Authorization"] = "Basic " + token
         return endpoint, headers
+
+    def active_tbox_metadata_via_http(self) -> Dict[str, object]:
+        endpoint, headers = self.http_endpoint_and_headers()
+        try:
+            payload = self.post_http_statements(endpoint, headers, active_tbox_metadata_statements())
+        except Exception as error:  # noqa: BLE001 - projection can fall back to code TBox.
+            return active_tbox_metadata_unavailable("error", str(error)[:180], "neo4j-http")
+        errors = payload.get("errors") or []
+        if errors:
+            return active_tbox_metadata_unavailable("neo4j-error", json.dumps(errors[:2], ensure_ascii=False)[:300], "neo4j-http")
+        return active_tbox_metadata_from_rows(http_result_rowsets(payload, ["entities", "relations"]), "neo4j-http")
+
+    def active_tbox_metadata_via_driver(self) -> Dict[str, object]:
+        try:
+            from neo4j import GraphDatabase
+        except Exception as error:  # noqa: BLE001 - optional dependency.
+            return active_tbox_metadata_unavailable("driver-missing", "neo4j Python driver is not installed: " + str(error)[:120], "neo4j-driver")
+        try:
+            driver = GraphDatabase.driver(self.uri, auth=(self.user, self.password) if self.user or self.password else None)
+            rowsets: Dict[str, List[Dict[str, object]]] = {}
+            with driver.session(database=self.database) as session:
+                for key, statement in zip(["entities", "relations"], active_tbox_metadata_statements()):
+                    rowsets[key] = [neo4j_record_to_dict(record) for record in session.run(statement["statement"], **statement["parameters"])]
+            driver.close()
+            return active_tbox_metadata_from_rows(rowsets, "neo4j-driver")
+        except Exception as error:  # noqa: BLE001 - projection can fall back to code TBox.
+            return active_tbox_metadata_unavailable("error", str(error)[:180], "neo4j-driver")
 
     def rulebox_snapshot(self) -> Dict[str, object]:
         if not self.uri:
@@ -1040,6 +1147,72 @@ def graph_box_relation_counts(graph: PortfolioOntology) -> Dict[str, int]:
     return counts
 
 
+def active_tbox_metadata_statements() -> List[Dict[str, object]]:
+    return [
+        {
+            "statement": (
+                "MATCH (n:OntologyEntity) "
+                "WHERE n.ontologyBox = 'TBox' "
+                "RETURN count(n) AS entityCount, "
+                "max(coalesce(n.version, '')) AS version, "
+                "max(coalesce(n.tboxFingerprint, '')) AS fingerprint, "
+                "max(coalesce(n.updatedAt, '')) AS updatedAt"
+            ),
+            "parameters": {},
+        },
+        {
+            "statement": (
+                "MATCH ()-[r]->() "
+                "WHERE r.ontologyBox = 'TBox' "
+                "RETURN count(r) AS relationCount"
+            ),
+            "parameters": {},
+        },
+    ]
+
+
+def active_tbox_metadata_unavailable(status: str, reason: str, source: str) -> Dict[str, object]:
+    metadata = default_tbox_metadata()
+    metadata.update({
+        "configured": True,
+        "status": status,
+        "source": "code-fallback",
+        "storeSource": source,
+        "reason": reason,
+    })
+    return metadata
+
+
+def active_tbox_metadata_from_rows(rowsets: Dict[str, List[Dict[str, object]]], source: str) -> Dict[str, object]:
+    entity_row = (rowsets.get("entities") or [{}])[0]
+    relation_row = (rowsets.get("relations") or [{}])[0]
+    entity_count = int(entity_row.get("entityCount") or 0)
+    if entity_count <= 0:
+        metadata = default_tbox_metadata()
+        metadata.update({
+            "configured": True,
+            "status": "code-fallback",
+            "source": "code-fallback",
+            "storeSource": source,
+            "reason": "저장된 TBox 노드가 없어 코드 TBox 메타데이터를 사용합니다.",
+        })
+        return metadata
+    metadata = normalize_tbox_metadata({
+        "source": "neo4j",
+        "version": entity_row.get("version") or default_tbox_metadata()["version"],
+        "fingerprint": entity_row.get("fingerprint") or default_tbox_metadata()["fingerprint"],
+        "entityCount": entity_count,
+        "relationCount": int(relation_row.get("relationCount") or 0),
+        "status": "ok",
+    })
+    metadata.update({
+        "configured": True,
+        "storeSource": source,
+        "updatedAt": str(entity_row.get("updatedAt") or ""),
+    })
+    return metadata
+
+
 def rulebox_rules_to_payload(rules: Iterable[GraphInferenceRule]) -> List[Dict[str, object]]:
     return [rule.to_dict() for rule in rules]
 
@@ -1067,10 +1240,22 @@ def rulebox_graph_from_rules(rules: Iterable[GraphInferenceRule]) -> PortfolioOn
     graph.entities.extend(tbox_entities())
     graph.relations.extend(tbox_relations())
     add_rulebox_concepts(graph, rules)
+    tbox = default_tbox_metadata()
+    for item in graph.entities:
+        if str((item.properties or {}).get("ontologyBox") or "") == "RuleBox":
+            item.properties["tboxVersion"] = tbox["version"]
+            item.properties["activeTboxVersion"] = tbox["version"]
+            item.properties["tboxFingerprint"] = tbox["fingerprint"]
+    for item in graph.relations:
+        if str((item.properties or {}).get("ontologyBox") or "") == "RuleBox":
+            item.properties["tboxVersion"] = tbox["version"]
+            item.properties["activeTboxVersion"] = tbox["version"]
+            item.properties["tboxFingerprint"] = tbox["fingerprint"]
     graph.worldview = {
         "model": "neo4j-rulebox-source-of-truth",
         "engineVersion": GRAPH_REASONER_VERSION,
         "adminEditable": True,
+        "activeTBox": tbox,
     }
     return graph
 
@@ -1386,6 +1571,62 @@ def clear_rulebox_statements(clear_inference: bool = True) -> List[Dict[str, obj
         "parameters": {},
     })
     return statements
+
+
+def graph_abox_lifecycle(graph: PortfolioOntology) -> Dict[str, object]:
+    lifecycle = (graph.worldview or {}).get("aboxLifecycle") if isinstance(graph.worldview, dict) else {}
+    lifecycle = lifecycle if isinstance(lifecycle, dict) else {}
+    account_id = str(lifecycle.get("accountId") or "").strip()
+    snapshot_id = str(lifecycle.get("aboxSnapshotId") or lifecycle.get("snapshotId") or "").strip()
+    if not account_id or not snapshot_id:
+        return {}
+    return {
+        "accountId": account_id,
+        "aboxSnapshotId": snapshot_id,
+        "updatedAt": utc_now(),
+    }
+
+
+def deactivate_current_abox_statements(graph: PortfolioOntology) -> List[Dict[str, object]]:
+    lifecycle = graph_abox_lifecycle(graph)
+    if not lifecycle:
+        return []
+    return [
+        {
+            "statement": (
+                "MATCH (n:OntologyEntity) "
+                "WHERE n.ontologyBox = 'ABox' "
+                "AND n.accountId = $accountId "
+                "AND coalesce(n.isCurrent, false) = true "
+                "AND coalesce(n.aboxSnapshotId, '') <> $aboxSnapshotId "
+                "SET n.isCurrent = false, n.supersededAt = $updatedAt"
+            ),
+            "parameters": lifecycle,
+        },
+        {
+            "statement": (
+                "MATCH ()-[r]->() "
+                "WHERE r.ontologyBox = 'ABox' "
+                "AND r.accountId = $accountId "
+                "AND coalesce(r.isCurrent, false) = true "
+                "AND coalesce(r.aboxSnapshotId, '') <> $aboxSnapshotId "
+                "SET r.isCurrent = false, r.supersededAt = $updatedAt"
+            ),
+            "parameters": lifecycle,
+        },
+        {
+            "statement": (
+                "MATCH (n) "
+                "WHERE (n:OntologyEvidence OR n:OntologyBelief OR n:OntologyOpinion OR n:OntologyReasoningCard) "
+                "AND n.ontologyBox = 'ABox' "
+                "AND n.accountId = $accountId "
+                "AND coalesce(n.isCurrent, false) = true "
+                "AND coalesce(n.aboxSnapshotId, '') <> $aboxSnapshotId "
+                "SET n.isCurrent = false, n.supersededAt = $updatedAt"
+            ),
+            "parameters": lifecycle,
+        },
+    ]
 
 
 def clear_inferencebox_statements() -> List[Dict[str, object]]:
@@ -1797,7 +2038,10 @@ def native_reasoning_statement_for_relation_type(relation_type: str) -> Dict[str
         "MATCH (rule)-[:DERIVES_RELATION]->(template:OntologyEntity {kind: 'relation-template', ontologyBox: 'RuleBox'}) "
         "WHERE template.derivationRelationType = $relationType "
         "MATCH (stock:OntologyEntity {kind: 'stock'}) "
-        "WHERE stock.ontologyBox <> 'TBox' AND all(condition IN conditions WHERE "
+        "WHERE stock.ontologyBox = 'ABox' "
+        "AND coalesce(stock.isCurrent, false) = true "
+        "AND coalesce(stock.aboxSnapshotId, '') <> '' "
+        "AND all(condition IN conditions WHERE "
         "CASE condition.conditionKind "
         "WHEN 'subject_property' THEN "
         "CASE condition.conditionOperator "
@@ -1817,6 +2061,9 @@ def native_reasoning_statement_for_relation_type(relation_type: str) -> Dict[str
         "WHEN 'relation' THEN EXISTS { "
         "MATCH (stock)-[rel]->(target:OntologyEntity) "
         "WHERE type(rel) = condition.conditionRelationType "
+        "AND coalesce(rel.isCurrent, false) = true "
+        "AND (target.ontologyBox <> 'ABox' OR coalesce(target.isCurrent, false) = true) "
+        "AND (target.ontologyBox <> 'ABox' OR target.aboxSnapshotId = stock.aboxSnapshotId) "
         "AND coalesce(rel.weight, 0.0) >= coalesce(condition.conditionMinWeight, 0.0) "
         "AND (condition.conditionTargetKind = '' OR target.kind = condition.conditionTargetKind) "
         "AND (size(coalesce(condition.conditionTargetLevelTypes, [])) = 0 OR target.levelType IN condition.conditionTargetLevelTypes) "
@@ -1852,36 +2099,57 @@ def native_reasoning_statement_for_relation_type(relation_type: str) -> Dict[str
         "MERGE (target:OntologyEntity {id: targetId}) "
         "SET target.label = targetLabel, target.kind = template.derivationTargetKind, target.ontologyBox = 'InferenceBox', "
         "target.symbol = stock.symbol, target.ruleId = rule.ruleId, target.tboxClass = template.derivationTboxClass, "
+        "target.accountId = stock.accountId, target.aboxSnapshotId = stock.aboxSnapshotId, target.snapshotId = stock.snapshotId, "
+        "target.asOf = stock.asOf, target.isCurrent = true, target.tboxVersion = stock.tboxVersion, "
+        "target.activeTboxVersion = stock.activeTboxVersion, target.tboxFingerprint = stock.tboxFingerprint, "
         "target.actionGroup = template.derivationActionGroup, target.actionLevel = template.derivationActionLevel, "
         "target.decisionStage = template.derivationDecisionStage, target.stagePriority = template.derivationStagePriority, "
         "target.boundedContext = 'reasoning-insight', target.nativeNeo4jReasoned = true, target.updatedAt = $updatedAt "
         "MERGE (trace:OntologyEntity {id: traceId}) "
         "SET trace.label = stock.label + ' · ' + rule.label, trace.kind = 'inference-trace', trace.ontologyBox = 'InferenceBox', "
         "trace.symbol = stock.symbol, trace.ruleId = rule.ruleId, trace.tboxClass = 'InferenceTrace', "
+        "trace.accountId = stock.accountId, trace.aboxSnapshotId = stock.aboxSnapshotId, trace.snapshotId = stock.snapshotId, "
+        "trace.asOf = stock.asOf, trace.isCurrent = true, trace.tboxVersion = stock.tboxVersion, "
         "trace.boundedContext = 'reasoning-insight', trace.confidence = confidence, trace.nativeNeo4jReasoned = true, "
         "trace.matchedConditionIds = [c IN conditions | c.conditionId], trace.updatedAt = $updatedAt "
         "MERGE (evidence:OntologyEvidence {id: evidenceId}) "
         "SET evidence.subject = stock.id, evidence.kind = 'inference-trace', evidence.source = 'neo4j-native-rulebox', "
         "evidence.summary = stock.label + ' · ' + rule.label, evidence.ontologyBox = 'InferenceBox', "
+        "evidence.accountId = stock.accountId, evidence.aboxSnapshotId = stock.aboxSnapshotId, evidence.snapshotId = stock.snapshotId, "
+        "evidence.asOf = stock.asOf, evidence.isCurrent = true, evidence.tboxVersion = stock.tboxVersion, "
         "evidence.confidence = confidence, evidence.nativeNeo4jReasoned = true, evidence.updatedAt = $updatedAt "
         "MERGE (stock)-[:HAS_EVIDENCE]->(evidence) "
         "MERGE (rule)-[triggered:TRIGGERED_INFERENCE]->(trace) "
-        "SET triggered.weight = confidence, triggered.ontologyBox = 'InferenceBox', triggered.ruleId = rule.ruleId, triggered.nativeNeo4jReasoned = true, triggered.updatedAt = $updatedAt "
+        "SET triggered.weight = confidence, triggered.ontologyBox = 'InferenceBox', triggered.ruleId = rule.ruleId, "
+        "triggered.accountId = stock.accountId, triggered.aboxSnapshotId = stock.aboxSnapshotId, triggered.snapshotId = stock.snapshotId, "
+        "triggered.asOf = stock.asOf, triggered.isCurrent = true, triggered.tboxVersion = stock.tboxVersion, "
+        "triggered.nativeNeo4jReasoned = true, triggered.updatedAt = $updatedAt "
         "MERGE (stock)-[hasTrace:HAS_INFERENCE_TRACE]->(trace) "
-        "SET hasTrace.weight = confidence, hasTrace.ontologyBox = 'InferenceBox', hasTrace.ruleId = rule.ruleId, hasTrace.nativeNeo4jReasoned = true, hasTrace.updatedAt = $updatedAt "
+        "SET hasTrace.weight = confidence, hasTrace.ontologyBox = 'InferenceBox', hasTrace.ruleId = rule.ruleId, "
+        "hasTrace.accountId = stock.accountId, hasTrace.aboxSnapshotId = stock.aboxSnapshotId, hasTrace.snapshotId = stock.snapshotId, "
+        "hasTrace.asOf = stock.asOf, hasTrace.isCurrent = true, hasTrace.tboxVersion = stock.tboxVersion, "
+        "hasTrace.nativeNeo4jReasoned = true, hasTrace.updatedAt = $updatedAt "
         "MERGE (stock)-[inferred:" + safe_type + "]->(target) "
         "SET inferred.weight = coalesce(template.derivationWeight, 0.72), inferred.ontologyBox = 'InferenceBox', inferred.ruleId = rule.ruleId, "
+        "inferred.accountId = stock.accountId, inferred.aboxSnapshotId = stock.aboxSnapshotId, inferred.snapshotId = stock.snapshotId, "
+        "inferred.asOf = stock.asOf, inferred.isCurrent = true, inferred.tboxVersion = stock.tboxVersion, "
         "inferred.polarity = template.derivationPolarity, inferred.riskImpact = template.derivationRiskImpact, "
         "inferred.supportImpact = template.derivationSupportImpact, inferred.actionGroup = template.derivationActionGroup, "
         "inferred.actionLevel = template.derivationActionLevel, inferred.decisionStage = template.derivationDecisionStage, "
         "inferred.stagePriority = template.derivationStagePriority, inferred.aiInfluenceLabel = template.derivationAiInfluenceLabel, "
         "inferred.inferenceTraceId = traceId, inferred.evidenceIds = [evidenceId], inferred.nativeNeo4jReasoned = true, inferred.updatedAt = $updatedAt "
         "MERGE (target)-[explained:EXPLAINED_BY_TRACE]->(trace) "
-        "SET explained.weight = confidence, explained.ontologyBox = 'InferenceBox', explained.ruleId = rule.ruleId, explained.nativeNeo4jReasoned = true, explained.updatedAt = $updatedAt "
+        "SET explained.weight = confidence, explained.ontologyBox = 'InferenceBox', explained.ruleId = rule.ruleId, "
+        "explained.accountId = stock.accountId, explained.aboxSnapshotId = stock.aboxSnapshotId, explained.snapshotId = stock.snapshotId, "
+        "explained.asOf = stock.asOf, explained.isCurrent = true, explained.tboxVersion = stock.tboxVersion, "
+        "explained.nativeNeo4jReasoned = true, explained.updatedAt = $updatedAt "
         "FOREACH (_ IN CASE WHEN template.derivationBeliefLabel <> '' THEN [1] ELSE [] END | "
         "MERGE (belief:OntologyBelief {id: beliefId}) "
         "SET belief.label = template.derivationBeliefLabel, belief.polarity = CASE WHEN template.derivationPolarity IN ['risk', 'support'] THEN template.derivationPolarity ELSE 'context' END, "
-        "belief.confidence = confidence, belief.ontologyBox = 'InferenceBox', belief.evidenceIds = [evidenceId], belief.nativeNeo4jReasoned = true, belief.updatedAt = $updatedAt "
+        "belief.confidence = confidence, belief.ontologyBox = 'InferenceBox', belief.evidenceIds = [evidenceId], "
+        "belief.accountId = stock.accountId, belief.aboxSnapshotId = stock.aboxSnapshotId, belief.snapshotId = stock.snapshotId, "
+        "belief.asOf = stock.asOf, belief.isCurrent = true, belief.tboxVersion = stock.tboxVersion, "
+        "belief.nativeNeo4jReasoned = true, belief.updatedAt = $updatedAt "
         "MERGE (stock)-[:HAS_BELIEF]->(belief) "
         ")"
     )

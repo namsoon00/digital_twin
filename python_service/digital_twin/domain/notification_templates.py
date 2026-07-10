@@ -227,6 +227,10 @@ DEFAULT_NOTIFICATION_TEMPLATES = {
         "template": DEFAULT_TEMPLATE,
         "description": "보유 종목 타이밍 점검 알림",
     },
+    "ontologyInferenceMissing": {
+        "template": DEFAULT_TEMPLATE,
+        "description": "온톨로지 추론 결과 누락 상태 알림",
+    },
     "monitorHeartbeat": {
         "template": DEFAULT_TEMPLATE,
         "description": "실시간 모니터링 상태 알림",
@@ -786,6 +790,8 @@ def notification_title_headline(rule: str, raw_lines: List[str], event: AlertEve
     if key == "externalDataConnection":
         provider = raw_lines[0] if raw_lines else ""
         return (provider + " 연결 점검").strip() if provider else "외부 API 연결 점검"
+    if key == "ontologyInferenceMissing":
+        return "온톨로지 추론 결과 없음"
     return fallback or title_text or key
 
 
@@ -892,6 +898,9 @@ def inferred_criterion_lines(event: AlertEvent, raw_lines: List[str], trigger_su
         if detected:
             details.append("감지: " + detected)
     elif rule == "externalDataConnection":
+        if raw_lines:
+            details.append("감지: " + ", ".join(raw_lines[:2]))
+    elif rule == "ontologyInferenceMissing":
         if raw_lines:
             details.append("감지: " + ", ".join(raw_lines[:2]))
     elif rule == "monitorPositionChange":
@@ -1732,6 +1741,7 @@ MODELING_LABELS = {
     "watchlistQuotePending": "관심종목 시세 수집 대기 모델",
     "watchlistOntologySignal": "관심종목 온톨로지 관계 신호 모델",
     "holdingTiming": "보유 타이밍 모델",
+    "ontologyInferenceMissing": "온톨로지 추론 상태 점검 모델",
     "monitorHeartbeat": "실시간 모니터링 상태 모델",
     "monitorConnection": "토스 연결 상태 모델",
     "monitorPositionChange": "보유 수량 변화 감지 모델",
@@ -1757,6 +1767,7 @@ MODEL_DATA_HINTS = {
     "watchlistBuyCandidate": "관심종목 시세·수급·추세·가치평가 데이터",
     "watchlistOntologySignal": "관심종목 ABox 관측값, 관계 규칙, 추세 동역학, 데이터 품질",
     "holdingTiming": "보유 스냅샷, 손익률, 수급, 추세, 매도 가능 수량",
+    "ontologyInferenceMissing": "실계좌 스냅샷, Neo4j InferenceBox 상태, 관계·근거 추론 개수",
     "monitorDecisionChange": "이전/현재 보유 모델 점수와 보유 스냅샷",
     "monitorTrendChange": "현재가와 20일/60일 이동평균 비교",
     "monitorPnlChange": "이전/현재 손익률",

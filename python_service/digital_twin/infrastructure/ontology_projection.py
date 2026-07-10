@@ -1,6 +1,8 @@
 from typing import Dict, List, Set
+import hashlib
 
 from ..domain.ontology_contracts import PortfolioOntology
+from ..domain.ontology_validator import validate_ontology
 from ..domain.portfolio_ontology_builder import build_portfolio_ontology
 from ..domain.portfolio import AccountSnapshot
 
@@ -35,10 +37,21 @@ class PortfolioOntologyProjectionRecorder:
                 include_reasoning_outputs=False,
             )
             persistence_graph = self.graph_for_neo4j_persistence(graph)
+            validation = validate_ontology(persistence_graph)
+            if validation.error_count:
+                result = {
+                    "saved": False,
+                    "status": "invalid-abox",
+                    "reason": "ABox validation failed before Neo4j persistence.",
+                    "aboxValidation": validation.to_dict(),
+                }
+                snapshot.metadata.setdefault("ontology", {})["neo4j"] = result
+                return result
             result = self.repository.save_graph(persistence_graph)
             if not isinstance(result, dict):
                 result = {"saved": False, "status": "error", "reason": "ontology repository returned non-dict result"}
             result["projectionMode"] = "abox-facts-only-neo4j-rulebox"
+            result["aboxValidation"] = validation.to_dict()
             if result.get("saved"):
                 self.attach_neo4j_inference_result(result, snapshot)
             if self.quality_store:
@@ -128,8 +141,19 @@ class PortfolioOntologyProjectionRecorder:
         return False
 
     def runtime_context(self, snapshot: AccountSnapshot) -> Dict[str, object]:
+        active_tbox = {}
+        if hasattr(self.repository, "active_tbox_metadata"):
+            try:
+                active_tbox = self.repository.active_tbox_metadata()
+            except Exception as error:  # noqa: BLE001 - projection can still use code fallback in builder.
+                active_tbox = {"status": "error", "reason": str(error)[:180], "source": "code-fallback"}
+        as_of = str(snapshot.generated_at or "").strip()
+        snapshot_seed = "|".join([str(snapshot.account_id or ""), as_of or "unknown"])
         return {
             "settings": dict(self.settings),
+            "snapshotId": "abox-snapshot:" + hashlib.sha256(snapshot_seed.encode("utf-8")).hexdigest()[:16],
+            "asOf": as_of,
+            "activeTBox": active_tbox,
             "account": {
                 "accountId": snapshot.account_id,
                 "accountLabel": snapshot.account_label,

@@ -23,6 +23,7 @@ ACTIONABLE_NOTIFICATION_RULES = {
     "modelSell",
     "watchlistBuyCandidate",
     "holdingTiming",
+    "ontologyInferenceMissing",
     "monitorDecisionChange",
     "watchlistQuote",
     "externalDataConnection",

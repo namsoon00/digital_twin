@@ -49,10 +49,20 @@ def _entity_classes(properties: Dict[str, object]) -> List[str]:
 def validate_ontology(graph: PortfolioOntology) -> OntologyValidationReport:
     issues: List[OntologyValidationIssue] = []
     entity_ids = {item.entity_id for item in graph.entities or []}
+    required_lifecycle_fields = ["accountId", "aboxSnapshotId", "tboxVersion"]
     for entity in graph.entities or []:
         properties = entity.properties or {}
         if properties.get("ontologyBox") == "TBox":
             continue
+        if properties.get("ontologyBox") == "ABox":
+            missing_lifecycle = [field for field in required_lifecycle_fields if not properties.get(field)]
+            if missing_lifecycle:
+                issues.append(OntologyValidationIssue(
+                    "warning",
+                    "missing_abox_lifecycle",
+                    entity.entity_id,
+                    "ABox entity is missing lifecycle fields: " + ", ".join(missing_lifecycle),
+                ))
         classes = _entity_classes(properties)
         if not classes:
             issues.append(OntologyValidationIssue(
@@ -74,6 +84,15 @@ def validate_ontology(graph: PortfolioOntology) -> OntologyValidationReport:
         properties = relation.properties or {}
         if properties.get("ontologyBox") == "TBox":
             continue
+        if properties.get("ontologyBox") == "ABox":
+            missing_lifecycle = [field for field in required_lifecycle_fields if not properties.get(field)]
+            if missing_lifecycle:
+                issues.append(OntologyValidationIssue(
+                    "warning",
+                    "missing_abox_lifecycle",
+                    relation.source + " -> " + relation.target,
+                    "ABox relation is missing lifecycle fields: " + ", ".join(missing_lifecycle),
+                ))
         if relation.source not in entity_ids:
             issues.append(OntologyValidationIssue(
                 "error",

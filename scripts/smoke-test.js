@@ -1735,6 +1735,7 @@ async function checkNormalMode(port, context) {
   const templatesPayload = JSON.parse(templates.body);
   assertOk(Array.isArray(templatesPayload.templates), "알림 템플릿 API templates가 배열이 아닙니다.");
   assertOk(templatesPayload.templates.some(function (item) { return item.messageType === "investmentInsight"; }), "투자 인사이트 템플릿이 없습니다.");
+  assertOk(templatesPayload.templates.some(function (item) { return item.messageType === "ontologyInferenceMissing"; }), "온톨로지 추론 상태 템플릿이 없습니다.");
   assertOk(templatesPayload.templates.some(function (item) { return item.messageType === "externalDataConnection"; }), "외부 데이터 연결 템플릿이 없습니다.");
   assertOk(!templatesPayload.templates.some(function (item) { return item.messageType === "monitorHeartbeat"; }), "내부 상태 확인 템플릿이 기본 목록에 노출됩니다.");
   assertOk(!templatesPayload.templates.some(function (item) { return item.messageType === "watchlistQuote"; }), "근거 시세 템플릿이 기본 목록에 노출됩니다.");

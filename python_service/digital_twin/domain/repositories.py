@@ -87,6 +87,9 @@ class MonitoringCycleRecorder(Protocol):
 
 
 class OntologyGraphRepository(Protocol):
+    def active_tbox_metadata(self) -> Dict[str, object]:
+        ...
+
     def save_graph(self, graph: PortfolioOntology) -> Dict[str, object]:
         ...
 

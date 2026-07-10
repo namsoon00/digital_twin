@@ -13,10 +13,11 @@ from .message_types import (
     DEFAULT_CADENCE,
     INVESTMENT_INSIGHT,
     MIN_CADENCE_MINUTES,
+    ONTOLOGY_INFERENCE_MISSING,
     WATCHLIST_ONTOLOGY_SIGNAL,
 )
 from .model_review import decision_change_context, decision_change_review_lines
-from .ontology_inference_context import relation_contexts_from_snapshot
+from .ontology_inference_context import inferencebox_from_snapshot, relation_contexts_from_snapshot
 from .ontology_insights import build_investment_insight_events, split_operational_and_investment_events
 from .ontology_relation_rules import decision_action_group_for_label, relation_rule_context_summary_lines, relation_thresholds_from_settings
 from .parsing import parse_assignments
@@ -215,6 +216,7 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
         raw_events.extend(self.connection_events(decision_snapshot, previous))
         raw_events.extend(self.heartbeat_events(decision_snapshot))
         if has_account_data:
+            raw_events.extend(self.ontology_inference_missing_events(decision_snapshot))
             raw_events.extend(self.model_score_events(signal_snapshot))
         if has_account_data and previous_has_account_data:
             raw_events.extend(self.position_change_events(decision_snapshot, previous))
@@ -241,6 +243,7 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
         snapshot = self.snapshot_with_strategy_scores(snapshot)
         events.extend(self.connection_events(snapshot, {"status": "이전 연결 상태"}))
         events.extend(self.heartbeat_events(snapshot))
+        events.extend(self.only_rule(ONTOLOGY_INFERENCE_MISSING, self.ontology_inference_missing_events(snapshot)))
         model_events = self.model_score_events(snapshot)
         events.extend(self.only_rule("modelBuy", model_events) or self.model_sample_events(snapshot, "modelBuy"))
         events.extend(self.only_rule("modelSell", model_events) or self.model_sample_events(snapshot, "modelSell"))
@@ -1204,6 +1207,109 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
                 "상태 " + (snapshot.status or snapshot.mode) + ", 보유 " + str(len([item for item in snapshot.positions if not item.is_cash()])) + "개",
             ),
         )]
+
+    def ontology_inference_missing_events(self, snapshot: AccountSnapshot) -> List[AlertEvent]:
+        positions = [item for item in snapshot.positions or [] if getattr(item, "symbol", "") and not item.is_cash()]
+        if not snapshot.has_live_account_data() or not positions:
+            return []
+        inference_contexts = relation_contexts_from_snapshot(
+            snapshot,
+            getattr(self.strategy_model, "settings", {}) if self.strategy_model else {},
+        )
+        if inference_contexts:
+            return []
+
+        reason_code, reason, inference_status = self.ontology_inference_missing_reason(snapshot)
+        relation_count = int(number(inference_status.get("relationCount")) or 0)
+        trace_count = int(number(inference_status.get("traceCount")) or 0)
+        entity_count = int(number(inference_status.get("entityCount")) or 0)
+        native_used = bool(inference_status.get("neo4jNativeReasoningUsed"))
+        status_text = str(inference_status.get("status") or "missing").strip() or "missing"
+        lines = [
+            "상태 온톨로지 추론 결과 없음",
+            "판단 차단 매수·매도 판단은 생성하지 않았습니다",
+            "원인 " + reason,
+            "추론 상태 status=" + status_text + ", relations=" + str(relation_count) + ", traces=" + str(trace_count),
+            "보유 " + str(len(positions)) + "개",
+            "확인 행동 Neo4j 연결, RuleBox 저장 상태, 온톨로지 추론 워커 점검",
+        ]
+        inference_metadata = ontology_inference_event_metadata(snapshot)
+        if not inference_metadata:
+            inference_metadata = {
+                "source": "neo4jInferenceBox",
+                "status": status_text,
+                "projectionMode": str(inference_status.get("projectionMode") or ""),
+                "ruleboxExecutionStatus": str(inference_status.get("ruleboxExecutionStatus") or ""),
+                "neo4jNativeReasoningUsed": native_used,
+                "entityCount": entity_count,
+                "relationCount": relation_count,
+                "traceCount": trace_count,
+                "nativeRelationCount": int(number(inference_status.get("nativeRelationCount")) or 0),
+                "relations": [],
+                "traces": [],
+            }
+        inference_metadata = dict(inference_metadata)
+        inference_metadata.update({
+            "missing": True,
+            "missingReasonCode": reason_code,
+            "missingReason": reason,
+        })
+        return [AlertEvent(
+            snapshot.account_id,
+            snapshot.account_label,
+            "WATCH",
+            ONTOLOGY_INFERENCE_MISSING,
+            ":".join([snapshot.account_id, "ontology-inference-missing", reason_code]),
+            "온톨로지 추론 상태",
+            lines,
+            criteria=self.criteria(
+                "실계좌 데이터와 보유 종목이 있는데 Neo4j InferenceBox 관계 추론을 사용할 수 없을 때",
+                reason + ", 보유 " + str(len(positions)) + "개, relationCount=" + str(relation_count) + ", traceCount=" + str(trace_count),
+            ),
+            metadata={
+                "blockedInvestmentJudgment": True,
+                "missingInferenceBox": True,
+                "missingInferenceReasonCode": reason_code,
+                "missingInferenceReason": reason,
+                "positionCount": len(positions),
+                "ontologyInference": inference_metadata,
+            },
+        )]
+
+    def ontology_inference_missing_reason(self, snapshot: AccountSnapshot):
+        metadata = snapshot.metadata if isinstance(snapshot.metadata, dict) else {}
+        ontology = metadata.get("ontology") if isinstance(metadata.get("ontology"), dict) else {}
+        projection = ontology.get("neo4j") if isinstance(ontology.get("neo4j"), dict) else ontology.get("projection")
+        if not isinstance(projection, dict) or not projection:
+            return "missingProjection", "Neo4j 온톨로지 투영 결과가 없습니다", {
+                "status": "missing",
+                "projectionMode": "",
+                "ruleboxExecutionStatus": "",
+            }
+        inference = inferencebox_from_snapshot(snapshot)
+        rulebox_execution = projection.get("ruleboxExecution") if isinstance(projection.get("ruleboxExecution"), dict) else {}
+        status = str((inference or {}).get("status") or projection.get("status") or "").strip()
+        common = {
+            "status": status or ("empty" if isinstance(inference, dict) else "missing"),
+            "projectionMode": str(projection.get("projectionMode") or ""),
+            "ruleboxExecutionStatus": str(rulebox_execution.get("status") or ""),
+            "neo4jNativeReasoningUsed": bool((inference or {}).get("neo4jNativeReasoningUsed")) if isinstance(inference, dict) else False,
+            "entityCount": int(number((inference or {}).get("entityCount")) or 0) if isinstance(inference, dict) else 0,
+            "relationCount": int(number((inference or {}).get("relationCount")) or 0) if isinstance(inference, dict) else 0,
+            "traceCount": int(number((inference or {}).get("traceCount")) or 0) if isinstance(inference, dict) else 0,
+            "nativeRelationCount": int(number((inference or {}).get("nativeRelationCount")) or 0) if isinstance(inference, dict) else 0,
+        }
+        if not inference:
+            return "missingInferenceBox", "Neo4j InferenceBox 응답이 없습니다", common
+        if status and status.lower() not in {"ok", "partial"}:
+            return "inferenceBoxStatusBlocked", "InferenceBox 상태가 " + status + "입니다", common
+        relations = inference.get("relations") if isinstance(inference.get("relations"), list) else []
+        traces = inference.get("traces") if isinstance(inference.get("traces"), list) else []
+        if not bool(inference.get("neo4jNativeReasoningUsed")) and not relations:
+            return "nativeReasoningMissing", "Neo4j 네이티브 추론 관계가 아직 없습니다", common
+        if not relations and not traces:
+            return "emptyInferenceBox", "InferenceBox 관계와 근거가 0개입니다", common
+        return "positionInferenceMissing", "보유 종목과 연결된 InferenceBox 관계가 없습니다", common
 
     def position_change_events(self, snapshot: AccountSnapshot, previous: Dict[str, object]) -> List[AlertEvent]:
         current_positions = snapshot.to_monitor_state()["positions"]

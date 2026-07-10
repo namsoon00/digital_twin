@@ -57,36 +57,49 @@ class Neo4jOntologyGraphRepository:
             "CREATE CONSTRAINT ontology_reasoning_card_id IF NOT EXISTS FOR (n:OntologyReasoningCard) REQUIRE n.id IS UNIQUE",
             "CREATE INDEX ontology_entity_box_kind IF NOT EXISTS FOR (n:OntologyEntity) ON (n.ontologyBox, n.kind)",
             "CREATE INDEX ontology_entity_updated IF NOT EXISTS FOR (n:OntologyEntity) ON (n.updatedAt)",
+            "CREATE INDEX ontology_entity_rule_id IF NOT EXISTS FOR (n:OntologyEntity) ON (n.ruleId)",
+            "CREATE INDEX ontology_entity_symbol IF NOT EXISTS FOR (n:OntologyEntity) ON (n.symbol)",
+            "CREATE INDEX ontology_entity_tbox_class IF NOT EXISTS FOR (n:OntologyEntity) ON (n.tboxClass)",
+            "CREATE INDEX ontology_entity_bounded_context IF NOT EXISTS FOR (n:OntologyEntity) ON (n.boundedContext)",
+            "CREATE INDEX ontology_evidence_subject IF NOT EXISTS FOR (n:OntologyEvidence) ON (n.subject)",
             "CREATE INDEX ontology_opinion_symbol IF NOT EXISTS FOR (n:OntologyOpinion) ON (n.symbol)",
             "CREATE INDEX ontology_reasoning_card_symbol IF NOT EXISTS FOR (n:OntologyReasoningCard) ON (n.symbol)",
         ]
         return [{"statement": statement, "parameters": {}} for statement in statements]
 
     def rows_for_entities(self, graph: PortfolioOntology) -> List[Dict[str, object]]:
-        return [
-            {
+        rows: List[Dict[str, object]] = []
+        for item in graph.entities:
+            properties = item.properties or {}
+            rows.append({
                 "id": item.entity_id,
                 "label": item.label,
                 "kind": item.kind,
-                "ontologyBox": str((item.properties or {}).get("ontologyBox") or "ABox"),
-                "propertiesJson": json.dumps(item.properties or {}, ensure_ascii=False, sort_keys=True),
-            }
-            for item in graph.entities
-        ]
+                "ontologyBox": str(properties.get("ontologyBox") or "ABox"),
+                "symbol": str(properties.get("symbol") or ""),
+                "ruleId": str(properties.get("ruleId") or ""),
+                "tboxClass": str(properties.get("tboxClass") or ""),
+                "boundedContext": str(properties.get("boundedContext") or ""),
+                "propertiesJson": json.dumps(properties, ensure_ascii=False, sort_keys=True),
+            })
+        return rows
 
     def rows_for_relations(self, graph: PortfolioOntology) -> List[Dict[str, object]]:
-        return [
-            {
+        rows: List[Dict[str, object]] = []
+        for item in graph.relations:
+            properties = item.properties or {}
+            rows.append({
                 "source": item.source,
                 "target": item.target,
                 "type": safe_relation_type(item.relation_type),
                 "weight": float(item.weight or 0),
-                "ontologyBox": str((item.properties or {}).get("ontologyBox") or "ABox"),
+                "ontologyBox": str(properties.get("ontologyBox") or "ABox"),
+                "boundedContext": str(properties.get("boundedContext") or ""),
+                "ruleId": str(properties.get("ruleId") or ""),
                 "evidenceIds": [str(value) for value in item.evidence_ids],
-                "propertiesJson": json.dumps(item.properties or {}, ensure_ascii=False, sort_keys=True),
-            }
-            for item in graph.relations
-        ]
+                "propertiesJson": json.dumps(properties, ensure_ascii=False, sort_keys=True),
+            })
+        return rows
 
     def rows_for_evidence(self, graph: PortfolioOntology) -> List[Dict[str, object]]:
         return [
@@ -96,7 +109,7 @@ class Neo4jOntologyGraphRepository:
                 "kind": item.kind,
                 "source": item.source,
                 "summary": item.summary,
-                "ontologyBox": "ABox",
+                "ontologyBox": str((item.value or {}).get("ontologyBox") or ("InferenceBox" if item.kind == "inference-trace" else "ABox")),
                 "valueJson": json.dumps(item.value or {}, ensure_ascii=False, sort_keys=True),
                 "confidence": float(item.confidence or 0),
             }
@@ -111,7 +124,7 @@ class Neo4jOntologyGraphRepository:
                 "label": item.label,
                 "polarity": item.polarity,
                 "confidence": float(item.confidence or 0),
-                "ontologyBox": "ABox",
+                "ontologyBox": "InferenceBox" if str(item.belief_id or "").startswith("belief:inference:") else "ABox",
                 "evidenceIds": [str(value) for value in item.evidence_ids],
             }
             for item in graph.beliefs
@@ -156,7 +169,9 @@ class Neo4jOntologyGraphRepository:
                     "UNWIND $rows AS row "
                     "MERGE (n:OntologyEntity {id: row.id}) "
                     "SET n.label = row.label, n.kind = row.kind, "
-                    "n.ontologyBox = row.ontologyBox, n.propertiesJson = row.propertiesJson, n.updatedAt = $updatedAt"
+                    "n.ontologyBox = row.ontologyBox, n.symbol = row.symbol, n.ruleId = row.ruleId, "
+                    "n.tboxClass = row.tboxClass, n.boundedContext = row.boundedContext, "
+                    "n.propertiesJson = row.propertiesJson, n.updatedAt = $updatedAt"
                 ),
                 "parameters": {"rows": self.rows_for_entities(graph), "updatedAt": updated_at},
             },
@@ -164,7 +179,7 @@ class Neo4jOntologyGraphRepository:
                 "statement": (
                     "UNWIND $rows AS row "
                     "MERGE (n:OntologyEvidence {id: row.id}) "
-                    "SET n.kind = row.kind, n.source = row.source, n.summary = row.summary, n.ontologyBox = row.ontologyBox, "
+                    "SET n.subject = row.subject, n.kind = row.kind, n.source = row.source, n.summary = row.summary, n.ontologyBox = row.ontologyBox, "
                     "n.valueJson = row.valueJson, n.confidence = row.confidence, n.updatedAt = $updatedAt "
                     "WITH row, n MATCH (s:OntologyEntity {id: row.subject}) "
                     "MERGE (s)-[:HAS_EVIDENCE]->(n)"
@@ -215,7 +230,8 @@ class Neo4jOntologyGraphRepository:
                     "MATCH (b:OntologyEntity {id: row.target}) "
                     "MERGE (a)-[r:" + relation_type + "]->(b) "
                     "SET r.weight = row.weight, r.evidenceIds = row.evidenceIds, "
-                    "r.ontologyBox = row.ontologyBox, r.propertiesJson = row.propertiesJson, r.updatedAt = $updatedAt"
+                    "r.ontologyBox = row.ontologyBox, r.ruleId = row.ruleId, r.boundedContext = row.boundedContext, "
+                    "r.propertiesJson = row.propertiesJson, r.updatedAt = $updatedAt"
                 ),
                 "parameters": {"rows": rows, "updatedAt": updated_at},
             })

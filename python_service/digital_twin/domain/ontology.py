@@ -35,6 +35,7 @@ from .ontology_schema import (
 from .ontology_tbox import (
     tbox_class_def,
 )
+from .ontology_rulebox import add_rulebox_concepts, default_graph_inference_rules, run_graph_reasoner
 from .ontology_rules import evaluate_position_relation_rules
 from .parsing import parse_assignments
 from .portfolio import PortfolioSummary, Position
@@ -2279,6 +2280,9 @@ def build_portfolio_ontology(
                 "aiInfluenceLabel": opinion.contradictions[0],
             })))
     add_decision_item_concepts(graph, runtime_context)
+    graph_inference_rules = default_graph_inference_rules()
+    add_rulebox_concepts(graph, graph_inference_rules)
+    run_graph_reasoner(graph, graph_inference_rules)
     graph.entities = dedupe_entities(graph.entities)
     graph.relations = dedupe_relations(graph.relations)
     graph.evidence = dedupe_evidence(graph.evidence)

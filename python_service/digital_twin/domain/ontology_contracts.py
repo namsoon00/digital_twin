@@ -95,13 +95,18 @@ class PortfolioOntology:
     prompt: str = ""
 
     def to_dict(self) -> Dict[str, object]:
-        from .ontology_prompting import ONTOLOGY_PROMPT_VERSION, build_ai_inference_packet
+        from .ontology_prompting import ONTOLOGY_PROMPT_VERSION, build_ai_inference_packet, inferencebox_payload, rulebox_payload
         from .ontology_schema import ontology_abox, ontology_tbox
 
+        inferencebox = inferencebox_payload(self)
         return {
             "portfolioId": self.portfolio_id,
             "tbox": ontology_tbox(),
             "abox": ontology_abox(self),
+            "ruleBox": rulebox_payload(self),
+            "inferenceBox": inferencebox,
+            "derivedRelations": list(inferencebox.get("derivedRelations") or []),
+            "inferenceTraces": list(inferencebox.get("traces") or []),
             "entities": [item.to_dict() for item in self.entities],
             "relations": [item.to_dict() for item in self.relations],
             "evidence": [item.to_dict() for item in self.evidence],

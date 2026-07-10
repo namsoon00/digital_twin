@@ -50,6 +50,55 @@ def compact_relation_row(item: OntologyRelation, labels: Dict[str, str]) -> Dict
     }
 
 
+def ontology_box(properties: Dict[str, object], default: str = "ABox") -> str:
+    return str((properties or {}).get("ontologyBox") or default)
+
+
+def rulebox_payload(graph: PortfolioOntology) -> Dict[str, object]:
+    labels = entity_label_map(graph)
+    entities = [item for item in graph.entities if ontology_box(item.properties) == "RuleBox"]
+    relations = [item for item in graph.relations if ontology_box(item.properties) == "RuleBox"]
+    rules = [item for item in entities if item.kind == "rule"]
+    conditions = [item for item in entities if item.kind == "rule-condition"]
+    templates = [item for item in entities if item.kind == "relation-template"]
+    return {
+        "box": "RuleBox",
+        "description": "Executable graph rules represented as ontology nodes.",
+        "entityCount": len(entities),
+        "relationCount": len(relations),
+        "ruleCount": len(rules),
+        "conditionCount": len(conditions),
+        "relationTemplateCount": len(templates),
+        "rules": [item.to_dict() for item in rules[:24]],
+        "conditions": [item.to_dict() for item in conditions[:40]],
+        "relationTemplates": [item.to_dict() for item in templates[:40]],
+        "relations": [compact_relation_row(item, labels) for item in relations[:80]],
+    }
+
+
+def inferencebox_payload(graph: PortfolioOntology) -> Dict[str, object]:
+    labels = entity_label_map(graph)
+    entities = [item for item in graph.entities if ontology_box(item.properties) == "InferenceBox"]
+    relations = [item for item in graph.relations if ontology_box(item.properties) == "InferenceBox"]
+    traces = [item for item in entities if item.kind == "inference-trace"]
+    evidence = [
+        item
+        for item in graph.evidence
+        if item.kind == "inference-trace" or ontology_box(item.value) == "InferenceBox"
+    ]
+    return {
+        "box": "InferenceBox",
+        "description": "Derived assertions and inference traces produced from RuleBox rules.",
+        "entityCount": len(entities),
+        "relationCount": len(relations),
+        "traceCount": len(traces),
+        "evidenceCount": len(evidence),
+        "traces": [item.to_dict() for item in traces[:40]],
+        "derivedRelations": [compact_relation_row(item, labels) for item in relations[:100]],
+        "evidence": [compact_evidence_row(item) for item in evidence[:60]],
+    }
+
+
 def build_reasoning_cards(graph: PortfolioOntology) -> List[Dict[str, object]]:
     labels = entity_label_map(graph)
     entities = {item.entity_id: item for item in graph.entities}
@@ -165,13 +214,16 @@ def build_ai_inference_packet(graph: PortfolioOntology) -> Dict[str, object]:
     insight_count = len([item for item in graph.entities if item.kind == "insight"])
     active_opinion_count = len([item for item in graph.entities if item.kind == "active-opinion"])
     execution_plan_count = len([item for item in graph.entities if item.kind == "execution-plan"])
+    rulebox_entity_count = len([item for item in graph.entities if ontology_box(item.properties) == "RuleBox"])
+    inferencebox_entity_count = len([item for item in graph.entities if ontology_box(item.properties) == "InferenceBox"])
+    inferencebox_relation_count = len([item for item in graph.relations if ontology_box(item.properties) == "InferenceBox"])
     return {
         "contract": "investment-ontology-ai-inference-v1",
         "promptVersion": ONTOLOGY_PROMPT_VERSION,
         "role": "ontology-first-investment-opinion",
         "legacyModelRole": "not-used-for-scoring",
         "notificationRole": "insight-driven-dispatch",
-        "inputOrder": ["tbox", "boundedContexts", "abox", "operationalOntology", "reasoningCards", "relationInfluences", "researchEvidence", "signalTransitions", "factorExposure", "liquidityConstraints", "insights", "activeInvestmentOpinions", "executionPlans", "relations", "evidence", "beliefs", "opinions"],
+        "inputOrder": ["tbox", "boundedContexts", "ruleBox", "abox", "inferenceBox", "derivedRelations", "inferenceTraces", "operationalOntology", "reasoningCards", "relationInfluences", "researchEvidence", "signalTransitions", "factorExposure", "liquidityConstraints", "insights", "activeInvestmentOpinions", "executionPlans", "relations", "evidence", "beliefs", "opinions"],
         "reasoningCardCount": len(graph.reasoning_cards),
         "reasoningCardIds": [item.get("id") for item in graph.reasoning_cards],
         "graphInputs": {
@@ -181,6 +233,9 @@ def build_ai_inference_packet(graph: PortfolioOntology) -> Dict[str, object]:
             "evidenceCount": len(graph.evidence),
             "beliefCount": len(graph.beliefs),
             "opinionCount": len(graph.opinions),
+            "ruleBoxEntityCount": rulebox_entity_count,
+            "inferenceBoxEntityCount": inferencebox_entity_count,
+            "inferenceBoxRelationCount": inferencebox_relation_count,
             "pipelineCount": pipeline_count,
             "insightCount": insight_count,
             "activeOpinionCount": active_opinion_count,
@@ -197,6 +252,7 @@ def build_ai_inference_packet(graph: PortfolioOntology) -> Dict[str, object]:
         },
         "guardrails": [
             "제공된 TBox, ABox, reasoning card, 관계 행만 사용합니다.",
+            "RuleBox의 조건과 InferenceBox의 파생 관계를 우선 읽고, 어떤 규칙이 결론을 만들었는지 설명합니다.",
             "보유 종목 HOLDS와 관심 종목 WATCHES를 다른 판단 단계로 설명합니다.",
             "최종 점수는 관계 규칙과 관계 근거로만 계산합니다.",
             "알림 타입 이름보다 온톨로지 인사이트, 신규성, 쿨다운, 억제 정책을 우선합니다.",
@@ -222,17 +278,36 @@ def portfolio_worldview(
     insight_nodes = [item for item in graph.entities if item.kind == "insight"]
     dispatch_nodes = [item for item in graph.entities if item.kind == "notification-dispatch"]
     bounded_context_counts: Dict[str, int] = {}
+    ontology_box_counts: Dict[str, int] = {}
+    ontology_relation_box_counts: Dict[str, int] = {}
     for item in graph.entities:
+        box = ontology_box(item.properties)
+        ontology_box_counts[box] = ontology_box_counts.get(box, 0) + 1
         context = str((item.properties or {}).get("boundedContext") or "")
         if context and (item.properties or {}).get("ontologyBox") != "TBox":
             bounded_context_counts[context] = bounded_context_counts.get(context, 0) + 1
+    for item in graph.relations:
+        box = ontology_box(item.properties)
+        ontology_relation_box_counts[box] = ontology_relation_box_counts.get(box, 0) + 1
     top_sector = portfolio.sectors[0] if portfolio.sectors else {}
     return {
         "model": "ontology-first",
         "ontologyBoxes": {
             "tbox": ontology_tbox(),
             "abox": ontology_abox(graph),
+            "rulebox": {
+                "box": "RuleBox",
+                "entityCount": ontology_box_counts.get("RuleBox", 0),
+                "relationCount": ontology_relation_box_counts.get("RuleBox", 0),
+            },
+            "inferencebox": {
+                "box": "InferenceBox",
+                "entityCount": ontology_box_counts.get("InferenceBox", 0),
+                "relationCount": ontology_relation_box_counts.get("InferenceBox", 0),
+            },
         },
+        "ontologyBoxCounts": ontology_box_counts,
+        "ontologyRelationBoxCounts": ontology_relation_box_counts,
         "boundedContexts": bounded_contexts_payload(),
         "aboxBoundedContextCounts": bounded_context_counts,
         "legacyModelRole": "not-used-for-scoring",
@@ -300,6 +375,8 @@ def prompt_relation_priority(item: OntologyRelation) -> float:
         priority += 18
     if properties.get("polarity") in {"risk", "support"}:
         priority += 8
+    if ontology_box(properties) == "InferenceBox":
+        priority += 22
     return priority
 
 
@@ -312,6 +389,8 @@ def prompt_evidence_priority(item: OntologyEvidence) -> float:
         priority += 10
     if item.kind in {"disclosure", "filing", "news", "market-move", "financial-fact"}:
         priority += 8
+    if item.kind == "inference-trace" or ontology_box(payload) == "InferenceBox":
+        priority += 18
     return priority
 
 
@@ -328,10 +407,15 @@ def prompt_payload(graph: PortfolioOntology) -> Dict[str, object]:
     relations = sorted(graph.relations, key=prompt_relation_priority, reverse=True)
     evidence = sorted(graph.evidence, key=prompt_evidence_priority, reverse=True)
     beliefs = sorted(graph.beliefs, key=prompt_belief_priority, reverse=True)
+    inferencebox = inferencebox_payload(graph)
     return {
         "tbox": ontology_tbox(),
         "boundedContexts": bounded_contexts_payload(),
+        "ruleBox": rulebox_payload(graph),
         "abox": ontology_abox(graph),
+        "inferenceBox": inferencebox,
+        "derivedRelations": list(inferencebox.get("derivedRelations") or []),
+        "inferenceTraces": list(inferencebox.get("traces") or []),
         "worldview": graph.worldview,
         "aiInferencePacket": build_ai_inference_packet(graph),
         "reasoningCards": list(graph.reasoning_cards),
@@ -358,12 +442,12 @@ def build_investment_opinion_prompt(graph: PortfolioOntology) -> str:
     payload = json.dumps(prompt_payload(graph), ensure_ascii=False, sort_keys=True)
     return "\n".join([
         "너는 투자전략 관계 분석 데이터를 읽는 AI 투자 의견 리뷰어다.",
-        "규칙 구조는 투자 핵심, 관측 데이터, 전략 가설, 리스크, 추론 인사이트, 운영/알림 바운디드 컨텍스트로 나뉜 세계관이다.",
-        "현재 데이터는 계좌의 실제 보유, 근거, 판단 근거, 운영 정책, 의견 기록이다.",
+        "규칙 구조는 투자 핵심, 관측 데이터, 전략 가설, 리스크, 추론 인사이트, 운영/알림 바운디드 컨텍스트와 RuleBox로 나뉜 세계관이다.",
+        "현재 데이터는 계좌의 실제 보유, 근거, 판단 근거, 운영 정책, 의견 기록이며 InferenceBox는 RuleBox가 파생한 관계와 추론 경로다.",
         "제공된 근거 안에서 BUY, ADD, HOLD, TRIM, SELL, AVOID 중 하나의 투자 의견을 반드시 고르되 자동 주문 지시로 표현하지 마라.",
         "최종 판단과 점수는 관계 규칙과 근거 충돌을 기준으로 설명해라.",
         "뉴스, 공시, SEC/OpenDART 근거와 출처 URL을 적극적으로 반영하고, 반대 근거와 무효화 조건을 함께 제시해라.",
-        "새 관측값이나 관계가 추가되면 어떤 투자 가설, 리스크, 인사이트, 알림 정책에 영향을 주는지 먼저 추론해라.",
+        "새 관측값이나 관계가 추가되면 어떤 RuleBox 조건이 켜지고 어떤 InferenceBox 관계가 생겨 투자 가설, 리스크, 인사이트, 알림 정책에 영향을 주는지 먼저 추론해라.",
         "알림은 알림 타입별 주기가 아니라 온톨로지 인사이트의 신규성, 신뢰도, 쿨다운, 억제 정책으로 설명해라.",
         "계좌번호, API 키, 토큰, 개인 식별정보를 추정하거나 요청하지 마라.",
         "응답 섹션은 반드시 투자 관점, 핵심 관계, 보유 이유와 반대 신호, 종목별 의견, 다음 검증 순서로 작성해라.",

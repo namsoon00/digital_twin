@@ -30,12 +30,25 @@ def ontology_tbox() -> Dict[str, object]:
 
 
 def ontology_abox(graph: PortfolioOntology) -> Dict[str, object]:
+    box_counts: Dict[str, int] = {}
+    relation_box_counts: Dict[str, int] = {}
+    for item in graph.entities:
+        box = str((item.properties or {}).get("ontologyBox") or "ABox")
+        box_counts[box] = box_counts.get(box, 0) + 1
+    for item in graph.relations:
+        box = str((item.properties or {}).get("ontologyBox") or "ABox")
+        relation_box_counts[box] = relation_box_counts.get(box, 0) + 1
     return {
         "box": "ABox",
-        "description": "Runtime portfolio assertions: holdings, evidence, beliefs, and opinions.",
+        "description": "Runtime portfolio assertions plus RuleBox and InferenceBox projections.",
         "portfolioId": graph.portfolio_id,
         "entityCount": len([item for item in graph.entities if item.properties.get("ontologyBox") != "TBox"]),
         "relationCount": len([item for item in graph.relations if item.properties.get("ontologyBox") != "TBox"]),
+        "entityBoxCounts": box_counts,
+        "relationBoxCounts": relation_box_counts,
+        "ruleBoxEntityCount": box_counts.get("RuleBox", 0),
+        "inferenceBoxEntityCount": box_counts.get("InferenceBox", 0),
+        "inferenceBoxRelationCount": relation_box_counts.get("InferenceBox", 0),
         "evidenceCount": len(graph.evidence),
         "beliefCount": len(graph.beliefs),
         "opinionCount": len(graph.opinions),
@@ -51,6 +64,14 @@ def tbox_entities() -> List[OntologyEntity]:
         OntologyEntity(entity_id("ontology-box", "ABox"), "ABox", "ontology-box", {
             "ontologyBox": "TBox",
             "description": "Assertion layer for runtime portfolio facts.",
+        }),
+        OntologyEntity(entity_id("ontology-box", "RuleBox"), "RuleBox", "ontology-box", {
+            "ontologyBox": "TBox",
+            "description": "Executable graph rule layer for conditions, relation templates, and prompt hints.",
+        }),
+        OntologyEntity(entity_id("ontology-box", "InferenceBox"), "InferenceBox", "ontology-box", {
+            "ontologyBox": "TBox",
+            "description": "Derived assertion layer for inference traces and rule-produced relations.",
         }),
     ]
     for context in BOUNDED_CONTEXTS:
@@ -90,6 +111,8 @@ def tbox_relations() -> List[OntologyRelation]:
     relations: List[OntologyRelation] = []
     tbox_id = entity_id("ontology-box", "TBox")
     abox_id = entity_id("ontology-box", "ABox")
+    rulebox_id = entity_id("ontology-box", "RuleBox")
+    inferencebox_id = entity_id("ontology-box", "InferenceBox")
     for context in BOUNDED_CONTEXTS:
         context_id = entity_id("bounded-context", context.key)
         relations.append(OntologyRelation(tbox_id, context_id, "DEFINES_BOUNDED_CONTEXT", properties={
@@ -119,6 +142,9 @@ def tbox_relations() -> List[OntologyRelation]:
             "targetContext": definition.target_context if definition else "",
         }))
     relations.append(OntologyRelation(tbox_id, abox_id, "CONSTRAINS_ASSERTIONS", properties={"ontologyBox": "TBox"}))
+    relations.append(OntologyRelation(tbox_id, rulebox_id, "CONSTRAINS_RULES", properties={"ontologyBox": "TBox"}))
+    relations.append(OntologyRelation(rulebox_id, inferencebox_id, "DERIVES_ASSERTIONS", properties={"ontologyBox": "TBox"}))
+    relations.append(OntologyRelation(inferencebox_id, abox_id, "CONSTRAINS_ASSERTIONS", properties={"ontologyBox": "TBox"}))
     return relations
 
 

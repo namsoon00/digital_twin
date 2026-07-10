@@ -14,8 +14,8 @@ from ..domain.portfolio_calculations import fx_rates_with_external_signals, port
 from ..domain.strategy import decisions_for_positions
 from .external_signals import ExternalSignalProvider
 from .kis_market_signals import KISMarketSignalProvider
+from .operational_store import market_quote_cache
 from .settings import currency_rates, runtime_settings
-from .sqlite_monitoring import SQLiteMarketQuoteCache
 
 
 MARKET_DATA_ACCOUNT_ID = "__market_data__"
@@ -311,10 +311,10 @@ def demo_positions() -> List[Position]:
 
 
 class TossProvider:
-    def __init__(self, account: AccountConfig, quote_cache: Optional[SQLiteMarketQuoteCache] = None):
+    def __init__(self, account: AccountConfig, quote_cache=None):
         self.account = account
         self.base_url = account.base_url.rstrip("/")
-        self.quote_cache = quote_cache if quote_cache is not None else SQLiteMarketQuoteCache()
+        self.quote_cache = quote_cache if quote_cache is not None else market_quote_cache(runtime_settings())
         self.stage_failures: Dict[str, Dict[str, object]] = {}
         self.auth_refreshes = 0
 

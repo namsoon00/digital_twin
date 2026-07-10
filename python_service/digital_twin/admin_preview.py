@@ -7,8 +7,8 @@ from typing import Dict, Iterable, List
 from .domain.model_review import MODEL_REVIEW_PROMPT_VERSION
 from .domain.message_types import DEFAULT_ALERT_RULES, DEFAULT_ALERT_THRESHOLDS, DEFAULT_CADENCE, DEFAULT_RELATION_RULE_THRESHOLDS, MIN_CADENCE_MINUTES
 from .domain.parsing import parse_assignments
+from .infrastructure import operational_store as stores
 from .infrastructure.settings import ROOT_DIR, runtime_settings, service_db_path, settings_path, utc_now
-from .infrastructure.sqlite_accounts import AccountRegistry
 
 
 DEFAULT_THRESHOLDS = DEFAULT_ALERT_THRESHOLDS
@@ -224,7 +224,7 @@ def assignment_snapshot(raw: str, defaults: Dict[str, float], unit: str = "") ->
 
 def local_data_snapshot() -> Dict[str, object]:
     settings = runtime_settings()
-    registry = AccountRegistry()
+    registry = stores.account_registry(settings)
     saved_accounts = registry.load_saved()
     accounts = saved_accounts or registry.load_all()
     enabled_accounts = [account for account in accounts if account.enabled]
@@ -263,7 +263,7 @@ def admin_preview_config() -> Dict[str, object]:
         "previewUrl": "https://namsoon00.github.io/orbit-alpha/admin/",
         "localUrl": "http://127.0.0.1:3000/admin/",
         "security": [
-            "GitHub Pages 미리보기에는 SQLite DB 파일, Toss secret, Telegram bot token, 계좌 순번, 채팅 ID 원문을 포함하지 않습니다.",
+            "GitHub Pages 미리보기에는 운영 DB 파일, Toss secret, Telegram bot token, 계좌 순번, 채팅 ID 원문을 포함하지 않습니다.",
             "빌드 시점의 로컬 DB 계정과 런타임 설정은 secret 원문 없이 마스킹된 값으로만 포함합니다.",
             "실제 설정 저장과 계좌 조회는 로컬 서버의 /api/service-accounts, /api/settings에서만 수행합니다.",
             "공유 미리보기에서는 서버 설정과 계정 DB 쓰기를 차단합니다.",
@@ -273,7 +273,7 @@ def admin_preview_config() -> Dict[str, object]:
             {
                 "id": "accounts",
                 "title": "계정 관리",
-                "summary": "여러 Toss 계정과 관심 종목, 알림 채널을 SQLite에 저장하는 로컬 전용 관리 화면입니다.",
+                "summary": "여러 Toss 계정과 관심 종목, 알림 채널을 운영 저장소에 저장하는 로컬 전용 관리 화면입니다.",
                 "localEndpoints": ["GET /api/service-accounts", "POST /api/service-accounts", "DELETE /api/service-accounts/{id}"],
                 "commands": ["npm run python:accounts -- list --json", "npm run python:accounts -- add --id main ..."],
                 "storage": ["data/service.db"],
@@ -389,7 +389,7 @@ def admin_preview_config() -> Dict[str, object]:
             {
                 "id": "symbol-universe",
                 "title": "전체 종목 카탈로그",
-                "summary": "코스피, 코스닥, 나스닥 전체 종목 목록을 SQLite에 저장하고 소스별 신선도를 추적합니다.",
+                "summary": "코스피, 코스닥, 나스닥 전체 종목 목록을 운영 저장소에 저장하고 소스별 신선도를 추적합니다.",
                 "localEndpoints": ["GET /api/symbol-universe", "POST /api/symbol-universe/refresh"],
                 "commands": [
                     "npm run python:symbols:refresh -- --markets KOSPI,KOSDAQ,NASDAQ",
@@ -407,7 +407,7 @@ def admin_preview_config() -> Dict[str, object]:
             {
                 "id": "market-data-collector",
                 "title": "추천용 시장 데이터 수집",
-                "summary": "전체 종목 카탈로그를 순환하면서 Toss 현재가와 일부 캔들 지표를 SQLite에 저장합니다.",
+                "summary": "전체 종목 카탈로그를 순환하면서 Toss 현재가와 일부 캔들 지표를 운영 저장소에 저장합니다.",
                 "localEndpoints": [],
                 "commands": [
                     "npm run python:market-data:once",
@@ -445,7 +445,7 @@ def admin_preview_config() -> Dict[str, object]:
             {
                 "id": "notification-templates",
                 "title": "알림 템플릿",
-                "summary": "메시지 타입별 포맷을 SQLite 템플릿으로 관리합니다. 포맷 변경은 템플릿 수정만으로 다음 발송에 적용됩니다.",
+                "summary": "메시지 타입별 포맷을 운영 저장소 템플릿으로 관리합니다. 포맷 변경은 템플릿 수정만으로 다음 발송에 적용됩니다.",
                 "commands": [
                     "npm run python:templates -- list",
                     "python3 python_service/service.py templates save < template.json",
@@ -537,7 +537,7 @@ def render_configured_flags(flags: Dict[str, bool]) -> str:
 
 def render_account_cards(accounts: List[Dict[str, object]]) -> str:
     if not accounts:
-        return '<p class="muted">빌드 시점에 SQLite DB에 저장된 계정이 없습니다.</p>'
+        return '<p class="muted">빌드 시점에 운영 DB에 저장된 계정이 없습니다.</p>'
     cards = []
     for account in accounts:
         symbols = account.get("watchlistSymbols") if isinstance(account.get("watchlistSymbols"), list) else []
@@ -573,7 +573,7 @@ def render_local_data(payload: Dict[str, object]) -> str:
         '<div class="section-head">'
         '<p class="eyebrow">local-data</p>'
         "<h2>로컬 DB 빌드 스냅샷</h2>"
-        "<p>현재 빌드에 포함된 SQLite 계정과 런타임 설정입니다. 민감 값은 원문 대신 설정 여부만 표시합니다.</p>"
+        "<p>현재 빌드에 포함된 운영 DB 계정과 런타임 설정입니다. 민감 값은 원문 대신 설정 여부만 표시합니다.</p>"
         "</div>"
         '<div class="section-grid">'
         '<div class="panel"><h3>소스</h3>'

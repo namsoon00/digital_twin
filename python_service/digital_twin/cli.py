@@ -18,10 +18,7 @@ from .domain.monitoring import RealtimeMonitor
 from .domain.notification_templates import template_variables, text_context
 from .domain.portfolio import AlertEvent
 from .infrastructure.event_bus import default_event_bus
-from .infrastructure.sqlite_model_review import SQLiteModelReviewJobStore
-from .infrastructure.sqlite_monitoring import SQLiteMonitorStore
-from .infrastructure.sqlite_notifications import SQLiteNotificationJobStore, SQLiteNotificationTemplateStore
-from .infrastructure.sqlite_runtime import SQLiteAppStore
+from .infrastructure import operational_store as stores
 from .infrastructure.notifications import queued_notifier_for_account, send_events
 from .infrastructure.neo4j_ontology import ontology_repository_from_settings
 from .infrastructure.service_factory import build_market_data_collection_runner, build_model_review_runner, build_monitor_runner, build_news_collection_runner, build_notification_queue_runner, build_ontology_reasoning_runner, build_symbol_universe_service, monitor_account_job_store_from_settings
@@ -34,7 +31,6 @@ from .infrastructure.settings import (
     utc_now,
     write_settings_store,
 )
-from .infrastructure.sqlite_accounts import AccountRegistry
 from .infrastructure.toss_snapshots import build_snapshot
 
 
@@ -58,7 +54,7 @@ def account_from_args(args) -> AccountConfig:
     )
 
 
-def preserve_existing_secrets(registry: AccountRegistry, payload, account: AccountConfig) -> AccountConfig:
+def preserve_existing_secrets(registry, payload, account: AccountConfig) -> AccountConfig:
     return AccountApplicationService(registry).preserve_existing_secrets(payload, account)
 
 
@@ -135,7 +131,7 @@ def notification_targets(accounts: List[AccountConfig]) -> List[AccountConfig]:
 
 
 def accounts_command(args) -> int:
-    registry = AccountRegistry()
+    registry = stores.account_registry()
     service = AccountApplicationService(registry, registry.settings, event_publisher=default_event_bus())
     if args.accounts_action == "list":
         accounts = service.list_masked()
@@ -169,11 +165,11 @@ def accounts_command(args) -> int:
 
 
 def monitor_command(args) -> int:
-    registry = AccountRegistry()
+    settings = runtime_settings()
+    registry = stores.account_registry(settings)
     accounts = registry.load()
     if args.monitor_action == "status":
-        store = SQLiteMonitorStore()
-        settings = runtime_settings()
+        store = stores.monitor_store(settings)
         print("Accounts: " + str(len(accounts)))
         for account in accounts:
             previous = store.previous.get(account.account_id)
@@ -236,7 +232,7 @@ def monitor_command(args) -> int:
 
 
 def model_review_command(args) -> int:
-    store = SQLiteModelReviewJobStore()
+    store = stores.model_review_job_store()
     if args.model_review_action == "status":
         summary = store.summary()
         print(json.dumps({"jobs": summary}, ensure_ascii=False))
@@ -255,7 +251,7 @@ def model_review_command(args) -> int:
 
 
 def notifications_command(args) -> int:
-    store = SQLiteNotificationJobStore()
+    store = stores.notification_job_store()
     if args.notifications_action == "status":
         print(json.dumps({"jobs": store.summary()}, ensure_ascii=False))
         return 0
@@ -347,7 +343,7 @@ def settings_command(args) -> int:
 
 
 def app_store_command(args) -> int:
-    store = SQLiteAppStore()
+    store = stores.app_store()
     if args.store_action == "raw-json":
         print(json.dumps({"store": store.load()}, ensure_ascii=False))
         return 0
@@ -361,7 +357,7 @@ def app_store_command(args) -> int:
 
 
 def templates_command(args) -> int:
-    store = SQLiteNotificationTemplateStore()
+    store = stores.notification_template_store()
     if args.templates_action == "list":
         payload = {
             "templates": [item.to_dict() for item in store.list()],
@@ -470,7 +466,7 @@ def sqlite_maintenance_command(args) -> int:
 def handoff_command(args) -> int:
     if args.handoff_action != "notify":
         return 1
-    registry = AccountRegistry()
+    registry = stores.account_registry()
     accounts = notification_targets(registry.load())
     message = build_handoff_message(args.summary, args.commit, args.validation, args.push, args.details)
     if args.dry_run:

@@ -6,7 +6,7 @@ from typing import Dict, Iterable, List
 
 from ..domain.accounts import AccountConfig
 from ..domain.repositories import MonitorAccountJob
-from .settings import runtime_settings, utc_now
+from .settings import utc_now
 
 
 class MySQLDependencyError(RuntimeError):
@@ -14,7 +14,7 @@ class MySQLDependencyError(RuntimeError):
 
 
 def mysql_settings(settings: Dict[str, str] = None) -> Dict[str, object]:
-    configured = settings or runtime_settings()
+    configured = settings or {}
     url = str(configured.get("mysqlUrl") or os.environ.get("MYSQL_URL") or os.environ.get("DATABASE_URL") or "").strip()
     if url:
         parsed = urllib.parse.urlparse(url)
@@ -38,7 +38,7 @@ def mysql_settings(settings: Dict[str, str] = None) -> Dict[str, object]:
 
 
 def mysql_backend_enabled(settings: Dict[str, str] = None) -> bool:
-    configured = settings or runtime_settings()
+    configured = settings or {}
     backend = str(configured.get("operationalDbBackend") or os.environ.get("OPERATIONAL_DB_BACKEND") or "").strip().lower()
     if backend in {"mysql", "mariadb"}:
         return True

@@ -9,7 +9,13 @@ from .domain.monitoring import (
     pct_delta,
     signed_pct,
 )
-from .infrastructure.sqlite_monitoring import SQLiteMonitorStore as MonitorStore
+
+
+class MonitorStore:
+    def __new__(cls, *args, **kwargs):
+        from .infrastructure.operational_store import monitor_store
+
+        return monitor_store()
 
 __all__ = [
     "DEFAULT_ALERT_RULES",

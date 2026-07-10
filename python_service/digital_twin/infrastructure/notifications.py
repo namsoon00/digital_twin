@@ -157,15 +157,15 @@ def notifier_for_account(account: AccountConfig = None):
 
 
 def notification_queue():
-    from .sqlite_notifications import SQLiteNotificationJobStore
+    from .operational_store import notification_job_store
 
-    return SQLiteNotificationJobStore()
+    return notification_job_store()
 
 
 def notification_templates():
-    from .sqlite_notifications import SQLiteNotificationTemplateStore
+    from .operational_store import notification_template_store
 
-    return SQLiteNotificationTemplateStore()
+    return notification_template_store()
 
 
 def formula_settings_context() -> Dict[str, object]:

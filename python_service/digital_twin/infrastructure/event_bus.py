@@ -53,8 +53,8 @@ class JsonEventLog:
 
 
 def default_event_bus() -> EventBus:
-    from .sqlite_monitoring import SQLiteEventLog
+    from .operational_store import event_log
 
     bus = EventBus()
-    bus.subscribe_all(SQLiteEventLog().handle)
+    bus.subscribe_all(event_log().handle)
     return bus

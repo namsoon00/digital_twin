@@ -16,7 +16,17 @@ from .infrastructure.settings import (
     write_private_json,
     write_settings_store,
 )
-from .infrastructure.sqlite_accounts import AccountRegistry
+
+
+class AccountRegistry:
+    def __new__(cls, *args, **kwargs):
+        if args or kwargs:
+            from .infrastructure.sqlite_accounts import AccountRegistry as SQLiteAccountRegistry
+
+            return SQLiteAccountRegistry(*args, **kwargs)
+        from .infrastructure.operational_store import account_registry
+
+        return account_registry()
 
 __all__ = [
     "AccountConfig",

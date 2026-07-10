@@ -59,13 +59,10 @@ from ..domain.portfolio import utc_now_iso
 from ..infrastructure.event_bus import default_event_bus
 from ..infrastructure.mock_market import mock_market_payload, mock_market_scenario_list
 from ..infrastructure.neo4j_ontology import ontology_repository_from_settings
+from ..infrastructure import operational_store as stores
 from ..infrastructure.service_factory import build_notification_queue_runner, build_rule_change_candidate_service, build_symbol_universe_service, flow_lens_snapshot
 from ..infrastructure.settings import ROOT_DIR, runtime_settings, save_runtime_settings
-from ..infrastructure.sqlite_accounts import AccountRegistry
 from ..infrastructure.sqlite.health import run_sqlite_maintenance, sqlite_health_snapshot
-from ..infrastructure.sqlite_monitoring import SQLiteEventLog, SQLiteMonitorStore, SQLiteResearchEvidenceStore
-from ..infrastructure.sqlite_notifications import SQLiteNotificationJobStore, SQLiteNotificationRuleStore, SQLiteNotificationTemplateStore
-from ..infrastructure.sqlite_runtime import SQLiteAppStore
 from ..infrastructure.toss_snapshots import build_snapshot
 
 
@@ -212,7 +209,7 @@ def realtime_event_payload(event: DomainEvent) -> Dict[str, object]:
 
 
 def realtime_status_payload() -> Dict[str, object]:
-    event_log = SQLiteEventLog()
+    event_log = stores.event_log()
     counts = event_log.event_counts()
     latest_by_name = event_log.latest_events_by_name([
         MONITORING_CYCLE_COMPLETED,
@@ -319,8 +316,8 @@ def default_store() -> Dict[str, object]:
     }
 
 
-def app_store() -> SQLiteAppStore:
-    return SQLiteAppStore()
+def app_store():
+    return stores.app_store()
 
 
 def read_store() -> Dict[str, object]:
@@ -565,16 +562,16 @@ def seed_ontology_payload(payload: Dict[str, object]) -> Dict[str, object]:
     return ontology_repository_from_settings(runtime_settings()).seed_ontology(payload)
 
 
-def notification_store() -> SQLiteNotificationTemplateStore:
-    return SQLiteNotificationTemplateStore()
+def notification_store():
+    return stores.notification_template_store()
 
 
-def notification_queue_store() -> SQLiteNotificationJobStore:
-    return SQLiteNotificationJobStore()
+def notification_queue_store():
+    return stores.notification_job_store()
 
 
-def notification_rule_store() -> SQLiteNotificationRuleStore:
-    return SQLiteNotificationRuleStore()
+def notification_rule_store():
+    return stores.notification_rule_store()
 
 
 def list_templates_payload() -> Dict[str, object]:
@@ -807,7 +804,7 @@ def research_evidence_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
     limit = max(1, min(500, int(first_query(query, "limit") or 80)))
     symbol = configured(first_query(query, "symbol")).upper()
     kind = configured(first_query(query, "kind"))
-    store = SQLiteResearchEvidenceStore()
+    store = stores.research_evidence_store()
     return {
         "items": [item.to_dict() for item in store.latest(symbol=symbol, kind=kind, limit=limit)],
         "summary": store.summary(),
@@ -821,7 +818,7 @@ def delete_research_evidence_payload(evidence_id: str, query: Dict[str, List[str
     normalized_id = configured(evidence_id)
     if not normalized_id:
         raise ValueError("삭제할 근거 ID가 필요합니다.")
-    store = SQLiteResearchEvidenceStore()
+    store = stores.research_evidence_store()
     removed = store.delete(normalized_id)
     if removed:
         new_domain_event(
@@ -873,8 +870,8 @@ def notification_schedules_payload(include_internal: bool = False) -> Dict[str, 
     settings = runtime_settings()
     rules = parse_assignments(settings.get("alertRules", ""), DEFAULT_ALERT_RULES)
     cadence = parse_assignments(settings.get("alertCadenceMinutes", ""), DEFAULT_CADENCE)
-    store = SQLiteMonitorStore()
-    accounts = {account.account_id: account for account in AccountRegistry().load()}
+    store = stores.monitor_store()
+    accounts = {account.account_id: account for account in stores.account_registry().load()}
     now_at = datetime.now(timezone.utc)
     if include_internal:
         message_types = list(dict.fromkeys(list(DEFAULT_CADENCE.keys()) + list(DEFAULT_NOTIFICATION_TEMPLATES.keys())))
@@ -1021,7 +1018,7 @@ def alert_event_public_payload(event) -> Dict[str, object]:
 
 def selected_notification_test_account(payload: Dict[str, object]):
     requested = configured(payload.get("accountId") or payload.get("account_id"))
-    accounts = AccountRegistry().load()
+    accounts = stores.account_registry().load()
     if requested:
         for account in accounts:
             if account.account_id == requested:
@@ -1193,7 +1190,7 @@ def notification_template_test_payload(payload: Dict[str, object]):
 
 
 def account_service() -> AccountApplicationService:
-    registry = AccountRegistry()
+    registry = stores.account_registry()
     return AccountApplicationService(registry, registry.settings, event_publisher=RealtimeEventBridge())
 
 

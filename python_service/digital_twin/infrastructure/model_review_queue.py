@@ -125,9 +125,9 @@ class ModelReviewEnqueuer:
         if store:
             self.store = store
         else:
-            from .sqlite_model_review import SQLiteModelReviewJobStore
+            from .operational_store import model_review_job_store
 
-            self.store = SQLiteModelReviewJobStore()
+            self.store = model_review_job_store()
 
     def handle(self, event: DomainEvent) -> None:
         self.store.enqueue_from_event(event)

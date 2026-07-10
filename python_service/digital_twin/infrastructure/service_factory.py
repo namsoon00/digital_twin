@@ -27,6 +27,7 @@ from .model_review_queue import ModelReviewEnqueuer
 from .model_reviewer import reviewer_from_settings
 from .notification_ai_reviewer import notification_ai_reviewer_from_settings
 from .neo4j_ontology import ontology_repository_from_settings
+from . import operational_store as stores
 from .ontology_projection import PortfolioOntologyProjectionRecorder
 from .rule_change_candidate_ai import rule_change_candidate_advisor_from_settings
 from .notifications import queued_notifier_for_account
@@ -34,40 +35,24 @@ from .notifications import send_events
 from .notifications import notifier_for_account
 from .news_sources import NewsSourceGateway
 from .settings import currency_rates, runtime_settings
-from .mysql_monitoring import MySQLMonitorAccountJobStore, mysql_backend_enabled
-from .sqlite_model_review import SQLiteModelReviewJobStore
-from .sqlite_monitoring import SQLiteMonitorAccountJobStore, SQLiteMonitorStore
-from .sqlite_monitoring import SQLiteEventLog
-from .sqlite_monitoring import SQLiteMarketQuoteCache
-from .sqlite_monitoring import SQLiteMonitoringCycleRecorder
-from .sqlite_monitoring import SQLiteOntologyReasoningCursorStore
-from .sqlite_monitoring import SQLiteOntologyQualitySampleStore
-from .sqlite_monitoring import SQLiteResearchEvidenceStore
-from .sqlite_notifications import SQLiteNotificationJobStore, SQLiteNotificationTemplateStore
-from .sqlite_symbols import SQLiteSymbolUniverseStore
-from .sqlite_accounts import AccountRegistry
 from .symbol_sources import RemoteSymbolSourceGateway
 from .toss_snapshots import TossProvider, build_snapshot, demo_positions
 
 
 def monitor_event_bus() -> EventBus:
     bus = default_event_bus()
-    bus.subscribe_all(ModelReviewEnqueuer(SQLiteModelReviewJobStore()).handle)
+    bus.subscribe_all(ModelReviewEnqueuer(stores.model_review_job_store()).handle)
     return bus
 
 
 def monitor_account_job_store_from_settings(settings):
-    if mysql_backend_enabled(settings):
-        return MySQLMonitorAccountJobStore(settings)
-    if str(settings.get("monitorAccountQueueEnabled") or os.environ.get("MONITOR_ACCOUNT_QUEUE_ENABLED") or "").strip().lower() in {"1", "true", "yes", "on"}:
-        return SQLiteMonitorAccountJobStore()
-    return None
+    return stores.monitor_account_job_store(settings)
 
 
 def build_monitor_runner(accounts: Iterable[AccountConfig], event_publisher=None) -> MonitorRunner:
     settings = runtime_settings()
-    store = SQLiteMonitorStore()
-    ontology_quality_store = SQLiteOntologyQualitySampleStore()
+    store = stores.monitor_store(settings)
+    ontology_quality_store = stores.ontology_quality_sample_store(settings)
     interval_seconds = int(os.environ.get("PYTHON_REALTIME_INTERVAL_SECONDS") or os.environ.get("REALTIME_NOTIFY_INTERVAL_SECONDS") or settings.get("monitorAccountIntervalSeconds") or 180)
     return MonitorRunner(
         accounts,
@@ -76,7 +61,7 @@ def build_monitor_runner(accounts: Iterable[AccountConfig], event_publisher=None
         snapshot_builder=build_snapshot,
         event_sender=send_events,
         event_publisher=event_publisher or monitor_event_bus(),
-        cycle_recorder=SQLiteMonitoringCycleRecorder(monitor_store=store),
+        cycle_recorder=stores.monitoring_cycle_recorder(settings, store),
         ontology_projection_recorder=PortfolioOntologyProjectionRecorder(
             ontology_repository_from_settings(settings),
             quality_store=ontology_quality_store,
@@ -93,9 +78,9 @@ def build_monitor_runner(accounts: Iterable[AccountConfig], event_publisher=None
 def build_model_review_runner(dry_run: bool = False) -> ModelReviewRunner:
     settings = runtime_settings()
     return ModelReviewRunner(
-        queue=SQLiteModelReviewJobStore(),
+        queue=stores.model_review_job_store(settings),
         reviewer=reviewer_from_settings(settings),
-        account_repository=AccountRegistry(),
+        account_repository=stores.account_registry(settings),
         notifier_factory=lambda account: queued_notifier_for_account(account, message_type="modelReview"),
         dry_run=dry_run,
         settings=settings,
@@ -104,15 +89,15 @@ def build_model_review_runner(dry_run: bool = False) -> ModelReviewRunner:
 
 def build_notification_queue_runner(dry_run: bool = False) -> NotificationQueueRunner:
     settings = runtime_settings()
-    monitor_store = SQLiteMonitorStore()
+    monitor_store = stores.monitor_store(settings)
     return NotificationQueueRunner(
-        queue=SQLiteNotificationJobStore(),
-        account_repository=AccountRegistry(),
+        queue=stores.notification_job_store(settings),
+        account_repository=stores.account_registry(settings),
         notifier_factory=notifier_for_account,
         dry_run=dry_run,
         send_gap_seconds=float(settings.get("notificationSendGapSeconds") or 0),
         stale_after_minutes=int(settings.get("notificationProcessingStaleMinutes") or 30),
-        template_renderer=SQLiteNotificationTemplateStore().render_job,
+        template_renderer=stores.notification_template_store(settings).render_job,
         context_enricher=CompositeNotificationContextEnricher(
             NotificationHoldingSnapshotEnricher(
                 monitor_store.load_previous,
@@ -132,20 +117,21 @@ def build_notification_queue_runner(dry_run: bool = False) -> NotificationQueueR
 
 
 def build_symbol_universe_service(settings=None) -> SymbolUniverseService:
+    configured_settings = settings or runtime_settings()
     return SymbolUniverseService(
-        store=SQLiteSymbolUniverseStore(),
+        store=stores.symbol_universe_store(configured_settings),
         source_gateway=RemoteSymbolSourceGateway(),
-        settings=settings or runtime_settings(),
-        quote_cache=SQLiteMarketQuoteCache(),
+        settings=configured_settings,
+        quote_cache=stores.market_quote_cache(configured_settings),
     )
 
 
 def build_market_data_collection_runner(settings=None, event_publisher=None) -> MarketDataCollectionRunner:
     configured_settings = settings or runtime_settings()
     return MarketDataCollectionRunner(
-        account_repository=AccountRegistry(),
+        account_repository=stores.account_registry(configured_settings),
         symbol_service=build_symbol_universe_service(configured_settings),
-        quote_cache=SQLiteMarketQuoteCache(),
+        quote_cache=stores.market_quote_cache(configured_settings),
         settings=configured_settings,
         provider_factory=lambda account, quote_cache: TossProvider(account, quote_cache=quote_cache),
         event_publisher=event_publisher or default_event_bus(),
@@ -155,10 +141,10 @@ def build_market_data_collection_runner(settings=None, event_publisher=None) -> 
 def build_news_collection_runner(settings=None, event_publisher=None) -> NewsCollectionRunner:
     configured_settings = settings or runtime_settings()
     return NewsCollectionRunner(
-        account_repository=AccountRegistry(),
-        monitor_store=SQLiteMonitorStore(),
-        symbol_store=SQLiteSymbolUniverseStore(),
-        evidence_store=SQLiteResearchEvidenceStore(),
+        account_repository=stores.account_registry(configured_settings),
+        monitor_store=stores.monitor_store(configured_settings),
+        symbol_store=stores.symbol_universe_store(configured_settings),
+        evidence_store=stores.research_evidence_store(configured_settings),
         gateway=NewsSourceGateway(configured_settings),
         settings=configured_settings,
         event_publisher=event_publisher or default_event_bus(),
@@ -167,12 +153,12 @@ def build_news_collection_runner(settings=None, event_publisher=None) -> NewsCol
 
 def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> OntologyReasoningRunner:
     configured_settings = settings or runtime_settings()
-    registry = AccountRegistry()
-    event_log = SQLiteEventLog()
+    registry = stores.account_registry(configured_settings)
+    event_log = stores.event_log(configured_settings)
     ontology_repository = ontology_repository_from_settings(configured_settings)
     return OntologyReasoningRunner(
         event_reader=event_log,
-        cursor_store=SQLiteOntologyReasoningCursorStore(),
+        cursor_store=stores.ontology_reasoning_cursor_store(configured_settings),
         monitor_runner_factory=lambda: build_monitor_runner(registry.load()),
         event_publisher=event_publisher or default_event_bus(),
         settings=configured_settings,
@@ -190,7 +176,7 @@ def build_rule_change_candidate_service(settings=None) -> RuleChangeCandidatePro
     return RuleChangeCandidateProposalService(
         ontology_repository=ontology_repository_from_settings(configured_settings),
         advisor=rule_change_candidate_advisor_from_settings(configured_settings),
-        event_reader=SQLiteEventLog(),
+        event_reader=stores.event_log(configured_settings),
         settings=configured_settings,
     )
 
@@ -211,7 +197,7 @@ def build_flow_lens_service(settings=None) -> FlowLensService:
     flow_lens_external_settings["externalFredMaxSeries"] = capped_int("externalFredMaxSeries", 2, 2)
     symbol_service = build_symbol_universe_service(configured_settings)
     return FlowLensService(
-        account_repository=AccountRegistry(),
+        account_repository=stores.account_registry(configured_settings),
         snapshot_builder=lambda account: build_snapshot(account, external_settings=flow_lens_external_settings),
         demo_positions_provider=demo_positions,
         settings_provider=lambda: configured_settings,

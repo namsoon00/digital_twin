@@ -6,7 +6,7 @@ The Python service is the migration target for account-scale monitoring, schedul
 
 - `python_service/digital_twin/domain/`: account, portfolio, alert domain objects and repository/provider ports
 - `python_service/digital_twin/application/`: use cases that coordinate repositories, snapshot providers, monitors, and notification delivery
-- `python_service/digital_twin/infrastructure/`: SQLite, local JSON state, Toss snapshot, and notification adapters
+- `python_service/digital_twin/infrastructure/`: operational DB adapters, local JSON compatibility, Toss snapshot, and notification adapters
 - `python_service/digital_twin/config.py`: compatibility re-export for old settings/account imports
 - `python_service/digital_twin/providers.py`: compatibility re-export for Toss snapshot adapter
 - `python_service/digital_twin/analytics.py`: compatibility re-export for market data, portfolio calculations, and strategy helpers
@@ -22,7 +22,7 @@ The development methodology is documented in `docs/development-methodology.md` a
 
 The Python service now follows a conservative DDD layout:
 
-- Domain objects and domain services live in `domain/` and do not call SQLite, Toss, Telegram, files, or environment variables.
+- Domain objects and domain services live in `domain/` and do not call database adapters, Toss, Telegram, files, or environment variables.
 - Domain ports in `domain/repositories.py` define what the application needs from account storage, snapshot loading, monitor state, symbol universe storage, symbol sources, and notifications.
 - Application services in `application/` own use cases such as saving account settings and running one monitoring cycle.
 - Infrastructure adapters satisfy those ports with local implementations.
@@ -41,7 +41,7 @@ Use events as the contract between independently developed features:
 - Runtime dispatch lives in `python_service/digital_twin/infrastructure/event_bus.py`.
 - Application services publish events after completing their own transaction or monitoring step.
 - Event payloads must not include API keys, Telegram tokens, client secrets, or raw account credentials.
-- Local events are stored in the `domain_events` table inside `data/service.db`.
+- Local events are stored in the `domain_events` table of the configured operational DB.
 
 Current event contracts:
 
@@ -53,10 +53,10 @@ Current event contracts:
 
 For parallel work across multiple chat windows, keep each conversation inside one slice:
 
-- Account management: `domain/accounts.py`, `application/account_service.py`, `infrastructure/sqlite_accounts.py`
+- Account management: `domain/accounts.py`, `application/account_service.py`, `infrastructure/operational_store.py`, `infrastructure/sqlite_accounts.py`, `infrastructure/mysql_operational.py`
 - Monitoring and scheduling: `domain/monitoring.py`, `domain/strategy_alerts.py`, `domain/external_signal_alerts.py`, `application/monitoring_service.py`, `monitor.py`, `scheduler.py`
-- Notifications and messages: `domain/message_types.py`, `domain/notifications.py`, `domain/notification_rules.py`, `domain/notification_templates.py`, `domain/scoring.py`, `infrastructure/notifications.py`, `application/notification_service.py`, and `infrastructure/sqlite_notifications.py`
-- Symbol universe: `domain/symbol_universe.py`, `application/symbol_universe_service.py`, `infrastructure/symbol_sources.py`, and `infrastructure/sqlite_symbols.py`
+- Notifications and messages: `domain/message_types.py`, `domain/notifications.py`, `domain/notification_rules.py`, `domain/notification_templates.py`, `domain/scoring.py`, `infrastructure/notifications.py`, `application/notification_service.py`, `infrastructure/operational_store.py`, and the SQLite/MySQL store adapters
+- Symbol universe: `domain/symbol_universe.py`, `application/symbol_universe_service.py`, `infrastructure/symbol_sources.py`, `infrastructure/operational_store.py`, and the SQLite/MySQL store adapters
 - Providers/data collection: `providers.py`, `infrastructure/toss_snapshots.py`
 - Model scoring and strategy: `domain/market_data.py`, `domain/portfolio_calculations.py`, `domain/strategy.py`, `domain/scoring.py`, and future model-lab modules
 
@@ -84,13 +84,13 @@ npm run python:service:restart
 npm run python:service:stop
 ```
 
-The account registry is stored in SQLite at `data/service.db` with `0600` permissions and is ignored by git.
+Operational state is selected through `python_service/digital_twin/infrastructure/operational_store.py`. SQLite remains the local fallback at `data/service.db` with `0600` permissions and is ignored by git. When `OPERATIONAL_DB_BACKEND=mysql` or `MYSQL_URL` is configured, accounts, runtime settings, app store, domain events, monitor snapshots, cadence keys, notification templates/rules/jobs, model review jobs, symbol universe, market quote cache, research evidence, and ontology quality samples use MySQL.
 
-If the SQLite database has no account rows, the service falls back to single-account settings from the `runtime_settings` table or `.env.local`. Existing `data/store.json`, `data/settings.json`, and `data/accounts.json` files are imported into SQLite on first use as legacy compatibility.
+If the operational database has no account rows, the service falls back to single-account settings from `runtime_settings` or `.env.local`. Existing `data/store.json`, `data/settings.json`, and `data/accounts.json` files are imported into SQLite on first use as legacy compatibility.
 
 `python:monitor:watch` runs realtime monitoring in the foreground. `python:model-review:watch` runs the asynchronous model-review worker in the foreground. `python:notifications:watch` runs the single notification delivery worker.
 
-For account-scale monitoring, enable the account monitor queue. With SQLite this is useful for local testing; with MySQL it becomes the production coordination point for 100+ accounts and multiple monitor workers:
+For account-scale monitoring, enable MySQL. It becomes the production coordination point for 100+ accounts and multiple monitor workers:
 
 ```bash
 OPERATIONAL_DB_BACKEND=mysql
@@ -104,7 +104,7 @@ MONITOR_ACCOUNT_INTERVAL_SECONDS=180
 MONITOR_ACCOUNT_LOCK_SECONDS=600
 ```
 
-The MySQL monitor queue requires `pymysql` in the Python environment. It stores due/processing/done/failed account jobs in `monitor_account_jobs` and uses row-level locking so multiple monitor workers can claim different accounts. Snapshot state, notification outbox, templates, and other local-first stores still use SQLite unless separately migrated.
+The MySQL backend requires `pymysql` in the Python environment. It stores due/processing/done/failed account jobs in `monitor_account_jobs` and uses row-level locking so multiple monitor workers can claim different accounts. The rest of the operational tables are created by `mysql_operational.py` and share the same backend selection.
 
 The `python:service:*` commands run all background workers:
 
@@ -112,9 +112,9 @@ The `python:service:*` commands run all background workers:
 - model review worker: `data/python-model-review.pid`, `data/python-model-review.log`
 - notification worker: `data/python-notifications.pid`, `data/python-notifications.log`
 
-## Account Database
+## Operational Database
 
-SQLite tables:
+Core account tables:
 
 - `service_accounts`: account id, label, provider, enabled flag, watchlist
 - `toss_credentials`: Toss base URL, client id, client secret, account sequence
@@ -173,7 +173,7 @@ When a decision-change evidence signal is included in an `investmentInsight`, it
 
 The decision-change evidence signal also queues a deeper asynchronous model review through `investmentInsight.sourceAlertEvents`. The realtime alert path does not wait for LLM/Codex output.
 
-The app store is stored in `app_store`, runtime settings are stored in `runtime_settings`, listed symbols are stored in `symbol_universe` with source freshness in `symbol_universe_sources`, recommendation-universe quote/trend snapshots are stored in `market_quote_cache` with account id `__market_data__`, snapshots are stored in `monitor_snapshots`, cadence is stored per account, rule, and symbol in `monitor_sent`, notification templates are stored in `notification_templates`, and outgoing notification jobs are stored in `notification_jobs` inside `data/service.db`.
+The app store is stored in `app_store`, runtime settings are stored in `runtime_settings`, listed symbols are stored in `symbol_universe` with source freshness in `symbol_universe_sources`, recommendation-universe quote/trend snapshots are stored in `market_quote_cache` with account id `__market_data__`, snapshots are stored in `monitor_snapshots`, cadence is stored per account, rule, and symbol in `monitor_sent`, notification templates are stored in `notification_templates`, and outgoing notification jobs are stored in `notification_jobs` inside the configured operational DB.
 
 The market data collector runs as a managed worker through `python_service/monitor_service.py`. It refreshes stale catalog rows when configured, then rotates through the symbol universe and stores Toss `/api/v1/prices` current prices plus a smaller `/api/v1/candles` trend batch for future recommendation scoring.
 
@@ -210,7 +210,7 @@ Configuration:
 
 ## Event Sourcing and Outbox
 
-Monitoring snapshots, alert detections, account changes, and cycle completions are appended to `domain_events`. `SQLiteEventLog.events()` replays that stream in event order so lightweight projections and audits can be rebuilt from the event log instead of trusting only the latest mutable state.
+Monitoring snapshots, alert detections, account changes, and cycle completions are appended to `domain_events`. The configured event-log adapter replays that stream in event order so lightweight projections and audits can be rebuilt from the event log instead of trusting only the latest mutable state.
 
 Monitoring alerts, model-review messages, and work-handoff messages enqueue `notification_jobs` instead of sending directly. This table is the notification outbox. Jobs derived from a domain event store `source_event_id`, `source_event_name`, and a `dedupe_key`, so replaying or retrying an event does not enqueue the same outbound message twice. The notification worker renders the current `notification_templates` row for the job's `message_type` at delivery time, then calls the configured notifier. That keeps Telegram/API delivery and message formatting out of realtime monitoring and model-review workers.
 
@@ -232,7 +232,7 @@ Configuration:
 
 ## Async Model Review
 
-Decision-change alerts are queued in the `model_review_jobs` table inside `data/service.db`.
+Decision-change alerts are queued in the `model_review_jobs` table inside the configured operational DB.
 
 The model-review worker processes that queue separately and enqueues a second notification message with:
 

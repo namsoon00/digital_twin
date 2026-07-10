@@ -409,6 +409,12 @@ def utc_now() -> str:
 
 def read_settings_store() -> Dict[str, str]:
     try:
+        from .mysql_monitoring import mysql_backend_enabled
+
+        if mysql_backend_enabled({}):
+            from .mysql_operational import MySQLRuntimeSettingsStore
+
+            return MySQLRuntimeSettingsStore({}).load()
         from .sqlite_runtime import SQLiteRuntimeSettingsStore
 
         return SQLiteRuntimeSettingsStore().load()
@@ -417,10 +423,17 @@ def read_settings_store() -> Dict[str, str]:
 
 
 def write_settings_store(settings: Dict[str, object]) -> Dict[str, str]:
-    from .sqlite_runtime import SQLiteRuntimeSettingsStore
-
     clean = {str(key): str(value or "") for key, value in settings.items()}
-    SQLiteRuntimeSettingsStore().replace(clean)
+    from .mysql_monitoring import mysql_backend_enabled
+
+    if mysql_backend_enabled(clean) or mysql_backend_enabled({}):
+        from .mysql_operational import MySQLRuntimeSettingsStore
+
+        MySQLRuntimeSettingsStore(clean).replace(clean)
+    else:
+        from .sqlite_runtime import SQLiteRuntimeSettingsStore
+
+        SQLiteRuntimeSettingsStore().replace(clean)
     return clean
 
 

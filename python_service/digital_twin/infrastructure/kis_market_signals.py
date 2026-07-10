@@ -10,8 +10,8 @@ from typing import Callable, Dict, Iterable, List, Optional, Tuple
 from ..domain.data_freshness import combine_quality
 from ..domain.market_data import known_stock, number, pct_distance
 from ..domain.portfolio import Position, utc_now_iso
+from .operational_store import market_quote_cache
 from .settings import runtime_settings
-from .sqlite_monitoring import SQLiteMarketQuoteCache
 
 
 KST = timezone(timedelta(hours=9))
@@ -219,13 +219,13 @@ class KISMarketSignalProvider:
     def __init__(
         self,
         settings: Dict[str, str] = None,
-        quote_cache: SQLiteMarketQuoteCache = None,
+        quote_cache=None,
         fetch_json: JsonFetcher = None,
         sleep: Callable[[float], None] = None,
         now_provider: Callable[[], datetime] = None,
     ):
         self.settings = settings or runtime_settings()
-        self.quote_cache = quote_cache if quote_cache is not None else SQLiteMarketQuoteCache()
+        self.quote_cache = quote_cache if quote_cache is not None else market_quote_cache(self.settings)
         self.fetch_json = fetch_json or kis_http_json
         self.sleep = sleep or time.sleep
         self.now_provider = now_provider or (lambda: datetime.now(timezone.utc))

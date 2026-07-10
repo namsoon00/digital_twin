@@ -11,7 +11,7 @@ npm start
 
 브라우저에서 `http://127.0.0.1:3000`을 여세요. 첫 화면은 Python 서비스 운영 콘솔이며, 계정 등록, 메시지 타입별 알림 활성화, 알림 주기, 모델링 설정을 관리합니다.
 
-GitHub Pages 정적 미리보기는 아래 URL에서 확인합니다. 빌드 시점의 로컬 DB 계정/설정 요약은 마스킹된 값으로 채우고, 실제 SQLite DB 파일과 secret 원문은 포함하지 않습니다. 로컬 서버가 필요한 저장/조회 기능은 비활성화됩니다.
+GitHub Pages 정적 미리보기는 아래 URL에서 확인합니다. 빌드 시점의 로컬 DB 계정/설정 요약은 마스킹된 값으로 채우고, 실제 운영 DB 파일과 secret 원문은 포함하지 않습니다. 로컬 서버가 필요한 저장/조회 기능은 비활성화됩니다.
 
 ```text
 https://namsoon00.github.io/orbit-alpha/
@@ -64,9 +64,9 @@ npm run generate:static
 
 ## 화면 구성
 
-웹은 `홈`, `계정`, `관심종목`, `모니터링`, `알림`, `투자전략`, `관계 분석`, `설정` 탭으로 구성됩니다. desktop에서는 왼쪽 고정 내비게이션, mobile에서는 하단 탭 내비게이션을 사용합니다. `계정` 탭은 로컬 SQLite DB에 저장된 계정 값을 폼에 채우고, secret 원문은 다시 표시하지 않습니다. `알림` 탭에서는 메시지 타입별 활성화, 주기, 임계값, 발송 채널, 마지막 발송 시각, 다음 발송 가능 시각, 타입별 메시지 템플릿을 관리하고, `투자전략` 탭에서는 모델 공식과 판단 기준을 관리합니다. `관계 분석` 탭은 규칙 구조와 현재 데이터 관계 그래프 기반 투자 의견을 별도로 보여줍니다.
+웹은 `홈`, `계정`, `관심종목`, `모니터링`, `알림`, `투자전략`, `관계 분석`, `설정` 탭으로 구성됩니다. desktop에서는 왼쪽 고정 내비게이션, mobile에서는 하단 탭 내비게이션을 사용합니다. `계정` 탭은 운영 DB에 저장된 계정 값을 폼에 채우고, secret 원문은 다시 표시하지 않습니다. `알림` 탭에서는 메시지 타입별 활성화, 주기, 임계값, 발송 채널, 마지막 발송 시각, 다음 발송 가능 시각, 타입별 메시지 템플릿을 관리하고, `투자전략` 탭에서는 모델 공식과 판단 기준을 관리합니다. `관계 분석` 탭은 규칙 구조와 현재 데이터 관계 그래프 기반 투자 의견을 별도로 보여줍니다.
 
-`설정` 탭에서는 앱 테마, 외부 데이터 API, 텔레그램 알림 전달 설정을 로컬 SQLite DB(`data/service.db`)의 `runtime_settings` 테이블에 저장합니다. 계정별 Toss API 연결은 `계정` 탭에서, 관심 종목은 `관심종목` 탭에서, 모델 기준은 `모델링` 탭에서 관리합니다. `client_secret`, 외부 API key, bot token은 서버가 사용하는 로컬 DB에만 저장하고, API 응답과 화면에는 원문을 다시 표시하지 않습니다. GitHub Pages 정적 미리보기에서는 서버 DB가 없으므로 민감 설정 저장을 사용하지 않습니다.
+`설정` 탭에서는 앱 테마, 외부 데이터 API, 텔레그램 알림 전달 설정을 운영 DB의 `runtime_settings` 테이블에 저장합니다. 기본은 로컬 SQLite `data/service.db`이고, `OPERATIONAL_DB_BACKEND=mysql` 또는 `MYSQL_URL`을 설정하면 MySQL을 사용합니다. 계정별 Toss API 연결은 `계정` 탭에서, 관심 종목은 `관심종목` 탭에서, 모델 기준은 `모델링` 탭에서 관리합니다. `client_secret`, 외부 API key, bot token은 서버가 사용하는 로컬 DB에만 저장하고, API 응답과 화면에는 원문을 다시 표시하지 않습니다. GitHub Pages 정적 미리보기에서는 서버 DB가 없으므로 민감 설정 저장을 사용하지 않습니다.
 
 전역 UI 정책과 새 화면 체크리스트는 `docs/design-system.md`에 정리되어 있습니다. 모든 웹 탭과 Python admin preview는 같은 색상, 간격, 버튼 위치, 내비게이션 기준을 따릅니다.
 
@@ -75,8 +75,8 @@ npm run generate:static
 - `public/`: Exit Lens 웹 대시보드
 - `GET /api/flow-lens`: 토스 계좌/보유자산, 주문 가능 금액, 관심 종목, 내 계좌 기준 오늘 먼저 점검할 종목 집계
 - `GET /api/symbol-universe`, `POST /api/symbol-universe/refresh`: 코스피·코스닥·나스닥 전체 종목 카탈로그 검색과 원천 목록 갱신
-- `GET /api/bootstrap`, `GET/POST /api/memories`, `GET/POST /api/items`: 로컬 SQLite DB의 `app_store` 기반 앱 데이터 조회와 저장
-- `GET/PUT /api/settings`: 로컬 SQLite DB의 `runtime_settings` 기반 Toss/알림 설정 조회와 저장. secret 원문은 GET 응답에 포함하지 않음
+- `GET /api/bootstrap`, `GET/POST /api/memories`, `GET/POST /api/items`: 운영 DB의 `app_store` 기반 앱 데이터 조회와 저장
+- `GET/PUT /api/settings`: 운영 DB의 `runtime_settings` 기반 Toss/알림 설정 조회와 저장. secret 원문은 GET 응답에 포함하지 않음
 - `GET /api/notification-schedules`: 메시지 타입별 실제 마지막 발송, 다음 가능 시각, 최근 대상, 발송 조건 설명 조회
 - `python_service/digital_twin/infrastructure/web_server.py`: 정적 웹 자산 서빙과 로컬 API 라우팅
 - `python_service/digital_twin/application/flow_lens_service.py`: 토스 계좌/보유자산 스냅샷, 관심 종목 파싱, 매도 검토 fallback 생성
@@ -85,7 +85,7 @@ npm run generate:static
 
 ## 전체 종목 카탈로그
 
-모니터링 탭의 `전체 종목 카탈로그`는 코스피, 코스닥, 나스닥 종목을 `data/service.db`의 `symbol_universe`에 저장합니다. 코스피/코스닥은 KRX KIND 상장법인 목록, 나스닥은 Nasdaq Trader Symbol Directory를 사용하며, 소스별 마지막 성공 시각과 stale 여부를 함께 표시합니다. 원천 호출이 실패해도 마지막 성공 목록은 유지됩니다.
+모니터링 탭의 `전체 종목 카탈로그`는 코스피, 코스닥, 나스닥 종목을 운영 DB의 `symbol_universe`에 저장합니다. 코스피/코스닥은 KRX KIND 상장법인 목록, 나스닥은 Nasdaq Trader Symbol Directory를 사용하며, 소스별 마지막 성공 시각과 stale 여부를 함께 표시합니다. 원천 호출이 실패해도 마지막 성공 목록은 유지됩니다.
 
 ```bash
 npm run python:symbols:refresh -- --markets KOSPI,KOSDAQ,NASDAQ
@@ -152,7 +152,7 @@ npm run share
 
 ## Python 서비스
 
-다중 계정, 실시간 모니터링, 스케줄링, 모델 리뷰 로직은 Python 서비스가 담당합니다. Python 서비스는 SQLite DB인 `data/service.db`의 여러 계정을 순회하고, 앱 store, 런타임 설정, 계정별 이전 스냅샷, 메시지 주기, 도메인 이벤트, 모델 리뷰 큐, 알림 발송 큐, 알림 템플릿을 DB 테이블에 저장합니다. 토스 credentials와 텔레그램 발송 정보도 계정별 DB row로 관리합니다.
+다중 계정, 실시간 모니터링, 스케줄링, 모델 리뷰 로직은 Python 서비스가 담당합니다. Python 서비스는 운영 DB의 여러 계정을 순회하고, 앱 store, 런타임 설정, 계정별 이전 스냅샷, 메시지 주기, 도메인 이벤트, 모델 리뷰 큐, 알림 발송 큐, 알림 템플릿을 DB 테이블에 저장합니다. 토스 credentials와 텔레그램 발송 정보도 계정별 DB row로 관리합니다.
 
 ```bash
 npm run python:accounts -- list

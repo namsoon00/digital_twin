@@ -11,8 +11,8 @@ from ..domain.external_signal_quality import attach_external_signal_quality
 from ..domain.investment_research import research_evidence_from_external_signals
 from ..domain.market_data import number
 from ..domain.portfolio import Position, utc_now_iso
+from .operational_store import external_signal_cache, research_evidence_store
 from .settings import runtime_settings
-from .sqlite_monitoring import SQLiteExternalSignalCache, SQLiteResearchEvidenceStore
 
 
 JsonFetcher = Callable[[str, Dict[str, str]], object]
@@ -151,14 +151,14 @@ class ExternalSignalProvider:
     def __init__(
         self,
         settings: Dict[str, str] = None,
-        cache: SQLiteExternalSignalCache = None,
-        evidence_store: SQLiteResearchEvidenceStore = None,
+        cache=None,
+        evidence_store=None,
         fetch_json: JsonFetcher = None,
         sleep: Callable[[float], None] = None,
     ):
         self.settings = settings or runtime_settings()
-        self.cache = cache or SQLiteExternalSignalCache()
-        self.evidence_store = evidence_store or SQLiteResearchEvidenceStore()
+        self.cache = cache or external_signal_cache(self.settings)
+        self.evidence_store = evidence_store or research_evidence_store(self.settings)
         self.fetch_json = fetch_json or self.default_fetch_json
         self.sleep = sleep or time.sleep
         self.provider_state: Dict[str, object] = {}

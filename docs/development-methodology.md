@@ -62,9 +62,11 @@ Application:
 
 Infrastructure:
 
-- `python_service/digital_twin/infrastructure/settings.py`: env fallback and SQLite-backed runtime settings facade
-- `python_service/digital_twin/infrastructure/sqlite_accounts.py`: SQLite account repository
-- `python_service/digital_twin/infrastructure/sqlite_operational.py`: shared SQLite schema and compatibility implementation
+- `python_service/digital_twin/infrastructure/settings.py`: env fallback and operational runtime settings facade
+- `python_service/digital_twin/infrastructure/operational_store.py`: runtime selector for SQLite fallback or MySQL operational stores
+- `python_service/digital_twin/infrastructure/mysql_operational.py`: MySQL account, runtime, event, monitoring, notification, model-review, symbol, quote, evidence, and quality-sample stores
+- `python_service/digital_twin/infrastructure/sqlite_accounts.py`: SQLite account repository fallback
+- `python_service/digital_twin/infrastructure/sqlite_operational.py`: shared SQLite schema and compatibility fallback implementation
 - `python_service/digital_twin/infrastructure/sqlite_monitoring.py`: context entrypoint for snapshots, cadence, monitoring-cycle recorder, quote cache, external signal cache, and domain event log stores
 - `python_service/digital_twin/infrastructure/sqlite_notifications.py`: context entrypoint for notification jobs, rules, and templates
 - `python_service/digital_twin/infrastructure/sqlite_symbols.py`: context entrypoint for symbol universe storage
@@ -74,7 +76,7 @@ Infrastructure:
 - `python_service/digital_twin/infrastructure/toss_snapshots.py`: Toss adapter and demo snapshot fallback
 - `python_service/digital_twin/application/notification_service.py`: queued notification delivery worker
 - `python_service/digital_twin/infrastructure/notifications.py`: notification queue adapters plus console and Telegram delivery
-- `python_service/digital_twin/infrastructure/event_bus.py`: synchronous event bus with SQLite event-log default
+- `python_service/digital_twin/infrastructure/event_bus.py`: synchronous event bus with operational event-log default
 - `python_service/digital_twin/infrastructure/model_review_queue.py`: async model-review queue interface fed by decision-change events
 - `python_service/digital_twin/infrastructure/model_reviewer.py`: Codex/LLM command adapter with local fallback
 - `python_service/digital_twin/infrastructure/ontology_projection.py`: snapshot-to-ontology projection recorder that saves Neo4j graphs and quality samples without making monitoring application services own graph persistence details
@@ -97,7 +99,7 @@ Current events:
 - `monitoring.alerts_detected`
 - `monitoring.cycle_completed`
 
-Events are persisted locally to the append-only `domain_events` table in `data/service.db` through `SQLiteEventLog`. Rebuild projections by replaying that event stream where practical instead of coupling features to mutable state tables. Event handlers must not break publishers by default. If one feature needs another feature's result, publish or subscribe to an event instead of importing the other feature's application service.
+Events are persisted locally to the append-only `domain_events` table through the configured operational event-log adapter. Rebuild projections by replaying that event stream where practical instead of coupling features to mutable state tables. Event handlers must not break publishers by default. If one feature needs another feature's result, publish or subscribe to an event instead of importing the other feature's application service.
 
 `monitoring.alerts_detected` now carries investment notifications as `investmentInsight` events. Legacy investment alert types such as `monitorDecisionChange`, `modelBuy`, and `externalCryptoMove` are evidence signals inside `metadata.sourceAlertEvents`, not direct investment dispatches. The model-review queue must read decision-change evidence from `investmentInsight.sourceAlertEvents` as well as the legacy direct shape for compatibility. Realtime alerts must never wait for LLM/Codex output; deep analysis belongs in the model-review queue and worker. Notification producers should enqueue jobs in the notification outbox and leave external delivery to the notification worker. Jobs derived from a domain event should carry `source_event_id` and a stable `dedupe_key`.
 
@@ -107,13 +109,13 @@ Ontology projection is a read-model boundary, not the source of truth. Aggregate
 
 Use these slices when multiple chat windows work independently:
 
-- Account management: `domain/accounts.py`, `application/account_service.py`, `infrastructure/sqlite_accounts.py`
-- Monitoring and scheduling: `domain/monitoring.py`, `domain/strategy_alerts.py`, `domain/external_signal_alerts.py`, `application/monitoring_service.py`, `application/scheduler.py`, and `infrastructure/sqlite_monitoring.py`
-- Notifications and messages: `domain/message_types.py`, `domain/notifications.py`, `domain/notification_rules.py`, `domain/notification_templates.py`, `domain/scoring.py`, `application/notification_service.py`, `infrastructure/notifications.py`, and `infrastructure/sqlite_notifications.py`
-- Symbol universe: `domain/symbol_universe.py`, `application/symbol_universe_service.py`, `infrastructure/symbol_sources.py`, and `infrastructure/sqlite_symbols.py`
+- Account management: `domain/accounts.py`, `application/account_service.py`, `infrastructure/operational_store.py`, and account store adapters
+- Monitoring and scheduling: `domain/monitoring.py`, `domain/strategy_alerts.py`, `domain/external_signal_alerts.py`, `application/monitoring_service.py`, `application/scheduler.py`, `infrastructure/operational_store.py`, and monitor store adapters
+- Notifications and messages: `domain/message_types.py`, `domain/notifications.py`, `domain/notification_rules.py`, `domain/notification_templates.py`, `domain/scoring.py`, `application/notification_service.py`, `infrastructure/notifications.py`, `infrastructure/operational_store.py`, and notification store adapters
+- Symbol universe: `domain/symbol_universe.py`, `application/symbol_universe_service.py`, `infrastructure/symbol_sources.py`, `infrastructure/operational_store.py`, and symbol store adapters
 - Providers/data collection: `infrastructure/toss_snapshots.py`
 - Model scoring and strategy: `domain/market_data.py`, `domain/portfolio_calculations.py`, `domain/strategy.py`, `domain/scoring.py`, and future model-lab application services
-- Model review and validation: `domain/model_review.py`, `application/model_review_service.py`, `infrastructure/sqlite_model_review.py`, `infrastructure/model_review_queue.py`, `infrastructure/model_reviewer.py`
+- Model review and validation: `domain/model_review.py`, `application/model_review_service.py`, `infrastructure/operational_store.py`, `infrastructure/model_review_queue.py`, `infrastructure/model_reviewer.py`, and model-review store adapters
 - Runtime/configuration: `infrastructure/settings.py`, `infrastructure/service_factory.py`, `service_manager.py`
 
 When a change touches more than one slice, keep the cross-slice contract in `domain/events.py` or `domain/repositories.py` and keep each implementation inside its own layer. If one use case must update several context stores atomically, use an explicit recorder or unit-of-work implementation in `infrastructure/` instead of putting cross-context writes into a single context repository.

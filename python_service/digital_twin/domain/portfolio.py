@@ -69,8 +69,11 @@ class Position:
     market_signal_coverage: Dict[str, object] = field(default_factory=dict)
     updated_at: str = ""
     market_value: float = 0.0
+    market_value_krw: float = 0.0
     profit_loss: float = 0.0
+    profit_loss_krw: float = 0.0
     profit_loss_rate: float = 0.0
+    exchange_rate: float = 0.0
     trade_strength: float = 0.0
     trading_value: float = 0.0
     volume: float = 0.0

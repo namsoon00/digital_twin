@@ -31,6 +31,80 @@ def optional_number(item: Dict[str, object], keys: List[str]):
     return None
 
 
+BASE_MARKET_VALUE_KEYS = [
+    "marketValueKrw",
+    "marketValueKRW",
+    "market_value_krw",
+    "krwMarketValue",
+    "krw_market_value",
+    "wonMarketValue",
+    "evaluationAmountKrw",
+    "evaluationAmountKRW",
+    "evaluation_amount_krw",
+    "krwEvaluationAmount",
+    "convertedMarketValue",
+    "converted_market_value",
+    "convertedEvaluationAmount",
+    "converted_evaluation_amount",
+    "baseMarketValue",
+    "base_market_value",
+    "baseCurrencyMarketValue",
+    "localCurrencyMarketValue",
+    "원화평가금액",
+    "원화평가액",
+    "평가금액원화",
+    "평가액원화",
+]
+
+
+BASE_PROFIT_LOSS_KEYS = [
+    "profitLossKrw",
+    "profitLossKRW",
+    "profit_loss_krw",
+    "krwProfitLoss",
+    "krw_profit_loss",
+    "wonProfitLoss",
+    "unrealizedProfitLossKrw",
+    "unrealizedProfitLossKRW",
+    "unrealized_profit_loss_krw",
+    "convertedProfitLoss",
+    "converted_profit_loss",
+    "baseProfitLoss",
+    "base_profit_loss",
+    "baseCurrencyProfitLoss",
+    "localCurrencyProfitLoss",
+    "원화평가손익",
+    "원화손익",
+    "평가손익원화",
+]
+
+
+EXCHANGE_RATE_KEYS = [
+    "exchangeRate",
+    "exchange_rate",
+    "fxRate",
+    "fx_rate",
+    "appliedExchangeRate",
+    "applied_exchange_rate",
+    "baseExchangeRate",
+    "base_exchange_rate",
+    "환율",
+    "적용환율",
+]
+
+
+def looks_like_krw_value(native_value: float, candidate_value: float, currency: str) -> bool:
+    if str(currency or "").upper() == "KRW":
+        return True
+    native = abs(number(native_value))
+    candidate = abs(number(candidate_value))
+    if not candidate:
+        return False
+    if not native:
+        return candidate >= 1000
+    return candidate >= native * 10
+
+
 def moving_average(values: List[float], period: int) -> float:
     usable = [number(value) for value in values if number(value) > 0]
     if not usable:
@@ -139,8 +213,18 @@ def known_stock(symbol: str) -> Dict[str, str]:
 
 
 def normalize_position(item: Dict[str, object]) -> Position:
-    market_value = number(item.get("marketValue") or item.get("evaluationAmount"))
-    profit_loss = number(item.get("profitLoss") or item.get("unrealizedProfitLoss"))
+    symbol = str(item.get("symbol") or item.get("stockCode") or item.get("code") or "").upper()
+    info = known_stock(symbol)
+    market = str(item.get("marketCountry") or item.get("market") or info["market"])
+    currency = str(item.get("currency") or info["currency"])
+    if not currency:
+        market_code = market.upper()
+        if market_code == "US":
+            currency = "USD"
+        elif market_code in {"KR", "KOSPI", "KOSDAQ"} or symbol.isdigit():
+            currency = "KRW"
+
+    quantity = number(item.get("quantity") or item.get("qty"))
     average_price = number(
         item.get("averagePrice")
         or item.get("avgPrice")
@@ -154,13 +238,51 @@ def normalize_position(item: Dict[str, object]) -> Position:
         or item.get("lastPrice")
         or item.get("stck_prpr")
     )
+    evaluation_amount = optional_number(item, ["evaluationAmount", "evaluation_amount", "evalAmount", "평가금액", "평가액"])
+    native_market_value = first_number(item, [
+        "marketValue",
+        "market_value",
+        "foreignMarketValue",
+        "foreign_market_value",
+        "currencyMarketValue",
+        "nativeMarketValue",
+        "native_market_value",
+        "assetValue",
+        "asset_value",
+    ])
+    estimated_native_market_value = quantity * current_price if quantity and current_price else 0.0
+    if not native_market_value:
+        if currency.upper() == "KRW" and evaluation_amount is not None:
+            native_market_value = evaluation_amount
+        elif estimated_native_market_value:
+            native_market_value = estimated_native_market_value
+        elif evaluation_amount is not None:
+            native_market_value = evaluation_amount
+    market_value_krw = first_number(item, BASE_MARKET_VALUE_KEYS)
+    if not market_value_krw and evaluation_amount is not None and looks_like_krw_value(native_market_value, evaluation_amount, currency):
+        market_value_krw = evaluation_amount
+    if currency.upper() == "KRW" and not market_value_krw:
+        market_value_krw = native_market_value
+
+    profit_loss = first_number(item, [
+        "profitLoss",
+        "profit_loss",
+        "unrealizedProfitLoss",
+        "unrealized_profit_loss",
+        "nativeProfitLoss",
+        "native_profit_loss",
+    ])
+    profit_loss_krw = first_number(item, BASE_PROFIT_LOSS_KEYS)
+    if currency.upper() == "KRW" and not profit_loss_krw:
+        profit_loss_krw = profit_loss
+    exchange_rate = first_number(item, EXCHANGE_RATE_KEYS)
     raw_rate = (
         number(item.get("profitLossRate"))
         if item.get("profitLossRate") is not None
         else number(item.get("unrealizedProfitLossRate"))
     )
-    if not raw_rate and market_value and profit_loss:
-        raw_rate = profit_loss / max(1.0, market_value - profit_loss) * 100
+    if not raw_rate and native_market_value and profit_loss:
+        raw_rate = profit_loss / max(1.0, native_market_value - profit_loss) * 100
     trade_strength = first_number(item, [
         "tradeStrength",
         "trade_strength",
@@ -376,16 +498,6 @@ def normalize_position(item: Dict[str, object]) -> Position:
     ])
     if not trading_value and volume and current_price:
         trading_value = volume * current_price
-    symbol = str(item.get("symbol") or item.get("stockCode") or item.get("code") or "").upper()
-    info = known_stock(symbol)
-    market = str(item.get("marketCountry") or item.get("market") or info["market"])
-    currency = str(item.get("currency") or info["currency"])
-    if not currency:
-        market_code = market.upper()
-        if market_code == "US":
-            currency = "USD"
-        elif market_code in {"KR", "KOSPI", "KOSDAQ"} or symbol.isdigit():
-            currency = "KRW"
     market_signal_coverage = item.get("marketSignalCoverage")
     if not isinstance(market_signal_coverage, dict):
         market_signal_coverage = item.get("market_signal_coverage")
@@ -405,9 +517,12 @@ def normalize_position(item: Dict[str, object]) -> Position:
         data_quality=str(item.get("dataQuality") or item.get("data_quality") or ""),
         market_signal_coverage=dict(market_signal_coverage or {}) if isinstance(market_signal_coverage, dict) else {},
         updated_at=str(item.get("updatedAt") or item.get("updated_at") or item.get("timestamp") or ""),
-        market_value=market_value,
+        market_value=native_market_value,
+        market_value_krw=market_value_krw,
         profit_loss=profit_loss,
+        profit_loss_krw=profit_loss_krw,
         profit_loss_rate=raw_rate,
+        exchange_rate=exchange_rate,
         trade_strength=trade_strength,
         trading_value=trading_value,
         volume=volume,

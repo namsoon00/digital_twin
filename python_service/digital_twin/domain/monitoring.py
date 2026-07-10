@@ -811,13 +811,12 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
         quantity = self.position_quantity(position)
         sellable = self.position_sellable_quantity(position)
         market_value = self.position_market_value(position)
-        currency = self.position_currency(position)
         if quantity:
             parts.append("수량 " + compact_number(quantity) + "주")
         if sellable:
             parts.append("매도가능 " + compact_number(sellable) + "주")
         if market_value:
-            parts.append("평가금액 " + money(market_value, currency))
+            parts.append("평가금액 " + self.position_value_label(position))
         if not parts:
             return ""
         return "보유: " + ", ".join(parts)
@@ -838,7 +837,7 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
         market_value = self.position_market_value(position)
         if not market_value:
             return ""
-        return "종목 평가금액: " + money(market_value, self.position_currency(position))
+        return "종목 평가금액: " + self.position_value_label(position)
 
     def portfolio_total_value(self, portfolio) -> float:
         if isinstance(portfolio, dict):
@@ -887,6 +886,15 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
         return volume * price if volume and price else 0.0
 
     def position_value_base(self, position: Dict[str, object]) -> float:
+        source_base_value = (
+            number(position.get("market_value_krw"))
+            or number(position.get("marketValueKrw"))
+            or number(position.get("marketValueKRW"))
+            or number(position.get("baseMarketValue"))
+            or number(position.get("convertedMarketValue"))
+        )
+        if source_base_value > 0:
+            return source_base_value
         return value_in_base(self.position_market_value(position), self.position_currency(position), self.fx_rates)
 
     def position_value_label(self, position: Dict[str, object]) -> str:

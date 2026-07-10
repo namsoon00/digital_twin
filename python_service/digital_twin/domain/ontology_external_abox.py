@@ -54,6 +54,12 @@ def external_signal_classes(group: str) -> List[str]:
     classes = ["Observation", "ExternalObservation", "ExternalSignal", "Signal"]
     if "dart" in text or "disclosure" in text or "filing" in text:
         classes.extend(["DisclosureEvent", "DisclosureSignal", "EventRisk"])
+    if "overview" in text or "fundamental" in text:
+        classes.extend(["FundamentalObservation", "ValuationSignal"])
+    if "earning" in text:
+        classes.extend(["EarningsEvent", "EarningsCalendarEvent", "ValuationSignal"])
+    if "analyst" in text:
+        classes.extend(["AnalystRevision", "ValuationSignal"])
     if "news" in text or "headline" in text:
         classes.extend(["NewsEvent", "EventRisk"])
     if "macro" in text or "rate" in text or "yield" in text:
@@ -69,6 +75,60 @@ def external_signal_classes(group: str) -> List[str]:
     if "regulat" in text or "policy" in text:
         classes.extend(["RegulatoryEvent", "EventRisk"])
     return unique_list(classes)
+
+
+CORPORATE_ACTION_TERMS = {
+    "자기주식": "treasury-stock",
+    "배당": "dividend",
+    "유상증자": "rights-offering",
+    "무상증자": "bonus-issue",
+    "증자": "capital-increase",
+    "감자": "capital-reduction",
+    "합병": "merger",
+    "분할": "spin-off",
+    "주식교환": "share-swap",
+    "주식이전": "share-transfer",
+    "공개매수": "tender-offer",
+    "전환사채": "convertible-bond",
+    "신주인수권": "warrant",
+}
+
+REGULATORY_EVENT_TERMS = {
+    "소송": "litigation",
+    "제재": "sanction",
+    "조사": "investigation",
+    "과징금": "penalty",
+    "벌금": "fine",
+    "상장폐지": "delisting",
+    "관리종목": "watchlist-designation",
+    "불성실": "disclosure-violation",
+    "감사의견": "audit-opinion",
+    "횡령": "embezzlement",
+    "배임": "breach-of-trust",
+}
+
+EARNINGS_EVENT_TERMS = ["10-K", "10-Q", "20-F", "40-F", "사업보고서", "분기보고서", "반기보고서", "영업실적", "실적", "earnings"]
+
+
+def first_matching_term(text: str, term_map: Dict[str, str]) -> str:
+    blob = str(text or "").lower()
+    for term, value in term_map.items():
+        if term.lower() in blob:
+            return value
+    return ""
+
+
+def looks_like_earnings_event(text: str) -> bool:
+    blob = str(text or "").lower()
+    return any(term.lower() in blob for term in EARNINGS_EVENT_TERMS)
+
+
+def first_fact(facts: Dict[str, object], keys: List[str]) -> Dict[str, object]:
+    for key in keys:
+        item = facts.get(key) if isinstance(facts.get(key), dict) else {}
+        if item:
+            return item
+    return {}
 
 
 def rate_series_label(series_id: str) -> str:
@@ -417,6 +477,8 @@ def add_symbol_external_signal_concepts(graph: PortfolioOntology, stock_id: str,
             properties=external_signal_relation_properties(group, row.get("value")),
         )
         add_symbol_fundamental_event_concepts(graph, stock_id, symbol, group, row.get("value"))
+        add_symbol_company_overview_concepts(graph, stock_id, symbol, group, row.get("value"))
+        add_symbol_earnings_report_concepts(graph, stock_id, symbol, group, row.get("value"))
 
 
 def add_symbol_fundamental_event_concepts(graph: PortfolioOntology, stock_id: str, symbol: str, group: str, value: object) -> None:
@@ -456,3 +518,240 @@ def add_symbol_fundamental_event_concepts(graph: PortfolioOntology, stock_id: st
     add_relation(graph, stock_id, filing_id, "HAS_EXTERNAL_SIGNAL", weight=1.0, properties=props)
     add_relation(graph, filing_id, stock_id, "MENTIONS_INSTRUMENT", weight=0.78, properties=props)
     add_relation(graph, event_id, filing_id, "HAS_PROVENANCE", weight=1.0, properties=props)
+    add_symbol_corporate_action_concept(graph, stock_id, event_id, symbol, group, value, label)
+    add_symbol_regulatory_event_concept(graph, stock_id, event_id, symbol, group, value, label)
+    add_symbol_earnings_event_from_filing(graph, stock_id, event_id, symbol, group, value, label)
+    add_symbol_revenue_exposure_from_facts(graph, stock_id, symbol, group, value, label)
+
+
+def report_text(group: str, value: Dict[str, object], label: str) -> str:
+    latest = value.get("latestFiling") if isinstance(value.get("latestFiling"), dict) else {}
+    return " ".join([
+        str(group or ""),
+        str(label or ""),
+        str(value.get("reportName") or value.get("report_name") or ""),
+        str(latest.get("form") or ""),
+        str(latest.get("primaryDocument") or ""),
+    ])
+
+
+def add_symbol_corporate_action_concept(
+    graph: PortfolioOntology,
+    stock_id: str,
+    event_id: str,
+    symbol: str,
+    group: str,
+    value: Dict[str, object],
+    label: str,
+) -> None:
+    action_type = first_matching_term(report_text(group, value, label), CORPORATE_ACTION_TERMS)
+    if not action_type:
+        return
+    latest = value.get("latestFiling") if isinstance(value.get("latestFiling"), dict) else {}
+    action_id = add_entity(graph, "corporate-action", symbol + ":" + group + ":" + action_type, label, {
+        "tboxClass": "CorporateAction",
+        "tboxClasses": ["Observation", "ExternalObservation", "ExternalSignal", "CorporateAction", "EventRisk"],
+        "symbol": symbol,
+        "group": group,
+        "actionType": action_type,
+        "provider": str(value.get("provider") or ""),
+        "reportName": str(value.get("reportName") or value.get("report_name") or latest.get("form") or label),
+        "receiptNo": str(value.get("receiptNo") or value.get("receipt_no") or latest.get("accessionNumber") or ""),
+        "eventDate": str(value.get("receiptDate") or value.get("receipt_date") or latest.get("filingDate") or latest.get("reportDate") or ""),
+    })
+    props = {"source": group, "polarity": "context", "aiInfluenceLabel": "기업 액션: " + label, "actionType": action_type}
+    add_relation(graph, stock_id, action_id, "HAS_OBSERVATION", weight=1.0, properties=props)
+    add_relation(graph, stock_id, action_id, "HAS_EXTERNAL_SIGNAL", weight=1.0, properties=props)
+    add_relation(graph, action_id, stock_id, "AFFECTS", weight=0.72, properties=props)
+    add_relation(graph, event_id, action_id, "HAS_PROVENANCE", weight=1.0, properties=props)
+
+
+def add_symbol_regulatory_event_concept(
+    graph: PortfolioOntology,
+    stock_id: str,
+    event_id: str,
+    symbol: str,
+    group: str,
+    value: Dict[str, object],
+    label: str,
+) -> None:
+    event_type = first_matching_term(report_text(group, value, label), REGULATORY_EVENT_TERMS)
+    if not event_type:
+        return
+    latest = value.get("latestFiling") if isinstance(value.get("latestFiling"), dict) else {}
+    regulatory_id = add_entity(graph, "regulatory-event", symbol + ":" + group + ":" + event_type, label, {
+        "tboxClass": "RegulatoryEvent",
+        "tboxClasses": ["Observation", "ExternalObservation", "ExternalSignal", "RegulatoryEvent", "EventRisk"],
+        "symbol": symbol,
+        "group": group,
+        "eventType": event_type,
+        "provider": str(value.get("provider") or ""),
+        "reportName": str(value.get("reportName") or value.get("report_name") or latest.get("form") or label),
+        "receiptNo": str(value.get("receiptNo") or value.get("receipt_no") or latest.get("accessionNumber") or ""),
+        "eventDate": str(value.get("receiptDate") or value.get("receipt_date") or latest.get("filingDate") or latest.get("reportDate") or ""),
+    })
+    props = {"source": group, "polarity": "risk", "opinionImpact": 10.0, "aiInfluenceLabel": "규제 이벤트: " + label, "eventType": event_type}
+    add_relation(graph, stock_id, regulatory_id, "HAS_OBSERVATION", weight=1.0, properties=props)
+    add_relation(graph, stock_id, regulatory_id, "HAS_EXTERNAL_SIGNAL", weight=1.0, properties=props)
+    add_relation(graph, regulatory_id, stock_id, "AFFECTS", weight=0.85, properties=props)
+    add_relation(graph, event_id, regulatory_id, "HAS_PROVENANCE", weight=1.0, properties=props)
+
+
+def add_symbol_earnings_event_from_filing(
+    graph: PortfolioOntology,
+    stock_id: str,
+    event_id: str,
+    symbol: str,
+    group: str,
+    value: Dict[str, object],
+    label: str,
+) -> None:
+    latest = value.get("latestFiling") if isinstance(value.get("latestFiling"), dict) else {}
+    facts = value.get("facts") if isinstance(value.get("facts"), dict) else {}
+    revenue = first_fact(facts, ["revenue", "netIncome"])
+    text = report_text(group, value, label)
+    if not looks_like_earnings_event(text) and not revenue:
+        return
+    period_end = str(revenue.get("end") or latest.get("reportDate") or "")
+    reported_at = str(revenue.get("filed") or latest.get("filingDate") or value.get("receiptDate") or value.get("receipt_date") or "")
+    earnings_id = add_entity(graph, "earnings-calendar-event", symbol + ":" + (period_end or reported_at or group), label, {
+        "tboxClass": "EarningsCalendarEvent",
+        "tboxClasses": ["Observation", "ExternalObservation", "ExternalSignal", "FundamentalObservation", "EarningsEvent", "EarningsCalendarEvent", "ValuationSignal"],
+        "symbol": symbol,
+        "group": group,
+        "provider": str(value.get("provider") or ""),
+        "eventStatus": "reported",
+        "periodEnd": period_end,
+        "reportedAt": reported_at,
+        "form": str(latest.get("form") or ""),
+        "revenue": number((facts.get("revenue") if isinstance(facts.get("revenue"), dict) else {}).get("value")),
+        "netIncome": number((facts.get("netIncome") if isinstance(facts.get("netIncome"), dict) else {}).get("value")),
+    })
+    props = {"source": group, "polarity": "context", "aiInfluenceLabel": "실적 이벤트: " + label}
+    add_relation(graph, stock_id, earnings_id, "HAS_OBSERVATION", weight=1.0, properties=props)
+    add_relation(graph, stock_id, earnings_id, "HAS_EXTERNAL_SIGNAL", weight=1.0, properties=props)
+    add_relation(graph, stock_id, earnings_id, "HAS_VALUATION", weight=0.74, properties=props)
+    add_relation(graph, event_id, earnings_id, "HAS_PROVENANCE", weight=1.0, properties=props)
+
+
+def add_symbol_revenue_exposure_from_facts(
+    graph: PortfolioOntology,
+    stock_id: str,
+    symbol: str,
+    group: str,
+    value: Dict[str, object],
+    label: str,
+) -> None:
+    facts = value.get("facts") if isinstance(value.get("facts"), dict) else {}
+    revenue = facts.get("revenue") if isinstance(facts.get("revenue"), dict) else {}
+    if not revenue or revenue.get("value") in (None, ""):
+        return
+    exposure_id = add_entity(graph, "revenue-exposure", symbol + ":" + group + ":" + str(revenue.get("end") or revenue.get("filed") or "latest"), "매출 노출 " + symbol, {
+        "tboxClass": "RevenueExposure",
+        "tboxClasses": ["Observation", "ExternalObservation", "FundamentalObservation", "RevenueExposure", "ValuationSignal"],
+        "symbol": symbol,
+        "group": group,
+        "provider": str(value.get("provider") or ""),
+        "revenue": number(revenue.get("value")),
+        "periodEnd": str(revenue.get("end") or ""),
+        "filedAt": str(revenue.get("filed") or ""),
+        "form": str(revenue.get("form") or ""),
+    })
+    props = {"source": group, "polarity": "context", "aiInfluenceLabel": "매출 노출: " + label}
+    add_relation(graph, stock_id, exposure_id, "HAS_REVENUE_EXPOSURE", weight=0.82, properties=props)
+    add_relation(graph, stock_id, exposure_id, "HAS_VALUATION", weight=0.68, properties=props)
+
+
+def add_symbol_company_overview_concepts(graph: PortfolioOntology, stock_id: str, symbol: str, group: str, value: object) -> None:
+    if not isinstance(value, dict) or group != "companyOverviews":
+        return
+    label = str(value.get("name") or symbol) + " 펀더멘털 개요"
+    valuation_fields = {
+        "marketCapitalization": number(value.get("marketCapitalization")),
+        "revenueTTM": number(value.get("revenueTTM")),
+        "grossProfitTTM": number(value.get("grossProfitTTM")),
+        "ebitda": number(value.get("ebitda")),
+        "profitMargin": number(value.get("profitMargin")),
+        "operatingMarginTTM": number(value.get("operatingMarginTTM")),
+        "peRatio": number(value.get("peRatio")),
+        "pegRatio": number(value.get("pegRatio")),
+        "forwardPE": number(value.get("forwardPE")),
+        "beta": number(value.get("beta")),
+        "dividendYield": number(value.get("dividendYield")),
+        "analystTargetPrice": number(value.get("analystTargetPrice")),
+    }
+    if any(valuation_fields.values()):
+        assumption_id = add_entity(graph, "valuation-assumption", symbol + ":alpha-overview", label, {
+            "tboxClass": "ValuationAssumption",
+            "tboxClasses": ["ValuationAssumption", "ValuationSignal", "FundamentalObservation"],
+            "symbol": symbol,
+            "provider": str(value.get("provider") or "Alpha Vantage"),
+            "latestQuarter": str(value.get("latestQuarter") or ""),
+            **valuation_fields,
+        })
+        add_relation(graph, stock_id, assumption_id, "HAS_VALUATION", weight=0.8, properties={"source": group, "polarity": "context", "aiInfluenceLabel": label})
+    if number(value.get("revenueTTM")):
+        exposure_id = add_entity(graph, "revenue-exposure", symbol + ":alpha-overview", "매출 노출 " + symbol, {
+            "tboxClass": "RevenueExposure",
+            "tboxClasses": ["Observation", "ExternalObservation", "FundamentalObservation", "RevenueExposure", "ValuationSignal"],
+            "symbol": symbol,
+            "provider": str(value.get("provider") or "Alpha Vantage"),
+            "revenueTTM": number(value.get("revenueTTM")),
+            "grossProfitTTM": number(value.get("grossProfitTTM")),
+            "latestQuarter": str(value.get("latestQuarter") or ""),
+        })
+        add_relation(graph, stock_id, exposure_id, "HAS_REVENUE_EXPOSURE", weight=0.82, properties={"source": group, "polarity": "context", "aiInfluenceLabel": "매출 노출"})
+    analyst_total = sum(number(value.get(key)) for key in ["analystRatingStrongBuy", "analystRatingBuy", "analystRatingHold", "analystRatingSell", "analystRatingStrongSell"])
+    if number(value.get("analystTargetPrice")) or analyst_total:
+        analyst_id = add_entity(graph, "analyst-revision", symbol + ":alpha-overview", "애널리스트 컨센서스 " + symbol, {
+            "tboxClass": "AnalystRevision",
+            "tboxClasses": ["Observation", "ExternalObservation", "ExternalSignal", "AnalystRevision", "ValuationSignal"],
+            "symbol": symbol,
+            "provider": str(value.get("provider") or "Alpha Vantage"),
+            "revisionType": "analyst-consensus-snapshot",
+            "targetPrice": number(value.get("analystTargetPrice")),
+            "strongBuy": number(value.get("analystRatingStrongBuy")),
+            "buy": number(value.get("analystRatingBuy")),
+            "hold": number(value.get("analystRatingHold")),
+            "sell": number(value.get("analystRatingSell")),
+            "strongSell": number(value.get("analystRatingStrongSell")),
+        })
+        add_relation(graph, stock_id, analyst_id, "HAS_EXTERNAL_SIGNAL", weight=0.72, properties={"source": group, "polarity": "context", "aiInfluenceLabel": "애널리스트 컨센서스"})
+        add_relation(graph, stock_id, analyst_id, "HAS_VALUATION", weight=0.74, properties={"source": group, "polarity": "context", "aiInfluenceLabel": "애널리스트 컨센서스"})
+    industry = str(value.get("industry") or "").strip()
+    if industry:
+        industry_id = add_entity(graph, "industry", industry, industry, {
+            "tboxClass": "Industry",
+            "industry": industry,
+            "sector": str(value.get("sector") or ""),
+            "provider": str(value.get("provider") or "Alpha Vantage"),
+        })
+        add_relation(graph, stock_id, industry_id, "BELONGS_TO", weight=1.0, properties={"source": group, "aiInfluenceLabel": "산업 분류"})
+
+
+def add_symbol_earnings_report_concepts(graph: PortfolioOntology, stock_id: str, symbol: str, group: str, value: object) -> None:
+    if not isinstance(value, dict) or group != "earningsReports":
+        return
+    latest = value.get("latestQuarter") if isinstance(value.get("latestQuarter"), dict) else {}
+    if not latest:
+        return
+    label = symbol + " 실적 발표"
+    earnings_id = add_entity(graph, "earnings-calendar-event", symbol + ":alpha:" + str(latest.get("fiscalDateEnding") or latest.get("reportedDate") or "latest"), label, {
+        "tboxClass": "EarningsCalendarEvent",
+        "tboxClasses": ["Observation", "ExternalObservation", "ExternalSignal", "FundamentalObservation", "EarningsEvent", "EarningsCalendarEvent", "ValuationSignal"],
+        "symbol": symbol,
+        "provider": str(value.get("provider") or "Alpha Vantage"),
+        "eventStatus": "reported",
+        "fiscalDateEnding": str(latest.get("fiscalDateEnding") or ""),
+        "reportedDate": str(latest.get("reportedDate") or ""),
+        "reportedEPS": number(latest.get("reportedEPS")),
+        "estimatedEPS": number(latest.get("estimatedEPS")),
+        "surprise": number(latest.get("surprise")),
+        "surprisePercentage": number(latest.get("surprisePercentage")),
+    })
+    props = {"source": group, "polarity": "context", "aiInfluenceLabel": label}
+    if abs(number(latest.get("surprisePercentage"))) >= 5:
+        props.update({"polarity": "support" if number(latest.get("surprisePercentage")) > 0 else "risk", "opinionImpact": min(12.0, abs(number(latest.get("surprisePercentage"))) * 0.6)})
+    add_relation(graph, stock_id, earnings_id, "HAS_OBSERVATION", weight=1.0, properties=props)
+    add_relation(graph, stock_id, earnings_id, "HAS_EXTERNAL_SIGNAL", weight=1.0, properties=props)
+    add_relation(graph, stock_id, earnings_id, "HAS_VALUATION", weight=0.78, properties=props)

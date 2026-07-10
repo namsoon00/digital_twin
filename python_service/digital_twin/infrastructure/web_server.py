@@ -429,6 +429,8 @@ def settings_status_payload() -> Dict[str, object]:
         "symbolUniverseMaxAgeHours",
         "externalApiFetchIntervalMinutes",
         "externalAlphaEnabled",
+        "externalAlphaFundamentalsEnabled",
+        "externalAlphaFundamentalsMaxSymbols",
         "externalCoinGeckoEnabled",
         "externalFredEnabled",
         "externalFredSeries",

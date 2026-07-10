@@ -12506,10 +12506,10 @@
       '<div class="flow-title"><div><strong>프롬프트 템플릿</strong><span>알림 타입별 AI 질문과 출력 계약입니다.</span></div></div>',
       '<label class="setting-field wide"><textarea data-model-setting="aiPromptTemplates" rows="14" autocomplete="off">' + escapeHtml(settingValue("aiPromptTemplates") || defaultSettings.aiPromptTemplates) + '</textarea></label>',
       '</div>',
-      '<div class="source-stack">',
+      '<div class="source-stack prompt-registry-list">',
       prompts.map(function (prompt) {
         return [
-          '<div class="source-row">',
+          '<div class="source-row prompt-registry-row">',
           '<span>' + escapeHtml(prompt.id) + '</span>',
           '<strong>' + escapeHtml(prompt.label || prompt.id) + '</strong>',
           '<em>' + escapeHtml([prompt.version, prompt.purpose].filter(Boolean).join(" · ")) + '</em>',

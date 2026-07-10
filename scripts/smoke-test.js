@@ -181,6 +181,12 @@ function checkFrontendAdminRender() {
   assertOk(styles.indexOf("--ds-color-action: #1457a8") >= 0, "기관형 액션 블루 토큰이 적용되지 않았습니다.");
   assertOk(styles.indexOf("--ds-color-orbit-line: #2f6fbb") >= 0, "기관형 신호 라인 토큰이 적용되지 않았습니다.");
   assertOk(styles.indexOf("--ds-color-orbit-signal: #137a63") >= 0, "기관형 시그널 그린 토큰이 적용되지 않았습니다.");
+  assertOk(styles.indexOf("--ds-color-page-top") >= 0 && styles.indexOf("--ds-color-page-bottom") >= 0, "페이지 배경 그라데이션 토큰이 없습니다.");
+  assertOk(/html\[data-theme="dark"\]\s*\{[\s\S]*--ds-color-page-top: #0f1720;[\s\S]*--ds-color-page-bottom: #070b10;[\s\S]*--ds-shadow-bottom-tabs:/.test(styles), "다크모드 전용 페이지 배경/하단 탭 토큰이 없습니다.");
+  assertOk(/body\s*\{[\s\S]*background: linear-gradient\(180deg, var\(--ds-color-page-top\) 0, var\(--bg\) 240px, var\(--ds-color-page-bottom\) 100%\);/.test(styles), "body 배경이 테마 토큰을 따르지 않습니다.");
+  assertOk(styles.indexOf("background: linear-gradient(180deg, #f7f9fc") < 0, "body 배경에 라이트 고정 그라데이션이 남아 있습니다.");
+  assertOk(code.indexOf('document.documentElement.setAttribute("data-theme", theme)') >= 0 && code.indexOf('document.documentElement.setAttribute("data-theme-setting", currentAppTheme())') >= 0, "테마 설정이 document root 속성으로 반영되지 않습니다.");
+  assertOk(code.indexOf('window.matchMedia("(prefers-color-scheme: dark)")') >= 0 && code.indexOf('if (name === "appTheme") applyAppTheme();') >= 0, "시스템/설정 변경 시 테마 재적용 경로가 없습니다.");
   assertOk(styles.indexOf("--surface: var(--ds-color-panel-soft)") >= 0, "보조 표면 alias가 없습니다.");
   assertOk(styles.indexOf("--ds-control-height-md") >= 0, "전역 컨트롤 높이 토큰이 없습니다.");
   assertOk(styles.indexOf("--ds-page-gap") >= 0 && styles.indexOf("--ds-row-pad-x") >= 0, "전역 레이아웃 간격 토큰이 없습니다.");
@@ -202,6 +208,7 @@ function checkFrontendAdminRender() {
   assertOk(code.indexOf("bindTabNavigation") >= 0 && code.indexOf('button.addEventListener("pointerup"') >= 0 && code.indexOf('button.addEventListener("touchend"') >= 0, "스크롤 중 모바일 탭 전환을 위한 pointer/touch 입력 경로가 없습니다.");
   assertOk(code.indexOf("stopActiveScrollMomentum") >= 0 && code.indexOf("activateTabButton") >= 0, "탭 전환 시 스크롤 관성을 멈추는 경로가 없습니다.");
   assertOk(/\.tab-bar\s*\{[\s\S]*touch-action: manipulation;/.test(styles) && /\.tab-bar button\s*\{[\s\S]*touch-action: manipulation;/.test(styles), "하단 탭 터치 조작 최적화 CSS가 없습니다.");
+  assertOk(/@media \(max-width: 860px\)[\s\S]*\.tab-bar\s*\{[\s\S]*box-shadow: var\(--ds-shadow-bottom-tabs\);/.test(styles), "모바일 하단 탭 그림자가 테마 토큰을 따르지 않습니다.");
   assertOk(code.indexOf("scrollY > 120 && delta >= 0") >= 0 && code.indexOf("scrollY > 72 && delta > 6") >= 0, "모바일 스크롤 복원 상태에서 상단 앱바가 충분히 빨리 접히지 않습니다.");
   assertOk(/@media \(max-width: 860px\)[\s\S]*\.app-brand-copy strong[\s\S]*color: var\(--ink\);/.test(styles), "모바일 상단 앱바 브랜드명이 명확하게 보이지 않습니다.");
   const mobileSpacingAuditLayerStart = styles.indexOf("/* Mobile spacing audit layer */");

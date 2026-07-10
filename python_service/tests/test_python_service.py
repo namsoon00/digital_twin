@@ -35,6 +35,7 @@ from digital_twin.domain.ontology import OntologyEntity, OntologyRelation, abox_
 from digital_twin.domain.ontology_rules import decision_action_group_for_label, evaluate_position_relation_rules, prompt_template_for_message_type
 from digital_twin.domain.portfolio_calculations import portfolio_summary
 from digital_twin.domain.strategy import SafeFormula, StrategyModel, decisions_for_positions
+from digital_twin.domain.trend_transitions import trend_transition_assessment
 from digital_twin.domain.events import ACCOUNT_SAVED, MARKET_DATA_COLLECTED, MONITORING_ALERTS_DETECTED, MONITORING_CYCLE_COMPLETED, MONITORING_SNAPSHOT_COLLECTED, ONTOLOGY_REASONING_COMPLETED, ONTOLOGY_REASONING_REQUESTED, RESEARCH_EVIDENCE_COLLECTED, DomainEvent, alerts_detected_event, monitoring_cycle_completed_event, ontology_reasoning_requested_event, snapshot_collected_event
 from digital_twin.domain.monitoring import RealtimeMonitor
 from digital_twin.domain.model_review import ModelReviewJob, build_model_review_prompt, local_model_review
@@ -1679,6 +1680,120 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(any(item.kind == "signal-transition" for item in graph.entities))
         self.assertTrue(any(item.relation_type == "CHANGED_FROM" for item in graph.relations))
         self.assertTrue(any(item.relation_type == "CONFIRMED_OVER" for item in graph.relations))
+
+    def test_trend_transition_assessment_detects_price_path_changes(self):
+        base = {
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "marketValue": 1000000,
+            "sector": "반도체",
+        }
+        rebound = trend_transition_assessment(
+            normalize_position({
+                **base,
+                "currentPrice": 99000,
+                "profitLossRate": -1.0,
+                "ma20Distance": -1.0,
+                "ma60Distance": -2.5,
+                "ma20Slope": 0.6,
+                "ma60Slope": -0.1,
+                "changeRate": 2.1,
+                "volumeRatio": 1.3,
+            }),
+            history=[
+                {"generatedAt": "2026-07-10T00:00:00Z", "positions": {"005930": {"currentPrice": 100000, "ma20Distance": -2.0}}},
+                {"generatedAt": "2026-07-10T00:03:00Z", "positions": {"005930": {"currentPrice": 97000, "ma20Distance": -5.0}}},
+            ],
+        )
+        breakout = trend_transition_assessment(
+            normalize_position({
+                **base,
+                "currentPrice": 103000,
+                "profitLossRate": 3.0,
+                "ma20Distance": 3.0,
+                "ma60Distance": 4.0,
+                "ma20Slope": 0.5,
+                "ma60Slope": 0.1,
+                "changeRate": 2.7,
+                "volumeRatio": 1.6,
+            }),
+            history=[
+                {"generatedAt": "2026-07-10T00:00:00Z", "positions": {"005930": {"currentPrice": 100000, "ma20Distance": 0.1}}},
+                {"generatedAt": "2026-07-10T00:03:00Z", "positions": {"005930": {"currentPrice": 100200, "ma20Distance": 0.2}}},
+                {"generatedAt": "2026-07-10T00:06:00Z", "positions": {"005930": {"currentPrice": 99900, "ma20Distance": -0.1}}},
+            ],
+        )
+        breakdown = trend_transition_assessment(
+            normalize_position({
+                **base,
+                "currentPrice": 97000,
+                "profitLossRate": -3.0,
+                "ma20Distance": -3.0,
+                "ma60Distance": -2.0,
+                "ma20Slope": -0.5,
+                "ma60Slope": -0.1,
+                "changeRate": -2.8,
+                "volumeRatio": 1.6,
+            }),
+            history=[
+                {"generatedAt": "2026-07-10T00:00:00Z", "positions": {"005930": {"currentPrice": 100000, "ma20Distance": 0.1}}},
+                {"generatedAt": "2026-07-10T00:03:00Z", "positions": {"005930": {"currentPrice": 100300, "ma20Distance": 0.2}}},
+                {"generatedAt": "2026-07-10T00:06:00Z", "positions": {"005930": {"currentPrice": 99800, "ma20Distance": 0.0}}},
+            ],
+        )
+
+        self.assertEqual("falling_to_rebound", rebound["transitionType"])
+        self.assertEqual("support", rebound["polarity"])
+        self.assertEqual("sideways_to_breakout", breakout["transitionType"])
+        self.assertEqual("support", breakout["polarity"])
+        self.assertEqual("sideways_to_breakdown", breakdown["transitionType"])
+        self.assertEqual("risk", breakdown["polarity"])
+
+    def test_portfolio_ontology_adds_price_path_trend_transition(self):
+        position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "marketValue": 1000000,
+            "currentPrice": 103000,
+            "profitLossRate": 3.0,
+            "ma20": 100000,
+            "ma60": 99000,
+            "ma20Distance": 3.0,
+            "ma60Distance": 4.0,
+            "ma20Slope": 0.5,
+            "ma60Slope": 0.1,
+            "changeRate": 2.7,
+            "volumeRatio": 1.6,
+            "sector": "반도체",
+        })
+        portfolio = portfolio_summary([position], fx_rates={"KRW": 1})
+        history = [
+            {"generatedAt": "2026-07-10T00:00:00Z", "positions": {"005930": {"currentPrice": 100000, "ma20Distance": 0.1, "ma60Distance": 0.3}}},
+            {"generatedAt": "2026-07-10T00:03:00Z", "positions": {"005930": {"currentPrice": 100200, "ma20Distance": 0.2, "ma60Distance": 0.4}}},
+            {"generatedAt": "2026-07-10T00:06:00Z", "positions": {"005930": {"currentPrice": 99900, "ma20Distance": -0.1, "ma60Distance": 0.2}}},
+        ]
+
+        graph = build_portfolio_ontology(
+            [position],
+            portfolio,
+            runtime_context={"metadata": {"monitorStateHistory": history}},
+        )
+        transition = next(item for item in graph.entities if item.kind == "trend-transition")
+        transition_relations = [item for item in graph.relations if item.relation_type == "HAS_TREND_TRANSITION"]
+        thesis_relations = [item for item in graph.relations if item.relation_type == "SUPPORTS_THESIS"]
+        opinion = graph.opinion_for_symbol("005930")
+
+        self.assertEqual("sideways_to_breakout", transition.properties["transitionType"])
+        self.assertTrue(any(item.kind == "price-path" for item in graph.entities))
+        self.assertTrue(any(item.kind == "trend-phase" for item in graph.entities))
+        self.assertTrue(transition_relations)
+        self.assertGreater(transition_relations[0].properties["supportImpact"], 0)
+        self.assertTrue(thesis_relations)
+        self.assertTrue(any("횡보 후 상방 이탈" in item.get("label", "") for item in opinion.relation_influences))
 
     def test_neo4j_ontology_repository_builds_relation_statements(self):
         position = normalize_position({
@@ -9096,7 +9211,18 @@ class PythonServiceTests(unittest.TestCase):
             "toss",
             "live",
             "ok",
-            utc_now_iso(),
+            "2026-07-10T00:00:00Z",
+            portfolio,
+            [position],
+            decisions_for_positions([position], portfolio),
+        )
+        snapshot2 = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "ok",
+            "2026-07-10T00:03:00Z",
             portfolio,
             [position],
             decisions_for_positions([position], portfolio),
@@ -9105,12 +9231,14 @@ class PythonServiceTests(unittest.TestCase):
 
         monitor_store = SQLiteMonitorStore(db_path, legacy_path=legacy_missing)
         monitor_store.save_snapshot(snapshot)
+        monitor_store.save_snapshot(snapshot2)
         monitor_store.mark_sent([alert])
         reopened = SQLiteMonitorStore(db_path, legacy_path=legacy_missing)
 
         self.assertIn("main", reopened.previous)
         self.assertIn(alert.key, reopened.sent)
         self.assertIn(alert.cadence_key(), reopened.sent)
+        self.assertEqual(2, len(reopened.load_history("main", limit=5)))
 
         event_log = SQLiteEventLog(db_path, legacy_path=Path(self.temp.name) / "missing.jsonl")
         source_event = alerts_detected_event([alert])
@@ -9136,6 +9264,7 @@ class PythonServiceTests(unittest.TestCase):
 
         with sqlite3.connect(str(db_path)) as connection:
             self.assertEqual(1, connection.execute("SELECT COUNT(*) FROM monitor_snapshots").fetchone()[0])
+            self.assertEqual(2, connection.execute("SELECT COUNT(*) FROM monitor_snapshot_history").fetchone()[0])
             self.assertEqual(2, connection.execute("SELECT COUNT(*) FROM monitor_sent").fetchone()[0])
             self.assertEqual(1, connection.execute("SELECT COUNT(*) FROM domain_events").fetchone()[0])
             self.assertEqual(1, connection.execute("SELECT COUNT(*) FROM model_review_jobs").fetchone()[0])

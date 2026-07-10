@@ -43,6 +43,7 @@ from .ontology_external_abox import (
 from .ontology_reasoning import apply_graph_reasoning
 from .ontology_rules import evaluate_position_relation_rules
 from .portfolio import PortfolioSummary, Position
+from .trend_transitions import trend_transition_assessment
 
 
 SENSITIVE_SETTING_TOKENS = ("secret", "token", "password", "clientid", "client_id", "accountseq", "account_seq", "chatid", "chat_id", "key")
@@ -1299,6 +1300,110 @@ def add_relation_state_concepts(
         add_relation(graph, transition_id, previous_state_id, "FAILED_AFTER", weight=round(transition_score / 100, 4), properties=props)
 
 
+def add_trend_transition_concepts(
+    graph: PortfolioOntology,
+    stock_id: str,
+    thesis_id: str,
+    symbol: str,
+    position: Position,
+    source: str,
+    runtime_context: Dict[str, object],
+) -> None:
+    metadata = runtime_context.get("metadata") if isinstance(runtime_context, dict) else {}
+    metadata = metadata if isinstance(metadata, dict) else {}
+    history = metadata.get("monitorStateHistory") if isinstance(metadata.get("monitorStateHistory"), list) else []
+    previous = metadata.get("previousMonitorState") if isinstance(metadata.get("previousMonitorState"), dict) else {}
+    assessment = trend_transition_assessment(position, history=history, previous_state=previous, source=source)
+    points = list(assessment.get("points") or [])
+    if not points:
+        return
+    phase_classes = {
+        "falling_to_rebound": ["TrendTransition", "ReversalSignal"],
+        "sideways_to_breakout": ["TrendTransition", "ConsolidationBreak"],
+        "sideways_to_breakdown": ["TrendTransition", "ConsolidationBreak"],
+        "rising_to_distribution": ["TrendTransition", "DecelerationSignal"],
+        "falling_acceleration": ["TrendTransition", "AccelerationSignal"],
+    }
+    path_id = add_entity(graph, "price-path", symbol, symbol + " 가격 경로", {
+        "tboxClass": "PricePath",
+        "symbol": symbol,
+        "source": source,
+        "pointCount": len(points),
+        "points": points,
+        "lastPriceDeltaPct": assessment.get("lastPriceDeltaPct"),
+        "ma20DistanceDeltaPct": assessment.get("ma20DistanceDeltaPct"),
+    })
+    add_relation(graph, stock_id, path_id, "HAS_PRICE_PATH", weight=min(1.0, len(points) / 6.0), properties={
+        "source": "monitor-state-history",
+        "aiInfluenceLabel": "최근 가격 경로",
+    })
+    previous_phase = assessment.get("previousPhase") if isinstance(assessment.get("previousPhase"), dict) else {}
+    current_phase = assessment.get("currentPhase") if isinstance(assessment.get("currentPhase"), dict) else {}
+    current_phase_key = str(current_phase.get("phase") or "unknown")
+    current_phase_id = add_entity(graph, "trend-phase", symbol + ":current:" + current_phase_key, str(current_phase.get("label") or current_phase_key), {
+        "tboxClass": "TrendPhase",
+        "symbol": symbol,
+        "phase": current_phase_key,
+        "role": "current",
+        "confidence": round(number(current_phase.get("confidence")), 3),
+    })
+    add_relation(graph, path_id, current_phase_id, "HAS_TREND_PHASE", weight=round(number(current_phase.get("confidence")), 4), properties={
+        "source": "trend-transition",
+        "aiInfluenceLabel": "현재 추세 국면",
+    })
+    previous_phase_key = str(previous_phase.get("phase") or "unknown")
+    if previous_phase_key != "unknown":
+        previous_phase_id = add_entity(graph, "trend-phase", symbol + ":previous:" + previous_phase_key, str(previous_phase.get("label") or previous_phase_key), {
+            "tboxClass": "TrendPhase",
+            "symbol": symbol,
+            "phase": previous_phase_key,
+            "role": "previous",
+            "confidence": round(number(previous_phase.get("confidence")), 3),
+        })
+        add_relation(graph, current_phase_id, previous_phase_id, "CHANGED_FROM", weight=1.0, properties={
+            "source": "trend-transition",
+            "aiInfluenceLabel": "추세 국면 전이",
+        })
+    score = number(assessment.get("score"))
+    transition_type = str(assessment.get("transitionType") or "none")
+    if score <= 0 or transition_type == "none":
+        return
+    transition_id = add_entity(graph, "trend-transition", symbol + ":" + transition_type, str(assessment.get("label") or transition_type), {
+        "tboxClass": "TrendTransition",
+        "tboxClasses": phase_classes.get(transition_type, ["TrendTransition"]),
+        "symbol": symbol,
+        "source": source,
+        "transitionType": transition_type,
+        "score": round(score, 1),
+        "previousPhase": previous_phase_key,
+        "currentPhase": current_phase_key,
+        "lastPriceDeltaPct": assessment.get("lastPriceDeltaPct"),
+        "ma20DistanceDeltaPct": assessment.get("ma20DistanceDeltaPct"),
+        "volumeRatio": assessment.get("volumeRatio"),
+    })
+    polarity = str(assessment.get("polarity") or "context")
+    props = {
+        "source": "trend-transition",
+        "polarity": polarity,
+        "aiInfluenceLabel": str(assessment.get("label") or "추세 전이"),
+        "transitionType": transition_type,
+        "supportImpact": round(number(assessment.get("supportImpact")), 2),
+        "riskImpact": round(number(assessment.get("riskImpact")), 2),
+    }
+    if props["riskImpact"]:
+        props["opinionImpact"] = props["riskImpact"]
+    weight = round(min(1.0, score / 100.0), 4)
+    add_relation(graph, stock_id, transition_id, "HAS_TREND_TRANSITION", weight=weight, properties=props)
+    add_relation(graph, transition_id, path_id, "CONFIRMED_OVER", weight=weight, properties=props)
+    hint = str(assessment.get("relationHint") or "")
+    if hint:
+        add_relation(graph, transition_id, current_phase_id, hint, weight=weight, properties=props)
+    if polarity == "support":
+        add_relation(graph, transition_id, thesis_id, "SUPPORTS_THESIS", weight=weight, properties=props)
+    elif polarity == "risk":
+        add_relation(graph, transition_id, thesis_id, "WEAKENS_THESIS", weight=weight, properties=props)
+
+
 def signed_pct_text(value: object, suffix: str = "%") -> str:
     numeric = round(number(value), 2)
     return ("+" if numeric > 0 else "") + str(numeric).rstrip("0").rstrip(".") + suffix
@@ -1783,6 +1888,15 @@ def build_portfolio_ontology(
             source,
             runtime_context,
             active_relation_context,
+        )
+        add_trend_transition_concepts(
+            graph,
+            stock_id,
+            thesis_id,
+            symbol,
+            position,
+            source,
+            runtime_context,
         )
         horizon_id = add_entity(graph, "signal-horizon", symbol + ":" + source, "보유 점검 기간" if holding else "관심 관찰 기간", {
             "tboxClass": "SignalHorizon",

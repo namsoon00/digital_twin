@@ -188,7 +188,7 @@ def research_evidence_change_payload(
 
 
 class OperationalConnection:
-    SCHEMA_VERSION = "sqlite_operational_schema_20260710"
+    SCHEMA_VERSION = "sqlite_operational_schema_20260710_trend_history"
     _schema_ready_paths = set()
     _schema_lock = threading.Lock()
 
@@ -232,6 +232,16 @@ class OperationalConnection:
                     updated_at TEXT NOT NULL
                 )
             """)
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS monitor_snapshot_history (
+                    account_id TEXT NOT NULL,
+                    generated_at TEXT NOT NULL DEFAULT '',
+                    payload_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY (account_id, generated_at)
+                )
+            """)
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_monitor_snapshot_history_account_time ON monitor_snapshot_history(account_id, generated_at)")
             connection.execute("""
                 CREATE TABLE IF NOT EXISTS monitor_sent (
                     key TEXT PRIMARY KEY,
@@ -1843,6 +1853,28 @@ class SQLiteMonitorStore(OperationalConnection):
                 previous[row["account_id"]] = {}
         return previous
 
+    def load_history(self, account_id: str, limit: int = 6) -> List[Dict[str, object]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT payload_json
+                FROM monitor_snapshot_history
+                WHERE account_id = ?
+                ORDER BY generated_at DESC
+                LIMIT ?
+                """,
+                (str(account_id or ""), max(1, int(limit or 6))),
+            ).fetchall()
+        history: List[Dict[str, object]] = []
+        for row in reversed(rows):
+            try:
+                payload = json.loads(row["payload_json"] or "{}")
+            except json.JSONDecodeError:
+                payload = {}
+            if isinstance(payload, dict) and payload:
+                history.append(payload)
+        return history
+
     def load_sent(self) -> Dict[str, object]:
         with self.connect() as connection:
             rows = connection.execute("SELECT key, sent_at FROM monitor_sent").fetchall()
@@ -1857,6 +1889,7 @@ class SQLiteMonitorStore(OperationalConnection):
         return self.payload["sent"]
 
     def upsert_snapshot_state_with_connection(self, connection, account_id: str, state: Dict[str, object], stamp: str = "") -> None:
+        updated_at = stamp or utc_now()
         connection.execute(
             """
             INSERT INTO monitor_snapshots (
@@ -1880,8 +1913,39 @@ class SQLiteMonitorStore(OperationalConnection):
                 str(state.get("status") or ""),
                 str(state.get("generatedAt") or ""),
                 json_dumps(state),
-                stamp or utc_now(),
+                updated_at,
             ),
+        )
+        connection.execute(
+            """
+            INSERT INTO monitor_snapshot_history (
+                account_id, generated_at, payload_json, created_at
+            )
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(account_id, generated_at) DO UPDATE SET
+                payload_json = excluded.payload_json,
+                created_at = excluded.created_at
+            """,
+            (
+                account_id,
+                str(state.get("generatedAt") or updated_at),
+                json_dumps(state),
+                updated_at,
+            ),
+        )
+        connection.execute(
+            """
+            DELETE FROM monitor_snapshot_history
+            WHERE account_id = ?
+              AND generated_at NOT IN (
+                SELECT generated_at
+                FROM monitor_snapshot_history
+                WHERE account_id = ?
+                ORDER BY generated_at DESC
+                LIMIT 200
+              )
+            """,
+            (account_id, account_id),
         )
 
     def upsert_snapshot_state(self, account_id: str, state: Dict[str, object]) -> None:

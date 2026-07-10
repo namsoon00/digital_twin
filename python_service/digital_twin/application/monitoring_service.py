@@ -40,6 +40,9 @@ class MonitorRunner:
                 self.publish(snapshot_collected_event(snapshot))
             previous = self.store.previous.get(snapshot.account_id) or {}
             snapshot.metadata["previousMonitorState"] = self.compact_previous_state(previous)
+            snapshot.metadata["monitorStateHistory"] = self.compact_monitor_history(
+                self.load_snapshot_history(snapshot.account_id)
+            )
             snapshot.metadata.setdefault("ontology", {})["previousStateAvailable"] = bool(previous)
             if not dry_run:
                 self.record_ontology_projection(snapshot)
@@ -51,6 +54,7 @@ class MonitorRunner:
         if self.use_cycle_recorder(dry_run):
             for snapshot in snapshots:
                 snapshot.metadata.pop("previousMonitorState", None)
+                snapshot.metadata.pop("monitorStateHistory", None)
             self.cycle_recorder.record_cycle(
                 [account.account_id for account in self.accounts],
                 snapshots,
@@ -75,6 +79,7 @@ class MonitorRunner:
         if not dry_run:
             for snapshot in snapshots:
                 snapshot.metadata.pop("previousMonitorState", None)
+                snapshot.metadata.pop("monitorStateHistory", None)
                 self.store.save_snapshot(snapshot)
             self.store.write()
         return all_events
@@ -138,6 +143,19 @@ class MonitorRunner:
             "decisions": previous.get("decisions") if isinstance(previous.get("decisions"), dict) else {},
             "externalSignals": previous.get("externalSignals") if isinstance(previous.get("externalSignals"), dict) else {},
         }
+
+    def load_snapshot_history(self, account_id: str) -> List[dict]:
+        if hasattr(self.store, "load_history"):
+            return list(self.store.load_history(account_id, limit=6) or [])
+        return []
+
+    def compact_monitor_history(self, history: List[dict]) -> List[dict]:
+        compacted = []
+        for item in history or []:
+            compacted_item = self.compact_previous_state(item)
+            if compacted_item:
+                compacted.append(compacted_item)
+        return compacted[-6:]
 
     def send_alert_events(self, events, dry_run: bool, source_event):
         parameters = inspect.signature(self.event_sender).parameters

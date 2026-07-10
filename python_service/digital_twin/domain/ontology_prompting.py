@@ -429,6 +429,11 @@ def prompt_payload(graph: PortfolioOntology) -> Dict[str, object]:
         "aiInferencePacket": build_ai_inference_packet(graph),
         "reasoningCards": list(graph.reasoning_cards),
         "insights": [item.to_dict() for item in graph.entities if item.kind == "insight"],
+        "trendTransitions": [
+            item.to_dict()
+            for item in graph.entities
+            if item.kind == "trend-transition"
+        ],
         "activeInvestmentOpinions": [
             dict((item.properties or {}).get("activeInvestmentOpinion") or {})
             for item in graph.entities

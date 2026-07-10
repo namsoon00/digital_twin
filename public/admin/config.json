@@ -163,7 +163,8 @@
       "newsMaterialityMinimumScore": "65",
       "dartDisclosureAiAnalysisEnabled": "1",
       "dartDisclosureAiUseCodex": "1",
-      "dartDisclosureAiTimeoutSeconds": "90"
+      "dartDisclosureAiTimeoutSeconds": "90",
+      "appTheme": "dark"
     },
     "configured": {
       "tossClientId": true,

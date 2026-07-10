@@ -54,6 +54,7 @@ def display_key(key: object) -> str:
     return DISPLAY_KEY_LABELS.get(raw, beginner_friendly_text(raw))
 
 PUBLIC_SETTING_KEYS = [
+    "appTheme",
     "watchlistSymbols",
     "tossApiBaseUrl",
     "notifyProvider",

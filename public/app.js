@@ -464,12 +464,13 @@
     { id: "notifications", label: "알림", description: "신호·발송" },
     { id: "modeling", label: "투자 분석", description: "전략·관계·AI" },
     { id: "feed", label: "피드", description: "데이터 품질" },
+    { id: "system", label: "시스템", description: "매뉴얼·흐름" },
     { id: "settings", label: "설정", description: "런타임 환경" }
   ];
   var appBrandName = "Orbit Alpha";
   var appBrandSubtitle = "포트폴리오 신호 궤도 관제";
   var bottomTabIds = ["overview", "watchlist", "notifications", "modeling"];
-  var managementTabIds = ["accounts", "symbols", "feed", "settings"];
+  var managementTabIds = ["accounts", "symbols", "feed", "system", "settings"];
   var notificationSections = [
     { id: "status", label: "현황", description: "발송 판단" },
     { id: "signals", label: "신호", description: "감지 내역" },
@@ -7117,6 +7118,9 @@
     if (state.activeTab === "feed") {
       return renderFeedPage(snapshot);
     }
+    if (state.activeTab === "system") {
+      return renderSystemGuidePage(snapshot);
+    }
     if (state.activeTab === "notifications") {
       return renderNotificationsPage();
     }
@@ -7143,6 +7147,281 @@
       renderPageCommandStrip(pageId, snapshot),
       content,
       '</div>'
+    ].join("");
+  }
+
+  function renderSystemGuidePage(snapshot) {
+    return renderManagedPage("system", snapshot, [
+      '<section class="admin-grid system-guide-view">',
+      renderSystemGuideHero(snapshot),
+      renderSystemQuickManualPanel(),
+      renderSystemDataFlowPanel(snapshot),
+      renderSystemEventFlowPanel(),
+      renderSystemNotificationFlowPanel(),
+      renderSystemOntologyPanel(snapshot),
+      renderSystemOperationsPanel(),
+      renderSystemGlossaryPanel(),
+      '</section>'
+    ].join(""));
+  }
+
+  function renderSystemGuideHero(snapshot) {
+    var toss = (snapshot || {}).toss || {};
+    var positions = Array.isArray(toss.positions) ? toss.positions.filter(function (item) { return item && item.source !== "cash"; }) : [];
+    var strategy = (((snapshot || {}).tossDecision || {}).ontologyStrategy || {});
+    var abox = strategy.abox || {};
+    var evidence = Array.isArray(strategy.evidence) ? strategy.evidence : [];
+    var metrics = [
+      ["계정", serviceAccounts().length || 0, "로컬 SQLite에 저장된 연결 단위"],
+      ["보유 종목", positions.length, "현금 제외 현재 포지션"],
+      ["관계", abox.relationCount || strategy.relationCount || 0, "TBox/ABox에서 만들어진 연결"],
+      ["근거", evidence.length || ((currentResearchEvidence().summary || {}).total || 0), "뉴스·시세·공시·모델 근거"]
+    ];
+    return [
+      '<article class="panel system-guide-hero">',
+      '<div class="system-guide-hero-copy">',
+      '<p class="label">SYSTEM MANUAL</p>',
+      '<h2>Orbit Alpha는 계좌, 시장 데이터, 규칙, AI 의견을 한 흐름으로 묶는 로컬 우선 투자 관제 시스템입니다.</h2>',
+      '<p>처음 보는 사람은 먼저 계정과 관심종목을 등록하고, 데이터 수집 상태를 확인한 뒤, 알림과 투자 분석 탭에서 왜 신호가 생겼는지 확인하면 됩니다. 이 탭은 그 전체 흐름을 운영 매뉴얼처럼 설명합니다.</p>',
+      '<div class="system-guide-kpis">',
+      metrics.map(function (metric) {
+        return [
+          '<span>',
+          '<em>' + escapeHtml(metric[0]) + '</em>',
+          '<strong>' + escapeHtml(metric[1]) + '</strong>',
+          '<b>' + escapeHtml(metric[2]) + '</b>',
+          '</span>'
+        ].join("");
+      }).join(""),
+      '</div>',
+      '</div>',
+      '<div class="system-orbit-map" aria-label="Orbit Alpha 시스템 구성 다이어그램">',
+      '<span class="system-orbit-ring ring-one"></span>',
+      '<span class="system-orbit-ring ring-two"></span>',
+      '<div class="system-orbit-node core"><strong>Orbit Alpha</strong><em>로컬 관제</em></div>',
+      '<div class="system-orbit-node data"><strong>Data</strong><em>시세·뉴스·공시</em></div>',
+      '<div class="system-orbit-node model"><strong>Model</strong><em>전략 공식·관계 규칙</em></div>',
+      '<div class="system-orbit-node alert"><strong>Alert</strong><em>Outbox·Telegram</em></div>',
+      '<div class="system-orbit-node ui"><strong>Console</strong><em>탭별 운영 화면</em></div>',
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderSystemQuickManualPanel() {
+    var steps = [
+      ["01", "계정 등록", "계정 탭에서 Toss 자격 정보, 계좌 순번, Telegram 채널을 저장합니다. 저장된 secret은 화면에 다시 노출하지 않습니다."],
+      ["02", "관심종목 구성", "관심종목 탭에서 계정별 추적 대상을 넣습니다. 보유 종목과 관심 종목은 알림 판단에서 서로 다른 관계로 다룹니다."],
+      ["03", "데이터 확인", "피드 탭과 전체종목 탭에서 종목 카탈로그, 뉴스, 공시, 외부 API 수집 상태를 확인합니다."],
+      ["04", "알림 정책 조정", "알림 탭에서 메시지 타입별 사용 여부, 임계값, 발송 템플릿, 최근 판단을 점검합니다."],
+      ["05", "투자 분석 검토", "투자 분석 탭에서 가격·수급·추세·공시·뉴스 근거가 어떤 관계 규칙으로 연결됐는지 봅니다."]
+    ];
+    return [
+      '<article class="panel system-manual-panel">',
+      '<div class="panel-head"><div><p class="label">USER MANUAL</p><h2>처음 사용하는 순서</h2></div><span class="status-pill live">local-first</span></div>',
+      '<div class="system-manual-grid">',
+      steps.map(function (step) {
+        return [
+          '<section class="system-manual-step">',
+          '<b>' + escapeHtml(step[0]) + '</b>',
+          '<strong>' + escapeHtml(step[1]) + '</strong>',
+          '<p>' + escapeHtml(step[2]) + '</p>',
+          '</section>'
+        ].join("");
+      }).join(""),
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderSystemDataFlowPanel(snapshot) {
+    var generatedAt = formatClock((snapshot || {}).generatedAt);
+    var sourceRows = [
+      ["계좌·보유", "Toss snapshot", "monitor_snapshots", "보유 수량, 평단가, 평가액, 현금 비중"],
+      ["전체종목·시세", "market-data worker", "symbol_universe, market_quote_cache", "시장별 종목명, 현재가, 캔들 기반 이동평균"],
+      ["뉴스·공시", "news worker, OpenDART", "research_evidence, app_store", "기사 요약, 관련성, 중요도, 공시 제목"],
+      ["거시·외부", "Alpha Vantage, CoinGecko, FRED", "external_signals cache", "미장 가격, 코인 변동, 금리·스프레드"],
+      ["운영 설정", "웹 설정 API", "runtime_settings, notification_rules", "임계값, 템플릿, API 사용 여부"]
+    ];
+    return [
+      '<article class="panel system-data-flow-panel">',
+      '<div class="panel-head"><div><p class="label">DATA FLOW</p><h2>데이터가 화면과 알림까지 가는 흐름</h2><span>마지막 화면 데이터 ' + escapeHtml(generatedAt) + '</span></div></div>',
+      '<div class="system-flow-diagram data-flow" aria-label="데이터 흐름 다이어그램">',
+      renderSystemFlowNode("01", "외부·로컬 입력", ["Toss 계좌", "종목 카탈로그", "뉴스·공시·거시"]),
+      renderSystemFlowNode("02", "수집 워커", ["monitor", "market-data", "news"]),
+      renderSystemFlowNode("03", "로컬 저장소", ["SQLite service.db", "캐시·이벤트·Outbox"]),
+      renderSystemFlowNode("04", "분석 계층", ["전략 공식", "온톨로지 규칙", "AI 의견"]),
+      renderSystemFlowNode("05", "사용자 접점", ["웹 콘솔", "알림 큐", "Telegram"]),
+      '</div>',
+      '<div class="system-lineage-grid" role="table" aria-label="데이터 계보">',
+      '<div class="system-lineage-head" role="row"><span>데이터</span><span>수집 주체</span><span>저장 위치</span><span>사용 목적</span></div>',
+      sourceRows.map(function (row) {
+        return [
+          '<div class="system-lineage-row" role="row">',
+          '<strong>' + escapeHtml(row[0]) + '</strong>',
+          '<span>' + escapeHtml(row[1]) + '</span>',
+          '<code>' + escapeHtml(row[2]) + '</code>',
+          '<em>' + escapeHtml(row[3]) + '</em>',
+          '</div>'
+        ].join("");
+      }).join(""),
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderSystemFlowNode(index, title, items) {
+    return [
+      '<section class="system-flow-node">',
+      '<b>' + escapeHtml(index) + '</b>',
+      '<strong>' + escapeHtml(title) + '</strong>',
+      '<ul>',
+      (items || []).map(function (item) { return '<li>' + escapeHtml(item) + '</li>'; }).join(""),
+      '</ul>',
+      '</section>'
+    ].join("");
+  }
+
+  function renderSystemEventFlowPanel() {
+    var events = [
+      ["account.saved", "계정 저장", "계정 탭에서 저장된 계정을 마스킹된 payload로 이벤트 로그에 남깁니다."],
+      ["market_data.collected", "시세 수집", "종목 유니버스에서 선택된 종목의 가격과 캔들 데이터를 저장합니다."],
+      ["research_evidence.collected", "뉴스 근거 수집", "뉴스·공시 근거가 바뀌면 관련 종목과 중요도 정보를 이벤트로 남깁니다."],
+      ["monitoring.snapshot_collected", "계좌 스냅샷", "각 계정의 보유, 현금, 판단 후보를 하나의 스냅샷으로 기록합니다."],
+      ["monitoring.alerts_detected", "신호 감지", "가격·수급·추세·보유 변화가 알림 후보 이벤트로 묶입니다."],
+      ["ontology.reasoning_requested", "관계 추론 요청", "중요한 데이터 변화가 있으면 온톨로지 추론 워커가 처리할 요청을 만듭니다."],
+      ["ontology.reasoning_completed", "관계 추론 완료", "TBox/ABox 관계, 근거 카드, 의견 후보가 계산됩니다."],
+      ["notification.job_queued", "알림 큐 적재", "사용자에게 보낼 메시지는 즉시 발송하지 않고 Outbox에 넣어 재시도 가능하게 합니다."]
+    ];
+    return [
+      '<article class="panel system-event-panel">',
+      '<div class="panel-head"><div><p class="label">EVENT FLOW</p><h2>이벤트 흐름</h2><span>각 기능은 서로 직접 호출하기보다 이벤트를 남기고 필요한 워커가 이어서 처리합니다.</span></div></div>',
+      '<div class="system-event-track" aria-label="이벤트 흐름 다이어그램">',
+      events.map(function (event, index) {
+        return [
+          '<section class="system-event-row">',
+          '<b>' + String(index + 1).padStart(2, "0") + '</b>',
+          '<code>' + escapeHtml(event[0]) + '</code>',
+          '<strong>' + escapeHtml(event[1]) + '</strong>',
+          '<p>' + escapeHtml(event[2]) + '</p>',
+          '</section>'
+        ].join("");
+      }).join(""),
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderSystemNotificationFlowPanel() {
+    var nodes = [
+      ["감지", "모니터링과 외부 데이터가 가격·수급·추세·공시·뉴스 변화를 찾습니다."],
+      ["근거 묶음", "단일 신호를 바로 보내지 않고 투자 인사이트의 근거로 묶습니다."],
+      ["관계 판단", "TBox/ABox 규칙이 보유, 관심, 데이터 품질, 리스크 관계를 계산합니다."],
+      ["AI 문구", "제공된 데이터 안에서만 이유, 반대 근거, 실행 전 확인을 작성합니다."],
+      ["Outbox", "notification_jobs에 저장한 뒤 워커가 재시도 가능하게 전달합니다."],
+      ["사용자", "Telegram 또는 콘솔에서 왜 알림이 왔는지 확인합니다."]
+    ];
+    return [
+      '<article class="panel system-notification-panel">',
+      '<div class="panel-head"><div><p class="label">ALERT PIPELINE</p><h2>알림이 만들어지는 방식</h2></div></div>',
+      '<div class="system-notification-flow" aria-label="알림 생성 흐름 다이어그램">',
+      nodes.map(function (node, index) {
+        return [
+          '<section class="system-notification-node">',
+          '<b>' + String(index + 1).padStart(2, "0") + '</b>',
+          '<strong>' + escapeHtml(node[0]) + '</strong>',
+          '<p>' + escapeHtml(node[1]) + '</p>',
+          '</section>'
+        ].join("");
+      }).join(""),
+      '</div>',
+      '<div class="system-guide-note">',
+      '<strong>중요한 운영 원칙</strong>',
+      '<p>투자 알림은 자동 주문이 아닙니다. 시스템은 근거를 모아 대응 우선순위를 제안하고, 실제 실행 전 확인할 조건을 사용자에게 보여줍니다.</p>',
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderSystemOntologyPanel(snapshot) {
+    var strategy = (((snapshot || {}).tossDecision || {}).ontologyStrategy || {});
+    var tbox = strategy.tbox || {};
+    var abox = strategy.abox || {};
+    var relationCount = abox.relationCount || strategy.relationCount || 0;
+    var cards = [
+      ["TBox", "시스템의 용어 사전", "종목, 계좌, 가격, 추세, 뉴스, 공시, 리스크 같은 개념과 가능한 관계를 정의합니다.", (tbox.classes || []).length + " classes"],
+      ["ABox", "현재 데이터", "지금 계정과 시장에서 실제로 관찰된 보유 종목, 관심 종목, 가격, 근거를 담습니다.", (abox.entityCount || 0) + " entities"],
+      ["Evidence", "판단 근거", "시세, 수급, 이동평균, 뉴스, 공시, 외부 지표를 출처와 함께 보관합니다.", (Array.isArray(strategy.evidence) ? strategy.evidence.length : 0) + " cards"],
+      ["Belief", "중간 해석", "근거를 읽고 추세 훼손, 수급 확인, 데이터 부족 같은 중간 판단을 만듭니다.", (Array.isArray(strategy.beliefs) ? strategy.beliefs.length : 0) + " beliefs"],
+      ["Opinion", "사용자 의견", "분할축소, 보유, 추가 확인처럼 실행 전 점검 의견을 생성합니다.", (Array.isArray(strategy.opinions) ? strategy.opinions.length : 0) + " opinions"]
+    ];
+    return [
+      '<article class="panel system-ontology-panel">',
+      '<div class="panel-head"><div><p class="label">ONTOLOGY MODEL</p><h2>온톨로지와 모델링 구조</h2><span>현재 관계 수 ' + escapeHtml(relationCount) + '</span></div></div>',
+      '<div class="system-ontology-map" aria-label="온톨로지 모델 다이어그램">',
+      cards.map(function (card, index) {
+        return [
+          '<section class="system-ontology-card step-' + escapeHtml(index + 1) + '">',
+          '<b>' + escapeHtml(card[0]) + '</b>',
+          '<strong>' + escapeHtml(card[1]) + '</strong>',
+          '<p>' + escapeHtml(card[2]) + '</p>',
+          '<em>' + escapeHtml(card[3]) + '</em>',
+          '</section>'
+        ].join("");
+      }).join(""),
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderSystemOperationsPanel() {
+    var rows = [
+      ["매일 먼저 볼 것", "홈에서 연결 상태와 최근 알림, 투자 분석에서 관계 그래프와 근거 카드를 봅니다."],
+      ["데이터가 이상할 때", "피드 탭의 수집 오류, 전체종목 탭의 최신성, 설정 탭의 API 키와 캐시 시간을 순서대로 확인합니다."],
+      ["알림이 너무 많을 때", "알림 탭에서 메시지 타입별 사용 여부와 cadence, 임계값을 조정합니다."],
+      ["모델 판단이 이상할 때", "투자 분석 탭에서 공식 입력, 기준값, 근거 카드, 반대 근거를 함께 확인합니다."],
+      ["외부 공유 전", "로컬 우선 시스템이므로 `.env.local`, service.db, API 키, 계좌 정보가 노출되지 않는지 먼저 확인합니다."]
+    ];
+    return [
+      '<article class="panel system-operations-panel">',
+      '<div class="panel-head"><div><p class="label">OPERATIONS</p><h2>운영 체크리스트</h2></div></div>',
+      '<div class="system-ops-list">',
+      rows.map(function (row) {
+        return [
+          '<section class="system-ops-row">',
+          '<strong>' + escapeHtml(row[0]) + '</strong>',
+          '<p>' + escapeHtml(row[1]) + '</p>',
+          '</section>'
+        ].join("");
+      }).join(""),
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderSystemGlossaryPanel() {
+    var terms = [
+      ["Snapshot", "한 시점의 계좌·보유·가격·판단 상태 묶음입니다."],
+      ["Evidence", "알림과 판단에 쓰인 출처 있는 근거입니다."],
+      ["TBox", "개념과 관계 규칙의 설계도입니다."],
+      ["ABox", "현재 데이터로 채워진 실제 관계 그래프입니다."],
+      ["Outbox", "보낼 알림을 먼저 저장하고 워커가 안전하게 전송하는 큐입니다."],
+      ["Cadence", "같은 유형의 알림을 너무 자주 보내지 않도록 막는 시간 간격입니다."]
+    ];
+    return [
+      '<article class="panel system-glossary-panel">',
+      '<div class="panel-head"><div><p class="label">GLOSSARY</p><h2>핵심 용어</h2></div></div>',
+      '<div class="system-glossary-grid">',
+      terms.map(function (term) {
+        return [
+          '<section>',
+          '<strong>' + escapeHtml(term[0]) + '</strong>',
+          '<p>' + escapeHtml(term[1]) + '</p>',
+          '</section>'
+        ].join("");
+      }).join(""),
+      '</div>',
+      '</article>'
     ].join("");
   }
 
@@ -7178,6 +7457,10 @@
       feed: {
         steps: [["01", "Source", "피드 설정"], ["02", "Quality", "수집 품질"], ["03", "Evidence", "저장 근거"]],
         metrics: [["피드", (state.feed && state.feed.items ? state.feed.items.length : 0)], ["근거", ((currentResearchEvidence().summary || {}).total || 0)], ["오류", (state.feed && state.feed.errors ? state.feed.errors.length : 0)]]
+      },
+      system: {
+        steps: [["01", "Manual", "처음 보는 사람"], ["02", "Data", "수집·저장"], ["03", "Event", "알림·추론"]],
+        metrics: [["워커", "6"], ["이벤트", "12+"], ["저장소", "SQLite"]]
       },
       notifications: {
         steps: [["01", "Decision", "최근 판단"], ["02", "Policy", "타입 룰"], ["03", "Template", "본문·발송"]],

@@ -1006,6 +1006,7 @@ function checkFrontendAdminRender() {
     renderForSearch("?tab=modeling&strategy=trace"),
     renderForSearch("?tab=ontology&ontology=graphs"),
     renderForSearch("?tab=monitoring"),
+    renderForSearch("?tab=system"),
     renderForSearch("?tab=settings"),
     renderForSearch("?tab=accounts", "namsoon00.github.io"),
     renderForSearch("?tab=accounts", null, { captureNewAccountButton: true, clickNewAccount: true })
@@ -1028,9 +1029,10 @@ function checkFrontendAdminRender() {
     const modelingTraceHtml = pages[15];
     const legacyOntologyGraphHtml = pages[16];
     const monitoringHtml = pages[17];
-    const settingsHtml = pages[18];
-    const staticAccountHtml = pages[19];
-    const newAccountHtml = pages[20];
+    const systemHtml = pages[18];
+    const settingsHtml = pages[19];
+    const staticAccountHtml = pages[20];
+    const newAccountHtml = pages[21];
 
     [
       ["overview", overviewHtml],
@@ -1040,6 +1042,7 @@ function checkFrontendAdminRender() {
       ["notifications", notificationHtml],
       ["modeling", modelingHtml],
       ["feed", feedHtml],
+      ["system", systemHtml],
       ["settings", settingsHtml]
     ].forEach(function (entry) {
       assertOk(entry[1].indexOf("managed-page managed-page-" + entry[0]) >= 0, "탭이 공통 관리 페이지 템플릿을 거치지 않습니다: " + entry[0]);
@@ -1067,6 +1070,7 @@ function checkFrontendAdminRender() {
       ["투자 분석", modelingHtml],
       ["피드", feedHtml],
       ["모니터링", monitoringHtml],
+      ["시스템", systemHtml],
       ["설정", settingsHtml]
     ].forEach(function (entry) {
       assertOk(entry[1].indexOf("deskbar ") < 0, entry[0] + " 탭에 홈 전용 deskbar가 렌더링됩니다.");
@@ -1079,7 +1083,7 @@ function checkFrontendAdminRender() {
     assertOk(overviewHtml.indexOf('data-scroll-key="overview"') >= 0, "탭 본문에 스크롤 관리 키가 렌더링되지 않습니다.");
     assertOk(designSystemDoc.indexOf("각 탭은 독립된 스크롤 위치") >= 0, "디자인 시스템 문서에 탭별 스크롤 정책이 없습니다.");
     assertOk(code.indexOf('var bottomTabIds = ["overview", "watchlist", "notifications", "modeling"];') >= 0, "하단 핵심 탭에 알림과 투자 분석이 배치되지 않았습니다.");
-    assertOk(code.indexOf('var managementTabIds = ["accounts", "symbols", "feed", "settings"];') >= 0, "상단 운영 메뉴 탭 구성이 역할과 맞지 않습니다.");
+    assertOk(code.indexOf('var managementTabIds = ["accounts", "symbols", "feed", "system", "settings"];') >= 0, "상단 운영 메뉴 탭 구성이 역할과 맞지 않습니다.");
     assertOk(styles.indexOf(".app-nav-tab.active") >= 0 && styles.indexOf(".app-nav-menu") >= 0, "앱 네비게이션 활성 탭과 모바일 관리 메뉴 스타일 규칙이 없습니다.");
     assertOk(styles.indexOf("@media (min-width: 861px)") >= 0 && styles.indexOf(".tab-bar {\n    display: none;") >= 0, "데스크톱에서 하단 탭을 숨기는 규칙이 없습니다.");
     assertOk(styles.indexOf("position: sticky") >= 0 && styles.indexOf("bottom: 0;") >= 0 && styles.indexOf("backdrop-filter: blur(18px)") >= 0 && styles.indexOf(".app-nav.is-hidden") >= 0, "모바일 앱바 접힘/하단탭 고정 반응형 규칙이 없습니다.");
@@ -1088,7 +1092,7 @@ function checkFrontendAdminRender() {
     assertOk(code.indexOf("realtime.status") >= 0, "웹소켓 상태 메시지를 처리하지 않습니다.");
     assertOk(code.indexOf("realtimeEventSnackbar") >= 0, "웹소켓 이벤트를 스낵바로 연결하지 않습니다.");
     assertOk(overviewHtml.indexOf("실시간") >= 0, "홈 요약에 실시간 연결 상태가 렌더링되지 않습니다.");
-    ["overview", "accounts", "watchlist", "symbols", "notifications", "modeling", "feed", "settings"].forEach(function (tab) {
+    ["overview", "accounts", "watchlist", "symbols", "notifications", "modeling", "feed", "system", "settings"].forEach(function (tab) {
       assertOk(overviewHtml.indexOf('data-tab="' + tab + '"') >= 0, "새 탭이 렌더링되지 않았습니다: " + tab);
     });
     assertOk(overviewHtml.indexOf('data-tab="ontology"') < 0, "관계 분석 독립 탭이 아직 렌더링됩니다.");
@@ -1103,6 +1107,14 @@ function checkFrontendAdminRender() {
     assertOk(feedHtml.indexOf("feed-view") >= 0, "피드 탭이 데이터 관리 화면으로 렌더링되지 않습니다.");
     assertOk(feedHtml.indexOf("피드 수집 설정") >= 0 && feedHtml.indexOf("데이터 품질 상태") >= 0, "피드 설정과 데이터 품질 패널이 없습니다.");
     assertOk(feedHtml.indexOf("저장 근거 조회·관리") >= 0 && feedHtml.indexOf('data-research-evidence-form') >= 0, "저장 근거 조회/관리 폼이 없습니다.");
+    assertOk(systemHtml.indexOf("<h1>시스템</h1>") >= 0, "시스템 탭 제목이 상단에 렌더링되지 않았습니다.");
+    assertOk(systemHtml.indexOf("system-guide-view") >= 0, "시스템 설명 탭이 전용 레이아웃으로 렌더링되지 않습니다.");
+    assertOk(systemHtml.indexOf("SYSTEM MANUAL") >= 0 && systemHtml.indexOf("처음 사용하는 순서") >= 0, "시스템 탭에 사용자 매뉴얼이 없습니다.");
+    assertOk(systemHtml.indexOf("DATA FLOW") >= 0 && systemHtml.indexOf("system-flow-diagram data-flow") >= 0, "시스템 탭에 데이터 흐름 다이어그램이 없습니다.");
+    assertOk(systemHtml.indexOf("EVENT FLOW") >= 0 && systemHtml.indexOf("monitoring.snapshot_collected") >= 0 && systemHtml.indexOf("notification.job_queued") >= 0, "시스템 탭에 이벤트 흐름 설명이 없습니다.");
+    assertOk(systemHtml.indexOf("ALERT PIPELINE") >= 0 && systemHtml.indexOf("system-notification-flow") >= 0, "시스템 탭에 알림 생성 흐름 다이어그램이 없습니다.");
+    assertOk(systemHtml.indexOf("ONTOLOGY MODEL") >= 0 && systemHtml.indexOf("TBox") >= 0 && systemHtml.indexOf("ABox") >= 0, "시스템 탭에 온톨로지 모델 설명이 없습니다.");
+    assertOk(styles.indexOf(".system-guide-view") >= 0 && styles.indexOf(".system-flow-diagram") >= 0 && styles.indexOf(".system-event-track") >= 0, "시스템 설명 탭 스타일이 없습니다.");
     assertOk(overviewHtml.indexOf("admin-monitoring-panel") >= 0, "모니터링 상태 패널이 렌더링되지 않았습니다.");
     assertOk(overviewHtml.indexOf("account-directory-panel") >= 0, "홈에 DB 계정 패널이 렌더링되지 않았습니다.");
     assertOk(overviewHtml.indexOf("account-watchlist-panel") >= 0, "홈에 계정별 관심 종목 패널이 렌더링되지 않았습니다.");

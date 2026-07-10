@@ -597,8 +597,21 @@
     "monitorPositionChange", "monitorPnlChange", "monitorValueChange", "monitorTrendChange", "monitorCashChange",
     "monitorDecisionChange", "externalEquityMove", "externalCryptoMove", "externalMacroShift", "externalDartDisclosure"
   ];
+  var userManagedNotificationTypes = ["investmentInsight", "monitorConnection", "externalDataConnection"];
+  var visibleNotificationTemplateTypes = ["default", "investmentInsight", "monitorConnection", "externalDataConnection", "modelReview", "workHandoff", "notification"];
   function ontologyEvidenceSignalRule(key) {
     return ontologyEvidenceSignalTypes.indexOf(String(key || "")) >= 0;
+  }
+  function managedNotificationType(key) {
+    return userManagedNotificationTypes.indexOf(String(key || "")) >= 0;
+  }
+  function visibleNotificationTemplateType(key) {
+    return visibleNotificationTemplateTypes.indexOf(String(key || "")) >= 0;
+  }
+  function notificationPolicyCatalog() {
+    return alertRuleCatalog.filter(function (rule) {
+      return managedNotificationType(rule.key);
+    });
   }
   var notificationTypeEmojis = {
     default: "🔔",
@@ -799,9 +812,9 @@
     activeNotificationSection: initialNotificationSection(),
     activeStrategySection: initialStrategySection(),
     activeOntologySection: initialOntologySection(),
-    activeNotificationMessageType: "monitorHeartbeat",
+    activeNotificationMessageType: "investmentInsight",
     notificationPolicyEditorOpen: false,
-    activeNotificationTemplateType: "monitorHeartbeat",
+    activeNotificationTemplateType: "investmentInsight",
     notificationTemplateEditorOpen: false,
     notificationMarketHoursSessions: [],
     notificationJobItems: [],
@@ -1824,7 +1837,7 @@
         description: "기본 알림 템플릿"
       }
     ];
-    alertRuleCatalog.forEach(function (rule) {
+    notificationPolicyCatalog().forEach(function (rule) {
       items.push({
         messageType: rule.key,
         template: richTemplate,
@@ -1840,6 +1853,7 @@
     });
     var seen = {};
     return items.filter(function (item) {
+      if (!visibleNotificationTemplateType(item.messageType)) return false;
       if (seen[item.messageType]) return false;
       seen[item.messageType] = true;
       return true;
@@ -2058,7 +2072,7 @@
     defaultNotificationTemplates().forEach(function (item) {
       keys.push(item.messageType);
     });
-    alertRuleCatalog.forEach(function (rule) {
+    notificationPolicyCatalog().forEach(function (rule) {
       keys.push(rule.key);
     });
     return keys.filter(function (key) {
@@ -7074,7 +7088,8 @@
       return item && item.source !== "cash";
     }).length : 0;
     var rules = alertRules();
-    var enabledRules = alertRuleCatalog.filter(function (rule) {
+    var policyRules = notificationPolicyCatalog();
+    var enabledRules = policyRules.filter(function (rule) {
       return enabledAlertRule(rules, rule.key);
     }).length;
     var thresholds = modelDecisionThresholds();
@@ -7089,7 +7104,7 @@
       renderDeskbarCell("Portfolio", formatMoney(portfolio.total || 0), positions + " positions", "neutral"),
       renderDeskbarCell("Model", settingValue("modelName") || defaultSettings.modelName, "Buy " + Math.round(thresholds.modelBuy || 0) + " · Sell " + Math.round(thresholds.modelSell || 0), "neutral"),
       renderDeskbarCell("Ontology", (tbox.classes || []).length + " TBox / " + relationCount + " rel", (abox.entityCount || 0) + " ABox entities", "neutral"),
-      renderDeskbarCell("Alerts", enabledRules + "/" + alertRuleCatalog.length, state.realtime.connected ? "WebSocket live" : "HTTP polling", state.realtime.connected ? "live" : "demo"),
+      renderDeskbarCell("Alerts", enabledRules + "/" + policyRules.length, state.realtime.connected ? "WebSocket live" : "HTTP polling", state.realtime.connected ? "live" : "demo"),
       '</section>'
     ].join("");
   }
@@ -7618,7 +7633,7 @@
     var profiles = {
       overview: {
         steps: [["01", "Status", "계정·데이터"], ["02", "Risk", "모니터링"], ["03", "Action", "알림·전략"]],
-        metrics: [["계정", serviceAccounts().length || 0], ["평가", formatMoney(portfolio.total || 0)], ["알림", enabledRules + "/" + alertRuleCatalog.length]]
+        metrics: [["계정", serviceAccounts().length || 0], ["평가", formatMoney(portfolio.total || 0)], ["알림", enabledRules + "/" + notificationPolicyCatalog().length]]
       },
       accounts: {
         steps: [["01", "Directory", "계정 목록"], ["02", "Exposure", "노출 상태"], ["03", "Save", "DB 저장"]],
@@ -7642,7 +7657,7 @@
       },
       notifications: {
         steps: [["01", "Decision", "최근 판단"], ["02", "Policy", "타입 룰"], ["03", "Template", "본문·발송"]],
-        metrics: [["사용 룰", enabledRules + "/" + alertRuleCatalog.length], ["템플릿", notificationTemplateItems().length], ["큐", notificationJobSummaryText(state.realtime.notificationJobs)]]
+        metrics: [["관리 룰", enabledRules + "/" + notificationPolicyCatalog().length], ["템플릿", notificationTemplateItems().length], ["큐", notificationJobSummaryText(state.realtime.notificationJobs)]]
       },
       modeling: {
         steps: [["01", "Evidence", "전략 근거"], ["02", "Relation", "TBox·ABox"], ["03", "AI", "투자 의견"]],
@@ -8636,9 +8651,10 @@
   function renderAdminOverviewPanel(snapshot) {
     var rules = alertRules();
     var cadences = alertCadenceMinutes();
-    var enabledRules = alertRuleCatalog.filter(function (rule) { return enabledAlertRule(rules, rule.key); }).length;
-    var realtimeKeys = alertRuleCatalog.filter(function (rule) {
-      return ["투자 알림", "온톨로지 근거", "실시간"].indexOf(rule.group) >= 0;
+    var policyRules = notificationPolicyCatalog();
+    var enabledRules = policyRules.filter(function (rule) { return enabledAlertRule(rules, rule.key); }).length;
+    var realtimeKeys = policyRules.filter(function (rule) {
+      return ["투자 알림", "외부 API", "실시간"].indexOf(rule.group) >= 0;
     }).map(function (rule) { return rule.key; });
     var realtimeCadence = realtimeKeys.reduce(function (min, key) {
       var value = Number(cadences[key] || 0);
@@ -8664,7 +8680,7 @@
       '</div>',
       '<div class="home-command-grid">',
       '<div class="home-command-main">',
-      '<span class="home-kicker">계정 ' + escapeHtml(activeAccounts + "/" + accounts.length) + ' · 알림 ' + escapeHtml(enabledRules + "/" + alertRuleCatalog.length) + '</span>',
+      '<span class="home-kicker">계정 ' + escapeHtml(activeAccounts + "/" + accounts.length) + ' · 알림 ' + escapeHtml(enabledRules + "/" + policyRules.length) + '</span>',
       '<strong>' + escapeHtml(tossModeLabel(snapshot)) + '</strong>',
       '<p>계정 연결, 관심종목, 알림 템플릿, 모델 기준을 한 곳에서 운영합니다.</p>',
       '</div>',
@@ -9428,13 +9444,16 @@
 
   function notificationEnabledRuleCount() {
     var rules = alertRules();
-    return alertRuleCatalog.filter(function (rule) {
+    return notificationPolicyCatalog().filter(function (rule) {
       return enabledAlertRule(rules, rule.key);
     }).length;
   }
 
   function notificationTemplateItems() {
-    return state.notificationTemplates.length ? state.notificationTemplates : defaultNotificationTemplates();
+    var templates = state.notificationTemplates.length ? state.notificationTemplates : defaultNotificationTemplates();
+    return templates.filter(function (item) {
+      return visibleNotificationTemplateType(item.messageType);
+    });
   }
 
   function renderNotificationSectionBar() {
@@ -9470,7 +9489,7 @@
       ["발송", Number(summary.done || 0), "watch"],
       ["보류", Number(summary.suppressed || 0), "muted"],
       ["실패", Number(summary.failed || 0), Number(summary.failed || 0) ? "danger" : "muted"],
-      ["사용 룰", notificationEnabledRuleCount() + "/" + alertRuleCatalog.length, "policy"],
+      ["관리 룰", notificationEnabledRuleCount() + "/" + notificationPolicyCatalog().length, "policy"],
       ["기본 주기", interval + "분", "muted"],
       ["템플릿", templateCount + "개", "muted"],
       ["스케줄", scheduleCount || "-", "muted"]
@@ -9548,7 +9567,7 @@
   function renderNotificationPolicyListScreen(groups, rules, cadences) {
     return [
       '<div class="notification-policy-list-screen">',
-      '<div class="flow-title"><div><strong>투자 인사이트와 근거 신호</strong><span>투자 인사이트는 실제 발송 타입이고, 온톨로지 근거 신호는 인사이트 합성 입력입니다.</span></div></div>',
+      '<div class="flow-title"><div><strong>사용 중인 알림 타입</strong><span>투자 근거 신호와 레거시 타입은 인사이트 합성 입력으로만 유지하고, 여기서는 직접 관리하는 타입만 편집합니다.</span></div></div>',
       '<div class="admin-message-group-list">',
       groups.map(function (group) {
         return renderAdminMessageGroup(group, rules, cadences);
@@ -9561,7 +9580,7 @@
   function alertRuleGroups() {
     var order = [];
     var byGroup = {};
-    alertRuleCatalog.forEach(function (rule) {
+    notificationPolicyCatalog().forEach(function (rule) {
       var group = rule.group || "기타";
       if (!byGroup[group]) {
         byGroup[group] = [];
@@ -9635,14 +9654,14 @@
   }
 
   function notificationRuleByKey(key) {
-    return alertRuleCatalog.filter(function (rule) {
+    return notificationPolicyCatalog().filter(function (rule) {
       return rule.key === key;
     })[0] || null;
   }
 
   function activeNotificationRule() {
     var selected = notificationRuleByKey(state.activeNotificationMessageType);
-    return selected || notificationRuleByKey("monitorHeartbeat") || alertRuleCatalog[0];
+    return selected || notificationRuleByKey("investmentInsight") || notificationPolicyCatalog()[0];
   }
 
   function renderNotificationPolicyDetailPanel() {
@@ -10169,7 +10188,7 @@
       return item.messageType === state.activeNotificationTemplateType;
     })[0];
     if (selected) return selected;
-    return templates.filter(function (item) { return item.messageType === "monitorHeartbeat"; })[0] || templates[0] || defaultNotificationTemplates()[0];
+    return templates.filter(function (item) { return item.messageType === "investmentInsight"; })[0] || templates[0] || defaultNotificationTemplates()[0];
   }
 
   function renderNotificationTemplateSelector(item) {

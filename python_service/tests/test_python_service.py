@@ -3532,6 +3532,55 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("entry.pullback.supported.v1", active_ids)
         self.assertIn("<b>[관찰] 🟢 Apple: 분할매수 후보: 진입 조건 점검</b>", message)
 
+    def test_watchlist_entry_wait_title_does_not_become_buy_candidate(self):
+        event = AlertEvent(
+            "main",
+            "메인",
+            "WATCH",
+            "investmentInsight",
+            "main:ontology-insight:NVDA:relationshipChange:watchlistOntologySignal",
+            "NVIDIA",
+            [
+                "상태: 신규 진입 관찰 (78.0점)",
+                "현재가: $201.98",
+                "수급: 거래량 306,912(0x), 거래액 $21,890,894,549",
+                "추세: 20일선 $201.5보다 0.2% 높음, 60일선 $208.2보다 3% 낮음",
+                "지금 피할 일: 5일선·60일선·거래량·금리·환율 확인 전 신규 매수",
+                "의견: 신규 진입 대기, 조건 재확인",
+            ],
+            "NVDA",
+            metadata={
+                "ontologyRelationContext": {
+                    "decision": {
+                        "label": "신규 진입 관찰",
+                        "actionGroup": "entryWait",
+                        "actionLevel": "watch",
+                        "decisionStage": "ENTRY_WATCH",
+                    },
+                    "activeRules": [
+                        {
+                            "ruleId": "graph.watchlist.pullback.entry.v1",
+                            "label": "NVIDIA · 관심 종목 + 기준선 재시험 -> 진입 관찰 추론",
+                            "relationType": "ENTRY_WAIT",
+                        }
+                    ],
+                },
+                "sourceAlertEvents": [
+                    {
+                        "rule": "watchlistOntologySignal",
+                        "title": "NVIDIA",
+                        "message": "관심종목 관계 신호",
+                        "lines": ["신규 진입 관찰", "신규 매수 전 조건 재확인"],
+                    }
+                ],
+            },
+        )
+
+        message = SQLiteNotificationTemplateStore(Path(self.temp.name) / "service.db").render(event.rule, alert_context(event))
+
+        self.assertIn("<b>[관찰] 🧭 NVIDIA: 신규 진입 대기: 조건 재확인</b>", message)
+        self.assertNotIn("NVIDIA: 매수 후보: 진입 조건 점검", message)
+
     def test_watchlist_ontology_signal_promotes_risk_insight_without_buy_score(self):
         watch = normalize_position({
             "symbol": "005380",

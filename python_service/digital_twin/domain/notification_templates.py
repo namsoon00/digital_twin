@@ -600,6 +600,20 @@ def has_investment_profit_signal(value: str) -> bool:
     return any(term in str(value or "") for term in ["분할매도", "익절", "수익", "리밸런싱", "profit_take", "PROFIT"])
 
 
+def has_entry_wait_signal(value: str) -> bool:
+    return any(term in str(value or "") for term in [
+        "entryWait",
+        "ENTRY_WAIT",
+        "신규 진입 대기",
+        "신규 진입 관찰",
+        "진입 관찰",
+        "실행보다 관찰 우선",
+        "지금 피할 일",
+        "확인 전 신규 매수",
+        "조건 재확인",
+    ])
+
+
 def notification_title_icon(rule: str, raw_lines: List[str], event: AlertEvent) -> str:
     key = str(rule or "")
     status = data_value(raw_lines, "상태")
@@ -615,6 +629,8 @@ def notification_title_icon(rule: str, raw_lines: List[str], event: AlertEvent) 
     if key == "investmentInsight":
         blob = investment_insight_signal_blob(raw_lines, event)
         decision_blob = investment_insight_decision_blob(raw_lines, event)
+        if has_entry_wait_signal(blob) or has_entry_wait_signal(decision_blob):
+            return "🧭"
         if any(term in blob for term in ["분할매수", "매수 후보", "기회 후보", "opportunityDetected", "watchlistBuyCandidate", "entry.pullback.supported"]):
             return "🟢"
         if signed_direction(profit) < 0 and has_investment_loss_signal(decision_blob):
@@ -677,6 +693,8 @@ def notification_title_headline(rule: str, raw_lines: List[str], event: AlertEve
         blob = investment_insight_signal_blob(raw_lines, event)
         decision_blob = investment_insight_decision_blob(raw_lines, event)
         profit_text = percent_text(profit)
+        if has_entry_wait_signal(blob) or has_entry_wait_signal(decision_blob):
+            return "신규 진입 대기: 조건 재확인"
         if any(term in blob for term in ["분할매수", "매수 후보", "기회 후보", "opportunityDetected", "watchlistBuyCandidate", "entry.pullback.supported"]):
             return "분할매수 후보: 진입 조건 점검"
         if signed_direction(profit) < 0 and has_investment_loss_signal(decision_blob):

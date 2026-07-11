@@ -207,6 +207,20 @@ class OntologyRuleBoxTests(unittest.TestCase):
             and item.relation_type == "HAS_INFERRED_RISK"
             and (item.properties or {}).get("ruleId") == "graph.data_quality.microstructure_gap.v1"
         ]
+        confidence_relations = [
+            item
+            for item in graph.relations
+            if item.source == "stock:035420"
+            and item.relation_type == "LOWERS_CONFIDENCE_OF"
+            and (item.properties or {}).get("ruleId") == "graph.data_quality.microstructure_gap.v1"
+        ]
+        blocked_relations = [
+            item
+            for item in graph.relations
+            if item.source == "stock:035420"
+            and item.relation_type == "BLOCKS_ACTION"
+            and (item.properties or {}).get("ruleId") == "graph.data_quality.action_block.v1"
+        ]
         trace = next(
             item
             for item in graph.entities
@@ -220,7 +234,10 @@ class OntologyRuleBoxTests(unittest.TestCase):
 
         self.assertTrue(missing_nodes)
         self.assertIn("tradeStrength", {(item.properties or {}).get("field") for item in missing_nodes})
+        self.assertEqual({"market-microstructure"}, {(item.properties or {}).get("dataScope") for item in missing_nodes})
         self.assertTrue(data_quality_relations)
+        self.assertTrue(confidence_relations)
+        self.assertTrue(blocked_relations)
         self.assertIn("microstructure-missing", matched_ids)
 
     def test_microstructure_missing_data_is_market_specific(self):
@@ -348,6 +365,10 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertIn("condition.conditionTargetMinValue", cypher)
         self.assertIn("condition.conditionTargetMaxValue", cypher)
         self.assertIn("condition.conditionTargetRelationScopes", cypher)
+        self.assertIn("condition.conditionTargetDataScopes", cypher)
+        self.assertIn("condition.conditionRole", cypher)
+        self.assertIn("rule.anyConditionMinCount", cypher)
+        self.assertIn("stock.kind = CASE WHEN coalesce(rule.sourceKind", cypher)
         self.assertIn("condition.conditionTargetMaterialityPassed", cypher)
         self.assertIn("stock.ontologyBox = 'ABox'", cypher)
         self.assertIn("coalesce(stock.isCurrent, false) = true", cypher)
@@ -397,6 +418,26 @@ class OntologyRuleBoxTests(unittest.TestCase):
             for item in condition_rows
             if item["id"] == "rule-condition:graph.materiality.alert_candidate.v1:material-fact-change"
         )
+        microstructure_gap = next(
+            item
+            for item in condition_rows
+            if item["id"] == "rule-condition:graph.data_quality.microstructure_gap.v1:microstructure-missing"
+        )
+        execution_slippage = next(
+            item
+            for item in condition_rows
+            if item["id"] == "rule-condition:graph.execution.liquidity_or_slippage_block.v1:slippage-risk"
+        )
+        price_reclaim_not = next(
+            item
+            for item in condition_rows
+            if item["id"] == "rule-condition:graph.price.reclaim.thesis_support.v1:no-severe-microstructure-gap"
+        )
+        portfolio_concentration = next(
+            item
+            for item in condition_rows
+            if item["id"] == "rule-condition:graph.portfolio.concentration.review.v1:sector-concentration-risk"
+        )
 
         self.assertIn("graph.materiality.alert_candidate.v1", rule_ids)
         self.assertIn("graph.holding.trend_transition.risk.v1", rule_ids)
@@ -407,6 +448,12 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertIn("graph.news.direct_material_support.v1", rule_ids)
         self.assertIn("graph.news.direct_material_context.v1", rule_ids)
         self.assertIn("graph.disclosure.event_risk.v1", rule_ids)
+        self.assertIn("graph.data_quality.action_block.v1", rule_ids)
+        self.assertIn("graph.execution.liquidity_or_slippage_block.v1", rule_ids)
+        self.assertIn("graph.factor.position_crowding.v1", rule_ids)
+        self.assertIn("graph.benchmark.beta.context.v1", rule_ids)
+        self.assertIn("graph.price.reclaim.thesis_support.v1", rule_ids)
+        self.assertIn("graph.portfolio.concentration.review.v1", rule_ids)
         self.assertEqual(["support"], support_transition["conditionRelationPolarities"])
         self.assertEqual(["risk"], risk_transition["conditionRelationPolarities"])
         self.assertEqual(["bidAskImbalance"], sell_pressure["conditionTargetFields"])
@@ -421,6 +468,11 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertEqual(["context"], direct_news_context["conditionTargetPolarities"])
         self.assertEqual(60.0, direct_news_context["conditionTargetMinMaterialityScore"])
         self.assertTrue(fact_change_gate["conditionTargetMaterialityPassed"])
+        self.assertEqual(["market-microstructure"], microstructure_gap["conditionTargetDataScopes"])
+        self.assertEqual("any", execution_slippage["conditionRole"])
+        self.assertEqual("not", price_reclaim_not["conditionRole"])
+        self.assertEqual("any", portfolio_concentration["conditionRole"])
+        self.assertEqual(["ConcentrationRisk"], portfolio_concentration["conditionTargetTboxClasses"])
 
     def test_rulebox_admin_payload_roundtrips_to_graph(self):
         rules = default_graph_inference_rules()
@@ -447,9 +499,9 @@ class OntologyRuleBoxTests(unittest.TestCase):
                     "id": "rulebox-version:test001",
                     "versionLabel": "test001",
                     "rulesHash": "test001",
-                    "ruleCount": 14,
-                    "conditionCount": 28,
-                    "derivationCount": 15,
+                    "ruleCount": 20,
+                    "conditionCount": 40,
+                    "derivationCount": 30,
                     "status": "saved",
                     "changeReason": "baseline",
                     "author": "test",
@@ -489,7 +541,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertIn("RuleBoxGovernance", cypher)
         self.assertIn("HAS_RULEBOX_VERSION", cypher)
         self.assertEqual("baseline", statements[0]["parameters"]["changeReason"])
-        self.assertEqual("candidate", factor_candidate["status"])
+        self.assertEqual("covered", factor_candidate["status"])
         self.assertFalse(factor_candidate["proposedRule"]["enabled"])
         self.assertEqual("append-disabled-rule", factor_candidate["action"])
 

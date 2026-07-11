@@ -227,6 +227,8 @@ class Neo4jOntologyGraphRepository(Neo4jOntologyRowMapperMixin):
             "CREATE INDEX ontology_entity_condition_kind IF NOT EXISTS FOR (n:OntologyEntity) ON (n.conditionKind)",
             "CREATE INDEX ontology_entity_derivation_relation_type IF NOT EXISTS FOR (n:OntologyEntity) ON (n.derivationRelationType)",
             "CREATE INDEX ontology_entity_level_type IF NOT EXISTS FOR (n:OntologyEntity) ON (n.levelType)",
+            "CREATE INDEX ontology_entity_data_scope IF NOT EXISTS FOR (n:OntologyEntity) ON (n.dataScope)",
+            "CREATE INDEX ontology_entity_relation_scope IF NOT EXISTS FOR (n:OntologyEntity) ON (n.relationScope)",
             "CREATE INDEX ontology_tbox_class_name IF NOT EXISTS FOR (n:OntologyTBoxClass) ON (n.className)",
             "CREATE INDEX ontology_tbox_relation_type IF NOT EXISTS FOR (n:OntologyTBoxRelation) ON (n.relationTypeName)",
             "CREATE INDEX ontology_box_name IF NOT EXISTS FOR (n:OntologyBox) ON (n.label)",
@@ -251,9 +253,11 @@ class Neo4jOntologyGraphRepository(Neo4jOntologyRowMapperMixin):
                     "n.ontologyBox = row.ontologyBox, n.symbol = row.symbol, n.ruleId = row.ruleId, "
                     "n.version = row.version, n.sourceKind = row.sourceKind, "
                     "n.actionGroup = row.actionGroup, n.actionLevel = row.actionLevel, n.promptHint = row.promptHint, "
+                    "n.anyConditionMinCount = row.anyConditionMinCount, "
                     "n.tboxClass = row.tboxClass, n.tboxClasses = row.tboxClasses, n.boundedContext = row.boundedContext, "
                     "n.className = row.className, n.parentClass = row.parentClass, n.relationTypeName = row.relationTypeName, "
-                    "n.box = row.box, n.sourceContext = row.sourceContext, n.targetContext = row.targetContext, "
+                    "n.box = row.box, n.scope = row.scope, n.dataScope = row.dataScope, n.domainScope = row.domainScope, "
+                    "n.sourceContext = row.sourceContext, n.targetContext = row.targetContext, "
                     "n.accountId = row.accountId, n.aboxSnapshotId = row.aboxSnapshotId, n.snapshotId = row.snapshotId, "
                     "n.asOf = row.asOf, n.isCurrent = row.isCurrent, n.tboxVersion = row.tboxVersion, "
                     "n.activeTboxVersion = row.activeTboxVersion, n.tboxFingerprint = row.tboxFingerprint, n.activeTboxSource = row.activeTboxSource, "
@@ -264,12 +268,14 @@ class Neo4jOntologyGraphRepository(Neo4jOntologyRowMapperMixin):
                     "n.materialityPassed = row.materialityPassed, n.relevanceScore = row.relevanceScore, "
                     "n.sourceReliability = row.sourceReliability, n.impactScore = row.impactScore, n.confidence = row.confidence, "
                     "n.enabled = row.enabled, n.conditionId = row.conditionId, n.conditionKind = row.conditionKind, "
-                    "n.conditionField = row.conditionField, n.conditionOperator = row.conditionOperator, "
+                    "n.conditionField = row.conditionField, n.conditionOperator = row.conditionOperator, n.conditionRole = row.conditionRole, "
                     "n.conditionValueString = row.conditionValueString, n.conditionValueNumber = row.conditionValueNumber, "
                     "n.conditionRelationType = row.conditionRelationType, n.conditionDirection = row.conditionDirection, "
                     "n.conditionTargetKind = row.conditionTargetKind, n.conditionTargetLevelTypes = row.conditionTargetLevelTypes, "
                     "n.conditionTargetFields = row.conditionTargetFields, n.conditionTargetTboxClasses = row.conditionTargetTboxClasses, "
-                    "n.conditionTargetGroups = row.conditionTargetGroups, n.conditionTargetRelationScopes = row.conditionTargetRelationScopes, "
+                    "n.conditionTargetGroups = row.conditionTargetGroups, n.conditionTargetScopes = row.conditionTargetScopes, "
+                    "n.conditionTargetDataScopes = row.conditionTargetDataScopes, n.conditionTargetDomainScopes = row.conditionTargetDomainScopes, "
+                    "n.conditionTargetRelationScopes = row.conditionTargetRelationScopes, "
                     "n.conditionTargetEventTypes = row.conditionTargetEventTypes, n.conditionTargetPolarities = row.conditionTargetPolarities, "
                     "n.conditionTargetMaterialityPassed = row.conditionTargetMaterialityPassed, "
                     "n.conditionTargetMinMaterialityScore = row.conditionTargetMinMaterialityScore, "

@@ -379,7 +379,7 @@ def curated_rule_candidates() -> List[Dict[str, object]]:
 
 def factor_concentration_candidate_rule() -> GraphInferenceRule:
     return GraphInferenceRule(
-        rule_id="graph.factor.concentration.context.v1",
+        rule_id="graph.factor.position_crowding.v1",
         label="보유 종목 + 높은 팩터 노출 -> 팩터 집중 점검",
         version="candidate-v1",
         source_kind="stock",

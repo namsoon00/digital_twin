@@ -106,7 +106,8 @@ def rulebox_snapshot_statements() -> List[Dict[str, object]]:
                 "MATCH (rule:OntologyEntity {kind: 'rule', ontologyBox: 'RuleBox'}) "
                 "RETURN rule.id AS id, rule.ruleId AS ruleId, rule.label AS label, rule.version AS version, "
                 "rule.sourceKind AS sourceKind, rule.enabled AS enabled, rule.actionGroup AS actionGroup, "
-                "rule.actionLevel AS actionLevel, rule.promptHint AS promptHint, rule.propertiesJson AS propertiesJson, "
+                "rule.actionLevel AS actionLevel, rule.promptHint AS promptHint, rule.anyConditionMinCount AS anyConditionMinCount, "
+                "rule.propertiesJson AS propertiesJson, "
                 "rule.updatedAt AS updatedAt ORDER BY rule.ruleId"
             ),
             "parameters": {},
@@ -117,13 +118,15 @@ def rulebox_snapshot_statements() -> List[Dict[str, object]]:
                 "(condition:OntologyEntity {kind: 'rule-condition', ontologyBox: 'RuleBox'}) "
                 "RETURN rule.ruleId AS ruleId, condition.id AS id, condition.conditionId AS conditionId, "
                 "condition.label AS description, condition.conditionKind AS kind, condition.conditionField AS field, "
-                "condition.conditionOperator AS operator, condition.conditionValueString AS valueString, "
+                "condition.conditionOperator AS operator, condition.conditionRole AS role, condition.conditionValueString AS valueString, "
                 "condition.conditionValueNumber AS valueNumber, condition.conditionRelationType AS relationType, "
                 "condition.conditionDirection AS direction, condition.conditionTargetKind AS targetKind, "
                 "condition.conditionTargetLevelTypes AS targetLevelTypes, condition.conditionRelationPolarities AS relationPolarities, "
                 "condition.conditionRelationTransitionTypes AS relationTransitionTypes, condition.conditionMinWeight AS minWeight, "
                 "condition.conditionTargetFields AS targetFields, condition.conditionTargetTboxClasses AS targetTboxClasses, "
-                "condition.conditionTargetGroups AS targetGroups, condition.conditionTargetRelationScopes AS targetRelationScopes, "
+                "condition.conditionTargetGroups AS targetGroups, condition.conditionTargetScopes AS targetScopes, "
+                "condition.conditionTargetDataScopes AS targetDataScopes, condition.conditionTargetDomainScopes AS targetDomainScopes, "
+                "condition.conditionTargetRelationScopes AS targetRelationScopes, "
                 "condition.conditionTargetEventTypes AS targetEventTypes, condition.conditionTargetPolarities AS targetPolarities, "
                 "condition.conditionTargetMaterialityPassed AS targetMaterialityPassed, "
                 "condition.conditionTargetMinMaterialityScore AS targetMinMaterialityScore, "
@@ -385,6 +388,7 @@ def build_rulebox_rules_from_rows(
             "action_group": str(row.get("actionGroup") or props.get("actionGroup") or ""),
             "action_level": str(row.get("actionLevel") or props.get("actionLevel") or ""),
             "prompt_hint": str(row.get("promptHint") or props.get("promptHint") or ""),
+            "any_condition_min_count": int(row.get("anyConditionMinCount") or props.get("anyConditionMinCount") or 1),
             "enabled": bool(row.get("enabled")) if row.get("enabled") is not None else bool(props.get("enabled", True)),
         }
         try:
@@ -408,6 +412,9 @@ def condition_payload_from_row(row: Dict[str, object]) -> Dict[str, object]:
             ("targetFields", "field"),
             ("targetTboxClasses", "tboxClasses"),
             ("targetGroups", "group"),
+            ("targetScopes", "scope"),
+            ("targetDataScopes", "dataScope"),
+            ("targetDomainScopes", "domainScope"),
             ("targetRelationScopes", "relationScope"),
             ("targetEventTypes", "eventType"),
             ("targetPolarities", "polarity"),
@@ -453,6 +460,7 @@ def condition_payload_from_row(row: Dict[str, object]) -> Dict[str, object]:
         "description": str(row.get("description") or condition.get("description") or ""),
         "field": str(row.get("field") or condition.get("field") or ""),
         "operator": str(row.get("operator") or condition.get("operator") or "=="),
+        "role": str(row.get("role") or condition.get("role") or "required"),
         "value": condition.get("value") if "value" in condition else (row.get("valueNumber") if row.get("valueNumber") is not None else row.get("valueString")),
         "relation_type": str(row.get("relationType") or condition.get("relation_type") or ""),
         "direction": str(row.get("direction") or condition.get("direction") or "out"),
@@ -512,18 +520,7 @@ def native_reasoning_statements_for_relation_types(relation_types: Iterable[str]
 
 def native_reasoning_statement_for_relation_type(relation_type: str) -> Dict[str, object]:
     safe_type = safe_relation_type(relation_type)
-    statement = (
-        "MATCH (rule:OntologyEntity {kind: 'rule', ontologyBox: 'RuleBox'}) "
-        "WHERE coalesce(rule.enabled, false) = true "
-        "MATCH (rule)-[:HAS_CONDITION]->(condition:OntologyEntity {kind: 'rule-condition', ontologyBox: 'RuleBox'}) "
-        "WITH rule, collect(condition) AS conditions "
-        "MATCH (rule)-[:DERIVES_RELATION]->(template:OntologyEntity {kind: 'relation-template', ontologyBox: 'RuleBox'}) "
-        "WHERE template.derivationRelationType = $relationType "
-        "MATCH (stock:OntologyEntity {kind: 'stock'}) "
-        "WHERE stock.ontologyBox = 'ABox' "
-        "AND coalesce(stock.isCurrent, false) = true "
-        "AND coalesce(stock.aboxSnapshotId, '') <> '' "
-        "AND all(condition IN conditions WHERE "
+    condition_match_case = (
         "CASE condition.conditionKind "
         "WHEN 'subject_property' THEN "
         "CASE condition.conditionOperator "
@@ -539,11 +536,15 @@ def native_reasoning_statement_for_relation_type(relation_type: str) -> Dict[str
         "WHEN 'lt' THEN coalesce(toFloat(CASE condition.conditionField WHEN 'source' THEN stock.sourceValue ELSE stock[condition.conditionField] END), 999999999.0) < condition.conditionValueNumber "
         "WHEN '>' THEN coalesce(toFloat(CASE condition.conditionField WHEN 'source' THEN stock.sourceValue ELSE stock[condition.conditionField] END), -999999999.0) > condition.conditionValueNumber "
         "WHEN 'gt' THEN coalesce(toFloat(CASE condition.conditionField WHEN 'source' THEN stock.sourceValue ELSE stock[condition.conditionField] END), -999999999.0) > condition.conditionValueNumber "
+        "WHEN 'exists' THEN coalesce(toString(CASE condition.conditionField WHEN 'source' THEN stock.sourceValue ELSE stock[condition.conditionField] END), '') <> '' "
+        "WHEN 'present' THEN coalesce(toString(CASE condition.conditionField WHEN 'source' THEN stock.sourceValue ELSE stock[condition.conditionField] END), '') <> '' "
         "ELSE false END "
         "WHEN 'relation' THEN EXISTS { "
-        "MATCH (stock)-[rel]->(target:OntologyEntity) "
+        "MATCH (sourceNode:OntologyEntity)-[rel]->(targetNode:OntologyEntity) "
         "WHERE type(rel) = condition.conditionRelationType "
-        "AND coalesce(rel.isCurrent, false) = true "
+        "AND ((coalesce(condition.conditionDirection, 'out') = 'in' AND targetNode = stock) OR (coalesce(condition.conditionDirection, 'out') <> 'in' AND sourceNode = stock)) "
+        "WITH stock, condition, rel, CASE WHEN coalesce(condition.conditionDirection, 'out') = 'in' THEN sourceNode ELSE targetNode END AS target "
+        "WHERE coalesce(rel.isCurrent, false) = true "
         "AND (target.ontologyBox <> 'ABox' OR coalesce(target.isCurrent, false) = true) "
         "AND (target.ontologyBox <> 'ABox' OR target.aboxSnapshotId = stock.aboxSnapshotId) "
         "AND coalesce(rel.weight, 0.0) >= coalesce(condition.conditionMinWeight, 0.0) "
@@ -552,6 +553,9 @@ def native_reasoning_statement_for_relation_type(relation_type: str) -> Dict[str
         "AND (size(coalesce(condition.conditionTargetFields, [])) = 0 OR target.field IN condition.conditionTargetFields) "
         "AND (size(coalesce(condition.conditionTargetTboxClasses, [])) = 0 OR target.tboxClass IN condition.conditionTargetTboxClasses OR any(cls IN coalesce(target.tboxClasses, []) WHERE cls IN condition.conditionTargetTboxClasses)) "
         "AND (size(coalesce(condition.conditionTargetGroups, [])) = 0 OR target.group IN condition.conditionTargetGroups) "
+        "AND (size(coalesce(condition.conditionTargetScopes, [])) = 0 OR target.scope IN condition.conditionTargetScopes OR target.dataScope IN condition.conditionTargetScopes OR target.domainScope IN condition.conditionTargetScopes) "
+        "AND (size(coalesce(condition.conditionTargetDataScopes, [])) = 0 OR target.dataScope IN condition.conditionTargetDataScopes) "
+        "AND (size(coalesce(condition.conditionTargetDomainScopes, [])) = 0 OR target.domainScope IN condition.conditionTargetDomainScopes) "
         "AND (size(coalesce(condition.conditionTargetRelationScopes, [])) = 0 OR target.relationScope IN condition.conditionTargetRelationScopes) "
         "AND (size(coalesce(condition.conditionTargetEventTypes, [])) = 0 OR target.eventType IN condition.conditionTargetEventTypes) "
         "AND (size(coalesce(condition.conditionTargetPolarities, [])) = 0 OR target.polarity IN condition.conditionTargetPolarities) "
@@ -567,20 +571,39 @@ def native_reasoning_statement_for_relation_type(relation_type: str) -> Dict[str
         "AND (condition.conditionRelationMinRiskImpact IS NULL OR coalesce(rel.riskImpact, 0.0) >= condition.conditionRelationMinRiskImpact) "
         "AND (condition.conditionRelationMinSupportImpact IS NULL OR coalesce(rel.supportImpact, 0.0) >= condition.conditionRelationMinSupportImpact) "
         "} "
-        "ELSE false END) "
-        "WITH rule, template, stock, conditions, "
-        "CASE WHEN 0.62 + size(conditions) * 0.08 > 0.94 THEN 0.94 ELSE 0.62 + size(conditions) * 0.08 END AS confidence "
-        "WITH rule, template, stock, conditions, confidence, "
-        "replace(replace(template.derivationTargetKey, '{symbol}', stock.symbol), '{displayName}', stock.label) AS targetValue, "
-        "replace(replace(template.derivationTargetLabel, '{symbol}', stock.symbol), '{displayName}', stock.label) AS targetLabel "
-        "WITH rule, template, stock, conditions, confidence, targetLabel, "
+        "ELSE false END"
+    )
+    statement = (
+        "MATCH (rule:OntologyEntity {kind: 'rule', ontologyBox: 'RuleBox'}) "
+        "WHERE coalesce(rule.enabled, false) = true "
+        "MATCH (rule)-[:HAS_CONDITION]->(condition:OntologyEntity {kind: 'rule-condition', ontologyBox: 'RuleBox'}) "
+        "WITH rule, collect(condition) AS conditions "
+        "MATCH (rule)-[:DERIVES_RELATION]->(template:OntologyEntity {kind: 'relation-template', ontologyBox: 'RuleBox'}) "
+        "WHERE template.derivationRelationType = $relationType "
+        "MATCH (stock:OntologyEntity) "
+        "WHERE stock.ontologyBox = 'ABox' "
+        "AND stock.kind = CASE WHEN coalesce(rule.sourceKind, '') = '' THEN 'stock' ELSE rule.sourceKind END "
+        "AND coalesce(stock.isCurrent, false) = true "
+        "AND coalesce(stock.aboxSnapshotId, '') <> '' "
+        "WITH rule, template, stock, conditions, [condition IN conditions | {id: condition.conditionId, role: coalesce(condition.conditionRole, 'required'), matched: " + condition_match_case + "}] AS conditionEvaluations "
+        "WHERE all(item IN [evaluation IN conditionEvaluations WHERE evaluation.role = '' OR evaluation.role = 'required'] WHERE item.matched) "
+        "AND all(item IN [evaluation IN conditionEvaluations WHERE evaluation.role = 'not'] WHERE NOT item.matched) "
+        "AND (size([evaluation IN conditionEvaluations WHERE evaluation.role IN ['any', 'optional']]) = 0 "
+        "OR size([evaluation IN conditionEvaluations WHERE evaluation.role IN ['any', 'optional'] AND evaluation.matched]) >= coalesce(rule.anyConditionMinCount, 1)) "
+        "WITH rule, template, stock, conditions, conditionEvaluations, [evaluation IN conditionEvaluations WHERE evaluation.matched | evaluation.id] AS matchedConditionIds, "
+        "CASE WHEN coalesce(stock.symbol, '') <> '' THEN stock.symbol ELSE replace(stock.id, ':', '-') END AS subjectKey, "
+        "CASE WHEN 0.62 + size([evaluation IN conditionEvaluations WHERE evaluation.matched]) * 0.08 > 0.94 THEN 0.94 ELSE 0.62 + size([evaluation IN conditionEvaluations WHERE evaluation.matched]) * 0.08 END AS confidence "
+        "WITH rule, template, stock, conditions, conditionEvaluations, matchedConditionIds, confidence, subjectKey, replace(stock.id, ':', '-') AS subjectId, "
+        "replace(replace(replace(template.derivationTargetKey, '{symbol}', subjectKey), '{displayName}', stock.label), '{subjectId}', replace(stock.id, ':', '-')) AS targetValue, "
+        "replace(replace(replace(template.derivationTargetLabel, '{symbol}', subjectKey), '{displayName}', stock.label), '{subjectId}', replace(stock.id, ':', '-')) AS targetLabel "
+        "WITH rule, template, stock, conditions, confidence, matchedConditionIds, subjectKey, targetLabel, "
         "template.derivationTargetKind + ':' + targetValue AS targetId, "
-        "'inference-trace:' + stock.symbol + ':' + rule.ruleId AS traceId, "
-        "'evidence:inference:' + stock.symbol + ':' + rule.ruleId AS evidenceId, "
-        "'belief:inference:' + stock.symbol + ':' + rule.ruleId + ':' + toString(coalesce(template.derivationIndex, 0)) AS beliefId "
+        "'inference-trace:' + subjectKey + ':' + rule.ruleId AS traceId, "
+        "'evidence:inference:' + subjectKey + ':' + rule.ruleId AS evidenceId, "
+        "'belief:inference:' + subjectKey + ':' + rule.ruleId + ':' + toString(coalesce(template.derivationIndex, 0)) AS beliefId "
         "MERGE (target:OntologyEntity {id: targetId}) "
         "SET target.label = targetLabel, target.kind = template.derivationTargetKind, target.ontologyBox = 'InferenceBox', "
-        "target.symbol = stock.symbol, target.ruleId = rule.ruleId, target.tboxClass = template.derivationTboxClass, "
+        "target.symbol = subjectKey, target.ruleId = rule.ruleId, target.tboxClass = template.derivationTboxClass, "
         "target.accountId = stock.accountId, target.aboxSnapshotId = stock.aboxSnapshotId, target.snapshotId = stock.snapshotId, "
         "target.asOf = stock.asOf, target.isCurrent = true, target.tboxVersion = stock.tboxVersion, "
         "target.activeTboxVersion = stock.activeTboxVersion, target.tboxFingerprint = stock.tboxFingerprint, "
@@ -589,11 +612,11 @@ def native_reasoning_statement_for_relation_type(relation_type: str) -> Dict[str
         "target.boundedContext = 'reasoning-insight', target.nativeNeo4jReasoned = true, target.updatedAt = $updatedAt "
         "MERGE (trace:OntologyEntity {id: traceId}) "
         "SET trace.label = stock.label + ' · ' + rule.label, trace.kind = 'inference-trace', trace.ontologyBox = 'InferenceBox', "
-        "trace.symbol = stock.symbol, trace.ruleId = rule.ruleId, trace.tboxClass = 'InferenceTrace', "
+        "trace.symbol = subjectKey, trace.ruleId = rule.ruleId, trace.tboxClass = 'InferenceTrace', "
         "trace.accountId = stock.accountId, trace.aboxSnapshotId = stock.aboxSnapshotId, trace.snapshotId = stock.snapshotId, "
         "trace.asOf = stock.asOf, trace.isCurrent = true, trace.tboxVersion = stock.tboxVersion, "
         "trace.boundedContext = 'reasoning-insight', trace.confidence = confidence, trace.nativeNeo4jReasoned = true, "
-        "trace.matchedConditionIds = [c IN conditions | c.conditionId], trace.updatedAt = $updatedAt "
+        "trace.matchedConditionIds = matchedConditionIds, trace.updatedAt = $updatedAt "
         "MERGE (evidence:OntologyEvidence {id: evidenceId}) "
         "SET evidence.subject = stock.id, evidence.kind = 'inference-trace', evidence.source = 'neo4j-native-rulebox', "
         "evidence.summary = stock.label + ' · ' + rule.label, evidence.ontologyBox = 'InferenceBox', "

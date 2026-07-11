@@ -8,18 +8,19 @@ from .ontology_rulebox_contracts import GraphInferenceRule, GraphRuleCondition
 
 def run_graph_reasoner(graph: PortfolioOntology, rules: Iterable[GraphInferenceRule]) -> None:
     entities_by_id = {item.entity_id: item for item in graph.entities}
-    stocks = [
-        item
-        for item in graph.entities
-        if item.kind == "stock" and str((item.properties or {}).get("ontologyBox") or "ABox") != "TBox"
-    ]
     for rule in rules:
         if not rule.enabled:
             continue
-        for stock in stocks:
-            matched, context = rule_matches_entity(graph, entities_by_id, rule, stock)
+        source_kind = str(rule.source_kind or "stock").strip() or "stock"
+        subjects = [
+            item
+            for item in graph.entities
+            if item.kind == source_kind and str((item.properties or {}).get("ontologyBox") or "ABox") != "TBox"
+        ]
+        for subject in subjects:
+            matched, context = rule_matches_entity(graph, entities_by_id, rule, subject)
             if matched:
-                materialize_rule_inference(graph, rule, stock, context)
+                materialize_rule_inference(graph, rule, subject, context)
 
 
 def rule_matches_entity(
@@ -32,35 +33,68 @@ def rule_matches_entity(
         return False, {}
     matched_conditions: List[Dict[str, object]] = []
     evidence_relation_ids: List[str] = []
+    any_condition_count = 0
+    any_condition_matched_count = 0
     for condition in rule.conditions:
+        role = str(condition.role or "required").strip().lower()
+        if role not in {"required", "any", "optional", "not"}:
+            role = "required"
+        condition_matched = False
+        condition_context: Dict[str, object] = {}
         if condition.kind == "subject_property":
-            matched = property_matches(entity.properties or {}, condition.field, condition.operator, condition.value)
-            if not matched:
-                return False, {}
-            matched_conditions.append({
+            condition_matched = property_matches(entity.properties or {}, condition.field, condition.operator, condition.value)
+            condition_context = {
                 "conditionId": condition.condition_id,
                 "kind": condition.kind,
+                "role": role,
                 "field": condition.field,
                 "operator": condition.operator,
                 "value": condition.value,
                 "actual": (entity.properties or {}).get(condition.field),
-            })
-            continue
-        if condition.kind == "relation":
+            }
+        elif condition.kind == "relation":
             relation = first_matching_relation(graph, entities_by_id, entity.entity_id, condition)
-            if not relation:
+            condition_matched = bool(relation)
+            if relation:
+                relation_id = relation_key(relation)
+                condition_context = {
+                    "conditionId": condition.condition_id,
+                    "kind": condition.kind,
+                    "role": role,
+                    "relationId": relation_id,
+                    "relationType": relation.relation_type,
+                    "target": relation.target if relation.source == entity.entity_id else relation.source,
+                    "weight": number(relation.weight),
+                }
+            else:
+                condition_context = {
+                    "conditionId": condition.condition_id,
+                    "kind": condition.kind,
+                    "role": role,
+                    "relationType": condition.relation_type,
+                    "matched": False,
+                }
+        else:
+            return False, {}
+
+        if role == "not":
+            if condition_matched:
                 return False, {}
-            relation_id = relation_key(relation)
-            evidence_relation_ids.append(relation_id)
-            matched_conditions.append({
-                "conditionId": condition.condition_id,
-                "kind": condition.kind,
-                "relationId": relation_id,
-                "relationType": relation.relation_type,
-                "target": relation.target if relation.source == entity.entity_id else relation.source,
-                "weight": number(relation.weight),
-            })
             continue
+        if role in {"any", "optional"}:
+            any_condition_count += 1
+            if condition_matched:
+                any_condition_matched_count += 1
+                if condition_context.get("relationId"):
+                    evidence_relation_ids.append(str(condition_context.get("relationId")))
+                matched_conditions.append(condition_context)
+            continue
+        if not condition_matched:
+            return False, {}
+        if condition_context.get("relationId"):
+            evidence_relation_ids.append(str(condition_context.get("relationId")))
+        matched_conditions.append(condition_context)
+    if any_condition_count and any_condition_matched_count < max(1, int(rule.any_condition_min_count or 1)):
         return False, {}
     confidence = clamp(0.62 + len(matched_conditions) * 0.08, 0.0, 0.94)
     return True, {
@@ -152,6 +186,12 @@ def property_filters_match(properties: Dict[str, object], filters: Dict[str, obj
         actual = properties.get(key)
         if key in {"tboxClass", "tboxClasses"}:
             actual = list_property_values(properties.get("tboxClasses")) + list_property_values(properties.get("tboxClass"))
+        if key == "scope":
+            actual = (
+                list_property_values(properties.get("scope"))
+                + list_property_values(properties.get("dataScope"))
+                + list_property_values(properties.get("domainScope"))
+            )
         if isinstance(expected, dict):
             if not property_matches(properties, key, str(expected.get("operator") or "=="), expected.get("value")):
                 return False

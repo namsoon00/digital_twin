@@ -14,7 +14,8 @@ def materialize_rule_inference(
     context: Dict[str, object],
 ) -> None:
     properties = stock.properties or {}
-    symbol = str(properties.get("symbol") or stock.entity_id.replace("stock:", "")).upper()
+    subject_key = stock.entity_id.replace(":", "-")
+    symbol = str(properties.get("symbol") or subject_key).upper()
     display_name = stock.label or symbol
     confidence = number(context.get("confidence"))
     evidence_relation_ids = [str(item) for item in context.get("evidenceRelationIds") or []]
@@ -75,8 +76,8 @@ def materialize_rule_inference(
         confidence,
     ))
     for index, derivation in enumerate(rule.derivations):
-        target_key = fill_template(derivation.target_key, symbol, display_name)
-        target_label = fill_template(derivation.target_label, symbol, display_name)
+        target_key = fill_template(derivation.target_key, symbol, display_name, subject_key)
+        target_label = fill_template(derivation.target_label, symbol, display_name, subject_key)
         target_id = entity_id(derivation.target_kind, target_key)
         action_group = derivation.action_group or rule.action_group
         action_level = derivation.action_level or rule.action_level
@@ -163,5 +164,10 @@ def inference_relation_properties(relation_type: str, properties: Dict[str, obje
     return payload
 
 
-def fill_template(template: str, symbol: str, display_name: str) -> str:
-    return str(template or "").replace("{symbol}", symbol).replace("{displayName}", display_name)
+def fill_template(template: str, symbol: str, display_name: str, subject_id: str = "") -> str:
+    return (
+        str(template or "")
+        .replace("{symbol}", symbol)
+        .replace("{displayName}", display_name)
+        .replace("{subjectId}", subject_id or symbol)
+    )

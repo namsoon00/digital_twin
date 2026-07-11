@@ -425,8 +425,16 @@ def add_price_level_and_liquidity_concepts(graph: PortfolioOntology, stock_id: s
             "missingLabels": [item["label"] for item in missing_fields],
             "missingCount": len(missing_fields),
             "scope": "market-microstructure",
+            "dataScope": "market-microstructure",
         })
-        missing_props = {"source": source, "polarity": "risk", "opinionImpact": min(10.0, len(missing_fields) * 0.8), "aiInfluenceLabel": "체결/호가/투자자별 수급 결측"}
+        missing_props = {
+            "source": source,
+            "polarity": "risk",
+            "opinionImpact": min(10.0, len(missing_fields) * 0.8),
+            "aiInfluenceLabel": "체결/호가/투자자별 수급 결측",
+            "dataScope": "market-microstructure",
+            "scope": "market-microstructure",
+        }
         add_relation(graph, stock_id, missing_id, "HAS_DATA_QUALITY", weight=round(max(0.1, 1 - len(missing_fields) / 10), 4), properties=missing_props)
         for item in missing_fields:
             field = str(item.get("field") or "").strip()
@@ -444,6 +452,7 @@ def add_price_level_and_liquidity_concepts(graph: PortfolioOntology, stock_id: s
                 "missingLabels": [label],
                 "missingCount": 1,
                 "scope": "market-microstructure",
+                "dataScope": "market-microstructure",
             })
             field_props = {
                 "source": source,
@@ -451,6 +460,8 @@ def add_price_level_and_liquidity_concepts(graph: PortfolioOntology, stock_id: s
                 "field": field,
                 "missingField": field,
                 "aiInfluenceLabel": label + " 결측",
+                "dataScope": "market-microstructure",
+                "scope": "market-microstructure",
             }
             add_relation(graph, stock_id, field_id, "HAS_DATA_QUALITY", weight=0.42, properties=field_props)
             add_relation(graph, missing_id, field_id, "AFFECTS", weight=0.7, properties=field_props)

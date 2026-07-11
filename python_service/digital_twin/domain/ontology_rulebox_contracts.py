@@ -19,6 +19,7 @@ class GraphRuleCondition:
     target_property_filters: Dict[str, object] = dataclass_field(default_factory=dict)
     relation_property_filters: Dict[str, object] = dataclass_field(default_factory=dict)
     min_weight: float = 0.0
+    role: str = "required"
 
     def to_dict(self) -> Dict[str, object]:
         return asdict(self)
@@ -39,6 +40,7 @@ class GraphRuleCondition:
             target_property_filters=dict(payload.get("target_property_filters") or payload.get("targetPropertyFilters") or {}),
             relation_property_filters=dict(payload.get("relation_property_filters") or payload.get("relationPropertyFilters") or {}),
             min_weight=float(payload.get("min_weight") or payload.get("minWeight") or 0),
+            role=str(payload.get("role") or payload.get("conditionRole") or "required"),
         )
 
 
@@ -98,6 +100,7 @@ class GraphInferenceRule:
     action_group: str
     action_level: str
     prompt_hint: str
+    any_condition_min_count: int = 1
     enabled: bool = True
 
     def to_dict(self) -> Dict[str, object]:
@@ -136,5 +139,6 @@ class GraphInferenceRule:
             action_group=str(payload.get("action_group") or payload.get("actionGroup") or ""),
             action_level=str(payload.get("action_level") or payload.get("actionLevel") or ""),
             prompt_hint=str(payload.get("prompt_hint") or payload.get("promptHint") or ""),
+            any_condition_min_count=max(1, int(payload.get("any_condition_min_count") or payload.get("anyConditionMinCount") or 1)),
             enabled=bool(payload.get("enabled")) if "enabled" in payload else True,
         )

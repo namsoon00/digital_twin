@@ -16,6 +16,12 @@ def decision_stage_from_action(action_group: str, action_level: str) -> str:
         return "ENTRY_WAIT" if level in {"review", "action", "urgent"} else "ENTRY_WATCH"
     if group == "entryRisk":
         return "ADD_BUY_BLOCKED"
+    if group == "factorRisk":
+        return "FACTOR_CROWDING"
+    if group == "rebalance":
+        return "REBALANCE_ACTION" if level in {"action", "urgent"} else "REBALANCE_REVIEW"
+    if group == "dataQuality":
+        return "DATA_CONFLICT"
     if group == "executionRisk":
         return "LIQUIDITY_ACTION" if level in {"action", "urgent"} else "LIQUIDITY_REVIEW"
     if group == "alertReview":
@@ -41,6 +47,14 @@ def relation_stage_priority(relation: Dict[str, object]) -> int:
         "PROFIT_SPLIT": 37,
         "PROFIT_PARTIAL": 33,
         "ADD_BUY_BLOCKED": 36,
+        "FACTOR_CROWDING": 32,
+        "REBALANCE_ACTION": 39,
+        "REBALANCE_REVIEW": 34,
+        "DATA_CONFLICT": 34,
+        "RECOVERY_CONFIRM": 30,
+        "NEWS_RISK": 36,
+        "NEWS_CONFIRMATION": 31,
+        "FLOW_DEFENSE": 35,
         "ENTRY_READY": 35,
         "ENTRY_SPLIT_BUY": 30,
         "ENTRY_WAIT": 26,

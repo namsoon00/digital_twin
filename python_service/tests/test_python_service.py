@@ -2328,7 +2328,7 @@ class PythonServiceTests(unittest.TestCase):
 
             def seed_ontology(self, payload=None):
                 self.seed_calls.append(dict(payload or {}))
-                return {"seeded": True, "status": "ok", "ruleCount": 14}
+                return {"seeded": True, "status": "ok", "ruleCount": 20}
 
             def save_graph(self, graph):
                 self.graphs.append(graph)
@@ -2349,7 +2349,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(1, len(repository.seed_calls))
         self.assertFalse(repository.seed_calls[0]["replaceRuleBox"])
         self.assertEqual("seeded", result["ruleboxBootstrap"]["status"])
-        self.assertEqual(14, result["ruleboxBootstrap"]["ruleCount"])
+        self.assertEqual(20, result["ruleboxBootstrap"]["ruleCount"])
 
     def test_ontology_projection_recorder_includes_watchlist_candidates(self):
         holding = normalize_position({

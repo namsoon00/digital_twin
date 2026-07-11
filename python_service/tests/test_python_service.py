@@ -5052,13 +5052,13 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(180, item["ma20"])
         self.assertEqual(1, payload["summary"]["marketData"]["count"])
 
-    def test_market_data_collection_runner_collects_recommendation_universe(self):
+    def test_market_data_collection_runner_collects_account_focus_symbols(self):
         db_path = test_store_seed(self.temp.name)
         symbol_store = TestSymbolUniverseStore(db_path)
         quote_cache = TestMarketQuoteCache(db_path)
-        symbol_store.upsert_many([seed_symbol("AAPL"), seed_symbol("TSLA")])
+        symbol_store.upsert_many([seed_symbol("AAPL"), seed_symbol("TSLA"), seed_symbol("MSFT")])
         registry = AccountRegistry()
-        account = AccountConfig("main", "메인", "toss", "https://example.test", "id", "secret", "1", [])
+        account = AccountConfig("main", "메인", "toss", "https://example.test", "id", "secret", "1", ["TSLA"])
         registry.upsert(account)
 
         class StaticSymbolService:
@@ -5079,29 +5079,38 @@ class PythonServiceTests(unittest.TestCase):
             def fetch_access_token(self):
                 return "token"
 
+            def fetch_positions(self):
+                holding = normalize_position({
+                    "symbol": "AAPL",
+                    "name": "Apple",
+                    "market": "NASDAQ",
+                    "currency": "USD",
+                    "currentPrice": 100,
+                    "volume": 2000,
+                    "ma20": 95,
+                    "dataQuality": "actual",
+                    "quoteSource": "fake account focus",
+                    "source": "holding",
+                })
+                watch = normalize_position({
+                    "symbol": "TSLA",
+                    "name": "Tesla",
+                    "market": "NASDAQ",
+                    "currency": "USD",
+                    "currentPrice": 101,
+                    "volume": 3000,
+                    "ma20": 99,
+                    "dataQuality": "actual",
+                    "quoteSource": "fake account focus",
+                    "source": "watchlist",
+                })
+                return "live", "토스 계좌 동기화", [holding], 0, "KRW", [watch]
+
             def fetch_prices(self, token, symbols):
-                return {
-                    symbol: {
-                        "symbol": symbol,
-                        "currentPrice": 100 + index,
-                        "currency": "USD",
-                        "quoteSource": "Toss /api/v1/prices",
-                        "quoteStatus": "토스 prices 반영",
-                        "dataQuality": "actual",
-                        "updatedAt": "2026-07-04T00:00:00Z",
-                    }
-                    for index, symbol in enumerate(symbols)
-                }, token
+                raise AssertionError("account-focus collection should not select arbitrary universe prices")
 
             def fetch_daily_candles(self, token, symbol):
-                return [
-                    {
-                        "timestamp": "2026-01-" + str(index + 1).zfill(2) + "T09:00:00+09:00",
-                        "closePrice": str(80 + index),
-                        "volume": str(1000 + index),
-                    }
-                    for index in range(28)
-                ], token
+                raise AssertionError("account-focus collection should use account snapshot enrichment")
 
             def merge_market_data(self, *args, **kwargs):
                 return self.delegate.merge_market_data(*args, **kwargs)
@@ -5126,15 +5135,24 @@ class PythonServiceTests(unittest.TestCase):
         result = runner.run_once()
         cached_aapl = quote_cache.load("toss", MARKET_DATA_ACCOUNT_ID, "AAPL")
         cached_tsla = quote_cache.load("toss", MARKET_DATA_ACCOUNT_ID, "TSLA")
+        cached_msft = quote_cache.load("toss", MARKET_DATA_ACCOUNT_ID, "MSFT")
+        account_aapl = quote_cache.load("toss", "main", "AAPL")
+        account_tsla = quote_cache.load("toss", "main", "TSLA")
 
         self.assertEqual("ok", result["status"])
+        self.assertEqual("account-focus", result["collectionScope"])
         self.assertEqual(2, result["savedCount"])
         self.assertEqual(2, result["changedCount"])
-        self.assertEqual(1, result["candleCount"])
-        self.assertEqual("recommendation-universe", cached_aapl["collectionPurpose"])
+        self.assertEqual(2, result["candleCount"])
+        self.assertEqual("account-focus", cached_aapl["collectionPurpose"])
+        self.assertEqual("holding", cached_aapl["collectionTarget"])
         self.assertEqual(100, cached_aapl["currentPrice"])
-        self.assertGreater(cached_aapl["ma20"], 0)
+        self.assertEqual(95, cached_aapl["ma20"])
         self.assertEqual(101, cached_tsla["currentPrice"])
+        self.assertEqual("watchlist", cached_tsla["collectionTarget"])
+        self.assertEqual({}, cached_msft)
+        self.assertEqual(100, account_aapl["currentPrice"])
+        self.assertEqual(101, account_tsla["currentPrice"])
         self.assertEqual(0, result["materialChangedCount"])
         self.assertEqual([MARKET_DATA_COLLECTED, ONTOLOGY_REASONING_REQUESTED], [event.name for event in events.published])
         self.assertEqual(["AAPL", "TSLA"], events.published[-1].payload["symbols"])

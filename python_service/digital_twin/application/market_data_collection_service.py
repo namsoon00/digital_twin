@@ -39,7 +39,7 @@ def configured_markets(raw_value: str = "") -> List[str]:
     return markets or list(SUPPORTED_MARKETS)
 
 
-def position_payload(position: Position, base: Dict[str, object]) -> Dict[str, object]:
+def position_payload(position: Position, base: Dict[str, object], collection_purpose: str = "account-focus") -> Dict[str, object]:
     return {
         "symbol": position.symbol,
         "name": position.name or str(base.get("name") or position.symbol),
@@ -56,7 +56,8 @@ def position_payload(position: Position, base: Dict[str, object]) -> Dict[str, o
         "dataQuality": position.data_quality or "actual",
         "updatedAt": position.updated_at or utc_now_iso(),
         "collectionSource": "market-data-collector",
-        "collectionPurpose": "recommendation-universe",
+        "collectionPurpose": collection_purpose,
+        "collectionTarget": position.source or "holding",
         "tradingValue": position.trading_value,
         "volume": position.volume,
         "volumeRatio": position.volume_ratio,
@@ -141,6 +142,22 @@ class MarketDataCollectionRunner:
             "sector": item.get("sector"),
         })
 
+    def focus_positions(self, provider: MarketDataProvider):
+        mode, status, positions, _cash, _currency, watchlist = provider.fetch_positions()
+        if str(mode or "").lower() != "live":
+            return mode, status, []
+        seen = set()
+        focused = []
+        for position in list(positions or []) + list(watchlist or []):
+            if not position or position.is_cash() or not position.symbol:
+                continue
+            symbol = position.symbol.upper()
+            if symbol in seen:
+                continue
+            seen.add(symbol)
+            focused.append(position)
+        return mode, status, focused
+
     def collect_candles(self, provider: MarketDataProvider, token: str, symbols: Iterable[str]):
         result: Dict[str, Dict[str, object]] = {}
         for index, symbol in enumerate(symbols):
@@ -168,55 +185,48 @@ class MarketDataCollectionRunner:
                 "savedCount": 0,
             }
         markets = self.markets()
-        selected = self.quote_cache.stale_universe_symbols(
-            "toss",
-            MARKET_DATA_ACCOUNT_ID,
-            markets=markets,
-            limit=self.price_batch_size(),
-            max_age_minutes=0 if force else self.max_age_minutes(),
-        )
-        if not selected:
+        provider = self.provider_factory(account, self.quote_cache)
+        mode, account_status, focused_positions = self.focus_positions(provider)
+        if str(mode or "").lower() != "live":
             return {
-                "status": "fresh",
+                "status": "accountDataUnavailable",
+                "mode": mode,
+                "message": account_status,
                 "markets": markets,
+                "collectionScope": "account-focus",
                 "universeRefresh": universe_refresh,
                 "savedCount": 0,
                 "cache": self.quote_cache.summary("toss", MARKET_DATA_ACCOUNT_ID),
             }
-        provider = self.provider_factory(account, self.quote_cache)
-        token = provider.fetch_access_token()
-        symbols = [str(item.get("symbol") or "").upper() for item in selected if item.get("symbol")]
-        prices, token = provider.fetch_prices(token, symbols)
-        candle_symbols = symbols[:self.candle_batch_size()]
-        indicators, token = self.collect_candles(provider, token, candle_symbols)
+        if not focused_positions:
+            return {
+                "status": "fresh",
+                "markets": markets,
+                "mode": mode,
+                "accountStatus": account_status,
+                "collectionScope": "account-focus",
+                "universeRefresh": universe_refresh,
+                "savedCount": 0,
+                "cache": self.quote_cache.summary("toss", MARKET_DATA_ACCOUNT_ID),
+            }
+        symbols = [position.symbol.upper() for position in focused_positions]
         saved = 0
         changed = 0
         changed_symbols: List[str] = []
         changed_fields_by_symbol: Dict[str, List[str]] = {}
         material_symbols: List[str] = []
         materiality_assessments: Dict[str, Dict[str, object]] = {}
-        for item in selected:
-            symbol = str(item.get("symbol") or "").upper()
+        for position in focused_positions:
+            symbol = str(position.symbol or "").upper()
             if not symbol:
                 continue
-            quote = prices.get(symbol) or {}
-            indicator = indicators.get(symbol) or {}
-            if not quote and not indicator:
-                continue
             cached = self.quote_cache.load("toss", MARKET_DATA_ACCOUNT_ID, symbol)
-            position = provider.merge_market_data(
-                self.base_position(item),
-                quote,
-                indicator,
-                cached,
-                quote_live=bool(quote),
-                indicators_live=bool(indicator),
-            )
-            payload = position_payload(position, item)
+            payload = position_payload(position, position.to_dict(), "account-focus")
             if not number(payload.get("currentPrice")) and not any(number(payload.get(key)) for key in ["ma20", "ma60", "volume"]):
                 continue
             change = market_fact_change(cached, payload)
             self.quote_cache.save("toss", MARKET_DATA_ACCOUNT_ID, symbol, payload)
+            self.quote_cache.save("toss", account.account_id, symbol, payload)
             saved += 1
             if change.get("changed"):
                 changed += 1
@@ -230,10 +240,13 @@ class MarketDataCollectionRunner:
             "status": "ok",
             "provider": "toss",
             "markets": markets,
+            "mode": mode,
+            "accountStatus": account_status,
+            "collectionScope": "account-focus",
             "symbols": symbols,
-            "selectedCount": len(selected),
-            "priceCount": len(prices),
-            "candleCount": len(indicators),
+            "selectedCount": len(focused_positions),
+            "priceCount": len([item for item in focused_positions if number(item.current_price)]),
+            "candleCount": len([item for item in focused_positions if number(item.ma20) or number(item.ma60)]),
             "savedCount": saved,
             "changedCount": changed,
             "changedSymbols": changed_symbols,
@@ -283,6 +296,7 @@ class MarketDataCollectionRunner:
             "priceBatchSize": self.price_batch_size(),
             "candleBatchSize": self.candle_batch_size(),
             "maxAgeMinutes": self.max_age_minutes(),
+            "collectionScope": "account-focus",
             "cache": self.quote_cache.summary("toss", MARKET_DATA_ACCOUNT_ID),
             "symbolUniverse": self.symbol_service.summary(),
         }

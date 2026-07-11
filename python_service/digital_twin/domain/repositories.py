@@ -233,6 +233,9 @@ class MarketDataProvider(Protocol):
     def fetch_access_token(self) -> str:
         ...
 
+    def fetch_positions(self) -> Tuple[str, str, List[Position], float, str, List[Position]]:
+        ...
+
     def fetch_prices(self, token: str, symbols: Iterable[str]) -> Tuple[Dict[str, Dict[str, object]], str]:
         ...
 

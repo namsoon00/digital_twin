@@ -699,7 +699,7 @@ class TossProvider:
         watchlist: List[Position] = []
         symbols = [
             str(symbol or "").upper()
-            for symbol in self.account.watchlist_symbols[:30]
+            for symbol in self.account.watchlist_symbols
             if str(symbol or "").upper() and str(symbol or "").upper() not in holding_symbols
         ]
         prices, token = self.safe_fetch_prices(token, symbols)

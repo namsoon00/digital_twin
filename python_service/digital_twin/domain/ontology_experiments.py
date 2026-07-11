@@ -1,0 +1,422 @@
+import copy
+import hashlib
+import json
+from dataclasses import asdict, dataclass, field
+from typing import Dict, Iterable, List, Tuple
+
+from .market_data import clamp, number
+from .ontology_contracts import PortfolioOntology
+from .ontology_graph_reasoner import run_graph_reasoner
+from .ontology_quality import build_ontology_quality_sample
+from .ontology_rulebox_contracts import GraphInferenceRule
+from .ontology_rulebox_governance import rulebox_rules_hash
+from .portfolio import utc_now_iso
+
+
+TRACE_RELATION_TYPES = {"HAS_INFERENCE_TRACE", "TRIGGERED_INFERENCE", "EXPLAINED_BY_TRACE"}
+
+
+@dataclass
+class OntologyExperiment:
+    experiment_id: str
+    title: str
+    hypothesis: str
+    symbols: List[str] = field(default_factory=list)
+    candidate_rules: List[Dict[str, object]] = field(default_factory=list)
+    baseline_rulebox: Dict[str, object] = field(default_factory=dict)
+    status: str = "draft"
+    created_at: str = ""
+    updated_at: str = ""
+    last_result: Dict[str, object] = field(default_factory=dict)
+    validation_warnings: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, object]:
+        payload = asdict(self)
+        payload["id"] = payload.pop("experiment_id")
+        payload["candidateRules"] = payload.pop("candidate_rules")
+        payload["baselineRulebox"] = payload.pop("baseline_rulebox")
+        payload["createdAt"] = payload.pop("created_at")
+        payload["updatedAt"] = payload.pop("updated_at")
+        payload["lastResult"] = payload.pop("last_result")
+        payload["validationWarnings"] = payload.pop("validation_warnings")
+        return payload
+
+    @staticmethod
+    def from_dict(payload: Dict[str, object]):
+        payload = dict(payload or {})
+        return OntologyExperiment(
+            experiment_id=str(payload.get("id") or payload.get("experimentId") or payload.get("experiment_id") or ""),
+            title=str(payload.get("title") or "Ontology experiment"),
+            hypothesis=str(payload.get("hypothesis") or ""),
+            symbols=clean_symbols(payload.get("symbols") or []),
+            candidate_rules=[
+                dict(item)
+                for item in (payload.get("candidateRules") or payload.get("candidate_rules") or [])
+                if isinstance(item, dict)
+            ],
+            baseline_rulebox=dict(payload.get("baselineRulebox") or payload.get("baseline_rulebox") or {}),
+            status=str(payload.get("status") or "draft"),
+            created_at=str(payload.get("createdAt") or payload.get("created_at") or ""),
+            updated_at=str(payload.get("updatedAt") or payload.get("updated_at") or ""),
+            last_result=dict(payload.get("lastResult") or payload.get("last_result") or {}),
+            validation_warnings=[
+                str(item)
+                for item in (payload.get("validationWarnings") or payload.get("validation_warnings") or [])
+                if str(item or "").strip()
+            ],
+        )
+
+
+def clean_symbols(values: Iterable[object]) -> List[str]:
+    result: List[str] = []
+    seen = set()
+    for value in values or []:
+        text = str(value or "").upper().strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        result.append(text)
+    return result
+
+
+def experiment_id_for(payload: Dict[str, object], stamp: str = "") -> str:
+    encoded = json.dumps(payload or {}, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    digest = hashlib.sha256((encoded + (stamp or utc_now_iso())).encode("utf-8")).hexdigest()[:12]
+    return "ontology-exp-" + digest
+
+
+def compact_rulebox_snapshot(snapshot: Dict[str, object]) -> Dict[str, object]:
+    snapshot = dict(snapshot or {})
+    rules = [dict(item) for item in (snapshot.get("rules") or []) if isinstance(item, dict)]
+    return {
+        "status": str(snapshot.get("status") or ""),
+        "configured": bool(snapshot.get("configured")),
+        "source": str(snapshot.get("source") or ""),
+        "engineVersion": str(snapshot.get("engineVersion") or ""),
+        "ruleCount": len(rules) if rules else int(snapshot.get("ruleCount") or 0),
+        "conditionCount": sum(len(item.get("conditions") or []) for item in rules) if rules else int(snapshot.get("conditionCount") or 0),
+        "derivationCount": sum(len(item.get("derivations") or []) for item in rules) if rules else int(snapshot.get("derivationCount") or 0),
+        "relationTypes": sorted(set(str(item) for item in (snapshot.get("relationTypes") or []) if str(item or "").strip())),
+        "rulesHash": rulebox_rules_hash(rules) if rules else "",
+    }
+
+
+def rule_payloads_from_snapshot(snapshot: Dict[str, object]) -> List[Dict[str, object]]:
+    return [dict(item) for item in (snapshot or {}).get("rules") or [] if isinstance(item, dict)]
+
+
+def normalize_candidate_rules(
+    payload: Dict[str, object],
+    rulebox_snapshot: Dict[str, object],
+) -> Tuple[List[Dict[str, object]], List[str]]:
+    payload = dict(payload or {})
+    existing_rule_ids = {
+        str(item.get("rule_id") or item.get("ruleId") or "").strip()
+        for item in rule_payloads_from_snapshot(rulebox_snapshot)
+        if isinstance(item, dict)
+    }
+    candidate_payloads = collect_candidate_rule_payloads(payload, rulebox_snapshot)
+    normalized: List[Dict[str, object]] = []
+    warnings: List[str] = []
+    seen = set()
+    for index, raw_rule in enumerate(candidate_payloads):
+        try:
+            rule = GraphInferenceRule.from_dict(raw_rule)
+        except ValueError as error:
+            warnings.append("candidate[" + str(index) + "] invalid: " + str(error))
+            continue
+        rule_payload = rule.to_dict()
+        rule_payload["enabled"] = False
+        rule_id = str(rule_payload.get("rule_id") or "")
+        if rule_id in existing_rule_ids:
+            warnings.append("candidate rule duplicates current RuleBox rule_id: " + rule_id)
+        if rule_id in seen:
+            warnings.append("candidate rule repeated in experiment payload: " + rule_id)
+            continue
+        seen.add(rule_id)
+        for derivation in rule_payload.get("derivations") or []:
+            if not isinstance(derivation, dict):
+                continue
+            if not str(derivation.get("decision_stage") or derivation.get("decisionStage") or "").strip():
+                warnings.append("candidate rule " + rule_id + " has derivation without decision_stage")
+            if number(derivation.get("stage_priority") or derivation.get("stagePriority")) <= 0:
+                warnings.append("candidate rule " + rule_id + " has derivation without positive stage_priority")
+        normalized.append(rule_payload)
+    return normalized, sorted(set(warnings))
+
+
+def collect_candidate_rule_payloads(payload: Dict[str, object], rulebox_snapshot: Dict[str, object]) -> List[Dict[str, object]]:
+    rows: List[Dict[str, object]] = []
+    for key in ["rules", "candidateRules"]:
+        value = payload.get(key)
+        if isinstance(value, list):
+            rows.extend(dict(item) for item in value if isinstance(item, dict))
+    if isinstance(payload.get("proposedRule"), dict):
+        rows.append(dict(payload.get("proposedRule") or {}))
+    candidate_ids = clean_id_values(payload.get("candidateIds") or payload.get("candidateId"))
+    if candidate_ids:
+        for candidate in (rulebox_snapshot or {}).get("changeCandidates") or []:
+            if not isinstance(candidate, dict):
+                continue
+            candidate_id = str(candidate.get("id") or "").strip()
+            proposed = candidate.get("proposedRule") if isinstance(candidate.get("proposedRule"), dict) else {}
+            proposed_id = str(proposed.get("rule_id") or proposed.get("ruleId") or "").strip()
+            if candidate_id in candidate_ids or proposed_id in candidate_ids:
+                rows.append(dict(proposed))
+    return rows
+
+
+def clean_id_values(value: object) -> set:
+    if isinstance(value, str):
+        values = [value]
+    elif isinstance(value, list):
+        values = value
+    else:
+        values = []
+    return {str(item or "").strip() for item in values if str(item or "").strip()}
+
+
+def graph_rules_from_payloads(rules: Iterable[Dict[str, object]], force_enabled: bool = False) -> List[GraphInferenceRule]:
+    result = []
+    for payload in rules or []:
+        if not isinstance(payload, dict):
+            continue
+        next_payload = dict(payload)
+        if force_enabled:
+            next_payload["enabled"] = True
+        try:
+            result.append(GraphInferenceRule.from_dict(next_payload))
+        except ValueError:
+            continue
+    return result
+
+
+def rulebox_metrics(rules: Iterable[Dict[str, object]]) -> Dict[str, object]:
+    rows = [dict(item) for item in rules or [] if isinstance(item, dict)]
+    relation_types = []
+    decision_stages = []
+    for rule in rows:
+        for derivation in rule.get("derivations") or []:
+            if not isinstance(derivation, dict):
+                continue
+            relation_type = str(derivation.get("relation_type") or derivation.get("relationType") or "").strip()
+            if relation_type:
+                relation_types.append(relation_type)
+            decision_stage = str(derivation.get("decision_stage") or derivation.get("decisionStage") or "").strip()
+            if decision_stage:
+                decision_stages.append(decision_stage)
+    return {
+        "ruleCount": len(rows),
+        "enabledRuleCount": len([item for item in rows if item.get("enabled") is not False]),
+        "conditionCount": sum(len(item.get("conditions") or []) for item in rows),
+        "derivationCount": sum(len(item.get("derivations") or []) for item in rows),
+        "relationTypes": sorted(set(relation_types)),
+        "decisionStages": sorted(set(decision_stages)),
+        "rulesHash": rulebox_rules_hash(rows),
+    }
+
+
+def inference_metrics_from_graph(graph: PortfolioOntology) -> Dict[str, object]:
+    inference_entities = [
+        item
+        for item in graph.entities or []
+        if str((item.properties or {}).get("ontologyBox") or "") == "InferenceBox"
+    ]
+    inference_relations = [
+        item
+        for item in graph.relations or []
+        if str((item.properties or {}).get("ontologyBox") or "") == "InferenceBox"
+    ]
+    derived_relations = [item for item in inference_relations if item.relation_type not in TRACE_RELATION_TYPES]
+    rule_ids = []
+    relation_types = []
+    decision_stages = []
+    symbols = []
+    for relation in derived_relations:
+        props = relation.properties or {}
+        relation_types.append(relation.relation_type)
+        if str(props.get("ruleId") or "").strip():
+            rule_ids.append(str(props.get("ruleId")).strip())
+        if str(props.get("decisionStage") or "").strip():
+            decision_stages.append(str(props.get("decisionStage")).strip())
+    for entity in inference_entities:
+        props = entity.properties or {}
+        if str(props.get("symbol") or "").strip():
+            symbols.append(str(props.get("symbol")).upper().strip())
+    sample = build_ontology_quality_sample(graph, source="ontology-lab")
+    return {
+        "entityCount": len(inference_entities),
+        "relationCount": len(inference_relations),
+        "derivedRelationCount": len(derived_relations),
+        "traceCount": len([item for item in inference_entities if item.kind == "inference-trace"]),
+        "ruleIds": sorted(set(rule_ids)),
+        "relationTypes": sorted(set(relation_types)),
+        "decisionStages": sorted(set(decision_stages)),
+        "symbols": sorted(set(symbols)),
+        "quality": {
+            "overallScore": sample.overall_score,
+            "dataCoverageScore": sample.data_coverage_score,
+            "contextCoverageScore": sample.context_coverage_score,
+            "reasoningReadinessScore": sample.reasoning_readiness_score,
+            "relationDensityScore": sample.relation_density_score,
+            "dataGapCount": sample.data_gap_count,
+            "highPressureCount": sample.high_pressure_count,
+        },
+    }
+
+
+def run_experiment_on_graph(
+    facts_graph: PortfolioOntology,
+    baseline_rules: Iterable[Dict[str, object]],
+    candidate_rules: Iterable[Dict[str, object]],
+) -> Dict[str, object]:
+    baseline_graph = copy.deepcopy(facts_graph)
+    candidate_graph = copy.deepcopy(facts_graph)
+    baseline_rule_objects = graph_rules_from_payloads(baseline_rules)
+    candidate_rule_objects = baseline_rule_objects + graph_rules_from_payloads(candidate_rules, force_enabled=True)
+    run_graph_reasoner(baseline_graph, baseline_rule_objects)
+    run_graph_reasoner(candidate_graph, candidate_rule_objects)
+    baseline_metrics = inference_metrics_from_graph(baseline_graph)
+    candidate_metrics = inference_metrics_from_graph(candidate_graph)
+    return {
+        "portfolioId": facts_graph.portfolio_id,
+        "baseline": baseline_metrics,
+        "candidate": candidate_metrics,
+        "delta": inference_metric_delta(baseline_metrics, candidate_metrics),
+    }
+
+
+def inference_metric_delta(baseline: Dict[str, object], candidate: Dict[str, object]) -> Dict[str, object]:
+    return {
+        "entityCount": int(candidate.get("entityCount") or 0) - int(baseline.get("entityCount") or 0),
+        "relationCount": int(candidate.get("relationCount") or 0) - int(baseline.get("relationCount") or 0),
+        "derivedRelationCount": int(candidate.get("derivedRelationCount") or 0) - int(baseline.get("derivedRelationCount") or 0),
+        "traceCount": int(candidate.get("traceCount") or 0) - int(baseline.get("traceCount") or 0),
+        "newRuleIds": sorted(set(candidate.get("ruleIds") or []) - set(baseline.get("ruleIds") or [])),
+        "newRelationTypes": sorted(set(candidate.get("relationTypes") or []) - set(baseline.get("relationTypes") or [])),
+        "newDecisionStages": sorted(set(candidate.get("decisionStages") or []) - set(baseline.get("decisionStages") or [])),
+        "qualityScore": round(
+            number((candidate.get("quality") or {}).get("overallScore"))
+            - number((baseline.get("quality") or {}).get("overallScore")),
+            2,
+        ),
+    }
+
+
+def summarize_experiment_result(
+    experiment: OntologyExperiment,
+    baseline_rules: List[Dict[str, object]],
+    graph_runs: List[Dict[str, object]],
+) -> Dict[str, object]:
+    candidate_metrics = rulebox_metrics(experiment.candidate_rules)
+    baseline_metrics = rulebox_metrics(baseline_rules)
+    aggregate_delta = aggregate_graph_deltas(graph_runs)
+    readiness = promotion_readiness(experiment.validation_warnings, aggregate_delta, len(graph_runs))
+    return {
+        "status": "completed",
+        "experimentId": experiment.experiment_id,
+        "title": experiment.title,
+        "hypothesis": experiment.hypothesis,
+        "symbols": list(experiment.symbols or []),
+        "sandbox": {
+            "mutatedOperationalRuleBox": False,
+            "mutatedNeo4j": False,
+            "graphRunCount": len(graph_runs),
+        },
+        "rulebox": {
+            "baseline": baseline_metrics,
+            "candidate": candidate_metrics,
+            "delta": {
+                "ruleCount": int(candidate_metrics.get("ruleCount") or 0),
+                "conditionCount": int(candidate_metrics.get("conditionCount") or 0),
+                "derivationCount": int(candidate_metrics.get("derivationCount") or 0),
+                "newRelationTypes": sorted(set(candidate_metrics.get("relationTypes") or []) - set(baseline_metrics.get("relationTypes") or [])),
+                "newDecisionStages": sorted(set(candidate_metrics.get("decisionStages") or []) - set(baseline_metrics.get("decisionStages") or [])),
+            },
+        },
+        "inference": {
+            "aggregateDelta": aggregate_delta,
+            "graphRuns": graph_runs,
+        },
+        "promotionReadiness": readiness,
+        "findings": experiment_findings(experiment.validation_warnings, aggregate_delta, len(graph_runs), readiness),
+        "validationWarnings": list(experiment.validation_warnings or []),
+        "completedAt": utc_now_iso(),
+    }
+
+
+def aggregate_graph_deltas(graph_runs: List[Dict[str, object]]) -> Dict[str, object]:
+    result = {
+        "entityCount": 0,
+        "relationCount": 0,
+        "derivedRelationCount": 0,
+        "traceCount": 0,
+        "qualityScore": 0.0,
+        "newRuleIds": [],
+        "newRelationTypes": [],
+        "newDecisionStages": [],
+    }
+    for run in graph_runs or []:
+        delta = run.get("delta") if isinstance(run.get("delta"), dict) else {}
+        for key in ["entityCount", "relationCount", "derivedRelationCount", "traceCount"]:
+            result[key] += int(delta.get(key) or 0)
+        result["qualityScore"] += number(delta.get("qualityScore"))
+        for key in ["newRuleIds", "newRelationTypes", "newDecisionStages"]:
+            result[key].extend(str(item) for item in (delta.get(key) or []) if str(item or "").strip())
+    for key in ["newRuleIds", "newRelationTypes", "newDecisionStages"]:
+        result[key] = sorted(set(result[key]))
+    result["qualityScore"] = round(result["qualityScore"], 2)
+    return result
+
+
+def promotion_readiness(warnings: List[str], aggregate_delta: Dict[str, object], graph_run_count: int) -> Dict[str, object]:
+    score = 52.0
+    score += min(22.0, max(0, int(aggregate_delta.get("derivedRelationCount") or 0)) * 4.0)
+    score += min(12.0, len(aggregate_delta.get("newDecisionStages") or []) * 3.0)
+    score += clamp(number(aggregate_delta.get("qualityScore")) * 0.4, -10.0, 10.0)
+    score -= min(24.0, len(warnings or []) * 6.0)
+    if graph_run_count <= 0:
+        score -= 18.0
+    rounded = round(clamp(score, 0.0, 100.0), 2)
+    if warnings:
+        status = "needs-review"
+    elif graph_run_count <= 0:
+        status = "needs-data"
+    elif rounded >= 72 and int(aggregate_delta.get("derivedRelationCount") or 0) > 0:
+        status = "promote-candidate"
+    else:
+        status = "needs-review"
+    return {
+        "status": status,
+        "score": rounded,
+        "reason": readiness_reason(status),
+    }
+
+
+def readiness_reason(status: str) -> str:
+    if status == "promote-candidate":
+        return "후보 규칙이 샌드박스 그래프에서 새 추론 관계를 만들었고 구조 경고가 없습니다."
+    if status == "needs-data":
+        return "비교할 최근 ABox 스냅샷이 없어 구조 검증만 수행했습니다."
+    return "후보 규칙을 승격하기 전에 경고, 데이터 커버리지, 추론 변화량을 검토해야 합니다."
+
+
+def experiment_findings(
+    warnings: List[str],
+    aggregate_delta: Dict[str, object],
+    graph_run_count: int,
+    readiness: Dict[str, object],
+) -> List[str]:
+    findings = []
+    if graph_run_count <= 0:
+        findings.append("최근 모니터 스냅샷이 없어 실제 ABox 리플레이를 수행하지 못했습니다.")
+    if int(aggregate_delta.get("derivedRelationCount") or 0) > 0:
+        findings.append("후보 규칙이 새 파생 관계 " + str(aggregate_delta.get("derivedRelationCount")) + "개를 만들었습니다.")
+    else:
+        findings.append("후보 규칙이 현재 스냅샷에서는 새 파생 관계를 만들지 않았습니다.")
+    if aggregate_delta.get("newRelationTypes"):
+        findings.append("새 관계 타입: " + ", ".join(aggregate_delta.get("newRelationTypes") or []))
+    if warnings:
+        findings.append("구조 경고 " + str(len(warnings)) + "개가 있어 승격 전 검토가 필요합니다.")
+    findings.append("승격 판단: " + str(readiness.get("status") or "needs-review"))
+    return findings

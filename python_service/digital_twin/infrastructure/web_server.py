@@ -60,7 +60,7 @@ from ..infrastructure.event_bus import default_event_bus
 from ..infrastructure.mock_market import mock_market_payload, mock_market_scenario_list
 from ..infrastructure.neo4j_ontology import ontology_repository_from_settings
 from ..infrastructure import operational_store as stores
-from ..infrastructure.service_factory import build_notification_queue_runner, build_rule_change_candidate_service, build_symbol_universe_service, flow_lens_snapshot
+from ..infrastructure.service_factory import build_notification_queue_runner, build_ontology_lab_service, build_rule_change_candidate_service, build_symbol_universe_service, flow_lens_snapshot
 from ..infrastructure.settings import ROOT_DIR, runtime_settings, save_runtime_settings
 from ..infrastructure.toss_snapshots import build_snapshot
 
@@ -559,6 +559,26 @@ def propose_ontology_rule_candidates_payload(payload: Dict[str, object]) -> Dict
 
 def seed_ontology_payload(payload: Dict[str, object]) -> Dict[str, object]:
     return ontology_repository_from_settings(runtime_settings()).seed_ontology(payload)
+
+
+def ontology_lab_service():
+    return build_ontology_lab_service(runtime_settings())
+
+
+def list_ontology_experiments_payload() -> Dict[str, object]:
+    return ontology_lab_service().list()
+
+
+def create_ontology_experiment_payload(payload: Dict[str, object]) -> Dict[str, object]:
+    return ontology_lab_service().create(payload if isinstance(payload, dict) else {})
+
+
+def ontology_experiment_payload(experiment_id: str) -> Dict[str, object]:
+    return ontology_lab_service().report(experiment_id)
+
+
+def run_ontology_experiment_payload(experiment_id: str, payload: Dict[str, object]) -> Dict[str, object]:
+    return ontology_lab_service().run(experiment_id, payload if isinstance(payload, dict) else {})
 
 
 def notification_store():
@@ -1827,6 +1847,27 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
             if not self.ensure_writable("공유 모드에서는 Neo4j 온톨로지 시드를 실행할 수 없습니다."):
                 return
             return self.send_payload(200, seed_ontology_payload(self.read_json_body()))
+
+        if path == "/api/ontology/experiments" and self.command == "GET":
+            return self.send_payload(200, list_ontology_experiments_payload())
+
+        if path == "/api/ontology/experiments" and self.command == "POST":
+            if not self.ensure_writable("공유 모드에서는 온톨로지 실험을 생성할 수 없습니다."):
+                return
+            return self.send_payload(200, create_ontology_experiment_payload(self.read_json_body()))
+
+        ontology_experiment_run_match = re.match(r"^/api/ontology/experiments/([^/]+)/run$", path)
+        if ontology_experiment_run_match and self.command == "POST":
+            if not self.ensure_writable("공유 모드에서는 온톨로지 실험을 실행할 수 없습니다."):
+                return
+            return self.send_payload(200, run_ontology_experiment_payload(
+                urllib.parse.unquote(ontology_experiment_run_match.group(1)),
+                self.read_json_body(),
+            ))
+
+        ontology_experiment_match = re.match(r"^/api/ontology/experiments/([^/]+)$", path)
+        if ontology_experiment_match and self.command == "GET":
+            return self.send_payload(200, ontology_experiment_payload(urllib.parse.unquote(ontology_experiment_match.group(1))))
 
         if path == "/api/symbol-universe":
             if self.command == "GET":

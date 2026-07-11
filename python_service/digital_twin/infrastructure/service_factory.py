@@ -17,6 +17,7 @@ from ..application.notification_service import (
     NotificationQueueRunner,
 )
 from ..application.ontology_reasoning_service import OntologyReasoningRunner
+from ..application.ontology_lab_service import OntologyLabService
 from ..application.ontology_rule_candidate_service import RuleChangeCandidateProposalService
 from ..application.symbol_universe_service import SymbolUniverseService
 from ..domain.accounts import AccountConfig
@@ -195,6 +196,16 @@ def build_rule_change_candidate_service(settings=None) -> RuleChangeCandidatePro
         ontology_repository=ontology_repository_from_settings(configured_settings),
         advisor=rule_change_candidate_advisor_from_settings(configured_settings),
         event_reader=stores.event_log(configured_settings),
+        settings=configured_settings,
+    )
+
+
+def build_ontology_lab_service(settings=None) -> OntologyLabService:
+    configured_settings = settings or runtime_settings()
+    return OntologyLabService(
+        ontology_repository=ontology_repository_from_settings(configured_settings),
+        experiment_store=stores.ontology_experiment_store(configured_settings),
+        monitor_store=stores.monitor_store(configured_settings),
         settings=configured_settings,
     )
 

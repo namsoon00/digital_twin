@@ -100,6 +100,28 @@ Projection은 다음 용도로만 사용한다.
 
 이 샘플은 AI 의견 품질을 나중에 회귀 테스트하거나 운영 튜닝할 때 쓰는 로컬 히스토리다. 개인 계좌 데이터가 포함될 수 있으므로 git에 넣지 않는다.
 
+## Ontology Lab
+
+1차 실험 환경은 운영 RuleBox와 Neo4j를 직접 바꾸지 않는 로컬 샌드박스다. 후보 규칙을 `candidateRules`로 저장하고, 최근 모니터 스냅샷에서 만든 ABox facts-only 그래프에 현재 RuleBox와 후보 RuleBox를 각각 실행해 파생 관계, 추론 trace, 품질 점수 변화를 비교한다.
+
+CLI:
+
+```bash
+npm run python:ontology-lab -- list
+npm run python:ontology-lab -- create --payload-file ./experiment.json
+npm run python:ontology-lab -- run --id <experiment-id>
+npm run python:ontology-lab -- report --id <experiment-id>
+```
+
+API:
+
+- `GET /api/ontology/experiments`
+- `POST /api/ontology/experiments`
+- `GET /api/ontology/experiments/{id}`
+- `POST /api/ontology/experiments/{id}/run`
+
+실험 결과의 `sandbox.mutatedOperationalRuleBox`와 `sandbox.mutatedNeo4j`는 항상 `false`여야 한다. 승격은 별도 검토 후 RuleBox 저장 흐름에서 수행한다. 런타임 실험 기록은 `data/ontology-lab.json`에 저장되며 git에 넣지 않는다.
+
 ## Runtime Settings
 
 관계 규칙과 프롬프트는 런타임 설정으로 관리한다.

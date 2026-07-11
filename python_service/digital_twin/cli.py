@@ -3,7 +3,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import List
+from typing import Dict, List
 
 from .admin_preview import write_admin_preview
 from .application.account_service import AccountApplicationService
@@ -21,7 +21,7 @@ from .infrastructure.event_bus import default_event_bus
 from .infrastructure import operational_store as stores
 from .infrastructure.notifications import queued_notifier_for_account, send_events
 from .infrastructure.neo4j_ontology import ontology_repository_from_settings
-from .infrastructure.service_factory import build_market_data_collection_runner, build_model_review_runner, build_monitor_runner, build_news_collection_runner, build_notification_queue_runner, build_ontology_reasoning_runner, build_symbol_universe_service, monitor_account_job_store_from_settings
+from .infrastructure.service_factory import build_market_data_collection_runner, build_model_review_runner, build_monitor_runner, build_news_collection_runner, build_notification_queue_runner, build_ontology_lab_service, build_ontology_reasoning_runner, build_symbol_universe_service, monitor_account_job_store_from_settings
 from .infrastructure.settings import (
     SECRET_SETTING_KEYS,
     read_settings_store,
@@ -307,6 +307,44 @@ def ontology_command(args) -> int:
     return 1
 
 
+def ontology_lab_command(args) -> int:
+    service = build_ontology_lab_service(runtime_settings())
+    if args.ontology_lab_action == "list":
+        print(json.dumps(service.list(), ensure_ascii=False))
+        return 0
+    if args.ontology_lab_action == "create":
+        payload = read_json_payload(args.payload_file)
+        if args.title:
+            payload["title"] = args.title
+        if args.hypothesis:
+            payload["hypothesis"] = args.hypothesis
+        if args.symbols:
+            payload["symbols"] = [item.strip() for item in args.symbols.split(",") if item.strip()]
+        result = service.create(payload)
+        print(json.dumps(result, ensure_ascii=False))
+        return 0
+    if args.ontology_lab_action == "run":
+        result = service.run(args.id, read_json_payload(args.payload_file) if args.payload_file else {})
+        print(json.dumps(result, ensure_ascii=False))
+        return 0 if result.get("status") != "not-found" else 1
+    if args.ontology_lab_action == "report":
+        result = service.report(args.id)
+        print(json.dumps(result, ensure_ascii=False))
+        return 0 if result.get("status") != "not-found" else 1
+    return 1
+
+
+def read_json_payload(path: str = "") -> Dict[str, object]:
+    if path:
+        with open(path, "r", encoding="utf-8") as handle:
+            payload = json.loads(handle.read() or "{}")
+    elif not sys.stdin.isatty():
+        payload = json.loads(sys.stdin.read() or "{}")
+    else:
+        payload = {}
+    return payload if isinstance(payload, dict) else {}
+
+
 MASKED_RUNTIME_SETTING_KEYS = set(SECRET_SETTING_KEYS) | {"tossAccountSeq", "telegramChatId"}
 
 
@@ -556,6 +594,21 @@ def build_parser() -> argparse.ArgumentParser:
     ontology_seed.add_argument("--replace-rulebox", action="store_true")
     ontology_seed.add_argument("--keep-inference", dest="clear_inference", action="store_false", default=True)
     ontology.set_defaults(func=ontology_command)
+
+    ontology_lab = subparsers.add_parser("ontology-lab", help="Run local ontology experiments")
+    ontology_lab_actions = ontology_lab.add_subparsers(dest="ontology_lab_action", required=True)
+    ontology_lab_actions.add_parser("list")
+    lab_create = ontology_lab_actions.add_parser("create")
+    lab_create.add_argument("--payload-file", default="")
+    lab_create.add_argument("--title", default="")
+    lab_create.add_argument("--hypothesis", default="")
+    lab_create.add_argument("--symbols", default="")
+    lab_run = ontology_lab_actions.add_parser("run")
+    lab_run.add_argument("--id", required=True)
+    lab_run.add_argument("--payload-file", default="")
+    lab_report = ontology_lab_actions.add_parser("report")
+    lab_report.add_argument("--id", required=True)
+    ontology_lab.set_defaults(func=ontology_lab_command)
 
     settings = subparsers.add_parser("settings", help="Manage runtime settings")
     settings_actions = settings.add_subparsers(dest="settings_action", required=True)

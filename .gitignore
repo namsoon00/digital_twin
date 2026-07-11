@@ -17,6 +17,7 @@ data/monitor-state.json
 data/python-monitor-state.json
 data/domain-events.jsonl
 data/model-review-queue.json
+data/ontology-lab.json
 data/python-model-review.log
 data/kakao-token.json
 data/*.pid

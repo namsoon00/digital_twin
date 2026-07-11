@@ -120,6 +120,21 @@ class NewsAnalysisDomainTests(unittest.TestCase):
         self.assertEqual("regulation", classify_news_event_type("Apple sues OpenAI", "legal dispute"))
         self.assertNotEqual("regulation", classify_news_event_type("Apple issues software update", "general product release"))
 
+    def test_news_analysis_downgrades_social_feed_source(self):
+        target = NewsCollectionTarget("AAPL", "Apple", "NASDAQ", "USD", "AI")
+
+        analysis = classify_news_relevance(
+            target,
+            "Breaking News: Apple sued OpenAI, accusing the company of stealing secrets",
+            "",
+            "facebook.com",
+            "Google News US",
+        )
+
+        self.assertEqual("direct", analysis["relationScope"])
+        self.assertLessEqual(analysis["sourceReliability"], 0.3)
+        self.assertLess(confidence_from_analysis_payload(analysis), 0.55)
+
     def test_english_article_summary_keeps_concrete_article_facts(self):
         target = NewsCollectionTarget("AAPL", "Apple", "NASDAQ", "USD", "AI")
 

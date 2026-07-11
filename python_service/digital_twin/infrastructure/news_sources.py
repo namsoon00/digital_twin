@@ -82,6 +82,10 @@ def article_block_is_useful(text: object) -> bool:
     return True
 
 
+def article_body_allowed_for_source(source: object, provider: object = "") -> bool:
+    return not news_domain.source_is_social_feed(source, provider)
+
+
 class ArticleTextParser(HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=True)
@@ -243,7 +247,8 @@ class NewsSourceGateway:
         preliminary = classify_news_relevance(target, title, feed_summary or title, source, provider)
         if number(preliminary.get("relevanceScore")) < self.min_relevance_score() or preliminary.get("relationScope") == "noise":
             return None
-        article_text = self.article_text_for_url(link)
+        article_source_allowed = article_body_allowed_for_source(source, provider)
+        article_text = self.article_text_for_url(link) if article_source_allowed else ""
         analysis_text = article_text or feed_summary or title
         relevance = classify_news_relevance(target, title, analysis_text, source, provider)
         if number(relevance.get("relevanceScore")) < self.min_relevance_score() or relevance.get("relationScope") == "noise":
@@ -273,9 +278,9 @@ class NewsSourceGateway:
             **relevance,
             **stock_impact,
             "articleSummaryKo": summary_ko,
-            "articleReadStatus": "body" if article_text else "feed-summary",
-            "articleAnalysisSource": "article-body" if article_text else "feed-summary",
-            "articleAnalysisQuality": "body-read" if article_text else "feed-only",
+            "articleReadStatus": "body" if article_text else ("source-blocked" if not article_source_allowed else "feed-summary"),
+            "articleAnalysisSource": "article-body" if article_text else ("source-quality-gate" if not article_source_allowed else "feed-summary"),
+            "articleAnalysisQuality": "body-read" if article_text else ("source-blocked" if not article_source_allowed else "feed-only"),
             "articleTextPreview": compact_text(article_text, 700) if article_text else "",
         }
         return ResearchEvidence(

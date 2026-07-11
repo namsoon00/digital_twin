@@ -118,6 +118,8 @@ def article_analysis_label(item: Dict[str, object]) -> str:
     status = article_read_status(item)
     if status == "body":
         return "기사 본문 읽음, 본문 기반 요약/영향 계산"
+    if status == "source-blocked":
+        return "제목/RSS 요약만 사용, 소셜·저품질 출처는 본문 근거로 보지 않음"
     return "제목/RSS 요약만 사용"
 
 

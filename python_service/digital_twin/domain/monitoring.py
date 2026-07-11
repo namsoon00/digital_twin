@@ -107,6 +107,26 @@ def ontology_inference_event_metadata(snapshot: AccountSnapshot) -> Dict[str, ob
     }
 
 
+def ontology_validation_issues_from_projection(projection: Dict[str, object]) -> List[Dict[str, object]]:
+    validation = projection.get("aboxValidation") if isinstance(projection.get("aboxValidation"), dict) else {}
+    issues = validation.get("issues") if isinstance(validation.get("issues"), list) else []
+    return [dict(item) for item in issues if isinstance(item, dict)]
+
+
+def ontology_validation_issue_summary(projection: Dict[str, object], limit: int = 2) -> str:
+    rows: List[str] = []
+    for issue in ontology_validation_issues_from_projection(projection)[: max(1, limit)]:
+        message = str(issue.get("message") or issue.get("code") or "").strip()
+        subject = str(issue.get("subject") or "").strip()
+        if not message:
+            continue
+        if subject:
+            rows.append(message + " (" + subject + ")")
+        else:
+            rows.append(message)
+    return "; ".join(rows)
+
+
 class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin, StrategyAlertMixin, ExternalSignalAlertMixin):
     def __init__(self, settings: Dict[str, str] = None):
         settings = settings or {}
@@ -483,6 +503,8 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
             "보유 " + str(len(positions)) + "개",
             "확인 행동 Neo4j 연결, RuleBox 저장 상태, 온톨로지 추론 워커 점검",
         ]
+        if inference_status.get("validationIssueSummary"):
+            lines.insert(3, "검증 오류 " + str(inference_status.get("validationIssueSummary")))
         inference_metadata = ontology_inference_event_metadata(snapshot)
         if not inference_metadata:
             inference_metadata = {
@@ -499,6 +521,9 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
                 "traces": [],
             }
         inference_metadata = dict(inference_metadata)
+        for key in ["aboxValidationStatus", "aboxValidationErrorCount", "aboxValidationWarningCount", "aboxValidationIssues", "validationIssueSummary"]:
+            if key in inference_status:
+                inference_metadata[key] = inference_status.get(key)
         inference_metadata.update({
             "missing": True,
             "missingReasonCode": reason_code,
@@ -518,7 +543,8 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
             ),
             metadata={
                 "blockedInvestmentJudgment": True,
-                "missingInferenceBox": True,
+                "missingInferenceBox": reason_code == "missingInferenceBox",
+                "invalidOntologyProjection": reason_code == "invalidABox",
                 "missingInferenceReasonCode": reason_code,
                 "missingInferenceReason": reason,
                 "positionCount": len(positions),
@@ -549,6 +575,21 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
             "traceCount": int(number((inference or {}).get("traceCount")) or 0) if isinstance(inference, dict) else 0,
             "nativeRelationCount": int(number((inference or {}).get("nativeRelationCount")) or 0) if isinstance(inference, dict) else 0,
         }
+        validation = projection.get("aboxValidation") if isinstance(projection.get("aboxValidation"), dict) else {}
+        validation_error_count = int(number(validation.get("errorCount")) or 0)
+        if str(projection.get("status") or "").strip().lower() == "invalid-abox" or validation_error_count:
+            summary = ontology_validation_issue_summary(projection)
+            common.update({
+                "aboxValidationStatus": str(validation.get("status") or "invalid"),
+                "aboxValidationErrorCount": validation_error_count,
+                "aboxValidationWarningCount": int(number(validation.get("warningCount")) or 0),
+                "aboxValidationIssues": ontology_validation_issues_from_projection(projection)[:5],
+                "validationIssueSummary": summary,
+            })
+            reason = "ABox 검증 실패"
+            if summary:
+                reason += ": " + summary
+            return "invalidABox", reason, common
         if not inference:
             return "missingInferenceBox", "Neo4j InferenceBox 응답이 없습니다", common
         if status and status.lower() not in {"ok", "partial"}:

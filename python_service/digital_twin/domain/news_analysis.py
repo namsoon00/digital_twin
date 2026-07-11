@@ -131,7 +131,18 @@ EVENT_TYPE_KEYWORDS = {
     "price_commentary": ["주가", "shares", "stock", "목표주가", "급등", "급락"],
 }
 
-LOW_RELIABILITY_SOURCE_TERMS = ["blog", "블로그", "cafe", "reddit", "rumor"]
+SOCIAL_SOURCE_TERMS = [
+    "facebook",
+    "facebook.com",
+    "x.com",
+    "twitter",
+    "threads",
+    "instagram",
+    "linkedin",
+    "youtube",
+    "tiktok",
+]
+LOW_RELIABILITY_SOURCE_TERMS = ["blog", "블로그", "cafe", "reddit", "rumor", *SOCIAL_SOURCE_TERMS]
 HIGH_RELIABILITY_SOURCE_TERMS = ["dart", "sec", "edgar", "reuters", "bloomberg", "연합", "yonhap", "cnbc", "wsj", "marketwatch"]
 
 EVENT_TYPE_LABELS = {
@@ -770,6 +781,8 @@ def source_reliability_score(source: object, provider: object = "") -> float:
     source_text = _lower_text(source)
     provider_text = _lower_text(provider)
     text = source_text + " " + provider_text
+    if source_is_social_feed(source, provider):
+        return 0.25
     if any(token in source_text for token in LOW_RELIABILITY_SOURCE_TERMS):
         return 0.42
     if any(token in source_text for token in HIGH_RELIABILITY_SOURCE_TERMS):
@@ -781,6 +794,11 @@ def source_reliability_score(source: object, provider: object = "") -> float:
     if any(token in text for token in ["yahoo finance", "investing"]):
         return 0.68
     return 0.58
+
+
+def source_is_social_feed(source: object, provider: object = "") -> bool:
+    text = _lower_text(str(source or "") + " " + str(provider or ""))
+    return any(token in text for token in SOCIAL_SOURCE_TERMS)
 
 
 def keyword_polarity(text: object) -> Tuple[str, float]:
@@ -883,6 +901,7 @@ def analyze_news_item(
     event_type = classify_news_event_type(title_text, summary_text)
     polarity, impact = keyword_polarity(combined)
     platform_only = platform_source_only_noise(target, title_text, summary_text, source, [*direct_title, *direct_body], topic_hits, event_type)
+    social_feed = source_is_social_feed(source, provider)
 
     score = 24.0
     scope = "noise"
@@ -911,6 +930,8 @@ def analyze_news_item(
     if scope != "noise":
         score += max(-8.0, min(8.0, (reliability - 0.6) * 25.0))
     score = clamp(score, 0.0, 100.0)
+    if social_feed and scope == "direct":
+        score = min(score, 62.0)
     materiality = clamp(
         score * 0.45
         + reliability * 30

@@ -4401,6 +4401,67 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(inference_event.metadata["ontologyInference"]["missing"])
         self.assertFalse(any(event.rule == "investmentInsight" for event in events))
 
+    def test_events_explain_invalid_abox_validation_failure(self):
+        position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "marketValue": 864000,
+            "quantity": 10,
+            "sellableQuantity": 10,
+            "averagePrice": 80000,
+            "currentPrice": 86400,
+            "profitLossRate": 8,
+            "sector": "반도체",
+        })
+        portfolio = portfolio_summary([position])
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "토스 계좌 동기화",
+            utc_now_iso(),
+            portfolio,
+            [position],
+            decisions_for_positions([position], portfolio),
+            metadata={
+                "ontology": {
+                    "neo4j": {
+                        "saved": False,
+                        "status": "invalid-abox",
+                        "reason": "ABox validation failed before Neo4j persistence.",
+                        "aboxValidation": {
+                            "status": "invalid",
+                            "errorCount": 1,
+                            "warningCount": 0,
+                            "issues": [{
+                                "code": "unknown_relation_type",
+                                "message": "Unknown TBox relation type: INDICATES_WEAKENING",
+                                "severity": "error",
+                                "subject": "trend-transition:005930 -INDICATES_WEAKENING-> trend-phase:005930",
+                            }],
+                        },
+                    },
+                },
+            },
+        )
+
+        events = RealtimeMonitor().events_for_snapshot(snapshot, {})
+        inference_event = next(event for event in events if event.rule == "ontologyInferenceMissing")
+        line_text = "\n".join(inference_event.lines)
+        inference = inference_event.metadata["ontologyInference"]
+
+        self.assertEqual("invalidABox", inference_event.metadata["missingInferenceReasonCode"])
+        self.assertTrue(inference_event.metadata["invalidOntologyProjection"])
+        self.assertFalse(inference_event.metadata["missingInferenceBox"])
+        self.assertIn("ABox 검증 실패", inference_event.metadata["missingInferenceReason"])
+        self.assertIn("INDICATES_WEAKENING", line_text)
+        self.assertEqual(1, inference["aboxValidationErrorCount"])
+        self.assertEqual("unknown_relation_type", inference["aboxValidationIssues"][0]["code"])
+        self.assertFalse(any(event.rule == "investmentInsight" for event in events))
+
     def test_events_skip_operational_alert_when_inferencebox_matches_holding(self):
         position = normalize_position({
             "symbol": "005930",
@@ -5732,6 +5793,30 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("HBM 수요 회복", evidence[0].summary)
         self.assertEqual("호재", evidence[0].raw_payload["stockImpactLabel"])
         self.assertIn("주가 영향", evidence[0].raw_payload["stockImpactReasonKo"])
+
+    def test_news_source_gateway_does_not_treat_social_feed_as_article_body(self):
+        def fake_text(_url, headers=None):
+            raise AssertionError("social source should not fetch or trust article body")
+
+        gateway = NewsSourceGateway({
+            "newsCollectionMinRelevanceScore": "35",
+        }, fetch_text=fake_text)
+
+        evidence = gateway.news_evidence_from_article(
+            NewsCollectionTarget("AAPL", "Apple", "NASDAQ", "USD", "AI"),
+            "Google News US",
+            "facebook.com",
+            "Breaking News: Apple sued OpenAI, accusing the company of stealing secrets",
+            "",
+            "https://facebook.com/example-post",
+            "2026-07-11T00:00:00Z",
+        )
+
+        self.assertIsNotNone(evidence)
+        self.assertEqual("source-blocked", evidence.raw_payload["articleReadStatus"])
+        self.assertEqual("source-quality-gate", evidence.raw_payload["articleAnalysisSource"])
+        self.assertEqual("", evidence.raw_payload["articleTextPreview"])
+        self.assertLessEqual(evidence.raw_payload["sourceReliability"], 0.3)
 
     def test_news_collection_runner_stores_domestic_and_overseas_news(self):
         path = test_store_seed(self.temp.name)

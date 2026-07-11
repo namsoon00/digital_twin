@@ -118,6 +118,29 @@ class NewsDigestEnqueuerTests(unittest.TestCase):
 
         self.assertEqual([], queue.jobs)
 
+    def test_ignores_social_source_blocked_article_by_default(self):
+        queue = MemoryNotificationQueue()
+        social = self.evidence()
+        social.source = "facebook.com"
+        social.raw_payload.update({
+            "sourceReliability": 0.25,
+            "articleReadStatus": "source-blocked",
+            "articleAnalysisSource": "source-quality-gate",
+        })
+        event = DomainEvent(
+            name=RESEARCH_EVIDENCE_COLLECTED,
+            aggregate_id="news:AAPL",
+            payload={
+                "materialChangedItems": [social.to_dict()],
+                "materialChangedSymbols": ["AAPL"],
+                "materialChangedCount": 1,
+            },
+        )
+
+        self.enqueuer(queue).handle(event)
+
+        self.assertEqual([], queue.jobs)
+
     def test_ignores_low_quality_news_by_default(self):
         queue = MemoryNotificationQueue()
         weak = self.evidence()

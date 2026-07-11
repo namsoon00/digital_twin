@@ -188,6 +188,8 @@ def research_evidence_collected_event(payload: Dict[str, object]) -> DomainEvent
             "changedSymbols": list(payload.get("changedSymbols") or symbols)[:100],
             "materialChangedCount": int(payload.get("materialChangedCount") or len(material_symbols) or 0),
             "materialChangedSymbols": material_symbols[:100],
+            "changedItems": list(payload.get("changedItems") or [])[:100],
+            "materialChangedItems": list(payload.get("materialChangedItems") or [])[:100],
             "materialityAssessments": list(payload.get("materialityAssessments") or [])[:100],
             "providers": list(payload.get("providers") or [])[:20],
         },

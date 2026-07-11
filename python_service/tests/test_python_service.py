@@ -8886,6 +8886,7 @@ class PythonServiceTests(unittest.TestCase):
 
         self.assertEqual([
             "investmentInsight",
+            "newsDigest",
             "ontologyInferenceMissing",
             "monitorConnection",
             "externalDataConnection",

@@ -5,6 +5,7 @@ IMPORTANT_NOTIFICATION_RULES = {
     "modelBuy",
     "modelSell",
     "watchlistBuyCandidate",
+    "newsDigest",
     "holdingTiming",
     "monitorPositionChange",
     "monitorPnlChange",
@@ -22,6 +23,7 @@ ACTIONABLE_NOTIFICATION_RULES = {
     "modelBuy",
     "modelSell",
     "watchlistBuyCandidate",
+    "newsDigest",
     "holdingTiming",
     "ontologyInferenceMissing",
     "monitorDecisionChange",
@@ -48,6 +50,9 @@ CONFIRMING_DATA_LABELS = {
     "크립토 변동",
     "크립토 가격",
     "크립토 거래액",
+    "뉴스",
+    "기사",
+    "출처",
 }
 
 DEFAULT_SIGNAL_FALLBACK_TERMS = {

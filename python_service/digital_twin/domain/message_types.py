@@ -9,6 +9,7 @@ WATCHLIST_QUOTE_PENDING = "watchlistQuotePending"
 WATCHLIST_ONTOLOGY_SIGNAL = "watchlistOntologySignal"
 HOLDING_TIMING = "holdingTiming"
 INVESTMENT_INSIGHT = "investmentInsight"
+NEWS_DIGEST = "newsDigest"
 ONTOLOGY_INFERENCE_MISSING = "ontologyInferenceMissing"
 MONITOR_HEARTBEAT = "monitorHeartbeat"
 MONITOR_CONNECTION = "monitorConnection"
@@ -30,6 +31,7 @@ DEFAULT_MESSAGE = "default"
 
 MONITORING_MESSAGE_TYPES = [
     INVESTMENT_INSIGHT,
+    NEWS_DIGEST,
     MODEL_BUY,
     MODEL_SELL,
     WATCHLIST_BUY_CANDIDATE,
@@ -62,6 +64,7 @@ SYSTEM_MESSAGE_TYPES = {
 
 USER_MANAGED_NOTIFICATION_TYPES = [
     INVESTMENT_INSIGHT,
+    NEWS_DIGEST,
     ONTOLOGY_INFERENCE_MISSING,
     MONITOR_CONNECTION,
     EXTERNAL_DATA_CONNECTION,
@@ -83,6 +86,7 @@ MIN_CADENCE_MINUTES = 10
 
 DEFAULT_ALERT_RULES = {
     INVESTMENT_INSIGHT: 1,
+    NEWS_DIGEST: 1,
     MODEL_BUY: 1,
     MODEL_SELL: 1,
     WATCHLIST_BUY_CANDIDATE: 1,
@@ -188,6 +192,7 @@ DEFAULT_RELATION_RULE_THRESHOLDS = {
 
 DEFAULT_CADENCE = {
     INVESTMENT_INSIGHT: 10,
+    NEWS_DIGEST: 30,
     MODEL_BUY: 10,
     MODEL_SELL: 10,
     WATCHLIST_BUY_CANDIDATE: 10,
@@ -213,6 +218,7 @@ DEFAULT_CADENCE = {
 
 MESSAGE_TYPE_LABELS = {
     INVESTMENT_INSIGHT: "투자 인사이트",
+    NEWS_DIGEST: "뉴스/피드 새 정보",
     MODEL_BUY: "모델 매수",
     MODEL_SELL: "모델 매도",
     WATCHLIST_BUY_CANDIDATE: "관심종목 매수 후보",
@@ -239,6 +245,7 @@ MESSAGE_TYPE_LABELS = {
 MESSAGE_TYPE_EMOJIS = {
     DEFAULT_MESSAGE: "🔔",
     INVESTMENT_INSIGHT: "🧭",
+    NEWS_DIGEST: "🗞️",
     MODEL_BUY: "🟢",
     MODEL_SELL: "🔴",
     WATCHLIST_BUY_CANDIDATE: "👀",
@@ -267,6 +274,7 @@ MESSAGE_TYPE_EMOJIS = {
 
 TRIGGER_SUMMARIES = {
     INVESTMENT_INSIGHT: "온톨로지 관계 그래프에서 의미 있는 투자 인사이트가 생성될 때 보냅니다.",
+    NEWS_DIGEST: "보유/관심 종목에 신선도·관련성·중요도 기준을 통과한 새 뉴스나 피드 근거가 들어올 때 보냅니다.",
     MODEL_BUY: "내가 정한 매수 점수가 기준값을 넘을 때 보냅니다.",
     MODEL_SELL: "내가 정한 매도 점수가 기준값을 넘을 때 보냅니다.",
     WATCHLIST_BUY_CANDIDATE: "관심 종목의 매수 점수가 기준값을 넘을 때 보냅니다.",

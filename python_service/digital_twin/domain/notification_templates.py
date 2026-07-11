@@ -130,6 +130,10 @@ DEFAULT_NOTIFICATION_TEMPLATES = {
         "template": DEFAULT_TEMPLATE,
         "description": "온톨로지 관계 인사이트 기반 투자 알림",
     },
+    "newsDigest": {
+        "template": BODY_TEMPLATE,
+        "description": "뉴스/피드 새 정보 알림",
+    },
     "modelBuy": {
         "template": DEFAULT_TEMPLATE,
         "description": "모델 매수 조건 알림",

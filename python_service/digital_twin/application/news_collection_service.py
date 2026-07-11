@@ -153,6 +153,8 @@ class NewsCollectionRunner:
             if assessment.get("passed")
         ]
         material_symbols = sorted(set(str(item.symbol or "").upper().strip() for item in material_items if str(item.symbol or "").strip()))
+        changed_item_payloads = [item.to_dict() for item in changed_items[:50]]
+        material_item_payloads = [item.to_dict() for item in material_items[:50]]
         result = {
             "status": "ok",
             "targetCount": len(targets),
@@ -162,6 +164,8 @@ class NewsCollectionRunner:
             "changedSymbols": changed_symbols,
             "materialChangedCount": len(material_items),
             "materialChangedSymbols": material_symbols,
+            "changedItems": changed_item_payloads,
+            "materialChangedItems": material_item_payloads,
             "materialityAssessments": materiality_assessments,
             "symbols": [target.symbol for target in targets],
             "providers": self.gateway.providers(),

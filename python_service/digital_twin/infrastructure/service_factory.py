@@ -6,6 +6,7 @@ from ..application.flow_lens_service import FlowLensService
 from ..application.market_data_collection_service import MarketDataCollectionRunner
 from ..application.model_review_service import ModelReviewRunner
 from ..application.news_collection_service import NewsCollectionRunner
+from ..application.news_digest_service import NewsDigestEnqueuer
 from ..application.monitoring_service import MonitorRunner
 from ..application.notification_service import (
     CompositeNotificationContextEnricher,
@@ -19,6 +20,7 @@ from ..application.ontology_reasoning_service import OntologyReasoningRunner
 from ..application.ontology_rule_candidate_service import RuleChangeCandidateProposalService
 from ..application.symbol_universe_service import SymbolUniverseService
 from ..domain.accounts import AccountConfig
+from ..domain.events import RESEARCH_EVIDENCE_COLLECTED
 from ..domain.market_data import number
 from ..domain.monitoring import RealtimeMonitor
 from .event_bus import EventBus, default_event_bus
@@ -42,6 +44,22 @@ from .toss_snapshots import TossProvider, build_snapshot, demo_positions
 def monitor_event_bus() -> EventBus:
     bus = default_event_bus()
     bus.subscribe_all(ModelReviewEnqueuer(stores.model_review_job_store()).handle)
+    return bus
+
+
+def news_event_bus(settings=None) -> EventBus:
+    configured_settings = settings or runtime_settings()
+    bus = default_event_bus()
+    bus.subscribe(
+        RESEARCH_EVIDENCE_COLLECTED,
+        NewsDigestEnqueuer(
+            account_repository=stores.account_registry(configured_settings),
+            monitor_store=stores.monitor_store(configured_settings),
+            queue=stores.notification_job_store(configured_settings),
+            settings=configured_settings,
+            max_items=int(number(configured_settings.get("newsDigestMaxItems")) or 3),
+        ).handle,
+    )
     return bus
 
 
@@ -147,7 +165,7 @@ def build_news_collection_runner(settings=None, event_publisher=None) -> NewsCol
         evidence_store=stores.research_evidence_store(configured_settings),
         gateway=NewsSourceGateway(configured_settings),
         settings=configured_settings,
-        event_publisher=event_publisher or default_event_bus(),
+        event_publisher=event_publisher or news_event_bus(configured_settings),
     )
 
 

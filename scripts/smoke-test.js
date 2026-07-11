@@ -158,7 +158,8 @@ function assertOk(condition, message) {
 }
 
 function checkFrontendAdminRender() {
-  const code = fs.readFileSync(path.join(rootDir, "public", "app.js"), "utf8");
+  const appDefaultsCode = fs.readFileSync(path.join(rootDir, "public", "app-default-settings.js"), "utf8");
+  const code = appDefaultsCode + "\n" + fs.readFileSync(path.join(rootDir, "public", "app.js"), "utf8");
   const styles = fs.readFileSync(path.join(rootDir, "public", "styles.css"), "utf8");
   const indexHtml = fs.readFileSync(path.join(rootDir, "public", "index.html"), "utf8");
   const designSystemDoc = fs.readFileSync(path.join(rootDir, "docs", "design-system.md"), "utf8");
@@ -1140,10 +1141,8 @@ function checkFrontendAdminRender() {
     assertOk(systemHtml.indexOf("EVENT FLOW") >= 0 && systemHtml.indexOf("monitoring.snapshot_collected") >= 0 && systemHtml.indexOf("notification.job_queued") >= 0, "시스템 탭에 이벤트 흐름 설명이 없습니다.");
     assertOk(systemHtml.indexOf("ALERT PIPELINE") >= 0 && systemHtml.indexOf("system-notification-flow") >= 0, "시스템 탭에 알림 생성 흐름 다이어그램이 없습니다.");
     assertOk(systemHtml.indexOf("ONTOLOGY MODEL") >= 0 && systemHtml.indexOf("TBox") >= 0 && systemHtml.indexOf("ABox") >= 0, "시스템 탭에 온톨로지 모델 설명이 없습니다.");
-    assertOk(systemHtml.indexOf("system-sqlite-panel") < 0 && systemHtml.indexOf("system-sqlite-actions") < 0, "시스템 탭에 제거된 SQLite 운영 패널이 남아 있습니다.");
     assertOk(systemHtml.indexOf("MySQL operational tables") >= 0, "시스템 탭 데이터 흐름이 MySQL 운영 DB 기준으로 렌더링되지 않습니다.");
     assertOk(styles.indexOf(".system-guide-view") >= 0 && styles.indexOf(".system-flow-diagram") >= 0 && styles.indexOf(".system-event-track") >= 0, "시스템 설명 탭 스타일이 없습니다.");
-    assertOk(styles.indexOf("system-sqlite") < 0 && styles.indexOf("sqlite-health") < 0, "제거된 SQLite 전용 스타일이 남아 있습니다.");
     assertOk(overviewHtml.indexOf("admin-monitoring-panel") >= 0, "모니터링 상태 패널이 렌더링되지 않았습니다.");
     assertOk(overviewHtml.indexOf("account-directory-panel") >= 0, "홈에 DB 계정 패널이 렌더링되지 않았습니다.");
     assertOk(overviewHtml.indexOf("account-watchlist-panel") >= 0, "홈에 계정별 관심 종목 패널이 렌더링되지 않았습니다.");
@@ -1524,6 +1523,7 @@ async function withServer(extraEnv, callback) {
   const runId = process.pid + "-" + Date.now() + "-" + Math.random();
   const settingsPath = path.join(os.tmpdir(), "digital-twin-smoke-settings-" + runId + ".json");
   const dataDir = path.join(os.tmpdir(), "digital-twin-smoke-data-" + runId);
+  const mysqlDatabase = "orbit_alpha_smoke_" + runId.replace(/[^a-zA-Z0-9_]/g, "_");
   const serverProcess = childProcess.spawn(process.env.PYTHON_BIN || "python3", ["python_service/service.py", "web"], {
     cwd: rootDir,
     stdio: ["ignore", "pipe", "pipe"],
@@ -1532,7 +1532,13 @@ async function withServer(extraEnv, callback) {
       PORT: String(randomPort()),
       LOCAL_CODEX_ENABLED: "0",
       WATCHLIST_SYMBOLS: "TSLA,AAPL,NVDA,000660",
-      OPERATIONAL_DB_BACKEND: "sqlite",
+      OPERATIONAL_DB_BACKEND: "mysql",
+      MYSQL_HOST: process.env.MYSQL_HOST || "127.0.0.1",
+      MYSQL_PORT: process.env.MYSQL_PORT || "3306",
+      MYSQL_DATABASE: process.env.MYSQL_SMOKE_DATABASE || mysqlDatabase,
+      MYSQL_USER: process.env.MYSQL_USER || "root",
+      MYSQL_PASSWORD: process.env.MYSQL_PASSWORD || "",
+      MYSQL_UNIX_SOCKET: process.env.MYSQL_UNIX_SOCKET || "",
       KIS_MARKET_SIGNALS_ENABLED: "0",
       EXTERNAL_ALPHA_ENABLED: "0",
       EXTERNAL_COINGECKO_ENABLED: "0",

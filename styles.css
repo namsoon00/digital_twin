@@ -13654,3 +13654,54 @@ html[data-theme="dark"] .ontology-cytoscape {
     grid-template-columns: 1fr !important;
   }
 }
+
+/* Dense summary card alignment audit */
+:where(
+  .settings-api-grid,
+  .admin-stat-grid,
+  .symbol-summary-grid,
+  .account-manager-summary,
+  .account-directory-summary,
+  .monitoring-instrument-summary,
+  .settings-view .settings-grid
+) {
+  align-items: start;
+}
+
+:where(
+  .settings-api-row,
+  .admin-stat-grid span,
+  .symbol-summary-metric,
+  .account-manager-summary span,
+  .account-directory-summary span,
+  .monitoring-instrument-summary > div
+) {
+  align-self: start;
+  min-height: 0;
+}
+
+.settings-api-row {
+  align-content: start;
+  gap: var(--ds-space-3);
+  padding: var(--ds-row-pad-y) var(--ds-row-pad-x);
+}
+
+.settings-api-row .chip-row {
+  align-items: flex-start;
+  justify-content: flex-start;
+  margin-top: var(--ds-space-2);
+}
+
+.settings-api-row .chip {
+  max-width: 100%;
+  min-height: 30px;
+  padding: 5px 9px;
+  line-height: 1.25;
+  white-space: normal;
+  word-break: keep-all;
+}
+
+.settings-api-row .chip em {
+  white-space: normal;
+  word-break: keep-all;
+}

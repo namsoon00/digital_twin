@@ -14,7 +14,9 @@ from .ontology_relation_rules import (
 
 
 SKIP_AI_OPINION_TYPES = {"workHandoff", "modelReview"}
-AI_OPINION_ENGINE_VERSION = "notification-ai-opinion-v2"
+AI_OPINION_ENGINE_VERSION = "notification-ai-opinion-v3"
+AI_OPINION_MAX_LINES = 5
+AI_OPINION_MAX_CHARS = 135
 SENSITIVE_PROMPT_KEY_TERMS = ("secret", "token", "password", "clientid", "client_id", "appsecret", "app_key", "apikey", "api_key", "accountseq", "account_seq", "chatid", "chat_id")
 KST = timezone(timedelta(hours=9))
 NEWS_DATE_KEYS = (
@@ -29,6 +31,32 @@ NEWS_DATE_KEYS = (
     "time_published",
     "timePublished",
 )
+NOISY_AI_LABELS = {"가격 위치", "추세 동역학", "투자자", "분석출처"}
+REPEATED_VALUE_LABELS = {"이유", "상황", "해석", "수급·추세", "근거", "현재가", "가격", "추세", "수급", "상태"}
+AI_LABEL_PRIORITY = {
+    "판단": 10,
+    "상황": 20,
+    "해석": 30,
+    "이유": 40,
+    "투자 의견 근거": 45,
+    "반대 근거": 50,
+    "피할 일": 51,
+    "근거": 52,
+    "수급·추세": 60,
+    "뉴스·공시": 65,
+    "뉴스": 66,
+    "공시": 67,
+    "공시 의미": 68,
+    "공시 영향": 69,
+    "주의": 70,
+    "다음 확인": 75,
+    "의견": 80,
+    "부족 데이터": 95,
+}
+LOW_QUALITY_RELATION_SCOPES = {"noise", "unrelated", "irrelevant"}
+MISLEADING_KEYWORDS_BY_SYMBOL = {
+    "PLTR": {"전기차", "ev", "electric vehicle", "battery", "배터리"},
+}
 
 
 def context_raw_lines(context: Dict[str, object]) -> List[str]:
@@ -75,6 +103,15 @@ def line_value(lines: List[str], label: str) -> str:
         if line.startswith(prefix + " "):
             return line[len(prefix):].strip()
     return ""
+
+
+def split_label_value_text(line: object):
+    label, _, value = str(line or "").partition(":")
+    return label.strip(), value.strip()
+
+
+def normalized_text(value: object) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip()).lower()
 
 
 def first_line_with(lines: List[str], *labels: str) -> str:
@@ -283,6 +320,83 @@ def news_item_number(item: Dict[str, object], *keys: str) -> float:
     return number * 100 if 0 < number <= 1 else number
 
 
+def target_terms_from_context(context: Dict[str, object]) -> List[str]:
+    values = [
+        context.get("symbol") if isinstance(context, dict) else "",
+        context.get("rawSymbol") if isinstance(context, dict) else "",
+        context.get("target") if isinstance(context, dict) else "",
+        context.get("displayTarget") if isinstance(context, dict) else "",
+        context.get("title") if isinstance(context, dict) else "",
+    ]
+    terms: List[str] = []
+    for value in values:
+        for token in re.split(r"[/|,()\s]+", str(value or "")):
+            text = token.strip()
+            if len(text) >= 2 and text.lower() not in {"the", "and", "주식", "알림"} and text not in terms:
+                terms.append(text)
+    return terms[:8]
+
+
+def news_item_text(item: Dict[str, object]) -> str:
+    values = [
+        item.get("title"),
+        item.get("summary"),
+        item.get("articleSummaryKo"),
+        item.get("domain"),
+        item.get("provider"),
+        item.get("source"),
+        news_item_value(item, "title"),
+        news_item_value(item, "summary"),
+        news_item_value(item, "articleSummaryKo"),
+        news_item_value(item, "coreKeyword", "keyword", "keywords", "핵심키워드"),
+    ]
+    return " ".join(str(value or "") for value in values if str(value or "").strip())
+
+
+def news_summary_candidate(item: Dict[str, object]) -> str:
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    summary = str(
+        item.get("articleSummaryKo")
+        or payload.get("articleSummaryKo")
+        or item.get("summary")
+        or item.get("title")
+        or ""
+    ).strip()
+    noisy_markers = ["관련 뉴스입니다", "뉴스 유형은", "관련성 분류는", "핵심 키워드는"]
+    if any(marker in summary for marker in noisy_markers):
+        return str(item.get("title") or summary).strip()
+    return summary
+
+
+def news_item_quality_reason(item: Dict[str, object], context: Dict[str, object] = None) -> str:
+    context = context or {}
+    scope = str(news_item_value(item, "relationScope", "relation_scope") or "").strip().lower()
+    if scope in LOW_QUALITY_RELATION_SCOPES:
+        return "relationScope=" + scope
+    relevance = news_item_number(item, "relevanceScore", "relevance_score")
+    reliability = news_item_number(item, "sourceReliability", "confidence")
+    materiality = news_item_number(item, "materialityScore", "impactScore", "impact_score")
+    if relevance and relevance < 35:
+        return "low relevance"
+    if reliability and reliability < 35:
+        return "low reliability"
+    target_terms = target_terms_from_context(context)
+    text = normalized_text(news_item_text(item))
+    mentions_target = any(normalized_text(term) in text for term in target_terms if len(str(term)) >= 2)
+    if target_terms and not mentions_target and (relevance < 55 or materiality < 45):
+        return "target not mentioned"
+    symbol = str((context or {}).get("symbol") or (target_terms[0] if target_terms else "")).upper()
+    misleading = MISLEADING_KEYWORDS_BY_SYMBOL.get(symbol, set())
+    keyword_text = normalized_text(news_item_value(item, "coreKeyword", "keyword", "keywords", "핵심키워드"))
+    if misleading and any(keyword in keyword_text for keyword in misleading):
+        return "misleading keyword"
+    return ""
+
+
+def news_item_is_usable(item: Dict[str, object], context: Dict[str, object] = None) -> bool:
+    return not news_item_quality_reason(item, context)
+
+
 def parse_news_datetime(value: object) -> Optional[datetime]:
     raw = str(value or "").strip()
     if not raw:
@@ -387,6 +501,8 @@ def rank_news_items(items: List[Dict[str, object]], context: Dict[str, object] =
     seen_clusters = set()
     for index, item in enumerate(items or []):
         if not isinstance(item, dict):
+            continue
+        if not news_item_is_usable(item, context or {}):
             continue
         cluster = news_cluster_key(item)
         if cluster and cluster in seen_clusters:
@@ -599,12 +715,7 @@ def compact_news_summary_text(context: Dict[str, object]) -> str:
         payload = first.get("payload") if isinstance(first.get("payload"), dict) else {}
         source = str(first.get("domain") or first.get("provider") or "뉴스").strip()
         impact = str(first.get("stockImpactLabel") or payload.get("stockImpactLabel") or "").strip()
-        summary = (
-            first.get("articleSummaryKo")
-            or payload.get("articleSummaryKo")
-            or first.get("summary")
-            or first.get("title")
-        )
+        summary = news_summary_candidate(first)
         prefix = source + ((" " + impact) if impact and impact not in {"중립", "neutral", "Neutral"} else "")
         suffix = " 외 " + str(len(news_items) - 1) + "건" if len(news_items) > 1 else ""
         return compact_text(prefix + ": " + compact_text(summary, 58) + suffix, 125)
@@ -708,7 +819,7 @@ def news_summary_text(context: Dict[str, object]) -> str:
         seen_date = str(item.get("seenDate") or item.get("seendate") or "").strip()
         suffix = (" · " + seen_date) if seen_date else ""
         payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
-        summary = item.get("articleSummaryKo") or payload.get("articleSummaryKo") or item.get("summary") or item.get("title")
+        summary = news_summary_candidate(item)
         impact = str(item.get("stockImpactLabel") or payload.get("stockImpactLabel") or "").strip()
         prefix = (impact + " · ") if impact else ""
         parts.append(domain + ": " + prefix + compact_text(summary, 110) + suffix)
@@ -717,7 +828,7 @@ def news_summary_text(context: Dict[str, object]) -> str:
         if kind == "news":
             payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
             source = str(item.get("source") or "뉴스").strip()
-            summary = item.get("articleSummaryKo") or payload.get("articleSummaryKo") or item.get("summary") or item.get("title")
+            summary = news_summary_candidate(item)
             impact = str(item.get("stockImpactLabel") or payload.get("stockImpactLabel") or "").strip()
             observed = str(item.get("publishedAt") or item.get("observedAt") or "").strip()
             suffix = (" · " + observed) if observed else ""
@@ -911,6 +1022,8 @@ def opinion_lines_for_type(message_type: str, context: Dict[str, object]) -> Lis
             "판단: " + user_facing_investment_text(stance, 80),
             "이유: " + reason_text,
         ]
+        if active_evidence:
+            result.append("근거: " + user_facing_investment_text(active_evidence, 110))
         counter_text = join_unique_segments(active_counter, plan_counter)
         if counter_text:
             result.append("반대 근거: " + user_facing_investment_text(counter_text, 110))
@@ -931,10 +1044,10 @@ def opinion_lines_for_type(message_type: str, context: Dict[str, object]) -> Lis
             result.append("피할 일: " + user_facing_investment_text(plan_blocked, 120))
         elif opinion_text:
             result.append("의견: " + user_facing_investment_text(opinion_text, 120))
-        result.append("다음 확인: " + user_facing_investment_text(
-            plan_next or active_next_check or next_check or "다음 조회에서도 같은 조건이 유지되는지 확인하세요.",
-            140,
-        ))
+        next_text = plan_next or active_next_check or next_check or "다음 조회에서도 같은 조건이 유지되는지 확인하세요."
+        if active_invalidation and "무효화 조건" not in next_text:
+            next_text += " / 무효화 조건: " + active_invalidation
+        result.append("다음 확인: " + user_facing_investment_text(next_text, 140))
         return result
     if message_type == "holdingTiming":
         evidence = active_rule_evidence(context, 5)
@@ -1109,6 +1222,125 @@ def opinion_lines_for_type(message_type: str, context: Dict[str, object]) -> Lis
     return result
 
 
+def raw_line_values(context: Dict[str, object]) -> set:
+    values = set()
+    for line in context_raw_lines(context or {}):
+        text = normalized_text(line)
+        if text:
+            values.add(text)
+        _, value = split_label_value_text(line)
+        if value:
+            values.add(normalized_text(value))
+    return values
+
+
+def compact_opinion_line(line: object) -> str:
+    label, value = split_label_value_text(line)
+    if not label:
+        return compact_text(line, AI_OPINION_MAX_CHARS)
+    if label in NOISY_AI_LABELS:
+        return ""
+    if label == "투자 의견 근거":
+        label = "이유"
+    if label == "뉴스·공시" and str(value or "").startswith("공시:"):
+        label = "공시"
+        value = value.split(":", 1)[1].strip()
+    value = user_facing_investment_text(value, AI_OPINION_MAX_CHARS - len(label) - 2)
+    if not value:
+        return ""
+    return label + ": " + value
+
+
+def line_priority(line: str, index: int) -> int:
+    label, _ = split_label_value_text(line)
+    return AI_LABEL_PRIORITY.get(label, 200) * 100 + index
+
+
+def remove_repeated_opinion_lines(lines: List[str], context: Dict[str, object]) -> List[str]:
+    raw_values = raw_line_values(context or {})
+    if not raw_values:
+        return lines
+    rich_context = has_rich_opinion_context(context or {})
+    rows: List[str] = []
+    for line in lines:
+        label, value = split_label_value_text(line)
+        normalized_value = normalized_text(value)
+        if label in REPEATED_VALUE_LABELS and normalized_value in raw_values and not (rich_context and label in {"이유", "상황", "해석", "근거"}):
+            continue
+        if normalized_text(line) in raw_values:
+            continue
+        rows.append(line)
+    return rows
+
+
+def apply_opinion_budget(lines: List[str]) -> List[str]:
+    unique: List[str] = []
+    for line in lines:
+        text = compact_opinion_line(line)
+        if text and text not in unique:
+            unique.append(text)
+    unique = merge_related_opinion_lines(unique)
+    if len(unique) <= AI_OPINION_MAX_LINES:
+        return unique
+    selected = sorted(enumerate(unique), key=lambda pair: line_priority(pair[1], pair[0]))[:AI_OPINION_MAX_LINES]
+    return [line for _, line in sorted(selected, key=lambda pair: pair[0])]
+
+
+def merge_related_opinion_lines(lines: List[str]) -> List[str]:
+    rows: List[str] = []
+    pending_disclosure_meaning = ""
+    for line in lines:
+        label, value = split_label_value_text(line)
+        if label == "공시 의미":
+            pending_disclosure_meaning = value
+            continue
+        if label == "공시 영향" and pending_disclosure_meaning:
+            merged = "공시 의미: " + compact_text(pending_disclosure_meaning + " / " + value, AI_OPINION_MAX_CHARS - 7)
+            rows.append(merged)
+            pending_disclosure_meaning = ""
+            continue
+        if pending_disclosure_meaning:
+            rows.append("공시 의미: " + pending_disclosure_meaning)
+            pending_disclosure_meaning = ""
+        rows.append(line)
+    if pending_disclosure_meaning:
+        rows.append("공시 의미: " + pending_disclosure_meaning)
+    return rows
+
+
+def has_actionable_opinion(lines: List[str]) -> bool:
+    actionable_labels = {"판단", "이유", "상황", "해석", "반대 근거", "주의", "뉴스", "뉴스·공시", "공시", "피할 일", "의견", "다음 확인", "부족 데이터"}
+    for line in lines:
+        label, value = split_label_value_text(line)
+        if label in actionable_labels and str(value or "").strip():
+            return True
+    return False
+
+
+def has_rich_opinion_context(context: Dict[str, object]) -> bool:
+    if active_investment_opinion_value(context) or execution_plan_value(context):
+        return True
+    if missing_data_labels(context) or disclosure_context(context):
+        return True
+    if selected_news_headline_items(context, 1) or selected_research_evidence_items(context, 1):
+        return True
+    return False
+
+
+def postprocess_opinion_lines(message_type: str, context: Dict[str, object], lines: List[str]) -> List[str]:
+    compacted = apply_opinion_budget(lines or [])
+    compacted = remove_repeated_opinion_lines(compacted, context or {})
+    compacted = apply_opinion_budget(compacted)
+    if not compacted or not has_actionable_opinion(compacted):
+        return []
+    labels = {split_label_value_text(line)[0] for line in compacted}
+    if message_type == "investmentInsight" and not has_rich_opinion_context(context or {}) and labels.issubset({"판단", "의견", "다음 확인"}):
+        return []
+    if len(compacted) <= 2 and not has_rich_opinion_context(context or {}):
+        return []
+    return compacted
+
+
 def build_notification_ai_opinion(
     context: Dict[str, object],
     settings: Optional[Dict[str, object]] = None,
@@ -1120,6 +1352,9 @@ def build_notification_ai_opinion(
     lines = opinion_lines_for_type(message_type, context or {})
     if missing_data_labels(context or {}) and not any(line.startswith("부족 데이터:") for line in lines):
         lines.append("부족 데이터: " + ", ".join(missing_data_labels(context or {})[:3]) + "는 결론 강도를 낮추는 요소입니다.")
+    lines = postprocess_opinion_lines(message_type, context or {}, lines)
+    if not lines:
+        return {}
     return {
         "engineVersion": AI_OPINION_ENGINE_VERSION,
         "messageType": message_type,

@@ -6918,6 +6918,109 @@ class PythonServiceTests(unittest.TestCase):
         self.assertNotIn("추세 동역학", text)
         self.assertNotIn("분석출처", text)
 
+    def test_ai_opinion_filters_misleading_news_keywords(self):
+        context = {
+            "messageType": "investmentInsight",
+            "symbol": "PLTR",
+            "target": "PLTR",
+            "rawLines": [
+                "인사이트 유형: 관계 변화",
+                "핵심 결론: PLTR에서 관심종목 관계 신호 관계가 새로 감지되었습니다.",
+                "수급: 거래량 15,815,798(0.4x)",
+                "추세: 20일선 $124.9보다 1.3% 높음, 60일선 $135.12보다 6.4% 낮음",
+            ],
+            "metadata": {
+                "ontologyRelationContext": {
+                    "facts": {
+                        "newsHeadlines": {
+                            "items": [
+                                {
+                                    "provider": "Generic EV Wire",
+                                    "title": "Electric vehicle battery makers rally",
+                                    "summary": "PLTR 관련 뉴스입니다. 핵심 키워드는 전기차입니다.",
+                                    "coreKeyword": "전기차",
+                                    "relevanceScore": 99,
+                                    "stockImpactLabel": "호재",
+                                },
+                                {
+                                    "provider": "Reuters",
+                                    "title": "PLTR data platform contract expands",
+                                    "summary": "PLTR 데이터 플랫폼 계약 관련 뉴스입니다.",
+                                    "relevanceScore": 91,
+                                    "stockImpactLabel": "중립",
+                                },
+                            ],
+                        },
+                    },
+                }
+            },
+        }
+
+        text = "\n".join(build_notification_ai_opinion(context)["lines"])
+
+        self.assertIn("Reuters", text)
+        self.assertIn("PLTR data platform contract expands", text)
+        self.assertNotIn("전기차", text)
+        self.assertNotIn("Generic EV Wire", text)
+
+    def test_ai_opinion_budget_applies_to_holding_timing(self):
+        context = {
+            "messageType": "holdingTiming",
+            "target": "NAVER / 035420",
+            "rawLines": [
+                "상태: 손실 축소 권장 (80점)",
+                "수익률: -3.4%",
+                "수급: 거래량 1,077,802(1.6x), 거래액 2112억 원, 체결강도 87.3",
+                "추세: 20일선 215,135원보다 8.3% 낮음, 60일선 217,132원보다 9.2% 낮음",
+                "권장 액션: 손절·분할축소 우선, 20일선 회복 전 추가매수 보류",
+            ],
+            "metadata": {
+                "ontologyRelationContext": {
+                    "facts": {
+                        "trendDynamics": {
+                            "state": "하락 가속",
+                            "dynamicRiskScore": 61.2,
+                        },
+                        "dartDisclosure": {
+                            "provider": "OpenDART",
+                            "reportName": "[기재정정]주식교환ㆍ이전결정",
+                            "receiptDate": "20260706",
+                        },
+                        "newsHeadlines": {
+                            "items": [{
+                                "title": "NAVER governance update",
+                                "domain": "example.test",
+                                "relevanceScore": 91,
+                            }],
+                        },
+                    },
+                    "missingData": [{"label": "투자자별 수급"}],
+                }
+            },
+        }
+
+        lines = build_notification_ai_opinion(context)["lines"]
+        text = "\n".join(lines)
+
+        self.assertLessEqual(len(lines), 5)
+        self.assertIn("상황:", text)
+        self.assertIn("뉴스·공시:", text)
+        self.assertIn("다음 확인:", text)
+        self.assertNotIn("추세 동역학", text)
+
+    def test_ai_opinion_hides_when_only_repeating_data(self):
+        context = {
+            "messageType": "investmentInsight",
+            "target": "PLTR",
+            "rawLines": ["현재가: $126.47"],
+            "ontologyInsight": {
+                "insightLabel": "온톨로지 인사이트",
+                "thesis": "현재가: $126.47",
+            },
+        }
+
+        self.assertEqual({}, build_notification_ai_opinion(context))
+
     def test_investment_insight_ai_opinion_interprets_self_stock_disposal_disclosure(self):
         context = {
             "messageType": "investmentInsight",

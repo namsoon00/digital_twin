@@ -5693,8 +5693,111 @@ h3 {
 .ontology-execution-surface,
 .ontology-operational-surface,
 .ontology-insight-surface,
-.ontology-data-quality-surface {
+.ontology-data-quality-surface,
+.investment-rule-relation-text-panel {
   grid-column: 1 / -1;
+}
+
+.investment-rule-relation-text-panel {
+  background: color-mix(in srgb, var(--panel-soft) 82%, var(--input));
+}
+
+.investment-relation-text-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  min-width: 0;
+}
+
+.investment-relation-text-column {
+  display: grid;
+  align-content: start;
+  gap: 9px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--input);
+}
+
+.investment-relation-text-head {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.investment-relation-text-head strong,
+.investment-relation-text-head span,
+.investment-relation-text-row strong,
+.investment-relation-text-row span,
+.investment-relation-text-row em,
+.investment-relation-text-row b {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.investment-relation-text-head strong {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 950;
+}
+
+.investment-relation-text-head span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 820;
+  line-height: 1.35;
+}
+
+.investment-relation-text-list {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.investment-relation-text-row {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--blue);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel) 78%, transparent);
+}
+
+.investment-relation-text-row.rule {
+  border-left-color: var(--amber);
+}
+
+.investment-relation-text-row.relation {
+  border-left-color: var(--green);
+}
+
+.investment-relation-text-row.inference {
+  border-left-color: var(--violet);
+}
+
+.investment-relation-text-row strong {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 950;
+  line-height: 1.3;
+}
+
+.investment-relation-text-row span,
+.investment-relation-text-row em,
+.investment-relation-text-row b {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.investment-relation-text-row b {
+  color: var(--blue);
+  font-weight: 950;
 }
 
 .ontology-surface-head {
@@ -7694,11 +7797,11 @@ h3 {
 }
 
 .feed-view .feed-settings-panel {
-  grid-column: span 5;
+  grid-column: 1 / -1;
 }
 
 .feed-view .feed-quality-panel {
-  grid-column: span 7;
+  grid-column: span 5;
 }
 
 .feed-view .feed-channel-panel {
@@ -7711,6 +7814,40 @@ h3 {
 
 .feed-settings-grid {
   grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+}
+
+.feed-settings-body {
+  display: grid;
+  gap: var(--ds-section-gap);
+}
+
+.feed-settings-summary {
+  padding: var(--ds-panel-pad-y) var(--ds-panel-pad-x) 0;
+}
+
+.feed-settings-sections {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: var(--ds-section-gap);
+  min-width: 0;
+  padding: 0 var(--ds-panel-pad-x);
+}
+
+.feed-settings-sections .settings-fieldset {
+  grid-column: span 6;
+  min-width: 0;
+}
+
+.feed-settings-sections .settings-fieldset.feed-wide {
+  grid-column: 1 / -1;
+}
+
+.feed-settings-sections .settings-fieldset .settings-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.feed-settings-sections .settings-fieldset.feed-compact .settings-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .feed-quality-grid {
@@ -7843,6 +7980,20 @@ h3 {
   .feed-view .feed-channel-panel,
   .feed-view .feed-list-panel {
     grid-column: 1 / -1;
+  }
+
+  .feed-settings-sections {
+    grid-template-columns: 1fr;
+  }
+
+  .feed-settings-sections .settings-fieldset,
+  .feed-settings-sections .settings-fieldset.feed-wide {
+    grid-column: 1 / -1;
+  }
+
+  .feed-settings-sections .settings-fieldset .settings-grid,
+  .feed-settings-sections .settings-fieldset.feed-compact .settings-grid {
+    grid-template-columns: 1fr;
   }
 
   .research-evidence-filters,
@@ -10544,6 +10695,7 @@ h3 {
   .flow-lanes,
   .flow-row,
   .ontology-dashboard,
+  .investment-relation-text-grid,
   .lab-stats-grid,
   .lab-status-grid,
   .lab-model-grid,
@@ -13480,6 +13632,12 @@ html[data-theme="dark"] .ontology-cytoscape {
   min-width: 0;
   padding-bottom: var(--ds-space-4);
   border-bottom: 1px solid var(--ds-card-border);
+}
+
+.settings-fieldset-head > div {
+  display: grid;
+  gap: var(--ds-space-2);
+  min-width: 0;
 }
 
 .settings-fieldset-head strong {

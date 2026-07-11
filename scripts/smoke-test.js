@@ -999,7 +999,13 @@ function checkFrontendAdminRender() {
     }, { filename: "public/app.js" });
 
     return new Promise(function (resolve, reject) {
-      setTimeout(function () {
+      const deadline = Date.now() + 1200;
+
+      function finishWhenRendered() {
+        if (html.indexOf("loading-status-panel") >= 0 && Date.now() < deadline) {
+          setTimeout(finishWhenRendered, 20);
+          return;
+        }
         try {
           if (options.clickNewAccount) {
             if (!capturedActions.newAccount) {
@@ -1011,7 +1017,9 @@ function checkFrontendAdminRender() {
         } catch (error) {
           reject(error);
         }
-      }, 80);
+      }
+
+      setTimeout(finishWhenRendered, 20);
     });
   }
 
@@ -1134,6 +1142,9 @@ function checkFrontendAdminRender() {
     });
     assertOk(feedHtml.indexOf("feed-view") >= 0, "피드 탭이 데이터 관리 화면으로 렌더링되지 않습니다.");
     assertOk(feedHtml.indexOf("피드 수집 설정") >= 0 && feedHtml.indexOf("데이터 품질 상태") >= 0, "피드 설정과 데이터 품질 패널이 없습니다.");
+    assertOk(feedHtml.indexOf("feed-settings-sections") >= 0 && feedHtml.indexOf("뉴스 아카이브") >= 0 && feedHtml.indexOf("그래프 추론") >= 0 && feedHtml.indexOf("긴 매핑값") >= 0, "피드 수집 설정이 관리 섹션 구조로 렌더링되지 않습니다.");
+    assertOk(feedHtml.indexOf('data-setting="newsCollectionRateLimitSeconds"') >= 0 && feedHtml.indexOf('data-setting="externalSecCompanyCiks"') >= 0, "피드 탭에 세부 수집 설정 필드가 없습니다.");
+    assertOk(/\.feed-view \.feed-settings-panel\s*\{[\s\S]*grid-column: 1 \/ -1;/.test(styles) && styles.indexOf(".feed-settings-sections") >= 0, "PC 피드 설정 패널이 전폭 섹션 그리드로 정의되지 않았습니다.");
     assertOk(feedHtml.indexOf("저장 근거 조회·관리") >= 0 && feedHtml.indexOf('data-research-evidence-form') >= 0, "저장 근거 조회/관리 폼이 없습니다.");
     assertOk(systemHtml.indexOf("<h1>시스템</h1>") >= 0, "시스템 탭 제목이 상단에 렌더링되지 않았습니다.");
     assertOk(systemHtml.indexOf("system-guide-view") >= 0, "시스템 설명 탭이 전용 레이아웃으로 렌더링되지 않습니다.");
@@ -1276,8 +1287,8 @@ function checkFrontendAdminRender() {
     assertOk(modelingEvidenceHtml.indexOf("체결강도") >= 0 && modelingEvidenceHtml.indexOf("모델-알림 기준") >= 0, "근거 카드 섹션에 전략 데이터 점검 항목이 없습니다.");
     assertOk(modelingResultsHtml.indexOf("investment-evidence-panel") >= 0 && modelingResultsHtml.indexOf("model-preview-panel") >= 0, "종목 판단 섹션이 근거 카드와 모델 판단을 함께 보여주지 않습니다.");
     assertOk(modelingResultsHtml.indexOf("실제 데이터 예시") >= 0 && modelingResultsHtml.indexOf("쉬운 해석") >= 0, "종목 판단 섹션에 기존 모델 해석이 보조 근거로 유지되지 않았습니다.");
-    assertOk(modelingGraphHtml.indexOf("TBox·ABox 관계 그래프") >= 0 && modelingGraphHtml.indexOf("규칙 구조 관계 그래프") >= 0 && modelingGraphHtml.indexOf("현재 데이터 관계 그래프") >= 0, "관계 그래프 섹션이 통합 탭 내부에서 렌더링되지 않았습니다.");
-    assertOk(modelingGraphHtml.indexOf("ontology-cytoscape") >= 0 && modelingGraphHtml.indexOf("규칙 구조") >= 0 && modelingGraphHtml.indexOf("현재 데이터") >= 0, "관계 그래프 섹션에 Cytoscape 그래프와 보조 패널이 없습니다.");
+    assertOk(modelingGraphHtml.indexOf("TBox·ABox 관계 그래프") >= 0 && modelingGraphHtml.indexOf("핵심 규칙 구조 그래프") >= 0 && modelingGraphHtml.indexOf("핵심 데이터 관계 그래프") >= 0, "관계 그래프 섹션이 통합 탭 내부에서 렌더링되지 않았습니다.");
+    assertOk(modelingGraphHtml.indexOf("ontology-cytoscape") >= 0 && modelingGraphHtml.indexOf("규칙과 관계 해설") >= 0 && modelingGraphHtml.indexOf("RuleBox 규칙") >= 0, "관계 그래프 섹션에 Cytoscape 그래프와 텍스트 보조 패널이 없습니다.");
     assertOk(legacyOntologyGraphHtml.indexOf("managed-page managed-page-modeling") >= 0 && legacyOntologyGraphHtml.indexOf("TBox·ABox 관계 그래프") >= 0, "기존 관계 그래프 URL이 통합 탭 그래프 섹션으로 열리지 않습니다.");
     assertOk(/\.ontology-relationship-graphs\s*\{[\s\S]*grid-template-columns: 1fr;/.test(styles), "관계 그래프가 전폭 1열 구조로 정의되지 않았습니다.");
     assertOk(code.indexOf("ontologyEntityDisplayLabel") >= 0 && code.indexOf('"의견 " + displayName') >= 0, "현재 데이터 관계 그래프 노드가 회사명 표시명을 거치지 않습니다.");

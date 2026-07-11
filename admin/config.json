@@ -954,6 +954,26 @@
           "unit": "seconds"
         },
         {
+          "key": "ontologyGraphStoreMode",
+          "label": "온톨로지 그래프 저장소 모드",
+          "type": "select",
+          "default": "neo4j",
+          "options": [
+            {
+              "value": "neo4j",
+              "label": "Neo4j 유지"
+            },
+            {
+              "value": "dual",
+              "label": "Neo4j + TypeDB 미러"
+            },
+            {
+              "value": "typedb",
+              "label": "TypeDB 단독"
+            }
+          ]
+        },
+        {
           "key": "ontologyNeo4jEnabled",
           "label": "관계 분석 Neo4j 저장",
           "type": "toggle",
@@ -981,6 +1001,49 @@
           "label": "Neo4j Database",
           "type": "text",
           "default": "neo4j"
+        },
+        {
+          "key": "ontologyTypeDbEnabled",
+          "label": "관계 분석 TypeDB 저장",
+          "type": "toggle",
+          "default": "0"
+        },
+        {
+          "key": "typedbAddress",
+          "label": "TypeDB Address",
+          "type": "text",
+          "default": "127.0.0.1:1729"
+        },
+        {
+          "key": "typedbUser",
+          "label": "TypeDB User",
+          "type": "text",
+          "default": "admin"
+        },
+        {
+          "key": "typedbPassword",
+          "label": "TypeDB Password",
+          "type": "secret",
+          "masked": true
+        },
+        {
+          "key": "typedbDatabase",
+          "label": "TypeDB Database",
+          "type": "text",
+          "default": "orbit_alpha_ontology"
+        },
+        {
+          "key": "typedbTlsEnabled",
+          "label": "TypeDB TLS",
+          "type": "toggle",
+          "default": "0"
+        },
+        {
+          "key": "typedbTimeoutSeconds",
+          "label": "TypeDB Timeout",
+          "type": "number",
+          "default": "20",
+          "unit": "seconds"
         },
         {
           "key": "formulaWeights",

@@ -7184,6 +7184,7 @@
         '<span class="metric">' + escapeHtml(parts.aboxRelations.length) + '</span>',
         '</div>',
         '<div class="ontology-dashboard">',
+        renderInvestmentRuleRelationTextPanel(parts),
         renderOntologyRelationshipGraphs(parts.tbox, parts.abox, parts.aboxEntities, parts.aboxRelations, parts.evidence, parts.beliefs, parts.opinions, parts.entityLabels, parts.relationCounts),
         renderOntologyClassPanel(parts.tbox),
         renderOntologyAboxPanel(parts.abox, parts.aboxEntities, parts.evidence, parts.beliefs, parts.opinions),
@@ -7230,6 +7231,220 @@
       renderOntologyOperationalPanel(parts),
       renderStrategyProcessPanel(snapshot),
       renderModelOperatingGuidePanel(snapshot)
+    ].join("");
+  }
+
+  function ontologyRuleboxRules() {
+    var payload = state.ontologyRulebox || {};
+    return Array.isArray(payload.rules) ? payload.rules : [];
+  }
+
+  function ontologyRuleId(rule) {
+    return String(rule && (rule.rule_id || rule.ruleId || rule.id) || "");
+  }
+
+  function ontologyRuleConditions(rule) {
+    return Array.isArray(rule && rule.conditions) ? rule.conditions : [];
+  }
+
+  function ontologyRuleDerivations(rule) {
+    return Array.isArray(rule && rule.derivations) ? rule.derivations : [];
+  }
+
+  function ontologyRuleRelationTypes(rule) {
+    var types = [];
+    ontologyRuleConditions(rule).forEach(function (condition) {
+      var type = String(condition.relation_type || condition.relationType || "").toUpperCase();
+      if (type && types.indexOf(type) < 0) types.push(type);
+    });
+    ontologyRuleDerivations(rule).forEach(function (derivation) {
+      var type = String(derivation.relation_type || derivation.relationType || "").toUpperCase();
+      if (type && types.indexOf(type) < 0) types.push(type);
+    });
+    return types;
+  }
+
+  function ontologyReadableRuleRows(parts) {
+    var rules = ontologyRuleboxRules();
+    if (!rules.length) {
+      return ((((parts || {}).tbox || {}).reasoningRuleDefinitions || [])).slice(0, 8).map(function (item, index) {
+        return {
+          id: "tbox-rule-" + index,
+          label: item.text || item.label || "TBox reasoning rule",
+          detail: item.bounded_context || item.boundedContext || "reasoning-insight",
+          relationTypes: [],
+          conditionCount: 0,
+          derivationCount: 0
+        };
+      });
+    }
+    return rules.slice().sort(function (a, b) {
+      var priority = String(b.action_level || b.actionLevel || "").localeCompare(String(a.action_level || a.actionLevel || ""));
+      return priority || ontologyRuleId(a).localeCompare(ontologyRuleId(b));
+    }).slice(0, 10).map(function (rule) {
+      return {
+        id: ontologyRuleId(rule),
+        label: rule.label || ontologyRuleId(rule) || "RuleBox rule",
+        detail: [rule.action_group || rule.actionGroup, rule.action_level || rule.actionLevel, rule.prompt_hint || rule.promptHint].filter(Boolean).join(" · "),
+        relationTypes: ontologyRuleRelationTypes(rule),
+        conditionCount: ontologyRuleConditions(rule).length,
+        derivationCount: ontologyRuleDerivations(rule).length
+      };
+    });
+  }
+
+  function ontologyRelationPriority(type) {
+    var order = [
+      "HAS_INFERRED_RISK",
+      "HAS_INFERRED_SUPPORT",
+      "HAS_INFERRED_ENTRY_OPPORTUNITY",
+      "CREATES_NOTIFICATION_INTENT",
+      "REQUIRES_NEXT_CHECK",
+      "HAS_TREND_TRANSITION",
+      "HAS_EXTERNAL_SIGNAL",
+      "HAS_DATA_QUALITY",
+      "HAS_TRADE_FLOW",
+      "BREAKS_LEVEL",
+      "RETESTS_LEVEL",
+      "RECLAIMS_LEVEL",
+      "HOLDS",
+      "WATCHES",
+      "HAS_OPINION",
+      "HAS_EVIDENCE"
+    ];
+    var index = order.indexOf(String(type || "").toUpperCase());
+    return index < 0 ? 999 : index;
+  }
+
+  function ontologyReadableRelationRows(parts) {
+    parts = parts || {};
+    var labels = parts.entityLabels || {};
+    var groups = {};
+    (parts.aboxRelations || []).forEach(function (relation) {
+      var type = ontologyTypeOf(relation) || "RELATED_TO";
+      if (!groups[type]) groups[type] = { type: type, count: 0, examples: [] };
+      groups[type].count += 1;
+      if (groups[type].examples.length < 3) {
+        groups[type].examples.push(ontologyEndpointLabel(relation.source, labels) + " → " + ontologyEndpointLabel(relation.target, labels));
+      }
+    });
+    return Object.keys(groups).map(function (key) {
+      return groups[key];
+    }).sort(function (a, b) {
+      var priority = ontologyRelationPriority(a.type) - ontologyRelationPriority(b.type);
+      if (priority !== 0) return priority;
+      if (b.count !== a.count) return b.count - a.count;
+      return a.type.localeCompare(b.type);
+    }).slice(0, 12);
+  }
+
+  function ontologyInferenceRelationTypes() {
+    return {
+      HAS_INFERRED_RISK: true,
+      HAS_INFERRED_SUPPORT: true,
+      HAS_INFERRED_ENTRY_OPPORTUNITY: true,
+      HAS_ACTION_CANDIDATE: true,
+      CREATES_NOTIFICATION_INTENT: true,
+      REQUIRES_NEXT_CHECK: true,
+      HAS_INFERENCE_TRACE: true
+    };
+  }
+
+  function ontologyReadableInferenceRows(parts) {
+    parts = parts || {};
+    var labels = parts.entityLabels || {};
+    var inferenceTypes = ontologyInferenceRelationTypes();
+    var rows = (parts.relations || parts.aboxRelations || []).filter(function (relation) {
+      var type = ontologyTypeOf(relation);
+      return inferenceTypes[type] || ontologyBoxOf(relation) === "INFERENCEBOX";
+    }).slice(0, 10).map(function (relation) {
+      var props = relation.properties || {};
+      return {
+        type: ontologyTypeOf(relation),
+        source: ontologyEndpointLabel(relation.source, labels),
+        target: ontologyEndpointLabel(relation.target, labels),
+        detail: [props.aiInfluenceLabel, props.decisionStage, props.ruleId].filter(Boolean).join(" · "),
+        weight: relation.weight
+      };
+    });
+    if (rows.length) return rows;
+    return (parts.insights || []).slice(0, 6).map(function (item) {
+      var props = item.properties || {};
+      return {
+        type: "INSIGHT",
+        source: props.symbol ? stockDisplayName(props.symbol) : "ontology",
+        target: ontologyEntityDisplayLabel(item, item && item.id),
+        detail: [props.insightType, props.severity, props.confidence != null ? "confidence " + Math.round(Number(props.confidence || 0)) : ""].filter(Boolean).join(" · "),
+        weight: props.score
+      };
+    });
+  }
+
+  function renderInvestmentRuleRelationTextPanel(parts) {
+    var ruleRows = ontologyReadableRuleRows(parts);
+    var relationRows = ontologyReadableRelationRows(parts);
+    var inferenceRows = ontologyReadableInferenceRows(parts);
+    return [
+      '<section class="ontology-surface investment-rule-relation-text-panel">',
+      '<div class="ontology-surface-head">',
+      '<div>',
+      '<strong>규칙과 관계 해설</strong>',
+      '<span>그래프를 읽기 전에 RuleBox 조건, 현재 관계 행, 추론 출력을 압축해서 확인합니다.</span>',
+      '</div>',
+      '<span>' + escapeHtml(ruleRows.length) + ' rules · ' + escapeHtml(relationRows.length) + ' relation groups</span>',
+      '</div>',
+      '<div class="investment-relation-text-grid">',
+      renderInvestmentRuleTextColumn("RuleBox 규칙", "조건과 파생 관계", ruleRows, renderInvestmentRuleTextRow),
+      renderInvestmentRuleTextColumn("현재 ABox 관계", "실제 데이터 관계 묶음", relationRows, renderInvestmentRelationTextRow),
+      renderInvestmentRuleTextColumn("InferenceBox 출력", "AI 판단으로 넘어가는 추론", inferenceRows, renderInvestmentInferenceTextRow),
+      '</div>',
+      '</section>'
+    ].join("");
+  }
+
+  function renderInvestmentRuleTextColumn(title, caption, rows, renderer) {
+    return [
+      '<section class="investment-relation-text-column">',
+      '<div class="investment-relation-text-head">',
+      '<strong>' + escapeHtml(title) + '</strong>',
+      '<span>' + escapeHtml(caption) + '</span>',
+      '</div>',
+      '<div class="investment-relation-text-list">',
+      rows.length ? rows.map(renderer).join("") : '<div class="ontology-empty">표시할 행이 없습니다.</div>',
+      '</div>',
+      '</section>'
+    ].join("");
+  }
+
+  function renderInvestmentRuleTextRow(row) {
+    return [
+      '<div class="investment-relation-text-row rule">',
+      '<strong>' + escapeHtml(row.label || row.id || "-") + '</strong>',
+      '<span>' + escapeHtml(row.detail || row.id || "-") + '</span>',
+      '<em>' + escapeHtml(row.conditionCount + " conditions · " + row.derivationCount + " derives") + '</em>',
+      row.relationTypes.length ? '<b>' + escapeHtml(row.relationTypes.slice(0, 4).join(" / ")) + '</b>' : '',
+      '</div>'
+    ].join("");
+  }
+
+  function renderInvestmentRelationTextRow(row) {
+    return [
+      '<div class="investment-relation-text-row relation">',
+      '<strong>' + escapeHtml(row.type || "-") + '</strong>',
+      '<span>' + escapeHtml((row.examples || []).join(" · ") || "-") + '</span>',
+      '<em>' + escapeHtml(row.count + " rows") + '</em>',
+      '</div>'
+    ].join("");
+  }
+
+  function renderInvestmentInferenceTextRow(row) {
+    var weight = row.weight == null || row.weight === "" ? "" : "weight " + Number(row.weight || 0).toFixed(2);
+    return [
+      '<div class="investment-relation-text-row inference">',
+      '<strong>' + escapeHtml(row.type || "-") + '</strong>',
+      '<span>' + escapeHtml([row.source, row.target].filter(Boolean).join(" → ")) + '</span>',
+      '<em>' + escapeHtml([row.detail, weight].filter(Boolean).join(" · ") || "-") + '</em>',
+      '</div>'
     ].join("");
   }
 
@@ -9486,6 +9701,73 @@
     return text.length > max ? text.slice(0, Math.max(1, max - 1)) + "…" : text;
   }
 
+  function ontologyTboxGraphClassImportant(name) {
+    var important = {
+      Account: true,
+      Portfolio: true,
+      Position: true,
+      Stock: true,
+      Security: true,
+      Watchlist: true,
+      PriceBar: true,
+      PriceMetric: true,
+      KeyLevel: true,
+      TrendSignal: true,
+      TrendTransition: true,
+      VolumeProfile: true,
+      TradeFlow: true,
+      ResearchEvidence: true,
+      NewsArticle: true,
+      DisclosureFiling: true,
+      FactChange: true,
+      MaterialityAssessment: true,
+      MissingData: true,
+      DataQuality: true,
+      DataSource: true,
+      Risk: true,
+      MarketRisk: true,
+      EventRisk: true,
+      DataQualityRisk: true,
+      Opportunity: true,
+      InvestmentThesis: true,
+      Opinion: true,
+      ActiveInvestmentOpinion: true,
+      GraphInferenceRule: true,
+      InferenceTrace: true,
+      NextCheck: true,
+      AlertCandidate: true,
+      NotificationDispatch: true,
+      DataPipeline: true
+    };
+    return Boolean(important[String(name || "")]);
+  }
+
+  function ontologyGraphImportantRelationTypes() {
+    return {
+      HOLDS: true,
+      WATCHES: true,
+      REPRESENTS_STOCK: true,
+      HAS_PRICE: true,
+      HAS_OBSERVATION: true,
+      HAS_EXTERNAL_SIGNAL: true,
+      HAS_DATA_QUALITY: true,
+      HAS_TRADE_FLOW: true,
+      HAS_TREND_TRANSITION: true,
+      BREAKS_LEVEL: true,
+      RETESTS_LEVEL: true,
+      RECLAIMS_LEVEL: true,
+      HAS_INFERRED_RISK: true,
+      HAS_INFERRED_SUPPORT: true,
+      HAS_INFERRED_ENTRY_OPPORTUNITY: true,
+      CREATES_NOTIFICATION_INTENT: true,
+      REQUIRES_NEXT_CHECK: true,
+      HAS_OPINION: true,
+      HAS_EVIDENCE: true,
+      PASSES_IMPORTANCE_GATE: true,
+      TRIGGERS_MATERIALITY_ASSESSMENT: true
+    };
+  }
+
   function ontologyTboxGraphNodes(tbox) {
     var contexts = tbox.boundedContexts || [];
     var classDefs = tbox.classDefinitions || (tbox.classes || []).map(function (name) {
@@ -9512,6 +9794,7 @@
     classDefs.forEach(function (item) {
       var name = String(item.name || item.className || "");
       if (!name) return;
+      if (!ontologyTboxGraphClassImportant(name) && !ontologyTboxGraphClassImportant(item.parent)) return;
       var contextKey = String(item.bounded_context || item.boundedContext || "investment-core");
       var index = contextIndex[contextKey];
       if (index === undefined) index = 0;
@@ -9551,10 +9834,12 @@
       return { text: text, bounded_context: "reasoning-insight" };
     });
     var edges = [];
+    var importantRelations = ontologyGraphImportantRelationTypes();
     classDefs.forEach(function (item) {
       var name = String(item.name || item.className || "");
       var contextKey = String(item.bounded_context || item.boundedContext || "investment-core");
       if (!name) return;
+      if (!ontologyTboxGraphClassImportant(name) && !ontologyTboxGraphClassImportant(item.parent)) return;
       edges.push({ source: "ctx:" + contextKey, target: "class:" + name, type: "DEFINES_CLASS", kind: "schema" });
       if (item.parent) {
         edges.push({ source: "class:" + name, target: "class:" + item.parent, type: "IS_A", kind: "schema" });
@@ -9565,11 +9850,12 @@
       var sourceContext = String(item.source_context || item.sourceContext || item.bounded_context || item.boundedContext || "");
       var targetContext = String(item.target_context || item.targetContext || item.bounded_context || item.boundedContext || "");
       var name = String(item.name || item.relationType || "");
+      var relationType = name.toUpperCase();
       if (!sourceContext || !targetContext || !name) return;
-      var key = sourceContext + "|" + targetContext + "|" + name;
+      var key = importantRelations[relationType] ? (sourceContext + "|" + targetContext + "|" + relationType) : (sourceContext + "|" + targetContext + "|RELATES_TO");
       if (relationSeen[key]) return;
       relationSeen[key] = true;
-      edges.push({ source: "ctx:" + sourceContext, target: "ctx:" + targetContext, type: name, kind: "schema" });
+      edges.push({ source: "ctx:" + sourceContext, target: "ctx:" + targetContext, type: importantRelations[relationType] ? relationType : "RELATES_TO", kind: "schema" });
     });
     ruleDefs.forEach(function (item, index) {
       var contextKey = String(item.bounded_context || item.boundedContext || "reasoning-insight");
@@ -9579,12 +9865,14 @@
   }
 
   function renderOntologyTboxGraph(tbox, relationCounts) {
+    var graphNodes = ontologyTboxGraphNodes(tbox);
+    var graphEdges = ontologyTboxGraphEdges(tbox);
     return [
       '<section class="ontology-graph-panel ontology-tbox-graph">',
       '<div class="ontology-surface-head">',
       '<div>',
-      '<strong>규칙 구조 관계 그래프</strong>',
-      '<span>분류, 관계 타입, 규칙 간의 허용 관계</span>',
+      '<strong>핵심 규칙 구조 그래프</strong>',
+      '<span>투자 판단에 직접 영향을 주는 TBox 분류, 관계 타입, 규칙 연결만 표시합니다.</span>',
       '</div>',
       '<div class="ontology-graph-actions">',
       '<button class="icon-button" type="button" data-ontology-graph-fit="tbox" title="규칙 구조 그래프 맞춤" aria-label="규칙 구조 그래프 맞춤">⌖</button>',
@@ -9592,12 +9880,13 @@
       '</div>',
       '</div>',
       '<div class="ontology-graph-meta">',
-      '<span>' + escapeHtml(((tbox.boundedContexts || []).length || 0)) + ' 컨텍스트 · ' + escapeHtml((tbox.classes || []).length || 0) + ' 분류 · ' + escapeHtml((tbox.relationTypes || []).length || 0) + ' 관계 타입 · ' + escapeHtml((tbox.reasoningRules || []).length || 0) + ' 규칙</span>',
+      '<span>표시 ' + escapeHtml(graphNodes.length) + ' 노드 · ' + escapeHtml(graphEdges.length) + ' 관계</span>',
+      '<span>전체 ' + escapeHtml(((tbox.boundedContexts || []).length || 0)) + ' 컨텍스트 · ' + escapeHtml((tbox.classes || []).length || 0) + ' 분류 · ' + escapeHtml((tbox.relationTypes || []).length || 0) + ' 관계 타입</span>',
       '</div>',
       '<div class="ontology-cytoscape" data-ontology-cytoscape="tbox"><span>그래프 엔진 초기화 중</span></div>',
       '<div class="ontology-graph-caption">',
-      '<span>굵은 실선은 허용 relation type입니다.</span>',
-      '<span>점선 rule edge는 TBox 규칙이 어떤 개념을 생성·제약하는지 나타냅니다.</span>',
+      '<span>굵은 실선은 핵심 relation type, RELATES_TO는 보조 관계를 접은 표시입니다.</span>',
+      '<span>점선 rule edge는 TBox 규칙이 어떤 컨텍스트의 판단을 제약하는지 나타냅니다.</span>',
       '</div>',
       '</section>'
     ].join("");
@@ -9660,6 +9949,15 @@
       rule: { x: 720, y: 274, step: 80 },
       belief: { x: 850, y: 132, step: 104 },
       opinion: { x: 850, y: 208, step: 104 },
+      "research-evidence": { x: 720, y: 132, step: 96 },
+      "news-article": { x: 720, y: 132, step: 96 },
+      "disclosure-filing": { x: 720, y: 210, step: 92 },
+      "fact-change": { x: 572, y: 224, step: 78 },
+      "trend-transition": { x: 572, y: 156, step: 78 },
+      "missing-data": { x: 572, y: 300, step: 78 },
+      "next-check": { x: 850, y: 300, step: 86 },
+      "alert-candidate": { x: 850, y: 388, step: 86 },
+      "inference-trace": { x: 720, y: 330, step: 78 },
       entity: { x: 404, y: 380, step: 62 }
     };
     Object.keys(groups).forEach(function (kind) {
@@ -9678,9 +9976,29 @@
       var node = nodesById[id];
       if (!node.symbol || !stockY[node.symbol]) return;
       if (node.kind === "evidence") node.y = Math.max(70, stockY[node.symbol] - 34);
+      if (node.kind === "research-evidence" || node.kind === "news-article" || node.kind === "disclosure-filing") node.y = Math.max(70, stockY[node.symbol] - 44);
+      if (node.kind === "fact-change" || node.kind === "trend-transition" || node.kind === "missing-data") node.y = stockY[node.symbol];
       if (node.kind === "belief") node.y = Math.max(70, stockY[node.symbol] - 34);
       if (node.kind === "opinion") node.y = stockY[node.symbol] + 30;
+      if (node.kind === "next-check" || node.kind === "alert-candidate") node.y = stockY[node.symbol] + 46;
     });
+  }
+
+  function ontologySelectGraphRelations(relations) {
+    var important = ontologyGraphImportantRelationTypes();
+    var rows = (relations || []).filter(function (relation) {
+      var type = ontologyTypeOf(relation);
+      if (important[type]) return true;
+      if (ontologyBoxOf(relation) === "INFERENCEBOX") return true;
+      var props = relation.properties || {};
+      return Boolean(props.aiInfluenceLabel || props.materialityPassed || props.decisionStage);
+    });
+    rows.sort(function (a, b) {
+      var priority = ontologyRelationPriority(ontologyTypeOf(a)) - ontologyRelationPriority(ontologyTypeOf(b));
+      if (priority !== 0) return priority;
+      return Number(b.weight || 0) - Number(a.weight || 0);
+    });
+    return rows.slice(0, 120);
   }
 
   function ontologyBuildAboxGraph(aboxEntities, aboxRelations, evidence, beliefs, opinions, entityLabels) {
@@ -9689,14 +10007,17 @@
       if (entity && entity.id) memo[entity.id] = entity;
       return memo;
     }, {});
-    (aboxRelations || []).forEach(function (relation) {
+    var graphRelations = ontologySelectGraphRelations(aboxRelations || []);
+    graphRelations.forEach(function (relation) {
       [relation.source, relation.target].forEach(function (id) {
         var entity = entityById[id] || { id: id, label: ontologyEndpointLabel(id, entityLabels), kind: "entity" };
         var label = ontologyEntityGraphLabel(entity);
-        ontologyAddGraphNode(nodesById, id, label, ontologyAboxKind(entity), label, ontologyAboxSymbolFromId(id));
+        var properties = entity.properties || {};
+        var symbol = String(properties.symbol || ontologyAboxSymbolFromId(id) || "").toUpperCase();
+        ontologyAddGraphNode(nodesById, id, label, ontologyAboxKind(entity), label, symbol);
       });
     });
-    var edges = (aboxRelations || []).map(function (relation) {
+    var edges = graphRelations.map(function (relation) {
       return { source: relation.source, target: relation.target, type: ontologyTypeOf(relation), kind: "assertion" };
     });
     ontologyAddGraphNode(nodesById, "runtime-rules", "Runtime Rules", "rule", "ABox assertions evaluated by TBox reasoning rules");
@@ -9724,12 +10045,15 @@
 
   function renderOntologyAboxGraph(abox, aboxEntities, aboxRelations, evidence, beliefs, opinions, entityLabels) {
     var portfolioId = String(abox && abox.portfolioId || "flow-lens");
+    var graph = ontologyBuildAboxGraph(aboxEntities, aboxRelations, evidence, beliefs, opinions, entityLabels);
+    var graphNodeCount = Object.keys(graph.nodesById || {}).length;
+    var graphEdgeCount = (graph.edges || []).length;
     return [
       '<section class="ontology-graph-panel ontology-abox-graph">',
       '<div class="ontology-surface-head">',
       '<div>',
-      '<strong>현재 데이터 관계 그래프</strong>',
-      '<span>실제 /api/flow-lens 포트폴리오의 보유 종목, 근거, 판단 근거, AI 의견 관계</span>',
+      '<strong>핵심 데이터 관계 그래프</strong>',
+      '<span>실제 데이터 중 AI 판단, 중요 변경, 알림 후보와 연결되는 관계만 압축 표시합니다.</span>',
       '</div>',
       '<div class="ontology-graph-actions">',
       '<button class="icon-button" type="button" data-ontology-graph-fit="abox" title="현재 데이터 그래프 맞춤" aria-label="현재 데이터 그래프 맞춤">⌖</button>',
@@ -9737,13 +10061,14 @@
       '</div>',
       '</div>',
       '<div class="ontology-graph-meta">',
-      '<span>' + escapeHtml(aboxEntities.length) + ' 데이터 행 · ' + escapeHtml(aboxRelations.length) + ' 관계 행 · ' + escapeHtml((beliefs || []).length) + ' 판단 근거</span>',
+      '<span>표시 ' + escapeHtml(graphNodeCount) + ' 노드 · ' + escapeHtml(graphEdgeCount) + ' 관계</span>',
+      '<span>전체 ' + escapeHtml(aboxEntities.length) + ' 데이터 행 · ' + escapeHtml(aboxRelations.length) + ' 관계 행 · ' + escapeHtml((beliefs || []).length) + ' 판단 근거</span>',
       '<span>현재 실행 데이터 · 계좌 ' + escapeHtml(portfolioId) + '</span>',
       '</div>',
       '<div class="ontology-cytoscape" data-ontology-cytoscape="abox"><span>그래프 엔진 초기화 중</span></div>',
       '<div class="ontology-graph-caption">',
-      '<span>실선은 현재 데이터에서 직접 확인된 관계입니다.</span>',
-      '<span>점선은 근거가 규칙을 거쳐 판단 근거와 AI 의견으로 이어지는 관계입니다.</span>',
+      '<span>실선은 현재 데이터에서 확인된 핵심 관계입니다.</span>',
+      '<span>점선은 근거가 규칙을 거쳐 판단 근거, 다음 확인, 알림 후보로 이어지는 관계입니다.</span>',
       '</div>',
       '</section>'
     ].join("");
@@ -9833,43 +10158,51 @@
         selector: "node",
         style: {
           "shape": "round-rectangle",
-          "width": 112,
-          "height": 38,
+          "width": 132,
+          "height": 44,
           "background-color": panel,
-          "border-width": 1.2,
+          "border-width": 1.4,
           "border-color": line,
           "label": "data(label)",
           "color": ink,
-          "font-size": 11,
+          "font-size": 10,
           "font-weight": 800,
           "text-valign": "center",
           "text-halign": "center",
-          "text-wrap": "ellipsis",
-          "text-max-width": 96
+          "text-wrap": "wrap",
+          "text-max-width": 112,
+          "overlay-opacity": 0
         }
       },
-      { selector: ".node-context", style: { "width": 120, "height": 42, "background-color": "#eef2ff", "border-color": violet, "color": ink } },
-      { selector: ".node-rule", style: { "width": 58, "height": 34, "background-color": "#fff7ed", "border-color": amber, "color": amber } },
+      { selector: ".node-context", style: { "width": 150, "height": 48, "background-color": "#eef2ff", "border-color": violet, "color": ink, "font-weight": 900 } },
+      { selector: ".node-rule", style: { "width": 74, "height": 36, "background-color": "#fff7ed", "border-color": amber, "color": amber, "font-size": 9 } },
       { selector: ".node-schema, .node-portfolio, .node-stock", style: { "background-color": "#eff6ff", "border-color": blue } },
       { selector: ".node-sector, .node-market, .node-currency, .node-cash", style: { "background-color": "#ecfdf5", "border-color": green } },
       { selector: ".node-fx-rate, .node-fx-pair", style: { "background-color": "#ecfeff", "border-color": green } },
       { selector: ".node-interest-rate, .node-yield-curve", style: { "background-color": "#fff7ed", "border-color": amber } },
       { selector: ".node-risk", style: { "background-color": "#fef2f2", "border-color": red } },
-      { selector: ".node-evidence, .node-belief, .node-opinion, .node-review, .node-model", style: { "background-color": "#f5f3ff", "border-color": violet } },
+      { selector: ".node-evidence, .node-belief, .node-opinion, .node-review, .node-model, .node-research-evidence, .node-news-article, .node-disclosure-filing", style: { "background-color": "#f5f3ff", "border-color": violet } },
+      { selector: ".node-fact-change, .node-trend-transition", style: { "background-color": "#eff6ff", "border-color": blue } },
+      { selector: ".node-missing-data, .node-data-quality, .node-source-reliability", style: { "background-color": "#fff7ed", "border-color": amber } },
+      { selector: ".node-next-check, .node-alert-candidate, .node-inference-trace", style: { "background-color": "#f8fafc", "border-color": ink } },
       {
         selector: "edge",
         style: {
-          "curve-style": "bezier",
+          "curve-style": "taxi",
+          "taxi-direction": "rightward",
+          "taxi-turn": 32,
+          "taxi-turn-min-distance": 12,
           "target-arrow-shape": "triangle",
           "target-arrow-color": blue,
           "line-color": blue,
-          "width": 1.35,
+          "width": 1.25,
+          "opacity": 0.82,
           "label": "data(label)",
-          "font-size": 8,
+          "font-size": 7,
           "font-weight": 700,
           "color": muted,
           "text-background-color": panel,
-          "text-background-opacity": 0.88,
+          "text-background-opacity": 0.82,
           "text-background-padding": 2,
           "text-rotation": "autorotate",
           "text-margin-y": -6
@@ -9879,7 +10212,7 @@
       { selector: ".edge-assertion", style: { "line-color": green, "target-arrow-color": green } },
       { selector: ".edge-derived", style: { "line-color": violet, "target-arrow-color": violet, "line-style": "dashed" } },
       { selector: ".edge-rule", style: { "line-color": amber, "target-arrow-color": amber, "line-style": "dashed" } },
-      { selector: ":selected", style: { "border-width": 3, "border-color": ink, "line-color": ink, "target-arrow-color": ink } }
+      { selector: ":selected", style: { "border-width": 3, "border-color": ink, "line-color": ink, "target-arrow-color": ink, "opacity": 1 } }
     ];
   }
 
@@ -9937,9 +10270,11 @@
     var instance = ontologyGraphInstances[graphId];
     if (!instance) return;
     instance.layout({
-      name: graphId === "abox" ? "cose" : "breadthfirst",
-      directed: graphId === "tbox",
+      name: "breadthfirst",
+      directed: true,
       padding: 36,
+      spacingFactor: graphId === "abox" ? 1.25 : 1.1,
+      avoidOverlap: true,
       animate: true,
       animationDuration: 260,
       fit: true
@@ -11494,6 +11829,10 @@
   }
 
   function renderFeedSettingsPanel() {
+    var archiveScope = (settingValue("newsCollectionMaxSymbols") || defaultSettings.newsCollectionMaxSymbols || "40") + "종목 · "
+      + (settingValue("newsCollectionLookbackMinutes") || defaultSettings.newsCollectionLookbackMinutes || "180") + "분";
+    var reasoningScope = (settingEnabled("ontologyNeo4jEnabled") ? "Neo4j" : "로컬") + " · "
+      + (settingValue("ontologyReasoningIntervalSeconds") || defaultSettings.ontologyReasoningIntervalSeconds || "10") + "초";
     return [
       '<article class="panel feed-settings-panel">',
       '<div class="panel-head">',
@@ -11503,7 +11842,8 @@
       '</div>',
       '<span class="tone-chip ' + settingsStatusTone() + '" data-settings-status>' + settingsStatusLabel() + '</span>',
       '</div>',
-      '<div class="settings-body">',
+      '<div class="settings-body feed-settings-body">',
+      '<div class="settings-api-grid feed-settings-summary">',
       renderSettingsApiCard("원천 준비도", "뉴스·공시·SEC", [
         configuredChip("KIS 수급", settingEnabled("kisMarketSignalsEnabled"), configuredCount(["kisAppKey", "kisAppSecret"]) + "/2"),
         configuredChip("뉴스", settingEnabled("externalNewsEnabled"), newsProviderLabel(settingValue("externalNewsProvider") || defaultSettings.externalNewsProvider)),
@@ -11513,84 +11853,132 @@
         configuredChip("FRED", settingEnabled("externalFredEnabled"), isConfiguredSetting("fredApiKey") ? "키 저장됨" : "키 필요"),
         configuredChip("CoinGecko", settingEnabled("externalCoinGeckoEnabled"), isConfiguredSetting("coingeckoApiKey") ? "키 저장됨" : "키 없음")
       ]),
-      '<div class="settings-grid feed-settings-grid">',
-      renderSettingSelect("kisMarketSignalsEnabled", "KIS 수급 수집", [
-        { value: "1", label: "사용" },
-        { value: "0", label: "사용 안 함" }
+      renderSettingsApiCard("아카이브 범위", archiveScope, [
+        configuredChip("관심", settingValue("newsCollectionIncludeWatchlist") !== "0", "포함"),
+        configuredChip("보유", settingValue("newsCollectionIncludeHoldings") !== "0", "포함"),
+        configuredChip("관련성", true, (settingValue("newsCollectionMinRelevanceScore") || defaultSettings.newsCollectionMinRelevanceScore || "35") + "점")
       ]),
-      renderSettingField("kisMarketSignalMaxSymbols", "KIS 수급 종목 수", "number", "20"),
-      renderSettingSelect("externalNewsEnabled", "뉴스 헤드라인 수집", [
-        { value: "1", label: "사용" },
-        { value: "0", label: "사용 안 함" }
+      renderSettingsApiCard("추론 흐름", reasoningScope, [
+        configuredChip("추론", settingEnabled("ontologyReasoningEnabled"), settingValue("ontologyReasoningBatchSize") || defaultSettings.ontologyReasoningBatchSize || "20"),
+        configuredChip("게이트", settingEnabled("materialityGateEnabled"), (settingValue("materialityMinimumScore") || defaultSettings.materialityMinimumScore || "65") + "점"),
+        configuredChip("뉴스 기준", true, (settingValue("newsMaterialityMinimumScore") || defaultSettings.newsMaterialityMinimumScore || "65") + "점")
       ]),
-      renderSettingSelect("externalNewsProvider", "뉴스 공급자", [
-        { value: "auto", label: "자동" },
-        { value: "gdelt", label: "GDELT" },
-        { value: "alpha_vantage", label: "Alpha Vantage" }
-      ]),
-      renderSettingField("externalNewsMaxSymbols", "뉴스 조회 종목 수", "number", "3"),
-      renderSettingField("externalNewsLookbackHours", "뉴스 조회 기간(시간)", "number", "48"),
-      renderSettingSelect("newsCollectionEnabled", "뉴스 아카이브 실시간 수집", [
-        { value: "1", label: "사용" },
-        { value: "0", label: "사용 안 함" }
-      ]),
-      renderSettingField("newsCollectionIntervalSeconds", "뉴스 수집 주기(초)", "number", "60"),
-      renderSettingField("newsCollectionMaxSymbols", "뉴스 수집 종목 수", "number", "40"),
-      renderSettingField("newsCollectionLookbackMinutes", "뉴스 조회 기간(분)", "number", "180"),
-      renderSettingField("newsCollectionPerSymbolLimit", "종목별 저장 기사 수", "number", "8"),
-      renderSettingField("newsCollectionProviders", "뉴스 수집 채널", "text", "google_rss_kr,google_rss_us,gdelt"),
-      renderSettingField("newsCollectionMinRelevanceScore", "뉴스 관련성 최소 점수", "number", "35"),
-      renderSettingSelect("ontologyReasoningEnabled", "데이터 변경 추론", [
-        { value: "1", label: "사용" },
-        { value: "0", label: "사용 안 함" }
-      ]),
-      renderSettingSelect("ontologyNeo4jEnabled", "Neo4j 그래프 저장소", [
-        { value: "1", label: "사용" },
-        { value: "0", label: "사용 안 함" }
-      ]),
-      renderSettingField("neo4jUri", "Neo4j URI", "text", "http://127.0.0.1:7474"),
-      renderSettingField("neo4jUser", "Neo4j 사용자", "text", "neo4j"),
-      renderSettingField("neo4jDatabase", "Neo4j DB", "text", "neo4j"),
-      renderSettingField("neo4jTimeoutSeconds", "Neo4j 타임아웃(초)", "number", "8"),
-      renderSettingField("ontologyReasoningIntervalSeconds", "추론 요청 확인 주기(초)", "number", "10"),
-      renderSettingField("ontologyReasoningBatchSize", "추론 요청 배치", "number", "20"),
-      renderSettingSelect("materialityGateEnabled", "중요 변경 게이트", [
-        { value: "1", label: "사용" },
-        { value: "0", label: "사용 안 함" }
-      ]),
-      renderSettingField("materialityMinimumScore", "중요 변경 기본 기준", "number", "65"),
-      renderSettingField("marketMaterialityMinimumScore", "시장 데이터 중요 기준", "number", "65"),
-      renderSettingField("marketMaterialityPriceChangePct", "가격 중요 변화율(%)", "number", "0.6"),
-      renderSettingField("marketMaterialityTrendDistancePct", "추세 중요 이격(%)", "number", "2"),
-      renderSettingField("marketMaterialityVolumeRatio", "거래량 중요 배율", "number", "1.5"),
-      renderSettingField("newsMaterialityMinimumScore", "뉴스 중요 기준", "number", "65"),
-      renderSettingSelect("externalDartEnabled", "OpenDART 공시 수집", [
-        { value: "1", label: "사용" },
-        { value: "0", label: "사용 안 함" }
-      ]),
-      renderSettingField("externalDartLookbackDays", "공시 조회 기간(일)", "number", "14"),
-      renderSettingSelect("externalSecEnabled", "SEC EDGAR 수집", [
-        { value: "1", label: "사용" },
-        { value: "0", label: "사용 안 함" }
-      ]),
-      renderSettingField("externalSecMaxSymbols", "SEC 조회 종목 수", "number", "3"),
-      renderSettingSelect("externalAlphaEnabled", "Alpha Vantage 수집", [
-        { value: "1", label: "사용" },
-        { value: "0", label: "사용 안 함" }
-      ]),
-      renderSettingSelect("externalFredEnabled", "FRED 거시 수집", [
-        { value: "1", label: "사용" },
-        { value: "0", label: "사용 안 함" }
-      ]),
-      renderSettingSelect("externalCoinGeckoEnabled", "CoinGecko 크립토 수집", [
-        { value: "1", label: "사용" },
-        { value: "0", label: "사용 안 함" }
-      ]),
-      renderSettingField("externalApiFetchIntervalMinutes", "외부 API 캐시(분)", "number", "30"),
-      '<label class="setting-field wide">',
-      '<span>OpenDART 종목 매핑</span>',
-      '<textarea data-setting="externalDartCorpCodes" rows="3" autocomplete="off" placeholder="005930=00126380">' + escapeHtml(settingValue("externalDartCorpCodes") || defaultSettings.externalDartCorpCodes) + '</textarea>',
-      '</label>',
+      '</div>',
+      '<div class="feed-settings-sections">',
+      renderSettingsGroup("장중 시세·수급", "KIS 장중 수급과 호출량을 조정합니다.", [
+        renderSettingSelect("kisMarketSignalsEnabled", "KIS 수급 수집", [
+          { value: "1", label: "사용" },
+          { value: "0", label: "사용 안 함" }
+        ]),
+        renderSettingField("kisMarketSignalMaxSymbols", "KIS 수급 종목 수", "number", "20"),
+        renderSettingField("kisMarketSignalCacheMinutes", "KIS 수급 캐시(분)", "number", "3"),
+        renderSettingField("kisMarketSignalGapSeconds", "KIS 호출 간격(초)", "number", "0.35"),
+        renderSettingSelect("kisMarketSignalPreferLiveDuringMarketHours", "장중 KIS live 우선", [
+          { value: "1", label: "사용" },
+          { value: "0", label: "사용 안 함" }
+        ]),
+        renderSettingField("kisMarketSignalLiveRefreshSeconds", "장중 live 최소 간격(초)", "number", "60")
+      ].join(""), "market feed-compact"),
+      renderSettingsGroup("뉴스 헤드라인", "빠른 외부 뉴스 조회 범위를 관리합니다.", [
+        renderSettingSelect("externalNewsEnabled", "뉴스 헤드라인 수집", [
+          { value: "1", label: "사용" },
+          { value: "0", label: "사용 안 함" }
+        ]),
+        renderSettingSelect("externalNewsProvider", "뉴스 공급자", [
+          { value: "auto", label: "자동" },
+          { value: "gdelt", label: "GDELT" },
+          { value: "alpha_vantage", label: "Alpha Vantage" }
+        ]),
+        renderSettingField("externalNewsMaxSymbols", "뉴스 조회 종목 수", "number", "3"),
+        renderSettingField("externalNewsLookbackHours", "뉴스 조회 기간(시간)", "number", "48"),
+        renderSettingField("externalResearchEvidenceMaxItems", "AI 전달 최신 근거 수", "number", "8")
+      ].join(""), "research feed-compact"),
+      renderSettingsGroup("뉴스 아카이브", "저장형 뉴스 수집 워커의 대상과 속도입니다.", [
+        renderSettingSelect("newsCollectionEnabled", "뉴스 아카이브 실시간 수집", [
+          { value: "1", label: "사용" },
+          { value: "0", label: "사용 안 함" }
+        ]),
+        renderSettingField("newsCollectionIntervalSeconds", "뉴스 수집 주기(초)", "number", "60"),
+        renderSettingField("newsCollectionMaxSymbols", "뉴스 수집 종목 수", "number", "40"),
+        renderSettingField("newsCollectionLookbackMinutes", "뉴스 조회 기간(분)", "number", "180"),
+        renderSettingField("newsCollectionPerSymbolLimit", "종목별 저장 기사 수", "number", "8"),
+        renderSettingField("newsCollectionProviders", "뉴스 수집 채널", "text", "google_rss_kr,google_rss_us,gdelt"),
+        renderSettingField("newsCollectionMinRelevanceScore", "뉴스 관련성 최소 점수", "number", "35"),
+        renderSettingSelect("newsCollectionIncludeWatchlist", "관심종목 뉴스 포함", [
+          { value: "1", label: "포함" },
+          { value: "0", label: "제외" }
+        ]),
+        renderSettingSelect("newsCollectionIncludeHoldings", "보유종목 뉴스 포함", [
+          { value: "1", label: "포함" },
+          { value: "0", label: "제외" }
+        ]),
+        renderSettingField("newsCollectionRateLimitSeconds", "뉴스 호출 간격(초)", "number", "0.25")
+      ].join(""), "research feed-wide"),
+      renderSettingsGroup("그래프 추론", "수집 데이터가 Neo4j 관계 추론으로 넘어가는 경로입니다.", [
+        renderSettingSelect("ontologyReasoningEnabled", "데이터 변경 추론", [
+          { value: "1", label: "사용" },
+          { value: "0", label: "사용 안 함" }
+        ]),
+        renderSettingSelect("ontologyNeo4jEnabled", "Neo4j 그래프 저장소", [
+          { value: "1", label: "사용" },
+          { value: "0", label: "사용 안 함" }
+        ]),
+        renderSettingField("neo4jUri", "Neo4j URI", "text", "http://127.0.0.1:7474"),
+        renderSettingField("neo4jUser", "Neo4j 사용자", "text", "neo4j"),
+        renderSettingField("neo4jDatabase", "Neo4j DB", "text", "neo4j"),
+        renderSettingField("neo4jTimeoutSeconds", "Neo4j 타임아웃(초)", "number", "8"),
+        renderSettingField("ontologyReasoningIntervalSeconds", "추론 요청 확인 주기(초)", "number", "10"),
+        renderSettingField("ontologyReasoningBatchSize", "추론 요청 배치", "number", "20")
+      ].join(""), "gate feed-wide"),
+      renderSettingsGroup("중요도 게이트", "시세·뉴스·거래량 변화가 알림 후보로 들어가는 기준입니다.", [
+        renderSettingSelect("materialityGateEnabled", "중요 변경 게이트", [
+          { value: "1", label: "사용" },
+          { value: "0", label: "사용 안 함" }
+        ]),
+        renderSettingField("materialityMinimumScore", "중요 변경 기본 기준", "number", "65"),
+        renderSettingField("marketMaterialityMinimumScore", "시장 데이터 중요 기준", "number", "65"),
+        renderSettingField("marketMaterialityPriceChangePct", "가격 중요 변화율(%)", "number", "0.6"),
+        renderSettingField("marketMaterialityTrendDistancePct", "추세 중요 이격(%)", "number", "2"),
+        renderSettingField("marketMaterialityVolumeRatio", "거래량 중요 배율", "number", "1.5"),
+        renderSettingField("newsMaterialityMinimumScore", "뉴스 중요 기준", "number", "65")
+      ].join(""), "gate feed-compact"),
+      renderSettingsGroup("공시·외부 원천", "공시, 미장, 거시, 크립토 원천의 사용 여부입니다.", [
+        renderSettingSelect("externalDartEnabled", "OpenDART 공시 수집", [
+          { value: "1", label: "사용" },
+          { value: "0", label: "사용 안 함" }
+        ]),
+        renderSettingField("externalDartLookbackDays", "공시 조회 기간(일)", "number", "14"),
+        renderSettingSelect("externalSecEnabled", "SEC EDGAR 수집", [
+          { value: "1", label: "사용" },
+          { value: "0", label: "사용 안 함" }
+        ]),
+        renderSettingField("externalSecMaxSymbols", "SEC 조회 종목 수", "number", "3"),
+        renderSettingSelect("externalAlphaEnabled", "Alpha Vantage 수집", [
+          { value: "1", label: "사용" },
+          { value: "0", label: "사용 안 함" }
+        ]),
+        renderSettingSelect("externalFredEnabled", "FRED 거시 수집", [
+          { value: "1", label: "사용" },
+          { value: "0", label: "사용 안 함" }
+        ]),
+        renderSettingSelect("externalCoinGeckoEnabled", "CoinGecko 크립토 수집", [
+          { value: "1", label: "사용" },
+          { value: "0", label: "사용 안 함" }
+        ]),
+        renderSettingField("externalApiFetchIntervalMinutes", "외부 API 캐시(분)", "number", "30")
+      ].join(""), "external feed-compact"),
+      renderSettingsGroup("긴 매핑값", "종목 코드, CIK, 거시·코인 목록처럼 긴 입력값입니다.", [
+        renderSettingField("externalFredSeries", "FRED 지표", "text", "DGS10,DGS2,DFF"),
+        renderSettingField("externalCryptoIds", "CoinGecko 코인 ID", "text", "bitcoin,ethereum"),
+        '<label class="setting-field wide">',
+        '<span class="setting-field-label">OpenDART 종목 매핑</span>',
+        '<div class="form-control-shell"><textarea data-setting="externalDartCorpCodes" rows="3" autocomplete="off" placeholder="005930=00126380">' + escapeHtml(settingValue("externalDartCorpCodes") || defaultSettings.externalDartCorpCodes) + '</textarea></div>',
+        '</label>',
+        '<label class="setting-field wide">',
+        '<span class="setting-field-label">SEC CIK 매핑</span>',
+        '<div class="form-control-shell"><textarea data-setting="externalSecCompanyCiks" rows="3" autocomplete="off" placeholder="AAPL=0000320193">' + escapeHtml(settingValue("externalSecCompanyCiks") || defaultSettings.externalSecCompanyCiks) + '</textarea></div>',
+        '</label>',
+      ].join(""), "mapping feed-wide"),
       '</div>',
       renderSettingsSmartSavePanel(),
       '</div>',

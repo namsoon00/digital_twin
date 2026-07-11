@@ -62,7 +62,6 @@ from ..infrastructure.neo4j_ontology import ontology_repository_from_settings
 from ..infrastructure import operational_store as stores
 from ..infrastructure.service_factory import build_notification_queue_runner, build_rule_change_candidate_service, build_symbol_universe_service, flow_lens_snapshot
 from ..infrastructure.settings import ROOT_DIR, runtime_settings, save_runtime_settings
-from ..infrastructure.sqlite.health import run_sqlite_maintenance, sqlite_health_snapshot
 from ..infrastructure.toss_snapshots import build_snapshot
 
 
@@ -780,24 +779,6 @@ def notification_jobs_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
         "diagnostics": notification_job_diagnostics(jobs),
         "limit": limit,
     }
-
-
-def sqlite_health_payload() -> Dict[str, object]:
-    return sqlite_health_snapshot()
-
-
-def sqlite_maintenance_payload(payload: Dict[str, object]) -> Dict[str, object]:
-    retention_days = int(payload.get("retentionDays") or payload.get("retention_days") or 7)
-    return run_sqlite_maintenance(
-        checkpoint=payload.get("checkpoint") is not False,
-        optimize=payload.get("optimize") is not False,
-        recover_processing=payload.get("recoverProcessing") is not False,
-        cleanup_old_data=bool(payload.get("cleanupOldData") or payload.get("cleanup_old_data")),
-        archive_old_data=bool(payload.get("archiveOldData") or payload.get("archive_old_data")),
-        retention_days=max(1, retention_days),
-        compact_app_store=payload.get("compactAppStore", payload.get("compact_app_store", True)) is not False,
-        vacuum=bool(payload.get("vacuum")),
-    )
 
 
 def research_evidence_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
@@ -1874,14 +1855,6 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
 
         if path == "/api/notification-jobs" and self.command == "GET":
             return self.send_payload(200, notification_jobs_payload(query))
-
-        if path == "/api/sqlite/health" and self.command == "GET":
-            return self.send_payload(200, sqlite_health_payload())
-
-        if path == "/api/sqlite/maintenance" and self.command == "POST":
-            if not self.ensure_writable("공유 모드에서는 로컬 SQLite 유지보수를 실행할 수 없습니다."):
-                return
-            return self.send_payload(200, sqlite_maintenance_payload(self.read_json_body()))
 
         if path == "/api/research-evidence" and self.command == "GET":
             return self.send_payload(200, research_evidence_payload(query))

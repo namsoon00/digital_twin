@@ -21,9 +21,7 @@ from .infrastructure.settings import (
 class AccountRegistry:
     def __new__(cls, *args, **kwargs):
         if args or kwargs:
-            from .infrastructure.sqlite_accounts import AccountRegistry as SQLiteAccountRegistry
-
-            return SQLiteAccountRegistry(*args, **kwargs)
+            raise TypeError("Path-based AccountRegistry construction is no longer supported; use the operational store.")
         from .infrastructure.operational_store import account_registry
 
         return account_registry()

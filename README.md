@@ -66,7 +66,7 @@ npm run generate:static
 
 웹은 `홈`, `계정`, `관심종목`, `모니터링`, `알림`, `투자전략`, `관계 분석`, `설정` 탭으로 구성됩니다. desktop에서는 왼쪽 고정 내비게이션, mobile에서는 하단 탭 내비게이션을 사용합니다. `계정` 탭은 운영 DB에 저장된 계정 값을 폼에 채우고, secret 원문은 다시 표시하지 않습니다. `알림` 탭에서는 메시지 타입별 활성화, 주기, 임계값, 발송 채널, 마지막 발송 시각, 다음 발송 가능 시각, 타입별 메시지 템플릿을 관리하고, `투자전략` 탭에서는 모델 공식과 판단 기준을 관리합니다. `관계 분석` 탭은 규칙 구조와 현재 데이터 관계 그래프 기반 투자 의견을 별도로 보여줍니다.
 
-`설정` 탭에서는 앱 테마, 외부 데이터 API, 텔레그램 알림 전달 설정을 운영 DB의 `runtime_settings` 테이블에 저장합니다. 기본은 로컬 SQLite `data/service.db`이고, `OPERATIONAL_DB_BACKEND=mysql` 또는 `MYSQL_URL`을 설정하면 MySQL을 사용합니다. 계정별 Toss API 연결은 `계정` 탭에서, 관심 종목은 `관심종목` 탭에서, 모델 기준은 `모델링` 탭에서 관리합니다. `client_secret`, 외부 API key, bot token은 서버가 사용하는 로컬 DB에만 저장하고, API 응답과 화면에는 원문을 다시 표시하지 않습니다. GitHub Pages 정적 미리보기에서는 서버 DB가 없으므로 민감 설정 저장을 사용하지 않습니다.
+`설정` 탭에서는 앱 테마, 외부 데이터 API, 텔레그램 알림 전달 설정을 MySQL 운영 DB의 `runtime_settings` 테이블에 저장합니다. 계정별 Toss API 연결은 `계정` 탭에서, 관심 종목은 `관심종목` 탭에서, 모델 기준은 `모델링` 탭에서 관리합니다. `client_secret`, 외부 API key, bot token은 서버가 사용하는 운영 DB에만 저장하고, API 응답과 화면에는 원문을 다시 표시하지 않습니다. GitHub Pages 정적 미리보기에서는 서버 DB가 없으므로 민감 설정 저장을 사용하지 않습니다.
 
 전역 UI 정책과 새 화면 체크리스트는 `docs/design-system.md`에 정리되어 있습니다. 모든 웹 탭과 Python admin preview는 같은 색상, 간격, 버튼 위치, 내비게이션 기준을 따릅니다.
 
@@ -148,7 +148,7 @@ npm test
 npm run share
 ```
 
-공유 모드에서는 임시 토큰 URL을 사용합니다. `.env`, `.env.local`, `data/service.db`, legacy `data/store.json`, API key, 토스 credentials, 개인 계좌 데이터는 이슈나 PR에 올리지 않습니다.
+공유 모드에서는 임시 토큰 URL을 사용합니다. `.env`, `.env.local`, MySQL 접속 정보, legacy `data/store.json`, API key, 토스 credentials, 개인 계좌 데이터는 이슈나 PR에 올리지 않습니다.
 
 ## Python 서비스
 

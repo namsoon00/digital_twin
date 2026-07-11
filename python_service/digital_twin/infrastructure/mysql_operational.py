@@ -33,8 +33,7 @@ from ..domain.repositories import MonitoringCycleRecordResult
 from ..domain.symbol_universe import ListedSymbol, normalize_market, normalize_symbol, utc_now_iso as symbol_utc_now_iso
 from .model_review_queue import model_review_payloads_from_event
 from .mysql_monitoring import MySQLDependencyError, MySQLMonitorAccountJobStore, mysql_settings
-from .settings import read_json, settings_path, utc_now
-from .sqlite_operational import (
+from .operational_common import (
     MAX_NOTIFICATION_DELIVERY_ATTEMPTS,
     NOTIFICATION_HISTORY_LOOKBACK_LIMIT,
     age_minutes_since,
@@ -44,6 +43,7 @@ from .sqlite_operational import (
     rule_from_row,
     template_from_row,
 )
+from .settings import read_json, settings_path, utc_now
 
 
 def _json_loads(value, fallback):

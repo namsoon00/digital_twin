@@ -92,7 +92,7 @@ Projection은 다음 용도로만 사용한다.
 
 ## Quality Samples
 
-모니터링 사이클에서 온톨로지 그래프를 만들면 `ontology_ai_opinion_samples` SQLite 테이블에 품질 샘플을 남긴다.
+모니터링 사이클에서 온톨로지 그래프를 만들면 MySQL 운영 DB의 `ontology_ai_opinion_samples` 테이블에 품질 샘플을 남긴다.
 
 - 전체 점수: 데이터 커버리지, 바운디드 컨텍스트 커버리지, reasoning card 준비도, 관계 밀도.
 - 데이터 공백: reasoning card가 표시한 부족 데이터.

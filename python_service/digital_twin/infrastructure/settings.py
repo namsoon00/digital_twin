@@ -266,6 +266,9 @@ DEFAULT_RELATION_RULE_THRESHOLDS = [
         "externalBitcoinChange7dPct",
         "entryPullbackMa20BelowPct",
         "entryPullbackMa20DeepPct",
+        "entryMa5TimingMinPct",
+        "entryMomentumMa20MinPct",
+        "entryMomentumMa60MinPct",
         "entryMa60SupportPct",
         "entryVolumeMinRatio",
         "entryVolumeMaxRatio",
@@ -286,6 +289,9 @@ DEFAULT_RELATION_RULE_THRESHOLDS = [
         "usdKrwLow",
         "fxExposureReview",
         "fxExposureHigh",
+        "newsDirectFreshMaxAgeMinutes",
+        "newsDirectRelevanceMin",
+        "newsDirectMaterialityMin",
     ]
 ]
 
@@ -409,31 +415,29 @@ def utc_now() -> str:
 
 def read_settings_store() -> Dict[str, str]:
     try:
-        from .mysql_monitoring import mysql_backend_enabled
+        backend = str(os.environ.get("OPERATIONAL_DB_BACKEND") or "mysql").strip().lower()
+        if backend == "sqlite":
+            from .sqlite_runtime import SQLiteRuntimeSettingsStore
 
-        if mysql_backend_enabled({}):
-            from .mysql_operational import MySQLRuntimeSettingsStore
+            return SQLiteRuntimeSettingsStore().load()
+        from .mysql_operational import MySQLRuntimeSettingsStore
 
-            return MySQLRuntimeSettingsStore({}).load()
-        from .sqlite_runtime import SQLiteRuntimeSettingsStore
-
-        return SQLiteRuntimeSettingsStore().load()
+        return MySQLRuntimeSettingsStore({}).load()
     except Exception:
         return read_json(settings_path(), {})
 
 
 def write_settings_store(settings: Dict[str, object]) -> Dict[str, str]:
     clean = {str(key): str(value or "") for key, value in settings.items()}
-    from .mysql_monitoring import mysql_backend_enabled
-
-    if mysql_backend_enabled(clean) or mysql_backend_enabled({}):
-        from .mysql_operational import MySQLRuntimeSettingsStore
-
-        MySQLRuntimeSettingsStore(clean).replace(clean)
-    else:
+    backend = str(clean.get("operationalDbBackend") or os.environ.get("OPERATIONAL_DB_BACKEND") or "mysql").strip().lower()
+    if backend == "sqlite":
         from .sqlite_runtime import SQLiteRuntimeSettingsStore
 
         SQLiteRuntimeSettingsStore().replace(clean)
+    else:
+        from .mysql_operational import MySQLRuntimeSettingsStore
+
+        MySQLRuntimeSettingsStore(clean).replace(clean)
     return clean
 
 
@@ -480,7 +484,7 @@ def runtime_settings() -> Dict[str, str]:
     settings = {
         "appTheme": value("appTheme", "APP_THEME", "light"),
         "watchlistSymbols": value("watchlistSymbols", "WATCHLIST_SYMBOLS", "TSLA,AAPL,NVDA,000660"),
-        "operationalDbBackend": value("operationalDbBackend", "OPERATIONAL_DB_BACKEND", "sqlite"),
+        "operationalDbBackend": value("operationalDbBackend", "OPERATIONAL_DB_BACKEND", "mysql"),
         "mysqlUrl": value("mysqlUrl", "MYSQL_URL", ""),
         "mysqlHost": value("mysqlHost", "MYSQL_HOST", "127.0.0.1"),
         "mysqlPort": value("mysqlPort", "MYSQL_PORT", "3306"),

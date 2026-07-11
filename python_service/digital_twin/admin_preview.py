@@ -8,7 +8,7 @@ from .domain.model_review import MODEL_REVIEW_PROMPT_VERSION
 from .domain.message_types import DEFAULT_ALERT_RULES, DEFAULT_ALERT_THRESHOLDS, DEFAULT_CADENCE, DEFAULT_RELATION_RULE_THRESHOLDS, MIN_CADENCE_MINUTES
 from .domain.parsing import parse_assignments
 from .infrastructure import operational_store as stores
-from .infrastructure.settings import ROOT_DIR, runtime_settings, service_db_path, settings_path, utc_now
+from .infrastructure.settings import ROOT_DIR, runtime_settings, settings_path, utc_now
 
 
 DEFAULT_THRESHOLDS = DEFAULT_ALERT_THRESHOLDS
@@ -224,19 +224,22 @@ def assignment_snapshot(raw: str, defaults: Dict[str, float], unit: str = "") ->
 
 def local_data_snapshot() -> Dict[str, object]:
     settings = runtime_settings()
-    registry = stores.account_registry(settings)
-    saved_accounts = registry.load_saved()
-    accounts = saved_accounts or registry.load_all()
+    try:
+        registry = stores.account_registry(settings)
+        saved_accounts = registry.load_saved()
+        accounts = saved_accounts or registry.load_all()
+    except Exception:
+        saved_accounts = []
+        accounts = []
     enabled_accounts = [account for account in accounts if account.enabled]
     return {
         "generatedAt": utc_now(),
         "sources": {
-            "serviceDb": relative_path(service_db_path()),
-            "serviceDbExists": service_db_path().exists(),
+            "operationalDbBackend": settings.get("operationalDbBackend") or "mysql",
             "settings": relative_path(settings_path()),
             "settingsExists": settings_path().exists(),
         },
-        "accountSource": "sqlite" if saved_accounts else "runtime-default",
+        "accountSource": "operational-db" if saved_accounts else "runtime-default",
         "savedAccountCount": len(saved_accounts),
         "accountCount": len(accounts),
         "enabledAccountCount": len(enabled_accounts),
@@ -263,8 +266,8 @@ def admin_preview_config() -> Dict[str, object]:
         "previewUrl": "https://namsoon00.github.io/orbit-alpha/admin/",
         "localUrl": "http://127.0.0.1:3000/admin/",
         "security": [
-            "GitHub Pages 미리보기에는 운영 DB 파일, Toss secret, Telegram bot token, 계좌 순번, 채팅 ID 원문을 포함하지 않습니다.",
-            "빌드 시점의 로컬 DB 계정과 런타임 설정은 secret 원문 없이 마스킹된 값으로만 포함합니다.",
+            "GitHub Pages 미리보기에는 운영 DB 접속 정보, Toss secret, Telegram bot token, 계좌 순번, 채팅 ID 원문을 포함하지 않습니다.",
+            "빌드 시점의 운영 DB 계정과 런타임 설정은 secret 원문 없이 마스킹된 값으로만 포함합니다.",
             "실제 설정 저장과 계좌 조회는 로컬 서버의 /api/service-accounts, /api/settings에서만 수행합니다.",
             "공유 미리보기에서는 서버 설정과 계정 DB 쓰기를 차단합니다.",
         ],
@@ -276,7 +279,7 @@ def admin_preview_config() -> Dict[str, object]:
                 "summary": "여러 Toss 계정과 관심 종목, 알림 채널을 운영 저장소에 저장하는 로컬 전용 관리 화면입니다.",
                 "localEndpoints": ["GET /api/service-accounts", "POST /api/service-accounts", "DELETE /api/service-accounts/{id}"],
                 "commands": ["npm run python:accounts -- list --json", "npm run python:accounts -- add --id main ..."],
-                "storage": ["data/service.db"],
+                "storage": ["mysql: service_accounts"],
                 "fields": [
                     {"key": "id", "label": "계정 ID", "type": "text", "required": True},
                     {"key": "label", "label": "표시 이름", "type": "text", "required": True},
@@ -295,7 +298,7 @@ def admin_preview_config() -> Dict[str, object]:
                 "summary": "웹 설정 패널과 Python 서비스가 함께 읽는 로컬 설정입니다. secret 원문은 응답에 다시 내려주지 않습니다.",
                 "localEndpoints": ["GET /api/settings", "PUT /api/settings"],
                 "commands": ["cp .env.example .env.local", "npm start"],
-                "storage": ["data/service.db: runtime_settings", ".env.local"],
+                "storage": ["mysql: runtime_settings", ".env.local"],
                 "fields": [
                     {"key": "watchlistSymbols", "label": "기본 관심 종목", "type": "symbols", "default": "TSLA,AAPL,NVDA,000660"},
                     {"key": "notifyProvider", "label": "알림 채널", "type": "select", "options": ["telegram", "kakao", "console"]},
@@ -377,7 +380,7 @@ def admin_preview_config() -> Dict[str, object]:
                     "npm run python:service:start",
                     "npm run python:service:status",
                 ],
-                "storage": ["data/service.db: monitor_snapshots", "data/service.db: monitor_sent", "data/service.db: domain_events"],
+                "storage": ["mysql: monitor_snapshots", "mysql: monitor_sent", "mysql: domain_events"],
                 "defaults": {
                     "alertRules": assignment_items(DEFAULT_ALERT_RULES),
                     "alertThresholds": assignment_items(DEFAULT_THRESHOLDS),
@@ -396,7 +399,7 @@ def admin_preview_config() -> Dict[str, object]:
                     "npm run python:symbols:search -- --query AAPL --market NASDAQ",
                     "npm run python:symbols:status",
                 ],
-                "storage": ["data/service.db: symbol_universe", "data/service.db: symbol_universe_sources"],
+                "storage": ["mysql: symbol_universe", "mysql: symbol_universe_sources"],
                 "fields": [
                     {"key": "symbol", "label": "티커/종목코드", "type": "text"},
                     {"key": "market", "label": "시장", "type": "select", "options": ["KOSPI", "KOSDAQ", "NASDAQ"]},
@@ -414,7 +417,7 @@ def admin_preview_config() -> Dict[str, object]:
                     "npm run python:market-data:status",
                     "npm run python:market-data:watch",
                 ],
-                "storage": ["data/service.db: market_quote_cache"],
+                "storage": ["mysql: market_quote_cache"],
                 "fields": [
                     {"key": "marketDataCollectionIntervalSeconds", "label": "수집 주기(초)", "type": "number", "default": "180"},
                     {"key": "marketDataPriceBatchSize", "label": "현재가 배치", "type": "number", "default": "200"},
@@ -431,7 +434,7 @@ def admin_preview_config() -> Dict[str, object]:
                     "npm run python:model-review:watch",
                     "npm run python:model-review:status",
                 ],
-                "storage": ["data/service.db: model_review_jobs", "data/python-model-review.log"],
+                "storage": ["mysql: model_review_jobs", "data/python-model-review.log"],
                 "settings": [
                     {"key": "modelReviewUseCodex", "label": "Codex 분석 사용", "default": "1"},
                     {"key": "modelReviewCommand", "label": "외부 리뷰 명령", "default": ""},
@@ -452,7 +455,7 @@ def admin_preview_config() -> Dict[str, object]:
                     "python3 python_service/service.py templates reset --message-type monitorHeartbeat",
                 ],
                 "localEndpoints": ["GET /api/notification-templates", "GET /api/notification-schedules", "POST /api/notification-templates/test-send"],
-                "storage": ["data/service.db: notification_templates", "data/service.db: notification_jobs"],
+                "storage": ["mysql: notification_templates", "mysql: notification_jobs"],
                 "fields": [
                     {"key": "messageType", "label": "메시지 타입"},
                     {"key": "template", "label": "템플릿 본문"},
@@ -577,7 +580,7 @@ def render_local_data(payload: Dict[str, object]) -> str:
         "</div>"
         '<div class="section-grid">'
         '<div class="panel"><h3>소스</h3>'
-        '<div class="default-row"><strong>DB</strong><div><span class="chip">' + escape(str(sources.get("serviceDb") or "data/service.db")) + "</span>" + status_chip(sources.get("serviceDbExists"), "파일 확인") + "</div></div>"
+        '<div class="default-row"><strong>DB</strong><div><span class="chip">' + escape(str(sources.get("operationalDbBackend") or "mysql")) + "</span></div></div>"
         '<div class="default-row"><strong>설정</strong><div><span class="chip">' + escape(str(sources.get("settings") or "data/settings.json")) + "</span>" + status_chip(sources.get("settingsExists"), "파일 확인") + "</div></div>"
         '<div class="default-row"><strong>빌드 시각</strong><div><span class="chip">' + escape(str(local_data.get("generatedAt") or "-")) + "</span></div></div>"
         "</div>"

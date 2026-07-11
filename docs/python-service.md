@@ -53,10 +53,10 @@ Current event contracts:
 
 For parallel work across multiple chat windows, keep each conversation inside one slice:
 
-- Account management: `domain/accounts.py`, `application/account_service.py`, `infrastructure/operational_store.py`, `infrastructure/sqlite_accounts.py`, `infrastructure/mysql_operational.py`
+- Account management: `domain/accounts.py`, `application/account_service.py`, `infrastructure/operational_store.py`, `infrastructure/mysql_operational.py`
 - Monitoring and scheduling: `domain/monitoring.py`, `domain/strategy_alerts.py`, `domain/external_signal_alerts.py`, `application/monitoring_service.py`, `monitor.py`, `scheduler.py`
-- Notifications and messages: `domain/message_types.py`, `domain/notifications.py`, `domain/notification_rules.py`, `domain/notification_templates.py`, `domain/scoring.py`, `infrastructure/notifications.py`, `application/notification_service.py`, `infrastructure/operational_store.py`, and the SQLite/MySQL store adapters
-- Symbol universe: `domain/symbol_universe.py`, `application/symbol_universe_service.py`, `infrastructure/symbol_sources.py`, `infrastructure/operational_store.py`, and the SQLite/MySQL store adapters
+- Notifications and messages: `domain/message_types.py`, `domain/notifications.py`, `domain/notification_rules.py`, `domain/notification_templates.py`, `domain/scoring.py`, `infrastructure/notifications.py`, `application/notification_service.py`, `infrastructure/operational_store.py`, and the MySQL store adapters
+- Symbol universe: `domain/symbol_universe.py`, `application/symbol_universe_service.py`, `infrastructure/symbol_sources.py`, `infrastructure/operational_store.py`, and the MySQL store adapters
 - Providers/data collection: `providers.py`, `infrastructure/toss_snapshots.py`
 - Model scoring and strategy: `domain/market_data.py`, `domain/portfolio_calculations.py`, `domain/strategy.py`, `domain/scoring.py`, and future model-lab modules
 
@@ -84,9 +84,9 @@ npm run python:service:restart
 npm run python:service:stop
 ```
 
-Operational state is selected through `python_service/digital_twin/infrastructure/operational_store.py`. SQLite remains the local fallback at `data/service.db` with `0600` permissions and is ignored by git. When `OPERATIONAL_DB_BACKEND=mysql` or `MYSQL_URL` is configured, accounts, runtime settings, app store, domain events, monitor snapshots, cadence keys, notification templates/rules/jobs, model review jobs, symbol universe, market quote cache, research evidence, and ontology quality samples use MySQL.
+Operational state is selected through `python_service/digital_twin/infrastructure/operational_store.py`. The default operational backend is MySQL. Accounts, runtime settings, app store, domain events, monitor snapshots, cadence keys, notification templates/rules/jobs, model review jobs, symbol universe, market quote cache, research evidence, and ontology quality samples use MySQL.
 
-If the operational database has no account rows, the service falls back to single-account settings from `runtime_settings` or `.env.local`. Existing `data/store.json`, `data/settings.json`, and `data/accounts.json` files are imported into SQLite on first use as legacy compatibility.
+If the operational database has no account rows, the service falls back to single-account settings from `runtime_settings` or `.env.local`. Existing `data/store.json`, `data/settings.json`, and `data/accounts.json` files are retained only as legacy import sources; new runtime writes should go to MySQL.
 
 `python:monitor:watch` runs realtime monitoring in the foreground. `python:model-review:watch` runs the asynchronous model-review worker in the foreground. `python:notifications:watch` runs the single notification delivery worker.
 

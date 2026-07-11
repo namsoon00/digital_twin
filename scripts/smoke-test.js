@@ -157,19 +157,6 @@ function assertOk(condition, message) {
   if (!condition) throw new Error(message);
 }
 
-function readSqliteSetting(dbPath, key) {
-  const script = [
-    "import sqlite3, sys",
-    "connection = sqlite3.connect(sys.argv[1])",
-    "row = connection.execute('SELECT value FROM runtime_settings WHERE key = ?', (sys.argv[2],)).fetchone()",
-    "print('' if row is None else row[0])"
-  ].join("\n");
-  return childProcess.execFileSync(process.env.PYTHON_BIN || "python3", ["-c", script, dbPath, key], {
-    cwd: rootDir,
-    encoding: "utf8"
-  }).trim();
-}
-
 function checkFrontendAdminRender() {
   const code = fs.readFileSync(path.join(rootDir, "public", "app.js"), "utf8");
   const styles = fs.readFileSync(path.join(rootDir, "public", "styles.css"), "utf8");
@@ -579,32 +566,6 @@ function checkFrontendAdminRender() {
       ],
       summary: { done: 2, suppressed: 2, failed: 0 },
       limit: 40
-    },
-    "/api/sqlite/health": {
-      generatedAt: "2026-07-01T00:00:00.000Z",
-      path: "/tmp/service.db",
-      exists: true,
-      sizeBytes: 40960,
-      walSizeBytes: 0,
-      shmSizeBytes: 0,
-      recentLockLogCount: 0,
-      journalMode: "wal",
-      busyTimeoutMs: 30000,
-      tables: {
-        runtimeSettings: 12,
-        domainEvents: 5,
-        monitorSnapshots: 1,
-        researchEvidence: 4,
-        symbolUniverse: 8,
-        marketQuoteCache: 3
-      },
-      outbox: {
-        notificationJobs: { pending: 1, done: 2, suppressed: 2 },
-        modelReviewJobs: { pending: 1 }
-      },
-      migrations: [
-        { version: "sqlite_operational_schema_20260710", appliedAt: "2026-07-01T00:00:00.000Z" }
-      ]
     },
     "/api/notification-schedules": {
       generatedAt: "2026-07-01T00:00:00.000Z",
@@ -1152,7 +1113,7 @@ function checkFrontendAdminRender() {
     assertOk(styles.indexOf(".app-nav-tab.active") >= 0 && styles.indexOf(".app-nav-menu") >= 0, "앱 네비게이션 활성 탭과 모바일 관리 메뉴 스타일 규칙이 없습니다.");
     assertOk(styles.indexOf("@media (min-width: 861px)") >= 0 && styles.indexOf(".tab-bar {\n    display: none;") >= 0, "데스크톱에서 하단 탭을 숨기는 규칙이 없습니다.");
     assertOk(styles.indexOf("position: sticky") >= 0 && styles.indexOf("bottom: 0;") >= 0 && styles.indexOf("backdrop-filter: blur(18px)") >= 0 && styles.indexOf(".app-nav.is-hidden") >= 0, "모바일 앱바 접힘/하단탭 고정 반응형 규칙이 없습니다.");
-    assertOk(code.indexOf("settingsSaving") >= 0 && code.indexOf("로컬 SQLite DB") >= 0, "설정 저장 진행 상태가 렌더링되지 않습니다.");
+    assertOk(code.indexOf("settingsSaving") >= 0 && code.indexOf("MySQL 운영 DB") >= 0, "설정 저장 진행 상태가 렌더링되지 않습니다.");
     assertOk(code.indexOf("new window.WebSocket") >= 0, "프론트가 웹소켓 실시간 연결을 생성하지 않습니다.");
     assertOk(code.indexOf("realtime.status") >= 0, "웹소켓 상태 메시지를 처리하지 않습니다.");
     assertOk(code.indexOf("realtimeEventSnackbar") >= 0, "웹소켓 이벤트를 스낵바로 연결하지 않습니다.");
@@ -1179,11 +1140,10 @@ function checkFrontendAdminRender() {
     assertOk(systemHtml.indexOf("EVENT FLOW") >= 0 && systemHtml.indexOf("monitoring.snapshot_collected") >= 0 && systemHtml.indexOf("notification.job_queued") >= 0, "시스템 탭에 이벤트 흐름 설명이 없습니다.");
     assertOk(systemHtml.indexOf("ALERT PIPELINE") >= 0 && systemHtml.indexOf("system-notification-flow") >= 0, "시스템 탭에 알림 생성 흐름 다이어그램이 없습니다.");
     assertOk(systemHtml.indexOf("ONTOLOGY MODEL") >= 0 && systemHtml.indexOf("TBox") >= 0 && systemHtml.indexOf("ABox") >= 0, "시스템 탭에 온톨로지 모델 설명이 없습니다.");
-    assertOk(systemHtml.indexOf("system-sqlite-panel") >= 0 && systemHtml.indexOf("system-sqlite-actions") >= 0, "시스템 탭에 SQLite 운영 상태 패널이 정리된 액션 레이아웃으로 렌더링되지 않습니다.");
-    assertOk(systemHtml.indexOf("DB 최적화") >= 0 && systemHtml.indexOf("Checkpoint · Optimize") < 0, "시스템 탭 SQLite 액션 버튼 라벨이 모바일에 맞게 줄어들지 않았습니다.");
+    assertOk(systemHtml.indexOf("system-sqlite-panel") < 0 && systemHtml.indexOf("system-sqlite-actions") < 0, "시스템 탭에 제거된 SQLite 운영 패널이 남아 있습니다.");
+    assertOk(systemHtml.indexOf("MySQL operational tables") >= 0, "시스템 탭 데이터 흐름이 MySQL 운영 DB 기준으로 렌더링되지 않습니다.");
     assertOk(styles.indexOf(".system-guide-view") >= 0 && styles.indexOf(".system-flow-diagram") >= 0 && styles.indexOf(".system-event-track") >= 0, "시스템 설명 탭 스타일이 없습니다.");
-    assertOk(/\.system-sqlite-panel \.sqlite-health-ledger\s*\{[\s\S]*grid-template-columns: repeat\(auto-fit, minmax\(230px, 1fr\)\);/.test(styles), "시스템 SQLite 상태 카드가 PC에서 카드 그리드로 정렬되지 않습니다.");
-    assertOk(/@media \(max-width: 860px\)[\s\S]*\.system-sqlite-panel \.sqlite-migration-grid\s*\{[\s\S]*display: none;/.test(styles), "시스템 SQLite migration 상세 표가 모바일에서 숨겨지지 않습니다.");
+    assertOk(styles.indexOf("system-sqlite") < 0 && styles.indexOf("sqlite-health") < 0, "제거된 SQLite 전용 스타일이 남아 있습니다.");
     assertOk(overviewHtml.indexOf("admin-monitoring-panel") >= 0, "모니터링 상태 패널이 렌더링되지 않았습니다.");
     assertOk(overviewHtml.indexOf("account-directory-panel") >= 0, "홈에 DB 계정 패널이 렌더링되지 않았습니다.");
     assertOk(overviewHtml.indexOf("account-watchlist-panel") >= 0, "홈에 계정별 관심 종목 패널이 렌더링되지 않았습니다.");
@@ -1572,6 +1532,7 @@ async function withServer(extraEnv, callback) {
       PORT: String(randomPort()),
       LOCAL_CODEX_ENABLED: "0",
       WATCHLIST_SYMBOLS: "TSLA,AAPL,NVDA,000660",
+      OPERATIONAL_DB_BACKEND: "sqlite",
       KIS_MARKET_SIGNALS_ENABLED: "0",
       EXTERNAL_ALPHA_ENABLED: "0",
       EXTERNAL_COINGECKO_ENABLED: "0",
@@ -1588,7 +1549,6 @@ async function withServer(extraEnv, callback) {
     const port = await waitForServer(serverProcess);
     await callback(port, {
       dataDir: dataDir,
-      serviceDbPath: path.join(dataDir, "service.db"),
       settingsPath: settingsPath
     });
   } finally {
@@ -1714,13 +1674,6 @@ async function checkNormalMode(port, context) {
   assertOk(savedSettingsPayload.settings.dataFreshnessQuoteMaxAgeMinutes === "12", "저장된 시세 신선도 기준이 응답에 없습니다.");
   assertOk(savedSettingsPayload.settings.externalSignalCacheMaxAgeMinutes === "9", "저장된 외부 신호 캐시 TTL이 응답에 없습니다.");
   assertOk(savedSettingsPayload.settings.marketDataMaxAgeMinutes === "180", "저장된 추천 시세 신선도 기준이 응답에 없습니다.");
-  assertOk(readSqliteSetting(context.serviceDbPath, "appTheme") === "dark", "화면 테마 설정이 SQLite DB에 저장되지 않았습니다.");
-  assertOk(readSqliteSetting(context.serviceDbPath, "notifyProvider") === "telegram", "알림 제공자 설정이 SQLite DB에 저장되지 않았습니다.");
-  assertOk(readSqliteSetting(context.serviceDbPath, "telegramChatId") === "1234", "Telegram Chat ID 설정이 SQLite DB에 저장되지 않았습니다.");
-  assertOk(readSqliteSetting(context.serviceDbPath, "dartDisclosureAiUseCodex") === "0", "공시 AI 엔진 설정이 SQLite DB에 저장되지 않았습니다.");
-  assertOk(readSqliteSetting(context.serviceDbPath, "tossClientSecret") === "fake-secret", "Toss secret 설정이 SQLite DB에 저장되지 않았습니다.");
-  assertOk(readSqliteSetting(context.serviceDbPath, "dataFreshnessQuoteMaxAgeMinutes") === "12", "시세 신선도 기준이 SQLite DB에 저장되지 않았습니다.");
-  assertOk(readSqliteSetting(context.serviceDbPath, "externalSignalCacheMaxAgeMinutes") === "9", "외부 신호 캐시 TTL이 SQLite DB에 저장되지 않았습니다.");
   const eventStatusAfterSettings = JSON.parse((await request(port, "/api/realtime/status")).body);
   assertOk(eventStatusAfterSettings.events["settings.updated"] >= 1, "설정 저장 이벤트가 이벤트 로그에 없습니다.");
   assertOk(eventStatusAfterSettings.latestEvents.some(function (event) { return event.name === "settings.updated"; }), "최근 이벤트에 설정 저장 이벤트가 없습니다.");

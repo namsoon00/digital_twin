@@ -22,7 +22,6 @@ from .infrastructure import operational_store as stores
 from .infrastructure.notifications import queued_notifier_for_account, send_events
 from .infrastructure.neo4j_ontology import ontology_repository_from_settings
 from .infrastructure.service_factory import build_market_data_collection_runner, build_model_review_runner, build_monitor_runner, build_news_collection_runner, build_notification_queue_runner, build_ontology_reasoning_runner, build_symbol_universe_service, monitor_account_job_store_from_settings
-from .infrastructure.sqlite_maintenance_service import SQLiteMaintenanceRunner, SQLiteMaintenanceScheduler
 from .infrastructure.settings import (
     SECRET_SETTING_KEYS,
     read_settings_store,
@@ -432,37 +431,6 @@ def news_command(args) -> int:
     return 1
 
 
-def sqlite_maintenance_command(args) -> int:
-    settings = runtime_settings()
-    retention_days = int(
-        getattr(args, "retention_days", 0)
-        or os.environ.get("SQLITE_RETENTION_DAYS")
-        or settings.get("sqliteRetentionDays")
-        or 7
-    )
-    runner = SQLiteMaintenanceRunner(
-        retention_days=retention_days,
-        archive_old_data=bool(getattr(args, "archive", False)),
-        compact_app_store=not bool(getattr(args, "no_compact_app_store", False)),
-        vacuum=bool(getattr(args, "vacuum", False)),
-    )
-    if args.sqlite_maintenance_action == "status":
-        print(json.dumps(runner.status(), ensure_ascii=False))
-        return 0
-    if args.sqlite_maintenance_action == "once":
-        print(json.dumps(runner.run_once(), ensure_ascii=False))
-        return 0
-    if args.sqlite_maintenance_action == "watch":
-        interval = int(
-            os.environ.get("SQLITE_MAINTENANCE_INTERVAL_SECONDS")
-            or settings.get("sqliteMaintenanceIntervalSeconds")
-            or 60 * 60
-        )
-        SQLiteMaintenanceScheduler(runner, interval).run_forever()
-        return 0
-    return 1
-
-
 def handoff_command(args) -> int:
     if args.handoff_action != "notify":
         return 1
@@ -639,21 +607,6 @@ def build_parser() -> argparse.ArgumentParser:
     news_actions.add_parser("watch")
     news_actions.add_parser("status")
     news.set_defaults(func=news_command)
-
-    sqlite_maintenance = subparsers.add_parser("sqlite-maintenance", help="Run SQLite cleanup and query maintenance")
-    sqlite_maintenance_actions = sqlite_maintenance.add_subparsers(dest="sqlite_maintenance_action", required=True)
-    sqlite_once = sqlite_maintenance_actions.add_parser("once")
-    sqlite_once.add_argument("--retention-days", default="")
-    sqlite_once.add_argument("--archive", action="store_true")
-    sqlite_once.add_argument("--no-compact-app-store", action="store_true")
-    sqlite_once.add_argument("--vacuum", action="store_true")
-    sqlite_watch = sqlite_maintenance_actions.add_parser("watch")
-    sqlite_watch.add_argument("--retention-days", default="")
-    sqlite_watch.add_argument("--archive", action="store_true")
-    sqlite_watch.add_argument("--no-compact-app-store", action="store_true")
-    sqlite_watch.add_argument("--vacuum", action="store_true")
-    sqlite_maintenance_actions.add_parser("status")
-    sqlite_maintenance.set_defaults(func=sqlite_maintenance_command)
 
     handoff = subparsers.add_parser("handoff", help="Send development handoff notifications")
     handoff_actions = handoff.add_subparsers(dest="handoff_action", required=True)

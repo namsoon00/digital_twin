@@ -13705,3 +13705,87 @@ html[data-theme="dark"] .ontology-cytoscape {
   white-space: normal;
   word-break: keep-all;
 }
+
+/* Event flow cards need explicit placement because the panel can be narrow
+   while the viewport is still in the desktop media range. */
+.system-event-track {
+  min-width: 0;
+}
+
+.system-event-row {
+  grid-template-columns: 52px minmax(200px, 0.4fr) minmax(0, 1fr);
+  grid-template-areas:
+    "step event title"
+    "step detail detail";
+  gap: var(--ds-space-3) var(--ds-space-5);
+  align-items: start;
+}
+
+.system-event-row b {
+  grid-area: step;
+  justify-self: start;
+  width: 44px;
+}
+
+.system-event-row code {
+  grid-area: event;
+  max-width: 100%;
+  white-space: normal;
+  word-break: normal;
+  overflow-wrap: anywhere;
+}
+
+.system-event-row strong {
+  grid-area: title;
+  min-width: 0;
+  white-space: normal;
+  word-break: keep-all;
+  overflow-wrap: normal;
+}
+
+.system-event-row p {
+  grid-area: detail;
+  max-width: 72ch;
+  white-space: normal;
+  word-break: keep-all;
+  overflow-wrap: normal;
+}
+
+@media (max-width: 980px) {
+  .system-event-row {
+    grid-template-columns: 48px minmax(0, 1fr);
+    grid-template-areas:
+      "step event"
+      "step title"
+      "step detail";
+  }
+
+  .system-event-row p {
+    max-width: none;
+  }
+}
+
+@media (max-width: 860px) {
+  .system-event-row {
+    display: block;
+  }
+
+  .system-event-row b,
+  .system-event-row code,
+  .system-event-row strong,
+  .system-event-row p {
+    display: block;
+    grid-area: auto !important;
+    grid-column: auto !important;
+  }
+
+  .system-event-row code,
+  .system-event-row strong,
+  .system-event-row p {
+    margin-top: var(--ds-space-3);
+  }
+
+  .system-event-row p {
+    max-width: none;
+  }
+}

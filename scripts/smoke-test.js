@@ -8,6 +8,7 @@ const path = require("path");
 const vm = require("vm");
 
 const rootDir = path.resolve(__dirname, "..");
+const requestTimeoutMs = Number(process.env.SMOKE_REQUEST_TIMEOUT_MS || 10000);
 
 function randomPort() {
   return 43000 + (crypto.randomBytes(2).readUInt16BE(0) % 1000);
@@ -81,7 +82,7 @@ function request(port, pathname, options) {
       socket.end();
     });
     const chunks = [];
-    socket.setTimeout(5000);
+    socket.setTimeout(requestTimeoutMs);
     socket.on("data", function (chunk) {
       chunks.push(chunk);
     });

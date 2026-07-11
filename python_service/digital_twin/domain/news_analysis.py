@@ -767,12 +767,18 @@ def stock_impact_analysis(
 
 
 def source_reliability_score(source: object, provider: object = "") -> float:
-    text = _lower_text(str(source or "") + " " + str(provider or ""))
-    if any(token in text for token in LOW_RELIABILITY_SOURCE_TERMS):
+    source_text = _lower_text(source)
+    provider_text = _lower_text(provider)
+    text = source_text + " " + provider_text
+    if any(token in source_text for token in LOW_RELIABILITY_SOURCE_TERMS):
         return 0.42
-    if any(token in text for token in HIGH_RELIABILITY_SOURCE_TERMS):
+    if any(token in source_text for token in HIGH_RELIABILITY_SOURCE_TERMS):
         return 0.82
-    if any(token in text for token in ["google news", "gdelt", "yahoo finance", "investing", "매일경제", "한국경제", "이데일리", "머니투데이", "조선비즈", "서울경제"]):
+    if any(token in source_text for token in ["yahoo finance", "investing", "매일경제", "한국경제", "이데일리", "머니투데이", "조선비즈", "서울경제", "kbs", "sbs", "mbc", "매경", "한경"]):
+        return 0.68
+    if any(token in provider_text for token in ["google news", "google_rss", "gdelt"]):
+        return 0.58
+    if any(token in text for token in ["yahoo finance", "investing"]):
         return 0.68
     return 0.58
 

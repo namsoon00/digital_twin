@@ -84,10 +84,13 @@ def score_text(value: object, suffix: str = "점") -> str:
     return ("%.1f" % numeric).rstrip("0").rstrip(".") + suffix
 
 
-def reliability_label(value: object) -> str:
+def normalized_score(value: object) -> float:
     score = number(value)
-    if 0 < score <= 1:
-        score *= 100
+    return score * 100 if 0 < score <= 1 else score
+
+
+def reliability_label(value: object) -> str:
+    score = normalized_score(value)
     if score >= 80:
         return "높음"
     if score >= 60:
@@ -180,6 +183,47 @@ class NewsDigestEnqueuer:
             return True
         return str(value).strip().lower() not in {"0", "false", "no", "off", "disabled"}
 
+    def quality_gate_enabled(self) -> bool:
+        value = self.settings.get("newsDigestHighQualityOnly")
+        if value in (None, ""):
+            return True
+        return str(value).strip().lower() not in {"0", "false", "no", "off", "disabled"}
+
+    def min_relevance_score(self) -> float:
+        return number(self.settings.get("newsDigestMinRelevanceScore")) or 85
+
+    def min_materiality_score(self) -> float:
+        return number(self.settings.get("newsDigestMinMaterialityScore")) or 70
+
+    def min_neutral_materiality_score(self) -> float:
+        return number(self.settings.get("newsDigestMinNeutralMaterialityScore")) or 78
+
+    def min_source_reliability(self) -> float:
+        return number(self.settings.get("newsDigestMinSourceReliability")) or 68
+
+    def item_payload_score(self, item: Dict[str, object], key: str) -> float:
+        payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+        return normalized_score(item.get(key) if item.get(key) not in (None, "") else payload.get(key))
+
+    def item_passes_quality_gate(self, item: Dict[str, object]) -> bool:
+        if not self.quality_gate_enabled():
+            return True
+        summary = item_summary(item)
+        if not summary or "Comprehensive" in summary or "Google News입니다" in summary or "상승-으로-date" in summary:
+            return False
+        reliability = self.item_payload_score(item, "sourceReliability")
+        relevance = self.item_payload_score(item, "relevanceScore")
+        materiality = self.item_payload_score(item, "materialityScore")
+        impact = normalized_score(item.get("stockImpactScore") or item.get("impactScore"))
+        polarity = clean_text(item.get("stockImpactPolarity") or item.get("polarity")).lower()
+        label = impact_label(item)
+        required_materiality = self.min_neutral_materiality_score() if label == "중립" or polarity in {"context", "neutral"} else self.min_materiality_score()
+        return (
+            reliability >= self.min_source_reliability()
+            and relevance >= self.min_relevance_score()
+            and max(materiality, impact) >= required_materiality
+        )
+
     def handle(self, event: DomainEvent) -> None:
         if event.name != RESEARCH_EVIDENCE_COLLECTED:
             return
@@ -203,6 +247,8 @@ class NewsDigestEnqueuer:
         items = [dict(item) for item in raw_items if isinstance(item, dict)]
         if self.require_article_body():
             items = [item for item in items if article_read_status(item) == "body"]
+        if self.quality_gate_enabled():
+            items = [item for item in items if self.item_passes_quality_gate(item)]
         items.sort(key=item_sort_key, reverse=True)
         return items
 

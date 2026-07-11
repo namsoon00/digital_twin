@@ -118,6 +118,31 @@ class NewsDigestEnqueuerTests(unittest.TestCase):
 
         self.assertEqual([], queue.jobs)
 
+    def test_ignores_low_quality_news_by_default(self):
+        queue = MemoryNotificationQueue()
+        weak = self.evidence()
+        weak.raw_payload.update({
+            "sourceReliability": 58,
+            "materialityScore": 66.5,
+            "stockImpactPolarity": "context",
+            "stockImpactLabel": "중립",
+            "stockImpactScore": 50,
+            "articleSummaryKo": "본문 요약: SK하이닉스 상장 제목만 확인됐습니다.",
+        })
+        event = DomainEvent(
+            name=RESEARCH_EVIDENCE_COLLECTED,
+            aggregate_id="news:AAPL",
+            payload={
+                "materialChangedItems": [weak.to_dict()],
+                "materialChangedSymbols": ["AAPL"],
+                "materialChangedCount": 1,
+            },
+        )
+
+        self.enqueuer(queue).handle(event)
+
+        self.assertEqual([], queue.jobs)
+
     def test_rendered_news_digest_does_not_append_generic_ai_sections(self):
         queue = MemoryNotificationQueue()
         event = DomainEvent(

@@ -351,6 +351,7 @@ def research_evidence_from_payload(payload: Dict[str, object], fallback_symbol: 
         "directMention",
         "eventType",
         "materialityScore",
+        "materialityPassed",
         "ontologyRelations",
         "excludedReason",
         "analysisSummary",

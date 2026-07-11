@@ -195,6 +195,45 @@ def trend_transition_assessment(
             "riskImpact": min(18.0, 8.0 + abs(min(last_delta, ma20_delta)) * 1.8),
             "relationHint": "INDICATES_ACCELERATION",
         })
+    elif transition["transitionType"] == "none" and curr in {"falling", "weakening"}:
+        ma20_distance = float(current.get("ma20Distance") or 0.0)
+        ma60_distance = float(current.get("ma60Distance") or 0.0)
+        ma20_slope = float(current.get("ma20Slope") or 0.0)
+        risk_driver = max(
+            abs(min(0.0, ma20_distance + 4.0)) * 4.0,
+            abs(min(0.0, ma60_distance + 3.0)) * 3.0,
+            abs(min(0.0, last_delta + 1.2)) * 5.0,
+            abs(min(0.0, ma20_slope + 0.6)) * 8.0,
+        )
+        if risk_driver >= 4.0 or ma20_distance <= -5.0 or ma60_distance <= -4.0:
+            score = 58 + min(24.0, risk_driver) + (6 if volume_ratio >= 1.2 else 0)
+            transition.update({
+                "transitionType": "current_path_risk_confirmation",
+                "label": "현재 경로 위험 확인",
+                "polarity": "risk",
+                "score": min(100.0, score),
+                "riskImpact": min(15.0, 6.0 + risk_driver * 0.35),
+                "relationHint": "INDICATES_WEAKENING",
+            })
+    elif transition["transitionType"] == "none" and curr in {"recovering", "rising"}:
+        ma20_distance = float(current.get("ma20Distance") or 0.0)
+        ma20_slope = float(current.get("ma20Slope") or 0.0)
+        support_driver = max(
+            max(0.0, last_delta - 0.8) * 5.0,
+            max(0.0, ma20_delta - 0.8) * 4.0,
+            max(0.0, ma20_distance - 2.0) * 2.5,
+            max(0.0, ma20_slope - 0.3) * 8.0,
+        )
+        if support_driver >= 4.0 or (last_delta >= 1.2 and volume_ratio >= 1.1):
+            score = 58 + min(24.0, support_driver) + (6 if volume_ratio >= 1.2 else 0)
+            transition.update({
+                "transitionType": "current_path_support_confirmation",
+                "label": "현재 경로 우호 확인",
+                "polarity": "support",
+                "score": min(100.0, score),
+                "supportImpact": min(14.0, 5.0 + support_driver * 0.35),
+                "relationHint": "INDICATES_REVERSAL",
+            })
 
     return {
         "symbol": symbol,

@@ -2131,6 +2131,29 @@ class PythonServiceTests(unittest.TestCase):
             portfolio,
             [position],
             decisions_for_positions([position], portfolio),
+            external_signals={
+                "researchEvidence": {
+                    "005930": [
+                        {
+                            "symbol": "005930",
+                            "kind": "news",
+                            "source": "Reuters",
+                            "title": "Samsung faces direct margin risk from memory pricing",
+                            "summary": "Direct company news with material margin risk.",
+                            "url": "https://example.test/samsung-margin-risk",
+                            "polarity": "risk",
+                            "impactScore": 11,
+                            "confidence": 0.92,
+                            "relationScope": "direct",
+                            "materialityPassed": True,
+                            "materialityScore": 84,
+                            "relevanceScore": 96,
+                            "sourceReliability": 88,
+                            "eventType": "margin-risk",
+                        }
+                    ]
+                }
+            },
             metadata={
                 "previousMonitorState": {
                     "positions": {
@@ -2211,12 +2234,20 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(any(item.kind == "stock" for item in persisted.entities))
         self.assertTrue(any(item.kind == "company" for item in persisted.entities))
         self.assertTrue(any(item.kind == "security" for item in persisted.entities))
+        self.assertTrue(any(item.kind == "research-evidence" for item in persisted.entities))
+        research = next(item for item in persisted.entities if item.kind == "research-evidence")
+        self.assertTrue(research.properties["isCurrent"])
+        self.assertEqual(True, research.properties["materialityPassed"])
+        self.assertEqual("direct", research.properties["relationScope"])
+        self.assertTrue(any(item.kind == "news-article" for item in persisted.entities))
         self.assertTrue(any(item.kind == "fact-change" for item in persisted.entities))
         self.assertTrue(any(item.kind == "materiality-assessment" for item in persisted.entities))
         self.assertTrue(any(item.kind == "trend-transition" for item in persisted.entities))
+        self.assertTrue(any(item.kind == "missing-data" and (item.properties or {}).get("field") == "buyVolume" for item in persisted.entities))
         self.assertTrue(any(item.relation_type == "BREAKS_LEVEL" for item in persisted.relations))
         self.assertTrue(any(item.relation_type == "PASSES_IMPORTANCE_GATE" for item in persisted.relations))
         self.assertTrue(any(item.relation_type == "HAS_TREND_TRANSITION" for item in persisted.relations))
+        self.assertTrue(any(item.relation_type == "HAS_EXTERNAL_SIGNAL" and item.target.startswith("research-evidence:") for item in persisted.relations))
 
     def test_ontology_projection_bootstraps_empty_rulebox_before_abox_projection(self):
         position = normalize_position({
@@ -2256,7 +2287,7 @@ class PythonServiceTests(unittest.TestCase):
 
             def seed_ontology(self, payload=None):
                 self.seed_calls.append(dict(payload or {}))
-                return {"seeded": True, "status": "ok", "ruleCount": 12}
+                return {"seeded": True, "status": "ok", "ruleCount": 13}
 
             def save_graph(self, graph):
                 self.graphs.append(graph)
@@ -2277,7 +2308,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(1, len(repository.seed_calls))
         self.assertFalse(repository.seed_calls[0]["replaceRuleBox"])
         self.assertEqual("seeded", result["ruleboxBootstrap"]["status"])
-        self.assertEqual(12, result["ruleboxBootstrap"]["ruleCount"])
+        self.assertEqual(13, result["ruleboxBootstrap"]["ruleCount"])
 
     def test_ontology_projection_recorder_includes_watchlist_candidates(self):
         holding = normalize_position({

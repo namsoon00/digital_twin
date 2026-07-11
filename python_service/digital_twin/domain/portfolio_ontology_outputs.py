@@ -73,6 +73,7 @@ def relation_influence_score(relation: OntologyRelation) -> (float, float):
 def relation_influence_rows(graph: PortfolioOntology, stock_id: str) -> List[Dict[str, object]]:
     labels = entity_label_map(graph)
     portfolio_id = entity_id("portfolio", graph.portfolio_id)
+    stock_ids = {item.entity_id for item in graph.entities if item.kind == "stock"}
     neighbor_ids = {
         relation.source if relation.target == stock_id else relation.target
         for relation in graph.relations
@@ -83,16 +84,24 @@ def relation_influence_rows(graph: PortfolioOntology, stock_id: str) -> List[Dic
         if relation.properties.get("ontologyBox") == "TBox":
             continue
         direct = relation.source == stock_id or relation.target == stock_id
-        neighbor = relation.source in neighbor_ids or relation.target in neighbor_ids
-        portfolio_scope = relation.source == portfolio_id or relation.target == portfolio_id
-        if not direct and not neighbor and not portfolio_scope:
+        neighbor = not direct and (relation.source in neighbor_ids or relation.target in neighbor_ids)
+        if neighbor:
+            endpoints = {relation.source, relation.target}
+            other_stock_ids = stock_ids - {stock_id}
+            if endpoints & other_stock_ids:
+                continue
+            if portfolio_id in endpoints:
+                continue
+            if relation.source in neighbor_ids and relation.target in neighbor_ids:
+                continue
+        if not direct and not neighbor:
             continue
         risk, support = relation_influence_score(relation)
         if not risk and not support:
             continue
         rows.append({
             "relationId": relation_key(relation),
-            "scope": "direct" if direct else "neighbor" if neighbor else "portfolio",
+            "scope": "direct" if direct else "neighbor",
             "type": relation.relation_type,
             "source": relation.source,
             "sourceLabel": labels.get(relation.source, relation.source),

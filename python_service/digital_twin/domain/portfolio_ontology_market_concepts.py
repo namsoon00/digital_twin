@@ -425,6 +425,32 @@ def add_price_level_and_liquidity_concepts(graph: PortfolioOntology, stock_id: s
         })
         missing_props = {"source": source, "polarity": "risk", "opinionImpact": min(10.0, len(missing_fields) * 0.8), "aiInfluenceLabel": "체결/호가/투자자별 수급 결측"}
         add_relation(graph, stock_id, missing_id, "HAS_DATA_QUALITY", weight=round(max(0.1, 1 - len(missing_fields) / 10), 4), properties=missing_props)
+        for item in missing_fields:
+            field = str(item.get("field") or "").strip()
+            label = str(item.get("label") or field or "부족 데이터").strip()
+            if not field:
+                continue
+            field_id = add_entity(graph, "missing-data", symbol + ":market-microstructure:" + field, (position.name or symbol) + " " + label + " 결측", {
+                "tboxClass": "MissingData",
+                "tboxClasses": ["Observation", "DataQuality", "MissingData", "DataQualitySignal"],
+                "symbol": symbol,
+                "source": source,
+                "field": field,
+                "label": label,
+                "missingFields": [field],
+                "missingLabels": [label],
+                "missingCount": 1,
+                "scope": "market-microstructure",
+            })
+            field_props = {
+                "source": source,
+                "polarity": "context",
+                "field": field,
+                "missingField": field,
+                "aiInfluenceLabel": label + " 결측",
+            }
+            add_relation(graph, stock_id, field_id, "HAS_DATA_QUALITY", weight=0.42, properties=field_props)
+            add_relation(graph, missing_id, field_id, "AFFECTS", weight=0.7, properties=field_props)
         risk_id = add_entity(graph, "risk", symbol + ":data-quality-risk", (position.name or symbol) + " 데이터 품질 리스크", {
             "tboxClass": "DataQualityRisk",
             "tboxClasses": ["Risk", "DataQualityRisk"],

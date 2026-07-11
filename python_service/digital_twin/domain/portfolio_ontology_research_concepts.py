@@ -138,8 +138,10 @@ def add_research_document_concept(
     add_relation(graph, document_id, stock_id, "MENTIONS_INSTRUMENT", weight=relation_weight, evidence_ids=[evidence_id], properties=props)
     add_relation(graph, event_id, document_id, "HAS_PROVENANCE", weight=relation_weight, evidence_ids=[evidence_id], properties={**props, "source": "research-document"})
     add_relation(graph, document_id, source_id, "HAS_PROVENANCE", weight=1.0, evidence_ids=[evidence_id], properties={**props, "source": "research-document-source"})
-    add_relation(graph, document_id, thesis_id, "MATERIAL_TO", weight=round((number(getattr(item, "impact_score", 0)) or 2) / 20, 4), evidence_ids=[evidence_id], properties=props)
-    add_relation(graph, document_id, active_opinion_id, "IMPACTS_OPINION", weight=round((number(getattr(item, "impact_score", 0)) or 2) / 20, 4), evidence_ids=[evidence_id], properties=props)
+    if thesis_id:
+        add_relation(graph, document_id, thesis_id, "MATERIAL_TO", weight=round((number(getattr(item, "impact_score", 0)) or 2) / 20, 4), evidence_ids=[evidence_id], properties=props)
+    if active_opinion_id:
+        add_relation(graph, document_id, active_opinion_id, "IMPACTS_OPINION", weight=round((number(getattr(item, "impact_score", 0)) or 2) / 20, 4), evidence_ids=[evidence_id], properties=props)
 
 def add_research_evidence_concepts(
     graph: PortfolioOntology,
@@ -256,8 +258,10 @@ def add_research_evidence_concepts(
             })
             add_relation(graph, event_id, peer_id, "MENTIONS_PEER", weight=relation_weight, evidence_ids=[item.evidence_id], properties=props)
             add_relation(graph, peer_id, stock_id, "AFFECTS", weight=round(relation_weight * 0.75, 4), evidence_ids=[item.evidence_id], properties=props)
-        add_relation(graph, event_id, thesis_id, "MATERIAL_TO", weight=round((number(item.impact_score) or 2) / 20, 4), evidence_ids=[item.evidence_id], properties=props)
-        add_relation(graph, event_id, active_opinion_id, "IMPACTS_OPINION", weight=round((number(item.impact_score) or 2) / 20, 4), evidence_ids=[item.evidence_id], properties=props)
+        if thesis_id:
+            add_relation(graph, event_id, thesis_id, "MATERIAL_TO", weight=round((number(item.impact_score) or 2) / 20, 4), evidence_ids=[item.evidence_id], properties=props)
+        if active_opinion_id:
+            add_relation(graph, event_id, active_opinion_id, "IMPACTS_OPINION", weight=round((number(item.impact_score) or 2) / 20, 4), evidence_ids=[item.evidence_id], properties=props)
         add_relation(graph, event_id, event_id, "DECAYS_AFTER", weight=1.0, evidence_ids=[item.evidence_id], properties={
             "source": "research-evidence",
             "decayPolicy": "materiality-decay",

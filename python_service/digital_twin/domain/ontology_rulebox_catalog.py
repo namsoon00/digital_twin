@@ -204,6 +204,44 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
             ],
         ),
         GraphInferenceRule(
+            rule_id="graph.data_quality.microstructure_gap.v1",
+            label="체결·호가·투자자 수급 결측 -> 데이터 품질 리스크 추론",
+            version="v1",
+            source_kind="stock",
+            action_group="alertReview",
+            action_level="watch",
+            prompt_hint="체결강도, 호가, 투자자별 수급 같은 미시구조 데이터가 빠지면 방향 판단보다 결론 확신도와 다음 수집 과제를 먼저 설명합니다.",
+            conditions=[
+                GraphRuleCondition(
+                    "microstructure-missing",
+                    "relation",
+                    "체결·호가·투자자별 수급 결측이 판단 확신도를 낮춥니다.",
+                    relation_type="HAS_DATA_QUALITY",
+                    target_kind="missing-data",
+                    target_property_filters={"scope": "market-microstructure"},
+                    relation_property_filters={"minRiskImpact": 2.4},
+                    min_weight=0.1,
+                )
+            ],
+            derivations=[
+                GraphRuleDerivation(
+                    relation_type="HAS_INFERRED_RISK",
+                    target_kind="risk",
+                    target_key="{symbol}:microstructure-data-gap",
+                    target_label="{displayName} 미시구조 데이터 결측 리스크",
+                    tbox_class="DataQualityRisk",
+                    tbox_classes=["Risk", "DataQualityRisk", "MissingData", "DataQualitySignal"],
+                    polarity="risk",
+                    risk_impact=7.0,
+                    weight=0.68,
+                    belief_label="체결·호가·투자자별 수급 일부가 없어 투자 의견 확신도를 제한합니다.",
+                    ai_influence_label="미시구조 데이터 결측 추론",
+                    action_group="alertReview",
+                    action_level="watch",
+                )
+            ],
+        ),
+        GraphInferenceRule(
             rule_id="graph.flow.sell_pressure.v1",
             label="보유 종목 + 매도 호가 압력 + 거래량 증가 -> 수급 리스크 추론",
             version="v1",

@@ -73,6 +73,30 @@ class OntologyRuleBoxTests(unittest.TestCase):
         portfolio = portfolio_summary([position], account_cash=200000)
         return build_portfolio_ontology([position], portfolio, portfolio_id="rulebox-flow-test")
 
+    def data_quality_gap_graph(self):
+        position = Position(
+            symbol="035420",
+            name="NAVER",
+            market="KR",
+            currency="KRW",
+            quantity=3,
+            sellable_quantity=3,
+            average_price=204000,
+            current_price=197200,
+            market_value=591600,
+            profit_loss=-20400,
+            profit_loss_rate=-3.6,
+            ma20=213940,
+            ma60=217075,
+            ma20_distance=-7.8,
+            ma60_distance=-9.2,
+            volume_ratio=0.8,
+            trading_value=3000000000,
+            sector="플랫폼",
+        )
+        portfolio = portfolio_summary([position], account_cash=200000)
+        return build_portfolio_ontology([position], portfolio, portfolio_id="rulebox-data-quality-test")
+
     def test_rulebox_materializes_rules_and_inference_relations(self):
         graph = self.loss_guard_graph()
 
@@ -125,6 +149,36 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertTrue(flow_risk_relations)
         self.assertIn("ask-pressure", matched_ids)
         self.assertIn("volume-confirmation", matched_ids)
+
+    def test_local_rulebox_uses_missing_microstructure_data_quality(self):
+        graph = self.data_quality_gap_graph()
+
+        missing_nodes = [
+            item for item in graph.entities
+            if item.kind == "missing-data" and (item.properties or {}).get("field")
+        ]
+        data_quality_relations = [
+            item
+            for item in graph.relations
+            if item.source == "stock:035420"
+            and item.relation_type == "HAS_INFERRED_RISK"
+            and (item.properties or {}).get("ruleId") == "graph.data_quality.microstructure_gap.v1"
+        ]
+        trace = next(
+            item
+            for item in graph.entities
+            if item.kind == "inference-trace" and (item.properties or {}).get("ruleId") == "graph.data_quality.microstructure_gap.v1"
+        )
+        matched_ids = [
+            item.get("conditionId")
+            for item in ((trace.properties or {}).get("matchedConditions") or [])
+            if isinstance(item, dict)
+        ]
+
+        self.assertTrue(missing_nodes)
+        self.assertIn("tradeStrength", {(item.properties or {}).get("field") for item in missing_nodes})
+        self.assertTrue(data_quality_relations)
+        self.assertIn("microstructure-missing", matched_ids)
 
     def test_prompt_payload_exposes_rulebox_and_inferencebox(self):
         graph = self.loss_guard_graph()
@@ -310,8 +364,8 @@ class OntologyRuleBoxTests(unittest.TestCase):
                     "id": "rulebox-version:test001",
                     "versionLabel": "test001",
                     "rulesHash": "test001",
-                    "ruleCount": 12,
-                    "conditionCount": 31,
+                    "ruleCount": 13,
+                    "conditionCount": 27,
                     "derivationCount": 14,
                     "status": "saved",
                     "changeReason": "baseline",

@@ -207,7 +207,7 @@ def build_portfolio_ontology(
             entity_id("sector", label),
             "EXPOSED_TO",
             weight=round(number(sector.get("ratio")) / 100, 4),
-            properties=abox_properties({"basis": "sector-weight"}),
+            properties=abox_properties({"basis": "sector-weight", "polarity": "context"}),
         ))
     for position in observed_positions:
         label = str(position.sector or "기타").strip() or "기타"
@@ -295,6 +295,15 @@ def build_portfolio_ontology(
             position,
             source,
             runtime_context,
+        )
+        add_research_evidence_concepts(
+            graph,
+            stock_id,
+            "",
+            "",
+            symbol,
+            {},
+            external_signals,
         )
         if not include_reasoning_outputs:
             continue

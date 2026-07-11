@@ -46,48 +46,17 @@
   }
 
   var alertRuleCatalog = [
-    { key: "priceBuyLimit", group: "가격", label: "매수 상한 접근", description: "현재가가 실험실 매수 상한에 접근하거나 하회할 때" },
-    { key: "priceStop", group: "가격", label: "손절 기준 접근", description: "현재가가 손절 기준선에 접근하거나 하회할 때" },
-    { key: "priceTrim", group: "가격", label: "분할매도 기준 접근", description: "현재가가 1차 또는 2차 매도 기준에 접근할 때" },
     { key: "investmentInsight", group: "투자 알림", label: "온톨로지 투자 인사이트", description: "관계 그래프에서 의미 있는 투자 인사이트가 생성될 때 실제 발송" },
-    { key: "modelBuy", group: "온톨로지 근거", label: "모델 매수 신호", description: "투자 인사이트에 넣을 모델 매수 근거 신호" },
-    { key: "modelSell", group: "온톨로지 근거", label: "모델 매도 신호", description: "투자 인사이트에 넣을 모델 매도 근거 신호" },
-    { key: "watchlistBuyCandidate", group: "온톨로지 근거", label: "관심종목 매수 후보 신호", description: "투자 인사이트에 넣을 관심종목 후보 근거 신호" },
-    { key: "modelScoreGap", group: "모델", label: "모델 방향성", description: "매수와 매도 점수 차이가 크게 벌어질 때" },
-    { key: "flowVolume", group: "수급", label: "거래량 급증", description: "거래량 배율이 설정값 이상으로 커질 때" },
-    { key: "flowBuyShare", group: "수급", label: "매수 체결 우위", description: "매수 체결 비중이 높아질 때" },
-    { key: "flowSellShare", group: "수급", label: "매도 체결 우위", description: "매도 체결 비중이 높아질 때" },
-    { key: "flowOrderbook", group: "수급", label: "호가 불균형", description: "호가 불균형이 설정값 이상으로 커질 때" },
-    { key: "trendMomentum", group: "추세", label: "상승 모멘텀", description: "단기 가격 변화율이 상승 임계값을 넘을 때" },
-    { key: "trendPullback", group: "추세", label: "하락 압력", description: "단기 가격 변화율이 하락 임계값을 밑돌 때" },
-    { key: "holdingProfit", group: "보유", label: "수익 구간", description: "보유 종목 수익률이 익절 점검 기준을 넘을 때" },
-    { key: "holdingLoss", group: "보유", label: "손실 구간", description: "보유 종목 손실률이 리스크 기준을 밑돌 때" },
-    { key: "holdingConcentration", group: "보유", label: "종목 비중 쏠림", description: "단일 보유 종목 비중이 높아질 때" },
-    { key: "sectorConcentration", group: "보유", label: "섹터 쏠림", description: "계좌의 최대 섹터 노출이 높아질 때" },
-    { key: "marketCashLow", group: "보유", label: "시장별 현금 부족", description: "한국장 또는 미국장별 현금 비중이 낮을 때" },
-    { key: "dataFreshness", group: "데이터", label: "데이터 지연", description: "마지막 데이터 생성 시각이 오래되었을 때" },
-    { key: "tossConnection", group: "데이터", label: "토스 연결 상태", description: "토스 live 연결이 아니거나 비어 있을 때" },
-    { key: "orderPending", group: "주문", label: "미체결 주문", description: "주문 데이터가 연결되면 오래된 미체결을 표시" },
-    { key: "orderReject", group: "주문", label: "거부/실패 주문", description: "주문 데이터가 연결되면 거부 또는 실패 주문을 표시" },
-    { key: "watchlistQuote", group: "온톨로지 근거", label: "관심종목 시세 신호", description: "투자 인사이트에 넣을 관심종목 시세 근거 신호" },
-    { key: "watchlistQuotePending", group: "온톨로지 근거", label: "시세 대기 신호", description: "투자 인사이트에 넣을 데이터 신뢰도 근거 신호" },
+    { key: "newsDigest", group: "데이터", label: "뉴스/피드 새 정보", description: "관련성과 중요도 기준을 통과한 새 뉴스 근거가 들어올 때" },
+    { key: "watchlistOntologySignal", group: "온톨로지 근거", label: "관심종목 관계 신호", description: "투자 인사이트에 넣을 Neo4j InferenceBox 기반 관심종목 근거 신호" },
     { key: "holdingTiming", group: "온톨로지 근거", label: "보유 타이밍 신호", description: "투자 인사이트에 넣을 보유 종목 타이밍 근거 신호" },
+    { key: "ontologyInferenceMissing", group: "온톨로지 상태", label: "추론 결과 누락", description: "실계좌 데이터는 있지만 Neo4j InferenceBox 추론 결과가 없을 때" },
     { key: "monitorHeartbeat", group: "실시간", label: "상태 확인 메시지", description: "실시간 워커가 살아 있는지 주기적으로 짧게 보낼 때" },
     { key: "monitorConnection", group: "실시간", label: "연결 상태 변화", description: "실시간 모니터링 중 토스 연결 상태가 바뀔 때" },
-    { key: "monitorPositionChange", group: "온톨로지 근거", label: "보유 종목 변화 신호", description: "투자 인사이트에 넣을 보유 수량 변화 근거 신호" },
-    { key: "monitorPnlChange", group: "온톨로지 근거", label: "손익률 변화 신호", description: "투자 인사이트에 넣을 손익률 변화 근거 신호" },
-    { key: "monitorValueChange", group: "온톨로지 근거", label: "평가액 변화 신호", description: "투자 인사이트에 넣을 평가액 변화 근거 신호" },
-    { key: "monitorTrendChange", group: "온톨로지 근거", label: "추세 변화 신호", description: "투자 인사이트에 넣을 이동평균·추세 근거 신호" },
-    { key: "monitorCashChange", group: "온톨로지 근거", label: "현금비중 변화 신호", description: "투자 인사이트에 넣을 유동성 근거 신호" },
-    { key: "monitorDecisionChange", group: "온톨로지 근거", label: "판단 변화 신호", description: "투자 인사이트와 모델 리뷰에 넣을 판단 변화 근거 신호" },
-    { key: "externalEquityMove", group: "온톨로지 근거", label: "미장 가격/거래량 신호", description: "투자 인사이트에 넣을 미장 가격·거래량 근거 신호" },
-    { key: "externalCryptoMove", group: "온톨로지 근거", label: "크립토 변동 신호", description: "투자 인사이트에 넣을 크립토 변동 근거 신호" },
-    { key: "externalMacroShift", group: "온톨로지 근거", label: "거시 금리 변화 신호", description: "투자 인사이트에 넣을 거시 환경 근거 신호" },
-    { key: "externalDartDisclosure", group: "온톨로지 근거", label: "국내 공시 신호", description: "투자 인사이트에 넣을 공시 근거 신호" },
     { key: "externalDataConnection", group: "외부 API", label: "외부 API 연결", description: "외부 데이터 API 키, 한도, 응답 오류가 감지될 때" }
   ];
-  var userManagedNotificationTypes = ["investmentInsight", "monitorConnection", "externalDataConnection"];
-  var visibleNotificationTemplateTypes = ["default", "investmentInsight", "monitorConnection", "externalDataConnection", "modelReview", "workHandoff", "notification"];
+  var userManagedNotificationTypes = ["investmentInsight", "newsDigest", "ontologyInferenceMissing", "monitorConnection", "externalDataConnection"];
+  var visibleNotificationTemplateTypes = ["default", "investmentInsight", "newsDigest", "ontologyInferenceMissing", "monitorConnection", "externalDataConnection", "modelReview", "workHandoff", "notification"];
   function managedNotificationType(key) {
     return userManagedNotificationTypes.indexOf(String(key || "")) >= 0;
   }

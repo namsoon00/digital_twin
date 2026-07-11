@@ -16,11 +16,11 @@ from .message_types import (
     ONTOLOGY_INFERENCE_MISSING,
     WATCHLIST_ONTOLOGY_SIGNAL,
 )
-from .ontology_inference_context import inferencebox_from_snapshot, relation_contexts_from_snapshot
+from .ontology_inference_context import relation_contexts_from_snapshot
 from .ontology_insights import build_investment_insight_events, relation_news_event_key_suffix, split_operational_and_investment_events
 from .ontology_relation_reasoning import decision_action_group_for_label, relation_rule_context_summary_lines, relation_thresholds_from_settings
 from .parsing import parse_assignments
-from .portfolio import AccountSnapshot, AlertEvent, Position, status_has_account_data_failure
+from .portfolio import AccountSnapshot, AlertEvent, Position, monitor_state_has_live_account_data, status_has_account_data_failure
 from .portfolio_calculations import DEFAULT_FX_RATES, fx_rates_with_external_signals, value_in_base
 from .repositories import MonitorStateRepository
 from .strategy import StrategyModel, decisions_for_positions
@@ -97,6 +97,11 @@ def ontology_inference_event_metadata(snapshot: AccountSnapshot) -> Dict[str, ob
         "status": str(inference.get("status") or projection.get("status") or ""),
         "projectionMode": str(projection.get("projectionMode") or ""),
         "ruleboxExecutionStatus": str(rulebox_execution.get("status") or ""),
+        "ruleboxExecutionReason": str(rulebox_execution.get("reason") or ""),
+        "ruleboxStatementCount": int(number(rulebox_execution.get("statementCount")) or 0),
+        "ruleboxRelationTypes": list(rulebox_execution.get("relationTypes") or [])[:20] if isinstance(rulebox_execution.get("relationTypes"), list) else [],
+        "clearInferenceStatus": str((rulebox_execution.get("clearResult") or {}).get("status") or "") if isinstance(rulebox_execution.get("clearResult"), dict) else "",
+        "clearInferenceReason": str((rulebox_execution.get("clearResult") or {}).get("reason") or "") if isinstance(rulebox_execution.get("clearResult"), dict) else "",
         "neo4jNativeReasoningUsed": bool(inference.get("neo4jNativeReasoningUsed")),
         "entityCount": int(number(inference.get("entityCount")) or 0),
         "relationCount": int(number(inference.get("relationCount")) or 0),
@@ -179,6 +184,14 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
         except (TypeError, ValueError):
             return 55.0
 
+    def ontology_inference_missing_required_cycles(self) -> int:
+        raw = self.settings.get("ontologyInferenceMissingConsecutiveCycles") or self.settings.get("notificationOntologyInferenceMissingConsecutiveCycles") or 2
+        try:
+            value = int(float(raw))
+        except (TypeError, ValueError):
+            value = 2
+        return max(1, min(5, value))
+
     def criteria(self, setting: str, detected: str = "") -> List[str]:
         lines = []
         if str(setting or "").strip():
@@ -240,20 +253,24 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
         decision_snapshot = self.snapshot_with_strategy_scores(snapshot)
         has_account_data = decision_snapshot.has_live_account_data()
         inference_missing_events: List[AlertEvent] = []
+        inference_missing = False
         raw_events.extend(self.connection_events(decision_snapshot, previous))
         raw_events.extend(self.heartbeat_events(decision_snapshot))
         if has_account_data:
-            inference_missing_events = self.ontology_inference_missing_events(decision_snapshot)
+            inference_state = self.ontology_inference_missing_state(decision_snapshot)
+            inference_missing = bool(inference_state.get("missing"))
+            self.attach_ontology_inference_missing_state(decision_snapshot, inference_state)
+            inference_missing_events = self.ontology_inference_missing_events(decision_snapshot, previous or {}, inference_state)
             raw_events.extend(inference_missing_events)
-            if not inference_missing_events:
+            if not inference_missing:
                 raw_events.extend(self.ontology_signal_events(signal_snapshot))
         raw_events.extend(self.external_signal_events(signal_snapshot, previous or {}))
-        if has_account_data and not inference_missing_events:
+        if has_account_data and not inference_missing:
             raw_events.extend(self.holding_timing_events(decision_snapshot))
         raw_events = self.attach_data_freshness(decision_snapshot, raw_events)
         system_events, signal_events = split_operational_and_investment_events(raw_events)
         signal_events = self.enabled_signal_events(signal_events)
-        if inference_missing_events:
+        if inference_missing:
             signal_events = []
         events = [*system_events, *build_investment_insight_events(decision_snapshot, signal_events)]
         return [event for event in self.stamp_events(decision_snapshot, events) if self.enabled(event.rule)]
@@ -271,7 +288,10 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
         snapshot = self.snapshot_with_strategy_scores(snapshot)
         events.extend(self.connection_events(snapshot, {"status": "이전 연결 상태"}))
         events.extend(self.heartbeat_events(snapshot))
-        inference_missing_events = self.only_rule(ONTOLOGY_INFERENCE_MISSING, self.ontology_inference_missing_events(snapshot))
+        inference_missing_events = self.only_rule(
+            ONTOLOGY_INFERENCE_MISSING,
+            self.ontology_inference_missing_events(snapshot, force_confirmed=True),
+        )
         events.extend(inference_missing_events)
         watchlist_snapshot = self.snapshot_with_sample_watchlist(snapshot)
         ontology_watchlist_snapshot = self.snapshot_with_sample_watchlist_ontology_signal(watchlist_snapshot)
@@ -478,31 +498,134 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
             ),
         )]
 
-    def ontology_inference_missing_events(self, snapshot: AccountSnapshot) -> List[AlertEvent]:
+    def ontology_inference_missing_state(self, snapshot: AccountSnapshot) -> Dict[str, object]:
         positions = [item for item in snapshot.positions or [] if getattr(item, "symbol", "") and not item.is_cash()]
         if not snapshot.has_live_account_data() or not positions:
-            return []
+            return {"missing": False, "positionCount": len(positions)}
         inference_contexts = relation_contexts_from_snapshot(
             snapshot,
             getattr(self.strategy_model, "settings", {}) if self.strategy_model else {},
         )
         if inference_contexts:
-            return []
+            return {"missing": False, "positionCount": len(positions), "contextCount": len(inference_contexts)}
 
         reason_code, reason, inference_status = self.ontology_inference_missing_reason(snapshot)
         relation_count = int(number(inference_status.get("relationCount")) or 0)
         trace_count = int(number(inference_status.get("traceCount")) or 0)
         entity_count = int(number(inference_status.get("entityCount")) or 0)
-        native_used = bool(inference_status.get("neo4jNativeReasoningUsed"))
         status_text = str(inference_status.get("status") or "missing").strip() or "missing"
+        return {
+            "missing": True,
+            "reasonCode": reason_code,
+            "reason": reason,
+            "status": status_text,
+            "positionCount": len(positions),
+            "entityCount": entity_count,
+            "relationCount": relation_count,
+            "traceCount": trace_count,
+            "nativeRelationCount": int(number(inference_status.get("nativeRelationCount")) or 0),
+            "neo4jNativeReasoningUsed": bool(inference_status.get("neo4jNativeReasoningUsed")),
+            "projectionMode": str(inference_status.get("projectionMode") or ""),
+            "ruleboxExecutionStatus": str(inference_status.get("ruleboxExecutionStatus") or ""),
+            "ruleboxExecutionReason": str(inference_status.get("ruleboxExecutionReason") or ""),
+            "ruleboxStatementCount": int(number(inference_status.get("ruleboxStatementCount")) or 0),
+            "ruleboxRelationTypes": list(inference_status.get("ruleboxRelationTypes") or [])[:20] if isinstance(inference_status.get("ruleboxRelationTypes"), list) else [],
+            "clearInferenceStatus": str(inference_status.get("clearInferenceStatus") or ""),
+            "clearInferenceReason": str(inference_status.get("clearInferenceReason") or ""),
+            "inferenceStatus": dict(inference_status or {}),
+        }
+
+    def attach_ontology_inference_missing_state(self, snapshot: AccountSnapshot, state: Dict[str, object]) -> None:
+        compact = dict(state or {})
+        compact.pop("inferenceStatus", None)
+        snapshot.metadata.setdefault("ontology", {})["inferenceMissingState"] = compact
+
+    def previous_ontology_inference_missing_state(self, previous: Dict[str, object]) -> Dict[str, object]:
+        if not isinstance(previous, dict) or not monitor_state_has_live_account_data(previous):
+            return {"missing": False}
+        positions = previous.get("positions") if isinstance(previous.get("positions"), dict) else {}
+        if not positions:
+            return {"missing": False}
+        metadata = previous.get("metadata") if isinstance(previous.get("metadata"), dict) else {}
+        ontology = metadata.get("ontology") if isinstance(metadata.get("ontology"), dict) else {}
+        stored = ontology.get("inferenceMissingState") if isinstance(ontology.get("inferenceMissingState"), dict) else {}
+        if stored:
+            return dict(stored)
+        reason_code, reason, inference_status = self.ontology_inference_missing_reason_from_metadata(metadata)
+        if not reason_code:
+            return {"missing": False}
+        return {
+            "missing": True,
+            "reasonCode": reason_code,
+            "reason": reason,
+            "status": str(inference_status.get("status") or "missing"),
+            "positionCount": len(positions),
+            "relationCount": int(number(inference_status.get("relationCount")) or 0),
+            "traceCount": int(number(inference_status.get("traceCount")) or 0),
+            "nativeRelationCount": int(number(inference_status.get("nativeRelationCount")) or 0),
+        }
+
+    def ontology_inference_missing_confirmation(self, state: Dict[str, object], previous: Dict[str, object]) -> Dict[str, object]:
+        if not bool((state or {}).get("missing")):
+            return {"confirmed": False, "requiredCycles": self.ontology_inference_missing_required_cycles(), "currentCycle": 0}
+        required = self.ontology_inference_missing_required_cycles()
+        previous_state = self.previous_ontology_inference_missing_state(previous or {})
+        previous_missing = bool(previous_state.get("missing"))
+        immediate_codes = {"invalidABox"}
+        immediate = str(state.get("reasonCode") or "") in immediate_codes
+        effective_required = 1 if immediate else required
+        confirmed = effective_required <= 1 or previous_missing
+        return {
+            "confirmed": confirmed,
+            "requiredCycles": effective_required,
+            "currentCycle": effective_required if confirmed else 1,
+            "previousMissing": previous_missing,
+            "previousReasonCode": str(previous_state.get("reasonCode") or ""),
+            "previousStatus": str(previous_state.get("status") or ""),
+        }
+
+    def ontology_inference_missing_events(
+        self,
+        snapshot: AccountSnapshot,
+        previous: Dict[str, object] = None,
+        state: Dict[str, object] = None,
+        force_confirmed: bool = False,
+    ) -> List[AlertEvent]:
+        state = state if isinstance(state, dict) else self.ontology_inference_missing_state(snapshot)
+        if not bool(state.get("missing")):
+            return []
+
+        confirmation = self.ontology_inference_missing_confirmation(state, previous or {})
+        if force_confirmed and not bool(confirmation.get("confirmed")):
+            confirmation = {
+                **confirmation,
+                "confirmed": True,
+                "forced": True,
+                "currentCycle": int(confirmation.get("requiredCycles") or 1),
+            }
+        self.attach_ontology_inference_missing_state(snapshot, {**state, "confirmation": confirmation})
+        if not bool(confirmation.get("confirmed")):
+            return []
+
+        reason_code = str(state.get("reasonCode") or "missingInferenceBox")
+        reason = str(state.get("reason") or "Neo4j InferenceBox 관계 추론을 사용할 수 없습니다")
+        inference_status = dict(state.get("inferenceStatus") or {})
+        relation_count = int(number(state.get("relationCount")) or 0)
+        trace_count = int(number(state.get("traceCount")) or 0)
+        entity_count = int(number(state.get("entityCount")) or 0)
+        native_used = bool(state.get("neo4jNativeReasoningUsed"))
+        status_text = str(state.get("status") or "missing").strip() or "missing"
         lines = [
             "상태 온톨로지 추론 결과 없음",
             "판단 차단 매수·매도 판단은 생성하지 않았습니다",
             "원인 " + reason,
             "추론 상태 status=" + status_text + ", relations=" + str(relation_count) + ", traces=" + str(trace_count),
-            "보유 " + str(len(positions)) + "개",
+            "확인 상태 " + str(int(confirmation.get("currentCycle") or 1)) + "/" + str(int(confirmation.get("requiredCycles") or 1)) + "회 연속 감지",
+            "보유 " + str(int(state.get("positionCount") or 0)) + "개",
             "확인 행동 Neo4j 연결, RuleBox 저장 상태, 온톨로지 추론 워커 점검",
         ]
+        if status_text.lower() in {"ok", "partial"} and relation_count == 0 and trace_count == 0:
+            lines.insert(4, "조회 결과 Neo4j 조회는 성공했지만 InferenceBox 관계와 trace가 0개입니다")
         if inference_status.get("validationIssueSummary"):
             lines.insert(3, "검증 오류 " + str(inference_status.get("validationIssueSummary")))
         inference_metadata = ontology_inference_event_metadata(snapshot)
@@ -510,13 +633,18 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
             inference_metadata = {
                 "source": "neo4jInferenceBox",
                 "status": status_text,
-                "projectionMode": str(inference_status.get("projectionMode") or ""),
-                "ruleboxExecutionStatus": str(inference_status.get("ruleboxExecutionStatus") or ""),
+                "projectionMode": str(state.get("projectionMode") or ""),
+                "ruleboxExecutionStatus": str(state.get("ruleboxExecutionStatus") or ""),
+                "ruleboxExecutionReason": str(state.get("ruleboxExecutionReason") or ""),
+                "ruleboxStatementCount": int(number(state.get("ruleboxStatementCount")) or 0),
+                "ruleboxRelationTypes": list(state.get("ruleboxRelationTypes") or [])[:20] if isinstance(state.get("ruleboxRelationTypes"), list) else [],
+                "clearInferenceStatus": str(state.get("clearInferenceStatus") or ""),
+                "clearInferenceReason": str(state.get("clearInferenceReason") or ""),
                 "neo4jNativeReasoningUsed": native_used,
                 "entityCount": entity_count,
                 "relationCount": relation_count,
                 "traceCount": trace_count,
-                "nativeRelationCount": int(number(inference_status.get("nativeRelationCount")) or 0),
+                "nativeRelationCount": int(number(state.get("nativeRelationCount")) or 0),
                 "relations": [],
                 "traces": [],
             }
@@ -528,6 +656,7 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
             "missing": True,
             "missingReasonCode": reason_code,
             "missingReason": reason,
+            "confirmation": confirmation,
         })
         return [AlertEvent(
             snapshot.account_id,
@@ -539,7 +668,7 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
             lines,
             criteria=self.criteria(
                 "실계좌 데이터와 보유 종목이 있는데 Neo4j InferenceBox 관계 추론을 사용할 수 없을 때",
-                reason + ", 보유 " + str(len(positions)) + "개, relationCount=" + str(relation_count) + ", traceCount=" + str(trace_count),
+                reason + ", 보유 " + str(int(state.get("positionCount") or 0)) + "개, relationCount=" + str(relation_count) + ", traceCount=" + str(trace_count),
             ),
             metadata={
                 "blockedInvestmentJudgment": True,
@@ -547,13 +676,16 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
                 "invalidOntologyProjection": reason_code == "invalidABox",
                 "missingInferenceReasonCode": reason_code,
                 "missingInferenceReason": reason,
-                "positionCount": len(positions),
+                "positionCount": int(state.get("positionCount") or 0),
                 "ontologyInference": inference_metadata,
             },
         )]
 
     def ontology_inference_missing_reason(self, snapshot: AccountSnapshot):
         metadata = snapshot.metadata if isinstance(snapshot.metadata, dict) else {}
+        return self.ontology_inference_missing_reason_from_metadata(metadata)
+
+    def ontology_inference_missing_reason_from_metadata(self, metadata: Dict[str, object]):
         ontology = metadata.get("ontology") if isinstance(metadata.get("ontology"), dict) else {}
         projection = ontology.get("neo4j") if isinstance(ontology.get("neo4j"), dict) else ontology.get("projection")
         if not isinstance(projection, dict) or not projection:
@@ -562,13 +694,19 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
                 "projectionMode": "",
                 "ruleboxExecutionStatus": "",
             }
-        inference = inferencebox_from_snapshot(snapshot)
+        inference = projection.get("inferenceBox") if isinstance(projection.get("inferenceBox"), dict) else {}
         rulebox_execution = projection.get("ruleboxExecution") if isinstance(projection.get("ruleboxExecution"), dict) else {}
+        clear_result = rulebox_execution.get("clearResult") if isinstance(rulebox_execution.get("clearResult"), dict) else {}
         status = str((inference or {}).get("status") or projection.get("status") or "").strip()
         common = {
             "status": status or ("empty" if isinstance(inference, dict) else "missing"),
             "projectionMode": str(projection.get("projectionMode") or ""),
             "ruleboxExecutionStatus": str(rulebox_execution.get("status") or ""),
+            "ruleboxExecutionReason": str(rulebox_execution.get("reason") or ""),
+            "ruleboxStatementCount": int(number(rulebox_execution.get("statementCount")) or 0),
+            "ruleboxRelationTypes": list(rulebox_execution.get("relationTypes") or [])[:20] if isinstance(rulebox_execution.get("relationTypes"), list) else [],
+            "clearInferenceStatus": str(clear_result.get("status") or ""),
+            "clearInferenceReason": str(clear_result.get("reason") or ""),
             "neo4jNativeReasoningUsed": bool((inference or {}).get("neo4jNativeReasoningUsed")) if isinstance(inference, dict) else False,
             "entityCount": int(number((inference or {}).get("entityCount")) or 0) if isinstance(inference, dict) else 0,
             "relationCount": int(number((inference or {}).get("relationCount")) or 0) if isinstance(inference, dict) else 0,

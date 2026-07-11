@@ -429,6 +429,45 @@ class TossProvider:
         except (urllib.error.URLError, urllib.error.HTTPError, RuntimeError, ValueError, OSError) as error:
             return "demo", "토스 조회 실패 · " + str(error), demo_positions(), 1250000.0, "KRW", []
 
+    def fetch_focus_targets(self) -> Tuple[str, str, str, List[Position], List[Position]]:
+        if not self.account.client_id or not self.account.client_secret:
+            return "demo", "토스 credentials 미설정", "", [], []
+        try:
+            token = self.fetch_access_token()
+            accounts_payload, token = self.token_request("accounts", "GET", self.base_url + "/api/v1/accounts", token)
+            accounts = normalize_accounts(accounts_payload)
+            selected = select_account(accounts, self.account.account_seq)
+            account_seq = self.account.account_seq or str(selected.get("accountSeq") or selected.get("id") or "")
+            if not account_seq:
+                return "live", "계좌 식별값 없음", token, [], []
+            holdings_payload, token = self.token_request(
+                "holdings",
+                "GET",
+                self.base_url + "/api/v1/holdings",
+                token,
+                {"X-Tossinvest-Account": account_seq},
+            )
+            positions = [normalize_position(item) for item in normalize_holdings(holdings_payload)]
+            holding_symbols = {position.symbol.upper() for position in positions if position.symbol}
+            watchlist: List[Position] = []
+            seen_watchlist = set()
+            for raw_symbol in self.account.watchlist_symbols:
+                normalized = str(raw_symbol or "").upper().strip()
+                if not normalized or normalized in holding_symbols or normalized in seen_watchlist:
+                    continue
+                seen_watchlist.add(normalized)
+                info = known_stock(normalized)
+                watchlist.append(replace(normalize_position({
+                    "symbol": info.get("symbol") or normalized,
+                    "name": info.get("name") or normalized,
+                    "market": info.get("market") or "",
+                    "currency": info.get("currency") or "",
+                    "sector": info.get("sector") or "",
+                }), source="watchlist"))
+            return "live", "토스 계좌 동기화", token, positions, watchlist
+        except (urllib.error.URLError, urllib.error.HTTPError, RuntimeError, ValueError, OSError) as error:
+            return "demo", "토스 조회 실패 · " + str(error), "", [], []
+
     def fetch_buying_power(self, token: str, account_seq: str) -> Tuple[float, str]:
         total = 0.0
         rates = currency_rates()

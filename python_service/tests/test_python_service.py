@@ -4370,7 +4370,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("HAS_INFERRED_RISK", inference["relations"][0]["type"])
         self.assertEqual(["holding-loss", "ma-break"], inference["traces"][0]["matchedConditionIds"])
 
-    def test_events_include_operational_alert_when_inferencebox_missing(self):
+    def test_events_suppress_first_inferencebox_missing_alert_but_block_investment(self):
         position = normalize_position({
             "symbol": "005930",
             "name": "삼성전자",
@@ -4398,16 +4398,144 @@ class PythonServiceTests(unittest.TestCase):
         )
 
         events = RealtimeMonitor().events_for_snapshot(snapshot, {})
+
+        self.assertFalse(any(event.rule == "ontologyInferenceMissing" for event in events))
+        self.assertFalse(any(event.rule == "investmentInsight" for event in events))
+        state = snapshot.metadata["ontology"]["inferenceMissingState"]
+        self.assertTrue(state["missing"])
+        self.assertEqual("missingProjection", state["reasonCode"])
+        self.assertFalse(state["confirmation"]["confirmed"])
+        self.assertEqual(1, state["confirmation"]["currentCycle"])
+
+    def test_events_include_operational_alert_when_inferencebox_missing_repeats(self):
+        position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "marketValue": 864000,
+            "quantity": 10,
+            "sellableQuantity": 10,
+            "averagePrice": 80000,
+            "currentPrice": 86400,
+            "profitLossRate": 8,
+            "sector": "반도체",
+        })
+        portfolio = portfolio_summary([position])
+        previous_snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "토스 계좌 동기화",
+            utc_now_iso(),
+            portfolio,
+            [position],
+            decisions_for_positions([position], portfolio),
+        )
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "토스 계좌 동기화",
+            utc_now_iso(),
+            portfolio,
+            [position],
+            decisions_for_positions([position], portfolio),
+        )
+
+        events = RealtimeMonitor().events_for_snapshot(snapshot, previous_snapshot.to_monitor_state())
         inference_event = next(event for event in events if event.rule == "ontologyInferenceMissing")
 
         self.assertEqual("WATCH", inference_event.severity)
         self.assertEqual("온톨로지 추론 상태", inference_event.title)
         self.assertTrue(any("매수·매도 판단은 생성하지 않았습니다" in line for line in inference_event.lines))
+        self.assertTrue(any("2/2회 연속 감지" in line for line in inference_event.lines))
         self.assertTrue(inference_event.metadata["blockedInvestmentJudgment"])
         self.assertEqual("missingProjection", inference_event.metadata["missingInferenceReasonCode"])
         self.assertEqual("neo4jInferenceBox", inference_event.metadata["ontologyInference"]["source"])
         self.assertTrue(inference_event.metadata["ontologyInference"]["missing"])
+        self.assertTrue(inference_event.metadata["ontologyInference"]["confirmation"]["confirmed"])
         self.assertFalse(any(event.rule == "investmentInsight" for event in events))
+
+    def test_events_explain_ok_but_empty_inferencebox_after_repeated_missing(self):
+        position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "marketValue": 864000,
+            "quantity": 10,
+            "sellableQuantity": 10,
+            "averagePrice": 80000,
+            "currentPrice": 86400,
+            "profitLossRate": 8,
+            "sector": "반도체",
+        })
+        portfolio = portfolio_summary([position])
+        metadata = {
+            "ontology": {
+                "neo4j": {
+                    "saved": True,
+                    "status": "ok",
+                    "projectionMode": "abox-facts-only-neo4j-rulebox",
+                    "ruleboxExecution": {
+                        "status": "ok",
+                        "statementCount": 3,
+                        "relationTypes": ["HAS_INFERRED_RISK"],
+                        "clearResult": {"status": "ok"},
+                    },
+                    "inferenceBox": {
+                        "configured": True,
+                        "status": "ok",
+                        "neo4jNativeReasoningUsed": False,
+                        "entityCount": 0,
+                        "relationCount": 0,
+                        "traceCount": 0,
+                        "nativeRelationCount": 0,
+                        "relations": [],
+                        "traces": [],
+                    },
+                },
+            },
+        }
+        previous_snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "토스 계좌 동기화",
+            utc_now_iso(),
+            portfolio,
+            [position],
+            decisions_for_positions([position], portfolio),
+            metadata=metadata,
+        )
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "토스 계좌 동기화",
+            utc_now_iso(),
+            portfolio,
+            [position],
+            decisions_for_positions([position], portfolio),
+            metadata=metadata,
+        )
+
+        events = RealtimeMonitor().events_for_snapshot(snapshot, previous_snapshot.to_monitor_state())
+        inference_event = next(event for event in events if event.rule == "ontologyInferenceMissing")
+        inference = inference_event.metadata["ontologyInference"]
+
+        self.assertEqual("nativeReasoningMissing", inference_event.metadata["missingInferenceReasonCode"])
+        self.assertTrue(any("조회는 성공했지만" in line for line in inference_event.lines))
+        self.assertEqual("ok", inference["status"])
+        self.assertEqual("ok", inference["ruleboxExecutionStatus"])
+        self.assertEqual(3, inference["ruleboxStatementCount"])
+        self.assertEqual(["HAS_INFERRED_RISK"], inference["ruleboxRelationTypes"])
+        self.assertEqual("ok", inference["clearInferenceStatus"])
 
     def test_events_explain_invalid_abox_validation_failure(self):
         position = normalize_position({
@@ -5056,10 +5184,15 @@ class PythonServiceTests(unittest.TestCase):
         db_path = test_store_seed(self.temp.name)
         symbol_store = TestSymbolUniverseStore(db_path)
         quote_cache = TestMarketQuoteCache(db_path)
-        symbol_store.upsert_many([seed_symbol("AAPL"), seed_symbol("TSLA"), seed_symbol("MSFT")])
+        symbol_store.upsert_many([seed_symbol("AAPL"), seed_symbol("TSLA"), seed_symbol("MSFT"), seed_symbol("NVDA")])
         registry = AccountRegistry()
         account = AccountConfig("main", "메인", "toss", "https://example.test", "id", "secret", "1", ["TSLA"])
+        second = AccountConfig("second", "두번째", "toss", "https://example.test", "id", "secret", "2", ["TSLA", "MSFT"])
         registry.upsert(account)
+        registry.upsert(second)
+        target_calls = []
+        price_calls = []
+        candle_calls = []
 
         class StaticSymbolService:
             def summary(self):
@@ -5074,12 +5207,14 @@ class PythonServiceTests(unittest.TestCase):
 
         class FakeProvider:
             def __init__(self, account, cache):
+                self.account = account
                 self.delegate = TossProvider(account, quote_cache=cache)
 
             def fetch_access_token(self):
                 return "token"
 
-            def fetch_positions(self):
+            def fetch_focus_targets(self):
+                target_calls.append(self.account.account_id)
                 holding = normalize_position({
                     "symbol": "AAPL",
                     "name": "Apple",
@@ -5092,7 +5227,7 @@ class PythonServiceTests(unittest.TestCase):
                     "quoteSource": "fake account focus",
                     "source": "holding",
                 })
-                watch = normalize_position({
+                tsla = normalize_position({
                     "symbol": "TSLA",
                     "name": "Tesla",
                     "market": "NASDAQ",
@@ -5104,13 +5239,50 @@ class PythonServiceTests(unittest.TestCase):
                     "quoteSource": "fake account focus",
                     "source": "watchlist",
                 })
-                return "live", "토스 계좌 동기화", [holding], 0, "KRW", [watch]
+                watchlist = [tsla]
+                if self.account.account_id == "second":
+                    watchlist.append(normalize_position({
+                        "symbol": "MSFT",
+                        "name": "Microsoft",
+                        "market": "NASDAQ",
+                        "currency": "USD",
+                        "currentPrice": 102,
+                        "volume": 4000,
+                        "ma20": 100,
+                        "dataQuality": "actual",
+                        "quoteSource": "fake account focus",
+                        "source": "watchlist",
+                    }))
+                return "live", "토스 계좌 동기화", "token-" + self.account.account_id, [holding], watchlist
+
+            def fetch_positions(self):
+                raise AssertionError("account-focus collection should use shallow focus targets")
 
             def fetch_prices(self, token, symbols):
-                raise AssertionError("account-focus collection should not select arbitrary universe prices")
+                price_calls.append(list(symbols))
+                return {
+                    symbol: {
+                        "symbol": symbol,
+                        "currentPrice": 100 + index,
+                        "currency": "USD",
+                        "quoteSource": "Toss /api/v1/prices",
+                        "quoteStatus": "토스 prices 반영",
+                        "dataQuality": "actual",
+                        "updatedAt": "2026-07-04T00:00:00Z",
+                    }
+                    for index, symbol in enumerate(symbols)
+                }, token
 
             def fetch_daily_candles(self, token, symbol):
-                raise AssertionError("account-focus collection should use account snapshot enrichment")
+                candle_calls.append(symbol)
+                return [
+                    {
+                        "timestamp": "2026-01-" + str(index + 1).zfill(2) + "T09:00:00+09:00",
+                        "closePrice": str(80 + index),
+                        "volume": str(1000 + index),
+                    }
+                    for index in range(28)
+                ], token
 
             def merge_market_data(self, *args, **kwargs):
                 return self.delegate.merge_market_data(*args, **kwargs)
@@ -5136,32 +5308,51 @@ class PythonServiceTests(unittest.TestCase):
         cached_aapl = quote_cache.load("toss", MARKET_DATA_ACCOUNT_ID, "AAPL")
         cached_tsla = quote_cache.load("toss", MARKET_DATA_ACCOUNT_ID, "TSLA")
         cached_msft = quote_cache.load("toss", MARKET_DATA_ACCOUNT_ID, "MSFT")
+        cached_nvda = quote_cache.load("toss", MARKET_DATA_ACCOUNT_ID, "NVDA")
         account_aapl = quote_cache.load("toss", "main", "AAPL")
         account_tsla = quote_cache.load("toss", "main", "TSLA")
+        second_aapl = quote_cache.load("toss", "second", "AAPL")
+        second_tsla = quote_cache.load("toss", "second", "TSLA")
+        second_msft = quote_cache.load("toss", "second", "MSFT")
 
         self.assertEqual("ok", result["status"])
         self.assertEqual("account-focus", result["collectionScope"])
-        self.assertEqual(2, result["savedCount"])
-        self.assertEqual(2, result["changedCount"])
-        self.assertEqual(2, result["candleCount"])
+        self.assertEqual(2, result["accountCount"])
+        self.assertEqual(2, result["liveAccountCount"])
+        self.assertEqual(3, result["savedCount"])
+        self.assertEqual(5, result["accountSavedCount"])
+        self.assertEqual(3, result["changedCount"])
+        self.assertEqual(3, result["selectedCount"])
+        self.assertEqual(5, result["accountSelectedCount"])
+        self.assertEqual(3, result["priceCount"])
+        self.assertEqual(3, result["candleCount"])
+        self.assertEqual({"main": 2, "second": 3}, result["accountSymbolCounts"])
+        self.assertEqual(["main", "second"], target_calls)
+        self.assertEqual([["AAPL", "TSLA", "MSFT"]], price_calls)
+        self.assertEqual(["AAPL", "TSLA", "MSFT"], candle_calls)
         self.assertEqual("account-focus", cached_aapl["collectionPurpose"])
         self.assertEqual("holding", cached_aapl["collectionTarget"])
         self.assertEqual(100, cached_aapl["currentPrice"])
-        self.assertEqual(95, cached_aapl["ma20"])
+        self.assertGreater(cached_aapl["ma20"], 0)
         self.assertEqual(101, cached_tsla["currentPrice"])
         self.assertEqual("watchlist", cached_tsla["collectionTarget"])
-        self.assertEqual({}, cached_msft)
+        self.assertEqual(102, cached_msft["currentPrice"])
+        self.assertEqual({}, cached_nvda)
         self.assertEqual(100, account_aapl["currentPrice"])
         self.assertEqual(101, account_tsla["currentPrice"])
+        self.assertEqual(100, second_aapl["currentPrice"])
+        self.assertEqual(101, second_tsla["currentPrice"])
+        self.assertEqual(102, second_msft["currentPrice"])
         self.assertEqual(0, result["materialChangedCount"])
         self.assertEqual([MARKET_DATA_COLLECTED, ONTOLOGY_REASONING_REQUESTED], [event.name for event in events.published])
-        self.assertEqual(["AAPL", "TSLA"], events.published[-1].payload["symbols"])
-        self.assertEqual(2, events.published[-1].payload["changedCount"])
+        self.assertEqual(["AAPL", "MSFT", "TSLA"], events.published[-1].payload["symbols"])
+        self.assertEqual(3, events.published[-1].payload["changedCount"])
 
         events.published.clear()
         repeat = runner.run_once(force=True)
 
-        self.assertEqual(2, repeat["savedCount"])
+        self.assertEqual(3, repeat["savedCount"])
+        self.assertEqual(5, repeat["accountSavedCount"])
         self.assertEqual(0, repeat["changedCount"])
         self.assertEqual([MARKET_DATA_COLLECTED], [event.name for event in events.published])
 

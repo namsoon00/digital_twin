@@ -1,6 +1,6 @@
 import signal
 import time
-from typing import Dict, Iterable, List
+from typing import Dict, Iterable, List, Tuple
 
 from ..domain.accounts import AccountConfig
 from ..domain.events import market_data_collected_event, ontology_reasoning_requested_event
@@ -110,12 +110,13 @@ class MarketDataCollectionRunner:
     def refresh_universe_enabled(self) -> bool:
         return truthy(self.settings.get("marketDataRefreshUniverse"), True)
 
-    def select_account(self) -> AccountConfig:
+    def select_accounts(self) -> List[AccountConfig]:
         accounts = self.account_repository.load()
+        selected = []
         for account in accounts:
             if account.enabled and account.provider == "toss" and account.client_id and account.client_secret:
-                return account
-        return None
+                selected.append(account)
+        return selected
 
     def refresh_symbol_universe_if_needed(self) -> Dict[str, object]:
         if not self.refresh_universe_enabled():
@@ -143,9 +144,13 @@ class MarketDataCollectionRunner:
         })
 
     def focus_positions(self, provider: MarketDataProvider):
-        mode, status, positions, _cash, _currency, watchlist = provider.fetch_positions()
+        token = ""
+        if hasattr(provider, "fetch_focus_targets"):
+            mode, status, token, positions, watchlist = provider.fetch_focus_targets()
+        else:
+            mode, status, positions, _cash, _currency, watchlist = provider.fetch_positions()
         if str(mode or "").lower() != "live":
-            return mode, status, []
+            return mode, status, token, []
         seen = set()
         focused = []
         for position in list(positions or []) + list(watchlist or []):
@@ -156,7 +161,51 @@ class MarketDataCollectionRunner:
                 continue
             seen.add(symbol)
             focused.append(position)
-        return mode, status, focused
+        return mode, status, token, focused
+
+    def merge_focus_market_data(
+        self,
+        provider: MarketDataProvider,
+        token: str,
+        focused_by_account: List[Dict[str, object]],
+    ) -> Tuple[List[Dict[str, object]], Dict[str, object]]:
+        symbol_order: List[str] = []
+        for entry in focused_by_account:
+            for position in entry.get("positions") or []:
+                symbol = str(position.symbol or "").upper()
+                if symbol and symbol not in symbol_order:
+                    symbol_order.append(symbol)
+        if not symbol_order:
+            return focused_by_account, {"symbols": [], "priceCount": 0, "candleCount": 0}
+        if not token:
+            token = provider.fetch_access_token()
+        try:
+            prices, token = provider.fetch_prices(token, symbol_order)
+        except Exception:
+            prices = {}
+        indicators, token = self.collect_candles(provider, token, symbol_order)
+        merged_entries: List[Dict[str, object]] = []
+        for entry in focused_by_account:
+            merged_positions = []
+            for position in entry.get("positions") or []:
+                symbol = str(position.symbol or "").upper()
+                cached = self.quote_cache.load("toss", MARKET_DATA_ACCOUNT_ID, symbol)
+                merged_positions.append(provider.merge_market_data(
+                    position,
+                    prices.get(symbol) or {},
+                    indicators.get(symbol) or {},
+                    cached,
+                    quote_live=bool(prices.get(symbol)),
+                    indicators_live=bool(indicators.get(symbol)),
+                ))
+            next_entry = dict(entry)
+            next_entry["positions"] = merged_positions
+            merged_entries.append(next_entry)
+        return merged_entries, {
+            "symbols": symbol_order,
+            "priceCount": len(prices),
+            "candleCount": len(indicators),
+        }
 
     def collect_candles(self, provider: MarketDataProvider, token: str, symbols: Iterable[str]):
         result: Dict[str, Dict[str, object]] = {}
@@ -176,8 +225,8 @@ class MarketDataCollectionRunner:
         if not self.enabled() and not force:
             return {"status": "disabled", "savedCount": 0}
         universe_refresh = self.refresh_symbol_universe_if_needed()
-        account = self.select_account()
-        if not account:
+        accounts = self.select_accounts()
+        if not accounts:
             return {
                 "status": "missingCredentials",
                 "message": "Toss credentials가 설정된 계정이 없습니다.",
@@ -185,69 +234,110 @@ class MarketDataCollectionRunner:
                 "savedCount": 0,
             }
         markets = self.markets()
-        provider = self.provider_factory(account, self.quote_cache)
-        mode, account_status, focused_positions = self.focus_positions(provider)
-        if str(mode or "").lower() != "live":
+        focused_by_account: List[Dict[str, object]] = []
+        unavailable_accounts: List[Dict[str, str]] = []
+        merge_provider = None
+        merge_token = ""
+        for account in accounts:
+            provider = self.provider_factory(account, self.quote_cache)
+            mode, account_status, token, focused_positions = self.focus_positions(provider)
+            if str(mode or "").lower() != "live":
+                unavailable_accounts.append({
+                    "accountId": account.account_id,
+                    "mode": str(mode or ""),
+                    "status": str(account_status or ""),
+                })
+                continue
+            if merge_provider is None:
+                merge_provider = provider
+                merge_token = token
+            focused_by_account.append({
+                "account": account,
+                "mode": mode,
+                "status": account_status,
+                "positions": focused_positions,
+            })
+        if not focused_by_account:
             return {
                 "status": "accountDataUnavailable",
-                "mode": mode,
-                "message": account_status,
+                "message": "실데이터를 읽은 계정이 없습니다.",
                 "markets": markets,
                 "collectionScope": "account-focus",
+                "accountCount": len(accounts),
+                "liveAccountCount": 0,
+                "unavailableAccounts": unavailable_accounts,
                 "universeRefresh": universe_refresh,
                 "savedCount": 0,
                 "cache": self.quote_cache.summary("toss", MARKET_DATA_ACCOUNT_ID),
             }
-        if not focused_positions:
+        focused_by_account, merge_summary = self.merge_focus_market_data(merge_provider, merge_token, focused_by_account)
+        if not merge_summary.get("symbols"):
             return {
                 "status": "fresh",
                 "markets": markets,
-                "mode": mode,
-                "accountStatus": account_status,
                 "collectionScope": "account-focus",
+                "accountCount": len(accounts),
+                "liveAccountCount": len(focused_by_account),
+                "unavailableAccounts": unavailable_accounts,
                 "universeRefresh": universe_refresh,
                 "savedCount": 0,
                 "cache": self.quote_cache.summary("toss", MARKET_DATA_ACCOUNT_ID),
             }
-        symbols = [position.symbol.upper() for position in focused_positions]
+        symbols = list(merge_summary.get("symbols") or [])
         saved = 0
+        account_saved = 0
         changed = 0
         changed_symbols: List[str] = []
         changed_fields_by_symbol: Dict[str, List[str]] = {}
         material_symbols: List[str] = []
         materiality_assessments: Dict[str, Dict[str, object]] = {}
-        for position in focused_positions:
-            symbol = str(position.symbol or "").upper()
-            if not symbol:
-                continue
-            cached = self.quote_cache.load("toss", MARKET_DATA_ACCOUNT_ID, symbol)
-            payload = position_payload(position, position.to_dict(), "account-focus")
-            if not number(payload.get("currentPrice")) and not any(number(payload.get(key)) for key in ["ma20", "ma60", "volume"]):
-                continue
-            change = market_fact_change(cached, payload)
-            self.quote_cache.save("toss", MARKET_DATA_ACCOUNT_ID, symbol, payload)
-            self.quote_cache.save("toss", account.account_id, symbol, payload)
-            saved += 1
-            if change.get("changed"):
-                changed += 1
-                changed_symbols.append(symbol)
-                changed_fields_by_symbol[symbol] = list(change.get("fields") or [])
-                assessment = market_change_materiality(symbol, cached, payload, change, self.settings)
-                materiality_assessments[symbol] = assessment.to_dict()
-                if assessment.passed:
-                    material_symbols.append(symbol)
+        global_saved_symbols = set()
+        account_symbol_counts: Dict[str, int] = {}
+        for entry in focused_by_account:
+            account = entry["account"]
+            account_count = 0
+            for position in entry.get("positions") or []:
+                symbol = str(position.symbol or "").upper()
+                if not symbol:
+                    continue
+                payload = position_payload(position, position.to_dict(), "account-focus")
+                if not number(payload.get("currentPrice")) and not any(number(payload.get(key)) for key in ["ma20", "ma60", "volume"]):
+                    continue
+                self.quote_cache.save("toss", account.account_id, symbol, payload)
+                account_saved += 1
+                account_count += 1
+                if symbol in global_saved_symbols:
+                    continue
+                cached = self.quote_cache.load("toss", MARKET_DATA_ACCOUNT_ID, symbol)
+                change = market_fact_change(cached, payload)
+                self.quote_cache.save("toss", MARKET_DATA_ACCOUNT_ID, symbol, payload)
+                global_saved_symbols.add(symbol)
+                saved += 1
+                if change.get("changed"):
+                    changed += 1
+                    changed_symbols.append(symbol)
+                    changed_fields_by_symbol[symbol] = list(change.get("fields") or [])
+                    assessment = market_change_materiality(symbol, cached, payload, change, self.settings)
+                    materiality_assessments[symbol] = assessment.to_dict()
+                    if assessment.passed:
+                        material_symbols.append(symbol)
+            account_symbol_counts[account.account_id] = account_count
         result = {
             "status": "ok",
             "provider": "toss",
             "markets": markets,
-            "mode": mode,
-            "accountStatus": account_status,
             "collectionScope": "account-focus",
+            "accountCount": len(accounts),
+            "liveAccountCount": len(focused_by_account),
+            "unavailableAccounts": unavailable_accounts,
+            "accountSymbolCounts": account_symbol_counts,
             "symbols": symbols,
-            "selectedCount": len(focused_positions),
-            "priceCount": len([item for item in focused_positions if number(item.current_price)]),
-            "candleCount": len([item for item in focused_positions if number(item.ma20) or number(item.ma60)]),
+            "selectedCount": len(symbols),
+            "accountSelectedCount": sum(account_symbol_counts.values()),
+            "priceCount": int(merge_summary.get("priceCount") or 0),
+            "candleCount": int(merge_summary.get("candleCount") or 0),
             "savedCount": saved,
+            "accountSavedCount": account_saved,
             "changedCount": changed,
             "changedSymbols": changed_symbols,
             "changedFieldsBySymbol": changed_fields_by_symbol,

@@ -48,7 +48,7 @@ AI 프롬프트에는 TBox, `boundedContexts`, ABox, operational ontology, reaso
 ## Runtime Flow
 
 1. Toss 계좌, 시장 데이터, 외부 API 데이터를 `Position`, `PortfolioSummary`, `externalSignals`로 정규화한다.
-2. `domain/ontology_relation_reasoning.py`가 종목별 fact, 부족 데이터, 관계 규칙 성립 여부를 만든다.
+2. `domain/ontology_relation_reasoning.py`가 종목별 ABox fact, 부족 데이터, fallback 관계 추론 결과를 만든다. 운영 판단은 가능하면 Neo4j RuleBox/InferenceBox 결과를 우선 사용한다.
 3. `DecisionItem.decision`, `exit_pressure`, `decision_basis`는 관계 규칙 결과에서 나온다. `decision_basis`는 `ontologyRelationRules`다.
 4. 기존 공식 기반 `profitTakePressure`, `lossCutPressure`, 매수/매도 점수는 보조 근거와 과거 비교용으로만 보관한다.
 5. `domain/ontology.py`가 TBox/ABox 그래프와 `OntologyOpinion`을 만든다. 이때 `Strategy`, `InvestmentThesis`, `Observation`, `Risk`, `Insight`, `NotificationDispatch`까지 모두 ABox 노드로 만든다.
@@ -148,7 +148,7 @@ AI에는 다음 데이터를 함께 전달한다.
 
 - 새 TBox 클래스, 관계 타입, 바운디드 컨텍스트 규칙은 `domain/ontology_tbox.py`에 추가한다.
 - 새 ABox 인스턴스 생성은 `domain/ontology.py`에 추가하고, `tboxClass` 또는 `tboxClasses`를 지정해 `boundedContext`가 자동 부여되게 한다.
-- 새 런타임 판단은 먼저 `domain/ontology_relation_reasoning.py`의 관계 규칙과 fact builder로 추가한다.
+- 새 런타임 판단은 먼저 Neo4j RuleBox/InferenceBox와 온톨로지 relation catalog에 추가한다. Python `domain/ontology_relation_reasoning.py`는 그래프 저장소가 비었을 때의 bootstrap fallback만 보완한다.
 - 새 AI 설명은 `aiPromptTemplates`와 `aiPromptPolicy`의 계약을 함께 갱신한다.
 - 외부 뉴스, 공시, 매크로 데이터는 먼저 `ExternalSignal` 또는 구체 클래스(`NewsEvent`, `DisclosureEvent`, `MacroIndicator`)의 ABox 관측값으로 만들고, 필요하면 `Evidence`, `Belief`, `Insight`로 파생한다.
 - 새 관계가 AI 의견을 바꿔야 하면 relation properties에 `polarity`, `opinionImpact`, `riskImpact`, `supportImpact`, `aiInfluenceLabel`을 명시한다.

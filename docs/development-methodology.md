@@ -28,10 +28,10 @@ Domain:
 - `python_service/digital_twin/domain/ontology_tbox.py`: bounded-context TBox vocabulary, relation definitions, and ontology reasoning rule catalog
 - `python_service/digital_twin/domain/ontology_contracts.py`: ontology graph data contracts such as entities, relations, evidence, beliefs, opinions, and portfolio ontology snapshots
 - `python_service/digital_twin/domain/ontology_schema.py`: TBox/ABox payloads, bounded-context property assignment, and basic ontology graph mutation helpers
-- `python_service/digital_twin/domain/ontology_relation_contracts.py`: relation-rule engine data contracts, prompt template contracts, score bands, decision stages, and threshold constants
-- `python_service/digital_twin/domain/ontology_relation_catalog.py`: default relation-rule catalog, score-band catalog, and decision-stage catalog
+- `python_service/digital_twin/domain/ontology_relation_contracts.py`: ontology relation-reasoning data contracts, prompt template contracts, score bands, decision stages, and threshold constants
+- `python_service/digital_twin/domain/ontology_relation_catalog.py`: bootstrap ontology relation catalog, score-band catalog, and decision-stage catalog used to seed ontology/RuleBox views; new runtime logic should not be added here first
 - `python_service/digital_twin/domain/ontology_prompt_registry.py`: default AI prompt registry text, prompt guardrails, and prompt policy defaults
-- `python_service/digital_twin/domain/ontology_relation_facts.py`: position, temporal, liquidity, macro, research-evidence, and missing-data facts used by relation-rule evaluation
+- `python_service/digital_twin/domain/ontology_relation_facts.py`: position, temporal, liquidity, macro, research-evidence, and missing-data facts used by ontology relation evaluation
 - `python_service/digital_twin/domain/portfolio_ontology_builder.py`: portfolio snapshot to ontology builder; Neo4j projection must call it in ABox-facts-only mode and leave opinions, insights, and inference to graph-store/AI stages
 - `python_service/digital_twin/domain/portfolio_ontology_catalog.py`: portfolio ontology projection catalogs for metrics, runtime settings, operational pipelines, insight types, factors, and sectors
 - `python_service/digital_twin/domain/portfolio_ontology_market_concepts.py`: market metric, trend, data-source, model-score, price-level, and liquidity ABox concept builders
@@ -39,9 +39,8 @@ Domain:
 - `python_service/digital_twin/domain/ontology_prompting.py`: ontology read models for reasoning cards, AI inference packets, worldview summaries, and prompt payloads
 - `python_service/digital_twin/domain/external_signal_quality.py`: external signal provenance, freshness, source-health, and symbol-coverage scoring
 - `python_service/digital_twin/domain/ontology_quality.py`: AI opinion readiness and ontology graph quality sample metrics
-- `python_service/digital_twin/domain/ontology_relation_reasoning.py`: ontology relation-rule definitions, relation-context contracts, missing-data contracts, and AI prompt context
-- `python_service/digital_twin/domain/ontology_inference_context.py`: Neo4j InferenceBox to relation-context adapter; runtime monitoring should prefer this graph-store result and use Python relation rules only as fallback
-- `python_service/digital_twin/domain/ontology_relation_reasoning.py`: compatibility facade only; do not add new rule logic here
+- `python_service/digital_twin/domain/ontology_relation_reasoning.py`: Python fallback adapter that turns ABox facts into relation context, missing-data context, and AI prompt context; prefer Neo4j RuleBox/InferenceBox for new reasoning behavior
+- `python_service/digital_twin/domain/ontology_inference_context.py`: Neo4j InferenceBox to relation-context adapter; runtime monitoring should prefer this graph-store result and use Python relation reasoning only as bootstrap fallback
 - `python_service/digital_twin/domain/scoring.py`: reusable scoring signals and fallback vocabularies used by notification and strategy-adjacent scores
 - `python_service/digital_twin/domain/message_types.py`: shared message-type catalog, labels, default alert rules, thresholds, and cadence
 - `python_service/digital_twin/domain/alert_formatting.py`: money, percentage, and compact-number formatting used by alerts

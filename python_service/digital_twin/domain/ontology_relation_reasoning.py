@@ -1,3 +1,10 @@
+"""Fallback ontology relation reasoning.
+
+Runtime reasoning should prefer persisted ontology RuleBox/InferenceBox results.
+This module only keeps the local ABox-fact fallback used when the graph store is
+empty, unavailable, or being bootstrapped.
+"""
+
 from typing import Dict, Iterable, List, Optional
 
 from .market_data import clamp, number

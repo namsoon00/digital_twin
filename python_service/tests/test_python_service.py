@@ -1,4 +1,5 @@
 import json
+import importlib
 import os
 import sqlite3
 import sys
@@ -101,6 +102,15 @@ class PythonServiceTests(unittest.TestCase):
         event.metadata = dict(event.metadata or {})
         event.metadata.setdefault("dataFreshness", self.fresh_data_freshness(source))
         return event
+
+    def test_legacy_python_relation_rule_modules_are_removed(self):
+        for module_name in [
+            "digital_twin.domain.ontology_rules",
+            "digital_twin.domain.ontology_relation_rules",
+            "digital_twin.domain.ontology_rule_catalog",
+        ]:
+            with self.assertRaises(ModuleNotFoundError):
+                importlib.import_module(module_name)
 
     def insight_event(self, events, symbol: str = ""):
         for event in events:
@@ -1233,7 +1243,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertGreater(buy_side["buyScore"], buy_side["sellScore"])
         self.assertGreater(sell_side["sellScore"], sell_side["buyScore"])
 
-    def test_holding_decision_uses_ontology_rules_not_user_score_formulas(self):
+    def test_holding_decision_uses_ontology_reasoning_not_user_score_formulas(self):
         loss_position = normalize_position({
             "symbol": "000660",
             "name": "SK하이닉스",

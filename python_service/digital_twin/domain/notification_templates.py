@@ -116,6 +116,7 @@ SEVERITY_LABELS = {
 }
 
 SCORE_EXPLANATION_SKIP_TYPES = {
+    "newsDigest",
     "workHandoff",
 }
 
@@ -1001,6 +1002,8 @@ def append_score_explanation(rendered: str, context: Dict[str, object], rich: bo
 
 def append_ai_opinion(rendered: str, context: Dict[str, object], rich: bool = False) -> str:
     rendered_text = str(rendered or "")
+    if context_message_type(context) in SCORE_EXPLANATION_SKIP_TYPES:
+        return rendered
     if isinstance(context, dict) and context.get("notificationAiValidatedResponse"):
         return rendered
     if not rendered_text.strip() or "AI 의견" in rendered_text:

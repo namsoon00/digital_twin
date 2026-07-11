@@ -104,6 +104,18 @@ def impact_label(item: Dict[str, object]) -> str:
     return raw or "중립"
 
 
+def article_read_status(item: Dict[str, object]) -> str:
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    return clean_text(item.get("articleReadStatus") or payload.get("articleReadStatus"))
+
+
+def article_analysis_label(item: Dict[str, object]) -> str:
+    status = article_read_status(item)
+    if status == "body":
+        return "기사 본문 읽음, 본문 기반 요약/영향 계산"
+    return "제목/RSS 요약만 사용"
+
+
 def item_summary(item: Dict[str, object]) -> str:
     payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
     return (
@@ -160,6 +172,12 @@ class NewsDigestEnqueuer:
         self.settings = dict(settings or {})
         self.max_items = max(1, int(max_items or 3))
 
+    def require_article_body(self) -> bool:
+        value = self.settings.get("newsDigestRequireArticleBody")
+        if value in (None, ""):
+            return True
+        return str(value).strip().lower() not in {"0", "false", "no", "off", "disabled"}
+
     def handle(self, event: DomainEvent) -> None:
         if event.name != RESEARCH_EVIDENCE_COLLECTED:
             return
@@ -181,6 +199,8 @@ class NewsDigestEnqueuer:
         if not isinstance(raw_items, list):
             return []
         items = [dict(item) for item in raw_items if isinstance(item, dict)]
+        if self.require_article_body():
+            items = [item for item in items if article_read_status(item) == "body"]
         items.sort(key=item_sort_key, reverse=True)
         return items
 
@@ -270,6 +290,7 @@ class NewsDigestEnqueuer:
                 "primaryUrl": clean_text(primary.get("url")),
                 "primaryTitle": clean_text(primary.get("title")),
                 "primaryPublishedAt": clean_text(primary.get("publishedAt") or primary.get("observedAt")),
+                "primaryArticleReadStatus": article_read_status(primary),
                 "materialityScores": materiality_scores,
             },
         }
@@ -301,6 +322,7 @@ class NewsDigestEnqueuer:
                 str(index) + ". " + html_text(name + (" / " + symbol if symbol and symbol != name else "")),
                 "• 제목: " + html_text(title),
                 "• 기사일: " + html_text(published_at) + ", 출처: " + html_text(source),
+                "• 분석: " + html_text(article_analysis_label(item)),
                 "• 판단: 영향 " + html_text(impact_label(item)) + ", 신뢰도 " + html_text(reliability)
                 + (", 관련성 " + html_text(relevance) if relevance else "")
                 + (", 중요도 " + html_text(importance) if importance else ""),

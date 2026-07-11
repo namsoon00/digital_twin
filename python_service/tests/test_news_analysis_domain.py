@@ -107,9 +107,8 @@ class NewsAnalysisDomainTests(unittest.TestCase):
 
         self.assertNotIn("한국어로 정리하면", summary)
         self.assertNotIn("이슈 이슈", summary)
-        self.assertIn("삼성전자 관련 뉴스입니다", summary)
-        self.assertIn("뉴스 유형은 일반 이슈입니다", summary)
-        self.assertIn("관련성 분류는 종목 직접 뉴스입니다", summary)
+        self.assertIn("본문 요약", summary)
+        self.assertIn("Samsung Electronics shares moved after semiconductor demand expectations improved.", summary)
 
 
 if __name__ == "__main__":

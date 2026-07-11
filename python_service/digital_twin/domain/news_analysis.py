@@ -424,8 +424,8 @@ def korean_article_summary(
     topics = detected_topic_labels(str(title or "") + " " + source_text)
     numbers = numeric_highlights(source_text)
     body_status = "본문" if body else "RSS/제공 요약"
-    if contains_hangul(source_text):
-        sentences = article_sentence_candidates(source_text, target, analysis, 2)
+    sentences = article_sentence_candidates(source_text, target, analysis, 2)
+    if sentences and (body or contains_hangul(source_text)):
         sentence_text = " ".join(sentences)
         details = []
         if topics:

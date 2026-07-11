@@ -274,6 +274,8 @@ class NewsSourceGateway:
             **stock_impact,
             "articleSummaryKo": summary_ko,
             "articleReadStatus": "body" if article_text else "feed-summary",
+            "articleAnalysisSource": "article-body" if article_text else "feed-summary",
+            "articleAnalysisQuality": "body-read" if article_text else "feed-only",
             "articleTextPreview": compact_text(article_text, 700) if article_text else "",
         }
         return ResearchEvidence(

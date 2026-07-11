@@ -806,11 +806,6 @@
     notificationJobsSummary: {},
     notificationJobDiagnostics: {},
     notificationExpandedJobs: {},
-    sqliteHealth: null,
-    sqliteHealthLoading: false,
-    sqliteHealthError: "",
-    sqliteMaintenanceRunning: false,
-    sqliteCleanupRunning: false,
     messageSchedules: [],
     messageSchedulesLoading: false,
     messageSchedulesError: "",
@@ -2112,90 +2107,6 @@
       .finally(function () {
         state.notificationJobsLoading = false;
         if (state.snapshot) render();
-      });
-  }
-
-  function applySqliteHealth(payload) {
-    state.sqliteHealth = payload && typeof payload === "object" ? payload : null;
-    state.sqliteHealthLoading = false;
-    state.sqliteHealthError = "";
-  }
-
-  function loadSqliteHealth() {
-    state.sqliteHealthLoading = true;
-    state.sqliteHealthError = "";
-    if (isStaticPreviewHost()) {
-      applySqliteHealth(null);
-      state.sqliteHealthLoading = false;
-      return Promise.resolve();
-    }
-    return requestJson("/api/sqlite/health")
-      .then(function (payload) {
-        applySqliteHealth(payload);
-      })
-      .catch(function (error) {
-        state.sqliteHealthError = error.message || "SQLite 상태를 읽지 못했습니다.";
-        state.sqliteHealth = null;
-      })
-      .finally(function () {
-        state.sqliteHealthLoading = false;
-        if (state.snapshot) render();
-      });
-  }
-
-  function runSqliteMaintenanceAction() {
-    if (state.sqliteMaintenanceRunning || isStaticPreviewHost() || state.serverSettingsLocked) return Promise.resolve();
-    state.sqliteMaintenanceRunning = true;
-    state.sqliteHealthError = "";
-    render();
-    return sendJson("/api/sqlite/maintenance", "POST", {
-      checkpoint: true,
-      optimize: true,
-      recoverProcessing: true
-    })
-      .then(function (payload) {
-        applySqliteHealth(payload.health || payload);
-        var recovered = payload.recoveredProcessing || {};
-        var recoveredCount = Number(recovered.notification_jobs || 0) + Number(recovered.model_review_jobs || 0);
-        showSnackbar("SQLite 유지보수를 완료했습니다" + (recoveredCount ? " · 복구 " + recoveredCount + "건" : "") + ".");
-      })
-      .catch(function (error) {
-        state.sqliteHealthError = error.message || "SQLite 유지보수를 실행하지 못했습니다.";
-        showSnackbar(state.sqliteHealthError, "danger");
-      })
-      .finally(function () {
-        state.sqliteMaintenanceRunning = false;
-        render();
-      });
-  }
-
-  function runSqliteCleanupAction() {
-    if (state.sqliteCleanupRunning || isStaticPreviewHost() || state.serverSettingsLocked) return Promise.resolve();
-    state.sqliteCleanupRunning = true;
-    state.sqliteHealthError = "";
-    render();
-    return sendJson("/api/sqlite/maintenance", "POST", {
-      checkpoint: true,
-      optimize: true,
-      recoverProcessing: true,
-      cleanupOldData: true,
-      archiveOldData: false,
-      retentionDays: 7,
-      compactAppStore: true,
-      vacuum: false
-    })
-      .then(function (payload) {
-        applySqliteHealth(payload.health || payload);
-        var cleanup = payload.cleanup || {};
-        showSnackbar("오래된 SQLite 데이터를 정리했습니다 · 삭제 " + Number(cleanup.deletedTotal || 0) + "건");
-      })
-      .catch(function (error) {
-        state.sqliteHealthError = error.message || "오래된 SQLite 데이터를 정리하지 못했습니다.";
-        showSnackbar(state.sqliteHealthError, "danger");
-      })
-      .finally(function () {
-        state.sqliteCleanupRunning = false;
-        render();
       });
   }
 
@@ -6735,7 +6646,6 @@
       renderSystemEventFlowPanel(),
       renderSystemNotificationFlowPanel(),
       renderSystemOntologyPanel(snapshot),
-      renderSystemSqliteHealthPanel(),
       renderSystemOperationsPanel(),
       renderSystemGlossaryPanel(),
       '</section>'
@@ -6749,7 +6659,7 @@
     var abox = strategy.abox || {};
     var evidence = Array.isArray(strategy.evidence) ? strategy.evidence : [];
     var metrics = [
-      ["계정", serviceAccounts().length || 0, "로컬 SQLite에 저장된 연결 단위"],
+      ["계정", serviceAccounts().length || 0, "MySQL 운영 DB에 저장된 연결 단위"],
       ["보유 종목", positions.length, "현금 제외 현재 포지션"],
       ["관계", abox.relationCount || strategy.relationCount || 0, "TBox/ABox에서 만들어진 연결"],
       ["근거", evidence.length || ((currentResearchEvidence().summary || {}).total || 0), "뉴스·시세·공시·모델 근거"]
@@ -6826,7 +6736,7 @@
       '<div class="system-flow-diagram data-flow" aria-label="데이터 흐름 다이어그램">',
       renderSystemFlowNode("01", "외부·로컬 입력", ["Toss 계좌", "종목 카탈로그", "뉴스·공시·거시"]),
       renderSystemFlowNode("02", "수집 워커", ["monitor", "market-data", "news"]),
-      renderSystemFlowNode("03", "로컬 저장소", ["SQLite service.db", "캐시·이벤트·Outbox"]),
+      renderSystemFlowNode("03", "운영 저장소", ["MySQL operational tables", "캐시·이벤트·Outbox"]),
       renderSystemFlowNode("04", "분석 계층", ["전략 공식", "온톨로지 규칙", "AI 의견"]),
       renderSystemFlowNode("05", "사용자 접점", ["웹 콘솔", "알림 큐", "Telegram"]),
       '</div>',
@@ -6920,95 +6830,6 @@
     ].join("");
   }
 
-  function formatBytes(value) {
-    var size = Number(value || 0);
-    if (!Number.isFinite(size) || size <= 0) return "0 B";
-    var units = ["B", "KB", "MB", "GB"];
-    var unit = 0;
-    while (size >= 1024 && unit < units.length - 1) {
-      size = size / 1024;
-      unit += 1;
-    }
-    return (unit === 0 ? Math.round(size) : size.toFixed(size >= 10 ? 1 : 2)) + " " + units[unit];
-  }
-
-  function sqliteStatusTone(health) {
-    if (!health || !health.exists) return "caution";
-    if (Number(health.recentLockLogCount || 0) > 0) return "hold";
-    if (String(health.journalMode || "").toLowerCase() === "wal") return "watch";
-    return "hold";
-  }
-
-  function outboxCountText(counts) {
-    counts = counts || {};
-    var pending = Number(counts.pending || 0);
-    var processing = Number(counts.processing || 0);
-    var failed = Number(counts.failed || 0);
-    var done = Number(counts.done || 0);
-    var suppressed = Number(counts.suppressed || 0);
-    return "대기 " + pending + " · 처리 " + processing + " · 실패 " + failed + " · 완료 " + done + (suppressed ? " · 억제 " + suppressed : "");
-  }
-
-  function renderSqliteHealthCell(label, value, detail, tone) {
-    return [
-      '<div class="monitor-runtime-row sqlite-health-cell ' + escapeHtml(tone || "") + '">',
-      '<span>' + escapeHtml(label || "-") + '</span>',
-      '<strong>' + escapeHtml(value == null ? "-" : value) + '</strong>',
-      detail ? '<em>' + escapeHtml(detail) + '</em>' : '',
-      '</div>'
-    ].join("");
-  }
-
-  function renderSystemSqliteHealthPanel() {
-    var health = state.sqliteHealth || {};
-    var tables = health.tables || {};
-    var outbox = health.outbox || {};
-    var migrations = Array.isArray(health.migrations) ? health.migrations : [];
-    var locked = state.serverSettingsLocked || isStaticPreviewHost();
-    var rows = [
-      ["DB 파일", health.exists ? formatBytes(health.sizeBytes) : "없음", health.path || "data/service.db"],
-      ["WAL", formatBytes(health.walSizeBytes), "journal " + (health.journalMode || "-") + " · busy " + (health.busyTimeoutMs || 0) + "ms"],
-      ["최근 lock 로그", Number(health.recentLockLogCount || 0) + "건", "worker 로그 최근 구간 기준"],
-      ["이벤트", Number(tables.domainEvents || 0) + "건", "domain_events"],
-      ["근거·종목", Number(tables.researchEvidence || 0) + " / " + Number(tables.symbolUniverse || 0), "research_evidence / symbol_universe"],
-      ["알림 Outbox", outboxCountText(outbox.notificationJobs), "notification_jobs"],
-      ["모델 리뷰 Outbox", outboxCountText(outbox.modelReviewJobs), "model_review_jobs"]
-    ];
-    return [
-      '<article class="panel system-sqlite-panel">',
-      '<div class="panel-head">',
-      '<div><p class="label">SQLite Operations</p><h2>로컬 운영 DB 상태</h2><span>SQLite는 설정, 이벤트, 캐시, Outbox만 맡고 관계 추론은 Neo4j가 맡습니다.</span></div>',
-      '<span class="status-pill ' + escapeHtml(sqliteStatusTone(health)) + '">' + escapeHtml(state.sqliteHealthLoading ? "checking" : (health.exists ? "local db" : "missing")) + '</span>',
-      '</div>',
-      state.sqliteHealthError ? '<p class="error-text">' + escapeHtml(state.sqliteHealthError) + '</p>' : '',
-      '<div class="monitor-runtime-timeline sqlite-health-ledger">',
-      rows.map(function (row) {
-        return renderSqliteHealthCell(row[0], row[1], row[2]);
-      }).join(""),
-      '</div>',
-      '<div class="system-lineage-grid sqlite-migration-grid" role="table" aria-label="SQLite migration 기록">',
-      '<div class="system-lineage-head" role="row"><span>Migration</span><span>적용 시각</span><span>범위</span><span>상태</span></div>',
-      (migrations.length ? migrations : [{ version: "기록 없음", appliedAt: "", scope: "schema", status: "대기" }]).slice(0, 6).map(function (item) {
-        return [
-          '<div class="system-lineage-row" role="row">',
-          '<strong>' + escapeHtml(item.version || "-") + '</strong>',
-          '<span>' + escapeHtml(item.appliedAt ? formatClock(item.appliedAt) : "-") + '</span>',
-          '<code>service.db</code>',
-          '<em>' + escapeHtml(item.version ? "applied" : "pending") + '</em>',
-          '</div>'
-        ].join("");
-      }).join(""),
-      '</div>',
-      '<div class="settings-actions system-sqlite-actions">',
-      '<button class="text-button" type="button" data-action="refresh-sqlite-health"' + (state.sqliteHealthLoading ? ' disabled' : '') + '>' + escapeHtml(state.sqliteHealthLoading ? "확인 중" : "새로고침") + '</button>',
-      '<button class="text-button primary" type="button" data-action="sqlite-maintenance"' + (locked || state.sqliteMaintenanceRunning ? ' disabled' : '') + '>' + escapeHtml(state.sqliteMaintenanceRunning ? "정리 중" : "DB 최적화") + '</button>',
-      '<button class="text-button danger" type="button" data-action="sqlite-cleanup"' + (locked || state.sqliteCleanupRunning ? ' disabled' : '') + '>' + escapeHtml(state.sqliteCleanupRunning ? "삭제 중" : "데이터 정리") + '</button>',
-      '</div>',
-      '<div class="rule-strip"><span>오래된 데이터 삭제는 pending/processing 작업을 보호하고, 알림·이벤트·캐시·근거·품질 샘플을 7일 또는 상한 기준으로 정리합니다.</span></div>',
-      '</article>'
-    ].join("");
-  }
-
   function renderSystemOntologyPanel(snapshot) {
     var strategy = (((snapshot || {}).tossDecision || {}).ontologyStrategy || {});
     var tbox = strategy.tbox || {};
@@ -7046,7 +6867,7 @@
       ["데이터가 이상할 때", "피드 탭의 수집 오류, 전체종목 탭의 최신성, 설정 탭의 API 키와 캐시 시간을 순서대로 확인합니다."],
       ["알림이 너무 많을 때", "알림 탭에서 메시지 타입별 사용 여부와 cadence, 임계값을 조정합니다."],
       ["모델 판단이 이상할 때", "투자 분석 탭에서 공식 입력, 기준값, 근거 카드, 반대 근거를 함께 확인합니다."],
-      ["외부 공유 전", "로컬 우선 시스템이므로 `.env.local`, service.db, API 키, 계좌 정보가 노출되지 않는지 먼저 확인합니다."]
+      ["외부 공유 전", "로컬 우선 시스템이므로 `.env.local`, API 키, 계좌 정보, DB 접속 정보가 노출되지 않는지 먼저 확인합니다."]
     ];
     return [
       '<article class="panel system-operations-panel">',
@@ -7126,7 +6947,7 @@
       },
       system: {
         steps: [["01", "Manual", "처음 보는 사람"], ["02", "Data", "수집·저장"], ["03", "Event", "알림·추론"]],
-        metrics: [["워커", "6"], ["이벤트", "12+"], ["저장소", "SQLite"]]
+        metrics: [["워커", "6"], ["이벤트", "12+"], ["저장소", "MySQL"]]
       },
       notifications: {
         steps: [["01", "Decision", "최근 판단"], ["02", "Policy", "타입 룰"], ["03", "Template", "본문·발송"]],
@@ -8110,7 +7931,7 @@
       renderHomeSignal("토스", configuredAccounts ? "API 정보 저장됨" : "API 정보 필요", configuredAccounts ? "ok" : "warn"),
       renderHomeSignal("알림", telegramAccounts ? "텔레그램 연결됨" : "알림 채널 확인", telegramAccounts ? "ok" : "warn"),
       renderHomeSignal("실시간", state.realtime.connected ? "웹소켓 연결됨" : "HTTP 대기", state.realtime.connected ? "ok" : "warn"),
-      renderHomeSignal("저장소", isStaticPreviewHost() ? "정적 미리보기" : "로컬 SQLite 사용", isStaticPreviewHost() ? "warn" : "ok"),
+      renderHomeSignal("저장소", isStaticPreviewHost() ? "정적 미리보기" : "MySQL 운영 DB", isStaticPreviewHost() ? "warn" : "ok"),
       '</div>',
       '</article>'
     ].join("");
@@ -10701,7 +10522,7 @@
       '<section class="ontology-surface ontology-projection-surface">',
       '<div class="ontology-surface-head">',
       '<strong>테이블 저장 구조</strong>',
-      '<span>SQLite 관점 · 규칙 구조와 현재 데이터를 행 단위로 표시</span>',
+      '<span>운영 DB 관점 · 규칙 구조와 현재 데이터를 행 단위로 표시</span>',
       '</div>',
       '<div class="ontology-projection-grid">',
       rows.map(renderOntologyProjectionRow).join(""),
@@ -11985,7 +11806,7 @@
       '<button class="text-button" type="button" data-action="refresh-symbol-universe">' + escapeHtml(state.symbolUniverseRefreshing ? "갱신 중" : "목록 갱신") + '</button>',
       '</form>',
       state.symbolUniverseError ? '<p class="form-error">' + escapeHtml(state.symbolUniverseError) + '</p>' : '',
-      '<p class="symbol-universe-note subtle">코스피·코스닥은 KRX KIND, 나스닥은 Nasdaq Trader 심볼 디렉터리를 로컬 SQLite에 저장합니다. 원천 호출이 실패해도 마지막 성공 목록을 계속 사용합니다.</p>',
+      '<p class="symbol-universe-note subtle">코스피·코스닥은 KRX KIND, 나스닥은 Nasdaq Trader 심볼 디렉터리를 운영 DB에 저장합니다. 원천 호출이 실패해도 마지막 성공 목록을 계속 사용합니다.</p>',
       full ? '<div class="symbol-pager"><span>' + escapeHtml(resultTotal ? visibleFrom + "-" + visibleTo + " / " + resultTotal + "개 표시" : "표시할 종목 없음") + '</span><div><button class="mini-button" data-symbol-page="prev"' + (hasPrev ? "" : " disabled") + '>이전</button><button class="mini-button" data-symbol-page="next"' + (hasNext ? "" : " disabled") + '>다음</button></div></div>' : '',
       full ? renderSymbolBulkActionBar(renderedItems) : '',
       '<div class="symbol-result-list">',
@@ -12675,7 +12496,7 @@
       '<span class="tone-chip ' + settingsStatusTone() + '" data-settings-status>' + settingsStatusLabel() + '</span>',
       '<span class="chip">로컬 DB 우선</span>',
       '</div>',
-      state.settingsSaving ? '<p class="lab-message">설정을 로컬 SQLite DB에 저장하는 중입니다.</p>' : '',
+      state.settingsSaving ? '<p class="lab-message">설정을 MySQL 운영 DB에 저장하는 중입니다.</p>' : '',
       state.serverSettingsError ? '<p class="form-error">' + escapeHtml(state.serverSettingsError) + '</p>' : '',
       state.serverSettingsLocked ? '<p class="form-error">공유 모드에서는 서버 설정 저장이 잠겨 있습니다.</p>' : '',
       '</div>',
@@ -12936,26 +12757,6 @@
     Array.prototype.slice.call(app.querySelectorAll('[data-action="refresh-research-evidence"]')).forEach(function (refreshEvidence) {
       refreshEvidence.addEventListener("click", function () {
         loadResearchEvidence(true);
-      });
-    });
-
-    Array.prototype.slice.call(app.querySelectorAll('[data-action="refresh-sqlite-health"]')).forEach(function (refreshSqliteHealth) {
-      refreshSqliteHealth.addEventListener("click", function () {
-        loadSqliteHealth().then(function () {
-          showSnackbar("SQLite 상태를 다시 읽었습니다.");
-        });
-      });
-    });
-
-    Array.prototype.slice.call(app.querySelectorAll('[data-action="sqlite-maintenance"]')).forEach(function (sqliteMaintenance) {
-      sqliteMaintenance.addEventListener("click", function () {
-        runSqliteMaintenanceAction();
-      });
-    });
-
-    Array.prototype.slice.call(app.querySelectorAll('[data-action="sqlite-cleanup"]')).forEach(function (sqliteCleanup) {
-      sqliteCleanup.addEventListener("click", function () {
-        runSqliteCleanupAction();
       });
     });
 
@@ -13679,8 +13480,7 @@
     loadNotificationJobs(),
     loadNotificationSchedules(),
     loadOntologyRulebox(),
-    loadSymbolUniverse(),
-    loadSqliteHealth()
+    loadSymbolUniverse()
   ];
   Promise.all(snapshotPrerequisites.map(function (task) {
     return task.catch(function () {

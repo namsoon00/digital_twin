@@ -134,6 +134,24 @@ class NewsDigestEnqueuerTests(unittest.TestCase):
         self.assertNotIn("모델 판단", rendered)
         self.assertIn("뉴스/피드 새 정보", rendered)
 
+    def test_first_watch_section_deduplicates_same_symbol(self):
+        queue = MemoryNotificationQueue()
+        first = self.evidence()
+        second = self.evidence()
+        second.evidence_id = "research:AAPL:news:apple-openai-2"
+        second.title = "Apple OpenAI lawsuit follow-up"
+        second.url = "https://example.test/apple-2"
+        event = DomainEvent(
+            name=RESEARCH_EVIDENCE_COLLECTED,
+            aggregate_id="news:AAPL",
+            payload={"materialChangedItems": [first.to_dict(), second.to_dict()]},
+        )
+
+        self.enqueuer(queue).handle(event)
+
+        self.assertEqual(1, len(queue.jobs))
+        self.assertEqual(1, queue.jobs[0].text.count("• Apple(AAPL): 관심 · 위험 뉴스"))
+
     def test_ignores_collection_event_without_material_items(self):
         queue = MemoryNotificationQueue()
         event = DomainEvent(

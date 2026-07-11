@@ -12,6 +12,7 @@ from .notification_ai_news import (
     news_item_rank_score,
     research_evidence_items,
 )
+from .news_analysis import clean_article_summary_noise
 from .notification_ai_gate_contracts import KST
 from .notification_ai_gate_text import (
     _line_after_colon,
@@ -352,7 +353,7 @@ def source_detail_summary(item: Dict[str, object]) -> str:
         return ""
     payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
     raw_payload = item.get("rawPayload") if isinstance(item.get("rawPayload"), dict) else {}
-    return _text(
+    summary = (
         item.get("articleSummaryKo")
         or payload.get("articleSummaryKo")
         or raw_payload.get("articleSummaryKo")
@@ -360,7 +361,10 @@ def source_detail_summary(item: Dict[str, object]) -> str:
         or item.get("analysisSummary")
         or payload.get("analysisSummary")
         or raw_payload.get("analysisSummary")
-        or item.get("title"),
+        or item.get("title")
+    )
+    return _text(
+        clean_article_summary_noise(summary),
         360,
     )
 

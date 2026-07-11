@@ -384,6 +384,30 @@ def numeric_highlights(text: object, limit: int = 4) -> List[str]:
     return rows
 
 
+def is_news_boilerplate_sentence(value: object) -> bool:
+    lowered = _lower_text(value)
+    if not lowered:
+        return False
+    if "google news" in lowered and any(token in lowered for token in ["comprehensive", "coverage", "aggregated", "all over the world"]):
+        return True
+    if "comprehensive up-to-date news coverage" in lowered:
+        return True
+    if "aggregated from sources all over the world" in lowered:
+        return True
+    if "comprehensive 상승-으로-date" in lowered:
+        return True
+    return False
+
+
+def clean_article_summary_noise(value: object) -> str:
+    text = compact_text(value, 1200)
+    if not text:
+        return ""
+    parts = re.split(r"(?<=입니다[.。])\s+|(?<=다[.。])\s+|(?<=[.!?。！？])\s+", text)
+    cleaned = [part.strip() for part in parts if part.strip() and not is_news_boilerplate_sentence(part)]
+    return " ".join(cleaned).strip() if cleaned else ("" if is_news_boilerplate_sentence(text) else text)
+
+
 def article_sentence_candidates(text: object, target: object, analysis: Dict[str, object] = None, limit: int = 3) -> List[str]:
     analysis = analysis if isinstance(analysis, dict) else {}
     source_text = str(text or "")
@@ -402,6 +426,8 @@ def article_sentence_candidates(text: object, target: object, analysis: Dict[str
         sentence = compact_text(raw, 180)
         if len(sentence) < 24:
             continue
+        if is_news_boilerplate_sentence(sentence):
+            continue
         lowered = _lower_text(sentence)
         score = max(0.0, 12.0 - index * 0.25)
         score += sum(4.0 for term in terms if _keyword_in_lowered_text(term, lowered))
@@ -417,11 +443,15 @@ def article_sentence_candidates(text: object, target: object, analysis: Dict[str
     if result:
         return result
     fallback = compact_text(source_text, 180)
+    if is_news_boilerplate_sentence(fallback):
+        return []
     return [fallback] if fallback else []
 
 
 def clean_article_title(value: object) -> str:
     text = compact_text(value, 260)
+    if is_news_boilerplate_sentence(text):
+        return ""
     if " - " in text:
         head, tail = text.rsplit(" - ", 1)
         if 2 <= len(tail.strip()) <= 48:
@@ -525,7 +555,7 @@ def english_fragment_to_korean(value: object, target: object = None) -> str:
 
 def english_sentence_korean_fact(sentence: object, target: object, event_label: str) -> str:
     source = article_core_clause(sentence, target)
-    if not source:
+    if not source or is_news_boilerplate_sentence(source):
         return ""
     translated = english_fragment_to_korean(source, target)
     lowered = _lower_text(source)
@@ -649,18 +679,20 @@ def korean_article_summary(
     analysis: Dict[str, object] = None,
 ) -> str:
     analysis = analysis if isinstance(analysis, dict) else {}
-    body = compact_text(article_text, 2500)
-    fallback = compact_text(feed_summary or title, 900)
+    body = clean_article_summary_noise(compact_text(article_text, 2500))
+    fallback_from_title = not str(feed_summary or "").strip()
+    fallback_source = feed_summary if not fallback_from_title else clean_article_title(title)
+    fallback = clean_article_summary_noise(compact_text(fallback_source, 900))
     source_text = body or fallback
     if not source_text:
         return ""
     event_label = event_type_label(analysis.get("eventType") or classify_news_event_type(title, source_text))
     topics = detected_topic_labels(str(title or "") + " " + source_text)
     numbers = numeric_highlights(source_text)
-    body_status = "본문" if body else "RSS/제공 요약"
-    sentences = article_sentence_candidates(source_text, target, analysis, 3)
+    body_status = "본문" if body else "RSS/제공"
+    sentences = [clean_article_title(source_text)] if fallback_from_title and not body else article_sentence_candidates(source_text, target, analysis, 3)
     if sentences and contains_hangul(source_text):
-        sentence_text = " ".join(sentences)
+        sentence_text = join_korean_summary_parts(sentences)
         details = []
         if topics:
             details.append("핵심 키워드: " + ", ".join(topics))

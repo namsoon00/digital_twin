@@ -1,5 +1,6 @@
 import hashlib
 import html
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Iterable, List, Tuple
 
@@ -7,6 +8,7 @@ from ..domain.accounts import AccountConfig
 from ..domain.events import DomainEvent, RESEARCH_EVIDENCE_COLLECTED
 from ..domain.market_data import number
 from ..domain.message_types import NEWS_DIGEST
+from ..domain.news_analysis import clean_article_summary_noise
 from ..domain.notifications import NotificationJob, notification_debug_number
 from ..domain.portfolio import utc_now_iso
 
@@ -119,10 +121,10 @@ def article_analysis_label(item: Dict[str, object]) -> str:
 def item_summary(item: Dict[str, object]) -> str:
     payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
     return (
-        bounded_text(item.get("articleSummaryKo"), 360)
-        or bounded_text(item.get("analysisSummary"), 260)
-        or bounded_text(item.get("summary"), 360)
-        or bounded_text(payload.get("articleSummaryKo"), 360)
+        bounded_text(clean_article_summary_noise(item.get("articleSummaryKo")), 360)
+        or bounded_text(clean_article_summary_noise(item.get("analysisSummary")), 260)
+        or bounded_text(clean_article_summary_noise(item.get("summary")), 360)
+        or bounded_text(clean_article_summary_noise(payload.get("articleSummaryKo")), 360)
         or bounded_text(item.get("title"), 180)
     )
 
@@ -298,13 +300,16 @@ class NewsDigestEnqueuer:
     def message_text(self, account: AccountConfig, items: List[Dict[str, object]], event: DomainEvent, tracking_number: str = "") -> str:
         reference = latest_timestamp(items)
         symbols = []
+        seen_symbol_lines = set()
         for item in items:
             symbol = normalized_symbol(item.get("symbol"))
             name = clean_text(item.get("displayName") or symbol)
             bucket = clean_text(item.get("portfolioBucket") or "대상")
             label = name + ("(" + symbol + ")" if symbol and symbol != name else "")
             impact = impact_label(item)
-            if label:
+            line_key = re.sub(r"\s+", "", label + "|" + bucket + "|" + impact).casefold()
+            if label and line_key not in seen_symbol_lines:
+                seen_symbol_lines.add(line_key)
                 symbols.append("• " + html_text(label) + ": " + html_text(bucket + " · " + impact + " 뉴스"))
         item_lines = []
         for index, item in enumerate(items, start=1):

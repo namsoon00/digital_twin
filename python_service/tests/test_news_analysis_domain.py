@@ -8,6 +8,7 @@ from digital_twin.domain.investment_research import NewsCollectionTarget, Resear
 from digital_twin.domain.news_analysis import (
     classify_news_relevance,
     classify_news_event_type,
+    clean_article_summary_noise,
     confidence_from_analysis_payload,
     impact_from_analysis_payload,
     korean_article_summary,
@@ -134,6 +135,33 @@ class NewsAnalysisDomainTests(unittest.TestCase):
         self.assertIn("프리마켓에서 큰 변화가 없었다", summary)
         self.assertNotIn("관련 뉴스입니다", summary)
         self.assertNotIn("뉴스 유형은", summary)
+
+    def test_article_summary_filters_google_news_boilerplate(self):
+        target = NewsCollectionTarget("000660", "SK하이닉스", "KOSPI", "KRW", "반도체")
+        boilerplate = "Comprehensive up-to-date news coverage, aggregated from sources all over the world by Google News."
+
+        summary = korean_article_summary(
+            target,
+            'SK하이닉스 美 상장에 외신 "역사적 데뷔"... 월가 "반도체 랠리 가능성"',
+            boilerplate,
+            analysis={"relationScope": "direct", "eventType": "listing"},
+        )
+
+        self.assertIn("SK하이닉스 美 상장", summary)
+        self.assertNotIn("Comprehensive", summary)
+        self.assertNotIn("Google News", summary)
+        self.assertNotIn("상승-으로-date", summary)
+        self.assertNotIn("aggregated", summary)
+
+    def test_stored_summary_noise_is_removed_before_rendering(self):
+        cleaned = clean_article_summary_noise(
+            '본문 요약: SK하이닉스 상장 이슈입니다. 상장/거래시장 관련 핵심 내용은 Comprehensive 상승-으로-date news coverage, aggregated 에서 sources all 관련해 world by Google News입니다. 핵심 키워드는 반도체입니다.'
+        )
+
+        self.assertIn("SK하이닉스 상장 이슈", cleaned)
+        self.assertIn("핵심 키워드는 반도체", cleaned)
+        self.assertNotIn("Comprehensive", cleaned)
+        self.assertNotIn("Google News", cleaned)
 
 
 if __name__ == "__main__":

@@ -361,7 +361,7 @@ def source_detail_summary(item: Dict[str, object]) -> str:
         or payload.get("analysisSummary")
         or raw_payload.get("analysisSummary")
         or item.get("title"),
-        140,
+        360,
     )
 
 

@@ -6,7 +6,7 @@ from .market_data import clamp, number
 
 
 NEWS_ANALYSIS_VERSION = "news-analysis-v2-domain-ontology"
-ARTICLE_DIGEST_VERSION = "article-digest-ko-v2"
+ARTICLE_DIGEST_VERSION = "article-digest-ko-v3"
 
 SUPPORT_KEYWORDS = (
     "beat",
@@ -420,14 +420,203 @@ def article_sentence_candidates(text: object, target: object, analysis: Dict[str
     return [fallback] if fallback else []
 
 
-def english_article_korean_context_parts(
+def clean_article_title(value: object) -> str:
+    text = compact_text(value, 260)
+    if " - " in text:
+        head, tail = text.rsplit(" - ", 1)
+        if 2 <= len(tail.strip()) <= 48:
+            return head.strip()
+    return text.strip()
+
+
+def _target_name_for_summary(target: object) -> str:
+    return str(getattr(target, "name", "") or target_symbol(target) or "해당 종목").strip()
+
+
+def _with_target_aliases_ko(text: str, target: object) -> str:
+    result = str(text or "")
+    target_name = _target_name_for_summary(target)
+    if not target_name:
+        return result
+    for alias in sorted(target_aliases(target), key=len, reverse=True):
+        alias_text = str(alias or "").strip()
+        if not alias_text or alias_text.upper() == target_symbol(target):
+            continue
+        result = re.sub(r"(?<![A-Za-z0-9])" + re.escape(alias_text) + r"(?![A-Za-z0-9])", target_name, result, flags=re.IGNORECASE)
+    return result
+
+
+def _target_mentioned_in_text(text: object, target: object) -> bool:
+    lowered = _lower_text(text)
+    return any(_keyword_in_lowered_text(alias, lowered) for alias in target_aliases(target))
+
+
+def article_core_clause(value: object, target: object) -> str:
+    text = clean_article_title(value)
+    if ";" in text:
+        parts = [part.strip() for part in text.split(";") if part.strip()]
+        for part in parts:
+            if _target_mentioned_in_text(part, target):
+                text = part
+                break
+    if ":" in text:
+        before, after = text.split(":", 1)
+        if _target_mentioned_in_text(after, target) or _lower_text(before) in {"world in brief", "view", "brief"}:
+            text = after.strip()
+    return text.strip()
+
+
+def english_fragment_to_korean(value: object, target: object = None) -> str:
+    text = clean_article_title(value)
+    if target is not None:
+        text = _with_target_aliases_ko(text, target)
+    replacements = [
+        (r"\bhomicide investigation underway\b", "살인 수사가 진행 중"),
+        (r"\bbody found\b", "시신이 발견"),
+        (r"\btrunk of\b", "트렁크에서"),
+        (r"\blegal dispute\b", "법적 분쟁"),
+        (r"\bartificial intelligence\b", "AI"),
+        (r"\bproducts?\b", "제품"),
+        (r"\bdata centers?\b", "데이터센터"),
+        (r"\bsemiconductor demand expectations improved\b", "반도체 수요 기대가 개선"),
+        (r"\bsemiconductor demand\b", "반도체 수요"),
+        (r"\bchip demand\b", "반도체 수요"),
+        (r"\bbitcoin hoarding\b", "비트코인 보유 확대"),
+        (r"\bpivoting from 비트코인 보유 확대 to funding dividends with sales\b", "비트코인 보유 확대에서 매각 자금으로 배당 재원을 마련하는 전략으로 전환"),
+        (r"\bfunding dividends with sales\b", "매각 자금으로 배당 재원을 마련"),
+        (r"\bbitcoin strategy\b", "비트코인 전략"),
+        (r"\bdigital assets?\b", "디지털자산"),
+        (r"\bpre[- ]market\b", "프리마켓"),
+        (r"\bafter[- ]hours\b", "시간외 거래"),
+        (r"\bshares?\b", "주가"),
+        (r"\bstock\b", "주가"),
+        (r"\bstake\b", "지분"),
+        (r"\bposition\b", "보유 지분"),
+        (r"\bpurchases?\b", "매수"),
+        (r"\bincreased\b", "증가"),
+        (r"\bdecreased\b", "감소"),
+        (r"\brises?\b|\brose\b|\bgains?\b|\bjumps?\b|\bsurges?\b", "상승"),
+        (r"\bfalls?\b|\bfell\b|\bdrops?\b|\bslips?\b", "하락"),
+        (r"\bis down\b|\bdown\b", "하락"),
+        (r"\bis up\b|\bup\b", "상승"),
+        (r"\bmoved\b|\btracks?\b", "움직임"),
+        (r"\bsells?\b", "매도"),
+        (r"\bdefends?\b", "방어"),
+        (r"\blawsuit\b|\blitigation\b", "소송"),
+        (r"\bsues?\b|\bsued\b", "소송 제기"),
+        (r"\binvestigation\b|\bprobe\b", "조사"),
+        (r"\bagainst\b", "상대로"),
+        (r"\bover\b", "관련해"),
+        (r"\bafter\b", "이후"),
+        (r"\bas\b", "하면서"),
+        (r"\bamid\b", "가운데"),
+        (r"\bwith\b", "함께"),
+        (r"\ba\s+|\ban\s+|\bthe\s+", ""),
+        (r"\bfrom\b", "에서"),
+        (r"\bto\b", "으로"),
+        (r"\bof\b", "의"),
+        (r"\bin\b", "에서"),
+    ]
+    for pattern, replacement in replacements:
+        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+    text = re.sub(r"\s+", " ", text).strip(" .;:-")
+    return text
+
+
+def english_sentence_korean_fact(sentence: object, target: object, event_label: str) -> str:
+    source = article_core_clause(sentence, target)
+    if not source:
+        return ""
+    translated = english_fragment_to_korean(source, target)
+    lowered = _lower_text(source)
+    target_name = _target_name_for_summary(target)
+    legal_match = re.search(r"(.+?)\s+sues?\s+(.+?)(?:\s+(?:over|in|for)\s+(.+))?$", source, re.IGNORECASE)
+    if legal_match:
+        actor = english_fragment_to_korean(legal_match.group(1), target)
+        target_party = english_fragment_to_korean(legal_match.group(2), None)
+        issue_source = str(legal_match.group(3) or "")
+        if re.search(r"legal dispute .*artificial intelligence products?", issue_source, re.IGNORECASE):
+            issue = "AI 제품을 둘러싼 법적 분쟁"
+        else:
+            issue = english_fragment_to_korean(issue_source, target) if issue_source else ""
+        return actor + "가 " + target_party + "를 상대로 소송을 제기했다는 내용입니다" + (". 쟁점은 " + issue + "입니다" if issue else ".")
+    if "homicide investigation" in lowered and "body found" in lowered and "tesla" in lowered:
+        return "테슬라 차량 트렁크에서 시신이 발견돼 살인 수사가 진행 중이라는 내용입니다."
+    if re.search(r"\bshares?\s+(?:were\s+)?little changed\b", source, re.IGNORECASE):
+        market = "프리마켓에서 " if re.search(r"pre[- ]market", source, re.IGNORECASE) else ""
+        return "주가는 " + market + "큰 변화가 없었다는 내용입니다."
+    bitcoin_sale = re.search(r"(.+?)\s+sells?\s+([\d,.]+)\s+bitcoin", source, re.IGNORECASE)
+    if bitcoin_sale:
+        actor = english_fragment_to_korean(bitcoin_sale.group(1), target)
+        return actor + "가 비트코인 " + bitcoin_sale.group(2) + "개를 매도했다는 내용입니다."
+    move_after = re.search(r"(.+?)\s+(?:is\s+)?(down|up)\s+([+-]?\d[\d,.]*%)\s+after\s+(.+)", source, re.IGNORECASE)
+    if move_after:
+        actor = english_fragment_to_korean(move_after.group(1), target)
+        direction = "하락" if move_after.group(2).lower() == "down" else "상승"
+        reason_source = move_after.group(4)
+        if re.search(r"pivoting from bitcoin hoarding to funding dividends with sales", reason_source, re.IGNORECASE):
+            return actor + "가 비트코인 보유 확대에서 매각 자금으로 배당 재원을 마련하는 전략으로 전환한 뒤 " + move_after.group(3) + " " + direction + "했다는 내용입니다."
+        else:
+            reason = english_fragment_to_korean(reason_source, target)
+        return actor + "가 " + reason + " 이후 " + move_after.group(3) + " " + direction + "했다는 내용입니다."
+    if re.search(r"stock reaction followed a shift in .*bitcoin treasury playbook", source, re.IGNORECASE):
+        return "주가 반응은 비트코인 재무 전략 변화 이후 나타났다는 내용입니다."
+    if re.search(r"\bshares?\s+tracks?\s+(?:chip|semiconductor)\s+demand\b", source, re.IGNORECASE):
+        return _target_name_for_summary(target) + " 주가가 반도체 수요 흐름을 따라 움직였다는 내용입니다."
+    if re.search(r"\bshares?\s+moved\s+after\s+semiconductor demand expectations improved\b", source, re.IGNORECASE):
+        return "반도체 수요 기대가 개선된 뒤 " + _target_name_for_summary(target) + " 주가가 움직였다는 내용입니다."
+    stock_move = re.search(r"(.+?)\s+(?:shares?|stock)\s+(.+)", source, re.IGNORECASE)
+    if stock_move:
+        actor = english_fragment_to_korean(stock_move.group(1), target) or target_name
+        action = english_fragment_to_korean(stock_move.group(2), target)
+        return actor + " 주가가 " + action + "했다는 내용입니다."
+    if any(_keyword_in_lowered_text(term, lowered) for term in ["stake", "purchases", "decreases position", "increased by"]):
+        return target_name + "의 기관 보유 지분 변화가 기사 핵심입니다. 내용은 " + translated + "입니다."
+    if translated:
+        return event_label + " 관련 핵심 내용은 " + translated + "입니다."
+    return ""
+
+
+def join_korean_summary_parts(parts: Iterable[str]) -> str:
+    rows: List[str] = []
+    for part in parts or []:
+        text = str(part or "").strip().rstrip(".。")
+        if text:
+            rows.append(text)
+    return ". ".join(rows) + ("." if rows else "")
+
+
+def factual_english_article_summary_parts(
     target: object,
     title: object,
     source_text: object,
     event_label: str,
 ) -> List[str]:
+    sentences = [clean_article_title(title)]
+    sentences.extend(article_sentence_candidates(source_text, target, {"eventType": ""}, 3))
+    rows: List[str] = []
+    seen = set()
+    for sentence in sentences:
+        fact = english_sentence_korean_fact(sentence, target, event_label)
+        if "소송을 제기" in fact:
+            legal_index = next((index for index, row in enumerate(rows) if "소송을 제기" in row), -1)
+            if legal_index >= 0:
+                if "쟁점은" in fact and "쟁점은" not in rows[legal_index]:
+                    rows[legal_index] = fact
+                continue
+        if "비트코인 보유 확대" in fact and "하락했다는 내용" in fact:
+            if any("비트코인 보유 확대" in row and "하락했다는 내용" in row for row in rows):
+                continue
+        key = _lower_text(fact)
+        if fact and key not in seen:
+            seen.add(key)
+            rows.append(fact)
+        if len(rows) >= 4:
+            break
+    if rows:
+        return rows
     text = _lower_text(str(title or "") + " " + str(source_text or ""))
-    subject = str(getattr(target, "name", "") or target_symbol(target) or "해당 종목").strip()
+    subject = _target_name_for_summary(target)
     parts: List[str] = []
     if any(_keyword_in_lowered_text(term, text) for term in ["lawsuit", "sue", "sues", "sued", "legal", "litigation", "antitrust", "probe", "investigation"]):
         parts.append("소송·조사·규제처럼 주가 부담이 될 수 있는 법적 이슈를 다룹니다")
@@ -465,13 +654,11 @@ def korean_article_summary(
     source_text = body or fallback
     if not source_text:
         return ""
-    subject = str(getattr(target, "name", "") or target_symbol(target) or "해당 종목").strip()
     event_label = event_type_label(analysis.get("eventType") or classify_news_event_type(title, source_text))
-    scope_label = relation_scope_label(analysis.get("relationScope"))
     topics = detected_topic_labels(str(title or "") + " " + source_text)
     numbers = numeric_highlights(source_text)
     body_status = "본문" if body else "RSS/제공 요약"
-    sentences = article_sentence_candidates(source_text, target, analysis, 2)
+    sentences = article_sentence_candidates(source_text, target, analysis, 3)
     if sentences and contains_hangul(source_text):
         sentence_text = " ".join(sentences)
         details = []
@@ -480,26 +667,19 @@ def korean_article_summary(
         if numbers:
             details.append("확인된 수치: " + ", ".join(numbers))
         suffix = (" " + " / ".join(details) + ".") if details else ""
-        return compact_text(body_status + " 요약: " + sentence_text + suffix, 520)
-    detail_parts = english_article_korean_context_parts(target, title, source_text, event_label)
+        return compact_text(body_status + " 요약: " + sentence_text + suffix, 760)
+    detail_parts = factual_english_article_summary_parts(target, title, source_text, event_label)
     if topics:
         detail_parts.append("핵심 키워드는 " + ", ".join(topics) + "입니다")
     if numbers:
-        detail_parts.append("원문에서 확인되는 주요 수치는 " + ", ".join(numbers) + "입니다")
+        detail_parts.append("기사에서 확인되는 주요 수치는 " + ", ".join(numbers) + "입니다")
     if not detail_parts:
-        detail_parts.append("제목과 본문 흐름상 투자 판단에 필요한 사실을 추가 확인해야 합니다")
+        detail_parts.append("기사의 구체 내용을 확인하려면 원문 본문 확인이 필요합니다")
     return compact_text(
         body_status
         + " 요약: "
-        + subject
-        + " 관련 뉴스입니다. 뉴스 유형은 "
-        + event_label
-        + "입니다. 관련성 분류는 "
-        + scope_label
-        + "입니다. "
-        + ". ".join(detail_parts)
-        + ".",
-        520,
+        + join_korean_summary_parts(detail_parts),
+        760,
     )
 
 

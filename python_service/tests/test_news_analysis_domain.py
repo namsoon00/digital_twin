@@ -108,14 +108,32 @@ class NewsAnalysisDomainTests(unittest.TestCase):
 
         self.assertNotIn("한국어로 정리하면", summary)
         self.assertNotIn("이슈 이슈", summary)
+        self.assertNotIn("관련 뉴스입니다", summary)
+        self.assertNotIn("뉴스 유형은", summary)
         self.assertIn("본문 요약", summary)
-        self.assertIn("반도체 수요와 공급 흐름", summary)
+        self.assertIn("반도체 수요 흐름을 따라 움직였다는 내용", summary)
         self.assertNotIn("Samsung Electronics shares moved after semiconductor demand expectations improved.", summary)
         self.assertRegex(summary, r"[가-힣]")
 
     def test_english_legal_keyword_uses_word_boundary(self):
         self.assertEqual("regulation", classify_news_event_type("Apple sues OpenAI", "legal dispute"))
         self.assertNotEqual("regulation", classify_news_event_type("Apple issues software update", "general product release"))
+
+    def test_english_article_summary_keeps_concrete_article_facts(self):
+        target = NewsCollectionTarget("AAPL", "Apple", "NASDAQ", "USD", "AI")
+
+        summary = korean_article_summary(
+            target,
+            "World in Brief: Apple sues OpenAI; Trump says Iran talks to resume - The Economist",
+            "Apple sues OpenAI in a legal dispute over artificial intelligence products. Shares were little changed in pre-market trading.",
+            analysis={"relationScope": "direct", "eventType": "regulation"},
+        )
+
+        self.assertIn("Apple가 OpenAI를 상대로 소송을 제기", summary)
+        self.assertIn("AI 제품을 둘러싼 법적 분쟁", summary)
+        self.assertIn("프리마켓에서 큰 변화가 없었다", summary)
+        self.assertNotIn("관련 뉴스입니다", summary)
+        self.assertNotIn("뉴스 유형은", summary)
 
 
 if __name__ == "__main__":

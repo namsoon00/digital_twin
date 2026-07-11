@@ -119,10 +119,10 @@ def article_analysis_label(item: Dict[str, object]) -> str:
 def item_summary(item: Dict[str, object]) -> str:
     payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
     return (
-        bounded_text(item.get("articleSummaryKo"), 180)
-        or bounded_text(item.get("analysisSummary"), 180)
-        or bounded_text(item.get("summary"), 180)
-        or bounded_text(payload.get("articleSummaryKo"), 180)
+        bounded_text(item.get("articleSummaryKo"), 360)
+        or bounded_text(item.get("analysisSummary"), 260)
+        or bounded_text(item.get("summary"), 360)
+        or bounded_text(payload.get("articleSummaryKo"), 360)
         or bounded_text(item.get("title"), 180)
     )
 

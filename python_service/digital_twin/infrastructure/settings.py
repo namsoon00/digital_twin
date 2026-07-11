@@ -405,21 +405,12 @@ def settings_path() -> Path:
     return data_dir() / "settings.json"
 
 
-def service_db_path() -> Path:
-    return Path(os.environ.get("DIGITAL_TWIN_SERVICE_DB", str(data_dir() / "service.db"))).resolve()
-
-
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def read_settings_store() -> Dict[str, str]:
     try:
-        backend = str(os.environ.get("OPERATIONAL_DB_BACKEND") or "mysql").strip().lower()
-        if backend == "sqlite":
-            from .sqlite_runtime import SQLiteRuntimeSettingsStore
-
-            return SQLiteRuntimeSettingsStore().load()
         from .mysql_operational import MySQLRuntimeSettingsStore
 
         return MySQLRuntimeSettingsStore({}).load()
@@ -429,15 +420,9 @@ def read_settings_store() -> Dict[str, str]:
 
 def write_settings_store(settings: Dict[str, object]) -> Dict[str, str]:
     clean = {str(key): str(value or "") for key, value in settings.items()}
-    backend = str(clean.get("operationalDbBackend") or os.environ.get("OPERATIONAL_DB_BACKEND") or "mysql").strip().lower()
-    if backend == "sqlite":
-        from .sqlite_runtime import SQLiteRuntimeSettingsStore
+    from .mysql_operational import MySQLRuntimeSettingsStore
 
-        SQLiteRuntimeSettingsStore().replace(clean)
-    else:
-        from .mysql_operational import MySQLRuntimeSettingsStore
-
-        MySQLRuntimeSettingsStore(clean).replace(clean)
+    MySQLRuntimeSettingsStore(clean).replace(clean)
     return clean
 
 

@@ -12,23 +12,32 @@ from digital_twin.domain.market_data import normalize_position
 from digital_twin.domain.portfolio_calculations import portfolio_summary
 from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontology
 from digital_twin.infrastructure.external_signals import ExternalSignalProvider
-from digital_twin.infrastructure.sqlite_monitoring import SQLiteExternalSignalCache
+from mysql_fixtures import TestExternalSignalCache, mysql_test_settings, reset_mysql_test_database, test_store_seed
 
 
 class ExistingApiOntologyMaterializationTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
+        mysql_settings = mysql_test_settings(self.temp.name)
         self.env_patch = mock.patch.dict(
             os.environ,
             {
                 "DIGITAL_TWIN_DATA_DIR": self.temp.name,
                 "SETTINGS_PATH": str(Path(self.temp.name) / "settings.json"),
+                "OPERATIONAL_DB_BACKEND": "mysql",
+                "MYSQL_HOST": mysql_settings["mysqlHost"],
+                "MYSQL_PORT": mysql_settings["mysqlPort"],
+                "MYSQL_DATABASE": mysql_settings["mysqlDatabase"],
+                "MYSQL_USER": mysql_settings["mysqlUser"],
+                "MYSQL_PASSWORD": mysql_settings["mysqlPassword"],
+                "MYSQL_UNIX_SOCKET": mysql_settings["mysqlUnixSocket"],
             },
             clear=False,
         )
         self.env_patch.start()
         self.addCleanup(self.env_patch.stop)
+        reset_mysql_test_database(self.temp.name)
 
     def test_alpha_vantage_fundamentals_can_use_existing_api_key(self):
         calls = []
@@ -89,7 +98,7 @@ class ExistingApiOntologyMaterializationTests(unittest.TestCase):
                 "externalNewsEnabled": "0",
                 "externalFxRateEnabled": "0",
             },
-            cache=SQLiteExternalSignalCache(Path(self.temp.name) / "service.db"),
+            cache=TestExternalSignalCache(test_store_seed(self.temp.name)),
             fetch_json=fake_fetch,
             sleep=lambda _: None,
         )

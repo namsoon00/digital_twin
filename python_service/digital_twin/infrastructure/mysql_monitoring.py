@@ -13,6 +13,9 @@ class MySQLDependencyError(RuntimeError):
     pass
 
 
+_MYSQL_DATABASE_READY = set()
+
+
 def mysql_settings(settings: Dict[str, str] = None) -> Dict[str, object]:
     configured = settings or {}
     url = str(configured.get("mysqlUrl") or os.environ.get("MYSQL_URL") or os.environ.get("DATABASE_URL") or "").strip()
@@ -30,11 +33,60 @@ def mysql_settings(settings: Dict[str, str] = None) -> Dict[str, object]:
     return {
         "host": configured.get("mysqlHost") or os.environ.get("MYSQL_HOST") or "127.0.0.1",
         "port": int(configured.get("mysqlPort") or os.environ.get("MYSQL_PORT") or 3306),
-        "user": configured.get("mysqlUser") or os.environ.get("MYSQL_USER") or "",
+        "user": configured.get("mysqlUser") or os.environ.get("MYSQL_USER") or "root",
         "password": configured.get("mysqlPassword") or os.environ.get("MYSQL_PASSWORD") or "",
-        "database": configured.get("mysqlDatabase") or os.environ.get("MYSQL_DATABASE") or "",
+        "database": configured.get("mysqlDatabase") or os.environ.get("MYSQL_DATABASE") or "orbit_alpha",
         "unix_socket": configured.get("mysqlUnixSocket") or os.environ.get("MYSQL_UNIX_SOCKET") or "",
     }
+
+
+def ensure_mysql_database_exists(settings: Dict[str, object]) -> None:
+    database = str((settings or {}).get("database") or "").strip()
+    if not database:
+        raise MySQLDependencyError("MySQL database name is required. Set MYSQL_DATABASE.")
+    cache_key = (
+        str((settings or {}).get("host") or "127.0.0.1"),
+        str((settings or {}).get("port") or 3306),
+        database,
+        str((settings or {}).get("unix_socket") or ""),
+        str((settings or {}).get("user") or ""),
+    )
+    if cache_key in _MYSQL_DATABASE_READY:
+        return
+    try:
+        import pymysql
+    except ImportError as error:
+        raise MySQLDependencyError("MySQL backend requires pymysql. Install with: python3 -m pip install pymysql") from error
+    kwargs = {
+        "host": settings.get("host") or "127.0.0.1",
+        "port": int(settings.get("port") or 3306),
+        "user": settings.get("user") or "",
+        "password": settings.get("password") or "",
+        "charset": "utf8mb4",
+        "autocommit": True,
+    }
+    if settings.get("unix_socket"):
+        kwargs["unix_socket"] = settings["unix_socket"]
+    connection = pymysql.connect(**kwargs)
+    try:
+        with connection.cursor() as cursor:
+            escaped = database.replace("`", "``")
+            cursor.execute("CREATE DATABASE IF NOT EXISTS `" + escaped + "` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
+        _MYSQL_DATABASE_READY.add(cache_key)
+    finally:
+        connection.close()
+
+
+def forget_mysql_database(settings: Dict[str, object]) -> None:
+    database = str((settings or {}).get("database") or "").strip()
+    cache_key = (
+        str((settings or {}).get("host") or "127.0.0.1"),
+        str((settings or {}).get("port") or 3306),
+        database,
+        str((settings or {}).get("unix_socket") or ""),
+        str((settings or {}).get("user") or ""),
+    )
+    _MYSQL_DATABASE_READY.discard(cache_key)
 
 
 def mysql_backend_enabled(settings: Dict[str, str] = None) -> bool:
@@ -64,6 +116,7 @@ def monitor_account_job_from_row(row) -> MonitorAccountJob:
 class MySQLMonitorAccountJobStore:
     def __init__(self, settings: Dict[str, str] = None):
         self.settings = mysql_settings(settings)
+        ensure_mysql_database_exists(self.settings)
         self.ensure_schema()
 
     def connect(self):

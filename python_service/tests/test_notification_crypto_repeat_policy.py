@@ -9,19 +9,28 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.domain.portfolio import AlertEvent, utc_now_iso
 from digital_twin.infrastructure.notifications import send_events
-from digital_twin.infrastructure.sqlite_notifications import SQLiteNotificationJobStore, SQLiteNotificationRuleStore
+from mysql_fixtures import TestNotificationJobStore, TestNotificationRuleStore, mysql_test_settings, reset_mysql_test_database, test_store_seed
 
 
 class CryptoRepeatPolicyTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
+        mysql_settings = mysql_test_settings(self.temp.name)
         self.env_patch = mock.patch.dict(os.environ, {
             "DIGITAL_TWIN_DATA_DIR": self.temp.name,
             "SETTINGS_PATH": str(Path(self.temp.name) / "settings.json"),
+            "OPERATIONAL_DB_BACKEND": "mysql",
+            "MYSQL_HOST": mysql_settings["mysqlHost"],
+            "MYSQL_PORT": mysql_settings["mysqlPort"],
+            "MYSQL_DATABASE": mysql_settings["mysqlDatabase"],
+            "MYSQL_USER": mysql_settings["mysqlUser"],
+            "MYSQL_PASSWORD": mysql_settings["mysqlPassword"],
+            "MYSQL_UNIX_SOCKET": mysql_settings["mysqlUnixSocket"],
         }, clear=False)
         self.env_patch.start()
         self.addCleanup(self.env_patch.stop)
+        reset_mysql_test_database(self.temp.name)
 
     def fresh_data_freshness(self):
         return {
@@ -65,9 +74,9 @@ class CryptoRepeatPolicyTests(unittest.TestCase):
         )
 
     def test_btc_investment_insight_suppresses_percentage_only_source_key_change(self):
-        db_path = Path(self.temp.name) / "service.db"
-        queue = SQLiteNotificationJobStore(db_path)
-        rules = SQLiteNotificationRuleStore(db_path)
+        db_path = test_store_seed(self.temp.name)
+        queue = TestNotificationJobStore(db_path)
+        rules = TestNotificationRuleStore(db_path)
         rule = rules.get("investmentInsight")
         rule.market_hours_enabled = False
         rules.upsert(rule)

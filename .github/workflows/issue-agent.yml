@@ -34,6 +34,12 @@ jobs:
       ISSUE_REPOSITORY: ${{ github.repository }}
       ISSUE_NUMBER: ${{ github.event.issue.number || inputs.issue_number }}
       INPUT_AGENT_COMMAND: ${{ inputs.agent_command }}
+      OPERATIONAL_DB_BACKEND: mysql
+      MYSQL_HOST: 127.0.0.1
+      MYSQL_PORT: 3306
+      MYSQL_DATABASE: orbit_alpha
+      MYSQL_USER: root
+      MYSQL_PASSWORD: ""
 
     steps:
       - name: Check out repository
@@ -51,6 +57,9 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Install Python dependencies
+        run: python3 -m pip install --user pymysql
 
       - name: Mark issue as started
         run: node scripts/issue-workflow.js claim "$ISSUE_NUMBER"

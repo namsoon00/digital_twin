@@ -62,10 +62,9 @@ Application:
 Infrastructure:
 
 - `python_service/digital_twin/infrastructure/settings.py`: env fallback and operational runtime settings facade
-- `python_service/digital_twin/infrastructure/operational_store.py`: runtime selector for the MySQL operational stores, with an explicit legacy SQLite test fixture path
+- `python_service/digital_twin/infrastructure/operational_store.py`: runtime factory for the MySQL operational stores
 - `python_service/digital_twin/infrastructure/operational_common.py`: shared row conversion and notification helper functions used by operational store adapters
 - `python_service/digital_twin/infrastructure/mysql_operational.py`: MySQL account, runtime, event, monitoring, notification, model-review, symbol, quote, evidence, and quality-sample stores
-- `python_service/digital_twin/infrastructure/sqlite_*.py`: legacy local fixture adapters kept for compatibility tests and old data migration only
 - `python_service/digital_twin/infrastructure/json_monitor_state.py`: legacy JSON monitor state compatibility only
 - `python_service/digital_twin/infrastructure/toss_snapshots.py`: Toss adapter and demo snapshot fallback
 - `python_service/digital_twin/application/notification_service.py`: queued notification delivery worker

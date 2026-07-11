@@ -9,7 +9,7 @@ from digital_twin.domain.investment_research import ResearchEvidence
 from digital_twin.domain.market_data import normalize_position
 from digital_twin.domain.portfolio import utc_now_iso
 from digital_twin.infrastructure.external_signals import ExternalSignalProvider
-from digital_twin.infrastructure.sqlite_monitoring import SQLiteResearchEvidenceStore
+from mysql_fixtures import TestResearchEvidenceStore, reset_mysql_test_database, test_store_seed
 
 
 class MemoryExternalSignalCache:
@@ -32,7 +32,8 @@ class FixedCacheKeyExternalSignalProvider(ExternalSignalProvider):
 class ResearchEvidenceStoreTests(unittest.TestCase):
     def test_research_evidence_store_upserts_and_summarizes(self):
         with tempfile.TemporaryDirectory() as temp:
-            store = SQLiteResearchEvidenceStore(Path(temp) / "service.db")
+            reset_mysql_test_database(temp)
+            store = TestResearchEvidenceStore(test_store_seed(temp))
             evidence = ResearchEvidence(
                 "research:005930:news:1",
                 "005930",
@@ -76,7 +77,8 @@ class ResearchEvidenceStoreTests(unittest.TestCase):
 
     def test_research_evidence_store_deletes_by_id(self):
         with tempfile.TemporaryDirectory() as temp:
-            store = SQLiteResearchEvidenceStore(Path(temp) / "service.db")
+            reset_mysql_test_database(temp)
+            store = TestResearchEvidenceStore(test_store_seed(temp))
             evidence = ResearchEvidence(
                 "research:005930:news:delete",
                 "005930",
@@ -139,7 +141,8 @@ class ResearchEvidenceStoreTests(unittest.TestCase):
             "providerState": {},
         })
         with tempfile.TemporaryDirectory() as temp:
-            store = SQLiteResearchEvidenceStore(Path(temp) / "service.db")
+            reset_mysql_test_database(temp)
+            store = TestResearchEvidenceStore(test_store_seed(temp))
             provider = FixedCacheKeyExternalSignalProvider(
                 settings={"externalApiFetchIntervalMinutes": "30"},
                 cache=cache,

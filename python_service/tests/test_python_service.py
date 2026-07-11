@@ -1,7 +1,6 @@
 import json
 import importlib
 import os
-import sqlite3
 import sys
 import tempfile
 import unittest
@@ -63,29 +62,56 @@ from digital_twin.infrastructure.notifications import TelegramNotifier, send_eve
 from digital_twin.infrastructure.ontology_projection import PortfolioOntologyProjectionRecorder
 from digital_twin.infrastructure.service_factory import flow_lens_snapshot
 from digital_twin.infrastructure.settings import runtime_settings, save_runtime_settings
-from digital_twin.infrastructure.sqlite_model_review import SQLiteModelReviewJobStore
-from digital_twin.infrastructure.sqlite_monitoring import SQLiteEventLog, SQLiteExternalSignalCache, SQLiteMarketQuoteCache, SQLiteMonitorAccountJobStore, SQLiteMonitoringCycleRecorder, SQLiteMonitorStore, SQLiteOntologyQualitySampleStore, SQLiteOntologyReasoningCursorStore, SQLiteResearchEvidenceStore
-from digital_twin.infrastructure.sqlite_notifications import SQLiteNotificationJobStore, SQLiteNotificationRuleStore, SQLiteNotificationTemplateStore
-from digital_twin.infrastructure.sqlite_runtime import SQLiteAppStore, SQLiteRuntimeSettingsStore
-from digital_twin.infrastructure.sqlite_symbols import SQLiteSymbolUniverseStore
 from digital_twin.infrastructure.symbol_sources import RemoteSymbolSourceGateway, parse_krx_kind_table, parse_nasdaq_listed
-from digital_twin.infrastructure.sqlite_accounts import AccountRegistry
 from digital_twin.infrastructure.toss_snapshots import TossProvider, account_cash_amount, normalize_price_items, select_account
-from digital_twin.infrastructure.sqlite.health import run_sqlite_maintenance, sqlite_health_snapshot
 from digital_twin.infrastructure.web_server import list_notification_rules_payload, list_templates_payload, notification_jobs_payload, notification_schedules_payload, notification_template_test_payload, realtime_status_payload, save_notification_rule_payload, settings_status_payload
 from digital_twin.scheduler import MonitorRunner
+from mysql_fixtures import (
+    TestAccountRegistry as AccountRegistry,
+    TestAppStore,
+    TestEventLog,
+    TestExternalSignalCache,
+    TestMarketQuoteCache,
+    TestModelReviewJobStore,
+    TestMonitorAccountJobStore,
+    TestMonitoringCycleRecorder,
+    TestMonitorStore,
+    TestNotificationJobStore,
+    TestNotificationRuleStore,
+    TestNotificationTemplateStore,
+    TestOntologyQualitySampleStore,
+    TestOntologyReasoningCursorStore,
+    TestResearchEvidenceStore,
+    TestRuntimeSettingsStore,
+    TestSymbolUniverseStore,
+    mysql_execute,
+    mysql_fetchall,
+    mysql_fetchone,
+    mysql_test_settings,
+    reset_mysql_test_database,
+    test_store_seed,
+)
 
 
 class PythonServiceTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
+        mysql_settings = mysql_test_settings(self.temp.name)
         self.env_patch = mock.patch.dict(os.environ, {
             "DIGITAL_TWIN_DATA_DIR": self.temp.name,
             "SETTINGS_PATH": str(Path(self.temp.name) / "settings.json"),
+            "OPERATIONAL_DB_BACKEND": "mysql",
+            "MYSQL_HOST": mysql_settings["mysqlHost"],
+            "MYSQL_PORT": mysql_settings["mysqlPort"],
+            "MYSQL_DATABASE": mysql_settings["mysqlDatabase"],
+            "MYSQL_USER": mysql_settings["mysqlUser"],
+            "MYSQL_PASSWORD": mysql_settings["mysqlPassword"],
+            "MYSQL_UNIX_SOCKET": mysql_settings["mysqlUnixSocket"],
         }, clear=False)
         self.env_patch.start()
         self.addCleanup(self.env_patch.stop)
+        reset_mysql_test_database(self.temp.name)
 
     def fresh_data_freshness(self, source: str = "unit-test", max_age_minutes: int = 10):
         return {
@@ -216,7 +242,7 @@ class PythonServiceTests(unittest.TestCase):
         accounts = registry.load_all()
 
         self.assertEqual(["main", "ira"], [item.account_id for item in accounts])
-        self.assertTrue((Path(self.temp.name) / "service.db").exists())
+        self.assertEqual((2,), mysql_fetchone(test_store_seed(self.temp.name), "SELECT COUNT(*) FROM service_accounts"))
         self.assertTrue(accounts[0].client_id)
         self.assertTrue(accounts[0].quiet_hours_enabled)
         self.assertEqual("22:00", accounts[0].quiet_hours_start)
@@ -226,22 +252,20 @@ class PythonServiceTests(unittest.TestCase):
         registry = AccountRegistry()
         registry.upsert(AccountConfig("main", "메인", "toss", "https://example.test", "id1", "secret1", "1", ["AAPL"]))
 
-        db_path = Path(self.temp.name) / "service.db"
-        AccountRegistry._schema_ready_paths.discard(str(db_path.resolve()))
-        original_ensure_schema = AccountRegistry.ensure_schema
+        original_transaction = AccountRegistry.transaction
         ensure_calls = []
 
         def fail_if_called(self):
-            ensure_calls.append(self.path)
+            ensure_calls.append(self.mysql_config["database"])
             raise AssertionError("ready account schema should not run DDL")
 
         try:
-            AccountRegistry.ensure_schema = fail_if_called
+            AccountRegistry.transaction = fail_if_called
             reopened = AccountRegistry()
             self.assertEqual(["main"], [item.account_id for item in reopened.load_saved()])
             self.assertEqual([], ensure_calls)
         finally:
-            AccountRegistry.ensure_schema = original_ensure_schema
+            AccountRegistry.transaction = original_transaction
 
     def test_account_registry_persists_quiet_hours_for_many_accounts(self):
         registry = AccountRegistry()
@@ -292,7 +316,7 @@ class PythonServiceTests(unittest.TestCase):
 
     def test_toss_prices_are_primary_quote_source_and_cached(self):
         calls = []
-        db_path = Path(self.temp.name) / "service.db"
+        db_path = test_store_seed(self.temp.name)
         account = AccountConfig("main", "메인", "toss", "https://example.test", "id", "secret", "1", ["TSLA"])
 
         def candles(price):
@@ -342,13 +366,13 @@ class PythonServiceTests(unittest.TestCase):
                 return candles(50 if symbol == "AAPL" else 150)
             return {}
 
-        provider = TossProvider(account, quote_cache=SQLiteMarketQuoteCache(db_path))
+        provider = TossProvider(account, quote_cache=TestMarketQuoteCache(db_path))
         with mock.patch("digital_twin.infrastructure.toss_snapshots.http_json", side_effect=fake_http_json):
             mode, status, positions, cash, currency, watchlist = provider.fetch_positions()
 
         aapl = next(item for item in positions if item.symbol == "AAPL")
         tsla = next(item for item in watchlist if item.symbol == "TSLA")
-        cached = SQLiteMarketQuoteCache(db_path).load("toss", "main", "TSLA")
+        cached = TestMarketQuoteCache(db_path).load("toss", "main", "TSLA")
 
         self.assertEqual("live", mode)
         self.assertEqual("토스 계좌 동기화", status)
@@ -362,8 +386,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(any("/api/v1/prices" in url for url in calls))
 
     def test_toss_quote_cache_fills_watchlist_when_market_data_is_rate_limited(self):
-        db_path = Path(self.temp.name) / "service.db"
-        cache = SQLiteMarketQuoteCache(db_path)
+        db_path = test_store_seed(self.temp.name)
+        cache = TestMarketQuoteCache(db_path)
         cache.save("toss", "main", "TSLA", {
             "symbol": "TSLA",
             "name": "Tesla",
@@ -407,8 +431,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("마지막 저장 시세", tsla.quote_status)
 
     def test_toss_snapshot_uses_shared_market_data_cache_when_account_cache_is_empty(self):
-        db_path = Path(self.temp.name) / "service.db"
-        cache = SQLiteMarketQuoteCache(db_path)
+        db_path = test_store_seed(self.temp.name)
+        cache = TestMarketQuoteCache(db_path)
         cache.save("toss", MARKET_DATA_ACCOUNT_ID, "TSLA", {
             "symbol": "TSLA",
             "name": "Tesla",
@@ -451,7 +475,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("마지막 저장 시세", tsla.quote_status)
 
     def test_kis_market_signal_provider_enriches_kr_positions(self):
-        db_path = Path(self.temp.name) / "service.db"
+        db_path = test_store_seed(self.temp.name)
         calls = []
 
         def fake_fetch_json(method, url, headers, body=None, query=None, timeout=12):
@@ -519,7 +543,7 @@ class PythonServiceTests(unittest.TestCase):
                 "kisMarketSignalMaxSymbols": "5",
                 "externalApiRetryAttempts": "1",
             },
-            quote_cache=SQLiteMarketQuoteCache(db_path),
+            quote_cache=TestMarketQuoteCache(db_path),
             fetch_json=fake_fetch_json,
             sleep=lambda _seconds: None,
         )
@@ -529,7 +553,7 @@ class PythonServiceTests(unittest.TestCase):
         positions, watchlist = provider.enrich_collections([samsung, apple], [])
         enriched = next(item for item in positions if item.symbol == "005930")
         untouched = next(item for item in positions if item.symbol == "AAPL")
-        cached = SQLiteMarketQuoteCache(db_path).load(KIS_CACHE_PROVIDER, KIS_CACHE_ACCOUNT_ID, "005930")
+        cached = TestMarketQuoteCache(db_path).load(KIS_CACHE_PROVIDER, KIS_CACHE_ACCOUNT_ID, "005930")
 
         self.assertEqual([], watchlist)
         self.assertEqual(72000, enriched.current_price)
@@ -583,7 +607,7 @@ class PythonServiceTests(unittest.TestCase):
                 "kisMarketSignalGapSeconds": "0",
                 "externalApiRetryAttempts": "1",
             },
-            quote_cache=SQLiteMarketQuoteCache(Path(self.temp.name) / "service.db"),
+            quote_cache=TestMarketQuoteCache(test_store_seed(self.temp.name)),
             fetch_json=fake_fetch_json,
             sleep=lambda _seconds: None,
         )
@@ -597,8 +621,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("/uapi/domestic-stock/v1/quotations/inquire-investor", calls)
 
     def test_kis_market_signal_provider_uses_fresh_cache_without_token(self):
-        db_path = Path(self.temp.name) / "service.db"
-        cache = SQLiteMarketQuoteCache(db_path)
+        db_path = test_store_seed(self.temp.name)
+        cache = TestMarketQuoteCache(db_path)
         cache.save(KIS_CACHE_PROVIDER, KIS_CACHE_ACCOUNT_ID, "005930", {
             "symbol": "005930",
             "name": "삼성전자",
@@ -645,8 +669,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(0, provider.diagnostics["live"])
 
     def test_kis_cached_fallback_marks_position_mixed_quality(self):
-        db_path = Path(self.temp.name) / "service.db"
-        cache = SQLiteMarketQuoteCache(db_path)
+        db_path = test_store_seed(self.temp.name)
+        cache = TestMarketQuoteCache(db_path)
         cache.save(KIS_CACHE_PROVIDER, KIS_CACHE_ACCOUNT_ID, "005930", {
             "symbol": "005930",
             "name": "삼성전자",
@@ -692,8 +716,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(1, provider.diagnostics["cached"])
 
     def test_kis_market_signal_provider_refreshes_partial_fresh_cache(self):
-        db_path = Path(self.temp.name) / "service.db"
-        cache = SQLiteMarketQuoteCache(db_path)
+        db_path = test_store_seed(self.temp.name)
+        cache = TestMarketQuoteCache(db_path)
         cache.save(KIS_CACHE_PROVIDER, KIS_CACHE_ACCOUNT_ID, "005930", {
             "symbol": "005930",
             "name": "삼성전자",
@@ -762,8 +786,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("/uapi/domestic-stock/v1/quotations/inquire-ccnl", calls)
 
     def test_kis_market_signal_provider_refreshes_fresh_cache_without_investor_flow(self):
-        db_path = Path(self.temp.name) / "service.db"
-        cache = SQLiteMarketQuoteCache(db_path)
+        db_path = test_store_seed(self.temp.name)
+        cache = TestMarketQuoteCache(db_path)
         cache.save(KIS_CACHE_PROVIDER, KIS_CACHE_ACCOUNT_ID, "035420", {
             "symbol": "035420",
             "name": "NAVER",
@@ -827,8 +851,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("/uapi/domestic-stock/v1/quotations/inquire-investor", calls)
 
     def test_kis_market_signal_provider_prefers_live_during_market_hours(self):
-        db_path = Path(self.temp.name) / "service.db"
-        cache = SQLiteMarketQuoteCache(db_path)
+        db_path = test_store_seed(self.temp.name)
+        cache = TestMarketQuoteCache(db_path)
         cache.save(KIS_CACHE_PROVIDER, KIS_CACHE_ACCOUNT_ID, "035420", {
             "symbol": "035420",
             "name": "NAVER",
@@ -893,8 +917,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("/uapi/domestic-stock/v1/quotations/inquire-investor", calls)
 
     def test_kis_market_signal_provider_reuses_near_live_cache_during_market_hours(self):
-        db_path = Path(self.temp.name) / "service.db"
-        cache = SQLiteMarketQuoteCache(db_path)
+        db_path = test_store_seed(self.temp.name)
+        cache = TestMarketQuoteCache(db_path)
         cache.save(KIS_CACHE_PROVIDER, KIS_CACHE_ACCOUNT_ID, "035420", {
             "symbol": "035420",
             "name": "NAVER",
@@ -983,7 +1007,7 @@ class PythonServiceTests(unittest.TestCase):
                 return {"result": {"holdings": []}}
             return {}
 
-        provider = TossProvider(account, quote_cache=SQLiteMarketQuoteCache(Path(self.temp.name) / "service.db"))
+        provider = TossProvider(account, quote_cache=TestMarketQuoteCache(test_store_seed(self.temp.name)))
         with mock.patch("digital_twin.infrastructure.toss_snapshots.http_json", side_effect=fake_http_json), \
                 mock.patch("digital_twin.infrastructure.toss_snapshots.time.sleep", return_value=None):
             mode, status, positions, _, _, _ = provider.fetch_positions()
@@ -1010,7 +1034,7 @@ class PythonServiceTests(unittest.TestCase):
                 raise urllib.error.HTTPError(url, 401, "Unauthorized", {}, None)
             return {}
 
-        provider = TossProvider(account, quote_cache=SQLiteMarketQuoteCache(Path(self.temp.name) / "service.db"))
+        provider = TossProvider(account, quote_cache=TestMarketQuoteCache(test_store_seed(self.temp.name)))
         with mock.patch("digital_twin.infrastructure.toss_snapshots.http_json", side_effect=fake_http_json), \
                 mock.patch("digital_twin.infrastructure.toss_snapshots.time.sleep", return_value=None):
             mode, status, _, _, _, _ = provider.fetch_positions()
@@ -1029,7 +1053,7 @@ class PythonServiceTests(unittest.TestCase):
         def fake_http_json(method, url, headers, body=None, timeout=12):
             raise urllib.error.HTTPError(url, 401, "Unauthorized", {}, None)
 
-        provider = TossProvider(account, quote_cache=SQLiteMarketQuoteCache(Path(self.temp.name) / "service.db"))
+        provider = TossProvider(account, quote_cache=TestMarketQuoteCache(test_store_seed(self.temp.name)))
         with mock.patch("digital_twin.infrastructure.toss_snapshots.http_json", side_effect=fake_http_json), \
                 mock.patch("digital_twin.infrastructure.toss_snapshots.time.sleep", return_value=None):
             mode, status, _, _, _, _ = provider.fetch_positions()
@@ -1069,7 +1093,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("chat", loaded.telegram_chat_id)
 
     def test_account_registry_falls_back_to_runtime_toss_credentials(self):
-        SQLiteRuntimeSettingsStore(Path(self.temp.name) / "service.db").save({
+        TestRuntimeSettingsStore(test_store_seed(self.temp.name)).save({
             "tossClientId": "runtime-id",
             "tossClientSecret": "runtime-secret",
             "tossAccountSeq": "9",
@@ -1626,7 +1650,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("trendDynamics", trend_evidence.value)
         self.assertTrue(graph.opinion_for_symbol("000660").dominant_risks)
         self.assertTrue(graph.opinion_for_symbol("000660").relation_influences)
-        sample_store = SQLiteOntologyQualitySampleStore(Path(self.temp.name) / "service.db")
+        sample_store = TestOntologyQualitySampleStore(test_store_seed(self.temp.name))
         sample = sample_store.record_graph(graph, source="unit-test")
         latest_samples = sample_store.latest("main")
         self.assertGreater(sample.overall_score, 0)
@@ -3609,8 +3633,8 @@ class PythonServiceTests(unittest.TestCase):
 
         events = RealtimeMonitor().events_for_snapshot(snapshot, {})
         insight = self.insight_event(events, "MSTR")
-        db_path = Path(self.temp.name) / "service.db"
-        message = SQLiteNotificationTemplateStore(db_path).render(insight.rule, alert_context(insight))
+        db_path = test_store_seed(self.temp.name)
+        message = TestNotificationTemplateStore(db_path).render(insight.rule, alert_context(insight))
 
         self.assertEqual("investmentInsight", insight.rule)
         self.assertIn("holdingTiming", self.insight_source_rules(insight))
@@ -3889,7 +3913,7 @@ class PythonServiceTests(unittest.TestCase):
 
         candidate = self.insight_event(events, "AAPL")
         source_message = self.insight_source_message(candidate, "watchlistBuyCandidate")
-        message = SQLiteNotificationTemplateStore(Path(self.temp.name) / "service.db").render(candidate.rule, alert_context(candidate))
+        message = TestNotificationTemplateStore(test_store_seed(self.temp.name)).render(candidate.rule, alert_context(candidate))
         active_ids = self.insight_active_rule_ids(candidate)
 
         self.assertIn("watchlistBuyCandidate", self.insight_source_rules(candidate))
@@ -3946,7 +3970,7 @@ class PythonServiceTests(unittest.TestCase):
             },
         )
 
-        message = SQLiteNotificationTemplateStore(Path(self.temp.name) / "service.db").render(event.rule, alert_context(event))
+        message = TestNotificationTemplateStore(test_store_seed(self.temp.name)).render(event.rule, alert_context(event))
 
         self.assertIn("<b>[관찰] 🧭 NVIDIA: 신규 진입 대기: 조건 재확인</b>", message)
         self.assertNotIn("NVIDIA: 매수 후보: 진입 조건 점검", message)
@@ -4742,8 +4766,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(decision.similarity_bypassed)
 
     def test_notification_rule_store_migrates_investment_insight_dispatch_policy_defaults(self):
-        db_path = Path(self.temp.name) / "service.db"
-        store = SQLiteNotificationRuleStore(db_path)
+        db_path = test_store_seed(self.temp.name)
+        store = TestNotificationRuleStore(db_path)
         rule = store.get("investmentInsight")
         legacy_conditions = []
         for condition in rule.similarity_bypass_conditions:
@@ -4751,21 +4775,21 @@ class PythonServiceTests(unittest.TestCase):
             if payload.get("id") == "insight_type_changed":
                 payload["field"] = "ontologyInsight.insightType"
             legacy_conditions.append(payload)
-        with sqlite3.connect(db_path) as connection:
-            connection.execute(
-                """
-                UPDATE notification_rules
-                SET similarity_fields_json = ?, similarity_bypass_conditions_json = ?
-                WHERE message_type = ?
-                """,
-                (
-                    json.dumps(["messageType", "accountId", "ontologyInsight.subject", "ontologyInsight.insightType"]),
-                    json.dumps(legacy_conditions),
-                    "investmentInsight",
-                ),
-            )
+        mysql_execute(
+            db_path,
+            """
+            UPDATE notification_rules
+            SET similarity_fields_json = ?, similarity_bypass_conditions_json = ?
+            WHERE message_type = ?
+            """,
+            (
+                json.dumps(["messageType", "accountId", "ontologyInsight.subject", "ontologyInsight.insightType"]),
+                json.dumps(legacy_conditions),
+                "investmentInsight",
+            ),
+        )
 
-        migrated = SQLiteNotificationRuleStore(db_path).get("investmentInsight")
+        migrated = TestNotificationRuleStore(db_path).get("investmentInsight")
         insight_change = next(condition for condition in migrated.similarity_bypass_conditions if condition.condition_id == "insight_type_changed")
 
         self.assertEqual(["messageType", "accountId", "ontologyInsight.subject", "ontologyInsight.dispatchInsightType"], migrated.similarity_fields)
@@ -4784,7 +4808,7 @@ class PythonServiceTests(unittest.TestCase):
         """
         nasdaq = parse_nasdaq_listed(nasdaq_text, fetched_at="2026-07-01T00:00:00Z")
         krx = parse_krx_kind_table(krx_html, "KOSPI", fetched_at="2026-07-01T00:00:00Z")
-        store = SQLiteSymbolUniverseStore(Path(self.temp.name) / "service.db")
+        store = TestSymbolUniverseStore(test_store_seed(self.temp.name))
 
         self.assertEqual(["AAPL"], [item.symbol for item in nasdaq])
         self.assertEqual("005930", krx[0].symbol)
@@ -4796,8 +4820,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(["AAPL"], [item.symbol for item in store.search(limit=1, offset=1)])
 
     def test_symbol_universe_refresh_market_records_catalog_and_source_together(self):
-        db_path = Path(self.temp.name) / "service.db"
-        store = SQLiteSymbolUniverseStore(db_path)
+        db_path = test_store_seed(self.temp.name)
+        store = TestSymbolUniverseStore(db_path)
         item = seed_symbol("AAPL")
         item.source = "NASDAQ"
         item.source_url = "https://example.test/nasdaq"
@@ -4814,7 +4838,7 @@ class PythonServiceTests(unittest.TestCase):
 
     def test_symbol_universe_service_seeds_and_reports_freshness(self):
         service = SymbolUniverseService(
-            SQLiteSymbolUniverseStore(Path(self.temp.name) / "service.db"),
+            TestSymbolUniverseStore(test_store_seed(self.temp.name)),
             RemoteSymbolSourceGateway(),
             runtime_settings(),
         )
@@ -4828,9 +4852,9 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("hasMore", payload)
 
     def test_symbol_universe_search_includes_collected_market_data(self):
-        db_path = Path(self.temp.name) / "service.db"
-        symbol_store = SQLiteSymbolUniverseStore(db_path)
-        quote_cache = SQLiteMarketQuoteCache(db_path)
+        db_path = test_store_seed(self.temp.name)
+        symbol_store = TestSymbolUniverseStore(db_path)
+        quote_cache = TestMarketQuoteCache(db_path)
         symbol_store.upsert_many([seed_symbol("AAPL")])
         quote_cache.save("toss", MARKET_DATA_ACCOUNT_ID, "AAPL", {
             "symbol": "AAPL",
@@ -4854,9 +4878,9 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(1, payload["summary"]["marketData"]["count"])
 
     def test_market_data_collection_runner_collects_recommendation_universe(self):
-        db_path = Path(self.temp.name) / "service.db"
-        symbol_store = SQLiteSymbolUniverseStore(db_path)
-        quote_cache = SQLiteMarketQuoteCache(db_path)
+        db_path = test_store_seed(self.temp.name)
+        symbol_store = TestSymbolUniverseStore(db_path)
+        quote_cache = TestMarketQuoteCache(db_path)
         symbol_store.upsert_many([seed_symbol("AAPL"), seed_symbol("TSLA")])
         registry = AccountRegistry()
         account = AccountConfig("main", "메인", "toss", "https://example.test", "id", "secret", "1", [])
@@ -5009,9 +5033,9 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("idle", repeat["status"])
 
     def test_market_quote_cache_selects_stale_symbols_before_fresh_symbols(self):
-        db_path = Path(self.temp.name) / "service.db"
-        symbol_store = SQLiteSymbolUniverseStore(db_path)
-        quote_cache = SQLiteMarketQuoteCache(db_path)
+        db_path = test_store_seed(self.temp.name)
+        symbol_store = TestSymbolUniverseStore(db_path)
+        quote_cache = TestMarketQuoteCache(db_path)
         symbol_store.upsert_many([seed_symbol("AAPL"), seed_symbol("TSLA")])
         quote_cache.save("toss", MARKET_DATA_ACCOUNT_ID, "AAPL", {
             "symbol": "AAPL",
@@ -5025,9 +5049,9 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("TSLA", selected[0]["symbol"])
 
     def test_symbol_universe_search_marks_stale_market_data_without_attaching_price(self):
-        db_path = Path(self.temp.name) / "service.db"
-        symbol_store = SQLiteSymbolUniverseStore(db_path)
-        quote_cache = SQLiteMarketQuoteCache(db_path)
+        db_path = test_store_seed(self.temp.name)
+        symbol_store = TestSymbolUniverseStore(db_path)
+        quote_cache = TestMarketQuoteCache(db_path)
         symbol_store.upsert_many([seed_symbol("AAPL")])
         quote_cache.save("toss", MARKET_DATA_ACCOUNT_ID, "AAPL", {
             "symbol": "AAPL",
@@ -5388,8 +5412,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("HOLD", event.metadata.get("ontologyRelationContext", {}).get("executionPlan", {}).get("primaryAction"))
         self.assertEqual("cryptoMoveScoreFormula", event.metadata.get("legacyFormulaAudits")[0].get("key"))
 
-        db_path = Path(self.temp.name) / "service.db"
-        templates = SQLiteNotificationTemplateStore(db_path)
+        db_path = test_store_seed(self.temp.name)
+        templates = TestNotificationTemplateStore(db_path)
         message = templates.render(event.rule, alert_context(event))
         self.assertIn("<b>[관찰] 🪙 이더리움: 크립토 가격 급등</b>", message)
         self.assertNotIn("크립토 가격 급락", message)
@@ -5430,7 +5454,7 @@ class PythonServiceTests(unittest.TestCase):
 
         events = RealtimeMonitor().events_for_snapshot(snapshot, {})
         insight = self.insight_event(events, "ETH")
-        message = SQLiteNotificationTemplateStore(Path(self.temp.name) / "service.db").render(insight.rule, alert_context(insight))
+        message = TestNotificationTemplateStore(test_store_seed(self.temp.name)).render(insight.rule, alert_context(insight))
         active = insight.metadata.get("activeInvestmentOpinion", {})
 
         self.assertEqual("HOLD", active.get("action"))
@@ -5544,7 +5568,7 @@ class PythonServiceTests(unittest.TestCase):
         }
         provider = ExternalSignalProvider(
             settings=settings,
-            cache=SQLiteExternalSignalCache(Path(self.temp.name) / "service.db"),
+            cache=TestExternalSignalCache(test_store_seed(self.temp.name)),
             fetch_json=fake_fetch,
         )
         positions = [
@@ -5574,8 +5598,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("Alpha Vantage", signals["fxRates"]["USDKRW"]["provider"])
 
     def test_external_signal_cache_recomputes_freshness_age_on_read(self):
-        db_path = Path(self.temp.name) / "service.db"
-        cache = SQLiteExternalSignalCache(db_path)
+        db_path = test_store_seed(self.temp.name)
+        cache = TestExternalSignalCache(db_path)
         settings = {
             "externalApiFetchIntervalMinutes": "60",
             "externalSignalCacheMaxAgeMinutes": "60",
@@ -5687,8 +5711,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("주가 영향", evidence[0].raw_payload["stockImpactReasonKo"])
 
     def test_news_collection_runner_stores_domestic_and_overseas_news(self):
-        path = Path(self.temp.name) / "service.db"
-        monitor_store = SQLiteMonitorStore(path)
+        path = test_store_seed(self.temp.name)
+        monitor_store = TestMonitorStore(path)
         monitor_store.previous["main"] = {
             "positions": {
                 "005930": {"symbol": "005930", "name": "삼성전자", "market": "KOSPI", "currency": "KRW"},
@@ -5724,8 +5748,8 @@ class PythonServiceTests(unittest.TestCase):
         runner = NewsCollectionRunner(
             account_repository=account_repository,
             monitor_store=monitor_store,
-            symbol_store=SQLiteSymbolUniverseStore(path),
-            evidence_store=SQLiteResearchEvidenceStore(path),
+            symbol_store=TestSymbolUniverseStore(path),
+            evidence_store=TestResearchEvidenceStore(path),
             gateway=NewsSourceGateway({
                 "newsCollectionProviders": "google_rss_kr,google_rss_us",
                 "newsCollectionPerSymbolLimit": "4",
@@ -5741,7 +5765,7 @@ class PythonServiceTests(unittest.TestCase):
         )
 
         result = runner.run_once()
-        store = SQLiteResearchEvidenceStore(path)
+        store = TestResearchEvidenceStore(path)
         latest = store.latest(kind="news", limit=10)
 
         self.assertEqual("ok", result["status"])
@@ -5761,8 +5785,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual([], events.published)
 
     def test_external_signal_provider_attaches_stored_news_evidence(self):
-        path = Path(self.temp.name) / "service.db"
-        store = SQLiteResearchEvidenceStore(path)
+        path = test_store_seed(self.temp.name)
+        store = TestResearchEvidenceStore(path)
         facts = {
             "newsHeadlines": {
                 "items": [{
@@ -5784,7 +5808,7 @@ class PythonServiceTests(unittest.TestCase):
                 "externalNewsEnabled": "0",
                 "externalResearchEvidenceMaxItems": "4",
             },
-            cache=SQLiteExternalSignalCache(path),
+            cache=TestExternalSignalCache(path),
             evidence_store=store,
             fetch_json=lambda _url, headers=None: {},
         )
@@ -5819,7 +5843,7 @@ class PythonServiceTests(unittest.TestCase):
         }
         provider = ExternalSignalProvider(
             settings=settings,
-            cache=SQLiteExternalSignalCache(Path(self.temp.name) / "service.db"),
+            cache=TestExternalSignalCache(test_store_seed(self.temp.name)),
             fetch_json=fake_fetch,
         )
         positions = [
@@ -5858,7 +5882,7 @@ class PythonServiceTests(unittest.TestCase):
                 "externalApiCircuitFailures": "2",
                 "externalApiCircuitCooldownMinutes": "30",
             },
-            cache=SQLiteExternalSignalCache(Path(self.temp.name) / "service.db"),
+            cache=TestExternalSignalCache(test_store_seed(self.temp.name)),
             fetch_json=fake_fetch,
             sleep=lambda _: None,
         )
@@ -5888,7 +5912,7 @@ class PythonServiceTests(unittest.TestCase):
                 "externalApiCircuitFailures": "2",
                 "externalApiCircuitCooldownMinutes": "30",
             },
-            cache=SQLiteExternalSignalCache(Path(self.temp.name) / "service.db"),
+            cache=TestExternalSignalCache(test_store_seed(self.temp.name)),
             fetch_json=fake_fetch,
             sleep=lambda _: None,
         )
@@ -5920,7 +5944,7 @@ class PythonServiceTests(unittest.TestCase):
                 "externalApiCircuitFailures": "2",
                 "externalApiCircuitCooldownMinutes": "30",
             },
-            cache=SQLiteExternalSignalCache(Path(self.temp.name) / "service.db"),
+            cache=TestExternalSignalCache(test_store_seed(self.temp.name)),
             fetch_json=fake_fetch,
             sleep=lambda _: None,
         )
@@ -6316,9 +6340,9 @@ class PythonServiceTests(unittest.TestCase):
 
     def test_send_events_enqueues_notifications_without_direct_delivery(self):
         account = AccountConfig("main", "메인", "toss", "https://example.test", "", "", "", ["AAPL"], message_delivery_level="absoluteBeginner")
-        db_path = Path(self.temp.name) / "service.db"
-        queue = SQLiteNotificationJobStore(db_path)
-        rules = SQLiteNotificationRuleStore(db_path)
+        db_path = test_store_seed(self.temp.name)
+        queue = TestNotificationJobStore(db_path)
+        rules = TestNotificationRuleStore(db_path)
         rule = rules.get("monitorTrendChange")
         rule.market_hours_enabled = False
         rules.upsert(rule)
@@ -6348,13 +6372,13 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("SK하이닉스", jobs[0].text)
 
     def test_notification_outbox_claim_marks_processing_atomically(self):
-        db_path = Path(self.temp.name) / "service.db"
-        queue = SQLiteNotificationJobStore(db_path)
+        db_path = test_store_seed(self.temp.name)
+        queue = TestNotificationJobStore(db_path)
         queue.enqueue(NotificationJob.create("첫 번째", account_id="main", message_type="notification"))
         queue.enqueue(NotificationJob.create("두 번째", account_id="main", message_type="notification"))
 
         first_claim = queue.claim_pending(limit=1)
-        second_claim = SQLiteNotificationJobStore(db_path).claim_pending(limit=10)
+        second_claim = TestNotificationJobStore(db_path).claim_pending(limit=10)
 
         self.assertEqual(1, len(first_claim))
         self.assertEqual("processing", first_claim[0].status)
@@ -6364,8 +6388,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual({"processing": 2}, queue.summary())
 
     def test_model_review_outbox_claim_marks_processing_atomically(self):
-        db_path = Path(self.temp.name) / "service.db"
-        queue = SQLiteModelReviewJobStore(db_path, legacy_path=Path(self.temp.name) / "missing.json")
+        db_path = test_store_seed(self.temp.name)
+        queue = TestModelReviewJobStore(db_path, legacy_path=Path(self.temp.name) / "missing.json")
         queue.enqueue(ModelReviewJob.create({
             "accountId": "main",
             "accountLabel": "메인",
@@ -6376,7 +6400,7 @@ class PythonServiceTests(unittest.TestCase):
         }))
 
         claimed = queue.claim_pending(limit=1)
-        duplicate = SQLiteModelReviewJobStore(db_path, legacy_path=Path(self.temp.name) / "missing.json").claim_pending(limit=1)
+        duplicate = TestModelReviewJobStore(db_path, legacy_path=Path(self.temp.name) / "missing.json").claim_pending(limit=1)
 
         self.assertEqual(1, len(claimed))
         self.assertEqual("processing", claimed[0].status)
@@ -6384,29 +6408,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual([], duplicate)
         self.assertEqual({"processing": 1}, queue.summary())
 
-    def test_sqlite_health_and_maintenance_report_outbox_state(self):
-        db_path = Path(self.temp.name) / "service.db"
-        queue = SQLiteNotificationJobStore(db_path)
-        queue.enqueue(NotificationJob.create("점검", account_id="main", message_type="notification"))
-        claimed = queue.claim_pending(limit=1)[0]
-        stale_at = (datetime.now(timezone.utc) - timedelta(minutes=45)).isoformat().replace("+00:00", "Z")
-        with sqlite3.connect(str(db_path)) as connection:
-            connection.execute(
-                "UPDATE notification_jobs SET processing_started_at = ?, updated_at = ? WHERE job_id = ?",
-                (stale_at, stale_at, claimed.job_id),
-            )
-
-        health = sqlite_health_snapshot(db_path)
-        maintenance = run_sqlite_maintenance(db_path)
-
-        self.assertTrue(health["exists"])
-        self.assertEqual("wal", str(health["journalMode"]).lower())
-        self.assertEqual(1, health["outbox"]["notificationJobs"]["processing"])
-        self.assertEqual(1, maintenance["recoveredProcessing"]["notification_jobs"])
-        self.assertEqual({"failed": 1}, queue.summary())
-
     def test_notification_rule_suppresses_low_score_heartbeat(self):
-        queue = SQLiteNotificationJobStore(Path(self.temp.name) / "service.db")
+        queue = TestNotificationJobStore(test_store_seed(self.temp.name))
         event = AlertEvent("main", "메인", "INFO", "monitorHeartbeat", "main:heartbeat", "상태 확인", ["모니터링 정상 작동", "보유 5개"], "")
 
         result = send_events([event], queue=queue)
@@ -6421,7 +6424,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertLess(jobs[0].context["honeyScore"], jobs[0].context["honeyThreshold"])
 
     def test_notification_jobs_payload_exposes_honey_decisions(self):
-        queue = SQLiteNotificationJobStore()
+        queue = TestNotificationJobStore()
         event = AlertEvent("main", "메인", "INFO", "monitorHeartbeat", "main:heartbeat", "상태 확인", ["모니터링 정상 작동", "보유 5개"], "")
         send_events([event], queue=queue)
 
@@ -6518,8 +6521,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertNotIn("<code>035420</code>", message)
 
     def test_notification_render_shows_ontology_rule_context(self):
-        db_path = Path(self.temp.name) / "service.db"
-        templates = SQLiteNotificationTemplateStore(db_path)
+        db_path = test_store_seed(self.temp.name)
+        templates = TestNotificationTemplateStore(db_path)
         position = Position(
             symbol="MSTR",
             name="Strategy",
@@ -6751,8 +6754,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("custom-holding-v1", holding.version)
 
     def test_notification_render_adds_ai_opinion_and_prompt_for_every_alert(self):
-        db_path = Path(self.temp.name) / "service.db"
-        templates = SQLiteNotificationTemplateStore(db_path)
+        db_path = test_store_seed(self.temp.name)
+        templates = TestNotificationTemplateStore(db_path)
         event = AlertEvent(
             "main",
             "메인",
@@ -6781,8 +6784,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertLess(message.index("<b>AI 의견</b>"), message.index("<b>발송 기준</b>"))
 
     def test_holding_timing_ai_opinion_uses_news_and_disclosure_context(self):
-        db_path = Path(self.temp.name) / "service.db"
-        templates = SQLiteNotificationTemplateStore(db_path)
+        db_path = test_store_seed(self.temp.name)
+        templates = TestNotificationTemplateStore(db_path)
         position = normalize_position({
             "symbol": "035420",
             "name": "NAVER",
@@ -8137,8 +8140,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual({"baseScore": 35.0, "symbolScore": 10.0}, audit["variables"])
 
     def test_notification_rule_seed_migrates_default_text_conditions_to_signals(self):
-        db_path = Path(self.temp.name) / "service.db"
-        store = SQLiteNotificationRuleStore(db_path)
+        db_path = test_store_seed(self.temp.name)
+        store = TestNotificationRuleStore(db_path)
         rule = store.get("holdingTiming")
         important = next(condition for condition in rule.conditions if condition.condition_id == "important_terms")
         important.condition_type = "text_contains_any"
@@ -8147,7 +8150,7 @@ class PythonServiceTests(unittest.TestCase):
         important.score = 17
         store.upsert(rule)
 
-        refreshed = SQLiteNotificationRuleStore(db_path)
+        refreshed = TestNotificationRuleStore(db_path)
         migrated = next(condition for condition in refreshed.get("holdingTiming").conditions if condition.condition_id == "important_terms")
 
         self.assertEqual("context_contains_any", migrated.condition_type)
@@ -8230,23 +8233,23 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("애프터마켓", us_decision.market_hours_reason)
 
     def test_notification_rule_seed_restores_default_market_hours_enabled(self):
-        db_path = Path(self.temp.name) / "service.db"
-        SQLiteNotificationRuleStore(db_path)
-        with sqlite3.connect(db_path) as connection:
-            connection.execute(
-                "UPDATE notification_rules SET market_hours_enabled = 0, market_hours_markets_json = ?, updated_at = ? WHERE message_type = ?",
-                (json.dumps(["US"]), "2026-07-01T00:00:00Z", "externalEquityMove"),
-            )
+        db_path = test_store_seed(self.temp.name)
+        TestNotificationRuleStore(db_path)
+        mysql_execute(
+            db_path,
+            "UPDATE notification_rules SET market_hours_enabled = 0, market_hours_markets_json = ?, updated_at = ? WHERE message_type = ?",
+            (json.dumps(["US"]), "2026-07-01T00:00:00Z", "externalEquityMove"),
+        )
 
-        refreshed = SQLiteNotificationRuleStore(db_path).get("externalEquityMove")
+        refreshed = TestNotificationRuleStore(db_path).get("externalEquityMove")
 
         self.assertTrue(refreshed.market_hours_enabled)
         self.assertEqual(["US"], refreshed.market_hours_markets)
 
     def test_notification_job_store_skips_rule_seed_when_defaults_exist(self):
-        db_path = Path(self.temp.name) / "service.db"
-        SQLiteNotificationRuleStore(db_path)
-        original_seed_defaults = SQLiteNotificationRuleStore.seed_defaults
+        db_path = test_store_seed(self.temp.name)
+        TestNotificationRuleStore(db_path)
+        original_seed_defaults = TestNotificationRuleStore.seed_defaults
         seed_calls = []
 
         def fail_if_called(self):
@@ -8254,15 +8257,15 @@ class PythonServiceTests(unittest.TestCase):
             raise AssertionError("notification job queue should not reseed existing rules")
 
         try:
-            SQLiteNotificationRuleStore.seed_defaults = fail_if_called
-            queue = SQLiteNotificationJobStore(db_path)
+            TestNotificationRuleStore.seed_defaults = fail_if_called
+            queue = TestNotificationJobStore(db_path)
             self.assertTrue(queue.notification_rule_defaults_exist())
             self.assertEqual([], seed_calls)
         finally:
-            SQLiteNotificationRuleStore.seed_defaults = original_seed_defaults
+            TestNotificationRuleStore.seed_defaults = original_seed_defaults
 
     def test_notification_queue_suppresses_stale_data_freshness(self):
-        queue = SQLiteNotificationJobStore(Path(self.temp.name) / "service.db")
+        queue = TestNotificationJobStore(test_store_seed(self.temp.name))
         stale_time = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat().replace("+00:00", "Z")
         job = NotificationJob.create(
             "크립토 변동",
@@ -8295,7 +8298,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("suppressed", saved.context["dataFreshnessDecision"])
 
     def test_notification_queue_suppresses_missing_required_data_freshness(self):
-        queue = SQLiteNotificationJobStore(Path(self.temp.name) / "service.db")
+        queue = TestNotificationJobStore(test_store_seed(self.temp.name))
         job = NotificationJob.create(
             "크립토 변동",
             account_id="main",
@@ -8319,9 +8322,9 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("신선도 메타데이터 없음", saved.last_error)
 
     def test_investment_insight_state_cooldown_suppresses_score_only_relation_noise(self):
-        db_path = Path(self.temp.name) / "service.db"
-        queue = SQLiteNotificationJobStore(db_path)
-        rules = SQLiteNotificationRuleStore(db_path)
+        db_path = test_store_seed(self.temp.name)
+        queue = TestNotificationJobStore(db_path)
+        rules = TestNotificationRuleStore(db_path)
         rule = rules.get("investmentInsight")
         rule.market_hours_enabled = False
         rules.upsert(rule)
@@ -8419,9 +8422,9 @@ class PythonServiceTests(unittest.TestCase):
         self.assertFalse(decision.similarity_bypassed)
 
     def test_investment_insight_state_cooldown_ignores_stale_processing_jobs(self):
-        db_path = Path(self.temp.name) / "service.db"
-        queue = SQLiteNotificationJobStore(db_path)
-        rules = SQLiteNotificationRuleStore(db_path)
+        db_path = test_store_seed(self.temp.name)
+        queue = TestNotificationJobStore(db_path)
+        rules = TestNotificationRuleStore(db_path)
         rule = rules.get("investmentInsight")
         rule.market_hours_enabled = False
         rules.upsert(rule)
@@ -8464,9 +8467,9 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("new_threshold", jobs[1].context["honeyStateDecision"])
 
     def test_investment_insight_state_cooldown_uses_done_time_not_stale_processing_time(self):
-        db_path = Path(self.temp.name) / "service.db"
-        queue = SQLiteNotificationJobStore(db_path)
-        rules = SQLiteNotificationRuleStore(db_path)
+        db_path = test_store_seed(self.temp.name)
+        queue = TestNotificationJobStore(db_path)
+        rules = TestNotificationRuleStore(db_path)
         rule = rules.get("investmentInsight")
         rule.market_hours_enabled = False
         rules.upsert(rule)
@@ -8517,9 +8520,9 @@ class PythonServiceTests(unittest.TestCase):
         self.assertGreaterEqual(jobs[2].context["honeyStateLastSentAgeMinutes"], 360)
 
     def test_notification_rule_penalizes_similar_recent_messages(self):
-        db_path = Path(self.temp.name) / "service.db"
-        queue = SQLiteNotificationJobStore(db_path)
-        rules = SQLiteNotificationRuleStore(db_path)
+        db_path = test_store_seed(self.temp.name)
+        queue = TestNotificationJobStore(db_path)
+        rules = TestNotificationRuleStore(db_path)
         rule = rules.get("monitorTrendChange")
         rule.threshold = 80
         rule.similarity_enabled = True
@@ -8545,9 +8548,9 @@ class PythonServiceTests(unittest.TestCase):
         self.assertLess(jobs[1].context["honeyScore"], jobs[1].context["honeyThreshold"])
 
     def test_external_move_rules_suppress_repeated_market_noise(self):
-        db_path = Path(self.temp.name) / "service.db"
-        queue = SQLiteNotificationJobStore(db_path)
-        rules = SQLiteNotificationRuleStore(db_path)
+        db_path = test_store_seed(self.temp.name)
+        queue = TestNotificationJobStore(db_path)
+        rules = TestNotificationRuleStore(db_path)
         rule = rules.get("externalEquityMove")
         self.assertEqual(60, rule.threshold)
         self.assertTrue(rule.similarity_bypass_conditions)
@@ -8587,9 +8590,9 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("같은 임계값 상태 지속", jobs[1].last_error)
 
     def test_external_move_similarity_bypass_sends_material_change(self):
-        db_path = Path(self.temp.name) / "service.db"
-        queue = SQLiteNotificationJobStore(db_path)
-        rules = SQLiteNotificationRuleStore(db_path)
+        db_path = test_store_seed(self.temp.name)
+        queue = TestNotificationJobStore(db_path)
+        rules = TestNotificationRuleStore(db_path)
         rule = rules.get("externalEquityMove")
         rule.market_hours_enabled = False
         rules.upsert(rule)
@@ -8630,9 +8633,9 @@ class PythonServiceTests(unittest.TestCase):
         self.assertGreaterEqual(jobs[1].context["honeyScore"], jobs[1].context["honeyThreshold"])
 
     def test_crypto_state_cooldown_suppresses_same_threshold_state(self):
-        db_path = Path(self.temp.name) / "service.db"
-        queue = SQLiteNotificationJobStore(db_path)
-        rules = SQLiteNotificationRuleStore(db_path)
+        db_path = test_store_seed(self.temp.name)
+        queue = TestNotificationJobStore(db_path)
+        rules = TestNotificationRuleStore(db_path)
         rule = rules.get("externalCryptoMove")
         self.assertEqual(60, rule.threshold)
         self.assertTrue(rule.state_cooldown_enabled)
@@ -8674,9 +8677,9 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("같은 임계값 상태 지속", jobs[1].last_error)
 
     def test_holding_timing_state_cooldown_suppresses_same_status(self):
-        db_path = Path(self.temp.name) / "service.db"
-        queue = SQLiteNotificationJobStore(db_path)
-        rules = SQLiteNotificationRuleStore(db_path)
+        db_path = test_store_seed(self.temp.name)
+        queue = TestNotificationJobStore(db_path)
+        rules = TestNotificationRuleStore(db_path)
         rule = rules.get("holdingTiming")
         self.assertTrue(rule.state_cooldown_enabled)
         self.assertEqual(360, rule.state_cooldown_minutes)
@@ -8719,9 +8722,9 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("같은 임계값 상태 지속", jobs[1].last_error)
 
     def test_holding_timing_state_cooldown_allows_material_worsening(self):
-        db_path = Path(self.temp.name) / "service.db"
-        queue = SQLiteNotificationJobStore(db_path)
-        rules = SQLiteNotificationRuleStore(db_path)
+        db_path = test_store_seed(self.temp.name)
+        queue = TestNotificationJobStore(db_path)
+        rules = TestNotificationRuleStore(db_path)
         rule = rules.get("holdingTiming")
         rule.market_hours_enabled = False
         rules.upsert(rule)
@@ -8760,8 +8763,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("손익률 추가 악화", jobs[1].context["honeyStateReason"])
 
     def test_crypto_state_cooldown_allows_material_7d_expansion(self):
-        db_path = Path(self.temp.name) / "service.db"
-        queue = SQLiteNotificationJobStore(db_path)
+        db_path = test_store_seed(self.temp.name)
+        queue = TestNotificationJobStore(db_path)
         first = AlertEvent(
             "main",
             "메인",
@@ -8797,9 +8800,9 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("7일 변동 확대", jobs[1].context["honeyStateReason"])
 
     def test_crypto_state_cooldown_allows_sustained_summary_after_cooldown(self):
-        db_path = Path(self.temp.name) / "service.db"
-        queue = SQLiteNotificationJobStore(db_path)
-        rules = SQLiteNotificationRuleStore(db_path)
+        db_path = test_store_seed(self.temp.name)
+        queue = TestNotificationJobStore(db_path)
+        rules = TestNotificationRuleStore(db_path)
         rule = rules.get("externalCryptoMove")
         rule.state_cooldown_minutes = 10
         rules.upsert(rule)
@@ -8916,7 +8919,7 @@ class PythonServiceTests(unittest.TestCase):
     def test_notification_queue_runner_delivers_pending_messages_in_order(self):
         registry = AccountRegistry()
         registry.upsert(AccountConfig("main", "메인", "toss", "https://example.test", "", "", "", ["AAPL"]))
-        queue = SQLiteNotificationJobStore(Path(self.temp.name) / "service.db")
+        queue = TestNotificationJobStore(test_store_seed(self.temp.name))
         queue.enqueue(NotificationJob.create("첫 번째", account_id="main", account_label="메인", message_type="notification"))
         queue.enqueue(NotificationJob.create("두 번째", account_id="main", account_label="메인", message_type="notification"))
         sent = []
@@ -8942,7 +8945,7 @@ class PythonServiceTests(unittest.TestCase):
     def test_notification_queue_runner_suppresses_account_quiet_hours(self):
         registry = AccountRegistry()
         registry.upsert(AccountConfig("main", "메인", "toss", "https://example.test", "", "", "", ["AAPL"]))
-        queue = SQLiteNotificationJobStore(Path(self.temp.name) / "service.db")
+        queue = TestNotificationJobStore(test_store_seed(self.temp.name))
         queue.enqueue(NotificationJob.create("밤 알림", account_id="main", account_label="메인", message_type="notification"))
         sent = []
 
@@ -8970,7 +8973,7 @@ class PythonServiceTests(unittest.TestCase):
     def test_notification_queue_runner_bypasses_quiet_hours_for_work_handoff(self):
         registry = AccountRegistry()
         registry.upsert(AccountConfig("main", "메인", "toss", "https://example.test", "", "", "", ["AAPL"]))
-        queue = SQLiteNotificationJobStore(Path(self.temp.name) / "service.db")
+        queue = TestNotificationJobStore(test_store_seed(self.temp.name))
         queue.enqueue(NotificationJob.create("작업 완료", account_id="main", account_label="메인", message_type="workHandoff"))
         sent = []
 
@@ -8993,10 +8996,10 @@ class PythonServiceTests(unittest.TestCase):
     def test_notification_templates_render_pending_jobs_at_delivery_time(self):
         registry = AccountRegistry()
         registry.upsert(AccountConfig("main", "메인", "toss", "https://example.test", "", "", "", ["AAPL"]))
-        db_path = Path(self.temp.name) / "service.db"
-        queue = SQLiteNotificationJobStore(db_path)
-        templates = SQLiteNotificationTemplateStore(db_path)
-        rules = SQLiteNotificationRuleStore(db_path)
+        db_path = test_store_seed(self.temp.name)
+        queue = TestNotificationJobStore(db_path)
+        templates = TestNotificationTemplateStore(db_path)
+        rules = TestNotificationRuleStore(db_path)
         heartbeat_rule = rules.get("monitorHeartbeat")
         heartbeat_rule.threshold = 0
         rules.upsert(heartbeat_rule)
@@ -9038,10 +9041,10 @@ class PythonServiceTests(unittest.TestCase):
     def test_dart_disclosure_notification_includes_ai_analysis_at_delivery_time(self):
         registry = AccountRegistry()
         registry.upsert(AccountConfig("main", "메인", "toss", "https://example.test", "", "", "", ["005930"]))
-        db_path = Path(self.temp.name) / "service.db"
-        queue = SQLiteNotificationJobStore(db_path)
-        templates = SQLiteNotificationTemplateStore(db_path)
-        rules = SQLiteNotificationRuleStore(db_path)
+        db_path = test_store_seed(self.temp.name)
+        queue = TestNotificationJobStore(db_path)
+        templates = TestNotificationTemplateStore(db_path)
+        rules = TestNotificationRuleStore(db_path)
         dart_rule = rules.get("externalDartDisclosure")
         dart_rule.threshold = 0
         dart_rule.market_hours_enabled = False
@@ -9158,10 +9161,10 @@ class PythonServiceTests(unittest.TestCase):
     def test_holding_timing_delivery_adds_sent_time(self):
         registry = AccountRegistry()
         registry.upsert(AccountConfig("main", "메인", "toss", "https://example.test", "", "", "", ["AAPL"]))
-        db_path = Path(self.temp.name) / "service.db"
-        queue = SQLiteNotificationJobStore(db_path)
-        templates = SQLiteNotificationTemplateStore(db_path)
-        rules = SQLiteNotificationRuleStore(db_path)
+        db_path = test_store_seed(self.temp.name)
+        queue = TestNotificationJobStore(db_path)
+        templates = TestNotificationTemplateStore(db_path)
+        rules = TestNotificationRuleStore(db_path)
         timing_rule = rules.get("holdingTiming")
         timing_rule.threshold = 0
         timing_rule.market_hours_enabled = False
@@ -9210,8 +9213,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(str(queue.jobs()[0].context["notificationNumber"]).startswith("N-"))
 
     def test_notification_score_explanation_uses_friendly_korean(self):
-        db_path = Path(self.temp.name) / "service.db"
-        templates = SQLiteNotificationTemplateStore(db_path)
+        db_path = test_store_seed(self.temp.name)
+        templates = TestNotificationTemplateStore(db_path)
         event = AlertEvent(
             "main",
             "메인",
@@ -9260,8 +9263,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertNotIn("caution", message.lower())
 
     def test_formula_audit_details_render_for_holding_messages(self):
-        db_path = Path(self.temp.name) / "service.db"
-        templates = SQLiteNotificationTemplateStore(db_path)
+        db_path = test_store_seed(self.temp.name)
+        templates = TestNotificationTemplateStore(db_path)
         event = AlertEvent(
             "main",
             "메인",
@@ -9309,8 +9312,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertNotIn("발송 공식", message)
 
     def test_holding_formula_audit_skips_domestic_signal_inputs_for_us_positions(self):
-        db_path = Path(self.temp.name) / "service.db"
-        templates = SQLiteNotificationTemplateStore(db_path)
+        db_path = test_store_seed(self.temp.name)
+        templates = TestNotificationTemplateStore(db_path)
         position = Position(
             symbol="MSTR",
             name="스트래티지",
@@ -9361,8 +9364,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertNotIn("투자자별 수급 없음", message)
 
     def test_holding_formula_audit_reports_domestic_signal_inputs_for_kr_positions(self):
-        db_path = Path(self.temp.name) / "service.db"
-        templates = SQLiteNotificationTemplateStore(db_path)
+        db_path = test_store_seed(self.temp.name)
+        templates = TestNotificationTemplateStore(db_path)
         position = Position(
             symbol="000660",
             name="SK하이닉스",
@@ -9412,8 +9415,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("투자자별 수급 없음", message)
 
     def test_holding_formula_audit_uses_domestic_execution_proxies(self):
-        db_path = Path(self.temp.name) / "service.db"
-        templates = SQLiteNotificationTemplateStore(db_path)
+        db_path = test_store_seed(self.temp.name)
+        templates = TestNotificationTemplateStore(db_path)
         position = Position(
             symbol="005930",
             name="삼성전자",
@@ -9463,8 +9466,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("투자자별 수급 없음", message)
 
     def test_model_review_message_skips_delivery_score_explanation(self):
-        db_path = Path(self.temp.name) / "service.db"
-        templates = SQLiteNotificationTemplateStore(db_path)
+        db_path = test_store_seed(self.temp.name)
+        templates = TestNotificationTemplateStore(db_path)
 
         message = templates.render("modelReview", {
             "messageType": "modelReview",
@@ -9481,8 +9484,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertNotIn("기본 우선도 85점", message)
 
     def test_default_notification_template_is_readable_and_skips_empty_fields(self):
-        db_path = Path(self.temp.name) / "service.db"
-        templates = SQLiteNotificationTemplateStore(db_path)
+        db_path = test_store_seed(self.temp.name)
+        templates = TestNotificationTemplateStore(db_path)
         event = AlertEvent(
             "main",
             "메인",
@@ -9509,8 +9512,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertNotIn("\n\n\n", message)
 
     def test_monitor_decision_title_uses_recommended_action(self):
-        db_path = Path(self.temp.name) / "service.db"
-        templates = SQLiteNotificationTemplateStore(db_path)
+        db_path = test_store_seed(self.temp.name)
+        templates = TestNotificationTemplateStore(db_path)
         event = AlertEvent(
             "main",
             "메인",
@@ -9533,8 +9536,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("• <b>권장 액션</b>: <code>손실 축소 우선, 회복 조건 확인 전 비중 확대 보류</code>", message)
 
     def test_external_equity_alert_uses_colon_pairs_without_divider(self):
-        db_path = Path(self.temp.name) / "service.db"
-        templates = SQLiteNotificationTemplateStore(db_path)
+        db_path = test_store_seed(self.temp.name)
+        templates = TestNotificationTemplateStore(db_path)
         event = AlertEvent(
             "main",
             "메인",
@@ -9570,8 +9573,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("• <b>감지</b>: <code>가격 변동 -7.5%, 현재가 $393.45</code>", message)
 
     def test_holding_timing_alert_title_uses_detected_decision(self):
-        db_path = Path(self.temp.name) / "service.db"
-        templates = SQLiteNotificationTemplateStore(db_path)
+        db_path = test_store_seed(self.temp.name)
+        templates = TestNotificationTemplateStore(db_path)
         event = AlertEvent(
             "main",
             "메인",
@@ -9607,8 +9610,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertNotIn("분할매도 권장</b>", loss_message)
 
     def test_external_crypto_alert_orders_bitcoin_price_and_trading_value(self):
-        db_path = Path(self.temp.name) / "service.db"
-        templates = SQLiteNotificationTemplateStore(db_path)
+        db_path = test_store_seed(self.temp.name)
+        templates = TestNotificationTemplateStore(db_path)
         event = AlertEvent(
             "main",
             "메인",
@@ -9642,8 +9645,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("• <b>감지</b>: <code>비트코인 24h -5.2%, 7d -12.1%</code>", message)
 
     def test_external_crypto_alert_title_uses_dominant_change_direction(self):
-        db_path = Path(self.temp.name) / "service.db"
-        templates = SQLiteNotificationTemplateStore(db_path)
+        db_path = test_store_seed(self.temp.name)
+        templates = TestNotificationTemplateStore(db_path)
         event = AlertEvent(
             "main",
             "메인",
@@ -9692,8 +9695,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertNotIn("<b>기준일</b>", context["telegramDataLines"])
 
     def test_model_score_alert_uses_phrase_with_score_in_parentheses(self):
-        db_path = Path(self.temp.name) / "service.db"
-        templates = SQLiteNotificationTemplateStore(db_path)
+        db_path = test_store_seed(self.temp.name)
+        templates = TestNotificationTemplateStore(db_path)
         event = AlertEvent(
             "main",
             "메인",
@@ -9714,8 +9717,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("관계 규칙", message)
 
     def test_model_score_event_renders_relation_rule_details(self):
-        db_path = Path(self.temp.name) / "service.db"
-        templates = SQLiteNotificationTemplateStore(db_path)
+        db_path = test_store_seed(self.temp.name)
+        templates = TestNotificationTemplateStore(db_path)
         position = normalize_position({
             "symbol": "005930",
             "name": "삼성전자",
@@ -9804,8 +9807,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertNotIn("모델 대입값", message)
 
     def test_model_sell_alert_explains_sell_score_inputs(self):
-        db_path = Path(self.temp.name) / "service.db"
-        templates = SQLiteNotificationTemplateStore(db_path)
+        db_path = test_store_seed(self.temp.name)
+        templates = TestNotificationTemplateStore(db_path)
         event = AlertEvent(
             "main",
             "메인",
@@ -9824,8 +9827,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("관계 규칙", message)
 
     def test_flow_and_trend_lines_use_colon_pair_template_format(self):
-        db_path = Path(self.temp.name) / "service.db"
-        templates = SQLiteNotificationTemplateStore(db_path)
+        db_path = test_store_seed(self.temp.name)
+        templates = TestNotificationTemplateStore(db_path)
         event = AlertEvent(
             "main",
             "메인",
@@ -9852,8 +9855,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("• <b>설정</b>: <code>이동평균 돌파, 크로스, 현재가와 이동평균 차이가 커질 때 보냅니다.</code>", message)
 
     def test_status_profit_flow_and_trend_are_separate_ordered_rows(self):
-        db_path = Path(self.temp.name) / "service.db"
-        templates = SQLiteNotificationTemplateStore(db_path)
+        db_path = test_store_seed(self.temp.name)
+        templates = TestNotificationTemplateStore(db_path)
         event = AlertEvent(
             "main",
             "메인",
@@ -9887,11 +9890,11 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("• <b>감지</b>: <code>상태 조건부 보유 (52점), 손익 -3.2%</code>", message)
 
     def test_notification_template_seed_migrates_previous_readable_default(self):
-        db_path = Path(self.temp.name) / "service.db"
-        templates = SQLiteNotificationTemplateStore(db_path)
+        db_path = test_store_seed(self.temp.name)
+        templates = TestNotificationTemplateStore(db_path)
         templates.upsert("monitorHeartbeat", "{readableMessage}", "이전 기본 템플릿", True)
 
-        refreshed = SQLiteNotificationTemplateStore(db_path)
+        refreshed = TestNotificationTemplateStore(db_path)
 
         self.assertEqual("{telegramMessage}", refreshed.get("monitorHeartbeat").template)
 
@@ -10015,7 +10018,7 @@ class PythonServiceTests(unittest.TestCase):
     def test_notification_schedules_use_real_monitor_sent_history(self):
         registry = AccountRegistry()
         registry.upsert(AccountConfig("main", "메인", "toss", "https://example.test", "", "", "", ["AAPL"]))
-        store = SQLiteMonitorStore(Path(self.temp.name) / "service.db")
+        store = TestMonitorStore(test_store_seed(self.temp.name))
         event = AlertEvent("main", "메인", "WATCH", "monitorHeartbeat", "main:heartbeat", "상태 확인", ["정상"], "")
         store.mark_sent([event])
 
@@ -10072,8 +10075,8 @@ class PythonServiceTests(unittest.TestCase):
             [position],
             decisions_for_positions([position], portfolio),
         )
-        SQLiteNotificationTemplateStore().upsert("monitorHeartbeat", "[{messageType}] {title}\n{rawLines}", "상태 확인 템플릿", True)
-        rules = SQLiteNotificationRuleStore()
+        TestNotificationTemplateStore().upsert("monitorHeartbeat", "[{messageType}] {title}\n{rawLines}", "상태 확인 템플릿", True)
+        rules = TestNotificationRuleStore()
         heartbeat_rule = rules.get("monitorHeartbeat")
         heartbeat_rule.threshold = 0
         rules.upsert(heartbeat_rule)
@@ -10085,14 +10088,14 @@ class PythonServiceTests(unittest.TestCase):
         self.assertFalse(payload["delivered"])
         self.assertTrue(payload["queued"])
         self.assertEqual("monitorHeartbeat", payload["event"]["messageType"])
-        jobs = SQLiteNotificationJobStore().pending(limit=10)
+        jobs = TestNotificationJobStore().pending(limit=10)
         self.assertEqual(1, len(jobs))
         self.assertEqual("pending", jobs[0].status)
         self.assertEqual("monitorHeartbeat", jobs[0].message_type)
         self.assertIn("상태 토스 계좌 동기화", jobs[0].context["rawLines"])
         self.assertEqual("notification.test_requested", jobs[0].source_event_name)
         self.assertTrue(jobs[0].source_event_id)
-        counts = SQLiteEventLog().event_counts()
+        counts = TestEventLog().event_counts()
         self.assertEqual(1, counts["notification.test_requested"])
         self.assertEqual(1, counts["notification.job_queued"])
 
@@ -10147,7 +10150,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertFalse(payload["queued"])
         self.assertEqual("investmentInsight", payload["messageType"])
         self.assertTrue(sent_messages)
-        jobs = SQLiteNotificationJobStore().jobs()
+        jobs = TestNotificationJobStore().jobs()
         self.assertEqual(1, len(jobs))
         self.assertEqual("done", jobs[0].status)
         self.assertEqual("investmentInsight", jobs[0].message_type)
@@ -10215,9 +10218,9 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("실제 토스 데이터를", payload["error"])
 
     def test_realtime_status_payload_includes_monitoring_and_queue_state(self):
-        event_log = SQLiteEventLog()
+        event_log = TestEventLog()
         event_log.handle(monitoring_cycle_completed_event(["main"], 2, 1, False, True))
-        queue = SQLiteNotificationJobStore()
+        queue = TestNotificationJobStore()
         queue.enqueue(NotificationJob.create("queued", account_id="main", message_type="monitorHeartbeat"))
 
         payload = realtime_status_payload()
@@ -10343,10 +10346,10 @@ class PythonServiceTests(unittest.TestCase):
 
         service.save(AccountConfig("main", "메인", "toss", "https://example.test", "id1", "secret1", "1", ["AAPL"]))
 
-        with sqlite3.connect(str(Path(self.temp.name) / "service.db")) as connection:
-            rows = connection.execute(
-                "SELECT name, aggregate_id, event_json FROM domain_events ORDER BY occurred_at"
-            ).fetchall()
+        rows = mysql_fetchall(
+            test_store_seed(self.temp.name),
+            "SELECT name, aggregate_id, event_json FROM domain_events ORDER BY occurred_at",
+        )
         self.assertEqual([(ACCOUNT_SAVED, "main")], [(row[0], row[1]) for row in rows])
         self.assertNotIn("secret1", rows[0][2])
 
@@ -10366,11 +10369,11 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(1, len(event_bus.handler_errors))
 
     def test_application_runner_records_monitoring_cycle_transactionally(self):
-        db_path = Path(self.temp.name) / "service.db"
+        db_path = test_store_seed(self.temp.name)
         legacy_missing = Path(self.temp.name) / "missing.json"
-        store = SQLiteMonitorStore(db_path, legacy_path=legacy_missing)
-        cycle_recorder = SQLiteMonitoringCycleRecorder(db_path, monitor_store=store)
-        rules = SQLiteNotificationRuleStore(db_path)
+        store = TestMonitorStore(db_path, legacy_path=legacy_missing)
+        cycle_recorder = TestMonitoringCycleRecorder(db_path, monitor_store=store)
+        rules = TestNotificationRuleStore(db_path)
         rule = rules.get("monitorDecisionChange")
         rule.market_hours_enabled = False
         rules.upsert(rule)
@@ -10434,17 +10437,14 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("main", store.previous)
         self.assertIn(alert.key, store.sent)
         self.assertIn(alert.cadence_key(), store.sent)
-        with sqlite3.connect(str(db_path)) as connection:
-            event_counts = {
-                row[0]: row[1]
-                for row in connection.execute(
-                    "SELECT name, COUNT(*) FROM domain_events GROUP BY name"
-                ).fetchall()
-            }
-            self.assertEqual(1, connection.execute("SELECT COUNT(*) FROM monitor_snapshots").fetchone()[0])
-            self.assertEqual(2, connection.execute("SELECT COUNT(*) FROM monitor_sent").fetchone()[0])
-            self.assertEqual(1, connection.execute("SELECT COUNT(*) FROM notification_jobs WHERE status = 'pending'").fetchone()[0])
-            self.assertEqual(1, connection.execute("SELECT COUNT(*) FROM model_review_jobs WHERE status = 'pending'").fetchone()[0])
+        event_counts = {
+            row[0]: row[1]
+            for row in mysql_fetchall(db_path, "SELECT name, COUNT(*) FROM domain_events GROUP BY name")
+        }
+        self.assertEqual(1, mysql_fetchone(db_path, "SELECT COUNT(*) FROM monitor_snapshots")[0])
+        self.assertEqual(2, mysql_fetchone(db_path, "SELECT COUNT(*) FROM monitor_sent")[0])
+        self.assertEqual(1, mysql_fetchone(db_path, "SELECT COUNT(*) FROM notification_jobs WHERE status = 'pending'")[0])
+        self.assertEqual(1, mysql_fetchone(db_path, "SELECT COUNT(*) FROM model_review_jobs WHERE status = 'pending'")[0])
         self.assertEqual(
             {
                 MONITORING_SNAPSHOT_COLLECTED: 1,
@@ -10455,11 +10455,11 @@ class PythonServiceTests(unittest.TestCase):
         )
 
     def test_application_runner_claims_account_monitor_jobs_independently(self):
-        db_path = Path(self.temp.name) / "service.db"
+        db_path = test_store_seed(self.temp.name)
         legacy_missing = Path(self.temp.name) / "missing.json"
-        store = SQLiteMonitorStore(db_path, legacy_path=legacy_missing)
-        cycle_recorder = SQLiteMonitoringCycleRecorder(db_path, monitor_store=store)
-        job_store = SQLiteMonitorAccountJobStore(db_path)
+        store = TestMonitorStore(db_path, legacy_path=legacy_missing)
+        cycle_recorder = TestMonitoringCycleRecorder(db_path, monitor_store=store)
+        job_store = TestMonitorAccountJobStore(db_path)
         accounts = [
             AccountConfig("a1", "계정 1", "toss", "https://example.test", "", "", "", ["AAPL"]),
             AccountConfig("bad", "실패 계정", "toss", "https://example.test", "", "", "", ["AAPL"]),
@@ -10510,19 +10510,14 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(["a1", "a3"], built)
         self.assertIn("a1", store.previous)
         self.assertIn("a3", store.previous)
-        with sqlite3.connect(str(db_path)) as connection:
-            rows = {
-                row[0]: row[1]
-                for row in connection.execute(
-                    "SELECT account_id, status FROM monitor_account_jobs ORDER BY account_id"
-                ).fetchall()
-            }
-            errors = {
-                row[0]: row[1]
-                for row in connection.execute(
-                    "SELECT account_id, last_error FROM monitor_account_jobs"
-                ).fetchall()
-            }
+        rows = {
+            row[0]: row[1]
+            for row in mysql_fetchall(db_path, "SELECT account_id, status FROM monitor_account_jobs ORDER BY account_id")
+        }
+        errors = {
+            row[0]: row[1]
+            for row in mysql_fetchall(db_path, "SELECT account_id, last_error FROM monitor_account_jobs")
+        }
         self.assertEqual({"a1": "done", "a3": "done", "bad": "failed"}, rows)
         self.assertIn("vendor timeout", errors["bad"])
 
@@ -10539,8 +10534,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn('"name": "account.saved"', payload)
         self.assertNotIn("secret1", payload)
 
-    def test_sqlite_operational_store_persists_runtime_data(self):
-        db_path = Path(self.temp.name) / "service.db"
+    def test_mysql_operational_store_persists_runtime_data(self):
+        db_path = test_store_seed(self.temp.name)
         legacy_missing = Path(self.temp.name) / "missing.json"
         position = normalize_position({
             "symbol": "AAPL",
@@ -10574,50 +10569,49 @@ class PythonServiceTests(unittest.TestCase):
         )
         alert = AlertEvent("main", "메인", "WATCH", "monitorDecisionChange", "main:decision:AAPL", "Apple", ["판단 변화"], "AAPL")
 
-        monitor_store = SQLiteMonitorStore(db_path, legacy_path=legacy_missing)
+        monitor_store = TestMonitorStore(db_path, legacy_path=legacy_missing)
         monitor_store.save_snapshot(snapshot)
         monitor_store.save_snapshot(snapshot2)
         monitor_store.mark_sent([alert])
-        reopened = SQLiteMonitorStore(db_path, legacy_path=legacy_missing)
+        reopened = TestMonitorStore(db_path, legacy_path=legacy_missing)
 
         self.assertIn("main", reopened.previous)
         self.assertIn(alert.key, reopened.sent)
         self.assertIn(alert.cadence_key(), reopened.sent)
         self.assertEqual(2, len(reopened.load_history("main", limit=5)))
 
-        event_log = SQLiteEventLog(db_path, legacy_path=Path(self.temp.name) / "missing.jsonl")
+        event_log = TestEventLog(db_path, legacy_path=Path(self.temp.name) / "missing.jsonl")
         source_event = alerts_detected_event([alert])
         event_log.handle(source_event)
         replayed = event_log.events(name=MONITORING_ALERTS_DETECTED)
         self.assertEqual([source_event.event_id], [event.event_id for event in replayed])
         self.assertEqual({MONITORING_ALERTS_DETECTED: 1}, event_log.event_counts())
-        job_store = SQLiteModelReviewJobStore(db_path, legacy_path=legacy_missing)
+        job_store = TestModelReviewJobStore(db_path, legacy_path=legacy_missing)
         self.assertEqual(1, job_store.enqueue_from_event(source_event))
         self.assertEqual(1, len(job_store.pending(limit=10)))
-        notification_store = SQLiteNotificationJobStore(db_path)
+        notification_store = TestNotificationJobStore(db_path)
         self.assertTrue(notification_store.enqueue(NotificationJob.create("queued", account_id="main", message_type="notification")))
         self.assertEqual(1, len(notification_store.pending(limit=10)))
-        template_store = SQLiteNotificationTemplateStore(db_path)
+        template_store = TestNotificationTemplateStore(db_path)
         template_store.upsert("test", "테스트 {body}", "테스트", True)
-        settings_store = SQLiteRuntimeSettingsStore(db_path, legacy_path=legacy_missing)
+        settings_store = TestRuntimeSettingsStore(db_path, legacy_path=legacy_missing)
         settings_store.save({"watchlistSymbols": "AAPL,NVDA", "tossClientSecret": "secret"})
-        app_store = SQLiteAppStore(db_path, legacy_path=legacy_missing)
+        app_store = TestAppStore(db_path, legacy_path=legacy_missing)
         app_store.replace({"messages": [{"id": "msg-1", "content": "hello"}]})
 
         self.assertEqual("AAPL,NVDA", runtime_settings()["watchlistSymbols"])
         self.assertEqual("msg-1", app_store.load()["messages"][0]["id"])
 
-        with sqlite3.connect(str(db_path)) as connection:
-            self.assertEqual(1, connection.execute("SELECT COUNT(*) FROM monitor_snapshots").fetchone()[0])
-            self.assertEqual(2, connection.execute("SELECT COUNT(*) FROM monitor_snapshot_history").fetchone()[0])
-            self.assertEqual(2, connection.execute("SELECT COUNT(*) FROM monitor_sent").fetchone()[0])
-            self.assertEqual(1, connection.execute("SELECT COUNT(*) FROM domain_events").fetchone()[0])
-            self.assertEqual(1, connection.execute("SELECT COUNT(*) FROM model_review_jobs").fetchone()[0])
-            self.assertEqual(1, connection.execute("SELECT COUNT(*) FROM notification_jobs").fetchone()[0])
-            self.assertGreaterEqual(connection.execute("SELECT COUNT(*) FROM notification_templates").fetchone()[0], 1)
-            self.assertGreaterEqual(connection.execute("SELECT COUNT(*) FROM notification_rules").fetchone()[0], 1)
-            self.assertEqual(2, connection.execute("SELECT COUNT(*) FROM runtime_settings").fetchone()[0])
-            self.assertEqual(1, connection.execute("SELECT COUNT(*) FROM app_store").fetchone()[0])
+        self.assertEqual(1, mysql_fetchone(db_path, "SELECT COUNT(*) FROM monitor_snapshots")[0])
+        self.assertEqual(2, mysql_fetchone(db_path, "SELECT COUNT(*) FROM monitor_snapshot_history")[0])
+        self.assertEqual(2, mysql_fetchone(db_path, "SELECT COUNT(*) FROM monitor_sent")[0])
+        self.assertEqual(1, mysql_fetchone(db_path, "SELECT COUNT(*) FROM domain_events")[0])
+        self.assertEqual(1, mysql_fetchone(db_path, "SELECT COUNT(*) FROM model_review_jobs")[0])
+        self.assertEqual(1, mysql_fetchone(db_path, "SELECT COUNT(*) FROM notification_jobs")[0])
+        self.assertGreaterEqual(mysql_fetchone(db_path, "SELECT COUNT(*) FROM notification_templates")[0], 1)
+        self.assertGreaterEqual(mysql_fetchone(db_path, "SELECT COUNT(*) FROM notification_rules")[0], 1)
+        self.assertEqual(2, mysql_fetchone(db_path, "SELECT COUNT(*) FROM runtime_settings")[0])
+        self.assertEqual(1, mysql_fetchone(db_path, "SELECT COUNT(*) FROM app_store")[0])
 
 
 class AssignmentTests(unittest.TestCase):

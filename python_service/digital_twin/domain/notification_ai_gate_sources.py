@@ -5,11 +5,11 @@ from email.utils import parsedate_to_datetime
 from typing import Dict, List, Optional
 
 from .accounts import normalize_message_delivery_level
-from .notification_ai import (
+from .notification_ai import notification_ai_prompt_context
+from .notification_ai_news import (
     news_headline_items,
     news_item_number,
     news_item_rank_score,
-    notification_ai_prompt_context,
     research_evidence_items,
 )
 from .notification_ai_gate_contracts import KST

@@ -313,6 +313,51 @@ def stable_source_event_key(value: object) -> str:
     return VOLATILE_SCORE_SUFFIX.sub("", str(value or "").strip())
 
 
+def compact_relation_event_token(value: object) -> str:
+    text = stable_source_event_key(value)
+    text = re.sub(r"[^0-9A-Za-z가-힣:_./-]+", "-", text).strip("-")
+    return text[:120]
+
+
+def relation_news_event_tokens(relation_context: Dict[str, object], limit: int = 3) -> List[str]:
+    if not isinstance(relation_context, dict):
+        return []
+    active_rule_ids = {
+        str(item.get("ruleId") or item.get("rule_id") or "")
+        for item in relation_context.get("activeRules") or relation_context.get("matchedRules") or []
+        if isinstance(item, dict)
+    }
+    if not any(rule_id.startswith("news.") for rule_id in active_rule_ids):
+        return []
+    facts = relation_context.get("facts") if isinstance(relation_context.get("facts"), dict) else {}
+    evidence = facts.get("researchEvidence") if isinstance(facts.get("researchEvidence"), list) else []
+    tokens: List[str] = []
+    for item in evidence:
+        if not isinstance(item, dict) or str(item.get("kind") or "").lower() != "news":
+            continue
+        payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+        scope = str(item.get("relationScope") or payload.get("relationScope") or "").lower()
+        if scope and scope != "direct":
+            continue
+        token = compact_relation_event_token(
+            item.get("evidenceId")
+            or item.get("evidence_id")
+            or item.get("url")
+            or item.get("title")
+            or item.get("summary")
+        )
+        if token and token not in tokens:
+            tokens.append(token)
+        if len(tokens) >= limit:
+            break
+    return tokens
+
+
+def relation_news_event_key_suffix(relation_context: Dict[str, object], limit: int = 3) -> str:
+    tokens = relation_news_event_tokens(relation_context, limit=limit)
+    return "news:" + "+".join(tokens) if tokens else ""
+
+
 def compact_source_line(event: AlertEvent) -> str:
     label = signal_type_label(event.rule)
     first_line = next((str(line or "").strip() for line in event.lines or [] if str(line or "").strip()), "")

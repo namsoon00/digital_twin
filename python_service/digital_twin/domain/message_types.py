@@ -181,6 +181,9 @@ DEFAULT_RELATION_RULE_THRESHOLDS = {
     "usdKrwLow": 1300,
     "fxExposureReview": 5,
     "fxExposureHigh": 10,
+    "newsDirectFreshMaxAgeMinutes": 1440,
+    "newsDirectRelevanceMin": 75,
+    "newsDirectMaterialityMin": 60,
 }
 
 DEFAULT_CADENCE = {

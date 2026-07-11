@@ -2,6 +2,7 @@ from typing import Dict, List
 
 from .message_types import WATCHLIST_ONTOLOGY_SIGNAL
 from .ontology_inference_context import relation_contexts_from_snapshot
+from .ontology_insights import relation_news_event_key_suffix
 from .portfolio import AccountSnapshot, AlertEvent
 
 
@@ -21,12 +22,17 @@ class StrategyAlertMixin:
             "trend.breakdown_acceleration.v1",
             "entry.add_buy.blocked.v1",
             "disclosure.material_event.v1",
+            "news.direct_risk.new_material.v1",
+            "news.direct_risk.price_confirmed.v1",
         ]) or action_group in {"lossControl", "entryRisk", "disclosure", "cryptoSensitivity"}:
             return "riskWatch"
         if any(rule_id in rule_ids for rule_id in [
             "trend.support_retest.v1",
             "trend.recovery_attempt.v1",
             "holding.trend_flow.confirmation.v1",
+            "news.direct_support.new_material.v1",
+            "news.direct_support.price_confirmed.v1",
+            "news.direct_material.new.v1",
         ]) or action_group in {"trendReview", "recovery", "flowTrend"}:
             return "trendReview"
         if "data.conflict.v1" in rule_ids or relation_context.get("missingData"):
@@ -76,6 +82,9 @@ class StrategyAlertMixin:
             if str(item.get("ruleId") or item.get("rule_id") or "").strip()
         )
         rule_signature = "+".join(active_rule_ids[:4]) or "relationship"
+        news_event_suffix = relation_news_event_key_suffix(relation_context)
+        if news_event_suffix:
+            rule_signature = rule_signature + "+" + news_event_suffix
         severity = "ALERT" if signal_type == "riskWatch" and (relation_score >= 75 or decision.get("tone") == "danger") else "WATCH"
         symbol = position.symbol.upper()
         lines = [

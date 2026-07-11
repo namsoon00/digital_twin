@@ -251,6 +251,8 @@ def decision_drivers_from_relation_context(
         _append_driver(rows, seen, "research", "risk", "위험 뉴스", "직접 위험 뉴스가 확인됐습니다: " + (risk_title or top_title), 72, ["directRiskNewsCount", "directRiskNewsTitles", "researchEvidence"])
     if _float_value(facts.get("directSupportNewsCount")):
         _append_driver(rows, seen, "research", "support", "우호 뉴스", "직접 우호 뉴스가 확인됐습니다: " + (support_title or top_title), 68, ["directSupportNewsCount", "directSupportNewsTitles", "researchEvidence"])
+    if _float_value(facts.get("directNewsCount")) and not (_float_value(facts.get("directRiskNewsCount")) or _float_value(facts.get("directSupportNewsCount"))):
+        _append_driver(rows, seen, "research", "neutral", "새 직접 뉴스", "새 직접 뉴스가 확인됐습니다. 방향이 명확하지 않아 원문과 가격 반응을 함께 확인해야 합니다: " + top_title, 62, ["directNewsCount", "topNewsTitles", "researchEvidence"])
     if facts.get("dartDisclosure"):
         disclosure = facts.get("dartDisclosure") if isinstance(facts.get("dartDisclosure"), dict) else {}
         _append_driver(

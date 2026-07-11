@@ -41,7 +41,7 @@ from .ontology_external_abox import (
     add_symbol_external_signal_concepts,
 )
 from .ontology_reasoning import apply_graph_reasoning
-from .ontology_relation_rules import evaluate_position_relation_rules
+from .ontology_relation_reasoning import evaluate_position_relation_rules
 from .portfolio_ontology_runtime_concepts import (
     add_account_delivery_profile_concepts,
     add_decision_item_concepts,

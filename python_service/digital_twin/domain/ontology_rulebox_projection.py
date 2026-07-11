@@ -2,7 +2,7 @@ from typing import Dict, Iterable
 
 from .ontology_contracts import OntologyEntity, OntologyRelation, PortfolioOntology, entity_id
 from .ontology_rulebox_contracts import GRAPH_REASONER_VERSION, GraphInferenceRule
-from .ontology_relation_rules import ONTOLOGY_RULE_ENGINE_VERSION, RelationRuleDefinition
+from .ontology_relation_reasoning import ONTOLOGY_RULE_ENGINE_VERSION, RelationRuleDefinition
 from .ontology_schema import abox_relation_properties
 
 

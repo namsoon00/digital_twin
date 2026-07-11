@@ -1,7 +1,7 @@
 from typing import Dict, List
 
 from .ontology_relation_contracts import AI_PROMPT_REGISTRY_VERSION, OntologyPromptTemplate
-from .ontology_rule_catalog import DEFAULT_RELATION_RULES
+from .ontology_relation_catalog import DEFAULT_RELATION_RULES
 
 
 PROMPT_OUTPUT_SCHEMA = {
@@ -233,7 +233,7 @@ DEFAULT_PROMPT_TEMPLATES = [
 ]
 
 
-def default_ontology_relation_rules_text() -> str:
+def default_ontology_relation_reasoning_text() -> str:
     return "\n".join(
         " | ".join([
             item.rule_id,

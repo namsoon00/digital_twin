@@ -2,7 +2,7 @@ from typing import Dict, Iterable, List, Optional
 
 from .market_data import number
 from .ontology_decision_policy import decision_stage_from_action, relation_stage_priority
-from .ontology_relation_rules import (
+from .ontology_relation_reasoning import (
     OntologyRuleMatch,
     build_ai_prompt_context,
     decision_stage_by_key,

@@ -5,7 +5,7 @@ from .ontology_graph_reasoner import run_graph_reasoner
 from .ontology_rulebox_catalog import default_graph_inference_rules
 from .ontology_rulebox_contracts import GraphInferenceRule
 from .ontology_rulebox_projection import add_relation_rulebox_concepts, add_rulebox_concepts
-from .ontology_relation_rules import DEFAULT_RELATION_RULES
+from .ontology_relation_reasoning import DEFAULT_RELATION_RULES
 
 
 def apply_graph_reasoning(

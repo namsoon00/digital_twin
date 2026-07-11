@@ -5,11 +5,11 @@ from pathlib import Path
 from typing import Dict
 
 from ..domain.accounts import configured
-from ..domain.ontology_relation_rules import (
+from ..domain.ontology_relation_reasoning import (
     DEFAULT_RELATION_THRESHOLDS,
     default_ai_prompt_policy_text,
     default_ai_prompt_templates_text,
-    default_ontology_relation_rules_text,
+    default_ontology_relation_reasoning_text,
 )
 from ..domain.parsing import parse_assignments
 
@@ -312,7 +312,7 @@ DEFAULT_STRATEGY_SETTINGS = {
     "profitTakeScoreFormula": DEFAULT_PROFIT_TAKE_SCORE_FORMULA,
     "lossCutScoreFormula": DEFAULT_LOSS_CUT_SCORE_FORMULA,
     "notificationScoreFormula": DEFAULT_NOTIFICATION_SCORE_FORMULA,
-    "ontologyRelationRules": default_ontology_relation_rules_text(),
+    "ontologyRelationRules": default_ontology_relation_reasoning_text(),
     "aiPromptTemplates": default_ai_prompt_templates_text(),
     "aiPromptPolicy": default_ai_prompt_policy_text(),
     "notificationAiGateEnabled": "1",

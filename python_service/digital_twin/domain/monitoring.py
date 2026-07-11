@@ -18,8 +18,8 @@ from .message_types import (
 )
 from .model_review import decision_change_context, decision_change_review_lines
 from .ontology_inference_context import inferencebox_from_snapshot, relation_contexts_from_snapshot
-from .ontology_insights import build_investment_insight_events, split_operational_and_investment_events
-from .ontology_relation_rules import decision_action_group_for_label, relation_rule_context_summary_lines, relation_thresholds_from_settings
+from .ontology_insights import build_investment_insight_events, relation_news_event_key_suffix, split_operational_and_investment_events
+from .ontology_relation_reasoning import decision_action_group_for_label, relation_rule_context_summary_lines, relation_thresholds_from_settings
 from .parsing import parse_assignments
 from .portfolio import AccountSnapshot, AlertEvent, Position, monitor_state_has_live_account_data, status_has_account_data_failure
 from .portfolio_calculations import DEFAULT_FX_RATES, fx_rates_with_external_signals, value_in_base
@@ -1487,12 +1487,16 @@ class RealtimeMonitor(StrategyAlertMixin, ExternalSignalAlertMixin):
             relation_lines = self.relation_context_lines(decision_state)
             ontology_lines = self.ontology_context_lines(decision_state)
             active_lines = self.active_investment_opinion_lines(decision_state)
+            event_key_parts = [snapshot.account_id, "timing", item.symbol, item.decision]
+            news_event_suffix = relation_news_event_key_suffix(relation_context)
+            if news_event_suffix:
+                event_key_parts.append(news_event_suffix)
             events.append(AlertEvent(
                 snapshot.account_id,
                 snapshot.account_label,
                 "ALERT" if item.tone == "danger" else "WATCH",
                 "holdingTiming",
-                snapshot.account_id + ":timing:" + item.symbol + ":" + item.decision,
+                ":".join(event_key_parts),
                 item.name,
                 ["상태 " + decision_phrase, *self.holding_price_lines(position, snapshot.portfolio), self.flow_context_line(position), self.investor_context_line(position), self.trend_context_line(position), self.holding_action_line(item.decision, item.profit_loss_rate)] + relation_lines + ontology_lines + active_lines,
                 item.symbol,

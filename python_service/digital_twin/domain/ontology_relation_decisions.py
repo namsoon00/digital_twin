@@ -1,7 +1,7 @@
 from typing import Dict
 
 from .ontology_relation_contracts import DEFAULT_RELATION_THRESHOLDS, DecisionStageDefinition, ScoreBandDefinition
-from .ontology_rule_catalog import DECISION_LABEL_ALIASES, DECISION_STAGE_DEFINITIONS, SCORE_BANDS
+from .ontology_relation_catalog import DECISION_LABEL_ALIASES, DECISION_STAGE_DEFINITIONS, SCORE_BANDS
 
 
 def score_band(score: float) -> ScoreBandDefinition:
@@ -113,9 +113,15 @@ def resolve_decision_stage(rule_id: str, score: float, facts: Dict[str, object])
         return _stage_for_score("BTC_REVIEW", "BTC_REDUCE", value)
     if rule_id == "disclosure.material_event.v1":
         return decision_stage_by_key("DISCLOSURE_REVIEW")
+    if rule_id == "news.direct_risk.new_material.v1":
+        return decision_stage_by_key("NEWS_RISK")
     if rule_id == "news.direct_risk.price_confirmed.v1":
         return decision_stage_by_key("NEWS_RISK")
+    if rule_id == "news.direct_support.new_material.v1":
+        return decision_stage_by_key("NEWS_CONFIRMATION")
     if rule_id == "news.direct_support.price_confirmed.v1":
+        return decision_stage_by_key("NEWS_CONFIRMATION")
+    if rule_id == "news.direct_material.new.v1":
         return decision_stage_by_key("NEWS_CONFIRMATION")
     if rule_id == "news.sector_peer_context.v1":
         return decision_stage_by_key("SECTOR_NEWS")

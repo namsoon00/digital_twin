@@ -9,7 +9,7 @@ from .notification_text_formatting import (
     plain_bullet,
     split_data_line,
 )
-from .ontology_relation_rules import relation_score_meaning
+from .ontology_relation_reasoning import relation_score_meaning
 
 
 def notification_data_lines(raw_lines: List[str], metadata: Dict[str, object]) -> List[str]:

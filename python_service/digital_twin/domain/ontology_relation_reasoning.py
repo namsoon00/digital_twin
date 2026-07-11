@@ -5,7 +5,7 @@ from .ontology_prompt_registry import (
     DEFAULT_PROMPT_TEMPLATES,
     default_ai_prompt_policy_text,
     default_ai_prompt_templates_text,
-    default_ontology_relation_rules_text,
+    default_ontology_relation_reasoning_text,
 )
 from .ontology_relation_contracts import (
     AI_PROMPT_REGISTRY_VERSION,
@@ -27,7 +27,7 @@ from .ontology_relation_facts import (
     position_signal_facts,
     research_evidence_facts,
 )
-from .ontology_rule_catalog import (
+from .ontology_relation_catalog import (
     DECISION_LABEL_ALIASES,
     DECISION_STAGE_DEFINITIONS,
     DEFAULT_RELATION_RULES,
@@ -128,9 +128,12 @@ def decision_from_matches(facts: Dict[str, object], matches: List[OntologyRuleMa
         "profit.protection.volatility.v1": 36,
         "holding.profit_take.trend_weakness.v1": 35,
         "liquidity.exit_capacity.v1": 34,
+        "news.direct_risk.new_material.v1": 33,
         "news.direct_risk.price_confirmed.v1": 32,
         "disclosure.material_event.v1": 30,
+        "news.direct_support.new_material.v1": 29,
         "news.direct_support.price_confirmed.v1": 28,
+        "news.direct_material.new.v1": 27,
         "rates.interest_rate.sensitivity.v1": 27,
         "factor.crowding.v1": 19,
         "macro.regime.shift.v1": 27,
@@ -326,6 +329,87 @@ def evaluate_position_relation_rules(
     news_materiality = float(facts.get("averageNewsMaterialityScore") or 0)
     top_news_event_types = [str(item) for item in list(facts.get("topNewsEventTypes") or [])[:3] if str(item or "").strip()]
     news_confidence = min(data_quality, 55 + min(40, news_reliability * 45)) if news_reliability else data_quality
+    news_fresh_max_age = float(thresholds.get("newsDirectFreshMaxAgeMinutes", 1440) or 1440)
+    news_relevance_min = float(thresholds.get("newsDirectRelevanceMin", 75) or 75)
+    news_materiality_min = float(thresholds.get("newsDirectMaterialityMin", 60) or 60)
+    latest_direct_news_age = float(facts.get("latestDirectNewsAgeMinutes") or 0)
+    direct_news_fresh = not latest_direct_news_age or latest_direct_news_age <= news_fresh_max_age
+    direct_news_material = (
+        direct_news_count
+        and direct_news_fresh
+        and news_relevance >= news_relevance_min
+        and news_materiality >= news_materiality_min
+    )
+    if direct_news_material and direct_risk_news_count:
+        score = (
+            52
+            + min(14, direct_risk_news_count * 4)
+            + min(14, news_relevance * 0.14)
+            + min(12, news_materiality * 0.1)
+            + (6 if latest_direct_news_age and latest_direct_news_age <= 180 else 0)
+        )
+        matches.append(_match(
+            "news.direct_risk.new_material.v1",
+            score,
+            news_confidence,
+            [
+                "새 직접 부정 뉴스 " + str(direct_risk_news_count) + "건",
+                "평균 관련성 " + ("%.1f" % news_relevance) + "점",
+                "평균 중요도 " + ("%.1f" % news_materiality) + "점",
+                "최신 직접 뉴스 " + ("%.1f" % latest_direct_news_age) + "분 전" if latest_direct_news_age else "최신 직접 뉴스 시각 미확인",
+                "가격 확인 전 뉴스 단독 감지",
+                "뉴스 제목 " + " / ".join(str(item) for item in list(facts.get("directRiskNewsTitles") or facts.get("topNewsTitles") or [])[:2]),
+            ],
+            missing_labels,
+            definitions=relation_definitions,
+        ))
+    if direct_news_material and direct_support_news_count:
+        score = (
+            50
+            + min(14, direct_support_news_count * 4)
+            + min(14, news_relevance * 0.14)
+            + min(12, news_materiality * 0.1)
+            + (6 if latest_direct_news_age and latest_direct_news_age <= 180 else 0)
+        )
+        matches.append(_match(
+            "news.direct_support.new_material.v1",
+            score,
+            news_confidence,
+            [
+                "새 직접 우호 뉴스 " + str(direct_support_news_count) + "건",
+                "평균 관련성 " + ("%.1f" % news_relevance) + "점",
+                "평균 중요도 " + ("%.1f" % news_materiality) + "점",
+                "최신 직접 뉴스 " + ("%.1f" % latest_direct_news_age) + "분 전" if latest_direct_news_age else "최신 직접 뉴스 시각 미확인",
+                "가격 확인 전 뉴스 단독 감지",
+                "뉴스 제목 " + " / ".join(str(item) for item in list(facts.get("directSupportNewsTitles") or facts.get("topNewsTitles") or [])[:2]),
+            ],
+            missing_labels,
+            definitions=relation_definitions,
+        ))
+    neutral_direct_news_count = max(0, direct_news_count - direct_risk_news_count - direct_support_news_count)
+    if direct_news_material and neutral_direct_news_count:
+        score = (
+            48
+            + min(12, neutral_direct_news_count * 3)
+            + min(14, news_relevance * 0.14)
+            + min(12, news_materiality * 0.1)
+            + (6 if latest_direct_news_age and latest_direct_news_age <= 180 else 0)
+        )
+        matches.append(_match(
+            "news.direct_material.new.v1",
+            score,
+            news_confidence,
+            [
+                "새 직접 중요 뉴스 " + str(neutral_direct_news_count) + "건",
+                "평균 관련성 " + ("%.1f" % news_relevance) + "점",
+                "평균 중요도 " + ("%.1f" % news_materiality) + "점",
+                "최신 직접 뉴스 " + ("%.1f" % latest_direct_news_age) + "분 전" if latest_direct_news_age else "최신 직접 뉴스 시각 미확인",
+                "가격 확인 전 뉴스 단독 감지",
+                "뉴스 제목 " + " / ".join(str(item) for item in list(facts.get("topNewsTitles") or [])[:2]),
+            ],
+            missing_labels,
+            definitions=relation_definitions,
+        ))
     risk_news_confirmation_count = sum(
         1
         for value in [

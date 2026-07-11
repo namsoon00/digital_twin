@@ -7,7 +7,7 @@ from .ontology_relation_contracts import (
     OntologyPromptTemplate,
     RelationRuleDefinition,
 )
-from .ontology_rule_catalog import DEFAULT_RELATION_RULES
+from .ontology_relation_catalog import DEFAULT_RELATION_RULES
 from .parsing import parse_assignments
 
 

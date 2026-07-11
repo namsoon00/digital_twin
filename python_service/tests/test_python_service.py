@@ -34,7 +34,7 @@ from digital_twin.domain.message_types import DEFAULT_ALERT_RULES, DEFAULT_CADEN
 from digital_twin.domain.ontology_contracts import OntologyEntity, OntologyRelation, entity_id
 from digital_twin.domain.ontology_schema import abox_properties
 from digital_twin.domain.portfolio_ontology_builder import apply_relation_driven_opinions, build_portfolio_ontology
-from digital_twin.domain.ontology_relation_rules import decision_action_group_for_label, evaluate_position_relation_rules, prompt_template_for_message_type
+from digital_twin.domain.ontology_relation_reasoning import decision_action_group_for_label, evaluate_position_relation_rules, prompt_template_for_message_type
 from digital_twin.domain.portfolio_calculations import portfolio_summary
 from digital_twin.domain.strategy import SafeFormula, StrategyModel, decisions_for_positions
 from digital_twin.domain.trend_transitions import trend_transition_assessment
@@ -2346,7 +2346,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("caution", weak_signal_decision.tone)
         self.assertGreaterEqual(weak_signal_decision.exit_pressure - neutral_decision.exit_pressure, 12)
 
-    def test_holding_decision_uses_ontology_relation_rules(self):
+    def test_holding_decision_uses_ontology_relation_reasoning(self):
         loss_position = normalize_position({
             "symbol": "000660",
             "name": "SK하이닉스",
@@ -2442,7 +2442,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("반도체", portfolio.sectors[0]["sector"])
         self.assertEqual(1000000, portfolio.sectors[0]["value"])
 
-    def test_ontology_relation_rules_include_prompt_and_missing_data(self):
+    def test_ontology_relation_reasoning_include_prompt_and_missing_data(self):
         position = Position(
             symbol="MSTR",
             name="Strategy",
@@ -2805,7 +2805,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(any("sec.gov" in item["url"] for item in evidence if item["kind"] == "filing"))
         self.assertEqual(evidence, context["promptContext"]["facts"]["researchEvidence"])
 
-    def test_ontology_relation_rules_use_stored_direct_news_context(self):
+    def test_ontology_relation_reasoning_use_stored_direct_news_context(self):
         position = Position(
             symbol="005930",
             name="삼성전자",
@@ -2859,6 +2859,90 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("eventRisk", context["decision"]["actionGroup"])
         self.assertEqual("EVENT_RISK_REVIEW", context["executionPlan"]["primaryAction"])
         self.assertEqual(context["facts"]["researchEvidence"], context["promptContext"]["facts"]["researchEvidence"])
+
+    def test_new_direct_news_can_trigger_investment_insight_without_price_confirmation(self):
+        position = Position(
+            symbol="005930",
+            name="삼성전자",
+            market="KR",
+            currency="KRW",
+            market_value=1000000,
+            quantity=10,
+            profit_loss_rate=0.0,
+            current_price=90000,
+            average_price=90000,
+            ma20=89000,
+            ma60=87000,
+            ma20_distance=1.1,
+            ma60_distance=3.4,
+            change_rate=0.0,
+            volume=500000,
+            volume_ratio=0.6,
+            trading_value=45000000000,
+            sellable_quantity=10,
+            source="holding",
+            sector="반도체",
+        )
+        external_signals = {
+            "researchEvidence": {
+                "005930": [{
+                    "evidenceId": "research:005930:news:samsung-memory-risk",
+                    "symbol": "005930",
+                    "kind": "news",
+                    "source": "Reuters",
+                    "title": "Samsung faces fresh memory export risk",
+                    "summary": "A fresh direct risk headline was collected.",
+                    "url": "https://example.test/samsung-memory-risk",
+                    "publishedAt": utc_now_iso(),
+                    "polarity": "risk",
+                    "impactScore": 8,
+                    "confidence": 0.82,
+                    "payload": {
+                        "relationScope": "direct",
+                        "relevanceScore": 94,
+                        "sourceReliability": 0.82,
+                        "materialityScore": 82,
+                        "directMention": True,
+                    },
+                }]
+            }
+        }
+        portfolio = portfolio_summary([position], fx_rates={"KRW": 1})
+        context = evaluate_position_relation_rules(position, portfolio, external_signals=external_signals)
+        active_ids = [item.get("ruleId") or item.get("rule_id") for item in context["activeRules"]]
+
+        self.assertIn("news.direct_risk.new_material.v1", active_ids)
+        self.assertNotIn("news.direct_risk.price_confirmed.v1", active_ids)
+        self.assertEqual("eventRisk", context["decision"]["actionGroup"])
+        self.assertTrue(any("새 직접 부정 뉴스" in item.get("summary", "") for item in context["executionPlan"]["decisionDrivers"]))
+
+        decisions = decisions_for_positions([position], portfolio, external_signals=external_signals)
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "ok",
+            utc_now_iso(),
+            portfolio,
+            [position],
+            decisions,
+            external_signals=external_signals,
+            metadata=self.inferencebox_metadata(
+                "005930",
+                "news.direct_risk.new_material.v1",
+                "NEWS_RISK",
+                "새 직접 부정 뉴스 -> 뉴스 리스크 점검",
+                stage_priority=33,
+            ),
+        )
+        events = RealtimeMonitor().events_for_snapshot(snapshot, {})
+        insight = self.insight_event(events, "005930")
+        source_keys = insight.metadata.get("ontologyInsight", {}).get("sourceEventKeys", [])
+
+        self.assertEqual("investmentInsight", insight.rule)
+        self.assertIn("holdingTiming", self.insight_source_rules(insight))
+        self.assertTrue(any("news:samsung-memory-risk" in key or "samsung-memory-risk" in key for key in source_keys))
 
     def test_decisions_include_active_opinion_and_research_prompt_context(self):
         position = Position(
@@ -3050,7 +3134,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("trend.breakdown_acceleration.v1", context["decision"]["selectedRuleId"])
         self.assertTrue(context["promptContext"]["trendDynamics"]["breakdownAcceleration"])
 
-    def test_ontology_relation_rules_detect_temporal_failure_and_liquidity(self):
+    def test_ontology_relation_reasoning_detect_temporal_failure_and_liquidity(self):
         position = Position(
             symbol="005930",
             name="삼성전자",
@@ -3120,7 +3204,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertNotIn("손실", context["decision"]["label"])
         self.assertNotIn("손절", context["decision"]["label"])
 
-    def test_ontology_relation_rules_report_domestic_microstructure_missing_data(self):
+    def test_ontology_relation_reasoning_report_domestic_microstructure_missing_data(self):
         position = Position(
             symbol="000660",
             name="SK하이닉스",
@@ -3145,7 +3229,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("방향별 매수/매도 체결량", missing_labels)
         self.assertIn("투자자별 수급", missing_labels)
 
-    def test_ontology_relation_rules_use_execution_proxies_for_domestic_missing_data(self):
+    def test_ontology_relation_reasoning_use_execution_proxies_for_domestic_missing_data(self):
         position = Position(
             symbol="005930",
             name="삼성전자",
@@ -3175,7 +3259,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("투자자별 수급", missing_labels)
         self.assertIn("중립으로 처리", effects["투자자별 수급"])
 
-    def test_ontology_relation_rules_distinguish_zero_investor_flow_from_missing_collection(self):
+    def test_ontology_relation_reasoning_distinguish_zero_investor_flow_from_missing_collection(self):
         position = Position(
             symbol="035420",
             name="NAVER",

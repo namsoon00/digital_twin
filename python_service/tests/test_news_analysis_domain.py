@@ -11,7 +11,7 @@ from digital_twin.domain.news_analysis import (
     impact_from_analysis_payload,
     korean_article_summary,
 )
-from digital_twin.domain.ontology_relation_rules import research_evidence_facts
+from digital_twin.domain.ontology_relation_reasoning import research_evidence_facts
 
 
 class NewsAnalysisDomainTests(unittest.TestCase):

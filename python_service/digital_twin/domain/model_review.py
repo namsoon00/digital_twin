@@ -3,7 +3,7 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from typing import Dict, List, Tuple
 
-from .ontology_relation_rules import relation_score_direction_meaning
+from .ontology_relation_reasoning import relation_score_direction_meaning
 from .notification_templates import symbol_display_name, symbol_with_code
 from .portfolio import utc_now_iso
 

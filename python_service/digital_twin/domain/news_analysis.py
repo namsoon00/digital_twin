@@ -856,6 +856,32 @@ def platform_source_only_noise(
             return True
     return False
 
+def ambiguous_company_alias_noise(
+    target: object,
+    title: object,
+    summary: object,
+    direct_hits: Iterable[str],
+    topic_hits: Iterable[str],
+    event_type: str,
+) -> bool:
+    symbol = target_symbol(target)
+    hits = [str(item or "").casefold().strip() for item in direct_hits or [] if str(item or "").strip()]
+    text = _lower_text(str(title or "") + " " + str(summary or ""))
+    if symbol == "AAPL" and hits and set(hits).issubset({"apple"}):
+        common_noun_markers = [
+            "apple snail",
+            "apple snails",
+            "apple orchard",
+            "apple orchards",
+            "apple harvest",
+            "apple festival",
+            "apple growers",
+            "apple cider",
+        ]
+        if any(marker in text for marker in common_noun_markers):
+            return True
+    return False
+
 
 def confidence_from_analysis_payload(payload: Dict[str, object]) -> float:
     payload = payload if isinstance(payload, dict) else {}
@@ -901,11 +927,12 @@ def analyze_news_item(
     event_type = classify_news_event_type(title_text, summary_text)
     polarity, impact = keyword_polarity(combined)
     platform_only = platform_source_only_noise(target, title_text, summary_text, source, [*direct_title, *direct_body], topic_hits, event_type)
+    alias_noise = ambiguous_company_alias_noise(target, title_text, summary_text, [*direct_title, *direct_body], topic_hits, event_type)
     social_feed = source_is_social_feed(source, provider)
 
     score = 24.0
     scope = "noise"
-    if platform_only:
+    if platform_only or alias_noise:
         score = 18.0
         scope = "noise"
     elif direct_title:
@@ -943,6 +970,8 @@ def analyze_news_item(
     excluded_reason = ""
     if platform_only:
         excluded_reason = "회사 뉴스가 아니라 플랫폼/블로그 출처명이 종목명처럼 잡힌 항목"
+    elif alias_noise:
+        excluded_reason = "회사 뉴스가 아니라 일반 명사 별칭이 종목명처럼 잡힌 항목"
     elif scope == "noise":
         excluded_reason = "종목명, 비교 기업, 업종, 시장 주제가 기사 제목/요약에서 확인되지 않음"
     return NewsAnalysis(

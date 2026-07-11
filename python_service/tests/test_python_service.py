@@ -2274,6 +2274,14 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("direct", research.properties["relationScope"])
         self.assertTrue(any(item.kind == "news-article" for item in persisted.entities))
         self.assertTrue(any(item.kind == "fact-change" for item in persisted.entities))
+        field_fact = next(
+            item
+            for item in persisted.entities
+            if item.kind == "fact-change" and (item.properties or {}).get("field") == "currentPrice"
+        )
+        self.assertEqual(80000, field_fact.properties["previousValue"])
+        self.assertEqual(69000, field_fact.properties["currentValue"])
+        self.assertTrue(field_fact.properties["materialityPassed"])
         self.assertTrue(any(item.kind == "materiality-assessment" for item in persisted.entities))
         self.assertTrue(any(item.kind == "trend-transition" for item in persisted.entities))
         self.assertTrue(any(item.kind == "missing-data" and (item.properties or {}).get("field") == "buyVolume" for item in persisted.entities))
@@ -2320,7 +2328,7 @@ class PythonServiceTests(unittest.TestCase):
 
             def seed_ontology(self, payload=None):
                 self.seed_calls.append(dict(payload or {}))
-                return {"seeded": True, "status": "ok", "ruleCount": 13}
+                return {"seeded": True, "status": "ok", "ruleCount": 14}
 
             def save_graph(self, graph):
                 self.graphs.append(graph)
@@ -2341,7 +2349,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(1, len(repository.seed_calls))
         self.assertFalse(repository.seed_calls[0]["replaceRuleBox"])
         self.assertEqual("seeded", result["ruleboxBootstrap"]["status"])
-        self.assertEqual(13, result["ruleboxBootstrap"]["ruleCount"])
+        self.assertEqual(14, result["ruleboxBootstrap"]["ruleCount"])
 
     def test_ontology_projection_recorder_includes_watchlist_candidates(self):
         holding = normalize_position({

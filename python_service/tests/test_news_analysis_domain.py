@@ -135,6 +135,22 @@ class NewsAnalysisDomainTests(unittest.TestCase):
         self.assertLessEqual(analysis["sourceReliability"], 0.3)
         self.assertLess(confidence_from_analysis_payload(analysis), 0.55)
 
+    def test_news_analysis_filters_apple_common_noun_false_positive(self):
+        target = NewsCollectionTarget("AAPL", "Apple", "NASDAQ", "USD", "AI")
+
+        analysis = classify_news_relevance(
+            target,
+            "Apple snails spread through Salt River wetlands",
+            "Wildlife officials warned that invasive apple snails are damaging local habitats.",
+            "Local News",
+            "Google News US",
+        )
+
+        self.assertEqual("noise", analysis["relationScope"])
+        self.assertLess(analysis["relevanceScore"], 35)
+        self.assertIn("일반 명사", analysis["excludedReason"])
+        self.assertEqual([], analysis["ontologyRelations"])
+
     def test_english_article_summary_keeps_concrete_article_facts(self):
         target = NewsCollectionTarget("AAPL", "Apple", "NASDAQ", "USD", "AI")
 

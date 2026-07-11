@@ -304,6 +304,38 @@ def signed_pct_text(value: object, suffix: str = "%") -> str:
     numeric = round(number(value), 2)
     return ("+" if numeric > 0 else "") + str(numeric).rstrip("0").rstrip(".") + suffix
 
+def field_materiality_component(field: str, components: Dict[str, object]) -> float:
+    component_by_field = {
+        "currentPrice": "priceMove",
+        "profitLossRate": "priceMove",
+        "changeRate": "priceMove",
+        "ma20Distance": "ma20Threshold",
+        "ma60Distance": "ma60Threshold",
+        "ma20Slope": "ma20Threshold",
+        "ma60Slope": "ma60Threshold",
+        "volumeRatio": "volumeConfirmation",
+        "tradeStrength": "tradeStrength",
+        "orderbookImbalance": "orderbookImbalance",
+        "dataQuality": "dataQualityChange",
+    }
+    return number(components.get(component_by_field.get(field, "")))
+
+def numeric_delta(previous: object, current: object) -> Dict[str, object]:
+    previous_number = number(previous)
+    current_number = number(current)
+    has_numeric_value = any(value not in (None, "") for value in [previous, current]) and (
+        previous_number != 0 or current_number != 0 or str(previous).strip() in {"0", "0.0"} or str(current).strip() in {"0", "0.0"}
+    )
+    if not has_numeric_value:
+        return {"delta": None, "deltaPct": None, "value": None}
+    delta = current_number - previous_number
+    delta_pct = pct_distance_safe(current_number, previous_number) if previous_number else 0.0
+    return {
+        "delta": round(delta, 6),
+        "deltaPct": round(delta_pct, 3),
+        "value": round(current_number, 6),
+    }
+
 def add_fact_change_concepts(
     graph: PortfolioOntology,
     stock_id: str,
@@ -324,15 +356,19 @@ def add_fact_change_concepts(
     )
     payload = assessment.to_dict()
     score = number(payload.get("score"))
+    components = payload.get("components") if isinstance(payload.get("components"), dict) else {}
+    changed_fields = list(payload.get("changedFields") or [])
     fact_id = add_entity(graph, "fact-change", symbol + ":market-data-update", (position.name or symbol) + " 시장 데이터 변경", {
         "tboxClass": "FactChange",
         "tboxClasses": ["Observation", "FactChange"],
         "symbol": symbol,
         "source": source,
         "trigger": payload.get("trigger"),
-        "changedFields": list(payload.get("changedFields") or []),
+        "field": "marketData",
+        "changedFields": changed_fields,
         "previous": previous,
         "current": current,
+        "value": score,
         "materialityScore": score,
         "materialityPassed": bool(payload.get("passed")),
         "materialityGrade": payload.get("grade"),
@@ -352,6 +388,53 @@ def add_fact_change_concepts(
     add_relation(graph, stock_id, fact_id, "HAS_OBSERVATION", weight=fact_weight, properties=relation_props)
     add_relation(graph, fact_id, stock_id, "CHANGES_FACT", weight=fact_weight, properties=relation_props)
 
+    for field in changed_fields:
+        field_name = str(field or "").strip()
+        if not field_name:
+            continue
+        previous_value = previous.get(field_name)
+        current_value = current.get(field_name)
+        delta = numeric_delta(previous_value, current_value)
+        component_score = field_materiality_component(field_name, components)
+        field_materiality_passed = bool(payload.get("passed"))
+        field_props = {
+            **relation_props,
+            "field": field_name,
+            "componentScore": round(component_score, 2),
+            "delta": delta.get("delta"),
+            "deltaPct": delta.get("deltaPct"),
+            "aiInfluenceLabel": field_name + " 의미 변화",
+        }
+        field_entity_props = {
+            "tboxClass": "FactChange",
+            "tboxClasses": ["Observation", "FactChange"],
+            "symbol": symbol,
+            "source": source,
+            "trigger": payload.get("trigger"),
+            "field": field_name,
+            "previousValue": previous_value,
+            "currentValue": current_value,
+            "value": delta.get("value"),
+            "delta": delta.get("delta"),
+            "deltaPct": delta.get("deltaPct"),
+            "componentScore": round(component_score, 2),
+            "materialityScore": score,
+            "materialityPassed": field_materiality_passed,
+            "materialityGrade": payload.get("grade"),
+            "reason": payload.get("reason"),
+            "changedFields": [field_name],
+        }
+        field_fact_id = add_entity(
+            graph,
+            "fact-change",
+            symbol + ":market-data-update:" + field_name,
+            (position.name or symbol) + " " + field_name + " 변경",
+            field_entity_props,
+        )
+        add_relation(graph, stock_id, field_fact_id, "HAS_OBSERVATION", weight=fact_weight, properties=field_props)
+        add_relation(graph, field_fact_id, stock_id, "CHANGES_FACT", weight=fact_weight, properties=field_props)
+        add_relation(graph, fact_id, field_fact_id, "AFFECTS", weight=fact_weight, properties=field_props)
+
     assessment_id = add_entity(graph, "materiality-assessment", symbol + ":market-data-update", (position.name or symbol) + " 중요 변경 평가", {
         "tboxClass": "MaterialityAssessment",
         "tboxClasses": ["MaterialityAssessment", "ConfidenceAssessment", "ActionabilityAssessment"],
@@ -361,7 +444,6 @@ def add_fact_change_concepts(
     gate_relation = "PASSES_IMPORTANCE_GATE" if bool(payload.get("passed")) else "BLOCKED_BY_IMPORTANCE_GATE"
     add_relation(graph, assessment_id, entity_id("importance-gate", "materiality-first"), gate_relation, weight=fact_weight, properties=relation_props)
 
-    components = payload.get("components") if isinstance(payload.get("components"), dict) else {}
     threshold_components = [key for key in ["priceMove", "ma20Threshold", "ma60Threshold", "volumeConfirmation", "tradeStrength", "orderbookImbalance"] if number(components.get(key))]
     if threshold_components:
         threshold_id = add_entity(graph, "threshold-crossing", symbol + ":market-data-update", (position.name or symbol) + " 기준선/변동성 변화", {

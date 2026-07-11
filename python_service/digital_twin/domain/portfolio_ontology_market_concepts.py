@@ -3,7 +3,7 @@ from typing import Dict, List
 from .market_data import clamp, number
 from .ontology_contracts import PortfolioOntology
 from .ontology_schema import add_entity, add_relation
-from .portfolio import Position
+from .portfolio import Position, expects_kr_microstructure_signals
 from .portfolio_ontology_catalog import METRIC_CONCEPTS
 
 
@@ -212,6 +212,9 @@ def volume_profile(position: Position) -> Dict[str, object]:
 
 def missing_market_microstructure_fields(position: Position) -> List[Dict[str, str]]:
     missing: List[Dict[str, str]] = []
+    symbol = str(position.symbol or position.name or "").upper().strip()
+    if not expects_kr_microstructure_signals(position.market, position.currency, symbol):
+        return missing
     if number(position.trade_strength) == 0:
         missing.append({"field": "tradeStrength", "label": "체결강도"})
     if number(position.buy_volume) == 0 and number(position.sell_volume) == 0:

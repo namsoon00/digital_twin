@@ -451,6 +451,48 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
             ],
         ),
         GraphInferenceRule(
+            rule_id="graph.news.direct_material_context.v1",
+            label="직접 중요 맥락 뉴스 -> 다음 확인 추론",
+            version="v1",
+            source_kind="stock",
+            action_group="alertReview",
+            action_level="watch",
+            prompt_hint="방향성이 뚜렷하지 않은 직접 중요 뉴스는 매수·매도 결론보다 가격, 거래량, 후속 공시, 반대 신호 확인 과제로 분리합니다.",
+            conditions=[
+                GraphRuleCondition(
+                    "direct-material-context",
+                    "relation",
+                    "직접 관련 중요 맥락 뉴스가 있어 다음 확인이 필요합니다.",
+                    relation_type="HAS_EXTERNAL_SIGNAL",
+                    target_kind="research-evidence",
+                    target_property_filters={
+                        "relationScope": "direct",
+                        "polarity": "context",
+                        "materialityPassed": True,
+                        "minMaterialityScore": 60,
+                    },
+                    min_weight=0.55,
+                ),
+            ],
+            derivations=[
+                GraphRuleDerivation(
+                    relation_type="REQUIRES_NEXT_CHECK",
+                    target_kind="next-check",
+                    target_key="{symbol}:direct-news-context-check",
+                    target_label="{displayName} 직접 뉴스 후속 확인",
+                    tbox_class="NextCheck",
+                    tbox_classes=["NextCheck", "NewsEvent", "ActionabilityAssessment"],
+                    polarity="context",
+                    risk_impact=3.5,
+                    weight=0.71,
+                    belief_label="직접 중요 뉴스가 방향성 결론이 아니라 후속 확인 과제를 만듭니다.",
+                    ai_influence_label="직접 중요 맥락 뉴스 확인",
+                    action_group="alertReview",
+                    action_level="watch",
+                )
+            ],
+        ),
+        GraphInferenceRule(
             rule_id="graph.disclosure.event_risk.v1",
             label="보유 종목 + 공시/신고 이벤트 -> 공시 이벤트 리스크 추론",
             version="v1",

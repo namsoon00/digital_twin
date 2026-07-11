@@ -260,6 +260,7 @@ class Neo4jOntologyGraphRepository(Neo4jOntologyRowMapperMixin):
                     "n.sourceValue = row.sourceValue, n.profitLossRate = row.profitLossRate, n.levelType = row.levelType, "
                     "n.field = row.field, n.valueNumber = row.valueNumber, n.polarity = row.polarity, n.transitionType = row.transitionType, n.group = row.group, "
                     "n.relationScope = row.relationScope, n.eventType = row.eventType, n.materialityScore = row.materialityScore, "
+                    "n.title = row.title, n.url = row.url, n.publishedAt = row.publishedAt, n.observedAt = row.observedAt, "
                     "n.materialityPassed = row.materialityPassed, n.relevanceScore = row.relevanceScore, "
                     "n.sourceReliability = row.sourceReliability, n.impactScore = row.impactScore, n.confidence = row.confidence, "
                     "n.enabled = row.enabled, n.conditionId = row.conditionId, n.conditionKind = row.conditionKind, "

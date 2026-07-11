@@ -9,6 +9,7 @@ from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference
 from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontology
 from digital_twin.domain.portfolio import Position
 from digital_twin.domain.portfolio_calculations import portfolio_summary
+from digital_twin.domain.portfolio_ontology_market_concepts import missing_market_microstructure_fields
 from digital_twin.infrastructure.neo4j_ontology import (
     Neo4jOntologyGraphRepository,
     NullOntologyGraphRepository,
@@ -97,6 +98,48 @@ class OntologyRuleBoxTests(unittest.TestCase):
         portfolio = portfolio_summary([position], account_cash=200000)
         return build_portfolio_ontology([position], portfolio, portfolio_id="rulebox-data-quality-test")
 
+    def direct_context_news_graph(self):
+        position = Position(
+            symbol="AAPL",
+            name="Apple",
+            market="NASDAQ",
+            currency="USD",
+            quantity=0,
+            current_price=212,
+            market_value=0,
+            sector="AI",
+            source="watchlist",
+        )
+        portfolio = portfolio_summary([position], account_cash=200000)
+        return build_portfolio_ontology(
+            [position],
+            portfolio,
+            external_signals={
+                "researchEvidence": {
+                    "AAPL": [
+                        {
+                            "symbol": "AAPL",
+                            "kind": "news",
+                            "source": "Reuters",
+                            "title": "Apple names a new product operations leader",
+                            "summary": "Apple disclosed an executive transition that may affect product launch execution.",
+                            "url": "https://example.test/apple-operations",
+                            "polarity": "context",
+                            "impactScore": 4,
+                            "confidence": 0.82,
+                            "relationScope": "direct",
+                            "materialityPassed": True,
+                            "materialityScore": 72,
+                            "relevanceScore": 94,
+                            "sourceReliability": 82,
+                            "eventType": "general",
+                        }
+                    ]
+                }
+            },
+            portfolio_id="rulebox-context-news-test",
+        )
+
     def test_rulebox_materializes_rules_and_inference_relations(self):
         graph = self.loss_guard_graph()
 
@@ -179,6 +222,37 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertIn("tradeStrength", {(item.properties or {}).get("field") for item in missing_nodes})
         self.assertTrue(data_quality_relations)
         self.assertIn("microstructure-missing", matched_ids)
+
+    def test_microstructure_missing_data_is_market_specific(self):
+        us_position = Position(symbol="AAPL", name="Apple", market="NASDAQ", currency="USD")
+        kr_position = Position(symbol="005930", name="삼성전자", market="KR", currency="KRW")
+
+        self.assertEqual([], missing_market_microstructure_fields(us_position))
+        self.assertIn("tradeStrength", {item["field"] for item in missing_market_microstructure_fields(kr_position)})
+
+    def test_local_rulebox_promotes_direct_material_context_news_to_next_check(self):
+        graph = self.direct_context_news_graph()
+
+        context_relations = [
+            item
+            for item in graph.relations
+            if item.source == "stock:AAPL"
+            and item.relation_type == "REQUIRES_NEXT_CHECK"
+            and (item.properties or {}).get("ruleId") == "graph.news.direct_material_context.v1"
+        ]
+        trace = next(
+            item
+            for item in graph.entities
+            if item.kind == "inference-trace" and (item.properties or {}).get("ruleId") == "graph.news.direct_material_context.v1"
+        )
+        matched_ids = [
+            item.get("conditionId")
+            for item in ((trace.properties or {}).get("matchedConditions") or [])
+            if isinstance(item, dict)
+        ]
+
+        self.assertTrue(context_relations)
+        self.assertIn("direct-material-context", matched_ids)
 
     def test_prompt_payload_exposes_rulebox_and_inferencebox(self):
         graph = self.loss_guard_graph()
@@ -313,6 +387,11 @@ class OntologyRuleBoxTests(unittest.TestCase):
             for item in condition_rows
             if item["id"] == "rule-condition:graph.news.direct_material_risk.v1:direct-material-risk"
         )
+        direct_news_context = next(
+            item
+            for item in condition_rows
+            if item["id"] == "rule-condition:graph.news.direct_material_context.v1:direct-material-context"
+        )
         fact_change_gate = next(
             item
             for item in condition_rows
@@ -326,6 +405,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertIn("graph.flow.accumulation.entry.v1", rule_ids)
         self.assertIn("graph.news.direct_material_risk.v1", rule_ids)
         self.assertIn("graph.news.direct_material_support.v1", rule_ids)
+        self.assertIn("graph.news.direct_material_context.v1", rule_ids)
         self.assertIn("graph.disclosure.event_risk.v1", rule_ids)
         self.assertEqual(["support"], support_transition["conditionRelationPolarities"])
         self.assertEqual(["risk"], risk_transition["conditionRelationPolarities"])
@@ -337,6 +417,9 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertEqual(["risk"], direct_news_risk["conditionTargetPolarities"])
         self.assertTrue(direct_news_risk["conditionTargetMaterialityPassed"])
         self.assertEqual(65.0, direct_news_risk["conditionTargetMinMaterialityScore"])
+        self.assertEqual(["direct"], direct_news_context["conditionTargetRelationScopes"])
+        self.assertEqual(["context"], direct_news_context["conditionTargetPolarities"])
+        self.assertEqual(60.0, direct_news_context["conditionTargetMinMaterialityScore"])
         self.assertTrue(fact_change_gate["conditionTargetMaterialityPassed"])
 
     def test_rulebox_admin_payload_roundtrips_to_graph(self):
@@ -364,9 +447,9 @@ class OntologyRuleBoxTests(unittest.TestCase):
                     "id": "rulebox-version:test001",
                     "versionLabel": "test001",
                     "rulesHash": "test001",
-                    "ruleCount": 13,
-                    "conditionCount": 27,
-                    "derivationCount": 14,
+                    "ruleCount": 14,
+                    "conditionCount": 28,
+                    "derivationCount": 15,
                     "status": "saved",
                     "changeReason": "baseline",
                     "author": "test",

@@ -129,6 +129,73 @@ class PythonServiceTests(unittest.TestCase):
         event.metadata.setdefault("dataFreshness", self.fresh_data_freshness(source))
         return event
 
+    def graph_relation_context(
+        self,
+        symbol: str = "005930",
+        label: str = "그래프 추론",
+        score: float = 80.0,
+        rule_id: str = "graph.loss_guard.breakdown.v1",
+        action_group: str = "lossControl",
+        action_level: str = "review",
+        decision_stage: str = "LOSS_REDUCE",
+        tone: str = "caution",
+        facts: dict = None,
+        execution_plan: dict = None,
+        active_rules: list = None,
+    ):
+        return {
+            "engineVersion": "neo4j-inferencebox-relation-context-v1",
+            "source": "neo4jInferenceBox",
+            "graphStoreUsed": True,
+            "fallbackUsed": False,
+            "neo4jNativeReasoningUsed": True,
+            "subject": {"symbol": symbol, "name": symbol, "market": "KR"},
+            "facts": dict(facts or {}),
+            "matchedRules": active_rules or [{
+                "ruleId": rule_id,
+                "label": label,
+                "matched": True,
+                "strengthScore": score,
+                "confidence": score,
+            }],
+            "activeRules": active_rules or [{
+                "ruleId": rule_id,
+                "label": label,
+                "matched": True,
+                "strengthScore": score,
+                "confidence": score,
+            }],
+            "referenceRules": [],
+            "missingData": [],
+            "dominantSignals": [label],
+            "signalStrength": score,
+            "signalStrengthLabel": "강함",
+            "confidence": score,
+            "decision": {
+                "label": label,
+                "tone": tone,
+                "score": score,
+                "basis": "neo4jInferenceBox",
+                "selectedRuleId": rule_id,
+                "decisionStage": decision_stage,
+                "actionGroup": action_group,
+                "actionLevel": action_level,
+                "scoreBand": {},
+                "nextStageAt": 0,
+            },
+            "executionPlan": execution_plan or {
+                "primaryAction": "HOLD",
+                "primaryActionLabel": "그래프 관계 유지 확인",
+                "riskSignals": [],
+                "supportSignals": [],
+                "counterSignals": [],
+                "nextChecks": ["다음 데이터 업데이트에서 관계 유지 확인"],
+                "blockedActions": [],
+                "missingDataImpact": [],
+                "decisionDrivers": [],
+            },
+        }
+
     def test_legacy_python_relation_rule_modules_are_removed(self):
         for module_name in [
             "digital_twin.domain.ontology_rules",
@@ -190,6 +257,16 @@ class PythonServiceTests(unittest.TestCase):
         stage_priority: float = 40,
     ):
         symbol = str(symbol or "").upper()
+        stage_aliases = {
+            "lossControl": "LOSS_REDUCE",
+            "profitTake": "PROFIT_PARTIAL",
+            "riskWatch": "RELATION_WATCH",
+            "entry": "ENTRY_READY",
+            "entryWait": "ENTRY_WATCH",
+            "alertReview": "RELATION_WATCH",
+        }
+        action_group = decision_stage if decision_stage in stage_aliases else ""
+        decision_stage_key = stage_aliases.get(decision_stage, decision_stage)
         trace_id = "inference-trace:" + symbol + ":" + rule_id
         target_kind = "opportunity" if polarity == "support" else "risk"
         return {
@@ -210,7 +287,9 @@ class PythonServiceTests(unittest.TestCase):
                                 "riskImpact": risk_impact,
                                 "supportImpact": support_impact,
                                 "weight": weight,
-                                "decisionStage": decision_stage,
+                                "decisionStage": decision_stage_key,
+                                "actionGroup": action_group,
+                                "actionLevel": "review",
                                 "stagePriority": stage_priority,
                                 "aiInfluenceLabel": label,
                                 "inferenceTraceId": trace_id,
@@ -1302,18 +1381,16 @@ class PythonServiceTests(unittest.TestCase):
         profit_decision = next(item for item in decisions if item.symbol == "005930")
 
         self.assertNotEqual(88, loss_decision.loss_cut_pressure)
-        self.assertGreaterEqual(loss_decision.loss_cut_pressure, 70)
-        self.assertEqual("ontologyRelationRules", loss_decision.decision_basis)
-        self.assertEqual("손절·분할축소 권장", loss_decision.decision)
+        self.assertEqual(0, loss_decision.loss_cut_pressure)
+        self.assertEqual("ontologyInferenceRequired", loss_decision.decision_basis)
+        self.assertEqual("온톨로지 추론 대기", loss_decision.decision)
         self.assertEqual(0, profit_decision.profit_take_pressure)
-        self.assertEqual("ontologyRelationRules", profit_decision.decision_basis)
-        self.assertEqual("리밸런싱 권장", profit_decision.decision)
-        self.assertEqual("not-used-for-scoring", loss_decision.ai_context["legacyModelRole"])
-        self.assertEqual("ontology-relation-rule-ai-review", loss_decision.ai_context["role"])
+        self.assertEqual("ontologyInferenceRequired", profit_decision.decision_basis)
+        self.assertEqual("온톨로지 추론 대기", profit_decision.decision)
+        self.assertEqual("blocked", loss_decision.ai_context["legacyModelRole"])
+        self.assertEqual("ontology-inference-required", loss_decision.ai_context["role"])
         self.assertIn("relationRuleContext", loss_decision.ai_context)
-        self.assertIn("관계 분석 데이터 JSON", loss_decision.ai_context["prompt"])
-        self.assertIn("legacy_model", loss_decision.ontology_opinion)
-        self.assertEqual("not-used-for-scoring", loss_decision.ontology_opinion["legacy_model"]["role"])
+        self.assertIn("Python 관계 규칙 fallback을 차단", loss_decision.ai_context["blockedReason"])
 
     def test_loss_guard_near_threshold_requires_confirmation(self):
         position = normalize_position({
@@ -1560,11 +1637,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(any(item.relation_type == "TRIGGERS_REASONING" for item in graph.relations))
         self.assertTrue(any(item.relation_type == "PRODUCES_INSIGHT" for item in graph.relations))
         self.assertTrue(any(item.relation_type == "DISPATCHED_BY" for item in graph.relations))
-        self.assertTrue(any(item.relation_type == "HAS_EXECUTION_PLAN" for item in graph.relations))
-        self.assertTrue(any(item.relation_type == "HAS_DECISION_DRIVER" for item in graph.relations))
-        self.assertTrue(any(item.relation_type == "HAS_PRIMARY_ACTION" for item in graph.relations))
-        self.assertTrue(any(item.relation_type == "BLOCKS_ACTION" for item in graph.relations))
-        self.assertTrue(any(item.relation_type == "REQUIRES_NEXT_CHECK" for item in graph.relations))
+        self.assertFalse(any(item.relation_type == "HAS_EXECUTION_PLAN" for item in graph.relations))
         self.assertTrue(any(item.relation_type == "HAS_FACTOR_EXPOSURE" for item in graph.relations))
         self.assertTrue(any(item.relation_type == "HAS_FX_EXPOSURE" for item in graph.relations))
         self.assertTrue(any(item.relation_type == "HAS_RATE_SENSITIVITY" for item in graph.relations))
@@ -1584,10 +1657,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(any(item.kind == "reasoning-cycle" for item in graph.entities))
         self.assertTrue(any(item.kind == "insight" for item in graph.entities))
         self.assertTrue(any(item.kind == "notification-dispatch" for item in graph.entities))
-        self.assertTrue(any(item.kind == "execution-plan" for item in graph.entities))
-        self.assertTrue(any(item.kind == "action-candidate" for item in graph.entities))
-        self.assertTrue(any(item.kind == "blocked-action" for item in graph.entities))
-        self.assertTrue(any(item.kind == "next-check" for item in graph.entities))
+        self.assertFalse(any(item.kind == "execution-plan" for item in graph.entities))
         self.assertTrue(any(item.kind == "trend-scenario" for item in graph.entities))
         self.assertTrue(any(item.kind == "price-bar" for item in graph.entities))
         self.assertTrue(any(item.kind == "key-level" for item in graph.entities))
@@ -1632,11 +1702,10 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("factorExposure", payload["aiInferencePacket"]["inputOrder"])
         self.assertIn("liquidityConstraints", payload["aiInferencePacket"]["inputOrder"])
         self.assertGreater(payload["aiInferencePacket"]["graphInputs"]["activeOpinionCount"], 0)
-        self.assertGreater(payload["aiInferencePacket"]["graphInputs"]["executionPlanCount"], 0)
+        self.assertEqual(0, payload["aiInferencePacket"]["graphInputs"]["executionPlanCount"])
         self.assertTrue(payload["activeInvestmentOpinions"])
-        self.assertTrue(payload["executionPlans"])
+        self.assertEqual([], payload["executionPlans"])
         self.assertTrue(any(item.get("symbol") == "AAPL" for item in payload["activeInvestmentOpinions"]))
-        self.assertTrue(any(item.get("subject", {}).get("symbol") == "000660" for item in payload["executionPlans"]))
         self.assertEqual("insight-driven-only", graph.worldview["operationalOntology"]["dispatchMode"])
         self.assertEqual(3, graph.worldview["operationalOntology"]["collectionPipelineCount"])
         self.assertTrue(any(item.get("key") == "externalSignals" and item.get("configuredMinutes") == 30 for item in graph.worldview["operationalOntology"]["pipelines"]))
@@ -2377,8 +2446,10 @@ class PythonServiceTests(unittest.TestCase):
         ) if item.symbol == "005930")
 
         self.assertEqual("hold", neutral_decision.tone)
-        self.assertEqual("caution", weak_signal_decision.tone)
-        self.assertGreaterEqual(weak_signal_decision.exit_pressure - neutral_decision.exit_pressure, 12)
+        self.assertEqual("hold", weak_signal_decision.tone)
+        self.assertEqual("ontologyInferenceRequired", neutral_decision.decision_basis)
+        self.assertEqual("ontologyInferenceRequired", weak_signal_decision.decision_basis)
+        self.assertEqual(0, weak_signal_decision.exit_pressure - neutral_decision.exit_pressure)
 
     def test_holding_decision_uses_ontology_relation_reasoning(self):
         loss_position = normalize_position({
@@ -2433,18 +2504,15 @@ class PythonServiceTests(unittest.TestCase):
             portfolio_summary([small_loss_position, diversifier_position]),
         ) if item.symbol == "035720")
 
-        self.assertGreaterEqual(loss_decision.exit_pressure, 55)
-        self.assertEqual("손절·분할축소 권장", loss_decision.decision)
+        self.assertEqual(0, loss_decision.exit_pressure)
+        self.assertEqual("온톨로지 추론 대기", loss_decision.decision)
         self.assertNotIn("익절", loss_decision.decision)
-        self.assertEqual("ontologyRelationRules", loss_decision.decision_basis)
-        self.assertIn("holding.loss_guard.breakdown.v1", [
-            item.get("rule_id") or item.get("ruleId")
-            for item in loss_decision.relation_rule_context.get("activeRules", [])
-        ])
-        self.assertEqual("리밸런싱 권장", profit_decision.decision)
-        self.assertEqual("ontologyRelationRules", profit_decision.decision_basis)
-        self.assertEqual("관계 규칙 관찰", small_loss_decision.decision)
-        self.assertEqual("ontologyRelationRules", small_loss_decision.decision_basis)
+        self.assertEqual("ontologyInferenceRequired", loss_decision.decision_basis)
+        self.assertEqual([], loss_decision.relation_rule_context.get("activeRules", []))
+        self.assertEqual("온톨로지 추론 대기", profit_decision.decision)
+        self.assertEqual("ontologyInferenceRequired", profit_decision.decision_basis)
+        self.assertEqual("온톨로지 추론 대기", small_loss_decision.decision)
+        self.assertEqual("ontologyInferenceRequired", small_loss_decision.decision_basis)
 
     def test_portfolio_summary_converts_usd_holdings_to_krw_base(self):
         kr_position = normalize_position({
@@ -3013,17 +3081,10 @@ class PythonServiceTests(unittest.TestCase):
 
         decision = decisions_for_positions([position], portfolio_summary([position]), external_signals=external_signals)[0]
 
-        active = decision.active_investment_opinion
-        self.assertIn(active["action"], {"HOLD", "TRIM", "SELL"})
-        self.assertEqual(active["action"], decision.ai_context["activeInvestmentOpinion"]["action"])
-        self.assertTrue(active["sourceUrls"])
-        self.assertTrue(decision.ai_prompt_context["facts"]["researchEvidence"])
-        self.assertEqual(
-            "BUY|ADD|HOLD|TRIM|SELL|AVOID",
-            decision.ai_prompt_context["outputSchema"]["activeInvestmentOpinion"]["action"],
-        )
-        self.assertEqual("ExecutionPlan", decision.ai_prompt_context["outputSchema"]["activeInvestmentOpinion"]["executionPlan"])
-        self.assertTrue(decision.ai_prompt_context["executionPlan"])
+        self.assertEqual({}, decision.active_investment_opinion)
+        self.assertEqual("ontologyInferenceRequired", decision.decision_basis)
+        self.assertEqual("ontology-inference-required", decision.ai_context["role"])
+        self.assertIn("neo4jInferenceBox", [item.get("key") for item in decision.ai_prompt_context.get("missingData", [])])
 
     def test_execution_plan_is_abox_from_relation_rules(self):
         position = Position(
@@ -3089,17 +3150,11 @@ class PythonServiceTests(unittest.TestCase):
         plan_relations = [item.relation_type for item in graph.relations if "execution-plan" in str((item.properties or {}).get("source") or "")]
         card = next(item for item in payload["reasoningCards"] if item["symbol"] == "000660")
 
-        self.assertTrue(plan_entities)
-        self.assertTrue(driver_entities)
-        self.assertEqual("ExecutionPlan", (plan_entities[0].properties or {}).get("tboxClass"))
-        self.assertIn("HAS_EXECUTION_PLAN", plan_relations)
-        self.assertIn("HAS_DECISION_DRIVER", plan_relations)
-        self.assertIn("HAS_PRIMARY_ACTION", plan_relations)
-        self.assertIn("BLOCKS_ACTION", plan_relations)
-        self.assertIn("WEAKENS_ACTION_IF", plan_relations)
-        self.assertIn("REQUIRES_NEXT_CHECK", plan_relations)
-        self.assertEqual("TRIM_OR_SELL_REVIEW", payload["executionPlans"][0]["primaryAction"])
-        self.assertEqual("TRIM_OR_SELL_REVIEW", card["executionPlans"][0]["primaryAction"])
+        self.assertEqual([], plan_entities)
+        self.assertEqual([], driver_entities)
+        self.assertEqual([], plan_relations)
+        self.assertEqual([], payload["executionPlans"])
+        self.assertEqual([], card["executionPlans"])
 
     def test_ontology_trend_dynamics_classifies_support_retest(self):
         position = Position(
@@ -3558,22 +3613,18 @@ class PythonServiceTests(unittest.TestCase):
 
         events = RealtimeMonitor().events_for_snapshot(current_snapshot, previous_snapshot.to_monitor_state())
         insight = self.insight_event(events, "005930")
-        pnl_message = self.insight_source_message(insight, "monitorPnlChange")
-        value_message = self.insight_source_message(insight, "monitorValueChange")
+        holding_message = self.insight_source_message(insight, "holdingTiming")
 
         self.assertTrue(all(event.generated_at == current_generated_at for event in events))
         self.assertEqual("investmentInsight", insight.rule)
-        self.assertIn("monitorPnlChange", self.insight_source_rules(insight))
-        self.assertIn("monitorValueChange", self.insight_source_rules(insight))
+        self.assertIn("holdingTiming", self.insight_source_rules(insight))
+        self.assertNotIn("monitorPnlChange", self.insight_source_rules(insight))
+        self.assertNotIn("monitorValueChange", self.insight_source_rules(insight))
         self.assertFalse(any(event.rule == "monitorPnlChange" for event in events))
-        self.assertIn("수급: 거래량 30,000(1.8x), 거래액 18억 원", pnl_message)
-        self.assertIn("투자자:", pnl_message)
-        self.assertIn("외국인: 순매수 145,000주, 매수 420,000주, 매도 275,000주", pnl_message)
-        self.assertIn("기관: 순매수 82,000주, 매수 310,000주, 매도 228,000주", pnl_message)
-        self.assertIn("수급: 거래량 30,000(1.8x), 거래액 18억 원", value_message)
-        self.assertIn("투자자:", value_message)
-        self.assertIn("외국인: 순매수 145,000주, 매수 420,000주, 매도 275,000주", value_message)
-        self.assertIn("기관: 순매수 82,000주, 매수 310,000주, 매도 228,000주", value_message)
+        self.assertIn("수급: 거래량 30,000(1.8x), 거래액 18억 원", holding_message)
+        self.assertIn("투자자:", holding_message)
+        self.assertIn("외국인: 순매수 145,000주, 매수 420,000주, 매도 275,000주", holding_message)
+        self.assertIn("기관: 순매수 82,000주, 매수 310,000주, 매도 228,000주", holding_message)
 
     def test_investment_insight_promotes_reference_data_and_action_title(self):
         position = normalize_position({
@@ -3649,7 +3700,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("수급: 거래량 90,863(1.4x), 거래액 $3,543,834,187", "\n".join(insight.lines))
         self.assertIn("추세: 20일선 $108.07보다 6.3% 낮음", "\n".join(insight.lines))
         self.assertIn("권장 액션: 분할매도", "\n".join(insight.lines))
-        self.assertIn("<b>[주의] 💰 Strategy: 수익 +12.2%: 분할매도·리밸런싱 점검</b>", message)
+        self.assertIn("<b>[관찰] 💰 Strategy: 수익 +12.2%: 분할매도·리밸런싱 점검</b>", message)
         self.assertIn("현재가", message)
         self.assertIn("평균매입가", message)
         self.assertIn("수익률", message)
@@ -3679,6 +3730,15 @@ class PythonServiceTests(unittest.TestCase):
                 metadata={
                     "watchlistOntologySignalType": "riskWatch",
                     "watchlistSignalScore": score,
+                    "ontologyRelationContext": self.graph_relation_context(
+                        "005380",
+                        "하락 가속 대응 점검",
+                        score,
+                        rule_id="trend.breakdown_acceleration.v1",
+                        action_group="entryRisk",
+                        action_level="review",
+                        decision_stage="ADD_BUY_BLOCKED",
+                    ),
                     "dataFreshness": self.fresh_data_freshness("unit-test-position"),
                 },
             )
@@ -3714,29 +3774,25 @@ class PythonServiceTests(unittest.TestCase):
             "SK하이닉스",
             ["상태: 손절·분할축소 권장 (88점)", "수익률: -13.2%"],
             "000660",
+            metadata={
+                "ontologyRelationContext": self.graph_relation_context(
+                    "000660",
+                    "손절·분할축소 권장",
+                    88,
+                    action_group="lossControl",
+                    action_level="action",
+                    decision_stage="LOSS_CUT",
+                    tone="danger",
+                )
+            },
         )
-        trend_event = AlertEvent(
-            "main",
-            "메인",
-            "WATCH",
-            "monitorTrendChange",
-            "main:trend:000660:ma",
-            "SK하이닉스",
-            ["이동평균 변화", "20일 평균선 아래"],
-            "000660",
-        )
-
         holding_insight = build_investment_insight_events(snapshot, [holding_event])[0]
-        trend_insight = build_investment_insight_events(snapshot, [trend_event])[0]
         holding_metadata = holding_insight.metadata["ontologyInsight"]
-        trend_metadata = trend_insight.metadata["ontologyInsight"]
 
         self.assertEqual("riskIncrease", holding_metadata["insightType"])
-        self.assertEqual("portfolioShift", trend_metadata["insightType"])
         self.assertEqual("holdingPositionCommon", holding_metadata["dispatchInsightType"])
-        self.assertEqual("holdingPositionCommon", trend_metadata["dispatchInsightType"])
         self.assertEqual("holdingPosition", holding_metadata["dispatchSourceKey"])
-        self.assertEqual(holding_metadata["cadenceKey"], trend_metadata["cadenceKey"])
+        self.assertIn(":holdingPositionCommon:holdingPosition", holding_metadata["cadenceKey"])
 
     def test_investment_insight_loss_title_wins_over_rebalance_signal(self):
         event = AlertEvent(
@@ -3798,15 +3854,9 @@ class PythonServiceTests(unittest.TestCase):
             decisions_for_positions([position], portfolio),
         )
 
-        event = RealtimeMonitor().holding_timing_events(snapshot)[0]
-        message = event.message()
+        events = RealtimeMonitor().holding_timing_events(snapshot)
 
-        self.assertRegex(message, r"상태 .+ \([0-9.]+점\)")
-        self.assertIn("현재가: 100,000원", message)
-        self.assertIn("평균매입가: 110,000원", message)
-        self.assertIn("수익률: -9.0%", message)
-        self.assertTrue(any("상태 " in item and "점)" in item for item in event.criteria))
-        self.assertTrue(any("수익률 -9.0%" in item for item in event.criteria))
+        self.assertEqual([], events)
 
     def test_watchlist_buy_candidate_requires_relation_entry_rule(self):
         watch = normalize_position({
@@ -3835,14 +3885,10 @@ class PythonServiceTests(unittest.TestCase):
 
         events = RealtimeMonitor({
             "buyScoreFormula": "80",
-            "alertThresholds": "modelBuyScore=99\nwatchlistBuyScore=74",
+            "alertThresholds": "graphSignalMinScore=55\ngraphSignalAlertScore=78",
         }).events_for_snapshot(snapshot, {})
 
-        candidate = self.insight_event(events, "AAPL")
-        self.assertEqual("AAPL", candidate.symbol)
-        self.assertEqual("investmentInsight", candidate.rule)
-        self.assertNotIn("watchlistBuyCandidate", self.insight_source_rules(candidate))
-        self.assertIn("watchlistQuote", self.insight_source_rules(candidate))
+        self.assertFalse(any(event.rule == "investmentInsight" for event in events))
         self.assertFalse(any(event.rule == "modelBuy" for event in events))
         self.assertFalse(any(event.rule == "watchlistBuyCandidate" for event in events))
 
@@ -3908,17 +3954,17 @@ class PythonServiceTests(unittest.TestCase):
 
         events = RealtimeMonitor({
             "buyScoreFormula": "10",
-            "alertThresholds": "modelBuyScore=99\nwatchlistBuyScore=74",
+            "alertThresholds": "graphSignalMinScore=55\ngraphSignalAlertScore=78",
         }).events_for_snapshot(snapshot, {})
 
         candidate = self.insight_event(events, "AAPL")
-        source_message = self.insight_source_message(candidate, "watchlistBuyCandidate")
+        source_message = self.insight_source_message(candidate, "watchlistOntologySignal")
         message = TestNotificationTemplateStore(test_store_seed(self.temp.name)).render(candidate.rule, alert_context(candidate))
         active_ids = self.insight_active_rule_ids(candidate)
 
-        self.assertIn("watchlistBuyCandidate", self.insight_source_rules(candidate))
+        self.assertNotIn("watchlistBuyCandidate", self.insight_source_rules(candidate))
         self.assertIn("watchlistOntologySignal", self.insight_source_rules(candidate))
-        self.assertIn("소액 진입 검토", source_message)
+        self.assertIn("관심종목 온톨로지 관계 신호", source_message)
         self.assertIn(
             "관심종목 온톨로지 관계 신호",
             self.insight_source_message(candidate, "watchlistOntologySignal"),
@@ -4026,7 +4072,7 @@ class PythonServiceTests(unittest.TestCase):
 
         events = RealtimeMonitor({
             "buyScoreFormula": "10",
-            "alertThresholds": "modelBuyScore=99\nwatchlistBuyScore=99",
+            "alertThresholds": "graphSignalMinScore=55\ngraphSignalAlertScore=78",
         }).events_for_snapshot(snapshot, {})
 
         insight = self.insight_event(events, "005380")
@@ -4042,7 +4088,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("riskIncrease", ontology.get("insightType"))
         self.assertFalse(any(event.rule == "watchlistOntologySignal" for event in events))
 
-    def test_legacy_signal_rule_controls_ontology_insight_sources(self):
+    def test_graph_signal_rule_controls_ontology_insight_sources(self):
         watch = normalize_position({
             "symbol": "AAPL",
             "name": "Apple",
@@ -4064,17 +4110,27 @@ class PythonServiceTests(unittest.TestCase):
             [],
             [],
             watchlist=[watch],
+            metadata=self.inferencebox_metadata(
+                "AAPL",
+                "entry.pullback.supported.v1",
+                "ENTRY_SPLIT_BUY",
+                "진입 조건 점검",
+                relation_type="HAS_INFERRED_SUPPORT",
+                polarity="support",
+                support_impact=16,
+                weight=0.9,
+                stage_priority=38,
+            ),
         )
 
         events = RealtimeMonitor({
             "buyScoreFormula": "80",
-            "alertRules": "watchlistBuyCandidate=0\ninvestmentInsight=1",
-            "alertThresholds": "modelBuyScore=99\nwatchlistBuyScore=74",
+            "alertRules": "watchlistOntologySignal=0\ninvestmentInsight=1",
+            "alertThresholds": "graphSignalMinScore=55\ngraphSignalAlertScore=78",
         }).events_for_snapshot(snapshot, {})
 
-        insight = self.insight_event(events, "AAPL")
-        self.assertNotIn("watchlistBuyCandidate", self.insight_source_rules(insight))
-        self.assertFalse(any(event.rule == "watchlistBuyCandidate" for event in events))
+        self.assertFalse(any(event.rule == "investmentInsight" for event in events))
+        self.assertFalse(any(event.rule == "watchlistOntologySignal" for event in events))
 
     def test_investment_insight_rule_controls_final_investment_dispatch(self):
         watch = normalize_position({
@@ -4098,16 +4154,27 @@ class PythonServiceTests(unittest.TestCase):
             [],
             [],
             watchlist=[watch],
+            metadata=self.inferencebox_metadata(
+                "AAPL",
+                "entry.pullback.supported.v1",
+                "ENTRY_SPLIT_BUY",
+                "진입 조건 점검",
+                relation_type="HAS_INFERRED_SUPPORT",
+                polarity="support",
+                support_impact=16,
+                weight=0.9,
+                stage_priority=38,
+            ),
         )
 
         events = RealtimeMonitor({
             "buyScoreFormula": "80",
-            "alertRules": "watchlistBuyCandidate=1\ninvestmentInsight=0",
-            "alertThresholds": "modelBuyScore=99\nwatchlistBuyScore=74",
+            "alertRules": "watchlistOntologySignal=1\ninvestmentInsight=0",
+            "alertThresholds": "graphSignalMinScore=55\ngraphSignalAlertScore=78",
         }).events_for_snapshot(snapshot, {})
 
         self.assertFalse(any(event.rule == "investmentInsight" for event in events))
-        self.assertFalse(any(event.rule == "watchlistBuyCandidate" for event in events))
+        self.assertFalse(any(event.rule == "watchlistOntologySignal" for event in events))
 
     def test_realtime_monitor_blocks_decision_scores_without_inferencebox(self):
         position = normalize_position({
@@ -4566,30 +4633,12 @@ class PythonServiceTests(unittest.TestCase):
             metadata=self.inferencebox_metadata("005930", "graph.trend.recovery.v1", "holdReview", "추세 회복 추론", polarity="support", risk_impact=0, support_impact=12),
         )
 
-        event = self.insight_event(
-            RealtimeMonitor().events_for_snapshot(current_snapshot, previous_snapshot.to_monitor_state()),
-            "005930",
-        )
-        message = self.insight_source_message(event, "monitorTrendChange")
+        events = RealtimeMonitor().events_for_snapshot(current_snapshot, previous_snapshot.to_monitor_state())
 
-        self.assertEqual("WATCH", event.severity)
-        self.assertIn("monitorTrendChange", self.insight_source_rules(event))
-        self.assertFalse("monitorTrendChange" == event.rule)
-        self.assertIn("20일선 상향 돌파", message)
-        self.assertIn("60일선 상향 돌파", message)
-        self.assertIn("20/60일선 골든크로스", message)
-        self.assertIn("현재가: 106,000원", message)
-        self.assertIn("평균매입가: 100,000원", message)
-        self.assertIn("계좌 평가금액: 100만 원", message)
-        self.assertIn("수익률: +5.0%", message)
-        self.assertIn("추세: 20일선 104,000원보다 1.9% 높음, 60일선 103,000원보다 2.9% 높음", message)
-        self.assertIn("수급: 거래량 40,000(2.1x), 거래액 24억 원", message)
-        self.assertIn("투자자:", message)
-        self.assertIn("외국인: 순매수 70,000주, 매수 510,000주, 매도 440,000주", message)
-        self.assertIn("기관: 순매수 35,000주, 매수 350,000주, 매도 315,000주", message)
-        self.assertIn("설정: 20일/60일 이동평균 돌파, 크로스, 또는 현재가가 이동평균보다 8% 이상 높거나 낮을 때", message)
-        self.assertIn("20일선 상향 돌파", message)
-        self.assertNotIn("괴리", message)
+        self.assertFalse(any(event.rule == "monitorTrendChange" for event in events))
+        event = self.insight_event(events, "005930")
+        self.assertIn("holdingTiming", self.insight_source_rules(event))
+        self.assertNotIn("monitorTrendChange", self.insight_source_rules(event))
 
     def test_monitor_value_change_formats_usd_with_krw_basis(self):
         previous_position = normalize_position({
@@ -4644,15 +4693,10 @@ class PythonServiceTests(unittest.TestCase):
             "fxRates": "KRW=1\nUSD=1400",
             "alertThresholds": "monitorValueDelta=5",
         }).events_for_snapshot(current_snapshot, previous_snapshot.to_monitor_state())
-        insight = self.insight_event(events, "AAPL")
-        message = self.insight_source_message(insight, "monitorValueChange")
-
-        self.assertIn("monitorValueChange", self.insight_source_rules(insight))
         self.assertFalse(any(event.rule == "monitorValueChange" for event in events))
-        self.assertIn("이전 $1,000 (약 140만 원)", message)
-        self.assertIn("현재 $1,100 (약 154만 원)", message)
-        self.assertIn("변화 +10.0% (KRW 환산 기준)", message)
-        self.assertNotIn("이전 1,000원", message)
+        insight = self.insight_event(events, "AAPL")
+        self.assertIn("holdingTiming", self.insight_source_rules(insight))
+        self.assertNotIn("monitorValueChange", self.insight_source_rules(insight))
 
     def test_monitor_cadence_is_account_and_type_scoped(self):
         account = AccountConfig("main", "메인", "toss", "https://example.test", "", "", "", ["AAPL"])
@@ -4692,7 +4736,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(DEFAULT_CADENCE)
         self.assertTrue(all(value >= 10 for value in DEFAULT_CADENCE.values()))
         self.assertEqual(10, DEFAULT_CADENCE["monitorHeartbeat"])
-        self.assertEqual(60, DEFAULT_CADENCE["externalMacroShift"])
+        self.assertEqual(60, DEFAULT_CADENCE["externalDataConnection"])
         self.assertEqual(60, DEFAULT_CADENCE["ontologyInferenceMissing"])
 
     def test_default_watchlist_and_model_alerts_include_requested_symbols(self):
@@ -4701,14 +4745,12 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("TSLA", symbols)
         self.assertIn("AAPL", symbols)
         self.assertEqual(1, DEFAULT_ALERT_RULES["investmentInsight"])
-        self.assertEqual(1, DEFAULT_ALERT_RULES["modelBuy"])
-        self.assertEqual(1, DEFAULT_ALERT_RULES["modelSell"])
-        self.assertEqual(1, DEFAULT_ALERT_RULES["watchlistBuyCandidate"])
         self.assertEqual(1, DEFAULT_ALERT_RULES["watchlistOntologySignal"])
+        self.assertEqual(1, DEFAULT_ALERT_RULES["holdingTiming"])
+        self.assertNotIn("modelBuy", DEFAULT_ALERT_RULES)
+        self.assertNotIn("modelSell", DEFAULT_ALERT_RULES)
+        self.assertNotIn("watchlistBuyCandidate", DEFAULT_ALERT_RULES)
         self.assertEqual(10, DEFAULT_CADENCE["investmentInsight"])
-        self.assertEqual(10, DEFAULT_CADENCE["modelBuy"])
-        self.assertEqual(10, DEFAULT_CADENCE["modelSell"])
-        self.assertEqual(10, DEFAULT_CADENCE["watchlistBuyCandidate"])
         self.assertEqual(10, DEFAULT_CADENCE["watchlistOntologySignal"])
 
     def test_investment_insight_rule_uses_ontology_novelty_for_cooldown_bypass(self):
@@ -5098,29 +5140,23 @@ class PythonServiceTests(unittest.TestCase):
         catalog = public_message_catalog()
 
         self.assertEqual("투자 인사이트", MESSAGE_TYPE_LABELS["investmentInsight"])
-        self.assertEqual("모델 매수", MESSAGE_TYPE_LABELS["modelBuy"])
-        self.assertEqual("관심종목 매수 후보", MESSAGE_TYPE_LABELS["watchlistBuyCandidate"])
         self.assertEqual("관심종목 관계 신호", MESSAGE_TYPE_LABELS["watchlistOntologySignal"])
         self.assertEqual("온톨로지 추론 상태", MESSAGE_TYPE_LABELS["ontologyInferenceMissing"])
         self.assertEqual(10, catalog["investmentInsight"]["cadenceMinutes"])
-        self.assertEqual(10, catalog["modelBuy"]["cadenceMinutes"])
-        self.assertEqual(10, catalog["watchlistBuyCandidate"]["cadenceMinutes"])
         self.assertEqual(10, catalog["watchlistOntologySignal"]["cadenceMinutes"])
         self.assertEqual(60, catalog["ontologyInferenceMissing"]["cadenceMinutes"])
         self.assertEqual("🧭", catalog["investmentInsight"]["icon"])
-        self.assertEqual("🟢", catalog["modelBuy"]["icon"])
         self.assertEqual("🧠", MESSAGE_TYPE_EMOJIS["modelReview"])
         self.assertTrue(all(item.get("icon") for item in catalog.values()))
         self.assertTrue(catalog["investmentInsight"]["monitoring"])
-        self.assertTrue(catalog["modelBuy"]["monitoring"])
-        self.assertTrue(catalog["watchlistBuyCandidate"]["monitoring"])
         self.assertTrue(catalog["investmentInsight"]["userManaged"])
         self.assertTrue(catalog["ontologyInferenceMissing"]["userManaged"])
         self.assertEqual("user", catalog["investmentInsight"]["role"])
-        self.assertFalse(catalog["modelBuy"]["userManaged"])
-        self.assertTrue(catalog["modelBuy"]["evidenceOnly"])
-        self.assertEqual("evidence", catalog["modelBuy"]["role"])
+        self.assertNotIn("modelBuy", catalog)
+        self.assertNotIn("modelSell", catalog)
+        self.assertNotIn("watchlistBuyCandidate", catalog)
         self.assertTrue(catalog["watchlistOntologySignal"]["monitoring"])
+        self.assertTrue(catalog["watchlistOntologySignal"]["evidenceOnly"])
         self.assertTrue(catalog["workHandoff"]["system"])
 
     def test_flow_lens_mock_contract_is_python_native(self):
@@ -5131,7 +5167,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(any(item["symbol"] == "AAPL" for item in payload["tossDecision"]["items"]))
         self.assertTrue(any(item["symbol"] == "TSLA" for item in payload["tossDecision"]["items"]))
         self.assertIn("investmentAnalysis", payload["tossDecision"])
-        self.assertEqual([], payload["tossDecision"]["investmentAnalysis"]["reasoningCards"])
+        self.assertTrue(payload["tossDecision"]["investmentAnalysis"]["reasoningCards"])
         self.assertEqual("investment-ontology-ai-inference-v1", payload["tossDecision"]["investmentAnalysis"]["aiInferencePacket"]["contract"])
         self.assertTrue(any(item.get("decisionBasis") == "ontologyInferenceRequired" for item in payload["tossDecision"]["items"]))
         ontology_strategy = payload["tossDecision"]["ontologyStrategy"]
@@ -5188,23 +5224,9 @@ class PythonServiceTests(unittest.TestCase):
 
         self.assertEqual(
             {
-                "investmentInsight",
                 "ontologyInferenceMissing",
-                "watchlistQuote",
-                "watchlistQuotePending",
-                "holdingTiming",
                 "monitorHeartbeat",
                 "monitorConnection",
-                "monitorPositionChange",
-                "monitorPnlChange",
-                "monitorValueChange",
-                "monitorTrendChange",
-                "monitorCashChange",
-                "monitorDecisionChange",
-                "externalEquityMove",
-                "externalCryptoMove",
-                "externalMacroShift",
-                "externalDartDisclosure",
                 "externalDataConnection",
             },
             {event.rule for event in events},
@@ -5295,28 +5317,12 @@ class PythonServiceTests(unittest.TestCase):
         events = RealtimeMonitor().external_signal_events(snapshot, previous)
         messages = {event.rule: event.message() for event in events}
 
-        self.assertIn("externalEquityMove", messages)
-        self.assertIn("Alpha Vantage", messages["externalEquityMove"])
-        self.assertIn("현재가: $130", messages["externalEquityMove"])
-        self.assertIn("평균매입가: $100", messages["externalEquityMove"])
-        self.assertIn("수익률: +25.0%", messages["externalEquityMove"])
-        self.assertIn("externalCryptoMove", messages)
-        self.assertIn("CoinGecko", messages["externalCryptoMove"])
-        self.assertIn("비트코인 변동", messages["externalCryptoMove"])
-        self.assertIn("크립토 거래액", messages["externalCryptoMove"])
-        self.assertIn("externalMacroShift", messages)
-        self.assertIn("DGS10", messages["externalMacroShift"])
-        self.assertIn("externalDartDisclosure", messages)
-        self.assertIn("주요사항보고서", messages["externalDartDisclosure"])
-        self.assertIn("현재가: 100,000원", messages["externalDartDisclosure"])
-        self.assertIn("평균매입가: 95,000원", messages["externalDartDisclosure"])
-        self.assertIn("수익률: +5.3%", messages["externalDartDisclosure"])
         self.assertIn("externalDataConnection", messages)
+        self.assertEqual(["externalDataConnection"], sorted(messages.keys()))
+        self.assertIn("FRED", messages["externalDataConnection"])
+        self.assertIn("rate limit", messages["externalDataConnection"])
         criteria_by_rule = {event.rule: event.criteria for event in events}
-        self.assertTrue(any("±3% 이상" in item for item in criteria_by_rule["externalEquityMove"]))
-        self.assertTrue(any("관계 규칙 강도" in item for item in criteria_by_rule["externalCryptoMove"]))
-        self.assertTrue(any("7일 -12.1%" in item for item in criteria_by_rule["externalCryptoMove"]))
-        self.assertTrue(any("±15bp 이상" in item for item in criteria_by_rule["externalMacroShift"]))
+        self.assertTrue(any("외부 데이터 API" in item for item in criteria_by_rule["externalDataConnection"]))
 
     def test_bitcoin_crypto_alert_uses_lower_bitcoin_thresholds(self):
         portfolio = portfolio_summary([])
@@ -5356,10 +5362,7 @@ class PythonServiceTests(unittest.TestCase):
 
         events = RealtimeMonitor().external_signal_events(snapshot, {})
 
-        crypto_events = [event for event in events if event.rule == "externalCryptoMove"]
-        self.assertEqual(["BTC"], [event.symbol for event in crypto_events])
-        self.assertIn("비트코인 변동", crypto_events[0].message())
-        self.assertTrue(any("비트코인 24h ±3% 또는 7d ±4% 이상" in item for item in crypto_events[0].criteria))
+        self.assertEqual([], [event.rule for event in events])
 
     def test_external_crypto_positive_weekly_move_with_minor_day_drop_is_watch(self):
         portfolio = portfolio_summary([])
@@ -5390,40 +5393,7 @@ class PythonServiceTests(unittest.TestCase):
 
         events = RealtimeMonitor().external_signal_events(snapshot, {})
 
-        self.assertEqual(1, len(events))
-        event = events[0]
-        self.assertEqual("externalCryptoMove", event.rule)
-        self.assertEqual("WATCH", event.severity)
-        self.assertTrue(any("관계 규칙 강도 70.8점" in item for item in event.criteria))
-        self.assertTrue(any("7일 +11.8%" in item for item in event.criteria))
-        model = event.metadata.get("cryptoMoveModel")
-        self.assertEqual("크립토 가격 급등", model.get("titleLabel"))
-        self.assertEqual("상승", model.get("directionLabel"))
-        self.assertEqual("7d", model.get("dominantPeriod"))
-        self.assertEqual(70.8, model.get("score"))
-        self.assertEqual("크립토 가격 급등", event.metadata.get("cryptoMoveTitle"))
-        self.assertEqual(70.8, event.metadata.get("cryptoMoveScore"))
-        self.assertEqual("external.crypto.market_move.v1", event.metadata.get("ontologyRelationContext", {}).get("activeRules", [{}])[0].get("ruleId"))
-        active_opinion = event.metadata.get("activeInvestmentOpinion")
-        self.assertEqual("HOLD", active_opinion.get("action"))
-        self.assertEqual("HOLD", active_opinion.get("executionPlan", {}).get("primaryAction"))
-        self.assertTrue(any("변동만 보고 주식 신규 매수·매도" in item for item in active_opinion.get("executionPlan", {}).get("blockedActions", [])))
-        self.assertEqual("HOLD", event.metadata.get("ontologyRelationContext", {}).get("activeInvestmentOpinion", {}).get("action"))
-        self.assertEqual("HOLD", event.metadata.get("ontologyRelationContext", {}).get("executionPlan", {}).get("primaryAction"))
-        self.assertEqual("cryptoMoveScoreFormula", event.metadata.get("legacyFormulaAudits")[0].get("key"))
-
-        db_path = test_store_seed(self.temp.name)
-        templates = TestNotificationTemplateStore(db_path)
-        message = templates.render(event.rule, alert_context(event))
-        self.assertIn("<b>[관찰] 🪙 이더리움: 크립토 가격 급등</b>", message)
-        self.assertNotIn("크립토 가격 급락", message)
-        self.assertIn("관계 규칙", message)
-        self.assertIn("크립토 급변", message)
-        self.assertIn("관계 판단", message)
-        self.assertIn("대표 변화", message)
-        self.assertIn("7일 +11.8%", message)
-        self.assertNotIn("AI 프롬프트", message)
-        self.assertNotIn("크립토 변동 공식(cryptoMoveScoreFormula)", message)
+        self.assertEqual([], events)
 
     def test_crypto_investment_insight_uses_active_opinion_beginner_summary(self):
         portfolio = portfolio_summary([])
@@ -5453,19 +5423,8 @@ class PythonServiceTests(unittest.TestCase):
         )
 
         events = RealtimeMonitor().events_for_snapshot(snapshot, {})
-        insight = self.insight_event(events, "ETH")
-        message = TestNotificationTemplateStore(test_store_seed(self.temp.name)).render(insight.rule, alert_context(insight))
-        active = insight.metadata.get("activeInvestmentOpinion", {})
-
-        self.assertEqual("HOLD", active.get("action"))
-        self.assertIn("보유 영향만 점검", active.get("executionPlan", {}).get("primaryActionLabel"))
-        self.assertIn("외부 신호: 보유 영향 점검", message)
-        self.assertIn("이유", message)
-        self.assertIn("보유 영향만 점검", message)
-        self.assertIn("피할 일", message)
-        self.assertIn("직접 민감 보유 종목이 없어 단독 매매 근거는 약함", message)
-        self.assertNotIn("실행보다 관찰 우선", message)
-        self.assertNotIn("크립토 변동가", message)
+        self.assertFalse(any(event.rule == "investmentInsight" for event in events))
+        self.assertFalse(any(event.rule == "externalCryptoMove" for event in events))
 
     def test_external_signal_provider_normalizes_api_responses_and_caches(self):
         calls = []
@@ -6038,25 +5997,9 @@ class PythonServiceTests(unittest.TestCase):
 
         events = RealtimeMonitor().events_for_snapshot(current_snapshot, previous_snapshot.to_monitor_state())
         decision_event = self.insight_event(events, "AAPL")
-        message = self.insight_source_message(decision_event, "monitorDecisionChange")
-
-        self.assertEqual("Apple", decision_event.message().splitlines()[0])
-        self.assertNotIn("메인 Apple", message)
-        self.assertEqual("investmentInsight", decision_event.rule)
-        self.assertIn("monitorDecisionChange", self.insight_source_rules(decision_event))
+        self.assertIn("holdingTiming", self.insight_source_rules(decision_event))
+        self.assertNotIn("monitorDecisionChange", self.insight_source_rules(decision_event))
         self.assertFalse(any(event.rule == "monitorDecisionChange" for event in events))
-        self.assertIn("보유 종목 판단 변화", message)
-        self.assertIn("권장 액션:", message)
-        self.assertIn("Codex 답변:", message)
-        self.assertIn("점수 해석:", message)
-        self.assertIn("대응 필요 강도", message)
-        self.assertIn("데이터 검증:", message)
-        self.assertIn("모델 보완:", message)
-        self.assertIn("손익률 급변", message)
-        self.assertRegex(message, r"이전 .+ \([0-9.]+점\)")
-        self.assertRegex(message, r"현재 .+ \([0-9.]+점\)")
-        self.assertTrue(any("(" in item and "점)" in item for item in message.splitlines()))
-        self.assertTrue(any("보유 종목" in item for item in message.splitlines()))
 
     def test_decision_change_event_enqueues_async_model_review(self):
         event = alerts_detected_event([
@@ -6155,8 +6098,7 @@ class PythonServiceTests(unittest.TestCase):
 
         events = RealtimeMonitor().events_for_snapshot(current_snapshot, previous_snapshot.to_monitor_state())
 
-        insight = self.insight_event(events, "AAPL")
-        self.assertIn("monitorPositionChange", self.insight_source_rules(insight))
+        self.assertFalse(any(event.rule == "investmentInsight" for event in events))
         self.assertFalse(any(event.rule == "monitorPositionChange" for event in events))
         self.assertFalse(any(event.rule == "monitorDecisionChange" for event in events))
 
@@ -6211,7 +6153,7 @@ class PythonServiceTests(unittest.TestCase):
 
         events = monitor.events_for_snapshot(scored_snapshot, previous)
 
-        insight = self.insight_event(events, "BTC")
+        insight = self.insight_event(events, "STRC")
         self.assertFalse(any(event.rule == "monitorDecisionChange" for event in events))
         self.assertNotIn("monitorDecisionChange", self.insight_source_rules(insight))
 
@@ -6451,7 +6393,7 @@ class PythonServiceTests(unittest.TestCase):
             "main",
             "메인",
             "WATCH",
-            "monitorTrendChange",
+            "investmentInsight",
             "main:trend:000660",
             "SK하이닉스",
             ["추세: 현재 2,360,000원, 20일선 2,490,000원(-5.4%)", "수급: 거래량 4,816,364(0.5x)"],
@@ -6926,6 +6868,13 @@ class PythonServiceTests(unittest.TestCase):
                 },
             },
         }
+        raw_relation_context = context["metadata"]["ontologyRelationContext"]
+        context["metadata"]["ontologyRelationContext"] = self.graph_relation_context(
+            "035420",
+            "리스크 관리",
+            80,
+            facts=raw_relation_context.get("facts", {}),
+        )
 
         opinion = build_notification_ai_opinion(context)
         text = "\n".join(opinion["lines"])
@@ -6999,6 +6948,19 @@ class PythonServiceTests(unittest.TestCase):
                 }
             },
         }
+        raw_relation_context = context["metadata"]["ontologyRelationContext"]
+        context["metadata"]["ontologyRelationContext"] = self.graph_relation_context(
+            "PLTR",
+            "관심종목 관계 신호",
+            72,
+            rule_id="graph.watchlist.pullback.entry.v1",
+            action_group="entryWait",
+            action_level="watch",
+            decision_stage="ENTRY_WATCH",
+            tone="hold",
+            facts=raw_relation_context.get("facts", {}),
+            execution_plan=raw_relation_context.get("executionPlan", {}),
+        )
 
         opinion = build_notification_ai_opinion(context)
         text = "\n".join(opinion["lines"])
@@ -7052,6 +7014,18 @@ class PythonServiceTests(unittest.TestCase):
                 }
             },
         }
+        raw_relation_context = context["metadata"]["ontologyRelationContext"]
+        context["metadata"]["ontologyRelationContext"] = self.graph_relation_context(
+            "PLTR",
+            "관심종목 관계 신호",
+            72,
+            rule_id="graph.watchlist.pullback.entry.v1",
+            action_group="entryWait",
+            action_level="watch",
+            decision_stage="ENTRY_WATCH",
+            tone="hold",
+            facts=raw_relation_context.get("facts", {}),
+        )
 
         text = "\n".join(build_notification_ai_opinion(context)["lines"])
 
@@ -7149,6 +7123,13 @@ class PythonServiceTests(unittest.TestCase):
                 }
             },
         }
+        raw_relation_context = context["metadata"]["ontologyRelationContext"]
+        context["metadata"]["ontologyRelationContext"] = self.graph_relation_context(
+            "005930",
+            "리스크 증가",
+            86,
+            facts=raw_relation_context.get("facts", {}),
+        )
 
         opinion = build_notification_ai_opinion(context)
         text = "\n".join(opinion["lines"])
@@ -7192,6 +7173,11 @@ class PythonServiceTests(unittest.TestCase):
                 }
             },
         }
+        context["metadata"]["ontologyRelationContext"] = self.graph_relation_context(
+            "035420",
+            "리스크 관리",
+            84,
+        )
 
         opinion = build_notification_ai_opinion(context)
         text = "\n".join(opinion["lines"])
@@ -8114,7 +8100,7 @@ class PythonServiceTests(unittest.TestCase):
             "main",
             "메인",
             "WATCH",
-            "monitorTrendChange",
+            "investmentInsight",
             "main:trend:000660",
             "SK하이닉스",
             ["추세: 현재 2,360,000원, 20일선 2,490,000원(-5.4%)", "수급: 거래량 4,816,364(0.5x)"],
@@ -8548,133 +8534,27 @@ class PythonServiceTests(unittest.TestCase):
         self.assertLess(jobs[1].context["honeyScore"], jobs[1].context["honeyThreshold"])
 
     def test_external_move_rules_suppress_repeated_market_noise(self):
-        db_path = test_store_seed(self.temp.name)
-        queue = TestNotificationJobStore(db_path)
-        rules = TestNotificationRuleStore(db_path)
-        rule = rules.get("externalEquityMove")
-        self.assertEqual(60, rule.threshold)
-        self.assertTrue(rule.similarity_bypass_conditions)
-        rule.market_hours_enabled = False
-        rules.upsert(rule)
-        first = AlertEvent(
-            "main",
-            "메인",
-            "WATCH",
-            "externalEquityMove",
-            "main:alpha:MSTR:1",
-            "MSTR",
-            ["미장 가격 변동 +7.9%", "가격 $100.77", "거래량 34,757,614", "출처 Alpha Vantage"],
-            "MSTR",
-        )
-        second = AlertEvent(
-            "main",
-            "메인",
-            "WATCH",
-            "externalEquityMove",
-            "main:alpha:MSTR:2",
-            "MSTR",
-            ["미장 가격 변동 +7.9%", "가격 $100.77", "거래량 34,757,614", "출처 Alpha Vantage"],
-            "MSTR",
-        )
-        first = self.mark_event_fresh(first, "Alpha Vantage")
-        second = self.mark_event_fresh(second, "Alpha Vantage")
+        payload = list_notification_rules_payload(include_internal=True)
+        internal_types = {item["messageType"] for item in payload["internalRules"]}
 
-        self.assertEqual(1, send_events([first], queue=queue).queued)
-        self.assertEqual(0, send_events([second], queue=queue).queued)
-
-        jobs = queue.jobs()
-        self.assertEqual(["pending", "suppressed"], [job.status for job in jobs])
-        self.assertEqual("cooldown", jobs[1].context["honeyStateDecision"])
-        self.assertTrue(jobs[1].context["honeyStateSuppressed"])
-        self.assertEqual(360, jobs[1].context["honeySimilarityWindowMinutes"])
-        self.assertIn("같은 임계값 상태 지속", jobs[1].last_error)
+        self.assertNotIn("externalEquityMove", internal_types)
+        self.assertNotIn("externalCryptoMove", internal_types)
+        self.assertNotIn("externalMacroShift", internal_types)
+        self.assertNotIn("externalDartDisclosure", internal_types)
 
     def test_external_move_similarity_bypass_sends_material_change(self):
-        db_path = test_store_seed(self.temp.name)
-        queue = TestNotificationJobStore(db_path)
-        rules = TestNotificationRuleStore(db_path)
-        rule = rules.get("externalEquityMove")
-        rule.market_hours_enabled = False
-        rules.upsert(rule)
-        first = AlertEvent(
-            "main",
-            "메인",
-            "ALERT",
-            "externalEquityMove",
-            "main:alpha:TSLA:1",
-            "TSLA",
-            ["미장 가격 변동 -7.5%", "가격 $393.45", "거래량 73,915,762", "출처 Alpha Vantage"],
-            "TSLA",
-            metadata={"market": "US", "changePercent": -7.5, "price": 393.45, "volume": 73915762},
-        )
-        second = AlertEvent(
-            "main",
-            "메인",
-            "ALERT",
-            "externalEquityMove",
-            "main:alpha:TSLA:2",
-            "TSLA",
-            ["미장 가격 변동 -10.2%", "가격 $382.10", "거래량 74,500,000", "출처 Alpha Vantage"],
-            "TSLA",
-            metadata={"market": "US", "changePercent": -10.2, "price": 382.10, "volume": 74500000},
-        )
-        first = self.mark_event_fresh(first, "Alpha Vantage")
-        second = self.mark_event_fresh(second, "Alpha Vantage")
+        rule = default_notification_rule("externalEquityMove")
 
-        self.assertEqual(1, send_events([first], queue=queue).queued)
-        self.assertEqual(1, send_events([second], queue=queue).queued)
-
-        jobs = queue.jobs()
-        self.assertEqual(["pending", "pending"], [job.status for job in jobs])
-        self.assertEqual(jobs[0].context["honeyFingerprint"], jobs[1].context["honeyFingerprint"])
-        self.assertEqual(1, jobs[1].context["honeySimilarityRecentCount"])
-        self.assertTrue(jobs[1].context["honeySimilarityBypassed"])
-        self.assertIn("변동률 추가 확대", jobs[1].context["honeySimilarityBypassReason"])
-        self.assertGreaterEqual(jobs[1].context["honeyScore"], jobs[1].context["honeyThreshold"])
+        self.assertEqual(45, rule.threshold)
+        self.assertFalse(rule.state_cooldown_enabled)
+        self.assertEqual([], rule.similarity_bypass_conditions)
 
     def test_crypto_state_cooldown_suppresses_same_threshold_state(self):
-        db_path = test_store_seed(self.temp.name)
-        queue = TestNotificationJobStore(db_path)
-        rules = TestNotificationRuleStore(db_path)
-        rule = rules.get("externalCryptoMove")
-        self.assertEqual(60, rule.threshold)
-        self.assertTrue(rule.state_cooldown_enabled)
-        self.assertEqual(360, rule.state_cooldown_minutes)
-        self.assertTrue(any(condition.condition_id == "change_7d_abs_delta" for condition in rule.similarity_bypass_conditions))
-        first = AlertEvent(
-            "main",
-            "메인",
-            "ALERT",
-            "externalCryptoMove",
-            "main:crypto:ETH:1",
-            "크립토 변동",
-            ["크립토 변동 24h -0.7% · 7d +13.4%", "크립토 가격 $1,780", "크립토 거래액 $9,941,259,360", "출처 CoinGecko"],
-            "ETH",
-            metadata={"market": "CRYPTO", "change24h": -0.7, "change7d": 13.4, "volume24h": 9941259360},
-        )
-        second = AlertEvent(
-            "main",
-            "메인",
-            "ALERT",
-            "externalCryptoMove",
-            "main:crypto:ETH:2",
-            "크립토 변동",
-            ["크립토 변동 24h -0.7% · 7d +13.4%", "크립토 가격 $1,780", "크립토 거래액 $9,941,259,360", "출처 CoinGecko"],
-            "ETH",
-            metadata={"market": "CRYPTO", "change24h": -0.7, "change7d": 13.4, "volume24h": 9941259360},
-        )
-        first = self.mark_event_fresh(first, "CoinGecko")
-        second = self.mark_event_fresh(second, "CoinGecko")
+        rule = default_notification_rule("externalCryptoMove")
 
-        self.assertEqual(1, send_events([first], queue=queue).queued)
-        self.assertEqual(0, send_events([second], queue=queue).queued)
-
-        jobs = queue.jobs()
-        self.assertEqual(["pending", "suppressed"], [job.status for job in jobs])
-        self.assertEqual("new_threshold", jobs[0].context["honeyStateDecision"])
-        self.assertEqual("cooldown", jobs[1].context["honeyStateDecision"])
-        self.assertTrue(jobs[1].context["honeyStateSuppressed"])
-        self.assertIn("같은 임계값 상태 지속", jobs[1].last_error)
+        self.assertEqual(45, rule.threshold)
+        self.assertFalse(rule.state_cooldown_enabled)
+        self.assertEqual([], rule.similarity_bypass_conditions)
 
     def test_holding_timing_state_cooldown_suppresses_same_status(self):
         db_path = test_store_seed(self.temp.name)
@@ -8763,120 +8643,36 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("손익률 추가 악화", jobs[1].context["honeyStateReason"])
 
     def test_crypto_state_cooldown_allows_material_7d_expansion(self):
-        db_path = test_store_seed(self.temp.name)
-        queue = TestNotificationJobStore(db_path)
-        first = AlertEvent(
-            "main",
-            "메인",
-            "ALERT",
-            "externalCryptoMove",
-            "main:crypto:ETH:1",
-            "크립토 변동",
-            ["크립토 변동 24h -0.7% · 7d +13.4%", "크립토 가격 $1,780", "크립토 거래액 $9,941,259,360", "출처 CoinGecko"],
-            "ETH",
-            metadata={"market": "CRYPTO", "change24h": -0.7, "change7d": 13.4, "volume24h": 9941259360},
-        )
-        expanded = AlertEvent(
-            "main",
-            "메인",
-            "ALERT",
-            "externalCryptoMove",
-            "main:crypto:ETH:3",
-            "크립토 변동",
-            ["크립토 변동 24h -0.8% · 7d +16.8%", "크립토 가격 $1,825", "크립토 거래액 $10,000,000,000", "출처 CoinGecko"],
-            "ETH",
-            metadata={"market": "CRYPTO", "change24h": -0.8, "change7d": 16.8, "volume24h": 10000000000},
-        )
-        first = self.mark_event_fresh(first, "CoinGecko")
-        expanded = self.mark_event_fresh(expanded, "CoinGecko")
+        payload = list_notification_rules_payload(include_internal=True)
+        internal_types = {item["messageType"] for item in payload["internalRules"]}
 
-        self.assertEqual(1, send_events([first], queue=queue).queued)
-        self.assertEqual(1, send_events([expanded], queue=queue).queued)
-
-        jobs = queue.jobs()
-        self.assertEqual(["pending", "pending"], [job.status for job in jobs])
-        self.assertEqual("material_change", jobs[1].context["honeyStateDecision"])
-        self.assertTrue(jobs[1].context["honeySimilarityBypassed"])
-        self.assertIn("7일 변동 확대", jobs[1].context["honeyStateReason"])
+        self.assertNotIn("externalCryptoMove", internal_types)
 
     def test_crypto_state_cooldown_allows_sustained_summary_after_cooldown(self):
-        db_path = test_store_seed(self.temp.name)
-        queue = TestNotificationJobStore(db_path)
-        rules = TestNotificationRuleStore(db_path)
-        rule = rules.get("externalCryptoMove")
-        rule.state_cooldown_minutes = 10
-        rules.upsert(rule)
-        old_job = NotificationJob.create(
-            "크립토 변동 ETH",
-            account_id="main",
-            account_label="메인",
-            message_type="externalCryptoMove",
-            context={
-                "messageType": "externalCryptoMove",
-                "accountId": "main",
-                "accountLabel": "메인",
-                "severity": "ALERT",
-                "title": "크립토 변동",
-                "symbol": "ETH",
-                "body": "크립토 변동 24h -0.7% · 7d +13.4%",
-                "change24h": -0.7,
-                "change7d": 13.4,
-                "volume24h": 9941259360,
-                "dataFreshness": self.fresh_data_freshness("CoinGecko"),
-            },
-        )
-        old_job.created_at = (datetime.now(timezone.utc) - timedelta(minutes=15)).isoformat().replace("+00:00", "Z")
-        new_job = NotificationJob.create(
-            "크립토 변동 ETH",
-            account_id="main",
-            account_label="메인",
-            message_type="externalCryptoMove",
-            context={
-                "messageType": "externalCryptoMove",
-                "accountId": "main",
-                "accountLabel": "메인",
-                "severity": "ALERT",
-                "title": "크립토 변동",
-                "symbol": "ETH",
-                "body": "크립토 변동 24h -0.7% · 7d +13.4%",
-                "change24h": -0.7,
-                "change7d": 13.4,
-                "volume24h": 9941259360,
-                "dataFreshness": self.fresh_data_freshness("CoinGecko"),
-            },
-        )
+        payload = list_notification_rules_payload(include_internal=True)
+        internal_types = {item["messageType"] for item in payload["internalRules"]}
 
-        self.assertTrue(queue.enqueue(old_job))
-        old_saved = queue.jobs()[0]
-        old_saved.status = "done"
-        old_saved.created_at = old_job.created_at
-        queue.update(old_saved)
-        self.assertTrue(queue.enqueue(new_job))
-
-        jobs = queue.jobs()
-        self.assertEqual(["done", "pending"], [job.status for job in jobs])
-        self.assertEqual("sustained_summary", jobs[1].context["honeyStateDecision"])
-        self.assertIn("지속 상태 요약", jobs[1].context["honeyStateReason"])
+        self.assertNotIn("externalCryptoMove", internal_types)
 
     def test_notification_rule_payload_saves_similarity_bypass_conditions(self):
         payload = list_notification_rules_payload(include_internal=True)
-        equity_rule = next(item for item in payload["internalRules"] if item["messageType"] == "externalEquityMove")
-        self.assertTrue(equity_rule["similarityBypassConditions"])
-        self.assertTrue(equity_rule["stateCooldownEnabled"])
-        change_condition = next(item for item in equity_rule["similarityBypassConditions"] if item["id"] == "change_abs_delta")
-        change_condition["value"] = 3.5
+        holding_rule = next(item for item in payload["internalRules"] if item["messageType"] == "holdingTiming")
+        self.assertTrue(holding_rule["similarityBypassConditions"])
+        self.assertTrue(holding_rule["stateCooldownEnabled"])
+        change_condition = next(item for item in holding_rule["similarityBypassConditions"] if item["id"] == "holding_score_delta")
+        change_condition["value"] = 9.5
         change_condition["enabled"] = False
-        equity_rule["stateCooldownMinutes"] = 720
+        holding_rule["stateCooldownMinutes"] = 720
 
-        saved = save_notification_rule_payload({"rule": equity_rule})["rule"]
+        saved = save_notification_rule_payload({"rule": holding_rule})["rule"]
 
-        saved_condition = next(item for item in saved["similarityBypassConditions"] if item["id"] == "change_abs_delta")
-        self.assertEqual("3.5", str(saved_condition["value"]))
+        saved_condition = next(item for item in saved["similarityBypassConditions"] if item["id"] == "holding_score_delta")
+        self.assertEqual("9.5", str(saved_condition["value"]))
         self.assertFalse(saved_condition["enabled"])
         self.assertEqual(720, saved["stateCooldownMinutes"])
-        reloaded = next(item for item in list_notification_rules_payload(include_internal=True)["internalRules"] if item["messageType"] == "externalEquityMove")
-        reloaded_condition = next(item for item in reloaded["similarityBypassConditions"] if item["id"] == "change_abs_delta")
-        self.assertEqual("3.5", str(reloaded_condition["value"]))
+        reloaded = next(item for item in list_notification_rules_payload(include_internal=True)["internalRules"] if item["messageType"] == "holdingTiming")
+        reloaded_condition = next(item for item in reloaded["similarityBypassConditions"] if item["id"] == "holding_score_delta")
+        self.assertEqual("9.5", str(reloaded_condition["value"]))
         self.assertFalse(reloaded_condition["enabled"])
         self.assertEqual(720, reloaded["stateCooldownMinutes"])
 
@@ -8898,8 +8694,10 @@ class PythonServiceTests(unittest.TestCase):
 
         internal_payload = list_notification_rules_payload(include_internal=True)
         internal_types = [item["messageType"] for item in internal_payload["internalRules"]]
-        self.assertIn("modelBuy", internal_types)
-        self.assertIn("externalCryptoMove", internal_types)
+        self.assertIn("holdingTiming", internal_types)
+        self.assertIn("watchlistOntologySignal", internal_types)
+        self.assertNotIn("modelBuy", internal_types)
+        self.assertNotIn("externalCryptoMove", internal_types)
 
     def test_notification_template_payload_hides_internal_templates(self):
         payload = list_templates_payload()
@@ -9718,8 +9516,6 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("관계 규칙", message)
 
     def test_model_score_event_renders_relation_rule_details(self):
-        db_path = test_store_seed(self.temp.name)
-        templates = TestNotificationTemplateStore(db_path)
         position = normalize_position({
             "symbol": "005930",
             "name": "삼성전자",
@@ -9789,23 +9585,10 @@ class PythonServiceTests(unittest.TestCase):
             },
         )
         monitor = RealtimeMonitor({"alertThresholds": "modelBuyScore=99\nmodelSellScore=1\nwatchlistBuyScore=99"})
-        event = next(item for item in monitor.model_score_events(snapshot) if item.rule == "modelSell")
+        events = monitor.model_score_events(snapshot)
 
-        message = templates.render(event.rule, alert_context(event))
-
-        self.assertFalse(event.metadata.get("formulaAudits"))
-        self.assertEqual("neo4j-inferencebox-relation-context-v1", event.metadata["ontologyRelationContext"]["engineVersion"])
-        self.assertEqual(100.0, event.metadata["relationRuleScore"])
-        self.assertIn("• <b>현재가</b>: <code>71,000원</code>", message)
-        self.assertIn("• <b>평균매입가</b>: <code>74,000원</code>", message)
-        self.assertIn("• <b>수익률</b>: <code>-4.1%</code>", message)
-        self.assertIn("관계 규칙 모델", message)
-        self.assertIn("선택 규칙 graph.loss_guard.breakdown.v1", message)
-        self.assertIn("성립 규칙", message)
-        self.assertIn("부족 데이터", message)
-        self.assertNotIn("매수 공식(buyScoreFormula)", message)
-        self.assertNotIn("매도 공식(sellScoreFormula)", message)
-        self.assertNotIn("모델 대입값", message)
+        self.assertFalse(any(item.rule == "modelSell" for item in events))
+        self.assertFalse(any(item.rule == "modelBuy" for item in events))
 
     def test_model_sell_alert_explains_sell_score_inputs(self):
         db_path = test_store_seed(self.temp.name)

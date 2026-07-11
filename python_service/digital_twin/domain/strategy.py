@@ -6,7 +6,7 @@ from .market_data import clamp, number
 from .investment_research import build_active_investment_opinion
 from .ontology_prompting import ONTOLOGY_PROMPT_VERSION
 from .portfolio_ontology_builder import build_portfolio_ontology, build_position_opinion
-from .ontology_relation_reasoning import DEFAULT_RELATION_THRESHOLDS, evaluate_position_relation_rules, relation_thresholds_from_settings
+from .ontology_relation_reasoning import DEFAULT_RELATION_THRESHOLDS, relation_thresholds_from_settings
 from .parsing import parse_assignments
 from .portfolio import DecisionItem, PortfolioSummary, Position, expects_kr_microstructure_signals
 
@@ -604,25 +604,15 @@ def decision_for_position(
     ontology_prompt: str = "",
     relation_context: Dict[str, object] = None,
     external_signals: Dict[str, object] = None,
-    require_inference_context: bool = False,
+    require_inference_context: bool = True,
 ) -> DecisionItem:
-    payload = legacy_payload if legacy_payload is not None else (
-        baseline_position_payload(position) if require_inference_context else legacy_decision_payload(position, portfolio, strategy_model)
-    )
-    if require_inference_context and not is_graph_inference_context(relation_context):
+    payload = baseline_position_payload(position)
+    if not is_graph_inference_context(relation_context):
         return inference_required_decision_for_position(
             position,
             ontology_opinion=ontology_opinion,
             ontology_worldview=ontology_worldview,
             reason="Neo4j InferenceBox 결과가 없어 Python 관계 규칙 fallback을 차단했습니다.",
-        )
-    if not relation_context:
-        relation_context = evaluate_position_relation_rules(
-            position,
-            portfolio,
-            external_signals=external_signals or {},
-            settings=getattr(strategy_model, "settings", {}) if strategy_model else {},
-            legacy_model=payload,
         )
     relation_decision = relation_context.get("decision") if isinstance(relation_context, dict) else {}
     if not isinstance(relation_decision, dict):
@@ -633,7 +623,7 @@ def decision_for_position(
     exit_pressure = float(relation_decision.get("score") or relation_context.get("signalStrength") or payload.get("exitPressure") or 0)
     decision_label = str(relation_decision.get("label") or payload.get("decision") or "")
     decision_tone = str(relation_decision.get("tone") or payload.get("tone") or "")
-    decision_basis = str(relation_decision.get("basis") or "ontologyRelationRules")
+    decision_basis = str(relation_decision.get("basis") or NEO4J_INFERENCE_BASIS)
     action_group = str(relation_decision.get("actionGroup") or "")
     relation_profit_take_pressure = exit_pressure if action_group == "profitTake" else 0.0
     relation_loss_cut_pressure = exit_pressure if action_group in {
@@ -870,14 +860,11 @@ def decisions_for_positions(
     strategy_model: StrategyModel = None,
     external_signals: Dict[str, object] = None,
     relation_contexts_by_symbol: Dict[str, Dict[str, object]] = None,
-    require_inference_context: bool = False,
+    require_inference_context: bool = True,
 ) -> List[DecisionItem]:
     active_positions = [item for item in positions if not item.is_cash() and item.market_value > 0]
     relation_contexts_by_symbol = relation_contexts_by_symbol or {}
-    legacy_by_symbol = {} if require_inference_context else {
-        item.symbol.upper(): legacy_decision_payload(item, portfolio, strategy_model)
-        for item in active_positions
-    }
+    legacy_by_symbol = {}
     ontology = build_portfolio_ontology(
         active_positions,
         portfolio,
@@ -890,20 +877,12 @@ def decisions_for_positions(
                 for symbol, payload in legacy_by_symbol.items()
             ],
         },
-        include_reasoning_outputs=not require_inference_context,
+        include_reasoning_outputs=False,
     )
     decisions = []
     for item in active_positions:
         legacy_payload = legacy_by_symbol.get(item.symbol.upper())
         relation_context = relation_contexts_by_symbol.get(item.symbol.upper())
-        if not require_inference_context and not relation_context:
-            relation_context = evaluate_position_relation_rules(
-                item,
-                portfolio,
-                external_signals=external_signals or {},
-                settings=getattr(strategy_model, "settings", {}) if strategy_model else {},
-                legacy_model=legacy_payload,
-            )
         decisions.append(decision_for_position(
             item,
             portfolio,

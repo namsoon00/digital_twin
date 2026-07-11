@@ -14,6 +14,7 @@ from .notification_ai_context import (
     disclosure_context,
     execution_plan_value,
     first_line_with,
+    has_graph_backed_relation_context,
     line_value,
     missing_data_labels,
     normalized_text,
@@ -484,6 +485,8 @@ def opinion_lines_for_type(message_type: str, context: Dict[str, object]) -> Lis
     plan_counter = execution_plan_text(execution_plan, "counterSignals", 2)
 
     if message_type == "investmentInsight":
+        if not has_graph_backed_relation_context(context or {}):
+            return []
         insight = context.get("ontologyInsight") if isinstance(context, dict) else {}
         if not isinstance(insight, dict):
             insight = {}

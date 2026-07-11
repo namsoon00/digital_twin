@@ -7,6 +7,7 @@ from .notification_ai import (
     active_investment_opinion_value,
     build_notification_ai_opinion,
     criterion_lines,
+    has_graph_backed_relation_context,
     missing_data_labels,
     notification_ai_prompt_context,
     relation_context_value,
@@ -219,6 +220,25 @@ def disagreement_reason_text(precomputed_action: str, action: str, payload: Dict
 
 def local_validated_ai_response(context: Dict[str, object], source: str = "local") -> NotificationAIValidatedResponse:
     context = dict(context or {})
+    message_type = str(context.get("messageType") or context.get("rule") or "").strip()
+    if message_type == "investmentInsight" and not has_graph_backed_relation_context(context):
+        return NotificationAIValidatedResponse(
+            action="HOLD",
+            action_label=ACTION_LABELS["HOLD"],
+            confidence=0.0,
+            original_confidence=0.0,
+            summary="Neo4j InferenceBox 관계가 없어 투자 판단을 만들지 않았습니다.",
+            opinion="그래프 저장소의 온톨로지 추론 결과가 생성될 때까지 투자 의견을 보류합니다.",
+            evidence=[],
+            counter_evidence=[],
+            invalidation_condition="Neo4j InferenceBox 관계와 실행 계획이 생성되면 다시 판단합니다.",
+            next_checks=["Neo4j InferenceBox 생성 여부", "RuleBox 실행 상태", "투자 대상과 연결된 그래프 관계"],
+            missing_data_impact=["그래프 기반 온톨로지 관계가 없어 로컬 임계값만으로는 투자 판단하지 않습니다."],
+            source_urls=source_urls_from_context(context),
+            reference_date=reference_date(context),
+            validation_warnings=["graph-backed ontology context missing"],
+            source=source,
+        )
     relation_context = relation_context_value(context)
     execution_plan = _execution_plan_from_context(context)
     opinion = active_investment_opinion_value(context)

@@ -111,6 +111,22 @@ def relation_context_value(context: Dict[str, object]) -> Dict[str, object]:
     return relation_context if isinstance(relation_context, dict) else {}
 
 
+def is_graph_backed_relation_context(relation_context: Dict[str, object]) -> bool:
+    if not isinstance(relation_context, dict) or not relation_context:
+        return False
+    decision = relation_context.get("decision") if isinstance(relation_context.get("decision"), dict) else {}
+    return (
+        bool(relation_context.get("graphStoreUsed"))
+        and not bool(relation_context.get("fallbackUsed"))
+        and str(relation_context.get("source") or "") == "neo4jInferenceBox"
+        and str(decision.get("basis") or "") == "neo4jInferenceBox"
+    )
+
+
+def has_graph_backed_relation_context(context: Dict[str, object]) -> bool:
+    return is_graph_backed_relation_context(relation_context_value(context or {}))
+
+
 def source_alert_event_items(context: Dict[str, object]) -> List[Dict[str, object]]:
     metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
     raw_items = metadata.get("sourceAlertEvents") or context.get("sourceAlertEvents") or []

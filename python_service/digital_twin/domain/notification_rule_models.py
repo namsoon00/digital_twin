@@ -17,7 +17,7 @@ from .notification_templates import DEFAULT_NOTIFICATION_TEMPLATES
 DEFAULT_HONEY_THRESHOLD = 45
 DEFAULT_LOW_SCORE_ACTION = "suppress"
 DEFAULT_SIMILARITY_FIELDS = ["messageType", "accountId", "symbol", "severity", "title"]
-STATE_COOLDOWN_MESSAGE_TYPES = {INVESTMENT_INSIGHT, "holdingTiming", "externalEquityMove", "externalCryptoMove"}
+STATE_COOLDOWN_MESSAGE_TYPES = {INVESTMENT_INSIGHT, "holdingTiming", "watchlistOntologySignal"}
 DEFAULT_NOTIFICATION_SCORE_FORMULA = "rawScore"
 VOLATILE_SCORE_SUFFIX = re.compile(r":[+-]?\d+(?:\.\d+)?%?$")
 FORMULA_VARIABLE_BY_CONDITION_ID = {
@@ -45,23 +45,10 @@ CONDITION_TYPE_LABELS = [
 HIGH_SIGNAL_MESSAGE_TYPES = {
     INVESTMENT_INSIGHT,
     NEWS_DIGEST,
-    "modelBuy",
-    "modelSell",
-    "watchlistBuyCandidate",
     "watchlistOntologySignal",
     "holdingTiming",
-    "monitorPositionChange",
-    "monitorPnlChange",
-    "monitorValueChange",
-    "monitorTrendChange",
-    "monitorCashChange",
-    "monitorDecisionChange",
-    "externalEquityMove",
-    "externalCryptoMove",
-    "externalMacroShift",
-    "externalDartDisclosure",
 }
-LOW_SIGNAL_MESSAGE_TYPES = {"monitorHeartbeat", "watchlistQuotePending", "externalDataConnection"}
+LOW_SIGNAL_MESSAGE_TYPES = {"monitorHeartbeat", "externalDataConnection"}
 
 
 def clamp_int(value, minimum: int, maximum: int, fallback: int) -> int:
@@ -110,8 +97,6 @@ def default_threshold(message_type: str) -> int:
         return 50
     if key == NEWS_DIGEST:
         return 45
-    if key in {"externalEquityMove", "externalCryptoMove"}:
-        return 60
     return DEFAULT_HONEY_THRESHOLD
 
 
@@ -125,12 +110,10 @@ def default_similarity_window_minutes(message_type: str) -> int:
         return 1440
     if key == INVESTMENT_INSIGHT:
         return 180
-    if key in {"holdingTiming", "monitorHeartbeat", "externalEquityMove", "externalCryptoMove"}:
+    if key in {"holdingTiming", "watchlistOntologySignal", "monitorHeartbeat"}:
         return 360
     if key in LOW_SIGNAL_MESSAGE_TYPES:
         return 180
-    if key in {"monitorPnlChange", "monitorValueChange", "monitorTrendChange", "monitorCashChange"}:
-        return 60
     return 120
 
 
@@ -140,9 +123,7 @@ def default_similarity_penalty(message_type: str) -> int:
         return -60
     if key == INVESTMENT_INSIGHT:
         return -35
-    if key in {"externalEquityMove", "externalCryptoMove"}:
-        return -55
-    if key in {"holdingTiming", "monitorHeartbeat"}:
+    if key in {"holdingTiming", "watchlistOntologySignal", "monitorHeartbeat"}:
         return -40
     if key in LOW_SIGNAL_MESSAGE_TYPES:
         return -30
@@ -152,7 +133,7 @@ def default_similarity_penalty(message_type: str) -> int:
 def default_similarity_bypass_score_delta(message_type: str) -> int:
     if str(message_type or "") == NEWS_DIGEST:
         return 30
-    return 15 if str(message_type or "") in {INVESTMENT_INSIGHT, "modelBuy", "modelSell", "watchlistBuyCandidate", "monitorDecisionChange"} else 20
+    return 15 if str(message_type or "") in {INVESTMENT_INSIGHT, "holdingTiming", "watchlistOntologySignal"} else 20
 
 
 def default_state_cooldown_enabled(message_type: str) -> bool:
@@ -211,64 +192,6 @@ def default_similarity_bypass_conditions(message_type: str) -> List["SimilarityB
                 field="ontologyInsight.sourceEventKeys",
                 value=1,
                 description="같은 신호 타입이어도 활성 관계 규칙 조합이 달라지면 보냅니다.",
-            ),
-        ]
-    if key == "externalEquityMove":
-        return [
-            SimilarityBypassCondition(
-                "severity_upgrade",
-                "등급 상승",
-                "severity_upgrade",
-                description="관찰에서 주의처럼 중요도가 올라가면 반복이어도 보냅니다.",
-            ),
-            SimilarityBypassCondition(
-                "change_abs_delta",
-                "변동률 추가 확대",
-                "abs_number_delta_gte",
-                field="changePercent",
-                value=2,
-                description="이전 유사 알림보다 변동률 절대값이 기준 %p 이상 커지면 보냅니다.",
-            ),
-            SimilarityBypassCondition(
-                "volume_multiplier",
-                "거래량 급증",
-                "number_multiplier_gte",
-                field="volume",
-                value=1.5,
-                description="이전 유사 알림보다 거래량이 기준 배수 이상 커지면 보냅니다.",
-            ),
-        ]
-    if key == "externalCryptoMove":
-        return [
-            SimilarityBypassCondition(
-                "severity_upgrade",
-                "등급 상승",
-                "severity_upgrade",
-                description="관찰에서 주의처럼 중요도가 올라가면 반복이어도 보냅니다.",
-            ),
-            SimilarityBypassCondition(
-                "change_24h_abs_delta",
-                "24시간 변동 확대",
-                "abs_number_delta_gte",
-                field="change24h",
-                value=2,
-                description="이전 유사 알림보다 24시간 변동률 절대값이 기준 %p 이상 커지면 보냅니다.",
-            ),
-            SimilarityBypassCondition(
-                "change_7d_abs_delta",
-                "7일 변동 확대",
-                "abs_number_delta_gte",
-                field="change7d",
-                value=3,
-                description="이전 유사 알림보다 7일 변동률 절대값이 기준 %p 이상 커지면 보냅니다.",
-            ),
-            SimilarityBypassCondition(
-                "volume_multiplier",
-                "거래액 급증",
-                "number_multiplier_gte",
-                field="volume24h",
-                value=1.5,
-                description="이전 유사 알림보다 거래액이 기준 배수 이상 커지면 보냅니다.",
             ),
         ]
     if key == "holdingTiming":

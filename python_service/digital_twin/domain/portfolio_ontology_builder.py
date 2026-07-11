@@ -41,7 +41,6 @@ from .ontology_external_abox import (
     add_symbol_external_signal_concepts,
 )
 from .ontology_reasoning import apply_graph_reasoning
-from .ontology_relation_reasoning import evaluate_position_relation_rules
 from .portfolio_ontology_runtime_concepts import (
     add_account_delivery_profile_concepts,
     add_decision_item_concepts,
@@ -99,8 +98,6 @@ from .portfolio_ontology_state import (
     add_fact_change_concepts,
     add_relation_state_concepts,
     add_trend_transition_concepts,
-    previous_decision_state,
-    previous_position_state,
 )
 from .portfolio_ontology_structure import (
     add_execution_plan_concepts,
@@ -312,15 +309,7 @@ def build_portfolio_ontology(
             "confidence": number(opinion.conviction),
             "ontologyPressure": number(opinion.ontology_pressure),
         })
-        active_relation_context = evaluate_position_relation_rules(
-            position,
-            portfolio,
-            external_signals=external_signals,
-            settings=runtime_context.get("settings") if isinstance(runtime_context.get("settings"), dict) else {},
-            legacy_model=legacy,
-            previous_state=previous_position_state(runtime_context, symbol, source),
-            previous_decision=previous_decision_state(runtime_context, symbol),
-        )
+        active_relation_context = {}
         active_opinion_payload = build_active_investment_opinion(
             position,
             relation_context=active_relation_context,
@@ -474,11 +463,14 @@ def build_portfolio_ontology(
                 "aiInfluenceLabel": opinion.contradictions[0],
             })))
     add_decision_item_concepts(graph, runtime_context)
+    apply_graph_reasoning(graph)
     if not include_reasoning_outputs:
         graph.entities = dedupe_entities(graph.entities)
         graph.relations = dedupe_relations(graph.relations)
         graph.evidence = dedupe_evidence(graph.evidence)
         apply_abox_lifecycle(graph, lifecycle_metadata)
+        graph.reasoning_cards = build_reasoning_cards(graph)
+        graph.prompt = build_investment_opinion_prompt(graph)
         graph.worldview = {
             "model": "ontology-abox-facts",
             "runtimeProjectionMode": "abox-facts-only-neo4j-rulebox",
@@ -489,7 +481,6 @@ def build_portfolio_ontology(
             "activeTBox": dict(runtime_context.get("activeTBox") or {}),
         }
         return graph
-    apply_graph_reasoning(graph)
     graph.entities = dedupe_entities(graph.entities)
     graph.relations = dedupe_relations(graph.relations)
     graph.evidence = dedupe_evidence(graph.evidence)

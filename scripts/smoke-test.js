@@ -1226,7 +1226,7 @@ function checkFrontendAdminRender() {
     assertOk(code.indexOf("data-notification-rule-market-hours-market") >= 0, "장 시간 시장 선택 체크박스 경로가 없습니다.");
     assertOk(code.indexOf("data-notification-rule-condition-value") >= 0, "발송 우선도 조건 값 편집 입력 경로가 없습니다.");
     assertOk(code.indexOf("data-rule-save") >= 0 && code.indexOf("investmentInsight") >= 0, "알림 타입별 룰 저장 경로가 없습니다.");
-    assertOk(code.indexOf("externalEquityMove") >= 0 && code.indexOf("externalEquityMove=60") >= 0, "미장 가격/거래량 기본 발송 기준 60점 계약이 없습니다.");
+    assertOk(code.indexOf("investmentInsight") >= 0 && code.indexOf("watchlistOntologySignal") >= 0, "온톨로지 투자 알림 룰 저장 경로가 없습니다.");
     assertOk(notificationHtml.indexOf("최근 알림 판단") >= 0, "최근 알림 판단 제목이 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("발송 우선도 30/45") >= 0, "최근 알림 판단의 발송 우선도가 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("360분 내 7회 · 우선도 -55") >= 0, "최근 알림 판단의 유사 메시지 감점이 렌더링되지 않았습니다.");
@@ -1585,9 +1585,9 @@ async function checkNormalMode(port, context) {
   assertOk(Object.prototype.hasOwnProperty.call(settingsPayload.settings, "aiPromptTemplates"), "설정 API에 AI 프롬프트 템플릿 필드가 없습니다.");
   assertOk(Object.prototype.hasOwnProperty.call(settingsPayload.settings, "aiPromptPolicy"), "설정 API에 AI 프롬프트 정책 필드가 없습니다.");
   assertOk(settingsPayload.settings.ontologyRelationRules.indexOf("holding.loss_guard.breakdown.v1") >= 0, "설정 API의 기본 관계 규칙이 비어 있습니다.");
-  assertOk(settingsPayload.settings.modelDecisionThresholds.indexOf("modelBuy=74") >= 0, "설정 API의 모델 기본 판단 기준이 비어 있습니다.");
-  assertOk(settingsPayload.settings.alertThresholds.indexOf("modelBuyScore=74") >= 0, "설정 API의 모델 알림 기준이 비어 있습니다.");
-  assertOk(settingsPayload.settings.alertThresholds.indexOf("watchlistBuyScore=74") >= 0, "설정 API의 관심종목 매수 기준이 비어 있습니다.");
+  assertOk(settingsPayload.settings.modelDecisionThresholds.indexOf("graphSignalAlertScore=78") >= 0, "설정 API의 그래프 신호 기본 판단 기준이 비어 있습니다.");
+  assertOk(settingsPayload.settings.alertThresholds.indexOf("graphSignalMinScore=55") >= 0, "설정 API의 그래프 신호 최소 기준이 비어 있습니다.");
+  assertOk(settingsPayload.settings.alertThresholds.indexOf("graphSignalConfidenceMin=50") >= 0, "설정 API의 그래프 신호 신뢰도 기준이 비어 있습니다.");
   assertOk(Object.prototype.hasOwnProperty.call(settingsPayload.settings, "appTheme"), "설정 API에 화면 테마 필드가 없습니다.");
   assertOk(settingsPayload.settings.dartDisclosureAiAnalysisEnabled === "1", "설정 API의 공시 AI 해석 기본값이 없습니다.");
   assertOk(Object.prototype.hasOwnProperty.call(settingsPayload.settings, "externalAlphaEnabled"), "설정 API에 Alpha Vantage 사용 옵션이 없습니다.");
@@ -1652,8 +1652,8 @@ async function checkNormalMode(port, context) {
         dataFreshnessQuoteMaxAgeMinutes: "12",
         externalSignalCacheMaxAgeMinutes: "9",
         marketDataMaxAgeMinutes: "180",
-        alertRules: "priceStop=1\nmodelSell=1",
-        modelDecisionThresholds: "modelBuy=75\nmodelSell=70"
+        alertRules: "investmentInsight=1\nwatchlistOntologySignal=1",
+        modelDecisionThresholds: "graphSignalMinScore=60\ngraphSignalAlertScore=82\ngraphSignalConfidenceMin=55"
       }
     })
   });
@@ -1662,11 +1662,11 @@ async function checkNormalMode(port, context) {
   assertOk(savedSettingsPayload.configured.tossClientSecret === true, "저장된 토스 secret 설정 상태가 true가 아닙니다.");
   assertOk(savedSettingsPayload.settings.tossClientSecret === "", "저장 응답이 토스 secret을 내려주고 있습니다.");
   assertOk(savedSettingsPayload.settings.watchlistSymbols === "TSLA,AAPL,NVDA", "저장된 관심 종목 값이 응답에 없습니다.");
-  assertOk(savedSettingsPayload.settings.alertRules.indexOf("priceStop=1") >= 0, "저장된 알림 규칙이 응답에 없습니다.");
-  assertOk(savedSettingsPayload.settings.modelDecisionThresholds.indexOf("modelBuy=75") >= 0, "저장된 모델 기준값이 응답에 없습니다.");
-  assertOk(savedSettingsPayload.settings.alertThresholds.indexOf("modelBuyScore=75") >= 0, "모델 매수 기준이 알림 기준으로 동기화되지 않았습니다.");
-  assertOk(savedSettingsPayload.settings.alertThresholds.indexOf("watchlistBuyScore=75") >= 0, "관심종목 매수 기준이 모델 매수 기준과 동기화되지 않았습니다.");
-  assertOk(savedSettingsPayload.settings.alertThresholds.indexOf("modelSellScore=70") >= 0, "모델 매도 기준이 알림 기준으로 동기화되지 않았습니다.");
+  assertOk(savedSettingsPayload.settings.alertRules.indexOf("investmentInsight=1") >= 0, "저장된 알림 규칙이 응답에 없습니다.");
+  assertOk(savedSettingsPayload.settings.modelDecisionThresholds.indexOf("graphSignalAlertScore=82") >= 0, "저장된 그래프 신호 기준값이 응답에 없습니다.");
+  assertOk(savedSettingsPayload.settings.alertThresholds.indexOf("graphSignalMinScore=60") >= 0, "그래프 신호 최소 기준이 알림 기준으로 동기화되지 않았습니다.");
+  assertOk(savedSettingsPayload.settings.alertThresholds.indexOf("graphSignalAlertScore=82") >= 0, "그래프 신호 알림 기준이 알림 기준으로 동기화되지 않았습니다.");
+  assertOk(savedSettingsPayload.settings.alertThresholds.indexOf("graphSignalConfidenceMin=55") >= 0, "그래프 신호 신뢰도 기준이 알림 기준으로 동기화되지 않았습니다.");
   assertOk(savedSettingsPayload.settings.appTheme === "dark", "저장된 화면 테마 값이 응답에 없습니다.");
   assertOk(savedSettingsPayload.settings.dartDisclosureAiUseCodex === "0", "저장된 공시 AI 엔진 설정이 응답에 없습니다.");
   assertOk(savedSettingsPayload.settings.dartDisclosureAiTimeoutSeconds === "45", "저장된 공시 AI 타임아웃 설정이 응답에 없습니다.");

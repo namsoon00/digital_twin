@@ -127,48 +127,15 @@ class StrategyAlertMixin:
         decision = self.relation_decision(relation_context)
         return float(decision.get("score") or relation_context.get("signalStrength") or 0)
 
-    def relation_score_phrase(self, relation_context: Dict[str, object], fallback: str = "관계 규칙 신호") -> str:
-        decision = self.relation_decision(relation_context)
-        label = str(decision.get("label") or fallback).strip()
-        return label + " (" + ("%.1f" % self.relation_score(relation_context)) + "점)"
-
-    def relation_metadata(self, relation_context: Dict[str, object], score_key: str = "") -> Dict[str, object]:
-        score = round(self.relation_score(relation_context), 1)
-        metadata = {
-            "relationRuleScore": score,
-            "ontologyRelationContext": relation_context,
-            "ontologyPromptContext": relation_context.get("promptContext") if isinstance(relation_context, dict) else {},
-        }
-        if score_key:
-            metadata[score_key] = score
-        return metadata
-
-    def relation_sell_action_group(self, action_group: str) -> bool:
-        return action_group in {
-            "profitTake",
-            "lossControl",
-            "rebalance",
-            "distributionRisk",
-            "executionRisk",
-            "eventRisk",
-            "cryptoSensitivity",
-            "factorRisk",
-            "entryRisk",
-        }
-
-    def model_score_events(self, snapshot: AccountSnapshot) -> List[AlertEvent]:
+    def ontology_signal_events(self, snapshot: AccountSnapshot) -> List[AlertEvent]:
         events: List[AlertEvent] = []
-        buy_threshold = float(self.thresholds.get("modelBuyScore", 0))
-        watchlist_buy_threshold = float(self.thresholds.get("watchlistBuyScore", buy_threshold) or buy_threshold)
-        sell_threshold = float(self.thresholds.get("modelSellScore", 0))
         holding_symbols = {item.symbol.upper() for item in snapshot.positions if item.symbol and not item.is_cash()}
         watchlist_items = [item for item in snapshot.watchlist if item.symbol and item.symbol.upper() not in holding_symbols]
-        items = [(item, "보유") for item in snapshot.positions if item.symbol and not item.is_cash()] + [(item, "관심") for item in watchlist_items]
         inference_contexts = relation_contexts_from_snapshot(
             snapshot,
             getattr(self.strategy_model, "settings", {}) if self.strategy_model else {},
         )
-        for position, source in items:
+        for position in watchlist_items:
             if not (position.current_price or position.market_value or position.volume or position.trade_strength):
                 continue
             symbol = position.symbol.upper()
@@ -176,170 +143,10 @@ class StrategyAlertMixin:
             relation_context = inference_contexts.get(symbol)
             if not relation_context:
                 continue
-            current_price = self.current_price_line(position_context)
-            price_lines = self.holding_price_lines(position_context) if source == "보유" else [current_price] if current_price else []
-            common_lines = [
-                source + " 종목",
-                *price_lines,
-                self.flow_context_line(position_context),
-                self.trend_context_line(position_context),
-            ]
-            relation_decision = self.relation_decision(relation_context)
-            relation_score = self.relation_score(relation_context)
-            relation_action_group = str(relation_decision.get("actionGroup") or "")
-            relation_entry_candidate = (
-                source == "관심"
-                and watchlist_buy_threshold
-                and relation_action_group == "entry"
-                and relation_score >= watchlist_buy_threshold
-            )
-            if source == "관심":
-                ontology_event = self.watchlist_ontology_event(snapshot, position, position_context, relation_context)
-                if ontology_event:
-                    events.append(ontology_event)
-            if source == "관심" and relation_entry_candidate:
-                buy_phrase = self.relation_score_phrase(relation_context, "분할매수 후보")
-                detected = buy_phrase
-                events.append(AlertEvent(
-                    snapshot.account_id,
-                    snapshot.account_label,
-                    "WATCH",
-                    "watchlistBuyCandidate",
-                    ":".join([snapshot.account_id, "watchlist-buy", symbol, str(round(relation_score, 1))]),
-                    position.name,
-                    ["관심종목 매수 후보 " + buy_phrase, *common_lines],
-                    symbol,
-                    criteria=self.criteria(
-                        "관심종목 관계 규칙 점수 " + self.threshold_text("watchlistBuyScore", "점") + " 이상이며 진입 관계가 성립할 때",
-                        detected,
-                    ),
-                    metadata=self.relation_metadata(relation_context, "watchlistBuyScore"),
-                ))
-            if source != "관심" and buy_threshold and relation_action_group == "entry" and relation_score >= buy_threshold:
-                buy_phrase = self.relation_score_phrase(relation_context, "매수 후보")
-                events.append(AlertEvent(
-                    snapshot.account_id,
-                    snapshot.account_label,
-                    "WATCH",
-                    "modelBuy",
-                    ":".join([snapshot.account_id, "model-buy", symbol, str(round(relation_score, 1))]),
-                    position.name,
-                    ["매수 판단 " + buy_phrase, *common_lines],
-                    symbol,
-                    criteria=self.criteria(
-                        "보유 종목 관계 규칙 점수 " + self.threshold_text("modelBuyScore", "점") + " 이상이며 진입 관계가 성립할 때",
-                        buy_phrase,
-                    ),
-                    metadata=self.relation_metadata(relation_context, "modelBuyScore"),
-                ))
-            if source != "관심" and sell_threshold and self.relation_sell_action_group(relation_action_group) and relation_score >= sell_threshold:
-                sell_phrase = self.relation_score_phrase(relation_context, "매도/축소 점검")
-                events.append(AlertEvent(
-                    snapshot.account_id,
-                    snapshot.account_label,
-                    "ALERT",
-                    "modelSell",
-                    ":".join([snapshot.account_id, "model-sell", symbol, str(round(relation_score, 1))]),
-                    position.name,
-                    [
-                        "매도 판단 " + sell_phrase,
-                        *common_lines,
-                    ],
-                    symbol,
-                    criteria=self.criteria(
-                        "보유 종목 관계 규칙 점수 " + self.threshold_text("modelSellScore", "점") + " 이상이며 매도·축소·리스크 관계가 성립할 때",
-                        sell_phrase,
-                    ),
-                    metadata=self.relation_metadata(relation_context, "modelSellScore"),
-                ))
+            ontology_event = self.watchlist_ontology_event(snapshot, position, position_context, relation_context)
+            if ontology_event:
+                events.append(ontology_event)
         return events
 
-    def model_sample_events(self, snapshot: AccountSnapshot, rule: str) -> List[AlertEvent]:
-        candidates = [item for item in snapshot.watchlist + snapshot.positions if not item.is_cash() and item.symbol]
-        if not candidates:
-            return []
-        holding_symbols = {item.symbol.upper() for item in snapshot.positions if item.symbol and not item.is_cash()}
-        holding_candidates = [item for item in snapshot.positions if item.symbol and not item.is_cash()]
-        watchlist_candidates = [item for item in snapshot.watchlist if item.symbol and item.symbol.upper() not in holding_symbols]
-        if rule == "watchlistBuyCandidate":
-            position = watchlist_candidates[0] if watchlist_candidates else candidates[0]
-        else:
-            position = holding_candidates[0] if holding_candidates else candidates[0]
-        position_context = position.to_dict()
-        current_price = self.current_price_line(position_context)
-        price_lines = self.holding_price_lines(position_context) if position.symbol.upper() in holding_symbols else [current_price] if current_price else []
-        inference_contexts = relation_contexts_from_snapshot(
-            snapshot,
-            getattr(self.strategy_model, "settings", {}) if self.strategy_model else {},
-        )
-        relation_context = inference_contexts.get(position.symbol.upper())
-        if not relation_context:
-            return []
-        symbol = position.symbol.upper()
-        if rule == "modelSell":
-            sell_phrase = self.relation_score_phrase(relation_context, "매도/축소 점검")
-            return [AlertEvent(
-                snapshot.account_id,
-                snapshot.account_label,
-                "ALERT",
-                "modelSell",
-                ":".join([snapshot.account_id, "model-sell-test", symbol]),
-                position.name,
-                [
-                    "매도 판단 " + sell_phrase,
-                    "현재 데이터 기준 템플릿 테스트",
-                    *price_lines,
-                    self.flow_context_line(position_context),
-                    self.trend_context_line(position_context),
-                ],
-                symbol,
-                criteria=self.criteria(
-                    "관계 규칙에서 매도·축소·리스크 관계가 성립할 때",
-                    sell_phrase,
-                ),
-                metadata=self.relation_metadata(relation_context, "modelSellScore"),
-            )]
-        buy_phrase = self.relation_score_phrase(relation_context, "매수 후보")
-        if rule == "watchlistBuyCandidate":
-            return [AlertEvent(
-                snapshot.account_id,
-                snapshot.account_label,
-                "WATCH",
-                "watchlistBuyCandidate",
-                ":".join([snapshot.account_id, "watchlist-buy-test", symbol]),
-                position.name,
-                [
-                    "관심종목 매수 후보 " + buy_phrase,
-                    "현재 데이터 기준 템플릿 테스트",
-                    *price_lines,
-                    self.flow_context_line(position_context),
-                    self.trend_context_line(position_context),
-                ],
-                symbol,
-                criteria=self.criteria(
-                    "관심종목 관계 규칙에서 진입 관계가 성립할 때",
-                    buy_phrase,
-                ),
-                metadata=self.relation_metadata(relation_context, "watchlistBuyScore"),
-            )]
-        return [AlertEvent(
-            snapshot.account_id,
-            snapshot.account_label,
-            "WATCH",
-            "modelBuy",
-            ":".join([snapshot.account_id, "model-buy-test", symbol]),
-            position.name,
-            [
-                "매수 판단 " + buy_phrase,
-                "현재 데이터 기준 템플릿 테스트",
-                *price_lines,
-                self.flow_context_line(position_context),
-                self.trend_context_line(position_context),
-            ],
-            symbol,
-            criteria=self.criteria(
-                "관계 규칙에서 진입 관계가 성립할 때",
-                buy_phrase,
-            ),
-            metadata=self.relation_metadata(relation_context, "modelBuyScore"),
-        )]
+    def model_score_events(self, snapshot: AccountSnapshot) -> List[AlertEvent]:
+        return self.ontology_signal_events(snapshot)

@@ -2,38 +2,23 @@ from typing import Iterable, List
 
 
 IMPORTANT_NOTIFICATION_RULES = {
-    "modelBuy",
-    "modelSell",
-    "watchlistBuyCandidate",
+    "investmentInsight",
     "newsDigest",
     "holdingTiming",
-    "monitorPositionChange",
-    "monitorPnlChange",
-    "monitorValueChange",
-    "monitorTrendChange",
-    "monitorCashChange",
-    "monitorDecisionChange",
-    "externalEquityMove",
-    "externalCryptoMove",
-    "externalMacroShift",
-    "externalDartDisclosure",
+    "watchlistOntologySignal",
 }
 
 ACTIONABLE_NOTIFICATION_RULES = {
-    "modelBuy",
-    "modelSell",
-    "watchlistBuyCandidate",
+    "investmentInsight",
     "newsDigest",
     "holdingTiming",
+    "watchlistOntologySignal",
     "ontologyInferenceMissing",
-    "monitorDecisionChange",
-    "watchlistQuote",
     "externalDataConnection",
 }
 
 LOW_SIGNAL_NOTIFICATION_RULES = {
     "monitorHeartbeat",
-    "watchlistQuotePending",
     "externalDataConnection",
 }
 
@@ -57,21 +42,15 @@ CONFIRMING_DATA_LABELS = {
 
 DEFAULT_SIGNAL_FALLBACK_TERMS = {
     "important_terms": [
-        "판단 변화",
-        "모델 매수",
-        "관심종목 매수",
-        "모델 매도",
-        "내 매수 기준",
-        "내 매도 기준",
-        "손익률 급변",
-        "평가액 급변",
-        "보유 수량 변경",
-        "새 보유",
-        "이동평균",
+        "온톨로지",
+        "관계 신호",
+        "InferenceBox",
+        "RuleBox",
+        "성립 규칙",
+        "관계 강도",
+        "신규 관계",
+        "상충 신호",
         "신규 공시",
-        "가격 변동",
-        "크립토 변동",
-        "거시 지표",
         "손절",
         "분할매도",
         "리스크",

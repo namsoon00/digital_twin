@@ -217,17 +217,11 @@ DEFAULT_DECISION_THRESHOLDS = [
     ("sellWatch", 64),
 ]
 DEFAULT_MODEL_DECISION_THRESHOLDS = [
-    ("modelBuy", 74),
-    ("modelAdd", 70),
-    ("modelSell", 72),
-    ("modelReduce", 64),
-    ("modelHold", 55),
+    ("graphSignalMinScore", 55),
+    ("graphSignalAlertScore", 78),
+    ("graphSignalConfidenceMin", 50),
 ]
 DEFAULT_ALERT_THRESHOLDS = [
-    ("modelBuyScore", 74),
-    ("modelSellScore", 72),
-    ("watchlistBuyScore", 74),
-    ("modelScoreGap", 15),
     ("volumeRatioHigh", 2),
     ("buyShareHigh", 65),
     ("sellShareHigh", 65),
@@ -238,18 +232,9 @@ DEFAULT_ALERT_THRESHOLDS = [
     ("priceNearPercent", 1),
     ("staleMinutes", 30),
     ("pendingOrderMinutes", 30),
-    ("watchlistPriceDelta", 3),
-    ("monitorPnlDelta", 2),
-    ("monitorValueDelta", 5),
-    ("monitorMaDistance", 8),
-    ("monitorCashDelta", 10),
-    ("monitorExitPressureDelta", 15),
-    ("externalEquityChangePct", 3),
-    ("externalCryptoChange24hPct", 4),
-    ("externalCryptoChange7dPct", 10),
-    ("externalBitcoinChange24hPct", 3),
-    ("externalBitcoinChange7dPct", 4),
-    ("externalMacroRateDeltaBp", 15),
+    ("graphSignalMinScore", 55),
+    ("graphSignalAlertScore", 78),
+    ("graphSignalConfidenceMin", 50),
 ]
 DEFAULT_RELATION_RULE_THRESHOLDS = [
     (key, DEFAULT_RELATION_THRESHOLDS[key])
@@ -316,7 +301,7 @@ DEFAULT_STRATEGY_SETTINGS = {
     "aiPromptTemplates": default_ai_prompt_templates_text(),
     "aiPromptPolicy": default_ai_prompt_policy_text(),
     "notificationAiGateEnabled": "1",
-    "notificationAiGateMessageTypes": "investmentInsight,holdingTiming,monitorDecisionChange,monitorTrendChange,monitorPnlChange,monitorValueChange,modelBuy,modelSell,watchlistBuyCandidate,externalEquityMove,externalCryptoMove,externalMacroShift,externalDartDisclosure",
+    "notificationAiGateMessageTypes": "investmentInsight",
     "notificationAiUseCodex": "1",
     "notificationAiTimeoutSeconds": "120",
     "modelName": "나의 매수/매도 모델",
@@ -351,9 +336,8 @@ def assignment_text_from_map(values: Dict[str, float], ordered_items) -> str:
 def synced_model_alert_thresholds(alert_thresholds: str, model_thresholds: str) -> str:
     alerts = parse_assignments(alert_thresholds, assignment_defaults(DEFAULT_ALERT_THRESHOLDS))
     models = parse_assignments(model_thresholds, assignment_defaults(DEFAULT_MODEL_DECISION_THRESHOLDS))
-    alerts["modelBuyScore"] = models.get("modelBuy", alerts.get("modelBuyScore", 0))
-    alerts["watchlistBuyScore"] = models.get("modelBuy", alerts.get("watchlistBuyScore", alerts.get("modelBuyScore", 0)))
-    alerts["modelSellScore"] = models.get("modelSell", alerts.get("modelSellScore", 0))
+    for key in ["graphSignalMinScore", "graphSignalAlertScore", "graphSignalConfidenceMin"]:
+        alerts[key] = models.get(key, alerts.get(key, 0))
     return assignment_text_from_map(alerts, DEFAULT_ALERT_THRESHOLDS)
 
 

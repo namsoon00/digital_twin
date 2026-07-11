@@ -135,26 +135,6 @@ DEFAULT_NOTIFICATION_TEMPLATES = {
         "template": BODY_TEMPLATE,
         "description": "뉴스/피드 새 정보 알림",
     },
-    "modelBuy": {
-        "template": DEFAULT_TEMPLATE,
-        "description": "모델 매수 조건 알림",
-    },
-    "modelSell": {
-        "template": DEFAULT_TEMPLATE,
-        "description": "모델 매도 조건 알림",
-    },
-    "watchlistBuyCandidate": {
-        "template": DEFAULT_TEMPLATE,
-        "description": "관심종목 매수 후보 알림",
-    },
-    "watchlistQuote": {
-        "template": DEFAULT_TEMPLATE,
-        "description": "관심종목 시세 수집 알림",
-    },
-    "watchlistQuotePending": {
-        "template": DEFAULT_TEMPLATE,
-        "description": "관심종목 시세 대기 알림",
-    },
     "watchlistOntologySignal": {
         "template": DEFAULT_TEMPLATE,
         "description": "관심종목 온톨로지 관계 신호 알림",
@@ -174,46 +154,6 @@ DEFAULT_NOTIFICATION_TEMPLATES = {
     "monitorConnection": {
         "template": DEFAULT_TEMPLATE,
         "description": "토스 연결 상태 변화 알림",
-    },
-    "monitorPositionChange": {
-        "template": DEFAULT_TEMPLATE,
-        "description": "보유 종목/수량 변화 알림",
-    },
-    "monitorPnlChange": {
-        "template": DEFAULT_TEMPLATE,
-        "description": "손익률 변화 알림",
-    },
-    "monitorValueChange": {
-        "template": DEFAULT_TEMPLATE,
-        "description": "평가액 변화 알림",
-    },
-    "monitorTrendChange": {
-        "template": DEFAULT_TEMPLATE,
-        "description": "이동평균/추세 변화 알림",
-    },
-    "monitorCashChange": {
-        "template": DEFAULT_TEMPLATE,
-        "description": "현금 비중 변화 알림",
-    },
-    "monitorDecisionChange": {
-        "template": DEFAULT_TEMPLATE,
-        "description": "매수/매도 판단 변화 알림",
-    },
-    "externalEquityMove": {
-        "template": DEFAULT_TEMPLATE,
-        "description": "Alpha Vantage 기반 미장 가격/거래량 변동 알림",
-    },
-    "externalCryptoMove": {
-        "template": DEFAULT_TEMPLATE,
-        "description": "CoinGecko 기반 크립토 변동 알림",
-    },
-    "externalMacroShift": {
-        "template": DEFAULT_TEMPLATE,
-        "description": "FRED 기반 금리/스프레드 변화 알림",
-    },
-    "externalDartDisclosure": {
-        "template": DEFAULT_TEMPLATE,
-        "description": "OpenDART 기반 국내 종목 공시 변화 알림",
     },
     "externalDataConnection": {
         "template": DEFAULT_TEMPLATE,

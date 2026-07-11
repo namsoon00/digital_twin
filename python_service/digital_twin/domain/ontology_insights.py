@@ -5,32 +5,18 @@ from .alert_formatting import compact_number
 from .data_freshness import aggregate_freshness
 from .market_data import number
 from .message_types import (
-    EXTERNAL_CRYPTO_MOVE,
-    EXTERNAL_DART_DISCLOSURE,
     EXTERNAL_DATA_CONNECTION,
-    EXTERNAL_EQUITY_MOVE,
-    EXTERNAL_MACRO_SHIFT,
     HOLDING_TIMING,
     INVESTMENT_INSIGHT,
     MESSAGE_TYPE_LABELS,
-    MODEL_BUY,
     MODEL_REVIEW,
-    MODEL_SELL,
-    MONITOR_CASH_CHANGE,
     MONITOR_CONNECTION,
-    MONITOR_DECISION_CHANGE,
     MONITOR_HEARTBEAT,
-    MONITOR_PNL_CHANGE,
-    MONITOR_POSITION_CHANGE,
-    MONITOR_TREND_CHANGE,
-    MONITOR_VALUE_CHANGE,
     ONTOLOGY_INFERENCE_MISSING,
-    WATCHLIST_BUY_CANDIDATE,
     WATCHLIST_ONTOLOGY_SIGNAL,
-    WATCHLIST_QUOTE,
-    WATCHLIST_QUOTE_PENDING,
     WORK_HANDOFF,
 )
+from .notification_ai_context import is_graph_backed_relation_context
 from .portfolio import AccountSnapshot, AlertEvent
 
 
@@ -47,33 +33,12 @@ SYSTEM_ALERT_TYPES = {
 }
 
 INVESTMENT_SIGNAL_TYPES = {
-    MODEL_BUY,
-    MODEL_SELL,
-    WATCHLIST_BUY_CANDIDATE,
     WATCHLIST_ONTOLOGY_SIGNAL,
-    WATCHLIST_QUOTE,
-    WATCHLIST_QUOTE_PENDING,
     HOLDING_TIMING,
-    MONITOR_POSITION_CHANGE,
-    MONITOR_PNL_CHANGE,
-    MONITOR_VALUE_CHANGE,
-    MONITOR_TREND_CHANGE,
-    MONITOR_CASH_CHANGE,
-    MONITOR_DECISION_CHANGE,
-    EXTERNAL_EQUITY_MOVE,
-    EXTERNAL_CRYPTO_MOVE,
-    EXTERNAL_MACRO_SHIFT,
-    EXTERNAL_DART_DISCLOSURE,
 }
 
 HOLDING_POSITION_SIGNAL_TYPES = {
-    MODEL_SELL,
     HOLDING_TIMING,
-    MONITOR_POSITION_CHANGE,
-    MONITOR_PNL_CHANGE,
-    MONITOR_VALUE_CHANGE,
-    MONITOR_TREND_CHANGE,
-    MONITOR_DECISION_CHANGE,
 }
 HOLDING_POSITION_POLICY_GROUP = "holdingPositionCommon"
 HOLDING_POSITION_DISPATCH_TYPE = "holdingPositionCommon"
@@ -92,17 +57,13 @@ INSIGHT_TYPE_LABELS = {
 }
 
 SCORE_KEYS = (
+    "graphSignalScore",
+    "graphSignalStrength",
+    "relationRuleScore",
     "ontologyPressure",
     "ontology_pressure",
     "holdingDecisionScore",
-    "modelSellScore",
-    "modelBuyScore",
-    "watchlistBuyScore",
     "watchlistSignalScore",
-    "cryptoMoveScore",
-    "changePercent",
-    "change24h",
-    "change7d",
     "profitLossRate",
 )
 
@@ -110,18 +71,14 @@ SEVERITY_SCORE = {"ALERT": 82.0, "WATCH": 62.0, "INFO": 35.0}
 SOURCE_METADATA_KEYS = {
     "market",
     "provider",
-    "modelBuyScore",
-    "modelSellScore",
-    "watchlistBuyScore",
+    "graphSignalScore",
+    "graphSignalStrength",
+    "graphSignalConfidence",
     "watchlistSignalScore",
     "watchlistOntologySignalType",
     "watchlistActiveRelationRules",
     "holdingDecisionScore",
     "profitLossRate",
-    "changePercent",
-    "change24h",
-    "change7d",
-    "cryptoMoveScore",
     "disclosureCount",
     "latestTradingDay",
     "lastUpdated",
@@ -170,7 +127,17 @@ def split_operational_and_investment_events(events: Iterable[AlertEvent]) -> Tup
 
 
 def investment_signal_events(events: Iterable[AlertEvent]) -> List[AlertEvent]:
-    return [event for event in events or [] if event.rule in INVESTMENT_SIGNAL_TYPES]
+    return [event for event in events or [] if event.rule in INVESTMENT_SIGNAL_TYPES and graph_backed_investment_event(event)]
+
+
+def event_relation_context(event: AlertEvent) -> Dict[str, object]:
+    metadata = event.metadata if isinstance(event.metadata, dict) else {}
+    relation_context = metadata.get("ontologyRelationContext") if isinstance(metadata.get("ontologyRelationContext"), dict) else {}
+    return relation_context if isinstance(relation_context, dict) else {}
+
+
+def graph_backed_investment_event(event: AlertEvent) -> bool:
+    return is_graph_backed_relation_context(event_relation_context(event))
 
 
 def signal_type_label(rule: str) -> str:
@@ -179,6 +146,19 @@ def signal_type_label(rule: str) -> str:
 
 def event_score(event: AlertEvent) -> float:
     metadata = event.metadata or {}
+    relation_context = event_relation_context(event)
+    if relation_context:
+        decision = relation_context.get("decision") if isinstance(relation_context.get("decision"), dict) else {}
+        graph_scores = [
+            number(decision.get("score")),
+            number(relation_context.get("signalStrength")),
+            number(metadata.get("relationRuleScore")),
+            number(metadata.get("watchlistSignalScore")),
+            number(metadata.get("holdingDecisionScore")),
+        ]
+        graph_scores = [score for score in graph_scores if score]
+        if graph_scores:
+            return max(0.0, min(100.0, max(graph_scores)))
     nested_opinion = metadata.get("ontologyOpinion") if isinstance(metadata.get("ontologyOpinion"), dict) else {}
     candidates: List[float] = []
     for key in SCORE_KEYS:
@@ -199,10 +179,6 @@ def event_subject(event: AlertEvent) -> str:
     symbol = str(event.symbol or "").strip().upper()
     if symbol:
         return symbol
-    if event.rule == MONITOR_CASH_CHANGE:
-        return "portfolio"
-    if event.rule == EXTERNAL_MACRO_SHIFT:
-        return "macro"
     return "portfolio"
 
 
@@ -251,10 +227,6 @@ def unique_preserve(values: Iterable[str]) -> List[str]:
 def infer_insight_type(events: List[AlertEvent]) -> str:
     source_types = {event.rule for event in events}
     severities = {str(event.severity or "").upper() for event in events}
-    if {MODEL_BUY, MODEL_SELL}.issubset(source_types) or {WATCHLIST_BUY_CANDIDATE, MODEL_SELL}.issubset(source_types):
-        return "contradictionDetected"
-    if WATCHLIST_QUOTE_PENDING in source_types:
-        return "dataQualityWarning"
     if WATCHLIST_ONTOLOGY_SIGNAL in source_types:
         signal_types = {
             str((event.metadata or {}).get("watchlistOntologySignalType") or "")
@@ -270,16 +242,8 @@ def infer_insight_type(events: List[AlertEvent]) -> str:
         if "trendReview" in signal_types:
             return "opportunityDetected"
         return "relationshipChange"
-    if MONITOR_CASH_CHANGE in source_types:
-        return "liquidityShift"
-    if source_types & {MODEL_SELL, HOLDING_TIMING, MONITOR_DECISION_CHANGE}:
+    if HOLDING_TIMING in source_types:
         return "riskIncrease" if "ALERT" in severities else "riskManagement"
-    if source_types & {MODEL_BUY, WATCHLIST_BUY_CANDIDATE, WATCHLIST_QUOTE}:
-        return "opportunityDetected"
-    if source_types & {EXTERNAL_EQUITY_MOVE, EXTERNAL_CRYPTO_MOVE, EXTERNAL_MACRO_SHIFT, EXTERNAL_DART_DISCLOSURE}:
-        return "externalRegimeShift"
-    if source_types & {MONITOR_POSITION_CHANGE, MONITOR_PNL_CHANGE, MONITOR_VALUE_CHANGE, MONITOR_TREND_CHANGE}:
-        return "portfolioShift"
     return "relationshipChange"
 
 
@@ -439,8 +403,6 @@ def next_check_for_insight(insight_type: str, source_types: List[str]) -> str:
         return "종목 코드, 데이터 공급자 응답, 마지막 성공 시각을 먼저 복구하세요."
     if insight_type == "contradictionDetected":
         return "매수 후보 근거와 리스크 근거가 서로 다른 기간/데이터에서 온 것인지 분리하세요."
-    if EXTERNAL_DART_DISCLOSURE in source_types:
-        return "공시 원문, 접수번호, 장중 거래량 반응을 확인하세요."
     return "새 관계가 다음 데이터 업데이트에서도 유지되는지 확인하세요."
 
 
@@ -532,7 +494,7 @@ def build_investment_insight_events(snapshot: AccountSnapshot, signal_events: It
         metadata = {
             "ontologyInsight": {
                 "id": insight_id,
-                "cadenceKey": ":".join(["cadence", "python", snapshot.account_id, INSIGHT_RULE, subject, policy_dispatch_type, policy_source_key]),
+                "cadenceKey": ":".join(["cadence", "neo4j", snapshot.account_id, INSIGHT_RULE, subject, policy_dispatch_type, policy_source_key]),
                 "insightType": insight_type,
                 "dispatchInsightType": policy_dispatch_type,
                 "dispatchSourceKey": policy_source_key,
@@ -550,7 +512,9 @@ def build_investment_insight_events(snapshot: AccountSnapshot, signal_events: It
                 "thesis": thesis,
                 "nextCheck": next_check,
                 "dispatchMode": "insight-driven-only",
-                "legacyAlertTypesRole": "evidence-only",
+                "sourceSignalRole": "graph-backed-evidence",
+                "graphDerived": True,
+                "graphSource": "neo4jInferenceBox",
                 "referenceDataLines": reference_lines,
             },
             "sourceSignalTypes": source_types,
@@ -579,8 +543,9 @@ def build_investment_insight_events(snapshot: AccountSnapshot, signal_events: It
                 "cooldownPolicy": "insight-cadence-key",
                 "noveltyPolicy": "source-relation-change",
                 "suppressionPolicy": "legacy-signal-direct-dispatch-disabled",
+                "graphSourceRequired": True,
             },
-            "legacyAlertTypesRole": "evidence-only",
+            "sourceSignalRole": "graph-backed-evidence",
         }
         metadata.update(promoted_context)
         insights.append(AlertEvent(

@@ -274,7 +274,11 @@ function checkFrontendAdminRender() {
   assertOk(designSystemDoc.indexOf("aria-current") >= 0, "디자인 시스템 문서에 내비게이션 접근성 기준이 없습니다.");
   assertOk(code.indexOf('appTheme: settingValue("appTheme")') >= 0, "설정 저장 payload에 화면 테마가 포함되지 않았습니다.");
   assertOk(code.indexOf('neo4jUri: settingValue("neo4jUri")') >= 0, "설정 저장 payload에 Neo4j URI가 포함되지 않았습니다.");
+  assertOk(code.indexOf('ontologyGraphStoreMode: settingValue("ontologyGraphStoreMode")') >= 0, "설정 저장 payload에 그래프 저장소 모드가 포함되지 않았습니다.");
+  assertOk(code.indexOf('typedbAddress: settingValue("typedbAddress")') >= 0, "설정 저장 payload에 TypeDB 주소가 포함되지 않았습니다.");
   assertOk(code.indexOf('renderSettingField("neo4jUri"') >= 0, "설정 화면에 Neo4j URI 입력 필드가 없습니다.");
+  assertOk(code.indexOf('renderSettingSelect("ontologyGraphStoreMode"') >= 0, "설정 화면에 그래프 저장소 모드 선택 필드가 없습니다.");
+  assertOk(code.indexOf('renderSettingField("typedbAddress"') >= 0, "설정 화면에 TypeDB 주소 입력 필드가 없습니다.");
   const payloads = {
     "/api/settings": {
       settings: {

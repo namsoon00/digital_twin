@@ -29,16 +29,16 @@ Required flow for new investment behavior:
    Every collected or derived investment fact should become an ABox entity or relation with `ontologyBox`, `tboxClass` or `tboxClasses`, `boundedContext` when applicable, provenance, freshness, and missing-data semantics. A quote, disclosure, news item, macro series, FX rate, liquidity observation, investor-flow value, valuation assumption, account exposure, data-source status, or collection schedule should be represented as facts before it is used for judgement.
 
 3. Persist graph facts through the projection boundary.
-   Owning bounded contexts still persist their transactional state in their own stores. The ontology projection translates that state into Neo4j graph assertions. New feature code should publish or persist source facts first, then extend `portfolio_ontology_builder.py` or its concept-builder modules so the projection can create ABox nodes and relations. Do not make account, monitoring, notification, or provider aggregates depend directly on Neo4j.
+   Owning bounded contexts still persist their transactional state in their own stores. The ontology projection translates that state into graph-store assertions through adapters. Neo4j remains the default adapter, TypeDB can run as a parallel mirror or primary adapter, and new feature code must publish or persist source facts first, then extend `portfolio_ontology_builder.py` or its concept-builder modules so the projection can create ABox nodes and relations. Do not make account, monitoring, notification, or provider aggregates depend directly on Neo4j, TypeDB, or any graph driver.
 
 4. Put investment reasoning in the RuleBox and InferenceBox.
-   New investment rules must be expressible as graph rules over ABox facts and should be seeded into Neo4j RuleBox before they drive alerts or AI opinions. Runtime investment judgement must read Neo4j InferenceBox through `domain/ontology_inference_context.py`. Python may assemble facts and prompts, but it must not keep a parallel buy/sell/risk rule evaluator for user-facing investment decisions.
+   New investment rules must be expressible as graph rules over ABox facts and should be seeded into RuleBox before they drive alerts or AI opinions. Runtime investment judgement must read the active graph-store InferenceBox through `domain/ontology_inference_context.py`. Python may assemble facts and prompts, but it must not keep a parallel buy/sell/risk rule evaluator for user-facing investment decisions.
 
 5. Keep Python thresholds out of primary investment judgement.
    Python may parse data, normalize units, compute raw market metrics, detect operational failures, and enforce delivery policies. It should not directly decide that a stock is a buy, sell, loss-cut, profit-take, risk-increase, opportunity, or sector-rotation candidate unless that decision is backed by graph-store inference or explicitly marked as an operational/system alert.
 
 6. Treat graph inference as mandatory for investment alerts.
-   Legacy message types such as `modelBuy`, `modelSell`, `monitorPnlChange`, `monitorTrendChange`, `externalCryptoMove`, and `externalDartDisclosure` must not be generated, enabled by default, or registered as standalone investment dispatch inputs. `holdingTiming` and `watchlistOntologySignal` may exist only as graph-backed evidence signals inside an `investmentInsight`. New investment notifications must be `investmentInsight` events derived from graph-backed Neo4j InferenceBox relation context.
+   Legacy message types such as `modelBuy`, `modelSell`, `monitorPnlChange`, `monitorTrendChange`, `externalCryptoMove`, and `externalDartDisclosure` must not be generated, enabled by default, or registered as standalone investment dispatch inputs. `holdingTiming` and `watchlistOntologySignal` may exist only as graph-backed evidence signals inside an `investmentInsight`. New investment notifications must be `investmentInsight` events derived from graph-backed InferenceBox relation context from the active graph store.
 
 7. Separate reasoning score from delivery priority.
    Ontology relation scores describe investment meaning, relationship strength, confidence, novelty, and decision stage. Notification scores describe whether a message should be delivered after cooldown, similarity, market-hours, and freshness gates. Do not use delivery priority as an investment score or present it as model confidence.
@@ -62,10 +62,10 @@ Acceptable non-ontology code:
 Anti-patterns to avoid:
 
 - Adding a new investment alert by checking a price, moving average, PnL, volume, disclosure title, or news keyword directly in `monitoring.py` or `external_signal_alerts.py` without first creating ontology facts and graph rules.
-- Creating a context named `ontologyRelationContext` in Python without `graphStoreUsed=True` and without Neo4j InferenceBox evidence, then presenting it as graph-derived reasoning.
+- Creating a context named `ontologyRelationContext` in Python without `graphStoreUsed=True` and without active graph-store InferenceBox evidence, then presenting it as graph-derived reasoning.
 - Storing a rule only as a Python `if` statement, formula string, or notification condition when it changes investment judgement.
 - Letting AI see raw source data without the corresponding TBox/ABox/RuleBox/InferenceBox explanation and missing-data boundaries.
-- Treating Neo4j projection failure as harmless for investment judgement. If graph inference is unavailable, investment decisions should be blocked, downgraded to operational diagnostics, or clearly marked as non-investment evidence.
+- Treating graph-store projection failure as harmless for investment judgement. If graph inference is unavailable, investment decisions should be blocked, downgraded to operational diagnostics, or clearly marked as non-investment evidence.
 
 ## Python Layer Map
 
@@ -84,15 +84,15 @@ Domain:
 - `python_service/digital_twin/domain/ontology_relation_catalog.py`: bootstrap ontology relation catalog, score-band catalog, and decision-stage catalog used to seed ontology/RuleBox views; new runtime logic should not be added here first
 - `python_service/digital_twin/domain/ontology_prompt_registry.py`: default AI prompt registry text, prompt guardrails, and prompt policy defaults
 - `python_service/digital_twin/domain/ontology_relation_facts.py`: position, temporal, liquidity, macro, research-evidence, and missing-data facts used by ontology relation evaluation
-- `python_service/digital_twin/domain/portfolio_ontology_builder.py`: portfolio snapshot to ontology builder; Neo4j projection must call it in ABox-facts-only mode and leave opinions, insights, and inference to graph-store/AI stages
+- `python_service/digital_twin/domain/portfolio_ontology_builder.py`: portfolio snapshot to ontology builder; graph-store projection must call it in ABox-facts-only mode and leave opinions, insights, and inference to graph-store/AI stages
 - `python_service/digital_twin/domain/portfolio_ontology_catalog.py`: portfolio ontology projection catalogs for metrics, runtime settings, operational pipelines, insight types, factors, and sectors
 - `python_service/digital_twin/domain/portfolio_ontology_market_concepts.py`: market metric, trend, data-source, model-score, price-level, and liquidity ABox concept builders
 - `python_service/digital_twin/domain/portfolio_ontology_runtime_concepts.py`: runtime settings, account delivery profile, operational pipeline, strategy world, and decision-item ABox concept builders
 - `python_service/digital_twin/domain/ontology_prompting.py`: ontology read models for reasoning cards, AI inference packets, worldview summaries, and prompt payloads
 - `python_service/digital_twin/domain/external_signal_quality.py`: external signal provenance, freshness, source-health, and symbol-coverage scoring
 - `python_service/digital_twin/domain/ontology_quality.py`: AI opinion readiness and ontology graph quality sample metrics
-- `python_service/digital_twin/domain/ontology_relation_reasoning.py`: Python fallback adapter that turns ABox facts into relation context, missing-data context, and AI prompt context; prefer Neo4j RuleBox/InferenceBox for new reasoning behavior
-- `python_service/digital_twin/domain/ontology_inference_context.py`: Neo4j InferenceBox to relation-context adapter; runtime monitoring should prefer this graph-store result and use Python relation reasoning only as bootstrap fallback
+- `python_service/digital_twin/domain/ontology_relation_reasoning.py`: Python fallback adapter that turns ABox facts into relation context, missing-data context, and AI prompt context; prefer the active graph-store RuleBox/InferenceBox for new reasoning behavior
+- `python_service/digital_twin/domain/ontology_inference_context.py`: active graph-store InferenceBox to relation-context adapter; runtime monitoring should prefer this graph-store result and use Python relation reasoning only as bootstrap fallback
 - `python_service/digital_twin/domain/scoring.py`: reusable scoring signals and fallback vocabularies used by notification and strategy-adjacent scores
 - `python_service/digital_twin/domain/message_types.py`: shared message-type catalog, labels, default alert rules, thresholds, and cadence
 - `python_service/digital_twin/domain/alert_formatting.py`: money, percentage, and compact-number formatting used by alerts
@@ -124,7 +124,9 @@ Infrastructure:
 - `python_service/digital_twin/infrastructure/event_bus.py`: synchronous event bus with operational event-log default
 - `python_service/digital_twin/infrastructure/model_review_queue.py`: async model-review queue interface fed by decision-change events
 - `python_service/digital_twin/infrastructure/model_reviewer.py`: Codex/LLM command adapter with local fallback
-- `python_service/digital_twin/infrastructure/ontology_projection.py`: snapshot-to-ontology projection recorder that saves Neo4j graphs and quality samples without making monitoring application services own graph persistence details
+- `python_service/digital_twin/infrastructure/ontology_projection.py`: snapshot-to-ontology projection recorder that saves graph-store projections and quality samples without making monitoring application services own graph persistence details
+- `python_service/digital_twin/infrastructure/neo4j_ontology.py`: default Neo4j graph-store adapter and compatibility factory
+- `python_service/digital_twin/infrastructure/typedb_ontology.py`: TypeDB graph-store adapter, dual-write mirror, and bootstrap TypeDB InferenceBox support
 - `python_service/digital_twin/infrastructure/service_factory.py`: runtime composition of use cases and adapters
 
 Compatibility modules:
@@ -148,7 +150,7 @@ Events are persisted locally to the append-only `domain_events` table through th
 
 `monitoring.alerts_detected` now carries investment notifications only as graph-backed `investmentInsight` events. Legacy investment alert types such as `monitorDecisionChange`, `modelBuy`, and `externalCryptoMove` are not valid realtime investment dispatch inputs. The model-review queue may read legacy-shaped historical jobs for compatibility, but new realtime investment judgement must originate from graph inference. Realtime alerts must never wait for LLM/Codex output; deep analysis belongs in the model-review queue and worker. Notification producers should enqueue jobs in the notification outbox and leave external delivery to the notification worker. Jobs derived from a domain event should carry `source_event_id` and a stable `dedupe_key`.
 
-Ontology projection is a read-model boundary, not the source of truth. Aggregates and use cases own transactional state inside their bounded contexts; projection code can translate snapshots and domain events into TBox/ABox graph assertions for Neo4j, AI prompts, quality samples, and console views. Do not make domain aggregates depend on Neo4j, graph storage, or prompt rendering. If ontology needs more facts, publish or persist those facts in the owning context first, then extend the projection/read model.
+Ontology projection is a read-model boundary, not the source of truth. Aggregates and use cases own transactional state inside their bounded contexts; projection code can translate snapshots and domain events into TBox/ABox graph assertions for the active graph store, AI prompts, quality samples, and console views. Do not make domain aggregates depend on Neo4j, TypeDB, graph storage, or prompt rendering. If ontology needs more facts, publish or persist those facts in the owning context first, then extend the projection/read model.
 
 ## Parallel Development Slices
 

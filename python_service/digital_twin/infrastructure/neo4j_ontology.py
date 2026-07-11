@@ -78,6 +78,9 @@ from .neo4j_ontology_inferencebox import (
 
 
 class NullOntologyGraphRepository:
+    store_key = "neo4j"
+    store_label = "Neo4j"
+
     def active_tbox_metadata(self) -> Dict[str, object]:
         metadata = default_tbox_metadata()
         metadata.update({
@@ -170,6 +173,9 @@ class NullOntologyGraphRepository:
 
 
 class Neo4jOntologyGraphRepository(Neo4jOntologyRowMapperMixin):
+    store_key = "neo4j"
+    store_label = "Neo4j"
+
     def __init__(
         self,
         uri: str,
@@ -983,6 +989,26 @@ def urllib_quote(value: str) -> str:
 
 
 def ontology_repository_from_settings(settings: Dict[str, str] = None):
+    settings = settings or runtime_settings()
+    mode = str(settings.get("ontologyGraphStoreMode") or "neo4j").strip().lower()
+    if mode not in {"neo4j", "typedb", "dual"}:
+        mode = "neo4j"
+    if mode == "typedb":
+        from .typedb_ontology import typedb_repository_from_settings
+
+        return typedb_repository_from_settings(settings)
+    neo4j_repository = neo4j_repository_from_settings(settings)
+    if mode == "dual":
+        from .typedb_ontology import CompositeOntologyGraphRepository, typedb_repository_from_settings
+
+        return CompositeOntologyGraphRepository(
+            neo4j_repository,
+            mirrors=[typedb_repository_from_settings(settings)],
+        )
+    return neo4j_repository
+
+
+def neo4j_repository_from_settings(settings: Dict[str, str] = None):
     settings = settings or runtime_settings()
     enabled = str(settings.get("ontologyNeo4jEnabled") or "1").strip().lower() not in {"0", "false", "no", "off"}
     uri = str(settings.get("neo4jUri") or "").strip()

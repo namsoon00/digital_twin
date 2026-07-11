@@ -17,13 +17,33 @@ from .portfolio import AccountSnapshot, PortfolioSummary, Position
 NEO4J_RELATION_CONTEXT_VERSION = "neo4j-inferencebox-relation-context-v1"
 
 
+def ontology_projection_from_metadata(metadata: Dict[str, object]) -> Dict[str, object]:
+    metadata = metadata if isinstance(metadata, dict) else {}
+    ontology = metadata.get("ontology") if isinstance(metadata.get("ontology"), dict) else {}
+    preferred = str(ontology.get("activeGraphStore") or "").strip()
+    candidates = []
+    if preferred:
+        candidates.append(ontology.get(preferred))
+    candidates.extend([
+        ontology.get("projection"),
+        ontology.get("neo4j"),
+        ontology.get("typedb"),
+    ])
+    for candidate in candidates:
+        if isinstance(candidate, dict) and candidate:
+            return candidate
+    return {}
+
+
 def inferencebox_from_snapshot(snapshot: AccountSnapshot) -> Dict[str, object]:
     metadata = snapshot.metadata if isinstance(snapshot.metadata, dict) else {}
-    ontology = metadata.get("ontology") if isinstance(metadata.get("ontology"), dict) else {}
-    projection = ontology.get("neo4j") if isinstance(ontology.get("neo4j"), dict) else ontology.get("projection")
+    projection = ontology_projection_from_metadata(metadata)
     if not isinstance(projection, dict):
         return {}
     inference = projection.get("inferenceBox") if isinstance(projection.get("inferenceBox"), dict) else {}
+    if isinstance(inference, dict) and inference:
+        inference = dict(inference)
+        inference.setdefault("graphStore", projection.get("graphStore") or projection.get("primaryGraphStore") or projection.get("graphStoreMode") or "")
     return dict(inference or {}) if isinstance(inference, dict) else {}
 
 
@@ -75,6 +95,7 @@ def relation_context_from_inferencebox(
         return {}
     if not bool(inferencebox.get("neo4jNativeReasoningUsed")) and not inferencebox.get("relations"):
         return {}
+    graph_store = str(inferencebox.get("graphStore") or "").strip() or "graph-store"
     relations = symbol_inference_relations(symbol, inferencebox.get("relations") or [])
     traces = symbol_inference_traces(symbol, inferencebox.get("traces") or [])
     if not relations and not traces:
@@ -98,9 +119,12 @@ def relation_context_from_inferencebox(
     return {
         "engineVersion": NEO4J_RELATION_CONTEXT_VERSION,
         "source": "neo4jInferenceBox",
+        "graphStore": graph_store,
         "graphStoreUsed": True,
         "fallbackUsed": False,
         "neo4jNativeReasoningUsed": bool(inferencebox.get("neo4jNativeReasoningUsed")),
+        "nativeTypeDbReasoningUsed": bool(inferencebox.get("nativeTypeDbReasoningUsed")),
+        "typedbBootstrapReasoningUsed": bool(inferencebox.get("typedbBootstrapReasoningUsed")),
         "subject": {
             "symbol": facts.get("symbol"),
             "name": facts.get("name"),
@@ -121,6 +145,7 @@ def relation_context_from_inferencebox(
         "evidenceSubgraph": evidence_subgraph,
         "promptContext": prompt_context,
         "neo4jInference": {
+            "graphStore": graph_store,
             "relations": relations,
             "traces": traces,
             "entityCount": inferencebox.get("entityCount"),

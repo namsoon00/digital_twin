@@ -3103,11 +3103,18 @@
       ontologyRuleCandidateAiTimeoutSeconds: settingValue("ontologyRuleCandidateAiTimeoutSeconds"),
       ontologyRuleCandidateAiIntervalMinutes: settingValue("ontologyRuleCandidateAiIntervalMinutes"),
       ontologyRuleCandidateAiMaxCandidates: settingValue("ontologyRuleCandidateAiMaxCandidates"),
+      ontologyGraphStoreMode: settingValue("ontologyGraphStoreMode"),
       ontologyNeo4jEnabled: settingValue("ontologyNeo4jEnabled"),
+      ontologyTypeDbEnabled: settingValue("ontologyTypeDbEnabled"),
       neo4jUri: settingValue("neo4jUri"),
       neo4jUser: settingValue("neo4jUser"),
       neo4jDatabase: settingValue("neo4jDatabase"),
       neo4jTimeoutSeconds: settingValue("neo4jTimeoutSeconds"),
+      typedbAddress: settingValue("typedbAddress"),
+      typedbUser: settingValue("typedbUser"),
+      typedbDatabase: settingValue("typedbDatabase"),
+      typedbTlsEnabled: settingValue("typedbTlsEnabled"),
+      typedbTimeoutSeconds: settingValue("typedbTimeoutSeconds"),
       materialityGateEnabled: settingValue("materialityGateEnabled"),
       materialityMinimumScore: settingValue("materialityMinimumScore"),
       marketMaterialityMinimumScore: settingValue("marketMaterialityMinimumScore"),
@@ -11831,7 +11838,9 @@
   function renderFeedSettingsPanel() {
     var archiveScope = (settingValue("newsCollectionMaxSymbols") || defaultSettings.newsCollectionMaxSymbols || "40") + "종목 · "
       + (settingValue("newsCollectionLookbackMinutes") || defaultSettings.newsCollectionLookbackMinutes || "180") + "분";
-    var reasoningScope = (settingEnabled("ontologyNeo4jEnabled") ? "Neo4j" : "로컬") + " · "
+    var graphStoreMode = settingValue("ontologyGraphStoreMode") || defaultSettings.ontologyGraphStoreMode || "neo4j";
+    var graphStoreLabel = graphStoreMode === "typedb" ? "TypeDB" : (graphStoreMode === "dual" ? "Neo4j+TypeDB" : (settingEnabled("ontologyNeo4jEnabled") ? "Neo4j" : "로컬"));
+    var reasoningScope = graphStoreLabel + " · "
       + (settingValue("ontologyReasoningIntervalSeconds") || defaultSettings.ontologyReasoningIntervalSeconds || "10") + "초";
     return [
       '<article class="panel feed-settings-panel">',
@@ -11914,10 +11923,15 @@
         ]),
         renderSettingField("newsCollectionRateLimitSeconds", "뉴스 호출 간격(초)", "number", "0.25")
       ].join(""), "research feed-wide"),
-      renderSettingsGroup("그래프 추론", "수집 데이터가 Neo4j 관계 추론으로 넘어가는 경로입니다.", [
+      renderSettingsGroup("그래프 추론", "수집 데이터가 그래프 저장소 관계 추론으로 넘어가는 경로입니다.", [
         renderSettingSelect("ontologyReasoningEnabled", "데이터 변경 추론", [
           { value: "1", label: "사용" },
           { value: "0", label: "사용 안 함" }
+        ]),
+        renderSettingSelect("ontologyGraphStoreMode", "그래프 저장소 모드", [
+          { value: "neo4j", label: "Neo4j 유지" },
+          { value: "dual", label: "Neo4j + TypeDB 미러" },
+          { value: "typedb", label: "TypeDB 단독" }
         ]),
         renderSettingSelect("ontologyNeo4jEnabled", "Neo4j 그래프 저장소", [
           { value: "1", label: "사용" },
@@ -11927,6 +11941,18 @@
         renderSettingField("neo4jUser", "Neo4j 사용자", "text", "neo4j"),
         renderSettingField("neo4jDatabase", "Neo4j DB", "text", "neo4j"),
         renderSettingField("neo4jTimeoutSeconds", "Neo4j 타임아웃(초)", "number", "8"),
+        renderSettingSelect("ontologyTypeDbEnabled", "TypeDB 그래프 저장소", [
+          { value: "1", label: "사용" },
+          { value: "0", label: "사용 안 함" }
+        ]),
+        renderSettingField("typedbAddress", "TypeDB 주소", "text", "127.0.0.1:1729"),
+        renderSettingField("typedbUser", "TypeDB 사용자", "text", "admin"),
+        renderSettingField("typedbDatabase", "TypeDB DB", "text", "orbit_alpha_ontology"),
+        renderSettingSelect("typedbTlsEnabled", "TypeDB TLS", [
+          { value: "0", label: "사용 안 함" },
+          { value: "1", label: "사용" }
+        ]),
+        renderSettingField("typedbTimeoutSeconds", "TypeDB 타임아웃(초)", "number", "20"),
         renderSettingField("ontologyReasoningIntervalSeconds", "추론 요청 확인 주기(초)", "number", "10"),
         renderSettingField("ontologyReasoningBatchSize", "추론 요청 배치", "number", "20")
       ].join(""), "gate feed-wide"),

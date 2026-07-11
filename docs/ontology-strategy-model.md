@@ -55,7 +55,7 @@ AI 프롬프트에는 TBox, `boundedContexts`, ABox, operational ontology, reaso
 6. `DecisionItem.relation_rule_context`, `ai_prompt_context`, `ai_context`에 관계 규칙 결과와 프롬프트 입력 계약을 함께 붙인다.
 7. 실시간 모니터링은 알림 metadata에 `ontologyRelationContext`, `ontologyPromptContext`, `ontologyReviewContext`를 포함한다.
 8. 모델 리뷰 워커는 이 정보를 비동기 AI 프롬프트에 넣어 판단 변화 원인, 노이즈 가능성, 부족 데이터, 다음 규칙 개선안을 분석한다.
-9. `infrastructure/ontology_projection.py`가 스냅샷을 온톨로지 read model로 투영한다. `NEO4J_URI`가 설정되어 있으면 `infrastructure/neo4j_ontology.py`가 동일 그래프를 Neo4j에 저장한다.
+9. `infrastructure/ontology_projection.py`가 스냅샷을 온톨로지 read model로 투영한다. 기본은 `infrastructure/neo4j_ontology.py`가 Neo4j에 저장하고, `ONTOLOGY_GRAPH_STORE_MODE=dual`이면 `infrastructure/typedb_ontology.py`가 같은 TBox/ABox/RuleBox/InferenceBox 세트를 TypeDB에도 미러링한다.
 
 알림은 투자 이벤트 타입별 폴링으로 직접 발송하지 않는다. 기존 `modelBuy`, `holdingTiming`, `externalDartDisclosure` 같은 이벤트는 `investmentInsight.metadata.sourceAlertEvents`의 근거 신호로 남고, 최종 발송은 `Insight -> DISPATCHED_BY -> NotificationDispatch(investmentInsight)` 관계가 담당한다.
 
@@ -132,18 +132,26 @@ API:
 
 코드의 기본 matcher는 안전한 기본 규칙을 실행한다. 설정의 관계 규칙과 프롬프트는 UI, 메시지, AI 리뷰 정보의 운영 계약이며, 새 규칙 matcher를 추가할 때도 이 키를 함께 갱신해야 한다.
 
-## Neo4j Configuration
+## Graph Store Configuration
 
 ```bash
+ONTOLOGY_GRAPH_STORE_MODE=neo4j # neo4j | dual | typedb
 ONTOLOGY_NEO4J_ENABLED=1
 NEO4J_URI=http://127.0.0.1:7474
 NEO4J_USER=neo4j
 NEO4J_PASSWORD=...
 NEO4J_DATABASE=neo4j
 NEO4J_TIMEOUT_SECONDS=8
+ONTOLOGY_TYPEDB_ENABLED=0
+TYPEDB_ADDRESS=127.0.0.1:1729
+TYPEDB_USER=admin
+TYPEDB_PASSWORD=password
+TYPEDB_DATABASE=orbit_alpha_ontology
+TYPEDB_TLS_ENABLED=0
+TYPEDB_TIMEOUT_SECONDS=20
 ```
 
-HTTP URI는 Neo4j transactional endpoint로 전송한다. `bolt://` 또는 `neo4j://` URI를 쓰려면 런타임에 `neo4j` Python driver가 설치되어 있어야 한다. 저장 실패는 모니터링 사이클을 막지 않고 snapshot metadata에 결과만 남긴다.
+HTTP URI는 Neo4j transactional endpoint로 전송한다. `bolt://` 또는 `neo4j://` URI를 쓰려면 런타임에 `neo4j` Python driver가 설치되어 있어야 한다. TypeDB를 쓰려면 런타임에 `typedb-driver` Python package와 TypeDB 서버가 필요하다. 저장 실패는 모니터링 사이클을 막지 않고 snapshot metadata에 결과만 남긴다.
 
 저장소는 그래프 저장 전에 다음 스키마 준비를 best effort로 실행한다.
 

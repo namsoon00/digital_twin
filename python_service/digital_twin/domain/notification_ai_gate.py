@@ -634,10 +634,21 @@ def ai_confidence_display(response: NotificationAIValidatedResponse, level: str)
     return str(round(response.confidence, 1)) + "%"
 
 
+def ai_judgment_section_title(level: str) -> str:
+    if level in {"absoluteBeginner", "beginner"}:
+        return "판단 요약"
+    return "AI 최종 판단"
+
+
+def ai_action_row_label(level: str) -> str:
+    if level == "absoluteBeginner":
+        return "지금 할 일"
+    return "대응 방향"
+
+
 def ai_judgment_rows(response: NotificationAIValidatedResponse, level: str) -> List[str]:
-    label = "먼저 볼 행동" if level == "absoluteBeginner" else "AI 최종 의견"
     rows = [
-        _html_row(label, response.action_label),
+        _html_row(ai_action_row_label(level), response.action_label),
         _html_row("판단 강도", ai_confidence_display(response, level)),
     ]
     summary_label = "이유" if level == "absoluteBeginner" else "AI 판단 이유"
@@ -1016,7 +1027,7 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
         "<b>" + html.escape(headline, quote=False) + "</b>",
         ("<code>" + html.escape(target, quote=False) + "</code>") if target else "",
         "",
-        "<b>AI 최종 판단</b>",
+        "<b>" + ai_judgment_section_title(level) + "</b>",
         *ai_judgment_rows(response, level),
     ]
     difference_rows = ai_difference_rows(response, level)
@@ -1072,9 +1083,9 @@ def execution_telegram_message_absolute_beginner(context: Dict[str, object], res
         "<b>" + html.escape(headline, quote=False) + "</b>",
         ("<code>" + html.escape(target, quote=False) + "</code>") if target else "",
         "",
-        "<b>AI 최종 판단</b>",
+        "<b>" + ai_judgment_section_title("absoluteBeginner") + "</b>",
         *ai_judgment_rows(response, "absoluteBeginner"),
-        "• 자동 주문이 아니라 실행 전 점검 알림입니다.",
+        _html_row("안내", "자동 주문이 아니라 실행 전 점검 알림입니다."),
     ]
     difference_rows = ai_difference_rows(response, "absoluteBeginner")
     if difference_rows:

@@ -7249,7 +7249,9 @@ class PythonServiceTests(unittest.TestCase):
         message = enriched["telegramMessage"]
 
         self.assertIn("<b>AI 최종 판단</b>", message)
+        self.assertIn("<b>대응 방향</b>", message)
         self.assertIn("AI 판단 이유", message)
+        self.assertNotIn("먼저 볼 행동", message)
         self.assertIn("매도", message)
         self.assertIn("<b>평균매입가</b>: <code>2,571,000원</code>", message)
         self.assertIn("<b>보유 수량</b>: <code>10주</code>", message)
@@ -7366,7 +7368,11 @@ class PythonServiceTests(unittest.TestCase):
 
         message = context_with_validated_ai_response(context, response)["telegramMessage"]
 
-        self.assertIn("<b>AI 최종 판단</b>", message)
+        self.assertIn("<b>판단 요약</b>", message)
+        self.assertIn("<b>지금 할 일</b>", message)
+        self.assertIn("<b>안내</b>: <code>자동 주문이 아니라 실행 전 점검 알림입니다.</code>", message)
+        self.assertNotIn("먼저 볼 행동", message)
+        self.assertNotIn("<b>AI 최종 판단</b>", message)
         self.assertIn("<b>현재 상황</b>", message)
         self.assertIn("<b>투자자</b>", message)
         self.assertIn("외국인: 순매도 3,015,093주", message)

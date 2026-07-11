@@ -6,7 +6,7 @@ from .market_data import clamp, number
 
 
 NEWS_ANALYSIS_VERSION = "news-analysis-v2-domain-ontology"
-ARTICLE_DIGEST_VERSION = "article-digest-ko-v1"
+ARTICLE_DIGEST_VERSION = "article-digest-ko-v2"
 
 SUPPORT_KEYWORDS = (
     "beat",
@@ -39,6 +39,12 @@ RISK_KEYWORDS = (
     "miss",
     "downgrade",
     "lawsuit",
+    "sue",
+    "sues",
+    "sued",
+    "legal",
+    "litigation",
+    "antitrust",
     "probe",
     "investigation",
     "recall",
@@ -117,7 +123,7 @@ EVENT_TYPE_KEYWORDS = {
     "guidance": ["guidance", "전망", "가이던스", "목표주가", "estimate", "forecast"],
     "supply_chain": ["공급", "supply", "supplier", "생산", "fab", "foundry", "라인", "공장"],
     "product": ["launch", "출시", "roadmap", "제품", "서비스", "chip", "GPU", "AI"],
-    "regulation": ["regulation", "규제", "소송", "lawsuit", "probe", "investigation", "조사", "제재"],
+    "regulation": ["regulation", "규제", "소송", "lawsuit", "sue", "sues", "sued", "legal", "litigation", "antitrust", "probe", "investigation", "조사", "제재"],
     "capital_policy": ["buyback", "dividend", "자사주", "배당", "증자", "offering", "dilution"],
     "listing": ["listing", "상장", "ADR", "나스닥", "IPO"],
     "macro_sector": ["금리", "환율", "inflation", "FOMC", "업황", "수요", "demand"],
@@ -261,6 +267,15 @@ def _lower_text(value: object) -> str:
     return str(value or "").casefold()
 
 
+def _keyword_in_lowered_text(keyword: object, lowered_text: str) -> bool:
+    term = _lower_text(keyword).strip()
+    if not term:
+        return False
+    if re.fullmatch(r"[a-z0-9][a-z0-9 .&+/'-]*", term):
+        return bool(re.search(r"(?<![a-z0-9])" + re.escape(term) + r"(?![a-z0-9])", lowered_text))
+    return term in lowered_text
+
+
 def _unique_texts(values: Iterable[object]) -> List[str]:
     result: List[str] = []
     seen = set()
@@ -333,14 +348,14 @@ def sector_topic_keywords(target: object) -> List[str]:
 
 def matched_terms(text: str, terms: Iterable[str]) -> List[str]:
     lowered = _lower_text(text)
-    return [term for term in _unique_texts(terms) if _lower_text(term) and _lower_text(term) in lowered]
+    return [term for term in _unique_texts(terms) if _keyword_in_lowered_text(term, lowered)]
 
 
 def detected_topic_labels(text: object, limit: int = 5) -> List[str]:
     lowered = _lower_text(text)
     labels: List[str] = []
     for keyword, label in TOPIC_LABELS:
-        if keyword in lowered and label not in labels:
+        if _keyword_in_lowered_text(keyword, lowered) and label not in labels:
             labels.append(label)
         if len(labels) >= limit:
             break
@@ -351,7 +366,7 @@ def keyword_hits(text: object, terms: Iterable[str], limit: int = 4) -> List[str
     lowered = _lower_text(text)
     rows: List[str] = []
     for term in terms:
-        if _lower_text(term) in lowered and str(term) not in rows:
+        if _keyword_in_lowered_text(term, lowered) and str(term) not in rows:
             rows.append(str(term))
         if len(rows) >= limit:
             break
@@ -389,7 +404,7 @@ def article_sentence_candidates(text: object, target: object, analysis: Dict[str
             continue
         lowered = _lower_text(sentence)
         score = max(0.0, 12.0 - index * 0.25)
-        score += sum(4.0 for term in terms if _lower_text(term) and _lower_text(term) in lowered)
+        score += sum(4.0 for term in terms if _keyword_in_lowered_text(term, lowered))
         score += min(8.0, len(numeric_highlights(sentence, 4)) * 2.0)
         scored.append((score, index, sentence))
     scored.sort(key=lambda item: (-item[0], item[1]))
@@ -403,6 +418,38 @@ def article_sentence_candidates(text: object, target: object, analysis: Dict[str
         return result
     fallback = compact_text(source_text, 180)
     return [fallback] if fallback else []
+
+
+def english_article_korean_context_parts(
+    target: object,
+    title: object,
+    source_text: object,
+    event_label: str,
+) -> List[str]:
+    text = _lower_text(str(title or "") + " " + str(source_text or ""))
+    subject = str(getattr(target, "name", "") or target_symbol(target) or "해당 종목").strip()
+    parts: List[str] = []
+    if any(_keyword_in_lowered_text(term, text) for term in ["lawsuit", "sue", "sues", "sued", "legal", "litigation", "antitrust", "probe", "investigation"]):
+        parts.append("소송·조사·규제처럼 주가 부담이 될 수 있는 법적 이슈를 다룹니다")
+    if any(_keyword_in_lowered_text(term, text) for term in ["earnings", "revenue", "profit", "margin", "guidance", "forecast", "estimate"]):
+        parts.append("실적이나 향후 전망 변화가 핵심입니다")
+    if any(_keyword_in_lowered_text(term, text) for term in ["buyback", "dividend", "offering", "dilution", "debt", "treasury"]):
+        parts.append("자사주·배당·자금 조달 같은 자본정책 이슈가 포함됩니다")
+    if any(_keyword_in_lowered_text(term, text) for term in ["partnership", "contract", "deal", "approval", "launch", "supplier"]):
+        parts.append("제휴·계약·승인·출시처럼 사업 진행 상황과 연결된 내용입니다")
+    if any(_keyword_in_lowered_text(term, text) for term in ["bitcoin", "crypto", "digital asset", "ethereum"]):
+        parts.append("가상자산 가격이나 관련 사업 민감도와 연결될 수 있는 내용입니다")
+    if any(_keyword_in_lowered_text(term, text) for term in ["rate", "yield", "inflation", "fed", "fomc", "dollar", "currency"]):
+        parts.append("금리·물가·환율 같은 거시 환경 변화와 연결되는 내용입니다")
+    if any(_keyword_in_lowered_text(term, text) for term in ["semiconductor", "chip", "memory", "hbm", "dram", "nand", "foundry", "demand"]):
+        parts.append("반도체 수요와 공급 흐름이 " + subject + "의 가격 판단과 연결될 수 있습니다")
+    if any(_keyword_in_lowered_text(term, text) for term in ["ai", "artificial intelligence", "gpu", "data center", "cloud"]):
+        parts.append("AI·데이터센터 투자 흐름과 연결된 내용입니다")
+    if any(_keyword_in_lowered_text(term, text) for term in ["shares", "stock", "pre-market", "premarket", "trading", "rises", "falls", "down", "up"]):
+        parts.append("기사 안에서 주가 움직임이나 시장 반응을 함께 다룹니다")
+    if not parts:
+        parts.append("본문에서 " + event_label + " 성격의 새 정보를 확인했으며 투자 판단에 필요한 사실관계 확인이 필요합니다")
+    return parts[:3]
 
 
 def korean_article_summary(
@@ -425,7 +472,7 @@ def korean_article_summary(
     numbers = numeric_highlights(source_text)
     body_status = "본문" if body else "RSS/제공 요약"
     sentences = article_sentence_candidates(source_text, target, analysis, 2)
-    if sentences and (body or contains_hangul(source_text)):
+    if sentences and contains_hangul(source_text):
         sentence_text = " ".join(sentences)
         details = []
         if topics:
@@ -434,7 +481,7 @@ def korean_article_summary(
             details.append("확인된 수치: " + ", ".join(numbers))
         suffix = (" " + " / ".join(details) + ".") if details else ""
         return compact_text(body_status + " 요약: " + sentence_text + suffix, 520)
-    detail_parts = []
+    detail_parts = english_article_korean_context_parts(target, title, source_text, event_label)
     if topics:
         detail_parts.append("핵심 키워드는 " + ", ".join(topics) + "입니다")
     if numbers:
@@ -519,9 +566,9 @@ def source_reliability_score(source: object, provider: object = "") -> float:
 
 
 def keyword_polarity(text: object) -> Tuple[str, float]:
-    lowered = str(text or "").lower()
-    support_hits = sum(1 for item in SUPPORT_KEYWORDS if item.lower() in lowered)
-    risk_hits = sum(1 for item in RISK_KEYWORDS if item.lower() in lowered)
+    lowered = _lower_text(text)
+    support_hits = sum(1 for item in SUPPORT_KEYWORDS if _keyword_in_lowered_text(item, lowered))
+    risk_hits = sum(1 for item in RISK_KEYWORDS if _keyword_in_lowered_text(item, lowered))
     if risk_hits > support_hits:
         return "risk", min(16.0, 6.0 + risk_hits * 4.0)
     if support_hits > risk_hits:
@@ -533,7 +580,7 @@ def classify_news_event_type(title: object, summary: object = "") -> str:
     text = _lower_text(str(title or "") + " " + str(summary or ""))
     best = ("general", 0)
     for event_type, keywords in EVENT_TYPE_KEYWORDS.items():
-        hits = sum(1 for keyword in keywords if _lower_text(keyword) in text)
+        hits = sum(1 for keyword in keywords if _keyword_in_lowered_text(keyword, text))
         if hits > best[1]:
             best = (event_type, hits)
     return best[0]

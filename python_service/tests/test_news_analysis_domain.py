@@ -7,6 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from digital_twin.domain.investment_research import NewsCollectionTarget, ResearchEvidence
 from digital_twin.domain.news_analysis import (
     classify_news_relevance,
+    classify_news_event_type,
     confidence_from_analysis_payload,
     impact_from_analysis_payload,
     korean_article_summary,
@@ -108,7 +109,13 @@ class NewsAnalysisDomainTests(unittest.TestCase):
         self.assertNotIn("한국어로 정리하면", summary)
         self.assertNotIn("이슈 이슈", summary)
         self.assertIn("본문 요약", summary)
-        self.assertIn("Samsung Electronics shares moved after semiconductor demand expectations improved.", summary)
+        self.assertIn("반도체 수요와 공급 흐름", summary)
+        self.assertNotIn("Samsung Electronics shares moved after semiconductor demand expectations improved.", summary)
+        self.assertRegex(summary, r"[가-힣]")
+
+    def test_english_legal_keyword_uses_word_boundary(self):
+        self.assertEqual("regulation", classify_news_event_type("Apple sues OpenAI", "legal dispute"))
+        self.assertNotEqual("regulation", classify_news_event_type("Apple issues software update", "general product release"))
 
 
 if __name__ == "__main__":

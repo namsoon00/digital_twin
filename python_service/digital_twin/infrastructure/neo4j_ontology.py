@@ -258,7 +258,7 @@ class Neo4jOntologyGraphRepository(Neo4jOntologyRowMapperMixin):
                     "n.asOf = row.asOf, n.isCurrent = row.isCurrent, n.tboxVersion = row.tboxVersion, "
                     "n.activeTboxVersion = row.activeTboxVersion, n.tboxFingerprint = row.tboxFingerprint, n.activeTboxSource = row.activeTboxSource, "
                     "n.sourceValue = row.sourceValue, n.profitLossRate = row.profitLossRate, n.levelType = row.levelType, "
-                    "n.field = row.field, n.valueNumber = row.valueNumber, n.polarity = row.polarity, n.group = row.group, "
+                    "n.field = row.field, n.valueNumber = row.valueNumber, n.polarity = row.polarity, n.transitionType = row.transitionType, n.group = row.group, "
                     "n.relationScope = row.relationScope, n.eventType = row.eventType, n.materialityScore = row.materialityScore, "
                     "n.materialityPassed = row.materialityPassed, n.relevanceScore = row.relevanceScore, "
                     "n.sourceReliability = row.sourceReliability, n.impactScore = row.impactScore, n.confidence = row.confidence, "
@@ -420,7 +420,7 @@ class Neo4jOntologyGraphRepository(Neo4jOntologyRowMapperMixin):
                 "entityCount": len(graph.entities),
                 "relationCount": len(graph.relations),
             }
-        native_reasoning = self.run_native_reasoning_via_http(endpoint, headers, graph) if self.should_run_native_reasoning(graph) else {
+        native_reasoning = self.run_native_rulebox_reasoning_via_http(endpoint, headers) if self.should_run_native_reasoning(graph) else {
             "status": "skipped",
             "statementCount": 0,
             "reason": "graph requested persistence-only Neo4j seed",
@@ -831,7 +831,7 @@ class Neo4jOntologyGraphRepository(Neo4jOntologyRowMapperMixin):
                         schema_reason = str(error)[:180]
                 for statement in self.statements(graph):
                     session.run(statement["statement"], **statement["parameters"])
-                native_reasoning = self.run_native_reasoning_via_driver(session, graph) if self.should_run_native_reasoning(graph) else {
+                native_reasoning = self.run_native_rulebox_reasoning_via_driver() if self.should_run_native_reasoning(graph) else {
                     "status": "skipped",
                     "statementCount": 0,
                     "reason": "graph requested persistence-only Neo4j seed",

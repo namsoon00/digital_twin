@@ -33,6 +33,7 @@ from digital_twin.domain.market_data import normalize_position, technical_indica
 from digital_twin.domain.message_types import DEFAULT_ALERT_RULES, DEFAULT_CADENCE, MESSAGE_TYPE_EMOJIS, MESSAGE_TYPE_LABELS, public_message_catalog
 from digital_twin.domain.ontology_contracts import OntologyEntity, OntologyRelation, entity_id
 from digital_twin.domain.ontology_schema import abox_properties
+from digital_twin.domain.ontology_validator import validate_ontology
 from digital_twin.domain.portfolio_ontology_builder import apply_relation_driven_opinions, build_portfolio_ontology
 from digital_twin.domain.ontology_relation_reasoning import decision_action_group_for_label, evaluate_position_relation_rules, prompt_template_for_message_type
 from digital_twin.domain.portfolio_calculations import portfolio_summary
@@ -2008,6 +2009,38 @@ class PythonServiceTests(unittest.TestCase):
         self.assertGreater(transition_relations[0].properties["supportImpact"], 0)
         self.assertTrue(thesis_relations)
         self.assertTrue(any("횡보 후 상방 이탈" in item.get("label", "") for item in opinion.relation_influences))
+
+    def test_portfolio_ontology_validates_current_path_weakening_transition(self):
+        position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "marketValue": 1000000,
+            "currentPrice": 90000,
+            "profitLossRate": -6.0,
+            "ma20": 100000,
+            "ma60": 99000,
+            "ma20Distance": -10.0,
+            "ma60Distance": -9.0,
+            "ma20Slope": -0.8,
+            "ma60Slope": -0.2,
+            "changeRate": -1.5,
+            "volumeRatio": 1.1,
+            "sector": "반도체",
+        })
+        graph = build_portfolio_ontology(
+            [position],
+            portfolio_summary([position], fx_rates={"KRW": 1}),
+            include_reasoning_outputs=False,
+        )
+        transition = next(item for item in graph.entities if item.kind == "trend-transition")
+        relation_types = {item.relation_type for item in graph.relations}
+        report = validate_ontology(graph)
+
+        self.assertEqual("current_path_risk_confirmation", transition.properties["transitionType"])
+        self.assertIn("INDICATES_WEAKENING", relation_types)
+        self.assertEqual("valid", report.status)
 
     def test_neo4j_ontology_repository_builds_relation_statements(self):
         position = normalize_position({

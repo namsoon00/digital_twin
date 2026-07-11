@@ -334,6 +334,7 @@ RELATION_DEFS: List[TBoxRelationDef] = [
     TBoxRelationDef("BREAKS_CONSOLIDATION", "reasoning-insight", "reasoning-insight", "reasoning-insight"),
     TBoxRelationDef("INDICATES_ACCELERATION", "reasoning-insight", "reasoning-insight", "reasoning-insight"),
     TBoxRelationDef("INDICATES_DECELERATION", "reasoning-insight", "reasoning-insight", "reasoning-insight"),
+    TBoxRelationDef("INDICATES_WEAKENING", "reasoning-insight", "reasoning-insight", "reasoning-insight"),
     TBoxRelationDef("RETESTS_LEVEL", "observation-data", "investment-core", "observation-data"),
     TBoxRelationDef("BREAKS_LEVEL", "observation-data", "investment-core", "observation-data"),
     TBoxRelationDef("RECLAIMS_LEVEL", "observation-data", "investment-core", "observation-data"),

@@ -145,6 +145,7 @@ class Neo4jOntologyRowMapperMixin:
                 "field": str(properties.get("field") or ""),
                 "valueNumber": number_or_none(properties.get("value")),
                 "polarity": str(properties.get("polarity") or ""),
+                "transitionType": str(properties.get("transitionType") or ""),
                 "group": str(properties.get("group") or ""),
                 "relationScope": str(properties.get("relationScope") or ""),
                 "eventType": str(properties.get("eventType") or ""),

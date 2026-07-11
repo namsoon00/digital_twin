@@ -708,14 +708,6 @@ def _plain_value(context: Dict[str, object], label: str) -> str:
     return _line_after_colon(_raw_lines(context), label)
 
 
-def notification_key(context: Dict[str, object]) -> str:
-    for key in ["key", "dedupeKey", "jobId"]:
-        value = str((context or {}).get(key) or "").strip()
-        if value:
-            return value
-    return ""
-
-
 def execution_footer(context: Dict[str, object], response: NotificationAIValidatedResponse, reference: str, sent: str) -> List[str]:
     return []
 

@@ -23,7 +23,6 @@ from .notification_ontology_sections import (
     notification_ai_opinion_payload,
     notification_data_lines,
     ontology_missing_data,
-    ontology_prompt_context,
     ontology_relation_context,
     ontology_relation_contexts,
     ontology_rule_lines,
@@ -534,46 +533,6 @@ def context_message_type(context: Dict[str, object]) -> str:
     return str((context or {}).get("messageType") or (context or {}).get("rule") or "").strip()
 
 
-def score_reason_items(value: object) -> List[str]:
-    if isinstance(value, list):
-        items = value
-    else:
-        items = str(value or "").splitlines()
-    return [friendly_score_reason(item) for item in items if str(item or "").strip()]
-
-
-def friendly_score_reason(value: object) -> str:
-    text = str(value or "").strip()
-    replacements = [
-        ("기본 ", "기본 우선도 "),
-        ("주의 등급", "주의 알림"),
-        ("관찰 등급", "관찰 알림"),
-        ("종목 지정", "종목 코드/이름 포함"),
-        ("핵심 투자 단어", "중요 투자 표현 포함"),
-        ("확인 데이터 포함", "수급·추세 같은 확인 데이터 포함"),
-        ("행동 필요 표현", "확인·점검 표현 포함"),
-        ("본문 있음", "알림 내용 있음"),
-        ("상태성 노이즈", "단순 상태 알림"),
-        ("유사 메시지", "비슷한 알림 반복"),
-        ("상태 정책", "반복 알림 조절"),
-        ("장 시간", "장 운영 시간"),
-        ("신규 임계값 상태", "새 기준값 상태"),
-        ("같은 임계값 상태 지속", "같은 기준값 상태 지속"),
-        ("임계값", "기준값"),
-        ("리스크", "위험"),
-        ("모델 매수", "내 매수 기준"),
-        ("모델 매도", "내 매도 기준"),
-        ("danger", "위험"),
-        ("caution", "주의"),
-        ("ALERT", "주의"),
-        ("WATCH", "관찰"),
-    ]
-    for before, after in replacements:
-        text = text.replace(before, after)
-    text = re.sub(r"([+-]\d+(?:\.\d+)?)$", r"\1점", text)
-    return text
-
-
 def formula_number(value: object) -> str:
     try:
         number = float(value)
@@ -726,39 +685,6 @@ MODEL_DATA_HINTS = {
 }
 
 
-def context_number(context: Dict[str, object], key: str):
-    value = (context or {}).get(key)
-    if value in (None, ""):
-        raw_value = data_value(context_raw_lines(context), key)
-        value = raw_value
-    if isinstance(value, (int, float)):
-        return float(value)
-    text = str(value or "").replace(",", "")
-    match = re.search(r"-?\d+(?:\.\d+)?", text)
-    if not match:
-        return None
-    try:
-        return float(match.group(0))
-    except ValueError:
-        return None
-
-
-def selected_holding_formula_key(context: Dict[str, object]) -> str:
-    basis = str((context or {}).get("holdingDecisionBasis") or "").strip()
-    if basis == "profitTake":
-        return "profitTakeScoreFormula"
-    if basis == "lossCut":
-        return "lossCutScoreFormula"
-    pnl = context_number(context, "profitLossRate")
-    if pnl is None:
-        pnl = context_number(context, "손익")
-    if pnl is None:
-        pnl = context_number(context, "수익률")
-    if pnl is not None:
-        return "lossCutScoreFormula" if pnl < 0 else "profitTakeScoreFormula"
-    return ""
-
-
 def strategy_formula_line(context: Dict[str, object]) -> str:
     message_type = context_message_type(context)
     if ontology_relation_context(context) and message_type in {"modelBuy", "modelSell", "watchlistBuyCandidate", "holdingTiming", "monitorDecisionChange"}:
@@ -814,24 +740,6 @@ def modeling_lines(context: Dict[str, object]) -> List[str]:
     if data_hint:
         lines.append("사용 데이터: " + data_hint)
     lines.extend(crypto_model_summary_lines(context))
-    return lines
-
-
-def delivery_score_lines(context: Dict[str, object]) -> List[str]:
-    if not isinstance(context, dict) or context.get("honeyScore") in (None, ""):
-        return []
-    score = format_score_value(context.get("honeyScore"))
-    threshold = format_score_value(context.get("honeyThreshold"))
-    lines = [
-        "발송 우선도: " + score + "/" + threshold,
-        "발송 우선도는 투자 모델 점수가 아니라 이 알림을 실제로 보낼지 판단하는 별도 값입니다. 발송 공식으로 알림 중요도를 계산한 뒤 반복 여부와 장 시간 정책을 반영합니다.",
-    ]
-    formula = str(context.get("notificationScoreFormula") or "").strip()
-    if formula and formula != "rawScore":
-        lines.append("발송 공식: " + formula)
-    reasons = score_reason_items(context.get("honeyReasons"))
-    if reasons:
-        lines.append("발송 판정 내역: " + ", ".join(reasons))
     return lines
 
 
@@ -930,17 +838,6 @@ def ontology_missing_lines(context: Dict[str, object]) -> List[str]:
     return ["부족 데이터 없음"] if ontology_relation_context(context) and not lines else lines
 
 
-def ontology_prompt_section_lines(context: Dict[str, object]) -> List[str]:
-    lines = ai_prompt_lines(context)
-    prompt_context = ontology_prompt_context(context)
-    policy = str(prompt_context.get("promptPolicy") or "").strip()
-    if policy:
-        compact_policy = ", ".join(line.strip() for line in policy.splitlines() if line.strip())
-        if compact_policy:
-            lines.append("정책: " + compact_policy)
-    return lines
-
-
 def score_explanation_sections(context: Dict[str, object]) -> List[tuple]:
     if context_message_type(context) in SCORE_EXPLANATION_SKIP_TYPES:
         return []
@@ -964,13 +861,6 @@ def score_explanation_sections(context: Dict[str, object]) -> List[tuple]:
     if missing_lines:
         sections.append(("부족 데이터", missing_lines))
     return sections
-
-
-def score_explanation_lines(context: Dict[str, object]) -> List[str]:
-    lines: List[str] = []
-    for _title, section_lines in score_explanation_sections(context):
-        lines.extend(section_lines)
-    return lines
 
 
 def score_explanation_block(context: Dict[str, object], rich: bool = False) -> str:
@@ -1053,15 +943,6 @@ def footer_value_from_context(context: Dict[str, object], *keys: str) -> str:
         if value:
             return value
     return ""
-
-
-def footer_analysis_source(context: Dict[str, object]) -> str:
-    response = context.get("notificationAiValidatedResponse") if isinstance(context, dict) else {}
-    if isinstance(response, dict):
-        source = str(response.get("source") or "").strip()
-        if source:
-            return "AI 투자 판단 / " + source
-    return str((context or {}).get("analysisSource") or "").strip()
 
 
 def footer_row(label: str, value: str, rich: bool = False) -> str:

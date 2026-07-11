@@ -19,10 +19,6 @@ from ..domain.portfolio_calculations import (
 from ..domain.strategy import StrategyModel, inference_required_relation_context
 
 
-def clamp_score(value: float) -> int:
-    return max(0, min(100, round(float(value or 0))))
-
-
 def position_payload(position: Position) -> Dict[str, object]:
     return {
         "symbol": position.symbol,
@@ -82,17 +78,6 @@ def portfolio_payload(portfolio) -> Dict[str, object]:
     if isinstance(portfolio, dict):
         return dict(portfolio)
     return asdict(portfolio)
-
-
-def summary_payload(summary) -> Dict[str, object]:
-    return {
-        "total": summary.total,
-        "invested": summary.invested,
-        "cash": summary.cash,
-        "markets": summary.markets,
-        "sectors": summary.sectors,
-        "concentration": summary.concentration,
-    }
 
 
 def demo_toss_portfolio(reason: str = "", demo_positions_provider: Callable = None) -> Dict[str, object]:

@@ -1260,32 +1260,6 @@ def rulebox_graph_from_rules(rules: Iterable[GraphInferenceRule]) -> PortfolioOn
     return graph
 
 
-def rulebox_default_snapshot(status: str = "defaults", reason: str = "", configured: bool = False) -> Dict[str, object]:
-    rules = rulebox_rules_to_payload(default_graph_inference_rules())
-    return {
-        "configured": configured,
-        "saved": False,
-        "status": status,
-        "source": "defaults",
-        "reason": reason,
-        "engineVersion": GRAPH_REASONER_VERSION,
-        "rules": rules,
-        "ruleCount": len(rules),
-        "conditionCount": sum(len(item.get("conditions") or []) for item in rules),
-        "derivationCount": sum(len(item.get("derivations") or []) for item in rules),
-        "defaultsFallbackUsed": True,
-        "relationTypes": sorted(set(
-            safe_relation_type(derivation.get("relation_type") or "")
-            for rule in rules
-            for derivation in (rule.get("derivations") or [])
-            if derivation.get("relation_type")
-        )),
-        "versions": [],
-        "versionCount": 0,
-        "changeCandidates": rulebox_governance_candidates(rules, []),
-    }
-
-
 def rulebox_store_snapshot_unavailable(status: str, reason: str = "", source: str = "neo4j") -> Dict[str, object]:
     bootstrap_rules = rulebox_rules_to_payload(default_graph_inference_rules())
     return {

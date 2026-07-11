@@ -96,10 +96,6 @@ def unique_list(values: Iterable[str]) -> List[str]:
     return rows
 
 
-def bounded_number(value: object, lower: float = 0.0, upper: float = 100.0) -> float:
-    return clamp(number(value), lower, upper)
-
-
 def prior_monitor_state(runtime_context: Dict[str, object]) -> Dict[str, object]:
     metadata = runtime_context.get("metadata") if isinstance(runtime_context, dict) else {}
     metadata = metadata if isinstance(metadata, dict) else {}

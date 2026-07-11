@@ -555,16 +555,8 @@
     { key: "externalDartDisclosure", group: "온톨로지 근거", label: "국내 공시 신호", description: "투자 인사이트에 넣을 공시 근거 신호" },
     { key: "externalDataConnection", group: "외부 API", label: "외부 API 연결", description: "외부 데이터 API 키, 한도, 응답 오류가 감지될 때" }
   ];
-  var ontologyEvidenceSignalTypes = [
-    "modelBuy", "modelSell", "watchlistBuyCandidate", "watchlistQuote", "watchlistQuotePending", "holdingTiming",
-    "monitorPositionChange", "monitorPnlChange", "monitorValueChange", "monitorTrendChange", "monitorCashChange",
-    "monitorDecisionChange", "externalEquityMove", "externalCryptoMove", "externalMacroShift", "externalDartDisclosure"
-  ];
   var userManagedNotificationTypes = ["investmentInsight", "monitorConnection", "externalDataConnection"];
   var visibleNotificationTemplateTypes = ["default", "investmentInsight", "monitorConnection", "externalDataConnection", "modelReview", "workHandoff", "notification"];
-  function ontologyEvidenceSignalRule(key) {
-    return ontologyEvidenceSignalTypes.indexOf(String(key || "")) >= 0;
-  }
   function managedNotificationType(key) {
     return userManagedNotificationTypes.indexOf(String(key || "")) >= 0;
   }
@@ -690,43 +682,6 @@
     { key: "fxExposureReview", label: "외화 노출 참고", unit: "%", step: "1" },
     { key: "fxExposureHigh", label: "외화 노출 기준", unit: "%", step: "1" }
   ];
-  var relationThresholdKeys = {
-    lossRateLow: 1,
-    lossRateBufferPct: 1,
-    lossGuardVolumeConfirmRatio: 1,
-    lossGuardMa60SupportPct: 1,
-    lossGuardWeakEvidencePenalty: 1,
-    profitRateHigh: 1,
-    sectorWeightHigh: 1,
-    positionWeightHigh: 1,
-    externalBitcoinChange24hPct: 1,
-    externalBitcoinChange7dPct: 1,
-    entryPullbackMa20BelowPct: 1,
-    entryPullbackMa20DeepPct: 1,
-    entryMa5TimingMinPct: 1,
-    entryMomentumMa20MinPct: 1,
-    entryMomentumMa60MinPct: 1,
-    entryMa60SupportPct: 1,
-    entryVolumeMinRatio: 1,
-    entryVolumeMaxRatio: 1,
-    entrySmartMoneyMin: 1,
-    entryTradeStrengthMin: 1,
-    entryOrderbookImbalanceMin: 1,
-    entryMaxPositionWeight: 1,
-    entryMaxSectorWeight: 1,
-    macroRateDeltaBp: 1,
-    macroRateHighPct: 1,
-    macroRateLowPct: 1,
-    macroCurveInversionPct: 1,
-    usdKrwDeltaKrw: 1,
-    usdKrwDeltaPct: 1,
-    usdKrw7dDeltaKrw: 1,
-    usdKrw7dDeltaPct: 1,
-    usdKrwHigh: 1,
-    usdKrwLow: 1,
-    fxExposureReview: 1,
-    fxExposureHigh: 1
-  };
   var settingsMemoryStore = "";
   var snapshotMemoryStore = "";
   var staticBuildConfigPromise = null;
@@ -958,26 +913,6 @@
     }).then(function (response) {
       return response.json().then(function (body) {
         if (!response.ok) throw new Error(body.error || "요청 실패");
-        return body;
-      });
-    });
-  }
-
-  function requestText(path) {
-    return fetch(path, {
-      headers: { "Accept": "application/rss+xml, application/xml;q=0.9, text/plain;q=0.8, */*;q=0.7" },
-      cache: "no-store"
-    }).then(function (response) {
-      return response.text().then(function (body) {
-        if (!response.ok) {
-          var message = "요청 실패";
-          try {
-            message = JSON.parse(body).error || message;
-          } catch (error) {
-            message = body || message;
-          }
-          throw new Error(message);
-        }
         return body;
       });
     });
@@ -1307,12 +1242,6 @@
     })[0] || strategySections[0];
   }
 
-  function activeOntologySectionMeta() {
-    return ontologySections.filter(function (section) {
-      return section.id === state.activeOntologySection;
-    })[0] || ontologySections[0];
-  }
-
   function tabUrl(tab) {
     var normalized = normalizeTabId(tab);
     var params = new URLSearchParams(window.location.search);
@@ -1364,10 +1293,6 @@
     return path + (query ? "?" + query : "") + hash;
   }
 
-  function ontologySectionUrl(section) {
-    return strategySectionUrl(normalizeStrategySection(normalizeOntologySection(section)));
-  }
-
   function writeTabHistory(tab, replace) {
     if (!window.history) return;
     var method = replace ? "replaceState" : "pushState";
@@ -1385,12 +1310,6 @@
   function writeStrategySectionHistory(section) {
     if (!window.history || !window.history.replaceState) return;
     var normalized = normalizeStrategySection(section);
-    window.history.replaceState({ tab: "modeling", strategy: normalized }, "", strategySectionUrl(normalized));
-  }
-
-  function writeOntologySectionHistory(section) {
-    if (!window.history || !window.history.replaceState) return;
-    var normalized = normalizeStrategySection(normalizeOntologySection(section));
     window.history.replaceState({ tab: "modeling", strategy: normalized }, "", strategySectionUrl(normalized));
   }
 
@@ -5236,21 +5155,6 @@
     return items;
   }
 
-  function tradeSignalDecision(item, scores, valuation, hasData) {
-    var thresholds = decisionThresholds();
-    if (!hasData) return { label: "수급 입력 필요", tone: "hold", priority: 9 };
-    var holding = item.source !== "watchlist";
-    var expensive = valuation && (valuation.tone === "danger" || valuation.tone === "caution");
-    var cheap = valuation && valuation.tone === "watch";
-    if (holding && scores.sellScore >= thresholds.sellTrim && expensive) return { label: "분할매도 검토", tone: "danger", priority: 1 };
-    if (holding && scores.sellScore >= thresholds.riskReduce) return { label: "리스크 축소 검토", tone: "caution", priority: 2 };
-    if (holding && scores.buyScore >= thresholds.strongHold && !expensive) return { label: "보유 강화 관찰", tone: "watch", priority: 3 };
-    if (!holding && scores.buyScore >= thresholds.buyCandidate && (cheap || !expensive)) return { label: "매수 후보", tone: "watch", priority: 2 };
-    if (!holding && scores.buyScore >= thresholds.chaseCaution) return { label: "추격 주의", tone: "caution", priority: 4 };
-    if (scores.sellScore >= thresholds.sellWatch) return { label: holding ? "매도 기준 확인" : "진입 보류", tone: "caution", priority: 5 };
-    return { label: "관망", tone: "hold", priority: 6 };
-  }
-
   function tradeSignalReasons(signal, scores, valuation, hasData, relationRules) {
     if (!hasData) {
       return ["설정에서 거래량 배율, 매수/매도 체결량, 이동평균을 입력하면 관계 규칙을 평가합니다."];
@@ -5554,44 +5458,6 @@
       { label: "2차 매도", value: trimTwo, tone: "danger" },
       { label: "적정가", value: fairValue, tone: "watch" }
     ];
-  }
-
-  function labScenarioNotes(item) {
-    var valuation = item.valuation || {};
-    var notes = [];
-    if (!item.hasData) {
-      notes.push("거래량과 이동평균 입력이 없어 수급 판단은 대기 상태입니다.");
-    } else if (item.buyScore > item.sellScore + 10) {
-      notes.push("매수 압력이 매도 압력보다 뚜렷해 추가 관찰 우선입니다.");
-    } else if (item.sellScore > item.buyScore + 10) {
-      notes.push("매도 압력이 우세해 분할매도 또는 리스크 축소 기준을 먼저 확인합니다.");
-    } else {
-      notes.push("매수·매도 압력이 비슷해 가격 기준 도달 여부를 먼저 봅니다.");
-    }
-    if (valuation.status) {
-      notes.push("가치 분류는 " + valuation.status + "이고 적정가와 현재가 차이는 " + (valuation.fairValue ? signedPct(valuation.gap) : "-") + "입니다.");
-    } else {
-      notes.push("EPS와 목표 PER을 입력하면 적정가·안전마진 기준이 계산됩니다.");
-    }
-    if (item.source !== "watchlist" && item.averagePrice) {
-      notes.push("평단 대비 현재 수익률은 " + signedPct(item.profitLossRate) + "입니다.");
-    }
-    return notes;
-  }
-
-  function serializeValuationAssumptions(map) {
-    return Object.keys(map)
-      .sort()
-      .map(function (symbol) {
-        var row = map[symbol] || {};
-        return [
-          symbol,
-          Number(row.eps || 0),
-          Number(row.targetPer || 0),
-          Number(row.margin || 15)
-        ].join(",");
-      })
-      .join("\n");
   }
 
   function labDraftDefaults(item) {
@@ -9812,10 +9678,6 @@
 
   function ontologyOpinionOf(item) {
     return item && item.ontologyOpinion ? item.ontologyOpinion : {};
-  }
-
-  function ontologyRisksOf(opinion) {
-    return Array.isArray(opinion.dominant_risks) ? opinion.dominant_risks : (Array.isArray(opinion.dominantRisks) ? opinion.dominantRisks : []);
   }
 
   function ontologyPressureOf(opinion) {

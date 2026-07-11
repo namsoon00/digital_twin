@@ -185,28 +185,6 @@ def freshness_from_position(position: Dict[str, object], message_type: str, sett
     )
 
 
-def freshness_from_external_signals(signals: Dict[str, object], message_type: str, settings: Dict[str, object] = None, now=None) -> Dict[str, object]:
-    payload = signals if isinstance(signals, dict) else {}
-    freshness = payload.get("freshness") if isinstance(payload.get("freshness"), dict) else {}
-    source = "externalSignals"
-    if message_type == EXTERNAL_EQUITY_MOVE:
-        source = "Alpha Vantage"
-    elif message_type == EXTERNAL_CRYPTO_MOVE:
-        source = "CoinGecko"
-    elif message_type == EXTERNAL_MACRO_SHIFT:
-        source = "FRED"
-    elif message_type == EXTERNAL_DART_DISCLOSURE:
-        source = "OpenDART"
-    return freshness_record(
-        source,
-        message_type,
-        settings=settings,
-        source_fetched_at=freshness.get("fetchedAt") or payload.get("fetchedAt"),
-        data_quality=(payload.get("quality") or {}).get("score") if isinstance(payload.get("quality"), dict) else "",
-        now=now,
-    )
-
-
 def aggregate_freshness(records: Iterable[Dict[str, object]], message_type: str, settings: Dict[str, object] = None, now=None) -> Dict[str, object]:
     items = [dict(item) for item in records or [] if isinstance(item, dict)]
     if not items:

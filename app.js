@@ -1,477 +1,8 @@
 (function () {
   var app = document.getElementById("app");
   var ontologyGraphInstances = {};
-  var defaultSettings = {
-    appTheme: "light",
-    watchlistSymbols: "TSLA,AAPL,NVDA,000660",
-    tossApiBaseUrl: "https://openapi.tossinvest.com",
-    tossClientId: "",
-    tossClientSecret: "",
-    tossAccountSeq: "",
-    kisBaseUrl: "https://openapi.koreainvestment.com:9443",
-    kisMarketSignalsEnabled: "1",
-    kisMarketSignalMaxSymbols: "20",
-    kisMarketSignalCacheMinutes: "3",
-    kisMarketSignalGapSeconds: "0.35",
-    kisMarketSignalPreferLiveDuringMarketHours: "1",
-    kisMarketSignalLiveRefreshSeconds: "60",
-    notifyProvider: "",
-    telegramBotToken: "",
-    telegramChatId: "",
-    notifyLinkUrl: "http://127.0.0.1:3000?tab=notifications",
-    symbolUniverseMaxAgeHours: "24",
-    marketDataMaxAgeMinutes: "240",
-    dataFreshnessEnabled: "1",
-    dataFreshnessDefaultMaxAgeMinutes: "10",
-    dataFreshnessQuoteMaxAgeMinutes: "10",
-    dataFreshnessExternalMaxAgeMinutes: "10",
-    dataFreshnessExternalEquityMaxAgeMinutes: "10",
-    dataFreshnessExternalCryptoMaxAgeMinutes: "10",
-    dataFreshnessMacroMaxAgeMinutes: "120",
-    dataFreshnessDisclosureMaxAgeMinutes: "120",
-    externalApiFetchIntervalMinutes: "30",
-    externalSignalCacheMaxAgeMinutes: "10",
-    externalAlphaEnabled: "1",
-    externalCoinGeckoEnabled: "1",
-    externalFredEnabled: "1",
-    externalFredSeries: "DGS10,DGS2,DFF",
-    externalCryptoIds: "bitcoin,ethereum",
-    externalAlphaMaxSymbols: "3",
-    externalSecEnabled: "1",
-    externalSecMaxSymbols: "3",
-    externalSecCompanyCiks: [
-      "AAPL=0000320193",
-      "MSFT=0000789019",
-      "NVDA=0001045810",
-      "TSLA=0001318605",
-      "AMD=0000002488",
-      "MSTR=0001050446"
-    ].join("\n"),
-    externalSecUserAgent: "DigitalTwin/1.0 local-contact",
-    externalDartEnabled: "1",
-    externalDartLookbackDays: "14",
-    externalNewsEnabled: "1",
-    externalNewsProvider: "auto",
-    externalNewsMaxSymbols: "3",
-    externalNewsLookbackHours: "48",
-    externalResearchEvidenceMaxItems: "8",
-    newsCollectionEnabled: "1",
-    newsCollectionIntervalSeconds: "60",
-    newsCollectionMaxSymbols: "40",
-    newsCollectionLookbackMinutes: "180",
-    newsCollectionPerSymbolLimit: "8",
-    newsCollectionProviders: "google_rss_kr,google_rss_us,gdelt",
-    newsCollectionMinRelevanceScore: "35",
-    newsCollectionIncludeWatchlist: "1",
-    newsCollectionIncludeHoldings: "1",
-    newsCollectionRateLimitSeconds: "0.25",
-    ontologyReasoningEnabled: "1",
-    ontologyReasoningIntervalSeconds: "10",
-    ontologyReasoningBatchSize: "20",
-    ontologyRuleCandidateAiEnabled: "1",
-    ontologyRuleCandidateAiUseCodex: "1",
-    ontologyRuleCandidateAiCommand: "",
-    ontologyRuleCandidateAiTimeoutSeconds: "120",
-    ontologyRuleCandidateAiIntervalMinutes: "60",
-    ontologyRuleCandidateAiMaxCandidates: "3",
-    ontologyNeo4jEnabled: "1",
-    neo4jUri: "http://127.0.0.1:7474",
-    neo4jUser: "neo4j",
-    neo4jDatabase: "neo4j",
-    neo4jTimeoutSeconds: "8",
-    materialityGateEnabled: "1",
-    materialityMinimumScore: "65",
-    marketMaterialityMinimumScore: "65",
-    marketMaterialityPriceChangePct: "0.6",
-    marketMaterialityTrendDistancePct: "2",
-    marketMaterialityVolumeRatio: "1.5",
-    newsMaterialityMinimumScore: "65",
-    externalDartCorpCodes: [
-      "005930=00126380",
-      "000660=00164779",
-      "035420=00266961"
-    ].join("\n"),
-    dartDisclosureAiAnalysisEnabled: "1",
-    dartDisclosureAiUseCodex: "1",
-    dartDisclosureAiCommand: "",
-    dartDisclosureAiTimeoutSeconds: "90",
-    alphaVantageApiKey: "",
-    coingeckoApiKey: "",
-    fredApiKey: "",
-    opendartApiKey: "",
-    fxRates: [
-      "KRW=1",
-      "USD=1400"
-    ].join("\n"),
-    valuationAssumptions: [
-      "AAPL,7.5,28,15",
-      "005930,6500,12,20"
-    ].join("\n"),
-    marketSignalInputs: [
-      "005930,118,1.8,620000,480000,18,2.1,71000,68000,14500000000,8200000000,-11200000000",
-      "AAPL,86,1.4,320000,410000,-12,-1.8,205,212,-4200000,-1800000,5200000",
-      "NVDA,132,2.3,780000,520000,22,3.5,174,159,11800000,7400000,-9300000",
-      "TSLA,91,1.2,210000,260000,-8,-0.9,182,197,-6300000,-2100000,7600000",
-      "000660,122,1.7,510000,390000,15,2.4,236000,218000,9800000000,13400000000,-15100000000"
-    ].join("\n"),
-    fairValueFormula: "eps * targetPer * growthWeight * qualityWeight * riskWeight",
-    buyScoreFormula: "50 + (executionScore * 0.42 + directionalVolumePressure * 0.9 + buyShareScore * 0.55 + orderbookScore * 0.32 + momentumScore * 0.35 + trendScore * 0.45 + investorFlowScore * 0.35) * flowWeight + undervalueBonus * valuationWeight - expensivePenalty * valuationWeight",
-    sellScoreFormula: "50 + (-executionScore * 0.38 - directionalVolumePressure * 0.85 - buyShareScore * 0.55 - orderbookScore * 0.3 - momentumScore * 0.4 - trendScore * 0.35 - investorFlowScore * 0.3) * flowWeight + expensiveBonus * valuationWeight",
-    profitTakeScoreFormula: "baseScore + profitTakePnlScore + sectorConcentrationScore + sellableScore + holdingSignalScore",
-    lossCutScoreFormula: "baseScore + lossCutPnlScore + sectorConcentrationScore + sellableScore + holdingSignalScore + lossGuardConfirmationScore - lossGuardWeakEvidencePenalty",
-    notificationScoreFormula: "rawScore",
-    ontologyRelationRules: [
-      "holding.profit_take.trend_weakness.v1 | 수익 보유 + 추세 약화 -> 익절 점검 | 손익률 +10% 이상이고 20일선 아래이거나 60일선 대비 약해질 때 | PROFIT_TAKE_REVIEW | exit_timing | 분할 매도, 추세 회복 조건, 유지 조건을 함께 비교",
-      "holding.loss_guard.breakdown.v1 | 손실 보유 + 기준선 이탈 -> 손실 관리 | 손익률이 손실 기준 이하이거나 20일선보다 5% 이상 낮고, 60일선·거래량·수급 확인 강도로 점수를 조정할 때 | LOSS_GUARD | risk_control | 손실 확대 요인, 60일선 유지, 거래량 동반 여부, 회복 조건, 분할 대응 기준을 분리",
-      "holding.concentration.rebalance.v1 | 업종 집중 + 보유 비중 과대 -> 리밸런싱 점검 | 업종 비중 50% 이상 또는 단일 종목 비중 30% 이상일 때 | CONCENTRATION_RISK | portfolio_risk | 개별 종목 판단과 포트폴리오 리스크를 분리",
-      "holding.trend_flow.confirmation.v1 | 추세와 수급 방향 일치 -> 판단 신뢰도 보강 | 추세와 외국인·기관 순매수 방향이 같은 쪽으로 움직일 때 | EVIDENCE_SUPPORT | confirmation | 같은 방향 근거와 반대 근거를 나눠 검토",
-      "external.crypto.btc_sensitivity.v1 | 비트코인 급변 + 민감 종목 -> 연동 점검 | BTC가 24시간 또는 7일 기준을 넘고 MSTR/STRC 같은 민감 종목을 보유할 때 | EXTERNAL_SENSITIVITY | cross_asset | BTC 변화와 보유 종목 가격 변화의 시차를 확인",
-      "data.quality.guard.v1 | 핵심 데이터 부족 -> 판단 보류 | 현재가, 이동평균, 수급, 체결강도 중 판단에 필요한 데이터가 빠졌을 때 | DATA_QUALITY_GUARD | data_quality | 없는 데이터는 추정하지 않고 판단 영향만 설명"
-    ].join("\n"),
-    aiPromptTemplates: [
-      "[default]",
-      "label=기본 알림 AI 의견",
-      "version=ai-prompt-registry-v1",
-      "purpose=알림 데이터와 발송 기준을 읽고 사용자가 바로 확인할 핵심을 짧게 정리",
-      "system=제공된 데이터와 관계 규칙만 사용한다.",
-      "user=알림 원문과 기준을 보고 해석, 의견, 다음 확인 항목을 제시한다.",
-      "",
-      "[modelBuy]",
-      "label=매수 후보 AI 의견",
-      "version=ai-prompt-registry-v1",
-      "purpose=모델 매수 후보 알림의 근거와 첫 진입 전 확인할 리스크를 설명",
-      "system=제공된 데이터와 관계 규칙만 사용한다.",
-      "user=매수 후보 점수, 현재가, 수급, 추세, 적정가 정보를 보고 분할매수 가능성과 보류 조건을 나눠 설명한다.",
-      "",
-      "[modelSell]",
-      "label=매도 후보 AI 의견",
-      "version=ai-prompt-registry-v1",
-      "purpose=모델 매도 후보 알림의 매도 압력과 분할 대응 기준을 설명",
-      "system=제공된 데이터와 관계 규칙만 사용한다.",
-      "user=매도 점수, 손익률, 수급, 추세를 보고 분할매도, 손절, 보유 유지 중 어떤 확인 기준이 우선인지 설명한다.",
-      "",
-      "[watchlistBuyCandidate]",
-      "label=관심종목 매수 후보 AI 의견",
-      "version=ai-prompt-registry-v1",
-      "purpose=보유 전 관심종목의 매수 후보 신호를 진입 조건과 보류 조건으로 분리",
-      "system=제공된 데이터와 관계 규칙만 사용한다.",
-      "user=관심종목의 가격, 거래량, 추세, 매수 후보 점수를 보고 첫 진입 전 확인할 조건을 제시한다.",
-      "",
-      "[watchlistQuote]",
-      "label=관심종목 시세 AI 의견",
-      "version=ai-prompt-registry-v1",
-      "purpose=관심종목 가격 변화가 매수 후보 검토로 이어질지 판단할 확인 기준을 설명",
-      "system=제공된 데이터와 관계 규칙만 사용한다.",
-      "user=관심종목의 현재가 변화, 직전 가격, 수급, 추세를 보고 추적 강화 또는 관망 기준을 제시한다.",
-      "",
-      "[watchlistQuotePending]",
-      "label=관심종목 시세 대기 AI 의견",
-      "version=ai-prompt-registry-v1",
-      "purpose=시세 미수집 상태가 데이터 품질에 주는 영향을 설명",
-      "system=제공된 데이터와 관계 규칙만 사용한다.",
-      "user=현재가가 없는 이유와 확인해야 할 연결, 종목 코드, 데이터 수집 상태를 정리한다.",
-      "",
-      "[holdingTiming]",
-      "label=보유 타이밍 AI 분석",
-      "version=ai-prompt-registry-v1",
-      "purpose=보유 종목의 현재 가격, 수급, 추세, 공시, 뉴스 헤드라인을 관계 규칙과 함께 종합해 대응 우선순위를 설명",
-      "system=제공된 데이터와 관계 규칙만 사용한다.",
-      "user=성립 규칙, 가격·수급·추세, OpenDART 공시, 뉴스 헤드라인, 부족 데이터를 보고 왜 알림이 발생했는지와 다음 확인 질문 3개를 제시한다.",
-      "",
-      "[monitorHeartbeat]",
-      "label=모니터링 상태 AI 의견",
-      "version=ai-prompt-registry-v1",
-      "purpose=실시간 모니터링이 정상 작동 중인지와 투자 판단 신호가 아닌지 구분",
-      "system=제공된 데이터와 관계 규칙만 사용한다.",
-      "user=모니터링 상태, 보유 수, 평가 정보를 보고 시스템 상태와 매매 판단 여부를 분리해 설명한다.",
-      "",
-      "[monitorConnection]",
-      "label=연결 상태 AI 의견",
-      "version=ai-prompt-registry-v1",
-      "purpose=토스 또는 외부 연결 실패가 데이터 신뢰도에 미치는 영향을 설명",
-      "system=제공된 데이터와 관계 규칙만 사용한다.",
-      "user=연결 모드, 실패 단계, 재시도 상태를 보고 일시 오류와 지속 오류를 구분해 다음 점검을 제시한다.",
-      "",
-      "[monitorPositionChange]",
-      "label=보유 수량 변화 AI 의견",
-      "version=ai-prompt-registry-v1",
-      "purpose=보유 수량 변화가 포지션 관리에 주는 의미를 설명",
-      "system=제공된 데이터와 관계 규칙만 사용한다.",
-      "user=이전 수량, 현재 수량, 현재가, 평단가, 수익률을 보고 의도한 매매 반영 여부와 비중 변화를 점검한다.",
-      "",
-      "[monitorPnlChange]",
-      "label=손익률 변화 AI 의견",
-      "version=ai-prompt-registry-v1",
-      "purpose=손익률 급변의 방향과 대응 기준을 설명",
-      "system=제공된 데이터와 관계 규칙만 사용한다.",
-      "user=이전 손익률, 현재 손익률, 변화폭, 현재가와 평단가를 보고 손실 관리 또는 수익 보호 기준을 제시한다.",
-      "",
-      "[monitorValueChange]",
-      "label=평가액 변화 AI 의견",
-      "version=ai-prompt-registry-v1",
-      "purpose=평가액 변화가 가격 변화인지 수량 변화인지 분리해 설명",
-      "system=제공된 데이터와 관계 규칙만 사용한다.",
-      "user=이전 평가액, 현재 평가액, 변화율, 현재가, 수익률을 보고 포트폴리오 영향과 확인 기준을 제시한다.",
-      "",
-      "[monitorTrendChange]",
-      "label=이동평균·추세 AI 의견",
-      "version=ai-prompt-registry-v1",
-      "purpose=현재가와 20일/60일선 관계가 매매 타이밍에 주는 의미를 설명",
-      "system=제공된 데이터와 관계 규칙만 사용한다.",
-      "user=이동평균 돌파, 이탈, 크로스, 수급 동반 여부를 보고 추세 회복 또는 약화 기준을 제시한다.",
-      "",
-      "[monitorCashChange]",
-      "label=현금 비중 AI 의견",
-      "version=ai-prompt-registry-v1",
-      "purpose=현금 비중 변화가 리스크 관리와 매수 여력에 주는 의미를 설명",
-      "system=제공된 데이터와 관계 규칙만 사용한다.",
-      "user=시장별 현금 비중의 이전/현재/변화를 보고 매수 여력, 방어력, 리밸런싱 관점을 분리한다.",
-      "",
-      "[monitorDecisionChange]",
-      "label=판단 변화 AI 분석",
-      "version=ai-prompt-registry-v1",
-      "purpose=이전 판단과 현재 판단이 달라진 이유를 관계 규칙과 데이터 변화로 분해",
-      "system=실시간 모니터링 변화 원인을 설명한다.",
-      "user=이전 상태와 현재 상태의 차이를 비교해 판단 변화 원인, 노이즈 가능성, 재확인 조건을 설명한다.",
-      "",
-      "[externalEquityMove]",
-      "label=미국 주식 변동 AI 의견",
-      "version=ai-prompt-registry-v1",
-      "purpose=미국 주식 가격/거래량 변화가 보유 종목 판단에 주는 의미를 설명",
-      "system=제공된 데이터와 관계 규칙만 사용한다.",
-      "user=Alpha Vantage 가격 변화, 거래량, 보유 수익률을 보고 단기 변동과 포지션 대응 기준을 제시한다.",
-      "",
-      "[externalCryptoMove]",
-      "label=크립토 연동 AI 분석",
-      "version=ai-prompt-registry-v1",
-      "purpose=BTC/ETH 급변이 보유 주식과 어떤 관계를 가질 수 있는지 분리해 설명",
-      "system=외부 시장 신호와 보유 종목의 연결 관계를 검토한다.",
-      "user=크립토 변화율, 거래액, 민감 종목 보유 여부를 근거로 확인할 연결 관계와 노이즈 가능성을 설명한다.",
-      "",
-      "[externalMacroShift]",
-      "label=매크로 변화 AI 의견",
-      "version=ai-prompt-registry-v1",
-      "purpose=금리와 스프레드 변화가 성장주, 현금 비중, 리스크 선호에 주는 의미를 설명",
-      "system=제공된 데이터와 관계 규칙만 사용한다.",
-      "user=FRED 지표 변화와 기준값을 보고 성장주 할인율, 위험 선호, 포트폴리오 점검 기준을 제시한다.",
-      "",
-      "[externalDartDisclosure]",
-      "label=국내 공시 AI 의견",
-      "version=ai-prompt-registry-v1",
-      "purpose=OpenDART 신규 공시의 성격과 원문 확인 포인트를 설명",
-      "system=제공된 데이터와 관계 규칙만 사용한다.",
-      "user=공시 제목, 접수일, 보유 수익률, 공시 해석 결과를 보고 영향 가능성과 원문 확인 항목을 제시한다.",
-      "",
-      "[externalDataConnection]",
-      "label=외부 데이터 연결 AI 의견",
-      "version=ai-prompt-registry-v1",
-      "purpose=외부 API 연결 오류가 알림 신뢰도에 주는 영향을 설명",
-      "system=제공된 데이터와 관계 규칙만 사용한다.",
-      "user=실패한 데이터 소스, 오류 메시지, 재시도 필요 여부를 보고 투자 판단 전 데이터 복구 우선순위를 제시한다.",
-      "",
-      "[modelReview]",
-      "label=모델 개선 AI 리뷰",
-      "version=ai-prompt-registry-v1",
-      "purpose=비동기 모델 리뷰의 부족 데이터, 관계 규칙, 프롬프트 개선점을 검토",
-      "system=현재 규칙과 데이터 품질을 점검해 개선안을 제안한다.",
-      "user=알림 원문, 관계 규칙, 부족 데이터, 최근 반복 여부를 보고 모델 개선 후보를 구조화한다."
-    ].join("\n"),
-    aiPromptPolicy: [
-      "providedDataOnly=1",
-      "separateInvestmentJudgmentAndDelivery=1",
-      "showMissingData=1",
-      "askBeforeInventingNewData=1",
-      "preferRelationRulesOverFormulaScores=1"
-    ].join("\n"),
-    notificationAiGateEnabled: "1",
-    notificationAiGateMessageTypes: "investmentInsight,holdingTiming,monitorDecisionChange,monitorTrendChange,monitorPnlChange,monitorValueChange,modelBuy,modelSell,watchlistBuyCandidate,externalEquityMove,externalCryptoMove,externalMacroShift,externalDartDisclosure",
-    notificationAiUseCodex: "1",
-    notificationAiTimeoutSeconds: "120",
-    modelName: "나의 매수/매도 모델",
-    modelHypothesis: "수급, 가치, 내 점수, 리스크를 함께 봐서 매수 후보와 매도 후보를 분리한다.",
-    customBuyModelFormula: "buyScore * 0.35 + buyReasonScore * buyReasonWeight + confidenceScore * confidenceWeight + max(0, targetReturn) * 0.15 + undervalueBonus * valuationWeight - riskScore * riskControlWeight",
-    customSellModelFormula: "sellScore * 0.35 + riskScore * riskControlWeight + expensivePenalty * valuationWeight + max(0, -targetReturn) * 0.2 - buyReasonScore * 0.1",
-    formulaWeights: [
-      "growthWeight=1",
-      "qualityWeight=1",
-      "riskWeight=1",
-      "flowWeight=1",
-      "valuationWeight=1",
-      "buyReasonWeight=0.25",
-      "confidenceWeight=0.15",
-      "riskControlWeight=0.35"
-    ].join("\n"),
-    decisionThresholds: [
-      "buyCandidate=78",
-      "chaseCaution=70",
-      "strongHold=72",
-      "sellTrim=70",
-      "riskReduce=66",
-      "sellWatch=64"
-    ].join("\n"),
-    modelDecisionThresholds: [
-      "modelBuy=74",
-      "modelAdd=70",
-      "modelSell=72",
-      "modelReduce=64",
-      "modelHold=55"
-    ].join("\n"),
-    alertRules: [
-      "priceBuyLimit=1",
-      "priceStop=1",
-      "priceTrim=1",
-      "investmentInsight=1",
-      "modelBuy=1",
-      "modelSell=1",
-      "watchlistBuyCandidate=1",
-      "modelScoreGap=1",
-      "flowVolume=1",
-      "flowBuyShare=1",
-      "flowSellShare=1",
-      "flowOrderbook=1",
-      "trendMomentum=1",
-      "trendPullback=1",
-      "holdingProfit=1",
-      "holdingLoss=1",
-      "holdingConcentration=1",
-      "sectorConcentration=1",
-      "marketCashLow=1",
-      "dataFreshness=1",
-      "tossConnection=1",
-      "orderPending=1",
-      "orderReject=1",
-      "watchlistQuote=1",
-      "watchlistQuotePending=1",
-      "holdingTiming=1",
-      "monitorHeartbeat=1",
-      "monitorConnection=1",
-      "monitorPositionChange=1",
-      "monitorPnlChange=1",
-      "monitorValueChange=1",
-      "monitorTrendChange=1",
-      "monitorCashChange=1",
-      "monitorDecisionChange=1",
-      "externalEquityMove=1",
-      "externalCryptoMove=1",
-      "externalMacroShift=1",
-      "externalDartDisclosure=1",
-      "externalDataConnection=1"
-    ].join("\n"),
-    alertCadenceMinutes: [
-      "priceBuyLimit=10",
-      "priceStop=10",
-      "priceTrim=10",
-      "investmentInsight=10",
-      "modelBuy=10",
-      "modelSell=10",
-      "watchlistBuyCandidate=10",
-      "modelScoreGap=10",
-      "flowVolume=10",
-      "flowBuyShare=10",
-      "flowSellShare=10",
-      "flowOrderbook=10",
-      "trendMomentum=10",
-      "trendPullback=10",
-      "holdingProfit=10",
-      "holdingLoss=10",
-      "holdingConcentration=10",
-      "sectorConcentration=10",
-      "marketCashLow=10",
-      "dataFreshness=10",
-      "tossConnection=10",
-      "orderPending=10",
-      "orderReject=10",
-      "watchlistQuote=10",
-      "watchlistQuotePending=60",
-      "holdingTiming=10",
-      "monitorHeartbeat=10",
-      "monitorConnection=10",
-      "monitorPositionChange=10",
-      "monitorPnlChange=10",
-      "monitorValueChange=10",
-      "monitorTrendChange=10",
-      "monitorCashChange=10",
-      "monitorDecisionChange=10",
-      "externalEquityMove=60",
-      "externalCryptoMove=60",
-      "externalMacroShift=60",
-      "externalDartDisclosure=60",
-      "externalDataConnection=60"
-    ].join("\n"),
-    alertThresholds: [
-      "modelBuyScore=74",
-      "modelSellScore=72",
-      "watchlistBuyScore=74",
-      "modelScoreGap=15",
-      "volumeRatioHigh=2",
-      "buyShareHigh=65",
-      "sellShareHigh=65",
-      "orderbookImbalance=25",
-      "momentumUp=3",
-      "momentumDown=-3",
-      "profitRateHigh=20",
-      "lossRateLow=-8",
-      "lossRateBufferPct=1",
-      "lossGuardVolumeConfirmRatio=0.8",
-      "lossGuardMa60SupportPct=0",
-      "lossGuardWeakEvidencePenalty=30",
-      "positionWeightHigh=30",
-      "sectorWeightHigh=50",
-      "marketCashLow=10",
-      "priceNearPercent=1",
-      "staleMinutes=30",
-      "pendingOrderMinutes=30",
-      "watchlistPriceDelta=3",
-      "monitorPnlDelta=2",
-      "monitorValueDelta=5",
-      "monitorMaDistance=8",
-      "monitorCashDelta=10",
-      "monitorExitPressureDelta=15",
-      "externalEquityChangePct=3",
-      "externalCryptoChange24hPct=4",
-      "externalCryptoChange7dPct=10",
-      "externalBitcoinChange24hPct=3",
-      "externalBitcoinChange7dPct=4",
-      "externalMacroRateDeltaBp=15"
-    ].join("\n"),
-    relationRuleThresholds: [
-      "lossRateLow=-8",
-      "lossRateBufferPct=1",
-      "lossGuardVolumeConfirmRatio=0.8",
-      "lossGuardMa60SupportPct=0",
-      "lossGuardWeakEvidencePenalty=30",
-      "profitRateHigh=20",
-      "sectorWeightHigh=50",
-      "positionWeightHigh=30",
-      "externalBitcoinChange24hPct=3",
-      "externalBitcoinChange7dPct=4",
-      "entryPullbackMa20BelowPct=-2",
-      "entryPullbackMa20DeepPct=-8",
-      "entryMa5TimingMinPct=-0.5",
-      "entryMomentumMa20MinPct=-0.5",
-      "entryMomentumMa60MinPct=0",
-      "entryMa60SupportPct=-1",
-      "entryVolumeMinRatio=0.8",
-      "entryVolumeMaxRatio=1.8",
-      "entrySmartMoneyMin=10",
-      "entryTradeStrengthMin=100",
-      "entryOrderbookImbalanceMin=5",
-      "entryMaxPositionWeight=20",
-      "entryMaxSectorWeight=45",
-      "macroRateDeltaBp=15",
-      "macroRateHighPct=4.5",
-      "macroRateLowPct=3.0",
-      "macroCurveInversionPct=0",
-      "usdKrwDeltaKrw=15",
-      "usdKrwDeltaPct=1",
-      "usdKrw7dDeltaKrw=30",
-      "usdKrw7dDeltaPct=2",
-      "usdKrwHigh=1450",
-      "usdKrwLow=1300",
-      "fxExposureReview=5",
-      "fxExposureHigh=10"
-    ].join("\n")
-  };
+  var defaultSettings = window.OrbitAlphaDefaultSettings || {};
+
   var tabs = [
     { id: "overview", label: "홈", description: "운영 요약" },
     { id: "accounts", label: "계정", description: "DB 계정" },
@@ -746,6 +277,7 @@
     notificationRulesSaved: false,
     notificationExpandedTypes: {},
     notificationExpandedGroups: {},
+    activeNotificationJobKey: "",
     activeNotificationSection: initialNotificationSection(),
     activeStrategySection: initialStrategySection(),
     activeOntologySection: initialOntologySection(),
@@ -1992,6 +1524,12 @@
     Object.keys(state.notificationExpandedJobs || {}).forEach(function (key) {
       if (!visibleJobs[key]) delete state.notificationExpandedJobs[key];
     });
+    if (state.activeNotificationJobKey && !visibleJobs[state.activeNotificationJobKey]) {
+      state.activeNotificationJobKey = "";
+    }
+    if (!state.activeNotificationJobKey && state.notificationJobItems.length) {
+      state.activeNotificationJobKey = notificationJobKey(state.notificationJobItems[0]);
+    }
     state.notificationJobsSummary = payload.summary && typeof payload.summary === "object" ? payload.summary : {};
     state.notificationJobDiagnostics = payload.diagnostics && typeof payload.diagnostics === "object" ? payload.diagnostics : {};
     state.notificationJobsLoaded = true;
@@ -6238,7 +5776,7 @@
       '</div>',
       '</article>',
       '<article class="panel loading-preview-panel">',
-      '<div class="panel-head"><div><p class="label">Preview</p><h2>화면 골격</h2></div></div>',
+      '<div class="panel-head"><div><p class="label">Preview</p><h2>데이터 준비 상태</h2></div></div>',
       '<div class="loading-shell-preview">',
       '<span></span><span></span><span></span>',
       '<span></span><span></span><span></span>',
@@ -6257,6 +5795,28 @@
       '<strong>' + escapeHtml(title) + '</strong>',
       '<em>' + escapeHtml(description) + '</em>',
       '</div>',
+      '</div>'
+    ].join("");
+  }
+
+  function renderEmptyState(options) {
+    options = options || {};
+    var tone = options.tone || "muted";
+    var label = options.label || "State";
+    var title = options.title || "표시할 데이터가 없습니다";
+    var description = options.description || "데이터가 들어오면 같은 위치에 표시합니다.";
+    var meta = Array.isArray(options.meta) ? options.meta : [];
+    return [
+      '<div class="empty-state ' + escapeHtml(tone) + '">',
+      '<div class="empty-state-copy">',
+      '<p class="label">' + escapeHtml(label) + '</p>',
+      '<strong>' + escapeHtml(title) + '</strong>',
+      '<span>' + escapeHtml(description) + '</span>',
+      '</div>',
+      meta.length ? '<div class="empty-state-meta">' + meta.map(function (item) {
+        return '<span>' + escapeHtml(item) + '</span>';
+      }).join("") + '</div>' : '',
+      options.action || '',
       '</div>'
     ].join("");
   }
@@ -7310,7 +6870,13 @@
       '<span class="metric">' + escapeHtml(cards.length) + '</span>',
       '</div>',
       '<div class="investment-evidence-list">',
-      visible.length ? visible.map(renderInvestmentReasoningCard).join("") : '<p class="subtle">연결된 투자 근거 카드가 없습니다.</p>',
+      visible.length ? visible.map(renderInvestmentReasoningCard).join("") : renderEmptyState({
+        tone: "muted",
+        label: "Reasoning",
+        title: "연결된 투자 근거 카드가 없습니다",
+        description: "계좌 스냅샷, 시세, 뉴스·공시 근거가 수집되면 전략 근거와 관계 근거를 묶어 표시합니다.",
+        meta: ["TBox/ABox", "Evidence", "AI opinion"]
+      }),
       '</div>',
       '</article>'
     ].join("");
@@ -8861,9 +8427,16 @@
     var summaryItems = ["pending", "done", "suppressed", "failed"].map(function (key) {
       return '<span class="chip">' + escapeHtml(notificationJobStatusLabel(key)) + ' ' + escapeHtml(Number(summary[key] || 0)) + '</span>';
     }).join("");
+    var activeJob = activeNotificationDecisionJob(jobs);
     var stateMessage = hasError
       ? renderNotificationStateMessage("hold", "최근 판단 API 연결 확인", state.notificationJobsError)
-      : renderNotificationStateMessage("muted", "최근 알림 판단 기록 없음", "알림 워커가 발송, 보류, 실패 판단을 남기면 이곳에 시간순으로 표시합니다.");
+      : renderEmptyState({
+        tone: "muted",
+        label: "Decisions",
+        title: "아직 판단 이력이 없습니다",
+        description: "알림 워커가 발송, 보류, 실패 판단을 남기면 이곳에 시간순으로 표시합니다.",
+        meta: ["Outbox 기준", "최근 40건"]
+      });
     return [
       '<article class="panel notification-decision-panel">',
       '<div class="panel-head">',
@@ -8876,12 +8449,18 @@
       '</div>',
       '</div>',
       renderNotificationDecisionDiagnostics(diagnostics),
-      '<div class="notification-decision-body">',
+      '<div class="notification-decision-body' + (jobs.length ? " has-detail" : "") + '">',
+      '<div class="notification-decision-master">',
       '<div class="notification-decision-status">',
       '<span class="tone-chip ' + escapeHtml(hasError ? "hold" : "watch") + '">' + escapeHtml(hasError ? "확인 필요" : "현황") + '</span>',
-      '<span>' + escapeHtml(jobs.length ? "최근 " + jobs.length + "건" : (hasError ? "연결 상태 확인" : "기록 없음")) + '</span>',
+      '<span>' + escapeHtml(jobs.length ? "최근 " + jobs.length + "건 · 선택 리포트 분리" : (hasError ? "연결 상태 확인" : "판단 이력 없음")) + '</span>',
+      '<em>' + escapeHtml(state.notificationJobsLoading ? "백그라운드 갱신 중" : "마지막 결과 유지") + '</em>',
       '</div>',
-      jobs.length ? '<div class="notification-decision-list">' + jobs.map(renderNotificationDecisionRow).join("") + '</div>' : stateMessage,
+      jobs.length ? '<div class="notification-decision-list" role="listbox" aria-label="최근 알림 판단 목록">' + jobs.map(function (job) {
+        return renderNotificationDecisionRow(job, notificationJobKey(job) === notificationJobKey(activeJob));
+      }).join("") + '</div>' : stateMessage,
+      '</div>',
+      jobs.length ? renderNotificationDecisionDetail(activeJob) : '',
       '</div>',
       '</article>'
     ].join("");
@@ -8913,6 +8492,93 @@
     ].join("");
   }
 
+  function activeNotificationDecisionJob(jobs) {
+    jobs = Array.isArray(jobs) ? jobs : [];
+    if (!jobs.length) return null;
+    var selectedKey = state.activeNotificationJobKey || "";
+    var selected = jobs.filter(function (job) {
+      return notificationJobKey(job) === selectedKey;
+    })[0];
+    return selected || jobs[0];
+  }
+
+  function renderNotificationDetailMetric(label, value, tone) {
+    return [
+      '<span class="notification-detail-metric ' + escapeHtml(tone || "") + '">',
+      '<em>' + escapeHtml(label) + '</em>',
+      '<strong>' + escapeHtml(value || "-") + '</strong>',
+      '</span>'
+    ].join("");
+  }
+
+  function notificationJobDetailPayload(job) {
+    var resolvedSymbol = notificationJobResolvedSymbol(job);
+    var displaySymbol = resolvedSymbol ? stockDisplayName(resolvedSymbol, job) : "";
+    var title = textWithKnownDisplaySymbols(job.title || "", resolvedSymbol, job);
+    var preview = textWithKnownDisplaySymbols(job.lastError || job.textPreview || "-", resolvedSymbol, job);
+    var fullText = notificationJobFullText(job, resolvedSymbol);
+    var reasons = Array.isArray(job.honeyReasons) ? job.honeyReasons.slice(0, 6) : [];
+    return {
+      resolvedSymbol: resolvedSymbol,
+      displaySymbol: displaySymbol,
+      title: title,
+      preview: preview,
+      fullText: fullText,
+      reasons: reasons
+    };
+  }
+
+  function renderNotificationDecisionDetail(job) {
+    if (!job) {
+      return renderEmptyState({
+        tone: "muted",
+        label: "Report",
+        title: "선택된 알림이 없습니다",
+        description: "왼쪽 목록에서 알림 판단을 선택하면 상세 리포트를 표시합니다."
+      });
+    }
+    var payload = notificationJobDetailPayload(job);
+    var gateRows = [
+      notificationJobSimilarityText(job),
+      notificationJobStateCooldownText(job),
+      notificationJobMarketHoursText(job),
+      notificationJobQuietHoursText(job),
+      job.suppressionSummary || "",
+      job.nextEligibleAt ? "다음 발송 가능 " + formatClock(job.nextEligibleAt) : ""
+    ].filter(Boolean);
+    var fingerprint = textWithKnownDisplaySymbols(job.honeyFingerprint || "", payload.resolvedSymbol, job);
+    return [
+      '<aside class="notification-decision-detail" aria-label="선택 알림 판단 상세">',
+      '<div class="notification-detail-head">',
+      '<div>',
+      '<p class="label">Decision Report</p>',
+      '<h3>' + escapeHtml(payload.title || payload.displaySymbol || job.messageTypeLabel || job.messageType || "알림 판단") + '</h3>',
+      '<span>' + escapeHtml([payload.displaySymbol, labelWithNotificationIcon(job.messageType, job.messageTypeLabel || job.messageType), formatClock(job.createdAt)].filter(Boolean).join(" · ")) + '</span>',
+      '</div>',
+      '<span class="tone-chip ' + escapeHtml(notificationJobToneClass(job.status)) + '">' + escapeHtml(notificationJobStatusLabel(job.status)) + '</span>',
+      '</div>',
+      '<div class="notification-detail-metrics">',
+      renderNotificationDetailMetric("우선도", notificationJobScoreText(job), "score"),
+      renderNotificationDetailMetric("상태", notificationJobStatusLabel(job.status), notificationJobToneClass(job.status)),
+      renderNotificationDetailMetric("반복 판단", notificationJobSimilarityText(job), "muted"),
+      renderNotificationDetailMetric("발송 가능", job.nextEligibleAt ? formatClock(job.nextEligibleAt) : "조건 충족 시", "muted"),
+      '</div>',
+      '<section class="notification-detail-section primary">',
+      '<strong>판단 요약</strong>',
+      '<p>' + escapeHtml(payload.preview) + '</p>',
+      '</section>',
+      gateRows.length ? '<section class="notification-detail-section"><strong>게이트와 보류 조건</strong><div class="notification-detail-tags">' + gateRows.map(function (row) {
+        return '<span>' + escapeHtml(textWithKnownDisplaySymbols(row, payload.resolvedSymbol, job)) + '</span>';
+      }).join("") + '</div></section>' : '',
+      payload.reasons.length ? '<section class="notification-detail-section"><strong>판단 근거</strong><div class="notification-detail-reasons">' + payload.reasons.map(function (reason) {
+        return '<p>' + escapeHtml(textWithKnownDisplaySymbols(reason, payload.resolvedSymbol, job)) + '</p>';
+      }).join("") + '</div></section>' : '',
+      payload.fullText && payload.fullText !== payload.preview ? '<section class="notification-detail-section"><strong>전체 메시지</strong><pre class="notification-full-message">' + escapeHtml(payload.fullText) + '</pre></section>' : '',
+      fingerprint ? '<section class="notification-detail-section"><strong>중복 판단 키</strong><code class="notification-fingerprint">' + escapeHtml(fingerprint) + '</code></section>' : '',
+      '</aside>'
+    ].join("");
+  }
+
   function notificationJobKey(job) {
     return String((job && job.jobId) || [job && job.createdAt, job && job.messageType, job && job.title].join(":"));
   }
@@ -8925,7 +8591,7 @@
     return Boolean((state.notificationExpandedJobs || {})[notificationJobKey(job)]);
   }
 
-  function renderNotificationDecisionRow(job) {
+  function renderNotificationDecisionRow(job, selected) {
     var reasons = Array.isArray(job.honeyReasons) ? job.honeyReasons.slice(0, 5) : [];
     var resolvedSymbol = notificationJobResolvedSymbol(job);
     var displaySymbol = resolvedSymbol ? stockDisplayName(resolvedSymbol, job) : "";
@@ -8953,8 +8619,9 @@
     var suppression = textWithKnownDisplaySymbols(job.suppressionSummary || "", resolvedSymbol, job);
     var nextEligible = job.nextEligibleAt ? "다음 가능 " + formatClock(job.nextEligibleAt) : "";
     var processing = job.recoverableProcessing ? "처리 중 지연 " + String(job.processingAgeMinutes || 0) + "분 · 워커 재시도 가능" : "";
+    var rowKey = notificationJobKey(job);
     return [
-      '<div class="notification-decision-row">',
+      '<div class="notification-decision-row ' + (selected ? "active " : "") + escapeHtml(notificationJobToneClass(job.status)) + '" role="option" tabindex="0" data-notification-job-select="' + escapeHtml(rowKey) + '" aria-selected="' + escapeHtml(selected ? "true" : "false") + '">',
       '<div class="notification-decision-top">',
       '<span class="tone-chip ' + escapeHtml(notificationJobToneClass(job.status)) + '">' + escapeHtml(notificationJobStatusLabel(job.status)) + '</span>',
       '<strong>' + escapeHtml(labelWithNotificationIcon(job.messageType, job.messageTypeLabel || job.messageType || "-")) + '</strong>',
@@ -11319,7 +10986,13 @@
       items.length ? items.map(function (item) {
         var symbol = String(item.symbol || "").toUpperCase();
         return renderMonitoringInstrumentRow(item, signalMap[symbol]);
-      }).join("") : '<p class="subtle">보유 또는 관심 종목을 찾지 못했습니다.</p>',
+      }).join("") : renderEmptyState({
+        tone: "muted",
+        label: "Universe",
+        title: "보유·관심 종목이 아직 없습니다",
+        description: "계정 탭에서 연결을 확인하거나 관심종목 탭에서 추적 대상을 추가하면 모니터링 원장이 채워집니다.",
+        meta: ["계정 연결", "관심종목"]
+      }),
       '</div>',
       '</article>'
     ].join("");
@@ -11672,7 +11345,19 @@
       full ? '<div class="symbol-pager"><span>' + escapeHtml(resultTotal ? visibleFrom + "-" + visibleTo + " / " + resultTotal + "개 표시" : "표시할 종목 없음") + '</span><div><button class="mini-button" data-symbol-page="prev"' + (hasPrev ? "" : " disabled") + '>이전</button><button class="mini-button" data-symbol-page="next"' + (hasNext ? "" : " disabled") + '>다음</button></div></div>' : '',
       full ? renderSymbolBulkActionBar(renderedItems) : '',
       '<div class="symbol-result-list">',
-      state.symbolUniverseLoading ? '<p class="subtle">종목 목록을 읽는 중입니다.</p>' : (renderedItems.length ? renderedItems.map(renderSymbolUniverseRow).join("") : '<p class="subtle">검색 결과가 없습니다. 목록 갱신을 실행하세요.</p>'),
+      state.symbolUniverseLoading ? renderEmptyState({
+        tone: "watch",
+        label: "Catalog",
+        title: "종목 카탈로그를 갱신하고 있습니다",
+        description: "마지막 성공 목록은 유지하고, 검색 조건에 맞는 결과만 백그라운드로 다시 읽습니다.",
+        meta: [marketLabel(state.symbolUniverseMarket || "전체"), String(limit) + "개 단위"]
+      }) : (renderedItems.length ? renderedItems.map(renderSymbolUniverseRow).join("") : renderEmptyState({
+        tone: "muted",
+        label: "Catalog",
+        title: "검색 조건에 맞는 종목이 없습니다",
+        description: "시장 필터와 검색어를 줄이거나 목록 갱신을 실행해 최신 카탈로그를 다시 불러오세요.",
+        meta: [marketLabel(state.symbolUniverseMarket || "전체"), state.symbolUniverseQuery || "검색어 없음"]
+      })),
       '</div>',
       '</article>'
     ].join("");
@@ -12174,9 +11859,11 @@
     }
     var configuredNote = options.preserveConfigured && isConfiguredSetting(name);
     return [
-      '<label class="setting-field">',
-      '<span>' + escapeHtml(label) + '</span>',
+      '<label class="setting-field setting-field-' + escapeHtml(type || "text") + '">',
+      '<span class="setting-field-label">' + escapeHtml(label) + '</span>',
+      '<div class="form-control-shell">',
       '<input data-setting="' + escapeHtml(name) + '" type="' + escapeHtml(type || "text") + '" value="' + escapeHtml(settingValue(name)) + '" placeholder="' + escapeHtml(fieldPlaceholder) + '" autocomplete="off" />',
+      '</div>',
       configuredNote ? '<em class="setting-field-note">저장됨</em>' : '',
       '</label>'
     ].join("");
@@ -12261,13 +11948,15 @@
   function renderSettingSelect(name, label, options) {
     var current = settingValue(name) || defaultSettings[name] || "";
     return [
-      '<label class="setting-field">',
-      '<span>' + escapeHtml(label) + '</span>',
+      '<label class="setting-field setting-field-select">',
+      '<span class="setting-field-label">' + escapeHtml(label) + '</span>',
+      '<div class="form-control-shell select-shell">',
       '<select data-setting="' + escapeHtml(name) + '">',
       options.map(function (option) {
         return '<option value="' + escapeHtml(option.value) + '"' + (String(current) === String(option.value) ? " selected" : "") + '>' + escapeHtml(option.label) + '</option>';
       }).join(""),
       '</select>',
+      '</div>',
       '</label>'
     ].join("");
   }
@@ -12334,6 +12023,22 @@
     ].join(""));
   }
 
+  function renderSettingsGroup(title, description, content, tone) {
+    return [
+      '<section class="settings-fieldset ' + escapeHtml(tone || "neutral") + '">',
+      '<div class="settings-fieldset-head">',
+      '<div>',
+      '<strong>' + escapeHtml(title) + '</strong>',
+      '<span>' + escapeHtml(description || "") + '</span>',
+      '</div>',
+      '</div>',
+      '<div class="settings-grid">',
+      content,
+      '</div>',
+      '</section>'
+    ].join("");
+  }
+
   function renderSettingsOverviewPanel() {
     return [
       '<article class="panel settings-overview-panel">',
@@ -12379,14 +12084,14 @@
       '</div>',
       '</div>',
       '<div class="settings-body">',
-      '<div class="settings-grid">',
-      renderSettingSelect("appTheme", "화면 테마", [
+      renderSettingsGroup("표시 환경", "콘솔 테마와 종목 카탈로그 신선도 기준입니다.", [
+        renderSettingSelect("appTheme", "화면 테마", [
         { value: "light", label: "라이트" },
         { value: "dark", label: "다크" },
         { value: "system", label: "시스템 설정" }
-      ]),
-      renderSettingField("symbolUniverseMaxAgeHours", "전체 종목 신선도(시간)", "number", "24"),
-      '</div>',
+        ]),
+        renderSettingField("symbolUniverseMaxAgeHours", "전체 종목 신선도(시간)", "number", "24")
+      ].join(""), "display"),
       '</div>',
       '</article>'
     ].join("");
@@ -12403,12 +12108,12 @@
       '</div>',
       '</div>',
       '<div class="settings-body">',
-      '<div class="settings-grid">',
-      renderSettingField("notifyProvider", "알림 제공자", "text", "telegram"),
-      renderSettingField("telegramBotToken", "Telegram Bot Token", secretType, "bot token", { preserveConfigured: true }),
-      renderSettingField("telegramChatId", "Telegram Chat ID", "text", "chat id", { preserveConfigured: true }),
-      renderSettingField("notifyLinkUrl", "알림 링크 URL", "url", "http://127.0.0.1:3000?tab=notifications"),
-      '</div>',
+      renderSettingsGroup("텔레그램 전달 채널", "사용자에게 나가는 링크와 채널 자격 정보를 관리합니다.", [
+        renderSettingField("notifyProvider", "알림 제공자", "text", "telegram"),
+        renderSettingField("telegramBotToken", "Telegram Bot Token", secretType, "bot token", { preserveConfigured: true }),
+        renderSettingField("telegramChatId", "Telegram Chat ID", "text", "chat id", { preserveConfigured: true }),
+        renderSettingField("notifyLinkUrl", "알림 링크 URL", "url", "http://127.0.0.1:3000?tab=notifications")
+      ].join(""), "delivery"),
       '</div>',
       '</article>'
     ].join("");
@@ -12425,110 +12130,118 @@
       '</div>',
       '</div>',
       '<div class="settings-body">',
-      '<div class="settings-grid">',
-      renderSettingField("kisBaseUrl", "KIS Base URL", "url", "https://openapi.koreainvestment.com:9443"),
-      renderSettingField("kisAppKey", "KIS App Key", secretType, "app key", { preserveConfigured: true }),
-      renderSettingField("kisAppSecret", "KIS App Secret", secretType, "app secret", { preserveConfigured: true }),
-      renderSettingSelect("kisMarketSignalsEnabled", "KIS 수급 수집", [
-        { value: "1", label: "사용" },
-        { value: "0", label: "사용 안 함" }
-      ]),
-      renderSettingField("kisMarketSignalMaxSymbols", "KIS 수급 종목 수", "number", "20"),
-      renderSettingField("kisMarketSignalCacheMinutes", "KIS 수급 캐시(분)", "number", "3"),
-      renderSettingField("kisMarketSignalGapSeconds", "KIS 호출 간격(초)", "number", "0.35"),
-      renderSettingSelect("kisMarketSignalPreferLiveDuringMarketHours", "장중 KIS live 우선", [
-        { value: "1", label: "사용" },
-        { value: "0", label: "사용 안 함" }
-      ]),
-      renderSettingField("kisMarketSignalLiveRefreshSeconds", "장중 live 최소 간격(초)", "number", "60"),
-      renderSettingSelect("externalAlphaEnabled", "Alpha Vantage 수집", [
-        { value: "1", label: "사용" },
-        { value: "0", label: "사용 안 함" }
-      ]),
-      renderSettingField("alphaVantageApiKey", "Alpha Vantage API Key", secretType, "api key", { preserveConfigured: true }),
-      renderSettingSelect("externalCoinGeckoEnabled", "CoinGecko 수집", [
-        { value: "1", label: "사용" },
-        { value: "0", label: "사용 안 함" }
-      ]),
-      renderSettingField("coingeckoApiKey", "CoinGecko API Key", secretType, "api key", { preserveConfigured: true }),
-      renderSettingSelect("externalFredEnabled", "FRED 수집", [
-        { value: "1", label: "사용" },
-        { value: "0", label: "사용 안 함" }
-      ]),
-      renderSettingField("fredApiKey", "FRED API Key", secretType, "api key", { preserveConfigured: true }),
-      renderSettingSelect("externalDartEnabled", "OpenDART 수집", [
-        { value: "1", label: "사용" },
-        { value: "0", label: "사용 안 함" }
-      ]),
-      renderSettingField("opendartApiKey", "OpenDART API Key", secretType, "api key", { preserveConfigured: true }),
-      renderSettingSelect("externalNewsEnabled", "뉴스 헤드라인 수집", [
-        { value: "1", label: "사용" },
-        { value: "0", label: "사용 안 함" }
-      ]),
-      renderSettingSelect("externalNewsProvider", "뉴스 공급자", [
-        { value: "auto", label: "자동" },
-        { value: "gdelt", label: "GDELT" },
-        { value: "alpha_vantage", label: "Alpha Vantage" }
-      ]),
-      renderSettingField("externalApiFetchIntervalMinutes", "외부 API 캐시(분)", "number", "30"),
-      renderSettingField("externalSignalCacheMaxAgeMinutes", "외부 신호 캐시 TTL(분)", "number", "10"),
-      renderSettingSelect("dataFreshnessEnabled", "알림 데이터 신선도 게이트", [
-        { value: "1", label: "사용" },
-        { value: "0", label: "사용 안 함" }
-      ]),
-      renderSettingField("dataFreshnessDefaultMaxAgeMinutes", "알림 기본 신선도(분)", "number", "10"),
-      renderSettingField("dataFreshnessQuoteMaxAgeMinutes", "시세 알림 신선도(분)", "number", "10"),
-      renderSettingField("dataFreshnessExternalMaxAgeMinutes", "외부 신호 신선도(분)", "number", "10"),
-      renderSettingField("dataFreshnessExternalEquityMaxAgeMinutes", "미장 신호 신선도(분)", "number", "10"),
-      renderSettingField("dataFreshnessExternalCryptoMaxAgeMinutes", "크립토 신호 신선도(분)", "number", "10"),
-      renderSettingField("dataFreshnessMacroMaxAgeMinutes", "거시 신호 신선도(분)", "number", "120"),
-      renderSettingField("dataFreshnessDisclosureMaxAgeMinutes", "공시 신선도(분)", "number", "120"),
-      renderSettingField("marketDataMaxAgeMinutes", "추천 시세 신선도(분)", "number", "240"),
-      renderSettingField("externalAlphaMaxSymbols", "미장 조회 종목 수", "number", "3"),
-      renderSettingSelect("externalSecEnabled", "SEC EDGAR 수집", [
-        { value: "1", label: "사용" },
-        { value: "0", label: "사용 안 함" }
-      ]),
-      renderSettingField("externalSecMaxSymbols", "SEC 조회 종목 수", "number", "3"),
-      renderSettingField("externalSecUserAgent", "SEC User-Agent", "text", "DigitalTwin/1.0 local-contact"),
-      renderSettingField("externalDartLookbackDays", "공시 조회 기간(일)", "number", "14"),
-      renderSettingField("externalNewsMaxSymbols", "뉴스 조회 종목 수", "number", "3"),
-      renderSettingField("externalNewsLookbackHours", "뉴스 조회 기간(시간)", "number", "48"),
-      renderSettingField("externalResearchEvidenceMaxItems", "AI 전달 최신 근거 수", "number", "8"),
-      renderSettingField("newsCollectionIntervalSeconds", "뉴스 수집 주기(초)", "number", "60"),
-      renderSettingField("newsCollectionMaxSymbols", "뉴스 수집 종목 수", "number", "40"),
-      renderSettingField("newsCollectionLookbackMinutes", "뉴스 조회 기간(분)", "number", "180"),
-      renderSettingField("newsCollectionMinRelevanceScore", "뉴스 관련성 최소 점수", "number", "35"),
-      renderSettingField("ontologyReasoningIntervalSeconds", "추론 요청 확인 주기(초)", "number", "10"),
-      renderSettingField("ontologyReasoningBatchSize", "추론 요청 배치", "number", "20"),
-      renderSettingField("materialityMinimumScore", "중요 변경 기본 기준", "number", "65"),
-      renderSettingField("marketMaterialityPriceChangePct", "가격 중요 변화율(%)", "number", "0.6"),
-      renderSettingField("newsMaterialityMinimumScore", "뉴스 중요 기준", "number", "65"),
-      renderSettingSelect("dartDisclosureAiAnalysisEnabled", "공시 AI 해석", [
-        { value: "1", label: "사용" },
-        { value: "0", label: "사용 안 함" }
-      ]),
-      renderSettingSelect("dartDisclosureAiUseCodex", "공시 해석 엔진", [
-        { value: "1", label: "Codex AI" },
-        { value: "0", label: "로컬 규칙" }
-      ]),
-      renderSettingField("dartDisclosureAiTimeoutSeconds", "공시 AI 타임아웃(초)", "number", "90"),
-      renderSettingField("dartDisclosureAiCommand", "공시 AI 명령", "text", "비우면 Codex 사용"),
-      renderSettingField("externalFredSeries", "FRED 지표", "text", "DGS10,DGS2,DFF"),
-      renderSettingField("externalCryptoIds", "CoinGecko 코인 ID", "text", "bitcoin,ethereum"),
-      '<label class="setting-field wide">',
-      '<span>OpenDART 종목 매핑</span>',
-      '<textarea data-setting="externalDartCorpCodes" rows="3" autocomplete="off" placeholder="005930=00126380">' + escapeHtml(settingValue("externalDartCorpCodes") || defaultSettings.externalDartCorpCodes) + '</textarea>',
-      '</label>',
-      '<label class="setting-field wide">',
-      '<span>SEC CIK 매핑</span>',
-      '<textarea data-setting="externalSecCompanyCiks" rows="3" autocomplete="off" placeholder="AAPL=0000320193">' + escapeHtml(settingValue("externalSecCompanyCiks") || defaultSettings.externalSecCompanyCiks) + '</textarea>',
-      '</label>',
-      '<label class="setting-field wide">',
-      '<span>환율 설정</span>',
-      '<textarea data-setting="fxRates" rows="2" autocomplete="off" placeholder="USD=1400">' + escapeHtml(settingValue("fxRates") || defaultSettings.fxRates) + '</textarea>',
-      '</label>',
-      '</div>',
+      renderSettingsGroup("국내 시세·수급", "KIS API와 장중 수급 수집의 호출량, 캐시, live 우선 정책입니다.", [
+        renderSettingField("kisBaseUrl", "KIS Base URL", "url", "https://openapi.koreainvestment.com:9443"),
+        renderSettingField("kisAppKey", "KIS App Key", secretType, "app key", { preserveConfigured: true }),
+        renderSettingField("kisAppSecret", "KIS App Secret", secretType, "app secret", { preserveConfigured: true }),
+        renderSettingSelect("kisMarketSignalsEnabled", "KIS 수급 수집", [
+          { value: "1", label: "사용" },
+          { value: "0", label: "사용 안 함" }
+        ]),
+        renderSettingField("kisMarketSignalMaxSymbols", "KIS 수급 종목 수", "number", "20"),
+        renderSettingField("kisMarketSignalCacheMinutes", "KIS 수급 캐시(분)", "number", "3"),
+        renderSettingField("kisMarketSignalGapSeconds", "KIS 호출 간격(초)", "number", "0.35"),
+        renderSettingSelect("kisMarketSignalPreferLiveDuringMarketHours", "장중 KIS live 우선", [
+          { value: "1", label: "사용" },
+          { value: "0", label: "사용 안 함" }
+        ]),
+        renderSettingField("kisMarketSignalLiveRefreshSeconds", "장중 live 최소 간격(초)", "number", "60")
+      ].join(""), "market"),
+      renderSettingsGroup("해외·거시 원천", "미장, 코인, 금리 데이터를 판단 근거로 넣기 위한 API 연결입니다.", [
+        renderSettingSelect("externalAlphaEnabled", "Alpha Vantage 수집", [
+          { value: "1", label: "사용" },
+          { value: "0", label: "사용 안 함" }
+        ]),
+        renderSettingField("alphaVantageApiKey", "Alpha Vantage API Key", secretType, "api key", { preserveConfigured: true }),
+        renderSettingField("externalAlphaMaxSymbols", "미장 조회 종목 수", "number", "3"),
+        renderSettingSelect("externalCoinGeckoEnabled", "CoinGecko 수집", [
+          { value: "1", label: "사용" },
+          { value: "0", label: "사용 안 함" }
+        ]),
+        renderSettingField("coingeckoApiKey", "CoinGecko API Key", secretType, "api key", { preserveConfigured: true }),
+        renderSettingSelect("externalFredEnabled", "FRED 수집", [
+          { value: "1", label: "사용" },
+          { value: "0", label: "사용 안 함" }
+        ]),
+        renderSettingField("fredApiKey", "FRED API Key", secretType, "api key", { preserveConfigured: true }),
+        renderSettingField("externalFredSeries", "FRED 지표", "text", "DGS10,DGS2,DFF"),
+        renderSettingField("externalCryptoIds", "CoinGecko 코인 ID", "text", "bitcoin,ethereum")
+      ].join(""), "external"),
+      renderSettingsGroup("뉴스·공시 수집", "뉴스, OpenDART, SEC 원천과 리서치 근거 저장량을 조정합니다.", [
+        renderSettingSelect("externalDartEnabled", "OpenDART 수집", [
+          { value: "1", label: "사용" },
+          { value: "0", label: "사용 안 함" }
+        ]),
+        renderSettingField("opendartApiKey", "OpenDART API Key", secretType, "api key", { preserveConfigured: true }),
+        renderSettingField("externalDartLookbackDays", "공시 조회 기간(일)", "number", "14"),
+        renderSettingSelect("externalSecEnabled", "SEC EDGAR 수집", [
+          { value: "1", label: "사용" },
+          { value: "0", label: "사용 안 함" }
+        ]),
+        renderSettingField("externalSecMaxSymbols", "SEC 조회 종목 수", "number", "3"),
+        renderSettingField("externalSecUserAgent", "SEC User-Agent", "text", "DigitalTwin/1.0 local-contact"),
+        renderSettingSelect("externalNewsEnabled", "뉴스 헤드라인 수집", [
+          { value: "1", label: "사용" },
+          { value: "0", label: "사용 안 함" }
+        ]),
+        renderSettingSelect("externalNewsProvider", "뉴스 공급자", [
+          { value: "auto", label: "자동" },
+          { value: "gdelt", label: "GDELT" },
+          { value: "alpha_vantage", label: "Alpha Vantage" }
+        ]),
+        renderSettingField("externalNewsMaxSymbols", "뉴스 조회 종목 수", "number", "3"),
+        renderSettingField("externalNewsLookbackHours", "뉴스 조회 기간(시간)", "number", "48"),
+        renderSettingField("externalResearchEvidenceMaxItems", "AI 전달 최신 근거 수", "number", "8"),
+        renderSettingField("newsCollectionIntervalSeconds", "뉴스 수집 주기(초)", "number", "60"),
+        renderSettingField("newsCollectionMaxSymbols", "뉴스 수집 종목 수", "number", "40"),
+        renderSettingField("newsCollectionLookbackMinutes", "뉴스 조회 기간(분)", "number", "180"),
+        renderSettingField("newsCollectionMinRelevanceScore", "뉴스 관련성 최소 점수", "number", "35")
+      ].join(""), "research"),
+      renderSettingsGroup("신선도·추론 게이트", "알림과 온톨로지 추론에 들어가기 전 데이터 유효성을 제한합니다.", [
+        renderSettingField("externalApiFetchIntervalMinutes", "외부 API 캐시(분)", "number", "30"),
+        renderSettingField("externalSignalCacheMaxAgeMinutes", "외부 신호 캐시 TTL(분)", "number", "10"),
+        renderSettingSelect("dataFreshnessEnabled", "알림 데이터 신선도 게이트", [
+          { value: "1", label: "사용" },
+          { value: "0", label: "사용 안 함" }
+        ]),
+        renderSettingField("dataFreshnessDefaultMaxAgeMinutes", "알림 기본 신선도(분)", "number", "10"),
+        renderSettingField("dataFreshnessQuoteMaxAgeMinutes", "시세 알림 신선도(분)", "number", "10"),
+        renderSettingField("dataFreshnessExternalMaxAgeMinutes", "외부 신호 신선도(분)", "number", "10"),
+        renderSettingField("dataFreshnessExternalEquityMaxAgeMinutes", "미장 신호 신선도(분)", "number", "10"),
+        renderSettingField("dataFreshnessExternalCryptoMaxAgeMinutes", "크립토 신호 신선도(분)", "number", "10"),
+        renderSettingField("dataFreshnessMacroMaxAgeMinutes", "거시 신호 신선도(분)", "number", "120"),
+        renderSettingField("dataFreshnessDisclosureMaxAgeMinutes", "공시 신선도(분)", "number", "120"),
+        renderSettingField("marketDataMaxAgeMinutes", "추천 시세 신선도(분)", "number", "240"),
+        renderSettingField("ontologyReasoningIntervalSeconds", "추론 요청 확인 주기(초)", "number", "10"),
+        renderSettingField("ontologyReasoningBatchSize", "추론 요청 배치", "number", "20"),
+        renderSettingField("materialityMinimumScore", "중요 변경 기본 기준", "number", "65"),
+        renderSettingField("marketMaterialityPriceChangePct", "가격 중요 변화율(%)", "number", "0.6"),
+        renderSettingField("newsMaterialityMinimumScore", "뉴스 중요 기준", "number", "65")
+      ].join(""), "gate"),
+      renderSettingsGroup("공시 AI와 매핑", "AI 해석 방식과 종목·CIK·환율 매핑처럼 긴 설정값을 관리합니다.", [
+        renderSettingSelect("dartDisclosureAiAnalysisEnabled", "공시 AI 해석", [
+          { value: "1", label: "사용" },
+          { value: "0", label: "사용 안 함" }
+        ]),
+        renderSettingSelect("dartDisclosureAiUseCodex", "공시 해석 엔진", [
+          { value: "1", label: "Codex AI" },
+          { value: "0", label: "로컬 규칙" }
+        ]),
+        renderSettingField("dartDisclosureAiTimeoutSeconds", "공시 AI 타임아웃(초)", "number", "90"),
+        renderSettingField("dartDisclosureAiCommand", "공시 AI 명령", "text", "비우면 Codex 사용"),
+        '<label class="setting-field wide">',
+        '<span class="setting-field-label">OpenDART 종목 매핑</span>',
+        '<div class="form-control-shell"><textarea data-setting="externalDartCorpCodes" rows="3" autocomplete="off" placeholder="005930=00126380">' + escapeHtml(settingValue("externalDartCorpCodes") || defaultSettings.externalDartCorpCodes) + '</textarea></div>',
+        '</label>',
+        '<label class="setting-field wide">',
+        '<span class="setting-field-label">SEC CIK 매핑</span>',
+        '<div class="form-control-shell"><textarea data-setting="externalSecCompanyCiks" rows="3" autocomplete="off" placeholder="AAPL=0000320193">' + escapeHtml(settingValue("externalSecCompanyCiks") || defaultSettings.externalSecCompanyCiks) + '</textarea></div>',
+        '</label>',
+        '<label class="setting-field wide">',
+        '<span class="setting-field-label">환율 설정</span>',
+        '<div class="form-control-shell"><textarea data-setting="fxRates" rows="2" autocomplete="off" placeholder="USD=1400">' + escapeHtml(settingValue("fxRates") || defaultSettings.fxRates) + '</textarea></div>',
+        '</label>'
+      ].join(""), "mapping"),
       '</div>',
       '</article>'
     ].join("");
@@ -13117,6 +12830,28 @@
       });
     });
 
+    Array.prototype.slice.call(app.querySelectorAll("[data-notification-job-select]")).forEach(function (row) {
+      var selectNotificationJob = function () {
+        var key = row.getAttribute("data-notification-job-select") || "";
+        if (!key || state.activeNotificationJobKey === key) return;
+        state.activeNotificationJobKey = key;
+        render();
+      };
+      row.addEventListener("click", function (event) {
+        var target = event.target;
+        while (target && target !== row) {
+          if (/^(BUTTON|A|INPUT|SELECT|TEXTAREA)$/.test(target.tagName || "")) return;
+          target = target.parentNode;
+        }
+        selectNotificationJob();
+      });
+      row.addEventListener("keydown", function (event) {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        selectNotificationJob();
+      });
+    });
+
     Array.prototype.slice.call(app.querySelectorAll("[data-setting]")).forEach(function (field) {
       var updateSettingField = function () {
         var name = field.getAttribute("data-setting");
@@ -13335,6 +13070,7 @@
   applyAppTheme();
   connectRealtime();
   render();
+  var snapshotLoadTask = load();
   var snapshotPrerequisites = [loadServerSettings(), loadServiceAccounts()];
   var supportingBootstrapTasks = [
     loadNotificationTemplates(),
@@ -13349,7 +13085,7 @@
       return null;
     });
   })).finally(function () {
-    load();
+    if (state.snapshot) render();
   });
   Promise.all(supportingBootstrapTasks.map(function (task) {
     return task.catch(function () {
@@ -13357,5 +13093,8 @@
     });
   })).finally(function () {
     if (state.snapshot) render();
+  });
+  snapshotLoadTask.catch(function () {
+    return null;
   });
 }());

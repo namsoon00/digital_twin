@@ -15455,3 +15455,39 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
     justify-self: start;
   }
 }
+
+/* Monitoring status card layout repair */
+.admin-monitoring-panel .monitor-primary-state {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  min-height: 0;
+  gap: var(--ds-space-5);
+  padding: var(--ds-row-pad-y) var(--ds-row-pad-x);
+}
+
+.admin-monitoring-panel .monitor-primary-head {
+  align-self: center;
+  padding: 0;
+  border-bottom: 0;
+}
+
+.admin-monitoring-panel .monitor-primary-copy {
+  min-width: 0;
+  gap: var(--ds-space-2);
+}
+
+.admin-monitoring-panel .monitor-primary-copy strong {
+  font-size: clamp(18px, 1.7vw, 24px);
+  line-height: 1.18;
+}
+
+.admin-monitoring-panel .monitor-primary-copy em {
+  line-height: 1.35;
+}
+
+@media (max-width: 640px) {
+  .admin-monitoring-panel .monitor-primary-state {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+  }
+}

@@ -125,6 +125,15 @@ class OntologyLabTests(unittest.TestCase):
         self.assertGreaterEqual(delta["derivedRelationCount"], 1)
         self.assertIn("graph.lab.symbol-review.v1", delta["newRuleIds"])
         self.assertIn("REQUIRES_NEXT_CHECK", delta["newRelationTypes"])
+        proposal = lab_result["proposedOntologyChanges"]
+        self.assertIn("graph.lab.symbol-review.v1", proposal["ruleIds"])
+        self.assertIn("REQUIRES_NEXT_CHECK", proposal["newRelationTypes"])
+        self.assertIn("LAB_REVIEW", proposal["newDecisionStages"])
+        recommendations = lab_result["recommendations"]
+        self.assertTrue(recommendations)
+        self.assertIn("review-rule-promotion", {item["type"] for item in recommendations})
+        self.assertIn("register-relation-types", {item["type"] for item in recommendations})
+        self.assertIn("register-decision-stages", {item["type"] for item in recommendations})
 
     def test_run_without_snapshots_marks_result_as_needing_data(self):
         service = OntologyLabService(
@@ -137,6 +146,7 @@ class OntologyLabTests(unittest.TestCase):
         result = service.run(experiment_id)
 
         self.assertEqual("needs-data", result["result"]["promotionReadiness"]["status"])
+        self.assertIn("collect-abox-data", {item["type"] for item in result["result"]["recommendations"]})
 
     def test_active_experiment_runs_once_per_monitor_snapshot(self):
         store = MemoryExperimentStore()
@@ -166,6 +176,7 @@ class OntologyLabTests(unittest.TestCase):
         self.assertEqual(1, len(experiment.run_history))
         self.assertTrue(experiment.last_snapshot_key.startswith("monitor:"))
         self.assertEqual("scheduled", experiment.run_history[0]["runKind"])
+        self.assertGreaterEqual(experiment.run_history[0]["recommendationCount"], 1)
 
     def test_pause_experiment_removes_it_from_active_batch(self):
         store = MemoryExperimentStore()

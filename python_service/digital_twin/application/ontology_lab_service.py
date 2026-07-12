@@ -217,6 +217,7 @@ class OntologyLabService:
         inference = result.get("inference") if isinstance(result.get("inference"), dict) else {}
         aggregate_delta = inference.get("aggregateDelta") if isinstance(inference.get("aggregateDelta"), dict) else {}
         sandbox = result.get("sandbox") if isinstance(result.get("sandbox"), dict) else {}
+        recommendations = [dict(item) for item in (result.get("recommendations") or []) if isinstance(item, dict)]
         completed_at = str(result.get("completedAt") or utc_now_iso())
         seed = experiment.experiment_id + "|" + snapshot_key + "|" + completed_at + "|" + run_kind
         entry = {
@@ -231,6 +232,8 @@ class OntologyLabService:
             "derivedRelationDelta": int(aggregate_delta.get("derivedRelationCount") or 0),
             "newRelationTypes": list(aggregate_delta.get("newRelationTypes") or [])[:12],
             "findings": list(result.get("findings") or [])[:6],
+            "recommendationCount": len(recommendations),
+            "recommendations": recommendations[:4],
         }
         history = [entry] + [dict(item) for item in (experiment.run_history or []) if isinstance(item, dict)]
         experiment.run_history = history[: self.history_limit()]

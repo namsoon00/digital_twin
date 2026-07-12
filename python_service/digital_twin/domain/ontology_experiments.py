@@ -209,9 +209,14 @@ def graph_rules_from_payloads(rules: Iterable[Dict[str, object]], force_enabled:
 
 def rulebox_metrics(rules: Iterable[Dict[str, object]]) -> Dict[str, object]:
     rows = [dict(item) for item in rules or [] if isinstance(item, dict)]
+    rule_ids = []
     relation_types = []
     decision_stages = []
+    tbox_classes = []
     for rule in rows:
+        rule_id = str(rule.get("rule_id") or rule.get("ruleId") or "").strip()
+        if rule_id:
+            rule_ids.append(rule_id)
         for derivation in rule.get("derivations") or []:
             if not isinstance(derivation, dict):
                 continue
@@ -221,13 +226,22 @@ def rulebox_metrics(rules: Iterable[Dict[str, object]]) -> Dict[str, object]:
             decision_stage = str(derivation.get("decision_stage") or derivation.get("decisionStage") or "").strip()
             if decision_stage:
                 decision_stages.append(decision_stage)
+            tbox_class = str(derivation.get("tbox_class") or derivation.get("tboxClass") or "").strip()
+            if tbox_class:
+                tbox_classes.append(tbox_class)
+            for value in derivation.get("tbox_classes") or derivation.get("tboxClasses") or []:
+                text = str(value or "").strip()
+                if text:
+                    tbox_classes.append(text)
     return {
+        "ruleIds": sorted(set(rule_ids)),
         "ruleCount": len(rows),
         "enabledRuleCount": len([item for item in rows if item.get("enabled") is not False]),
         "conditionCount": sum(len(item.get("conditions") or []) for item in rows),
         "derivationCount": sum(len(item.get("derivations") or []) for item in rows),
         "relationTypes": sorted(set(relation_types)),
         "decisionStages": sorted(set(decision_stages)),
+        "tboxClasses": sorted(set(tbox_classes)),
         "rulesHash": rulebox_rules_hash(rows),
     }
 
@@ -328,6 +342,14 @@ def summarize_experiment_result(
     baseline_metrics = rulebox_metrics(baseline_rules)
     aggregate_delta = aggregate_graph_deltas(graph_runs)
     readiness = promotion_readiness(experiment.validation_warnings, aggregate_delta, len(graph_runs))
+    proposed_changes = ontology_change_proposal(candidate_metrics, baseline_metrics, aggregate_delta)
+    recommendations = experiment_recommendations(
+        experiment.validation_warnings,
+        proposed_changes,
+        aggregate_delta,
+        len(graph_runs),
+        readiness,
+    )
     return {
         "status": "completed",
         "experimentId": experiment.experiment_id,
@@ -354,10 +376,176 @@ def summarize_experiment_result(
             "aggregateDelta": aggregate_delta,
             "graphRuns": graph_runs,
         },
+        "proposedOntologyChanges": proposed_changes,
         "promotionReadiness": readiness,
+        "recommendations": recommendations,
         "findings": experiment_findings(experiment.validation_warnings, aggregate_delta, len(graph_runs), readiness),
         "validationWarnings": list(experiment.validation_warnings or []),
         "completedAt": utc_now_iso(),
+    }
+
+
+def ontology_change_proposal(
+    candidate_metrics: Dict[str, object],
+    baseline_metrics: Dict[str, object],
+    aggregate_delta: Dict[str, object],
+) -> Dict[str, object]:
+    candidate_rule_ids = list(candidate_metrics.get("ruleIds") or [])
+    candidate_relation_types = list(candidate_metrics.get("relationTypes") or [])
+    candidate_decision_stages = list(candidate_metrics.get("decisionStages") or [])
+    baseline_relation_types = set(baseline_metrics.get("relationTypes") or [])
+    baseline_decision_stages = set(baseline_metrics.get("decisionStages") or [])
+    return {
+        "ruleIds": candidate_rule_ids,
+        "relationTypes": candidate_relation_types,
+        "newRelationTypes": sorted(set(candidate_relation_types) - baseline_relation_types),
+        "decisionStages": candidate_decision_stages,
+        "newDecisionStages": sorted(set(candidate_decision_stages) - baseline_decision_stages),
+        "tboxClasses": list(candidate_metrics.get("tboxClasses") or []),
+        "inferenceRuleIds": list(aggregate_delta.get("newRuleIds") or []),
+        "inferenceDecisionStages": list(aggregate_delta.get("newDecisionStages") or []),
+        "inferenceRelationTypes": list(aggregate_delta.get("newRelationTypes") or []),
+    }
+
+
+def experiment_recommendations(
+    warnings: List[str],
+    proposed_changes: Dict[str, object],
+    aggregate_delta: Dict[str, object],
+    graph_run_count: int,
+    readiness: Dict[str, object],
+) -> List[Dict[str, object]]:
+    recommendations: List[Dict[str, object]] = []
+    derived_count = int(aggregate_delta.get("derivedRelationCount") or 0)
+    readiness_status = str(readiness.get("status") or "needs-review")
+    rule_ids = list(proposed_changes.get("ruleIds") or [])
+    relation_types = list(proposed_changes.get("relationTypes") or [])
+    new_relation_types = list(proposed_changes.get("newRelationTypes") or [])
+    new_decision_stages = sorted(
+        set(proposed_changes.get("newDecisionStages") or [])
+        | set(proposed_changes.get("inferenceDecisionStages") or [])
+    )
+    if graph_run_count <= 0:
+        recommendations.append(
+            recommendation_payload(
+                "collect-abox-data",
+                "high",
+                "최근 ABox 스냅샷 확보 후 재실행",
+                "실제 모니터 스냅샷이 없어 후보 규칙이 투자 그래프에서 만드는 차이를 비교하지 못했습니다.",
+                "모니터링 스냅샷을 먼저 수집한 뒤 같은 실험을 다시 실행합니다.",
+                proposed_changes,
+                {"graphRunCount": graph_run_count, "derivedRelationDelta": derived_count},
+            )
+        )
+    if warnings:
+        recommendations.append(
+            recommendation_payload(
+                "fix-candidate-structure",
+                "high",
+                "후보 규칙 구조 경고 해결",
+                "구조 경고 " + str(len(warnings)) + "개가 있어 운영 RuleBox 승격 전에 수정이 필요합니다.",
+                "candidateRules의 condition, derivation, decision_stage, stage_priority를 보완합니다.",
+                proposed_changes,
+                {"warnings": list(warnings or [])[:6]},
+            )
+        )
+    if derived_count > 0:
+        promote = readiness_status == "promote-candidate"
+        recommendations.append(
+            recommendation_payload(
+                "promote-rule" if promote else "review-rule-promotion",
+                "high" if promote else "medium",
+                "후보 RuleBox 규칙 " + ("승격" if promote else "승격 검토"),
+                "샌드박스 비교에서 새 파생 관계 " + str(derived_count) + "개가 만들어졌습니다.",
+                "운영 RuleBox에 " + (", ".join(rule_ids) if rule_ids else "후보 규칙") + " 추가를 검토합니다.",
+                proposed_changes,
+                {
+                    "derivedRelationDelta": derived_count,
+                    "promotionStatus": readiness_status,
+                    "promotionScore": readiness.get("score"),
+                },
+            )
+        )
+    elif graph_run_count > 0:
+        recommendations.append(
+            recommendation_payload(
+                "refine-rule-conditions",
+                "medium",
+                "후보 규칙 조건 보완",
+                "현재 스냅샷에서는 후보 규칙이 새 파생 관계를 만들지 못했습니다.",
+                "조건 임계값, 대상 심볼, 필요한 ABox 관계를 조정한 새 실험을 만듭니다.",
+                proposed_changes,
+                {"graphRunCount": graph_run_count, "derivedRelationDelta": derived_count},
+            )
+        )
+    if new_relation_types:
+        recommendations.append(
+            recommendation_payload(
+                "register-relation-types",
+                "medium",
+                "새 관계 타입 등록",
+                "후보 규칙이 현재 RuleBox에 없는 관계 타입을 사용합니다.",
+                "TBox/관계 카탈로그에 " + ", ".join(new_relation_types) + " 의미와 방향성을 추가합니다.",
+                proposed_changes,
+                {"newRelationTypes": new_relation_types},
+            )
+        )
+    elif relation_types and derived_count > 0:
+        recommendations.append(
+            recommendation_payload(
+                "reuse-existing-relation-types",
+                "low",
+                "기존 관계 타입 재사용",
+                "새 relation type 없이 기존 관계 어휘로 의미 있는 추론 차이를 만들었습니다.",
+                "관계 타입 추가보다 RuleBox 규칙과 decision stage 추가를 우선 검토합니다.",
+                proposed_changes,
+                {"relationTypes": relation_types},
+            )
+        )
+    if new_decision_stages:
+        recommendations.append(
+            recommendation_payload(
+                "register-decision-stages",
+                "medium",
+                "새 decision stage 등록",
+                "후보 규칙이 기존 운영 추론에 없던 판단 단계를 만들었습니다.",
+                "DecisionStage 카탈로그와 설명 문맥에 " + ", ".join(new_decision_stages) + "를 추가합니다.",
+                proposed_changes,
+                {"newDecisionStages": new_decision_stages},
+            )
+        )
+    return recommendations[:6]
+
+
+def recommendation_payload(
+    recommendation_type: str,
+    priority: str,
+    title: str,
+    reason: str,
+    action: str,
+    proposal: Dict[str, object],
+    evidence: Dict[str, object],
+) -> Dict[str, object]:
+    seed = json.dumps(
+        {
+            "type": recommendation_type,
+            "title": title,
+            "proposal": proposal,
+            "evidence": evidence,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return {
+        "id": "ontology-rec-" + hashlib.sha256(seed.encode("utf-8")).hexdigest()[:12],
+        "type": recommendation_type,
+        "priority": priority,
+        "title": title,
+        "reason": reason,
+        "action": action,
+        "proposal": dict(proposal or {}),
+        "evidence": dict(evidence or {}),
     }
 
 

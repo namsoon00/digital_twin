@@ -66,8 +66,8 @@
     modeling: {
       layer: "Strategy Workbench",
       entity: "Investment Opinion",
-      objective: "보유·관심 데이터와 관계 그래프를 투자 판단 후보로 압축합니다.",
-      workflow: ["판단판", "근거 평가", "액션 큐"]
+      objective: "오늘의 판단, 투자 근거, 통합 차트, 온톨로지 추적을 한 작업 흐름으로 압축합니다.",
+      workflow: ["오늘 판단", "근거·차트", "검증 리뷰"]
     },
     experiments: {
       layer: "Ontology Lab",
@@ -108,12 +108,12 @@
     { id: "management", label: "관리", description: "계정·키" }
   ];
   var strategySections = [
-    { id: "overview", label: "판단판", description: "오늘의 구조" },
-    { id: "evidence", label: "근거 카드", description: "데이터·관계" },
-    { id: "results", label: "액션 큐", description: "보류·후보" },
-    { id: "graphs", label: "관계 그래프", description: "TBox·ABox" },
-    { id: "registry", label: "규칙·프롬프트", description: "운영 기준" },
-    { id: "trace", label: "검증 추적", description: "행·룰" }
+    { id: "overview", label: "오늘의 판단", description: "액션 큐" },
+    { id: "evidence", label: "투자 근거", description: "관계·데이터" },
+    { id: "charts", label: "통합 차트", description: "가격·흐름" },
+    { id: "rules", label: "전략 룰", description: "조건·알림" },
+    { id: "graphs", label: "온톨로지", description: "TBox·ABox" },
+    { id: "trace", label: "검증·리뷰", description: "성과·품질" }
   ];
   var ontologySections = [
     { id: "overview", label: "개요", description: "요약·상태" },
@@ -136,8 +136,8 @@
       settings: ["policy", "templates", "diagnostics"]
     },
     modeling: {
-      results: ["overview", "evidence", "results", "graphs", "trace"],
-      settings: ["registry"]
+      results: ["overview", "evidence", "charts", "graphs", "trace"],
+      settings: ["rules"]
     }
   };
   var pageModeEnabledTabs = ["accounts", "notifications", "modeling", "feed"];
@@ -388,6 +388,7 @@
     activeNotificationSection: initialNotificationSection(),
     activeAccountSection: initialAccountSection(),
     activeStrategySection: initialStrategySection(),
+    activeInvestmentChartPeriod: "1d",
     activeOntologySection: initialOntologySection(),
     activeNotificationMessageType: "investmentInsight",
     notificationPolicyEditorOpen: false,
@@ -967,9 +968,11 @@
   function normalizeStrategySection(value) {
     var requested = String(value || "").toLowerCase();
     if (requested === "data" || requested === "cards" || requested === "card") return "evidence";
-    if (requested === "policy" || requested === "rules" || requested === "prompts") return "registry";
-    if (requested === "structure" || requested === "graph" || requested === "ontology") return "graphs";
-    if (requested === "relations" || requested === "rules-trace") return "trace";
+    if (requested === "result" || requested === "results" || requested === "actions" || requested === "queue") return "overview";
+    if (requested === "chart" || requested === "candle" || requested === "candles" || requested === "flow" || requested === "money-flow") return "charts";
+    if (requested === "policy" || requested === "rule" || requested === "rules" || requested === "registry" || requested === "prompts") return "rules";
+    if (requested === "structure" || requested === "graph" || requested === "ontology" || requested === "relation-graph") return "graphs";
+    if (requested === "relations" || requested === "rules-trace" || requested === "review" || requested === "reviews") return "trace";
     return strategySections.some(function (section) { return section.id === requested; }) ? requested : "overview";
   }
 
@@ -7671,6 +7674,173 @@
     };
   }
 
+  function investmentChartPeriodOptions() {
+    return [
+      { id: "1d", label: "일", description: "장중·일간" },
+      { id: "1w", label: "주", description: "단기 추세" },
+      { id: "1m", label: "월", description: "중기 흐름" },
+      { id: "custom", label: "사용자", description: "API 범위" }
+    ];
+  }
+
+  function normalizeInvestmentChartPeriod(value) {
+    var requested = String(value || "").toLowerCase();
+    return investmentChartPeriodOptions().some(function (item) { return item.id === requested; }) ? requested : "1d";
+  }
+
+  function activeInvestmentChartPeriod() {
+    state.activeInvestmentChartPeriod = normalizeInvestmentChartPeriod(state.activeInvestmentChartPeriod);
+    return state.activeInvestmentChartPeriod;
+  }
+
+  function investmentChartScore(value) {
+    var number = Number(value || 0);
+    if (!isFinite(number)) return 0;
+    return Math.max(-100, Math.min(100, number));
+  }
+
+  function investmentChartSourceText(source, quality) {
+    var sourceText = String(source || "snapshot");
+    var qualityText = String(quality || "").toLowerCase();
+    if (qualityText === "mock") return "mock · " + sourceText;
+    if (qualityText === "stale") return "실제 데이터 지연 · " + sourceText;
+    if (qualityText === "missing" || qualityText === "gap") return "데이터 부족 · " + sourceText;
+    return "실제 데이터 · " + sourceText;
+  }
+
+  function investmentIntegratedChartRows(snapshot, parts) {
+    var rows = [];
+    var analysis = investmentAnalysisModel(snapshot);
+    buildTradeSignalItems(snapshot).slice(0, 6).forEach(function (item) {
+      var score = investmentChartScore((Number(item.buyScore || 0) - Number(item.sellScore || 0)) || item.relationStrength || 0);
+      rows.push({
+        group: item.source === "watchlist" ? "관심" : "보유",
+        label: stockDisplayName(item.symbol, item),
+        detail: stockDisplayMeta(item, [marketLabel(item.market || "-"), item.sector || "-", item.action || "관망"]),
+        score: score,
+        value: item.currentPrice ? formatPrice(item.currentPrice, item.currency) : "시세 대기",
+        source: item.quoteSource || item.source || "portfolio",
+        quality: item.hasData ? "actual" : "missing"
+      });
+    });
+    var flow = analysis.moneyFlow || {};
+    (Array.isArray(flow.buckets) ? flow.buckets : []).slice(0, 5).forEach(function (bucket) {
+      var raw = bucket.score != null ? bucket.score : (bucket.changeRate != null ? Number(bucket.changeRate) * 100 : bucket.ratio || bucket.value || 0);
+      rows.push({
+        group: "자금",
+        label: bucket.label || bucket.name || bucket.asset || "Money flow",
+        detail: bucket.caption || bucket.description || bucket.kind || "global flow",
+        score: investmentChartScore(raw),
+        value: bucket.valueText || bucket.value || bucket.amount || "-",
+        source: bucket.source || bucket.provider || "investmentAnalysis.moneyFlow",
+        quality: bucket.mock ? "mock" : (bucket.quality || "actual")
+      });
+    });
+    (Array.isArray(flow.emergingFlows) ? flow.emergingFlows : []).slice(0, 3).forEach(function (item) {
+      rows.push({
+        group: "새 흐름",
+        label: item.label || item.name || "Emerging flow",
+        detail: item.reason || item.description || "새 자금 흐름 후보",
+        score: investmentChartScore(item.score || item.strength || 0),
+        value: item.value || item.signal || "-",
+        source: item.source || "investmentAnalysis.emergingFlows",
+        quality: item.mock ? "mock" : (item.quality || "actual")
+      });
+    });
+    var macro = ontologyMacroSignalData(parts || {});
+    macro.fxSignals.concat(macro.rateSignals).slice(0, 5).forEach(function (entity) {
+      var relationCount = ontologyMacroRelationCount(entity, macro.macroRelations);
+      rows.push({
+        group: String(entity.kind || "").indexOf("fx") >= 0 ? "환율" : "금리",
+        label: ontologyEntityDisplayLabel(entity, entity && entity.id),
+        detail: ontologyMacroMetaText(entity),
+        score: investmentChartScore(relationCount * 12),
+        value: ontologyMacroValueText(entity),
+        source: ((entity.properties || {}).provider) || "ontology ABox",
+        quality: (entity.properties || {}).mock ? "mock" : "actual"
+      });
+    });
+    return rows;
+  }
+
+  function renderInvestmentChartPeriodControl(active) {
+    return [
+      '<div class="investment-chart-periods" role="tablist" aria-label="통합 차트 기간">',
+      investmentChartPeriodOptions().map(function (item) {
+        var selected = item.id === active;
+        return [
+          '<button type="button" role="tab" class="' + (selected ? "active" : "") + '" data-investment-chart-period="' + escapeHtml(item.id) + '"' + (selected ? ' aria-selected="true"' : ' aria-selected="false"') + '>',
+          '<strong>' + escapeHtml(item.label) + '</strong>',
+          '<span>' + escapeHtml(item.description) + '</span>',
+          '</button>'
+        ].join("");
+      }).join(""),
+      '</div>'
+    ].join("");
+  }
+
+  function renderInvestmentIntegratedChartRow(row) {
+    var score = investmentChartScore(row.score);
+    var magnitude = Math.min(50, Math.max(2, Math.abs(score) / 2));
+    var direction = score >= 0 ? "positive" : "negative";
+    return [
+      '<div class="investment-chart-row ' + escapeHtml(direction) + '">',
+      '<div class="investment-chart-label">',
+      '<span>' + escapeHtml(row.group || "-") + '</span>',
+      '<strong>' + escapeHtml(row.label || "-") + '</strong>',
+      '<em>' + escapeHtml(row.detail || "") + '</em>',
+      '</div>',
+      '<div class="investment-chart-track" aria-label="' + escapeHtml((row.label || "") + " 흐름 점수 " + Math.round(score)) + '">',
+      '<span class="investment-chart-bar" style="width:' + escapeHtml(magnitude.toFixed(1)) + '%"></span>',
+      '</div>',
+      '<div class="investment-chart-value">',
+      '<strong>' + escapeHtml(row.value == null ? "-" : row.value) + '</strong>',
+      '<span>' + escapeHtml(Math.round(score) + "점") + '</span>',
+      '<em>' + escapeHtml(investmentChartSourceText(row.source, row.quality)) + '</em>',
+      '</div>',
+      '</div>'
+    ].join("");
+  }
+
+  function renderInvestmentIntegratedChartPanel(snapshot, parts) {
+    var rows = investmentIntegratedChartRows(snapshot, parts);
+    var active = activeInvestmentChartPeriod();
+    var actualCount = rows.filter(function (row) { return String(row.quality || "").toLowerCase() !== "mock" && String(row.quality || "").toLowerCase() !== "missing"; }).length;
+    var mockCount = rows.filter(function (row) { return String(row.quality || "").toLowerCase() === "mock"; }).length;
+    return [
+      '<article class="panel investment-chart-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Integrated Market Chart</p>',
+      '<h2>통합 차트</h2>',
+      '<p class="subtle">종목, 자금 흐름, 환율·금리 온톨로지 신호를 같은 레인에서 비교합니다. 실제 캔들 API가 붙으면 이 기간 상태를 그대로 사용합니다.</p>',
+      '</div>',
+      '<span class="metric">' + escapeHtml(rows.length) + '</span>',
+      '</div>',
+      renderInvestmentChartPeriodControl(active),
+      '<div class="investment-chart-summary">',
+      '<span>기간 <strong>' + escapeHtml(active.toUpperCase()) + '</strong></span>',
+      '<span>실제 데이터 <strong>' + escapeHtml(actualCount) + '</strong></span>',
+      '<span>mock <strong>' + escapeHtml(mockCount) + '</strong></span>',
+      '</div>',
+      '<div class="investment-chart-axis"><span>리스크/매도</span><strong>중립</strong><span>기회/매수</span></div>',
+      '<div class="investment-chart-lanes">',
+      rows.length ? rows.map(renderInvestmentIntegratedChartRow).join("") : renderEmptyState({
+        tone: "muted",
+        label: "Chart",
+        title: "통합 차트에 표시할 데이터가 없습니다",
+        description: "보유·관심 종목, 자금 흐름, 매크로 API가 수집되면 같은 레인에서 비교합니다.",
+        meta: ["prices", "flow", "macro"]
+      }),
+      '</div>',
+      '<div class="rule-strip">',
+      '<span>점수는 차트 표시용 방향성입니다. 최종 투자 판단은 온톨로지 InferenceBox와 전략 룰 근거를 우선합니다.</span>',
+      '<span>각 행 끝에 실제/mock 여부와 API·스냅샷 출처를 표시합니다.</span>',
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
   function renderInvestmentDecisionBoardPanel(snapshot) {
     var analysis = investmentAnalysisModel(snapshot);
     var board = analysis.board || {};
@@ -8247,13 +8417,13 @@
     if (section === "evidence") {
       return renderInvestmentTabWorkspace("evidence", [
         { role: "main", html: renderInvestmentReasoningCardPanel(snapshot) },
-        { role: "side", html: renderOntologyExecutionPlanPanel(investmentReasoningCards(snapshot), parts) + renderStrategyDataPanel(snapshot) }
+        { role: "side", html: renderOntologyExecutionPlanPanel(investmentReasoningCards(snapshot), parts) + renderInvestmentDataLineagePanel(snapshot) + renderStrategyDataPanel(snapshot) }
       ]);
     }
-    if (section === "results") {
-      return renderInvestmentTabWorkspace("results", [
-        { role: "main", html: renderInvestmentActionQueuePanel(snapshot) + renderModelPreviewPanel(snapshot) },
-        { role: "side", html: renderInvestmentGraphGatePanel(snapshot) + renderInvestmentDataLineagePanel(snapshot) + renderOntologyExecutionPlanPanel(investmentReasoningCards(snapshot), parts) }
+    if (section === "charts") {
+      return renderInvestmentTabWorkspace("charts", [
+        { role: "main", html: renderInvestmentIntegratedChartPanel(snapshot, parts) + renderInvestmentMoneyFlowPanel(snapshot) },
+        { role: "side", html: renderOntologyMacroSignalPanel(parts) + renderInvestmentGraphGatePanel(snapshot) + renderInvestmentDataLineagePanel(snapshot) }
       ]);
     }
     if (section === "graphs") {
@@ -8262,9 +8432,9 @@
         '<article class="panel ontology-panel">',
         '<div class="panel-head">',
         '<div>',
-        '<p class="label">Ontology Graphs</p>',
-        '<h2>TBox·ABox 관계 그래프</h2>',
-        '<p class="subtle">TBox 규칙 구조와 ABox 현재 데이터가 reasoning card를 거쳐 AI 의견으로 연결됩니다.</p>',
+        '<p class="label">Ontology Engine</p>',
+        '<h2>온톨로지</h2>',
+        '<p class="subtle">TBox 규칙 구조와 ABox 현재 데이터가 투자 근거 카드, RuleBox, AI 의견으로 연결되는 경로입니다.</p>',
         '</div>',
         '<span class="metric">' + escapeHtml(parts.aboxRelations.length) + '</span>',
         '</div>',
@@ -8278,8 +8448,8 @@
       ].join("") }
       ]);
     }
-    if (section === "registry") {
-      return renderInvestmentTabWorkspace("registry", [
+    if (section === "rules") {
+      return renderInvestmentTabWorkspace("rules", [
         { role: "main", html: renderOntologyRuleEditorPanel(snapshot) + renderNeo4jRuleboxPanel(snapshot) },
         { role: "side", html: renderInvestmentAiPacketPanel(snapshot) + renderAiPromptRegistryPanel(snapshot) + renderAdminModelingPanel(snapshot) }
       ]);
@@ -8290,12 +8460,14 @@
         '<article class="panel ontology-panel ontology-trace-panel">',
         '<div class="panel-head">',
         '<div>',
-        '<p class="label">Relation Trace</p>',
-        '<h2>관계형 데이터·규칙 추적</h2>',
+        '<p class="label">Review Trace</p>',
+        '<h2>검증·리뷰</h2>',
+        '<p class="subtle">전략 판단 결과, 데이터 품질, 저장 행, 규칙 추적을 모아 이후 추천 모델 개선 근거로 남깁니다.</p>',
         '</div>',
         '<span class="metric">' + escapeHtml(parts.relations.length) + '</span>',
         '</div>',
         '<div class="ontology-dashboard">',
+        renderModelPreviewPanel(snapshot),
         renderOntologyRelationalProjectionPanel(parts.entities, parts.relations, parts.evidence, parts.beliefs, parts.opinions, parts),
         renderOntologyInsightPanel(parts),
         renderOntologyDataQualityPanel(parts),
@@ -8309,8 +8481,8 @@
     }
     return renderInvestmentTabWorkspace("overview", [
       { role: "summary", html: renderInvestmentDecisionBoardPanel(snapshot) + renderInvestmentGraphGatePanel(snapshot) },
-      { role: "main", html: renderInvestmentActionQueuePanel(snapshot) + renderInvestmentMoneyFlowPanel(snapshot) },
-      { role: "side", html: renderInvestmentDataLineagePanel(snapshot) + renderInvestmentBridgePanel(snapshot) + renderOntologyMacroSignalPanel(parts) + renderInvestmentAiPacketPanel(snapshot) + renderOntologyOperationalPanel(parts) }
+      { role: "main", html: renderInvestmentActionQueuePanel(snapshot) },
+      { role: "side", html: renderInvestmentMoneyFlowPanel(snapshot) + renderInvestmentBridgePanel(snapshot) + renderOntologyOperationalPanel(parts) }
     ]);
   }
 
@@ -14541,6 +14713,15 @@
         state.activeStrategySection = section;
         state.pageViewModes.modeling = sectionModeForPage("modeling", section);
         writeStrategySectionHistory(section);
+        render();
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-investment-chart-period]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        var period = normalizeInvestmentChartPeriod(button.getAttribute("data-investment-chart-period"));
+        if (period === state.activeInvestmentChartPeriod) return;
+        state.activeInvestmentChartPeriod = period;
         render();
       });
     });

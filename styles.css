@@ -5249,6 +5249,189 @@ h3 {
   color: var(--ink);
 }
 
+.investment-chart-periods,
+.investment-chart-summary {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 0 16px 14px;
+}
+
+.investment-chart-periods {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  padding-top: 16px;
+}
+
+.investment-chart-periods button {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  min-height: 54px;
+  padding: 10px 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--input);
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+
+.investment-chart-periods button.active {
+  border-color: color-mix(in srgb, var(--blue) 62%, var(--line));
+  background: color-mix(in srgb, var(--blue) 11%, var(--panel));
+}
+
+.investment-chart-periods strong,
+.investment-chart-periods span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.investment-chart-periods strong {
+  font-size: 13px;
+  font-weight: 920;
+}
+
+.investment-chart-periods span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 780;
+}
+
+.investment-chart-summary {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.investment-chart-summary span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 820;
+}
+
+.investment-chart-summary strong {
+  color: var(--ink);
+  font-size: 16px;
+}
+
+.investment-chart-axis {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 12px;
+  align-items: center;
+  padding: 0 16px 8px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.investment-chart-axis span:last-child {
+  text-align: right;
+}
+
+.investment-chart-lanes {
+  display: grid;
+  gap: 9px;
+  padding: 0 16px 16px;
+}
+
+.investment-chart-row {
+  display: grid;
+  grid-template-columns: minmax(170px, 0.42fr) minmax(180px, 1fr) minmax(150px, 0.34fr);
+  gap: 12px;
+  align-items: center;
+  min-width: 0;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+}
+
+.investment-chart-label,
+.investment-chart-value {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.investment-chart-label span,
+.investment-chart-label em,
+.investment-chart-value span,
+.investment-chart-value em {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 780;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.investment-chart-label strong,
+.investment-chart-value strong {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 920;
+  overflow-wrap: anywhere;
+}
+
+.investment-chart-track {
+  position: relative;
+  height: 18px;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--red) 9%, var(--input)), var(--input) 48%, var(--input) 52%, color-mix(in srgb, var(--green) 10%, var(--input)));
+  overflow: hidden;
+}
+
+.investment-chart-track::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--line-strong);
+}
+
+.investment-chart-bar {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  border-radius: 999px;
+}
+
+.investment-chart-row.positive .investment-chart-bar {
+  left: 50%;
+  background: var(--green);
+}
+
+.investment-chart-row.negative .investment-chart-bar {
+  right: 50%;
+  background: var(--red);
+}
+
+@media (max-width: 860px) {
+  .investment-chart-periods,
+  .investment-chart-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .investment-chart-row {
+    grid-template-columns: 1fr;
+  }
+}
+
 .investment-lineage-row {
   display: grid;
   grid-template-columns: minmax(0, 1.1fr) auto minmax(120px, 0.8fr) auto;
@@ -14342,7 +14525,9 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   }
 
   .strategy-view .investment-tab-workspace-evidence,
+  .strategy-view .investment-tab-workspace-charts,
   .strategy-view .investment-tab-workspace-results,
+  .strategy-view .investment-tab-workspace-rules,
   .strategy-view .investment-tab-workspace-registry {
     grid-template-columns: minmax(0, 1.18fr) minmax(340px, 0.82fr);
   }
@@ -16242,7 +16427,9 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   }
 
   .strategy-view .investment-tab-workspace-evidence,
+  .strategy-view .investment-tab-workspace-charts,
   .strategy-view .investment-tab-workspace-results,
+  .strategy-view .investment-tab-workspace-rules,
   .strategy-view .investment-tab-workspace-registry {
     grid-template-columns: minmax(0, 1.38fr) minmax(360px, 0.82fr);
   }
@@ -16261,13 +16448,17 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   }
 
   .strategy-view .investment-tab-workspace-evidence .investment-tab-stack-main,
+  .strategy-view .investment-tab-workspace-charts .investment-tab-stack-main,
   .strategy-view .investment-tab-workspace-results .investment-tab-stack-main,
+  .strategy-view .investment-tab-workspace-rules .investment-tab-stack-main,
   .strategy-view .investment-tab-workspace-registry .investment-tab-stack-main {
     grid-column: 1;
   }
 
   .strategy-view .investment-tab-workspace-evidence .investment-tab-stack-side,
+  .strategy-view .investment-tab-workspace-charts .investment-tab-stack-side,
   .strategy-view .investment-tab-workspace-results .investment-tab-stack-side,
+  .strategy-view .investment-tab-workspace-rules .investment-tab-stack-side,
   .strategy-view .investment-tab-workspace-registry .investment-tab-stack-side {
     grid-column: 2;
   }
@@ -16294,13 +16485,17 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   }
 
   .strategy-view .investment-tab-workspace-evidence,
+  .strategy-view .investment-tab-workspace-charts,
   .strategy-view .investment-tab-workspace-results,
+  .strategy-view .investment-tab-workspace-rules,
   .strategy-view .investment-tab-workspace-registry {
     grid-template-columns: minmax(0, 1fr);
   }
 
   .strategy-view .investment-tab-workspace-evidence .investment-tab-stack-side,
+  .strategy-view .investment-tab-workspace-charts .investment-tab-stack-side,
   .strategy-view .investment-tab-workspace-results .investment-tab-stack-side,
+  .strategy-view .investment-tab-workspace-rules .investment-tab-stack-side,
   .strategy-view .investment-tab-workspace-registry .investment-tab-stack-side {
     grid-column: 1;
     max-height: none;

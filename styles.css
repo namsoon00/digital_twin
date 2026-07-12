@@ -4931,6 +4931,26 @@ h3 {
   grid-column: 1 / -1;
 }
 
+.investment-tab-workspace {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: var(--ds-section-gap);
+  min-width: 0;
+}
+
+.investment-tab-stack {
+  display: grid;
+  align-content: start;
+  gap: var(--ds-section-gap);
+  min-width: 0;
+}
+
+.investment-tab-stack > .panel,
+.investment-tab-stack > .ontology-surface {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
 .investment-board-metrics,
 .investment-gate-grid,
 .investment-flow-grid {
@@ -14158,6 +14178,67 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
     grid-column: 1 / -1;
   }
 
+  .strategy-view .investment-tab-workspace {
+    grid-column: 1 / -1;
+    grid-template-columns: minmax(270px, 0.72fr) minmax(420px, 1.16fr) minmax(320px, 0.86fr);
+    align-items: stretch;
+    min-height: 0;
+    height: clamp(620px, calc(100dvh - 260px), 840px);
+    overflow: hidden;
+  }
+
+  .strategy-view .investment-tab-workspace-evidence,
+  .strategy-view .investment-tab-workspace-results,
+  .strategy-view .investment-tab-workspace-registry {
+    grid-template-columns: minmax(0, 1.18fr) minmax(340px, 0.82fr);
+  }
+
+  .strategy-view .investment-tab-workspace-graphs,
+  .strategy-view .investment-tab-workspace-trace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .strategy-view .investment-tab-stack {
+    align-content: start;
+    min-height: 0;
+    overflow: auto;
+    padding-right: var(--ds-space-2);
+    scrollbar-gutter: stable;
+  }
+
+  .strategy-view .investment-tab-stack-full {
+    overflow: hidden;
+    padding-right: 0;
+  }
+
+  .strategy-view .investment-tab-stack-full > .panel {
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .strategy-view .investment-tab-stack-full .ontology-dashboard {
+    min-height: 0;
+    overflow: auto;
+    align-content: start;
+    scrollbar-gutter: stable;
+  }
+
+  .strategy-view .investment-tab-stack-side .investment-bridge-flow {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .strategy-view .investment-tab-stack-side .investment-bridge-step {
+    border-left: 0;
+    border-top: 1px solid var(--ds-card-border);
+  }
+
+  .strategy-view .investment-tab-stack-side .investment-bridge-step:first-child {
+    border-top: 0;
+  }
+
   .investment-evidence-list {
     grid-template-columns: minmax(0, 1fr);
     max-height: none;
@@ -14305,7 +14386,77 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   }
 }
 
+@media (max-width: 1180px) and (min-width: 861px) {
+  .strategy-view .investment-tab-workspace {
+    grid-column: 1 / -1;
+    grid-template-columns: minmax(0, 1fr) minmax(300px, 0.82fr);
+    align-items: stretch;
+    min-height: 620px;
+    max-height: calc(100dvh - 236px);
+    overflow: hidden;
+  }
+
+  .strategy-view .investment-tab-workspace-overview {
+    grid-template-columns: minmax(0, 1fr) minmax(320px, 0.86fr);
+  }
+
+  .strategy-view .investment-tab-workspace-graphs,
+  .strategy-view .investment-tab-workspace-trace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .strategy-view .investment-tab-stack {
+    min-height: 0;
+    overflow: auto;
+    padding-right: var(--ds-space-2);
+    scrollbar-gutter: stable;
+  }
+
+  .strategy-view .investment-tab-stack-summary {
+    grid-column: 1 / -1;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .strategy-view .investment-tab-stack-full > .panel {
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    min-height: 0;
+  }
+
+  .strategy-view .investment-tab-stack-full .ontology-dashboard {
+    min-height: 0;
+    overflow: auto;
+  }
+}
+
 @media (max-width: 860px) {
+  .strategy-view .investment-tab-workspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .strategy-view .investment-tab-stack {
+    gap: var(--ds-space-7);
+  }
+
+  .strategy-view .investment-tab-workspace .investment-action-list,
+  .strategy-view .investment-tab-workspace .investment-lineage-list,
+  .strategy-view .investment-tab-workspace .investment-evidence-list,
+  .strategy-view .investment-tab-workspace .ontology-execution-list,
+  .strategy-view .investment-tab-workspace .ontology-operational-list,
+  .strategy-view .investment-tab-workspace .ontology-insight-list,
+  .strategy-view .investment-tab-workspace .ontology-data-quality-list {
+    max-height: min(68dvh, 560px);
+    overflow: auto;
+    scrollbar-gutter: stable;
+  }
+
+  .strategy-view .investment-tab-workspace .ontology-dashboard {
+    grid-template-columns: minmax(0, 1fr);
+    max-height: min(72dvh, 680px);
+    overflow: auto;
+    scrollbar-gutter: stable;
+  }
+
   .settings-smart-save {
     grid-template-columns: 1fr;
     align-items: stretch;

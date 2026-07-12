@@ -6897,6 +6897,20 @@
     ].join("");
   }
 
+  function renderInvestmentTabWorkspace(kind, columns) {
+    return [
+      '<section class="investment-tab-workspace investment-tab-workspace-' + escapeHtml(kind || "overview") + '">',
+      (columns || []).map(function (column) {
+        return [
+          '<div class="investment-tab-stack investment-tab-stack-' + escapeHtml(column.role || "main") + '">',
+          column.html || "",
+          '</div>'
+        ].join("");
+      }).join(""),
+      '</section>'
+    ].join("");
+  }
+
   function ontologyStrategyParts(snapshot) {
     var decision = (snapshot || {}).tossDecision || {};
     var strategy = decision.ontologyStrategy || {};
@@ -7827,23 +7841,20 @@
     var section = normalizeStrategySection(state.activeStrategySection);
     var parts = ontologyStrategyParts(snapshot);
     if (section === "evidence") {
-      return [
-        renderInvestmentReasoningCardPanel(snapshot),
-        renderOntologyExecutionPlanPanel(investmentReasoningCards(snapshot), parts),
-        renderStrategyDataPanel(snapshot)
-      ].join("");
+      return renderInvestmentTabWorkspace("evidence", [
+        { role: "main", html: renderInvestmentReasoningCardPanel(snapshot) },
+        { role: "side", html: renderOntologyExecutionPlanPanel(investmentReasoningCards(snapshot), parts) + renderStrategyDataPanel(snapshot) }
+      ]);
     }
     if (section === "results") {
-      return [
-        renderInvestmentActionQueuePanel(snapshot),
-        renderInvestmentGraphGatePanel(snapshot),
-        renderInvestmentReasoningCardPanel(snapshot, { compact: true }),
-        renderOntologyExecutionPlanPanel(investmentReasoningCards(snapshot), parts),
-        renderModelPreviewPanel(snapshot)
-      ].join("");
+      return renderInvestmentTabWorkspace("results", [
+        { role: "main", html: renderInvestmentActionQueuePanel(snapshot) + renderModelPreviewPanel(snapshot) },
+        { role: "side", html: renderInvestmentGraphGatePanel(snapshot) + renderInvestmentDataLineagePanel(snapshot) + renderOntologyExecutionPlanPanel(investmentReasoningCards(snapshot), parts) }
+      ]);
     }
     if (section === "graphs") {
-      return [
+      return renderInvestmentTabWorkspace("graphs", [
+        { role: "full", html: [
         '<article class="panel ontology-panel">',
         '<div class="panel-head">',
         '<div>',
@@ -7860,19 +7871,18 @@
         renderOntologyAboxPanel(parts.abox, parts.aboxEntities, parts.evidence, parts.beliefs, parts.opinions),
         '</div>',
         '</article>'
-      ].join("");
+      ].join("") }
+      ]);
     }
     if (section === "registry") {
-      return [
-        renderInvestmentAiPacketPanel(snapshot),
-        renderOntologyRuleEditorPanel(snapshot),
-        renderNeo4jRuleboxPanel(snapshot),
-        renderAiPromptRegistryPanel(snapshot),
-        renderAdminModelingPanel(snapshot)
-      ].join("");
+      return renderInvestmentTabWorkspace("registry", [
+        { role: "main", html: renderOntologyRuleEditorPanel(snapshot) + renderNeo4jRuleboxPanel(snapshot) },
+        { role: "side", html: renderInvestmentAiPacketPanel(snapshot) + renderAiPromptRegistryPanel(snapshot) + renderAdminModelingPanel(snapshot) }
+      ]);
     }
     if (section === "trace") {
-      return [
+      return renderInvestmentTabWorkspace("trace", [
+        { role: "full", html: [
         '<article class="panel ontology-panel ontology-trace-panel">',
         '<div class="panel-head">',
         '<div>',
@@ -7890,23 +7900,14 @@
         renderOntologyRulePanel(parts.tbox, parts.relationCounts, parts.evidence, parts.beliefs, parts.opinions),
         '</div>',
         '</article>'
-      ].join("");
+      ].join("") }
+      ]);
     }
-    return [
-      renderInvestmentDecisionBoardPanel(snapshot),
-      renderInvestmentGraphGatePanel(snapshot),
-      renderInvestmentActionQueuePanel(snapshot),
-      renderInvestmentDataLineagePanel(snapshot),
-      renderInvestmentMoneyFlowPanel(snapshot),
-      renderInvestmentBridgePanel(snapshot),
-      renderOntologyMacroSignalPanel(parts),
-      renderInvestmentReasoningCardPanel(snapshot, { compact: true }),
-      renderOntologyExecutionPlanPanel(investmentReasoningCards(snapshot), parts),
-      renderInvestmentAiPacketPanel(snapshot),
-      renderOntologyOperationalPanel(parts),
-      renderStrategyProcessPanel(snapshot),
-      renderModelOperatingGuidePanel(snapshot)
-    ].join("");
+    return renderInvestmentTabWorkspace("overview", [
+      { role: "summary", html: renderInvestmentDecisionBoardPanel(snapshot) + renderInvestmentGraphGatePanel(snapshot) },
+      { role: "main", html: renderInvestmentActionQueuePanel(snapshot) + renderInvestmentMoneyFlowPanel(snapshot) },
+      { role: "side", html: renderInvestmentDataLineagePanel(snapshot) + renderInvestmentBridgePanel(snapshot) + renderOntologyMacroSignalPanel(parts) + renderInvestmentAiPacketPanel(snapshot) + renderOntologyOperationalPanel(parts) }
+    ]);
   }
 
   function ontologyRuleboxRules() {

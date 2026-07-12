@@ -13,20 +13,20 @@
     "공유 미리보기에서는 서버 설정과 계정 DB 쓰기를 차단합니다."
   ],
   "localData": {
-    "generatedAt": "2026-07-11T05:44:57.992006Z",
+    "generatedAt": "2026-07-12T01:18:56.589918Z",
     "sources": {
       "operationalDbBackend": "mysql",
       "settings": "data/settings.json",
       "settingsExists": false
     },
-    "accountSource": "runtime-default",
-    "savedAccountCount": 0,
+    "accountSource": "operational-db",
+    "savedAccountCount": 1,
     "accountCount": 1,
     "enabledAccountCount": 1,
     "accounts": [
       {
         "id": "default",
-        "label": "기본 계정",
+        "label": "남순",
         "provider": "toss",
         "baseUrl": "https://openapi.tossinvest.com",
         "clientId": true,
@@ -35,8 +35,7 @@
         "watchlistSymbols": [
           "TSLA",
           "AAPL",
-          "NVDA",
-          "000660"
+          "NVDA"
         ],
         "notifyProvider": "telegram",
         "telegramBotToken": true,
@@ -129,6 +128,10 @@
       "ontologyReasoningEnabled": "1",
       "ontologyReasoningIntervalSeconds": "10",
       "ontologyReasoningBatchSize": "20",
+      "ontologyLabEnabled": "1",
+      "ontologyLabIntervalSeconds": "300",
+      "ontologyLabBatchSize": "5",
+      "ontologyLabRunHistoryLimit": "50",
       "materialityGateEnabled": "1",
       "materialityMinimumScore": "65",
       "marketMaterialityMinimumScore": "65",
@@ -885,6 +888,31 @@
           "default": "20"
         },
         {
+          "key": "ontologyLabEnabled",
+          "label": "온톨로지 실험 워커 사용",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
+          "key": "ontologyLabIntervalSeconds",
+          "label": "실험 반복 주기",
+          "type": "number",
+          "default": "300",
+          "unit": "seconds"
+        },
+        {
+          "key": "ontologyLabBatchSize",
+          "label": "실험 배치 수",
+          "type": "number",
+          "default": "5"
+        },
+        {
+          "key": "ontologyLabRunHistoryLimit",
+          "label": "실험 이력 보관 수",
+          "type": "number",
+          "default": "50"
+        },
+        {
           "key": "materialityGateEnabled",
           "label": "중요 변경 게이트",
           "type": "toggle",
@@ -954,26 +982,6 @@
           "unit": "seconds"
         },
         {
-          "key": "ontologyGraphStoreMode",
-          "label": "온톨로지 그래프 저장소 모드",
-          "type": "select",
-          "default": "neo4j",
-          "options": [
-            {
-              "value": "neo4j",
-              "label": "Neo4j 유지"
-            },
-            {
-              "value": "dual",
-              "label": "Neo4j + TypeDB 미러"
-            },
-            {
-              "value": "typedb",
-              "label": "TypeDB 단독"
-            }
-          ]
-        },
-        {
           "key": "ontologyNeo4jEnabled",
           "label": "관계 분석 Neo4j 저장",
           "type": "toggle",
@@ -1001,49 +1009,6 @@
           "label": "Neo4j Database",
           "type": "text",
           "default": "neo4j"
-        },
-        {
-          "key": "ontologyTypeDbEnabled",
-          "label": "관계 분석 TypeDB 저장",
-          "type": "toggle",
-          "default": "0"
-        },
-        {
-          "key": "typedbAddress",
-          "label": "TypeDB Address",
-          "type": "text",
-          "default": "127.0.0.1:1729"
-        },
-        {
-          "key": "typedbUser",
-          "label": "TypeDB User",
-          "type": "text",
-          "default": "admin"
-        },
-        {
-          "key": "typedbPassword",
-          "label": "TypeDB Password",
-          "type": "secret",
-          "masked": true
-        },
-        {
-          "key": "typedbDatabase",
-          "label": "TypeDB Database",
-          "type": "text",
-          "default": "orbit_alpha_ontology"
-        },
-        {
-          "key": "typedbTlsEnabled",
-          "label": "TypeDB TLS",
-          "type": "toggle",
-          "default": "0"
-        },
-        {
-          "key": "typedbTimeoutSeconds",
-          "label": "TypeDB Timeout",
-          "type": "number",
-          "default": "20",
-          "unit": "seconds"
         },
         {
           "key": "formulaWeights",
@@ -1525,6 +1490,54 @@
       "promptVersion": "model-review-v2-ontology"
     },
     {
+      "id": "ontology-experiments",
+      "title": "온톨로지 실험",
+      "summary": "후보 RuleBox를 운영 그래프와 분리된 샌드박스에서 반복 검증하고, 새 모니터 스냅샷이 들어오면 활성 실험을 다시 실행합니다.",
+      "localEndpoints": [
+        "GET /api/ontology/experiments",
+        "GET /api/ontology/experiments/status",
+        "POST /api/ontology/experiments",
+        "POST /api/ontology/experiments/once",
+        "POST /api/ontology/experiments/{id}/run",
+        "POST /api/ontology/experiments/{id}/activate",
+        "POST /api/ontology/experiments/{id}/pause"
+      ],
+      "commands": [
+        "npm run python:ontology-lab:status",
+        "npm run python:ontology-lab:once",
+        "npm run python:ontology-lab:watch",
+        "python3 python_service/service.py ontology-lab activate --id ontology-exp-...",
+        "npm run python:service:restart"
+      ],
+      "storage": [
+        "data/ontology-lab.json",
+        "data/python-ontology-lab.log"
+      ],
+      "settings": [
+        {
+          "key": "ontologyLabEnabled",
+          "label": "실험 워커 사용",
+          "default": "1"
+        },
+        {
+          "key": "ontologyLabIntervalSeconds",
+          "label": "반복 주기",
+          "default": "300",
+          "unit": "seconds"
+        },
+        {
+          "key": "ontologyLabBatchSize",
+          "label": "회차별 실험 수",
+          "default": "5"
+        },
+        {
+          "key": "ontologyLabRunHistoryLimit",
+          "label": "이력 보관 수",
+          "default": "50"
+        }
+      ]
+    },
+    {
       "id": "notification-templates",
       "title": "알림 템플릿",
       "summary": "메시지 타입별 포맷을 운영 저장소 템플릿으로 관리합니다. 포맷 변경은 템플릿 수정만으로 다음 발송에 적용됩니다.",
@@ -1576,5 +1589,5 @@
       ]
     }
   ],
-  "buildId": "8474478d0135"
+  "buildId": "0a3df6976603"
 }

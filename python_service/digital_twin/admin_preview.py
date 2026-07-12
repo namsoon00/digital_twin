@@ -140,6 +140,10 @@ PUBLIC_SETTING_KEYS = [
     "ontologyReasoningEnabled",
     "ontologyReasoningIntervalSeconds",
     "ontologyReasoningBatchSize",
+    "ontologyLabEnabled",
+    "ontologyLabIntervalSeconds",
+    "ontologyLabBatchSize",
+    "ontologyLabRunHistoryLimit",
     "materialityGateEnabled",
     "materialityMinimumScore",
     "marketMaterialityMinimumScore",
@@ -346,6 +350,10 @@ def admin_preview_config() -> Dict[str, object]:
                     {"key": "ontologyReasoningEnabled", "label": "데이터 변경 추론 사용", "type": "toggle", "default": "1"},
                     {"key": "ontologyReasoningIntervalSeconds", "label": "추론 요청 확인 주기", "type": "number", "default": "10", "unit": "seconds"},
                     {"key": "ontologyReasoningBatchSize", "label": "추론 요청 배치", "type": "number", "default": "20"},
+                    {"key": "ontologyLabEnabled", "label": "온톨로지 실험 워커 사용", "type": "toggle", "default": "1"},
+                    {"key": "ontologyLabIntervalSeconds", "label": "실험 반복 주기", "type": "number", "default": "300", "unit": "seconds"},
+                    {"key": "ontologyLabBatchSize", "label": "실험 배치 수", "type": "number", "default": "5"},
+                    {"key": "ontologyLabRunHistoryLimit", "label": "실험 이력 보관 수", "type": "number", "default": "50"},
                     {"key": "materialityGateEnabled", "label": "중요 변경 게이트", "type": "toggle", "default": "1"},
                     {"key": "materialityMinimumScore", "label": "중요 변경 기본 기준", "type": "number", "default": "65"},
                     {"key": "marketMaterialityMinimumScore", "label": "시장 데이터 중요 기준", "type": "number", "default": "65"},
@@ -444,6 +452,34 @@ def admin_preview_config() -> Dict[str, object]:
                     {"key": "modelReviewTelegramMode", "label": "텔레그램 발송 범위", "default": "actionableOnly", "options": ["actionableOnly", "all", "off"]},
                 ],
                 "promptVersion": MODEL_REVIEW_PROMPT_VERSION,
+            },
+            {
+                "id": "ontology-experiments",
+                "title": "온톨로지 실험",
+                "summary": "후보 RuleBox를 운영 그래프와 분리된 샌드박스에서 반복 검증하고, 새 모니터 스냅샷이 들어오면 활성 실험을 다시 실행합니다.",
+                "localEndpoints": [
+                    "GET /api/ontology/experiments",
+                    "GET /api/ontology/experiments/status",
+                    "POST /api/ontology/experiments",
+                    "POST /api/ontology/experiments/once",
+                    "POST /api/ontology/experiments/{id}/run",
+                    "POST /api/ontology/experiments/{id}/activate",
+                    "POST /api/ontology/experiments/{id}/pause",
+                ],
+                "commands": [
+                    "npm run python:ontology-lab:status",
+                    "npm run python:ontology-lab:once",
+                    "npm run python:ontology-lab:watch",
+                    "python3 python_service/service.py ontology-lab activate --id ontology-exp-...",
+                    "npm run python:service:restart",
+                ],
+                "storage": ["data/ontology-lab.json", "data/python-ontology-lab.log"],
+                "settings": [
+                    {"key": "ontologyLabEnabled", "label": "실험 워커 사용", "default": "1"},
+                    {"key": "ontologyLabIntervalSeconds", "label": "반복 주기", "default": "300", "unit": "seconds"},
+                    {"key": "ontologyLabBatchSize", "label": "회차별 실험 수", "default": "5"},
+                    {"key": "ontologyLabRunHistoryLimit", "label": "이력 보관 수", "default": "50"},
+                ],
             },
             {
                 "id": "notification-templates",
@@ -622,6 +658,7 @@ def render_admin_html(payload: Dict[str, object]) -> str:
             "</div>"
             '<div class="section-grid">'
             '<div class="panel"><h3>명령</h3>' + render_list(page.get("commands") or []) + "</div>"
+            '<div class="panel"><h3>API</h3>' + render_list(page.get("localEndpoints") or []) + "</div>"
             '<div class="panel"><h3>저장 위치</h3>' + render_list(page.get("storage") or page.get("publishes") or []) + "</div>"
             '<div class="panel wide"><h3>구성 필드</h3>' + (field_block or '<span class="muted">정적 구성 없음</span>') + render_defaults(page.get("defaults") or {}) + "</div>"
             "</div>"

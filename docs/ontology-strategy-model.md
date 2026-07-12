@@ -108,17 +108,28 @@ CLI:
 
 ```bash
 npm run python:ontology-lab -- list
+npm run python:ontology-lab:status
 npm run python:ontology-lab -- create --payload-file ./experiment.json
+npm run python:ontology-lab -- activate --id <experiment-id>
+npm run python:ontology-lab:once
+npm run python:ontology-lab:watch
 npm run python:ontology-lab -- run --id <experiment-id>
+npm run python:ontology-lab -- pause --id <experiment-id>
 npm run python:ontology-lab -- report --id <experiment-id>
 ```
+
+`activate`된 실험은 service manager의 `ontology-lab` worker가 계속 확인한다. 기본 주기는 `ontologyLabIntervalSeconds=300`이며, `npm run python:service:restart`를 실행하면 다른 Python worker와 함께 시작된다. 반복 실행은 `lastSnapshotKey`를 보고 같은 모니터 스냅샷에서는 건너뛰고, 새 계좌/관심종목 스냅샷이 들어오면 다시 샌드박스 리플레이를 수행한다. 각 실행 요약은 `runHistory`에 보관한다.
 
 API:
 
 - `GET /api/ontology/experiments`
+- `GET /api/ontology/experiments/status`
 - `POST /api/ontology/experiments`
+- `POST /api/ontology/experiments/once`
 - `GET /api/ontology/experiments/{id}`
 - `POST /api/ontology/experiments/{id}/run`
+- `POST /api/ontology/experiments/{id}/activate`
+- `POST /api/ontology/experiments/{id}/pause`
 
 실험 결과의 `sandbox.mutatedOperationalRuleBox`와 `sandbox.mutatedNeo4j`는 항상 `false`여야 한다. 승격은 별도 검토 후 RuleBox 저장 흐름에서 수행한다. 런타임 실험 기록은 `data/ontology-lab.json`에 저장되며 git에 넣지 않는다.
 

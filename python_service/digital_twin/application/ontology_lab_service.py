@@ -1,4 +1,7 @@
 import hashlib
+import json
+import signal
+import time
 from dataclasses import fields
 from typing import Dict, Iterable, List
 
@@ -15,6 +18,26 @@ from ..domain.ontology_experiments import (
 )
 from ..domain.portfolio import AccountSnapshot, DecisionItem, PortfolioSummary, Position, utc_now_iso
 from ..domain.portfolio_ontology_builder import build_portfolio_ontology
+
+
+DISABLED_VALUES = {"0", "false", "no", "off", "disabled"}
+ACTIVE_STATUS = "active"
+PAUSED_STATUS = "paused"
+
+
+def truthy(value: object, default: bool = True) -> bool:
+    text = str(value if value is not None else "").strip().lower()
+    if not text:
+        return default
+    return text not in DISABLED_VALUES
+
+
+def int_setting(settings: Dict[str, object], key: str, fallback: int, lower: int = 1, upper: int = 1000) -> int:
+    try:
+        parsed = int(float(str((settings or {}).get(key) or "").strip()))
+    except ValueError:
+        parsed = fallback
+    return max(lower, min(upper, parsed))
 
 
 class OntologyLabService:
@@ -37,6 +60,37 @@ class OntologyLabService:
             "count": len(experiments),
         }
 
+    def enabled(self) -> bool:
+        return truthy(self.settings.get("ontologyLabEnabled"), True)
+
+    def batch_size(self) -> int:
+        return int_setting(self.settings, "ontologyLabBatchSize", 5, 1, 100)
+
+    def history_limit(self) -> int:
+        return int_setting(self.settings, "ontologyLabRunHistoryLimit", 50, 1, 500)
+
+    def status(self) -> Dict[str, object]:
+        experiments = self.experiment_store.list()
+        statuses: Dict[str, int] = {}
+        latest_run = {}
+        for experiment in experiments:
+            statuses[experiment.status] = statuses.get(experiment.status, 0) + 1
+            for item in experiment.run_history or []:
+                if not latest_run or str(item.get("completedAt") or "") > str(latest_run.get("completedAt") or ""):
+                    latest_run = dict(item)
+        return {
+            "enabled": self.enabled(),
+            "count": len(experiments),
+            "activeCount": statuses.get(ACTIVE_STATUS, 0),
+            "pausedCount": statuses.get(PAUSED_STATUS, 0),
+            "draftCount": statuses.get("draft", 0),
+            "completedCount": statuses.get("completed", 0),
+            "batchSize": self.batch_size(),
+            "historyLimit": self.history_limit(),
+            "latestRun": latest_run,
+            "experiments": [item.to_dict() for item in experiments],
+        }
+
     def create(self, payload: Dict[str, object]) -> Dict[str, object]:
         body = dict(payload or {})
         rulebox = self.rulebox_snapshot()
@@ -57,6 +111,29 @@ class OntologyLabService:
         self.experiment_store.save(experiment)
         return {"experiment": experiment.to_dict()}
 
+    def activate(self, experiment_id: str) -> Dict[str, object]:
+        experiment = self.experiment_store.get(experiment_id)
+        if not experiment:
+            return {"status": "not-found", "id": experiment_id}
+        stamp = utc_now_iso()
+        experiment.status = ACTIVE_STATUS
+        experiment.active_since = experiment.active_since or stamp
+        experiment.paused_at = ""
+        experiment.updated_at = stamp
+        self.experiment_store.save(experiment)
+        return {"status": ACTIVE_STATUS, "experiment": experiment.to_dict()}
+
+    def pause(self, experiment_id: str) -> Dict[str, object]:
+        experiment = self.experiment_store.get(experiment_id)
+        if not experiment:
+            return {"status": "not-found", "id": experiment_id}
+        stamp = utc_now_iso()
+        experiment.status = PAUSED_STATUS
+        experiment.paused_at = stamp
+        experiment.updated_at = stamp
+        self.experiment_store.save(experiment)
+        return {"status": PAUSED_STATUS, "experiment": experiment.to_dict()}
+
     def report(self, experiment_id: str) -> Dict[str, object]:
         experiment = self.experiment_store.get(experiment_id)
         if not experiment:
@@ -67,22 +144,96 @@ class OntologyLabService:
         experiment = self.experiment_store.get(experiment_id)
         if not experiment:
             return {"status": "not-found", "id": experiment_id}
+        return self._run_experiment(experiment, payload or {}, keep_active_status=False, force=True, run_kind="manual")
+
+    def run_once(self, limit: int = 0, force: bool = False) -> Dict[str, object]:
+        if not self.enabled():
+            return {"status": "disabled", "processedCount": 0, "runCount": 0, "skippedCount": 0, "experiments": []}
+        active = [item for item in self.experiment_store.list() if item.status == ACTIVE_STATUS]
+        if not active:
+            return {"status": "idle", "processedCount": 0, "runCount": 0, "skippedCount": 0, "experiments": []}
+        selected = active[: max(1, int(limit or self.batch_size()))]
+        results = [
+            self._run_experiment(experiment, {}, keep_active_status=True, force=force, run_kind="scheduled")
+            for experiment in selected
+        ]
+        run_count = len([item for item in results if item.get("status") == "completed"])
+        skipped_count = len([item for item in results if item.get("status") == "skipped"])
+        return {
+            "status": "ok" if run_count else "idle",
+            "processedCount": len(results),
+            "runCount": run_count,
+            "skippedCount": skipped_count,
+            "experiments": results,
+        }
+
+    def _run_experiment(
+        self,
+        experiment: OntologyExperiment,
+        payload: Dict[str, object] = None,
+        keep_active_status: bool = False,
+        force: bool = False,
+        run_kind: str = "manual",
+    ) -> Dict[str, object]:
         payload = dict(payload or {})
         symbols = clean_symbols(payload.get("symbols") or experiment.symbols or [])
         if symbols and symbols != experiment.symbols:
             experiment.symbols = symbols
+        snapshots = self.monitor_snapshots(symbols=symbols)
+        snapshot_key = monitor_snapshot_key(snapshots, symbols)
+        if keep_active_status and not force and experiment.last_snapshot_key == snapshot_key:
+            return {
+                "status": "skipped",
+                "reason": "snapshot-unchanged",
+                "snapshotKey": snapshot_key,
+                "experiment": experiment.to_dict(),
+                "result": experiment.last_result,
+            }
         rulebox = self.rulebox_snapshot()
         baseline_rules = rule_payloads_from_snapshot(rulebox)
         graph_runs = []
-        for graph in self.facts_graphs(symbols=symbols):
+        for graph in self.facts_graphs(snapshots=snapshots):
             graph_runs.append(run_experiment_on_graph(graph, baseline_rules, experiment.candidate_rules))
         result = summarize_experiment_result(experiment, baseline_rules, graph_runs)
         result["baselineRulebox"] = compact_rulebox_snapshot(rulebox)
-        experiment.status = "completed"
+        result["snapshotKey"] = snapshot_key
+        result["runKind"] = run_kind
+        experiment.status = ACTIVE_STATUS if keep_active_status else "completed"
         experiment.updated_at = utc_now_iso()
         experiment.last_result = result
+        experiment.last_snapshot_key = snapshot_key
+        self.append_run_history(experiment, result, snapshot_key, run_kind)
         self.experiment_store.save(experiment)
-        return {"experiment": experiment.to_dict(), "result": result}
+        return {"status": "completed", "experiment": experiment.to_dict(), "result": result}
+
+    def append_run_history(
+        self,
+        experiment: OntologyExperiment,
+        result: Dict[str, object],
+        snapshot_key: str,
+        run_kind: str,
+    ) -> None:
+        readiness = result.get("promotionReadiness") if isinstance(result.get("promotionReadiness"), dict) else {}
+        inference = result.get("inference") if isinstance(result.get("inference"), dict) else {}
+        aggregate_delta = inference.get("aggregateDelta") if isinstance(inference.get("aggregateDelta"), dict) else {}
+        sandbox = result.get("sandbox") if isinstance(result.get("sandbox"), dict) else {}
+        completed_at = str(result.get("completedAt") or utc_now_iso())
+        seed = experiment.experiment_id + "|" + snapshot_key + "|" + completed_at + "|" + run_kind
+        entry = {
+            "runId": "ontology-lab-run-" + hashlib.sha256(seed.encode("utf-8")).hexdigest()[:12],
+            "runKind": run_kind,
+            "status": str(result.get("status") or "completed"),
+            "completedAt": completed_at,
+            "snapshotKey": snapshot_key,
+            "graphRunCount": int(sandbox.get("graphRunCount") or 0),
+            "promotionStatus": str(readiness.get("status") or ""),
+            "promotionScore": readiness.get("score"),
+            "derivedRelationDelta": int(aggregate_delta.get("derivedRelationCount") or 0),
+            "newRelationTypes": list(aggregate_delta.get("newRelationTypes") or [])[:12],
+            "findings": list(result.get("findings") or [])[:6],
+        }
+        history = [entry] + [dict(item) for item in (experiment.run_history or []) if isinstance(item, dict)]
+        experiment.run_history = history[: self.history_limit()]
 
     def rulebox_snapshot(self) -> Dict[str, object]:
         if not self.ontology_repository or not hasattr(self.ontology_repository, "rulebox_snapshot"):
@@ -90,21 +241,23 @@ class OntologyLabService:
         snapshot = self.ontology_repository.rulebox_snapshot()
         return snapshot if isinstance(snapshot, dict) else {}
 
-    def facts_graphs(self, symbols: Iterable[str] = None) -> List[object]:
-        snapshots = self.monitor_snapshots(symbols)
-        graphs = []
-        for snapshot in snapshots:
-            graph = build_portfolio_ontology(
-                list(snapshot.positions or []) + list(snapshot.watchlist or []),
-                snapshot.portfolio,
-                legacy_by_symbol={item.symbol.upper(): item.to_dict() for item in snapshot.decisions},
-                external_signals=snapshot.external_signals,
-                portfolio_id=snapshot.account_id,
-                runtime_context=self.runtime_context(snapshot),
-                include_reasoning_outputs=False,
-            )
-            graphs.append(facts_only_graph(graph))
-        return graphs
+    def facts_graphs(self, symbols: Iterable[str] = None, snapshots: List[AccountSnapshot] = None) -> List[object]:
+        return [
+            self.facts_graph_from_snapshot(snapshot)
+            for snapshot in (snapshots if snapshots is not None else self.monitor_snapshots(symbols))
+        ]
+
+    def facts_graph_from_snapshot(self, snapshot: AccountSnapshot) -> PortfolioOntology:
+        graph = build_portfolio_ontology(
+            list(snapshot.positions or []) + list(snapshot.watchlist or []),
+            snapshot.portfolio,
+            legacy_by_symbol={item.symbol.upper(): item.to_dict() for item in snapshot.decisions},
+            external_signals=snapshot.external_signals,
+            portfolio_id=snapshot.account_id,
+            runtime_context=self.runtime_context(snapshot),
+            include_reasoning_outputs=False,
+        )
+        return facts_only_graph(graph)
 
     def runtime_context(self, snapshot: AccountSnapshot) -> Dict[str, object]:
         active_tbox = {}
@@ -144,6 +297,74 @@ class OntologyLabService:
                 continue
             snapshots.append(snapshot)
         return snapshots
+
+
+class OntologyLabScheduler:
+    def __init__(self, service: OntologyLabService, interval_seconds: int):
+        self.service = service
+        self.interval_seconds = max(5, int(interval_seconds or 300))
+        self.running = True
+
+    def stop(self, *_args) -> None:
+        self.running = False
+
+    def run_forever(self, limit: int = 0, force: bool = False) -> None:
+        signal.signal(signal.SIGTERM, self.stop)
+        signal.signal(signal.SIGINT, self.stop)
+        print("Python ontology lab worker started. interval=" + str(self.interval_seconds) + "s")
+        while self.running:
+            started = time.monotonic()
+            try:
+                result = self.service.run_once(limit=limit, force=force)
+                if result.get("processedCount"):
+                    print(
+                        "Ontology lab "
+                        + str(result.get("status"))
+                        + " processed="
+                        + str(result.get("processedCount", 0))
+                        + " runs="
+                        + str(result.get("runCount", 0))
+                        + " skipped="
+                        + str(result.get("skippedCount", 0))
+                    )
+            except Exception as error:  # noqa: BLE001 - long-running lab worker must continue after a cycle failure.
+                print("Python ontology lab worker error: " + str(error))
+            elapsed = time.monotonic() - started
+            sleep_seconds = max(1.0, self.interval_seconds - elapsed)
+            end_at = time.monotonic() + sleep_seconds
+            while self.running and time.monotonic() < end_at:
+                time.sleep(min(1.0, end_at - time.monotonic()))
+
+
+def monitor_snapshot_key(snapshots: Iterable[AccountSnapshot], symbols: Iterable[str] = None) -> str:
+    rows = []
+    allowed = set(clean_symbols(symbols or []))
+    for snapshot in snapshots or []:
+        snapshot_symbols = [
+            str(item.symbol or "").upper().strip()
+            for item in list(snapshot.positions or []) + list(snapshot.watchlist or [])
+            if str(item.symbol or "").strip()
+        ]
+        if allowed:
+            snapshot_symbols = [item for item in snapshot_symbols if item in allowed]
+        rows.append(
+            {
+                "accountId": str(snapshot.account_id or ""),
+                "generatedAt": str(snapshot.generated_at or ""),
+                "status": str(snapshot.status or ""),
+                "symbols": sorted(set(snapshot_symbols)),
+            }
+        )
+    encoded = json.dumps(
+        {
+            "symbols": clean_symbols(symbols or []),
+            "snapshots": sorted(rows, key=lambda item: (item.get("accountId") or "", item.get("generatedAt") or "")),
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return "monitor:" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:16]
 
 
 def snapshot_has_symbol(snapshot: AccountSnapshot, symbols: set) -> bool:

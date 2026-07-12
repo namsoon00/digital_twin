@@ -569,6 +569,10 @@ def list_ontology_experiments_payload() -> Dict[str, object]:
     return ontology_lab_service().list()
 
 
+def ontology_experiments_status_payload() -> Dict[str, object]:
+    return ontology_lab_service().status()
+
+
 def create_ontology_experiment_payload(payload: Dict[str, object]) -> Dict[str, object]:
     return ontology_lab_service().create(payload if isinstance(payload, dict) else {})
 
@@ -579,6 +583,21 @@ def ontology_experiment_payload(experiment_id: str) -> Dict[str, object]:
 
 def run_ontology_experiment_payload(experiment_id: str, payload: Dict[str, object]) -> Dict[str, object]:
     return ontology_lab_service().run(experiment_id, payload if isinstance(payload, dict) else {})
+
+
+def run_ontology_experiments_once_payload(payload: Dict[str, object]) -> Dict[str, object]:
+    body = payload if isinstance(payload, dict) else {}
+    limit = int(body.get("limit") or 0)
+    force = bool(body.get("force"))
+    return ontology_lab_service().run_once(limit=limit, force=force)
+
+
+def activate_ontology_experiment_payload(experiment_id: str) -> Dict[str, object]:
+    return ontology_lab_service().activate(experiment_id)
+
+
+def pause_ontology_experiment_payload(experiment_id: str) -> Dict[str, object]:
+    return ontology_lab_service().pause(experiment_id)
 
 
 def notification_store():
@@ -1856,6 +1875,14 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
                 return
             return self.send_payload(200, create_ontology_experiment_payload(self.read_json_body()))
 
+        if path == "/api/ontology/experiments/status" and self.command == "GET":
+            return self.send_payload(200, ontology_experiments_status_payload())
+
+        if path == "/api/ontology/experiments/once" and self.command == "POST":
+            if not self.ensure_writable("공유 모드에서는 온톨로지 실험을 실행할 수 없습니다."):
+                return
+            return self.send_payload(200, run_ontology_experiments_once_payload(self.read_json_body()))
+
         ontology_experiment_run_match = re.match(r"^/api/ontology/experiments/([^/]+)/run$", path)
         if ontology_experiment_run_match and self.command == "POST":
             if not self.ensure_writable("공유 모드에서는 온톨로지 실험을 실행할 수 없습니다."):
@@ -1863,6 +1890,22 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
             return self.send_payload(200, run_ontology_experiment_payload(
                 urllib.parse.unquote(ontology_experiment_run_match.group(1)),
                 self.read_json_body(),
+            ))
+
+        ontology_experiment_activate_match = re.match(r"^/api/ontology/experiments/([^/]+)/activate$", path)
+        if ontology_experiment_activate_match and self.command == "POST":
+            if not self.ensure_writable("공유 모드에서는 온톨로지 실험 상태를 변경할 수 없습니다."):
+                return
+            return self.send_payload(200, activate_ontology_experiment_payload(
+                urllib.parse.unquote(ontology_experiment_activate_match.group(1)),
+            ))
+
+        ontology_experiment_pause_match = re.match(r"^/api/ontology/experiments/([^/]+)/pause$", path)
+        if ontology_experiment_pause_match and self.command == "POST":
+            if not self.ensure_writable("공유 모드에서는 온톨로지 실험 상태를 변경할 수 없습니다."):
+                return
+            return self.send_payload(200, pause_ontology_experiment_payload(
+                urllib.parse.unquote(ontology_experiment_pause_match.group(1)),
             ))
 
         ontology_experiment_match = re.match(r"^/api/ontology/experiments/([^/]+)$", path)

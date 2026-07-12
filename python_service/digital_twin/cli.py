@@ -11,6 +11,7 @@ from .application.market_data_collection_service import MarketDataCollectionSche
 from .application.model_review_service import ModelReviewScheduler
 from .application.news_collection_service import NewsCollectionScheduler
 from .application.notification_service import NotificationQueueScheduler
+from .application.ontology_lab_service import OntologyLabScheduler
 from .application.ontology_reasoning_service import OntologyReasoningScheduler
 from .application.scheduler import MIN_REALTIME_INTERVAL_SECONDS, RealtimeScheduler
 from .domain.accounts import AccountConfig, split_symbols
@@ -308,9 +309,13 @@ def ontology_command(args) -> int:
 
 
 def ontology_lab_command(args) -> int:
-    service = build_ontology_lab_service(runtime_settings())
+    settings = runtime_settings()
+    service = build_ontology_lab_service(settings)
     if args.ontology_lab_action == "list":
         print(json.dumps(service.list(), ensure_ascii=False))
+        return 0
+    if args.ontology_lab_action == "status":
+        print(json.dumps(service.status(), ensure_ascii=False))
         return 0
     if args.ontology_lab_action == "create":
         payload = read_json_payload(args.payload_file)
@@ -323,10 +328,29 @@ def ontology_lab_command(args) -> int:
         result = service.create(payload)
         print(json.dumps(result, ensure_ascii=False))
         return 0
+    if args.ontology_lab_action == "activate":
+        result = service.activate(args.id)
+        print(json.dumps(result, ensure_ascii=False))
+        return 0 if result.get("status") != "not-found" else 1
+    if args.ontology_lab_action == "pause":
+        result = service.pause(args.id)
+        print(json.dumps(result, ensure_ascii=False))
+        return 0 if result.get("status") != "not-found" else 1
     if args.ontology_lab_action == "run":
         result = service.run(args.id, read_json_payload(args.payload_file) if args.payload_file else {})
         print(json.dumps(result, ensure_ascii=False))
         return 0 if result.get("status") != "not-found" else 1
+    if args.ontology_lab_action == "once":
+        result = service.run_once(limit=int(args.limit or settings.get("ontologyLabBatchSize") or 0), force=args.force)
+        print(json.dumps(result, ensure_ascii=False))
+        return 0
+    if args.ontology_lab_action == "watch":
+        interval = int(os.environ.get("ONTOLOGY_LAB_INTERVAL_SECONDS") or settings.get("ontologyLabIntervalSeconds") or 300)
+        OntologyLabScheduler(service, interval).run_forever(
+            limit=int(args.limit or settings.get("ontologyLabBatchSize") or 0),
+            force=args.force,
+        )
+        return 0
     if args.ontology_lab_action == "report":
         result = service.report(args.id)
         print(json.dumps(result, ensure_ascii=False))
@@ -598,14 +622,25 @@ def build_parser() -> argparse.ArgumentParser:
     ontology_lab = subparsers.add_parser("ontology-lab", help="Run local ontology experiments")
     ontology_lab_actions = ontology_lab.add_subparsers(dest="ontology_lab_action", required=True)
     ontology_lab_actions.add_parser("list")
+    ontology_lab_actions.add_parser("status")
     lab_create = ontology_lab_actions.add_parser("create")
     lab_create.add_argument("--payload-file", default="")
     lab_create.add_argument("--title", default="")
     lab_create.add_argument("--hypothesis", default="")
     lab_create.add_argument("--symbols", default="")
+    lab_activate = ontology_lab_actions.add_parser("activate")
+    lab_activate.add_argument("--id", required=True)
+    lab_pause = ontology_lab_actions.add_parser("pause")
+    lab_pause.add_argument("--id", required=True)
     lab_run = ontology_lab_actions.add_parser("run")
     lab_run.add_argument("--id", required=True)
     lab_run.add_argument("--payload-file", default="")
+    lab_once = ontology_lab_actions.add_parser("once")
+    lab_once.add_argument("--limit", default="")
+    lab_once.add_argument("--force", action="store_true")
+    lab_watch = ontology_lab_actions.add_parser("watch")
+    lab_watch.add_argument("--limit", default="")
+    lab_watch.add_argument("--force", action="store_true")
     lab_report = ontology_lab_actions.add_parser("report")
     lab_report.add_argument("--id", required=True)
     ontology_lab.set_defaults(func=ontology_lab_command)

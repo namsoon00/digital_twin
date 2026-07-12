@@ -28,6 +28,10 @@ class OntologyExperiment:
     created_at: str = ""
     updated_at: str = ""
     last_result: Dict[str, object] = field(default_factory=dict)
+    run_history: List[Dict[str, object]] = field(default_factory=list)
+    last_snapshot_key: str = ""
+    active_since: str = ""
+    paused_at: str = ""
     validation_warnings: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, object]:
@@ -38,6 +42,10 @@ class OntologyExperiment:
         payload["createdAt"] = payload.pop("created_at")
         payload["updatedAt"] = payload.pop("updated_at")
         payload["lastResult"] = payload.pop("last_result")
+        payload["runHistory"] = payload.pop("run_history")
+        payload["lastSnapshotKey"] = payload.pop("last_snapshot_key")
+        payload["activeSince"] = payload.pop("active_since")
+        payload["pausedAt"] = payload.pop("paused_at")
         payload["validationWarnings"] = payload.pop("validation_warnings")
         return payload
 
@@ -59,6 +67,14 @@ class OntologyExperiment:
             created_at=str(payload.get("createdAt") or payload.get("created_at") or ""),
             updated_at=str(payload.get("updatedAt") or payload.get("updated_at") or ""),
             last_result=dict(payload.get("lastResult") or payload.get("last_result") or {}),
+            run_history=[
+                dict(item)
+                for item in (payload.get("runHistory") or payload.get("run_history") or [])
+                if isinstance(item, dict)
+            ],
+            last_snapshot_key=str(payload.get("lastSnapshotKey") or payload.get("last_snapshot_key") or ""),
+            active_since=str(payload.get("activeSince") or payload.get("active_since") or ""),
+            paused_at=str(payload.get("pausedAt") or payload.get("paused_at") or ""),
             validation_warnings=[
                 str(item)
                 for item in (payload.get("validationWarnings") or payload.get("validation_warnings") or [])

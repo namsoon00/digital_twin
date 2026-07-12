@@ -138,6 +138,52 @@ class OntologyLabTests(unittest.TestCase):
 
         self.assertEqual("needs-data", result["result"]["promotionReadiness"]["status"])
 
+    def test_active_experiment_runs_once_per_monitor_snapshot(self):
+        store = MemoryExperimentStore()
+        service = OntologyLabService(
+            FakeOntologyRepository(),
+            store,
+            monitor_store=FakeMonitorStore(),
+            settings={"ontologyLabBatchSize": "5", "ontologyLabRunHistoryLimit": "3"},
+        )
+        experiment_id = service.create({
+            "title": "AAPL continuous lab",
+            "symbols": ["AAPL"],
+            "rules": [candidate_rule()],
+        })["experiment"]["id"]
+
+        activated = service.activate(experiment_id)
+        first_run = service.run_once()
+        second_run = service.run_once()
+
+        self.assertEqual("active", activated["status"])
+        self.assertEqual(1, first_run["runCount"])
+        self.assertEqual(0, first_run["skippedCount"])
+        self.assertEqual(0, second_run["runCount"])
+        self.assertEqual(1, second_run["skippedCount"])
+        experiment = store.get(experiment_id)
+        self.assertEqual("active", experiment.status)
+        self.assertEqual(1, len(experiment.run_history))
+        self.assertTrue(experiment.last_snapshot_key.startswith("monitor:"))
+        self.assertEqual("scheduled", experiment.run_history[0]["runKind"])
+
+    def test_pause_experiment_removes_it_from_active_batch(self):
+        store = MemoryExperimentStore()
+        service = OntologyLabService(
+            FakeOntologyRepository(),
+            store,
+            monitor_store=FakeMonitorStore(),
+        )
+        experiment_id = service.create({"symbols": ["AAPL"], "rules": [candidate_rule()]})["experiment"]["id"]
+
+        service.activate(experiment_id)
+        paused = service.pause(experiment_id)
+        result = service.run_once(force=True)
+
+        self.assertEqual("paused", paused["status"])
+        self.assertEqual("idle", result["status"])
+        self.assertEqual(0, result["processedCount"])
+
 
 def candidate_rule():
     return {

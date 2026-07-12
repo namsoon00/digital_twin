@@ -1169,6 +1169,8 @@ function checkFrontendAdminRender() {
     assertOk(code.indexOf("tabScrollPositions") >= 0 && code.indexOf("restoreRenderedPageScrollPosition") >= 0 && code.indexOf("rememberRenderedPageScrollPosition") >= 0, "탭별 본문 스크롤 복원 로직이 없습니다.");
     assertOk(overviewHtml.indexOf('data-scroll-key="overview"') >= 0, "탭 본문에 스크롤 관리 키가 렌더링되지 않습니다.");
     assertOk(designSystemDoc.indexOf("각 탭은 독립된 스크롤 위치") >= 0, "디자인 시스템 문서에 탭별 스크롤 정책이 없습니다.");
+    assertOk(code.indexOf("syncTopbarScrollState") >= 0 && code.indexOf("topbar-collapsed") >= 0, "상단 제목 영역을 스크롤 상태에 따라 접는 로직이 없습니다.");
+    assertOk(styles.indexOf(".shell-page.topbar-collapsed") >= 0 && styles.indexOf(".topbar-collapsed .topbar") >= 0, "상단 제목 영역 접힘 레이아웃 스타일이 없습니다.");
     assertOk(
       code.indexOf('var bottomTabIds = ["overview", "watchlist", "notifications", "modeling"];') >= 0 ||
       code.indexOf('var bottomTabIds = ["overview", "watchlist", "notifications", "modeling", "experiments"];') >= 0,

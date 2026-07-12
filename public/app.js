@@ -209,6 +209,8 @@
   var appNavLastScrollY = 0;
   var appNavHidden = false;
   var appNavScrollTicking = false;
+  var topbarCollapsed = false;
+  var topbarScrollTicking = false;
   var cachedSnapshot = loadCachedSnapshot();
   var state = {
     loading: !cachedSnapshot,
@@ -948,7 +950,9 @@
   }
 
   function windowScrollTop() {
-    return scrollTopNumber(window.pageYOffset || document.documentElement.scrollTop || document.body.scrollTop || 0);
+    var doc = document.documentElement || {};
+    var body = document.body || {};
+    return scrollTopNumber(window.pageYOffset || doc.scrollTop || body.scrollTop || 0);
   }
 
   function maxWindowScrollTop() {
@@ -996,7 +1000,39 @@
   function bindPageScrollMemory() {
     var scroller = currentWorkspaceScroller();
     if (!scroller) return;
-    scroller.addEventListener("scroll", rememberRenderedPageScrollPosition, { passive: true });
+    scroller.addEventListener("scroll", function () {
+      rememberRenderedPageScrollPosition();
+      scheduleTopbarScrollState();
+    }, { passive: true });
+  }
+
+  function currentShell() {
+    return app && app.querySelector ? app.querySelector(".shell") : null;
+  }
+
+  function setTopbarCollapsed(collapsed) {
+    topbarCollapsed = Boolean(collapsed);
+    var shell = currentShell();
+    if (!shell) return;
+    shell.classList.toggle("topbar-collapsed", topbarCollapsed);
+  }
+
+  function syncTopbarScrollState() {
+    var scroller = currentWorkspaceScroller();
+    var scrollTop = scroller ? scrollTopNumber(scroller.scrollTop) : windowScrollTop();
+    setTopbarCollapsed(scrollTop > 32);
+  }
+
+  function scheduleTopbarScrollState() {
+    if (topbarScrollTicking) return;
+    topbarScrollTicking = true;
+    var frame = window.requestAnimationFrame || function (callback) {
+      return window.setTimeout(callback, 16);
+    };
+    frame(function () {
+      topbarScrollTicking = false;
+      syncTopbarScrollState();
+    });
   }
 
   function currentAppNav() {
@@ -5909,6 +5945,7 @@
     restoreRenderedPageScrollPosition();
     bindPageScrollMemory();
     syncAppNavScrollState();
+    syncTopbarScrollState();
     if (state.activeTab === "feed" && !state.researchEvidence && !state.researchEvidenceLoading) {
       loadResearchEvidence(false);
     }
@@ -14651,11 +14688,13 @@
     window.addEventListener("scroll", function () {
       rememberRenderedPageScrollPosition();
       scheduleAppNavScrollState();
+      scheduleTopbarScrollState();
     }, { passive: true });
     window.addEventListener("resize", function () {
       rememberRenderedPageScrollPosition();
       restoreRenderedPageScrollPosition();
       scheduleAppNavScrollState();
+      scheduleTopbarScrollState();
     });
     window.addEventListener("keydown", function (event) {
       if (event.key !== "Escape") return;

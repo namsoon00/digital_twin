@@ -547,7 +547,7 @@ def runtime_settings() -> Dict[str, str]:
         "neo4jUser": value("neo4jUser", "NEO4J_USER", "neo4j"),
         "neo4jPassword": value("neo4jPassword", "NEO4J_PASSWORD", ""),
         "neo4jDatabase": value("neo4jDatabase", "NEO4J_DATABASE", "neo4j"),
-        "neo4jTimeoutSeconds": value("neo4jTimeoutSeconds", "NEO4J_TIMEOUT_SECONDS", "8"),
+        "neo4jTimeoutSeconds": value("neo4jTimeoutSeconds", "NEO4J_TIMEOUT_SECONDS", "30"),
         "typedbAddress": value("typedbAddress", "TYPEDB_ADDRESS", "127.0.0.1:1729"),
         "typedbUser": value("typedbUser", "TYPEDB_USER", "admin"),
         "typedbPassword": value("typedbPassword", "TYPEDB_PASSWORD", "password"),

@@ -636,6 +636,53 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertIn("condition.conditionRelationPolarities", cypher)
         self.assertIn("rel.polarity IN condition.conditionRelationPolarities", cypher)
 
+    def test_rulebox_http_execution_retries_transient_deadlock_per_relation_type(self):
+        class RetryingRepository(Neo4jOntologyGraphRepository):
+            def __init__(self):
+                super().__init__("http://neo4j.test", timeout_seconds=2)
+                self.calls = {}
+
+            def post_http_statements(self, endpoint, headers, statements):
+                relation_type = statements[0]["parameters"]["relationType"]
+                self.calls[relation_type] = self.calls.get(relation_type, 0) + 1
+                if relation_type == "HAS_INFERRED_RISK" and self.calls[relation_type] == 1:
+                    return {"results": [], "errors": [{"code": "Neo.TransientError.Transaction.DeadlockDetected", "message": "deadlock"}]}
+                return {"results": [], "errors": []}
+
+        relation_types = ["HAS_INFERRED_RISK", "HAS_INFERRED_SUPPORT"]
+        statements = native_reasoning_statements_for_relation_types(relation_types)
+
+        result = RetryingRepository().run_native_rulebox_statements_via_http("http://neo4j.test", {}, relation_types, statements)
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual(2, result["succeededStatementCount"])
+        self.assertEqual(0, result["failedStatementCount"])
+        self.assertEqual(3, result["attemptCount"])
+        self.assertEqual(2, result["statementResults"][0]["attempts"])
+        self.assertEqual("ok", result["statementResults"][0]["status"])
+
+    def test_rulebox_http_execution_reports_partial_when_one_relation_type_fails(self):
+        class PartialRepository(Neo4jOntologyGraphRepository):
+            def __init__(self):
+                super().__init__("http://neo4j.test", timeout_seconds=2)
+
+            def post_http_statements(self, endpoint, headers, statements):
+                relation_type = statements[0]["parameters"]["relationType"]
+                if relation_type == "HAS_INFERRED_RISK":
+                    return {"results": [], "errors": [{"code": "Neo.ClientError.Statement.SyntaxError", "message": "bad query"}]}
+                return {"results": [], "errors": []}
+
+        relation_types = ["HAS_INFERRED_RISK", "HAS_INFERRED_SUPPORT"]
+        statements = native_reasoning_statements_for_relation_types(relation_types)
+
+        result = PartialRepository().run_native_rulebox_statements_via_http("http://neo4j.test", {}, relation_types, statements)
+
+        self.assertEqual("partial", result["status"])
+        self.assertEqual(1, result["succeededStatementCount"])
+        self.assertEqual(1, result["failedStatementCount"])
+        self.assertIn("HAS_INFERRED_RISK", result["reason"])
+        self.assertEqual("neo4j-error", result["statementResults"][0]["status"])
+
 
 if __name__ == "__main__":
     unittest.main()

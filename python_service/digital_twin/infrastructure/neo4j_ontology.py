@@ -1,6 +1,7 @@
 import base64
 import json
 import re
+import time
 import urllib.request
 from typing import Dict, Iterable, List
 
@@ -885,21 +886,16 @@ class Neo4jOntologyGraphRepository(Neo4jOntologyRowMapperMixin):
         return native_reasoning_statements_for_relation_types(relation_types)
 
     def run_native_reasoning_via_http(self, endpoint: str, headers: Dict[str, str], graph: PortfolioOntology) -> Dict[str, object]:
-        statements = self.native_reasoning_statements(graph)
+        relation_types = sorted(set(
+            safe_relation_type((item.properties or {}).get("relationType") or ((item.properties or {}).get("derivation") or {}).get("relation_type") or "")
+            for item in graph.entities
+            if item.kind == "relation-template"
+        ))
+        relation_types = [item for item in relation_types if item]
+        statements = native_reasoning_statements_for_relation_types(relation_types)
         if not statements:
             return {"status": "skipped", "statementCount": 0, "reason": "no RuleBox relation templates"}
-        try:
-            payload = self.post_http_statements(endpoint, headers, statements)
-        except Exception as error:  # noqa: BLE001 - native reasoning is best effort.
-            return {"status": "error", "statementCount": len(statements), "reason": str(error)[:180]}
-        errors = payload.get("errors") or []
-        if errors:
-            return {
-                "status": "neo4j-error",
-                "statementCount": len(statements),
-                "reason": json.dumps(errors[:2], ensure_ascii=False)[:300],
-            }
-        return {"status": "ok", "statementCount": len(statements)}
+        return self.run_native_rulebox_statements_via_http(endpoint, headers, relation_types, statements)
 
     def run_native_reasoning_via_driver(self, session, graph: PortfolioOntology) -> Dict[str, object]:
         statements = self.native_reasoning_statements(graph)
@@ -920,18 +916,81 @@ class Neo4jOntologyGraphRepository(Neo4jOntologyRowMapperMixin):
         statements = native_reasoning_statements_for_relation_types(relation_types)
         if not statements:
             return {"status": "skipped", "statementCount": 0, "reason": "no RuleBox relation templates"}
-        try:
-            payload = self.post_http_statements(endpoint, headers, statements)
-        except Exception as error:  # noqa: BLE001 - admin command should report structured errors.
-            return {"status": "error", "statementCount": len(statements), "reason": str(error)[:180]}
-        errors = payload.get("errors") or []
-        if errors:
-            return {
-                "status": "neo4j-error",
-                "statementCount": len(statements),
-                "reason": json.dumps(errors[:2], ensure_ascii=False)[:300],
+        return self.run_native_rulebox_statements_via_http(endpoint, headers, relation_types, statements)
+
+    def run_native_rulebox_statements_via_http(
+        self,
+        endpoint: str,
+        headers: Dict[str, str],
+        relation_types: List[str],
+        statements: List[Dict[str, object]],
+    ) -> Dict[str, object]:
+        started = time.monotonic()
+        statement_results = []
+        failures = []
+        max_attempts = 3
+        for index, statement in enumerate(statements):
+            relation_type = relation_types[index] if index < len(relation_types) else str((statement.get("parameters") or {}).get("relationType") or "")
+            attempts = 0
+            status = "error"
+            reason = ""
+            item_started = time.monotonic()
+            while attempts < max_attempts:
+                attempts += 1
+                try:
+                    payload = self.post_http_statements(endpoint, headers, [statement])
+                    errors = payload.get("errors") or []
+                    if errors:
+                        reason = json.dumps(errors[:2], ensure_ascii=False)[:300]
+                        status = "neo4j-error"
+                    else:
+                        reason = ""
+                        status = "ok"
+                        break
+                except Exception as error:  # noqa: BLE001 - admin command should report structured errors.
+                    reason = str(error)[:180]
+                    status = "error"
+                if not self.is_transient_rulebox_failure(reason) or attempts >= max_attempts:
+                    break
+                time.sleep(min(1.5, 0.2 * attempts))
+            elapsed = round(time.monotonic() - item_started, 3)
+            result = {
+                "relationType": relation_type,
+                "status": status,
+                "attempts": attempts,
+                "elapsedSeconds": elapsed,
             }
-        return {"status": "ok", "statementCount": len(statements), "relationTypes": relation_types}
+            if reason:
+                result["reason"] = reason
+            statement_results.append(result)
+            if status != "ok":
+                failures.append(relation_type + ": " + (reason or status))
+        succeeded = len([item for item in statement_results if item.get("status") == "ok"])
+        total_elapsed = round(time.monotonic() - started, 3)
+        response = {
+            "status": "ok" if not failures else ("partial" if succeeded else "error"),
+            "statementCount": len(statements),
+            "succeededStatementCount": succeeded,
+            "failedStatementCount": len(failures),
+            "attemptCount": sum(int(item.get("attempts") or 0) for item in statement_results),
+            "elapsedSeconds": total_elapsed,
+            "relationTypes": relation_types,
+            "statementResults": statement_results,
+        }
+        if failures:
+            response["reason"] = "; ".join(failures[:3])[:500]
+        return response
+
+    def is_transient_rulebox_failure(self, reason: str) -> bool:
+        text = str(reason or "").lower()
+        return any(fragment in text for fragment in [
+            "deadlock",
+            "transienterror",
+            "timed out",
+            "timeout",
+            "temporarily",
+            "lock client stopped",
+        ])
 
     def rulebox_relation_types_via_http(self, endpoint: str, headers: Dict[str, str]) -> List[str]:
         payload = self.post_http_statements(endpoint, headers, [rulebox_relation_types_statement()])

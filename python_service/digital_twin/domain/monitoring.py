@@ -734,7 +734,7 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
             return "invalidABox", reason, common
         if not inference:
             return "missingInferenceBox", "Neo4j InferenceBox 응답이 없습니다", common
-        if common["ruleboxExecutionStatus"] and common["ruleboxExecutionStatus"].lower() != "ok":
+        if common["ruleboxExecutionStatus"] and common["ruleboxExecutionStatus"].lower() not in {"ok", "partial"}:
             reason = "RuleBox 실행 실패"
             if common["ruleboxExecutionReason"]:
                 reason += ": " + common["ruleboxExecutionReason"]

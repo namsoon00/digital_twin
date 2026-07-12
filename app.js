@@ -122,6 +122,25 @@
     { id: "registry", label: "규칙·프롬프트", description: "런타임 관리" },
     { id: "trace", label: "관계 추적", description: "행·룰 검증" }
   ];
+  var pageModeOptions = [
+    { id: "results", label: "결과", description: "지금 봐야 할 상태와 결과" },
+    { id: "settings", label: "설정", description: "편집, 정책, 고급 설정" }
+  ];
+  var pageModeSectionMap = {
+    accounts: {
+      results: ["overview", "connections", "balance"],
+      settings: ["management"]
+    },
+    notifications: {
+      results: ["status", "signals"],
+      settings: ["policy", "templates", "advanced"]
+    },
+    modeling: {
+      results: ["overview", "evidence", "results", "graphs", "trace"],
+      settings: ["registry"]
+    }
+  };
+  var pageModeEnabledTabs = ["accounts", "notifications", "modeling", "feed"];
 
   function activeTabMeta() {
     return tabs.filter(function (tab) { return tab.id === state.activeTab; })[0] || tabs[0];
@@ -329,6 +348,7 @@
     previousTab: "",
     tabBarScrollLeft: 0,
     tabScrollPositions: {},
+    pageViewModes: initialPageViewModes(),
     settings: loadSettings(),
     snackbar: null,
     realtime: {
@@ -831,6 +851,95 @@
     return normalizeOntologySection(params.get("ontology"));
   }
 
+  function normalizePageMode(value) {
+    return String(value || "").toLowerCase() === "settings" ? "settings" : "results";
+  }
+
+  function pageSupportsMode(pageId) {
+    return pageModeEnabledTabs.indexOf(normalizeTabId(pageId)) >= 0;
+  }
+
+  function sectionModeForPage(pageId, sectionId) {
+    var config = pageModeSectionMap[normalizeTabId(pageId)];
+    var section = String(sectionId || "").toLowerCase();
+    if (!config) return "results";
+    if ((config.settings || []).indexOf(section) >= 0) return "settings";
+    return "results";
+  }
+
+  function initialPageModeForTab(pageId) {
+    var params = new URLSearchParams(window.location.search);
+    var explicit = params.get("mode");
+    var normalized = normalizeTabId(pageId || params.get("tab"));
+    if (explicit) return normalizePageMode(explicit);
+    if (normalized === "accounts") return sectionModeForPage("accounts", initialAccountSection());
+    if (normalized === "notifications") return sectionModeForPage("notifications", initialNotificationSection());
+    if (normalized === "modeling") return sectionModeForPage("modeling", initialStrategySection());
+    if (normalized === "settings") return "settings";
+    return "results";
+  }
+
+  function initialPageViewModes() {
+    var mode = initialPageModeForTab();
+    var tab = initialTab();
+    return {
+      overview: "results",
+      accounts: tab === "accounts" ? mode : "results",
+      watchlist: "results",
+      symbols: "results",
+      notifications: tab === "notifications" ? mode : "results",
+      modeling: tab === "modeling" ? mode : "results",
+      experiments: "results",
+      feed: tab === "feed" ? mode : "results",
+      system: "results",
+      settings: "settings"
+    };
+  }
+
+  function activePageMode(pageId) {
+    var normalized = normalizeTabId(pageId || state.activeTab);
+    if (!pageSupportsMode(normalized)) return normalized === "settings" ? "settings" : "results";
+    return normalizePageMode((state.pageViewModes || {})[normalized]);
+  }
+
+  function modeSectionsForPage(pageId, sections) {
+    var normalized = normalizeTabId(pageId);
+    var config = pageModeSectionMap[normalized];
+    var mode = activePageMode(normalized);
+    if (!config) return sections || [];
+    var allowed = config[mode] || [];
+    return (sections || []).filter(function (section) {
+      return allowed.indexOf(section.id) >= 0;
+    });
+  }
+
+  function activeSectionForPageMode(pageId, sections, current) {
+    var visible = modeSectionsForPage(pageId, sections);
+    var currentId = String(current || "").toLowerCase();
+    if (visible.some(function (section) { return section.id === currentId; })) return currentId;
+    return visible.length ? visible[0].id : currentId;
+  }
+
+  function firstSectionForPageMode(pageId, mode) {
+    var config = pageModeSectionMap[normalizeTabId(pageId)] || {};
+    var ids = config[normalizePageMode(mode)] || [];
+    return ids[0] || "";
+  }
+
+  function setPageViewMode(pageId, mode) {
+    var normalized = normalizeTabId(pageId || state.activeTab);
+    if (!state.pageViewModes) state.pageViewModes = {};
+    state.pageViewModes[normalized] = normalizePageMode(mode);
+    var firstSection = firstSectionForPageMode(normalized, mode);
+    if (normalized === "accounts" && firstSection) state.activeAccountSection = firstSection;
+    if (normalized === "notifications" && firstSection) {
+      state.activeNotificationSection = firstSection;
+      state.notificationPolicyEditorOpen = false;
+      state.notificationTemplateEditorOpen = false;
+    }
+    if (normalized === "modeling" && firstSection) state.activeStrategySection = firstSection;
+  }
+
   function normalizeTabId(value) {
     var requested = String(value || "").toLowerCase();
     if (requested === "more") return "overview";
@@ -920,6 +1029,7 @@
     if (normalized !== "notifications") params.delete("notification");
     if (normalized !== "modeling") params.delete("strategy");
     if (normalized !== "ontology") params.delete("ontology");
+    params.delete("mode");
     if (normalized === "overview") {
       params.delete("tab");
     } else {
@@ -938,6 +1048,7 @@
     params.delete("notification");
     params.delete("strategy");
     params.delete("ontology");
+    params.delete("mode");
     if (normalized === "overview") {
       params.delete("account");
     } else {
@@ -956,6 +1067,7 @@
     params.delete("account");
     params.delete("strategy");
     params.delete("ontology");
+    params.delete("mode");
     if (normalized === "status") {
       params.delete("notification");
     } else {
@@ -974,6 +1086,7 @@
     params.delete("account");
     params.delete("notification");
     params.delete("ontology");
+    params.delete("mode");
     if (normalized === "overview") {
       params.delete("strategy");
     } else {
@@ -1009,6 +1122,27 @@
     if (!window.history || !window.history.replaceState) return;
     var normalized = normalizeStrategySection(section);
     window.history.replaceState({ tab: "modeling", strategy: normalized }, "", strategySectionUrl(normalized));
+  }
+
+  function pageModeUrl(pageId, mode) {
+    var params = new URLSearchParams(window.location.search);
+    var normalized = normalizeTabId(pageId);
+    params.set("tab", normalized);
+    if (normalizePageMode(mode) === "settings") {
+      params.set("mode", "settings");
+    } else {
+      params.delete("mode");
+    }
+    var path = window.location.pathname || "/";
+    var query = params.toString();
+    var hash = window.location.hash || "";
+    return path + (query ? "?" + query : "") + hash;
+  }
+
+  function writePageModeHistory(pageId, mode) {
+    if (!window.history || !window.history.replaceState) return;
+    var normalized = normalizeTabId(pageId || state.activeTab);
+    window.history.replaceState({ tab: normalized, mode: normalizePageMode(mode) }, "", pageModeUrl(normalized, mode));
   }
 
   function scrollKeyForTab(tab, notificationSection, strategySection, ontologySection, accountSection) {
@@ -1316,10 +1450,14 @@
     var nextNotificationSection = initialNotificationSection();
     var nextStrategySection = initialStrategySection();
     var nextOntologySection = initialOntologySection();
+    var nextPageMode = initialPageModeForTab(nextTab);
     var accountSectionChanged = nextAccountSection !== state.activeAccountSection;
     var sectionChanged = nextNotificationSection !== state.activeNotificationSection;
     var strategySectionChanged = nextStrategySection !== state.activeStrategySection;
     var ontologySectionChanged = nextOntologySection !== state.activeOntologySection;
+    var pageModeChanged = activePageMode(nextTab) !== nextPageMode;
+    if (!state.pageViewModes) state.pageViewModes = {};
+    state.pageViewModes[nextTab] = nextPageMode;
     state.activeAccountSection = nextAccountSection;
     state.activeNotificationSection = nextNotificationSection;
     state.activeStrategySection = nextStrategySection;
@@ -1331,6 +1469,7 @@
       if (sectionChanged && nextTab === "notifications") render();
       if (strategySectionChanged && nextTab === "modeling") render();
       if (ontologySectionChanged && nextTab === "ontology") render();
+      if (pageModeChanged) render();
       return;
     }
     rememberTabBarPosition();
@@ -6422,8 +6561,9 @@
 
   function renderManagedPage(pageId, snapshot, content) {
     var structure = pageStructureMeta(pageId || "overview");
+    var mode = activePageMode(pageId || "overview");
     return [
-      '<div class="managed-page managed-page-' + escapeHtml(pageId || "overview") + ' ' + escapeHtml(webStyleContract.pageClass) + ' web-style-screen-' + escapeHtml(pageId || "overview") + '" data-style-contract="' + escapeHtml(webStyleContract.id) + '" data-style-screen="' + escapeHtml(pageId || "overview") + '" data-structure-group="' + escapeHtml(structure.groupId) + '" data-structure-layer="' + escapeHtml(structure.layer) + '" data-structure-entity="' + escapeHtml(structure.entity) + '">',
+      '<div class="managed-page managed-page-' + escapeHtml(pageId || "overview") + ' ' + escapeHtml(webStyleContract.pageClass) + ' web-style-screen-' + escapeHtml(pageId || "overview") + '" data-style-contract="' + escapeHtml(webStyleContract.id) + '" data-style-screen="' + escapeHtml(pageId || "overview") + '" data-page-mode="' + escapeHtml(mode) + '" data-structure-group="' + escapeHtml(structure.groupId) + '" data-structure-layer="' + escapeHtml(structure.layer) + '" data-structure-entity="' + escapeHtml(structure.entity) + '">',
       renderPageCommandStrip(pageId, snapshot),
       content,
       '</div>'
@@ -6811,6 +6951,7 @@
       '<span class="page-command-kicker">' + escapeHtml(profile.group + " / " + profile.layer) + '</span>',
       '<strong>' + escapeHtml(profile.entity) + '</strong>',
       '<em>' + escapeHtml(profile.objective) + '</em>',
+      renderPageModeSwitch(pageId),
       '</div>',
       '<div class="page-command-flow">',
       profile.steps.map(renderPageCommandStep).join(""),
@@ -6819,6 +6960,25 @@
       profile.metrics.map(renderPageCommandMetric).join(""),
       '</div>',
       '</section>'
+    ].join("");
+  }
+
+  function renderPageModeSwitch(pageId) {
+    var normalized = normalizeTabId(pageId || state.activeTab);
+    if (!pageSupportsMode(normalized)) return "";
+    var active = activePageMode(normalized);
+    return [
+      '<div class="page-mode-switch" role="tablist" aria-label="결과와 설정 보기 전환">',
+      pageModeOptions.map(function (option) {
+        var selected = option.id === active;
+        return [
+          '<button type="button" role="tab" class="' + (selected ? "active" : "") + '" data-page-mode-page="' + escapeHtml(normalized) + '" data-page-mode="' + escapeHtml(option.id) + '"' + (selected ? ' aria-selected="true"' : ' aria-selected="false"') + '>',
+          '<strong>' + escapeHtml(option.label) + '</strong>',
+          '<span>' + escapeHtml(option.description) + '</span>',
+          '</button>'
+        ].join("");
+      }).join(""),
+      '</div>'
     ].join("");
   }
 
@@ -7061,12 +7221,13 @@
   }
 
   function renderStrategySectionBar() {
-    var section = activeStrategySectionMeta();
+    var visibleSections = modeSectionsForPage("modeling", strategySections);
+    var activeId = activeSectionForPageMode("modeling", strategySections, state.activeStrategySection);
     return [
-      '<div class="strategy-section-bar">',
+      '<div class="strategy-section-bar" data-section-mode="' + escapeHtml(activePageMode("modeling")) + '">',
       '<div class="strategy-section-tabs" role="tablist" aria-label="투자 분석 섹션">',
-      strategySections.map(function (item) {
-        var active = section.id === item.id;
+      visibleSections.map(function (item) {
+        var active = activeId === item.id;
         return [
           '<button type="button" role="tab" class="' + (active ? "active" : "") + '" data-strategy-section="' + escapeHtml(item.id) + '"' + (active ? ' aria-selected="true"' : ' aria-selected="false"') + '>',
           '<strong>' + escapeHtml(item.label) + '</strong>',
@@ -8020,7 +8181,7 @@
   }
 
   function renderStrategySectionContent(snapshot) {
-    var section = normalizeStrategySection(state.activeStrategySection);
+    var section = activeSectionForPageMode("modeling", strategySections, normalizeStrategySection(state.activeStrategySection));
     var parts = ontologyStrategyParts(snapshot);
     if (section === "evidence") {
       return renderInvestmentTabWorkspace("evidence", [
@@ -9127,12 +9288,13 @@
   }
 
   function renderAccountSectionBar() {
-    var section = activeAccountSectionMeta();
+    var visibleSections = modeSectionsForPage("accounts", accountSections);
+    var activeId = activeSectionForPageMode("accounts", accountSections, state.activeAccountSection);
     return [
-      '<div class="account-section-bar">',
+      '<div class="account-section-bar" data-section-mode="' + escapeHtml(activePageMode("accounts")) + '">',
       '<div class="account-section-tabs" role="tablist" aria-label="계정 섹션">',
-      accountSections.map(function (item) {
-        var active = section.id === item.id;
+      visibleSections.map(function (item) {
+        var active = activeId === item.id;
         return [
           '<button type="button" role="tab" class="' + (active ? "active" : "") + '" data-account-section="' + escapeHtml(item.id) + '"' + (active ? ' aria-selected="true"' : ' aria-selected="false"') + '>',
           '<strong>' + escapeHtml(item.label) + '</strong>',
@@ -9143,15 +9305,16 @@
       '</div>',
       '<div class="account-section-actions">',
       '<button class="text-button" data-action="refresh">데이터 새로고침</button>',
-      '<button class="text-button" data-account-section="management">계정 관리</button>',
-      '<button class="text-button primary" data-action="new-service-account">새 계정</button>',
+      activePageMode("accounts") === "settings"
+        ? '<button class="text-button primary" data-action="new-service-account">새 계정</button>'
+        : '<button class="text-button" data-account-section="management">계정 관리</button>',
       '</div>',
       '</div>'
     ].join("");
   }
 
   function renderAccountSectionContent(snapshot) {
-    var section = normalizeAccountSection(state.activeAccountSection);
+    var section = activeSectionForPageMode("accounts", accountSections, normalizeAccountSection(state.activeAccountSection));
     if (section === "connections") return renderAccountConnectionsPanel(snapshot);
     if (section === "balance") return renderAccountBalancePanel(snapshot);
     if (section === "management") return renderAdminAccountPanel();
@@ -9391,7 +9554,7 @@
   }
 
   function renderNotificationsPage() {
-    var section = normalizeNotificationSection(state.activeNotificationSection);
+    var section = activeSectionForPageMode("notifications", notificationSections, normalizeNotificationSection(state.activeNotificationSection));
     var content = renderNotificationSectionContent();
     return renderManagedPage("notifications", state.snapshot || {}, [
       '<section class="admin-grid notifications-view">',
@@ -9417,12 +9580,13 @@
   }
 
   function renderNotificationSectionBar() {
-    var section = activeNotificationSectionMeta();
+    var visibleSections = modeSectionsForPage("notifications", notificationSections);
+    var activeId = activeSectionForPageMode("notifications", notificationSections, state.activeNotificationSection);
     return [
-      '<div class="notification-section-bar">',
+      '<div class="notification-section-bar" data-section-mode="' + escapeHtml(activePageMode("notifications")) + '">',
       '<div class="notification-section-tabs" role="tablist" aria-label="알림 설정 섹션">',
-      notificationSections.map(function (item) {
-        var active = section.id === item.id;
+      visibleSections.map(function (item) {
+        var active = activeId === item.id;
         return [
           '<button type="button" role="tab" class="' + (active ? "active" : "") + '" data-notification-section="' + escapeHtml(item.id) + '"' + (active ? ' aria-selected="true"' : ' aria-selected="false"') + '>',
           '<strong>' + escapeHtml(item.label) + '</strong>',
@@ -9433,7 +9597,9 @@
       '</div>',
       '<div class="notification-section-actions">',
       '<button class="text-button" data-action="refresh-notification-jobs"' + (state.notificationJobsLoading ? ' disabled' : '') + '>판단 새로고침</button>',
-      '<button class="' + settingsSaveButtonClass() + '" data-action="save-settings"' + settingsSaveDisabledAttr() + '>' + settingsSaveButtonLabel() + '</button>',
+      activePageMode("notifications") === "settings"
+        ? '<button class="' + settingsSaveButtonClass() + '" data-action="save-settings"' + settingsSaveDisabledAttr() + '>' + settingsSaveButtonLabel() + '</button>'
+        : '<button class="text-button" data-page-mode-page="notifications" data-page-mode="settings">알림 설정</button>',
       '</div>',
       '</div>'
     ].join("");
@@ -9494,7 +9660,7 @@
   }
 
   function renderNotificationSectionContent() {
-    var section = normalizeNotificationSection(state.activeNotificationSection);
+    var section = activeSectionForPageMode("notifications", notificationSections, normalizeNotificationSection(state.activeNotificationSection));
     if (section === "signals") return renderNotificationSignalPanel(state.snapshot || {});
     if (section === "policy") return renderAdminMessagePanel();
     if (section === "templates") return renderNotificationTemplateManagerPanel();
@@ -12918,8 +13084,13 @@
   }
 
   function renderFeedPage(snapshot) {
-    return renderManagedPage("feed", snapshot, [
-      '<section class="admin-grid feed-view">',
+    var settingsMode = activePageMode("feed") === "settings";
+    var body = settingsMode ? [
+      '<section class="admin-grid feed-view feed-view-settings">',
+      renderFeedSettingsPanel(),
+      '</section>'
+    ].join("") : [
+      '<section class="admin-grid feed-view feed-view-results">',
       '<div class="feed-workbench">',
       '<div class="feed-primary-column">',
       renderFeedOverviewPanel(),
@@ -12931,8 +13102,10 @@
       renderFeedChannelPanel(),
       '</aside>',
       '</div>',
-      renderFeedSettingsPanel(),
       '</section>'
+    ].join("");
+    return renderManagedPage("feed", snapshot, [
+      body
     ].join(""));
   }
 
@@ -14071,6 +14244,7 @@
 
     Array.prototype.slice.call(app.querySelectorAll('[data-action="new-service-account"]')).forEach(function (newServiceAccount) {
       newServiceAccount.addEventListener("click", function () {
+        setPageViewMode("accounts", "settings");
         state.editingAccountId = "";
         state.accountDraft = createNewAccountDraft();
         state.accountSaved = false;
@@ -14113,6 +14287,7 @@
         state.accountSaved = false;
         state.serviceAccountsError = "";
         state.activeTab = "accounts";
+        setPageViewMode("accounts", "settings");
         render();
       });
     });
@@ -14258,11 +14433,26 @@
       });
     });
 
+    Array.prototype.slice.call(app.querySelectorAll("[data-page-mode]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        var page = normalizeTabId(button.getAttribute("data-page-mode-page") || state.activeTab);
+        var mode = normalizePageMode(button.getAttribute("data-page-mode"));
+        if (activePageMode(page) === mode) return;
+        setPageViewMode(page, mode);
+        if (page === "accounts") writeAccountSectionHistory(state.activeAccountSection);
+        else if (page === "notifications") writeNotificationSectionHistory(state.activeNotificationSection);
+        else if (page === "modeling") writeStrategySectionHistory(state.activeStrategySection);
+        else writePageModeHistory(page, mode);
+        render();
+      });
+    });
+
     Array.prototype.slice.call(app.querySelectorAll("[data-notification-section]")).forEach(function (button) {
       button.addEventListener("click", function () {
         var section = normalizeNotificationSection(button.getAttribute("data-notification-section"));
         if (section === state.activeNotificationSection) return;
         state.activeNotificationSection = section;
+        state.pageViewModes.notifications = sectionModeForPage("notifications", section);
         state.notificationPolicyEditorOpen = false;
         state.notificationTemplateEditorOpen = false;
         writeNotificationSectionHistory(section);
@@ -14275,6 +14465,7 @@
         var section = normalizeAccountSection(button.getAttribute("data-account-section"));
         if (section === state.activeAccountSection) return;
         state.activeAccountSection = section;
+        state.pageViewModes.accounts = sectionModeForPage("accounts", section);
         writeAccountSectionHistory(section);
         render();
       });
@@ -14285,6 +14476,7 @@
         var section = normalizeStrategySection(button.getAttribute("data-strategy-section"));
         if (section === state.activeStrategySection) return;
         state.activeStrategySection = section;
+        state.pageViewModes.modeling = sectionModeForPage("modeling", section);
         writeStrategySectionHistory(section);
         render();
       });

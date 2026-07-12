@@ -7031,8 +7031,17 @@
 
   function ontologyExperimentLatestRun(experiment) {
     var history = Array.isArray(experiment.runHistory) ? experiment.runHistory : [];
-    if (history.length) return history[0] || {};
     var lastResult = experiment.lastResult && typeof experiment.lastResult === "object" ? experiment.lastResult : {};
+    if (history.length) {
+      var latestHistory = history[0] || {};
+      if (Array.isArray(latestHistory.recommendations)) return latestHistory;
+      var mergedHistory = Object.assign({}, latestHistory);
+      if (Array.isArray(lastResult.recommendations)) mergedHistory.recommendations = lastResult.recommendations;
+      if (lastResult.proposedOntologyChanges && typeof lastResult.proposedOntologyChanges === "object") {
+        mergedHistory.proposedOntologyChanges = lastResult.proposedOntologyChanges;
+      }
+      return mergedHistory;
+    }
     var readiness = lastResult.promotionReadiness && typeof lastResult.promotionReadiness === "object" ? lastResult.promotionReadiness : {};
     var inference = lastResult.inference && typeof lastResult.inference === "object" ? lastResult.inference : {};
     var aggregate = inference.aggregateDelta && typeof inference.aggregateDelta === "object" ? inference.aggregateDelta : {};
@@ -7044,8 +7053,29 @@
       graphRunCount: sandbox.graphRunCount || 0,
       derivedRelationDelta: aggregate.derivedRelationCount || 0,
       newRelationTypes: aggregate.newRelationTypes || [],
-      findings: lastResult.findings || []
+      findings: lastResult.findings || [],
+      recommendations: lastResult.recommendations || [],
+      proposedOntologyChanges: lastResult.proposedOntologyChanges || {}
     };
+  }
+
+  function ontologyExperimentRecommendations(source) {
+    return Array.isArray((source || {}).recommendations) ? source.recommendations : [];
+  }
+
+  function ontologyRecommendationTone(priority) {
+    var key = String(priority || "").toLowerCase();
+    if (key === "high") return "watch";
+    if (key === "medium") return "caution";
+    return "neutral";
+  }
+
+  function ontologyRecommendationPriorityLabel(priority) {
+    return {
+      high: "높음",
+      medium: "중간",
+      low: "낮음"
+    }[String(priority || "").toLowerCase()] || "검토";
   }
 
   function ontologyExperimentStatusLabel(status) {
@@ -7130,6 +7160,7 @@
     var latest = payload.latestRun && typeof payload.latestRun === "object" ? payload.latestRun : {};
     var relationTypes = Array.isArray(latest.newRelationTypes) ? latest.newRelationTypes : [];
     var findings = Array.isArray(latest.findings) ? latest.findings : [];
+    var recommendations = ontologyExperimentRecommendations(latest);
     return [
       '<article class="panel ontology-experiment-latest-panel">',
       '<div class="panel-head">',
@@ -7147,6 +7178,7 @@
         '</div>',
         relationTypes.length ? '<div class="theme-radar ontology-experiment-tags">' + relationTypes.slice(0, 8).map(function (item) { return '<span>' + escapeHtml(item) + '</span>'; }).join("") + '</div>' : '',
         findings.length ? '<div class="ontology-experiment-findings">' + findings.slice(0, 4).map(function (item) { return '<span>' + escapeHtml(item) + '</span>'; }).join("") + '</div>' : '',
+        recommendations.length ? renderOntologyExperimentRecommendationList(recommendations, 4) : '',
         '<p class="subtle">' + escapeHtml(formatClock(latest.completedAt)) + '</p>'
       ].join("") : renderEmptyState({
         label: "Latest Run",
@@ -7154,6 +7186,31 @@
         description: "활성 실험이 실행되면 최근 결과가 이곳에 표시됩니다."
       }),
       '</article>'
+    ].join("");
+  }
+
+  function renderOntologyExperimentRecommendationList(recommendations, limit) {
+    var items = (recommendations || []).slice(0, limit || 4);
+    if (!items.length) return "";
+    return [
+      '<div class="ontology-experiment-recommendations">',
+      '<div class="ontology-experiment-recommendation-title"><strong>온톨로지 보완 제안</strong><span>' + escapeHtml(items.length) + '</span></div>',
+      items.map(renderOntologyExperimentRecommendation).join(""),
+      '</div>'
+    ].join("");
+  }
+
+  function renderOntologyExperimentRecommendation(item) {
+    item = item || {};
+    return [
+      '<section class="ontology-experiment-recommendation">',
+      '<div>',
+      '<strong>' + escapeHtml(item.title || "보완 제안") + '</strong>',
+      item.reason ? '<p>' + escapeHtml(item.reason) + '</p>' : '',
+      item.action ? '<em>' + escapeHtml(item.action) + '</em>' : '',
+      '</div>',
+      '<span class="tone-chip ' + escapeHtml(ontologyRecommendationTone(item.priority)) + '">' + escapeHtml(ontologyRecommendationPriorityLabel(item.priority)) + '</span>',
+      '</section>'
     ].join("");
   }
 
@@ -7188,6 +7245,7 @@
     var status = String(experiment.status || "draft");
     var active = status.toLowerCase() === "active";
     var actionBusy = state.ontologyExperimentAction && String(state.ontologyExperimentAction).indexOf(":" + id) >= 0;
+    var recommendations = ontologyExperimentRecommendations(latest);
     return [
       '<section class="ontology-experiment-card">',
       '<div class="ontology-experiment-card-head">',
@@ -7205,6 +7263,7 @@
       renderOntologyExperimentMetric("판정", ontologyReadinessLabel(latest.promotionStatus), "readiness"),
       '</div>',
       symbols.length ? '<div class="theme-radar ontology-experiment-tags">' + symbols.slice(0, 12).map(function (item) { return '<span>' + escapeHtml(item) + '</span>'; }).join("") + '</div>' : '',
+      recommendations.length ? renderOntologyExperimentRecommendationList(recommendations, 2) : '',
       latest.completedAt ? '<p class="subtle">최근 실행 ' + escapeHtml(formatClock(latest.completedAt)) + '</p>' : '',
       '<div class="ontology-experiment-card-actions">',
       '<button class="text-button" type="button" data-lab-run="' + escapeHtml(id) + '"' + (actionBusy || !id ? ' disabled' : '') + '>' + escapeHtml(ontologyExperimentBusy("run", id) ? "실행 중" : "실행") + '</button>',

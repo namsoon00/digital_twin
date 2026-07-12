@@ -15750,6 +15750,61 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   margin-top: var(--ds-space-3);
 }
 
+.ontology-experiment-recommendations {
+  display: grid;
+  gap: var(--ds-space-2);
+  margin-top: var(--ds-space-3);
+}
+
+.ontology-experiment-recommendation-title,
+.ontology-experiment-recommendation {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--ds-space-3);
+  align-items: start;
+}
+
+.ontology-experiment-recommendation-title {
+  color: var(--ink);
+  font-size: var(--ds-type-label);
+}
+
+.ontology-experiment-recommendation-title span {
+  color: var(--muted);
+  font-weight: 850;
+}
+
+.ontology-experiment-recommendation {
+  padding: var(--ds-row-pad-y) var(--ds-row-pad-x);
+  border: 1px solid var(--ds-card-border);
+  border-left: 3px solid var(--ds-card-status-neutral);
+  border-radius: var(--ds-radius-control);
+  background: var(--ds-card-row-bg);
+}
+
+.ontology-experiment-recommendation strong,
+.ontology-experiment-recommendation p,
+.ontology-experiment-recommendation em {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.ontology-experiment-recommendation strong {
+  display: block;
+  color: var(--ink);
+  font-size: var(--ds-type-label);
+}
+
+.ontology-experiment-recommendation p,
+.ontology-experiment-recommendation em {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: var(--ds-type-caption);
+  font-style: normal;
+  font-weight: 760;
+}
+
 @media (max-width: 980px) {
   .ontology-experiment-overview-panel,
   .ontology-experiment-latest-panel {
@@ -15767,11 +15822,14 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   .ontology-experiment-metrics,
   .ontology-experiment-run-grid,
   .ontology-experiment-card-metrics,
-  .ontology-experiment-card-head {
+  .ontology-experiment-card-head,
+  .ontology-experiment-recommendation-title,
+  .ontology-experiment-recommendation {
     grid-template-columns: 1fr;
   }
 
-  .ontology-experiment-card-head .tone-chip {
+  .ontology-experiment-card-head .tone-chip,
+  .ontology-experiment-recommendation .tone-chip {
     justify-self: start;
   }
 }

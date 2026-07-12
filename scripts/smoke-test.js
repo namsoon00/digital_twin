@@ -1115,6 +1115,8 @@ function checkFrontendAdminRender() {
     assertOk(overviewHtml.indexOf("app-nav") < overviewHtml.indexOf("topbar"), "앱 네비게이션 바가 topbar 위에 렌더링되지 않습니다.");
     assertOk(overviewHtml.indexOf("top-action-bar") < 0, "기존 상단 버튼 나열 구조가 아직 렌더링됩니다.");
     assertOk(overviewHtml.indexOf("deskbar deskbar-full") >= 0, "홈 탭은 full deskbar를 사용해야 합니다.");
+    assertOk(overviewHtml.indexOf("console-shell") >= 0 && styles.indexOf("Next-generation desktop finance console") >= 0, "PC 콘솔 전용 셸 스타일이 적용되지 않았습니다.");
+    assertOk(overviewHtml.indexOf("nav-tab-description") >= 0 && styles.indexOf(".nav-tab-description") >= 0, "PC 좌측 네비게이션에 탭 설명 구조가 없습니다.");
     assertOk(overviewHtml.indexOf("shell-home") >= 0, "홈 탭 shell이 홈 전용 배치를 사용하지 않습니다.");
     [
       ["계정", accountHtml],
@@ -1127,7 +1129,8 @@ function checkFrontendAdminRender() {
       ["시스템", systemHtml],
       ["설정", settingsHtml]
     ].forEach(function (entry) {
-      assertOk(entry[1].indexOf("deskbar ") < 0, entry[0] + " 탭에 홈 전용 deskbar가 렌더링됩니다.");
+      assertOk(entry[1].indexOf("deskbar deskbar-compact") >= 0, entry[0] + " 탭이 compact PC deskbar를 사용하지 않습니다.");
+      assertOk(entry[1].indexOf("deskbar deskbar-full") < 0, entry[0] + " 탭에 홈 전용 full deskbar가 렌더링됩니다.");
       assertOk(entry[1].indexOf("shell-page") >= 0, entry[0] + " 탭 shell이 본문 우선 배치를 사용하지 않습니다.");
     });
     assertOk(code.indexOf('data-action="open-settings"') < 0, "topbar 설정 버튼이 상단 관리 탭과 중복됩니다.");

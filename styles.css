@@ -2825,6 +2825,152 @@ h3 {
   overflow-wrap: anywhere;
 }
 
+.account-command-panel {
+  grid-column: 1 / -1;
+}
+
+.account-command-grid,
+.account-balance-grid,
+.account-quality-ledger {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+  min-width: 0;
+  padding: 14px 16px 0;
+}
+
+.account-command-layout {
+  display: grid;
+  grid-template-columns: minmax(320px, 0.9fr) minmax(0, 1.1fr);
+  gap: 14px;
+  min-width: 0;
+  padding: 16px;
+}
+
+.account-board-title {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  padding: 0 0 8px;
+}
+
+.account-board-title strong {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.account-board-title span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 760;
+  line-height: 1.35;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.account-control-metric {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-left-width: 3px;
+  border-radius: 8px;
+  background: var(--panel-soft);
+}
+
+.account-control-metric.ok {
+  border-left-color: var(--green);
+}
+
+.account-control-metric.warn {
+  border-left-color: var(--amber);
+}
+
+.account-control-metric.neutral,
+.account-control-metric.live {
+  border-left-color: var(--blue);
+}
+
+.account-control-metric.demo {
+  border-left-color: var(--muted);
+}
+
+.account-control-metric em,
+.account-control-metric b {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 850;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.account-control-metric strong {
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 900;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.account-api-ledger,
+.account-balance-audit {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.account-api-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.7fr) minmax(120px, 0.7fr) minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-left-width: 3px;
+  border-radius: 8px;
+  background: var(--input);
+}
+
+.account-api-row.ok {
+  border-left-color: var(--green);
+}
+
+.account-api-row.warn {
+  border-left-color: var(--amber);
+}
+
+.account-api-row.neutral {
+  border-left-color: var(--blue);
+}
+
+.account-api-row span,
+.account-api-row em {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 800;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.account-api-row strong {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 900;
+  overflow-wrap: anywhere;
+}
+
+.source-stack.compact {
+  gap: 6px;
+  padding-top: 10px;
+}
+
 .chip {
   display: inline-flex;
   align-items: center;
@@ -10749,6 +10895,8 @@ h3 {
   .home-action-grid,
   .home-signal-strip,
   .admin-grid,
+  .account-command-layout,
+  .account-api-row,
   .admin-account-layout,
   .account-watchlist-workbench,
   .notification-template-row,
@@ -10763,6 +10911,15 @@ h3 {
   .page-command-strip {
     gap: 0;
     margin-bottom: 0;
+  }
+
+  .account-board-title {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .account-board-title span {
+    text-align: left;
   }
 
   .managed-page {

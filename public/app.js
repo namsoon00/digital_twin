@@ -141,7 +141,7 @@
       settings: ["rules"]
     }
   };
-  var pageModeEnabledTabs = ["accounts", "notifications", "modeling", "feed"];
+  var pageModeEnabledTabs = ["accounts", "notifications", "modeling"];
 
   function activeTabMeta() {
     return tabs.filter(function (tab) { return tab.id === state.activeTab; })[0] || tabs[0];
@@ -333,6 +333,12 @@
   var appNavScrollTicking = false;
   var topbarCollapsed = false;
   var topbarScrollTicking = false;
+  var feedSections = [
+    { id: "operations", label: "관제", description: "수집 상태" },
+    { id: "evidence", label: "근거 DB", description: "저장 근거" },
+    { id: "sources", label: "수집원", description: "채널 상태" },
+    { id: "settings", label: "피드 설정", description: "수집 정책" }
+  ];
   var cachedSnapshot = loadCachedSnapshot();
   var state = {
     loading: !cachedSnapshot,
@@ -389,6 +395,7 @@
     activeNotificationSection: initialNotificationSection(),
     activeAccountSection: initialAccountSection(),
     activeStrategySection: initialStrategySection(),
+    activeFeedSection: initialFeedSection(),
     activeInvestmentChartPeriod: "1d",
     activeOntologySection: initialOntologySection(),
     activeNotificationMessageType: "investmentInsight",
@@ -853,6 +860,14 @@
     return normalizeOntologySection(params.get("ontology"));
   }
 
+  function initialFeedSection() {
+    var params = new URLSearchParams(window.location.search);
+    if (!params.get("feed") && normalizeTabId(params.get("tab")) === "feed" && normalizePageMode(params.get("mode")) === "settings") {
+      return "settings";
+    }
+    return normalizeFeedSection(params.get("feed"));
+  }
+
   function normalizePageMode(value) {
     return String(value || "").toLowerCase() === "settings" ? "settings" : "results";
   }
@@ -892,7 +907,7 @@
       notifications: tab === "notifications" ? mode : "results",
       modeling: tab === "modeling" ? mode : "results",
       experiments: "results",
-      feed: tab === "feed" ? mode : "results",
+      feed: "results",
       system: "results",
       settings: "settings"
     };
@@ -940,6 +955,7 @@
       state.notificationTemplateEditorOpen = false;
     }
     if (normalized === "modeling" && firstSection) state.activeStrategySection = firstSection;
+    if (normalized === "feed") state.activeFeedSection = normalizeFeedSection(mode === "settings" ? "settings" : state.activeFeedSection);
   }
 
   function normalizeTabId(value) {
@@ -987,6 +1003,15 @@
     return ontologySections.some(function (section) { return section.id === requested; }) ? requested : "overview";
   }
 
+  function normalizeFeedSection(value) {
+    var requested = String(value || "").toLowerCase();
+    if (requested === "status" || requested === "overview" || requested === "monitoring" || requested === "pipeline") return "operations";
+    if (requested === "db" || requested === "research" || requested === "research-evidence" || requested === "evidences") return "evidence";
+    if (requested === "source" || requested === "channel" || requested === "channels" || requested === "provider" || requested === "providers") return "sources";
+    if (requested === "config" || requested === "policy" || requested === "policies" || requested === "setting") return "settings";
+    return feedSections.some(function (section) { return section.id === requested; }) ? requested : "operations";
+  }
+
   function normalizeOntologyGraphId(value) {
     var requested = String(value || "").toLowerCase().replace("-expanded", "");
     return requested === "tbox" || requested === "abox" ? requested : "";
@@ -1030,6 +1055,12 @@
     })[0] || strategySections[0];
   }
 
+  function activeFeedSectionMeta() {
+    return feedSections.filter(function (section) {
+      return section.id === state.activeFeedSection;
+    })[0] || feedSections[0];
+  }
+
   function tabUrl(tab) {
     var normalized = normalizeTabId(tab);
     var params = new URLSearchParams(window.location.search);
@@ -1037,6 +1068,7 @@
     if (normalized !== "notifications") params.delete("notification");
     if (normalized !== "modeling") params.delete("strategy");
     if (normalized !== "ontology") params.delete("ontology");
+    if (normalized !== "feed") params.delete("feed");
     params.delete("mode");
     if (normalized === "overview") {
       params.delete("tab");
@@ -1056,6 +1088,7 @@
     params.delete("notification");
     params.delete("strategy");
     params.delete("ontology");
+    params.delete("feed");
     params.delete("mode");
     if (normalized === "status") {
       params.delete("account");
@@ -1075,6 +1108,7 @@
     params.delete("account");
     params.delete("strategy");
     params.delete("ontology");
+    params.delete("feed");
     params.delete("mode");
     if (normalized === "status") {
       params.delete("notification");
@@ -1094,11 +1128,32 @@
     params.delete("account");
     params.delete("notification");
     params.delete("ontology");
+    params.delete("feed");
     params.delete("mode");
     if (normalized === "overview") {
       params.delete("strategy");
     } else {
       params.set("strategy", normalized);
+    }
+    var path = window.location.pathname || "/";
+    var query = params.toString();
+    var hash = window.location.hash || "";
+    return path + (query ? "?" + query : "") + hash;
+  }
+
+  function feedSectionUrl(section) {
+    var normalized = normalizeFeedSection(section);
+    var params = new URLSearchParams(window.location.search);
+    params.set("tab", "feed");
+    params.delete("account");
+    params.delete("notification");
+    params.delete("strategy");
+    params.delete("ontology");
+    params.delete("mode");
+    if (normalized === "operations") {
+      params.delete("feed");
+    } else {
+      params.set("feed", normalized);
     }
     var path = window.location.pathname || "/";
     var query = params.toString();
@@ -1132,6 +1187,12 @@
     window.history.replaceState({ tab: "modeling", strategy: normalized }, "", strategySectionUrl(normalized));
   }
 
+  function writeFeedSectionHistory(section) {
+    if (!window.history || !window.history.replaceState) return;
+    var normalized = normalizeFeedSection(section);
+    window.history.replaceState({ tab: "feed", feed: normalized }, "", feedSectionUrl(normalized));
+  }
+
   function pageModeUrl(pageId, mode) {
     var params = new URLSearchParams(window.location.search);
     var normalized = normalizeTabId(pageId);
@@ -1153,7 +1214,7 @@
     window.history.replaceState({ tab: normalized, mode: normalizePageMode(mode) }, "", pageModeUrl(normalized, mode));
   }
 
-  function scrollKeyForTab(tab, notificationSection, strategySection, ontologySection, accountSection) {
+  function scrollKeyForTab(tab, notificationSection, strategySection, ontologySection, accountSection, feedSection) {
     var normalized = normalizeTabId(tab || state.activeTab);
     if (normalized === "accounts") {
       return normalized + ":" + normalizeAccountSection(accountSection || state.activeAccountSection);
@@ -1167,11 +1228,14 @@
     if (normalized === "ontology") {
       return normalized + ":" + normalizeOntologySection(ontologySection || state.activeOntologySection);
     }
+    if (normalized === "feed") {
+      return normalized + ":" + normalizeFeedSection(feedSection || state.activeFeedSection);
+    }
     return normalized;
   }
 
   function activeScrollKey() {
-    return scrollKeyForTab(state.activeTab, state.activeNotificationSection, state.activeStrategySection, state.activeOntologySection, state.activeAccountSection);
+    return scrollKeyForTab(state.activeTab, state.activeNotificationSection, state.activeStrategySection, state.activeOntologySection, state.activeAccountSection, state.activeFeedSection);
   }
 
   function currentWorkspaceMain() {
@@ -1458,11 +1522,13 @@
     var nextNotificationSection = initialNotificationSection();
     var nextStrategySection = initialStrategySection();
     var nextOntologySection = initialOntologySection();
+    var nextFeedSection = initialFeedSection();
     var nextPageMode = initialPageModeForTab(nextTab);
     var accountSectionChanged = nextAccountSection !== state.activeAccountSection;
     var sectionChanged = nextNotificationSection !== state.activeNotificationSection;
     var strategySectionChanged = nextStrategySection !== state.activeStrategySection;
     var ontologySectionChanged = nextOntologySection !== state.activeOntologySection;
+    var feedSectionChanged = nextFeedSection !== state.activeFeedSection;
     var pageModeChanged = activePageMode(nextTab) !== nextPageMode;
     if (!state.pageViewModes) state.pageViewModes = {};
     state.pageViewModes[nextTab] = nextPageMode;
@@ -1470,6 +1536,7 @@
     state.activeNotificationSection = nextNotificationSection;
     state.activeStrategySection = nextStrategySection;
     state.activeOntologySection = nextOntologySection;
+    state.activeFeedSection = nextFeedSection;
     if (nextTab !== "notifications" || sectionChanged) state.notificationPolicyEditorOpen = false;
     if (nextTab !== "notifications" || sectionChanged) state.notificationTemplateEditorOpen = false;
     if (nextTab === state.activeTab) {
@@ -1477,6 +1544,7 @@
       if (sectionChanged && nextTab === "notifications") render();
       if (strategySectionChanged && nextTab === "modeling") render();
       if (ontologySectionChanged && nextTab === "ontology") render();
+      if (feedSectionChanged && nextTab === "feed") render();
       if (pageModeChanged) render();
       return;
     }
@@ -13289,29 +13357,78 @@
   }
 
   function renderFeedPage(snapshot) {
-    var settingsMode = activePageMode("feed") === "settings";
-    var body = settingsMode ? [
-      '<section class="admin-grid feed-view feed-view-settings">',
-      renderFeedSettingsPanel(),
-      '</section>'
-    ].join("") : [
-      '<section class="admin-grid feed-view feed-view-results">',
-      '<div class="feed-workbench">',
-      '<div class="feed-primary-column">',
-      renderFeedOverviewPanel(),
-      renderResearchEvidencePanel(),
-      '</div>',
-      '<aside class="feed-side-column">',
-      renderFeedPipelinePanel(),
-      renderFeedQualityPanel(),
-      renderFeedChannelPanel(),
-      '</aside>',
-      '</div>',
+    var section = normalizeFeedSection(state.activeFeedSection);
+    state.activeFeedSection = section;
+    var body = [
+      '<section class="admin-grid feed-view feed-view-' + escapeHtml(section) + '">',
+      renderFeedSectionBar(),
+      renderFeedSectionContent(snapshot, section),
       '</section>'
     ].join("");
     return renderManagedPage("feed", snapshot, [
       body
     ].join(""));
+  }
+
+  function renderFeedSectionBar() {
+    var activeId = normalizeFeedSection(state.activeFeedSection);
+    return [
+      '<div class="feed-section-bar" data-feed-active-section="' + escapeHtml(activeId) + '">',
+      '<div class="feed-section-tabs" role="tablist" aria-label="피드 섹션">',
+      feedSections.map(function (item) {
+        var active = activeId === item.id;
+        return [
+          '<button type="button" role="tab" class="' + (active ? "active" : "") + '" data-feed-section="' + escapeHtml(item.id) + '"' + (active ? ' aria-selected="true"' : ' aria-selected="false"') + '>',
+          '<strong>' + escapeHtml(item.label) + '</strong>',
+          '<span>' + escapeHtml(item.description) + '</span>',
+          '</button>'
+        ].join("");
+      }).join(""),
+      '</div>',
+      '<div class="feed-section-actions">',
+      '<button class="text-button" data-action="refresh-research-evidence">' + (state.researchEvidenceLoading ? "조회 중" : "근거 새로고침") + '</button>',
+      activeId === "settings"
+        ? '<button class="' + settingsSaveButtonClass() + '" data-action="save-settings"' + settingsSaveDisabledAttr() + '>' + settingsSaveButtonLabel() + '</button>'
+        : '<button class="text-button" data-feed-section="settings">수집 설정</button>',
+      '</div>',
+      '</div>'
+    ].join("");
+  }
+
+  function renderFeedSectionContent(snapshot, section) {
+    var active = normalizeFeedSection(section);
+    if (active === "settings") {
+      return renderFeedSettingsPanel();
+    }
+    if (active === "evidence") {
+      return [
+        '<div class="feed-evidence-workspace">',
+        renderResearchEvidencePanel(),
+        renderFeedQualityPanel(),
+        '</div>'
+      ].join("");
+    }
+    if (active === "sources") {
+      return [
+        '<div class="feed-source-workspace">',
+        renderFeedChannelPanel(),
+        renderFeedPipelinePanel(),
+        renderFeedQualityPanel(),
+        '</div>'
+      ].join("");
+    }
+    return [
+      '<div class="feed-workbench feed-operations-workbench">',
+      '<div class="feed-primary-column">',
+      renderFeedOverviewPanel(),
+      renderFeedPipelinePanel(),
+      '</div>',
+      '<aside class="feed-side-column">',
+      renderFeedQualityPanel(),
+      renderFeedChannelPanel(),
+      '</aside>',
+      '</div>'
+    ].join("");
   }
 
   function feedSourceTone(enabled, ready) {
@@ -14689,6 +14806,16 @@
         state.activeStrategySection = section;
         state.pageViewModes.modeling = sectionModeForPage("modeling", section);
         writeStrategySectionHistory(section);
+        render();
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-feed-section]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        var section = normalizeFeedSection(button.getAttribute("data-feed-section"));
+        if (section === state.activeFeedSection) return;
+        state.activeFeedSection = section;
+        writeFeedSectionHistory(section);
         render();
       });
     });

@@ -1068,7 +1068,10 @@ function checkFrontendAdminRender() {
     renderForSearch("?tab=settings"),
     renderForSearch("?tab=feed&mode=settings"),
     renderForSearch("?tab=accounts&account=management", "namsoon00.github.io"),
-    renderForSearch("?tab=accounts&account=management", null, { captureNewAccountButton: true, clickNewAccount: true })
+    renderForSearch("?tab=accounts&account=management", null, { captureNewAccountButton: true, clickNewAccount: true }),
+    renderForSearch("?tab=feed&feed=evidence"),
+    renderForSearch("?tab=feed&feed=sources"),
+    renderForSearch("?tab=feed&feed=settings")
   ]).then(function (pages) {
     const overviewHtml = pages[0];
     const accountHtml = pages[1];
@@ -1095,6 +1098,9 @@ function checkFrontendAdminRender() {
     const feedSettingsHtml = pages[22];
     const staticAccountHtml = pages[23];
     const newAccountHtml = pages[24];
+    const feedEvidenceHtml = pages[25];
+    const feedSourcesHtml = pages[26];
+    const feedExplicitSettingsHtml = pages[27];
 
     [
       ["overview", overviewHtml],
@@ -1228,12 +1234,15 @@ function checkFrontendAdminRender() {
     ["decision", "lab", "alerts", "holdings"].forEach(function (tab) {
       assertOk(overviewHtml.indexOf('data-tab="' + tab + '"') < 0, "기존 탭이 남아 있습니다: " + tab);
     });
-    assertOk(feedHtml.indexOf("feed-view") >= 0, "피드 탭이 데이터 관리 화면으로 렌더링되지 않습니다.");
-    assertOk(feedHtml.indexOf("데이터 품질 상태") >= 0 && feedHtml.indexOf("피드 수집 설정") < 0, "피드 기본 결과 화면이 수집 설정 폼과 분리되지 않았습니다.");
-    assertOk(feedSettingsHtml.indexOf("피드 수집 설정") >= 0 && feedSettingsHtml.indexOf("feed-settings-sections") >= 0 && feedSettingsHtml.indexOf("뉴스 아카이브") >= 0 && feedSettingsHtml.indexOf("그래프 추론") >= 0 && feedSettingsHtml.indexOf("긴 매핑값") >= 0, "피드 설정 모드가 관리 섹션 구조로 렌더링되지 않습니다.");
-    assertOk(feedSettingsHtml.indexOf('data-setting="newsCollectionRateLimitSeconds"') >= 0 && feedSettingsHtml.indexOf('data-setting="externalSecCompanyCiks"') >= 0, "피드 설정 모드에 세부 수집 설정 필드가 없습니다.");
-    assertOk(/\.feed-view-settings \.feed-settings-panel\s*\{[\s\S]*grid-column: 1 \/ -1;/.test(styles) && styles.indexOf(".feed-settings-sections") >= 0, "PC 피드 설정 패널이 전폭 섹션 그리드로 정의되지 않았습니다.");
-    assertOk(feedHtml.indexOf("저장 근거 조회·관리") >= 0 && feedHtml.indexOf('data-research-evidence-form') >= 0, "저장 근거 조회/관리 폼이 없습니다.");
+    assertOk(feedHtml.indexOf("feed-view feed-view-operations") >= 0 && feedHtml.indexOf("feed-section-tabs") >= 0, "피드 탭이 관제 중심 내부 섹션 화면으로 렌더링되지 않습니다.");
+    assertOk(feedHtml.indexOf('data-feed-section="operations"') >= 0 && feedHtml.indexOf('data-feed-section="evidence"') >= 0 && feedHtml.indexOf('data-feed-section="sources"') >= 0 && feedHtml.indexOf('data-feed-section="settings"') >= 0, "피드 내부 섹션 탭이 관제/근거 DB/수집원/설정을 제공하지 않습니다.");
+    assertOk(feedHtml.indexOf("데이터 품질 상태") >= 0 && feedHtml.indexOf("피드 수집 설정") < 0 && feedHtml.indexOf('data-research-evidence-form') < 0, "피드 기본 관제 화면이 설정 폼이나 긴 근거 목록과 분리되지 않았습니다.");
+    assertOk(feedEvidenceHtml.indexOf("feed-view feed-view-evidence") >= 0 && feedEvidenceHtml.indexOf("저장 근거 조회·관리") >= 0 && feedEvidenceHtml.indexOf('data-research-evidence-form') >= 0, "피드 근거 DB 섹션에 저장 근거 조회/관리 폼이 없습니다.");
+    assertOk(feedSourcesHtml.indexOf("feed-view feed-view-sources") >= 0 && feedSourcesHtml.indexOf("수집 채널 매트릭스") >= 0 && feedSourcesHtml.indexOf("수집·판단 흐름") >= 0, "피드 수집원 섹션이 채널과 데이터 흐름을 함께 보여주지 않습니다.");
+    assertOk(feedSettingsHtml.indexOf("피드 수집 설정") >= 0 && feedExplicitSettingsHtml.indexOf("feed-settings-sections") >= 0 && feedExplicitSettingsHtml.indexOf("뉴스 아카이브") >= 0 && feedExplicitSettingsHtml.indexOf("그래프 추론") >= 0 && feedExplicitSettingsHtml.indexOf("긴 매핑값") >= 0, "피드 설정 섹션이 관리 섹션 구조로 렌더링되지 않습니다.");
+    assertOk(feedExplicitSettingsHtml.indexOf('data-setting="newsCollectionRateLimitSeconds"') >= 0 && feedExplicitSettingsHtml.indexOf('data-setting="externalSecCompanyCiks"') >= 0, "피드 설정 섹션에 세부 수집 설정 필드가 없습니다.");
+    assertOk(feedHtml.indexOf('data-page-mode-page="feed"') < 0 && feedSettingsHtml.indexOf('data-page-mode-page="feed"') < 0, "피드 탭에 결과/설정 전역 스위치가 남아 있습니다.");
+    assertOk(/\.feed-view-settings \.feed-settings-panel\s*\{[\s\S]*grid-column: 1 \/ -1;/.test(styles) && styles.indexOf(".feed-settings-sections") >= 0 && styles.indexOf(".feed-evidence-workspace") >= 0 && styles.indexOf(".feed-source-workspace") >= 0, "PC 피드 섹션별 워크스페이스 스타일이 정의되지 않았습니다.");
     assertOk(systemHtml.indexOf("<h1>시스템</h1>") >= 0, "시스템 탭 제목이 상단에 렌더링되지 않았습니다.");
     assertOk(systemHtml.indexOf("system-guide-view") >= 0, "시스템 설명 탭이 전용 레이아웃으로 렌더링되지 않습니다.");
     assertOk(systemHtml.indexOf("SYSTEM MANUAL") >= 0 && systemHtml.indexOf("처음 사용하는 순서") >= 0, "시스템 탭에 사용자 매뉴얼이 없습니다.");

@@ -5511,6 +5511,15 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("investmentAnalysis", payload["tossDecision"])
         self.assertTrue(payload["tossDecision"]["investmentAnalysis"]["reasoningCards"])
         self.assertEqual("investment-ontology-ai-inference-v1", payload["tossDecision"]["investmentAnalysis"]["aiInferencePacket"]["contract"])
+        self.assertIn("investmentAnalysis", payload)
+        self.assertEqual("investment-analysis-read-model-v1", payload["investmentAnalysis"]["contract"])
+        self.assertEqual("blocked", payload["investmentAnalysis"]["board"]["state"])
+        self.assertGreater(payload["investmentAnalysis"]["graphGate"]["blockedCount"], 0)
+        self.assertEqual("neo4jInferenceBox", payload["investmentAnalysis"]["graphGate"]["requiredSource"])
+        self.assertTrue(payload["investmentAnalysis"]["actionQueue"])
+        self.assertTrue(any(item["graph"]["blocked"] for item in payload["investmentAnalysis"]["actionQueue"]))
+        self.assertGreater(payload["investmentAnalysis"]["dataLineage"]["mockCount"], 0)
+        self.assertTrue(payload["investmentAnalysis"]["moneyFlow"]["emergingFlows"])
         self.assertTrue(any(item.get("decisionBasis") == "ontologyInferenceRequired" for item in payload["tossDecision"]["items"]))
         ontology_strategy = payload["tossDecision"]["ontologyStrategy"]
         abox_kinds = {item.get("kind") for item in ontology_strategy["aboxEntities"]}

@@ -60,7 +60,7 @@ from ..infrastructure.event_bus import default_event_bus
 from ..infrastructure.mock_market import mock_market_payload, mock_market_scenario_list
 from ..infrastructure.ontology_graph_store import ontology_repository_from_settings
 from ..infrastructure import operational_store as stores
-from ..infrastructure.service_factory import build_notification_queue_runner, build_ontology_lab_service, build_rule_change_candidate_service, build_symbol_universe_service, flow_lens_snapshot
+from ..infrastructure.service_factory import build_notification_queue_runner, build_ontology_lab_service, build_rule_change_candidate_service, build_symbol_universe_service, flow_lens_snapshot, investment_analysis_snapshot
 from ..infrastructure.settings import ROOT_DIR, runtime_settings, save_runtime_settings
 from ..infrastructure.toss_snapshots import build_snapshot
 
@@ -1995,6 +1995,13 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
         if path == "/api/flow-lens" and self.command == "GET":
             mock_value = configured(first_query(query, "mock") or first_query(query, "mode")).lower()
             return self.send_payload(200, flow_lens_snapshot(
+                mock=mock_value in {"1", "true", "mock"},
+                watchlist_symbols=first_query(query, "watchlistSymbols"),
+            ))
+
+        if path == "/api/investment-analysis" and self.command == "GET":
+            mock_value = configured(first_query(query, "mock") or first_query(query, "mode")).lower()
+            return self.send_payload(200, investment_analysis_snapshot(
                 mock=mock_value in {"1", "true", "mock"},
                 watchlist_symbols=first_query(query, "watchlistSymbols"),
             ))

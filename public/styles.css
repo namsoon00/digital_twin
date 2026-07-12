@@ -4748,10 +4748,228 @@ h3 {
   overflow-wrap: anywhere;
 }
 
+.investment-board-panel,
+.investment-gate-panel,
+.investment-action-panel,
+.investment-lineage-panel,
+.investment-flow-panel,
 .investment-bridge-panel,
 .investment-evidence-panel,
 .investment-ai-packet-panel {
   grid-column: 1 / -1;
+}
+
+.investment-board-metrics,
+.investment-gate-grid,
+.investment-flow-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+  min-width: 0;
+  padding: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.investment-board-metrics section,
+.investment-gate-grid section,
+.investment-flow-grid section {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+}
+
+.investment-board-metrics span,
+.investment-gate-grid span,
+.investment-flow-grid span,
+.investment-flow-grid em {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 850;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.investment-board-metrics strong,
+.investment-gate-grid strong,
+.investment-flow-grid strong {
+  color: var(--ink);
+  font-size: 22px;
+  font-weight: 900;
+  overflow-wrap: anywhere;
+}
+
+.investment-board-metrics em {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.investment-checklist-grid,
+.investment-emerging-list {
+  display: grid;
+  gap: 8px;
+  padding: 0 16px 16px;
+}
+
+.investment-check-row,
+.investment-emerging-list > div {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--input);
+}
+
+.investment-check-row strong,
+.investment-emerging-list strong {
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.investment-check-row span,
+.investment-emerging-list span,
+.investment-emerging-list em {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 800;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.investment-action-list,
+.investment-lineage-list {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+}
+
+.investment-action-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px 12px;
+  min-width: 0;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+}
+
+.investment-action-main {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.investment-action-main strong {
+  color: var(--ink);
+  font-size: 15px;
+  overflow-wrap: anywhere;
+}
+
+.investment-action-main span,
+.investment-action-row p,
+.investment-action-checks span,
+.investment-action-meta span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 780;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.investment-action-row p {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+.investment-action-meta,
+.investment-action-checks {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
+.investment-action-meta span,
+.investment-action-checks span {
+  padding: 8px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--input);
+}
+
+.investment-action-meta strong {
+  color: var(--ink);
+}
+
+.investment-lineage-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) auto minmax(120px, 0.8fr) auto;
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+}
+
+.investment-lineage-row > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.investment-lineage-row strong {
+  color: var(--ink);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.investment-lineage-row span,
+.investment-lineage-row em,
+.investment-lineage-row b {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 850;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 720px) {
+  .investment-action-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .investment-action-row .tone-chip {
+    justify-self: start;
+  }
+
+  .investment-lineage-row {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .investment-check-row,
+  .investment-emerging-list > div {
+    align-items: flex-start;
+    flex-direction: column;
+  }
 }
 
 .investment-bridge-flow {
@@ -14624,5 +14842,67 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   .notification-decision-body.has-detail .notification-decision-list {
     max-height: none;
     overflow: visible;
+  }
+}
+
+/* Full viewport workspace expansion */
+:root {
+  --ds-shell-width: 100vw;
+  --ds-viewport-pad-x: 14px;
+  --ds-viewport-pad-y: 10px;
+}
+
+.shell {
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  padding: var(--ds-viewport-pad-y) var(--ds-viewport-pad-x) calc(var(--ds-viewport-pad-y) + 8px);
+}
+
+@media (min-width: 861px) {
+  .shell {
+    height: 100dvh;
+    min-height: 0;
+    padding: var(--ds-viewport-pad-y) var(--ds-viewport-pad-x);
+  }
+
+  .workspace-layout,
+  .workspace-main {
+    height: 100%;
+  }
+
+  .workspace-main {
+    padding-right: 0;
+  }
+}
+
+@media (min-width: 1181px) {
+  .shell {
+    column-gap: var(--ds-page-gap);
+    row-gap: var(--ds-section-gap);
+  }
+}
+
+@media (max-width: 1180px) and (min-width: 861px) {
+  .shell {
+    width: 100%;
+    max-width: none;
+    padding: var(--ds-viewport-pad-y) var(--ds-viewport-pad-x);
+  }
+}
+
+@media (max-width: 980px) and (min-width: 861px) {
+  .shell {
+    width: 100%;
+    max-width: none;
+    padding: var(--ds-viewport-pad-y) var(--ds-viewport-pad-x) calc(var(--ds-viewport-pad-y) + 8px);
+  }
+}
+
+@media (max-width: 860px) {
+  .shell {
+    width: 100%;
+    max-width: none;
+    padding: calc(10px + env(safe-area-inset-top)) 10px calc(20px + var(--bottom-tabs-height) + env(safe-area-inset-bottom));
   }
 }

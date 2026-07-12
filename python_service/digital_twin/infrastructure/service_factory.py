@@ -3,6 +3,7 @@ import uuid
 from typing import Iterable
 
 from ..application.flow_lens_service import FlowLensService
+from ..application.investment_analysis_service import InvestmentAnalysisService
 from ..application.market_data_collection_service import MarketDataCollectionRunner
 from ..application.model_review_service import ModelReviewRunner
 from ..application.news_collection_service import NewsCollectionRunner
@@ -237,3 +238,17 @@ def build_flow_lens_service(settings=None) -> FlowLensService:
 
 def flow_lens_snapshot(mock: bool = False, watchlist_symbols: str = ""):
     return build_flow_lens_service().snapshot(mock=mock, watchlist_symbols=watchlist_symbols)
+
+
+def build_investment_analysis_service(settings=None) -> InvestmentAnalysisService:
+    flow_service = build_flow_lens_service(settings)
+    return InvestmentAnalysisService(
+        snapshot_provider=lambda mock=False, watchlist_symbols="": flow_service.snapshot(
+            mock=mock,
+            watchlist_symbols=watchlist_symbols,
+        ),
+    )
+
+
+def investment_analysis_snapshot(mock: bool = False, watchlist_symbols: str = ""):
+    return build_investment_analysis_service().snapshot(mock=mock, watchlist_symbols=watchlist_symbols)

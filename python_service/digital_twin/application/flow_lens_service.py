@@ -9,6 +9,7 @@ from ..domain.market_data import (
     number,
     sector_from_symbol,
 )
+from ..domain.investment_analysis import build_investment_analysis
 from ..domain.ontology_prompting import ONTOLOGY_PROMPT_VERSION
 from ..domain.portfolio_ontology_builder import build_portfolio_ontology
 from ..domain.portfolio import PortfolioSummary, Position, utc_now_iso
@@ -752,7 +753,7 @@ def build_toss_lens_snapshot(
     )
     toss["watchlist"] = watchlist
     toss_decision = build_toss_decision(toss, portfolio, watchlist, strategy_model)
-    return {
+    payload = {
         "generatedAt": utc_now_iso(),
         "dataMode": "mock" if mock else "live",
         "mock": bool(mock),
@@ -781,6 +782,8 @@ def build_toss_lens_snapshot(
             {"label": "주문 실행은 읽기 전용 검증 이후 별도 단계에서만 열기", "status": "잠금"},
         ],
     }
+    payload["investmentAnalysis"] = build_investment_analysis(payload)
+    return payload
 
 
 class FlowLensService:

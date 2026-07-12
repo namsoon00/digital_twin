@@ -3822,10 +3822,10 @@
     state.ontologyExperimentAction = "suggest";
     state.ontologyExperimentsError = "";
     render();
-    sendJson("/api/ontology/experiments/suggest", "POST", { trigger: "ontology-lab-manual-suggest", activate: false })
+    sendJson("/api/ontology/experiments/suggest", "POST", { trigger: "ontology-lab-manual-suggest", activate: true, run: true })
       .then(function (payload) {
         showSnackbar(
-          payload && payload.createdCount ? "AI 실험 제안 " + payload.createdCount + "건을 등록했습니다." : "새로 등록할 AI 실험 제안이 없습니다.",
+          payload && payload.createdCount ? "AI 실험 제안 " + payload.createdCount + "건을 등록하고 실행했습니다." : "새로 등록할 AI 실험 제안이 없습니다.",
           payload && payload.createdCount ? "success" : "caution"
         );
         return loadOntologyExperiments(true);
@@ -3869,7 +3869,9 @@
     state.ontologyExperimentsError = "";
     render();
     sendJson("/api/ontology/experiments/" + encodeURIComponent(id) + "/" + action, "POST", {})
-      .then(function () {
+      .then(function (payload) {
+        var failureMessage = ontologyExperimentCommandFailureMessage(action, payload);
+        if (failureMessage) throw new Error(failureMessage);
         showSnackbar(successMessage || "실험 상태를 변경했습니다.");
         return loadOntologyExperiments(true);
       })
@@ -3881,6 +3883,19 @@
         state.ontologyExperimentAction = "";
         render();
       });
+  }
+
+  function ontologyExperimentCommandFailureMessage(action, payload) {
+    payload = payload && typeof payload === "object" ? payload : {};
+    var status = String(payload.status || "");
+    var reason = String(payload.reason || "");
+    if (status === "not-found") return "실험을 찾지 못했습니다.";
+    if (status === "no-result") return "아직 적용할 실험 결과가 없습니다.";
+    if (action === "apply" && status === "not-ready") return "완료된 샌드박스 실행 결과가 있어야 적용할 수 있습니다." + (reason ? " (" + reason + ")" : "");
+    if (action === "apply" && status === "disabled") return "온톨로지 저장소가 비활성화되어 적용할 수 없습니다.";
+    if (action === "apply" && status === "pending") return "온톨로지 제안 적용이 완료되지 않았습니다.";
+    if (action === "apply" && status === "error") return "온톨로지 제안을 운영 반영하지 못했습니다.";
+    return "";
   }
 
 

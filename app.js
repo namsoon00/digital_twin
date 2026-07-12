@@ -26,9 +26,9 @@
     { id: "advanced", label: "고급", description: "채널·임계값" }
   ];
   var strategySections = [
-    { id: "overview", label: "개요", description: "분석 흐름" },
+    { id: "overview", label: "판단판", description: "오늘의 구조" },
     { id: "evidence", label: "근거 카드", description: "데이터·관계" },
-    { id: "results", label: "종목 판단", description: "의견·점수" },
+    { id: "results", label: "액션 큐", description: "보류·후보" },
     { id: "graphs", label: "관계 그래프", description: "TBox·ABox" },
     { id: "registry", label: "규칙·프롬프트", description: "운영 기준" },
     { id: "trace", label: "검증 추적", description: "행·룰" }
@@ -6042,6 +6042,7 @@
     if (state.activeTab === "accounts") {
       return renderManagedPage("accounts", snapshot, [
         '<section class="admin-grid accounts-view">',
+        renderAccountCommandCenter(snapshot),
         renderAdminAccountPanel(),
         '</section>'
       ].join(""));
@@ -6412,8 +6413,8 @@
         metrics: [["관리 룰", enabledRules + "/" + notificationPolicyCatalog().length], ["템플릿", notificationTemplateItems().length], ["큐", notificationJobSummaryText(state.realtime.notificationJobs)]]
       },
       modeling: {
-        steps: [["01", "Evidence", "전략 근거"], ["02", "Relation", "TBox·ABox"], ["03", "AI", "투자 의견"]],
-        metrics: [["보유", positions.length], ["관심", watchlist.length], ["근거 카드", reasoningCards.length || "-"]]
+        steps: [["01", "Board", "오늘의 판단판"], ["02", "Queue", "보유·관심 후보"], ["03", "Graph", "InferenceBox 게이트"]],
+        metrics: [["보유", positions.length], ["관심", watchlist.length], ["추론 보류", ((snapshot.investmentAnalysis || {}).graphGate || {}).blockedCount || 0]]
       },
       ontology: {
         steps: [["01", "TBox", "스키마"], ["02", "ABox", "실체"], ["03", "Relation", "관계·근거"]],
@@ -6825,6 +6826,236 @@
     return parts.investmentAnalysis.aiInferencePacket || parts.strategy.aiInferencePacket || {};
   }
 
+  function investmentAnalysisModel(snapshot) {
+    var payload = (snapshot || {}).investmentAnalysis || {};
+    if (payload && payload.contract) return payload;
+    var toss = (snapshot || {}).toss || {};
+    var positions = Array.isArray(toss.positions) ? toss.positions.filter(function (item) {
+      return item && item.source !== "cash" && String(item.symbol || "").toUpperCase() !== "CASH";
+    }) : [];
+    var watchlist = Array.isArray(toss.watchlist) ? toss.watchlist : [];
+    var decision = (snapshot || {}).tossDecision || {};
+    var items = Array.isArray(decision.items) ? decision.items : [];
+    return {
+      contract: "investment-analysis-client-fallback-v1",
+      generatedAt: (snapshot || {}).generatedAt || "",
+      mode: toss.mode || "",
+      status: toss.status || "",
+      board: {
+        title: "오늘의 투자 판단판",
+        state: items.length ? "blocked" : "ready",
+        tone: items.length ? "caution" : "watch",
+        summary: "서버 분석 모델이 없어서 현재 스냅샷으로 기본 판단판을 구성했습니다.",
+        metrics: [
+          { label: "보유", value: positions.length, caption: "holding" },
+          { label: "관심", value: watchlist.length, caption: "watchlist" },
+          { label: "액션 후보", value: items.length, caption: "queue" },
+          { label: "추론 보류", value: 0, caption: "blocked" }
+        ],
+        checklist: Array.isArray((snapshot || {}).checklist) ? (snapshot || {}).checklist : []
+      },
+      accountFocus: {
+        holdingCount: positions.length,
+        watchCount: watchlist.length,
+        symbols: positions.concat(watchlist).map(function (item) { return String(item.symbol || "").toUpperCase(); }).filter(Boolean)
+      },
+      actionQueue: items,
+      dataLineage: {
+        actualCount: positions.concat(watchlist).length,
+        mockCount: 0,
+        items: positions.concat(watchlist).map(function (item) {
+          return {
+            symbol: item.symbol,
+            name: item.name,
+            source: item.quoteSource || item.source || "snapshot",
+            quality: item.dataQuality || "actual",
+            updatedAt: item.updatedAt || "",
+            status: item.quoteStatus || ""
+          };
+        })
+      },
+      moneyFlow: { buckets: [], emergingFlows: [] },
+      graphGate: { status: "blocked", tone: "caution", blockedCount: 0, relationCount: 0, entityCount: 0, requiredSource: "neo4jInferenceBox", nextChecks: [] }
+    };
+  }
+
+  function renderInvestmentDecisionBoardPanel(snapshot) {
+    var analysis = investmentAnalysisModel(snapshot);
+    var board = analysis.board || {};
+    var metrics = Array.isArray(board.metrics) ? board.metrics : [];
+    var checklist = Array.isArray(board.checklist) ? board.checklist : [];
+    return [
+      '<article class="panel investment-board-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Investment Board</p>',
+      '<h2>' + escapeHtml(board.title || "오늘의 투자 판단판") + '</h2>',
+      '<p class="subtle">' + escapeHtml(board.summary || "데이터, 체크리스트, 그래프 추론 상태를 먼저 확인합니다.") + '</p>',
+      '</div>',
+      '<span class="tone-chip ' + escapeHtml(board.tone || "hold") + '">' + escapeHtml(board.state === "ready" ? "판단 가능" : "판단 보류") + '</span>',
+      '</div>',
+      '<div class="investment-board-metrics">',
+      metrics.map(function (item) {
+        return [
+          '<section>',
+          '<span>' + escapeHtml(item.caption || "") + '</span>',
+          '<strong>' + escapeHtml(item.value) + '</strong>',
+          '<em>' + escapeHtml(item.label || "") + '</em>',
+          '</section>'
+        ].join("");
+      }).join(""),
+      '</div>',
+      '<div class="investment-checklist-grid">',
+      checklist.length ? checklist.map(function (item) {
+        return [
+          '<div class="investment-check-row">',
+          '<strong>' + escapeHtml(item.label || item.title || "-") + '</strong>',
+          '<span>' + escapeHtml(item.status || "대기") + '</span>',
+          '</div>'
+        ].join("");
+      }).join("") : '<div class="ontology-empty">오늘 체크리스트가 아직 없습니다.</div>',
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderInvestmentGraphGatePanel(snapshot) {
+    var gate = investmentAnalysisModel(snapshot).graphGate || {};
+    var checks = Array.isArray(gate.nextChecks) ? gate.nextChecks : [];
+    return [
+      '<article class="panel investment-gate-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Inference Gate</p>',
+      '<h2>추론 가능 상태</h2>',
+      '<p class="subtle">' + escapeHtml(gate.reason || "InferenceBox 관계와 데이터 신선도를 확인합니다.") + '</p>',
+      '</div>',
+      '<span class="tone-chip ' + escapeHtml(gate.tone || "hold") + '">' + escapeHtml(gate.status || "unknown") + '</span>',
+      '</div>',
+      '<div class="investment-gate-grid">',
+      renderInvestmentGateMetric("요구 출처", gate.requiredSource || "neo4jInferenceBox"),
+      renderInvestmentGateMetric("관계", gate.relationCount || 0),
+      renderInvestmentGateMetric("엔티티", gate.entityCount || 0),
+      renderInvestmentGateMetric("보류", gate.blockedCount || 0),
+      '</div>',
+      '<div class="rule-strip">',
+      checks.slice(0, 3).map(function (item) { return '<span>' + escapeHtml(item) + '</span>'; }).join("") || '<span>추론 상태 확인 대기</span>',
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderInvestmentGateMetric(label, value) {
+    return '<section><span>' + escapeHtml(label) + '</span><strong>' + escapeHtml(value) + '</strong></section>';
+  }
+
+  function renderInvestmentActionQueuePanel(snapshot) {
+    var rows = Array.isArray(investmentAnalysisModel(snapshot).actionQueue) ? investmentAnalysisModel(snapshot).actionQueue : [];
+    return [
+      '<article class="panel investment-action-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Action Queue</p>',
+      '<h2>보유·관심 종목 액션 큐</h2>',
+      '<p class="subtle">매수·매도 결론이 아니라, 그래프 추론과 체크리스트를 통과하기 전 확인할 후보 목록입니다.</p>',
+      '</div>',
+      '<span class="metric">' + escapeHtml(rows.length) + '</span>',
+      '</div>',
+      '<div class="investment-action-list">',
+      rows.length ? rows.slice(0, 10).map(renderInvestmentActionRow).join("") : '<div class="ontology-empty">액션 큐가 비어 있습니다.</div>',
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderInvestmentActionRow(row) {
+    row = row || {};
+    var graph = row.graph || {};
+    var reasons = Array.isArray(row.reasons) ? row.reasons : [];
+    var checks = Array.isArray(graph.nextChecks) ? graph.nextChecks : [];
+    var name = row.name || stockDisplayName(row.symbol, row);
+    return [
+      '<div class="investment-action-row">',
+      '<div class="investment-action-main">',
+      '<strong>' + escapeHtml(name) + '</strong>',
+      '<span>' + escapeHtml([row.symbol, sourceLabel(row.source), row.market, row.sector].filter(Boolean).join(" · ")) + '</span>',
+      '</div>',
+      '<span class="tone-chip ' + escapeHtml(row.tone || "hold") + '">' + escapeHtml(row.decision || "판단 대기") + '</span>',
+      '<div class="investment-action-meta">',
+      '<span>데이터 <strong>' + escapeHtml(row.dataQuality || "-") + '</strong></span>',
+      '<span>API <strong>' + escapeHtml(row.apiSource || "-") + '</strong></span>',
+      '<span>손익률 <strong>' + escapeHtml(row.profitLossRate || 0) + '%</strong></span>',
+      graph.blocked ? '<span>차단 <strong>' + escapeHtml(graph.basis || "InferenceBox") + '</strong></span>' : '<span>추론 <strong>ready</strong></span>',
+      '</div>',
+      '<p>' + escapeHtml((reasons[0] || graph.reason || "다음 확인 조건을 먼저 봅니다.")) + '</p>',
+      checks.length ? '<div class="investment-action-checks">' + checks.slice(0, 3).map(function (item) { return '<span>' + escapeHtml(item) + '</span>'; }).join("") + '</div>' : '',
+      '</div>'
+    ].join("");
+  }
+
+  function renderInvestmentDataLineagePanel(snapshot) {
+    var lineage = investmentAnalysisModel(snapshot).dataLineage || {};
+    var rows = Array.isArray(lineage.items) ? lineage.items : [];
+    return [
+      '<article class="panel investment-lineage-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Data Lineage</p>',
+      '<h2>실제·mock·API 출처</h2>',
+      '<p class="subtle">화면에 쓰인 기본 데이터가 실제인지 mock인지, 어떤 API에서 왔는지 분리합니다.</p>',
+      '</div>',
+      '<span class="metric">' + escapeHtml(lineage.actualCount || 0) + '/' + escapeHtml((lineage.actualCount || 0) + (lineage.mockCount || 0)) + '</span>',
+      '</div>',
+      '<div class="investment-lineage-list">',
+      rows.length ? rows.slice(0, 12).map(function (row) {
+        return [
+          '<div class="investment-lineage-row">',
+          '<div><strong>' + escapeHtml(row.name || stockDisplayName(row.symbol, row)) + '</strong><span>' + escapeHtml(row.symbol || "") + '</span></div>',
+          '<em>' + escapeHtml(row.quality || "-") + '</em>',
+          '<span>' + escapeHtml(row.source || "-") + '</span>',
+          '<b>' + escapeHtml(row.updatedAt ? formatClock(row.updatedAt) : "-") + '</b>',
+          '</div>'
+        ].join("");
+      }).join("") : '<div class="ontology-empty">데이터 출처가 없습니다.</div>',
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderInvestmentMoneyFlowPanel(snapshot) {
+    var flow = investmentAnalysisModel(snapshot).moneyFlow || {};
+    var buckets = Array.isArray(flow.buckets) ? flow.buckets : [];
+    var emerging = Array.isArray(flow.emergingFlows) ? flow.emergingFlows : [];
+    return [
+      '<article class="panel investment-flow-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Global Flow Lens</p>',
+      '<h2>세계 돈의 흐름 단서</h2>',
+      '<p class="subtle">현재 계좌 노출과 외부 신호가 어떤 자산·시장 흐름을 봐야 하는지 알려줍니다.</p>',
+      '</div>',
+      '<span class="metric">' + escapeHtml(buckets.length + emerging.length) + '</span>',
+      '</div>',
+      '<div class="investment-flow-grid">',
+      buckets.length ? buckets.map(function (bucket) {
+        return [
+          '<section>',
+          '<span>' + escapeHtml(bucket.source || "") + '</span>',
+          '<strong>' + escapeHtml(bucket.label || bucket.key || "-") + '</strong>',
+          '<em>' + escapeHtml(bucket.value ? formatMoney(bucket.value) : bucket.caption || "-") + '</em>',
+          '</section>'
+        ].join("");
+      }).join("") : '<div class="ontology-empty">시장 흐름 버킷 없음</div>',
+      '</div>',
+      '<div class="investment-emerging-list">',
+      emerging.length ? emerging.map(function (item) {
+        return '<div><strong>' + escapeHtml(item.title || "-") + '</strong><span>' + escapeHtml(item.description || "") + '</span><em>' + escapeHtml(item.source || "") + '</em></div>';
+      }).join("") : '<div class="ontology-empty">새 흐름 후보가 아직 없습니다.</div>',
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
   function renderInvestmentBridgePanel(snapshot) {
     var parts = ontologyStrategyParts(snapshot);
     var cards = investmentReasoningCards(snapshot);
@@ -7230,6 +7461,8 @@
     }
     if (section === "results") {
       return [
+        renderInvestmentActionQueuePanel(snapshot),
+        renderInvestmentGraphGatePanel(snapshot),
         renderInvestmentReasoningCardPanel(snapshot, { compact: true }),
         renderOntologyExecutionPlanPanel(investmentReasoningCards(snapshot), parts),
         renderModelPreviewPanel(snapshot)
@@ -7286,6 +7519,11 @@
       ].join("");
     }
     return [
+      renderInvestmentDecisionBoardPanel(snapshot),
+      renderInvestmentGraphGatePanel(snapshot),
+      renderInvestmentActionQueuePanel(snapshot),
+      renderInvestmentDataLineagePanel(snapshot),
+      renderInvestmentMoneyFlowPanel(snapshot),
       renderInvestmentBridgePanel(snapshot),
       renderOntologyMacroSignalPanel(parts),
       renderInvestmentReasoningCardPanel(snapshot, { compact: true }),
@@ -8176,6 +8414,192 @@
       marketRows ? '<section class="monitor-board-section monitor-market-section"><div class="monitor-section-head"><strong>시장별 현금</strong><span>매수 여력 기준</span></div><div class="monitor-market-ledger">' + marketRows + '</div></section>' : '',
       '</div>',
       '<div class="rule-strip"><span>실제 백그라운드 워커 실행/중지는 로컬 명령으로 관리하고, 웹은 저장된 계정과 알림 설정을 같은 로컬 DB/설정 파일에 기록합니다.</span></div>',
+      '</article>'
+    ].join("");
+  }
+
+  function accountSnapshotMode(snapshot) {
+    var toss = (snapshot || {}).toss || {};
+    if ((snapshot || {}).preview) return "preview";
+    if ((snapshot || {}).mock || (snapshot || {}).dataMode === "mock") return "mock";
+    return toss.mode || (snapshot && snapshot.dataMode) || "unknown";
+  }
+
+  function accountSnapshotModeLabel(snapshot) {
+    var mode = accountSnapshotMode(snapshot);
+    if (mode === "live") return "실제 데이터";
+    if (mode === "mock") return "mock 데이터";
+    if (mode === "preview") return "정적 미리보기";
+    if (mode === "demo") return "demo 데이터";
+    return "데이터 대기";
+  }
+
+  function accountSnapshotTone(snapshot) {
+    var mode = accountSnapshotMode(snapshot);
+    if (mode === "live") return "live";
+    if (mode === "mock" || mode === "preview" || mode === "demo") return "demo";
+    return "watch";
+  }
+
+  function timestampAgeMinutes(value) {
+    if (!value) return null;
+    var date = new Date(value);
+    if (Number.isNaN(date.getTime())) return null;
+    return Math.max(0, Math.round((Date.now() - date.getTime()) / 60000));
+  }
+
+  function accountFreshness(snapshot) {
+    var generatedAt = (snapshot || {}).generatedAt || "";
+    var age = timestampAgeMinutes(generatedAt);
+    var maxAge = Number(settingValue("marketDataMaxAgeMinutes") || settingValue("dataFreshnessDefaultMaxAgeMinutes") || 30);
+    if (age == null) {
+      return { label: "기준시각 없음", detail: "스냅샷 generatedAt 없음", tone: "warn" };
+    }
+    return {
+      label: age <= maxAge ? "신선" : "지연",
+      detail: age + "분 전 · 기준 " + maxAge + "분",
+      tone: age <= maxAge ? "ok" : "warn"
+    };
+  }
+
+  function accountSnapshotItems(snapshot) {
+    var toss = (snapshot || {}).toss || {};
+    var positions = Array.isArray(toss.positions) ? toss.positions : [];
+    var watchlist = Array.isArray(toss.watchlist) ? toss.watchlist : [];
+    return positions.concat(watchlist).filter(function (item) {
+      return item && String(item.symbol || "").toUpperCase() !== "CASH";
+    });
+  }
+
+  function accountDataQualityCounts(snapshot) {
+    var mode = accountSnapshotMode(snapshot);
+    return accountSnapshotItems(snapshot).reduce(function (memo, item) {
+      var quality = String(item.dataQuality || "").toLowerCase();
+      if (mode === "mock" || mode === "preview" || quality.indexOf("mock") >= 0 || quality.indexOf("demo") >= 0) {
+        memo.mock += 1;
+      } else if (quality.indexOf("cache") >= 0 || quality.indexOf("cached") >= 0) {
+        memo.cached += 1;
+      } else if (item.currentPrice || item.marketValue || item.quoteSource) {
+        memo.actual += 1;
+      } else {
+        memo.pending += 1;
+      }
+      return memo;
+    }, { actual: 0, cached: 0, mock: 0, pending: 0 });
+  }
+
+  function currentAccountLabel(snapshot) {
+    var accounts = state.serviceAccounts || [];
+    if (accounts.length === 1) return accounts[0].label || accounts[0].id || "계정";
+    var displayNumber = (((snapshot || {}).toss || {}).account || {}).displayNumber || "";
+    if (displayNumber) return "현재 조회 계좌 " + displayNumber;
+    return accounts.length ? "다중 계정" : "계정 미등록";
+  }
+
+  function renderAccountControlMetric(label, value, detail, tone) {
+    return [
+      '<span class="account-control-metric ' + escapeHtml(tone || "neutral") + '">',
+      '<em>' + escapeHtml(label) + '</em>',
+      '<strong>' + escapeHtml(value == null ? "-" : value) + '</strong>',
+      detail ? '<b>' + escapeHtml(detail) + '</b>' : '',
+      '</span>'
+    ].join("");
+  }
+
+  function renderAccountApiStatusRow(label, value, detail, tone) {
+    return [
+      '<div class="account-api-row ' + escapeHtml(tone || "neutral") + '">',
+      '<span>' + escapeHtml(label) + '</span>',
+      '<strong>' + escapeHtml(value || "-") + '</strong>',
+      '<em>' + escapeHtml(detail || "") + '</em>',
+      '</div>'
+    ].join("");
+  }
+
+  function renderAccountApiLedger(accounts, snapshot) {
+    var configured = state.serverConfigured || {};
+    var tossReady = accounts.filter(function (account) { return account.clientId && account.clientSecret; }).length;
+    var telegramReady = accounts.filter(function (account) { return account.telegramBotToken && account.telegramChatId; }).length;
+    var items = accountSnapshotItems(snapshot);
+    var kisItems = items.filter(function (item) {
+      return String(item.quoteSource || item.signalSource || "").toLowerCase().indexOf("kis") >= 0;
+    }).length;
+    return [
+      '<section class="account-api-ledger">',
+      renderAccountApiStatusRow("Toss Open API", tossReady + "/" + accounts.length + " 계정", ((snapshot.toss || {}).status || "계정별 key/secret 기준"), tossReady ? "ok" : "warn"),
+      renderAccountApiStatusRow("KIS 시세·수급", configured.kisAppKey && configured.kisAppSecret ? "키 저장됨" : "키 필요", kisItems ? kisItems + "개 종목 보강" : "시세 보강 대기", configured.kisAppKey && configured.kisAppSecret ? "ok" : "warn"),
+      renderAccountApiStatusRow("OpenDART 공시", configured.opendartApiKey ? "키 저장됨" : "키 필요", settingValue("externalDartEnabled") ? "공시 수집 사용" : "공시 수집 꺼짐", configured.opendartApiKey ? "ok" : "warn"),
+      renderAccountApiStatusRow("코인·매크로", [configured.coingeckoApiKey ? "CoinGecko" : "", configured.fredApiKey ? "FRED" : ""].filter(Boolean).join(" / ") || "선택 키 없음", "BTC·금리·환율 흐름 보강", configured.coingeckoApiKey || configured.fredApiKey ? "ok" : "neutral"),
+      renderAccountApiStatusRow("알림 채널", telegramReady + "/" + accounts.length + " Telegram", "계정별 bot token/chat id 저장 상태", telegramReady ? "ok" : "warn"),
+      '</section>'
+    ].join("");
+  }
+
+  function renderAccountQualityLedger(snapshot) {
+    var counts = accountDataQualityCounts(snapshot);
+    var total = counts.actual + counts.cached + counts.mock + counts.pending;
+    return [
+      '<section class="account-quality-ledger">',
+      renderAccountControlMetric("실제", counts.actual, total ? "화면 데이터 중 " + total + "개" : "데이터 없음", "ok"),
+      renderAccountControlMetric("캐시", counts.cached, "레이트리밋/실패 시 사용", counts.cached ? "warn" : "neutral"),
+      renderAccountControlMetric("mock", counts.mock, "실제와 구분 표시", counts.mock ? "warn" : "neutral"),
+      renderAccountControlMetric("대기", counts.pending, "시세 또는 원장 미수집", counts.pending ? "warn" : "neutral"),
+      '</section>'
+    ].join("");
+  }
+
+  function renderAccountBalanceAudit(snapshot) {
+    var portfolio = (snapshot || {}).portfolio || {};
+    return [
+      '<section class="account-balance-audit">',
+      '<div class="account-board-title">',
+      '<strong>계좌 금액 검증</strong>',
+      '<span>총 평가 = 투자 평가액 + 현금, 환율과 원장 합계를 같이 봅니다.</span>',
+      '</div>',
+      '<div class="account-balance-grid">',
+      renderAccountControlMetric("투자 평가액", formatMoney(portfolio.invested || 0), "보유 종목 원화환산", "neutral"),
+      renderAccountControlMetric("현금/주문 가능", formatMoney(portfolio.cash || 0), portfolioCashBasisText(snapshot || {}, portfolio), "neutral"),
+      renderAccountControlMetric("총 평가", formatMoney(portfolio.total || 0), "스냅샷 portfolio.total", "ok"),
+      renderAccountControlMetric("산식 차이", exposureDiffText(portfolio.total || 0, numeric(portfolio.invested) + numeric(portfolio.cash)), "total - (invested + cash)", Math.abs(numeric(portfolio.total) - numeric(portfolio.invested) - numeric(portfolio.cash)) < 1 ? "ok" : "warn"),
+      '</div>',
+      '<div class="source-stack compact">',
+      renderPortfolioBasisRows(snapshot || {}, portfolio),
+      '</div>',
+      '</section>'
+    ].join("");
+  }
+
+  function renderAccountCommandCenter(snapshot) {
+    snapshot = snapshot || {};
+    var accounts = state.serviceAccounts || [];
+    var enabled = accounts.filter(function (account) { return account.enabled !== false; }).length;
+    var tossReady = accounts.filter(function (account) { return account.clientId && account.clientSecret; }).length;
+    var freshness = accountFreshness(snapshot);
+    var modeLabel = accountSnapshotModeLabel(snapshot);
+    return [
+      '<article class="panel account-command-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Account Control</p>',
+      '<h2>계정 관제 보드</h2>',
+      '<p class="subtle">API 키 원문은 숨긴 상태로, 계좌 데이터 출처와 금액 산식만 검증합니다.</p>',
+      '</div>',
+      '<span class="status-pill ' + escapeHtml(accountSnapshotTone(snapshot)) + '">' + escapeHtml(modeLabel) + '</span>',
+      '</div>',
+      '<div class="account-command-grid">',
+      renderAccountControlMetric("현재 계좌", currentAccountLabel(snapshot), enabled + "/" + accounts.length + " 활성", enabled ? "ok" : "warn"),
+      renderAccountControlMetric("Toss 준비", tossReady + "/" + accounts.length, "계정별 API key/secret", tossReady ? "ok" : "warn"),
+      renderAccountControlMetric("데이터 신선도", freshness.label, freshness.detail, freshness.tone),
+      renderAccountControlMetric("스냅샷", formatClock(snapshot.generatedAt), (snapshot.toss || {}).status || "조회 상태 대기", accountSnapshotTone(snapshot)),
+      '</div>',
+      '<div class="account-command-layout">',
+      '<div>',
+      '<div class="account-board-title"><strong>API 출처 상태</strong><span>화면 데이터와 알림에 들어가는 외부 연결 기준입니다.</span></div>',
+      renderAccountApiLedger(accounts, snapshot),
+      renderAccountQualityLedger(snapshot),
+      '</div>',
+      renderAccountBalanceAudit(snapshot),
+      '</div>',
       '</article>'
     ].join("");
   }

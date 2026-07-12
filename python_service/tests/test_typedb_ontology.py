@@ -6,6 +6,11 @@ from unittest.mock import patch
 from digital_twin import service_manager
 from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
 from digital_twin.domain.ontology_contracts import OntologyEntity, OntologyEvidence, OntologyRelation, PortfolioOntology
+from digital_twin.domain.repositories import (
+    ONTOLOGY_GRAPH_REPOSITORY_CONTRACT,
+    ontology_graph_repository_contract_errors,
+)
+from digital_twin.infrastructure.neo4j_ontology import NullOntologyGraphRepository, Neo4jOntologyGraphRepository
 from digital_twin.infrastructure.ontology_graph_store import (
     CompositeOntologyGraphRepository,
     ontology_repository_from_settings,
@@ -156,6 +161,28 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertIn("server", command)
         self.assertIn("--server.listen-address", command)
         self.assertIn("--storage.data-directory", command)
+
+    def test_graph_store_contract_is_shared_by_all_adapters(self):
+        repositories = [
+            NullOntologyGraphRepository(),
+            NullTypeDBOntologyGraphRepository(),
+            Neo4jOntologyGraphRepository(""),
+            TypeDBOntologyGraphRepository(""),
+            CompositeOntologyGraphRepository(NullOntologyGraphRepository(), mirrors=[NullTypeDBOntologyGraphRepository()]),
+        ]
+
+        for repository in repositories:
+            self.assertEqual([], ontology_graph_repository_contract_errors(repository), repository.__class__.__name__)
+
+    def test_graph_store_contract_catches_partial_implementations(self):
+        class PartialRepository:
+            def save_graph(self, graph):
+                return {}
+
+        errors = ontology_graph_repository_contract_errors(PartialRepository())
+
+        self.assertGreaterEqual(len(errors), len(ONTOLOGY_GRAPH_REPOSITORY_CONTRACT) - 1)
+        self.assertTrue(any("active_tbox_metadata" in error for error in errors))
 
     def test_typedb_rulebox_snapshot_reads_persisted_typeql_rows(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
@@ -312,8 +339,29 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                 self.entities = entities
                 self.relations = relations
 
-            def save_graph(self, _graph):
+            def active_tbox_metadata(self):
+                return {"status": "ok"}
+
+            def save_graph(self, graph):
                 return {"status": "ok", "graphStore": self.store_key, "entityCount": self.entities, "relationCount": self.relations}
+
+            def seed_ontology(self, payload=None):
+                return {"status": "ok", "graphStore": self.store_key}
+
+            def rulebox_snapshot(self):
+                return {"status": "ok", "graphStore": self.store_key}
+
+            def save_rulebox(self, payload=None):
+                return {"status": "ok", "graphStore": self.store_key}
+
+            def run_rulebox(self, payload=None):
+                return {"status": "ok", "graphStore": self.store_key}
+
+            def inferencebox_snapshot(self, symbols=None, limit=80):
+                return {"status": "ok", "graphStore": self.store_key, "symbols": list(symbols or []), "limit": limit}
+
+            def save_rule_change_candidates(self, candidates, context=None):
+                return {"status": "ok", "graphStore": self.store_key, "candidateCount": len(candidates or [])}
 
         repository = CompositeOntologyGraphRepository(
             FakeStore("neo4j", 3, 2),
@@ -331,6 +379,15 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                 self.store_key = key
                 self.target_kind = target_kind
 
+            def active_tbox_metadata(self):
+                return {"status": "ok"}
+
+            def save_graph(self, graph):
+                return {"status": "ok", "graphStore": self.store_key}
+
+            def seed_ontology(self, payload=None):
+                return {"status": "ok", "graphStore": self.store_key}
+
             def rulebox_snapshot(self):
                 return {
                     "status": "ok",
@@ -346,6 +403,18 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                         "derivations": [{"relation_type": "HAS_INFERRED_RISK", "target_kind": self.target_kind, "target_key": "{symbol}"}],
                     }],
                 }
+
+            def save_rulebox(self, payload=None):
+                return {"status": "ok", "graphStore": self.store_key}
+
+            def run_rulebox(self, payload=None):
+                return {"status": "ok", "graphStore": self.store_key}
+
+            def inferencebox_snapshot(self, symbols=None, limit=80):
+                return {"status": "ok", "graphStore": self.store_key, "symbols": list(symbols or []), "limit": limit}
+
+            def save_rule_change_candidates(self, candidates, context=None):
+                return {"status": "ok", "graphStore": self.store_key, "candidateCount": len(candidates or [])}
 
         repository = CompositeOntologyGraphRepository(
             FakeRuleboxStore("neo4j", "risk-signal"),

@@ -2,6 +2,7 @@ import hashlib
 import json
 from typing import Dict, Iterable, List
 
+from ..domain.repositories import ensure_ontology_graph_repository_contract
 from .settings import runtime_settings
 
 
@@ -37,7 +38,7 @@ def ontology_repository_from_settings(settings: Dict[str, str] = None):
     if mode == "typedb":
         from .typedb_ontology import typedb_repository_from_settings
 
-        return typedb_repository_from_settings(settings)
+        return ensure_ontology_graph_repository_contract(typedb_repository_from_settings(settings), "TypeDB ontology graph repository")
 
     from .neo4j_ontology import neo4j_repository_from_settings
 
@@ -45,11 +46,11 @@ def ontology_repository_from_settings(settings: Dict[str, str] = None):
     if mode == "dual":
         from .typedb_ontology import typedb_repository_from_settings
 
-        return CompositeOntologyGraphRepository(
+        return ensure_ontology_graph_repository_contract(CompositeOntologyGraphRepository(
             primary,
             mirrors=[typedb_repository_from_settings(settings)],
-        )
-    return primary
+        ), "dual ontology graph repository")
+    return ensure_ontology_graph_repository_contract(primary, "Neo4j ontology graph repository")
 
 
 class CompositeOntologyGraphRepository:
@@ -57,8 +58,12 @@ class CompositeOntologyGraphRepository:
     store_label = "Dual Graph Store"
 
     def __init__(self, primary, mirrors: Iterable[object] = None):
-        self.primary = primary
-        self.mirrors = [item for item in (mirrors or []) if item]
+        self.primary = ensure_ontology_graph_repository_contract(primary, "primary ontology graph repository")
+        self.mirrors = [
+            ensure_ontology_graph_repository_contract(item, "mirror ontology graph repository")
+            for item in (mirrors or [])
+            if item
+        ]
 
     def active_tbox_metadata(self) -> Dict[str, object]:
         metadata = self.primary.active_tbox_metadata()

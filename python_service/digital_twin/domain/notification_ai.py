@@ -600,7 +600,7 @@ def opinion_lines_for_type(message_type: str, context: Dict[str, object]) -> Lis
         return [
             "해석: 실계좌 데이터는 있지만 온톨로지 추론 결과가 없어 매수·매도 판단을 만들지 않았습니다.",
             "의견: 투자 신호가 아니라 판단 엔진의 필수 데이터 누락 알림입니다. " + (reason or "InferenceBox 상태를 먼저 확인해야 합니다."),
-            "다음 확인: " + (inference_status + " 확인 후 " if inference_status else "") + "Neo4j 연결, RuleBox 저장 상태, 온톨로지 추론 워커를 순서대로 점검하세요.",
+            "다음 확인: " + (inference_status + " 확인 후 " if inference_status else "") + "TypeDB 연결, RuleBox 저장 상태, 온톨로지 추론 워커를 순서대로 점검하세요.",
         ]
     if message_type == "monitorDecisionChange":
         previous_value = line_value(lines, "이전")

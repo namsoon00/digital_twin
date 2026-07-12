@@ -22,7 +22,7 @@ TBox 정의는 `python_service/digital_twin/domain/ontology_tbox.py`에 둔다. 
 - `TBox`: 투자 관계 분석의 규칙 구조다. `Portfolio`, `Stock`, `Sector`, `Risk`, `Evidence`, `Belief`, `Opinion` 같은 클래스와 `HOLDS`, `EXPOSED_TO`, `CONTRADICTS`, `HAS_EVIDENCE` 같은 관계 타입, 그리고 판단 규칙을 정의한다.
 - `ABox`: 현재 계좌 스냅샷에서 만들어진 실제 데이터 계층이다. 실제 보유 종목, 섹터 노출, 수급 근거, 추세 근거, 위험 판단 근거, 종목별 의견이 여기에 들어간다.
 
-AI 프롬프트에는 TBox, `boundedContexts`, ABox, operational ontology, reasoning card를 함께 전달한다. AI는 TBox를 해석 규칙으로 읽고, ABox를 현재 투자 상태의 사실 집합으로 읽어야 한다. Neo4j 저장 시 노드와 관계에는 `ontologyBox` 속성을 붙여 `TBox`와 `ABox`를 구분하고, ABox 노드/관계에는 가능하면 `boundedContext`도 붙인다.
+AI 프롬프트에는 TBox, `boundedContexts`, ABox, operational ontology, reasoning card를 함께 전달한다. AI는 TBox를 해석 규칙으로 읽고, ABox를 현재 투자 상태의 사실 집합으로 읽어야 한다. TypeDB 저장 시 엔티티와 관계에는 `ontologyBox` 속성을 붙여 `TBox`와 `ABox`를 구분하고, ABox 노드/관계에는 가능하면 `boundedContext`도 붙인다.
 
 데이터 수집 주기 자체도 세계관의 일부다. `marketSnapshot`, `watchlistSnapshot`, `externalSignals`는 ABox의 `DataPipeline` 노드이며, 각 파이프라인은 `CollectionSchedule`, `DataFreshness`, `CollectionPolicy`, `ReasoningCycle`에 연결된다. 즉 3분/5분/30분 같은 값은 TBox 클래스가 아니라, `CollectionSchedule` 클래스의 현재 실행 인스턴스다.
 
@@ -43,29 +43,29 @@ AI 프롬프트에는 TBox, `boundedContexts`, ABox, operational ontology, reaso
 - `CONTRADICTS`: 기존 점수, 추세, 수급, 집중도 사이에 충돌이 있다.
 - `USES_EVIDENCE_FROM`: 기존 점수 모델을 보조 근거로 사용한다.
 - `REQUESTS_OPINION_FROM`: AI 투자 의견 정보로 넘긴다.
-- `HAS_EVIDENCE`, `HAS_BELIEF`, `HAS_OPINION`: Neo4j 저장용 세부 관계.
+- `HAS_EVIDENCE`, `HAS_BELIEF`, `HAS_OPINION`: TypeDB/그래프 저장소 저장용 세부 관계.
 
 ## Runtime Flow
 
 1. Toss 계좌, 시장 데이터, 외부 API 데이터를 `Position`, `PortfolioSummary`, `externalSignals`로 정규화한다.
-2. `domain/ontology_relation_reasoning.py`가 종목별 ABox fact, 부족 데이터, fallback 관계 추론 결과를 만든다. 운영 판단은 가능하면 Neo4j RuleBox/InferenceBox 결과를 우선 사용한다.
+2. `domain/ontology_relation_reasoning.py`가 종목별 ABox fact, 부족 데이터, fallback 관계 추론 결과를 만든다. 운영 판단은 TypeDB RuleBox/InferenceBox 결과를 우선 사용한다.
 3. `DecisionItem.decision`, `exit_pressure`, `decision_basis`는 관계 규칙 결과에서 나온다. `decision_basis`는 `ontologyRelationRules`다.
 4. 기존 공식 기반 `profitTakePressure`, `lossCutPressure`, 매수/매도 점수는 보조 근거와 과거 비교용으로만 보관한다.
 5. `domain/ontology.py`가 TBox/ABox 그래프와 `OntologyOpinion`을 만든다. 이때 `Strategy`, `InvestmentThesis`, `Observation`, `Risk`, `Insight`, `NotificationDispatch`까지 모두 ABox 노드로 만든다.
 6. `DecisionItem.relation_rule_context`, `ai_prompt_context`, `ai_context`에 관계 규칙 결과와 프롬프트 입력 계약을 함께 붙인다.
 7. 실시간 모니터링은 알림 metadata에 `ontologyRelationContext`, `ontologyPromptContext`, `ontologyReviewContext`를 포함한다.
 8. 모델 리뷰 워커는 이 정보를 비동기 AI 프롬프트에 넣어 판단 변화 원인, 노이즈 가능성, 부족 데이터, 다음 규칙 개선안을 분석한다.
-9. `infrastructure/ontology_projection.py`가 스냅샷을 온톨로지 read model로 투영한다. 런타임은 `infrastructure/ontology_graph_store.py`의 generic factory만 사용하고, 이 factory가 `ONTOLOGY_GRAPH_STORE_MODE`에 따라 Neo4j, TypeDB, dual-write 어댑터를 인프라에서만 갈아 끼운다.
+9. `infrastructure/ontology_projection.py`가 스냅샷을 온톨로지 read model로 투영한다. 런타임은 `infrastructure/ontology_graph_store.py`의 generic factory만 사용하고, 이 factory가 `ONTOLOGY_GRAPH_STORE_MODE`에 따라 TypeDB, Neo4j, dual-write 어댑터를 인프라에서만 갈아 끼운다.
 
 알림은 투자 이벤트 타입별 폴링으로 직접 발송하지 않는다. 기존 `modelBuy`, `holdingTiming`, `externalDartDisclosure` 같은 이벤트는 `investmentInsight.metadata.sourceAlertEvents`의 근거 신호로 남고, 최종 발송은 `Insight -> DISPATCHED_BY -> NotificationDispatch(investmentInsight)` 관계가 담당한다.
 
 ## Projection Boundary
 
-온톨로지는 DDD aggregate의 저장소가 아니라 projection/read model이다. `Account`, `Monitoring`, `Research`, `Strategy`, `Notification` 같은 소유 컨텍스트가 사실과 이벤트를 만든 뒤, projection이 그 사실을 `TBox` 규칙에 맞는 `ABox` 노드와 관계로 변환한다. 이 경계 덕분에 계좌 저장, 알림 outbox, 모델 리뷰 큐의 트랜잭션은 각 context와 unit-of-work가 책임지고, Neo4j 저장이나 AI 프롬프트 생성 실패는 원본 업무 트랜잭션을 깨지 않는다.
+온톨로지는 DDD aggregate의 저장소가 아니라 projection/read model이다. `Account`, `Monitoring`, `Research`, `Strategy`, `Notification` 같은 소유 컨텍스트가 사실과 이벤트를 만든 뒤, projection이 그 사실을 `TBox` 규칙에 맞는 `ABox` 노드와 관계로 변환한다. 이 경계 덕분에 계좌 저장, 알림 outbox, 모델 리뷰 큐의 트랜잭션은 각 context와 unit-of-work가 책임지고, TypeDB 저장이나 AI 프롬프트 생성 실패는 원본 업무 트랜잭션을 깨지 않는다.
 
 Projection은 다음 용도로만 사용한다.
 
-- Neo4j 그래프 조회와 시각화.
+- TypeDB 그래프 조회와 시각화.
 - reasoning card, AI inference packet, prompt payload 같은 읽기 모델 생성.
 - 품질 샘플과 운영 콘솔용 진단 지표 생성.
 - bounded context 사이의 의미 관계를 설명하는 audit trail.
@@ -102,7 +102,7 @@ Projection은 다음 용도로만 사용한다.
 
 ## Ontology Lab
 
-1차 실험 환경은 운영 RuleBox와 Neo4j를 직접 바꾸지 않는 로컬 샌드박스다. 후보 규칙을 `candidateRules`로 저장하고, 최근 모니터 스냅샷에서 만든 ABox facts-only 그래프에 현재 RuleBox와 후보 RuleBox를 각각 실행해 파생 관계, 추론 trace, 품질 점수 변화를 비교한다.
+1차 실험 환경은 운영 RuleBox와 TypeDB를 직접 바꾸지 않는 로컬 샌드박스다. 후보 규칙을 `candidateRules`로 저장하고, 최근 모니터 스냅샷에서 만든 ABox facts-only 그래프에 현재 RuleBox와 후보 RuleBox를 각각 실행해 파생 관계, 추론 trace, 품질 점수 변화를 비교한다.
 
 CLI:
 
@@ -131,7 +131,7 @@ API:
 - `POST /api/ontology/experiments/{id}/activate`
 - `POST /api/ontology/experiments/{id}/pause`
 
-실험 결과의 `sandbox.mutatedOperationalRuleBox`와 `sandbox.mutatedNeo4j`는 항상 `false`여야 한다. 승격은 별도 검토 후 RuleBox 저장 흐름에서 수행한다. 런타임 실험 기록은 `data/ontology-lab.json`에 저장되며 git에 넣지 않는다.
+실험 결과의 `sandbox.mutatedOperationalRuleBox`와 그래프 저장소 변경 플래그는 항상 `false`여야 한다. 승격은 별도 검토 후 RuleBox 저장 흐름에서 수행한다. 런타임 실험 기록은 `data/ontology-lab.json`에 저장되며 git에 넣지 않는다.
 
 ## Runtime Settings
 
@@ -146,14 +146,14 @@ API:
 ## Graph Store Configuration
 
 ```bash
-ONTOLOGY_GRAPH_STORE_MODE=neo4j # neo4j | dual | typedb
-ONTOLOGY_NEO4J_ENABLED=1
+ONTOLOGY_GRAPH_STORE_MODE=typedb # typedb | dual | neo4j
+ONTOLOGY_TYPEDB_ENABLED=1
+ONTOLOGY_NEO4J_ENABLED=0
 NEO4J_URI=http://127.0.0.1:7474
 NEO4J_USER=neo4j
 NEO4J_PASSWORD=...
 NEO4J_DATABASE=neo4j
 NEO4J_TIMEOUT_SECONDS=30
-ONTOLOGY_TYPEDB_ENABLED=0
 TYPEDB_ADDRESS=127.0.0.1:1729
 TYPEDB_USER=admin
 TYPEDB_PASSWORD=password
@@ -162,16 +162,16 @@ TYPEDB_TLS_ENABLED=0
 TYPEDB_TIMEOUT_SECONDS=20
 ```
 
-HTTP URI는 Neo4j transactional endpoint로 전송한다. `bolt://` 또는 `neo4j://` URI를 쓰려면 런타임에 `neo4j` Python driver가 설치되어 있어야 한다. TypeDB를 쓰려면 런타임에 `typedb-driver` Python package와 TypeDB 서버가 필요하다. 저장 실패는 모니터링 사이클을 막지 않고 snapshot metadata에 결과만 남긴다.
+TypeDB를 쓰려면 런타임에 `typedb-driver` Python package와 TypeDB 서버가 필요하다. Neo4j 호환 모드는 HTTP transactional endpoint를 사용하며, `bolt://` 또는 `neo4j://` URI를 쓰려면 런타임에 `neo4j` Python driver가 설치되어 있어야 한다. 저장 실패는 모니터링 사이클을 막지 않고 snapshot metadata에 결과만 남긴다.
 
-`ONTOLOGY_GRAPH_STORE_MODE=dual` 또는 `typedb`이고 `ONTOLOGY_TYPEDB_ENABLED=1`이면 project service manager가 TypeDB 서버를 조건부 worker로 포함한다. 로컬 TypeDB 데이터는 `data/typedb-data/`에, TypeDB 자체 로그는 `data/typedb-logs/`에, service manager stdout/stderr는 `data/typedb.log`에 남긴다.
+`ONTOLOGY_GRAPH_STORE_MODE=typedb` 또는 `dual`이고 `ONTOLOGY_TYPEDB_ENABLED=1`이면 project service manager가 TypeDB 서버를 조건부 worker로 포함한다. 로컬 TypeDB 데이터는 `data/typedb-data/`에, TypeDB 자체 로그는 `data/typedb-logs/`에, service manager stdout/stderr는 `data/typedb.log`에 남긴다.
 
 저장소는 그래프 저장 전에 다음 스키마 준비를 best effort로 실행한다.
 
 - `OntologyEntity`, `OntologyEvidence`, `OntologyBelief`, `OntologyOpinion`, `OntologyReasoningCard`의 id 유니크 제약.
 - `OntologyEntity(ontologyBox, kind)`, `OntologyEntity(updatedAt)`, `OntologyOpinion(symbol)`, `OntologyReasoningCard(symbol)` 인덱스.
 
-Neo4j 버전 차이로 스키마 준비가 실패해도 그래프 저장은 계속 시도하며, 결과에는 `schemaPrepared`와 `schemaReason`을 남긴다.
+그래프 저장소 스키마 준비가 실패해도 원본 수집 흐름은 막지 않으며, 결과에는 `schemaPrepared`와 `schemaReason`을 남긴다.
 
 ## AI Prompt Contract
 
@@ -191,11 +191,11 @@ AI에는 다음 데이터를 함께 전달한다.
 
 - 새 TBox 클래스, 관계 타입, 바운디드 컨텍스트 규칙은 `domain/ontology_tbox.py`에 추가한다.
 - 새 ABox 인스턴스 생성은 `domain/ontology.py`에 추가하고, `tboxClass` 또는 `tboxClasses`를 지정해 `boundedContext`가 자동 부여되게 한다.
-- 새 런타임 판단은 먼저 Neo4j RuleBox/InferenceBox와 온톨로지 relation catalog에 추가한다. Python `domain/ontology_relation_reasoning.py`는 그래프 저장소가 비었을 때의 bootstrap fallback만 보완한다.
+- 새 런타임 판단은 먼저 TypeDB RuleBox/InferenceBox와 온톨로지 relation catalog에 추가한다. Python `domain/ontology_relation_reasoning.py`는 그래프 저장소가 비었을 때의 bootstrap fallback만 보완한다.
 - 새 AI 설명은 `aiPromptTemplates`와 `aiPromptPolicy`의 계약을 함께 갱신한다.
 - 외부 뉴스, 공시, 매크로 데이터는 먼저 `ExternalSignal` 또는 구체 클래스(`NewsEvent`, `DisclosureEvent`, `MacroIndicator`)의 ABox 관측값으로 만들고, 필요하면 `Evidence`, `Belief`, `Insight`로 파생한다.
 - 새 관계가 AI 의견을 바꿔야 하면 relation properties에 `polarity`, `opinionImpact`, `riskImpact`, `supportImpact`, `aiInfluenceLabel`을 명시한다.
 - 외부 공급자 연동을 새로 추가하면 `domain/external_signal_quality.py`의 `SOURCE_KEYS`와 품질 계산도 함께 갱신한다.
 - AI 의견 품질 지표를 바꾸면 `domain/ontology_quality.py`와 `ontology_ai_opinion_samples` 소비 화면/문서를 같이 갱신한다.
 - 기존 공식 점수를 다시 최종 판단 주체로 올리지 않는다. 공식은 보조 근거로만 둔다.
-- Neo4j 저장 실패가 실시간 알림, snapshot 저장, notification outbox를 막으면 안 된다.
+- TypeDB 저장 실패가 실시간 알림, snapshot 저장, notification outbox를 막으면 안 된다.

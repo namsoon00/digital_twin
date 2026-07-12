@@ -2097,6 +2097,8 @@ class PythonServiceTests(unittest.TestCase):
         )
 
         class FakeRepository:
+            store_key = "typedb"
+
             def __init__(self):
                 self.graphs = []
 
@@ -2106,7 +2108,7 @@ class PythonServiceTests(unittest.TestCase):
 
             def active_tbox_metadata(self):
                 return {
-                    "source": "neo4j",
+                    "source": "typedb",
                     "version": "stored-tbox-test",
                     "fingerprint": "stored-fingerprint",
                     "entityCount": 10,
@@ -2135,8 +2137,9 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(stock.properties["isCurrent"])
         self.assertIn("aboxValidation", result)
         self.assertEqual("valid", result["aboxValidation"]["status"])
-        self.assertEqual("sample-1", snapshot.metadata["ontology"]["neo4j"]["qualitySampleId"])
-        self.assertEqual(91.5, snapshot.metadata["ontology"]["neo4j"]["qualityScore"])
+        self.assertEqual("typedb", snapshot.metadata["ontology"]["activeGraphStore"])
+        self.assertEqual("sample-1", snapshot.metadata["ontology"]["typedb"]["qualitySampleId"])
+        self.assertEqual(91.5, snapshot.metadata["ontology"]["typedb"]["qualityScore"])
 
     def test_ontology_projection_recorder_runs_neo4j_rulebox_and_reads_inferencebox(self):
         position = normalize_position({
@@ -2245,7 +2248,7 @@ class PythonServiceTests(unittest.TestCase):
 
         persisted = repository.graphs[0]
         self.assertTrue(result["saved"])
-        self.assertEqual("abox-facts-only-neo4j-rulebox", result["projectionMode"])
+        self.assertEqual("abox-facts-only-graph-store-rulebox", result["projectionMode"])
         self.assertEqual({"clearInference": True}, repository.executions[0])
         self.assertEqual(["005930"], repository.queried_symbols[0])
         self.assertTrue(result["inferenceBox"]["neo4jNativeReasoningUsed"])
@@ -3158,7 +3161,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual({}, decision.active_investment_opinion)
         self.assertEqual("ontologyInferenceRequired", decision.decision_basis)
         self.assertEqual("ontology-inference-required", decision.ai_context["role"])
-        self.assertIn("neo4jInferenceBox", [item.get("key") for item in decision.ai_prompt_context.get("missingData", [])])
+        self.assertIn("graphStoreInferenceBox", [item.get("key") for item in decision.ai_prompt_context.get("missingData", [])])
 
     def test_execution_plan_is_abox_from_relation_rules(self):
         position = Position(
@@ -4459,7 +4462,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(any("2/2회 연속 감지" in line for line in inference_event.lines))
         self.assertTrue(inference_event.metadata["blockedInvestmentJudgment"])
         self.assertEqual("missingProjection", inference_event.metadata["missingInferenceReasonCode"])
-        self.assertEqual("neo4jInferenceBox", inference_event.metadata["ontologyInference"]["source"])
+        self.assertEqual("graphStoreInferenceBox", inference_event.metadata["ontologyInference"]["source"])
         self.assertTrue(inference_event.metadata["ontologyInference"]["missing"])
         self.assertTrue(inference_event.metadata["ontologyInference"]["confirmation"]["confirmed"])
         self.assertFalse(any(event.rule == "investmentInsight" for event in events))
@@ -5672,7 +5675,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("investment-analysis-read-model-v1", payload["investmentAnalysis"]["contract"])
         self.assertEqual("blocked", payload["investmentAnalysis"]["board"]["state"])
         self.assertGreater(payload["investmentAnalysis"]["graphGate"]["blockedCount"], 0)
-        self.assertEqual("neo4jInferenceBox", payload["investmentAnalysis"]["graphGate"]["requiredSource"])
+        self.assertEqual("graphStoreInferenceBox", payload["investmentAnalysis"]["graphGate"]["requiredSource"])
         self.assertTrue(payload["investmentAnalysis"]["actionQueue"])
         self.assertTrue(any(item["graph"]["blocked"] for item in payload["investmentAnalysis"]["actionQueue"]))
         self.assertGreater(payload["investmentAnalysis"]["dataLineage"]["mockCount"], 0)
@@ -5681,7 +5684,7 @@ class PythonServiceTests(unittest.TestCase):
         ontology_strategy = payload["tossDecision"]["ontologyStrategy"]
         abox_kinds = {item.get("kind") for item in ontology_strategy["aboxEntities"]}
         abox_relation_types = {item.get("type") for item in ontology_strategy["aboxRelations"]}
-        self.assertEqual("abox-facts-only-neo4j-rulebox", ontology_strategy["worldview"]["runtimeProjectionMode"])
+        self.assertEqual("abox-facts-only-graph-store-rulebox", ontology_strategy["worldview"]["runtimeProjectionMode"])
         self.assertTrue(ontology_strategy["tboxEntities"])
         self.assertTrue(ontology_strategy["tboxRelations"])
         self.assertTrue(ontology_strategy["aboxEntities"])
@@ -10641,6 +10644,31 @@ class PythonServiceTests(unittest.TestCase):
         )
         self.assertEqual(1, event_bus.published[-1].payload["snapshotCount"])
         self.assertEqual(len(events), event_bus.published[-1].payload["alertCount"])
+
+    def test_application_runner_records_ontology_projection_during_dry_run(self):
+        account = AccountConfig("main", "메인", "toss", "https://example.test", "", "", "", ["AAPL"])
+        recorded = []
+
+        def snapshot_builder(_account):
+            position = normalize_position({"symbol": "AAPL", "name": "Apple", "marketValue": 1000, "profitLossRate": 15, "sellableQuantity": 1})
+            portfolio = portfolio_summary([position])
+            return AccountSnapshot("main", "메인", "toss", "live", "ok", utc_now_iso(), portfolio, [position], decisions_for_positions([position], portfolio))
+
+        class FakeProjectionRecorder:
+            def record_snapshot(self, snapshot):
+                recorded.append(snapshot.account_id)
+                snapshot.metadata.setdefault("ontology", {})["projection"] = {"saved": True, "status": "ok", "graphStore": "typedb"}
+
+        ApplicationMonitorRunner(
+            [account],
+            store=MonitorStore(),
+            monitor=RealtimeMonitor(),
+            snapshot_builder=snapshot_builder,
+            event_sender=lambda events, dry_run=False, accounts=None: SimpleNamespace(delivered=False),
+            ontology_projection_recorder=FakeProjectionRecorder(),
+        ).run_once(dry_run=True, force=True)
+
+        self.assertEqual(["main"], recorded)
 
     def test_event_bus_dispatches_named_and_wildcard_handlers(self):
         registry = AccountRegistry()

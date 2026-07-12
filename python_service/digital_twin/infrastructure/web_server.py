@@ -1870,22 +1870,22 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
             if self.command == "GET":
                 return self.send_payload(200, ontology_rulebox_payload())
             if self.command in {"POST", "PUT"}:
-                if not self.ensure_writable("공유 모드에서는 Neo4j RuleBox를 변경할 수 없습니다."):
+                if not self.ensure_writable("공유 모드에서는 TypeDB RuleBox를 변경할 수 없습니다."):
                     return
                 return self.send_payload(200, save_ontology_rulebox_payload(self.read_json_body()))
 
         if path == "/api/ontology/rulebox/run" and self.command == "POST":
-            if not self.ensure_writable("공유 모드에서는 Neo4j RuleBox 추론을 실행할 수 없습니다."):
+            if not self.ensure_writable("공유 모드에서는 TypeDB RuleBox 추론을 실행할 수 없습니다."):
                 return
             return self.send_payload(200, run_ontology_rulebox_payload(self.read_json_body()))
 
         if path == "/api/ontology/rulebox/candidates" and self.command == "POST":
-            if not self.ensure_writable("공유 모드에서는 Neo4j RuleBox 후보를 생성할 수 없습니다."):
+            if not self.ensure_writable("공유 모드에서는 TypeDB RuleBox 후보를 생성할 수 없습니다."):
                 return
             return self.send_payload(200, propose_ontology_rule_candidates_payload(self.read_json_body()))
 
         if path == "/api/ontology/seed" and self.command == "POST":
-            if not self.ensure_writable("공유 모드에서는 Neo4j 온톨로지 시드를 실행할 수 없습니다."):
+            if not self.ensure_writable("공유 모드에서는 온톨로지 그래프 시드를 실행할 수 없습니다."):
                 return
             return self.send_payload(200, seed_ontology_payload(self.read_json_body()))
 

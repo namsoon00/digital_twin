@@ -162,8 +162,10 @@ class MonitorRunner:
             self.load_snapshot_history(snapshot.account_id)
         )
         snapshot.metadata.setdefault("ontology", {})["previousStateAvailable"] = bool(previous)
-        if not dry_run:
-            self.record_ontology_projection(snapshot)
+        # Dry-run still needs graph inference to simulate the same investment
+        # judgement path as live monitoring; delivery and monitor persistence
+        # remain gated by dry_run below.
+        self.record_ontology_projection(snapshot)
         events = self.monitor.events_for_snapshot(snapshot, previous)
         if allowed_symbols:
             events = self.filter_events_by_symbol(events, allowed_symbols)

@@ -23,7 +23,8 @@ DISPLAY_KEY_LABELS = {
     "lossGuardWeakEvidencePenalty": "확인 약할 때 감점",
     "lossGuardConfirmationScore": "손실 관리 확인 점수",
     "lossGuardConfirmationCount": "손실 관리 확인 신호 수",
-    "ontologyNeo4jEnabled": "관계 분석 Neo4j 저장",
+    "ontologyNeo4jEnabled": "Neo4j 미러 저장",
+    "ontologyTypeDbEnabled": "관계 분석 TypeDB 저장",
 }
 
 BEGINNER_REPLACEMENTS = [
@@ -365,7 +366,8 @@ def admin_preview_config() -> Dict[str, object]:
                     {"key": "dartDisclosureAiUseCodex", "label": "공시 해석 Codex 사용", "type": "toggle", "default": "1"},
                     {"key": "dartDisclosureAiCommand", "label": "공시 해석 명령", "type": "text"},
                     {"key": "dartDisclosureAiTimeoutSeconds", "label": "공시 해석 타임아웃", "type": "number", "default": "90", "unit": "seconds"},
-                    {"key": "ontologyNeo4jEnabled", "label": "관계 분석 Neo4j 저장", "type": "toggle", "default": "1"},
+                    {"key": "ontologyTypeDbEnabled", "label": "관계 분석 TypeDB 저장", "type": "toggle", "default": "1"},
+                    {"key": "ontologyNeo4jEnabled", "label": "Neo4j 미러 저장", "type": "toggle", "default": "0"},
                     {"key": "neo4jUri", "label": "Neo4j URI", "type": "url"},
                     {"key": "neo4jUser", "label": "Neo4j 사용자", "type": "text", "default": "neo4j"},
                     {"key": "neo4jPassword", "label": "Neo4j Password", "type": "secret", "masked": True},

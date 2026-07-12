@@ -150,7 +150,7 @@ def build_rule_change_candidate_prompt(context: Dict[str, object]) -> str:
     }
     return "\n".join([
         "너는 자동매매 시스템이 아니라 투자 온톨로지 RuleBox 설계 리뷰어다.",
-        "목표: 현재 Neo4j RuleBox, InferenceBox, 최근 데이터 변경, 알림 근거를 보고 새로운 RuleChangeCandidate만 제안한다.",
+        "목표: 현재 TypeDB RuleBox, InferenceBox, 최근 데이터 변경, 알림 근거를 보고 새로운 RuleChangeCandidate만 제안한다.",
         "제약:",
         "- 매수/매도 지시를 만들지 말고 관계 후보만 제안한다.",
         "- proposedRule.enabled는 반드시 false다.",

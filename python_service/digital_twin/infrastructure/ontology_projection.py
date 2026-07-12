@@ -213,8 +213,8 @@ class PortfolioOntologyProjectionRecorder:
             return primary
         key = str(getattr(self.repository, "store_key", "") or "").strip()
         if key == "dual" and getattr(self.repository, "primary", None):
-            return str(getattr(self.repository.primary, "store_key", "neo4j") or "neo4j")
-        return key or "neo4j"
+            return str(getattr(self.repository.primary, "store_key", "graph-store") or "graph-store")
+        return key or "graph-store"
 
     def store_projection_result(self, snapshot: AccountSnapshot, result: Dict[str, object]) -> None:
         ontology = snapshot.metadata.setdefault("ontology", {})

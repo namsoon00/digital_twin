@@ -386,7 +386,7 @@ def toss_decision_for_holding(item: Dict[str, object], portfolio: Dict[str, obje
     )
     relation_context = inference_required_relation_context(
         decision_position,
-        "Flow Lens에서는 Neo4j InferenceBox 결과가 없으면 매수·매도 판단을 만들지 않습니다.",
+        "Flow Lens에서는 TypeDB InferenceBox 결과가 없으면 매수·매도 판단을 만들지 않습니다.",
     )
     relation_decision = relation_context.get("decision") if isinstance(relation_context, dict) else {}
     if not isinstance(relation_decision, dict):
@@ -689,7 +689,7 @@ def build_toss_decision(
             "투자전략 점수는 온톨로지 관계 규칙과 성립한 관계 강도만 사용합니다.",
             "수익률, 평가손익, 수급, 추세, 섹터 집중도, 뉴스·공시 리서치를 AI 의견 정보에 함께 넣습니다.",
             "관심 종목은 보유가 아니므로 매도 판단 대신 시세 기준 대기 상태로 둡니다.",
-            "Neo4j 설정이 있으면 같은 관계 그래프를 저장합니다.",
+            "TypeDB 설정이 있으면 같은 관계 그래프를 저장합니다.",
         ],
         "ontologyStrategy": ontology_strategy,
         "investmentAnalysis": {

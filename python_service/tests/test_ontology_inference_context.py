@@ -128,6 +128,95 @@ class OntologyInferenceContextTests(unittest.TestCase):
         self.assertTrue(decisions[0].relation_rule_context["blocked"])
         self.assertFalse(decisions[0].relation_rule_context["fallbackUsed"])
 
+    def test_typedb_inferencebox_context_is_valid_graph_decision_source(self):
+        position = Position(
+            symbol="005930",
+            name="삼성전자",
+            market="KR",
+            currency="KRW",
+            quantity=10,
+            sellable_quantity=10,
+            average_price=80000,
+            current_price=70000,
+            market_value=700000,
+            profit_loss_rate=-12.5,
+            ma20=76000,
+            ma60=72000,
+            ma20_distance=-7.9,
+            ma60_distance=-2.8,
+            sector="반도체",
+        )
+        portfolio = portfolio_summary([position], fx_rates={"KRW": 1})
+        snapshot = AccountSnapshot(
+            "acct",
+            "계좌",
+            "test",
+            "live",
+            "ok",
+            "2026-07-10T00:00:00Z",
+            portfolio,
+            positions=[position],
+            metadata={
+                "ontology": {
+                    "activeGraphStore": "typedb",
+                    "typedb": {
+                        "graphStore": "typedb",
+                        "inferenceBox": {
+                            "status": "ok",
+                            "source": "typedbInferenceBox",
+                            "graphStore": "typedb",
+                            "typedbBootstrapReasoningUsed": True,
+                            "entityCount": 2,
+                            "relationCount": 1,
+                            "traceCount": 1,
+                            "relations": [
+                                {
+                                    "type": "HAS_INFERRED_RISK",
+                                    "source": "stock:005930",
+                                    "sourceLabel": "삼성전자",
+                                    "target": "risk:005930:loss-guard-breakdown",
+                                    "targetLabel": "삼성전자 손실 방어 리스크",
+                                    "ruleId": "graph.loss_guard.breakdown.v1",
+                                    "polarity": "risk",
+                                    "riskImpact": 13,
+                                    "weight": 0.86,
+                                    "aiInfluenceLabel": "손실 방어 추론",
+                                    "decisionStage": "LOSS_REDUCE",
+                                    "stagePriority": 90,
+                                }
+                            ],
+                            "traces": [
+                                {
+                                    "id": "inference-trace:005930:graph.loss_guard.breakdown.v1",
+                                    "label": "삼성전자 · 손실 보유 + 기준선 이탈 -> 손실 방어 추론",
+                                    "symbol": "005930",
+                                    "ruleId": "graph.loss_guard.breakdown.v1",
+                                    "confidence": 0.86,
+                                    "matchedConditionIds": ["holding-source", "holding-loss", "ma-break"],
+                                }
+                            ],
+                        },
+                    },
+                }
+            },
+        )
+
+        contexts = relation_contexts_from_snapshot(snapshot)
+        self.assertIn("005930", contexts)
+        self.assertEqual("typedbInferenceBox", contexts["005930"]["source"])
+        self.assertEqual("typedbInferenceBox", contexts["005930"]["decision"]["basis"])
+        self.assertEqual("typedbInferenceRelation", contexts["005930"]["decision"]["stagePolicySource"])
+
+        decisions = decisions_for_positions(
+            [position],
+            portfolio,
+            relation_contexts_by_symbol=contexts,
+        )
+
+        self.assertEqual(1, len(decisions))
+        self.assertEqual("typedbInferenceBox", decisions[0].decision_basis)
+        self.assertTrue(decisions[0].relation_rule_context["graphStoreUsed"])
+
     def test_neo4j_entry_wait_inference_maps_to_entry_wait_stage(self):
         watch = Position(
             symbol="NVDA",

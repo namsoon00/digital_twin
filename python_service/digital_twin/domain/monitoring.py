@@ -530,6 +530,8 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
             "traceCount": trace_count,
             "nativeRelationCount": int(number(inference_status.get("nativeRelationCount")) or 0),
             "neo4jNativeReasoningUsed": bool(inference_status.get("neo4jNativeReasoningUsed")),
+            "nativeTypeDbReasoningUsed": bool(inference_status.get("nativeTypeDbReasoningUsed")),
+            "typedbBootstrapReasoningUsed": bool(inference_status.get("typedbBootstrapReasoningUsed")),
             "projectionMode": str(inference_status.get("projectionMode") or ""),
             "ruleboxExecutionStatus": str(inference_status.get("ruleboxExecutionStatus") or ""),
             "ruleboxExecutionReason": str(inference_status.get("ruleboxExecutionReason") or ""),
@@ -613,12 +615,13 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
             return []
 
         reason_code = str(state.get("reasonCode") or "missingInferenceBox")
-        reason = str(state.get("reason") or "Neo4j InferenceBox 관계 추론을 사용할 수 없습니다")
+        reason = str(state.get("reason") or "그래프 저장소 InferenceBox 관계 추론을 사용할 수 없습니다")
         inference_status = dict(state.get("inferenceStatus") or {})
         relation_count = int(number(state.get("relationCount")) or 0)
         trace_count = int(number(state.get("traceCount")) or 0)
         entity_count = int(number(state.get("entityCount")) or 0)
         native_used = bool(state.get("neo4jNativeReasoningUsed"))
+        typedb_used = bool(state.get("nativeTypeDbReasoningUsed") or state.get("typedbBootstrapReasoningUsed"))
         status_text = str(state.get("status") or "missing").strip() or "missing"
         lines = [
             "상태 온톨로지 추론 결과 없음",
@@ -627,16 +630,16 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
             "추론 상태 status=" + status_text + ", relations=" + str(relation_count) + ", traces=" + str(trace_count),
             "확인 상태 " + str(int(confirmation.get("currentCycle") or 1)) + "/" + str(int(confirmation.get("requiredCycles") or 1)) + "회 연속 감지",
             "보유 " + str(int(state.get("positionCount") or 0)) + "개",
-            "확인 행동 Neo4j 연결, RuleBox 저장 상태, 온톨로지 추론 워커 점검",
+            "확인 행동 TypeDB 연결, RuleBox 저장 상태, 온톨로지 추론 워커 점검",
         ]
         if status_text.lower() in {"ok", "partial"} and relation_count == 0 and trace_count == 0:
-            lines.insert(4, "조회 결과 Neo4j 조회는 성공했지만 InferenceBox 관계와 trace가 0개입니다")
+            lines.insert(4, "조회 결과 그래프 저장소 조회는 성공했지만 InferenceBox 관계와 trace가 0개입니다")
         if inference_status.get("validationIssueSummary"):
             lines.insert(3, "검증 오류 " + str(inference_status.get("validationIssueSummary")))
         inference_metadata = ontology_inference_event_metadata(snapshot)
         if not inference_metadata:
             inference_metadata = {
-                "source": "neo4jInferenceBox",
+                "source": "graphStoreInferenceBox",
                 "status": status_text,
                 "projectionMode": str(state.get("projectionMode") or ""),
                 "ruleboxExecutionStatus": str(state.get("ruleboxExecutionStatus") or ""),
@@ -646,6 +649,9 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
                 "clearInferenceStatus": str(state.get("clearInferenceStatus") or ""),
                 "clearInferenceReason": str(state.get("clearInferenceReason") or ""),
                 "neo4jNativeReasoningUsed": native_used,
+                "nativeTypeDbReasoningUsed": bool(state.get("nativeTypeDbReasoningUsed")),
+                "typedbBootstrapReasoningUsed": bool(state.get("typedbBootstrapReasoningUsed")),
+                "graphStoreReasoningUsed": native_used or typedb_used,
                 "entityCount": entity_count,
                 "relationCount": relation_count,
                 "traceCount": trace_count,
@@ -672,7 +678,7 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
             "온톨로지 추론 상태",
             lines,
             criteria=self.criteria(
-                "실계좌 데이터와 보유 종목이 있는데 Neo4j InferenceBox 관계 추론을 사용할 수 없을 때",
+                "실계좌 데이터와 보유 종목이 있는데 그래프 저장소 InferenceBox 관계 추론을 사용할 수 없을 때",
                 reason + ", 보유 " + str(int(state.get("positionCount") or 0)) + "개, relationCount=" + str(relation_count) + ", traceCount=" + str(trace_count),
             ),
             metadata={
@@ -693,7 +699,7 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
     def ontology_inference_missing_reason_from_metadata(self, metadata: Dict[str, object]):
         projection = ontology_projection_from_metadata(metadata)
         if not isinstance(projection, dict) or not projection:
-            return "missingProjection", "Neo4j 온톨로지 투영 결과가 없습니다", {
+            return "missingProjection", "그래프 저장소 온톨로지 투영 결과가 없습니다", {
                 "status": "missing",
                 "projectionMode": "",
                 "ruleboxExecutionStatus": "",
@@ -712,6 +718,8 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
             "clearInferenceStatus": str(clear_result.get("status") or ""),
             "clearInferenceReason": str(clear_result.get("reason") or ""),
             "neo4jNativeReasoningUsed": bool((inference or {}).get("neo4jNativeReasoningUsed")) if isinstance(inference, dict) else False,
+            "nativeTypeDbReasoningUsed": bool((inference or {}).get("nativeTypeDbReasoningUsed")) if isinstance(inference, dict) else False,
+            "typedbBootstrapReasoningUsed": bool((inference or {}).get("typedbBootstrapReasoningUsed")) if isinstance(inference, dict) else False,
             "entityCount": int(number((inference or {}).get("entityCount")) or 0) if isinstance(inference, dict) else 0,
             "relationCount": int(number((inference or {}).get("relationCount")) or 0) if isinstance(inference, dict) else 0,
             "traceCount": int(number((inference or {}).get("traceCount")) or 0) if isinstance(inference, dict) else 0,
@@ -733,7 +741,7 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
                 reason += ": " + summary
             return "invalidABox", reason, common
         if not inference:
-            return "missingInferenceBox", "Neo4j InferenceBox 응답이 없습니다", common
+            return "missingInferenceBox", "그래프 저장소 InferenceBox 응답이 없습니다", common
         if common["ruleboxExecutionStatus"] and common["ruleboxExecutionStatus"].lower() not in {"ok", "partial"}:
             reason = "RuleBox 실행 실패"
             if common["ruleboxExecutionReason"]:
@@ -743,8 +751,13 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
             return "inferenceBoxStatusBlocked", "InferenceBox 상태가 " + status + "입니다", common
         relations = inference.get("relations") if isinstance(inference.get("relations"), list) else []
         traces = inference.get("traces") if isinstance(inference.get("traces"), list) else []
-        if not bool(inference.get("neo4jNativeReasoningUsed")) and not relations:
-            return "nativeReasoningMissing", "Neo4j 네이티브 추론 관계가 아직 없습니다", common
+        graph_reasoning_used = (
+            bool(inference.get("neo4jNativeReasoningUsed"))
+            or bool(inference.get("nativeTypeDbReasoningUsed"))
+            or bool(inference.get("typedbBootstrapReasoningUsed"))
+        )
+        if not graph_reasoning_used and not relations and not traces:
+            return "nativeReasoningMissing", "그래프 저장소 추론 관계가 아직 없습니다", common
         if not relations and not traces:
             return "emptyInferenceBox", "InferenceBox 관계와 근거가 0개입니다", common
         return "positionInferenceMissing", "보유 종목과 연결된 InferenceBox 관계가 없습니다", common

@@ -28,8 +28,8 @@ PARITY_COUNT_KEYS = [
 
 def normalized_graph_store_mode(settings: Dict[str, str] = None) -> str:
     settings = settings or {}
-    mode = str(settings.get("ontologyGraphStoreMode") or "neo4j").strip().lower()
-    return mode if mode in GRAPH_STORE_MODES else "neo4j"
+    mode = str(settings.get("ontologyGraphStoreMode") or "typedb").strip().lower()
+    return mode if mode in GRAPH_STORE_MODES else "typedb"
 
 
 def ontology_repository_from_settings(settings: Dict[str, str] = None):

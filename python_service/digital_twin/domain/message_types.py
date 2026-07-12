@@ -209,7 +209,7 @@ TRIGGER_SUMMARIES = {
     WATCHLIST_QUOTE_PENDING: "관심 종목 시세를 아직 받지 못했을 때 보냅니다.",
     WATCHLIST_ONTOLOGY_SIGNAL: "관심 종목의 온톨로지 관계 규칙에서 진입, 회복, 리스크 신호가 생성될 때 보냅니다.",
     HOLDING_TIMING: "보유 종목의 매수·매도 점검 데이터가 기준에 걸릴 때 보냅니다.",
-    ONTOLOGY_INFERENCE_MISSING: "실계좌 데이터는 있지만 Neo4j InferenceBox 추론 결과가 없어 매수·매도 판단을 만들지 못할 때 보냅니다.",
+    ONTOLOGY_INFERENCE_MISSING: "실계좌 데이터는 있지만 그래프 저장소 InferenceBox 추론 결과가 없어 매수·매도 판단을 만들지 못할 때 보냅니다.",
     MONITOR_HEARTBEAT: "실시간 모니터링 워커가 정상 작동 중인지 확인할 때 보냅니다.",
     MONITOR_CONNECTION: "Toss 연결 상태가 바뀔 때 보냅니다.",
     MONITOR_POSITION_CHANGE: "새 보유, 제외, 수량 변경이 감지될 때 보냅니다.",

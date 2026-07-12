@@ -13,6 +13,13 @@ from .portfolio import DecisionItem, PortfolioSummary, Position, expects_kr_micr
 
 ONTOLOGY_INFERENCE_REQUIRED_BASIS = "ontologyInferenceRequired"
 NEO4J_INFERENCE_BASIS = "neo4jInferenceBox"
+TYPEDB_INFERENCE_BASIS = "typedbInferenceBox"
+GRAPH_STORE_INFERENCE_BASIS = "graphStoreInferenceBox"
+GRAPH_INFERENCE_BASES = {
+    NEO4J_INFERENCE_BASIS,
+    TYPEDB_INFERENCE_BASIS,
+    GRAPH_STORE_INFERENCE_BASIS,
+}
 
 DERIVED_FORMULA_DEPENDENCIES = {
     "holdingSignalScore": [
@@ -485,8 +492,8 @@ def is_graph_inference_context(relation_context: Dict[str, object]) -> bool:
         return False
     decision = relation_context.get("decision") if isinstance(relation_context.get("decision"), dict) else {}
     return (
-        str(relation_context.get("source") or "") == NEO4J_INFERENCE_BASIS
-        and str(decision.get("basis") or "") == NEO4J_INFERENCE_BASIS
+        str(relation_context.get("source") or "") in GRAPH_INFERENCE_BASES
+        and str(decision.get("basis") or "") in GRAPH_INFERENCE_BASES
         and bool(relation_context.get("graphStoreUsed"))
         and not bool(relation_context.get("fallbackUsed"))
     )
@@ -499,7 +506,7 @@ def inference_required_relation_context(position: Position, reason: str = "") ->
         "graphStoreUsed": False,
         "fallbackUsed": False,
         "blocked": True,
-        "reason": reason or "Neo4j InferenceBox 관계가 없어 투자 판단을 만들지 않았습니다.",
+        "reason": reason or "그래프 저장소 InferenceBox 관계가 없어 투자 판단을 만들지 않았습니다.",
         "subject": {
             "symbol": position.symbol,
             "name": position.name,
@@ -520,7 +527,7 @@ def inference_required_relation_context(position: Position, reason: str = "") ->
         "matchedRules": [],
         "activeRules": [],
         "referenceRules": [],
-        "missingData": [{"key": "neo4jInferenceBox", "label": "온톨로지 추론 결과", "effect": "추론 결과가 없으면 매수·매도 판단을 만들지 않습니다."}],
+        "missingData": [{"key": GRAPH_STORE_INFERENCE_BASIS, "label": "온톨로지 추론 결과", "effect": "추론 결과가 없으면 매수·매도 판단을 만들지 않습니다."}],
         "dominantSignals": [],
         "signalStrength": 0.0,
         "signalStrengthLabel": "없음",
@@ -542,14 +549,14 @@ def inference_required_relation_context(position: Position, reason: str = "") ->
             "primaryAction": "WAIT_FOR_ONTOLOGY_INFERENCE",
             "primaryActionLabel": "온톨로지 추론 완료 전 투자 판단 보류",
             "blockedActions": ["InferenceBox 없는 매수 판단", "InferenceBox 없는 매도 판단", "Python 관계 규칙 fallback"],
-            "nextChecks": ["Neo4j RuleBox 저장 상태 확인", "InferenceBox 관계 생성 여부 확인", "온톨로지 품질 점수 확인"],
+            "nextChecks": ["TypeDB RuleBox 저장 상태 확인", "InferenceBox 관계 생성 여부 확인", "온톨로지 품질 점수 확인"],
             "missingDataImpact": ["온톨로지 추론 결과가 없어 판단 강도를 0으로 고정했습니다."],
             "sourceFacts": {},
         },
         "promptContext": {
             "promptVersion": ONTOLOGY_PROMPT_VERSION,
             "promptId": "ontologyInferenceRequired",
-            "missingData": [{"key": "neo4jInferenceBox", "label": "온톨로지 추론 결과"}],
+            "missingData": [{"key": GRAPH_STORE_INFERENCE_BASIS, "label": "온톨로지 추론 결과"}],
             "guardrails": ["InferenceBox 없이 매수·매도 판단을 만들지 않습니다."],
         },
     }
@@ -612,7 +619,7 @@ def decision_for_position(
             position,
             ontology_opinion=ontology_opinion,
             ontology_worldview=ontology_worldview,
-            reason="Neo4j InferenceBox 결과가 없어 Python 관계 규칙 fallback을 차단했습니다.",
+            reason="그래프 저장소 InferenceBox 결과가 없어 Python 관계 규칙 fallback을 차단했습니다.",
         )
     relation_decision = relation_context.get("decision") if isinstance(relation_context, dict) else {}
     if not isinstance(relation_decision, dict):

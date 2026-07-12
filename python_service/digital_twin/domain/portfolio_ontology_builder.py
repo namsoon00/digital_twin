@@ -482,8 +482,8 @@ def build_portfolio_ontology(
         graph.prompt = build_investment_opinion_prompt(graph)
         graph.worldview = {
             "model": "ontology-abox-facts",
-            "runtimeProjectionMode": "abox-facts-only-neo4j-rulebox",
-            "description": "Runtime ABox facts are projected for Neo4j RuleBox reasoning; opinions, insights, and inference are produced after graph-store reasoning.",
+            "runtimeProjectionMode": "abox-facts-only-graph-store-rulebox",
+            "description": "Runtime ABox facts are projected for graph-store RuleBox reasoning; opinions, insights, and inference are produced after graph-store reasoning.",
             "positionCount": len([item for item in observed_positions if is_holding_position(item)]),
             "watchlistCount": len([item for item in observed_positions if is_watchlist_position(item)]),
             "aboxLifecycle": dict(lifecycle_metadata),

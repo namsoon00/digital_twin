@@ -27,8 +27,8 @@ def ontology_projection_from_metadata(metadata: Dict[str, object]) -> Dict[str, 
         candidates.append(ontology.get(preferred))
     candidates.extend([
         ontology.get("projection"),
-        ontology.get("neo4j"),
         ontology.get("typedb"),
+        ontology.get("neo4j"),
     ])
     for candidate in candidates:
         if isinstance(candidate, dict) and candidate:
@@ -94,7 +94,13 @@ def relation_context_from_inferencebox(
         return {}
     if str(inferencebox.get("status") or "").lower() not in {"ok", "partial", ""}:
         return {}
-    if not bool(inferencebox.get("neo4jNativeReasoningUsed")) and not inferencebox.get("relations"):
+    if (
+        not bool(inferencebox.get("neo4jNativeReasoningUsed"))
+        and not bool(inferencebox.get("nativeTypeDbReasoningUsed"))
+        and not bool(inferencebox.get("typedbBootstrapReasoningUsed"))
+        and not inferencebox.get("relations")
+        and not inferencebox.get("traces")
+    ):
         return {}
     graph_store = str(inferencebox.get("graphStore") or "").strip() or "graph-store"
     source_name = inferencebox_source_name(inferencebox)
@@ -149,6 +155,15 @@ def relation_context_from_inferencebox(
         "promptContext": prompt_context,
         "graphStoreInference": {
             "source": source_name,
+            "graphStore": graph_store,
+            "relations": relations,
+            "traces": traces,
+            "entityCount": inferencebox.get("entityCount"),
+            "relationCount": inferencebox.get("relationCount"),
+            "traceCount": inferencebox.get("traceCount"),
+            "nativeRelationCount": inferencebox.get("nativeRelationCount"),
+        },
+        "typedbInference": {
             "graphStore": graph_store,
             "relations": relations,
             "traces": traces,

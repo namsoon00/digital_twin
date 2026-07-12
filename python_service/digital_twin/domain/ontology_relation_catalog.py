@@ -1,6 +1,6 @@
 """Bootstrap ontology relation catalog.
 
-Use Neo4j RuleBox/InferenceBox for new runtime reasoning behavior. The defaults
+Use active graph-store RuleBox/InferenceBox for new runtime reasoning behavior. The defaults
 here seed local fallback reasoning and ontology read models when no graph-store
 rules have been saved yet.
 """

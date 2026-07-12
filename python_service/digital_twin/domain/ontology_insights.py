@@ -514,7 +514,7 @@ def build_investment_insight_events(snapshot: AccountSnapshot, signal_events: It
                 "dispatchMode": "insight-driven-only",
                 "sourceSignalRole": "graph-backed-evidence",
                 "graphDerived": True,
-                "graphSource": "neo4jInferenceBox",
+                "graphSource": "graphStoreInferenceBox",
                 "referenceDataLines": reference_lines,
             },
             "sourceSignalTypes": source_types,

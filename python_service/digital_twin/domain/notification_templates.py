@@ -616,7 +616,7 @@ MODEL_DATA_HINTS = {
     "watchlistBuyCandidate": "관심종목 시세·수급·추세·가치평가 데이터",
     "watchlistOntologySignal": "관심종목 ABox 관측값, 관계 규칙, 추세 동역학, 데이터 품질",
     "holdingTiming": "보유 스냅샷, 손익률, 수급, 추세, 매도 가능 수량",
-    "ontologyInferenceMissing": "실계좌 스냅샷, Neo4j InferenceBox 상태, 관계·근거 추론 개수",
+    "ontologyInferenceMissing": "실계좌 스냅샷, 그래프 저장소 InferenceBox 상태, 관계·근거 추론 개수",
     "monitorDecisionChange": "이전/현재 보유 모델 점수와 보유 스냅샷",
     "monitorTrendChange": "현재가와 20일/60일 이동평균 비교",
     "monitorPnlChange": "이전/현재 손익률",

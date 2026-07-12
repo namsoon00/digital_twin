@@ -29,7 +29,7 @@ Required flow for new investment behavior:
    Every collected or derived investment fact should become an ABox entity or relation with `ontologyBox`, `tboxClass` or `tboxClasses`, `boundedContext` when applicable, provenance, freshness, and missing-data semantics. A quote, disclosure, news item, macro series, FX rate, liquidity observation, investor-flow value, valuation assumption, account exposure, data-source status, or collection schedule should be represented as facts before it is used for judgement.
 
 3. Persist graph facts through the projection boundary.
-   Owning bounded contexts still persist their transactional state in their own stores. The ontology projection translates that state into graph-store assertions through adapters. Neo4j remains the default adapter, TypeDB can run as a parallel mirror or primary adapter, and new feature code must publish or persist source facts first, then extend `portfolio_ontology_builder.py` or its concept-builder modules so the projection can create ABox nodes and relations. Do not make account, monitoring, notification, or provider aggregates depend directly on Neo4j, TypeDB, or any graph driver.
+   Owning bounded contexts still persist their transactional state in their own stores. The ontology projection translates that state into graph-store assertions through adapters. TypeDB is the default adapter, Neo4j is a compatibility/mirror adapter, and new feature code must publish or persist source facts first, then extend `portfolio_ontology_builder.py` or its concept-builder modules so the projection can create ABox nodes and relations. Do not make account, monitoring, notification, or provider aggregates depend directly on TypeDB, Neo4j, or any graph driver.
 
 4. Put investment reasoning in the RuleBox and InferenceBox.
    New investment rules must be expressible as graph rules over ABox facts and should be seeded into RuleBox before they drive alerts or AI opinions. Runtime investment judgement must read the active graph-store InferenceBox through `domain/ontology_inference_context.py`. Python may assemble facts and prompts, but it must not keep a parallel buy/sell/risk rule evaluator for user-facing investment decisions.
@@ -126,7 +126,8 @@ Infrastructure:
 - `python_service/digital_twin/infrastructure/model_reviewer.py`: Codex/LLM command adapter with local fallback
 - `python_service/digital_twin/infrastructure/ontology_projection.py`: snapshot-to-ontology projection recorder that saves graph-store projections and quality samples without making monitoring application services own graph persistence details
 - `python_service/digital_twin/infrastructure/ontology_graph_store.py`: graph-store composition root; runtime code should import this factory instead of a concrete database adapter
-- `python_service/digital_twin/infrastructure/neo4j_ontology.py`: default Neo4j graph-store adapter plus backward-compatible wrapper only
+- `python_service/digital_twin/infrastructure/typedb_ontology.py`: default TypeDB graph-store adapter for TBox/ABox/RuleBox/InferenceBox persistence and inference
+- `python_service/digital_twin/infrastructure/neo4j_ontology.py`: Neo4j compatibility/mirror adapter only
 - `python_service/digital_twin/infrastructure/typedb_ontology.py`: TypeDB graph-store adapter and bootstrap TypeDB InferenceBox support
 - `python_service/digital_twin/infrastructure/service_factory.py`: runtime composition of use cases and adapters
 

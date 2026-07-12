@@ -228,6 +228,9 @@ function checkFrontendAdminRender() {
   assertOk(styles.indexOf(".app-nav-command") >= 0 && styles.indexOf(".app-nav-flow") >= 0 && styles.indexOf(".app-nav-mode") >= 0, "PC 상단 통합 command rail 스타일 정의가 없습니다.");
   assertOk(code.indexOf("renderAppNavCommand") >= 0 && code.indexOf("app-nav-routine") >= 0 && code.indexOf('data-style-layer="unified-command"') >= 0, "상단 네비게이션이 현재 화면 command/routine rail을 함께 렌더링하지 않습니다.");
   assertOk(/Professional finance top navigation shell[\s\S]*\.console-shell \.topbar,[\s\S]*\.console-shell \.managed-page > \.page-command-strip,[\s\S]*\.console-shell \.managed-page > \.page-routine-panel[\s\S]*\{[\s\S]*display: none;/.test(styles), "topbar, 본문 command strip, 본문 routine panel이 상단 통합 rail로 합쳐지지 않았습니다.");
+  assertOk(code.indexOf("renderWorkDetailLayer") >= 0 && code.indexOf("data-work-detail") >= 0, "긴 상세 정보를 공통 work detail layer로 여는 렌더 경로가 없습니다.");
+  assertOk(styles.indexOf(".work-detail-layer") >= 0 && styles.indexOf("Executive console simplification layer") >= 0, "PC 요약 화면과 상세 레이어를 위한 최종 콘솔 레이어가 없습니다.");
+  assertOk(designSystemDoc.indexOf("work-detail-layer") >= 0 && designSystemDoc.indexOf("전체 데이터를 다 펼치지 않는다") >= 0, "디자인 시스템 문서에 요약 우선/상세 레이어 계약이 없습니다.");
   assertOk(/Professional finance top navigation shell[\s\S]*\.app-nav-tab,[\s\S]*\.app-nav-menu-item[\s\S]*min-height: var\(--ds-top-nav-tab-height\);/.test(styles), "PC 상단 탭이 낮은 한 줄 금융 탭 높이를 쓰지 않습니다.");
   assertOk(/Professional finance top navigation shell[\s\S]*\.nav-tab-description\s*\{[\s\S]*display: none;/.test(styles), "PC 상단 탭이 설명까지 노출해 여러 줄로 늘어날 수 있습니다.");
   assertOk(styles.indexOf("grid-template-columns: repeat(12, minmax(0, 1fr))") >= 0, "PC 본문 12컬럼 그리드가 없습니다.");
@@ -1397,7 +1400,13 @@ function checkFrontendAdminRender() {
     assertOk(notificationHtml.indexOf("notification-score-factors") >= 0, "최근 알림 판단의 상승/감점 요인이 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("360분 내 7회 · 우선도 -55") >= 0, "최근 알림 판단의 유사 메시지 감점이 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("미장 닫힘") >= 0, "최근 알림 판단의 장 시간 외 보류 사유가 렌더링되지 않았습니다.");
-    assertOk(notificationHtml.indexOf("messageType=externalcryptomove|symbol=eth") >= 0, "최근 알림 판단 fingerprint가 렌더링되지 않았습니다.");
+    assertOk(
+      notificationHtml.indexOf("messageType=externalcryptomove|symbol=eth") < 0 &&
+        notificationHtml.indexOf('data-work-detail="notification-job"') >= 0 &&
+        code.indexOf("notificationWorkDetailPayload") >= 0 &&
+        code.indexOf("notification-fingerprint") >= 0,
+      "최근 알림 판단 fingerprint가 상세 레이어로 분리되지 않았습니다.",
+    );
     assertOk(notificationHtml.indexOf('data-action="refresh-notification-jobs"') >= 0, "최근 알림 판단 새로고침 버튼이 없습니다.");
     assertOk(notificationTemplateHtml.indexOf("notification-template-manager-panel") >= 0, "템플릿 섹션이 렌더링되지 않았습니다.");
     assertOk(notificationTemplateHtml.indexOf("notification-template-workbench") >= 0, "템플릿 섹션이 선택형 워크벤치로 렌더링되지 않았습니다.");
@@ -1458,9 +1467,9 @@ function checkFrontendAdminRender() {
     assertOk(modelingRulesHtml.indexOf("investment-ai-packet-panel") >= 0 && modelingRulesHtml.indexOf("AI 추론 입력 계약") >= 0, "전략 룰 섹션에 AI 추론 입력 계약이 없습니다.");
     assertOk(modelingRulesHtml.indexOf("ontology-rule-panel") >= 0 && modelingRulesHtml.indexOf("Relation Rule Registry") >= 0, "전략 룰 섹션에 관계 규칙 레지스트리가 없습니다.");
     assertOk(modelingRulesHtml.indexOf('data-model-setting="ontologyRelationRules"') >= 0, "전략 룰 섹션에 관계 규칙 편집기가 없습니다.");
-    assertOk(modelingRulesHtml.indexOf("neo4j-rulebox-panel") >= 0 && modelingRulesHtml.indexOf("Neo4j RuleBox") >= 0, "전략 룰 섹션에 Neo4j RuleBox 관리 콘솔이 없습니다.");
-    assertOk(modelingRulesHtml.indexOf('data-ontology-rulebox-json') >= 0 && modelingRulesHtml.indexOf('data-action="run-rulebox"') >= 0, "Neo4j RuleBox JSON 편집기나 실행 버튼이 없습니다.");
-    assertOk(modelingRulesHtml.indexOf("최근 버전") >= 0 && modelingRulesHtml.indexOf("AI 관계 후보 검토") >= 0, "Neo4j RuleBox 버전/후보 검토 섹션이 없습니다.");
+    assertOk(modelingRulesHtml.indexOf("neo4j-rulebox-panel") >= 0 && modelingRulesHtml.indexOf("TypeDB RuleBox") >= 0, "전략 룰 섹션에 TypeDB RuleBox 관리 콘솔이 없습니다.");
+    assertOk(modelingRulesHtml.indexOf('data-ontology-rulebox-json') >= 0 && modelingRulesHtml.indexOf('data-action="run-rulebox"') >= 0, "TypeDB RuleBox JSON 편집기나 실행 버튼이 없습니다.");
+    assertOk(modelingRulesHtml.indexOf("최근 버전") >= 0 && modelingRulesHtml.indexOf("AI 관계 후보 검토") >= 0, "TypeDB RuleBox 버전/후보 검토 섹션이 없습니다.");
     assertOk(modelingRulesHtml.indexOf('data-ontology-rulebox-change-reason') >= 0 && modelingRulesHtml.indexOf('data-action="append-rulebox-candidate"') >= 0, "RuleBox 변경 이유 입력이나 후보 추가 버튼이 없습니다.");
     assertOk(modelingRulesHtml.indexOf('data-action="propose-rulebox-candidates"') >= 0 && modelingRulesHtml.indexOf("AI 후보 생성") >= 0, "RuleBox AI 후보 생성 버튼이 없습니다.");
     assertOk(modelingRulesHtml.indexOf('data-model-setting="ontologyRuleCandidateAiEnabled"') >= 0 && modelingRulesHtml.indexOf('data-model-setting="ontologyRuleCandidateAiIntervalMinutes"') >= 0, "RuleBox AI 후보 생성 설정이 없습니다.");
@@ -1988,7 +1997,7 @@ async function checkNormalMode(port, context) {
   assertOk(tossPayload.tossDecision.investmentAnalysis && tossPayload.tossDecision.investmentAnalysis.contract === "investment-ontology-ai-inference-v1", "토스 판단 API에 투자 분석 AI 추론 계약이 없습니다.");
   assertOk(Array.isArray(tossPayload.tossDecision.investmentAnalysis.reasoningCards), "토스 판단 API reasoning card 필드가 배열이 아닙니다.");
   assertOk(tossPayload.tossDecision.ontologyStrategy && tossPayload.tossDecision.ontologyStrategy.aiInferencePacket && tossPayload.tossDecision.ontologyStrategy.aiInferencePacket.contract === "investment-ontology-ai-inference-v1", "온톨로지 전략에 AI inference packet이 없습니다.");
-  assertOk(tossPayload.tossDecision.ontologyStrategy.worldview && tossPayload.tossDecision.ontologyStrategy.worldview.runtimeProjectionMode === "abox-facts-only-neo4j-rulebox", "토스 판단 API가 Neo4j RuleBox용 ABox 투영 모드가 아닙니다.");
+  assertOk(tossPayload.tossDecision.ontologyStrategy.worldview && tossPayload.tossDecision.ontologyStrategy.worldview.runtimeProjectionMode === "abox-facts-only-graph-store-rulebox", "토스 판단 API가 그래프 저장소 RuleBox용 ABox 투영 모드가 아닙니다.");
   assertOk(tossPayload.tossDecision.items.some(function (item) { return item.decisionBasis === "ontologyInferenceRequired"; }), "토스 판단 항목이 InferenceBox 없는 판단을 차단하지 않습니다.");
   assertOk(tossPayload.portfolio && Array.isArray(tossPayload.portfolio.markets), "토스 판단 API에 시장별 현금비중 배열이 없습니다.");
   assertOk(tossPayload.portfolio.markets.some(function (market) { return market.key === "KR"; }), "시장별 현금비중에 한국장 항목이 없습니다.");

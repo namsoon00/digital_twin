@@ -126,13 +126,13 @@ DEFAULT_PROMPT_TEMPLATES = [
     _prompt(
         "ontologyInferenceMissing",
         "온톨로지 추론 상태 AI 의견",
-        "Neo4j InferenceBox가 없어 투자 판단이 차단된 상태와 복구 우선순위를 설명합니다.",
-        "InferenceBox 상태, 관계 수, 근거 수, 보유 종목 수, 차단 사유를 보고 매수·매도 판단을 만들지 않은 이유와 Neo4j, RuleBox, 추론 워커 점검 순서를 제시한다.",
+        "그래프 저장소 InferenceBox가 없어 투자 판단이 차단된 상태와 복구 우선순위를 설명합니다.",
+        "InferenceBox 상태, 관계 수, 근거 수, 보유 종목 수, 차단 사유를 보고 매수·매도 판단을 만들지 않은 이유와 TypeDB, RuleBox, 추론 워커 점검 순서를 제시한다.",
         system_prompt="너는 투자 판단 엔진의 운영 상태를 점검하는 분석가다. 추론 결과가 없을 때는 매매 의견을 내지 않고 데이터 복구 우선순위를 설명한다.",
         guardrails=[
             "InferenceBox가 없으면 매수·매도 의견을 제시하지 않습니다.",
             "투자 점수가 아니라 판단 생성이 차단된 운영 상태임을 분명히 말합니다.",
-            "Neo4j 연결, RuleBox 저장, 온톨로지 추론 워커 순서로 점검 항목을 제시합니다.",
+            "TypeDB 연결, RuleBox 저장, 온톨로지 추론 워커 순서로 점검 항목을 제시합니다.",
         ],
     ),
     _prompt(

@@ -4,16 +4,16 @@
   var defaultSettings = window.OrbitAlphaDefaultSettings || {};
 
   var tabs = [
-    { id: "overview", label: "홈", description: "관제 요약", groupId: "command" },
-    { id: "accounts", label: "계정", description: "계좌·API 원장", groupId: "market" },
-    { id: "watchlist", label: "관심종목", description: "관찰 대상", groupId: "market" },
-    { id: "symbols", label: "전체종목", description: "시장 유니버스", groupId: "market" },
-    { id: "notifications", label: "알림 판단", description: "점수·발송 이유", groupId: "decision" },
-    { id: "modeling", label: "투자 판단", description: "전략·근거·AI", groupId: "decision" },
-    { id: "experiments", label: "전략 실험", description: "온톨로지 Lab", groupId: "decision" },
-    { id: "feed", label: "뉴스 영향", description: "기사·주가 영향", groupId: "market" },
-    { id: "system", label: "시스템", description: "흐름·매뉴얼", groupId: "control" },
-    { id: "settings", label: "설정", description: "런타임 환경", groupId: "control" }
+    { id: "overview", label: "관제 홈", description: "오늘의 운영 현황", groupId: "command" },
+    { id: "accounts", label: "계정·연결", description: "계좌·API", groupId: "market" },
+    { id: "watchlist", label: "관심 관리", description: "관찰 종목", groupId: "market" },
+    { id: "symbols", label: "종목 탐색", description: "시장 카탈로그", groupId: "market" },
+    { id: "notifications", label: "알림 운영", description: "점수·발송 게이트", groupId: "decision" },
+    { id: "modeling", label: "투자 판단", description: "근거·액션 큐", groupId: "decision" },
+    { id: "experiments", label: "전략 검증", description: "규칙 실험", groupId: "decision" },
+    { id: "feed", label: "뉴스·근거", description: "본문 요약·영향", groupId: "market" },
+    { id: "system", label: "구조·흐름", description: "데이터 파이프라인", groupId: "control" },
+    { id: "settings", label: "운영 설정", description: "환경·연결", groupId: "control" }
   ];
   var appBrandName = "Orbit Alpha";
   var appBrandSubtitle = "포트폴리오 신호 궤도 관제";
@@ -27,69 +27,69 @@
   var bottomTabIds = ["overview", "watchlist", "notifications", "modeling", "experiments"];
   var managementTabIds = ["accounts", "symbols", "feed", "system", "settings"];
   var navigationGroups = [
-    { id: "command", label: "Command", description: "오늘 먼저 보는 관제", tabIds: ["overview"] },
-    { id: "market", label: "Market Desk", description: "계좌·종목·근거 정리", tabIds: ["accounts", "watchlist", "symbols", "feed"] },
-    { id: "decision", label: "Decision Stack", description: "판단·알림·실험 실행", tabIds: ["modeling", "notifications", "experiments"] },
-    { id: "control", label: "Control Plane", description: "문서·런타임 관리", tabIds: ["system", "settings"] }
+    { id: "command", label: "관제 홈", description: "오늘 먼저 보는 현황", tabIds: ["overview"] },
+    { id: "market", label: "데이터 관리", description: "계정·종목·근거 수집", tabIds: ["accounts", "watchlist", "symbols", "feed"] },
+    { id: "decision", label: "판단 운영", description: "투자 판단·알림·검증", tabIds: ["modeling", "notifications", "experiments"] },
+    { id: "control", label: "운영 관리", description: "구조·환경 관리", tabIds: ["system", "settings"] }
   ];
   var pageStructureCatalog = {
     overview: {
-      layer: "Mission Control",
-      entity: "Portfolio Snapshot",
+      layer: "운영 현황",
+      entity: "포트폴리오 스냅샷",
       objective: "계정, 포트폴리오, 신호, 모델 상태를 한 화면에서 먼저 판단합니다.",
       workflow: ["상태 확인", "위험 노출", "즉시 조치"]
     },
     accounts: {
-      layer: "Account Registry",
-      entity: "Service Account",
+      layer: "계정 원장",
+      entity: "서비스 계정",
       objective: "계좌/API/알림 채널을 원장으로 정리하고 데이터 출처를 검증합니다.",
       workflow: ["계정 목록", "출처 검증", "저장 관리"]
     },
     watchlist: {
-      layer: "Observation Book",
-      entity: "Watch Symbol",
+      layer: "관심 관리",
+      entity: "관찰 종목",
       objective: "계정별 관찰 종목을 분리해 알림과 전략 판단의 입력으로 관리합니다.",
       workflow: ["계정 선택", "종목 편집", "알림 연결"]
     },
     symbols: {
-      layer: "Universe Catalog",
-      entity: "Market Symbol",
+      layer: "종목 카탈로그",
+      entity: "시장 종목",
       objective: "시장 유니버스를 검색하고 관심종목 편입 후보를 정리합니다.",
       workflow: ["목록 조회", "필터 적용", "계정 편입"]
     },
     notifications: {
-      layer: "Signal Execution",
-      entity: "Notification Job",
+      layer: "알림 운영",
+      entity: "알림 판단 기록",
       objective: "알림이 발생한 점수 변화와 발송·보류 이유를 먼저 확인합니다.",
       workflow: ["판단 확인", "정책 조정", "본문 발송"]
     },
     modeling: {
-      layer: "Strategy Workbench",
-      entity: "Investment Opinion",
+      layer: "판단 콘솔",
+      entity: "투자 의견",
       objective: "오늘의 판단, 투자 근거, 검증 리뷰를 한 작업 흐름으로 압축합니다.",
       workflow: ["오늘 판단", "근거·차트", "검증 리뷰"]
     },
     experiments: {
-      layer: "Ontology Lab",
-      entity: "Rule Experiment",
+      layer: "전략 검증",
+      entity: "규칙 실험",
       objective: "새 관계 규칙을 샌드박스에서 재생하고 승격 가능성을 검토합니다.",
       workflow: ["규칙 초안", "재생 검증", "승격 판단"]
     },
     feed: {
-      layer: "Evidence Pipeline",
-      entity: "Research Evidence",
+      layer: "뉴스 근거",
+      entity: "리서치 근거",
       objective: "뉴스, 공시, 시장 데이터를 주가 영향 관점으로 요약하고 근거 저장소 품질을 점검합니다.",
       workflow: ["영향 판단", "근거 확인", "수집 설정"]
     },
     system: {
-      layer: "Operating Manual",
-      entity: "System Flow",
+      layer: "구조 문서",
+      entity: "시스템 흐름",
       objective: "데이터 수집부터 추론, 알림까지 전체 실행 흐름을 문서화합니다.",
       workflow: ["구조 이해", "이벤트 흐름", "운영 기준"]
     },
     settings: {
-      layer: "Runtime Control",
-      entity: "Local Setting",
+      layer: "운영 설정",
+      entity: "로컬 설정",
       objective: "로컬 우선 환경, 외부 API, 전달 채널 설정을 안전하게 관리합니다.",
       workflow: ["로컬 상태", "연결 설정", "변경 저장"]
     }
@@ -5427,7 +5427,7 @@
         tone: toss.mode === "live" ? "watch" : "caution",
         description: toss.status || "계좌 연결 상태를 확인합니다.",
         symbols: [],
-        action: "계정 탭의 Toss 연결값 확인"
+        action: "계정·연결의 Toss 연결값 확인"
       },
       {
         label: "현재가",
@@ -5443,7 +5443,7 @@
         tone: diagnosticTone(missingValuation.length, total),
         description: "EPS, 목표 PER, 안전마진이 있어야 싸다/비싸다 판단이 안정됩니다.",
         symbols: missingValuation,
-        action: "투자 분석 탭의 종목별 EPS/PER 입력"
+        action: "투자 판단의 종목별 EPS/PER 입력"
       },
       {
         label: "체결강도",
@@ -6350,8 +6350,8 @@
       '<div class="loading-source-list">',
       renderLoadingSource("계좌 연결", "토스 live 또는 로컬 저장 계정 상태 확인"),
       renderLoadingSource("관심 종목", "계정별 관심 목록과 전체 종목 캐시 준비"),
-      renderLoadingSource("알림 판단", "최근 발송 이력과 룰 설정 동기화"),
-      renderLoadingSource("투자 분석", "전략 근거와 관계 그래프 계산"),
+      renderLoadingSource("알림 운영", "최근 발송 이력과 룰 설정 동기화"),
+      renderLoadingSource("투자 판단", "전략 근거와 관계 그래프 계산"),
       '</div>',
       '</article>',
       '<article class="panel loading-preview-panel">',
@@ -6584,7 +6584,7 @@
       navigationGroups.map(renderAppNavGroup).join(""),
       '</div>',
       '<details class="app-nav-menu">',
-      '<summary><strong>운영</strong><span>' + escapeHtml(managementActive ? activeTab.label : "알림·설정") + '</span></summary>',
+      '<summary><strong>운영</strong><span>' + escapeHtml(managementActive ? activeTab.label : "관리 탭") + '</span></summary>',
       '<div class="app-nav-menu-list">',
       managementTabs.map(function (tab) {
         return navTabButton(tab, "app-nav-menu-item");
@@ -6719,7 +6719,7 @@
       '<div class="system-guide-hero-copy">',
       '<p class="label">SYSTEM MANUAL</p>',
       '<h2>Orbit Alpha는 계좌, 시장 데이터, 규칙, AI 의견을 한 흐름으로 묶는 로컬 우선 투자 관제 시스템입니다.</h2>',
-      '<p>처음 보는 사람은 먼저 계정과 관심종목을 등록하고, 데이터 수집 상태를 확인한 뒤, 알림과 투자 분석 탭에서 왜 신호가 생겼는지 확인하면 됩니다. 이 탭은 그 전체 흐름을 운영 매뉴얼처럼 설명합니다.</p>',
+      '<p>처음 보는 사람은 먼저 계정과 관심종목을 등록하고, 데이터 수집 상태를 확인한 뒤, 알림 운영과 투자 판단에서 왜 신호가 생겼는지 확인하면 됩니다. 이 탭은 그 전체 흐름을 운영 매뉴얼처럼 설명합니다.</p>',
       '<div class="system-guide-kpis">',
       metrics.map(function (metric) {
         return [
@@ -6747,11 +6747,11 @@
 
   function renderSystemQuickManualPanel() {
     var steps = [
-      ["01", "계정 등록", "계정 탭에서 Toss 자격 정보, 계좌 순번, 관심 종목 기준을 저장합니다. 알림 채널과 전달 정책은 알림/설정 탭에서 따로 관리합니다."],
-      ["02", "관심종목 구성", "관심종목 탭에서 계정별 추적 대상을 넣습니다. 보유 종목과 관심 종목은 알림 판단에서 서로 다른 관계로 다룹니다."],
-      ["03", "데이터 확인", "피드 탭과 전체종목 탭에서 종목 카탈로그, 뉴스, 공시, 외부 API 수집 상태를 확인합니다."],
-      ["04", "알림 정책 조정", "알림 탭에서 메시지 타입별 사용 여부, 임계값, 발송 템플릿, 최근 판단을 점검합니다."],
-      ["05", "투자 분석 검토", "투자 분석 탭에서 가격·수급·추세·공시·뉴스 근거가 어떤 관계 규칙으로 연결됐는지 봅니다."]
+      ["01", "계정 등록", "계정·연결에서 Toss 자격 정보, 계좌 순번, 관심 종목 기준을 저장합니다. 알림 채널과 전달 정책은 알림 운영/운영 설정에서 따로 관리합니다."],
+      ["02", "관심종목 구성", "관심 관리 탭에서 계정별 추적 대상을 넣습니다. 보유 종목과 관심 종목은 알림 운영에서 서로 다른 관계로 다룹니다."],
+      ["03", "데이터 확인", "뉴스·근거 탭과 종목 탐색 탭에서 종목 카탈로그, 뉴스, 공시, 외부 API 수집 상태를 확인합니다."],
+      ["04", "알림 정책 조정", "알림 운영에서 메시지 타입별 사용 여부, 임계값, 발송 템플릿, 최근 판단을 점검합니다."],
+      ["05", "투자 판단 검토", "투자 판단에서 가격·수급·추세·공시·뉴스 근거가 어떤 관계 규칙으로 연결됐는지 봅니다."]
     ];
     return [
       '<article class="panel system-manual-panel">',
@@ -6775,7 +6775,7 @@
     var generatedAt = formatClock((snapshot || {}).generatedAt);
     var sourceRows = [
       ["계좌·보유", "Toss snapshot", "monitor_snapshots", "보유 수량, 평단가, 평가액, 현금 비중"],
-      ["전체종목·시세", "market-data worker", "symbol_universe, market_quote_cache", "시장별 종목명, 현재가, 캔들 기반 이동평균"],
+      ["종목 탐색·시세", "market-data worker", "symbol_universe, market_quote_cache", "시장별 종목명, 현재가, 캔들 기반 이동평균"],
       ["뉴스·공시", "news worker, OpenDART", "research_evidence, app_store", "기사 요약, 관련성, 중요도, 공시 제목"],
       ["거시·외부", "Alpha Vantage, CoinGecko, FRED", "external_signals cache", "미장 가격, 코인 변동, 금리·스프레드"],
       ["운영 설정", "웹 설정 API", "runtime_settings, notification_rules", "임계값, 템플릿, API 사용 여부"]
@@ -6821,7 +6821,7 @@
 
   function renderSystemEventFlowPanel() {
     var events = [
-      ["account.saved", "계정 저장", "계정 탭에서 저장된 계정을 마스킹된 payload로 이벤트 로그에 남깁니다."],
+      ["account.saved", "계정 저장", "계정·연결에서 저장된 계정을 마스킹된 payload로 이벤트 로그에 남깁니다."],
       ["market_data.collected", "시세 수집", "종목 유니버스에서 선택된 종목의 가격과 캔들 데이터를 저장합니다."],
       ["research_evidence.collected", "뉴스 근거 수집", "뉴스·공시 근거가 바뀌면 관련 종목과 중요도 정보를 이벤트로 남깁니다."],
       ["monitoring.snapshot_collected", "계좌 스냅샷", "각 계정의 보유, 현금, 판단 후보를 하나의 스냅샷으로 기록합니다."],
@@ -6913,10 +6913,10 @@
 
   function renderSystemOperationsPanel() {
     var rows = [
-      ["매일 먼저 볼 것", "홈에서 연결 상태와 최근 알림, 투자 분석에서 관계 그래프와 근거 카드를 봅니다."],
-      ["데이터가 이상할 때", "피드 탭의 수집 오류, 전체종목 탭의 최신성, 설정 탭의 API 키와 캐시 시간을 순서대로 확인합니다."],
-      ["알림이 너무 많을 때", "알림 탭에서 메시지 타입별 사용 여부와 cadence, 임계값을 조정합니다."],
-      ["모델 판단이 이상할 때", "투자 분석 탭에서 공식 입력, 기준값, 근거 카드, 반대 근거를 함께 확인합니다."],
+      ["매일 먼저 볼 것", "관제 홈에서 연결 상태와 최근 알림, 투자 판단에서 관계 그래프와 근거 카드를 봅니다."],
+      ["데이터가 이상할 때", "뉴스·근거 탭의 수집 오류, 종목 탐색 탭의 최신성, 운영 설정 탭의 API 키와 캐시 시간을 순서대로 확인합니다."],
+      ["알림이 너무 많을 때", "알림 운영에서 메시지 타입별 사용 여부와 cadence, 임계값을 조정합니다."],
+      ["모델 판단이 이상할 때", "투자 판단에서 공식 입력, 기준값, 근거 카드, 반대 근거를 함께 확인합니다."],
       ["외부 공유 전", "로컬 우선 시스템이므로 `.env.local`, API 키, 계좌 정보, DB 접속 정보가 노출되지 않는지 먼저 확인합니다."]
     ];
     return [
@@ -7161,7 +7161,7 @@
         tone: positions.length || notificationJobs.length ? "watch" : "hold",
         current: "계정 " + enabledServiceAccounts().length + "/" + serviceAccounts().length + " · 평가 " + formatMoney(portfolio.total || 0),
         reason: "오늘 먼저 봐야 할 연결, 포트폴리오, 알림 상태를 한 번에 모읍니다.",
-        action: "알림 판단 보기",
+        action: "알림 운영 보기",
         href: "?tab=notifications"
       },
       accounts: {
@@ -7174,7 +7174,7 @@
       watchlist: {
         tone: (allAccountWatchlistSymbols().length || watchlistSymbols().length) ? "watch" : "hold",
         current: "관심종목 " + (allAccountWatchlistSymbols().length || watchlistSymbols().length) + "개 · 실시간 시세 " + watchlist.length + "개",
-        reason: "관심종목은 뉴스 영향, 알림 후보, 투자 판단의 관찰 입력입니다.",
+        reason: "관심종목은 뉴스·근거, 알림 후보, 투자 판단의 관찰 입력입니다.",
         action: "관심종목 정리",
         href: "?tab=watchlist"
       },
@@ -7201,7 +7201,7 @@
       },
       experiments: {
         tone: Number(experiments.activeCount || 0) ? "watch" : "hold",
-        current: "전략 실험 " + (experiments.count || ontologyExperimentItems().length || 0) + "개 · 활성 " + (experiments.activeCount || 0) + "개",
+        current: "전략 검증 " + (experiments.count || ontologyExperimentItems().length || 0) + "개 · 활성 " + (experiments.activeCount || 0) + "개",
         reason: "운영 룰로 올리기 전 새 관계 규칙을 샌드박스에서 검증합니다.",
         action: "실험 검토",
         href: "?tab=experiments"
@@ -7581,7 +7581,7 @@
     var activeId = activeSectionForPageMode("modeling", strategySections, state.activeStrategySection);
     return [
       '<div class="strategy-section-bar" data-section-mode="' + escapeHtml(activePageMode("modeling")) + '">',
-      '<div class="strategy-section-tabs" role="tablist" aria-label="투자 분석 섹션">',
+      '<div class="strategy-section-tabs" role="tablist" aria-label="투자 판단 섹션">',
       visibleSections.map(function (item) {
         var active = activeId === item.id;
         return [
@@ -9076,7 +9076,7 @@
       '<div class="home-action-grid">',
       renderHomeAction("accounts", "계정", configuredAccounts + "개 API 연결", "토스·텔레그램"),
       renderHomeAction("notifications", "알림", enabledRules + "개 활성", "템플릿 테스트"),
-      renderHomeAction("modeling", "투자 분석", "전략·관계·AI", "근거 카드"),
+      renderHomeAction("modeling", "투자 판단", "전략·관계·AI", "근거 카드"),
       '</div>',
       '</div>',
       '<div class="admin-stat-grid home-stat-grid">',
@@ -9254,7 +9254,7 @@
       state.serviceAccountsError ? '<p class="form-error">' + escapeHtml(state.serviceAccountsError) + '</p>' : '',
       accounts.length ? accounts.map(function (account) {
         return renderAccountDirectoryRow(account, options);
-      }).join("") : '<p class="subtle">아직 DB에 저장된 계정이 없습니다. 계정 탭에서 등록하세요.</p>',
+      }).join("") : '<p class="subtle">아직 DB에 저장된 계정이 없습니다. 계정·연결에서 등록하세요.</p>',
       '</div>',
       '</article>'
     ].join("");
@@ -9396,7 +9396,7 @@
       state.serviceAccountsError ? '<p class="form-error">' + escapeHtml(state.serviceAccountsError) + '</p>' : '',
       accounts.length ? accounts.map(function (account) {
         return renderAccountWatchlistRow(account, { selectable: true });
-      }).join("") : '<p class="subtle">계정 탭에서 먼저 계정을 등록하세요.</p>',
+      }).join("") : '<p class="subtle">계정·연결에서 먼저 계정을 등록하세요.</p>',
       '</div>',
       renderAccountWatchlistEditor(activeAccount, snapshot),
       '</div>'
@@ -9450,7 +9450,7 @@
         '<div class="account-watchlist-editor empty">',
         '<div class="settings-note">',
         '<strong>계정이 필요합니다</strong>',
-        '<p>관심 종목은 계정별로 저장됩니다. 계정 탭에서 계정을 만든 뒤 이 화면에서 종목을 등록하세요.</p>',
+        '<p>관심 종목은 계정별로 저장됩니다. 계정·연결에서 계정을 만든 뒤 이 화면에서 종목을 등록하세요.</p>',
         '</div>',
         '</div>'
       ].join("");
@@ -9474,7 +9474,7 @@
       '<button class="text-button primary"' + (locked ? " disabled" : "") + '>' + escapeHtml(state.watchlistSavingAccountId === accountId ? "저장 중" : "추가") + '</button>',
       '</form>',
       '<div class="watch-suggest-box" data-watch-suggest-list data-watch-account-id="' + escapeHtml(accountId) + '">' + renderWatchSuggestList() + '</div>',
-      '<p class="subtle">검색 후 저장하면 이 계정의 알림·모니터링 기준으로 쓰입니다. 시장 전체 목록은 전체종목 탭에서 따로 봅니다.</p>',
+      '<p class="subtle">검색 후 저장하면 이 계정의 알림·모니터링 기준으로 쓰입니다. 시장 전체 목록은 종목 탐색 탭에서 따로 봅니다.</p>',
       state.watchlistError ? '<p class="form-error">' + escapeHtml(state.watchlistError) + '</p>' : '',
       '</div>',
       '<div class="account-watch-symbol-list">',
@@ -13150,7 +13150,7 @@
         tone: "muted",
         label: "Universe",
         title: "보유·관심 종목이 아직 없습니다",
-        description: "계정 탭에서 연결을 확인하거나 관심종목 탭에서 추적 대상을 추가하면 모니터링 원장이 채워집니다.",
+        description: "계정·연결에서 연결을 확인하거나 관심 관리에서 추적 대상을 추가하면 모니터링 원장이 채워집니다.",
         meta: ["계정 연결", "관심종목"]
       }),
       '</div>',
@@ -13860,7 +13860,7 @@
       '<article class="panel feed-overview-panel">',
       '<div class="panel-head">',
       '<div>',
-      '<p class="label">Feed Command</p>',
+      '<p class="label">뉴스 근거 현황</p>',
       '<h2>피드 운영 대시보드</h2>',
       '</div>',
       '<span class="tone-chip ' + escapeHtml(warningChannels ? "caution" : "watch") + '">' + escapeHtml(warningChannels ? "확인 필요" : "운영 가능") + '</span>',
@@ -14693,14 +14693,14 @@
   function renderSettingsResponsibilityPanel() {
     var rows = [
       {
-        tab: "계정",
+        tab: "계정·연결",
         result: "계정 상태, Toss 연결, 자산 검증, 데이터 이력",
         setting: "계정 식별값, API secret, 계좌 seq, 알림 채널",
         href: "?tab=accounts&account=identity",
         action: "계정 설정"
       },
       {
-        tab: "알림 판단",
+        tab: "알림 운영",
         result: "점수 변화, 후보 신호, 발송/보류 판단",
         setting: "메시지 타입별 정책, 템플릿, 채널 진단",
         href: "?tab=notifications&notification=policy",
@@ -14714,7 +14714,7 @@
         action: "전략 룰"
       },
       {
-        tab: "뉴스 영향",
+        tab: "뉴스·근거",
         result: "기사 본문 요약, 호재/악재 판단, 수집 품질",
         setting: "뉴스 아카이브, 공시·외부 원천, 중요도 게이트",
         href: "?tab=feed&mode=settings&feed=settings",

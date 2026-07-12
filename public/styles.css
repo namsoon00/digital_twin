@@ -15143,3 +15143,162 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+
+/* Ontology experiment workspace */
+.ontology-experiments-view {
+  align-items: start;
+}
+
+.ontology-experiment-overview-panel,
+.ontology-experiment-latest-panel,
+.ontology-experiment-list-panel {
+  min-width: 0;
+}
+
+.ontology-experiment-list-panel {
+  grid-column: 1 / -1;
+}
+
+.ontology-experiment-metrics,
+.ontology-experiment-run-grid,
+.ontology-experiment-card-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--ds-space-3);
+}
+
+.ontology-experiment-metrics section,
+.ontology-experiment-run-grid section,
+.ontology-experiment-card-metrics section {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: var(--ds-row-pad-y) var(--ds-row-pad-x);
+  border: 1px solid var(--ds-card-border);
+  border-left: 3px solid var(--ds-card-status-neutral);
+  border-radius: var(--ds-radius-control);
+  background: linear-gradient(180deg, var(--ds-card-row-bg), var(--ds-card-bg));
+}
+
+.ontology-experiment-metrics span,
+.ontology-experiment-run-grid span,
+.ontology-experiment-card-metrics span {
+  color: var(--muted);
+  font-size: var(--ds-type-caption);
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.ontology-experiment-metrics strong,
+.ontology-experiment-run-grid strong,
+.ontology-experiment-card-metrics strong {
+  color: var(--ink);
+  font-size: 20px;
+  line-height: 1.1;
+  overflow-wrap: anywhere;
+}
+
+.ontology-experiment-card-metrics strong {
+  font-size: 16px;
+}
+
+.ontology-experiment-metrics em,
+.ontology-experiment-run-grid em,
+.ontology-experiment-card-metrics em {
+  color: var(--muted);
+  font-size: var(--ds-type-label);
+  font-style: normal;
+  font-weight: 760;
+}
+
+.ontology-experiment-actions,
+.ontology-experiment-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ds-space-2);
+  margin-top: var(--ds-space-4);
+}
+
+.ontology-experiment-list {
+  display: grid;
+  gap: var(--ds-space-3);
+}
+
+.ontology-experiment-card {
+  display: grid;
+  gap: var(--ds-space-3);
+  padding: var(--ds-panel-pad-y) var(--ds-panel-pad-x);
+  border: 1px solid var(--ds-card-border);
+  border-left: 3px solid var(--blue);
+  border-radius: var(--ds-radius-panel);
+  background: linear-gradient(180deg, var(--ds-card-row-bg), var(--ds-card-bg));
+}
+
+.ontology-experiment-card-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--ds-space-3);
+  align-items: start;
+}
+
+.ontology-experiment-card-head strong {
+  display: block;
+  color: var(--ink);
+  font-size: 17px;
+  line-height: 1.25;
+}
+
+.ontology-experiment-card-head span:not(.tone-chip) {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: var(--ds-type-caption);
+  font-weight: 760;
+  overflow-wrap: anywhere;
+}
+
+.ontology-experiment-card p,
+.ontology-experiment-findings span {
+  color: var(--muted);
+  font-size: var(--ds-type-label);
+  font-weight: 760;
+}
+
+.ontology-experiment-findings {
+  display: grid;
+  gap: var(--ds-space-2);
+  margin-top: var(--ds-space-3);
+}
+
+.ontology-experiment-findings span {
+  padding: var(--ds-space-2) var(--ds-space-3);
+  border: 1px solid var(--ds-card-border);
+  border-radius: var(--ds-radius-control);
+  background: var(--ds-card-row-bg);
+}
+
+.ontology-experiment-tags {
+  margin-top: var(--ds-space-3);
+}
+
+@media (max-width: 980px) {
+  .ontology-experiment-metrics,
+  .ontology-experiment-run-grid,
+  .ontology-experiment-card-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 620px) {
+  .ontology-experiment-metrics,
+  .ontology-experiment-run-grid,
+  .ontology-experiment-card-metrics,
+  .ontology-experiment-card-head {
+    grid-template-columns: 1fr;
+  }
+
+  .ontology-experiment-card-head .tone-chip {
+    justify-self: start;
+  }
+}

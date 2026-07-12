@@ -366,7 +366,7 @@ def ontology_lab_command(args) -> int:
             {"runRulebox": not bool(args.skip_run_rulebox)},
         )
         print(json.dumps(result, ensure_ascii=False))
-        return 0 if result.get("status") not in {"not-found", "no-result", "error"} else 1
+        return 0 if result.get("status") not in {"not-found", "no-result", "not-ready", "disabled", "pending", "error"} else 1
     if args.ontology_lab_action == "once":
         result = service.run_once(limit=int(args.limit or settings.get("ontologyLabBatchSize") or 0), force=args.force)
         print(json.dumps(result, ensure_ascii=False))

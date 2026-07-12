@@ -209,22 +209,7 @@ class OntologyLabTests(unittest.TestCase):
             store,
             monitor_store=FakeMonitorStore(),
         )
-        candidate_result = {
-            "status": "ok",
-            "symbols": ["AAPL"],
-            "candidates": [
-                {
-                    "id": "ai-candidate:test-lab",
-                    "title": "AI 다음 점검 실험",
-                    "status": "candidate",
-                    "priority": 77,
-                    "rationale": "반복 신호를 다음 점검 관계로 검증합니다.",
-                    "expectedEffect": "AI 판단 근거에 점검 컨텍스트를 추가합니다.",
-                    "risk": "과도한 점검 관계가 생길 수 있습니다.",
-                    "proposedRule": candidate_rule(),
-                }
-            ],
-        }
+        candidate_result = ai_candidate_result()
 
         created = service.suggest_from_rule_candidates(candidate_result)
         duplicated = service.suggest_from_rule_candidates(candidate_result)
@@ -241,6 +226,47 @@ class OntologyLabTests(unittest.TestCase):
         self.assertFalse(experiment.candidate_rules[0]["enabled"])
         self.assertEqual("suggested", experiment.last_result["status"])
         self.assertEqual("graph.lab.symbol-review.v1", experiment.last_result["sourceCandidate"]["ruleId"])
+
+    def test_apply_recommendations_rejects_unrun_ai_suggestion(self):
+        store = MemoryExperimentStore()
+        repository = FakeOntologyRepository()
+        service = OntologyLabService(
+            repository,
+            store,
+            monitor_store=FakeMonitorStore(),
+        )
+        created = service.suggest_from_rule_candidates(ai_candidate_result())
+        experiment_id = created["experiments"][0]["id"]
+
+        result = service.apply_recommendations(experiment_id)
+
+        self.assertEqual("not-ready", result["status"])
+        self.assertEqual("experiment-result-not-completed", result["reason"])
+        self.assertEqual(0, len(repository.saved_rulebox_payloads))
+        self.assertEqual(0, len(repository.run_rulebox_payloads))
+        self.assertEqual(0, len(repository.saved_tbox_graphs))
+        self.assertEqual("draft", store.get(experiment_id).status)
+
+    def test_suggest_from_ai_candidates_can_activate_and_run_immediately(self):
+        store = MemoryExperimentStore()
+        service = OntologyLabService(
+            FakeOntologyRepository(),
+            store,
+            monitor_store=FakeMonitorStore(),
+        )
+
+        created = service.suggest_from_rule_candidates(
+            ai_candidate_result(),
+            {"activate": True, "run": True},
+        )
+
+        self.assertEqual("created", created["status"])
+        experiment = store.get(created["experiments"][0]["id"])
+        self.assertEqual("active", experiment.status)
+        self.assertTrue(experiment.active_since)
+        self.assertEqual("completed", experiment.last_result["status"])
+        self.assertEqual("ai-suggested", experiment.last_result["runKind"])
+        self.assertEqual("ai-suggested", experiment.run_history[0]["runKind"])
 
     def test_run_without_snapshots_marks_result_as_needing_data(self):
         service = OntologyLabService(
@@ -335,6 +361,25 @@ def candidate_rule():
                 "weight": 0.72,
                 "decision_stage": "LAB_REVIEW",
                 "stage_priority": 40,
+            }
+        ],
+    }
+
+
+def ai_candidate_result():
+    return {
+        "status": "ok",
+        "symbols": ["AAPL"],
+        "candidates": [
+            {
+                "id": "ai-candidate:test-lab",
+                "title": "AI 다음 점검 실험",
+                "status": "candidate",
+                "priority": 77,
+                "rationale": "반복 신호를 다음 점검 관계로 검증합니다.",
+                "expectedEffect": "AI 판단 근거에 점검 컨텍스트를 추가합니다.",
+                "risk": "과도한 점검 관계가 생길 수 있습니다.",
+                "proposedRule": candidate_rule(),
             }
         ],
     }

@@ -245,6 +245,14 @@ class OntologyLabService:
         last_result = dict(experiment.last_result or {})
         if not last_result:
             return {"status": "no-result", "id": experiment_id}
+        readiness = ontology_apply_readiness(last_result)
+        if readiness:
+            return {
+                "status": "not-ready",
+                "id": experiment_id,
+                "reason": readiness,
+                "experiment": experiment.to_dict(),
+            }
         proposed = last_result.get("proposedOntologyChanges")
         proposed = dict(proposed) if isinstance(proposed, dict) else {}
         recommendations = [
@@ -845,6 +853,25 @@ def ontology_lab_tbox_graph(
         "skipNativeReasoning": True,
     }
     return graph
+
+
+def ontology_apply_readiness(last_result: Dict[str, object]) -> str:
+    last_result = dict(last_result or {})
+    if str(last_result.get("status") or "").lower() != "completed":
+        return "experiment-result-not-completed"
+    if not str(last_result.get("completedAt") or "").strip():
+        return "experiment-result-missing-completed-at"
+    sandbox = last_result.get("sandbox") if isinstance(last_result.get("sandbox"), dict) else {}
+    graph_run_count = int_setting({"graphRunCount": sandbox.get("graphRunCount")}, "graphRunCount", 0, 0, 1000000)
+    if graph_run_count <= 0:
+        return "experiment-has-no-sandbox-graph-run"
+    readiness = last_result.get("promotionReadiness") if isinstance(last_result.get("promotionReadiness"), dict) else {}
+    if str(readiness.get("status") or "").lower() == "needs-data":
+        return "experiment-needs-abox-data"
+    proposal = last_result.get("proposedOntologyChanges")
+    if not isinstance(proposal, dict) or not proposal:
+        return "experiment-has-no-ontology-proposal"
+    return ""
 
 
 def compact_apply_result(result: Dict[str, object]) -> Dict[str, object]:

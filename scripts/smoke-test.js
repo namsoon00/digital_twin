@@ -237,7 +237,7 @@ function checkFrontendAdminRender() {
   assertOk(desktopLayoutAuditLayerStart >= 0, "PC 최종 레이아웃 감사 레이어가 없습니다.");
   assertOk(/\.home-view \.admin-overview-panel\s*\{\s*grid-column: span 7;/.test(desktopLayoutAuditLayer), "홈 운영 요약이 PC 7컬럼 배치로 최종 고정되지 않습니다.");
   assertOk(/\.home-view \.account-watchlist-panel,[\s\S]*\.home-view \.admin-monitoring-panel\s*\{\s*grid-column: span 6;/.test(desktopLayoutAuditLayer), "홈 하단 패널이 PC 6:6 배치로 최종 고정되지 않습니다.");
-  assertOk(/\.notifications-view \.monitoring-instrument-panel\s*\{\s*grid-column: span 8;/.test(desktopLayoutAuditLayer), "알림 신호 섹션의 통합 종목 패널이 PC 8컬럼으로 고정되지 않습니다.");
+  assertOk(/\.notifications-view \.monitoring-instrument-panel\s*\{\s*grid-column: span 8;/.test(desktopLayoutAuditLayer), "알림 후보 섹션의 통합 종목 패널이 PC 8컬럼으로 고정되지 않습니다.");
   assertOk(/\.notification-decision-list\s*\{\s*grid-template-columns: minmax\(0, 1fr\);/.test(desktopLayoutAuditLayer), "최근 알림 판단 목록이 PC 전폭 원장 행으로 유지되지 않습니다.");
   assertOk(/\.notification-decision-row\s*\{\s*grid-template-columns: minmax\(240px, 0\.34fr\) minmax\(0, 1fr\);/.test(desktopLayoutAuditLayer), "최근 알림 판단 행의 PC 최종 2열 구조가 없습니다.");
   assertOk(/\.strategy-data-grid\s*\{\s*grid-template-columns: repeat\(auto-fit, minmax\(min\(100%, 360px\), 1fr\)\);/.test(desktopLayoutAuditLayer), "전략 데이터 점검 카드가 PC 읽기 폭 제한 그리드로 정리되지 않습니다.");
@@ -1052,7 +1052,7 @@ function checkFrontendAdminRender() {
     renderForSearch("?tab=notifications"),
     renderForSearch("?tab=notifications&notification=policy"),
     renderForSearch("?tab=notifications&notification=templates"),
-    renderForSearch("?tab=notifications&notification=advanced"),
+    renderForSearch("?tab=notifications&notification=diagnostics"),
     renderForSearch("?tab=modeling"),
     renderForSearch("?tab=ontology"),
     renderForSearch("?tab=feed"),
@@ -1078,7 +1078,7 @@ function checkFrontendAdminRender() {
     const notificationHtml = pages[5];
     const notificationPolicyHtml = pages[6];
     const notificationTemplateHtml = pages[7];
-    const notificationAdvancedHtml = pages[8];
+    const notificationDiagnosticsHtml = pages[8];
     const modelingHtml = pages[9];
     const legacyOntologyHtml = pages[10];
     const feedHtml = pages[11];
@@ -1293,12 +1293,12 @@ function checkFrontendAdminRender() {
     assertOk(notificationHtml.indexOf("notification-command-panel") < 0, "카드형 알림 관제 패널이 남아 있습니다.");
     assertOk(notificationPolicyHtml.indexOf("notification-command-center") >= 0 && notificationPolicyHtml.indexOf("notification-ops-rail") >= 0, "정책 섹션 상단 운영 요약이 렌더링되지 않았습니다.");
     assertOk(notificationTemplateHtml.indexOf("notification-command-center") >= 0 && notificationTemplateHtml.indexOf("notification-ops-rail") >= 0, "템플릿 섹션 상단 운영 요약이 렌더링되지 않았습니다.");
-    assertOk(notificationAdvancedHtml.indexOf("notification-command-center") >= 0 && notificationAdvancedHtml.indexOf("notification-ops-rail") >= 0, "고급 섹션 상단 운영 요약이 렌더링되지 않았습니다.");
+    assertOk(notificationDiagnosticsHtml.indexOf("notification-command-center") >= 0 && notificationDiagnosticsHtml.indexOf("notification-ops-rail") >= 0, "진단 섹션 상단 운영 요약이 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("notification-section-bar") >= 0, "알림 내부 섹션 상단 탭 바가 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("notification-section-tabs") >= 0, "알림 내부 섹션 탭이 렌더링되지 않았습니다.");
-    assertOk(styles.indexOf(".notification-command-center") >= 0 && styles.indexOf("grid-template-columns: repeat(5, minmax(0, 1fr))") >= 0, "알림 내부 섹션이 5탭 command center 스타일로 정의되지 않았습니다.");
-    assertOk(notificationHtml.indexOf('data-notification-section="signals"') >= 0 && notificationHtml.indexOf('data-notification-section="policy"') < 0, "알림 결과 모드가 정책/템플릿/고급 설정과 분리되지 않았습니다.");
-    assertOk(notificationPolicyHtml.indexOf('data-page-mode="settings"') >= 0 && notificationPolicyHtml.indexOf('data-notification-section="policy"') >= 0 && notificationPolicyHtml.indexOf('data-notification-section="templates"') >= 0 && notificationPolicyHtml.indexOf('data-notification-section="advanced"') >= 0, "알림 설정 모드가 정책/템플릿/고급 섹션을 보여주지 않습니다.");
+    assertOk(styles.indexOf(".notification-command-center") >= 0 && styles.indexOf("grid-template-columns: repeat(auto-fit, minmax(118px, 1fr))") >= 0, "알림 내부 섹션이 command center 자동 맞춤 탭 스타일로 정의되지 않았습니다.");
+    assertOk(notificationHtml.indexOf('data-notification-section="candidates"') >= 0 && notificationHtml.indexOf('data-notification-section="policy"') < 0, "알림 결과 모드가 정책/템플릿/진단 설정과 분리되지 않았습니다.");
+    assertOk(notificationPolicyHtml.indexOf('data-page-mode="settings"') >= 0 && notificationPolicyHtml.indexOf('data-notification-section="policy"') >= 0 && notificationPolicyHtml.indexOf('data-notification-section="templates"') >= 0 && notificationPolicyHtml.indexOf('data-notification-section="diagnostics"') >= 0, "알림 설정 모드가 정책/템플릿/진단 섹션을 보여주지 않습니다.");
     assertOk(notificationHtml.indexOf("notification-section-bar") < notificationHtml.indexOf("notification-ops-rail"), "알림 섹션 탭이 상태 레일 위에 배치되지 않았습니다.");
     assertOk(notificationHtml.indexOf("notification-decision-panel") >= 0, "최근 알림 판단 패널이 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("notification-ops-rail") < notificationHtml.indexOf("notification-decision-panel"), "기본 현황에서 상태 레일 다음에 최근 알림 판단이 이어지지 않습니다.");
@@ -1319,7 +1319,7 @@ function checkFrontendAdminRender() {
     assertOk(notificationPolicyHtml.indexOf("admin-message-details") < 0, "정책 행 안에 inline 상세 편집기가 남아 있습니다.");
     assertOk(code.indexOf("renderNotificationTemplateRow(template, { policyDetail: true })") >= 0, "알림 타입별 템플릿 상세 렌더링 경로가 없습니다.");
     assertOk(code.indexOf("renderNotificationRuleEditor(rule.key, { inline: true })") >= 0, "정책 상세의 전체 룰 편집 경로가 없습니다.");
-    assertOk(notificationAdvancedHtml.indexOf("notification-rule-editor") >= 0 && notificationAdvancedHtml.indexOf("최소 발송 우선도") >= 0, "고급 섹션의 전체 룰 상세가 렌더링되지 않았습니다.");
+    assertOk(notificationDiagnosticsHtml.indexOf("notification-rule-editor") >= 0 && notificationDiagnosticsHtml.indexOf("최소 발송 우선도") >= 0, "진단 섹션의 전체 룰 상세가 렌더링되지 않았습니다.");
     assertOk(code.indexOf("유사 메시지") >= 0 && code.indexOf("data-notification-rule-similarity-enabled") >= 0, "유사 메시지 억제 설정 경로가 없습니다.");
     assertOk(code.indexOf("data-notification-rule-fields") >= 0, "유사 메시지 fingerprint 필드 입력 경로가 없습니다.");
     assertOk(code.indexOf("장 시간 필터") >= 0 && code.indexOf("data-notification-rule-market-hours-enabled") >= 0, "장 시간 필터 설정 경로가 없습니다.");
@@ -1342,16 +1342,16 @@ function checkFrontendAdminRender() {
     assertOk(code.indexOf("notificationTemplateEditorOpen") >= 0 && code.indexOf("data-notification-template-editor-close") >= 0, "템플릿 상세 편집 레이어 닫기 경로가 없습니다.");
     assertOk(code.indexOf("notification-template-modal-backdrop") >= 0 && code.indexOf("renderNotificationTemplateRow(selected, { templateDetail: true })") >= 0, "템플릿 상세 편집 레이어 렌더링 경로가 없습니다.");
     assertOk(notificationTemplateHtml.indexOf("notification-rule-editor") < 0, "템플릿 섹션에 룰 편집기가 섞여 있습니다.");
-    assertOk(notificationAdvancedHtml.indexOf("settings-api-grid") >= 0, "고급 섹션에 설정 API 상태 요약이 렌더링되지 않았습니다.");
-    assertOk(notificationAdvancedHtml.indexOf("Client ID 설정됨") >= 0, "고급 섹션에 토스 Client ID 상태가 표시되지 않습니다.");
-    assertOk(notificationAdvancedHtml.indexOf("Bot token 설정됨") >= 0, "고급 섹션에 텔레그램 bot token 상태가 표시되지 않습니다.");
-    assertOk(notificationAdvancedHtml.indexOf("notification-threshold-panel") >= 0 && notificationAdvancedHtml.indexOf("alert-threshold-grid") >= 0, "고급 섹션에 알림 임계값 패널이 없습니다.");
+    assertOk(notificationDiagnosticsHtml.indexOf("settings-api-grid") >= 0, "진단 섹션에 설정 API 상태 요약이 렌더링되지 않았습니다.");
+    assertOk(notificationDiagnosticsHtml.indexOf("Client ID 설정됨") >= 0, "진단 섹션에 토스 Client ID 상태가 표시되지 않습니다.");
+    assertOk(notificationDiagnosticsHtml.indexOf("Bot token 설정됨") >= 0, "진단 섹션에 텔레그램 bot token 상태가 표시되지 않습니다.");
+    assertOk(notificationDiagnosticsHtml.indexOf("notification-threshold-panel") >= 0 && notificationDiagnosticsHtml.indexOf("alert-threshold-grid") >= 0, "진단 섹션에 알림 임계값 패널이 없습니다.");
     assertOk(code.indexOf("data-template-test-send") >= 0, "실제 데이터 알림 테스트 발송 경로가 없습니다.");
     assertOk(code.indexOf("모니터링 정상 작동") >= 0, "상태 확인 템플릿 미리보기 샘플 경로가 없습니다.");
     assertOk(code.indexOf("매수 점수") >= 0, "타입별 템플릿 미리보기 샘플 경로가 없습니다.");
     assertOk(code.indexOf("data-notification-template") >= 0 && code.indexOf("investmentInsight") >= 0, "투자 인사이트 템플릿 textarea 경로가 없습니다.");
     assertOk(notificationTemplateHtml.indexOf("{rawLines}") >= 0, "알림 템플릿 변수가 렌더링되지 않았습니다.");
-    assertOk(notificationAdvancedHtml.indexOf("tab=notifications") >= 0, "알림 링크 기본값이 새 알림 탭을 가리키지 않습니다.");
+    assertOk(notificationDiagnosticsHtml.indexOf("tab=notifications") >= 0, "알림 링크 기본값이 새 알림 탭을 가리키지 않습니다.");
     assertOk(modelingHtml.indexOf("strategy-section-bar") >= 0, "투자 분석 내부 섹션 탭 바가 렌더링되지 않았습니다.");
     assertOk(modelingHtml.indexOf("strategy-section-tabs") >= 0, "투자 분석 내부 섹션 탭이 렌더링되지 않았습니다.");
     assertOk(styles.indexOf(".strategy-section-tabs") >= 0 && styles.indexOf(".strategy-section-bar") >= 0, "투자 분석 내부 섹션 스타일이 정의되지 않았습니다.");
@@ -1418,10 +1418,10 @@ function checkFrontendAdminRender() {
     assertOk(modelingHtml.indexOf("model-timing-panel") < 0 && modelingResultsHtml.indexOf("model-timing-panel") < 0, "Mock 시계열 기반 타이밍 패널이 아직 렌더링됩니다.");
     assertOk(modelingHtml.indexOf("웹에서 운영하는 매수·매도 타이밍 모델") < 0 && modelingResultsHtml.indexOf("웹에서 운영하는 매수·매도 타이밍 모델") < 0, "타이밍 모델 제목이 아직 렌더링됩니다.");
     assertOk(monitoringHtml.indexOf("managed-page-notifications") >= 0 && monitoringHtml.indexOf("<h1>알림</h1>") >= 0, "기존 모니터링 URL이 알림 탭으로 매핑되지 않습니다.");
-    assertOk(monitoringHtml.indexOf("notifications-view") >= 0, "알림 신호 섹션에 통합 화면 클래스가 없습니다.");
+    assertOk(monitoringHtml.indexOf("notifications-view") >= 0, "알림 후보 섹션에 통합 화면 클래스가 없습니다.");
     assertOk(code.indexOf('if (requested === "monitoring") return "notifications";') >= 0, "기존 모니터링 URL 호환 매핑이 없습니다.");
-    assertOk(code.indexOf('return "signals";') >= 0, "기존 모니터링 URL이 신호 섹션으로 열리지 않습니다.");
-    assertOk(styles.indexOf(".notifications-view .monitoring-instrument-panel") >= 0, "알림 신호 섹션 모니터링 패널 레이아웃 CSS가 없습니다.");
+    assertOk(code.indexOf('return "candidates";') >= 0, "기존 모니터링 URL이 후보 섹션으로 열리지 않습니다.");
+    assertOk(styles.indexOf(".notifications-view .monitoring-instrument-panel") >= 0, "알림 후보 섹션 모니터링 패널 레이아웃 CSS가 없습니다.");
     assertOk(styles.indexOf(".monitoring-view .admin-monitoring-panel {\n  grid-area: status;\n  grid-column: auto;") < 0, "모니터링 상태 패널의 PC grid-area가 1컬럼으로 압축될 수 있습니다.");
     assertOk(styles.indexOf(".monitoring-view .alert-panel {\n  grid-area: alerts;\n  grid-column: auto;") < 0, "모니터링 알림 패널의 PC grid-area가 1컬럼으로 압축될 수 있습니다.");
     assertOk(monitoringHtml.indexOf("monitor-status-board") >= 0 && monitoringHtml.indexOf("monitor-runtime-strip") >= 0, "모니터링 실행 상태 패널이 ledger/strip 구조로 렌더링되지 않습니다.");

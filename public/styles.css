@@ -15354,7 +15354,7 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
 }
 
 .notification-command-center .notification-section-tabs {
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
   gap: var(--ds-space-2);
   padding: var(--ds-space-2);
   border: 1px solid var(--ds-card-border);

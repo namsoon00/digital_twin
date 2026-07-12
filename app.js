@@ -96,10 +96,10 @@
   };
   var notificationSections = [
     { id: "status", label: "현황", description: "발송 판단" },
-    { id: "signals", label: "신호", description: "감지 내역" },
+    { id: "candidates", label: "후보", description: "발송 전 신호" },
     { id: "policy", label: "정책", description: "타입별 룰" },
     { id: "templates", label: "템플릿", description: "본문·미리보기" },
-    { id: "advanced", label: "고급", description: "채널·임계값" }
+    { id: "diagnostics", label: "진단", description: "채널·실패 원인" }
   ];
   var accountSections = [
     { id: "overview", label: "개요", description: "상태 요약" },
@@ -132,8 +132,8 @@
       settings: ["management"]
     },
     notifications: {
-      results: ["status", "signals"],
-      settings: ["policy", "templates", "advanced"]
+      results: ["status", "candidates"],
+      settings: ["policy", "templates", "diagnostics"]
     },
     modeling: {
       results: ["overview", "evidence", "results", "graphs", "trace"],
@@ -827,7 +827,7 @@
   function initialNotificationSection() {
     var params = new URLSearchParams(window.location.search);
     if (String(params.get("tab") || "").toLowerCase() === "monitoring" && !params.get("notification")) {
-      return "signals";
+      return "candidates";
     }
     return normalizeNotificationSection(params.get("notification"));
   }
@@ -951,6 +951,8 @@
 
   function normalizeNotificationSection(value) {
     var requested = String(value || "").toLowerCase();
+    if (requested === "signals" || requested === "signal" || requested === "candidate") return "candidates";
+    if (requested === "advanced" || requested === "diagnostic") return "diagnostics";
     return notificationSections.some(function (section) { return section.id === requested; }) ? requested : "status";
   }
 
@@ -9620,7 +9622,7 @@
       renderNotificationCommandCenter(section),
       content,
       '</section>',
-      section === "signals" ? renderMonitoringDetailOverlay(state.snapshot || {}) : ''
+      section === "candidates" ? renderMonitoringDetailOverlay(state.snapshot || {}) : ''
     ].join(""));
   }
 
@@ -9720,25 +9722,27 @@
 
   function renderNotificationSectionContent() {
     var section = activeSectionForPageMode("notifications", notificationSections, normalizeNotificationSection(state.activeNotificationSection));
-    if (section === "signals") return renderNotificationSignalPanel(state.snapshot || {});
+    if (section === "candidates") return renderNotificationCandidatePanel(state.snapshot || {});
     if (section === "policy") return renderAdminMessagePanel();
     if (section === "templates") return renderNotificationTemplateManagerPanel();
-    if (section === "advanced") {
-      return [
-        renderAdminDeliveryPanel(),
-        renderNotificationAdvancedRulePanel(),
-        renderNotificationThresholdPanel()
-      ].join("");
-    }
+    if (section === "diagnostics") return renderNotificationDiagnosticsPanel();
     return renderNotificationDecisionPanel();
   }
 
-  function renderNotificationSignalPanel(snapshot) {
+  function renderNotificationCandidatePanel(snapshot) {
     return [
       renderAdminMonitoringPanel(snapshot),
       renderAlertCenterPanel(snapshot),
       renderMonitoringInstrumentPanel(snapshot),
       renderPortfolioPanel(snapshot)
+    ].join("");
+  }
+
+  function renderNotificationDiagnosticsPanel() {
+    return [
+      renderAdminDeliveryPanel(),
+      renderNotificationAdvancedRulePanel(),
+      renderNotificationThresholdPanel()
     ].join("");
   }
 
@@ -10465,7 +10469,7 @@
       '<option value="tag_only"' + (rule.lowScoreAction === "tag_only" ? " selected" : "") + '>우선도만 기록</option>',
       '</select></label>',
       '</div>',
-      compact ? '<p class="subtle">유사 메시지, 상태 지속 억제, 장 시간 필터, 세부 조건은 고급 탭에서 조정합니다.</p>' : renderNotificationSimilarityEditor(messageType, rule, disabled),
+      compact ? '<p class="subtle">유사 메시지, 상태 지속 억제, 장 시간 필터, 세부 조건은 진단 탭에서 조정합니다.</p>' : renderNotificationSimilarityEditor(messageType, rule, disabled),
       compact ? '' : renderNotificationStateCooldownEditor(messageType, rule, disabled),
       compact ? '' : renderNotificationMarketHoursEditor(messageType, rule, disabled),
       compact ? '' : '<div class="notification-rule-condition-list">',
@@ -10591,9 +10595,9 @@
       '<article class="panel notification-advanced-rule-panel">',
       '<div class="panel-head">',
       '<div>',
-      '<p class="label">Advanced Rule</p>',
-      '<h2>선택 알림 고급 조건</h2>',
-      '<p class="subtle">정책 탭에서 선택한 타입의 유사 메시지, 장 시간, 조건 점수를 세부 조정합니다.</p>',
+      '<p class="label">Diagnostics Rule</p>',
+      '<h2>반복·시간 조건</h2>',
+      '<p class="subtle">정책 탭에서 선택한 타입의 유사 메시지, 장 시간, 조건 점수를 진단합니다.</p>',
       '</div>',
       '<span class="tone-chip hold">' + escapeHtml(rule.label) + '</span>',
       '</div>',

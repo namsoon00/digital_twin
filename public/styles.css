@@ -14375,3 +14375,83 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
     max-width: none;
   }
 }
+
+/* Settings overview layout repair */
+.settings-overview-panel .settings-status-band {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--ds-section-gap);
+  padding: var(--ds-row-pad-y) var(--ds-row-pad-x);
+  border: 1px solid var(--ds-card-border);
+  border-left: 3px solid var(--blue);
+  border-radius: var(--ds-radius-control);
+  background: linear-gradient(180deg, var(--ds-card-row-bg), var(--ds-card-bg));
+}
+
+.settings-overview-panel .settings-status-copy {
+  max-width: 760px;
+  gap: var(--ds-space-2);
+}
+
+.settings-overview-panel .settings-status-copy strong {
+  font-size: 18px;
+  line-height: 1.25;
+  word-break: keep-all;
+}
+
+.settings-overview-panel .settings-status-copy span:not(.tone-chip) {
+  max-width: 70ch;
+  word-break: keep-all;
+  overflow-wrap: normal;
+}
+
+.settings-overview-panel .settings-section-label {
+  display: inline-flex;
+  width: fit-content;
+  min-height: 22px;
+  align-items: center;
+}
+
+.settings-overview-panel .settings-status-stack {
+  align-self: start;
+  justify-content: flex-end;
+  min-width: max-content;
+}
+
+.settings-overview-panel .settings-api-grid {
+  align-items: start;
+  padding-top: 0;
+}
+
+.settings-overview-panel .settings-api-row {
+  min-height: 128px;
+  border: 1px solid var(--ds-card-border);
+  border-left: 3px solid var(--ds-card-status-neutral);
+  border-radius: var(--ds-radius-control);
+  background: linear-gradient(180deg, var(--ds-card-row-bg), var(--ds-card-bg));
+}
+
+.settings-overview-panel .settings-api-row .chip-row {
+  margin-top: var(--ds-space-3);
+}
+
+@media (max-width: 980px) {
+  .settings-overview-panel .settings-status-band {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+
+  .settings-overview-panel .settings-status-copy,
+  .settings-overview-panel .settings-status-copy span:not(.tone-chip) {
+    max-width: none;
+  }
+
+  .settings-overview-panel .settings-status-stack {
+    justify-content: flex-start;
+    min-width: 0;
+  }
+
+  .settings-overview-panel .settings-api-row {
+    min-height: 0;
+  }
+}

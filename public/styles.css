@@ -5394,14 +5394,28 @@ h3 {
 }
 
 .ontology-tbox-graph .ontology-cytoscape {
-  height: min(54vh, 520px);
-  min-height: 400px;
+  height: min(72vh, 760px);
+  min-height: 560px;
 }
 
 .ontology-graph-actions {
   display: flex;
   gap: 6px;
   align-items: center;
+}
+
+.ontology-graph-panel .ontology-surface-head > .ontology-graph-actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: max-content;
+}
+
+.ontology-graph-panel .ontology-surface-head > .ontology-graph-actions .icon-button {
+  flex: 0 0 auto;
 }
 
 .ontology-graph-meta {
@@ -13491,6 +13505,12 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
 
   .ontology-cytoscape {
     min-height: 320px;
+  }
+
+  .ontology-graph-panel .ontology-surface-head > .ontology-graph-actions {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    min-width: 0;
   }
 
   .ontology-graph-expanded-backdrop {

@@ -1291,10 +1291,11 @@ function checkFrontendAdminRender() {
     assertOk(modelingEvidenceHtml.indexOf("체결강도") >= 0 && modelingEvidenceHtml.indexOf("모델-알림 기준") >= 0, "근거 카드 섹션에 전략 데이터 점검 항목이 없습니다.");
     assertOk(modelingResultsHtml.indexOf("investment-evidence-panel") >= 0 && modelingResultsHtml.indexOf("model-preview-panel") >= 0, "종목 판단 섹션이 근거 카드와 모델 판단을 함께 보여주지 않습니다.");
     assertOk(modelingResultsHtml.indexOf("실제 데이터 예시") >= 0 && modelingResultsHtml.indexOf("쉬운 해석") >= 0, "종목 판단 섹션에 기존 모델 해석이 보조 근거로 유지되지 않았습니다.");
-    assertOk(modelingGraphHtml.indexOf("TBox·ABox 관계 그래프") >= 0 && modelingGraphHtml.indexOf("핵심 규칙 구조 그래프") >= 0 && modelingGraphHtml.indexOf("핵심 데이터 관계 그래프") >= 0, "관계 그래프 섹션이 통합 탭 내부에서 렌더링되지 않았습니다.");
+    assertOk(modelingGraphHtml.indexOf("TBox·ABox 관계 그래프") >= 0 && modelingGraphHtml.indexOf("전체 규칙 구조 그래프") >= 0 && modelingGraphHtml.indexOf("핵심 데이터 관계 그래프") >= 0, "관계 그래프 섹션이 통합 탭 내부에서 렌더링되지 않았습니다.");
     assertOk(modelingGraphHtml.indexOf("ontology-cytoscape") >= 0 && modelingGraphHtml.indexOf("규칙과 관계 해설") >= 0 && modelingGraphHtml.indexOf("RuleBox 규칙") >= 0, "관계 그래프 섹션에 Cytoscape 그래프와 텍스트 보조 패널이 없습니다.");
     assertOk(legacyOntologyGraphHtml.indexOf("managed-page managed-page-modeling") >= 0 && legacyOntologyGraphHtml.indexOf("TBox·ABox 관계 그래프") >= 0, "기존 관계 그래프 URL이 통합 탭 그래프 섹션으로 열리지 않습니다.");
     assertOk(/\.ontology-relationship-graphs\s*\{[\s\S]*grid-template-columns: 1fr;/.test(styles), "관계 그래프가 전폭 1열 구조로 정의되지 않았습니다.");
+    assertOk(code.indexOf('targetContext + "|RELATES_TO"') < 0 && modelingGraphHtml.indexOf("접은 표시") < 0, "규칙 구조 그래프가 relation type을 접어서 표시합니다.");
     assertOk(code.indexOf("ontologyEntityDisplayLabel") >= 0 && code.indexOf('"의견 " + displayName') >= 0, "현재 데이터 관계 그래프 노드가 회사명 표시명을 거치지 않습니다.");
     assertOk(code.indexOf("properties.symbol || entity.label") < 0 && code.indexOf('"의견 " + symbol') < 0, "현재 데이터 관계 그래프 노드 라벨에 종목코드 우선 경로가 남아 있습니다.");
     assertOk(modelingRegistryHtml.indexOf("investment-ai-packet-panel") >= 0 && modelingRegistryHtml.indexOf("AI 추론 입력 계약") >= 0, "규칙·프롬프트 섹션에 AI 추론 입력 계약이 없습니다.");

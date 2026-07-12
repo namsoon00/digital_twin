@@ -749,9 +749,9 @@
       };
     }
     return {
-      title: "핵심 규칙 구조 그래프",
+      title: "전체 규칙 구조 그래프",
       eyebrow: "Rule Structure Graph",
-      description: "투자 판단에 직접 영향을 주는 TBox 분류, 관계 타입, 규칙 연결을 큰 화면으로 확인합니다.",
+      description: "TBox 분류, 관계 타입, 규칙 연결을 접지 않고 큰 화면으로 확인합니다.",
       fitLabel: "규칙 구조 그래프 맞춤",
       layoutLabel: "규칙 구조 자동 배치"
     };
@@ -9764,47 +9764,6 @@
     return text.length > max ? text.slice(0, Math.max(1, max - 1)) + "…" : text;
   }
 
-  function ontologyTboxGraphClassImportant(name) {
-    var important = {
-      Account: true,
-      Portfolio: true,
-      Position: true,
-      Stock: true,
-      Security: true,
-      Watchlist: true,
-      PriceBar: true,
-      PriceMetric: true,
-      KeyLevel: true,
-      TrendSignal: true,
-      TrendTransition: true,
-      VolumeProfile: true,
-      TradeFlow: true,
-      ResearchEvidence: true,
-      NewsArticle: true,
-      DisclosureFiling: true,
-      FactChange: true,
-      MaterialityAssessment: true,
-      MissingData: true,
-      DataQuality: true,
-      DataSource: true,
-      Risk: true,
-      MarketRisk: true,
-      EventRisk: true,
-      DataQualityRisk: true,
-      Opportunity: true,
-      InvestmentThesis: true,
-      Opinion: true,
-      ActiveInvestmentOpinion: true,
-      GraphInferenceRule: true,
-      InferenceTrace: true,
-      NextCheck: true,
-      AlertCandidate: true,
-      NotificationDispatch: true,
-      DataPipeline: true
-    };
-    return Boolean(important[String(name || "")]);
-  }
-
   function ontologyGraphImportantRelationTypes() {
     return {
       HOLDS: true,
@@ -9857,7 +9816,6 @@
     classDefs.forEach(function (item) {
       var name = String(item.name || item.className || "");
       if (!name) return;
-      if (!ontologyTboxGraphClassImportant(name) && !ontologyTboxGraphClassImportant(item.parent)) return;
       var contextKey = String(item.bounded_context || item.boundedContext || "investment-core");
       var index = contextIndex[contextKey];
       if (index === undefined) index = 0;
@@ -9897,12 +9855,10 @@
       return { text: text, bounded_context: "reasoning-insight" };
     });
     var edges = [];
-    var importantRelations = ontologyGraphImportantRelationTypes();
     classDefs.forEach(function (item) {
       var name = String(item.name || item.className || "");
       var contextKey = String(item.bounded_context || item.boundedContext || "investment-core");
       if (!name) return;
-      if (!ontologyTboxGraphClassImportant(name) && !ontologyTboxGraphClassImportant(item.parent)) return;
       edges.push({ source: "ctx:" + contextKey, target: "class:" + name, type: "DEFINES_CLASS", kind: "schema" });
       if (item.parent) {
         edges.push({ source: "class:" + name, target: "class:" + item.parent, type: "IS_A", kind: "schema" });
@@ -9915,10 +9871,10 @@
       var name = String(item.name || item.relationType || "");
       var relationType = name.toUpperCase();
       if (!sourceContext || !targetContext || !name) return;
-      var key = importantRelations[relationType] ? (sourceContext + "|" + targetContext + "|" + relationType) : (sourceContext + "|" + targetContext + "|RELATES_TO");
+      var key = sourceContext + "|" + targetContext + "|" + relationType;
       if (relationSeen[key]) return;
       relationSeen[key] = true;
-      edges.push({ source: "ctx:" + sourceContext, target: "ctx:" + targetContext, type: importantRelations[relationType] ? relationType : "RELATES_TO", kind: "schema" });
+      edges.push({ source: "ctx:" + sourceContext, target: "ctx:" + targetContext, type: relationType, kind: "schema" });
     });
     ruleDefs.forEach(function (item, index) {
       var contextKey = String(item.bounded_context || item.boundedContext || "reasoning-insight");
@@ -9934,8 +9890,8 @@
       '<section class="ontology-graph-panel ontology-tbox-graph">',
       '<div class="ontology-surface-head">',
       '<div>',
-      '<strong>핵심 규칙 구조 그래프</strong>',
-      '<span>투자 판단에 직접 영향을 주는 TBox 분류, 관계 타입, 규칙 연결만 표시합니다.</span>',
+      '<strong>전체 규칙 구조 그래프</strong>',
+      '<span>TBox 분류, 관계 타입, 규칙 연결을 접지 않고 모두 표시합니다.</span>',
       '</div>',
       '<div class="ontology-graph-actions">',
       '<button class="icon-button" type="button" data-ontology-graph-expand="tbox" title="규칙 구조 큰 화면으로 보기" aria-label="규칙 구조 그래프 큰 화면으로 보기">⤢</button>',
@@ -9949,7 +9905,7 @@
       '</div>',
       '<div class="ontology-cytoscape" data-ontology-cytoscape="tbox"><span>그래프 엔진 초기화 중</span></div>',
       '<div class="ontology-graph-caption">',
-      '<span>굵은 실선은 핵심 relation type, RELATES_TO는 보조 관계를 접은 표시입니다.</span>',
+      '<span>모든 relation type을 각각의 관계 edge로 표시합니다.</span>',
       '<span>점선 rule edge는 TBox 규칙이 어떤 컨텍스트의 판단을 제약하는지 나타냅니다.</span>',
       '</div>',
       '</section>'

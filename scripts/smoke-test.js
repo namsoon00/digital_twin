@@ -252,6 +252,7 @@ function checkFrontendAdminRender() {
   assertOk(code.indexOf("renderManagedPage") >= 0 && styles.indexOf(".managed-page") >= 0, "전체 탭 공통 관리 페이지 템플릿이 없습니다.");
   assertOk(code.indexOf("renderPageCommandStrip") >= 0 && styles.indexOf(".page-command-strip") >= 0, "페이지 작업 상태 strip 템플릿이 없습니다.");
   assertOk(code.indexOf("renderPageRoutinePanel") >= 0 && styles.indexOf(".page-routine-panel") >= 0, "탭별 현재 상태/이유/다음 행동 루틴 카드가 없습니다.");
+  assertOk(code.indexOf("renderPageFlowSpine") >= 0 && styles.indexOf(".page-flow-spine") >= 0, "업무 탭 데이터 흐름 spine이 없습니다.");
   assertOk(styles.indexOf("Desktop free-scroll and focus-mode layer") >= 0, "PC 자유 스크롤/모드 분리 최종 레이어가 없습니다.");
   assertOk(/Desktop free-scroll and focus-mode layer[\s\S]*\.shell,[\s\S]*\.console-shell\s*\{[\s\S]*height: auto;[\s\S]*overflow: visible;/.test(styles), "PC shell이 페이지 스크롤 구조로 풀리지 않았습니다.");
   assertOk(/Desktop free-scroll and focus-mode layer[\s\S]*\.workspace-main,[\s\S]*\.managed-page,[\s\S]*\.admin-grid\s*\{[\s\S]*height: auto;[\s\S]*overflow: visible;/.test(styles), "PC 본문이 내부 고정 스크롤에서 해제되지 않았습니다.");
@@ -280,6 +281,7 @@ function checkFrontendAdminRender() {
   assertOk(designSystemDoc.indexOf("#F3F5F8") >= 0 && designSystemDoc.indexOf("Relation Matrix") >= 0, "디자인 시스템 문서에 기관형 금융 콘솔 팔레트나 관계 UI 기준이 없습니다.");
   assertOk(designSystemDoc.indexOf("Page Contracts") >= 0, "디자인 시스템 문서에 페이지별 UI 계약이 없습니다.");
   assertOk(designSystemDoc.indexOf("page-routine-panel") >= 0 && designSystemDoc.indexOf("현재 상태") >= 0 && designSystemDoc.indexOf("다음 행동") >= 0, "디자인 시스템 문서에 탭별 루틴 패널 계약이 없습니다.");
+  assertOk(designSystemDoc.indexOf("page-flow-spine") >= 0 && designSystemDoc.indexOf("이전 입력") >= 0 && designSystemDoc.indexOf("다음 출력") >= 0, "디자인 시스템 문서에 전체 데이터 흐름 spine 계약이 없습니다.");
   assertOk(designSystemDoc.indexOf("textarea") >= 0 && designSystemDoc.indexOf("자동 높이 확장") >= 0 && designSystemDoc.indexOf("자체 스크롤바") >= 0, "디자인 시스템 문서에 긴 입력값 자체 스크롤 금지 계약이 없습니다.");
   assertOk(designSystemDoc.indexOf("영향 인박스") >= 0 && designSystemDoc.indexOf("기사 제목·출처·시간·원문 링크는 카드 하단") >= 0, "디자인 시스템 문서에 피드 영향 인박스 계약이 없습니다.");
   assertOk(designSystemDoc.indexOf("Control Map") >= 0 && designSystemDoc.indexOf("결과 화면과 설정 화면 책임") >= 0 && designSystemDoc.indexOf("고급 설정") >= 0 && designSystemDoc.indexOf("진단") >= 0, "디자인 시스템 문서에 설정 탭 책임 지도/설정 분리 계약이 없습니다.");
@@ -1168,6 +1170,9 @@ function checkFrontendAdminRender() {
       assertOk(html.indexOf('data-structure-group="' + expectedStructureGroups[tabId] + '"') >= 0, "탭 managed page가 정보 구조 그룹을 렌더링하지 않습니다: " + tabId);
       assertOk(html.indexOf('data-structure-layer="') >= 0 && html.indexOf('data-structure-entity="') >= 0, "탭 managed page가 레이어/엔티티 구조를 렌더링하지 않습니다: " + tabId);
       assertOk(html.indexOf('data-command-group="' + expectedStructureGroups[tabId] + '"') >= 0 && html.indexOf("page-command-context") >= 0, "탭 command strip이 정보 구조 컨텍스트를 렌더링하지 않습니다: " + tabId);
+      if (!hasDeskbar) {
+        assertOk(html.indexOf("page-flow-spine") >= 0 && html.indexOf("이전 입력") >= 0 && html.indexOf("현재 처리") >= 0 && html.indexOf("다음 출력") >= 0, "업무 탭에 전체 데이터 흐름 spine이 없습니다: " + tabId);
+      }
       assertOk(html.indexOf("admin-grid") >= 0, "탭 본문이 12컬럼 작업대 구조를 통과하지 않습니다: " + tabId);
     });
     assertOk(legacyOntologyHtml.indexOf("managed-page managed-page-modeling") >= 0, "기존 관계 분석 URL이 투자 분석 탭으로 호환 렌더링되지 않습니다.");
@@ -1212,6 +1217,7 @@ function checkFrontendAdminRender() {
     assertOk(overviewHtml.indexOf("Portfolio Snapshot") >= 0 && notificationHtml.indexOf("Notification Job") >= 0 && modelingHtml.indexOf("Investment Opinion") >= 0, "주요 화면 command strip이 핵심 엔티티를 렌더링하지 않습니다.");
     assertOk(styles.indexOf(".app-nav-group") >= 0 && styles.indexOf(".page-command-context") >= 0, "업무 그룹 네비게이션과 command context 스타일이 없습니다.");
     assertOk(styles.indexOf("Focused work-tab header layer") >= 0 && styles.indexOf(".page-command-strip-compact") >= 0, "업무 탭 상단 compact command strip 스타일이 없습니다.");
+    assertOk(styles.indexOf(".page-flow-node + .page-flow-node::before") >= 0, "업무 탭 데이터 흐름 spine 연결 표시가 없습니다.");
     assertOk(overviewHtml.indexOf("shell-home") >= 0, "홈 탭 shell이 홈 전용 배치를 사용하지 않습니다.");
     [
       ["계정", accountHtml],
@@ -1226,16 +1232,21 @@ function checkFrontendAdminRender() {
     ].forEach(function (entry) {
       assertOk(entry[1].indexOf("deskbar deskbar-compact") < 0 && entry[1].indexOf("web-style-deskbar") < 0, entry[0] + " 탭에 업무 흐름을 밀어내는 deskbar가 남아 있습니다.");
       assertOk(entry[1].indexOf("page-command-strip-compact") >= 0, entry[0] + " 탭이 얇은 command strip을 사용하지 않습니다.");
+      assertOk(entry[1].indexOf("page-flow-spine") >= 0, entry[0] + " 탭이 전체 데이터 흐름 spine을 사용하지 않습니다.");
       assertOk(entry[1].indexOf("deskbar deskbar-full") < 0, entry[0] + " 탭에 홈 전용 full deskbar가 렌더링됩니다.");
       assertOk(entry[1].indexOf("shell-page") >= 0, entry[0] + " 탭 shell이 본문 우선 배치를 사용하지 않습니다.");
     });
+    assertOk(accountHtml.indexOf("Toss/API 인증") >= 0 && accountHtml.indexOf("포트폴리오 스냅샷") >= 0, "계정 탭 흐름 spine이 계정 입력/출력을 설명하지 않습니다.");
+    assertOk(feedHtml.indexOf("관심·보유 종목 뉴스/공시") >= 0 && feedHtml.indexOf("투자 판단 근거") >= 0, "뉴스 영향 탭 흐름 spine이 근거 입력/출력을 설명하지 않습니다.");
+    assertOk(modelingHtml.indexOf("계정·시세·뉴스 근거") >= 0 && modelingHtml.indexOf("액션 큐·알림 후보") >= 0, "투자 판단 탭 흐름 spine이 판단 입력/출력을 설명하지 않습니다.");
+    assertOk(notificationHtml.indexOf("추론 결과·중요도 점수") >= 0 && notificationHtml.indexOf("알림 이력") >= 0, "알림 판단 탭 흐름 spine이 알림 입력/출력을 설명하지 않습니다.");
     assertOk(code.indexOf('data-action="open-settings"') < 0, "topbar 설정 버튼이 상단 관리 탭과 중복됩니다.");
     assertOk(code.indexOf("pushState") >= 0 && code.indexOf("popstate") >= 0, "탭 이동이 브라우저 뒤로가기와 동기화되지 않았습니다.");
     assertOk(code.indexOf("restoreTabBarPosition") >= 0 && code.indexOf("tabBarScrollLeft") >= 0, "하단 탭 위치 복원 로직이 없습니다.");
     assertOk(code.indexOf("tabScrollPositions") >= 0 && code.indexOf("restoreRenderedPageScrollPosition") >= 0 && code.indexOf("rememberRenderedPageScrollPosition") >= 0, "탭별 본문 스크롤 복원 로직이 없습니다.");
     assertOk(overviewHtml.indexOf('data-scroll-key="overview"') >= 0, "탭 본문에 스크롤 관리 키가 렌더링되지 않습니다.");
     assertOk(designSystemDoc.indexOf("각 탭은 독립된 페이지 스크롤 위치") >= 0 && designSystemDoc.indexOf("기본은 window/page 스크롤") >= 0, "디자인 시스템 문서에 탭별 페이지 스크롤 정책이 없습니다.");
-    assertOk(designSystemDoc.indexOf("업무 탭에서는 상단 상태 카드 묶음을 렌더링하지 않는다") >= 0 && designSystemDoc.indexOf("page-command-strip-compact") >= 0, "디자인 시스템 문서에 업무 탭 상단 축소 계약이 없습니다.");
+    assertOk(designSystemDoc.indexOf("업무 탭에서는 상단 상태 카드 묶음을 렌더링하지 않는다") >= 0 && designSystemDoc.indexOf("page-command-strip-compact") >= 0 && designSystemDoc.indexOf("page-flow-spine") >= 0, "디자인 시스템 문서에 업무 탭 상단 축소/흐름 계약이 없습니다.");
     assertOk(code.indexOf("syncTopbarScrollState") >= 0 && code.indexOf("topbar-collapsed") >= 0, "상단 제목 영역을 스크롤 상태에 따라 접는 로직이 없습니다.");
     assertOk(styles.indexOf(".shell-page.topbar-collapsed") >= 0 && styles.indexOf(".topbar-collapsed .topbar") >= 0, "상단 제목 영역 접힘 레이아웃 스타일이 없습니다.");
     assertOk(

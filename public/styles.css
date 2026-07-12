@@ -17159,7 +17159,7 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
 
 /* Focused work-tab header layer */
 .shell-page .page-command-strip-compact {
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(250px, 0.32fr) minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--ds-space-3);
   min-height: 42px;
@@ -17184,6 +17184,10 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   font-size: 13px;
 }
 
+.shell-page .page-command-strip-compact .page-command-kicker {
+  display: none;
+}
+
 .shell-page .page-command-strip-compact .page-command-context em {
   display: none;
 }
@@ -17192,13 +17196,68 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   display: none;
 }
 
+.shell-page .page-flow-spine {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+}
+
+.shell-page .page-flow-node {
+  position: relative;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  min-width: 0;
+  padding: 0 var(--ds-space-4) 0 0;
+}
+
+.shell-page .page-flow-node + .page-flow-node {
+  padding-left: var(--ds-space-4);
+}
+
+.shell-page .page-flow-node + .page-flow-node::before {
+  content: ">";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  color: color-mix(in srgb, var(--muted) 62%, transparent);
+  font-size: 11px;
+  font-weight: 950;
+  transform: translate(-50%, -48%);
+}
+
+.shell-page .page-flow-node em,
+.shell-page .page-flow-node strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.1;
+}
+
+.shell-page .page-flow-node em {
+  color: var(--muted);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 900;
+}
+
+.shell-page .page-flow-node strong {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 900;
+}
+
 .shell-page .page-command-strip-compact .page-command-metrics {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: var(--ds-space-2);
   min-width: 0;
+  overflow: hidden;
   border-left: 0;
 }
 
@@ -17206,6 +17265,8 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  flex: 0 1 106px;
+  max-width: 118px;
   min-height: 26px;
   padding: 3px 8px;
   border: 1px solid color-mix(in srgb, var(--ds-card-border) 82%, transparent);
@@ -17215,6 +17276,10 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
 
 .shell-page .page-command-strip-compact .page-command-metric em,
 .shell-page .page-command-strip-compact .page-command-metric strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 11px;
   line-height: 1;
 }
@@ -17246,6 +17311,19 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
     grid-template-columns: 1fr;
     align-items: start;
     padding: var(--ds-space-3);
+  }
+
+  .shell-page .page-flow-spine {
+    flex-wrap: wrap;
+    gap: var(--ds-space-2);
+  }
+
+  .shell-page .page-flow-node {
+    padding-right: var(--ds-space-3);
+  }
+
+  .shell-page .page-flow-node + .page-flow-node {
+    padding-left: var(--ds-space-3);
   }
 
   .shell-page .page-command-strip-compact .page-command-metrics {

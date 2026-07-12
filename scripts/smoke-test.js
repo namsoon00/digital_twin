@@ -1158,9 +1158,9 @@ function checkFrontendAdminRender() {
     assertOk(overviewHtml.indexOf("<h1>홈</h1>") >= 0, "홈 탭 제목이 상단에 렌더링되지 않았습니다.");
     assertOk(accountHtml.indexOf("<h1>계정</h1>") >= 0, "계정 탭 제목이 상단에 렌더링되지 않았습니다.");
     assertOk(accountResultsHtml.indexOf("account-section-tabs") >= 0, "계정 결과 탭이 내부 섹션 탭으로 분리되지 않았습니다.");
-    assertOk(accountResultsHtml.indexOf('data-account-section="connections"') >= 0 && accountResultsHtml.indexOf('data-account-section="balance"') >= 0, "계정 결과 섹션 탭에 연결/금액 탭이 없습니다.");
-    assertOk(accountHtml.indexOf('data-page-mode="settings"') >= 0 && accountHtml.indexOf('data-account-section="management"') >= 0, "계정 설정 모드가 관리 섹션으로 분리되지 않았습니다.");
-    assertOk(accountHtml.indexOf('data-scroll-key="accounts:management"') >= 0, "계정 내부 탭별 스크롤 키가 렌더링되지 않습니다.");
+    assertOk(accountResultsHtml.indexOf('data-account-section="status"') >= 0 && accountResultsHtml.indexOf('data-account-section="connections"') >= 0 && accountResultsHtml.indexOf('data-account-section="balance"') >= 0 && accountResultsHtml.indexOf('data-account-section="history"') >= 0, "계정 결과 섹션 탭에 상태/연결/자산 검증/데이터 이력 탭이 없습니다.");
+    assertOk(accountHtml.indexOf('data-page-mode="settings"') >= 0 && accountHtml.indexOf('data-account-section="identity"') >= 0, "계정 설정 모드가 계정 식별 섹션으로 분리되지 않았습니다.");
+    assertOk(accountHtml.indexOf('data-scroll-key="accounts:identity"') >= 0, "계정 내부 탭별 스크롤 키가 렌더링되지 않습니다.");
     assertOk(overviewHtml.indexOf('aria-current="page"') >= 0, "활성 탭 접근성 상태가 렌더링되지 않았습니다.");
     assertOk(settingsHtml.indexOf("<h1>설정</h1>") >= 0, "설정 탭 제목이 상단에 렌더링되지 않았습니다.");
     assertOk(settingsHtml.indexOf("settings-view") >= 0, "설정 화면이 페이지 구조로 렌더링되지 않았습니다.");
@@ -1256,9 +1256,11 @@ function checkFrontendAdminRender() {
     assertOk(accountHtml.indexOf("account-exposure-grid") >= 0, "PC 계좌 노출 지표가 렌더링되지 않았습니다.");
     assertOk(accountHtml.indexOf("계정 노출 상태") >= 0, "계좌 노출 지표 접근성 라벨이 없습니다.");
     assertOk(accountHtml.indexOf("account-credential-grid") >= 0, "계정 보안 상태 요약이 렌더링되지 않았습니다.");
-    assertOk(accountHtml.indexOf("Bot token 설정됨") >= 0, "텔레그램 bot token 설정 상태가 표시되지 않습니다.");
     assertOk(accountHtml.indexOf("Secret 설정됨") >= 0, "토스 secret 설정 상태가 표시되지 않습니다.");
     assertOk(accountHtml.indexOf("저장됨 - 새 값 입력 시 교체") >= 0, "저장된 API 값의 교체 안내가 표시되지 않습니다.");
+    assertOk(accountHtml.indexOf("Telegram Bot Token") < 0 && accountHtml.indexOf("Bot token 설정됨") < 0 && accountHtml.indexOf("알림 금지") < 0 && accountHtml.indexOf("메시지 전달 수준") < 0, "계정 탭에 알림 채널/전달 정책 UI가 남아 있습니다.");
+    assertOk(accountResultsHtml.indexOf("Telegram Bot Token") < 0 && accountResultsHtml.indexOf("Bot token 설정됨") < 0 && accountResultsHtml.indexOf("알림 금지") < 0 && accountResultsHtml.indexOf("메시지 전달 수준") < 0, "계정 결과 탭에 알림 채널/전달 정책 UI가 남아 있습니다.");
+    assertOk(code.indexOf('notifyProvider: String(draft.notifyProvider') < 0 && code.indexOf("if (String(draft.telegramBotToken") < 0, "계정 저장 payload가 알림 채널 secret을 전송합니다.");
     assertOk(code.indexOf("function createNewAccountDraft") >= 0, "새 계정 전용 draft 생성 로직이 없습니다.");
     assertOk(code.indexOf("state.accountDraft = createNewAccountDraft();") >= 0, "새 계정 버튼이 새 draft 생성 로직과 연결되지 않았습니다.");
     assertOk(code.indexOf('"account-" + index') >= 0, "새 계정 ID 중복 방지 로직이 없습니다.");

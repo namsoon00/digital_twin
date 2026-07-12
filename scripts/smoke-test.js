@@ -1150,7 +1150,7 @@ function checkFrontendAdminRender() {
     assertOk(code.indexOf("realtime.status") >= 0, "웹소켓 상태 메시지를 처리하지 않습니다.");
     assertOk(code.indexOf("realtimeEventSnackbar") >= 0, "웹소켓 이벤트를 스낵바로 연결하지 않습니다.");
     assertOk(overviewHtml.indexOf("실시간") >= 0, "홈 요약에 실시간 연결 상태가 렌더링되지 않습니다.");
-    ["overview", "accounts", "watchlist", "symbols", "notifications", "modeling", "feed", "system", "settings"].forEach(function (tab) {
+    ["overview", "accounts", "watchlist", "symbols", "notifications", "modeling", "experiments", "feed", "system", "settings"].forEach(function (tab) {
       assertOk(overviewHtml.indexOf('data-tab="' + tab + '"') >= 0, "새 탭이 렌더링되지 않았습니다: " + tab);
     });
     assertOk(overviewHtml.indexOf('data-tab="ontology"') < 0, "관계 분석 독립 탭이 아직 렌더링됩니다.");
@@ -1288,27 +1288,29 @@ function checkFrontendAdminRender() {
     assertOk(modelingHtml.indexOf("strategy-section-bar") >= 0, "투자 분석 내부 섹션 탭 바가 렌더링되지 않았습니다.");
     assertOk(modelingHtml.indexOf("strategy-section-tabs") >= 0, "투자 분석 내부 섹션 탭이 렌더링되지 않았습니다.");
     assertOk(styles.indexOf(".strategy-section-tabs") >= 0 && styles.indexOf(".strategy-section-bar") >= 0, "투자 분석 내부 섹션 스타일이 정의되지 않았습니다.");
+    assertOk(code.indexOf("renderInvestmentTabWorkspace") >= 0 && styles.indexOf(".investment-tab-workspace") >= 0, "투자 분석 탭이 짧은 워크스페이스 구조를 쓰지 않습니다.");
     assertOk(modelingHtml.indexOf('data-strategy-section="evidence"') >= 0 && modelingHtml.indexOf('data-strategy-section="results"') >= 0 && modelingHtml.indexOf('data-strategy-section="graphs"') >= 0 && modelingHtml.indexOf('data-strategy-section="registry"') >= 0 && modelingHtml.indexOf('data-strategy-section="trace"') >= 0, "투자 분석 내부 섹션 이동 버튼이 없습니다.");
     assertOk(modelingHtml.indexOf('data-strategy-section="data"') < 0 && modelingHtml.indexOf('data-strategy-section="policy"') < 0 && modelingHtml.indexOf('data-strategy-section="ontology"') < 0, "이전 전략/관계 섹션 ID가 통합 탭에 남아 있습니다.");
     assertOk(code.indexOf('if (requested === "ontology" || requested === "relations") return "modeling";') >= 0, "기존 관계 분석 URL을 투자 분석 탭으로 매핑하지 않습니다.");
     assertOk(code.indexOf("writeStrategySectionHistory") >= 0 && code.indexOf("strategySectionUrl") >= 0, "투자 분석 내부 탭 URL 동기화 경로가 없습니다.");
     assertOk(modelingHtml.indexOf("<h1>투자 분석</h1>") >= 0, "투자 분석 탭 제목이 상단에 렌더링되지 않았습니다.");
     assertOk(legacyOntologyHtml.indexOf("<h1>투자 분석</h1>") >= 0 && legacyOntologyHtml.indexOf("investment-bridge-panel") >= 0, "기존 관계 분석 URL이 통합 투자 분석 개요로 열리지 않습니다.");
+    assertOk(modelingHtml.indexOf("investment-tab-workspace-overview") >= 0, "투자 분석 개요가 워크스페이스 컨테이너로 렌더링되지 않습니다.");
     assertOk(modelingHtml.indexOf("investment-bridge-panel") >= 0 && modelingHtml.indexOf("전략 데이터와 관계 분석을 잇는 추론 구조") >= 0, "투자 분석 개요에 전략-관계-AI 파이프라인이 없습니다.");
     assertOk(modelingHtml.indexOf("AI 추론 입력") >= 0 && modelingHtml.indexOf("investment-ontology-ai-inference-v1") >= 0, "투자 분석 개요에 AI inference packet 계약이 보이지 않습니다.");
-    assertOk(modelingHtml.indexOf("investment-evidence-panel") >= 0 && modelingHtml.indexOf("투자 근거 카드") >= 0, "투자 분석 개요에 reasoning card가 렌더링되지 않았습니다.");
+    assertOk(modelingHtml.indexOf("investment-evidence-panel") < 0 && modelingHtml.indexOf("투자 근거 카드") < 0, "투자 분석 개요에 근거 카드 미리보기가 중복 렌더링됩니다.");
     assertOk(modelingHtml.indexOf("HOLDS") >= 0 && modelingHtml.indexOf("WATCHES") >= 0, "보유/관심 관계 구분이 투자 분석 개요에 표시되지 않습니다.");
     assertOk(modelingHtml.indexOf("macro-signal-panel") >= 0 && modelingHtml.indexOf("환율·금리 관계 신호") >= 0, "투자 분석 개요에 환율·금리 온톨로지 신호 패널이 없습니다.");
     assertOk(modelingHtml.indexOf("USD/KRW 환율") >= 0 && modelingHtml.indexOf("미국 10년 국채금리") >= 0 && modelingHtml.indexOf("10Y-2Y 금리 스프레드") >= 0, "환율·금리 신호 값이 투자 분석 개요에 표시되지 않습니다.");
     assertOk(styles.indexOf(".macro-signal-grid") >= 0 && styles.indexOf(".macro-relation-row") >= 0, "환율·금리 온톨로지 신호 UI 스타일이 없습니다.");
-    assertOk(modelingHtml.indexOf("strategy-process-panel") >= 0 && modelingHtml.indexOf("Strategy Workflow") >= 0, "투자 분석 개요에 처리 순서 UI가 없습니다.");
-    assertOk(modelingHtml.indexOf("model-guide-panel") >= 0 && modelingHtml.indexOf("전략 운영 기준 관리") >= 0, "개요 탭에 모델 운영 가이드가 렌더링되지 않았습니다.");
+    assertOk(modelingHtml.indexOf("strategy-process-panel") < 0 && modelingHtml.indexOf("model-guide-panel") < 0, "개요 탭에 긴 운영 가이드 패널이 섞여 있습니다.");
     assertOk(modelingHtml.indexOf("strategy-data-panel") < 0 && modelingHtml.indexOf("admin-modeling-panel") < 0 && modelingHtml.indexOf("model-preview-panel") < 0, "개요 탭에 상세 운영 섹션 패널이 섞여 있습니다.");
-    assertOk(modelingEvidenceHtml.indexOf("investment-evidence-panel") >= 0 && modelingEvidenceHtml.indexOf("strategy-data-panel") >= 0, "근거 카드 섹션에 카드와 데이터 점검이 함께 렌더링되지 않았습니다.");
+    assertOk(modelingEvidenceHtml.indexOf("investment-tab-workspace-evidence") >= 0 && modelingEvidenceHtml.indexOf("investment-evidence-panel") >= 0 && modelingEvidenceHtml.indexOf("strategy-data-panel") >= 0, "근거 카드 섹션에 카드와 데이터 점검이 함께 렌더링되지 않았습니다.");
     assertOk(modelingEvidenceHtml.indexOf("전략 근거") >= 0 && modelingEvidenceHtml.indexOf("관계 근거") >= 0, "근거 카드가 전략 근거와 관계 근거를 분리해서 보여주지 않습니다.");
     assertOk(modelingEvidenceHtml.indexOf("삼성전자") >= 0 && modelingEvidenceHtml.indexOf("005930 가격과") < 0, "근거 카드 본문에 종목코드가 회사명으로 치환되지 않았습니다.");
     assertOk(modelingEvidenceHtml.indexOf("체결강도") >= 0 && modelingEvidenceHtml.indexOf("모델-알림 기준") >= 0, "근거 카드 섹션에 전략 데이터 점검 항목이 없습니다.");
-    assertOk(modelingResultsHtml.indexOf("investment-evidence-panel") >= 0 && modelingResultsHtml.indexOf("model-preview-panel") >= 0, "종목 판단 섹션이 근거 카드와 모델 판단을 함께 보여주지 않습니다.");
+    assertOk(modelingResultsHtml.indexOf("investment-tab-workspace-results") >= 0 && modelingResultsHtml.indexOf("investment-action-panel") >= 0 && modelingResultsHtml.indexOf("model-preview-panel") >= 0, "종목 판단 섹션이 액션 큐와 모델 판단을 함께 보여주지 않습니다.");
+    assertOk(modelingResultsHtml.indexOf("investment-evidence-panel") < 0, "종목 판단 섹션에 근거 카드가 중복 렌더링됩니다.");
     assertOk(modelingResultsHtml.indexOf("실제 데이터 예시") >= 0 && modelingResultsHtml.indexOf("쉬운 해석") >= 0, "종목 판단 섹션에 기존 모델 해석이 보조 근거로 유지되지 않았습니다.");
     assertOk(modelingGraphHtml.indexOf("TBox·ABox 관계 그래프") >= 0 && modelingGraphHtml.indexOf("전체 규칙 구조 그래프") >= 0 && modelingGraphHtml.indexOf("핵심 데이터 관계 그래프") >= 0, "관계 그래프 섹션이 통합 탭 내부에서 렌더링되지 않았습니다.");
     assertOk(modelingGraphHtml.indexOf("ontology-cytoscape") >= 0 && modelingGraphHtml.indexOf("규칙과 관계 해설") >= 0 && modelingGraphHtml.indexOf("RuleBox 규칙") >= 0, "관계 그래프 섹션에 Cytoscape 그래프와 텍스트 보조 패널이 없습니다.");

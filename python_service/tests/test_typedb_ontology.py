@@ -15,6 +15,7 @@ from digital_twin.infrastructure.typedb_ontology import (
     NullTypeDBOntologyGraphRepository,
     TypeDBOntologyGraphRepository,
     relation_row_id,
+    typedb_native_reasoning_profile,
 )
 
 
@@ -64,6 +65,37 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertTrue(any('has ontology-relation-type "HAS_RISK_SIGNAL"' in query for query in queries))
         self.assertTrue(any('has ontology-relation-type "HAS_EVIDENCE"' in query for query in queries))
         self.assertEqual(relation_row_id(repository.rows_for_relations(graph)[0]), relation_row_id(repository.rows_for_relations(graph)[0]))
+
+    def test_typedb_insert_queries_promote_reasoning_fields_to_attributes(self):
+        graph = PortfolioOntology("portfolio:typed-fields")
+        graph.entities.append(OntologyEntity("stock:005930", "삼성전자", "stock", {
+            "ontologyBox": "ABox",
+            "symbol": "005930",
+            "source": "holding",
+            "profitLossRate": -12.5,
+            "tboxClass": "Stock",
+        }))
+        graph.entities.append(OntologyEntity("level:005930:ma20", "20일선", "key-level", {
+            "ontologyBox": "ABox",
+            "symbol": "005930",
+            "levelType": "ma20",
+            "field": "movingAverage",
+            "value": 70000,
+        }))
+        graph.relations.append(OntologyRelation("stock:005930", "level:005930:ma20", "BREAKS_LEVEL", 0.8, properties={
+            "ontologyBox": "ABox",
+            "riskImpact": 3.2,
+            "polarity": "risk",
+            "field": "ma20Distance",
+        }))
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+
+        queries = repository.insert_queries(graph)
+
+        self.assertTrue(any('has ontology-source-value "holding"' in query for query in queries))
+        self.assertTrue(any("has ontology-profit-loss-rate -12.5" in query for query in queries))
+        self.assertTrue(any('has ontology-level-type "ma20"' in query for query in queries))
+        self.assertTrue(any("has ontology-risk-impact 3.2" in query for query in queries))
 
     def test_typedb_null_repository_is_explicitly_disabled(self):
         result = NullTypeDBOntologyGraphRepository().save_graph(PortfolioOntology("empty"))
@@ -139,6 +171,32 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("typedb", snapshot["graphStore"])
         self.assertGreaterEqual(snapshot["ruleCount"], 1)
         self.assertFalse(snapshot["defaultsFallbackUsed"])
+        self.assertEqual("typedb-functions", snapshot["nativeReasoningProfile"]["reasoningModel"])
+
+    def test_typedb_rule_condition_rows_keep_node_kind_separate_from_condition_kind(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        rows = repository.entity_rows_from_typeql([
+            {
+                "id": "rule-condition:test",
+                "label": "보유 종목",
+                "kind": "rule-condition",
+                "updatedAt": "2026-07-12T00:00:00Z",
+                "json": json.dumps({
+                    "ontologyBox": "RuleBox",
+                    "ruleId": "graph.test",
+                    "condition": {
+                        "condition_id": "holding-source",
+                        "kind": "subject_property",
+                        "field": "source",
+                        "operator": "==",
+                        "value": "holding",
+                    },
+                }),
+            }
+        ], "RuleBox")
+
+        self.assertEqual("rule-condition", rows[0]["nodeKind"])
+        self.assertEqual("subject_property", rows[0]["kind"])
 
     def test_typedb_inferencebox_snapshot_reads_persisted_typeql_rows(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
@@ -236,6 +294,16 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("ok", result["status"])
         self.assertEqual(1, result["statementCount"])
         self.assertTrue(result["typedbBootstrapReasoningUsed"])
+        self.assertIn("nativeReasoningProfile", result)
+        self.assertFalse(result["typedbNativeFunctionReasoningUsed"])
+
+    def test_typedb_native_reasoning_profile_identifies_function_ready_rules(self):
+        profile = typedb_native_reasoning_profile([rule.to_dict() for rule in default_graph_inference_rules()])
+
+        self.assertEqual("typedb-functions", profile["reasoningModel"])
+        self.assertEqual("typedb-function-readiness-v1", profile["version"])
+        self.assertGreater(profile["readyRuleCount"] + profile["partialRuleCount"], 0)
+        self.assertTrue(profile["materializationRequired"])
 
     def test_dual_graph_store_reports_parity_mismatches(self):
         class FakeStore:
@@ -256,6 +324,39 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
 
         self.assertEqual("mismatch", result["graphStoreParity"]["status"])
         self.assertEqual("relationCount", result["graphStoreParity"]["checks"][0]["mismatches"][0]["key"])
+
+    def test_dual_graph_store_reports_semantic_parity_mismatches(self):
+        class FakeRuleboxStore:
+            def __init__(self, key, target_kind):
+                self.store_key = key
+                self.target_kind = target_kind
+
+            def rulebox_snapshot(self):
+                return {
+                    "status": "ok",
+                    "graphStore": self.store_key,
+                    "ruleCount": 1,
+                    "conditionCount": 1,
+                    "derivationCount": 1,
+                    "rules": [{
+                        "rule_id": "graph.semantic.test",
+                        "version": "v1",
+                        "enabled": True,
+                        "conditions": [{"condition_id": "source", "kind": "subject_property", "field": "source", "operator": "==", "value": "holding"}],
+                        "derivations": [{"relation_type": "HAS_INFERRED_RISK", "target_kind": self.target_kind, "target_key": "{symbol}"}],
+                    }],
+                }
+
+        repository = CompositeOntologyGraphRepository(
+            FakeRuleboxStore("neo4j", "risk-signal"),
+            mirrors=[FakeRuleboxStore("typedb", "opportunity-signal")],
+        )
+
+        result = repository.rulebox_snapshot()
+
+        self.assertEqual("mismatch", result["graphStoreParity"]["status"])
+        self.assertEqual("mismatch", result["graphStoreParity"]["checks"][0]["semantic"]["status"])
+        self.assertEqual("rulebox", result["graphStoreParity"]["checks"][0]["semantic"]["domain"])
 
 
 if __name__ == "__main__":

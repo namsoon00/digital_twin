@@ -1,3 +1,5 @@
+import hashlib
+import json
 from typing import Dict, Iterable, List
 
 from .settings import runtime_settings
@@ -164,13 +166,15 @@ def graph_store_parity(primary_result: Dict[str, object], mirror_results: Dict[s
                     "primary": int_or_none(primary_result.get(count_key)),
                     "mirror": int_or_none(result.get(count_key)),
                 })
+        semantic = graph_store_semantic_parity(primary_result, result)
         checks.append({
             "graphStore": key,
-            "status": "mismatch" if mismatches else "ok",
+            "status": "mismatch" if (mismatches or semantic.get("status") == "mismatch") else "ok",
             "mismatches": mismatches,
+            "semantic": semantic,
             "comparedKeys": [count_key for count_key in PARITY_COUNT_KEYS if count_key in primary_result and count_key in result],
         })
-        if mismatches:
+        if mismatches or semantic.get("status") == "mismatch":
             status = "mismatch"
     return {
         "status": status,
@@ -187,3 +191,117 @@ def int_or_none(value: object):
         return int(float(value))
     except (TypeError, ValueError):
         return None
+
+
+def graph_store_semantic_parity(primary_result: Dict[str, object], mirror_result: Dict[str, object]) -> Dict[str, object]:
+    primary = graph_store_semantic_signature(primary_result)
+    mirror = graph_store_semantic_signature(mirror_result)
+    if not primary.get("comparable") or not mirror.get("comparable"):
+        return {
+            "status": "not-compared",
+            "reason": "semantic signatures are available only for RuleBox or InferenceBox snapshots.",
+        }
+    primary_items = set(primary.get("items") or [])
+    mirror_items = set(mirror.get("items") or [])
+    missing = sorted(primary_items - mirror_items)
+    extra = sorted(mirror_items - primary_items)
+    return {
+        "status": "mismatch" if missing or extra else "ok",
+        "domain": primary.get("domain") if primary.get("domain") == mirror.get("domain") else "mixed",
+        "primaryFingerprint": primary.get("fingerprint"),
+        "mirrorFingerprint": mirror.get("fingerprint"),
+        "primaryCount": len(primary_items),
+        "mirrorCount": len(mirror_items),
+        "missingInMirror": missing[:12],
+        "extraInMirror": extra[:12],
+    }
+
+
+def graph_store_semantic_signature(result: Dict[str, object]) -> Dict[str, object]:
+    if not isinstance(result, dict):
+        return {"comparable": False}
+    rules = result.get("rules") if isinstance(result.get("rules"), list) else []
+    if rules:
+        items = sorted(rule_semantic_signature(rule) for rule in rules if isinstance(rule, dict))
+        return semantic_signature_payload("rulebox", items)
+    relations = result.get("relations") if isinstance(result.get("relations"), list) else []
+    traces = result.get("traces") if isinstance(result.get("traces"), list) else []
+    if relations or traces:
+        items = sorted(
+            [inference_relation_semantic_signature(item) for item in relations if isinstance(item, dict)]
+            + [inference_trace_semantic_signature(item) for item in traces if isinstance(item, dict)]
+        )
+        return semantic_signature_payload("inferencebox", items)
+    return {"comparable": False}
+
+
+def semantic_signature_payload(domain: str, items: List[str]) -> Dict[str, object]:
+    fingerprint = hashlib.sha256(json.dumps(items, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:24]
+    return {
+        "comparable": True,
+        "domain": domain,
+        "fingerprint": fingerprint,
+        "items": items,
+    }
+
+
+def rule_semantic_signature(rule: Dict[str, object]) -> str:
+    conditions = [
+        "|".join([
+            str(item.get("condition_id") or item.get("conditionId") or ""),
+            str(item.get("kind") or ""),
+            str(item.get("field") or ""),
+            str(item.get("operator") or ""),
+            stable_json(item.get("value")),
+            str(item.get("relation_type") or item.get("relationType") or ""),
+            stable_json(item.get("target_property_filters") or item.get("targetPropertyFilters") or {}),
+            stable_json(item.get("relation_property_filters") or item.get("relationPropertyFilters") or {}),
+        ])
+        for item in (rule.get("conditions") or [])
+        if isinstance(item, dict)
+    ]
+    derivations = [
+        "|".join([
+            str(item.get("relation_type") or item.get("relationType") or ""),
+            str(item.get("target_kind") or item.get("targetKind") or ""),
+            str(item.get("target_key") or item.get("targetKey") or ""),
+            str(item.get("decision_stage") or item.get("decisionStage") or ""),
+            str(item.get("action_group") or item.get("actionGroup") or ""),
+            str(item.get("action_level") or item.get("actionLevel") or ""),
+        ])
+        for item in (rule.get("derivations") or [])
+        if isinstance(item, dict)
+    ]
+    return "|".join([
+        "rule",
+        str(rule.get("rule_id") or rule.get("ruleId") or ""),
+        str(rule.get("version") or ""),
+        str(bool(rule.get("enabled", True))),
+        stable_json(sorted(conditions)),
+        stable_json(sorted(derivations)),
+    ])
+
+
+def inference_relation_semantic_signature(item: Dict[str, object]) -> str:
+    return "|".join([
+        "relation",
+        str(item.get("type") or ""),
+        str(item.get("source") or ""),
+        str(item.get("target") or ""),
+        str(item.get("ruleId") or ""),
+        str(item.get("decisionStage") or ""),
+        str(item.get("polarity") or ""),
+    ])
+
+
+def inference_trace_semantic_signature(item: Dict[str, object]) -> str:
+    return "|".join([
+        "trace",
+        str(item.get("symbol") or ""),
+        str(item.get("ruleId") or ""),
+        stable_json(sorted(str(value) for value in (item.get("matchedConditionIds") or []))),
+    ])
+
+
+def stable_json(value: object) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))

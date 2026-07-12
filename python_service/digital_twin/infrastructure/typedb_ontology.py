@@ -88,6 +88,19 @@ def typeql_has(attribute: str, value: object, numeric: bool = False) -> str:
     return ", has " + attribute + " " + typedb_string(value)
 
 
+def typeql_has_bool_string(attribute: str, value: object) -> str:
+    if value is None or value == "":
+        return ""
+    if isinstance(value, bool):
+        normalized = "true" if value else "false"
+    else:
+        normalized = str(value).strip().lower()
+        if normalized not in {"true", "false", "1", "0", "yes", "no", "y", "n", "on", "off"}:
+            return ""
+        normalized = "true" if normalized in {"true", "1", "yes", "y", "on"} else "false"
+    return ", has " + attribute + " " + typedb_string(normalized)
+
+
 def json_object(value: object) -> Dict[str, object]:
     if isinstance(value, dict):
         return dict(value)
@@ -148,6 +161,46 @@ def merge_flat_properties(row: Dict[str, object], props: Dict[str, object]) -> D
         if value not in (None, "", [], {}):
             merged.setdefault(key, value)
     return merged
+
+
+TYPEDB_NATIVE_REASONING_PROFILE_VERSION = "typedb-function-readiness-v1"
+TYPEDB_FUNCTION_SUBJECT_FIELDS = {
+    "source",
+    "symbol",
+    "kind",
+    "ontologyBox",
+    "tboxClass",
+    "profitLossRate",
+    "value",
+    "valueNumber",
+}
+TYPEDB_FUNCTION_TARGET_FILTERS = {
+    "field",
+    "levelType",
+    "dataScope",
+    "domainScope",
+    "relationScope",
+    "group",
+    "polarity",
+    "eventType",
+    "materialityPassed",
+    "minMaterialityScore",
+    "minValue",
+    "maxValue",
+    "tboxClass",
+    "tboxClasses",
+}
+TYPEDB_FUNCTION_RELATION_FILTERS = {
+    "field",
+    "signalGroup",
+    "polarity",
+    "transitionType",
+    "materialityPassed",
+    "minMaterialityScore",
+    "minRiskImpact",
+    "minSupportImpact",
+}
+TYPEDB_FUNCTION_OPERATORS = {"==", "eq", "!=", "ne", "<=", "lte", ">=", "gte", "<", "lt", ">", "gt", "exists", "present"}
 
 
 class NullTypeDBOntologyGraphRepository:
@@ -211,6 +264,7 @@ class NullTypeDBOntologyGraphRepository:
             "versions": [],
             "versionCount": 0,
             "changeCandidates": rulebox_governance_candidates(rules, []),
+            "nativeReasoningProfile": typedb_native_reasoning_profile(rules),
         }
 
     def save_rulebox(self, payload: Dict[str, object] = None) -> Dict[str, object]:
@@ -487,10 +541,11 @@ class TypeDBOntologyGraphRepository(Neo4jOntologyRowMapperMixin):
 
     def entity_row_from_typeql(self, row: Dict[str, object], box: str) -> Dict[str, object]:
         props = json_object(row.get("json"))
+        node_kind = str(row.get("kind") or props.get("kind") or "")
         merged = merge_flat_properties({
             "id": row.get("id"),
             "label": row.get("label"),
-            "kind": row.get("kind"),
+            "kind": node_kind,
             "ontologyBox": box,
             "symbol": row.get("symbol"),
             "ruleId": row.get("ruleId"),
@@ -504,7 +559,8 @@ class TypeDBOntologyGraphRepository(Neo4jOntologyRowMapperMixin):
             **merged,
             "id": str(row.get("id") or merged.get("id") or ""),
             "label": str(row.get("label") or merged.get("label") or row.get("id") or ""),
-            "kind": str(row.get("kind") or merged.get("kind") or ""),
+            "nodeKind": node_kind,
+            "kind": str(condition.get("kind") or merged.get("conditionKind") or node_kind) if node_kind == "rule-condition" else node_kind,
             "ontologyBox": str(box or merged.get("ontologyBox") or "ABox"),
             "symbol": str(row.get("symbol") or merged.get("symbol") or ""),
             "ruleId": str(row.get("ruleId") or merged.get("ruleId") or ""),
@@ -639,6 +695,24 @@ attribute ontology-updated-at, value string;
 attribute ontology-json, value string;
 attribute ontology-weight, value double;
 attribute ontology-confidence, value double;
+attribute ontology-source-value, value string;
+attribute ontology-field, value string;
+attribute ontology-level-type, value string;
+attribute ontology-data-scope, value string;
+attribute ontology-domain-scope, value string;
+attribute ontology-relation-scope, value string;
+attribute ontology-group, value string;
+attribute ontology-polarity, value string;
+attribute ontology-transition-type, value string;
+attribute ontology-signal-group, value string;
+attribute ontology-event-type, value string;
+attribute ontology-materiality-passed, value string;
+attribute ontology-value-number, value double;
+attribute ontology-profit-loss-rate, value double;
+attribute ontology-materiality-score, value double;
+attribute ontology-risk-impact, value double;
+attribute ontology-support-impact, value double;
+attribute ontology-stage-priority, value double;
 
 entity ontology-node @abstract,
     owns ontology-id @key,
@@ -653,6 +727,19 @@ entity ontology-node @abstract,
     owns ontology-updated-at,
     owns ontology-json,
     owns ontology-confidence,
+    owns ontology-source-value,
+    owns ontology-field,
+    owns ontology-level-type,
+    owns ontology-data-scope,
+    owns ontology-domain-scope,
+    owns ontology-relation-scope,
+    owns ontology-group,
+    owns ontology-polarity,
+    owns ontology-event-type,
+    owns ontology-materiality-passed,
+    owns ontology-value-number,
+    owns ontology-profit-loss-rate,
+    owns ontology-materiality-score,
     plays ontology-assertion:source,
     plays ontology-assertion:target;
 
@@ -675,7 +762,16 @@ relation ontology-assertion,
     owns ontology-tbox-class,
     owns ontology-updated-at,
     owns ontology-json,
-    owns ontology-weight;
+    owns ontology-weight,
+    owns ontology-field,
+    owns ontology-polarity,
+    owns ontology-transition-type,
+    owns ontology-signal-group,
+    owns ontology-materiality-passed,
+    owns ontology-materiality-score,
+    owns ontology-risk-impact,
+    owns ontology-support-impact,
+    owns ontology-stage-priority;
 """.strip()
 
     def delete_queries(self, boxes: Iterable[str]) -> List[str]:
@@ -839,6 +935,19 @@ relation ontology-assertion,
             + typeql_has("ontology-updated-at", updated_at)
             + typeql_has("ontology-json", row.get("propertiesJson"))
             + typeql_has("ontology-confidence", row.get("confidence"), numeric=True)
+            + typeql_has("ontology-source-value", row.get("sourceValue"))
+            + typeql_has("ontology-field", row.get("field"))
+            + typeql_has("ontology-level-type", row.get("levelType"))
+            + typeql_has("ontology-data-scope", row.get("dataScope"))
+            + typeql_has("ontology-domain-scope", row.get("domainScope"))
+            + typeql_has("ontology-relation-scope", row.get("relationScope"))
+            + typeql_has("ontology-group", row.get("group"))
+            + typeql_has("ontology-polarity", row.get("polarity"))
+            + typeql_has("ontology-event-type", row.get("eventType"))
+            + typeql_has_bool_string("ontology-materiality-passed", row.get("materialityPassed"))
+            + typeql_has("ontology-value-number", row.get("valueNumber"), numeric=True)
+            + typeql_has("ontology-profit-loss-rate", row.get("profitLossRate"), numeric=True)
+            + typeql_has("ontology-materiality-score", row.get("materialityScore"), numeric=True)
             + ";"
         )
 
@@ -861,6 +970,15 @@ relation ontology-assertion,
             + typeql_has("ontology-updated-at", updated_at)
             + typeql_has("ontology-json", row.get("propertiesJson"))
             + typeql_has("ontology-weight", row.get("weight"), numeric=True)
+            + typeql_has("ontology-field", row.get("field"))
+            + typeql_has("ontology-polarity", row.get("polarity"))
+            + typeql_has("ontology-transition-type", row.get("transitionType"))
+            + typeql_has("ontology-signal-group", row.get("signalGroup"))
+            + typeql_has_bool_string("ontology-materiality-passed", row.get("materialityPassed"))
+            + typeql_has("ontology-materiality-score", row.get("materialityScore"), numeric=True)
+            + typeql_has("ontology-risk-impact", row.get("riskImpact"), numeric=True)
+            + typeql_has("ontology-support-impact", row.get("supportImpact"), numeric=True)
+            + typeql_has("ontology-stage-priority", row.get("stagePriority"), numeric=True)
             + ";"
         )
 
@@ -912,12 +1030,12 @@ relation ontology-assertion,
                 "changeCandidates": rulebox_governance_candidates([], []),
             }
         rowsets = {
-            "rules": [row for row in entities if row.get("kind") == "rule" and row.get("ontologyBox") == "RuleBox"],
-            "conditions": [row for row in entities if row.get("kind") == "rule-condition" and row.get("ontologyBox") == "RuleBox"],
-            "derivations": [row for row in entities if row.get("kind") == "relation-template" and row.get("ontologyBox") == "RuleBox"],
+            "rules": [row for row in entities if entity_node_kind(row) == "rule" and row.get("ontologyBox") == "RuleBox"],
+            "conditions": [row for row in entities if entity_node_kind(row) == "rule-condition" and row.get("ontologyBox") == "RuleBox"],
+            "derivations": [row for row in entities if entity_node_kind(row) == "relation-template" and row.get("ontologyBox") == "RuleBox"],
             "relationTypes": relation_type_rows_from_derivations(entities, relations),
-            "versions": [row for row in entities if row.get("kind") == "rulebox-version" and row.get("ontologyBox") == "RuleBoxGovernance"],
-            "candidates": [row for row in entities if row.get("kind") == "rule-change-candidate" and row.get("ontologyBox") == "RuleBoxGovernance"],
+            "versions": [row for row in entities if entity_node_kind(row) == "rulebox-version" and row.get("ontologyBox") == "RuleBoxGovernance"],
+            "candidates": [row for row in entities if entity_node_kind(row) == "rule-change-candidate" and row.get("ontologyBox") == "RuleBoxGovernance"],
         }
         snapshot = rulebox_snapshot_from_rows(rowsets, "typedb-typeql")
         snapshot.update({"graphStore": "typedb", "source": "typedb-typeql"})
@@ -926,6 +1044,7 @@ relation ontology-assertion,
                 self._last_rules = rulebox_rules_from_payload({"rules": snapshot.get("rules") or []})
             except ValueError:
                 pass
+        snapshot["nativeReasoningProfile"] = typedb_native_reasoning_profile(snapshot.get("rules") or [])
         return snapshot
 
     def save_rulebox(self, payload: Dict[str, object] = None) -> Dict[str, object]:
@@ -963,6 +1082,7 @@ relation ontology-assertion,
                 self._last_rules = rulebox_rules_from_payload({"rules": snapshot.get("rules") or []})
             except ValueError:
                 self._last_rules = list(default_graph_inference_rules())
+        native_profile = typedb_native_reasoning_profile(rulebox_rules_to_payload(self._last_rules or default_graph_inference_rules()))
         run_graph_reasoner(graph, self._last_rules or default_graph_inference_rules())
         inference_entities = [
             item for item in graph.entities
@@ -983,7 +1103,10 @@ relation ontology-assertion,
             "statementCount": len(inference_relations),
             "relationTypes": sorted({str(item.relation_type or "") for item in inference_relations if str(item.relation_type or "")}),
             "nativeTypeDbReasoningUsed": False,
+            "typedbNativeFunctionReasoningUsed": False,
+            "typedbNativeReasoningReady": native_profile.get("status") in {"ready", "partial"},
             "typedbBootstrapReasoningUsed": True,
+            "nativeReasoningProfile": native_profile,
         }
 
     def inferencebox_snapshot(self, symbols: List[str] = None, limit: int = 80) -> Dict[str, object]:
@@ -1163,12 +1286,144 @@ def relation_type_rows_from_derivations(
 ) -> List[Dict[str, object]]:
     values = set()
     for row in entity_rows or []:
-        if row.get("kind") == "relation-template":
+        if entity_node_kind(row) == "relation-template":
             values.add(str(row.get("derivationRelationType") or row.get("relationType") or "").upper())
     for row in relation_rows or []:
         if row.get("ontologyBox") == "RuleBox":
             values.add(str(row.get("type") or row.get("relationType") or "").upper())
     return [{"relationType": item} for item in sorted(value for value in values if value)]
+
+
+def entity_node_kind(row: Dict[str, object]) -> str:
+    return str(row.get("nodeKind") or row.get("kind") or "")
+
+
+def typedb_native_reasoning_profile(rules: Iterable[object]) -> Dict[str, object]:
+    rule_payloads = [
+        item.to_dict() if hasattr(item, "to_dict") else dict(item)
+        for item in (rules or [])
+        if isinstance(item, dict) or hasattr(item, "to_dict")
+    ]
+    rule_profiles = [typedb_native_rule_profile(rule) for rule in rule_payloads]
+    ready = [item for item in rule_profiles if item.get("status") == "ready"]
+    partial = [item for item in rule_profiles if item.get("status") == "partial"]
+    blocked = [item for item in rule_profiles if item.get("status") == "blocked"]
+    unsupported = sum(int(item.get("unsupportedConditionCount") or 0) for item in rule_profiles)
+    supported = sum(int(item.get("supportedConditionCount") or 0) for item in rule_profiles)
+    status = "ready" if rule_profiles and len(ready) == len(rule_profiles) else ("partial" if ready or partial else "blocked")
+    blockers = [
+        blocker
+        for item in rule_profiles
+        for blocker in (item.get("blockers") or [])
+        if isinstance(blocker, dict)
+    ]
+    return {
+        "version": TYPEDB_NATIVE_REASONING_PROFILE_VERSION,
+        "graphStore": "typedb",
+        "reasoningModel": "typedb-functions",
+        "status": status,
+        "ruleCount": len(rule_profiles),
+        "readyRuleCount": len(ready),
+        "partialRuleCount": len(partial),
+        "blockedRuleCount": len(blocked),
+        "supportedConditionCount": supported,
+        "unsupportedConditionCount": unsupported,
+        "materializationRequired": True,
+        "materializationTarget": "InferenceBox",
+        "materializationStrategy": "application-write-stage",
+        "reason": "TypeDB 3 functions compute views on demand, so persisted InferenceBox assertions still require an application materialization step.",
+        "readyRules": [item.get("ruleId") for item in ready][:24],
+        "partialRules": [item.get("ruleId") for item in partial][:24],
+        "blockedRules": [item.get("ruleId") for item in blocked][:24],
+        "blockers": blockers[:24],
+        "rules": rule_profiles[:80],
+    }
+
+
+def typedb_native_rule_profile(rule: Dict[str, object]) -> Dict[str, object]:
+    conditions = [item for item in (rule.get("conditions") or []) if isinstance(item, dict)]
+    derivations = [item for item in (rule.get("derivations") or []) if isinstance(item, dict)]
+    condition_profiles = [typedb_native_condition_profile(item) for item in conditions]
+    blockers = [
+        blocker
+        for item in condition_profiles
+        for blocker in (item.get("blockers") or [])
+        if isinstance(blocker, dict)
+    ]
+    supported = [item for item in condition_profiles if item.get("status") == "ready"]
+    partial = [item for item in condition_profiles if item.get("status") == "partial"]
+    if blockers and not supported and not partial:
+        status = "blocked"
+    elif blockers:
+        status = "partial"
+    else:
+        status = "ready"
+    return {
+        "ruleId": str(rule.get("rule_id") or rule.get("ruleId") or ""),
+        "label": str(rule.get("label") or ""),
+        "status": status,
+        "conditionCount": len(conditions),
+        "derivationCount": len(derivations),
+        "supportedConditionCount": len(supported),
+        "unsupportedConditionCount": len(blockers),
+        "blockers": blockers,
+        "conditions": condition_profiles,
+        "functionBlueprint": typedb_function_blueprint(rule) if status in {"ready", "partial"} else "",
+    }
+
+
+def typedb_native_condition_profile(condition: Dict[str, object]) -> Dict[str, object]:
+    condition_id = str(condition.get("condition_id") or condition.get("conditionId") or "")
+    kind = str(condition.get("kind") or "")
+    blockers: List[Dict[str, object]] = []
+    operator = str(condition.get("operator") or "==")
+    if operator not in TYPEDB_FUNCTION_OPERATORS:
+        blockers.append(condition_blocker(condition_id, "unsupported-operator", "TypeDB function profile does not support operator " + operator))
+    if kind == "subject_property":
+        field = str(condition.get("field") or "")
+        if field not in TYPEDB_FUNCTION_SUBJECT_FIELDS:
+            blockers.append(condition_blocker(condition_id, "json-bound-subject-field", field + " is still JSON-bound or not promoted to a TypeDB attribute."))
+    elif kind == "relation":
+        if not str(condition.get("relation_type") or condition.get("relationType") or ""):
+            blockers.append(condition_blocker(condition_id, "missing-relation-type", "Relation condition needs an explicit relation_type."))
+        blockers.extend(filter_blockers(condition_id, condition.get("target_property_filters") or condition.get("targetPropertyFilters") or {}, TYPEDB_FUNCTION_TARGET_FILTERS, "target"))
+        blockers.extend(filter_blockers(condition_id, condition.get("relation_property_filters") or condition.get("relationPropertyFilters") or {}, TYPEDB_FUNCTION_RELATION_FILTERS, "relation"))
+    else:
+        blockers.append(condition_blocker(condition_id, "unsupported-condition-kind", kind + " is not mapped to a TypeDB function pattern."))
+    return {
+        "conditionId": condition_id,
+        "kind": kind,
+        "status": "ready" if not blockers else "partial",
+        "blockers": blockers,
+    }
+
+
+def filter_blockers(condition_id: str, filters: Dict[str, object], supported: set, scope: str) -> List[Dict[str, object]]:
+    blockers = []
+    for key in sorted((filters or {}).keys()):
+        if key not in supported:
+            blockers.append(condition_blocker(condition_id, "json-bound-" + scope + "-filter", key + " is not promoted to a TypeDB attribute."))
+    return blockers
+
+
+def condition_blocker(condition_id: str, code: str, reason: str) -> Dict[str, object]:
+    return {
+        "conditionId": condition_id,
+        "code": code,
+        "reason": reason,
+    }
+
+
+def typedb_function_blueprint(rule: Dict[str, object]) -> str:
+    rule_id = str(rule.get("rule_id") or rule.get("ruleId") or "rule").replace(".", "_").replace("-", "_")
+    source_kind = str(rule.get("source_kind") or rule.get("sourceKind") or "stock")
+    return (
+        "fun orbit_inference_" + rule_id + "() -> { ontology-node, ontology-node }:\n"
+        "  match\n"
+        "    $source isa ontology-node, has ontology-kind " + typedb_string(source_kind) + ";\n"
+        "    # RuleBox conditions are represented by promoted ontology-* attributes where available.\n"
+        "  return { $source, $source };"
+    )
 
 
 def relation_row_id(row: Dict[str, object]) -> str:

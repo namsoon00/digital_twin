@@ -13015,11 +13015,123 @@ pre.notification-full-message {
   font-weight: 900;
 }
 
+.ontology-graph-expanded-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: color-mix(in srgb, var(--bg) 76%, rgba(15, 23, 42, 0.58) 24%);
+  backdrop-filter: blur(12px);
+}
+
+.ontology-graph-expanded-dialog {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: var(--ds-space-5);
+  width: min(1480px, calc(100vw - 40px));
+  height: min(920px, calc(100dvh - 40px));
+  min-width: 0;
+  min-height: 0;
+  padding: var(--ds-panel-pad-y) var(--ds-panel-pad-x);
+  border: 1px solid var(--ds-card-border);
+  border-radius: var(--ds-radius-panel);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--panel) 94%, var(--blue-soft) 6%), var(--panel)),
+    radial-gradient(circle at 12% 10%, var(--ds-color-orbit-glow), transparent 34%);
+  box-shadow: 0 24px 80px rgba(15, 23, 42, 0.18);
+}
+
+.ontology-graph-expanded-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: var(--ds-section-gap);
+  min-width: 0;
+  padding-bottom: var(--ds-space-4);
+  border-bottom: 1px solid var(--ds-card-border);
+}
+
+.ontology-graph-expanded-head > div:first-child {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.ontology-graph-expanded-head h2 {
+  min-width: 0;
+  margin: 0;
+  color: var(--ink);
+  font-size: 24px;
+  font-weight: 950;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.ontology-graph-expanded-head span,
+.ontology-graph-expanded-footer span {
+  min-width: 0;
+  color: var(--muted);
+  font-size: var(--ds-type-label);
+  font-weight: 820;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.ontology-graph-expanded-toolbar {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.ontology-graph-expanded-toolbar .icon-button {
+  width: 44px;
+  height: 44px;
+}
+
+.ontology-graph-expanded-toolbar .icon-button.danger {
+  color: var(--red);
+  border-color: color-mix(in srgb, var(--red) 38%, var(--line));
+  background: color-mix(in srgb, var(--panel) 84%, var(--red-soft) 16%);
+}
+
+.ontology-cytoscape.ontology-cytoscape-expanded {
+  height: 100%;
+  min-height: 0;
+  border-radius: var(--ds-radius-control);
+}
+
+.ontology-graph-expanded-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--ds-space-4);
+  min-width: 0;
+  padding-top: var(--ds-space-4);
+  border-top: 1px solid var(--ds-card-border);
+}
+
 html[data-theme="dark"] .ontology-graph-panel,
 html[data-theme="dark"] .ontology-cytoscape {
   background:
     linear-gradient(180deg, color-mix(in srgb, var(--panel) 88%, #000000 12%), var(--panel)),
     radial-gradient(circle at 14% 12%, var(--ds-color-orbit-glow), transparent 34%);
+}
+
+html[data-theme="dark"] .ontology-graph-expanded-backdrop {
+  background: color-mix(in srgb, var(--bg) 72%, rgba(2, 6, 23, 0.72) 28%);
+}
+
+html[data-theme="dark"] .ontology-graph-expanded-dialog {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--panel) 90%, #000000 10%), var(--panel)),
+    radial-gradient(circle at 12% 10%, var(--ds-color-orbit-glow), transparent 36%);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.42);
+}
+
+html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
+  background: color-mix(in srgb, var(--panel) 82%, var(--red-soft) 18%);
 }
 
 .system-flow-node,
@@ -13379,6 +13491,35 @@ html[data-theme="dark"] .ontology-cytoscape {
 
   .ontology-cytoscape {
     min-height: 320px;
+  }
+
+  .ontology-graph-expanded-backdrop {
+    place-items: stretch;
+    padding: 10px;
+  }
+
+  .ontology-graph-expanded-dialog {
+    width: 100%;
+    height: calc(100dvh - 20px);
+    padding: var(--ds-space-5);
+  }
+
+  .ontology-graph-expanded-head {
+    display: grid;
+    gap: var(--ds-space-4);
+  }
+
+  .ontology-graph-expanded-head h2 {
+    font-size: 20px;
+  }
+
+  .ontology-graph-expanded-toolbar {
+    justify-content: end;
+    flex-wrap: wrap;
+  }
+
+  .ontology-cytoscape.ontology-cytoscape-expanded {
+    min-height: 0;
   }
 }
 

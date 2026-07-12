@@ -347,22 +347,22 @@ class TypeDBOntologyGraphRepository(Neo4jOntologyRowMapperMixin):
     def schema_query(self) -> str:
         return """
 define
-ontology-id sub attribute, value string;
-ontology-label sub attribute, value string;
-ontology-kind sub attribute, value string;
-ontology-box sub attribute, value string;
-ontology-symbol sub attribute, value string;
-ontology-rule-id sub attribute, value string;
-ontology-account-id sub attribute, value string;
-ontology-snapshot-id sub attribute, value string;
-ontology-tbox-class sub attribute, value string;
-ontology-relation-type sub attribute, value string;
-ontology-updated-at sub attribute, value string;
-ontology-json sub attribute, value string;
-ontology-weight sub attribute, value double;
-ontology-confidence sub attribute, value double;
+attribute ontology-id, value string;
+attribute ontology-label, value string;
+attribute ontology-kind, value string;
+attribute ontology-box, value string;
+attribute ontology-symbol, value string;
+attribute ontology-rule-id, value string;
+attribute ontology-account-id, value string;
+attribute ontology-snapshot-id, value string;
+attribute ontology-tbox-class, value string;
+attribute ontology-relation-type, value string;
+attribute ontology-updated-at, value string;
+attribute ontology-json, value string;
+attribute ontology-weight, value double;
+attribute ontology-confidence, value double;
 
-ontology-node sub entity, abstract,
+entity ontology-node @abstract,
     owns ontology-id @key,
     owns ontology-label,
     owns ontology-kind,
@@ -378,13 +378,13 @@ ontology-node sub entity, abstract,
     plays ontology-assertion:source,
     plays ontology-assertion:target;
 
-ontology-entity sub ontology-node;
-ontology-evidence sub ontology-node;
-ontology-belief sub ontology-node;
-ontology-opinion sub ontology-node;
-ontology-reasoning-card sub ontology-node;
+entity ontology-entity, sub ontology-node;
+entity ontology-evidence, sub ontology-node;
+entity ontology-belief, sub ontology-node;
+entity ontology-opinion, sub ontology-node;
+entity ontology-reasoning-card, sub ontology-node;
 
-ontology-assertion sub relation,
+relation ontology-assertion,
     relates source,
     relates target,
     owns ontology-id @key,
@@ -571,7 +571,7 @@ ontology-assertion sub relation,
             "$source isa ontology-node, has ontology-id " + typedb_string(row.get("source")) + "; "
             "$target isa ontology-node, has ontology-id " + typedb_string(row.get("target")) + "; "
             "insert "
-            "$r (source: $source, target: $target) isa ontology-assertion"
+            "$r isa ontology-assertion, links (source: $source, target: $target)"
             + ", has ontology-id " + typedb_string(relation_id)
             + typeql_has("ontology-relation-type", row.get("type"))
             + typeql_has("ontology-box", row.get("ontologyBox") or "ABox")

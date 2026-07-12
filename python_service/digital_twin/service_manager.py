@@ -1,15 +1,16 @@
 import os
 import signal
+import shutil
 import subprocess
 import sys
 import time
 from pathlib import Path
 from typing import Dict, List
 
-from .infrastructure.settings import ROOT_DIR, data_dir
+from .infrastructure.settings import ROOT_DIR, data_dir, runtime_settings
 
 
-WORKERS = {
+BASE_WORKERS = {
     "monitor": {
         "label": "Python realtime monitor",
         "pid": data_dir() / "python-monitor.pid",
@@ -60,6 +61,64 @@ WORKERS = {
         "needle": "python_service/service.py notifications watch",
     },
 }
+
+
+def truthy(value: object) -> bool:
+    return str(value or "").strip().lower() not in {"", "0", "false", "no", "off"}
+
+
+def typedb_requested(settings: Dict[str, object]) -> bool:
+    mode = str((settings or {}).get("ontologyGraphStoreMode") or "neo4j").strip().lower()
+    return mode in {"dual", "typedb"} and truthy((settings or {}).get("ontologyTypeDbEnabled"))
+
+
+def typedb_executable() -> str:
+    explicit = str(os.environ.get("TYPEDB_COMMAND") or "").strip()
+    if explicit:
+        return explicit
+    found = shutil.which("typedb")
+    if found:
+        return found
+    home_install = Path.home() / ".typedb" / "typedb"
+    return str(home_install) if home_install.exists() else ""
+
+
+def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
+    executable = typedb_executable()
+    address = str((settings or {}).get("typedbAddress") or "127.0.0.1:1729").strip() or "127.0.0.1:1729"
+    data_path = data_dir() / "typedb-data"
+    log_dir = data_dir() / "typedb-logs"
+    command = [
+        executable,
+        "server",
+        "--server.listen-address",
+        address,
+        "--server.advertise-address",
+        address,
+        "--storage.data-directory",
+        str(data_path),
+        "--logging.directory",
+        str(log_dir),
+    ] if executable else []
+    return {
+        "label": "TypeDB ontology graph store",
+        "pid": data_dir() / "typedb.pid",
+        "log": data_dir() / "typedb.log",
+        "command": command,
+        "needle": "typedb_server_bin",
+        "missingReason": "" if executable else "TypeDB executable was not found. Install TypeDB or set TYPEDB_COMMAND.",
+    }
+
+
+def worker_specs() -> Dict[str, Dict[str, object]]:
+    workers = dict(BASE_WORKERS)
+    try:
+        settings = runtime_settings()
+    except Exception:  # noqa: BLE001 - service manager should still manage Python workers.
+        settings = {}
+    if typedb_requested(settings):
+        workers["typedb"] = typedb_worker_spec(settings)
+    return workers
 
 
 def read_pid(path: Path) -> int:
@@ -122,6 +181,8 @@ def status_worker(spec: Dict[str, object]) -> int:
     pid = read_pid(pid_path)
     running = is_running(pid, spec)
     print(str(spec["label"]) + ": " + ("running" if running else "stopped"))
+    if spec.get("missingReason"):
+        print("Unavailable: " + str(spec.get("missingReason")))
     if pid:
         print("PID: " + str(pid))
     if running:
@@ -142,6 +203,9 @@ def status_worker(spec: Dict[str, object]) -> int:
 
 
 def start_worker(spec: Dict[str, object]) -> int:
+    if spec.get("missingReason") or not spec.get("command"):
+        print(str(spec["label"]) + " not started. " + str(spec.get("missingReason") or "Command is not configured."))
+        return 0
     pid_path = spec["pid"]
     log_path = spec["log"]
     existing = read_pid(pid_path)
@@ -196,19 +260,19 @@ def stop_worker(spec: Dict[str, object]) -> int:
 
 
 def status() -> int:
-    for spec in WORKERS.values():
+    for spec in worker_specs().values():
         status_worker(spec)
     return 0
 
 
 def start() -> int:
-    for spec in WORKERS.values():
+    for spec in worker_specs().values():
         start_worker(spec)
     return 0
 
 
 def stop() -> int:
-    for spec in reversed(list(WORKERS.values())):
+    for spec in reversed(list(worker_specs().values())):
         stop_worker(spec)
     return 0
 

@@ -22,4 +22,7 @@ data/python-model-review.log
 data/kakao-token.json
 data/*.pid
 data/python-monitor.log
+data/typedb-data/
+data/typedb-logs/
+data/typedb.log
 *.log

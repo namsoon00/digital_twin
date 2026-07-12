@@ -1,6 +1,8 @@
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+from digital_twin import service_manager
 from digital_twin.domain.ontology_contracts import OntologyEntity, OntologyEvidence, OntologyRelation, PortfolioOntology
 from digital_twin.infrastructure.ontology_graph_store import (
     CompositeOntologyGraphRepository,
@@ -19,8 +21,8 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
 
         schema = repository.schema_query()
 
-        self.assertIn("ontology-node sub entity", schema)
-        self.assertIn("ontology-assertion sub relation", schema)
+        self.assertIn("entity ontology-node @abstract", schema)
+        self.assertIn("relation ontology-assertion", schema)
         self.assertIn("owns ontology-id @key", schema)
         self.assertIn("plays ontology-assertion:source", schema)
         self.assertIn("plays ontology-assertion:target", schema)
@@ -55,7 +57,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         queries = repository.insert_queries(graph)
 
         self.assertTrue(any("insert $n isa ontology-entity" in query for query in queries))
-        self.assertTrue(any("insert $r (source: $source, target: $target) isa ontology-assertion" in query for query in queries))
+        self.assertTrue(any("insert $r isa ontology-assertion, links (source: $source, target: $target)" in query for query in queries))
         self.assertTrue(any('has ontology-relation-type "HAS_RISK_SIGNAL"' in query for query in queries))
         self.assertTrue(any('has ontology-relation-type "HAS_EVIDENCE"' in query for query in queries))
         self.assertEqual(relation_row_id(repository.rows_for_relations(graph)[0]), relation_row_id(repository.rows_for_relations(graph)[0]))
@@ -99,6 +101,26 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             self.assertIn("ontology_graph_store", source)
             self.assertNotIn("from .neo4j_ontology import ontology_repository_from_settings", source)
             self.assertNotIn("from ..infrastructure.neo4j_ontology import ontology_repository_from_settings", source)
+
+    def test_service_manager_adds_typedb_only_when_graph_store_requests_it(self):
+        with patch.object(service_manager, "runtime_settings", return_value={
+            "ontologyGraphStoreMode": "neo4j",
+            "ontologyTypeDbEnabled": "0",
+        }):
+            self.assertNotIn("typedb", service_manager.worker_specs())
+
+        with patch.object(service_manager, "runtime_settings", return_value={
+            "ontologyGraphStoreMode": "dual",
+            "ontologyTypeDbEnabled": "1",
+            "typedbAddress": "127.0.0.1:1729",
+        }), patch.object(service_manager, "typedb_executable", return_value="/tmp/typedb"):
+            workers = service_manager.worker_specs()
+
+        self.assertIn("typedb", workers)
+        command = workers["typedb"]["command"]
+        self.assertIn("server", command)
+        self.assertIn("--server.listen-address", command)
+        self.assertIn("--storage.data-directory", command)
 
 
 if __name__ == "__main__":

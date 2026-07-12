@@ -60,6 +60,8 @@ TYPEDB_PASSWORD=password
 TYPEDB_DATABASE=orbit_alpha_ontology
 ```
 
+`ONTOLOGY_GRAPH_STORE_MODE=dual` 또는 `typedb`이고 `ONTOLOGY_TYPEDB_ENABLED=1`이면 `npm run python:service:start|restart|status`가 TypeDB 서버도 함께 관리합니다. TypeDB 로컬 데이터와 로그는 `data/typedb-data/`, `data/typedb-logs/`, `data/typedb.log` 아래에 저장되며 git에는 포함하지 않습니다.
+
 토스 개발자 콘솔에서 허용 IP를 관리하는 경우, 브라우저 IP가 아니라 이 로컬 서버가 외부로 나가는 공인 IP를 등록해야 합니다. GitHub Pages 같은 정적 웹 페이지에서 브라우저가 직접 토스 API를 호출하는 구조는 `client_secret` 노출과 사용자별 유동 IP 문제 때문에 사용하지 않습니다.
 
 GitHub Pages에 올라가는 모든 정적 산출물은 아래 명령으로 함께 갱신합니다.

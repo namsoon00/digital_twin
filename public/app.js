@@ -17,6 +17,13 @@
   ];
   var appBrandName = "Orbit Alpha";
   var appBrandSubtitle = "포트폴리오 신호 궤도 관제";
+  var webStyleContract = {
+    id: "orbit-alpha-console-v2",
+    version: "20260712",
+    shellClass: "web-style-shell",
+    pageClass: "web-style-page",
+    commandClass: "web-style-command-strip"
+  };
   var bottomTabIds = ["overview", "watchlist", "notifications", "modeling", "experiments"];
   var managementTabIds = ["accounts", "symbols", "feed", "system", "settings"];
   var notificationSections = [
@@ -6008,9 +6015,9 @@
     var showHomeDeskbar = state.activeTab === "overview";
     var subtitle = (tab.description || "운영") + " · 마지막 데이터 " + formatClock(snapshot.generatedAt);
     return [
-      '<main class="shell console-shell' + (showHomeDeskbar ? " shell-home" : " shell-page") + '">',
+      '<main class="shell console-shell ' + escapeHtml(webStyleContract.shellClass) + (showHomeDeskbar ? " shell-home" : " shell-page") + '" data-web-style="' + escapeHtml(webStyleContract.id) + '" data-web-style-version="' + escapeHtml(webStyleContract.version) + '">',
       renderAppNavigation(tab, modeLabel, modeClass),
-      '<section class="topbar">',
+      '<section class="topbar web-style-topbar" data-style-region="topbar">',
       '<div class="topbar-copy">',
       '<p class="eyebrow">' + escapeHtml(appBrandName) + ' Console</p>',
       '<h1>' + escapeHtml(tab.label || "홈") + '</h1>',
@@ -6019,9 +6026,9 @@
       renderTopbarSyncState(),
       '</section>',
       renderDeskbar(snapshot, modeLabel, modeClass, { compact: !showHomeDeskbar, activeTab: tab }),
-      '<section class="workspace-layout">',
+      '<section class="workspace-layout web-style-workspace" data-style-region="workspace">',
       renderTabs(),
-      '<div class="workspace-main" data-scroll-key="' + escapeHtml(activeScrollKey()) + '">',
+      '<div class="workspace-main web-style-main" data-style-region="main" data-scroll-key="' + escapeHtml(activeScrollKey()) + '">',
       renderActiveTab(snapshot),
       '</div>',
       '</section>',
@@ -6107,7 +6114,7 @@
     var compact = !!options.compact;
     if (compact) {
       return [
-        '<section class="deskbar deskbar-compact" aria-label="콘솔 상태 요약">',
+        '<section class="deskbar deskbar-compact web-style-deskbar" data-style-region="deskbar" data-style-rail="compact" aria-label="콘솔 상태 요약">',
         renderDeskbarCell("Workspace", activeTab.label || "업무", activeTab.description || "현재 작업", "neutral"),
         renderDeskbarCell("Data", modeLabel, "Last " + formatClock(snapshot.generatedAt), modeClass),
         renderDeskbarCell("Portfolio", formatMoney(portfolio.total || 0), positions + " positions", "neutral"),
@@ -6116,7 +6123,7 @@
       ].join("");
     }
     return [
-      '<section class="deskbar deskbar-full" aria-label="운영 상태 요약">',
+      '<section class="deskbar deskbar-full web-style-deskbar" data-style-region="deskbar" data-style-rail="full" aria-label="운영 상태 요약">',
       renderDeskbarCell("Data", modeLabel, "Last " + formatClock(snapshot.generatedAt), modeClass),
       renderDeskbarCell("Portfolio", formatMoney(portfolio.total || 0), positions + " positions", "neutral"),
       renderDeskbarCell("Model", settingValue("modelName") || defaultSettings.modelName, "Buy " + Math.round(thresholds.modelBuy || 0) + " · Sell " + Math.round(thresholds.modelSell || 0), "neutral"),
@@ -6157,7 +6164,7 @@
       return tab.id === state.activeTab;
     });
     return [
-      '<nav class="app-nav" aria-label="앱 네비게이션">',
+      '<nav class="app-nav web-style-nav" data-style-region="navigation" aria-label="앱 네비게이션">',
       '<div class="app-nav-brand">',
       '<span class="app-brand-mark" aria-hidden="true"><span></span></span>',
       '<div class="app-brand-copy">',
@@ -6270,7 +6277,7 @@
 
   function renderManagedPage(pageId, snapshot, content) {
     return [
-      '<div class="managed-page managed-page-' + escapeHtml(pageId || "overview") + '">',
+      '<div class="managed-page managed-page-' + escapeHtml(pageId || "overview") + ' ' + escapeHtml(webStyleContract.pageClass) + ' web-style-screen-' + escapeHtml(pageId || "overview") + '" data-style-contract="' + escapeHtml(webStyleContract.id) + '" data-style-screen="' + escapeHtml(pageId || "overview") + '">',
       renderPageCommandStrip(pageId, snapshot),
       content,
       '</div>'
@@ -6645,7 +6652,7 @@
   function renderPageCommandStrip(pageId, snapshot) {
     var profile = pageCommandProfile(pageId, snapshot);
     return [
-      '<section class="page-command-strip" aria-label="페이지 작업 상태">',
+      '<section class="page-command-strip ' + escapeHtml(webStyleContract.commandClass) + '" data-style-layer="command-strip" aria-label="페이지 작업 상태">',
       '<div class="page-command-flow">',
       profile.steps.map(renderPageCommandStep).join(""),
       '</div>',

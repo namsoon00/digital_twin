@@ -170,6 +170,9 @@ function checkFrontendAdminRender() {
   assertOk(styles.indexOf("--ds-color-action: #1457a8") >= 0, "기관형 액션 블루 토큰이 적용되지 않았습니다.");
   assertOk(styles.indexOf("--ds-color-orbit-line: #2f6fbb") >= 0, "기관형 신호 라인 토큰이 적용되지 않았습니다.");
   assertOk(styles.indexOf("--ds-color-orbit-signal: #137a63") >= 0, "기관형 시그널 그린 토큰이 적용되지 않았습니다.");
+  assertOk(code.indexOf('id: "orbit-alpha-console-v2"') >= 0, "웹 스타일 계약 ID가 앱 코드에 정의되지 않았습니다.");
+  assertOk(styles.indexOf("Orbit Alpha web style contract: orbit-alpha-console-v2") >= 0, "웹 스타일 계약 CSS 레이어가 없습니다.");
+  assertOk(designSystemDoc.indexOf("Web Style Contract") >= 0 && designSystemDoc.indexOf("orbit-alpha-console-v2") >= 0, "디자인 시스템 문서에 웹 스타일 계약이 정의되지 않았습니다.");
   assertOk(styles.indexOf("--ds-color-page-top") >= 0 && styles.indexOf("--ds-color-page-bottom") >= 0, "페이지 배경 그라데이션 토큰이 없습니다.");
   assertOk(/html\[data-theme="dark"\]\s*\{[\s\S]*--ds-color-page-top: #0f1720;[\s\S]*--ds-color-page-bottom: #070b10;[\s\S]*--ds-shadow-bottom-tabs:/.test(styles), "다크모드 전용 페이지 배경/하단 탭 토큰이 없습니다.");
   assertOk(/body\s*\{[\s\S]*background: linear-gradient\(180deg, var\(--ds-color-page-top\) 0, var\(--bg\) 240px, var\(--ds-color-page-bottom\) 100%\);/.test(styles), "body 배경이 테마 토큰을 따르지 않습니다.");
@@ -1050,6 +1053,7 @@ function checkFrontendAdminRender() {
     renderForSearch("?tab=modeling"),
     renderForSearch("?tab=ontology"),
     renderForSearch("?tab=feed"),
+    renderForSearch("?tab=experiments"),
     renderForSearch("?tab=modeling&strategy=evidence"),
     renderForSearch("?tab=modeling&strategy=results"),
     renderForSearch("?tab=modeling&strategy=graphs"),
@@ -1073,17 +1077,18 @@ function checkFrontendAdminRender() {
     const modelingHtml = pages[8];
     const legacyOntologyHtml = pages[9];
     const feedHtml = pages[10];
-    const modelingEvidenceHtml = pages[11];
-    const modelingResultsHtml = pages[12];
-    const modelingGraphHtml = pages[13];
-    const modelingRegistryHtml = pages[14];
-    const modelingTraceHtml = pages[15];
-    const legacyOntologyGraphHtml = pages[16];
-    const monitoringHtml = pages[17];
-    const systemHtml = pages[18];
-    const settingsHtml = pages[19];
-    const staticAccountHtml = pages[20];
-    const newAccountHtml = pages[21];
+    const experimentsHtml = pages[11];
+    const modelingEvidenceHtml = pages[12];
+    const modelingResultsHtml = pages[13];
+    const modelingGraphHtml = pages[14];
+    const modelingRegistryHtml = pages[15];
+    const modelingTraceHtml = pages[16];
+    const legacyOntologyGraphHtml = pages[17];
+    const monitoringHtml = pages[18];
+    const systemHtml = pages[19];
+    const settingsHtml = pages[20];
+    const staticAccountHtml = pages[21];
+    const newAccountHtml = pages[22];
 
     [
       ["overview", overviewHtml],
@@ -1092,12 +1097,37 @@ function checkFrontendAdminRender() {
       ["symbols", symbolUniverseHtml],
       ["notifications", notificationHtml],
       ["modeling", modelingHtml],
+      ["experiments", experimentsHtml],
       ["feed", feedHtml],
       ["system", systemHtml],
       ["settings", settingsHtml]
     ].forEach(function (entry) {
       assertOk(entry[1].indexOf("managed-page managed-page-" + entry[0]) >= 0, "탭이 공통 관리 페이지 템플릿을 거치지 않습니다: " + entry[0]);
       assertOk(entry[1].indexOf("page-command-strip") >= 0, "탭에 페이지 작업 상태 strip이 없습니다: " + entry[0]);
+    });
+    [
+      ["overview", overviewHtml, "full"],
+      ["accounts", accountHtml, "compact"],
+      ["watchlist", watchlistHtml, "compact"],
+      ["symbols", symbolUniverseHtml, "compact"],
+      ["notifications", notificationHtml, "compact"],
+      ["modeling", modelingHtml, "compact"],
+      ["experiments", experimentsHtml, "compact"],
+      ["feed", feedHtml, "compact"],
+      ["system", systemHtml, "compact"],
+      ["settings", settingsHtml, "compact"]
+    ].forEach(function (entry) {
+      var tabId = entry[0];
+      var html = entry[1];
+      var rail = entry[2];
+      assertOk(html.indexOf('data-web-style="orbit-alpha-console-v2"') >= 0, "탭이 웹 스타일 계약 ID를 렌더링하지 않습니다: " + tabId);
+      assertOk(html.indexOf('data-web-style-version="20260712"') >= 0, "탭이 웹 스타일 계약 버전을 렌더링하지 않습니다: " + tabId);
+      assertOk(html.indexOf("web-style-shell") >= 0 && html.indexOf("web-style-nav") >= 0 && html.indexOf("web-style-topbar") >= 0, "탭의 콘솔 셸/네비/topbar 스타일 영역이 없습니다: " + tabId);
+      assertOk(html.indexOf("web-style-deskbar") >= 0 && html.indexOf('data-style-rail="' + rail + '"') >= 0, "탭의 deskbar 스타일 rail이 계약과 다릅니다: " + tabId);
+      assertOk(html.indexOf("web-style-workspace") >= 0 && html.indexOf("web-style-main") >= 0, "탭의 workspace/main 스타일 영역이 없습니다: " + tabId);
+      assertOk(html.indexOf("web-style-page") >= 0 && html.indexOf('data-style-screen="' + tabId + '"') >= 0, "탭의 managed page 스타일 화면 ID가 없습니다: " + tabId);
+      assertOk(html.indexOf("web-style-command-strip") >= 0 && html.indexOf('data-style-layer="command-strip"') >= 0, "탭의 command strip 스타일 레이어가 없습니다: " + tabId);
+      assertOk(html.indexOf("admin-grid") >= 0, "탭 본문이 12컬럼 작업대 구조를 통과하지 않습니다: " + tabId);
     });
     assertOk(legacyOntologyHtml.indexOf("managed-page managed-page-modeling") >= 0, "기존 관계 분석 URL이 투자 분석 탭으로 호환 렌더링되지 않습니다.");
     assertOk(monitoringHtml.indexOf("managed-page managed-page-notifications") >= 0, "기존 모니터링 URL이 알림 공통 페이지로 열리지 않습니다.");

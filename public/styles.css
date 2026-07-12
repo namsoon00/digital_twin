@@ -16032,3 +16032,61 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
     overflow: visible;
   }
 }
+
+/* Orbit Alpha web style contract: orbit-alpha-console-v2 */
+[data-web-style="orbit-alpha-console-v2"] {
+  --oa-contract-line: var(--ds-card-border);
+  --oa-contract-surface: var(--ds-card-bg);
+  --oa-contract-rail: #101820;
+  --oa-contract-screen-gap: 12px;
+}
+
+[data-web-style="orbit-alpha-console-v2"].web-style-shell {
+  isolation: isolate;
+}
+
+[data-web-style="orbit-alpha-console-v2"] .web-style-nav,
+[data-web-style="orbit-alpha-console-v2"] .web-style-topbar,
+[data-web-style="orbit-alpha-console-v2"] .web-style-deskbar,
+[data-web-style="orbit-alpha-console-v2"] .web-style-workspace,
+[data-web-style="orbit-alpha-console-v2"] .web-style-main,
+[data-web-style="orbit-alpha-console-v2"] .web-style-page,
+[data-web-style="orbit-alpha-console-v2"] .web-style-command-strip {
+  min-width: 0;
+}
+
+[data-web-style="orbit-alpha-console-v2"] .web-style-page {
+  position: relative;
+  isolation: isolate;
+}
+
+[data-web-style="orbit-alpha-console-v2"] .web-style-command-strip {
+  border-color: var(--oa-contract-line);
+  background: var(--oa-contract-surface);
+}
+
+[data-web-style="orbit-alpha-console-v2"] .web-style-deskbar {
+  border-color: var(--oa-contract-line);
+}
+
+[data-web-style="orbit-alpha-console-v2"] .web-style-main > .web-style-page {
+  width: 100%;
+}
+
+[data-web-style="orbit-alpha-console-v2"] .web-style-page > .admin-grid {
+  min-width: 0;
+}
+
+@media (min-width: 1181px) {
+  [data-web-style="orbit-alpha-console-v2"] .web-style-page {
+    gap: var(--oa-contract-screen-gap);
+  }
+
+  [data-web-style="orbit-alpha-console-v2"] .web-style-command-strip {
+    position: relative;
+  }
+
+  [data-web-style="orbit-alpha-console-v2"] .web-style-deskbar[data-style-rail="compact"] {
+    grid-template-columns: minmax(180px, 0.9fr) minmax(180px, 1fr) minmax(180px, 1fr) minmax(160px, 0.8fr);
+  }
+}

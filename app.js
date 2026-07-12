@@ -12605,11 +12605,17 @@
   function renderFeedPage(snapshot) {
     return renderManagedPage("feed", snapshot, [
       '<section class="admin-grid feed-view">',
+      '<div class="feed-workbench">',
+      '<div class="feed-primary-column">',
       renderFeedOverviewPanel(),
-      renderFeedPipelinePanel(),
-      renderFeedChannelPanel(),
-      renderFeedQualityPanel(),
       renderResearchEvidencePanel(),
+      '</div>',
+      '<aside class="feed-side-column">',
+      renderFeedPipelinePanel(),
+      renderFeedQualityPanel(),
+      renderFeedChannelPanel(),
+      '</aside>',
+      '</div>',
       renderFeedSettingsPanel(),
       '</section>'
     ].join(""));

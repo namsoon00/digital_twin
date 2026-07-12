@@ -250,6 +250,7 @@ function checkFrontendAdminRender() {
   assertOk(styles.indexOf("Desktop free-scroll and focus-mode layer") >= 0, "PC 자유 스크롤/모드 분리 최종 레이어가 없습니다.");
   assertOk(/Desktop free-scroll and focus-mode layer[\s\S]*\.shell,[\s\S]*\.console-shell\s*\{[\s\S]*height: auto;[\s\S]*overflow: visible;/.test(styles), "PC shell이 페이지 스크롤 구조로 풀리지 않았습니다.");
   assertOk(/Desktop free-scroll and focus-mode layer[\s\S]*\.workspace-main,[\s\S]*\.managed-page,[\s\S]*\.admin-grid\s*\{[\s\S]*height: auto;[\s\S]*overflow: visible;/.test(styles), "PC 본문이 내부 고정 스크롤에서 해제되지 않았습니다.");
+  assertOk(/Desktop free-scroll and focus-mode layer[\s\S]*\.notification-template-select-list,[\s\S]*\.feed-view \.feed-side-column,[\s\S]*\.notification-decision-body\.has-detail \.notification-decision-list[\s\S]*\{[\s\S]*max-height: none;[\s\S]*overflow: visible;/.test(styles), "PC 탭 내부 목록/사이드 컬럼이 자체 스크롤에서 해제되지 않았습니다.");
   assertOk(/@media \(max-width: 1180px\) and \(min-width: 981px\)[\s\S]*grid-template-columns: 224px minmax\(0, 1fr\);/.test(styles), "981px 이상 태블릿이 PC형 좌측 네비게이션으로 유지되지 않습니다.");
   assertOk(/@media \(max-width: 980px\) and \(min-width: 861px\)[\s\S]*\.app-nav[\s\S]*grid-template-columns: auto minmax\(0, 1fr\) auto;/.test(styles), "좁은 태블릿에서 상단 네비게이션으로 전환되지 않습니다.");
   assertOk(code.indexOf("renderDeskbar") >= 0 && styles.indexOf(".deskbar") >= 0, "PC/태블릿 데스크 바가 없습니다.");
@@ -1171,6 +1172,7 @@ function checkFrontendAdminRender() {
     assertOk(overviewHtml.indexOf("nav-tab-description") >= 0 && styles.indexOf(".nav-tab-description") >= 0, "PC 좌측 네비게이션에 탭 설명 구조가 없습니다.");
     assertOk(code.indexOf("var navigationGroups = [") >= 0 && code.indexOf("pageStructureCatalog") >= 0, "탭 업무 그룹과 화면 정보 구조 카탈로그가 없습니다.");
     assertOk(code.indexOf("pageModeOptions") >= 0 && code.indexOf("setPageViewMode") >= 0 && styles.indexOf(".page-mode-switch") >= 0, "결과/설정 모드 분리 구조가 없습니다.");
+    assertOk(code.indexOf('querySelectorAll("button[data-page-mode-page][data-page-mode]")') >= 0, "결과/설정 전환 이벤트가 페이지 컨테이너에 바인딩될 수 있습니다.");
     assertOk(accountResultsHtml.indexOf("page-mode-switch") >= 0 && accountResultsHtml.indexOf('data-page-mode="results"') >= 0 && accountResultsHtml.indexOf('data-page-mode="settings"') >= 0, "계정 탭에 결과/설정 전환이 없습니다.");
     assertOk(overviewHtml.indexOf("app-nav-group") >= 0 && overviewHtml.indexOf("Command") >= 0 && overviewHtml.indexOf("Market Desk") >= 0 && overviewHtml.indexOf("Decision Stack") >= 0 && overviewHtml.indexOf("Control Plane") >= 0, "PC 좌측 네비게이션이 업무 그룹으로 구조화되지 않았습니다.");
     assertOk(overviewHtml.indexOf('data-nav-group="market"') >= 0 && overviewHtml.indexOf('data-nav-group="decision"') >= 0 && overviewHtml.indexOf('data-nav-group="control"') >= 0, "탭 버튼이 업무 그룹 메타데이터를 렌더링하지 않습니다.");
@@ -1197,7 +1199,7 @@ function checkFrontendAdminRender() {
     assertOk(code.indexOf("restoreTabBarPosition") >= 0 && code.indexOf("tabBarScrollLeft") >= 0, "하단 탭 위치 복원 로직이 없습니다.");
     assertOk(code.indexOf("tabScrollPositions") >= 0 && code.indexOf("restoreRenderedPageScrollPosition") >= 0 && code.indexOf("rememberRenderedPageScrollPosition") >= 0, "탭별 본문 스크롤 복원 로직이 없습니다.");
     assertOk(overviewHtml.indexOf('data-scroll-key="overview"') >= 0, "탭 본문에 스크롤 관리 키가 렌더링되지 않습니다.");
-    assertOk(designSystemDoc.indexOf("각 탭은 독립된 스크롤 위치") >= 0, "디자인 시스템 문서에 탭별 스크롤 정책이 없습니다.");
+    assertOk(designSystemDoc.indexOf("각 탭은 독립된 페이지 스크롤 위치") >= 0 && designSystemDoc.indexOf("기본은 window/page 스크롤") >= 0, "디자인 시스템 문서에 탭별 페이지 스크롤 정책이 없습니다.");
     assertOk(code.indexOf("syncTopbarScrollState") >= 0 && code.indexOf("topbar-collapsed") >= 0, "상단 제목 영역을 스크롤 상태에 따라 접는 로직이 없습니다.");
     assertOk(styles.indexOf(".shell-page.topbar-collapsed") >= 0 && styles.indexOf(".topbar-collapsed .topbar") >= 0, "상단 제목 영역 접힘 레이아웃 스타일이 없습니다.");
     assertOk(

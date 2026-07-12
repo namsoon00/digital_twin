@@ -6005,10 +6005,10 @@
     var modeLabel = snapshot.preview ? "Pages preview" : (toss.mode === "live" ? "Toss live" : "Local server");
     var modeClass = toss.mode === "live" ? "live" : "demo";
     var tab = activeTabMeta();
-    var showDeskbar = state.activeTab === "overview";
+    var showHomeDeskbar = state.activeTab === "overview";
     var subtitle = (tab.description || "운영") + " · 마지막 데이터 " + formatClock(snapshot.generatedAt);
     return [
-      '<main class="shell' + (showDeskbar ? " shell-home" : " shell-page") + '">',
+      '<main class="shell console-shell' + (showHomeDeskbar ? " shell-home" : " shell-page") + '">',
       renderAppNavigation(tab, modeLabel, modeClass),
       '<section class="topbar">',
       '<div class="topbar-copy">',
@@ -6018,7 +6018,7 @@
       '</div>',
       renderTopbarSyncState(),
       '</section>',
-      showDeskbar ? renderDeskbar(snapshot, modeLabel, modeClass) : '',
+      renderDeskbar(snapshot, modeLabel, modeClass, { compact: !showHomeDeskbar, activeTab: tab }),
       '<section class="workspace-layout">',
       renderTabs(),
       '<div class="workspace-main" data-scroll-key="' + escapeHtml(activeScrollKey()) + '">',
@@ -6085,7 +6085,8 @@
     return "";
   }
 
-  function renderDeskbar(snapshot, modeLabel, modeClass) {
+  function renderDeskbar(snapshot, modeLabel, modeClass, options) {
+    options = options || {};
     var portfolio = snapshot.portfolio || {};
     var toss = snapshot.toss || {};
     var positions = Array.isArray(toss.positions) ? toss.positions.filter(function (item) {
@@ -6102,6 +6103,18 @@
     var abox = strategy.abox || {};
     var tbox = strategy.tbox || {};
     var relationCount = Number(abox.relationCount || strategy.relationCount || 0);
+    var activeTab = options.activeTab || activeTabMeta();
+    var compact = !!options.compact;
+    if (compact) {
+      return [
+        '<section class="deskbar deskbar-compact" aria-label="콘솔 상태 요약">',
+        renderDeskbarCell("Workspace", activeTab.label || "업무", activeTab.description || "현재 작업", "neutral"),
+        renderDeskbarCell("Data", modeLabel, "Last " + formatClock(snapshot.generatedAt), modeClass),
+        renderDeskbarCell("Portfolio", formatMoney(portfolio.total || 0), positions + " positions", "neutral"),
+        renderDeskbarCell("Alerts", enabledRules + "/" + policyRules.length, state.realtime.connected ? "WebSocket live" : "HTTP polling", state.realtime.connected ? "live" : "demo"),
+        '</section>'
+      ].join("");
+    }
     return [
       '<section class="deskbar deskbar-full" aria-label="운영 상태 요약">',
       renderDeskbarCell("Data", modeLabel, "Last " + formatClock(snapshot.generatedAt), modeClass),
@@ -6127,7 +6140,8 @@
     var active = state.activeTab === tab.id;
     return [
       '<button type="button" class="' + escapeHtml(className) + (active ? " active" : "") + '" data-tab="' + escapeHtml(tab.id) + '"' + (active ? ' aria-current="page"' : "") + '>',
-      '<span>' + escapeHtml(tab.label) + '</span>',
+      '<span class="nav-tab-label">' + escapeHtml(tab.label) + '</span>',
+      '<span class="nav-tab-description">' + escapeHtml(tab.description || "") + '</span>',
       '</button>'
     ].join("");
   }
@@ -6152,10 +6166,12 @@
       '</div>',
       '</div>',
       '<div class="app-nav-tabs" aria-label="전체 탭">',
+      '<span class="app-nav-section-label">Core Console</span>',
       primaryTabs.map(function (tab) {
         return navTabButton(tab, "app-nav-tab primary");
       }).join(""),
       '<span class="app-nav-divider" aria-hidden="true"></span>',
+      '<span class="app-nav-section-label">Operations</span>',
       managementTabs.map(function (tab) {
         return navTabButton(tab, "app-nav-tab admin");
       }).join(""),

@@ -16434,6 +16434,15 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   .account-watch-symbol-list,
   .monitoring-instrument-list,
   .admin-message-group-list,
+  .notification-template-select-list,
+  .notification-template-preview pre,
+  .notification-full-message,
+  pre.notification-full-message,
+  .notification-decision-detail pre.notification-full-message,
+  .research-evidence-list,
+  .feed-settings-sections,
+  .feed-view .feed-side-column,
+  .notification-decision-body.has-detail .notification-decision-list,
   .notification-decision-detail,
   .strategy-view .investment-tab-stack,
   .strategy-view .investment-tab-stack-full,
@@ -16441,10 +16450,21 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   .strategy-view .investment-tab-stack-full .ontology-dashboard {
     max-height: none;
     overflow: visible;
+    overscroll-behavior: auto;
+    scrollbar-gutter: auto;
+  }
+
+  .notification-fingerprint {
+    max-height: none;
+    overflow: visible;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    scrollbar-gutter: auto;
   }
 
   .notification-decision-status,
-  .notification-decision-detail {
+  .notification-decision-detail,
+  .feed-view .feed-side-column {
     position: static;
     top: auto;
   }

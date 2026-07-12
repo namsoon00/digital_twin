@@ -14492,7 +14492,7 @@
       });
     });
 
-    Array.prototype.slice.call(app.querySelectorAll("[data-page-mode]")).forEach(function (button) {
+    Array.prototype.slice.call(app.querySelectorAll("button[data-page-mode-page][data-page-mode]")).forEach(function (button) {
       button.addEventListener("click", function () {
         var page = normalizeTabId(button.getAttribute("data-page-mode-page") || state.activeTab);
         var mode = normalizePageMode(button.getAttribute("data-page-mode"));

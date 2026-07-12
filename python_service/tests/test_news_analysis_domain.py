@@ -12,6 +12,7 @@ from digital_twin.domain.news_analysis import (
     confidence_from_analysis_payload,
     impact_from_analysis_payload,
     korean_article_summary,
+    source_reliability_score,
 )
 from digital_twin.domain.ontology_relation_reasoning import research_evidence_facts
 
@@ -134,6 +135,12 @@ class NewsAnalysisDomainTests(unittest.TestCase):
         self.assertEqual("direct", analysis["relationScope"])
         self.assertLessEqual(analysis["sourceReliability"], 0.3)
         self.assertLess(confidence_from_analysis_payload(analysis), 0.55)
+
+    def test_news_analysis_scores_known_publishers_above_digest_gate(self):
+        self.assertGreaterEqual(source_reliability_score("The Economist", "Google News US"), 0.8)
+        self.assertGreaterEqual(source_reliability_score("YTN", "Google News KR"), 0.68)
+        self.assertGreaterEqual(source_reliability_score("뉴스핌", "Google News KR"), 0.68)
+        self.assertLess(source_reliability_score("Naver Blog", "Google News KR"), 0.5)
 
     def test_news_analysis_filters_apple_common_noun_false_positive(self):
         target = NewsCollectionTarget("AAPL", "Apple", "NASDAQ", "USD", "AI")

@@ -143,7 +143,42 @@ SOCIAL_SOURCE_TERMS = [
     "tiktok",
 ]
 LOW_RELIABILITY_SOURCE_TERMS = ["blog", "블로그", "cafe", "reddit", "rumor", *SOCIAL_SOURCE_TERMS]
-HIGH_RELIABILITY_SOURCE_TERMS = ["dart", "sec", "edgar", "reuters", "bloomberg", "연합", "yonhap", "cnbc", "wsj", "marketwatch"]
+HIGH_RELIABILITY_SOURCE_TERMS = [
+    "dart",
+    "sec",
+    "edgar",
+    "reuters",
+    "bloomberg",
+    "the economist",
+    "financial times",
+    "연합",
+    "yonhap",
+    "cnbc",
+    "wsj",
+    "marketwatch",
+]
+MEDIUM_RELIABILITY_SOURCE_TERMS = [
+    "yahoo finance",
+    "investing",
+    "매일경제",
+    "한국경제",
+    "이데일리",
+    "머니투데이",
+    "조선비즈",
+    "chosunbiz",
+    "서울경제",
+    "파이낸셜뉴스",
+    "뉴스핌",
+    "뉴스토마토",
+    "전자신문",
+    "매일일보",
+    "ytn",
+    "kbs",
+    "sbs",
+    "mbc",
+    "매경",
+    "한경",
+]
 
 EVENT_TYPE_LABELS = {
     "earnings": "실적",
@@ -787,7 +822,7 @@ def source_reliability_score(source: object, provider: object = "") -> float:
         return 0.42
     if any(token in source_text for token in HIGH_RELIABILITY_SOURCE_TERMS):
         return 0.82
-    if any(token in source_text for token in ["yahoo finance", "investing", "매일경제", "한국경제", "이데일리", "머니투데이", "조선비즈", "서울경제", "kbs", "sbs", "mbc", "매경", "한경"]):
+    if any(token in source_text for token in MEDIUM_RELIABILITY_SOURCE_TERMS):
         return 0.68
     if any(token in provider_text for token in ["google news", "google_rss", "gdelt"]):
         return 0.58

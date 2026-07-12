@@ -115,12 +115,18 @@ def is_graph_backed_relation_context(relation_context: Dict[str, object]) -> boo
     if not isinstance(relation_context, dict) or not relation_context:
         return False
     decision = relation_context.get("decision") if isinstance(relation_context.get("decision"), dict) else {}
+    source = str(relation_context.get("source") or "")
+    basis = str(decision.get("basis") or "")
     return (
         bool(relation_context.get("graphStoreUsed"))
         and not bool(relation_context.get("fallbackUsed"))
-        and str(relation_context.get("source") or "") == "neo4jInferenceBox"
-        and str(decision.get("basis") or "") == "neo4jInferenceBox"
+        and is_graph_store_inference_source(source)
+        and is_graph_store_inference_source(basis)
     )
+
+
+def is_graph_store_inference_source(value: str) -> bool:
+    return str(value or "") in {"neo4jInferenceBox", "typedbInferenceBox", "graphStoreInferenceBox"}
 
 
 def has_graph_backed_relation_context(context: Dict[str, object]) -> bool:

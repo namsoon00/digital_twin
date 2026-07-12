@@ -3,7 +3,7 @@ import hashlib
 import json
 from typing import Dict, Iterable, List, Tuple
 
-from ..domain.ontology_contracts import PortfolioOntology
+from ..domain.ontology_contracts import OntologyEntity, OntologyRelation, PortfolioOntology
 from ..domain.ontology_graph_reasoner import run_graph_reasoner
 from ..domain.ontology_rulebox_catalog import default_graph_inference_rules
 from ..domain.ontology_rulebox_contracts import GRAPH_REASONER_VERSION, GraphInferenceRule
@@ -15,9 +15,12 @@ from ..domain.ontology_schema import default_tbox_metadata
 from .neo4j_ontology_inferencebox import (
     inferencebox_entity_payload,
     inferencebox_relation_payload,
+    inferencebox_snapshot_from_rows,
     inferencebox_trace_payload,
 )
 from .neo4j_ontology_lifecycle import (
+    active_tbox_metadata_from_rows,
+    active_tbox_metadata_unavailable,
     graph_box_entity_counts,
     graph_box_relation_counts,
     ontology_seed_graph,
@@ -26,6 +29,7 @@ from .neo4j_ontology_payloads import Neo4jOntologyRowMapperMixin, number_or_none
 from .neo4j_ontology_rulebox import (
     rulebox_graph_from_rules,
     rulebox_rules_from_payload,
+    rulebox_snapshot_from_rows,
     rulebox_rules_to_payload,
 )
 from .settings import runtime_settings, utc_now
@@ -82,6 +86,68 @@ def typeql_has(attribute: str, value: object, numeric: bool = False) -> str:
             return ""
         return ", has " + attribute + " " + str(parsed)
     return ", has " + attribute + " " + typedb_string(value)
+
+
+def json_object(value: object) -> Dict[str, object]:
+    if isinstance(value, dict):
+        return dict(value)
+    if not value:
+        return {}
+    try:
+        decoded = json.loads(str(value))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    return dict(decoded) if isinstance(decoded, dict) else {}
+
+
+def list_of_strings(value: object) -> List[str]:
+    if isinstance(value, list):
+        return [str(item) for item in value if str(item or "").strip()]
+    if value in (None, ""):
+        return []
+    return [str(value)]
+
+
+def typedb_concept_value(concept: object):
+    if concept is None:
+        return None
+    get_value = getattr(concept, "get_value", None)
+    if callable(get_value):
+        return get_value()
+    value = getattr(concept, "value", None)
+    if callable(value):
+        return value()
+    if value is not None:
+        return value
+    get_label = getattr(concept, "get_label", None)
+    if callable(get_label):
+        return str(get_label())
+    return concept
+
+
+def typedb_row_value(row: object, name: str):
+    if row is None:
+        return None
+    getter = getattr(row, "get", None)
+    if callable(getter):
+        try:
+            return typedb_concept_value(getter(name))
+        except Exception:
+            return None
+    if isinstance(row, dict):
+        return typedb_concept_value(row.get(name))
+    return None
+
+
+def merge_flat_properties(row: Dict[str, object], props: Dict[str, object]) -> Dict[str, object]:
+    merged = dict(props or {})
+    nested = merged.get("properties") if isinstance(merged.get("properties"), dict) else {}
+    if nested:
+        merged.update(nested)
+    for key, value in row.items():
+        if value not in (None, "", [], {}):
+            merged.setdefault(key, value)
+    return merged
 
 
 class NullTypeDBOntologyGraphRepository:
@@ -213,18 +279,39 @@ class TypeDBOntologyGraphRepository(Neo4jOntologyRowMapperMixin):
         self.timeout_seconds = max(2, int(timeout_seconds or 20))
         self._last_graph = None
         self._last_inference_graph = None
-        self._last_rules: List[GraphInferenceRule] = list(default_graph_inference_rules())
+        self._last_rules: List[GraphInferenceRule] = []
 
     def active_tbox_metadata(self) -> Dict[str, object]:
-        metadata = default_tbox_metadata()
-        metadata.update({
-            "configured": bool(self.address),
-            "status": "code-fallback",
-            "source": "code-fallback",
-            "graphStore": "typedb",
-            "storeSource": "typedb",
-            "reason": "TypeDB TBox read model is bootstrapped from the code TBox until TypeQL read queries are enabled.",
-        })
+        if not self.address:
+            return NullTypeDBOntologyGraphRepository().active_tbox_metadata()
+        try:
+            entity_rows = self.read_entity_rows(["TBox"])
+            relation_rows = self.read_relation_rows(["TBox"])
+        except Exception as error:  # noqa: BLE001 - metadata must be safe for UI/bootstrap.
+            metadata = active_tbox_metadata_unavailable("error", str(error)[:180], "typedb")
+            metadata.update({"graphStore": "typedb", "storeSource": "typedb-typeql"})
+            return metadata
+        version = ""
+        fingerprint = ""
+        updated_at = ""
+        for row in entity_rows:
+            props = json_object(row.get("propertiesJson"))
+            version = version or str(row.get("version") or props.get("version") or props.get("tboxVersion") or "")
+            fingerprint = fingerprint or str(row.get("fingerprint") or props.get("fingerprint") or props.get("tboxFingerprint") or "")
+            updated_at = max(updated_at, str(row.get("updatedAt") or props.get("updatedAt") or ""))
+        metadata = active_tbox_metadata_from_rows(
+            {
+                "entities": [{
+                    "entityCount": len(entity_rows),
+                    "version": version,
+                    "fingerprint": fingerprint,
+                    "updatedAt": updated_at,
+                }],
+                "relations": [{"relationCount": len(relation_rows)}],
+            },
+            "typedb-typeql",
+        )
+        metadata.update({"graphStore": "typedb", "source": "typedb-typeql", "storeSource": "typedb-typeql"})
         return metadata
 
     def save_graph(self, graph: PortfolioOntology) -> Dict[str, object]:
@@ -332,6 +419,197 @@ class TypeDBOntologyGraphRepository(Neo4jOntologyRowMapperMixin):
         with driver.transaction(self.database, TransactionType.SCHEMA) as tx:
             tx.query(self.schema_query()).resolve()
             tx.commit()
+
+    def read_rows(self, query: str, columns: Iterable[str]) -> List[Dict[str, object]]:
+        if not self.address:
+            return []
+        imported = self.driver_imports()
+        if imported[0] is None:
+            raise RuntimeError("typedb-driver Python package is not installed: " + str(imported[1])[:160])
+        _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
+        driver = self.open_driver(imported)
+        try:
+            self.ensure_database(driver)
+            with driver.transaction(self.database, TransactionType.READ) as tx:
+                resolved = tx.query(query).resolve()
+                rows = []
+                for item in resolved:
+                    rows.append({name: typedb_row_value(item, name) for name in columns})
+                return rows
+        finally:
+            self.close_driver(driver)
+
+    def read_entity_rows(self, boxes: Iterable[str] = None, limit: int = 0) -> List[Dict[str, object]]:
+        rows: List[Dict[str, object]] = []
+        for box in normalized_boxes(boxes):
+            query = (
+                "match $n isa ontology-node, "
+                "has ontology-id $id, "
+                "has ontology-label $label, "
+                "has ontology-kind $kind, "
+                "has ontology-box " + typedb_string(box) + ", "
+                "has ontology-updated-at $updatedAt, "
+                "has ontology-json $json; "
+            )
+            rows.extend(self.entity_rows_from_typeql(self.read_rows(
+                query,
+                ["id", "label", "kind", "updatedAt", "json"],
+            ), box))
+        rows = sorted(rows, key=lambda item: (str(item.get("updatedAt") or ""), str(item.get("id") or "")), reverse=True)
+        safe_limit = int(limit or 0)
+        return rows[:safe_limit] if safe_limit > 0 else rows
+
+    def read_relation_rows(self, boxes: Iterable[str] = None, limit: int = 0) -> List[Dict[str, object]]:
+        rows: List[Dict[str, object]] = []
+        for box in normalized_boxes(boxes):
+            query = (
+                "match "
+                "$source isa ontology-node, has ontology-id $sourceId, has ontology-label $sourceLabel; "
+                "$target isa ontology-node, has ontology-id $targetId, has ontology-label $targetLabel; "
+                "$r isa ontology-assertion, links (source: $source, target: $target), "
+                "has ontology-id $id, "
+                "has ontology-relation-type $type, "
+                "has ontology-box " + typedb_string(box) + ", "
+                "has ontology-updated-at $updatedAt, "
+                "has ontology-json $json, "
+                "has ontology-weight $weight; "
+            )
+            rows.extend(self.relation_rows_from_typeql(self.read_rows(
+                query,
+                ["id", "sourceId", "sourceLabel", "targetId", "targetLabel", "type", "updatedAt", "json", "weight"],
+            ), box))
+        rows = sorted(rows, key=lambda item: (str(item.get("updatedAt") or ""), str(item.get("source") or ""), str(item.get("target") or "")), reverse=True)
+        safe_limit = int(limit or 0)
+        return rows[:safe_limit] if safe_limit > 0 else rows
+
+    def entity_rows_from_typeql(self, rows: Iterable[Dict[str, object]], box: str) -> List[Dict[str, object]]:
+        return [self.entity_row_from_typeql(row, box) for row in rows or [] if str(row.get("id") or "")]
+
+    def entity_row_from_typeql(self, row: Dict[str, object], box: str) -> Dict[str, object]:
+        props = json_object(row.get("json"))
+        merged = merge_flat_properties({
+            "id": row.get("id"),
+            "label": row.get("label"),
+            "kind": row.get("kind"),
+            "ontologyBox": box,
+            "symbol": row.get("symbol"),
+            "ruleId": row.get("ruleId"),
+            "tboxClass": row.get("tboxClass"),
+            "updatedAt": row.get("updatedAt"),
+        }, props)
+        condition = merged.get("condition") if isinstance(merged.get("condition"), dict) else {}
+        derivation = merged.get("derivation") if isinstance(merged.get("derivation"), dict) else {}
+        proposed = merged.get("proposedRule") if isinstance(merged.get("proposedRule"), dict) else None
+        payload = {
+            **merged,
+            "id": str(row.get("id") or merged.get("id") or ""),
+            "label": str(row.get("label") or merged.get("label") or row.get("id") or ""),
+            "kind": str(row.get("kind") or merged.get("kind") or ""),
+            "ontologyBox": str(box or merged.get("ontologyBox") or "ABox"),
+            "symbol": str(row.get("symbol") or merged.get("symbol") or ""),
+            "ruleId": str(row.get("ruleId") or merged.get("ruleId") or ""),
+            "tboxClass": str(row.get("tboxClass") or merged.get("tboxClass") or ""),
+            "updatedAt": str(row.get("updatedAt") or merged.get("updatedAt") or ""),
+            "propertiesJson": json.dumps(props, ensure_ascii=False, sort_keys=True),
+            "version": str(merged.get("version") or ""),
+            "sourceKind": str(merged.get("sourceKind") or ""),
+            "actionGroup": str(merged.get("actionGroup") or merged.get("action_group") or ""),
+            "actionLevel": str(merged.get("actionLevel") or merged.get("action_level") or ""),
+            "promptHint": str(merged.get("promptHint") or ""),
+            "anyConditionMinCount": int(number_or_none(merged.get("anyConditionMinCount")) or 1),
+            "enabled": bool(merged.get("enabled", True)),
+            "conditionId": str(merged.get("conditionId") or condition.get("condition_id") or ""),
+            "conditionKind": str(condition.get("kind") or merged.get("conditionKind") or ""),
+            "conditionField": str(condition.get("field") or merged.get("conditionField") or ""),
+            "conditionOperator": str(condition.get("operator") or merged.get("conditionOperator") or ""),
+            "conditionRole": str(condition.get("role") or merged.get("conditionRole") or "required"),
+            "conditionValueString": str(condition.get("value") or merged.get("conditionValueString") or ""),
+            "conditionValueNumber": number_or_none(condition.get("value") if "value" in condition else merged.get("conditionValueNumber")),
+            "conditionRelationType": str(condition.get("relation_type") or merged.get("conditionRelationType") or "").upper(),
+            "conditionDirection": str(condition.get("direction") or merged.get("conditionDirection") or "out"),
+            "conditionTargetKind": str(condition.get("target_kind") or merged.get("conditionTargetKind") or ""),
+            "conditionMinWeight": float(number_or_none(condition.get("min_weight") if "min_weight" in condition else merged.get("conditionMinWeight")) or 0),
+            "derivationIndex": int(number_or_none(merged.get("derivationIndex")) or 0),
+            "derivationRelationType": str(derivation.get("relation_type") or merged.get("derivationRelationType") or "").upper(),
+            "derivationTargetKind": str(derivation.get("target_kind") or merged.get("derivationTargetKind") or ""),
+            "derivationTargetKey": str(derivation.get("target_key") or merged.get("derivationTargetKey") or ""),
+            "derivationTargetLabel": str(derivation.get("target_label") or merged.get("derivationTargetLabel") or ""),
+            "derivationTboxClass": str(derivation.get("tbox_class") or merged.get("derivationTboxClass") or ""),
+            "derivationTboxClasses": list_of_strings(derivation.get("tbox_classes") or merged.get("derivationTboxClasses")),
+            "derivationPolarity": str(derivation.get("polarity") or merged.get("derivationPolarity") or ""),
+            "derivationRiskImpact": number_or_none(derivation.get("risk_impact") or merged.get("derivationRiskImpact")),
+            "derivationSupportImpact": number_or_none(derivation.get("support_impact") or merged.get("derivationSupportImpact")),
+            "derivationWeight": number_or_none(derivation.get("weight") or merged.get("derivationWeight")),
+            "derivationBeliefLabel": str(derivation.get("belief_label") or merged.get("derivationBeliefLabel") or ""),
+            "derivationAiInfluenceLabel": str(derivation.get("ai_influence_label") or merged.get("derivationAiInfluenceLabel") or ""),
+            "derivationActionGroup": str(derivation.get("action_group") or merged.get("derivationActionGroup") or ""),
+            "derivationActionLevel": str(derivation.get("action_level") or merged.get("derivationActionLevel") or ""),
+            "derivationDecisionStage": str(derivation.get("decision_stage") or derivation.get("decisionStage") or merged.get("derivationDecisionStage") or ""),
+            "derivationStagePriority": number_or_none(derivation.get("stage_priority") or derivation.get("stagePriority") or merged.get("derivationStagePriority")),
+            "polarity": str(merged.get("polarity") or ""),
+            "confidence": number_or_none(merged.get("confidence")),
+            "decisionStage": str(merged.get("decisionStage") or ""),
+            "stagePriority": number_or_none(merged.get("stagePriority")),
+            "nativeNeo4jReasoned": bool(merged.get("nativeNeo4jReasoned")),
+            "nativeTypeDbReasoned": bool(merged.get("nativeTypeDbReasoned")),
+            "title": str(merged.get("title") or row.get("label") or ""),
+            "status": str(merged.get("status") or ""),
+            "priority": number_or_none(merged.get("priority")) or 0,
+            "source": str(merged.get("source") or ""),
+            "rationale": str(merged.get("rationale") or ""),
+            "expectedEffect": str(merged.get("expectedEffect") or ""),
+            "risk": str(merged.get("risk") or ""),
+            "action": str(merged.get("action") or ""),
+            "requiresData": list_of_strings(merged.get("requiresData")),
+            "proposedRuleJson": json.dumps(proposed, ensure_ascii=False, sort_keys=True) if proposed else str(merged.get("proposedRuleJson") or ""),
+            "validationWarnings": list_of_strings(merged.get("validationWarnings")),
+            "promptVersion": str(merged.get("promptVersion") or ""),
+            "createdAt": str(merged.get("createdAt") or ""),
+            "symbols": list_of_strings(merged.get("symbols")),
+        }
+        return payload
+
+    def relation_rows_from_typeql(self, rows: Iterable[Dict[str, object]], box: str) -> List[Dict[str, object]]:
+        return [self.relation_row_from_typeql(row, box) for row in rows or [] if str(row.get("sourceId") or "") and str(row.get("targetId") or "")]
+
+    def relation_row_from_typeql(self, row: Dict[str, object], box: str) -> Dict[str, object]:
+        props = json_object(row.get("json"))
+        merged = merge_flat_properties({
+            "source": row.get("sourceId"),
+            "sourceLabel": row.get("sourceLabel"),
+            "target": row.get("targetId"),
+            "targetLabel": row.get("targetLabel"),
+            "type": row.get("type"),
+            "ruleId": row.get("ruleId"),
+            "ontologyBox": box,
+            "updatedAt": row.get("updatedAt"),
+            "weight": row.get("weight"),
+        }, props)
+        return {
+            **merged,
+            "id": str(row.get("id") or merged.get("id") or ""),
+            "source": str(row.get("sourceId") or merged.get("source") or ""),
+            "sourceLabel": str(row.get("sourceLabel") or merged.get("sourceLabel") or ""),
+            "target": str(row.get("targetId") or merged.get("target") or ""),
+            "targetLabel": str(row.get("targetLabel") or merged.get("targetLabel") or ""),
+            "type": str(row.get("type") or merged.get("type") or ""),
+            "relationType": str(row.get("type") or merged.get("relationType") or merged.get("type") or ""),
+            "ontologyBox": str(box or merged.get("ontologyBox") or "ABox"),
+            "symbol": str(merged.get("symbol") or ""),
+            "ruleId": str(row.get("ruleId") or merged.get("ruleId") or ""),
+            "weight": number_or_none(row.get("weight") if row.get("weight") is not None else merged.get("weight")),
+            "updatedAt": str(row.get("updatedAt") or merged.get("updatedAt") or ""),
+            "propertiesJson": json.dumps(props, ensure_ascii=False, sort_keys=True),
+            "polarity": str(merged.get("polarity") or ""),
+            "riskImpact": number_or_none(merged.get("riskImpact")),
+            "supportImpact": number_or_none(merged.get("supportImpact")),
+            "decisionStage": str(merged.get("decisionStage") or ""),
+            "stagePriority": number_or_none(merged.get("stagePriority")),
+            "aiInfluenceLabel": str(merged.get("aiInfluenceLabel") or ""),
+            "inferenceTraceId": str(merged.get("inferenceTraceId") or ""),
+            "nativeNeo4jReasoned": bool(merged.get("nativeNeo4jReasoned")),
+            "nativeTypeDbReasoned": bool(merged.get("nativeTypeDbReasoned")),
+        }
 
     def write_graph(self, driver, imported, graph: PortfolioOntology) -> None:
         _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
@@ -605,30 +883,50 @@ relation ontology-assertion,
         return result
 
     def rulebox_snapshot(self) -> Dict[str, object]:
-        rules = rulebox_rules_to_payload(self._last_rules or default_graph_inference_rules())
-        return {
-            "configured": bool(self.address),
-            "saved": True,
-            "status": "ok" if self.address else "disabled",
-            "source": "typedb-code-bootstrap",
-            "graphStore": "typedb",
-            "reason": "TypeDB RuleBox read model is using the active in-process rule catalog until TypeQL reads are enabled.",
-            "engineVersion": GRAPH_REASONER_VERSION,
-            "rules": rules,
-            "ruleCount": len(rules),
-            "conditionCount": sum(len(item.get("conditions") or []) for item in rules),
-            "derivationCount": sum(len(item.get("derivations") or []) for item in rules),
-            "relationTypes": sorted({
-                str(derivation.get("relation_type") or derivation.get("relationType") or "")
-                for rule in rules
-                for derivation in (rule.get("derivations") or [])
-                if isinstance(derivation, dict)
-            }),
-            "defaultsFallbackUsed": True,
-            "versions": [],
-            "versionCount": 0,
-            "changeCandidates": rulebox_governance_candidates(rules, []),
+        if not self.address:
+            return NullTypeDBOntologyGraphRepository().rulebox_snapshot()
+        try:
+            entities = self.read_entity_rows(["RuleBox", "RuleBoxGovernance"])
+            relations = self.read_relation_rows(["RuleBox", "RuleBoxGovernance"])
+        except Exception as error:  # noqa: BLE001 - admin read model must fail closed.
+            rules = rulebox_rules_to_payload(self._last_rules or default_graph_inference_rules())
+            return {
+                "configured": True,
+                "saved": False,
+                "status": "error",
+                "source": "typedb-typeql",
+                "graphStore": "typedb",
+                "reason": str(error)[:220],
+                "engineVersion": GRAPH_REASONER_VERSION,
+                "rules": [],
+                "ruleCount": 0,
+                "conditionCount": 0,
+                "derivationCount": 0,
+                "relationTypes": [],
+                "defaultsFallbackUsed": False,
+                "bootstrapAvailable": True,
+                "bootstrapRuleCount": len(rules),
+                "bootstrapRules": rules,
+                "versions": [],
+                "versionCount": 0,
+                "changeCandidates": rulebox_governance_candidates([], []),
+            }
+        rowsets = {
+            "rules": [row for row in entities if row.get("kind") == "rule" and row.get("ontologyBox") == "RuleBox"],
+            "conditions": [row for row in entities if row.get("kind") == "rule-condition" and row.get("ontologyBox") == "RuleBox"],
+            "derivations": [row for row in entities if row.get("kind") == "relation-template" and row.get("ontologyBox") == "RuleBox"],
+            "relationTypes": relation_type_rows_from_derivations(entities, relations),
+            "versions": [row for row in entities if row.get("kind") == "rulebox-version" and row.get("ontologyBox") == "RuleBoxGovernance"],
+            "candidates": [row for row in entities if row.get("kind") == "rule-change-candidate" and row.get("ontologyBox") == "RuleBoxGovernance"],
         }
+        snapshot = rulebox_snapshot_from_rows(rowsets, "typedb-typeql")
+        snapshot.update({"graphStore": "typedb", "source": "typedb-typeql"})
+        if snapshot.get("status") == "ok":
+            try:
+                self._last_rules = rulebox_rules_from_payload({"rules": snapshot.get("rules") or []})
+            except ValueError:
+                pass
+        return snapshot
 
     def save_rulebox(self, payload: Dict[str, object] = None) -> Dict[str, object]:
         try:
@@ -649,16 +947,22 @@ relation ontology-assertion,
     def run_rulebox(self, payload: Dict[str, object] = None) -> Dict[str, object]:
         if not self.address:
             return NullTypeDBOntologyGraphRepository().run_rulebox(payload)
-        if not self._last_graph:
+        graph = copy.deepcopy(self._last_graph) if self._last_graph else self.load_graph_from_typedb(["ABox"])
+        if not graph or not graph.entities:
             return {
                 "configured": True,
                 "status": "missing-abox",
                 "graphStore": "typedb",
-                "reason": "TypeDB RuleBox 실행 전에 저장된 ABox 그래프가 없습니다.",
+                "reason": "TypeDB에 실행 가능한 ABox 그래프가 없습니다.",
                 "statementCount": 0,
                 "nativeTypeDbReasoningUsed": False,
             }
-        graph = copy.deepcopy(self._last_graph)
+        if not self._last_rules:
+            snapshot = self.rulebox_snapshot()
+            try:
+                self._last_rules = rulebox_rules_from_payload({"rules": snapshot.get("rules") or []})
+            except ValueError:
+                self._last_rules = list(default_graph_inference_rules())
         run_graph_reasoner(graph, self._last_rules or default_graph_inference_rules())
         inference_entities = [
             item for item in graph.entities
@@ -683,9 +987,16 @@ relation ontology-assertion,
         }
 
     def inferencebox_snapshot(self, symbols: List[str] = None, limit: int = 80) -> Dict[str, object]:
-        graph = self._last_inference_graph
         clean_symbols = sorted(set(str(item or "").upper().strip() for item in (symbols or []) if str(item or "").strip()))
         safe_limit = max(1, min(500, int(limit or 80)))
+        if self.address:
+            try:
+                snapshot = self.inferencebox_snapshot_from_typedb(clean_symbols, safe_limit)
+                if snapshot.get("entityCount") or snapshot.get("relationCount") or snapshot.get("traceCount"):
+                    return snapshot
+            except Exception:
+                pass
+        graph = self._last_inference_graph
         if not graph:
             return {
                 "configured": bool(self.address),
@@ -741,7 +1052,72 @@ relation ontology-assertion,
             "traces": [inferencebox_trace_payload({**row, "matchedConditionIds": matched_condition_ids(row)}) for row in trace_rows],
         }
 
+    def inferencebox_snapshot_from_typedb(self, clean_symbols: List[str], safe_limit: int) -> Dict[str, object]:
+        entity_rows = [
+            row for row in self.read_entity_rows(["InferenceBox"])
+            if not clean_symbols or str(row.get("symbol") or "").upper() in clean_symbols
+        ]
+        relation_rows = [
+            row for row in self.read_relation_rows(["InferenceBox"])
+            if not clean_symbols
+            or any(symbol in str(row.get(key) or "").upper() for symbol in clean_symbols for key in ["source", "target", "symbol"])
+        ]
+        trace_rows = [row for row in entity_rows if str(row.get("kind") or "") == "inference-trace"]
+        rowsets = {
+            "entityCounts": [{"entityCount": len(entity_rows), "nativeEntityCount": 0}],
+            "relationCounts": [{"relationCount": len(relation_rows), "nativeRelationCount": 0}],
+            "traceCounts": [{"traceCount": len(trace_rows), "nativeTraceCount": 0}],
+            "entities": entity_rows[:safe_limit],
+            "relations": relation_rows[:safe_limit],
+            "traces": [{**row, "matchedConditionIds": matched_condition_ids(row)} for row in trace_rows[:safe_limit]],
+        }
+        snapshot = inferencebox_snapshot_from_rows(rowsets, "typedb-typeql", clean_symbols)
+        snapshot.update({
+            "graphStore": "typedb",
+            "source": "typedbInferenceBox",
+            "neo4jNativeReasoningUsed": False,
+            "nativeTypeDbReasoningUsed": False,
+            "typedbBootstrapReasoningUsed": True,
+        })
+        return snapshot
+
+    def load_graph_from_typedb(self, boxes: Iterable[str] = None) -> PortfolioOntology:
+        graph = PortfolioOntology("typedb-read-model")
+        for row in self.read_entity_rows(boxes or ["ABox"]):
+            properties = json_object(row.get("propertiesJson"))
+            properties.setdefault("ontologyBox", row.get("ontologyBox") or "ABox")
+            if row.get("symbol"):
+                properties.setdefault("symbol", row.get("symbol"))
+            if row.get("tboxClass"):
+                properties.setdefault("tboxClass", row.get("tboxClass"))
+            graph.entities.append(OntologyEntity(
+                str(row.get("id") or ""),
+                str(row.get("label") or row.get("id") or ""),
+                str(row.get("kind") or ""),
+                properties,
+            ))
+        for row in self.read_relation_rows(boxes or ["ABox"]):
+            properties = json_object(row.get("propertiesJson"))
+            properties.setdefault("ontologyBox", row.get("ontologyBox") or "ABox")
+            if row.get("ruleId"):
+                properties.setdefault("ruleId", row.get("ruleId"))
+            graph.relations.append(OntologyRelation(
+                str(row.get("source") or ""),
+                str(row.get("target") or ""),
+                str(row.get("type") or ""),
+                float(number_or_none(row.get("weight")) or 1.0),
+                [],
+                properties,
+            ))
+        return graph
+
     def save_rule_change_candidates(self, candidates: List[Dict[str, object]], context: Dict[str, object] = None) -> Dict[str, object]:
+        if not self._last_rules:
+            try:
+                snapshot = self.rulebox_snapshot()
+                self._last_rules = rulebox_rules_from_payload({"rules": snapshot.get("rules") or []})
+            except ValueError:
+                self._last_rules = []
         normalized = [
             normalize_rule_change_candidate(candidate, existing_rule_ids=[rule.rule_id for rule in self._last_rules])
             for candidate in (candidates or [])
@@ -774,6 +1150,25 @@ relation ontology-assertion,
             "savedCount": len(normalized) if save_result.get("saved") else 0,
             "saveResult": save_result,
         }
+
+
+def normalized_boxes(boxes: Iterable[str] = None) -> List[str]:
+    values = [str(item or "").strip() for item in (boxes or []) if str(item or "").strip()]
+    return sorted(set(values or ["ABox"]))
+
+
+def relation_type_rows_from_derivations(
+    entity_rows: Iterable[Dict[str, object]],
+    relation_rows: Iterable[Dict[str, object]],
+) -> List[Dict[str, object]]:
+    values = set()
+    for row in entity_rows or []:
+        if row.get("kind") == "relation-template":
+            values.add(str(row.get("derivationRelationType") or row.get("relationType") or "").upper())
+    for row in relation_rows or []:
+        if row.get("ontologyBox") == "RuleBox":
+            values.add(str(row.get("type") or row.get("relationType") or "").upper())
+    return [{"relationType": item} for item in sorted(value for value in values if value)]
 
 
 def relation_row_id(row: Dict[str, object]) -> str:

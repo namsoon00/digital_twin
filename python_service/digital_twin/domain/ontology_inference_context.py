@@ -15,6 +15,7 @@ from .portfolio import AccountSnapshot, PortfolioSummary, Position
 
 
 NEO4J_RELATION_CONTEXT_VERSION = "neo4j-inferencebox-relation-context-v1"
+GRAPH_STORE_RELATION_CONTEXT_VERSION = "graph-store-inferencebox-relation-context-v1"
 
 
 def ontology_projection_from_metadata(metadata: Dict[str, object]) -> Dict[str, object]:
@@ -96,6 +97,8 @@ def relation_context_from_inferencebox(
     if not bool(inferencebox.get("neo4jNativeReasoningUsed")) and not inferencebox.get("relations"):
         return {}
     graph_store = str(inferencebox.get("graphStore") or "").strip() or "graph-store"
+    source_name = inferencebox_source_name(inferencebox)
+    context_version = relation_context_version(source_name)
     relations = symbol_inference_relations(symbol, inferencebox.get("relations") or [])
     traces = symbol_inference_traces(symbol, inferencebox.get("traces") or [])
     if not relations and not traces:
@@ -105,10 +108,10 @@ def relation_context_from_inferencebox(
         portfolio,
         external_signals or {},
     )
-    matches = matches_from_inference(relations, traces)
+    matches = matches_from_inference(relations, traces, source_name=source_name, context_version=context_version)
     if not matches:
         return {}
-    decision = decision_from_inference(facts, matches, relations, traces)
+    decision = decision_from_inference(facts, matches, relations, traces, source_name=source_name)
     execution_plan = execution_plan_from_relation_context(facts, decision, matches)
     prompt_context = build_ai_prompt_context(prompt_id, facts, matches, settings or {}, execution_plan)
     active_matches = [item for item in matches if item.matched and not item.reference_only]
@@ -117,8 +120,8 @@ def relation_context_from_inferencebox(
     if isinstance(prompt_context, dict):
         prompt_context["evidenceSubgraph"] = evidence_subgraph
     return {
-        "engineVersion": NEO4J_RELATION_CONTEXT_VERSION,
-        "source": "neo4jInferenceBox",
+        "engineVersion": context_version,
+        "source": source_name,
         "graphStore": graph_store,
         "graphStoreUsed": True,
         "fallbackUsed": False,
@@ -144,6 +147,16 @@ def relation_context_from_inferencebox(
         "executionPlan": execution_plan,
         "evidenceSubgraph": evidence_subgraph,
         "promptContext": prompt_context,
+        "graphStoreInference": {
+            "source": source_name,
+            "graphStore": graph_store,
+            "relations": relations,
+            "traces": traces,
+            "entityCount": inferencebox.get("entityCount"),
+            "relationCount": inferencebox.get("relationCount"),
+            "traceCount": inferencebox.get("traceCount"),
+            "nativeRelationCount": inferencebox.get("nativeRelationCount"),
+        },
         "neo4jInference": {
             "graphStore": graph_store,
             "relations": relations,
@@ -154,6 +167,20 @@ def relation_context_from_inferencebox(
             "nativeRelationCount": inferencebox.get("nativeRelationCount"),
         },
     }
+
+
+def inferencebox_source_name(inferencebox: Dict[str, object]) -> str:
+    graph_store = str((inferencebox or {}).get("graphStore") or "").strip().lower()
+    source = str((inferencebox or {}).get("source") or "").strip()
+    if graph_store == "typedb" or source == "typedbInferenceBox" or bool((inferencebox or {}).get("nativeTypeDbReasoningUsed")):
+        return "typedbInferenceBox"
+    if graph_store == "neo4j" or source == "neo4jInferenceBox" or bool((inferencebox or {}).get("neo4jNativeReasoningUsed")):
+        return "neo4jInferenceBox"
+    return "graphStoreInferenceBox"
+
+
+def relation_context_version(source_name: str) -> str:
+    return NEO4J_RELATION_CONTEXT_VERSION if source_name == "neo4jInferenceBox" else GRAPH_STORE_RELATION_CONTEXT_VERSION
 
 
 def position_with_source(position: Position, source: str) -> Position:
@@ -198,7 +225,12 @@ def relation_mentions_symbol(symbol: str, item: Dict[str, object]) -> bool:
     return False
 
 
-def matches_from_inference(relations: List[Dict[str, object]], traces: List[Dict[str, object]]) -> List[OntologyRuleMatch]:
+def matches_from_inference(
+    relations: List[Dict[str, object]],
+    traces: List[Dict[str, object]],
+    source_name: str = "neo4jInferenceBox",
+    context_version: str = NEO4J_RELATION_CONTEXT_VERSION,
+) -> List[OntologyRuleMatch]:
     trace_by_rule = {
         str(item.get("ruleId") or ""): item
         for item in traces or []
@@ -229,9 +261,9 @@ def matches_from_inference(relations: List[Dict[str, object]], traces: List[Dict
         matches.append(OntologyRuleMatch(
             rule_id=rule_id,
             label=label,
-            version=NEO4J_RELATION_CONTEXT_VERSION,
+            version=context_version,
             relation_type=str(relation.get("type") or "INFERRED_RELATION"),
-            signal_type="neo4j_inference",
+            signal_type=inference_signal_type(source_name),
             matched=True,
             strength_score=score,
             strength_label=strength_label(score),
@@ -239,7 +271,7 @@ def matches_from_inference(relations: List[Dict[str, object]], traces: List[Dict
             evidence=evidence,
             missing=[],
             reference_only=False,
-            prompt_hint="Neo4j RuleBox InferenceBox에서 생성된 관계를 우선 근거로 사용합니다.",
+            prompt_hint=inference_prompt_hint(source_name, "relation"),
         ))
     if matches:
         return sorted(matches, key=lambda item: (-item.strength_score, item.rule_id))
@@ -251,9 +283,9 @@ def matches_from_inference(relations: List[Dict[str, object]], traces: List[Dict
         matches.append(OntologyRuleMatch(
             rule_id=rule_id,
             label=str(trace.get("label") or rule_id),
-            version=NEO4J_RELATION_CONTEXT_VERSION,
+            version=context_version,
             relation_type="HAS_INFERENCE_TRACE",
-            signal_type="neo4j_inference",
+            signal_type=inference_signal_type(source_name),
             matched=True,
             strength_score=score,
             strength_label=strength_label(score),
@@ -261,9 +293,23 @@ def matches_from_inference(relations: List[Dict[str, object]], traces: List[Dict
             evidence=[str(trace.get("label") or rule_id)],
             missing=[],
             reference_only=False,
-            prompt_hint="Neo4j RuleBox InferenceBox trace를 우선 근거로 사용합니다.",
+            prompt_hint=inference_prompt_hint(source_name, "trace"),
         ))
     return sorted(matches, key=lambda item: (-item.strength_score, item.rule_id))
+
+
+def inference_signal_type(source_name: str) -> str:
+    if source_name == "typedbInferenceBox":
+        return "typedb_inference"
+    if source_name == "neo4jInferenceBox":
+        return "neo4j_inference"
+    return "graph_store_inference"
+
+
+def inference_prompt_hint(source_name: str, unit: str) -> str:
+    store_label = "TypeDB" if source_name == "typedbInferenceBox" else ("Neo4j" if source_name == "neo4jInferenceBox" else "그래프 저장소")
+    suffix = "trace" if unit == "trace" else "관계"
+    return f"{store_label} RuleBox InferenceBox에서 생성된 {suffix}를 우선 근거로 사용합니다."
 
 
 def inference_strength_score(relation: Dict[str, object]) -> float:
@@ -278,6 +324,7 @@ def decision_from_inference(
     matches: List[OntologyRuleMatch],
     relations: List[Dict[str, object]],
     traces: List[Dict[str, object]],
+    source_name: str = "neo4jInferenceBox",
 ) -> Dict[str, object]:
     selected = max(matches, key=lambda item: (stage_priority_for_match(item, relations), item.strength_score, item.confidence))
     relation = relation_for_match(selected, relations)
@@ -289,7 +336,7 @@ def decision_from_inference(
         "label": stage.label,
         "tone": stage.tone,
         "score": round(float(selected.strength_score or 0), 1),
-        "basis": "neo4jInferenceBox",
+        "basis": source_name,
         "selectedRuleId": selected.rule_id,
         "selectedInferenceTraceId": str(trace.get("id") or ""),
         "decisionStage": stage.stage_key,
@@ -299,9 +346,17 @@ def decision_from_inference(
         "nextStageAt": stage.next_stage_at,
         "sourceRelationType": str(relation.get("type") or ""),
         "stagePriority": relation_stage_priority(relation),
-        "stagePolicySource": "neo4jInferenceRelation" if relation.get("decisionStage") or relation.get("stagePriority") else "actionFallback",
+        "stagePolicySource": inference_relation_policy_source(source_name) if relation.get("decisionStage") or relation.get("stagePriority") else "actionFallback",
         "nativeNeo4jReasoned": bool(relation.get("nativeNeo4jReasoned") or trace.get("nativeNeo4jReasoned")),
     }
+
+
+def inference_relation_policy_source(source_name: str) -> str:
+    if source_name == "typedbInferenceBox":
+        return "typedbInferenceRelation"
+    if source_name == "neo4jInferenceBox":
+        return "neo4jInferenceRelation"
+    return "graphStoreInferenceRelation"
 
 
 def stage_key_for_inference(rule_id: str, relation: Dict[str, object]) -> str:

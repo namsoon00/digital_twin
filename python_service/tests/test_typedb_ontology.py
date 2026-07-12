@@ -1,13 +1,16 @@
+import json
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from digital_twin import service_manager
+from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
 from digital_twin.domain.ontology_contracts import OntologyEntity, OntologyEvidence, OntologyRelation, PortfolioOntology
 from digital_twin.infrastructure.ontology_graph_store import (
     CompositeOntologyGraphRepository,
     ontology_repository_from_settings,
 )
+from digital_twin.infrastructure.neo4j_ontology_rulebox import rulebox_graph_from_rules
 from digital_twin.infrastructure.typedb_ontology import (
     NullTypeDBOntologyGraphRepository,
     TypeDBOntologyGraphRepository,
@@ -121,6 +124,138 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertIn("server", command)
         self.assertIn("--server.listen-address", command)
         self.assertIn("--storage.data-directory", command)
+
+    def test_typedb_rulebox_snapshot_reads_persisted_typeql_rows(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        graph = rulebox_graph_from_rules(default_graph_inference_rules()[:2])
+        entity_rows = repository.rows_for_entities(graph)
+        relation_rows = repository.rows_for_relations(graph)
+
+        with patch.object(repository, "read_entity_rows", return_value=entity_rows), patch.object(repository, "read_relation_rows", return_value=relation_rows):
+            snapshot = repository.rulebox_snapshot()
+
+        self.assertEqual("ok", snapshot["status"])
+        self.assertEqual("typedb-typeql", snapshot["source"])
+        self.assertEqual("typedb", snapshot["graphStore"])
+        self.assertGreaterEqual(snapshot["ruleCount"], 1)
+        self.assertFalse(snapshot["defaultsFallbackUsed"])
+
+    def test_typedb_inferencebox_snapshot_reads_persisted_typeql_rows(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        entity_rows = [
+            {
+                "id": "risk:005930:loss",
+                "label": "삼성전자 손실 방어",
+                "kind": "risk-signal",
+                "ontologyBox": "InferenceBox",
+                "symbol": "005930",
+                "ruleId": "graph.loss_guard.breakdown.v1",
+                "tboxClass": "RiskSignal",
+                "confidence": 0.86,
+                "propertiesJson": json.dumps({
+                    "ontologyBox": "InferenceBox",
+                    "symbol": "005930",
+                    "ruleId": "graph.loss_guard.breakdown.v1",
+                    "confidence": 0.86,
+                    "decisionStage": "LOSS_REDUCE",
+                    "stagePriority": 90,
+                }),
+            },
+            {
+                "id": "inference-trace:005930:graph.loss_guard.breakdown.v1",
+                "label": "삼성전자 · 손실 방어 추론",
+                "kind": "inference-trace",
+                "ontologyBox": "InferenceBox",
+                "symbol": "005930",
+                "ruleId": "graph.loss_guard.breakdown.v1",
+                "confidence": 0.86,
+                "propertiesJson": json.dumps({
+                    "ontologyBox": "InferenceBox",
+                    "symbol": "005930",
+                    "ruleId": "graph.loss_guard.breakdown.v1",
+                    "confidence": 0.86,
+                    "matchedConditions": [{"conditionId": "holding-loss"}],
+                }),
+            },
+        ]
+        relation_rows = [
+            {
+                "source": "stock:005930",
+                "sourceLabel": "삼성전자",
+                "target": "risk:005930:loss",
+                "targetLabel": "삼성전자 손실 방어",
+                "type": "HAS_INFERRED_RISK",
+                "ontologyBox": "InferenceBox",
+                "symbol": "005930",
+                "ruleId": "graph.loss_guard.breakdown.v1",
+                "weight": 0.86,
+                "propertiesJson": json.dumps({
+                    "ontologyBox": "InferenceBox",
+                    "symbol": "005930",
+                    "ruleId": "graph.loss_guard.breakdown.v1",
+                    "riskImpact": 13,
+                    "decisionStage": "LOSS_REDUCE",
+                    "stagePriority": 90,
+                    "aiInfluenceLabel": "손실 방어 추론",
+                    "inferenceTraceId": "inference-trace:005930:graph.loss_guard.breakdown.v1",
+                }),
+            },
+        ]
+
+        with patch.object(repository, "read_entity_rows", return_value=entity_rows), patch.object(repository, "read_relation_rows", return_value=relation_rows):
+            snapshot = repository.inferencebox_snapshot(symbols=["005930"])
+
+        self.assertEqual("ok", snapshot["status"])
+        self.assertEqual("typedbInferenceBox", snapshot["source"])
+        self.assertEqual("typedb", snapshot["graphStore"])
+        self.assertEqual(2, snapshot["entityCount"])
+        self.assertEqual(1, snapshot["relationCount"])
+        self.assertEqual(["holding-loss"], snapshot["traces"][0]["matchedConditionIds"])
+
+    def test_typedb_rulebox_execution_can_load_abox_from_store(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        repository._last_graph = None
+        repository._last_rules = default_graph_inference_rules()[:1]
+        abox = PortfolioOntology("typedb-abox")
+        abox.entities.append(OntologyEntity("stock:005930", "삼성전자", "stock", {"ontologyBox": "ABox", "symbol": "005930"}))
+
+        def materialize_inference(graph, _rules):
+            graph.entities.append(OntologyEntity("risk:005930:test", "테스트 리스크", "risk-signal", {
+                "ontologyBox": "InferenceBox",
+                "symbol": "005930",
+                "ruleId": "graph.test",
+            }))
+            graph.relations.append(OntologyRelation("stock:005930", "risk:005930:test", "HAS_INFERRED_RISK", 0.8, properties={
+                "ontologyBox": "InferenceBox",
+                "ruleId": "graph.test",
+            }))
+
+        with patch.object(repository, "load_graph_from_typedb", return_value=abox), patch.object(repository, "save_graph", return_value={"saved": True, "status": "ok"}), patch("digital_twin.infrastructure.typedb_ontology.run_graph_reasoner", side_effect=materialize_inference):
+            result = repository.run_rulebox()
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual(1, result["statementCount"])
+        self.assertTrue(result["typedbBootstrapReasoningUsed"])
+
+    def test_dual_graph_store_reports_parity_mismatches(self):
+        class FakeStore:
+            def __init__(self, key, entities, relations):
+                self.store_key = key
+                self.entities = entities
+                self.relations = relations
+
+            def save_graph(self, _graph):
+                return {"status": "ok", "graphStore": self.store_key, "entityCount": self.entities, "relationCount": self.relations}
+
+        repository = CompositeOntologyGraphRepository(
+            FakeStore("neo4j", 3, 2),
+            mirrors=[FakeStore("typedb", 3, 1)],
+        )
+
+        result = repository.save_graph(PortfolioOntology("parity"))
+
+        self.assertEqual("mismatch", result["graphStoreParity"]["status"])
+        self.assertEqual("relationCount", result["graphStoreParity"]["checks"][0]["mismatches"][0]["key"])
 
 
 if __name__ == "__main__":

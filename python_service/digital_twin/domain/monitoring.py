@@ -16,7 +16,7 @@ from .message_types import (
     ONTOLOGY_INFERENCE_MISSING,
     WATCHLIST_ONTOLOGY_SIGNAL,
 )
-from .ontology_inference_context import ontology_projection_from_metadata, relation_contexts_from_snapshot
+from .ontology_inference_context import inferencebox_source_name, ontology_projection_from_metadata, relation_contexts_from_snapshot
 from .ontology_insights import build_investment_insight_events, relation_news_event_key_suffix, split_operational_and_investment_events
 from .ontology_relation_reasoning import decision_action_group_for_label, relation_rule_context_summary_lines, relation_thresholds_from_settings
 from .parsing import parse_assignments
@@ -90,8 +90,12 @@ def ontology_inference_event_metadata(snapshot: AccountSnapshot) -> Dict[str, ob
         if isinstance(item, dict)
     ]
     rulebox_execution = projection.get("ruleboxExecution") if isinstance(projection.get("ruleboxExecution"), dict) else {}
+    source = inferencebox_source_name({
+        **dict(inference or {}),
+        "graphStore": inference.get("graphStore") or projection.get("graphStore") or projection.get("primaryGraphStore") or "",
+    })
     return {
-        "source": "neo4jInferenceBox",
+        "source": source,
         "graphStore": str(inference.get("graphStore") or projection.get("graphStore") or projection.get("primaryGraphStore") or ""),
         "status": str(inference.get("status") or projection.get("status") or ""),
         "projectionMode": str(projection.get("projectionMode") or ""),
@@ -102,6 +106,8 @@ def ontology_inference_event_metadata(snapshot: AccountSnapshot) -> Dict[str, ob
         "clearInferenceStatus": str((rulebox_execution.get("clearResult") or {}).get("status") or "") if isinstance(rulebox_execution.get("clearResult"), dict) else "",
         "clearInferenceReason": str((rulebox_execution.get("clearResult") or {}).get("reason") or "") if isinstance(rulebox_execution.get("clearResult"), dict) else "",
         "neo4jNativeReasoningUsed": bool(inference.get("neo4jNativeReasoningUsed")),
+        "nativeTypeDbReasoningUsed": bool(inference.get("nativeTypeDbReasoningUsed")),
+        "typedbBootstrapReasoningUsed": bool(inference.get("typedbBootstrapReasoningUsed")),
         "entityCount": int(number(inference.get("entityCount")) or 0),
         "relationCount": int(number(inference.get("relationCount")) or 0),
         "traceCount": int(number(inference.get("traceCount")) or 0),

@@ -29,7 +29,7 @@ from .disclosure_analyzer import disclosure_analyzer_from_settings
 from .model_review_queue import ModelReviewEnqueuer
 from .model_reviewer import reviewer_from_settings
 from .notification_ai_reviewer import notification_ai_reviewer_from_settings
-from .neo4j_ontology import ontology_repository_from_settings
+from .ontology_graph_store import ontology_repository_from_settings
 from . import operational_store as stores
 from .ontology_projection import PortfolioOntologyProjectionRecorder
 from .rule_change_candidate_ai import rule_change_candidate_advisor_from_settings

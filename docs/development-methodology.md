@@ -125,8 +125,9 @@ Infrastructure:
 - `python_service/digital_twin/infrastructure/model_review_queue.py`: async model-review queue interface fed by decision-change events
 - `python_service/digital_twin/infrastructure/model_reviewer.py`: Codex/LLM command adapter with local fallback
 - `python_service/digital_twin/infrastructure/ontology_projection.py`: snapshot-to-ontology projection recorder that saves graph-store projections and quality samples without making monitoring application services own graph persistence details
-- `python_service/digital_twin/infrastructure/neo4j_ontology.py`: default Neo4j graph-store adapter and compatibility factory
-- `python_service/digital_twin/infrastructure/typedb_ontology.py`: TypeDB graph-store adapter, dual-write mirror, and bootstrap TypeDB InferenceBox support
+- `python_service/digital_twin/infrastructure/ontology_graph_store.py`: graph-store composition root; runtime code should import this factory instead of a concrete database adapter
+- `python_service/digital_twin/infrastructure/neo4j_ontology.py`: default Neo4j graph-store adapter plus backward-compatible wrapper only
+- `python_service/digital_twin/infrastructure/typedb_ontology.py`: TypeDB graph-store adapter and bootstrap TypeDB InferenceBox support
 - `python_service/digital_twin/infrastructure/service_factory.py`: runtime composition of use cases and adapters
 
 Compatibility modules:

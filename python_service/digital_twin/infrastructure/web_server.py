@@ -58,7 +58,7 @@ from ..domain.parsing import parse_assignments
 from ..domain.portfolio import utc_now_iso
 from ..infrastructure.event_bus import default_event_bus
 from ..infrastructure.mock_market import mock_market_payload, mock_market_scenario_list
-from ..infrastructure.neo4j_ontology import ontology_repository_from_settings
+from ..infrastructure.ontology_graph_store import ontology_repository_from_settings
 from ..infrastructure import operational_store as stores
 from ..infrastructure.service_factory import build_notification_queue_runner, build_ontology_lab_service, build_rule_change_candidate_service, build_symbol_universe_service, flow_lens_snapshot
 from ..infrastructure.settings import ROOT_DIR, runtime_settings, save_runtime_settings

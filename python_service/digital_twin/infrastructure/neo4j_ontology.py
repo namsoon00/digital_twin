@@ -989,23 +989,9 @@ def urllib_quote(value: str) -> str:
 
 
 def ontology_repository_from_settings(settings: Dict[str, str] = None):
-    settings = settings or runtime_settings()
-    mode = str(settings.get("ontologyGraphStoreMode") or "neo4j").strip().lower()
-    if mode not in {"neo4j", "typedb", "dual"}:
-        mode = "neo4j"
-    if mode == "typedb":
-        from .typedb_ontology import typedb_repository_from_settings
+    from .ontology_graph_store import ontology_repository_from_settings as graph_store_repository_from_settings
 
-        return typedb_repository_from_settings(settings)
-    neo4j_repository = neo4j_repository_from_settings(settings)
-    if mode == "dual":
-        from .typedb_ontology import CompositeOntologyGraphRepository, typedb_repository_from_settings
-
-        return CompositeOntologyGraphRepository(
-            neo4j_repository,
-            mirrors=[typedb_repository_from_settings(settings)],
-        )
-    return neo4j_repository
+    return graph_store_repository_from_settings(settings)
 
 
 def neo4j_repository_from_settings(settings: Dict[str, str] = None):

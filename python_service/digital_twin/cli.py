@@ -20,7 +20,7 @@ from .domain.portfolio import AlertEvent
 from .infrastructure.event_bus import default_event_bus
 from .infrastructure import operational_store as stores
 from .infrastructure.notifications import queued_notifier_for_account, send_events
-from .infrastructure.neo4j_ontology import ontology_repository_from_settings
+from .infrastructure.ontology_graph_store import ontology_repository_from_settings
 from .infrastructure.service_factory import build_market_data_collection_runner, build_model_review_runner, build_monitor_runner, build_news_collection_runner, build_notification_queue_runner, build_ontology_lab_service, build_ontology_reasoning_runner, build_symbol_universe_service, monitor_account_job_store_from_settings
 from .infrastructure.settings import (
     SECRET_SETTING_KEYS,

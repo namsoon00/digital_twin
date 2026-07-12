@@ -1,9 +1,12 @@
 import unittest
+from pathlib import Path
 
 from digital_twin.domain.ontology_contracts import OntologyEntity, OntologyEvidence, OntologyRelation, PortfolioOntology
-from digital_twin.infrastructure.neo4j_ontology import ontology_repository_from_settings
-from digital_twin.infrastructure.typedb_ontology import (
+from digital_twin.infrastructure.ontology_graph_store import (
     CompositeOntologyGraphRepository,
+    ontology_repository_from_settings,
+)
+from digital_twin.infrastructure.typedb_ontology import (
     NullTypeDBOntologyGraphRepository,
     TypeDBOntologyGraphRepository,
     relation_row_id,
@@ -84,6 +87,18 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertIsInstance(repository, CompositeOntologyGraphRepository)
         self.assertEqual("neo4j", repository.primary.store_key)
         self.assertEqual(["typedb"], [item.store_key for item in repository.mirrors])
+
+    def test_runtime_composition_uses_generic_graph_store_factory(self):
+        root = Path(__file__).resolve().parents[2]
+        for relative in [
+            "python_service/digital_twin/infrastructure/service_factory.py",
+            "python_service/digital_twin/infrastructure/web_server.py",
+            "python_service/digital_twin/cli.py",
+        ]:
+            source = (root / relative).read_text(encoding="utf-8")
+            self.assertIn("ontology_graph_store", source)
+            self.assertNotIn("from .neo4j_ontology import ontology_repository_from_settings", source)
+            self.assertNotIn("from ..infrastructure.neo4j_ontology import ontology_repository_from_settings", source)
 
 
 if __name__ == "__main__":

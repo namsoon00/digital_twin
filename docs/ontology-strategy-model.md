@@ -55,7 +55,7 @@ AI 프롬프트에는 TBox, `boundedContexts`, ABox, operational ontology, reaso
 6. `DecisionItem.relation_rule_context`, `ai_prompt_context`, `ai_context`에 관계 규칙 결과와 프롬프트 입력 계약을 함께 붙인다.
 7. 실시간 모니터링은 알림 metadata에 `ontologyRelationContext`, `ontologyPromptContext`, `ontologyReviewContext`를 포함한다.
 8. 모델 리뷰 워커는 이 정보를 비동기 AI 프롬프트에 넣어 판단 변화 원인, 노이즈 가능성, 부족 데이터, 다음 규칙 개선안을 분석한다.
-9. `infrastructure/ontology_projection.py`가 스냅샷을 온톨로지 read model로 투영한다. 기본은 `infrastructure/neo4j_ontology.py`가 Neo4j에 저장하고, `ONTOLOGY_GRAPH_STORE_MODE=dual`이면 `infrastructure/typedb_ontology.py`가 같은 TBox/ABox/RuleBox/InferenceBox 세트를 TypeDB에도 미러링한다.
+9. `infrastructure/ontology_projection.py`가 스냅샷을 온톨로지 read model로 투영한다. 런타임은 `infrastructure/ontology_graph_store.py`의 generic factory만 사용하고, 이 factory가 `ONTOLOGY_GRAPH_STORE_MODE`에 따라 Neo4j, TypeDB, dual-write 어댑터를 인프라에서만 갈아 끼운다.
 
 알림은 투자 이벤트 타입별 폴링으로 직접 발송하지 않는다. 기존 `modelBuy`, `holdingTiming`, `externalDartDisclosure` 같은 이벤트는 `investmentInsight.metadata.sourceAlertEvents`의 근거 신호로 남고, 최종 발송은 `Insight -> DISPATCHED_BY -> NotificationDispatch(investmentInsight)` 관계가 담당한다.
 

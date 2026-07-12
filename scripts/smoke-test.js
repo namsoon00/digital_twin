@@ -932,7 +932,18 @@ function checkFrontendAdminRender() {
         }
         return null;
       },
-      querySelectorAll: function () {
+      querySelectorAll: function (selector) {
+        if (
+          options.captureNewAccountButton &&
+          selector === '[data-action="new-service-account"]' &&
+          html.indexOf('data-action="new-service-account"') >= 0
+        ) {
+          return [{
+            addEventListener: function (type, handler) {
+              if (type === "click") capturedActions.newAccount = handler;
+            }
+          }];
+        }
         return [];
       }
     };
@@ -1029,7 +1040,7 @@ function checkFrontendAdminRender() {
 
   return Promise.all([
     renderForSearch(""),
-    renderForSearch("?tab=accounts"),
+    renderForSearch("?tab=accounts&account=management"),
     renderForSearch("?tab=watchlist"),
     renderForSearch("?tab=symbols"),
     renderForSearch("?tab=notifications"),
@@ -1048,7 +1059,7 @@ function checkFrontendAdminRender() {
     renderForSearch("?tab=monitoring"),
     renderForSearch("?tab=system"),
     renderForSearch("?tab=settings"),
-    renderForSearch("?tab=accounts", "namsoon00.github.io"),
+    renderForSearch("?tab=accounts&account=management", "namsoon00.github.io"),
     renderForSearch("?tab=accounts", null, { captureNewAccountButton: true, clickNewAccount: true })
   ]).then(function (pages) {
     const overviewHtml = pages[0];
@@ -1094,6 +1105,9 @@ function checkFrontendAdminRender() {
     assertOk(overviewHtml.indexOf("계정·알림·모델 운영 콘솔") < 0, "이전 고정 운영 콘솔 제목이 아직 렌더링됩니다.");
     assertOk(overviewHtml.indexOf("<h1>홈</h1>") >= 0, "홈 탭 제목이 상단에 렌더링되지 않았습니다.");
     assertOk(accountHtml.indexOf("<h1>계정</h1>") >= 0, "계정 탭 제목이 상단에 렌더링되지 않았습니다.");
+    assertOk(accountHtml.indexOf("account-section-tabs") >= 0, "계정 탭이 내부 섹션 탭으로 분리되지 않았습니다.");
+    assertOk(accountHtml.indexOf('data-account-section="connections"') >= 0 && accountHtml.indexOf('data-account-section="balance"') >= 0, "계정 섹션 탭에 연결/금액 탭이 없습니다.");
+    assertOk(accountHtml.indexOf('data-scroll-key="accounts:management"') >= 0, "계정 내부 탭별 스크롤 키가 렌더링되지 않습니다.");
     assertOk(overviewHtml.indexOf('aria-current="page"') >= 0, "활성 탭 접근성 상태가 렌더링되지 않았습니다.");
     assertOk(settingsHtml.indexOf("<h1>설정</h1>") >= 0, "설정 탭 제목이 상단에 렌더링되지 않았습니다.");
     assertOk(settingsHtml.indexOf("settings-view") >= 0, "설정 화면이 페이지 구조로 렌더링되지 않았습니다.");
@@ -1122,7 +1136,11 @@ function checkFrontendAdminRender() {
     assertOk(code.indexOf("tabScrollPositions") >= 0 && code.indexOf("restoreRenderedPageScrollPosition") >= 0 && code.indexOf("rememberRenderedPageScrollPosition") >= 0, "탭별 본문 스크롤 복원 로직이 없습니다.");
     assertOk(overviewHtml.indexOf('data-scroll-key="overview"') >= 0, "탭 본문에 스크롤 관리 키가 렌더링되지 않습니다.");
     assertOk(designSystemDoc.indexOf("각 탭은 독립된 스크롤 위치") >= 0, "디자인 시스템 문서에 탭별 스크롤 정책이 없습니다.");
-    assertOk(code.indexOf('var bottomTabIds = ["overview", "watchlist", "notifications", "modeling"];') >= 0, "하단 핵심 탭에 알림과 투자 분석이 배치되지 않았습니다.");
+    assertOk(
+      code.indexOf('var bottomTabIds = ["overview", "watchlist", "notifications", "modeling"];') >= 0 ||
+      code.indexOf('var bottomTabIds = ["overview", "watchlist", "notifications", "modeling", "experiments"];') >= 0,
+      "하단 핵심 탭에 알림과 투자 분석이 배치되지 않았습니다."
+    );
     assertOk(code.indexOf('var managementTabIds = ["accounts", "symbols", "feed", "system", "settings"];') >= 0, "상단 운영 메뉴 탭 구성이 역할과 맞지 않습니다.");
     assertOk(styles.indexOf(".app-nav-tab.active") >= 0 && styles.indexOf(".app-nav-menu") >= 0, "앱 네비게이션 활성 탭과 모바일 관리 메뉴 스타일 규칙이 없습니다.");
     assertOk(styles.indexOf("@media (min-width: 861px)") >= 0 && styles.indexOf(".tab-bar {\n    display: none;") >= 0, "데스크톱에서 하단 탭을 숨기는 규칙이 없습니다.");

@@ -15569,6 +15569,11 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   min-width: 0;
 }
 
+.ontology-experiment-overview-panel,
+.ontology-experiment-latest-panel {
+  grid-column: span 6;
+}
+
 .ontology-experiment-list-panel {
   grid-column: 1 / -1;
 }
@@ -15696,6 +15701,11 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
 }
 
 @media (max-width: 980px) {
+  .ontology-experiment-overview-panel,
+  .ontology-experiment-latest-panel {
+    grid-column: 1 / -1;
+  }
+
   .ontology-experiment-metrics,
   .ontology-experiment-run-grid,
   .ontology-experiment-card-metrics {

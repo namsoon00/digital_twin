@@ -6977,51 +6977,63 @@
     var profiles = {
       overview: {
         steps: [["01", "상태", "계정·데이터"], ["02", "위험", "노출·모니터링"], ["03", "조치", "알림·전략"]],
-        metrics: [["계정", serviceAccounts().length || 0], ["평가", formatMoney(portfolio.total || 0)], ["알림", enabledRules + "/" + notificationPolicyCatalog().length]]
+        metrics: [["계정", serviceAccounts().length || 0], ["평가", formatMoney(portfolio.total || 0)], ["알림", enabledRules + "/" + notificationPolicyCatalog().length]],
+        flow: ["계정·시장 데이터", "운영 현황", "알림·투자 판단"]
       },
       accounts: {
         steps: [["01", "상태", "계정 진단"], ["02", "연결", "증권사·잔고"], ["03", "저장", "DB 반영"]],
-        metrics: [["활성", enabledServiceAccounts().length + "/" + serviceAccounts().length], ["Toss", configuredCount(["tossClientId", "tossClientSecret"]) + "/2"], ["계좌", serviceAccounts().filter(function (account) { return account.accountSeq; }).length + "/" + serviceAccounts().length]]
+        metrics: [["활성", enabledServiceAccounts().length + "/" + serviceAccounts().length], ["Toss", configuredCount(["tossClientId", "tossClientSecret"]) + "/2"], ["계좌", serviceAccounts().filter(function (account) { return account.accountSeq; }).length + "/" + serviceAccounts().length]],
+        flow: ["Toss/API 인증", "계정 원장", "포트폴리오 스냅샷"]
       },
       watchlist: {
         steps: [["01", "계정", "대상 선택"], ["02", "종목", "관찰 편집"], ["03", "연결", "알림 입력"]],
-        metrics: [["계정", serviceAccounts().length || 0], ["관심", allAccountWatchlistSymbols().length || watchlistSymbols().length], ["시세", watchlist.length]]
+        metrics: [["계정", serviceAccounts().length || 0], ["관심", allAccountWatchlistSymbols().length || watchlistSymbols().length], ["시세", watchlist.length]],
+        flow: ["계정·시장 유니버스", "관찰 종목", "시세·뉴스 수집 대상"]
       },
       symbols: {
         steps: [["01", "목록", "시장 유니버스"], ["02", "필터", "검색·구분"], ["03", "편입", "계정 연결"]],
-        metrics: [["기본", watchlistSymbols().length], ["계정", allAccountWatchlistSymbols().length], ["시장", symbolMarketCount()]]
+        metrics: [["기본", watchlistSymbols().length], ["계정", allAccountWatchlistSymbols().length], ["시장", symbolMarketCount()]],
+        flow: ["KRX/NASDAQ 카탈로그", "종목 검색", "관심종목 편입"]
       },
       feed: {
         steps: [["01", "영향", "호재·악재"], ["02", "근거", "본문 요약"], ["03", "소스", "수집 품질"]],
-        metrics: [["피드", (state.feed && state.feed.items ? state.feed.items.length : 0)], ["근거", ((currentResearchEvidence().summary || {}).total || 0)], ["오류", (state.feed && state.feed.errors ? state.feed.errors.length : 0)]]
+        metrics: [["피드", (state.feed && state.feed.items ? state.feed.items.length : 0)], ["근거", ((currentResearchEvidence().summary || {}).total || 0)], ["오류", (state.feed && state.feed.errors ? state.feed.errors.length : 0)]],
+        flow: ["관심·보유 종목 뉴스/공시", "본문 요약·영향 판단", "투자 판단 근거"]
       },
       system: {
         steps: [["01", "지도", "처음 보는 사람"], ["02", "데이터", "수집·저장"], ["03", "이벤트", "알림·추론"]],
-        metrics: [["워커", "6"], ["이벤트", "12+"], ["저장소", "MySQL"]]
+        metrics: [["워커", "6"], ["이벤트", "12+"], ["저장소", "MySQL"]],
+        flow: ["앱 구조", "데이터 흐름 문서", "운영 기준"]
       },
       notifications: {
         steps: [["01", "점수", "상승·감점"], ["02", "게이트", "발송·보류"], ["03", "본문", "템플릿·발송"]],
-        metrics: [["관리 룰", enabledRules + "/" + notificationPolicyCatalog().length], ["템플릿", notificationTemplateItems().length], ["큐", notificationJobSummaryText(state.realtime.notificationJobs)]]
+        metrics: [["관리 룰", enabledRules + "/" + notificationPolicyCatalog().length], ["템플릿", notificationTemplateItems().length], ["큐", notificationJobSummaryText(state.realtime.notificationJobs)]],
+        flow: ["추론 결과·중요도 점수", "발송/보류 게이트", "알림 이력"]
       },
       modeling: {
         steps: [["01", "판단", "오늘 할 일"], ["02", "근거", "뉴스·차트"], ["03", "검증", "그래프·품질"]],
-        metrics: [["보유", positions.length], ["관심", watchlist.length], ["추론 보류", ((snapshot.investmentAnalysis || {}).graphGate || {}).blockedCount || 0]]
+        metrics: [["보유", positions.length], ["관심", watchlist.length], ["추론 보류", ((snapshot.investmentAnalysis || {}).graphGate || {}).blockedCount || 0]],
+        flow: ["계정·시세·뉴스 근거", "온톨로지/모델 판단", "액션 큐·알림 후보"]
       },
       experiments: {
         steps: [["01", "초안", "후보 규칙"], ["02", "재생", "샌드박스"], ["03", "승격", "운영 검토"]],
-        metrics: [["전체", (ontologyExperimentPayload().count || ontologyExperimentItems().length || 0)], ["활성", ontologyExperimentPayload().activeCount || 0], ["최근", ((ontologyExperimentPayload().latestRun || {}).promotionStatus || "대기")]]
+        metrics: [["전체", (ontologyExperimentPayload().count || ontologyExperimentItems().length || 0)], ["활성", ontologyExperimentPayload().activeCount || 0], ["최근", ((ontologyExperimentPayload().latestRun || {}).promotionStatus || "대기")]],
+        flow: ["후보 관계 규칙", "샌드박스 검증", "운영 RuleBox"]
       },
       ontology: {
         steps: [["01", "TBox", "스키마"], ["02", "ABox", "현재 실체"], ["03", "관계", "근거 연결"]],
-        metrics: [["TBox", ((strategy.tbox || {}).classes || []).length], ["ABox", abox.entityCount || 0], ["관계", abox.relationCount || strategy.relationCount || 0]]
+        metrics: [["TBox", ((strategy.tbox || {}).classes || []).length], ["ABox", abox.entityCount || 0], ["관계", abox.relationCount || strategy.relationCount || 0]],
+        flow: ["TBox 규칙", "ABox 관계", "InferenceBox 판단"]
       },
       monitoring: {
         steps: [["01", "스냅샷", "계좌 수집"], ["02", "감지", "가격·수급"], ["03", "상세", "종목 확인"]],
-        metrics: [["보유", positions.length], ["관심", watchlist.length], ["평가", formatMoney(portfolio.total || 0)]]
+        metrics: [["보유", positions.length], ["관심", watchlist.length], ["평가", formatMoney(portfolio.total || 0)]],
+        flow: ["계좌 스냅샷", "가격·수급 감지", "알림 후보"]
       },
       settings: {
         steps: [["01", "기본", "표시·전달"], ["02", "고급", "API·게이트"], ["03", "진단", "잠금·오류"]],
-        metrics: [["저장", state.settingsSaved ? "완료" : "대기"], ["잠금", state.serverSettingsLocked ? "읽기전용" : "수정"], ["API", configuredCount(["alphaVantageApiKey", "coingeckoApiKey", "fredApiKey", "opendartApiKey"]) + "/4"]]
+        metrics: [["저장", state.settingsSaved ? "완료" : "대기"], ["잠금", state.serverSettingsLocked ? "읽기전용" : "수정"], ["API", configuredCount(["alphaVantageApiKey", "coingeckoApiKey", "fredApiKey", "opendartApiKey"]) + "/4"]],
+        flow: ["운영 정책", "런타임 설정", "수집·알림 동작"]
       }
     };
     var structure = pageStructureMeta(pageId || "overview");
@@ -7071,6 +7083,7 @@
       '<em>' + escapeHtml(profile.objective) + '</em>',
       renderPageModeSwitch(pageId),
       '</div>',
+      compact ? renderPageFlowSpine(profile) : '',
       '<div class="page-command-flow">',
       profile.steps.map(renderPageCommandStep).join(""),
       '</div>',
@@ -7078,6 +7091,27 @@
       profile.metrics.map(renderPageCommandMetric).join(""),
       '</div>',
       '</section>'
+    ].join("");
+  }
+
+  function renderPageFlowSpine(profile) {
+    var flow = Array.isArray(profile.flow) ? profile.flow : [];
+    if (flow.length < 3) return "";
+    return [
+      '<div class="page-flow-spine" aria-label="전체 데이터 흐름상 위치">',
+      renderPageFlowNode("이전 입력", flow[0]),
+      renderPageFlowNode("현재 처리", flow[1]),
+      renderPageFlowNode("다음 출력", flow[2]),
+      '</div>'
+    ].join("");
+  }
+
+  function renderPageFlowNode(label, value) {
+    return [
+      '<span class="page-flow-node">',
+      '<em>' + escapeHtml(label) + '</em>',
+      '<strong>' + escapeHtml(value || "-") + '</strong>',
+      '</span>'
     ].join("");
   }
 

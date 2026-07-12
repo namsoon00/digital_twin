@@ -1139,24 +1139,28 @@ function checkFrontendAdminRender() {
       settings: "control"
     };
     [
-      ["overview", overviewHtml, "full"],
-      ["accounts", accountHtml, "compact"],
-      ["watchlist", watchlistHtml, "compact"],
-      ["symbols", symbolUniverseHtml, "compact"],
-      ["notifications", notificationHtml, "compact"],
-      ["modeling", modelingHtml, "compact"],
-      ["experiments", experimentsHtml, "compact"],
-      ["feed", feedHtml, "compact"],
-      ["system", systemHtml, "compact"],
-      ["settings", settingsHtml, "compact"]
+      ["overview", overviewHtml, true],
+      ["accounts", accountHtml, false],
+      ["watchlist", watchlistHtml, false],
+      ["symbols", symbolUniverseHtml, false],
+      ["notifications", notificationHtml, false],
+      ["modeling", modelingHtml, false],
+      ["experiments", experimentsHtml, false],
+      ["feed", feedHtml, false],
+      ["system", systemHtml, false],
+      ["settings", settingsHtml, false]
     ].forEach(function (entry) {
       var tabId = entry[0];
       var html = entry[1];
-      var rail = entry[2];
+      var hasDeskbar = entry[2];
       assertOk(html.indexOf('data-web-style="orbit-alpha-console-v2"') >= 0, "탭이 웹 스타일 계약 ID를 렌더링하지 않습니다: " + tabId);
       assertOk(html.indexOf('data-web-style-version="20260712"') >= 0, "탭이 웹 스타일 계약 버전을 렌더링하지 않습니다: " + tabId);
       assertOk(html.indexOf("web-style-shell") >= 0 && html.indexOf("web-style-nav") >= 0 && html.indexOf("web-style-topbar") >= 0, "탭의 콘솔 셸/네비/topbar 스타일 영역이 없습니다: " + tabId);
-      assertOk(html.indexOf("web-style-deskbar") >= 0 && html.indexOf('data-style-rail="' + rail + '"') >= 0, "탭의 deskbar 스타일 rail이 계약과 다릅니다: " + tabId);
+      if (hasDeskbar) {
+        assertOk(html.indexOf("web-style-deskbar") >= 0 && html.indexOf('data-style-rail="full"') >= 0, "홈 탭의 full deskbar 스타일 rail이 없습니다.");
+      } else {
+        assertOk(html.indexOf("web-style-deskbar") < 0 && html.indexOf("deskbar deskbar-compact") < 0, "업무 탭에 제거해야 할 deskbar가 렌더링됩니다: " + tabId);
+      }
       assertOk(html.indexOf("web-style-workspace") >= 0 && html.indexOf("web-style-main") >= 0, "탭의 workspace/main 스타일 영역이 없습니다: " + tabId);
       assertOk(html.indexOf("web-style-page") >= 0 && html.indexOf('data-style-screen="' + tabId + '"') >= 0, "탭의 managed page 스타일 화면 ID가 없습니다: " + tabId);
       assertOk(html.indexOf("web-style-command-strip") >= 0 && html.indexOf('data-style-layer="command-strip"') >= 0, "탭의 command strip 스타일 레이어가 없습니다: " + tabId);
@@ -1207,6 +1211,7 @@ function checkFrontendAdminRender() {
     assertOk(overviewHtml.indexOf('data-nav-group="market"') >= 0 && overviewHtml.indexOf('data-nav-group="decision"') >= 0 && overviewHtml.indexOf('data-nav-group="control"') >= 0, "탭 버튼이 업무 그룹 메타데이터를 렌더링하지 않습니다.");
     assertOk(overviewHtml.indexOf("Portfolio Snapshot") >= 0 && notificationHtml.indexOf("Notification Job") >= 0 && modelingHtml.indexOf("Investment Opinion") >= 0, "주요 화면 command strip이 핵심 엔티티를 렌더링하지 않습니다.");
     assertOk(styles.indexOf(".app-nav-group") >= 0 && styles.indexOf(".page-command-context") >= 0, "업무 그룹 네비게이션과 command context 스타일이 없습니다.");
+    assertOk(styles.indexOf("Focused work-tab header layer") >= 0 && styles.indexOf(".page-command-strip-compact") >= 0, "업무 탭 상단 compact command strip 스타일이 없습니다.");
     assertOk(overviewHtml.indexOf("shell-home") >= 0, "홈 탭 shell이 홈 전용 배치를 사용하지 않습니다.");
     [
       ["계정", accountHtml],
@@ -1219,7 +1224,8 @@ function checkFrontendAdminRender() {
       ["시스템", systemHtml],
       ["설정", settingsHtml]
     ].forEach(function (entry) {
-      assertOk(entry[1].indexOf("deskbar deskbar-compact") >= 0, entry[0] + " 탭이 compact PC deskbar를 사용하지 않습니다.");
+      assertOk(entry[1].indexOf("deskbar deskbar-compact") < 0 && entry[1].indexOf("web-style-deskbar") < 0, entry[0] + " 탭에 업무 흐름을 밀어내는 deskbar가 남아 있습니다.");
+      assertOk(entry[1].indexOf("page-command-strip-compact") >= 0, entry[0] + " 탭이 얇은 command strip을 사용하지 않습니다.");
       assertOk(entry[1].indexOf("deskbar deskbar-full") < 0, entry[0] + " 탭에 홈 전용 full deskbar가 렌더링됩니다.");
       assertOk(entry[1].indexOf("shell-page") >= 0, entry[0] + " 탭 shell이 본문 우선 배치를 사용하지 않습니다.");
     });
@@ -1229,6 +1235,7 @@ function checkFrontendAdminRender() {
     assertOk(code.indexOf("tabScrollPositions") >= 0 && code.indexOf("restoreRenderedPageScrollPosition") >= 0 && code.indexOf("rememberRenderedPageScrollPosition") >= 0, "탭별 본문 스크롤 복원 로직이 없습니다.");
     assertOk(overviewHtml.indexOf('data-scroll-key="overview"') >= 0, "탭 본문에 스크롤 관리 키가 렌더링되지 않습니다.");
     assertOk(designSystemDoc.indexOf("각 탭은 독립된 페이지 스크롤 위치") >= 0 && designSystemDoc.indexOf("기본은 window/page 스크롤") >= 0, "디자인 시스템 문서에 탭별 페이지 스크롤 정책이 없습니다.");
+    assertOk(designSystemDoc.indexOf("업무 탭에서는 상단 상태 카드 묶음을 렌더링하지 않는다") >= 0 && designSystemDoc.indexOf("page-command-strip-compact") >= 0, "디자인 시스템 문서에 업무 탭 상단 축소 계약이 없습니다.");
     assertOk(code.indexOf("syncTopbarScrollState") >= 0 && code.indexOf("topbar-collapsed") >= 0, "상단 제목 영역을 스크롤 상태에 따라 접는 로직이 없습니다.");
     assertOk(styles.indexOf(".shell-page.topbar-collapsed") >= 0 && styles.indexOf(".topbar-collapsed .topbar") >= 0, "상단 제목 영역 접힘 레이아웃 스타일이 없습니다.");
     assertOk(

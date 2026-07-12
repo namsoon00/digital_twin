@@ -16879,10 +16879,6 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
     grid-template-columns: repeat(5, minmax(0, 1fr));
   }
 
-  .deskbar-compact {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
-
   .deskbar-cell {
     min-height: 76px;
     padding: 12px 14px;
@@ -17161,6 +17157,102 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   min-width: 0;
 }
 
+/* Focused work-tab header layer */
+.shell-page .page-command-strip-compact {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--ds-space-3);
+  min-height: 42px;
+  padding: 0 var(--ds-space-4);
+  border: 1px solid var(--ds-card-border);
+  border-radius: var(--ds-radius-control);
+  background: color-mix(in srgb, var(--panel) 92%, var(--panel-soft));
+  box-shadow: none;
+  overflow: visible;
+}
+
+.shell-page .page-command-strip-compact .page-command-context {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--ds-space-3);
+  min-height: 40px;
+  padding: 6px 0;
+}
+
+.shell-page .page-command-strip-compact .page-command-context strong {
+  font-size: 13px;
+}
+
+.shell-page .page-command-strip-compact .page-command-context em {
+  display: none;
+}
+
+.shell-page .page-command-strip-compact .page-command-flow {
+  display: none;
+}
+
+.shell-page .page-command-strip-compact .page-command-metrics {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--ds-space-2);
+  min-width: 0;
+  border-left: 0;
+}
+
+.shell-page .page-command-strip-compact .page-command-metric {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 26px;
+  padding: 3px 8px;
+  border: 1px solid color-mix(in srgb, var(--ds-card-border) 82%, transparent);
+  border-radius: 999px;
+  background: var(--ds-card-row-bg);
+}
+
+.shell-page .page-command-strip-compact .page-command-metric em,
+.shell-page .page-command-strip-compact .page-command-metric strong {
+  font-size: 11px;
+  line-height: 1;
+}
+
+.shell-page .page-command-strip-compact .page-mode-switch {
+  display: flex;
+  grid-template-columns: none;
+  align-items: center;
+  gap: 2px;
+  margin-top: 0;
+  padding: 2px;
+  border-radius: 999px;
+}
+
+.shell-page .page-command-strip-compact .page-mode-switch button {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 3px 8px;
+  border-radius: 999px;
+}
+
+.shell-page .page-command-strip-compact .page-mode-switch span {
+  display: none;
+}
+
+@media (max-width: 860px) {
+  .shell-page .page-command-strip-compact {
+    grid-template-columns: 1fr;
+    align-items: start;
+    padding: var(--ds-space-3);
+  }
+
+  .shell-page .page-command-strip-compact .page-command-metrics {
+    justify-content: flex-start;
+  }
+}
+
 @media (min-width: 1181px) {
   [data-web-style="orbit-alpha-console-v2"] .web-style-page {
     gap: var(--oa-contract-screen-gap);
@@ -17170,9 +17262,6 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
     position: relative;
   }
 
-  [data-web-style="orbit-alpha-console-v2"] .web-style-deskbar[data-style-rail="compact"] {
-    grid-template-columns: minmax(180px, 0.9fr) minmax(180px, 1fr) minmax(180px, 1fr) minmax(160px, 0.8fr);
-  }
 }
 
 /* Desktop free-scroll and focus-mode layer */

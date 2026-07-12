@@ -6434,7 +6434,7 @@
       '</div>',
       renderTopbarSyncState(),
       '</section>',
-      renderDeskbar(snapshot, modeLabel, modeClass, { compact: !showHomeDeskbar, activeTab: tab }),
+      showHomeDeskbar ? renderDeskbar(snapshot, modeLabel, modeClass) : '',
       '<section class="workspace-layout web-style-workspace" data-style-region="workspace">',
       renderTabs(),
       '<div class="workspace-main web-style-main" data-style-region="main" data-scroll-key="' + escapeHtml(activeScrollKey()) + '">',
@@ -6501,8 +6501,7 @@
     return "";
   }
 
-  function renderDeskbar(snapshot, modeLabel, modeClass, options) {
-    options = options || {};
+  function renderDeskbar(snapshot, modeLabel, modeClass) {
     var portfolio = snapshot.portfolio || {};
     var toss = snapshot.toss || {};
     var positions = Array.isArray(toss.positions) ? toss.positions.filter(function (item) {
@@ -6519,19 +6518,6 @@
     var abox = strategy.abox || {};
     var tbox = strategy.tbox || {};
     var relationCount = Number(abox.relationCount || strategy.relationCount || 0);
-    var activeTab = options.activeTab || activeTabMeta();
-    var structure = pageStructureMeta(activeTab.id);
-    var compact = !!options.compact;
-    if (compact) {
-      return [
-        '<section class="deskbar deskbar-compact web-style-deskbar" data-style-region="deskbar" data-style-rail="compact" aria-label="콘솔 상태 요약">',
-        renderDeskbarCell("Domain", structure.groupLabel, structure.entity || activeTab.label || "현재 작업", "neutral"),
-        renderDeskbarCell("Data", modeLabel, "Last " + formatClock(snapshot.generatedAt), modeClass),
-        renderDeskbarCell("Portfolio", formatMoney(portfolio.total || 0), positions + " positions", "neutral"),
-        renderDeskbarCell("Alerts", enabledRules + "/" + policyRules.length, state.realtime.connected ? "WebSocket live" : "HTTP polling", state.realtime.connected ? "live" : "demo"),
-        '</section>'
-      ].join("");
-    }
     return [
       '<section class="deskbar deskbar-full web-style-deskbar" data-style-region="deskbar" data-style-rail="full" aria-label="운영 상태 요약">',
       renderDeskbarCell("Data", modeLabel, "Last " + formatClock(snapshot.generatedAt), modeClass),
@@ -7076,8 +7062,9 @@
 
   function renderPageCommandStrip(pageId, snapshot) {
     var profile = pageCommandProfile(pageId, snapshot);
+    var compact = normalizeTabId(pageId || state.activeTab) !== "overview";
     return [
-      '<section class="page-command-strip ' + escapeHtml(webStyleContract.commandClass) + '" data-style-layer="command-strip" data-command-group="' + escapeHtml(profile.groupId) + '" aria-label="페이지 작업 상태">',
+      '<section class="page-command-strip ' + (compact ? "page-command-strip-compact " : "") + escapeHtml(webStyleContract.commandClass) + '" data-style-layer="command-strip" data-command-group="' + escapeHtml(profile.groupId) + '" aria-label="페이지 작업 상태">',
       '<div class="page-command-context">',
       '<span class="page-command-kicker">' + escapeHtml(profile.group + " / " + profile.layer) + '</span>',
       '<strong>' + escapeHtml(profile.entity) + '</strong>',

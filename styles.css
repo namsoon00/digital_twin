@@ -5267,6 +5267,10 @@ h3 {
   margin: 0;
 }
 
+.investment-evidence-narrative:empty {
+  display: none;
+}
+
 .investment-evidence-columns {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -13984,7 +13988,7 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   }
 
   .investment-evidence-panel {
-    grid-column: span 8;
+    grid-column: 1 / -1;
   }
 
   .ontology-execution-surface,
@@ -14003,36 +14007,45 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
 
   .investment-evidence-list {
     grid-template-columns: minmax(0, 1fr);
-    max-height: min(78vh, 980px);
-    overflow: auto;
-    scrollbar-gutter: stable;
+    max-height: none;
+    overflow: visible;
   }
 
   .investment-evidence-card {
     display: grid;
-    grid-template-columns: minmax(240px, 0.32fr) minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
     grid-template-areas:
-      "head narrative"
-      "metrics columns"
-      "plan plan"
-      "refs refs";
-    gap: var(--ds-section-gap);
+      "head"
+      "narrative"
+      "metrics"
+      "columns"
+      "plan"
+      "refs";
+    gap: var(--ds-space-5);
     align-items: start;
   }
 
   .investment-evidence-head {
     grid-area: head;
+    align-items: center;
+    padding-bottom: var(--ds-space-4);
+    border-bottom: 1px solid var(--ds-card-border);
   }
 
   .investment-evidence-grid {
     grid-area: metrics;
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
     gap: var(--ds-space-4);
+  }
+
+  .investment-evidence-grid span {
+    align-content: center;
+    min-height: 72px;
   }
 
   .investment-evidence-narrative {
     grid-area: narrative;
-    min-height: 100%;
+    min-height: auto;
     padding: var(--ds-row-pad-y) var(--ds-row-pad-x);
     border: 1px solid var(--ds-card-border);
     border-radius: var(--ds-radius-control);
@@ -14045,12 +14058,22 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
     gap: var(--ds-space-5);
   }
 
+  .investment-evidence-columns .reasoning-card-list {
+    align-content: start;
+    min-height: 150px;
+    padding: var(--ds-row-pad-y) var(--ds-row-pad-x);
+    border: 1px solid var(--ds-card-border);
+    border-radius: var(--ds-radius-control);
+    background: var(--ds-surface-muted);
+  }
+
   .reasoning-execution-plan {
     grid-area: plan;
   }
 
   .reasoning-graph-refs {
     grid-area: refs;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .system-guide-hero {
@@ -14116,7 +14139,7 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   }
 
   .investment-evidence-panel {
-    grid-column: span 8;
+    grid-column: 1 / -1;
   }
 
   .ontology-execution-surface {

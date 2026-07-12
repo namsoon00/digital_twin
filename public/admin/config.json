@@ -1498,6 +1498,7 @@
         "GET /api/ontology/experiments/status",
         "POST /api/ontology/experiments",
         "POST /api/ontology/experiments/once",
+        "POST /api/ontology/experiments/suggest",
         "POST /api/ontology/experiments/{id}/run",
         "POST /api/ontology/experiments/{id}/apply",
         "POST /api/ontology/experiments/{id}/activate",
@@ -1507,6 +1508,7 @@
         "npm run python:ontology-lab:status",
         "npm run python:ontology-lab:once",
         "npm run python:ontology-lab:watch",
+        "python3 python_service/service.py ontology-lab suggest --symbols AAPL",
         "python3 python_service/service.py ontology-lab apply --id ontology-exp-...",
         "python3 python_service/service.py ontology-lab activate --id ontology-exp-...",
         "npm run python:service:restart"

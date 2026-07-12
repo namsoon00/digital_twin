@@ -202,6 +202,46 @@ class OntologyLabTests(unittest.TestCase):
         self.assertEqual("applied", experiment.last_result["appliedOntologyChanges"]["status"])
         self.assertIn("applied", {item.get("applyStatus") for item in experiment.last_result["recommendations"]})
 
+    def test_suggest_from_ai_candidates_creates_draft_experiment_once(self):
+        store = MemoryExperimentStore()
+        service = OntologyLabService(
+            FakeOntologyRepository(),
+            store,
+            monitor_store=FakeMonitorStore(),
+        )
+        candidate_result = {
+            "status": "ok",
+            "symbols": ["AAPL"],
+            "candidates": [
+                {
+                    "id": "ai-candidate:test-lab",
+                    "title": "AI 다음 점검 실험",
+                    "status": "candidate",
+                    "priority": 77,
+                    "rationale": "반복 신호를 다음 점검 관계로 검증합니다.",
+                    "expectedEffect": "AI 판단 근거에 점검 컨텍스트를 추가합니다.",
+                    "risk": "과도한 점검 관계가 생길 수 있습니다.",
+                    "proposedRule": candidate_rule(),
+                }
+            ],
+        }
+
+        created = service.suggest_from_rule_candidates(candidate_result)
+        duplicated = service.suggest_from_rule_candidates(candidate_result)
+
+        self.assertEqual("created", created["status"])
+        self.assertEqual(1, created["createdCount"])
+        self.assertEqual("skipped", duplicated["status"])
+        self.assertEqual(0, duplicated["createdCount"])
+        self.assertEqual(1, duplicated["skippedCount"])
+        experiment = store.get(created["experiments"][0]["id"])
+        self.assertEqual("draft", experiment.status)
+        self.assertTrue(experiment.title.startswith("AI 제안:"))
+        self.assertEqual(["AAPL"], experiment.symbols)
+        self.assertFalse(experiment.candidate_rules[0]["enabled"])
+        self.assertEqual("suggested", experiment.last_result["status"])
+        self.assertEqual("graph.lab.symbol-review.v1", experiment.last_result["sourceCandidate"]["ruleId"])
+
     def test_run_without_snapshots_marks_result_as_needing_data(self):
         service = OntologyLabService(
             FakeOntologyRepository(),

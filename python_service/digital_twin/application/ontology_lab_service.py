@@ -113,6 +113,95 @@ class OntologyLabService:
         self.experiment_store.save(experiment)
         return {"experiment": experiment.to_dict()}
 
+    def suggest_from_rule_candidates(
+        self,
+        candidate_result: Dict[str, object],
+        payload: Dict[str, object] = None,
+    ) -> Dict[str, object]:
+        body = dict(payload or {})
+        candidate_result = dict(candidate_result or {})
+        candidates = [dict(item) for item in (candidate_result.get("candidates") or []) if isinstance(item, dict)]
+        clean_limit = int_setting(body, "limit", len(candidates) or 3, 0, 20)
+        if clean_limit:
+            candidates = candidates[:clean_limit]
+        symbols = clean_symbols(body.get("symbols") or candidate_result.get("symbols") or [])
+        activate = truthy(body.get("activate"), False)
+        run_after_create = truthy(body.get("run"), False)
+        rulebox = self.rulebox_snapshot()
+        existing_rule_ids = experiment_candidate_rule_ids(self.experiment_store.list())
+        stamp = utc_now_iso()
+        created = []
+        skipped = []
+        for candidate in candidates:
+            proposed_rule = candidate.get("proposedRule") if isinstance(candidate.get("proposedRule"), dict) else None
+            if not proposed_rule:
+                skipped.append(compact_candidate_skip(candidate, "no-proposed-rule"))
+                continue
+            if str(candidate.get("status") or "").lower() == "covered":
+                skipped.append(compact_candidate_skip(candidate, "covered"))
+                continue
+            rule_id = rule_id_from_payload(proposed_rule)
+            if not rule_id:
+                skipped.append(compact_candidate_skip(candidate, "missing-rule-id"))
+                continue
+            if rule_id in existing_rule_ids:
+                skipped.append(compact_candidate_skip(candidate, "duplicate-rule-id"))
+                continue
+            experiment_id = experiment_id_for_candidate(candidate, proposed_rule)
+            if self.experiment_store.get(experiment_id):
+                skipped.append(compact_candidate_skip(candidate, "duplicate-experiment"))
+                existing_rule_ids.add(rule_id)
+                continue
+            candidate_rules, warnings = normalize_candidate_rules({"rules": [proposed_rule]}, rulebox)
+            if not candidate_rules:
+                skipped.append(compact_candidate_skip(candidate, "invalid-proposed-rule"))
+                continue
+            experiment = OntologyExperiment(
+                experiment_id=experiment_id,
+                title="AI 제안: " + str(candidate.get("title") or candidate_rules[0].get("label") or rule_id),
+                hypothesis=hypothesis_from_candidate(candidate),
+                symbols=symbols,
+                candidate_rules=candidate_rules,
+                baseline_rulebox=compact_rulebox_snapshot(rulebox),
+                status=ACTIVE_STATUS if activate else "draft",
+                created_at=stamp,
+                updated_at=stamp,
+                last_result={
+                    "status": "suggested",
+                    "suggestedAt": stamp,
+                    "sourceCandidate": compact_source_candidate(candidate, rule_id),
+                },
+                active_since=stamp if activate else "",
+                validation_warnings=warnings + [
+                    "sourceCandidateId=" + str(candidate.get("id") or ""),
+                    "sourceCandidateStatus=" + str(candidate.get("status") or ""),
+                ],
+            )
+            self.experiment_store.save(experiment)
+            existing_rule_ids.add(rule_id)
+            if run_after_create:
+                run_result = self._run_experiment(
+                    experiment,
+                    {},
+                    keep_active_status=activate,
+                    force=True,
+                    run_kind="ai-suggested",
+                )
+                created.append(run_result.get("experiment") or experiment.to_dict())
+            else:
+                created.append(experiment.to_dict())
+        status = "created" if created else ("no-candidates" if not candidates else "skipped")
+        return {
+            "status": status,
+            "candidateStatus": str(candidate_result.get("status") or ""),
+            "candidateCount": len(candidates),
+            "createdCount": len(created),
+            "skippedCount": len(skipped),
+            "symbols": symbols,
+            "experiments": created,
+            "skipped": skipped,
+        }
+
     def activate(self, experiment_id: str) -> Dict[str, object]:
         experiment = self.experiment_store.get(experiment_id)
         if not experiment:
@@ -568,6 +657,65 @@ def facts_only_graph(graph: PortfolioOntology) -> PortfolioOntology:
 
 def rule_id_from_payload(rule: Dict[str, object]) -> str:
     return str((rule or {}).get("rule_id") or (rule or {}).get("ruleId") or "").strip()
+
+
+def experiment_candidate_rule_ids(experiments: Iterable[OntologyExperiment]) -> set:
+    rule_ids = set()
+    for experiment in experiments or []:
+        for rule in getattr(experiment, "candidate_rules", []) or []:
+            rule_id = rule_id_from_payload(rule)
+            if rule_id:
+                rule_ids.add(rule_id)
+    return rule_ids
+
+
+def experiment_id_for_candidate(candidate: Dict[str, object], proposed_rule: Dict[str, object]) -> str:
+    basis = {
+        "candidateId": str((candidate or {}).get("id") or ""),
+        "ruleId": rule_id_from_payload(proposed_rule),
+        "title": str((candidate or {}).get("title") or ""),
+    }
+    encoded = json.dumps(basis, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return "ontology-exp-ai-" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:12]
+
+
+def compact_candidate_skip(candidate: Dict[str, object], reason: str) -> Dict[str, object]:
+    proposed_rule = (candidate or {}).get("proposedRule") if isinstance((candidate or {}).get("proposedRule"), dict) else {}
+    return {
+        "id": str((candidate or {}).get("id") or ""),
+        "title": str((candidate or {}).get("title") or ""),
+        "ruleId": rule_id_from_payload(proposed_rule),
+        "reason": reason,
+    }
+
+
+def compact_source_candidate(candidate: Dict[str, object], rule_id: str) -> Dict[str, object]:
+    return {
+        "id": str((candidate or {}).get("id") or ""),
+        "title": str((candidate or {}).get("title") or ""),
+        "status": str((candidate or {}).get("status") or ""),
+        "priority": (candidate or {}).get("priority"),
+        "ruleId": rule_id,
+        "source": str((candidate or {}).get("source") or ""),
+        "rationale": str((candidate or {}).get("rationale") or ""),
+        "expectedEffect": str((candidate or {}).get("expectedEffect") or ""),
+        "risk": str((candidate or {}).get("risk") or ""),
+        "requiresData": clean_text_list((candidate or {}).get("requiresData") or []),
+    }
+
+
+def hypothesis_from_candidate(candidate: Dict[str, object]) -> str:
+    parts = []
+    rationale = str((candidate or {}).get("rationale") or "").strip()
+    expected = str((candidate or {}).get("expectedEffect") or "").strip()
+    risk = str((candidate or {}).get("risk") or "").strip()
+    if rationale:
+        parts.append("근거: " + rationale)
+    if expected:
+        parts.append("기대 효과: " + expected)
+    if risk:
+        parts.append("검증 리스크: " + risk)
+    return " / ".join(parts) or "AI가 제안한 RuleBox 후보를 샌드박스에서 검증합니다."
 
 
 def clean_text_list(values: Iterable[object]) -> List[str]:

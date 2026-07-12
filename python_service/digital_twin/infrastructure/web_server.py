@@ -577,6 +577,23 @@ def create_ontology_experiment_payload(payload: Dict[str, object]) -> Dict[str, 
     return ontology_lab_service().create(payload if isinstance(payload, dict) else {})
 
 
+def suggest_ontology_experiments_payload(payload: Dict[str, object]) -> Dict[str, object]:
+    body = payload if isinstance(payload, dict) else {}
+    symbols = body.get("symbols") if isinstance(body.get("symbols"), list) else []
+    candidate_result = build_rule_change_candidate_service(runtime_settings()).propose(
+        symbols=symbols,
+        trigger=str(body.get("trigger") or "ontology-lab-suggest"),
+    )
+    result = ontology_lab_service().suggest_from_rule_candidates(candidate_result, body)
+    result["candidateResult"] = {
+        "status": candidate_result.get("status"),
+        "candidateCount": candidate_result.get("candidateCount"),
+        "savedCount": candidate_result.get("savedCount"),
+        "contextSummary": candidate_result.get("contextSummary") or {},
+    }
+    return result
+
+
 def ontology_experiment_payload(experiment_id: str) -> Dict[str, object]:
     return ontology_lab_service().report(experiment_id)
 
@@ -1886,6 +1903,11 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
             if not self.ensure_writable("공유 모드에서는 온톨로지 실험을 실행할 수 없습니다."):
                 return
             return self.send_payload(200, run_ontology_experiments_once_payload(self.read_json_body()))
+
+        if path == "/api/ontology/experiments/suggest" and self.command == "POST":
+            if not self.ensure_writable("공유 모드에서는 AI 온톨로지 실험 제안을 생성할 수 없습니다."):
+                return
+            return self.send_payload(200, suggest_ontology_experiments_payload(self.read_json_body()))
 
         ontology_experiment_run_match = re.match(r"^/api/ontology/experiments/([^/]+)/run$", path)
         if ontology_experiment_run_match and self.command == "POST":

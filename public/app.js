@@ -3800,6 +3800,35 @@
       });
   }
 
+  function suggestOntologyExperiments() {
+    if (state.ontologyExperimentAction) return;
+    if (isStaticPreviewHost()) {
+      state.ontologyExperimentsError = "로컬 서버에서 실행할 수 있습니다.";
+      showSnackbar(state.ontologyExperimentsError, "danger");
+      render();
+      return;
+    }
+    state.ontologyExperimentAction = "suggest";
+    state.ontologyExperimentsError = "";
+    render();
+    sendJson("/api/ontology/experiments/suggest", "POST", { trigger: "ontology-lab-manual-suggest", activate: false })
+      .then(function (payload) {
+        showSnackbar(
+          payload && payload.createdCount ? "AI 실험 제안 " + payload.createdCount + "건을 등록했습니다." : "새로 등록할 AI 실험 제안이 없습니다.",
+          payload && payload.createdCount ? "success" : "caution"
+        );
+        return loadOntologyExperiments(true);
+      })
+      .catch(function (error) {
+        state.ontologyExperimentsError = error.message || "AI 실험 제안을 생성하지 못했습니다.";
+        showSnackbar(state.ontologyExperimentsError, "danger");
+      })
+      .finally(function () {
+        state.ontologyExperimentAction = "";
+        render();
+      });
+  }
+
   function runOntologyExperiment(experimentId) {
     ontologyExperimentCommand(experimentId, "run", "실험을 실행했습니다.");
   }
@@ -7197,6 +7226,7 @@
       '</div>',
       '<div class="ontology-experiment-actions">',
       '<button class="text-button" type="button" data-lab-refresh' + (state.ontologyExperimentsLoading ? ' disabled' : '') + '>' + escapeHtml(state.ontologyExperimentsLoading ? "조회 중" : "새로고침") + '</button>',
+      '<button class="text-button" type="button" data-lab-suggest' + (state.ontologyExperimentAction ? ' disabled' : '') + '>' + escapeHtml(ontologyExperimentBusy("suggest") ? "제안 중" : "AI 실험 제안") + '</button>',
       '<button class="text-button primary" type="button" data-lab-run-active' + (state.ontologyExperimentAction ? ' disabled' : '') + '>' + escapeHtml(ontologyExperimentBusy("once") ? "실행 중" : "활성 실험 실행") + '</button>',
       '</div>',
       state.ontologyExperimentsError ? '<p class="form-error">' + escapeHtml(state.ontologyExperimentsError) + '</p>' : '',
@@ -7336,7 +7366,7 @@
       applyStatus ? '<p class="subtle">운영 반영 ' + escapeHtml(ontologyApplyStatusLabel(applyStatus)) + (appliedAt ? ' · ' + escapeHtml(formatClock(appliedAt)) : '') + '</p>' : '',
       latest.completedAt ? '<p class="subtle">최근 실행 ' + escapeHtml(formatClock(latest.completedAt)) + '</p>' : '',
       '<div class="ontology-experiment-card-actions">',
-      recommendations.length ? '<button class="text-button primary" type="button" data-lab-apply="' + escapeHtml(id) + '"' + (actionBusy || !id || applied ? ' disabled' : '') + '>' + escapeHtml(ontologyExperimentBusy("apply", id) ? "반영 중" : (applied ? "반영됨" : "제안 적용")) + '</button>' : '',
+      recommendations.length && latest.completedAt ? '<button class="text-button primary" type="button" data-lab-apply="' + escapeHtml(id) + '"' + (actionBusy || !id || applied ? ' disabled' : '') + '>' + escapeHtml(ontologyExperimentBusy("apply", id) ? "반영 중" : (applied ? "반영됨" : "제안 적용")) + '</button>' : '',
       '<button class="text-button" type="button" data-lab-run="' + escapeHtml(id) + '"' + (actionBusy || !id ? ' disabled' : '') + '>' + escapeHtml(ontologyExperimentBusy("run", id) ? "실행 중" : "실행") + '</button>',
       active ? '<button class="text-button" type="button" data-lab-pause="' + escapeHtml(id) + '"' + (actionBusy || !id ? ' disabled' : '') + '>일시정지</button>' : '<button class="text-button primary" type="button" data-lab-activate="' + escapeHtml(id) + '"' + (actionBusy || !id ? ' disabled' : '') + '>활성화</button>',
       '</div>',
@@ -14711,6 +14741,13 @@
     if (runActiveLabButton) {
       runActiveLabButton.addEventListener("click", function () {
         runOntologyExperimentsOnce();
+      });
+    }
+
+    var suggestLabButton = app.querySelector("[data-lab-suggest]");
+    if (suggestLabButton) {
+      suggestLabButton.addEventListener("click", function () {
+        suggestOntologyExperiments();
       });
     }
 

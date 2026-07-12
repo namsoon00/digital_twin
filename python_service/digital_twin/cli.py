@@ -22,7 +22,7 @@ from .infrastructure.event_bus import default_event_bus
 from .infrastructure import operational_store as stores
 from .infrastructure.notifications import queued_notifier_for_account, send_events
 from .infrastructure.ontology_graph_store import ontology_repository_from_settings
-from .infrastructure.service_factory import build_market_data_collection_runner, build_model_review_runner, build_monitor_runner, build_news_collection_runner, build_notification_queue_runner, build_ontology_lab_service, build_ontology_reasoning_runner, build_symbol_universe_service, monitor_account_job_store_from_settings
+from .infrastructure.service_factory import build_market_data_collection_runner, build_model_review_runner, build_monitor_runner, build_news_collection_runner, build_notification_queue_runner, build_ontology_lab_service, build_ontology_reasoning_runner, build_rule_change_candidate_service, build_symbol_universe_service, monitor_account_job_store_from_settings
 from .infrastructure.settings import (
     SECRET_SETTING_KEYS,
     read_settings_store,
@@ -328,6 +328,26 @@ def ontology_lab_command(args) -> int:
         result = service.create(payload)
         print(json.dumps(result, ensure_ascii=False))
         return 0
+    if args.ontology_lab_action == "suggest":
+        symbols = split_symbols(args.symbols or "")
+        candidate_result = build_rule_change_candidate_service(settings).propose(
+            symbols=symbols,
+            trigger=args.trigger or "ontology-lab-suggest",
+        )
+        result = service.suggest_from_rule_candidates(candidate_result, {
+            "symbols": symbols,
+            "activate": bool(args.activate),
+            "run": bool(args.run),
+            "limit": args.limit,
+        })
+        result["candidateResult"] = {
+            "status": candidate_result.get("status"),
+            "candidateCount": candidate_result.get("candidateCount"),
+            "savedCount": candidate_result.get("savedCount"),
+            "contextSummary": candidate_result.get("contextSummary") or {},
+        }
+        print(json.dumps(result, ensure_ascii=False))
+        return 0 if result.get("status") not in {"disabled", "error"} else 1
     if args.ontology_lab_action == "activate":
         result = service.activate(args.id)
         print(json.dumps(result, ensure_ascii=False))
@@ -635,6 +655,12 @@ def build_parser() -> argparse.ArgumentParser:
     lab_create.add_argument("--title", default="")
     lab_create.add_argument("--hypothesis", default="")
     lab_create.add_argument("--symbols", default="")
+    lab_suggest = ontology_lab_actions.add_parser("suggest")
+    lab_suggest.add_argument("--symbols", default="")
+    lab_suggest.add_argument("--trigger", default="ontology-lab-suggest")
+    lab_suggest.add_argument("--limit", default="")
+    lab_suggest.add_argument("--activate", action="store_true")
+    lab_suggest.add_argument("--run", action="store_true")
     lab_activate = ontology_lab_actions.add_parser("activate")
     lab_activate.add_argument("--id", required=True)
     lab_pause = ontology_lab_actions.add_parser("pause")

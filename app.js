@@ -188,9 +188,9 @@
   var alertRuleCatalog = [
     { key: "investmentInsight", group: "투자 알림", label: "온톨로지 투자 인사이트", description: "관계 그래프에서 의미 있는 투자 인사이트가 생성될 때 실제 발송" },
     { key: "newsDigest", group: "데이터", label: "뉴스/피드 새 정보", description: "관련성과 중요도 기준을 통과한 새 뉴스 근거가 들어올 때" },
-    { key: "watchlistOntologySignal", group: "온톨로지 근거", label: "관심종목 관계 신호", description: "투자 인사이트에 넣을 Neo4j InferenceBox 기반 관심종목 근거 신호" },
+    { key: "watchlistOntologySignal", group: "온톨로지 근거", label: "관심종목 관계 신호", description: "투자 인사이트에 넣을 TypeDB InferenceBox 기반 관심종목 근거 신호" },
     { key: "holdingTiming", group: "온톨로지 근거", label: "보유 타이밍 신호", description: "투자 인사이트에 넣을 보유 종목 타이밍 근거 신호" },
-    { key: "ontologyInferenceMissing", group: "온톨로지 상태", label: "추론 결과 누락", description: "실계좌 데이터는 있지만 Neo4j InferenceBox 추론 결과가 없을 때" },
+    { key: "ontologyInferenceMissing", group: "온톨로지 상태", label: "추론 결과 누락", description: "실계좌 데이터는 있지만 그래프 저장소 InferenceBox 추론 결과가 없을 때" },
     { key: "monitorHeartbeat", group: "실시간", label: "상태 확인 메시지", description: "실시간 워커가 살아 있는지 주기적으로 짧게 보낼 때" },
     { key: "monitorConnection", group: "실시간", label: "연결 상태 변화", description: "실시간 모니터링 중 토스 연결 상태가 바뀔 때" },
     { key: "externalDataConnection", group: "외부 API", label: "외부 API 연결", description: "외부 데이터 API 키, 한도, 응답 오류가 감지될 때" }
@@ -460,6 +460,7 @@
     symbolUniverseOffset: 0,
     symbolUniverseLimit: 80,
     monitoringDetail: null,
+    workDetailLayer: null,
     expandedOntologyGraphId: ""
   };
 
@@ -1518,6 +1519,7 @@
     if (nextTab !== "notifications") state.monitoringDetail = null;
     if (nextTab !== "notifications") state.notificationPolicyEditorOpen = false;
     if (nextTab !== "notifications") state.notificationTemplateEditorOpen = false;
+    state.workDetailLayer = null;
     if (!options.skipPrevious) state.previousTab = priorTab;
     if (!options.skipHistory) writeTabHistory(nextTab, Boolean(options.replace));
     setAppNavHidden(false);
@@ -1560,6 +1562,7 @@
     state.previousTab = state.activeTab;
     state.activeTab = nextTab;
     if (nextTab !== "notifications") state.monitoringDetail = null;
+    state.workDetailLayer = null;
     render();
   }
 
@@ -3618,7 +3621,7 @@
         return payload;
       })
       .catch(function (error) {
-        state.ontologyRuleboxError = error.message || "Neo4j RuleBox를 읽지 못했습니다.";
+        state.ontologyRuleboxError = error.message || "TypeDB RuleBox를 읽지 못했습니다.";
         return null;
       })
       .finally(function () {
@@ -3668,10 +3671,10 @@
       .then(function (payload) {
         applyOntologyRuleboxPayload(payload);
         state.ontologyRuleboxChangeReason = "";
-        showSnackbar(seedDefaults ? "기본 RuleBox를 Neo4j에 시드했습니다." : "Neo4j RuleBox를 저장했습니다.");
+        showSnackbar(seedDefaults ? "기본 RuleBox를 TypeDB에 시드했습니다." : "TypeDB RuleBox를 저장했습니다.");
       })
       .catch(function (error) {
-        state.ontologyRuleboxError = error.message || "Neo4j RuleBox를 저장하지 못했습니다.";
+        state.ontologyRuleboxError = error.message || "TypeDB RuleBox를 저장하지 못했습니다.";
         showSnackbar(state.ontologyRuleboxError, "danger");
       })
       .finally(function () {
@@ -3719,11 +3722,11 @@
     sendJson("/api/ontology/rulebox/run", "POST", { clearInference: true })
       .then(function (payload) {
         state.ontologyRuleboxLastRun = payload;
-        showSnackbar(payload.status === "ok" ? "Neo4j RuleBox 추론을 실행했습니다." : "RuleBox 실행 결과: " + (payload.status || "확인 필요"), payload.status === "ok" ? "success" : "caution");
+        showSnackbar(payload.status === "ok" ? "TypeDB RuleBox 추론을 실행했습니다." : "RuleBox 실행 결과: " + (payload.status || "확인 필요"), payload.status === "ok" ? "success" : "caution");
         return loadOntologyRulebox(true);
       })
       .catch(function (error) {
-        state.ontologyRuleboxError = error.message || "Neo4j RuleBox 추론 실행에 실패했습니다.";
+        state.ontologyRuleboxError = error.message || "TypeDB RuleBox 추론 실행에 실패했습니다.";
         showSnackbar(state.ontologyRuleboxError, "danger");
       })
       .finally(function () {
@@ -3742,7 +3745,7 @@
         state.ontologyRuleboxCandidateResult = payload;
         if (payload && payload.rulebox) applyOntologyRuleboxPayload(payload.rulebox);
         showSnackbar(
-          payload && payload.savedCount ? "AI 관계 후보를 Neo4j에 저장했습니다." : "AI 관계 후보 생성 결과가 없습니다.",
+          payload && payload.savedCount ? "AI 관계 후보를 TypeDB RuleBox에 저장했습니다." : "AI 관계 후보 생성 결과가 없습니다.",
           payload && payload.savedCount ? "success" : "caution"
         );
       })
@@ -6442,9 +6445,63 @@
       '</div>',
       '</section>',
       renderOntologyGraphExpandedOverlay(),
+      renderWorkDetailLayer(),
       renderSnackbar(),
       '</main>'
     ].join("");
+  }
+
+  function openWorkDetailLayer(type, key) {
+    if (!type) return;
+    state.workDetailLayer = {
+      type: String(type || ""),
+      key: String(key || "")
+    };
+    render();
+  }
+
+  function renderWorkDetailButton(type, key, label, className) {
+    return [
+      '<button class="' + escapeHtml(className || "mini-button") + '" type="button" data-work-detail="' + escapeHtml(type || "") + '" data-work-detail-key="' + escapeHtml(key || "") + '">',
+      escapeHtml(label || "상세 보기"),
+      '</button>'
+    ].join("");
+  }
+
+  function renderWorkDetailLayer() {
+    var detail = state.workDetailLayer || {};
+    if (!detail.type) return "";
+    var payload = workDetailPayload(detail.type, detail.key);
+    if (!payload) return "";
+    return [
+      '<div class="work-detail-backdrop" data-work-detail-close>',
+      '<aside class="work-detail-layer" role="dialog" aria-modal="true" aria-label="' + escapeHtml(payload.title || "상세 정보") + '">',
+      '<header class="work-detail-head">',
+      '<div>',
+      '<p class="label">' + escapeHtml(payload.kicker || "Detail") + '</p>',
+      '<h2>' + escapeHtml(payload.title || "상세 정보") + '</h2>',
+      payload.meta ? '<span>' + escapeHtml(payload.meta) + '</span>' : '',
+      '</div>',
+      '<button class="icon-button danger" type="button" data-work-detail-close title="상세 닫기" aria-label="상세 닫기">&times;</button>',
+      '</header>',
+      '<div class="work-detail-body">',
+      payload.body || '',
+      '</div>',
+      payload.footer ? '<footer class="work-detail-footer">' + payload.footer + '</footer>' : '',
+      '</aside>',
+      '</div>'
+    ].join("");
+  }
+
+  function workDetailPayload(type, key) {
+    if (type === "notification-job") return notificationWorkDetailPayload(key);
+    if (type === "feed-impact" || type === "research-evidence") return researchEvidenceWorkDetailPayload(key);
+    if (type === "feed-pipeline") return feedPipelineWorkDetailPayload();
+    if (type === "feed-sources") return feedSourcesWorkDetailPayload();
+    if (type === "feed-quality") return feedQualityWorkDetailPayload();
+    if (type === "investment-action") return investmentActionWorkDetailPayload(key);
+    if (type === "settings-runtime") return settingsRuntimeWorkDetailPayload();
+    return null;
   }
 
   function renderOntologyGraphExpandedOverlay() {
@@ -7991,7 +8048,7 @@
         })
       },
       moneyFlow: { buckets: [], emergingFlows: [] },
-      graphGate: { status: "blocked", tone: "caution", blockedCount: 0, relationCount: 0, entityCount: 0, requiredSource: "neo4jInferenceBox", nextChecks: [] }
+      graphGate: { status: "blocked", tone: "caution", blockedCount: 0, relationCount: 0, entityCount: 0, requiredSource: "graphStoreInferenceBox", nextChecks: [] }
     };
   }
 
@@ -8216,7 +8273,7 @@
       '<span class="tone-chip ' + escapeHtml(gate.tone || "hold") + '">' + escapeHtml(gate.status || "unknown") + '</span>',
       '</div>',
       '<div class="investment-gate-grid">',
-      renderInvestmentGateMetric("요구 출처", gate.requiredSource || "neo4jInferenceBox"),
+      renderInvestmentGateMetric("요구 출처", gate.requiredSource || "graphStoreInferenceBox"),
       renderInvestmentGateMetric("관계", gate.relationCount || 0),
       renderInvestmentGateMetric("엔티티", gate.entityCount || 0),
       renderInvestmentGateMetric("보류", gate.blockedCount || 0),
@@ -8251,12 +8308,60 @@
     ].join("");
   }
 
-  function renderInvestmentActionRow(row) {
+  function investmentActionKey(row, index) {
+    row = row || {};
+    return String(row.symbol || row.id || [row.name, row.source, index].join(":"));
+  }
+
+  function investmentActionByKey(key) {
+    var rows = Array.isArray(investmentAnalysisModel(state.snapshot || {}).actionQueue) ? investmentAnalysisModel(state.snapshot || {}).actionQueue : [];
+    return rows.filter(function (row, index) {
+      return investmentActionKey(row, index) === key;
+    })[0] || null;
+  }
+
+  function investmentActionWorkDetailPayload(key) {
+    var row = investmentActionByKey(key);
+    if (!row) return null;
+    var graph = row.graph || {};
+    var reasons = Array.isArray(row.reasons) ? row.reasons : [];
+    var checks = Array.isArray(graph.nextChecks) ? graph.nextChecks : [];
+    var name = row.name || stockDisplayName(row.symbol, row);
+    return {
+      kicker: "Action Queue",
+      title: name || row.symbol || "투자 판단 후보",
+      meta: [row.symbol, sourceLabel(row.source), row.market, row.sector].filter(Boolean).join(" · "),
+      body: [
+        '<section class="work-detail-section">',
+        '<div class="work-detail-metric-row">',
+        renderNotificationDetailMetric("판단", row.decision || "판단 대기", row.tone || "hold"),
+        renderNotificationDetailMetric("데이터", row.dataQuality || "-", "muted"),
+        renderNotificationDetailMetric("API", row.apiSource || "-", "muted"),
+        renderNotificationDetailMetric("손익률", String(row.profitLossRate || 0) + "%", Number(row.profitLossRate || 0) >= 0 ? "watch" : "danger"),
+        '</div>',
+        '</section>',
+        '<section class="work-detail-section primary">',
+        '<strong>요약 판단</strong>',
+        '<p>' + escapeHtml(reasons[0] || graph.reason || "다음 확인 조건을 먼저 봅니다.") + '</p>',
+        '</section>',
+        reasons.length ? '<section class="work-detail-section"><strong>판단 근거</strong><div class="notification-detail-reasons">' + reasons.map(function (reason) {
+          return '<p>' + escapeHtml(reason) + '</p>';
+        }).join("") + '</div></section>' : '',
+        checks.length ? '<section class="work-detail-section"><strong>다음 체크</strong><div class="notification-detail-tags">' + checks.map(function (item) {
+          return '<span>' + escapeHtml(item) + '</span>';
+        }).join("") + '</div></section>' : '',
+        graph.blocked ? '<section class="work-detail-section"><strong>차단 조건</strong><p>' + escapeHtml(graph.basis || "InferenceBox") + '</p></section>' : ''
+      ].join("")
+    };
+  }
+
+  function renderInvestmentActionRow(row, index) {
     row = row || {};
     var graph = row.graph || {};
     var reasons = Array.isArray(row.reasons) ? row.reasons : [];
     var checks = Array.isArray(graph.nextChecks) ? graph.nextChecks : [];
     var name = row.name || stockDisplayName(row.symbol, row);
+    var key = investmentActionKey(row, index);
     return [
       '<div class="investment-action-row">',
       '<div class="investment-action-main">',
@@ -8271,7 +8376,10 @@
       graph.blocked ? '<span>차단 <strong>' + escapeHtml(graph.basis || "InferenceBox") + '</strong></span>' : '<span>추론 <strong>ready</strong></span>',
       '</div>',
       '<p>' + escapeHtml((reasons[0] || graph.reason || "다음 확인 조건을 먼저 봅니다.")) + '</p>',
-      checks.length ? '<div class="investment-action-checks">' + checks.slice(0, 3).map(function (item) { return '<span>' + escapeHtml(item) + '</span>'; }).join("") + '</div>' : '',
+      '<div class="investment-action-checks">',
+      checks.length ? checks.slice(0, 2).map(function (item) { return '<span>' + escapeHtml(item) + '</span>'; }).join("") : '<span>추가 확인 대기</span>',
+      renderWorkDetailButton("investment-action", key, "상세", "mini-button"),
+      '</div>',
       '</div>'
     ].join("");
   }
@@ -10553,14 +10661,13 @@
       '<div class="notification-decision-master">',
       '<div class="notification-decision-status">',
       '<span class="tone-chip ' + escapeHtml(hasError ? "hold" : "watch") + '">' + escapeHtml(hasError ? "확인 필요" : "현황") + '</span>',
-      '<span>' + escapeHtml(jobs.length ? "최근 " + jobs.length + "건 · 선택 리포트 분리" : (hasError ? "연결 상태 확인" : "판단 이력 없음")) + '</span>',
+      '<span>' + escapeHtml(jobs.length ? "최근 " + jobs.length + "건 · 상세는 레이어에서 확인" : (hasError ? "연결 상태 확인" : "판단 이력 없음")) + '</span>',
       '<em>' + escapeHtml(state.notificationJobsLoading ? "백그라운드 갱신 중" : "마지막 결과 유지") + '</em>',
       '</div>',
       jobs.length ? '<div class="notification-decision-list" role="listbox" aria-label="최근 알림 판단 목록">' + jobs.map(function (job) {
         return renderNotificationDecisionRow(job, notificationJobKey(job) === notificationJobKey(activeJob));
       }).join("") + '</div>' : stateMessage,
       '</div>',
-      jobs.length ? renderNotificationDecisionDetail(activeJob) : '',
       '</div>',
       '</article>'
     ].join("");
@@ -10600,6 +10707,25 @@
       return notificationJobKey(job) === selectedKey;
     })[0];
     return selected || jobs[0];
+  }
+
+  function notificationJobByKey(key) {
+    var jobs = state.notificationJobItems || [];
+    return jobs.filter(function (job) {
+      return notificationJobKey(job) === key;
+    })[0] || null;
+  }
+
+  function notificationWorkDetailPayload(key) {
+    var job = notificationJobByKey(key) || activeNotificationDecisionJob(state.notificationJobItems || []);
+    if (!job) return null;
+    var payload = notificationJobDetailPayload(job);
+    return {
+      kicker: "Notification Decision",
+      title: payload.title || payload.displaySymbol || job.messageTypeLabel || job.messageType || "알림 판단",
+      meta: [payload.displaySymbol, labelWithNotificationIcon(job.messageType, job.messageTypeLabel || job.messageType), formatClock(job.createdAt)].filter(Boolean).join(" · "),
+      body: renderNotificationDecisionDetail(job)
+    };
   }
 
   function renderNotificationDetailMetric(label, value, tone) {
@@ -10713,18 +10839,6 @@
       target = title + " / " + displaySymbol;
     }
     var preview = textWithKnownDisplaySymbols(job.lastError || job.textPreview || "-", resolvedSymbol, job);
-    var fullText = notificationJobFullText(job, resolvedSymbol);
-    var expanded = notificationJobExpanded(job);
-    var canExpand = Boolean(fullText && fullText !== preview);
-    var fullMessageToggle = canExpand ? [
-      '<div class="notification-decision-actions">',
-      '<button type="button" class="mini-button" data-notification-full-toggle="' + escapeHtml(notificationJobKey(job)) + '" aria-expanded="' + escapeHtml(expanded ? "true" : "false") + '">',
-      escapeHtml(expanded ? "접기" : "전체 메시지"),
-      '</button>',
-      '</div>'
-    ].join("") : "";
-    var fullMessageBlock = canExpand && expanded ? '<pre class="notification-full-message">' + escapeHtml(fullText) + '</pre>' : "";
-    var fingerprint = textWithKnownDisplaySymbols(job.honeyFingerprint || "", resolvedSymbol, job);
     var suppression = textWithKnownDisplaySymbols(job.suppressionSummary || "", resolvedSymbol, job);
     var nextEligible = job.nextEligibleAt ? "다음 가능 " + formatClock(job.nextEligibleAt) : "";
     var processing = job.recoverableProcessing ? "처리 중 지연 " + String(job.processingAgeMinutes || 0) + "분 · 워커 재시도 가능" : "";
@@ -10749,13 +10863,13 @@
       job.honeySimilarityBypassed ? '<span>' + escapeHtml(job.honeySimilarityBypassReason ? "반복 예외 " + job.honeySimilarityBypassReason : "반복 예외 적용") + '</span>' : '',
       '</div>',
       '<p>' + escapeHtml(preview) + '</p>',
-      fullMessageToggle,
-      fullMessageBlock,
+      '<div class="notification-decision-actions">',
+      renderWorkDetailButton("notification-job", rowKey, "상세 리포트", "mini-button"),
+      '</div>',
       renderNotificationScoreFactors(job),
-      reasons.length ? '<div class="notification-decision-reasons">' + reasons.map(function (reason) {
+      reasons.length ? '<div class="notification-decision-reasons compact">' + reasons.slice(0, 2).map(function (reason) {
         return '<span>' + escapeHtml(textWithKnownDisplaySymbols(reason, resolvedSymbol, job)) + '</span>';
       }).join("") + '</div>' : '',
-      fingerprint ? '<code class="notification-fingerprint">' + escapeHtml(fingerprint) + '</code>' : '',
       '</div>'
     ].join("");
   }
@@ -12467,7 +12581,7 @@
       '<article class="panel model-panel neo4j-rulebox-panel">',
       '<div class="panel-head">',
       '<div>',
-      '<p class="label">Neo4j RuleBox</p>',
+      '<p class="label">TypeDB RuleBox</p>',
       '<h2>그래프 규칙 실행 콘솔</h2>',
       '</div>',
       '<span class="tone-chip ' + escapeHtml(payload.status === "ok" ? "watch" : payload.configured ? "caution" : "hold") + '">' + escapeHtml(ruleboxStatusLabel(payload)) + '</span>',
@@ -12480,8 +12594,8 @@
       renderLabStat("버전", payload.versionCount || versions.length || 0, "개"),
       '</div>',
       '<div class="settings-note model-settings-note">',
-      '<strong>Neo4j를 RuleBox 원본으로 사용합니다.</strong>',
-      '<p>저장 시 RuleBox와 InferenceBox를 지우고 규칙 구조를 다시 적재한 뒤 버전 해시를 남깁니다. 실행 버튼은 Neo4j 안의 관계 조건을 읽어 InferenceBox 관계를 다시 만듭니다.</p>',
+      '<strong>TypeDB를 RuleBox 원본으로 사용합니다.</strong>',
+      '<p>저장 시 RuleBox와 InferenceBox를 지우고 규칙 구조를 다시 적재한 뒤 버전 해시를 남깁니다. 실행 버튼은 TypeDB의 관계 조건을 읽어 InferenceBox 관계를 다시 만듭니다.</p>',
       '</div>',
       '<div class="rulebox-console-strip">',
       '<span><strong>source</strong>' + escapeHtml(payload.source || "-") + '</span>',
@@ -12489,7 +12603,7 @@
       '<span><strong>relations</strong>' + escapeHtml(relationTypes.length ? relationTypes.join(", ") : "-") + '</span>',
       lastRun.status ? '<span><strong>last run</strong>' + escapeHtml(lastRun.status + (lastRun.reason ? " · " + lastRun.reason : "")) + '</span>' : '',
       '</div>',
-      state.ontologyRuleboxLoading ? '<p class="lab-message">Neo4j RuleBox를 읽는 중입니다.</p>' : '',
+      state.ontologyRuleboxLoading ? '<p class="lab-message">TypeDB RuleBox를 읽는 중입니다.</p>' : '',
       state.ontologyRuleboxError ? '<p class="form-error">' + escapeHtml(state.ontologyRuleboxError) + '</p>' : '',
       payload.reason ? '<p class="lab-message caution">' + escapeHtml(payload.reason) + '</p>' : '',
       '<label class="setting-field wide"><span>변경 이유</span><input data-ontology-rulebox-change-reason type="text" autocomplete="off" placeholder="예: 피어 뉴스 후보 검토, 판단 단계 정책 보강" value="' + escapeHtml(state.ontologyRuleboxChangeReason || "") + '"></label>',
@@ -12497,7 +12611,7 @@
       '<button class="text-button" type="button" data-action="refresh-rulebox"' + (state.ontologyRuleboxLoading ? ' disabled' : '') + '>새로고침</button>',
       '<button class="text-button" type="button" data-action="seed-rulebox"' + (disabled ? ' disabled' : '') + '>기본값 시드</button>',
       '<button class="text-button primary" type="button" data-action="save-rulebox"' + (disabled ? ' disabled' : '') + '>' + escapeHtml(state.ontologyRuleboxSaving ? "저장 중" : "RuleBox 저장") + '</button>',
-      '<button class="text-button primary" type="button" data-action="run-rulebox"' + (disabled ? ' disabled' : '') + '>' + escapeHtml(state.ontologyRuleboxRunning ? "실행 중" : "Neo4j 추론 실행") + '</button>',
+      '<button class="text-button primary" type="button" data-action="run-rulebox"' + (disabled ? ' disabled' : '') + '>' + escapeHtml(state.ontologyRuleboxRunning ? "실행 중" : "TypeDB 추론 실행") + '</button>',
       '<button class="text-button primary" type="button" data-action="propose-rulebox-candidates"' + (disabled ? ' disabled' : '') + '>' + escapeHtml(state.ontologyRuleboxProposing ? "생성 중" : "AI 후보 생성") + '</button>',
       '</div>',
       '<div class="settings-grid compact-settings-grid">',
@@ -12519,13 +12633,13 @@
       '</div>',
       '</div>',
       '<div class="model-section">',
-      '<div class="flow-title"><div><strong>Neo4j 저장 원본 JSON</strong><span>GraphInferenceRule 배열입니다. 조건과 derivation을 추가하면 다음 실행부터 관계 추론 대상이 됩니다.</span></div></div>',
+      '<div class="flow-title"><div><strong>TypeDB 저장 원본 JSON</strong><span>GraphInferenceRule 배열입니다. 조건과 derivation을 추가하면 다음 실행부터 관계 추론 대상이 됩니다.</span></div></div>',
       '<label class="setting-field wide"><textarea data-ontology-rulebox-json rows="18" autocomplete="off">' + escapeHtml(state.ontologyRuleboxJson || JSON.stringify(rules, null, 2)) + '</textarea></label>',
       '</div>',
       '<div class="model-section">',
-      '<div class="flow-title"><div><strong>활성 규칙 요약</strong><span>Neo4j에 적재된 RuleBox 노드를 사람이 읽기 쉽게 펼친 목록입니다.</span></div></div>',
+      '<div class="flow-title"><div><strong>활성 규칙 요약</strong><span>TypeDB에 적재된 RuleBox 노드를 사람이 읽기 쉽게 펼친 목록입니다.</span></div></div>',
       '<div class="source-stack rulebox-rule-list">',
-      rules.length ? rules.map(renderNeo4jRuleboxRuleRow).join("") : '<p class="subtle">Neo4j RuleBox 규칙이 비어 있습니다.</p>',
+      rules.length ? rules.map(renderNeo4jRuleboxRuleRow).join("") : '<p class="subtle">TypeDB RuleBox 규칙이 비어 있습니다.</p>',
       '</div>',
       '</div>',
       '</div>',
@@ -12534,8 +12648,8 @@
   }
 
   function ruleboxStatusLabel(payload) {
-    if (!payload || !payload.configured) return "Neo4j 미연결";
-    if (payload.status === "ok") return "Neo4j 연결";
+    if (!payload || !payload.configured) return "TypeDB 미연결";
+    if (payload.status === "ok") return "TypeDB 연결";
     return payload.status || "확인 필요";
   }
 
@@ -13788,7 +13902,7 @@
 
   function feedSourceChannels() {
     var newsArchiveEnabled = settingEnabled("newsCollectionEnabled");
-    var graphStoreMode = settingValue("ontologyGraphStoreMode") || defaultSettings.ontologyGraphStoreMode || "neo4j";
+    var graphStoreMode = settingValue("ontologyGraphStoreMode") || defaultSettings.ontologyGraphStoreMode || "typedb";
     return [
       {
         label: "KIS 장중 수급",
@@ -13866,7 +13980,7 @@
     var channels = feedSourceChannels();
     var activeChannels = channels.filter(function (channel) { return channel.enabled; }).length;
     var readyChannels = channels.filter(function (channel) { return channel.enabled && channel.ready !== false; }).length;
-    var graphStoreMode = settingValue("ontologyGraphStoreMode") || defaultSettings.ontologyGraphStoreMode || "neo4j";
+    var graphStoreMode = settingValue("ontologyGraphStoreMode") || defaultSettings.ontologyGraphStoreMode || "typedb";
     var graphStoreLabel = graphStoreMode === "typedb" ? "TypeDB" : (graphStoreMode === "dual" ? "Neo4j + TypeDB" : "Neo4j");
     return [
       { step: "01", title: "원천 수집", tone: activeChannels ? "watch" : "hold", value: activeChannels + "/" + channels.length, detail: "사용 중인 수집 채널" },
@@ -13902,7 +14016,7 @@
       renderFeedCommandMetric("게이트", (settingValue("materialityMinimumScore") || defaultSettings.materialityMinimumScore || "65") + "점", "관계 알림 기준", settingEnabled("materialityGateEnabled") ? "watch" : "hold"),
       '</div>',
       '<div class="feed-flow-map">',
-      feedPipelineStages().map(renderFeedFlowNode).join(""),
+      feedPipelineStages().slice(0, 3).map(renderFeedFlowNode).join(""),
       '</div>',
       '</div>',
       '</article>'
@@ -13937,9 +14051,10 @@
       '<p class="label">Data Flow</p>',
       '<h2>수집·판단 흐름</h2>',
       '</div>',
+      renderWorkDetailButton("feed-pipeline", "", "상세", "mini-button"),
       '</div>',
       '<div class="feed-pipeline-list">',
-      feedPipelineStages().map(function (stage) {
+      feedPipelineStages().slice(0, 4).map(function (stage) {
         return [
           '<div class="feed-pipeline-row ' + escapeHtml(stage.tone || "hold") + '">',
           '<span>' + escapeHtml(stage.step) + '</span>',
@@ -13964,10 +14079,13 @@
       '<p class="label">Source Matrix</p>',
       '<h2>수집 채널 매트릭스</h2>',
       '</div>',
+      '<div class="settings-actions">',
       '<span class="metric">' + escapeHtml(feedSourceChannels().filter(function (channel) { return channel.enabled; }).length) + '</span>',
+      renderWorkDetailButton("feed-sources", "", "상세", "mini-button"),
+      '</div>',
       '</div>',
       '<div class="feed-channel-grid">',
-      feedSourceChannels().map(function (channel) {
+      feedSourceChannels().slice(0, 5).map(function (channel) {
         return [
           '<div class="feed-channel-row ' + escapeHtml(channel.tone || "hold") + '">',
           '<div>',
@@ -13987,7 +14105,7 @@
   function renderFeedSettingsPanel() {
     var archiveScope = (settingValue("newsCollectionMaxSymbols") || defaultSettings.newsCollectionMaxSymbols || "40") + "종목 · "
       + (settingValue("newsCollectionLookbackMinutes") || defaultSettings.newsCollectionLookbackMinutes || "180") + "분";
-    var graphStoreMode = settingValue("ontologyGraphStoreMode") || defaultSettings.ontologyGraphStoreMode || "neo4j";
+    var graphStoreMode = settingValue("ontologyGraphStoreMode") || defaultSettings.ontologyGraphStoreMode || "typedb";
     var graphStoreLabel = graphStoreMode === "typedb" ? "TypeDB" : (graphStoreMode === "dual" ? "Neo4j+TypeDB" : (settingEnabled("ontologyNeo4jEnabled") ? "Neo4j" : "로컬"));
     var reasoningScope = graphStoreLabel + " · "
       + (settingValue("ontologyReasoningIntervalSeconds") || defaultSettings.ontologyReasoningIntervalSeconds || "10") + "초";
@@ -14078,11 +14196,11 @@
           { value: "0", label: "사용 안 함" }
         ]),
         renderSettingSelect("ontologyGraphStoreMode", "그래프 저장소 모드", [
-          { value: "neo4j", label: "Neo4j 유지" },
-          { value: "dual", label: "Neo4j + TypeDB 미러" },
-          { value: "typedb", label: "TypeDB 단독" }
+          { value: "typedb", label: "TypeDB 단독" },
+          { value: "dual", label: "TypeDB + Neo4j 미러" },
+          { value: "neo4j", label: "Neo4j 호환" }
         ]),
-        renderSettingSelect("ontologyNeo4jEnabled", "Neo4j 그래프 저장소", [
+        renderSettingSelect("ontologyNeo4jEnabled", "Neo4j 미러 저장소", [
           { value: "1", label: "사용" },
           { value: "0", label: "사용 안 함" }
         ]),
@@ -14241,10 +14359,11 @@
       '</div>',
       '<div class="settings-actions">',
       '<button class="text-button" data-action="refresh-research-evidence">' + (state.researchEvidenceLoading ? "조회 중" : "저장 근거 조회") + '</button>',
+      renderWorkDetailButton("feed-quality", "", "품질 상세", "text-button compact"),
       '</div>',
       '</div>',
       '<div class="feed-quality-grid">',
-      feedQualitySignals().map(renderFeedQualitySignal).join(""),
+      feedQualitySignals().slice(0, 4).map(renderFeedQualitySignal).join(""),
       '</div>',
       '<div class="theme-radar feed-quality-tags">',
       kinds.length ? kinds.slice(0, 8).map(function (entry) {
@@ -14403,7 +14522,20 @@
     ].join("");
   }
 
-  function renderFeedImpactCard(item) {
+  function feedEvidenceKey(item, index) {
+    item = item || {};
+    return String(item.evidenceId || item.id || [item.symbol, item.publishedAt || item.observedAt, item.title, index].join(":"));
+  }
+
+  function researchEvidenceItemByKey(key) {
+    var evidence = currentResearchEvidence();
+    var items = Array.isArray(evidence.items) ? evidence.items : [];
+    return items.filter(function (item, index) {
+      return feedEvidenceKey(item, index) === key;
+    })[0] || null;
+  }
+
+  function renderFeedImpactCard(item, index) {
     item = item || {};
     var symbol = String(item.symbol || "").toUpperCase();
     var displayName = stockDisplayName(symbol, item.payload || item);
@@ -14411,6 +14543,7 @@
     var impact = researchEvidenceImpactMeta(item);
     var summary = researchEvidenceKoreanSummary(item);
     var confidence = item.confidence == null ? "-" : (Math.round(Number(item.confidence || 0) * 100) + "%");
+    var key = feedEvidenceKey(item, index);
     return [
       '<section class="feed-impact-card ' + escapeHtml(impact.tone) + '">',
       '<div class="feed-impact-card-head">',
@@ -14434,10 +14567,106 @@
       '<span>기사</span>',
       '<strong>' + escapeHtml(item.title || "제목 없음") + '</strong>',
       '<em>' + escapeHtml([item.source || "-", formatFeedTime(time) || "-"].join(" · ")) + '</em>',
+      renderWorkDetailButton("feed-impact", key, "상세", "mini-button"),
       item.url ? '<a class="open-link" href="' + escapeHtml(item.url) + '" target="_blank" rel="noreferrer" title="원문 열기">↗</a>' : '',
       '</footer>',
       '</section>'
     ].join("");
+  }
+
+  function researchEvidenceWorkDetailPayload(key) {
+    var item = researchEvidenceItemByKey(key);
+    if (!item) return null;
+    var symbol = String(item.symbol || "").toUpperCase();
+    var displayName = stockDisplayName(symbol, item.payload || item);
+    var time = item.publishedAt || item.observedAt || "";
+    var impact = researchEvidenceImpactMeta(item);
+    var summary = researchEvidenceKoreanSummary(item);
+    var confidence = item.confidence == null ? "-" : (Math.round(Number(item.confidence || 0) * 100) + "%");
+    return {
+      kicker: "Research Evidence",
+      title: item.title || displayName || symbol || "뉴스·근거 상세",
+      meta: [displayName || symbol, item.source || "-", formatFeedTime(time) || "-"].filter(Boolean).join(" · "),
+      body: [
+        '<section class="work-detail-section">',
+        '<div class="work-detail-metric-row">',
+        renderNotificationDetailMetric("주가 영향", impact.label, impact.tone),
+        renderNotificationDetailMetric("영향 점수", impact.scoreLabel, impact.tone),
+        renderNotificationDetailMetric("근거 종류", researchEvidenceKindLabel(item.kind), "muted"),
+        renderNotificationDetailMetric("신뢰도", confidence, "muted"),
+        '</div>',
+        '</section>',
+        '<section class="work-detail-section primary">',
+        '<strong>본문 요약</strong>',
+        '<p>' + escapeHtml(summary) + '</p>',
+        '</section>',
+        '<section class="work-detail-section">',
+        '<strong>주가 영향 판단</strong>',
+        '<p>' + escapeHtml(impact.summary) + '</p>',
+        '</section>',
+        '<section class="work-detail-section">',
+        '<strong>기사</strong>',
+        '<p>' + escapeHtml(item.title || "제목 없음") + '</p>',
+        '<div class="notification-detail-tags">',
+        '<span>출처 ' + escapeHtml(item.source || "-") + '</span>',
+        '<span>시간 ' + escapeHtml(formatFeedTime(time) || "-") + '</span>',
+        '<span>방향 ' + escapeHtml(researchEvidencePolarityLabel(item.polarity)) + '</span>',
+        '</div>',
+        '</section>',
+        item.url ? '<a class="text-button primary" href="' + escapeHtml(item.url) + '" target="_blank" rel="noreferrer">원문 열기</a>' : '',
+      ].join("")
+    };
+  }
+
+  function feedPipelineWorkDetailPayload() {
+    return {
+      kicker: "Data Flow",
+      title: "수집·판단 흐름 전체",
+      meta: "원천 수집부터 알림 후보까지",
+      body: '<div class="work-detail-list">' + feedPipelineStages().map(function (stage) {
+        return [
+          '<section class="work-detail-row ' + escapeHtml(stage.tone || "hold") + '">',
+          '<b>' + escapeHtml(stage.step) + '</b>',
+          '<div><strong>' + escapeHtml(stage.title) + '</strong><span>' + escapeHtml(stage.detail || "") + '</span></div>',
+          '<em>' + escapeHtml(stage.value || "-") + '</em>',
+          '</section>'
+        ].join("");
+      }).join("") + '</div>'
+    };
+  }
+
+  function feedSourcesWorkDetailPayload() {
+    return {
+      kicker: "Source Matrix",
+      title: "수집 채널 상세",
+      meta: "사용 여부, 준비도, 수집 주기",
+      body: '<div class="work-detail-list">' + feedSourceChannels().map(function (channel) {
+        return [
+          '<section class="work-detail-row ' + escapeHtml(channel.tone || "hold") + '">',
+          '<span class="tone-chip ' + escapeHtml(channel.tone || "hold") + '">' + escapeHtml(channel.enabled ? (channel.ready === false ? "키 확인" : "사용") : "중지") + '</span>',
+          '<div><strong>' + escapeHtml(channel.label) + '</strong><span>' + escapeHtml(channel.route) + '</span></div>',
+          '<em>' + escapeHtml(channel.cadence || "-") + '</em>',
+          '</section>'
+        ].join("");
+      }).join("") + '</div>'
+    };
+  }
+
+  function feedQualityWorkDetailPayload() {
+    return {
+      kicker: "Data Quality",
+      title: "데이터 품질 상세",
+      meta: "저장 근거, 원천 준비도, 캐시 상태",
+      body: '<div class="work-detail-grid">' + feedQualitySignals().map(function (item) {
+        return [
+          '<section class="work-detail-card ' + escapeHtml(item.tone || "hold") + '">',
+          '<span class="tone-chip ' + escapeHtml(item.tone || "hold") + '">' + escapeHtml(item.value || "-") + '</span>',
+          '<strong>' + escapeHtml(item.label || "-") + '</strong>',
+          '<p>' + escapeHtml(item.description || "") + '</p>',
+          '</section>'
+        ].join("");
+      }).join("") + '</div>'
+    };
   }
 
   function renderResearchEvidencePanel() {
@@ -14501,13 +14730,14 @@
     ].join("");
   }
 
-  function renderResearchEvidenceItem(item) {
+  function renderResearchEvidenceItem(item, index) {
     var symbol = String(item.symbol || "").toUpperCase();
     var displayName = stockDisplayName(symbol, item.payload || item);
     var time = item.publishedAt || item.observedAt || "";
     var deleting = state.researchEvidenceDeleting === item.evidenceId;
     var impact = researchEvidenceImpactMeta(item);
     var summary = researchEvidenceKoreanSummary(item);
+    var key = feedEvidenceKey(item, index);
     return [
       '<div class="research-evidence-item ' + escapeHtml(impact.tone) + '">',
       '<div class="research-evidence-main">',
@@ -14530,6 +14760,7 @@
       '</footer>',
       '</div>',
       '<div class="research-evidence-actions">',
+      renderWorkDetailButton("research-evidence", key, "상세", "mini-button"),
       item.url ? '<a class="open-link" href="' + escapeHtml(item.url) + '" target="_blank" rel="noreferrer" title="원문 열기">↗</a>' : '<span class="open-link muted">-</span>',
       '<button class="mini-button danger" type="button" data-research-delete="' + escapeHtml(item.evidenceId || "") + '"' + (deleting || item.evidenceId === "preview:005930:news" ? " disabled" : "") + '>' + (deleting ? "삭제 중" : "삭제") + '</button>',
       '</div>',
@@ -14815,6 +15046,7 @@
       '<div class="settings-status-stack">',
       '<span class="tone-chip ' + settingsStatusTone() + '" data-settings-status>' + settingsStatusLabel() + '</span>',
       '<span class="chip">로컬 DB 우선</span>',
+      renderWorkDetailButton("settings-runtime", "", "연결 상세", "mini-button"),
       '</div>',
       state.settingsSaving ? '<p class="lab-message">설정을 MySQL 운영 DB에 저장하는 중입니다.</p>' : '',
       state.serverSettingsError ? '<p class="form-error">' + escapeHtml(state.serverSettingsError) + '</p>' : '',
@@ -14824,6 +15056,43 @@
       renderSettingsSmartSavePanel(),
       '</div>',
       '</article>'
+    ].join("");
+  }
+
+  function settingsRuntimeWorkDetailPayload() {
+    return {
+      kicker: "Runtime Settings",
+      title: "런타임 연결 상세",
+      meta: settingsStatusLabel() + " · 외부 API " + configuredCount(["alphaVantageApiKey", "coingeckoApiKey", "fredApiKey", "opendartApiKey"]) + "/4",
+      body: [
+        '<section class="work-detail-section">',
+        '<strong>현재 저장 상태</strong>',
+        renderSettingsSmartSavePanel(),
+        '</section>',
+        '<section class="work-detail-section">',
+        '<strong>연결 요약</strong>',
+        renderRuntimeSettingsSummary(),
+        '</section>',
+        '<section class="work-detail-section">',
+        '<strong>진단</strong>',
+        '<div class="work-detail-grid">',
+        renderSettingsDiagnosticMini("저장 상태", settingsStatusLabel(), settingsStatusTone(), settingsHasPendingChanges() ? "변경사항 저장 필요" : "로컬 설정과 동기화됨"),
+        renderSettingsDiagnosticMini("서버 잠금", state.serverSettingsLocked ? "읽기전용" : "수정 가능", state.serverSettingsLocked ? "caution" : "watch", state.serverSettingsLocked ? "공유 모드에서는 서버 설정 저장이 잠겨 있습니다." : "로컬 운영 DB 저장 가능"),
+        renderSettingsDiagnosticMini("외부 API", configuredCount(["alphaVantageApiKey", "coingeckoApiKey", "fredApiKey", "opendartApiKey"]) + "/4", "hold", "Alpha, CoinGecko, FRED, OpenDART 준비도"),
+        renderSettingsDiagnosticMini("최근 오류", state.serverSettingsError ? "확인 필요" : "없음", state.serverSettingsError ? "danger" : "watch", state.serverSettingsError || "설정 API 오류가 없습니다."),
+        '</div>',
+        '</section>'
+      ].join("")
+    };
+  }
+
+  function renderSettingsDiagnosticMini(label, value, tone, detail) {
+    return [
+      '<section class="work-detail-card ' + escapeHtml(tone || "hold") + '">',
+      '<span class="tone-chip ' + escapeHtml(tone || "hold") + '">' + escapeHtml(value || "-") + '</span>',
+      '<strong>' + escapeHtml(label || "-") + '</strong>',
+      '<p>' + escapeHtml(detail || "") + '</p>',
+      '</section>'
     ].join("");
   }
 
@@ -15109,6 +15378,22 @@
       });
     });
 
+    Array.prototype.slice.call(app.querySelectorAll("[data-work-detail]")).forEach(function (button) {
+      button.addEventListener("click", function (event) {
+        if (event && event.preventDefault) event.preventDefault();
+        if (event && event.stopPropagation) event.stopPropagation();
+        openWorkDetailLayer(button.getAttribute("data-work-detail"), button.getAttribute("data-work-detail-key") || "");
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-work-detail-close]")).forEach(function (button) {
+      button.addEventListener("click", function (event) {
+        if (button.classList && button.classList.contains("work-detail-backdrop") && event.target !== button) return;
+        state.workDetailLayer = null;
+        render();
+      });
+    });
+
     Array.prototype.slice.call(app.querySelectorAll("[data-tab]")).forEach(bindTabNavigation);
 
     Array.prototype.slice.call(app.querySelectorAll("[data-monitor-instrument-detail]")).forEach(function (row) {
@@ -15287,7 +15572,7 @@
     if (refreshRuleboxButton) {
       refreshRuleboxButton.addEventListener("click", function () {
         loadOntologyRulebox(true).then(function () {
-          showSnackbar("Neo4j RuleBox를 다시 읽었습니다.");
+          showSnackbar("TypeDB RuleBox를 다시 읽었습니다.");
         });
       });
     }
@@ -15759,8 +16044,9 @@
     Array.prototype.slice.call(app.querySelectorAll("[data-notification-job-select]")).forEach(function (row) {
       var selectNotificationJob = function () {
         var key = row.getAttribute("data-notification-job-select") || "";
-        if (!key || state.activeNotificationJobKey === key) return;
+        if (!key) return;
         state.activeNotificationJobKey = key;
+        state.workDetailLayer = { type: "notification-job", key: key };
         render();
       };
       row.addEventListener("click", function (event) {
@@ -15992,6 +16278,11 @@
       if (event.key !== "Escape") return;
       if (state.expandedOntologyGraphId) {
         state.expandedOntologyGraphId = "";
+        render();
+        return;
+      }
+      if (state.workDetailLayer) {
+        state.workDetailLayer = null;
         render();
         return;
       }

@@ -6425,7 +6425,7 @@
     var subtitle = (structure.objective || tab.description || "운영") + " · 마지막 데이터 " + formatClock(snapshot.generatedAt);
     return [
       '<main class="shell console-shell ' + escapeHtml(webStyleContract.shellClass) + (showHomeDeskbar ? " shell-home" : " shell-page") + '" data-web-style="' + escapeHtml(webStyleContract.id) + '" data-web-style-version="' + escapeHtml(webStyleContract.version) + '" data-active-group="' + escapeHtml(structure.groupId) + '">',
-      renderAppNavigation(tab, modeLabel, modeClass),
+      renderAppNavigation(tab, modeLabel, modeClass, snapshot),
       '<section class="topbar web-style-topbar" data-style-region="topbar">',
       '<div class="topbar-copy">',
       '<p class="eyebrow">' + escapeHtml(structure.groupLabel + " / " + structure.layer) + '</p>',
@@ -6550,7 +6550,7 @@
     ].join("");
   }
 
-  function renderAppNavigation(activeTab, modeLabel, modeClass) {
+  function renderAppNavigation(activeTab, modeLabel, modeClass, snapshot) {
     var managementTabs = tabs.filter(function (tab) {
       return managementTabIds.indexOf(tab.id) >= 0;
     });
@@ -6595,7 +6595,29 @@
       '<span class="status-pill ' + modeClass + '">' + escapeHtml(modeLabel) + "</span>",
       '<button class="icon-button" type="button" data-action="refresh" title="새로고침" aria-label="새로고침">' + (state.refreshing ? "…" : "↻") + "</button>",
       '</div>',
+      renderAppNavCommand(activeTab.id, snapshot),
       '</nav>'
+    ].join("");
+  }
+
+  function renderAppNavCommand(pageId, snapshot) {
+    var normalized = normalizeTabId(pageId || state.activeTab);
+    var tab = tabById(normalized) || activeTabMeta();
+    var profile = pageCommandProfile(normalized, snapshot || state.snapshot || {});
+    var hasMode = pageSupportsMode(normalized);
+    return [
+      '<div class="app-nav-command ' + (hasMode ? "has-mode" : "no-mode") + '" data-style-layer="unified-command" data-command-group="' + escapeHtml(profile.groupId) + '" aria-label="현재 화면 작업 요약">',
+      '<div class="app-nav-current">',
+      '<span class="app-nav-command-kicker">' + escapeHtml(profile.group + " / " + profile.layer) + '</span>',
+      '<strong>' + escapeHtml(tab.label || profile.entity) + '</strong>',
+      '<em>' + escapeHtml(profile.objective || tab.description || "") + '</em>',
+      '</div>',
+      hasMode ? '<div class="app-nav-mode">' + renderPageModeSwitch(normalized) + '</div>' : '',
+      '<div class="app-nav-flow">' + renderPageFlowSpine(profile) + '</div>',
+      '<div class="app-nav-command-metrics page-command-metrics">',
+      profile.metrics.map(renderPageCommandMetric).join(""),
+      '</div>',
+      '</div>'
     ].join("");
   }
 

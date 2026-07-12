@@ -252,6 +252,14 @@ a {
   grid-template-rows: auto minmax(0, 1fr);
 }
 
+.shell.topbar-collapsed {
+  row-gap: 0;
+}
+
+.shell-page.topbar-collapsed {
+  grid-template-rows: 0 minmax(0, 1fr);
+}
+
 .shell-page .app-nav {
   grid-row: 1 / span 2;
 }
@@ -272,6 +280,22 @@ a {
   padding: 2px 0 12px;
   border-bottom: 1px solid color-mix(in srgb, var(--line) 78%, transparent);
   min-width: 0;
+  max-height: 132px;
+  overflow: hidden;
+  transition: max-height 160ms ease, min-height 160ms ease, padding 160ms ease, opacity 140ms ease, transform 160ms ease, border-color 160ms ease;
+}
+
+.topbar-collapsed .topbar {
+  min-height: 0;
+  max-height: 0;
+  margin-top: 0;
+  margin-bottom: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  border-bottom-color: transparent;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-8px);
 }
 
 .topbar-copy {

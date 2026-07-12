@@ -11843,11 +11843,217 @@
   function renderFeedPage(snapshot) {
     return renderManagedPage("feed", snapshot, [
       '<section class="admin-grid feed-view">',
-      renderFeedSettingsPanel(),
+      renderFeedOverviewPanel(),
+      renderFeedPipelinePanel(),
+      renderFeedChannelPanel(),
       renderFeedQualityPanel(),
       renderResearchEvidencePanel(),
+      renderFeedSettingsPanel(),
       '</section>'
     ].join(""));
+  }
+
+  function feedSourceTone(enabled, ready) {
+    if (!enabled) return "hold";
+    return ready === false ? "caution" : "watch";
+  }
+
+  function feedSourceChannels() {
+    var newsArchiveEnabled = settingEnabled("newsCollectionEnabled");
+    var graphStoreMode = settingValue("ontologyGraphStoreMode") || defaultSettings.ontologyGraphStoreMode || "neo4j";
+    return [
+      {
+        label: "KIS 장중 수급",
+        enabled: settingEnabled("kisMarketSignalsEnabled"),
+        ready: configuredCount(["kisAppKey", "kisAppSecret"]) >= 2,
+        route: "시장 신호 -> 가격·수급 근거",
+        cadence: (settingValue("kisMarketSignalCacheMinutes") || defaultSettings.kisMarketSignalCacheMinutes || "3") + "분 캐시"
+      },
+      {
+        label: "뉴스 헤드라인",
+        enabled: settingEnabled("externalNewsEnabled"),
+        ready: true,
+        route: "외부 뉴스 -> 최신 근거",
+        cadence: newsProviderLabel(settingValue("externalNewsProvider") || defaultSettings.externalNewsProvider)
+      },
+      {
+        label: "뉴스 아카이브",
+        enabled: newsArchiveEnabled,
+        ready: true,
+        route: "관심·보유 종목 -> Evidence DB",
+        cadence: (settingValue("newsCollectionIntervalSeconds") || defaultSettings.newsCollectionIntervalSeconds || "60") + "초 주기"
+      },
+      {
+        label: "OpenDART 공시",
+        enabled: settingEnabled("externalDartEnabled"),
+        ready: isConfiguredSetting("opendartApiKey"),
+        route: "국내 공시 -> 이벤트 근거",
+        cadence: (settingValue("externalDartLookbackDays") || defaultSettings.externalDartLookbackDays || "14") + "일 조회"
+      },
+      {
+        label: "SEC EDGAR",
+        enabled: settingEnabled("externalSecEnabled"),
+        ready: true,
+        route: "미국 공시 -> 보조 근거",
+        cadence: (settingValue("externalSecMaxSymbols") || defaultSettings.externalSecMaxSymbols || "3") + "종목"
+      },
+      {
+        label: "FRED 거시",
+        enabled: settingEnabled("externalFredEnabled"),
+        ready: isConfiguredSetting("fredApiKey"),
+        route: "금리·유동성 -> 리스크 맥락",
+        cadence: (settingValue("externalFredSeries") || defaultSettings.externalFredSeries || "DGS10,DGS2").split(",").filter(Boolean).length + "개 지표"
+      },
+      {
+        label: "CoinGecko 크립토",
+        enabled: settingEnabled("externalCoinGeckoEnabled"),
+        ready: true,
+        route: "크립토 변동 -> 외부 위험 신호",
+        cadence: (settingValue("externalCryptoIds") || defaultSettings.externalCryptoIds || "bitcoin,ethereum").split(",").filter(Boolean).length + "개 자산"
+      },
+      {
+        label: "Alpha Vantage",
+        enabled: settingEnabled("externalAlphaEnabled"),
+        ready: isConfiguredSetting("alphaVantageApiKey"),
+        route: "미장 가격 -> 해외 보조 신호",
+        cadence: (settingValue("externalApiFetchIntervalMinutes") || defaultSettings.externalApiFetchIntervalMinutes || "30") + "분 캐시"
+      },
+      {
+        label: "그래프 추론",
+        enabled: settingEnabled("ontologyReasoningEnabled"),
+        ready: graphStoreMode !== "typedb" || settingEnabled("ontologyTypeDbEnabled"),
+        route: "근거 -> 관계 추론 -> 알림 후보",
+        cadence: (settingValue("ontologyReasoningIntervalSeconds") || defaultSettings.ontologyReasoningIntervalSeconds || "10") + "초 확인"
+      }
+    ].map(function (channel) {
+      channel.tone = feedSourceTone(channel.enabled, channel.ready);
+      return channel;
+    });
+  }
+
+  function feedPipelineStages() {
+    var evidence = currentResearchEvidence();
+    var summary = evidence.summary || {};
+    var latest = feedFreshness(summary.latestSeenAt);
+    var channels = feedSourceChannels();
+    var activeChannels = channels.filter(function (channel) { return channel.enabled; }).length;
+    var readyChannels = channels.filter(function (channel) { return channel.enabled && channel.ready !== false; }).length;
+    var graphStoreMode = settingValue("ontologyGraphStoreMode") || defaultSettings.ontologyGraphStoreMode || "neo4j";
+    var graphStoreLabel = graphStoreMode === "typedb" ? "TypeDB" : (graphStoreMode === "dual" ? "Neo4j + TypeDB" : "Neo4j");
+    return [
+      { step: "01", title: "원천 수집", tone: activeChannels ? "watch" : "hold", value: activeChannels + "/" + channels.length, detail: "사용 중인 수집 채널" },
+      { step: "02", title: "준비도 확인", tone: readyChannels === activeChannels ? "watch" : "caution", value: readyChannels + "/" + Math.max(activeChannels, 1), detail: "키·연결·무키 채널 확인" },
+      { step: "03", title: "근거 저장", tone: Number(summary.total || 0) ? latest.tone : "caution", value: Number(summary.total || 0) + "건", detail: "최근 저장 " + latest.label },
+      { step: "04", title: "관계 추론", tone: settingEnabled("ontologyReasoningEnabled") ? "watch" : "hold", value: graphStoreLabel, detail: "배치 " + (settingValue("ontologyReasoningBatchSize") || defaultSettings.ontologyReasoningBatchSize || "20") },
+      { step: "05", title: "알림 후보", tone: settingEnabled("materialityGateEnabled") ? "watch" : "hold", value: (settingValue("materialityMinimumScore") || defaultSettings.materialityMinimumScore || "65") + "점", detail: "중요도 게이트 기준" }
+    ];
+  }
+
+  function renderFeedOverviewPanel() {
+    var evidence = currentResearchEvidence();
+    var summary = evidence.summary || {};
+    var latest = feedFreshness(summary.latestSeenAt);
+    var channels = feedSourceChannels();
+    var activeChannels = channels.filter(function (channel) { return channel.enabled; }).length;
+    var warningChannels = channels.filter(function (channel) { return channel.enabled && channel.ready === false; }).length;
+    var kinds = Array.isArray(summary.byKind) ? summary.byKind : [];
+    return [
+      '<article class="panel feed-overview-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Feed Command</p>',
+      '<h2>피드 운영 대시보드</h2>',
+      '</div>',
+      '<span class="tone-chip ' + escapeHtml(warningChannels ? "caution" : "watch") + '">' + escapeHtml(warningChannels ? "확인 필요" : "운영 가능") + '</span>',
+      '</div>',
+      '<div class="feed-command-body">',
+      '<div class="feed-command-metrics">',
+      renderFeedCommandMetric("저장 근거", Number(summary.total || 0) + "건", "최근 " + latest.label, Number(summary.total || 0) ? latest.tone : "caution"),
+      renderFeedCommandMetric("수집 채널", activeChannels + "/" + channels.length, warningChannels ? warningChannels + "개 키 확인" : "준비 완료", warningChannels ? "caution" : "watch"),
+      renderFeedCommandMetric("근거 종류", kinds.length + "종", kinds.slice(0, 3).map(function (entry) { return researchEvidenceKindLabel(entry.name); }).join(" · ") || "대기", kinds.length ? "watch" : "hold"),
+      renderFeedCommandMetric("게이트", (settingValue("materialityMinimumScore") || defaultSettings.materialityMinimumScore || "65") + "점", "관계 알림 기준", settingEnabled("materialityGateEnabled") ? "watch" : "hold"),
+      '</div>',
+      '<div class="feed-flow-map">',
+      feedPipelineStages().map(renderFeedFlowNode).join(""),
+      '</div>',
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderFeedCommandMetric(label, value, detail, tone) {
+    return [
+      '<span class="feed-command-metric ' + escapeHtml(tone || "hold") + '">',
+      '<em>' + escapeHtml(label) + '</em>',
+      '<strong>' + escapeHtml(value) + '</strong>',
+      '<b>' + escapeHtml(detail || "-") + '</b>',
+      '</span>'
+    ].join("");
+  }
+
+  function renderFeedFlowNode(stage) {
+    return [
+      '<span class="feed-flow-node ' + escapeHtml(stage.tone || "hold") + '">',
+      '<b>' + escapeHtml(stage.step) + '</b>',
+      '<strong>' + escapeHtml(stage.title) + '</strong>',
+      '<em>' + escapeHtml(stage.value) + '</em>',
+      '</span>'
+    ].join("");
+  }
+
+  function renderFeedPipelinePanel() {
+    return [
+      '<article class="panel feed-pipeline-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Data Flow</p>',
+      '<h2>수집·판단 흐름</h2>',
+      '</div>',
+      '</div>',
+      '<div class="feed-pipeline-list">',
+      feedPipelineStages().map(function (stage) {
+        return [
+          '<div class="feed-pipeline-row ' + escapeHtml(stage.tone || "hold") + '">',
+          '<span>' + escapeHtml(stage.step) + '</span>',
+          '<div>',
+          '<strong>' + escapeHtml(stage.title) + '</strong>',
+          '<em>' + escapeHtml(stage.detail || "") + '</em>',
+          '</div>',
+          '<b>' + escapeHtml(stage.value || "-") + '</b>',
+          '</div>'
+        ].join("");
+      }).join(""),
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderFeedChannelPanel() {
+    return [
+      '<article class="panel feed-channel-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Source Matrix</p>',
+      '<h2>수집 채널 매트릭스</h2>',
+      '</div>',
+      '<span class="metric">' + escapeHtml(feedSourceChannels().filter(function (channel) { return channel.enabled; }).length) + '</span>',
+      '</div>',
+      '<div class="feed-channel-grid">',
+      feedSourceChannels().map(function (channel) {
+        return [
+          '<div class="feed-channel-row ' + escapeHtml(channel.tone || "hold") + '">',
+          '<div>',
+          '<span class="tone-chip ' + escapeHtml(channel.tone || "hold") + '">' + escapeHtml(channel.enabled ? (channel.ready === false ? "키 확인" : "사용") : "중지") + '</span>',
+          '<strong>' + escapeHtml(channel.label) + '</strong>',
+          '<em>' + escapeHtml(channel.route) + '</em>',
+          '</div>',
+          '<b>' + escapeHtml(channel.cadence || "-") + '</b>',
+          '</div>'
+        ].join("");
+      }).join(""),
+      '</div>',
+      '</article>'
+    ].join("");
   }
 
   function renderFeedSettingsPanel() {
@@ -12136,9 +12342,15 @@
     return {
       "news": "뉴스",
       "disclosure": "공시",
+      "filing": "공시",
       "sec-filing": "SEC",
       "market-move": "가격 변동",
-      "fundamental": "펀더멘털"
+      "market-signal": "시장 신호",
+      "financial-fact": "재무 사실",
+      "fundamental": "펀더멘털",
+      "macro": "거시",
+      "crypto": "크립토",
+      "investor-flow": "수급"
     }[String(kind || "").toLowerCase()] || kind || "근거";
   }
 

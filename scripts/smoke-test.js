@@ -1058,9 +1058,9 @@ function checkFrontendAdminRender() {
     renderForSearch("?tab=feed"),
     renderForSearch("?tab=experiments"),
     renderForSearch("?tab=modeling&strategy=evidence"),
-    renderForSearch("?tab=modeling&strategy=results"),
+    renderForSearch("?tab=modeling&strategy=charts"),
     renderForSearch("?tab=modeling&strategy=graphs"),
-    renderForSearch("?tab=modeling&strategy=registry"),
+    renderForSearch("?tab=modeling&strategy=rules"),
     renderForSearch("?tab=modeling&strategy=trace"),
     renderForSearch("?tab=ontology&ontology=graphs"),
     renderForSearch("?tab=monitoring"),
@@ -1084,9 +1084,9 @@ function checkFrontendAdminRender() {
     const feedHtml = pages[11];
     const experimentsHtml = pages[12];
     const modelingEvidenceHtml = pages[13];
-    const modelingResultsHtml = pages[14];
+    const modelingChartHtml = pages[14];
     const modelingGraphHtml = pages[15];
-    const modelingRegistryHtml = pages[16];
+    const modelingRulesHtml = pages[16];
     const modelingTraceHtml = pages[17];
     const legacyOntologyGraphHtml = pages[18];
     const monitoringHtml = pages[19];
@@ -1356,9 +1356,10 @@ function checkFrontendAdminRender() {
     assertOk(modelingHtml.indexOf("strategy-section-tabs") >= 0, "투자 분석 내부 섹션 탭이 렌더링되지 않았습니다.");
     assertOk(styles.indexOf(".strategy-section-tabs") >= 0 && styles.indexOf(".strategy-section-bar") >= 0, "투자 분석 내부 섹션 스타일이 정의되지 않았습니다.");
     assertOk(code.indexOf("renderInvestmentTabWorkspace") >= 0 && styles.indexOf(".investment-tab-workspace") >= 0, "투자 분석 탭이 짧은 워크스페이스 구조를 쓰지 않습니다.");
-    assertOk(modelingHtml.indexOf('data-strategy-section="evidence"') >= 0 && modelingHtml.indexOf('data-strategy-section="results"') >= 0 && modelingHtml.indexOf('data-strategy-section="graphs"') >= 0 && modelingHtml.indexOf('data-strategy-section="trace"') >= 0 && modelingHtml.indexOf('data-strategy-section="registry"') < 0, "투자 분석 결과 모드가 규칙·프롬프트 설정과 분리되지 않았습니다.");
-    assertOk(modelingRegistryHtml.indexOf('data-page-mode="settings"') >= 0 && modelingRegistryHtml.indexOf('data-strategy-section="registry"') >= 0, "투자 분석 설정 모드가 규칙·프롬프트 섹션을 보여주지 않습니다.");
-    assertOk(modelingHtml.indexOf('data-strategy-section="data"') < 0 && modelingHtml.indexOf('data-strategy-section="policy"') < 0 && modelingHtml.indexOf('data-strategy-section="ontology"') < 0, "이전 전략/관계 섹션 ID가 통합 탭에 남아 있습니다.");
+    assertOk(modelingHtml.indexOf('data-strategy-section="evidence"') >= 0 && modelingHtml.indexOf('data-strategy-section="charts"') >= 0 && modelingHtml.indexOf('data-strategy-section="graphs"') >= 0 && modelingHtml.indexOf('data-strategy-section="trace"') >= 0 && modelingHtml.indexOf('data-strategy-section="rules"') < 0, "투자 분석 결과 모드가 전략 룰 설정과 분리되지 않았습니다.");
+    assertOk(modelingRulesHtml.indexOf('data-page-mode="settings"') >= 0 && modelingRulesHtml.indexOf('data-strategy-section="rules"') >= 0, "투자 분석 설정 모드가 전략 룰 섹션을 보여주지 않습니다.");
+    assertOk(modelingHtml.indexOf("오늘의 판단") >= 0 && modelingHtml.indexOf("투자 근거") >= 0 && modelingHtml.indexOf("통합 차트") >= 0 && modelingHtml.indexOf("온톨로지") >= 0 && modelingHtml.indexOf("검증·리뷰") >= 0, "투자전략 탭이 새 업무 흐름 라벨을 렌더링하지 않습니다.");
+    assertOk(modelingHtml.indexOf('data-strategy-section="data"') < 0 && modelingHtml.indexOf('data-strategy-section="policy"') < 0 && modelingHtml.indexOf('data-strategy-section="ontology"') < 0 && modelingHtml.indexOf('data-strategy-section="registry"') < 0 && modelingHtml.indexOf('data-strategy-section="results"') < 0, "이전 전략/관계 섹션 ID가 통합 탭에 남아 있습니다.");
     assertOk(code.indexOf('if (requested === "ontology" || requested === "relations") return "modeling";') >= 0, "기존 관계 분석 URL을 투자 분석 탭으로 매핑하지 않습니다.");
     assertOk(code.indexOf("writeStrategySectionHistory") >= 0 && code.indexOf("strategySectionUrl") >= 0, "투자 분석 내부 탭 URL 동기화 경로가 없습니다.");
     assertOk(modelingHtml.indexOf("<h1>투자 분석</h1>") >= 0, "투자 분석 탭 제목이 상단에 렌더링되지 않았습니다.");
@@ -1368,8 +1369,8 @@ function checkFrontendAdminRender() {
     assertOk(modelingHtml.indexOf("AI 추론 입력") >= 0 && modelingHtml.indexOf("investment-ontology-ai-inference-v1") >= 0, "투자 분석 개요에 AI inference packet 계약이 보이지 않습니다.");
     assertOk(modelingHtml.indexOf("investment-evidence-panel") < 0 && modelingHtml.indexOf("투자 근거 카드") < 0, "투자 분석 개요에 근거 카드 미리보기가 중복 렌더링됩니다.");
     assertOk(modelingHtml.indexOf("HOLDS") >= 0 && modelingHtml.indexOf("WATCHES") >= 0, "보유/관심 관계 구분이 투자 분석 개요에 표시되지 않습니다.");
-    assertOk(modelingHtml.indexOf("macro-signal-panel") >= 0 && modelingHtml.indexOf("환율·금리 관계 신호") >= 0, "투자 분석 개요에 환율·금리 온톨로지 신호 패널이 없습니다.");
-    assertOk(modelingHtml.indexOf("USD/KRW 환율") >= 0 && modelingHtml.indexOf("미국 10년 국채금리") >= 0 && modelingHtml.indexOf("10Y-2Y 금리 스프레드") >= 0, "환율·금리 신호 값이 투자 분석 개요에 표시되지 않습니다.");
+    assertOk(modelingChartHtml.indexOf("macro-signal-panel") >= 0 && modelingChartHtml.indexOf("환율·금리 관계 신호") >= 0, "통합 차트 섹션에 환율·금리 온톨로지 신호 패널이 없습니다.");
+    assertOk(modelingChartHtml.indexOf("USD/KRW 환율") >= 0 && modelingChartHtml.indexOf("미국 10년 국채금리") >= 0 && modelingChartHtml.indexOf("10Y-2Y 금리 스프레드") >= 0, "환율·금리 신호 값이 통합 차트 섹션에 표시되지 않습니다.");
     assertOk(styles.indexOf(".macro-signal-grid") >= 0 && styles.indexOf(".macro-relation-row") >= 0, "환율·금리 온톨로지 신호 UI 스타일이 없습니다.");
     assertOk(modelingHtml.indexOf("strategy-process-panel") < 0 && modelingHtml.indexOf("model-guide-panel") < 0, "개요 탭에 긴 운영 가이드 패널이 섞여 있습니다.");
     assertOk(modelingHtml.indexOf("strategy-data-panel") < 0 && modelingHtml.indexOf("admin-modeling-panel") < 0 && modelingHtml.indexOf("model-preview-panel") < 0, "개요 탭에 상세 운영 섹션 패널이 섞여 있습니다.");
@@ -1377,46 +1378,49 @@ function checkFrontendAdminRender() {
     assertOk(modelingEvidenceHtml.indexOf("전략 근거") >= 0 && modelingEvidenceHtml.indexOf("관계 근거") >= 0, "근거 카드가 전략 근거와 관계 근거를 분리해서 보여주지 않습니다.");
     assertOk(modelingEvidenceHtml.indexOf("삼성전자") >= 0 && modelingEvidenceHtml.indexOf("005930 가격과") < 0, "근거 카드 본문에 종목코드가 회사명으로 치환되지 않았습니다.");
     assertOk(modelingEvidenceHtml.indexOf("체결강도") >= 0 && modelingEvidenceHtml.indexOf("모델-알림 기준") >= 0, "근거 카드 섹션에 전략 데이터 점검 항목이 없습니다.");
-    assertOk(modelingResultsHtml.indexOf("investment-tab-workspace-results") >= 0 && modelingResultsHtml.indexOf("investment-action-panel") >= 0 && modelingResultsHtml.indexOf("model-preview-panel") >= 0, "종목 판단 섹션이 액션 큐와 모델 판단을 함께 보여주지 않습니다.");
-    assertOk(modelingResultsHtml.indexOf("investment-evidence-panel") < 0, "종목 판단 섹션에 근거 카드가 중복 렌더링됩니다.");
-    assertOk(modelingResultsHtml.indexOf("실제 데이터 예시") >= 0 && modelingResultsHtml.indexOf("쉬운 해석") >= 0, "종목 판단 섹션에 기존 모델 해석이 보조 근거로 유지되지 않았습니다.");
-    assertOk(modelingGraphHtml.indexOf("TBox·ABox 관계 그래프") >= 0 && modelingGraphHtml.indexOf("전체 규칙 구조 그래프") >= 0 && modelingGraphHtml.indexOf("핵심 데이터 관계 그래프") >= 0, "관계 그래프 섹션이 통합 탭 내부에서 렌더링되지 않았습니다.");
+    assertOk(modelingHtml.indexOf("investment-action-panel") >= 0 && modelingHtml.indexOf("model-preview-panel") < 0, "오늘의 판단 섹션은 액션 큐만 짧게 보여줘야 합니다.");
+    assertOk(modelingHtml.indexOf("investment-evidence-panel") < 0, "오늘의 판단 섹션에 근거 카드가 중복 렌더링됩니다.");
+    assertOk(modelingChartHtml.indexOf("investment-tab-workspace-charts") >= 0 && modelingChartHtml.indexOf("investment-chart-panel") >= 0 && modelingChartHtml.indexOf("investment-chart-periods") >= 0, "통합 차트 섹션이 별도 워크스페이스와 기간 컨트롤로 렌더링되지 않습니다.");
+    assertOk(modelingChartHtml.indexOf('data-investment-chart-period="1d"') >= 0 && modelingChartHtml.indexOf('data-investment-chart-period="1w"') >= 0 && modelingChartHtml.indexOf('data-investment-chart-period="1m"') >= 0 && modelingChartHtml.indexOf('data-investment-chart-period="custom"') >= 0, "통합 차트 기간 컨트롤이 일/주/월/사용자 기간을 제공하지 않습니다.");
+    assertOk(modelingChartHtml.indexOf("실제 데이터") >= 0 && modelingChartHtml.indexOf("mock") >= 0 && modelingChartHtml.indexOf("API·스냅샷 출처") >= 0, "통합 차트가 실제/mock 데이터와 출처 표시 정책을 보여주지 않습니다.");
+    assertOk(modelingChartHtml.indexOf("investment-evidence-panel") < 0 && modelingChartHtml.indexOf("ontology-cytoscape") < 0, "통합 차트 섹션에 근거 카드나 온톨로지 그래프가 섞여 있습니다.");
+    assertOk(modelingGraphHtml.indexOf("<h2>온톨로지</h2>") >= 0 && modelingGraphHtml.indexOf("전체 규칙 구조 그래프") >= 0 && modelingGraphHtml.indexOf("핵심 데이터 관계 그래프") >= 0, "온톨로지 섹션이 통합 탭 내부에서 렌더링되지 않았습니다.");
     assertOk(modelingGraphHtml.indexOf("ontology-cytoscape") >= 0 && modelingGraphHtml.indexOf("규칙과 관계 해설") >= 0 && modelingGraphHtml.indexOf("RuleBox 규칙") >= 0, "관계 그래프 섹션에 Cytoscape 그래프와 텍스트 보조 패널이 없습니다.");
-    assertOk(legacyOntologyGraphHtml.indexOf("managed-page managed-page-modeling") >= 0 && legacyOntologyGraphHtml.indexOf("TBox·ABox 관계 그래프") >= 0, "기존 관계 그래프 URL이 통합 탭 그래프 섹션으로 열리지 않습니다.");
+    assertOk(legacyOntologyGraphHtml.indexOf("managed-page managed-page-modeling") >= 0 && legacyOntologyGraphHtml.indexOf("<h2>온톨로지</h2>") >= 0, "기존 관계 그래프 URL이 통합 탭 온톨로지 섹션으로 열리지 않습니다.");
     assertOk(/\.ontology-relationship-graphs\s*\{[\s\S]*grid-template-columns: 1fr;/.test(styles), "관계 그래프가 전폭 1열 구조로 정의되지 않았습니다.");
     assertOk(code.indexOf('targetContext + "|RELATES_TO"') < 0 && modelingGraphHtml.indexOf("접은 표시") < 0, "규칙 구조 그래프가 relation type을 접어서 표시합니다.");
     assertOk(code.indexOf("ontologyEntityDisplayLabel") >= 0 && code.indexOf('"의견 " + displayName') >= 0, "현재 데이터 관계 그래프 노드가 회사명 표시명을 거치지 않습니다.");
     assertOk(code.indexOf("properties.symbol || entity.label") < 0 && code.indexOf('"의견 " + symbol') < 0, "현재 데이터 관계 그래프 노드 라벨에 종목코드 우선 경로가 남아 있습니다.");
-    assertOk(modelingRegistryHtml.indexOf("investment-ai-packet-panel") >= 0 && modelingRegistryHtml.indexOf("AI 추론 입력 계약") >= 0, "규칙·프롬프트 섹션에 AI 추론 입력 계약이 없습니다.");
-    assertOk(modelingRegistryHtml.indexOf("ontology-rule-panel") >= 0 && modelingRegistryHtml.indexOf("Relation Rule Registry") >= 0, "규칙·프롬프트 섹션에 관계 규칙 레지스트리가 없습니다.");
-    assertOk(modelingRegistryHtml.indexOf('data-model-setting="ontologyRelationRules"') >= 0, "규칙·프롬프트 섹션에 관계 규칙 편집기가 없습니다.");
-    assertOk(modelingRegistryHtml.indexOf("neo4j-rulebox-panel") >= 0 && modelingRegistryHtml.indexOf("Neo4j RuleBox") >= 0, "규칙·프롬프트 섹션에 Neo4j RuleBox 관리 콘솔이 없습니다.");
-    assertOk(modelingRegistryHtml.indexOf('data-ontology-rulebox-json') >= 0 && modelingRegistryHtml.indexOf('data-action="run-rulebox"') >= 0, "Neo4j RuleBox JSON 편집기나 실행 버튼이 없습니다.");
-    assertOk(modelingRegistryHtml.indexOf("최근 버전") >= 0 && modelingRegistryHtml.indexOf("AI 관계 후보 검토") >= 0, "Neo4j RuleBox 버전/후보 검토 섹션이 없습니다.");
-    assertOk(modelingRegistryHtml.indexOf('data-ontology-rulebox-change-reason') >= 0 && modelingRegistryHtml.indexOf('data-action="append-rulebox-candidate"') >= 0, "RuleBox 변경 이유 입력이나 후보 추가 버튼이 없습니다.");
-    assertOk(modelingRegistryHtml.indexOf('data-action="propose-rulebox-candidates"') >= 0 && modelingRegistryHtml.indexOf("AI 후보 생성") >= 0, "RuleBox AI 후보 생성 버튼이 없습니다.");
-    assertOk(modelingRegistryHtml.indexOf('data-model-setting="ontologyRuleCandidateAiEnabled"') >= 0 && modelingRegistryHtml.indexOf('data-model-setting="ontologyRuleCandidateAiIntervalMinutes"') >= 0, "RuleBox AI 후보 생성 설정이 없습니다.");
-    assertOk(modelingRegistryHtml.indexOf("prompt-registry-panel") >= 0 && modelingRegistryHtml.indexOf("Prompt Registry") >= 0, "규칙·프롬프트 섹션에 프롬프트 레지스트리가 없습니다.");
-    assertOk(modelingRegistryHtml.indexOf("prompt-registry-list") >= 0 && modelingRegistryHtml.indexOf("prompt-registry-row") >= 0, "프롬프트 레지스트리 목록에 모바일 전용 행 구조가 없습니다.");
+    assertOk(modelingRulesHtml.indexOf("investment-ai-packet-panel") >= 0 && modelingRulesHtml.indexOf("AI 추론 입력 계약") >= 0, "전략 룰 섹션에 AI 추론 입력 계약이 없습니다.");
+    assertOk(modelingRulesHtml.indexOf("ontology-rule-panel") >= 0 && modelingRulesHtml.indexOf("Relation Rule Registry") >= 0, "전략 룰 섹션에 관계 규칙 레지스트리가 없습니다.");
+    assertOk(modelingRulesHtml.indexOf('data-model-setting="ontologyRelationRules"') >= 0, "전략 룰 섹션에 관계 규칙 편집기가 없습니다.");
+    assertOk(modelingRulesHtml.indexOf("neo4j-rulebox-panel") >= 0 && modelingRulesHtml.indexOf("Neo4j RuleBox") >= 0, "전략 룰 섹션에 Neo4j RuleBox 관리 콘솔이 없습니다.");
+    assertOk(modelingRulesHtml.indexOf('data-ontology-rulebox-json') >= 0 && modelingRulesHtml.indexOf('data-action="run-rulebox"') >= 0, "Neo4j RuleBox JSON 편집기나 실행 버튼이 없습니다.");
+    assertOk(modelingRulesHtml.indexOf("최근 버전") >= 0 && modelingRulesHtml.indexOf("AI 관계 후보 검토") >= 0, "Neo4j RuleBox 버전/후보 검토 섹션이 없습니다.");
+    assertOk(modelingRulesHtml.indexOf('data-ontology-rulebox-change-reason') >= 0 && modelingRulesHtml.indexOf('data-action="append-rulebox-candidate"') >= 0, "RuleBox 변경 이유 입력이나 후보 추가 버튼이 없습니다.");
+    assertOk(modelingRulesHtml.indexOf('data-action="propose-rulebox-candidates"') >= 0 && modelingRulesHtml.indexOf("AI 후보 생성") >= 0, "RuleBox AI 후보 생성 버튼이 없습니다.");
+    assertOk(modelingRulesHtml.indexOf('data-model-setting="ontologyRuleCandidateAiEnabled"') >= 0 && modelingRulesHtml.indexOf('data-model-setting="ontologyRuleCandidateAiIntervalMinutes"') >= 0, "RuleBox AI 후보 생성 설정이 없습니다.");
+    assertOk(modelingRulesHtml.indexOf("prompt-registry-panel") >= 0 && modelingRulesHtml.indexOf("Prompt Registry") >= 0, "전략 룰 섹션에 프롬프트 레지스트리가 없습니다.");
+    assertOk(modelingRulesHtml.indexOf("prompt-registry-list") >= 0 && modelingRulesHtml.indexOf("prompt-registry-row") >= 0, "프롬프트 레지스트리 목록에 모바일 전용 행 구조가 없습니다.");
     assertOk(/@media \(max-width: 860px\)[\s\S]*\.prompt-registry-row\s*\{[\s\S]*grid-template-columns: 1fr;/.test(styles), "프롬프트 레지스트리 행이 모바일에서 1열 카드로 전환되지 않습니다.");
     assertOk(/@media \(max-width: 860px\)[\s\S]*\.prompt-registry-panel \.prompt-registry-row\s*\{[\s\S]*grid-template-columns: 1fr;/.test(styles), "프롬프트 레지스트리 모바일 1열 전환 규칙의 우선순위가 충분하지 않습니다.");
-    assertOk(modelingRegistryHtml.indexOf("admin-modeling-panel") >= 0 && modelingRegistryHtml.indexOf("model-version-panel") < 0, "규칙·프롬프트 섹션은 보조 모델 정책만 유지하고 로컬 모델 버전 패널은 제거해야 합니다.");
-    assertOk(modelingRegistryHtml.indexOf('data-model-setting="notificationScoreFormula"') >= 0, "규칙·프롬프트 섹션에 알림 발송 공식 편집기가 없습니다.");
-    assertOk(modelingTraceHtml.indexOf("테이블 저장 구조") >= 0 && modelingTraceHtml.indexOf("규칙 추적") >= 0, "검증 추적 섹션에 관계형 규칙 추적이 없습니다.");
+    assertOk(modelingRulesHtml.indexOf("admin-modeling-panel") >= 0 && modelingRulesHtml.indexOf("model-version-panel") < 0, "전략 룰 섹션은 보조 모델 정책만 유지하고 로컬 모델 버전 패널은 제거해야 합니다.");
+    assertOk(modelingRulesHtml.indexOf('data-model-setting="notificationScoreFormula"') >= 0, "전략 룰 섹션에 알림 발송 공식 편집기가 없습니다.");
+    assertOk(modelingTraceHtml.indexOf("<h2>검증·리뷰</h2>") >= 0 && modelingTraceHtml.indexOf("테이블 저장 구조") >= 0 && modelingTraceHtml.indexOf("규칙 추적") >= 0, "검증·리뷰 섹션에 관계형 규칙 추적이 없습니다.");
     assertOk(modelingTraceHtml.indexOf("ontology-relation-table") >= 0 && modelingTraceHtml.indexOf("ontology-rule-list") >= 0, "검증 추적 섹션에 관계/규칙 보조 표가 렌더링되지 않았습니다.");
     assertOk(modelingTraceHtml.indexOf("macro-relation-panel") >= 0 && modelingTraceHtml.indexOf("HAS_FX_EXPOSURE") >= 0 && modelingTraceHtml.indexOf("HAS_RATE_SENSITIVITY") >= 0, "검증 추적 섹션에 환율·금리 관계 행이 표시되지 않습니다.");
     assertOk(modelingTraceHtml.indexOf("삼성전자 → 반도체") >= 0 && modelingTraceHtml.indexOf("005930 →") < 0, "검증 추적 샘플 관계가 회사명 대신 종목코드를 노출합니다.");
     assertOk(modelingTraceHtml.indexOf("회사 표시명") >= 0 && modelingTraceHtml.indexOf("종목코드 -> 종목 데이터") < 0, "검증 추적 저장 구조 설명에 종목코드 기준 문구가 남아 있습니다.");
     assertOk(code.indexOf("reasoningCards") >= 0 && code.indexOf("investmentAnalysis") >= 0 && code.indexOf("aiInferencePacket") >= 0, "프론트가 백엔드 reasoning card와 AI inference packet 계약을 소비하지 않습니다.");
-    assertOk(modelingHtml.indexOf("model-timing-panel") < 0 && modelingResultsHtml.indexOf("model-timing-panel") < 0, "Mock 시계열 기반 타이밍 패널이 아직 렌더링됩니다.");
-    assertOk(modelingResultsHtml.indexOf("model-preview-panel") >= 0, "모델 결과 탭에 현재 종목 판단 결과 패널이 렌더링되지 않았습니다.");
-    assertOk(modelingResultsHtml.indexOf("실제 데이터 예시") >= 0, "모델 결과 탭에 실제 데이터 예시 설명이 렌더링되지 않았습니다.");
-    assertOk(modelingResultsHtml.indexOf("쉬운 해석") >= 0, "모델 결과 탭에 종목별 쉬운 해석이 렌더링되지 않았습니다.");
-    assertOk(modelingResultsHtml.indexOf("판단을 움직인 항목") >= 0, "모델 결과 탭에 판단 영향 항목 블록이 렌더링되지 않았습니다.");
-    assertOk(modelingResultsHtml.indexOf("재계산 확인") >= 0, "모델 결과 탭에 재계산 확인 블록이 렌더링되지 않았습니다.");
-    assertOk(modelingResultsHtml.indexOf("같은 입력 재현됨") >= 0, "모델 결과 탭에 같은 입력 재계산 검증 결과가 렌더링되지 않았습니다.");
-    assertOk(modelingHtml.indexOf("model-timing-panel") < 0 && modelingResultsHtml.indexOf("model-timing-panel") < 0, "Mock 시계열 기반 타이밍 패널이 아직 렌더링됩니다.");
-    assertOk(modelingHtml.indexOf("웹에서 운영하는 매수·매도 타이밍 모델") < 0 && modelingResultsHtml.indexOf("웹에서 운영하는 매수·매도 타이밍 모델") < 0, "타이밍 모델 제목이 아직 렌더링됩니다.");
+    assertOk(modelingHtml.indexOf("model-timing-panel") < 0 && modelingTraceHtml.indexOf("model-timing-panel") < 0, "Mock 시계열 기반 타이밍 패널이 아직 렌더링됩니다.");
+    assertOk(modelingTraceHtml.indexOf("model-preview-panel") >= 0, "검증·리뷰 탭에 현재 종목 판단 결과 패널이 렌더링되지 않았습니다.");
+    assertOk(modelingTraceHtml.indexOf("실제 데이터 예시") >= 0, "검증·리뷰 탭에 실제 데이터 예시 설명이 렌더링되지 않았습니다.");
+    assertOk(modelingTraceHtml.indexOf("쉬운 해석") >= 0, "검증·리뷰 탭에 종목별 쉬운 해석이 렌더링되지 않았습니다.");
+    assertOk(modelingTraceHtml.indexOf("판단을 움직인 항목") >= 0, "검증·리뷰 탭에 판단 영향 항목 블록이 렌더링되지 않았습니다.");
+    assertOk(modelingTraceHtml.indexOf("재계산 확인") >= 0, "검증·리뷰 탭에 재계산 확인 블록이 렌더링되지 않았습니다.");
+    assertOk(modelingTraceHtml.indexOf("같은 입력 재현됨") >= 0, "검증·리뷰 탭에 같은 입력 재계산 검증 결과가 렌더링되지 않았습니다.");
+    assertOk(modelingHtml.indexOf("model-timing-panel") < 0 && modelingTraceHtml.indexOf("model-timing-panel") < 0, "Mock 시계열 기반 타이밍 패널이 아직 렌더링됩니다.");
+    assertOk(modelingHtml.indexOf("웹에서 운영하는 매수·매도 타이밍 모델") < 0 && modelingTraceHtml.indexOf("웹에서 운영하는 매수·매도 타이밍 모델") < 0, "타이밍 모델 제목이 아직 렌더링됩니다.");
     assertOk(monitoringHtml.indexOf("managed-page-notifications") >= 0 && monitoringHtml.indexOf("<h1>알림</h1>") >= 0, "기존 모니터링 URL이 알림 탭으로 매핑되지 않습니다.");
     assertOk(monitoringHtml.indexOf("notifications-view") >= 0, "알림 후보 섹션에 통합 화면 클래스가 없습니다.");
     assertOk(code.indexOf('if (requested === "monitoring") return "notifications";') >= 0, "기존 모니터링 URL 호환 매핑이 없습니다.");

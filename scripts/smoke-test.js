@@ -222,9 +222,12 @@ function checkFrontendAdminRender() {
   assertOk(/\.monitor-primary-state,[\s\S]*\.monitor-runtime-row,[\s\S]*\.monitor-alert-summary,[\s\S]*\.monitor-ledger-cell,[\s\S]*\.monitoring-detail-metric,[\s\S]*\{[\s\S]*padding: var\(--ds-row-pad-y\) var\(--ds-row-pad-x\);/.test(mobileSpacingAuditLayer), "모바일 모니터링 내부 카드 padding 보정이 없습니다.");
   assertOk(/\.admin-monitoring-panel \.monitor-primary-state\s*\{[\s\S]*min-height: 132px;[\s\S]*padding: var\(--ds-panel-pad-y\) var\(--ds-panel-pad-x\);/.test(mobileSpacingAuditLayer), "모바일 대표 모니터링 상태 카드의 구조적 여백 보정이 없습니다.");
   assertOk(styles.indexOf("@media (max-width: 1180px) and (min-width: 981px)") >= 0 && styles.indexOf("@media (max-width: 980px) and (min-width: 861px)") >= 0, "PC/태블릿 레이아웃 분기 규칙이 없습니다.");
-  assertOk(styles.indexOf("--ds-shell-width: 1720px") >= 0 && styles.indexOf("--ds-content-width: 1880px") >= 0 && styles.indexOf("--ds-top-nav-height: 54px") >= 0, "PC 중심 상단 탭형 금융 콘솔 레이아웃 토큰이 없습니다.");
+  assertOk(styles.indexOf("--ds-shell-width: 1720px") >= 0 && styles.indexOf("--ds-content-width: 1880px") >= 0 && styles.indexOf("--ds-top-nav-height: 104px") >= 0, "PC 중심 상단 통합 금융 콘솔 레이아웃 토큰이 없습니다.");
   assertOk(styles.indexOf("Professional finance top navigation shell") >= 0 && styles.indexOf("grid-template-columns: minmax(0, 1fr)") >= 0, "PC shell이 단일 컬럼 상단 탭형 작업 영역으로 전환되지 않습니다.");
   assertOk(/Professional finance top navigation shell[\s\S]*\.app-nav[\s\S]*grid-template-columns: minmax\(180px, 0\.17fr\) minmax\(0, 1fr\) minmax\(108px, auto\);/.test(styles), "PC 상단 금융 탭 네비게이션 3구획 구조가 없습니다.");
+  assertOk(styles.indexOf(".app-nav-command") >= 0 && styles.indexOf(".app-nav-flow") >= 0 && styles.indexOf(".app-nav-mode") >= 0, "PC 상단 통합 command rail 스타일 정의가 없습니다.");
+  assertOk(code.indexOf("renderAppNavCommand") >= 0 && code.indexOf('data-style-layer="unified-command"') >= 0, "PC 상단 네비게이션이 현재 화면 command rail을 함께 렌더링하지 않습니다.");
+  assertOk(/Professional finance top navigation shell[\s\S]*\.console-shell \.topbar,[\s\S]*\.console-shell \.managed-page > \.page-command-strip[\s\S]*\{[\s\S]*display: none;/.test(styles), "PC에서 topbar와 본문 command strip이 상단 통합 rail로 합쳐지지 않았습니다.");
   assertOk(/Professional finance top navigation shell[\s\S]*\.app-nav-tab,[\s\S]*\.app-nav-menu-item[\s\S]*min-height: var\(--ds-top-nav-tab-height\);/.test(styles), "PC 상단 탭이 낮은 한 줄 금융 탭 높이를 쓰지 않습니다.");
   assertOk(/Professional finance top navigation shell[\s\S]*\.nav-tab-description\s*\{[\s\S]*display: none;/.test(styles), "PC 상단 탭이 설명까지 노출해 여러 줄로 늘어날 수 있습니다.");
   assertOk(styles.indexOf("grid-template-columns: repeat(12, minmax(0, 1fr))") >= 0, "PC 본문 12컬럼 그리드가 없습니다.");
@@ -1161,6 +1164,7 @@ function checkFrontendAdminRender() {
       assertOk(html.indexOf('data-web-style="orbit-alpha-console-v2"') >= 0, "탭이 웹 스타일 계약 ID를 렌더링하지 않습니다: " + tabId);
       assertOk(html.indexOf('data-web-style-version="20260712"') >= 0, "탭이 웹 스타일 계약 버전을 렌더링하지 않습니다: " + tabId);
       assertOk(html.indexOf("web-style-shell") >= 0 && html.indexOf("web-style-nav") >= 0 && html.indexOf("web-style-topbar") >= 0, "탭의 콘솔 셸/네비/topbar 스타일 영역이 없습니다: " + tabId);
+      assertOk(html.indexOf("app-nav-command") >= 0 && html.indexOf('data-style-layer="unified-command"') >= 0, "탭의 PC 상단 통합 command rail이 렌더링되지 않습니다: " + tabId);
       if (hasDeskbar) {
         assertOk(html.indexOf("web-style-deskbar") >= 0 && html.indexOf('data-style-rail="full"') >= 0, "홈 탭의 full deskbar 스타일 rail이 없습니다.");
       } else {
@@ -1218,8 +1222,8 @@ function checkFrontendAdminRender() {
     assertOk(overviewHtml.indexOf("app-nav-group") >= 0 && overviewHtml.indexOf("관제 홈") >= 0 && overviewHtml.indexOf("데이터 관리") >= 0 && overviewHtml.indexOf("판단 운영") >= 0 && overviewHtml.indexOf("운영 관리") >= 0, "PC 상단 네비게이션이 한국어 업무 그룹 순서로 구조화되지 않았습니다.");
     assertOk(overviewHtml.indexOf("Market Desk") < 0 && overviewHtml.indexOf("Decision Stack") < 0 && overviewHtml.indexOf("Control Plane") < 0, "PC 상단 네비게이션에 이전 영어 그룹명이 남아 있습니다.");
     assertOk(overviewHtml.indexOf('data-nav-group="market"') >= 0 && overviewHtml.indexOf('data-nav-group="decision"') >= 0 && overviewHtml.indexOf('data-nav-group="control"') >= 0, "탭 버튼이 업무 그룹 메타데이터를 렌더링하지 않습니다.");
-    assertOk(overviewHtml.indexOf("포트폴리오 스냅샷") >= 0 && notificationHtml.indexOf("알림 판단 기록") >= 0 && modelingHtml.indexOf("투자 의견") >= 0, "주요 화면 command strip이 핵심 엔티티를 렌더링하지 않습니다.");
-    assertOk(styles.indexOf(".app-nav-group") >= 0 && styles.indexOf(".page-command-context") >= 0, "업무 그룹 네비게이션과 command context 스타일이 없습니다.");
+    assertOk(overviewHtml.indexOf("포트폴리오 스냅샷") >= 0 && notificationHtml.indexOf("알림 판단 기록") >= 0 && modelingHtml.indexOf("투자 의견") >= 0, "주요 화면 command rail이 핵심 엔티티 정보를 렌더링하지 않습니다.");
+    assertOk(styles.indexOf(".app-nav-group") >= 0 && styles.indexOf(".app-nav-command") >= 0 && styles.indexOf(".page-command-context") >= 0, "업무 그룹 네비게이션과 통합 command context 스타일이 없습니다.");
     assertOk(styles.indexOf("Focused work-tab header layer") >= 0 && styles.indexOf(".page-command-strip-compact") >= 0, "업무 탭 상단 compact command strip 스타일이 없습니다.");
     assertOk(styles.indexOf(".page-flow-node + .page-flow-node::before") >= 0, "업무 탭 데이터 흐름 spine 연결 표시가 없습니다.");
     assertOk(overviewHtml.indexOf("shell-home") >= 0, "홈 탭 shell이 홈 전용 배치를 사용하지 않습니다.");
@@ -1235,7 +1239,7 @@ function checkFrontendAdminRender() {
       ["운영 설정", settingsHtml]
     ].forEach(function (entry) {
       assertOk(entry[1].indexOf("deskbar deskbar-compact") < 0 && entry[1].indexOf("web-style-deskbar") < 0, entry[0] + " 탭에 업무 흐름을 밀어내는 deskbar가 남아 있습니다.");
-      assertOk(entry[1].indexOf("page-command-strip-compact") >= 0, entry[0] + " 탭이 얇은 command strip을 사용하지 않습니다.");
+      assertOk(entry[1].indexOf("page-command-strip-compact") >= 0, entry[0] + " 탭이 모바일/시맨틱 command strip 계약을 유지하지 않습니다.");
       assertOk(entry[1].indexOf("page-flow-spine") >= 0, entry[0] + " 탭이 전체 데이터 흐름 spine을 사용하지 않습니다.");
       assertOk(entry[1].indexOf("deskbar deskbar-full") < 0, entry[0] + " 탭에 홈 전용 full deskbar가 렌더링됩니다.");
       assertOk(entry[1].indexOf("shell-page") >= 0, entry[0] + " 탭 shell이 본문 우선 배치를 사용하지 않습니다.");
@@ -1250,7 +1254,7 @@ function checkFrontendAdminRender() {
     assertOk(code.indexOf("tabScrollPositions") >= 0 && code.indexOf("restoreRenderedPageScrollPosition") >= 0 && code.indexOf("rememberRenderedPageScrollPosition") >= 0, "탭별 본문 스크롤 복원 로직이 없습니다.");
     assertOk(overviewHtml.indexOf('data-scroll-key="overview"') >= 0, "탭 본문에 스크롤 관리 키가 렌더링되지 않습니다.");
     assertOk(designSystemDoc.indexOf("각 탭은 독립된 페이지 스크롤 위치") >= 0 && designSystemDoc.indexOf("기본은 window/page 스크롤") >= 0, "디자인 시스템 문서에 탭별 페이지 스크롤 정책이 없습니다.");
-    assertOk(designSystemDoc.indexOf("업무 탭에서는 상단 상태 카드 묶음을 렌더링하지 않는다") >= 0 && designSystemDoc.indexOf("page-command-strip-compact") >= 0 && designSystemDoc.indexOf("page-flow-spine") >= 0, "디자인 시스템 문서에 업무 탭 상단 축소/흐름 계약이 없습니다.");
+    assertOk(designSystemDoc.indexOf("업무 탭에서는 상단 상태 카드 묶음을 렌더링하지 않는다") >= 0 && designSystemDoc.indexOf("app-nav-command") >= 0 && designSystemDoc.indexOf("page-flow-spine") >= 0, "디자인 시스템 문서에 PC 상단 통합 command rail/흐름 계약이 없습니다.");
     assertOk(code.indexOf("syncTopbarScrollState") >= 0 && code.indexOf("topbar-collapsed") >= 0, "상단 제목 영역을 스크롤 상태에 따라 접는 로직이 없습니다.");
     assertOk(styles.indexOf(".shell-page.topbar-collapsed") >= 0 && styles.indexOf(".topbar-collapsed .topbar") >= 0, "상단 제목 영역 접힘 레이아웃 스타일이 없습니다.");
     assertOk(

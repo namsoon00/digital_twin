@@ -6603,7 +6603,9 @@
   function renderAppNavCommand(pageId, snapshot) {
     var normalized = normalizeTabId(pageId || state.activeTab);
     var tab = tabById(normalized) || activeTabMeta();
-    var profile = pageCommandProfile(normalized, snapshot || state.snapshot || {});
+    var activeSnapshot = snapshot || state.snapshot || {};
+    var profile = pageCommandProfile(normalized, activeSnapshot);
+    var routine = pageRoutineProfile(normalized, activeSnapshot);
     var hasMode = pageSupportsMode(normalized);
     return [
       '<div class="app-nav-command ' + (hasMode ? "has-mode" : "no-mode") + '" data-style-layer="unified-command" data-command-group="' + escapeHtml(profile.groupId) + '" aria-label="현재 화면 작업 요약">',
@@ -6616,6 +6618,11 @@
       '<div class="app-nav-flow">' + renderPageFlowSpine(profile) + '</div>',
       '<div class="app-nav-command-metrics page-command-metrics">',
       profile.metrics.map(renderPageCommandMetric).join(""),
+      '</div>',
+      '<div class="app-nav-routine ' + escapeHtml(routine.tone || "hold") + '">',
+      '<span><em>현재 상태</em><strong>' + escapeHtml(routine.current || "-") + '</strong></span>',
+      '<span class="app-nav-routine-reason"><em>왜 봐야 하나</em><strong>' + escapeHtml(routine.reason || "-") + '</strong></span>',
+      '<span class="app-nav-routine-action-cell"><em>다음 행동</em><a class="text-button primary app-nav-routine-action" href="' + escapeHtml(routine.href || "?tab=" + normalized) + '">' + escapeHtml(routine.action || "상세 보기") + '</a></span>',
       '</div>',
       '</div>'
     ].join("");

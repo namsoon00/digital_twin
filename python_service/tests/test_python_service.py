@@ -10616,6 +10616,7 @@ class PythonServiceTests(unittest.TestCase):
     def test_application_runner_uses_injected_ports(self):
         account = AccountConfig("main", "메인", "toss", "https://example.test", "", "", "", ["AAPL"])
         sent = []
+        recorded = []
 
         def snapshot_builder(_account):
             position = normalize_position({"symbol": "AAPL", "name": "Apple", "marketValue": 1000, "profitLossRate": 15, "sellableQuantity": 1})
@@ -10626,6 +10627,11 @@ class PythonServiceTests(unittest.TestCase):
             sent.extend(events)
             return SimpleNamespace(delivered=True)
 
+        class FakeProjectionRecorder:
+            def record_snapshot(self, snapshot):
+                recorded.append(snapshot.account_id)
+                snapshot.metadata.setdefault("ontology", {})["projection"] = {"saved": True, "status": "ok", "graphStore": "typedb"}
+
         event_bus = EventBus()
         events = ApplicationMonitorRunner(
             [account],
@@ -10634,41 +10640,18 @@ class PythonServiceTests(unittest.TestCase):
             snapshot_builder=snapshot_builder,
             event_sender=sender,
             event_publisher=event_bus,
+            ontology_projection_recorder=FakeProjectionRecorder(),
         ).run_once(dry_run=True, force=True)
 
         self.assertTrue(events)
         self.assertEqual(events, sent)
+        self.assertEqual(["main"], recorded)
         self.assertEqual(
             [MONITORING_SNAPSHOT_COLLECTED, MONITORING_ALERTS_DETECTED, MONITORING_CYCLE_COMPLETED],
             [event.name for event in event_bus.published],
         )
         self.assertEqual(1, event_bus.published[-1].payload["snapshotCount"])
         self.assertEqual(len(events), event_bus.published[-1].payload["alertCount"])
-
-    def test_application_runner_records_ontology_projection_during_dry_run(self):
-        account = AccountConfig("main", "메인", "toss", "https://example.test", "", "", "", ["AAPL"])
-        recorded = []
-
-        def snapshot_builder(_account):
-            position = normalize_position({"symbol": "AAPL", "name": "Apple", "marketValue": 1000, "profitLossRate": 15, "sellableQuantity": 1})
-            portfolio = portfolio_summary([position])
-            return AccountSnapshot("main", "메인", "toss", "live", "ok", utc_now_iso(), portfolio, [position], decisions_for_positions([position], portfolio))
-
-        class FakeProjectionRecorder:
-            def record_snapshot(self, snapshot):
-                recorded.append(snapshot.account_id)
-                snapshot.metadata.setdefault("ontology", {})["projection"] = {"saved": True, "status": "ok", "graphStore": "typedb"}
-
-        ApplicationMonitorRunner(
-            [account],
-            store=MonitorStore(),
-            monitor=RealtimeMonitor(),
-            snapshot_builder=snapshot_builder,
-            event_sender=lambda events, dry_run=False, accounts=None: SimpleNamespace(delivered=False),
-            ontology_projection_recorder=FakeProjectionRecorder(),
-        ).run_once(dry_run=True, force=True)
-
-        self.assertEqual(["main"], recorded)
 
     def test_event_bus_dispatches_named_and_wildcard_handlers(self):
         registry = AccountRegistry()

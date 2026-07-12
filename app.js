@@ -78,8 +78,8 @@
     feed: {
       layer: "Evidence Pipeline",
       entity: "Research Evidence",
-      objective: "뉴스, 공시, 시장 데이터를 근거 저장소로 수집하고 품질을 점검합니다.",
-      workflow: ["소스 설정", "수집 품질", "근거 저장"]
+      objective: "뉴스, 공시, 시장 데이터를 주가 영향 관점으로 요약하고 근거 저장소 품질을 점검합니다.",
+      workflow: ["영향 판단", "근거 확인", "수집 설정"]
     },
     system: {
       layer: "Operating Manual",
@@ -139,9 +139,13 @@
     modeling: {
       results: ["overview", "evidence", "charts", "graphs", "trace"],
       settings: ["rules"]
+    },
+    feed: {
+      results: ["operations", "evidence", "sources"],
+      settings: ["settings"]
     }
   };
-  var pageModeEnabledTabs = ["accounts", "notifications", "modeling"];
+  var pageModeEnabledTabs = ["accounts", "notifications", "modeling", "feed"];
 
   function activeTabMeta() {
     return tabs.filter(function (tab) { return tab.id === state.activeTab; })[0] || tabs[0];
@@ -334,8 +338,8 @@
   var topbarCollapsed = false;
   var topbarScrollTicking = false;
   var feedSections = [
-    { id: "operations", label: "관제", description: "수집 상태" },
-    { id: "evidence", label: "근거 DB", description: "저장 근거" },
+    { id: "operations", label: "영향 인박스", description: "주가 영향" },
+    { id: "evidence", label: "근거 DB", description: "본문 요약" },
     { id: "sources", label: "수집원", description: "채널 상태" },
     { id: "settings", label: "피드 설정", description: "수집 정책" }
   ];
@@ -892,6 +896,7 @@
     if (normalized === "accounts") return sectionModeForPage("accounts", initialAccountSection());
     if (normalized === "notifications") return sectionModeForPage("notifications", initialNotificationSection());
     if (normalized === "modeling") return sectionModeForPage("modeling", initialStrategySection());
+    if (normalized === "feed") return sectionModeForPage("feed", initialFeedSection());
     if (normalized === "settings") return "settings";
     return "results";
   }
@@ -907,7 +912,7 @@
       notifications: tab === "notifications" ? mode : "results",
       modeling: tab === "modeling" ? mode : "results",
       experiments: "results",
-      feed: "results",
+      feed: tab === "feed" ? mode : "results",
       system: "results",
       settings: "settings"
     };
@@ -955,7 +960,7 @@
       state.notificationTemplateEditorOpen = false;
     }
     if (normalized === "modeling" && firstSection) state.activeStrategySection = firstSection;
-    if (normalized === "feed") state.activeFeedSection = normalizeFeedSection(mode === "settings" ? "settings" : state.activeFeedSection);
+    if (normalized === "feed" && firstSection) state.activeFeedSection = normalizeFeedSection(firstSection);
   }
 
   function normalizeTabId(value) {
@@ -1150,6 +1155,9 @@
     params.delete("strategy");
     params.delete("ontology");
     params.delete("mode");
+    if (normalized === "settings") {
+      params.set("mode", "settings");
+    }
     if (normalized === "operations") {
       params.delete("feed");
     } else {
@@ -13387,7 +13395,7 @@
   }
 
   function renderFeedPage(snapshot) {
-    var section = normalizeFeedSection(state.activeFeedSection);
+    var section = activeSectionForPageMode("feed", feedSections, normalizeFeedSection(state.activeFeedSection));
     state.activeFeedSection = section;
     var body = [
       '<section class="admin-grid feed-view feed-view-' + escapeHtml(section) + '">',
@@ -13401,11 +13409,12 @@
   }
 
   function renderFeedSectionBar() {
-    var activeId = normalizeFeedSection(state.activeFeedSection);
+    var visibleSections = modeSectionsForPage("feed", feedSections);
+    var activeId = activeSectionForPageMode("feed", feedSections, state.activeFeedSection);
     return [
-      '<div class="feed-section-bar" data-feed-active-section="' + escapeHtml(activeId) + '">',
+      '<div class="feed-section-bar" data-section-mode="' + escapeHtml(activePageMode("feed")) + '" data-feed-active-section="' + escapeHtml(activeId) + '">',
       '<div class="feed-section-tabs" role="tablist" aria-label="피드 섹션">',
-      feedSections.map(function (item) {
+      visibleSections.map(function (item) {
         var active = activeId === item.id;
         return [
           '<button type="button" role="tab" class="' + (active ? "active" : "") + '" data-feed-section="' + escapeHtml(item.id) + '"' + (active ? ' aria-selected="true"' : ' aria-selected="false"') + '>',
@@ -13417,9 +13426,9 @@
       '</div>',
       '<div class="feed-section-actions">',
       '<button class="text-button" data-action="refresh-research-evidence">' + (state.researchEvidenceLoading ? "조회 중" : "근거 새로고침") + '</button>',
-      activeId === "settings"
+      activePageMode("feed") === "settings"
         ? '<button class="' + settingsSaveButtonClass() + '" data-action="save-settings"' + settingsSaveDisabledAttr() + '>' + settingsSaveButtonLabel() + '</button>'
-        : '<button class="text-button" data-feed-section="settings">수집 설정</button>',
+        : '<button class="text-button" data-page-mode-page="feed" data-page-mode="settings">수집 설정</button>',
       '</div>',
       '</div>'
     ].join("");
@@ -13433,6 +13442,7 @@
     if (active === "evidence") {
       return [
         '<div class="feed-evidence-workspace">',
+        renderFeedImpactInboxPanel(snapshot, { compact: true }),
         renderResearchEvidencePanel(),
         renderFeedQualityPanel(),
         '</div>'
@@ -13450,10 +13460,11 @@
     return [
       '<div class="feed-workbench feed-operations-workbench">',
       '<div class="feed-primary-column">',
+      renderFeedImpactInboxPanel(snapshot),
       renderFeedOverviewPanel(),
-      renderFeedPipelinePanel(),
       '</div>',
       '<aside class="feed-side-column">',
+      renderFeedPipelinePanel(),
       renderFeedQualityPanel(),
       renderFeedChannelPanel(),
       '</aside>',
@@ -13970,6 +13981,143 @@
     }[String(polarity || "").toLowerCase()] || polarity || "맥락";
   }
 
+  function researchEvidenceNormalizedImpactScore(item) {
+    var value = item && item.impactScore != null ? item.impactScore : (item && item.materialityScore != null ? item.materialityScore : "");
+    var score = Number(value);
+    if (!isFinite(score)) return null;
+    if (Math.abs(score) <= 10) score *= 10;
+    return Math.round(score);
+  }
+
+  function researchEvidenceTextCorpus(item) {
+    item = item || {};
+    var payload = item.payload && typeof item.payload === "object" ? item.payload : {};
+    return [
+      item.title,
+      item.summary,
+      item.description,
+      item.body,
+      item.content,
+      item.text,
+      payload.title,
+      payload.summary,
+      payload.description,
+      payload.body,
+      payload.content,
+      payload.text
+    ].filter(Boolean).join(" ").toLowerCase();
+  }
+
+  function researchEvidenceKoreanSummary(item) {
+    item = item || {};
+    var payload = item.payload && typeof item.payload === "object" ? item.payload : {};
+    return item.summaryKo || item.bodySummary || item.summary || item.description
+      || payload.summaryKo || payload.bodySummary || payload.summary || payload.description
+      || item.title || payload.title || "본문 요약이 아직 저장되지 않았습니다.";
+  }
+
+  function researchEvidenceImpactMeta(item) {
+    var polarity = String((item || {}).polarity || (item || {}).sentiment || (item || {}).direction || "").toLowerCase();
+    var score = researchEvidenceNormalizedImpactScore(item || {});
+    var corpus = researchEvidenceTextCorpus(item || {});
+    var positive = /호재|개선|상향|수주|계약|성장|흑자|회복|증가|강세|기대|beat|upgrade|growth|record|demand/.test(corpus);
+    var negative = /악재|부진|하향|소송|규제|손실|적자|감소|약세|리콜|제재|miss|downgrade|lawsuit|weak|recall/.test(corpus);
+    var tone = "hold";
+    if (["risk", "negative", "bearish", "downside"].indexOf(polarity) >= 0 || negative || (score != null && score <= -30)) {
+      tone = "danger";
+    } else if (["support", "positive", "bullish", "upside"].indexOf(polarity) >= 0 || positive || (score != null && score >= 65)) {
+      tone = "watch";
+    } else if (score != null && score >= 45) {
+      tone = "caution";
+    }
+    var label = tone === "watch" ? "호재" : (tone === "danger" ? "악재" : "중립");
+    var summary = tone === "watch"
+      ? "주가에는 긍정적인 기사입니다. 실적, 업황, 수요, 계약, 정책 기대 같은 점수 상승 요인으로 볼 수 있습니다."
+      : (tone === "danger"
+        ? "주가에는 부정적인 기사입니다. 실적 둔화, 비용, 규제, 수요 약화 같은 리스크 점검 요인으로 볼 수 있습니다."
+        : "주가 영향은 아직 중립입니다. 단독 기사만으로 방향을 정하기보다 시세와 수급 변화가 같이 올라오는지 확인해야 합니다.");
+    return {
+      tone: tone,
+      label: label,
+      score: score,
+      scoreLabel: score == null ? "-" : (score + "점"),
+      summary: summary
+    };
+  }
+
+  function renderFeedImpactInboxPanel(snapshot, options) {
+    options = options || {};
+    var evidence = currentResearchEvidence();
+    var items = Array.isArray(evidence.items) ? evidence.items.slice(0, options.compact ? 4 : 6) : [];
+    var metas = items.map(researchEvidenceImpactMeta);
+    var good = metas.filter(function (item) { return item.tone === "watch"; }).length;
+    var bad = metas.filter(function (item) { return item.tone === "danger"; }).length;
+    var neutral = Math.max(0, items.length - good - bad);
+    return [
+      '<article class="panel feed-impact-inbox-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Impact Inbox</p>',
+      '<h2>투자 영향 인박스</h2>',
+      '<span>뉴스·공시 본문 요약을 먼저 읽고 종목별 주가 영향 방향을 구분합니다.</span>',
+      '</div>',
+      '<div class="feed-impact-metrics" aria-label="주가 영향 요약">',
+      renderFeedImpactMetric("호재", good, "watch"),
+      renderFeedImpactMetric("악재", bad, "danger"),
+      renderFeedImpactMetric("중립", neutral, "hold"),
+      '</div>',
+      '</div>',
+      items.length ? '<div class="feed-impact-grid">' + items.map(renderFeedImpactCard).join("") + '</div>' : '<p class="subtle feed-impact-empty">저장된 기사 본문 요약이 아직 없습니다. 피드 설정에서 뉴스 아카이브를 켜거나 근거 새로고침을 실행하면 이곳에 주가 영향 요약이 표시됩니다.</p>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderFeedImpactMetric(label, value, tone) {
+    return [
+      '<span class="feed-impact-metric ' + escapeHtml(tone || "hold") + '">',
+      '<em>' + escapeHtml(label) + '</em>',
+      '<strong>' + escapeHtml(value) + '</strong>',
+      '</span>'
+    ].join("");
+  }
+
+  function renderFeedImpactCard(item) {
+    item = item || {};
+    var symbol = String(item.symbol || "").toUpperCase();
+    var displayName = stockDisplayName(symbol, item.payload || item);
+    var time = item.publishedAt || item.observedAt || "";
+    var impact = researchEvidenceImpactMeta(item);
+    var summary = researchEvidenceKoreanSummary(item);
+    var confidence = item.confidence == null ? "-" : (Math.round(Number(item.confidence || 0) * 100) + "%");
+    return [
+      '<section class="feed-impact-card ' + escapeHtml(impact.tone) + '">',
+      '<div class="feed-impact-card-head">',
+      '<span class="tone-chip ' + escapeHtml(impact.tone) + '">' + escapeHtml(impact.label) + '</span>',
+      '<div>',
+      '<strong>' + escapeHtml(displayName || symbol || "관련 종목") + '</strong>',
+      symbol && displayName !== symbol ? '<em>' + escapeHtml(symbol) + '</em>' : '',
+      '</div>',
+      '<b>' + escapeHtml(impact.scoreLabel) + '</b>',
+      '</div>',
+      '<div class="feed-impact-body">',
+      '<h3>주가 영향: ' + escapeHtml(impact.summary) + '</h3>',
+      '<p><strong>본문 요약</strong> ' + escapeHtml(summary) + '</p>',
+      '<div class="feed-impact-tags">',
+      '<span>근거 ' + escapeHtml(researchEvidenceKindLabel(item.kind)) + '</span>',
+      '<span>방향 ' + escapeHtml(researchEvidencePolarityLabel(item.polarity)) + '</span>',
+      '<span>신뢰 ' + escapeHtml(confidence) + '</span>',
+      '</div>',
+      '</div>',
+      '<footer class="feed-impact-article">',
+      '<span>기사</span>',
+      '<strong>' + escapeHtml(item.title || "제목 없음") + '</strong>',
+      '<em>' + escapeHtml([item.source || "-", formatFeedTime(time) || "-"].join(" · ")) + '</em>',
+      item.url ? '<a class="open-link" href="' + escapeHtml(item.url) + '" target="_blank" rel="noreferrer" title="원문 열기">↗</a>' : '',
+      '</footer>',
+      '</section>'
+    ].join("");
+  }
+
   function renderResearchEvidencePanel() {
     var evidence = currentResearchEvidence();
     var items = Array.isArray(evidence.items) ? evidence.items : [];
@@ -14036,22 +14184,28 @@
     var displayName = stockDisplayName(symbol, item.payload || item);
     var time = item.publishedAt || item.observedAt || "";
     var deleting = state.researchEvidenceDeleting === item.evidenceId;
+    var impact = researchEvidenceImpactMeta(item);
+    var summary = researchEvidenceKoreanSummary(item);
     return [
-      '<div class="research-evidence-item">',
+      '<div class="research-evidence-item ' + escapeHtml(impact.tone) + '">',
       '<div class="research-evidence-main">',
       '<div class="research-evidence-meta">',
+      '<span class="tone-chip ' + escapeHtml(impact.tone) + '">' + escapeHtml(impact.label) + '</span>',
       '<span>' + escapeHtml(displayName) + (symbol && displayName !== symbol ? ' <em>' + escapeHtml(symbol) + '</em>' : '') + '</span>',
       '<span>' + escapeHtml(researchEvidenceKindLabel(item.kind)) + '</span>',
-      '<span>' + escapeHtml(item.source || "-") + '</span>',
-      '<span>' + escapeHtml(formatFeedTime(time) || "-") + '</span>',
       '</div>',
-      '<h3>' + escapeHtml(item.title || "제목 없음") + '</h3>',
-      '<p>' + escapeHtml(item.summary || "요약 없음") + '</p>',
+      '<h3>주가 영향: ' + escapeHtml(impact.summary) + '</h3>',
+      '<p><strong>본문 요약</strong> ' + escapeHtml(summary) + '</p>',
       '<div class="research-evidence-metrics">',
       '<span>방향 <strong>' + escapeHtml(researchEvidencePolarityLabel(item.polarity)) + '</strong></span>',
-      '<span>영향 <strong>' + escapeHtml(item.impactScore == null ? "-" : item.impactScore) + '</strong></span>',
+      '<span>영향 <strong>' + escapeHtml(impact.scoreLabel) + '</strong></span>',
       '<span>신뢰 <strong>' + escapeHtml(Math.round(Number(item.confidence || 0) * 100)) + '%</strong></span>',
       '</div>',
+      '<footer class="research-evidence-article">',
+      '<span>기사</span>',
+      '<strong>' + escapeHtml(item.title || "제목 없음") + '</strong>',
+      '<em>' + escapeHtml([item.source || "-", formatFeedTime(time) || "-"].join(" · ")) + '</em>',
+      '</footer>',
       '</div>',
       '<div class="research-evidence-actions">',
       item.url ? '<a class="open-link" href="' + escapeHtml(item.url) + '" target="_blank" rel="noreferrer" title="원문 열기">↗</a>' : '<span class="open-link muted">-</span>',
@@ -14234,11 +14388,69 @@
     return renderManagedPage("settings", state.snapshot || {}, [
       '<section class="admin-grid settings-view">',
       renderSettingsOverviewPanel(),
+      renderSettingsResponsibilityPanel(),
       renderSettingsEnvironmentPanel(),
       renderSettingsDeliverySettingsPanel(),
       renderSettingsExternalDataPanel(),
       '</section>'
     ].join(""));
+  }
+
+  function renderSettingsResponsibilityPanel() {
+    var rows = [
+      {
+        tab: "계정",
+        result: "계정 상태, Toss 연결, 자산 검증, 데이터 이력",
+        setting: "계정 식별값, API secret, 계좌 seq, 알림 채널",
+        href: "?tab=accounts&account=identity",
+        action: "계정 설정"
+      },
+      {
+        tab: "알림",
+        result: "알림이 온 이유, 후보 신호, 발송/보류 판단",
+        setting: "메시지 타입별 정책, 템플릿, 채널 진단",
+        href: "?tab=notifications&notification=policy",
+        action: "알림 설정"
+      },
+      {
+        tab: "투자 분석",
+        result: "오늘의 판단, 투자 근거, 통합 차트, 그래프 검증",
+        setting: "전략 룰, RuleBox, 프롬프트 레지스트리",
+        href: "?tab=modeling&strategy=rules",
+        action: "전략 룰"
+      },
+      {
+        tab: "피드",
+        result: "기사 본문 요약, 호재/악재 판단, 수집 품질",
+        setting: "뉴스 아카이브, 공시·외부 원천, 중요도 게이트",
+        href: "?tab=feed&mode=settings&feed=settings",
+        action: "피드 설정"
+      }
+    ];
+    return [
+      '<article class="panel settings-responsibility-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Control Map</p>',
+      '<h2>탭별 결과와 설정 책임</h2>',
+      '<span>결과 화면에서는 판단을 보고, 설정 화면에서는 그 판단을 만드는 입력과 정책만 관리합니다.</span>',
+      '</div>',
+      '</div>',
+      '<div class="settings-responsibility-grid" role="table" aria-label="탭별 결과와 설정 책임">',
+      '<div class="settings-responsibility-head" role="row"><span>탭</span><span>결과에서 볼 것</span><span>설정에서 바꿀 것</span><span>이동</span></div>',
+      rows.map(function (row) {
+        return [
+          '<div class="settings-responsibility-row" role="row">',
+          '<strong>' + escapeHtml(row.tab) + '</strong>',
+          '<span>' + escapeHtml(row.result) + '</span>',
+          '<em>' + escapeHtml(row.setting) + '</em>',
+          '<a class="text-button" href="' + escapeHtml(row.href) + '">' + escapeHtml(row.action) + '</a>',
+          '</div>'
+        ].join("");
+      }).join(""),
+      '</div>',
+      '</article>'
+    ].join("");
   }
 
   function renderSettingsGroup(title, description, content, tone) {
@@ -14807,6 +15019,7 @@
         if (page === "accounts") writeAccountSectionHistory(state.activeAccountSection);
         else if (page === "notifications") writeNotificationSectionHistory(state.activeNotificationSection);
         else if (page === "modeling") writeStrategySectionHistory(state.activeStrategySection);
+        else if (page === "feed") writeFeedSectionHistory(state.activeFeedSection);
         else writePageModeHistory(page, mode);
         render();
       });
@@ -14852,6 +15065,7 @@
         var section = normalizeFeedSection(button.getAttribute("data-feed-section"));
         if (section === state.activeFeedSection) return;
         state.activeFeedSection = section;
+        state.pageViewModes.feed = sectionModeForPage("feed", section);
         writeFeedSectionHistory(section);
         render();
       });

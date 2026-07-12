@@ -764,6 +764,56 @@ h3 {
   line-height: 1.25;
 }
 
+.page-mode-switch {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  min-width: 0;
+  margin-top: 4px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: var(--ds-radius-control);
+  background: var(--panel-soft);
+}
+
+.page-mode-switch button {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+  min-height: 36px;
+  padding: 5px 8px;
+  border: 1px solid transparent;
+  border-radius: calc(var(--ds-radius-control) - 2px);
+  background: transparent;
+  color: var(--muted);
+  text-align: left;
+  cursor: pointer;
+}
+
+.page-mode-switch button.active {
+  border-color: var(--blue);
+  background: var(--panel);
+  color: var(--blue);
+}
+
+.page-mode-switch strong,
+.page-mode-switch span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.page-mode-switch strong {
+  font-size: 12px;
+  font-weight: 950;
+}
+
+.page-mode-switch span {
+  font-size: 10px;
+  font-weight: 800;
+}
+
 .page-command-flow,
 .page-command-metrics {
   display: grid;
@@ -16255,5 +16305,101 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
 
   [data-web-style="orbit-alpha-console-v2"] .web-style-deskbar[data-style-rail="compact"] {
     grid-template-columns: minmax(180px, 0.9fr) minmax(180px, 1fr) minmax(180px, 1fr) minmax(160px, 0.8fr);
+  }
+}
+
+/* Desktop free-scroll and focus-mode layer */
+@media (min-width: 861px) {
+  html,
+  body,
+  .app-shell {
+    height: auto;
+    min-height: 100%;
+    overflow: visible;
+  }
+
+  .shell,
+  .console-shell {
+    height: auto;
+    min-height: 100dvh;
+    overflow: visible;
+  }
+
+  .shell-page.topbar-collapsed {
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .topbar-collapsed .topbar {
+    min-height: 70px;
+    max-height: none;
+    padding-top: 2px;
+    padding-bottom: 12px;
+    border-bottom-color: color-mix(in srgb, var(--line) 78%, transparent);
+    opacity: 1;
+    pointer-events: auto;
+    transform: none;
+  }
+
+  .workspace-layout,
+  .workspace-main,
+  .managed-page,
+  .admin-grid {
+    height: auto;
+    min-height: 0;
+    max-height: none;
+    overflow: visible;
+  }
+
+  .workspace-main {
+    padding-right: 0;
+    overscroll-behavior: auto;
+    scrollbar-gutter: auto;
+  }
+
+  .app-nav {
+    position: relative;
+    top: auto;
+    height: auto;
+    min-height: 0;
+    max-height: none;
+    overflow: visible;
+  }
+
+  .app-nav-tabs {
+    overflow: visible;
+  }
+
+  .notification-decision-list,
+  .symbol-result-list,
+  .account-card-list,
+  .watch-account-list,
+  .account-watch-symbol-list,
+  .monitoring-instrument-list,
+  .admin-message-group-list,
+  .notification-decision-detail,
+  .strategy-view .investment-tab-stack,
+  .strategy-view .investment-tab-stack-full,
+  .strategy-view .investment-tab-stack-full > .panel,
+  .strategy-view .investment-tab-stack-full .ontology-dashboard {
+    max-height: none;
+    overflow: visible;
+  }
+
+  .notification-decision-status,
+  .notification-decision-detail {
+    position: static;
+    top: auto;
+  }
+
+  .strategy-view .investment-tab-workspace {
+    height: auto;
+    min-height: 0;
+    max-height: none;
+    overflow: visible;
+    align-items: start;
+  }
+
+  .feed-view-settings .feed-settings-panel {
+    grid-column: 1 / -1;
   }
 }

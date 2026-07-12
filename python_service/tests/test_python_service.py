@@ -6,6 +6,7 @@ import tempfile
 import unittest
 import urllib.error
 import urllib.parse
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -4422,7 +4423,7 @@ class PythonServiceTests(unittest.TestCase):
             "sector": "반도체",
         })
         portfolio = portfolio_summary([position])
-        previous_snapshot = AccountSnapshot(
+        first_snapshot = AccountSnapshot(
             "main",
             "메인",
             "toss",
@@ -4433,6 +4434,9 @@ class PythonServiceTests(unittest.TestCase):
             [position],
             decisions_for_positions([position], portfolio),
         )
+        first_events = RealtimeMonitor().events_for_snapshot(first_snapshot, {})
+        self.assertFalse(any(event.rule == "ontologyInferenceMissing" for event in first_events))
+
         snapshot = AccountSnapshot(
             "main",
             "메인",
@@ -4445,7 +4449,7 @@ class PythonServiceTests(unittest.TestCase):
             decisions_for_positions([position], portfolio),
         )
 
-        events = RealtimeMonitor().events_for_snapshot(snapshot, previous_snapshot.to_monitor_state())
+        events = RealtimeMonitor().events_for_snapshot(snapshot, first_snapshot.to_monitor_state())
         inference_event = next(event for event in events if event.rule == "ontologyInferenceMissing")
 
         self.assertEqual("WATCH", inference_event.severity)
@@ -4458,6 +4462,158 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(inference_event.metadata["ontologyInference"]["missing"])
         self.assertTrue(inference_event.metadata["ontologyInference"]["confirmation"]["confirmed"])
         self.assertFalse(any(event.rule == "investmentInsight" for event in events))
+
+    def test_events_suppress_transient_rulebox_timeout_after_healthy_inference(self):
+        position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "marketValue": 864000,
+            "quantity": 10,
+            "sellableQuantity": 10,
+            "averagePrice": 80000,
+            "currentPrice": 86400,
+            "profitLossRate": 8,
+            "sector": "반도체",
+        })
+        portfolio = portfolio_summary([position])
+        healthy_metadata = self.inferencebox_metadata("005930", "graph.loss_guard.breakdown.v1", "lossControl", "손실 방어 추론")
+        timeout_metadata = {
+            "ontology": {
+                "neo4j": {
+                    "saved": True,
+                    "status": "ok",
+                    "projectionMode": "abox-facts-only-neo4j-rulebox",
+                    "ruleboxExecution": {
+                        "status": "error",
+                        "reason": "timed out",
+                        "statementCount": 10,
+                        "clearResult": {"status": "ok"},
+                    },
+                    "inferenceBox": {
+                        "configured": True,
+                        "status": "ok",
+                        "neo4jNativeReasoningUsed": False,
+                        "entityCount": 0,
+                        "relationCount": 0,
+                        "traceCount": 0,
+                        "nativeRelationCount": 0,
+                        "relations": [],
+                        "traces": [],
+                    },
+                },
+            },
+        }
+        previous_snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "토스 계좌 동기화",
+            utc_now_iso(),
+            portfolio,
+            [position],
+            decisions_for_positions([position], portfolio),
+            metadata=healthy_metadata,
+        )
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "토스 계좌 동기화",
+            utc_now_iso(),
+            portfolio,
+            [position],
+            decisions_for_positions([position], portfolio),
+            metadata=timeout_metadata,
+        )
+
+        events = RealtimeMonitor().events_for_snapshot(snapshot, previous_snapshot.to_monitor_state())
+
+        self.assertFalse(any(event.rule == "ontologyInferenceMissing" for event in events))
+        state = snapshot.metadata["ontology"]["inferenceMissingState"]
+        self.assertEqual("ruleboxExecutionFailed", state["reasonCode"])
+        self.assertEqual("timed out", state["ruleboxExecutionReason"])
+        self.assertFalse(state["confirmation"]["confirmed"])
+
+    def test_events_explain_rulebox_timeout_when_repeated(self):
+        position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "marketValue": 864000,
+            "quantity": 10,
+            "sellableQuantity": 10,
+            "averagePrice": 80000,
+            "currentPrice": 86400,
+            "profitLossRate": 8,
+            "sector": "반도체",
+        })
+        portfolio = portfolio_summary([position])
+        metadata = {
+            "ontology": {
+                "neo4j": {
+                    "saved": True,
+                    "status": "ok",
+                    "projectionMode": "abox-facts-only-neo4j-rulebox",
+                    "ruleboxExecution": {
+                        "status": "error",
+                        "reason": "timed out",
+                        "statementCount": 10,
+                        "clearResult": {"status": "ok"},
+                    },
+                    "inferenceBox": {
+                        "configured": True,
+                        "status": "ok",
+                        "neo4jNativeReasoningUsed": False,
+                        "entityCount": 0,
+                        "relationCount": 0,
+                        "traceCount": 0,
+                        "nativeRelationCount": 0,
+                        "relations": [],
+                        "traces": [],
+                    },
+                },
+            },
+        }
+        first_snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "토스 계좌 동기화",
+            utc_now_iso(),
+            portfolio,
+            [position],
+            decisions_for_positions([position], portfolio),
+            metadata=deepcopy(metadata),
+        )
+        first_events = RealtimeMonitor().events_for_snapshot(first_snapshot, {})
+        self.assertFalse(any(event.rule == "ontologyInferenceMissing" for event in first_events))
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "토스 계좌 동기화",
+            utc_now_iso(),
+            portfolio,
+            [position],
+            decisions_for_positions([position], portfolio),
+            metadata=deepcopy(metadata),
+        )
+
+        events = RealtimeMonitor().events_for_snapshot(snapshot, first_snapshot.to_monitor_state())
+        inference_event = next(event for event in events if event.rule == "ontologyInferenceMissing")
+
+        self.assertEqual("ruleboxExecutionFailed", inference_event.metadata["missingInferenceReasonCode"])
+        self.assertIn("RuleBox 실행 실패: timed out", inference_event.metadata["missingInferenceReason"])
+        self.assertTrue(any("RuleBox 실행 실패: timed out" in line for line in inference_event.lines))
+        self.assertEqual("error", inference_event.metadata["ontologyInference"]["ruleboxExecutionStatus"])
+        self.assertEqual("timed out", inference_event.metadata["ontologyInference"]["ruleboxExecutionReason"])
 
     def test_events_explain_ok_but_empty_inferencebox_after_repeated_missing(self):
         position = normalize_position({

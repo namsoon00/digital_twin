@@ -557,7 +557,7 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
         if stored:
             return dict(stored)
         reason_code, reason, inference_status = self.ontology_inference_missing_reason_from_metadata(metadata)
-        if not reason_code:
+        if not reason_code or reason_code == "positionInferenceMissing":
             return {"missing": False}
         return {
             "missing": True,
@@ -734,6 +734,11 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
             return "invalidABox", reason, common
         if not inference:
             return "missingInferenceBox", "Neo4j InferenceBox 응답이 없습니다", common
+        if common["ruleboxExecutionStatus"] and common["ruleboxExecutionStatus"].lower() != "ok":
+            reason = "RuleBox 실행 실패"
+            if common["ruleboxExecutionReason"]:
+                reason += ": " + common["ruleboxExecutionReason"]
+            return "ruleboxExecutionFailed", reason, common
         if status and status.lower() not in {"ok", "partial"}:
             return "inferenceBoxStatusBlocked", "InferenceBox 상태가 " + status + "입니다", common
         relations = inference.get("relations") if isinstance(inference.get("relations"), list) else []

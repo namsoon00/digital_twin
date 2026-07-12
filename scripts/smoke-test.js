@@ -188,6 +188,10 @@ function checkFrontendAdminRender() {
   assertOk(styles.indexOf("Professional form control replacement system") >= 0, "전문 form control 교체 레이어가 없습니다.");
   assertOk(/select\s*\{[\s\S]*appearance: none;[\s\S]*background-image:[\s\S]*data:image\/svg\+xml/.test(styles), "select 박스가 커스텀 chevron 스타일을 쓰지 않습니다.");
   assertOk(/input:not\(\[type="checkbox"\]\):not\(\[type="radio"\]\):focus,[\s\S]*select:focus,[\s\S]*textarea:focus\s*\{[\s\S]*box-shadow: 0 0 0 3px var\(--blue-soft\)/.test(styles), "입력 요소 focus ring이 금융 콘솔 스타일로 통일되지 않았습니다.");
+  assertOk(code.indexOf("bindAutoGrowingTextareas") >= 0 && code.indexOf("resizeTextareaToContent") >= 0, "긴 입력값을 내부 스크롤 없이 자동 확장하는 textarea 경로가 없습니다.");
+  assertOk(/textarea\s*\{[\s\S]*overflow-y: hidden;[\s\S]*resize: none;/.test(styles), "textarea가 자체 스크롤/수동 리사이즈 상자로 남아 있습니다.");
+  assertOk(/\.setting-field textarea,[\s\S]*\.notification-template-row textarea,[\s\S]*\.admin-message-template textarea\s*\{[\s\S]*overflow-y: hidden;[\s\S]*resize: none;/.test(styles), "구체 textarea 컴포넌트가 자동 확장 규칙으로 고정되지 않았습니다.");
+  assertOk(/\.notification-full-message,[\s\S]*pre\.notification-full-message\s*\{[\s\S]*max-height: none;[\s\S]*overflow: visible;/.test(styles), "긴 알림 본문이 내부 스크롤 박스로 남아 있습니다.");
   assertOk(/input\[type="checkbox"\],[\s\S]*input\[type="radio"\]\s*\{[\s\S]*appearance: none;/.test(styles), "checkbox/radio가 native accent 컨트롤로 남아 있습니다.");
   assertOk(/input\[type="checkbox"\]:checked::before\s*\{[\s\S]*rotate\(-45deg\) scale\(1\);/.test(styles), "커스텀 checkbox 체크 마크가 없습니다.");
   assertOk(/:where\(\.notification-rule-toggle, \.admin-check-field, \.notification-rule-market-option\):has\(input:checked\)/.test(styles), "선택된 checkbox label surface 스타일이 없습니다.");
@@ -247,6 +251,7 @@ function checkFrontendAdminRender() {
   assertOk(/@media \(min-width: 1440px\)[\s\S]*\.notifications-view \.alert-delivery-panel\s*\{[\s\S]*grid-column: span 4;/.test(desktopLayoutAuditLayer), "넓은 PC에서 알림 고급 패널 4:4:4 배치가 없습니다.");
   assertOk(code.indexOf("renderManagedPage") >= 0 && styles.indexOf(".managed-page") >= 0, "전체 탭 공통 관리 페이지 템플릿이 없습니다.");
   assertOk(code.indexOf("renderPageCommandStrip") >= 0 && styles.indexOf(".page-command-strip") >= 0, "페이지 작업 상태 strip 템플릿이 없습니다.");
+  assertOk(code.indexOf("renderPageRoutinePanel") >= 0 && styles.indexOf(".page-routine-panel") >= 0, "탭별 현재 상태/이유/다음 행동 루틴 카드가 없습니다.");
   assertOk(styles.indexOf("Desktop free-scroll and focus-mode layer") >= 0, "PC 자유 스크롤/모드 분리 최종 레이어가 없습니다.");
   assertOk(/Desktop free-scroll and focus-mode layer[\s\S]*\.shell,[\s\S]*\.console-shell\s*\{[\s\S]*height: auto;[\s\S]*overflow: visible;/.test(styles), "PC shell이 페이지 스크롤 구조로 풀리지 않았습니다.");
   assertOk(/Desktop free-scroll and focus-mode layer[\s\S]*\.workspace-main,[\s\S]*\.managed-page,[\s\S]*\.admin-grid\s*\{[\s\S]*height: auto;[\s\S]*overflow: visible;/.test(styles), "PC 본문이 내부 고정 스크롤에서 해제되지 않았습니다.");
@@ -274,8 +279,10 @@ function checkFrontendAdminRender() {
   assertOk(fs.existsSync(path.join(rootDir, "public", "favicon.svg")), "Orbit Alpha SVG 파비콘이 없습니다.");
   assertOk(designSystemDoc.indexOf("#F3F5F8") >= 0 && designSystemDoc.indexOf("Relation Matrix") >= 0, "디자인 시스템 문서에 기관형 금융 콘솔 팔레트나 관계 UI 기준이 없습니다.");
   assertOk(designSystemDoc.indexOf("Page Contracts") >= 0, "디자인 시스템 문서에 페이지별 UI 계약이 없습니다.");
+  assertOk(designSystemDoc.indexOf("page-routine-panel") >= 0 && designSystemDoc.indexOf("현재 상태") >= 0 && designSystemDoc.indexOf("다음 행동") >= 0, "디자인 시스템 문서에 탭별 루틴 패널 계약이 없습니다.");
+  assertOk(designSystemDoc.indexOf("textarea") >= 0 && designSystemDoc.indexOf("자동 높이 확장") >= 0 && designSystemDoc.indexOf("자체 스크롤바") >= 0, "디자인 시스템 문서에 긴 입력값 자체 스크롤 금지 계약이 없습니다.");
   assertOk(designSystemDoc.indexOf("영향 인박스") >= 0 && designSystemDoc.indexOf("기사 제목·출처·시간·원문 링크는 카드 하단") >= 0, "디자인 시스템 문서에 피드 영향 인박스 계약이 없습니다.");
-  assertOk(designSystemDoc.indexOf("Control Map") >= 0 && designSystemDoc.indexOf("결과 화면과 설정 화면 책임") >= 0, "디자인 시스템 문서에 설정 탭 책임 지도 계약이 없습니다.");
+  assertOk(designSystemDoc.indexOf("Control Map") >= 0 && designSystemDoc.indexOf("결과 화면과 설정 화면 책임") >= 0 && designSystemDoc.indexOf("고급 설정") >= 0 && designSystemDoc.indexOf("진단") >= 0, "디자인 시스템 문서에 설정 탭 책임 지도/설정 분리 계약이 없습니다.");
   assertOk(designSystemDoc.indexOf("12컬럼") >= 0 && designSystemDoc.indexOf("8컬럼") >= 0, "디자인 시스템 문서에 PC/태블릿 컬럼 기준이 없습니다.");
   assertOk(designSystemDoc.indexOf("Button Placement") >= 0, "디자인 시스템 문서에 버튼 위치 정책이 없습니다.");
   assertOk(designSystemDoc.indexOf("aria-current") >= 0, "디자인 시스템 문서에 내비게이션 접근성 기준이 없습니다.");
@@ -1171,6 +1178,16 @@ function checkFrontendAdminRender() {
     assertOk(accountHtml.indexOf('data-scroll-key="accounts:identity"') >= 0, "계정 내부 탭별 스크롤 키가 렌더링되지 않습니다.");
     assertOk(overviewHtml.indexOf('aria-current="page"') >= 0, "활성 탭 접근성 상태가 렌더링되지 않았습니다.");
     assertOk(settingsHtml.indexOf("<h1>설정</h1>") >= 0, "설정 탭 제목이 상단에 렌더링되지 않았습니다.");
+    [
+      ["홈", overviewHtml],
+      ["계정", accountHtml],
+      ["알림 판단", notificationHtml],
+      ["투자 판단", modelingHtml],
+      ["뉴스 영향", feedHtml],
+      ["설정", settingsHtml]
+    ].forEach(function (entry) {
+      assertOk(entry[1].indexOf("page-routine-panel") >= 0 && entry[1].indexOf("현재 상태") >= 0 && entry[1].indexOf("왜 봐야 하나") >= 0 && entry[1].indexOf("다음 행동") >= 0, entry[0] + " 탭에 현재 상태/이유/다음 행동 루틴이 없습니다.");
+    });
     assertOk(settingsHtml.indexOf("settings-view") >= 0, "설정 화면이 페이지 구조로 렌더링되지 않았습니다.");
     assertOk(code.indexOf("renderAppNavigation") >= 0 && styles.indexOf(".app-nav") >= 0, "앱 네비게이션 바 구조가 렌더링되지 않습니다.");
     assertOk(overviewHtml.indexOf("app-nav") < overviewHtml.indexOf("topbar"), "앱 네비게이션 바가 topbar 위에 렌더링되지 않습니다.");
@@ -1195,9 +1212,9 @@ function checkFrontendAdminRender() {
       ["계정", accountHtml],
       ["관심종목", watchlistHtml],
       ["전체종목", symbolUniverseHtml],
-      ["알림", notificationHtml],
-      ["투자 분석", modelingHtml],
-      ["피드", feedHtml],
+      ["알림 판단", notificationHtml],
+      ["투자 판단", modelingHtml],
+      ["뉴스 영향", feedHtml],
       ["모니터링", monitoringHtml],
       ["시스템", systemHtml],
       ["설정", settingsHtml]
@@ -1251,7 +1268,7 @@ function checkFrontendAdminRender() {
     assertOk(feedExplicitSettingsHtml.indexOf('data-setting="newsCollectionRateLimitSeconds"') >= 0 && feedExplicitSettingsHtml.indexOf('data-setting="externalSecCompanyCiks"') >= 0, "피드 설정 섹션에 세부 수집 설정 필드가 없습니다.");
     assertOk(feedSettingsHtml.indexOf('data-section-mode="settings"') >= 0 && feedSettingsHtml.indexOf('data-feed-section="settings"') >= 0 && feedSettingsHtml.indexOf('data-feed-section="operations"') < 0, "피드 설정 모드가 수집 설정 섹션으로만 분리되지 않았습니다.");
     assertOk(/\.feed-view-settings \.feed-settings-panel\s*\{[\s\S]*grid-column: 1 \/ -1;/.test(styles) && styles.indexOf(".feed-impact-inbox-panel") >= 0 && styles.indexOf(".feed-settings-sections") >= 0 && styles.indexOf(".feed-evidence-workspace") >= 0 && styles.indexOf(".feed-source-workspace") >= 0, "PC 피드 섹션별 워크스페이스 스타일이 정의되지 않았습니다.");
-    assertOk(settingsHtml.indexOf("settings-responsibility-panel") >= 0 && settingsHtml.indexOf("탭별 결과와 설정 책임") >= 0 && settingsHtml.indexOf("피드 설정") >= 0, "설정 탭에 결과/설정 책임 지도가 렌더링되지 않습니다.");
+    assertOk(settingsHtml.indexOf("settings-responsibility-panel") >= 0 && settingsHtml.indexOf("탭별 결과와 설정 책임") >= 0 && settingsHtml.indexOf("뉴스 영향") >= 0 && settingsHtml.indexOf("피드 설정") >= 0, "설정 탭에 결과/설정 책임 지도가 렌더링되지 않습니다.");
     assertOk(systemHtml.indexOf("<h1>시스템</h1>") >= 0, "시스템 탭 제목이 상단에 렌더링되지 않았습니다.");
     assertOk(systemHtml.indexOf("system-guide-view") >= 0, "시스템 설명 탭이 전용 레이아웃으로 렌더링되지 않습니다.");
     assertOk(systemHtml.indexOf("SYSTEM MANUAL") >= 0 && systemHtml.indexOf("처음 사용하는 순서") >= 0, "시스템 탭에 사용자 매뉴얼이 없습니다.");
@@ -1350,7 +1367,8 @@ function checkFrontendAdminRender() {
     assertOk(code.indexOf("data-rule-save") >= 0 && code.indexOf("investmentInsight") >= 0, "알림 타입별 룰 저장 경로가 없습니다.");
     assertOk(code.indexOf("investmentInsight") >= 0 && code.indexOf("watchlistOntologySignal") >= 0, "온톨로지 투자 알림 룰 저장 경로가 없습니다.");
     assertOk(notificationHtml.indexOf("최근 알림 판단") >= 0, "최근 알림 판단 제목이 렌더링되지 않았습니다.");
-    assertOk(notificationHtml.indexOf("발송 우선도 30/45") >= 0, "최근 알림 판단의 발송 우선도가 렌더링되지 않았습니다.");
+    assertOk(notificationHtml.indexOf("notification-score-route") >= 0 && notificationHtml.indexOf("85 → 30 (-55)") >= 0, "최근 알림 판단의 점수 변화가 렌더링되지 않았습니다.");
+    assertOk(notificationHtml.indexOf("notification-score-factors") >= 0, "최근 알림 판단의 상승/감점 요인이 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("360분 내 7회 · 우선도 -55") >= 0, "최근 알림 판단의 유사 메시지 감점이 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("미장 닫힘") >= 0, "최근 알림 판단의 장 시간 외 보류 사유가 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("messageType=externalcryptomove|symbol=eth") >= 0, "최근 알림 판단 fingerprint가 렌더링되지 않았습니다.");
@@ -1382,8 +1400,8 @@ function checkFrontendAdminRender() {
     assertOk(modelingHtml.indexOf('data-strategy-section="data"') < 0 && modelingHtml.indexOf('data-strategy-section="policy"') < 0 && modelingHtml.indexOf('data-strategy-section="ontology"') < 0 && modelingHtml.indexOf('data-strategy-section="registry"') < 0 && modelingHtml.indexOf('data-strategy-section="results"') < 0, "이전 전략/관계 섹션 ID가 통합 탭에 남아 있습니다.");
     assertOk(code.indexOf('if (requested === "ontology" || requested === "relations") return "modeling";') >= 0, "기존 관계 분석 URL을 투자 분석 탭으로 매핑하지 않습니다.");
     assertOk(code.indexOf("writeStrategySectionHistory") >= 0 && code.indexOf("strategySectionUrl") >= 0, "투자 분석 내부 탭 URL 동기화 경로가 없습니다.");
-    assertOk(modelingHtml.indexOf("<h1>투자 분석</h1>") >= 0, "투자 분석 탭 제목이 상단에 렌더링되지 않았습니다.");
-    assertOk(legacyOntologyHtml.indexOf("<h1>투자 분석</h1>") >= 0 && legacyOntologyHtml.indexOf("investment-bridge-panel") >= 0, "기존 관계 분석 URL이 통합 투자 분석 개요로 열리지 않습니다.");
+    assertOk(modelingHtml.indexOf("<h1>투자 판단</h1>") >= 0, "투자 판단 탭 제목이 상단에 렌더링되지 않았습니다.");
+    assertOk(legacyOntologyHtml.indexOf("<h1>투자 판단</h1>") >= 0 && legacyOntologyHtml.indexOf("investment-bridge-panel") >= 0, "기존 관계 분석 URL이 통합 투자 판단 개요로 열리지 않습니다.");
     assertOk(modelingHtml.indexOf("investment-tab-workspace-overview") >= 0, "투자 분석 개요가 워크스페이스 컨테이너로 렌더링되지 않습니다.");
     assertOk(modelingHtml.indexOf("investment-bridge-panel") >= 0 && modelingHtml.indexOf("전략 데이터와 관계 분석을 잇는 추론 구조") >= 0, "투자 분석 개요에 전략-관계-AI 파이프라인이 없습니다.");
     assertOk(modelingHtml.indexOf("AI 추론 입력") >= 0 && modelingHtml.indexOf("investment-ontology-ai-inference-v1") >= 0, "투자 분석 개요에 AI inference packet 계약이 보이지 않습니다.");
@@ -1441,7 +1459,7 @@ function checkFrontendAdminRender() {
     assertOk(modelingTraceHtml.indexOf("같은 입력 재현됨") >= 0, "검증·리뷰 탭에 같은 입력 재계산 검증 결과가 렌더링되지 않았습니다.");
     assertOk(modelingHtml.indexOf("model-timing-panel") < 0 && modelingTraceHtml.indexOf("model-timing-panel") < 0, "Mock 시계열 기반 타이밍 패널이 아직 렌더링됩니다.");
     assertOk(modelingHtml.indexOf("웹에서 운영하는 매수·매도 타이밍 모델") < 0 && modelingTraceHtml.indexOf("웹에서 운영하는 매수·매도 타이밍 모델") < 0, "타이밍 모델 제목이 아직 렌더링됩니다.");
-    assertOk(monitoringHtml.indexOf("managed-page-notifications") >= 0 && monitoringHtml.indexOf("<h1>알림</h1>") >= 0, "기존 모니터링 URL이 알림 탭으로 매핑되지 않습니다.");
+    assertOk(monitoringHtml.indexOf("managed-page-notifications") >= 0 && monitoringHtml.indexOf("<h1>알림 판단</h1>") >= 0, "기존 모니터링 URL이 알림 판단 탭으로 매핑되지 않습니다.");
     assertOk(monitoringHtml.indexOf("notifications-view") >= 0, "알림 후보 섹션에 통합 화면 클래스가 없습니다.");
     assertOk(code.indexOf('if (requested === "monitoring") return "notifications";') >= 0, "기존 모니터링 URL 호환 매핑이 없습니다.");
     assertOk(code.indexOf('return "candidates";') >= 0, "기존 모니터링 URL이 후보 섹션으로 열리지 않습니다.");
@@ -1480,6 +1498,7 @@ function checkFrontendAdminRender() {
     assertOk(settingsHtml.indexOf("settings-environment-panel") >= 0, "설정 탭 앱 환경 패널이 렌더링되지 않았습니다.");
     assertOk(settingsHtml.indexOf("settings-delivery-panel") >= 0, "설정 탭 알림 전달 패널이 렌더링되지 않았습니다.");
     assertOk(settingsHtml.indexOf("settings-external-data-panel") >= 0, "설정 탭 외부 데이터 패널이 렌더링되지 않았습니다.");
+    assertOk(settingsHtml.indexOf("settings-advanced-disclosure") >= 0 && settingsHtml.indexOf("고급 설정") >= 0 && settingsHtml.indexOf("settings-diagnostics-panel") >= 0, "설정 탭이 기본/고급/진단 흐름으로 분리되지 않았습니다.");
     assertOk(settingsHtml.indexOf("settings-smart-save") >= 0, "설정 탭 스마트 저장 영역이 렌더링되지 않았습니다.");
     assertOk(settingsHtml.indexOf("settings-save-panel") < 0, "설정 탭에 하단 저장 패널이 남아 있습니다.");
     assertOk(settingsHtml.indexOf("변경사항 저장됨") >= 0, "설정 탭 스마트 저장 상태 문구가 렌더링되지 않았습니다.");

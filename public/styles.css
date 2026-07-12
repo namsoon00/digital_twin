@@ -898,6 +898,86 @@ h3 {
   font-weight: 950;
 }
 
+.page-routine-panel {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.7fr) minmax(0, 1.35fr) minmax(170px, auto);
+  align-items: stretch;
+  min-width: 0;
+  border: 1px solid var(--ds-card-border);
+  border-left: 3px solid var(--ds-card-status-neutral);
+  border-radius: var(--ds-radius-panel);
+  background: var(--panel);
+}
+
+.page-routine-panel.watch {
+  border-left-color: var(--green);
+}
+
+.page-routine-panel.caution {
+  border-left-color: var(--amber);
+}
+
+.page-routine-panel.danger {
+  border-left-color: var(--red);
+}
+
+.page-routine-cell {
+  display: grid;
+  align-content: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 12px 14px;
+  border-left: 1px solid var(--ds-card-rule);
+}
+
+.page-routine-cell:first-child {
+  border-left: 0;
+}
+
+.page-routine-cell span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1.25;
+  text-transform: uppercase;
+}
+
+.page-routine-cell strong {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 920;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.page-routine-cell.action {
+  align-content: center;
+  justify-items: end;
+}
+
+.page-routine-action {
+  min-height: 34px;
+}
+
+@media (max-width: 860px) {
+  .page-routine-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .page-routine-cell {
+    border-left: 0;
+    border-top: 1px solid var(--ds-card-rule);
+  }
+
+  .page-routine-cell:first-child {
+    border-top: 0;
+  }
+
+  .page-routine-cell.action {
+    justify-items: start;
+  }
+}
+
 .loading-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr);
@@ -2327,6 +2407,116 @@ h3 {
 
 .settings-view .settings-external-data-panel {
   grid-column: 1 / -1;
+}
+
+.settings-view .settings-diagnostics-panel {
+  grid-column: 1 / -1;
+}
+
+.settings-advanced-disclosure {
+  display: grid;
+  min-width: 0;
+  padding: var(--ds-panel-pad-y) var(--ds-panel-pad-x);
+}
+
+.settings-advanced-disclosure summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+  padding: var(--ds-row-pad-y) var(--ds-row-pad-x);
+  border: 1px solid var(--ds-card-border);
+  border-left: 3px solid var(--blue);
+  border-radius: var(--ds-radius-control);
+  background: var(--ds-card-row-bg);
+  cursor: pointer;
+}
+
+.settings-advanced-disclosure summary::after {
+  content: "열기";
+  color: var(--blue);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.settings-advanced-disclosure[open] summary::after {
+  content: "닫기";
+}
+
+.settings-advanced-disclosure summary strong,
+.settings-advanced-disclosure summary span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.settings-advanced-disclosure summary strong {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 950;
+}
+
+.settings-advanced-disclosure summary span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 820;
+}
+
+.settings-advanced-content {
+  display: grid;
+  gap: var(--ds-section-gap);
+  min-width: 0;
+  padding-top: var(--ds-section-gap);
+}
+
+.settings-diagnostic-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--ds-section-gap);
+  padding: var(--ds-panel-pad-y) var(--ds-panel-pad-x);
+}
+
+.settings-diagnostic-card {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-width: 0;
+  padding: var(--ds-row-pad-y) var(--ds-row-pad-x);
+  border: 1px solid var(--ds-card-border);
+  border-left: 3px solid var(--ds-card-status-neutral);
+  border-radius: var(--ds-radius-control);
+  background: linear-gradient(180deg, var(--ds-card-row-bg), var(--ds-card-bg));
+}
+
+.settings-diagnostic-card.watch {
+  border-left-color: var(--green);
+}
+
+.settings-diagnostic-card.caution {
+  border-left-color: var(--amber);
+}
+
+.settings-diagnostic-card.danger {
+  border-left-color: var(--red);
+}
+
+.settings-diagnostic-card strong,
+.settings-diagnostic-card p {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.settings-diagnostic-card strong {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 950;
+}
+
+.settings-diagnostic-card p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .settings-responsibility-grid {
@@ -4509,6 +4699,72 @@ h3 {
   font-size: 12px;
   font-weight: 800;
   line-height: 1.3;
+}
+
+.notification-score-route {
+  display: inline-grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  min-width: min(100%, 260px);
+  min-height: 28px;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--ds-card-status-neutral);
+  border-radius: var(--ds-radius-control);
+  background: var(--panel-soft);
+}
+
+.notification-score-route.watch {
+  border-left-color: var(--green);
+}
+
+.notification-score-route.danger {
+  border-left-color: var(--red);
+}
+
+.notification-score-route span,
+.notification-score-route em,
+.notification-score-route strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.notification-score-route span,
+.notification-score-route em {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 850;
+}
+
+.notification-score-route strong {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 950;
+  font-variant-numeric: tabular-nums;
+}
+
+.notification-score-factors {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.notification-score-factors span,
+.notification-score-tags span {
+  border-left: 3px solid var(--ds-card-status-neutral);
+}
+
+.notification-score-factors span.watch,
+.notification-score-tags span.watch {
+  border-left-color: var(--green);
+}
+
+.notification-score-factors span.danger,
+.notification-score-tags span.danger {
+  border-left-color: var(--red);
 }
 
 .notification-decision-row p {
@@ -13826,7 +14082,8 @@ select {
 textarea {
   min-height: 96px;
   padding: 11px 13px;
-  resize: vertical;
+  overflow-y: hidden;
+  resize: none;
 }
 
 select {
@@ -14403,8 +14660,8 @@ body {
 
 .notification-full-message,
 pre.notification-full-message {
-  max-height: 360px;
-  overflow: auto;
+  max-height: none;
+  overflow: visible;
   margin: 0;
   padding: var(--ds-row-pad-y) var(--ds-row-pad-x);
   border: 1px solid var(--ds-card-border);
@@ -15474,6 +15731,15 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
 .setting-field input,
 .setting-field select {
   font-weight: 820;
+}
+
+.setting-field textarea,
+.notification-template-row textarea,
+.notification-rule-condition textarea,
+.notification-rule-fields textarea,
+.admin-message-template textarea {
+  overflow-y: hidden;
+  resize: none;
 }
 
 .settings-external-data-panel .settings-body,

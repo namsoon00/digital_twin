@@ -64,6 +64,7 @@ from digital_twin.infrastructure.notifications import TelegramNotifier, send_eve
 from digital_twin.infrastructure.ontology_projection import PortfolioOntologyProjectionRecorder
 from digital_twin.infrastructure.service_factory import flow_lens_snapshot
 from digital_twin.infrastructure.settings import runtime_settings, save_runtime_settings
+from digital_twin.infrastructure.mysql_schema_tuning import MYSQL_OPERATIONAL_KEY_PARTITIONS, mysql_partitioning_mode
 from digital_twin.infrastructure.symbol_sources import RemoteSymbolSourceGateway, parse_krx_kind_table, parse_nasdaq_listed
 from digital_twin.infrastructure.toss_snapshots import TossProvider, account_cash_amount, normalize_price_items, select_account
 from digital_twin.infrastructure.web_server import list_notification_rules_payload, list_templates_payload, notification_jobs_payload, notification_schedules_payload, notification_template_test_payload, realtime_status_payload, save_notification_rule_payload, settings_status_payload
@@ -10927,6 +10928,53 @@ class PythonServiceTests(unittest.TestCase):
         self.assertGreaterEqual(mysql_fetchone(db_path, "SELECT COUNT(*) FROM notification_rules")[0], 1)
         self.assertEqual(2, mysql_fetchone(db_path, "SELECT COUNT(*) FROM runtime_settings")[0])
         self.assertEqual(1, mysql_fetchone(db_path, "SELECT COUNT(*) FROM app_store")[0])
+
+    def test_mysql_schema_tuning_adds_query_indexes(self):
+        db_path = test_store_seed(self.temp.name)
+
+        TestNotificationJobStore(db_path)
+        TestMonitorAccountJobStore(db_path)
+
+        def index_names(table: str):
+            return {
+                row[2]
+                for row in mysql_fetchall(db_path, "SHOW INDEX FROM " + table)
+            }
+
+        self.assertTrue({
+            "idx_domain_events_time",
+            "idx_domain_events_name_aggregate_time",
+        }.issubset(index_names("domain_events")))
+        self.assertTrue({
+            "idx_notification_jobs_created",
+            "idx_notification_jobs_type_status_created",
+            "idx_notification_jobs_status_attempts_created",
+            "idx_notification_jobs_status_processing_age",
+        }.issubset(index_names("notification_jobs")))
+        self.assertTrue({
+            "idx_research_evidence_latest",
+            "idx_research_evidence_symbol_kind_latest",
+        }.issubset(index_names("research_evidence")))
+        self.assertTrue({
+            "idx_symbol_universe_active_market_seen",
+            "idx_symbol_universe_active_symbol_market",
+        }.issubset(index_names("symbol_universe")))
+        self.assertTrue({
+            "idx_monitor_account_jobs_status_priority_due",
+            "idx_monitor_account_jobs_updated",
+        }.issubset(index_names("monitor_account_jobs")))
+
+    def test_mysql_schema_tuning_partition_contract_avoids_conflicting_unique_keys(self):
+        self.assertEqual("auto", mysql_partitioning_mode({}))
+        self.assertEqual("off", mysql_partitioning_mode({"mysqlTablePartitioning": "off"}))
+        self.assertEqual("force", mysql_partitioning_mode({"mysqlTablePartitioning": "force"}))
+        self.assertIn("domain_events", MYSQL_OPERATIONAL_KEY_PARTITIONS)
+        self.assertIn("monitor_snapshot_history", MYSQL_OPERATIONAL_KEY_PARTITIONS)
+        self.assertNotIn("notification_jobs", MYSQL_OPERATIONAL_KEY_PARTITIONS)
+        self.assertEqual(
+            "ALTER TABLE `domain_events` PARTITION BY KEY(`event_id`) PARTITIONS 16",
+            MYSQL_OPERATIONAL_KEY_PARTITIONS["domain_events"].alter_sql(),
+        )
 
 
 class AssignmentTests(unittest.TestCase):

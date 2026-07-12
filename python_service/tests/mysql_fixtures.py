@@ -26,6 +26,7 @@ from digital_twin.infrastructure.mysql_operational import (
     MySQLRuntimeSettingsStore,
     MySQLSymbolUniverseStore,
 )
+from digital_twin.infrastructure.mysql_schema_tuning import mysql_partitioning_mode
 
 
 def _seed_value(seed=None) -> str:
@@ -107,6 +108,7 @@ def reset_mysql_test_database(seed=None):
         str(config.get("port") or ""),
         str(config.get("database") or ""),
         str(config.get("unix_socket") or ""),
+        mysql_partitioning_mode(settings),
     ))
     ensure_mysql_database_exists(config)
     return settings

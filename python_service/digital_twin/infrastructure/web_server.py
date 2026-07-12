@@ -364,6 +364,7 @@ def settings_status_payload() -> Dict[str, object]:
         "mysqlDatabase",
         "mysqlUser",
         "mysqlUnixSocket",
+        "mysqlTablePartitioning",
         "tossApiBaseUrl",
         "kisBaseUrl",
         "kisMarketSignalsEnabled",

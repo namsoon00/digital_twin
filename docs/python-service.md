@@ -99,12 +99,15 @@ MYSQL_PORT=3306
 MYSQL_DATABASE=orbit_alpha
 MYSQL_USER=orbit_alpha
 MYSQL_PASSWORD=
+MYSQL_TABLE_PARTITIONING=auto
 MONITOR_ACCOUNT_BATCH_SIZE=10
 MONITOR_ACCOUNT_INTERVAL_SECONDS=180
 MONITOR_ACCOUNT_LOCK_SECONDS=600
 ```
 
 The MySQL backend requires `pymysql` in the Python environment. It stores due/processing/done/failed account jobs in `monitor_account_jobs` and uses row-level locking so multiple monitor workers can claim different accounts. The rest of the operational tables are created by `mysql_operational.py` and share the same backend selection.
+
+The MySQL schema bootstrap also maintains query-pattern indexes for event replay, notification/model-review outboxes, symbol universe search, market-data cache reads, research evidence, ontology quality samples, and monitor account claiming. `MYSQL_TABLE_PARTITIONING=auto` applies safe KEY partitioning only to empty eligible high-volume tables. Use `force` only during an intentional maintenance window because MySQL may rebuild existing tables; use `off` to skip partition changes.
 
 The `python:service:*` commands run all background workers:
 

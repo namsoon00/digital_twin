@@ -1,0 +1,255 @@
+import os
+import re
+import warnings
+from dataclasses import dataclass
+from typing import Dict, List, Mapping, Sequence
+
+
+IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9_]+$")
+
+
+@dataclass(frozen=True)
+class MySQLIndexDefinition:
+    table: str
+    name: str
+    columns_sql: str
+
+    def alter_sql(self) -> str:
+        return (
+            "ALTER TABLE "
+            + quote_identifier(self.table)
+            + " ADD INDEX "
+            + quote_identifier(self.name)
+            + " ("
+            + self.columns_sql
+            + ")"
+        )
+
+
+@dataclass(frozen=True)
+class MySQLKeyPartitionDefinition:
+    table: str
+    columns: Sequence[str]
+    partitions: int
+
+    def alter_sql(self) -> str:
+        columns_sql = ", ".join(quote_identifier(column) for column in self.columns)
+        return (
+            "ALTER TABLE "
+            + quote_identifier(self.table)
+            + " PARTITION BY KEY("
+            + columns_sql
+            + ") PARTITIONS "
+            + str(max(1, int(self.partitions or 1)))
+        )
+
+
+MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
+    "service_accounts": (
+        MySQLIndexDefinition("service_accounts", "idx_service_accounts_enabled_created", "`enabled`, `created_at`, `id`"),
+    ),
+    "domain_events": (
+        MySQLIndexDefinition("domain_events", "idx_domain_events_time", "`occurred_at`, `event_id`"),
+        MySQLIndexDefinition(
+            "domain_events",
+            "idx_domain_events_name_aggregate_time",
+            "`name`, `aggregate_id`, `occurred_at`, `event_id`",
+        ),
+    ),
+    "notification_jobs": (
+        MySQLIndexDefinition("notification_jobs", "idx_notification_jobs_created", "`created_at`, `job_id`"),
+        MySQLIndexDefinition(
+            "notification_jobs",
+            "idx_notification_jobs_type_status_created",
+            "`message_type`, `status`, `created_at`, `job_id`",
+        ),
+        MySQLIndexDefinition(
+            "notification_jobs",
+            "idx_notification_jobs_status_attempts_created",
+            "`status`, `attempts`, `created_at`, `job_id`",
+        ),
+        MySQLIndexDefinition(
+            "notification_jobs",
+            "idx_notification_jobs_status_processing_age",
+            "`status`, `processing_started_at`, `updated_at`, `created_at`, `job_id`",
+        ),
+        MySQLIndexDefinition("notification_jobs", "idx_notification_jobs_source_event", "`source_event_id`, `job_id`"),
+    ),
+    "model_review_jobs": (
+        MySQLIndexDefinition("model_review_jobs", "idx_model_review_jobs_created", "`created_at`, `job_id`"),
+        MySQLIndexDefinition(
+            "model_review_jobs",
+            "idx_model_review_jobs_status_attempts_created",
+            "`status`, `attempts`, `created_at`, `job_id`",
+        ),
+    ),
+    "symbol_universe": (
+        MySQLIndexDefinition("symbol_universe", "idx_symbol_universe_active_market_seen", "`active`, `market`, `last_seen_at`"),
+        MySQLIndexDefinition("symbol_universe", "idx_symbol_universe_active_symbol_market", "`active`, `symbol`, `market`"),
+    ),
+    "research_evidence": (
+        MySQLIndexDefinition(
+            "research_evidence",
+            "idx_research_evidence_latest",
+            "`last_seen_at`, `published_at`, `evidence_id`",
+        ),
+        MySQLIndexDefinition(
+            "research_evidence",
+            "idx_research_evidence_symbol_kind_latest",
+            "`symbol`, `kind`, `last_seen_at`, `published_at`, `evidence_id`",
+        ),
+        MySQLIndexDefinition("research_evidence", "idx_research_evidence_source_latest", "`source`, `last_seen_at`"),
+        MySQLIndexDefinition("research_evidence", "idx_research_evidence_polarity_latest", "`polarity`, `last_seen_at`"),
+    ),
+    "ontology_ai_opinion_samples": (
+        MySQLIndexDefinition("ontology_ai_opinion_samples", "idx_ontology_quality_created", "`created_at`, `sample_id`"),
+    ),
+}
+
+
+MYSQL_MONITORING_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
+    "monitor_account_jobs": (
+        MySQLIndexDefinition(
+            "monitor_account_jobs",
+            "idx_monitor_account_jobs_status_priority_due",
+            "`status`, `priority`, `next_run_at`, `account_id`",
+        ),
+        MySQLIndexDefinition("monitor_account_jobs", "idx_monitor_account_jobs_updated", "`status`, `updated_at`, `account_id`"),
+    ),
+}
+
+
+MYSQL_OPERATIONAL_KEY_PARTITIONS: Dict[str, MySQLKeyPartitionDefinition] = {
+    "domain_events": MySQLKeyPartitionDefinition("domain_events", ("event_id",), 16),
+    "monitor_snapshot_history": MySQLKeyPartitionDefinition("monitor_snapshot_history", ("account_id", "generated_at"), 8),
+    "model_review_jobs": MySQLKeyPartitionDefinition("model_review_jobs", ("job_id",), 8),
+    "market_quote_cache": MySQLKeyPartitionDefinition("market_quote_cache", ("provider", "account_id", "symbol"), 8),
+    "symbol_universe": MySQLKeyPartitionDefinition("symbol_universe", ("market", "symbol"), 8),
+    "research_evidence": MySQLKeyPartitionDefinition("research_evidence", ("evidence_id",), 8),
+    "ontology_ai_opinion_samples": MySQLKeyPartitionDefinition("ontology_ai_opinion_samples", ("sample_id",), 8),
+}
+
+
+def quote_identifier(value: str) -> str:
+    name = str(value or "").strip()
+    if not IDENTIFIER_PATTERN.match(name):
+        raise ValueError("Unsafe MySQL identifier: " + name)
+    return "`" + name + "`"
+
+
+def _execute(connection, sql: str, params=()):
+    if hasattr(connection, "execute"):
+        return connection.execute(sql, params)
+    cursor = connection.cursor()
+    cursor.execute(sql, params or ())
+    return cursor
+
+
+def _is_duplicate_index_error(error: Exception) -> bool:
+    args = getattr(error, "args", ())
+    code = args[0] if args else None
+    return code == 1061 or "Duplicate key name" in str(error)
+
+
+def mysql_index_exists(connection, table: str, index_name: str) -> bool:
+    cursor = _execute(connection, "SHOW INDEX FROM " + quote_identifier(table) + " WHERE Key_name = %s", (index_name,))
+    return bool(cursor.fetchone())
+
+
+def ensure_mysql_indexes(
+    connection,
+    index_map: Mapping[str, Sequence[MySQLIndexDefinition]],
+) -> List[str]:
+    created: List[str] = []
+    for table, definitions in index_map.items():
+        for definition in definitions:
+            if mysql_index_exists(connection, table, definition.name):
+                continue
+            try:
+                _execute(connection, definition.alter_sql())
+            except Exception as error:
+                if _is_duplicate_index_error(error):
+                    continue
+                raise
+            created.append(definition.name)
+    return created
+
+
+def mysql_partitioning_mode(settings: Mapping[str, object] = None) -> str:
+    configured = settings or {}
+    raw = str(
+        configured.get("mysqlTablePartitioning")
+        or configured.get("mysqlEnableTablePartitioning")
+        or os.environ.get("MYSQL_TABLE_PARTITIONING")
+        or os.environ.get("MYSQL_ENABLE_TABLE_PARTITIONING")
+        or "auto"
+    ).strip().lower()
+    if raw in {"0", "false", "no", "off", "disabled", "disable", "none"}:
+        return "off"
+    if raw in {"force", "always", "all", "rebuild"}:
+        return "force"
+    return "auto"
+
+
+def mysql_table_is_partitioned(connection, table: str) -> bool:
+    cursor = _execute(
+        connection,
+        """
+        SELECT PARTITION_NAME
+        FROM information_schema.PARTITIONS
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = %s
+          AND PARTITION_NAME IS NOT NULL
+        LIMIT 1
+        """,
+        (table,),
+    )
+    return bool(cursor.fetchone())
+
+
+def mysql_table_is_empty(connection, table: str) -> bool:
+    cursor = _execute(connection, "SELECT 1 FROM " + quote_identifier(table) + " LIMIT 1")
+    return not bool(cursor.fetchone())
+
+
+def ensure_mysql_key_partitions(
+    connection,
+    partition_map: Mapping[str, MySQLKeyPartitionDefinition],
+    settings: Mapping[str, object] = None,
+) -> List[str]:
+    mode = mysql_partitioning_mode(settings)
+    if mode == "off":
+        return []
+    partitioned: List[str] = []
+    for table, definition in partition_map.items():
+        if mysql_table_is_partitioned(connection, table):
+            continue
+        if mode == "auto" and not mysql_table_is_empty(connection, table):
+            continue
+        try:
+            _execute(connection, definition.alter_sql())
+        except Exception as error:
+            if mode == "force":
+                raise
+            warnings.warn(
+                "MySQL table partitioning skipped for " + table + ": " + str(error),
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            continue
+        partitioned.append(table)
+    return partitioned
+
+
+def ensure_mysql_operational_schema_tuning(connection, settings: Mapping[str, object] = None) -> Dict[str, List[str]]:
+    return {
+        "indexes": ensure_mysql_indexes(connection, MYSQL_OPERATIONAL_INDEXES),
+        "partitions": ensure_mysql_key_partitions(connection, MYSQL_OPERATIONAL_KEY_PARTITIONS, settings),
+    }
+
+
+def ensure_mysql_monitoring_schema_tuning(connection) -> Dict[str, List[str]]:
+    return {
+        "indexes": ensure_mysql_indexes(connection, MYSQL_MONITORING_INDEXES),
+        "partitions": [],
+    }

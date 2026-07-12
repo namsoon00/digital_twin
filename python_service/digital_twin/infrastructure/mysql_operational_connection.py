@@ -2,6 +2,7 @@ from contextlib import contextmanager
 from typing import Dict
 
 from .mysql_monitoring import MySQLDependencyError, ensure_mysql_database_exists, mysql_settings
+from .mysql_schema_tuning import ensure_mysql_operational_schema_tuning, mysql_partitioning_mode
 
 
 class MySQLConnectionProxy:
@@ -78,12 +79,14 @@ class MySQLOperationalConnection:
             str(self.mysql_config.get("port") or ""),
             str(self.mysql_config.get("database") or ""),
             str(self.mysql_config.get("unix_socket") or ""),
+            mysql_partitioning_mode(self.runtime_settings),
         )
         if schema_key in MySQLOperationalConnection._schema_ready:
             return
         with self.transaction() as connection:
             for statement in MYSQL_SCHEMA:
                 connection.execute(statement)
+            ensure_mysql_operational_schema_tuning(connection, self.runtime_settings)
         MySQLOperationalConnection._schema_ready.add(schema_key)
 
 MYSQL_SCHEMA = [

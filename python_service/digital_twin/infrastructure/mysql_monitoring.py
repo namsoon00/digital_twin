@@ -6,6 +6,7 @@ from typing import Dict, Iterable, List
 
 from ..domain.accounts import AccountConfig
 from ..domain.repositories import MonitorAccountJob
+from .mysql_schema_tuning import ensure_mysql_monitoring_schema_tuning
 from .settings import utc_now
 
 
@@ -115,6 +116,7 @@ def monitor_account_job_from_row(row) -> MonitorAccountJob:
 
 class MySQLMonitorAccountJobStore:
     def __init__(self, settings: Dict[str, str] = None):
+        self.runtime_settings = dict(settings or {})
         self.settings = mysql_settings(settings)
         ensure_mysql_database_exists(self.settings)
         self.ensure_schema()
@@ -171,6 +173,7 @@ class MySQLMonitorAccountJobStore:
                         KEY idx_monitor_account_jobs_lock (status, locked_until, account_id)
                     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
                 """)
+                ensure_mysql_monitoring_schema_tuning(connection)
 
     def sync_accounts(self, accounts: Iterable[AccountConfig], default_interval_seconds: int) -> None:
         enabled_accounts = [account for account in (accounts or []) if getattr(account, "enabled", True)]

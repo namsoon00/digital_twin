@@ -542,6 +542,29 @@ h3 {
   overflow: visible;
 }
 
+.app-nav-group {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.app-nav-section-label {
+  min-width: 0;
+}
+
+.app-nav-section-label strong,
+.app-nav-section-label em {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-nav-section-label em {
+  font-style: normal;
+}
+
 .app-nav-tab,
 .app-nav-menu-item {
   display: flex;
@@ -691,7 +714,7 @@ h3 {
 
 .page-command-strip {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(300px, 0.34fr);
+  grid-template-columns: minmax(220px, 0.42fr) minmax(0, 1fr) minmax(300px, 0.34fr);
   gap: 10px;
   min-width: 0;
   border-top: 1px solid var(--line);
@@ -699,6 +722,46 @@ h3 {
   background: var(--panel);
   box-shadow: none;
   overflow: hidden;
+}
+
+.page-command-context {
+  display: grid;
+  align-content: center;
+  gap: 4px;
+  min-width: 0;
+  min-height: 62px;
+  padding: 11px 14px;
+}
+
+.page-command-kicker,
+.page-command-context strong,
+.page-command-context em {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.page-command-kicker {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 950;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.page-command-context strong {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 950;
+}
+
+.page-command-context em {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 850;
+  line-height: 1.25;
 }
 
 .page-command-flow,
@@ -713,6 +776,10 @@ h3 {
 
 .page-command-metrics {
   grid-template-columns: repeat(3, minmax(0, 1fr));
+  border-left: 1px solid var(--line);
+}
+
+.page-command-flow {
   border-left: 1px solid var(--line);
 }
 
@@ -10698,6 +10765,14 @@ h3 {
     scrollbar-width: none;
   }
 
+  .app-nav-group {
+    display: contents;
+  }
+
+  .app-nav-section-label {
+    display: none;
+  }
+
   .app-nav-tabs::-webkit-scrollbar {
     display: none;
   }
@@ -10759,6 +10834,11 @@ h3 {
 
   .page-command-strip {
     grid-template-columns: 1fr;
+  }
+
+  .page-command-flow {
+    border-top: 1px solid var(--line);
+    border-left: 0;
   }
 
   .page-command-metrics {
@@ -15433,6 +15513,11 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   overflow: visible;
 }
 
+.page-command-flow {
+  border-top: 1px solid var(--line);
+  border-left: 0;
+}
+
 .page-command-flow,
 .page-command-metrics {
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 170px), 1fr));
@@ -15759,6 +15844,24 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
     padding: 0;
   }
 
+  .app-nav-group {
+    gap: 3px;
+  }
+
+  .app-nav-group.active {
+    position: relative;
+  }
+
+  .app-nav-group.active::before {
+    content: "";
+    position: absolute;
+    left: -12px;
+    top: 24px;
+    bottom: 4px;
+    width: 2px;
+    background: var(--blue);
+  }
+
   .app-nav-section-label {
     display: block;
     margin: 8px 10px 3px;
@@ -15767,6 +15870,25 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
     font-weight: 950;
     line-height: 1;
     text-transform: uppercase;
+  }
+
+  .app-nav-section-label strong {
+    color: #8fa0b5;
+    font-size: 10px;
+    line-height: 1;
+  }
+
+  .app-nav-section-label em {
+    margin-top: 3px;
+    color: #5e7086;
+    font-size: 9px;
+    font-weight: 850;
+    line-height: 1.15;
+    text-transform: none;
+  }
+
+  .app-nav-group.active .app-nav-section-label strong {
+    color: #d9e2ef;
   }
 
   .app-nav-divider {
@@ -15902,7 +16024,7 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   }
 
   .page-command-strip {
-    grid-template-columns: minmax(0, 1.1fr) minmax(360px, 0.55fr);
+    grid-template-columns: minmax(240px, 0.4fr) minmax(0, 1.05fr) minmax(340px, 0.52fr);
     gap: 0;
     border: 1px solid var(--ds-card-border);
     border-radius: 8px;
@@ -15910,8 +16032,19 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
     overflow: hidden;
   }
 
+  .page-command-context {
+    min-height: 60px;
+    padding: 10px 14px;
+  }
+
+  .page-command-context em {
+    white-space: normal;
+  }
+
   .page-command-flow {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+    border-top: 0;
+    border-left: 1px solid var(--ds-card-border);
   }
 
   .page-command-metrics {

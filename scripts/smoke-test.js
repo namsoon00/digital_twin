@@ -1105,6 +1105,18 @@ function checkFrontendAdminRender() {
       assertOk(entry[1].indexOf("managed-page managed-page-" + entry[0]) >= 0, "탭이 공통 관리 페이지 템플릿을 거치지 않습니다: " + entry[0]);
       assertOk(entry[1].indexOf("page-command-strip") >= 0, "탭에 페이지 작업 상태 strip이 없습니다: " + entry[0]);
     });
+    var expectedStructureGroups = {
+      overview: "command",
+      accounts: "market",
+      watchlist: "market",
+      symbols: "market",
+      notifications: "decision",
+      modeling: "decision",
+      experiments: "decision",
+      feed: "market",
+      system: "control",
+      settings: "control"
+    };
     [
       ["overview", overviewHtml, "full"],
       ["accounts", accountHtml, "compact"],
@@ -1127,6 +1139,10 @@ function checkFrontendAdminRender() {
       assertOk(html.indexOf("web-style-workspace") >= 0 && html.indexOf("web-style-main") >= 0, "탭의 workspace/main 스타일 영역이 없습니다: " + tabId);
       assertOk(html.indexOf("web-style-page") >= 0 && html.indexOf('data-style-screen="' + tabId + '"') >= 0, "탭의 managed page 스타일 화면 ID가 없습니다: " + tabId);
       assertOk(html.indexOf("web-style-command-strip") >= 0 && html.indexOf('data-style-layer="command-strip"') >= 0, "탭의 command strip 스타일 레이어가 없습니다: " + tabId);
+      assertOk(html.indexOf('data-active-group="' + expectedStructureGroups[tabId] + '"') >= 0, "탭 shell이 업무 그룹을 렌더링하지 않습니다: " + tabId);
+      assertOk(html.indexOf('data-structure-group="' + expectedStructureGroups[tabId] + '"') >= 0, "탭 managed page가 정보 구조 그룹을 렌더링하지 않습니다: " + tabId);
+      assertOk(html.indexOf('data-structure-layer="') >= 0 && html.indexOf('data-structure-entity="') >= 0, "탭 managed page가 레이어/엔티티 구조를 렌더링하지 않습니다: " + tabId);
+      assertOk(html.indexOf('data-command-group="' + expectedStructureGroups[tabId] + '"') >= 0 && html.indexOf("page-command-context") >= 0, "탭 command strip이 정보 구조 컨텍스트를 렌더링하지 않습니다: " + tabId);
       assertOk(html.indexOf("admin-grid") >= 0, "탭 본문이 12컬럼 작업대 구조를 통과하지 않습니다: " + tabId);
     });
     assertOk(legacyOntologyHtml.indexOf("managed-page managed-page-modeling") >= 0, "기존 관계 분석 URL이 투자 분석 탭으로 호환 렌더링되지 않습니다.");
@@ -1147,6 +1163,11 @@ function checkFrontendAdminRender() {
     assertOk(overviewHtml.indexOf("deskbar deskbar-full") >= 0, "홈 탭은 full deskbar를 사용해야 합니다.");
     assertOk(overviewHtml.indexOf("console-shell") >= 0 && styles.indexOf("Next-generation desktop finance console") >= 0, "PC 콘솔 전용 셸 스타일이 적용되지 않았습니다.");
     assertOk(overviewHtml.indexOf("nav-tab-description") >= 0 && styles.indexOf(".nav-tab-description") >= 0, "PC 좌측 네비게이션에 탭 설명 구조가 없습니다.");
+    assertOk(code.indexOf("var navigationGroups = [") >= 0 && code.indexOf("pageStructureCatalog") >= 0, "탭 업무 그룹과 화면 정보 구조 카탈로그가 없습니다.");
+    assertOk(overviewHtml.indexOf("app-nav-group") >= 0 && overviewHtml.indexOf("Command") >= 0 && overviewHtml.indexOf("Market Desk") >= 0 && overviewHtml.indexOf("Decision Stack") >= 0 && overviewHtml.indexOf("Control Plane") >= 0, "PC 좌측 네비게이션이 업무 그룹으로 구조화되지 않았습니다.");
+    assertOk(overviewHtml.indexOf('data-nav-group="market"') >= 0 && overviewHtml.indexOf('data-nav-group="decision"') >= 0 && overviewHtml.indexOf('data-nav-group="control"') >= 0, "탭 버튼이 업무 그룹 메타데이터를 렌더링하지 않습니다.");
+    assertOk(overviewHtml.indexOf("Portfolio Snapshot") >= 0 && notificationHtml.indexOf("Notification Job") >= 0 && modelingHtml.indexOf("Investment Opinion") >= 0, "주요 화면 command strip이 핵심 엔티티를 렌더링하지 않습니다.");
+    assertOk(styles.indexOf(".app-nav-group") >= 0 && styles.indexOf(".page-command-context") >= 0, "업무 그룹 네비게이션과 command context 스타일이 없습니다.");
     assertOk(overviewHtml.indexOf("shell-home") >= 0, "홈 탭 shell이 홈 전용 배치를 사용하지 않습니다.");
     [
       ["계정", accountHtml],

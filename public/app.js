@@ -4,16 +4,16 @@
   var defaultSettings = window.OrbitAlphaDefaultSettings || {};
 
   var tabs = [
-    { id: "overview", label: "홈", description: "운영 요약" },
-    { id: "accounts", label: "계정", description: "DB 계정" },
-    { id: "watchlist", label: "관심종목", description: "알림 대상" },
-    { id: "symbols", label: "전체종목", description: "시장 목록" },
-    { id: "notifications", label: "알림", description: "신호·발송" },
-    { id: "modeling", label: "투자 분석", description: "전략·관계·AI" },
-    { id: "experiments", label: "실험", description: "온톨로지 Lab" },
-    { id: "feed", label: "피드", description: "데이터 품질" },
-    { id: "system", label: "시스템", description: "매뉴얼·흐름" },
-    { id: "settings", label: "설정", description: "런타임 환경" }
+    { id: "overview", label: "홈", description: "관제 요약", groupId: "command" },
+    { id: "accounts", label: "계정", description: "계좌·API 원장", groupId: "market" },
+    { id: "watchlist", label: "관심종목", description: "관찰 대상", groupId: "market" },
+    { id: "symbols", label: "전체종목", description: "시장 유니버스", groupId: "market" },
+    { id: "notifications", label: "알림", description: "신호 실행", groupId: "decision" },
+    { id: "modeling", label: "투자 분석", description: "전략·관계·AI", groupId: "decision" },
+    { id: "experiments", label: "실험", description: "온톨로지 Lab", groupId: "decision" },
+    { id: "feed", label: "피드", description: "뉴스·근거 품질", groupId: "market" },
+    { id: "system", label: "시스템", description: "흐름·매뉴얼", groupId: "control" },
+    { id: "settings", label: "설정", description: "런타임 환경", groupId: "control" }
   ];
   var appBrandName = "Orbit Alpha";
   var appBrandSubtitle = "포트폴리오 신호 궤도 관제";
@@ -26,6 +26,74 @@
   };
   var bottomTabIds = ["overview", "watchlist", "notifications", "modeling", "experiments"];
   var managementTabIds = ["accounts", "symbols", "feed", "system", "settings"];
+  var navigationGroups = [
+    { id: "command", label: "Command", description: "오늘 먼저 보는 관제", tabIds: ["overview"] },
+    { id: "market", label: "Market Desk", description: "계좌·종목·근거 정리", tabIds: ["accounts", "watchlist", "symbols", "feed"] },
+    { id: "decision", label: "Decision Stack", description: "판단·알림·실험 실행", tabIds: ["modeling", "notifications", "experiments"] },
+    { id: "control", label: "Control Plane", description: "문서·런타임 관리", tabIds: ["system", "settings"] }
+  ];
+  var pageStructureCatalog = {
+    overview: {
+      layer: "Mission Control",
+      entity: "Portfolio Snapshot",
+      objective: "계정, 포트폴리오, 신호, 모델 상태를 한 화면에서 먼저 판단합니다.",
+      workflow: ["상태 확인", "위험 노출", "즉시 조치"]
+    },
+    accounts: {
+      layer: "Account Registry",
+      entity: "Service Account",
+      objective: "계좌/API/알림 채널을 원장으로 정리하고 데이터 출처를 검증합니다.",
+      workflow: ["계정 목록", "출처 검증", "저장 관리"]
+    },
+    watchlist: {
+      layer: "Observation Book",
+      entity: "Watch Symbol",
+      objective: "계정별 관찰 종목을 분리해 알림과 전략 판단의 입력으로 관리합니다.",
+      workflow: ["계정 선택", "종목 편집", "알림 연결"]
+    },
+    symbols: {
+      layer: "Universe Catalog",
+      entity: "Market Symbol",
+      objective: "시장 유니버스를 검색하고 관심종목 편입 후보를 정리합니다.",
+      workflow: ["목록 조회", "필터 적용", "계정 편입"]
+    },
+    notifications: {
+      layer: "Signal Execution",
+      entity: "Notification Job",
+      objective: "왜 알림이 만들어졌는지 판단 로그, 정책, 템플릿을 분리해 확인합니다.",
+      workflow: ["판단 확인", "정책 조정", "본문 발송"]
+    },
+    modeling: {
+      layer: "Strategy Workbench",
+      entity: "Investment Opinion",
+      objective: "보유·관심 데이터와 관계 그래프를 투자 판단 후보로 압축합니다.",
+      workflow: ["판단판", "근거 평가", "액션 큐"]
+    },
+    experiments: {
+      layer: "Ontology Lab",
+      entity: "Rule Experiment",
+      objective: "새 관계 규칙을 샌드박스에서 재생하고 승격 가능성을 검토합니다.",
+      workflow: ["규칙 초안", "재생 검증", "승격 판단"]
+    },
+    feed: {
+      layer: "Evidence Pipeline",
+      entity: "Research Evidence",
+      objective: "뉴스, 공시, 시장 데이터를 근거 저장소로 수집하고 품질을 점검합니다.",
+      workflow: ["소스 설정", "수집 품질", "근거 저장"]
+    },
+    system: {
+      layer: "Operating Manual",
+      entity: "System Flow",
+      objective: "데이터 수집부터 추론, 알림까지 전체 실행 흐름을 문서화합니다.",
+      workflow: ["구조 이해", "이벤트 흐름", "운영 기준"]
+    },
+    settings: {
+      layer: "Runtime Control",
+      entity: "Local Setting",
+      objective: "로컬 우선 환경, 외부 API, 전달 채널 설정을 안전하게 관리합니다.",
+      workflow: ["로컬 상태", "연결 설정", "변경 저장"]
+    }
+  };
   var notificationSections = [
     { id: "status", label: "현황", description: "발송 판단" },
     { id: "signals", label: "신호", description: "감지 내역" },
@@ -57,6 +125,40 @@
 
   function activeTabMeta() {
     return tabs.filter(function (tab) { return tab.id === state.activeTab; })[0] || tabs[0];
+  }
+
+  function tabById(tabId) {
+    return tabs.filter(function (tab) { return tab.id === tabId; })[0] || null;
+  }
+
+  function navigationGroupById(groupId) {
+    return navigationGroups.filter(function (group) { return group.id === groupId; })[0] || navigationGroups[0];
+  }
+
+  function navigationGroupForTab(tabId) {
+    var tab = tabById(tabId) || tabs[0];
+    return navigationGroupById(tab.groupId || "command");
+  }
+
+  function tabsForNavigationGroup(group) {
+    var ids = (group && group.tabIds) || [];
+    return ids.map(tabById).filter(Boolean);
+  }
+
+  function pageStructureMeta(pageId) {
+    var tab = tabById(pageId) || tabs[0];
+    var group = navigationGroupForTab(tab.id);
+    var structure = pageStructureCatalog[pageId] || pageStructureCatalog[tab.id] || {};
+    return {
+      groupId: group.id,
+      groupLabel: group.label,
+      groupDescription: group.description,
+      layer: structure.layer || tab.label,
+      entity: structure.entity || tab.label,
+      objective: structure.objective || tab.description || "",
+      workflow: structure.workflow || [],
+      tabLabel: tab.label || pageId
+    };
   }
 
   var alertRuleCatalog = [
@@ -6049,14 +6151,15 @@
     var modeLabel = snapshot.preview ? "Pages preview" : (toss.mode === "live" ? "Toss live" : "Local server");
     var modeClass = toss.mode === "live" ? "live" : "demo";
     var tab = activeTabMeta();
+    var structure = pageStructureMeta(tab.id);
     var showHomeDeskbar = state.activeTab === "overview";
-    var subtitle = (tab.description || "운영") + " · 마지막 데이터 " + formatClock(snapshot.generatedAt);
+    var subtitle = (structure.objective || tab.description || "운영") + " · 마지막 데이터 " + formatClock(snapshot.generatedAt);
     return [
-      '<main class="shell console-shell ' + escapeHtml(webStyleContract.shellClass) + (showHomeDeskbar ? " shell-home" : " shell-page") + '" data-web-style="' + escapeHtml(webStyleContract.id) + '" data-web-style-version="' + escapeHtml(webStyleContract.version) + '">',
+      '<main class="shell console-shell ' + escapeHtml(webStyleContract.shellClass) + (showHomeDeskbar ? " shell-home" : " shell-page") + '" data-web-style="' + escapeHtml(webStyleContract.id) + '" data-web-style-version="' + escapeHtml(webStyleContract.version) + '" data-active-group="' + escapeHtml(structure.groupId) + '">',
       renderAppNavigation(tab, modeLabel, modeClass),
       '<section class="topbar web-style-topbar" data-style-region="topbar">',
       '<div class="topbar-copy">',
-      '<p class="eyebrow">' + escapeHtml(appBrandName) + ' Console</p>',
+      '<p class="eyebrow">' + escapeHtml(structure.groupLabel + " / " + structure.layer) + '</p>',
       '<h1>' + escapeHtml(tab.label || "홈") + '</h1>',
       '<p class="subtle">' + escapeHtml(subtitle) + '</p>',
       '</div>',
@@ -6148,11 +6251,12 @@
     var tbox = strategy.tbox || {};
     var relationCount = Number(abox.relationCount || strategy.relationCount || 0);
     var activeTab = options.activeTab || activeTabMeta();
+    var structure = pageStructureMeta(activeTab.id);
     var compact = !!options.compact;
     if (compact) {
       return [
         '<section class="deskbar deskbar-compact web-style-deskbar" data-style-region="deskbar" data-style-rail="compact" aria-label="콘솔 상태 요약">',
-        renderDeskbarCell("Workspace", activeTab.label || "업무", activeTab.description || "현재 작업", "neutral"),
+        renderDeskbarCell("Domain", structure.groupLabel, structure.entity || activeTab.label || "현재 작업", "neutral"),
         renderDeskbarCell("Data", modeLabel, "Last " + formatClock(snapshot.generatedAt), modeClass),
         renderDeskbarCell("Portfolio", formatMoney(portfolio.total || 0), positions + " positions", "neutral"),
         renderDeskbarCell("Alerts", enabledRules + "/" + policyRules.length, state.realtime.connected ? "WebSocket live" : "HTTP polling", state.realtime.connected ? "live" : "demo"),
@@ -6182,8 +6286,9 @@
 
   function navTabButton(tab, className) {
     var active = state.activeTab === tab.id;
+    var structure = pageStructureMeta(tab.id);
     return [
-      '<button type="button" class="' + escapeHtml(className) + (active ? " active" : "") + '" data-tab="' + escapeHtml(tab.id) + '"' + (active ? ' aria-current="page"' : "") + '>',
+      '<button type="button" class="' + escapeHtml(className) + (active ? " active" : "") + '" data-tab="' + escapeHtml(tab.id) + '" data-nav-group="' + escapeHtml(structure.groupId) + '"' + (active ? ' aria-current="page"' : "") + '>',
       '<span class="nav-tab-label">' + escapeHtml(tab.label) + '</span>',
       '<span class="nav-tab-description">' + escapeHtml(tab.description || "") + '</span>',
       '</button>'
@@ -6191,34 +6296,37 @@
   }
 
   function renderAppNavigation(activeTab, modeLabel, modeClass) {
-    var primaryTabs = tabs.filter(function (tab) {
-      return bottomTabIds.indexOf(tab.id) >= 0;
-    });
     var managementTabs = tabs.filter(function (tab) {
       return managementTabIds.indexOf(tab.id) >= 0;
     });
     var managementActive = managementTabs.some(function (tab) {
       return tab.id === state.activeTab;
     });
+    function renderAppNavGroup(group, index) {
+      var groupTabs = tabsForNavigationGroup(group);
+      var active = groupTabs.some(function (tab) { return tab.id === state.activeTab; });
+      if (!groupTabs.length) return "";
+      return [
+        index ? '<span class="app-nav-divider" aria-hidden="true"></span>' : '',
+        '<section class="app-nav-group' + (active ? " active" : "") + '" data-nav-group="' + escapeHtml(group.id) + '">',
+        '<span class="app-nav-section-label"><strong>' + escapeHtml(group.label) + '</strong><em>' + escapeHtml(group.description || "") + '</em></span>',
+        groupTabs.map(function (tab) {
+          return navTabButton(tab, "app-nav-tab " + group.id);
+        }).join(""),
+        '</section>'
+      ].join("");
+    }
     return [
       '<nav class="app-nav web-style-nav" data-style-region="navigation" aria-label="앱 네비게이션">',
       '<div class="app-nav-brand">',
       '<span class="app-brand-mark" aria-hidden="true"><span></span></span>',
       '<div class="app-brand-copy">',
       '<strong>' + escapeHtml(appBrandName) + '</strong>',
-      '<span class="app-brand-subtitle">' + escapeHtml(activeTab.description || appBrandSubtitle) + '</span>',
+      '<span class="app-brand-subtitle">' + escapeHtml(navigationGroupForTab(activeTab.id).label + " · " + (activeTab.description || appBrandSubtitle)) + '</span>',
       '</div>',
       '</div>',
-      '<div class="app-nav-tabs" aria-label="전체 탭">',
-      '<span class="app-nav-section-label">Core Console</span>',
-      primaryTabs.map(function (tab) {
-        return navTabButton(tab, "app-nav-tab primary");
-      }).join(""),
-      '<span class="app-nav-divider" aria-hidden="true"></span>',
-      '<span class="app-nav-section-label">Operations</span>',
-      managementTabs.map(function (tab) {
-        return navTabButton(tab, "app-nav-tab admin");
-      }).join(""),
+      '<div class="app-nav-tabs" aria-label="업무 구조 탭">',
+      navigationGroups.map(renderAppNavGroup).join(""),
       '</div>',
       '<details class="app-nav-menu">',
       '<summary><strong>운영</strong><span>' + escapeHtml(managementActive ? activeTab.label : "알림·설정") + '</span></summary>',
@@ -6313,8 +6421,9 @@
   }
 
   function renderManagedPage(pageId, snapshot, content) {
+    var structure = pageStructureMeta(pageId || "overview");
     return [
-      '<div class="managed-page managed-page-' + escapeHtml(pageId || "overview") + ' ' + escapeHtml(webStyleContract.pageClass) + ' web-style-screen-' + escapeHtml(pageId || "overview") + '" data-style-contract="' + escapeHtml(webStyleContract.id) + '" data-style-screen="' + escapeHtml(pageId || "overview") + '">',
+      '<div class="managed-page managed-page-' + escapeHtml(pageId || "overview") + ' ' + escapeHtml(webStyleContract.pageClass) + ' web-style-screen-' + escapeHtml(pageId || "overview") + '" data-style-contract="' + escapeHtml(webStyleContract.id) + '" data-style-screen="' + escapeHtml(pageId || "overview") + '" data-structure-group="' + escapeHtml(structure.groupId) + '" data-structure-layer="' + escapeHtml(structure.layer) + '" data-structure-entity="' + escapeHtml(structure.entity) + '">',
       renderPageCommandStrip(pageId, snapshot),
       content,
       '</div>'
@@ -6610,55 +6719,63 @@
     var enabledRules = notificationEnabledRuleCount();
     var profiles = {
       overview: {
-        steps: [["01", "Status", "계정·데이터"], ["02", "Risk", "모니터링"], ["03", "Action", "알림·전략"]],
+        steps: [["01", "상태", "계정·데이터"], ["02", "위험", "노출·모니터링"], ["03", "조치", "알림·전략"]],
         metrics: [["계정", serviceAccounts().length || 0], ["평가", formatMoney(portfolio.total || 0)], ["알림", enabledRules + "/" + notificationPolicyCatalog().length]]
       },
       accounts: {
-        steps: [["01", "Directory", "계정 목록"], ["02", "Exposure", "노출 상태"], ["03", "Save", "DB 저장"]],
+        steps: [["01", "목록", "계정 원장"], ["02", "검증", "API·잔고"], ["03", "저장", "DB 반영"]],
         metrics: [["활성", enabledServiceAccounts().length + "/" + serviceAccounts().length], ["Toss", configuredCount(["tossClientId", "tossClientSecret"]) + "/2"], ["Telegram", configuredCount(["telegramBotToken", "telegramChatId"]) + "/2"]]
       },
       watchlist: {
-        steps: [["01", "Account", "대상 선택"], ["02", "Universe", "종목 검색"], ["03", "Notify", "알림 연결"]],
+        steps: [["01", "계정", "대상 선택"], ["02", "종목", "관찰 편집"], ["03", "연결", "알림 입력"]],
         metrics: [["계정", serviceAccounts().length || 0], ["관심", allAccountWatchlistSymbols().length || watchlistSymbols().length], ["시세", watchlist.length]]
       },
       symbols: {
-        steps: [["01", "Catalog", "시장 목록"], ["02", "Filter", "검색·필터"], ["03", "Add", "계정 편입"]],
+        steps: [["01", "목록", "시장 유니버스"], ["02", "필터", "검색·구분"], ["03", "편입", "계정 연결"]],
         metrics: [["기본", watchlistSymbols().length], ["계정", allAccountWatchlistSymbols().length], ["시장", symbolMarketCount()]]
       },
       feed: {
-        steps: [["01", "Source", "피드 설정"], ["02", "Quality", "수집 품질"], ["03", "Evidence", "저장 근거"]],
+        steps: [["01", "소스", "수집 채널"], ["02", "품질", "오류·신선도"], ["03", "근거", "Evidence 저장"]],
         metrics: [["피드", (state.feed && state.feed.items ? state.feed.items.length : 0)], ["근거", ((currentResearchEvidence().summary || {}).total || 0)], ["오류", (state.feed && state.feed.errors ? state.feed.errors.length : 0)]]
       },
       system: {
-        steps: [["01", "Manual", "처음 보는 사람"], ["02", "Data", "수집·저장"], ["03", "Event", "알림·추론"]],
+        steps: [["01", "지도", "처음 보는 사람"], ["02", "데이터", "수집·저장"], ["03", "이벤트", "알림·추론"]],
         metrics: [["워커", "6"], ["이벤트", "12+"], ["저장소", "MySQL"]]
       },
       notifications: {
-        steps: [["01", "Decision", "최근 판단"], ["02", "Policy", "타입 룰"], ["03", "Template", "본문·발송"]],
+        steps: [["01", "판단", "최근 알림 이유"], ["02", "정책", "타입별 룰"], ["03", "본문", "템플릿·발송"]],
         metrics: [["관리 룰", enabledRules + "/" + notificationPolicyCatalog().length], ["템플릿", notificationTemplateItems().length], ["큐", notificationJobSummaryText(state.realtime.notificationJobs)]]
       },
       modeling: {
-        steps: [["01", "Board", "오늘의 판단판"], ["02", "Queue", "보유·관심 후보"], ["03", "Graph", "InferenceBox 게이트"]],
+        steps: [["01", "판단판", "오늘의 구조"], ["02", "후보", "보유·관심"], ["03", "관계", "InferenceBox"]],
         metrics: [["보유", positions.length], ["관심", watchlist.length], ["추론 보류", ((snapshot.investmentAnalysis || {}).graphGate || {}).blockedCount || 0]]
       },
       experiments: {
-        steps: [["01", "Draft", "후보 규칙"], ["02", "Replay", "샌드박스"], ["03", "Promote", "승격 검토"]],
+        steps: [["01", "초안", "후보 규칙"], ["02", "재생", "샌드박스"], ["03", "승격", "운영 검토"]],
         metrics: [["전체", (ontologyExperimentPayload().count || ontologyExperimentItems().length || 0)], ["활성", ontologyExperimentPayload().activeCount || 0], ["최근", ((ontologyExperimentPayload().latestRun || {}).promotionStatus || "대기")]]
       },
       ontology: {
-        steps: [["01", "TBox", "스키마"], ["02", "ABox", "실체"], ["03", "Relation", "관계·근거"]],
+        steps: [["01", "TBox", "스키마"], ["02", "ABox", "현재 실체"], ["03", "관계", "근거 연결"]],
         metrics: [["TBox", ((strategy.tbox || {}).classes || []).length], ["ABox", abox.entityCount || 0], ["관계", abox.relationCount || strategy.relationCount || 0]]
       },
       monitoring: {
-        steps: [["01", "Snapshot", "수집"], ["02", "Alert", "감지"], ["03", "Detail", "종목 상세"]],
+        steps: [["01", "스냅샷", "계좌 수집"], ["02", "감지", "가격·수급"], ["03", "상세", "종목 확인"]],
         metrics: [["보유", positions.length], ["관심", watchlist.length], ["평가", formatMoney(portfolio.total || 0)]]
       },
       settings: {
-        steps: [["01", "Local", "설정 DB"], ["02", "Provider", "외부 연결"], ["03", "Save", "변경 반영"]],
+        steps: [["01", "로컬", "설정 DB"], ["02", "연결", "외부 Provider"], ["03", "저장", "변경 반영"]],
         metrics: [["저장", state.settingsSaved ? "완료" : "대기"], ["잠금", state.serverSettingsLocked ? "읽기전용" : "수정"], ["API", configuredCount(["alphaVantageApiKey", "coingeckoApiKey", "fredApiKey", "opendartApiKey"]) + "/4"]]
       }
     };
-    return profiles[pageId] || profiles.overview;
+    var structure = pageStructureMeta(pageId || "overview");
+    var profile = profiles[pageId] || profiles.overview;
+    profile.groupId = structure.groupId;
+    profile.group = structure.groupLabel;
+    profile.layer = structure.layer;
+    profile.entity = structure.entity;
+    profile.objective = structure.objective;
+    profile.workflow = structure.workflow;
+    return profile;
   }
 
   function symbolMarketCount() {
@@ -6689,7 +6806,12 @@
   function renderPageCommandStrip(pageId, snapshot) {
     var profile = pageCommandProfile(pageId, snapshot);
     return [
-      '<section class="page-command-strip ' + escapeHtml(webStyleContract.commandClass) + '" data-style-layer="command-strip" aria-label="페이지 작업 상태">',
+      '<section class="page-command-strip ' + escapeHtml(webStyleContract.commandClass) + '" data-style-layer="command-strip" data-command-group="' + escapeHtml(profile.groupId) + '" aria-label="페이지 작업 상태">',
+      '<div class="page-command-context">',
+      '<span class="page-command-kicker">' + escapeHtml(profile.group + " / " + profile.layer) + '</span>',
+      '<strong>' + escapeHtml(profile.entity) + '</strong>',
+      '<em>' + escapeHtml(profile.objective) + '</em>',
+      '</div>',
       '<div class="page-command-flow">',
       profile.steps.map(renderPageCommandStep).join(""),
       '</div>',

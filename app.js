@@ -102,10 +102,11 @@
     { id: "diagnostics", label: "진단", description: "채널·실패 원인" }
   ];
   var accountSections = [
-    { id: "overview", label: "개요", description: "상태 요약" },
-    { id: "connections", label: "연결", description: "API 출처" },
-    { id: "balance", label: "금액", description: "산식 검증" },
-    { id: "management", label: "관리", description: "계정·키" }
+    { id: "status", label: "상태", description: "계정 진단" },
+    { id: "identity", label: "계정", description: "식별 정보" },
+    { id: "connections", label: "연결", description: "증권사 인증" },
+    { id: "balance", label: "자산 검증", description: "금액 산식" },
+    { id: "history", label: "데이터 이력", description: "신선도" }
   ];
   var strategySections = [
     { id: "overview", label: "오늘의 판단", description: "액션 큐" },
@@ -128,8 +129,8 @@
   ];
   var pageModeSectionMap = {
     accounts: {
-      results: ["overview", "connections", "balance"],
-      settings: ["management"]
+      results: ["status", "connections", "balance", "history"],
+      settings: ["identity"]
     },
     notifications: {
       results: ["status", "candidates"],
@@ -959,10 +960,12 @@
 
   function normalizeAccountSection(value) {
     var requested = String(value || "").toLowerCase();
+    if (requested === "overview" || requested === "summary" || requested === "health") return "status";
     if (requested === "api" || requested === "source" || requested === "sources") return "connections";
-    if (requested === "money" || requested === "portfolio" || requested === "audit") return "balance";
-    if (requested === "settings" || requested === "form" || requested === "accounts") return "management";
-    return accountSections.some(function (section) { return section.id === requested; }) ? requested : "overview";
+    if (requested === "money" || requested === "portfolio" || requested === "audit" || requested === "assets") return "balance";
+    if (requested === "settings" || requested === "form" || requested === "accounts" || requested === "management") return "identity";
+    if (requested === "freshness" || requested === "logs" || requested === "sync") return "history";
+    return accountSections.some(function (section) { return section.id === requested; }) ? requested : "status";
   }
 
   function normalizeStrategySection(value) {
@@ -1054,7 +1057,7 @@
     params.delete("strategy");
     params.delete("ontology");
     params.delete("mode");
-    if (normalized === "overview") {
+    if (normalized === "status") {
       params.delete("account");
     } else {
       params.set("account", normalized);
@@ -3121,15 +3124,6 @@
       clientSecret: "",
       accountSeq: "",
       watchlistSymbols: currentSettings.watchlistSymbols || defaultSettings.watchlistSymbols,
-      notifyProvider: currentSettings.notifyProvider || "telegram",
-      telegramBotToken: "",
-      telegramChatId: currentSettings.telegramChatId || "",
-      notifyLinkUrl: currentSettings.notifyLinkUrl || defaultSettings.notifyLinkUrl,
-      quietHoursEnabled: true,
-      quietHoursStart: "22:00",
-      quietHoursEnd: "05:00",
-      quietHoursTimezone: "Asia/Seoul",
-      messageDeliveryLevel: "absoluteBeginner",
       enabled: true
     };
   }
@@ -3199,15 +3193,6 @@
       clientSecret: "",
       accountSeq: textValueUnlessBoolean(account.accountSeq),
       watchlistSymbols: Array.isArray(account.watchlistSymbols) ? account.watchlistSymbols.join(",") : String(account.watchlistSymbols || ""),
-      notifyProvider: account.notifyProvider || settingValue("notifyProvider") || "telegram",
-      telegramBotToken: "",
-      telegramChatId: textValueUnlessBoolean(account.telegramChatId),
-      notifyLinkUrl: account.notifyLinkUrl || settingValue("notifyLinkUrl") || defaultSettings.notifyLinkUrl,
-      quietHoursEnabled: account.quietHoursEnabled !== false,
-      quietHoursStart: account.quietHoursStart || "22:00",
-      quietHoursEnd: account.quietHoursEnd || "05:00",
-      quietHoursTimezone: account.quietHoursTimezone || "Asia/Seoul",
-      messageDeliveryLevel: normalizeMessageDeliveryLevel(account.messageDeliveryLevel),
       enabled: account.enabled !== false
     };
   }
@@ -3221,19 +3206,10 @@
       baseUrl: String(draft.baseUrl || "https://openapi.tossinvest.com").trim(),
       accountSeq: String(draft.accountSeq || "").trim(),
       watchlistSymbols: normalizeSymbols(draft.watchlistSymbols || "").join(","),
-      notifyProvider: String(draft.notifyProvider || "").trim(),
-      telegramChatId: String(draft.telegramChatId || "").trim(),
-      notifyLinkUrl: String(draft.notifyLinkUrl || "").trim(),
-      quietHoursEnabled: draft.quietHoursEnabled !== false,
-      quietHoursStart: String(draft.quietHoursStart || "22:00").trim(),
-      quietHoursEnd: String(draft.quietHoursEnd || "05:00").trim(),
-      quietHoursTimezone: String(draft.quietHoursTimezone || "Asia/Seoul").trim(),
-      messageDeliveryLevel: normalizeMessageDeliveryLevel(draft.messageDeliveryLevel),
       enabled: draft.enabled !== false
     };
     if (String(draft.clientId || "").trim()) payload.clientId = String(draft.clientId || "").trim();
     if (String(draft.clientSecret || "").trim()) payload.clientSecret = String(draft.clientSecret || "").trim();
-    if (String(draft.telegramBotToken || "").trim()) payload.telegramBotToken = String(draft.telegramBotToken || "").trim();
     return payload;
   }
 
@@ -3311,12 +3287,6 @@
       baseUrl: String(account.baseUrl || "https://openapi.tossinvest.com").trim(),
       accountSeq: textValueUnlessBoolean(account.accountSeq),
       watchlistSymbols: normalizeSymbols((symbols || []).join(",")).join(","),
-      notifyProvider: String(account.notifyProvider || settingValue("notifyProvider") || "telegram").trim(),
-      notifyLinkUrl: String(account.notifyLinkUrl || settingValue("notifyLinkUrl") || "").trim(),
-      quietHoursEnabled: account.quietHoursEnabled !== false,
-      quietHoursStart: account.quietHoursStart || "22:00",
-      quietHoursEnd: account.quietHoursEnd || "05:00",
-      quietHoursTimezone: account.quietHoursTimezone || "Asia/Seoul",
       enabled: account.enabled !== false
     };
   }
@@ -6635,7 +6605,7 @@
 
   function renderSystemQuickManualPanel() {
     var steps = [
-      ["01", "계정 등록", "계정 탭에서 Toss 자격 정보, 계좌 순번, Telegram 채널을 저장합니다. 저장된 secret은 화면에 다시 노출하지 않습니다."],
+      ["01", "계정 등록", "계정 탭에서 Toss 자격 정보, 계좌 순번, 관심 종목 기준을 저장합니다. 알림 채널과 전달 정책은 알림/설정 탭에서 따로 관리합니다."],
       ["02", "관심종목 구성", "관심종목 탭에서 계정별 추적 대상을 넣습니다. 보유 종목과 관심 종목은 알림 판단에서 서로 다른 관계로 다룹니다."],
       ["03", "데이터 확인", "피드 탭과 전체종목 탭에서 종목 카탈로그, 뉴스, 공시, 외부 API 수집 상태를 확인합니다."],
       ["04", "알림 정책 조정", "알림 탭에서 메시지 타입별 사용 여부, 임계값, 발송 템플릿, 최근 판단을 점검합니다."],
@@ -6868,8 +6838,8 @@
         metrics: [["계정", serviceAccounts().length || 0], ["평가", formatMoney(portfolio.total || 0)], ["알림", enabledRules + "/" + notificationPolicyCatalog().length]]
       },
       accounts: {
-        steps: [["01", "목록", "계정 원장"], ["02", "검증", "API·잔고"], ["03", "저장", "DB 반영"]],
-        metrics: [["활성", enabledServiceAccounts().length + "/" + serviceAccounts().length], ["Toss", configuredCount(["tossClientId", "tossClientSecret"]) + "/2"], ["Telegram", configuredCount(["telegramBotToken", "telegramChatId"]) + "/2"]]
+        steps: [["01", "상태", "계정 진단"], ["02", "연결", "증권사·잔고"], ["03", "저장", "DB 반영"]],
+        metrics: [["활성", enabledServiceAccounts().length + "/" + serviceAccounts().length], ["Toss", configuredCount(["tossClientId", "tossClientSecret"]) + "/2"], ["계좌", serviceAccounts().filter(function (account) { return account.accountSeq; }).length + "/" + serviceAccounts().length]]
       },
       watchlist: {
         steps: [["01", "계정", "대상 선택"], ["02", "종목", "관찰 편집"], ["03", "연결", "알림 입력"]],
@@ -8941,8 +8911,7 @@
     var accounts = state.serviceAccounts || [];
     var enabled = accounts.filter(function (account) { return account.enabled !== false; }).length;
     var tossReady = accounts.filter(function (account) { return account.clientId && account.clientSecret; }).length;
-    var telegramReady = accounts.filter(function (account) { return account.telegramBotToken && account.telegramChatId; }).length;
-    var quietEnabled = accounts.filter(function (account) { return account.quietHoursEnabled !== false; }).length;
+    var accountSeqReady = accounts.filter(function (account) { return account.accountSeq; }).length;
     var classes = "panel account-directory-panel" + (options.full ? " account-directory-wide" : "");
     return [
       '<article class="' + classes + '">',
@@ -8956,8 +8925,7 @@
       '<div class="account-directory-summary">',
       renderDirectoryStat("활성", enabled + "/" + accounts.length),
       renderDirectoryStat("토스 API", tossReady + "개"),
-      renderDirectoryStat("텔레그램", telegramReady + "개"),
-      renderDirectoryStat("알림 금지", quietEnabled + "개"),
+      renderDirectoryStat("계좌 seq", accountSeqReady + "개"),
       '</div>',
       '<div class="account-card-list">',
       state.serviceAccountsLoading ? '<p class="subtle">계정 DB를 읽는 중입니다.</p>' : '',
@@ -8995,7 +8963,7 @@
       '<button class="mini-button" data-account-edit="' + escapeHtml(account.id || "") + '">수정</button>',
       '</div>',
       options.compact ? renderAccountCredentialPills(account) : renderAccountCredentialSummary(account),
-      '<div class="account-card-meta"><span class="chip">관심 ' + escapeHtml(symbols.length) + '개</span><span class="chip">' + escapeHtml(accountQuietHoursText(account)) + '</span></div>',
+      '<div class="account-card-meta"><span class="chip">관심 ' + escapeHtml(symbols.length) + '개</span><span class="chip">' + escapeHtml(account.accountSeq ? "계좌 seq 저장" : "계좌 seq 선택 안함") + '</span></div>',
       options.compact ? '' : '<div class="chip-row">' + (symbols.length ? symbols.map(function (symbol) {
         return renderWatchSymbolChip(symbol);
       }).join("") : '<span class="subtle">계정에 저장된 관심 종목이 없습니다.</span>') + '</div>',
@@ -9009,16 +8977,8 @@
       '<div class="account-credential-pills">',
       configuredChip("Toss API", Boolean(account.clientId && account.clientSecret)),
       configuredChip("계좌 seq", Boolean(account.accountSeq), account.accountSeq || "선택"),
-      configuredChip("Telegram", Boolean(account.telegramBotToken && account.telegramChatId)),
-      configuredChip("알림 금지", account.quietHoursEnabled !== false, accountQuietHoursText(account)),
       '</div>'
     ].join("");
-  }
-
-  function accountQuietHoursText(account) {
-    account = account || {};
-    if (account.quietHoursEnabled === false) return "알림 금지 꺼짐";
-    return "알림 금지 " + String(account.quietHoursStart || "22:00") + "-" + String(account.quietHoursEnd || "05:00") + " " + String(account.quietHoursTimezone || "Asia/Seoul");
   }
 
   function configuredChip(label, configured, detail) {
@@ -9032,7 +8992,6 @@
 
   function renderAccountCredentialSummary(account) {
     account = account || {};
-    var provider = account.notifyProvider || settingValue("notifyProvider") || "-";
     return [
       '<div class="account-credential-grid">',
       '<div>',
@@ -9045,20 +9004,11 @@
       '</div>',
       '</div>',
       '<div>',
-      '<strong>텔레그램</strong>',
-      '<span>' + escapeHtml(provider + (account.notifyLinkUrl ? " · " + account.notifyLinkUrl : "")) + '</span>',
+      '<strong>계정 식별</strong>',
+      '<span>' + escapeHtml((account.provider || "toss") + " · " + (account.enabled === false ? "중지" : "사용")) + '</span>',
       '<div class="chip-row">',
-      configuredChip("Bot token", Boolean(account.telegramBotToken)),
-      configuredChip("Chat ID", Boolean(account.telegramChatId), account.telegramChatId ? "저장됨" : ""),
-      configuredChip("알림 링크", Boolean(account.notifyLinkUrl)),
-      '</div>',
-      '</div>',
-      '<div>',
-      '<strong>알림 금지 시간</strong>',
-      '<span>' + escapeHtml(accountQuietHoursText(account)) + '</span>',
-      '<div class="chip-row">',
-      configuredChip("금지 시간", account.quietHoursEnabled !== false, accountQuietHoursText(account)),
-      configuredChip("전달 수준", true, messageDeliveryLevelLabel(account.messageDeliveryLevel)),
+      configuredChip("표시 이름", Boolean(account.label), account.label || ""),
+      configuredChip("계정 ID", Boolean(account.id), account.id || ""),
       '</div>',
       '</div>',
       '</div>'
@@ -9074,22 +9024,16 @@
       '<div class="chip-row">' + configuredChip("API key", false) + configuredChip("Secret", false) + '</div>',
       '</div>',
       '<div>',
-      '<strong>텔레그램</strong>',
-      '<span>알림 채널 저장 후 bot token과 chat id 상태를 확인할 수 있습니다.</span>',
-      '<div class="chip-row">' + configuredChip("Bot token", false) + configuredChip("Chat ID", false) + '</div>',
-      '</div>',
-      '<div>',
-      '<strong>알림 금지 시간</strong>',
-      '<span>기본값은 22:00-05:00 Asia/Seoul입니다.</span>',
-      '<div class="chip-row">' + configuredChip("금지 시간", true, "22:00-05:00 Asia/Seoul") + '</div>',
-      '<div class="chip-row">' + configuredChip("전달 수준", true, "왕초보") + '</div>',
+      '<strong>계정 식별</strong>',
+      '<span>표시 이름, 증권사, 사용 여부는 계정 저장 후 요약됩니다.</span>',
+      '<div class="chip-row">' + configuredChip("표시 이름", false) + configuredChip("계정 ID", false) + '</div>',
       '</div>',
       '</div>'
     ].join("");
   }
 
   function accountRowStatusChip(account) {
-    var ready = Boolean(account.clientId && account.clientSecret && account.telegramBotToken && account.telegramChatId);
+    var ready = Boolean(account.clientId && account.clientSecret);
     if (account.enabled === false) return '<span class="status-pill demo">중지</span>';
     return '<span class="status-pill ' + (ready ? "live" : "demo") + '">' + escapeHtml(ready ? "연결 완료" : "설정 확인") + '</span>';
   }
@@ -9470,7 +9414,7 @@
   function renderAccountApiLedger(accounts, snapshot) {
     var configured = state.serverConfigured || {};
     var tossReady = accounts.filter(function (account) { return account.clientId && account.clientSecret; }).length;
-    var telegramReady = accounts.filter(function (account) { return account.telegramBotToken && account.telegramChatId; }).length;
+    var accountSeqReady = accounts.filter(function (account) { return account.accountSeq; }).length;
     var items = accountSnapshotItems(snapshot);
     var kisItems = items.filter(function (item) {
       return String(item.quoteSource || item.signalSource || "").toLowerCase().indexOf("kis") >= 0;
@@ -9478,10 +9422,9 @@
     return [
       '<section class="account-api-ledger">',
       renderAccountApiStatusRow("Toss Open API", tossReady + "/" + accounts.length + " 계정", ((snapshot.toss || {}).status || "계정별 key/secret 기준"), tossReady ? "ok" : "warn"),
-      renderAccountApiStatusRow("KIS 시세·수급", configured.kisAppKey && configured.kisAppSecret ? "키 저장됨" : "키 필요", kisItems ? kisItems + "개 종목 보강" : "시세 보강 대기", configured.kisAppKey && configured.kisAppSecret ? "ok" : "warn"),
-      renderAccountApiStatusRow("OpenDART 공시", configured.opendartApiKey ? "키 저장됨" : "키 필요", settingValue("externalDartEnabled") ? "공시 수집 사용" : "공시 수집 꺼짐", configured.opendartApiKey ? "ok" : "warn"),
-      renderAccountApiStatusRow("코인·매크로", [configured.coingeckoApiKey ? "CoinGecko" : "", configured.fredApiKey ? "FRED" : ""].filter(Boolean).join(" / ") || "선택 키 없음", "BTC·금리·환율 흐름 보강", configured.coingeckoApiKey || configured.fredApiKey ? "ok" : "neutral"),
-      renderAccountApiStatusRow("알림 채널", telegramReady + "/" + accounts.length + " Telegram", "계정별 bot token/chat id 저장 상태", telegramReady ? "ok" : "warn"),
+      renderAccountApiStatusRow("계좌 순번", accountSeqReady + "/" + accounts.length + " 계정", "계좌 조회에 필요한 account seq 저장 상태", accountSeqReady ? "ok" : "warn"),
+      renderAccountApiStatusRow("KIS 시세·수급", configured.kisAppKey && configured.kisAppSecret ? "키 저장됨" : "키 필요", kisItems ? kisItems + "개 종목 보강" : "보유 종목 시세 보강 대기", configured.kisAppKey && configured.kisAppSecret ? "ok" : "neutral"),
+      renderAccountApiStatusRow("스냅샷 모드", accountSnapshotModeLabel(snapshot), "actual/cache/mock 계정 데이터 구분", accountSnapshotTone(snapshot)),
       '</section>'
     ].join("");
   }
@@ -9540,7 +9483,7 @@
       '<button class="text-button" data-action="refresh">데이터 새로고침</button>',
       activePageMode("accounts") === "settings"
         ? '<button class="text-button primary" data-action="new-service-account">새 계정</button>'
-        : '<button class="text-button" data-account-section="management">계정 관리</button>',
+        : '<button class="text-button" data-account-section="identity">계정 관리</button>',
       '</div>',
       '</div>'
     ].join("");
@@ -9550,7 +9493,8 @@
     var section = activeSectionForPageMode("accounts", accountSections, normalizeAccountSection(state.activeAccountSection));
     if (section === "connections") return renderAccountConnectionsPanel(snapshot);
     if (section === "balance") return renderAccountBalancePanel(snapshot);
-    if (section === "management") return renderAdminAccountPanel();
+    if (section === "history") return renderAccountDataHistoryPanel(snapshot);
+    if (section === "identity") return renderAdminAccountPanel();
     return renderAccountCommandCenter(snapshot);
   }
 
@@ -9562,8 +9506,8 @@
       '<div class="panel-head">',
       '<div>',
       '<p class="label">Account Connections</p>',
-      '<h2>API 연결과 데이터 출처</h2>',
-      '<p class="subtle">저장된 키의 존재 여부, 화면 데이터 출처, 실제·캐시·mock 비중을 분리해서 봅니다.</p>',
+      '<h2>증권사 연결과 데이터 출처</h2>',
+      '<p class="subtle">계정별 증권사 인증 상태, 조회 가능성, 실제·캐시·mock 비중을 분리해서 봅니다.</p>',
       '</div>',
       '<span class="status-pill ' + escapeHtml(accountSnapshotTone(snapshot)) + '">' + escapeHtml(accountSnapshotModeLabel(snapshot)) + '</span>',
       '</div>',
@@ -9576,6 +9520,35 @@
       '<div class="account-board-title"><strong>데이터 품질</strong><span>레이트리밋이나 실패 시 캐시가 섞였는지 확인합니다.</span></div>',
       renderAccountQualityLedger(snapshot),
       '</div>',
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderAccountDataHistoryPanel(snapshot) {
+    snapshot = snapshot || {};
+    var freshness = accountFreshness(snapshot);
+    var portfolio = snapshot.portfolio || {};
+    var toss = snapshot.toss || {};
+    return [
+      '<article class="panel account-history-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Account Data History</p>',
+      '<h2>계정 데이터 이력</h2>',
+      '<p class="subtle">계좌 스냅샷, 보유/현금 기준, 캐시 사용 여부를 시간순으로 확인합니다.</p>',
+      '</div>',
+      '<span class="status-pill ' + escapeHtml(freshness.tone || "demo") + '">' + escapeHtml(freshness.label) + '</span>',
+      '</div>',
+      '<div class="account-command-grid">',
+      renderAccountControlMetric("스냅샷 생성", formatClock(snapshot.generatedAt), (toss.status || "조회 상태 대기"), accountSnapshotTone(snapshot)),
+      renderAccountControlMetric("계좌 기준", currentAccountLabel(snapshot), accountSnapshotModeLabel(snapshot), accountSnapshotTone(snapshot)),
+      renderAccountControlMetric("보유 평가", formatMoney(portfolio.invested || 0), "positions 원화환산", "neutral"),
+      renderAccountControlMetric("현금 기준", formatMoney(portfolio.cash || 0), portfolioCashBasisText(snapshot, portfolio), "neutral"),
+      '</div>',
+      '<div class="account-overview-ledger">',
+      '<div class="account-board-title"><strong>데이터 품질 이력</strong><span>실제 데이터와 캐시/mock 데이터가 섞였는지 확인합니다.</span></div>',
+      renderAccountQualityLedger(snapshot),
       '</div>',
       '</article>'
     ].join("");
@@ -9638,7 +9611,7 @@
     })[0] || null;
     var active = accounts.filter(function (account) { return account.enabled !== false; }).length;
     var tossReady = accounts.filter(function (account) { return account.clientId && account.clientSecret; }).length;
-    var telegramReady = accounts.filter(function (account) { return account.telegramBotToken && account.telegramChatId; }).length;
+    var accountSeqReady = accounts.filter(function (account) { return account.accountSeq; }).length;
     return [
       '<article class="panel admin-account-panel account-manager-panel">',
       '<div class="panel-head">',
@@ -9655,7 +9628,7 @@
       renderDirectoryStat("등록", accounts.length + "개"),
       renderDirectoryStat("활성", active + "개"),
       renderDirectoryStat("토스 API", tossReady + "개"),
-      renderDirectoryStat("텔레그램", telegramReady + "개"),
+      renderDirectoryStat("계좌 seq", accountSeqReady + "개"),
       '</div>',
       '<div class="admin-account-layout">',
       '<div class="admin-account-list">',
@@ -9680,18 +9653,6 @@
       renderAccountField("clientSecret", "Toss Secret Key", state.showSecrets ? "text" : "password", "새 값 입력 시 교체", { configured: Boolean(editingAccount && editingAccount.clientSecret) }),
       renderAccountField("accountSeq", "계좌 순번", "text", "선택", { configured: Boolean(editingAccount && editingAccount.accountSeq) }),
       renderAccountField("watchlistSymbols", "관심 종목", "text", "NVDA,005930", { wide: true }),
-      renderAccountField("notifyProvider", "알림 채널", "text", "telegram"),
-      renderAccountField("telegramBotToken", "Telegram Bot Token", state.showSecrets ? "text" : "password", "새 값 입력 시 교체", { configured: Boolean(editingAccount && editingAccount.telegramBotToken) }),
-      renderAccountField("telegramChatId", "Telegram Chat ID", "text", "chat id", { configured: Boolean(editingAccount && editingAccount.telegramChatId) }),
-      renderAccountField("notifyLinkUrl", "알림 링크 URL", "url", "http://127.0.0.1:3000?tab=notifications", { wide: true }),
-      '<label class="admin-check-field">',
-      '<input data-account-field="quietHoursEnabled" type="checkbox"' + (draft.quietHoursEnabled !== false ? " checked" : "") + ' />',
-      '<span>알림 금지 시간 적용</span>',
-      '</label>',
-      renderAccountField("quietHoursStart", "알림 금지 시작", "time", "22:00"),
-      renderAccountField("quietHoursEnd", "알림 금지 종료", "time", "05:00"),
-      renderAccountField("quietHoursTimezone", "알림 금지 타임존", "text", "Asia/Seoul"),
-      renderAccountSelectField("messageDeliveryLevel", "메시지 전달 수준", messageDeliveryLevelOptions(), { wide: true }),
       '<label class="admin-check-field">',
       '<input data-account-field="enabled" type="checkbox"' + (draft.enabled !== false ? " checked" : "") + ' />',
       '<span>이 계정을 모니터링에 사용</span>',
@@ -9718,24 +9679,6 @@
       '<span>' + escapeHtml(label) + '</span>',
       '<input data-account-field="' + escapeHtml(name) + '" name="' + escapeHtml(name) + '" type="' + escapeHtml(type || "text") + '" value="' + escapeHtml(value) + '" placeholder="' + escapeHtml(fieldPlaceholder) + '" autocomplete="off"' + (options.required ? " required" : "") + (options.disabled ? " disabled" : "") + ' />',
       options.configured ? '<em class="setting-field-note">저장됨</em>' : '',
-      '</label>'
-    ].join("");
-  }
-
-  function renderAccountSelectField(name, label, optionsList, options) {
-    options = options || {};
-    var draft = state.accountDraft || defaultAccountDraft();
-    var value = normalizeMessageDeliveryLevel(draft[name]);
-    return [
-      '<label class="setting-field' + (options.wide ? " wide" : "") + '">',
-      '<span>' + escapeHtml(label) + '</span>',
-      '<select data-account-field="' + escapeHtml(name) + '" name="' + escapeHtml(name) + '">',
-      (optionsList || []).map(function (item) {
-        var selected = normalizeMessageDeliveryLevel(item.value) === value ? " selected" : "";
-        return '<option value="' + escapeHtml(item.value) + '"' + selected + '>' + escapeHtml(item.label + " · " + item.description) + '</option>';
-      }).join(""),
-      '</select>',
-      '<em class="setting-field-note">알림 판단은 그대로 두고 설명 방식만 바꿉니다.</em>',
       '</label>'
     ].join("");
   }
@@ -9770,9 +9713,8 @@
       '<div class="account-exposure-grid" aria-label="계정 노출 상태">',
       renderAccountExposureItem("토스 API", account.clientId && account.clientSecret ? "연결" : "확인", account.clientId && account.clientSecret ? "ok" : "warn"),
       renderAccountExposureItem("계좌 seq", account.accountSeq ? String(account.accountSeq) : "선택 안함", account.accountSeq ? "ok" : "warn"),
-      renderAccountExposureItem("텔레그램", account.telegramBotToken && account.telegramChatId ? "연결" : "미설정", account.telegramBotToken && account.telegramChatId ? "ok" : "warn"),
       renderAccountExposureItem("관심종목", symbols.length + "개", symbols.length ? "ok" : "neutral"),
-      renderAccountExposureItem("전달수준", messageDeliveryLevelLabel(account.messageDeliveryLevel), "neutral"),
+      renderAccountExposureItem("사용 상태", account.enabled === false ? "중지" : "사용", account.enabled === false ? "warn" : "ok"),
       '</div>'
     ].join("");
   }
@@ -14484,8 +14426,8 @@
         state.accountDraft = createNewAccountDraft();
         state.accountSaved = false;
         state.serviceAccountsError = "";
-        state.activeAccountSection = "management";
-        writeAccountSectionHistory("management");
+        state.activeAccountSection = "identity";
+        writeAccountSectionHistory("identity");
         render();
       });
     });

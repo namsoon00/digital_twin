@@ -26,6 +26,12 @@
     { id: "templates", label: "템플릿", description: "본문·미리보기" },
     { id: "advanced", label: "고급", description: "채널·임계값" }
   ];
+  var accountSections = [
+    { id: "overview", label: "개요", description: "상태 요약" },
+    { id: "connections", label: "연결", description: "API 출처" },
+    { id: "balance", label: "금액", description: "산식 검증" },
+    { id: "management", label: "관리", description: "계정·키" }
+  ];
   var strategySections = [
     { id: "overview", label: "판단판", description: "오늘의 구조" },
     { id: "evidence", label: "근거 카드", description: "데이터·관계" },
@@ -249,6 +255,7 @@
     notificationExpandedGroups: {},
     activeNotificationJobKey: "",
     activeNotificationSection: initialNotificationSection(),
+    activeAccountSection: initialAccountSection(),
     activeStrategySection: initialStrategySection(),
     activeOntologySection: initialOntologySection(),
     activeNotificationMessageType: "investmentInsight",
@@ -694,6 +701,11 @@
     return normalizeNotificationSection(params.get("notification"));
   }
 
+  function initialAccountSection() {
+    var params = new URLSearchParams(window.location.search);
+    return normalizeAccountSection(params.get("account"));
+  }
+
   function initialStrategySection() {
     var params = new URLSearchParams(window.location.search);
     var requested = params.get("strategy");
@@ -720,6 +732,14 @@
   function normalizeNotificationSection(value) {
     var requested = String(value || "").toLowerCase();
     return notificationSections.some(function (section) { return section.id === requested; }) ? requested : "status";
+  }
+
+  function normalizeAccountSection(value) {
+    var requested = String(value || "").toLowerCase();
+    if (requested === "api" || requested === "source" || requested === "sources") return "connections";
+    if (requested === "money" || requested === "portfolio" || requested === "audit") return "balance";
+    if (requested === "settings" || requested === "form" || requested === "accounts") return "management";
+    return accountSections.some(function (section) { return section.id === requested; }) ? requested : "overview";
   }
 
   function normalizeStrategySection(value) {
@@ -770,6 +790,12 @@
     })[0] || notificationSections[0];
   }
 
+  function activeAccountSectionMeta() {
+    return accountSections.filter(function (section) {
+      return section.id === state.activeAccountSection;
+    })[0] || accountSections[0];
+  }
+
   function activeStrategySectionMeta() {
     return strategySections.filter(function (section) {
       return section.id === state.activeStrategySection;
@@ -779,6 +805,7 @@
   function tabUrl(tab) {
     var normalized = normalizeTabId(tab);
     var params = new URLSearchParams(window.location.search);
+    if (normalized !== "accounts") params.delete("account");
     if (normalized !== "notifications") params.delete("notification");
     if (normalized !== "modeling") params.delete("strategy");
     if (normalized !== "ontology") params.delete("ontology");
@@ -793,10 +820,29 @@
     return path + (query ? "?" + query : "") + hash;
   }
 
+  function accountSectionUrl(section) {
+    var normalized = normalizeAccountSection(section);
+    var params = new URLSearchParams(window.location.search);
+    params.set("tab", "accounts");
+    params.delete("notification");
+    params.delete("strategy");
+    params.delete("ontology");
+    if (normalized === "overview") {
+      params.delete("account");
+    } else {
+      params.set("account", normalized);
+    }
+    var path = window.location.pathname || "/";
+    var query = params.toString();
+    var hash = window.location.hash || "";
+    return path + (query ? "?" + query : "") + hash;
+  }
+
   function notificationSectionUrl(section) {
     var normalized = normalizeNotificationSection(section);
     var params = new URLSearchParams(window.location.search);
     params.set("tab", "notifications");
+    params.delete("account");
     params.delete("strategy");
     params.delete("ontology");
     if (normalized === "status") {
@@ -814,6 +860,7 @@
     var normalized = normalizeStrategySection(section);
     var params = new URLSearchParams(window.location.search);
     params.set("tab", "modeling");
+    params.delete("account");
     params.delete("notification");
     params.delete("ontology");
     if (normalized === "overview") {
@@ -841,14 +888,23 @@
     window.history.replaceState({ tab: "notifications", notification: normalized }, "", notificationSectionUrl(normalized));
   }
 
+  function writeAccountSectionHistory(section) {
+    if (!window.history || !window.history.replaceState) return;
+    var normalized = normalizeAccountSection(section);
+    window.history.replaceState({ tab: "accounts", account: normalized }, "", accountSectionUrl(normalized));
+  }
+
   function writeStrategySectionHistory(section) {
     if (!window.history || !window.history.replaceState) return;
     var normalized = normalizeStrategySection(section);
     window.history.replaceState({ tab: "modeling", strategy: normalized }, "", strategySectionUrl(normalized));
   }
 
-  function scrollKeyForTab(tab, notificationSection, strategySection, ontologySection) {
+  function scrollKeyForTab(tab, notificationSection, strategySection, ontologySection, accountSection) {
     var normalized = normalizeTabId(tab || state.activeTab);
+    if (normalized === "accounts") {
+      return normalized + ":" + normalizeAccountSection(accountSection || state.activeAccountSection);
+    }
     if (normalized === "notifications") {
       return normalized + ":" + normalizeNotificationSection(notificationSection || state.activeNotificationSection);
     }
@@ -862,7 +918,7 @@
   }
 
   function activeScrollKey() {
-    return scrollKeyForTab(state.activeTab, state.activeNotificationSection, state.activeStrategySection, state.activeOntologySection);
+    return scrollKeyForTab(state.activeTab, state.activeNotificationSection, state.activeStrategySection, state.activeOntologySection, state.activeAccountSection);
   }
 
   function currentWorkspaceMain() {
@@ -1111,18 +1167,22 @@
 
   function syncTabFromLocation() {
     var nextTab = initialTab();
+    var nextAccountSection = initialAccountSection();
     var nextNotificationSection = initialNotificationSection();
     var nextStrategySection = initialStrategySection();
     var nextOntologySection = initialOntologySection();
+    var accountSectionChanged = nextAccountSection !== state.activeAccountSection;
     var sectionChanged = nextNotificationSection !== state.activeNotificationSection;
     var strategySectionChanged = nextStrategySection !== state.activeStrategySection;
     var ontologySectionChanged = nextOntologySection !== state.activeOntologySection;
+    state.activeAccountSection = nextAccountSection;
     state.activeNotificationSection = nextNotificationSection;
     state.activeStrategySection = nextStrategySection;
     state.activeOntologySection = nextOntologySection;
     if (nextTab !== "notifications" || sectionChanged) state.notificationPolicyEditorOpen = false;
     if (nextTab !== "notifications" || sectionChanged) state.notificationTemplateEditorOpen = false;
     if (nextTab === state.activeTab) {
+      if (accountSectionChanged && nextTab === "accounts") render();
       if (sectionChanged && nextTab === "notifications") render();
       if (strategySectionChanged && nextTab === "modeling") render();
       if (ontologySectionChanged && nextTab === "ontology") render();
@@ -6144,8 +6204,8 @@
     if (state.activeTab === "accounts") {
       return renderManagedPage("accounts", snapshot, [
         '<section class="admin-grid accounts-view">',
-        renderAccountCommandCenter(snapshot),
-        renderAdminAccountPanel(),
+        renderAccountSectionBar(),
+        renderAccountSectionContent(snapshot),
         '</section>'
       ].join(""));
     }
@@ -8883,6 +8943,82 @@
     ].join("");
   }
 
+  function renderAccountSectionBar() {
+    var section = activeAccountSectionMeta();
+    return [
+      '<div class="account-section-bar">',
+      '<div class="account-section-tabs" role="tablist" aria-label="계정 섹션">',
+      accountSections.map(function (item) {
+        var active = section.id === item.id;
+        return [
+          '<button type="button" role="tab" class="' + (active ? "active" : "") + '" data-account-section="' + escapeHtml(item.id) + '"' + (active ? ' aria-selected="true"' : ' aria-selected="false"') + '>',
+          '<strong>' + escapeHtml(item.label) + '</strong>',
+          '<span>' + escapeHtml(item.description) + '</span>',
+          '</button>'
+        ].join("");
+      }).join(""),
+      '</div>',
+      '<div class="account-section-actions">',
+      '<button class="text-button" data-action="refresh">데이터 새로고침</button>',
+      '<button class="text-button" data-account-section="management">계정 관리</button>',
+      '<button class="text-button primary" data-action="new-service-account">새 계정</button>',
+      '</div>',
+      '</div>'
+    ].join("");
+  }
+
+  function renderAccountSectionContent(snapshot) {
+    var section = normalizeAccountSection(state.activeAccountSection);
+    if (section === "connections") return renderAccountConnectionsPanel(snapshot);
+    if (section === "balance") return renderAccountBalancePanel(snapshot);
+    if (section === "management") return renderAdminAccountPanel();
+    return renderAccountCommandCenter(snapshot);
+  }
+
+  function renderAccountConnectionsPanel(snapshot) {
+    snapshot = snapshot || {};
+    var accounts = state.serviceAccounts || [];
+    return [
+      '<article class="panel account-connections-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Account Connections</p>',
+      '<h2>API 연결과 데이터 출처</h2>',
+      '<p class="subtle">저장된 키의 존재 여부, 화면 데이터 출처, 실제·캐시·mock 비중을 분리해서 봅니다.</p>',
+      '</div>',
+      '<span class="status-pill ' + escapeHtml(accountSnapshotTone(snapshot)) + '">' + escapeHtml(accountSnapshotModeLabel(snapshot)) + '</span>',
+      '</div>',
+      '<div class="account-command-layout">',
+      '<div>',
+      '<div class="account-board-title"><strong>API 출처 상태</strong><span>키 원문 없이 연결 가능성과 사용 출처만 표시합니다.</span></div>',
+      renderAccountApiLedger(accounts, snapshot),
+      '</div>',
+      '<div>',
+      '<div class="account-board-title"><strong>데이터 품질</strong><span>레이트리밋이나 실패 시 캐시가 섞였는지 확인합니다.</span></div>',
+      renderAccountQualityLedger(snapshot),
+      '</div>',
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderAccountBalancePanel(snapshot) {
+    snapshot = snapshot || {};
+    return [
+      '<article class="panel account-balance-panel">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Balance Audit</p>',
+      '<h2>계좌 금액 기준</h2>',
+      '<p class="subtle">화면의 평가액이 어떤 현금 기준, 환율, 보유 원장 합계에서 나왔는지 확인합니다.</p>',
+      '</div>',
+      '<span class="metric">' + escapeHtml(formatMoney(((snapshot || {}).portfolio || {}).total || 0)) + '</span>',
+      '</div>',
+      renderAccountBalanceAudit(snapshot),
+      '</article>'
+    ].join("");
+  }
+
   function renderAccountCommandCenter(snapshot) {
     snapshot = snapshot || {};
     var accounts = state.serviceAccounts || [];
@@ -8906,13 +9042,9 @@
       renderAccountControlMetric("데이터 신선도", freshness.label, freshness.detail, freshness.tone),
       renderAccountControlMetric("스냅샷", formatClock(snapshot.generatedAt), (snapshot.toss || {}).status || "조회 상태 대기", accountSnapshotTone(snapshot)),
       '</div>',
-      '<div class="account-command-layout">',
-      '<div>',
-      '<div class="account-board-title"><strong>API 출처 상태</strong><span>화면 데이터와 알림에 들어가는 외부 연결 기준입니다.</span></div>',
-      renderAccountApiLedger(accounts, snapshot),
+      '<div class="account-overview-ledger">',
+      '<div class="account-board-title"><strong>데이터 품질</strong><span>연결/금액 탭에서 세부 검증을 볼 수 있습니다.</span></div>',
       renderAccountQualityLedger(snapshot),
-      '</div>',
-      renderAccountBalanceAudit(snapshot),
       '</div>',
       '</article>'
     ].join("");
@@ -13754,16 +13886,17 @@
       });
     });
 
-    var newServiceAccount = app.querySelector('[data-action="new-service-account"]');
-    if (newServiceAccount) {
+    Array.prototype.slice.call(app.querySelectorAll('[data-action="new-service-account"]')).forEach(function (newServiceAccount) {
       newServiceAccount.addEventListener("click", function () {
         state.editingAccountId = "";
         state.accountDraft = createNewAccountDraft();
         state.accountSaved = false;
         state.serviceAccountsError = "";
+        state.activeAccountSection = "management";
+        writeAccountSectionHistory("management");
         render();
       });
-    }
+    });
 
     var accountForm = app.querySelector("[data-account-form]");
     if (accountForm) {
@@ -13950,6 +14083,16 @@
         state.notificationPolicyEditorOpen = false;
         state.notificationTemplateEditorOpen = false;
         writeNotificationSectionHistory(section);
+        render();
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-account-section]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        var section = normalizeAccountSection(button.getAttribute("data-account-section"));
+        if (section === state.activeAccountSection) return;
+        state.activeAccountSection = section;
+        writeAccountSectionHistory(section);
         render();
       });
     });

@@ -2117,12 +2117,15 @@ h3 {
 }
 
 .accounts-view .admin-account-panel,
+.accounts-view .account-connections-panel,
+.accounts-view .account-balance-panel,
 .watchlist-view .account-watchlist-panel,
 .symbol-universe-view .symbol-universe-panel,
 .ontology-view .ontology-panel {
   grid-column: 1 / -1;
 }
 
+.accounts-view .account-section-bar,
 .notifications-view .notification-section-bar,
 .strategy-view .strategy-section-bar {
   grid-column: 1 / -1;
@@ -2825,8 +2828,19 @@ h3 {
   overflow-wrap: anywhere;
 }
 
-.account-command-panel {
+.account-command-panel,
+.account-connections-panel,
+.account-balance-panel {
   grid-column: 1 / -1;
+}
+
+.account-overview-ledger {
+  min-width: 0;
+  padding: 16px;
+}
+
+.account-overview-ledger .account-quality-ledger {
+  padding: 0;
 }
 
 .account-command-grid,
@@ -3310,12 +3324,14 @@ h3 {
   accent-color: var(--green);
 }
 
+.accounts-view,
 .notifications-view,
 .ontology-view,
 .strategy-view {
   align-items: start;
 }
 
+.account-section-bar,
 .notification-section-bar,
 .ontology-section-bar,
 .strategy-section-bar {
@@ -3328,6 +3344,7 @@ h3 {
   padding: 6px 0 10px;
 }
 
+.account-section-actions,
 .notification-section-actions,
 .ontology-section-actions,
 .strategy-section-actions {
@@ -3339,6 +3356,7 @@ h3 {
   min-width: 0;
 }
 
+.account-section-actions .text-button,
 .notification-section-actions .text-button,
 .ontology-section-actions .text-button,
 .strategy-section-actions .text-button {
@@ -3402,6 +3420,7 @@ h3 {
   font-weight: 800;
 }
 
+.account-section-tabs,
 .notification-section-tabs,
 .ontology-section-tabs,
 .strategy-section-tabs {
@@ -3420,6 +3439,7 @@ h3 {
   grid-template-columns: repeat(6, minmax(0, 1fr));
 }
 
+.account-section-tabs button,
 .notification-section-tabs button,
 .ontology-section-tabs button,
 .strategy-section-tabs button {
@@ -3437,6 +3457,7 @@ h3 {
   cursor: pointer;
 }
 
+.account-section-tabs button.active,
 .notification-section-tabs button.active,
 .ontology-section-tabs button.active,
 .strategy-section-tabs button.active {
@@ -3445,6 +3466,8 @@ h3 {
   color: var(--blue);
 }
 
+.account-section-tabs strong,
+.account-section-tabs span,
 .notification-section-tabs strong,
 .notification-section-tabs span,
 .ontology-section-tabs strong,
@@ -3457,12 +3480,14 @@ h3 {
   white-space: nowrap;
 }
 
+.account-section-tabs strong,
 .notification-section-tabs strong,
 .ontology-section-tabs strong,
 .strategy-section-tabs strong {
   font-size: 14px;
 }
 
+.account-section-tabs span,
 .notification-section-tabs span,
 .ontology-section-tabs span,
 .strategy-section-tabs span {
@@ -3471,6 +3496,7 @@ h3 {
   font-weight: 800;
 }
 
+.account-section-tabs button.active span,
 .notification-section-tabs button.active span,
 .ontology-section-tabs button.active span,
 .strategy-section-tabs button.active span {
@@ -11004,6 +11030,7 @@ h3 {
   .home-action-grid,
   .home-signal-strip,
   .admin-grid,
+  .account-section-bar,
   .account-command-layout,
   .account-api-row,
   .admin-account-layout,
@@ -11066,7 +11093,10 @@ h3 {
   .home-view .account-directory-panel,
   .home-view .account-watchlist-panel,
   .home-view .admin-monitoring-panel,
+  .accounts-view .account-section-bar,
   .accounts-view .admin-account-panel,
+  .accounts-view .account-connections-panel,
+  .accounts-view .account-balance-panel,
   .watchlist-view .account-watchlist-panel,
   .symbol-universe-view .symbol-universe-panel,
   .ontology-view .ontology-panel,
@@ -11159,12 +11189,14 @@ h3 {
     border-left: 0;
   }
 
+  .account-section-tabs,
   .notification-section-tabs,
   .ontology-section-tabs,
   .strategy-section-tabs {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
+  .account-section-tabs button,
   .notification-section-tabs button,
   .ontology-section-tabs button,
   .strategy-section-tabs button {
@@ -11173,6 +11205,7 @@ h3 {
     text-align: center;
   }
 
+  .account-section-tabs span,
   .notification-section-tabs span,
   .ontology-section-tabs span,
   .strategy-section-tabs span {
@@ -11590,12 +11623,14 @@ h3 {
     border-left: 0;
   }
 
+  .account-section-tabs,
   .notification-section-tabs,
   .ontology-section-tabs,
   .strategy-section-tabs {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
+  .account-section-tabs button,
   .notification-section-tabs button,
   .ontology-section-tabs button,
   .strategy-section-tabs button {
@@ -11604,18 +11639,21 @@ h3 {
     text-align: center;
   }
 
+  .account-section-tabs span,
   .notification-section-tabs span,
   .ontology-section-tabs span,
   .strategy-section-tabs span {
     display: none;
   }
 
+  .account-section-bar,
   .notification-section-bar,
   .ontology-section-bar,
   .strategy-section-bar {
     grid-template-columns: 1fr;
   }
 
+  .account-section-actions,
   .notification-section-actions,
   .ontology-section-actions,
   .strategy-section-actions {
@@ -12847,6 +12885,7 @@ h3 {
 
   .admin-grid > *,
   .panel,
+  .account-section-bar,
   .notification-section-bar,
   .strategy-section-bar,
   .ontology-section-bar {
@@ -12986,6 +13025,7 @@ h3 {
   }
 
   :where(
+    .account-section-bar,
     .notification-section-bar,
     .strategy-section-bar,
     .ontology-section-bar,
@@ -13043,6 +13083,7 @@ h3 {
   }
 
   :where(
+    .account-section-tabs,
     .notification-section-tabs,
     .strategy-section-tabs,
     .ontology-section-tabs
@@ -13280,6 +13321,7 @@ input[type="radio"]:disabled {
   .managed-page,
   .admin-grid,
   .home-view,
+  .accounts-view,
   .notifications-view,
   .strategy-view,
   .ontology-view,
@@ -13290,6 +13332,7 @@ input[type="radio"]:disabled {
   .managed-page,
   .admin-grid,
   .home-view,
+  .accounts-view,
   .notifications-view,
   .strategy-view,
   .ontology-view,
@@ -13322,6 +13365,7 @@ input[type="radio"]:disabled {
     padding: var(--ds-panel-pad-y) var(--ds-panel-pad-x);
   }
 
+  .account-section-bar,
   .notification-section-bar,
   .ontology-section-bar,
   .strategy-section-bar {
@@ -13329,6 +13373,7 @@ input[type="radio"]:disabled {
     padding: 0;
   }
 
+  .account-section-tabs,
   .notification-section-tabs,
   .ontology-section-tabs,
   .strategy-section-tabs {
@@ -13337,6 +13382,7 @@ input[type="radio"]:disabled {
     border-radius: var(--ds-radius-panel);
   }
 
+  .account-section-actions,
   .notification-section-actions,
   .ontology-section-actions,
   .strategy-section-actions {
@@ -13940,6 +13986,7 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
 }
 
 @media (min-width: 1181px) {
+  .accounts-view,
   .notifications-view,
   .strategy-view,
   .system-guide-view,
@@ -13948,6 +13995,7 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
     align-items: start;
   }
 
+  .account-section-bar,
   .notification-section-bar,
   .strategy-section-bar,
   .system-guide-hero,

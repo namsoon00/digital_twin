@@ -302,7 +302,8 @@
     symbolUniverseMarket: "",
     symbolUniverseOffset: 0,
     symbolUniverseLimit: 80,
-    monitoringDetail: null
+    monitoringDetail: null,
+    expandedOntologyGraphId: ""
   };
 
   function escapeHtml(value) {
@@ -729,6 +730,31 @@
     if (requested === "rules" || requested === "prompts") return "registry";
     if (requested === "relations" || requested === "rules-trace") return "trace";
     return ontologySections.some(function (section) { return section.id === requested; }) ? requested : "overview";
+  }
+
+  function normalizeOntologyGraphId(value) {
+    var requested = String(value || "").toLowerCase().replace("-expanded", "");
+    return requested === "tbox" || requested === "abox" ? requested : "";
+  }
+
+  function ontologyGraphDisplayMeta(graphId) {
+    var normalized = normalizeOntologyGraphId(graphId);
+    if (normalized === "abox") {
+      return {
+        title: "핵심 데이터 관계 그래프",
+        eyebrow: "Data Relation Graph",
+        description: "실제 데이터 중 AI 판단, 중요 변경, 알림 후보와 연결되는 관계를 큰 화면으로 확인합니다.",
+        fitLabel: "데이터 관계 그래프 맞춤",
+        layoutLabel: "데이터 관계 자동 배치"
+      };
+    }
+    return {
+      title: "핵심 규칙 구조 그래프",
+      eyebrow: "Rule Structure Graph",
+      description: "투자 판단에 직접 영향을 주는 TBox 분류, 관계 타입, 규칙 연결을 큰 화면으로 확인합니다.",
+      fitLabel: "규칙 구조 그래프 맞춤",
+      layoutLabel: "규칙 구조 자동 배치"
+    };
   }
 
   function activeNotificationSectionMeta() {
@@ -5837,8 +5863,38 @@
       renderActiveTab(snapshot),
       '</div>',
       '</section>',
+      renderOntologyGraphExpandedOverlay(),
       renderSnackbar(),
       '</main>'
+    ].join("");
+  }
+
+  function renderOntologyGraphExpandedOverlay() {
+    var graphId = normalizeOntologyGraphId(state.expandedOntologyGraphId);
+    if (!graphId) return "";
+    var meta = ontologyGraphDisplayMeta(graphId);
+    var expandedGraphId = graphId + "-expanded";
+    return [
+      '<div class="ontology-graph-expanded-backdrop" data-ontology-graph-close>',
+      '<section class="ontology-graph-expanded-dialog" role="dialog" aria-modal="true" aria-label="' + escapeHtml(meta.title) + '">',
+      '<header class="ontology-graph-expanded-head">',
+      '<div>',
+      '<p class="label">' + escapeHtml(meta.eyebrow) + '</p>',
+      '<h2>' + escapeHtml(meta.title) + '</h2>',
+      '<span>' + escapeHtml(meta.description) + '</span>',
+      '</div>',
+      '<div class="ontology-graph-expanded-toolbar">',
+      '<button class="icon-button" type="button" data-ontology-graph-fit="' + escapeHtml(expandedGraphId) + '" title="' + escapeHtml(meta.fitLabel) + '" aria-label="' + escapeHtml(meta.fitLabel) + '">⌖</button>',
+      '<button class="icon-button" type="button" data-ontology-graph-layout="' + escapeHtml(expandedGraphId) + '" title="' + escapeHtml(meta.layoutLabel) + '" aria-label="' + escapeHtml(meta.layoutLabel) + '">↺</button>',
+      '<button class="icon-button danger" type="button" data-ontology-graph-close="" title="큰 화면 닫기" aria-label="큰 화면 닫기">×</button>',
+      '</div>',
+      '</header>',
+      '<div class="ontology-cytoscape ontology-cytoscape-expanded" data-ontology-cytoscape="' + escapeHtml(expandedGraphId) + '"><span>그래프 엔진 초기화 중</span></div>',
+      '<footer class="ontology-graph-expanded-footer">',
+      '<span>표시 기준: 핵심 관계 압축 · 원본과 동일한 그래프 데이터</span>',
+      '</footer>',
+      '</section>',
+      '</div>'
     ].join("");
   }
 
@@ -9882,6 +9938,7 @@
       '<span>투자 판단에 직접 영향을 주는 TBox 분류, 관계 타입, 규칙 연결만 표시합니다.</span>',
       '</div>',
       '<div class="ontology-graph-actions">',
+      '<button class="icon-button" type="button" data-ontology-graph-expand="tbox" title="규칙 구조 큰 화면으로 보기" aria-label="규칙 구조 그래프 큰 화면으로 보기">⤢</button>',
       '<button class="icon-button" type="button" data-ontology-graph-fit="tbox" title="규칙 구조 그래프 맞춤" aria-label="규칙 구조 그래프 맞춤">⌖</button>',
       '<button class="icon-button" type="button" data-ontology-graph-layout="tbox" title="규칙 구조 자동 배치" aria-label="규칙 구조 자동 배치">↺</button>',
       '</div>',
@@ -10063,6 +10120,7 @@
       '<span>실제 데이터 중 AI 판단, 중요 변경, 알림 후보와 연결되는 관계만 압축 표시합니다.</span>',
       '</div>',
       '<div class="ontology-graph-actions">',
+      '<button class="icon-button" type="button" data-ontology-graph-expand="abox" title="데이터 관계 큰 화면으로 보기" aria-label="데이터 관계 그래프 큰 화면으로 보기">⤢</button>',
       '<button class="icon-button" type="button" data-ontology-graph-fit="abox" title="현재 데이터 그래프 맞춤" aria-label="현재 데이터 그래프 맞춤">⌖</button>',
       '<button class="icon-button" type="button" data-ontology-graph-layout="abox" title="현재 데이터 자동 배치" aria-label="현재 데이터 자동 배치">↺</button>',
       '</div>',
@@ -10243,7 +10301,8 @@
     var graphs = ontologyCurrentGraphData();
     containers.forEach(function (container) {
       var graphId = container.getAttribute("data-ontology-cytoscape") || "";
-      var graph = graphs[graphId];
+      var sourceGraphId = normalizeOntologyGraphId(graphId);
+      var graph = graphs[sourceGraphId];
       if (!graph || !graph.elements.length) {
         container.innerHTML = '<span>표시할 그래프 관계가 없습니다.</span>';
         return;
@@ -10280,7 +10339,7 @@
       name: "breadthfirst",
       directed: true,
       padding: 36,
-      spacingFactor: graphId === "abox" ? 1.25 : 1.1,
+      spacingFactor: normalizeOntologyGraphId(graphId) === "abox" ? 1.25 : 1.1,
       avoidOverlap: true,
       animate: true,
       animationDuration: 260,
@@ -12653,6 +12712,15 @@
       });
     }
 
+    Array.prototype.slice.call(app.querySelectorAll("[data-ontology-graph-expand]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        var graphId = normalizeOntologyGraphId(button.getAttribute("data-ontology-graph-expand"));
+        if (!graphId) return;
+        state.expandedOntologyGraphId = graphId;
+        render();
+      });
+    });
+
     Array.prototype.slice.call(app.querySelectorAll("[data-ontology-graph-fit]")).forEach(function (button) {
       button.addEventListener("click", function () {
         fitOntologyGraph(button.getAttribute("data-ontology-graph-fit"));
@@ -12662,6 +12730,14 @@
     Array.prototype.slice.call(app.querySelectorAll("[data-ontology-graph-layout]")).forEach(function (button) {
       button.addEventListener("click", function () {
         layoutOntologyGraph(button.getAttribute("data-ontology-graph-layout"));
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-ontology-graph-close]")).forEach(function (button) {
+      button.addEventListener("click", function (event) {
+        if (button.classList && button.classList.contains("ontology-graph-expanded-backdrop") && event.target !== button) return;
+        state.expandedOntologyGraphId = "";
+        render();
       });
     });
 
@@ -13444,7 +13520,13 @@
       scheduleAppNavScrollState();
     });
     window.addEventListener("keydown", function (event) {
-      if (event.key !== "Escape" || !state.monitoringDetail) return;
+      if (event.key !== "Escape") return;
+      if (state.expandedOntologyGraphId) {
+        state.expandedOntologyGraphId = "";
+        render();
+        return;
+      }
+      if (!state.monitoringDetail) return;
       state.monitoringDetail = null;
       render();
     });

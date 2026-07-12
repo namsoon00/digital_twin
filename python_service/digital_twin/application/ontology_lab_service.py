@@ -5,7 +5,7 @@ import time
 from dataclasses import fields
 from typing import Dict, Iterable, List
 
-from ..domain.ontology_contracts import PortfolioOntology
+from ..domain.ontology_contracts import OntologyEntity, OntologyRelation, PortfolioOntology, entity_id
 from ..domain.ontology_experiments import (
     OntologyExperiment,
     clean_symbols,
@@ -18,6 +18,8 @@ from ..domain.ontology_experiments import (
 )
 from ..domain.portfolio import AccountSnapshot, DecisionItem, PortfolioSummary, Position, utc_now_iso
 from ..domain.portfolio_ontology_builder import build_portfolio_ontology
+from ..domain.ontology_schema import default_tbox_metadata, tbox_entities, tbox_relations
+from ..domain.ontology_tbox import TBOX_CLASSES, TBOX_RELATION_TYPES
 
 
 DISABLED_VALUES = {"0", "false", "no", "off", "disabled"}
@@ -146,6 +148,69 @@ class OntologyLabService:
             return {"status": "not-found", "id": experiment_id}
         return self._run_experiment(experiment, payload or {}, keep_active_status=False, force=True, run_kind="manual")
 
+    def apply_recommendations(self, experiment_id: str, payload: Dict[str, object] = None) -> Dict[str, object]:
+        experiment = self.experiment_store.get(experiment_id)
+        if not experiment:
+            return {"status": "not-found", "id": experiment_id}
+        payload = dict(payload or {})
+        last_result = dict(experiment.last_result or {})
+        if not last_result:
+            return {"status": "no-result", "id": experiment_id}
+        proposed = last_result.get("proposedOntologyChanges")
+        proposed = dict(proposed) if isinstance(proposed, dict) else {}
+        recommendations = [
+            dict(item)
+            for item in (last_result.get("recommendations") or [])
+            if isinstance(item, dict)
+        ]
+        run_rulebox = truthy(payload.get("runRulebox", payload.get("run_rulebox")), True)
+        stamp = utc_now_iso()
+        rulebox = self.rulebox_snapshot()
+        baseline_rules = rule_payloads_from_snapshot(rulebox)
+        merged_rules, added_rules, skipped_rule_ids = merge_candidate_rules(baseline_rules, experiment.candidate_rules)
+        tbox_graph = ontology_lab_tbox_graph(experiment, proposed, stamp)
+        tbox_result = self.save_tbox_graph(tbox_graph) if tbox_graph.entities else {"status": "skipped", "reason": "No TBox proposal."}
+        rulebox_result = {"status": "skipped", "reason": "No new RuleBox rule."}
+        if added_rules:
+            rulebox_result = self.save_rulebox(
+                {
+                    "rules": merged_rules,
+                    "clearInference": True,
+                    "author": "ontology-lab",
+                    "changeReason": "Ontology lab proposal applied from " + experiment.experiment_id,
+                }
+            )
+        inference_result = {"status": "skipped", "reason": "RuleBox run disabled or no new rule."}
+        if run_rulebox and added_rules:
+            inference_result = self.run_rulebox({"clearInference": True, "trigger": "ontology-lab-apply", "experimentId": experiment.experiment_id})
+        application = {
+            "status": ontology_application_status(rulebox_result, tbox_result, added_rules, tbox_graph.entities),
+            "appliedAt": stamp,
+            "experimentId": experiment.experiment_id,
+            "ruleIds": [rule_id_from_payload(item) for item in added_rules if rule_id_from_payload(item)],
+            "skippedRuleIds": skipped_rule_ids,
+            "relationTypes": clean_text_list(proposed.get("newRelationTypes") or proposed.get("relationTypes") or []),
+            "decisionStages": clean_text_list(proposed.get("newDecisionStages") or proposed.get("decisionStages") or []),
+            "tboxClasses": clean_text_list(proposed.get("tboxClasses") or []),
+            "recommendationIds": [str(item.get("id") or "") for item in recommendations if str(item.get("id") or "").strip()],
+            "ruleboxSave": compact_apply_result(rulebox_result),
+            "tboxSave": compact_apply_result(tbox_result),
+            "inferenceRun": compact_apply_result(inference_result),
+        }
+        updated_recommendations = mark_recommendations_applied(recommendations, application)
+        last_result["recommendations"] = updated_recommendations
+        last_result["appliedOntologyChanges"] = application
+        last_result["sandbox"] = {
+            **dict(last_result.get("sandbox") or {}),
+            "mutatedOperationalRuleBox": bool(added_rules),
+            "mutatedNeo4j": bool(added_rules or tbox_graph.entities),
+        }
+        experiment.last_result = last_result
+        experiment.updated_at = stamp
+        self.mark_latest_history_application(experiment, application, updated_recommendations)
+        self.experiment_store.save(experiment)
+        return {"status": application["status"], "experiment": experiment.to_dict(), "application": application}
+
     def run_once(self, limit: int = 0, force: bool = False) -> Dict[str, object]:
         if not self.enabled():
             return {"status": "disabled", "processedCount": 0, "runCount": 0, "skippedCount": 0, "experiments": []}
@@ -238,11 +303,46 @@ class OntologyLabService:
         history = [entry] + [dict(item) for item in (experiment.run_history or []) if isinstance(item, dict)]
         experiment.run_history = history[: self.history_limit()]
 
+    def mark_latest_history_application(
+        self,
+        experiment: OntologyExperiment,
+        application: Dict[str, object],
+        recommendations: List[Dict[str, object]],
+    ) -> None:
+        history = [dict(item) for item in (experiment.run_history or []) if isinstance(item, dict)]
+        if not history:
+            return
+        history[0].update({
+            "applyStatus": str(application.get("status") or ""),
+            "appliedAt": str(application.get("appliedAt") or ""),
+            "appliedOntologyChanges": dict(application),
+            "recommendations": recommendations[:4],
+        })
+        experiment.run_history = history[: self.history_limit()]
+
     def rulebox_snapshot(self) -> Dict[str, object]:
         if not self.ontology_repository or not hasattr(self.ontology_repository, "rulebox_snapshot"):
             return {}
         snapshot = self.ontology_repository.rulebox_snapshot()
         return snapshot if isinstance(snapshot, dict) else {}
+
+    def save_rulebox(self, payload: Dict[str, object]) -> Dict[str, object]:
+        if not self.ontology_repository or not hasattr(self.ontology_repository, "save_rulebox"):
+            return {"status": "disabled", "saved": False, "reason": "Ontology repository cannot save RuleBox."}
+        result = self.ontology_repository.save_rulebox(payload)
+        return result if isinstance(result, dict) else {"status": "unknown", "saved": False}
+
+    def run_rulebox(self, payload: Dict[str, object]) -> Dict[str, object]:
+        if not self.ontology_repository or not hasattr(self.ontology_repository, "run_rulebox"):
+            return {"status": "disabled", "reason": "Ontology repository cannot run RuleBox."}
+        result = self.ontology_repository.run_rulebox(payload)
+        return result if isinstance(result, dict) else {"status": "unknown"}
+
+    def save_tbox_graph(self, graph: PortfolioOntology) -> Dict[str, object]:
+        if not self.ontology_repository or not hasattr(self.ontology_repository, "save_graph"):
+            return {"status": "disabled", "saved": False, "reason": "Ontology repository cannot save TBox graph."}
+        result = self.ontology_repository.save_graph(graph)
+        return result if isinstance(result, dict) else {"status": "unknown", "saved": False}
 
     def facts_graphs(self, symbols: Iterable[str] = None, snapshots: List[AccountSnapshot] = None) -> List[object]:
         return [
@@ -464,3 +564,202 @@ def facts_only_graph(graph: PortfolioOntology) -> PortfolioOntology:
         worldview={**dict(graph.worldview or {}), "runtimeProjectionMode": "ontology-lab-facts-only"},
         prompt=graph.prompt,
     )
+
+
+def rule_id_from_payload(rule: Dict[str, object]) -> str:
+    return str((rule or {}).get("rule_id") or (rule or {}).get("ruleId") or "").strip()
+
+
+def clean_text_list(values: Iterable[object]) -> List[str]:
+    result: List[str] = []
+    seen = set()
+    for value in values or []:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        result.append(text)
+    return result
+
+
+def merge_candidate_rules(
+    baseline_rules: Iterable[Dict[str, object]],
+    candidate_rules: Iterable[Dict[str, object]],
+) -> tuple:
+    merged = [dict(item) for item in (baseline_rules or []) if isinstance(item, dict)]
+    existing_ids = {rule_id_from_payload(item) for item in merged if rule_id_from_payload(item)}
+    added: List[Dict[str, object]] = []
+    skipped: List[str] = []
+    for candidate in candidate_rules or []:
+        if not isinstance(candidate, dict):
+            continue
+        rule_id = rule_id_from_payload(candidate)
+        if not rule_id:
+            continue
+        if rule_id in existing_ids:
+            skipped.append(rule_id)
+            continue
+        promoted = dict(candidate)
+        promoted["enabled"] = True
+        merged.append(promoted)
+        added.append(promoted)
+        existing_ids.add(rule_id)
+    return merged, added, skipped
+
+
+def ontology_lab_tbox_graph(
+    experiment: OntologyExperiment,
+    proposal: Dict[str, object],
+    stamp: str,
+) -> PortfolioOntology:
+    proposal = dict(proposal or {})
+    relation_types = [
+        item
+        for item in clean_text_list(proposal.get("newRelationTypes") or [])
+        if item not in set(TBOX_RELATION_TYPES)
+    ]
+    decision_stages = clean_text_list(proposal.get("newDecisionStages") or proposal.get("decisionStages") or [])
+    tbox_classes = [
+        item
+        for item in clean_text_list(proposal.get("tboxClasses") or [])
+        if item not in set(TBOX_CLASSES)
+    ]
+    graph = PortfolioOntology("ontology-lab-tbox:" + experiment.experiment_id)
+    if not (relation_types or decision_stages or tbox_classes):
+        return graph
+    graph.entities.extend(tbox_entities())
+    graph.relations.extend(tbox_relations())
+    metadata = default_tbox_metadata()
+    owner_id = entity_id("bounded-context", "reasoning-insight")
+    base_properties = {
+        "ontologyBox": "TBox",
+        "box": "TBox",
+        "version": metadata["version"],
+        "tboxVersion": metadata["version"],
+        "tboxFingerprint": metadata["fingerprint"],
+        "boundedContext": "reasoning-insight",
+        "source": "ontology-lab",
+        "experimentId": experiment.experiment_id,
+        "proposedAt": stamp,
+    }
+    for class_name in tbox_classes:
+        class_id = entity_id("tbox-class", class_name)
+        graph.entities.append(OntologyEntity(class_id, class_name, "tbox-class", {
+            **base_properties,
+            "className": class_name,
+            "label": class_name,
+            "description": "Ontology lab proposed TBox class from " + experiment.experiment_id,
+            "materializationPolicy": "runtime-proposed",
+            "materializationBox": "InferenceBox",
+        }))
+        graph.relations.append(OntologyRelation(owner_id, class_id, "DEFINES_CLASS", properties={
+            **base_properties,
+            "proposalSource": "ontology-lab",
+        }))
+    for relation_type in relation_types:
+        relation_id = entity_id("tbox-relation", relation_type)
+        graph.entities.append(OntologyEntity(relation_id, relation_type, "tbox-relation", {
+            **base_properties,
+            "relationType": relation_type,
+            "label": relation_type,
+            "sourceContext": "investment-core",
+            "targetContext": "reasoning-insight",
+            "description": "Ontology lab proposed relation type from " + experiment.experiment_id,
+            "materializationPolicy": "runtime-proposed",
+            "materializationBox": "InferenceBox",
+        }))
+        graph.relations.append(OntologyRelation(owner_id, relation_id, "DEFINES_RELATION", properties={
+            **base_properties,
+            "sourceContext": "investment-core",
+            "targetContext": "reasoning-insight",
+            "proposalSource": "ontology-lab",
+        }))
+    for stage in decision_stages:
+        stage_id = entity_id("decision-stage", stage)
+        graph.entities.append(OntologyEntity(stage_id, stage, "decision-stage", {
+            **base_properties,
+            "tboxClass": "DecisionStage",
+            "decisionStage": stage,
+            "label": stage,
+            "description": "Ontology lab proposed decision stage from " + experiment.experiment_id,
+            "materializationPolicy": "runtime-proposed",
+            "materializationBox": "InferenceBox",
+        }))
+        graph.relations.append(OntologyRelation(owner_id, stage_id, "DEFINES_DECISION_STAGE", properties={
+            **base_properties,
+            "decisionStage": stage,
+            "proposalSource": "ontology-lab",
+        }))
+    graph.worldview = {
+        "model": "ontology-lab-tbox-application",
+        "experimentId": experiment.experiment_id,
+        "appliedAt": stamp,
+        "skipNativeReasoning": True,
+    }
+    return graph
+
+
+def compact_apply_result(result: Dict[str, object]) -> Dict[str, object]:
+    result = dict(result or {})
+    compact = {
+        "status": str(result.get("status") or ""),
+        "saved": bool(result.get("saved")) if "saved" in result else None,
+        "reason": str(result.get("reason") or ""),
+    }
+    for key in ["ruleCount", "entityCount", "relationCount", "statementCount", "versionCount"]:
+        if key in result:
+            compact[key] = result.get(key)
+    return {key: value for key, value in compact.items() if value is not None and value != ""}
+
+
+def ontology_apply_succeeded(result: Dict[str, object]) -> bool:
+    result = dict(result or {})
+    return bool(result.get("saved")) or str(result.get("status") or "").lower() == "ok"
+
+
+def ontology_apply_disabled(result: Dict[str, object]) -> bool:
+    return str((result or {}).get("status") or "").lower() == "disabled"
+
+
+def ontology_apply_failed(result: Dict[str, object]) -> bool:
+    status = str((result or {}).get("status") or "").lower()
+    return status in {"error", "neo4j-error", "invalid-rulebox", "unsupported-uri", "driver-missing"}
+
+
+def ontology_application_status(
+    rulebox_result: Dict[str, object],
+    tbox_result: Dict[str, object],
+    added_rules: List[Dict[str, object]],
+    tbox_entities_to_apply: List[OntologyEntity],
+) -> str:
+    if ontology_apply_failed(rulebox_result) or ontology_apply_failed(tbox_result):
+        return "error"
+    if ontology_apply_succeeded(rulebox_result) or ontology_apply_succeeded(tbox_result):
+        return "applied"
+    if ontology_apply_disabled(rulebox_result) or ontology_apply_disabled(tbox_result):
+        return "disabled"
+    if not added_rules and not tbox_entities_to_apply:
+        return "already-applied"
+    return "pending"
+
+
+def mark_recommendations_applied(
+    recommendations: List[Dict[str, object]],
+    application: Dict[str, object],
+) -> List[Dict[str, object]]:
+    applied_types = {
+        "promote-rule",
+        "review-rule-promotion",
+        "register-relation-types",
+        "register-decision-stages",
+        "reuse-existing-relation-types",
+    }
+    applied = []
+    for item in recommendations or []:
+        recommendation = dict(item)
+        if str(recommendation.get("type") or "") in applied_types:
+            recommendation["applyStatus"] = str(application.get("status") or "")
+            recommendation["appliedAt"] = str(application.get("appliedAt") or "")
+            recommendation["appliedRuleIds"] = list(application.get("ruleIds") or [])
+        applied.append(recommendation)
+    return applied

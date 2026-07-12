@@ -3744,6 +3744,10 @@
     ontologyExperimentCommand(experimentId, "pause", "실험을 일시정지했습니다.");
   }
 
+  function applyOntologyExperiment(experimentId) {
+    ontologyExperimentCommand(experimentId, "apply", "온톨로지 제안을 운영 반영했습니다.");
+  }
+
   function ontologyExperimentCommand(experimentId, action, successMessage) {
     var id = String(experimentId || "").trim();
     if (!id || state.ontologyExperimentAction) return;
@@ -7030,7 +7034,10 @@
       newRelationTypes: aggregate.newRelationTypes || [],
       findings: lastResult.findings || [],
       recommendations: lastResult.recommendations || [],
-      proposedOntologyChanges: lastResult.proposedOntologyChanges || {}
+      proposedOntologyChanges: lastResult.proposedOntologyChanges || {},
+      appliedOntologyChanges: lastResult.appliedOntologyChanges || {},
+      applyStatus: (lastResult.appliedOntologyChanges || {}).status || "",
+      appliedAt: (lastResult.appliedOntologyChanges || {}).appliedAt || ""
     };
   }
 
@@ -7086,6 +7093,16 @@
     }[String(status || "").toLowerCase()] || status || "판정 대기";
   }
 
+  function ontologyApplyStatusLabel(status) {
+    return {
+      applied: "운영 반영",
+      pending: "반영 대기",
+      disabled: "저장소 비활성",
+      error: "반영 오류",
+      "already-applied": "이미 반영"
+    }[String(status || "").toLowerCase()] || status || "미반영";
+  }
+
   function ontologyExperimentBusy(action, id) {
     var current = String(state.ontologyExperimentAction || "");
     return current === action || current === action + ":" + id;
@@ -7136,6 +7153,8 @@
     var relationTypes = Array.isArray(latest.newRelationTypes) ? latest.newRelationTypes : [];
     var findings = Array.isArray(latest.findings) ? latest.findings : [];
     var recommendations = ontologyExperimentRecommendations(latest);
+    var applyStatus = String(latest.applyStatus || ((latest.appliedOntologyChanges || {}).status) || "");
+    var appliedAt = latest.appliedAt || ((latest.appliedOntologyChanges || {}).appliedAt) || "";
     return [
       '<article class="panel ontology-experiment-latest-panel">',
       '<div class="panel-head">',
@@ -7154,6 +7173,7 @@
         relationTypes.length ? '<div class="theme-radar ontology-experiment-tags">' + relationTypes.slice(0, 8).map(function (item) { return '<span>' + escapeHtml(item) + '</span>'; }).join("") + '</div>' : '',
         findings.length ? '<div class="ontology-experiment-findings">' + findings.slice(0, 4).map(function (item) { return '<span>' + escapeHtml(item) + '</span>'; }).join("") + '</div>' : '',
         recommendations.length ? renderOntologyExperimentRecommendationList(recommendations, 4) : '',
+        applyStatus ? '<p class="subtle">운영 반영 ' + escapeHtml(ontologyApplyStatusLabel(applyStatus)) + (appliedAt ? ' · ' + escapeHtml(formatClock(appliedAt)) : '') + '</p>' : '',
         '<p class="subtle">' + escapeHtml(formatClock(latest.completedAt)) + '</p>'
       ].join("") : renderEmptyState({
         label: "Latest Run",
@@ -7177,12 +7197,15 @@
 
   function renderOntologyExperimentRecommendation(item) {
     item = item || {};
+    var appliedAt = item.appliedAt ? formatClock(item.appliedAt) : "";
+    var applyStatus = String(item.applyStatus || "");
     return [
       '<section class="ontology-experiment-recommendation">',
       '<div>',
       '<strong>' + escapeHtml(item.title || "보완 제안") + '</strong>',
       item.reason ? '<p>' + escapeHtml(item.reason) + '</p>' : '',
       item.action ? '<em>' + escapeHtml(item.action) + '</em>' : '',
+      applyStatus ? '<em>' + escapeHtml(ontologyApplyStatusLabel(applyStatus) + (appliedAt ? " · " + appliedAt : "")) + '</em>' : '',
       '</div>',
       '<span class="tone-chip ' + escapeHtml(ontologyRecommendationTone(item.priority)) + '">' + escapeHtml(ontologyRecommendationPriorityLabel(item.priority)) + '</span>',
       '</section>'
@@ -7221,6 +7244,9 @@
     var active = status.toLowerCase() === "active";
     var actionBusy = state.ontologyExperimentAction && String(state.ontologyExperimentAction).indexOf(":" + id) >= 0;
     var recommendations = ontologyExperimentRecommendations(latest);
+    var applyStatus = String(latest.applyStatus || ((latest.appliedOntologyChanges || {}).status) || "");
+    var appliedAt = latest.appliedAt || ((latest.appliedOntologyChanges || {}).appliedAt) || "";
+    var applied = applyStatus === "applied" || applyStatus === "already-applied";
     return [
       '<section class="ontology-experiment-card">',
       '<div class="ontology-experiment-card-head">',
@@ -7239,8 +7265,10 @@
       '</div>',
       symbols.length ? '<div class="theme-radar ontology-experiment-tags">' + symbols.slice(0, 12).map(function (item) { return '<span>' + escapeHtml(item) + '</span>'; }).join("") + '</div>' : '',
       recommendations.length ? renderOntologyExperimentRecommendationList(recommendations, 2) : '',
+      applyStatus ? '<p class="subtle">운영 반영 ' + escapeHtml(ontologyApplyStatusLabel(applyStatus)) + (appliedAt ? ' · ' + escapeHtml(formatClock(appliedAt)) : '') + '</p>' : '',
       latest.completedAt ? '<p class="subtle">최근 실행 ' + escapeHtml(formatClock(latest.completedAt)) + '</p>' : '',
       '<div class="ontology-experiment-card-actions">',
+      recommendations.length ? '<button class="text-button primary" type="button" data-lab-apply="' + escapeHtml(id) + '"' + (actionBusy || !id || applied ? ' disabled' : '') + '>' + escapeHtml(ontologyExperimentBusy("apply", id) ? "반영 중" : (applied ? "반영됨" : "제안 적용")) + '</button>' : '',
       '<button class="text-button" type="button" data-lab-run="' + escapeHtml(id) + '"' + (actionBusy || !id ? ' disabled' : '') + '>' + escapeHtml(ontologyExperimentBusy("run", id) ? "실행 중" : "실행") + '</button>',
       active ? '<button class="text-button" type="button" data-lab-pause="' + escapeHtml(id) + '"' + (actionBusy || !id ? ' disabled' : '') + '>일시정지</button>' : '<button class="text-button primary" type="button" data-lab-activate="' + escapeHtml(id) + '"' + (actionBusy || !id ? ' disabled' : '') + '>활성화</button>',
       '</div>',
@@ -14572,6 +14600,12 @@
     Array.prototype.slice.call(app.querySelectorAll("[data-lab-run]")).forEach(function (button) {
       button.addEventListener("click", function () {
         runOntologyExperiment(button.getAttribute("data-lab-run"));
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-lab-apply]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        applyOntologyExperiment(button.getAttribute("data-lab-apply"));
       });
     });
 

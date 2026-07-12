@@ -585,6 +585,10 @@ def run_ontology_experiment_payload(experiment_id: str, payload: Dict[str, objec
     return ontology_lab_service().run(experiment_id, payload if isinstance(payload, dict) else {})
 
 
+def apply_ontology_experiment_payload(experiment_id: str, payload: Dict[str, object]) -> Dict[str, object]:
+    return ontology_lab_service().apply_recommendations(experiment_id, payload if isinstance(payload, dict) else {})
+
+
 def run_ontology_experiments_once_payload(payload: Dict[str, object]) -> Dict[str, object]:
     body = payload if isinstance(payload, dict) else {}
     limit = int(body.get("limit") or 0)
@@ -1889,6 +1893,15 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
                 return
             return self.send_payload(200, run_ontology_experiment_payload(
                 urllib.parse.unquote(ontology_experiment_run_match.group(1)),
+                self.read_json_body(),
+            ))
+
+        ontology_experiment_apply_match = re.match(r"^/api/ontology/experiments/([^/]+)/apply$", path)
+        if ontology_experiment_apply_match and self.command == "POST":
+            if not self.ensure_writable("공유 모드에서는 온톨로지 실험 제안을 운영 반영할 수 없습니다."):
+                return
+            return self.send_payload(200, apply_ontology_experiment_payload(
+                urllib.parse.unquote(ontology_experiment_apply_match.group(1)),
                 self.read_json_body(),
             ))
 

@@ -23,21 +23,55 @@ class MemoryExperimentStore:
 
 
 class FakeOntologyRepository:
+    def __init__(self):
+        self.rules = []
+        self.saved_rulebox_payloads = []
+        self.run_rulebox_payloads = []
+        self.saved_tbox_graphs = []
+
     def active_tbox_metadata(self):
         return {"status": "ok", "source": "test"}
 
     def rulebox_snapshot(self):
+        relation_types = []
+        for rule in self.rules:
+            for derivation in rule.get("derivations") or []:
+                relation_type = str(derivation.get("relation_type") or derivation.get("relationType") or "").strip()
+                if relation_type:
+                    relation_types.append(relation_type)
         return {
-            "configured": False,
-            "status": "disabled",
-            "source": "defaults",
+            "configured": True,
+            "status": "ok",
+            "source": "test",
             "engineVersion": "test",
-            "rules": [],
-            "ruleCount": 0,
-            "conditionCount": 0,
-            "derivationCount": 0,
-            "relationTypes": [],
+            "rules": [dict(item) for item in self.rules],
+            "ruleCount": len(self.rules),
+            "conditionCount": sum(len(item.get("conditions") or []) for item in self.rules),
+            "derivationCount": sum(len(item.get("derivations") or []) for item in self.rules),
+            "relationTypes": sorted(set(relation_types)),
             "changeCandidates": [],
+        }
+
+    def save_rulebox(self, payload):
+        body = dict(payload or {})
+        self.saved_rulebox_payloads.append(body)
+        self.rules = [dict(item) for item in (body.get("rules") or []) if isinstance(item, dict)]
+        snapshot = self.rulebox_snapshot()
+        snapshot.update({"saved": True, "status": "ok", "versionCount": 1})
+        return snapshot
+
+    def run_rulebox(self, payload=None):
+        self.run_rulebox_payloads.append(dict(payload or {}))
+        return {"status": "ok", "statementCount": 3}
+
+    def save_graph(self, graph):
+        self.saved_tbox_graphs.append(graph)
+        return {
+            "configured": True,
+            "saved": True,
+            "status": "ok",
+            "entityCount": len(graph.entities),
+            "relationCount": len(graph.relations),
         }
 
 
@@ -134,6 +168,39 @@ class OntologyLabTests(unittest.TestCase):
         self.assertIn("review-rule-promotion", {item["type"] for item in recommendations})
         self.assertIn("register-relation-types", {item["type"] for item in recommendations})
         self.assertIn("register-decision-stages", {item["type"] for item in recommendations})
+
+    def test_apply_recommendations_promotes_rulebox_tbox_and_records_audit(self):
+        store = MemoryExperimentStore()
+        repository = FakeOntologyRepository()
+        service = OntologyLabService(
+            repository,
+            store,
+            monitor_store=FakeMonitorStore(),
+        )
+        experiment_id = service.create({
+            "title": "AAPL apply lab",
+            "symbols": ["AAPL"],
+            "rules": [candidate_rule()],
+        })["experiment"]["id"]
+        service.run(experiment_id)
+
+        result = service.apply_recommendations(experiment_id)
+
+        self.assertEqual("applied", result["status"])
+        self.assertEqual(1, len(repository.saved_rulebox_payloads))
+        self.assertEqual(1, len(repository.run_rulebox_payloads))
+        self.assertEqual(1, len(repository.saved_tbox_graphs))
+        saved_rules = repository.saved_rulebox_payloads[0]["rules"]
+        self.assertIn("graph.lab.symbol-review.v1", {item["rule_id"] for item in saved_rules})
+        self.assertTrue([item for item in saved_rules if item["rule_id"] == "graph.lab.symbol-review.v1"][0]["enabled"])
+        application = result["application"]
+        self.assertIn("graph.lab.symbol-review.v1", application["ruleIds"])
+        self.assertIn("REQUIRES_NEXT_CHECK", application["relationTypes"])
+        self.assertIn("LAB_REVIEW", application["decisionStages"])
+        experiment = store.get(experiment_id)
+        self.assertEqual("applied", experiment.run_history[0]["applyStatus"])
+        self.assertEqual("applied", experiment.last_result["appliedOntologyChanges"]["status"])
+        self.assertIn("applied", {item.get("applyStatus") for item in experiment.last_result["recommendations"]})
 
     def test_run_without_snapshots_marks_result_as_needing_data(self):
         service = OntologyLabService(

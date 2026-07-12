@@ -340,6 +340,13 @@ def ontology_lab_command(args) -> int:
         result = service.run(args.id, read_json_payload(args.payload_file) if args.payload_file else {})
         print(json.dumps(result, ensure_ascii=False))
         return 0 if result.get("status") != "not-found" else 1
+    if args.ontology_lab_action == "apply":
+        result = service.apply_recommendations(
+            args.id,
+            {"runRulebox": not bool(args.skip_run_rulebox)},
+        )
+        print(json.dumps(result, ensure_ascii=False))
+        return 0 if result.get("status") not in {"not-found", "no-result", "error"} else 1
     if args.ontology_lab_action == "once":
         result = service.run_once(limit=int(args.limit or settings.get("ontologyLabBatchSize") or 0), force=args.force)
         print(json.dumps(result, ensure_ascii=False))
@@ -635,6 +642,9 @@ def build_parser() -> argparse.ArgumentParser:
     lab_run = ontology_lab_actions.add_parser("run")
     lab_run.add_argument("--id", required=True)
     lab_run.add_argument("--payload-file", default="")
+    lab_apply = ontology_lab_actions.add_parser("apply")
+    lab_apply.add_argument("--id", required=True)
+    lab_apply.add_argument("--skip-run-rulebox", action="store_true")
     lab_once = ontology_lab_actions.add_parser("once")
     lab_once.add_argument("--limit", default="")
     lab_once.add_argument("--force", action="store_true")

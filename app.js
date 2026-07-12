@@ -8342,8 +8342,7 @@
     var content = renderNotificationSectionContent();
     return renderManagedPage("notifications", state.snapshot || {}, [
       '<section class="admin-grid notifications-view">',
-      renderNotificationSectionBar(),
-      section === "status" ? renderNotificationOpsRail() : '',
+      renderNotificationCommandCenter(section),
       content,
       '</section>',
       section === "signals" ? renderMonitoringDetailOverlay(state.snapshot || {}) : ''
@@ -8384,6 +8383,31 @@
       '<button class="' + settingsSaveButtonClass() + '" data-action="save-settings"' + settingsSaveDisabledAttr() + '>' + settingsSaveButtonLabel() + '</button>',
       '</div>',
       '</div>'
+    ].join("");
+  }
+
+  function renderNotificationCommandCenter(sectionId) {
+    var section = notificationSections.filter(function (item) {
+      return item.id === normalizeNotificationSection(sectionId);
+    })[0] || activeNotificationSectionMeta();
+    var summary = state.notificationJobsSummary || state.realtime.notificationJobs || {};
+    var failedCount = Number(summary.failed || 0);
+    var pendingCount = Number(summary.pending || 0);
+    var statusTone = failedCount ? "danger" : (pendingCount ? "watch" : "muted");
+    var statusText = failedCount ? failedCount + "건 실패 확인" : (pendingCount ? pendingCount + "건 대기" : "대기 없음");
+    return [
+      '<section class="notification-command-center" aria-label="알림 운영 요약">',
+      '<div class="notification-command-head">',
+      '<div>',
+      '<p class="label">Notifications</p>',
+      '<h2>알림 운영</h2>',
+      '<span>' + escapeHtml(section.label + " · " + section.description) + '</span>',
+      '</div>',
+      '<span class="tone-chip ' + escapeHtml(statusTone) + '">' + escapeHtml(statusText) + '</span>',
+      '</div>',
+      renderNotificationSectionBar(),
+      renderNotificationOpsRail(),
+      '</section>'
     ].join("");
   }
 

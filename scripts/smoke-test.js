@@ -222,8 +222,11 @@ function checkFrontendAdminRender() {
   assertOk(/\.monitor-primary-state,[\s\S]*\.monitor-runtime-row,[\s\S]*\.monitor-alert-summary,[\s\S]*\.monitor-ledger-cell,[\s\S]*\.monitoring-detail-metric,[\s\S]*\{[\s\S]*padding: var\(--ds-row-pad-y\) var\(--ds-row-pad-x\);/.test(mobileSpacingAuditLayer), "모바일 모니터링 내부 카드 padding 보정이 없습니다.");
   assertOk(/\.admin-monitoring-panel \.monitor-primary-state\s*\{[\s\S]*min-height: 132px;[\s\S]*padding: var\(--ds-panel-pad-y\) var\(--ds-panel-pad-x\);/.test(mobileSpacingAuditLayer), "모바일 대표 모니터링 상태 카드의 구조적 여백 보정이 없습니다.");
   assertOk(styles.indexOf("@media (max-width: 1180px) and (min-width: 981px)") >= 0 && styles.indexOf("@media (max-width: 980px) and (min-width: 861px)") >= 0, "PC/태블릿 레이아웃 분기 규칙이 없습니다.");
-  assertOk(styles.indexOf("--ds-shell-width: 1720px") >= 0 && styles.indexOf("--ds-sidebar-width: 256px") >= 0, "PC 중심 shell/sidebar 레이아웃 토큰이 없습니다.");
-  assertOk(styles.indexOf("grid-template-columns: var(--ds-sidebar-width) minmax(0, 1fr)") >= 0, "PC shell이 좌측 네비게이션과 작업 영역으로 분리되지 않습니다.");
+  assertOk(styles.indexOf("--ds-shell-width: 1720px") >= 0 && styles.indexOf("--ds-content-width: 1880px") >= 0 && styles.indexOf("--ds-top-nav-height: 54px") >= 0, "PC 중심 상단 탭형 금융 콘솔 레이아웃 토큰이 없습니다.");
+  assertOk(styles.indexOf("Professional finance top navigation shell") >= 0 && styles.indexOf("grid-template-columns: minmax(0, 1fr)") >= 0, "PC shell이 단일 컬럼 상단 탭형 작업 영역으로 전환되지 않습니다.");
+  assertOk(/Professional finance top navigation shell[\s\S]*\.app-nav[\s\S]*grid-template-columns: minmax\(180px, 0\.17fr\) minmax\(0, 1fr\) minmax\(108px, auto\);/.test(styles), "PC 상단 금융 탭 네비게이션 3구획 구조가 없습니다.");
+  assertOk(/Professional finance top navigation shell[\s\S]*\.app-nav-tab,[\s\S]*\.app-nav-menu-item[\s\S]*min-height: var\(--ds-top-nav-tab-height\);/.test(styles), "PC 상단 탭이 낮은 한 줄 금융 탭 높이를 쓰지 않습니다.");
+  assertOk(/Professional finance top navigation shell[\s\S]*\.nav-tab-description\s*\{[\s\S]*display: none;/.test(styles), "PC 상단 탭이 설명까지 노출해 여러 줄로 늘어날 수 있습니다.");
   assertOk(styles.indexOf("grid-template-columns: repeat(12, minmax(0, 1fr))") >= 0, "PC 본문 12컬럼 그리드가 없습니다.");
   assertOk(styles.indexOf("@media (min-width: 1181px)") >= 0, "PC 전용 데스크톱 최적화 분기 규칙이 없습니다.");
   assertOk(/@media \(min-width: 1181px\)[\s\S]*\.managed-page[\s\S]*gap: var\(--ds-page-gap\);/.test(styles), "PC 본문 간격이 공통 page gap을 따르지 않습니다.");
@@ -257,8 +260,8 @@ function checkFrontendAdminRender() {
   assertOk(/Desktop free-scroll and focus-mode layer[\s\S]*\.shell,[\s\S]*\.console-shell\s*\{[\s\S]*height: auto;[\s\S]*overflow: visible;/.test(styles), "PC shell이 페이지 스크롤 구조로 풀리지 않았습니다.");
   assertOk(/Desktop free-scroll and focus-mode layer[\s\S]*\.workspace-main,[\s\S]*\.managed-page,[\s\S]*\.admin-grid\s*\{[\s\S]*height: auto;[\s\S]*overflow: visible;/.test(styles), "PC 본문이 내부 고정 스크롤에서 해제되지 않았습니다.");
   assertOk(/Desktop free-scroll and focus-mode layer[\s\S]*\.notification-template-select-list,[\s\S]*\.feed-view \.feed-side-column,[\s\S]*\.notification-decision-body\.has-detail \.notification-decision-list[\s\S]*\{[\s\S]*max-height: none;[\s\S]*overflow: visible;/.test(styles), "PC 탭 내부 목록/사이드 컬럼이 자체 스크롤에서 해제되지 않았습니다.");
-  assertOk(/@media \(max-width: 1180px\) and \(min-width: 981px\)[\s\S]*grid-template-columns: 224px minmax\(0, 1fr\);/.test(styles), "981px 이상 태블릿이 PC형 좌측 네비게이션으로 유지되지 않습니다.");
-  assertOk(/@media \(max-width: 980px\) and \(min-width: 861px\)[\s\S]*\.app-nav[\s\S]*grid-template-columns: auto minmax\(0, 1fr\) auto;/.test(styles), "좁은 태블릿에서 상단 네비게이션으로 전환되지 않습니다.");
+  assertOk(/@media \(max-width: 1180px\) and \(min-width: 981px\)[\s\S]*\.shell,[\s\S]*\.console-shell[\s\S]*grid-template-columns: minmax\(0, 1fr\);/.test(styles), "981px 이상 태블릿이 상단 탭형 단일 컬럼 구조를 유지하지 않습니다.");
+  assertOk(/@media \(max-width: 980px\) and \(min-width: 861px\)[\s\S]*\.app-nav[\s\S]*grid-template-columns: auto minmax\(0, 1fr\) auto;/.test(styles), "좁은 태블릿에서 상단 네비게이션 3구획이 유지되지 않습니다.");
   assertOk(code.indexOf("renderDeskbar") >= 0 && styles.indexOf(".deskbar") >= 0, "PC/태블릿 데스크 바가 없습니다.");
   assertOk(code.indexOf("loadCachedSnapshot") >= 0 && code.indexOf("writeCachedSnapshot") >= 0 && code.indexOf("snapshotFromCache") >= 0, "리로드 시 직전 화면 유지 로직이 없습니다.");
   assertOk(code.indexOf("snapshotPrerequisites") >= 0 && code.indexOf("supportingBootstrapTasks") >= 0, "초기 데이터 로드가 메인/보조 작업으로 병렬 분리되지 않았습니다.");
@@ -1203,7 +1206,7 @@ function checkFrontendAdminRender() {
     assertOk(overviewHtml.indexOf("top-action-bar") < 0, "기존 상단 버튼 나열 구조가 아직 렌더링됩니다.");
     assertOk(overviewHtml.indexOf("deskbar deskbar-full") >= 0, "홈 탭은 full deskbar를 사용해야 합니다.");
     assertOk(overviewHtml.indexOf("console-shell") >= 0 && styles.indexOf("Next-generation desktop finance console") >= 0, "PC 콘솔 전용 셸 스타일이 적용되지 않았습니다.");
-    assertOk(overviewHtml.indexOf("nav-tab-description") >= 0 && styles.indexOf(".nav-tab-description") >= 0, "PC 좌측 네비게이션에 탭 설명 구조가 없습니다.");
+    assertOk(overviewHtml.indexOf("nav-tab-label") >= 0 && styles.indexOf(".nav-tab-label") >= 0, "PC 상단 네비게이션에 탭 라벨 구조가 없습니다.");
     assertOk(code.indexOf("var navigationGroups = [") >= 0 && code.indexOf("pageStructureCatalog") >= 0, "탭 업무 그룹과 화면 정보 구조 카탈로그가 없습니다.");
   assertOk(code.indexOf("pageModeOptions") >= 0 && code.indexOf("setPageViewMode") >= 0 && styles.indexOf(".page-mode-switch") >= 0, "결과/설정 모드 분리 구조가 없습니다.");
   assertOk(code.indexOf('querySelectorAll("button[data-page-mode-page][data-page-mode]")') >= 0, "결과/설정 전환 이벤트가 페이지 컨테이너에 바인딩될 수 있습니다.");
@@ -1212,8 +1215,8 @@ function checkFrontendAdminRender() {
   assertOk(code.indexOf("feed-impact-article") >= 0 && code.indexOf("research-evidence-article") >= 0, "피드/근거 카드에서 기사 메타 영역이 하단으로 분리되지 않았습니다.");
   assertOk(code.indexOf("renderSettingsResponsibilityPanel") >= 0 && styles.indexOf(".settings-responsibility-panel") >= 0, "설정 탭에 탭별 책임 지도 구조가 없습니다.");
   assertOk(accountResultsHtml.indexOf("page-mode-switch") >= 0 && accountResultsHtml.indexOf('data-page-mode="results"') >= 0 && accountResultsHtml.indexOf('data-page-mode="settings"') >= 0, "계정 탭에 결과/설정 전환이 없습니다.");
-    assertOk(overviewHtml.indexOf("app-nav-group") >= 0 && overviewHtml.indexOf("관제 홈") >= 0 && overviewHtml.indexOf("데이터 관리") >= 0 && overviewHtml.indexOf("판단 운영") >= 0 && overviewHtml.indexOf("운영 관리") >= 0, "PC 좌측 네비게이션이 한국어 업무 그룹으로 구조화되지 않았습니다.");
-    assertOk(overviewHtml.indexOf("Market Desk") < 0 && overviewHtml.indexOf("Decision Stack") < 0 && overviewHtml.indexOf("Control Plane") < 0, "PC 좌측 네비게이션에 이전 영어 그룹명이 남아 있습니다.");
+    assertOk(overviewHtml.indexOf("app-nav-group") >= 0 && overviewHtml.indexOf("관제 홈") >= 0 && overviewHtml.indexOf("데이터 관리") >= 0 && overviewHtml.indexOf("판단 운영") >= 0 && overviewHtml.indexOf("운영 관리") >= 0, "PC 상단 네비게이션이 한국어 업무 그룹 순서로 구조화되지 않았습니다.");
+    assertOk(overviewHtml.indexOf("Market Desk") < 0 && overviewHtml.indexOf("Decision Stack") < 0 && overviewHtml.indexOf("Control Plane") < 0, "PC 상단 네비게이션에 이전 영어 그룹명이 남아 있습니다.");
     assertOk(overviewHtml.indexOf('data-nav-group="market"') >= 0 && overviewHtml.indexOf('data-nav-group="decision"') >= 0 && overviewHtml.indexOf('data-nav-group="control"') >= 0, "탭 버튼이 업무 그룹 메타데이터를 렌더링하지 않습니다.");
     assertOk(overviewHtml.indexOf("포트폴리오 스냅샷") >= 0 && notificationHtml.indexOf("알림 판단 기록") >= 0 && modelingHtml.indexOf("투자 의견") >= 0, "주요 화면 command strip이 핵심 엔티티를 렌더링하지 않습니다.");
     assertOk(styles.indexOf(".app-nav-group") >= 0 && styles.indexOf(".page-command-context") >= 0, "업무 그룹 네비게이션과 command context 스타일이 없습니다.");

@@ -4659,6 +4659,7 @@
     return sendJson("/api/investment-calendar/events", "POST", payload)
       .then(function () {
         state.investmentCalendarDraft = defaultInvestmentCalendarDraft();
+        state.workDetailLayer = null;
         showSnackbar("투자 캘린더 이벤트를 저장했습니다.");
         return loadInvestmentCalendar(true);
       })
@@ -6773,6 +6774,8 @@
     if (type === "feed-pipeline") return feedPipelineWorkDetailPayload();
     if (type === "feed-sources") return feedSourcesWorkDetailPayload();
     if (type === "feed-quality") return feedQualityWorkDetailPayload();
+    if (type === "calendar-entry") return investmentCalendarEntryWorkDetailPayload();
+    if (type === "calendar-event") return investmentCalendarEventWorkDetailPayload(key);
     if (type === "investment-action") return investmentActionWorkDetailPayload(key);
     if (type === "settings-runtime") return settingsRuntimeWorkDetailPayload();
     return null;
@@ -7054,8 +7057,8 @@
     return renderManagedPage("calendar", snapshot, [
       '<section class="admin-grid investment-calendar-view">',
       renderInvestmentCalendarSummaryPanel(),
-      renderInvestmentCalendarFormPanel(),
       renderInvestmentCalendarListPanel(),
+      renderInvestmentCalendarRailPanel(),
       '</section>'
     ].join(""));
   }
@@ -7094,33 +7097,33 @@
     var summary = payload.summary || {};
     var upcoming = investmentCalendarUpcomingEvents();
     var next = upcoming[0] || {};
+    var important = investmentCalendarEvents().filter(function (event) {
+      return Number((event || {}).importance || 0) >= 80;
+    }).length;
     return [
-      '<article class="panel investment-calendar-summary-panel">',
+      '<article class="panel investment-calendar-summary-panel"' + cardTypeAttrs("source-card", "hold") + '>',
       '<div class="panel-head">',
       '<div><p class="label">INVESTMENT CALENDAR</p><h2>예정 이벤트와 알림 상태</h2><span>투자 판단은 캘린더 리마인더가 아니라 온톨로지 인사이트에서 따로 생성됩니다.</span></div>',
       '<div class="toolbar">',
       '<button class="text-button" type="button" data-action="refresh-investment-calendar"' + (state.investmentCalendarLoading ? ' disabled' : '') + '>' + (state.investmentCalendarLoading ? "조회 중" : "새로고침") + '</button>',
       '<button class="text-button primary" type="button" data-action="run-investment-calendar-reminders"' + (state.investmentCalendarRunning ? ' disabled' : '') + '>' + (state.investmentCalendarRunning ? "확인 중" : "리마인더 확인") + '</button>',
+      renderWorkDetailButton("calendar-entry", "", "이벤트 등록", "text-button primary"),
       '</div>',
       '</div>',
       state.investmentCalendarError ? '<p class="form-error">' + escapeHtml(state.investmentCalendarError) + '</p>' : '',
       '<div class="investment-calendar-kpis">',
-      renderCalendarKpi("전체", summary.total || 0, "등록 이벤트"),
-      renderCalendarKpi("예정", summary.upcoming || upcoming.length || 0, "활성 일정"),
-      renderCalendarKpi("다음", next.title || "대기", next.startsAt ? formatClock(next.startsAt) : "등록 필요"),
-      '</div>',
-      '<div class="investment-calendar-type-strip">',
-      ((summary.byType || []).length ? summary.byType : [{ eventType: "custom", count: 0 }]).slice(0, 6).map(function (item) {
-        return '<span><strong>' + escapeHtml(investmentCalendarEventTypeLabel(item.eventType)) + '</strong><em>' + escapeHtml(item.count || 0) + '</em></span>';
-      }).join(""),
+      renderCalendarKpi("전체", summary.total || 0, "등록 이벤트", "metric-cell", "hold"),
+      renderCalendarKpi("예정", summary.upcoming || upcoming.length || 0, "활성 일정", "metric-cell", upcoming.length ? "watch" : "hold"),
+      renderCalendarKpi("중요", important, "중요도 80+", "metric-cell", important ? "caution" : "hold"),
+      renderCalendarKpi("다음", next.title || "대기", next.startsAt ? formatClock(next.startsAt) : "등록 필요", "metric-cell", next.startsAt ? "watch" : "hold"),
       '</div>',
       '</article>'
     ].join("");
   }
 
-  function renderCalendarKpi(label, value, detail) {
+  function renderCalendarKpi(label, value, detail, cardType, tone) {
     return [
-      '<span class="investment-calendar-kpi">',
+      '<span class="investment-calendar-kpi"' + cardTypeAttrs(cardType || "metric-cell", tone || "hold") + '>',
       '<em>' + escapeHtml(label) + '</em>',
       '<strong>' + escapeHtml(value) + '</strong>',
       '<b>' + escapeHtml(detail || "") + '</b>',
@@ -7128,11 +7131,12 @@
     ].join("");
   }
 
-  function renderInvestmentCalendarFormPanel() {
+  function renderInvestmentCalendarFormPanel(options) {
+    options = options || {};
     var draft = state.investmentCalendarDraft || defaultInvestmentCalendarDraft();
     return [
-      '<article class="panel investment-calendar-form-panel">',
-      '<div class="panel-head"><div><p class="label">EVENT ENTRY</p><h2>투자 이벤트 등록</h2></div></div>',
+      '<article class="' + escapeHtml(options.layer ? "investment-calendar-form-panel layer-form" : "panel investment-calendar-form-panel") + '"' + cardTypeAttrs("config-panel", "hold") + '>',
+      options.layer ? '' : '<div class="panel-head"><div><p class="label">EVENT ENTRY</p><h2>투자 이벤트 등록</h2></div></div>',
       '<form class="investment-calendar-form" data-investment-calendar-form>',
       '<label class="setting-field wide"><span>제목</span><input data-calendar-field="title" type="text" autocomplete="off" value="' + escapeHtml(draft.title || "") + '" placeholder="예: AAPL FY26 Q3 실적 발표"></label>',
       '<label class="setting-field"><span>유형</span><select data-calendar-field="eventType">',
@@ -7159,9 +7163,13 @@
   function renderInvestmentCalendarListPanel() {
     var events = investmentCalendarEvents();
     var filters = state.investmentCalendarFilters || {};
+    var upcoming = investmentCalendarUpcomingEvents();
     return [
-      '<article class="panel investment-calendar-list-panel">',
-      '<div class="panel-head"><div><p class="label">AGENDA</p><h2>투자 이벤트 목록</h2></div></div>',
+      '<article class="panel investment-calendar-list-panel"' + cardTypeAttrs("process-card", events.length ? "watch" : "hold") + '>',
+      '<div class="panel-head">',
+      '<div><p class="label">AGENDA</p><h2>투자 이벤트 타임라인</h2><span>예정 이벤트를 먼저 보고, 등록과 상세 편집은 레이어에서 처리합니다.</span></div>',
+      '<span class="metric">' + escapeHtml(upcoming.length) + '</span>',
+      '</div>',
       '<form class="investment-calendar-filters" data-investment-calendar-filter-form>',
       '<input data-calendar-filter="symbol" type="text" value="' + escapeHtml(filters.symbol || "") + '" placeholder="종목 필터" autocomplete="off">',
       '<select data-calendar-filter="eventType"><option value="">전체 유형</option>',
@@ -7177,9 +7185,20 @@
       '<button class="text-button primary" type="submit">' + (state.investmentCalendarLoading ? "조회 중" : "조회") + '</button>',
       '</form>',
       '<div class="investment-calendar-list">',
-      state.investmentCalendarLoading ? '<div class="panel skeleton"></div>' : '',
-      (!state.investmentCalendarLoading && !events.length) ? renderEmptyState({ label: "Calendar", title: "등록된 투자 이벤트가 없습니다", description: "실적, 거시지표, 공시, 점검 일정을 등록하면 리마인더와 알림 정책에 연결됩니다." }) : '',
-      events.map(renderInvestmentCalendarEvent).join(""),
+      state.investmentCalendarLoading ? renderEmptyState({
+        tone: "watch",
+        label: "Calendar",
+        title: "투자 이벤트를 조회하고 있습니다",
+        description: "마지막 등록 상태를 유지하면서 조건에 맞는 이벤트와 리마인더 후보를 다시 읽습니다.",
+        meta: [filters.symbol || "전체 종목", filters.eventType ? investmentCalendarEventTypeLabel(filters.eventType) : "전체 유형"]
+      }) : (!events.length ? renderEmptyState({
+        tone: "hold",
+        label: "Calendar",
+        title: "등록된 투자 이벤트가 없습니다",
+        description: "실적, 거시지표, 공시, 점검 일정을 등록하면 리마인더와 알림 정책에 연결됩니다.",
+        meta: ["등록 폼은 레이어에서 열림", "알림 큐와 온톨로지 요청으로 연결"],
+        action: renderWorkDetailButton("calendar-entry", "", "이벤트 등록", "text-button primary")
+      }) : events.map(renderInvestmentCalendarEvent).join("")),
       '</div>',
       '</article>'
     ].join("");
@@ -7188,6 +7207,7 @@
   function renderInvestmentCalendarEvent(event) {
     var tone = investmentCalendarTone(event);
     var targets = (event.symbols || []).concat(event.markets || []);
+    var key = event.eventId || event.id || event.title || "";
     return [
       '<section class="investment-calendar-event ' + escapeHtml(tone) + '"' + cardTypeAttrs("calendar-event", tone) + '>',
       '<div class="investment-calendar-event-main">',
@@ -7207,10 +7227,101 @@
       '</div>',
       '</div>',
       '<div class="investment-calendar-event-actions">',
+      renderWorkDetailButton("calendar-event", key, "상세", "mini-button"),
       '<button class="mini-button danger" type="button" data-calendar-delete="' + escapeHtml(event.eventId || "") + '"' + (state.investmentCalendarDeleting === event.eventId ? ' disabled' : '') + '>' + (state.investmentCalendarDeleting === event.eventId ? "삭제 중" : "삭제") + '</button>',
       '</div>',
       '</section>'
     ].join("");
+  }
+
+  function renderInvestmentCalendarRailPanel() {
+    var payload = currentInvestmentCalendar();
+    var summary = payload.summary || {};
+    var upcoming = investmentCalendarUpcomingEvents();
+    var next = upcoming[0] || {};
+    var byType = (summary.byType || []).length ? summary.byType : [{ eventType: "custom", count: 0 }];
+    return [
+      '<aside class="investment-calendar-rail">',
+      '<section class="panel investment-calendar-next-card"' + cardTypeAttrs("action-queue-card", next.startsAt ? "watch" : "hold") + '>',
+      '<div class="panel-head"><div><p class="label">NEXT ACTION</p><h2>다음 알림</h2></div></div>',
+      '<div class="investment-calendar-next-body">',
+      '<strong>' + escapeHtml(next.title || "등록 대기") + '</strong>',
+      '<span>' + escapeHtml(next.startsAt ? formatClock(next.startsAt) : "예정 이벤트를 등록하면 알림 후보가 생성됩니다.") + '</span>',
+      '<em>' + escapeHtml(next.eventType ? investmentCalendarEventTypeLabel(next.eventType) : "캘린더 준비") + '</em>',
+      '</div>',
+      renderWorkDetailButton("calendar-entry", "", "이벤트 등록", "text-button primary"),
+      '</section>',
+      '<section class="panel investment-calendar-type-panel"' + cardTypeAttrs("diagnostic-card", "hold") + '>',
+      '<div class="panel-head"><div><p class="label">EVENT MIX</p><h2>유형 분포</h2></div></div>',
+      '<div class="investment-calendar-type-strip">',
+      byType.slice(0, 8).map(function (item) {
+        return '<span' + cardTypeAttrs("metric-cell", item.count ? "watch" : "hold") + '><strong>' + escapeHtml(investmentCalendarEventTypeLabel(item.eventType)) + '</strong><em>' + escapeHtml(item.count || 0) + '</em></span>';
+      }).join(""),
+      '</div>',
+      '</section>',
+      '<section class="panel investment-calendar-quality-panel"' + cardTypeAttrs("source-card", "hold") + '>',
+      '<div class="panel-head"><div><p class="label">DATA QUALITY</p><h2>운영 연결</h2></div></div>',
+      '<div class="investment-calendar-quality-list">',
+      renderCalendarRailCheck("이벤트 저장소", summary.total ? "저장됨" : "대기", summary.total ? "watch" : "hold"),
+      renderCalendarRailCheck("리마인더 큐", upcoming.length ? upcoming.length + "건 후보" : "후보 없음", upcoming.length ? "watch" : "hold"),
+      renderCalendarRailCheck("판단 연결", "온톨로지 요청", "hold"),
+      '</div>',
+      '</section>',
+      '</aside>'
+    ].join("");
+  }
+
+  function renderCalendarRailCheck(label, value, tone) {
+    return [
+      '<span class="investment-calendar-quality-row"' + cardTypeAttrs("health-card", tone || "hold") + '>',
+      '<em>' + escapeHtml(label) + '</em>',
+      '<strong>' + escapeHtml(value || "-") + '</strong>',
+      '</span>'
+    ].join("");
+  }
+
+  function investmentCalendarEntryWorkDetailPayload() {
+    return {
+      kicker: "Event Entry",
+      title: "투자 이벤트 등록",
+      meta: "실적, 거시지표, 공시, 점검 일정을 알림 후보로 연결합니다.",
+      body: renderInvestmentCalendarFormPanel({ layer: true })
+    };
+  }
+
+  function investmentCalendarEventByKey(key) {
+    var target = String(key || "");
+    return investmentCalendarEvents().filter(function (event) {
+      return String(event.eventId || event.id || event.title || "") === target;
+    })[0] || null;
+  }
+
+  function investmentCalendarEventWorkDetailPayload(key) {
+    var event = investmentCalendarEventByKey(key);
+    if (!event) return null;
+    var targets = (event.symbols || []).concat(event.markets || []);
+    var tone = investmentCalendarTone(event);
+    return {
+      kicker: "Calendar Event",
+      title: event.title || "투자 이벤트",
+      meta: [investmentCalendarEventTypeLabel(event.eventType), event.startsAt ? formatClock(event.startsAt) : "", targets.join(" · ")].filter(Boolean).join(" · "),
+      body: [
+        '<section class="work-detail-section primary">',
+        '<strong>이벤트 요약</strong>',
+        '<p>' + escapeHtml(event.notes || "등록된 메모가 없습니다. 이벤트 시점과 대상 종목을 확인한 뒤 알림 후보로 이어집니다.") + '</p>',
+        '</section>',
+        '<div class="work-detail-metric-row">',
+        renderNotificationDetailMetric("중요도", event.importance || 0, tone),
+        renderNotificationDetailMetric("시간대", event.timezone || "UTC", "muted"),
+        renderNotificationDetailMetric("알림", (event.reminderOffsetsMinutes || []).join(", ") || "없음", "muted"),
+        '</div>',
+        '<section class="work-detail-section">',
+        '<strong>대상</strong>',
+        '<p>' + escapeHtml(targets.join(" · ") || "전체 포트폴리오") + '</p>',
+        '</section>'
+      ].join(""),
+      footer: '<button class="mini-button danger" type="button" data-calendar-delete="' + escapeHtml(event.eventId || "") + '">삭제</button>'
+    };
   }
 
   function renderSystemGuidePage(snapshot) {
@@ -7821,10 +7932,12 @@
   }
 
   function renderOntologyExperimentsPage(snapshot) {
+    var experiments = ontologyExperimentItems();
     return renderManagedPage("experiments", snapshot, [
       '<section class="admin-grid ontology-experiments-view">',
       renderOntologyExperimentOverviewPanel(),
       renderOntologyExperimentLatestPanel(),
+      !experiments.length ? renderOntologyExperimentStarterPanel() : '',
       renderOntologyExperimentListPanel(),
       '</section>'
     ].join(""));
@@ -7950,7 +8063,7 @@
     var payload = ontologyExperimentPayload();
     var latest = payload.latestRun && typeof payload.latestRun === "object" ? payload.latestRun : {};
     return [
-      '<article class="panel ontology-experiment-overview-panel">',
+      '<article class="panel ontology-experiment-overview-panel"' + cardTypeAttrs("process-card", payload.enabled === false ? "hold" : "watch") + '>',
       '<div class="panel-head">',
       '<div>',
       '<p class="label">Ontology Lab</p>',
@@ -7979,7 +8092,7 @@
 
   function renderOntologyExperimentMetric(label, value, caption) {
     return [
-      '<section>',
+      '<section' + cardTypeAttrs("metric-cell") + '>',
       '<span>' + escapeHtml(caption || "") + '</span>',
       '<strong>' + escapeHtml(value) + '</strong>',
       '<em>' + escapeHtml(label || "") + '</em>',
@@ -7996,7 +8109,7 @@
     var applyStatus = String(latest.applyStatus || ((latest.appliedOntologyChanges || {}).status) || "");
     var appliedAt = latest.appliedAt || ((latest.appliedOntologyChanges || {}).appliedAt) || "";
     return [
-      '<article class="panel ontology-experiment-latest-panel">',
+      '<article class="panel ontology-experiment-latest-panel"' + cardTypeAttrs("diagnostic-card", latest.completedAt ? "watch" : "hold") + '>',
       '<div class="panel-head">',
       '<div>',
       '<p class="label">Latest Run</p>',
@@ -8021,6 +8134,32 @@
         description: "활성 실험이 실행되면 최근 결과가 이곳에 표시됩니다."
       }),
       '</article>'
+    ].join("");
+  }
+
+  function renderOntologyExperimentStarterPanel() {
+    return [
+      '<article class="panel ontology-experiment-starter-panel"' + cardTypeAttrs("action-queue-card", "hold") + '>',
+      '<div class="panel-head">',
+      '<div><p class="label">STARTER FLOW</p><h2>전략 검증 시작점</h2><span>빈 화면에서도 다음 작업이 보이도록 실험 생성, 실행, 운영 반영 흐름을 고정합니다.</span></div>',
+      '<button class="text-button primary" type="button" data-lab-suggest' + (state.ontologyExperimentAction ? ' disabled' : '') + '>' + escapeHtml(ontologyExperimentBusy("suggest") ? "제안 중" : "AI 실험 제안") + '</button>',
+      '</div>',
+      '<div class="ontology-experiment-starter-grid">',
+      renderExperimentStarterStep("01", "후보 규칙 생성", "최근 판단 실패와 누락 근거에서 RuleBox 후보를 만듭니다.", "process-card"),
+      renderExperimentStarterStep("02", "샌드박스 실행", "활성 실험을 스냅샷에 적용해 관계 변화와 점수 변화를 비교합니다.", "diagnostic-card"),
+      renderExperimentStarterStep("03", "운영 반영", "검증 점수와 권고안을 확인한 뒤 실제 온톨로지 기준에 반영합니다.", "relationship-card"),
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderExperimentStarterStep(index, title, description, type) {
+    return [
+      '<section class="ontology-experiment-starter-step"' + cardTypeAttrs(type || "process-card", "hold") + '>',
+      '<b>' + escapeHtml(index) + '</b>',
+      '<strong>' + escapeHtml(title) + '</strong>',
+      '<p>' + escapeHtml(description) + '</p>',
+      '</section>'
     ].join("");
   }
 
@@ -8055,7 +8194,7 @@
   function renderOntologyExperimentListPanel() {
     var experiments = ontologyExperimentItems();
     return [
-      '<article class="panel ontology-experiment-list-panel">',
+      '<article class="panel ontology-experiment-list-panel"' + cardTypeAttrs("relationship-card", experiments.length ? "watch" : "hold") + '>',
       '<div class="panel-head">',
       '<div>',
       '<p class="label">Experiments</p>',
@@ -8067,7 +8206,9 @@
       (!state.ontologyExperimentsLoading && !experiments.length) ? renderEmptyState({
         label: "Ontology Lab",
         title: "등록된 실험이 없습니다",
-        description: "후보 RuleBox 실험을 만들면 이 탭에서 실행 상태를 볼 수 있습니다."
+        description: "후보 RuleBox 실험을 만들면 이 탭에서 실행 상태를 볼 수 있습니다.",
+        meta: ["AI 제안으로 시작", "활성 실험만 자동 검증"],
+        action: '<button class="text-button primary" type="button" data-lab-suggest' + (state.ontologyExperimentAction ? ' disabled' : '') + '>' + escapeHtml(ontologyExperimentBusy("suggest") ? "제안 중" : "AI 실험 제안") + '</button>'
       }) : '',
       experiments.length ? '<div class="ontology-experiment-list">' + experiments.map(renderOntologyExperimentCard).join("") + '</div>' : '',
       '</article>'
@@ -8088,7 +8229,7 @@
     var appliedAt = latest.appliedAt || ((latest.appliedOntologyChanges || {}).appliedAt) || "";
     var applied = applyStatus === "applied" || applyStatus === "already-applied";
     return [
-      '<section class="ontology-experiment-card">',
+      '<section class="ontology-experiment-card"' + cardTypeAttrs("relationship-card", active ? "watch" : "hold") + '>',
       '<div class="ontology-experiment-card-head">',
       '<div>',
       '<strong>' + escapeHtml(experiment.title || "Ontology experiment") + '</strong>',
@@ -11098,15 +11239,9 @@
     var activeJob = activeNotificationDecisionJob(jobs);
     var stateMessage = hasError
       ? renderNotificationStateMessage("hold", "최근 판단 API 연결 확인", state.notificationJobsError)
-      : renderEmptyState({
-        tone: "muted",
-        label: "Decisions",
-        title: "아직 판단 이력이 없습니다",
-        description: "알림 워커가 발송, 보류, 실패 판단을 남기면 이곳에 시간순으로 표시합니다.",
-        meta: ["Outbox 기준", "최근 40건"]
-      });
+      : renderNotificationDecisionEmptyConsole();
     return [
-      '<article class="panel notification-decision-panel">',
+      '<article class="panel notification-decision-panel"' + cardTypeAttrs("process-card", jobs.length ? "watch" : "hold") + '>',
       '<div class="panel-head">',
       '<div>',
       '<p class="label">Decisions</p>',
@@ -11130,6 +11265,30 @@
       '</div>',
       '</div>',
       '</article>'
+    ].join("");
+  }
+
+  function renderNotificationDecisionEmptyConsole() {
+    return [
+      '<div class="notification-empty-console">',
+      '<section' + cardTypeAttrs("signal-card", "hold") + '>',
+      '<span>01 후보</span>',
+      '<strong>후보 신호 확인</strong>',
+      '<p>관심종목의 가격·뉴스·모델 신호가 알림 후보로 올라오는지 먼저 봅니다.</p>',
+      '<button class="text-button primary" type="button" data-notification-section="candidates">후보 신호 보기</button>',
+      '</section>',
+      '<section' + cardTypeAttrs("decision-row", "hold") + '>',
+      '<span>02 판단</span>',
+      '<strong>발송·보류 이력 대기</strong>',
+      '<p>워커가 점수 변화와 게이트 사유를 남기면 이 영역에 시간순 판단 행으로 표시됩니다.</p>',
+      '</section>',
+      '<section' + cardTypeAttrs("config-panel", "hold") + '>',
+      '<span>03 설정</span>',
+      '<strong>정책 기준 점검</strong>',
+      '<p>후보가 없거나 보류가 많으면 정책, 템플릿, 진단 섹션에서 기준을 확인합니다.</p>',
+      '<button class="text-button" type="button" data-notification-section="diagnostics">진단 보기</button>',
+      '</section>',
+      '</div>'
     ].join("");
   }
 
@@ -14069,12 +14228,14 @@
     var hasPrev = offset > 0;
     var hasNext = Boolean(universe.hasMore || (resultTotal && offset + items.length < resultTotal));
     var renderedItems = full ? items : items.slice(0, 12);
+    var emptyCatalog = !renderedItems.length;
     return [
-      '<article class="panel symbol-universe-panel' + (full ? " symbol-universe-full" : "") + '">',
+      '<article class="panel symbol-universe-panel' + (full ? " symbol-universe-full" : "") + '"' + cardTypeAttrs("source-card", items.length ? "watch" : "hold") + '>',
       '<div class="panel-head">',
       '<div>',
       '<p class="label">Symbol Universe</p>',
       '<h2>' + escapeHtml(full ? "전체 종목 정보" : "전체 종목 카탈로그") + '</h2>',
+      '<p class="subtle">시장 카탈로그에서 추적 종목 후보를 찾고 계정별 관심 목록으로 넘깁니다.</p>',
       '</div>',
       '<span class="metric">' + escapeHtml(summary.total || items.length || 0) + '</span>',
       '</div>',
@@ -14101,10 +14262,11 @@
       }).join("") + '</select></label>' : '',
       full ? '<label><span>추가 대상</span><select name="watchAccount" data-symbol-add-account>' + renderWatchAccountSelectOptions() + '</select></label>' : '',
       '<button class="text-button primary">검색</button>',
-      '<button class="text-button" type="button" data-action="refresh-symbol-universe">' + escapeHtml(state.symbolUniverseRefreshing ? "갱신 중" : "목록 갱신") + '</button>',
+      '<button class="text-button" type="button" data-action="refresh-symbol-universe"' + (state.symbolUniverseLoading || state.symbolUniverseRefreshing ? ' disabled' : '') + '>' + escapeHtml(state.symbolUniverseRefreshing || state.symbolUniverseLoading ? "갱신 중" : "목록 갱신") + '</button>',
       '</form>',
       state.symbolUniverseError ? '<p class="form-error">' + escapeHtml(state.symbolUniverseError) + '</p>' : '',
       '<p class="symbol-universe-note subtle">코스피·코스닥은 KRX KIND, 나스닥은 Nasdaq Trader 심볼 디렉터리를 운영 DB에 저장합니다. 원천 호출이 실패해도 마지막 성공 목록을 계속 사용합니다.</p>',
+      emptyCatalog ? renderSymbolUniverseStarterConsole(summary, sources, marketData) : '',
       full ? '<div class="symbol-pager"><span>' + escapeHtml(resultTotal ? visibleFrom + "-" + visibleTo + " / " + resultTotal + "개 표시" : "표시할 종목 없음") + '</span><div><button class="mini-button" data-symbol-page="prev"' + (hasPrev ? "" : " disabled") + '>이전</button><button class="mini-button" data-symbol-page="next"' + (hasNext ? "" : " disabled") + '>다음</button></div></div>' : '',
       full ? renderSymbolBulkActionBar(renderedItems) : '',
       '<div class="symbol-result-list">',
@@ -14119,10 +14281,37 @@
         label: "Catalog",
         title: "검색 조건에 맞는 종목이 없습니다",
         description: "시장 필터와 검색어를 줄이거나 목록 갱신을 실행해 최신 카탈로그를 다시 불러오세요.",
-        meta: [marketLabel(state.symbolUniverseMarket || "전체"), state.symbolUniverseQuery || "검색어 없음"]
+        meta: [marketLabel(state.symbolUniverseMarket || "전체"), state.symbolUniverseQuery || "검색어 없음"],
+        action: '<button class="text-button primary" type="button" data-action="refresh-symbol-universe"' + (state.symbolUniverseLoading || state.symbolUniverseRefreshing ? ' disabled' : '') + '>' + escapeHtml(state.symbolUniverseRefreshing || state.symbolUniverseLoading ? "갱신 중" : "카탈로그 갱신") + '</button>'
       })),
       '</div>',
       '</article>'
+    ].join("");
+  }
+
+  function renderSymbolUniverseStarterConsole(summary, sources, marketData) {
+    var sourceCount = Array.isArray(sources) ? sources.length : 0;
+    var marketCount = Array.isArray((summary || {}).markets) ? summary.markets.length : 0;
+    var quoteCount = Number((marketData || {}).count || 0);
+    return [
+      '<div class="symbol-empty-console">',
+      '<section' + cardTypeAttrs("source-card", sourceCount ? "watch" : "hold") + '>',
+      '<span>01 원천</span>',
+      '<strong>' + escapeHtml(sourceCount ? sourceCount + "개 소스 확인" : "KRX/NASDAQ 연결 대기") + '</strong>',
+      '<p>시장별 카탈로그 원천 상태를 확인하고 마지막 성공 목록을 유지합니다.</p>',
+      '</section>',
+      '<section' + cardTypeAttrs("diagnostic-card", marketCount ? "watch" : "hold") + '>',
+      '<span>02 카탈로그</span>',
+      '<strong>' + escapeHtml(marketCount ? marketCount + "개 시장" : "저장 종목 없음") + '</strong>',
+      '<p>필터가 너무 좁거나 초기 수집 전이면 결과가 비어 보일 수 있습니다.</p>',
+      '</section>',
+      '<section' + cardTypeAttrs("action-queue-card", "hold") + '>',
+      '<span>03 다음 행동</span>',
+      '<strong>' + escapeHtml(quoteCount ? "관심 목록 편입" : "목록 갱신") + '</strong>',
+      '<p>카탈로그를 갱신한 뒤 계정별 관심 종목 후보로 넘깁니다.</p>',
+      '<button class="text-button primary" type="button" data-action="refresh-symbol-universe"' + (state.symbolUniverseLoading || state.symbolUniverseRefreshing ? ' disabled' : '') + '>' + escapeHtml(state.symbolUniverseRefreshing || state.symbolUniverseLoading ? "갱신 중" : "목록 갱신") + '</button>',
+      '</section>',
+      '</div>'
     ].join("");
   }
 
@@ -16127,12 +16316,11 @@
       });
     }
 
-    var suggestLabButton = app.querySelector("[data-lab-suggest]");
-    if (suggestLabButton) {
+    Array.prototype.slice.call(app.querySelectorAll("[data-lab-suggest]")).forEach(function (suggestLabButton) {
       suggestLabButton.addEventListener("click", function () {
         suggestOntologyExperiments();
       });
-    }
+    });
 
     Array.prototype.slice.call(app.querySelectorAll("[data-lab-run]")).forEach(function (button) {
       button.addEventListener("click", function () {

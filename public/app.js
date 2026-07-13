@@ -3562,6 +3562,10 @@
       newsCollectionIncludeWatchlist: settingValue("newsCollectionIncludeWatchlist"),
       newsCollectionIncludeHoldings: settingValue("newsCollectionIncludeHoldings"),
       newsCollectionRateLimitSeconds: settingValue("newsCollectionRateLimitSeconds"),
+      newsAiAnalysisEnabled: settingValue("newsAiAnalysisEnabled"),
+      newsAiAnalysisUseCodex: settingValue("newsAiAnalysisUseCodex"),
+      newsAiAnalysisCommand: settingValue("newsAiAnalysisCommand"),
+      newsAiAnalysisTimeoutSeconds: settingValue("newsAiAnalysisTimeoutSeconds"),
       ontologyReasoningEnabled: settingValue("ontologyReasoningEnabled"),
       ontologyReasoningIntervalSeconds: settingValue("ontologyReasoningIntervalSeconds"),
       ontologyReasoningBatchSize: settingValue("ontologyReasoningBatchSize"),
@@ -14914,7 +14918,17 @@
           { value: "1", label: "포함" },
           { value: "0", label: "제외" }
         ]),
-        renderSettingField("newsCollectionRateLimitSeconds", "뉴스 호출 간격(초)", "number", "0.25")
+        renderSettingField("newsCollectionRateLimitSeconds", "뉴스 호출 간격(초)", "number", "0.25"),
+        renderSettingSelect("newsAiAnalysisEnabled", "기사 AI 분석", [
+          { value: "1", label: "사용" },
+          { value: "0", label: "사용 안 함" }
+        ]),
+        renderSettingSelect("newsAiAnalysisUseCodex", "기사 분석 Codex 사용", [
+          { value: "1", label: "사용" },
+          { value: "0", label: "사용 안 함" }
+        ]),
+        renderSettingField("newsAiAnalysisCommand", "기사 분석 명령", "text", ""),
+        renderSettingField("newsAiAnalysisTimeoutSeconds", "기사 분석 타임아웃(초)", "number", "90")
       ].join(""), "research feed-wide"),
       renderSettingsGroup("그래프 추론", "수집 데이터가 그래프 저장소 관계 추론으로 넘어가는 경로입니다.", [
         renderSettingSelect("ontologyReasoningEnabled", "데이터 변경 추론", [

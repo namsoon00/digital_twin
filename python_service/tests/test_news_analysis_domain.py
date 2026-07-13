@@ -17,7 +17,7 @@ from digital_twin.domain.news_analysis import (
     source_reliability_score,
     stock_impact_analysis,
 )
-from digital_twin.domain.news_ai_analysis import apply_news_ai_analysis, local_news_ai_analysis
+from digital_twin.domain.news_ai_analysis import apply_news_ai_analysis, local_news_ai_analysis, normalize_ai_analysis
 from digital_twin.domain.ontology_contracts import PortfolioOntology
 from digital_twin.domain.ontology_relation_reasoning import research_evidence_facts
 from digital_twin.domain.portfolio_ontology_research_concepts import add_research_evidence_concepts
@@ -223,6 +223,74 @@ class NewsAnalysisDomainTests(unittest.TestCase):
         self.assertEqual("악재", updated.raw_payload["stockImpactLabel"])
         self.assertEqual("feed-summary", updated.raw_payload["articleReadStatus"])
         self.assertTrue(updated.raw_payload["aiAnalysis"]["summary"]["briefKo"])
+
+    def test_ai_article_analysis_summarizes_title_rss_facts_for_legal_article(self):
+        target = NewsCollectionTarget("AAPL", "Apple", "NASDAQ", "USD", "AI/플랫폼")
+        evidence = ResearchEvidence(
+            "research:AAPL:news:apple-openai-theft",
+            "AAPL",
+            "news",
+            "The Register",
+            "Apple accuses OpenAI of stealing its core tech secrets - The Register",
+            "RSS/제공 요약: Apple accuses OpenAI of stealing its core tech secrets.",
+            "https://example.test/apple-openai",
+            "2026-07-13T07:31:00Z",
+            "context",
+            62.3,
+            0.58,
+            "2026-07-13T07:31:00Z",
+            raw_payload={
+                "relationScope": "direct",
+                "relevanceScore": 94.5,
+                "materialityScore": 62.3,
+                "articleReadStatus": "feed-summary",
+                "articleFacts": {
+                    "bodyAvailable": False,
+                    "feedSummaryPreview": "RSS/제공 요약: Apple accuses OpenAI of stealing its core tech secrets.",
+                },
+            },
+        )
+
+        analysis = local_news_ai_analysis(target, evidence).to_dict()
+
+        self.assertEqual("risk", analysis["impactPolarity"])
+        self.assertEqual("regulation", analysis["eventType"])
+        self.assertIn("accuses", analysis["riskSignals"])
+        self.assertIn("핵심 기술 비밀 탈취 의혹", analysis["summary"]["briefKo"])
+        self.assertIn("원문 본문 확보", analysis["summary"]["watchPoints"])
+        self.assertIn("본문 원문 미수집", " ".join(analysis["reasoningLimitations"]))
+
+    def test_ai_article_analysis_keeps_fallback_summary_when_external_ai_omits_summary(self):
+        target = NewsCollectionTarget("AAPL", "Apple", "NASDAQ", "USD", "AI/플랫폼")
+        evidence = ResearchEvidence(
+            "research:AAPL:news:external-empty-summary",
+            "AAPL",
+            "news",
+            "The Register",
+            "Apple accuses OpenAI of stealing its core tech secrets",
+            "RSS/제공 요약: Apple accuses OpenAI of stealing its core tech secrets.",
+            "https://example.test/apple-openai",
+            "2026-07-13T07:31:00Z",
+            "context",
+            62.3,
+            0.58,
+            "2026-07-13T07:31:00Z",
+            raw_payload={
+                "relationScope": "direct",
+                "relevanceScore": 94.5,
+                "materialityScore": 62.3,
+            },
+        )
+        fallback = local_news_ai_analysis(target, evidence)
+
+        analysis = normalize_ai_analysis(
+            {"status": "ok", "model": "External article AI", "impactPolarity": "risk", "summary": {}},
+            fallback,
+        ).to_dict()
+
+        self.assertEqual("External article AI", analysis["model"])
+        self.assertIn("핵심 기술 비밀 탈취 의혹", analysis["summary"]["briefKo"])
+        self.assertTrue(analysis["summary"]["watchPoints"])
 
     def test_ontology_projection_materializes_article_ai_analysis_node(self):
         evidence = ResearchEvidence(

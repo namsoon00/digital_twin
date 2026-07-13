@@ -48,9 +48,29 @@ RISK_PHRASES = [
     "하향",
     "적자",
     "손실",
+    "소송",
+    "규제",
+    "조사",
     "downgrade",
     "miss",
     "missed",
+    "lawsuit",
+    "sue",
+    "sues",
+    "sued",
+    "accuse",
+    "accuses",
+    "accused",
+    "steal",
+    "steals",
+    "stealing",
+    "stolen",
+    "trade secret",
+    "trade secrets",
+    "core tech secrets",
+    "legal",
+    "litigation",
+    "antitrust",
     "plunge",
     "falls",
     "fell",
@@ -219,6 +239,7 @@ def normalize_ai_analysis(payload: Dict[str, object], fallback: NewsAiAnalysis =
     if polarity not in IMPACT_LABELS:
         polarity = "unknown"
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    fallback_summary = fallback.summary if isinstance(fallback.summary, dict) else {}
     return NewsAiAnalysis(
         status=str(payload.get("status") or fallback.status or "ok"),
         version=str(payload.get("version") or fallback.version or NEWS_AI_ANALYSIS_VERSION),
@@ -234,11 +255,11 @@ def normalize_ai_analysis(payload: Dict[str, object], fallback: NewsAiAnalysis =
         materiality_score=clamp(number(payload.get("materialityScore") or payload.get("materiality_score")) or fallback.materiality_score, 0.0, 100.0),
         relevance_score=clamp(number(payload.get("relevanceScore") or payload.get("relevance_score")) or fallback.relevance_score, 0.0, 100.0),
         summary={
-            "oneLineKo": compact_text(summary.get("oneLineKo") or summary.get("one_line_ko") or "", 220),
-            "briefKo": compact_text(summary.get("briefKo") or summary.get("brief_ko") or "", 520),
-            "keyTakeaways": unique_texts(summary.get("keyTakeaways") or summary.get("key_takeaways") or [], 5),
-            "whyItMatters": compact_text(summary.get("whyItMatters") or summary.get("why_it_matters") or "", 360),
-            "watchPoints": unique_texts(summary.get("watchPoints") or summary.get("watch_points") or [], 5),
+            "oneLineKo": compact_text(summary.get("oneLineKo") or summary.get("one_line_ko") or fallback_summary.get("oneLineKo") or "", 220),
+            "briefKo": compact_text(summary.get("briefKo") or summary.get("brief_ko") or fallback_summary.get("briefKo") or "", 520),
+            "keyTakeaways": unique_texts(summary.get("keyTakeaways") or summary.get("key_takeaways") or fallback_summary.get("keyTakeaways") or [], 5),
+            "whyItMatters": compact_text(summary.get("whyItMatters") or summary.get("why_it_matters") or fallback_summary.get("whyItMatters") or "", 360),
+            "watchPoints": unique_texts(summary.get("watchPoints") or summary.get("watch_points") or fallback_summary.get("watchPoints") or [], 5),
         },
         risk_signals=unique_texts(payload.get("riskSignals") or payload.get("risk_signals") or fallback.risk_signals, 6),
         support_signals=unique_texts(payload.get("supportSignals") or payload.get("support_signals") or fallback.support_signals, 6),
@@ -303,20 +324,34 @@ def local_news_ai_analysis(target: NewsCollectionTarget, evidence: ResearchEvide
     target_name = target.name or evidence.symbol or "대상 종목"
     label = IMPACT_LABELS.get(polarity, "중립")
     evidence_scope = "본문" if read_scope == "body" else "제목/RSS 요약"
+    analysis_context = {
+        "relationScope": relation_scope,
+        "eventType": event_type,
+        "relevanceScore": relevance,
+        "materialityScore": materiality,
+    }
+    article_summary = news_domain.korean_article_summary(target, title, body, feed_summary, analysis_context)
+    article_takeaway = news_domain.article_event_takeaway(target, title, body, feed_summary)
     signal_text = ", ".join(unique_texts(risk_hits + support_hits + contrast_hits, 5)) or "명시적 방향 신호 없음"
     if polarity == "risk":
-        one_line = target_name + " 기사에서 위험 신호가 더 강하게 확인됩니다."
-        brief = target_name + " 관련 기사에서 " + signal_text + "가 확인돼 단기 가격 부담과 거래량 반응을 먼저 봐야 합니다."
+        one_line = article_takeaway or target_name + " 기사에서 위험 신호가 더 강하게 확인됩니다."
+        fallback_brief = target_name + " 관련 기사에서 " + signal_text + "가 확인돼 단기 가격 부담과 거래량 반응을 먼저 봐야 합니다."
     elif polarity == "support":
-        one_line = target_name + " 기사에서 우호 신호가 확인됩니다."
-        brief = target_name + " 관련 기사에서 " + signal_text + "가 확인돼 가격 반응이 이어지는지 확인할 필요가 있습니다."
+        one_line = article_takeaway or target_name + " 기사에서 우호 신호가 확인됩니다."
+        fallback_brief = target_name + " 관련 기사에서 " + signal_text + "가 확인돼 가격 반응이 이어지는지 확인할 필요가 있습니다."
     elif polarity == "mixed":
-        one_line = target_name + " 기사에 우호·위험 신호가 함께 있습니다."
-        brief = "우호 표현과 위험 표현이 함께 있어 방향을 단정하지 말고 원문과 다음 가격 반응을 함께 확인해야 합니다."
+        one_line = article_takeaway or target_name + " 기사에 우호·위험 신호가 함께 있습니다."
+        fallback_brief = "우호 표현과 위험 표현이 함께 있어 방향을 단정하지 말고 원문과 다음 가격 반응을 함께 확인해야 합니다."
     else:
-        one_line = target_name + " 관련 새 정보지만 방향성은 중립입니다."
-        brief = "기사에서 명확한 호재·악재 방향은 약해 가격·거래량 확인용 근거로 다룹니다."
+        one_line = article_takeaway or target_name + " 관련 새 정보지만 방향성은 중립입니다."
+        fallback_brief = "기사에서 명확한 호재·악재 방향은 약해 가격·거래량 확인용 근거로 다룹니다."
+    brief = article_summary or fallback_brief
     takeaways = [
+        "기사 요약: " + compact_text(article_takeaway or article_summary, 140),
+        "영향 방향: " + label,
+        "분석 범위: " + evidence_scope,
+        "이벤트 유형: " + news_domain.event_type_label(event_type),
+    ] if (article_takeaway or article_summary) else [
         "영향 방향: " + label,
         "분석 범위: " + evidence_scope,
         "이벤트 유형: " + news_domain.event_type_label(event_type),
@@ -470,6 +505,8 @@ def build_news_ai_analysis_prompt(target: NewsCollectionTarget, evidence: Resear
         "guardrails": [
             "Do not create buy, sell, add, trim, or hold decisions.",
             "Use only the provided title, feed summary, body preview, and existing metadata.",
+            "summary.oneLineKo and summary.briefKo must summarize article facts first; keep stock impact reasoning in rationaleKo.",
+            "Do not use generic sector templates such as AI/data-center demand unless that fact is present in the title, feed summary, or body preview.",
             "If the body is missing, state that limitation and lower confidence.",
             "A phrase such as 실적 by itself is not positive; 실적 우려, 붕괴, 하락, 덮은 are risk context.",
         ],

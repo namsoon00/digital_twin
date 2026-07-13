@@ -124,11 +124,18 @@ def article_read_status(item: Dict[str, object]) -> str:
 
 def article_analysis_label(item: Dict[str, object]) -> str:
     status = article_read_status(item)
+    analysis = ai_analysis(item)
+    model = bounded_text(analysis.get("model"), 40) if isinstance(analysis, dict) else ""
+    ai_suffix = "AI 요약/영향 계산"
+    if model and model not in {"local-news-semantic-analyzer-v1", "unit"}:
+        ai_suffix += " · " + model
+    if isinstance(analysis, dict) and str(analysis.get("status") or "") == "fallback":
+        ai_suffix += " · fallback"
     if status == "body":
-        return "기사 본문 읽음, 본문 기반 요약/영향 계산"
+        return "기사 본문 읽음, 본문 기반 " + ai_suffix
     if status == "source-blocked":
-        return "제목/RSS 요약만 사용, 소셜·저품질 출처는 본문 근거로 보지 않음"
-    return "제목/RSS 요약만 사용"
+        return "제목/RSS 요약만 사용, 소셜·저품질 출처는 본문 근거로 보지 않음, " + ai_suffix
+    return "제목/RSS 요약만 사용, " + ai_suffix
 
 
 def article_facts(item: Dict[str, object]) -> Dict[str, object]:

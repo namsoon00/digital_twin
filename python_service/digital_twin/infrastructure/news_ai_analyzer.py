@@ -37,9 +37,10 @@ def first_json_object(text: object) -> Dict[str, object]:
 
 
 class CommandNewsAiAnalyzer(NewsAiAnalyzer):
-    def __init__(self, command: str, timeout_seconds: int = 90):
+    def __init__(self, command: str, timeout_seconds: int = 90, model_name: str = "External article AI"):
         self.command = str(command or "").strip()
         self.timeout_seconds = max(15, int(timeout_seconds or 90))
+        self.model_name = str(model_name or "External article AI").strip()
 
     def analyze(self, target: NewsCollectionTarget, evidence: ResearchEvidence) -> Dict[str, object]:
         prompt = build_news_ai_analysis_prompt(target, evidence)
@@ -61,6 +62,7 @@ class CommandNewsAiAnalyzer(NewsAiAnalyzer):
         if not parsed:
             raise RuntimeError("news AI analysis command returned no JSON object")
         fallback = local_news_ai_analysis(target, evidence)
+        parsed.setdefault("model", self.model_name)
         return normalize_ai_analysis(parsed, fallback).to_dict()
 
 
@@ -84,12 +86,12 @@ class FallbackNewsAiAnalyzer(NewsAiAnalyzer):
 def news_ai_analyzer_from_settings(settings: Dict[str, str] = None) -> NewsAiAnalyzer:
     configured = settings or runtime_settings()
     command = str(configured.get("newsAiAnalysisCommand") or os.environ.get("NEWS_AI_ANALYSIS_COMMAND") or "").strip()
-    use_codex = str(configured.get("newsAiAnalysisUseCodex") or os.environ.get("NEWS_AI_ANALYSIS_USE_CODEX") or "0").strip() not in {"0", "false", "no", "off"}
+    use_codex = str(configured.get("newsAiAnalysisUseCodex") or os.environ.get("NEWS_AI_ANALYSIS_USE_CODEX") or "1").strip() not in {"0", "false", "no", "off"}
     timeout = int(configured.get("newsAiAnalysisTimeoutSeconds") or os.environ.get("NEWS_AI_ANALYSIS_TIMEOUT_SECONDS") or 90)
     if command:
-        return FallbackNewsAiAnalyzer(CommandNewsAiAnalyzer(command, timeout))
+        return FallbackNewsAiAnalyzer(CommandNewsAiAnalyzer(command, timeout, "External article AI"))
     if use_codex:
         command = codex_command()
         if command:
-            return FallbackNewsAiAnalyzer(CommandNewsAiAnalyzer(command, timeout))
+            return FallbackNewsAiAnalyzer(CommandNewsAiAnalyzer(command, timeout, "Codex AI"))
     return LocalNewsAiAnalyzer()

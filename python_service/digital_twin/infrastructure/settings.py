@@ -624,7 +624,7 @@ def runtime_settings() -> Dict[str, str]:
         "newsArticleBodyFailureWarnRate": value("newsArticleBodyFailureWarnRate", "NEWS_ARTICLE_BODY_FAILURE_WARN_RATE", "0.4"),
         "newsArticleBodyFailureMinimumCount": value("newsArticleBodyFailureMinimumCount", "NEWS_ARTICLE_BODY_FAILURE_MINIMUM_COUNT", "5"),
         "newsAiAnalysisEnabled": value("newsAiAnalysisEnabled", "NEWS_AI_ANALYSIS_ENABLED", "1"),
-        "newsAiAnalysisUseCodex": value("newsAiAnalysisUseCodex", "NEWS_AI_ANALYSIS_USE_CODEX", "0"),
+        "newsAiAnalysisUseCodex": value("newsAiAnalysisUseCodex", "NEWS_AI_ANALYSIS_USE_CODEX", "1"),
         "newsAiAnalysisCommand": value("newsAiAnalysisCommand", "NEWS_AI_ANALYSIS_COMMAND", ""),
         "newsAiAnalysisTimeoutSeconds": value("newsAiAnalysisTimeoutSeconds", "NEWS_AI_ANALYSIS_TIMEOUT_SECONDS", "90"),
         "externalApiRetryAttempts": value("externalApiRetryAttempts", "EXTERNAL_API_RETRY_ATTEMPTS", "2"),

@@ -44,6 +44,16 @@ RISK_KEYWORDS = (
     "sue",
     "sues",
     "sued",
+    "accuse",
+    "accuses",
+    "accused",
+    "steal",
+    "steals",
+    "stealing",
+    "stolen",
+    "trade secret",
+    "trade secrets",
+    "core tech secrets",
     "legal",
     "litigation",
     "antitrust",
@@ -157,7 +167,7 @@ EVENT_TYPE_KEYWORDS = {
     "guidance": ["guidance", "전망", "가이던스", "목표주가", "estimate", "forecast"],
     "supply_chain": ["공급", "supply", "supplier", "생산", "fab", "foundry", "라인", "공장"],
     "product": ["launch", "출시", "roadmap", "제품", "서비스", "chip", "GPU", "AI"],
-    "regulation": ["regulation", "규제", "소송", "lawsuit", "sue", "sues", "sued", "legal", "litigation", "antitrust", "probe", "investigation", "조사", "제재"],
+    "regulation": ["regulation", "규제", "소송", "lawsuit", "sue", "sues", "sued", "accuse", "accuses", "accused", "stealing", "stolen", "trade secret", "trade secrets", "legal", "litigation", "antitrust", "probe", "investigation", "조사", "제재"],
     "capital_policy": ["buyback", "dividend", "자사주", "배당", "증자", "offering", "dilution", "debt", "convertible debt", "repayment", "상환"],
     "listing": ["listing", "상장", "ADR", "나스닥", "IPO"],
     "macro_sector": ["금리", "환율", "inflation", "FOMC", "업황", "수요", "demand"],
@@ -676,6 +686,11 @@ def clean_article_summary_noise(value: object) -> str:
     return " ".join(cleaned).strip() if cleaned else ("" if is_news_boilerplate_sentence(text) else text)
 
 
+def strip_feed_summary_prefix(value: object) -> str:
+    text = compact_text(value, 1600)
+    return re.sub(r"^\s*(?:RSS/제공\s*요약|제공\s*요약|RSS\s*summary)\s*[:：]\s*", "", text, flags=re.IGNORECASE).strip()
+
+
 def article_sentence_candidates(text: object, target: object, analysis: Dict[str, object] = None, limit: int = 3) -> List[str]:
     analysis = analysis if isinstance(analysis, dict) else {}
     source_text = str(text or "")
@@ -774,6 +789,12 @@ def english_fragment_to_korean(value: object, target: object = None) -> str:
         (r"\btrunk of\b", "트렁크에서"),
         (r"\blegal dispute\b", "법적 분쟁"),
         (r"\bartificial intelligence\b", "AI"),
+        (r"\bits core tech secrets\b", "핵심 기술 비밀"),
+        (r"\bcore tech secrets\b", "핵심 기술 비밀"),
+        (r"\btrade secrets?\b", "영업비밀"),
+        (r"\bstealing\b|\bstole\b|\bstolen\b|\bsteals?\b", "탈취"),
+        (r"\baccuses?\b|\baccused\b", "의혹 제기"),
+        (r"\bdenies?\b|\bdenied\b", "부인"),
         (r"\bproducts?\b", "제품"),
         (r"\bdata centers?\b", "데이터센터"),
         (r"\bsemiconductor demand expectations improved\b", "반도체 수요 기대가 개선"),
@@ -862,6 +883,17 @@ def english_sentence_korean_fact(sentence: object, target: object, event_label: 
         else:
             issue = english_fragment_to_korean(issue_source, target) if issue_source else ""
         return actor + "가 " + target_party + "를 상대로 소송을 제기했다는 내용입니다" + (". 쟁점은 " + issue + "입니다" if issue else ".")
+    theft_accusation = re.search(r"(.+?)\s+accuses?\s+(.+?)\s+of\s+stealing\s+(.+)", source, re.IGNORECASE)
+    if theft_accusation:
+        actor = english_fragment_to_korean(theft_accusation.group(1), target)
+        target_party = english_fragment_to_korean(theft_accusation.group(2), None)
+        issue = english_fragment_to_korean(theft_accusation.group(3), target) or "기술 자산"
+        return actor + "가 " + target_party + "를 상대로 " + issue + " 탈취 의혹을 제기했다는 내용입니다."
+    if re.search(r"\bdenies?\s+stealing\b", source, re.IGNORECASE):
+        actor = english_fragment_to_korean(re.split(r"\s+denies?\s+stealing\s+", source, maxsplit=1, flags=re.IGNORECASE)[0], target)
+        party_match = re.search(r"fruits\s+of\s+(.+?)(?:['’]s)?\s+labor", source, re.IGNORECASE)
+        party = english_fragment_to_korean(party_match.group(1), target) if party_match else _target_name_for_summary(target)
+        return actor + "가 " + party + " 측 기술 탈취 주장을 부인했다는 내용입니다."
     preferred_volume = re.search(
         r"(.+?)\s+preferred shares?\s+hit record\s+([$€£]?\d[\d,.]*(?:\.\d+)?\s?(?:billion|million|trillion|bn|mn|B|M)?)\s+in\s+combined\s+(.+?)\s+trading volume(?:\s+despite\s+(.+))?",
         source,
@@ -998,12 +1030,13 @@ def korean_article_summary(
     source_text = body or fallback
     if not source_text:
         return ""
+    article_text_for_summary = strip_feed_summary_prefix(source_text) or source_text
     event_label = event_type_label(analysis.get("eventType") or classify_news_event_type(title, source_text))
-    topics = detected_topic_labels(str(title or "") + " " + source_text)
-    numbers = numeric_highlights(source_text)
+    topics = detected_topic_labels(str(title or "") + " " + article_text_for_summary)
+    numbers = numeric_highlights(article_text_for_summary)
     body_status = "본문" if body else "RSS/제공"
-    sentences = [clean_article_title(source_text)] if fallback_from_title and not body else article_sentence_candidates(source_text, target, analysis, 3)
-    if sentences and contains_hangul(source_text):
+    sentences = [clean_article_title(article_text_for_summary)] if fallback_from_title and not body else article_sentence_candidates(article_text_for_summary, target, analysis, 3)
+    if sentences and contains_hangul(article_text_for_summary):
         sentence_text = join_korean_summary_parts(sentences)
         details = []
         if topics:
@@ -1012,7 +1045,7 @@ def korean_article_summary(
             details.append("확인된 수치: " + ", ".join(numbers))
         suffix = (" " + " / ".join(details) + ".") if details else ""
         return compact_text(body_status + " 요약: " + sentence_text + suffix, 760)
-    detail_parts = factual_english_article_summary_parts(target, title, source_text, event_label)
+    detail_parts = factual_english_article_summary_parts(target, title, article_text_for_summary, event_label)
     if topics:
         detail_parts.append("핵심 키워드는 " + ", ".join(topics) + "입니다")
     if numbers:
@@ -1028,7 +1061,7 @@ def korean_article_summary(
 
 
 def article_event_takeaway(target: object, title: object, article_text: object = "", feed_summary: object = "") -> str:
-    text = clean_article_summary_noise(compact_text(str(article_text or feed_summary or title or ""), 1600))
+    text = strip_feed_summary_prefix(clean_article_summary_noise(compact_text(str(article_text or feed_summary or title or ""), 1600)))
     title_text = clean_article_title(title)
     combined = title_text + " " + text
     lowered = _lower_text(combined)
@@ -1049,7 +1082,7 @@ def article_event_takeaway(target: object, title: object, article_text: object =
         return "전환사채 상환이 " + affected + " 급락 원인으로 지목"
     if re.search(r"needs clarity in BTC pivot message to convince investors", combined, re.IGNORECASE):
         return "비트코인 전략 전환 메시지가 투자자를 설득하기에는 아직 명확하지 않다는 지적"
-    if re.search(r"\bsues?\b|\blawsuit\b|\blitigation\b|\bantitrust\b", lowered):
+    if re.search(r"\bsues?\b|\blawsuit\b|\blitigation\b|\bantitrust\b|\baccuses?\b|\bstealing\b|\btrade secrets?\b", lowered):
         return target_name + " 관련 소송·규제 이슈가 투자심리 부담으로 부각"
     if re.search(r"\bbuyback\b|자사주|dividend|배당", lowered):
         return "자사주·배당 같은 주주환원 정책 변화가 핵심"

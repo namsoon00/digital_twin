@@ -6,7 +6,16 @@ from .ontology_inference_materializer import materialize_rule_inference
 from .ontology_rulebox_contracts import GraphInferenceRule, GraphRuleCondition
 
 
-def run_graph_reasoner(graph: PortfolioOntology, rules: Iterable[GraphInferenceRule]) -> None:
+def run_graph_reasoner(
+    graph: PortfolioOntology,
+    rules: Iterable[GraphInferenceRule],
+    target_symbols: Iterable[str] = None,
+) -> None:
+    clean_symbols = {
+        str(item or "").upper().strip()
+        for item in (target_symbols or [])
+        if str(item or "").strip()
+    }
     entities_by_id = {item.entity_id: item for item in graph.entities}
     for rule in rules:
         if not rule.enabled:
@@ -18,6 +27,8 @@ def run_graph_reasoner(graph: PortfolioOntology, rules: Iterable[GraphInferenceR
             if item.kind == source_kind and str((item.properties or {}).get("ontologyBox") or "ABox") != "TBox"
         ]
         for subject in subjects:
+            if clean_symbols and str((subject.properties or {}).get("symbol") or "").upper().strip() not in clean_symbols:
+                continue
             matched, context = rule_matches_entity(graph, entities_by_id, rule, subject)
             if matched:
                 materialize_rule_inference(graph, rule, subject, context)

@@ -110,7 +110,7 @@ class OntologyDiagnosticsService:
         return summary
 
     def inferencebox_summary(self, payload: Dict[str, object]) -> Dict[str, object]:
-        return self.pick(payload, [
+        summary = self.pick(payload, [
             "configured",
             "saved",
             "status",
@@ -130,10 +130,27 @@ class OntologyDiagnosticsService:
             "nativeTypeDbReasoningUsed",
             "typedbBootstrapReasoningUsed",
             "pythonBootstrapDisabled",
+            "inferenceGenerationId",
+            "inferenceGenerationAt",
+            "generationScoped",
+            "generationCount",
+            "inactiveGenerationEntityCount",
+            "inactiveGenerationRelationCount",
             "ignoredNonNativeRelationCount",
             "ignoredNonNativeTraceCount",
             "symbols",
         ])
+        summary["relationTypes"] = sorted(set(
+            str(item.get("type") or item.get("relationType") or "")
+            for item in (payload.get("relations") or [])
+            if isinstance(item, dict) and str(item.get("type") or item.get("relationType") or "")
+        ))[:20]
+        summary["recentTraces"] = [
+            self.pick(item, ["id", "ruleId", "label", "symbol", "confidence", "inferenceGenerationId"])
+            for item in (payload.get("traces") or [])[:5]
+            if isinstance(item, dict)
+        ]
+        return summary
 
     def reasoning_boundary(self, rulebox: Dict[str, object], inference: Dict[str, object]) -> Dict[str, object]:
         mode = str(inference.get("reasoningMode") or rulebox.get("reasoningMode") or "").strip()

@@ -1,9 +1,11 @@
 import copy
 import hashlib
 import json
+import time
+import uuid
 from typing import Dict, Iterable, List, Tuple
 
-from ..domain.ontology_contracts import OntologyEntity, OntologyRelation, PortfolioOntology
+from ..domain.ontology_contracts import OntologyEntity, OntologyEvidence, OntologyRelation, PortfolioOntology
 from ..domain.ontology_graph_reasoner import run_graph_reasoner
 from ..domain.ontology_rulebox_catalog import default_graph_inference_rules
 from ..domain.ontology_rulebox_contracts import GRAPH_REASONER_VERSION, GraphInferenceRule
@@ -50,6 +52,26 @@ def typedb_bool(value: object) -> bool:
     if isinstance(value, (int, float)):
         return bool(value)
     return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def clean_symbols_from_payload(value: object) -> List[str]:
+    if isinstance(value, list):
+        raw_values = value
+    elif value in (None, ""):
+        raw_values = []
+    else:
+        raw_values = [value]
+    return sorted(set(str(item or "").upper().strip() for item in raw_values if str(item or "").strip()))
+
+
+def inference_generation_id() -> str:
+    return "inference-generation:" + uuid.uuid4().hex[:16]
+
+
+def generated_inference_id(original_id: str, generation_id: str) -> str:
+    original = str(original_id or "unknown")
+    digest = hashlib.sha256((str(generation_id or "") + "|" + original).encode("utf-8")).hexdigest()[:12]
+    return original + ":gen:" + digest
 
 
 def node_boxes(graph: PortfolioOntology) -> List[str]:
@@ -327,6 +349,8 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
         database: str = "orbit_alpha_ontology",
         tls_enabled: bool = False,
         timeout_seconds: int = 20,
+        retry_count: int = 2,
+        inference_generation_keep_count: int = 2,
     ):
         self.address = str(address or "").strip()
         self.user = str(user or "admin").strip() or "admin"
@@ -334,8 +358,23 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
         self.database = str(database or "orbit_alpha_ontology").strip() or "orbit_alpha_ontology"
         self.tls_enabled = bool(tls_enabled)
         self.timeout_seconds = max(2, int(timeout_seconds or 20))
+        self.retry_count = max(0, int(retry_count or 0))
+        self.inference_generation_keep_count = max(1, int(inference_generation_keep_count or 2))
         self._last_graph = None
         self._last_rules: List[GraphInferenceRule] = []
+
+    def with_typedb_retries(self, operation):
+        attempts = max(1, self.retry_count + 1)
+        last_error = None
+        for index in range(attempts):
+            try:
+                return operation()
+            except Exception as error:  # noqa: BLE001 - TypeDB connectivity can be transient.
+                last_error = error
+                if index >= attempts - 1:
+                    break
+                time.sleep(min(2.0, 0.25 * (index + 1)))
+        raise last_error
 
     def active_tbox_metadata(self) -> Dict[str, object]:
         if not self.address:
@@ -377,13 +416,15 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
         if imported[0] is None:
             return self.driver_missing_result(imported[1], graph)
         try:
-            driver = self.open_driver(imported)
-            try:
-                self.ensure_database(driver)
-                self.ensure_schema(driver, imported)
-                self.write_graph(driver, imported, graph)
-            finally:
-                self.close_driver(driver)
+            def operation():
+                driver = self.open_driver(imported)
+                try:
+                    self.ensure_database(driver)
+                    self.ensure_schema(driver, imported)
+                    self.write_graph(driver, imported, graph)
+                finally:
+                    self.close_driver(driver)
+            self.with_typedb_retries(operation)
         except Exception as error:  # noqa: BLE001 - graph-store persistence must not block monitoring.
             return {
                 "configured": True,
@@ -483,17 +524,19 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
         if imported[0] is None:
             raise RuntimeError("typedb-driver Python package is not installed: " + str(imported[1])[:160])
         _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
-        driver = self.open_driver(imported)
-        try:
-            self.ensure_database(driver)
-            with driver.transaction(self.database, TransactionType.READ) as tx:
-                resolved = tx.query(query).resolve()
-                rows = []
-                for item in resolved:
-                    rows.append({name: typedb_row_value(item, name) for name in columns})
-                return rows
-        finally:
-            self.close_driver(driver)
+        def operation():
+            driver = self.open_driver(imported)
+            try:
+                self.ensure_database(driver)
+                with driver.transaction(self.database, TransactionType.READ) as tx:
+                    resolved = tx.query(query).resolve()
+                    rows = []
+                    for item in resolved:
+                        rows.append({name: typedb_row_value(item, name) for name in columns})
+                    return rows
+            finally:
+                self.close_driver(driver)
+        return self.with_typedb_retries(operation)
 
     def read_entity_rows(self, boxes: Iterable[str] = None, limit: int = 0) -> List[Dict[str, object]]:
         rows: List[Dict[str, object]] = []
@@ -695,15 +738,19 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
                 "reason": "typedb-driver Python package is not installed: " + str(imported[1])[:160],
             }
         _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
-        driver = None
         try:
-            driver = self.open_driver(imported)
-            self.ensure_database(driver)
-            self.ensure_schema(driver, imported)
-            with driver.transaction(self.database, TransactionType.WRITE) as tx:
-                for query in self.delete_queries(["InferenceBox"]):
-                    tx.query(query).resolve()
-                tx.commit()
+            def operation():
+                driver = self.open_driver(imported)
+                try:
+                    self.ensure_database(driver)
+                    self.ensure_schema(driver, imported)
+                    with driver.transaction(self.database, TransactionType.WRITE) as tx:
+                        for query in self.delete_queries(["InferenceBox"]):
+                            tx.query(query).resolve()
+                        tx.commit()
+                finally:
+                    self.close_driver(driver)
+            self.with_typedb_retries(operation)
             return {
                 "configured": True,
                 "status": "ok",
@@ -717,9 +764,6 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
                 "graphStore": "typedb",
                 "reason": str(error)[:220],
             }
-        finally:
-            if driver is not None:
-                self.close_driver(driver)
 
     def schema_query(self) -> str:
         return """
@@ -1110,7 +1154,17 @@ relation ontology-assertion,
         if not self.address:
             return NullTypeDBOntologyGraphRepository().run_rulebox(payload)
         payload = payload if isinstance(payload, dict) else {}
-        clear_requested = typedb_bool(payload.get("clearInference")) if "clearInference" in payload else True
+        target_symbols = clean_symbols_from_payload(
+            payload.get("symbols")
+            or payload.get("targetSymbols")
+            or payload.get("changedSymbols")
+        )
+        force_clear_requested = typedb_bool(payload.get("forceClearInference"))
+        prune_requested = typedb_bool(payload.get("pruneOldGenerations")) if "pruneOldGenerations" in payload else True
+        keep_generation_count = max(1, int(number_or_none(payload.get("keepGenerationCount")) or self.inference_generation_keep_count))
+        generation_id = str(payload.get("generationId") or inference_generation_id())
+        generation_at = utc_now()
+        clear_requested = force_clear_requested
         clear_result = self.clear_inferencebox() if clear_requested else {}
         if clear_result and str(clear_result.get("status") or "") != "ok":
             return {
@@ -1185,8 +1239,8 @@ relation ontology-assertion,
             graph = self.load_graph_from_typedb(["ABox"])
             before_entities = len(graph.entities)
             before_relations = len(graph.relations)
-            run_graph_reasoner(graph, rulebox_rules_from_payload({"rules": rules}))
-            inference_graph = typedb_inferencebox_graph(graph)
+            run_graph_reasoner(graph, rulebox_rules_from_payload({"rules": rules}), target_symbols=target_symbols)
+            inference_graph = typedb_inferencebox_graph(graph, generation_id=generation_id, generation_at=generation_at)
             save_result = self.write_inferencebox_graph(inference_graph)
         except Exception as error:  # noqa: BLE001 - expose materialization failures to monitoring diagnostics.
             return {
@@ -1214,6 +1268,7 @@ relation ontology-assertion,
         materialized_relation_count = len(inference_graph.relations)
         has_materialized_relations = materialized_relation_count > 0
         saved_ok = bool(save_result.get("saved"))
+        prune_result = self.prune_inferencebox_generations(generation_id, keep_count=keep_generation_count) if saved_ok and prune_requested else {}
         return {
             "configured": True,
             "status": ("ok" if has_materialized_relations else "empty") if saved_ok else str(save_result.get("status") or "error"),
@@ -1232,9 +1287,14 @@ relation ontology-assertion,
             "typedbBootstrapReasoningUsed": False,
             "pythonBootstrapDisabled": True,
             "materializationSource": "typedb-abox-rulebox",
+            "inferenceGenerationId": generation_id,
+            "inferenceGenerationAt": generation_at,
+            "targetSymbols": target_symbols,
+            "incrementalScope": "symbols" if target_symbols else "all-symbols",
             "readAboxEntityCount": before_entities,
             "readAboxRelationCount": before_relations,
             "clearResult": clear_result,
+            "pruneResult": prune_result,
             "saveResult": save_result,
             "nativeReasoningProfile": native_profile,
         }
@@ -1268,16 +1328,20 @@ relation ontology-assertion,
         ]
         queries = [self.node_insert_query(row, utc_now()) for row in node_rows]
         queries.extend(self.relation_insert_query(row, utc_now()) for row in relation_rows if row.get("source") and row.get("target"))
-        driver = None
         try:
-            driver = self.open_driver(imported)
-            self.ensure_database(driver)
-            self.ensure_schema(driver, imported)
-            if queries:
-                with driver.transaction(self.database, TransactionType.WRITE) as tx:
-                    for query in queries:
-                        tx.query(query).resolve()
-                    tx.commit()
+            def operation():
+                driver = self.open_driver(imported)
+                try:
+                    self.ensure_database(driver)
+                    self.ensure_schema(driver, imported)
+                    if queries:
+                        with driver.transaction(self.database, TransactionType.WRITE) as tx:
+                            for query in queries:
+                                tx.query(query).resolve()
+                            tx.commit()
+                finally:
+                    self.close_driver(driver)
+            self.with_typedb_retries(operation)
             return {
                 "configured": True,
                 "saved": True,
@@ -1286,6 +1350,8 @@ relation ontology-assertion,
                 "entityCount": len(node_rows),
                 "relationCount": len(relation_rows),
                 "statementCount": len(queries),
+                "inferenceGenerationId": str((graph.worldview or {}).get("inferenceGenerationId") or ""),
+                "inferenceGenerationAt": str((graph.worldview or {}).get("inferenceGenerationAt") or ""),
             }
         except Exception as error:  # noqa: BLE001 - materialization failure must be visible to diagnostics.
             return {
@@ -1297,10 +1363,82 @@ relation ontology-assertion,
                 "entityCount": len(node_rows),
                 "relationCount": len(relation_rows),
                 "statementCount": len(queries),
+                "inferenceGenerationId": str((graph.worldview or {}).get("inferenceGenerationId") or ""),
             }
-        finally:
-            if driver is not None:
-                self.close_driver(driver)
+
+    def prune_inferencebox_generations(self, active_generation_id: str, keep_count: int = 2) -> Dict[str, object]:
+        active_generation_id = str(active_generation_id or "").strip()
+        if not active_generation_id:
+            return {"configured": bool(self.address), "status": "skipped", "reason": "active generation id is empty"}
+        try:
+            entity_rows = self.read_entity_rows(["InferenceBox"])
+            relation_rows = self.read_relation_rows(["InferenceBox"])
+        except Exception as error:  # noqa: BLE001 - pruning must not fail materialization.
+            return {"configured": True, "status": "error", "reason": str(error)[:180], "activeGenerationId": active_generation_id}
+        records = inference_generation_records(entity_rows, relation_rows)
+        if not records:
+            return {"configured": True, "status": "skipped", "reason": "no generation-scoped InferenceBox rows", "activeGenerationId": active_generation_id}
+        keep = {active_generation_id}
+        for item in sorted(records, key=lambda row: str(row.get("latestAt") or ""), reverse=True)[: max(1, int(keep_count or 2))]:
+            keep.add(str(item.get("generationId") or ""))
+        prune_ids = [
+            str(item.get("generationId") or "")
+            for item in records
+            if str(item.get("generationId") or "") and str(item.get("generationId") or "") not in keep
+        ]
+        if not prune_ids:
+            return {
+                "configured": True,
+                "status": "ok",
+                "activeGenerationId": active_generation_id,
+                "keptGenerationCount": len(keep),
+                "deletedGenerationCount": 0,
+            }
+        imported = self.driver_imports()
+        if imported[0] is None:
+            return {"configured": True, "status": "driver-missing", "reason": "typedb-driver Python package is not installed: " + str(imported[1])[:160]}
+        _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
+        queries = []
+        for generation_id in prune_ids:
+            queries.append(
+                "match $r isa ontology-assertion, has ontology-box \"InferenceBox\", has ontology-snapshot-id "
+                + typedb_string(generation_id)
+                + "; delete $r;"
+            )
+            queries.append(
+                "match $n isa ontology-node, has ontology-box \"InferenceBox\", has ontology-snapshot-id "
+                + typedb_string(generation_id)
+                + "; delete $n;"
+            )
+        try:
+            def operation():
+                driver = self.open_driver(imported)
+                try:
+                    self.ensure_database(driver)
+                    self.ensure_schema(driver, imported)
+                    with driver.transaction(self.database, TransactionType.WRITE) as tx:
+                        for query in queries:
+                            tx.query(query).resolve()
+                        tx.commit()
+                finally:
+                    self.close_driver(driver)
+            self.with_typedb_retries(operation)
+            return {
+                "configured": True,
+                "status": "ok",
+                "activeGenerationId": active_generation_id,
+                "keptGenerationCount": len(keep),
+                "deletedGenerationCount": len(prune_ids),
+                "deletedGenerationIds": prune_ids[:20],
+            }
+        except Exception as error:  # noqa: BLE001 - pruning is non-critical but must be visible.
+            return {
+                "configured": True,
+                "status": "error",
+                "reason": str(error)[:220],
+                "activeGenerationId": active_generation_id,
+                "deletedGenerationCount": 0,
+            }
 
     def inferencebox_snapshot(self, symbols: List[str] = None, limit: int = 80) -> Dict[str, object]:
         clean_symbols = sorted(set(str(item or "").upper().strip() for item in (symbols or []) if str(item or "").strip()))
@@ -1335,12 +1473,25 @@ relation ontology-assertion,
                 "typedbBootstrapReasoningUsed": False,
             }
     def inferencebox_snapshot_from_typedb(self, clean_symbols: List[str], safe_limit: int) -> Dict[str, object]:
+        all_entity_rows = self.read_entity_rows(["InferenceBox"])
+        all_relation_rows = self.read_relation_rows(["InferenceBox"])
+        active_generation = active_inference_generation(all_entity_rows, all_relation_rows)
+        generation_id = str((active_generation or {}).get("generationId") or "")
+        generation_scoped = bool(generation_id)
+        scoped_entity_rows = [
+            row for row in all_entity_rows
+            if not generation_scoped or row_inference_generation_id(row) == generation_id
+        ]
+        scoped_relation_rows = [
+            row for row in all_relation_rows
+            if not generation_scoped or row_inference_generation_id(row) == generation_id
+        ]
         entity_rows = [
-            row for row in self.read_entity_rows(["InferenceBox"])
+            row for row in scoped_entity_rows
             if not clean_symbols or str(row.get("symbol") or "").upper() in clean_symbols
         ]
         relation_rows = [
-            row for row in self.read_relation_rows(["InferenceBox"])
+            row for row in scoped_relation_rows
             if not clean_symbols
             or any(symbol in str(row.get(key) or "").upper() for symbol in clean_symbols for key in ["source", "target", "symbol"])
         ]
@@ -1370,6 +1521,12 @@ relation ontology-assertion,
             "nativeTypeDbReasoningUsed": has_native_output,
             "typedbBootstrapReasoningUsed": False,
             "pythonBootstrapDisabled": True,
+            "inferenceGenerationId": generation_id,
+            "inferenceGenerationAt": str((active_generation or {}).get("latestAt") or ""),
+            "generationScoped": generation_scoped,
+            "generationCount": len(inference_generation_records(all_entity_rows, all_relation_rows)),
+            "inactiveGenerationEntityCount": max(0, len(all_entity_rows) - len(scoped_entity_rows)) if generation_scoped else 0,
+            "inactiveGenerationRelationCount": max(0, len(all_relation_rows) - len(scoped_relation_rows)) if generation_scoped else 0,
             "ignoredNonNativeRelationCount": ignored_relation_count,
             "ignoredNonNativeTraceCount": ignored_trace_count,
         })
@@ -1465,53 +1622,150 @@ def relation_type_rows_from_derivations(
     return [{"relationType": item} for item in sorted(value for value in values if value)]
 
 
-def typedb_inferencebox_graph(graph: PortfolioOntology) -> PortfolioOntology:
+def typedb_inferencebox_graph(
+    graph: PortfolioOntology,
+    generation_id: str = None,
+    generation_at: str = None,
+) -> PortfolioOntology:
+    generation_id = str(generation_id or inference_generation_id())
+    generation_at = str(generation_at or utc_now())
     inference_graph = PortfolioOntology(str(graph.portfolio_id or "typedb-inferencebox"))
+    id_map: Dict[str, str] = {}
+    for item in graph.entities:
+        if str((item.properties or {}).get("ontologyBox") or "") == "InferenceBox":
+            id_map[item.entity_id] = generated_inference_id(item.entity_id, generation_id)
+    for item in graph.evidence:
+        if str((item.value or {}).get("ontologyBox") or ("InferenceBox" if item.kind == "inference-trace" else "")) == "InferenceBox":
+            id_map[item.evidence_id] = generated_inference_id(item.evidence_id, generation_id)
     inference_graph.entities = [
-        OntologyEntity(item.entity_id, item.label, item.kind, typedb_reasoned_properties(item.properties))
+        OntologyEntity(
+            id_map.get(item.entity_id, item.entity_id),
+            item.label,
+            item.kind,
+            typedb_reasoned_properties(item.properties, generation_id, generation_at, item.entity_id),
+        )
         for item in graph.entities
         if str((item.properties or {}).get("ontologyBox") or "") == "InferenceBox"
     ]
     inference_graph.relations = [
         OntologyRelation(
-            item.source,
-            item.target,
+            id_map.get(item.source, item.source),
+            id_map.get(item.target, item.target),
             item.relation_type,
             item.weight,
-            list(item.evidence_ids or []),
-            typedb_reasoned_properties(item.properties),
+            [id_map.get(value, value) for value in list(item.evidence_ids or [])],
+            typedb_reasoned_properties(item.properties, generation_id, generation_at),
         )
         for item in graph.relations
         if str((item.properties or {}).get("ontologyBox") or "") == "InferenceBox"
     ]
     inference_graph.evidence = [
-        copy.deepcopy(item)
+        OntologyEvidence(
+            id_map.get(item.evidence_id, item.evidence_id),
+            id_map.get(item.subject, item.subject),
+            item.kind,
+            item.source,
+            item.summary,
+            typedb_reasoned_properties(item.value, generation_id, generation_at, item.evidence_id),
+            item.confidence,
+        )
         for item in graph.evidence
         if str((item.value or {}).get("ontologyBox") or ("InferenceBox" if item.kind == "inference-trace" else "")) == "InferenceBox"
     ]
-    for item in inference_graph.evidence:
-        item.value = typedb_reasoned_properties(item.value)
-    inference_graph.beliefs = [
-        copy.deepcopy(item)
-        for item in graph.beliefs
-        if str(item.belief_id or "").startswith("belief:inference:")
-    ]
+    inference_graph.beliefs = []
     inference_graph.worldview = {
         "reasoningMode": "typedb-rulebox-materialized",
         "materializationSource": "typedb-abox-rulebox",
+        "inferenceGenerationId": generation_id,
+        "inferenceGenerationAt": generation_at,
     }
     return inference_graph
 
 
-def typedb_reasoned_properties(properties: Dict[str, object]) -> Dict[str, object]:
+def typedb_reasoned_properties(
+    properties: Dict[str, object],
+    generation_id: str = "",
+    generation_at: str = "",
+    original_id: str = "",
+) -> Dict[str, object]:
     payload = dict(properties or {})
     payload.setdefault("ontologyBox", "InferenceBox")
     payload.setdefault("box", "InferenceBox")
     payload["nativeTypeDbReasoned"] = True
+    payload["typeDbMaterialized"] = True
+    payload["graphInferenceUsed"] = True
     payload["typedbMaterialized"] = True
     payload["reasoningMode"] = "typedb-rulebox-materialized"
     payload["materializationSource"] = "typedb-abox-rulebox"
+    if generation_id:
+        payload["inferenceGenerationId"] = generation_id
+        payload["snapshotId"] = generation_id
+        payload["aboxSnapshotId"] = generation_id
+    if generation_at:
+        payload["inferenceGenerationAt"] = generation_at
+        payload["asOf"] = generation_at
+    if original_id:
+        payload["originalId"] = original_id
     return payload
+
+
+def row_inference_generation_id(row: Dict[str, object]) -> str:
+    if not isinstance(row, dict):
+        return ""
+    direct = str(row.get("inferenceGenerationId") or row.get("snapshotId") or row.get("aboxSnapshotId") or "").strip()
+    if direct:
+        return direct
+    try:
+        props = json.loads(str(row.get("propertiesJson") or "{}"))
+    except json.JSONDecodeError:
+        props = {}
+    return str((props or {}).get("inferenceGenerationId") or (props or {}).get("snapshotId") or "").strip()
+
+
+def row_inference_generation_at(row: Dict[str, object]) -> str:
+    if not isinstance(row, dict):
+        return ""
+    direct = str(row.get("inferenceGenerationAt") or row.get("asOf") or row.get("updatedAt") or "").strip()
+    if direct:
+        return direct
+    try:
+        props = json.loads(str(row.get("propertiesJson") or "{}"))
+    except json.JSONDecodeError:
+        props = {}
+    return str((props or {}).get("inferenceGenerationAt") or (props or {}).get("asOf") or "").strip()
+
+
+def inference_generation_records(
+    entity_rows: Iterable[Dict[str, object]],
+    relation_rows: Iterable[Dict[str, object]],
+) -> List[Dict[str, object]]:
+    records: Dict[str, Dict[str, object]] = {}
+    for row in list(entity_rows or []) + list(relation_rows or []):
+        generation_id = row_inference_generation_id(row)
+        if not generation_id:
+            continue
+        record = records.setdefault(generation_id, {
+            "generationId": generation_id,
+            "latestAt": "",
+            "entityCount": 0,
+            "relationCount": 0,
+        })
+        latest_at = row_inference_generation_at(row)
+        if latest_at > str(record.get("latestAt") or ""):
+            record["latestAt"] = latest_at
+        if "relationType" in row or "type" in row and row.get("source"):
+            record["relationCount"] = int(record.get("relationCount") or 0) + 1
+        else:
+            record["entityCount"] = int(record.get("entityCount") or 0) + 1
+    return sorted(records.values(), key=lambda item: str(item.get("latestAt") or ""), reverse=True)
+
+
+def active_inference_generation(
+    entity_rows: Iterable[Dict[str, object]],
+    relation_rows: Iterable[Dict[str, object]],
+) -> Dict[str, object]:
+    records = inference_generation_records(entity_rows, relation_rows)
+    return records[0] if records else {}
 
 
 def entity_node_kind(row: Dict[str, object]) -> str:
@@ -1698,4 +1952,6 @@ def typedb_repository_from_settings(settings: Dict[str, str] = None):
         database=str(settings.get("typedbDatabase") or "orbit_alpha_ontology"),
         tls_enabled=typedb_bool(settings.get("typedbTlsEnabled")),
         timeout_seconds=int(settings.get("typedbTimeoutSeconds") or 20),
+        retry_count=int(number_or_none(settings.get("typedbRetryCount")) or 2),
+        inference_generation_keep_count=int(number_or_none(settings.get("typedbInferenceGenerationKeepCount")) or 2),
     )

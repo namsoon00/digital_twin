@@ -149,7 +149,10 @@ class PortfolioOntologyProjectionRecorder:
         if not hasattr(self.repository, "run_rulebox"):
             return
         try:
-            execution = self.repository.run_rulebox({"clearInference": True})
+            execution = self.repository.run_rulebox({
+                "symbols": self.snapshot_symbols(snapshot),
+                "pruneOldGenerations": True,
+            })
         except Exception as error:  # noqa: BLE001 - graph inference must not block monitoring.
             execution = {"status": "error", "reason": str(error)[:180]}
         active_key = self.active_graph_store_key(result)

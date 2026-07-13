@@ -376,7 +376,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
 
         repository = CapturingTypeDBRepository(self.loss_guard_graph())
 
-        result = repository.run_rulebox({"clearInference": True})
+        result = repository.run_rulebox({})
 
         self.assertEqual("ok", result["status"])
         self.assertEqual("typedb", result["graphStore"])
@@ -386,7 +386,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertTrue(result["pythonBootstrapDisabled"])
         self.assertGreater(result["statementCount"], 0)
         self.assertIn("HAS_INFERRED_RISK", result["relationTypes"])
-        self.assertEqual("ok", result["clearResult"]["status"])
+        self.assertEqual({}, result["clearResult"])
         self.assertIsNotNone(repository.saved_inferencebox_graph)
         self.assertTrue(repository.saved_inferencebox_graph.entities)
         self.assertTrue(all((item.properties or {}).get("nativeTypeDbReasoned") for item in repository.saved_inferencebox_graph.entities))

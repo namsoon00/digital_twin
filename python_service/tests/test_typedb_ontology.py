@@ -16,6 +16,7 @@ from digital_twin.infrastructure.typedb_ontology import (
     NullTypeDBOntologyGraphRepository,
     TypeDBOntologyGraphRepository,
     relation_row_id,
+    typedb_inferencebox_graph,
     typedb_native_reasoning_profile,
 )
 
@@ -354,8 +355,58 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertFalse(result["typedbNativeFunctionReasoningUsed"])
         self.assertTrue(result["nativeTypeDbReasoningUsed"])
         self.assertIn("HAS_INFERRED_RISK", result["relationTypes"])
+        self.assertTrue(result["inferenceGenerationId"].startswith("inference-generation:"))
+        self.assertEqual("symbols" if result["targetSymbols"] else "all-symbols", result["incrementalScope"])
         self.assertTrue(captured["graph"].entities)
         self.assertTrue(all((item.properties or {}).get("nativeTypeDbReasoned") for item in captured["graph"].entities))
+        self.assertTrue(all((item.properties or {}).get("snapshotId") == result["inferenceGenerationId"] for item in captured["graph"].entities))
+
+    def test_typedb_inferencebox_graph_rewrites_ids_by_generation(self):
+        graph = PortfolioOntology("typedb-generation")
+        graph.entities.append(OntologyEntity("stock:005930", "삼성전자", "stock", {"ontologyBox": "ABox", "symbol": "005930"}))
+        graph.entities.append(OntologyEntity("inference-trace:005930:rule", "trace", "inference-trace", {
+            "ontologyBox": "InferenceBox",
+            "symbol": "005930",
+            "ruleId": "rule",
+        }))
+        graph.entities.append(OntologyEntity("risk:005930", "risk", "risk", {
+            "ontologyBox": "InferenceBox",
+            "symbol": "005930",
+            "ruleId": "rule",
+        }))
+        graph.evidence.append(OntologyEvidence("evidence:inference:005930:rule", "stock:005930", "inference-trace", "test", "trace", {
+            "ontologyBox": "InferenceBox",
+            "ruleId": "rule",
+        }))
+        graph.relations.append(OntologyRelation("stock:005930", "risk:005930", "HAS_INFERRED_RISK", 0.9, ["evidence:inference:005930:rule"], {
+            "ontologyBox": "InferenceBox",
+            "ruleId": "rule",
+        }))
+        graph.relations.append(OntologyRelation("risk:005930", "inference-trace:005930:rule", "EXPLAINED_BY_TRACE", 0.9, [], {
+            "ontologyBox": "InferenceBox",
+            "ruleId": "rule",
+        }))
+
+        generated = typedb_inferencebox_graph(graph, generation_id="inference-generation:test", generation_at="2026-07-13T00:00:00Z")
+
+        self.assertTrue(all(item.entity_id.endswith(":gen:" + item.entity_id.rsplit(":gen:", 1)[1]) for item in generated.entities))
+        self.assertTrue(all((item.properties or {}).get("snapshotId") == "inference-generation:test" for item in generated.entities))
+        self.assertIn("stock:005930", {item.source for item in generated.relations})
+        self.assertTrue(any(item.target.startswith("risk:005930:gen:") for item in generated.relations))
+        self.assertTrue(generated.evidence[0].evidence_id.startswith("evidence:inference:005930:rule:gen:"))
+
+    def test_typedb_retry_helper_retries_transient_failures(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729", retry_count=1)
+        calls = {"count": 0}
+
+        def operation():
+            calls["count"] += 1
+            if calls["count"] == 1:
+                raise RuntimeError("transient")
+            return "ok"
+
+        self.assertEqual("ok", repository.with_typedb_retries(operation))
+        self.assertEqual(2, calls["count"])
 
     def test_typedb_rulebox_save_failure_does_not_mark_inference_used(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")

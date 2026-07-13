@@ -126,7 +126,7 @@ Infrastructure:
 - `python_service/digital_twin/infrastructure/model_reviewer.py`: Codex/LLM command adapter with local fallback
 - `python_service/digital_twin/infrastructure/ontology_projection.py`: snapshot-to-ontology projection recorder that saves graph-store projections and quality samples without making monitoring application services own graph persistence details
 - `python_service/digital_twin/infrastructure/ontology_graph_store.py`: graph-store composition root; runtime code should import this factory instead of constructing the database adapter directly
-- `python_service/digital_twin/infrastructure/typedb_ontology.py`: TypeDB graph-store adapter; production InferenceBox output is materialized from TypeDB ABox facts and TypeDB RuleBox rules into TypeDB InferenceBox, not from a non-TypeDB runtime fallback
+- `python_service/digital_twin/infrastructure/typedb_ontology.py`: TypeDB graph-store adapter; production InferenceBox output is materialized from TypeDB ABox facts and TypeDB RuleBox rules into TypeDB InferenceBox, not from a non-TypeDB runtime fallback. InferenceBox writes must be generation-scoped so a failed materialization does not erase the last usable graph-backed judgement.
 - `python_service/digital_twin/infrastructure/service_factory.py`: runtime composition of use cases and adapters
 
 Compatibility modules:

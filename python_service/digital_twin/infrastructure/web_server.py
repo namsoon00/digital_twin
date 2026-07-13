@@ -22,6 +22,8 @@ from pathlib import Path
 from typing import Dict, List
 
 from ..application.account_service import AccountApplicationService
+from ..application.notification_replay_service import NotificationReplayService
+from ..application.ontology_diagnostics_service import OntologyDiagnosticsService
 from ..domain.events import (
     APP_ITEM_REMOVED,
     APP_ITEM_UPDATED,
@@ -238,6 +240,19 @@ def new_id(prefix: str) -> str:
 
 def configured(value) -> str:
     return str(value or "").strip()
+
+
+def request_bool(value, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None or value == "":
+        return default
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "y", "on"}:
+        return True
+    if text in {"0", "false", "no", "n", "off"}:
+        return False
+    return default
 
 
 def default_store() -> Dict[str, object]:
@@ -551,6 +566,22 @@ def run_ontology_rulebox_payload(payload: Dict[str, object]) -> Dict[str, object
     return ontology_repository_from_settings(runtime_settings()).run_rulebox(payload)
 
 
+def ontology_diagnostics_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
+    settings = runtime_settings()
+    symbols = [
+        item.strip()
+        for item in str(first_query(query, "symbols") or first_query(query, "symbol") or "").split(",")
+        if item.strip()
+    ]
+    limit = max(1, min(500, int(first_query(query, "limit") or 80)))
+    return OntologyDiagnosticsService(
+        ontology_repository=ontology_repository_from_settings(settings),
+        settings=settings,
+        event_log=stores.event_log(settings),
+        notification_queue=stores.notification_job_store(settings),
+    ).status(symbols=symbols, limit=limit)
+
+
 def propose_ontology_rule_candidates_payload(payload: Dict[str, object]) -> Dict[str, object]:
     body = payload if isinstance(payload, dict) else {}
     symbols = body.get("symbols") if isinstance(body.get("symbols"), list) else []
@@ -847,6 +878,22 @@ def notification_jobs_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
     }
 
 
+def replay_notification_payload(payload: Dict[str, object]) -> Dict[str, object]:
+    body = payload if isinstance(payload, dict) else {}
+    identifier = configured(body.get("identifier") or body.get("notificationNumber") or body.get("jobId"))
+    result = NotificationReplayService(
+        queue=notification_queue_store(),
+        account_repository=stores.account_registry(),
+        runner_factory=build_notification_queue_runner,
+        lookup_limit=int(body.get("lookupLimit") or 200),
+    ).replay(
+        identifier,
+        direct=request_bool(body.get("direct")),
+        dry_run=request_bool(body.get("dryRun", body.get("dry_run"))),
+    )
+    return result.to_dict()
+
+
 def research_evidence_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
     limit = max(1, min(500, int(first_query(query, "limit") or 80)))
     symbol = configured(first_query(query, "symbol")).upper()
@@ -1123,8 +1170,11 @@ def notification_template_test_payload(payload: Dict[str, object]):
     message_type = configured(payload.get("messageType") or payload.get("message_type"))
     if not message_type:
         raise ValueError("messageType은 필요합니다.")
-    dry_run = bool(payload.get("dryRun") or payload.get("dry_run"))
-    bypass_policy = bool(payload.get("bypassPolicy") or payload.get("bypass_policy") or payload.get("directSend") or payload.get("direct_send"))
+    dry_run = request_bool(payload.get("dryRun", payload.get("dry_run")))
+    bypass_policy = (
+        request_bool(payload.get("bypassPolicy", payload.get("bypass_policy")))
+        or request_bool(payload.get("directSend", payload.get("direct_send")))
+    )
     account = selected_notification_test_account(payload)
     snapshot = build_snapshot(account)
     if snapshot.mode != "live" and not payload.get("allowDemo"):
@@ -1915,6 +1965,9 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
                 return
             return self.send_payload(200, run_ontology_rulebox_payload(self.read_json_body()))
 
+        if path == "/api/ontology/diagnostics" and self.command == "GET":
+            return self.send_payload(200, ontology_diagnostics_payload(query))
+
         if path == "/api/ontology/rulebox/candidates" and self.command == "POST":
             if not self.ensure_writable("공유 모드에서는 TypeDB RuleBox 후보를 생성할 수 없습니다."):
                 return
@@ -2011,6 +2064,11 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
 
         if path == "/api/notification-jobs" and self.command == "GET":
             return self.send_payload(200, notification_jobs_payload(query))
+
+        if path == "/api/notification-jobs/replay" and self.command == "POST":
+            if not self.ensure_writable("공유 모드에서는 알림을 재발송할 수 없습니다."):
+                return
+            return self.send_payload(200, replay_notification_payload(self.read_json_body()))
 
         if path == "/api/research-evidence" and self.command == "GET":
             return self.send_payload(200, research_evidence_payload(query))

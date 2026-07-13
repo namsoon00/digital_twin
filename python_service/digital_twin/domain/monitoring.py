@@ -59,23 +59,16 @@ def ontology_quality_event_metadata(snapshot: AccountSnapshot, min_score: float)
 
 def graph_store_label(value: object) -> str:
     graph_store = str(value or "").strip().lower()
-    if graph_store in {"typedb", "neo4j", ""}:
+    if graph_store in {"typedb", ""}:
         return "TypeDB"
     return "그래프 저장소"
 
 
 def normalized_monitoring_graph_store(value: object) -> str:
     graph_store = str(value or "").strip().lower()
-    if graph_store in {"", "typedb", "neo4j"}:
+    if graph_store in {"", "typedb"}:
         return "typedb"
     return graph_store
-
-
-def legacy_graph_store_note(value: object) -> str:
-    graph_store = str(value or "").strip().lower()
-    if graph_store == "neo4j":
-        return "레거시 저장소 표기 neo4j 감지(현재 런타임은 TypeDB)"
-    return ""
 
 
 def ontology_inference_failure_stage(reason_code: object, status: object, detail: Dict[str, object]) -> str:
@@ -121,9 +114,6 @@ def ontology_inference_failure_detail(reason_code: object, status: object, detai
         value = str((detail or {}).get(key) or "").strip()
         if value:
             parts.append(label + "=" + value)
-    legacy_note = legacy_graph_store_note((detail or {}).get("rawGraphStore") or (detail or {}).get("graphStore"))
-    if legacy_note:
-        parts.append(legacy_note)
     if code == "missingInferenceBox":
         parts.append("inferenceBox 섹션 없음")
     return "; ".join(parts[:8])

@@ -173,23 +173,99 @@ def compact_price(value: object) -> str:
 def liquidity_profile(position: Position) -> Dict[str, object]:
     market_value = number(position.market_value)
     trading_value = number(position.trading_value)
+    current_price = number(position.current_price)
+    volume = number(position.volume)
     volume_ratio = number(position.volume_ratio)
     ask_pressure = max(0.0, -number(position.bid_ask_imbalance))
     sellable_quantity = number(position.sellable_quantity)
     quantity = number(position.quantity)
+    bid_depth = number(position.orderbook_bid_volume)
     exit_days = market_value / max(1.0, trading_value * 0.1) if market_value and trading_value else 0.0
     position_to_value = (market_value / trading_value) * 100 if market_value and trading_value else 0.0
+    position_to_volume = (sellable_quantity / volume) * 100 if sellable_quantity and volume else 0.0
+    position_to_bid_depth = (sellable_quantity / bid_depth) * 100 if sellable_quantity and bid_depth else 0.0
+    bid_depth_coverage = (bid_depth / sellable_quantity) * 100 if sellable_quantity and bid_depth else 0.0
+    bid_depth_value = bid_depth * current_price if bid_depth and current_price else 0.0
+    position_to_bid_depth_value = (market_value / bid_depth_value) * 100 if market_value and bid_depth_value else 0.0
+    sellable_ratio = (sellable_quantity / quantity) * 100 if quantity else 0.0
     sellable_gap = 100.0 if quantity and sellable_quantity <= 0 else 0.0
     liquidity_risk = clamp(position_to_value * 2.0 + max(0.0, 1.0 - volume_ratio) * 18.0 + ask_pressure * 0.25 + sellable_gap * 0.25, 0.0, 100.0)
-    slippage_risk = clamp(position_to_value * 1.4 + ask_pressure * 0.35 + max(0.0, 0.8 - volume_ratio) * 20.0, 0.0, 100.0)
+    slippage_risk = clamp(
+        position_to_value * 1.4
+        + position_to_bid_depth * 0.35
+        + ask_pressure * 0.35
+        + max(0.0, 0.8 - volume_ratio) * 20.0,
+        0.0,
+        100.0,
+    )
     return {
+        "hasMarketValue": bool(market_value),
+        "hasTradingValue": bool(trading_value),
+        "hasDailyVolume": bool(volume),
+        "hasBidDepth": bool(bid_depth),
+        "hasQuantity": bool(quantity),
+        "hasSellableQuantity": bool(sellable_quantity),
         "positionToTradingValuePct": round(position_to_value, 2),
+        "positionToDailyVolumePct": round(position_to_volume, 4),
+        "positionToBidDepthPct": round(position_to_bid_depth, 4),
+        "positionToBidDepthValuePct": round(position_to_bid_depth_value, 4),
+        "bidDepthCoveragePct": round(bid_depth_coverage, 2),
+        "bidDepthValue": round(bid_depth_value, 2),
+        "sellableRatioPct": round(sellable_ratio, 2),
+        "sellableBlocked": bool(quantity and sellable_quantity <= 0),
         "exitDaysAtTenPctADV": round(exit_days, 2),
         "liquidityRiskScore": round(liquidity_risk, 1),
         "slippageRiskScore": round(slippage_risk, 1),
         "volumeRatio": round(volume_ratio, 3),
         "bidAskImbalance": round(number(position.bid_ask_imbalance), 2),
     }
+
+def add_execution_metric_concepts(
+    graph: PortfolioOntology,
+    stock_id: str,
+    symbol: str,
+    display_name: str,
+    liquidity: Dict[str, object],
+    source: str,
+) -> None:
+    metric_rows = [
+        ("positionToTradingValuePct", "보유금액/거래대금", "position-exit-exposure", ["hasMarketValue", "hasTradingValue"]),
+        ("positionToDailyVolumePct", "보유수량/거래량", "position-exit-exposure", ["hasSellableQuantity", "hasDailyVolume"]),
+        ("positionToBidDepthPct", "매도가능수량/매수호가잔량", "position-exit-exposure", ["hasSellableQuantity", "hasBidDepth"]),
+        ("positionToBidDepthValuePct", "평가액/매수호가잔량가치", "position-exit-exposure", ["hasMarketValue", "hasBidDepth"]),
+        ("bidDepthCoveragePct", "매수호가잔량 커버리지", "execution-capacity", ["hasSellableQuantity", "hasBidDepth"]),
+        ("sellableRatioPct", "매도가능수량 비율", "execution-capacity", ["hasQuantity"]),
+        ("sellableBlocked", "매도가능 제한", "execution-capacity", ["hasQuantity"]),
+        ("exitDaysAtTenPctADV", "10% ADV 청산 일수", "execution-capacity", ["hasMarketValue", "hasTradingValue"]),
+        ("liquidityRiskScore", "유동성 위험 원천 점수", "liquidity-profile", []),
+        ("slippageRiskScore", "슬리피지 위험 원천 점수", "slippage-estimate", []),
+    ]
+    for field_name, label, metric_role, required_flags in metric_rows:
+        if any(not liquidity.get(flag) for flag in required_flags):
+            continue
+        raw_value = liquidity.get(field_name)
+        numeric_value = 1.0 if raw_value is True else 0.0 if raw_value is False else number(raw_value)
+        if raw_value in (None, ""):
+            continue
+        metric_id = add_entity(graph, "execution-metric", symbol + ":" + field_name, display_name + " " + label, {
+            "tboxClass": "ExecutionMetric",
+            "tboxClasses": ["Observation", "FlowObservation", "ExecutionMetric", "TradeFlow"],
+            "symbol": symbol,
+            "field": field_name,
+            "value": round(numeric_value, 4),
+            "valueNumber": round(numeric_value, 4),
+            "metricRole": metric_role,
+            "source": source,
+        })
+        relation_props = {
+            "source": source,
+            "polarity": "context",
+            "field": field_name,
+            "metricRole": metric_role,
+            "aiInfluenceLabel": label,
+        }
+        add_relation(graph, stock_id, metric_id, "HAS_OBSERVATION", weight=1.0, properties=relation_props)
+        add_relation(graph, stock_id, metric_id, "HAS_EXECUTION_METRIC", weight=1.0, properties=relation_props)
 
 def volume_profile(position: Position) -> Dict[str, object]:
     return {
@@ -516,24 +592,65 @@ def add_price_level_and_liquidity_concepts(graph: PortfolioOntology, stock_id: s
         "tboxClasses": ["Risk", "LiquidityRisk", "LiquidityProfile"],
         **liquidity,
     })
-    risk_props = {"source": source, "aiInfluenceLabel": "유동성/실행 가능성"}
-    if number(liquidity.get("liquidityRiskScore")) >= 55:
-        risk_props.update({"polarity": "risk", "opinionImpact": min(16.0, number(liquidity.get("liquidityRiskScore")) * 0.18)})
-    add_relation(graph, stock_id, liquidity_id, "LIMITED_BY_LIQUIDITY", weight=round(number(liquidity.get("liquidityRiskScore")) / 100, 4), properties=risk_props)
+    add_relation(
+        graph,
+        stock_id,
+        liquidity_id,
+        "HAS_LIQUIDITY_PROFILE",
+        weight=1.0,
+        properties={"source": source, "polarity": "context", "aiInfluenceLabel": "유동성 원천 프로파일"},
+    )
+    add_execution_metric_concepts(graph, stock_id, symbol, position.name or symbol, liquidity, source)
+    risk_props = {"source": source, "aiInfluenceLabel": "유동성/실행 가능성", "polarity": "context"}
+    liquidity_risk = number(liquidity.get("liquidityRiskScore"))
+    slippage_risk = number(liquidity.get("slippageRiskScore"))
+    if liquidity_risk >= 55:
+        add_relation(
+            graph,
+            stock_id,
+            liquidity_id,
+            "LIMITED_BY_LIQUIDITY",
+            weight=round(liquidity_risk / 100, 4),
+            properties={
+                **risk_props,
+                "polarity": "risk",
+                "opinionImpact": min(16.0, liquidity_risk * 0.18),
+            },
+        )
     capacity_id = add_entity(graph, "exit-capacity", symbol, (position.name or symbol) + " 청산 가능 용량", {
         "tboxClass": "ExitCapacity",
-        "tboxClasses": ["Risk", "LiquidityRisk", "ExitCapacity"],
+        "tboxClasses": ["Risk", "LiquidityRisk", "ExitCapacity", "ExecutionCapacity"],
         "sellableQuantity": round(number(position.sellable_quantity), 4),
         "positionValue": round(number(position.market_value), 2),
         "tradingValue": round(number(position.trading_value), 2),
+        "positionToTradingValuePct": liquidity.get("positionToTradingValuePct"),
+        "positionToDailyVolumePct": liquidity.get("positionToDailyVolumePct"),
+        "positionToBidDepthPct": liquidity.get("positionToBidDepthPct"),
+        "bidDepthCoveragePct": liquidity.get("bidDepthCoveragePct"),
+        "sellableRatioPct": liquidity.get("sellableRatioPct"),
+        "sellableBlocked": liquidity.get("sellableBlocked"),
         "exitDaysAtTenPctADV": liquidity.get("exitDaysAtTenPctADV"),
     })
     add_relation(graph, stock_id, capacity_id, "HAS_EXIT_CAPACITY", weight=1.0, properties={"source": source, "aiInfluenceLabel": "청산 가능 용량"})
+    add_relation(graph, stock_id, capacity_id, "HAS_EXECUTION_CAPACITY", weight=1.0, properties={"source": source, "polarity": "context", "aiInfluenceLabel": "실행 가능 용량"})
     slippage_id = add_entity(graph, "slippage-estimate", symbol, (position.name or symbol) + " 슬리피지 추정", {
         "tboxClass": "SlippageEstimate",
         "tboxClasses": ["Risk", "ExecutionRisk", "SlippageEstimate"],
         "slippageRiskScore": liquidity.get("slippageRiskScore"),
         "bidAskImbalance": round(number(position.bid_ask_imbalance), 2),
         "volumeRatio": round(number(position.volume_ratio), 3),
+        "positionToBidDepthPct": liquidity.get("positionToBidDepthPct"),
     })
-    add_relation(graph, stock_id, slippage_id, "HAS_SLIPPAGE_RISK", weight=round(number(liquidity.get("slippageRiskScore")) / 100, 4), properties=risk_props)
+    if slippage_risk >= 55:
+        add_relation(
+            graph,
+            stock_id,
+            slippage_id,
+            "HAS_SLIPPAGE_RISK",
+            weight=round(slippage_risk / 100, 4),
+            properties={
+                **risk_props,
+                "polarity": "risk",
+                "opinionImpact": min(16.0, slippage_risk * 0.18),
+            },
+        )

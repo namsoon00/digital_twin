@@ -94,6 +94,74 @@ class OntologyRuleBoxTests(unittest.TestCase):
         portfolio = portfolio_summary([position], account_cash=200000)
         return build_portfolio_ontology([position], portfolio, portfolio_id="rulebox-data-quality-test")
 
+    def liquid_small_position_graph(self):
+        position = Position(
+            symbol="005930",
+            name="삼성전자",
+            market="KR",
+            currency="KRW",
+            quantity=10,
+            sellable_quantity=10,
+            average_price=327000,
+            current_price=254500,
+            market_value=2545000,
+            profit_loss=-725000,
+            profit_loss_rate=-21.6,
+            ma20=319375,
+            ma60=290467,
+            ma20_distance=-20.3,
+            ma60_distance=-12.4,
+            volume=31882652,
+            volume_ratio=1.6,
+            trading_value=8455100000000,
+            trade_strength=89.1,
+            buy_volume=10445338,
+            sell_volume=11162345,
+            orderbook_bid_volume=1585913,
+            orderbook_ask_volume=205943,
+            bid_ask_imbalance=77.0,
+            foreign_net_volume=-717007,
+            institution_net_volume=-3216316,
+            individual_net_volume=4177230,
+            sector="반도체",
+        )
+        portfolio = portfolio_summary([position], account_cash=200000)
+        return build_portfolio_ontology([position], portfolio, portfolio_id="rulebox-execution-safe-test")
+
+    def illiquid_large_position_graph(self):
+        position = Position(
+            symbol="123450",
+            name="테스트소형주",
+            market="KR",
+            currency="KRW",
+            quantity=100000,
+            sellable_quantity=100000,
+            average_price=1000,
+            current_price=1000,
+            market_value=100000000,
+            profit_loss=-5000000,
+            profit_loss_rate=-5.0,
+            ma20=1050,
+            ma60=1100,
+            ma20_distance=-4.8,
+            ma60_distance=-9.1,
+            volume=50000,
+            volume_ratio=0.4,
+            trading_value=500000000,
+            trade_strength=72.0,
+            buy_volume=18000,
+            sell_volume=32000,
+            orderbook_bid_volume=1000,
+            orderbook_ask_volume=8000,
+            bid_ask_imbalance=-77.8,
+            foreign_net_volume=-2000,
+            institution_net_volume=-1500,
+            individual_net_volume=3500,
+            sector="테스트",
+        )
+        portfolio = portfolio_summary([position], account_cash=200000)
+        return build_portfolio_ontology([position], portfolio, portfolio_id="rulebox-execution-block-test")
+
     def direct_context_news_graph(self):
         position = Position(
             symbol="AAPL",
@@ -247,6 +315,60 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertTrue(flow_risk_relations)
         self.assertIn("ask-pressure", matched_ids)
         self.assertIn("volume-confirmation", matched_ids)
+
+    def test_execution_metrics_keep_small_liquid_holding_from_action_block(self):
+        graph = self.liquid_small_position_graph()
+
+        execution_metrics = [
+            item for item in graph.entities
+            if item.kind == "execution-metric"
+        ]
+        execution_capacity = [
+            item
+            for item in graph.relations
+            if item.source == "stock:005930"
+            and item.relation_type == "HAS_EXECUTION_CAPACITY"
+            and (item.properties or {}).get("ruleId") == "graph.execution.capacity_safe.v1"
+        ]
+        execution_blocks = [
+            item
+            for item in graph.relations
+            if item.source == "stock:005930"
+            and item.relation_type == "BLOCKS_ACTION"
+            and (item.properties or {}).get("ruleId") == "graph.execution.liquidity_or_slippage_block.v1"
+        ]
+
+        self.assertIn("positionToTradingValuePct", {(item.properties or {}).get("field") for item in execution_metrics})
+        self.assertIn("slippageRiskScore", {(item.properties or {}).get("field") for item in execution_metrics})
+        self.assertTrue(any(item.relation_type == "HAS_LIQUIDITY_PROFILE" for item in graph.relations))
+        self.assertTrue(execution_capacity)
+        self.assertFalse(execution_blocks)
+
+    def test_execution_block_requires_rulebox_execution_thresholds(self):
+        graph = self.illiquid_large_position_graph()
+
+        execution_block = [
+            item
+            for item in graph.relations
+            if item.source == "stock:123450"
+            and item.relation_type == "BLOCKS_ACTION"
+            and (item.properties or {}).get("ruleId") == "graph.execution.liquidity_or_slippage_block.v1"
+        ]
+        trace = next(
+            item
+            for item in graph.entities
+            if item.kind == "inference-trace"
+            and (item.properties or {}).get("ruleId") == "graph.execution.liquidity_or_slippage_block.v1"
+        )
+        matched_ids = [
+            item.get("conditionId")
+            for item in ((trace.properties or {}).get("matchedConditions") or [])
+            if isinstance(item, dict)
+        ]
+
+        self.assertTrue(execution_block)
+        self.assertIn("large-position-block", matched_ids)
+        self.assertIn("visible-depth-block", matched_ids)
 
     def test_local_rulebox_uses_missing_microstructure_data_quality(self):
         graph = self.data_quality_gap_graph()
@@ -539,7 +661,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
         execution_slippage = next(
             item
             for item in condition_rows
-            if item["id"] == "rule-condition:graph.execution.liquidity_or_slippage_block.v1:slippage-risk"
+            if item["id"] == "rule-condition:graph.execution.liquidity_or_slippage_block.v1:slippage-score-block"
         )
         price_reclaim_not = next(
             item
@@ -583,6 +705,8 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertTrue(fact_change_gate["conditionTargetMaterialityPassed"])
         self.assertEqual(["market-microstructure"], microstructure_gap["conditionTargetDataScopes"])
         self.assertEqual("any", execution_slippage["conditionRole"])
+        self.assertEqual(["slippageRiskScore"], execution_slippage["conditionTargetFields"])
+        self.assertEqual(70.0, execution_slippage["conditionTargetMinValue"])
         self.assertEqual("not", price_reclaim_not["conditionRole"])
         self.assertEqual("any", portfolio_concentration["conditionRole"])
         self.assertEqual(["ConcentrationRisk"], portfolio_concentration["conditionTargetTboxClasses"])

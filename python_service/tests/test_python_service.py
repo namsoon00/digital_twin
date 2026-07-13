@@ -33,6 +33,7 @@ from digital_twin.domain.investment_research import NewsCollectionTarget, build_
 from digital_twin.domain.market_data import normalize_position, technical_indicators_from_candles
 from digital_twin.domain.message_types import DEFAULT_ALERT_RULES, DEFAULT_CADENCE, MESSAGE_TYPE_EMOJIS, MESSAGE_TYPE_LABELS, public_message_catalog
 from digital_twin.domain.ontology_contracts import OntologyEntity, OntologyRelation, entity_id
+from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
 from digital_twin.domain.ontology_schema import abox_properties
 from digital_twin.domain.ontology_validator import validate_ontology
 from digital_twin.domain.portfolio_ontology_builder import apply_relation_driven_opinions, build_portfolio_ontology
@@ -2331,6 +2332,7 @@ class PythonServiceTests(unittest.TestCase):
             def __init__(self):
                 self.seed_calls = []
                 self.graphs = []
+                self.default_rule_count = len(default_graph_inference_rules())
 
             def rulebox_snapshot(self):
                 return {
@@ -2342,7 +2344,7 @@ class PythonServiceTests(unittest.TestCase):
 
             def seed_ontology(self, payload=None):
                 self.seed_calls.append(dict(payload or {}))
-                return {"seeded": True, "status": "ok", "ruleCount": 20}
+                return {"seeded": True, "status": "ok", "ruleCount": self.default_rule_count}
 
             def save_graph(self, graph):
                 self.graphs.append(graph)
@@ -2363,7 +2365,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(1, len(repository.seed_calls))
         self.assertFalse(repository.seed_calls[0]["replaceRuleBox"])
         self.assertEqual("seeded", result["ruleboxBootstrap"]["status"])
-        self.assertEqual(20, result["ruleboxBootstrap"]["ruleCount"])
+        self.assertEqual(repository.default_rule_count, result["ruleboxBootstrap"]["ruleCount"])
 
     def test_ontology_projection_recorder_includes_watchlist_candidates(self):
         holding = normalize_position({

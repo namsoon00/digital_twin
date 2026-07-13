@@ -751,6 +751,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
         graph = self.loss_guard_graph()
         repository = TypeDBOntologyGraphRepository("http://typedb.example.test")
         entity_rows = repository.rows_for_entities(graph)
+        default_rules = default_graph_inference_rules()
         rowsets = {
             "rules": [item for item in entity_rows if item["kind"] == "rule" and item["ontologyBox"] == "RuleBox"],
             "conditions": [item for item in entity_rows if item["kind"] == "rule-condition" and item["ontologyBox"] == "RuleBox"],
@@ -761,9 +762,9 @@ class OntologyRuleBoxTests(unittest.TestCase):
                     "id": "rulebox-version:test001",
                     "versionLabel": "test001",
                     "rulesHash": "test001",
-                    "ruleCount": 20,
-                    "conditionCount": 40,
-                    "derivationCount": 30,
+                    "ruleCount": len(default_rules),
+                    "conditionCount": sum(len(rule.conditions) for rule in default_rules),
+                    "derivationCount": sum(len(rule.derivations) for rule in default_rules),
                     "status": "saved",
                     "changeReason": "baseline",
                     "author": "test",

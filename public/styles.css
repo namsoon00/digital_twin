@@ -19586,6 +19586,20 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   background: transparent;
 }
 
+.data-refresh-status {
+  display: block;
+  margin: 0 0 var(--ds-space-4);
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--blue) 24%, var(--ds-card-border));
+  border-left: 3px solid var(--blue);
+  border-radius: var(--ds-radius-control);
+  background: color-mix(in srgb, var(--blue) 6%, transparent);
+  color: var(--ds-text-muted);
+  font-size: var(--ds-text-sm);
+  font-weight: 700;
+  line-height: 1.45;
+}
+
 .symbol-detail-panel,
 .research-evidence-detail-panel,
 .investment-action-detail-panel {

@@ -8,6 +8,7 @@ from ..domain.symbol_universe import ListedSymbol, SUPPORTED_MARKETS, is_stale, 
 
 DEFAULT_SYMBOL_SEEDS = ["005930", "000660", "TSLA", "AAPL", "NVDA", "MSFT", "AMD", "MSTR"]
 MARKET_DATA_ACCOUNT_ID = "__market_data__"
+DEFAULT_SYMBOL_UNIVERSE_LIMIT = 40
 
 
 def seed_symbol(symbol: str) -> ListedSymbol:
@@ -127,10 +128,10 @@ class SymbolUniverseService:
             merged.append(next_item)
         return merged
 
-    def search(self, query: str = "", market: str = "", limit: int = 80, offset: int = 0) -> Dict[str, object]:
+    def search(self, query: str = "", market: str = "", limit: int = DEFAULT_SYMBOL_UNIVERSE_LIMIT, offset: int = 0) -> Dict[str, object]:
         self.ensure_seed()
         max_age = self.max_age_hours()
-        limit_value = max(1, min(500, int(limit or 80)))
+        limit_value = max(1, min(500, int(limit or DEFAULT_SYMBOL_UNIVERSE_LIMIT)))
         offset_value = max(0, int(offset or 0))
         result_total = self.store.search_count(query=query, market=market)
         items = self.store.search(query=query, market=market, limit=limit_value, offset=offset_value)

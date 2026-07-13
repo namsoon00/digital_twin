@@ -54,6 +54,9 @@ from .mysql_operational_helpers import (
 )
 
 
+DEFAULT_SYMBOL_UNIVERSE_LIMIT = 40
+
+
 class MySQLSymbolUniverseStore(MySQLOperationalConnection):
     def upsert_many_with_connection(self, connection, symbols: Iterable[ListedSymbol], stamp: str = "") -> int:
         items = [item for item in symbols if item.symbol and item.market]
@@ -147,9 +150,9 @@ class MySQLSymbolUniverseStore(MySQLOperationalConnection):
             params.extend([like, "%" + query_value + "%"])
         return query_value, clauses, params
 
-    def search(self, query: str = "", market: str = "", limit: int = 80, offset: int = 0) -> List[ListedSymbol]:
+    def search(self, query: str = "", market: str = "", limit: int = DEFAULT_SYMBOL_UNIVERSE_LIMIT, offset: int = 0) -> List[ListedSymbol]:
         query_value, clauses, params = self.symbol_search_clauses(query, market)
-        limit_value = max(1, min(500, int(limit or 80)))
+        limit_value = max(1, min(500, int(limit or DEFAULT_SYMBOL_UNIVERSE_LIMIT)))
         offset_value = max(0, int(offset or 0))
         exact_symbol = normalize_symbol(query_value)
         sql = """

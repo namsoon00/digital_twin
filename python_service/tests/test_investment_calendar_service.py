@@ -136,6 +136,12 @@ class InvestmentCalendarServiceTests(unittest.TestCase):
         self.assertEqual(INVESTMENT_CALENDAR_REMINDER, job.message_type)
         self.assertEqual("event-1", job.context["eventId"])
         self.assertEqual(60, job.context["reminderOffsetMinutes"])
+        self.assertIn("투자 영향", job.text)
+        self.assertIn("확인할 것", job.text)
+        self.assertIn("centralBank", job.context["eventType"])
+        self.assertIn("investmentImpact", job.context)
+        self.assertIn("watchItems", job.context)
+        self.assertTrue(job.context["watchItems"])
 
 
 if __name__ == "__main__":

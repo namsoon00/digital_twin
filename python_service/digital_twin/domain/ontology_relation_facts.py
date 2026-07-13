@@ -4,6 +4,7 @@ from typing import Dict, Iterable, List, Optional
 from .investment_research import research_evidence_from_external_signals, research_evidence_from_facts
 from .macro_context import macro_context_facts
 from .market_data import clamp, number
+from . import news_analysis as news_domain
 from .ontology_relation_contracts import BTC_SENSITIVE_SYMBOLS
 from .portfolio import PortfolioSummary, Position, expects_kr_microstructure_signals
 
@@ -730,6 +731,7 @@ def research_evidence_facts(evidence_items: Iterable[Dict[str, object]]) -> Dict
         item
         for item in evidence_items or []
         if isinstance(item, dict) and str(item.get("kind") or "").lower() == "news"
+        and news_domain.relation_scope_is_investable(_evidence_scope(item))
     ]
     direct = [item for item in news_items if _evidence_scope(item) == "direct"]
     peer = [item for item in news_items if _evidence_scope(item) == "peer"]

@@ -10,6 +10,7 @@ from .notification_ai_context import (
     normalized_text,
     relation_facts,
 )
+from .news_analysis import relation_scope_is_excluded
 
 
 NEWS_DATE_KEYS = (
@@ -24,7 +25,7 @@ NEWS_DATE_KEYS = (
     "time_published",
     "timePublished",
 )
-LOW_QUALITY_RELATION_SCOPES = {"noise", "unrelated", "irrelevant"}
+LOW_QUALITY_RELATION_SCOPES = {"noise", "unrelated", "irrelevant", "platform_noise", "publisher_noise", "entity_mismatch", "low_confidence_context", "syndicated_duplicate"}
 MISLEADING_KEYWORDS_BY_SYMBOL = {
     "PLTR": {"전기차", "ev", "electric vehicle", "battery", "배터리"},
 }
@@ -122,7 +123,7 @@ def news_summary_candidate(item: Dict[str, object]) -> str:
 def news_item_quality_reason(item: Dict[str, object], context: Dict[str, object] = None) -> str:
     context = context or {}
     scope = str(news_item_value(item, "relationScope", "relation_scope") or "").strip().lower()
-    if scope in LOW_QUALITY_RELATION_SCOPES:
+    if scope in LOW_QUALITY_RELATION_SCOPES or relation_scope_is_excluded(scope):
         return "relationScope=" + scope
     relevance = news_item_number(item, "relevanceScore", "relevance_score")
     reliability = news_item_number(item, "sourceReliability", "confidence")

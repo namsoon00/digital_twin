@@ -8,7 +8,8 @@ from ..domain.accounts import AccountConfig
 from ..domain.events import DomainEvent, RESEARCH_EVIDENCE_COLLECTED
 from ..domain.market_data import number
 from ..domain.message_types import NEWS_DIGEST
-from ..domain.news_analysis import clean_article_summary_noise
+from ..domain.investment_research import NewsCollectionTarget
+from ..domain.news_analysis import analysis_payload_requires_refresh, classify_news_relevance, clean_article_summary_noise, relation_scope_is_investable
 from ..domain.notifications import NotificationJob, notification_debug_number
 from ..domain.portfolio import utc_now_iso
 
@@ -207,9 +208,44 @@ class NewsDigestEnqueuer:
         payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
         return normalized_score(item.get(key) if item.get(key) not in (None, "") else payload.get(key))
 
+    def item_relation_scope(self, item: Dict[str, object]) -> str:
+        payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+        return clean_text(item.get("relationScope") or payload.get("relationScope")).lower()
+
+    def refresh_item_analysis(self, item: Dict[str, object]) -> Dict[str, object]:
+        payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+        title = clean_text(item.get("title"))
+        merged_payload = {**payload, **{key: value for key, value in item.items() if key not in {"payload"}}}
+        if not analysis_payload_requires_refresh(merged_payload) or not title:
+            return item
+        symbol = normalized_symbol(item.get("symbol"))
+        target = NewsCollectionTarget(
+            symbol,
+            clean_text(item.get("name") or item.get("displayName") or symbol),
+            clean_text(item.get("market")),
+            clean_text(item.get("currency")),
+            clean_text(item.get("sector")),
+        )
+        analysis = classify_news_relevance(
+            target,
+            title,
+            item.get("summary") or item.get("articleSummaryKo") or title,
+            item.get("source") or item.get("domain") or "",
+            item.get("provider") or payload.get("provider") or "",
+        )
+        refreshed = dict(item)
+        refreshed_payload = dict(payload)
+        refreshed_payload.update(analysis)
+        refreshed["payload"] = refreshed_payload
+        for key, value in analysis.items():
+            refreshed[key] = value
+        return refreshed
+
     def item_passes_quality_gate(self, item: Dict[str, object]) -> bool:
         if not self.quality_gate_enabled():
             return True
+        if not relation_scope_is_investable(self.item_relation_scope(item)):
+            return False
         summary = item_summary(item)
         if not summary or "Comprehensive" in summary or "Google News입니다" in summary or "상승-으로-date" in summary:
             return False
@@ -246,7 +282,8 @@ class NewsDigestEnqueuer:
             raw_items = payload.get("changedItems") or []
         if not isinstance(raw_items, list):
             return []
-        items = [dict(item) for item in raw_items if isinstance(item, dict)]
+        items = [self.refresh_item_analysis(dict(item)) for item in raw_items if isinstance(item, dict)]
+        items = [item for item in items if relation_scope_is_investable(self.item_relation_scope(item))]
         if self.require_article_body():
             items = [item for item in items if article_read_status(item) == "body"]
         if self.quality_gate_enabled():

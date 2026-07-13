@@ -4,7 +4,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from digital_twin.domain.investment_research import NewsCollectionTarget, ResearchEvidence
+from digital_twin.domain.investment_research import NewsCollectionTarget, ResearchEvidence, research_evidence_from_facts
 from digital_twin.domain.news_analysis import (
     classify_news_relevance,
     classify_news_event_type,
@@ -12,6 +12,7 @@ from digital_twin.domain.news_analysis import (
     confidence_from_analysis_payload,
     impact_from_analysis_payload,
     korean_article_summary,
+    relation_scope_is_investable,
     source_reliability_score,
 )
 from digital_twin.domain.ontology_relation_reasoning import research_evidence_facts
@@ -48,9 +49,10 @@ class NewsAnalysisDomainTests(unittest.TestCase):
             "Google News KR",
         )
 
-        self.assertEqual("noise", analysis["relationScope"])
+        self.assertEqual("platform_noise", analysis["relationScope"])
         self.assertLess(analysis["relevanceScore"], 35)
-        self.assertIn("확인되지 않음", analysis["excludedReason"])
+        self.assertIn("플랫폼/블로그", analysis["excludedReason"])
+        self.assertFalse(relation_scope_is_investable(analysis["relationScope"]))
         self.assertEqual([], analysis["ontologyRelations"])
 
     def test_news_analysis_does_not_treat_naver_blog_source_as_naver_company_news(self):
@@ -64,9 +66,87 @@ class NewsAnalysisDomainTests(unittest.TestCase):
             "Google News KR",
         )
 
-        self.assertEqual("noise", analysis["relationScope"])
+        self.assertEqual("platform_noise", analysis["relationScope"])
         self.assertLess(analysis["relevanceScore"], 35)
         self.assertIn("플랫폼/블로그", analysis["excludedReason"])
+        self.assertEqual("Naver Blog", analysis["sourcePlatform"])
+        self.assertEqual("exclude", analysis["qualityGate"]["decision"])
+        self.assertTrue(any(item["role"] == "platform_reference" for item in analysis["entityLinks"]))
+
+    def test_news_analysis_excludes_naver_platform_suffix_even_with_material_event_keyword(self):
+        target = NewsCollectionTarget("035420", "NAVER", "KOSPI", "KRW", "플랫폼")
+
+        analysis = classify_news_relevance(
+            target,
+            "지배구조 변화 첫 메시지…카카오게임즈, 자사주 소각 카드 꺼냈다 : 네이버 블로그",
+            "RSS/제공 요약: 지배구조 변화 첫 메시지…카카오게임즈, 자사주 소각 카드 꺼냈다 : 네이버 블로그 Naver Blog.",
+            "Naver Blog",
+            "Google News KR",
+        )
+
+        self.assertEqual("platform_noise", analysis["relationScope"])
+        self.assertLess(analysis["relevanceScore"], 35)
+        self.assertEqual([], analysis["ontologyRelations"])
+        self.assertEqual("exclude", analysis["qualityGate"]["decision"])
+        self.assertFalse(analysis["directMention"])
+        self.assertTrue(any("카카오게임즈" in item.get("terms", []) for item in analysis["entityLinks"]))
+
+    def test_news_analysis_excludes_naver_premium_source_suffix_for_other_company_news(self):
+        target = NewsCollectionTarget("035420", "NAVER", "KOSPI", "KRW", "플랫폼")
+
+        analysis = classify_news_relevance(
+            target,
+            "SK하이닉스, 나스닥 데뷔 첫날 13% 급등 - 네이버 프리미엄콘텐츠",
+            "RSS/제공 요약: SK하이닉스, 나스닥 데뷔 첫날 13% 급등 네이버 프리미엄콘텐츠.",
+            "네이버 프리미엄콘텐츠",
+            "Google News KR",
+        )
+
+        self.assertEqual("platform_noise", analysis["relationScope"])
+        self.assertEqual("Naver Premium Contents", analysis["sourcePlatform"])
+        self.assertFalse(relation_scope_is_investable(analysis["relationScope"]))
+        self.assertTrue(any(item["role"] == "article_subject" and "SK하이닉스" in item.get("terms", []) for item in analysis["entityLinks"]))
+
+    def test_news_analysis_keeps_real_naver_company_article_as_direct(self):
+        target = NewsCollectionTarget("035420", "NAVER", "KOSPI", "KRW", "플랫폼")
+
+        analysis = classify_news_relevance(
+            target,
+            "Naver Invests in AI, Commerce; Kakao Streamlines for Profit Growth - 조선일보",
+            "Naver Invests in AI, Commerce; Kakao Streamlines for Profit Growth.",
+            "조선일보",
+            "Google News KR",
+        )
+
+        self.assertEqual("direct", analysis["relationScope"])
+        self.assertTrue(analysis["directMention"])
+        self.assertEqual("accept", analysis["qualityGate"]["decision"])
+        self.assertTrue(relation_scope_is_investable(analysis["relationScope"]))
+
+    def test_research_evidence_generation_skips_non_investable_platform_noise(self):
+        evidence = research_evidence_from_facts("035420", {
+            "symbol": "035420",
+            "name": "NAVER",
+            "sector": "플랫폼",
+            "newsHeadlines": {
+                "provider": "Google News KR",
+                "items": [{
+                    "title": "카카오게임즈, 자사주 소각 카드 꺼냈다 : 네이버 블로그",
+                    "summary": "카카오게임즈 자사주 소각 관련 블로그 글입니다.",
+                    "source": "Naver Blog",
+                    "provider": "Google News KR",
+                    "url": "https://blog.naver.com/example",
+                    "payload": {
+                        "analysisVersion": "news-analysis-v2-domain-ontology",
+                        "relationScope": "direct",
+                        "relevanceScore": 94,
+                        "materialityScore": 82,
+                    },
+                }],
+            },
+        })
+
+        self.assertEqual([], evidence)
 
     def test_ontology_news_facts_include_event_type_and_materiality(self):
         evidence = ResearchEvidence(

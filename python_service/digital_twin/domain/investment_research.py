@@ -173,6 +173,10 @@ class ResearchEvidence:
             "stockImpactPolarity": str(payload.get("stockImpactPolarity") or ""),
             "stockImpactScore": round(number(payload.get("stockImpactScore")), 1),
             "stockImpactReasonKo": str(payload.get("stockImpactReasonKo") or ""),
+            "sourceKind": str(payload.get("sourceKind") or ""),
+            "sourcePlatform": str(payload.get("sourcePlatform") or ""),
+            "entityLinks": list(payload.get("entityLinks") or []),
+            "qualityGate": dict(payload.get("qualityGate") or {}),
             "payload": payload,
         }
 
@@ -365,10 +369,16 @@ def research_evidence_from_payload(payload: Dict[str, object], fallback_symbol: 
         "stockImpactPolarity",
         "stockImpactScore",
         "stockImpactReasonKo",
+        "normalizedTitle",
+        "normalizedSummary",
+        "sourceKind",
+        "sourcePlatform",
+        "entityLinks",
+        "qualityGate",
     ]:
         if key in source_payload and key not in raw_payload:
             raw_payload[key] = source_payload.get(key)
-    if kind == "news" and title and not raw_payload.get("analysisVersion"):
+    if kind == "news" and title and news_domain.analysis_payload_requires_refresh(raw_payload):
         target = NewsCollectionTarget(
             symbol,
             str(source_payload.get("name") or source_payload.get("companyName") or symbol).strip(),
@@ -378,7 +388,7 @@ def research_evidence_from_payload(payload: Dict[str, object], fallback_symbol: 
         )
         analysis = classify_news_relevance(target, title, source_payload.get("summary") or title, source, source_payload.get("provider") or raw_payload.get("provider") or "")
         for key, value in analysis.items():
-            raw_payload.setdefault(key, value)
+            raw_payload[key] = value
     polarity = str(source_payload.get("polarity") or "").strip()
     if kind == "news" and not polarity:
         polarity, _unused_impact = keyword_polarity(title + " " + str(source_payload.get("summary") or ""))
@@ -573,7 +583,7 @@ def research_evidence_from_facts(symbol: str, facts: Dict[str, object]) -> List[
         ]:
             if key in item and key not in raw_payload:
                 raw_payload[key] = item.get(key)
-        if not raw_payload.get("relationScope"):
+        if news_domain.analysis_payload_requires_refresh(raw_payload):
             raw_payload.update(classify_news_relevance(
                 target,
                 title,
@@ -581,7 +591,7 @@ def research_evidence_from_facts(symbol: str, facts: Dict[str, object]) -> List[
                 source,
                 item.get("provider") or news.get("provider") or "",
             ))
-        if raw_payload.get("relationScope") == "noise":
+        if not news_domain.relation_scope_is_investable(raw_payload.get("relationScope")):
             continue
         confidence = news_domain.confidence_from_analysis_payload(raw_payload)
         evidence.append(ResearchEvidence(
@@ -619,7 +629,11 @@ def research_evidence_from_external_signals(symbol: str, external_signals: Dict[
     stored_items = stored_group.get(normalized_symbol) if isinstance(stored_group.get(normalized_symbol), list) else []
     for item in stored_items:
         if isinstance(item, dict) and item.get("title"):
-            evidence.append(research_evidence_from_payload(item, normalized_symbol))
+            parsed = research_evidence_from_payload(item, normalized_symbol)
+            payload = parsed.raw_payload if isinstance(parsed.raw_payload, dict) else {}
+            if parsed.kind == "news" and not news_domain.relation_scope_is_investable(payload.get("relationScope")):
+                continue
+            evidence.append(parsed)
     quote = (external_signals.get("equityQuotes") or {}).get(normalized_symbol) if isinstance(external_signals.get("equityQuotes"), dict) else {}
     if isinstance(quote, dict) and quote:
         change = number(quote.get("changePercent"))
@@ -674,8 +688,9 @@ def support_risk_scores(evidence: List[ResearchEvidence], relation_context: Dict
             "sector": 0.48,
             "market": 0.28,
             "context": 0.5,
-            "noise": 0.0,
         }.get(scope, 0.5)
+        if not news_domain.relation_scope_is_investable(scope) and scope != "context":
+            scope_weight = 0.0
         relevance = clamp(number(payload.get("relevanceScore")) / 100, 0.25, 1.0) if payload.get("relevanceScore") not in (None, "") else 0.75
         reliability = clamp(number(payload.get("sourceReliability")) or number(item.confidence) or 0.55, 0.35, 0.95)
         return round(scope_weight * (0.5 + relevance * 0.5) * (0.7 + reliability * 0.3), 4)

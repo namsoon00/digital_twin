@@ -245,13 +245,13 @@ class NewsSourceGateway:
         metadata: Dict[str, object] = None,
     ) -> Optional[ResearchEvidence]:
         preliminary = classify_news_relevance(target, title, feed_summary or title, source, provider)
-        if number(preliminary.get("relevanceScore")) < self.min_relevance_score() or preliminary.get("relationScope") == "noise":
+        if number(preliminary.get("relevanceScore")) < self.min_relevance_score() or not news_domain.relation_scope_is_investable(preliminary.get("relationScope")):
             return None
         article_source_allowed = article_body_allowed_for_source(source, provider)
         article_text = self.article_text_for_url(link) if article_source_allowed else ""
         analysis_text = article_text or feed_summary or title
         relevance = classify_news_relevance(target, title, analysis_text, source, provider)
-        if number(relevance.get("relevanceScore")) < self.min_relevance_score() or relevance.get("relationScope") == "noise":
+        if number(relevance.get("relevanceScore")) < self.min_relevance_score() or not news_domain.relation_scope_is_investable(relevance.get("relationScope")):
             return None
         polarity, impact = keyword_polarity(title + " " + analysis_text)
         confidence = news_domain.confidence_from_analysis_payload(relevance)

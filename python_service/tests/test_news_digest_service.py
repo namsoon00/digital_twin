@@ -166,6 +166,41 @@ class NewsDigestEnqueuerTests(unittest.TestCase):
 
         self.assertEqual([], queue.jobs)
 
+    def test_reclassifies_and_ignores_stale_platform_noise_even_when_quality_gate_is_relaxed(self):
+        queue = MemoryNotificationQueue()
+        platform_noise = self.evidence()
+        platform_noise.source = "Naver Blog"
+        platform_noise.title = "카카오게임즈, 자사주 소각 카드 꺼냈다 : 네이버 블로그"
+        platform_noise.raw_payload.update({
+            "analysisVersion": "news-analysis-v2-domain-ontology",
+            "relationScope": "direct",
+            "relevanceScore": 95,
+            "sourceReliability": 82,
+            "materialityScore": 90,
+            "stockImpactPolarity": "support",
+            "stockImpactLabel": "호재",
+            "articleReadStatus": "body",
+            "qualityGate": {
+                "decision": "accept",
+                "reason": "",
+            },
+        })
+        event = DomainEvent(
+            name=RESEARCH_EVIDENCE_COLLECTED,
+            aggregate_id="news:AAPL",
+            payload={
+                "materialChangedItems": [platform_noise.to_dict()],
+                "materialChangedSymbols": ["AAPL"],
+                "materialChangedCount": 1,
+            },
+        )
+        enqueuer = self.enqueuer(queue)
+        enqueuer.settings["newsDigestHighQualityOnly"] = "0"
+
+        enqueuer.handle(event)
+
+        self.assertEqual([], queue.jobs)
+
     def test_rendered_news_digest_does_not_append_generic_ai_sections(self):
         queue = MemoryNotificationQueue()
         event = DomainEvent(

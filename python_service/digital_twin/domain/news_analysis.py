@@ -5,7 +5,7 @@ from typing import Dict, Iterable, List, Tuple
 from .market_data import clamp, number
 
 
-NEWS_ANALYSIS_VERSION = "news-analysis-v2-domain-ontology"
+NEWS_ANALYSIS_VERSION = "news-analysis-v3-entity-linking"
 ARTICLE_DIGEST_VERSION = "article-digest-ko-v3"
 
 SUPPORT_KEYWORDS = (
@@ -89,10 +89,29 @@ KNOWN_COMPANY_ALIASES = {
 PEER_ALIASES = {
     "005930": ["SK하이닉스", "SK Hynix", "Micron", "TSMC"],
     "000660": ["삼성전자", "Samsung Electronics", "Micron", "TSMC"],
+    "035420": ["카카오", "Kakao", "카카오게임즈", "Kakao Games"],
     "AAPL": ["Samsung Electronics", "Microsoft", "Google", "Alphabet"],
     "NVDA": ["AMD", "Broadcom", "Intel", "TSMC"],
     "TSLA": ["BYD", "Rivian", "Lucid", "Hyundai Motor"],
 }
+
+EXTRA_COMPANY_ALIASES = [
+    "카카오",
+    "Kakao",
+    "카카오게임즈",
+    "Kakao Games",
+    "SK하이닉스",
+    "SK Hynix",
+    "삼성전자",
+    "Samsung Electronics",
+    "현대차",
+    "현대자동차",
+    "Hyundai Motor",
+    "Apple",
+    "NVIDIA",
+    "Tesla",
+    "Palantir",
+]
 
 SECTOR_TOPIC_KEYWORDS = {
     "semiconductor": ["반도체", "메모리", "memory", "HBM", "DRAM", "D램", "NAND", "AI chip", "chip", "foundry"],
@@ -143,6 +162,57 @@ SOCIAL_SOURCE_TERMS = [
     "tiktok",
 ]
 LOW_RELIABILITY_SOURCE_TERMS = ["blog", "블로그", "cafe", "reddit", "rumor", *SOCIAL_SOURCE_TERMS]
+INVESTABLE_RELATION_SCOPES = {"direct", "peer", "sector", "market"}
+NON_INVESTABLE_RELATION_SCOPES = {
+    "noise",
+    "platform_noise",
+    "publisher_noise",
+    "entity_mismatch",
+    "low_confidence_context",
+    "syndicated_duplicate",
+}
+PLATFORM_SOURCE_TERMS = [
+    "naver blog",
+    "blog.naver",
+    "네이버 블로그",
+    "네이버블로그",
+    "naver post",
+    "post.naver",
+    "네이버 포스트",
+    "네이버포스트",
+    "naver premium",
+    "premium.naver",
+    "contents.premium.naver",
+    "네이버 프리미엄콘텐츠",
+    "네이버 프리미엄 콘텐츠",
+    "네이버프리미엄콘텐츠",
+]
+PUBLISHER_PLATFORM_LABELS = {
+    "naver blog": "Naver Blog",
+    "blog.naver": "Naver Blog",
+    "네이버 블로그": "Naver Blog",
+    "네이버블로그": "Naver Blog",
+    "naver post": "Naver Post",
+    "post.naver": "Naver Post",
+    "네이버 포스트": "Naver Post",
+    "네이버포스트": "Naver Post",
+    "naver premium": "Naver Premium Contents",
+    "premium.naver": "Naver Premium Contents",
+    "contents.premium.naver": "Naver Premium Contents",
+    "네이버 프리미엄콘텐츠": "Naver Premium Contents",
+    "네이버 프리미엄 콘텐츠": "Naver Premium Contents",
+    "네이버프리미엄콘텐츠": "Naver Premium Contents",
+}
+PLATFORM_TRAILING_PATTERNS = [
+    r"\s*[:：]\s*네이버\s*블로그\s*$",
+    r"\s*[-–—]\s*네이버\s*블로그\s*$",
+    r"\s*[-–—]\s*네이버\s*포스트\s*$",
+    r"\s*[-–—]\s*네이버\s*프리미엄\s*콘텐츠\s*$",
+    r"\s*[-–—]\s*네이버\s*프리미엄콘텐츠\s*$",
+    r"\s*[-–—]\s*Naver\s+Blog\s*$",
+    r"\s*[-–—]\s*Naver\s+Post\s*$",
+    r"\s*[-–—]\s*Naver\s+Premium(?:\s+Contents?)?\s*$",
+]
 HIGH_RELIABILITY_SOURCE_TERMS = [
     "dart",
     "sec",
@@ -200,6 +270,11 @@ RELATION_SCOPE_LABELS = {
     "sector": "업종 뉴스",
     "market": "시장 환경 뉴스",
     "noise": "투자 관련 낮음",
+    "platform_noise": "게시 플랫폼명 매칭 제외",
+    "publisher_noise": "출처명 매칭 제외",
+    "entity_mismatch": "다른 회사 뉴스",
+    "low_confidence_context": "낮은 신뢰도 참고",
+    "syndicated_duplicate": "중복 기사",
 }
 
 TOPIC_LABELS = [
@@ -253,6 +328,12 @@ class NewsAnalysis:
     market_topics: List[str] = field(default_factory=list)
     direct_mention: bool = False
     excluded_reason: str = ""
+    normalized_title: str = ""
+    normalized_summary: str = ""
+    source_kind: str = "publisher"
+    source_platform: str = ""
+    entity_links: List[Dict[str, object]] = field(default_factory=list)
+    quality_gate: Dict[str, object] = field(default_factory=dict)
 
     def confidence(self) -> float:
         if self.excluded_reason:
@@ -281,6 +362,12 @@ class NewsAnalysis:
             "ontologyRelations": list(self.ontology_relations),
             "excludedReason": self.excluded_reason,
             "analysisSummary": self.summary(),
+            "normalizedTitle": self.normalized_title,
+            "normalizedSummary": self.normalized_summary,
+            "sourceKind": self.source_kind,
+            "sourcePlatform": self.source_platform,
+            "entityLinks": list(self.entity_links),
+            "qualityGate": dict(self.quality_gate or {}),
         }
 
     def summary(self) -> str:
@@ -290,6 +377,11 @@ class NewsAnalysis:
             "sector": "업종 뉴스",
             "market": "시장 환경 뉴스",
             "noise": "투자 관련 낮음",
+            "platform_noise": "게시 플랫폼명 매칭 제외",
+            "publisher_noise": "출처명 매칭 제외",
+            "entity_mismatch": "다른 회사 뉴스",
+            "low_confidence_context": "낮은 신뢰도 참고",
+            "syndicated_duplicate": "중복 기사",
         }.get(self.relation_scope, self.relation_scope)
         event = {
             "earnings": "실적",
@@ -351,6 +443,119 @@ def event_type_label(event_type: object) -> str:
 
 def relation_scope_label(scope: object) -> str:
     return RELATION_SCOPE_LABELS.get(str(scope or ""), str(scope or "뉴스"))
+
+
+def relation_scope_is_investable(scope: object) -> bool:
+    return str(scope or "").strip().lower() in INVESTABLE_RELATION_SCOPES
+
+
+def relation_scope_is_excluded(scope: object) -> bool:
+    text = str(scope or "").strip().lower()
+    return bool(text) and text not in INVESTABLE_RELATION_SCOPES
+
+
+def analysis_payload_requires_refresh(payload: Dict[str, object]) -> bool:
+    payload = payload if isinstance(payload, dict) else {}
+    version = str(payload.get("analysisVersion") or "").strip()
+    return (bool(version) and version != NEWS_ANALYSIS_VERSION) or not str(payload.get("relationScope") or "").strip()
+
+
+def source_identity(source: object, provider: object = "") -> Dict[str, object]:
+    source_text = str(source or "").strip()
+    provider_text = str(provider or "").strip()
+    lowered = _lower_text(source_text + " " + provider_text)
+    platform = ""
+    for term, label in PUBLISHER_PLATFORM_LABELS.items():
+        if term in lowered:
+            platform = label
+            break
+    source_kind = "platform" if platform else "publisher"
+    return {
+        "sourceKind": source_kind,
+        "sourcePlatform": platform,
+        "sourceName": source_text,
+        "providerName": provider_text,
+        "isPlatformSource": bool(platform),
+    }
+
+
+def strip_platform_source_markers(value: object) -> str:
+    text = compact_text(value, 900)
+    if not text:
+        return ""
+    for pattern in PLATFORM_TRAILING_PATTERNS:
+        text = re.sub(pattern, "", text, flags=re.IGNORECASE).strip()
+    for term in PLATFORM_SOURCE_TERMS:
+        text = re.sub(r"(?<![A-Za-z0-9가-힣])" + re.escape(term) + r"(?![A-Za-z0-9가-힣])", " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s+", " ", text).strip(" .:-")
+    return text
+
+
+def normalized_article_title(value: object) -> str:
+    return strip_platform_source_markers(clean_article_title(value))
+
+
+def article_primary_clause(value: object) -> str:
+    text = normalized_article_title(value)
+    if not text:
+        return ""
+    parts = re.split(r"\s*[,:：;；|]\s+|\s+[-–—]\s+", text, maxsplit=1)
+    return str(parts[0] if parts else text).strip()
+
+
+def global_company_aliases(exclude_symbol: object = "") -> List[str]:
+    exclude = str(exclude_symbol or "").upper().strip()
+    rows: List[str] = []
+    for symbol, aliases in KNOWN_COMPANY_ALIASES.items():
+        if str(symbol or "").upper() == exclude:
+            continue
+        rows.extend(aliases)
+    rows.extend(EXTRA_COMPANY_ALIASES)
+    return _unique_texts(rows)
+
+
+def entity_link_rows(
+    target: object,
+    title: object,
+    summary: object,
+    source: object,
+    provider: object,
+    direct_title: Iterable[str],
+    direct_body: Iterable[str],
+    peer_hits: Iterable[str],
+    other_company_hits: Iterable[str],
+    platform_alias_hits: Iterable[str],
+) -> List[Dict[str, object]]:
+    rows: List[Dict[str, object]] = []
+    symbol = target_symbol(target)
+
+    def add(entity: str, role: str, terms: Iterable[str], confidence: float, reason: str = "") -> None:
+        clean_terms = _unique_texts(terms)
+        if not entity or not clean_terms:
+            return
+        rows.append({
+            "entity": entity,
+            "role": role,
+            "terms": clean_terms,
+            "confidence": round(clamp(confidence, 0.0, 1.0), 2),
+            "reason": reason,
+        })
+
+    add(symbol, "target_subject", direct_title, 0.95, "제목 본문 영역에서 대상 종목명이 확인됨")
+    add(symbol, "target_context", direct_body, 0.72, "요약/본문 영역에서 대상 종목명이 확인됨")
+    add(symbol, "platform_reference", platform_alias_hits, 0.15, "회사명이 아니라 게시 플랫폼/출처명에서 감지됨")
+    add("peer_or_other_company", "peer_context", peer_hits, 0.62, "비교 기업 또는 동종 기업명이 확인됨")
+    add("other_company", "article_subject", other_company_hits, 0.78, "기사 제목의 주어가 다른 회사로 보임")
+    identity = source_identity(source, provider)
+    if identity.get("sourcePlatform"):
+        rows.append({
+            "entity": str(identity.get("sourcePlatform")),
+            "role": "publishing_platform",
+            "terms": [str(identity.get("sourcePlatform"))],
+            "confidence": 0.98,
+            "reason": "출처/게시 플랫폼으로 정규화됨",
+        })
+    return rows
 
 
 def target_symbol(target: object) -> str:
@@ -858,7 +1063,7 @@ def classify_news_event_type(title: object, summary: object = "") -> str:
 
 
 def ontology_relations_for_news(scope: str, polarity: str, event_type: str) -> List[Dict[str, object]]:
-    if scope == "noise":
+    if not relation_scope_is_investable(scope):
         return []
     relations: List[Dict[str, object]] = [{
         "type": "NEWS_CONTEXT_FOR",
@@ -886,10 +1091,28 @@ def platform_source_only_noise(
     symbol = target_symbol(target)
     text = _lower_text(str(title or "") + " " + str(summary or "") + " " + str(source or ""))
     if symbol == "035420" and direct_hits:
-        platform_markers = ["naver blog", "네이버 블로그", "네이버 프리미엄콘텐츠", "네이버 포스트"]
-        if any(marker in text for marker in platform_markers) and not list(topic_hits or []) and event_type == "general":
+        if any(marker in text for marker in PLATFORM_SOURCE_TERMS) and not list(topic_hits or []):
             return True
     return False
+
+
+def low_confidence_platform_context(
+    source: object,
+    provider: object,
+    direct_hits: Iterable[str],
+) -> bool:
+    identity = source_identity(source, provider)
+    return bool(identity.get("isPlatformSource") and list(direct_hits or []))
+
+
+def other_company_subject_hits(target: object, title: object) -> List[str]:
+    primary = article_primary_clause(title)
+    if not primary:
+        return []
+    target_hits = matched_terms(primary, target_aliases(target))
+    if target_hits:
+        return []
+    return matched_terms(primary, global_company_aliases(target_symbol(target)))
 
 def ambiguous_company_alias_noise(
     target: object,
@@ -949,27 +1172,45 @@ def analyze_news_item(
 ) -> NewsAnalysis:
     title_text = str(title or "")
     summary_text = str(summary or "")
-    combined = title_text + " " + summary_text
+    normalized_title = normalized_article_title(title_text)
+    normalized_summary = strip_platform_source_markers(summary_text)
+    combined = normalized_title + " " + normalized_summary
     aliases = target_aliases(target)
     peers = peer_aliases(target)
     topics = sector_topic_keywords(target)
-    direct_title = matched_terms(title_text, aliases)
-    direct_body = matched_terms(summary_text, aliases)
+    raw_direct_hits = matched_terms(title_text + " " + summary_text + " " + str(source or ""), aliases)
+    direct_title = matched_terms(normalized_title, aliases)
+    direct_body = matched_terms(normalized_summary, aliases)
+    direct_keys = {_lower_text(item) for item in _unique_texts([*direct_title, *direct_body])}
+    platform_alias_hits = [item for item in raw_direct_hits if _lower_text(item) not in direct_keys]
     peer_hits = matched_terms(combined, peers)
     topic_hits = matched_terms(combined, topics)
     market_hits = matched_terms(combined, MARKET_TOPIC_KEYWORDS)
+    other_subject_hits = other_company_subject_hits(target, normalized_title)
+    identity = source_identity(source, provider)
     reliability = source_reliability_score(source, provider)
     event_type = classify_news_event_type(title_text, summary_text)
     polarity, impact = keyword_polarity(combined)
-    platform_only = platform_source_only_noise(target, title_text, summary_text, source, [*direct_title, *direct_body], topic_hits, event_type)
+    platform_reference_only = target_symbol(target) == "035420" and bool(platform_alias_hits) and not direct_title and not direct_body
+    platform_only = platform_reference_only or platform_source_only_noise(target, title_text, summary_text, source, [*direct_title, *direct_body], topic_hits, event_type)
     alias_noise = ambiguous_company_alias_noise(target, title_text, summary_text, [*direct_title, *direct_body], topic_hits, event_type)
+    low_confidence_platform = low_confidence_platform_context(source, provider, [*direct_title, *direct_body])
     social_feed = source_is_social_feed(source, provider)
 
     score = 24.0
     scope = "noise"
-    if platform_only or alias_noise:
+    if platform_only:
+        score = 16.0
+        scope = "platform_noise"
+    elif alias_noise:
         score = 18.0
         scope = "noise"
+    elif low_confidence_platform:
+        score = 42.0
+        scope = "low_confidence_context"
+    elif other_subject_hits and not direct_title:
+        score = 26.0
+        scope = "entity_mismatch"
     elif direct_title:
         score = 95.0
         scope = "direct"
@@ -989,11 +1230,13 @@ def analyze_news_item(
         score = 40.0
         scope = "market"
 
-    if scope != "noise":
+    if relation_scope_is_investable(scope):
         score += max(-8.0, min(8.0, (reliability - 0.6) * 25.0))
     score = clamp(score, 0.0, 100.0)
     if social_feed and scope == "direct":
         score = min(score, 62.0)
+    if identity.get("isPlatformSource") and scope == "direct":
+        score = min(score, 58.0)
     materiality = clamp(
         score * 0.45
         + reliability * 30
@@ -1007,8 +1250,33 @@ def analyze_news_item(
         excluded_reason = "회사 뉴스가 아니라 플랫폼/블로그 출처명이 종목명처럼 잡힌 항목"
     elif alias_noise:
         excluded_reason = "회사 뉴스가 아니라 일반 명사 별칭이 종목명처럼 잡힌 항목"
-    elif scope == "noise":
+    elif low_confidence_platform:
+        excluded_reason = "블로그/플랫폼 출처의 낮은 신뢰도 직접 언급은 투자 판단 근거에서 제외"
+    elif scope == "entity_mismatch":
+        excluded_reason = "기사 제목의 핵심 주어가 대상 종목이 아니라 " + ", ".join(other_subject_hits[:3]) + "로 보임"
+    elif not relation_scope_is_investable(scope):
         excluded_reason = "종목명, 비교 기업, 업종, 시장 주제가 기사 제목/요약에서 확인되지 않음"
+    entity_links = entity_link_rows(
+        target,
+        normalized_title,
+        normalized_summary,
+        source,
+        provider,
+        direct_title,
+        direct_body,
+        peer_hits,
+        other_subject_hits,
+        platform_alias_hits,
+    )
+    quality_gate = {
+        "stage": "entity-linking",
+        "decision": "accept" if relation_scope_is_investable(scope) else "exclude",
+        "reason": excluded_reason,
+        "relationScope": scope,
+        "sourceKind": str(identity.get("sourceKind") or "publisher"),
+        "sourcePlatform": str(identity.get("sourcePlatform") or ""),
+        "targetSubjectConfirmed": bool(direct_title),
+    }
     return NewsAnalysis(
         relevance_score=round(score, 1),
         relation_scope=scope,
@@ -1022,6 +1290,12 @@ def analyze_news_item(
         market_topics=market_hits[:8],
         direct_mention=bool(direct_title or direct_body),
         excluded_reason=excluded_reason,
+        normalized_title=normalized_title,
+        normalized_summary=normalized_summary,
+        source_kind=str(identity.get("sourceKind") or "publisher"),
+        source_platform=str(identity.get("sourcePlatform") or ""),
+        entity_links=entity_links,
+        quality_gate=quality_gate,
     )
 
 

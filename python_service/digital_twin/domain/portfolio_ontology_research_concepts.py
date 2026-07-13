@@ -2,6 +2,7 @@ from typing import Dict, List
 
 from .investment_research import research_evidence_from_external_signals, research_evidence_from_facts
 from .market_data import number
+from . import news_analysis as news_domain
 from .ontology_contracts import OntologyEvidence, PortfolioOntology
 from .ontology_schema import add_entity, add_relation
 
@@ -58,6 +59,10 @@ def event_relation_properties(item: object) -> Dict[str, object]:
         "ontologyRelations",
         "analysisSummary",
         "analysisVersion",
+        "sourceKind",
+        "sourcePlatform",
+        "entityLinks",
+        "qualityGate",
     ]:
         if key in raw_payload:
             props[key] = raw_payload.get(key)
@@ -158,6 +163,8 @@ def add_research_evidence_concepts(
     for item in evidence_by_id.values():
         raw_payload = item.raw_payload if isinstance(item.raw_payload, dict) else {}
         relation_scope = str(raw_payload.get("relationScope") or "").lower().strip()
+        if item.kind == "news" and not news_domain.relation_scope_is_investable(relation_scope):
+            continue
         materiality_passed = raw_payload.get("materialityPassed") if "materialityPassed" in raw_payload else None
         if materiality_passed is None and raw_payload.get("materialityScore") is not None:
             materiality_passed = number(raw_payload.get("materialityScore")) >= 65
@@ -195,6 +202,9 @@ def add_research_evidence_concepts(
             "materialityPassed": materiality_passed,
             "analysisSummary": raw_payload.get("analysisSummary"),
             "analysisVersion": raw_payload.get("analysisVersion"),
+            "sourceKind": raw_payload.get("sourceKind"),
+            "sourcePlatform": raw_payload.get("sourcePlatform"),
+            "qualityGate": raw_payload.get("qualityGate"),
         })
         graph.evidence.append(OntologyEvidence(
             item.evidence_id,

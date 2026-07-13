@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from typing import Dict, Iterable, List
 
 from .market_data import number
+from . import news_analysis as news_domain
 
 
 DISABLED_VALUES = {"0", "false", "no", "off", "disabled"}
@@ -186,8 +187,8 @@ def evidence_materiality(
     if not truthy(settings.get("materialityGateEnabled"), True):
         return disabled_assessment(symbol, "research-evidence-update", ["researchEvidence"])
     scope = str(payload.get("relationScope") or "").strip() or "context"
-    if scope == "noise":
-        return MaterialityAssessment(symbol, "research-evidence-update", 0.0, threshold, False, "record", "뉴스 관련성 분류가 noise입니다.")
+    if scope != "context" and not news_domain.relation_scope_is_investable(scope):
+        return MaterialityAssessment(symbol, "research-evidence-update", 0.0, threshold, False, "record", "뉴스 관련성 분류가 " + scope + "입니다.")
     relevance = number(payload.get("relevanceScore"))
     reliability = number(payload.get("sourceReliability"))
     materiality = number(payload.get("materialityScore"))

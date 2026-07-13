@@ -333,6 +333,10 @@
   ];
   var settingsMemoryStore = "";
   var snapshotMemoryStore = "";
+  var researchEvidenceMemoryStore = "";
+  var symbolUniverseMemoryStore = "";
+  var DEFAULT_RESEARCH_EVIDENCE_LIMIT = "30";
+  var DEFAULT_SYMBOL_UNIVERSE_LIMIT = 40;
   var staticBuildConfigPromise = null;
   var watchSuggestTimer = null;
   var watchSuggestRequestId = 0;
@@ -362,7 +366,7 @@
     researchEvidence: null,
     researchEvidenceLoading: false,
     researchEvidenceError: "",
-    researchEvidenceFilters: { symbol: "", kind: "", limit: "80" },
+    researchEvidenceFilters: { symbol: "", kind: "", limit: DEFAULT_RESEARCH_EVIDENCE_LIMIT },
     researchEvidenceDeleting: "",
     expandedFeedDetail: "",
     expandedResearchEvidenceKey: "",
@@ -481,7 +485,7 @@
     symbolUniverseQuery: "",
     symbolUniverseMarket: "",
     symbolUniverseOffset: 0,
-    symbolUniverseLimit: 80,
+    symbolUniverseLimit: DEFAULT_SYMBOL_UNIVERSE_LIMIT,
     activeSymbolUniverseKey: "",
     monitoringDetail: null,
     workDetailLayer: null,
@@ -557,6 +561,27 @@
       var payload = JSON.stringify(snapshot);
       snapshotMemoryStore = payload;
       return writeSessionPayload("orbitAlphaLastSnapshot", payload);
+    } catch (error) {
+      return false;
+    }
+  }
+
+  function loadCachedPayload(key, fallback) {
+    var raw = readSessionPayload(key, fallback || "");
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw);
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function writeCachedPayload(key, payload, memorySetter) {
+    if (!payload || typeof payload !== "object") return false;
+    try {
+      var serialized = JSON.stringify(payload);
+      if (typeof memorySetter === "function") memorySetter(serialized);
+      return writeSessionPayload(key, serialized);
     } catch (error) {
       return false;
     }
@@ -4091,7 +4116,7 @@
       var queryOk = !query || String(item.symbol || "").toUpperCase().indexOf(query) >= 0 || String(item.name || "").toUpperCase().indexOf(query) >= 0;
       return marketOk && queryOk;
     });
-    var limit = Math.max(1, Math.min(500, Number(state.symbolUniverseLimit || 80)));
+    var limit = Math.max(1, Math.min(500, Number(state.symbolUniverseLimit || DEFAULT_SYMBOL_UNIVERSE_LIMIT)));
     var offset = Math.max(0, Number(state.symbolUniverseOffset || 0));
     return {
       items: filtered.slice(offset, offset + limit),
@@ -4122,7 +4147,7 @@
       items: Array.isArray(payload.items) ? payload.items : [],
       summary: payload.summary || { markets: [], sources: [], total: 0, maxAgeHours: 24 },
       resultTotal: Number(payload.resultTotal || 0),
-      limit: Number(payload.limit || state.symbolUniverseLimit || 80),
+      limit: Number(payload.limit || state.symbolUniverseLimit || DEFAULT_SYMBOL_UNIVERSE_LIMIT),
       offset: Number(payload.offset || state.symbolUniverseOffset || 0),
       hasMore: Boolean(payload.hasMore)
     };
@@ -4136,12 +4161,27 @@
     var params = new URLSearchParams();
     if (state.symbolUniverseQuery) params.set("query", state.symbolUniverseQuery);
     if (state.symbolUniverseMarket) params.set("market", state.symbolUniverseMarket);
-    params.set("limit", String(state.symbolUniverseLimit || 80));
+    params.set("limit", String(state.symbolUniverseLimit || DEFAULT_SYMBOL_UNIVERSE_LIMIT));
     params.set("offset", String(state.symbolUniverseOffset || 0));
     return "/api/symbol-universe?" + params.toString();
   }
 
+  function loadCachedSymbolUniverse() {
+    return loadCachedPayload("orbitAlphaSymbolUniverse", symbolUniverseMemoryStore);
+  }
+
+  function writeCachedSymbolUniverse(payload) {
+    return writeCachedPayload("orbitAlphaSymbolUniverse", payload, function (serialized) {
+      symbolUniverseMemoryStore = serialized;
+    });
+  }
+
   function loadSymbolUniverse() {
+    var cached = loadCachedSymbolUniverse();
+    if (cached && (!state.symbolUniverseLoaded || !(state.symbolUniverse.items || []).length)) {
+      applySymbolUniverse(cached);
+      if (state.snapshot) render();
+    }
     state.symbolUniverseLoading = true;
     state.symbolUniverseError = "";
     if (isStaticPreviewHost()) {
@@ -4152,10 +4192,15 @@
     return requestJson(symbolUniversePath())
       .then(function (payload) {
         applySymbolUniverse(payload);
+        writeCachedSymbolUniverse(payload);
       })
       .catch(function (error) {
-        state.symbolUniverseError = error.message || "종목 유니버스를 읽지 못했습니다.";
-        applySymbolUniverse(defaultSymbolUniversePayload());
+        var message = error.message || "종목 유니버스를 읽지 못했습니다.";
+        state.symbolUniverseError = message;
+        if (!(state.symbolUniverse.items || []).length) {
+          applySymbolUniverse(cached || defaultSymbolUniversePayload());
+          state.symbolUniverseError = message;
+        }
       })
       .finally(function () {
         state.symbolUniverseLoading = false;
@@ -4388,7 +4433,7 @@
       summary: { total: 0, latestSeenAt: "", bySymbol: [], byKind: [], bySource: [], byPolarity: [] },
       symbol: "",
       kind: "",
-      limit: Number(state.researchEvidenceFilters.limit || 80)
+      limit: Number(state.researchEvidenceFilters.limit || DEFAULT_RESEARCH_EVIDENCE_LIMIT)
     };
   }
 
@@ -4423,7 +4468,7 @@
     var params = new URLSearchParams();
     var symbol = resolveResearchEvidenceSymbol(filters.symbol);
     var kind = String(filters.kind || "").trim();
-    var limit = String(filters.limit || "80").trim();
+    var limit = String(filters.limit || DEFAULT_RESEARCH_EVIDENCE_LIMIT).trim();
     if (symbol) params.set("symbol", symbol);
     if (kind) params.set("kind", kind);
     if (limit) params.set("limit", limit);
@@ -4461,14 +4506,29 @@
       },
       symbol: "005930",
       kind: "",
-      limit: 80,
+      limit: Number(DEFAULT_RESEARCH_EVIDENCE_LIMIT),
       preview: true
     };
+  }
+
+  function loadCachedResearchEvidence() {
+    return loadCachedPayload("orbitAlphaResearchEvidence", researchEvidenceMemoryStore);
+  }
+
+  function writeCachedResearchEvidence(payload) {
+    return writeCachedPayload("orbitAlphaResearchEvidence", payload, function (serialized) {
+      researchEvidenceMemoryStore = serialized;
+    });
   }
 
   function loadResearchEvidence(force) {
     if (state.researchEvidenceLoading) return Promise.resolve();
     if (state.researchEvidence && !force) return Promise.resolve(state.researchEvidence);
+    var cached = loadCachedResearchEvidence();
+    if (cached && !state.researchEvidence) {
+      state.researchEvidence = cached;
+      render();
+    }
     state.researchEvidenceLoading = true;
     state.researchEvidenceError = "";
     render();
@@ -4481,9 +4541,11 @@
       .then(function (payload) {
         state.researchEvidence = payload;
         state.researchEvidenceError = "";
+        writeCachedResearchEvidence(payload);
       })
       .catch(function (error) {
         state.researchEvidenceError = error.message || "저장된 근거를 불러오지 못했습니다.";
+        if (!state.researchEvidence && cached) state.researchEvidence = cached;
       })
       .finally(function () {
         state.researchEvidenceLoading = false;
@@ -4501,6 +4563,7 @@
     return sendJson("/api/research-evidence/" + encodeURIComponent(id) + researchEvidenceQueryString(), "DELETE", {})
       .then(function (payload) {
         state.researchEvidence = payload;
+        writeCachedResearchEvidence(payload);
         showSnackbar(payload.deleted ? "리서치 근거를 삭제했습니다." : "삭제할 근거를 찾지 못했습니다.", payload.deleted ? "success" : "danger");
       })
       .catch(function (error) {
@@ -14344,7 +14407,7 @@
     var markets = summary.markets || [];
     var sources = summary.sources || [];
     var marketData = summary.marketData || {};
-    var limit = Number(universe.limit || state.symbolUniverseLimit || 80);
+    var limit = Number(universe.limit || state.symbolUniverseLimit || DEFAULT_SYMBOL_UNIVERSE_LIMIT);
     var offset = Number(universe.offset || state.symbolUniverseOffset || 0);
     var resultTotal = Number(universe.resultTotal || 0);
     if (!resultTotal) resultTotal = state.symbolUniverseQuery || state.symbolUniverseMarket ? items.length : Number(summary.total || items.length || 0);
@@ -14382,21 +14445,22 @@
       '<span>검색어</span>',
       '<input name="query" data-symbol-query placeholder="회사명 검색" value="' + escapeHtml(state.symbolUniverseQuery || "") + '" autocomplete="off" />',
       '</label>',
-      full ? '<label><span>표시 수</span><select name="limit" data-symbol-limit>' + [80, 200, 500].map(function (value) {
-        return '<option value="' + value + '"' + (Number(state.symbolUniverseLimit || 80) === value ? " selected" : "") + '>' + value + '개</option>';
+      full ? '<label><span>표시 수</span><select name="limit" data-symbol-limit>' + [40, 80, 200].map(function (value) {
+        return '<option value="' + value + '"' + (Number(state.symbolUniverseLimit || DEFAULT_SYMBOL_UNIVERSE_LIMIT) === value ? " selected" : "") + '>' + value + '개</option>';
       }).join("") + '</select></label>' : '',
       full ? '<label><span>추가 대상</span><select name="watchAccount" data-symbol-add-account>' + renderWatchAccountSelectOptions() + '</select></label>' : '',
       '<button class="text-button primary">검색</button>',
       '<button class="text-button" type="button" data-action="refresh-symbol-universe"' + (state.symbolUniverseLoading || state.symbolUniverseRefreshing ? ' disabled' : '') + '>' + escapeHtml(state.symbolUniverseRefreshing || state.symbolUniverseLoading ? "갱신 중" : "목록 갱신") + '</button>',
       '</form>',
       state.symbolUniverseError ? '<p class="form-error">' + escapeHtml(state.symbolUniverseError) + '</p>' : '',
+      (state.symbolUniverseLoading && renderedItems.length) ? '<p class="data-refresh-status">최근 성공 목록을 먼저 보여주는 중입니다. 최신 카탈로그는 백그라운드에서 갱신합니다.</p>' : '',
       '<p class="symbol-universe-note subtle">코스피·코스닥은 KRX KIND, 나스닥은 Nasdaq Trader 심볼 디렉터리를 운영 DB에 저장합니다. 원천 호출이 실패해도 마지막 성공 목록을 계속 사용합니다.</p>',
       emptyCatalog ? renderSymbolUniverseStarterConsole(summary, sources, marketData) : '',
       full ? '<div class="symbol-pager"><span>' + escapeHtml(resultTotal ? visibleFrom + "-" + visibleTo + " / " + resultTotal + "개 표시" : "표시할 종목 없음") + '</span><div><button class="mini-button" data-symbol-page="prev"' + (hasPrev ? "" : " disabled") + '>이전</button><button class="mini-button" data-symbol-page="next"' + (hasNext ? "" : " disabled") + '>다음</button></div></div>' : '',
       full ? renderSymbolBulkActionBar(renderedItems) : '',
       full ? '<div class="symbol-result-workbench">' : '',
       '<div class="symbol-result-list">',
-      state.symbolUniverseLoading ? renderEmptyState({
+      (state.symbolUniverseLoading && !renderedItems.length) ? renderEmptyState({
         tone: "watch",
         label: "Catalog",
         title: "종목 카탈로그를 갱신하고 있습니다",
@@ -15408,7 +15472,14 @@
       renderFeedImpactMetric("중립", neutral, "hold"),
       '</div>',
       '</div>',
-      items.length ? '<div class="feed-impact-workbench"><div class="feed-impact-grid">' + items.map(renderFeedImpactCard).join("") + '</div>' + renderResearchEvidenceDetailPanel(items, "기사 상세를 선택하세요") + '</div>' : '<p class="subtle feed-impact-empty">저장된 기사 본문 요약이 아직 없습니다. 피드 설정에서 뉴스 아카이브를 켜거나 근거 새로고침을 실행하면 이곳에 주가 영향 요약이 표시됩니다.</p>',
+      (state.researchEvidenceLoading && items.length) ? '<p class="data-refresh-status">저장 근거를 최신 상태로 다시 확인하고 있습니다. 현재 목록은 마지막 성공 조회 결과입니다.</p>' : '',
+      items.length ? '<div class="feed-impact-workbench"><div class="feed-impact-grid">' + items.map(renderFeedImpactCard).join("") + '</div>' + renderResearchEvidenceDetailPanel(items, "기사 상세를 선택하세요") + '</div>' : (state.researchEvidenceLoading ? renderEmptyState({
+        tone: "watch",
+        label: "Evidence",
+        title: "기사 본문 요약을 불러오고 있습니다",
+        description: "마지막 성공 데이터가 있으면 먼저 표시하고, 새 결과가 도착하면 영향 인박스를 갱신합니다.",
+        meta: ["본문 요약", "주가 영향", "출처"]
+      }) : '<p class="subtle feed-impact-empty">저장된 기사 본문 요약이 아직 없습니다. 피드 설정에서 뉴스 아카이브를 켜거나 근거 새로고침을 실행하면 이곳에 주가 영향 요약이 표시됩니다.</p>'),
       '</article>'
     ].join("");
   }
@@ -15644,10 +15715,11 @@
       renderResearchEvidenceFilters(),
       '<div class="research-evidence-workbench">',
       '<div class="research-evidence-list">',
-      state.researchEvidenceLoading ? '<div class="panel skeleton"></div>' : '',
+      state.researchEvidenceLoading && !items.length ? '<div class="panel skeleton"></div>' : '',
+      state.researchEvidenceLoading && items.length ? '<p class="data-refresh-status">조회 조건에 맞춰 최신 근거를 다시 읽고 있습니다. 현재 목록은 마지막 성공 조회 결과입니다.</p>' : '',
       state.researchEvidenceError ? '<p class="form-error">' + escapeHtml(state.researchEvidenceError) + '</p>' : '',
       (!state.researchEvidenceLoading && !state.researchEvidenceError && !items.length) ? '<p class="subtle">저장된 뉴스·공시·SEC 근거가 아직 없습니다. 외부 데이터 워커가 수집하면 이곳에 표시됩니다.</p>' : '',
-      (!state.researchEvidenceLoading && items.length) ? items.map(renderResearchEvidenceItem).join("") : '',
+      items.length ? items.map(renderResearchEvidenceItem).join("") : '',
       '</div>',
       items.length ? renderResearchEvidenceDetailPanel(items, "근거 상세를 선택하세요") : '',
       '</div>',
@@ -15681,7 +15753,7 @@
       '<span>조회 수</span>',
       '<select data-research-filter="limit">',
       ["30", "80", "150", "300"].map(function (value) {
-        return '<option value="' + escapeHtml(value) + '"' + (String(filters.limit || "80") === value ? " selected" : "") + '>' + escapeHtml(value) + '건</option>';
+        return '<option value="' + escapeHtml(value) + '"' + (String(filters.limit || DEFAULT_RESEARCH_EVIDENCE_LIMIT) === value ? " selected" : "") + '>' + escapeHtml(value) + '건</option>';
       }).join(""),
       '</select>',
       '</label>',
@@ -17278,7 +17350,7 @@
         var limit = symbolSearchForm.querySelector("[data-symbol-limit]");
         state.symbolUniverseQuery = query ? query.value.trim() : "";
         state.symbolUniverseMarket = market ? market.value : "";
-        state.symbolUniverseLimit = limit ? Number(limit.value || 80) : state.symbolUniverseLimit;
+        state.symbolUniverseLimit = limit ? Number(limit.value || DEFAULT_SYMBOL_UNIVERSE_LIMIT) : state.symbolUniverseLimit;
         state.symbolUniverseOffset = 0;
         state.activeSymbolUniverseKey = "";
         loadSymbolUniverse();
@@ -17317,7 +17389,7 @@
     Array.prototype.slice.call(app.querySelectorAll("[data-symbol-page]")).forEach(function (button) {
       button.addEventListener("click", function () {
         var direction = button.getAttribute("data-symbol-page");
-        var limit = Number(state.symbolUniverseLimit || 80);
+        var limit = Number(state.symbolUniverseLimit || DEFAULT_SYMBOL_UNIVERSE_LIMIT);
         if (direction === "prev") {
           state.symbolUniverseOffset = Math.max(0, Number(state.symbolUniverseOffset || 0) - limit);
         } else if (direction === "next") {

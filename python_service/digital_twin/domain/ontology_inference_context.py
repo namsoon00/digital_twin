@@ -28,7 +28,6 @@ def ontology_projection_from_metadata(metadata: Dict[str, object]) -> Dict[str, 
     candidates.extend([
         ontology.get("projection"),
         ontology.get("typedb"),
-        ontology.get("typedb"),
     ])
     for candidate in candidates:
         if isinstance(candidate, dict) and candidate:
@@ -162,16 +161,9 @@ def relation_context_from_inferencebox(
             "nativeRelationCount": inferencebox.get("nativeRelationCount"),
         },
         "typedbInference": {
+            "source": source_name,
             "graphStore": graph_store,
-            "relations": relations,
-            "traces": traces,
-            "entityCount": inferencebox.get("entityCount"),
-            "relationCount": inferencebox.get("relationCount"),
-            "traceCount": inferencebox.get("traceCount"),
-            "nativeRelationCount": inferencebox.get("nativeRelationCount"),
-        },
-        "typedbInference": {
-            "graphStore": graph_store,
+            "reasoningMode": str(inferencebox.get("reasoningMode") or ""),
             "relations": relations,
             "traces": traces,
             "entityCount": inferencebox.get("entityCount"),
@@ -185,7 +177,12 @@ def relation_context_from_inferencebox(
 def inferencebox_source_name(inferencebox: Dict[str, object]) -> str:
     graph_store = str((inferencebox or {}).get("graphStore") or "").strip().lower()
     source = str((inferencebox or {}).get("source") or "").strip()
-    if graph_store == "typedb" or source == "typedbInferenceBox" or bool((inferencebox or {}).get("nativeTypeDbReasoningUsed")):
+    if (
+        graph_store == "typedb"
+        or source == "typedbInferenceBox"
+        or bool((inferencebox or {}).get("nativeTypeDbReasoningUsed"))
+        or bool((inferencebox or {}).get("typedbBootstrapReasoningUsed"))
+    ):
         return "typedbInferenceBox"
     return "graphStoreInferenceBox"
 
@@ -312,13 +309,11 @@ def matches_from_inference(
 def inference_signal_type(source_name: str) -> str:
     if source_name == "typedbInferenceBox":
         return "typedb_inference"
-    if source_name == "typedbInferenceBox":
-        return "typedb_inference"
     return "graph_store_inference"
 
 
 def inference_prompt_hint(source_name: str, unit: str) -> str:
-    store_label = "TypeDB" if source_name == "typedbInferenceBox" else ("TypeDB" if source_name == "typedbInferenceBox" else "그래프 저장소")
+    store_label = "TypeDB" if source_name == "typedbInferenceBox" else "그래프 저장소"
     suffix = "trace" if unit == "trace" else "관계"
     return f"{store_label} RuleBox InferenceBox에서 생성된 {suffix}를 우선 근거로 사용합니다."
 
@@ -363,8 +358,6 @@ def decision_from_inference(
 
 
 def inference_relation_policy_source(source_name: str) -> str:
-    if source_name == "typedbInferenceBox":
-        return "typedbInferenceRelation"
     if source_name == "typedbInferenceBox":
         return "typedbInferenceRelation"
     return "graphStoreInferenceRelation"

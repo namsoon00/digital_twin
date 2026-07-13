@@ -3163,7 +3163,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual({}, decision.active_investment_opinion)
         self.assertEqual("ontologyInferenceRequired", decision.decision_basis)
         self.assertEqual("ontology-inference-required", decision.ai_context["role"])
-        self.assertIn("graphStoreInferenceBox", [item.get("key") for item in decision.ai_prompt_context.get("missingData", [])])
+        self.assertIn("typedbInferenceBox", [item.get("key") for item in decision.ai_prompt_context.get("missingData", [])])
 
     def test_execution_plan_is_abox_from_relation_rules(self):
         position = Position(
@@ -4464,7 +4464,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(any("2/2회 연속 감지" in line for line in inference_event.lines))
         self.assertTrue(inference_event.metadata["blockedInvestmentJudgment"])
         self.assertEqual("missingProjection", inference_event.metadata["missingInferenceReasonCode"])
-        self.assertEqual("graphStoreInferenceBox", inference_event.metadata["ontologyInference"]["source"])
+        self.assertEqual("typedbInferenceBox", inference_event.metadata["ontologyInference"]["source"])
+        self.assertEqual("typedb", inference_event.metadata["ontologyInference"]["graphStore"])
         self.assertTrue(inference_event.metadata["ontologyInference"]["missing"])
         self.assertTrue(inference_event.metadata["ontologyInference"]["confirmation"]["confirmed"])
         self.assertFalse(any(event.rule == "investmentInsight" for event in events))
@@ -4620,6 +4621,96 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(any("RuleBox 실행 실패: timed out" in line for line in inference_event.lines))
         self.assertEqual("error", inference_event.metadata["ontologyInference"]["ruleboxExecutionStatus"])
         self.assertEqual("timed out", inference_event.metadata["ontologyInference"]["ruleboxExecutionReason"])
+
+    def test_events_explain_typedb_inferencebox_read_error_when_repeated(self):
+        position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "marketValue": 864000,
+            "quantity": 10,
+            "sellableQuantity": 10,
+            "averagePrice": 80000,
+            "currentPrice": 86400,
+            "profitLossRate": 8,
+            "sector": "반도체",
+        })
+        portfolio = portfolio_summary([position])
+        metadata = {
+            "ontology": {
+                "activeGraphStore": "typedb",
+                "typedb": {
+                    "saved": True,
+                    "status": "ok",
+                    "graphStore": "typedb",
+                    "projectionMode": "abox-facts-only-typedb-rulebox",
+                    "ruleboxExecution": {
+                        "status": "ok",
+                        "statementCount": 3,
+                        "reasoningMode": "typedb-bootstrap-domain-reasoner",
+                    },
+                    "inferenceBox": {
+                        "configured": True,
+                        "saved": False,
+                        "status": "error",
+                        "source": "typedbInferenceBox",
+                        "graphStore": "typedb",
+                        "reasoningMode": "typedb-typeql-read",
+                        "querySource": "typedb-typeql",
+                        "typedbReadStatus": "error",
+                        "typedbReadReason": "schema unavailable",
+                        "reason": "TypeDB InferenceBox 조회 실패: schema unavailable",
+                        "entityCount": 0,
+                        "relationCount": 0,
+                        "traceCount": 0,
+                        "relations": [],
+                        "traces": [],
+                    },
+                },
+            },
+        }
+        previous_snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "토스 계좌 동기화",
+            utc_now_iso(),
+            portfolio,
+            [position],
+            decisions_for_positions([position], portfolio),
+            metadata=deepcopy(metadata),
+        )
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "토스 계좌 동기화",
+            utc_now_iso(),
+            portfolio,
+            [position],
+            decisions_for_positions([position], portfolio),
+            metadata=deepcopy(metadata),
+        )
+
+        events = RealtimeMonitor().events_for_snapshot(snapshot, previous_snapshot.to_monitor_state())
+        inference_event = next(event for event in events if event.rule == "ontologyInferenceMissing")
+        inference = inference_event.metadata["ontologyInference"]
+        line_text = "\n".join(inference_event.lines)
+
+        self.assertEqual("inferenceBoxStatusBlocked", inference_event.metadata["missingInferenceReasonCode"])
+        self.assertIn("TypeDB InferenceBox 상태가 error입니다", inference_event.metadata["missingInferenceReason"])
+        self.assertIn("저장소 TypeDB", line_text)
+        self.assertIn("추론 소스 typedbInferenceBox", line_text)
+        self.assertIn("조회 오류 schema unavailable", line_text)
+        self.assertEqual("typedbInferenceBox", inference["source"])
+        self.assertEqual("typedb", inference["graphStore"])
+        self.assertEqual("typedb-typeql-read", inference["reasoningMode"])
+        self.assertEqual("typedb-typeql", inference["querySource"])
+        self.assertEqual("error", inference["typedbReadStatus"])
+        self.assertEqual("schema unavailable", inference["typedbReadReason"])
 
     def test_events_explain_ok_but_empty_inferencebox_after_repeated_missing(self):
         position = normalize_position({
@@ -5677,7 +5768,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("investment-analysis-read-model-v1", payload["investmentAnalysis"]["contract"])
         self.assertEqual("blocked", payload["investmentAnalysis"]["board"]["state"])
         self.assertGreater(payload["investmentAnalysis"]["graphGate"]["blockedCount"], 0)
-        self.assertEqual("graphStoreInferenceBox", payload["investmentAnalysis"]["graphGate"]["requiredSource"])
+        self.assertEqual("typedbInferenceBox", payload["investmentAnalysis"]["graphGate"]["requiredSource"])
         self.assertTrue(payload["investmentAnalysis"]["actionQueue"])
         self.assertTrue(any(item["graph"]["blocked"] for item in payload["investmentAnalysis"]["actionQueue"]))
         self.assertGreater(payload["investmentAnalysis"]["dataLineage"]["mockCount"], 0)
@@ -9327,6 +9418,7 @@ class PythonServiceTests(unittest.TestCase):
 
         self.assertEqual([
             "investmentInsight",
+            "investmentCalendarReminder",
             "newsDigest",
             "ontologyInferenceMissing",
             "monitorConnection",

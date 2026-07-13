@@ -174,7 +174,7 @@ def _graph_gate(snapshot: Dict[str, object], decisions: List[Dict[str, object]])
         "relationCount": relation_count,
         "entityCount": entity_count,
         "reason": blocked[0].get("reason") if blocked else "그래프 추론 기반 판단이 가능합니다.",
-        "requiredSource": "graphStoreInferenceBox",
+        "requiredSource": "typedbInferenceBox",
         "nextChecks": (blocked[0].get("nextChecks") if blocked else []) or ["RuleBox 실행 상태 확인", "InferenceBox 관계 확인", "데이터 신선도 확인"],
     }
 

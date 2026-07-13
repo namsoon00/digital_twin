@@ -57,6 +57,13 @@ def ontology_quality_event_metadata(snapshot: AccountSnapshot, min_score: float)
     }
 
 
+def graph_store_label(value: object) -> str:
+    graph_store = str(value or "").strip().lower()
+    if graph_store == "typedb":
+        return "TypeDB"
+    return "그래프 저장소"
+
+
 def ontology_inference_event_metadata(snapshot: AccountSnapshot) -> Dict[str, object]:
     metadata = snapshot.metadata if isinstance(snapshot.metadata, dict) else {}
     projection = ontology_projection_from_metadata(metadata)
@@ -90,14 +97,20 @@ def ontology_inference_event_metadata(snapshot: AccountSnapshot) -> Dict[str, ob
         if isinstance(item, dict)
     ]
     rulebox_execution = projection.get("ruleboxExecution") if isinstance(projection.get("ruleboxExecution"), dict) else {}
+    graph_store = str(inference.get("graphStore") or projection.get("graphStore") or "")
     source = inferencebox_source_name({
         **dict(inference or {}),
-        "graphStore": inference.get("graphStore") or projection.get("graphStore") or "",
+        "graphStore": graph_store,
     })
     return {
         "source": source,
-        "graphStore": str(inference.get("graphStore") or projection.get("graphStore") or ""),
+        "graphStore": graph_store,
         "status": str(inference.get("status") or projection.get("status") or ""),
+        "reason": str(inference.get("reason") or projection.get("reason") or ""),
+        "reasoningMode": str(inference.get("reasoningMode") or rulebox_execution.get("reasoningMode") or ""),
+        "querySource": str(inference.get("querySource") or ""),
+        "typedbReadStatus": str(inference.get("typedbReadStatus") or ""),
+        "typedbReadReason": str(inference.get("typedbReadReason") or ""),
         "projectionMode": str(projection.get("projectionMode") or ""),
         "ruleboxExecutionStatus": str(rulebox_execution.get("status") or ""),
         "ruleboxExecutionReason": str(rulebox_execution.get("reason") or ""),
@@ -523,6 +536,12 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
             "reasonCode": reason_code,
             "reason": reason,
             "status": status_text,
+            "source": str(inference_status.get("source") or ""),
+            "graphStore": str(inference_status.get("graphStore") or ""),
+            "reasoningMode": str(inference_status.get("reasoningMode") or ""),
+            "querySource": str(inference_status.get("querySource") or ""),
+            "typedbReadStatus": str(inference_status.get("typedbReadStatus") or ""),
+            "typedbReadReason": str(inference_status.get("typedbReadReason") or ""),
             "positionCount": len(positions),
             "entityCount": entity_count,
             "relationCount": relation_count,
@@ -564,6 +583,9 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
             "reasonCode": reason_code,
             "reason": reason,
             "status": str(inference_status.get("status") or "missing"),
+            "source": str(inference_status.get("source") or ""),
+            "graphStore": str(inference_status.get("graphStore") or ""),
+            "reasoningMode": str(inference_status.get("reasoningMode") or ""),
             "positionCount": len(positions),
             "relationCount": int(number(inference_status.get("relationCount")) or 0),
             "traceCount": int(number(inference_status.get("traceCount")) or 0),
@@ -621,8 +643,16 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
         native_used = bool(state.get("nativeTypeDbReasoningUsed"))
         typedb_used = bool(state.get("nativeTypeDbReasoningUsed") or state.get("typedbBootstrapReasoningUsed"))
         status_text = str(state.get("status") or "missing").strip() or "missing"
+        graph_store = str(state.get("graphStore") or inference_status.get("graphStore") or "typedb").strip() or "typedb"
+        source_name = str(state.get("source") or inference_status.get("source") or ("typedbInferenceBox" if graph_store == "typedb" else "graphStoreInferenceBox"))
+        reasoning_mode = str(state.get("reasoningMode") or inference_status.get("reasoningMode") or "").strip()
+        query_source = str(state.get("querySource") or inference_status.get("querySource") or "").strip()
+        typedb_read_status = str(state.get("typedbReadStatus") or inference_status.get("typedbReadStatus") or "").strip()
+        typedb_read_reason = str(state.get("typedbReadReason") or inference_status.get("typedbReadReason") or "").strip()
         lines = [
             "상태 온톨로지 추론 결과 없음",
+            "저장소 " + graph_store_label(graph_store),
+            "추론 소스 " + source_name,
             "판단 차단 매수·매도 판단은 생성하지 않았습니다",
             "원인 " + reason,
             "추론 상태 status=" + status_text + ", relations=" + str(relation_count) + ", traces=" + str(trace_count),
@@ -630,15 +660,26 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
             "보유 " + str(int(state.get("positionCount") or 0)) + "개",
             "확인 행동 TypeDB 연결, RuleBox 저장 상태, 온톨로지 추론 워커 점검",
         ]
+        if reasoning_mode:
+            lines.insert(3, "추론 모드 " + reasoning_mode)
+        if query_source or typedb_read_status:
+            lines.insert(4, "조회 상태 source=" + (query_source or "unknown") + ", typedbRead=" + (typedb_read_status or "unknown"))
+        if typedb_read_reason:
+            lines.insert(5, "조회 오류 " + typedb_read_reason)
         if status_text.lower() in {"ok", "partial"} and relation_count == 0 and trace_count == 0:
-            lines.insert(4, "조회 결과 그래프 저장소 조회는 성공했지만 InferenceBox 관계와 trace가 0개입니다")
+            lines.insert(4, "조회 결과 " + graph_store_label(graph_store) + " 조회는 성공했지만 InferenceBox 관계와 trace가 0개입니다")
         if inference_status.get("validationIssueSummary"):
             lines.insert(3, "검증 오류 " + str(inference_status.get("validationIssueSummary")))
         inference_metadata = ontology_inference_event_metadata(snapshot)
         if not inference_metadata:
             inference_metadata = {
-                "source": "graphStoreInferenceBox",
+                "source": source_name,
+                "graphStore": graph_store,
                 "status": status_text,
+                "reasoningMode": reasoning_mode,
+                "querySource": query_source,
+                "typedbReadStatus": typedb_read_status,
+                "typedbReadReason": typedb_read_reason,
                 "projectionMode": str(state.get("projectionMode") or ""),
                 "ruleboxExecutionStatus": str(state.get("ruleboxExecutionStatus") or ""),
                 "ruleboxExecutionReason": str(state.get("ruleboxExecutionReason") or ""),
@@ -660,6 +701,10 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
         for key in ["aboxValidationStatus", "aboxValidationErrorCount", "aboxValidationWarningCount", "aboxValidationIssues", "validationIssueSummary"]:
             if key in inference_status:
                 inference_metadata[key] = inference_status.get(key)
+        for key in ["source", "graphStore", "reasoningMode", "querySource", "typedbReadStatus", "typedbReadReason"]:
+            value = state.get(key) or inference_status.get(key)
+            if value not in (None, ""):
+                inference_metadata[key] = value
         inference_metadata.update({
             "missing": True,
             "missingReasonCode": reason_code,
@@ -696,8 +741,10 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
     def ontology_inference_missing_reason_from_metadata(self, metadata: Dict[str, object]):
         projection = ontology_projection_from_metadata(metadata)
         if not isinstance(projection, dict) or not projection:
-            return "missingProjection", "그래프 저장소 온톨로지 투영 결과가 없습니다", {
+            return "missingProjection", "TypeDB 온톨로지 투영 결과가 없습니다", {
                 "status": "missing",
+                "source": "typedbInferenceBox",
+                "graphStore": "typedb",
                 "projectionMode": "",
                 "ruleboxExecutionStatus": "",
             }
@@ -705,8 +752,20 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
         rulebox_execution = projection.get("ruleboxExecution") if isinstance(projection.get("ruleboxExecution"), dict) else {}
         clear_result = rulebox_execution.get("clearResult") if isinstance(rulebox_execution.get("clearResult"), dict) else {}
         status = str((inference or {}).get("status") or projection.get("status") or "").strip()
+        graph_store = str((inference or {}).get("graphStore") or projection.get("graphStore") or "typedb").strip() or "typedb"
+        source_name = inferencebox_source_name({
+            **dict(inference or {}),
+            "graphStore": graph_store,
+        }) if isinstance(inference, dict) and inference else ("typedbInferenceBox" if graph_store == "typedb" else "graphStoreInferenceBox")
         common = {
             "status": status or ("empty" if isinstance(inference, dict) else "missing"),
+            "source": source_name,
+            "graphStore": graph_store,
+            "inferenceReason": str((inference or {}).get("reason") or ""),
+            "reasoningMode": str((inference or {}).get("reasoningMode") or rulebox_execution.get("reasoningMode") or ""),
+            "querySource": str((inference or {}).get("querySource") or ""),
+            "typedbReadStatus": str((inference or {}).get("typedbReadStatus") or ""),
+            "typedbReadReason": str((inference or {}).get("typedbReadReason") or ""),
             "projectionMode": str(projection.get("projectionMode") or ""),
             "ruleboxExecutionStatus": str(rulebox_execution.get("status") or ""),
             "ruleboxExecutionReason": str(rulebox_execution.get("reason") or ""),
@@ -737,14 +796,18 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
                 reason += ": " + summary
             return "invalidABox", reason, common
         if not inference:
-            return "missingInferenceBox", "그래프 저장소 InferenceBox 응답이 없습니다", common
+            return "missingInferenceBox", graph_store_label(graph_store) + " InferenceBox 응답이 없습니다", common
         if common["ruleboxExecutionStatus"] and common["ruleboxExecutionStatus"].lower() not in {"ok", "partial"}:
             reason = "RuleBox 실행 실패"
             if common["ruleboxExecutionReason"]:
                 reason += ": " + common["ruleboxExecutionReason"]
             return "ruleboxExecutionFailed", reason, common
         if status and status.lower() not in {"ok", "partial"}:
-            return "inferenceBoxStatusBlocked", "InferenceBox 상태가 " + status + "입니다", common
+            reason = graph_store_label(graph_store) + " InferenceBox 상태가 " + status + "입니다"
+            detail = common.get("inferenceReason") or common.get("typedbReadReason")
+            if detail:
+                reason += ": " + str(detail)
+            return "inferenceBoxStatusBlocked", reason, common
         relations = inference.get("relations") if isinstance(inference.get("relations"), list) else []
         traces = inference.get("traces") if isinstance(inference.get("traces"), list) else []
         graph_reasoning_used = (
@@ -752,10 +815,10 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
             or bool(inference.get("typedbBootstrapReasoningUsed"))
         )
         if not graph_reasoning_used and not relations and not traces:
-            return "nativeReasoningMissing", "그래프 저장소 추론 관계가 아직 없습니다", common
+            return "nativeReasoningMissing", graph_store_label(graph_store) + " 추론 관계가 아직 없습니다", common
         if not relations and not traces:
-            return "emptyInferenceBox", "InferenceBox 관계와 근거가 0개입니다", common
-        return "positionInferenceMissing", "보유 종목과 연결된 InferenceBox 관계가 없습니다", common
+            return "emptyInferenceBox", graph_store_label(graph_store) + " InferenceBox 관계와 근거가 0개입니다", common
+        return "positionInferenceMissing", "보유 종목과 연결된 " + graph_store_label(graph_store) + " InferenceBox 관계가 없습니다", common
 
     def holding_timing_events(self, snapshot: AccountSnapshot) -> List[AlertEvent]:
         events: List[AlertEvent] = []

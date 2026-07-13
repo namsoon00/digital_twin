@@ -514,7 +514,7 @@ def build_investment_insight_events(snapshot: AccountSnapshot, signal_events: It
                 "dispatchMode": "insight-driven-only",
                 "sourceSignalRole": "graph-backed-evidence",
                 "graphDerived": True,
-                "graphSource": "graphStoreInferenceBox",
+                "graphSource": "typedbInferenceBox",
                 "referenceDataLines": reference_lines,
             },
             "sourceSignalTypes": source_types,

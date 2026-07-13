@@ -153,8 +153,6 @@ def ontology_quality_candidates(context: Dict[str, object]) -> List[Dict[str, ob
         _dict_value(metadata.get("ontologyQualitySample")),
         _dict_value(metadata_ontology.get("projection")),
         _dict_value(ontology.get("typedb")),
-        _dict_value(ontology.get("typedb")),
-        _dict_value(metadata_ontology.get("typedb")),
         _dict_value(metadata_ontology.get("typedb")),
     ]
 

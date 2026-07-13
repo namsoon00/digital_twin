@@ -13,12 +13,11 @@ from .portfolio import DecisionItem, PortfolioSummary, Position, expects_kr_micr
 
 ONTOLOGY_INFERENCE_REQUIRED_BASIS = "ontologyInferenceRequired"
 TYPEDB_INFERENCE_BASIS = "typedbInferenceBox"
-TYPEDB_INFERENCE_BASIS = "typedbInferenceBox"
-GRAPH_STORE_INFERENCE_BASIS = "graphStoreInferenceBox"
+GRAPH_STORE_INFERENCE_BASIS = TYPEDB_INFERENCE_BASIS
+LEGACY_GRAPH_STORE_INFERENCE_BASIS = "graphStoreInferenceBox"
 GRAPH_INFERENCE_BASES = {
     TYPEDB_INFERENCE_BASIS,
-    TYPEDB_INFERENCE_BASIS,
-    GRAPH_STORE_INFERENCE_BASIS,
+    LEGACY_GRAPH_STORE_INFERENCE_BASIS,
 }
 
 DERIVED_FORMULA_DEPENDENCIES = {
@@ -527,7 +526,7 @@ def inference_required_relation_context(position: Position, reason: str = "") ->
         "matchedRules": [],
         "activeRules": [],
         "referenceRules": [],
-        "missingData": [{"key": GRAPH_STORE_INFERENCE_BASIS, "label": "온톨로지 추론 결과", "effect": "추론 결과가 없으면 매수·매도 판단을 만들지 않습니다."}],
+        "missingData": [{"key": GRAPH_STORE_INFERENCE_BASIS, "label": "TypeDB InferenceBox 추론 결과", "effect": "추론 결과가 없으면 매수·매도 판단을 만들지 않습니다."}],
         "dominantSignals": [],
         "signalStrength": 0.0,
         "signalStrengthLabel": "없음",
@@ -556,7 +555,7 @@ def inference_required_relation_context(position: Position, reason: str = "") ->
         "promptContext": {
             "promptVersion": ONTOLOGY_PROMPT_VERSION,
             "promptId": "ontologyInferenceRequired",
-            "missingData": [{"key": GRAPH_STORE_INFERENCE_BASIS, "label": "온톨로지 추론 결과"}],
+            "missingData": [{"key": GRAPH_STORE_INFERENCE_BASIS, "label": "TypeDB InferenceBox 추론 결과"}],
             "guardrails": ["InferenceBox 없이 매수·매도 판단을 만들지 않습니다."],
         },
     }

@@ -152,14 +152,24 @@ class PortfolioOntologyProjectionRecorder:
             execution = self.repository.run_rulebox({"clearInference": True})
         except Exception as error:  # noqa: BLE001 - graph inference must not block monitoring.
             execution = {"status": "error", "reason": str(error)[:180]}
-        result["ruleboxExecution"] = execution if isinstance(execution, dict) else {"status": "error", "reason": "non-dict RuleBox result"}
+        active_key = self.active_graph_store_key(result)
+        if isinstance(execution, dict):
+            execution.setdefault("graphStore", active_key)
+            if active_key == "typedb":
+                execution.setdefault("source", "typedbRuleBox")
+        else:
+            execution = {"status": "error", "reason": "non-dict RuleBox result", "graphStore": active_key}
+        result["ruleboxExecution"] = execution
         if not hasattr(self.repository, "inferencebox_snapshot"):
             return
         try:
             snapshot_payload = self.repository.inferencebox_snapshot(symbols=self.snapshot_symbols(snapshot), limit=80)
         except Exception as error:  # noqa: BLE001 - snapshot read is best effort.
-            snapshot_payload = {"status": "error", "reason": str(error)[:180]}
+            snapshot_payload = {"status": "error", "reason": str(error)[:180], "graphStore": active_key}
         if isinstance(snapshot_payload, dict):
+            snapshot_payload.setdefault("graphStore", active_key)
+            if active_key == "typedb":
+                snapshot_payload.setdefault("source", "typedbInferenceBox")
             result["inferenceBox"] = snapshot_payload
 
     def snapshot_symbols(self, snapshot: AccountSnapshot) -> List[str]:
@@ -191,6 +201,7 @@ class PortfolioOntologyProjectionRecorder:
         ontology = snapshot.metadata.setdefault("ontology", {})
         active_key = self.active_graph_store_key(result)
         result.setdefault("graphStore", active_key)
+        result.setdefault("activeGraphStore", active_key)
         ontology[active_key] = result
         ontology["projection"] = result
         ontology["activeGraphStore"] = active_key

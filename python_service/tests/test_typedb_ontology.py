@@ -278,9 +278,28 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("ok", snapshot["status"])
         self.assertEqual("typedbInferenceBox", snapshot["source"])
         self.assertEqual("typedb", snapshot["graphStore"])
+        self.assertEqual("typedb-bootstrap-domain-reasoner", snapshot["reasoningMode"])
+        self.assertEqual("typedb-typeql", snapshot["querySource"])
+        self.assertEqual("ok", snapshot["typedbReadStatus"])
         self.assertEqual(2, snapshot["entityCount"])
         self.assertEqual(1, snapshot["relationCount"])
         self.assertEqual(["holding-loss"], snapshot["traces"][0]["matchedConditionIds"])
+
+    def test_typedb_inferencebox_snapshot_exposes_typeql_read_errors(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+
+        with patch.object(repository, "read_entity_rows", side_effect=RuntimeError("schema unavailable")):
+            snapshot = repository.inferencebox_snapshot(symbols=["005930"])
+
+        self.assertEqual("error", snapshot["status"])
+        self.assertEqual("typedbInferenceBox", snapshot["source"])
+        self.assertEqual("typedb", snapshot["graphStore"])
+        self.assertEqual("typedb-typeql-read", snapshot["reasoningMode"])
+        self.assertEqual("typedb-typeql", snapshot["querySource"])
+        self.assertEqual("error", snapshot["typedbReadStatus"])
+        self.assertIn("schema unavailable", snapshot["typedbReadReason"])
+        self.assertIn("TypeDB InferenceBox 조회 실패", snapshot["reason"])
+        self.assertFalse(snapshot["typedbBootstrapReasoningUsed"])
 
     def test_typedb_rulebox_execution_can_load_abox_from_store(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")

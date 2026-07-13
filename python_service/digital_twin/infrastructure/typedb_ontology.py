@@ -286,8 +286,9 @@ class NullTypeDBOntologyGraphRepository:
             "configured": False,
             "saved": False,
             "status": "disabled",
-            "source": "typedb",
+            "source": "typedbInferenceBox",
             "graphStore": "typedb",
+            "reasoningMode": "disabled",
             "reason": "TypeDB ontology storage is not configured.",
             "symbols": list(symbols or []),
             "entities": [],
@@ -299,6 +300,8 @@ class NullTypeDBOntologyGraphRepository:
             "nativeEntityCount": 0,
             "nativeRelationCount": 0,
             "nativeTraceCount": 0,
+            "nativeTypeDbReasoningUsed": False,
+            "typedbBootstrapReasoningUsed": False,
         }
 
     def save_rule_change_candidates(self, candidates: List[Dict[str, object]], context: Dict[str, object] = None) -> Dict[str, object]:
@@ -1097,6 +1100,8 @@ relation ontology-assertion,
             "configured": True,
             "status": "ok",
             "graphStore": "typedb",
+            "source": "typedbRuleBox",
+            "reasoningMode": "typedb-bootstrap-domain-reasoner",
             "reason": "TypeDB bootstrap mode uses the domain graph reasoner to materialize InferenceBox while TypeQL native rules are prepared.",
             "statementCount": len(inference_relations),
             "relationTypes": sorted({str(item.relation_type or "") for item in inference_relations if str(item.relation_type or "")}),
@@ -1110,22 +1115,22 @@ relation ontology-assertion,
     def inferencebox_snapshot(self, symbols: List[str] = None, limit: int = 80) -> Dict[str, object]:
         clean_symbols = sorted(set(str(item or "").upper().strip() for item in (symbols or []) if str(item or "").strip()))
         safe_limit = max(1, min(500, int(limit or 80)))
-        if self.address:
-            try:
-                snapshot = self.inferencebox_snapshot_from_typedb(clean_symbols, safe_limit)
-                if snapshot.get("entityCount") or snapshot.get("relationCount") or snapshot.get("traceCount"):
-                    return snapshot
-            except Exception:
-                pass
-        graph = self._last_inference_graph
-        if not graph:
+        if not self.address:
+            return NullTypeDBOntologyGraphRepository().inferencebox_snapshot(clean_symbols, safe_limit)
+        try:
+            return self.inferencebox_snapshot_from_typedb(clean_symbols, safe_limit)
+        except Exception as error:  # noqa: BLE001 - expose TypeDB read failures to monitoring diagnostics.
             return {
-                "configured": bool(self.address),
+                "configured": True,
                 "saved": False,
-                "status": "empty",
-                "source": "typedb-bootstrap",
+                "status": "error",
+                "source": "typedbInferenceBox",
                 "graphStore": "typedb",
-                "reason": "아직 현재 프로세스에서 TypeDB InferenceBox를 만들지 않았습니다.",
+                "reasoningMode": "typedb-typeql-read",
+                "querySource": "typedb-typeql",
+                "typedbReadStatus": "error",
+                "typedbReadReason": str(error)[:180],
+                "reason": "TypeDB InferenceBox 조회 실패: " + str(error)[:180],
                 "symbols": clean_symbols,
                 "entities": [],
                 "relations": [],
@@ -1139,39 +1144,6 @@ relation ontology-assertion,
                 "nativeTypeDbReasoningUsed": False,
                 "typedbBootstrapReasoningUsed": False,
             }
-        entity_rows = [
-            row for row in self.rows_for_entities(graph)
-            if row.get("ontologyBox") == "InferenceBox" and (not clean_symbols or str(row.get("symbol") or "").upper() in clean_symbols)
-        ][:safe_limit]
-        relation_rows = [
-            row for row in self.rows_for_relations(graph)
-            if row.get("ontologyBox") == "InferenceBox" and (
-                not clean_symbols
-                or any(symbol in str(row.get(key) or "").upper() for symbol in clean_symbols for key in ["source", "target", "symbol"])
-            )
-        ][:safe_limit]
-        trace_rows = [row for row in entity_rows if str(row.get("kind") or "") == "inference-trace"][:safe_limit]
-        return {
-            "configured": bool(self.address),
-            "saved": True,
-            "status": "ok",
-            "source": "typedb-bootstrap",
-            "graphStore": "typedb",
-            "engineVersion": GRAPH_REASONER_VERSION,
-            "symbols": clean_symbols,
-            "entityCount": len(entity_rows),
-            "relationCount": len(relation_rows),
-            "traceCount": len(trace_rows),
-            "nativeEntityCount": 0,
-            "nativeRelationCount": 0,
-            "nativeTraceCount": 0,
-            "nativeTypeDbReasoningUsed": False,
-            "typedbBootstrapReasoningUsed": True,
-            "entities": [inferencebox_entity_payload(row) for row in entity_rows],
-            "relations": [inferencebox_relation_payload(row) for row in relation_rows],
-            "traces": [inferencebox_trace_payload({**row, "matchedConditionIds": matched_condition_ids(row)}) for row in trace_rows],
-        }
-
     def inferencebox_snapshot_from_typedb(self, clean_symbols: List[str], safe_limit: int) -> Dict[str, object]:
         entity_rows = [
             row for row in self.read_entity_rows(["InferenceBox"])
@@ -1195,6 +1167,10 @@ relation ontology-assertion,
         snapshot.update({
             "graphStore": "typedb",
             "source": "typedbInferenceBox",
+            "reasoningMode": "typedb-bootstrap-domain-reasoner",
+            "querySource": "typedb-typeql",
+            "typedbReadStatus": "ok",
+            "reason": "TypeDB InferenceBox 조회는 성공했지만 관계와 trace가 0개입니다." if not relation_rows and not trace_rows else "",
             "nativeTypeDbReasoningUsed": False,
             "typedbBootstrapReasoningUsed": True,
         })

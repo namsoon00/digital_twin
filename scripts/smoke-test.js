@@ -228,9 +228,16 @@ function checkFrontendAdminRender() {
   assertOk(styles.indexOf(".app-nav-command") >= 0 && styles.indexOf(".app-nav-flow") >= 0 && styles.indexOf(".app-nav-mode") >= 0, "PC 상단 통합 command rail 스타일 정의가 없습니다.");
   assertOk(code.indexOf("renderAppNavCommand") >= 0 && code.indexOf("app-nav-routine") >= 0 && code.indexOf('data-style-layer="unified-command"') >= 0, "상단 네비게이션이 현재 화면 command/routine rail을 함께 렌더링하지 않습니다.");
   assertOk(/Professional finance top navigation shell[\s\S]*\.console-shell \.topbar,[\s\S]*\.console-shell \.managed-page > \.page-command-strip,[\s\S]*\.console-shell \.managed-page > \.page-routine-panel[\s\S]*\{[\s\S]*display: none;/.test(styles), "topbar, 본문 command strip, 본문 routine panel이 상단 통합 rail로 합쳐지지 않았습니다.");
-  assertOk(code.indexOf("renderWorkDetailLayer") >= 0 && code.indexOf("data-work-detail") >= 0, "긴 상세 정보를 공통 work detail layer로 여는 렌더 경로가 없습니다.");
-  assertOk(styles.indexOf(".work-detail-layer") >= 0 && styles.indexOf("Executive console simplification layer") >= 0, "PC 요약 화면과 상세 레이어를 위한 최종 콘솔 레이어가 없습니다.");
-  assertOk(designSystemDoc.indexOf("work-detail-layer") >= 0 && designSystemDoc.indexOf("전체 데이터를 다 펼치지 않는다") >= 0, "디자인 시스템 문서에 요약 우선/상세 레이어 계약이 없습니다.");
+  assertOk(code.indexOf("renderWorkDetailLayer") >= 0 && code.indexOf("data-work-detail") >= 0, "긴 독립 상세를 공통 work detail layer로 여는 렌더 경로가 없습니다.");
+  assertOk(
+    code.indexOf("data-feed-detail-toggle") >= 0 &&
+      code.indexOf("data-research-evidence-toggle") >= 0 &&
+      code.indexOf("data-investment-action-toggle") >= 0 &&
+      code.indexOf("data-settings-runtime-toggle") >= 0,
+    "짧은 상세 정보를 인라인/패널로 여는 렌더 경로가 없습니다.",
+  );
+  assertOk(styles.indexOf(".work-detail-layer") >= 0 && styles.indexOf("Layer reduction: inline detail surfaces") >= 0, "PC 요약 화면과 상세 표면을 위한 최종 콘솔 레이어가 없습니다.");
+  assertOk(designSystemDoc.indexOf("inline-detail-surface") >= 0 && designSystemDoc.indexOf("전체 데이터를 다 펼치지 않는다") >= 0, "디자인 시스템 문서에 요약 우선/상세 표면 계약이 없습니다.");
   assertOk(code.indexOf("cardTypeAttrs") >= 0 && code.indexOf('data-card-type="') >= 0, "카드 의미 타입을 렌더링하는 공통 계약이 없습니다.");
   assertOk(styles.indexOf("PC card type taxonomy layer") >= 0 && styles.indexOf('[data-card-type="health-card"]') >= 0 && styles.indexOf('[data-card-type="evidence-card"]') >= 0, "PC 카드 타입별 스타일 레이어가 없습니다.");
   assertOk(designSystemDoc.indexOf("Card type taxonomy") >= 0 && designSystemDoc.indexOf("health-card") >= 0 && designSystemDoc.indexOf("action-queue-card") >= 0, "디자인 시스템 문서에 카드 타입 분류 계약이 없습니다.");
@@ -1425,11 +1432,11 @@ function checkFrontendAdminRender() {
     assertOk(notificationHtml.indexOf("360분 내 7회 · 우선도 -55") >= 0, "최근 알림 판단의 유사 메시지 감점이 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("미장 닫힘") >= 0, "최근 알림 판단의 장 시간 외 보류 사유가 렌더링되지 않았습니다.");
     assertOk(
-      notificationHtml.indexOf("messageType=externalcryptomove|symbol=eth") < 0 &&
-        notificationHtml.indexOf('data-work-detail="notification-job"') >= 0 &&
-        code.indexOf("notificationWorkDetailPayload") >= 0 &&
+      notificationHtml.indexOf("notification-decision-detail") >= 0 &&
+        notificationHtml.indexOf('data-work-detail="notification-job"') < 0 &&
+        code.indexOf("renderNotificationDecisionDetail(activeJob)") >= 0 &&
         code.indexOf("notification-fingerprint") >= 0,
-      "최근 알림 판단 fingerprint가 상세 레이어로 분리되지 않았습니다.",
+      "최근 알림 판단 fingerprint가 선택형 상세 패널로 분리되지 않았습니다.",
     );
     assertOk(notificationHtml.indexOf('data-action="refresh-notification-jobs"') >= 0, "최근 알림 판단 새로고침 버튼이 없습니다.");
     assertOk(notificationTemplateHtml.indexOf("notification-template-manager-panel") >= 0, "템플릿 섹션이 렌더링되지 않았습니다.");

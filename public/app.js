@@ -364,6 +364,8 @@
     researchEvidenceError: "",
     researchEvidenceFilters: { symbol: "", kind: "", limit: "80" },
     researchEvidenceDeleting: "",
+    expandedFeedDetail: "",
+    expandedResearchEvidenceKey: "",
     investmentCalendar: null,
     investmentCalendarLoading: false,
     investmentCalendarError: "",
@@ -372,6 +374,8 @@
     investmentCalendarRunning: false,
     investmentCalendarFilters: { symbol: "", eventType: "", limit: "200" },
     investmentCalendarDraft: defaultInvestmentCalendarDraft(),
+    calendarEntryModalOpen: false,
+    expandedCalendarEventKey: "",
     activeTab: initialTab(),
     previousTab: "",
     tabBarScrollLeft: 0,
@@ -423,6 +427,8 @@
     notificationPolicyEditorOpen: false,
     activeNotificationTemplateType: "investmentInsight",
     notificationTemplateEditorOpen: false,
+    expandedInvestmentActionKey: "",
+    settingsRuntimeExpanded: false,
     notificationMarketHoursSessions: [],
     notificationJobItems: [],
     notificationJobsLoading: false,
@@ -4659,7 +4665,7 @@
     return sendJson("/api/investment-calendar/events", "POST", payload)
       .then(function () {
         state.investmentCalendarDraft = defaultInvestmentCalendarDraft();
-        state.workDetailLayer = null;
+        state.calendarEntryModalOpen = false;
         showSnackbar("투자 캘린더 이벤트를 저장했습니다.");
         return loadInvestmentCalendar(true);
       })
@@ -6721,6 +6727,7 @@
       '</section>',
       renderOntologyGraphExpandedOverlay(),
       renderWorkDetailLayer(),
+      renderCalendarEntryModal(),
       renderSnackbar(),
       '</main>'
     ].join("");
@@ -6771,13 +6778,6 @@
   function workDetailPayload(type, key) {
     if (type === "notification-job") return notificationWorkDetailPayload(key);
     if (type === "feed-impact" || type === "research-evidence") return researchEvidenceWorkDetailPayload(key);
-    if (type === "feed-pipeline") return feedPipelineWorkDetailPayload();
-    if (type === "feed-sources") return feedSourcesWorkDetailPayload();
-    if (type === "feed-quality") return feedQualityWorkDetailPayload();
-    if (type === "calendar-entry") return investmentCalendarEntryWorkDetailPayload();
-    if (type === "calendar-event") return investmentCalendarEventWorkDetailPayload(key);
-    if (type === "investment-action") return investmentActionWorkDetailPayload(key);
-    if (type === "settings-runtime") return settingsRuntimeWorkDetailPayload();
     return null;
   }
 
@@ -7107,7 +7107,7 @@
       '<div class="toolbar">',
       '<button class="text-button" type="button" data-action="refresh-investment-calendar"' + (state.investmentCalendarLoading ? ' disabled' : '') + '>' + (state.investmentCalendarLoading ? "조회 중" : "새로고침") + '</button>',
       '<button class="text-button primary" type="button" data-action="run-investment-calendar-reminders"' + (state.investmentCalendarRunning ? ' disabled' : '') + '>' + (state.investmentCalendarRunning ? "확인 중" : "리마인더 확인") + '</button>',
-      renderWorkDetailButton("calendar-entry", "", "이벤트 등록", "text-button primary"),
+      renderCalendarEntryButton("이벤트 등록", "text-button primary"),
       '</div>',
       '</div>',
       state.investmentCalendarError ? '<p class="form-error">' + escapeHtml(state.investmentCalendarError) + '</p>' : '',
@@ -7135,8 +7135,8 @@
     options = options || {};
     var draft = state.investmentCalendarDraft || defaultInvestmentCalendarDraft();
     return [
-      '<article class="' + escapeHtml(options.layer ? "investment-calendar-form-panel layer-form" : "panel investment-calendar-form-panel") + '"' + cardTypeAttrs("config-panel", "hold") + '>',
-      options.layer ? '' : '<div class="panel-head"><div><p class="label">EVENT ENTRY</p><h2>투자 이벤트 등록</h2></div></div>',
+      '<article class="' + escapeHtml(options.compact ? "investment-calendar-form-panel compact-form" : "panel investment-calendar-form-panel") + '"' + cardTypeAttrs("config-panel", "hold") + '>',
+      options.compact ? '' : '<div class="panel-head"><div><p class="label">EVENT ENTRY</p><h2>투자 이벤트 등록</h2></div></div>',
       '<form class="investment-calendar-form" data-investment-calendar-form>',
       '<label class="setting-field wide"><span>제목</span><input data-calendar-field="title" type="text" autocomplete="off" value="' + escapeHtml(draft.title || "") + '" placeholder="예: AAPL FY26 Q3 실적 발표"></label>',
       '<label class="setting-field"><span>유형</span><select data-calendar-field="eventType">',
@@ -7197,7 +7197,7 @@
         title: "등록된 투자 이벤트가 없습니다",
         description: "실적, 거시지표, 공시, 점검 일정을 등록하면 리마인더와 알림 정책에 연결됩니다.",
         meta: ["등록 폼은 레이어에서 열림", "알림 큐와 온톨로지 요청으로 연결"],
-        action: renderWorkDetailButton("calendar-entry", "", "이벤트 등록", "text-button primary")
+        action: renderCalendarEntryButton("이벤트 등록", "text-button primary")
       }) : events.map(renderInvestmentCalendarEvent).join("")),
       '</div>',
       '</article>'
@@ -7208,6 +7208,7 @@
     var tone = investmentCalendarTone(event);
     var targets = (event.symbols || []).concat(event.markets || []);
     var key = event.eventId || event.id || event.title || "";
+    var expanded = state.expandedCalendarEventKey === String(key || "");
     return [
       '<section class="investment-calendar-event ' + escapeHtml(tone) + '"' + cardTypeAttrs("calendar-event", tone) + '>',
       '<div class="investment-calendar-event-main">',
@@ -7227,10 +7228,52 @@
       '</div>',
       '</div>',
       '<div class="investment-calendar-event-actions">',
-      renderWorkDetailButton("calendar-event", key, "상세", "mini-button"),
+      '<button class="mini-button" type="button" data-calendar-event-toggle="' + escapeHtml(key) + '">' + escapeHtml(expanded ? "접기" : "상세") + '</button>',
       '<button class="mini-button danger" type="button" data-calendar-delete="' + escapeHtml(event.eventId || "") + '"' + (state.investmentCalendarDeleting === event.eventId ? ' disabled' : '') + '>' + (state.investmentCalendarDeleting === event.eventId ? "삭제 중" : "삭제") + '</button>',
       '</div>',
+      expanded ? renderCalendarEventInlineDetail(event) : '',
       '</section>'
+    ].join("");
+  }
+
+  function renderCalendarEntryButton(label, className) {
+    return '<button class="' + escapeHtml(className || "mini-button") + '" type="button" data-calendar-entry-open>' + escapeHtml(label || "이벤트 등록") + '</button>';
+  }
+
+  function renderCalendarEntryModal() {
+    if (!state.calendarEntryModalOpen) return "";
+    return [
+      '<div class="calendar-entry-backdrop" data-calendar-entry-close>',
+      '<section class="calendar-entry-modal" role="dialog" aria-modal="true" aria-label="투자 이벤트 등록">',
+      '<header class="calendar-entry-head">',
+      '<div><p class="label">Event Entry</p><h2>투자 이벤트 등록</h2><span>실적, 거시지표, 공시 일정을 리마인더 후보로 연결합니다.</span></div>',
+      '<button class="icon-button danger" type="button" data-calendar-entry-close aria-label="등록 닫기">&times;</button>',
+      '</header>',
+      renderInvestmentCalendarFormPanel({ compact: true }),
+      '</section>',
+      '</div>'
+    ].join("");
+  }
+
+  function renderCalendarEventInlineDetail(event) {
+    var targets = (event.symbols || []).concat(event.markets || []);
+    var tone = investmentCalendarTone(event);
+    return [
+      '<div class="investment-calendar-event-detail">',
+      '<section class="notification-detail-metrics">',
+      renderNotificationDetailMetric("중요도", event.importance || 0, tone),
+      renderNotificationDetailMetric("시간대", event.timezone || "UTC", "muted"),
+      renderNotificationDetailMetric("알림", (event.reminderOffsetsMinutes || []).join(", ") || "없음", "muted"),
+      '</section>',
+      '<section class="notification-detail-section primary">',
+      '<strong>이벤트 요약</strong>',
+      '<p>' + escapeHtml(event.notes || "등록된 메모가 없습니다. 이벤트 시점과 대상 종목을 확인한 뒤 알림 후보로 이어집니다.") + '</p>',
+      '</section>',
+      '<section class="notification-detail-section">',
+      '<strong>대상</strong>',
+      '<p>' + escapeHtml(targets.join(" · ") || "전체 포트폴리오") + '</p>',
+      '</section>',
+      '</div>'
     ].join("");
   }
 
@@ -7249,7 +7292,7 @@
       '<span>' + escapeHtml(next.startsAt ? formatClock(next.startsAt) : "예정 이벤트를 등록하면 알림 후보가 생성됩니다.") + '</span>',
       '<em>' + escapeHtml(next.eventType ? investmentCalendarEventTypeLabel(next.eventType) : "캘린더 준비") + '</em>',
       '</div>',
-      renderWorkDetailButton("calendar-entry", "", "이벤트 등록", "text-button primary"),
+      renderCalendarEntryButton("이벤트 등록", "text-button primary"),
       '</section>',
       '<section class="panel investment-calendar-type-panel"' + cardTypeAttrs("diagnostic-card", "hold") + '>',
       '<div class="panel-head"><div><p class="label">EVENT MIX</p><h2>유형 분포</h2></div></div>',
@@ -8963,6 +9006,7 @@
     var checks = Array.isArray(graph.nextChecks) ? graph.nextChecks : [];
     var name = row.name || stockDisplayName(row.symbol, row);
     var key = investmentActionKey(row, index);
+    var expanded = state.expandedInvestmentActionKey === key;
     return [
       '<div class="investment-action-row"' + cardTypeAttrs("action-queue-card", row.tone || "hold") + '>',
       '<div class="investment-action-main">',
@@ -8979,8 +9023,37 @@
       '<p>' + escapeHtml((reasons[0] || graph.reason || "다음 확인 조건을 먼저 봅니다.")) + '</p>',
       '<div class="investment-action-checks">',
       checks.length ? checks.slice(0, 2).map(function (item) { return '<span>' + escapeHtml(item) + '</span>'; }).join("") : '<span>추가 확인 대기</span>',
-      renderWorkDetailButton("investment-action", key, "상세", "mini-button"),
+      '<button class="mini-button" type="button" data-investment-action-toggle="' + escapeHtml(key) + '">' + escapeHtml(expanded ? "접기" : "근거 보기") + '</button>',
       '</div>',
+      expanded ? renderInvestmentActionInlineDetail(row) : '',
+      '</div>'
+    ].join("");
+  }
+
+  function renderInvestmentActionInlineDetail(row) {
+    row = row || {};
+    var graph = row.graph || {};
+    var reasons = Array.isArray(row.reasons) ? row.reasons : [];
+    var checks = Array.isArray(graph.nextChecks) ? graph.nextChecks : [];
+    return [
+      '<div class="investment-action-detail inline-detail-surface">',
+      '<div class="inline-detail-metrics">',
+      renderNotificationDetailMetric("판단", row.decision || "판단 대기", row.tone || "hold"),
+      renderNotificationDetailMetric("데이터", row.dataQuality || "-", "muted"),
+      renderNotificationDetailMetric("API", row.apiSource || "-", "muted"),
+      renderNotificationDetailMetric("손익률", String(row.profitLossRate || 0) + "%", Number(row.profitLossRate || 0) >= 0 ? "watch" : "danger"),
+      '</div>',
+      '<section class="inline-detail-block primary">',
+      '<strong>요약 판단</strong>',
+      '<p>' + escapeHtml(reasons[0] || graph.reason || "다음 확인 조건을 먼저 봅니다.") + '</p>',
+      '</section>',
+      reasons.length ? '<section class="inline-detail-block"><strong>판단 근거</strong><div class="inline-detail-list">' + reasons.map(function (reason) {
+        return '<span>' + escapeHtml(reason) + '</span>';
+      }).join("") + '</div></section>' : '',
+      checks.length ? '<section class="inline-detail-block"><strong>다음 체크</strong><div class="inline-detail-tags">' + checks.map(function (item) {
+        return '<span>' + escapeHtml(item) + '</span>';
+      }).join("") + '</div></section>' : '',
+      graph.blocked ? '<section class="inline-detail-block caution"><strong>차단 조건</strong><p>' + escapeHtml(graph.basis || "InferenceBox") + '</p></section>' : '',
       '</div>'
     ].join("");
   }
@@ -11240,6 +11313,11 @@
     var stateMessage = hasError
       ? renderNotificationStateMessage("hold", "최근 판단 API 연결 확인", state.notificationJobsError)
       : renderNotificationDecisionEmptyConsole();
+    var visibleJobs = jobs.slice(0, 12);
+    if (activeJob && visibleJobs.length && visibleJobs.every(function (job) { return notificationJobKey(job) !== notificationJobKey(activeJob); })) {
+      visibleJobs = [activeJob].concat(visibleJobs.slice(0, 11));
+    }
+    var visibleJobLabel = visibleJobs.length === jobs.length ? String(jobs.length) : (visibleJobs.length + "/" + jobs.length);
     return [
       '<article class="panel notification-decision-panel"' + cardTypeAttrs("process-card", jobs.length ? "watch" : "hold") + '>',
       '<div class="panel-head">',
@@ -11256,13 +11334,14 @@
       '<div class="notification-decision-master">',
       '<div class="notification-decision-status">',
       '<span class="tone-chip ' + escapeHtml(hasError ? "hold" : "watch") + '">' + escapeHtml(hasError ? "확인 필요" : "현황") + '</span>',
-      '<span>' + escapeHtml(jobs.length ? "최근 " + jobs.length + "건 · 상세는 레이어에서 확인" : (hasError ? "연결 상태 확인" : "판단 이력 없음")) + '</span>',
+      '<span>' + escapeHtml(jobs.length ? "최근 " + visibleJobLabel + "건 · 선택 행을 오른쪽 리포트로 확인" : (hasError ? "연결 상태 확인" : "판단 이력 없음")) + '</span>',
       '<em>' + escapeHtml(state.notificationJobsLoading ? "백그라운드 갱신 중" : "마지막 결과 유지") + '</em>',
       '</div>',
-      jobs.length ? '<div class="notification-decision-list" role="listbox" aria-label="최근 알림 판단 목록">' + jobs.map(function (job) {
+      jobs.length ? '<div class="notification-decision-list" role="listbox" aria-label="최근 알림 판단 목록">' + visibleJobs.map(function (job) {
         return renderNotificationDecisionRow(job, notificationJobKey(job) === notificationJobKey(activeJob));
       }).join("") + '</div>' : stateMessage,
       '</div>',
+      jobs.length ? renderNotificationDecisionDetail(activeJob) : '',
       '</div>',
       '</article>'
     ].join("");
@@ -11483,7 +11562,7 @@
       '</div>',
       '<p>' + escapeHtml(preview) + '</p>',
       '<div class="notification-decision-actions">',
-      renderWorkDetailButton("notification-job", rowKey, "상세 리포트", "mini-button"),
+      '<span class="mini-button ghost">' + escapeHtml(selected ? "리포트 표시 중" : "행 선택") + '</span>',
       '</div>',
       renderNotificationScoreFactors(job),
       reasons.length ? '<div class="notification-decision-reasons compact">' + reasons.slice(0, 2).map(function (reason) {
@@ -14689,6 +14768,11 @@
     ].join("");
   }
 
+  function renderFeedDetailToggle(kind, label, className) {
+    var expanded = state.expandedFeedDetail === kind;
+    return '<button class="' + escapeHtml(className || "mini-button") + '" type="button" data-feed-detail-toggle="' + escapeHtml(kind) + '">' + escapeHtml(expanded ? "접기" : label) + '</button>';
+  }
+
   function renderFeedPipelinePanel() {
     return [
       '<article class="panel feed-pipeline-panel">',
@@ -14697,10 +14781,9 @@
       '<p class="label">Data Flow</p>',
       '<h2>수집·판단 흐름</h2>',
       '</div>',
-      renderWorkDetailButton("feed-pipeline", "", "상세", "mini-button"),
+      renderFeedDetailToggle("pipeline", "전체 흐름", "mini-button"),
       '</div>',
-      '<div class="feed-pipeline-list">',
-      feedPipelineStages().slice(0, 4).map(function (stage) {
+      state.expandedFeedDetail === "pipeline" ? '' : '<div class="feed-pipeline-list">' + feedPipelineStages().slice(0, 4).map(function (stage) {
         return [
           '<div class="feed-pipeline-row ' + escapeHtml(stage.tone || "hold") + '"' + cardTypeAttrs("process-card", stage.tone || "hold") + '>',
           '<span>' + escapeHtml(stage.step) + '</span>',
@@ -14711,8 +14794,8 @@
           '<b>' + escapeHtml(stage.value || "-") + '</b>',
           '</div>'
         ].join("");
-      }).join(""),
-      '</div>',
+      }).join("") + '</div>',
+      state.expandedFeedDetail === "pipeline" ? renderFeedInlineDetail("pipeline") : '',
       '</article>'
     ].join("");
   }
@@ -14727,11 +14810,10 @@
       '</div>',
       '<div class="settings-actions">',
       '<span class="metric">' + escapeHtml(feedSourceChannels().filter(function (channel) { return channel.enabled; }).length) + '</span>',
-      renderWorkDetailButton("feed-sources", "", "상세", "mini-button"),
+      renderFeedDetailToggle("sources", "채널 전체", "mini-button"),
       '</div>',
       '</div>',
-      '<div class="feed-channel-grid">',
-      feedSourceChannels().slice(0, 5).map(function (channel) {
+      state.expandedFeedDetail === "sources" ? '' : '<div class="feed-channel-grid">' + feedSourceChannels().slice(0, 5).map(function (channel) {
         return [
           '<div class="feed-channel-row ' + escapeHtml(channel.tone || "hold") + '"' + cardTypeAttrs("source-card", channel.tone || "hold") + '>',
           '<div>',
@@ -14742,8 +14824,8 @@
           '<b>' + escapeHtml(channel.cadence || "-") + '</b>',
           '</div>'
         ].join("");
-      }).join(""),
-      '</div>',
+      }).join("") + '</div>',
+      state.expandedFeedDetail === "sources" ? renderFeedInlineDetail("sources") : '',
       '</article>'
     ].join("");
   }
@@ -14992,18 +15074,15 @@
       '</div>',
       '<div class="settings-actions">',
       '<button class="text-button" data-action="refresh-research-evidence">' + (state.researchEvidenceLoading ? "조회 중" : "저장 근거 조회") + '</button>',
-      renderWorkDetailButton("feed-quality", "", "품질 상세", "text-button compact"),
+      renderFeedDetailToggle("quality", "품질 전체", "text-button compact"),
       '</div>',
       '</div>',
-      '<div class="feed-quality-grid">',
-      feedQualitySignals().slice(0, 4).map(renderFeedQualitySignal).join(""),
-      '</div>',
-      '<div class="theme-radar feed-quality-tags">',
-      kinds.length ? kinds.slice(0, 8).map(function (entry) {
+      state.expandedFeedDetail === "quality" ? '' : '<div class="feed-quality-grid">' + feedQualitySignals().slice(0, 4).map(renderFeedQualitySignal).join("") + '</div>',
+      state.expandedFeedDetail === "quality" ? '' : '<div class="theme-radar feed-quality-tags">' + (kinds.length ? kinds.slice(0, 8).map(function (entry) {
         return '<span>' + escapeHtml(researchEvidenceKindLabel(entry.name)) + ' <strong>' + escapeHtml(entry.count) + '</strong></span>';
-      }).join("") : '<span>저장 근거 대기</span>',
-      '</div>',
+      }).join("") : '<span>저장 근거 대기</span>') + '</div>',
       state.researchEvidenceError ? '<p class="form-error">' + escapeHtml(state.researchEvidenceError) + '</p>' : '',
+      state.expandedFeedDetail === "quality" ? renderFeedInlineDetail("quality") : '',
       '</article>'
     ].join("");
   }
@@ -15016,6 +15095,61 @@
       '<p>' + escapeHtml(item.description || "") + '</p>',
       '</div>'
     ].join("");
+  }
+
+  function renderFeedInlineDetail(kind) {
+    if (kind === "pipeline") {
+      return [
+        '<div class="feed-inline-detail">',
+        '<div class="inline-detail-list">',
+        feedPipelineStages().map(function (stage) {
+          return [
+            '<section class="inline-detail-row ' + escapeHtml(stage.tone || "hold") + '">',
+            '<b>' + escapeHtml(stage.step) + '</b>',
+            '<div><strong>' + escapeHtml(stage.title) + '</strong><span>' + escapeHtml(stage.detail || "") + '</span></div>',
+            '<em>' + escapeHtml(stage.value || "-") + '</em>',
+            '</section>'
+          ].join("");
+        }).join(""),
+        '</div>',
+        '</div>'
+      ].join("");
+    }
+    if (kind === "sources") {
+      return [
+        '<div class="feed-inline-detail">',
+        '<div class="inline-detail-list">',
+        feedSourceChannels().map(function (channel) {
+          return [
+            '<section class="inline-detail-row ' + escapeHtml(channel.tone || "hold") + '">',
+            '<span class="tone-chip ' + escapeHtml(channel.tone || "hold") + '">' + escapeHtml(channel.enabled ? (channel.ready === false ? "키 확인" : "사용") : "중지") + '</span>',
+            '<div><strong>' + escapeHtml(channel.label) + '</strong><span>' + escapeHtml(channel.route) + '</span></div>',
+            '<em>' + escapeHtml(channel.cadence || "-") + '</em>',
+            '</section>'
+          ].join("");
+        }).join(""),
+        '</div>',
+        '</div>'
+      ].join("");
+    }
+    if (kind === "quality") {
+      return [
+        '<div class="feed-inline-detail">',
+        '<div class="inline-detail-grid">',
+        feedQualitySignals().map(function (item) {
+          return [
+            '<section class="inline-detail-card ' + escapeHtml(item.tone || "hold") + '">',
+            '<span class="tone-chip ' + escapeHtml(item.tone || "hold") + '">' + escapeHtml(item.value || "-") + '</span>',
+            '<strong>' + escapeHtml(item.label || "-") + '</strong>',
+            '<p>' + escapeHtml(item.description || "") + '</p>',
+            '</section>'
+          ].join("");
+        }).join(""),
+        '</div>',
+        '</div>'
+      ].join("");
+    }
+    return "";
   }
 
   function researchEvidenceKindLabel(kind) {
@@ -15177,6 +15311,7 @@
     var summary = researchEvidenceKoreanSummary(item);
     var confidence = item.confidence == null ? "-" : (Math.round(Number(item.confidence || 0) * 100) + "%");
     var key = feedEvidenceKey(item, index);
+    var expanded = state.expandedResearchEvidenceKey === key;
     return [
       '<section class="feed-impact-card ' + escapeHtml(impact.tone) + '"' + cardTypeAttrs("evidence-card", impact.tone) + '>',
       '<div class="feed-impact-card-head">',
@@ -15200,10 +15335,50 @@
       '<span>기사</span>',
       '<strong>' + escapeHtml(item.title || "제목 없음") + '</strong>',
       '<em>' + escapeHtml([item.source || "-", formatFeedTime(time) || "-"].join(" · ")) + '</em>',
-      renderWorkDetailButton("feed-impact", key, "상세", "mini-button"),
+      '<button class="mini-button" type="button" data-research-evidence-toggle="' + escapeHtml(key) + '">' + escapeHtml(expanded ? "접기" : "본문 보기") + '</button>',
       item.url ? '<a class="open-link" href="' + escapeHtml(item.url) + '" target="_blank" rel="noreferrer" title="원문 열기">↗</a>' : '',
       '</footer>',
+      expanded ? renderResearchEvidenceInlineDetail(item) : '',
       '</section>'
+    ].join("");
+  }
+
+  function renderResearchEvidenceInlineDetail(item) {
+    item = item || {};
+    var symbol = String(item.symbol || "").toUpperCase();
+    var displayName = stockDisplayName(symbol, item.payload || item);
+    var time = item.publishedAt || item.observedAt || "";
+    var impact = researchEvidenceImpactMeta(item);
+    var summary = researchEvidenceKoreanSummary(item);
+    var confidence = item.confidence == null ? "-" : (Math.round(Number(item.confidence || 0) * 100) + "%");
+    return [
+      '<div class="research-evidence-detail inline-detail-surface">',
+      '<div class="inline-detail-metrics">',
+      renderNotificationDetailMetric("주가 영향", impact.label, impact.tone),
+      renderNotificationDetailMetric("영향 점수", impact.scoreLabel, impact.tone),
+      renderNotificationDetailMetric("근거 종류", researchEvidenceKindLabel(item.kind), "muted"),
+      renderNotificationDetailMetric("신뢰도", confidence, "muted"),
+      '</div>',
+      '<section class="inline-detail-block primary">',
+      '<strong>본문 요약</strong>',
+      '<p>' + escapeHtml(summary) + '</p>',
+      '</section>',
+      '<section class="inline-detail-block">',
+      '<strong>주가 영향 판단</strong>',
+      '<p>' + escapeHtml(impact.summary) + '</p>',
+      '</section>',
+      '<section class="inline-detail-block">',
+      '<strong>기사</strong>',
+      '<p>' + escapeHtml(item.title || "제목 없음") + '</p>',
+      '<div class="inline-detail-tags">',
+      '<span>종목 ' + escapeHtml(displayName || symbol || "-") + '</span>',
+      '<span>출처 ' + escapeHtml(item.source || "-") + '</span>',
+      '<span>시간 ' + escapeHtml(formatFeedTime(time) || "-") + '</span>',
+      '<span>방향 ' + escapeHtml(researchEvidencePolarityLabel(item.polarity)) + '</span>',
+      '</div>',
+      '</section>',
+      item.url ? '<a class="text-button primary" href="' + escapeHtml(item.url) + '" target="_blank" rel="noreferrer">원문 열기</a>' : '',
+      '</div>'
     ].join("");
   }
 
@@ -15371,6 +15546,7 @@
     var impact = researchEvidenceImpactMeta(item);
     var summary = researchEvidenceKoreanSummary(item);
     var key = feedEvidenceKey(item, index);
+    var expanded = state.expandedResearchEvidenceKey === key;
     return [
       '<div class="research-evidence-item ' + escapeHtml(impact.tone) + '"' + cardTypeAttrs("evidence-card", impact.tone) + '>',
       '<div class="research-evidence-main">',
@@ -15393,10 +15569,11 @@
       '</footer>',
       '</div>',
       '<div class="research-evidence-actions">',
-      renderWorkDetailButton("research-evidence", key, "상세", "mini-button"),
+      '<button class="mini-button" type="button" data-research-evidence-toggle="' + escapeHtml(key) + '">' + escapeHtml(expanded ? "접기" : "본문 보기") + '</button>',
       item.url ? '<a class="open-link" href="' + escapeHtml(item.url) + '" target="_blank" rel="noreferrer" title="원문 열기">↗</a>' : '<span class="open-link muted">-</span>',
       '<button class="mini-button danger" type="button" data-research-delete="' + escapeHtml(item.evidenceId || "") + '"' + (deleting || item.evidenceId === "preview:005930:news" ? " disabled" : "") + '>' + (deleting ? "삭제 중" : "삭제") + '</button>',
       '</div>',
+      expanded ? renderResearchEvidenceInlineDetail(item) : '',
       '</div>'
     ].join("");
   }
@@ -15679,16 +15856,34 @@
       '<div class="settings-status-stack">',
       '<span class="tone-chip ' + settingsStatusTone() + '" data-settings-status>' + settingsStatusLabel() + '</span>',
       '<span class="chip">로컬 DB 우선</span>',
-      renderWorkDetailButton("settings-runtime", "", "연결 상세", "mini-button"),
+      '<button class="mini-button" type="button" data-settings-runtime-toggle>' + escapeHtml(state.settingsRuntimeExpanded ? "연결 접기" : "연결 상세") + '</button>',
       '</div>',
       state.settingsSaving ? '<p class="lab-message">설정을 MySQL 운영 DB에 저장하는 중입니다.</p>' : '',
       state.serverSettingsError ? '<p class="form-error">' + escapeHtml(state.serverSettingsError) + '</p>' : '',
       state.serverSettingsLocked ? '<p class="form-error">공유 모드에서는 서버 설정 저장이 잠겨 있습니다.</p>' : '',
       '</div>',
       renderRuntimeSettingsSummary(),
+      state.settingsRuntimeExpanded ? renderSettingsRuntimeInlineDetail() : '',
       renderSettingsSmartSavePanel(),
       '</div>',
       '</article>'
+    ].join("");
+  }
+
+  function renderSettingsRuntimeInlineDetail() {
+    return [
+      '<div class="settings-runtime-inline inline-detail-surface">',
+      '<section class="inline-detail-block primary">',
+      '<strong>연결 요약</strong>',
+      '<p>설정 저장 상태, 로컬 운영 DB 잠금, 외부 API 준비도를 한 번에 확인합니다.</p>',
+      '</section>',
+      '<div class="inline-detail-grid">',
+      renderSettingsDiagnosticMini("저장 상태", settingsStatusLabel(), settingsStatusTone(), settingsHasPendingChanges() ? "변경사항 저장 필요" : "로컬 설정과 동기화됨"),
+      renderSettingsDiagnosticMini("서버 잠금", state.serverSettingsLocked ? "읽기전용" : "수정 가능", state.serverSettingsLocked ? "caution" : "watch", state.serverSettingsLocked ? "공유 모드에서는 서버 설정 저장이 잠겨 있습니다." : "로컬 운영 DB 저장 가능"),
+      renderSettingsDiagnosticMini("외부 API", configuredCount(["alphaVantageApiKey", "coingeckoApiKey", "fredApiKey", "opendartApiKey"]) + "/4", "hold", "Alpha, CoinGecko, FRED, OpenDART 준비도"),
+      renderSettingsDiagnosticMini("최근 오류", state.serverSettingsError ? "확인 필요" : "없음", state.serverSettingsError ? "danger" : "watch", state.serverSettingsError || "설정 API 오류가 없습니다."),
+      '</div>',
+      '</div>'
     ].join("");
   }
 
@@ -16027,6 +16222,32 @@
       });
     });
 
+    Array.prototype.slice.call(app.querySelectorAll("[data-feed-detail-toggle]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        var key = button.getAttribute("data-feed-detail-toggle") || "";
+        state.expandedFeedDetail = state.expandedFeedDetail === key ? "" : key;
+        render();
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-research-evidence-toggle]")).forEach(function (button) {
+      button.addEventListener("click", function (event) {
+        if (event && event.preventDefault) event.preventDefault();
+        if (event && event.stopPropagation) event.stopPropagation();
+        var key = button.getAttribute("data-research-evidence-toggle") || "";
+        state.expandedResearchEvidenceKey = state.expandedResearchEvidenceKey === key ? "" : key;
+        render();
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-investment-action-toggle]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        var key = button.getAttribute("data-investment-action-toggle") || "";
+        state.expandedInvestmentActionKey = state.expandedInvestmentActionKey === key ? "" : key;
+        render();
+      });
+    });
+
     Array.prototype.slice.call(app.querySelectorAll("[data-tab]")).forEach(bindTabNavigation);
 
     Array.prototype.slice.call(app.querySelectorAll("[data-monitor-instrument-detail]")).forEach(function (row) {
@@ -16074,6 +16295,14 @@
       });
     }
 
+    var settingsRuntimeToggle = app.querySelector("[data-settings-runtime-toggle]");
+    if (settingsRuntimeToggle) {
+      settingsRuntimeToggle.addEventListener("click", function () {
+        state.settingsRuntimeExpanded = !state.settingsRuntimeExpanded;
+        render();
+      });
+    }
+
     Array.prototype.slice.call(app.querySelectorAll('[data-action="refresh-research-evidence"]')).forEach(function (refreshEvidence) {
       refreshEvidence.addEventListener("click", function () {
         loadResearchEvidence(true);
@@ -16113,6 +16342,21 @@
     Array.prototype.slice.call(app.querySelectorAll('[data-action="run-investment-calendar-reminders"]')).forEach(function (button) {
       button.addEventListener("click", function () {
         runInvestmentCalendarReminders();
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-calendar-entry-open]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        state.calendarEntryModalOpen = true;
+        render();
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-calendar-entry-close]")).forEach(function (button) {
+      button.addEventListener("click", function (event) {
+        if (button.classList && button.classList.contains("calendar-entry-backdrop") && event.target !== button) return;
+        state.calendarEntryModalOpen = false;
+        render();
       });
     });
 
@@ -16158,6 +16402,14 @@
       };
       field.addEventListener("input", updateCalendarFilter);
       field.addEventListener("change", updateCalendarFilter);
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-calendar-event-toggle]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        var key = button.getAttribute("data-calendar-event-toggle") || "";
+        state.expandedCalendarEventKey = state.expandedCalendarEventKey === key ? "" : key;
+        render();
+      });
     });
 
     Array.prototype.slice.call(app.querySelectorAll("[data-calendar-delete]")).forEach(function (button) {
@@ -16740,7 +16992,6 @@
         var key = row.getAttribute("data-notification-job-select") || "";
         if (!key) return;
         state.activeNotificationJobKey = key;
-        state.workDetailLayer = { type: "notification-job", key: key };
         render();
       };
       row.addEventListener("click", function (event) {

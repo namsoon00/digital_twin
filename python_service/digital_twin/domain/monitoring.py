@@ -812,7 +812,7 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
         traces = inference.get("traces") if isinstance(inference.get("traces"), list) else []
         graph_reasoning_used = bool(inference.get("nativeTypeDbReasoningUsed"))
         if graph_store.lower() == "typedb" and not graph_reasoning_used:
-            return "nativeReasoningMissing", graph_store_label(graph_store) + " native 추론 관계가 아직 없습니다", common
+            return "nativeReasoningMissing", graph_store_label(graph_store) + " RuleBox materialization 관계가 아직 없습니다", common
         if not graph_reasoning_used and not relations and not traces:
             return "nativeReasoningMissing", graph_store_label(graph_store) + " 추론 관계가 아직 없습니다", common
         if not relations and not traces:

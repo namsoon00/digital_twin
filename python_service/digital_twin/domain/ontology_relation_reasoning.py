@@ -1,8 +1,9 @@
 """Local ontology relation reasoning helpers.
 
-Runtime investment judgement must use active TypeDB native InferenceBox results.
+Runtime investment judgement must use active TypeDB InferenceBox results.
 This module is kept for offline experiments, prompt assembly helpers, and
-non-production comparisons; it must not materialize production InferenceBox data.
+non-production comparisons; it must not bypass the graph-store InferenceBox
+boundary for user-facing investment judgement.
 """
 
 from typing import Dict, Iterable, List, Optional

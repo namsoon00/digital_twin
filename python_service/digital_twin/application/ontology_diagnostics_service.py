@@ -159,12 +159,12 @@ class OntologyDiagnosticsService:
 
     def reasoning_interpretation(self, mode: str, native_used: bool, bootstrap_used: bool) -> str:
         if native_used:
-            return "TypeDB native reasoning produced InferenceBox relations."
+            return "TypeDB RuleBox materialization produced InferenceBox relations."
         if bootstrap_used:
-            return "Legacy Python bootstrap inference is present but no longer accepted for investment judgement."
+            return "Legacy in-memory inference is present but no longer accepted for investment judgement."
         if mode:
-            return "TypeDB native reasoning is required, but no native InferenceBox output was confirmed."
-        return "No TypeDB reasoning output was confirmed."
+            return "TypeDB RuleBox materialization is required, but no InferenceBox output was confirmed."
+        return "No TypeDB InferenceBox output was confirmed."
 
     def latest_events(self) -> Dict[str, object]:
         if not self.event_log or not hasattr(self.event_log, "latest_events_by_name"):

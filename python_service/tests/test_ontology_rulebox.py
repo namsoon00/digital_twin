@@ -342,21 +342,24 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertGreater(result["entityCount"], 0)
         self.assertGreater(result["relationCount"], 0)
 
-    def test_typedb_run_rulebox_requires_native_inference_without_python_materialization(self):
+    def test_typedb_run_rulebox_materializes_inferencebox_from_typedb_projection(self):
         class CapturingTypeDBRepository(TypeDBOntologyGraphRepository):
             def __init__(self, graph):
                 super().__init__("127.0.0.1:1729")
                 self._last_graph = graph
-                self.saved_graph = None
+                self.saved_inferencebox_graph = None
 
-            def save_graph(self, graph):
-                self.saved_graph = graph
+            def write_inferencebox_graph(self, graph):
+                self.saved_inferencebox_graph = graph
                 return {"configured": True, "saved": True, "status": "ok", "graphStore": "typedb"}
 
             def read_entity_rows(self, boxes=None, limit=0):
                 if list(boxes or []) == ["ABox"]:
                     return [{"id": "stock:005930", "ontologyBox": "ABox"}]
                 return []
+
+            def load_graph_from_typedb(self, boxes=None):
+                return self._last_graph
 
             def rulebox_snapshot(self):
                 return {
@@ -375,16 +378,18 @@ class OntologyRuleBoxTests(unittest.TestCase):
 
         result = repository.run_rulebox({"clearInference": True})
 
-        self.assertEqual("native-reasoning-required", result["status"])
+        self.assertEqual("ok", result["status"])
         self.assertEqual("typedb", result["graphStore"])
-        self.assertEqual("typedb-native-required", result["reasoningMode"])
+        self.assertEqual("typedb-rulebox-materialized", result["reasoningMode"])
         self.assertFalse(result["typedbBootstrapReasoningUsed"])
-        self.assertFalse(result["nativeTypeDbReasoningUsed"])
+        self.assertTrue(result["nativeTypeDbReasoningUsed"])
         self.assertTrue(result["pythonBootstrapDisabled"])
-        self.assertEqual(0, result["statementCount"])
-        self.assertEqual([], result["relationTypes"])
+        self.assertGreater(result["statementCount"], 0)
+        self.assertIn("HAS_INFERRED_RISK", result["relationTypes"])
         self.assertEqual("ok", result["clearResult"]["status"])
-        self.assertIsNone(repository.saved_graph)
+        self.assertIsNotNone(repository.saved_inferencebox_graph)
+        self.assertTrue(repository.saved_inferencebox_graph.entities)
+        self.assertTrue(all((item.properties or {}).get("nativeTypeDbReasoned") for item in repository.saved_inferencebox_graph.entities))
 
     def test_default_rulebox_covers_materiality_and_trend_transition_rules(self):
         rules = default_graph_inference_rules()

@@ -4648,7 +4648,7 @@ class PythonServiceTests(unittest.TestCase):
                     "ruleboxExecution": {
                         "status": "ok",
                         "statementCount": 0,
-                        "reasoningMode": "typedb-native-required",
+                        "reasoningMode": "typedb-rulebox-materialization-blocked",
                     },
                     "inferenceBox": {
                         "configured": True,

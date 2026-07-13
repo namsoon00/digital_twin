@@ -163,6 +163,7 @@ class GraphStoreOntologyRowMapperMixin:
                 "sourceReliability": number_or_none(properties.get("sourceReliability")),
                 "impactScore": number_or_none(properties.get("impactScore")),
                 "confidence": number_or_none(properties.get("confidence")),
+                "nativeTypeDbReasoned": bool(properties.get("nativeTypeDbReasoned")),
                 "enabled": bool(properties.get("enabled")) if "enabled" in properties else False,
                 "conditionId": str(properties.get("conditionId") or condition.get("condition_id") or ""),
                 "conditionKind": str(condition.get("kind") or ""),
@@ -248,6 +249,7 @@ class GraphStoreOntologyRowMapperMixin:
                 "decisionStage": str(properties.get("decisionStage") or ""),
                 "stagePriority": number_or_none(properties.get("stagePriority")),
                 "aiInfluenceLabel": str(properties.get("aiInfluenceLabel") or ""),
+                "nativeTypeDbReasoned": bool(properties.get("nativeTypeDbReasoned")),
                 "evidenceIds": [str(value) for value in item.evidence_ids],
                 "propertiesJson": json.dumps(properties, ensure_ascii=False, sort_keys=True),
             })

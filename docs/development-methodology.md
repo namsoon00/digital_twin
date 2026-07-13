@@ -92,7 +92,7 @@ Domain:
 - `python_service/digital_twin/domain/external_signal_quality.py`: external signal provenance, freshness, source-health, and symbol-coverage scoring
 - `python_service/digital_twin/domain/ontology_quality.py`: AI opinion readiness and ontology graph quality sample metrics
 - `python_service/digital_twin/domain/ontology_relation_reasoning.py`: local relation reasoning helpers for offline experiments, prompt assembly, and non-production comparisons; runtime investment judgement must not use it as an InferenceBox materialization fallback
-- `python_service/digital_twin/domain/ontology_inference_context.py`: active graph-store InferenceBox to relation-context adapter; runtime monitoring should require TypeDB native InferenceBox evidence for TypeDB-backed investment judgement
+- `python_service/digital_twin/domain/ontology_inference_context.py`: active graph-store InferenceBox to relation-context adapter; runtime monitoring should require TypeDB-stored InferenceBox evidence for TypeDB-backed investment judgement
 - `python_service/digital_twin/domain/scoring.py`: reusable scoring signals and fallback vocabularies used by notification and strategy-adjacent scores
 - `python_service/digital_twin/domain/message_types.py`: shared message-type catalog, labels, default alert rules, thresholds, and cadence
 - `python_service/digital_twin/domain/alert_formatting.py`: money, percentage, and compact-number formatting used by alerts
@@ -126,7 +126,7 @@ Infrastructure:
 - `python_service/digital_twin/infrastructure/model_reviewer.py`: Codex/LLM command adapter with local fallback
 - `python_service/digital_twin/infrastructure/ontology_projection.py`: snapshot-to-ontology projection recorder that saves graph-store projections and quality samples without making monitoring application services own graph persistence details
 - `python_service/digital_twin/infrastructure/ontology_graph_store.py`: graph-store composition root; runtime code should import this factory instead of constructing the database adapter directly
-- `python_service/digital_twin/infrastructure/typedb_ontology.py`: TypeDB graph-store adapter; production InferenceBox output must come from TypeDB native functions/rules, not Python bootstrap materialization
+- `python_service/digital_twin/infrastructure/typedb_ontology.py`: TypeDB graph-store adapter; production InferenceBox output is materialized from TypeDB ABox facts and TypeDB RuleBox rules into TypeDB InferenceBox, not from a non-TypeDB runtime fallback
 - `python_service/digital_twin/infrastructure/service_factory.py`: runtime composition of use cases and adapters
 
 Compatibility modules:
@@ -150,7 +150,7 @@ Events are persisted locally to the append-only `domain_events` table through th
 
 `monitoring.alerts_detected` now carries investment notifications only as graph-backed `investmentInsight` events. Legacy investment alert types such as `monitorDecisionChange`, `modelBuy`, and `externalCryptoMove` are not valid realtime investment dispatch inputs. The model-review queue may read legacy-shaped historical jobs for compatibility, but new realtime investment judgement must originate from graph inference. Realtime alerts must never wait for LLM/Codex output; deep analysis belongs in the model-review queue and worker. Notification producers should enqueue jobs in the notification outbox and leave external delivery to the notification worker. Jobs derived from a domain event should carry `source_event_id` and a stable `dedupe_key`.
 
-Ontology projection is a read-model boundary, not the source of truth. Aggregates and use cases own transactional state inside their bounded contexts; projection code can translate snapshots and domain events into TBox/ABox graph assertions for the active graph store, AI prompts, quality samples, and console views. Do not make domain aggregates depend on TypeDB, TypeDB, graph storage, or prompt rendering. If ontology needs more facts, publish or persist those facts in the owning context first, then extend the projection/read model.
+Ontology projection is a read-model boundary, not the source of truth. Aggregates and use cases own transactional state inside their bounded contexts; projection code can translate snapshots and domain events into TBox/ABox graph assertions for the active graph store, AI prompts, quality samples, and console views. Do not make domain aggregates depend on TypeDB, graph storage, or prompt rendering. If ontology needs more facts, publish or persist those facts in the owning context first, then extend the projection/read model.
 
 ## Parallel Development Slices
 

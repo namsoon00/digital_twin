@@ -170,12 +170,44 @@ BEGINNER_FRIENDLY_REPLACEMENTS = [
     ("가설", "설명"),
 ]
 
+ABSOLUTE_BEGINNER_FRIENDLY_REPLACEMENTS = [
+    ("중기 회복", "최근보다 조금 긴 기간의 가격 회복"),
+    ("중기 방어선", "최근보다 조금 긴 기간의 버티는 가격대"),
+    ("60일선 방어", "60일 평균 가격 근처에서 버팀"),
+    ("20일선 회복", "20일 평균 가격 위로 다시 올라감"),
+    ("60일선 회복", "60일 평균 가격 위로 다시 올라감"),
+    ("5일선 회복", "5일 평균 가격 위로 다시 올라감"),
+    ("20일선 이탈", "20일 평균 가격 아래로 내려감"),
+    ("60일선 이탈", "60일 평균 가격 아래로 내려감"),
+    ("5일선 이탈", "5일 평균 가격 아래로 내려감"),
+    ("재이탈", "다시 아래로 내려감"),
+    ("기준선 이탈", "주요 평균선 아래로 내려감"),
+    ("추세 훼손", "가격 흐름 약화"),
+    ("추세 약화", "가격 흐름 약화"),
+    ("하락 가속", "하락 속도 증가"),
+    ("중기선", "60일 평균 가격"),
+    ("지지선", "가격이 버티는 선"),
+    ("방어선", "버티는 가격대"),
+    ("눌림목", "잠깐 내려온 구간"),
+    ("추격 매수", "오른 뒤 급하게 따라 사기"),
+    ("모멘텀", "힘"),
+    ("괴리", "차이"),
+    ("무효화 조건", "의견이 약해지는 조건"),
+]
+
 
 def beginner_friendly_text(value: object) -> str:
     text = str(value or "")
     for before, after in BEGINNER_FRIENDLY_REPLACEMENTS:
         text = text.replace(before, after)
     return text
+
+
+def absolute_beginner_friendly_text(value: object) -> str:
+    text = str(value or "")
+    for before, after in ABSOLUTE_BEGINNER_FRIENDLY_REPLACEMENTS:
+        text = text.replace(before, after)
+    return beginner_friendly_text(text)
 
 
 def plain_bullet(text: str) -> str:

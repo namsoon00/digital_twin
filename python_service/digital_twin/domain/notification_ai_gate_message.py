@@ -20,12 +20,19 @@ from .notification_ai_gate_validation import (
     delivery_level_from_context,
     signed_percent_from_text,
 )
+from .notification_text_formatting import absolute_beginner_friendly_text
 
 
-def _html_row(label: str, value: object) -> str:
+def _friendly_text(value: object) -> str:
+    return absolute_beginner_friendly_text(value).strip()
+
+
+def _html_row(label: str, value: object, beginner: bool = False) -> str:
     text = _text(value, 500)
     if not text:
         return ""
+    if beginner:
+        text = _friendly_text(text)
     return "• <b>" + html.escape(label, quote=False) + "</b>: <code>" + html.escape(text, quote=False) + "</code>"
 
 def prepend_execution_start_badge(rendered: str) -> str:
@@ -66,24 +73,26 @@ def ai_action_row_label(level: str) -> str:
     return "대응 방향"
 
 def ai_judgment_rows(response: NotificationAIValidatedResponse, level: str) -> List[str]:
+    beginner = level == "absoluteBeginner"
     rows = [
-        _html_row(ai_action_row_label(level), response.action_label),
-        _html_row("판단 강도", ai_confidence_display(response, level)),
+        _html_row(ai_action_row_label(level), response.action_label, beginner),
+        _html_row("판단 강도", ai_confidence_display(response, level), beginner),
     ]
     summary_label = "이유" if level == "absoluteBeginner" else "AI 판단 이유"
     if response.summary:
-        rows.append(_html_row(summary_label, response.summary))
+        rows.append(_html_row(summary_label, response.summary, beginner))
     return [row for row in rows if row]
 
 def ai_difference_rows(response: NotificationAIValidatedResponse, level: str) -> List[str]:
     if not response.precomputed_action or response.precomputed_action == response.action:
         return []
+    beginner = level == "absoluteBeginner"
     rows = [
-        _html_row("계산 후보", action_label_for_action(response.precomputed_action)),
-        _html_row("AI 최종", response.action_label),
+        _html_row("계산 후보", action_label_for_action(response.precomputed_action), beginner),
+        _html_row("AI 최종", response.action_label, beginner),
     ]
     if response.disagreement_reason:
-        rows.append(_html_row("다르게 본 이유" if level == "absoluteBeginner" else "변경 이유", response.disagreement_reason))
+        rows.append(_html_row("다르게 본 이유" if level == "absoluteBeginner" else "변경 이유", response.disagreement_reason, beginner))
     return [row for row in rows if row]
 
 def target_name_for_headline(target: object) -> str:
@@ -477,7 +486,7 @@ def execution_telegram_message_absolute_beginner(context: Dict[str, object], res
         "",
         "<b>" + ai_judgment_section_title("absoluteBeginner") + "</b>",
         *ai_judgment_rows(response, "absoluteBeginner"),
-        _html_row("안내", "자동 주문이 아니라 실행 전 점검 알림입니다."),
+        _html_row("안내", "자동 주문이 아니라 실행 전 점검 알림입니다.", True),
     ]
     difference_rows = ai_difference_rows(response, "absoluteBeginner")
     if difference_rows:
@@ -487,26 +496,26 @@ def execution_telegram_message_absolute_beginner(context: Dict[str, object], res
     context_rows = context_specific_insight_rows(context, response, 3)
     if context_rows:
         parts.extend(["", "<b>이번 알림에서 봐야 할 것</b>"])
-        parts.extend("• " + html.escape(item, quote=False) for item in context_rows)
+        parts.extend("• " + html.escape(_friendly_text(item), quote=False) for item in context_rows)
     if response.evidence:
         parts.extend(["", "<b>AI가 중요하게 본 근거</b>"])
-        parts.extend("• " + html.escape(item, quote=False) for item in response.evidence[:3])
+        parts.extend("• " + html.escape(_friendly_text(item), quote=False) for item in response.evidence[:3])
     if response.counter_evidence:
         parts.extend(["", "<b>다르게 볼 점</b>"])
-        parts.extend("• " + html.escape(item, quote=False) for item in response.counter_evidence[:2])
+        parts.extend("• " + html.escape(_friendly_text(item), quote=False) for item in response.counter_evidence[:2])
     parts.extend(["", "<b>실행 전 확인</b>"])
     if response.opinion:
-        parts.append("• " + html.escape(response.opinion, quote=False))
+        parts.append("• " + html.escape(_friendly_text(response.opinion), quote=False))
     if response.invalidation_condition:
-        parts.append("• 의견이 약해지는 조건: " + html.escape(response.invalidation_condition, quote=False))
+        parts.append("• 의견이 약해지는 조건: " + html.escape(_friendly_text(response.invalidation_condition), quote=False))
     for item in response.next_checks[:2]:
-        parts.append("• " + html.escape(item, quote=False))
+        parts.append("• " + html.escape(_friendly_text(item), quote=False))
     if response.missing_data_impact:
         parts.extend(["", "<b>데이터 빈 곳</b>"])
-        parts.extend("• " + html.escape(item, quote=False) for item in response.missing_data_impact[:2])
+        parts.extend("• " + html.escape(_friendly_text(item), quote=False) for item in response.missing_data_impact[:2])
     reason = notification_reason_summary(context)
     if reason:
-        parts.extend(["", "<b>알림이 온 이유</b>", "• " + html.escape(reason, quote=False)])
+        parts.extend(["", "<b>알림이 온 이유</b>", "• " + html.escape(_friendly_text(reason), quote=False)])
     if response.source_urls:
         parts.extend(["", "<b>원문/출처</b>"])
         parts.extend(source_url_rows(response.source_urls, context))
@@ -524,7 +533,7 @@ def beginner_current_state_rows(context: Dict[str, object]) -> List[str]:
         ("가격 흐름", _plain_value(context, "추세")),
         ("거래 흐름", _plain_value(context, "수급")),
     ]
-    rows = [row for row in [_html_row(label, value) for label, value in values] if row]
+    rows = [row for row in [_html_row(label, value, True) for label, value in values] if row]
     rows.extend(_html_multiline_rows("투자자", _plain_value(context, "투자자")))
     return rows
 

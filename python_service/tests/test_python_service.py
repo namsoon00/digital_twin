@@ -7910,6 +7910,41 @@ class PythonServiceTests(unittest.TestCase):
         self.assertNotIn("<b>왜 온 알림</b>", message)
         self.assertNotIn("<b>핵심 근거</b>", message)
 
+    def test_absolute_beginner_response_rewrites_difficult_trend_terms(self):
+        context = {
+            "messageType": "investmentInsight",
+            "messageDeliveryLevel": "absoluteBeginner",
+            "headline": "[관찰] 🧭 STRC: 보유 유지·다음 조건 확인",
+            "displayTarget": "스트래티지 스트레치 우선주 / STRC",
+            "referenceDate": "2026-07-13 09:00 KST",
+            "sentTime": "2026-07-13 09:01 KST",
+            "rawLines": "\n".join([
+                "현재가: $88.28",
+                "수익률: +5.0%",
+                "추세: 중기 방어선 아래, 중기 회복 확인 전",
+            ]),
+        }
+        response = validated_response_from_payload(context, {
+            "action": "HOLD",
+            "confidence": 68,
+            "summary": "중기 회복이 아직 확인되지 않았고 중기 방어선 아래입니다.",
+            "opinion": "중기 방어선 회복 전에는 새로 늘리기보다 보유가 낫습니다.",
+            "evidence": ["60일선 이탈과 추세 훼손이 함께 보입니다."],
+            "counterEvidence": ["단기 모멘텀은 남아 있습니다."],
+            "nextChecks": ["중기 회복 여부와 20일선 회복을 확인"],
+            "missingDataImpact": ["중기 방어선 판단에 필요한 거래 흐름이 부족합니다."],
+            "referenceDate": "2026-07-13 09:00 KST",
+        }, source="test AI")
+
+        message = context_with_validated_ai_response(context, response)["telegramMessage"]
+
+        for hard_word in ["중기 회복", "중기 방어선", "60일선 이탈", "추세 훼손", "모멘텀"]:
+            self.assertNotIn(hard_word, message)
+        self.assertIn("최근보다 조금 긴 기간의 가격 회복", message)
+        self.assertIn("최근보다 조금 긴 기간의 버티는 가격대", message)
+        self.assertIn("60일 평균 가격 아래로 내려감", message)
+        self.assertIn("가격 흐름 약화", message)
+
     def test_holding_snapshot_enricher_adds_missing_price_rows(self):
         position = normalize_position({
             "symbol": "MSTR",

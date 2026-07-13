@@ -18866,6 +18866,7 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
 [data-card-type="health-card"],
 [data-card-type="ledger-row"],
 [data-card-type="decision-row"],
+[data-card-type="calendar-event"],
 [data-card-type="evidence-card"],
 [data-card-type="action-queue-card"],
 [data-card-type="config-panel"],
@@ -18894,6 +18895,12 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
 
 [data-card-type="decision-row"] {
   background: linear-gradient(90deg, color-mix(in srgb, var(--card-type-soft-bg) 36%, var(--ds-card-bg)), var(--ds-card-bg) 46%);
+}
+
+[data-card-type="calendar-event"] {
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--card-type-soft-bg) 34%, transparent), transparent 46%),
+    var(--ds-card-bg);
 }
 
 [data-card-type="evidence-card"] {
@@ -18980,6 +18987,10 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
     border-left-width: 4px;
   }
 
+  [data-card-type="calendar-event"] {
+    border-left-width: 4px;
+  }
+
   [data-card-type="evidence-card"] {
     border-left-width: 4px;
   }
@@ -19019,6 +19030,7 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
 
   [data-card-type="ledger-row"]:hover,
   [data-card-type="decision-row"]:hover,
+  [data-card-type="calendar-event"]:hover,
   [data-card-type="evidence-card"]:hover,
   [data-card-type="action-queue-card"]:hover,
   [data-card-type="process-card"]:hover,
@@ -19028,5 +19040,272 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   [data-card-type="relationship-card"]:hover {
     border-color: color-mix(in srgb, var(--card-type-accent) 62%, var(--ds-card-border));
     background-color: color-mix(in srgb, var(--card-type-soft-bg) 42%, var(--ds-card-bg));
+  }
+}
+
+/* PC information architecture refinement layer */
+.investment-calendar-summary-panel,
+.investment-calendar-list-panel,
+.investment-calendar-rail,
+.ontology-experiment-starter-panel {
+  min-width: 0;
+}
+
+.investment-calendar-summary-panel {
+  grid-column: 1 / -1;
+}
+
+.investment-calendar-list-panel {
+  grid-column: 1 / -1;
+}
+
+.investment-calendar-rail {
+  grid-column: 1 / -1;
+  display: grid;
+  align-content: start;
+  gap: var(--ds-section-gap);
+  min-width: 0;
+}
+
+.investment-calendar-next-body,
+.investment-calendar-quality-list {
+  display: grid;
+  gap: var(--ds-space-4);
+  min-width: 0;
+}
+
+.investment-calendar-next-body {
+  padding: 0 var(--ds-panel-pad-x) var(--ds-space-4);
+}
+
+.investment-calendar-next-body strong,
+.investment-calendar-next-body span,
+.investment-calendar-next-body em {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.investment-calendar-next-body strong {
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 950;
+  line-height: 1.28;
+}
+
+.investment-calendar-next-body span,
+.investment-calendar-next-body em {
+  color: var(--muted);
+  font-size: var(--ds-type-label);
+  font-style: normal;
+  font-weight: 820;
+  line-height: 1.42;
+}
+
+.investment-calendar-next-card > .text-button {
+  justify-self: start;
+  margin: 0 var(--ds-panel-pad-x) var(--ds-panel-pad-y);
+}
+
+.investment-calendar-quality-list {
+  padding: 0 var(--ds-panel-pad-x) var(--ds-panel-pad-y);
+}
+
+.investment-calendar-quality-row {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1fr);
+  gap: var(--ds-space-4);
+  align-items: center;
+  min-width: 0;
+  padding: var(--ds-row-pad-y) var(--ds-row-pad-x);
+  border: 1px solid var(--ds-card-border);
+  border-left: 3px solid var(--ds-card-status-neutral);
+  border-radius: var(--ds-radius-control);
+}
+
+.investment-calendar-quality-row em,
+.investment-calendar-quality-row strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.investment-calendar-quality-row em {
+  color: var(--muted);
+  font-size: var(--ds-type-caption);
+  font-style: normal;
+  font-weight: 900;
+}
+
+.investment-calendar-quality-row strong {
+  color: var(--ink);
+  font-size: var(--ds-type-label);
+  font-weight: 950;
+  text-align: right;
+}
+
+.investment-calendar-form-panel.layer-form {
+  display: grid;
+  gap: var(--ds-section-gap);
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.symbol-empty-console,
+.notification-empty-console,
+.ontology-experiment-starter-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--ds-section-gap);
+  min-width: 0;
+}
+
+.symbol-empty-console {
+  padding: 0 var(--ds-panel-pad-x) var(--ds-panel-pad-y);
+}
+
+.notification-empty-console,
+.ontology-experiment-starter-grid {
+  padding: var(--ds-space-3) var(--ds-panel-pad-x) var(--ds-panel-pad-y);
+}
+
+.symbol-empty-console > section,
+.notification-empty-console > section,
+.ontology-experiment-starter-step {
+  display: grid;
+  align-content: start;
+  gap: var(--ds-space-4);
+  min-width: 0;
+  padding: var(--ds-row-pad-y) var(--ds-row-pad-x);
+  border: 1px solid var(--ds-card-border);
+  border-left: 3px solid var(--ds-card-status-neutral);
+  border-radius: var(--ds-radius-control);
+}
+
+.symbol-empty-console span,
+.notification-empty-console span,
+.ontology-experiment-starter-step b {
+  color: var(--muted);
+  font-size: var(--ds-type-caption);
+  font-weight: 950;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.symbol-empty-console strong,
+.notification-empty-console strong,
+.ontology-experiment-starter-step strong {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 950;
+  line-height: 1.28;
+  overflow-wrap: anywhere;
+}
+
+.symbol-empty-console p,
+.notification-empty-console p,
+.ontology-experiment-starter-step p {
+  min-width: 0;
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--ds-type-label);
+  font-weight: 780;
+  line-height: 1.5;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+
+.notification-empty-console .text-button,
+.symbol-empty-console .text-button {
+  justify-self: start;
+  margin-top: var(--ds-space-2);
+}
+
+.notification-decision-body:not(.has-detail) {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.notification-decision-body:not(.has-detail) .notification-decision-master,
+.notification-decision-body:not(.has-detail) .notification-empty-console {
+  grid-column: 1 / -1;
+  width: 100%;
+}
+
+@media (min-width: 1181px) {
+  .investment-calendar-view {
+    grid-template-columns: repeat(12, minmax(0, 1fr));
+    align-items: start;
+  }
+
+  .investment-calendar-summary-panel {
+    grid-column: 1 / -1;
+  }
+
+  .investment-calendar-list-panel {
+    grid-column: span 8;
+  }
+
+  .investment-calendar-rail {
+    grid-column: span 4;
+  }
+
+  .investment-calendar-kpis {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    margin-top: var(--ds-section-gap);
+  }
+
+  .investment-calendar-list {
+    gap: 0;
+    padding: var(--ds-space-3) var(--ds-panel-pad-x) var(--ds-panel-pad-y);
+    border-top: 1px solid var(--ds-card-border);
+    background: color-mix(in srgb, var(--panel) 88%, transparent);
+  }
+
+  .investment-calendar-event {
+    grid-template-columns: minmax(0, 1fr) auto;
+    border-radius: var(--ds-radius-control);
+  }
+
+  .investment-calendar-event-main {
+    grid-template-columns: minmax(140px, 0.24fr) minmax(0, 1fr);
+  }
+
+  .investment-calendar-type-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding: 0 var(--ds-panel-pad-x) var(--ds-panel-pad-y);
+  }
+
+  .investment-calendar-type-strip span {
+    min-height: 62px;
+  }
+
+  .symbol-empty-console,
+  .notification-empty-console,
+  .ontology-experiment-starter-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .ontology-experiment-starter-panel {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 1180px) {
+  .investment-calendar-view {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .investment-calendar-list-panel,
+  .investment-calendar-rail,
+  .ontology-experiment-starter-panel {
+    grid-column: 1 / -1;
+  }
+
+  .investment-calendar-kpis,
+  .symbol-empty-console,
+  .notification-empty-console,
+  .ontology-experiment-starter-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 }

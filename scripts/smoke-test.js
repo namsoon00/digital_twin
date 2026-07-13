@@ -234,7 +234,7 @@ function checkFrontendAdminRender() {
   assertOk(code.indexOf("cardTypeAttrs") >= 0 && code.indexOf('data-card-type="') >= 0, "카드 의미 타입을 렌더링하는 공통 계약이 없습니다.");
   assertOk(styles.indexOf("PC card type taxonomy layer") >= 0 && styles.indexOf('[data-card-type="health-card"]') >= 0 && styles.indexOf('[data-card-type="evidence-card"]') >= 0, "PC 카드 타입별 스타일 레이어가 없습니다.");
   assertOk(designSystemDoc.indexOf("Card type taxonomy") >= 0 && designSystemDoc.indexOf("health-card") >= 0 && designSystemDoc.indexOf("action-queue-card") >= 0, "디자인 시스템 문서에 카드 타입 분류 계약이 없습니다.");
-  ["process-card", "source-card", "diagnostic-card", "signal-card", "relationship-card", "reference-card"].forEach((cardType) => {
+  ["process-card", "source-card", "diagnostic-card", "signal-card", "relationship-card", "reference-card", "calendar-event"].forEach((cardType) => {
     assertOk(code.indexOf(cardType) >= 0 && styles.indexOf('[data-card-type="' + cardType + '"]') >= 0 && designSystemDoc.indexOf(cardType) >= 0, "확장 카드 타입 계약이 누락되었습니다: " + cardType);
   });
   assertOk(/Professional finance top navigation shell[\s\S]*\.app-nav-tab,[\s\S]*\.app-nav-menu-item[\s\S]*min-height: var\(--ds-top-nav-tab-height\);/.test(styles), "PC 상단 탭이 낮은 한 줄 금융 탭 높이를 쓰지 않습니다.");
@@ -1374,6 +1374,7 @@ function checkFrontendAdminRender() {
     assertOk(symbolUniverseHtml.indexOf("symbol-bulk-bar") >= 0 && symbolUniverseHtml.indexOf('data-action="add-visible-symbols"') >= 0, "전체종목 탭에 페이지 일괄 추가 액션이 없습니다.");
     assertOk(symbolUniverseHtml.indexOf("data-symbol-add-account") >= 0, "전체종목 탭에 관심 추가 대상 계정 선택이 없습니다.");
     assertOk(symbolUniverseHtml.indexOf("symbol-summary-card") < 0 && symbolUniverseHtml.indexOf("symbol-source-card") < 0, "전체종목 탭에 중첩 카드 클래스가 남아 있습니다.");
+    assertOk(code.indexOf("renderSymbolUniverseStarterConsole") >= 0 && styles.indexOf(".symbol-empty-console") >= 0, "전체종목 빈 상태가 원천/카탈로그/다음 행동 콘솔로 정리되지 않았습니다.");
     assertOk(notificationHtml.indexOf("notification-command-center") >= 0, "알림 운영 command center가 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("notification-ops-rail") >= 0, "알림 상태 레일이 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("notification-command-panel") < 0, "카드형 알림 관제 패널이 남아 있습니다.");
@@ -1389,6 +1390,9 @@ function checkFrontendAdminRender() {
     assertOk(notificationHtml.indexOf("notification-decision-panel") >= 0, "최근 알림 판단 패널이 렌더링되지 않았습니다.");
     assertOk(notificationHtml.indexOf("notification-ops-rail") < notificationHtml.indexOf("notification-decision-panel"), "기본 현황에서 상태 레일 다음에 최근 알림 판단이 이어지지 않습니다.");
     assertOk(notificationHtml.indexOf("notification-decision-body") >= 0, "최근 알림 판단 본문 영역이 분리되지 않았습니다.");
+    assertOk(code.indexOf("renderNotificationDecisionEmptyConsole") >= 0 && styles.indexOf(".notification-empty-console") >= 0, "최근 알림 판단 빈 상태가 후보/판단/설정 흐름으로 구조화되지 않았습니다.");
+    assertOk(code.indexOf("renderInvestmentCalendarRailPanel") >= 0 && styles.indexOf(".investment-calendar-rail") >= 0, "투자 캘린더가 PC 타임라인/상태 레일 구조로 정리되지 않았습니다.");
+    assertOk(code.indexOf("renderOntologyExperimentStarterPanel") >= 0 && styles.indexOf(".ontology-experiment-starter-grid") >= 0, "전략 검증 빈 상태가 시작 흐름 카드로 정리되지 않았습니다.");
     assertOk(notificationHtml.indexOf("NAVER") >= 0, "최근 알림 판단에서 국내 종목명이 코드 대신 렌더링되지 않습니다.");
     assertOk(notificationHtml.indexOf("035420 판단") < 0 && notificationHtml.indexOf("symbol=035420") < 0 && notificationHtml.indexOf(">035420<") < 0, "최근 알림 판단에 국내 종목코드가 그대로 노출됩니다.");
     assertOk(code.indexOf('indexOf("API를 찾지 못했습니다")') >= 0, "최근 알림 판단 API 미지원 상태를 빈 상태로 처리하지 않습니다.");

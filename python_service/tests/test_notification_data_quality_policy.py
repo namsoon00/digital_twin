@@ -26,8 +26,25 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
             {"honeyStateReason": "의미 있는 추가 확대: 손익률 추가 악화 -8.9% -> -10.4%"},
         )
 
-        self.assertTrue(message.startswith("<b>🔔 새 알림</b> <code>손익률 악화</code>"))
+        self.assertTrue(message.startswith("<b>🔔 새 알림</b> <code>손익률 1.5%p 악화</code>"))
         self.assertEqual(1, message.count("🔔 새 알림"))
+
+    def test_topline_change_summary_shows_profit_loss_improvement_delta(self):
+        summary = notification_topline_change_summary({
+            "profitLossRate": -8.9,
+            "previousProfitLossRate": -10.4,
+            "honeyStateReason": "의미 있는 추가 확대: 관계 강도 변화",
+        })
+
+        self.assertEqual("손익률 1.5%p 개선", summary)
+
+    def test_topline_change_summary_uses_nested_profit_loss_delta(self):
+        summary = notification_topline_change_summary({
+            "ontologyInsight": {"facts": {"profitLossRateDeltaPct": -2.25}},
+            "honeyStateReason": "의미 있는 추가 확대: 관계 강도 변화",
+        })
+
+        self.assertEqual("손익률 2.2%p 악화", summary)
 
     def test_topline_change_summary_maps_new_news_disclosure_reason(self):
         summary = notification_topline_change_summary({

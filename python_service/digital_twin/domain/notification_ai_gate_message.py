@@ -35,10 +35,90 @@ def _html_row(label: str, value: object, beginner: bool = False) -> str:
         text = _friendly_text(text)
     return "• <b>" + html.escape(label, quote=False) + "</b>: <code>" + html.escape(text, quote=False) + "</code>"
 
+def _context_path_value(context: Dict[str, object], path: str):
+    current = context or {}
+    for part in [item for item in str(path or "").split(".") if item]:
+        if isinstance(current, dict) and part in current:
+            current = current.get(part)
+            continue
+        return None
+    return current
+
+def _first_number_from_paths(context: Dict[str, object], paths: List[str]):
+    for path in paths:
+        value = _context_path_value(context, path)
+        if value not in (None, ""):
+            return _number(value)
+    return None
+
+def _signed_point_change_text(delta: float) -> str:
+    if abs(delta) < 0.05:
+        return ""
+    magnitude = ("%.1f" % abs(delta)).rstrip("0").rstrip(".")
+    direction = "개선" if delta > 0 else "악화"
+    return "손익률 " + magnitude + "%p " + direction
+
+def _profit_loss_change_from_reason(reason: str) -> str:
+    match = re.search(
+        r"([+-]?\d+(?:\.\d+)?)\s*%\s*(?:->|→)\s*([+-]?\d+(?:\.\d+)?)\s*%",
+        str(reason or ""),
+    )
+    if not match:
+        return ""
+    previous = _number(match.group(1))
+    current = _number(match.group(2))
+    return _signed_point_change_text(current - previous)
+
+def _profit_loss_change_summary(context: Dict[str, object], reason: str = "") -> str:
+    reason_summary = _profit_loss_change_from_reason(reason)
+    if reason_summary:
+        return reason_summary
+    delta = _first_number_from_paths(context, [
+        "profitLossRateDeltaPct",
+        "profitLossDeltaPct",
+        "pnlDeltaPct",
+        "pnlDelta",
+        "facts.profitLossRateDeltaPct",
+        "ontologyInsight.facts.profitLossRateDeltaPct",
+        "activeInvestmentOpinion.facts.profitLossRateDeltaPct",
+        "ontologyRelationContext.facts.profitLossRateDeltaPct",
+        "relationContext.facts.profitLossRateDeltaPct",
+    ])
+    if delta is not None:
+        return _signed_point_change_text(delta)
+    previous = _first_number_from_paths(context, [
+        "previousProfitLossRate",
+        "previous_profit_loss_rate",
+        "facts.previousProfitLossRate",
+        "ontologyInsight.facts.previousProfitLossRate",
+        "activeInvestmentOpinion.facts.previousProfitLossRate",
+        "ontologyRelationContext.facts.previousProfitLossRate",
+        "relationContext.facts.previousProfitLossRate",
+    ])
+    current = _first_number_from_paths(context, [
+        "profitLossRate",
+        "profit_loss_rate",
+        "pnlRate",
+        "pnl_rate",
+        "facts.profitLossRate",
+        "ontologyInsight.facts.profitLossRate",
+        "ontologyInsight.legacyModel.profitLossRate",
+        "activeInvestmentOpinion.facts.profitLossRate",
+        "activeInvestmentOpinion.legacyModel.profitLossRate",
+        "ontologyRelationContext.facts.profitLossRate",
+        "relationContext.facts.profitLossRate",
+    ])
+    if previous is None or current is None:
+        return ""
+    return _signed_point_change_text(current - previous)
+
 def notification_topline_change_summary(context: Dict[str, object]) -> str:
     context = context or {}
     reason = str(context.get("honeyStateReason") or context.get("honeySimilarityBypassReason") or "").strip()
     source_types = " ".join(str(item or "") for item in (context.get("sourceSignalTypes") or []))
+    profit_loss_summary = _profit_loss_change_summary(context, reason)
+    if profit_loss_summary:
+        return profit_loss_summary
     if "손익률 추가 악화" in reason:
         return "손익률 악화"
     if "필수 발송 구간" in reason or "손실률" in reason or "수익률" in reason:

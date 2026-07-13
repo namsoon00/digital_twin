@@ -3534,13 +3534,7 @@
       ontologyRuleCandidateAiTimeoutSeconds: settingValue("ontologyRuleCandidateAiTimeoutSeconds"),
       ontologyRuleCandidateAiIntervalMinutes: settingValue("ontologyRuleCandidateAiIntervalMinutes"),
       ontologyRuleCandidateAiMaxCandidates: settingValue("ontologyRuleCandidateAiMaxCandidates"),
-      ontologyGraphStoreMode: settingValue("ontologyGraphStoreMode"),
-      ontologyTypeDBEnabled: settingValue("ontologyTypeDBEnabled"),
       ontologyTypeDbEnabled: settingValue("ontologyTypeDbEnabled"),
-      typedbUri: settingValue("typedbUri"),
-      typedbUser: settingValue("typedbUser"),
-      typedbDatabase: settingValue("typedbDatabase"),
-      typedbTimeoutSeconds: settingValue("typedbTimeoutSeconds"),
       typedbAddress: settingValue("typedbAddress"),
       typedbUser: settingValue("typedbUser"),
       typedbDatabase: settingValue("typedbDatabase"),
@@ -13942,7 +13936,6 @@
 
   function feedSourceChannels() {
     var newsArchiveEnabled = settingEnabled("newsCollectionEnabled");
-    var graphStoreMode = settingValue("ontologyGraphStoreMode") || defaultSettings.ontologyGraphStoreMode || "typedb";
     return [
       {
         label: "KIS 장중 수급",
@@ -14003,7 +13996,7 @@
       {
         label: "그래프 추론",
         enabled: settingEnabled("ontologyReasoningEnabled"),
-        ready: graphStoreMode !== "typedb" || settingEnabled("ontologyTypeDbEnabled"),
+        ready: settingEnabled("ontologyTypeDbEnabled"),
         route: "근거 -> 관계 추론 -> 알림 후보",
         cadence: (settingValue("ontologyReasoningIntervalSeconds") || defaultSettings.ontologyReasoningIntervalSeconds || "10") + "초 확인"
       }
@@ -14020,13 +14013,11 @@
     var channels = feedSourceChannels();
     var activeChannels = channels.filter(function (channel) { return channel.enabled; }).length;
     var readyChannels = channels.filter(function (channel) { return channel.enabled && channel.ready !== false; }).length;
-    var graphStoreMode = settingValue("ontologyGraphStoreMode") || defaultSettings.ontologyGraphStoreMode || "typedb";
-    var graphStoreLabel = graphStoreMode === "typedb" ? "TypeDB" : (graphStoreMode === "dual" ? "TypeDB + TypeDB" : "TypeDB");
     return [
       { step: "01", title: "원천 수집", tone: activeChannels ? "watch" : "hold", value: activeChannels + "/" + channels.length, detail: "사용 중인 수집 채널" },
       { step: "02", title: "준비도 확인", tone: readyChannels === activeChannels ? "watch" : "caution", value: readyChannels + "/" + Math.max(activeChannels, 1), detail: "키·연결·무키 채널 확인" },
       { step: "03", title: "근거 저장", tone: Number(summary.total || 0) ? latest.tone : "caution", value: Number(summary.total || 0) + "건", detail: "최근 저장 " + latest.label },
-      { step: "04", title: "관계 추론", tone: settingEnabled("ontologyReasoningEnabled") ? "watch" : "hold", value: graphStoreLabel, detail: "배치 " + (settingValue("ontologyReasoningBatchSize") || defaultSettings.ontologyReasoningBatchSize || "20") },
+      { step: "04", title: "관계 추론", tone: settingEnabled("ontologyReasoningEnabled") ? "watch" : "hold", value: "TypeDB", detail: "배치 " + (settingValue("ontologyReasoningBatchSize") || defaultSettings.ontologyReasoningBatchSize || "20") },
       { step: "05", title: "알림 후보", tone: settingEnabled("materialityGateEnabled") ? "watch" : "hold", value: (settingValue("materialityMinimumScore") || defaultSettings.materialityMinimumScore || "65") + "점", detail: "중요도 게이트 기준" }
     ];
   }
@@ -14145,9 +14136,7 @@
   function renderFeedSettingsPanel() {
     var archiveScope = (settingValue("newsCollectionMaxSymbols") || defaultSettings.newsCollectionMaxSymbols || "40") + "종목 · "
       + (settingValue("newsCollectionLookbackMinutes") || defaultSettings.newsCollectionLookbackMinutes || "180") + "분";
-    var graphStoreMode = settingValue("ontologyGraphStoreMode") || defaultSettings.ontologyGraphStoreMode || "typedb";
-    var graphStoreLabel = graphStoreMode === "typedb" ? "TypeDB" : (graphStoreMode === "dual" ? "TypeDB+TypeDB" : (settingEnabled("ontologyTypeDBEnabled") ? "TypeDB" : "로컬"));
-    var reasoningScope = graphStoreLabel + " · "
+    var reasoningScope = "TypeDB · "
       + (settingValue("ontologyReasoningIntervalSeconds") || defaultSettings.ontologyReasoningIntervalSeconds || "10") + "초";
     return [
       '<article class="panel feed-settings-panel">',
@@ -14235,19 +14224,6 @@
           { value: "1", label: "사용" },
           { value: "0", label: "사용 안 함" }
         ]),
-        renderSettingSelect("ontologyGraphStoreMode", "그래프 저장소 모드", [
-          { value: "typedb", label: "TypeDB 단독" },
-          { value: "dual", label: "TypeDB + TypeDB 미러" },
-          { value: "typedb", label: "TypeDB 호환" }
-        ]),
-        renderSettingSelect("ontologyTypeDBEnabled", "TypeDB 미러 저장소", [
-          { value: "1", label: "사용" },
-          { value: "0", label: "사용 안 함" }
-        ]),
-        renderSettingField("typedbUri", "TypeDB URI", "text", "http://127.0.0.1:7474"),
-        renderSettingField("typedbUser", "TypeDB 사용자", "text", "typedb"),
-        renderSettingField("typedbDatabase", "TypeDB DB", "text", "typedb"),
-        renderSettingField("typedbTimeoutSeconds", "TypeDB 타임아웃(초)", "number", "8"),
         renderSettingSelect("ontologyTypeDbEnabled", "TypeDB 그래프 저장소", [
           { value: "1", label: "사용" },
           { value: "0", label: "사용 안 함" }

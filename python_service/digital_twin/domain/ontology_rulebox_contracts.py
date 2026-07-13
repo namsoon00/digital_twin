@@ -2,7 +2,7 @@ from dataclasses import asdict, dataclass, field as dataclass_field
 from typing import Dict, List
 
 
-GRAPH_REASONER_VERSION = "neo4j-rulebox-graph-reasoner-v1"
+GRAPH_REASONER_VERSION = "typedb-rulebox-graph-reasoner-v1"
 
 
 @dataclass(frozen=True)

@@ -10,16 +10,12 @@ from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontol
 from digital_twin.domain.portfolio import Position
 from digital_twin.domain.portfolio_calculations import portfolio_summary
 from digital_twin.domain.portfolio_ontology_market_concepts import missing_market_microstructure_fields
-from digital_twin.infrastructure.neo4j_ontology import (
-    Neo4jOntologyGraphRepository,
-    NullOntologyGraphRepository,
-    clear_rulebox_statements,
+from digital_twin.infrastructure.typedb_ontology import (
+    TypeDBOntologyGraphRepository,
     inferencebox_snapshot_from_rows,
-    inferencebox_snapshot_statements,
-    native_reasoning_statements_for_relation_types,
+    NullTypeDBOntologyGraphRepository,
     ontology_seed_graph,
     rulebox_graph_from_rules,
-    rulebox_version_statements,
     rulebox_rules_from_payload,
     rulebox_rules_to_payload,
     rulebox_snapshot_from_rows,
@@ -283,9 +279,9 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertIn("ruleBox", payload["aiInferencePacket"]["inputOrder"])
         self.assertGreater(payload["aiInferencePacket"]["graphInputs"]["inferenceBoxRelationCount"], 0)
 
-    def test_neo4j_projection_promotes_rule_and_inference_query_keys(self):
+    def test_typedb_projection_promotes_rule_and_inference_query_keys(self):
         graph = self.loss_guard_graph()
-        repository = Neo4jOntologyGraphRepository("http://neo4j.example.test")
+        repository = TypeDBOntologyGraphRepository("http://typedb.example.test")
 
         rule_row = next(item for item in repository.rows_for_entities(graph) if item["id"] == "rule:graph.loss_guard.breakdown.v1")
         stock_class_row = next(item for item in repository.rows_for_entities(graph) if item["id"] == "tbox-class:Stock")
@@ -295,8 +291,8 @@ class OntologyRuleBoxTests(unittest.TestCase):
         inference_row = next(item for item in repository.rows_for_entities(graph) if item["kind"] == "inference-trace")
         risk_relation = next(item for item in repository.rows_for_relations(graph) if item["type"] == "HAS_INFERRED_RISK")
         inference_evidence = next(item for item in repository.rows_for_evidence(graph) if item["kind"] == "inference-trace")
-        schema_text = "\n".join(item["statement"] for item in repository.schema_statements())
-        statement_text = "\n".join(item["statement"] for item in repository.statements(graph))
+        schema_text = repository.schema_query()
+        query_text = "\n".join(repository.insert_queries(graph))
 
         self.assertEqual("Stock", stock_class_row["className"])
         self.assertEqual("HOLDS", holds_relation_row["relationTypeName"])
@@ -321,67 +317,63 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertEqual("LOSS_REDUCE", risk_relation["decisionStage"])
         self.assertGreaterEqual(risk_relation["stagePriority"], 40)
         self.assertEqual("InferenceBox", inference_evidence["ontologyBox"])
-        self.assertIn("ontology_entity_rule_id", schema_text)
-        self.assertIn("ontology_entity_condition_kind", schema_text)
-        self.assertIn("ontology_tbox_class_name", schema_text)
-        self.assertIn("SET n:TBox", statement_text)
-        self.assertIn("SET n:ABox", statement_text)
-        self.assertIn("SET n:RuleBox", statement_text)
-        self.assertIn("SET n:InferenceBox", statement_text)
-        self.assertIn("SET n:OntologyTBoxClass", statement_text)
-        self.assertIn("SET n:OntologyTBoxRelation", statement_text)
+        self.assertIn("attribute ontology-rule-id", schema_text)
+        self.assertIn("attribute ontology-json", schema_text)
+        self.assertIn("attribute ontology-tbox-class", schema_text)
+        self.assertIn('has ontology-box "TBox"', query_text)
+        self.assertIn('has ontology-box "ABox"', query_text)
+        self.assertIn('has ontology-box "RuleBox"', query_text)
+        self.assertIn('has ontology-box "InferenceBox"', query_text)
+        self.assertIn('has ontology-tbox-class "Stock"', query_text)
+        self.assertIn('has ontology-relation-type "HOLDS"', query_text)
 
-    def test_ontology_seed_graph_contains_tbox_and_rulebox_for_neo4j(self):
+    def test_ontology_seed_graph_contains_tbox_and_rulebox_for_typedb(self):
         graph = ontology_seed_graph()
-        repository = Neo4jOntologyGraphRepository("http://neo4j.example.test")
+        repository = TypeDBOntologyGraphRepository("http://typedb.example.test")
         entity_rows = repository.rows_for_entities(graph)
         relation_rows = repository.rows_for_relations(graph)
-        result = NullOntologyGraphRepository().seed_ontology()
+        result = NullTypeDBOntologyGraphRepository().seed_ontology()
 
         self.assertTrue(any(row["ontologyBox"] == "TBox" and row["kind"] == "tbox-class" for row in entity_rows))
         self.assertTrue(any(row["ontologyBox"] == "RuleBox" and row["kind"] == "rule" for row in entity_rows))
         self.assertTrue(any(row["ontologyBox"] == "TBox" and row["type"] == "DEFINES_CLASS" for row in relation_rows))
         self.assertTrue(any(row["ontologyBox"] == "RuleBox" and row["type"] == "HAS_CONDITION" for row in relation_rows))
         self.assertFalse(result["saved"])
-        self.assertGreater(result["tboxEntityCount"], 0)
-        self.assertGreater(result["ruleBoxEntityCount"], 0)
+        self.assertGreater(result["entityCount"], 0)
+        self.assertGreater(result["relationCount"], 0)
 
-    def test_neo4j_native_reasoning_cypher_uses_rulebox_as_execution_source(self):
-        graph = self.loss_guard_graph()
-        repository = Neo4jOntologyGraphRepository("http://neo4j.example.test")
+    def test_typedb_run_rulebox_materializes_inferencebox_without_statement_builder(self):
+        class CapturingTypeDBRepository(TypeDBOntologyGraphRepository):
+            def __init__(self, graph):
+                super().__init__("127.0.0.1:1729")
+                self._last_graph = graph
+                self.saved_graph = None
 
-        statements = repository.native_reasoning_statements(graph)
-        cypher = "\n".join(item["statement"] for item in statements)
-        relation_types = [item["parameters"]["relationType"] for item in statements]
+            def save_graph(self, graph):
+                self.saved_graph = graph
+                return {"configured": True, "saved": True, "status": "ok", "graphStore": "typedb"}
 
-        self.assertIn("HAS_INFERRED_RISK", relation_types)
-        self.assertIn("MATCH (rule:OntologyEntity {kind: 'rule', ontologyBox: 'RuleBox'})", cypher)
-        self.assertIn("MATCH (rule)-[:HAS_CONDITION]->(condition:OntologyEntity", cypher)
-        self.assertIn("MATCH (rule)-[:DERIVES_RELATION]->(template:OntologyEntity", cypher)
-        self.assertIn("MERGE (stock)-[inferred:HAS_INFERRED_RISK]->(target)", cypher)
-        self.assertIn("nativeNeo4jReasoned = true", cypher)
-        self.assertIn("condition.conditionTargetFields", cypher)
-        self.assertIn("target.valueNumber", cypher)
-        self.assertIn("condition.conditionTargetMinValue", cypher)
-        self.assertIn("condition.conditionTargetMaxValue", cypher)
-        self.assertIn("condition.conditionTargetRelationScopes", cypher)
-        self.assertIn("condition.conditionTargetDataScopes", cypher)
-        self.assertIn("condition.conditionRole", cypher)
-        self.assertIn("rule.anyConditionMinCount", cypher)
-        self.assertIn("stock.kind = CASE WHEN coalesce(rule.sourceKind", cypher)
-        self.assertIn("condition.conditionTargetMaterialityPassed", cypher)
-        self.assertIn("stock.ontologyBox = 'ABox'", cypher)
-        self.assertIn("coalesce(stock.isCurrent, false) = true", cypher)
-        self.assertIn("coalesce(rel.isCurrent, false) = true", cypher)
-        self.assertIn("target.aboxSnapshotId = stock.aboxSnapshotId", cypher)
-        self.assertIn("template.derivationDecisionStage", cypher)
-        self.assertIn("inferred.decisionStage = template.derivationDecisionStage", cypher)
+        repository = CapturingTypeDBRepository(self.loss_guard_graph())
+
+        result = repository.run_rulebox()
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual("typedb", result["graphStore"])
+        self.assertTrue(result["typedbBootstrapReasoningUsed"])
+        self.assertFalse(result["nativeTypeDbReasoningUsed"])
+        self.assertIn("HAS_INFERRED_RISK", result["relationTypes"])
+        self.assertIsNotNone(repository.saved_graph)
+        self.assertTrue(any(
+            str((relation.properties or {}).get("ontologyBox") or "") == "InferenceBox"
+            and relation.relation_type == "HAS_INFERRED_RISK"
+            for relation in repository.saved_graph.relations
+        ))
 
     def test_default_rulebox_covers_materiality_and_trend_transition_rules(self):
         rules = default_graph_inference_rules()
         rule_ids = {item.rule_id for item in rules}
         graph = rulebox_graph_from_rules(rules)
-        repository = Neo4jOntologyGraphRepository("http://neo4j.example.test")
+        repository = TypeDBOntologyGraphRepository("http://typedb.example.test")
         condition_rows = repository.rows_for_entities(graph)
         support_transition = next(
             item
@@ -485,9 +477,9 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertTrue(any(item.kind == "rule" and (item.properties or {}).get("ontologyBox") == "RuleBox" for item in graph.entities))
         self.assertTrue(any(item.relation_type == "DERIVES_RELATION" for item in graph.relations))
 
-    def test_rulebox_snapshot_reconstructs_rules_from_neo4j_rows(self):
+    def test_rulebox_snapshot_reconstructs_rules_from_typedb_rows(self):
         graph = self.loss_guard_graph()
-        repository = Neo4jOntologyGraphRepository("http://neo4j.example.test")
+        repository = TypeDBOntologyGraphRepository("http://typedb.example.test")
         entity_rows = repository.rows_for_entities(graph)
         rowsets = {
             "rules": [item for item in entity_rows if item["kind"] == "rule" and item["ontologyBox"] == "RuleBox"],
@@ -505,7 +497,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
                     "status": "saved",
                     "changeReason": "baseline",
                     "author": "test",
-                    "engineVersion": "neo4j-rulebox-graph-reasoner-v1",
+                    "engineVersion": "typedb-rulebox-graph-reasoner-v1",
                     "createdAt": "2026-07-10T00:00:00Z",
                 }
             ],
@@ -532,23 +524,19 @@ class OntologyRuleBoxTests(unittest.TestCase):
     def test_rulebox_governance_versions_and_candidates_are_reviewable(self):
         rules = default_graph_inference_rules()
         version = rulebox_version_payload(rules, "2026-07-10T00:00:00Z", "baseline", "test")
-        statements = rulebox_version_statements(version)
         candidates = rulebox_governance_candidates(rulebox_rules_to_payload(rules), [version])
         factor_candidate = next(item for item in candidates if item["id"] == "candidate.factor-concentration-context.v1")
 
-        cypher = "\n".join(item["statement"] for item in statements)
-
-        self.assertIn("RuleBoxGovernance", cypher)
-        self.assertIn("HAS_RULEBOX_VERSION", cypher)
-        self.assertEqual("baseline", statements[0]["parameters"]["changeReason"])
+        self.assertEqual("baseline", version["changeReason"])
+        self.assertTrue(version["id"].startswith("rulebox-version:"))
         self.assertEqual("covered", factor_candidate["status"])
         self.assertFalse(factor_candidate["proposedRule"]["enabled"])
         self.assertEqual("append-disabled-rule", factor_candidate["action"])
 
-    def test_empty_neo4j_rulebox_snapshot_does_not_fallback_to_runtime_defaults(self):
+    def test_empty_typedb_rulebox_snapshot_does_not_fallback_to_runtime_defaults(self):
         snapshot = rulebox_snapshot_from_rows(
             {"rules": [], "conditions": [], "derivations": [], "relationTypes": []},
-            source="neo4j-http",
+            source="typedb-http",
         )
 
         self.assertEqual("empty", snapshot["status"])
@@ -560,9 +548,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertEqual([], snapshot["versions"])
         self.assertTrue(snapshot["changeCandidates"])
 
-    def test_inferencebox_snapshot_payload_marks_native_neo4j_reasoning(self):
-        statements = inferencebox_snapshot_statements(["005930"], limit=10)
-        statement_text = "\n".join(item["statement"] for item in statements)
+    def test_inferencebox_snapshot_payload_marks_native_typedb_reasoning(self):
         rowsets = {
             "entityCounts": [{"entityCount": 2, "nativeEntityCount": 1}],
             "relationCounts": [{"relationCount": 3, "nativeRelationCount": 2}],
@@ -578,7 +564,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
                     "polarity": "risk",
                     "actionGroup": "lossControl",
                     "actionLevel": "review",
-                    "nativeNeo4jReasoned": True,
+                    "nativeTypeDbReasoned": True,
                 }
             ],
             "relations": [
@@ -595,7 +581,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
                     "decisionStage": "LOSS_REDUCE",
                     "stagePriority": 43,
                     "aiInfluenceLabel": "손실 방어 추론",
-                    "nativeNeo4jReasoned": True,
+                    "nativeTypeDbReasoned": True,
                 }
             ],
             "traces": [
@@ -606,82 +592,20 @@ class OntologyRuleBoxTests(unittest.TestCase):
                     "ruleId": "graph.loss_guard.breakdown.v1",
                     "confidence": 0.86,
                     "matchedConditionIds": ["holding-loss", "holding-source", "ma-break"],
-                    "nativeNeo4jReasoned": True,
+                    "nativeTypeDbReasoned": True,
                 }
             ],
         }
 
         payload = inferencebox_snapshot_from_rows(rowsets, source="test", symbols=["005930"])
 
-        self.assertIn("n.ontologyBox = 'InferenceBox'", statement_text)
-        self.assertIn("size($symbols) = 0 OR n.symbol IN $symbols", statement_text)
-        self.assertIn("r.decisionStage AS decisionStage", statement_text)
         self.assertEqual("ok", payload["status"])
-        self.assertTrue(payload["neo4jNativeReasoningUsed"])
+        self.assertTrue(payload["nativeTypeDbReasoningUsed"])
         self.assertEqual(2, payload["nativeRelationCount"])
         self.assertEqual("HAS_INFERRED_RISK", payload["relations"][0]["type"])
         self.assertEqual("LOSS_REDUCE", payload["relations"][0]["decisionStage"])
         self.assertEqual(43, payload["relations"][0]["stagePriority"])
         self.assertEqual(["holding-loss", "holding-source", "ma-break"], payload["traces"][0]["matchedConditionIds"])
-
-    def test_rulebox_admin_clear_and_native_execution_statements_are_graph_native(self):
-        clear_text = "\n".join(item["statement"] for item in clear_rulebox_statements(clear_inference=True))
-        statements = native_reasoning_statements_for_relation_types(["HAS_INFERRED_RISK", "HAS_INFERRED_SUPPORT"])
-        cypher = "\n".join(item["statement"] for item in statements)
-
-        self.assertIn("n.ontologyBox = 'RuleBox' DETACH DELETE n", clear_text)
-        self.assertIn("n.ontologyBox = 'InferenceBox' DETACH DELETE n", clear_text)
-        self.assertEqual(["HAS_INFERRED_RISK", "HAS_INFERRED_SUPPORT"], [item["parameters"]["relationType"] for item in statements])
-        self.assertIn("MATCH (rule:OntologyEntity {kind: 'rule', ontologyBox: 'RuleBox'})", cypher)
-        self.assertIn("condition.conditionRelationPolarities", cypher)
-        self.assertIn("rel.polarity IN condition.conditionRelationPolarities", cypher)
-
-    def test_rulebox_http_execution_retries_transient_deadlock_per_relation_type(self):
-        class RetryingRepository(Neo4jOntologyGraphRepository):
-            def __init__(self):
-                super().__init__("http://neo4j.test", timeout_seconds=2)
-                self.calls = {}
-
-            def post_http_statements(self, endpoint, headers, statements):
-                relation_type = statements[0]["parameters"]["relationType"]
-                self.calls[relation_type] = self.calls.get(relation_type, 0) + 1
-                if relation_type == "HAS_INFERRED_RISK" and self.calls[relation_type] == 1:
-                    return {"results": [], "errors": [{"code": "Neo.TransientError.Transaction.DeadlockDetected", "message": "deadlock"}]}
-                return {"results": [], "errors": []}
-
-        relation_types = ["HAS_INFERRED_RISK", "HAS_INFERRED_SUPPORT"]
-        statements = native_reasoning_statements_for_relation_types(relation_types)
-
-        result = RetryingRepository().run_native_rulebox_statements_via_http("http://neo4j.test", {}, relation_types, statements)
-
-        self.assertEqual("ok", result["status"])
-        self.assertEqual(2, result["succeededStatementCount"])
-        self.assertEqual(0, result["failedStatementCount"])
-        self.assertEqual(3, result["attemptCount"])
-        self.assertEqual(2, result["statementResults"][0]["attempts"])
-        self.assertEqual("ok", result["statementResults"][0]["status"])
-
-    def test_rulebox_http_execution_reports_partial_when_one_relation_type_fails(self):
-        class PartialRepository(Neo4jOntologyGraphRepository):
-            def __init__(self):
-                super().__init__("http://neo4j.test", timeout_seconds=2)
-
-            def post_http_statements(self, endpoint, headers, statements):
-                relation_type = statements[0]["parameters"]["relationType"]
-                if relation_type == "HAS_INFERRED_RISK":
-                    return {"results": [], "errors": [{"code": "Neo.ClientError.Statement.SyntaxError", "message": "bad query"}]}
-                return {"results": [], "errors": []}
-
-        relation_types = ["HAS_INFERRED_RISK", "HAS_INFERRED_SUPPORT"]
-        statements = native_reasoning_statements_for_relation_types(relation_types)
-
-        result = PartialRepository().run_native_rulebox_statements_via_http("http://neo4j.test", {}, relation_types, statements)
-
-        self.assertEqual("partial", result["status"])
-        self.assertEqual(1, result["succeededStatementCount"])
-        self.assertEqual(1, result["failedStatementCount"])
-        self.assertIn("HAS_INFERRED_RISK", result["reason"])
-        self.assertEqual("neo4j-error", result["statementResults"][0]["status"])
 
 
 if __name__ == "__main__":

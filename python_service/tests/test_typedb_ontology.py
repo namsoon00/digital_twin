@@ -10,12 +10,8 @@ from digital_twin.domain.repositories import (
     ONTOLOGY_GRAPH_REPOSITORY_CONTRACT,
     ontology_graph_repository_contract_errors,
 )
-from digital_twin.infrastructure.neo4j_ontology import NullOntologyGraphRepository, Neo4jOntologyGraphRepository
-from digital_twin.infrastructure.ontology_graph_store import (
-    CompositeOntologyGraphRepository,
-    ontology_repository_from_settings,
-)
-from digital_twin.infrastructure.neo4j_ontology_rulebox import rulebox_graph_from_rules
+from digital_twin.infrastructure.ontology_graph_store import ontology_repository_from_settings
+from digital_twin.infrastructure.graph_store_rulebox import rulebox_graph_from_rules
 from digital_twin.infrastructure.typedb_ontology import (
     NullTypeDBOntologyGraphRepository,
     TypeDBOntologyGraphRepository,
@@ -109,14 +105,8 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("disabled", result["status"])
         self.assertEqual("typedb", result["graphStore"])
 
-    def test_repository_factory_can_build_dual_graph_store_without_disabling_neo4j(self):
+    def test_repository_factory_builds_typedb_graph_store(self):
         repository = ontology_repository_from_settings({
-            "ontologyGraphStoreMode": "dual",
-            "ontologyNeo4jEnabled": "1",
-            "neo4jUri": "http://127.0.0.1:7474",
-            "neo4jUser": "neo4j",
-            "neo4jDatabase": "neo4j",
-            "neo4jTimeoutSeconds": "8",
             "ontologyTypeDbEnabled": "1",
             "typedbAddress": "127.0.0.1:1729",
             "typedbUser": "admin",
@@ -126,9 +116,8 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             "typedbTimeoutSeconds": "20",
         })
 
-        self.assertIsInstance(repository, CompositeOntologyGraphRepository)
-        self.assertEqual("neo4j", repository.primary.store_key)
-        self.assertEqual(["typedb"], [item.store_key for item in repository.mirrors])
+        self.assertIsInstance(repository, TypeDBOntologyGraphRepository)
+        self.assertEqual("typedb", repository.store_key)
 
     def test_runtime_composition_uses_generic_graph_store_factory(self):
         root = Path(__file__).resolve().parents[2]
@@ -139,18 +128,16 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         ]:
             source = (root / relative).read_text(encoding="utf-8")
             self.assertIn("ontology_graph_store", source)
-            self.assertNotIn("from .neo4j_ontology import ontology_repository_from_settings", source)
-            self.assertNotIn("from ..infrastructure.neo4j_ontology import ontology_repository_from_settings", source)
+            self.assertNotIn("from .typedb_ontology import ontology_repository_from_settings", source)
+            self.assertNotIn("from ..infrastructure.typedb_ontology import ontology_repository_from_settings", source)
 
     def test_service_manager_adds_typedb_only_when_graph_store_requests_it(self):
         with patch.object(service_manager, "runtime_settings", return_value={
-            "ontologyGraphStoreMode": "neo4j",
             "ontologyTypeDbEnabled": "0",
         }):
             self.assertNotIn("typedb", service_manager.worker_specs())
 
         with patch.object(service_manager, "runtime_settings", return_value={
-            "ontologyGraphStoreMode": "dual",
             "ontologyTypeDbEnabled": "1",
             "typedbAddress": "127.0.0.1:1729",
         }), patch.object(service_manager, "typedb_executable", return_value="/tmp/typedb"):
@@ -164,11 +151,9 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
 
     def test_graph_store_contract_is_shared_by_all_adapters(self):
         repositories = [
-            NullOntologyGraphRepository(),
             NullTypeDBOntologyGraphRepository(),
-            Neo4jOntologyGraphRepository(""),
             TypeDBOntologyGraphRepository(""),
-            CompositeOntologyGraphRepository(NullOntologyGraphRepository(), mirrors=[NullTypeDBOntologyGraphRepository()]),
+            TypeDBOntologyGraphRepository(""),
         ]
 
         for repository in repositories:
@@ -331,101 +316,6 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("typedb-function-readiness-v1", profile["version"])
         self.assertGreater(profile["readyRuleCount"] + profile["partialRuleCount"], 0)
         self.assertTrue(profile["materializationRequired"])
-
-    def test_dual_graph_store_reports_parity_mismatches(self):
-        class FakeStore:
-            def __init__(self, key, entities, relations):
-                self.store_key = key
-                self.entities = entities
-                self.relations = relations
-
-            def active_tbox_metadata(self):
-                return {"status": "ok"}
-
-            def save_graph(self, graph):
-                return {"status": "ok", "graphStore": self.store_key, "entityCount": self.entities, "relationCount": self.relations}
-
-            def seed_ontology(self, payload=None):
-                return {"status": "ok", "graphStore": self.store_key}
-
-            def rulebox_snapshot(self):
-                return {"status": "ok", "graphStore": self.store_key}
-
-            def save_rulebox(self, payload=None):
-                return {"status": "ok", "graphStore": self.store_key}
-
-            def run_rulebox(self, payload=None):
-                return {"status": "ok", "graphStore": self.store_key}
-
-            def inferencebox_snapshot(self, symbols=None, limit=80):
-                return {"status": "ok", "graphStore": self.store_key, "symbols": list(symbols or []), "limit": limit}
-
-            def save_rule_change_candidates(self, candidates, context=None):
-                return {"status": "ok", "graphStore": self.store_key, "candidateCount": len(candidates or [])}
-
-        repository = CompositeOntologyGraphRepository(
-            FakeStore("neo4j", 3, 2),
-            mirrors=[FakeStore("typedb", 3, 1)],
-        )
-
-        result = repository.save_graph(PortfolioOntology("parity"))
-
-        self.assertEqual("mismatch", result["graphStoreParity"]["status"])
-        self.assertEqual("relationCount", result["graphStoreParity"]["checks"][0]["mismatches"][0]["key"])
-
-    def test_dual_graph_store_reports_semantic_parity_mismatches(self):
-        class FakeRuleboxStore:
-            def __init__(self, key, target_kind):
-                self.store_key = key
-                self.target_kind = target_kind
-
-            def active_tbox_metadata(self):
-                return {"status": "ok"}
-
-            def save_graph(self, graph):
-                return {"status": "ok", "graphStore": self.store_key}
-
-            def seed_ontology(self, payload=None):
-                return {"status": "ok", "graphStore": self.store_key}
-
-            def rulebox_snapshot(self):
-                return {
-                    "status": "ok",
-                    "graphStore": self.store_key,
-                    "ruleCount": 1,
-                    "conditionCount": 1,
-                    "derivationCount": 1,
-                    "rules": [{
-                        "rule_id": "graph.semantic.test",
-                        "version": "v1",
-                        "enabled": True,
-                        "conditions": [{"condition_id": "source", "kind": "subject_property", "field": "source", "operator": "==", "value": "holding"}],
-                        "derivations": [{"relation_type": "HAS_INFERRED_RISK", "target_kind": self.target_kind, "target_key": "{symbol}"}],
-                    }],
-                }
-
-            def save_rulebox(self, payload=None):
-                return {"status": "ok", "graphStore": self.store_key}
-
-            def run_rulebox(self, payload=None):
-                return {"status": "ok", "graphStore": self.store_key}
-
-            def inferencebox_snapshot(self, symbols=None, limit=80):
-                return {"status": "ok", "graphStore": self.store_key, "symbols": list(symbols or []), "limit": limit}
-
-            def save_rule_change_candidates(self, candidates, context=None):
-                return {"status": "ok", "graphStore": self.store_key, "candidateCount": len(candidates or [])}
-
-        repository = CompositeOntologyGraphRepository(
-            FakeRuleboxStore("neo4j", "risk-signal"),
-            mirrors=[FakeRuleboxStore("typedb", "opportunity-signal")],
-        )
-
-        result = repository.rulebox_snapshot()
-
-        self.assertEqual("mismatch", result["graphStoreParity"]["status"])
-        self.assertEqual("mismatch", result["graphStoreParity"]["checks"][0]["semantic"]["status"])
-        self.assertEqual("rulebox", result["graphStoreParity"]["checks"][0]["semantic"]["domain"])
 
 
 if __name__ == "__main__":

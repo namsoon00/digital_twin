@@ -102,7 +102,7 @@ def bool_or_none(value: object):
 
 
 
-class Neo4jOntologyRowMapperMixin:
+class GraphStoreOntologyRowMapperMixin:
     def rows_for_entities(self, graph: PortfolioOntology) -> List[Dict[str, object]]:
         rows: List[Dict[str, object]] = []
         for item in graph.entities:

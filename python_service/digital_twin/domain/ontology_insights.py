@@ -494,7 +494,7 @@ def build_investment_insight_events(snapshot: AccountSnapshot, signal_events: It
         metadata = {
             "ontologyInsight": {
                 "id": insight_id,
-                "cadenceKey": ":".join(["cadence", "neo4j", snapshot.account_id, INSIGHT_RULE, subject, policy_dispatch_type, policy_source_key]),
+                "cadenceKey": ":".join(["cadence", "typedb", snapshot.account_id, INSIGHT_RULE, subject, policy_dispatch_type, policy_source_key]),
                 "insightType": insight_type,
                 "dispatchInsightType": policy_dispatch_type,
                 "dispatchSourceKey": policy_source_key,

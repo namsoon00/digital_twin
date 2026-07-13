@@ -73,7 +73,7 @@ def ontology_inference_event_metadata(snapshot: AccountSnapshot) -> Dict[str, ob
             "polarity": str(item.get("polarity") or ""),
             "riskImpact": item.get("riskImpact"),
             "supportImpact": item.get("supportImpact"),
-            "nativeNeo4jReasoned": bool(item.get("nativeNeo4jReasoned")),
+            "nativeTypeDbReasoned": bool(item.get("nativeTypeDbReasoned")),
         }
         for item in (inference.get("relations") or [])[:8]
         if isinstance(item, dict)
@@ -84,7 +84,7 @@ def ontology_inference_event_metadata(snapshot: AccountSnapshot) -> Dict[str, ob
             "label": str(item.get("label") or ""),
             "confidence": item.get("confidence"),
             "matchedConditionIds": list(item.get("matchedConditionIds") or [])[:8] if isinstance(item.get("matchedConditionIds"), list) else [],
-            "nativeNeo4jReasoned": bool(item.get("nativeNeo4jReasoned")),
+            "nativeTypeDbReasoned": bool(item.get("nativeTypeDbReasoned")),
         }
         for item in (inference.get("traces") or [])[:8]
         if isinstance(item, dict)
@@ -92,11 +92,11 @@ def ontology_inference_event_metadata(snapshot: AccountSnapshot) -> Dict[str, ob
     rulebox_execution = projection.get("ruleboxExecution") if isinstance(projection.get("ruleboxExecution"), dict) else {}
     source = inferencebox_source_name({
         **dict(inference or {}),
-        "graphStore": inference.get("graphStore") or projection.get("graphStore") or projection.get("primaryGraphStore") or "",
+        "graphStore": inference.get("graphStore") or projection.get("graphStore") or "",
     })
     return {
         "source": source,
-        "graphStore": str(inference.get("graphStore") or projection.get("graphStore") or projection.get("primaryGraphStore") or ""),
+        "graphStore": str(inference.get("graphStore") or projection.get("graphStore") or ""),
         "status": str(inference.get("status") or projection.get("status") or ""),
         "projectionMode": str(projection.get("projectionMode") or ""),
         "ruleboxExecutionStatus": str(rulebox_execution.get("status") or ""),
@@ -105,7 +105,6 @@ def ontology_inference_event_metadata(snapshot: AccountSnapshot) -> Dict[str, ob
         "ruleboxRelationTypes": list(rulebox_execution.get("relationTypes") or [])[:20] if isinstance(rulebox_execution.get("relationTypes"), list) else [],
         "clearInferenceStatus": str((rulebox_execution.get("clearResult") or {}).get("status") or "") if isinstance(rulebox_execution.get("clearResult"), dict) else "",
         "clearInferenceReason": str((rulebox_execution.get("clearResult") or {}).get("reason") or "") if isinstance(rulebox_execution.get("clearResult"), dict) else "",
-        "neo4jNativeReasoningUsed": bool(inference.get("neo4jNativeReasoningUsed")),
         "nativeTypeDbReasoningUsed": bool(inference.get("nativeTypeDbReasoningUsed")),
         "typedbBootstrapReasoningUsed": bool(inference.get("typedbBootstrapReasoningUsed")),
         "entityCount": int(number(inference.get("entityCount")) or 0),
@@ -529,7 +528,6 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
             "relationCount": relation_count,
             "traceCount": trace_count,
             "nativeRelationCount": int(number(inference_status.get("nativeRelationCount")) or 0),
-            "neo4jNativeReasoningUsed": bool(inference_status.get("neo4jNativeReasoningUsed")),
             "nativeTypeDbReasoningUsed": bool(inference_status.get("nativeTypeDbReasoningUsed")),
             "typedbBootstrapReasoningUsed": bool(inference_status.get("typedbBootstrapReasoningUsed")),
             "projectionMode": str(inference_status.get("projectionMode") or ""),
@@ -620,7 +618,7 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
         relation_count = int(number(state.get("relationCount")) or 0)
         trace_count = int(number(state.get("traceCount")) or 0)
         entity_count = int(number(state.get("entityCount")) or 0)
-        native_used = bool(state.get("neo4jNativeReasoningUsed"))
+        native_used = bool(state.get("nativeTypeDbReasoningUsed"))
         typedb_used = bool(state.get("nativeTypeDbReasoningUsed") or state.get("typedbBootstrapReasoningUsed"))
         status_text = str(state.get("status") or "missing").strip() or "missing"
         lines = [
@@ -648,8 +646,7 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
                 "ruleboxRelationTypes": list(state.get("ruleboxRelationTypes") or [])[:20] if isinstance(state.get("ruleboxRelationTypes"), list) else [],
                 "clearInferenceStatus": str(state.get("clearInferenceStatus") or ""),
                 "clearInferenceReason": str(state.get("clearInferenceReason") or ""),
-                "neo4jNativeReasoningUsed": native_used,
-                "nativeTypeDbReasoningUsed": bool(state.get("nativeTypeDbReasoningUsed")),
+                "nativeTypeDbReasoningUsed": native_used,
                 "typedbBootstrapReasoningUsed": bool(state.get("typedbBootstrapReasoningUsed")),
                 "graphStoreReasoningUsed": native_used or typedb_used,
                 "entityCount": entity_count,
@@ -717,7 +714,6 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
             "ruleboxRelationTypes": list(rulebox_execution.get("relationTypes") or [])[:20] if isinstance(rulebox_execution.get("relationTypes"), list) else [],
             "clearInferenceStatus": str(clear_result.get("status") or ""),
             "clearInferenceReason": str(clear_result.get("reason") or ""),
-            "neo4jNativeReasoningUsed": bool((inference or {}).get("neo4jNativeReasoningUsed")) if isinstance(inference, dict) else False,
             "nativeTypeDbReasoningUsed": bool((inference or {}).get("nativeTypeDbReasoningUsed")) if isinstance(inference, dict) else False,
             "typedbBootstrapReasoningUsed": bool((inference or {}).get("typedbBootstrapReasoningUsed")) if isinstance(inference, dict) else False,
             "entityCount": int(number((inference or {}).get("entityCount")) or 0) if isinstance(inference, dict) else 0,
@@ -752,8 +748,7 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
         relations = inference.get("relations") if isinstance(inference.get("relations"), list) else []
         traces = inference.get("traces") if isinstance(inference.get("traces"), list) else []
         graph_reasoning_used = (
-            bool(inference.get("neo4jNativeReasoningUsed"))
-            or bool(inference.get("nativeTypeDbReasoningUsed"))
+            bool(inference.get("nativeTypeDbReasoningUsed"))
             or bool(inference.get("typedbBootstrapReasoningUsed"))
         )
         if not graph_reasoning_used and not relations and not traces:
@@ -793,7 +788,7 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
                 "holdingTiming",
                 ":".join(event_key_parts),
                 item.name,
-                ["상태 " + decision_phrase, *self.holding_price_lines(position, snapshot.portfolio), self.flow_context_line(position), self.investor_context_line(position), self.trend_context_line(position), self.holding_action_line(item.decision, item.profit_loss_rate)] + relation_lines + ontology_lines + active_lines,
+                ["상태 " + decision_phrase, *self.holding_price_lines(position, snapshot.portfolio, positions.values()), self.flow_context_line(position), self.investor_context_line(position), self.trend_context_line(position), self.holding_action_line(item.decision, item.profit_loss_rate)] + relation_lines + ontology_lines + active_lines,
                 item.symbol,
                 criteria=self.criteria(
                     "관계 규칙이 위험/주의 상태로 성립하거나 손익률이 손실 기준 "

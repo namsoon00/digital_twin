@@ -301,11 +301,8 @@ function checkFrontendAdminRender() {
   assertOk(designSystemDoc.indexOf("Button Placement") >= 0, "디자인 시스템 문서에 버튼 위치 정책이 없습니다.");
   assertOk(designSystemDoc.indexOf("aria-current") >= 0, "디자인 시스템 문서에 내비게이션 접근성 기준이 없습니다.");
   assertOk(code.indexOf('appTheme: settingValue("appTheme")') >= 0, "설정 저장 payload에 화면 테마가 포함되지 않았습니다.");
-  assertOk(code.indexOf('neo4jUri: settingValue("neo4jUri")') >= 0, "설정 저장 payload에 Neo4j URI가 포함되지 않았습니다.");
-  assertOk(code.indexOf('ontologyGraphStoreMode: settingValue("ontologyGraphStoreMode")') >= 0, "설정 저장 payload에 그래프 저장소 모드가 포함되지 않았습니다.");
   assertOk(code.indexOf('typedbAddress: settingValue("typedbAddress")') >= 0, "설정 저장 payload에 TypeDB 주소가 포함되지 않았습니다.");
-  assertOk(code.indexOf('renderSettingField("neo4jUri"') >= 0, "설정 화면에 Neo4j URI 입력 필드가 없습니다.");
-  assertOk(code.indexOf('renderSettingSelect("ontologyGraphStoreMode"') >= 0, "설정 화면에 그래프 저장소 모드 선택 필드가 없습니다.");
+  assertOk(code.indexOf('typedbTlsEnabled: settingValue("typedbTlsEnabled")') >= 0, "설정 저장 payload에 TypeDB TLS 설정이 포함되지 않았습니다.");
   assertOk(code.indexOf('renderSettingField("typedbAddress"') >= 0, "설정 화면에 TypeDB 주소 입력 필드가 없습니다.");
   const payloads = {
     "/api/settings": {
@@ -313,11 +310,12 @@ function checkFrontendAdminRender() {
         tossApiBaseUrl: "https://openapi.tossinvest.com",
         notifyProvider: "telegram",
         notifyLinkUrl: "http://127.0.0.1:3000?tab=notifications",
-        ontologyNeo4jEnabled: "1",
-        neo4jUri: "http://127.0.0.1:7474",
-        neo4jUser: "neo4j",
-        neo4jDatabase: "neo4j",
-        neo4jTimeoutSeconds: "8",
+        ontologyTypeDbEnabled: "1",
+        typedbAddress: "127.0.0.1:1729",
+        typedbUser: "admin",
+        typedbDatabase: "orbit_alpha_ontology",
+        typedbTlsEnabled: "0",
+        typedbTimeoutSeconds: "20",
         ontologyRuleCandidateAiEnabled: "1",
         ontologyRuleCandidateAiUseCodex: "1",
         ontologyRuleCandidateAiIntervalMinutes: "60",
@@ -339,7 +337,7 @@ function checkFrontendAdminRender() {
       saved: false,
       status: "disabled",
       source: "defaults",
-      engineVersion: "neo4j-rulebox-graph-reasoner-v1",
+      engineVersion: "typedb-rulebox-graph-reasoner-v1",
       ruleCount: 1,
       conditionCount: 1,
       derivationCount: 1,
@@ -384,7 +382,7 @@ function checkFrontendAdminRender() {
         {
           rule_id: "graph.loss_guard.breakdown.v1",
           label: "손실 방어 추론",
-          version: "neo4j-rulebox-graph-reasoner-v1",
+          version: "typedb-rulebox-graph-reasoner-v1",
           source_kind: "smoke",
           enabled: true,
           action_group: "riskControl",
@@ -1470,7 +1468,7 @@ function checkFrontendAdminRender() {
     assertOk(modelingRulesHtml.indexOf("investment-ai-packet-panel") >= 0 && modelingRulesHtml.indexOf("AI 추론 입력 계약") >= 0, "전략 룰 섹션에 AI 추론 입력 계약이 없습니다.");
     assertOk(modelingRulesHtml.indexOf("ontology-rule-panel") >= 0 && modelingRulesHtml.indexOf("Relation Rule Registry") >= 0, "전략 룰 섹션에 관계 규칙 레지스트리가 없습니다.");
     assertOk(modelingRulesHtml.indexOf('data-model-setting="ontologyRelationRules"') >= 0, "전략 룰 섹션에 관계 규칙 편집기가 없습니다.");
-    assertOk(modelingRulesHtml.indexOf("neo4j-rulebox-panel") >= 0 && modelingRulesHtml.indexOf("TypeDB RuleBox") >= 0, "전략 룰 섹션에 TypeDB RuleBox 관리 콘솔이 없습니다.");
+    assertOk(modelingRulesHtml.indexOf("typedb-rulebox-panel") >= 0 && modelingRulesHtml.indexOf("TypeDB RuleBox") >= 0, "전략 룰 섹션에 TypeDB RuleBox 관리 콘솔이 없습니다.");
     assertOk(modelingRulesHtml.indexOf('data-ontology-rulebox-json') >= 0 && modelingRulesHtml.indexOf('data-action="run-rulebox"') >= 0, "TypeDB RuleBox JSON 편집기나 실행 버튼이 없습니다.");
     assertOk(modelingRulesHtml.indexOf("최근 버전") >= 0 && modelingRulesHtml.indexOf("AI 관계 후보 검토") >= 0, "TypeDB RuleBox 버전/후보 검토 섹션이 없습니다.");
     assertOk(modelingRulesHtml.indexOf('data-ontology-rulebox-change-reason') >= 0 && modelingRulesHtml.indexOf('data-action="append-rulebox-candidate"') >= 0, "RuleBox 변경 이유 입력이나 후보 추가 버튼이 없습니다.");
@@ -1732,6 +1730,7 @@ async function withServer(extraEnv, callback) {
       EXTERNAL_FRED_ENABLED: "0",
       EXTERNAL_DART_ENABLED: "0",
       EXTERNAL_SEC_ENABLED: "0",
+      EXTERNAL_NEWS_ENABLED: "0",
       EXTERNAL_CRYPTO_IDS: "",
       SETTINGS_PATH: settingsPath,
       DIGITAL_TWIN_DATA_DIR: dataDir

@@ -44,23 +44,19 @@ EXTERNAL_CRYPTO_IDS=bitcoin,ethereum
 EXTERNAL_DART_CORP_CODES="005930=00126380;000660=00164779"
 ```
 
-관계 분석 데이터를 그래프 저장소에 저장하려면 `.env.local`에 아래 값을 추가합니다. 기본은 기존 Neo4j이고, TypeDB 전환 준비는 `ONTOLOGY_GRAPH_STORE_MODE=dual`로 TypeDB 미러를 함께 적재한 뒤 검증하는 방식이 안전합니다.
+관계 분석 데이터를 그래프 저장소에 저장하려면 `.env.local`에 아래 값을 추가합니다. 그래프 저장소는 TypeDB 단일 경로로 동작합니다.
 
 ```bash
-ONTOLOGY_GRAPH_STORE_MODE=neo4j # neo4j | dual | typedb
-ONTOLOGY_NEO4J_ENABLED=1
-NEO4J_URI=http://127.0.0.1:7474
-NEO4J_USER=neo4j
-NEO4J_PASSWORD=...
-NEO4J_DATABASE=neo4j
-ONTOLOGY_TYPEDB_ENABLED=0
+ONTOLOGY_TYPEDB_ENABLED=1
 TYPEDB_ADDRESS=127.0.0.1:1729
 TYPEDB_USER=admin
 TYPEDB_PASSWORD=password
 TYPEDB_DATABASE=orbit_alpha_ontology
+TYPEDB_TLS_ENABLED=0
+TYPEDB_TIMEOUT_SECONDS=20
 ```
 
-`ONTOLOGY_GRAPH_STORE_MODE=dual` 또는 `typedb`이고 `ONTOLOGY_TYPEDB_ENABLED=1`이면 `npm run python:service:start|restart|status`가 TypeDB 서버도 함께 관리합니다. TypeDB 로컬 데이터와 로그는 `data/typedb-data/`, `data/typedb-logs/`, `data/typedb.log` 아래에 저장되며 git에는 포함하지 않습니다.
+`ONTOLOGY_TYPEDB_ENABLED=1`이면 `npm run python:service:start|restart|status`가 TypeDB 서버도 함께 관리합니다. TypeDB 로컬 데이터와 로그는 `data/typedb-data/`, `data/typedb-logs/`, `data/typedb.log` 아래에 저장되며 git에는 포함하지 않습니다.
 
 토스 개발자 콘솔에서 허용 IP를 관리하는 경우, 브라우저 IP가 아니라 이 로컬 서버가 외부로 나가는 공인 IP를 등록해야 합니다. GitHub Pages 같은 정적 웹 페이지에서 브라우저가 직접 토스 API를 호출하는 구조는 `client_secret` 노출과 사용자별 유동 IP 문제 때문에 사용하지 않습니다.
 

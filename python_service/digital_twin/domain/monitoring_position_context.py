@@ -1,4 +1,4 @@
-from typing import Dict, List
+from typing import Dict, Iterable, List
 
 from .alert_formatting import compact_number, money, pct_delta, price_money, signed_pct
 from .market_data import number
@@ -56,6 +56,7 @@ class MonitoringPositionContextMixin:
             individual_sell_volume=number(item.get("individual_sell_volume") if "individual_sell_volume" in item else item.get("individualSellVolume")),
             individual_net_volume=number(item.get("individual_net_volume") if "individual_net_volume" in item else item.get("individualNetVolume")),
             individual_net_amount=number(item.get("individual_net_amount")) or number(item.get("individualNetAmount")),
+            ma5=number(item.get("ma5") or item.get("movingAverage5") or item.get("sma5")),
             ma20=number(item.get("ma20")),
             ma60=number(item.get("ma60")),
             ma20_slope=number(item.get("ma20_slope") if "ma20_slope" in item else item.get("ma20Slope")),
@@ -272,13 +273,46 @@ class MonitoringPositionContextMixin:
             return number(portfolio.get("total"))
         return number(getattr(portfolio, "total", 0))
 
-    def account_market_value_line(self, portfolio) -> str:
-        total = self.portfolio_total_value(portfolio)
+    def portfolio_cash_value(self, portfolio) -> float:
+        if isinstance(portfolio, dict):
+            return number(portfolio.get("cash"))
+        return number(getattr(portfolio, "cash", 0))
+
+    def position_is_cash_state(self, position: Dict[str, object]) -> bool:
+        return str(position.get("symbol") or "").upper() == "CASH" or str(position.get("sector") or "") == "현금"
+
+    def position_states(self, positions) -> Iterable[Dict[str, object]]:
+        if isinstance(positions, dict):
+            values = positions.values()
+        else:
+            values = positions or []
+        for item in values:
+            if isinstance(item, Position):
+                yield item.to_dict()
+            elif isinstance(item, dict):
+                yield item
+
+    def recalculated_positions_value_base(self, positions) -> float:
+        total = 0.0
+        for item in self.position_states(positions):
+            if self.position_is_cash_state(item):
+                continue
+            total += max(0.0, self.position_value_base(item))
+        return total
+
+    def account_market_value(self, portfolio, positions=None) -> float:
+        recalculated = self.recalculated_positions_value_base(positions)
+        if recalculated:
+            return recalculated + max(0.0, self.portfolio_cash_value(portfolio))
+        return self.portfolio_total_value(portfolio)
+
+    def account_market_value_line(self, portfolio, positions=None) -> str:
+        total = self.account_market_value(portfolio, positions)
         if not total:
             return ""
         return "계좌 평가금액: " + money(total, "KRW")
 
-    def holding_price_lines(self, position: Dict[str, object], portfolio=None) -> List[str]:
+    def holding_price_lines(self, position: Dict[str, object], portfolio=None, positions=None) -> List[str]:
         return [
             line
             for line in [
@@ -288,7 +322,7 @@ class MonitoringPositionContextMixin:
                 self.holding_quantity_line(position),
                 self.sellable_quantity_line(position),
                 self.position_market_value_line(position),
-                self.account_market_value_line(portfolio),
+                self.account_market_value_line(portfolio, positions),
             ]
             if line
         ]
@@ -314,6 +348,10 @@ class MonitoringPositionContextMixin:
         return volume * price if volume and price else 0.0
 
     def position_value_base(self, position: Dict[str, object]) -> float:
+        currency = self.position_currency(position)
+        native_value = self.position_market_value(position)
+        if currency != "KRW" and native_value > 0 and self.fx_rates.get(currency):
+            return value_in_base(native_value, currency, self.fx_rates)
         source_base_value = (
             number(position.get("market_value_krw"))
             or number(position.get("marketValueKrw"))
@@ -323,7 +361,7 @@ class MonitoringPositionContextMixin:
         )
         if source_base_value > 0:
             return source_base_value
-        return value_in_base(self.position_market_value(position), self.position_currency(position), self.fx_rates)
+        return value_in_base(native_value, currency, self.fx_rates)
 
     def position_value_label(self, position: Dict[str, object]) -> str:
         currency = self.position_currency(position)
@@ -467,11 +505,17 @@ class MonitoringPositionContextMixin:
 
     def trend_context_line(self, position: Dict[str, object]) -> str:
         price = self.position_current_price(position)
-        ma20 = self.position_ma(position, 20)
-        ma60 = self.position_ma(position, 60)
-        if not price or not ma20 or not ma60:
+        if not price:
             return ""
-        return "추세: " + self.ma_comparison_text(position, 20) + ", " + self.ma_comparison_text(position, 60)
+        parts = [
+            self.ma_comparison_text(position, 5),
+            self.ma_comparison_text(position, 20),
+            self.ma_comparison_text(position, 60),
+        ]
+        parts = [part for part in parts if part]
+        if not parts:
+            return ""
+        return "추세: " + ", ".join(parts)
 
     def trend_slope_line(self, position: Dict[str, object]) -> str:
         slope20 = number(position.get("ma20_slope") if "ma20_slope" in position else position.get("ma20Slope"))

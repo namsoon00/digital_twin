@@ -11,7 +11,7 @@ from digital_twin.domain.ontology_rulebox_governance import (
     build_rule_change_candidate_prompt,
     rule_change_candidates_from_text,
 )
-from digital_twin.infrastructure.neo4j_ontology import rule_change_candidate_statements
+from digital_twin.infrastructure.typedb_ontology import TypeDBOntologyGraphRepository
 
 
 class FakeOntologyRepository:
@@ -123,15 +123,30 @@ class OntologyRuleCandidateAITests(unittest.TestCase):
         self.assertEqual(1, result["savedCount"])
         self.assertEqual(1, len(repository.saved_candidates))
 
-    def test_neo4j_candidate_statement_persists_governance_node(self):
-        candidates = rule_change_candidates_from_text(ai_candidate_json(), {"ruleBox": FakeOntologyRepository().rulebox_snapshot()})
-        statements = rule_change_candidate_statements(candidates, {"symbols": ["AAPL"]})
-        cypher = statements[0]["statement"]
+    def test_typedb_candidate_save_persists_governance_node(self):
+        class CapturingTypeDBRepository(TypeDBOntologyGraphRepository):
+            def __init__(self):
+                super().__init__("127.0.0.1:1729")
+                self.saved_graph = None
 
-        self.assertIn("RuleBoxGovernance", cypher)
-        self.assertIn("HAS_RULE_CHANGE_CANDIDATE", cypher)
-        self.assertEqual(1, len(statements[0]["parameters"]["rows"]))
-        self.assertIn("proposedRuleJson", statements[0]["parameters"]["rows"][0])
+            def save_graph(self, graph):
+                self.saved_graph = graph
+                return {"configured": True, "saved": True, "status": "ok", "graphStore": "typedb"}
+
+        candidates = rule_change_candidates_from_text(ai_candidate_json(), {"ruleBox": FakeOntologyRepository().rulebox_snapshot()})
+        repository = CapturingTypeDBRepository()
+
+        result = repository.save_rule_change_candidates(candidates, {"symbols": ["AAPL"]})
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual(1, result["savedCount"])
+        self.assertIsNotNone(repository.saved_graph)
+        self.assertTrue(any(
+            (entity.properties or {}).get("ontologyBox") == "RuleBoxGovernance"
+            and entity.kind == "rule-change-candidate"
+            and (entity.properties or {}).get("properties", {}).get("proposedRule")
+            for entity in repository.saved_graph.entities
+        ))
 
     def test_reasoning_runner_invokes_candidate_service_when_due(self):
         event = DomainEvent(

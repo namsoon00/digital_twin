@@ -358,7 +358,7 @@ def summarize_experiment_result(
         "symbols": list(experiment.symbols or []),
         "sandbox": {
             "mutatedOperationalRuleBox": False,
-            "mutatedNeo4j": False,
+            "mutatedTypeDB": False,
             "graphRunCount": len(graph_runs),
         },
         "rulebox": {

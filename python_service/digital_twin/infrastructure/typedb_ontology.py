@@ -12,21 +12,21 @@ from ..domain.ontology_rulebox_governance import (
     rulebox_governance_candidates,
 )
 from ..domain.ontology_schema import default_tbox_metadata
-from .neo4j_ontology_inferencebox import (
+from .graph_store_inferencebox import (
     inferencebox_entity_payload,
     inferencebox_relation_payload,
     inferencebox_snapshot_from_rows,
     inferencebox_trace_payload,
 )
-from .neo4j_ontology_lifecycle import (
+from .graph_store_lifecycle import (
     active_tbox_metadata_from_rows,
     active_tbox_metadata_unavailable,
     graph_box_entity_counts,
     graph_box_relation_counts,
     ontology_seed_graph,
 )
-from .neo4j_ontology_payloads import Neo4jOntologyRowMapperMixin, number_or_none
-from .neo4j_ontology_rulebox import (
+from .graph_store_payloads import GraphStoreOntologyRowMapperMixin, number_or_none
+from .graph_store_rulebox import (
     rulebox_graph_from_rules,
     rulebox_rules_from_payload,
     rulebox_snapshot_from_rows,
@@ -312,7 +312,7 @@ class NullTypeDBOntologyGraphRepository:
         }
 
 
-class TypeDBOntologyGraphRepository(Neo4jOntologyRowMapperMixin):
+class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
     store_key = "typedb"
     store_label = "TypeDB"
 
@@ -382,7 +382,7 @@ class TypeDBOntologyGraphRepository(Neo4jOntologyRowMapperMixin):
                 self.write_graph(driver, imported, graph)
             finally:
                 self.close_driver(driver)
-        except Exception as error:  # noqa: BLE001 - graph mirror must not block monitoring.
+        except Exception as error:  # noqa: BLE001 - graph-store persistence must not block monitoring.
             return {
                 "configured": True,
                 "saved": False,
@@ -606,7 +606,6 @@ class TypeDBOntologyGraphRepository(Neo4jOntologyRowMapperMixin):
             "confidence": number_or_none(merged.get("confidence")),
             "decisionStage": str(merged.get("decisionStage") or ""),
             "stagePriority": number_or_none(merged.get("stagePriority")),
-            "nativeNeo4jReasoned": bool(merged.get("nativeNeo4jReasoned")),
             "nativeTypeDbReasoned": bool(merged.get("nativeTypeDbReasoned")),
             "title": str(merged.get("title") or row.get("label") or ""),
             "status": str(merged.get("status") or ""),
@@ -663,7 +662,6 @@ class TypeDBOntologyGraphRepository(Neo4jOntologyRowMapperMixin):
             "stagePriority": number_or_none(merged.get("stagePriority")),
             "aiInfluenceLabel": str(merged.get("aiInfluenceLabel") or ""),
             "inferenceTraceId": str(merged.get("inferenceTraceId") or ""),
-            "nativeNeo4jReasoned": bool(merged.get("nativeNeo4jReasoned")),
             "nativeTypeDbReasoned": bool(merged.get("nativeTypeDbReasoned")),
         }
 
@@ -1167,7 +1165,6 @@ relation ontology-assertion,
             "nativeEntityCount": 0,
             "nativeRelationCount": 0,
             "nativeTraceCount": 0,
-            "neo4jNativeReasoningUsed": False,
             "nativeTypeDbReasoningUsed": False,
             "typedbBootstrapReasoningUsed": True,
             "entities": [inferencebox_entity_payload(row) for row in entity_rows],
@@ -1198,7 +1195,6 @@ relation ontology-assertion,
         snapshot.update({
             "graphStore": "typedb",
             "source": "typedbInferenceBox",
-            "neo4jNativeReasoningUsed": False,
             "nativeTypeDbReasoningUsed": False,
             "typedbBootstrapReasoningUsed": True,
         })

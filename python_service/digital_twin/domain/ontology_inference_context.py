@@ -14,7 +14,7 @@ from .ontology_relation_reasoning import (
 from .portfolio import AccountSnapshot, PortfolioSummary, Position
 
 
-NEO4J_RELATION_CONTEXT_VERSION = "neo4j-inferencebox-relation-context-v1"
+TYPEDB_RELATION_CONTEXT_VERSION = "typedb-inferencebox-relation-context-v1"
 GRAPH_STORE_RELATION_CONTEXT_VERSION = "graph-store-inferencebox-relation-context-v1"
 
 
@@ -28,7 +28,7 @@ def ontology_projection_from_metadata(metadata: Dict[str, object]) -> Dict[str, 
     candidates.extend([
         ontology.get("projection"),
         ontology.get("typedb"),
-        ontology.get("neo4j"),
+        ontology.get("typedb"),
     ])
     for candidate in candidates:
         if isinstance(candidate, dict) and candidate:
@@ -44,7 +44,7 @@ def inferencebox_from_snapshot(snapshot: AccountSnapshot) -> Dict[str, object]:
     inference = projection.get("inferenceBox") if isinstance(projection.get("inferenceBox"), dict) else {}
     if isinstance(inference, dict) and inference:
         inference = dict(inference)
-        inference.setdefault("graphStore", projection.get("graphStore") or projection.get("primaryGraphStore") or projection.get("graphStoreMode") or "")
+        inference.setdefault("graphStore", projection.get("graphStore") or "")
     return dict(inference or {}) if isinstance(inference, dict) else {}
 
 
@@ -95,8 +95,7 @@ def relation_context_from_inferencebox(
     if str(inferencebox.get("status") or "").lower() not in {"ok", "partial", ""}:
         return {}
     if (
-        not bool(inferencebox.get("neo4jNativeReasoningUsed"))
-        and not bool(inferencebox.get("nativeTypeDbReasoningUsed"))
+        not bool(inferencebox.get("nativeTypeDbReasoningUsed"))
         and not bool(inferencebox.get("typedbBootstrapReasoningUsed"))
         and not inferencebox.get("relations")
         and not inferencebox.get("traces")
@@ -131,7 +130,6 @@ def relation_context_from_inferencebox(
         "graphStore": graph_store,
         "graphStoreUsed": True,
         "fallbackUsed": False,
-        "neo4jNativeReasoningUsed": bool(inferencebox.get("neo4jNativeReasoningUsed")),
         "nativeTypeDbReasoningUsed": bool(inferencebox.get("nativeTypeDbReasoningUsed")),
         "typedbBootstrapReasoningUsed": bool(inferencebox.get("typedbBootstrapReasoningUsed")),
         "subject": {
@@ -172,7 +170,7 @@ def relation_context_from_inferencebox(
             "traceCount": inferencebox.get("traceCount"),
             "nativeRelationCount": inferencebox.get("nativeRelationCount"),
         },
-        "neo4jInference": {
+        "typedbInference": {
             "graphStore": graph_store,
             "relations": relations,
             "traces": traces,
@@ -189,13 +187,11 @@ def inferencebox_source_name(inferencebox: Dict[str, object]) -> str:
     source = str((inferencebox or {}).get("source") or "").strip()
     if graph_store == "typedb" or source == "typedbInferenceBox" or bool((inferencebox or {}).get("nativeTypeDbReasoningUsed")):
         return "typedbInferenceBox"
-    if graph_store == "neo4j" or source == "neo4jInferenceBox" or bool((inferencebox or {}).get("neo4jNativeReasoningUsed")):
-        return "neo4jInferenceBox"
     return "graphStoreInferenceBox"
 
 
 def relation_context_version(source_name: str) -> str:
-    return NEO4J_RELATION_CONTEXT_VERSION if source_name == "neo4jInferenceBox" else GRAPH_STORE_RELATION_CONTEXT_VERSION
+    return TYPEDB_RELATION_CONTEXT_VERSION if source_name == "typedbInferenceBox" else GRAPH_STORE_RELATION_CONTEXT_VERSION
 
 
 def position_with_source(position: Position, source: str) -> Position:
@@ -243,8 +239,8 @@ def relation_mentions_symbol(symbol: str, item: Dict[str, object]) -> bool:
 def matches_from_inference(
     relations: List[Dict[str, object]],
     traces: List[Dict[str, object]],
-    source_name: str = "neo4jInferenceBox",
-    context_version: str = NEO4J_RELATION_CONTEXT_VERSION,
+    source_name: str = "typedbInferenceBox",
+    context_version: str = TYPEDB_RELATION_CONTEXT_VERSION,
 ) -> List[OntologyRuleMatch]:
     trace_by_rule = {
         str(item.get("ruleId") or ""): item
@@ -316,13 +312,13 @@ def matches_from_inference(
 def inference_signal_type(source_name: str) -> str:
     if source_name == "typedbInferenceBox":
         return "typedb_inference"
-    if source_name == "neo4jInferenceBox":
-        return "neo4j_inference"
+    if source_name == "typedbInferenceBox":
+        return "typedb_inference"
     return "graph_store_inference"
 
 
 def inference_prompt_hint(source_name: str, unit: str) -> str:
-    store_label = "TypeDB" if source_name == "typedbInferenceBox" else ("Neo4j" if source_name == "neo4jInferenceBox" else "그래프 저장소")
+    store_label = "TypeDB" if source_name == "typedbInferenceBox" else ("TypeDB" if source_name == "typedbInferenceBox" else "그래프 저장소")
     suffix = "trace" if unit == "trace" else "관계"
     return f"{store_label} RuleBox InferenceBox에서 생성된 {suffix}를 우선 근거로 사용합니다."
 
@@ -339,7 +335,7 @@ def decision_from_inference(
     matches: List[OntologyRuleMatch],
     relations: List[Dict[str, object]],
     traces: List[Dict[str, object]],
-    source_name: str = "neo4jInferenceBox",
+    source_name: str = "typedbInferenceBox",
 ) -> Dict[str, object]:
     selected = max(matches, key=lambda item: (stage_priority_for_match(item, relations), item.strength_score, item.confidence))
     relation = relation_for_match(selected, relations)
@@ -362,15 +358,15 @@ def decision_from_inference(
         "sourceRelationType": str(relation.get("type") or ""),
         "stagePriority": relation_stage_priority(relation),
         "stagePolicySource": inference_relation_policy_source(source_name) if relation.get("decisionStage") or relation.get("stagePriority") else "actionFallback",
-        "nativeNeo4jReasoned": bool(relation.get("nativeNeo4jReasoned") or trace.get("nativeNeo4jReasoned")),
+        "nativeTypeDbReasoned": bool(relation.get("nativeTypeDbReasoned") or trace.get("nativeTypeDbReasoned")),
     }
 
 
 def inference_relation_policy_source(source_name: str) -> str:
     if source_name == "typedbInferenceBox":
         return "typedbInferenceRelation"
-    if source_name == "neo4jInferenceBox":
-        return "neo4jInferenceRelation"
+    if source_name == "typedbInferenceBox":
+        return "typedbInferenceRelation"
     return "graphStoreInferenceRelation"
 
 

@@ -142,7 +142,7 @@ class PortfolioOntologyProjectionRecorder:
             prompt=graph.prompt,
         )
 
-    def graph_for_neo4j_persistence(self, graph: PortfolioOntology) -> PortfolioOntology:
+    def graph_for_typedb_persistence(self, graph: PortfolioOntology) -> PortfolioOntology:
         return self.graph_for_graph_store_persistence(graph)
 
     def attach_graph_store_inference_result(self, result: Dict[str, object], snapshot: AccountSnapshot) -> None:
@@ -154,7 +154,6 @@ class PortfolioOntologyProjectionRecorder:
             execution = {"status": "error", "reason": str(error)[:180]}
         result["ruleboxExecution"] = execution if isinstance(execution, dict) else {"status": "error", "reason": "non-dict RuleBox result"}
         if not hasattr(self.repository, "inferencebox_snapshot"):
-            self.attach_mirror_inference_results(result, snapshot)
             return
         try:
             snapshot_payload = self.repository.inferencebox_snapshot(symbols=self.snapshot_symbols(snapshot), limit=80)
@@ -162,28 +161,6 @@ class PortfolioOntologyProjectionRecorder:
             snapshot_payload = {"status": "error", "reason": str(error)[:180]}
         if isinstance(snapshot_payload, dict):
             result["inferenceBox"] = snapshot_payload
-        self.attach_mirror_inference_results(result, snapshot)
-
-    def attach_mirror_inference_results(self, result: Dict[str, object], snapshot: AccountSnapshot) -> None:
-        mirrors = getattr(self.repository, "mirrors", []) or []
-        if not mirrors:
-            return
-        mirror_results = result.setdefault("mirrorResults", {})
-        execution = result.get("ruleboxExecution") if isinstance(result.get("ruleboxExecution"), dict) else {}
-        execution_mirrors = execution.get("mirrorResults") if isinstance(execution.get("mirrorResults"), dict) else {}
-        for mirror in mirrors:
-            key = str(getattr(mirror, "store_key", mirror.__class__.__name__) or mirror.__class__.__name__)
-            mirror_result = mirror_results.get(key) if isinstance(mirror_results.get(key), dict) else {}
-            if isinstance(execution_mirrors.get(key), dict):
-                mirror_result["ruleboxExecution"] = execution_mirrors.get(key)
-            if hasattr(mirror, "inferencebox_snapshot"):
-                try:
-                    inference = mirror.inferencebox_snapshot(symbols=self.snapshot_symbols(snapshot), limit=80)
-                except Exception as error:  # noqa: BLE001 - mirror snapshot read is best effort.
-                    inference = {"status": "error", "reason": str(error)[:180]}
-                if isinstance(inference, dict):
-                    mirror_result["inferenceBox"] = inference
-            mirror_results[key] = mirror_result
 
     def snapshot_symbols(self, snapshot: AccountSnapshot) -> List[str]:
         symbols = []
@@ -207,28 +184,16 @@ class PortfolioOntologyProjectionRecorder:
         return False
 
     def active_graph_store_key(self, result: Dict[str, object] = None) -> str:
-        result = result if isinstance(result, dict) else {}
-        primary = str(result.get("primaryGraphStore") or "").strip()
-        if primary:
-            return primary
         key = str(getattr(self.repository, "store_key", "") or "").strip()
-        if key == "dual" and getattr(self.repository, "primary", None):
-            return str(getattr(self.repository.primary, "store_key", "graph-store") or "graph-store")
         return key or "graph-store"
 
     def store_projection_result(self, snapshot: AccountSnapshot, result: Dict[str, object]) -> None:
         ontology = snapshot.metadata.setdefault("ontology", {})
         active_key = self.active_graph_store_key(result)
         result.setdefault("graphStore", active_key)
-        result.setdefault("graphStoreMode", str(result.get("graphStoreMode") or getattr(self.repository, "store_key", active_key) or active_key))
         ontology[active_key] = result
         ontology["projection"] = result
         ontology["activeGraphStore"] = active_key
-        ontology["graphStoreMode"] = result.get("graphStoreMode")
-        mirror_results = result.get("mirrorResults") if isinstance(result.get("mirrorResults"), dict) else {}
-        for key, mirror_result in mirror_results.items():
-            if isinstance(mirror_result, dict):
-                ontology[str(key)] = mirror_result
 
     def runtime_context(self, snapshot: AccountSnapshot) -> Dict[str, object]:
         active_tbox = {}

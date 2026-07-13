@@ -11,7 +11,7 @@ from digital_twin.domain.strategy import decisions_for_positions
 
 
 class OntologyInferenceContextTests(unittest.TestCase):
-    def test_neo4j_inferencebox_context_replaces_python_relation_rule_path(self):
+    def test_typedb_inferencebox_context_replaces_python_relation_rule_path(self):
         position = Position(
             symbol="005930",
             name="삼성전자",
@@ -41,10 +41,10 @@ class OntologyInferenceContextTests(unittest.TestCase):
             positions=[position],
             metadata={
                 "ontology": {
-                    "neo4j": {
+                    "typedb": {
                         "inferenceBox": {
                             "status": "ok",
-                            "neo4jNativeReasoningUsed": True,
+                            "nativeTypeDbReasoningUsed": True,
                             "entityCount": 2,
                             "relationCount": 1,
                             "traceCount": 1,
@@ -63,7 +63,7 @@ class OntologyInferenceContextTests(unittest.TestCase):
                                     "weight": 0.86,
                                     "aiInfluenceLabel": "손실 방어 추론",
                                     "inferenceTraceId": "inference-trace:005930:graph.loss_guard.breakdown.v1",
-                                    "nativeNeo4jReasoned": True,
+                                    "nativeTypeDbReasoned": True,
                                 }
                             ],
                             "traces": [
@@ -74,7 +74,7 @@ class OntologyInferenceContextTests(unittest.TestCase):
                                     "ruleId": "graph.loss_guard.breakdown.v1",
                                     "confidence": 0.86,
                                     "matchedConditionIds": ["holding-source", "holding-loss", "ma-break"],
-                                    "nativeNeo4jReasoned": True,
+                                    "nativeTypeDbReasoned": True,
                                 }
                             ],
                         }
@@ -85,8 +85,8 @@ class OntologyInferenceContextTests(unittest.TestCase):
 
         contexts = relation_contexts_from_snapshot(snapshot)
         self.assertIn("005930", contexts)
-        self.assertEqual("neo4jInferenceBox", contexts["005930"]["source"])
-        self.assertEqual("neo4jInferenceBox", contexts["005930"]["decision"]["basis"])
+        self.assertEqual("typedbInferenceBox", contexts["005930"]["source"])
+        self.assertEqual("typedbInferenceBox", contexts["005930"]["decision"]["basis"])
         self.assertEqual("graph.loss_guard.breakdown.v1", contexts["005930"]["decision"]["selectedRuleId"])
         self.assertEqual("stock:005930", contexts["005930"]["evidenceSubgraph"]["target"]["id"])
         self.assertEqual(["graph.loss_guard.breakdown.v1"], contexts["005930"]["evidenceSubgraph"]["matchedRuleIds"])
@@ -99,7 +99,7 @@ class OntologyInferenceContextTests(unittest.TestCase):
             relation_contexts_by_symbol=contexts,
         )
         self.assertEqual(1, len(decisions))
-        self.assertEqual("neo4jInferenceBox", decisions[0].relation_rule_context["decision"]["basis"])
+        self.assertEqual("typedbInferenceBox", decisions[0].relation_rule_context["decision"]["basis"])
         self.assertTrue(decisions[0].relation_rule_context["graphStoreUsed"])
 
     def test_strict_decision_path_blocks_python_relation_rule_fallback(self):
@@ -184,7 +184,7 @@ class OntologyInferenceContextTests(unittest.TestCase):
         self.assertEqual("typedbInferenceBox", contexts["005930"]["decision"]["basis"])
         self.assertEqual("typedbInferenceRelation", contexts["005930"]["decision"]["stagePolicySource"])
 
-    def test_neo4j_entry_wait_inference_maps_to_entry_wait_stage(self):
+    def test_typedb_entry_wait_inference_maps_to_entry_wait_stage(self):
         watch = Position(
             symbol="NVDA",
             name="NVIDIA",
@@ -209,10 +209,10 @@ class OntologyInferenceContextTests(unittest.TestCase):
             watchlist=[watch],
             metadata={
                 "ontology": {
-                    "neo4j": {
+                    "typedb": {
                         "inferenceBox": {
                             "status": "ok",
-                            "neo4jNativeReasoningUsed": True,
+                            "nativeTypeDbReasoningUsed": True,
                             "relations": [
                                 {
                                     "type": "HAS_INFERRED_ENTRY_WAIT",
@@ -227,7 +227,7 @@ class OntologyInferenceContextTests(unittest.TestCase):
                                     "stagePriority": 31,
                                     "actionGroup": "entryWait",
                                     "actionLevel": "review",
-                                    "nativeNeo4jReasoned": True,
+                                    "nativeTypeDbReasoned": True,
                                 }
                             ],
                             "traces": [
@@ -251,7 +251,7 @@ class OntologyInferenceContextTests(unittest.TestCase):
         self.assertEqual("ENTRY_WAIT", contexts["NVDA"]["decision"]["decisionStage"])
         self.assertEqual("entryWait", contexts["NVDA"]["decision"]["actionGroup"])
 
-    def test_neo4j_entry_momentum_inference_maps_to_entry_ready_stage(self):
+    def test_typedb_entry_momentum_inference_maps_to_entry_ready_stage(self):
         watch = Position(
             symbol="AAPL",
             name="Apple",
@@ -276,10 +276,10 @@ class OntologyInferenceContextTests(unittest.TestCase):
             watchlist=[watch],
             metadata={
                 "ontology": {
-                    "neo4j": {
+                    "typedb": {
                         "inferenceBox": {
                             "status": "ok",
-                            "neo4jNativeReasoningUsed": True,
+                            "nativeTypeDbReasoningUsed": True,
                             "relations": [
                                 {
                                     "type": "HAS_INFERRED_ENTRY_OPPORTUNITY",
@@ -294,7 +294,7 @@ class OntologyInferenceContextTests(unittest.TestCase):
                                     "stagePriority": 37,
                                     "actionGroup": "entry",
                                     "actionLevel": "action",
-                                    "nativeNeo4jReasoned": True,
+                                    "nativeTypeDbReasoned": True,
                                 }
                             ],
                             "traces": [
@@ -317,7 +317,7 @@ class OntologyInferenceContextTests(unittest.TestCase):
         self.assertEqual("소액 분할매수 검토", contexts["AAPL"]["decision"]["label"])
         self.assertEqual("ENTRY_READY", contexts["AAPL"]["decision"]["decisionStage"])
         self.assertEqual("entry", contexts["AAPL"]["decision"]["actionGroup"])
-        self.assertEqual("neo4jInferenceRelation", contexts["AAPL"]["decision"]["stagePolicySource"])
+        self.assertEqual("typedbInferenceRelation", contexts["AAPL"]["decision"]["stagePolicySource"])
 
 
 if __name__ == "__main__":

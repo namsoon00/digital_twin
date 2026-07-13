@@ -12,11 +12,11 @@ from .portfolio import DecisionItem, PortfolioSummary, Position, expects_kr_micr
 
 
 ONTOLOGY_INFERENCE_REQUIRED_BASIS = "ontologyInferenceRequired"
-NEO4J_INFERENCE_BASIS = "neo4jInferenceBox"
+TYPEDB_INFERENCE_BASIS = "typedbInferenceBox"
 TYPEDB_INFERENCE_BASIS = "typedbInferenceBox"
 GRAPH_STORE_INFERENCE_BASIS = "graphStoreInferenceBox"
 GRAPH_INFERENCE_BASES = {
-    NEO4J_INFERENCE_BASIS,
+    TYPEDB_INFERENCE_BASIS,
     TYPEDB_INFERENCE_BASIS,
     GRAPH_STORE_INFERENCE_BASIS,
 }
@@ -630,7 +630,7 @@ def decision_for_position(
     exit_pressure = float(relation_decision.get("score") or relation_context.get("signalStrength") or payload.get("exitPressure") or 0)
     decision_label = str(relation_decision.get("label") or payload.get("decision") or "")
     decision_tone = str(relation_decision.get("tone") or payload.get("tone") or "")
-    decision_basis = str(relation_decision.get("basis") or NEO4J_INFERENCE_BASIS)
+    decision_basis = str(relation_decision.get("basis") or TYPEDB_INFERENCE_BASIS)
     action_group = str(relation_decision.get("actionGroup") or "")
     relation_profit_take_pressure = exit_pressure if action_group == "profitTake" else 0.0
     relation_loss_cut_pressure = exit_pressure if action_group in {

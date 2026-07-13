@@ -29,7 +29,7 @@ Required flow for new investment behavior:
    Every collected or derived investment fact should become an ABox entity or relation with `ontologyBox`, `tboxClass` or `tboxClasses`, `boundedContext` when applicable, provenance, freshness, and missing-data semantics. A quote, disclosure, news item, macro series, FX rate, liquidity observation, investor-flow value, valuation assumption, account exposure, data-source status, or collection schedule should be represented as facts before it is used for judgement.
 
 3. Persist graph facts through the projection boundary.
-   Owning bounded contexts still persist their transactional state in their own stores. The ontology projection translates that state into graph-store assertions through adapters. TypeDB is the default adapter, Neo4j is a compatibility/mirror adapter, and new feature code must publish or persist source facts first, then extend `portfolio_ontology_builder.py` or its concept-builder modules so the projection can create ABox nodes and relations. Do not make account, monitoring, notification, or provider aggregates depend directly on TypeDB, Neo4j, or any graph driver.
+   Owning bounded contexts still persist their transactional state in their own stores. The ontology projection translates that state into graph-store assertions through the TypeDB adapter. New feature code must publish or persist source facts first, then extend `portfolio_ontology_builder.py` or its concept-builder modules so the projection can create ABox nodes and relations. Do not make account, monitoring, notification, or provider aggregates depend directly on TypeDB or any graph driver.
 
 4. Put investment reasoning in the RuleBox and InferenceBox.
    New investment rules must be expressible as graph rules over ABox facts and should be seeded into RuleBox before they drive alerts or AI opinions. Runtime investment judgement must read the active graph-store InferenceBox through `domain/ontology_inference_context.py`. Python may assemble facts and prompts, but it must not keep a parallel buy/sell/risk rule evaluator for user-facing investment decisions.
@@ -125,9 +125,7 @@ Infrastructure:
 - `python_service/digital_twin/infrastructure/model_review_queue.py`: async model-review queue interface fed by decision-change events
 - `python_service/digital_twin/infrastructure/model_reviewer.py`: Codex/LLM command adapter with local fallback
 - `python_service/digital_twin/infrastructure/ontology_projection.py`: snapshot-to-ontology projection recorder that saves graph-store projections and quality samples without making monitoring application services own graph persistence details
-- `python_service/digital_twin/infrastructure/ontology_graph_store.py`: graph-store composition root; runtime code should import this factory instead of a concrete database adapter
-- `python_service/digital_twin/infrastructure/typedb_ontology.py`: default TypeDB graph-store adapter for TBox/ABox/RuleBox/InferenceBox persistence and inference
-- `python_service/digital_twin/infrastructure/neo4j_ontology.py`: Neo4j compatibility/mirror adapter only
+- `python_service/digital_twin/infrastructure/ontology_graph_store.py`: graph-store composition root; runtime code should import this factory instead of constructing the database adapter directly
 - `python_service/digital_twin/infrastructure/typedb_ontology.py`: TypeDB graph-store adapter and bootstrap TypeDB InferenceBox support
 - `python_service/digital_twin/infrastructure/service_factory.py`: runtime composition of use cases and adapters
 
@@ -152,7 +150,7 @@ Events are persisted locally to the append-only `domain_events` table through th
 
 `monitoring.alerts_detected` now carries investment notifications only as graph-backed `investmentInsight` events. Legacy investment alert types such as `monitorDecisionChange`, `modelBuy`, and `externalCryptoMove` are not valid realtime investment dispatch inputs. The model-review queue may read legacy-shaped historical jobs for compatibility, but new realtime investment judgement must originate from graph inference. Realtime alerts must never wait for LLM/Codex output; deep analysis belongs in the model-review queue and worker. Notification producers should enqueue jobs in the notification outbox and leave external delivery to the notification worker. Jobs derived from a domain event should carry `source_event_id` and a stable `dedupe_key`.
 
-Ontology projection is a read-model boundary, not the source of truth. Aggregates and use cases own transactional state inside their bounded contexts; projection code can translate snapshots and domain events into TBox/ABox graph assertions for the active graph store, AI prompts, quality samples, and console views. Do not make domain aggregates depend on Neo4j, TypeDB, graph storage, or prompt rendering. If ontology needs more facts, publish or persist those facts in the owning context first, then extend the projection/read model.
+Ontology projection is a read-model boundary, not the source of truth. Aggregates and use cases own transactional state inside their bounded contexts; projection code can translate snapshots and domain events into TBox/ABox graph assertions for the active graph store, AI prompts, quality samples, and console views. Do not make domain aggregates depend on TypeDB, TypeDB, graph storage, or prompt rendering. If ontology needs more facts, publish or persist those facts in the owning context first, then extend the projection/read model.
 
 ## Parallel Development Slices
 

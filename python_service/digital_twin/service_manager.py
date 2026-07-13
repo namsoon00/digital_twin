@@ -68,8 +68,7 @@ def truthy(value: object) -> bool:
 
 
 def typedb_requested(settings: Dict[str, object]) -> bool:
-    mode = str((settings or {}).get("ontologyGraphStoreMode") or "typedb").strip().lower()
-    return mode in {"dual", "typedb"} and truthy((settings or {}).get("ontologyTypeDbEnabled"))
+    return truthy((settings or {}).get("ontologyTypeDbEnabled"))
 
 
 def typedb_executable() -> str:

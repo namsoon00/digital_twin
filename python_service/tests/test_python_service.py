@@ -58,7 +58,8 @@ from digital_twin.infrastructure.json_monitor_state import MonitorStore
 from digital_twin.infrastructure.kis_market_signals import KIS_CACHE_ACCOUNT_ID, KIS_CACHE_PROVIDER, KISMarketSignalProvider
 from digital_twin.infrastructure.model_review_queue import ModelReviewEnqueuer, ModelReviewJobStore
 from digital_twin.infrastructure.mock_market import mock_market_payload
-from digital_twin.infrastructure.neo4j_ontology import Neo4jOntologyGraphRepository, NullOntologyGraphRepository, safe_relation_type
+from digital_twin.infrastructure.graph_store_payloads import safe_relation_type
+from digital_twin.infrastructure.typedb_ontology import TypeDBOntologyGraphRepository, NullTypeDBOntologyGraphRepository
 from digital_twin.infrastructure.news_sources import NewsSourceGateway
 from digital_twin.infrastructure.notifications import TelegramNotifier, send_events
 from digital_twin.infrastructure.ontology_projection import PortfolioOntologyProjectionRecorder
@@ -147,11 +148,11 @@ class PythonServiceTests(unittest.TestCase):
         active_rules: list = None,
     ):
         return {
-            "engineVersion": "neo4j-inferencebox-relation-context-v1",
-            "source": "neo4jInferenceBox",
+            "engineVersion": "typedb-inferencebox-relation-context-v1",
+            "source": "typedbInferenceBox",
             "graphStoreUsed": True,
             "fallbackUsed": False,
-            "neo4jNativeReasoningUsed": True,
+            "nativeTypeDbReasoningUsed": True,
             "subject": {"symbol": symbol, "name": symbol, "market": "KR"},
             "facts": dict(facts or {}),
             "matchedRules": active_rules or [{
@@ -178,7 +179,7 @@ class PythonServiceTests(unittest.TestCase):
                 "label": label,
                 "tone": tone,
                 "score": score,
-                "basis": "neo4jInferenceBox",
+                "basis": "typedbInferenceBox",
                 "selectedRuleId": rule_id,
                 "decisionStage": decision_stage,
                 "actionGroup": action_group,
@@ -274,10 +275,10 @@ class PythonServiceTests(unittest.TestCase):
         target_kind = "opportunity" if polarity == "support" else "risk"
         return {
             "ontology": {
-                "neo4j": {
+                "typedb": {
                     "inferenceBox": {
                         "status": "ok",
-                        "neo4jNativeReasoningUsed": True,
+                        "nativeTypeDbReasoningUsed": True,
                         "relations": [
                             {
                                 "type": relation_type,
@@ -296,7 +297,7 @@ class PythonServiceTests(unittest.TestCase):
                                 "stagePriority": stage_priority,
                                 "aiInfluenceLabel": label,
                                 "inferenceTraceId": trace_id,
-                                "nativeNeo4jReasoned": True,
+                                "nativeTypeDbReasoned": True,
                             }
                         ],
                         "traces": [
@@ -306,7 +307,7 @@ class PythonServiceTests(unittest.TestCase):
                                 "symbol": symbol,
                                 "ruleId": rule_id,
                                 "confidence": weight,
-                                "nativeNeo4jReasoned": True,
+                                "nativeTypeDbReasoned": True,
                             }
                         ],
                     }
@@ -2044,7 +2045,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("INDICATES_WEAKENING", relation_types)
         self.assertEqual("valid", report.status)
 
-    def test_neo4j_ontology_repository_builds_relation_statements(self):
+    def test_typedb_ontology_repository_builds_relation_queries(self):
         position = normalize_position({
             "symbol": "005930",
             "name": "삼성전자",
@@ -2054,9 +2055,10 @@ class PythonServiceTests(unittest.TestCase):
         })
         portfolio = portfolio_summary([position])
         graph = build_portfolio_ontology([position], portfolio)
-        repository = Neo4jOntologyGraphRepository("http://127.0.0.1:7474", user="neo4j", password="secret")
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729", user="admin", password="secret")
 
-        statements = repository.statements(graph)
+        queries = repository.insert_queries(graph)
+        schema = repository.schema_query()
         entity_rows = repository.rows_for_entities(graph)
         relation_rows = repository.rows_for_relations(graph)
         stock_row = next(row for row in entity_rows if row["id"] == "stock:005930")
@@ -2067,13 +2069,13 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(stock_row["isCurrent"])
         self.assertTrue(stock_row["aboxSnapshotId"])
         self.assertTrue(stock_row["tboxVersion"])
-        self.assertTrue(any("OntologyEntity" in item["statement"] for item in statements))
-        self.assertTrue(any("CREATE CONSTRAINT ontology_entity_id" in item["statement"] for item in repository.schema_statements()))
-        self.assertTrue(any("SET n.isCurrent = false" in item["statement"] for item in statements))
-        self.assertTrue(any("OntologyReasoningCard" in item["statement"] for item in statements))
+        self.assertTrue(any("insert $n isa ontology-entity" in query for query in queries))
+        self.assertIn("attribute ontology-id, value string", schema)
+        self.assertTrue(any("insert $r isa ontology-assertion" in query for query in queries))
+        self.assertTrue(any("ontology-reasoning-card" in query for query in queries))
         self.assertGreater(len(repository.rows_for_reasoning_cards(graph)), 0)
-        self.assertTrue(any("MERGE (a)-[r:HOLDS]" in item["statement"] for item in statements))
-        self.assertFalse(NullOntologyGraphRepository().save_graph(graph)["saved"])
+        self.assertTrue(any('has ontology-relation-type "HOLDS"' in query for query in queries))
+        self.assertFalse(NullTypeDBOntologyGraphRepository().save_graph(graph)["saved"])
 
     def test_ontology_projection_recorder_persists_graph_and_quality_metadata(self):
         position = normalize_position({
@@ -2141,7 +2143,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("sample-1", snapshot.metadata["ontology"]["typedb"]["qualitySampleId"])
         self.assertEqual(91.5, snapshot.metadata["ontology"]["typedb"]["qualityScore"])
 
-    def test_ontology_projection_recorder_runs_neo4j_rulebox_and_reads_inferencebox(self):
+    def test_ontology_projection_recorder_runs_typedb_rulebox_and_reads_inferencebox(self):
         position = normalize_position({
             "symbol": "005930",
             "name": "삼성전자",
@@ -2220,7 +2222,7 @@ class PythonServiceTests(unittest.TestCase):
 
             def active_tbox_metadata(self):
                 return {
-                    "source": "neo4j",
+                    "source": "typedb",
                     "version": "stored-tbox-test",
                     "fingerprint": "stored-fingerprint",
                     "entityCount": 10,
@@ -2236,7 +2238,7 @@ class PythonServiceTests(unittest.TestCase):
                 self.queried_symbols.append(list(symbols or []))
                 return {
                     "status": "ok",
-                    "neo4jNativeReasoningUsed": True,
+                    "nativeTypeDbReasoningUsed": True,
                     "nativeRelationCount": 1,
                     "relations": [{"type": "HAS_INFERRED_RISK", "ruleId": "graph.loss_guard.breakdown.v1"}],
                 }
@@ -2251,7 +2253,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("abox-facts-only-graph-store-rulebox", result["projectionMode"])
         self.assertEqual({"clearInference": True}, repository.executions[0])
         self.assertEqual(["005930"], repository.queried_symbols[0])
-        self.assertTrue(result["inferenceBox"]["neo4jNativeReasoningUsed"])
+        self.assertTrue(result["inferenceBox"]["nativeTypeDbReasoningUsed"])
         self.assertFalse(any((item.properties or {}).get("ontologyBox") == "RuleBox" for item in persisted.entities))
         self.assertFalse(any((item.properties or {}).get("ontologyBox") == "InferenceBox" for item in persisted.entities))
         self.assertFalse(any(item.kind == "active-opinion" for item in persisted.entities))
@@ -2340,13 +2342,13 @@ class PythonServiceTests(unittest.TestCase):
                 return {"saved": True, "status": "ok"}
 
             def active_tbox_metadata(self):
-                return {"source": "neo4j", "status": "ok", "version": "stored", "fingerprint": "fp"}
+                return {"source": "typedb", "status": "ok", "version": "stored", "fingerprint": "fp"}
 
             def run_rulebox(self, payload=None):
                 return {"status": "ok"}
 
             def inferencebox_snapshot(self, symbols=None, limit=80):
-                return {"status": "ok", "neo4jNativeReasoningUsed": True, "relations": [], "traces": []}
+                return {"status": "ok", "nativeTypeDbReasoningUsed": True, "relations": [], "traces": []}
 
         repository = FakeRepository()
         result = PortfolioOntologyProjectionRecorder(repository).record_snapshot(snapshot)
@@ -4305,7 +4307,7 @@ class PythonServiceTests(unittest.TestCase):
             [],
             [],
         )
-        snapshot.metadata.setdefault("ontology", {})["neo4j"] = {
+        snapshot.metadata.setdefault("ontology", {})["typedb"] = {
             "qualityScore": 42,
             "qualitySampleId": "ontology-quality:test",
         }
@@ -4319,7 +4321,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(42, stamped[0].metadata["ontologyQuality"]["score"])
         self.assertEqual(55, stamped[0].metadata["ontologyQuality"]["minScore"])
 
-    def test_stamp_events_attaches_neo4j_inferencebox_metadata(self):
+    def test_stamp_events_attaches_typedb_inferencebox_metadata(self):
         snapshot = AccountSnapshot(
             "main",
             "메인",
@@ -4331,12 +4333,12 @@ class PythonServiceTests(unittest.TestCase):
             [],
             [],
         )
-        snapshot.metadata.setdefault("ontology", {})["neo4j"] = {
-            "projectionMode": "abox-first-neo4j-rulebox",
+        snapshot.metadata.setdefault("ontology", {})["typedb"] = {
+            "projectionMode": "abox-first-typedb-rulebox",
             "ruleboxExecution": {"status": "ok"},
             "inferenceBox": {
                 "status": "ok",
-                "neo4jNativeReasoningUsed": True,
+                "nativeTypeDbReasoningUsed": True,
                 "entityCount": 2,
                 "relationCount": 3,
                 "traceCount": 1,
@@ -4348,7 +4350,7 @@ class PythonServiceTests(unittest.TestCase):
                         "label": "손실 방어 추론",
                         "polarity": "risk",
                         "riskImpact": 13,
-                        "nativeNeo4jReasoned": True,
+                        "nativeTypeDbReasoned": True,
                     }
                 ],
                 "traces": [
@@ -4357,7 +4359,7 @@ class PythonServiceTests(unittest.TestCase):
                         "label": "삼성전자 · 손실 방어 추론",
                         "confidence": 0.86,
                         "matchedConditionIds": ["holding-loss", "ma-break"],
-                        "nativeNeo4jReasoned": True,
+                        "nativeTypeDbReasoned": True,
                     }
                 ],
             },
@@ -4368,9 +4370,9 @@ class PythonServiceTests(unittest.TestCase):
         ])
 
         inference = stamped[0].metadata["ontologyInference"]
-        self.assertEqual("neo4jInferenceBox", inference["source"])
-        self.assertEqual("abox-first-neo4j-rulebox", inference["projectionMode"])
-        self.assertTrue(inference["neo4jNativeReasoningUsed"])
+        self.assertEqual("typedbInferenceBox", inference["source"])
+        self.assertEqual("abox-first-typedb-rulebox", inference["projectionMode"])
+        self.assertTrue(inference["nativeTypeDbReasoningUsed"])
         self.assertEqual(2, inference["nativeRelationCount"])
         self.assertEqual("HAS_INFERRED_RISK", inference["relations"][0]["type"])
         self.assertEqual(["holding-loss", "ma-break"], inference["traces"][0]["matchedConditionIds"])
@@ -4485,10 +4487,10 @@ class PythonServiceTests(unittest.TestCase):
         healthy_metadata = self.inferencebox_metadata("005930", "graph.loss_guard.breakdown.v1", "lossControl", "손실 방어 추론")
         timeout_metadata = {
             "ontology": {
-                "neo4j": {
+                "typedb": {
                     "saved": True,
                     "status": "ok",
-                    "projectionMode": "abox-facts-only-neo4j-rulebox",
+                    "projectionMode": "abox-facts-only-typedb-rulebox",
                     "ruleboxExecution": {
                         "status": "error",
                         "reason": "timed out",
@@ -4498,7 +4500,7 @@ class PythonServiceTests(unittest.TestCase):
                     "inferenceBox": {
                         "configured": True,
                         "status": "ok",
-                        "neo4jNativeReasoningUsed": False,
+                        "nativeTypeDbReasoningUsed": False,
                         "entityCount": 0,
                         "relationCount": 0,
                         "traceCount": 0,
@@ -4559,10 +4561,10 @@ class PythonServiceTests(unittest.TestCase):
         portfolio = portfolio_summary([position])
         metadata = {
             "ontology": {
-                "neo4j": {
+                "typedb": {
                     "saved": True,
                     "status": "ok",
-                    "projectionMode": "abox-facts-only-neo4j-rulebox",
+                    "projectionMode": "abox-facts-only-typedb-rulebox",
                     "ruleboxExecution": {
                         "status": "error",
                         "reason": "timed out",
@@ -4572,7 +4574,7 @@ class PythonServiceTests(unittest.TestCase):
                     "inferenceBox": {
                         "configured": True,
                         "status": "ok",
-                        "neo4jNativeReasoningUsed": False,
+                        "nativeTypeDbReasoningUsed": False,
                         "entityCount": 0,
                         "relationCount": 0,
                         "traceCount": 0,
@@ -4636,10 +4638,10 @@ class PythonServiceTests(unittest.TestCase):
         portfolio = portfolio_summary([position])
         metadata = {
             "ontology": {
-                "neo4j": {
+                "typedb": {
                     "saved": True,
                     "status": "ok",
-                    "projectionMode": "abox-facts-only-neo4j-rulebox",
+                    "projectionMode": "abox-facts-only-typedb-rulebox",
                     "ruleboxExecution": {
                         "status": "ok",
                         "statementCount": 3,
@@ -4649,7 +4651,7 @@ class PythonServiceTests(unittest.TestCase):
                     "inferenceBox": {
                         "configured": True,
                         "status": "ok",
-                        "neo4jNativeReasoningUsed": False,
+                        "nativeTypeDbReasoningUsed": False,
                         "entityCount": 0,
                         "relationCount": 0,
                         "traceCount": 0,
@@ -4724,10 +4726,10 @@ class PythonServiceTests(unittest.TestCase):
             decisions_for_positions([position], portfolio),
             metadata={
                 "ontology": {
-                    "neo4j": {
+                    "typedb": {
                         "saved": False,
                         "status": "invalid-abox",
-                        "reason": "ABox validation failed before Neo4j persistence.",
+                        "reason": "ABox validation failed before TypeDB persistence.",
                         "aboxValidation": {
                             "status": "invalid",
                             "errorCount": 1,
@@ -8014,6 +8016,79 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("종목 평가금액: $2,098 (약 299만 원)", raw_lines)
         self.assertIn("계좌 평가금액: 299만 원", raw_lines)
 
+    def test_holding_snapshot_enricher_recalculates_stale_portfolio_with_external_fx_rate(self):
+        position = normalize_position({
+            "symbol": "STRC",
+            "name": "Strategy Preferred",
+            "market": "US",
+            "currency": "USD",
+            "marketValue": 1000,
+            "marketValueKrw": 1000000,
+            "quantity": 10,
+            "averagePrice": 90,
+            "currentPrice": 100,
+            "profitLossRate": 11.1,
+        })
+        external_signals = {
+            "fxRates": {
+                "USDKRW": {
+                    "provider": "Alpha Vantage",
+                    "base": "USD",
+                    "quote": "KRW",
+                    "rate": 1500,
+                }
+            }
+        }
+        stale_portfolio = portfolio_summary([position], fx_rates={"USD": 1000, "KRW": 1})
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "ok",
+            utc_now_iso(),
+            stale_portfolio,
+            [position],
+            external_signals=external_signals,
+        )
+        job = NotificationJob.create(
+            "Strategy Preferred",
+            account_id="main",
+            account_label="메인",
+            message_type="investmentInsight",
+            context={
+                "target": "STRC",
+                "displayTarget": "Strategy Preferred / STRC",
+                "rawLines": "상태: 보유",
+            },
+        )
+
+        NotificationHoldingSnapshotEnricher(
+            lambda: {"main": snapshot.to_monitor_state()},
+            RealtimeMonitor({"fxRates": "KRW=1\nUSD=1000"}),
+        )(job)
+        raw_lines = job.context["rawLines"]
+
+        self.assertIn("종목 평가금액: $1,000 (약 150만 원)", raw_lines)
+        self.assertIn("계좌 평가금액: 150만 원", raw_lines)
+
+    def test_trend_context_line_includes_ma5_when_available(self):
+        position = {
+            "symbol": "STRC",
+            "market": "US",
+            "currency": "USD",
+            "currentPrice": 88.28,
+            "ma5": 86.84,
+            "ma20": 86.66,
+            "ma60": 94.68,
+        }
+
+        line = RealtimeMonitor().trend_context_line(position)
+
+        self.assertIn("5일선 $86.84보다 1.7% 높음", line)
+        self.assertIn("20일선 $86.66보다 1.9% 높음", line)
+        self.assertIn("60일선 $94.68보다 6.8% 낮음", line)
+
     def test_validated_ai_response_hides_internal_variables_and_jargon(self):
         context = {
             "messageType": "investmentInsight",
@@ -10082,10 +10157,10 @@ class PythonServiceTests(unittest.TestCase):
             decisions_for_positions([position], portfolio),
             metadata={
                 "ontology": {
-                    "neo4j": {
+                    "typedb": {
                         "inferenceBox": {
                             "status": "ok",
-                            "neo4jNativeReasoningUsed": True,
+                            "nativeTypeDbReasoningUsed": True,
                             "relations": [
                                 {
                                     "type": "HAS_INFERRED_RISK",
@@ -10101,7 +10176,7 @@ class PythonServiceTests(unittest.TestCase):
                                     "decisionStage": "LOSS_REDUCE",
                                     "stagePriority": 40,
                                     "inferenceTraceId": "inference-trace:005930:graph.loss_guard.breakdown.v1",
-                                    "nativeNeo4jReasoned": True,
+                                    "nativeTypeDbReasoned": True,
                                 }
                             ],
                             "traces": [
@@ -10111,7 +10186,7 @@ class PythonServiceTests(unittest.TestCase):
                                     "symbol": "005930",
                                     "ruleId": "graph.loss_guard.breakdown.v1",
                                     "confidence": 1,
-                                    "nativeNeo4jReasoned": True,
+                                    "nativeTypeDbReasoned": True,
                                 }
                             ],
                         }

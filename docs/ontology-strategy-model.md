@@ -55,7 +55,7 @@ AI 프롬프트에는 TBox, `boundedContexts`, ABox, operational ontology, reaso
 6. `DecisionItem.relation_rule_context`, `ai_prompt_context`, `ai_context`에 관계 규칙 결과와 프롬프트 입력 계약을 함께 붙인다.
 7. 실시간 모니터링은 알림 metadata에 `ontologyRelationContext`, `ontologyPromptContext`, `ontologyReviewContext`를 포함한다.
 8. 모델 리뷰 워커는 이 정보를 비동기 AI 프롬프트에 넣어 판단 변화 원인, 노이즈 가능성, 부족 데이터, 다음 규칙 개선안을 분석한다.
-9. `infrastructure/ontology_projection.py`가 스냅샷을 온톨로지 read model로 투영한다. 런타임은 `infrastructure/ontology_graph_store.py`의 generic factory만 사용하고, 이 factory가 `ONTOLOGY_GRAPH_STORE_MODE`에 따라 TypeDB, TypeDB, dual-write 어댑터를 인프라에서만 갈아 끼운다.
+9. `infrastructure/ontology_projection.py`가 스냅샷을 온톨로지 read model로 투영한다. 런타임은 `infrastructure/ontology_graph_store.py`의 generic factory만 사용하고, 이 factory는 TypeDB repository 하나만 반환한다.
 
 알림은 투자 이벤트 타입별 폴링으로 직접 발송하지 않는다. 기존 `modelBuy`, `holdingTiming`, `externalDartDisclosure` 같은 이벤트는 `investmentInsight.metadata.sourceAlertEvents`의 근거 신호로 남고, 최종 발송은 `Insight -> DISPATCHED_BY -> NotificationDispatch(investmentInsight)` 관계가 담당한다.
 
@@ -153,14 +153,7 @@ API:
 ## Graph Store Configuration
 
 ```bash
-ONTOLOGY_GRAPH_STORE_MODE=typedb # typedb | dual | typedb
 ONTOLOGY_TYPEDB_ENABLED=1
-ONTOLOGY_TYPE_DB_ENABLED=0
-TYPE_DB_URI=http://127.0.0.1:7474
-TYPE_DB_USER=typedb
-TYPE_DB_PASSWORD=...
-TYPE_DB_DATABASE=typedb
-TYPE_DB_TIMEOUT_SECONDS=30
 TYPEDB_ADDRESS=127.0.0.1:1729
 TYPEDB_USER=admin
 TYPEDB_PASSWORD=password
@@ -169,9 +162,9 @@ TYPEDB_TLS_ENABLED=0
 TYPEDB_TIMEOUT_SECONDS=20
 ```
 
-TypeDB를 쓰려면 런타임에 `typedb-driver` Python package와 TypeDB 서버가 필요하다. TypeDB 호환 모드는 HTTP transactional endpoint를 사용하며, `bolt://` 또는 `typedb://` URI를 쓰려면 런타임에 `typedb` Python driver가 설치되어 있어야 한다. 저장 실패는 모니터링 사이클을 막지 않고 snapshot metadata에 결과만 남긴다.
+TypeDB를 쓰려면 런타임에 `typedb-driver` Python package와 TypeDB 서버가 필요하다. 저장 실패는 모니터링 사이클을 막지 않고 snapshot metadata에 결과만 남긴다.
 
-`ONTOLOGY_GRAPH_STORE_MODE=typedb` 또는 `dual`이고 `ONTOLOGY_TYPEDB_ENABLED=1`이면 project service manager가 TypeDB 서버를 조건부 worker로 포함한다. 로컬 TypeDB 데이터는 `data/typedb-data/`에, TypeDB 자체 로그는 `data/typedb-logs/`에, service manager stdout/stderr는 `data/typedb.log`에 남긴다.
+`ONTOLOGY_TYPEDB_ENABLED=1`이면 project service manager가 TypeDB 서버를 조건부 worker로 포함한다. 로컬 TypeDB 데이터는 `data/typedb-data/`에, TypeDB 자체 로그는 `data/typedb-logs/`에, service manager stdout/stderr는 `data/typedb.log`에 남긴다.
 
 저장소는 그래프 저장 전에 다음 스키마 준비를 best effort로 실행한다.
 

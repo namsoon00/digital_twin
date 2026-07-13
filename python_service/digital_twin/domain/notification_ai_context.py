@@ -126,7 +126,7 @@ def is_graph_backed_relation_context(relation_context: Dict[str, object]) -> boo
 
 
 def is_graph_store_inference_source(value: str) -> bool:
-    return str(value or "") in {"neo4jInferenceBox", "typedbInferenceBox", "graphStoreInferenceBox"}
+    return str(value or "") in {"typedbInferenceBox", "typedbInferenceBox", "graphStoreInferenceBox"}
 
 
 def has_graph_backed_relation_context(context: Dict[str, object]) -> bool:

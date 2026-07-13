@@ -7732,11 +7732,11 @@ h3 {
   padding: 16px;
 }
 
-.neo4j-rulebox-panel .panel-head {
+.typedb-rulebox-panel .panel-head {
   align-items: flex-start;
 }
 
-.neo4j-rulebox-editor {
+.typedb-rulebox-editor {
   gap: 14px;
 }
 

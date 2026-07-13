@@ -1025,6 +1025,20 @@
           "unit": "seconds"
         },
         {
+          "key": "typedbRetryCount",
+          "label": "TypeDB 재시도",
+          "type": "number",
+          "default": "2",
+          "unit": "회"
+        },
+        {
+          "key": "typedbInferenceGenerationKeepCount",
+          "label": "InferenceBox 보관 세대",
+          "type": "number",
+          "default": "2",
+          "unit": "세대"
+        },
+        {
           "key": "formulaWeights",
           "label": "참고 가중치",
           "type": "assignmentText"

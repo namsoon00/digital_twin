@@ -3571,6 +3571,8 @@
       typedbDatabase: settingValue("typedbDatabase"),
       typedbTlsEnabled: settingValue("typedbTlsEnabled"),
       typedbTimeoutSeconds: settingValue("typedbTimeoutSeconds"),
+      typedbRetryCount: settingValue("typedbRetryCount"),
+      typedbInferenceGenerationKeepCount: settingValue("typedbInferenceGenerationKeepCount"),
       materialityGateEnabled: settingValue("materialityGateEnabled"),
       materialityMinimumScore: settingValue("materialityMinimumScore"),
       marketMaterialityMinimumScore: settingValue("marketMaterialityMinimumScore"),
@@ -13053,7 +13055,7 @@
       '</div>',
       '<div class="settings-note model-settings-note">',
       '<strong>TypeDB를 RuleBox 원본으로 사용합니다.</strong>',
-      '<p>저장 시 RuleBox와 InferenceBox를 지우고 규칙 구조를 다시 적재한 뒤 버전 해시를 남깁니다. 실행 버튼은 TypeDB의 관계 조건을 읽어 InferenceBox 관계를 다시 만듭니다.</p>',
+      '<p>저장 시 RuleBox 규칙 구조를 TypeDB에 적재하고 버전 해시를 남깁니다. 실행 버튼은 TypeDB ABox와 RuleBox를 읽어 새 InferenceBox 세대를 먼저 만든 뒤 최신 세대로 전환합니다.</p>',
       '</div>',
       '<div class="rulebox-console-strip">',
       '<span><strong>source</strong>' + escapeHtml(payload.source || "-") + '</span>',
@@ -14660,6 +14662,8 @@
           { value: "1", label: "사용" }
         ]),
         renderSettingField("typedbTimeoutSeconds", "TypeDB 타임아웃(초)", "number", "20"),
+        renderSettingField("typedbRetryCount", "TypeDB 재시도(회)", "number", "2"),
+        renderSettingField("typedbInferenceGenerationKeepCount", "InferenceBox 보관 세대", "number", "2"),
         renderSettingField("ontologyReasoningIntervalSeconds", "추론 요청 확인 주기(초)", "number", "10"),
         renderSettingField("ontologyReasoningBatchSize", "추론 요청 배치", "number", "20")
       ].join(""), "gate feed-wide"),

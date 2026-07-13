@@ -73,6 +73,15 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
 
         self.assertIn("손익 구간: 큰 손실(-28.2%) · 이전 알림 대비 4.1%p 악화", message)
 
+    def test_previous_profit_loss_topline_shows_no_change(self):
+        summary = notification_topline_change_summary({
+            "profitLossRate": -20.948,
+            "previousProfitLossRate": -20.95,
+            "honeyStateReason": "손실률 -20.948%가 필수 발송 구간(-15% 이하)에 있음",
+        })
+
+        self.assertEqual("손익 구간: 큰 손실(-20.9%) · 이전 알림 대비 0.0%p 변화 없음", summary)
+
     def test_topline_change_summary_maps_new_news_disclosure_reason(self):
         summary = notification_topline_change_summary({
             "honeyStateReason": "의미 있는 추가 확대: 새 근거 신호 추가 holdingTiming, externalDartDisclosure",

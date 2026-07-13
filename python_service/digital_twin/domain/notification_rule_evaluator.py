@@ -27,6 +27,9 @@ from .strategy import SafeFormula
 MANDATORY_PROFIT_LOSS_MESSAGE_TYPES = {"investmentInsight", "holdingTiming"}
 MANDATORY_LOSS_RATE_THRESHOLD = -15.0
 MANDATORY_PROFIT_RATE_THRESHOLD = 20.0
+MANDATORY_PROFIT_LOSS_REPEAT_DELTA_PCT = 1.0
+MANDATORY_LOSS_BANDS = [-15.0, -20.0, -30.0]
+MANDATORY_PROFIT_BANDS = [20.0, 30.0, 50.0]
 PROFIT_LOSS_FIELD_CANDIDATES = [
     "profitLossRate",
     "profit_loss_rate",
@@ -235,7 +238,20 @@ def first_normalized_field_value(context: Dict[str, object], fields: List[str]) 
     return ""
 
 
-def mandatory_profit_loss_delivery_reason(job: NotificationJob = None) -> str:
+def format_profit_loss_percent(value: float) -> str:
+    prefix = "+" if float(value or 0) > 0 else ""
+    return prefix + format_rule_number(value) + "%"
+
+
+def mandatory_loss_band_rank(value: float) -> int:
+    return len([threshold for threshold in MANDATORY_LOSS_BANDS if float(value or 0) <= threshold])
+
+
+def mandatory_profit_band_rank(value: float) -> int:
+    return len([threshold for threshold in MANDATORY_PROFIT_BANDS if float(value or 0) >= threshold])
+
+
+def mandatory_profit_loss_delivery_reason(job: NotificationJob = None, previous_context: Dict[str, object] = None) -> str:
     if job is None:
         return ""
     if str(job.message_type or "") not in MANDATORY_PROFIT_LOSS_MESSAGE_TYPES:
@@ -243,19 +259,42 @@ def mandatory_profit_loss_delivery_reason(job: NotificationJob = None) -> str:
     profit_loss_rate = profit_loss_rate_from_context(job.context or {}, job.text or "")
     if profit_loss_rate is None:
         return ""
+    previous_rate = profit_loss_rate_from_context(previous_context or {})
     if profit_loss_rate <= MANDATORY_LOSS_RATE_THRESHOLD:
+        current_text = format_profit_loss_percent(profit_loss_rate)
+        if previous_rate is not None:
+            previous_text = format_profit_loss_percent(previous_rate)
+            if previous_rate > MANDATORY_LOSS_RATE_THRESHOLD:
+                return "손실률 " + previous_text + " -> " + current_text + "로 필수 발송 구간에 신규 진입"
+            if mandatory_loss_band_rank(profit_loss_rate) > mandatory_loss_band_rank(previous_rate):
+                return "손실률 " + previous_text + " -> " + current_text + "로 더 깊은 손실 구간 진입"
+            delta = float(profit_loss_rate) - float(previous_rate)
+            if delta <= -MANDATORY_PROFIT_LOSS_REPEAT_DELTA_PCT:
+                return "손실률 추가 악화 " + previous_text + " -> " + current_text
+            return ""
         return (
             "손실률 "
-            + format_rule_number(profit_loss_rate)
-            + "%가 필수 발송 구간("
+            + current_text
+            + "가 필수 발송 구간("
             + format_rule_number(MANDATORY_LOSS_RATE_THRESHOLD)
             + "% 이하)에 있음"
         )
     if profit_loss_rate >= MANDATORY_PROFIT_RATE_THRESHOLD:
+        current_text = format_profit_loss_percent(profit_loss_rate)
+        if previous_rate is not None:
+            previous_text = format_profit_loss_percent(previous_rate)
+            if previous_rate < MANDATORY_PROFIT_RATE_THRESHOLD:
+                return "수익률 " + previous_text + " -> " + current_text + "로 필수 발송 구간에 신규 진입"
+            if mandatory_profit_band_rank(profit_loss_rate) > mandatory_profit_band_rank(previous_rate):
+                return "수익률 " + previous_text + " -> " + current_text + "로 더 높은 수익 구간 진입"
+            delta = float(profit_loss_rate) - float(previous_rate)
+            if delta >= MANDATORY_PROFIT_LOSS_REPEAT_DELTA_PCT:
+                return "수익률 추가 개선 " + previous_text + " -> " + current_text
+            return ""
         return (
-            "수익률 +"
-            + format_rule_number(profit_loss_rate)
-            + "%가 필수 발송 구간(+"
+            "수익률 "
+            + current_text
+            + "가 필수 발송 구간(+"
             + format_rule_number(MANDATORY_PROFIT_RATE_THRESHOLD)
             + "% 이상)에 있음"
         )
@@ -265,8 +304,9 @@ def mandatory_profit_loss_delivery_reason(job: NotificationJob = None) -> str:
 def apply_mandatory_profit_loss_delivery(
     decision: NotificationRuleDecision,
     job: NotificationJob = None,
+    previous_context: Dict[str, object] = None,
 ) -> bool:
-    reason = mandatory_profit_loss_delivery_reason(job)
+    reason = mandatory_profit_loss_delivery_reason(job, previous_context=previous_context)
     if not reason:
         return False
     decision.should_send = True
@@ -587,13 +627,13 @@ def apply_similarity_rule(
 ) -> NotificationRuleDecision:
     decision.similarity_recent_count = max(0, int(recent_count or 0))
     decision.similarity_previous_score = max(0, int(previous_score or 0))
-    if config.enabled and apply_mandatory_profit_loss_delivery(decision, job):
+    previous_context = previous_context or {}
+    if config.enabled and apply_mandatory_profit_loss_delivery(decision, job, previous_context=previous_context):
         return decision
     if decision.suppression_reason == "state_cooldown" or decision.similarity_bypassed:
         return decision
     if not config.enabled or not config.similarity_enabled or decision.similarity_recent_count <= 0:
         return decision
-    previous_context = previous_context or {}
     if job is not None:
         for condition in config.similarity_bypass_conditions or []:
             if not condition.enabled:
@@ -643,14 +683,14 @@ def apply_state_cooldown_rule(
         decision.state_decision = "unknown"
         decision.state_reason = "상태 fingerprint 없음"
         return decision
-    if apply_mandatory_profit_loss_delivery(decision, job):
+    previous_context = previous_context or {}
+    if apply_mandatory_profit_loss_delivery(decision, job, previous_context=previous_context):
         return decision
     if decision.state_recent_sent_count <= 0:
         decision.state_decision = "new_threshold"
         decision.state_reason = "신규 임계값 상태"
         decision.reasons.append("상태 정책: " + decision.state_reason)
         return decision
-    previous_context = previous_context or {}
     if job is not None:
         for condition in config.similarity_bypass_conditions or []:
             if not condition.enabled:

@@ -60,8 +60,10 @@ def _signed_decimal_text(value: float) -> str:
     return magnitude
 
 def _signed_point_change_text(delta: float) -> str:
-    if abs(delta) < 0.05:
+    if delta is None:
         return ""
+    if abs(delta) < 0.05:
+        return "이전 알림 대비 0.0%p 변화 없음"
     magnitude = ("%.1f" % abs(delta)).rstrip("0").rstrip(".")
     direction = "개선" if delta > 0 else "악화"
     return "이전 알림 대비 " + magnitude + "%p " + direction

@@ -233,6 +233,6 @@ def context_with_validated_ai_response(
         "lines": lines,
         "validatedResponse": payload,
     }
-    enriched["telegramMessage"] = prepend_execution_start_badge(execution_telegram_message(enriched, response))
+    enriched["telegramMessage"] = prepend_execution_start_badge(execution_telegram_message(enriched, response), enriched)
     enriched["readableMessage"] = re.sub(r"</?(?:b|code)>", "", enriched["telegramMessage"])
     return enriched

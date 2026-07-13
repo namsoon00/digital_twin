@@ -10,12 +10,33 @@ from digital_twin.domain.notification_rules import (
     default_notification_rule,
     evaluate_notification_rule,
 )
+from digital_twin.domain.notification_ai_gate_message import (
+    notification_topline_change_summary,
+    prepend_execution_start_badge,
+)
 from digital_twin.domain.notifications import NotificationJob
 from digital_twin.domain.strategy_alerts import StrategyAlertMixin
 from digital_twin.domain.portfolio import utc_now_iso
 
 
 class NotificationDataQualityPolicyTests(unittest.TestCase):
+    def test_topline_change_summary_is_added_next_to_new_alert_badge(self):
+        message = prepend_execution_start_badge(
+            "<b>[주의] 🛡️ SK하이닉스: 분할축소 점검</b>",
+            {"honeyStateReason": "의미 있는 추가 확대: 손익률 추가 악화 -8.9% -> -10.4%"},
+        )
+
+        self.assertTrue(message.startswith("<b>🔔 새 알림</b> <code>손익률 악화</code>"))
+        self.assertEqual(1, message.count("🔔 새 알림"))
+
+    def test_topline_change_summary_maps_new_news_disclosure_reason(self):
+        summary = notification_topline_change_summary({
+            "honeyStateReason": "의미 있는 추가 확대: 새 근거 신호 추가 holdingTiming, externalDartDisclosure",
+            "sourceSignalTypes": ["holdingTiming", "externalDartDisclosure"],
+        })
+
+        self.assertEqual("새 뉴스·공시", summary)
+
     def test_watchlist_data_conflict_is_data_quality_signal(self):
         mixin = StrategyAlertMixin()
         signal_type = mixin.watchlist_ontology_signal_type({

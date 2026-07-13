@@ -469,7 +469,7 @@ class NewsDigestEnqueuer:
         reason = "신선도·관련성·중요도 기준을 통과한 새 뉴스/피드 근거가 저장됐습니다."
         number = tracking_number or notification_debug_number(event.event_id)
         parts = [
-            "🔔 새 알림",
+            "🔔 새 알림 · 새 뉴스 " + str(len(items)) + "건",
             "",
             "[관찰] 🗞️ 뉴스/피드 새 정보",
             "보유/관심 종목 새 근거 감지",

@@ -35,13 +35,58 @@ def _html_row(label: str, value: object, beginner: bool = False) -> str:
         text = _friendly_text(text)
     return "• <b>" + html.escape(label, quote=False) + "</b>: <code>" + html.escape(text, quote=False) + "</code>"
 
-def prepend_execution_start_badge(rendered: str) -> str:
+def notification_topline_change_summary(context: Dict[str, object]) -> str:
+    context = context or {}
+    reason = str(context.get("honeyStateReason") or context.get("honeySimilarityBypassReason") or "").strip()
+    source_types = " ".join(str(item or "") for item in (context.get("sourceSignalTypes") or []))
+    if "손익률 추가 악화" in reason:
+        return "손익률 악화"
+    if "필수 발송 구간" in reason or "손실률" in reason or "수익률" in reason:
+        return "손익 구간"
+    if "60일 평균 아래 전환" in reason or "60일선 이탈" in reason:
+        return "60일선 이탈"
+    if "판단 액션 변경" in reason or "판단 변경" in reason:
+        return "판단 변경"
+    if "새 근거 신호 추가" in reason:
+        if any(term in source_types for term in ["news", "News", "Dart", "Disclosure", "researchEvidence"]):
+            return "새 뉴스·공시"
+        return "새 근거"
+    if "새 뉴스/공시/관계 근거" in reason or "새 관계 이벤트" in reason:
+        return "새 뉴스·공시"
+    if "관계 강도 변화" in reason:
+        return "관계 강도 변화"
+    if "신규성 변화" in reason:
+        return "신규성 변화"
+    if "인사이트 유형 변경" in reason:
+        return "유형 변경"
+    if "신규 임계값 상태" in reason:
+        return "새 기준 진입"
+    reason_summary = notification_reason_summary(context)
+    if reason_summary:
+        if "뉴스" in reason_summary or "공시" in reason_summary:
+            return "새 뉴스·공시"
+        if "관계 점수" in reason_summary:
+            return "관계 점수 상승"
+        return _clean_reason_text(reason_summary, 18)
+    return ""
+
+def prepend_execution_start_badge(rendered: str, context: Dict[str, object] = None) -> str:
     text = str(rendered or "").strip()
     if not text:
         return text
-    if text.startswith(MESSAGE_START_BADGE) or text.startswith("<b>" + MESSAGE_START_BADGE + "</b>"):
+    summary = notification_topline_change_summary(context or {})
+    summary_suffix = (" <code>" + html.escape(summary, quote=False) + "</code>") if summary else ""
+    plain_badge = MESSAGE_START_BADGE + ((" · " + summary) if summary else "")
+    html_badge = "<b>" + MESSAGE_START_BADGE + "</b>" + summary_suffix
+    if text.startswith("<b>" + MESSAGE_START_BADGE + "</b>"):
+        if summary and not text.split("\n", 1)[0].strip().endswith("</code>"):
+            return text.replace("<b>" + MESSAGE_START_BADGE + "</b>", html_badge, 1)
         return text
-    return "<b>" + MESSAGE_START_BADGE + "</b>\n\n" + text
+    if text.startswith(MESSAGE_START_BADGE):
+        if summary and not text.split("\n", 1)[0].strip().endswith(summary):
+            return text.replace(MESSAGE_START_BADGE, plain_badge, 1)
+        return text
+    return html_badge + "\n\n" + text
 
 def confidence_text(value: object) -> str:
     score = _clamp(_number(value), 0, 100)

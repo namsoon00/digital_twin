@@ -103,6 +103,7 @@ class NewsDigestEnqueuerTests(unittest.TestCase):
         self.assertEqual("AAPL", job.context["symbol"])
         self.assertEqual("research:AAPL:news:apple-openai", job.context["newsDigest"]["primaryEvidenceId"])
         self.assertIn('href="https://example.test/apple?utm_source=news&amp;ref=long">원문 보기</a>', job.text)
+        self.assertTrue(job.text.startswith("🔔 새 알림 · 새 뉴스 1건"))
         self.assertNotIn("• 원문: https://example.test", job.text)
         self.assertIn("기사일: 07/11 09:00 KST", job.text)
         self.assertIn("분석: 기사 본문 읽음", job.text)

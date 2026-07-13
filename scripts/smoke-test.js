@@ -1574,6 +1574,8 @@ function checkFrontendAdminRender() {
     assertOk(settingsHtml.indexOf('data-setting="marketDataMaxAgeMinutes"') >= 0, "설정 탭에 추천 시세 신선도 기준이 없습니다.");
     assertOk(settingsHtml.indexOf('data-setting="dartDisclosureAiAnalysisEnabled"') >= 0, "설정 탭에 공시 AI 해석 옵션이 없습니다.");
     assertOk(settingsHtml.indexOf('data-setting="dartDisclosureAiTimeoutSeconds"') >= 0, "설정 탭에 공시 AI 타임아웃 옵션이 없습니다.");
+    assertOk(code.indexOf('kisAppKey: settingValue("kisAppKey")') >= 0 && code.indexOf('kisAppSecret: settingValue("kisAppSecret")') >= 0, "KIS secret 필드가 설정 저장 payload에 포함되지 않습니다.");
+    assertOk(code.indexOf('kisMarketSignalCacheMinutes: settingValue("kisMarketSignalCacheMinutes")') >= 0, "KIS 수급 캐시 설정이 저장 payload에 포함되지 않습니다.");
     assertOk(settingsHtml.indexOf('data-setting="tossClientId"') < 0, "설정 탭에 계정 Client ID 입력이 남아 있습니다.");
     assertOk(settingsHtml.indexOf('data-setting="tossClientSecret"') < 0, "설정 탭에 계정 Secret 입력이 남아 있습니다.");
     assertOk(settingsHtml.indexOf('data-setting="tossAccountSeq"') < 0, "설정 탭에 계좌 순번 입력이 남아 있습니다.");
@@ -1836,7 +1838,11 @@ async function checkNormalMode(port, context) {
       settings: {
         watchlistSymbols: "TSLA,AAPL,NVDA",
         tossApiBaseUrl: "http://127.0.0.1:1",
+        kisBaseUrl: "http://127.0.0.1:2",
         kisMarketSignalsEnabled: "0",
+        kisAppKey: "fake-kis-key",
+        kisAppSecret: "fake-kis-secret",
+        kisMarketSignalCacheMinutes: "7",
         tossClientId: "fake-client",
         tossClientSecret: "fake-secret",
         appTheme: "dark",
@@ -1865,7 +1871,12 @@ async function checkNormalMode(port, context) {
   assertOk(savedSettings.statusCode === 200, "설정 저장 API 응답 코드가 200이 아닙니다: " + savedSettings.statusCode);
   const savedSettingsPayload = JSON.parse(savedSettings.body);
   assertOk(savedSettingsPayload.configured.tossClientSecret === true, "저장된 토스 secret 설정 상태가 true가 아닙니다.");
+  assertOk(savedSettingsPayload.configured.kisAppKey === true, "저장된 KIS app key 설정 상태가 true가 아닙니다.");
+  assertOk(savedSettingsPayload.configured.kisAppSecret === true, "저장된 KIS app secret 설정 상태가 true가 아닙니다.");
   assertOk(savedSettingsPayload.settings.tossClientSecret === "", "저장 응답이 토스 secret을 내려주고 있습니다.");
+  assertOk(savedSettingsPayload.settings.kisAppKey === "" && savedSettingsPayload.settings.kisAppSecret === "", "저장 응답이 KIS secret 원문을 내려주고 있습니다.");
+  assertOk(savedSettingsPayload.settings.kisBaseUrl === "http://127.0.0.1:2", "저장된 KIS Base URL 값이 응답에 없습니다.");
+  assertOk(savedSettingsPayload.settings.kisMarketSignalCacheMinutes === "7", "저장된 KIS 수급 캐시 설정이 응답에 없습니다.");
   assertOk(savedSettingsPayload.settings.watchlistSymbols === "TSLA,AAPL,NVDA", "저장된 관심 종목 값이 응답에 없습니다.");
   assertOk(savedSettingsPayload.settings.alertRules.indexOf("investmentInsight=1") >= 0, "저장된 알림 규칙이 응답에 없습니다.");
   assertOk(savedSettingsPayload.settings.modelDecisionThresholds.indexOf("graphSignalAlertScore=82") >= 0, "저장된 그래프 신호 기준값이 응답에 없습니다.");

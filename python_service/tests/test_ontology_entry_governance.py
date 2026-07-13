@@ -5,6 +5,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.domain.investment_research import build_active_investment_opinion
+from digital_twin.domain.ontology_relation_facts import position_signal_facts
 from digital_twin.domain.ontology_relation_reasoning import evaluate_position_relation_rules
 from digital_twin.domain.portfolio import Position
 from digital_twin.domain.portfolio_calculations import portfolio_summary
@@ -100,6 +101,27 @@ class OntologyEntryGovernanceTests(unittest.TestCase):
         self.assertFalse(context["facts"]["entryMacroBlocked"])
         self.assertFalse(context["facts"]["entryFxBlocked"])
         self.assertEqual("BUY", opinion.action)
+
+    def test_relation_facts_include_time_adjusted_volume_pace(self):
+        candidate = Position(
+            symbol="AAPL",
+            name="Apple",
+            market="US",
+            currency="USD",
+            current_price=316.18,
+            volume=8737438,
+            volume_ratio=0.3,
+            trading_value=1050906655,
+            updated_at="2026-07-13T10:00:00-04:00",
+            source="watchlist",
+        )
+
+        facts = position_signal_facts(candidate, portfolio_summary([]), external_signals={})
+
+        self.assertEqual(0.3, facts["rawVolumeRatio"])
+        self.assertGreater(facts["timeAdjustedVolumeRatio"], facts["rawVolumeRatio"])
+        self.assertEqual("regular", facts["volumePaceSession"])
+        self.assertIn("미장 정규장", facts["volumePaceSessionLabel"])
 
 
 if __name__ == "__main__":

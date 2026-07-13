@@ -29,6 +29,24 @@ def _plain_number(value: object) -> str:
     return text or "0"
 
 
+def _volume_pace_phrase(facts: Dict[str, object]) -> str:
+    raw_ratio = _float_value(facts.get("rawVolumeRatio") if facts.get("rawVolumeRatio") is not None else facts.get("volumeRatio"))
+    adjusted_ratio = _float_value(facts.get("timeAdjustedVolumeRatio"))
+    expected_ratio = _float_value(facts.get("expectedVolumeRatioNow"))
+    elapsed_pct = _float_value(facts.get("volumePaceElapsedPct"))
+    session_label = str(facts.get("volumePaceSessionLabel") or "").strip()
+    pieces = []
+    if raw_ratio:
+        pieces.append("원본 " + _plain_number(raw_ratio) + "배")
+    if adjusted_ratio:
+        pieces.append("시간 보정 " + _plain_number(adjusted_ratio) + "배")
+    if session_label and elapsed_pct:
+        pieces.append(session_label + " " + _plain_number(elapsed_pct) + "% 경과")
+    if expected_ratio:
+        pieces.append("현시점 기대 누적 " + _plain_number(expected_ratio) + "배")
+    return ", ".join(pieces)
+
+
 def _append_unique(rows: List[str], value: object) -> None:
     text = str(value or "").strip()
     if text and text not in rows:
@@ -163,20 +181,32 @@ def decision_drivers_from_relation_context(
             ["currentPrice", "ma20", "ma20Distance", "ma60", "ma60Distance"],
         )
 
-    volume_ratio = _float_value(facts.get("volumeRatio"))
+    raw_volume_ratio = _float_value(facts.get("rawVolumeRatio") if facts.get("rawVolumeRatio") is not None else facts.get("volumeRatio"))
+    adjusted_volume_ratio = _float_value(facts.get("timeAdjustedVolumeRatio"))
+    volume_ratio = adjusted_volume_ratio or raw_volume_ratio
+    volume_pace_phrase = _volume_pace_phrase(facts)
     trade_strength = _float_value(facts.get("tradeStrength"))
     bid_ask_imbalance = _float_value(facts.get("bidAskImbalance"))
     if volume_ratio:
         if volume_ratio < 0.7:
-            summary = "거래량이 평소의 " + _plain_number(volume_ratio) + "배라 강한 매수세나 투매를 단정하기 어렵습니다."
+            summary = "거래량은 " + (volume_pace_phrase or _plain_number(volume_ratio) + "배") + " 기준이라 강한 매수세나 투매를 단정하기 어렵습니다."
             direction = "counter"
         elif volume_ratio >= 1.5:
-            summary = "거래량이 평소의 " + _plain_number(volume_ratio) + "배로 늘어 가격 신호의 확인 강도가 커졌습니다."
+            summary = "거래량은 " + (volume_pace_phrase or _plain_number(volume_ratio) + "배") + " 기준으로 늘어 가격 신호의 확인 강도가 커졌습니다."
             direction = "support" if ma20_distance >= 0 else "risk"
         else:
-            summary = "거래량이 평소와 비슷해 가격 흐름을 보조 근거로만 봅니다."
+            summary = "거래량은 " + (volume_pace_phrase or _plain_number(volume_ratio) + "배") + " 기준이라 가격 흐름을 보조 근거로 봅니다."
             direction = "neutral"
-        _append_driver(rows, seen, "liquidity", direction, "거래량 확인", summary, 52 + min(28, abs(volume_ratio - 1) * 12), ["volumeRatio", "volume"])
+        _append_driver(
+            rows,
+            seen,
+            "liquidity",
+            direction,
+            "거래량 확인",
+            summary,
+            52 + min(28, abs(volume_ratio - 1) * 12),
+            ["volumeRatio", "rawVolumeRatio", "timeAdjustedVolumeRatio", "expectedVolumeRatioNow", "volumePaceElapsedPct", "volume"],
+        )
     if trade_strength:
         _append_driver(
             rows,
@@ -321,7 +351,10 @@ def execution_plan_from_relation_context(
     pnl = float(facts.get("profitLossRate") or 0)
     ma20_distance = float(facts.get("ma20Distance") or 0)
     ma60_distance = float(facts.get("ma60Distance") or 0)
-    volume_ratio = float(facts.get("volumeRatio") or 0)
+    raw_volume_ratio = _float_value(facts.get("rawVolumeRatio") if facts.get("rawVolumeRatio") is not None else facts.get("volumeRatio"))
+    adjusted_volume_ratio = _float_value(facts.get("timeAdjustedVolumeRatio"))
+    volume_ratio = adjusted_volume_ratio or raw_volume_ratio
+    volume_phrase = _volume_pace_phrase(facts) or (("%.1f" % volume_ratio) + "x" if volume_ratio else "")
     trade_strength = float(facts.get("tradeStrength") or 0)
     bid_ask_imbalance = float(facts.get("bidAskImbalance") or 0)
     primary_action = "HOLD"
@@ -348,9 +381,9 @@ def execution_plan_from_relation_context(
             _append_unique(counter_signals, "60일선보다 " + ("%.1f" % abs(ma60_distance)) + "% 높아 중기 지지는 남아 있음")
             _append_unique(strengthen_conditions, "60일선 아래로 내려가면 손절·축소 강도 상향")
         if volume_ratio and volume_ratio < 1:
-            _append_unique(counter_signals, "거래량 " + ("%.1f" % volume_ratio) + "x로 평균 이하라 투매 확정은 아님")
+            _append_unique(counter_signals, "거래량 " + volume_phrase + " 기준으로 평균 이하라 투매 확정은 아님")
         elif volume_ratio >= 1:
-            _append_unique(risk_signals, "거래량 " + ("%.1f" % volume_ratio) + "x로 하락 확인 강도 상승")
+            _append_unique(risk_signals, "거래량 " + volume_phrase + " 기준으로 하락 확인 강도 상승")
         if trade_strength and trade_strength < 100:
             _append_unique(risk_signals, "체결강도 " + ("%.1f" % trade_strength) + "로 매수 체결 우위 부족")
         elif trade_strength >= 100:

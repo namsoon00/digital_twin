@@ -5,6 +5,7 @@ from .ontology_contracts import PortfolioOntology
 from .ontology_schema import add_entity, add_relation
 from .portfolio import Position, expects_kr_microstructure_signals
 from .portfolio_ontology_catalog import METRIC_CONCEPTS
+from .volume_time_adjustment import volume_pace_snapshot
 
 
 def metric_tbox_classes(tbox_class: str, field_name: str) -> List[str]:
@@ -268,9 +269,25 @@ def add_execution_metric_concepts(
         add_relation(graph, stock_id, metric_id, "HAS_EXECUTION_METRIC", weight=1.0, properties=relation_props)
 
 def volume_profile(position: Position) -> Dict[str, object]:
+    volume_pace = volume_pace_snapshot(
+        position.market,
+        position.volume_ratio,
+        volume=position.volume,
+        trading_value=position.trading_value,
+        observed_at=position.updated_at,
+    )
     return {
         "volume": round(number(position.volume), 2),
         "volumeRatio": round(number(position.volume_ratio), 3),
+        "rawVolumeRatio": volume_pace.get("rawVolumeRatio"),
+        "timeAdjustedVolumeRatio": volume_pace.get("timeAdjustedVolumeRatio"),
+        "expectedVolumeRatioNow": volume_pace.get("expectedVolumeRatioNow"),
+        "volumePaceStatus": volume_pace.get("volumePaceStatus"),
+        "volumePaceLabel": volume_pace.get("volumePaceLabel"),
+        "volumePaceSession": volume_pace.get("volumePaceSession"),
+        "volumePaceSessionLabel": volume_pace.get("volumePaceSessionLabel"),
+        "volumePaceElapsedPct": volume_pace.get("volumePaceElapsedPct"),
+        "volumePaceBasis": volume_pace.get("volumePaceBasis"),
         "tradingValue": round(number(position.trading_value), 2),
         "tradeStrength": round(number(position.trade_strength), 2),
         "buyVolume": round(number(position.buy_volume), 2),

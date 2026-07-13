@@ -7,6 +7,7 @@ from .market_data import clamp, number
 from . import news_analysis as news_domain
 from .ontology_relation_contracts import BTC_SENSITIVE_SYMBOLS
 from .portfolio import PortfolioSummary, Position, expects_kr_microstructure_signals
+from .volume_time_adjustment import volume_pace_snapshot
 
 
 def _sector_ratio(position: Position, portfolio: PortfolioSummary) -> float:
@@ -524,6 +525,13 @@ def position_signal_facts(
     news_context = news_headlines.get(symbol) if isinstance(news_headlines, dict) and isinstance(news_headlines.get(symbol), dict) else {}
     sec_filings = external_signals.get("secFilings") if isinstance(external_signals, dict) else {}
     sec_context = sec_filings.get(symbol) if isinstance(sec_filings, dict) and isinstance(sec_filings.get(symbol), dict) else {}
+    volume_pace = volume_pace_snapshot(
+        position.market,
+        position.volume_ratio,
+        volume=position.volume,
+        trading_value=position.trading_value,
+        observed_at=position.updated_at,
+    )
     facts: Dict[str, object] = {
         "symbol": symbol,
         "name": position.name,
@@ -550,6 +558,16 @@ def position_signal_facts(
         "tradeStrength": number(position.trade_strength),
         "volume": number(position.volume),
         "volumeRatio": number(position.volume_ratio),
+        "rawVolumeRatio": volume_pace.get("rawVolumeRatio"),
+        "timeAdjustedVolumeRatio": volume_pace.get("timeAdjustedVolumeRatio"),
+        "expectedVolumeRatioNow": volume_pace.get("expectedVolumeRatioNow"),
+        "volumePaceStatus": volume_pace.get("volumePaceStatus"),
+        "volumePaceLabel": volume_pace.get("volumePaceLabel"),
+        "volumePaceSession": volume_pace.get("volumePaceSession"),
+        "volumePaceSessionLabel": volume_pace.get("volumePaceSessionLabel"),
+        "volumePaceElapsedPct": volume_pace.get("volumePaceElapsedPct"),
+        "volumePaceLocalTime": volume_pace.get("volumePaceLocalTime"),
+        "volumePaceBasis": volume_pace.get("volumePaceBasis"),
         "tradingValue": number(position.trading_value),
         "buyVolume": buy_volume,
         "sellVolume": sell_volume,

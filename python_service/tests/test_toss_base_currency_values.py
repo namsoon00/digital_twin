@@ -7,6 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from digital_twin.domain.market_data import normalize_position
 from digital_twin.domain.monitoring import RealtimeMonitor
 from digital_twin.domain.portfolio_calculations import portfolio_summary, runtime_fx_currencies_from_external_signals
+from digital_twin.domain.volume_time_adjustment import volume_pace_snapshot
 from digital_twin.infrastructure.toss_snapshots import currency_rates_from_external_signals
 
 
@@ -176,6 +177,39 @@ class TossBaseCurrencyValueTests(unittest.TestCase):
         self.assertEqual(1425.5, rates["USD"])
         self.assertAlmostEqual(2097.6 * 1425.5, summary.total)
         self.assertEqual("종목 평가금액: $2,098 (약 299만 원)", line)
+
+    def test_volume_pace_snapshot_adjusts_raw_volume_ratio_by_market_session_time(self):
+        pace = volume_pace_snapshot(
+            "US",
+            0.3,
+            volume=8737438,
+            trading_value=1050906655,
+            observed_at="2026-07-13T10:00:00-04:00",
+        )
+
+        self.assertEqual("open", pace["volumePaceStatus"])
+        self.assertEqual("regular", pace["volumePaceSession"])
+        self.assertGreater(pace["timeAdjustedVolumeRatio"], pace["rawVolumeRatio"])
+        self.assertIn("시간 대비", pace["volumePaceLabel"])
+
+    def test_flow_context_line_shows_raw_and_time_adjusted_volume_ratio(self):
+        monitor = RealtimeMonitor({"fxRates": "KRW=1\nUSD=1400"})
+        position = {
+            "symbol": "AAPL",
+            "market": "US",
+            "currency": "USD",
+            "volume": 8737438,
+            "volumeRatio": 0.3,
+            "tradingValue": 1050906655,
+            "updatedAt": "2026-07-13T10:00:00-04:00",
+        }
+
+        line = monitor.flow_context_line(position)
+
+        self.assertIn("원본 0.3x", line)
+        self.assertIn("시간보정", line)
+        self.assertIn("미장 정규장", line)
+        self.assertIn("현시점 기대", line)
 
 
 if __name__ == "__main__":

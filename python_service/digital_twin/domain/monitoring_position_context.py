@@ -5,6 +5,7 @@ from .market_data import number
 from .ontology_relation_reasoning import relation_rule_context_summary_lines
 from .portfolio import AccountSnapshot, Position
 from .portfolio_calculations import value_in_base
+from .volume_time_adjustment import volume_pace_snapshot
 
 
 class MonitoringPositionContextMixin:
@@ -381,15 +382,36 @@ class MonitoringPositionContextMixin:
         parts: List[str] = []
         volume = self.position_volume(position)
         ratio = self.position_volume_ratio(position)
+        trading_value = self.position_trading_value(position)
+        pace = volume_pace_snapshot(
+            position.get("market"),
+            ratio,
+            volume=volume,
+            trading_value=trading_value,
+            observed_at=position.get("updated_at") if "updated_at" in position else position.get("updatedAt"),
+        )
+        adjusted_ratio = number(pace.get("timeAdjustedVolumeRatio"))
+        expected_ratio = number(pace.get("expectedVolumeRatioNow"))
+        elapsed_pct = number(pace.get("volumePaceElapsedPct"))
+        session_label = str(pace.get("volumePaceSessionLabel") or "").strip()
         if volume > 0:
             volume_label = compact_number(volume)
             if ratio > 0:
-                volume_label += "(" + compact_number(ratio) + "x)"
+                ratio_bits = ["원본 " + compact_number(ratio) + "x"]
+                if adjusted_ratio > 0:
+                    ratio_bits.append("시간보정 " + compact_number(adjusted_ratio) + "x")
+                if session_label and elapsed_pct > 0:
+                    ratio_bits.append(session_label + " " + compact_number(elapsed_pct) + "% 경과")
+                if expected_ratio > 0:
+                    ratio_bits.append("현시점 기대 " + compact_number(expected_ratio) + "x")
+                volume_label += "(" + " · ".join(ratio_bits) + ")"
             parts.append("거래량 " + volume_label)
         elif ratio > 0:
-            parts.append("거래량 배율 " + compact_number(ratio) + "x")
+            ratio_label = "거래량 배율 원본 " + compact_number(ratio) + "x"
+            if adjusted_ratio > 0:
+                ratio_label += " · 시간보정 " + compact_number(adjusted_ratio) + "x"
+            parts.append(ratio_label)
 
-        trading_value = self.position_trading_value(position)
         if trading_value > 0:
             parts.append("거래액 " + money(trading_value, self.position_currency(position)))
         trade_strength = self.position_trade_strength(position)

@@ -3535,12 +3535,12 @@
       ontologyRuleCandidateAiIntervalMinutes: settingValue("ontologyRuleCandidateAiIntervalMinutes"),
       ontologyRuleCandidateAiMaxCandidates: settingValue("ontologyRuleCandidateAiMaxCandidates"),
       ontologyGraphStoreMode: settingValue("ontologyGraphStoreMode"),
-      ontologyNeo4jEnabled: settingValue("ontologyNeo4jEnabled"),
+      ontologyTypeDBEnabled: settingValue("ontologyTypeDBEnabled"),
       ontologyTypeDbEnabled: settingValue("ontologyTypeDbEnabled"),
-      neo4jUri: settingValue("neo4jUri"),
-      neo4jUser: settingValue("neo4jUser"),
-      neo4jDatabase: settingValue("neo4jDatabase"),
-      neo4jTimeoutSeconds: settingValue("neo4jTimeoutSeconds"),
+      typedbUri: settingValue("typedbUri"),
+      typedbUser: settingValue("typedbUser"),
+      typedbDatabase: settingValue("typedbDatabase"),
+      typedbTimeoutSeconds: settingValue("typedbTimeoutSeconds"),
       typedbAddress: settingValue("typedbAddress"),
       typedbUser: settingValue("typedbUser"),
       typedbDatabase: settingValue("typedbDatabase"),
@@ -3853,10 +3853,22 @@
   }
 
   function applyOntologyExperiment(experimentId) {
-    ontologyExperimentCommand(experimentId, "apply", "온톨로지 제안을 운영 반영했습니다.");
+    var experiment = ontologyExperimentById(experimentId);
+    var latest = ontologyExperimentLatestRun(experiment);
+    var readiness = String(((latest.promotionReadiness || {}).status) || latest.promotionStatus || "");
+    var payload = {};
+    if (readiness === "needs-review") {
+      if (window.confirm && !window.confirm("이 실험은 needs-review 상태입니다. 검토 승인 기록을 남기고 운영 온톨로지에 반영할까요?")) return;
+      payload = {
+        reviewApproved: true,
+        reviewedBy: "web-main",
+        reviewReason: "웹 실험 탭에서 needs-review 결과를 수동 승인"
+      };
+    }
+    ontologyExperimentCommand(experimentId, "apply", "온톨로지 제안을 운영 반영했습니다.", payload);
   }
 
-  function ontologyExperimentCommand(experimentId, action, successMessage) {
+  function ontologyExperimentCommand(experimentId, action, successMessage, payload) {
     var id = String(experimentId || "").trim();
     if (!id || state.ontologyExperimentAction) return;
     if (isStaticPreviewHost()) {
@@ -3868,7 +3880,7 @@
     state.ontologyExperimentAction = action + ":" + id;
     state.ontologyExperimentsError = "";
     render();
-    sendJson("/api/ontology/experiments/" + encodeURIComponent(id) + "/" + action, "POST", {})
+    sendJson("/api/ontology/experiments/" + encodeURIComponent(id) + "/" + action, "POST", payload || {})
       .then(function (payload) {
         var failureMessage = ontologyExperimentCommandFailureMessage(action, payload);
         if (failureMessage) throw new Error(failureMessage);
@@ -3891,6 +3903,7 @@
     var reason = String(payload.reason || "");
     if (status === "not-found") return "실험을 찾지 못했습니다.";
     if (status === "no-result") return "아직 적용할 실험 결과가 없습니다.";
+    if (action === "apply" && reason === "experiment-needs-review-approval") return "needs-review 실험은 검토 승인 후 적용할 수 있습니다.";
     if (action === "apply" && status === "not-ready") return "완료된 샌드박스 실행 결과가 있어야 적용할 수 있습니다." + (reason ? " (" + reason + ")" : "");
     if (action === "apply" && status === "disabled") return "온톨로지 저장소가 비활성화되어 적용할 수 없습니다.";
     if (action === "apply" && status === "pending") return "온톨로지 제안 적용이 완료되지 않았습니다.";
@@ -6404,7 +6417,7 @@
     var description = options.description || "데이터가 들어오면 같은 위치에 표시합니다.";
     var meta = Array.isArray(options.meta) ? options.meta : [];
     return [
-      '<div class="empty-state ' + escapeHtml(tone) + '">',
+      '<div class="empty-state ' + escapeHtml(tone) + '"' + cardTypeAttrs("empty-state", tone) + '>',
       '<div class="empty-state-copy">',
       '<p class="label">' + escapeHtml(label) + '</p>',
       '<strong>' + escapeHtml(title) + '</strong>',
@@ -6416,6 +6429,10 @@
       options.action || '',
       '</div>'
     ].join("");
+  }
+
+  function cardTypeAttrs(type, tone) {
+    return ' data-card-type="' + escapeHtml(type || "container") + '"' + (tone ? ' data-card-tone="' + escapeHtml(tone) + '"' : '');
   }
 
   function renderError() {
@@ -7402,6 +7419,13 @@
     return Array.isArray(payload.experiments) ? payload.experiments : [];
   }
 
+  function ontologyExperimentById(experimentId) {
+    var id = String(experimentId || "");
+    return ontologyExperimentItems().filter(function (item) {
+      return String((item || {}).id || (item || {}).experimentId || "") === id;
+    })[0] || {};
+  }
+
   function ontologyExperimentLatestRun(experiment) {
     var history = Array.isArray(experiment.runHistory) ? experiment.runHistory : [];
     var lastResult = experiment.lastResult && typeof experiment.lastResult === "object" ? experiment.lastResult : {};
@@ -7527,6 +7551,7 @@
       '<button class="text-button primary" type="button" data-lab-run-active' + (state.ontologyExperimentAction ? ' disabled' : '') + '>' + escapeHtml(ontologyExperimentBusy("once") ? "실행 중" : "활성 실험 실행") + '</button>',
       '</div>',
       state.ontologyExperimentsError ? '<p class="form-error">' + escapeHtml(state.ontologyExperimentsError) + '</p>' : '',
+      '<p class="subtle">AI 자동 제안 ' + escapeHtml(payload.autoSuggestEnabled === false ? "중지" : (payload.autoSuggestConfigured === false ? "미설정" : "실행")) + ' · 주기 ' + escapeHtml(payload.autoSuggestIntervalMinutes || "-") + '분 · 최대 ' + escapeHtml(payload.autoSuggestLimit || "-") + '건</p>',
       latest.completedAt ? '<p class="subtle">최근 실행 ' + escapeHtml(formatClock(latest.completedAt)) + ' · ' + escapeHtml(ontologyReadinessLabel(latest.promotionStatus)) + '</p>' : '',
       '</article>'
     ].join("");
@@ -8894,7 +8919,7 @@
     }
     if (section === "rules") {
       return renderInvestmentTabWorkspace("rules", [
-        { role: "main", html: renderOntologyRuleEditorPanel(snapshot) + renderNeo4jRuleboxPanel(snapshot) },
+        { role: "main", html: renderOntologyRuleEditorPanel(snapshot) + renderTypeDBRuleboxPanel(snapshot) },
         { role: "side", html: renderInvestmentAiPacketPanel(snapshot) + renderAiPromptRegistryPanel(snapshot) + renderAdminModelingPanel(snapshot) }
       ]);
     }
@@ -9180,7 +9205,7 @@
     return [
       '<div class="process-step">',
       '<b>' + escapeHtml(step[0]) + '</b>',
-      '<span>',
+      '<span' + cardTypeAttrs("metric-cell") + '>',
       '<strong>' + escapeHtml(step[1]) + '</strong>',
       '<em>' + escapeHtml(step[2]) + '</em>',
       '</span>',
@@ -9258,7 +9283,7 @@
 
   function renderHomeAction(tab, label, value, caption) {
     return [
-      '<button class="home-action" data-tab="' + escapeHtml(tab) + '">',
+      '<button class="home-action" data-tab="' + escapeHtml(tab) + '"' + cardTypeAttrs("action-queue-card") + '>',
       '<span>' + escapeHtml(label) + '</span>',
       '<strong>' + escapeHtml(value) + '</strong>',
       '<em>' + escapeHtml(caption) + '</em>',
@@ -9268,7 +9293,7 @@
 
   function renderHomeSignal(label, value, tone) {
     return [
-      '<span class="home-signal ' + escapeHtml(tone || "ok") + '">',
+      '<span class="home-signal ' + escapeHtml(tone || "ok") + '"' + cardTypeAttrs("health-card", tone || "ok") + '>',
       '<em>' + escapeHtml(label) + '</em>',
       '<strong>' + escapeHtml(value) + '</strong>',
       '</span>'
@@ -9277,7 +9302,7 @@
 
   function renderAdminStat(label, value, suffix) {
     return [
-      '<span>',
+      '<span' + cardTypeAttrs("metric-cell") + '>',
       '<em>' + escapeHtml(label) + '</em>',
       '<strong>' + escapeHtml(value) + escapeHtml(suffix || "") + '</strong>',
       '</span>'
@@ -9427,7 +9452,7 @@
     var enabled = account.enabled !== false;
     var provider = String(account.provider || "toss").toUpperCase();
     return [
-      '<div class="account-card">',
+      '<div class="account-card"' + cardTypeAttrs("ledger-row", enabled ? "watch" : "hold") + '>',
       '<div class="account-card-head">',
       '<span class="account-provider-badge">' + escapeHtml(provider.slice(0, 4)) + '</span>',
       '<div>',
@@ -9564,7 +9589,7 @@
       ? ' type="button" data-watch-account-select="' + escapeHtml(accountIdOf(account)) + '"'
       : "";
     return [
-      '<' + tag + ' class="watch-account-row' + (options.selectable ? " selectable" : "") + (active ? " active" : "") + '"' + attrs + '>',
+      '<' + tag + ' class="watch-account-row' + (options.selectable ? " selectable" : "") + (active ? " active" : "") + '"' + cardTypeAttrs("ledger-row", active ? "watch" : "hold") + attrs + '>',
       '<div>',
       '<strong>' + escapeHtml(account.label || account.id || "-") + '</strong>',
       '<span>' + escapeHtml(account.id || "-") + ' · ' + escapeHtml(account.enabled === false ? "중지" : "사용") + '</span>',
@@ -9652,7 +9677,7 @@
     }
     var merged = Object.assign(clientKnownStockInfo(original), item || {}, { symbol: original });
     return [
-      '<div class="account-watch-symbol-row">',
+      '<div class="account-watch-symbol-row"' + cardTypeAttrs("ledger-row") + '>',
       '<div class="account-watch-symbol-main">',
       '<strong>' + escapeHtml(stockDisplayName(original, merged)) + '</strong>',
       '<span>' + escapeHtml(stockDisplayMeta(merged, [marketLabel(merged.market || "-"), merged.sector || "-"])) + '</span>',
@@ -9865,9 +9890,9 @@
     return accounts.length ? "다중 계정" : "계정 미등록";
   }
 
-  function renderAccountControlMetric(label, value, detail, tone) {
+  function renderAccountControlMetric(label, value, detail, tone, type) {
     return [
-      '<span class="account-control-metric ' + escapeHtml(tone || "neutral") + '">',
+      '<span class="account-control-metric ' + escapeHtml(tone || "neutral") + '"' + cardTypeAttrs(type || "metric-cell", tone || "neutral") + '>',
       '<em>' + escapeHtml(label) + '</em>',
       '<strong>' + escapeHtml(value == null ? "-" : value) + '</strong>',
       detail ? '<b>' + escapeHtml(detail) + '</b>' : '',
@@ -9877,7 +9902,7 @@
 
   function renderAccountApiStatusRow(label, value, detail, tone) {
     return [
-      '<div class="account-api-row ' + escapeHtml(tone || "neutral") + '">',
+      '<div class="account-api-row ' + escapeHtml(tone || "neutral") + '"' + cardTypeAttrs("health-card", tone || "neutral") + '>',
       '<span>' + escapeHtml(label) + '</span>',
       '<strong>' + escapeHtml(value || "-") + '</strong>',
       '<em>' + escapeHtml(detail || "") + '</em>',
@@ -10063,10 +10088,10 @@
       '<span class="status-pill ' + escapeHtml(accountSnapshotTone(snapshot)) + '">' + escapeHtml(modeLabel) + '</span>',
       '</div>',
       '<div class="account-command-grid">',
-      renderAccountControlMetric("현재 계좌", currentAccountLabel(snapshot), enabled + "/" + accounts.length + " 활성", enabled ? "ok" : "warn"),
-      renderAccountControlMetric("Toss 준비", tossReady + "/" + accounts.length, "계정별 API key/secret", tossReady ? "ok" : "warn"),
-      renderAccountControlMetric("데이터 신선도", freshness.label, freshness.detail, freshness.tone),
-      renderAccountControlMetric("스냅샷", formatClock(snapshot.generatedAt), (snapshot.toss || {}).status || "조회 상태 대기", accountSnapshotTone(snapshot)),
+      renderAccountControlMetric("현재 계좌", currentAccountLabel(snapshot), enabled + "/" + accounts.length + " 활성", enabled ? "ok" : "warn", "health-card"),
+      renderAccountControlMetric("Toss 준비", tossReady + "/" + accounts.length, "계정별 API key/secret", tossReady ? "ok" : "warn", "health-card"),
+      renderAccountControlMetric("데이터 신선도", freshness.label, freshness.detail, freshness.tone, "health-card"),
+      renderAccountControlMetric("스냅샷", formatClock(snapshot.generatedAt), (snapshot.toss || {}).status || "조회 상태 대기", accountSnapshotTone(snapshot), "health-card"),
       '</div>',
       '<div class="account-overview-ledger">',
       '<div class="account-board-title"><strong>데이터 품질</strong><span>연결/금액 탭에서 세부 검증을 볼 수 있습니다.</span></div>',
@@ -10160,7 +10185,7 @@
   function renderServiceAccountRow(account) {
     var watchlist = watchSymbolListText(accountWatchlistSymbols(account));
     return [
-      '<div class="service-account-row">',
+      '<div class="service-account-row"' + cardTypeAttrs("ledger-row", account.enabled === false ? "hold" : "watch") + '>',
       '<div class="service-account-main">',
       '<div class="service-account-title">',
       '<strong>' + escapeHtml(account.label || account.id || "-") + '</strong>',
@@ -10195,7 +10220,7 @@
 
   function renderAccountExposureItem(label, value, tone) {
     return [
-      '<span class="account-exposure-item ' + escapeHtml(tone || "neutral") + '">',
+      '<span class="account-exposure-item ' + escapeHtml(tone || "neutral") + '"' + cardTypeAttrs("health-card", tone || "neutral") + '>',
       '<em>' + escapeHtml(label) + '</em>',
       '<strong>' + escapeHtml(value) + '</strong>',
       '</span>'
@@ -12584,7 +12609,7 @@
     ].join("");
   }
 
-  function renderNeo4jRuleboxPanel() {
+  function renderTypeDBRuleboxPanel() {
     var payload = state.ontologyRulebox || {};
     var rules = Array.isArray(payload.rules) ? payload.rules : [];
     var relationTypes = Array.isArray(payload.relationTypes) ? payload.relationTypes : [];
@@ -12593,7 +12618,7 @@
     var lastRun = state.ontologyRuleboxLastRun || {};
     var disabled = state.ontologyRuleboxSaving || state.ontologyRuleboxRunning || state.ontologyRuleboxProposing || state.serverSettingsLocked;
     return [
-      '<article class="panel model-panel neo4j-rulebox-panel">',
+      '<article class="panel model-panel typedb-rulebox-panel">',
       '<div class="panel-head">',
       '<div>',
       '<p class="label">TypeDB RuleBox</p>',
@@ -12601,7 +12626,7 @@
       '</div>',
       '<span class="tone-chip ' + escapeHtml(payload.status === "ok" ? "watch" : payload.configured ? "caution" : "hold") + '">' + escapeHtml(ruleboxStatusLabel(payload)) + '</span>',
       '</div>',
-      '<div class="model-editor neo4j-rulebox-editor">',
+      '<div class="model-editor typedb-rulebox-editor">',
       '<div class="lab-stats-grid model-stats-grid">',
       renderLabStat("규칙", payload.ruleCount || rules.length || 0, "개"),
       renderLabStat("조건", payload.conditionCount || countRuleboxConditions(rules), "개"),
@@ -12638,13 +12663,13 @@
       '<div class="model-section">',
       '<div class="flow-title"><div><strong>최근 버전</strong><span>저장된 RuleBox 해시와 변경 이유입니다.</span></div></div>',
       '<div class="source-stack rulebox-version-list">',
-      versions.length ? versions.map(renderNeo4jRuleboxVersionRow).join("") : '<p class="subtle">아직 기록된 RuleBox 버전이 없습니다.</p>',
+      versions.length ? versions.map(renderTypeDBRuleboxVersionRow).join("") : '<p class="subtle">아직 기록된 RuleBox 버전이 없습니다.</p>',
       '</div>',
       '</div>',
       '<div class="model-section">',
       '<div class="flow-title"><div><strong>AI 관계 후보 검토</strong><span>후보는 JSON 초안에만 추가됩니다. enabled=false 상태로 검토 후 활성화하세요.</span></div></div>',
       '<div class="source-stack rulebox-candidate-list">',
-      candidates.length ? candidates.map(function (candidate) { return renderNeo4jRuleboxCandidateRow(candidate, disabled); }).join("") : '<p class="subtle">검토할 관계 후보가 없습니다.</p>',
+      candidates.length ? candidates.map(function (candidate) { return renderTypeDBRuleboxCandidateRow(candidate, disabled); }).join("") : '<p class="subtle">검토할 관계 후보가 없습니다.</p>',
       '</div>',
       '</div>',
       '<div class="model-section">',
@@ -12654,7 +12679,7 @@
       '<div class="model-section">',
       '<div class="flow-title"><div><strong>활성 규칙 요약</strong><span>TypeDB에 적재된 RuleBox 노드를 사람이 읽기 쉽게 펼친 목록입니다.</span></div></div>',
       '<div class="source-stack rulebox-rule-list">',
-      rules.length ? rules.map(renderNeo4jRuleboxRuleRow).join("") : '<p class="subtle">TypeDB RuleBox 규칙이 비어 있습니다.</p>',
+      rules.length ? rules.map(renderTypeDBRuleboxRuleRow).join("") : '<p class="subtle">TypeDB RuleBox 규칙이 비어 있습니다.</p>',
       '</div>',
       '</div>',
       '</div>',
@@ -12680,7 +12705,7 @@
     }, 0);
   }
 
-  function renderNeo4jRuleboxRuleRow(rule) {
+  function renderTypeDBRuleboxRuleRow(rule) {
     var conditions = Array.isArray(rule.conditions) ? rule.conditions : [];
     var derivations = Array.isArray(rule.derivations) ? rule.derivations : [];
     var relationTypes = derivations.map(function (item) {
@@ -12695,7 +12720,7 @@
     ].join("");
   }
 
-  function renderNeo4jRuleboxVersionRow(version) {
+  function renderTypeDBRuleboxVersionRow(version) {
     return [
       '<div class="source-row rulebox-version-row">',
       '<span>' + escapeHtml(version.versionLabel || version.shortHash || "-") + '</span>',
@@ -12705,7 +12730,7 @@
     ].join("");
   }
 
-  function renderNeo4jRuleboxCandidateRow(candidate, disabled) {
+  function renderTypeDBRuleboxCandidateRow(candidate, disabled) {
     var requiresData = Array.isArray(candidate.requiresData) ? candidate.requiresData : [];
     var proposed = candidate.proposedRule && typeof candidate.proposedRule === "object" ? candidate.proposedRule : null;
     var canAppend = proposed && candidate.status !== "covered";
@@ -13996,7 +14021,7 @@
     var activeChannels = channels.filter(function (channel) { return channel.enabled; }).length;
     var readyChannels = channels.filter(function (channel) { return channel.enabled && channel.ready !== false; }).length;
     var graphStoreMode = settingValue("ontologyGraphStoreMode") || defaultSettings.ontologyGraphStoreMode || "typedb";
-    var graphStoreLabel = graphStoreMode === "typedb" ? "TypeDB" : (graphStoreMode === "dual" ? "Neo4j + TypeDB" : "Neo4j");
+    var graphStoreLabel = graphStoreMode === "typedb" ? "TypeDB" : (graphStoreMode === "dual" ? "TypeDB + TypeDB" : "TypeDB");
     return [
       { step: "01", title: "원천 수집", tone: activeChannels ? "watch" : "hold", value: activeChannels + "/" + channels.length, detail: "사용 중인 수집 채널" },
       { step: "02", title: "준비도 확인", tone: readyChannels === activeChannels ? "watch" : "caution", value: readyChannels + "/" + Math.max(activeChannels, 1), detail: "키·연결·무키 채널 확인" },
@@ -14121,7 +14146,7 @@
     var archiveScope = (settingValue("newsCollectionMaxSymbols") || defaultSettings.newsCollectionMaxSymbols || "40") + "종목 · "
       + (settingValue("newsCollectionLookbackMinutes") || defaultSettings.newsCollectionLookbackMinutes || "180") + "분";
     var graphStoreMode = settingValue("ontologyGraphStoreMode") || defaultSettings.ontologyGraphStoreMode || "typedb";
-    var graphStoreLabel = graphStoreMode === "typedb" ? "TypeDB" : (graphStoreMode === "dual" ? "Neo4j+TypeDB" : (settingEnabled("ontologyNeo4jEnabled") ? "Neo4j" : "로컬"));
+    var graphStoreLabel = graphStoreMode === "typedb" ? "TypeDB" : (graphStoreMode === "dual" ? "TypeDB+TypeDB" : (settingEnabled("ontologyTypeDBEnabled") ? "TypeDB" : "로컬"));
     var reasoningScope = graphStoreLabel + " · "
       + (settingValue("ontologyReasoningIntervalSeconds") || defaultSettings.ontologyReasoningIntervalSeconds || "10") + "초";
     return [
@@ -14212,17 +14237,17 @@
         ]),
         renderSettingSelect("ontologyGraphStoreMode", "그래프 저장소 모드", [
           { value: "typedb", label: "TypeDB 단독" },
-          { value: "dual", label: "TypeDB + Neo4j 미러" },
-          { value: "neo4j", label: "Neo4j 호환" }
+          { value: "dual", label: "TypeDB + TypeDB 미러" },
+          { value: "typedb", label: "TypeDB 호환" }
         ]),
-        renderSettingSelect("ontologyNeo4jEnabled", "Neo4j 미러 저장소", [
+        renderSettingSelect("ontologyTypeDBEnabled", "TypeDB 미러 저장소", [
           { value: "1", label: "사용" },
           { value: "0", label: "사용 안 함" }
         ]),
-        renderSettingField("neo4jUri", "Neo4j URI", "text", "http://127.0.0.1:7474"),
-        renderSettingField("neo4jUser", "Neo4j 사용자", "text", "neo4j"),
-        renderSettingField("neo4jDatabase", "Neo4j DB", "text", "neo4j"),
-        renderSettingField("neo4jTimeoutSeconds", "Neo4j 타임아웃(초)", "number", "8"),
+        renderSettingField("typedbUri", "TypeDB URI", "text", "http://127.0.0.1:7474"),
+        renderSettingField("typedbUser", "TypeDB 사용자", "text", "typedb"),
+        renderSettingField("typedbDatabase", "TypeDB DB", "text", "typedb"),
+        renderSettingField("typedbTimeoutSeconds", "TypeDB 타임아웃(초)", "number", "8"),
         renderSettingSelect("ontologyTypeDbEnabled", "TypeDB 그래프 저장소", [
           { value: "1", label: "사용" },
           { value: "0", label: "사용 안 함" }

@@ -1,6 +1,22 @@
 from typing import List
 
-from .ontology_rulebox_contracts import GraphInferenceRule, GraphRuleCondition, GraphRuleDerivation
+from .ontology_rulebox_contracts import (
+    WATCHLIST_ACTION_POLICY,
+    WATCHLIST_ALLOWED_ACTIONS,
+    WATCHLIST_BLOCKED_ACTIONS,
+    WATCHLIST_TARGET_ROLE,
+    GraphInferenceRule,
+    GraphRuleCondition,
+    GraphRuleDerivation,
+)
+
+
+WATCHLIST_ENTRY_POLICY = {
+    "target_role": WATCHLIST_TARGET_ROLE,
+    "action_policy": WATCHLIST_ACTION_POLICY,
+    "allowed_actions": WATCHLIST_ALLOWED_ACTIONS,
+    "blocked_actions": WATCHLIST_BLOCKED_ACTIONS,
+}
 
 
 def default_graph_inference_rules() -> List[GraphInferenceRule]:
@@ -164,6 +180,7 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
                     ai_influence_label="관심 종목 진입 관찰",
                     action_group="entry",
                     action_level="watch",
+                    **WATCHLIST_ENTRY_POLICY,
                 )
             ],
         ),
@@ -363,6 +380,7 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
                     ai_influence_label="수급 매집 진입 후보",
                     action_group="entry",
                     action_level="review",
+                    **WATCHLIST_ENTRY_POLICY,
                 )
             ],
         ),
@@ -842,6 +860,7 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
                     ai_influence_label="추세 전이 진입 관찰",
                     action_group="entry",
                     action_level="review",
+                    **WATCHLIST_ENTRY_POLICY,
                 ),
                 GraphRuleDerivation(
                     relation_type="SUPPORTS_THESIS",
@@ -859,6 +878,7 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
                     action_level="review",
                     decision_stage="ENTRY_SPLIT_BUY",
                     stage_priority=31,
+                    **WATCHLIST_ENTRY_POLICY,
                 )
             ],
         ),

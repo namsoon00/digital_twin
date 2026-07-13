@@ -247,6 +247,13 @@ class OntologyInferenceContextTests(unittest.TestCase):
         self.assertEqual("신규 진입 대기", contexts["NVDA"]["decision"]["label"])
         self.assertEqual("ENTRY_WAIT", contexts["NVDA"]["decision"]["decisionStage"])
         self.assertEqual("entryWait", contexts["NVDA"]["decision"]["actionGroup"])
+        self.assertEqual("watchlist", contexts["NVDA"]["targetRole"])
+        self.assertEqual("ENTRY_ONLY", contexts["NVDA"]["actionPolicy"])
+        self.assertEqual(["BUY", "HOLD", "AVOID"], contexts["NVDA"]["allowedActions"])
+        self.assertEqual(["ADD", "TRIM", "SELL"], contexts["NVDA"]["blockedActions"])
+        self.assertEqual("ENTRY_ONLY", contexts["NVDA"]["executionPlan"]["actionPolicy"])
+        self.assertIn("BUY", contexts["NVDA"]["executionPlan"]["allowedActions"])
+        self.assertIn("SELL", contexts["NVDA"]["executionPlan"]["blockedActionCodes"])
 
     def test_typedb_entry_momentum_inference_maps_to_entry_ready_stage(self):
         watch = Position(
@@ -315,6 +322,79 @@ class OntologyInferenceContextTests(unittest.TestCase):
         self.assertEqual("ENTRY_READY", contexts["AAPL"]["decision"]["decisionStage"])
         self.assertEqual("entry", contexts["AAPL"]["decision"]["actionGroup"])
         self.assertEqual("typedbInferenceRelation", contexts["AAPL"]["decision"]["stagePolicySource"])
+
+    def test_watchlist_entry_only_policy_rewrites_holding_only_inference_stage(self):
+        watch = Position(
+            symbol="AAPL",
+            name="Apple",
+            market="US",
+            currency="USD",
+            current_price=196,
+            ma20=210,
+            ma60=208,
+            ma20_distance=-6.7,
+            ma60_distance=-5.8,
+            source="watchlist",
+            sector="AI/플랫폼",
+        )
+        snapshot = AccountSnapshot(
+            "acct",
+            "계좌",
+            "test",
+            "live",
+            "ok",
+            "2026-07-10T00:00:00Z",
+            portfolio_summary([], fx_rates={"KRW": 1, "USD": 1400}),
+            watchlist=[watch],
+            metadata={
+                "ontology": {
+                    "typedb": {
+                        "inferenceBox": {
+                            "status": "ok",
+                            "nativeTypeDbReasoningUsed": True,
+                            "relations": [
+                                {
+                                    "type": "HAS_INFERRED_RISK",
+                                    "source": "stock:AAPL",
+                                    "target": "risk:AAPL:trend-break",
+                                    "targetLabel": "Apple 가격 흐름 약화",
+                                    "ruleId": "graph.trend.breakdown_acceleration.v1",
+                                    "polarity": "risk",
+                                    "riskImpact": 12,
+                                    "weight": 0.84,
+                                    "decisionStage": "LOSS_REDUCE",
+                                    "stagePriority": 44,
+                                    "actionGroup": "lossControl",
+                                    "actionLevel": "review",
+                                    "nativeTypeDbReasoned": True,
+                                }
+                            ],
+                            "traces": [
+                                {
+                                    "id": "inference-trace:AAPL:graph.trend.breakdown_acceleration.v1",
+                                    "label": "Apple · 가격 흐름 약화",
+                                    "symbol": "AAPL",
+                                    "ruleId": "graph.trend.breakdown_acceleration.v1",
+                                    "confidence": 0.84,
+                                }
+                            ],
+                        }
+                    }
+                }
+            },
+        )
+
+        context = relation_contexts_from_snapshot(snapshot)["AAPL"]
+
+        self.assertEqual("watchlist", context["targetRole"])
+        self.assertEqual("ENTRY_ONLY", context["actionPolicy"])
+        self.assertTrue(context["decision"]["actionPolicyApplied"])
+        self.assertEqual("ADD_BUY_BLOCKED", context["decision"]["decisionStage"])
+        self.assertEqual("entryRisk", context["decision"]["actionGroup"])
+        self.assertEqual("신규 진입 보류", context["decision"]["label"])
+        self.assertEqual("AVOID_OR_WAIT", context["executionPlan"]["primaryAction"])
+        self.assertNotIn("TRIM", context["executionPlan"]["primaryAction"])
+        self.assertIn("SELL", context["executionPlan"]["blockedActionCodes"])
 
 
 if __name__ == "__main__":

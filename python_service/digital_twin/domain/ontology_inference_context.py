@@ -2,6 +2,13 @@ from typing import Dict, Iterable, List, Optional
 
 from .market_data import number
 from .ontology_decision_policy import decision_stage_from_action, relation_stage_priority
+from .ontology_rulebox_contracts import (
+    HOLDING_TARGET_ROLE,
+    WATCHLIST_ACTION_POLICY,
+    WATCHLIST_ALLOWED_ACTIONS,
+    WATCHLIST_BLOCKED_ACTIONS,
+    WATCHLIST_TARGET_ROLE,
+)
 from .ontology_relation_reasoning import (
     OntologyRuleMatch,
     build_ai_prompt_context,
@@ -143,6 +150,10 @@ def relation_context_from_inferencebox(
         "signalStrength": round(float(max_strength or 0), 1),
         "signalStrengthLabel": strength_label(max_strength),
         "confidence": round(max([item.confidence for item in active_matches], default=0), 1),
+        "targetRole": decision.get("targetRole"),
+        "actionPolicy": decision.get("actionPolicy"),
+        "allowedActions": decision.get("allowedActions") or [],
+        "blockedActions": decision.get("blockedActions") or [],
         "decision": decision,
         "executionPlan": execution_plan,
         "evidenceSubgraph": evidence_subgraph,
@@ -330,12 +341,20 @@ def decision_from_inference(
 ) -> Dict[str, object]:
     selected = max(matches, key=lambda item: (stage_priority_for_match(item, relations), item.strength_score, item.confidence))
     relation = relation_for_match(selected, relations)
+    action_policy = action_policy_from_relation_or_facts(facts, relation)
     stage_key = stage_key_for_inference(selected.rule_id, relation)
+    action_policy_applied = False
+    if action_policy.get("targetRole") == WATCHLIST_TARGET_ROLE:
+        candidate_stage = decision_stage_by_key(stage_key)
+        if candidate_stage.action_group in {"lossControl", "profitTake", "rebalance", "distributionRisk"}:
+            stage_key = "ADD_BUY_BLOCKED"
+            action_policy_applied = True
     stage = decision_stage_by_key(stage_key)
     band = score_band(selected.strength_score)
     trace = next((item for item in traces if str(item.get("ruleId") or "") == selected.rule_id), {})
+    label = "신규 진입 보류" if action_policy_applied and action_policy.get("targetRole") == WATCHLIST_TARGET_ROLE else stage.label
     return {
-        "label": stage.label,
+        "label": label,
         "tone": stage.tone,
         "score": round(float(selected.strength_score or 0), 1),
         "basis": source_name,
@@ -349,6 +368,8 @@ def decision_from_inference(
         "sourceRelationType": str(relation.get("type") or ""),
         "stagePriority": relation_stage_priority(relation),
         "stagePolicySource": inference_relation_policy_source(source_name) if relation.get("decisionStage") or relation.get("stagePriority") else "actionFallback",
+        **action_policy,
+        "actionPolicyApplied": action_policy_applied,
         "nativeTypeDbReasoned": bool(relation.get("nativeTypeDbReasoned") or trace.get("nativeTypeDbReasoned")),
     }
 
@@ -357,6 +378,40 @@ def inference_relation_policy_source(source_name: str) -> str:
     if source_name == "typedbInferenceBox":
         return "typedbInferenceRelation"
     return "graphStoreInferenceRelation"
+
+
+def action_policy_from_relation_or_facts(facts: Dict[str, object], relation: Dict[str, object]) -> Dict[str, object]:
+    facts = facts or {}
+    relation = relation or {}
+    target_role = str(relation.get("targetRole") or relation.get("target_role") or "").strip()
+    if not target_role:
+        if facts.get("isWatchlist") is True or str(facts.get("source") or "").strip().lower() == "watchlist":
+            target_role = WATCHLIST_TARGET_ROLE
+        elif facts.get("isHolding") is True or str(facts.get("source") or "").strip().lower() == "holding":
+            target_role = HOLDING_TARGET_ROLE
+    action_policy = str(relation.get("actionPolicy") or relation.get("action_policy") or "").strip()
+    allowed_actions = string_list(relation.get("allowedActions") or relation.get("allowed_actions"))
+    blocked_actions = string_list(relation.get("blockedActions") or relation.get("blocked_actions"))
+    if target_role == WATCHLIST_TARGET_ROLE:
+        action_policy = action_policy or WATCHLIST_ACTION_POLICY
+        allowed_actions = allowed_actions or list(WATCHLIST_ALLOWED_ACTIONS)
+        blocked_actions = blocked_actions or list(WATCHLIST_BLOCKED_ACTIONS)
+    return {
+        "targetRole": target_role,
+        "actionPolicy": action_policy,
+        "allowedActions": allowed_actions,
+        "blockedActions": blocked_actions,
+    }
+
+
+def string_list(value: object) -> List[str]:
+    if isinstance(value, list):
+        return [str(item) for item in value if str(item or "").strip()]
+    if value is None or value == "":
+        return []
+    if isinstance(value, tuple):
+        return [str(item) for item in value if str(item or "").strip()]
+    return [item.strip() for item in str(value).replace("\n", ",").split(",") if item.strip()]
 
 
 def stage_key_for_inference(rule_id: str, relation: Dict[str, object]) -> str:
@@ -437,6 +492,10 @@ def evidence_subgraph_packet(
             "supportImpact": number(relation.get("supportImpact")),
             "decisionStage": str(relation.get("decisionStage") or ""),
             "stagePriority": number(relation.get("stagePriority")),
+            "targetRole": str(relation.get("targetRole") or ""),
+            "actionPolicy": str(relation.get("actionPolicy") or ""),
+            "allowedActions": string_list(relation.get("allowedActions")),
+            "blockedActions": string_list(relation.get("blockedActions")),
             "label": str(relation.get("aiInfluenceLabel") or relation.get("targetLabel") or ""),
         })
     return {
@@ -468,6 +527,7 @@ def evidence_subgraph_packet(
             "ma60Distance": facts.get("ma60Distance"),
             "volumeRatio": facts.get("volumeRatio"),
             "dataQuality": facts.get("dataQuality"),
+            "targetRole": WATCHLIST_TARGET_ROLE if facts.get("isWatchlist") else (HOLDING_TARGET_ROLE if facts.get("isHolding") else ""),
         },
         "missingData": list(facts.get("missingData") or [])[:8],
     }

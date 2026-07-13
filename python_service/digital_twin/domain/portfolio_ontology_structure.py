@@ -106,12 +106,51 @@ def add_execution_plan_concepts(
         "primaryAction": execution_plan.get("primaryAction"),
         "primaryActionLabel": execution_plan.get("primaryActionLabel"),
         "decisionStage": execution_plan.get("decisionStage"),
+        "targetRole": execution_plan.get("targetRole"),
+        "actionPolicy": execution_plan.get("actionPolicy"),
+        "allowedActions": list(execution_plan.get("allowedActions") or []),
+        "blockedActionCodes": list(execution_plan.get("blockedActionCodes") or []),
         "actionGroup": execution_plan.get("actionGroup"),
         "actionLevel": execution_plan.get("actionLevel"),
         "executionPlan": dict(execution_plan),
     })
     add_relation(graph, stock_id, plan_id, "HAS_EXECUTION_PLAN", weight=0.92, properties={"source": "ontology-execution-plan"})
     add_relation(graph, active_opinion_id, plan_id, "HAS_EXECUTION_PLAN", weight=0.95, properties={"source": "active-investment-opinion"})
+    target_role = str(execution_plan.get("targetRole") or "").strip()
+    if target_role:
+        role_id = add_entity(graph, "target-role", symbol + ":" + target_role, "대상 역할 " + target_role, {
+            "tboxClass": "TargetRole",
+            "symbol": symbol,
+            "role": target_role,
+        })
+        add_relation(graph, stock_id, role_id, "HAS_TARGET_ROLE", weight=0.95, properties={"source": "ontology-execution-plan"})
+        add_relation(graph, plan_id, role_id, "HAS_TARGET_ROLE", weight=0.95, properties={"source": "ontology-execution-plan"})
+    action_policy = str(execution_plan.get("actionPolicy") or "").strip()
+    if action_policy:
+        policy_id = add_entity(graph, "action-policy", symbol + ":" + action_policy, "행동 정책 " + action_policy, {
+            "tboxClass": "ActionPolicy",
+            "symbol": symbol,
+            "policy": action_policy,
+            "targetRole": target_role,
+            "allowedActions": list(execution_plan.get("allowedActions") or []),
+            "blockedActionCodes": list(execution_plan.get("blockedActionCodes") or []),
+        })
+        add_relation(graph, stock_id, policy_id, "USES_ACTION_POLICY", weight=0.95, properties={"source": "ontology-execution-plan"})
+        add_relation(graph, plan_id, policy_id, "USES_ACTION_POLICY", weight=0.95, properties={"source": "ontology-execution-plan"})
+        for index, item in enumerate(compact_string_rows(execution_plan.get("allowedActions"), 6)):
+            allowed_id = add_entity(graph, "allowed-action", symbol + ":" + str(index) + ":" + item, item, {
+                "tboxClass": "AllowedAction",
+                "symbol": symbol,
+                "action": item,
+            })
+            add_relation(graph, policy_id, allowed_id, "ALLOWS_ACTION", weight=0.9, properties={"source": "ontology-execution-plan"})
+        for index, item in enumerate(compact_string_rows(execution_plan.get("blockedActionCodes"), 6)):
+            blocked_code_id = add_entity(graph, "blocked-action", symbol + ":policy:" + str(index) + ":" + item, item, {
+                "tboxClass": "BlockedAction",
+                "symbol": symbol,
+                "action": item,
+            })
+            add_relation(graph, policy_id, blocked_code_id, "BLOCKS_ACTION", weight=0.9, properties={"source": "ontology-execution-plan", "policyCode": item})
     primary_label = str(execution_plan.get("primaryActionLabel") or execution_plan.get("primaryAction") or "").strip()
     if primary_label:
         action_id = add_entity(graph, "action-candidate", symbol + ":" + str(execution_plan.get("primaryAction") or primary_label), primary_label, {

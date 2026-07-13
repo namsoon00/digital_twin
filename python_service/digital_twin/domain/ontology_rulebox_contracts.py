@@ -3,6 +3,21 @@ from typing import Dict, List
 
 
 GRAPH_REASONER_VERSION = "typedb-rulebox-graph-reasoner-v1"
+WATCHLIST_TARGET_ROLE = "watchlist"
+WATCHLIST_ACTION_POLICY = "ENTRY_ONLY"
+WATCHLIST_ALLOWED_ACTIONS = ["BUY", "HOLD", "AVOID"]
+WATCHLIST_BLOCKED_ACTIONS = ["ADD", "TRIM", "SELL"]
+HOLDING_TARGET_ROLE = "holding"
+
+
+def string_list(value: object) -> List[str]:
+    if isinstance(value, list):
+        return [str(item) for item in value if str(item or "").strip()]
+    if value is None or value == "":
+        return []
+    if isinstance(value, tuple):
+        return [str(item) for item in value if str(item or "").strip()]
+    return [item.strip() for item in str(value).replace("\n", ",").split(",") if item.strip()]
 
 
 @dataclass(frozen=True)
@@ -62,6 +77,10 @@ class GraphRuleDerivation:
     action_level: str = ""
     decision_stage: str = ""
     stage_priority: float = 0.0
+    target_role: str = ""
+    action_policy: str = ""
+    allowed_actions: List[str] = dataclass_field(default_factory=list)
+    blocked_actions: List[str] = dataclass_field(default_factory=list)
 
     def to_dict(self) -> Dict[str, object]:
         return asdict(self)
@@ -86,6 +105,10 @@ class GraphRuleDerivation:
             action_level=str(payload.get("action_level") or payload.get("actionLevel") or ""),
             decision_stage=str(payload.get("decision_stage") or payload.get("decisionStage") or ""),
             stage_priority=float(payload.get("stage_priority") or payload.get("stagePriority") or 0),
+            target_role=str(payload.get("target_role") or payload.get("targetRole") or ""),
+            action_policy=str(payload.get("action_policy") or payload.get("actionPolicy") or ""),
+            allowed_actions=string_list(payload.get("allowed_actions") or payload.get("allowedActions")),
+            blocked_actions=string_list(payload.get("blocked_actions") or payload.get("blockedActions")),
         )
 
 

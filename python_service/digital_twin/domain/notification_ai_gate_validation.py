@@ -40,6 +40,7 @@ from .notification_ai_gate_text import (
     user_friendly_ai_text,
 )
 from .notification_ai_context import is_watchlist_context, target_position_role
+from .ontology_rulebox_contracts import WATCHLIST_ACTION_POLICY
 
 
 def _execution_plan_from_context(context: Dict[str, object]) -> Dict[str, object]:
@@ -145,7 +146,7 @@ def normalized_action_for_target(context: Dict[str, object], action: str) -> str
     clean = str(action or "").strip().upper()
     if clean not in VALID_ACTIONS:
         return clean
-    if not is_watchlist_context(context or {}):
+    if not is_entry_only_action_context(context or {}):
         return clean
     if clean == "ADD":
         return "BUY"
@@ -155,7 +156,7 @@ def normalized_action_for_target(context: Dict[str, object], action: str) -> str
 
 def action_label_for_target(context: Dict[str, object], action: str) -> str:
     clean = str(action or "").strip().upper()
-    if is_watchlist_context(context or {}):
+    if is_entry_only_action_context(context or {}):
         return {
             "BUY": "소액 진입 검토",
             "ADD": "소액 진입 검토",
@@ -168,7 +169,7 @@ def action_label_for_target(context: Dict[str, object], action: str) -> str:
 
 def watchlist_friendly_text(context: Dict[str, object], value: object) -> str:
     text = str(value or "").strip()
-    if not text or not is_watchlist_context(context or {}):
+    if not text or not is_entry_only_action_context(context or {}):
         return text
     replacements = [
         ("보유가 맞습니다", "관심종목으로 지켜보는 게 맞습니다"),
@@ -196,7 +197,7 @@ def watchlist_friendly_rows(context: Dict[str, object], rows: List[str]) -> List
     return [watchlist_friendly_text(context, item) for item in rows or []]
 
 def append_watchlist_action_warning(context: Dict[str, object], original: str, normalized: str, warnings: List[str]) -> None:
-    if not is_watchlist_context(context or {}) or original == normalized:
+    if not is_entry_only_action_context(context or {}) or original == normalized:
         return
     warnings.append(
         "관심종목은 보유 물량이 아니므로 "
@@ -205,6 +206,15 @@ def append_watchlist_action_warning(context: Dict[str, object], original: str, n
         + action_label_for_target(context, normalized)
         + " 기준으로 보정했습니다."
     )
+
+def is_entry_only_action_context(context: Dict[str, object]) -> bool:
+    relation_context = relation_context_value(context or {})
+    decision = relation_context.get("decision") if isinstance(relation_context.get("decision"), dict) else {}
+    plan = relation_context.get("executionPlan") if isinstance(relation_context.get("executionPlan"), dict) else {}
+    for container in [relation_context, decision, plan]:
+        if str((container or {}).get("actionPolicy") or "").strip() == WATCHLIST_ACTION_POLICY:
+            return True
+    return is_watchlist_context(context or {})
 
 def signed_percent_from_text(value: object) -> float:
     match = re.search(r"[-+]?\d+(?:\.\d+)?\s*%", str(value or ""))
@@ -423,6 +433,10 @@ def ai_decision_input_packet(
         },
         "relationshipDatabaseInference": {
             "decision": relation_context.get("decision") if isinstance(relation_context.get("decision"), dict) else {},
+            "targetRole": relation_context.get("targetRole") or target_position_role(context),
+            "actionPolicy": relation_context.get("actionPolicy") or execution_plan.get("actionPolicy") or "",
+            "allowedActions": relation_context.get("allowedActions") or execution_plan.get("allowedActions") or [],
+            "blockedActions": relation_context.get("blockedActions") or execution_plan.get("blockedActionCodes") or [],
             "signalStrength": relation_context.get("signalStrength"),
             "signalStrengthLabel": relation_context.get("signalStrengthLabel"),
             "activeRules": relation_context.get("activeRules") or relation_context.get("matchedRules") or [],
@@ -441,6 +455,9 @@ def ai_decision_input_packet(
         "ontologyDecisionDrivers": decision_drivers,
         "messageDeliveryProfile": delivery_profile,
         "targetPositionRole": target_position_role(context),
+        "actionPolicy": relation_context.get("actionPolicy") or execution_plan.get("actionPolicy") or "",
+        "allowedActions": relation_context.get("allowedActions") or execution_plan.get("allowedActions") or [],
+        "blockedActions": relation_context.get("blockedActions") or execution_plan.get("blockedActionCodes") or [],
     }
 
 def build_notification_ai_gate_prompt(context: Dict[str, object]) -> str:
@@ -474,7 +491,7 @@ def build_notification_ai_gate_prompt(context: Dict[str, object]) -> str:
         "evidence에는 가능한 한 숫자나 원문 제목을 넣는다. '가격 흐름이 약하다'처럼 뻔한 말만 쓰지 말고 현재가/평단가/수익률/5일선/20일선/60일선/거래량/BTC/금리/환율/뉴스 제목 중 제공된 값을 구체적으로 연결한다.",
         "MSTR, STRC 등 비트코인 민감 종목이면 BTC 24시간·7일 변동과 보유 종목 가격 반응을 비교한다. 뉴스·공시 제목에 매각, 처분, 실적, 자금조달, 소송, 규제 같은 사건이 있으면 그 사건을 evidence 또는 counterEvidence에 반드시 반영한다.",
         "BUY, ADD, HOLD, TRIM, SELL, AVOID 중 하나를 반드시 고르되 자동 주문 지시처럼 쓰지 않는다.",
-        "대상이 관심종목이면 targetPositionRole=watchlist다. 관심종목은 보유 수량이 아니므로 HOLD는 '관심 유지', BUY는 '소액 진입 검토', AVOID는 '신규 진입 회피/대기'로 판단한다. 관심종목에 대해 보유 유지, 추가매수, 분할축소, 매도처럼 보유종목용 표현을 쓰지 않는다.",
+        "대상이 관심종목이면 targetPositionRole=watchlist이고 actionPolicy=ENTRY_ONLY다. 이 정책은 온톨로지 RuleBox/InferenceBox에서 온 제약이다. 관심종목은 보유 수량이 아니므로 HOLD는 '관심 유지', BUY는 '소액 진입 검토', AVOID는 '신규 진입 회피/대기'로 판단한다. 관심종목에 대해 보유 유지, 추가매수, 분할축소, 매도처럼 보유종목용 표현을 쓰지 않는다.",
         "사전 계산 후보와 다른 action을 고르면 disagreementReason에 왜 달라졌는지 반드시 쓴다. 같은 action이어도 단순 추종이 아니라 어떤 증거가 그 판단을 지지했는지 summary에 쓴다.",
         "가능하면 sourceUrls에 판단에 사용한 원문 URL을 넣고, URL이 없으면 evidence에 데이터 출처명을 함께 쓴다.",
         "action 필드에만 BUY/ADD/HOLD/TRIM/SELL/AVOID 코드를 쓰고, summary/opinion/evidence/counterEvidence/nextChecks에는 매수/추가매수/보유/분할축소/매도/회피처럼 한국어 행동명만 쓴다.",

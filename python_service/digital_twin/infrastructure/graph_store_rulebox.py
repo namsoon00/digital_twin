@@ -306,6 +306,10 @@ def derivation_payload_from_row(row: Dict[str, object]) -> Dict[str, object]:
         "action_level": str(row.get("actionLevel") or derivation.get("action_level") or ""),
         "decision_stage": str(row.get("decisionStage") or row.get("derivationDecisionStage") or derivation.get("decision_stage") or derivation.get("decisionStage") or ""),
         "stage_priority": float(row.get("stagePriority") or row.get("derivationStagePriority") or derivation.get("stage_priority") or derivation.get("stagePriority") or 0),
+        "target_role": str(row.get("targetRole") or row.get("derivationTargetRole") or derivation.get("target_role") or derivation.get("targetRole") or ""),
+        "action_policy": str(row.get("actionPolicy") or row.get("derivationActionPolicy") or derivation.get("action_policy") or derivation.get("actionPolicy") or ""),
+        "allowed_actions": list_of_strings(row.get("allowedActions") or row.get("derivationAllowedActions") or derivation.get("allowed_actions") or derivation.get("allowedActions")),
+        "blocked_actions": list_of_strings(row.get("blockedActions") or row.get("derivationBlockedActions") or derivation.get("blocked_actions") or derivation.get("blockedActions")),
     }
     if not payload["decision_stage"]:
         payload["decision_stage"] = decision_stage_from_action(payload["action_group"], payload["action_level"])

@@ -598,6 +598,31 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertTrue(any(item.kind == "rule" and (item.properties or {}).get("ontologyBox") == "RuleBox" for item in graph.entities))
         self.assertTrue(any(item.relation_type == "DERIVES_RELATION" for item in graph.relations))
 
+    def test_watchlist_rulebox_templates_carry_entry_only_action_policy(self):
+        rules = default_graph_inference_rules()
+        watchlist_rule = next(item for item in rules if item.rule_id == "graph.watchlist.trend_transition.support.v1")
+        watchlist_derivations = watchlist_rule.derivations
+        graph = rulebox_graph_from_rules([watchlist_rule])
+        repository = TypeDBOntologyGraphRepository("http://typedb.example.test")
+        entity_rows = repository.rows_for_entities(graph)
+        template_rows = [
+            item
+            for item in entity_rows
+            if item["kind"] == "relation-template" and item["ontologyBox"] == "RuleBox"
+        ]
+
+        self.assertTrue(watchlist_derivations)
+        for derivation in watchlist_derivations:
+            self.assertEqual("watchlist", derivation.target_role)
+            self.assertEqual("ENTRY_ONLY", derivation.action_policy)
+            self.assertEqual(["BUY", "HOLD", "AVOID"], derivation.allowed_actions)
+            self.assertEqual(["ADD", "TRIM", "SELL"], derivation.blocked_actions)
+        self.assertTrue(template_rows)
+        self.assertEqual("watchlist", template_rows[0]["derivationTargetRole"])
+        self.assertEqual("ENTRY_ONLY", template_rows[0]["derivationActionPolicy"])
+        self.assertEqual(["BUY", "HOLD", "AVOID"], template_rows[0]["derivationAllowedActions"])
+        self.assertEqual(["ADD", "TRIM", "SELL"], template_rows[0]["derivationBlockedActions"])
+
     def test_rulebox_snapshot_reconstructs_rules_from_typedb_rows(self):
         graph = self.loss_guard_graph()
         repository = TypeDBOntologyGraphRepository("http://typedb.example.test")

@@ -1,6 +1,12 @@
 from typing import Dict, List
 
 from .ontology_relation_contracts import OntologyRuleMatch
+from .ontology_rulebox_contracts import (
+    WATCHLIST_ACTION_POLICY,
+    WATCHLIST_ALLOWED_ACTIONS,
+    WATCHLIST_BLOCKED_ACTIONS,
+    WATCHLIST_TARGET_ROLE,
+)
 
 
 def _float_value(value: object) -> float:
@@ -305,6 +311,13 @@ def execution_plan_from_relation_context(
     action_group = str(decision.get("actionGroup") or "")
     action_level = str(decision.get("actionLevel") or "")
     label = str(decision.get("label") or "")
+    target_role = str(decision.get("targetRole") or ("watchlist" if facts.get("isWatchlist") else "") or "").strip()
+    action_policy = str(decision.get("actionPolicy") or (WATCHLIST_ACTION_POLICY if target_role == WATCHLIST_TARGET_ROLE else "") or "").strip()
+    allowed_action_codes = [str(item) for item in (decision.get("allowedActions") or []) if str(item or "").strip()]
+    blocked_action_codes = [str(item) for item in (decision.get("blockedActions") or []) if str(item or "").strip()]
+    if target_role == WATCHLIST_TARGET_ROLE:
+        allowed_action_codes = allowed_action_codes or list(WATCHLIST_ALLOWED_ACTIONS)
+        blocked_action_codes = blocked_action_codes or list(WATCHLIST_BLOCKED_ACTIONS)
     pnl = float(facts.get("profitLossRate") or 0)
     ma20_distance = float(facts.get("ma20Distance") or 0)
     ma60_distance = float(facts.get("ma60Distance") or 0)
@@ -384,9 +397,9 @@ def execution_plan_from_relation_context(
         _append_unique(next_checks, "5일선·20일선·60일선 위치, 거래량 배율, 미국 10년 금리, USD/KRW를 다음 조회에서 확인")
     elif action_group == "entryRisk":
         primary_action = "AVOID_OR_WAIT"
-        primary_label = "추가매수 보류, 회복 조건 대기"
-        _append_unique(blocked_actions, "추세 회복 전 추가매수")
-        _append_unique(risk_signals, "보유 종목의 추세 훼손 또는 이벤트 리스크")
+        primary_label = "신규 진입 보류, 회복 조건 대기" if target_role == WATCHLIST_TARGET_ROLE else "추가매수 보류, 회복 조건 대기"
+        _append_unique(blocked_actions, "추세 회복 전 " + ("신규 진입" if target_role == WATCHLIST_TARGET_ROLE else "추가매수"))
+        _append_unique(risk_signals, ("관심종목의 가격 흐름 약화 또는 이벤트 리스크" if target_role == WATCHLIST_TARGET_ROLE else "보유 종목의 추세 훼손 또는 이벤트 리스크"))
         _append_unique(weaken_conditions, "20일선 회복과 부정 이벤트 해소 시 보류 강도 완화")
         _append_unique(next_checks, "회복 조건과 비중 한도 확인")
     elif action_group == "disclosure":
@@ -472,6 +485,27 @@ def execution_plan_from_relation_context(
         _append_unique(next_checks, "USD/KRW, 외화 노출 비중, 현지 통화 기준 주가 변화를 나눠 확인")
         _append_unique(weaken_conditions, "환율이 기준 구간으로 돌아오거나 외화 노출이 줄면 신호 약화")
 
+    if target_role == WATCHLIST_TARGET_ROLE:
+        _append_unique(blocked_actions, "관심종목에는 추가매수·분할축소·매도 같은 보유종목 행동을 적용하지 않음")
+        if primary_action in {
+            "TRIM_OR_SELL_REVIEW",
+            "LOSS_CONTROL_REVIEW",
+            "TRIM_REVIEW",
+            "REBALANCE_REVIEW",
+            "SPLIT_EXECUTION_REVIEW",
+        }:
+            primary_action = "AVOID_OR_WAIT"
+            primary_label = "신규 진입 회피/대기, 회복 조건 확인"
+            _append_unique(risk_signals, "보유 수량이 없는 관심종목이므로 가격 회복 전 신규 진입을 보류합니다.")
+            _append_unique(next_checks, "진입 예정 금액, 5일·20일·60일 평균 위치, 거래량 회복 여부 확인")
+        elif primary_action == "EXPOSURE_REVIEW" and action_group in {"rebalance", "distributionRisk"}:
+            primary_action = "WAIT_FOR_ENTRY_CONFIRMATION"
+            primary_label = "신규 진입 대기, 노출 리스크 확인"
+        blocked_actions = [
+            item.replace("추가매수", "신규 진입").replace("일괄 매도", "성급한 진입").replace("분할매도", "신규 진입")
+            for item in blocked_actions
+        ]
+
     for item in _active_rule_labels(matches):
         if any(token in item for token in ["손실", "리스크", "하락", "공시", "집중", "부정"]):
             _append_unique(risk_signals, item)
@@ -498,6 +532,10 @@ def execution_plan_from_relation_context(
             "source": facts.get("source"),
         },
         "decisionStage": decision.get("decisionStage"),
+        "targetRole": target_role,
+        "actionPolicy": action_policy,
+        "allowedActions": allowed_action_codes,
+        "blockedActionCodes": blocked_action_codes,
         "actionGroup": action_group,
         "actionLevel": action_level,
         "decisionLabel": label,
@@ -514,6 +552,8 @@ def execution_plan_from_relation_context(
         "decisionDrivers": decision_drivers,
         "sourceFacts": {
             "currentPrice": facts.get("currentPrice"),
+            "targetRole": target_role,
+            "actionPolicy": action_policy,
             "averagePrice": facts.get("averagePrice"),
             "profitLossRate": facts.get("profitLossRate"),
             "ma5Distance": round(float(facts.get("ma5Distance") or 0), 2),

@@ -218,7 +218,10 @@ CLASS_DEFS: List[TBoxClassDef] = [
     TBoxClassDef("ActiveInvestmentOpinion", "reasoning-insight", "실행 투자 의견", parent="Opinion"),
     TBoxClassDef("ExecutionPlan", "reasoning-insight", "실행 계획"),
     TBoxClassDef("DecisionDriver", "reasoning-insight", "판단 근거 축"),
+    TBoxClassDef("TargetRole", "reasoning-insight", "판단 대상 역할", description="보유종목과 관심종목처럼 실행 가능한 행동 범위를 나누는 역할입니다."),
+    TBoxClassDef("ActionPolicy", "reasoning-insight", "행동 정책", description="대상 역할별로 허용되는 투자 행동과 차단되는 행동을 정의합니다."),
     TBoxClassDef("ActionCandidate", "reasoning-insight", "행동 후보"),
+    TBoxClassDef("AllowedAction", "reasoning-insight", "허용 행동", parent="ActionCandidate"),
     TBoxClassDef("BlockedAction", "reasoning-insight", "보류 행동", parent="ActionCandidate"),
     TBoxClassDef("InvalidationCondition", "reasoning-insight", "무효화 조건"),
     TBoxClassDef("NextCheck", "reasoning-insight", "다음 확인"),
@@ -439,6 +442,9 @@ RELATION_DEFS: List[TBoxRelationDef] = [
     TBoxRelationDef("HAS_EVIDENCE_SUBGRAPH", "reasoning-insight", "reasoning-insight", "reasoning-insight"),
     TBoxRelationDef("INCLUDES_EVIDENCE_RELATION", "reasoning-insight", "reasoning-insight", "reasoning-insight"),
     TBoxRelationDef("HAS_DECISION_DRIVER", "reasoning-insight", "reasoning-insight", "reasoning-insight"),
+    TBoxRelationDef("HAS_TARGET_ROLE", "reasoning-insight", "investment-core", "reasoning-insight"),
+    TBoxRelationDef("USES_ACTION_POLICY", "reasoning-insight", "investment-core", "reasoning-insight"),
+    TBoxRelationDef("ALLOWS_ACTION", "reasoning-insight", "reasoning-insight", "reasoning-insight"),
     TBoxRelationDef("HAS_PRIMARY_ACTION", "reasoning-insight", "reasoning-insight", "reasoning-insight"),
     TBoxRelationDef("BLOCKS_ACTION", "reasoning-insight", "reasoning-insight", "reasoning-insight"),
     TBoxRelationDef("LIMITED_BY_LIQUIDITY", "risk-exposure", "reasoning-insight", "risk-exposure"),
@@ -528,6 +534,7 @@ RULE_DEFS: List[TBoxRuleDef] = [
     TBoxRuleDef("RuleBox graph conditions can filter ABox fact values such as trade strength, volume ratio, orderbook imbalance, materiality score, event type, and relation scope before deriving opinions", "reasoning-insight"),
     TBoxRuleDef("material direct news, disclosures, trade-flow pressure, trend transitions, and fact-change gates can each independently create InferenceBox relations that alter AI investment opinions", "reasoning-insight"),
     TBoxRuleDef("RuleBox relation templates own decisionStage and stagePriority so graph-store policy, not rule-id code maps, controls AI decision routing", "reasoning-insight"),
+    TBoxRuleDef("RuleBox relation templates and InferenceBox assertions carry targetRole, actionPolicy, allowedActions, and blockedActions so watchlist candidates stay entry-only before AI validation", "reasoning-insight"),
     TBoxRuleDef("RuleBox changes must produce governance versions and reviewable rule-change candidates before candidate rules affect InferenceBox decisions", "reasoning-insight"),
 ]
 

@@ -214,6 +214,10 @@ class GraphStoreOntologyRowMapperMixin:
                 "derivationActionLevel": str(derivation.get("action_level") or ""),
                 "derivationDecisionStage": derivation_decision_stage(derivation),
                 "derivationStagePriority": derivation_stage_priority(derivation),
+                "derivationTargetRole": str(derivation.get("target_role") or derivation.get("targetRole") or ""),
+                "derivationActionPolicy": str(derivation.get("action_policy") or derivation.get("actionPolicy") or ""),
+                "derivationAllowedActions": list_of_strings(derivation.get("allowed_actions") or derivation.get("allowedActions")),
+                "derivationBlockedActions": list_of_strings(derivation.get("blocked_actions") or derivation.get("blockedActions")),
                 "propertiesJson": json.dumps(properties, ensure_ascii=False, sort_keys=True),
             })
         return rows
@@ -248,6 +252,11 @@ class GraphStoreOntologyRowMapperMixin:
                 "supportImpact": number_or_none(properties.get("supportImpact")),
                 "decisionStage": str(properties.get("decisionStage") or ""),
                 "stagePriority": number_or_none(properties.get("stagePriority")),
+                "targetRole": str(properties.get("targetRole") or ""),
+                "actionPolicy": str(properties.get("actionPolicy") or ""),
+                "allowedActions": list_of_strings(properties.get("allowedActions")),
+                "blockedActionCodes": list_of_strings(properties.get("blockedActionCodes")),
+                "blockedActionPolicyCodes": list_of_strings(properties.get("blockedActions")),
                 "aiInfluenceLabel": str(properties.get("aiInfluenceLabel") or ""),
                 "nativeTypeDbReasoned": bool(properties.get("nativeTypeDbReasoned")),
                 "evidenceIds": [str(value) for value in item.evidence_ids],

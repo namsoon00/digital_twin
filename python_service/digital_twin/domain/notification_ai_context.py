@@ -1,6 +1,8 @@
 import re
 from typing import Dict, List
 
+from .ontology_rulebox_contracts import WATCHLIST_ACTION_POLICY
+
 
 def context_raw_lines(context: Dict[str, object]) -> List[str]:
     raw = context.get("rawLines") if isinstance(context, dict) else ""
@@ -143,6 +145,12 @@ def is_watchlist_context(context: Dict[str, object]) -> bool:
     if str(facts.get("source") or "").strip().lower() == "watchlist":
         return True
     if str(relation_context.get("targetRole") or relation_context.get("sourceRole") or "").strip().lower() == "watchlist":
+        return True
+    if str(relation_context.get("actionPolicy") or "").strip() == WATCHLIST_ACTION_POLICY:
+        return True
+    decision = relation_context.get("decision") if isinstance(relation_context.get("decision"), dict) else {}
+    plan = relation_context.get("executionPlan") if isinstance(relation_context.get("executionPlan"), dict) else {}
+    if str(decision.get("actionPolicy") or plan.get("actionPolicy") or "").strip() == WATCHLIST_ACTION_POLICY:
         return True
     insight = (context or {}).get("ontologyInsight") if isinstance((context or {}).get("ontologyInsight"), dict) else {}
     metadata = (context or {}).get("metadata") if isinstance((context or {}).get("metadata"), dict) else {}

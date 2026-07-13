@@ -27,7 +27,7 @@ from .graph_store_lifecycle import (
     graph_box_relation_counts,
     ontology_seed_graph,
 )
-from .graph_store_payloads import GraphStoreOntologyRowMapperMixin, number_or_none
+from .graph_store_payloads import GraphStoreOntologyRowMapperMixin, list_of_strings, number_or_none
 from .graph_store_rulebox import (
     rulebox_graph_from_rules,
     rulebox_rules_from_payload,
@@ -647,6 +647,10 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
             "derivationActionLevel": str(derivation.get("action_level") or merged.get("derivationActionLevel") or ""),
             "derivationDecisionStage": str(derivation.get("decision_stage") or derivation.get("decisionStage") or merged.get("derivationDecisionStage") or ""),
             "derivationStagePriority": number_or_none(derivation.get("stage_priority") or derivation.get("stagePriority") or merged.get("derivationStagePriority")),
+            "derivationTargetRole": str(derivation.get("target_role") or derivation.get("targetRole") or merged.get("derivationTargetRole") or ""),
+            "derivationActionPolicy": str(derivation.get("action_policy") or derivation.get("actionPolicy") or merged.get("derivationActionPolicy") or ""),
+            "derivationAllowedActions": list_of_strings(derivation.get("allowed_actions") or derivation.get("allowedActions") or merged.get("derivationAllowedActions")),
+            "derivationBlockedActions": list_of_strings(derivation.get("blocked_actions") or derivation.get("blockedActions") or merged.get("derivationBlockedActions")),
             "polarity": str(merged.get("polarity") or ""),
             "confidence": number_or_none(merged.get("confidence")),
             "decisionStage": str(merged.get("decisionStage") or ""),
@@ -705,6 +709,10 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
             "supportImpact": number_or_none(merged.get("supportImpact")),
             "decisionStage": str(merged.get("decisionStage") or ""),
             "stagePriority": number_or_none(merged.get("stagePriority")),
+            "targetRole": str(merged.get("targetRole") or ""),
+            "actionPolicy": str(merged.get("actionPolicy") or ""),
+            "allowedActions": list_of_strings(merged.get("allowedActions")),
+            "blockedActions": list_of_strings(merged.get("blockedActions")),
             "aiInfluenceLabel": str(merged.get("aiInfluenceLabel") or ""),
             "inferenceTraceId": str(merged.get("inferenceTraceId") or ""),
             "nativeTypeDbReasoned": bool(merged.get("nativeTypeDbReasoned")),

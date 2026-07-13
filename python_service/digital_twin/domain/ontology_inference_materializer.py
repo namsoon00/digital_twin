@@ -3,7 +3,15 @@ from typing import Dict
 from .market_data import number
 from .ontology_contracts import OntologyBelief, OntologyEntity, OntologyEvidence, OntologyRelation, PortfolioOntology, entity_id
 from .ontology_decision_policy import decision_stage_from_action, relation_stage_priority
-from .ontology_rulebox_contracts import GRAPH_REASONER_VERSION, GraphInferenceRule
+from .ontology_rulebox_contracts import (
+    GRAPH_REASONER_VERSION,
+    HOLDING_TARGET_ROLE,
+    WATCHLIST_ACTION_POLICY,
+    WATCHLIST_ALLOWED_ACTIONS,
+    WATCHLIST_BLOCKED_ACTIONS,
+    WATCHLIST_TARGET_ROLE,
+    GraphInferenceRule,
+)
 from .ontology_schema import abox_relation_properties
 
 
@@ -81,6 +89,7 @@ def materialize_rule_inference(
         target_id = entity_id(derivation.target_kind, target_key)
         action_group = derivation.action_group or rule.action_group
         action_level = derivation.action_level or rule.action_level
+        action_policy = action_policy_properties(derivation, properties)
         decision_stage = derivation.decision_stage or decision_stage_from_action(action_group, action_level)
         stage_priority = derivation.stage_priority or relation_stage_priority({
             "decisionStage": decision_stage,
@@ -100,6 +109,7 @@ def materialize_rule_inference(
             "actionLevel": action_level,
             "decisionStage": decision_stage,
             "stagePriority": stage_priority,
+            **action_policy,
             "inferenceTraceId": trace_id,
         })))
         relation_properties = {
@@ -113,6 +123,7 @@ def materialize_rule_inference(
             "actionLevel": action_level,
             "decisionStage": decision_stage,
             "stagePriority": stage_priority,
+            **action_policy,
             "aiInfluenceLabel": derivation.ai_influence_label or derivation.belief_label or target_label,
             "inferenceTraceId": trace_id,
             "source": GRAPH_REASONER_VERSION,
@@ -171,3 +182,22 @@ def fill_template(template: str, symbol: str, display_name: str, subject_id: str
         .replace("{displayName}", display_name)
         .replace("{subjectId}", subject_id or symbol)
     )
+
+
+def action_policy_properties(derivation, stock_properties: Dict[str, object]) -> Dict[str, object]:
+    target_role = str(getattr(derivation, "target_role", "") or "").strip()
+    if not target_role:
+        target_role = WATCHLIST_TARGET_ROLE if str((stock_properties or {}).get("source") or "").strip().lower() == "watchlist" else HOLDING_TARGET_ROLE
+    action_policy = str(getattr(derivation, "action_policy", "") or "").strip()
+    allowed_actions = [str(item) for item in (getattr(derivation, "allowed_actions", []) or []) if str(item or "").strip()]
+    blocked_actions = [str(item) for item in (getattr(derivation, "blocked_actions", []) or []) if str(item or "").strip()]
+    if target_role == WATCHLIST_TARGET_ROLE:
+        action_policy = action_policy or WATCHLIST_ACTION_POLICY
+        allowed_actions = allowed_actions or list(WATCHLIST_ALLOWED_ACTIONS)
+        blocked_actions = blocked_actions or list(WATCHLIST_BLOCKED_ACTIONS)
+    return {
+        "targetRole": target_role,
+        "actionPolicy": action_policy,
+        "allowedActions": allowed_actions,
+        "blockedActions": blocked_actions,
+    }

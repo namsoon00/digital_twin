@@ -482,6 +482,7 @@
     symbolUniverseMarket: "",
     symbolUniverseOffset: 0,
     symbolUniverseLimit: 80,
+    activeSymbolUniverseKey: "",
     monitoringDetail: null,
     workDetailLayer: null,
     expandedOntologyGraphId: ""
@@ -7375,15 +7376,40 @@
     return renderManagedPage("system", snapshot, [
       '<section class="admin-grid system-guide-view">',
       renderSystemGuideHero(snapshot),
-      renderSystemQuickManualPanel(),
-      renderSystemDataFlowPanel(snapshot),
-      renderSystemEventFlowPanel(),
-      renderSystemNotificationFlowPanel(),
-      renderSystemOntologyPanel(snapshot),
-      renderSystemOperationsPanel(),
-      renderSystemGlossaryPanel(),
+      renderSystemGuideDetailHub(snapshot),
       '</section>'
     ].join(""));
+  }
+
+  function renderSystemGuideDetailHub(snapshot) {
+    return [
+      '<article class="panel system-detail-hub">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">System Detail</p>',
+      '<h2>운영 문서 상세</h2>',
+      '<span>기본 화면은 전체 흐름만 보여주고, 필요한 설명만 펼쳐서 확인합니다.</span>',
+      '</div>',
+      '</div>',
+      '<div class="system-detail-grid">',
+      renderSystemDetailDisclosure("처음 사용하는 순서", "계정 등록부터 투자 판단 검토까지", renderSystemQuickManualPanel()),
+      renderSystemDetailDisclosure("데이터와 이벤트 흐름", "저장소, 워커, 이벤트 계보", renderSystemDataFlowPanel(snapshot) + renderSystemEventFlowPanel()),
+      renderSystemDetailDisclosure("알림과 온톨로지", "알림 생성 경로와 TBox/ABox 모델", renderSystemNotificationFlowPanel() + renderSystemOntologyPanel(snapshot)),
+      renderSystemDetailDisclosure("운영 체크와 용어", "문제 점검 순서와 핵심 용어", renderSystemOperationsPanel() + renderSystemGlossaryPanel()),
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderSystemDetailDisclosure(title, description, body) {
+    return [
+      '<details class="system-detail-disclosure">',
+      '<summary><strong>' + escapeHtml(title) + '</strong><span>' + escapeHtml(description || "") + '</span></summary>',
+      '<div class="system-detail-disclosure-body">',
+      body,
+      '</div>',
+      '</details>'
+    ].join("");
   }
 
   function renderSystemGuideHero(snapshot) {
@@ -8949,9 +8975,7 @@
       '</div>',
       '<span class="metric">' + escapeHtml(rows.length) + '</span>',
       '</div>',
-      '<div class="investment-action-list">',
-      rows.length ? rows.slice(0, 10).map(renderInvestmentActionRow).join("") : '<div class="ontology-empty">액션 큐가 비어 있습니다.</div>',
-      '</div>',
+      rows.length ? '<div class="investment-action-workbench"><div class="investment-action-list">' + rows.slice(0, 10).map(renderInvestmentActionRow).join("") + '</div>' + renderInvestmentActionDetailPanel(rows) + '</div>' : '<div class="investment-action-list"><div class="ontology-empty">액션 큐가 비어 있습니다.</div></div>',
       '</article>'
     ].join("");
   }
@@ -9012,7 +9036,7 @@
     var key = investmentActionKey(row, index);
     var expanded = state.expandedInvestmentActionKey === key;
     return [
-      '<div class="investment-action-row"' + cardTypeAttrs("action-queue-card", row.tone || "hold") + '>',
+      '<div class="investment-action-row compact ' + escapeHtml(expanded ? "active" : "") + '"' + cardTypeAttrs("action-queue-card", row.tone || "hold") + '>',
       '<div class="investment-action-main">',
       '<strong>' + escapeHtml(name) + '</strong>',
       '<span>' + escapeHtml([row.symbol, sourceLabel(row.source), row.market, row.sector].filter(Boolean).join(" · ")) + '</span>',
@@ -9020,17 +9044,35 @@
       '<span class="tone-chip ' + escapeHtml(row.tone || "hold") + '">' + escapeHtml(row.decision || "판단 대기") + '</span>',
       '<div class="investment-action-meta">',
       '<span>데이터 <strong>' + escapeHtml(row.dataQuality || "-") + '</strong></span>',
-      '<span>API <strong>' + escapeHtml(row.apiSource || "-") + '</strong></span>',
       '<span>손익률 <strong>' + escapeHtml(row.profitLossRate || 0) + '%</strong></span>',
       graph.blocked ? '<span>차단 <strong>' + escapeHtml(graph.basis || "InferenceBox") + '</strong></span>' : '<span>추론 <strong>ready</strong></span>',
       '</div>',
       '<p>' + escapeHtml((reasons[0] || graph.reason || "다음 확인 조건을 먼저 봅니다.")) + '</p>',
       '<div class="investment-action-checks">',
-      checks.length ? checks.slice(0, 2).map(function (item) { return '<span>' + escapeHtml(item) + '</span>'; }).join("") : '<span>추가 확인 대기</span>',
-      '<button class="mini-button" type="button" data-investment-action-toggle="' + escapeHtml(key) + '">' + escapeHtml(expanded ? "접기" : "근거 보기") + '</button>',
+      '<span>' + escapeHtml(checks.length ? checks[0] : "추가 확인 대기") + '</span>',
+      '<button class="mini-button" type="button" data-investment-action-toggle="' + escapeHtml(key) + '">' + escapeHtml(expanded ? "상세 표시 중" : "상세") + '</button>',
       '</div>',
-      expanded ? renderInvestmentActionInlineDetail(row) : '',
       '</div>'
+    ].join("");
+  }
+
+  function renderInvestmentActionDetailPanel(rows) {
+    var row = investmentActionByKey(state.expandedInvestmentActionKey);
+    if (!row && Array.isArray(rows)) {
+      row = rows.filter(function (item, index) {
+        return investmentActionKey(item, index) === state.expandedInvestmentActionKey;
+      })[0] || null;
+    }
+    return [
+      '<aside class="investment-action-detail-panel" aria-label="선택 투자 후보 상세">',
+      row ? renderInvestmentActionInlineDetail(row) : renderEmptyState({
+        tone: "muted",
+        label: "Detail",
+        title: "투자 후보를 선택하세요",
+        description: "후보 목록은 최소 판단 정보만 보여주고, 온톨로지 근거·차단 조건·다음 체크는 상세에서 확인합니다.",
+        meta: ["근거", "차단 조건", "다음 체크"]
+      }),
+      '</aside>'
     ].join("");
   }
 
@@ -14352,6 +14394,7 @@
       emptyCatalog ? renderSymbolUniverseStarterConsole(summary, sources, marketData) : '',
       full ? '<div class="symbol-pager"><span>' + escapeHtml(resultTotal ? visibleFrom + "-" + visibleTo + " / " + resultTotal + "개 표시" : "표시할 종목 없음") + '</span><div><button class="mini-button" data-symbol-page="prev"' + (hasPrev ? "" : " disabled") + '>이전</button><button class="mini-button" data-symbol-page="next"' + (hasNext ? "" : " disabled") + '>다음</button></div></div>' : '',
       full ? renderSymbolBulkActionBar(renderedItems) : '',
+      full ? '<div class="symbol-result-workbench">' : '',
       '<div class="symbol-result-list">',
       state.symbolUniverseLoading ? renderEmptyState({
         tone: "watch",
@@ -14368,6 +14411,8 @@
         action: '<button class="text-button primary" type="button" data-action="refresh-symbol-universe"' + (state.symbolUniverseLoading || state.symbolUniverseRefreshing ? ' disabled' : '') + '>' + escapeHtml(state.symbolUniverseRefreshing || state.symbolUniverseLoading ? "갱신 중" : "카탈로그 갱신") + '</button>'
       })),
       '</div>',
+      full ? renderSymbolUniverseDetailPanel(renderedItems) : '',
+      full ? '</div>' : '',
       '</article>'
     ].join("");
   }
@@ -14468,6 +14513,75 @@
     ].join("");
   }
 
+  function symbolUniverseKey(item) {
+    item = item || {};
+    return String([item.symbol || "", item.market || item.exchange || "", item.source || ""].join(":")).toUpperCase();
+  }
+
+  function symbolUniverseItemByKey(key, items) {
+    key = String(key || "");
+    return (items || state.symbolUniverse.items || []).filter(function (item) {
+      return symbolUniverseKey(item) === key;
+    })[0] || null;
+  }
+
+  function renderSymbolUniverseDetailPanel(items) {
+    var item = symbolUniverseItemByKey(state.activeSymbolUniverseKey, items);
+    if (!item) {
+      return [
+        '<aside class="symbol-detail-panel" aria-label="선택 종목 상세">',
+        renderEmptyState({
+          tone: "muted",
+          label: "Detail",
+          title: "종목을 선택하세요",
+          description: "기본 목록은 최소 정보만 보여주고, 출처·시세·관심 편입 상태는 선택한 종목 상세에서 확인합니다.",
+          meta: ["목록 클릭", "관심 추가"]
+        }),
+        '</aside>'
+      ].join("");
+    }
+    var symbol = String(item.symbol || "").toUpperCase();
+    var account = activeWatchAccount();
+    var already = preferredWatchlistSymbols().indexOf(symbol) >= 0;
+    var targetText = account ? watchlistAccountLabel(account) : "기본 관심목록";
+    var hasPrice = Boolean(item.currentPrice);
+    var priceText = hasPrice ? formatCurrency(item.currentPrice, item.currency) : "시세 수집 대기";
+    var quality = String(item.dataQuality || "").toLowerCase();
+    var qualityLabel = quality === "actual" ? "실제 데이터" : (quality === "cached" ? "저장 데이터" : (quality || "대기"));
+    return [
+      '<aside class="symbol-detail-panel" aria-label="선택 종목 상세">',
+      '<div class="symbol-detail-head">',
+      '<div>',
+      '<p class="label">Symbol Detail</p>',
+      '<h3>' + escapeHtml(stockDisplayName(symbol, item)) + '</h3>',
+      '<span>' + escapeHtml(stockDisplayMeta(item, [marketLabel(item.market || item.exchange), item.sector || item.assetType || "STOCK"])) + '</span>',
+      '</div>',
+      '<span class="tone-chip ' + escapeHtml(already ? "watch" : "hold") + '">' + escapeHtml(already ? "관심 등록" : "후보") + '</span>',
+      '</div>',
+      '<div class="inline-detail-metrics">',
+      renderNotificationDetailMetric("시세", priceText, hasPrice ? "watch" : "muted"),
+      renderNotificationDetailMetric("데이터", qualityLabel, hasPrice ? "watch" : "hold"),
+      renderNotificationDetailMetric("시장", marketLabel(item.market || item.exchange), "muted"),
+      renderNotificationDetailMetric("통화", item.currency || "-", "muted"),
+      '</div>',
+      '<section class="inline-detail-block primary">',
+      '<strong>관심 편입</strong>',
+      '<p>' + escapeHtml(targetText + "에 편입해 알림과 투자 판단 입력으로 연결합니다.") + '</p>',
+      '<button class="text-button primary" type="button" data-symbol-add-watch="' + escapeHtml(symbol) + '"' + (already ? " disabled" : "") + '>' + escapeHtml(already ? "이미 등록됨" : "관심목록 추가") + '</button>',
+      '</section>',
+      '<section class="inline-detail-block">',
+      '<strong>출처와 신선도</strong>',
+      '<div class="inline-detail-tags">',
+      '<span>출처 ' + escapeHtml(item.source || "-") + '</span>',
+      '<span>최근 ' + escapeHtml(item.lastSeenAt ? formatClock(item.lastSeenAt) : "초기 데이터") + '</span>',
+      '<span>시세 ' + escapeHtml(item.marketDataUpdatedAt ? formatClock(item.marketDataUpdatedAt) : "대기") + '</span>',
+      '<span>상태 ' + escapeHtml(item.stale ? "갱신 필요" : "신선") + '</span>',
+      '</div>',
+      '</section>',
+      '</aside>'
+    ].join("");
+  }
+
   function addVisibleSymbolsToPreferredWatchlist() {
     var symbols = visibleSymbolUniverseSymbols(state.symbolUniverse.items || []);
     var registered = preferredWatchlistSymbols();
@@ -14486,6 +14600,7 @@
 
   function renderSymbolUniverseRow(item) {
     var symbol = String(item.symbol || "").toUpperCase();
+    var key = symbolUniverseKey(item);
     var account = activeWatchAccount();
     var already = preferredWatchlistSymbols().indexOf(symbol) >= 0;
     var targetText = account ? watchlistAccountLabel(account) : "기본 관심목록";
@@ -14496,8 +14611,9 @@
     var dataLine = hasPrice
       ? [qualityLabel, item.quoteSource || "", item.marketDataUpdatedAt ? formatClock(item.marketDataUpdatedAt) : ""].filter(Boolean).join(" · ")
       : (item.quoteStatus || "추천용 시세 수집 순서를 기다리는 중");
+    var active = state.activeSymbolUniverseKey === key;
     return [
-      '<div class="symbol-result-row"' + cardTypeAttrs("ledger-row", already ? "watch" : "hold") + '>',
+      '<div class="symbol-result-row ' + escapeHtml(active ? "active" : "") + '"' + cardTypeAttrs("ledger-row", already ? "watch" : "hold") + '>',
       '<div class="symbol-result-main">',
       '<div class="symbol-result-title">',
       '<strong>' + escapeHtml(stockDisplayName(symbol, item)) + '</strong>',
@@ -14509,13 +14625,12 @@
       '<span>' + escapeHtml(item.currency || "-") + '</span>',
       '<span>' + escapeHtml(item.stale ? "갱신 필요" : "신선") + '</span>',
       '</div>',
-      '<p>' + escapeHtml(item.source || "-") + ' · ' + escapeHtml(item.lastSeenAt ? formatClock(item.lastSeenAt) : "초기 데이터") + '</p>',
-      '<p>' + escapeHtml(dataLine) + '</p>',
+      '<p>' + escapeHtml([item.source || "-", dataLine].filter(Boolean).join(" · ")) + '</p>',
       '</div>',
       '<div class="symbol-result-side">',
       '<strong>' + escapeHtml(priceText) + '</strong>',
       '<span>' + escapeHtml((item.sector || "섹터 미분류") + " · " + targetText) + '</span>',
-      '<button class="mini-button subtle" data-symbol-add-watch="' + escapeHtml(symbol) + '"' + (already ? " disabled" : "") + '>' + (already ? "등록됨" : "추가") + '</button>',
+      '<button class="mini-button" type="button" data-symbol-select="' + escapeHtml(key) + '">' + escapeHtml(active ? "상세 표시 중" : "상세") + '</button>',
       '</div>',
       '</div>'
     ].join("");
@@ -15289,7 +15404,7 @@
       renderFeedImpactMetric("중립", neutral, "hold"),
       '</div>',
       '</div>',
-      items.length ? '<div class="feed-impact-grid">' + items.map(renderFeedImpactCard).join("") + '</div>' : '<p class="subtle feed-impact-empty">저장된 기사 본문 요약이 아직 없습니다. 피드 설정에서 뉴스 아카이브를 켜거나 근거 새로고침을 실행하면 이곳에 주가 영향 요약이 표시됩니다.</p>',
+      items.length ? '<div class="feed-impact-workbench"><div class="feed-impact-grid">' + items.map(renderFeedImpactCard).join("") + '</div>' + renderResearchEvidenceDetailPanel(items, "기사 상세를 선택하세요") + '</div>' : '<p class="subtle feed-impact-empty">저장된 기사 본문 요약이 아직 없습니다. 피드 설정에서 뉴스 아카이브를 켜거나 근거 새로고침을 실행하면 이곳에 주가 영향 요약이 표시됩니다.</p>',
       '</article>'
     ].join("");
   }
@@ -15327,7 +15442,7 @@
     var key = feedEvidenceKey(item, index);
     var expanded = state.expandedResearchEvidenceKey === key;
     return [
-      '<section class="feed-impact-card ' + escapeHtml(impact.tone) + '"' + cardTypeAttrs("evidence-card", impact.tone) + '>',
+      '<section class="feed-impact-card compact ' + escapeHtml(impact.tone) + (expanded ? " active" : "") + '"' + cardTypeAttrs("evidence-card", impact.tone) + '>',
       '<div class="feed-impact-card-head">',
       '<span class="tone-chip ' + escapeHtml(impact.tone) + '">' + escapeHtml(impact.label) + '</span>',
       '<div>',
@@ -15338,22 +15453,40 @@
       '</div>',
       '<div class="feed-impact-body">',
       '<p><strong>본문 요약</strong> ' + escapeHtml(summary) + '</p>',
-      '<h3>주가 영향: ' + escapeHtml(impact.summary) + '</h3>',
+      '<h3>주가 영향: ' + escapeHtml(impact.label) + ' · ' + escapeHtml(researchEvidenceKindLabel(item.kind)) + '</h3>',
       '<div class="feed-impact-tags">',
-      '<span>근거 ' + escapeHtml(researchEvidenceKindLabel(item.kind)) + '</span>',
-      '<span>방향 ' + escapeHtml(researchEvidencePolarityLabel(item.polarity)) + '</span>',
       '<span>신뢰 ' + escapeHtml(confidence) + '</span>',
+      '<span>' + escapeHtml(item.source || "-") + '</span>',
+      '<span>' + escapeHtml(formatFeedTime(time) || "-") + '</span>',
       '</div>',
       '</div>',
       '<footer class="feed-impact-article">',
       '<span>기사</span>',
       '<strong>' + escapeHtml(item.title || "제목 없음") + '</strong>',
-      '<em>' + escapeHtml([item.source || "-", formatFeedTime(time) || "-"].join(" · ")) + '</em>',
-      '<button class="mini-button" type="button" data-research-evidence-toggle="' + escapeHtml(key) + '">' + escapeHtml(expanded ? "접기" : "본문 보기") + '</button>',
+      '<button class="mini-button" type="button" data-research-evidence-toggle="' + escapeHtml(key) + '">' + escapeHtml(expanded ? "상세 표시 중" : "상세") + '</button>',
       item.url ? '<a class="open-link" href="' + escapeHtml(item.url) + '" target="_blank" rel="noreferrer" title="원문 열기">↗</a>' : '',
       '</footer>',
-      expanded ? renderResearchEvidenceInlineDetail(item) : '',
       '</section>'
+    ].join("");
+  }
+
+  function renderResearchEvidenceDetailPanel(items, emptyTitle) {
+    var item = researchEvidenceItemByKey(state.expandedResearchEvidenceKey);
+    if (!item && Array.isArray(items)) {
+      item = items.filter(function (entry, index) {
+        return feedEvidenceKey(entry, index) === state.expandedResearchEvidenceKey;
+      })[0] || null;
+    }
+    return [
+      '<aside class="research-evidence-detail-panel" aria-label="선택 기사 상세">',
+      item ? renderResearchEvidenceInlineDetail(item) : renderEmptyState({
+        tone: "muted",
+        label: "Detail",
+        title: emptyTitle || "상세 항목을 선택하세요",
+        description: "목록은 판단에 필요한 최소 정보만 보여주고, 기사 본문 요약·주가 영향 분석·출처는 상세에서 확인합니다.",
+        meta: ["본문 요약", "주가 영향", "출처"]
+      }),
+      '</aside>'
     ].join("");
   }
 
@@ -15505,11 +15638,14 @@
       '<span class="metric">' + escapeHtml(Number(summary.total || 0)) + '</span>',
       '</div>',
       renderResearchEvidenceFilters(),
+      '<div class="research-evidence-workbench">',
       '<div class="research-evidence-list">',
       state.researchEvidenceLoading ? '<div class="panel skeleton"></div>' : '',
       state.researchEvidenceError ? '<p class="form-error">' + escapeHtml(state.researchEvidenceError) + '</p>' : '',
       (!state.researchEvidenceLoading && !state.researchEvidenceError && !items.length) ? '<p class="subtle">저장된 뉴스·공시·SEC 근거가 아직 없습니다. 외부 데이터 워커가 수집하면 이곳에 표시됩니다.</p>' : '',
       (!state.researchEvidenceLoading && items.length) ? items.map(renderResearchEvidenceItem).join("") : '',
+      '</div>',
+      items.length ? renderResearchEvidenceDetailPanel(items, "근거 상세를 선택하세요") : '',
       '</div>',
       '</article>'
     ].join("");
@@ -15562,7 +15698,7 @@
     var key = feedEvidenceKey(item, index);
     var expanded = state.expandedResearchEvidenceKey === key;
     return [
-      '<div class="research-evidence-item ' + escapeHtml(impact.tone) + '"' + cardTypeAttrs("evidence-card", impact.tone) + '>',
+      '<div class="research-evidence-item compact ' + escapeHtml(impact.tone) + (expanded ? " active" : "") + '"' + cardTypeAttrs("evidence-card", impact.tone) + '>',
       '<div class="research-evidence-main">',
       '<div class="research-evidence-meta">',
       '<span class="tone-chip ' + escapeHtml(impact.tone) + '">' + escapeHtml(impact.label) + '</span>',
@@ -15570,7 +15706,7 @@
       '<span>' + escapeHtml(researchEvidenceKindLabel(item.kind)) + '</span>',
       '</div>',
       '<p><strong>본문 요약</strong> ' + escapeHtml(summary) + '</p>',
-      '<h3>주가 영향: ' + escapeHtml(impact.summary) + '</h3>',
+      '<h3>주가 영향: ' + escapeHtml(impact.label) + ' · ' + escapeHtml(impact.scoreLabel) + '</h3>',
       '<div class="research-evidence-metrics">',
       '<span>방향 <strong>' + escapeHtml(researchEvidencePolarityLabel(item.polarity)) + '</strong></span>',
       '<span>영향 <strong>' + escapeHtml(impact.scoreLabel) + '</strong></span>',
@@ -15583,11 +15719,10 @@
       '</footer>',
       '</div>',
       '<div class="research-evidence-actions">',
-      '<button class="mini-button" type="button" data-research-evidence-toggle="' + escapeHtml(key) + '">' + escapeHtml(expanded ? "접기" : "본문 보기") + '</button>',
+      '<button class="mini-button" type="button" data-research-evidence-toggle="' + escapeHtml(key) + '">' + escapeHtml(expanded ? "상세 표시 중" : "상세") + '</button>',
       item.url ? '<a class="open-link" href="' + escapeHtml(item.url) + '" target="_blank" rel="noreferrer" title="원문 열기">↗</a>' : '<span class="open-link muted">-</span>',
       '<button class="mini-button danger" type="button" data-research-delete="' + escapeHtml(item.evidenceId || "") + '"' + (deleting || item.evidenceId === "preview:005930:news" ? " disabled" : "") + '>' + (deleting ? "삭제 중" : "삭제") + '</button>',
       '</div>',
-      expanded ? renderResearchEvidenceInlineDetail(item) : '',
       '</div>'
     ].join("");
   }
@@ -15766,12 +15901,39 @@
       '<section class="admin-grid settings-view">',
       renderSettingsOverviewPanel(),
       renderSettingsResponsibilityPanel(),
-      renderSettingsEnvironmentPanel(),
-      renderSettingsDeliverySettingsPanel(),
-      renderSettingsExternalDataPanel(),
-      renderSettingsDiagnosticsPanel(),
+      renderSettingsDetailHub(),
       '</section>'
     ].join(""));
+  }
+
+  function renderSettingsDetailHub() {
+    return [
+      '<article class="panel settings-detail-hub">',
+      '<div class="panel-head">',
+      '<div>',
+      '<p class="label">Settings Detail</p>',
+      '<h2>설정 상세 편집</h2>',
+      '<span>기본 화면은 저장 상태와 책임만 확인하고, 실제 입력 폼은 필요한 섹션만 펼칩니다.</span>',
+      '</div>',
+      '</div>',
+      '<div class="settings-detail-grid">',
+      renderSettingsDetailDisclosure("기본 설정 편집", "화면 표시와 알림 전달 채널", renderSettingsEnvironmentPanel() + renderSettingsDeliverySettingsPanel()),
+      renderSettingsDetailDisclosure("고급 설정", "외부 API, 신선도 게이트, 추론, 매핑값", renderSettingsExternalDataPanel()),
+      renderSettingsDetailDisclosure("진단", "저장 상태, 잠금, API 준비도", renderSettingsDiagnosticsPanel()),
+      '</div>',
+      '</article>'
+    ].join("");
+  }
+
+  function renderSettingsDetailDisclosure(title, description, body) {
+    return [
+      '<details class="settings-detail-disclosure">',
+      '<summary><strong>' + escapeHtml(title) + '</strong><span>' + escapeHtml(description || "") + '</span></summary>',
+      '<div class="settings-detail-disclosure-body">',
+      body,
+      '</div>',
+      '</details>'
+    ].join("");
   }
 
   function renderSettingsResponsibilityPanel() {
@@ -16249,7 +16411,7 @@
         if (event && event.preventDefault) event.preventDefault();
         if (event && event.stopPropagation) event.stopPropagation();
         var key = button.getAttribute("data-research-evidence-toggle") || "";
-        state.expandedResearchEvidenceKey = state.expandedResearchEvidenceKey === key ? "" : key;
+        state.expandedResearchEvidenceKey = key;
         render();
       });
     });
@@ -16257,7 +16419,7 @@
     Array.prototype.slice.call(app.querySelectorAll("[data-investment-action-toggle]")).forEach(function (button) {
       button.addEventListener("click", function () {
         var key = button.getAttribute("data-investment-action-toggle") || "";
-        state.expandedInvestmentActionKey = state.expandedInvestmentActionKey === key ? "" : key;
+        state.expandedInvestmentActionKey = key;
         render();
       });
     });
@@ -17114,6 +17276,7 @@
         state.symbolUniverseMarket = market ? market.value : "";
         state.symbolUniverseLimit = limit ? Number(limit.value || 80) : state.symbolUniverseLimit;
         state.symbolUniverseOffset = 0;
+        state.activeSymbolUniverseKey = "";
         loadSymbolUniverse();
       });
     }
@@ -17140,6 +17303,13 @@
       });
     }
 
+    Array.prototype.slice.call(app.querySelectorAll("[data-symbol-select]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        state.activeSymbolUniverseKey = button.getAttribute("data-symbol-select") || "";
+        render();
+      });
+    });
+
     Array.prototype.slice.call(app.querySelectorAll("[data-symbol-page]")).forEach(function (button) {
       button.addEventListener("click", function () {
         var direction = button.getAttribute("data-symbol-page");
@@ -17149,6 +17319,7 @@
         } else if (direction === "next") {
           state.symbolUniverseOffset = Number(state.symbolUniverseOffset || 0) + limit;
         }
+        state.activeSymbolUniverseKey = "";
         loadSymbolUniverse();
       });
     });

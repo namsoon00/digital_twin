@@ -1,5 +1,5 @@
 from dataclasses import asdict
-from typing import Dict, Iterable, List
+from typing import Dict, Iterable, List, Set
 
 from .market_data import number, sector_from_symbol
 from .portfolio import PortfolioSummary, Position
@@ -61,17 +61,53 @@ def fx_rates_with_external_signals(
     return rates
 
 
+def runtime_fx_currencies_from_external_signals(external_signals: Dict[str, object] = None) -> Set[str]:
+    external_fx_rates = external_signals.get("fxRates") if isinstance(external_signals, dict) else {}
+    currencies: Set[str] = set()
+    if not isinstance(external_fx_rates, dict):
+        return currencies
+    for key, item in external_fx_rates.items():
+        if not isinstance(item, dict):
+            continue
+        normalized_key = str(key or "").upper().replace("/", "").strip()
+        base = str(item.get("base") or item.get("baseCurrency") or "").upper().strip()
+        quote = str(item.get("quote") or item.get("quoteCurrency") or "").upper().strip()
+        if not base and len(normalized_key) >= 6:
+            base = normalized_key[:3]
+        if not quote and len(normalized_key) >= 6:
+            quote = normalized_key[3:6]
+        rate = number(item.get("rate") if item.get("rate") not in (None, "") else item.get("value"))
+        provider = str(item.get("provider") or "").strip().lower()
+        if not rate or provider == "runtimesettings":
+            continue
+        if base and quote == "KRW":
+            currencies.add(base)
+        elif quote and base == "KRW":
+            currencies.add(quote)
+    currencies.discard("KRW")
+    return currencies
+
+
 def value_in_base(value: float, currency: str, fx_rates: Dict[str, float] = None) -> float:
     rates = normalized_fx_rates(fx_rates)
     code = str(currency or "KRW").upper()
     return number(value) * rates.get(code, 1.0)
 
 
-def position_value_in_base(position: Position, fx_rates: Dict[str, float] = None) -> float:
+def position_value_in_base(
+    position: Position,
+    fx_rates: Dict[str, float] = None,
+    runtime_fx_currencies: Iterable[str] = None,
+) -> float:
+    rates = normalized_fx_rates(fx_rates)
+    currency = str(position.currency or "KRW").upper()
+    runtime_currencies = {str(item or "").upper() for item in (runtime_fx_currencies or [])}
+    if currency != "KRW" and position.market_value > 0 and currency in runtime_currencies and rates.get(currency):
+        return value_in_base(position.market_value, currency, rates)
     source_base_value = number(getattr(position, "market_value_krw", 0.0))
     if source_base_value > 0:
         return source_base_value
-    return value_in_base(position.market_value, position.currency, fx_rates)
+    return value_in_base(position.market_value, currency, rates)
 
 
 def portfolio_summary(
@@ -79,9 +115,11 @@ def portfolio_summary(
     account_cash: float = 0.0,
     account_currency: str = "KRW",
     fx_rates: Dict[str, float] = None,
+    runtime_fx_currencies: Iterable[str] = None,
 ) -> PortfolioSummary:
     market_map: Dict[str, Dict[str, object]] = {}
     rates = normalized_fx_rates(fx_rates)
+    runtime_currencies = {str(item or "").upper() for item in (runtime_fx_currencies or [])}
 
     def exposure(key: str) -> Dict[str, object]:
         if key not in market_map:
@@ -89,11 +127,11 @@ def portfolio_summary(
         return market_map[key]
 
     position_list = list(positions)
-    cash = sum(max(0.0, position_value_in_base(item, rates)) for item in position_list if item.is_cash())
+    cash = sum(max(0.0, position_value_in_base(item, rates, runtime_currencies)) for item in position_list if item.is_cash())
     if cash:
         for item in position_list:
             if item.is_cash():
-                exposure(market_key(item))["cash"] = float(exposure(market_key(item))["cash"]) + max(0.0, position_value_in_base(item, rates))
+                exposure(market_key(item))["cash"] = float(exposure(market_key(item))["cash"]) + max(0.0, position_value_in_base(item, rates, runtime_currencies))
     elif account_cash:
         cash = max(0.0, value_in_base(account_cash, account_currency, rates))
         exposure("KR" if account_currency.upper() == "KRW" else "US" if account_currency.upper() == "USD" else "OTHER")["cash"] = cash
@@ -105,7 +143,7 @@ def portfolio_summary(
     for item in position_list:
         if item.is_cash():
             continue
-        value = max(0.0, position_value_in_base(item, rates))
+        value = max(0.0, position_value_in_base(item, rates, runtime_currencies))
         invested += value
         exposure(market_key(item))["invested"] = float(exposure(market_key(item))["invested"]) + value
         sector = item.sector or sector_from_symbol(item.symbol)

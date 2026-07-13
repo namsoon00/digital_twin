@@ -350,7 +350,8 @@ class MonitoringPositionContextMixin:
     def position_value_base(self, position: Dict[str, object]) -> float:
         currency = self.position_currency(position)
         native_value = self.position_market_value(position)
-        if currency != "KRW" and native_value > 0 and self.fx_rates.get(currency):
+        runtime_fx_currencies = {str(item or "").upper() for item in getattr(self, "runtime_fx_currencies", set())}
+        if currency != "KRW" and native_value > 0 and currency in runtime_fx_currencies and self.fx_rates.get(currency):
             return value_in_base(native_value, currency, self.fx_rates)
         source_base_value = (
             number(position.get("market_value_krw"))

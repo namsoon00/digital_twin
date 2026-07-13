@@ -6,7 +6,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.domain.market_data import normalize_position
 from digital_twin.domain.monitoring import RealtimeMonitor
-from digital_twin.domain.portfolio_calculations import portfolio_summary
+from digital_twin.domain.portfolio_calculations import portfolio_summary, runtime_fx_currencies_from_external_signals
 from digital_twin.infrastructure.toss_snapshots import currency_rates_from_external_signals
 
 
@@ -48,6 +48,73 @@ class TossBaseCurrencyValueTests(unittest.TestCase):
 
         summary = portfolio_summary([position], fx_rates={"USD": 1400, "KRW": 1})
 
+        self.assertEqual(32000000, summary.invested)
+        self.assertEqual(32000000, summary.total)
+
+    def test_portfolio_summary_uses_live_fx_over_toss_krw_value_when_external_rate_is_fresh(self):
+        position = normalize_position(
+            {
+                "symbol": "MSTR",
+                "market": "US",
+                "currency": "USD",
+                "quantity": 230,
+                "currentPrice": 98,
+                "marketValue": 22540,
+                "evaluationAmount": 32000000,
+            }
+        )
+        external_signals = {
+            "fxRates": {
+                "USDKRW": {
+                    "provider": "Alpha Vantage",
+                    "base": "USD",
+                    "quote": "KRW",
+                    "rate": 1425.5,
+                }
+            }
+        }
+        rates = currency_rates_from_external_signals({"fxRates": "KRW=1\nUSD=1400"}, external_signals)
+
+        summary = portfolio_summary(
+            [position],
+            fx_rates=rates,
+            runtime_fx_currencies=runtime_fx_currencies_from_external_signals(external_signals),
+        )
+
+        self.assertAlmostEqual(22540 * 1425.5, summary.invested)
+        self.assertAlmostEqual(22540 * 1425.5, summary.total)
+
+    def test_portfolio_summary_keeps_toss_krw_value_when_fx_is_only_runtime_setting(self):
+        position = normalize_position(
+            {
+                "symbol": "MSTR",
+                "market": "US",
+                "currency": "USD",
+                "quantity": 230,
+                "currentPrice": 98,
+                "marketValue": 22540,
+                "evaluationAmount": 32000000,
+            }
+        )
+        external_signals = {
+            "fxRates": {
+                "USDKRW": {
+                    "provider": "RuntimeSettings",
+                    "base": "USD",
+                    "quote": "KRW",
+                    "rate": 1425.5,
+                }
+            }
+        }
+        rates = currency_rates_from_external_signals({"fxRates": "KRW=1\nUSD=1400"}, external_signals)
+
+        summary = portfolio_summary(
+            [position],
+            fx_rates=rates,
+            runtime_fx_currencies=runtime_fx_currencies_from_external_signals(external_signals),
+        )
+
+        self.assertEqual(set(), runtime_fx_currencies_from_external_signals(external_signals))
         self.assertEqual(32000000, summary.invested)
         self.assertEqual(32000000, summary.total)
 

@@ -10,7 +10,7 @@ from ..domain.accounts import AccountConfig
 from ..domain.data_freshness import combine_quality
 from ..domain.market_data import known_stock, normalize_position, number, pct_distance, technical_indicators_from_candles
 from ..domain.portfolio import AccountSnapshot, Position, utc_now_iso
-from ..domain.portfolio_calculations import fx_rates_with_external_signals, portfolio_summary
+from ..domain.portfolio_calculations import fx_rates_with_external_signals, portfolio_summary, runtime_fx_currencies_from_external_signals
 from ..domain.strategy import decisions_for_positions
 from .external_signals import ExternalSignalProvider
 from .kis_market_signals import KISMarketSignalProvider
@@ -787,7 +787,13 @@ def build_snapshot(account: AccountConfig, external_settings: Optional[Dict[str,
     kis_provider = KISMarketSignalProvider()
     positions, watchlist = kis_provider.enrich_collections(positions, watchlist)
     external_signals = ExternalSignalProvider(settings=settings).signals_for_positions(positions + watchlist)
-    portfolio = portfolio_summary(positions, cash, currency, currency_rates_from_external_signals(settings, external_signals))
+    portfolio = portfolio_summary(
+        positions,
+        cash,
+        currency,
+        currency_rates_from_external_signals(settings, external_signals),
+        runtime_fx_currencies_from_external_signals(external_signals),
+    )
     decisions = decisions_for_positions(
         positions,
         portfolio,

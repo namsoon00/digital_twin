@@ -241,7 +241,7 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
         self.assertTrue(decision.similarity_bypassed)
         self.assertIn("더 깊은 손실 구간", decision.state_reason)
 
-    def test_critical_loss_additional_worsening_bypasses_state_cooldown(self):
+    def test_critical_loss_additional_worsening_inside_same_band_uses_state_cooldown(self):
         rule = default_notification_rule("investmentInsight")
         job = NotificationJob.create(
             "SK하이닉스 손실 점검",
@@ -272,15 +272,17 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
             previous_context={
                 "rawLines": "수익률: -21.7%",
                 "ontologyInsight": {"subject": "000660", "dispatchInsightType": "riskManagement"},
+                "sourceSignalTypes": ["holdingTiming"],
             },
             last_sent_at=utc_now_iso(),
             last_sent_age_minutes=117,
             job=job,
         )
 
-        self.assertTrue(decision.should_send)
-        self.assertEqual("mandatory_profit_loss_band", decision.state_decision)
-        self.assertIn("손실률 추가 악화", decision.state_reason)
+        self.assertFalse(decision.should_send)
+        self.assertEqual("cooldown", decision.state_decision)
+        self.assertFalse(decision.similarity_bypassed)
+        self.assertIn("같은 임계값 상태 지속", decision.state_reason)
 
     def test_mandatory_profit_band_bypasses_similarity_penalty(self):
         rule = default_notification_rule("investmentInsight")
@@ -311,7 +313,7 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
             rule,
             recent_count=1,
             previous_score=decision.score,
-            previous_context={"profitLossRate": 23.0},
+            previous_context={"profitLossRate": 19.0},
             job=job,
         )
 
@@ -353,6 +355,150 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
         self.assertTrue(decision.should_send)
         self.assertEqual("material_change", decision.state_decision)
         self.assertIn("손익률 추가 악화", decision.state_reason)
+
+    def test_synthetic_timing_source_event_does_not_bypass_investment_insight_cooldown(self):
+        rule = default_notification_rule("investmentInsight")
+        job = NotificationJob.create(
+            "관계 규칙 관찰",
+            account_id="main",
+            message_type="investmentInsight",
+            context={
+                "severity": "WATCH",
+                "symbol": "MSTR",
+                "profitLossRate": 5.0,
+                "ontologyInsight": {
+                    "subject": "MSTR",
+                    "dispatchInsightType": "holdingPositionCommon",
+                    "score": 78,
+                    "noveltyScore": 20,
+                    "sourceEventKeys": ["default:timing:MSTR:관계 규칙 관찰"],
+                },
+                "sourceSignalTypes": ["holdingTiming"],
+            },
+        )
+        decision = evaluate_notification_rule(job, rule)
+
+        decision = apply_state_cooldown_rule(
+            decision,
+            rule,
+            sent_count=1,
+            previous_score=decision.score,
+            previous_context={
+                "profitLossRate": 5.0,
+                "ontologyInsight": {
+                    "subject": "MSTR",
+                    "dispatchInsightType": "holdingPositionCommon",
+                    "score": 78,
+                    "noveltyScore": 20,
+                    "sourceEventKeys": ["default:timing:MSTR:분할축소 우선 점검"],
+                },
+                "sourceSignalTypes": ["holdingTiming"],
+            },
+            last_sent_at=utc_now_iso(),
+            last_sent_age_minutes=45,
+            job=job,
+        )
+
+        self.assertFalse(decision.should_send)
+        self.assertEqual("cooldown", decision.state_decision)
+        self.assertFalse(decision.similarity_bypassed)
+
+    def test_split_relation_rule_keys_do_not_count_as_new_source_event(self):
+        rule = default_notification_rule("investmentInsight")
+        job = NotificationJob.create(
+            "관계 규칙 관찰",
+            account_id="main",
+            message_type="investmentInsight",
+            context={
+                "severity": "WATCH",
+                "symbol": "AAPL",
+                "profitLossRate": 2.0,
+                "ontologyInsight": {
+                    "subject": "AAPL",
+                    "dispatchInsightType": "relationshipChange",
+                    "score": 78,
+                    "noveltyScore": 20,
+                    "sourceEventKeys": [
+                        "graph.news.direct_material_context.v1+graph.news.direct_material_context.v1+graph.holding.position_context.v1"
+                    ],
+                },
+                "sourceSignalTypes": ["watchlistOntologySignal"],
+            },
+        )
+        decision = evaluate_notification_rule(job, rule)
+
+        decision = apply_state_cooldown_rule(
+            decision,
+            rule,
+            sent_count=1,
+            previous_score=decision.score,
+            previous_context={
+                "profitLossRate": 2.0,
+                "ontologyInsight": {
+                    "subject": "AAPL",
+                    "dispatchInsightType": "relationshipChange",
+                    "score": 78,
+                    "noveltyScore": 20,
+                    "sourceEventKeys": ["graph.news.direct_material_context.v1"],
+                },
+                "sourceSignalTypes": ["watchlistOntologySignal"],
+            },
+            last_sent_at=utc_now_iso(),
+            last_sent_age_minutes=45,
+            job=job,
+        )
+
+        self.assertFalse(decision.should_send)
+        self.assertEqual("cooldown", decision.state_decision)
+        self.assertFalse(decision.similarity_bypassed)
+
+    def test_material_news_source_event_bypasses_investment_insight_cooldown(self):
+        rule = default_notification_rule("investmentInsight")
+        job = NotificationJob.create(
+            "새 뉴스 원천 근거",
+            account_id="main",
+            message_type="investmentInsight",
+            context={
+                "severity": "WATCH",
+                "symbol": "MSTR",
+                "profitLossRate": 4.0,
+                "ontologyInsight": {
+                    "subject": "MSTR",
+                    "dispatchInsightType": "holdingPositionCommon",
+                    "score": 78,
+                    "noveltyScore": 20,
+                    "sourceEventKeys": ["main:news:MSTR:yahoo:202607140001"],
+                },
+                "sourceSignalTypes": ["holdingTiming"],
+            },
+        )
+        decision = evaluate_notification_rule(job, rule)
+
+        decision = apply_state_cooldown_rule(
+            decision,
+            rule,
+            sent_count=1,
+            previous_score=decision.score,
+            previous_context={
+                "profitLossRate": 4.0,
+                "ontologyInsight": {
+                    "subject": "MSTR",
+                    "dispatchInsightType": "holdingPositionCommon",
+                    "score": 78,
+                    "noveltyScore": 20,
+                    "sourceEventKeys": ["main:holding:MSTR:risk"],
+                },
+                "sourceSignalTypes": ["holdingTiming"],
+            },
+            last_sent_at=utc_now_iso(),
+            last_sent_age_minutes=45,
+            job=job,
+        )
+
+        self.assertTrue(decision.should_send)
+        self.assertEqual("material_change", decision.state_decision)
+        self.assertTrue(decision.similarity_bypassed)
+        self.assertIn("새 뉴스/공시 원천 근거 추가", decision.state_reason)
 
     def test_ma60_cross_down_bypasses_investment_insight_cooldown(self):
         rule = default_notification_rule("investmentInsight")

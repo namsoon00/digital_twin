@@ -27,9 +27,18 @@ from .strategy import SafeFormula
 MANDATORY_PROFIT_LOSS_MESSAGE_TYPES = {"investmentInsight", "holdingTiming"}
 MANDATORY_LOSS_RATE_THRESHOLD = -15.0
 MANDATORY_PROFIT_RATE_THRESHOLD = 20.0
-MANDATORY_PROFIT_LOSS_REPEAT_DELTA_PCT = 1.0
 MANDATORY_LOSS_BANDS = [-15.0, -20.0, -30.0]
 MANDATORY_PROFIT_BANDS = [20.0, 30.0, 50.0]
+MATERIAL_SOURCE_EVENT_MARKERS = [
+    ":news:",
+    ":article:",
+    ":rss:",
+    ":disclosure:",
+    ":dart:",
+    ":filing:",
+    ":sec:",
+    ":externaldartdisclosure:",
+]
 PROFIT_LOSS_FIELD_CANDIDATES = [
     "profitLossRate",
     "profit_loss_rate",
@@ -268,9 +277,6 @@ def mandatory_profit_loss_delivery_reason(job: NotificationJob = None, previous_
                 return "손실률 " + previous_text + " -> " + current_text + "로 필수 발송 구간에 신규 진입"
             if mandatory_loss_band_rank(profit_loss_rate) > mandatory_loss_band_rank(previous_rate):
                 return "손실률 " + previous_text + " -> " + current_text + "로 더 깊은 손실 구간 진입"
-            delta = float(profit_loss_rate) - float(previous_rate)
-            if delta <= -MANDATORY_PROFIT_LOSS_REPEAT_DELTA_PCT:
-                return "손실률 추가 악화 " + previous_text + " -> " + current_text
             return ""
         return (
             "손실률 "
@@ -287,9 +293,6 @@ def mandatory_profit_loss_delivery_reason(job: NotificationJob = None, previous_
                 return "수익률 " + previous_text + " -> " + current_text + "로 필수 발송 구간에 신규 진입"
             if mandatory_profit_band_rank(profit_loss_rate) > mandatory_profit_band_rank(previous_rate):
                 return "수익률 " + previous_text + " -> " + current_text + "로 더 높은 수익 구간 진입"
-            delta = float(profit_loss_rate) - float(previous_rate)
-            if delta >= MANDATORY_PROFIT_LOSS_REPEAT_DELTA_PCT:
-                return "수익률 추가 개선 " + previous_text + " -> " + current_text
             return ""
         return (
             "수익률 "
@@ -424,6 +427,27 @@ def normalize_similarity_list_item(field: str, value: object) -> str:
     return normalized
 
 
+def material_source_event_key(value: str) -> bool:
+    normalized = normalized_text(value)
+    if not normalized:
+        return False
+    return any(marker in normalized for marker in MATERIAL_SOURCE_EVENT_MARKERS)
+
+
+def normalize_similarity_list_items(field: str, value: object) -> List[str]:
+    normalized = normalize_similarity_list_item(field, value)
+    if not normalized:
+        return []
+    if not str(field or "").endswith("sourceEventKeys"):
+        return [normalized]
+    parts = []
+    for item in normalized.split("+"):
+        key = VOLATILE_SCORE_SUFFIX.sub("", normalize_fingerprint_part(item))
+        if key and material_source_event_key(key):
+            parts.append(key)
+    return parts
+
+
 def similarity_bypass_match(
     condition: SimilarityBypassCondition,
     job: NotificationJob,
@@ -469,8 +493,12 @@ def similarity_bypass_match(
             return True, label + " 신규 " + current
         return False, ""
     if condition_type == "list_new_items_gte":
-        current_items = set(normalize_similarity_list_item(field, item) for item in flattened_strings(field_value(context, field)) if normalize_similarity_list_item(field, item))
-        previous_items = set(normalize_similarity_list_item(field, item) for item in flattened_strings(field_value(previous_context, field)) if normalize_similarity_list_item(field, item))
+        current_items = set()
+        previous_items = set()
+        for item in flattened_strings(field_value(context, field)):
+            current_items.update(normalize_similarity_list_items(field, item))
+        for item in flattened_strings(field_value(previous_context, field)):
+            previous_items.update(normalize_similarity_list_items(field, item))
         new_items = sorted(current_items - previous_items)
         minimum = numeric_value(condition.value)
         if new_items and len(new_items) >= int(minimum or 1):
@@ -483,6 +511,18 @@ def similarity_bypass_match(
         if current is None or previous is None or minimum is None:
             return False, ""
         delta = current - previous
+        if (
+            current <= MANDATORY_LOSS_RATE_THRESHOLD
+            and previous <= MANDATORY_LOSS_RATE_THRESHOLD
+            and mandatory_loss_band_rank(current) <= mandatory_loss_band_rank(previous)
+        ):
+            return False, ""
+        if (
+            current >= MANDATORY_PROFIT_RATE_THRESHOLD
+            and previous >= MANDATORY_PROFIT_RATE_THRESHOLD
+            and mandatory_profit_band_rank(current) <= mandatory_profit_band_rank(previous)
+        ):
+            return False, ""
         if delta <= -minimum:
             return True, label + " " + format_rule_number(previous) + "% -> " + format_rule_number(current) + "%"
         return False, ""

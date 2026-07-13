@@ -195,18 +195,18 @@ def default_similarity_bypass_conditions(message_type: str) -> List["SimilarityB
             ),
             SimilarityBypassCondition(
                 "new_relation_event",
-                "새 뉴스/공시/관계 근거 추가",
+                "새 뉴스/공시 원천 근거 추가",
                 "list_new_items_gte",
                 field="ontologyInsight.sourceEventKeys",
                 value=1,
-                description="같은 신호 타입이어도 뉴스, 공시, 활성 관계 규칙 조합이 달라지면 보냅니다.",
+                description="같은 신호 타입이어도 새 뉴스·공시·원문 기사 같은 실제 원천 근거가 추가되면 보냅니다. 반복 계산용 관계 규칙 키는 제외합니다.",
             ),
             SimilarityBypassCondition(
                 "insight_profit_loss_worsened",
                 "손익률 추가 악화",
                 "profit_loss_worsened_lte",
                 value=1,
-                description="이전 투자 인사이트보다 손익률이 1%p 이상 나빠지면 반복이어도 보냅니다.",
+                description="이전 투자 인사이트보다 손익률이 1%p 이상 나빠지면 반복이어도 보냅니다. 이미 큰 손실·큰 수익 구간이면 새 구간에 들어갈 때만 예외로 보냅니다.",
             ),
             SimilarityBypassCondition(
                 "insight_ma60_crossed_below",
@@ -244,7 +244,7 @@ def default_similarity_bypass_conditions(message_type: str) -> List["SimilarityB
                 "손익률 추가 악화",
                 "profit_loss_worsened_lte",
                 value=1,
-                description="이전 보유 타이밍 알림보다 손익률이 1%p 이상 나빠지면 보냅니다.",
+                description="이전 보유 타이밍 알림보다 손익률이 1%p 이상 나빠지면 보냅니다. 이미 큰 손실·큰 수익 구간이면 새 구간에 들어갈 때만 예외로 보냅니다.",
             ),
             SimilarityBypassCondition(
                 "holding_ma60_crossed_below",

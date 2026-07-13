@@ -20,13 +20,13 @@ from digital_twin.domain.portfolio import utc_now_iso
 
 
 class NotificationDataQualityPolicyTests(unittest.TestCase):
-    def test_topline_change_summary_is_added_next_to_new_alert_badge(self):
+    def test_topline_change_summary_is_separated_from_new_alert_badge(self):
         message = prepend_execution_start_badge(
             "<b>[주의] 🛡️ SK하이닉스: 분할축소 점검</b>",
             {"honeyStateReason": "의미 있는 추가 확대: 손익률 추가 악화 -8.9% -> -10.4%"},
         )
 
-        self.assertTrue(message.startswith("<b>🔔 새 알림</b> <code>손익률 1.5%p 악화</code>"))
+        self.assertTrue(message.startswith("<b>🔔 새 알림</b>\n<code>손익 구간: 손실 관리(-10.4%) · 이전 알림 대비 1.5%p 악화</code>"))
         self.assertEqual(1, message.count("🔔 새 알림"))
 
     def test_topline_change_summary_shows_profit_loss_improvement_delta(self):
@@ -36,7 +36,7 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
             "honeyStateReason": "의미 있는 추가 확대: 관계 강도 변화",
         })
 
-        self.assertEqual("손익률 1.5%p 개선", summary)
+        self.assertEqual("손익 구간: 손실 관리(-8.9%) · 이전 알림 대비 1.5%p 개선", summary)
 
     def test_topline_change_summary_uses_nested_profit_loss_delta(self):
         summary = notification_topline_change_summary({
@@ -44,7 +44,7 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
             "honeyStateReason": "의미 있는 추가 확대: 관계 강도 변화",
         })
 
-        self.assertEqual("손익률 2.2%p 악화", summary)
+        self.assertEqual("손익 구간: 이전 알림 대비 2.2%p 악화", summary)
 
     def test_topline_change_summary_maps_new_news_disclosure_reason(self):
         summary = notification_topline_change_summary({

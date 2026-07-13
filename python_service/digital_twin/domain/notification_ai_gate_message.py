@@ -51,28 +51,92 @@ def _first_number_from_paths(context: Dict[str, object], paths: List[str]):
             return _number(value)
     return None
 
+def _signed_decimal_text(value: float) -> str:
+    magnitude = ("%.1f" % abs(float(value or 0))).rstrip("0").rstrip(".")
+    if value > 0:
+        return "+" + magnitude
+    if value < 0:
+        return "-" + magnitude
+    return magnitude
+
 def _signed_point_change_text(delta: float) -> str:
     if abs(delta) < 0.05:
         return ""
     magnitude = ("%.1f" % abs(delta)).rstrip("0").rstrip(".")
     direction = "개선" if delta > 0 else "악화"
-    return "손익률 " + magnitude + "%p " + direction
+    return "이전 알림 대비 " + magnitude + "%p " + direction
 
-def _profit_loss_change_from_reason(reason: str) -> str:
+def _profit_loss_band_label(rate: float) -> str:
+    if rate <= -20:
+        return "큰 손실"
+    if rate <= -8:
+        return "손실 관리"
+    if rate < -2:
+        return "손실 주의"
+    if rate <= 2:
+        return "거의 보합"
+    if rate < 8:
+        return "작은 수익"
+    if rate < 20:
+        return "수익 구간"
+    return "큰 수익"
+
+def _profit_loss_band_text(rate: float) -> str:
+    return _profit_loss_band_label(rate) + "(" + _signed_decimal_text(rate) + "%)"
+
+def _profit_loss_pair_from_reason(reason: str):
     match = re.search(
         r"([+-]?\d+(?:\.\d+)?)\s*%\s*(?:->|→)\s*([+-]?\d+(?:\.\d+)?)\s*%",
         str(reason or ""),
     )
     if not match:
-        return ""
-    previous = _number(match.group(1))
-    current = _number(match.group(2))
-    return _signed_point_change_text(current - previous)
+        return None
+    return (_number(match.group(1)), _number(match.group(2)))
 
-def _profit_loss_change_summary(context: Dict[str, object], reason: str = "") -> str:
-    reason_summary = _profit_loss_change_from_reason(reason)
-    if reason_summary:
-        return reason_summary
+def _profit_loss_rate_from_text(value: object):
+    text = str(value or "")
+    if not text.strip():
+        return None
+    match = re.search(r"(?:수익률|손익률|손익)\s*(?:[:：]|은|이|약)?\s*([+-]?\d+(?:\.\d+)?)\s*%", text)
+    if not match:
+        return None
+    return _number(match.group(1))
+
+def _profit_loss_current_rate(context: Dict[str, object], reason: str = ""):
+    pair = _profit_loss_pair_from_reason(reason)
+    if pair:
+        return pair[1]
+    current = _first_number_from_paths(context, [
+        "profitLossRate",
+        "profit_loss_rate",
+        "pnlRate",
+        "pnl_rate",
+        "facts.profitLossRate",
+        "ontologyInsight.facts.profitLossRate",
+        "ontologyInsight.legacyModel.profitLossRate",
+        "ontologyInsight.sourceFacts.profitLossRate",
+        "ontologyInsight.executionPlan.sourceFacts.profitLossRate",
+        "activeInvestmentOpinion.facts.profitLossRate",
+        "activeInvestmentOpinion.legacyModel.profitLossRate",
+        "activeInvestmentOpinion.sourceFacts.profitLossRate",
+        "activeInvestmentOpinion.executionPlan.sourceFacts.profitLossRate",
+        "ontologyRelationContext.facts.profitLossRate",
+        "relationContext.facts.profitLossRate",
+    ])
+    if current is not None:
+        return current
+    for path in ["rawLines", "body", "summary", "currentStatus", "currentSituation"]:
+        value = _context_path_value(context, path)
+        rate = _profit_loss_rate_from_text(value)
+        if rate is not None:
+            return rate
+    return None
+
+def _profit_loss_delta(context: Dict[str, object], reason: str = ""):
+    pair = _profit_loss_pair_from_reason(reason)
+    if pair:
+        previous, current = pair
+        return current - previous
     delta = _first_number_from_paths(context, [
         "profitLossRateDeltaPct",
         "profitLossDeltaPct",
@@ -85,7 +149,7 @@ def _profit_loss_change_summary(context: Dict[str, object], reason: str = "") ->
         "relationContext.facts.profitLossRateDeltaPct",
     ])
     if delta is not None:
-        return _signed_point_change_text(delta)
+        return delta
     previous = _first_number_from_paths(context, [
         "previousProfitLossRate",
         "previous_profit_loss_rate",
@@ -95,22 +159,28 @@ def _profit_loss_change_summary(context: Dict[str, object], reason: str = "") ->
         "ontologyRelationContext.facts.previousProfitLossRate",
         "relationContext.facts.previousProfitLossRate",
     ])
-    current = _first_number_from_paths(context, [
-        "profitLossRate",
-        "profit_loss_rate",
-        "pnlRate",
-        "pnl_rate",
-        "facts.profitLossRate",
-        "ontologyInsight.facts.profitLossRate",
-        "ontologyInsight.legacyModel.profitLossRate",
-        "activeInvestmentOpinion.facts.profitLossRate",
-        "activeInvestmentOpinion.legacyModel.profitLossRate",
-        "ontologyRelationContext.facts.profitLossRate",
-        "relationContext.facts.profitLossRate",
-    ])
+    current = _profit_loss_current_rate(context, reason)
     if previous is None or current is None:
+        return None
+    return current - previous
+
+def _profit_loss_reason_present(reason: str) -> bool:
+    return any(term in str(reason or "") for term in ["손익", "손실률", "수익률", "필수 발송 구간"])
+
+def _profit_loss_change_summary(context: Dict[str, object], reason: str = "") -> str:
+    current = _profit_loss_current_rate(context, reason)
+    delta = _profit_loss_delta(context, reason)
+    delta_text = _signed_point_change_text(delta) if delta is not None else ""
+    if current is None and not delta_text:
         return ""
-    return _signed_point_change_text(current - previous)
+    if current is None and delta_text:
+        return "손익 구간: " + delta_text
+    if not delta_text and not _profit_loss_reason_present(reason):
+        return ""
+    parts = [_profit_loss_band_text(current)]
+    if delta_text:
+        parts.append(delta_text)
+    return "손익 구간: " + " · ".join(parts)
 
 def notification_topline_change_summary(context: Dict[str, object]) -> str:
     context = context or {}
@@ -155,17 +225,29 @@ def prepend_execution_start_badge(rendered: str, context: Dict[str, object] = No
     if not text:
         return text
     summary = notification_topline_change_summary(context or {})
-    summary_suffix = (" <code>" + html.escape(summary, quote=False) + "</code>") if summary else ""
-    plain_badge = MESSAGE_START_BADGE + ((" · " + summary) if summary else "")
-    html_badge = "<b>" + MESSAGE_START_BADGE + "</b>" + summary_suffix
+    plain_badge = MESSAGE_START_BADGE
+    html_badge = "<b>" + MESSAGE_START_BADGE + "</b>"
+    plain_summary_line = summary if summary else ""
+    html_summary_line = ("<code>" + html.escape(summary, quote=False) + "</code>") if summary else ""
     if text.startswith("<b>" + MESSAGE_START_BADGE + "</b>"):
-        if summary and not text.split("\n", 1)[0].strip().endswith("</code>"):
-            return text.replace("<b>" + MESSAGE_START_BADGE + "</b>", html_badge, 1)
+        first, rest = (text.split("\n", 1) + [""])[:2]
+        second = text.splitlines()[1] if len(text.splitlines()) > 1 else ""
+        second_plain = re.sub(r"</?(?:b|code)>", "", second)
+        if summary and (first.strip() != html_badge or summary not in second_plain):
+            first, rest = (text.split("\n", 1) + [""])[:2]
+            first = html_badge
+            return first + "\n" + html_summary_line + (("\n" + rest) if rest else "")
         return text
     if text.startswith(MESSAGE_START_BADGE):
-        if summary and not text.split("\n", 1)[0].strip().endswith(summary):
-            return text.replace(MESSAGE_START_BADGE, plain_badge, 1)
+        first, rest = (text.split("\n", 1) + [""])[:2]
+        second = text.splitlines()[1] if len(text.splitlines()) > 1 else ""
+        if summary and (first.strip() != plain_badge or summary not in second):
+            first, rest = (text.split("\n", 1) + [""])[:2]
+            first = plain_badge
+            return first + "\n" + plain_summary_line + (("\n" + rest) if rest else "")
         return text
+    if summary:
+        return html_badge + "\n" + html_summary_line + "\n\n" + text
     return html_badge + "\n\n" + text
 
 def confidence_text(value: object) -> str:

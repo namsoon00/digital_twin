@@ -13,7 +13,7 @@
     "공유 미리보기에서는 서버 설정과 계정 DB 쓰기를 차단합니다."
   ],
   "localData": {
-    "generatedAt": "2026-07-13T00:23:02.735591Z",
+    "generatedAt": "2026-07-13T11:50:07.547412Z",
     "sources": {
       "operationalDbBackend": "mysql",
       "settings": "data/settings.json",
@@ -125,6 +125,9 @@
       "newsCollectionIncludeWatchlist": "1",
       "newsCollectionIncludeHoldings": "1",
       "newsCollectionRateLimitSeconds": "0.25",
+      "newsAiAnalysisEnabled": "1",
+      "newsAiAnalysisUseCodex": "1",
+      "newsAiAnalysisTimeoutSeconds": "90",
       "ontologyReasoningEnabled": "1",
       "ontologyReasoningIntervalSeconds": "10",
       "ontologyReasoningBatchSize": "20",
@@ -158,6 +161,11 @@
       "alertRules": [
         {
           "key": "investmentInsight",
+          "default": 1,
+          "unit": ""
+        },
+        {
+          "key": "investmentCalendarReminder",
           "default": 1,
           "unit": ""
         },
@@ -459,6 +467,11 @@
       "alertCadenceMinutes": [
         {
           "key": "investmentInsight",
+          "default": 10,
+          "unit": "minutes"
+        },
+        {
+          "key": "investmentCalendarReminder",
           "default": 10,
           "unit": "minutes"
         },
@@ -869,6 +882,30 @@
           "default": "1"
         },
         {
+          "key": "newsAiAnalysisEnabled",
+          "label": "기사 AI 분석 사용",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
+          "key": "newsAiAnalysisUseCodex",
+          "label": "기사 분석 Codex 사용",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
+          "key": "newsAiAnalysisCommand",
+          "label": "기사 분석 명령",
+          "type": "text"
+        },
+        {
+          "key": "newsAiAnalysisTimeoutSeconds",
+          "label": "기사 분석 타임아웃",
+          "type": "number",
+          "default": "90",
+          "unit": "seconds"
+        },
+        {
           "key": "ontologyReasoningEnabled",
           "label": "데이터 변경 추론 사용",
           "type": "toggle",
@@ -1025,20 +1062,6 @@
           "unit": "seconds"
         },
         {
-          "key": "typedbRetryCount",
-          "label": "TypeDB 재시도",
-          "type": "number",
-          "default": "2",
-          "unit": "회"
-        },
-        {
-          "key": "typedbInferenceGenerationKeepCount",
-          "label": "InferenceBox 보관 세대",
-          "type": "number",
-          "default": "2",
-          "unit": "세대"
-        },
-        {
           "key": "formulaWeights",
           "label": "참고 가중치",
           "type": "assignmentText"
@@ -1085,6 +1108,11 @@
         "alertRules": [
           {
             "key": "investmentInsight",
+            "default": 1,
+            "unit": ""
+          },
+          {
+            "key": "investmentCalendarReminder",
             "default": 1,
             "unit": ""
           },
@@ -1336,6 +1364,11 @@
         "alertCadenceMinutes": [
           {
             "key": "investmentInsight",
+            "default": 10,
+            "unit": "minutes"
+          },
+          {
+            "key": "investmentCalendarReminder",
             "default": 10,
             "unit": "minutes"
           },
@@ -1621,5 +1654,5 @@
       ]
     }
   ],
-  "buildId": "48e8ae229e60"
+  "buildId": "a693a3fed247"
 }

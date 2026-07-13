@@ -154,7 +154,51 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
         self.assertEqual("cooldown", decision.state_decision)
         self.assertFalse(decision.similarity_bypassed)
 
-    def test_critical_loss_from_raw_lines_bypasses_state_cooldown(self):
+    def test_critical_loss_repeat_without_material_change_uses_state_cooldown(self):
+        rule = default_notification_rule("investmentInsight")
+        job = NotificationJob.create(
+            "SK하이닉스 손실 점검",
+            account_id="main",
+            message_type="investmentInsight",
+            context={
+                "severity": "WATCH",
+                "body": "SK하이닉스 손절·분할축소 점검",
+                "symbol": "000660",
+                "rawLines": "현재가: 2,007,000원\n평균매입가: 2,571,000원\n수익률: -21.7%",
+                "ontologyInsight": {
+                    "subject": "000660",
+                    "dispatchInsightType": "riskManagement",
+                    "score": 86,
+                    "noveltyScore": 20,
+                    "confidence": 70,
+                },
+                "sourceSignalTypes": ["holdingTiming"],
+            },
+        )
+        decision = evaluate_notification_rule(job, rule)
+
+        decision = apply_state_cooldown_rule(
+            decision,
+            rule,
+            sent_count=1,
+            previous_score=decision.score,
+            previous_context={
+                "severity": "WATCH",
+                "rawLines": "현재가: 2,014,000원\n평균매입가: 2,571,000원\n수익률: -21.8%",
+                "ontologyInsight": {"subject": "000660", "dispatchInsightType": "riskManagement"},
+                "sourceSignalTypes": ["holdingTiming"],
+            },
+            last_sent_at=utc_now_iso(),
+            last_sent_age_minutes=117,
+            job=job,
+        )
+
+        self.assertFalse(decision.should_send)
+        self.assertEqual("cooldown", decision.state_decision)
+        self.assertFalse(decision.similarity_bypassed)
+        self.assertIn("같은 임계값 상태 지속", decision.state_reason)
+
+    def test_critical_loss_new_band_entry_bypasses_state_cooldown(self):
         rule = default_notification_rule("investmentInsight")
         job = NotificationJob.create(
             "SK하이닉스 손실 점검",
@@ -184,7 +228,7 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
             previous_score=decision.score,
             previous_context={
                 "severity": "WATCH",
-                "rawLines": "현재가: 2,014,000원\n평균매입가: 2,571,000원\n수익률: -21.8%",
+                "rawLines": "현재가: 2,122,000원\n평균매입가: 2,571,000원\n수익률: -17.4%",
                 "ontologyInsight": {"subject": "000660", "dispatchInsightType": "riskManagement"},
             },
             last_sent_at=utc_now_iso(),
@@ -195,7 +239,48 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
         self.assertTrue(decision.should_send)
         self.assertEqual("mandatory_profit_loss_band", decision.state_decision)
         self.assertTrue(decision.similarity_bypassed)
-        self.assertIn("-21.9%", decision.state_reason)
+        self.assertIn("더 깊은 손실 구간", decision.state_reason)
+
+    def test_critical_loss_additional_worsening_bypasses_state_cooldown(self):
+        rule = default_notification_rule("investmentInsight")
+        job = NotificationJob.create(
+            "SK하이닉스 손실 점검",
+            account_id="main",
+            message_type="investmentInsight",
+            context={
+                "severity": "WATCH",
+                "body": "SK하이닉스 손절·분할축소 점검",
+                "symbol": "000660",
+                "rawLines": "수익률: -23.0%",
+                "ontologyInsight": {
+                    "subject": "000660",
+                    "dispatchInsightType": "riskManagement",
+                    "score": 86,
+                    "noveltyScore": 20,
+                    "confidence": 70,
+                },
+                "sourceSignalTypes": ["holdingTiming"],
+            },
+        )
+        decision = evaluate_notification_rule(job, rule)
+
+        decision = apply_state_cooldown_rule(
+            decision,
+            rule,
+            sent_count=1,
+            previous_score=decision.score,
+            previous_context={
+                "rawLines": "수익률: -21.7%",
+                "ontologyInsight": {"subject": "000660", "dispatchInsightType": "riskManagement"},
+            },
+            last_sent_at=utc_now_iso(),
+            last_sent_age_minutes=117,
+            job=job,
+        )
+
+        self.assertTrue(decision.should_send)
+        self.assertEqual("mandatory_profit_loss_band", decision.state_decision)
+        self.assertIn("손실률 추가 악화", decision.state_reason)
 
     def test_mandatory_profit_band_bypasses_similarity_penalty(self):
         rule = default_notification_rule("investmentInsight")

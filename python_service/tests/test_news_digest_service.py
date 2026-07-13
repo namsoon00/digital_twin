@@ -56,6 +56,14 @@ class NewsDigestEnqueuerTests(unittest.TestCase):
                 "articleReadStatus": "body",
                 "articleAnalysisSource": "article-body",
                 "articleSummaryKo": "애플을 직접 다룬 법적 이슈로 다음 장 가격 반응 확인이 필요합니다.",
+                "articleFacts": {
+                    "readStatus": "body",
+                    "readStatusLabel": "전체 본문 읽음",
+                    "eventTakeaway": "애플 관련 소송·규제 이슈가 투자심리 부담으로 부각",
+                    "numbers": ["12%"],
+                    "topics": ["AI"],
+                    "keySentences": ["Apple lawsuit claims new AI service used trade secrets."],
+                },
             },
         )
 
@@ -98,6 +106,7 @@ class NewsDigestEnqueuerTests(unittest.TestCase):
         self.assertNotIn("• 원문: https://example.test", job.text)
         self.assertIn("기사일: 07/11 09:00 KST", job.text)
         self.assertIn("분석: 기사 본문 읽음", job.text)
+        self.assertIn("기사 정보: 핵심 애플 관련 소송", job.text)
 
     def test_ignores_feed_only_article_by_default(self):
         queue = MemoryNotificationQueue()

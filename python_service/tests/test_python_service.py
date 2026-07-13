@@ -6272,6 +6272,12 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("HBM 수요 회복", evidence[0].summary)
         self.assertEqual("호재", evidence[0].raw_payload["stockImpactLabel"])
         self.assertIn("주가 영향", evidence[0].raw_payload["stockImpactReasonKo"])
+        article_facts = evidence[0].raw_payload["articleFacts"]
+        self.assertEqual("body", article_facts["readStatus"])
+        self.assertTrue(article_facts["bodyAvailable"])
+        self.assertGreater(article_facts["bodyCharCount"], 0)
+        self.assertIn("HBM", article_facts["topics"])
+        self.assertTrue(article_facts["keySentences"])
 
     def test_news_source_gateway_does_not_treat_social_feed_as_article_body(self):
         def fake_text(_url, headers=None):
@@ -6295,6 +6301,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("source-blocked", evidence.raw_payload["articleReadStatus"])
         self.assertEqual("source-quality-gate", evidence.raw_payload["articleAnalysisSource"])
         self.assertEqual("", evidence.raw_payload["articleTextPreview"])
+        self.assertEqual("source-blocked", evidence.raw_payload["articleFacts"]["readStatus"])
+        self.assertIn("본문", evidence.raw_payload["articleFacts"]["missingBodyReason"])
         self.assertLessEqual(evidence.raw_payload["sourceReliability"], 0.3)
 
     def test_news_collection_runner_stores_domestic_and_overseas_news(self):
@@ -8708,6 +8716,14 @@ class PythonServiceTests(unittest.TestCase):
                         "materialityScore": 78,
                         "stockImpactLabel": "호재",
                         "stockImpactReasonKo": "주가 영향은 긍정적으로 봅니다. 종목 직접 뉴스이고 실적 성격입니다.",
+                        "articleFacts": {
+                            "readStatus": "body",
+                            "readStatusLabel": "전체 본문 읽음",
+                            "eventTakeaway": "HBM 수요 회복과 메모리 가격 개선이 실적 기대를 키움",
+                            "numbers": ["81,000원"],
+                            "topics": ["HBM", "메모리"],
+                            "keySentences": ["삼성전자는 HBM 수요 회복과 메모리 가격 개선으로 실적 기대가 커졌습니다."],
+                        },
                     },
                 }
             ],
@@ -8727,6 +8743,8 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("<b>출처</b>", message)
         self.assertIn("주가 영향 호재", message)
         self.assertIn("기사일 2026-07-09", message)
+        self.assertIn("기사 분석: 전체 본문 읽음", message)
+        self.assertIn("핵심: HBM 수요 회복", message)
         self.assertIn("요약: 본문 요약: HBM 수요 회복", message)
         self.assertIn("영향 분석: 주가 영향은 긍정적으로 봅니다.", message)
         self.assertGreater(message.rfind("<b>출처</b>"), message.rfind("<b>실행 전 확인</b>"))

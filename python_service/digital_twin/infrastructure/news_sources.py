@@ -272,15 +272,35 @@ class NewsSourceGateway:
             polarity,
             impact_score,
         )
+        read_status = "body" if article_text else ("source-blocked" if not article_source_allowed else "feed-summary")
+        analysis_source = "article-body" if article_text else ("source-quality-gate" if not article_source_allowed else "feed-summary")
+        analysis_quality = "body-read" if article_text else ("source-blocked" if not article_source_allowed else "feed-only")
+        article_facts = news_domain.article_analysis_facts(
+            target,
+            title,
+            article_text,
+            feed_summary,
+            relevance,
+            stock_impact,
+            source,
+            provider,
+            link,
+            published,
+            read_status,
+            analysis_source,
+            analysis_quality,
+            summary_ko,
+        )
         symbol = target.normalized_symbol()
         payload = {
             **(metadata or {}),
             **relevance,
             **stock_impact,
             "articleSummaryKo": summary_ko,
-            "articleReadStatus": "body" if article_text else ("source-blocked" if not article_source_allowed else "feed-summary"),
-            "articleAnalysisSource": "article-body" if article_text else ("source-quality-gate" if not article_source_allowed else "feed-summary"),
-            "articleAnalysisQuality": "body-read" if article_text else ("source-blocked" if not article_source_allowed else "feed-only"),
+            "articleReadStatus": read_status,
+            "articleAnalysisSource": analysis_source,
+            "articleAnalysisQuality": analysis_quality,
+            "articleFacts": article_facts,
             "articleTextPreview": compact_text(article_text, 700) if article_text else "",
         }
         return ResearchEvidence(

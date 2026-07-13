@@ -168,6 +168,7 @@ class ResearchEvidence:
             "analysisSummary": str(payload.get("analysisSummary") or ""),
             "articleSummaryKo": str(payload.get("articleSummaryKo") or ""),
             "articleReadStatus": str(payload.get("articleReadStatus") or ""),
+            "articleFacts": dict(payload.get("articleFacts") or {}),
             "stockImpact": str(payload.get("stockImpact") or ""),
             "stockImpactLabel": str(payload.get("stockImpactLabel") or ""),
             "stockImpactPolarity": str(payload.get("stockImpactPolarity") or ""),

@@ -124,6 +124,46 @@ def article_analysis_label(item: Dict[str, object]) -> str:
     return "제목/RSS 요약만 사용"
 
 
+def article_facts(item: Dict[str, object]) -> Dict[str, object]:
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    for source in [item, payload]:
+        facts = source.get("articleFacts") if isinstance(source, dict) else None
+        if isinstance(facts, dict):
+            return facts
+    return {}
+
+
+def article_fact_list(facts: Dict[str, object], key: str, limit: int = 3) -> List[str]:
+    value = facts.get(key) if isinstance(facts, dict) else None
+    if not isinstance(value, list):
+        return []
+    rows: List[str] = []
+    for item in value:
+        text = bounded_text(item, 80)
+        if text and text not in rows:
+            rows.append(text)
+        if len(rows) >= limit:
+            break
+    return rows
+
+
+def article_facts_line(item: Dict[str, object]) -> str:
+    facts = article_facts(item)
+    if not facts:
+        return ""
+    pieces = []
+    takeaway = bounded_text(facts.get("eventTakeaway"), 120)
+    numbers = article_fact_list(facts, "numbers", 3)
+    topics = article_fact_list(facts, "topics", 4)
+    if takeaway:
+        pieces.append("핵심 " + takeaway)
+    if numbers:
+        pieces.append("수치 " + ", ".join(numbers))
+    if topics:
+        pieces.append("주제 " + ", ".join(topics))
+    return bounded_text(" · ".join(pieces), 260)
+
+
 def item_summary(item: Dict[str, object]) -> str:
     payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
     return (
@@ -413,6 +453,11 @@ class NewsDigestEnqueuer:
                 "• 제목: " + html_text(title),
                 "• 기사일: " + html_text(published_at) + ", 출처: " + html_text(source),
                 "• 분석: " + html_text(article_analysis_label(item)),
+            ])
+            facts_line = article_facts_line(item)
+            if facts_line:
+                item_lines.append("• 기사 정보: " + html_text(facts_line))
+            item_lines.extend([
                 "• 판단: 영향 " + html_text(impact_label(item)) + ", 신뢰도 " + html_text(reliability)
                 + (", 관련성 " + html_text(relevance) if relevance else "")
                 + (", 중요도 " + html_text(importance) if importance else ""),

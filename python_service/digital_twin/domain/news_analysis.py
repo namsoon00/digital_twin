@@ -7,6 +7,7 @@ from .market_data import clamp, number
 
 NEWS_ANALYSIS_VERSION = "news-analysis-v3-entity-linking"
 ARTICLE_DIGEST_VERSION = "article-digest-ko-v3"
+ARTICLE_FACTS_VERSION = "article-facts-v1"
 
 SUPPORT_KEYWORDS = (
     "beat",
@@ -1155,6 +1156,113 @@ def stock_impact_analysis(
         "stockImpactScore": round(number(impact_score), 1),
         "stockImpactReasonKo": compact_text(reason, 520),
     }
+
+
+def article_read_status_label(value: object) -> str:
+    status = str(value or "").strip()
+    if status == "body":
+        return "전체 본문 읽음"
+    if status == "source-blocked":
+        return "출처 품질 때문에 본문 미사용"
+    if status == "feed-summary":
+        return "RSS/제공 요약만 사용"
+    return "본문 확인 상태 미확인"
+
+
+def article_missing_body_reason(read_status: object, article_text: object) -> str:
+    if str(article_text or "").strip():
+        return ""
+    status = str(read_status or "").strip()
+    if status == "source-blocked":
+        return "소셜·블로그 등 낮은 신뢰도 출처는 본문을 투자 근거로 쓰지 않음"
+    if status == "feed-summary":
+        return "본문 수집이 실패했거나 본문 추출 결과가 부족해 RSS/제공 요약만 사용"
+    return "본문 원문이 수집되지 않음"
+
+
+def article_analysis_facts(
+    target: object,
+    title: object,
+    article_text: object = "",
+    feed_summary: object = "",
+    analysis: Dict[str, object] = None,
+    stock_impact: Dict[str, object] = None,
+    source: object = "",
+    provider: object = "",
+    url: object = "",
+    published: object = "",
+    read_status: object = "",
+    analysis_source: object = "",
+    analysis_quality: object = "",
+    summary_ko: object = "",
+) -> Dict[str, object]:
+    analysis = analysis if isinstance(analysis, dict) else {}
+    stock_impact = stock_impact if isinstance(stock_impact, dict) else {}
+    title_text = clean_article_title(title)
+    body_text = clean_article_summary_noise(compact_text(article_text, 5000))
+    feed_text = clean_article_summary_noise(compact_text(feed_summary, 1600))
+    source_text = body_text or feed_text or title_text
+    status = str(read_status or ("body" if body_text else "feed-summary")).strip()
+    event_type = str(analysis.get("eventType") or classify_news_event_type(title_text, source_text))
+    summary_text = str(summary_ko or "").strip() or korean_article_summary(
+        target,
+        title_text,
+        body_text,
+        feed_text,
+        analysis,
+    )
+    combined_text = title_text + " " + source_text
+    facts = {
+        "version": ARTICLE_FACTS_VERSION,
+        "readStatus": status,
+        "readStatusLabel": article_read_status_label(status),
+        "analysisSource": str(analysis_source or "").strip(),
+        "analysisQuality": str(analysis_quality or "").strip(),
+        "title": title_text,
+        "source": str(source or "").strip(),
+        "provider": str(provider or "").strip(),
+        "url": str(url or "").strip(),
+        "publishedAt": str(published or "").strip(),
+        "bodyAvailable": bool(body_text),
+        "bodyCharCount": len(body_text),
+        "feedSummaryAvailable": bool(feed_text),
+        "eventType": event_type,
+        "eventTypeLabel": event_type_label(event_type),
+        "relationScope": str(analysis.get("relationScope") or "").strip(),
+        "relationScopeLabel": relation_scope_label(analysis.get("relationScope")),
+        "relevanceScore": round(number(analysis.get("relevanceScore")), 1),
+        "materialityScore": round(number(analysis.get("materialityScore")), 1),
+        "sourceReliability": round(number(analysis.get("sourceReliability")), 2),
+        "summaryKo": compact_text(summary_text, 760),
+        "eventTakeaway": compact_text(article_event_takeaway(target, title_text, body_text, feed_text), 260),
+        "impactReasonKo": compact_text(stock_impact.get("stockImpactReasonKo") or "", 520),
+        "stockImpact": str(stock_impact.get("stockImpact") or "").strip(),
+        "stockImpactLabel": str(stock_impact.get("stockImpactLabel") or "").strip(),
+        "stockImpactPolarity": str(stock_impact.get("stockImpactPolarity") or "").strip(),
+        "stockImpactScore": round(number(stock_impact.get("stockImpactScore")), 1),
+        "topics": detected_topic_labels(combined_text, 6),
+        "numbers": numeric_highlights(source_text, 6),
+        "keySentences": article_sentence_candidates(source_text, target, analysis, 5),
+        "bodyPreview": compact_text(body_text, 700) if body_text else "",
+        "feedSummaryPreview": compact_text(feed_text, 360) if feed_text else "",
+        "missingBodyReason": article_missing_body_reason(status, body_text),
+        "collectedFields": [
+            "readStatus",
+            "title",
+            "source",
+            "provider",
+            "url",
+            "publishedAt",
+            "bodyAvailability",
+            "summaryKo",
+            "eventTakeaway",
+            "impactReasonKo",
+            "topics",
+            "numbers",
+            "keySentences",
+        ],
+    }
+    return facts
 
 
 def source_reliability_score(source: object, provider: object = "") -> float:

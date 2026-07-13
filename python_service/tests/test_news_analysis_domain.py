@@ -6,6 +6,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.domain.investment_research import NewsCollectionTarget, ResearchEvidence, research_evidence_from_facts
 from digital_twin.domain.news_analysis import (
+    article_analysis_facts,
     classify_news_relevance,
     classify_news_event_type,
     clean_article_summary_noise,
@@ -288,6 +289,41 @@ class NewsAnalysisDomainTests(unittest.TestCase):
         self.assertIn("비트코인 하락", summary)
         self.assertNotIn("관련 뉴스입니다", summary)
         self.assertNotIn("뉴스 유형은", summary)
+
+    def test_article_analysis_facts_collects_body_based_article_details(self):
+        target = NewsCollectionTarget("STRC", "Strategy Preferred", "US", "USD", "디지털자산")
+        title = "STRC and SATA Preferred Shares Hit Record $10B in Combined June Trading Volume Despite Bitcoin Dip"
+        body = (
+            "STRC and SATA preferred shares hit record $10B in combined June trading volume despite Bitcoin dip. "
+            "The article says investor demand for Strategy preferred shares stayed active while crypto prices weakened."
+        )
+        analysis = classify_news_relevance(target, title, body, "CryptoRank", "Google News US")
+        impact = stock_impact_analysis(target, title, body, "", analysis, "support", 12)
+
+        facts = article_analysis_facts(
+            target,
+            title,
+            body,
+            "",
+            analysis,
+            impact,
+            "CryptoRank",
+            "Google News US",
+            "https://example.test/strc",
+            "2026-07-11T00:25:00Z",
+            "body",
+            "article-body",
+            "body-read",
+            "",
+        )
+
+        self.assertEqual("body", facts["readStatus"])
+        self.assertTrue(facts["bodyAvailable"])
+        self.assertGreater(facts["bodyCharCount"], 40)
+        self.assertIn("$10B", facts["numbers"])
+        self.assertIn("비트코인", facts["topics"])
+        self.assertIn("합산 거래대금", facts["eventTakeaway"])
+        self.assertTrue(facts["keySentences"])
 
     def test_stock_impact_analysis_explains_event_channel_and_watchpoint(self):
         target = NewsCollectionTarget("STRC", "Strategy Preferred", "US", "USD", "디지털자산")

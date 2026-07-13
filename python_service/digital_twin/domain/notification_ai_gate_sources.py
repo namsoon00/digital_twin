@@ -395,6 +395,57 @@ def source_detail_raw_text(item: Dict[str, object], *keys: str) -> str:
     return ""
 
 
+def source_detail_article_facts(item: Dict[str, object]) -> Dict[str, object]:
+    if not isinstance(item, dict):
+        return {}
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    raw_payload = item.get("rawPayload") if isinstance(item.get("rawPayload"), dict) else {}
+    for source in [item, payload, raw_payload]:
+        facts = source.get("articleFacts") if isinstance(source, dict) else None
+        if isinstance(facts, dict):
+            return facts
+    return {}
+
+
+def source_detail_fact_list(facts: Dict[str, object], key: str, limit: int = 3) -> List[str]:
+    if not isinstance(facts, dict):
+        return []
+    value = facts.get(key)
+    if not isinstance(value, list):
+        return []
+    rows: List[str] = []
+    for item in value:
+        text = _text(item, 120)
+        if text and text not in rows:
+            rows.append(text)
+        if len(rows) >= limit:
+            break
+    return rows
+
+
+def source_detail_article_fact_rows(item: Dict[str, object]) -> List[str]:
+    facts = source_detail_article_facts(item)
+    if not facts:
+        return []
+    rows: List[str] = []
+    pieces: List[str] = []
+    status = _text(facts.get("readStatusLabel"), 60)
+    takeaway = _text(facts.get("eventTakeaway"), 170)
+    topics = source_detail_fact_list(facts, "topics", 4)
+    numbers = source_detail_fact_list(facts, "numbers", 4)
+    if status:
+        pieces.append(status)
+    if takeaway:
+        pieces.append("핵심: " + takeaway)
+    if numbers:
+        pieces.append("주요 수치: " + ", ".join(numbers))
+    if topics:
+        pieces.append("주제: " + ", ".join(topics))
+    if pieces:
+        rows.append(_text("기사 분석: " + " · ".join(pieces), 560))
+    return rows
+
+
 def source_date_label(url: str, item: Dict[str, object]) -> str:
     kind = str((item or {}).get("kind") or "").strip().lower() if isinstance(item, dict) else ""
     text = str(url or "").lower()
@@ -491,6 +542,8 @@ def source_url_rows(urls: List[str], context: Dict[str, object]) -> List[str]:
         ] if item)
         if meta:
             rows.append("  " + html.escape(meta, quote=False))
+        for fact_row in source_detail_article_fact_rows(detail):
+            rows.append("  " + html.escape(fact_row, quote=False))
         if summary and summary != title:
             rows.append("  " + html.escape("요약: " + summary, quote=False))
         if impact_reason:

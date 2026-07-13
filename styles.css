@@ -18707,6 +18707,12 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
 [data-card-type="evidence-card"],
 [data-card-type="action-queue-card"],
 [data-card-type="config-panel"],
+[data-card-type="process-card"],
+[data-card-type="source-card"],
+[data-card-type="diagnostic-card"],
+[data-card-type="signal-card"],
+[data-card-type="relationship-card"],
+[data-card-type="reference-card"],
 [data-card-type="empty-state"] {
   border-color: var(--ds-card-border);
   border-left-color: var(--card-type-accent);
@@ -18743,6 +18749,45 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
 [data-card-type="config-panel"] {
   background:
     linear-gradient(180deg, color-mix(in srgb, var(--ds-card-head-bg) 72%, var(--ds-card-bg)), var(--ds-card-bg));
+}
+
+[data-card-type="process-card"] {
+  --card-type-accent: var(--blue);
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--blue-soft) 34%, transparent), transparent 44%),
+    var(--ds-card-bg);
+}
+
+[data-card-type="source-card"] {
+  --card-type-accent: var(--green);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--ds-card-head-bg) 62%, var(--ds-card-bg)), var(--ds-card-bg));
+}
+
+[data-card-type="diagnostic-card"] {
+  --card-type-accent: var(--amber);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--card-type-soft-bg) 58%, var(--ds-card-bg)), var(--ds-card-bg));
+}
+
+[data-card-type="signal-card"] {
+  --card-type-accent: var(--blue);
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--card-type-soft-bg) 48%, transparent), transparent 50%),
+    var(--ds-card-bg);
+}
+
+[data-card-type="relationship-card"] {
+  --card-type-accent: var(--violet);
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--violet-soft) 46%, transparent), transparent 48%),
+    var(--ds-card-bg);
+}
+
+[data-card-type="reference-card"] {
+  --card-type-accent: var(--muted);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--ds-card-head-bg) 45%, var(--ds-card-bg)), var(--ds-card-bg));
 }
 
 [data-card-type="empty-state"] {
@@ -18785,10 +18830,40 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
     border-left-width: 3px;
   }
 
+  [data-card-type="process-card"] {
+    border-left-width: 3px;
+  }
+
+  [data-card-type="source-card"] {
+    border-left-width: 3px;
+  }
+
+  [data-card-type="diagnostic-card"] {
+    border-left-width: 4px;
+  }
+
+  [data-card-type="signal-card"] {
+    border-left-width: 4px;
+  }
+
+  [data-card-type="relationship-card"] {
+    --card-type-accent: var(--violet);
+    border-left-width: 4px;
+  }
+
+  [data-card-type="reference-card"] {
+    border-left-width: 2px;
+  }
+
   [data-card-type="ledger-row"]:hover,
   [data-card-type="decision-row"]:hover,
   [data-card-type="evidence-card"]:hover,
-  [data-card-type="action-queue-card"]:hover {
+  [data-card-type="action-queue-card"]:hover,
+  [data-card-type="process-card"]:hover,
+  [data-card-type="source-card"]:hover,
+  [data-card-type="diagnostic-card"]:hover,
+  [data-card-type="signal-card"]:hover,
+  [data-card-type="relationship-card"]:hover {
     border-color: color-mix(in srgb, var(--card-type-accent) 62%, var(--ds-card-border));
     background-color: color-mix(in srgb, var(--card-type-soft-bg) 42%, var(--ds-card-bg));
   }

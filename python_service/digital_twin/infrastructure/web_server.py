@@ -468,6 +468,7 @@ def settings_status_payload() -> Dict[str, object]:
         "newsCollectionPerSymbolLimit",
         "newsCollectionProviders",
         "newsCollectionMinRelevanceScore",
+        "newsCollectionRequireArticleBodyForRss",
         "newsCollectionIncludeWatchlist",
         "newsCollectionIncludeHoldings",
         "newsCollectionRateLimitSeconds",

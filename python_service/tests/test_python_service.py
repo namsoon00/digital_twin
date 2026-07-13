@@ -29,7 +29,7 @@ from digital_twin.cli import preserve_existing_secrets
 from digital_twin.cli import build_parser
 from digital_twin.domain.accounts import AccountConfig
 from digital_twin.domain.external_signal_quality import attach_external_signal_quality
-from digital_twin.domain.investment_research import NewsCollectionTarget, build_active_investment_opinion, research_evidence_from_facts
+from digital_twin.domain.investment_research import NewsCollectionTarget, ResearchEvidence, build_active_investment_opinion, research_evidence_from_facts
 from digital_twin.domain.market_data import normalize_position, technical_indicators_from_candles
 from digital_twin.domain.message_types import DEFAULT_ALERT_RULES, DEFAULT_CADENCE, MESSAGE_TYPE_EMOJIS, MESSAGE_TYPE_LABELS, public_message_catalog
 from digital_twin.domain.ontology_contracts import OntologyEntity, OntologyRelation, entity_id
@@ -6310,13 +6310,157 @@ class PythonServiceTests(unittest.TestCase):
             "2026-07-11T00:00:00Z",
         )
 
-        self.assertIsNotNone(evidence)
-        self.assertEqual("source-blocked", evidence.raw_payload["articleReadStatus"])
-        self.assertEqual("source-quality-gate", evidence.raw_payload["articleAnalysisSource"])
-        self.assertEqual("", evidence.raw_payload["articleTextPreview"])
-        self.assertEqual("source-blocked", evidence.raw_payload["articleFacts"]["readStatus"])
-        self.assertIn("본문", evidence.raw_payload["articleFacts"]["missingBodyReason"])
-        self.assertLessEqual(evidence.raw_payload["sourceReliability"], 0.3)
+        self.assertIsNone(evidence)
+
+    def test_news_source_gateway_skips_rss_without_article_body_and_continues_providers(self):
+        published = datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S GMT")
+
+        def fake_text(url, headers=None):
+            if "feeds.finance.yahoo.com" in url:
+                return (
+                    "<rss><channel><item>"
+                    "<title>Apple shares rise after services update</title>"
+                    "<link>https://finance.yahoo.com/news/apple-services</link>"
+                    "<pubDate>" + published + "</pubDate>"
+                    "<description>Apple services revenue and margin update</description>"
+                    "</item></channel></rss>"
+                )
+            if str(url).endswith("/apple-services"):
+                return (
+                    "<html><body><article>"
+                    "<p>Apple shares rose after services revenue and margins improved more than analysts expected.</p>"
+                    "<p>Investors are watching whether recurring revenue can support earnings growth.</p>"
+                    "</article></body></html>"
+                )
+            if "news.google.com" in url and "rss/search" in url:
+                return (
+                    "<rss><channel><item>"
+                    "<title>Apple services update lifts shares</title>"
+                    "<link>https://news.google.com/rss/articles/no-body</link>"
+                    "<pubDate>" + published + "</pubDate>"
+                    "<description>Apple services update</description>"
+                    "<source>Google News</source>"
+                    "</item></channel></rss>"
+                )
+            return "<html><body><p>Comprehensive up-to-date news coverage, aggregated from sources all over the world by Google News.</p></body></html>"
+
+        gateway = NewsSourceGateway({
+            "newsCollectionProviders": "google_rss_us,yahoo_finance",
+            "newsCollectionPerSymbolLimit": "4",
+            "newsCollectionLookbackMinutes": "1440",
+            "newsCollectionMinRelevanceScore": "35",
+        }, fetch_text=fake_text)
+
+        items, statuses = gateway.collect_for_target(NewsCollectionTarget("AAPL", "Apple", "NASDAQ", "USD", "Technology"))
+
+        self.assertEqual(1, len(items))
+        self.assertEqual("Yahoo Finance RSS", items[0].raw_payload["provider"])
+        self.assertEqual("body", items[0].raw_payload["articleReadStatus"])
+        self.assertTrue(items[0].raw_payload["articleFacts"]["bodyAvailable"])
+        self.assertEqual({"google_rss_us": 0, "yahoo_finance": 1}, {item["source"]: item["count"] for item in statuses})
+
+    def test_yahoo_finance_rss_maps_kr_symbol_to_yahoo_suffix(self):
+        published = datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S GMT")
+        calls = []
+
+        def fake_text(url, headers=None):
+            calls.append(str(url))
+            if "feeds.finance.yahoo.com" in url:
+                return (
+                    "<rss><channel><item>"
+                    "<title>Samsung Electronics memory demand improves</title>"
+                    "<link>https://finance.yahoo.com/news/samsung-memory</link>"
+                    "<pubDate>" + published + "</pubDate>"
+                    "<description>Samsung Electronics memory demand update</description>"
+                    "</item></channel></rss>"
+                )
+            return (
+                "<html><body><article>"
+                "<p>Samsung Electronics memory demand improved as customers increased semiconductor orders.</p>"
+                "<p>Analysts are watching whether earnings recover with higher chip prices.</p>"
+                "</article></body></html>"
+            )
+
+        gateway = NewsSourceGateway({
+            "newsCollectionPerSymbolLimit": "5",
+            "newsCollectionLookbackMinutes": "1440",
+            "newsCollectionMinRelevanceScore": "35",
+        }, fetch_text=fake_text)
+
+        evidence = gateway.fetch_yahoo_finance_rss(
+            NewsCollectionTarget("005930", "Samsung Electronics", "KOSPI", "KRW", "반도체"),
+        )
+
+        self.assertEqual(1, len(evidence))
+        self.assertIn("s=005930.KS", calls[0])
+        self.assertEqual("Yahoo Finance RSS", evidence[0].raw_payload["provider"])
+        self.assertEqual("body", evidence[0].raw_payload["articleReadStatus"])
+
+    def test_news_collection_runner_deletes_existing_feed_only_rss_evidence(self):
+        path = test_store_seed(self.temp.name)
+        store = TestResearchEvidenceStore(path)
+        now = utc_now_iso()
+        old_feed_only = ResearchEvidence(
+            "research:AAPL:news:old-google-rss",
+            "AAPL",
+            "news",
+            "Google News US",
+            "Apple services update lifts shares",
+            "RSS summary only",
+            "https://news.google.com/rss/articles/example",
+            now,
+            "context",
+            10,
+            0.5,
+            now,
+            {
+                "provider": "Google News US",
+                "articleReadStatus": "feed-summary",
+                "articleFacts": {"readStatus": "feed-summary", "bodyAvailable": False},
+            },
+        )
+        body_backed = ResearchEvidence(
+            "research:AAPL:news:yahoo-body",
+            "AAPL",
+            "news",
+            "Yahoo Finance",
+            "Apple earnings article",
+            "본문 요약",
+            "https://finance.yahoo.com/news/apple-earnings",
+            now,
+            "support",
+            70,
+            0.7,
+            now,
+            {
+                "provider": "Yahoo Finance RSS",
+                "articleReadStatus": "body",
+                "articleFacts": {"readStatus": "body", "bodyAvailable": True, "bodyCharCount": 1200},
+            },
+        )
+        store.upsert_many([old_feed_only, body_backed])
+        runner = NewsCollectionRunner(
+            account_repository=SimpleNamespace(load=lambda: []),
+            monitor_store=TestMonitorStore(path),
+            symbol_store=TestSymbolUniverseStore(path),
+            evidence_store=store,
+            gateway=SimpleNamespace(collect_for_target=lambda _target: ([], []), providers=lambda: []),
+            settings={
+                "newsCollectionEnabled": "1",
+                "newsEvidenceCleanupEnabled": "1",
+                "newsCollectionRequireArticleBodyForRss": "1",
+                "newsEvidenceCleanupBatchSize": "50",
+            },
+            event_publisher=EventBus(),
+            sleep_fn=lambda _: None,
+        )
+
+        result = runner.run_once(force=True)
+        remaining_ids = {item.evidence_id for item in store.latest(kind="news", limit=10)}
+
+        self.assertEqual(1, result["feedOnlyRssCleanup"]["deleted"])
+        self.assertNotIn(old_feed_only.evidence_id, remaining_ids)
+        self.assertIn(body_backed.evidence_id, remaining_ids)
 
     def test_news_collection_runner_stores_domestic_and_overseas_news(self):
         path = test_store_seed(self.temp.name)
@@ -6333,6 +6477,20 @@ class PythonServiceTests(unittest.TestCase):
         published = datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S GMT")
 
         def fake_text(url, headers=None):
+            if str(url).endswith("/samsung"):
+                return (
+                    "<html><body><article>"
+                    "<p>삼성전자 반도체 실적 기대가 커지고 메모리 수요 회복이 확인됐습니다.</p>"
+                    "<p>투자자들은 다음 분기 이익 개선 폭을 확인하고 있습니다.</p>"
+                    "</article></body></html>"
+                )
+            if str(url).endswith("/apple"):
+                return (
+                    "<html><body><article>"
+                    "<p>Apple shares rose after a services update showed stronger recurring revenue.</p>"
+                    "<p>Investors are watching margin improvement and customer retention.</p>"
+                    "</article></body></html>"
+                )
             query = urllib.parse.parse_qs(urllib.parse.urlparse(url).query).get("q", [""])[0]
             if "005930" in query or "삼성전자" in query:
                 title = "삼성전자 반도체 실적 기대"

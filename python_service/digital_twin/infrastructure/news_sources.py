@@ -20,6 +20,24 @@ TextFetcher = Callable[[str, Dict[str, str]], str]
 TAG_RE = re.compile(r"<[^>]+>")
 DISABLED_VALUES = {"0", "false", "no", "off", "disabled"}
 ARTICLE_TEXT_LIMIT = 5000
+DEFAULT_NEWS_COLLECTION_PROVIDERS = ["yahoo_finance", "gdelt"]
+RSS_PROVIDER_NAMES = {
+    "google_rss_kr",
+    "google_rss_us",
+    "google_news_kr",
+    "google_news_us",
+    "rss_kr",
+    "rss_us",
+    "kr",
+    "us",
+    "yahoo_finance",
+    "yahoo_finance_rss",
+    "yahoo_rss",
+}
+GOOGLE_NEWS_BODY_NOISE = [
+    "comprehensive up-to-date news coverage",
+    "aggregated from sources all over the world by google news",
+]
 
 
 def default_json_fetcher(url: str, headers: Dict[str, str] = None, timeout: float = 8.0) -> object:
@@ -71,6 +89,7 @@ def article_block_is_useful(text: object) -> bool:
         "subscribe",
         "sign up",
         "all rights reserved",
+        *GOOGLE_NEWS_BODY_NOISE,
         "개인정보",
         "구독",
         "광고",
@@ -202,7 +221,7 @@ class NewsSourceGateway:
             item.lower().replace("-", "_")
             for item in split_csv(
                 self.settings.get("newsCollectionProviders"),
-                ["google_rss_kr", "google_rss_us", "gdelt"],
+                DEFAULT_NEWS_COLLECTION_PROVIDERS,
             )
         ]
 
@@ -217,6 +236,16 @@ class NewsSourceGateway:
 
     def article_body_enabled(self) -> bool:
         return truthy(self.settings.get("newsCollectionArticleBodyEnabled"), True)
+
+    def require_article_body_for_rss(self) -> bool:
+        return truthy(self.settings.get("newsCollectionRequireArticleBodyForRss"), True)
+
+    def provider_is_rss(self, provider: object) -> bool:
+        normalized = re.sub(r"[\s-]+", "_", str(provider or "").strip().lower())
+        return normalized in RSS_PROVIDER_NAMES
+
+    def provider_requires_article_body(self, provider: object) -> bool:
+        return self.provider_is_rss(provider) and self.require_article_body_for_rss()
 
     def article_text_for_url(self, url: str) -> str:
         if not self.article_body_enabled():
@@ -249,6 +278,8 @@ class NewsSourceGateway:
             return None
         article_source_allowed = article_body_allowed_for_source(source, provider)
         article_text = self.article_text_for_url(link) if article_source_allowed else ""
+        if not article_text and self.provider_requires_article_body(provider):
+            return None
         analysis_text = article_text or feed_summary or title
         relevance = classify_news_relevance(target, title, analysis_text, source, provider)
         if number(relevance.get("relevanceScore")) < self.min_relevance_score() or not news_domain.relation_scope_is_investable(relevance.get("relationScope")):
@@ -334,23 +365,85 @@ class NewsSourceGateway:
                     seen.add(key)
                     items.append(item)
                     saved += 1
-                    if len(items) >= self.per_symbol_limit():
+                    if saved >= self.per_symbol_limit():
                         break
                 statuses.append({"source": provider, "symbol": target.normalized_symbol(), "ok": True, "count": saved})
             except Exception as error:  # noqa: BLE001 - one feed must not stop the collection cycle.
                 statuses.append({"source": provider, "symbol": target.normalized_symbol(), "ok": False, "message": str(error)[:180]})
-            if len(items) >= self.per_symbol_limit():
-                break
-        return items, statuses
+        ranked = sorted(items, key=self.evidence_rank_key, reverse=True)
+        return ranked[: self.per_symbol_limit()], statuses
+
+    def evidence_rank_key(self, item: ResearchEvidence) -> Tuple[float, float, float, float]:
+        payload = item.raw_payload if isinstance(item.raw_payload, dict) else {}
+        facts = payload.get("articleFacts") if isinstance(payload.get("articleFacts"), dict) else {}
+        body_score = 1.0 if facts.get("bodyAvailable") else 0.0
+        reliability = number(payload.get("sourceReliability") or facts.get("sourceReliability"))
+        materiality = number(payload.get("materialityScore") or facts.get("materialityScore") or item.impact_score)
+        published = parse_news_datetime(item.published_at or item.observed_at)
+        timestamp = published.timestamp() if published else 0.0
+        return body_score, reliability, materiality, timestamp
 
     def fetch_provider(self, provider: str, target: NewsCollectionTarget) -> List[ResearchEvidence]:
         if provider in {"google_rss_kr", "rss_kr", "kr"}:
             return self.fetch_google_news_rss(target, locale="KR")
         if provider in {"google_rss_us", "rss_us", "us"}:
             return self.fetch_google_news_rss(target, locale="US")
+        if provider in {"yahoo_finance", "yahoo_finance_rss", "yahoo_rss"}:
+            return self.fetch_yahoo_finance_rss(target)
         if provider == "gdelt":
             return self.fetch_gdelt(target)
         return []
+
+    def yahoo_finance_symbol(self, target: NewsCollectionTarget) -> str:
+        symbol = target.normalized_symbol()
+        market = str(target.market or "").upper().strip()
+        if "." in symbol:
+            return symbol
+        if market == "KOSDAQ":
+            return symbol + ".KQ"
+        if market in {"KR", "KOSPI", "KRX"} or (symbol.isdigit() and len(symbol) == 6):
+            return symbol + ".KS"
+        return symbol
+
+    def fetch_yahoo_finance_rss(self, target: NewsCollectionTarget) -> List[ResearchEvidence]:
+        yahoo_symbol = self.yahoo_finance_symbol(target)
+        params = {
+            "s": yahoo_symbol,
+            "region": "US",
+            "lang": "en-US",
+        }
+        url = "https://feeds.finance.yahoo.com/rss/2.0/headline?" + urllib.parse.urlencode(params)
+        xml_text = self.fetch_text(url, {"Accept": "application/rss+xml", "User-Agent": "DigitalTwin/1.0"})
+        root = ET.fromstring(xml_text)
+        evidence: List[ResearchEvidence] = []
+        for item in root.findall(".//item"):
+            title = strip_html(item.findtext("title"))
+            link = str(item.findtext("link") or "").strip()
+            published = item.findtext("pubDate") or ""
+            if not title or not link or not within_lookback(published, self.lookback_minutes()):
+                continue
+            source_text = strip_html(item.findtext("source")) or "Yahoo Finance"
+            summary = strip_html(item.findtext("description"))
+            item_evidence = self.news_evidence_from_article(
+                target,
+                "Yahoo Finance RSS",
+                source_text,
+                title,
+                summary,
+                link,
+                published,
+                {
+                    "provider": "Yahoo Finance RSS",
+                    "query": yahoo_symbol,
+                    "feedUrl": url,
+                },
+            )
+            if not item_evidence:
+                continue
+            evidence.append(item_evidence)
+            if len(evidence) >= self.per_symbol_limit():
+                break
+        return evidence
 
     def fetch_google_news_rss(self, target: NewsCollectionTarget, locale: str = "KR") -> List[ResearchEvidence]:
         symbol = target.normalized_symbol()

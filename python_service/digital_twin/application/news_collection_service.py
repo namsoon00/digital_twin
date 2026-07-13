@@ -14,6 +14,7 @@ from ..domain.symbol_universe import ListedSymbol, normalize_market
 
 
 DISABLED_VALUES = {"0", "false", "no", "off", "disabled"}
+RSS_PROVIDER_MARKERS = ("google news", "google_rss", "yahoo finance rss", "yahoo_finance", "rss")
 
 
 def truthy(value: object, default: bool = True) -> bool:
@@ -79,6 +80,38 @@ def evidence_age_minutes(item: ResearchEvidence, now=None):
     return age_minutes(parsed.isoformat(), now=now)
 
 
+def evidence_payload(item: ResearchEvidence) -> Dict[str, object]:
+    payload = getattr(item, "raw_payload", {})
+    return payload if isinstance(payload, dict) else {}
+
+
+def evidence_article_facts(item: ResearchEvidence) -> Dict[str, object]:
+    facts = evidence_payload(item).get("articleFacts")
+    return facts if isinstance(facts, dict) else {}
+
+
+def evidence_provider_text(item: ResearchEvidence) -> str:
+    payload = evidence_payload(item)
+    return str(payload.get("provider") or getattr(item, "source", "") or "").strip().lower()
+
+
+def evidence_is_rss_source(item: ResearchEvidence) -> bool:
+    provider = evidence_provider_text(item).replace("-", "_")
+    return any(marker in provider for marker in RSS_PROVIDER_MARKERS)
+
+
+def evidence_has_article_body(item: ResearchEvidence) -> bool:
+    facts = evidence_article_facts(item)
+    if "bodyAvailable" in facts:
+        return bool(facts.get("bodyAvailable"))
+    status = str(evidence_payload(item).get("articleReadStatus") or facts.get("readStatus") or "").strip()
+    return status == "body"
+
+
+def evidence_is_feed_only_rss(item: ResearchEvidence) -> bool:
+    return getattr(item, "kind", "") == "news" and evidence_is_rss_source(item) and not evidence_has_article_body(item)
+
+
 class NewsCollectionRunner:
     def __init__(
         self,
@@ -130,6 +163,9 @@ class NewsCollectionRunner:
     def keep_undated_news(self) -> bool:
         return truthy(self.settings.get("newsEvidenceKeepUndated"), False)
 
+    def require_article_body_for_rss(self) -> bool:
+        return truthy(self.settings.get("newsCollectionRequireArticleBodyForRss"), True)
+
     def stale_cutoff_iso(self) -> str:
         return utc_iso(datetime.now(timezone.utc) - timedelta(minutes=self.max_news_age_minutes()))
 
@@ -142,6 +178,21 @@ class NewsCollectionRunner:
             return {"enabled": True, "deleted": deleted, "cutoffIso": cutoff, "maxAgeMinutes": self.max_news_age_minutes()}
         except Exception as error:  # noqa: BLE001 - cleanup failure should not stop fresh collection.
             return {"enabled": True, "deleted": 0, "cutoffIso": cutoff, "status": "error", "message": str(error)[:180], "maxAgeMinutes": self.max_news_age_minutes()}
+
+    def delete_feed_only_rss_news(self) -> Dict[str, object]:
+        enabled = self.cleanup_enabled() and self.require_article_body_for_rss()
+        if not enabled or not hasattr(self.evidence_store, "latest") or not hasattr(self.evidence_store, "delete"):
+            return {"enabled": enabled, "deleted": 0}
+        try:
+            items = self.evidence_store.latest(kind="news", limit=self.cleanup_batch_size())
+            targets = [item for item in items if evidence_is_feed_only_rss(item)]
+            deleted = 0
+            for item in targets:
+                if self.evidence_store.delete(item.evidence_id):
+                    deleted += 1
+            return {"enabled": True, "deleted": deleted, "scanned": len(items), "reason": "rssFeedOnlyWithoutArticleBody"}
+        except Exception as error:  # noqa: BLE001 - cleanup failure should not stop fresh collection.
+            return {"enabled": True, "deleted": 0, "status": "error", "message": str(error)[:180]}
 
     def fresh_news_items(self, items: Iterable[ResearchEvidence]) -> Tuple[List[ResearchEvidence], List[ResearchEvidence]]:
         now = datetime.now(timezone.utc)
@@ -260,9 +311,10 @@ class NewsCollectionRunner:
         if not self.enabled() and not force:
             return {"status": "disabled", "targetCount": 0, "fetchedCount": 0, "savedCount": 0}
         cleanup = self.delete_stale_news()
+        feed_only_cleanup = self.delete_feed_only_rss_news()
         targets = self.targets()
         if not targets:
-            return {"status": "noTargets", "targetCount": 0, "fetchedCount": 0, "savedCount": 0, "staleDeletedCount": cleanup.get("deleted", 0), "staleCleanup": cleanup}
+            return {"status": "noTargets", "targetCount": 0, "fetchedCount": 0, "savedCount": 0, "staleDeletedCount": cleanup.get("deleted", 0), "staleCleanup": cleanup, "feedOnlyRssCleanup": feed_only_cleanup}
         collected: List[ResearchEvidence] = []
         stale_items: List[ResearchEvidence] = []
         statuses: List[Dict[str, object]] = []
@@ -302,6 +354,7 @@ class NewsCollectionRunner:
             "staleSkippedCount": len(stale_items),
             "staleDeletedCount": cleanup.get("deleted", 0),
             "staleCleanup": cleanup,
+            "feedOnlyRssCleanup": feed_only_cleanup,
             "changedSymbols": changed_symbols,
             "materialChangedCount": len(material_items),
             "materialChangedSymbols": material_symbols,

@@ -39,6 +39,7 @@ from .notification_ai_gate_text import (
     user_friendly_ai_list,
     user_friendly_ai_text,
 )
+from .notification_ai_context import is_watchlist_context, target_position_role
 
 
 def _execution_plan_from_context(context: Dict[str, object]) -> Dict[str, object]:
@@ -139,6 +140,71 @@ def default_next_checks_for_action(action: str) -> List[str]:
     if action == "AVOID":
         return ["부정 뉴스·공시 해소 여부와 다음 가격·수급 반응 확인"]
     return ["다음 데이터 업데이트에서 같은 관계 규칙과 반대 근거를 다시 확인"]
+
+def normalized_action_for_target(context: Dict[str, object], action: str) -> str:
+    clean = str(action or "").strip().upper()
+    if clean not in VALID_ACTIONS:
+        return clean
+    if not is_watchlist_context(context or {}):
+        return clean
+    if clean == "ADD":
+        return "BUY"
+    if clean in {"TRIM", "SELL"}:
+        return "AVOID"
+    return clean
+
+def action_label_for_target(context: Dict[str, object], action: str) -> str:
+    clean = str(action or "").strip().upper()
+    if is_watchlist_context(context or {}):
+        return {
+            "BUY": "소액 진입 검토",
+            "ADD": "소액 진입 검토",
+            "HOLD": "관심 유지",
+            "TRIM": "신규 진입 보류",
+            "SELL": "신규 진입 회피",
+            "AVOID": "신규 진입 회피",
+        }.get(clean, ACTION_LABELS.get(clean, clean))
+    return ACTION_LABELS.get(clean, clean)
+
+def watchlist_friendly_text(context: Dict[str, object], value: object) -> str:
+    text = str(value or "").strip()
+    if not text or not is_watchlist_context(context or {}):
+        return text
+    replacements = [
+        ("보유가 맞습니다", "관심종목으로 지켜보는 게 맞습니다"),
+        ("보유가 가장 적절합니다", "관심 상태를 유지하는 게 가장 적절합니다"),
+        ("보유가 적절합니다", "관심 상태를 유지하는 게 적절합니다"),
+        ("보유를 유지", "관심 상태를 유지"),
+        ("보유하며", "관심종목으로 지켜보며"),
+        ("보유하면서", "관심종목으로 지켜보면서"),
+        ("보유 의견", "관심 유지 의견"),
+        ("보유 판단", "관심 유지 판단"),
+        ("보유 유지", "관심 유지"),
+        ("새로 더 사기", "새로 들어가기"),
+        ("추가매수", "신규 진입"),
+        ("분할축소", "신규 진입 보류"),
+        ("매도 가능 수량", "진입 예정 금액"),
+        ("매도 의견", "신규 진입 회피 의견"),
+        ("매도 기준", "신규 진입 회피 기준"),
+        ("매도 강도", "신규 진입 회피 강도"),
+    ]
+    for before, after in replacements:
+        text = text.replace(before, after)
+    return " ".join(text.split())
+
+def watchlist_friendly_rows(context: Dict[str, object], rows: List[str]) -> List[str]:
+    return [watchlist_friendly_text(context, item) for item in rows or []]
+
+def append_watchlist_action_warning(context: Dict[str, object], original: str, normalized: str, warnings: List[str]) -> None:
+    if not is_watchlist_context(context or {}) or original == normalized:
+        return
+    warnings.append(
+        "관심종목은 보유 물량이 아니므로 "
+        + ACTION_LABELS.get(original, original)
+        + " 액션을 "
+        + action_label_for_target(context, normalized)
+        + " 기준으로 보정했습니다."
+    )
 
 def signed_percent_from_text(value: object) -> float:
     match = re.search(r"[-+]?\d+(?:\.\d+)?\s*%", str(value or ""))
@@ -251,6 +317,8 @@ def local_validated_ai_response(context: Dict[str, object], source: str = "local
             or _line_after_colon(lines, "판단")
             or _line_after_colon(raw_lines, "권장 액션")
         )
+    original_action = action
+    action = normalized_action_for_target(context, action)
     confidence = _clamp((opinion or {}).get("conviction") if isinstance(opinion, dict) else 0, 0, 100)
     if not confidence:
         confidence = 60.0
@@ -296,21 +364,24 @@ def local_validated_ai_response(context: Dict[str, object], source: str = "local
     missing_impact = list(execution_plan.get("missingDataImpact") or []) if isinstance(execution_plan.get("missingDataImpact"), list) else []
     if not missing_impact:
         missing_impact = [item + "는 결론 강도를 낮추는 요소입니다." for item in missing[:4]]
+    warnings: List[str] = []
+    append_watchlist_action_warning(context, original_action, action, warnings)
     return soften_low_confidence_sell(context, NotificationAIValidatedResponse(
         action=action,
-        action_label=ACTION_LABELS.get(action, action),
+        action_label=action_label_for_target(context, action),
         confidence=confidence,
         original_confidence=confidence,
-        summary=user_friendly_ai_text(_line_after_colon(lines, "해석") or _line_after_colon(raw_lines, "핵심 결론") or "관계 분석 실행 계획이 생성됐습니다."),
-        opinion=user_friendly_ai_text(str(execution_plan.get("primaryActionLabel") or "").strip() or _line_after_colon(lines, "의견") or _line_after_colon(raw_lines, "권장 액션") or "다음 데이터에서도 같은 신호가 유지되는지 확인하세요."),
-        evidence=user_friendly_ai_list(evidence, 5),
-        counter_evidence=user_friendly_ai_list(counter, 4),
-        invalidation_condition=user_friendly_ai_text(invalidation, 220),
-        next_checks=user_friendly_ai_list([next_check], 3),
-        missing_data_impact=user_friendly_ai_list(missing_impact, 4),
+        summary=watchlist_friendly_text(context, user_friendly_ai_text(_line_after_colon(lines, "해석") or _line_after_colon(raw_lines, "핵심 결론") or "관계 분석 실행 계획이 생성됐습니다.")),
+        opinion=watchlist_friendly_text(context, user_friendly_ai_text(str(execution_plan.get("primaryActionLabel") or "").strip() or _line_after_colon(lines, "의견") or _line_after_colon(raw_lines, "권장 액션") or "다음 데이터에서도 같은 신호가 유지되는지 확인하세요.")),
+        evidence=watchlist_friendly_rows(context, user_friendly_ai_list(evidence, 5)),
+        counter_evidence=watchlist_friendly_rows(context, user_friendly_ai_list(counter, 4)),
+        invalidation_condition=watchlist_friendly_text(context, user_friendly_ai_text(invalidation, 220)),
+        next_checks=watchlist_friendly_rows(context, user_friendly_ai_list([next_check], 3)),
+        missing_data_impact=watchlist_friendly_rows(context, user_friendly_ai_list(missing_impact, 4)),
         source_urls=source_urls_from_context(context),
         precomputed_action=precomputed_action_value(context),
         reference_date=reference_date(context),
+        validation_warnings=warnings,
         source=source,
     ))
 
@@ -369,6 +440,7 @@ def ai_decision_input_packet(
         "precomputedExecutionPlanCandidate": execution_plan,
         "ontologyDecisionDrivers": decision_drivers,
         "messageDeliveryProfile": delivery_profile,
+        "targetPositionRole": target_position_role(context),
     }
 
 def build_notification_ai_gate_prompt(context: Dict[str, object]) -> str:
@@ -402,6 +474,7 @@ def build_notification_ai_gate_prompt(context: Dict[str, object]) -> str:
         "evidence에는 가능한 한 숫자나 원문 제목을 넣는다. '가격 흐름이 약하다'처럼 뻔한 말만 쓰지 말고 현재가/평단가/수익률/5일선/20일선/60일선/거래량/BTC/금리/환율/뉴스 제목 중 제공된 값을 구체적으로 연결한다.",
         "MSTR, STRC 등 비트코인 민감 종목이면 BTC 24시간·7일 변동과 보유 종목 가격 반응을 비교한다. 뉴스·공시 제목에 매각, 처분, 실적, 자금조달, 소송, 규제 같은 사건이 있으면 그 사건을 evidence 또는 counterEvidence에 반드시 반영한다.",
         "BUY, ADD, HOLD, TRIM, SELL, AVOID 중 하나를 반드시 고르되 자동 주문 지시처럼 쓰지 않는다.",
+        "대상이 관심종목이면 targetPositionRole=watchlist다. 관심종목은 보유 수량이 아니므로 HOLD는 '관심 유지', BUY는 '소액 진입 검토', AVOID는 '신규 진입 회피/대기'로 판단한다. 관심종목에 대해 보유 유지, 추가매수, 분할축소, 매도처럼 보유종목용 표현을 쓰지 않는다.",
         "사전 계산 후보와 다른 action을 고르면 disagreementReason에 왜 달라졌는지 반드시 쓴다. 같은 action이어도 단순 추종이 아니라 어떤 증거가 그 판단을 지지했는지 summary에 쓴다.",
         "가능하면 sourceUrls에 판단에 사용한 원문 URL을 넣고, URL이 없으면 evidence에 데이터 출처명을 함께 쓴다.",
         "action 필드에만 BUY/ADD/HOLD/TRIM/SELL/AVOID 코드를 쓰고, summary/opinion/evidence/counterEvidence/nextChecks에는 매수/추가매수/보유/분할축소/매도/회피처럼 한국어 행동명만 쓴다.",
@@ -446,34 +519,37 @@ def validated_response_from_payload(
     if action not in VALID_ACTIONS:
         warnings.append("지원하지 않는 action 값이라 로컬 판단으로 대체했습니다.")
         action = fallback.action
+    original_action = action
+    action = normalized_action_for_target(context, action)
+    append_watchlist_action_warning(context, original_action, action, warnings)
     original_confidence = _clamp(_number(payload.get("confidence"), fallback.confidence), 0, 100)
-    summary = user_friendly_ai_text(payload.get("summary") or fallback.summary)
-    opinion = soften_order_language(user_friendly_ai_text(payload.get("opinion") or fallback.opinion))
-    raw_evidence = user_friendly_ai_list(payload.get("evidence") or [], 5)
-    raw_counter = user_friendly_ai_list(payload.get("counterEvidence") or payload.get("counter_evidence") or [], 4)
+    summary = watchlist_friendly_text(context, user_friendly_ai_text(payload.get("summary") or fallback.summary))
+    opinion = soften_order_language(watchlist_friendly_text(context, user_friendly_ai_text(payload.get("opinion") or fallback.opinion)))
+    raw_evidence = watchlist_friendly_rows(context, user_friendly_ai_list(payload.get("evidence") or [], 5))
+    raw_counter = watchlist_friendly_rows(context, user_friendly_ai_list(payload.get("counterEvidence") or payload.get("counter_evidence") or [], 4))
     evidence = list(raw_evidence)
     for item in fallback_evidence_rows(context, 5):
         if len(evidence) >= 5:
             break
-        append_unique_text(evidence, item, 180)
+        append_unique_text(evidence, watchlist_friendly_text(context, item), 180)
     if len(raw_evidence) < 2:
         warnings.append("AI 응답 근거가 부족해 관계 분석 데이터에서 근거를 보강했습니다.")
     counter = list(raw_counter)
     for item in fallback_counter_rows(context, 4):
         if len(counter) >= 4:
             break
-        append_unique_text(counter, item, 180)
+        append_unique_text(counter, watchlist_friendly_text(context, item), 180)
     if not raw_counter:
         warnings.append("AI 응답에 반대 근거가 없어 관계 분석 데이터에서 반대 근거를 보강했습니다.")
     if not counter:
         counter.append("제공 데이터 안에서 뚜렷한 반대 근거가 부족해 판단 강도를 보수적으로 봅니다.")
     raw_invalidation = str(payload.get("invalidationCondition") or payload.get("invalidation_condition") or "").strip()
-    invalidation = soften_order_language(user_friendly_ai_text(raw_invalidation or fallback.invalidation_condition or default_invalidation_for_action(action)))
+    invalidation = soften_order_language(watchlist_friendly_text(context, user_friendly_ai_text(raw_invalidation or fallback.invalidation_condition or default_invalidation_for_action(action))))
     raw_next_checks = payload.get("nextChecks") or payload.get("next_checks") or []
-    next_checks = user_friendly_ai_list(raw_next_checks or fallback.next_checks or default_next_checks_for_action(action), 4)
+    next_checks = watchlist_friendly_rows(context, user_friendly_ai_list(raw_next_checks or fallback.next_checks or default_next_checks_for_action(action), 4))
     if not next_checks:
-        next_checks = default_next_checks_for_action(action)
-    missing_impact = user_friendly_ai_list(payload.get("missingDataImpact") or payload.get("missing_data_impact") or fallback.missing_data_impact, 5)
+        next_checks = watchlist_friendly_rows(context, default_next_checks_for_action(action))
+    missing_impact = watchlist_friendly_rows(context, user_friendly_ai_list(payload.get("missingDataImpact") or payload.get("missing_data_impact") or fallback.missing_data_impact, 5))
     expected_reference = reference_date(context)
     response_reference = _text(payload.get("referenceDate") or payload.get("reference_date") or expected_reference, 80)
     if expected_reference and response_reference and expected_reference not in response_reference and response_reference not in expected_reference:
@@ -519,7 +595,7 @@ def validated_response_from_payload(
         warnings.append("AI 확신도 " + str(round(original_confidence, 1)) + "%를 검증 기준에 따라 " + str(round(confidence, 1)) + "%로 낮췄습니다.")
     return soften_low_confidence_sell(context, NotificationAIValidatedResponse(
         action=action,
-        action_label=ACTION_LABELS.get(action, action),
+        action_label=action_label_for_target(context, action),
         confidence=confidence,
         original_confidence=original_confidence,
         summary=summary,

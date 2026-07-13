@@ -4,6 +4,7 @@ from typing import Dict, List
 
 from .notification_ai import criterion_lines, notification_ai_prompt_context, relation_context_value
 from .notification_ai_context import relation_facts
+from .notification_ai_context import is_watchlist_context
 from .notification_ai_gate_contracts import ACTION_LABELS, MESSAGE_START_BADGE, NotificationAIValidatedResponse
 from .notification_ai_gate_sources import source_detail_text, source_url_rows
 from .notification_ai_gate_text import (
@@ -17,6 +18,7 @@ from .notification_ai_gate_text import (
 )
 from .notification_ai_gate_validation import (
     _driver_rows,
+    action_label_for_target,
     delivery_level_from_context,
     signed_percent_from_text,
 )
@@ -188,7 +190,7 @@ def notification_topline_change_summary(context: Dict[str, object]) -> str:
     context = context or {}
     reason = str(context.get("honeyStateReason") or context.get("honeySimilarityBypassReason") or "").strip()
     source_types = " ".join(str(item or "") for item in (context.get("sourceSignalTypes") or []))
-    profit_loss_summary = _profit_loss_change_summary(context, reason)
+    profit_loss_summary = "" if is_watchlist_context(context) else _profit_loss_change_summary(context, reason)
     if profit_loss_summary:
         return profit_loss_summary
     if "손익률 추가 악화" in reason:
@@ -262,8 +264,10 @@ def confidence_text(value: object) -> str:
         label = "낮음"
     return label + " (" + str(round(score, 1)) + "%)"
 
-def action_label_for_action(action: object) -> str:
+def action_label_for_action(action: object, context: Dict[str, object] = None) -> str:
     text = str(action or "").strip().upper()
+    if context is not None:
+        return action_label_for_target(context, text)
     return ACTION_LABELS.get(text, str(action or "").strip())
 
 def ai_confidence_display(response: NotificationAIValidatedResponse, level: str) -> str:
@@ -281,10 +285,10 @@ def ai_action_row_label(level: str) -> str:
         return "지금 할 일"
     return "대응 방향"
 
-def ai_judgment_rows(response: NotificationAIValidatedResponse, level: str) -> List[str]:
+def ai_judgment_rows(response: NotificationAIValidatedResponse, level: str, context: Dict[str, object] = None) -> List[str]:
     beginner = level == "absoluteBeginner"
     rows = [
-        _html_row(ai_action_row_label(level), response.action_label, beginner),
+        _html_row(ai_action_row_label(level), action_label_for_action(response.action, context) or response.action_label, beginner),
         _html_row("판단 강도", ai_confidence_display(response, level), beginner),
     ]
     summary_label = "이유" if level == "absoluteBeginner" else "AI 판단 이유"
@@ -292,13 +296,13 @@ def ai_judgment_rows(response: NotificationAIValidatedResponse, level: str) -> L
         rows.append(_html_row(summary_label, response.summary, beginner))
     return [row for row in rows if row]
 
-def ai_difference_rows(response: NotificationAIValidatedResponse, level: str) -> List[str]:
+def ai_difference_rows(response: NotificationAIValidatedResponse, level: str, context: Dict[str, object] = None) -> List[str]:
     if not response.precomputed_action or response.precomputed_action == response.action:
         return []
     beginner = level == "absoluteBeginner"
     rows = [
-        _html_row("계산 후보", action_label_for_action(response.precomputed_action), beginner),
-        _html_row("AI 최종", response.action_label, beginner),
+        _html_row("계산 후보", action_label_for_action(response.precomputed_action, context), beginner),
+        _html_row("AI 최종", action_label_for_action(response.action, context) or response.action_label, beginner),
     ]
     if response.disagreement_reason:
         rows.append(_html_row("다르게 본 이유" if level == "absoluteBeginner" else "변경 이유", response.disagreement_reason, beginner))
@@ -319,8 +323,15 @@ def title_prefix_from_headline(headline: str) -> str:
     match = re.match(r"^(\[[^\]]+\]\s+(?:\S+\s+)?)", text)
     return match.group(1).strip() if match else ""
 
-def action_headline(response: NotificationAIValidatedResponse) -> str:
+def action_headline(response: NotificationAIValidatedResponse, context: Dict[str, object] = None) -> str:
     action = response.action
+    if is_watchlist_context(context or {}):
+        if action in {"BUY", "ADD"}:
+            return "소액 진입 조건 점검"
+        if action == "HOLD":
+            return "관심 유지·진입 조건 확인"
+        if action in {"TRIM", "SELL", "AVOID"}:
+            return "신규 진입 회피"
     if action == "BUY":
         return "매수 조건 점검"
     if action == "ADD":
@@ -339,7 +350,7 @@ def execution_headline(context: Dict[str, object], response: NotificationAIValid
     headline = str(context.get("headline") or context.get("title") or "알림").strip()
     prefix = title_prefix_from_headline(headline)
     target = target_name_for_headline(context.get("displayTarget") or context.get("target") or context.get("title") or "")
-    action = action_headline(response)
+    action = action_headline(response, context)
     if target:
         return " ".join(part for part in [prefix, target + ": " + action] if part)
     return " ".join(part for part in [prefix, action] if part) or headline
@@ -534,7 +545,14 @@ def _price_position_summary(context: Dict[str, object], response: NotificationAI
     trend = _plain_value(context, "추세")
     if not any([current, average, pnl, trend]):
         return ""
-    if response.action in {"TRIM", "SELL"} and signed_percent_from_text(pnl) > 0:
+    if is_watchlist_context(context):
+        if response.action in {"BUY", "ADD"}:
+            base = "관심종목의 진입 조건이 일부 잡혔지만 작게 확인하는 단계입니다."
+        elif response.action in {"TRIM", "SELL", "AVOID"}:
+            base = "관심종목은 보유 물량이 아니므로 팔기보다 새로 들어갈지 말지를 판단합니다."
+        else:
+            base = "관심종목은 보유 판단이 아니라 진입 조건을 계속 지켜보는 단계입니다."
+    elif response.action in {"TRIM", "SELL"} and signed_percent_from_text(pnl) > 0:
         base = "아직 수익 구간이지만 가격 흐름이 약해져 수익 보호 쪽으로 봅니다."
     elif response.action in {"TRIM", "SELL"}:
         base = "손실 또는 가격 약화가 커져 비중 관리 쪽으로 봅니다."
@@ -596,7 +614,7 @@ def context_specific_insight_rows(context: Dict[str, object], response: Notifica
     if response.precomputed_action and response.precomputed_action != response.action:
         append_unique_text(
             rows,
-            "계산 후보는 " + action_label_for_action(response.precomputed_action) + "였지만 최종 메시지는 " + response.action_label + " 기준으로 완화/조정했습니다.",
+            "계산 후보는 " + action_label_for_action(response.precomputed_action, context) + "였지만 최종 메시지는 " + action_label_for_action(response.action, context) + " 기준으로 완화/조정했습니다.",
             210,
         )
     return rows[:limit]
@@ -639,9 +657,9 @@ def execution_telegram_message(context: Dict[str, object], response: Notificatio
         ("<code>" + html.escape(target, quote=False) + "</code>") if target else "",
         "",
         "<b>" + ai_judgment_section_title(level) + "</b>",
-        *ai_judgment_rows(response, level),
+        *ai_judgment_rows(response, level, context),
     ]
-    difference_rows = ai_difference_rows(response, level)
+    difference_rows = ai_difference_rows(response, level, context)
     if difference_rows:
         parts.extend(["", "<b>계산 후보와 다른 점</b>", *difference_rows])
     if current_state_rows:
@@ -694,10 +712,10 @@ def execution_telegram_message_absolute_beginner(context: Dict[str, object], res
         ("<code>" + html.escape(target, quote=False) + "</code>") if target else "",
         "",
         "<b>" + ai_judgment_section_title("absoluteBeginner") + "</b>",
-        *ai_judgment_rows(response, "absoluteBeginner"),
+        *ai_judgment_rows(response, "absoluteBeginner", context),
         _html_row("안내", "자동 주문이 아니라 실행 전 점검 알림입니다.", True),
     ]
-    difference_rows = ai_difference_rows(response, "absoluteBeginner")
+    difference_rows = ai_difference_rows(response, "absoluteBeginner", context)
     if difference_rows:
         parts.extend(["", "<b>AI가 다르게 본 점</b>", *difference_rows])
     if current_state_rows:

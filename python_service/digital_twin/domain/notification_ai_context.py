@@ -111,6 +111,57 @@ def relation_context_value(context: Dict[str, object]) -> Dict[str, object]:
     return relation_context if isinstance(relation_context, dict) else {}
 
 
+def source_signal_types(context: Dict[str, object]) -> List[str]:
+    if not isinstance(context, dict):
+        return []
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    ontology_insight = context.get("ontologyInsight") if isinstance(context.get("ontologyInsight"), dict) else {}
+    metadata_insight = metadata.get("ontologyInsight") if isinstance(metadata.get("ontologyInsight"), dict) else {}
+    values: List[str] = []
+    for container in [context, metadata, ontology_insight, metadata_insight]:
+        raw = container.get("sourceSignalTypes") if isinstance(container, dict) else []
+        if isinstance(raw, list):
+            values.extend(str(item or "").strip() for item in raw)
+        elif str(raw or "").strip():
+            values.extend(part.strip() for part in str(raw or "").replace("\n", ",").split(","))
+    for event in source_alert_event_items(context):
+        rule = str(event.get("rule") or "").strip()
+        if rule:
+            values.append(rule)
+        event_metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
+        raw = event_metadata.get("sourceSignalTypes") if isinstance(event_metadata, dict) else []
+        if isinstance(raw, list):
+            values.extend(str(item or "").strip() for item in raw)
+    return [item for item in values if item]
+
+
+def is_watchlist_context(context: Dict[str, object]) -> bool:
+    relation_context = relation_context_value(context or {})
+    facts = relation_context.get("facts") if isinstance(relation_context.get("facts"), dict) else {}
+    if facts.get("isWatchlist") is True:
+        return True
+    if str(facts.get("source") or "").strip().lower() == "watchlist":
+        return True
+    if str(relation_context.get("targetRole") or relation_context.get("sourceRole") or "").strip().lower() == "watchlist":
+        return True
+    insight = (context or {}).get("ontologyInsight") if isinstance((context or {}).get("ontologyInsight"), dict) else {}
+    metadata = (context or {}).get("metadata") if isinstance((context or {}).get("metadata"), dict) else {}
+    metadata_insight = metadata.get("ontologyInsight") if isinstance(metadata.get("ontologyInsight"), dict) else {}
+    for container in [context or {}, metadata, insight, metadata_insight]:
+        if str((container or {}).get("portfolioBucket") or "").strip() == "관심":
+            return True
+        if str((container or {}).get("positionRole") or (container or {}).get("targetPositionRole") or "").strip().lower() == "watchlist":
+            return True
+    signal_types = {item for item in source_signal_types(context or {})}
+    if "watchlistOntologySignal" in signal_types and "holdingTiming" not in signal_types:
+        return True
+    return False
+
+
+def target_position_role(context: Dict[str, object]) -> str:
+    return "watchlist" if is_watchlist_context(context or {}) else "holding"
+
+
 def is_graph_backed_relation_context(relation_context: Dict[str, object]) -> bool:
     if not isinstance(relation_context, dict) or not relation_context:
         return False

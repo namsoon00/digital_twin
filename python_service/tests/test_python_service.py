@@ -8009,6 +8009,78 @@ class PythonServiceTests(unittest.TestCase):
         self.assertNotIn("<b>왜 온 알림</b>", message)
         self.assertNotIn("<b>핵심 근거</b>", message)
 
+    def test_watchlist_ai_response_uses_entry_language_not_holding_language(self):
+        context = {
+            "messageType": "investmentInsight",
+            "messageDeliveryLevel": "absoluteBeginner",
+            "headline": "[관찰] 🧭 Apple: 보유 유지·다음 조건 확인",
+            "displayTarget": "Apple / AAPL",
+            "referenceDate": "2026-07-13 16:05 KST",
+            "sentTime": "2026-07-13 16:06 KST",
+            "rawLines": "\n".join([
+                "현재가: $316",
+                "추세: 5일선 $314.32보다 0.5% 높음, 20일선 $299.12보다 5.6% 높음, 60일선 $293.89보다 7.5% 높음",
+                "수급: 거래량 24,919(0x), 거래액 $8,213,981,996",
+                "기준일: 2026-07-13 16:05 KST",
+            ]),
+            "ontologyInsight": {
+                "sourceSignalTypes": ["watchlistOntologySignal"],
+            },
+            "ontologyRelationContext": {
+                "graphStoreUsed": True,
+                "fallbackUsed": False,
+                "source": "typedbInferenceBox",
+                "facts": {
+                    "source": "watchlist",
+                    "isWatchlist": True,
+                    "isHolding": False,
+                    "ma5": 314.32,
+                    "ma20": 299.12,
+                    "ma60": 293.89,
+                    "ma5Distance": 0.5,
+                    "ma20Distance": 5.6,
+                    "ma60Distance": 7.5,
+                },
+                "decision": {
+                    "basis": "typedbInferenceBox",
+                    "label": "신규 진입 관찰",
+                    "score": 78,
+                },
+                "activeRules": [
+                    {
+                        "ruleId": "graph.watchlist.trend.entry_watch.v1",
+                        "label": "Apple · 관심 종목 + 우호 추세 전이 -> 진입 관찰 추론",
+                        "strengthScore": 78,
+                    }
+                ],
+            },
+            "sourceSignalTypes": ["watchlistOntologySignal"],
+        }
+        response = validated_response_from_payload(context, {
+            "action": "HOLD",
+            "confidence": 66,
+            "summary": "보유가 맞습니다. 가격 흐름은 좋지만 소송 뉴스도 부담입니다.",
+            "opinion": "보유를 유지하면서 다음 가격 반응을 확인하세요.",
+            "evidence": ["현재가 $316은 20일 평균보다 5.6% 높습니다."],
+            "counterEvidence": ["거래량이 평소의 0배라 힘 있는 상승인지 확인이 부족합니다."],
+            "invalidationCondition": "현재가가 20일 평균 아래로 내려가면 보유 판단은 약해집니다.",
+            "nextChecks": ["소송 뉴스 원문과 다음 가격 반응을 함께 확인하세요."],
+            "referenceDate": "2026-07-13 16:05 KST",
+        }, source="test AI")
+
+        enriched = context_with_validated_ai_response(context, response)
+        message = enriched["telegramMessage"]
+
+        self.assertEqual("HOLD", enriched["notificationAiValidatedResponse"]["action"])
+        self.assertEqual("관심 유지", enriched["notificationAiValidatedResponse"]["actionLabel"])
+        self.assertIn("<b>[관찰] 🧭 Apple: 관심 유지·진입 조건 확인</b>", message)
+        self.assertIn("<b>지금 할 일</b>: <code>관심 유지</code>", message)
+        self.assertIn("관심종목으로 지켜보는 게 맞습니다", message)
+        self.assertIn("관심 상태를 유지", message)
+        self.assertNotIn("보유 유지", message)
+        self.assertNotIn("보유가 맞습니다", message)
+        self.assertNotIn("손익 구간", message)
+
     def test_absolute_beginner_response_rewrites_difficult_trend_terms(self):
         context = {
             "messageType": "investmentInsight",

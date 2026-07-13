@@ -66,6 +66,17 @@ def event_relation_properties(item: object) -> Dict[str, object]:
     ]:
         if key in raw_payload:
             props[key] = raw_payload.get(key)
+    ai_analysis = raw_payload.get("aiAnalysis") if isinstance(raw_payload.get("aiAnalysis"), dict) else {}
+    if ai_analysis:
+        props.update({
+            "aiAnalysisVersion": ai_analysis.get("version"),
+            "aiAnalysisModel": ai_analysis.get("model"),
+            "aiImpactPolarity": ai_analysis.get("impactPolarity"),
+            "aiImpactLabelKo": ai_analysis.get("impactLabelKo"),
+            "aiImpactConfidence": ai_analysis.get("confidence"),
+            "aiMaterialityScore": ai_analysis.get("materialityScore"),
+            "aiNeedsReview": ai_analysis.get("needsReview"),
+        })
     if "materialityPassed" not in props and raw_payload.get("materialityScore") is not None:
         props["materialityPassed"] = number(raw_payload.get("materialityScore")) >= 65
     if polarity == "risk":
@@ -148,6 +159,57 @@ def add_research_document_concept(
     if active_opinion_id:
         add_relation(graph, document_id, active_opinion_id, "IMPACTS_OPINION", weight=round((number(getattr(item, "impact_score", 0)) or 2) / 20, 4), evidence_ids=[evidence_id], properties=props)
 
+
+def add_news_ai_analysis_concept(
+    graph: PortfolioOntology,
+    stock_id: str,
+    event_id: str,
+    item: object,
+    props: Dict[str, object],
+    relation_weight: float,
+) -> None:
+    raw_payload = getattr(item, "raw_payload", {}) if isinstance(getattr(item, "raw_payload", {}), dict) else {}
+    analysis = raw_payload.get("aiAnalysis") if isinstance(raw_payload.get("aiAnalysis"), dict) else {}
+    if not analysis:
+        return
+    summary = analysis.get("summary") if isinstance(analysis.get("summary"), dict) else {}
+    evidence_id = str(getattr(item, "evidence_id", "") or "")
+    analysis_id = add_entity(graph, "article-ai-analysis", evidence_id or str(getattr(item, "title", "") or ""), "기사 AI 분석: " + str(getattr(item, "title", "") or ""), {
+        "tboxClass": "ArticleAIAnalysis",
+        "tboxClasses": ["Observation", "ExternalObservation", "ExternalSignal", "NewsEvent", "ArticleAIAnalysis", "DataQuality"],
+        "symbol": str(getattr(item, "symbol", "") or ""),
+        "sourceEvidenceId": evidence_id,
+        "version": analysis.get("version"),
+        "promptVersion": analysis.get("promptVersion"),
+        "model": analysis.get("model"),
+        "status": analysis.get("status"),
+        "readScope": analysis.get("readScope"),
+        "sourceTextHash": analysis.get("sourceTextHash"),
+        "relationScope": analysis.get("relationScope"),
+        "eventType": analysis.get("eventType"),
+        "impactPolarity": analysis.get("impactPolarity"),
+        "impactLabelKo": analysis.get("impactLabelKo"),
+        "confidence": analysis.get("confidence"),
+        "materialityScore": analysis.get("materialityScore"),
+        "relevanceScore": analysis.get("relevanceScore"),
+        "oneLineKo": summary.get("oneLineKo"),
+        "briefKo": summary.get("briefKo"),
+        "keyTakeaways": summary.get("keyTakeaways"),
+        "whyItMatters": summary.get("whyItMatters"),
+        "watchPoints": summary.get("watchPoints"),
+        "riskSignals": analysis.get("riskSignals"),
+        "supportSignals": analysis.get("supportSignals"),
+        "contrastSignals": analysis.get("contrastSignals"),
+        "keyNumbers": analysis.get("keyNumbers"),
+        "rationaleKo": analysis.get("rationaleKo"),
+        "needsReview": analysis.get("needsReview"),
+        "reasoningLimitations": analysis.get("reasoningLimitations"),
+    })
+    add_relation(graph, event_id, analysis_id, "HAS_ANALYSIS", weight=relation_weight, evidence_ids=[evidence_id], properties={**props, "source": "article-ai-analysis"})
+    add_relation(graph, analysis_id, event_id, "EXPLAINS", weight=relation_weight, evidence_ids=[evidence_id], properties={**props, "source": "article-ai-analysis"})
+    add_relation(graph, analysis_id, stock_id, "AFFECTS", weight=relation_weight, evidence_ids=[evidence_id], properties={**props, "source": "article-ai-analysis"})
+
+
 def add_research_evidence_concepts(
     graph: PortfolioOntology,
     stock_id: str,
@@ -202,6 +264,10 @@ def add_research_evidence_concepts(
             "materialityPassed": materiality_passed,
             "analysisSummary": raw_payload.get("analysisSummary"),
             "analysisVersion": raw_payload.get("analysisVersion"),
+            "aiAnalysisVersion": (raw_payload.get("aiAnalysis") or {}).get("version") if isinstance(raw_payload.get("aiAnalysis"), dict) else None,
+            "aiImpactPolarity": (raw_payload.get("aiAnalysis") or {}).get("impactPolarity") if isinstance(raw_payload.get("aiAnalysis"), dict) else None,
+            "aiImpactLabelKo": (raw_payload.get("aiAnalysis") or {}).get("impactLabelKo") if isinstance(raw_payload.get("aiAnalysis"), dict) else None,
+            "articleSummaryKo": raw_payload.get("articleSummaryKo"),
             "sourceKind": raw_payload.get("sourceKind"),
             "sourcePlatform": raw_payload.get("sourcePlatform"),
             "qualityGate": raw_payload.get("qualityGate"),
@@ -220,6 +286,7 @@ def add_research_evidence_concepts(
         add_relation(graph, stock_id, event_id, "HAS_EXTERNAL_SIGNAL", weight=round(number(item.confidence), 4), evidence_ids=[item.evidence_id], properties=props)
         add_relation(graph, event_id, stock_id, "MENTIONS_INSTRUMENT", weight=relation_weight, evidence_ids=[item.evidence_id], properties=props)
         add_research_document_concept(graph, stock_id, event_id, thesis_id, active_opinion_id, item, props, relation_weight)
+        add_news_ai_analysis_concept(graph, stock_id, event_id, item, props, relation_weight)
         if relation_scope in {"peer", "sector", "market"}:
             add_relation(graph, event_id, stock_id, "AFFECTS", weight=relation_weight, evidence_ids=[item.evidence_id], properties=props)
         event_type = str(raw_payload.get("eventType") or "").strip()

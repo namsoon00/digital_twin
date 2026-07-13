@@ -8,6 +8,7 @@ from ..application.investment_calendar_service import InvestmentCalendarRunner, 
 from ..application.market_data_collection_service import MarketDataCollectionRunner
 from ..application.model_review_service import ModelReviewRunner
 from ..application.news_collection_service import NewsCollectionRunner
+from ..application.news_ai_analysis_service import NewsAiAnalysisService
 from ..application.news_digest_service import NewsDigestEnqueuer
 from ..application.monitoring_service import MonitorRunner
 from ..application.notification_service import (
@@ -39,6 +40,7 @@ from .notifications import queued_notifier_for_account
 from .notifications import send_events
 from .notifications import notifier_for_account
 from .news_sources import NewsSourceGateway
+from .news_ai_analyzer import news_ai_analyzer_from_settings
 from .settings import currency_rates, runtime_settings
 from .symbol_sources import RemoteSymbolSourceGateway
 from .toss_snapshots import TossProvider, build_snapshot, demo_positions
@@ -169,6 +171,10 @@ def build_news_collection_runner(settings=None, event_publisher=None) -> NewsCol
         gateway=NewsSourceGateway(configured_settings),
         settings=configured_settings,
         event_publisher=event_publisher or news_event_bus(configured_settings),
+        article_analysis_service=NewsAiAnalysisService(
+            news_ai_analyzer_from_settings(configured_settings),
+            configured_settings,
+        ),
     )
 
 

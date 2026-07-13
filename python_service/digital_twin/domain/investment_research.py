@@ -174,6 +174,8 @@ class ResearchEvidence:
             "stockImpactPolarity": str(payload.get("stockImpactPolarity") or ""),
             "stockImpactScore": round(number(payload.get("stockImpactScore")), 1),
             "stockImpactReasonKo": str(payload.get("stockImpactReasonKo") or ""),
+            "aiAnalysis": dict(payload.get("aiAnalysis") or {}),
+            "articleAiAnalysisVersion": str(payload.get("articleAiAnalysisVersion") or ""),
             "sourceKind": str(payload.get("sourceKind") or ""),
             "sourcePlatform": str(payload.get("sourcePlatform") or ""),
             "entityLinks": list(payload.get("entityLinks") or []),
@@ -370,6 +372,8 @@ def research_evidence_from_payload(payload: Dict[str, object], fallback_symbol: 
         "stockImpactPolarity",
         "stockImpactScore",
         "stockImpactReasonKo",
+        "aiAnalysis",
+        "articleAiAnalysisVersion",
         "normalizedTitle",
         "normalizedSummary",
         "sourceKind",
@@ -581,6 +585,8 @@ def research_evidence_from_facts(symbol: str, facts: Dict[str, object]) -> List[
             "stockImpactPolarity",
             "stockImpactScore",
             "stockImpactReasonKo",
+            "aiAnalysis",
+            "articleAiAnalysisVersion",
         ]:
             if key in item and key not in raw_payload:
                 raw_payload[key] = item.get(key)

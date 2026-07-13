@@ -55,6 +55,7 @@ class NewsCollectionRunner:
         gateway: ResearchEvidenceGateway,
         settings: Dict[str, str],
         event_publisher=None,
+        article_analysis_service=None,
         sleep_fn=time.sleep,
     ):
         self.account_repository = account_repository
@@ -64,6 +65,7 @@ class NewsCollectionRunner:
         self.gateway = gateway
         self.settings = dict(settings or {})
         self.event_publisher = event_publisher
+        self.article_analysis_service = article_analysis_service
         self.sleep_fn = sleep_fn
 
     def enabled(self) -> bool:
@@ -136,6 +138,8 @@ class NewsCollectionRunner:
             if index and self.rate_limit_seconds():
                 self.sleep_fn(self.rate_limit_seconds())
             items, target_statuses = self.gateway.collect_for_target(target)
+            if self.article_analysis_service and hasattr(self.article_analysis_service, "analyze_many"):
+                items = self.article_analysis_service.analyze_many(target, items)
             collected.extend(items)
             statuses.extend(target_statuses)
         saved = self.evidence_store.upsert_many(collected) if collected else 0

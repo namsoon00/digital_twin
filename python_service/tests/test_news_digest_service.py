@@ -109,6 +109,41 @@ class NewsDigestEnqueuerTests(unittest.TestCase):
         self.assertIn("분석: 기사 본문 읽음", job.text)
         self.assertIn("기사 정보: 핵심 애플 관련 소송", job.text)
 
+    def test_news_digest_renders_ai_article_summary_and_signals(self):
+        queue = MemoryNotificationQueue()
+        evidence = self.evidence()
+        evidence.raw_payload["aiAnalysis"] = {
+            "version": "news-ai-analysis-v1",
+            "impactPolarity": "risk",
+            "impactLabelKo": "악재",
+            "confidence": 0.82,
+            "materialityScore": 88,
+            "summary": {
+                "briefKo": "애플 관련 법적 이슈가 투자심리 부담으로 작용할 수 있습니다.",
+                "watchPoints": ["원문 본문 확보", "다음 장 가격 반응"],
+            },
+            "riskSignals": ["소송", "규제"],
+            "supportSignals": [],
+            "contrastSignals": ["however"],
+        }
+        event = DomainEvent(
+            name=RESEARCH_EVIDENCE_COLLECTED,
+            aggregate_id="news:AAPL",
+            payload={
+                "materialChangedItems": [evidence.to_dict()],
+                "materialChangedSymbols": ["AAPL"],
+                "materialChangedCount": 1,
+            },
+        )
+
+        self.enqueuer(queue).handle(event)
+
+        job = queue.jobs[0]
+        self.assertIn("판단: 영향 악재", job.text)
+        self.assertIn("AI 요약: 애플 관련 법적 이슈", job.text)
+        self.assertIn("핵심 근거: 위험 소송, 규제", job.text)
+        self.assertIn("다음 확인: 원문 본문 확보, 다음 장 가격 반응", job.text)
+
     def test_ignores_feed_only_article_by_default(self):
         queue = MemoryNotificationQueue()
         feed_only = self.evidence()

@@ -102,8 +102,11 @@ def reliability_label(value: object) -> str:
 
 
 def impact_label(item: Dict[str, object]) -> str:
+    analysis = ai_analysis(item)
     raw = (
-        clean_text(item.get("stockImpactLabel"))
+        clean_text(analysis.get("impactLabelKo") if isinstance(analysis, dict) else "")
+        or clean_text(analysis.get("impact_label_ko") if isinstance(analysis, dict) else "")
+        or clean_text(item.get("stockImpactLabel"))
         or IMPACT_LABELS.get(clean_text(item.get("stockImpactPolarity")).lower(), "")
         or IMPACT_LABELS.get(clean_text(item.get("polarity")).lower(), "")
     )
@@ -112,7 +115,11 @@ def impact_label(item: Dict[str, object]) -> str:
 
 def article_read_status(item: Dict[str, object]) -> str:
     payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
-    return clean_text(item.get("articleReadStatus") or payload.get("articleReadStatus"))
+    status = clean_text(item.get("articleReadStatus") or payload.get("articleReadStatus"))
+    facts = article_facts(item)
+    if status == "body" and isinstance(facts, dict) and facts.get("bodyAvailable") is False:
+        return "feed-summary"
+    return status
 
 
 def article_analysis_label(item: Dict[str, object]) -> str:
@@ -131,6 +138,36 @@ def article_facts(item: Dict[str, object]) -> Dict[str, object]:
         if isinstance(facts, dict):
             return facts
     return {}
+
+
+def ai_analysis(item: Dict[str, object]) -> Dict[str, object]:
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    for source in [item, payload]:
+        analysis = source.get("aiAnalysis") if isinstance(source, dict) else None
+        if isinstance(analysis, dict):
+            return analysis
+    return {}
+
+
+def ai_summary(item: Dict[str, object]) -> Dict[str, object]:
+    analysis = ai_analysis(item)
+    summary = analysis.get("summary") if isinstance(analysis, dict) else {}
+    return summary if isinstance(summary, dict) else {}
+
+
+def ai_list(item: Dict[str, object], key: str, limit: int = 4) -> List[str]:
+    analysis = ai_analysis(item)
+    values = analysis.get(key) if isinstance(analysis, dict) else []
+    if not isinstance(values, list):
+        return []
+    rows: List[str] = []
+    for value in values:
+        text = bounded_text(value, 80)
+        if text and text not in rows:
+            rows.append(text)
+        if len(rows) >= limit:
+            break
+    return rows
 
 
 def article_fact_list(facts: Dict[str, object], key: str, limit: int = 3) -> List[str]:
@@ -166,13 +203,45 @@ def article_facts_line(item: Dict[str, object]) -> str:
 
 def item_summary(item: Dict[str, object]) -> str:
     payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    summary = ai_summary(item)
     return (
-        bounded_text(clean_article_summary_noise(item.get("articleSummaryKo")), 360)
+        bounded_text(clean_article_summary_noise(summary.get("briefKo")), 420)
+        or bounded_text(clean_article_summary_noise(summary.get("oneLineKo")), 260)
+        or bounded_text(clean_article_summary_noise(item.get("articleSummaryKo")), 360)
         or bounded_text(clean_article_summary_noise(item.get("analysisSummary")), 260)
         or bounded_text(clean_article_summary_noise(item.get("summary")), 360)
         or bounded_text(clean_article_summary_noise(payload.get("articleSummaryKo")), 360)
         or bounded_text(item.get("title"), 180)
     )
+
+
+def ai_reason_line(item: Dict[str, object]) -> str:
+    risk = ai_list(item, "riskSignals", 3)
+    support = ai_list(item, "supportSignals", 3)
+    contrast = ai_list(item, "contrastSignals", 2)
+    pieces = []
+    if risk:
+        pieces.append("위험 " + ", ".join(risk))
+    if support:
+        pieces.append("우호 " + ", ".join(support))
+    if contrast:
+        pieces.append("반전 문맥 " + ", ".join(contrast))
+    return bounded_text(" · ".join(pieces), 260)
+
+
+def ai_watch_line(item: Dict[str, object]) -> str:
+    summary = ai_summary(item)
+    values = summary.get("watchPoints") if isinstance(summary, dict) else []
+    if not isinstance(values, list):
+        return ""
+    rows = []
+    for value in values:
+        text = bounded_text(value, 80)
+        if text and text not in rows:
+            rows.append(text)
+        if len(rows) >= 4:
+            break
+    return ", ".join(rows)
 
 
 def item_sort_key(item: Dict[str, object]) -> Tuple[float, float, float]:
@@ -457,13 +526,20 @@ class NewsDigestEnqueuer:
             facts_line = article_facts_line(item)
             if facts_line:
                 item_lines.append("• 기사 정보: " + html_text(facts_line))
+            summary_line = item_summary(item)
+            reason_line = ai_reason_line(item)
+            watch_line = ai_watch_line(item)
             item_lines.extend([
                 "• 판단: 영향 " + html_text(impact_label(item)) + ", 신뢰도 " + html_text(reliability)
                 + (", 관련성 " + html_text(relevance) if relevance else "")
                 + (", 중요도 " + html_text(importance) if importance else ""),
-                "• 요약: " + html_text(item_summary(item)),
-                "• 원문: " + link,
+                "• AI 요약: " + html_text(summary_line),
             ])
+            if reason_line:
+                item_lines.append("• 핵심 근거: " + html_text(reason_line))
+            if watch_line:
+                item_lines.append("• 다음 확인: " + html_text(watch_line))
+            item_lines.append("• 원문: " + link)
             if index < len(items):
                 item_lines.append("")
         reason = "신선도·관련성·중요도 기준을 통과한 새 뉴스/피드 근거가 저장됐습니다."

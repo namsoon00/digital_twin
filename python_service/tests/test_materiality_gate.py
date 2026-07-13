@@ -135,6 +135,105 @@ class MaterialityGateTests(unittest.TestCase):
         self.assertEqual(2, events.published[-1].payload["changedCount"])
         self.assertEqual(2, len(events.published[-1].payload["materialityAssessments"]))
 
+    def test_news_collection_adds_ai_analysis_before_store_and_event(self):
+        first = ResearchEvidence(
+            "first",
+            "AAPL",
+            "news",
+            "Reuters",
+            "Apple shares fall on earnings concern",
+            "실적 우려",
+            "https://example.test/first",
+            "2026-07-10T01:00:00Z",
+            "context",
+            2.0,
+            0.7,
+            raw_payload={"relationScope": "direct", "relevanceScore": 95, "sourceReliability": 90, "materialityScore": 82},
+        )
+        second = ResearchEvidence(
+            "second",
+            "AAPL",
+            "news",
+            "Reuters",
+            "Apple buyback plan improves sentiment",
+            "자사주 매입",
+            "https://example.test/second",
+            "2026-07-10T01:01:00Z",
+            "context",
+            2.0,
+            0.7,
+            raw_payload={"relationScope": "direct", "relevanceScore": 92, "sourceReliability": 90, "materialityScore": 80},
+        )
+
+        class MemoryEvidenceStore:
+            def __init__(self):
+                self.saved_items = []
+
+            def upsert_many(self, items):
+                self.saved_items = list(items)
+                self.last_changed_items = list(items)
+                self.last_changed_symbols = ["AAPL"]
+                return len(items)
+
+        class Gateway:
+            def collect_for_target(self, target: NewsCollectionTarget):
+                return [first, second], []
+
+            def providers(self):
+                return ["unit"]
+
+        class AnalysisService:
+            def analyze_many(self, target, items):
+                result = []
+                for item in items:
+                    payload = dict(item.raw_payload)
+                    payload["aiAnalysis"] = {
+                        "version": "news-ai-analysis-v1",
+                        "impactPolarity": "risk" if item.evidence_id == "first" else "support",
+                        "impactLabelKo": "악재" if item.evidence_id == "first" else "호재",
+                        "confidence": 0.8,
+                        "materialityScore": 88,
+                        "summary": {"briefKo": item.title, "watchPoints": ["가격 반응"]},
+                    }
+                    payload["stockImpactLabel"] = payload["aiAnalysis"]["impactLabelKo"]
+                    result.append(ResearchEvidence(
+                        item.evidence_id,
+                        item.symbol,
+                        item.kind,
+                        item.source,
+                        item.title,
+                        item.summary,
+                        item.url,
+                        item.observed_at,
+                        item.polarity,
+                        item.impact_score,
+                        item.confidence,
+                        item.published_at,
+                        payload,
+                    ))
+                return result
+
+        store = MemoryEvidenceStore()
+        events = EventBus()
+        runner = NewsCollectionRunner(
+            account_repository=SimpleNamespace(load=lambda: [AccountConfig("main", "메인", "toss", "https://example.test", "", "", "", ["AAPL"])]),
+            monitor_store=SimpleNamespace(previous={}),
+            symbol_store=SimpleNamespace(get=lambda *_args: None),
+            evidence_store=store,
+            gateway=Gateway(),
+            settings={"newsCollectionRateLimitSeconds": "0"},
+            event_publisher=events,
+            article_analysis_service=AnalysisService(),
+            sleep_fn=lambda _seconds: None,
+        )
+
+        result = runner.run_once()
+
+        self.assertEqual(2, result["savedCount"])
+        self.assertTrue(all(item.raw_payload.get("aiAnalysis") for item in store.saved_items))
+        self.assertEqual("악재", result["changedItems"][0]["aiAnalysis"]["impactLabelKo"])
+        self.assertEqual("호재", result["changedItems"][1]["aiAnalysis"]["impactLabelKo"])
+
     def test_ontology_reasoning_limits_monitoring_to_material_symbols(self):
         source = DomainEvent(
             name="research_evidence.collected",

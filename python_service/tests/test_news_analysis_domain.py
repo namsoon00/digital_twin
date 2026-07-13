@@ -17,7 +17,10 @@ from digital_twin.domain.news_analysis import (
     source_reliability_score,
     stock_impact_analysis,
 )
+from digital_twin.domain.news_ai_analysis import apply_news_ai_analysis, local_news_ai_analysis
+from digital_twin.domain.ontology_contracts import PortfolioOntology
 from digital_twin.domain.ontology_relation_reasoning import research_evidence_facts
+from digital_twin.domain.portfolio_ontology_research_concepts import add_research_evidence_concepts
 
 
 class NewsAnalysisDomainTests(unittest.TestCase):
@@ -179,6 +182,100 @@ class NewsAnalysisDomainTests(unittest.TestCase):
         self.assertIn("earnings", facts["topNewsEventTypes"])
         self.assertGreaterEqual(facts["averageNewsMaterialityScore"], 60)
         self.assertGreater(facts["newsMomentumScore"], 0)
+
+    def test_ai_article_analysis_treats_earnings_concern_collapse_as_risk(self):
+        target = NewsCollectionTarget("000660", "SK하이닉스", "KOSPI", "KRW", "반도체")
+        evidence = ResearchEvidence(
+            "research:000660:news:hynix-risk",
+            "000660",
+            "news",
+            "연합인포맥스",
+            "'ADR 호재' 덮은 실적 우려…SK하이닉스 200만 원 붕괴",
+            "RSS/제공 요약: ADR 호재를 덮은 실적 우려와 가격 하락 기사입니다.",
+            "https://example.test/hynix",
+            "2026-07-13T02:01:00Z",
+            "support",
+            14.1,
+            0.78,
+            "2026-07-13T02:01:00Z",
+            raw_payload={
+                "relationScope": "direct",
+                "eventType": "earnings",
+                "relevanceScore": 100,
+                "materialityScore": 87.8,
+                "sourceReliability": 90,
+                "articleReadStatus": "body",
+                "articleFacts": {
+                    "bodyAvailable": False,
+                    "feedSummaryPreview": "ADR 호재를 덮은 실적 우려와 200만 원 붕괴",
+                },
+            },
+        )
+
+        analysis = local_news_ai_analysis(target, evidence).to_dict()
+        updated = apply_news_ai_analysis(evidence, analysis)
+
+        self.assertEqual("risk", analysis["impactPolarity"])
+        self.assertEqual("악재", analysis["impactLabelKo"])
+        self.assertIn("붕괴", analysis["riskSignals"])
+        self.assertIn("우려", analysis["riskSignals"])
+        self.assertEqual("risk", updated.polarity)
+        self.assertEqual("악재", updated.raw_payload["stockImpactLabel"])
+        self.assertEqual("feed-summary", updated.raw_payload["articleReadStatus"])
+        self.assertTrue(updated.raw_payload["aiAnalysis"]["summary"]["briefKo"])
+
+    def test_ontology_projection_materializes_article_ai_analysis_node(self):
+        evidence = ResearchEvidence(
+            "research:AAPL:news:ai",
+            "AAPL",
+            "news",
+            "Reuters",
+            "Apple shares fall on earnings concern",
+            "실적 우려",
+            "https://example.test/apple-ai",
+            "2026-07-10T01:00:00Z",
+            "risk",
+            88,
+            0.82,
+            "2026-07-10T01:00:00Z",
+            raw_payload={
+                "relationScope": "direct",
+                "relevanceScore": 96,
+                "sourceReliability": 90,
+                "materialityScore": 88,
+                "aiAnalysis": {
+                    "version": "news-ai-analysis-v1",
+                    "model": "unit",
+                    "impactPolarity": "risk",
+                    "impactLabelKo": "악재",
+                    "confidence": 0.82,
+                    "materialityScore": 88,
+                    "summary": {
+                        "oneLineKo": "실적 우려 기사",
+                        "briefKo": "실적 우려로 가격 부담을 확인합니다.",
+                        "watchPoints": ["가격 반응"],
+                    },
+                    "riskSignals": ["실적 우려"],
+                },
+            },
+        )
+        graph = PortfolioOntology("test")
+
+        add_research_evidence_concepts(
+            graph,
+            "stock:AAPL",
+            "",
+            "",
+            "AAPL",
+            {},
+            {"researchEvidence": {"AAPL": [evidence.to_dict()]}},
+        )
+
+        ai_entities = [item for item in graph.entities if item.kind == "article-ai-analysis"]
+        self.assertEqual(1, len(ai_entities))
+        self.assertEqual("ArticleAIAnalysis", ai_entities[0].properties["tboxClass"])
+        self.assertEqual("risk", ai_entities[0].properties["impactPolarity"])
+        self.assertTrue(any(item.relation_type == "HAS_ANALYSIS" for item in graph.relations))
 
     def test_korean_article_summary_removes_translation_preface_for_english_source(self):
         target = NewsCollectionTarget("005930", "삼성전자", "KOSPI", "KRW", "반도체")

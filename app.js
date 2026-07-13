@@ -8277,7 +8277,7 @@
       '<div class="investment-board-metrics">',
       metrics.map(function (item) {
         return [
-          '<section>',
+          '<section' + cardTypeAttrs("metric-cell") + '>',
           '<span>' + escapeHtml(item.caption || "") + '</span>',
           '<strong>' + escapeHtml(item.value) + '</strong>',
           '<em>' + escapeHtml(item.label || "") + '</em>',
@@ -8288,7 +8288,7 @@
       '<div class="investment-checklist-grid">',
       checklist.length ? checklist.map(function (item) {
         return [
-          '<div class="investment-check-row">',
+          '<div class="investment-check-row"' + cardTypeAttrs("ledger-row", item.status === "정상" ? "watch" : "hold") + '>',
           '<strong>' + escapeHtml(item.label || item.title || "-") + '</strong>',
           '<span>' + escapeHtml(item.status || "대기") + '</span>',
           '</div>'
@@ -8326,7 +8326,7 @@
   }
 
   function renderInvestmentGateMetric(label, value) {
-    return '<section><span>' + escapeHtml(label) + '</span><strong>' + escapeHtml(value) + '</strong></section>';
+    return '<section' + cardTypeAttrs("metric-cell") + '><span>' + escapeHtml(label) + '</span><strong>' + escapeHtml(value) + '</strong></section>';
   }
 
   function renderInvestmentActionQueuePanel(snapshot) {
@@ -8403,7 +8403,7 @@
     var name = row.name || stockDisplayName(row.symbol, row);
     var key = investmentActionKey(row, index);
     return [
-      '<div class="investment-action-row">',
+      '<div class="investment-action-row"' + cardTypeAttrs("action-queue-card", row.tone || "hold") + '>',
       '<div class="investment-action-main">',
       '<strong>' + escapeHtml(name) + '</strong>',
       '<span>' + escapeHtml([row.symbol, sourceLabel(row.source), row.market, row.sector].filter(Boolean).join(" · ")) + '</span>',
@@ -8587,7 +8587,7 @@
     var tone = finalOpinion.tone || (gaps.length ? "hold" : "watch");
     var thesis = textWithKnownDisplaySymbols(beginnerFriendlyText(finalOpinion.thesis || finalOpinion.action || ""), card.symbol, { symbol: card.symbol, name: displayName });
     return [
-      '<div class="investment-evidence-card">',
+      '<div class="investment-evidence-card"' + cardTypeAttrs("evidence-card", tone || "hold") + '>',
       '<div class="investment-evidence-head">',
       '<div>',
       '<strong>' + escapeHtml(displayName) + '</strong>',
@@ -10326,7 +10326,7 @@
 
   function renderNotificationOpsCell(item) {
     return [
-      '<span class="notification-ops-cell ' + escapeHtml(item[2] || "muted") + '">',
+      '<span class="notification-ops-cell ' + escapeHtml(item[2] || "muted") + '"' + cardTypeAttrs("metric-cell", item[2] || "muted") + '>',
       '<em>' + escapeHtml(item[0]) + '</em>',
       '<strong>' + escapeHtml(String(item[1])) + '</strong>',
       '</span>'
@@ -10884,7 +10884,7 @@
     var processing = job.recoverableProcessing ? "처리 중 지연 " + String(job.processingAgeMinutes || 0) + "분 · 워커 재시도 가능" : "";
     var rowKey = notificationJobKey(job);
     return [
-      '<div class="notification-decision-row ' + (selected ? "active " : "") + escapeHtml(notificationJobToneClass(job.status)) + '" role="option" tabindex="0" data-notification-job-select="' + escapeHtml(rowKey) + '" aria-selected="' + escapeHtml(selected ? "true" : "false") + '">',
+      '<div class="notification-decision-row ' + (selected ? "active " : "") + escapeHtml(notificationJobToneClass(job.status)) + '"' + cardTypeAttrs("decision-row", notificationJobToneClass(job.status)) + ' role="option" tabindex="0" data-notification-job-select="' + escapeHtml(rowKey) + '" aria-selected="' + escapeHtml(selected ? "true" : "false") + '">',
       '<div class="notification-decision-top">',
       '<span class="tone-chip ' + escapeHtml(notificationJobToneClass(job.status)) + '">' + escapeHtml(notificationJobStatusLabel(job.status)) + '</span>',
       '<strong>' + escapeHtml(labelWithNotificationIcon(job.messageType, job.messageTypeLabel || job.messageType || "-")) + '</strong>',
@@ -13708,7 +13708,7 @@
 
   function renderSymbolMarketSummary(market) {
     return [
-      '<div class="symbol-summary-metric">',
+      '<div class="symbol-summary-metric"' + cardTypeAttrs("metric-cell") + '>',
       '<span>' + escapeHtml(marketLabel(market.market)) + '</span>',
       '<strong>' + escapeHtml(market.count || 0) + '</strong>',
       '<em>' + escapeHtml(freshnessLabel(market)) + '</em>',
@@ -13719,7 +13719,7 @@
   function renderSymbolMarketDataSummary(summary) {
     if (!summary || !summary.count) return "";
     return [
-      '<div class="symbol-summary-metric">',
+      '<div class="symbol-summary-metric"' + cardTypeAttrs("metric-cell") + '>',
       '<span>수집 시세</span>',
       '<strong>' + escapeHtml(summary.count || 0) + '</strong>',
       '<em>' + escapeHtml(summary.latestUpdatedAt ? formatClock(summary.latestUpdatedAt) : "수집 대기") + '</em>',
@@ -13730,7 +13730,7 @@
   function renderSymbolSourceSummary(source) {
     var ok = String(source.status || "").toLowerCase() === "ok";
     return [
-      '<div class="symbol-source-status ' + (ok ? "ok" : "warn") + '">',
+      '<div class="symbol-source-status ' + (ok ? "ok" : "warn") + '"' + cardTypeAttrs("health-card", ok ? "watch" : "hold") + '>',
       '<span>' + escapeHtml(marketLabel(source.market)) + ' API</span>',
       '<strong>' + escapeHtml(source.status || "-") + '</strong>',
       '<em>' + escapeHtml(source.lastSuccessAt ? formatClock(source.lastSuccessAt) : "성공 기록 없음") + '</em>',
@@ -13805,7 +13805,7 @@
       ? [qualityLabel, item.quoteSource || "", item.marketDataUpdatedAt ? formatClock(item.marketDataUpdatedAt) : ""].filter(Boolean).join(" · ")
       : (item.quoteStatus || "추천용 시세 수집 순서를 기다리는 중");
     return [
-      '<div class="symbol-result-row">',
+      '<div class="symbol-result-row"' + cardTypeAttrs("ledger-row", already ? "watch" : "hold") + '>',
       '<div class="symbol-result-main">',
       '<div class="symbol-result-title">',
       '<strong>' + escapeHtml(stockDisplayName(symbol, item)) + '</strong>',
@@ -14065,7 +14065,7 @@
 
   function renderFeedCommandMetric(label, value, detail, tone) {
     return [
-      '<span class="feed-command-metric ' + escapeHtml(tone || "hold") + '">',
+      '<span class="feed-command-metric ' + escapeHtml(tone || "hold") + '"' + cardTypeAttrs("metric-cell", tone || "hold") + '>',
       '<em>' + escapeHtml(label) + '</em>',
       '<strong>' + escapeHtml(value) + '</strong>',
       '<b>' + escapeHtml(detail || "-") + '</b>',
@@ -14555,7 +14555,7 @@
 
   function renderFeedImpactMetric(label, value, tone) {
     return [
-      '<span class="feed-impact-metric ' + escapeHtml(tone || "hold") + '">',
+      '<span class="feed-impact-metric ' + escapeHtml(tone || "hold") + '"' + cardTypeAttrs("metric-cell", tone || "hold") + '>',
       '<em>' + escapeHtml(label) + '</em>',
       '<strong>' + escapeHtml(value) + '</strong>',
       '</span>'
@@ -14585,7 +14585,7 @@
     var confidence = item.confidence == null ? "-" : (Math.round(Number(item.confidence || 0) * 100) + "%");
     var key = feedEvidenceKey(item, index);
     return [
-      '<section class="feed-impact-card ' + escapeHtml(impact.tone) + '">',
+      '<section class="feed-impact-card ' + escapeHtml(impact.tone) + '"' + cardTypeAttrs("evidence-card", impact.tone) + '>',
       '<div class="feed-impact-card-head">',
       '<span class="tone-chip ' + escapeHtml(impact.tone) + '">' + escapeHtml(impact.label) + '</span>',
       '<div>',
@@ -14779,7 +14779,7 @@
     var summary = researchEvidenceKoreanSummary(item);
     var key = feedEvidenceKey(item, index);
     return [
-      '<div class="research-evidence-item ' + escapeHtml(impact.tone) + '">',
+      '<div class="research-evidence-item ' + escapeHtml(impact.tone) + '"' + cardTypeAttrs("evidence-card", impact.tone) + '>',
       '<div class="research-evidence-main">',
       '<div class="research-evidence-meta">',
       '<span class="tone-chip ' + escapeHtml(impact.tone) + '">' + escapeHtml(impact.label) + '</span>',
@@ -14902,7 +14902,7 @@
 
   function renderSettingsApiCard(title, subtitle, chips) {
     return [
-      '<div class="settings-api-row">',
+      '<div class="settings-api-row"' + cardTypeAttrs("config-panel") + '>',
       '<strong>' + escapeHtml(title) + '</strong>',
       '<span>' + escapeHtml(subtitle || "-") + '</span>',
       '<div class="chip-row">' + chips.join("") + '</div>',
@@ -15034,7 +15034,7 @@
       '<div class="settings-responsibility-head" role="row"><span>탭</span><span>결과에서 볼 것</span><span>설정에서 바꿀 것</span><span>이동</span></div>',
       rows.map(function (row) {
         return [
-          '<div class="settings-responsibility-row" role="row">',
+          '<div class="settings-responsibility-row" role="row"' + cardTypeAttrs("ledger-row") + '>',
           '<strong>' + escapeHtml(row.tab) + '</strong>',
           '<span>' + escapeHtml(row.result) + '</span>',
           '<em>' + escapeHtml(row.setting) + '</em>',
@@ -15049,7 +15049,7 @@
 
   function renderSettingsGroup(title, description, content, tone) {
     return [
-      '<section class="settings-fieldset ' + escapeHtml(tone || "neutral") + '">',
+      '<section class="settings-fieldset ' + escapeHtml(tone || "neutral") + '"' + cardTypeAttrs("config-panel", tone || "neutral") + '>',
       '<div class="settings-fieldset-head">',
       '<div>',
       '<strong>' + escapeHtml(title) + '</strong>',
@@ -15065,7 +15065,7 @@
 
   function renderSettingsOverviewPanel() {
     return [
-      '<article class="panel settings-overview-panel">',
+      '<article class="panel settings-overview-panel"' + cardTypeAttrs("config-panel", settingsStatusTone()) + '>',
       '<div class="panel-head">',
       '<div>',
       '<p class="label">App Settings</p>',

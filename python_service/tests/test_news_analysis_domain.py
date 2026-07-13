@@ -14,6 +14,7 @@ from digital_twin.domain.news_analysis import (
     korean_article_summary,
     relation_scope_is_investable,
     source_reliability_score,
+    stock_impact_analysis,
 )
 from digital_twin.domain.ontology_relation_reasoning import research_evidence_facts
 
@@ -270,6 +271,50 @@ class NewsAnalysisDomainTests(unittest.TestCase):
         self.assertNotIn("Google News", summary)
         self.assertNotIn("상승-으로-date", summary)
         self.assertNotIn("aggregated", summary)
+
+    def test_english_preferred_share_summary_extracts_record_volume_point(self):
+        target = NewsCollectionTarget("STRC", "Strategy Preferred", "US", "USD", "디지털자산")
+
+        summary = korean_article_summary(
+            target,
+            "STRC and SATA Preferred Shares Hit Record $10B in Combined June Trading Volume Despite Bitcoin Dip",
+            "STRC and SATA preferred shares hit record $10B in combined June trading volume despite Bitcoin dip.",
+            analysis={"relationScope": "direct", "eventType": "price_commentary"},
+        )
+
+        self.assertIn("합산 거래대금", summary)
+        self.assertIn("$10 billion", summary)
+        self.assertIn("사상 최고", summary)
+        self.assertIn("비트코인 하락", summary)
+        self.assertNotIn("관련 뉴스입니다", summary)
+        self.assertNotIn("뉴스 유형은", summary)
+
+    def test_stock_impact_analysis_explains_event_channel_and_watchpoint(self):
+        target = NewsCollectionTarget("STRC", "Strategy Preferred", "US", "USD", "디지털자산")
+
+        result = stock_impact_analysis(
+            target,
+            "Strategy CEO Says Convertible Debt Repayment Triggered STRC Plunge",
+            "",
+            "Strategy CEO says convertible debt repayment triggered STRC plunge.",
+            analysis={
+                "relationScope": "direct",
+                "eventType": "capital_policy",
+                "relevanceScore": 94.5,
+                "materialityScore": 72,
+            },
+            polarity="risk",
+            impact_score=11,
+        )
+
+        reason = result["stockImpactReasonKo"]
+        self.assertIn("핵심:", reason)
+        self.assertIn("전환사채 상환", reason)
+        self.assertIn("급락 원인", reason)
+        self.assertIn("영향 경로:", reason)
+        self.assertIn("배당 지속성", reason)
+        self.assertIn("확인:", reason)
+        self.assertNotIn("중요도는 높지만 방향성 표현이 뚜렷하지 않습니다", reason)
 
     def test_stored_summary_noise_is_removed_before_rendering(self):
         cleaned = clean_article_summary_noise(

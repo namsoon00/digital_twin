@@ -22,6 +22,8 @@ SUPPORT_KEYWORDS = (
     "launch",
     "strong demand",
     "surge",
+    "hit record",
+    "record",
     "실적",
     "상향",
     "수주",
@@ -55,6 +57,9 @@ RISK_KEYWORDS = (
     "weak demand",
     "loss",
     "risk",
+    "plunge",
+    "convertible debt",
+    "repayment",
     "하향",
     "소송",
     "조사",
@@ -143,11 +148,11 @@ EVENT_TYPE_KEYWORDS = {
     "supply_chain": ["공급", "supply", "supplier", "생산", "fab", "foundry", "라인", "공장"],
     "product": ["launch", "출시", "roadmap", "제품", "서비스", "chip", "GPU", "AI"],
     "regulation": ["regulation", "규제", "소송", "lawsuit", "sue", "sues", "sued", "legal", "litigation", "antitrust", "probe", "investigation", "조사", "제재"],
-    "capital_policy": ["buyback", "dividend", "자사주", "배당", "증자", "offering", "dilution"],
+    "capital_policy": ["buyback", "dividend", "자사주", "배당", "증자", "offering", "dilution", "debt", "convertible debt", "repayment", "상환"],
     "listing": ["listing", "상장", "ADR", "나스닥", "IPO"],
     "macro_sector": ["금리", "환율", "inflation", "FOMC", "업황", "수요", "demand"],
     "crypto_linked": ["bitcoin", "비트코인", "crypto", "암호화폐", "digital asset"],
-    "price_commentary": ["주가", "shares", "stock", "목표주가", "급등", "급락"],
+    "price_commentary": ["주가", "shares", "stock", "목표주가", "급등", "급락", "plunge", "trading volume", "거래량", "거래대금"],
 }
 
 SOCIAL_SOURCE_TERMS = [
@@ -299,6 +304,8 @@ TOPIC_LABELS = [
     ("배터리", "배터리"),
     ("bitcoin", "비트코인"),
     ("비트코인", "비트코인"),
+    ("convertible debt", "전환사채"),
+    ("trading volume", "거래량"),
     ("금리", "금리"),
     ("yield", "금리"),
     ("inflation", "인플레이션"),
@@ -766,7 +773,31 @@ def english_fragment_to_korean(value: object, target: object = None) -> str:
         (r"\bpivoting from 비트코인 보유 확대 to funding dividends with sales\b", "비트코인 보유 확대에서 매각 자금으로 배당 재원을 마련하는 전략으로 전환"),
         (r"\bfunding dividends with sales\b", "매각 자금으로 배당 재원을 마련"),
         (r"\bbitcoin strategy\b", "비트코인 전략"),
+        (r"\bbitcoin\b", "비트코인"),
+        (r"\bBTC pivot message\b", "비트코인 전략 전환 메시지"),
         (r"\bdigital assets?\b", "디지털자산"),
+        (r"\bpreferred shares?\b", "우선주"),
+        (r"\bcombined\b", "합산"),
+        (r"\btrading volume\b", "거래대금"),
+        (r"\bhit record\b|\brecord\b", "사상 최고"),
+        (r"\bdespite\b", "에도 불구하고"),
+        (r"\bdip\b", "하락"),
+        (r"\bplunge\b", "급락"),
+        (r"\bconvertible debt\b", "전환사채"),
+        (r"\brepayment\b", "상환"),
+        (r"\btriggered\b", "원인으로 작용"),
+        (r"\bjanuary\b", "1월"),
+        (r"\bfebruary\b", "2월"),
+        (r"\bmarch\b", "3월"),
+        (r"\bapril\b", "4월"),
+        (r"\bmay\b", "5월"),
+        (r"\bjune\b", "6월"),
+        (r"\bjuly\b", "7월"),
+        (r"\baugust\b", "8월"),
+        (r"\bseptember\b", "9월"),
+        (r"\boctober\b", "10월"),
+        (r"\bnovember\b", "11월"),
+        (r"\bdecember\b", "12월"),
         (r"\bpre[- ]market\b", "프리마켓"),
         (r"\bafter[- ]hours\b", "시간외 거래"),
         (r"\bshares?\b", "주가"),
@@ -821,6 +852,26 @@ def english_sentence_korean_fact(sentence: object, target: object, event_label: 
         else:
             issue = english_fragment_to_korean(issue_source, target) if issue_source else ""
         return actor + "가 " + target_party + "를 상대로 소송을 제기했다는 내용입니다" + (". 쟁점은 " + issue + "입니다" if issue else ".")
+    preferred_volume = re.search(
+        r"(.+?)\s+preferred shares?\s+hit record\s+([$€£]?\d[\d,.]*(?:\.\d+)?\s?(?:billion|million|trillion|bn|mn|B|M)?)\s+in\s+combined\s+(.+?)\s+trading volume(?:\s+despite\s+(.+))?",
+        source,
+        re.IGNORECASE,
+    )
+    if preferred_volume:
+        subject = english_fragment_to_korean(preferred_volume.group(1), target)
+        amount = preferred_volume.group(2).replace("B", " billion").replace("M", " million")
+        period = english_fragment_to_korean(preferred_volume.group(3), target)
+        counter = english_fragment_to_korean(preferred_volume.group(4), target) if preferred_volume.group(4) else ""
+        return subject + " 우선주의 " + period + " 합산 거래대금이 " + amount + "로 사상 최고를 기록했다는 내용입니다" + (". 다만 " + counter + "도 함께 언급됐습니다" if counter else ".")
+    debt_plunge = re.search(r"(.+?)\s+CEO\s+says\s+convertible debt repayment\s+triggered\s+(.+?)\s+plunge", source, re.IGNORECASE)
+    if debt_plunge:
+        actor = english_fragment_to_korean(debt_plunge.group(1), target)
+        affected = english_fragment_to_korean(debt_plunge.group(2), target)
+        return actor + " 경영진이 전환사채 상환을 " + affected + " 급락 원인으로 설명했다는 내용입니다."
+    btc_clarity = re.search(r"(.+?)\s+needs clarity in BTC pivot message to convince investors", source, re.IGNORECASE)
+    if btc_clarity:
+        actor = english_fragment_to_korean(btc_clarity.group(1), target)
+        return actor + "의 비트코인 전략 전환 메시지가 투자자를 설득하려면 더 명확해야 한다는 내용입니다."
     if "homicide investigation" in lowered and "body found" in lowered and "tesla" in lowered:
         return "테슬라 차량 트렁크에서 시신이 발견돼 살인 수사가 진행 중이라는 내용입니다."
     if re.search(r"\bshares?\s+(?:were\s+)?little changed\b", source, re.IGNORECASE):
@@ -966,6 +1017,89 @@ def korean_article_summary(
     )
 
 
+def article_event_takeaway(target: object, title: object, article_text: object = "", feed_summary: object = "") -> str:
+    text = clean_article_summary_noise(compact_text(str(article_text or feed_summary or title or ""), 1600))
+    title_text = clean_article_title(title)
+    combined = title_text + " " + text
+    lowered = _lower_text(combined)
+    target_name = _target_name_for_summary(target)
+    preferred_volume = re.search(
+        r"preferred shares?\s+hit record\s+([$€£]?\d[\d,.]*(?:\.\d+)?\s?(?:billion|million|trillion|bn|mn|B|M)?)\s+in\s+combined\s+(.+?)\s+trading volume(?:\s+despite\s+(.+))?",
+        combined,
+        re.IGNORECASE,
+    )
+    if preferred_volume:
+        amount = preferred_volume.group(1).replace("B", " billion").replace("M", " million")
+        period = english_fragment_to_korean(preferred_volume.group(2), target)
+        counter = english_fragment_to_korean(preferred_volume.group(3), target) if preferred_volume.group(3) else ""
+        return target_name + " 관련 우선주의 " + period + " 합산 거래대금이 " + amount + "로 사상 최고를 기록" + (", " + counter + "도 함께 언급" if counter else "")
+    debt_plunge = re.search(r"convertible debt repayment\s+triggered\s+(.+?)\s+plunge", combined, re.IGNORECASE)
+    if debt_plunge:
+        affected = english_fragment_to_korean(debt_plunge.group(1), target)
+        return "전환사채 상환이 " + affected + " 급락 원인으로 지목"
+    if re.search(r"needs clarity in BTC pivot message to convince investors", combined, re.IGNORECASE):
+        return "비트코인 전략 전환 메시지가 투자자를 설득하기에는 아직 명확하지 않다는 지적"
+    if re.search(r"\bsues?\b|\blawsuit\b|\blitigation\b|\bantitrust\b", lowered):
+        return target_name + " 관련 소송·규제 이슈가 투자심리 부담으로 부각"
+    if re.search(r"\bbuyback\b|자사주|dividend|배당", lowered):
+        return "자사주·배당 같은 주주환원 정책 변화가 핵심"
+    if re.search(r"\boffering\b|dilution|유상증자|증자", lowered):
+        return "자금 조달과 주식 가치 희석 가능성이 핵심"
+    if re.search(r"\bearnings\b|revenue|profit|실적|매출|영업이익", lowered):
+        return "실적과 이익 전망 변화가 핵심"
+    if re.search(r"\bbitcoin\b|비트코인|crypto|digital asset", lowered):
+        return "비트코인·가상자산 가격 민감도가 핵심"
+    if re.search(r"\bAI\b|artificial intelligence|gpu|data center|cloud|AI", combined, re.IGNORECASE):
+        return "AI·데이터센터 수요가 실적 기대에 연결되는지 확인할 뉴스"
+    sentences = article_sentence_candidates(text or title_text, target, {}, 1)
+    if sentences:
+        return clean_article_summary_noise(sentences[0]).rstrip(".")
+    return target_name + " 투자 판단에 영향을 줄 수 있는 새 정보"
+
+
+def impact_channel_text(event_type: object, text: object) -> str:
+    event = str(event_type or "general")
+    lowered = _lower_text(text)
+    if event == "earnings":
+        return "실적 추정치와 목표가 재평가로 이어질 수 있습니다"
+    if event == "guidance":
+        return "앞으로의 매출·이익 눈높이를 바꾸는 재료입니다"
+    if event == "supply_chain":
+        return "생산 차질이나 공급 확대가 매출 시점과 마진에 영향을 줍니다"
+    if event == "product":
+        return "제품 경쟁력과 실제 매출 전환 가능성을 확인해야 합니다"
+    if event == "regulation":
+        return "소송 비용, 사업 제약, 투자심리 악화로 연결될 수 있습니다"
+    if event == "capital_policy":
+        if re.search(r"repayment|상환|debt|전환사채", lowered):
+            return "상환 부담과 자금 조달 신뢰가 배당 지속성·가격 변동성에 바로 연결됩니다"
+        if re.search(r"buyback|자사주|dividend|배당", lowered):
+            return "주주환원은 수급을 지지하지만 재원 지속성이 관건입니다"
+        return "자금 조달·주주환원 조건이 주당 가치와 투자심리를 바꿀 수 있습니다"
+    if event == "listing":
+        return "거래시장과 유동성 변화가 수급을 바꿀 수 있습니다"
+    if event == "macro_sector":
+        return "업황·금리·환율 변화가 밸류에이션과 주문 흐름에 영향을 줍니다"
+    if event == "crypto_linked":
+        return "비트코인 가격과 같은 방향으로 흔들릴 가능성이 커집니다"
+    if event == "price_commentary":
+        return "이미 가격 반응이 언급된 기사라 다음 거래량과 후속 가격 반응이 중요합니다"
+    return "가격을 움직일 만큼 구체적인 사건인지 원문과 다음 가격 반응으로 확인해야 합니다"
+
+
+def impact_watch_text(impact: str, materiality: float, text: object) -> str:
+    lowered = _lower_text(text)
+    if impact == "positive":
+        return "호재라면 가격 상승이 거래량 증가와 함께 이어지는지 확인하세요"
+    if impact == "negative":
+        return "악재라면 하락이 하루짜리 반응인지, 거래량을 동반한 재평가인지 확인하세요"
+    if re.search(r"trading volume|거래량|거래대금", lowered):
+        return "거래가 늘어난 이유가 매수 수요인지 단순 변동성인지 가격 반응으로 확인하세요"
+    if materiality >= 65:
+        return "중요도는 높지만 방향은 단정하지 말고 당일·익일 가격과 거래량 반응을 보세요"
+    return "방향성이 약하므로 다른 가격·수급 신호와 같이 봐야 합니다"
+
+
 def stock_impact_analysis(
     target: object,
     title: object,
@@ -981,39 +1115,45 @@ def stock_impact_analysis(
     if detected_polarity == "support":
         impact = "positive"
         label = "호재"
-        impact_word = "긍정적"
         hits = keyword_hits(text, SUPPORT_KEYWORDS)
     elif detected_polarity in {"risk", "contradiction"}:
         impact = "negative"
         label = "악재"
-        impact_word = "부정적"
         hits = keyword_hits(text, RISK_KEYWORDS)
     else:
         impact = "neutral"
         label = "중립"
-        impact_word = "중립적"
         hits = []
     scope_label = relation_scope_label(analysis.get("relationScope"))
     event_label = event_type_label(analysis.get("eventType") or classify_news_event_type(title, text))
+    event_type = str(analysis.get("eventType") or classify_news_event_type(title, text))
     materiality = number(analysis.get("materialityScore"))
     relevance = number(analysis.get("relevanceScore"))
-    reason_parts = [
-        scope_label + "이고 " + event_label + " 성격입니다",
-        "관련성 " + ("%.1f" % relevance).rstrip("0").rstrip(".") + "점" if relevance else "",
-        "중요도 " + ("%.1f" % materiality).rstrip("0").rstrip(".") + "점" if materiality else "",
+    takeaway = article_event_takeaway(target, title, article_text, feed_summary)
+    channel = impact_channel_text(event_type, text)
+    watch = impact_watch_text(impact, materiality, text)
+    reason_parts = []
+    if takeaway:
+        reason_parts.append("핵심: " + takeaway + ".")
+    reason_parts.append("영향 경로: " + channel + ".")
+    score_bits = [
+        scope_label,
+        event_label,
+        ("관련성 " + ("%.1f" % relevance).rstrip("0").rstrip(".") + "점") if relevance else "",
+        ("중요도 " + ("%.1f" % materiality).rstrip("0").rstrip(".") + "점") if materiality else "",
     ]
+    reason_parts.append("주가 영향: " + label + "로 분류했습니다(" + ", ".join(bit for bit in score_bits if bit) + ").")
     if hits:
-        reason_parts.append(("긍정 표현 " if impact == "positive" else "부정 표현 ") + ", ".join(hits[:3]))
-    if impact == "neutral" and materiality >= 65:
-        reason_parts.append("중요도는 높지만 방향성 표현이 뚜렷하지 않습니다")
-    reason = "주가 영향은 " + impact_word + "으로 봅니다. " + ", ".join(part for part in reason_parts if part) + "."
+        reason_parts.append(("긍정 표현: " if impact == "positive" else "부정 표현: ") + ", ".join(hits[:3]) + ".")
+    reason_parts.append("확인: " + watch + ".")
+    reason = " ".join(part for part in reason_parts if part)
     return {
         "articleDigestVersion": ARTICLE_DIGEST_VERSION,
         "stockImpact": impact,
         "stockImpactLabel": label,
         "stockImpactPolarity": detected_polarity or "context",
         "stockImpactScore": round(number(impact_score), 1),
-        "stockImpactReasonKo": compact_text(reason, 360),
+        "stockImpactReasonKo": compact_text(reason, 520),
     }
 
 

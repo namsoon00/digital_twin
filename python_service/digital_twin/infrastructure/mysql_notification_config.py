@@ -17,6 +17,7 @@ from ..domain.model_review import ModelReviewJob
 from ..domain.notification_rules import (
     DEFAULT_NOTIFICATION_RULES,
     NotificationRuleConfig,
+    attach_previous_profit_loss_context,
     apply_market_hours_rule,
     apply_similarity_rule,
     apply_state_cooldown_rule,
@@ -329,4 +330,5 @@ class MySQLNotificationRuleStore(MySQLOperationalConnection):
         recent_count, previous_score, previous_context, last_sent_at = self.similar_history(job, rule, decision.fingerprint)
         decision = apply_state_cooldown_rule(decision, rule, recent_count, previous_score, previous_context, last_sent_at, age_minutes_since(last_sent_at), job)
         decision = apply_similarity_rule(decision, rule, recent_count, previous_score, previous_context, job)
+        decision = attach_previous_profit_loss_context(decision, job, previous_context)
         return apply_market_hours_rule(decision, rule, job)

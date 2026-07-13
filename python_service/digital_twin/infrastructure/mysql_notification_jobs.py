@@ -5,6 +5,7 @@ from ..domain.data_freshness import evaluate_notification_data_freshness
 from ..domain.notification_rules import (
     DEFAULT_NOTIFICATION_RULES,
     NotificationRuleConfig,
+    attach_previous_profit_loss_context,
     apply_market_hours_rule,
     apply_similarity_rule,
     apply_state_cooldown_rule,
@@ -212,6 +213,7 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             job,
         )
         decision = apply_similarity_rule(decision, rule, recent_count, previous_score, previous_context, job)
+        decision = attach_previous_profit_loss_context(decision, job, previous_context)
         return apply_market_hours_rule(decision, rule, job)
 
     def enqueue_with_connection(self, connection, job: NotificationJob) -> bool:

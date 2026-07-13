@@ -5,6 +5,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.domain.notification_rules import (
+    attach_previous_profit_loss_context,
     apply_similarity_rule,
     apply_state_cooldown_rule,
     default_notification_rule,
@@ -45,6 +46,32 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
         })
 
         self.assertEqual("손익 구간: 이전 알림 대비 2.2%p 악화", summary)
+
+    def test_previous_profit_loss_context_is_used_in_message_topline(self):
+        rule = default_notification_rule("investmentInsight")
+        job = NotificationJob.create(
+            "SK하이닉스 손익 구간",
+            account_id="main",
+            message_type="investmentInsight",
+            context={
+                "severity": "WATCH",
+                "symbol": "000660",
+                "rawLines": "수익률: -28.2%",
+                "ontologyInsight": {"subject": "000660", "dispatchInsightType": "riskManagement"},
+            },
+        )
+        decision = evaluate_notification_rule(job, rule)
+
+        decision = attach_previous_profit_loss_context(
+            decision,
+            job,
+            {"rawLines": "수익률: -24.1%", "ontologyInsight": {"subject": "000660"}},
+        )
+        context = dict(job.context)
+        context.update(decision.to_context())
+        message = prepend_execution_start_badge("<b>[관찰] 🛡️ SK하이닉스: 매도 우선 점검</b>", context)
+
+        self.assertIn("손익 구간: 큰 손실(-28.2%) · 이전 알림 대비 4.1%p 악화", message)
 
     def test_topline_change_summary_maps_new_news_disclosure_reason(self):
         summary = notification_topline_change_summary({

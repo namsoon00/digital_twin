@@ -168,6 +168,23 @@ def profit_loss_rate_from_context(context: Dict[str, object], text: str = "") ->
         return value
     return None
 
+def attach_previous_profit_loss_context(
+    decision: NotificationRuleDecision,
+    job: NotificationJob,
+    previous_context: Dict[str, object] = None,
+) -> NotificationRuleDecision:
+    previous_context = previous_context or {}
+    if job is None or not previous_context:
+        return decision
+    current = profit_loss_rate_from_context(job.context or {}, job.text if job else "")
+    previous = profit_loss_rate_from_context(previous_context)
+    if previous is None:
+        return decision
+    decision.previous_profit_loss_rate = round(float(previous), 2)
+    if current is not None:
+        decision.profit_loss_rate_delta_pct = round(float(current) - float(previous), 2)
+    return decision
+
 
 def ma60_distance_from_text(value: object) -> Optional[float]:
     text = str(value or "")

@@ -492,12 +492,14 @@ class NotificationRuleDecision:
     market_hours_timezone: str = ""
     market_hours_markets: List[str] = dataclass_field(default_factory=list)
     notification_formula_audit: Dict[str, object] = dataclass_field(default_factory=dict)
+    previous_profit_loss_rate: object = None
+    profit_loss_rate_delta_pct: object = None
 
     def to_context(self) -> Dict[str, object]:
         decision = "send" if self.should_send else "suppressed"
         if not self.enabled:
             decision = "bypass"
-        return {
+        payload = {
             "honeyScore": self.score,
             "honeyThreshold": self.threshold,
             "honeyScoreText": str(self.score) + "/" + str(self.threshold),
@@ -535,6 +537,11 @@ class NotificationRuleDecision:
             "marketHoursMarkets": list(self.market_hours_markets or []),
             "notificationFormulaAudit": dict(self.notification_formula_audit or {}),
         }
+        if self.previous_profit_loss_rate is not None:
+            payload["previousProfitLossRate"] = self.previous_profit_loss_rate
+        if self.profit_loss_rate_delta_pct is not None:
+            payload["profitLossRateDeltaPct"] = self.profit_loss_rate_delta_pct
+        return payload
 
 
 def default_conditions() -> List[NotificationRuleCondition]:

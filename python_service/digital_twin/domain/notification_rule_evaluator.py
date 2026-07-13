@@ -1,4 +1,5 @@
-from typing import Dict, Iterable, List, Tuple
+import re
+from typing import Dict, Iterable, List, Optional, Tuple
 
 from .market_hours import evaluate_market_hours
 from .notification_rule_models import (
@@ -21,6 +22,34 @@ from .notification_rule_models import (
 from .notifications import NotificationJob
 from .scoring import fallback_terms_for_condition
 from .strategy import SafeFormula
+
+
+MANDATORY_PROFIT_LOSS_MESSAGE_TYPES = {"investmentInsight", "holdingTiming"}
+MANDATORY_LOSS_RATE_THRESHOLD = -15.0
+MANDATORY_PROFIT_RATE_THRESHOLD = 20.0
+PROFIT_LOSS_FIELD_CANDIDATES = [
+    "profitLossRate",
+    "profit_loss_rate",
+    "pnlRate",
+    "pnl_rate",
+    "position.profitLossRate",
+    "position.profit_loss_rate",
+    "portfolioPosition.profitLossRate",
+    "holding.profitLossRate",
+    "facts.profitLossRate",
+    "ontologyInsight.facts.profitLossRate",
+    "ontologyInsight.legacyModel.profitLossRate",
+    "ontologyInsight.legacy_model.profitLossRate",
+    "activeInvestmentOpinion.facts.profitLossRate",
+    "activeInvestmentOpinion.legacyModel.profitLossRate",
+    "activeInvestmentOpinion.legacy_model.profitLossRate",
+    "ontologyRelationContext.facts.profitLossRate",
+    "relationContext.facts.profitLossRate",
+]
+PROFIT_LOSS_TEXT_FIELDS = ["rawLines", "body", "summary", "currentStatus", "currentSituation"]
+PROFIT_LOSS_TEXT_PATTERN = re.compile(
+    r"(?:수익률|손익률|손익)\s*(?:[:：]|은|이|약)?\s*([+-]?\d+(?:\.\d+)?)\s*%"
+)
 
 
 def flattened_strings(value) -> Iterable[str]:
@@ -84,6 +113,80 @@ def numeric_value(value):
         return float(str(value).replace(",", "").replace("%", "").strip())
     except (TypeError, ValueError):
         return None
+
+
+def profit_loss_rate_from_text(value: object) -> Optional[float]:
+    text = str(value or "")
+    if not text.strip():
+        return None
+    match = PROFIT_LOSS_TEXT_PATTERN.search(text)
+    if not match:
+        return None
+    return numeric_value(match.group(1))
+
+
+def profit_loss_rate_from_context(context: Dict[str, object], text: str = "") -> Optional[float]:
+    context = context or {}
+    for field in PROFIT_LOSS_FIELD_CANDIDATES:
+        value = numeric_value(field_value(context, field))
+        if value is not None:
+            return value
+    for field in PROFIT_LOSS_TEXT_FIELDS:
+        field_text = " ".join(flattened_strings(field_value(context, field)))
+        value = profit_loss_rate_from_text(field_text)
+        if value is not None:
+            return value
+    value = profit_loss_rate_from_text(text)
+    if value is not None:
+        return value
+    return None
+
+
+def mandatory_profit_loss_delivery_reason(job: NotificationJob = None) -> str:
+    if job is None:
+        return ""
+    if str(job.message_type or "") not in MANDATORY_PROFIT_LOSS_MESSAGE_TYPES:
+        return ""
+    profit_loss_rate = profit_loss_rate_from_context(job.context or {}, job.text or "")
+    if profit_loss_rate is None:
+        return ""
+    if profit_loss_rate <= MANDATORY_LOSS_RATE_THRESHOLD:
+        return (
+            "손실률 "
+            + format_rule_number(profit_loss_rate)
+            + "%가 필수 발송 구간("
+            + format_rule_number(MANDATORY_LOSS_RATE_THRESHOLD)
+            + "% 이하)에 있음"
+        )
+    if profit_loss_rate >= MANDATORY_PROFIT_RATE_THRESHOLD:
+        return (
+            "수익률 +"
+            + format_rule_number(profit_loss_rate)
+            + "%가 필수 발송 구간(+"
+            + format_rule_number(MANDATORY_PROFIT_RATE_THRESHOLD)
+            + "% 이상)에 있음"
+        )
+    return ""
+
+
+def apply_mandatory_profit_loss_delivery(
+    decision: NotificationRuleDecision,
+    job: NotificationJob = None,
+) -> bool:
+    reason = mandatory_profit_loss_delivery_reason(job)
+    if not reason:
+        return False
+    decision.should_send = True
+    decision.suppression_reason = ""
+    decision.state_suppressed = False
+    decision.state_decision = "mandatory_profit_loss_band"
+    decision.state_reason = reason
+    decision.similarity_bypassed = True
+    decision.similarity_bypass_reason = reason
+    marker = "손익 필수 발송: " + reason
+    if marker not in decision.reasons:
+        decision.reasons.append(marker)
+    return True
 
 
 def severity_rank(value) -> int:
@@ -361,6 +464,8 @@ def apply_similarity_rule(
 ) -> NotificationRuleDecision:
     decision.similarity_recent_count = max(0, int(recent_count or 0))
     decision.similarity_previous_score = max(0, int(previous_score or 0))
+    if config.enabled and apply_mandatory_profit_loss_delivery(decision, job):
+        return decision
     if decision.suppression_reason == "state_cooldown" or decision.similarity_bypassed:
         return decision
     if not config.enabled or not config.similarity_enabled or decision.similarity_recent_count <= 0:
@@ -414,6 +519,8 @@ def apply_state_cooldown_rule(
     if not decision.fingerprint:
         decision.state_decision = "unknown"
         decision.state_reason = "상태 fingerprint 없음"
+        return decision
+    if apply_mandatory_profit_loss_delivery(decision, job):
         return decision
     if decision.state_recent_sent_count <= 0:
         decision.state_decision = "new_threshold"

@@ -4,6 +4,7 @@ from typing import Callable, Dict, Iterable, List, Optional, Protocol, Tuple, ru
 
 from .accounts import AccountConfig
 from .investment_research import NewsCollectionTarget, ResearchEvidence
+from .investment_calendar import InvestmentCalendarEvent
 from .ontology_contracts import PortfolioOntology
 from .portfolio import AccountSnapshot, AlertEvent, Position
 from .symbol_universe import ListedSymbol
@@ -234,6 +235,34 @@ class SymbolUniverseRepository(Protocol):
         ...
 
     def source_states(self) -> List[Dict[str, object]]:
+        ...
+
+
+class InvestmentCalendarRepository(Protocol):
+    def upsert(self, event: InvestmentCalendarEvent) -> InvestmentCalendarEvent:
+        ...
+
+    def get(self, event_id: str):
+        ...
+
+    def delete(self, event_id: str) -> bool:
+        ...
+
+    def list(
+        self,
+        from_at: str = "",
+        to_at: str = "",
+        status: str = "",
+        symbol: str = "",
+        event_type: str = "",
+        limit: int = 200,
+    ) -> List[InvestmentCalendarEvent]:
+        ...
+
+    def reminder_candidates(self, now_at: str = "", lookback_minutes: int = 180) -> List[InvestmentCalendarEvent]:
+        ...
+
+    def summary(self) -> Dict[str, object]:
         ...
 
 

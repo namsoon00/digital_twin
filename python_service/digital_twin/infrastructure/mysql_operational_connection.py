@@ -326,6 +326,31 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS investment_calendar_events (
+        event_id VARCHAR(191) PRIMARY KEY,
+        title VARCHAR(255) NOT NULL DEFAULT '',
+        event_type VARCHAR(64) NOT NULL DEFAULT 'custom',
+        starts_at VARCHAR(40) NOT NULL DEFAULT '',
+        ends_at VARCHAR(40) NOT NULL DEFAULT '',
+        timezone_name VARCHAR(80) NOT NULL DEFAULT 'Asia/Seoul',
+        all_day TINYINT NOT NULL DEFAULT 0,
+        status VARCHAR(32) NOT NULL DEFAULT 'active',
+        importance INT NOT NULL DEFAULT 60,
+        symbols_json LONGTEXT NOT NULL,
+        markets_json LONGTEXT NOT NULL,
+        account_ids_json LONGTEXT NOT NULL,
+        source VARCHAR(120) NOT NULL DEFAULT 'manual',
+        source_url TEXT NOT NULL,
+        notes LONGTEXT NOT NULL,
+        reminder_offsets_json LONGTEXT NOT NULL,
+        payload_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        KEY idx_investment_calendar_time_status (status, starts_at, event_id),
+        KEY idx_investment_calendar_type_time (event_type, starts_at, event_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS ontology_ai_opinion_samples (
         sample_id VARCHAR(191) PRIMARY KEY,
         portfolio_id VARCHAR(191) NOT NULL DEFAULT '',

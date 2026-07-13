@@ -28,6 +28,9 @@ MARKET_DATA_COLLECTED = "market_data.collected"
 RESEARCH_EVIDENCE_COLLECTED = "research_evidence.collected"
 ONTOLOGY_REASONING_REQUESTED = "ontology.reasoning_requested"
 ONTOLOGY_REASONING_COMPLETED = "ontology.reasoning_completed"
+INVESTMENT_CALENDAR_EVENT_SAVED = "investment_calendar.event_saved"
+INVESTMENT_CALENDAR_EVENT_REMOVED = "investment_calendar.event_removed"
+INVESTMENT_CALENDAR_REMINDER_DUE = "investment_calendar.reminder_due"
 
 
 @dataclass(frozen=True)
@@ -251,5 +254,51 @@ def ontology_reasoning_completed_event(
             "status": str(status or "ok"),
             "reason": str(reason or ""),
             "dispatchMode": "data-update-driven",
+        },
+    )
+
+
+def investment_calendar_event_saved_event(calendar_event) -> DomainEvent:
+    payload = calendar_event.to_dict() if hasattr(calendar_event, "to_dict") else dict(calendar_event or {})
+    symbols = list(payload.get("symbols") or [])
+    markets = list(payload.get("markets") or [])
+    return DomainEvent(
+        name=INVESTMENT_CALENDAR_EVENT_SAVED,
+        aggregate_id=str(payload.get("eventId") or ""),
+        payload={
+            "event": payload,
+            "eventId": str(payload.get("eventId") or ""),
+            "title": str(payload.get("title") or ""),
+            "eventType": str(payload.get("eventType") or ""),
+            "startsAt": str(payload.get("startsAt") or ""),
+            "importance": int(payload.get("importance") or 0),
+            "symbols": symbols[:100],
+            "markets": markets[:50],
+            "changedSymbols": symbols[:100],
+            "changedCount": len(symbols),
+        },
+    )
+
+
+def investment_calendar_event_removed_event(event_id: str) -> DomainEvent:
+    return DomainEvent(
+        name=INVESTMENT_CALENDAR_EVENT_REMOVED,
+        aggregate_id=str(event_id or ""),
+        payload={"eventId": str(event_id or "")},
+    )
+
+
+def investment_calendar_reminder_due_event(reminders: Iterable[object]) -> DomainEvent:
+    items = [item.to_dict() if hasattr(item, "to_dict") else dict(item or {}) for item in reminders or []]
+    event_ids = sorted(set(str(item.get("eventId") or "") for item in items if str(item.get("eventId") or "")))
+    symbols = sorted(set(str(symbol or "").upper().strip() for item in items for symbol in (item.get("symbols") or []) if str(symbol or "").strip()))
+    return DomainEvent(
+        name=INVESTMENT_CALENDAR_REMINDER_DUE,
+        aggregate_id="calendar:" + (",".join(event_ids) or "none")[:180],
+        payload={
+            "count": len(items),
+            "eventIds": event_ids[:100],
+            "symbols": symbols[:100],
+            "reminders": items[:100],
         },
     )

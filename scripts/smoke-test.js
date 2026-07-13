@@ -400,6 +400,23 @@ function checkFrontendAdminRender() {
         }
       ]
     },
+    "/api/investment-calendar/events": {
+      generatedAt: "2026-07-13T00:00:00Z",
+      events: [],
+      summary: { total: 0, upcoming: 0, nextStartsAt: "", byType: [] },
+      eventTypes: [
+        { type: "earnings", label: "실적발표" },
+        { type: "dividend", label: "배당/권리" },
+        { type: "macro", label: "거시지표" },
+        { type: "centralBank", label: "중앙은행" },
+        { type: "disclosure", label: "공시" },
+        { type: "shareholderMeeting", label: "주주총회" },
+        { type: "lockup", label: "락업해제" },
+        { type: "portfolioReview", label: "포트폴리오 점검" },
+        { type: "custom", label: "사용자 이벤트" }
+      ],
+      preview: false
+    },
     "/api/ontology/rulebox/candidates": {
       status: "ok",
       trigger: "manual",
@@ -1265,8 +1282,7 @@ function checkFrontendAdminRender() {
     assertOk(code.indexOf("syncTopbarScrollState") >= 0 && code.indexOf("topbar-collapsed") >= 0, "상단 제목 영역을 스크롤 상태에 따라 접는 로직이 없습니다.");
     assertOk(styles.indexOf(".shell-page.topbar-collapsed") >= 0 && styles.indexOf(".topbar-collapsed .topbar") >= 0, "상단 제목 영역 접힘 레이아웃 스타일이 없습니다.");
     assertOk(
-      code.indexOf('var bottomTabIds = ["overview", "watchlist", "notifications", "modeling"];') >= 0 ||
-      code.indexOf('var bottomTabIds = ["overview", "watchlist", "notifications", "modeling", "experiments"];') >= 0,
+      /var bottomTabIds = \[[^\]]*"notifications"[^\]]*"modeling"[^\]]*\];/.test(code),
       "하단 핵심 탭에 알림과 투자 분석이 배치되지 않았습니다."
     );
     assertOk(code.indexOf('var managementTabIds = ["accounts", "symbols", "feed", "system", "settings"];') >= 0, "상단 운영 메뉴 탭 구성이 역할과 맞지 않습니다.");

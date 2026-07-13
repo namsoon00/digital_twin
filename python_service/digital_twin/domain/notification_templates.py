@@ -131,6 +131,10 @@ DEFAULT_NOTIFICATION_TEMPLATES = {
         "template": DEFAULT_TEMPLATE,
         "description": "온톨로지 관계 인사이트 기반 투자 알림",
     },
+    "investmentCalendarReminder": {
+        "template": BODY_TEMPLATE,
+        "description": "투자 이벤트 캘린더 리마인더",
+    },
     "newsDigest": {
         "template": BODY_TEMPLATE,
         "description": "뉴스/피드 새 정보 알림",

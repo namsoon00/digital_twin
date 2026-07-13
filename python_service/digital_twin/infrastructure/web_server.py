@@ -60,7 +60,7 @@ from ..infrastructure.event_bus import default_event_bus
 from ..infrastructure.mock_market import mock_market_payload, mock_market_scenario_list
 from ..infrastructure.ontology_graph_store import ontology_repository_from_settings
 from ..infrastructure import operational_store as stores
-from ..infrastructure.service_factory import build_notification_queue_runner, build_ontology_lab_service, build_rule_change_candidate_service, build_symbol_universe_service, flow_lens_snapshot, investment_analysis_snapshot
+from ..infrastructure.service_factory import build_investment_calendar_service, build_notification_queue_runner, build_ontology_lab_service, build_rule_change_candidate_service, build_symbol_universe_service, flow_lens_snapshot, investment_analysis_snapshot
 from ..infrastructure.settings import ROOT_DIR, runtime_settings, save_runtime_settings
 from ..infrastructure.toss_snapshots import build_snapshot
 
@@ -456,6 +456,10 @@ def settings_status_payload() -> Dict[str, object]:
         "newsCollectionIncludeWatchlist",
         "newsCollectionIncludeHoldings",
         "newsCollectionRateLimitSeconds",
+        "investmentCalendarEnabled",
+        "investmentCalendarIntervalSeconds",
+        "investmentCalendarDefaultWindowDays",
+        "investmentCalendarReminderLookbackMinutes",
         "dartDisclosureAiAnalysisEnabled",
         "dartDisclosureAiUseCodex",
         "dartDisclosureAiCommand",
@@ -873,6 +877,37 @@ def delete_research_evidence_payload(evidence_id: str, query: Dict[str, List[str
     payload["deleted"] = removed
     payload["deletedId"] = normalized_id
     return payload
+
+
+def investment_calendar_service():
+    return build_investment_calendar_service(runtime_settings(), event_publisher=RealtimeEventBridge())
+
+
+def investment_calendar_query_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
+    return {
+        "from": first_query(query, "from") or first_query(query, "fromAt"),
+        "to": first_query(query, "to") or first_query(query, "toAt"),
+        "status": first_query(query, "status"),
+        "symbol": first_query(query, "symbol"),
+        "eventType": first_query(query, "eventType") or first_query(query, "event_type"),
+        "limit": first_query(query, "limit") or "200",
+    }
+
+
+def investment_calendar_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
+    return investment_calendar_service().list_events(investment_calendar_query_payload(query))
+
+
+def save_investment_calendar_event_payload(payload: Dict[str, object]) -> Dict[str, object]:
+    return investment_calendar_service().save_event(payload if isinstance(payload, dict) else {})
+
+
+def delete_investment_calendar_event_payload(event_id: str) -> Dict[str, object]:
+    return investment_calendar_service().delete_event(event_id)
+
+
+def investment_calendar_reminders_once_payload() -> Dict[str, object]:
+    return investment_calendar_service().enqueue_due_reminders()
 
 
 def parse_utc(value: str):
@@ -1979,6 +2014,31 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
 
         if path == "/api/research-evidence" and self.command == "GET":
             return self.send_payload(200, research_evidence_payload(query))
+
+        if path == "/api/investment-calendar/events":
+            if self.command == "GET":
+                return self.send_payload(200, investment_calendar_payload(query))
+            if self.command in {"POST", "PUT"}:
+                if not self.ensure_writable("공유 모드에서는 투자 캘린더 이벤트를 변경할 수 없습니다."):
+                    return
+                return self.send_payload(200, save_investment_calendar_event_payload(self.read_json_body()))
+
+        if path == "/api/investment-calendar/reminders/run" and self.command == "POST":
+            if not self.ensure_writable("공유 모드에서는 투자 캘린더 알림을 큐잉할 수 없습니다."):
+                return
+            return self.send_payload(200, investment_calendar_reminders_once_payload())
+
+        calendar_event_match = re.match(r"^/api/investment-calendar/events/([^/]+)$", path)
+        if calendar_event_match:
+            event_id = urllib.parse.unquote(calendar_event_match.group(1))
+            if self.command == "GET":
+                payload = investment_calendar_payload({"limit": ["500"]})
+                payload["event"] = next((item for item in payload.get("events") or [] if item.get("eventId") == event_id), None)
+                return self.send_payload(200 if payload.get("event") else 404, payload if payload.get("event") else {"error": "투자 캘린더 이벤트를 찾지 못했습니다."})
+            if self.command == "DELETE":
+                if not self.ensure_writable("공유 모드에서는 투자 캘린더 이벤트를 변경할 수 없습니다."):
+                    return
+                return self.send_payload(200, delete_investment_calendar_event_payload(event_id))
 
         evidence_match = re.match(r"^/api/research-evidence/([^/]+)$", path)
         if evidence_match and self.command == "DELETE":

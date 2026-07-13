@@ -7,6 +7,7 @@ from typing import Dict, List
 
 from .admin_preview import write_admin_preview
 from .application.account_service import AccountApplicationService
+from .application.investment_calendar_service import InvestmentCalendarScheduler
 from .application.market_data_collection_service import MarketDataCollectionScheduler
 from .application.model_review_service import ModelReviewScheduler
 from .application.news_collection_service import NewsCollectionScheduler
@@ -22,7 +23,7 @@ from .infrastructure.event_bus import default_event_bus
 from .infrastructure import operational_store as stores
 from .infrastructure.notifications import queued_notifier_for_account, send_events
 from .infrastructure.ontology_graph_store import ontology_repository_from_settings
-from .infrastructure.service_factory import build_market_data_collection_runner, build_model_review_runner, build_monitor_runner, build_news_collection_runner, build_notification_queue_runner, build_ontology_lab_service, build_ontology_reasoning_runner, build_rule_change_candidate_service, build_symbol_universe_service, monitor_account_job_store_from_settings
+from .infrastructure.service_factory import build_investment_calendar_runner, build_investment_calendar_service, build_market_data_collection_runner, build_model_review_runner, build_monitor_runner, build_news_collection_runner, build_notification_queue_runner, build_ontology_lab_service, build_ontology_reasoning_runner, build_rule_change_candidate_service, build_symbol_universe_service, monitor_account_job_store_from_settings
 from .infrastructure.settings import (
     SECRET_SETTING_KEYS,
     read_settings_store,
@@ -532,6 +533,32 @@ def news_command(args) -> int:
     return 1
 
 
+def investment_calendar_command(args) -> int:
+    settings = runtime_settings()
+    service = build_investment_calendar_service(settings)
+    if args.investment_calendar_action == "status":
+        print(json.dumps(service.status(), ensure_ascii=False))
+        return 0
+    if args.investment_calendar_action == "list":
+        print(json.dumps(service.list_events({"limit": args.limit}), ensure_ascii=False))
+        return 0
+    if args.investment_calendar_action == "save-json":
+        print(json.dumps(service.save_event(read_json_payload()), ensure_ascii=False))
+        return 0
+    if args.investment_calendar_action == "delete":
+        print(json.dumps(service.delete_event(args.event_id), ensure_ascii=False))
+        return 0
+    runner = build_investment_calendar_runner(settings)
+    if args.investment_calendar_action == "once":
+        print(json.dumps(runner.run_once(), ensure_ascii=False))
+        return 0
+    if args.investment_calendar_action == "watch":
+        interval = int(os.environ.get("INVESTMENT_CALENDAR_INTERVAL_SECONDS") or settings.get("investmentCalendarIntervalSeconds") or 60)
+        InvestmentCalendarScheduler(runner, interval).run_forever()
+        return 0
+    return 1
+
+
 def handoff_command(args) -> int:
     if args.handoff_action != "notify":
         return 1
@@ -749,6 +776,18 @@ def build_parser() -> argparse.ArgumentParser:
     news_actions.add_parser("watch")
     news_actions.add_parser("status")
     news.set_defaults(func=news_command)
+
+    investment_calendar = subparsers.add_parser("investment-calendar", help="Manage investment calendar events and reminders")
+    investment_calendar_actions = investment_calendar.add_subparsers(dest="investment_calendar_action", required=True)
+    investment_calendar_actions.add_parser("status")
+    calendar_list = investment_calendar_actions.add_parser("list")
+    calendar_list.add_argument("--limit", default="80")
+    investment_calendar_actions.add_parser("save-json")
+    calendar_delete = investment_calendar_actions.add_parser("delete")
+    calendar_delete.add_argument("--event-id", required=True)
+    investment_calendar_actions.add_parser("once")
+    investment_calendar_actions.add_parser("watch")
+    investment_calendar.set_defaults(func=investment_calendar_command)
 
     handoff = subparsers.add_parser("handoff", help="Send development handoff notifications")
     handoff_actions = handoff.add_subparsers(dest="handoff_action", required=True)

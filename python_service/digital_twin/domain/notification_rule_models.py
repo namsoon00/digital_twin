@@ -5,6 +5,7 @@ from typing import Dict, List
 from .message_types import (
     DEFAULT_ALERT_RULES,
     DEFAULT_CADENCE,
+    INVESTMENT_CALENDAR_REMINDER,
     INVESTMENT_INSIGHT,
     NEWS_DIGEST,
     SYSTEM_MESSAGE_TYPES,
@@ -44,6 +45,7 @@ CONDITION_TYPE_LABELS = [
 
 HIGH_SIGNAL_MESSAGE_TYPES = {
     INVESTMENT_INSIGHT,
+    INVESTMENT_CALENDAR_REMINDER,
     NEWS_DIGEST,
     "watchlistOntologySignal",
     "holdingTiming",
@@ -108,6 +110,8 @@ def default_similarity_window_minutes(message_type: str) -> int:
     key = str(message_type or "")
     if key == NEWS_DIGEST:
         return 1440
+    if key == INVESTMENT_CALENDAR_REMINDER:
+        return 1440
     if key == INVESTMENT_INSIGHT:
         return 180
     if key in {"holdingTiming", "watchlistOntologySignal", "monitorHeartbeat"}:
@@ -121,6 +125,8 @@ def default_similarity_penalty(message_type: str) -> int:
     key = str(message_type or "")
     if key == NEWS_DIGEST:
         return -60
+    if key == INVESTMENT_CALENDAR_REMINDER:
+        return -80
     if key == INVESTMENT_INSIGHT:
         return -35
     if key in {"holdingTiming", "watchlistOntologySignal", "monitorHeartbeat"}:
@@ -133,6 +139,8 @@ def default_similarity_penalty(message_type: str) -> int:
 def default_similarity_bypass_score_delta(message_type: str) -> int:
     if str(message_type or "") == NEWS_DIGEST:
         return 30
+    if str(message_type or "") == INVESTMENT_CALENDAR_REMINDER:
+        return 60
     return 15 if str(message_type or "") in {INVESTMENT_INSIGHT, "holdingTiming", "watchlistOntologySignal"} else 20
 
 
@@ -560,6 +568,8 @@ def default_notification_rule(message_type: str) -> NotificationRuleConfig:
         similarity_fields = ["messageType", "accountId", "ontologyInsight.subject", "ontologyInsight.dispatchInsightType"]
     if key == NEWS_DIGEST:
         similarity_fields = ["messageType", "accountId", "newsDigest.primaryEvidenceId"]
+    if key == INVESTMENT_CALENDAR_REMINDER:
+        similarity_fields = ["messageType", "accountId", "investmentCalendar.eventId", "investmentCalendar.offsetMinutes"]
     return NotificationRuleConfig(
         message_type=key,
         enabled=True,

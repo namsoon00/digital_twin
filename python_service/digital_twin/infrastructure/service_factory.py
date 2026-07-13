@@ -4,6 +4,7 @@ from typing import Iterable
 
 from ..application.flow_lens_service import FlowLensService
 from ..application.investment_analysis_service import InvestmentAnalysisService
+from ..application.investment_calendar_service import InvestmentCalendarRunner, InvestmentCalendarService
 from ..application.market_data_collection_service import MarketDataCollectionRunner
 from ..application.model_review_service import ModelReviewRunner
 from ..application.news_collection_service import NewsCollectionRunner
@@ -169,6 +170,21 @@ def build_news_collection_runner(settings=None, event_publisher=None) -> NewsCol
         settings=configured_settings,
         event_publisher=event_publisher or news_event_bus(configured_settings),
     )
+
+
+def build_investment_calendar_service(settings=None, event_publisher=None) -> InvestmentCalendarService:
+    configured_settings = settings or runtime_settings()
+    return InvestmentCalendarService(
+        repository=stores.investment_calendar_store(configured_settings),
+        account_repository=stores.account_registry(configured_settings),
+        notification_queue=stores.notification_job_store(configured_settings),
+        settings=configured_settings,
+        event_publisher=event_publisher or default_event_bus(),
+    )
+
+
+def build_investment_calendar_runner(settings=None, event_publisher=None) -> InvestmentCalendarRunner:
+    return InvestmentCalendarRunner(build_investment_calendar_service(settings, event_publisher))
 
 
 def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> OntologyReasoningRunner:

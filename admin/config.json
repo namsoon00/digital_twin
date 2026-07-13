@@ -13,7 +13,7 @@
     "공유 미리보기에서는 서버 설정과 계정 DB 쓰기를 차단합니다."
   ],
   "localData": {
-    "generatedAt": "2026-07-12T21:17:35.611325Z",
+    "generatedAt": "2026-07-13T00:23:02.735591Z",
     "sources": {
       "operationalDbBackend": "mysql",
       "settings": "data/settings.json",
@@ -988,33 +988,41 @@
           "default": "1"
         },
         {
-          "key": "ontologyNeo4jEnabled",
-          "label": "Neo4j 미러 저장",
-          "type": "toggle",
-          "default": "0"
-        },
-        {
-          "key": "neo4jUri",
-          "label": "Neo4j URI",
-          "type": "url"
-        },
-        {
-          "key": "neo4jUser",
-          "label": "Neo4j 사용자",
+          "key": "typedbAddress",
+          "label": "TypeDB 주소",
           "type": "text",
-          "default": "neo4j"
+          "default": "127.0.0.1:1729"
         },
         {
-          "key": "neo4jPassword",
-          "label": "Neo4j Password",
+          "key": "typedbUser",
+          "label": "TypeDB 사용자",
+          "type": "text",
+          "default": "admin"
+        },
+        {
+          "key": "typedbPassword",
+          "label": "TypeDB Password",
           "type": "secret",
           "masked": true
         },
         {
-          "key": "neo4jDatabase",
-          "label": "Neo4j Database",
+          "key": "typedbDatabase",
+          "label": "TypeDB Database",
           "type": "text",
-          "default": "neo4j"
+          "default": "orbit_alpha_ontology"
+        },
+        {
+          "key": "typedbTlsEnabled",
+          "label": "TypeDB TLS",
+          "type": "toggle",
+          "default": "0"
+        },
+        {
+          "key": "typedbTimeoutSeconds",
+          "label": "TypeDB 타임아웃",
+          "type": "number",
+          "default": "20",
+          "unit": "seconds"
         },
         {
           "key": "formulaWeights",
@@ -1599,5 +1607,5 @@
       ]
     }
   ],
-  "buildId": "484440ba7fa1"
+  "buildId": "48e8ae229e60"
 }

@@ -55,7 +55,7 @@ AI 프롬프트에는 TBox, `boundedContexts`, ABox, operational ontology, reaso
 6. `DecisionItem.relation_rule_context`, `ai_prompt_context`, `ai_context`에 관계 규칙 결과와 프롬프트 입력 계약을 함께 붙인다.
 7. 실시간 모니터링은 알림 metadata에 `ontologyRelationContext`, `ontologyPromptContext`, `ontologyReviewContext`를 포함한다.
 8. 모델 리뷰 워커는 이 정보를 비동기 AI 프롬프트에 넣어 판단 변화 원인, 노이즈 가능성, 부족 데이터, 다음 규칙 개선안을 분석한다.
-9. `infrastructure/ontology_projection.py`가 스냅샷을 온톨로지 read model로 투영한다. 런타임은 `infrastructure/ontology_graph_store.py`의 generic factory만 사용하고, 이 factory가 `ONTOLOGY_GRAPH_STORE_MODE`에 따라 TypeDB, Neo4j, dual-write 어댑터를 인프라에서만 갈아 끼운다.
+9. `infrastructure/ontology_projection.py`가 스냅샷을 온톨로지 read model로 투영한다. 런타임은 `infrastructure/ontology_graph_store.py`의 generic factory만 사용하고, 이 factory가 `ONTOLOGY_GRAPH_STORE_MODE`에 따라 TypeDB, TypeDB, dual-write 어댑터를 인프라에서만 갈아 끼운다.
 
 알림은 투자 이벤트 타입별 폴링으로 직접 발송하지 않는다. 기존 `modelBuy`, `holdingTiming`, `externalDartDisclosure` 같은 이벤트는 `investmentInsight.metadata.sourceAlertEvents`의 근거 신호로 남고, 최종 발송은 `Insight -> DISPATCHED_BY -> NotificationDispatch(investmentInsight)` 관계가 담당한다.
 
@@ -111,16 +111,17 @@ npm run python:ontology-lab -- list
 npm run python:ontology-lab:status
 npm run python:ontology-lab -- create --payload-file ./experiment.json
 npm run python:ontology-lab -- suggest --symbols AAPL --activate --run
+npm run python:ontology-lab -- auto-suggest
 npm run python:ontology-lab -- activate --id <experiment-id>
 npm run python:ontology-lab:once
 npm run python:ontology-lab:watch
 npm run python:ontology-lab -- run --id <experiment-id>
-npm run python:ontology-lab -- apply --id <experiment-id>
+npm run python:ontology-lab -- apply --id <experiment-id> --approve-needs-review --reviewed-by local-user
 npm run python:ontology-lab -- pause --id <experiment-id>
 npm run python:ontology-lab -- report --id <experiment-id>
 ```
 
-`activate`된 실험은 service manager의 `ontology-lab` worker가 계속 확인한다. 기본 주기는 `ontologyLabIntervalSeconds=300`이며, `npm run python:service:restart`를 실행하면 다른 Python worker와 함께 시작된다. 반복 실행은 `lastSnapshotKey`를 보고 같은 모니터 스냅샷에서는 건너뛰고, 새 계좌/관심종목 스냅샷이 들어오면 다시 샌드박스 리플레이를 수행한다. 각 실행 요약은 `runHistory`에 보관한다. 웹의 `AI 실험 제안` 액션은 RuleBox 후보를 실험으로 등록하고 즉시 한 번 샌드박스 실행한 뒤 활성 상태로 둔다.
+`activate`된 실험은 service manager의 `ontology-lab` worker가 계속 확인한다. 기본 주기는 `ontologyLabIntervalSeconds=300`이며, `npm run python:service:restart`를 실행하면 다른 Python worker와 함께 시작된다. 반복 실행은 `lastSnapshotKey`를 보고 같은 모니터 스냅샷에서는 건너뛰고, 새 계좌/관심종목 스냅샷이 들어오면 다시 샌드박스 리플레이를 수행한다. 각 실행 요약은 `runHistory`에 보관한다. 같은 워커는 `ontologyRuleCandidateAiEnabled=1`이면 `ontologyRuleCandidateAiIntervalMinutes` 주기로 AI RuleBox 후보를 자동 제안하고, 생성된 실험을 즉시 한 번 샌드박스 실행한 뒤 활성 상태로 둔다. 웹의 `AI 실험 제안` 액션도 같은 제안+실행+활성화 흐름을 수동으로 호출한다.
 
 API:
 
@@ -135,7 +136,9 @@ API:
 - `POST /api/ontology/experiments/{id}/activate`
 - `POST /api/ontology/experiments/{id}/pause`
 
-샌드박스 실행 결과의 `sandbox.mutatedOperationalRuleBox`와 `sandbox.mutatedNeo4j`는 항상 `false`여야 한다. 운영 반영은 완료된 샌드박스 결과, 그래프 실행 이력, `proposedOntologyChanges`가 있는 실험에서만 `apply` 단계로 수행한다. `apply`는 후보 RuleBox를 운영 RuleBox에 저장하고, 제안된 TBox class/relation/decision stage를 그래프 저장소에 반영한 뒤 RuleBox 추론을 다시 실행한다. 런타임 실험 기록은 `data/ontology-lab.json`에 저장되며 git에 넣지 않는다.
+샌드박스 실행 결과의 `sandbox.mutatedOperationalRuleBox`와 `sandbox.mutatedTypeDB`는 항상 `false`여야 한다. 운영 반영은 완료된 샌드박스 결과, 그래프 실행 이력, `proposedOntologyChanges`가 있는 실험에서만 `apply` 단계로 수행한다. `apply`는 후보 RuleBox를 운영 RuleBox에 저장하고, 제안된 TBox class/relation/decision stage를 그래프 저장소에 반영한 뒤 RuleBox 추론을 다시 실행한다. 런타임 실험 기록은 `data/ontology-lab.json`에 저장되며 git에 넣지 않는다.
+
+`promotionReadiness.status=promote-candidate`는 바로 `apply`할 수 있다. `needs-review` 결과는 운영 반영 전에 `reviewApproved`, `reviewedBy`, `reviewReason` 승인 payload가 필요하며, 웹 실험 탭은 확인창을 거쳐 이 승인 기록을 남긴다. `needs-data`나 실행되지 않은 AI 제안은 운영 반영할 수 없다.
 
 ## Runtime Settings
 
@@ -150,14 +153,14 @@ API:
 ## Graph Store Configuration
 
 ```bash
-ONTOLOGY_GRAPH_STORE_MODE=typedb # typedb | dual | neo4j
+ONTOLOGY_GRAPH_STORE_MODE=typedb # typedb | dual | typedb
 ONTOLOGY_TYPEDB_ENABLED=1
-ONTOLOGY_NEO4J_ENABLED=0
-NEO4J_URI=http://127.0.0.1:7474
-NEO4J_USER=neo4j
-NEO4J_PASSWORD=...
-NEO4J_DATABASE=neo4j
-NEO4J_TIMEOUT_SECONDS=30
+ONTOLOGY_TYPE_DB_ENABLED=0
+TYPE_DB_URI=http://127.0.0.1:7474
+TYPE_DB_USER=typedb
+TYPE_DB_PASSWORD=...
+TYPE_DB_DATABASE=typedb
+TYPE_DB_TIMEOUT_SECONDS=30
 TYPEDB_ADDRESS=127.0.0.1:1729
 TYPEDB_USER=admin
 TYPEDB_PASSWORD=password
@@ -166,7 +169,7 @@ TYPEDB_TLS_ENABLED=0
 TYPEDB_TIMEOUT_SECONDS=20
 ```
 
-TypeDB를 쓰려면 런타임에 `typedb-driver` Python package와 TypeDB 서버가 필요하다. Neo4j 호환 모드는 HTTP transactional endpoint를 사용하며, `bolt://` 또는 `neo4j://` URI를 쓰려면 런타임에 `neo4j` Python driver가 설치되어 있어야 한다. 저장 실패는 모니터링 사이클을 막지 않고 snapshot metadata에 결과만 남긴다.
+TypeDB를 쓰려면 런타임에 `typedb-driver` Python package와 TypeDB 서버가 필요하다. TypeDB 호환 모드는 HTTP transactional endpoint를 사용하며, `bolt://` 또는 `typedb://` URI를 쓰려면 런타임에 `typedb` Python driver가 설치되어 있어야 한다. 저장 실패는 모니터링 사이클을 막지 않고 snapshot metadata에 결과만 남긴다.
 
 `ONTOLOGY_GRAPH_STORE_MODE=typedb` 또는 `dual`이고 `ONTOLOGY_TYPEDB_ENABLED=1`이면 project service manager가 TypeDB 서버를 조건부 worker로 포함한다. 로컬 TypeDB 데이터는 `data/typedb-data/`에, TypeDB 자체 로그는 `data/typedb-logs/`에, service manager stdout/stderr는 `data/typedb.log`에 남긴다.
 

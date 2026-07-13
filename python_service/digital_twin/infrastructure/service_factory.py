@@ -207,6 +207,7 @@ def build_ontology_lab_service(settings=None) -> OntologyLabService:
         ontology_repository=ontology_repository_from_settings(configured_settings),
         experiment_store=stores.ontology_experiment_store(configured_settings),
         monitor_store=stores.monitor_store(configured_settings),
+        rule_candidate_service=build_rule_change_candidate_service(configured_settings),
         settings=configured_settings,
     )
 

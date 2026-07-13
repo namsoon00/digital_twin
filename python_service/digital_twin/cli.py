@@ -363,10 +363,22 @@ def ontology_lab_command(args) -> int:
     if args.ontology_lab_action == "apply":
         result = service.apply_recommendations(
             args.id,
-            {"runRulebox": not bool(args.skip_run_rulebox)},
+            {
+                "runRulebox": not bool(args.skip_run_rulebox),
+                "reviewApproved": bool(args.approve_needs_review),
+                "reviewedBy": args.reviewed_by,
+                "reviewReason": args.review_reason,
+            },
         )
         print(json.dumps(result, ensure_ascii=False))
         return 0 if result.get("status") not in {"not-found", "no-result", "not-ready", "disabled", "pending", "error"} else 1
+    if args.ontology_lab_action == "auto-suggest":
+        result = service.auto_suggest(
+            symbols=split_symbols(args.symbols or ""),
+            trigger=args.trigger or "ontology-lab-cli-auto-suggest",
+        )
+        print(json.dumps(result, ensure_ascii=False))
+        return 0 if result.get("status") not in {"disabled", "error"} else 1
     if args.ontology_lab_action == "once":
         result = service.run_once(limit=int(args.limit or settings.get("ontologyLabBatchSize") or 0), force=args.force)
         print(json.dumps(result, ensure_ascii=False))
@@ -671,6 +683,12 @@ def build_parser() -> argparse.ArgumentParser:
     lab_apply = ontology_lab_actions.add_parser("apply")
     lab_apply.add_argument("--id", required=True)
     lab_apply.add_argument("--skip-run-rulebox", action="store_true")
+    lab_apply.add_argument("--approve-needs-review", action="store_true")
+    lab_apply.add_argument("--reviewed-by", default="cli-user")
+    lab_apply.add_argument("--review-reason", default="")
+    lab_auto_suggest = ontology_lab_actions.add_parser("auto-suggest")
+    lab_auto_suggest.add_argument("--symbols", default="")
+    lab_auto_suggest.add_argument("--trigger", default="ontology-lab-cli-auto-suggest")
     lab_once = ontology_lab_actions.add_parser("once")
     lab_once.add_argument("--limit", default="")
     lab_once.add_argument("--force", action="store_true")

@@ -48,11 +48,13 @@ class OntologyLabService:
         ontology_repository,
         experiment_store,
         monitor_store=None,
+        rule_candidate_service=None,
         settings: Dict[str, object] = None,
     ):
         self.ontology_repository = ontology_repository
         self.experiment_store = experiment_store
         self.monitor_store = monitor_store
+        self.rule_candidate_service = rule_candidate_service
         self.settings = dict(settings or {})
 
     def list(self) -> Dict[str, object]:
@@ -70,6 +72,21 @@ class OntologyLabService:
 
     def history_limit(self) -> int:
         return int_setting(self.settings, "ontologyLabRunHistoryLimit", 50, 1, 500)
+
+    def auto_suggest_enabled(self) -> bool:
+        return truthy(self.settings.get("ontologyRuleCandidateAiEnabled"), True)
+
+    def auto_suggest_configured(self) -> bool:
+        return bool(self.rule_candidate_service and hasattr(self.rule_candidate_service, "propose"))
+
+    def auto_suggest_interval_minutes(self) -> int:
+        return int_setting(self.settings, "ontologyRuleCandidateAiIntervalMinutes", 60, 1, 1440)
+
+    def auto_suggest_interval_seconds(self) -> int:
+        return self.auto_suggest_interval_minutes() * 60
+
+    def auto_suggest_limit(self) -> int:
+        return int_setting(self.settings, "ontologyRuleCandidateAiMaxCandidates", 3, 1, 10)
 
     def status(self) -> Dict[str, object]:
         experiments = self.experiment_store.list()
@@ -89,6 +106,10 @@ class OntologyLabService:
             "completedCount": statuses.get("completed", 0),
             "batchSize": self.batch_size(),
             "historyLimit": self.history_limit(),
+            "autoSuggestEnabled": self.auto_suggest_enabled(),
+            "autoSuggestConfigured": self.auto_suggest_configured(),
+            "autoSuggestIntervalMinutes": self.auto_suggest_interval_minutes(),
+            "autoSuggestLimit": self.auto_suggest_limit(),
             "latestRun": latest_run,
             "experiments": [item.to_dict() for item in experiments],
         }
@@ -202,6 +223,54 @@ class OntologyLabService:
             "skipped": skipped,
         }
 
+    def auto_suggest(self, symbols: Iterable[str] = None, trigger: str = "ontology-lab-auto-suggest") -> Dict[str, object]:
+        if not self.enabled():
+            return {"status": "disabled", "reason": "Ontology lab is disabled.", "createdCount": 0}
+        if not self.auto_suggest_enabled():
+            return {"status": "disabled", "reason": "Ontology rule candidate AI is disabled.", "createdCount": 0}
+        if not self.auto_suggest_configured():
+            return {"status": "disabled", "reason": "Rule candidate service is not configured.", "createdCount": 0}
+        clean = self.auto_suggest_symbols(symbols)
+        candidate_result = self.rule_candidate_service.propose(symbols=clean, trigger=trigger)
+        candidate_result = dict(candidate_result or {})
+        candidate_status = str(candidate_result.get("status") or "")
+        if candidate_status in {"disabled", "error"}:
+            return {
+                "status": candidate_status,
+                "reason": str(candidate_result.get("reason") or ""),
+                "createdCount": 0,
+                "symbols": clean,
+                "candidateResult": compact_candidate_result(candidate_result),
+            }
+        result = self.suggest_from_rule_candidates(candidate_result, {
+            "symbols": clean,
+            "activate": True,
+            "run": True,
+            "limit": self.auto_suggest_limit(),
+        })
+        result["autoSuggest"] = True
+        result["candidateResult"] = compact_candidate_result(candidate_result)
+        return result
+
+    def auto_suggest_symbols(self, symbols: Iterable[str] = None) -> List[str]:
+        requested = clean_symbols(symbols or [])
+        if requested:
+            return requested
+        seen = set()
+        result = []
+        for snapshot in self.monitor_snapshots():
+            for item in list(snapshot.positions or []) + list(snapshot.watchlist or []):
+                symbol = str(item.symbol or "").upper().strip()
+                if not symbol or symbol in seen:
+                    continue
+                seen.add(symbol)
+                result.append(symbol)
+                if len(result) >= 40:
+                    return result
+        if result:
+            return result
+        return clean_symbols(split_csv(self.settings.get("watchlistSymbols") or self.settings.get("modelTimingSymbols") or ""))
+
     def activate(self, experiment_id: str) -> Dict[str, object]:
         experiment = self.experiment_store.get(experiment_id)
         if not experiment:
@@ -245,7 +314,7 @@ class OntologyLabService:
         last_result = dict(experiment.last_result or {})
         if not last_result:
             return {"status": "no-result", "id": experiment_id}
-        readiness = ontology_apply_readiness(last_result)
+        readiness = ontology_apply_readiness(last_result, payload)
         if readiness:
             return {
                 "status": "not-ready",
@@ -280,6 +349,7 @@ class OntologyLabService:
         inference_result = {"status": "skipped", "reason": "RuleBox run disabled or no new rule."}
         if run_rulebox and added_rules:
             inference_result = self.run_rulebox({"clearInference": True, "trigger": "ontology-lab-apply", "experimentId": experiment.experiment_id})
+        review_approval = ontology_review_approval(last_result, payload, stamp)
         application = {
             "status": ontology_application_status(rulebox_result, tbox_result, added_rules, tbox_graph.entities),
             "appliedAt": stamp,
@@ -294,13 +364,15 @@ class OntologyLabService:
             "tboxSave": compact_apply_result(tbox_result),
             "inferenceRun": compact_apply_result(inference_result),
         }
+        if review_approval:
+            application["reviewApproval"] = review_approval
         updated_recommendations = mark_recommendations_applied(recommendations, application)
         last_result["recommendations"] = updated_recommendations
         last_result["appliedOntologyChanges"] = application
         last_result["sandbox"] = {
             **dict(last_result.get("sandbox") or {}),
             "mutatedOperationalRuleBox": bool(added_rules),
-            "mutatedNeo4j": bool(added_rules or tbox_graph.entities),
+            "mutatedTypeDB": bool(added_rules or tbox_graph.entities),
         }
         experiment.last_result = last_result
         experiment.updated_at = stamp
@@ -503,6 +575,7 @@ class OntologyLabScheduler:
     def __init__(self, service: OntologyLabService, interval_seconds: int):
         self.service = service
         self.interval_seconds = max(5, int(interval_seconds or 300))
+        self.last_auto_suggest_at = 0.0
         self.running = True
 
     def stop(self, *_args) -> None:
@@ -511,7 +584,13 @@ class OntologyLabScheduler:
     def run_forever(self, limit: int = 0, force: bool = False) -> None:
         signal.signal(signal.SIGTERM, self.stop)
         signal.signal(signal.SIGINT, self.stop)
-        print("Python ontology lab worker started. interval=" + str(self.interval_seconds) + "s")
+        print(
+            "Python ontology lab worker started. interval="
+            + str(self.interval_seconds)
+            + "s autoSuggestInterval="
+            + str(self.service.auto_suggest_interval_seconds())
+            + "s"
+        )
         while self.running:
             started = time.monotonic()
             try:
@@ -527,6 +606,17 @@ class OntologyLabScheduler:
                         + " skipped="
                         + str(result.get("skippedCount", 0))
                     )
+                if self.auto_suggest_due(started):
+                    auto_result = self.service.auto_suggest()
+                    self.last_auto_suggest_at = time.monotonic()
+                    print(
+                        "Ontology lab auto-suggest "
+                        + str(auto_result.get("status"))
+                        + " created="
+                        + str(auto_result.get("createdCount", 0))
+                        + " skipped="
+                        + str(auto_result.get("skippedCount", 0))
+                    )
             except Exception as error:  # noqa: BLE001 - long-running lab worker must continue after a cycle failure.
                 print("Python ontology lab worker error: " + str(error))
             elapsed = time.monotonic() - started
@@ -534,6 +624,12 @@ class OntologyLabScheduler:
             end_at = time.monotonic() + sleep_seconds
             while self.running and time.monotonic() < end_at:
                 time.sleep(min(1.0, end_at - time.monotonic()))
+
+    def auto_suggest_due(self, now: float) -> bool:
+        if not self.service.auto_suggest_enabled() or not self.service.auto_suggest_configured():
+            return False
+        interval = self.service.auto_suggest_interval_seconds()
+        return not self.last_auto_suggest_at or now - self.last_auto_suggest_at >= interval
 
 
 def monitor_snapshot_key(snapshots: Iterable[AccountSnapshot], symbols: Iterable[str] = None) -> str:
@@ -738,6 +834,20 @@ def clean_text_list(values: Iterable[object]) -> List[str]:
     return result
 
 
+def split_csv(value: object) -> List[str]:
+    return [item.strip() for item in str(value or "").split(",") if item.strip()]
+
+
+def compact_candidate_result(result: Dict[str, object]) -> Dict[str, object]:
+    result = dict(result or {})
+    return {
+        "status": str(result.get("status") or ""),
+        "candidateCount": int_setting(result, "candidateCount", 0, 0, 1000),
+        "savedCount": int_setting(result, "savedCount", 0, 0, 1000),
+        "contextSummary": result.get("contextSummary") if isinstance(result.get("contextSummary"), dict) else {},
+    }
+
+
 def merge_candidate_rules(
     baseline_rules: Iterable[Dict[str, object]],
     candidate_rules: Iterable[Dict[str, object]],
@@ -855,8 +965,9 @@ def ontology_lab_tbox_graph(
     return graph
 
 
-def ontology_apply_readiness(last_result: Dict[str, object]) -> str:
+def ontology_apply_readiness(last_result: Dict[str, object], payload: Dict[str, object] = None) -> str:
     last_result = dict(last_result or {})
+    payload = dict(payload or {})
     if str(last_result.get("status") or "").lower() != "completed":
         return "experiment-result-not-completed"
     if not str(last_result.get("completedAt") or "").strip():
@@ -866,12 +977,40 @@ def ontology_apply_readiness(last_result: Dict[str, object]) -> str:
     if graph_run_count <= 0:
         return "experiment-has-no-sandbox-graph-run"
     readiness = last_result.get("promotionReadiness") if isinstance(last_result.get("promotionReadiness"), dict) else {}
-    if str(readiness.get("status") or "").lower() == "needs-data":
+    readiness_status = str(readiness.get("status") or "").lower()
+    if readiness_status == "needs-data":
         return "experiment-needs-abox-data"
+    if readiness_status == "needs-review" and not ontology_review_approved(payload):
+        return "experiment-needs-review-approval"
+    if readiness_status and readiness_status not in {"promote-candidate", "ready", "approved", "needs-review"}:
+        return "experiment-readiness-not-promotable"
     proposal = last_result.get("proposedOntologyChanges")
     if not isinstance(proposal, dict) or not proposal:
         return "experiment-has-no-ontology-proposal"
     return ""
+
+
+def ontology_review_approved(payload: Dict[str, object]) -> bool:
+    payload = dict(payload or {})
+    return truthy(
+        payload.get("reviewApproved", payload.get("review_approved", payload.get("forceReviewed", payload.get("force_reviewed")))),
+        False,
+    )
+
+
+def ontology_review_approval(last_result: Dict[str, object], payload: Dict[str, object], stamp: str) -> Dict[str, object]:
+    payload = dict(payload or {})
+    readiness = last_result.get("promotionReadiness") if isinstance((last_result or {}).get("promotionReadiness"), dict) else {}
+    if str(readiness.get("status") or "").lower() != "needs-review" or not ontology_review_approved(payload):
+        return {}
+    return {
+        "approved": True,
+        "approvedAt": stamp,
+        "reviewedBy": str(payload.get("reviewedBy") or payload.get("reviewed_by") or "local-user"),
+        "reviewReason": str(payload.get("reviewReason") or payload.get("review_reason") or "needs-review result approved for ontology lab apply"),
+        "readinessStatus": str(readiness.get("status") or ""),
+        "readinessScore": readiness.get("score"),
+    }
 
 
 def compact_apply_result(result: Dict[str, object]) -> Dict[str, object]:
@@ -898,7 +1037,7 @@ def ontology_apply_disabled(result: Dict[str, object]) -> bool:
 
 def ontology_apply_failed(result: Dict[str, object]) -> bool:
     status = str((result or {}).get("status") or "").lower()
-    return status in {"error", "neo4j-error", "invalid-rulebox", "unsupported-uri", "driver-missing"}
+    return status in {"error", "typedb-error", "invalid-rulebox", "unsupported-uri", "driver-missing"}
 
 
 def ontology_application_status(

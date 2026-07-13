@@ -121,6 +121,16 @@ class FakeMonitorStore:
         }
 
 
+class FakeRuleCandidateService:
+    def __init__(self, result=None):
+        self.result = result or ai_candidate_result()
+        self.calls = []
+
+    def propose(self, symbols=None, trigger="manual"):
+        self.calls.append({"symbols": list(symbols or []), "trigger": trigger})
+        return self.result
+
+
 class OntologyLabTests(unittest.TestCase):
     def test_create_normalizes_candidate_rule_as_disabled(self):
         service = OntologyLabService(
@@ -153,7 +163,7 @@ class OntologyLabTests(unittest.TestCase):
         lab_result = result["result"]
         delta = lab_result["inference"]["aggregateDelta"]
 
-        self.assertFalse(lab_result["sandbox"]["mutatedNeo4j"])
+        self.assertFalse(lab_result["sandbox"]["mutatedTypeDB"])
         self.assertFalse(lab_result["sandbox"]["mutatedOperationalRuleBox"])
         self.assertEqual(1, lab_result["sandbox"]["graphRunCount"])
         self.assertGreaterEqual(delta["derivedRelationCount"], 1)
@@ -184,7 +194,11 @@ class OntologyLabTests(unittest.TestCase):
         })["experiment"]["id"]
         service.run(experiment_id)
 
-        result = service.apply_recommendations(experiment_id)
+        result = service.apply_recommendations(experiment_id, {
+            "reviewApproved": True,
+            "reviewedBy": "unit-test",
+            "reviewReason": "needs-review 실험 결과를 테스트에서 승인",
+        })
 
         self.assertEqual("applied", result["status"])
         self.assertEqual(1, len(repository.saved_rulebox_payloads))
@@ -200,7 +214,31 @@ class OntologyLabTests(unittest.TestCase):
         experiment = store.get(experiment_id)
         self.assertEqual("applied", experiment.run_history[0]["applyStatus"])
         self.assertEqual("applied", experiment.last_result["appliedOntologyChanges"]["status"])
+        self.assertEqual("unit-test", experiment.last_result["appliedOntologyChanges"]["reviewApproval"]["reviewedBy"])
         self.assertIn("applied", {item.get("applyStatus") for item in experiment.last_result["recommendations"]})
+
+    def test_apply_recommendations_rejects_needs_review_without_approval(self):
+        store = MemoryExperimentStore()
+        repository = FakeOntologyRepository()
+        service = OntologyLabService(
+            repository,
+            store,
+            monitor_store=FakeMonitorStore(),
+        )
+        experiment_id = service.create({
+            "title": "AAPL apply lab",
+            "symbols": ["AAPL"],
+            "rules": [candidate_rule()],
+        })["experiment"]["id"]
+        service.run(experiment_id)
+
+        result = service.apply_recommendations(experiment_id)
+
+        self.assertEqual("not-ready", result["status"])
+        self.assertEqual("experiment-needs-review-approval", result["reason"])
+        self.assertEqual(0, len(repository.saved_rulebox_payloads))
+        self.assertEqual(0, len(repository.run_rulebox_payloads))
+        self.assertEqual(0, len(repository.saved_tbox_graphs))
 
     def test_suggest_from_ai_candidates_creates_draft_experiment_once(self):
         store = MemoryExperimentStore()
@@ -266,6 +304,29 @@ class OntologyLabTests(unittest.TestCase):
         self.assertTrue(experiment.active_since)
         self.assertEqual("completed", experiment.last_result["status"])
         self.assertEqual("ai-suggested", experiment.last_result["runKind"])
+        self.assertEqual("ai-suggested", experiment.run_history[0]["runKind"])
+
+    def test_auto_suggest_uses_candidate_service_and_runs_active_experiment(self):
+        store = MemoryExperimentStore()
+        candidate_service = FakeRuleCandidateService()
+        service = OntologyLabService(
+            FakeOntologyRepository(),
+            store,
+            monitor_store=FakeMonitorStore(),
+            rule_candidate_service=candidate_service,
+            settings={"ontologyRuleCandidateAiMaxCandidates": "2"},
+        )
+
+        result = service.auto_suggest()
+
+        self.assertEqual("created", result["status"])
+        self.assertTrue(result["autoSuggest"])
+        self.assertEqual(1, result["createdCount"])
+        self.assertEqual("ontology-lab-auto-suggest", candidate_service.calls[0]["trigger"])
+        self.assertEqual(["AAPL"], candidate_service.calls[0]["symbols"])
+        experiment = store.get(result["experiments"][0]["id"])
+        self.assertEqual("active", experiment.status)
+        self.assertEqual("completed", experiment.last_result["status"])
         self.assertEqual("ai-suggested", experiment.run_history[0]["runKind"])
 
     def test_run_without_snapshots_marks_result_as_needing_data(self):

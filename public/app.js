@@ -6906,7 +6906,7 @@
       '<div class="system-lineage-head" role="row"><span>데이터</span><span>수집 주체</span><span>저장 위치</span><span>사용 목적</span></div>',
       sourceRows.map(function (row) {
         return [
-          '<div class="system-lineage-row" role="row">',
+          '<div class="system-lineage-row" role="row"' + cardTypeAttrs("source-card") + '>',
           '<strong>' + escapeHtml(row[0]) + '</strong>',
           '<span>' + escapeHtml(row[1]) + '</span>',
           '<code>' + escapeHtml(row[2]) + '</code>',
@@ -6921,7 +6921,7 @@
 
   function renderSystemFlowNode(index, title, items) {
     return [
-      '<section class="system-flow-node">',
+      '<section class="system-flow-node"' + cardTypeAttrs("process-card") + '>',
       '<b>' + escapeHtml(index) + '</b>',
       '<strong>' + escapeHtml(title) + '</strong>',
       '<ul>',
@@ -6948,7 +6948,7 @@
       '<div class="system-event-track" aria-label="이벤트 흐름 다이어그램">',
       events.map(function (event, index) {
         return [
-          '<section class="system-event-row">',
+          '<section class="system-event-row"' + cardTypeAttrs("process-card") + '>',
           '<b>' + String(index + 1).padStart(2, "0") + '</b>',
           '<code>' + escapeHtml(event[0]) + '</code>',
           '<strong>' + escapeHtml(event[1]) + '</strong>',
@@ -6976,7 +6976,7 @@
       '<div class="system-notification-flow" aria-label="알림 생성 흐름 다이어그램">',
       nodes.map(function (node, index) {
         return [
-          '<section class="system-notification-node">',
+          '<section class="system-notification-node"' + cardTypeAttrs("process-card") + '>',
           '<b>' + String(index + 1).padStart(2, "0") + '</b>',
           '<strong>' + escapeHtml(node[0]) + '</strong>',
           '<p>' + escapeHtml(node[1]) + '</p>',
@@ -7010,7 +7010,7 @@
       '<div class="system-ontology-map" aria-label="온톨로지 모델 다이어그램">',
       cards.map(function (card, index) {
         return [
-          '<section class="system-ontology-card step-' + escapeHtml(index + 1) + '">',
+          '<section class="system-ontology-card step-' + escapeHtml(index + 1) + '"' + cardTypeAttrs("relationship-card") + '>',
           '<b>' + escapeHtml(card[0]) + '</b>',
           '<strong>' + escapeHtml(card[1]) + '</strong>',
           '<p>' + escapeHtml(card[2]) + '</p>',
@@ -7037,7 +7037,7 @@
       '<div class="system-ops-list">',
       rows.map(function (row) {
         return [
-          '<section class="system-ops-row">',
+          '<section class="system-ops-row"' + cardTypeAttrs("reference-card") + '>',
           '<strong>' + escapeHtml(row[0]) + '</strong>',
           '<p>' + escapeHtml(row[1]) + '</p>',
           '</section>'
@@ -7063,7 +7063,7 @@
       '<div class="system-glossary-grid">',
       terms.map(function (term) {
         return [
-          '<section>',
+          '<section' + cardTypeAttrs("reference-card") + '>',
           '<strong>' + escapeHtml(term[0]) + '</strong>',
           '<p>' + escapeHtml(term[1]) + '</p>',
           '</section>'
@@ -7918,7 +7918,7 @@
     var relationCount = ontologyMacroRelationCount(entity, relations);
     var tone = ontologyMacroTone(entity, relations);
     return [
-      '<div class="macro-signal-row ' + escapeHtml(tone) + '">',
+      '<div class="macro-signal-row ' + escapeHtml(tone) + '"' + cardTypeAttrs("signal-card", tone) + '>',
       '<div>',
       '<strong>' + escapeHtml(ontologyEntityDisplayLabel(entity, entity && entity.id)) + '</strong>',
       '<span>' + escapeHtml(ontologyMacroMetaText(entity)) + '</span>',
@@ -7956,7 +7956,7 @@
     var label = properties.aiInfluenceLabel || properties.rateSeriesId || properties.source || "";
     var weight = Number(relation.weight || 0);
     return [
-      '<div class="macro-relation-row ' + escapeHtml(type === "HAS_FX_EXPOSURE" ? "fx" : "rate") + '">',
+      '<div class="macro-relation-row ' + escapeHtml(type === "HAS_FX_EXPOSURE" ? "fx" : "rate") + '"' + cardTypeAttrs("relationship-card") + '>',
       '<strong>' + escapeHtml(type) + '</strong>',
       '<span>' + escapeHtml(source + " → " + target) + '</span>',
       '<em>' + escapeHtml(label || (weight ? "weight " + weight.toFixed(2) : "-")) + '</em>',
@@ -8196,7 +8196,7 @@
     var magnitude = Math.min(50, Math.max(2, Math.abs(score) / 2));
     var direction = score >= 0 ? "positive" : "negative";
     return [
-      '<div class="investment-chart-row ' + escapeHtml(direction) + '">',
+      '<div class="investment-chart-row ' + escapeHtml(direction) + '"' + cardTypeAttrs("signal-card", score >= 0 ? "watch" : "danger") + '>',
       '<div class="investment-chart-label">',
       '<span>' + escapeHtml(row.group || "-") + '</span>',
       '<strong>' + escapeHtml(row.label || "-") + '</strong>',
@@ -8434,7 +8434,7 @@
       '<div class="investment-lineage-list">',
       rows.length ? rows.slice(0, 12).map(function (row) {
         return [
-          '<div class="investment-lineage-row">',
+          '<div class="investment-lineage-row"' + cardTypeAttrs("source-card") + '>',
           '<div><strong>' + escapeHtml(row.name || stockDisplayName(row.symbol, row)) + '</strong><span>' + escapeHtml(row.symbol || "") + '</span></div>',
           '<em>' + escapeHtml(row.quality || "-") + '</em>',
           '<span>' + escapeHtml(row.source || "-") + '</span>',
@@ -8464,7 +8464,7 @@
       '<div class="investment-flow-grid">',
       buckets.length ? buckets.map(function (bucket) {
         return [
-          '<section>',
+          '<section' + cardTypeAttrs("source-card") + '>',
           '<span>' + escapeHtml(bucket.source || "") + '</span>',
           '<strong>' + escapeHtml(bucket.label || bucket.key || "-") + '</strong>',
           '<em>' + escapeHtml(bucket.value ? formatMoney(bucket.value) : bucket.caption || "-") + '</em>',
@@ -8474,7 +8474,7 @@
       '</div>',
       '<div class="investment-emerging-list">',
       emerging.length ? emerging.map(function (item) {
-        return '<div><strong>' + escapeHtml(item.title || "-") + '</strong><span>' + escapeHtml(item.description || "") + '</span><em>' + escapeHtml(item.source || "") + '</em></div>';
+        return '<div' + cardTypeAttrs("signal-card", "hold") + '><strong>' + escapeHtml(item.title || "-") + '</strong><span>' + escapeHtml(item.description || "") + '</span><em>' + escapeHtml(item.source || "") + '</em></div>';
       }).join("") : '<div class="ontology-empty">새 흐름 후보가 아직 없습니다.</div>',
       '</div>',
       '</article>'
@@ -8505,7 +8505,7 @@
       '<div class="investment-bridge-flow">',
       steps.map(function (step) {
         return [
-          '<div class="investment-bridge-step">',
+          '<div class="investment-bridge-step"' + cardTypeAttrs("process-card") + '>',
           '<b>' + escapeHtml(step[0]) + '</b>',
           '<span><strong>' + escapeHtml(step[1]) + '</strong><em>' + escapeHtml(step[2]) + '</em></span>',
           '<i>' + escapeHtml(step[3]) + '</i>',
@@ -8734,7 +8734,7 @@
     var primary = plan.primaryActionLabel || plan.primaryAction || "실행 판단 대기";
     var tone = (row.opinion || {}).tone || (plan.actionLevel === "action" ? "caution" : "hold");
     return [
-      '<div class="ontology-execution-row">',
+      '<div class="ontology-execution-row"' + cardTypeAttrs("action-queue-card", tone || "hold") + '>',
       '<div class="ontology-execution-title">',
       '<strong>' + escapeHtml(row.displayName || row.symbol || "-") + '</strong>',
       '<span>' + escapeHtml([row.relation, plan.decisionStage, plan.actionGroup, plan.actionLevel].filter(Boolean).join(" · ") || "관계 조건 확인") + '</span>',
@@ -8776,7 +8776,7 @@
       '<div class="ontology-operational-list">',
       pipelines.length ? pipelines.map(function (pipeline) {
         return [
-          '<div class="ontology-operational-row">',
+          '<div class="ontology-operational-row"' + cardTypeAttrs("source-card") + '>',
           '<strong>' + escapeHtml(pipeline.key || "-") + '</strong>',
           '<span>target ' + escapeHtml(pipeline.targetMinutes || "-") + '분</span>',
           '<em>configured ' + escapeHtml(pipeline.configuredMinutes || "-") + '분</em>',
@@ -8790,7 +8790,7 @@
 
   function renderOntologyOperationalMetric(label, value, caption) {
     return [
-      '<div class="ontology-operational-metric">',
+      '<div class="ontology-operational-metric"' + cardTypeAttrs("metric-cell") + '>',
       '<span>' + escapeHtml(caption || "") + '</span>',
       '<strong>' + escapeHtml(value) + '</strong>',
       '<em>' + escapeHtml(label) + '</em>',
@@ -8822,7 +8822,7 @@
     var score = properties.score == null ? "-" : Math.round(Number(properties.score || 0));
     var confidence = properties.confidence == null ? "-" : Math.round(Number(properties.confidence || 0));
     return [
-      '<div class="ontology-insight-row">',
+      '<div class="ontology-insight-row"' + cardTypeAttrs("signal-card", tone || "hold") + '>',
       '<div>',
       '<strong>' + escapeHtml(ontologyEntityDisplayLabel(item, item && item.id)) + '</strong>',
       '<span>' + escapeHtml([properties.symbol, properties.insightType, properties.dispatchCandidate ? "dispatch candidate" : "reference"].filter(Boolean).join(" · ")) + '</span>',
@@ -8864,7 +8864,7 @@
       Array.isArray(properties.sources) ? properties.sources.slice(0, 3).join(", ") : ""
     ].filter(Boolean).join(" · ");
     return [
-      '<div class="ontology-data-quality-row">',
+      '<div class="ontology-data-quality-row"' + cardTypeAttrs("diagnostic-card") + '>',
       '<div>',
       '<strong>' + escapeHtml(ontologyEntityDisplayLabel(item, item && item.id)) + '</strong>',
       '<span>' + escapeHtml(meta || "품질 정보") + '</span>',
@@ -9691,7 +9691,7 @@
 
   function renderMonitorLedgerCell(label, value, tone) {
     return [
-      '<div class="monitor-ledger-cell ' + escapeHtml(tone || "") + '">',
+      '<div class="monitor-ledger-cell ' + escapeHtml(tone || "") + '"' + cardTypeAttrs("health-card", tone || "neutral") + '>',
       '<span>' + escapeHtml(label || "-") + '</span>',
       '<strong>' + escapeHtml(value == null ? "-" : value) + '</strong>',
       '</div>'
@@ -9700,7 +9700,7 @@
 
   function renderMonitorRuntimeRow(label, value, detail, tone) {
     return [
-      '<div class="monitor-runtime-row ' + escapeHtml(tone || "") + '">',
+      '<div class="monitor-runtime-row ' + escapeHtml(tone || "") + '"' + cardTypeAttrs("health-card", tone || "neutral") + '>',
       '<span>' + escapeHtml(label || "-") + '</span>',
       '<strong>' + escapeHtml(value || "-") + '</strong>',
       detail ? '<em>' + escapeHtml(detail) + '</em>' : '',
@@ -9717,7 +9717,7 @@
       return stockDisplayName(symbol, clientKnownStockInfo(symbol));
     }).join(", ") : "최근 감지된 모니터링 알림 없음";
     return [
-      '<section class="monitor-alert-summary ' + escapeHtml(count ? "active" : "idle") + '">',
+      '<section class="monitor-alert-summary ' + escapeHtml(count ? "active" : "idle") + '"' + cardTypeAttrs("signal-card", count ? "watch" : "hold") + '>',
       '<span>최근 모니터링 알림</span>',
       '<strong>' + escapeHtml(count ? count + "건 감지" : "대기 중") + '</strong>',
       '<p>' + escapeHtml(symbolText) + '</p>',
@@ -11456,7 +11456,7 @@
   function renderStrategyDataRow(item) {
     var symbols = compactSymbolList(item.symbols || []);
     return [
-      '<div class="strategy-data-row">',
+      '<div class="strategy-data-row"' + cardTypeAttrs("diagnostic-card", item.tone || "hold") + '>',
       '<div class="strategy-data-main">',
       '<strong>' + escapeHtml(item.label) + '</strong>',
       '<span>' + escapeHtml(item.description) + '</span>',
@@ -11472,7 +11472,7 @@
 
   function renderModelGuideCard(card) {
     return [
-      '<div class="model-guide-step">',
+      '<div class="model-guide-step"' + cardTypeAttrs("reference-card") + '>',
       '<em>' + escapeHtml(card.label) + '</em>',
       '<strong>' + escapeHtml(card.value) + '</strong>',
       '<p>' + escapeHtml(card.description) + '</p>',
@@ -12399,7 +12399,7 @@
 
   function renderOntologyProjectionRow(row) {
     return [
-      '<div class="ontology-projection-row">',
+      '<div class="ontology-projection-row"' + cardTypeAttrs("source-card") + '>',
       '<strong>' + escapeHtml(row.name) + '</strong>',
       '<span>PK ' + escapeHtml(row.key) + '</span>',
       '<span>' + escapeHtml(row.fk) + '</span>',
@@ -12409,7 +12409,7 @@
   }
 
   function renderOntologyMiniMetric(label, value) {
-    return '<span><em>' + escapeHtml(label) + '</em><strong>' + escapeHtml(value) + '</strong></span>';
+    return '<span' + cardTypeAttrs("metric-cell") + '><em>' + escapeHtml(label) + '</em><strong>' + escapeHtml(value) + '</strong></span>';
   }
 
   function renderOntologyDistribution(counts, label) {
@@ -12423,7 +12423,7 @@
       entries.map(function (item) {
         var width = Math.max(8, Math.round((Number(item.value || 0) / max) * 100));
         return [
-          '<div class="ontology-distribution-row">',
+          '<div class="ontology-distribution-row"' + cardTypeAttrs("diagnostic-card") + '>',
           '<span>' + escapeHtml(item.key) + '</span>',
           '<b><i style="width:' + escapeHtml(width) + '%"></i></b>',
           '<em>' + escapeHtml(item.value) + '</em>',
@@ -12462,7 +12462,7 @@
     var target = ontologyEndpointLabel(sample.target, entityLabels);
     var example = sample.source ? source + ' → ' + target : "TBox declared only";
     return [
-      '<div class="ontology-relation-row ' + (count ? "active" : "empty") + '">',
+      '<div class="ontology-relation-row ' + (count ? "active" : "empty") + '"' + cardTypeAttrs("relationship-card", count ? "watch" : "hold") + '>',
       '<strong>' + escapeHtml(type) + '</strong>',
       '<span>' + escapeHtml(example) + '</span>',
       '<em>' + escapeHtml(count) + '</em>',
@@ -12482,7 +12482,7 @@
       rules.length ? rules.map(function (rule, index) {
         var trace = ontologyRuleTrace(rule, index, relationCounts, evidence, beliefs, opinions);
         return [
-          '<div class="ontology-rule-row ontology-rule-trace-row">',
+          '<div class="ontology-rule-row ontology-rule-trace-row"' + cardTypeAttrs("relationship-card") + '>',
           '<b>' + escapeHtml(index + 1) + '</b>',
           '<span class="ontology-rule-body">',
           '<strong>' + escapeHtml(rule) + '</strong>',
@@ -12814,7 +12814,7 @@
     var model = item.model || customModelScores(item);
     var displayName = stockDisplayName(item.symbol, item);
     return [
-      '<div class="signal-row model-preview-row">',
+      '<div class="signal-row model-preview-row"' + cardTypeAttrs("signal-card", model.tone || "hold") + '>',
       '<div class="signal-main">',
       '<div class="flow-title">',
       '<div>',
@@ -12843,7 +12843,7 @@
   function renderModelRelationRuleSummary(item) {
     var rules = item.relationRules || [];
     return [
-      '<div class="model-feature-audit model-relation-summary">',
+      '<div class="model-feature-audit model-relation-summary"' + cardTypeAttrs("relationship-card", (rules[0] && rules[0].tone) || "hold") + '>',
       '<div class="feature-audit-head">',
       '<strong>관계 규칙</strong>',
       '<span class="tone-chip ' + escapeHtml((rules[0] && rules[0].tone) || "hold") + '">' + escapeHtml(rules.length ? Math.round(rules[0].score) + "점" : "대기") + '</span>',
@@ -12860,7 +12860,7 @@
   function renderModelPlainLanguageExplanation(item, model) {
     var rows = beginnerModelRows(item, model);
     return [
-      '<div class="model-feature-audit model-plain-explain">',
+      '<div class="model-feature-audit model-plain-explain"' + cardTypeAttrs("reference-card") + '>',
       '<div class="feature-audit-head">',
       '<strong>쉬운 해석</strong>',
       '<span class="tone-chip hold">실제 데이터 예시</span>',
@@ -12877,7 +12877,7 @@
   function renderModelFeatureAudit(item, model) {
     if (!item.hasData) {
       return [
-        '<div class="model-feature-audit">',
+        '<div class="model-feature-audit"' + cardTypeAttrs("diagnostic-card", "hold") + '>',
         '<div class="feature-audit-head">',
         '<strong>재계산 확인</strong>',
         '<span class="tone-chip hold">데이터 부족</span>',
@@ -12904,7 +12904,7 @@
       ["수급점수", formatSignalNumber(variables.investorFlowScore, "")]
     ];
     return [
-      '<div class="model-feature-audit">',
+      '<div class="model-feature-audit"' + cardTypeAttrs("diagnostic-card", audit.stable ? "watch" : "caution") + '>',
       '<div class="feature-audit-head">',
       '<strong>재계산 확인</strong>',
       '<span class="tone-chip ' + (audit.stable ? "watch" : "caution") + '">' + (audit.stable ? "같은 입력 재현됨" : "재계산 확인 필요") + '</span>',
@@ -12961,7 +12961,7 @@
 
   function renderAlertStat(label, value, severity) {
     return [
-      '<span class="alert-stat ' + escapeHtml(severity) + '">',
+      '<span class="alert-stat ' + escapeHtml(severity) + '"' + cardTypeAttrs("metric-cell", severity || "hold") + '>',
       '<em>' + escapeHtml(label) + '</em>',
       '<strong>' + escapeHtml(value) + '</strong>',
       '</span>'
@@ -12978,7 +12978,7 @@
       alert.threshold ? "기준 " + alert.threshold : ""
     ].filter(Boolean);
     return [
-      '<div class="alert-row ' + escapeHtml(alert.severity || "info") + '" role="button" tabindex="0" data-monitor-alert-detail="' + escapeHtml(index) + '" aria-label="' + escapeHtml((title || "알림") + " 상세 보기") + '">',
+      '<div class="alert-row ' + escapeHtml(alert.severity || "info") + '"' + cardTypeAttrs("signal-card", alert.severity || "info") + ' role="button" tabindex="0" data-monitor-alert-detail="' + escapeHtml(index) + '" aria-label="' + escapeHtml((title || "알림") + " 상세 보기") + '">',
       '<span class="alert-severity ' + escapeHtml(alert.severity || "info") + '">' + escapeHtml(alertSeverityLabel(alert.severity)) + '</span>',
       '<div class="alert-main">',
       '<div class="flow-title">',
@@ -13355,7 +13355,7 @@
       : "수급 입력 필요";
     var displayName = stockDisplayName(symbol, item);
     return [
-      '<div class="monitoring-instrument-row" role="button" tabindex="0" data-monitor-instrument-detail="' + escapeHtml(symbol) + '" aria-label="' + escapeHtml(displayName + " 상세 보기") + '">',
+      '<div class="monitoring-instrument-row"' + cardTypeAttrs("signal-card", signal && signal.tone ? signal.tone : "hold") + ' role="button" tabindex="0" data-monitor-instrument-detail="' + escapeHtml(symbol) + '" aria-label="' + escapeHtml(displayName + " 상세 보기") + '">',
       '<div class="monitoring-instrument-main">',
       '<div class="monitoring-instrument-title">',
       '<strong>' + escapeHtml(displayName) + '</strong>',
@@ -14087,7 +14087,7 @@
       '<div class="feed-pipeline-list">',
       feedPipelineStages().slice(0, 4).map(function (stage) {
         return [
-          '<div class="feed-pipeline-row ' + escapeHtml(stage.tone || "hold") + '">',
+          '<div class="feed-pipeline-row ' + escapeHtml(stage.tone || "hold") + '"' + cardTypeAttrs("process-card", stage.tone || "hold") + '>',
           '<span>' + escapeHtml(stage.step) + '</span>',
           '<div>',
           '<strong>' + escapeHtml(stage.title) + '</strong>',
@@ -14118,7 +14118,7 @@
       '<div class="feed-channel-grid">',
       feedSourceChannels().slice(0, 5).map(function (channel) {
         return [
-          '<div class="feed-channel-row ' + escapeHtml(channel.tone || "hold") + '">',
+          '<div class="feed-channel-row ' + escapeHtml(channel.tone || "hold") + '"' + cardTypeAttrs("source-card", channel.tone || "hold") + '>',
           '<div>',
           '<span class="tone-chip ' + escapeHtml(channel.tone || "hold") + '">' + escapeHtml(channel.enabled ? (channel.ready === false ? "키 확인" : "사용") : "중지") + '</span>',
           '<strong>' + escapeHtml(channel.label) + '</strong>',
@@ -14393,7 +14393,7 @@
 
   function renderFeedQualitySignal(item) {
     return [
-      '<div class="feed-quality-card">',
+      '<div class="feed-quality-card"' + cardTypeAttrs("diagnostic-card", item.tone || "hold") + '>',
       '<span class="tone-chip ' + escapeHtml(item.tone || "hold") + '">' + escapeHtml(item.value || "-") + '</span>',
       '<strong>' + escapeHtml(item.label || "-") + '</strong>',
       '<p>' + escapeHtml(item.description || "") + '</p>',
@@ -15330,7 +15330,7 @@
       '<div class="settings-diagnostic-grid">',
       diagnostics.map(function (item) {
         return [
-          '<section class="settings-diagnostic-card ' + escapeHtml(item.tone || "hold") + '">',
+          '<section class="settings-diagnostic-card ' + escapeHtml(item.tone || "hold") + '"' + cardTypeAttrs("diagnostic-card", item.tone || "hold") + '>',
           '<span class="tone-chip ' + escapeHtml(item.tone || "hold") + '">' + escapeHtml(item.value) + '</span>',
           '<strong>' + escapeHtml(item.label) + '</strong>',
           '<p>' + escapeHtml(item.detail) + '</p>',

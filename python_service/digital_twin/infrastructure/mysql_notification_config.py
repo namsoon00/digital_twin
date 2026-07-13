@@ -239,6 +239,11 @@ class MySQLNotificationRuleStore(MySQLOperationalConnection):
             current.similarity_fields = list(default_rule.similarity_fields)
             changed = True
         defaults = {condition.condition_id: condition for condition in default_rule.similarity_bypass_conditions}
+        current_ids = {condition.condition_id for condition in current.similarity_bypass_conditions}
+        for condition in default_rule.similarity_bypass_conditions:
+            if condition.condition_id not in current_ids:
+                current.similarity_bypass_conditions.append(condition)
+                changed = True
         for condition in current.similarity_bypass_conditions:
             default = defaults.get(condition.condition_id)
             if not default:

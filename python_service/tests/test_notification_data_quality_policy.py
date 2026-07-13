@@ -160,6 +160,158 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
         self.assertTrue(decision.similarity_bypassed)
         self.assertIn("+24.5%", decision.similarity_bypass_reason)
 
+    def test_profit_loss_worsening_bypasses_investment_insight_cooldown(self):
+        rule = default_notification_rule("investmentInsight")
+        job = NotificationJob.create(
+            "손익률 추가 악화",
+            account_id="main",
+            message_type="investmentInsight",
+            context={
+                "severity": "WATCH",
+                "symbol": "000660",
+                "rawLines": "수익률: -10.4%\n추세: 60일선 2,000,000원보다 3.0% 높음",
+                "ontologyInsight": {"subject": "000660", "dispatchInsightType": "riskManagement", "score": 70, "noveltyScore": 20},
+                "sourceSignalTypes": ["holdingTiming"],
+            },
+        )
+        decision = evaluate_notification_rule(job, rule)
+
+        decision = apply_state_cooldown_rule(
+            decision,
+            rule,
+            sent_count=1,
+            previous_score=decision.score,
+            previous_context={
+                "rawLines": "수익률: -8.9%\n추세: 60일선 2,000,000원보다 3.2% 높음",
+                "ontologyInsight": {"subject": "000660", "dispatchInsightType": "riskManagement"},
+                "sourceSignalTypes": ["holdingTiming"],
+            },
+            last_sent_at=utc_now_iso(),
+            last_sent_age_minutes=80,
+            job=job,
+        )
+
+        self.assertTrue(decision.should_send)
+        self.assertEqual("material_change", decision.state_decision)
+        self.assertIn("손익률 추가 악화", decision.state_reason)
+
+    def test_ma60_cross_down_bypasses_investment_insight_cooldown(self):
+        rule = default_notification_rule("investmentInsight")
+        job = NotificationJob.create(
+            "60일선 이탈",
+            account_id="main",
+            message_type="investmentInsight",
+            context={
+                "severity": "WATCH",
+                "symbol": "005930",
+                "rawLines": "수익률: -4.0%\n추세: 60일선 289,838원보다 1.2% 낮음",
+                "ontologyInsight": {"subject": "005930", "dispatchInsightType": "riskManagement", "score": 70, "noveltyScore": 20},
+                "sourceSignalTypes": ["holdingTiming"],
+            },
+        )
+        decision = evaluate_notification_rule(job, rule)
+
+        decision = apply_state_cooldown_rule(
+            decision,
+            rule,
+            sent_count=1,
+            previous_score=decision.score,
+            previous_context={
+                "rawLines": "수익률: -3.8%\n추세: 60일선 289,838원보다 0.4% 높음",
+                "ontologyInsight": {"subject": "005930", "dispatchInsightType": "riskManagement"},
+                "sourceSignalTypes": ["holdingTiming"],
+            },
+            last_sent_at=utc_now_iso(),
+            last_sent_age_minutes=80,
+            job=job,
+        )
+
+        self.assertTrue(decision.should_send)
+        self.assertEqual("material_change", decision.state_decision)
+        self.assertIn("60일 평균 아래 전환", decision.state_reason)
+
+    def test_action_change_bypasses_investment_insight_cooldown(self):
+        rule = default_notification_rule("investmentInsight")
+        job = NotificationJob.create(
+            "판단 액션 변경",
+            account_id="main",
+            message_type="investmentInsight",
+            context={
+                "severity": "WATCH",
+                "symbol": "MSTR",
+                "profitLossRate": 6.0,
+                "activeInvestmentOpinion": {"actionLabel": "분할축소"},
+                "ontologyInsight": {"subject": "MSTR", "dispatchInsightType": "riskManagement", "score": 70, "noveltyScore": 20},
+                "sourceSignalTypes": ["holdingTiming"],
+            },
+        )
+        decision = evaluate_notification_rule(job, rule)
+
+        decision = apply_state_cooldown_rule(
+            decision,
+            rule,
+            sent_count=1,
+            previous_score=decision.score,
+            previous_context={
+                "profitLossRate": 6.2,
+                "activeInvestmentOpinion": {"actionLabel": "보유"},
+                "ontologyInsight": {"subject": "MSTR", "dispatchInsightType": "riskManagement"},
+                "sourceSignalTypes": ["holdingTiming"],
+            },
+            last_sent_at=utc_now_iso(),
+            last_sent_age_minutes=80,
+            job=job,
+        )
+
+        self.assertTrue(decision.should_send)
+        self.assertEqual("material_change", decision.state_decision)
+        self.assertIn("판단 액션 변경", decision.state_reason)
+
+    def test_new_news_or_disclosure_event_bypasses_investment_insight_cooldown(self):
+        rule = default_notification_rule("investmentInsight")
+        job = NotificationJob.create(
+            "새 공시 근거",
+            account_id="main",
+            message_type="investmentInsight",
+            context={
+                "severity": "WATCH",
+                "symbol": "005930",
+                "profitLossRate": -4.0,
+                "ontologyInsight": {
+                    "subject": "005930",
+                    "dispatchInsightType": "riskManagement",
+                    "score": 70,
+                    "noveltyScore": 20,
+                    "sourceEventKeys": ["main:disclosure:005930:202607130001"],
+                },
+                "sourceSignalTypes": ["holdingTiming", "externalDartDisclosure"],
+            },
+        )
+        decision = evaluate_notification_rule(job, rule)
+
+        decision = apply_state_cooldown_rule(
+            decision,
+            rule,
+            sent_count=1,
+            previous_score=decision.score,
+            previous_context={
+                "profitLossRate": -4.0,
+                "ontologyInsight": {
+                    "subject": "005930",
+                    "dispatchInsightType": "riskManagement",
+                    "sourceEventKeys": ["main:holding:005930:risk"],
+                },
+                "sourceSignalTypes": ["holdingTiming"],
+            },
+            last_sent_at=utc_now_iso(),
+            last_sent_age_minutes=80,
+            job=job,
+        )
+
+        self.assertTrue(decision.should_send)
+        self.assertEqual("material_change", decision.state_decision)
+        self.assertIn("새 근거 신호 추가", decision.state_reason)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -50,6 +50,33 @@ PROFIT_LOSS_TEXT_FIELDS = ["rawLines", "body", "summary", "currentStatus", "curr
 PROFIT_LOSS_TEXT_PATTERN = re.compile(
     r"(?:수익률|손익률|손익)\s*(?:[:：]|은|이|약)?\s*([+-]?\d+(?:\.\d+)?)\s*%"
 )
+MA60_DISTANCE_FIELD_CANDIDATES = [
+    "ma60Distance",
+    "ma60_distance",
+    "facts.ma60Distance",
+    "ontologyInsight.facts.ma60Distance",
+    "activeInvestmentOpinion.facts.ma60Distance",
+    "ontologyRelationContext.facts.ma60Distance",
+    "relationContext.facts.ma60Distance",
+]
+MA60_PAREN_PATTERN = re.compile(r"60일[^\n]*?\(([+-]?\d+(?:\.\d+)?)\s*%\)")
+MA60_TEXT_PATTERN = re.compile(
+    r"60일[^\n]*?([+-]?\d+(?:\.\d+)?)\s*%\s*(낮음|아래|하회|높음|위|상회)"
+)
+ACTION_FIELD_CANDIDATES = [
+    "actionLabel",
+    "action",
+    "activeInvestmentOpinion.actionLabel",
+    "activeInvestmentOpinion.action",
+    "aiOpinion.actionLabel",
+    "aiOpinion.action",
+    "decision.actionLabel",
+    "decision.action",
+    "ontologyInsight.actionLabel",
+    "ontologyInsight.action",
+    "holdingDecision",
+    "holdingAction",
+]
 
 
 def flattened_strings(value) -> Iterable[str]:
@@ -140,6 +167,55 @@ def profit_loss_rate_from_context(context: Dict[str, object], text: str = "") ->
     if value is not None:
         return value
     return None
+
+
+def ma60_distance_from_text(value: object) -> Optional[float]:
+    text = str(value or "")
+    if not text.strip():
+        return None
+    paren_match = MA60_PAREN_PATTERN.search(text)
+    if paren_match:
+        return numeric_value(paren_match.group(1))
+    match = MA60_TEXT_PATTERN.search(text)
+    if not match:
+        return None
+    value = numeric_value(match.group(1))
+    if value is None:
+        return None
+    direction = str(match.group(2) or "")
+    if any(term in direction for term in ["낮", "아래", "하회"]):
+        return -abs(value)
+    return abs(value)
+
+
+def ma60_distance_from_context(context: Dict[str, object], text: str = "") -> Optional[float]:
+    context = context or {}
+    for field in MA60_DISTANCE_FIELD_CANDIDATES:
+        value = numeric_value(field_value(context, field))
+        if value is not None:
+            return value
+    for field in PROFIT_LOSS_TEXT_FIELDS:
+        field_text = " ".join(flattened_strings(field_value(context, field)))
+        value = ma60_distance_from_text(field_text)
+        if value is not None:
+            return value
+    value = ma60_distance_from_text(text)
+    if value is not None:
+        return value
+    return None
+
+
+def candidate_fields(value: str, fallback: List[str]) -> List[str]:
+    fields = [item.strip() for item in str(value or "").split(",") if item.strip()]
+    return fields or list(fallback)
+
+
+def first_normalized_field_value(context: Dict[str, object], fields: List[str]) -> str:
+    for field in fields:
+        value = normalize_fingerprint_part(field_value(context or {}, field))
+        if value:
+            return value
+    return ""
 
 
 def mandatory_profit_loss_delivery_reason(job: NotificationJob = None) -> str:
@@ -326,6 +402,15 @@ def similarity_bypass_match(
         if current and not previous:
             return True, label + " 신규 " + current
         return False, ""
+    if condition_type == "field_changed_any":
+        fields = candidate_fields(field, ACTION_FIELD_CANDIDATES)
+        current = first_normalized_field_value(context, fields)
+        previous = first_normalized_field_value(previous_context, fields)
+        if current and previous and current != previous:
+            return True, label + " " + previous + " -> " + current
+        if current and not previous:
+            return True, label + " 신규 " + current
+        return False, ""
     if condition_type == "list_new_items_gte":
         current_items = set(normalize_similarity_list_item(field, item) for item in flattened_strings(field_value(context, field)) if normalize_similarity_list_item(field, item))
         previous_items = set(normalize_similarity_list_item(field, item) for item in flattened_strings(field_value(previous_context, field)) if normalize_similarity_list_item(field, item))
@@ -333,6 +418,27 @@ def similarity_bypass_match(
         minimum = numeric_value(condition.value)
         if new_items and len(new_items) >= int(minimum or 1):
             return True, label + " " + ", ".join(new_items[:4])
+        return False, ""
+    if condition_type == "profit_loss_worsened_lte":
+        current = profit_loss_rate_from_context(context, job.text if job else "")
+        previous = profit_loss_rate_from_context(previous_context)
+        minimum = numeric_value(condition.value)
+        if current is None or previous is None or minimum is None:
+            return False, ""
+        delta = current - previous
+        if delta <= -minimum:
+            return True, label + " " + format_rule_number(previous) + "% -> " + format_rule_number(current) + "%"
+        return False, ""
+    if condition_type == "ma60_crossed_below":
+        current = ma60_distance_from_context(context, job.text if job else "")
+        previous = ma60_distance_from_context(previous_context)
+        threshold = numeric_value(condition.value)
+        if threshold is None:
+            threshold = 0.0
+        if current is None or previous is None:
+            return False, ""
+        if previous >= threshold and current < threshold:
+            return True, label + " " + format_rule_number(previous) + "% -> " + format_rule_number(current) + "%"
         return False, ""
     if condition_type in {"abs_number_delta_gte", "number_delta_gte", "number_delta_lte", "number_multiplier_gte"}:
         current = numeric_value(field_value(context, field))

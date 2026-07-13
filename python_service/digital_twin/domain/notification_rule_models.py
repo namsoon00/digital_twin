@@ -195,11 +195,32 @@ def default_similarity_bypass_conditions(message_type: str) -> List["SimilarityB
             ),
             SimilarityBypassCondition(
                 "new_relation_event",
-                "새 관계 이벤트 추가",
+                "새 뉴스/공시/관계 근거 추가",
                 "list_new_items_gte",
                 field="ontologyInsight.sourceEventKeys",
                 value=1,
-                description="같은 신호 타입이어도 활성 관계 규칙 조합이 달라지면 보냅니다.",
+                description="같은 신호 타입이어도 뉴스, 공시, 활성 관계 규칙 조합이 달라지면 보냅니다.",
+            ),
+            SimilarityBypassCondition(
+                "insight_profit_loss_worsened",
+                "손익률 추가 악화",
+                "profit_loss_worsened_lte",
+                value=1,
+                description="이전 투자 인사이트보다 손익률이 1%p 이상 나빠지면 반복이어도 보냅니다.",
+            ),
+            SimilarityBypassCondition(
+                "insight_ma60_crossed_below",
+                "60일 평균 아래 전환",
+                "ma60_crossed_below",
+                value=0,
+                description="이전에는 60일 평균 이상이었지만 현재 60일 평균 아래로 내려가면 보냅니다.",
+            ),
+            SimilarityBypassCondition(
+                "insight_action_changed",
+                "판단 액션 변경",
+                "field_changed_any",
+                field="activeInvestmentOpinion.actionLabel,activeInvestmentOpinion.action,actionLabel,action,ontologyInsight.actionLabel,ontologyInsight.action",
+                description="AI 또는 모델의 우선 행동이 바뀌면 반복이어도 보냅니다.",
             ),
         ]
     if key == "holdingTiming":
@@ -221,10 +242,23 @@ def default_similarity_bypass_conditions(message_type: str) -> List["SimilarityB
             SimilarityBypassCondition(
                 "loss_rate_worsened",
                 "손익률 추가 악화",
-                "number_delta_lte",
-                field="profitLossRate",
-                value=2,
-                description="이전 보유 타이밍 알림보다 손익률이 기준 %p 이상 나빠지면 보냅니다.",
+                "profit_loss_worsened_lte",
+                value=1,
+                description="이전 보유 타이밍 알림보다 손익률이 1%p 이상 나빠지면 보냅니다.",
+            ),
+            SimilarityBypassCondition(
+                "holding_ma60_crossed_below",
+                "60일 평균 아래 전환",
+                "ma60_crossed_below",
+                value=0,
+                description="이전에는 60일 평균 이상이었지만 현재 60일 평균 아래로 내려가면 보냅니다.",
+            ),
+            SimilarityBypassCondition(
+                "holding_action_changed",
+                "판단 액션 변경",
+                "field_changed_any",
+                field="holdingDecision,holdingAction,actionLabel,activeInvestmentOpinion.actionLabel,activeInvestmentOpinion.action",
+                description="보유 판단 또는 우선 행동이 바뀌면 반복이어도 보냅니다.",
             ),
         ]
     return []

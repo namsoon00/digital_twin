@@ -231,6 +231,9 @@ function checkFrontendAdminRender() {
   assertOk(code.indexOf("renderWorkDetailLayer") >= 0 && code.indexOf("data-work-detail") >= 0, "긴 상세 정보를 공통 work detail layer로 여는 렌더 경로가 없습니다.");
   assertOk(styles.indexOf(".work-detail-layer") >= 0 && styles.indexOf("Executive console simplification layer") >= 0, "PC 요약 화면과 상세 레이어를 위한 최종 콘솔 레이어가 없습니다.");
   assertOk(designSystemDoc.indexOf("work-detail-layer") >= 0 && designSystemDoc.indexOf("전체 데이터를 다 펼치지 않는다") >= 0, "디자인 시스템 문서에 요약 우선/상세 레이어 계약이 없습니다.");
+  assertOk(code.indexOf("cardTypeAttrs") >= 0 && code.indexOf('data-card-type="') >= 0, "카드 의미 타입을 렌더링하는 공통 계약이 없습니다.");
+  assertOk(styles.indexOf("PC card type taxonomy layer") >= 0 && styles.indexOf('[data-card-type="health-card"]') >= 0 && styles.indexOf('[data-card-type="evidence-card"]') >= 0, "PC 카드 타입별 스타일 레이어가 없습니다.");
+  assertOk(designSystemDoc.indexOf("Card type taxonomy") >= 0 && designSystemDoc.indexOf("health-card") >= 0 && designSystemDoc.indexOf("action-queue-card") >= 0, "디자인 시스템 문서에 카드 타입 분류 계약이 없습니다.");
   assertOk(/Professional finance top navigation shell[\s\S]*\.app-nav-tab,[\s\S]*\.app-nav-menu-item[\s\S]*min-height: var\(--ds-top-nav-tab-height\);/.test(styles), "PC 상단 탭이 낮은 한 줄 금융 탭 높이를 쓰지 않습니다.");
   assertOk(/Professional finance top navigation shell[\s\S]*\.nav-tab-description\s*\{[\s\S]*display: none;/.test(styles), "PC 상단 탭이 설명까지 노출해 여러 줄로 늘어날 수 있습니다.");
   assertOk(styles.indexOf("grid-template-columns: repeat(12, minmax(0, 1fr))") >= 0, "PC 본문 12컬럼 그리드가 없습니다.");

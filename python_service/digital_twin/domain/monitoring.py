@@ -59,9 +59,74 @@ def ontology_quality_event_metadata(snapshot: AccountSnapshot, min_score: float)
 
 def graph_store_label(value: object) -> str:
     graph_store = str(value or "").strip().lower()
-    if graph_store == "typedb":
+    if graph_store in {"typedb", "neo4j", ""}:
         return "TypeDB"
     return "그래프 저장소"
+
+
+def normalized_monitoring_graph_store(value: object) -> str:
+    graph_store = str(value or "").strip().lower()
+    if graph_store in {"", "typedb", "neo4j"}:
+        return "typedb"
+    return graph_store
+
+
+def legacy_graph_store_note(value: object) -> str:
+    graph_store = str(value or "").strip().lower()
+    if graph_store == "neo4j":
+        return "레거시 저장소 표기 neo4j 감지(현재 런타임은 TypeDB)"
+    return ""
+
+
+def ontology_inference_failure_stage(reason_code: object, status: object, detail: Dict[str, object]) -> str:
+    code = str(reason_code or "").strip()
+    status_text = str(status or "").strip().lower()
+    typedb_read_status = str((detail or {}).get("typedbReadStatus") or "").strip().lower()
+    rulebox_status = str((detail or {}).get("ruleboxExecutionStatus") or "").strip().lower()
+    if code == "invalidABox":
+        return "ABox 검증"
+    if code == "missingProjection":
+        return "온톨로지 투영 생성"
+    if code == "ruleboxExecutionFailed" or (rulebox_status and rulebox_status not in {"ok", "partial"}):
+        return "RuleBox 실행"
+    if typedb_read_status and typedb_read_status not in {"ok", "partial"}:
+        return "InferenceBox 조회"
+    if code == "missingInferenceBox":
+        return "InferenceBox 생성/저장"
+    if code == "nativeReasoningMissing":
+        return "RuleBox materialization"
+    if status_text and status_text not in {"ok", "partial"}:
+        return "InferenceBox 상태"
+    if code == "emptyInferenceBox":
+        return "InferenceBox 결과 생성"
+    return "관계 추론 연결"
+
+
+def ontology_inference_failure_detail(reason_code: object, status: object, detail: Dict[str, object]) -> str:
+    code = str(reason_code or "").strip()
+    status_text = str(status or "").strip()
+    parts: List[str] = []
+    if status_text:
+        parts.append("status=" + status_text)
+    for key, label in [
+        ("projectionReason", "projectionReason"),
+        ("ruleboxExecutionStatus", "ruleboxStatus"),
+        ("ruleboxExecutionReason", "ruleboxReason"),
+        ("typedbReadStatus", "typedbRead"),
+        ("typedbReadReason", "typedbReadReason"),
+        ("inferenceReason", "inferenceReason"),
+        ("clearInferenceStatus", "clearStatus"),
+        ("clearInferenceReason", "clearReason"),
+    ]:
+        value = str((detail or {}).get(key) or "").strip()
+        if value:
+            parts.append(label + "=" + value)
+    legacy_note = legacy_graph_store_note((detail or {}).get("rawGraphStore") or (detail or {}).get("graphStore"))
+    if legacy_note:
+        parts.append(legacy_note)
+    if code == "missingInferenceBox":
+        parts.append("inferenceBox 섹션 없음")
+    return "; ".join(parts[:8])
 
 
 def ontology_inference_event_metadata(snapshot: AccountSnapshot) -> Dict[str, object]:
@@ -538,6 +603,8 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
             "status": status_text,
             "source": str(inference_status.get("source") or ""),
             "graphStore": str(inference_status.get("graphStore") or ""),
+            "rawGraphStore": str(inference_status.get("rawGraphStore") or ""),
+            "projectionReason": str(inference_status.get("projectionReason") or ""),
             "reasoningMode": str(inference_status.get("reasoningMode") or ""),
             "querySource": str(inference_status.get("querySource") or ""),
             "typedbReadStatus": str(inference_status.get("typedbReadStatus") or ""),
@@ -649,17 +716,28 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
         query_source = str(state.get("querySource") or inference_status.get("querySource") or "").strip()
         typedb_read_status = str(state.get("typedbReadStatus") or inference_status.get("typedbReadStatus") or "").strip()
         typedb_read_reason = str(state.get("typedbReadReason") or inference_status.get("typedbReadReason") or "").strip()
+        failure_detail_context = {
+            **inference_status,
+            **dict(state or {}),
+            "graphStore": graph_store,
+            "rawGraphStore": state.get("rawGraphStore") or inference_status.get("rawGraphStore") or "",
+        }
+        failure_stage = ontology_inference_failure_stage(reason_code, status_text, failure_detail_context)
+        failure_detail = ontology_inference_failure_detail(reason_code, status_text, failure_detail_context)
         lines = [
             "상태 온톨로지 추론 결과 없음",
             "저장소 " + graph_store_label(graph_store),
             "추론 소스 " + source_name,
             "판단 차단 매수·매도 판단은 생성하지 않았습니다",
             "원인 " + reason,
+            "실패 단계 " + failure_stage,
             "추론 상태 status=" + status_text + ", relations=" + str(relation_count) + ", traces=" + str(trace_count),
             "확인 상태 " + str(int(confirmation.get("currentCycle") or 1)) + "/" + str(int(confirmation.get("requiredCycles") or 1)) + "회 연속 감지",
             "보유 " + str(int(state.get("positionCount") or 0)) + "개",
             "확인 행동 TypeDB 연결, RuleBox 저장 상태, 온톨로지 추론 워커 점검",
         ]
+        if failure_detail:
+            lines.insert(6, "실패 상세 " + failure_detail)
         if reasoning_mode:
             lines.insert(3, "추론 모드 " + reasoning_mode)
         if query_source or typedb_read_status:
@@ -675,6 +753,8 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
             inference_metadata = {
                 "source": source_name,
                 "graphStore": graph_store,
+                "rawGraphStore": str(state.get("rawGraphStore") or ""),
+                "projectionReason": str(state.get("projectionReason") or ""),
                 "status": status_text,
                 "reasoningMode": reasoning_mode,
                 "querySource": query_source,
@@ -701,7 +781,7 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
         for key in ["aboxValidationStatus", "aboxValidationErrorCount", "aboxValidationWarningCount", "aboxValidationIssues", "validationIssueSummary"]:
             if key in inference_status:
                 inference_metadata[key] = inference_status.get(key)
-        for key in ["source", "graphStore", "reasoningMode", "querySource", "typedbReadStatus", "typedbReadReason"]:
+        for key in ["source", "graphStore", "rawGraphStore", "projectionReason", "reasoningMode", "querySource", "typedbReadStatus", "typedbReadReason"]:
             value = state.get(key) or inference_status.get(key)
             if value not in (None, ""):
                 inference_metadata[key] = value
@@ -752,7 +832,8 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
         rulebox_execution = projection.get("ruleboxExecution") if isinstance(projection.get("ruleboxExecution"), dict) else {}
         clear_result = rulebox_execution.get("clearResult") if isinstance(rulebox_execution.get("clearResult"), dict) else {}
         status = str((inference or {}).get("status") or projection.get("status") or "").strip()
-        graph_store = str((inference or {}).get("graphStore") or projection.get("graphStore") or "typedb").strip() or "typedb"
+        raw_graph_store = str((inference or {}).get("graphStore") or projection.get("graphStore") or "typedb").strip() or "typedb"
+        graph_store = normalized_monitoring_graph_store(raw_graph_store)
         source_name = inferencebox_source_name({
             **dict(inference or {}),
             "graphStore": graph_store,
@@ -761,6 +842,8 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
             "status": status or ("empty" if isinstance(inference, dict) else "missing"),
             "source": source_name,
             "graphStore": graph_store,
+            "rawGraphStore": raw_graph_store if raw_graph_store.lower() != graph_store.lower() else "",
+            "projectionReason": str(projection.get("reason") or ""),
             "inferenceReason": str((inference or {}).get("reason") or ""),
             "reasoningMode": str((inference or {}).get("reasoningMode") or rulebox_execution.get("reasoningMode") or ""),
             "querySource": str((inference or {}).get("querySource") or ""),
@@ -796,7 +879,11 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
                 reason += ": " + summary
             return "invalidABox", reason, common
         if not inference:
-            return "missingInferenceBox", graph_store_label(graph_store) + " InferenceBox 응답이 없습니다", common
+            detail = ontology_inference_failure_detail("missingInferenceBox", common["status"], common)
+            reason = graph_store_label(graph_store) + " InferenceBox 응답이 없습니다"
+            if detail:
+                reason += ": " + detail
+            return "missingInferenceBox", reason, common
         if common["ruleboxExecutionStatus"] and common["ruleboxExecutionStatus"].lower() not in {"ok", "partial"}:
             reason = "RuleBox 실행 실패"
             if common["ruleboxExecutionReason"]:

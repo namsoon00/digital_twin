@@ -4704,6 +4704,10 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("TypeDB InferenceBox 상태가 error입니다", inference_event.metadata["missingInferenceReason"])
         self.assertIn("저장소 TypeDB", line_text)
         self.assertIn("추론 소스 typedbInferenceBox", line_text)
+        self.assertIn("실패 단계 InferenceBox 조회", line_text)
+        self.assertIn("실패 상세 status=error", line_text)
+        self.assertIn("typedbRead=error", line_text)
+        self.assertIn("typedbReadReason=schema unavailable", line_text)
         self.assertIn("조회 오류 schema unavailable", line_text)
         self.assertEqual("typedbInferenceBox", inference["source"])
         self.assertEqual("typedb", inference["graphStore"])
@@ -4711,6 +4715,73 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("typedb-typeql", inference["querySource"])
         self.assertEqual("error", inference["typedbReadStatus"])
         self.assertEqual("schema unavailable", inference["typedbReadReason"])
+
+    def test_events_explain_legacy_neo4j_graph_store_as_typedb_inference_missing(self):
+        position = normalize_position({
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "marketValue": 864000,
+            "quantity": 10,
+            "sellableQuantity": 10,
+            "averagePrice": 80000,
+            "currentPrice": 86400,
+            "profitLossRate": 8,
+            "sector": "반도체",
+        })
+        portfolio = portfolio_summary([position])
+        metadata = {
+            "ontology": {
+                "activeGraphStore": "neo4j",
+                "neo4j": {
+                    "saved": False,
+                    "status": "error",
+                    "graphStore": "neo4j",
+                    "reason": "connection refused",
+                    "projectionMode": "legacy-graph-store",
+                    "ruleboxExecution": {"status": "", "statementCount": 0},
+                },
+            },
+        }
+        previous_snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "토스 계좌 동기화",
+            utc_now_iso(),
+            portfolio,
+            [position],
+            decisions_for_positions([position], portfolio),
+            metadata=deepcopy(metadata),
+        )
+        snapshot = AccountSnapshot(
+            "main",
+            "메인",
+            "toss",
+            "live",
+            "토스 계좌 동기화",
+            utc_now_iso(),
+            portfolio,
+            [position],
+            decisions_for_positions([position], portfolio),
+            metadata=deepcopy(metadata),
+        )
+
+        events = RealtimeMonitor().events_for_snapshot(snapshot, previous_snapshot.to_monitor_state())
+        inference_event = next(event for event in events if event.rule == "ontologyInferenceMissing")
+        line_text = "\n".join(inference_event.lines)
+        inference = inference_event.metadata["ontologyInference"]
+
+        self.assertEqual("missingInferenceBox", inference_event.metadata["missingInferenceReasonCode"])
+        self.assertIn("TypeDB InferenceBox 응답이 없습니다", inference_event.metadata["missingInferenceReason"])
+        self.assertIn("저장소 TypeDB", line_text)
+        self.assertIn("실패 단계 InferenceBox 생성/저장", line_text)
+        self.assertIn("projectionReason=connection refused", line_text)
+        self.assertIn("레거시 저장소 표기 neo4j 감지", line_text)
+        self.assertEqual("typedb", inference["graphStore"])
+        self.assertEqual("neo4j", inference["rawGraphStore"])
 
     def test_events_explain_ok_but_empty_inferencebox_after_repeated_missing(self):
         position = normalize_position({

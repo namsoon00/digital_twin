@@ -4647,8 +4647,8 @@ class PythonServiceTests(unittest.TestCase):
                     "projectionMode": "abox-facts-only-typedb-rulebox",
                     "ruleboxExecution": {
                         "status": "ok",
-                        "statementCount": 3,
-                        "reasoningMode": "typedb-bootstrap-domain-reasoner",
+                        "statementCount": 0,
+                        "reasoningMode": "typedb-native-required",
                     },
                     "inferenceBox": {
                         "configured": True,

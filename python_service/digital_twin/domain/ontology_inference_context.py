@@ -93,14 +93,11 @@ def relation_context_from_inferencebox(
         return {}
     if str(inferencebox.get("status") or "").lower() not in {"ok", "partial", ""}:
         return {}
-    if (
-        not bool(inferencebox.get("nativeTypeDbReasoningUsed"))
-        and not bool(inferencebox.get("typedbBootstrapReasoningUsed"))
-        and not inferencebox.get("relations")
-        and not inferencebox.get("traces")
-    ):
-        return {}
     graph_store = str(inferencebox.get("graphStore") or "").strip() or "graph-store"
+    if graph_store.lower() == "typedb" and not bool(inferencebox.get("nativeTypeDbReasoningUsed")):
+        return {}
+    if not bool(inferencebox.get("nativeTypeDbReasoningUsed")) and not inferencebox.get("relations") and not inferencebox.get("traces"):
+        return {}
     source_name = inferencebox_source_name(inferencebox)
     context_version = relation_context_version(source_name)
     relations = symbol_inference_relations(symbol, inferencebox.get("relations") or [])
@@ -181,7 +178,6 @@ def inferencebox_source_name(inferencebox: Dict[str, object]) -> str:
         graph_store == "typedb"
         or source == "typedbInferenceBox"
         or bool((inferencebox or {}).get("nativeTypeDbReasoningUsed"))
-        or bool((inferencebox or {}).get("typedbBootstrapReasoningUsed"))
     ):
         return "typedbInferenceBox"
     return "graphStoreInferenceBox"

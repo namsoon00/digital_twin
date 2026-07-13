@@ -46,15 +46,16 @@ class FakeOntologyRepository:
             "status": "ok",
             "source": "typedbInferenceBox",
             "graphStore": "typedb",
-            "reasoningMode": "typedb-bootstrap-domain-reasoner",
+            "reasoningMode": "typedb-native-inferencebox",
             "querySource": "typedb-typeql",
             "typedbReadStatus": "ok",
             "entityCount": 4,
             "relationCount": 2,
             "traceCount": 1,
-            "nativeRelationCount": 0,
-            "nativeTypeDbReasoningUsed": False,
-            "typedbBootstrapReasoningUsed": True,
+            "nativeRelationCount": 2,
+            "nativeTypeDbReasoningUsed": True,
+            "typedbBootstrapReasoningUsed": False,
+            "pythonBootstrapDisabled": True,
             "symbols": list(symbols or []),
         }
 
@@ -76,7 +77,7 @@ class FakeNotificationQueue:
 
 
 class OntologyDiagnosticsServiceTests(unittest.TestCase):
-    def test_status_separates_bootstrap_reasoning_and_outbox_boundary(self):
+    def test_status_reports_native_reasoning_and_outbox_boundary(self):
         alert_event = DomainEvent(
             name=MONITORING_ALERTS_DETECTED,
             aggregate_id="main",
@@ -109,9 +110,9 @@ class OntologyDiagnosticsServiceTests(unittest.TestCase):
         self.assertEqual(payload["contract"], "typedb-ontology-diagnostics-v1")
         self.assertEqual(payload["activeGraphStore"], "typedb")
         self.assertTrue(payload["typedb"]["addressConfigured"])
-        self.assertEqual(payload["inferenceBox"]["reasoningMode"], "typedb-bootstrap-domain-reasoner")
-        self.assertFalse(payload["reasoningBoundary"]["nativeTypeDbReasoningUsed"])
-        self.assertTrue(payload["reasoningBoundary"]["typedbBootstrapReasoningUsed"])
+        self.assertEqual(payload["inferenceBox"]["reasoningMode"], "typedb-native-inferencebox")
+        self.assertTrue(payload["reasoningBoundary"]["nativeTypeDbReasoningUsed"])
+        self.assertFalse(payload["reasoningBoundary"]["typedbBootstrapReasoningUsed"])
         self.assertEqual(payload["notificationBoundary"]["status"], "ok")
         self.assertEqual(payload["notificationBoundary"]["jobsForLatestAlert"][0]["jobId"], job.job_id)
 
@@ -137,4 +138,3 @@ class OntologyDiagnosticsServiceTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

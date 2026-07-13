@@ -95,6 +95,7 @@ class OntologyDiagnosticsService:
             "defaultsFallbackUsed",
             "bootstrapAvailable",
             "bootstrapRuleCount",
+            "pythonBootstrapDisabled",
         ])
         profile = payload.get("nativeReasoningProfile")
         if isinstance(profile, dict):
@@ -128,6 +129,9 @@ class OntologyDiagnosticsService:
             "nativeTraceCount",
             "nativeTypeDbReasoningUsed",
             "typedbBootstrapReasoningUsed",
+            "pythonBootstrapDisabled",
+            "ignoredNonNativeRelationCount",
+            "ignoredNonNativeTraceCount",
             "symbols",
         ])
 
@@ -138,7 +142,9 @@ class OntologyDiagnosticsService:
         status = "ok"
         if str(inference.get("status") or "") == "error":
             status = "error"
-        elif not native_used and not bootstrap_used:
+        elif bootstrap_used and not native_used:
+            status = "error"
+        elif not native_used:
             status = "warning"
         return {
             "status": status,
@@ -155,9 +161,9 @@ class OntologyDiagnosticsService:
         if native_used:
             return "TypeDB native reasoning produced InferenceBox relations."
         if bootstrap_used:
-            return "TypeDB stores ABox/RuleBox/InferenceBox, while the domain bootstrap reasoner materialized the current InferenceBox."
+            return "Legacy Python bootstrap inference is present but no longer accepted for investment judgement."
         if mode:
-            return "InferenceBox exists in TypeDB read mode, but no reasoning output was confirmed."
+            return "TypeDB native reasoning is required, but no native InferenceBox output was confirmed."
         return "No TypeDB reasoning output was confirmed."
 
     def latest_events(self) -> Dict[str, object]:
@@ -262,4 +268,3 @@ class OntologyDiagnosticsService:
 
     def string_bool(self, value: object) -> bool:
         return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
-

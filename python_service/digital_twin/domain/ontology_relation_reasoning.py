@@ -1,8 +1,8 @@
-"""Fallback ontology relation reasoning.
+"""Local ontology relation reasoning helpers.
 
-Runtime reasoning should prefer persisted ontology RuleBox/InferenceBox results.
-This module only keeps the local ABox-fact fallback used when the graph store is
-empty, unavailable, or being bootstrapped.
+Runtime investment judgement must use active TypeDB native InferenceBox results.
+This module is kept for offline experiments, prompt assembly helpers, and
+non-production comparisons; it must not materialize production InferenceBox data.
 """
 
 from typing import Dict, Iterable, List, Optional

@@ -641,7 +641,7 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
         trace_count = int(number(state.get("traceCount")) or 0)
         entity_count = int(number(state.get("entityCount")) or 0)
         native_used = bool(state.get("nativeTypeDbReasoningUsed"))
-        typedb_used = bool(state.get("nativeTypeDbReasoningUsed") or state.get("typedbBootstrapReasoningUsed"))
+        typedb_used = native_used
         status_text = str(state.get("status") or "missing").strip() or "missing"
         graph_store = str(state.get("graphStore") or inference_status.get("graphStore") or "typedb").strip() or "typedb"
         source_name = str(state.get("source") or inference_status.get("source") or ("typedbInferenceBox" if graph_store == "typedb" else "graphStoreInferenceBox"))
@@ -810,10 +810,9 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
             return "inferenceBoxStatusBlocked", reason, common
         relations = inference.get("relations") if isinstance(inference.get("relations"), list) else []
         traces = inference.get("traces") if isinstance(inference.get("traces"), list) else []
-        graph_reasoning_used = (
-            bool(inference.get("nativeTypeDbReasoningUsed"))
-            or bool(inference.get("typedbBootstrapReasoningUsed"))
-        )
+        graph_reasoning_used = bool(inference.get("nativeTypeDbReasoningUsed"))
+        if graph_store.lower() == "typedb" and not graph_reasoning_used:
+            return "nativeReasoningMissing", graph_store_label(graph_store) + " native 추론 관계가 아직 없습니다", common
         if not graph_reasoning_used and not relations and not traces:
             return "nativeReasoningMissing", graph_store_label(graph_store) + " 추론 관계가 아직 없습니다", common
         if not relations and not traces:

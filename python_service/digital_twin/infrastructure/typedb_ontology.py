@@ -4,7 +4,6 @@ import json
 from typing import Dict, Iterable, List, Tuple
 
 from ..domain.ontology_contracts import OntologyEntity, OntologyRelation, PortfolioOntology
-from ..domain.ontology_graph_reasoner import run_graph_reasoner
 from ..domain.ontology_rulebox_catalog import default_graph_inference_rules
 from ..domain.ontology_rulebox_contracts import GRAPH_REASONER_VERSION, GraphInferenceRule
 from ..domain.ontology_rulebox_governance import (
@@ -335,7 +334,6 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
         self.tls_enabled = bool(tls_enabled)
         self.timeout_seconds = max(2, int(timeout_seconds or 20))
         self._last_graph = None
-        self._last_inference_graph = None
         self._last_rules: List[GraphInferenceRule] = []
 
     def active_tbox_metadata(self) -> Dict[str, object]:
@@ -678,6 +676,47 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin):
             for query in queries:
                 tx.query(query).resolve()
             tx.commit()
+
+    def clear_inferencebox(self) -> Dict[str, object]:
+        if not self.address:
+            return {
+                "configured": False,
+                "status": "disabled",
+                "graphStore": "typedb",
+                "reason": "TypeDB ontology storage is not configured.",
+            }
+        imported = self.driver_imports()
+        if imported[0] is None:
+            return {
+                "configured": True,
+                "status": "driver-missing",
+                "graphStore": "typedb",
+                "reason": "typedb-driver Python package is not installed: " + str(imported[1])[:160],
+            }
+        _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
+        driver = self.open_driver(imported)
+        try:
+            self.ensure_database(driver)
+            self.ensure_schema(driver, imported)
+            with driver.transaction(self.database, TransactionType.WRITE) as tx:
+                for query in self.delete_queries(["InferenceBox"]):
+                    tx.query(query).resolve()
+                tx.commit()
+            return {
+                "configured": True,
+                "status": "ok",
+                "graphStore": "typedb",
+                "clearedBox": "InferenceBox",
+            }
+        except Exception as error:  # noqa: BLE001 - caller reports clear failure as inference boundary status.
+            return {
+                "configured": True,
+                "status": "error",
+                "graphStore": "typedb",
+                "reason": str(error)[:220],
+            }
+        finally:
+            self.close_driver(driver)
 
     def schema_query(self) -> str:
         return """
@@ -1067,48 +1106,93 @@ relation ontology-assertion,
     def run_rulebox(self, payload: Dict[str, object] = None) -> Dict[str, object]:
         if not self.address:
             return NullTypeDBOntologyGraphRepository().run_rulebox(payload)
-        graph = copy.deepcopy(self._last_graph) if self._last_graph else self.load_graph_from_typedb(["ABox"])
-        if not graph or not graph.entities:
+        payload = payload if isinstance(payload, dict) else {}
+        clear_requested = typedb_bool(payload.get("clearInference")) if "clearInference" in payload else False
+        clear_result = self.clear_inferencebox() if clear_requested else {}
+        if clear_result and str(clear_result.get("status") or "") != "ok":
+            return {
+                "configured": True,
+                "status": "error",
+                "graphStore": "typedb",
+                "source": "typedbRuleBox",
+                "reasoningMode": "typedb-native-required",
+                "reason": "TypeDB InferenceBox 초기화 실패: " + str(clear_result.get("reason") or clear_result.get("status") or ""),
+                "statementCount": 0,
+                "relationTypes": [],
+                "nativeTypeDbReasoningUsed": False,
+                "typedbNativeFunctionReasoningUsed": False,
+                "typedbBootstrapReasoningUsed": False,
+                "pythonBootstrapDisabled": True,
+                "clearResult": clear_result,
+            }
+        try:
+            abox_rows = self.read_entity_rows(["ABox"], limit=1)
+        except Exception as error:  # noqa: BLE001 - report TypeDB read failures through diagnostics.
+            return {
+                "configured": True,
+                "status": "error",
+                "graphStore": "typedb",
+                "source": "typedbRuleBox",
+                "reasoningMode": "typedb-native-required",
+                "reason": "TypeDB ABox 조회 실패: " + str(error)[:180],
+                "statementCount": 0,
+                "relationTypes": [],
+                "nativeTypeDbReasoningUsed": False,
+                "typedbNativeFunctionReasoningUsed": False,
+                "typedbBootstrapReasoningUsed": False,
+                "pythonBootstrapDisabled": True,
+                "clearResult": clear_result,
+            }
+        if not abox_rows:
             return {
                 "configured": True,
                 "status": "missing-abox",
                 "graphStore": "typedb",
+                "source": "typedbRuleBox",
+                "reasoningMode": "typedb-native-required",
                 "reason": "TypeDB에 실행 가능한 ABox 그래프가 없습니다.",
                 "statementCount": 0,
                 "nativeTypeDbReasoningUsed": False,
+                "typedbNativeFunctionReasoningUsed": False,
+                "typedbBootstrapReasoningUsed": False,
+                "pythonBootstrapDisabled": True,
+                "clearResult": clear_result,
             }
-        if not self._last_rules:
-            snapshot = self.rulebox_snapshot()
-            try:
-                self._last_rules = rulebox_rules_from_payload({"rules": snapshot.get("rules") or []})
-            except ValueError:
-                self._last_rules = list(default_graph_inference_rules())
-        native_profile = typedb_native_reasoning_profile(rulebox_rules_to_payload(self._last_rules or default_graph_inference_rules()))
-        run_graph_reasoner(graph, self._last_rules or default_graph_inference_rules())
-        inference_entities = [
-            item for item in graph.entities
-            if str((item.properties or {}).get("ontologyBox") or "") == "InferenceBox"
-        ]
-        inference_relations = [
-            item for item in graph.relations
-            if str((item.properties or {}).get("ontologyBox") or "") == "InferenceBox"
-        ]
-        if inference_entities or inference_relations:
-            self.save_graph(graph)
-        self._last_inference_graph = graph
+        snapshot = self.rulebox_snapshot()
+        rules = snapshot.get("rules") if isinstance(snapshot.get("rules"), list) else []
+        native_profile = typedb_native_reasoning_profile(rules)
+        if str(snapshot.get("status") or "") != "ok" or not rules:
+            return {
+                "configured": True,
+                "status": "rulebox-not-ready",
+                "graphStore": "typedb",
+                "source": "typedbRuleBox",
+                "reasoningMode": "typedb-native-required",
+                "reason": str(snapshot.get("reason") or "TypeDB RuleBox rules are not available."),
+                "statementCount": 0,
+                "relationTypes": [],
+                "nativeTypeDbReasoningUsed": False,
+                "typedbNativeFunctionReasoningUsed": False,
+                "typedbBootstrapReasoningUsed": False,
+                "pythonBootstrapDisabled": True,
+                "clearResult": clear_result,
+                "nativeReasoningProfile": native_profile,
+            }
         return {
             "configured": True,
-            "status": "ok",
+            "status": "native-reasoning-required",
             "graphStore": "typedb",
             "source": "typedbRuleBox",
-            "reasoningMode": "typedb-bootstrap-domain-reasoner",
-            "reason": "TypeDB bootstrap mode uses the domain graph reasoner to materialize InferenceBox while TypeQL native rules are prepared.",
-            "statementCount": len(inference_relations),
-            "relationTypes": sorted({str(item.relation_type or "") for item in inference_relations if str(item.relation_type or "")}),
+            "reasoningMode": "typedb-native-required",
+            "reason": "Python bootstrap 추론은 비활성화되었습니다. TypeDB native function/rule로 InferenceBox를 생성하도록 구현해야 합니다.",
+            "statementCount": 0,
+            "relationTypes": [],
             "nativeTypeDbReasoningUsed": False,
             "typedbNativeFunctionReasoningUsed": False,
             "typedbNativeReasoningReady": native_profile.get("status") in {"ready", "partial"},
-            "typedbBootstrapReasoningUsed": True,
+            "typedbBootstrapReasoningUsed": False,
+            "pythonBootstrapDisabled": True,
+            "clearResult": clear_result,
             "nativeReasoningProfile": native_profile,
         }
 
@@ -1154,25 +1238,34 @@ relation ontology-assertion,
             if not clean_symbols
             or any(symbol in str(row.get(key) or "").upper() for symbol in clean_symbols for key in ["source", "target", "symbol"])
         ]
-        trace_rows = [row for row in entity_rows if str(row.get("kind") or "") == "inference-trace"]
+        native_entity_rows = [row for row in entity_rows if bool(row.get("nativeTypeDbReasoned"))]
+        native_relation_rows = [row for row in relation_rows if bool(row.get("nativeTypeDbReasoned"))]
+        native_trace_rows = [row for row in native_entity_rows if str(row.get("kind") or "") == "inference-trace"]
+        ignored_relation_count = len(relation_rows) - len(native_relation_rows)
+        ignored_trace_count = len([row for row in entity_rows if str(row.get("kind") or "") == "inference-trace"]) - len(native_trace_rows)
         rowsets = {
-            "entityCounts": [{"entityCount": len(entity_rows), "nativeEntityCount": 0}],
-            "relationCounts": [{"relationCount": len(relation_rows), "nativeRelationCount": 0}],
-            "traceCounts": [{"traceCount": len(trace_rows), "nativeTraceCount": 0}],
-            "entities": entity_rows[:safe_limit],
-            "relations": relation_rows[:safe_limit],
-            "traces": [{**row, "matchedConditionIds": matched_condition_ids(row)} for row in trace_rows[:safe_limit]],
+            "entityCounts": [{"entityCount": len(native_entity_rows), "nativeEntityCount": len(native_entity_rows)}],
+            "relationCounts": [{"relationCount": len(native_relation_rows), "nativeRelationCount": len(native_relation_rows)}],
+            "traceCounts": [{"traceCount": len(native_trace_rows), "nativeTraceCount": len(native_trace_rows)}],
+            "entities": native_entity_rows[:safe_limit],
+            "relations": native_relation_rows[:safe_limit],
+            "traces": [{**row, "matchedConditionIds": matched_condition_ids(row)} for row in native_trace_rows[:safe_limit]],
         }
         snapshot = inferencebox_snapshot_from_rows(rowsets, "typedb-typeql", clean_symbols)
+        has_native_output = bool(native_relation_rows or native_trace_rows)
         snapshot.update({
             "graphStore": "typedb",
             "source": "typedbInferenceBox",
-            "reasoningMode": "typedb-bootstrap-domain-reasoner",
+            "status": "ok" if has_native_output else "empty",
+            "reasoningMode": "typedb-native-inferencebox" if has_native_output else "typedb-native-required",
             "querySource": "typedb-typeql",
             "typedbReadStatus": "ok",
-            "reason": "TypeDB InferenceBox 조회는 성공했지만 관계와 trace가 0개입니다." if not relation_rows and not trace_rows else "",
-            "nativeTypeDbReasoningUsed": False,
-            "typedbBootstrapReasoningUsed": True,
+            "reason": "" if has_native_output else "TypeDB native InferenceBox 관계가 아직 없습니다. Python bootstrap 추론은 비활성화되어 있습니다.",
+            "nativeTypeDbReasoningUsed": has_native_output,
+            "typedbBootstrapReasoningUsed": False,
+            "pythonBootstrapDisabled": True,
+            "ignoredNonNativeRelationCount": ignored_relation_count,
+            "ignoredNonNativeTraceCount": ignored_trace_count,
         })
         return snapshot
 
@@ -1302,8 +1395,8 @@ def typedb_native_reasoning_profile(rules: Iterable[object]) -> Dict[str, object
         "unsupportedConditionCount": unsupported,
         "materializationRequired": True,
         "materializationTarget": "InferenceBox",
-        "materializationStrategy": "application-write-stage",
-        "reason": "TypeDB 3 functions compute views on demand, so persisted InferenceBox assertions still require an application materialization step.",
+        "materializationStrategy": "typedb-native-only",
+        "reason": "Python bootstrap materialization is disabled; InferenceBox must come from TypeDB native functions/rules.",
         "readyRules": [item.get("ruleId") for item in ready][:24],
         "partialRules": [item.get("ruleId") for item in partial][:24],
         "blockedRules": [item.get("ruleId") for item in blocked][:24],

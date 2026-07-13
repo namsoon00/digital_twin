@@ -191,7 +191,7 @@ AI에는 다음 데이터를 함께 전달한다.
 
 - 새 TBox 클래스, 관계 타입, 바운디드 컨텍스트 규칙은 `domain/ontology_tbox.py`에 추가한다.
 - 새 ABox 인스턴스 생성은 `domain/ontology.py`에 추가하고, `tboxClass` 또는 `tboxClasses`를 지정해 `boundedContext`가 자동 부여되게 한다.
-- 새 런타임 판단은 먼저 TypeDB RuleBox/InferenceBox와 온톨로지 relation catalog에 추가한다. Python `domain/ontology_relation_reasoning.py`는 그래프 저장소가 비었을 때의 bootstrap fallback만 보완한다.
+- 새 런타임 판단은 먼저 TypeDB RuleBox/InferenceBox와 온톨로지 relation catalog에 추가한다. Python `domain/ontology_relation_reasoning.py`는 운영 fallback이 아니라 실험/비교용 보조 로직으로만 사용한다.
 - 새 AI 설명은 `aiPromptTemplates`와 `aiPromptPolicy`의 계약을 함께 갱신한다.
 - 외부 뉴스, 공시, 매크로 데이터는 먼저 `ExternalSignal` 또는 구체 클래스(`NewsEvent`, `DisclosureEvent`, `MacroIndicator`)의 ABox 관측값으로 만들고, 필요하면 `Evidence`, `Belief`, `Insight`로 파생한다.
 - 새 관계가 AI 의견을 바꿔야 하면 relation properties에 `polarity`, `opinionImpact`, `riskImpact`, `supportImpact`, `aiInfluenceLabel`을 명시한다.

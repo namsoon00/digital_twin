@@ -128,7 +128,7 @@ class OntologyInferenceContextTests(unittest.TestCase):
         self.assertTrue(decisions[0].relation_rule_context["blocked"])
         self.assertFalse(decisions[0].relation_rule_context["fallbackUsed"])
 
-    def test_typedb_inferencebox_context_is_valid_graph_decision_source(self):
+    def test_typedb_bootstrap_inferencebox_is_not_valid_graph_decision_source(self):
         position = Position(
             symbol="005930",
             name="삼성전자",
@@ -179,10 +179,7 @@ class OntologyInferenceContextTests(unittest.TestCase):
         )
 
         contexts = relation_contexts_from_snapshot(snapshot)
-        self.assertIn("005930", contexts)
-        self.assertEqual("typedbInferenceBox", contexts["005930"]["source"])
-        self.assertEqual("typedbInferenceBox", contexts["005930"]["decision"]["basis"])
-        self.assertEqual("typedbInferenceRelation", contexts["005930"]["decision"]["stagePolicySource"])
+        self.assertEqual({}, contexts)
 
     def test_typedb_entry_wait_inference_maps_to_entry_wait_stage(self):
         watch = Position(

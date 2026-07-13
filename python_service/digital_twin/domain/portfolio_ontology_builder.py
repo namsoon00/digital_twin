@@ -472,7 +472,8 @@ def build_portfolio_ontology(
                 "aiInfluenceLabel": opinion.contradictions[0],
             })))
     add_decision_item_concepts(graph, runtime_context)
-    apply_graph_reasoning(graph)
+    if include_reasoning_outputs:
+        apply_graph_reasoning(graph)
     if not include_reasoning_outputs:
         graph.entities = dedupe_entities(graph.entities)
         graph.relations = dedupe_relations(graph.relations)

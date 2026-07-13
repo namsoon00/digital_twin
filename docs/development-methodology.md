@@ -91,8 +91,8 @@ Domain:
 - `python_service/digital_twin/domain/ontology_prompting.py`: ontology read models for reasoning cards, AI inference packets, worldview summaries, and prompt payloads
 - `python_service/digital_twin/domain/external_signal_quality.py`: external signal provenance, freshness, source-health, and symbol-coverage scoring
 - `python_service/digital_twin/domain/ontology_quality.py`: AI opinion readiness and ontology graph quality sample metrics
-- `python_service/digital_twin/domain/ontology_relation_reasoning.py`: Python fallback adapter that turns ABox facts into relation context, missing-data context, and AI prompt context; prefer the active graph-store RuleBox/InferenceBox for new reasoning behavior
-- `python_service/digital_twin/domain/ontology_inference_context.py`: active graph-store InferenceBox to relation-context adapter; runtime monitoring should prefer this graph-store result and use Python relation reasoning only as bootstrap fallback
+- `python_service/digital_twin/domain/ontology_relation_reasoning.py`: local relation reasoning helpers for offline experiments, prompt assembly, and non-production comparisons; runtime investment judgement must not use it as an InferenceBox materialization fallback
+- `python_service/digital_twin/domain/ontology_inference_context.py`: active graph-store InferenceBox to relation-context adapter; runtime monitoring should require TypeDB native InferenceBox evidence for TypeDB-backed investment judgement
 - `python_service/digital_twin/domain/scoring.py`: reusable scoring signals and fallback vocabularies used by notification and strategy-adjacent scores
 - `python_service/digital_twin/domain/message_types.py`: shared message-type catalog, labels, default alert rules, thresholds, and cadence
 - `python_service/digital_twin/domain/alert_formatting.py`: money, percentage, and compact-number formatting used by alerts
@@ -126,7 +126,7 @@ Infrastructure:
 - `python_service/digital_twin/infrastructure/model_reviewer.py`: Codex/LLM command adapter with local fallback
 - `python_service/digital_twin/infrastructure/ontology_projection.py`: snapshot-to-ontology projection recorder that saves graph-store projections and quality samples without making monitoring application services own graph persistence details
 - `python_service/digital_twin/infrastructure/ontology_graph_store.py`: graph-store composition root; runtime code should import this factory instead of constructing the database adapter directly
-- `python_service/digital_twin/infrastructure/typedb_ontology.py`: TypeDB graph-store adapter and bootstrap TypeDB InferenceBox support
+- `python_service/digital_twin/infrastructure/typedb_ontology.py`: TypeDB graph-store adapter; production InferenceBox output must come from TypeDB native functions/rules, not Python bootstrap materialization
 - `python_service/digital_twin/infrastructure/service_factory.py`: runtime composition of use cases and adapters
 
 Compatibility modules:

@@ -222,6 +222,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                 "ruleId": "graph.loss_guard.breakdown.v1",
                 "tboxClass": "RiskSignal",
                 "confidence": 0.86,
+                "nativeTypeDbReasoned": True,
                 "propertiesJson": json.dumps({
                     "ontologyBox": "InferenceBox",
                     "symbol": "005930",
@@ -229,6 +230,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                     "confidence": 0.86,
                     "decisionStage": "LOSS_REDUCE",
                     "stagePriority": 90,
+                    "nativeTypeDbReasoned": True,
                 }),
             },
             {
@@ -239,12 +241,14 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                 "symbol": "005930",
                 "ruleId": "graph.loss_guard.breakdown.v1",
                 "confidence": 0.86,
+                "nativeTypeDbReasoned": True,
                 "propertiesJson": json.dumps({
                     "ontologyBox": "InferenceBox",
                     "symbol": "005930",
                     "ruleId": "graph.loss_guard.breakdown.v1",
                     "confidence": 0.86,
                     "matchedConditions": [{"conditionId": "holding-loss"}],
+                    "nativeTypeDbReasoned": True,
                 }),
             },
         ]
@@ -259,6 +263,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                 "symbol": "005930",
                 "ruleId": "graph.loss_guard.breakdown.v1",
                 "weight": 0.86,
+                "nativeTypeDbReasoned": True,
                 "propertiesJson": json.dumps({
                     "ontologyBox": "InferenceBox",
                     "symbol": "005930",
@@ -268,6 +273,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                     "stagePriority": 90,
                     "aiInfluenceLabel": "손실 방어 추론",
                     "inferenceTraceId": "inference-trace:005930:graph.loss_guard.breakdown.v1",
+                    "nativeTypeDbReasoned": True,
                 }),
             },
         ]
@@ -278,11 +284,14 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("ok", snapshot["status"])
         self.assertEqual("typedbInferenceBox", snapshot["source"])
         self.assertEqual("typedb", snapshot["graphStore"])
-        self.assertEqual("typedb-bootstrap-domain-reasoner", snapshot["reasoningMode"])
+        self.assertEqual("typedb-native-inferencebox", snapshot["reasoningMode"])
         self.assertEqual("typedb-typeql", snapshot["querySource"])
         self.assertEqual("ok", snapshot["typedbReadStatus"])
         self.assertEqual(2, snapshot["entityCount"])
         self.assertEqual(1, snapshot["relationCount"])
+        self.assertTrue(snapshot["nativeTypeDbReasoningUsed"])
+        self.assertFalse(snapshot["typedbBootstrapReasoningUsed"])
+        self.assertEqual(0, snapshot["ignoredNonNativeRelationCount"])
         self.assertEqual(["holding-loss"], snapshot["traces"][0]["matchedConditionIds"])
 
     def test_typedb_inferencebox_snapshot_exposes_typeql_read_errors(self):
@@ -301,32 +310,28 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertIn("TypeDB InferenceBox 조회 실패", snapshot["reason"])
         self.assertFalse(snapshot["typedbBootstrapReasoningUsed"])
 
-    def test_typedb_rulebox_execution_can_load_abox_from_store(self):
+    def test_typedb_rulebox_execution_requires_native_inference_and_does_not_materialize_python_bootstrap(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
-        repository._last_graph = None
-        repository._last_rules = default_graph_inference_rules()[:1]
-        abox = PortfolioOntology("typedb-abox")
-        abox.entities.append(OntologyEntity("stock:005930", "삼성전자", "stock", {"ontologyBox": "ABox", "symbol": "005930"}))
+        rule_snapshot = {
+            "configured": True,
+            "saved": True,
+            "status": "ok",
+            "graphStore": "typedb",
+            "rules": [default_graph_inference_rules()[0].to_dict()],
+            "ruleCount": 1,
+        }
 
-        def materialize_inference(graph, _rules):
-            graph.entities.append(OntologyEntity("risk:005930:test", "테스트 리스크", "risk-signal", {
-                "ontologyBox": "InferenceBox",
-                "symbol": "005930",
-                "ruleId": "graph.test",
-            }))
-            graph.relations.append(OntologyRelation("stock:005930", "risk:005930:test", "HAS_INFERRED_RISK", 0.8, properties={
-                "ontologyBox": "InferenceBox",
-                "ruleId": "graph.test",
-            }))
+        with patch.object(repository, "read_entity_rows", return_value=[{"id": "stock:005930", "ontologyBox": "ABox"}]), patch.object(repository, "rulebox_snapshot", return_value=rule_snapshot), patch.object(repository, "clear_inferencebox", return_value={"status": "ok", "graphStore": "typedb"}), patch.object(repository, "save_graph") as save_graph:
+            result = repository.run_rulebox({"clearInference": True})
 
-        with patch.object(repository, "load_graph_from_typedb", return_value=abox), patch.object(repository, "save_graph", return_value={"saved": True, "status": "ok"}), patch("digital_twin.infrastructure.typedb_ontology.run_graph_reasoner", side_effect=materialize_inference):
-            result = repository.run_rulebox()
-
-        self.assertEqual("ok", result["status"])
-        self.assertEqual(1, result["statementCount"])
-        self.assertTrue(result["typedbBootstrapReasoningUsed"])
+        self.assertEqual("native-reasoning-required", result["status"])
+        self.assertEqual("typedb-native-required", result["reasoningMode"])
+        self.assertEqual(0, result["statementCount"])
+        self.assertFalse(result["typedbBootstrapReasoningUsed"])
+        self.assertTrue(result["pythonBootstrapDisabled"])
         self.assertIn("nativeReasoningProfile", result)
         self.assertFalse(result["typedbNativeFunctionReasoningUsed"])
+        save_graph.assert_not_called()
 
     def test_typedb_native_reasoning_profile_identifies_function_ready_rules(self):
         profile = typedb_native_reasoning_profile([rule.to_dict() for rule in default_graph_inference_rules()])

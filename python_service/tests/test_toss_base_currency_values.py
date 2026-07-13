@@ -51,7 +51,7 @@ class TossBaseCurrencyValueTests(unittest.TestCase):
         self.assertEqual(32000000, summary.invested)
         self.assertEqual(32000000, summary.total)
 
-    def test_us_position_alert_value_shows_native_and_toss_krw_value(self):
+    def test_us_position_alert_value_uses_live_fx_over_stale_toss_krw_value(self):
         position = normalize_position(
             {
                 "symbol": "MSTR",
@@ -64,9 +64,19 @@ class TossBaseCurrencyValueTests(unittest.TestCase):
             }
         )
 
-        line = RealtimeMonitor().position_market_value_line(position.to_dict())
+        monitor = RealtimeMonitor({"fxRates": "KRW=1\nUSD=1400"})
+        monitor.use_external_fx_rates({
+            "fxRates": {
+                "USDKRW": {
+                    "base": "USD",
+                    "quote": "KRW",
+                    "rate": 1425.5,
+                }
+            }
+        })
+        line = monitor.position_market_value_line(position.to_dict())
 
-        self.assertEqual("종목 평가금액: $22,540 (약 3,200만 원)", line)
+        self.assertEqual("종목 평가금액: $22,540 (약 3,213만 원)", line)
 
     def test_external_fx_rate_is_used_when_toss_krw_value_is_missing(self):
         position = normalize_position(

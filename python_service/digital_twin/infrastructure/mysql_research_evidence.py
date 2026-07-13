@@ -191,6 +191,24 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
             cursor = connection.execute("DELETE FROM research_evidence WHERE evidence_id = %s", (normalized_id,))
         return int(cursor.rowcount or 0) > 0
 
+    def delete_stale_news(self, cutoff_iso: str, limit: int = 500) -> int:
+        cutoff = str(cutoff_iso or "").strip()
+        if not cutoff:
+            return 0
+        row_limit = max(1, min(5000, int(limit or 500)))
+        with self.transaction() as connection:
+            cursor = connection.execute(
+                """
+                DELETE FROM research_evidence
+                WHERE kind = 'news'
+                  AND COALESCE(NULLIF(published_at, ''), NULLIF(observed_at, ''), NULLIF(last_seen_at, '')) < %s
+                ORDER BY last_seen_at ASC, evidence_id ASC
+                LIMIT %s
+                """,
+                (cutoff, row_limit),
+            )
+        return int(cursor.rowcount or 0)
+
     def summary_counts(self, column: str, limit: int = 20) -> List[Dict[str, object]]:
         if column not in {"symbol", "kind", "source", "polarity"}:
             return []

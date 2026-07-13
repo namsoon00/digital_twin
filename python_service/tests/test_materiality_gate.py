@@ -121,7 +121,7 @@ class MaterialityGateTests(unittest.TestCase):
             symbol_store=SimpleNamespace(get=lambda *_args: None),
             evidence_store=MemoryEvidenceStore(),
             gateway=Gateway(),
-            settings={"newsCollectionRateLimitSeconds": "0"},
+            settings={"newsCollectionRateLimitSeconds": "0", "newsEvidenceCleanupEnabled": "0", "newsEvidenceMaxAgeMinutes": "100000"},
             event_publisher=events,
             sleep_fn=lambda _seconds: None,
         )
@@ -221,7 +221,7 @@ class MaterialityGateTests(unittest.TestCase):
             symbol_store=SimpleNamespace(get=lambda *_args: None),
             evidence_store=store,
             gateway=Gateway(),
-            settings={"newsCollectionRateLimitSeconds": "0"},
+            settings={"newsCollectionRateLimitSeconds": "0", "newsEvidenceCleanupEnabled": "0", "newsEvidenceMaxAgeMinutes": "100000"},
             event_publisher=events,
             article_analysis_service=AnalysisService(),
             sleep_fn=lambda _seconds: None,
@@ -233,6 +233,98 @@ class MaterialityGateTests(unittest.TestCase):
         self.assertTrue(all(item.raw_payload.get("aiAnalysis") for item in store.saved_items))
         self.assertEqual("악재", result["changedItems"][0]["aiAnalysis"]["impactLabelKo"])
         self.assertEqual("호재", result["changedItems"][1]["aiAnalysis"]["impactLabelKo"])
+
+    def test_news_collection_deletes_and_skips_stale_news(self):
+        stale = ResearchEvidence(
+            "stale-news",
+            "AAPL",
+            "news",
+            "Reuters",
+            "Apple old news",
+            "오래된 기사",
+            "https://example.test/stale",
+            "2026-07-10T00:00:00Z",
+            "context",
+            2.0,
+            0.7,
+            published_at="2026-07-10T00:00:00Z",
+            raw_payload={"relationScope": "direct", "relevanceScore": 90, "sourceReliability": 90, "materialityScore": 80},
+        )
+        fresh = ResearchEvidence(
+            "fresh-news",
+            "AAPL",
+            "news",
+            "Reuters",
+            "Apple fresh news",
+            "새 기사",
+            "https://example.test/fresh",
+            "2099-07-10T00:00:00Z",
+            "support",
+            8.0,
+            0.8,
+            published_at="2099-07-10T00:00:00Z",
+            raw_payload={
+                "relationScope": "direct",
+                "relevanceScore": 95,
+                "sourceReliability": 90,
+                "materialityScore": 82,
+                "articleReadStatus": "feed-summary",
+                "articleFacts": {"bodyAvailable": False},
+                "aiAnalysis": {"version": "news-ai-analysis-v1", "status": "ok"},
+            },
+        )
+
+        class MemoryEvidenceStore:
+            def __init__(self):
+                self.saved_items = []
+
+            def delete_stale_news(self, cutoff_iso, limit=500):
+                self.cutoff_iso = cutoff_iso
+                self.limit = limit
+                return 3
+
+            def upsert_many(self, items):
+                self.saved_items = list(items)
+                self.last_changed_items = list(items)
+                self.last_changed_symbols = [item.symbol for item in items]
+                return len(items)
+
+        class Gateway:
+            def collect_for_target(self, target: NewsCollectionTarget):
+                return [stale, fresh], []
+
+            def providers(self):
+                return ["unit"]
+
+        store = MemoryEvidenceStore()
+        events = EventBus()
+        runner = NewsCollectionRunner(
+            account_repository=SimpleNamespace(load=lambda: [AccountConfig("main", "메인", "toss", "https://example.test", "", "", "", ["AAPL"])]),
+            monitor_store=SimpleNamespace(previous={}),
+            symbol_store=SimpleNamespace(get=lambda *_args: None),
+            evidence_store=store,
+            gateway=Gateway(),
+            settings={
+                "newsCollectionRateLimitSeconds": "0",
+                "newsEvidenceMaxAgeMinutes": "60",
+                "newsEvidenceCleanupBatchSize": "7",
+                "newsArticleBodyFailureWarnRate": "0.1",
+                "newsArticleBodyFailureMinimumCount": "1",
+            },
+            event_publisher=events,
+            sleep_fn=lambda _seconds: None,
+        )
+
+        result = runner.run_once()
+
+        self.assertEqual(1, result["savedCount"])
+        self.assertEqual(["fresh-news"], [item.evidence_id for item in store.saved_items])
+        self.assertEqual(1, result["staleSkippedCount"])
+        self.assertEqual(3, result["staleDeletedCount"])
+        self.assertEqual(7, store.limit)
+        self.assertEqual("degraded", result["articleAnalysisHealth"]["status"])
+        self.assertEqual(1, result["articleAnalysisHealth"]["bodyMissingCount"])
+        self.assertEqual(3, result["articleAnalysisHealth"]["staleDeletedCount"])
 
     def test_ontology_reasoning_limits_monitoring_to_material_symbols(self):
         source = DomainEvent(

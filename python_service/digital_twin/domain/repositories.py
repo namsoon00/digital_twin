@@ -308,6 +308,9 @@ class ResearchEvidenceRepository(Protocol):
     def delete(self, evidence_id: str) -> bool:
         ...
 
+    def delete_stale_news(self, cutoff_iso: str, limit: int = 500) -> int:
+        ...
+
     def summary(self) -> Dict[str, object]:
         ...
 

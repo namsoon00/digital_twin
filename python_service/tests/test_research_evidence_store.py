@@ -99,6 +99,60 @@ class ResearchEvidenceStoreTests(unittest.TestCase):
             self.assertEqual([], store.latest(symbol="005930"))
             self.assertEqual(0, store.summary()["total"])
 
+    def test_research_evidence_store_deletes_stale_news_only(self):
+        with tempfile.TemporaryDirectory() as temp:
+            reset_mysql_test_database(temp)
+            store = TestResearchEvidenceStore(test_store_seed(temp))
+            old_news = ResearchEvidence(
+                "research:005930:news:old",
+                "005930",
+                "news",
+                "Naver News",
+                "오래된 뉴스",
+                "삭제 대상",
+                "https://example.test/news/old",
+                "2026-07-08T01:00:00Z",
+                "context",
+                1.0,
+                0.5,
+            )
+            fresh_news = ResearchEvidence(
+                "research:005930:news:fresh",
+                "005930",
+                "news",
+                "Naver News",
+                "최신 뉴스",
+                "보존 대상",
+                "https://example.test/news/fresh",
+                "2026-07-13T01:00:00Z",
+                "support",
+                8.0,
+                0.8,
+            )
+            disclosure = ResearchEvidence(
+                "research:005930:dart:old",
+                "005930",
+                "disclosure",
+                "OpenDART",
+                "오래된 공시",
+                "뉴스 정리 대상이 아님",
+                "https://example.test/dart/old",
+                "2026-07-08T01:00:00Z",
+                "context",
+                1.0,
+                0.7,
+            )
+
+            self.assertEqual(3, store.upsert_many([old_news, fresh_news, disclosure]))
+
+            deleted = store.delete_stale_news("2026-07-10T00:00:00Z", limit=10)
+            remaining = {item.evidence_id for item in store.latest(symbol="005930", limit=10)}
+
+            self.assertEqual(1, deleted)
+            self.assertNotIn("research:005930:news:old", remaining)
+            self.assertIn("research:005930:news:fresh", remaining)
+            self.assertIn("research:005930:dart:old", remaining)
+
     def test_external_signal_provider_records_evidence_from_fresh_cache(self):
         fetched_at = utc_now_iso()
         signals = {

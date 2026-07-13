@@ -136,6 +136,65 @@ class OntologyRuleBoxTests(unittest.TestCase):
             portfolio_id="rulebox-context-news-test",
         )
 
+    def direct_ai_risk_news_graph(self):
+        position = Position(
+            symbol="AAPL",
+            name="Apple",
+            market="NASDAQ",
+            currency="USD",
+            quantity=2,
+            current_price=212,
+            market_value=424,
+            sector="AI",
+        )
+        portfolio = portfolio_summary([position], account_cash=200000)
+        return build_portfolio_ontology(
+            [position],
+            portfolio,
+            external_signals={
+                "researchEvidence": {
+                    "AAPL": [
+                        {
+                            "symbol": "AAPL",
+                            "kind": "news",
+                            "source": "Reuters",
+                            "title": "Apple shares fall on earnings concern",
+                            "summary": "실적 우려와 주가 하락 기사입니다.",
+                            "url": "https://example.test/apple-risk",
+                            "polarity": "risk",
+                            "impactScore": 88,
+                            "confidence": 0.82,
+                            "relationScope": "direct",
+                            "materialityPassed": True,
+                            "materialityScore": 88,
+                            "relevanceScore": 96,
+                            "sourceReliability": 90,
+                            "eventType": "earnings",
+                            "aiAnalysis": {
+                                "version": "news-ai-analysis-v1",
+                                "status": "ok",
+                                "readScope": "title+rss-summary",
+                                "relationScope": "direct",
+                                "eventType": "earnings",
+                                "impactPolarity": "risk",
+                                "impactLabelKo": "악재",
+                                "confidence": 0.82,
+                                "materialityScore": 88,
+                                "relevanceScore": 96,
+                                "needsReview": True,
+                                "summary": {
+                                    "briefKo": "실적 우려가 가격 부담으로 작용할 수 있습니다.",
+                                    "watchPoints": ["원문 본문 확보", "가격 반응"],
+                                },
+                                "riskSignals": ["실적 우려", "하락"],
+                            },
+                        }
+                    ]
+                }
+            },
+            portfolio_id="rulebox-ai-news-test",
+        )
+
     def test_rulebox_materializes_rules_and_inference_relations(self):
         graph = self.loss_guard_graph()
 
@@ -266,6 +325,46 @@ class OntologyRuleBoxTests(unittest.TestCase):
 
         self.assertTrue(context_relations)
         self.assertIn("direct-material-context", matched_ids)
+
+    def test_local_rulebox_uses_article_ai_analysis_for_news_risk_and_body_gap(self):
+        graph = self.direct_ai_risk_news_graph()
+
+        ai_risk_relations = [
+            item
+            for item in graph.relations
+            if item.source == "stock:AAPL"
+            and item.relation_type == "HAS_INFERRED_RISK"
+            and (item.properties or {}).get("ruleId") == "graph.news.ai_direct_risk.v1"
+        ]
+        body_check_relations = [
+            item
+            for item in graph.relations
+            if item.source == "stock:AAPL"
+            and item.relation_type == "REQUIRES_NEXT_CHECK"
+            and (item.properties or {}).get("ruleId") == "graph.news.ai_body_missing_review.v1"
+        ]
+        confidence_relations = [
+            item
+            for item in graph.relations
+            if item.source == "stock:AAPL"
+            and item.relation_type == "LOWERS_CONFIDENCE_OF"
+            and (item.properties or {}).get("ruleId") == "graph.news.ai_body_missing_review.v1"
+        ]
+        risk_trace = next(
+            item
+            for item in graph.entities
+            if item.kind == "inference-trace" and (item.properties or {}).get("ruleId") == "graph.news.ai_direct_risk.v1"
+        )
+        matched_ids = [
+            item.get("conditionId")
+            for item in ((risk_trace.properties or {}).get("matchedConditions") or [])
+            if isinstance(item, dict)
+        ]
+
+        self.assertTrue(ai_risk_relations)
+        self.assertTrue(body_check_relations)
+        self.assertTrue(confidence_relations)
+        self.assertIn("ai-direct-risk", matched_ids)
 
     def test_prompt_payload_exposes_rulebox_and_inferencebox(self):
         graph = self.loss_guard_graph()

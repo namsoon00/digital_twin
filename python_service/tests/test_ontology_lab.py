@@ -6,6 +6,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.application.ontology_lab_service import OntologyLabService
 from digital_twin.domain.ontology_experiments import OntologyExperiment
+from digital_twin.domain.ontology_rulebox_contracts import GraphInferenceRule
 
 
 class MemoryExperimentStore:
@@ -217,6 +218,55 @@ class OntologyLabTests(unittest.TestCase):
         self.assertEqual("unit-test", experiment.last_result["appliedOntologyChanges"]["reviewApproval"]["reviewedBy"])
         self.assertIn("applied", {item.get("applyStatus") for item in experiment.last_result["recommendations"]})
 
+    def test_apply_recommendations_normalizes_blank_condition_ids(self):
+        store = MemoryExperimentStore()
+        repository = FakeOntologyRepository()
+        service = OntologyLabService(
+            repository,
+            store,
+            monitor_store=FakeMonitorStore(),
+        )
+        rule = candidate_rule()
+        rule["rule_id"] = "graph.lab.blank-condition-ids.v1"
+        rule["conditions"] = [
+            {
+                "kind": "subject_property",
+                "description": "AAPL 대상 실험입니다.",
+                "field": "symbol",
+                "operator": "==",
+                "value": "AAPL",
+            },
+            {
+                "condition_id": "",
+                "kind": "subject_property",
+                "description": "보유 출처 실험입니다.",
+                "field": "source",
+                "operator": "==",
+                "value": "holding",
+            },
+        ]
+        experiment_id = service.create({
+            "title": "Blank condition id apply lab",
+            "symbols": ["AAPL"],
+            "rules": [rule],
+        })["experiment"]["id"]
+        service.run(experiment_id)
+
+        result = service.apply_recommendations(experiment_id, {
+            "reviewApproved": True,
+            "reviewedBy": "unit-test",
+            "reviewReason": "blank condition id normalization",
+        })
+
+        self.assertEqual("applied", result["status"])
+        saved_rule = [
+            item
+            for item in repository.saved_rulebox_payloads[0]["rules"]
+            if item["rule_id"] == "graph.lab.blank-condition-ids.v1"
+        ][0]
+        condition_ids = [item.get("condition_id") for item in saved_rule["conditions"]]
+        self.assertEqual(["condition-1", "condition-2"], condition_ids)
+
     def test_apply_recommendations_rejects_needs_review_without_approval(self):
         store = MemoryExperimentStore()
         repository = FakeOntologyRepository()
@@ -388,6 +438,41 @@ class OntologyLabTests(unittest.TestCase):
         self.assertEqual("paused", paused["status"])
         self.assertEqual("idle", result["status"])
         self.assertEqual(0, result["processedCount"])
+
+    def test_rulebox_contract_assigns_unique_condition_ids(self):
+        rule = candidate_rule()
+        rule["conditions"] = [
+            {
+                "kind": "subject_property",
+                "description": "AAPL 대상 실험입니다.",
+                "field": "symbol",
+                "operator": "==",
+                "value": "AAPL",
+            },
+            {
+                "condition_id": "",
+                "kind": "subject_property",
+                "description": "보유 출처 실험입니다.",
+                "field": "source",
+                "operator": "==",
+                "value": "holding",
+            },
+            {
+                "condition_id": "condition-1",
+                "kind": "subject_property",
+                "description": "중복 ID 실험입니다.",
+                "field": "sector",
+                "operator": "==",
+                "value": "Tech",
+            },
+        ]
+
+        normalized = GraphInferenceRule.from_dict(rule).to_dict()
+
+        self.assertEqual(
+            ["condition-1", "condition-2", "condition-1-2"],
+            [item["condition_id"] for item in normalized["conditions"]],
+        )
 
 
 def candidate_rule():

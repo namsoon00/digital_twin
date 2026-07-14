@@ -1,3 +1,4 @@
+import re
 from dataclasses import asdict, dataclass, field as dataclass_field
 from typing import Dict, List
 
@@ -18,6 +19,24 @@ def string_list(value: object) -> List[str]:
     if isinstance(value, tuple):
         return [str(item) for item in value if str(item or "").strip()]
     return [item.strip() for item in str(value).replace("\n", ",").split(",") if item.strip()]
+
+
+def stable_rulebox_component_id(value: object, prefix: str, index: int) -> str:
+    normalized = re.sub(r"[^a-zA-Z0-9_.:-]+", "-", str(value or "").strip()).strip("-")
+    if not normalized:
+        normalized = prefix + "-" + str(index + 1)
+    return normalized[:96]
+
+
+def unique_rulebox_component_id(value: object, prefix: str, index: int, seen: set) -> str:
+    base = stable_rulebox_component_id(value, prefix, index)
+    candidate = base
+    suffix = 2
+    while candidate in seen:
+        candidate = (base[:88] + "-" + str(suffix))[:96]
+        suffix += 1
+    seen.add(candidate)
+    return candidate
 
 
 @dataclass(frozen=True)
@@ -135,9 +154,21 @@ class GraphInferenceRule:
     @staticmethod
     def from_dict(payload: Dict[str, object]):
         payload = dict(payload or {})
+        rule_id = str(payload.get("rule_id") or payload.get("ruleId") or "").strip()
+        if not rule_id:
+            raise ValueError("RuleBox rule_id is required.")
+        seen_condition_ids = set()
         conditions = [
-            GraphRuleCondition.from_dict(item)
-            for item in (payload.get("conditions") or [])
+            GraphRuleCondition.from_dict({
+                **item,
+                "condition_id": unique_rulebox_component_id(
+                    item.get("condition_id") or item.get("conditionId"),
+                    "condition",
+                    index,
+                    seen_condition_ids,
+                ),
+            })
+            for index, item in enumerate(payload.get("conditions") or [])
             if isinstance(item, dict)
         ]
         derivations = [
@@ -145,9 +176,6 @@ class GraphInferenceRule:
             for item in (payload.get("derivations") or [])
             if isinstance(item, dict)
         ]
-        rule_id = str(payload.get("rule_id") or payload.get("ruleId") or "").strip()
-        if not rule_id:
-            raise ValueError("RuleBox rule_id is required.")
         if not conditions:
             raise ValueError("RuleBox rule must contain at least one condition.")
         if not derivations:

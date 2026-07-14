@@ -16,6 +16,7 @@ from ..domain.ontology_experiments import (
     run_experiment_on_graph,
     summarize_experiment_result,
 )
+from ..domain.ontology_rulebox_contracts import GraphInferenceRule
 from ..domain.portfolio import AccountSnapshot, DecisionItem, PortfolioSummary, Position, utc_now_iso
 from ..domain.portfolio_ontology_builder import build_portfolio_ontology
 from ..domain.ontology_schema import default_tbox_metadata, tbox_entities, tbox_relations
@@ -868,7 +869,10 @@ def merge_candidate_rules(
         if rule_id in existing_ids:
             skipped.append(rule_id)
             continue
-        promoted = dict(candidate)
+        try:
+            promoted = GraphInferenceRule.from_dict(candidate).to_dict()
+        except ValueError:
+            promoted = dict(candidate)
         promoted["enabled"] = True
         merged.append(promoted)
         added.append(promoted)

@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, List
 
 from ..domain.data_freshness import evaluate_notification_data_freshness
+from ..domain.message_types import INVESTMENT_INSIGHT, NEWS_DIGEST
 from ..domain.notification_rules import (
     DEFAULT_NOTIFICATION_RULES,
     NotificationRuleConfig,
@@ -15,6 +16,11 @@ from ..domain.notification_rules import (
     notification_state_group_key,
 )
 from ..domain.notifications import NotificationJob
+from ..domain.sent_article_filter import (
+    article_filter_context_summary,
+    collect_article_identity_keys_from_context,
+    filter_sent_articles_from_context,
+)
 from .mysql_operational_connection import MySQLOperationalConnection
 from .mysql_operational_helpers import _is_duplicate_key_error, _json_loads
 from .operational_common import (
@@ -150,6 +156,87 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         with self.connect() as connection:
             return self.similar_history_with_connection(connection, job, rule, fingerprint)
 
+    def sent_article_filter_enabled(self) -> bool:
+        value = self.runtime_settings.get("sentArticleFilterEnabled", self.runtime_settings.get("newsSentArticleFilterEnabled"))
+        if value in (None, ""):
+            return True
+        return str(value).strip().lower() not in {"0", "false", "no", "off", "disabled"}
+
+    def sent_article_history_limit(self) -> int:
+        try:
+            return max(20, min(500, int(self.runtime_settings.get("sentArticleFilterHistoryLimit") or 250)))
+        except (TypeError, ValueError):
+            return 250
+
+    def sent_article_history_keys_with_connection(self, connection, job: NotificationJob):
+        if not self.sent_article_filter_enabled():
+            return set()
+        account_id = str(job.account_id or "").strip()
+        clauses = ["status IN ('done', 'pending', 'processing')"]
+        params: List[object] = []
+        if account_id:
+            clauses.append("account_id = %s")
+            params.append(account_id)
+        params.append(self.sent_article_history_limit())
+        rows = connection.execute(
+            """
+            SELECT payload_json
+            FROM notification_jobs
+            WHERE """ + " AND ".join(clauses) + """
+            ORDER BY created_at DESC, job_id DESC
+            LIMIT %s
+            """,
+            params,
+        ).fetchall()
+        keys = set()
+        for row in rows:
+            previous = NotificationJob.from_dict(_json_loads(row["payload_json"], {}))
+            if previous.job_id == job.job_id:
+                continue
+            keys.update(collect_article_identity_keys_from_context(previous.context or {}))
+        return keys
+
+    def article_driven_job(self, job: NotificationJob) -> bool:
+        if str(job.message_type or "") == NEWS_DIGEST:
+            return True
+        if str(job.message_type or "") != INVESTMENT_INSIGHT:
+            return False
+        context = job.context or {}
+        insight = context.get("ontologyInsight") if isinstance(context.get("ontologyInsight"), dict) else {}
+        values = [
+            job.message_type,
+            context.get("rule"),
+            context.get("key"),
+            context.get("sourceSignalTypes"),
+            insight.get("sourceSignalTypes"),
+            insight.get("semanticSignature"),
+        ]
+        blob = " ".join(str(value or "") for value in values).casefold()
+        return any(token in blob for token in ["news", "article", "rss", "research"])
+
+    def apply_sent_article_filter_with_connection(self, connection, job: NotificationJob) -> bool:
+        if not self.sent_article_filter_enabled():
+            return False
+        current_keys = collect_article_identity_keys_from_context(job.context or {})
+        if not current_keys:
+            return False
+        sent_keys = self.sent_article_history_keys_with_connection(connection, job)
+        matched_keys = current_keys.intersection(sent_keys)
+        if not matched_keys:
+            return False
+        result = filter_sent_articles_from_context(job.context or {}, sent_keys)
+        context = dict(result.context or {})
+        context["sentArticleFilter"] = article_filter_context_summary(result, matched_keys)
+        job.context = context
+        if self.article_driven_job(job) and result.after_count <= 0:
+            job.status = "suppressed"
+            job.updated_at = utc_now()
+            job.last_error = "이미 발송한 기사 또는 같은 제목의 기사만 남아 다시 판단하지 않았습니다."
+            job.context["honeySuppressionReason"] = "sent_article_repeat"
+            self.upsert_job_with_connection(connection, job)
+            return True
+        return False
+
     def similar_history_with_connection(
         self,
         connection,
@@ -233,6 +320,9 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             ).fetchone()
             if existing:
                 return False
+
+        if self.apply_sent_article_filter_with_connection(connection, job):
+            return False
 
         decision = self.evaluate_job_with_connection(connection, job)
         context = dict(job.context or {})

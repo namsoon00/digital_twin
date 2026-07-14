@@ -12,6 +12,11 @@ from ..domain.investment_research import NewsCollectionTarget
 from ..domain.news_analysis import analysis_payload_requires_refresh, classify_news_relevance, clean_article_summary_noise, relation_scope_is_investable
 from ..domain.notifications import NotificationJob, notification_debug_number
 from ..domain.portfolio import utc_now_iso
+from ..domain.sent_article_filter import (
+    article_digest_context_item,
+    article_identity_keys,
+    collect_article_identity_keys_from_context,
+)
 
 
 KST = timezone(timedelta(hours=9))
@@ -320,6 +325,15 @@ class NewsDigestEnqueuer:
     def min_source_reliability(self) -> float:
         return number(self.settings.get("newsDigestMinSourceReliability")) or 68
 
+    def sent_article_filter_enabled(self) -> bool:
+        value = self.settings.get("sentArticleFilterEnabled", self.settings.get("newsSentArticleFilterEnabled"))
+        if value in (None, ""):
+            return True
+        return str(value).strip().lower() not in {"0", "false", "no", "off", "disabled"}
+
+    def sent_article_history_limit(self) -> int:
+        return max(20, min(200, int(number(self.settings.get("sentArticleFilterHistoryLimit")) or 200)))
+
     def item_payload_score(self, item: Dict[str, object], key: str) -> float:
         payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
         return normalized_score(item.get(key) if item.get(key) not in (None, "") else payload.get(key))
@@ -390,6 +404,29 @@ class NewsDigestEnqueuer:
             if scoped_items:
                 self.enqueue_account_digest(account, scoped_items, event)
 
+    def previously_sent_article_keys(self, account: AccountConfig) -> set:
+        if not self.sent_article_filter_enabled() or not hasattr(self.queue, "recent"):
+            return set()
+        try:
+            recent_jobs = self.queue.recent(limit=self.sent_article_history_limit(), status="done")
+        except TypeError:
+            recent_jobs = self.queue.recent(self.sent_article_history_limit())
+        except Exception:  # noqa: BLE001 - duplicate filtering must not block new evidence handling.
+            return set()
+        keys = set()
+        account_id = str(getattr(account, "account_id", "") or "")
+        for job in recent_jobs or []:
+            if account_id and str(getattr(job, "account_id", "") or "") != account_id:
+                continue
+            keys.update(collect_article_identity_keys_from_context(getattr(job, "context", {}) or {}))
+        return keys
+
+    def exclude_previously_sent_articles(self, account: AccountConfig, items: List[Dict[str, object]]) -> List[Dict[str, object]]:
+        sent_keys = self.previously_sent_article_keys(account)
+        if not sent_keys:
+            return items
+        return [item for item in items if not article_identity_keys(item).intersection(sent_keys)]
+
     def event_items(self, event: DomainEvent) -> List[Dict[str, object]]:
         payload = event.payload or {}
         if "materialChangedItems" in payload:
@@ -437,7 +474,7 @@ class NewsDigestEnqueuer:
         holdings, watchlist = self.account_symbols(account)
         known_symbols = set(holdings) | set(watchlist)
         if not known_symbols:
-            return items[: self.max_items]
+            return self.exclude_previously_sent_articles(account, items)[: self.max_items]
         scoped = []
         for item in items:
             symbol = normalized_symbol(item.get("symbol"))
@@ -446,11 +483,13 @@ class NewsDigestEnqueuer:
                 item["portfolioBucket"] = "보유" if symbol in holdings else "관심"
                 item["displayName"] = holdings.get(symbol) or watchlist.get(symbol) or symbol
                 scoped.append(item)
-        return scoped[: self.max_items]
+        return self.exclude_previously_sent_articles(account, scoped)[: self.max_items]
 
     def enqueue_account_digest(self, account: AccountConfig, items: List[Dict[str, object]], event: DomainEvent) -> None:
         primary = items[0]
         primary_id = item_evidence_id(primary)
+        article_keys = sorted({key for item in items for key in article_identity_keys(item)})
+        primary_token = "|".join(sorted(article_identity_keys(primary))) or primary_id
         context = self.context(account, items, event)
         job = NotificationJob.create(
             "",
@@ -459,9 +498,15 @@ class NewsDigestEnqueuer:
             message_type=NEWS_DIGEST,
             source_event_id=event.event_id,
             source_event_name=event.name,
-            dedupe_key="newsDigest:" + account.account_id + ":" + short_dedupe_token(primary_id),
+            dedupe_key="newsDigest:" + account.account_id + ":" + short_dedupe_token(primary_token),
             context=context,
         )
+        context["sentArticleFilter"] = {
+            "enabled": self.sent_article_filter_enabled(),
+            "policy": "sent-article-once",
+            "articleKeyCount": len(article_keys),
+            "reason": "이미 발송한 기사 또는 같은 제목의 기사 근거는 다시 판단하지 않습니다.",
+        }
         text = self.message_text(account, items, event, notification_debug_number(job.job_id))
         context["body"] = text
         job.text = text
@@ -473,6 +518,8 @@ class NewsDigestEnqueuer:
         symbols = [normalized_symbol(item.get("symbol")) for item in items if normalized_symbol(item.get("symbol"))]
         materiality_scores = [number(item.get("materialityScore") or (item.get("payload") or {}).get("materialityScore")) for item in items]
         severity = "ALERT" if max(materiality_scores or [0]) >= 80 or impact_label(primary) == "위험" else "WATCH"
+        article_items = [article_digest_context_item(item) for item in items]
+        article_keys = sorted({key for item in items for key in article_identity_keys(item)})
         return {
             "messageType": NEWS_DIGEST,
             "accountId": account.account_id,
@@ -489,6 +536,8 @@ class NewsDigestEnqueuer:
             "newsDigest": {
                 "itemCount": len(items),
                 "symbols": symbols,
+                "items": article_items,
+                "articleKeys": article_keys,
                 "primaryEvidenceId": item_evidence_id(primary),
                 "primaryUrl": clean_text(primary.get("url")),
                 "primaryTitle": clean_text(primary.get("title")),

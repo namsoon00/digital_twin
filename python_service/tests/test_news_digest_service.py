@@ -6,16 +6,28 @@ from digital_twin.domain.accounts import AccountConfig
 from digital_twin.domain.events import DomainEvent, RESEARCH_EVIDENCE_COLLECTED
 from digital_twin.domain.investment_research import ResearchEvidence
 from digital_twin.domain.message_types import NEWS_DIGEST
+from digital_twin.domain.notifications import NotificationJob
 from digital_twin.domain.notification_templates import NotificationTemplate, render_notification
 
 
 class MemoryNotificationQueue:
-    def __init__(self):
+    def __init__(self, recent_jobs=None):
         self.jobs = []
+        self.recent_jobs = list(recent_jobs or [])
 
     def enqueue(self, job):
         self.jobs.append(job)
         return True
+
+    def recent(self, limit=40, message_type="", status=""):
+        rows = []
+        for job in self.recent_jobs:
+            if message_type and job.message_type != message_type:
+                continue
+            if status and job.status != status:
+                continue
+            rows.append(job)
+        return rows[:limit]
 
 
 class NewsDigestEnqueuerTests(unittest.TestCase):
@@ -108,6 +120,51 @@ class NewsDigestEnqueuerTests(unittest.TestCase):
         self.assertIn("기사일: 07/11 09:00 KST", job.text)
         self.assertIn("분석: 기사 본문 읽음", job.text)
         self.assertIn("기사 정보: 핵심 애플 관련 소송", job.text)
+        self.assertEqual(1, len(job.context["newsDigest"]["items"]))
+        self.assertTrue(job.context["newsDigest"]["items"][0]["identityKeys"])
+        self.assertTrue(job.context["newsDigest"]["articleKeys"])
+
+    def test_ignores_article_already_sent_with_same_normalized_title(self):
+        previous = NotificationJob.create(
+            "previous",
+            account_id="main",
+            message_type=NEWS_DIGEST,
+            context={
+                "messageType": NEWS_DIGEST,
+                "accountId": "main",
+                "newsDigest": {
+                    "items": [
+                        {
+                            "kind": "news",
+                            "evidenceId": "research:AAPL:news:old",
+                            "title": "Apple OpenAI lawsuit highlights broader tensions - Semafor",
+                            "url": "https://other.example/apple-openai-lawsuit",
+                        }
+                    ],
+                    "primaryEvidenceId": "research:AAPL:news:old",
+                    "primaryTitle": "Apple OpenAI lawsuit highlights broader tensions - Semafor",
+                    "primaryUrl": "https://other.example/apple-openai-lawsuit",
+                },
+            },
+        )
+        previous.status = "done"
+        queue = MemoryNotificationQueue([previous])
+        evidence = self.evidence()
+        evidence.evidence_id = "research:AAPL:news:new-provider"
+        evidence.url = "https://example.test/apple?utm_source=newsletter"
+        event = DomainEvent(
+            name=RESEARCH_EVIDENCE_COLLECTED,
+            aggregate_id="news:AAPL",
+            payload={
+                "materialChangedItems": [evidence.to_dict()],
+                "materialChangedSymbols": ["AAPL"],
+                "materialChangedCount": 1,
+            },
+        )
+
+        self.enqueuer(queue).handle(event)
+
+        self.assertEqual([], queue.jobs)
 
     def test_news_digest_renders_ai_article_summary_and_signals(self):
         queue = MemoryNotificationQueue()

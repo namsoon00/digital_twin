@@ -260,7 +260,11 @@ def mandatory_profit_band_rank(value: float) -> int:
     return len([threshold for threshold in MANDATORY_PROFIT_BANDS if float(value or 0) >= threshold])
 
 
-def mandatory_profit_loss_delivery_reason(job: NotificationJob = None, previous_context: Dict[str, object] = None) -> str:
+def mandatory_profit_loss_delivery_reason(
+    job: NotificationJob = None,
+    previous_context: Dict[str, object] = None,
+    allow_without_previous: bool = True,
+) -> str:
     if job is None:
         return ""
     if str(job.message_type or "") not in MANDATORY_PROFIT_LOSS_MESSAGE_TYPES:
@@ -278,6 +282,8 @@ def mandatory_profit_loss_delivery_reason(job: NotificationJob = None, previous_
             if mandatory_loss_band_rank(profit_loss_rate) > mandatory_loss_band_rank(previous_rate):
                 return "손실률 " + previous_text + " -> " + current_text + "로 더 깊은 손실 구간 진입"
             return ""
+        if not allow_without_previous:
+            return ""
         return (
             "손실률 "
             + current_text
@@ -294,6 +300,8 @@ def mandatory_profit_loss_delivery_reason(job: NotificationJob = None, previous_
             if mandatory_profit_band_rank(profit_loss_rate) > mandatory_profit_band_rank(previous_rate):
                 return "수익률 " + previous_text + " -> " + current_text + "로 더 높은 수익 구간 진입"
             return ""
+        if not allow_without_previous:
+            return ""
         return (
             "수익률 "
             + current_text
@@ -308,8 +316,13 @@ def apply_mandatory_profit_loss_delivery(
     decision: NotificationRuleDecision,
     job: NotificationJob = None,
     previous_context: Dict[str, object] = None,
+    allow_without_previous: bool = True,
 ) -> bool:
-    reason = mandatory_profit_loss_delivery_reason(job, previous_context=previous_context)
+    reason = mandatory_profit_loss_delivery_reason(
+        job,
+        previous_context=previous_context,
+        allow_without_previous=allow_without_previous,
+    )
     if not reason:
         return False
     decision.should_send = True
@@ -723,7 +736,12 @@ def apply_similarity_rule(
     decision.similarity_recent_count = max(0, int(recent_count or 0))
     decision.similarity_previous_score = max(0, int(previous_score or 0))
     previous_context = previous_context or {}
-    if config.enabled and apply_mandatory_profit_loss_delivery(decision, job, previous_context=previous_context):
+    if config.enabled and apply_mandatory_profit_loss_delivery(
+        decision,
+        job,
+        previous_context=previous_context,
+        allow_without_previous=decision.similarity_recent_count <= 0,
+    ):
         return decision
     if decision.suppression_reason == "state_cooldown" or decision.similarity_bypassed:
         return decision
@@ -779,7 +797,12 @@ def apply_state_cooldown_rule(
         decision.state_reason = "상태 fingerprint 없음"
         return decision
     previous_context = previous_context or {}
-    if apply_mandatory_profit_loss_delivery(decision, job, previous_context=previous_context):
+    if apply_mandatory_profit_loss_delivery(
+        decision,
+        job,
+        previous_context=previous_context,
+        allow_without_previous=decision.state_recent_sent_count <= 0,
+    ):
         return decision
     if decision.state_recent_sent_count <= 0:
         decision.state_decision = "new_threshold"

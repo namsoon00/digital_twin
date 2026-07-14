@@ -205,6 +205,56 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
         self.assertFalse(decision.similarity_bypassed)
         self.assertIn("같은 임계값 상태 지속", decision.state_reason)
 
+    def test_critical_loss_repeat_with_missing_previous_rate_uses_state_cooldown(self):
+        rule = default_notification_rule("investmentInsight")
+        job = NotificationJob.create(
+            "SK하이닉스 손실 점검",
+            account_id="main",
+            message_type="investmentInsight",
+            context={
+                "severity": "WATCH",
+                "body": "SK하이닉스 손절·분할축소 점검",
+                "symbol": "000660",
+                "profitLossRate": -18.1,
+                "ontologyInsight": {
+                    "subject": "000660",
+                    "dispatchInsightType": "riskManagement",
+                    "score": 86,
+                    "noveltyScore": 20,
+                    "confidence": 70,
+                    "sourceEventKeys": ["default:timing:000660:손실 축소 권장"],
+                },
+                "sourceSignalTypes": ["holdingTiming"],
+            },
+        )
+        decision = evaluate_notification_rule(job, rule)
+
+        decision = apply_state_cooldown_rule(
+            decision,
+            rule,
+            sent_count=1,
+            previous_score=decision.score,
+            previous_context={
+                "severity": "WATCH",
+                "ontologyInsight": {
+                    "subject": "000660",
+                    "dispatchInsightType": "riskManagement",
+                    "score": 86,
+                    "noveltyScore": 20,
+                    "sourceEventKeys": ["default:timing:000660:손실 축소 권장"],
+                },
+                "sourceSignalTypes": ["holdingTiming"],
+            },
+            last_sent_at=utc_now_iso(),
+            last_sent_age_minutes=36,
+            job=job,
+        )
+
+        self.assertFalse(decision.should_send)
+        self.assertEqual("cooldown", decision.state_decision)
+        self.assertFalse(decision.similarity_bypassed)
+        self.assertIn("같은 임계값 상태 지속", decision.state_reason)
+
     def test_holding_investment_state_group_key_ignores_minor_dispatch_wording(self):
         risk_job = NotificationJob.create(
             "삼성전자 리스크 증가",

@@ -55,6 +55,15 @@ INVESTOR_SIGNAL_KEYS = [
     "individualNetVolume",
     "individualNetAmount",
 ]
+MICROSTRUCTURE_SIGNAL_KEYS = [
+    "tradeStrength",
+    "buyVolume",
+    "sellVolume",
+    "orderbookBidVolume",
+    "orderbookAskVolume",
+    "bidAskImbalance",
+    *INVESTOR_SIGNAL_KEYS,
+]
 INVESTOR_RAW_KEYS = [
     "frgn_shnu_vol",
     "frgn_seln_vol",
@@ -200,6 +209,18 @@ def stage_coverage(stage: str, raw_payload, normalized: Dict[str, object], keys:
     }
 
 
+def unavailable_stage_coverage(stage: str, session: Dict[str, object]) -> Dict[str, object]:
+    return {
+        "stage": stage,
+        "status": "unavailable",
+        "fields": [],
+        "nonZeroFields": [],
+        "reason": str(session.get("reason") or "정규장 시작 전이라 장중 수급 신호를 사용하지 않습니다."),
+        "marketSession": str(session.get("key") or ""),
+        "marketSessionLabel": str(session.get("label") or ""),
+    }
+
+
 def coverage_has_fields(coverage: Dict[str, object], stage: str, keys: Iterable[str]) -> bool:
     item = coverage.get(stage) if isinstance(coverage, dict) else {}
     fields = item.get("fields") if isinstance(item, dict) else []
@@ -293,11 +314,45 @@ class KISMarketSignalProvider:
         return value
 
     def is_kr_regular_market_hours(self) -> bool:
+        return bool(self.kr_market_session().get("regular"))
+
+    def kr_market_session(self) -> Dict[str, object]:
         now = self.now().astimezone(KST)
         if now.weekday() >= 5:
-            return False
+            return {
+                "key": "closed",
+                "label": "휴장",
+                "regular": False,
+                "microstructureAvailable": False,
+                "reason": "국장 휴장일이라 장중 수급 신호를 사용하지 않습니다.",
+            }
         minutes = now.hour * 60 + now.minute
-        return 9 * 60 <= minutes <= 15 * 60 + 30
+        if minutes < 9 * 60:
+            return {
+                "key": "pre_open",
+                "label": "장 시작 전",
+                "regular": False,
+                "microstructureAvailable": False,
+                "reason": "정규장 시작 전이라 외국인·기관·개인 수급과 체결강도는 오늘 장중 데이터로 쓰지 않습니다.",
+            }
+        if minutes <= 15 * 60 + 30:
+            return {
+                "key": "regular",
+                "label": "정규장",
+                "regular": True,
+                "microstructureAvailable": True,
+                "reason": "정규장 장중 데이터",
+            }
+        return {
+            "key": "post_close",
+            "label": "장 마감 후",
+            "regular": False,
+            "microstructureAvailable": True,
+            "reason": "장 마감 후 확정 또는 최신 수급 데이터",
+        }
+
+    def market_microstructure_available(self) -> bool:
+        return bool(self.kr_market_session().get("microstructureAvailable"))
 
     def max_symbols(self) -> int:
         return self.int_setting("kisMarketSignalMaxSymbols", 20, 1, 200)
@@ -450,6 +505,24 @@ class KISMarketSignalProvider:
         age_seconds = self.cache_age_seconds(payload)
         return age_seconds is not None and age_seconds <= self.live_refresh_seconds()
 
+    def signal_for_current_session(self, payload: Dict[str, object]) -> Dict[str, object]:
+        signal = dict(payload or {})
+        session = self.kr_market_session()
+        signal["marketSession"] = str(session.get("key") or "")
+        signal["marketSessionLabel"] = str(session.get("label") or "")
+        if session.get("microstructureAvailable"):
+            return signal
+        for key in MICROSTRUCTURE_SIGNAL_KEYS:
+            signal.pop(key, None)
+        coverage = signal.get("marketSignalCoverage") if isinstance(signal.get("marketSignalCoverage"), dict) else {}
+        coverage = dict(coverage or {})
+        for stage in ["ccnl", "investor", "orderbook"]:
+            coverage[stage] = unavailable_stage_coverage(stage, session)
+        signal["marketSignalCoverage"] = coverage
+        signal["quoteStatus"] = "KIS 현재가 반영"
+        signal["quoteMessage"] = str(session.get("reason") or "정규장 시작 전이라 장중 수급 신호를 제외했습니다.")
+        return signal
+
     def save_signal(self, symbol: str, payload: Dict[str, object]) -> None:
         try:
             self.quote_cache.save(KIS_CACHE_PROVIDER, KIS_CACHE_ACCOUNT_ID, symbol, payload)
@@ -477,15 +550,19 @@ class KISMarketSignalProvider:
 
     def fetch_symbol_signal(self, symbol: str) -> Dict[str, object]:
         self.fetch_access_token()
+        session = self.kr_market_session()
+        microstructure_available = bool(session.get("microstructureAvailable"))
         price = self.fetch_stage(symbol, "price", PRICE_PATH, "FHKST01010100")
-        ccnl = self.fetch_stage(symbol, "ccnl", CCNL_PATH, "FHKST01010300")
-        investor = self.fetch_stage(symbol, "investor", INVESTOR_PATH, "FHKST01010900")
-        orderbook = self.fetch_stage(symbol, "orderbook", ORDERBOOK_PATH, "FHKST01010200")
+        ccnl = self.fetch_stage(symbol, "ccnl", CCNL_PATH, "FHKST01010300") if microstructure_available else None
+        investor = self.fetch_stage(symbol, "investor", INVESTOR_PATH, "FHKST01010900") if microstructure_available else None
+        orderbook = self.fetch_stage(symbol, "orderbook", ORDERBOOK_PATH, "FHKST01010200") if microstructure_available else None
 
         signal: Dict[str, object] = {}
         coverage: Dict[str, object] = {}
         if isinstance(price, dict):
             normalized_price = normalize_price(symbol, price)
+            if not microstructure_available:
+                normalized_price.pop("foreignNetVolume", None)
             merge_if_present(signal, normalized_price)
             coverage["price"] = stage_coverage(
                 "price",
@@ -500,7 +577,7 @@ class KISMarketSignalProvider:
             merge_if_present(signal, normalized_ccnl)
             coverage["ccnl"] = stage_coverage("ccnl", ccnl, normalized_ccnl, ["tradeStrength", "buyVolume", "sellVolume"])
         else:
-            coverage["ccnl"] = stage_coverage("ccnl", ccnl, {}, ["tradeStrength", "buyVolume", "sellVolume"])
+            coverage["ccnl"] = unavailable_stage_coverage("ccnl", session) if not microstructure_available else stage_coverage("ccnl", ccnl, {}, ["tradeStrength", "buyVolume", "sellVolume"])
         if isinstance(investor, list):
             normalized_investor = normalize_investor(investor)
             merge_if_present(signal, normalized_investor)
@@ -510,7 +587,7 @@ class KISMarketSignalProvider:
             merge_if_present(signal, normalized_investor)
             coverage["investor"] = stage_coverage("investor", investor, normalized_investor, INVESTOR_SIGNAL_KEYS)
         else:
-            coverage["investor"] = stage_coverage("investor", investor, {}, INVESTOR_SIGNAL_KEYS)
+            coverage["investor"] = unavailable_stage_coverage("investor", session) if not microstructure_available else stage_coverage("investor", investor, {}, INVESTOR_SIGNAL_KEYS)
         if isinstance(orderbook, dict):
             normalized_orderbook = normalize_orderbook(orderbook)
             merge_if_present(signal, normalized_orderbook)
@@ -521,7 +598,7 @@ class KISMarketSignalProvider:
                 ["orderbookBidVolume", "orderbookAskVolume", "bidAskImbalance"],
             )
         else:
-            coverage["orderbook"] = stage_coverage("orderbook", orderbook, {}, ["orderbookBidVolume", "orderbookAskVolume", "bidAskImbalance"])
+            coverage["orderbook"] = unavailable_stage_coverage("orderbook", session) if not microstructure_available else stage_coverage("orderbook", orderbook, {}, ["orderbookBidVolume", "orderbookAskVolume", "bidAskImbalance"])
         if not signal:
             raise RuntimeError("KIS 수급 응답 없음")
 
@@ -532,6 +609,8 @@ class KISMarketSignalProvider:
         signal.setdefault("currency", "KRW")
         signal["quoteSource"] = "KIS Open API"
         signal["marketSignalCoverage"] = coverage
+        signal["marketSession"] = str(session.get("key") or "")
+        signal["marketSessionLabel"] = str(session.get("label") or "")
         included = []
         if coverage_has_fields(coverage, "price", ["currentPrice"]):
             included.append("현재가")
@@ -546,6 +625,8 @@ class KISMarketSignalProvider:
         included_text = ", ".join(included) if included else "응답 데이터"
         signal["quoteStatus"] = "KIS " + included_text + " 반영"
         signal["quoteMessage"] = "KIS " + included_text + "을 모델링 데이터에 반영했습니다."
+        if not microstructure_available:
+            signal["quoteMessage"] = str(session.get("reason") or "") or signal["quoteMessage"]
         signal["dataQuality"] = "actual"
         signal["updatedAt"] = utc_now_iso()
         return signal
@@ -573,7 +654,7 @@ class KISMarketSignalProvider:
         for symbol in symbols:
             cached = self.cached_signal(symbol)
             if self.should_use_cached_signal(cached):
-                cached = dict(cached)
+                cached = self.signal_for_current_session(cached)
                 cached["dataQuality"] = cached.get("dataQuality") or "cached"
                 signals[symbol] = cached
                 self.diagnostics["cached"] = int(self.diagnostics.get("cached") or 0) + 1
@@ -588,7 +669,7 @@ class KISMarketSignalProvider:
             if stale_symbols and not self.configured():
                 for symbol, cached in stale_symbols:
                     if cached:
-                        cached = dict(cached)
+                        cached = self.signal_for_current_session(cached)
                         cached["dataQuality"] = "cached"
                         signals[symbol] = cached
                         self.diagnostics["cached"] = int(self.diagnostics.get("cached") or 0) + 1
@@ -599,7 +680,7 @@ class KISMarketSignalProvider:
         for symbol, cached in stale_symbols:
             if self.circuit_open():
                 if cached:
-                    cached = dict(cached)
+                    cached = self.signal_for_current_session(cached)
                     cached["dataQuality"] = "cached"
                     signals[symbol] = cached
                     self.diagnostics["cached"] = int(self.diagnostics.get("cached") or 0) + 1
@@ -608,13 +689,14 @@ class KISMarketSignalProvider:
                 continue
             try:
                 signal = self.fetch_symbol_signal(symbol)
+                signal = self.signal_for_current_session(signal)
                 signals[symbol] = signal
                 self.save_signal(symbol, signal)
                 self.diagnostics["live"] = int(self.diagnostics.get("live") or 0) + 1
             except Exception as error:  # noqa: BLE001 - use cached signal if live KIS fails.
                 self.record_failure("symbol", symbol, error)
                 if cached:
-                    cached = dict(cached)
+                    cached = self.signal_for_current_session(cached)
                     cached["dataQuality"] = "cached"
                     signals[symbol] = cached
                     self.diagnostics["cached"] = int(self.diagnostics.get("cached") or 0) + 1

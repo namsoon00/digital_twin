@@ -630,6 +630,7 @@ class PythonServiceTests(unittest.TestCase):
             quote_cache=TestMarketQuoteCache(db_path),
             fetch_json=fake_fetch_json,
             sleep=lambda _seconds: None,
+            now_provider=lambda: datetime(2026, 7, 7, 2, 0, tzinfo=timezone.utc),
         )
         samsung = normalize_position({"symbol": "005930", "name": "삼성전자", "market": "KR", "currency": "KRW", "quantity": "2"})
         apple = normalize_position({"symbol": "AAPL", "name": "Apple", "market": "US", "currency": "USD"})
@@ -694,6 +695,7 @@ class PythonServiceTests(unittest.TestCase):
             quote_cache=TestMarketQuoteCache(test_store_seed(self.temp.name)),
             fetch_json=fake_fetch_json,
             sleep=lambda _seconds: None,
+            now_provider=lambda: datetime(2026, 7, 7, 2, 0, tzinfo=timezone.utc),
         )
 
         signal = provider.fetch_symbol_signal("035420")
@@ -703,6 +705,111 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("empty", signal["marketSignalCoverage"]["investor"]["status"])
         self.assertFalse(provider.is_signal_complete(signal))
         self.assertIn("/uapi/domestic-stock/v1/quotations/inquire-investor", calls)
+
+    def test_kis_market_signal_provider_excludes_microstructure_before_regular_open(self):
+        calls = []
+
+        def fake_fetch_json(method, url, headers=None, body=None, query=None, timeout=12):
+            path = urllib.parse.urlparse(url).path
+            calls.append(path)
+            if path.endswith("/oauth2/tokenP"):
+                return {"access_token": "kis-token"}
+            if path.endswith("/inquire-price"):
+                return {"rt_cd": "0", "output": {
+                    "stck_prpr": "254500",
+                    "acml_vol": "60",
+                    "acml_tr_pbmn": "15270000",
+                    "frgn_ntby_qty": "-716994",
+                }}
+            if path.endswith("/inquire-ccnl"):
+                return {"rt_cd": "0", "output": [{"tday_rltv": "89.2", "total_shnu_qty": "1000", "total_seln_qty": "900"}]}
+            if path.endswith("/inquire-investor"):
+                return {"rt_cd": "0", "output": [{
+                    "frgn_ntby_qty": "-716994",
+                    "orgn_ntby_qty": "-3246131",
+                    "prsn_ntby_qty": "4206987",
+                }]}
+            if path.endswith("/inquire-asking-price-exp-ccn"):
+                return {"rt_cd": "0", "output1": {"total_bidp_rsqn": "1000", "total_askp_rsqn": "500"}}
+            return {"rt_cd": "0", "output": {}}
+
+        provider = KISMarketSignalProvider(
+            settings={
+                "kisBaseUrl": "https://kis.example.test",
+                "kisAppKey": "app-key",
+                "kisAppSecret": "app-secret",
+                "kisMarketSignalsEnabled": "1",
+                "kisMarketSignalGapSeconds": "0",
+                "externalApiRetryAttempts": "1",
+            },
+            quote_cache=TestMarketQuoteCache(test_store_seed(self.temp.name)),
+            fetch_json=fake_fetch_json,
+            sleep=lambda _seconds: None,
+            now_provider=lambda: datetime(2026, 7, 6, 23, 35, tzinfo=timezone.utc),
+        )
+
+        signal = provider.fetch_symbol_signal("005930")
+
+        self.assertEqual(254500, signal["currentPrice"])
+        self.assertEqual("pre_open", signal["marketSession"])
+        self.assertNotIn("tradeStrength", signal)
+        self.assertNotIn("foreignNetVolume", signal)
+        self.assertNotIn("/uapi/domestic-stock/v1/quotations/inquire-ccnl", calls)
+        self.assertNotIn("/uapi/domestic-stock/v1/quotations/inquire-investor", calls)
+        self.assertNotIn("/uapi/domestic-stock/v1/quotations/inquire-asking-price-exp-ccn", calls)
+        self.assertEqual("unavailable", signal["marketSignalCoverage"]["investor"]["status"])
+        self.assertIn("정규장 시작 전", signal["marketSignalCoverage"]["investor"]["reason"])
+        self.assertNotIn("투자자별 수급", signal["quoteStatus"])
+
+    def test_kis_fresh_cache_excludes_microstructure_before_regular_open(self):
+        db_path = test_store_seed(self.temp.name)
+        cache = TestMarketQuoteCache(db_path)
+        cache.save(KIS_CACHE_PROVIDER, KIS_CACHE_ACCOUNT_ID, "005930", {
+            "symbol": "005930",
+            "name": "삼성전자",
+            "market": "KR",
+            "currency": "KRW",
+            "currentPrice": 254500,
+            "tradeStrength": 89.2,
+            "foreignNetVolume": -716994,
+            "institutionNetVolume": -3246131,
+            "individualNetVolume": 4206987,
+            "quoteSource": "KIS Open API",
+            "quoteStatus": "KIS 현재가, 체결강도, 투자자별 수급 반영",
+            "quoteMessage": "cached",
+            "dataQuality": "actual",
+            "updatedAt": "2026-07-06T23:34:00Z",
+            "marketSignalCoverage": {"investor": {"status": "available", "fields": ["foreignNetVolume"]}},
+        })
+
+        def fail_fetch_json(*_args, **_kwargs):
+            raise AssertionError("fresh pre-open cache should not make live calls")
+
+        provider = KISMarketSignalProvider(
+            settings={
+                "kisBaseUrl": "https://kis.example.test",
+                "kisAppKey": "app-key",
+                "kisAppSecret": "app-secret",
+                "kisMarketSignalsEnabled": "1",
+                "kisMarketSignalCacheMinutes": "10",
+                "kisMarketSignalPreferLiveDuringMarketHours": "0",
+            },
+            quote_cache=cache,
+            fetch_json=fail_fetch_json,
+            now_provider=lambda: datetime(2026, 7, 6, 23, 35, tzinfo=timezone.utc),
+        )
+        samsung = normalize_position({"symbol": "005930", "name": "삼성전자", "market": "KR", "currency": "KRW"})
+
+        positions, _watchlist = provider.enrich_collections([samsung], [])
+
+        self.assertEqual(254500, positions[0].current_price)
+        self.assertEqual(0, positions[0].trade_strength)
+        self.assertEqual(0, positions[0].foreign_net_volume)
+        self.assertEqual(0, positions[0].institution_net_volume)
+        self.assertEqual(0, positions[0].individual_net_volume)
+        self.assertEqual("unavailable", positions[0].market_signal_coverage["investor"]["status"])
+        self.assertIn("정규장 시작 전", positions[0].market_signal_coverage["investor"]["reason"])
+        self.assertEqual(1, provider.diagnostics["cached"])
 
     def test_kis_market_signal_provider_uses_fresh_cache_without_token(self):
         db_path = test_store_seed(self.temp.name)
@@ -738,6 +845,7 @@ class PythonServiceTests(unittest.TestCase):
             },
             quote_cache=cache,
             fetch_json=fail_fetch_json,
+            now_provider=lambda: datetime(2026, 7, 7, 2, 0, tzinfo=timezone.utc),
         )
         samsung = normalize_position({"symbol": "005930", "name": "삼성전자", "market": "KR", "currency": "KRW"})
 
@@ -784,6 +892,7 @@ class PythonServiceTests(unittest.TestCase):
             quote_cache=cache,
             fetch_json=fail_fetch_json,
             sleep=lambda _seconds: None,
+            now_provider=lambda: datetime(2026, 7, 7, 2, 0, tzinfo=timezone.utc),
         )
         samsung = normalize_position({
             "symbol": "005930",
@@ -851,6 +960,7 @@ class PythonServiceTests(unittest.TestCase):
             quote_cache=cache,
             fetch_json=fake_fetch_json,
             sleep=lambda _seconds: None,
+            now_provider=lambda: datetime(2026, 7, 7, 2, 0, tzinfo=timezone.utc),
         )
         samsung = normalize_position({"symbol": "005930", "name": "삼성전자", "market": "KR", "currency": "KRW"})
 
@@ -922,6 +1032,7 @@ class PythonServiceTests(unittest.TestCase):
             quote_cache=cache,
             fetch_json=fake_fetch_json,
             sleep=lambda _seconds: None,
+            now_provider=lambda: datetime(2026, 7, 7, 2, 0, tzinfo=timezone.utc),
         )
         naver = normalize_position({"symbol": "035420", "name": "NAVER", "market": "KR", "currency": "KRW"})
 

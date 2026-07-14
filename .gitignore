@@ -25,4 +25,5 @@ data/python-monitor.log
 data/typedb-data/
 data/typedb-logs/
 data/typedb.log
+data/typedb-retention.json
 *.log

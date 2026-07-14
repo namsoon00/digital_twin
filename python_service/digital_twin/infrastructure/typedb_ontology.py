@@ -1180,7 +1180,7 @@ relation ontology-assertion,
         except ValueError as error:
             return {"configured": True, "saved": False, "status": "invalid-rulebox", "graphStore": "typedb", "reason": str(error)}
         self._last_rules = list(rules)
-        save_result = self.save_graph(rulebox_graph_from_rules(self._last_rules))
+        save_result = self.save_graph(rulebox_graph_from_rules(self._last_rules, include_tbox=False))
         snapshot = self.rulebox_snapshot()
         snapshot.update({
             "saved": bool(save_result.get("saved")),
@@ -2066,5 +2066,5 @@ def typedb_repository_from_settings(settings: Dict[str, str] = None):
         tls_enabled=typedb_bool(settings.get("typedbTlsEnabled")),
         timeout_seconds=int(settings.get("typedbTimeoutSeconds") or 20),
         retry_count=int(number_or_none(settings.get("typedbRetryCount")) or 2),
-        inference_generation_keep_count=int(number_or_none(settings.get("typedbInferenceGenerationKeepCount")) or 2),
+        inference_generation_keep_count=int(number_or_none(settings.get("typedbInferenceGenerationKeepCount")) or 1),
     )

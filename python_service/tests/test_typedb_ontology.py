@@ -1,4 +1,5 @@
 import json
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -149,6 +150,53 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertIn("server", command)
         self.assertIn("--server.listen-address", command)
         self.assertIn("--storage.data-directory", command)
+        self.assertEqual("typedb", workers["typedb"]["role"])
+        self.assertEqual("24", workers["typedb"]["retentionHours"])
+        self.assertEqual("2048", workers["typedb"]["maxSizeMb"])
+
+    def test_typedb_retention_resets_projection_data_when_size_exceeds_limit(self):
+        with tempfile.TemporaryDirectory() as temp:
+            data_path = Path(temp) / "typedb-data"
+            data_path.mkdir(parents=True)
+            (data_path / "wal").mkdir()
+            (data_path / "wal" / "wal-1").write_bytes(b"x" * (2 * 1024 * 1024))
+            marker_path = Path(temp) / "typedb-retention.json"
+            spec = {
+                "role": "typedb",
+                "dataPath": data_path,
+                "autoResetEnabled": "1",
+                "retentionHours": "24",
+                "maxSizeMb": "1",
+            }
+
+            with patch.object(service_manager, "data_dir", return_value=Path(temp)):
+                result = service_manager.run_typedb_data_retention(spec)
+
+            self.assertEqual("reset", result["status"])
+            self.assertFalse(data_path.exists())
+            self.assertTrue(marker_path.exists())
+            marker = json.loads(marker_path.read_text(encoding="utf-8"))
+            self.assertEqual(24, marker["retentionHours"])
+            self.assertEqual(1, marker["maxSizeMb"])
+
+    def test_typedb_retention_skips_when_under_limit(self):
+        with tempfile.TemporaryDirectory() as temp:
+            data_path = Path(temp) / "typedb-data"
+            data_path.mkdir(parents=True)
+            (data_path / "small").write_text("ok", encoding="utf-8")
+            spec = {
+                "role": "typedb",
+                "dataPath": data_path,
+                "autoResetEnabled": "1",
+                "retentionHours": "24",
+                "maxSizeMb": "1024",
+            }
+
+            with patch.object(service_manager, "data_dir", return_value=Path(temp)):
+                result = service_manager.run_typedb_data_retention(spec)
+
+            self.assertEqual("skipped", result["status"])
+            self.assertTrue(data_path.exists())
 
     def test_graph_store_contract_is_shared_by_all_adapters(self):
         repositories = [

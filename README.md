@@ -58,6 +58,8 @@ TYPEDB_TIMEOUT_SECONDS=20
 
 `ONTOLOGY_TYPEDB_ENABLED=1`이면 `npm run python:service:start|restart|status`가 TypeDB 서버도 함께 관리합니다. TypeDB 로컬 데이터와 로그는 `data/typedb-data/`, `data/typedb-logs/`, `data/typedb.log` 아래에 저장되며 git에는 포함하지 않습니다.
 
+TypeDB는 원본 업무 저장소가 아니라 온톨로지 projection/read model입니다. 기본값은 하루치만 유지하도록 `TYPEDB_AUTO_RESET_ENABLED=1`, `TYPEDB_DATA_RETENTION_HOURS=24`, `TYPEDB_DATA_MAX_SIZE_MB=2048`, `TYPEDB_INFERENCE_GENERATION_KEEP_COUNT=1`로 동작합니다. 서비스 시작 전 보관 시간 또는 용량 한도를 넘은 `data/typedb-data/`는 삭제 후 재생성됩니다. 수동 정리는 TypeDB를 중지한 뒤 `npm run python:service -- typedb-maintenance --force`로 실행할 수 있습니다.
+
 토스 개발자 콘솔에서 허용 IP를 관리하는 경우, 브라우저 IP가 아니라 이 로컬 서버가 외부로 나가는 공인 IP를 등록해야 합니다. GitHub Pages 같은 정적 웹 페이지에서 브라우저가 직접 토스 API를 호출하는 구조는 `client_secret` 노출과 사용자별 유동 IP 문제 때문에 사용하지 않습니다.
 
 GitHub Pages에 올라가는 모든 정적 산출물은 아래 명령으로 함께 갱신합니다.

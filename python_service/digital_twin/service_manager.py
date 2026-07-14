@@ -4,6 +4,8 @@ import shutil
 import subprocess
 import sys
 import time
+import json
+import calendar
 from pathlib import Path
 from typing import Dict, List
 
@@ -119,6 +121,11 @@ def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
         "log": data_dir() / "typedb.log",
         "command": command,
         "needle": "typedb_server_bin",
+        "role": "typedb",
+        "dataPath": data_path,
+        "retentionHours": str((settings or {}).get("typedbDataRetentionHours") or "24"),
+        "maxSizeMb": str((settings or {}).get("typedbDataMaxSizeMb") or "2048"),
+        "autoResetEnabled": str((settings or {}).get("typedbAutoResetEnabled") or "1"),
         "missingReason": "" if executable else "TypeDB executable was not found. Install TypeDB or set TYPEDB_COMMAND.",
     }
 
@@ -180,6 +187,109 @@ def append_log(path: Path, label: str) -> None:
         handle.write("\n[" + time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()) + "] manager " + label + "\n")
 
 
+def int_value(value: object, fallback: int, lower: int = 0) -> int:
+    try:
+        parsed = int(float(str(value or "").strip()))
+    except ValueError:
+        parsed = fallback
+    return max(lower, parsed)
+
+
+def directory_size_bytes(path: Path) -> int:
+    if not path.exists():
+        return 0
+    total = 0
+    for item in path.rglob("*"):
+        try:
+            if item.is_file() or item.is_symlink():
+                total += item.stat().st_size
+        except OSError:
+            continue
+    return total
+
+
+def typedb_retention_marker_path() -> Path:
+    return data_dir() / "typedb-retention.json"
+
+
+def read_typedb_retention_marker() -> Dict[str, object]:
+    try:
+        return json.loads(typedb_retention_marker_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return {}
+
+
+def write_typedb_retention_marker(payload: Dict[str, object]) -> None:
+    path = typedb_retention_marker_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    os.chmod(path, 0o600)
+
+
+def iso_now() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def typedb_data_age_hours(path: Path, marker: Dict[str, object]) -> float:
+    raw = str((marker or {}).get("lastResetAt") or "").strip()
+    if raw:
+        try:
+            parsed = time.strptime(raw.replace("Z", ""), "%Y-%m-%dT%H:%M:%S")
+            return max(0.0, (time.time() - calendar.timegm(parsed)) / 3600.0)
+        except ValueError:
+            pass
+    try:
+        return max(0.0, (time.time() - path.stat().st_mtime) / 3600.0)
+    except OSError:
+        return 0.0
+
+
+def typedb_reset_needed(spec: Dict[str, object]) -> Dict[str, object]:
+    data_path = Path(spec.get("dataPath") or "")
+    enabled = truthy(spec.get("autoResetEnabled"))
+    retention_hours = int_value(spec.get("retentionHours"), 24, 1)
+    max_size_mb = int_value(spec.get("maxSizeMb"), 2048, 1)
+    size_bytes = directory_size_bytes(data_path)
+    marker = read_typedb_retention_marker()
+    age_hours = typedb_data_age_hours(data_path, marker)
+    reasons = []
+    if not enabled:
+        return {"needed": False, "reason": "disabled", "sizeBytes": size_bytes, "ageHours": age_hours}
+    if not data_path.exists() or size_bytes <= 0:
+        return {"needed": False, "reason": "empty", "sizeBytes": size_bytes, "ageHours": age_hours}
+    if age_hours >= retention_hours:
+        reasons.append("age " + str(round(age_hours, 2)) + "h >= " + str(retention_hours) + "h")
+    if size_bytes >= max_size_mb * 1024 * 1024:
+        reasons.append("size " + str(round(size_bytes / 1024 / 1024, 1)) + "MB >= " + str(max_size_mb) + "MB")
+    return {
+        "needed": bool(reasons),
+        "reason": "; ".join(reasons),
+        "sizeBytes": size_bytes,
+        "ageHours": age_hours,
+        "retentionHours": retention_hours,
+        "maxSizeMb": max_size_mb,
+    }
+
+
+def run_typedb_data_retention(spec: Dict[str, object], force: bool = False) -> Dict[str, object]:
+    if str(spec.get("role") or "") != "typedb":
+        return {"status": "skipped", "reason": "not typedb"}
+    data_path = Path(spec.get("dataPath") or "")
+    decision = typedb_reset_needed(spec)
+    if not force and not decision.get("needed"):
+        return {"status": "skipped", **decision}
+    if data_path.exists():
+        shutil.rmtree(data_path)
+    write_typedb_retention_marker({
+        "lastResetAt": iso_now(),
+        "reason": "forced" if force else decision.get("reason", ""),
+        "previousSizeBytes": int(decision.get("sizeBytes") or 0),
+        "retentionHours": int(decision.get("retentionHours") or int_value(spec.get("retentionHours"), 24, 1)),
+        "maxSizeMb": int(decision.get("maxSizeMb") or int_value(spec.get("maxSizeMb"), 2048, 1)),
+    })
+    return {"status": "reset", **decision, "dataPath": str(data_path)}
+
+
 def tail(path: Path, count: int = 8) -> List[str]:
     try:
         lines = path.read_text(encoding="utf-8").strip().splitlines()
@@ -227,6 +337,11 @@ def start_worker(spec: Dict[str, object]) -> int:
         return status_worker(spec)
     if existing:
         remove_pid(pid_path)
+    if str(spec.get("role") or "") == "typedb":
+        retention = run_typedb_data_retention(spec)
+        if retention.get("status") == "reset":
+            previous_mb = round(float(retention.get("sizeBytes") or 0) / 1024 / 1024, 1)
+            print(str(spec["label"]) + " data reset before start. previousSizeMb=" + str(previous_mb) + " reason=" + str(retention.get("reason") or ""))
     log_path.parent.mkdir(parents=True, exist_ok=True)
     append_log(log_path, "start")
     out = log_path.open("a", encoding="utf-8")
@@ -295,6 +410,21 @@ def restart() -> int:
     return start()
 
 
+def typedb_maintenance(force: bool = False) -> int:
+    specs = worker_specs()
+    spec = specs.get("typedb")
+    if not spec:
+        print("TypeDB maintenance skipped. TypeDB worker is not configured.")
+        return 0
+    pid = read_pid(spec["pid"])
+    if is_running(pid, spec):
+        print("TypeDB maintenance skipped. Stop TypeDB first or run restart so the data directory is not modified while TypeDB is running.")
+        return 0
+    result = run_typedb_data_retention(spec, force=force)
+    print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+    return 0
+
+
 def main(argv: List[str] = None) -> int:
     args = list(argv if argv is not None else sys.argv[1:])
     command = args[0] if args else "status"
@@ -306,5 +436,7 @@ def main(argv: List[str] = None) -> int:
         return restart()
     if command == "status":
         return status()
-    print("Usage: python3 python_service/monitor_service.py start|stop|restart|status")
+    if command == "typedb-maintenance":
+        return typedb_maintenance(force="--force" in args[1:])
+    print("Usage: python3 python_service/monitor_service.py start|stop|restart|status|typedb-maintenance [--force]")
     return 1

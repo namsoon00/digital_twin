@@ -17726,6 +17726,7 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   --ds-top-nav-height: 104px;
   --ds-top-nav-tab-height: 34px;
   --ds-content-width: 1880px;
+  --ds-desktop-page-gutter: clamp(24px, 3vw, 56px);
 }
 
 .console-shell .topbar,
@@ -17847,7 +17848,8 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto auto minmax(0, 1fr);
-    width: min(var(--ds-content-width), calc(100vw - 28px));
+    width: min(var(--ds-content-width), calc(100vw - var(--ds-desktop-page-gutter) - var(--ds-desktop-page-gutter)));
+    margin: 0 auto;
     column-gap: 0;
     row-gap: var(--ds-space-4);
     padding: var(--ds-viewport-pad-y, 12px) 0 36px;
@@ -18297,7 +18299,8 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   .shell,
   .console-shell {
     grid-template-columns: minmax(0, 1fr);
-    width: min(1180px, calc(100vw - 24px));
+    width: min(1180px, calc(100vw - var(--ds-desktop-page-gutter) - var(--ds-desktop-page-gutter)));
+    margin: 0 auto;
   }
 
   .app-nav {
@@ -18349,7 +18352,8 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   .shell,
   .console-shell {
     grid-template-columns: minmax(0, 1fr);
-    width: min(980px, calc(100vw - 24px));
+    width: min(980px, calc(100vw - var(--ds-desktop-page-gutter) - var(--ds-desktop-page-gutter)));
+    margin: 0 auto;
   }
 
   .app-nav {

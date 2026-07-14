@@ -28,6 +28,7 @@ from digital_twin.cli import build_handoff_message
 from digital_twin.cli import preserve_existing_secrets
 from digital_twin.cli import build_parser
 from digital_twin.domain.accounts import AccountConfig
+from digital_twin.domain.data_freshness import evaluate_notification_data_freshness, freshness_from_position
 from digital_twin.domain.external_signal_quality import attach_external_signal_quality
 from digital_twin.domain.investment_research import NewsCollectionTarget, ResearchEvidence, build_active_investment_opinion, research_evidence_from_facts
 from digital_twin.domain.market_data import normalize_position, technical_indicators_from_candles
@@ -1155,6 +1156,144 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(243601, positions[0].foreign_net_volume)
         self.assertEqual(1, provider.diagnostics["cached"])
         self.assertEqual(0, provider.diagnostics["live"])
+
+    def test_kis_market_signal_provider_marks_repeated_microstructure_stale_during_regular_hours(self):
+        db_path = test_store_seed(self.temp.name)
+        cache = TestMarketQuoteCache(db_path)
+        cache.save(KIS_CACHE_PROVIDER, KIS_CACHE_ACCOUNT_ID, "035420", {
+            "symbol": "035420",
+            "name": "NAVER",
+            "market": "KR",
+            "currency": "KRW",
+            "currentPrice": 201000,
+            "tradeStrength": 88.3,
+            "foreignNetVolume": 243601,
+            "institutionNetVolume": 67401,
+            "individualNetVolume": -304684,
+            "orderbookBidVolume": 1200,
+            "orderbookAskVolume": 900,
+            "bidAskImbalance": 14.285714285714286,
+            "quoteSource": "KIS Open API",
+            "quoteStatus": "KIS 현재가, 체결강도, 투자자별 수급 반영",
+            "quoteMessage": "cached",
+            "dataQuality": "actual",
+            "updatedAt": "2026-07-07T01:55:00Z",
+            "marketSignalCoverage": {
+                "ccnl": {"status": "available", "fields": ["tradeStrength"], "unchangedCount": 2},
+                "investor": {"status": "available", "fields": ["foreignNetVolume"], "unchangedCount": 2},
+                "orderbook": {"status": "available", "fields": ["bidAskImbalance"], "unchangedCount": 2},
+            },
+        })
+
+        def fake_fetch_json(method, url, headers=None, body=None, query=None, timeout=12):
+            path = urllib.parse.urlparse(url).path
+            if path.endswith("/oauth2/tokenP"):
+                return {"access_token": "kis-token"}
+            if path.endswith("/inquire-price"):
+                return {"rt_cd": "0", "output": {"stck_prpr": "201000", "acml_vol": "1026999", "acml_tr_pbmn": "206426799000"}}
+            if path.endswith("/inquire-ccnl"):
+                return {"rt_cd": "0", "output": [{"stck_prpr": "201000", "tday_rltv": "88.3", "cntg_vol": "100"}]}
+            if path.endswith("/inquire-investor"):
+                return {"rt_cd": "0", "output": [{
+                    "frgn_ntby_qty": "243601",
+                    "orgn_ntby_qty": "67401",
+                    "prsn_ntby_qty": "-304684",
+                }]}
+            if path.endswith("/inquire-asking-price-exp-ccn"):
+                return {"rt_cd": "0", "output1": {"total_bidp_rsqn": "1200", "total_askp_rsqn": "900"}}
+            return {"rt_cd": "0", "output": {}}
+
+        provider = KISMarketSignalProvider(
+            settings={
+                "kisBaseUrl": "https://kis.example.test",
+                "kisAppKey": "app-key",
+                "kisAppSecret": "app-secret",
+                "kisMarketSignalsEnabled": "1",
+                "kisMarketSignalCacheMinutes": "10",
+                "kisMarketSignalPreferLiveDuringMarketHours": "1",
+                "kisMarketSignalLiveRefreshSeconds": "60",
+                "kisMarketSignalUnchangedStaleCount": "3",
+                "kisMarketSignalGapSeconds": "0",
+                "externalApiRetryAttempts": "1",
+            },
+            quote_cache=cache,
+            fetch_json=fake_fetch_json,
+            sleep=lambda _seconds: None,
+            now_provider=lambda: datetime(2026, 7, 7, 2, 0, tzinfo=timezone.utc),
+        )
+        naver = normalize_position({"symbol": "035420", "name": "NAVER", "market": "KR", "currency": "KRW"})
+
+        positions, _watchlist = provider.enrich_collections([naver], [])
+        coverage = positions[0].market_signal_coverage
+
+        self.assertEqual("stale", coverage["investor"]["status"])
+        self.assertEqual(3, coverage["investor"]["unchangedCount"])
+        self.assertIn("지연 가능성", coverage["investor"]["staleReason"])
+        self.assertEqual("stale", coverage["ccnl"]["status"])
+        self.assertEqual("stale", coverage["orderbook"]["status"])
+
+    def test_position_freshness_uses_kis_stage_staleness(self):
+        now = datetime(2026, 7, 7, 2, 0, tzinfo=timezone.utc)
+        freshness = freshness_from_position(
+            {
+                "symbol": "035420",
+                "quoteSource": "KIS Open API",
+                "dataQuality": "actual",
+                "updatedAt": "2026-07-07T01:59:30Z",
+                "marketSignalCoverage": {
+                    "price": {
+                        "status": "available",
+                        "fields": ["currentPrice"],
+                        "fetchedAt": "2026-07-07T01:59:30Z",
+                    },
+                    "investor": {
+                        "status": "stale",
+                        "fields": ["foreignNetVolume"],
+                        "fetchedAt": "2026-07-07T01:59:30Z",
+                        "staleReason": "장중 같은 investor 값이 3회 연속 반복되어 지연 가능성이 있습니다.",
+                    },
+                },
+            },
+            "investmentInsight",
+            settings={
+                "dataFreshnessQuoteMaxAgeMinutes": "10",
+                "dataFreshnessKisPriceMaxAgeMinutes": "3",
+                "dataFreshnessKisInvestorMaxAgeMinutes": "5",
+            },
+            now=now,
+        )
+        decision = evaluate_notification_data_freshness(
+            {"messageType": "investmentInsight", "dataFreshness": freshness},
+            settings={"dataFreshnessEnabled": "1"},
+            now=now,
+        )
+
+        self.assertEqual("stale", freshness["status"])
+        self.assertFalse(decision.should_send)
+        self.assertIn("KIS investor", decision.stale_sources)
+
+    def test_position_freshness_rejects_kis_available_stage_without_timestamp(self):
+        now = datetime(2026, 7, 7, 2, 0, tzinfo=timezone.utc)
+        freshness = freshness_from_position(
+            {
+                "symbol": "005930",
+                "quoteSource": "KIS Open API",
+                "dataQuality": "actual",
+                "updatedAt": "2026-07-07T01:59:30Z",
+                "marketSignalCoverage": {
+                    "investor": {
+                        "status": "available",
+                        "fields": ["foreignNetVolume"],
+                    },
+                },
+            },
+            "investmentInsight",
+            settings={"dataFreshnessKisInvestorMaxAgeMinutes": "5"},
+            now=now,
+        )
+
+        self.assertEqual("unknown", freshness["status"])
+        self.assertIn("기준시각 없음", freshness["reason"])
 
     def test_kis_merge_recomputes_moving_average_distance_after_price_update(self):
         provider = KISMarketSignalProvider(settings={"kisMarketSignalsEnabled": "0"})

@@ -188,7 +188,16 @@ def append_message(existing: str, addition: str) -> str:
     return base + " " + extra
 
 
-def stage_coverage(stage: str, raw_payload, normalized: Dict[str, object], keys: Iterable[str]) -> Dict[str, object]:
+def stage_coverage(
+    stage: str,
+    raw_payload,
+    normalized: Dict[str, object],
+    keys: Iterable[str],
+    fetched_at: str = "",
+    source_as_of: str = "",
+    session: Dict[str, object] = None,
+) -> Dict[str, object]:
+    session = session or {}
     fields = sorted([
         key
         for key in keys
@@ -201,12 +210,20 @@ def stage_coverage(stage: str, raw_payload, normalized: Dict[str, object], keys:
         status = "missing"
     else:
         status = "empty"
-    return {
+    payload = {
         "stage": stage,
         "status": status,
         "fields": fields,
         "nonZeroFields": non_zero_fields,
     }
+    if fetched_at:
+        payload["fetchedAt"] = fetched_at
+    if source_as_of:
+        payload["sourceAsOf"] = source_as_of
+    if session:
+        payload["marketSession"] = str(session.get("key") or "")
+        payload["marketSessionLabel"] = str(session.get("label") or "")
+    return payload
 
 
 def unavailable_stage_coverage(stage: str, session: Dict[str, object]) -> Dict[str, object]:
@@ -225,6 +242,14 @@ def coverage_has_fields(coverage: Dict[str, object], stage: str, keys: Iterable[
     item = coverage.get(stage) if isinstance(coverage, dict) else {}
     fields = item.get("fields") if isinstance(item, dict) else []
     return any(key in set(str(field) for field in fields or []) for key in keys)
+
+
+def comparable_stage_values(payload: Dict[str, object], keys: Iterable[str]) -> Dict[str, float]:
+    return {
+        key: number(payload.get(key))
+        for key in keys
+        if payload.get(key) not in (None, "") and number(payload.get(key)) is not None
+    }
 
 
 class KISAPIError(RuntimeError):
@@ -306,6 +331,9 @@ class KISMarketSignalProvider:
 
     def live_refresh_seconds(self) -> int:
         return self.int_setting("kisMarketSignalLiveRefreshSeconds", 60, 0, 3600)
+
+    def unchanged_stale_count(self) -> int:
+        return self.int_setting("kisMarketSignalUnchangedStaleCount", 3, 1, 20)
 
     def now(self) -> datetime:
         value = self.now_provider()
@@ -523,6 +551,49 @@ class KISMarketSignalProvider:
         signal["quoteMessage"] = str(session.get("reason") or "정규장 시작 전이라 장중 수급 신호를 제외했습니다.")
         return signal
 
+    def mark_unchanged_stage_health(self, signal: Dict[str, object], previous: Dict[str, object] = None) -> Dict[str, object]:
+        if not signal or not previous or not self.is_kr_regular_market_hours():
+            return signal
+        coverage = signal.get("marketSignalCoverage") if isinstance(signal.get("marketSignalCoverage"), dict) else {}
+        previous_coverage = previous.get("marketSignalCoverage") if isinstance(previous.get("marketSignalCoverage"), dict) else {}
+        if not isinstance(coverage, dict):
+            return signal
+        coverage = dict(coverage)
+        stage_keys = {
+            "price": ["currentPrice", "volume", "tradingValue"],
+            "ccnl": ["tradeStrength", "buyVolume", "sellVolume"],
+            "investor": INVESTOR_SIGNAL_KEYS,
+            "orderbook": ["orderbookBidVolume", "orderbookAskVolume", "bidAskImbalance"],
+        }
+        stale_threshold = self.unchanged_stale_count()
+        for stage, keys in stage_keys.items():
+            item = coverage.get(stage) if isinstance(coverage.get(stage), dict) else {}
+            if str(item.get("status") or "") != "available":
+                continue
+            current_values = comparable_stage_values(signal, keys)
+            previous_values = comparable_stage_values(previous, keys)
+            if not current_values or not previous_values:
+                continue
+            comparable_keys = set(current_values).intersection(previous_values)
+            if not comparable_keys:
+                continue
+            unchanged = all(abs(float(current_values[key]) - float(previous_values[key])) < 0.000001 for key in comparable_keys)
+            next_item = dict(item)
+            if unchanged:
+                previous_item = previous_coverage.get(stage) if isinstance(previous_coverage, dict) and isinstance(previous_coverage.get(stage), dict) else {}
+                unchanged_count = int(previous_item.get("unchangedCount") or 0) + 1
+                next_item["unchangedCount"] = unchanged_count
+                next_item["unchangedFields"] = sorted(comparable_keys)
+                next_item["reason"] = "장중 이전 조회와 같은 값 " + str(unchanged_count) + "회 연속"
+                if stage != "price" and unchanged_count >= stale_threshold:
+                    next_item["status"] = "stale"
+                    next_item["staleReason"] = "장중 같은 " + stage + " 값이 " + str(unchanged_count) + "회 연속 반복되어 지연 가능성이 있습니다."
+            else:
+                next_item["unchangedCount"] = 0
+            coverage[stage] = next_item
+        signal["marketSignalCoverage"] = coverage
+        return signal
+
     def save_signal(self, symbol: str, payload: Dict[str, object]) -> None:
         try:
             self.quote_cache.save(KIS_CACHE_PROVIDER, KIS_CACHE_ACCOUNT_ID, symbol, payload)
@@ -559,6 +630,7 @@ class KISMarketSignalProvider:
 
         signal: Dict[str, object] = {}
         coverage: Dict[str, object] = {}
+        fetched_at = utc_now_iso()
         if isinstance(price, dict):
             normalized_price = normalize_price(symbol, price)
             if not microstructure_available:
@@ -569,25 +641,28 @@ class KISMarketSignalProvider:
                 price,
                 normalized_price,
                 ["currentPrice", "changeRate", "volume", "volumeRatio", "tradingValue", "foreignNetVolume"],
+                fetched_at=fetched_at,
+                source_as_of=fetched_at,
+                session=session,
             )
         else:
-            coverage["price"] = stage_coverage("price", price, {}, ["currentPrice"])
+            coverage["price"] = stage_coverage("price", price, {}, ["currentPrice"], fetched_at=fetched_at, session=session)
         if isinstance(ccnl, list):
             normalized_ccnl = normalize_ccnl(ccnl)
             merge_if_present(signal, normalized_ccnl)
-            coverage["ccnl"] = stage_coverage("ccnl", ccnl, normalized_ccnl, ["tradeStrength", "buyVolume", "sellVolume"])
+            coverage["ccnl"] = stage_coverage("ccnl", ccnl, normalized_ccnl, ["tradeStrength", "buyVolume", "sellVolume"], fetched_at=fetched_at, source_as_of=fetched_at, session=session)
         else:
-            coverage["ccnl"] = unavailable_stage_coverage("ccnl", session) if not microstructure_available else stage_coverage("ccnl", ccnl, {}, ["tradeStrength", "buyVolume", "sellVolume"])
+            coverage["ccnl"] = unavailable_stage_coverage("ccnl", session) if not microstructure_available else stage_coverage("ccnl", ccnl, {}, ["tradeStrength", "buyVolume", "sellVolume"], fetched_at=fetched_at, session=session)
         if isinstance(investor, list):
             normalized_investor = normalize_investor(investor)
             merge_if_present(signal, normalized_investor)
-            coverage["investor"] = stage_coverage("investor", investor, normalized_investor, INVESTOR_SIGNAL_KEYS)
+            coverage["investor"] = stage_coverage("investor", investor, normalized_investor, INVESTOR_SIGNAL_KEYS, fetched_at=fetched_at, source_as_of=fetched_at, session=session)
         elif isinstance(investor, dict):
             normalized_investor = normalize_investor([investor])
             merge_if_present(signal, normalized_investor)
-            coverage["investor"] = stage_coverage("investor", investor, normalized_investor, INVESTOR_SIGNAL_KEYS)
+            coverage["investor"] = stage_coverage("investor", investor, normalized_investor, INVESTOR_SIGNAL_KEYS, fetched_at=fetched_at, source_as_of=fetched_at, session=session)
         else:
-            coverage["investor"] = unavailable_stage_coverage("investor", session) if not microstructure_available else stage_coverage("investor", investor, {}, INVESTOR_SIGNAL_KEYS)
+            coverage["investor"] = unavailable_stage_coverage("investor", session) if not microstructure_available else stage_coverage("investor", investor, {}, INVESTOR_SIGNAL_KEYS, fetched_at=fetched_at, session=session)
         if isinstance(orderbook, dict):
             normalized_orderbook = normalize_orderbook(orderbook)
             merge_if_present(signal, normalized_orderbook)
@@ -596,9 +671,12 @@ class KISMarketSignalProvider:
                 orderbook,
                 normalized_orderbook,
                 ["orderbookBidVolume", "orderbookAskVolume", "bidAskImbalance"],
+                fetched_at=fetched_at,
+                source_as_of=fetched_at,
+                session=session,
             )
         else:
-            coverage["orderbook"] = unavailable_stage_coverage("orderbook", session) if not microstructure_available else stage_coverage("orderbook", orderbook, {}, ["orderbookBidVolume", "orderbookAskVolume", "bidAskImbalance"])
+            coverage["orderbook"] = unavailable_stage_coverage("orderbook", session) if not microstructure_available else stage_coverage("orderbook", orderbook, {}, ["orderbookBidVolume", "orderbookAskVolume", "bidAskImbalance"], fetched_at=fetched_at, session=session)
         if not signal:
             raise RuntimeError("KIS 수급 응답 없음")
 
@@ -628,7 +706,7 @@ class KISMarketSignalProvider:
         if not microstructure_available:
             signal["quoteMessage"] = str(session.get("reason") or "") or signal["quoteMessage"]
         signal["dataQuality"] = "actual"
-        signal["updatedAt"] = utc_now_iso()
+        signal["updatedAt"] = fetched_at
         return signal
 
     def symbols_for_positions(self, positions: Iterable[Position]) -> List[str]:
@@ -689,6 +767,7 @@ class KISMarketSignalProvider:
                 continue
             try:
                 signal = self.fetch_symbol_signal(symbol)
+                signal = self.mark_unchanged_stage_health(signal, cached)
                 signal = self.signal_for_current_session(signal)
                 signals[symbol] = signal
                 self.save_signal(symbol, signal)

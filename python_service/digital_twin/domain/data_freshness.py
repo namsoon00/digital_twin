@@ -55,6 +55,12 @@ QUOTE_MESSAGE_TYPES = {
     MONITOR_TREND_CHANGE,
     MONITOR_DECISION_CHANGE,
 }
+KIS_STAGE_MAX_AGE_SETTINGS = {
+    "price": ("dataFreshnessKisPriceMaxAgeMinutes", 3),
+    "ccnl": ("dataFreshnessKisMicrostructureMaxAgeMinutes", 2),
+    "orderbook": ("dataFreshnessKisMicrostructureMaxAgeMinutes", 2),
+    "investor": ("dataFreshnessKisInvestorMaxAgeMinutes", 5),
+}
 
 
 def bool_setting(settings: Dict[str, object], key: str, fallback: bool = True) -> bool:
@@ -119,6 +125,11 @@ def max_age_minutes_for_message_type(message_type: str, settings: Dict[str, obje
     return int_setting(settings, "dataFreshnessDefaultMaxAgeMinutes", 10)
 
 
+def max_age_minutes_for_kis_stage(stage: str, settings: Dict[str, object] = None) -> int:
+    key, fallback = KIS_STAGE_MAX_AGE_SETTINGS.get(str(stage or ""), ("dataFreshnessQuoteMaxAgeMinutes", 10))
+    return int_setting(settings or {}, key, fallback)
+
+
 def data_freshness_required(message_type: str) -> bool:
     return str(message_type or "") in DATA_FRESHNESS_MESSAGE_TYPES
 
@@ -173,9 +184,71 @@ def freshness_record(
     }
 
 
+def kis_stage_freshness_records(position: Dict[str, object], message_type: str, settings: Dict[str, object] = None, now=None) -> List[Dict[str, object]]:
+    item = position or {}
+    coverage = item.get("marketSignalCoverage") if isinstance(item.get("marketSignalCoverage"), dict) else item.get("market_signal_coverage")
+    if not isinstance(coverage, dict):
+        return []
+    records: List[Dict[str, object]] = []
+    for stage, raw_stage in coverage.items():
+        stage_payload = raw_stage if isinstance(raw_stage, dict) else {}
+        status = str(stage_payload.get("status") or "").strip()
+        fields = stage_payload.get("fields") if isinstance(stage_payload.get("fields"), list) else []
+        source = "KIS " + str(stage or "signal")
+        if status == "available" and fields:
+            fetched_at = stage_payload.get("fetchedAt") or stage_payload.get("sourceFetchedAt")
+            source_as_of = stage_payload.get("sourceAsOf") or ""
+            if not fetched_at and not source_as_of:
+                records.append({
+                    "source": source,
+                    "status": "unknown",
+                    "reason": "단계별 기준시각 없음",
+                    "ageMinutes": None,
+                    "maxAgeMinutes": max_age_minutes_for_kis_stage(str(stage), settings),
+                    "sourceFetchedAt": "",
+                    "sourceAsOf": "",
+                    "dataQuality": item.get("dataQuality") or item.get("data_quality") or "",
+                    "checkedAt": utc_iso(now),
+                    "stage": str(stage or ""),
+                    "fields": list(fields or []),
+                })
+                continue
+            record = freshness_record(
+                source,
+                message_type,
+                settings=settings,
+                source_fetched_at=fetched_at,
+                source_as_of=source_as_of,
+                data_quality=item.get("dataQuality") or item.get("data_quality") or "",
+                now=now,
+                max_age_minutes=max_age_minutes_for_kis_stage(str(stage), settings),
+            )
+            record["stage"] = str(stage or "")
+            record["fields"] = list(fields or [])
+            if stage_payload.get("unchangedCount") not in (None, ""):
+                record["unchangedCount"] = stage_payload.get("unchangedCount")
+            records.append(record)
+        elif status in {"stale", "unknown"}:
+            records.append({
+                "source": source,
+                "status": "stale" if status == "stale" else "unknown",
+                "reason": str(stage_payload.get("staleReason") or stage_payload.get("reason") or "단계별 신선도 문제"),
+                "ageMinutes": None,
+                "maxAgeMinutes": max_age_minutes_for_kis_stage(str(stage), settings),
+                "sourceFetchedAt": str(stage_payload.get("fetchedAt") or stage_payload.get("sourceFetchedAt") or ""),
+                "sourceAsOf": str(stage_payload.get("sourceAsOf") or ""),
+                "dataQuality": item.get("dataQuality") or item.get("data_quality") or "",
+                "checkedAt": utc_iso(now),
+                "stage": str(stage or ""),
+                "fields": list(fields or []),
+                "unchangedCount": stage_payload.get("unchangedCount"),
+            })
+    return records
+
+
 def freshness_from_position(position: Dict[str, object], message_type: str, settings: Dict[str, object] = None, now=None) -> Dict[str, object]:
     item = position or {}
-    return freshness_record(
+    base = freshness_record(
         item.get("quote_source") or item.get("quoteSource") or item.get("source") or "position",
         message_type,
         settings=settings,
@@ -183,6 +256,9 @@ def freshness_from_position(position: Dict[str, object], message_type: str, sett
         data_quality=item.get("data_quality") or item.get("dataQuality"),
         now=now,
     )
+    records = [base]
+    records.extend(kis_stage_freshness_records(item, message_type, settings=settings, now=now))
+    return aggregate_freshness(records, message_type, settings=settings, now=now)
 
 
 def aggregate_freshness(records: Iterable[Dict[str, object]], message_type: str, settings: Dict[str, object] = None, now=None) -> Dict[str, object]:

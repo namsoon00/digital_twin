@@ -15514,7 +15514,13 @@
       ]),
       '</div>',
       '<div class="feed-settings-sections">',
-      renderSettingsGroup("장중 시세·수급", "KIS 장중 수급과 호출량을 조정합니다.", [
+      renderSettingsGroup("장중 시세·수급", "KIS WebSocket 체결·호가와 REST 투자자 수급 호출량을 조정합니다.", [
+        renderSettingSelect("kisRealtimeWebSocketEnabled", "KIS 체결·호가 WebSocket", [
+          { value: "1", label: "사용" },
+          { value: "0", label: "사용 안 함" }
+        ]),
+        renderSettingField("kisRealtimeWebSocketMaxSymbols", "WebSocket 종목 수", "number", "20"),
+        renderSettingField("kisRealtimeWebSocketEventIntervalSeconds", "WebSocket 추론 묶음(초)", "number", "15"),
         renderSettingSelect("kisMarketSignalsEnabled", "KIS 수급 수집", [
           { value: "1", label: "사용" },
           { value: "0", label: "사용 안 함" }
@@ -16700,10 +16706,22 @@
       '<details class="settings-advanced-disclosure">',
       '<summary><strong>외부 데이터·추론·매핑 고급 설정 열기</strong><span>API 키, 캐시, 게이트, 공시 AI, 긴 매핑값</span></summary>',
       '<div class="settings-advanced-content">',
-      renderSettingsGroup("국내 시세·수급", "KIS API와 장중 수급 수집의 호출량, 캐시, live 우선 정책입니다.", [
+      renderSettingsGroup("국내 시세·수급", "KIS WebSocket 체결·호가와 REST 투자자 수급 수집 정책입니다.", [
+        renderSettingField("kisEnv", "KIS 환경", "text", "prod"),
         renderSettingField("kisBaseUrl", "KIS Base URL", "url", "https://openapi.koreainvestment.com:9443"),
+        renderSettingField("kisWebSocketUrl", "KIS WebSocket URL", "url", ""),
         renderSettingField("kisAppKey", "KIS App Key", secretType, "app key", { preserveConfigured: true }),
         renderSettingField("kisAppSecret", "KIS App Secret", secretType, "app secret", { preserveConfigured: true }),
+        renderSettingSelect("kisRealtimeWebSocketEnabled", "KIS 체결·호가 WebSocket", [
+          { value: "1", label: "사용" },
+          { value: "0", label: "사용 안 함" }
+        ]),
+        renderSettingField("kisRealtimeWebSocketSymbols", "WebSocket 고정 종목", "text", ""),
+        renderSettingField("kisRealtimeWebSocketMaxSymbols", "WebSocket 종목 수", "number", "20"),
+        renderSettingField("kisRealtimeWebSocketCollectSeconds", "WebSocket 연결 유지(초)", "number", "30"),
+        renderSettingField("kisRealtimeWebSocketEventIntervalSeconds", "WebSocket 추론 묶음(초)", "number", "15"),
+        renderSettingField("kisRealtimeWebSocketReconnectSeconds", "WebSocket 재연결 대기(초)", "number", "5"),
+        renderSettingField("kisRealtimeWebSocketTimeoutSeconds", "WebSocket 타임아웃(초)", "number", "10"),
         renderSettingSelect("kisMarketSignalsEnabled", "KIS 수급 수집", [
           { value: "1", label: "사용" },
           { value: "0", label: "사용 안 함" }
